@@ -46142,6 +46142,20 @@ static int mixin_runs_between(const int *run, int n, int lo, int hi) {
     if (run[i] > lo && run[i] < hi) return 1;
   return 0;
 }
+/* May a call outside any method body run later than the top-level statement
+   it stands in: in a block the record does not take to run at once (one a
+   method keeps, as an initializer's), a lambda, or an END body? */
+static int mixin_call_deferred(Compiler *c, int id) {
+  int n;
+  const int *par = elab_node_parents(c, &n);
+  for (int a = id; a >= 0 && a < n && par[a] >= 0; a = par[a]) {
+    NodeKind k = nt_kind(c->nt, a);
+    if (k == NK_DefNode) return 0;
+    if (k == NK_LambdaNode || k == NK_PostExecutionNode) return 1;
+    if (k == NK_BlockNode && nt_ref(c->nt, par[a], "block") == a && elab_block_runs(c, par[a]) != ELAB_BLK_NOW) return 1;
+  }
+  return 0;
+}
 /* Where a file of another region can start to run, from the requires that
    name it: blk, the least rank of a top-level statement holding one outside
    a method body (in a block kept for later), and def, of one holding a
@@ -46257,6 +46271,12 @@ static void refuse_mixin_after_calls(Compiler *c) {
          block that calls it, but a later statement runs that block. One
          in a file of another region may run at any time. */
       if (in_def && !other && !mixin_runs_between(run, nrun, rank > orank ? rank : orank, jrank)) continue;
+      /* a statement that runs ahead of the class's first body sees no object
+         of the class: its own run of the call reaches no method of it. Only
+         a block it stores (an initializer's, run by `initialize!`) can, and
+         only under a later statement between the body and the mixin. */
+      if (!in_def && !other && rank < orank &&
+          (!mixin_call_deferred(c, id) || !mixin_runs_between(run, nrun, orank, jrank))) continue;
       /* the classes the receiver can be an object of: its type's, or for a
          receiverless call in an instance method, self's */
       TyKind rt = TY_UNKNOWN;

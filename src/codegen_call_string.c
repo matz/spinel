@@ -73,23 +73,33 @@ static void emit_re_subject_at(Compiler *c, const char *fn, const char *pat, int
 
 /* Hold the subject through evaluation and integer coercion of the position.
    Read its bytes only when the matcher is ready to consume them. */
-static void emit_string_match_p_at(Compiler *c, int recv, TyKind rt, const char *pattern, int pos, Buf *b) {
-  int subject = ++g_tmp, position = ++g_tmp;
+static void emit_string_match_p_at(Compiler *c, int recv, TyKind rt, const char *pattern,
+                                  const Buf *pattern_setup, int pos, Buf *b) {
+  int boxed = rt != TY_STRING;
   buf_puts(b, "({ ");
-  if (rt == TY_STRING) {
-    subject = hold_operand(c, recv, TY_STRING, 0, subject, 1, " ", b);
-    position = hold_operand(c, pos, TY_POLY, 1, position, 1, " ", b);
-    if (!recv_never_nil(c, recv))
-      buf_printf(b, "if (!SP_STR_B(_t%d)) sp_nil_recv(\"match?\"); ", subject);
-    int offset = ++g_tmp;
-    buf_printf(b, "sp_int _t%d = sp_poly_arg_int_chk(_t%d); "
-                  "sp_str_re_match_p_at(%s, SP_STR_B(_t%d), _t%d); })",
-               offset, position, pattern, subject, offset);
-  } else {
-    subject = hold_operand(c, recv, TY_POLY, 1, subject, 1, " ", b);
-    position = hold_operand(c, pos, TY_POLY, 1, position, 1, " ", b);
-    buf_printf(b, "sp_poly_match_p_at_arg(_t%d, %s, _t%d); })", subject, pattern, position);
+  Buf *pre = g_pre;
+  g_pre = b;
+  int subject = hold_operand(c, recv, boxed ? TY_POLY : TY_STRING, boxed, ++g_tmp, 1, " ", b);
+  char pattern_temp[32];
+  if (pattern_setup) {
+    if (pattern_setup->p) buf_puts(b, pattern_setup->p);
+    int t = ++g_tmp;
+    buf_printf(b, "mrb_regexp_pattern *_t%d = %s; ", t, pattern);
+    snprintf(pattern_temp, sizeof pattern_temp, "_t%d", t);
+    pattern = pattern_temp;
   }
+  int position = hold_operand(c, pos, TY_POLY, 1, ++g_tmp, 1, " ", b);
+  g_pre = pre;
+  if (boxed) {
+    buf_printf(b, "sp_poly_match_p_at_arg(_t%d, %s, _t%d); })", subject, pattern, position);
+    return;
+  }
+  if (!recv_never_nil(c, recv))
+    buf_printf(b, "if (!SP_STR_B(_t%d)) sp_nil_recv(\"match?\"); ", subject);
+  int offset = ++g_tmp;
+  buf_printf(b, "sp_int _t%d = sp_poly_arg_int_chk(_t%d); "
+                "sp_str_re_match_p_at(%s, SP_STR_B(_t%d), _t%d); })",
+             offset, position, pattern, subject, offset);
 }
 
 /* The body of a match block, inside its hit arm with m bound: each
@@ -362,7 +372,7 @@ no_gsub_enum:
       snprintf(pattern, sizeof pattern, "sp_re_pat_%d", are);
       int boxed = repr_of(c, id).kind == RK_BOXED;
       if (boxed) buf_puts(b, "sp_box_bool(");
-      emit_string_match_p_at(c, recv, rt, pattern, argv[1], b);
+      emit_string_match_p_at(c, recv, rt, pattern, NULL, argv[1], b);
       if (boxed) buf_puts(b, ")");
       return 1;
     }
@@ -529,6 +539,11 @@ no_gsub_enum:
          did take the call. */
       if ((is_interp_arg || is_regex_val_arg) && !poly_claimed && is_match_family(name)) {
         size_t pre_mark = g_pre->len;
+        int position_call = argc == 2 && is_match_p_name(name) &&
+                            (rt == TY_STRING || rt == TY_SYMBOL || rt == TY_POLY || rt == TY_UNKNOWN);
+        Buf pattern_setup = {0};
+        Buf *outer_pre = g_pre;
+        if (position_call) g_pre = &pattern_setup;
         Buf rp; memset(&rp, 0, sizeof rp);
         int rp_ok = emit_regex_pat_to_buf(c, argv[0], &rp) && rp.p;
         /* Fallback: TY_REGEX local/constant/inline Regexp.new -- value IS the mrb_regexp_pattern* */
@@ -543,6 +558,7 @@ no_gsub_enum:
           memset(&rp, 0, sizeof rp); buf_puts(&rp, tbuf);
           rp_ok = 1;
         }
+        g_pre = outer_pre;
         if (rp_ok && rp.p) {
           /* `5 =~ /re/`, `3.5 !~ /re/`, `5.match?(/re/)`: Object#=~ was removed,
              so a numeric receiver has no =~/!~/match?/match -- raise
@@ -563,7 +579,7 @@ no_gsub_enum:
             int bx = repr_of(c, id).kind == RK_BOXED;
             if (bx) buf_puts(b, "sp_box_bool(");
             if (argc == 2)
-              emit_string_match_p_at(c, recv, rt, rp.p, argv[1], b);
+              emit_string_match_p_at(c, recv, rt, rp.p, position_call ? &pattern_setup : NULL, argv[1], b);
             /* A symbol receiver matches over its name, so feed the runtime
                pattern the symbol's string rather than the raw sp_sym. */
             else if (rt == TY_SYMBOL) { buf_printf(b, "sp_re_match_p(%s, sp_sym_to_s(", rp.p); emit_expr(c, recv, b); buf_puts(b, "))"); }
@@ -589,6 +605,7 @@ no_gsub_enum:
               emit_str_expr(c, recv, b); buf_puts(b, nn ? ", \"match?\"))" : ")");
             }
             if (bx) buf_puts(b, ")");
+            free(pattern_setup.p);
             free(rp.p); return 1;
           }
           if (sp_streq(name, "=~") && rt == TY_STRING) {
@@ -643,6 +660,7 @@ no_gsub_enum:
         /* no branch took it (a nil receiver's =~, match with three
            arguments): the arm that does must not find the setup for a
            pattern it builds again */
+        free(pattern_setup.p);
         free(rp.p);
         g_pre->len = pre_mark; if (g_pre->p) g_pre->p[pre_mark] = 0;
       }

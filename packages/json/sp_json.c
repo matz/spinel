@@ -11,6 +11,7 @@
 #include <string.h>
 #include <stdlib.h>           /* strtoll, strtod */
 #include <errno.h>            /* ERANGE past int64 */
+#include <limits.h>           /* INT_MAX (jp_raise) */
 #include <math.h>             /* isinf, isnan */
 #include <float.h>            /* FLT_EVAL_METHOD (jp_float_exact) */
 #include <stdio.h>            /* snprintf (sp_json_float) */
@@ -791,11 +792,14 @@ static SP_NORETURN void jp_raise(jrd *j, const char *at, const char *msg, int fr
     column++;
   }
   for (; i >= 0; i--) if (j->start[i] == '\n') line++;
-  char *text = NULL;
+  /* the fragment is written into the message itself, by its length: the
+     unquoted rest of a long input is not copied once more on the way */
+  const char *body = "", *quote = "";
+  size_t len = 0;
   if (frag) {
-    if (at >= j->end) text = strdup("EOF");
+    if (at >= j->end) { body = "EOF"; len = 3; }
     else {
-      size_t len = 0, left = (size_t)(j->end - at);
+      size_t left = (size_t)(j->end - at);
       while (len < 32 && len < left) {
         char c = at[len];
         if (!c || c == '\n' || c == ' ' || c == '\t' || c == '\r') break;
@@ -805,19 +809,17 @@ static SP_NORETURN void jp_raise(jrd *j, const char *at, const char *msg, int fr
         /* at[len - 1] is json 2.18.0's buffer[len] */
         while (len && (unsigned char)at[len - 1] >= 0x80 && (unsigned char)at[len - 1] < 0xC0) len--;
         if (len && (unsigned char)at[len - 1] >= 0xC0) len--;
-        text = (char *)malloc(len + 3);
-        if (text) { text[0] = '\''; memcpy(text + 1, at, len); text[len + 1] = '\''; text[len + 2] = 0; }
+        quote = "'";
       }
       else {
         const char *z = memchr(at, 0, left);
         len = z ? (size_t)(z - at) : left;
-        text = (char *)malloc(len + 1);
-        if (text) { memcpy(text, at, len); text[len] = 0; }
       }
+      body = at;
     }
   }
-  const char *m = sp_sprintf("%s%s at line %ld column %ld", msg, text ? text : "", line, column);
-  free(text);
+  if (len > INT_MAX) len = INT_MAX;
+  const char *m = sp_sprintf("%s%s%.*s%s at line %ld column %ld", msg, quote, (int)len, body, quote, line, column);
   sp_raise_cls("JSON::ParserError", m);
 }
 /* Whitespace, and the comments json 2.18.0 takes by default between tokens

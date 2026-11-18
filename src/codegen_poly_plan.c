@@ -4080,9 +4080,9 @@ void emit_poly_cases_n(Compiler *c, int id, const char *name, const PolySpecials
     buf_printf(b, "_t%d = ", tr);
     if (ret == TY_POLY) {
       if (no_exc7)
-        buf_printf(b, "_t%d ? sp_box_str(_t%d) : (_e%d ? sp_box_nil() : sp_box_sym(sp_sym_intern(\"wait_readable\")))",
+        buf_printf(b, "_t%d ? sp_box_str_new(_t%d) : (_e%d ? sp_box_nil() : sp_box_sym(sp_sym_intern(\"wait_readable\")))",
                    trd7, trd7, te7);
-      else buf_printf(b, "sp_box_str(_t%d)", trd7);
+      else buf_printf(b, "sp_box_str_new(_t%d)", trd7);
     }
     else buf_printf(b, "_t%d", trd7);
     buf_puts(b, "; break; }");

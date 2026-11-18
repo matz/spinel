@@ -364,7 +364,7 @@ static void emit_io_read_nonblock_value(Compiler *c, int id, Buf *b) {
   buf_printf(b, "if (!_t%d && _t%d) { if (_e%d) sp_raise_cls(\"EOFError\", \"end of file reached\"); "
                 "sp_raise_cls(\"IO::EAGAINWaitReadable\", \"Resource temporarily unavailable - read would block\"); } ", tr, te, eof);
   if (repr_of(c, id).kind == RK_BOXED)
-    buf_printf(b, "_t%d ? sp_box_str(_t%d) : (_e%d ? sp_box_nil() : sp_box_sym(sp_sym_intern(\"wait_readable\")))", tr, tr, eof);
+    buf_printf(b, "_t%d ? sp_box_str_new(_t%d) : (_e%d ? sp_box_nil() : sp_box_sym(sp_sym_intern(\"wait_readable\")))", tr, tr, eof);
   else buf_printf(b, "_t%d", tr);
   buf_puts(b, "; })");
 }
@@ -454,7 +454,7 @@ static void emit_io_read_nonblock_buffer(Compiler *c, int id, int handle, Buf *b
     if (shared)
       buf_printf(b, "(sp_poly_nil_p(_t%d) ? sp_box_obj(sp_String_new_shared(_t%d), SP_BUILTIN_STRBUF) : _t%d)",
                  held[1], tb, held[1]);
-    else buf_printf(b, "(sp_poly_nil_p(_t%d) ? sp_box_str(_t%d) : _t%d)", held[1], tb, held[1]);
+    else buf_printf(b, "(sp_poly_nil_p(_t%d) ? sp_box_str_new(_t%d) : _t%d)", held[1], tb, held[1]);
     buf_printf(b, " : (_e%d ? sp_box_nil() : sp_box_sym(sp_sym_intern(\"wait_readable\")))", eof);
   }
   else buf_printf(b, "_t%d", tb);
@@ -775,7 +775,7 @@ static void emit_io_socket_call(Compiler *c, const NodeTable *nt, const char *na
       int tw = ++g_tmp, te = ++g_tmp;
       buf_printf(b, "({ %ssp_bool _e%d; const char *_t%d = sp_sock_read_nb(%s, ", pre.p ? pre.p : "", te, tw, r);
       emit_nonblock_operand(c, op[0], argv[0], 'i', b);
-      buf_printf(b, ", %s, 1, &_e%d); _t%d ? sp_box_str(_t%d)"
+      buf_printf(b, ", %s, 1, &_e%d); _t%d ? sp_box_str_new(_t%d)"
                     " : (_e%d ? sp_box_nil() : sp_box_sym(sp_sym_intern(\"wait_readable\"))); })",
                  x.p, te, tw, tw, te);
     }
@@ -1508,7 +1508,7 @@ int emit_call_poly_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
             int tw9 = ++g_tmp, te9 = ++g_tmp;
             buf_printf(b, "sp_bool _e%d; const char *_t%d = sp_sock_read_nb(_t%d, ", te9, tw9, tio2);
             emit_nonblock_operand(c, op9[0], argv[0], 'i', b);
-            buf_printf(b, ", %s, 0, &_e%d); _t%d ? sp_box_str(_t%d)"
+            buf_printf(b, ", %s, 0, &_e%d); _t%d ? sp_box_str_new(_t%d)"
                           " : (_e%d ? sp_box_nil() : sp_box_sym(sp_sym_intern(\"wait_readable\"))); })",
                          x9.p, te9, tw9, tw9, te9);
           }
@@ -2093,7 +2093,7 @@ int emit_call_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const ch
           emit_nonblock_operand(c, op8[0], argv[0], 'i', b);
           buf_printf(b, ", %s, 0, &_e%d); ", x8.p, te);
           if (ob >= 0) buf_printf(b, "if (_t%d) { %s} ", tob, obset.p ? obset.p : "");
-          buf_printf(b, "_t%d ? sp_box_str(_t%d)"
+          buf_printf(b, "_t%d ? sp_box_str_new(_t%d)"
                         " : (_e%d ? sp_box_nil() : sp_box_sym(sp_sym_intern(\"wait_readable\"))); })",
                      tob, tob, te);
         }

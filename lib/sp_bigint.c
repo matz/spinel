@@ -5261,8 +5261,17 @@ mpz_powm_montgomery(mpz_ctx_t *ctx, mpz_t *result,
 }
 
 /* ---- Spinel Bigint API ---- */
+/* A Bigint is immutable once built: every operation below computes into a
+   fresh mpz and hands it to sp_bigint_seal (sp_bigint_new_int fills its
+   limbs in place instead). A small result (the common case:
+   a 64-bit mask, a value just past int64) keeps its limbs inline after the
+   header, so it is one GC object with no malloc'd limb array and no
+   finalizer. A larger one keeps the heap limb array, freed by the finalizer.
+   The GC does not move objects, so an inline mpz.p stays valid. */
+#define SP_BIGINT_INLINE_LIMBS 4
 typedef struct sp_Bigint {
   mpz_t mpz;
+  mp_limb inl[];
 } sp_Bigint;
 
 /* GC integration: use Spinel's no-collect allocator to avoid GC during nested bigint ops */
@@ -5293,10 +5302,49 @@ static sp_Bigint *sp_bigint_alloc(void) {
   return (sp_Bigint*)calloc(1, sizeof(sp_Bigint));
 }
 
-sp_Bigint *sp_bigint_new_int(int64_t v) {
-  sp_Bigint *b = sp_bigint_alloc();
-  mpz_init_set_int(sp_mpz_ctx, &b->mpz, (mrb_int)v);
+static int sp_bigint_is_inline(sp_Bigint *b) { return b->mpz.p == b->inl; }
+
+/* n inline limbs (n <= SP_BIGINT_INLINE_LIMBS), uninitialized, no finalizer */
+static sp_Bigint *sp_bigint_alloc_inline(size_t n) {
+  sp_bigint_init_ctx();
+  size_t sz = sizeof(sp_Bigint) + n * sizeof(mp_limb);
+  sp_Bigint *b = (sp_Bigint*)(sp_gc_alloc_nogc ? sp_gc_alloc_nogc(sz, NULL, NULL) : calloc(1, sz));
+  b->mpz.p = n ? b->inl : NULL;
+  b->mpz.sz = n;
+  b->mpz.sn = 0;
   return b;
+}
+
+/* The Bigint for a computed mpz, which this takes over (t is left cleared). */
+static sp_Bigint *sp_bigint_seal(mpz_t *t) {
+  size_t n = t->sz;
+  while (n > 0 && t->p[n - 1] == 0) n--;
+  if (n <= SP_BIGINT_INLINE_LIMBS) {
+    sp_Bigint *b = sp_bigint_alloc_inline(n);
+    for (size_t i = 0; i < n; i++) b->inl[i] = t->p[i];
+    b->mpz.sn = n ? t->sn : 0;
+    mpz_clear(sp_mpz_ctx, t);
+    return b;
+  }
+  sp_Bigint *b = sp_bigint_alloc();
+  b->mpz = *t;
+  t->p = NULL; t->sz = 0; t->sn = 0;
+  return b;
+}
+
+/* |u| with the given sign, built in place: the limbs of a word are known
+   without a scratch mpz. */
+static sp_Bigint *sp_bigint_new_mag(uint64_t u, int neg) {
+  size_t n = 0;
+  for (uint64_t u0 = u; u0; u0 >>= DIG_SIZE) n++;
+  sp_Bigint *b = sp_bigint_alloc_inline(n);
+  for (size_t i = 0; i < n; i++) { b->inl[i] = (mp_limb)LOW(u); u >>= DIG_SIZE; }
+  b->mpz.sn = n ? (neg ? -1 : 1) : 0;
+  return b;
+}
+
+sp_Bigint *sp_bigint_new_int(int64_t v) {
+  return v < 0 ? sp_bigint_new_mag((uint64_t)0 - (uint64_t)v, 1) : sp_bigint_new_mag((uint64_t)v, 0);
 }
 
 sp_Bigint *sp_bigint_shl(sp_Bigint *a, int64_t n);   /* fwd: the scale below */
@@ -5319,10 +5367,11 @@ sp_Bigint *sp_bigint_new_double(double d) {
 }
 
 sp_Bigint *sp_bigint_new_str(const char *s, int base) {
-  sp_Bigint *b = sp_bigint_alloc();
-  mpz_init(sp_mpz_ctx, &b->mpz);
-  mpz_init_set_str(sp_mpz_ctx, &b->mpz, s, (mrb_int)strlen(s), base);
-  return b;
+  sp_bigint_init_ctx();
+  mpz_t b_t;
+  mpz_init(sp_mpz_ctx, &b_t);
+  mpz_init_set_str(sp_mpz_ctx, &b_t, s, (mrb_int)strlen(s), base);
+  return sp_bigint_seal(&b_t);
 }
 
 /* Serialization helpers for Marshal's `l` (Bignum) form. The magnitude is a
@@ -5341,45 +5390,46 @@ size_t sp_bigint_to_le_bytes(sp_Bigint *b, unsigned char *out, size_t cap) {
   return k;
 }
 sp_Bigint *sp_bigint_from_le_bytes(int negative, const unsigned char *bytes, size_t n) {
-  sp_Bigint *b = sp_bigint_alloc();
-  mpz_init(sp_mpz_ctx, &b->mpz);
+  sp_bigint_init_ctx();
+  mpz_t b_t;
+  mpz_init(sp_mpz_ctx, &b_t);
   size_t lb = sizeof(mp_limb);
   size_t nlimbs = (n + lb - 1) / lb; if (nlimbs == 0) nlimbs = 1;
-  mpz_realloc(sp_mpz_ctx, &b->mpz, nlimbs);
-  for (size_t i = 0; i < nlimbs; i++) b->mpz.p[i] = 0;
-  for (size_t i = 0; i < n; i++) b->mpz.p[i / lb] |= (mp_limb)((mp_limb)bytes[i] << (8 * (i % lb)));
-  b->mpz.sz = nlimbs;
-  while (b->mpz.sz > 0 && b->mpz.p[b->mpz.sz - 1] == 0) b->mpz.sz--;
-  b->mpz.sn = (short)(b->mpz.sz == 0 ? 0 : (negative ? -1 : 1));
-  return b;
+  mpz_realloc(sp_mpz_ctx, &b_t, nlimbs);
+  for (size_t i = 0; i < nlimbs; i++) b_t.p[i] = 0;
+  for (size_t i = 0; i < n; i++) b_t.p[i / lb] |= (mp_limb)((mp_limb)bytes[i] << (8 * (i % lb)));
+  b_t.sz = nlimbs;
+  while (b_t.sz > 0 && b_t.p[b_t.sz - 1] == 0) b_t.sz--;
+  b_t.sn = (short)(b_t.sz == 0 ? 0 : (negative ? -1 : 1));
+  return sp_bigint_seal(&b_t);
 }
 
 void sp_bigint_free(sp_Bigint *b) {
   if (b) {
-    mpz_clear(sp_mpz_ctx, &b->mpz);
+    if (!sp_bigint_is_inline(b)) mpz_clear(sp_mpz_ctx, &b->mpz);
     if (!sp_gc_alloc_nogc) free(b);
   }
 }
 
 sp_Bigint *sp_bigint_add(sp_Bigint *a, sp_Bigint *b) {
-  sp_Bigint *r = sp_bigint_alloc();
-  mpz_init(sp_mpz_ctx, &r->mpz);
-  mpz_add(sp_mpz_ctx, &r->mpz, &a->mpz, &b->mpz);
-  return r;
+  mpz_t r_t;
+  mpz_init(sp_mpz_ctx, &r_t);
+  mpz_add(sp_mpz_ctx, &r_t, &a->mpz, &b->mpz);
+  return sp_bigint_seal(&r_t);
 }
 
 sp_Bigint *sp_bigint_sub(sp_Bigint *a, sp_Bigint *b) {
-  sp_Bigint *r = sp_bigint_alloc();
-  mpz_init(sp_mpz_ctx, &r->mpz);
-  mpz_sub(sp_mpz_ctx, &r->mpz, &a->mpz, &b->mpz);
-  return r;
+  mpz_t r_t;
+  mpz_init(sp_mpz_ctx, &r_t);
+  mpz_sub(sp_mpz_ctx, &r_t, &a->mpz, &b->mpz);
+  return sp_bigint_seal(&r_t);
 }
 
 sp_Bigint *sp_bigint_mul(sp_Bigint *a, sp_Bigint *b) {
-  sp_Bigint *r = sp_bigint_alloc();
-  mpz_init(sp_mpz_ctx, &r->mpz);
-  mpz_mul(sp_mpz_ctx, &r->mpz, &a->mpz, &b->mpz);
-  return r;
+  mpz_t r_t;
+  mpz_init(sp_mpz_ctx, &r_t);
+  mpz_mul(sp_mpz_ctx, &r_t, &a->mpz, &b->mpz);
+  return sp_bigint_seal(&r_t);
 }
 
 sp_Bigint *sp_bigint_div(sp_Bigint *a, sp_Bigint *b) {
@@ -5388,18 +5438,18 @@ sp_Bigint *sp_bigint_div(sp_Bigint *a, sp_Bigint *b) {
      bypassing div_limb's mrb_raise path. Routing through
      sp_bigint_raise_zerodiv reaches spinel's longjmp rescue net. */
   if (zero_p(&b->mpz)) sp_bigint_raise_zerodiv("divided by 0");
-  sp_Bigint *r = sp_bigint_alloc();
-  mpz_init(sp_mpz_ctx, &r->mpz);
-  mpz_mdiv(sp_mpz_ctx, &r->mpz, &a->mpz, &b->mpz);
-  return r;
+  mpz_t r_t;
+  mpz_init(sp_mpz_ctx, &r_t);
+  mpz_mdiv(sp_mpz_ctx, &r_t, &a->mpz, &b->mpz);
+  return sp_bigint_seal(&r_t);
 }
 
 sp_Bigint *sp_bigint_mod(sp_Bigint *a, sp_Bigint *b) {
   if (zero_p(&b->mpz)) sp_bigint_raise_zerodiv("divided by 0");
-  sp_Bigint *r = sp_bigint_alloc();
-  mpz_init(sp_mpz_ctx, &r->mpz);
-  mpz_mmod(sp_mpz_ctx, &r->mpz, &a->mpz, &b->mpz);
-  return r;
+  mpz_t r_t;
+  mpz_init(sp_mpz_ctx, &r_t);
+  mpz_mmod(sp_mpz_ctx, &r_t, &a->mpz, &b->mpz);
+  return sp_bigint_seal(&r_t);
 }
 
 /* Integer#remainder: truncated (toward zero) remainder, which carries the sign
@@ -5434,15 +5484,15 @@ sp_Bigint *sp_bigint_powmod(sp_Bigint *base, intptr_t exp, sp_Bigint *mod) {
   mpz_init(sp_mpz_ctx, &b);
   mpz_mod(sp_mpz_ctx, &b, &base->mpz, &c);
   if (b.sn < 0 && !uzero_p(&b)) mpz_add(sp_mpz_ctx, &b, &b, &c);
-  sp_Bigint *r = sp_bigint_alloc();
-  mpz_init(sp_mpz_ctx, &r->mpz);
+  mpz_t r_t;
+  mpz_init(sp_mpz_ctx, &r_t);
   if (!mod_one && !((zero_p(&b) || uzero_p(&b)) && exp > 0))
-    mpz_powm_i(sp_mpz_ctx, &r->mpz, &b, exp, &c);
-  if (neg_mod && !zero_p(&r->mpz) && !uzero_p(&r->mpz))
-    mpz_sub(sp_mpz_ctx, &r->mpz, &r->mpz, &c);
+    mpz_powm_i(sp_mpz_ctx, &r_t, &b, exp, &c);
+  if (neg_mod && !zero_p(&r_t) && !uzero_p(&r_t))
+    mpz_sub(sp_mpz_ctx, &r_t, &r_t, &c);
   mpz_clear(sp_mpz_ctx, &b);
   mpz_clear(sp_mpz_ctx, &c);
-  return r;
+  return sp_bigint_seal(&r_t);
 }
 
 sp_Bigint *sp_bigint_powmod_big(sp_Bigint *base, sp_Bigint *exp, sp_Bigint *mod) {
@@ -5457,25 +5507,25 @@ sp_Bigint *sp_bigint_powmod_big(sp_Bigint *base, sp_Bigint *exp, sp_Bigint *mod)
   mpz_init(sp_mpz_ctx, &b);
   mpz_mod(sp_mpz_ctx, &b, &base->mpz, &c);
   if (b.sn < 0 && !uzero_p(&b)) mpz_add(sp_mpz_ctx, &b, &b, &c);
-  sp_Bigint *r = sp_bigint_alloc();
-  mpz_init(sp_mpz_ctx, &r->mpz);
+  mpz_t r_t;
+  mpz_init(sp_mpz_ctx, &r_t);
   if (!mod_one && !((zero_p(&b) || uzero_p(&b)) && sp_bigint_sign(exp) > 0))
-    mpz_powm(sp_mpz_ctx, &r->mpz, &b, &exp->mpz, &c);
-  if (neg_mod && !zero_p(&r->mpz) && !uzero_p(&r->mpz))
-    mpz_sub(sp_mpz_ctx, &r->mpz, &r->mpz, &c);
+    mpz_powm(sp_mpz_ctx, &r_t, &b, &exp->mpz, &c);
+  if (neg_mod && !zero_p(&r_t) && !uzero_p(&r_t))
+    mpz_sub(sp_mpz_ctx, &r_t, &r_t, &c);
   mpz_clear(sp_mpz_ctx, &b);
   mpz_clear(sp_mpz_ctx, &c);
-  return r;
+  return sp_bigint_seal(&r_t);
 }
 
 sp_Bigint *sp_bigint_pow(sp_Bigint *base, int64_t exp) {
   /* No Rational: a negative integer exponent raises RangeError rather than
      truncating to 0 (mirrors sp_int_pow). See docs/limitations.md. */
   if (exp < 0) sp_raise_cls("RangeError", "negative exponent");
-  sp_Bigint *r = sp_bigint_alloc();
-  mpz_init(sp_mpz_ctx, &r->mpz);
-  mpz_pow(sp_mpz_ctx, &r->mpz, &base->mpz, exp);
-  return r;
+  mpz_t r_t;
+  mpz_init(sp_mpz_ctx, &r_t);
+  mpz_pow(sp_mpz_ctx, &r_t, &base->mpz, exp);
+  return sp_bigint_seal(&r_t);
 }
 
 int sp_bigint_cmp(sp_Bigint *a, sp_Bigint *b) {
@@ -5527,10 +5577,7 @@ int64_t sp_bigint_to_int(sp_Bigint *b) {
 /* IO::Buffer's u64 lane (lib/sp_iobuffer.c): a full unsigned-64 constructor,
    and the magnitude reader its range checks decide from. */
 sp_Bigint *sp_bigint_new_u64(uint64_t v) {
-  sp_Bigint *b = sp_bigint_alloc();
-  mpz_init(sp_mpz_ctx, &b->mpz);
-  mpz_set_uint64(sp_mpz_ctx, &b->mpz, v);
-  return b;
+  return sp_bigint_new_mag(v, 0);   /* a word fits the inline limbs at either limb width */
 }
 
 /* |b| into *out when it fits 64 bits; 0 (out untouched) when it doesn't.
@@ -5572,11 +5619,12 @@ double sp_bigint_to_double(sp_Bigint *b) {
    which the walks take as the zero they are. */
 static sp_Bigint *sp_bigint_bitwise(sp_Bigint *a, sp_Bigint *b,
                                     void (*op)(mpz_ctx_t *, mpz_t *, mpz_t *, mpz_t *)) {
-  mpz_t zero_mpz;
-  sp_Bigint *r = sp_bigint_alloc();
+  mpz_t zero_mpz, r_t;
+  sp_bigint_init_ctx();
   mpz_init(sp_mpz_ctx, &zero_mpz);
-  op(sp_mpz_ctx, &r->mpz, a ? &a->mpz : &zero_mpz, b ? &b->mpz : &zero_mpz);
-  return r;
+  mpz_init(sp_mpz_ctx, &r_t);
+  op(sp_mpz_ctx, &r_t, a ? &a->mpz : &zero_mpz, b ? &b->mpz : &zero_mpz);
+  return sp_bigint_seal(&r_t);
 }
 sp_Bigint *sp_bigint_and(sp_Bigint *a, sp_Bigint *b) { return sp_bigint_bitwise(a, b, mpz_and); }
 sp_Bigint *sp_bigint_or(sp_Bigint *a, sp_Bigint *b)  { return sp_bigint_bitwise(a, b, mpz_or); }
@@ -5599,10 +5647,10 @@ sp_Bigint *sp_bigint_shl(sp_Bigint *a, int64_t n) {
   /* x << n == x * 2^n, but moving limbs rather than building 2^n and running
      a general multiply over it: the old form cost a pow and an O(len^2)
      multiply where the answer is a memmove and a bit rotate. */
-  sp_Bigint *r = sp_bigint_alloc();
-  mpz_init(sp_mpz_ctx, &r->mpz);
-  mpz_mul_2exp(sp_mpz_ctx, &r->mpz, &a->mpz, (mrb_int)n);
-  return r;
+  mpz_t r_t;
+  mpz_init(sp_mpz_ctx, &r_t);
+  mpz_mul_2exp(sp_mpz_ctx, &r_t, &a->mpz, (mrb_int)n);
+  return sp_bigint_seal(&r_t);
 }
 
 sp_Bigint *sp_bigint_shr(sp_Bigint *a, int64_t n) {
@@ -5611,9 +5659,10 @@ sp_Bigint *sp_bigint_shr(sp_Bigint *a, int64_t n) {
      mpz_div_2exp shifts the MAGNITUDE and keeps the sign, so it truncates
      toward zero where Ruby's >> floors: a negative value that lost a set bit
      is one lower (-7 >> 1 is -4, not -3). */
-  sp_Bigint *r = sp_bigint_alloc();
-  mpz_init(sp_mpz_ctx, &r->mpz);
-  mpz_div_2exp(sp_mpz_ctx, &r->mpz, &a->mpz, (mrb_int)n);
+  mpz_t r_t;
+  mpz_init(sp_mpz_ctx, &r_t);
+  mpz_div_2exp(sp_mpz_ctx, &r_t, &a->mpz, (mrb_int)n);
+  sp_Bigint *r = sp_bigint_seal(&r_t);
   if (a->mpz.sn < 0 && mpz_low_bits_set(&a->mpz, n))
     return sp_bigint_sub(r, sp_bigint_new_int(1));
   return r;
@@ -5760,10 +5809,10 @@ sp_Bigint *sp_bigint_abs_v(sp_Bigint *b) {
 }
 
 sp_Bigint *sp_bigint_gcd(sp_Bigint *a, sp_Bigint *b) {
-  sp_Bigint *r = sp_bigint_alloc();
-  mpz_init(sp_mpz_ctx, &r->mpz);
-  mpz_gcd(sp_mpz_ctx, &r->mpz, &a->mpz, &b->mpz);
-  return sp_bigint_abs_v(r);   /* Integer#gcd is always non-negative */
+  mpz_t r_t;
+  mpz_init(sp_mpz_ctx, &r_t);
+  mpz_gcd(sp_mpz_ctx, &r_t, &a->mpz, &b->mpz);
+  return sp_bigint_abs_v(sp_bigint_seal(&r_t));   /* Integer#gcd is always non-negative */
 }
 
 sp_Bigint *sp_bigint_lcm(sp_Bigint *a, sp_Bigint *b) {
@@ -5777,9 +5826,10 @@ sp_Bigint *sp_bigint_lcm(sp_Bigint *a, sp_Bigint *b) {
 
 /* Integer.sqrt for a Bignum argument: exact integer square root via mpz (#2420) */
 sp_Bigint *sp_bigint_isqrt(sp_Bigint *a) {
-  sp_Bigint *r = sp_bigint_new_int(0);
-  mpz_sqrt(sp_mpz_ctx, &r->mpz, &a->mpz);
-  return r;
+  mpz_t r_t;
+  mpz_init(sp_mpz_ctx, &r_t);
+  mpz_sqrt(sp_mpz_ctx, &r_t, &a->mpz);
+  return sp_bigint_seal(&r_t);
 }
 
 /* Integer#digits(base) for a bignum receiver: least-significant first, into

@@ -57,8 +57,9 @@ NC_OTHER='(^|[^.[:alnum:]_])(load|open)[ (]|\$\$|`|%x|_nonblock'
 # nocache_one FILE: 0 when FILE itself opts out
 nocache_one() {
   grep -q '^# spinel: no-cache' "$1" && return 0
-  grep -v '^[[:space:]]*#' "$1" | grep -qwE "$NC_WORDS" && return 0
-  grep -v '^[[:space:]]*#' "$1" | grep -qE "$NC_OTHER" && return 0
+  # Drain the pipe so the comment filter can finish writing large sources.
+  grep -v '^[[:space:]]*#' "$1" | grep -wE "$NC_WORDS" >/dev/null && return 0
+  grep -v '^[[:space:]]*#' "$1" | grep -E "$NC_OTHER" >/dev/null && return 0
   return 1
 }
 

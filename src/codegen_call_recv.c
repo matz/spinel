@@ -8890,6 +8890,7 @@ static int str_arms_convert(Compiler *c, int id, Buf *b, const NodeTable *nt, co
    getbyte (emit_scalar_recv_arms's String chain; answers 1 when a branch
    was taken) */
 static int str_arms_slice_encode(Compiler *c, int id, Buf *b, const char *name, int recv, int argc, const int *argv, const char *r) {
+  TyKind index = argc == 1 && is_slice_alias(name) ? repr_of(c, argv[0]).as_ty : TY_UNKNOWN;
   if ((is_slice_alias(name)) && argc == 1 && re_lit_index(c, argv[0]) >= 0) {
     /* s[/re/] -> the matched substring, or nil (NULL) on no match */
     buf_printf(b, "(sp_re_match(sp_re_pat_%d, %s) >= 0 ? sp_re_match_str : NULL)", re_lit_index(c, argv[0]), r);
@@ -8992,11 +8993,11 @@ static int str_arms_slice_encode(Compiler *c, int id, Buf *b, const char *name, 
     buf_printf(b, "sp_str_sub_range(%s, ", r);
     emit_int_expr(c, argv[0], b); buf_puts(b, ", "); emit_int_expr(c, argv[1], b); buf_puts(b, ")");
   }
-  else if ((is_slice_alias(name)) && argc == 1 && comp_ntype(c, argv[0]) == TY_STRING) {
+  else if (index == TY_STRING || index == TY_STRBUF) {
     /* s["sub"] -> the substring if present, else nil */
     int tsub = ++g_tmp;
     buf_printf(b, "({ const char *_t%d = ", tsub); emit_str_expr(c, argv[0], b);
-    buf_printf(b, "; (strstr(%s, _t%d) ? sp_str_dup(_t%d) : NULL); })", r, tsub, tsub);
+    buf_printf(b, "; sp_String_cstr_nil(sp_str_slice_key(%s, _t%d)); })", r, tsub);
   }
   else if ((is_slice_alias(name)) && argc == 1) {
     buf_printf(b, "sp_str_char_at_or_nil(%s, ", r); emit_int_expr(c, argv[0], b); buf_puts(b, ")");
@@ -9217,8 +9218,8 @@ static int str_hold_operands(Compiler *c, int argc, const int *argv, Buf *b) {
   return got;
 }
 /* s[...], s.slice(...) and s.unpack1(...) on a receiver that can be nil:
-   the slice arms read a NULL receiver as "" (strstr, a match) or raise
-   under `[]` (the character and range reads), and unpack1's under unpack.
+   some slice arms treat NULL as no match, others raise under `[]`, and
+   unpack1's raises under unpack.
    With no argument that runs code, the receiver passes through
    sp_nil_recv_named, which raises under the name as written. With one, the
    receiver is held, then those arguments, as CRuby runs them ahead of the
@@ -10466,9 +10467,8 @@ static int str_arms_poly_pattern(Compiler *c, int id, Buf *b, const NodeTable *n
     int t1 = hold_operand(c, argv[1], comp_ntype(c, argv[1]), 0, ++g_tmp, 1, " ", &eb);
     bind1 = view_bind_temp(argv[1], t1);
   }
-  /* a receiver that can be nil raises its NoMethodError here, once the
-     operands have run: the arms below read a NULL receiver as no match
-     (a Regexp) or hand it to strstr (a String) */
+  /* A receiver that can be nil raises its NoMethodError once the
+     operands have run, before testing the pattern. */
   if (!recv_never_nil(c, recv)) { nil_recv_check(name, ts, &eb); buf_puts(&eb, " "); }
   buf_printf(&eb, "(_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_REGEX) ? (", tp, tp);
   int bind = view_bind(argv[0], "((mrb_regexp_pattern *)_t%d.v.p)", tp);

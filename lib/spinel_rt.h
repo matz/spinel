@@ -13131,14 +13131,9 @@ static sp_RbVal sp_poly_get_str(sp_RbVal v, const char *key) {
     const char *g = sp_MatchData_aref_name((sp_MatchData *)v.v.p, key ? key : "");
     return g ? sp_box_str_new(g) : sp_box_nil();
   }
-  /* `s["sub"]` is String#[str]: the substring itself when present, else nil.
-     Both string representations answer it, and neither did here -- an
-     immediate string was rejected by the tag test on the next line and a
-     shared handle fell out of the switch below (#4279). */
-  if (v.tag == SP_TAG_STR || sp_poly_is_strbuf(v)) {
-    const char *s = v.tag == SP_TAG_STR ? (v.v.s ? v.v.s : sp_str_empty) : sp_poly_to_s(v);
-    return (key && sp_str_include(s, key)) ? sp_box_str(key) : sp_box_nil();
-  }
+  /* A match is a new mutable String, with the needle's encoding. */
+  if (sp_rbval_is_string(v))
+    return sp_box_nullable_obj(sp_str_slice_key(sp_rbval_string_bytes(v), key), SP_BUILTIN_STRBUF);
   if (sp_poly_is_call_aref(v)) return sp_poly_call_aref(v, sp_box_str(key));
   sp_poly_coll_chk(v, "[]");
   if (v.tag != SP_TAG_OBJ) return sp_box_nil();

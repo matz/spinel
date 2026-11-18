@@ -460,6 +460,14 @@ static void sp_str_check_compatible_encoding(const char *s, const char *other) {
       ? "incompatible character encodings: BINARY (ASCII-8BIT) and UTF-8"
       : "incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)");
 }
+sp_String *sp_str_slice_key(const char *s, const char *key) {
+  if (!s) sp_nil_recv("[]");
+  if (!key) sp_raise_cls("TypeError", "no implicit conversion from nil to integer");
+  sp_str_check_compatible_encoding(s, key);
+  if (!sp_str_valid_encoding(key) || !sp_str_include(s, key)) return NULL;
+  SP_GC_ROOT_STR(key);
+  return sp_String_new_unfrozen(key);
+}
 static size_t sp_str_nl_at(const char*q,const char*e){return q<e&&*q=='\n'?1:e-q>=2&&q[0]=='\r'&&q[1]=='\n'?2:0;}
 /* Read one line from the byte views taken for this walk. A nil separator
    is handled by the receiver-owning caller, since its answer is the receiver. */

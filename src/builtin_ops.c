@@ -4129,7 +4129,7 @@ static const IterRow iter_rows[] = {
   { BOP_ANY_ARRAY, "select",          0, 0, 1, { YS_ELEM }, IA_SOME, 0, IR_EACH },
   { BOP_ANY_ARRAY, "filter",          0, 0, 1, { YS_ELEM }, IA_SOME, 0, IR_EACH },
   { BOP_ANY_ARRAY, "reject",          0, 0, 1, { YS_ELEM }, IA_SOME, 0, IR_EACH },
-  { BOP_ANY_ARRAY, "find_all",        0, 0, 1, { YS_ELEM }, IA_SOME, IRF_GAP_SHARE | IRF_GAP_SHAPE },
+  { BOP_ANY_ARRAY, "find_all",        0, 0, 1, { YS_ELEM }, IA_SOME, IRF_GAP_SHARE | IRF_GAP_SHAPE, IR_EACH },
   { BOP_ANY_ARRAY, "select!",         0, 0, 1, { YS_ELEM }, IA_RECV, 0, IR_EACH },
   { BOP_ANY_ARRAY, "filter!",         0, 0, 1, { YS_ELEM }, IA_RECV, 0, IR_EACH },
   { BOP_ANY_ARRAY, "reject!",         0, 0, 1, { YS_ELEM }, IA_RECV, 0, IR_EACH },
@@ -4383,7 +4383,8 @@ int iter_row_named(const char *name) {
 const IterRow *iter_row_of(TyKind rt, const char *name, int argc) {
   const IterRow *r = iter_row(BOP_ANY_RECV, name, argc, 0);
   if (r || !name) return r;
-  TyKind fam = ty_is_hash(rt) ? BOP_ANY_HASH
+  TyKind fam = rt == BOP_KERNEL ? BOP_KERNEL
+             : ty_is_hash(rt) ? BOP_ANY_HASH
              : ty_is_array(rt) || ty_is_obj_array(rt) ? BOP_ANY_ARRAY
              : rt == TY_INT || rt == TY_FLOAT || rt == TY_STRING || rt == TY_RANGE ||
                rt == TY_FLOAT_RANGE ? rt

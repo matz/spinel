@@ -1641,6 +1641,32 @@ int desugar_sclass_hooks(Compiler *c) {
   return changed;
 }
 
+/* `Socket::Constants::SOL_SOCKET` (excon's socket options): CRuby's Socket::Constants holds the same constants
+   Socket does, so the read is `Socket::SOL_SOCKET`, which the run time's table answers (sp_sock_const). */
+int desugar_socket_constants(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  if (!sp_feature_required("socket")) return 0;
+  int n0 = nt->count, changed = 0;
+  /* (none where the program declares a Socket or a Constants itself: a nested Socket module, or a reopened
+     ::Socket's own constants, are not the run time's table) */
+  for (int id = 0; id < n0; id++) {
+    const char *dn = class_def_name(nt, id);
+    if (dn && (sp_streq(dn, "Socket") || sp_streq(dn, "Constants"))) return 0;
+  }
+  for (int id = 0; id < n0; id++) {
+    if (nt_kind(nt, id) != NK_ConstantPathNode) continue;
+    int mid = nt_ref(nt, id, "parent");
+    if (mid < 0 || nt_kind(nt, mid) != NK_ConstantPathNode || !sp_streq(nt_str(nt, mid, "name"), "Constants")) continue;
+    int root = nt_ref(nt, mid, "parent");
+    int rooted_socket = root < 0 ? 0 : (nt_kind(nt, root) == NK_ConstantReadNode && sp_streq(nt_str(nt, root, "name"), "Socket")) ||
+                        (nt_kind(nt, root) == NK_ConstantPathNode && nt_ref(nt, root, "parent") < 0 && sp_streq(nt_str(nt, root, "name"), "Socket"));
+    if (!rooted_socket) continue;
+    nt_node_set_ref(nt, id, "parent", root);
+    changed = 1;
+  }
+  return changed;
+}
+
 int desugar_instance_eval_defs(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count, changed = 0;

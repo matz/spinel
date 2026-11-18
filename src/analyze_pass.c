@@ -21433,6 +21433,8 @@ void cr_collect_program_end(Compiler *c, char ***out, int *n, int *cap) {
 /* A call on the constant of a core class or module (`Array.new`,
    `Integer.sqrt`, `File.open`) runs that builtin's own singleton method, never
    a method of the program's of the name, on either side of a class: marking
+      if (is_exception_message(rows[i].name))
+        cr_mark_implied(c, out, n, cap, "to_str", 0, "ProgramNode: exception message text");
    it by bare name kept every program method called `new` or `open` alive, and
    with it what that method calls. The program names no class of the
    constant's name (a reopened core class has one, and its methods are among

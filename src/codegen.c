@@ -23816,8 +23816,13 @@ static void emit_exc_text_tail(Compiler *c, Buf *b) {
       buf_puts(b, " }\n");
     }
     buf_puts(b, "  return sp_exc_message_idbox(e);\n}\n");
-    buf_printf(b, "static const char *sp_user_exc_%s(sp_Exception *e) { const char *s = sp_strface_b_box(sp_user_exc_%s_v(e)); return %s; }\n",
-               name, name, msg ? "s ? s : sp_str_empty" : "s");
+    if (msg)
+      buf_puts(b, "static const char *sp_user_exc_message(sp_Exception *e) {\n"
+                  "  sp_RbVal v = sp_user_exc_message_v(e); SP_GC_ROOT_RBVAL(v);\n"
+                  "  const char *s = sp_strface_b_box(sp_poly_check_str_box(v)); return s ? s : sp_str_empty;\n"
+                  "}\n");
+    else
+      buf_puts(b, "static const char *sp_user_exc_to_s(sp_Exception *e) { return sp_strface_b_box(sp_user_exc_to_s_v(e)); }\n");
   }
 }
 

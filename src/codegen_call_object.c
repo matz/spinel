@@ -93,7 +93,8 @@ static int hash_reader_class(Compiler *c) {
 /* See codegen_call_arms.h. */
 int emit_main_text_call(Compiler *c, int id, Buf *b) {
   if (!cplan_main_text_call(c, id)) return 0;
-  buf_puts(b, "SPL(\"main\")");
+  emit_coerce_text(c, id, TY_STRING, repr_of(c, id).as_ty, CO_HOLD,
+                   "SPL(\"main\")", "main's display", b);
   return 1;
 }
 

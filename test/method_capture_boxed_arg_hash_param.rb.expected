@@ -1,0 +1,12 @@
+{"k" => 1}
+2
+{"k" => 1, "j" => 6}
+{"m" => 8, "k" => 2}
+"s"
+NoMethodError
+NoMethodError
+{"k" => 2}
+{"z" => 9, "k" => 1}
+2
+3
+NoMethodError

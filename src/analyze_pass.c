@@ -564,8 +564,12 @@ int infer_param_hash_value(Compiler *c) {
       /* A boxed parameter some caller hands a boxed value is that caller's
          object, whatever kind it holds at run time: narrowing it cast a
          `Hash.new(0)` (a poly-keyed hash) to the string-keyed struct and the
-         counting loop ran off its table (tally(hash) in builtins/). */
-      if (seedable && param_gets_boxed_arg(c, sc, p)) continue;
+         counting loop ran off its table (tally(hash) in builtins/). So is
+         one a call of a Method value hands a boxed argument, which no call
+         named for the method shows (bind_boxed_args_to_captures marks it):
+         narrowed here and boxed again there, it changed every round to the
+         cap. */
+      if (seedable && (lv->poly_dispatch_widened || param_gets_boxed_arg(c, sc, p))) continue;
       TyKind hv = ty_hash_of(kt, vt);
       if (hv == TY_UNKNOWN) continue;
       /* A parameter its own body assigns a value the hash does not hold

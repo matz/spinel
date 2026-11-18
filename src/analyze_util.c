@@ -5759,11 +5759,32 @@ static int method_nodes_same_target(Compiler *c, int a, int b) {
    What it holds then no write names. The scope's own writes of the name
    are read from their index (comp_lvw_first_sc): a walk of the program's
    targets for each Method local grew with the two multiplied. */
+int subtree_reads_local(const NodeTable *nt, int id, const char *name);
+
+/* Is parameter `vn` of scope `sc` written before anything reads it: by a
+   plain write that is a statement of the body itself, with no read of the
+   name in a default, in a statement before it or in its own value
+   (`def probe(m); m = obj.method(:f); ...`)? Its argument then reaches no
+   read, and the writes say what the local holds. */
+static int param_written_before_read(Compiler *c, Scope *sc, const char *vn) {
+  const NodeTable *nt = c->nt;
+  int body = sc->def_node >= 0 ? nt_ref(nt, sc->def_node, "body") : -1, n = 0;
+  if (body < 0 || nt_kind(nt, body) != NK_StatementsNode ||
+      subtree_reads_local(nt, nt_ref(nt, sc->def_node, "parameters"), vn)) return 0;
+  const int *st = nt_arr(nt, body, "body", &n);
+  for (int i = 0; i < n; i++) {
+    const char *wn = nt_kind(nt, st[i]) == NK_LocalVariableWriteNode ? nt_str(nt, st[i], "name") : NULL;
+    if (wn && sp_streq(wn, vn)) return !subtree_reads_local(nt, nt_ref(nt, st[i], "value"), vn);
+    if (subtree_reads_local(nt, st[i], vn)) return 0;
+  }
+  return 0;
+}
+
 int local_takes_unwritten_value(Compiler *c, Scope *sc, const char *vn) {
   const NodeTable *nt = c->nt;
   if (!sc || !vn) return 0;
   for (int i = 0; i < sc->nparams; i++)
-    if (sc->pnames[i] && sp_streq(sc->pnames[i], vn)) return 1;
+    if (sc->pnames[i] && sp_streq(sc->pnames[i], vn) && !param_written_before_read(c, sc, vn)) return 1;
   int si = (int)(sc - c->scopes);
   for (int w = comp_lvw_first_sc(c, si, vn); w >= 0; w = comp_lvw_next_sc(c, w)) {
     const char *wn = nt_str(nt, w, "name");

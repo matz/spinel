@@ -1126,8 +1126,8 @@ sp_RbVal sp_poly_slice_or_call(sp_RbVal v, sp_RbVal a, sp_RbVal b)
     if (b.tag == SP_TAG_INT) {
       if (sp_re_match(pattern, subject ? subject : sp_str_empty) < 0) return sp_box_nil();
       sp_int n = sp_re_group_nth(b.v.i);
-      if (n == 0) return sp_box_nullable_str(sp_re_match_str);
-      if (n >= 1 && n <= 9) return sp_box_nullable_str(sp_re_captures[n]);
+      if (n == 0) return sp_box_str_new(sp_re_match_str);
+      if (n >= 1 && n <= 9) return sp_box_str_new(sp_re_captures[n]);
       return sp_box_nil();
     }
     if (sp_rbval_is_string(b) || b.tag == SP_TAG_SYM) {
@@ -1135,7 +1135,7 @@ sp_RbVal sp_poly_slice_or_call(sp_RbVal v, sp_RbVal a, sp_RbVal b)
                                             : sp_rbval_string_bytes(b);
       SP_GC_ROOT_STR(name);
       if (sp_re_match(pattern, subject ? subject : sp_str_empty) < 0) return sp_box_nil();
-      return sp_box_nullable_str(sp_re_named_capture(pattern, name ? name : sp_str_empty));
+      return sp_box_str_new(sp_re_named_capture(pattern, name ? name : sp_str_empty));
     }
   }
   /* a Method's [] too: its arguments of any kind are the call's, where

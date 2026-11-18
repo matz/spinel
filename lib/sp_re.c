@@ -1145,7 +1145,7 @@ const char *sp_re_named_capture(const mrb_regexp_pattern *pat, const char *name)
   int len = e - b;
   char *out = sp_str_alloc(len);
   memcpy(out, sp_re_last_str + b, len);
-  return out;
+  return sp_str_bin_like(sp_re_last_str, out);
 }
 /* `a|b`, built byte-wise: sp_sprintf's %s ends at an embedded NUL, so a
    branch carrying one joined short. Used by Regexp.union, both the runtime
@@ -1291,9 +1291,8 @@ sp_PolyArray *sp_re_match_data(mrb_regexp_pattern *pat, const char *str) {
       memcpy(buf, str + start, len);
       buf[len] = 0;
       sp_str_set_len(buf, (size_t)len);
-      sp_PolyArray_push(arr, sp_box_str(sp_str_bin_like(str, buf)));
-    }
-else {
+      sp_PolyArray_push(arr, sp_box_str_new(sp_str_bin_like(str, buf)));
+    } else {
       sp_PolyArray_push(arr, sp_box_nil());
     }
   }

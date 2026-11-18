@@ -4299,9 +4299,10 @@ sp_RbVal sp_signal_trap(sp_RbVal sig, sp_RbVal handler) {SP_GC_ROOT_RBVAL(sig);S
   /* the previous handler: a stored proc or command string; an untouched
      signal reads "DEFAULT", except EXIT whose default handler is nil (#2839) */
   sp_RbVal prev = sp_trap_proc[no] ? sp_box_proc((sp_Proc *)sp_trap_proc[no])
-                : sp_trap_state[no] ? sp_box_str(sp_trap_state[no])
+                : sp_trap_state[no] ? sp_box_str_fresh(sp_trap_state[no])
                 : no == 0 ? sp_box_nil()
-                : sp_box_str((&("\xff" "DEFAULT")[1]));
+                : sp_box_str_fresh((&("\xff" "DEFAULT")[1]));
+  SP_GC_ROOT_RBVAL(prev);
   if (handler.tag == SP_TAG_OBJ && handler.cls_id == SP_BUILTIN_PROC && handler.v.p) {
     sp_trap_proc[no] = (sp_Proc *)handler.v.p;
     sp_trap_state[no] = NULL;
@@ -4419,8 +4420,8 @@ sp_RbVal sp_env_shift(void) {
   SP_GC_ROOT_STR(v);
   sp_PolyArray *a = sp_PolyArray_new();
   SP_GC_ROOT(a);
-  sp_PolyArray_push(a, sp_box_str(k));
-  sp_PolyArray_push(a, sp_box_str(v));
+  sp_PolyArray_push(a, sp_box_str_new(k));
+  sp_PolyArray_push(a, sp_box_str_new(v));
   unsetenv(k);
   return sp_box_poly_array(a);
 }
@@ -4942,7 +4943,7 @@ SP_NORETURN void sp_raise_load_error(const char *feature) {
   SP_GC_ROOT_STR(feature);
   const char *f = sp_sprintf("%s", feature ? feature : "");
   SP_GC_ROOT_STR(f);
-  sp_exc_stage_key(sp_box_str(f));
+  sp_exc_stage_key(sp_box_str_new(f));
   sp_raise_cls("LoadError", sp_sprintf("cannot load such file -- %s", f));
 }
 sp_StrArray *sp_get_loaded_features(void) {
@@ -5532,7 +5533,7 @@ sp_File *sp_File_set_encoding(sp_File *f, sp_RbVal ext, sp_RbVal in) {
   f->ext_enc = (unsigned char)e;
   return f;
 }
-sp_RbVal sp_box_nullable_str(const char *v) { return v ? sp_box_str(v) : sp_box_nil(); }
+sp_RbVal sp_box_nullable_str(const char *v) { return sp_box_str_new(v); }
 /* An opaque foreign/FFI pointer: boxed with SP_BUILTIN_FOREIGN_PTR so the
    collector skips it (it is not a sp_gc_alloc allocation). NULL -> nil. */
 sp_RbVal sp_box_foreign_ptr(void *p) { return p ? sp_box_obj(p, SP_BUILTIN_FOREIGN_PTR) : sp_box_nil(); }
@@ -5793,8 +5794,8 @@ sp_RbVal sp_trange_send(sp_TimeRange *r, const char *n, int argc, sp_RbVal a0) {
     if (!strcmp(n, "min")) return sp_trange_min_v(r);
     if (!strcmp(n, "max")) return sp_trange_max_v(r);
     if (!strcmp(n, "exclude_end?")) return sp_box_bool(r->excl != 0);
-    if (!strcmp(n, "to_s")) return sp_box_str(sp_trange_to_s(r));
-    if (!strcmp(n, "inspect")) return sp_box_str(sp_trange_inspect(r));
+    if (!strcmp(n, "to_s")) return sp_box_str_new(sp_trange_to_s(r));
+    if (!strcmp(n, "inspect")) return sp_box_str_new(sp_trange_inspect(r));
     if (!strcmp(n, "hash")) return sp_box_int(sp_trange_hash(r));
     if (!strcmp(n, "frozen?")) return sp_box_bool(!r->unfrozen);
     if (!strcmp(n, "to_a") || !strcmp(n, "entries")) return sp_trange_to_a(r);

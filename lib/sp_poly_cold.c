@@ -1085,7 +1085,7 @@ sp_RbVal sp_poly_clear(sp_RbVal v)
   /* String#clear on a plain string box: a fresh empty string the receiver
      takes back, as the typed clear builds; a frozen one raises. It answered
      the box untouched. */
-  if (v.tag == SP_TAG_STR) { sp_str_check_mutable(v.v.s); return sp_box_str(sp_str_from_bytes("", 0)); }
+  if (v.tag == SP_TAG_STR) { sp_str_check_mutable(v.v.s); return sp_box_str_new(sp_str_from_bytes("", 0)); }
   sp_poly_coll_chk(v, "clear");
   sp_poly_hash_check_mutable(v);
   if (v.tag != SP_TAG_OBJ || !v.v.p) return v;
@@ -1267,10 +1267,10 @@ sp_RbVal sp_poly_dup(sp_RbVal v, int keep_frozen)
      gsub! on the "copy" raised FrozenError (Benchmark::Tms#format). */
   if (v.tag == SP_TAG_STR && v.v.s) {
     const char *src = v.v.s;
-    const char *d = sp_str_dup(src);
-    if (keep_frozen && sp_str_is_frozen_val(src)) d = sp_str_freeze_val(d);
-    v.v.s = d;
-    return v;
+    int frozen = keep_frozen && sp_str_is_frozen_val(src);
+    sp_String *d = sp_String_new_unfrozen(src);
+    if (frozen) sp_String_freeze(d);
+    return sp_box_obj(d, SP_BUILTIN_STRBUF);
   }
   /* String#dup/#clone on a boxed shared handle (#6179): a new handle over a
      copy of the bytes, its ASCII-8BIT tag kept and its frozen flag only for

@@ -3452,7 +3452,7 @@ static inline sp_String *sp_poly_to_s_strbuf(sp_RbVal v) {
 /* --share-strings: to_s of a shared String handle that may be nil (NULL)
    as a box: the handle's own box, or nil's "" */
 static inline sp_RbVal sp_strbuf_to_s_box(sp_String *h) {
-  return h ? sp_box_nullable_obj(h, SP_BUILTIN_STRBUF) : sp_box_str(sp_str_frozen_empty);
+  return h ? sp_box_nullable_obj(h, SP_BUILTIN_STRBUF) : sp_box_str_new(sp_str_frozen_empty);
 }
 /* Missing a target and returning nil have different Ruby answers.
    The dispatch writes the actual result once and reports target presence. */
@@ -6496,7 +6496,7 @@ static SP_UNUSED sp_RbVal sp_poly_srange_end_box(sp_RbVal v, int last) {
   void *h = last ? r.hl : r.hf;
   if (h) return sp_box_obj(h, SP_BUILTIN_STRBUF);
   const char *e = last ? r.last : r.first;
-  return e ? sp_box_str(e) : sp_box_nil();
+  return sp_box_str_new(e);
 }
 static SP_UNUSED sp_RbVal sp_poly_range_begin_v(sp_RbVal v) {
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_TIME_RANGE && v.v.p) return sp_trange_begin_v((sp_TimeRange *)v.v.p);
@@ -11926,7 +11926,7 @@ static sp_sym sp_sym_intern(const char *s);
    Range of Symbols (sym) the Symbol of that name; nil for an absent end. */
 static SP_UNUSED sp_RbVal sp_srange_box_end(sp_StrRange r, const char *s) {
   if (!s) return sp_box_nil();
-  return r.sym ? sp_box_sym(sp_sym_intern(s)) : sp_box_str(s);
+  return r.sym ? sp_box_sym(sp_sym_intern(s)) : sp_box_str_new(s);
 }
 /* A String Range emitter's Array of members or ends reached through a boxed
    receiver (minmax): a Range of Symbols answers Symbols */
@@ -12907,7 +12907,7 @@ static sp_RbVal sp_poly_str_become_ex(sp_RbVal v, const char *s, int enc) {
     return v;
   }
   sp_str_check_mutable(v.v.s);
-  return sp_box_str(s);
+  return sp_box_str_new(s);
 }
 static sp_RbVal sp_poly_str_become(sp_RbVal v, const char *s) { return sp_poly_str_become_ex(v, s, 0); }
 static sp_RbVal sp_poly_str_become_enc(sp_RbVal v, const char *s) { return sp_poly_str_become_ex(v, s, 1); }
@@ -14587,7 +14587,7 @@ static inline sp_RbVal sp_poly_freeze(sp_RbVal v) {
       default: break;
     }
   }
-  else if (v.tag == SP_TAG_STR && v.v.s) sp_str_freeze_val(v.v.s);
+  else if (v.tag == SP_TAG_STR && v.v.s) return sp_box_str_new(sp_str_freeze_val(v.v.s));
   return v;
 }
 static inline sp_bool sp_poly_frozen(sp_RbVal v) {
@@ -18107,8 +18107,9 @@ static sp_Class sp_bm_owner(sp_BoundMethod *m) {
 }
 static sp_PolyArray *sp_bm_source_location(sp_BoundMethod *m) {
   if (!m || !m->src_file) return NULL;
+  SP_GC_ROOT(m);
   sp_PolyArray *a = sp_PolyArray_new(); SP_GC_ROOT(a);
-  sp_PolyArray_push(a, sp_box_str(m->src_file));
+  sp_PolyArray_push(a, sp_box_str_new(m->src_file));
   sp_PolyArray_push(a, sp_box_int(m->src_line));
   return a;
 }
@@ -18913,7 +18914,7 @@ SP_NORETURN SP_COLD static void sp_raise_poly_msg_h_cz(void *cz, sp_RbVal v, sp_
       sp_raise_cls(cn, se->msg);
     }
   }
-  if (m.tag != SP_TAG_NIL && m.tag != SP_TAG_STR && !sp_poly_is_strbuf(m)) m = sp_box_str(sp_poly_to_s(m));
+  if (m.tag != SP_TAG_NIL && !sp_rbval_is_string(m)) m = sp_poly_to_s_box(m);
   if (v.tag == SP_TAG_CLASS) {
     const char *cn = sp_class_val_name(v);
     if (cn && !strcmp(cn, "SignalException")) {
@@ -20304,8 +20305,8 @@ static sp_RbVal sp_orange_send(sp_ObjRange *r, const char *n, int argc, sp_RbVal
     if (!strcmp(n, "to_a") || !strcmp(n, "entries")) return sp_box_poly_array(SP_ORANGE_WALK(r));
     if (!strcmp(n, "count")) return r->last.tag == SP_TAG_NIL || r->first.tag == SP_TAG_NIL ? sp_box_float(HUGE_VAL) : sp_box_int(SP_ORANGE_WALK(r)->len);
     if (!strcmp(n, "exclude_end?")) return sp_box_bool(r->excl != 0);
-    if (!strcmp(n, "to_s")) return sp_box_str(sp_orange_to_s(r));
-    if (!strcmp(n, "inspect")) return sp_box_str(sp_orange_inspect(r));
+    if (!strcmp(n, "to_s")) return sp_box_str_new(sp_orange_to_s(r));
+    if (!strcmp(n, "inspect")) return sp_box_str_new(sp_orange_inspect(r));
     if (!strcmp(n, "hash")) return sp_box_int(sp_orange_hash(r));
     if (!strcmp(n, "frozen?")) return sp_box_bool(!r->unfrozen);
   }
@@ -22031,7 +22032,8 @@ static sp_Enumerator *sp_poly_str_each_enum(sp_RbVal v, const char *meth) {
   sp_Enumerator *e = kind == SP_ENUM_STR_CHAR ? sp_Enumerator_new_from_items(sp_str_chars_poly(s))
                    : kind == SP_ENUM_STR_LINE ? sp_Enumerator_new_from_items(sp_str_lines_poly(s))
                    : sp_Enumerator_new_from(sp_box_int_array(kind == SP_ENUM_STR_BYTE ? sp_str_bytes(s) : sp_str_codepoints(s)));
-  return sp_enum_with_src(e, sp_box_str(s), meth);
+  SP_GC_ROOT(e);
+  return sp_enum_with_src(e, sp_box_str_new(s), meth);
 }
 
 sp_Enumerator *sp_io_codepoint_enumerator(sp_File *io);
@@ -23805,8 +23807,8 @@ static sp_int sp_env_filter_core(sp_Proc *p, int keep) { SP_GC_ROOT(p);
   for (sp_int i = 0; i < snap->len; i++) {
     const char *k = snap->order[i];
     const char *v = sp_StrStrHash_get(snap, k);
-    _sp_proc_poly_args[0] = sp_box_str(k);
-    _sp_proc_poly_args[1] = sp_box_str(v ? v : "");
+    _sp_proc_poly_args[0] = sp_box_str_new(k);
+    _sp_proc_poly_args[1] = sp_box_str_new(v ? v : sp_str_empty);
     sp_int slots[16] = { (sp_int)(uintptr_t)k, (sp_int)(uintptr_t)(v ? v : "") };
     /* a bool/poly-returning proc publishes through the boxed channel and
        returns raw 0; pre-clear it so a typed proc's raw return still reads */
@@ -23862,9 +23864,9 @@ static sp_StrStrHash *sp_env_update_h_blk(sp_StrStrHash *h, sp_Proc *p) { SP_GC_
         const char *ovh = sp_str_dup_external(ov);  /* environ may move */
         ((unsigned char *)ovh)[-1] = 0xfa;
         SP_GC_ROOT(ovh);
-        _sp_proc_poly_args[0] = sp_box_str(k);
-        _sp_proc_poly_args[1] = sp_box_str(ovh);
-        _sp_proc_poly_args[2] = sp_box_str(nv ? nv : "");
+        _sp_proc_poly_args[0] = sp_box_str_new(k);
+        _sp_proc_poly_args[1] = sp_box_str_new(ovh);
+        _sp_proc_poly_args[2] = sp_box_str_new(nv ? nv : sp_str_empty);
         sp_int slots[16] = { (sp_int)(uintptr_t)k, (sp_int)(uintptr_t)ovh,
                               (sp_int)(uintptr_t)(nv ? nv : "") };
         _sp_proc_poly_ret = sp_box_nil();
@@ -23898,8 +23900,8 @@ static sp_StrStrHash *sp_env_update_v_blk(sp_RbVal hv, sp_Proc *p) {
       const char *ovh = sp_str_dup_external(ov);  /* environ may move */
       ((unsigned char *)ovh)[-1] = 0xfa;
       SP_GC_ROOT(ovh);
-      _sp_proc_poly_args[0] = k;
-      _sp_proc_poly_args[1] = sp_box_str(ovh);
+      _sp_proc_poly_args[0] = sp_box_str_new(k.v.s);
+      _sp_proc_poly_args[1] = sp_box_str_new(ovh);
       _sp_proc_poly_args[2] = v;
       sp_int slots[16] = { (sp_int)(uintptr_t)k.v.s, (sp_int)(uintptr_t)ovh,
                             (v.tag == SP_TAG_OBJ || v.tag == SP_TAG_STR) ? (sp_int)(uintptr_t)v.v.p : sp_poly_slot_arg(v) };
@@ -24655,7 +24657,8 @@ static inline const char *sp_poly_pack(sp_RbVal recv, const char *fmt) {
     return sp_PolyArray_pack(sp_poly_to_poly_array(recv), fmt);
   /* a value that is no Array has no pack: CRuby's NoMethodError, with
      the format as its args, where it answered "" */
-  { sp_RbVal fa = sp_box_str(fmt);
+  { SP_GC_ROOT_RBVAL(recv);
+    sp_RbVal fa = sp_box_str_new(fmt);
     sp_raise_nomethod(sp_nomethod_msg_args("pack", recv, 1, &fa)); }
   /* Marked, like every other string this can return: a bare "" literal
      has no 0xff marker byte, and a caller that roots the result would

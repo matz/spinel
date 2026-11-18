@@ -25999,7 +25999,13 @@ int desugar_class_new_blocks(Compiler *c, HostStep *h) {
       memcpy(out + at + 1, rs + at, sizeof(int) * (size_t)(rn2 - at));
       nt_node_set_arr(nt, host_st, "body", out, rn2 + 1);
       free(out);
-      nt_node_reset(nt, id, "ConstantReadNode");
+      { /* (the read keeps the call's place, so the record answers it
+           after the class it names) */
+        long long line = nt_int(nt, id, "node_line", 0), file = nt_int(nt, id, "node_file", 0);
+        nt_node_reset(nt, id, "ConstantReadNode");
+        nt_node_set_int(nt, id, "node_line", line);
+        nt_node_set_int(nt, id, "node_file", file);
+      }
       nt_node_set_str(nt, id, "name", name);
       cn_host_body(c, h, cls, body);
       changed = 1;

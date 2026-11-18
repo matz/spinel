@@ -20082,7 +20082,7 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
       /* unboxed as a String: an Integer or nil in the slot is NoMethodError,
          not its to_s padded (#4493) */
       char op[32]; snprintf(op, sizeof op, "%s%s", fn + 7, argc == 2 ? "2" : "");
-      buf_puts(b, "sp_box_str(");
+      buf_puts(b, "sp_box_str_new(");
       emit_poly_str_transform(c, recv, argc, argv, name, op, 1, b);
       buf_puts(b, ")");
       return 1;
@@ -20128,14 +20128,14 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
          uses. */
       int trp = ++g_tmp;
       buf_printf(b, "({ sp_Range _t%d = sp_range_ix(", trp); emit_expr(c, argv[0], b); buf_puts(b, ")");
-      buf_puts(b, "; sp_box_nullable_str(sp_str_byteslice_range(sp_poly_recv_s(");
+      buf_puts(b, "; sp_box_nullable_str_new(sp_str_byteslice_range(sp_poly_recv_s(");
       emit_expr(c, recv, b);
       buf_printf(b, ", \"byteslice\"), _t%d.first, _t%d.last, _t%d.excl,"
                     " _t%d.nobeg, _t%d.noend)); })",
                  trp, trp, trp, trp, trp);
     }
     else if (sp_streq(name, "byteslice")) {
-      buf_printf(b, "sp_box_nullable_str(sp_str_byteslice%s(sp_poly_recv_s(",
+      buf_printf(b, "sp_box_nullable_str_new(sp_str_byteslice%s(sp_poly_recv_s(",
                  argc == 1 ? "1" : "");
       emit_expr(c, recv, b); buf_puts(b, ", \"byteslice\"), ");
       emit_int_expr(c, argv[0], b);
@@ -20143,7 +20143,7 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
       buf_puts(b, "))");
     }
     else if (sp_streq(name, "scrub")) {
-      buf_puts(b, "sp_box_str(");
+      buf_puts(b, "sp_box_str_new(");
       emit_poly_str_transform(c, recv, argc, argv, name, "scrub", 0, b);
       buf_puts(b, ")");
     }
@@ -20151,7 +20151,7 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
     else {  /* encode: the same transcode the String receiver takes (#4439) */
       Buf rb; memset(&rb, 0, sizeof rb);
       buf_puts(&rb, "sp_poly_recv_s("); emit_expr(c, recv, &rb); buf_puts(&rb, ", \"encode\")");
-      buf_puts(b, "sp_box_str(");
+      buf_puts(b, "sp_box_str_new(");
       emit_str_encode_call(c, rb.p ? rb.p : "", recv, argv, argc, b);
       buf_puts(b, ")");
       free(rb.p);

@@ -2014,7 +2014,19 @@ SP_NORETURN SP_COLD void sp_raise_cls(const char *cls, const char *msg) {
      name, receiver and key themselves, without running #initialize) */
   if (sp_user_exc_reinit_fn && reinit_fresh && !user_raise && !cont && msg && cls && strcmp(cls, "FiberKillSignal") != 0 &&
       !sp_exc_cls_matches(cls, "NameError") && !sp_exc_cls_matches(cls, "KeyError")) {
+#if SP_BT_AVAILABLE
+    /* the initialize may raise and rescue inside itself, which overwrites the
+       capture of this raise: it is put back when the hook returns (one that
+       raises out of it leaves the new raise's own) */
+    void *bt_keep[256];
+    int bt_keep_n = sp_bt_n > 0 ? sp_bt_n : 0;
+    if (bt_keep_n > 256) bt_keep_n = 256;
+    if (bt_keep_n > 0) memcpy(bt_keep, sp_bt_buf, sizeof(void *) * (size_t)bt_keep_n);
+#endif
     void *made = sp_user_exc_reinit_fn(cls, msg, sp_pending_exc_obj);
+#if SP_BT_AVAILABLE
+    if (bt_keep_n > 0) { memcpy(sp_bt_buf, bt_keep, sizeof(void *) * (size_t)bt_keep_n); sp_bt_n = bt_keep_n; }
+#endif
     if (made) {
       sp_pending_exc_obj = made;
       msg = sp_msg_heapify(sp_exc_message((sp_Exception *)made));

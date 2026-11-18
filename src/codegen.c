@@ -23847,7 +23847,15 @@ static int exc_has_reopen_initialize(Compiler *c) {
    argument raises ArgumentError, as the call would. */
 static void emit_exc_reinit_dispatch(Compiler *c, Buf *b) {
   if (!exc_has_reopen_initialize(c)) return;
-  int xr[8], xn = exc_reopen_definers(c, "initialize", xr, 8);
+  /* every reopening that defines one, not the first eight: the pick is by the
+     class's ancestry, so a later one must be in it */
+  int *xr = malloc((size_t)c->nclasses * sizeof *xr), xn = exc_reopen_definers(c, "initialize", xr, c->nclasses);
+  /* the body is defined after the program's globals and constants, as the text
+     dispatchers' are (c->exc_text_late): a default that reads one
+     (`def initialize(msg, suffix = $suffix)`) names it there */
+  buf_puts(b, "static void *sp_user_exc_reinit(const char *cls, const char *msg, void *obj);\n");
+  Buf d; memset(&d, 0, sizeof d);
+  b = &d;
   buf_puts(b, "static void *sp_user_exc_reinit(const char *cls, const char *msg, void *obj){\n  ");
   int pk = emit_exc_reopen_pick_head(c, xr, xn, "cls", b);
   buf_printf(b, "\n  if (_xi%d < 0) return NULL;\n"
@@ -23887,6 +23895,13 @@ static void emit_exc_reinit_dispatch(Compiler *c, Buf *b) {
     free(pre.p); free(args.p); free(mb.p);
   }
   buf_puts(b, "  return NULL;\n}\n");
+  size_t ol = c->exc_text_late ? strlen(c->exc_text_late) : 0, nl = strlen(d.p);
+  char *cat = malloc(ol + nl + 1);
+  if (ol) memcpy(cat, c->exc_text_late, ol);
+  memcpy(cat + ol, d.p, nl + 1);
+  free(c->exc_text_late); free(d.p);
+  c->exc_text_late = cat;
+  free(xr);
 }
 
 static void emit_exc_text_dispatch_at(Compiler *c, Buf *b, int mode, int *late) {

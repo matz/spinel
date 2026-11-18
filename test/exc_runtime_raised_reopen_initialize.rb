@@ -5,8 +5,12 @@
 # NameError, NoMethodError and KeyError raised by the runtime are not built
 # that way (CRuby fills their name, receiver and key itself), and a reopened
 # initialize does not see them.
+require "tmpdir"
+
 $calls = 0
 $log = []
+# a path that cannot exist: a directory of the test's own that was never made
+MISSING = File.join(Dir.tmpdir, "spinel_reinit_missing_#{Process.pid}", "x")
 
 class StandardError
   def initialize(msg = nil)
@@ -15,8 +19,10 @@ class StandardError
   end
 end
 
+# (a default that reads a global is evaluated for the runtime's one-argument call)
+$suffix = "!"
 class ZeroDivisionError
-  def initialize(msg = nil) = super("Z<" + msg.to_s + ">")
+  def initialize(msg = nil, suffix = $suffix) = super("Z<" + msg.to_s + suffix + ">")
 end
 
 class IndexError
@@ -35,7 +41,7 @@ end
 def t(label)
   yield
 rescue => e
-  puts "#{label}: #{e.class} #{e.message.inspect}"
+  puts "#{label}: #{e.class} #{e.message.gsub(MISSING, "<missing>").inspect}"
 end
 
 t("fetch") { [1].fetch(9) }
@@ -45,7 +51,7 @@ t("integer") { Integer("zz") }
 t("float") { Float("zz") }
 t("range") { [1, 2].first(-1) }
 t("stop") { [].each.next }
-t("errno") { File.open("/nonexistent/x") }
+t("errno") { File.open(MISSING) }
 t("nomethod") { nil.foo }
 t("key") { {a: 1}.fetch(:b) }
 p $log

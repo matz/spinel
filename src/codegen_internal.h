@@ -1417,7 +1417,6 @@ void emit_index_op_write(Compiler *c, int id, Buf *b, int indent);
 void emit_index_and_or_write(Compiler *c, int id, Buf *b, int indent, int is_or);
 void emit_boxed(Compiler *c, int node, Buf *b);
 int emit_poly_concat_splat(Compiler *c, int t, int splat, Buf *b);   /* `*x` into the PolyArray _t<t> */
-void emit_lines_sep(Compiler *c, int a, Buf *b);
 void emit_recv_rooted(Compiler *c, int recv, int t, const char *rootm, Buf *b);
 int  push_recv_in_slot(Compiler *c, int recv, int argc, const int *argv, TyKind art);
 void emit_rat_coerce(Compiler *c, int node, Buf *b);
@@ -2993,6 +2992,8 @@ int emit_op_string_clear(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_string_slice(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_string_bytesplice(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_string_dedup(Compiler *c, const BopCtx *x, Buf *b);
+int emit_op_string_lines(Compiler *c, const BopCtx *x, Buf *b);
+void emit_string_lines_array(Compiler *c, int recv, int argc, const int *argv, Buf *b);
 int emit_op_string_scrub_block(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_array_transpose(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_array_nil_recv(Compiler *c, const BopCtx *x, Buf *b);
@@ -3053,6 +3054,8 @@ int emit_hash_new_capacity_wrap(Compiler *c, int id, Buf *b, int boxed);
 void emit_hash_new_capacity_check(Compiler *c, int cap, Buf *b);
 extern int g_hash_cap_inner;
 int emit_blockless_enumerator(Compiler *c, int id, Buf *b);
+int emit_string_line_operands(Compiler *c, int recv, int argc, const int *argv,
+                             int *receiver, int *separator, int *chomp_flag, Buf *b);
 void emit_string_line_enum(Compiler *c, int id, int recv, int argc, const int *argv, Buf *b);
 int str_each_recv_shares(Compiler *c, int recv);
 int str_each_enum_keeps(Compiler *c, int id);   /* --share-strings: a String iterator's Enumerator holds the handle */

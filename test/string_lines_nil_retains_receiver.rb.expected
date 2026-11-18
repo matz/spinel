@@ -1,0 +1,5 @@
+[true, LineLabel, []]
+true
+[true, "a\nb!"]
+true
+[true, [:receiver, :separator, :chomp, :yield], "new"]

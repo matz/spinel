@@ -2512,16 +2512,15 @@ int comp_arysub_call(Compiler *c, int id, TyKind rt, TyKind *kind) {
   mtab_pop(c, mt_was);
   if (!builtin) return 0;
   *kind = comp_ary_kind(c, cid);
-  /* An inherited String builtin takes the actual handle when it mutates,
-     returns, or keeps its receiver for a line Enumerator. */
+  /* Inherited line methods can return or yield the instance itself. */
   if (comp_ary_is_str(c, cid)) {
-    int line_enum = 0;
-    if (sp_streq(n, "each_line") && nt_ref(c->nt, id, "block") < 0) {
+    int preserves_lines = 0;
+    if (is_str_line_method(n)) {
       int argc;
       const int *argv = call_args(c->nt, id, &argc);
-      line_enum = string_line_enum_args(c, argc, argv);
+      preserves_lines = string_line_args(c, argc, argv);
     }
-    *kind = comp_arysub_str_boxed(n) || line_enum ? TY_POLY : TY_STRING;
+    *kind = comp_arysub_str_boxed(n) || preserves_lines ? TY_POLY : TY_STRING;
   }
   return 1;
 }

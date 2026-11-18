@@ -1727,13 +1727,14 @@ int poly_lines_args(Compiler *c, int argc, const int *argv) {
   return 0;
 }
 
-/* The explicit String line Enumerator captures any separator value. The
-   String conversion may only run when the Enumerator is walked. */
-int string_line_enum_args(Compiler *c, int argc, const int *argv) {
-  int kw = nt_argv_kwh(c->nt, argv, argc);
-  int pos = argc - (kw >= 0);
-  return pos <= 1 && !nt_argv_has(c->nt, argv, argc, NT_ARG_SPLAT | NT_ARG_FORWARDING | NT_ARG_BLOCK) &&
-         (kw < 0 || !nt_hash_has_splat(c->nt, kw));
+/* One positional separator, possibly forwarded through a splat, and a
+   literal keyword hash. The separator is converted when the walk starts. */
+int string_line_args(Compiler *c, int argc, const int *argv) {
+  const NodeTable *nt = c->nt;
+  int kw = nt_argv_kwh(nt, argv, argc);
+  return argc - (kw >= 0) <= 1 &&
+         !nt_argv_has(nt, argv, argc, NT_ARG_FORWARDING | NT_ARG_BLOCK) &&
+         (kw < 0 || !nt_hash_has_splat(nt, kw));
 }
 
 int lines_sep_ty(Compiler *c, int a) {
@@ -2118,7 +2119,7 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
       poly_lines_args(c, argc, argv))
     { *out = an_user_defines_or_reads(c, name) ? TY_POLY : TY_STR_ARRAY; return 1; }
   if (recv >= 0 && rt == TY_POLY && sp_streq(name, "each_line") &&
-      nt_ref(nt, id, "block") < 0 && string_line_enum_args(c, argc, argv)) {
+      nt_ref(nt, id, "block") < 0 && string_line_args(c, argc, argv)) {
     *out = an_user_defines_or_reads(c, name) ? TY_POLY : TY_ENUMERATOR;
     return 1;
   }
@@ -2154,6 +2155,21 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
     if (poly_io_codepoint_enum(c, id)) { *out = TY_POLY; return 1; }
     if (is_byte_codepoint_each(name)) { *out = TY_INT_ARRAY; return 1; }
     { *out = TY_STR_ARRAY; return 1; }
+  }
+  /* A boxed String line call returns the box it traversed. */
+  if (recv >= 0 && rt == TY_POLY && is_str_line_method(name) &&
+      nt_kind(nt, nt_ref(nt, id, "block")) == NK_BlockNode &&
+      (argc == 0 || poly_lines_args(c, argc, argv)) && string_line_args(c, argc, argv) &&
+      !an_user_defines_or_reads(c, name)) {
+    int block = nt_ref(nt, id, "block");
+    const char *param = block_param_name(c, block, 0);
+    Scope *scope = param ? comp_scope_of(c, block) : NULL;
+    LocalVar *slot = scope ? scope_local(scope, param) : NULL;
+    if (slot && slot->type != TY_STRING && !(slot->type == TY_STRBUF && slot->str_shared))
+      lv_set_type(slot, slot->type == TY_INT ||
+                        (slot->type == TY_POLY && block_yields_int_too(nt, block)) ? TY_POLY : TY_STRING);
+    *out = TY_POLY;
+    return 1;
   }
   /* poly.each_char { |c| } / each_line { |l| }: the block param is a String
      (one char, one line) and the call answers the receiver's string, as

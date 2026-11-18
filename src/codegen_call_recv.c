@@ -1241,18 +1241,6 @@ static void emit_repl_arg(Compiler *c, int arg, Buf *b) {
   else emit_str_expr(c, arg, b);
 }
 static int str_arms_convert(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind a0, const char *r);
-void emit_lines_sep(Compiler *c, int a, Buf *b) {
-  if (comp_ntype(c, a) == TY_STRING) { emit_expr(c, a, b); return; }
-  /* the arguments handed on in a splat (`s.each_line(*args, &block)`): its
-     first element is the separator, and an empty one leaves the default */
-  if (nt_kind(c->nt, a) == NK_SplatNode) {
-    int ts = ++g_tmp;
-    buf_printf(b, "({ sp_RbVal _t%d = ", ts); emit_boxed(c, a, b);
-    buf_printf(b, "; sp_poly_length(_t%d) > 0 ? sp_poly_arg_str_or_null(sp_poly_arr_get(_t%d, 0)) : \"\\n\"; })", ts, ts);
-    return;
-  }
-  buf_puts(b, "sp_poly_arg_str_or_null("); emit_boxed(c, a, b); buf_puts(b, ")");
-}
 static void emit_blk_value_as(Compiler *c, int blk, TyKind vt, Buf *b);
 static void emit_blk_value_as_o(Compiler *c, int blk, TyKind vt, Buf *b);
 /* The read entry a copy of an element of Array kind rt takes: a nilable Integer or Float element is read with
@@ -6239,44 +6227,29 @@ static int emit_array_call_arms(Compiler *c, int id, Buf *b) {
     buf_printf(b, " : (sp_StrArray *)(sp_raise_nomethod(sp_nomethod_msg(\"split\", _t%d)), (void *)0); })", tv);
     return 1;
   }
-  /* poly.lines(sep) / lines(chomp: ...) / lines(sep, chomp: ...): the typed
-     String path's lines over the receiver read as a String, which raises
-     NoMethodError for anything else, as the argumentless poly.lines does */
   if (recv >= 0 && rt == TY_POLY && sp_streq(name, "lines") && nt_ref(nt, id, "block") < 0 &&
-      poly_lines_args(c, argc, argv) && !user_defines_or_reads(c, "lines")) {
-    int tl = ++g_tmp;
-    char rl[32]; snprintf(rl, sizeof rl, "_t%d", tl);
-    buf_printf(b, "({ const char *_t%d = sp_poly_recv_s(", tl); emit_expr(c, recv, b);
-    buf_printf(b, ", \"lines\"); SP_GC_ROOT(_t%d); ", tl);
-    if (argc == 1 && lines_sep_ty(c, argv[0])) {
-      buf_printf(b, "sp_str_lines_sep(%s, ", rl); emit_lines_sep(c, argv[0], b); buf_puts(b, ")");
-    }
-    else str_arms_convert(c, id, b, nt, name, recv, argc, argv, TY_UNKNOWN, rl);
-    buf_puts(b, "; })");
+      (argc == 0 || poly_lines_args(c, argc, argv)) && string_line_args(c, argc, argv) &&
+      !user_defines_or_reads(c, name)) {
+    emit_string_lines_array(c, recv, argc, argv, b);
     return 1;
   }
   if (recv >= 0 && rt == TY_POLY && sp_streq(name, "each_line") &&
-      nt_ref(nt, id, "block") < 0 && string_line_enum_args(c, argc, argv) &&
+      nt_ref(nt, id, "block") < 0 && string_line_args(c, argc, argv) &&
       !user_defines_or_reads(c, name) && !poly_cls_value_owns(c, id, name)) {
     emit_string_line_enum(c, id, recv, argc, argv, b);
     return 1;
   }
   /* The boxed block form walks the same array as lines and returns self. */
-  if (recv >= 0 && rt == TY_POLY && sp_streq(name, "each_line") &&
-      nt_ref(nt, id, "block") >= 0 && poly_lines_args(c, argc, argv) &&
-      !user_defines_or_reads(c, "each_line") && !user_defines_or_reads(c, "lines")) {
-    int tl = ++g_tmp, ta = ++g_tmp;
-    char rl[32]; snprintf(rl, sizeof rl, "_t%d", tl);
-    buf_printf(b, "({ const char *_t%d = sp_poly_recv_s(", tl); emit_expr(c, recv, b);
-    buf_printf(b, ", \"each_line\"); SP_GC_ROOT(_t%d); sp_StrArray *_t%d = ", tl, ta);
-    if (argc == 1 && lines_sep_ty(c, argv[0])) {
-      buf_printf(b, "sp_str_lines_sep(%s, ", rl); emit_lines_sep(c, argv[0], b); buf_puts(b, ")");
-    }
-    else str_arms_convert(c, id, b, nt, "lines", recv, argc, argv, TY_UNKNOWN, rl);
-    buf_printf(b, "; SP_GC_ROOT(_t%d);", ta);
+  if (recv >= 0 && rt == TY_POLY && is_str_line_method(name) &&
+      nt_kind(nt, nt_ref(nt, id, "block")) == NK_BlockNode &&
+      (argc == 0 || poly_lines_args(c, argc, argv)) && string_line_args(c, argc, argv) &&
+      !user_defines_or_reads(c, name)) {
+    int tr, ts, tc, ta = ++g_tmp;
+    emit_string_line_operands(c, recv, argc, argv, &tr, &ts, &tc, b);
+    buf_printf(b, "sp_StrArray *_t%d = sp_poly_string_lines(_t%d, _t%d, _t%d, \"%s\"); SP_GC_ROOT(_t%d);",
+               ta, tr, ts, tc, name, ta);
     int eblk = nt_ref(nt, id, "block");
-    int boxed = repr_of(c, id).kind == RK_BOXED;
-    char ans[32];
+    Repr result = repr_of(c, id);
     const char *ebp = block_param_name(c, eblk, 0);
     const char *ebpn = ebp ? rename_local(ebp) : NULL;
     int ebody = nt_ref(nt, eblk, "body");
@@ -6285,10 +6258,9 @@ static int emit_array_call_arms(Compiler *c, int id, Buf *b) {
     buf_printf(b, " for (sp_int _t%d = 0; _t%d < sp_StrArray_length(_t%d); _t%d++) {", ti, ti, ta, ti);
     if (ebpn) emit_str_elem_param(c, eblk, ebp, ebpn, ta, ti, b);
     for (int k2 = 0; k2 < ebn; k2++) emit_stmt(c, ebb[k2], b, 0);
-    snprintf(ans, sizeof ans, "_t%d", tl);
-    buf_puts(b, " } ");
-    if (boxed) emit_boxed_text(c, TY_STRING, ans, b); else buf_puts(b, ans);
-    buf_puts(b, "; })");
+    if (result.kind == RK_BOXED) buf_printf(b, " } _t%d; })", tr);
+    else if (result.as_ty == TY_STRBUF) buf_printf(b, " } sp_poly_as_strbuf(_t%d); })", tr);
+    else buf_printf(b, " } sp_poly_recv_s(_t%d, \"%s\"); })", tr, name);
     return 1;
   }
   /* `poly.map! { |x| ... }` / `collect!` where poly is an array read out of a
@@ -8696,29 +8668,7 @@ static int str_arms_int_promote(Compiler *c, int id, Buf *b, const char *name, i
   return 1;
 }
 static int str_arms_convert(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind a0, const char *r) {
-  /* lines(sep, chomp: true): a separator and the keyword together (#3546) */
-  if (sp_streq(name, "lines") && argc == 2 &&
-           lines_sep_ty(c, argv[0]) &&
-           nt_kind(nt, argv[1]) == NK_KeywordHashNode) {
-    int chv = struct_kwarg_value(c, argv[1], "chomp");
-    int isc = kw_flag_static(c, chv);
-    if (isc < 0) { buf_puts(b, "("); emit_cond(c, chv, b); buf_puts(b, " ? "); }
-    if (isc != 0) { buf_printf(b, "sp_str_lines_sep_chomp(%s, ", r); emit_lines_sep(c, argv[0], b); buf_puts(b, ")"); }
-    if (isc < 0) buf_puts(b, " : ");
-    if (isc != 1) { buf_printf(b, "sp_str_lines_sep(%s, ", r); emit_lines_sep(c, argv[0], b); buf_puts(b, ")"); }
-    if (isc < 0) buf_puts(b, ")");
-  }
-  else if (sp_streq(name, "lines") && argc == 1 &&
-           nt_kind(nt, argv[0]) == NK_KeywordHashNode) {
-    int chomp_v = struct_kwarg_value(c, argv[0], "chomp");
-    int is_chomp = kw_flag_static(c, chomp_v);
-    if (is_chomp < 0) {
-      buf_puts(b, "("); emit_cond(c, chomp_v, b);
-      buf_printf(b, " ? sp_str_lines_chomp(%s) : sp_str_lines(%s))", r, r);
-    }
-    else buf_printf(b, "%s(%s)", is_chomp ? "sp_str_lines_chomp" : "sp_str_lines", r);
-  }
-  else if (sp_streq(name, "bytes") && argc == 0)   buf_printf(b, "sp_str_bytes(%s)", r);
+  if (sp_streq(name, "bytes") && argc == 0)   buf_printf(b, "sp_str_bytes(%s)", r);
   else if (sp_streq(name, "codepoints") && argc == 0) buf_printf(b, "sp_str_codepoints(%s)", r);
   /* unpack(fmt, offset: n): a trailing KeywordHashNode carries the offset. */
   else if ((sp_streq(name, "unpack") || sp_streq(name, "unpack1")) && argc == 2 &&
@@ -10551,6 +10501,10 @@ static int emit_scalar_recv_arms(Compiler *c, int id, Buf *b, const NodeTable *n
   /* scalar receiver methods: evaluate the receiver once into rs, then
      splice its text (so a literal/complex receiver isn't rebuilt). */
   if (!(recv >= 0 && (rt == TY_STRING || rt == TY_INT || rt == TY_FLOAT))) return 0;
+  if (rt == TY_STRING && is_str_line_method(name) && emit_builtin_op(c, id, recv, rt, name, b)) {
+    *out = 1;
+    return 1;
+  }
   if (rt == TY_STRING && str_partition_shared(c, id, b, name, recv, argc, argv)) { *out = 1; return 1; }
   /* `x.to_s(base)` on an Integer that may be nil: nil's to_s takes no
      argument, so a nil one is its ArgumentError, the receiver and the base
@@ -17330,11 +17284,10 @@ static int emit_poly_call0_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
      receiver has its own emitter that does not materialize one; a poly
      receiver only learns it is a String at run time, so it pays the array
      and yields out of it. Answers the receiver's string, as String#each_char
-     answers self (#3402). each_line { } walks the array #lines answers the
-     same way. */
-  if ((sp_streq(name, "each_char") || sp_streq(name, "each_line")) && argc == 0 &&
+     answers self (#3402). */
+  if (sp_streq(name, "each_char") && argc == 0 &&
       nt_ref(nt, id, "block") >= 0 && !user_defines_or_reads(c, name) &&
-      !user_defines_or_reads(c, sp_streq(name, "each_char") ? "chars" : "lines")) {
+      !user_defines_or_reads(c, "chars")) {
     int eblk = nt_ref(nt, id, "block");
     const char *ebp = block_param_name(c, eblk, 0);
     const char *ebpn = ebp ? rename_local(ebp) : NULL;
@@ -17343,8 +17296,7 @@ static int emit_poly_call0_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
     int ts = ++g_tmp, ta = ++g_tmp, ti = ++g_tmp;
     buf_printf(b, "({ const char *_t%d = sp_poly_recv_s(", ts); emit_expr(c, recv, b);
     buf_printf(b, ", \"%s\"); SP_GC_ROOT(_t%d);", name, ts);
-    buf_printf(b, " sp_StrArray *_t%d = %s(_t%d); SP_GC_ROOT(_t%d);",
-               ta, sp_streq(name, "each_char") ? "sp_str_chars" : "sp_str_lines", ts, ta);
+    buf_printf(b, " sp_StrArray *_t%d = sp_str_chars(_t%d); SP_GC_ROOT(_t%d);", ta, ts, ta);
     buf_printf(b, " for (sp_int _t%d = 0; _t%d < sp_StrArray_length(_t%d); _t%d++) {", ti, ti, ta, ti);
     if (ebpn) emit_str_elem_param(c, eblk, ebp, ebpn, ta, ti, b);
     for (int k2 = 0; k2 < ebn; k2++) emit_stmt(c, ebb[k2], b, 0);
@@ -17377,12 +17329,6 @@ static int emit_poly_call0_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
     for (int k2 = 0; k2 < ebn; k2++) emit_stmt(c, ebb[k2], b, 0);
     buf_printf(b, " } _t%d; })", ts);
     { *out = 1; return 1; }
-  }
-  /* poly.lines -> TY_STR_ARRAY, the same shape as #chars above (#3403) */
-  if (sp_streq(name, "lines") && argc == 0 && nt_ref(nt, id, "block") < 0) {
-    if (!user_defines_or_reads(c, "lines")) {
-      buf_puts(b, "sp_str_lines(sp_poly_recv_s("); emit_expr(c, recv, b); buf_puts(b, ", \"lines\"))"); { *out = 1; return 1; }
-    }
   }
   /* A blockless each_char / each_byte / each_codepoint is
      CRuby's Enumerator, as on a typed String (sp_poly_str_each_enum), where

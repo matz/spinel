@@ -23273,14 +23273,16 @@ int str_enum_h_made(Compiler *c) {
   }
   return c->str_enum_h == 2;
 }
-/* The typed String and its boxed dispatch arm both capture the Ruby values.
-   Operand preludes stay beside the operand they belong to, after the earlier
-   values have been rooted. The generator converts the separator per walk. */
-void emit_string_line_enum(Compiler *c, int id, int recv, int argc, const int *argv, Buf *b) {
+/* Keep the Ruby operands in source order. In particular a separator
+   conversion can rebind the receiver or run code that collects it. */
+int emit_string_line_operands(Compiler *c, int recv, int argc, const int *argv,
+                             int *receiver, int *separator, int *chomp_flag, Buf *b) {
   int kw = nt_argv_kwh(c->nt, argv, argc);
   int sep = argc - (kw >= 0) > 0 ? argv[0] : -1;
   int chomp = kw >= 0 ? struct_kwarg_value(c, kw, "chomp") : -1;
-  int tr = ++g_tmp, ts = ++g_tmp, tc = ++g_tmp;
+  int tr = *receiver = ++g_tmp;
+  int ts = *separator = ++g_tmp;
+  int tc = *chomp_flag = ++g_tmp;
   Buf capture = {0};
   Buf *saved_pre = g_pre;
   g_pre = &capture;
@@ -23288,21 +23290,35 @@ void emit_string_line_enum(Compiler *c, int id, int recv, int argc, const int *a
   buf_printf(&capture, "sp_RbVal _t%d = ", tr);
   emit_boxed(c, recv, &capture);
   buf_printf(&capture, "; SP_GC_ROOT_RBVAL(_t%d);\n", tr);
-  buf_printf(&capture, "sp_RbVal _t%d = ", ts);
+  int splat = nt_kind(c->nt, sep) == NK_SplatNode;
+  int gathered = splat ? ++g_tmp : ts;
+  buf_printf(&capture, "sp_RbVal _t%d = ", gathered);
   if (sep >= 0) emit_boxed(c, sep, &capture);
   else buf_puts(&capture, "sp_box_str(SPL(\"\\n\"))");
-  buf_printf(&capture, "; SP_GC_ROOT_RBVAL(_t%d);\n", ts);
+  buf_printf(&capture, "; SP_GC_ROOT_RBVAL(_t%d);\n", gathered);
   buf_printf(&capture, "sp_bool _t%d = ", tc);
   if (chomp >= 0) emit_into_pre_line(c, emit_cond, chomp);
   else buf_puts(&capture, "0");
   buf_puts(&capture, "; ");
+  if (splat) {
+    int n = ++g_tmp;
+    buf_printf(&capture, "sp_int _t%d = sp_poly_arr_len(_t%d); "
+               "if (_t%d > 1) sp_raise_arity(_t%d, 0, 1, NULL); "
+               "sp_RbVal _t%d = _t%d ? sp_poly_arr_get(_t%d, 0) : sp_box_str(SPL(\"\\n\")); "
+               "SP_GC_ROOT_RBVAL(_t%d); ", n, gathered, n, n, ts, n, gathered, ts);
+  }
   g_pre = saved_pre;
   buf_puts(b, capture.p);
   free(capture.p);
+  return sep < 0 && chomp >= 0;
+}
+
+void emit_string_line_enum(Compiler *c, int id, int recv, int argc, const int *argv, Buf *b) {
+  int tr, ts, tc;
+  int chomp_given = emit_string_line_operands(c, recv, argc, argv, &tr, &ts, &tc, b);
   int boxed = repr_of(c, id).kind == RK_BOXED;
   if (boxed) buf_puts(b, "sp_box_obj(");
-  buf_printf(b, "sp_poly_string_line_enum(_t%d, _t%d, _t%d, %d)",
-             tr, ts, tc, sep < 0 && chomp >= 0);
+  buf_printf(b, "sp_poly_string_line_enum(_t%d, _t%d, _t%d, %d)", tr, ts, tc, chomp_given);
   if (boxed) buf_puts(b, ", SP_BUILTIN_ENUMERATOR)");
   buf_puts(b, "; })");
 }
@@ -23424,7 +23440,7 @@ int emit_blockless_enumerator(Compiler *c, int id, Buf *b) {
     return 1;
   }
   if (recv >= 0 && comp_ntype(c, recv) == TY_STRING && sp_streq(name, "each_line") &&
-      nt_ref(nt, id, "block") < 0 && string_line_enum_args(c, argc, argv)) {
+      nt_ref(nt, id, "block") < 0 && string_line_args(c, argc, argv)) {
     emit_string_line_enum(c, id, recv, argc, argv, b);
     return 1;
   }

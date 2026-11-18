@@ -2456,7 +2456,7 @@ int an_lazy_terminal_fuses(const NodeTable *nt, int id); /* a terminal the lazy 
 int an_lazy_sn_guard_src(Compiler *c, int id);      /* the node a `&.` lazy terminal's guard tests, or -1 */
 int an_lazy_link_guarded_above(Compiler *c, int n); /* a lazy chain link whose terminal's guard tests the source */
 int poly_str_iter_enum(Compiler *c, int id);        /* boxed String iterator answers an Enumerator (analyze_infer_recv.c) */
-int string_line_enum_args(Compiler *c, int argc, const int *argv);
+int string_line_args(Compiler *c, int argc, const int *argv);
 int poly_io_codepoint_enum(Compiler *c, int id);   /* boxed each_codepoint takes the IO arm (analyze_infer_recv.c) */
 int lazy_alias_chain(Compiler *c, int var_read);
 int lazy_method_chain(Compiler *c, int call);      /* parameterless method whose body is a lazy chain -> chain node, else -1 */

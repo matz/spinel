@@ -89,6 +89,10 @@ operand view across the block and returns it through the physical result
 slot, including a String handle slot. Builtin rows identify self answers;
 the subclass adapter retains the original object when its builtin reads
 String bytes. A block break keeps its own boxed result outside that adapter.
+String line methods retain the receiver through separator and chomp
+evaluation. With a nil separator the receiver is the only line, including
+for an empty String. A line Enumerator retains its receiver and separator
+and reads their contents when each walk begins.
 Interpolation and printing call the display method selected at that site.
 They read the bytes of its native String result or format its boxed result
 while the receiver is rooted. Interpolation keeps a mutable conversion

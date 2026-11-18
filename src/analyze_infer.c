@@ -5698,7 +5698,7 @@ static int infer_string_recv_call(Compiler *c, int id, const NodeTable *nt, cons
         (comp_ntype(c, argv[0]) == TY_STRING || comp_ntype(c, argv[0]) == TY_REGEX))
       { *out = TY_INT; return 1; }
     if (sp_streq(name, "each_line") && nt_ref(nt, id, "block") < 0 &&
-        string_line_enum_args(c, argc, argv))
+        string_line_args(c, argc, argv))
       { *out = TY_ENUMERATOR; return 1; }
     if (sp_streq(name, "lines") && argc == 2 && infer_type(c, argv[0]) == TY_STRING &&
         nt_kind(nt, argv[1]) == NK_KeywordHashNode)

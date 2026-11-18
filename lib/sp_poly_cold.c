@@ -24,6 +24,27 @@
 
 sp_int sp_poly_arg_int(sp_RbVal v) { return sp_poly_arg_int_chk(v); }
 
+sp_StrArray *sp_poly_string_lines(sp_RbVal receiver, sp_RbVal separator,
+                                sp_bool chomp, const char *method) {
+  SP_GC_ROOT_RBVAL(receiver);
+  SP_GC_ROOT_RBVAL(separator);
+  if (!sp_poly_face_str_ok(receiver)) sp_raise_poly_nomethod(method, receiver);
+  sp_StrArray *lines = sp_StrArray_new();
+  SP_GC_ROOT(lines);
+  if (sp_poly_nil_p(separator)) {
+    sp_StrArray_push_e(lines, sp_poly_as_strbuf(receiver));
+    return lines;
+  }
+  const char *sep = sp_poly_arg_str_chk(separator);
+  SP_GC_ROOT_STR(sep);
+  const char *text = sp_poly_recv_s(receiver, method);
+  SP_GC_ROOT_STR(text);
+  size_t offset = 0;
+  for (sp_String *line; (line = sp_str_line_next(text, sep, &offset, chomp));)
+    sp_StrArray_push_e(lines, line);
+  return lines;
+}
+
 typedef struct {
   sp_RbVal receiver;
   sp_RbVal separator;

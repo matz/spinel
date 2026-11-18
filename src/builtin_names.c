@@ -510,6 +510,9 @@ int is_str_each_iter(const char *n) {
 
 int is_freeze_name(const char *n) { return sp_streq(n, "freeze"); }
 
+int is_str_line_method(const char *name) {
+  return sp_streq(name, "lines") || sp_streq(name, "each_line");
+}
 int is_str_string_yield(const char *n) {
   return sp_streq(n, "each_char") || sp_streq(n, "each_line") || sp_streq(n, "upto") ||
          sp_streq(n, "chars") || sp_streq(n, "lines") || sp_streq(n, "split") || sp_streq(n, "scrub");

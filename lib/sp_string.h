@@ -265,9 +265,11 @@ static SP_NOINLINE sp_String*sp_String_new_static1(unsigned char c){
   h->next=(sp_str_hdr*)(void*)r;h->len=c!=0;
   data[-1]=(char)0xfd;data[0]=(char)c;
   r->data=data;r->len=c!=0;r->cap=CAP;
-  sp_str_lcache_drop(data);
-  /* (one byte below 0x80, or none, is 7-bit: indexing it is byte indexing) */
-  if(c<0x80)h->size=SP_STR_SIZE_ASCII7;
+  /* Fixed-width reads use the header. Writes that invalidate that fact
+     also drop the cache entry, and collection clears the workers' length
+     caches before releasing slab slots. */
+  if (c < 0x80) h->size = SP_STR_SIZE_ASCII7;
+  else sp_str_lcache_drop(data);
   return r;
 }
 static SP_NOINLINE sp_String*sp_String_new_shared_make(const char*s);

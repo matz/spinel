@@ -1948,7 +1948,8 @@ requires shipping and maintaining the Unicode grapheme-break property tables,
 which Spinel deliberately does not carry. `String#grapheme_clusters` and
 `String#each_grapheme_cluster` are therefore not supported. For codepoint- or
 byte-level iteration, use the supported `String#chars`, `#each_char`,
-`#codepoints`, or `#bytes`.
+`#codepoints`, or `#bytes`. Characters from an ASCII-8BIT String keep
+that encoding.
 
 #### `Time` sub-nanosecond precision
 

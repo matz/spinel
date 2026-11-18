@@ -141,6 +141,15 @@ typedef struct {
      (nt_mark_builtin_call): none, and no call is marked, which an ask can
      tell without a node read (a clone copies a marked node's mark) */
   int builtin_marks;
+  /* Each node's parent, as an_parent_map answers it, kept up by the edits
+     that move a child (nt_parents): par[ch] is the highest id that holds ch,
+     and nref[ch] how many ref and array slots hold it. par_old holds the
+     maps a growth replaced, which a caller may still be reading, until the
+     next ask. par is NULL until the first ask and after an edit it cannot
+     follow. par_ahead is the lowest id past the count a slot names (0:
+     none), which the map counts once the node is made. */
+  int *par, *par_nref, par_cap, par_ahead;
+  int **par_old, npar_old, cpar_old;
 } NodeTable;
 
 /* An index of the tree kept on the table it was made of: for each node, the
@@ -363,6 +372,14 @@ void nt_node_set_arr(NodeTable *nt, int id, const char *key, const int *ids, int
 /* Point parent's references to child old, in its ref fields and its array
    fields, at with instead. */
 void nt_replace_child(NodeTable *nt, int parent, int old, int with);
+/* Each node's parent (-1 for a root and for a node no slot holds), the same
+   map an_parent_map makes, kept on the table and updated by its edits
+   rather than rebuilt after each. Borrowed: it changes under a caller that
+   edits, and the next ask frees the one a growth replaced. */
+const int *nt_parents(NodeTable *nt);
+/* A slot of `parent` that held `old` holds `with` now, written without the
+   table's setters (nt_parents follows it). */
+void nt_parents_moved(NodeTable *nt, int parent, int old, int with);
 int  nt_new_int(NodeTable *nt, long long v);                     /* a new IntegerNode */
 /* Are the nodes appended at or after id `from` all local variable reads?
    Such a read is a leaf, so a whole-tree index built before it was appended

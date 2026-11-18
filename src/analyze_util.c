@@ -6536,23 +6536,14 @@ const char *time_strict_parser_call(Compiler *c, int id) {
   return fn;
 }
 
-/* The program's parent map (an_parent_map), kept on the Compiler as the
-   emitter's is (codegen_parents, the same fields) and rebuilt whenever the
-   node table changed, for an analysis that asks where a node sits on every
-   round. The map is borrowed: the first ask after an edit that changes the
-   table's version or count (a string, a type, a new node, a placement)
-   rebuilds it and frees the one handed out before. A caller that holds it
-   across such an edit reads freed memory once anything asks again: it finds
-   what it needs from the map first and edits after. */
+/* The program's parent map (nt_parents, an_parent_map's), kept on the
+   node table and updated by its edits, for an analysis that asks where a
+   node sits on every round. The map is borrowed: an edit changes it under a
+   caller that holds it, and a caller that holds it across an edit that adds
+   a node reads freed memory once anything asks again: it finds what it
+   needs from the map first and edits after. */
 const int *comp_parent_map(Compiler *c) {
-  const NodeTable *nt = c->nt;
-  if (!c->cg_parent || c->cg_parent_n != nt->count || c->cg_parent_ver != nt->version) {
-    free(c->cg_parent);
-    c->cg_parent = an_parent_map(nt);
-    if (!c->cg_parent) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-    c->cg_parent_n = nt->count; c->cg_parent_ver = nt->version;
-  }
-  return c->cg_parent;
+  return nt_parents((NodeTable *)c->nt);
 }
 
 /* Is node n a statement the next statement follows, so that its value is

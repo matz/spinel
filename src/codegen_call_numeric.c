@@ -465,6 +465,17 @@ int emit_call_bigint_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
                  tsh, tln);
       free(rs.p); return 1;
     }
+    /* An exponent that may be a Bignum, nil or another class (or is only
+       known boxed) goes boxed to sp_bigint_powmod_arg, which takes a Bignum
+       one through sp_bigint_powmod_big and raises pow's own TypeError for the
+       rest; converting it to a word raised RangeError for a Bignum. */
+    if (sp_streq(name, "pow") && argc == 2 &&
+        (comp_ntype(c, argv[0]) != TY_INT || repr_of(c, argv[0]).big || repr_of(c, argv[0]).kind == RK_BOXED ||
+         (node_is_oint(c, argv[0]) && nullable_int_value(c, argv[0])))) {
+      buf_printf(b, "sp_bigint_powmod_arg(%s, ", r); emit_boxed(c, argv[0], b); buf_puts(b, ", ");
+      emit_bigint_operand(c, argv[1], b); buf_puts(b, ")");
+      free(rs.p); return 1;
+    }
     if (sp_streq(name, "pow") && argc == 2) {
       buf_printf(b, "sp_bigint_powmod(%s, ", r); emit_int_expr(c, argv[0], b); buf_puts(b, ", ");
       emit_bigint_operand(c, argv[1], b); buf_puts(b, ")");

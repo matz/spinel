@@ -1,0 +1,17 @@
+bignum exponent, word modulus: 455702321
+bignum exponent, bignum modulus: 13788724338938871139
+base -1 mod m: 1
+negative modulus: -7445450037878360752
+negative base: 7445450037878360752
+modulus one: 0
+exponent from a boxed value: 33
+word exponent from a boxed value: 33
+word exponent: 237606480
+negative bignum exponent: RangeError: Integer#pow() 1st argument cannot be negative when 2nd argument specified
+zero modulus: ZeroDivisionError: divided by 0
+float exponent: TypeError: Integer#pow() 2nd argument not allowed unless a 1st argument is integer
+string exponent: TypeError: Integer#pow() 2nd argument not allowed unless a 1st argument is integer
+rational exponent: TypeError: Integer#pow() 2nd argument not allowed unless a 1st argument is integer
+nil exponent: TypeError: Integer#pow() 2nd argument not allowed unless a 1st argument is integer
+exponent that may be nil, a value: 33
+exponent that may be nil, nil: TypeError: Integer#pow() 2nd argument not allowed unless a 1st argument is integer

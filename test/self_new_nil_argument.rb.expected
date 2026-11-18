@@ -1,0 +1,17 @@
+nil
+"5"
+nil
+""
+nil
+""
+nil
+""
+"bare"
+nil
+[nil, nil, nil, nil]
+[nil, nil, nil, nil]
+nil
+nil
+nil
+Shouty: NoMethodError undefined method 'upcase' for nil
+Counted: NoMethodError undefined method '+' for nil

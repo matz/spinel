@@ -41488,6 +41488,25 @@ static int mark_nullable_params_of_call(Compiler *c, int id, int mi) {
   return changed;
 }
 
+/* A builtin `new` at call id binds each initialize the call plan lists for
+   the site (cplan_entries): `new(...)` or `self.new(...)` in a class method
+   and `self.class.new(...)` in an instance method (a `dup` handing a nil
+   on) build the method's class or, run for a subclass, that subclass's; a
+   Class value the class facts bound, each class it may hold. Each takes the
+   nil an argument can be. The caller's lookup names a constant's class's
+   initialize only (mi, skipped here), and the nil reached a parameter left
+   plain: refused at emission, or its class's arm left out of a Class-value
+   dispatch (ctor_arm_incompat). */
+static int mark_nullable_params_of_new(Compiler *c, int id, int mi) {
+  const NodeTable *nt = c->nt;
+  const char *nm = nt_str(nt, id, "name");
+  if (!nm || !is_new_name(nm) || nt_ref(nt, id, "arguments") < 0) return 0;
+  int ent[CPT_MAX], ne = cplan_entries(c, id, ent, CPT_MAX), changed = 0;
+  for (int j = 0; j < ne; j++)
+    if (ent[j] >= 0 && ent[j] != mi) changed |= mark_nullable_params_of_call(c, id, ent[j]);
+  return changed;
+}
+
 /* A bare `super` hands each parameter of the method on as the argument of
    the parent's matching one, so a parameter that can hold nil (`b = nil`)
    makes the parent's Integer or Float slot hold its nil too, as the same
@@ -43627,6 +43646,7 @@ static void mark_nullable_int_locals(Compiler *c) {
                : (c->node_cbody && id < c->node_cap ? c->node_cbody[id] : -1);
         if (bk >= 0) mi = cplan_hook_target(c, bs->def_node >= 0 ? -1 : id, bk, "initialize", NULL);
       }
+      changed |= mark_nullable_params_of_new(c, id, mi);
       if (mi < 0 && recv >= 0) {
         TyKind rt = infer_type(c, recv);
         if (ty_is_object(rt))

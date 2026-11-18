@@ -12688,6 +12688,18 @@ int ctor_arm_incompat(Compiler *c, Scope *is, const ArgLayout *L, const int *arg
        the extra arms admitted by the sharing representation. */
     if (((ptc == TY_STRBUF && atc == TY_STRING) ||
                             (ptc == TY_STRING && atc == TY_STRBUF))) continue;
+    /* A nil fits a parameter whose slot holds a nil of its own: an Integer
+       or Float the nil marking made an oint (RK_OPT; emit_ctor_arm_param
+       unboxes the box with its nil), a String, Array or Hash whose NULL is
+       its nil (RK_PTR, RK_STRBUF), or an object the marking made nilable
+       (obj_nilable: the calls on it test for nil; an unmarked one's
+       methods would run on NULL). `self.new(nil)` in a class method and
+       `self.class.new(nil, ...)` with subclasses dispatch here, and the
+       class lost its arm to the NoMethodError default. */
+    if (atc == TY_NIL && cp) {
+      ReprKind pk = repr_of_slot(c, cp).kind;
+      if (pk == RK_OPT || pk == RK_STRBUF || (pk == RK_PTR && (!ty_is_object(ptc) || cp->obj_nilable))) continue;
+    }
     if (ptc != TY_POLY && ptc != TY_UNKNOWN && atc != TY_POLY && atc != TY_UNKNOWN && ptc != atc)
       return 1;
   }

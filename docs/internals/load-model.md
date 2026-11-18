@@ -273,6 +273,19 @@ answers "not known" (`LoadRecord.ext_building`), so no binding reads a
 half-built extent; `lr_run_points` aborts if a run point is read while the
 extents are being built.
 
+A hook a body defines (`def self.method_added`, `def self.inherited`,
+`def self.included` and the like, in a class method or a `class << self`
+there) may be live when the walk fires hooks: `lr_hook_live` and
+`lr_fire_inherited` count one whose target is on the class's chain
+(`lr_hook_body_def`), so the walk grafts the hook's call. Which body that
+call runs is the call plan's: it is bound against the versions after the
+walk, and where none of the program's is live at the call, its entry's
+else arm is the core's no-op hook (`VK_NOOP`, `is_definition_hook_name`),
+not `super`, which from a subclass's entry would reach the superclass's
+version. A class-side def a body makes fires `singleton_method_added`
+after it on each run of the body (`lr_body_hook`), when the class's chain
+holds a version of that hook.
+
 ### What an answer means
 
 The queries answer `ELAB_YES`, `ELAB_NO` or `ELAB_UNKNOWN` as of a point

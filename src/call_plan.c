@@ -1826,7 +1826,9 @@ static int ct_calls(Compiler *c, int id, const char *name) {
      construction names used by entry discovery on every target query. */
   if (nt_kind(c->nt, id) == NK_CallNode) {
     const char *nm = nt_str(c->nt, id, "name");
-    return nm && sp_streq(nm, name);
+    /* (a send of a literal name calls that name too, call_node_names) */
+    const char *sent = nm && is_send_family(nm) ? call_sent_name(c->nt, id, NULL) : NULL;
+    return (nm && sp_streq(nm, name)) || (sent && sp_streq(sent, name));
   }
   const char *nm[2];
   int n = call_node_names(c, id, nm);
@@ -3849,6 +3851,9 @@ static int ver_chain_undef(Compiler *c, int rcls, int sg, const char *name) {
    is the one every other call takes.) */
 static int ct_call_face(Compiler *c, int id, int rcls, int sg, const char *name, unsigned flags, int none) {
   if (id >= 0 && nt_kind(c->nt, id) == NK_CallNode && nt_vcall(c->nt, id) && (none || ver_chain_undef(c, rcls, sg, name))) return VF_VCALL;
+  /* (a call that enforces visibility, which may meet none of a class's definition hook: the core's private hook
+     raises for it, where a send's runs it, ct_core_hook) */
+  if (none && sg && id >= 0 && cplan_call_enforces_vis(c, id) && is_definition_hook_name(name)) return VF_PRIVATE;
   return ct_face_for(c, rcls, sg, name, flags);
 }
 /* The version of `name` call id runs, when the method has more than one
@@ -3984,9 +3989,11 @@ static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigne
        the fixpoint has not reached yet may be reached later: its answer is
        not kept, MethodLookup.unsure) */
     ml->unsure = in && c->ver_built && !comp_scope_may_run(c, (int)(in - c->scopes));
-    /* (a variable-like call's entry raises NameError where none is live: its own face's,
-       where its else arm raises: one that runs a method is the entry of no face, VerEntry.anyform) */
-    int nface = face == VF_VCALL ? VF_VCALL : VF_NONE, nix = face == VF_VCALL ? own : ix;
+    /* (a variable-like call's entry raises NameError where none is live, and an enforcing call's of a class's
+       hook NoMethodError (ct_call_face): its own face's) */
+    int nface = face == VF_VCALL || (sg && face) ? face : VF_NONE, nix = nface ? own : ix;
+    /* (...where its else arm raises: one that runs a method or the core's
+       no-op is the entry of no face, VerEntry.anyform) */
     if (face == VF_VCALL && own < 0 && ix >= 0 && c->ver_entries[ix].anyform) nface = VF_NONE, nix = ix;
     if (none && settled && in && comp_scope_may_run(c, (int)(in - c->scopes)) && c->ver_built && !ml->survey &&
         (nix < 0 || !c->ver_entries[nix].absent) &&
@@ -4127,6 +4134,14 @@ static int ct_builtin_reopen_undefined_at(Compiler *c, int id, int cls, const ch
   int none = elab_call_method(c, id, cls, name, 0, 1) == ELAB_NO;
   if (framed) elab_plan_leave(c);
   return none;
+}
+/* Does call id, asked for class method `name` (flags as call_target's),
+   reach the core's definition hook where no version of the program's is
+   live: one a call that does not enforce visibility (a send) runs, the
+   private no-op row (builtin_ops.c), as where the program defines none? A
+   call that enforces it raises NoMethodError for it. */
+static int ct_core_hook(Compiler *c, int id, const char *name, unsigned flags) {
+  return id >= 0 && (flags & CT_CMETHOD) && !cplan_call_enforces_vis(c, id) && is_definition_hook_name(name) && bop_find(TY_CLASS, name, 1, 0);
 }
 /* ct_undefined_at's ask of the record, once the chain it asks on (rcls) is known: the side of the call's own receiver
    and the builtin self methods apart from it (self_known: builtin_self_method_known of the name, -1 to ask it here). */
@@ -5547,7 +5562,8 @@ int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, 
     int vi = ct_versioned(c, mi, name) && ct_after_point(c, id) ? ct_version(c, id, cls, name, flags, mi, ml) : -1;
     if (vi >= 0 && c->scopes[vi].entry) r = vi;
     else {
-      *ml = (MethodLookup){ .kind = ML_NONE, .why = MLW_RECORD, .def_class = dc0 };
+      /* (but the core's hook, which a send reaches: ct_core_hook) */
+      *ml = (MethodLookup){ .kind = ML_NONE, .why = ct_core_hook(c, id, name, flags) ? 0 : MLW_RECORD, .def_class = dc0 };
       r = -1;
     }
   }
@@ -6755,7 +6771,7 @@ int cplan_missing(Compiler *c, int id, char *self_text, size_t cap, int *anon) {
   /* (a call on main that main's own method does not answer where it runs,
      removed or not yet defined, reaches Object's chain: ct_lookup) */
   if (oc >= 0 && call_target(c, id, oc, name, 0, NULL) >= 0) return CM_NONE;
-  if (cm_builtin_answers(c, ci, name)) return CM_NONE;
+  if (cm_builtin_answers(c, ci, name) || (cm && ct_core_hook(c, id, name, CT_CMETHOD))) return CM_NONE;
   if (anon) *anon = cm_self_name(c, ci, self_text, cap) ? -1 : ci;
   return nt_vcall(nt, id) ? CM_NAMEERROR : CM_NOMETHOD;
 }
@@ -11639,11 +11655,13 @@ static int ver_no_method_raise(Compiler *c, int cls, int sg, const char *name, i
    instance variable; VK_MM method_missing; VK_TEXT Kernel's to_s or
    inspect through super(); VK_BUILTIN the builtin a class answers on itself
    (bop_class_answers, or a record class's own: elab_record_cmethod),
-   called on self; VK_NOMETHOD NoMethodError; VK_KEEP
+   called on self; VK_NOOP a definition hook's own in the core
+   (method_added, inherited and the like: a private no-op, nil after its
+   arguments); VK_NOMETHOD NoMethodError; VK_KEEP
    no entry, where none of these is CRuby's answer: the history keeps the
    handling it had (its last version taken as run); a version entry's
    else arm the same, VK_KEEP its last version (ver_entry_make) */
-enum { VK_SUPER, VK_IVAR, VK_MM, VK_TEXT, VK_BUILTIN, VK_NOMETHOD, VK_KEEP, VK_CELL };
+enum { VK_SUPER, VK_IVAR, VK_MM, VK_TEXT, VK_BUILTIN, VK_NOMETHOD, VK_KEEP, VK_CELL, VK_NOOP };
 struct VerNamedAsks;
 static int ver_named_kind(const struct VerNamedAsks *q, int cls, int sg, const char *name, const int *to, int nv, int hist, int vis, int ar, int blk, int mm, int shared);
 static int ver_absent_else(Compiler *c, int els, int rcls, int sg, const char *name, const int *to, int na, int ar, int vcall, int *blk, int *spliced);
@@ -11778,10 +11796,11 @@ static int ver_entry_make(Compiler *c, const struct VerNamedAsks *q, int rcls, i
      Model the absence even if the call sites only name Kernel.String. */
   else if (q && nd && vis && !(mm & 1) && ver_symbol_conversion_callback(c, rcls, sg, name, ar))
     kind = VK_NOMETHOD;
-  /* (an else arm that runs a method raises nothing of its own, whatever
-     the call's form or its method_missing: asked with a variable-like
-     call's face, the entry of no face, -2, ver_late_make) */
-  int forms = kind == VK_SUPER || kind == VK_IVAR || kind == VK_TEXT || kind == VK_BUILTIN;
+  if (kind == VK_NOOP && ver_closed_to(SP_VIS_PRIVATE, face)) kind = VK_NOMETHOD;   /* (the core's hook is private) */
+  /* (an else arm that runs a method or the core's no-op raises nothing of
+     its own, whatever the call's form or its method_missing: asked with a
+     variable-like call's face, the entry of no face, -2, ver_late_make) */
+  int forms = kind == VK_SUPER || kind == VK_IVAR || kind == VK_TEXT || kind == VK_BUILTIN || kind == VK_NOOP;
   if (anyform) *anyform = forms;
   if (q && face == VF_VCALL && forms) return -2;
   if (kind != VK_KEEP) els = ver_absent_else(c, kind, rcls, sg, name, dto, nd, ar, face == VF_VCALL, &blk, &spliced);
@@ -12311,6 +12330,7 @@ static int ver_named_else(Compiler *c, const VerNamed *w) {
   int cls = w->cls, sg = w->sg;
   switch (w->els) {
   case VK_SUPER: return disp_super_call(nt, w->ar, w->blk);
+  case VK_NOOP: return nt_new_node(nt, "NilNode");
   case VK_TEXT: return disp_super_call(nt, 0, 0);
   case VK_MM: comp_sym_intern(c, name); return disp_method_missing_call(nt, name, w->ar, w->blk);   /* (its Symbol, made after the literals were interned) */
   case VK_CELL: {
@@ -12512,7 +12532,15 @@ static void ver_name_add(const char ***v, int *n, const char *name) {
 static int ver_named_kind(const VerNamedAsks *q, int cls, int sg, const char *name, const int *to, int nv, int hist, int vis, int ar, int blk, int mm, int shared) {
   Compiler *c = q->c;
   ElabVersion cv[VER_MAX_ARMS];
-  int par = comp_super_parent(c, cls, sg), st, last = -1, nc;
+  int par = comp_super_parent(c, cls, sg), st, last = -1, nc = elab_chain_versions(c, cls, sg, name, cv, VER_MAX_ARMS);
+  for (int j = 0; j < nc; j++) if (cv[j].hist == hist) last = j;
+  /* a class's or module's hook (included, inherited, method_added,
+     singleton_method_added and the like) with no version run, and none of
+     the program's above it, is the core's no-op, behind a later class's
+     history on the chain, a super of the program that reaches it too (the
+     core's hook raises nothing). (Not super: an entry of a subclass, whose
+     history is its superclass's, would reach that history's version.) */
+  if (sg && cls >= 0 && ar == 1 && !blk && is_definition_hook_name(name)) return last < nc - 1 ? VK_KEEP : VK_NOOP;
   for (int i = 0; i < nv; i++) if (to[i] < q->nsup && q->sup[to[i]]) return VK_KEEP;
   if (cls >= 0 && (st = cplan_super_target(c, -1, &c->scopes[to[nv - 1]], NULL)) >= 0) {
     /* (a module's copy has the visibility the module's own table gives it) */
@@ -12543,12 +12571,7 @@ static int ver_named_kind(const VerNamedAsks *q, int cls, int sg, const char *na
     mtab_leave(c);
     if (rd) return pv == vis ? VK_IVAR : VK_KEEP;
   }
-  nc = elab_chain_versions(c, cls, sg, name, cv, VER_MAX_ARMS);
-  for (int j = 0; j < nc; j++) if (cv[j].hist == hist) last = j;
   if (last < nc - 1) return VK_KEEP;
-  /* a class's or module's hook (included, inherited, method_added and the
-     like) with no version run is the core's no-op, which super reaches */
-  if (sg && cls >= 0 && ar == 1 && !blk && is_module_hook_name(name)) return VK_SUPER;
   /* (method_missing where the calls run: there at some and not at
      others, the history keeps its handling; at none, NoMethodError) */
   if (cplan_mm_method(c, -1, cls, sg) >= 0 && (mm & 1)) return mm == 1 ? VK_MM : VK_KEEP;
@@ -12593,7 +12616,7 @@ static int ver_else_finds(Compiler *c, int els, int cls, int sg, const char *nam
   switch (els) {
   case VK_NOMETHOD: case VK_MM: return VER_FINDS_NONE;
   case VK_BUILTIN: case VK_TEXT: return VER_FINDS_PUBLIC;
-  case VK_CELL: return VER_FINDS_HIDDEN;   /* (a Kernel row's is private: not found where the cell is clear either) */
+  case VK_CELL: case VK_NOOP: return VER_FINDS_HIDDEN;   /* (a Kernel row's, the core's hook: private, not found where the cell is clear either) */
   case VK_KEEP:   /* (main's: the versions', a private one unless declared) */
     if (cls >= 0) {
       mtab_enter(c);   /* (entry construction: the visibility the versions' table leaves the name) */
@@ -14158,6 +14181,14 @@ static int ver_cells_put(Compiler *c) {
   return nm;
 }
 void ver_memo_drop(Compiler *c) {
+  /* (and the user calls' plans and poly arms, which bind those versions
+     and entries; the arms handed out stay kept with the Compiler) */
+  struct CplanMemo *m = c->cplan_memo;
+  if (m) {
+    cplan_table_free(&m->user);
+    m->user = (struct CplanTable){0};
+    for (int i = 0; i < m->poly_cap; i++) { free(m->poly_name[i]); m->poly_name[i] = NULL; }
+  }
   for (int i = 0; i < c->ver_memo_cap; i++) free(c->ver_memo[i].name);
   free(c->ver_memo);
   c->ver_memo = NULL;

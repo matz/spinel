@@ -2889,6 +2889,10 @@ static int lr_node_defines(Compiler *c, int n, int direct, int depth) {
   for (int i = 0; i < (int)(sizeof kinds / sizeof *kinds); i++) if (k == kinds[i]) return LR_OPAQUE_DEFINES;
   for (int i = 0; i < nc; i++) if (k == ck[i]) return LR_OPAQUE_DEFINES;
   if (k == NK_BlockArgumentNode && nt_kind(nt, nt_ref(nt, n, "expression")) != NK_SymbolNode) return LR_OPAQUE_DEFINES;   /* a block passed on */
+  /* (a hook call grafted after a body's def, lr_body_hook, is past the
+     walk, which recorded the body without it: a check after the graft
+     reads the body as the walk did) */
+  if (k == NK_CallNode && nt_int(nt, n, "body_hook", 0)) return o;
   if (k == NK_CallNode) o = lr_most(o, lr_call_defines(c, nt_str(nt, n, "name"), direct, depth));
   if (lr_variable_op_write(k)) o = lr_most(o, lr_call_defines(c, nt_str(nt, n, "binary_operator"), direct, depth));
   if (o != LR_OPAQUE_DEFINES && !direct && lr_node_dispatches(nt, n)) o = lr_most(o, lr_callbacks_define(c, depth));
@@ -3689,10 +3693,54 @@ static int lr_jumps(const NodeTable *nt, int node) {
    is in a method body (a bare `private` there changes nothing), but where a
    visibility word takes the def as its argument (`private def m`). */
 static int lr_hist_has_node(LoadRecord *r, int cls, const char *name, int node);
+static const char *lr_event_hook(LrKind kind, int sg);
+static int lr_hook_call(Compiler *c, int like, int recv, const char *hook, int arg, const char *argname);
+static int lr_made(NodeTable *nt, int like, const char *ty);
+/* The hook CRuby calls each time a body runs def, where the
+   program defines it: singleton_method_added on the object def's receiver
+   names (`def self.m`, `def K.m`, class cls), where the record holds a
+   version of it on cls's chain, as a call after def in its statement
+   list (event_hook: the call plan answers it against the hook's versions,
+   the core's no-op where none is live). Made once (body_hook). The def's
+   value stays the list's where it is its last statement: the def's name
+   follows the call (`:m`), as a def's value is. A def with no receiver,
+   or that is no statement of a list, calls none: a gap. */
+static int lr_chain_versions(Compiler *c, int cls, int sg, const char *name, ElabVersion *out, int cap);
+static void lr_body_hook(Compiler *c, const int *par, int def, int cls, int sg) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  const char *hook = lr_event_hook(LR_DEF, sg);
+  ElabVersion hv[1];
+  if (!hook || !lr_named(c, hook) || lr_chain_versions(c, cls, 1, hook, hv, 1) == 0) return;   /* (no hook on the target's chain: the core's) */
+  int rv = nt_ref(nt, def, "receiver"), k = rv >= 0 ? nt_def_receiver(nt, rv) : -1, list = par[def], bn = 0, j = 0;
+  if (k < 0 || list < 0 || nt_kind(nt, list) != NK_StatementsNode || nt_int(nt, def, "body_hook", 0)) return;
+  const int *bb = nt_arr(nt, list, "body", &bn);
+  while (j < bn && bb[j] != def) j++;
+  if (j == bn) return;
+  int made = nt->count, tail = j == bn - 1, recv = nt_kind(nt, k) == NK_SelfNode ? lr_made(nt, def, "SelfNode") : nt_clone_subtree(nt, k);
+  int *out = malloc(sizeof(int) * (size_t)(bn + 1 + tail));
+  if (!out || recv < 0) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  int call = lr_hook_call(c, def, recv, hook, 0, nt_str(nt, def, "name"));
+  nt_node_set_int(nt, call, "event_hook", 1);
+  nt_node_set_int(nt, call, "body_hook", 1);
+  nt_node_set_int(nt, def, "body_hook", 1);
+  memcpy(out, bb, sizeof(int) * (size_t)(j + 1));
+  out[j + 1] = call;
+  memcpy(out + j + 2, bb + j + 1, sizeof(int) * (size_t)(bn - j - 1));
+  if (tail) {
+    out[bn + 1] = lr_made(nt, def, "SymbolNode");
+    nt_node_set_str(nt, out[bn + 1], "value", nt_str(nt, def, "name"));
+  }
+  nt_node_set_arr(nt, list, "body", out, bn + 1 + tail);
+  free(out);
+  comp_grow_node_arrays(c);
+  for (int n = made; n < nt->count; n++) { c->nscope[n] = c->nscope[def]; c->node_cbody[n] = c->node_cbody[def]; }   /* (the scope def stands in: the walk registered it) */
+}
 static void lr_body_versions(Compiler *c) {
   const NodeTable *nt = c->nt;
   LoadRecord *r = c->lrec;
   const int *par = r->plan_depth ? r->plan_par : r->up;
+  int nh = 0, *hooked = malloc(sizeof(int) * (size_t)(2 * nt->count + 1));
+  if (!hooked) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   NT_FOREACH_KIND(nt, NK_DefNode, id) {
     int body = id < r->n && r->at[id] >= 0 && (r->bits[id] & LR_LATE) ? lr_body_around(nt, par, r->n, id) : -1, cls, sg;
     if (body < 0 || !lr_body_target(c, par, r->n, id, 0, &cls, &sg) || !lr_body_def_version(c, par, r->n, id, sg)) continue;
@@ -3702,7 +3750,10 @@ static void lr_body_versions(Compiler *c) {
     if (have) continue;   /* (a class body's own statement: lr_body_defs) */
     ElabRec x = { c, r, .unplaced = 1, .body = body };
     lr_method(&x, cls, sg, nt_str(nt, id, "name"), id, LR_DEF, BVIS_PUBLIC, !lr_runs_with_body(nt, par, r->n, id, body), NULL);
+    if (sg) { hooked[nh++] = id; hooked[nh++] = cls; }
   }
+  for (int i = 0; i < nh; i += 2) lr_body_hook(c, par, hooked[i], hooked[i + 1], 1);   /* (after the walk over the defs: it adds nodes) */
+  free(hooked);
 }
 
 /* Each def the record answered held for (lr_body_held, its first answer
@@ -4315,7 +4366,7 @@ static int lr_late_asked(Compiler *c, const LrVers *x, const LrHist *h, int nh) 
       (!cside && lr_refl_has(r->refl_capt, r->nrefl_capt, x->name)) || (nh > 1 && !cside && !str_reader)) return 0;
   if (str_reader) return 1;
   if (cside)
-    return bop_class_answers(x->name, 0, 0) || elab_record_cmethod(c, h->a, x->name) ||
+    return bop_class_answers(x->name, 0, 0) || elab_record_cmethod(c, h->a, x->name) || is_definition_hook_name(x->name) ||
            !(builtin_object_method_known(x->name) || core_class_value_answers("Module#", x->name) ||
              (!comp_class_is_module(c, &c->classes[h->a]) &&
               (core_class_value_answers("Class#", x->name) || builtin_class_id_answers(class_builtin_parent(c, h->a), x->name, 1))));
@@ -4348,7 +4399,9 @@ static int lr_list_may_list(Compiler *c, int id, int a) {
    history is asked all the same of a name the class answers on
    itself as a reader, with no argument or block (bop_class_answers), or
    of a record class's own builtin (elab_record_cmethod), whose entry's
-   else arm calls that builtin (VK_BUILTIN). The ask is of
+   else arm calls that builtin (VK_BUILTIN), or of a definition hook
+   (singleton_method_added is Object's too), whose else arm is the core's
+   no-op (VK_NOOP). The ask is of
    the name's shape, not one call's; each entry asks again at its own
    arity and keeps the table's answer where the builtin does not take it.
    Of a name of two or more histories, only the class-side ones are
@@ -10086,6 +10139,7 @@ static int lr_hook_call(Compiler *c, int like, int recv, const char *hook, int a
    Struct or Data class, registered after the walk): the call binds to the
    hook the program has, or is a no-op row (builtin_ops.c). A core class the
    program does not reopen fires nothing. */
+static int lr_hook_body_def(Compiler *c, int cls, const char *hook);
 static void lr_fire_inherited(Compiler *c, int node) {
   LoadRecord *r = c->lrec;
   NodeTable *nt = (NodeTable *)c->nt;
@@ -10101,7 +10155,7 @@ static void lr_fire_inherited(Compiler *c, int node) {
   int sup = lr_class_ref_at(c, sc, NULL);
   const char *sn = lr_written_name(nt, sc);
   if (sup < 0 && sup != LR_LATER && (is_builtin_class_name(sn) || is_builtin_exception_name(sn)) && !lr_reopened(r, sn)) return;
-  if (sup >= 0 && elab_method_at(c, sup, "inherited", 1, elab_point_of(c, node), NULL) == ELAB_NO) return;
+  if (sup >= 0 && elab_method_at(c, sup, "inherited", 1, elab_point_of(c, node), NULL) == ELAB_NO && !lr_hook_body_def(c, sup, "inherited")) return;
   int body = class_def_body(nt, node), bn = 0;
   if (body < 0) {
     body = lr_made(nt, node, "StatementsNode");
@@ -10113,6 +10167,7 @@ static void lr_fire_inherited(Compiler *c, int node) {
   if (!out || recv < 0) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   int call = lr_hook_call(c, node, recv, "inherited", lr_made(nt, node, "SelfNode"), NULL);
   nt_node_set_int(nt, call, "class_recv", 1);   /* (a superclass is a class: the receiver is proven one) */
+  nt_node_set_int(nt, call, "event_hook", 1);
   out[0] = call;
   if (bn) memcpy(out + 1, bv, sizeof(int) * (size_t)bn);
   nt_node_set_arr(nt, body, "body", out, bn + 1);
@@ -10401,8 +10456,29 @@ static int lr_opaque_may_define(Compiler *c, int k) {
   }
   return 0;
 }
+/* Does a def a body makes, which the record holds (lr_body_held), define
+   hook on the singleton of cls or of a class above it? The walk asks
+   before the record orders that version (lr_body_versions comes after
+   it), so such a hook may be live anywhere: its call is made, and the
+   call plan answers it against the versions, the core's no-op where none
+   is live yet (VK_NOOP). */
+static int lr_hook_body_def(Compiler *c, int cls, const char *hook) {
+  LoadRecord *r = c->lrec;
+  int nd = 0;
+  const LrSite *d = lr_name_range(r->defs, r->ndefs, sizeof *r->defs, hook, &nd);
+  if (!nd) return 0;   /* (before the parents: the walk's map is built anew where the walk has none) */
+  const int *par = r->plan_depth ? r->plan_par : r->up ? r->up : comp_parent_map(c);
+  for (int i = 0, tc, sg; i < nd; i++) {
+    /* (the target first: a def whose class the walk has not reached yet is
+       not asked, as its first answer, lr_body_held's, is kept) */
+    if (!lr_body_target(c, par, r->n, d[i].node, 1, &tc, &sg) || !sg) continue;
+    for (int a = cls, k = 0; a >= 0 && k < lr_chain_bound(c); a = lr_super(c, a), k++)
+      if (a == tc) return lr_body_held(c, d[i].node);
+  }
+  return 0;
+}
 static int lr_hook_live(Compiler *c, int cls, const char *hook, LoadPoint p, const LrDef **d) {
-  if (elab_method_at(c, cls, hook, 1, p, d) != ELAB_NO) return 1;
+  if (elab_method_at(c, cls, hook, 1, p, d) != ELAB_NO || lr_hook_body_def(c, cls, hook)) return 1;
   if (!lr_defines(c->lrec, hook)) return 0;
   for (int a = cls, i = 0; a >= 0 && i < lr_chain_bound(c); a = lr_super(c, a), i++)
     if (elab_opaque_before(c, a, p) != ELAB_NO && lr_opaque_may_define(c, a)) return 1;

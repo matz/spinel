@@ -679,7 +679,7 @@ int emit_op_proc_source_location(Compiler *c, const BopCtx *x, Buf *b) {
     int ta = ++g_tmp;
     buf_printf(b, "({ (void)("); emit_expr_for_effect(c, recv, b);
     buf_printf(b, "); sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", ta, ta);
-    buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_str(", ta); emit_str_literal(b, fn); buf_puts(b, "));");
+    buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_str_new(", ta); emit_source_path_literal(b, fn); buf_puts(b, "));");
     buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_int(%d));", ta, nl);
     buf_printf(b, " _t%d; })", ta);
     return 1;
@@ -936,7 +936,7 @@ int emit_op_method_original_name(Compiler *c, const BopCtx *x, Buf *b) {
 /* `_t<tr> = [file, line];`, or NULL for file NULL (none) */
 static void emit_method_source_pair(int tr, const char *file, int line, Buf *b) {
   if (!file) { buf_printf(b, "_t%d = NULL;", tr); return; }
-  buf_printf(b, "_t%d = sp_PolyArray_new(); sp_PolyArray_push(_t%d, sp_box_str(", tr, tr);
+  buf_printf(b, "_t%d = sp_PolyArray_new(); sp_PolyArray_push(_t%d, sp_box_str_new(", tr, tr);
   emit_source_path_literal(b, file);
   buf_printf(b, ")); sp_PolyArray_push(_t%d, sp_box_int(%dLL));", tr, line);
 }
@@ -1021,7 +1021,7 @@ static int emit_method_source_target(Compiler *c, const BopCtx *x, Buf *b, int t
       own4 = !ci || comp_class_is_module(c, ci) || ci->is_builtin_const;
     }
     if (own4) {
-      buf_printf(b, "{ _t%d = sp_PolyArray_new(); sp_PolyArray_push(_t%d, sp_box_str(", tr4, tr4);
+      buf_printf(b, "{ _t%d = sp_PolyArray_new(); sp_PolyArray_push(_t%d, sp_box_str_new(", tr4, tr4);
       emit_source_path_literal(b, nt->source_file ? nt->source_file : "");
       buf_printf(b, ")); sp_PolyArray_push(_t%d, sp_box_int(0LL)); } _t%d; })", tr4, tr4);
     }
@@ -1039,7 +1039,7 @@ static int emit_method_source_target(Compiler *c, const BopCtx *x, Buf *b, int t
   int tr4 = ++g_tmp;
   buf_printf(b, "({ (void)("); emit_expr_for_effect(c, recv, b);
   buf_printf(b, "); sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);"
-                " sp_PolyArray_push(_t%d, sp_box_str(", tr4, tr4, tr4);
+                " sp_PolyArray_push(_t%d, sp_box_str_new(", tr4, tr4, tr4);
   emit_source_path_literal(b, file4);
   buf_printf(b, ")); sp_PolyArray_push(_t%d, sp_box_int(%dLL)); _t%d; })", tr4, ln4, tr4);
   return 1;
@@ -2552,8 +2552,8 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
             /* promote: bound methods are invoked through the poly ABI, so the
                adapter takes/returns sp_RbVal (boxing the int/string element). */
             /* an Integer element read that misses is nil: the oget's oint, boxed */
-            const char *boxret = (ki == 0) ? "sp_box_oint" : "sp_box_str";
-            const char *getfn  = (ki == 0) ? "sp_IntArray_oget" : "sp_StrArray_get";
+            const char *boxret = (ki == 0) ? "sp_box_oint" : "SP_SEBOX";
+            const char *getfn  = (ki == 0) ? "sp_IntArray_oget" : "sp_StrArray_get_e";
             /* the element the typed array is asked to hold: its own kind
                or the refusal, never a coercion (#4481) */
             /* (an Array that holds the handle stores its row's `_e` entries, the value as its handle) */
@@ -2976,14 +2976,14 @@ int emit_call_poly_callable_arms(Compiler *c, int id, Buf *b, const NodeTable *n
       char cls_arm[220];
       if (c->has_anonymous_classes || comp_has_sclass_values(c))
         snprintf(cls_arm, sizeof cls_arm, "({ const char *_cn%d = sp_class_name_or_nil(sp_unbox_class(_t%d));"
-                 " _cn%d ? sp_box_str(sp_str_uminus_val(_cn%d)) : sp_box_nil(); })", t, t, t, t);
-      else snprintf(cls_arm, sizeof cls_arm, "sp_box_str(sp_str_uminus_val(sp_class_val_name(_t%d)))", t);
+                 " _cn%d ? sp_box_str_new(sp_str_uminus_val(_cn%d)) : sp_box_nil(); })", t, t, t, t);
+      else snprintf(cls_arm, sizeof cls_arm, "sp_box_str_new(sp_str_uminus_val(sp_class_val_name(_t%d)))", t);
       if (sp_streq(name, "name")) {
         g_uses_symbols = 1;   /* a NameError's name is a Symbol */
         buf_printf(b, "sp_box_sym(sp_sym_intern(((sp_BoundMethod *)_t%d.v.p)->name))"
                       " : _t%d.tag == SP_TAG_CLASS ? %s"
-                      " : _t%d.tag == SP_TAG_ENCODING ? sp_box_str(sp_str_uminus_val(_t%d.v.s))"
-                      " : _t%d.tag == SP_TAG_SYM ? sp_box_str(sp_sym_name_str((sp_sym)_t%d.v.i))"   /* (a Symbol's name: its one frozen String, no fstring) */
+                      " : _t%d.tag == SP_TAG_ENCODING ? sp_box_str_new(sp_str_uminus_val(_t%d.v.s))"
+                      " : _t%d.tag == SP_TAG_SYM ? sp_box_str_new(sp_sym_name_str((sp_sym)_t%d.v.i))"   /* (a Symbol's name: its one frozen String, no fstring) */
                       " : (_t%d.tag == SP_TAG_OBJ && _t%d.v.p && (_t%d.cls_id == SP_BUILTIN_EXCEPTION || sp_is_exc_subclass_cls(_t%d.cls_id)))"
                       " ? sp_exc_name_acc((sp_Exception *)_t%d.v.p)",
                    t, t, cls_arm, t, t, t, t, t, t, t, t, t);

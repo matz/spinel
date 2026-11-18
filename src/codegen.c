@@ -13890,9 +13890,9 @@ static void emit_marshal_box_ivar_n(Compiler *c, TyKind t, const char *expr, con
       if (nilt) buf_printf(b, "(%s ? sp_box_nil() : sp_box_float(%s))", nilt, expr);
       else buf_printf(b, "sp_box_float(%s)", expr);
       break;
-    case TY_STRING: buf_printf(b, "(%s ? sp_box_str(%s) : sp_box_nil())", expr, expr); break;
-    /* the handle's live bytes, as a boxed handle's unbox reads them */
-    case TY_STRBUF: buf_printf(b, "(%s ? sp_box_str(sp_String_cstr(%s)) : sp_box_nil())", expr, expr); break;
+    case TY_STRING: buf_printf(b, "sp_box_str_new(%s)", expr); break;
+    /* Marshal uses the same handle on each visit to this object */
+    case TY_STRBUF: buf_printf(b, "SP_SEBOX(%s)", expr); break;
     case TY_BOOL:   buf_printf(b, "sp_box_bool(%s)", expr); break;
     case TY_SYMBOL: buf_printf(b, "sp_box_sym(%s)", expr); break;
     case TY_BIGINT: buf_printf(b, "(%s ? sp_box_bigint(%s) : sp_box_nil())", expr, expr); break;
@@ -13953,7 +13953,7 @@ static void emit_obj_to_hash_dispatch(Compiler *c, Buf *b) {
       buf_printf(b, "      sp_StrPolyHash_set(h, SPL(\"%s\"), ", iv);
       switch (mt) {
       case TY_INT: case TY_FLOAT: emit_member_boxed(c, i, j, b); break;
-      case TY_STRING: buf_printf(b, "(o->iv_%s ? sp_box_str(o->iv_%s) : sp_box_nil())", ivf, ivf); break;
+      case TY_STRING: buf_printf(b, "sp_box_str_new(o->iv_%s)", ivf); break;
       case TY_BOOL: buf_printf(b, "sp_box_bool(o->iv_%s)", ivf); break;
       case TY_SYMBOL: buf_printf(b, "sp_box_sym(o->iv_%s)", ivf); break;
       case TY_POLY: buf_printf(b, "o->iv_%s", ivf); break;
@@ -14211,7 +14211,7 @@ static void emit_member_boxed(Compiler *c, int cid, int j, Buf *b) {
     emit_marshal_box_ivar_of(c, cid, j, "o->", expr, b);
     break;
   }
-  case TY_STRING: buf_printf(b, "(o->iv_%s ? sp_box_str(o->iv_%s) : sp_box_nil())", ivf, ivf); break;
+  case TY_STRING: buf_printf(b, "sp_box_str_new(o->iv_%s)", ivf); break;
   case TY_BOOL: buf_printf(b, "sp_box_bool(o->iv_%s)", ivf); break;
   case TY_SYMBOL: buf_printf(b, "sp_box_sym(o->iv_%s)", ivf); break;
   case TY_POLY: buf_printf(b, "o->iv_%s", ivf); break;
@@ -23873,8 +23873,8 @@ static void emit_exc_reinit_dispatch(Compiler *c, Buf *b) {
     LocalVar *p0v = p0 >= 0 && c->scopes[im].pnames ? scope_local(&c->scopes[im], c->scopes[im].pnames[p0]) : NULL;
     TyKind p0t = p0v ? repr_of_slot(c, p0v).as_ty : TY_POLY;
     Buf mb = {0};
-    if (p0t == TY_POLY || p0t == TY_UNKNOWN) buf_puts(&mb, "sp_box_str(msg)");
-    else if (p0t == TY_STRING || p0t == TY_STRBUF) emit_unbox_text(c, p0t, "sp_box_str(msg)", &mb);
+    if (p0t == TY_POLY || p0t == TY_UNKNOWN) buf_puts(&mb, "sp_box_str_new(msg)");
+    else if (p0t == TY_STRING || p0t == TY_STRBUF) emit_unbox_text(c, p0t, "sp_box_str_new(msg)", &mb);
     else { free(pre.p); free(args.p); continue; }
     const char *argv[1] = { mb.p };
     buf_printf(b, "  if (_xi%d == %d) {", pk, q);

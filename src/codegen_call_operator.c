@@ -1777,7 +1777,7 @@ int emit_call_operator_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
     const char *keyct = hrr.key == TY_SYMBOL ? "sp_sym"
                       : hrr.key == TY_STRING ? "const char *" : "sp_RbVal";
     const char *kbox = hrr.key == TY_SYMBOL ? "sp_box_sym(_key)"
-                     : hrr.key == TY_STRING ? "sp_box_str(_key)" : "_key";
+                     : hrr.key == TY_STRING ? "sp_box_str_new(_key)" : "_key";
     const char *dn2 = uid_new();
     buf_printf(&g_procs,
       "static sp_RbVal _sp_hash_dproc_%s(sp_%sHash *_self_h, %s _key, void *_dproc_self) {\n"

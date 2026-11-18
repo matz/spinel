@@ -8792,8 +8792,8 @@ static int emit_poly_builtin_default_spread(Compiler *c, int id, int recv, const
        the value (re-entered, the emission folds the empty forward) */
     if (n == 0 && (sp_streq(name, "inspect") || sp_streq(name, "to_s")) &&
         (ret == TY_POLY || ret == TY_STRING)) {
-      buf_printf(&arms, " if (_t%d->len == 0) { _t%d = %ssp_poly_%s(_t%d)%s; break; }", atmp[0], tr,
-                 ret == TY_POLY ? "sp_box_str(" : "", name, tv, ret == TY_POLY ? ")" : "");
+      buf_printf(&arms, " if (_t%d->len == 0) { _t%d = sp_poly_%s%s(_t%d); break; }", atmp[0], tr,
+                 name, ret == TY_POLY ? "_box" : "", tv);
       any = 1;
       continue;
     }
@@ -23590,21 +23590,22 @@ int emit_blockless_enumerator(Compiler *c, int id, Buf *b) {
     }
     /* spill the receiver once: it feeds both the snapshot and the
        inspect-visible source stamp */
-    int tsrc = ++g_tmp;
+    int tsrc = ++g_tmp, tbox = ++g_tmp;
     buf_printf(b, "({ const char *_t%d = ", tsrc);
     emit_expr(c, recv, b);
     buf_printf(b, "; SP_GC_ROOT(_t%d); ", tsrc);
     /* the item reads raise a nil receiver under chars' or bytes' name, or
        read it as "": it raises under the iterator's own */
     if (!recv_never_nil(c, recv)) { nil_recv_check(name, tsrc, b); buf_puts(b, " "); }
+    buf_printf(b, "sp_RbVal _t%d = sp_box_str_new(_t%d); SP_GC_ROOT_RBVAL(_t%d); ", tbox, tsrc, tbox);
     if (is_byte_codepoint_each(name)) {
       const char *fn = sp_streq(name, "each_byte") ? "sp_str_bytes" : "sp_str_codepoints";
       buf_printf(b, "sp_enum_with_src(sp_Enumerator_new_from(sp_box_int_array(%s(_t%d))), "
-                    "sp_box_str(_t%d), SPL(\"%s\")); })", fn, tsrc, tsrc, name);
+                    "_t%d, SPL(\"%s\")); })", fn, tsrc, tbox, name);
       return 1;
     }
     buf_printf(b, "sp_enum_with_src(sp_Enumerator_new_from_items(sp_str_chars_poly(_t%d)), "
-                  "sp_box_str(_t%d), SPL(\"%s\")); })", tsrc, tsrc, name);
+                  "_t%d, SPL(\"%s\")); })", tsrc, tbox, name);
     return 1;
   }
   /* e.each_slice(n) / e.each_cons(n) with no block on an Enumerator, which
@@ -25240,7 +25241,7 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
     if (utf8 || bytes) {
       int tvC = ++g_tmp;
       buf_printf(b, "({ sp_RbVal _t%d = ", tvC); emit_boxed(c, recv, b);
-      buf_printf(b, "; sp_box_str(%s(sp_poly_recv_i(\"chr\", _t%d))); })", utf8 ? "sp_int_chr_utf8" : "sp_int_chr", tvC);
+      buf_printf(b, "; sp_box_str_fresh(%s(sp_poly_recv_i(\"chr\", _t%d))); })", utf8 ? "sp_int_chr_utf8" : "sp_int_chr", tvC);
       return 1;
     }
   }

@@ -733,7 +733,7 @@ int emit_op_hash_shift(Compiler *c, const BopCtx *x, Buf *b) {
   buf_printf(b, " sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", tp, tp);
   if (rt == TY_POLY_POLY_HASH) buf_printf(b, " sp_PolyArray_push(_t%d, _t%d);", tp, tk);
   else if (kt == TY_SYMBOL) buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_sym(_t%d));", tp, tk);
-  else if (kt == TY_STRING) buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_str(_t%d));", tp, tk);
+  else if (kt == TY_STRING) buf_printf(b, " sp_PolyArray_push(_t%d, SP_SEBOX(sp_String_key_handle(_t%d)));", tp, tk);
   else buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_int(_t%d));", tp, tk);
   if (rt == TY_POLY_POLY_HASH) buf_printf(b, " sp_PolyArray_push(_t%d, _t%d->vals[_t%d->order[0]]);", tp, th, th);
   else if (vt == TY_POLY) buf_printf(b, " sp_PolyArray_push(_t%d, sp_%sHash_get(_t%d, _t%d));", tp, hn, th, tk);
@@ -826,7 +826,7 @@ int emit_op_hash_invert(Compiler *c, const BopCtx *x, Buf *b) {
     if (kt == TY_SYMBOL)
       buf_printf(b, " sp_RbVal _k%d = sp_box_sym(_t%d->order[_t%d]);", ti, th, ti);
     else if (kt == TY_STRING)
-      buf_printf(b, " sp_RbVal _k%d = sp_box_str(_t%d->order[_t%d]);", ti, th, ti);
+      buf_printf(b, " sp_RbVal _k%d = SP_SEBOX(sp_String_key_handle(_t%d->order[_t%d])); SP_GC_ROOT_RBVAL(_k%d);", ti, th, ti, ti);
     else if (kt == TY_INT)
       buf_printf(b, " sp_RbVal _k%d = sp_box_int(_t%d->order[_t%d]);", ti, th, ti);
     else
@@ -1104,7 +1104,7 @@ int emit_op_hash_assoc(Compiler *c, const BopCtx *x, Buf *b) {
   if (one_k)
     buf_printf(b, " SP_GC_ROOT(_t%d); sp_PolyArray_push(_t%d, SP_STR_BOX(_t%d));", tr, tr, tk);
   else if (env) {
-    buf_printf(b, " SP_GC_ROOT(_t%d); sp_PolyArray_push(_t%d, sp_box_str(", tr, tr);
+    buf_printf(b, " SP_GC_ROOT(_t%d); sp_PolyArray_push(_t%d, sp_box_str_new(", tr, tr);
     if (is_rassoc) buf_printf(b, "sp_str_dup_external(_t%d->order[_t%d])", th, ti);
     else buf_printf(b, "_t%d", ta);
     buf_puts(b, "));");

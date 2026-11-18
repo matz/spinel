@@ -3498,6 +3498,9 @@ extern const char *g_nsub_cast_type;
 /* member i of class ci read as `expr` through `objprefix` ("_t3->"), boxed
    with its nil: an Integer / Float member by its nil bit (codegen.c) */
 void emit_member_boxed_text(Compiler *c, ClassInfo *ci, int i, const char *objprefix, const char *expr, Buf *b);
+/* Compare rendered member boxes, retaining any newly allocated boxes. */
+void emit_member_cmp_text(Compiler *c, ClassInfo *ci, int i, const char *fn,
+                          const char *left, const char *right, Buf *b);
 /* the head of a Range walk that stops at the ends of sp_int (see codegen_util.c) */
 void emit_range_walk_head(Buf *b, int indent, const char *var, int decl, const char *first,
                           const char *step, const char *last);

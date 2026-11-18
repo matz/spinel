@@ -925,6 +925,7 @@ typedef struct ElabNames ElabNames;
 void elab_names_end(ElabNames *nx);
 int elab_class_named(Compiler *c, ElabNames *nx, int node);   /* the program class a constant read names wherever its lookup finds one, -1 for none known */
 int elab_class_candidates(Compiler *c, int node, int **out);   /* the classes a constant read the record cannot settle may name, in a buffer *out the caller frees; -1 for no bounded answer */
+int elab_class_ref_one(Compiler *c, int node);   /* the one class every write a read the record cannot settle may end in makes; -1 for none */
 /* the node -> class map: the class class or module header `node` opens,
    as registration decided it there (below -1: none); *owner and *leaf,
    when asked, its entity: the class whose constants hold its name (-1:

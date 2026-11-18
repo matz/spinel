@@ -535,7 +535,8 @@ int const_node_class_index(Compiler *c, int id) {
   /* a constant a pass made to name a builtin class (cvb_split's arms) */
   if (id >= 0 && id < c->nt->count && nt_int(c->nt, id, "builtin_ref", 0)) return comp_builtin_class_named(c, nt_str(c->nt, id, "name"));
   /* a constant a pass made to name a class it held (made_class: the index,
-     +1), as the receiver of a call it gave a module's own receiverless one */
+     +1): the receiver of a call it gave a module's own receiverless one,
+     or the `.new` receiver it pointed at a singleton subclass it made */
   { long long mc = id >= 0 && id < c->nt->count ? nt_int(c->nt, id, "made_class", 0) : 0;
     if (mc > 0 && mc <= c->nclasses) return (int)mc - 1; }
   int core = -1;
@@ -553,6 +554,12 @@ int const_node_class_index(Compiler *c, int id) {
       if (rs != -2) break;
       src = nt_clone_source(c->nt, src);
     }
+  }
+  /* a read of a name whose every write the read may see makes one class
+     (a header under a run-time condition, read after it): that class */
+  if (r == -2) {
+    int one = elab_class_ref_one(c, id);
+    if (one >= 0) return one;
   }
   int k = const_node_class_index_tree(c, id);
   /* the record resolves the name to the builtin (Object holds no constant of

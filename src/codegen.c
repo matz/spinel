@@ -14122,6 +14122,21 @@ void emit_member_boxed_text(Compiler *c, ClassInfo *ci, int i, const char *objpr
   if (mt == TY_INT || mt == TY_FLOAT) emit_marshal_box_ivar_of(c, (int)(ci - c->classes), i, objprefix, expr, b);
   else emit_boxed_text(c, mt, expr, b);
 }
+/* An allocating member box must survive boxing the other member. Keep
+   both values rooted until their comparison returns; the containing object
+   owns the field, not the fresh box of a by-value field. */
+void emit_member_cmp_text(Compiler *c, ClassInfo *ci, int i, const char *fn,
+                          const char *left, const char *right, Buf *b) {
+  Repr member = repr_of_ivar(c, (int)(ci - c->classes), i);
+  if (!repr_box_allocates(c, member)) {
+    buf_printf(b, "%s(%s, %s)", fn, left, right);
+    return;
+  }
+  int tl = ++g_tmp, tr = ++g_tmp;
+  buf_printf(b, "({ sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d); "
+                "sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d); %s(_t%d, _t%d); })",
+             tl, left, tl, tr, right, tr, fn, tl, tr);
+}
 static void emit_member_boxed(Compiler *c, int cid, int j, Buf *b) {
   ClassInfo *ci = &c->classes[cid];
   TyKind mt = ci->ivar_types[j];
@@ -18757,7 +18772,8 @@ static void emit_obj_hashkey_dispatch(Compiler *c, Buf *b) {
       snprintf(fb, sizeof fb, "_b->iv_%s", iv);
       emit_boxed_text(c, ci->ivar_types[i], fa, &ea);
       emit_boxed_text(c, ci->ivar_types[i], fb, &eb);
-      buf_printf(b, "%ssp_poly_eql_strict(%s, %s)", i ? " && " : "", ea.p ? ea.p : fa, eb.p ? eb.p : fb);
+      if (i) buf_puts(b, " && ");
+      emit_member_cmp_text(c, ci, i, "sp_poly_eql_strict", ea.p ? ea.p : fa, eb.p ? eb.p : fb, b);
       free(ea.p); free(eb.p);
     }
     buf_puts(b, "; }\n");
@@ -18790,7 +18806,8 @@ static void emit_obj_valeq_dispatch(Compiler *c, Buf *b) {
       snprintf(fb, sizeof fb, "_b->iv_%s", iv);
       emit_member_boxed_text(c, ci, i, "_a->", fa, &ea);
       emit_member_boxed_text(c, ci, i, "_b->", fb, &eb);
-      buf_printf(b, "%ssp_poly_eq(%s, %s)", i ? " && " : "", ea.p ? ea.p : fa, eb.p ? eb.p : fb);
+      if (i) buf_puts(b, " && ");
+      emit_member_cmp_text(c, ci, i, "sp_poly_eq", ea.p ? ea.p : fa, eb.p ? eb.p : fb, b);
       free(ea.p); free(eb.p);
     }
     buf_puts(b, "; }\n");

@@ -251,6 +251,14 @@ static void cw_stmt_walk(ConstWalk *w, int id, int depth) {
       if (was && (r || bi) && lv) { w->settled[id] = 1; w->seen[cw_index(w, lv)] = 1; }
       return;
     }
+    case NK_LoadNode: {
+      /* --load-model=graph: a require naming its file runs no code of its
+         own; the file's top level is walked at its load, in load order
+         (prog_top_stmts). One whose path is computed may load any. */
+      const char *how = nt_str(nt, id, "how");
+      if (!how || sp_streq(how, "set")) w->clean = 0;
+      return;
+    }
     case NK_ConstantOrWriteNode: case NK_ConstantAndWriteNode:
     case NK_ConstantOperatorWriteNode: case NK_ConstantPathOrWriteNode:
     case NK_ConstantPathAndWriteNode: case NK_ConstantPathOperatorWriteNode:

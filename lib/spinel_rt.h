@@ -2206,12 +2206,9 @@ sp_String *sp_sym_to_s_new(sp_sym id);
    name has no marker byte, and the _bin entry would read s[-1] out of bounds.
    The typed-receiver arm chose by the operand's STATIC type, so a poly operand
    took the plain entry and a NUL truncated the write; the poly-receiver arm
-   already tested the tag, and now both do. A shared String reaches here as
-   its handle under --share-strings, so it is unwrapped first. */
-static inline sp_RbVal sp_poly_strbuf_deref(sp_RbVal v);
+   already took the byte path. */
 static SP_INLINE sp_int sp_File_write_poly(sp_File *f, sp_RbVal v) {
-  v = sp_poly_strbuf_deref(v);
-  if (v.tag == SP_TAG_STR) return sp_File_write_bin(f, v.v.s);
+  if (sp_rbval_is_string(v)) return sp_File_write_bin(f, sp_rbval_string_bytes(v));
   return sp_File_write(f, sp_poly_to_s(v));
 }
 static inline sp_File *sp_poly_to_file(sp_RbVal v) {
@@ -2798,14 +2795,13 @@ static inline sp_RbVal sp_rbs_cont_ret(sp_RbVal v, int cont, int nil_ok, const c
 /* ENV[key] = value with a boxed RHS: a String sets, nil deletes, anything
    else raises CRuby's TypeError. Returns the assigned string (NULL = nil),
    matching the statically-string path's expression type. */
-static inline sp_RbVal sp_poly_strbuf_deref(sp_RbVal v);
 static const char *sp_env_aset(const char *k, sp_RbVal v) {
-  v = sp_poly_strbuf_deref(v);
   if (v.tag == SP_TAG_NIL) { unsetenv(sp_env_chk(k, 0)); return NULL; }
-  if (v.tag != SP_TAG_STR) sp_raise_no_str_conversion(v);
+  if (!sp_rbval_is_string(v)) sp_raise_no_str_conversion(v);
   sp_env_chk(k, 0);
-  if (v.v.s) setenv(k, sp_env_chk(v.v.s, 1), 1); else unsetenv(k);
-  return v.v.s;
+  const char *bytes = sp_rbval_string_bytes(v);
+  if (bytes) setenv(k, sp_env_chk(bytes, 1), 1); else unsetenv(k);
+  return bytes;
 }
 static sp_bool sp_PolyArray_eq(sp_PolyArray *a, sp_PolyArray *b);
 static sp_float sp_poly_to_f(sp_RbVal v);  /* defined below; used by the bigint+float arms */
@@ -4000,7 +3996,7 @@ static SP_NOINLINE const char *sp_poly_arg_str_slow(sp_RbVal v) {
   return sp_poly_to_s(v);
 }
 static SP_INLINE const char *sp_poly_arg_str(sp_RbVal v) {
-  if (v.tag == SP_TAG_STR) return v.v.s;
+  if (sp_rbval_is_string(v)) return sp_rbval_string_bytes(v);
   return sp_poly_arg_str_slow(v);
 }
 /* A line reader's separator argument: a boxed nil stays nil (NULL, read to
@@ -4098,7 +4094,7 @@ static SP_NOINLINE SP_UNUSED const char *sp_obj_to_str_answer(sp_RbVal r, const 
    StringIO#read(nil)) keeps the loose form. CRuby words the nil-to-Integer
    case differently from every other pairing ("from nil to integer"). */
 static SP_NOINLINE const char *sp_poly_arg_str_chk_slow(sp_RbVal v) {
-  v = sp_rbval_str(v);
+  if (sp_rbval_is_string(v)) return sp_rbval_string_bytes(v);
   if (v.tag == SP_TAG_NIL)
     sp_raise_cls("TypeError", "no implicit conversion of nil into String");
   if (v.tag == SP_TAG_BOOL)
@@ -4113,16 +4109,14 @@ static SP_NOINLINE const char *sp_poly_arg_str_chk_slow(sp_RbVal v) {
     sp_raise_cls("TypeError", "no implicit conversion of Float into String");
   if (v.tag == SP_TAG_SYM)
     sp_raise_cls("TypeError", "no implicit conversion of Symbol into String");
-  /* a boxed BUILTIN value (negative cls_id) has no #to_str either -- name
-     its class, as CRuby does. A boxed shared-string handle IS a String and
-     passes through (the slow path dereferences it). */
-  if (v.tag == SP_TAG_OBJ && v.cls_id < 0 && !sp_poly_is_strbuf(v))
+  /* The remaining builtin objects have no #to_str. */
+  if (v.tag == SP_TAG_OBJ && v.cls_id < 0)
     sp_raise_cls("TypeError", sp_sprintf("no implicit conversion of %s into String",
                                          sp_poly_class_name(v)));
   return sp_poly_arg_str_slow(v);
 }
 static SP_INLINE const char *sp_poly_arg_str_chk(sp_RbVal v) {
-  if (v.tag == SP_TAG_STR) return v.v.s;
+  if (sp_rbval_is_string(v)) return sp_rbval_string_bytes(v);
   return sp_poly_arg_str_chk_slow(v);
 }
 /* A native binding retaining a String accepts the same implicit conversion
@@ -4223,7 +4217,6 @@ static mrb_regexp_pattern *sp_re_union_boxed(sp_RbVal v) {
    or any user class that names a file, is accepted wherever a String path is.
    Everything else is the strict String slot's protocol, unchanged. */
 static SP_NOINLINE const char *sp_poly_arg_path_slow(sp_RbVal v) {
-  v = sp_rbval_str(v);
   if (v.tag == SP_TAG_OBJ && v.cls_id >= 0 && v.v.p && sp_obj_to_path_fn) {
     SP_GC_ROOT_RBVAL(v);   /* across the user #to_path, as sp_poly_check_str_obj roots it */
     const char *r = sp_obj_to_path_fn((int)v.cls_id, v.v.p);
@@ -4232,7 +4225,7 @@ static SP_NOINLINE const char *sp_poly_arg_path_slow(sp_RbVal v) {
   return sp_poly_arg_str_chk_slow(v);
 }
 static SP_INLINE const char *sp_poly_arg_path(sp_RbVal v) {
-  if (v.tag == SP_TAG_STR) return v.v.s;
+  if (sp_rbval_is_string(v)) return sp_rbval_string_bytes(v);
   return sp_poly_arg_path_slow(v);
 }
 /* IO#reopen(other) with a boxed or user-object argument. CRuby asks anything
@@ -4372,9 +4365,8 @@ static SP_INLINE sp_ofloat sp_bm_arg_float_or_nil(sp_RbVal v) {
   return v.tag == SP_TAG_NIL ? sp_ofloat_nil() : sp_ofloat_of(sp_bm_arg_float(v));
 }
 static SP_INLINE const char *sp_bm_arg_str(sp_RbVal v) {
-  if (v.tag == SP_TAG_STR) return v.v.s;
+  if (sp_rbval_is_string(v)) return sp_rbval_string_bytes(v);
   if (v.tag == SP_TAG_NIL) return NULL;
-  if (sp_poly_is_strbuf(v)) return sp_poly_strbuf_deref(v).v.s;
   sp_bm_arg_mismatch(v, "String");
 }
 static SP_INLINE sp_sym sp_bm_arg_sym(sp_RbVal v) {
@@ -5907,19 +5899,15 @@ static sp_bool sp_poly_hash_subset(sp_RbVal a, sp_RbVal b, int strict) {
    silence. Implicit conversion does NOT apply here: an object defining #to_str
    is still NoMethodError, because the protocol converts an ARGUMENT into a
    String slot and never rescues a receiver (CRuby raises for `Pathname#upcase`
-   even though Pathname defines #to_str). A shared-mutable string is a builtin
-   OBJ box, not SP_TAG_STR, and is a string. */
+   even though Pathname defines #to_str). */
 /* The receivers a boxed String face accepts (sp_poly_recv_s's own test): the
    generated code asks it ahead of a zero-argument face call, so a receiver it
    rejects raises with the call's empty argument list. */
-static inline int sp_poly_face_str_ok(sp_RbVal v) { return v.tag == SP_TAG_STR || sp_poly_is_strbuf(v); }
+static inline int sp_poly_face_str_ok(sp_RbVal v) { return sp_rbval_is_string(v); }
 static const char *sp_poly_recv_s(sp_RbVal v, const char *meth) {
-  if (!sp_poly_face_str_ok(v)) {
-    sp_raise_nomethod(sp_nomethod_msg(meth, v));
-    return sp_str_empty;
-  }
-  if (v.tag == SP_TAG_STR) return v.v.s ? v.v.s : sp_str_empty;
-  return sp_poly_to_s(v);
+  if (!sp_poly_face_str_ok(v)) sp_raise_poly_nomethod(meth, v);
+  const char *bytes = sp_rbval_string_bytes(v);
+  return bytes ? bytes : sp_str_empty;
 }
 /* casecmp / casecmp? (`q`) on a boxed receiver. A Symbol compares with a
    Symbol and a String with a String (or an operand answering #to_str), as the
@@ -6608,13 +6596,18 @@ static sp_RbVal sp_poly_abs2(sp_RbVal v) { if (v.tag == SP_TAG_OBJ && v.cls_id =
    is already its own floor (returned unchanged, lossless for bigints), a
    float converts through the matching libm rounding. */
 static sp_RbVal sp_poly_floor(sp_RbVal v) { /* Time#floor answers a Time, as the typed path does */ if (SP_UNLIKELY(v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_TIME && v.v.p)) return sp_box_timev(sp_timev_round_to(*(sp_Time *)v.v.p, 0, 0)); if (v.tag == SP_TAG_FLT) { sp_poly_flo_domain_ck(v.v.f); return sp_box_f_to_int(floor(v.v.f)); } if (v.tag == SP_TAG_INT || v.tag == SP_TAG_BIGINT) return v; if (sp_poly_is_rational(v)) return sp_box_int(sp_rational_floor_i(sp_poly_as_rational(v))); if (sp_poly_is_brat(v) && v.v.p) return sp_box_bigint(sp_brat_floor_b((sp_BigRational *)v.v.p)); sp_raise_poly_nomethod("floor", v); }
-/* a NULL char* carried under SP_TAG_STR is the empty string (as in
-   sp_poly_to_i / sp_poly_eq): bytesize 0, ord raises CRuby's ArgumentError. */
-/* A shared String handle (#6179) answers bytesize, ord and getbyte from its
-   live bytes: each tested the plain String box alone and raised NoMethodError
-   for a String a method had appended to. */
-static sp_int sp_poly_bytesize(sp_RbVal v) { v = sp_poly_strbuf_deref(v); if (v.tag == SP_TAG_STR) return v.v.s ? sp_str_bytesize_m(v.v.s) : 0; sp_raise_poly_nomethod("bytesize", v); }
-static sp_RbVal sp_poly_ord(sp_RbVal v) { v = sp_poly_strbuf_deref(v); if (v.tag == SP_TAG_STR) { if (!v.v.s) sp_raise_cls("ArgumentError", "empty string"); return sp_box_int(sp_str_ord(v.v.s)); } if (v.tag == SP_TAG_INT || v.tag == SP_TAG_BIGINT) return v; sp_raise_poly_nomethod("ord", v); }
+static sp_int sp_poly_bytesize(sp_RbVal v) {
+  if (!sp_rbval_is_string(v)) sp_raise_poly_nomethod("bytesize", v);
+  const char *bytes = sp_rbval_string_bytes(v);
+  return bytes ? sp_str_bytesize_m(bytes) : 0;
+}
+static sp_RbVal sp_poly_ord(sp_RbVal v) {
+  if (v.tag == SP_TAG_INT || v.tag == SP_TAG_BIGINT) return v;
+  if (!sp_rbval_is_string(v)) sp_raise_poly_nomethod("ord", v);
+  const char *bytes = sp_rbval_string_bytes(v);
+  if (!bytes) sp_raise_cls("ArgumentError", "empty string");
+  return sp_box_int(sp_str_ord(bytes));
+}
 /* The Integer surface on a boxed receiver that may hold a Bignum (#4665).
    Each name below used to narrow the box to sp_int and run the typed arm,
    which truncated a Bignum to int64 and answered on the wrong number
@@ -6867,7 +6860,15 @@ static sp_RbVal sp_poly_denominator(sp_RbVal v) { if (v.tag == SP_TAG_BIGINT || 
 static sp_RbVal sp_poly_nonzero(sp_RbVal v) { if (!sp_poly_tower_p(v)) sp_raise_poly_nomethod("nonzero?", v); return sp_poly_zero_p(v) ? sp_box_nil() : v; }
 /* String#getbyte on a poly value; nil (not 0) for an out-of-range index, per
    CRuby, so the result is boxed. */
-static sp_RbVal sp_poly_getbyte(sp_RbVal v, sp_int i) { v = sp_poly_strbuf_deref(v); if (v.tag != SP_TAG_STR) sp_raise_poly_nomethod("getbyte", v); const char *s = v.v.s; if (!s) return sp_box_nil(); sp_int bl = (sp_int)sp_str_byte_len(s); if (i < 0) i += bl; if (i < 0 || i >= bl) return sp_box_nil(); return sp_box_int((sp_int)(unsigned char)s[i]); }
+static sp_RbVal sp_poly_getbyte(sp_RbVal v, sp_int i) {
+  if (!sp_rbval_is_string(v)) sp_raise_poly_nomethod("getbyte", v);
+  const char *s = sp_rbval_string_bytes(v);
+  if (!s) return sp_box_nil();
+  sp_int len = (sp_int)sp_str_byte_len(s);
+  if (i < 0) i += len;
+  if (i < 0 || i >= len) return sp_box_nil();
+  return sp_box_int((sp_int)(unsigned char)s[i]);
+}
 static sp_RbVal sp_poly_ceil(sp_RbVal v) { if (SP_UNLIKELY(v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_TIME && v.v.p)) return sp_box_timev(sp_timev_round_to(*(sp_Time *)v.v.p, 0, 1)); if (v.tag == SP_TAG_FLT) { sp_poly_flo_domain_ck(v.v.f); return sp_box_f_to_int(ceil(v.v.f)); } if (v.tag == SP_TAG_INT || v.tag == SP_TAG_BIGINT) return v; if (sp_poly_is_rational(v)) return sp_box_int(sp_rational_ceil_i(sp_poly_as_rational(v))); if (sp_poly_is_brat(v) && v.v.p) return sp_box_bigint(sp_brat_ceil_b((sp_BigRational *)v.v.p)); sp_raise_poly_nomethod("ceil", v); }
 static sp_RbVal sp_poly_round(sp_RbVal v) { if (SP_UNLIKELY(v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_TIME && v.v.p)) return sp_box_timev(sp_timev_round_to(*(sp_Time *)v.v.p, 0, 2)); if (v.tag == SP_TAG_FLT) { sp_poly_flo_domain_ck(v.v.f); return sp_box_f_to_int(round(v.v.f)); } if (v.tag == SP_TAG_INT || v.tag == SP_TAG_BIGINT) return v; if (sp_poly_is_rational(v)) return sp_box_int(sp_rational_round_i(sp_poly_as_rational(v))); if (sp_poly_is_brat(v) && v.v.p) return sp_box_bigint(sp_brat_round_b((sp_BigRational *)v.v.p)); sp_raise_poly_nomethod("round", v); }
 /* A Float digit count for sp_poly_round_n and sp_poly_prec_n: range-checked

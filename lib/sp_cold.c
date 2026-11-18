@@ -1591,10 +1591,7 @@ sp_RbVal sp_poly_replace(sp_RbVal recv, sp_RbVal src) {SP_GC_ROOT_RBVAL(recv);SP
      takes the source's encoding as well, as CRuby's replace does. */
   if (recv.cls_id == SP_BUILTIN_STRBUF) {
     sp_String *m = (sp_String *)recv.v.p;
-    const char *s2 = NULL;
-    if (src.tag == SP_TAG_STR) s2 = src.v.s;
-    else if (src.tag == SP_TAG_OBJ && src.cls_id == SP_BUILTIN_STRBUF)
-      s2 = sp_String_cstr((sp_String *)src.v.p);
+    const char *s2 = sp_rbval_string_bytes(src);
     if (s2) sp_String_set_bin_enc(m, s2);
     return recv;
   }

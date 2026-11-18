@@ -309,13 +309,13 @@ sp_RbVal sp_cext_sym2str(sp_sym s) {
 /* rb_str_plus: a new String of both, ASCII-8BIT when either is */
 sp_RbVal sp_cext_str_plus(sp_RbVal a, sp_RbVal b) {
   SP_GC_ROOT_RBVAL(a); SP_GC_ROOT_RBVAL(b);
-  sp_RbVal x = sp_poly_strbuf_deref(a), y = sp_poly_strbuf_deref(b);
-  if (x.tag != SP_TAG_STR || y.tag != SP_TAG_STR) sp_raise_cls("TypeError", "no implicit conversion into String");
-  SP_GC_ROOT_RBVAL(x); SP_GC_ROOT_RBVAL(y);
-  int64_t la = (int64_t)sp_str_byte_len(x.v.s), lb = (int64_t)sp_str_byte_len(y.v.s);
-  sp_String *r = sp_String_new_len(x.v.s, la); SP_GC_ROOT(r);
-  sp_String_append_n(r, y.v.s, (size_t)lb);
-  if (sp_str_is_binary(x.v.s) || sp_str_is_binary(y.v.s)) sp_String_force_encoding(r, 1);
+  if (!sp_rbval_is_string(a) || !sp_rbval_is_string(b))
+    sp_raise_cls("TypeError", "no implicit conversion into String");
+  const char *x = sp_rbval_string_bytes(a), *y = sp_rbval_string_bytes(b);
+  int64_t la = (int64_t)sp_str_byte_len(x), lb = (int64_t)sp_str_byte_len(y);
+  sp_String *r = sp_String_new_len(x, la); SP_GC_ROOT(r);
+  sp_String_append_n(r, y, (size_t)lb);
+  if (sp_str_is_binary(x) || sp_str_is_binary(y)) sp_String_force_encoding(r, 1);
   return sp_box_obj(r, SP_BUILTIN_STRBUF);
 }
 /* An Array a method yields to a C extension's block (rb_block_call) that

@@ -132,6 +132,9 @@ int sp_io_make_pipe(int fds[2]);
 sp_File *sp_io_fdopen(int fd, const char *mode);
 sp_File *sp_io_fdopen_ex(int fd, const char *mode, int owns_fd);
 sp_File *sp_File_open_perm(const char *path, const char *mode, sp_oint perm);   /* a nil perm is CRuby's default, 0666 */
+int sp_io_mode_open_flags(const char *m);   /* the open(2) flags of a mode string, -1 for one File.open refuses */
+const char *sp_io_fdopen_mode(int fl);      /* the stdio mode that fits those flags */
+int sp_open_fifo_aware(const char *path, int fl, int perm);   /* open(2) that lets the other green threads run while a FIFO waits (lib/sp_cold.c) */
 /* Wrap a connected/listening socket fd. Reads stay on the buffered FILE* so
    #gets and friends work, except a connected stream socket's, which take a
    buffer of the handle's own (own_buf); writes bypass stdio straight to

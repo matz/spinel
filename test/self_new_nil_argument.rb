@@ -2,7 +2,7 @@
 # `self.new` / `new` in a class method reaches initialize as nil, for the
 # class itself and for each subclass the call can run for: a parameter
 # typed from its default takes the nil, and a method called on it raises
-# CRuby's NoMethodError.
+# CRuby's NoMethodError, a keyword one as well as a positional one.
 class Owner
   def v = 5
 end
@@ -51,6 +51,18 @@ end
 class KwSub < Kw
 end
 
+class Account
+  def initialize(owner: Owner.new)
+    @value = owner.v
+  end
+
+  def value = @value
+  def again = self.class.new(owner: nil)
+end
+
+class SubAccount < Account
+end
+
 class Named
   def initialize(n = 1)
     @n = n
@@ -79,6 +91,11 @@ p Grid.make.size, BigGrid.make.label, Grid.bare.label, BigGrid.bare.size
 p Box.new.again.parts, TallBox.new.again.parts
 p Kw.new.again.size, KwSub.new.again.size
 p Named.new.again.n
+[Account, SubAccount].each do |k|
+  k.new.again
+rescue NoMethodError => e
+  puts "#{k}: NoMethodError #{e.message}"
+end
 [Shouty, Counted].each do |k|
   k.new.again
 rescue NoMethodError => e

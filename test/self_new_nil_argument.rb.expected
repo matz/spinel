@@ -13,5 +13,7 @@ nil
 nil
 nil
 nil
+Account: NoMethodError undefined method 'v' for nil
+SubAccount: NoMethodError undefined method 'v' for nil
 Shouty: NoMethodError undefined method 'upcase' for nil
 Counted: NoMethodError undefined method '+' for nil

@@ -5265,6 +5265,9 @@ infer-test-2: $(SPINEL) $(SP_RT_LIB)
 	for v in by_max by_min cmp_max cmp_min pool empty one bad shrink grow; do \
 	  grep -q "sp_PtrArray \\* lv_$$v\b" "$$tmp/opn.c" || { echo "infer-test: FAIL (obj_array_pick_narrowed: max_by, min_by, a comparator's max or min, or sample left $$v boxed)"; ok=0; }; \
 	done; \
+	$(SPINEL) test/opassign_poly_slot_class_facts.rb -c --no-line-map -o "$$tmp/opc.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (opassign_poly_slot_class_facts: -c)"; ok=0; }; \
+	grep -q "sp_Vec__plus(sp_Vec \*self, sp_Vec \* lv_other)" "$$tmp/opc.c" || { echo "infer-test: FAIL (opassign_poly_slot_class_facts: a boxed sum of no Vec boxed Vec#+ other)"; ok=0; }; \
+	grep -A3 "struct sp_Vec_s {" "$$tmp/opc.c" | grep -q "sp_float iv_x;" || { echo "infer-test: FAIL (opassign_poly_slot_class_facts: Vec @x boxed)"; ok=0; }; \
 	$(SPINEL) test/inject_empty_seed_typed.rb -c --no-line-map -o "$$tmp/ies.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (inject_empty_seed_typed: -c)"; ok=0; }; \
 	for m in evens squares kept nested small; do \
 	  grep -q "^static inline sp_IntArray \\* sp_$$m(" "$$tmp/ies.c" || { echo "infer-test: FAIL (inject_empty_seed_typed: an empty [] seed the block pushes Integers into left $$m boxed)"; ok=0; }; \

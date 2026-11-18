@@ -9,8 +9,9 @@ require "tmpdir"
 
 $calls = 0
 $log = []
-# a path that cannot exist: a directory of the test's own that was never made
-MISSING = File.join(Dir.tmpdir, "spinel_reinit_missing_#{Process.pid}", "x")
+# a path that cannot exist: a child that was never made in a directory of the test's own
+TESTDIR = Dir.mktmpdir("spinel_reinit")
+MISSING = File.join(TESTDIR, "x")
 
 class StandardError
   def initialize(msg = nil)
@@ -88,3 +89,4 @@ end
 before = $calls
 x = [1].fetch(9) rescue $!.message
 p x, $calls - before
+Dir.rmdir(TESTDIR)

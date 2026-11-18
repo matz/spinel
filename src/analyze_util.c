@@ -491,6 +491,26 @@ LocalVar *comp_const_at(Compiler *c, int node) {
 }
 
 static int const_node_class_index_tree(Compiler *c, int id);
+static int hdr_cp_cmp(const void *a, const void *b) { int x = *(const int *)a, y = *(const int *)b; return (x > y) - (x < y); }
+/* Is id a class or module header's constant_path? */
+static int const_node_names_header(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  /* (the parent map would answer, but it walks the whole table after each edit; the headers are few) */
+  if (!c->hdr_cp || c->hdr_cp_count != nt->count || c->hdr_cp_ver != nt->version || c->hdr_cp_edits != nt->edits) {
+    int ncl = 0, nmo = 0;
+    const int *cl = nt_nodes_of_kind(nt, NK_ClassNode, &ncl);
+    const int *mo = nt_nodes_of_kind(nt, NK_ModuleNode, &nmo);
+    int *v = realloc(c->hdr_cp, sizeof(int) * (size_t)(ncl + nmo + 1));
+    if (!v) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    int n = 0;
+    for (int i = 0; i < ncl; i++) v[n++] = nt_ref(nt, cl[i], "constant_path");
+    for (int i = 0; i < nmo; i++) v[n++] = nt_ref(nt, mo[i], "constant_path");
+    qsort(v, (size_t)n, sizeof(int), hdr_cp_cmp);
+    c->hdr_cp = v; c->hdr_cp_n = n;
+    c->hdr_cp_count = nt->count; c->hdr_cp_ver = nt->version; c->hdr_cp_edits = nt->edits;
+  }
+  return bsearch(&id, c->hdr_cp, (size_t)c->hdr_cp_n, sizeof(int), hdr_cp_cmp) != NULL;
+}
 /* The class or module of the program constant node id names, as the load
    record resolves it: a reference where it stands (elab_class_ref_at), a
    header's own name by its header, a builder's write by the class it opens.
@@ -515,7 +535,7 @@ static int const_node_record_class(Compiler *c, int id, int *core) {
     int k = elab_builder_class(c, id);
     return k >= 0 ? k : comp_class_of_def(c, id);
   }
-  const int *par = comp_parent_map(c);
+  const int *par = const_node_names_header(c, id) ? comp_parent_map(c) : NULL;
   int hp = par ? par[id] : -1;
   if (hp >= 0 && (nt_kind(nt, hp) == NK_ClassNode || nt_kind(nt, hp) == NK_ModuleNode) && nt_ref(nt, hp, "constant_path") == id)
     return elab_header_class(c, hp, NULL, NULL);

@@ -1810,6 +1810,10 @@ typedef struct {
   int *cg_parent;
   int cg_parent_n;
   unsigned cg_parent_ver;
+  /* the constant_path of every class and module header, sorted (const_node_names_header), and the table it was read from */
+  int *hdr_cp, hdr_cp_n, hdr_cp_count;
+  unsigned hdr_cp_ver;
+  unsigned long hdr_cp_edits;
   /* the last eight method C names mc_method spelled, and the next to reuse:
      each grown to its name (mc_ring_setf), which no length bounds */
   char *mc_ring[8]; size_t mc_ring_cap[8]; int mc_ring_next;

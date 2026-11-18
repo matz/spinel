@@ -453,6 +453,13 @@ sp_StrArray *sp_str_rpartition(const char *s, const char *sep) {
   sp_StrArray_push_e(r, sp_String_new_shared(sp_str_byteslice(s, pre + sl, bl - pre - sl)));
   return r;
 }
+static void sp_str_check_compatible_encoding(const char *s, const char *other) {
+  int binary = sp_str_is_binary(s);
+  if (binary != sp_str_is_binary(other) && !sp_str_ascii_only(other) && !sp_str_ascii_only(s))
+    sp_raise_cls("Encoding::CompatibilityError", binary
+      ? "incompatible character encodings: BINARY (ASCII-8BIT) and UTF-8"
+      : "incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)");
+}
 static size_t sp_str_nl_at(const char*q,const char*e){return q<e&&*q=='\n'?1:e-q>=2&&q[0]=='\r'&&q[1]=='\n'?2:0;}
 /* Read one line from the byte views taken for this walk. A nil separator
    is handled by the receiver-owning caller, since its answer is the receiver. */
@@ -460,6 +467,7 @@ sp_String *sp_str_line_next(const char *s, const char *sep, size_t *offset, sp_b
   const char *end = s + sp_str_byte_len(s);
   const char *start = s + *offset;
   if (start == end) return NULL;
+  if (!*offset) sp_str_check_compatible_encoding(s, sep);
   size_t seplen = sp_str_byte_len(sep);
   const char *next = end;
   const char *stop = end;
@@ -539,10 +547,7 @@ static void sp_str_bsp_span(const char*s,sp_int*beg,sp_int*len){
    result is BINARY. */
 int sp_str_bytesplice_check(const char*s,sp_int*start,sp_int*len,const char*val,sp_int*vstart,sp_int*vlen){
   sp_str_bsp_span(s,start,len);sp_str_bsp_span(val,vstart,vlen);
-  if(sp_str_is_binary(s)!=sp_str_is_binary(val)&&!sp_str_ascii_only(val)&&!sp_str_ascii_only(s))
-    sp_raise_cls("Encoding::CompatibilityError",sp_str_is_binary(s)
-      ?"incompatible character encodings: BINARY (ASCII-8BIT) and UTF-8"
-      :"incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)");
+  sp_str_check_compatible_encoding(s, val);
   return sp_str_cat_binary(s,val);
 }
 const char*sp_str_bytesplice5(const char*s,sp_int start,sp_int len,const char*val,sp_int vstart,sp_int vlen){

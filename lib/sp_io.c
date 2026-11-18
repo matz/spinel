@@ -2048,7 +2048,7 @@ const char *sp_sock_recv(sp_File *f, sp_int len) {SP_GC_ROOT(f);
   sp_str_mark_binary(s);
   return s;
 }
-/* Fills the caller's address slots; returns the payload. */
+/* Returns the binary payload and its sender's address row. */
 sp_PolyArray *sp_sock_recvfrom(sp_File *f, sp_int len) {SP_GC_ROOT(f);
   extern int sp_net_udp_recv_from(int fd, char *buf, int cap, char *ipbuf, int ipcap, int *port_out);
   sp_sock_require(f, "recvfrom");

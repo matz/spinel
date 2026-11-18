@@ -763,7 +763,7 @@ static int socket_recv_call(const char *name, int argc) {
    len: the typed arm's, and a socket a block or a thread takes as its
    parameter (a boxed handle) answers the same way. */
 static void emit_io_socket_recv_call(Compiler *c, const char *name, const char *r, int len, Buf *b) {
-  buf_printf(b, "%s(%s, ", sp_streq(name, "recv") ? "sp_sock_recv" : "sp_sock_recvfrom", r);
+  buf_printf(b, "sp_sock_%s(%s, ", name, r);
   emit_int_expr(c, len, b);
   buf_puts(b, ")");
 }

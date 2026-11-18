@@ -554,6 +554,12 @@ int const_node_class_index(Compiler *c, int id) {
       src = nt_clone_source(c->nt, src);
     }
   }
+  /* a read of a name whose every write the read may see makes one class
+     (a header under a run-time condition, read after it): that class */
+  if (r == -2) {
+    int one = elab_class_ref_one(c, id);
+    if (one >= 0) return one;
+  }
   int k = const_node_class_index_tree(c, id);
   /* the record resolves the name to the builtin (Object holds no constant of
      the program's by it): only a top-level class of that name can be the

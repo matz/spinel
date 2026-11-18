@@ -1753,6 +1753,20 @@ int elab_class_candidates(Compiler *c, int node, int **out) {
   return s.n;
 }
 
+/* The one class a constant read the record cannot settle names, asked
+   once the record is made: every write its lookup may end in makes that
+   class (a header under a run-time condition, read after the condition);
+   -1 for none, for several, or for a read the frame cannot place */
+int elab_class_ref_one(Compiler *c, int node) {
+  LoadRecord *r = lr_get(c);
+  if (!r->recorded || r->walk || r->plan_depth || !elab_plan_enter(c, node)) return -1;
+  int *v = NULL, n = elab_class_candidates(c, node, &v);
+  elab_plan_leave(c);
+  int one = n == 1 && v[0] >= 0 ? v[0] : -1;
+  free(v);
+  return one;
+}
+
 /* The constant reference `ref` (a path, its parents too), which the walk
    has not placed yet, stands at statement e's point: placed now, as the walk
    places it next, for a lookup that cannot wait for it */

@@ -69,23 +69,10 @@
 #include "sp_alloc.h"   /* sp_PolyArray, sp_RbVal, sp_box_*, sp_raise_cls */
 #include "sp_process_status.h"   /* sp_ProcessStatus, sp_box_process_status */
 #include "sp_system.h"   /* sp_last_status: $? */
-#include "sp_string.h"   /* sp_String: a shared String's handle */
 
 #if !defined(_WIN32)
 extern char **environ;
 #endif
-
-/* A String the program holds as the shared handle (--share-strings) arrives
-   boxed as that handle: the spawn reads its bytes as it reads a String's. */
-static sp_RbVal sp_spawn_str(sp_RbVal v) {
-  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_STRBUF && v.v.p) {
-    sp_RbVal s = v;
-    s.tag = SP_TAG_STR;
-    s.v.s = ((sp_String *)v.v.p)->data;
-    return s;
-  }
-  return v;
-}
 
 /* Local error-message builder. Returns a static buffer; copy the
    result before another call. Avoids sp_sprintf which would pull
@@ -225,12 +212,11 @@ static void sp_spawn_env_check(sp_RbVal env, int *owned) {
   for (sp_int i = 0; i < n; i++) {
     sp_RbVal key, val;
     sp_json_hpair_fn(env, i, &key, &val);
-    key = sp_spawn_str(key);
-    val = sp_spawn_str(val);
-    if (key.tag != SP_TAG_STR) sp_process_spawn_fail(owned, "TypeError", sp_errf_conv(key));
-    if (val.tag != SP_TAG_STR && val.tag != SP_TAG_NIL) sp_process_spawn_fail(owned, "TypeError", sp_errf_conv(val));
-    if (strchr(key.v.s, '=')) {
-      snprintf(sp_err_buf, sizeof sp_err_buf, "environment name contains a equal : %s", key.v.s);
+    if (!sp_rbval_is_string(key)) sp_process_spawn_fail(owned, "TypeError", sp_errf_conv(key));
+    if (!sp_rbval_is_string(val) && val.tag != SP_TAG_NIL) sp_process_spawn_fail(owned, "TypeError", sp_errf_conv(val));
+    const char *name = sp_rbval_string_bytes(key);
+    if (strchr(name, '=')) {
+      snprintf(sp_err_buf, sizeof sp_err_buf, "environment name contains a equal : %s", name);
       sp_process_spawn_fail(owned, "ArgumentError", sp_err_buf);
     }
   }
@@ -247,8 +233,7 @@ static char **sp_spawn_envp(sp_RbVal env, int unsetenv_others) {
   for (sp_int i = 0; i < n; i++) {
     sp_RbVal key, val;
     sp_json_hpair_fn(env, i, &key, &val);
-    val = sp_spawn_str(val);
-    if (val.tag == SP_TAG_STR) bytes += strlen(sp_spawn_str(key).v.s) + strlen(val.v.s) + 2;
+    if (sp_rbval_is_string(val)) bytes += strlen(sp_rbval_string_bytes(key)) + strlen(sp_rbval_string_bytes(val)) + 2;
   }
   char **envp = (char **)malloc(sizeof(char *) * (nenv + (size_t)n + 1) + bytes);
   if (!envp) return NULL;
@@ -259,7 +244,7 @@ static char **sp_spawn_envp(sp_RbVal env, int unsetenv_others) {
     for (sp_int i = 0; i < n && !named; i++) {
       sp_RbVal key, val;
       sp_json_hpair_fn(env, i, &key, &val);
-      const char *name = sp_spawn_str(key).v.s;
+      const char *name = sp_rbval_string_bytes(key);
       size_t len = strlen(name);
       named = strncmp(environ[e], name, len) == 0 && environ[e][len] == '=';
     }
@@ -268,10 +253,9 @@ static char **sp_spawn_envp(sp_RbVal env, int unsetenv_others) {
   for (sp_int i = 0; i < n; i++) {
     sp_RbVal key, val;
     sp_json_hpair_fn(env, i, &key, &val);
-    val = sp_spawn_str(val);
-    if (val.tag != SP_TAG_STR) continue;
+    if (!sp_rbval_is_string(val)) continue;
     envp[at++] = entry;
-    entry += sprintf(entry, "%s=%s", sp_spawn_str(key).v.s, val.v.s) + 1;
+    entry += sprintf(entry, "%s=%s", sp_rbval_string_bytes(key), sp_rbval_string_bytes(val)) + 1;
   }
   envp[at] = NULL;
   return envp;
@@ -358,10 +342,9 @@ sp_int sp_process_spawn(sp_RbVal cmd, sp_RbVal args_box,
     sp_process_spawn_fail(owned, "ArgumentError", "wrong exec option symbol: rlimit_as");
 #endif
 
-  const char *chdir_to = NULL;
-  sp_RbVal chdir_v = sp_spawn_str(opts->data[6]);
-  if (chdir_v.tag == SP_TAG_STR) chdir_to = chdir_v.v.s;
-  else if (opts->data[6].tag != SP_TAG_NIL)
+  sp_RbVal dir = opts->data[6];
+  const char *chdir_to = sp_rbval_string_bytes(dir);
+  if (dir.tag != SP_TAG_NIL && !sp_rbval_is_string(dir))
     sp_process_spawn_fail(owned, "TypeError", "chdir must be a String");
 
   sp_RbVal env = opts->len > 8 ? opts->data[8] : sp_box_nil();
@@ -384,9 +367,8 @@ sp_int sp_process_spawn(sp_RbVal cmd, sp_RbVal args_box,
 
   int via_shell = 0;
   char **words = NULL;   /* a command line's own words, when no shell runs it */
-  cmd = sp_spawn_str(cmd);
-  if (cmd.tag == SP_TAG_STR) {
-    prog = cmd.v.s;
+  if (sp_rbval_is_string(cmd)) {
+    prog = sp_rbval_string_bytes(cmd);
     if (args_box.tag == SP_TAG_OBJ &&
         args_box.cls_id == SP_BUILTIN_POLY_ARRAY) {
       args_arr = (sp_PolyArray *)args_box.v.p;
@@ -418,9 +400,9 @@ sp_int sp_process_spawn(sp_RbVal cmd, sp_RbVal args_box,
     cmd_arr = (sp_PolyArray *)cmd.v.p;
     if (cmd_arr->len != 2) sp_process_spawn_fail(owned, "ArgumentError", "wrong first argument");
     for (int i = 0; i < 2; i++)
-      if (sp_spawn_str(cmd_arr->data[i]).tag != SP_TAG_STR)
+      if (!sp_rbval_is_string(cmd_arr->data[i]))
         sp_process_spawn_fail(owned, "TypeError", sp_errf_conv(cmd_arr->data[i]));
-    prog = sp_spawn_str(cmd_arr->data[0]).v.s;
+    prog = sp_rbval_string_bytes(cmd_arr->data[0]);
     if (args_box.tag == SP_TAG_OBJ &&
         args_box.cls_id == SP_BUILTIN_POLY_ARRAY) {
       args_arr = (sp_PolyArray *)args_box.v.p;
@@ -439,13 +421,13 @@ sp_int sp_process_spawn(sp_RbVal cmd, sp_RbVal args_box,
     if (!argv) sp_process_spawn_fail(owned, "NoMemoryError", "out of memory");
     int ai = 0;
     if (via_shell) { argv[ai++] = (char *)"/bin/sh"; argv[ai++] = (char *)"-c"; }
-    argv[ai++] = cmd_arr ? (char *)sp_spawn_str(cmd_arr->data[1]).v.s : (char *)prog;
+    argv[ai++] = cmd_arr ? (char *)sp_rbval_string_bytes(cmd_arr->data[1]) : (char *)prog;
     if (via_shell) prog = "/bin/sh";
     if (args_arr) {
       for (int i = 0; i < args_arr->len; i++) {
-        if (sp_spawn_str(args_arr->data[i]).tag != SP_TAG_STR)
+        if (!sp_rbval_is_string(args_arr->data[i]))
           sp_process_spawn_fail(owned, "ArgumentError", "spawn args must be Strings");
-        argv[ai++] = (char *)sp_spawn_str(args_arr->data[i]).v.s;
+        argv[ai++] = (char *)sp_rbval_string_bytes(args_arr->data[i]);
       }
     }
     argv[ai] = NULL;
@@ -658,20 +640,19 @@ void sp_process_exec(sp_RbVal cmd, sp_RbVal args_box) {
   int na = args ? (int)args->len : 0;
   const char *prog = NULL, *argv0 = NULL;
   char prog_copy[4096];   /* as in sp_process_spawn: prog past free(argv) */
-  cmd = sp_spawn_str(cmd);
-  if (cmd.tag == SP_TAG_STR) prog = argv0 = cmd.v.s;
+  if (sp_rbval_is_string(cmd)) prog = argv0 = sp_rbval_string_bytes(cmd);
   else if (cmd.tag == SP_TAG_OBJ && cmd.cls_id == SP_BUILTIN_POLY_ARRAY) {
     sp_PolyArray *pa = (sp_PolyArray *)cmd.v.p;
     if (pa->len != 2) sp_raise_cls("ArgumentError", "wrong first argument");
     for (int i = 0; i < 2; i++)
-      if (sp_spawn_str(pa->data[i]).tag != SP_TAG_STR) sp_raise_cls("TypeError", sp_errf_conv(pa->data[i]));
-    prog = sp_spawn_str(pa->data[0]).v.s; argv0 = sp_spawn_str(pa->data[1]).v.s;
+      if (!sp_rbval_is_string(pa->data[i])) sp_raise_cls("TypeError", sp_errf_conv(pa->data[i]));
+    prog = sp_rbval_string_bytes(pa->data[0]); argv0 = sp_rbval_string_bytes(pa->data[1]);
   }
   else sp_raise_cls("TypeError", "wrong first argument type (expected String or Array)");
   for (int i = 0; i < na; i++)
-    if (sp_spawn_str(args->data[i]).tag != SP_TAG_STR) sp_raise_cls("TypeError", sp_errf_conv(args->data[i]));
+    if (!sp_rbval_is_string(args->data[i])) sp_raise_cls("TypeError", sp_errf_conv(args->data[i]));
   /* a command line as Process.spawn reads one (sp_cmdline_shell_p) */
-  int line = cmd.tag == SP_TAG_STR && na == 0;
+  int line = sp_rbval_is_string(cmd) && na == 0;
   int via_shell = line && sp_cmdline_shell_p(prog);
   char **argv;
   if (line && !via_shell) {
@@ -687,7 +668,7 @@ void sp_process_exec(sp_RbVal cmd, sp_RbVal args_box) {
     int ai = 0;
     if (via_shell) { argv[ai++] = (char *)"/bin/sh"; argv[ai++] = (char *)"-c"; }
     argv[ai++] = (char *)argv0;
-    for (int i = 0; i < na; i++) argv[ai++] = (char *)sp_spawn_str(args->data[i]).v.s;
+    for (int i = 0; i < na; i++) argv[ai++] = (char *)sp_rbval_string_bytes(args->data[i]);
     argv[ai] = NULL;
   }
   execvp(via_shell ? "/bin/sh" : prog, argv);

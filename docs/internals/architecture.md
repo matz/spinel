@@ -119,7 +119,8 @@ selects the builtin display path. Calls that may reach another method
 produce the usual result. A multi-argument append stages its argument
 values before the first write.
 
-The JSON, StringIO and PTY packages read boxed base Strings through
+Process spawning and the JSON, StringIO and PTY packages read boxed base
+Strings through
 `sp_rbval_is_string` and `sp_rbval_string_bytes`. The byte accessor borrows
 the current contents and leaves the original box intact. Keep that box
 or its owner live across operations that can allocate.

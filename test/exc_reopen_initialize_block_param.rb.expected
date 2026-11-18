@@ -1,0 +1,19 @@
+"S:I:k"
+"no block"
+"S:I:k"
+"block"
+"S:I:k"
+"block"
+yielded a
+"S:I:K:a"
+"S:I:K:b"
+"S:I:r"
+"no block"
+"S:I:"
+"no block"
+"S:I:K:q"
+IndexError
+"S:z"
+true
+"S:z"
+false

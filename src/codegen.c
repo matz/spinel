@@ -17299,6 +17299,10 @@ void emit_super(Compiler *c, int id, Buf *b) {
          runs, and reaches the builtin's through its own super */
       int upi = exc_super_reopen_initialize(c, sci);
       if (upi >= 0) {
+        /* a yielding initialize above has no function of its own: its proc-form
+           clone runs it, on the block this super hands on */
+        int upf = c->scopes[upi].yields ? scope_proc_form_of(c, upi) : -1;
+        if (upf >= 0) upi = upf;
         buf_printf(b, "%s((sp_Exception *)%s", mc_method(c, &c->scopes[upi]), g_self);
         if (ty_k == NK_ForwardingSuperNode) emit_zsuper_args(c, s, &c->scopes[upi], ", ", b);
         else emit_args_filled(c, upi, args_id, ", ", b);

@@ -77,6 +77,9 @@ display conversion still returns its actual boxed value.
 The ENV read paths that return a String default or a missing-key block's
 String use the same result view. The selected branch hands back its
 String handle directly.
+The IO output-buffer emitters return the rooted buffer through that view
+when the result is a String. Calls that can also return a wait Symbol keep
+their boxed result.
 A receiver-answering iterator at method tail keeps its receiver in the
 operand view across the block and returns it through the physical result
 slot, including a String handle slot. Builtin rows identify self answers;

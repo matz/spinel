@@ -925,7 +925,7 @@ int repr_native_call_handle(Compiler *c, int v) {
   if (t != TY_STRING && t != TY_STRBUF) return 0;
   if (k == NK_CallNode) {
     if (cplan_builtin_handle_row(c, v)) return 1;
-    if (repr_env_string_handle(c, v)) return 1;
+    if (repr_env_string_handle(c, v) || strbuf_io_outbuf(c, v) >= 0) return 1;
     if (call_is_setter_assign(nt, v) || cplan_pinned_builtin(c, v)) return 0;
     const char *name = nt_str(nt, v, "name");
     if (is_method_invoke(name) || is_bind_call(name)) {
@@ -946,15 +946,7 @@ int repr_native_call_handle(Compiler *c, int v) {
   return repr_call_result_storage(t) == TY_STRBUF;
 }
 int repr_call_returns_handle(Compiler *c, int v) {
-  const NodeTable *nt = c->nt;
-  v = nt_paren_single(c->nt, v);
-  if (repr_native_call_handle(c, v)) return 1;
-  if (v < 0 || nt_kind(nt, v) != NK_CallNode) return 0;
-  /* a String's value, or one the pickup marks to be stored as the handle */
-  TyKind t = comp_ntype_settled(c, v);
-  if (t != TY_STRING && !(t == TY_STRBUF && (comp_strbuf_box_stored(c, v) || c->n_cext_extensions))) return 0;
-  if (strbuf_io_outbuf(c, v) >= 0) return 1;
-  return 0;
+  return repr_native_call_handle(c, nt_paren_single(c->nt, v));
 }
 /* A boxed receiver's reader arms already box their shared fields as
    handles. A String demand can take that boxed result without a copy.

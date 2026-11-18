@@ -1476,12 +1476,10 @@ static void prog_unplace_candidates(Compiler *c, const unsigned char *seen, cons
 int prog_node_in_dropped_file(Compiler *c, int node) {
   const NodeTable *nt = c->nt;
   if (node < 0 || !prog_graph(c)) return 0;
-  const char *fp = nt_file_path(nt, (int)nt_int(nt, node, "node_file", -1));
-  if (!fp) return 0;
-  for (int f = 1; f < nt_nroots(nt); f++) {
-    const char *rp = nt_str(nt, nt_root(nt, f), "file_path");
-    if (rp && sp_streq(rp, fp)) return nt_int(nt, nt_root(nt, f), "file_dropped", 0) != 0;
-  }
+  long long fid = nt_int(nt, node, "node_file", -1);
+  if (fid < 0) return 0;
+  for (int f = 1; f < nt_nroots(nt); f++)
+    if (nt_int(nt, nt_root(nt, f), "node_file", -2) == fid) return nt_int(nt, nt_root(nt, f), "file_dropped", 0) != 0;
   return 0;
 }
 

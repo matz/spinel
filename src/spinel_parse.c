@@ -118,9 +118,10 @@ typedef struct {
 } SpSrcFile;
 
 /* --load-model=graph: the name a message gives file `path` (the whole
-   path the graph holds) as the inline model names it: from the current
-   directory when the entry file is given relative to it and the file is
-   under it, else the path. A pointer into path. */
+   path the graph holds), a file of the program's own (a compiler's
+   library keeps the path it was found at), as the inline model names it:
+   from the current directory when the entry file is given relative to it
+   and the file is under it, else the path. A pointer into path. */
 static const char *sp_shown_path(const char *path, const char *entry) {
   char cwd[1024];
   size_t cl = entry && entry[0] != '/' && getcwd(cwd, sizeof cwd) ? strlen(cwd) : 0;
@@ -185,7 +186,7 @@ static void sp_src_file_note_defers(const SpSrcFile *f) {
     char **grown = realloc(sp_defer_paths, sizeof(char *) * (size_t)(sp_defer_npaths + 1));
     if (!grown) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
     sp_defer_paths = grown;
-    sp_defer_paths[sp_defer_npaths++] = strdup(f->path);
+    sp_defer_paths[sp_defer_npaths++] = strdup(f->shown ? f->shown : f->path);   /* (the file table's name for it) */
     return;
   }
 }
@@ -8398,7 +8399,7 @@ static int sp_graph_read(SpLoadGraph *g, int f, const char *source_file, SpNames
   SpGraphFile *r = sp_graph_rec(g, f);
   r->text = text;
   sp_src_file_parse(&r->src, text, path);
-  if (f) r->src.shown = sp_shown_path(path, source_file);   /* (the entry is named as given) */
+  if (f && sp_load_tier(g, f) == SP_LIB_NONE) r->src.shown = sp_shown_path(path, source_file);   /* (the entry is named as given) */
   r->read = 1;
   sp_src_file_note_defers(&r->src);
   sp_src_file_warn_encoding(&r->src);
@@ -8522,8 +8523,9 @@ static int sp_graph_flatten(SpLoadGraph *g, int f, const char *source_file) {
   SpGraphFile *r = sp_graph_rec(g, f);
   /* the file in the table's file list, in graph order: flatten stamps a
      node's position from this parse, and a builtins/ root's nodes as
-     builtin ones */
-  g_flat_file = sp_intern_file(f ? g->file[f] : source_file, f ? sp_load_tier(g, f) : SP_LIB_NONE);
+     builtin ones; a file is named as a message names it (sp_shown_path),
+     its #line directives too, as the inline model names it */
+  g_flat_file = sp_intern_file(f ? (r->src.shown ? r->src.shown : g->file[f]) : source_file, f ? sp_load_tier(g, f) : SP_LIB_NONE);
   g_flat_builtin = (*sp_load_flags(g, f) & SP_FILE_BUILTIN) != 0;
   g_bi_base = -1;
   g_parser = &r->src.parser;

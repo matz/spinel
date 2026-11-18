@@ -53,15 +53,15 @@ extent def x line 6: from=#16 sure=#19 count=many kept=no
 extent def y line 7: from=#16 sure=#19 count=many kept=no
 extent def z line 9: from=#16 sure=#19 count=many kept=no
 extent def hi line 10: from=#16 sure=never count=many kept=no
-extent block new line 12: from=#6 sure=never count=many kept=no
+extent block new line 12: from=#6 sure=never count=many kept=yes
 extent def m line 13: from=#16 sure=never count=many kept=no
 extent def make line 15: from=#16 sure=#20 count=many kept=no
 extent def h line 17: from=#16 sure=never count=many kept=no
 extent def uses_h line 18: from=#16 sure=never count=many kept=no
-extent block define_method line 19: from=#12 sure=never count=many kept=yes
-extent block define_method line 21: from=#14 sure=never count=many kept=yes
+extent block define_method line 19: from=#16 sure=never count=many kept=yes
+extent block define_method line 21: from=#16 sure=never count=many kept=yes
 extent block each line 23: from=#15 sure=never count=many kept=no
 extent block define_method line 23: from=#16 sure=never count=many kept=yes
-extent block define line 25: from=#17 sure=never count=many kept=no
+extent block define line 25: from=#17 sure=never count=many kept=yes
 extent def twice line 26: from=#21 sure=never count=many kept=no
 extent block line 23: from=any sure=never count=many kept=yes

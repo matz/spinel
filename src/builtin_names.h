@@ -345,6 +345,9 @@ int is_bound_method_maker(const char *n);  /* method public_method: a Method of 
 int is_super_method_name(const char *n);   /* super_method: the Method one step up its owner's chain */
 /* const_get const_source_location nesting attached_object each_object eval binding */
 int is_constant_or_object_reflection(const char *n);
+/* is_constant_or_object_reflection, constants, __const_get__ __const_defined__: a call that reaches a
+   constant by a name it computes, or an object past the reads the program's syntax shows */
+int is_const_reaching_name(const char *n);
 int is_const_set_name(const char *n); /* const_set */
 int is_const_query_name(const char *n); /* const_get const_defined? const_source_location */
 int is_constants_list_name(const char *n); /* constants */

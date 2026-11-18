@@ -1,0 +1,15 @@
+load record: 8 points, 1 regions
+r0 #0 f0 ProgramNode line 3
+r0 #1 f0 LocalVariableWriteNode n line 3
+r0 #2 f0 LocalVariableWriteNode pr line 4
+r0 #3 f0 CallNode call line 5
+r0 #4 f0 LocalVariableWriteNode l line 6
+r0 #5 f0 CallNode call line 7
+r0 #6 f0 CallNode at_exit line 8
+r0 #7 f0 CallNode p line 9
+block proc line 4: later
+block at_exit line 8: later
+post: after #7
+extent block proc line 4: from=#3 sure=never count=many kept=yes
+extent lambda line 6: from=#5 sure=never count=many kept=yes
+extent block at_exit line 8: from=post sure=never count=many kept=yes

@@ -1,0 +1,7 @@
+load record: 3 points, 1 regions
+r0 #0 f0 ProgramNode line 3
+r0 #1 f0 ConstantWriteNode L line 3
+r0 #2 f0 CallNode call line 4
+const L: write#1
+post: after #2
+extent lambda line 3: from=#1 sure=never count=many kept=yes

@@ -79,5 +79,5 @@ extent block run line 28: from=#28 sure=never count=many kept=yes
 extent block run line 29: from=#30 sure=never count=many kept=yes
 extent block run line 30: from=#32 sure=never count=many kept=yes
 extent block run line 31: from=#34 sure=never count=many kept=yes
-extent lambda line 33: from=#37 sure=never count=many kept=yes
+extent lambda line 33: from=#40 sure=never count=once kept=yes
 extent def assign line 35: from=#41 sure=#41 count=once kept=no

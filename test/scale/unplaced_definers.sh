@@ -23,7 +23,8 @@ awk -v N="$N" 'BEGIN {
   for (i = 0; i < N; i++) printf "class W; def self.set_%d = (def w = %d); end\n", i, i
   for (i = 0; i < N; i++) printf "L%d = -> { class LC%d; def lm = %d; end }\n", i, i, i
   print "at_exit { class AE; def e = 1; end }"
-  for (i = 0; i < N; i++) printf "def call_%d = (U%d.add_%d; W.set_%d)\n", i, i, i, i
+  for (i = 0; i < N; i++) printf "def call_%d = (W.new.w rescue nil; U%d.add_%d; W.set_%d; U%d.add_%d; W.new.w)\n", i, i, i, i, i, i
+  print "W.new.w rescue nil"
   for (i = 0; i < N; i++) printf "U%d.add_%d\n", i, i
   for (i = 0; i < N; i++) printf "call_%d\n", i
   for (i = 0; i < N; i++) printf "L%d.call\n", i

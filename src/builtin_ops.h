@@ -811,7 +811,8 @@ int iter_row_named(const char *name);
 int object_iter_runs_now(const char *name);
 /* The iterator row a call with a block reads on a receiver of kind rt:
    any receiver's (tap, then, each_with_object), else its family's (an
-   Array's, a Hash's, a Range's, ...), or NULL. */
+   Array's, a Hash's, a Range's, ...), or NULL. A call with no receiver is
+   asked as kind BOP_KERNEL: Kernel's rows (catch, loop). */
 const IterRow *iter_row_of(TyKind rt, const char *name, int argc);
 /* What the row of `name` on a receiver of kind rt says of how often it runs
    its block: IR_EACH, IR_ONCE, IR_COUNT_RECV, IR_ELEMS for a row that steps

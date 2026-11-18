@@ -38,7 +38,7 @@ versions W#a: def#3..#9 seen=def#3 idle, undef#9..end seen=none idle; 3 of the n
 versions X#n: alias#12..#14 seen=alias#12 idle, def#14..end seen=def#14 idle; 3 of the name, named
 post: after #14
 extent def a line 7: from=never sure=never count=zero kept=no
-extent block define_method line 11: from=#7 sure=never count=many kept=yes
+extent block define_method line 11: from=never sure=never count=zero kept=yes
 extent def z line 12: from=never sure=never count=zero kept=no
 extent def m line 16: from=never sure=never count=zero kept=no
 extent def n line 19: from=never sure=never count=zero kept=no

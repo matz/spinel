@@ -841,6 +841,10 @@ int is_constant_or_object_reflection(const char *n) {
          sp_streq(n, "binding");
 }
 
+int is_const_reaching_name(const char *n) {
+  return n && (is_constant_or_object_reflection(n) || is_constants_list_name(n) || is_const_table_def_name(n) || is_remove_const_name(n));
+}
+
 int is_const_set_name(const char *n) {
   return sp_streq(n, "const_set");
 }

@@ -1,4 +1,4 @@
-load record: 94 points, 1 regions
+load record: 108 points, 1 regions
 r0 #0 f0 ProgramNode line 13
 r0 #1 f0 DefNode __enumw_map line 13
 r0 #2 f0 DefNode __enumw_select line 19
@@ -92,7 +92,21 @@ r0 #89 f0 CallOrWriteNode x line 90
 r0 #90 f0 LocalVariableWriteNode hk line 91
 r0 #91 f0 IndexAndWriteNode line 92
 r0 #92 f0 CallNode p line 93
-r0 #93 f0 DefNode __enum_each_with_index__0 line 506
+r0 #93 f0 ClassNode LC line 98
+  r0 #94 f0 ConstantWriteNode NEVER line 99
+  r0 #95 f0 ConstantWriteNode ONCE line 100
+  r0 #96 f0 ConstantWriteNode TWICE line 101
+  r0 #97 f0 ConstantWriteNode SEEN line 102
+r0 #98 f0 CallNode p line 104
+r0 #99 f0 LocalVariableWriteNode ll line 105
+r0 #100 f0 CallNode p line 106
+r0 #101 f0 ClassNode DM line 109
+  r0 #102 f0 CallNode define_singleton_method line 110
+  r0 #103 f0 CallNode define_singleton_method line 111
+  r0 #104 f0 CallNode define_method line 112
+r0 #105 f0 CallNode p line 114
+r0 #106 f0 CallNode p line 115
+r0 #107 f0 DefNode __enum_each_with_index__0 line 506
 block each line 15: assumed
 block each line 21: assumed
 block each line 27: assumed
@@ -125,6 +139,11 @@ block times line 59: now
 block at_exit line 59: later
 block tap line 77: assumed
 block then line 78: assumed
+block lambda line 100: later
+block proc line 101: later
+block define_singleton_method line 110: later
+block define_singleton_method line 111: later
+block define_method line 112: later
 block each line 509: assumed
 block new line 526: later
 block each line 528: assumed
@@ -133,11 +152,15 @@ class G: body#40
 class H: body#67
 class NN: body#74
 class OA: body#76
+class LC: body#93
+class DM: body#101
 entity K: owner main leaf K
 entity G: owner main leaf G
 entity H: owner main leaf H
 entity NN: owner main leaf NN
 entity OA: owner main leaf OA
+entity LC: owner main leaf LC
+entity DM: owner main leaf DM
 main#__enumw_map: def#1 private end=yes
 main#__enumw_select: def#2 private end=yes
 main#__enumw_reject: def#3 private end=yes
@@ -177,8 +200,17 @@ NN#foo: def#75 end=yes
 const OA: write#76
 OA#x: reader#77 end=yes
 OA#x=: writer#77 end=yes
-main#__enum_each_with_index__0: def#93 private end=yes
-post: after #93
+const LC: write#93
+const LC::NEVER: write#94
+const LC::ONCE: write#95
+const LC::TWICE: write#96
+const LC::SEEN: write#97
+const DM: write#101
+DM.later: define_method#102 end=yes
+DM.unused: define_method#103 end=yes
+DM#inst: define_method#104 end=yes
+main#__enum_each_with_index__0: def#107 private end=yes
+post: after #107
 extent def __enumw_map line 13: from=never sure=never count=zero kept=no
 extent block each line 15: from=never sure=never count=zero kept=no
 extent def __enumw_select line 19: from=never sure=never count=zero kept=no
@@ -216,10 +248,10 @@ extent def once line 22: from=#23 sure=#23 count=once kept=no
 extent def loop_run line 23: from=#26 sure=#38 count=many kept=no
 extent def guarded line 24: from=#28 sure=#38 count=many kept=no
 extent block times line 28: from=#25 sure=#25 count=many kept=no
-extent block times line 34: from=#30 sure=never count=zero kept=no
+extent block times line 34: from=never sure=never count=zero kept=no
 extent block times line 35: from=#32 sure=#32 count=once kept=no
 extent block each line 36: from=#34 sure=#34 count=once kept=no
-extent lambda line 37: from=#36 sure=never count=many kept=yes
+extent lambda line 37: from=post sure=never count=many kept=yes
 extent block at_exit line 38: from=post sure=never count=once kept=yes
 extent def a line 42: from=#45 sure=never count=many kept=no
 extent def b line 43: from=#46 sure=never count=many kept=no
@@ -233,7 +265,7 @@ extent block sort_by! line 55: from=#55 sure=never count=once kept=no
 extent block slice_before line 56: from=#57 sure=never count=many kept=no
 extent block times line 57: from=#60 sure=never count=many kept=no
 extent block times line 58: from=#62 sure=#62 count=many kept=no
-extent block times line 59: from=#64 sure=never count=zero kept=no
+extent block times line 59: from=never sure=never count=zero kept=no
 extent block at_exit line 59: from=never sure=never count=zero kept=yes
 extent def a line 62: from=#79 sure=never count=many kept=no
 extent def b line 63: from=#83 sure=never count=many kept=no
@@ -244,6 +276,14 @@ extent def f line 67: from=#91 sure=never count=once kept=no
 extent def foo line 70: from=#79 sure=never count=many kept=no
 extent block tap line 77: from=#80 sure=never count=once kept=no
 extent block then line 78: from=#82 sure=never count=once kept=no
+extent lambda line 99: from=never sure=never count=zero kept=yes
+extent block lambda line 100: from=#98 sure=never count=once kept=yes
+extent block proc line 101: from=#98 sure=never count=many kept=yes
+extent lambda line 102: from=#97 sure=never count=many kept=yes
+extent lambda line 105: from=#100 sure=never count=once kept=yes
+extent block define_singleton_method line 110: from=#106 sure=never count=many kept=yes
+extent block define_singleton_method line 111: from=never sure=never count=zero kept=yes
+extent block define_method line 112: from=#106 sure=never count=many kept=yes
 extent def __enum_each_with_index__0 line 506: from=never sure=never count=zero kept=no
 extent block each line 509: from=never sure=never count=zero kept=no
 extent block new line 526: from=never sure=never count=zero kept=yes

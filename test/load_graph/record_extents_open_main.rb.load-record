@@ -1,0 +1,16 @@
+load record: 9 points, 1 regions
+r0 #0 f0 ProgramNode line 7
+r0 #1 f0 ConstantWriteNode NEVER line 7
+r0 #2 f0 ConstantWriteNode LATER line 8
+r0 #3 f0 CallNode call line 9
+r0 #4 f0 CallNode call line 10
+r0 #5 f0 LocalVariableWriteNode n line 11
+r0 #6 f0 CallNode call line 12
+r0 #7 f0 LocalVariableWriteNode l line 13
+r0 #8 f0 CallNode call line 14
+const NEVER: write#1
+const LATER: write#2
+post: after #8
+extent lambda line 7: from=#1 sure=never count=many kept=yes
+extent lambda line 8: from=#2 sure=never count=many kept=yes
+extent lambda line 13: from=#7 sure=never count=many kept=yes

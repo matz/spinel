@@ -1,0 +1,10 @@
+load record: 6 points, 1 regions
+r0 #0 f0 ProgramNode line 5
+r0 #1 f0 ConstantWriteNode L line 5
+r0 #2 f0 LocalVariableWriteNode name line 6
+r0 #3 f0 LoadNode line 7
+r0 #4 f1 ProgramNode line 1
+r0 #5 f1 CallNode call line 1
+const L: write#1
+post: after #5
+extent lambda line 5: from=#5 sure=never count=once kept=yes

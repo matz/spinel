@@ -1741,11 +1741,11 @@ sp_RbVal sp_builtin_class_new(int kind, sp_int argc, const sp_RbVal *av, sp_Proc
   switch (kind) {
   case 'S': {
     sp_dyn_new_arity(argc, 1);
-    if (argc == 0) return sp_box_str(sp_str_dup_external((&("\xff")[1])));
+    if (argc == 0) return sp_box_obj(sp_String_from_cbinstr("", 0), SP_BUILTIN_STRBUF);
     sp_RbVal s = av[0];
     if (!sp_rbval_is_string(s))
       sp_raise_cls("TypeError", sp_sprintf("no implicit conversion of %s into String", sp_poly_class_name(s)));
-    return sp_box_str(sp_str_dup(sp_rbval_string_bytes(s)));
+    return sp_box_obj(sp_String_new_unfrozen(sp_rbval_string_bytes(s)), SP_BUILTIN_STRBUF);
   }
   case 'A': {
     sp_dyn_new_arity(argc, 2);

@@ -22024,12 +22024,13 @@ static void ext_emit_method_tables(Compiler *c, Buf *b) {
    them everything they call. A class no code builds has no arm, as its
    override has no body. */
 int exc_text_method(Compiler *c, int i, int want_message, int *dcls) {
+  /* The runtime hook survey is independent of any call being emitted. */
   int dmsg = -1, dtos = -1;
   MethodLookup ml_mi_msg = { .def_class = dmsg };
-  int mi_msg = call_target(c, -1, i, "message", CT_METHODS | CT_SHARED, &ml_mi_msg);
+  int mi_msg = call_target(c, -1, i, "message", CT_METHODS, &ml_mi_msg);
   dmsg = ml_mi_msg.def_class;
   MethodLookup ml_mi_tos = { .def_class = dtos };
-  int mi_tos = call_target(c, -1, i, "to_s", CT_METHODS | CT_SHARED, &ml_mi_tos);
+  int mi_tos = call_target(c, -1, i, "to_s", CT_METHODS, &ml_mi_tos);
   dtos = ml_mi_tos.def_class;
   if (mi_msg >= 0 && !c->scopes[mi_msg].reachable) mi_msg = -1;
   if (mi_tos >= 0 && !c->scopes[mi_tos].reachable) mi_tos = -1;

@@ -15525,11 +15525,11 @@ int exc_builtin_reopen_initialize(Compiler *c, int id, const char *cn, int argc,
     if (k == NK_KeywordHashNode || k == NK_SplatNode) return -1;
   }
   int mi = exc_reopen_initialize_above(c, cn, 0, -1);
-  /* a yielding initialize has no function of its own (its proc-form clone runs
-     it, as ctor_alloc_init arranges); this helper calls the plain one, so the
-     call would name a function that is not emitted: such a call keeps the native
-     construction, as before the reopening was looked for */
-  return mi >= 0 && !c->scopes[mi].yields ? mi : -1;
+  /* a yielding initialize has no function of its own: emit_exc_reopen_construct_as
+     calls its proc-form clone. One without a clone would name a function that
+     is not emitted: such a call keeps the native construction, as before the
+     reopening was looked for */
+  return mi >= 0 && (!c->scopes[mi].yields || scope_proc_form_of(c, mi) >= 0) ? mi : -1;
 }
 
 /* Build the runtime's exception of the reopened class ci and run the
@@ -15554,6 +15554,11 @@ void emit_exc_reopen_construct(Compiler *c, int ci, int initm, int args, int msg
    the one of a reopening above it (cname's own reopening, or a builtin's it
    descends from: ArgumentError.new under a reopened StandardError#initialize). */
 void emit_exc_reopen_construct_as(Compiler *c, const char *cname, int initm, int args, int msg_node, int call_id, Buf *b) {
+  /* a yielding initialize has no function of its own: its proc-form clone
+     runs it, on the call's block or on none (the same choice ctor_alloc_init
+     makes for a program's exception class) */
+  int pf = c->scopes[initm].yields ? scope_proc_form_of(c, initm) : -1;
+  if (pf >= 0) initm = pf;
   Scope *im = &c->scopes[initm];
   int lo, hi, argc = msg_node >= 0;
   if (args < 0 && class_new_pos_arity(c, initm, &lo, &hi) && (argc < lo || argc > hi)) {

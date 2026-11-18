@@ -36441,9 +36441,15 @@ int make_yield_proc_forms(Compiler *c) {
     if (src->is_transplanted_source || !src->name) continue;
     if (src->body < 0) continue;
     /* an exception class is built through sp_X_new by raise, rescue's
-       re-raise and its own `new` sites alike, none of which splice the body */
+       re-raise and its own `new` sites alike, none of which splice the body.
+       A reopening of a builtin exception is built the same way (sp_exc_new,
+       then its initialize run on the result, emit_exc_reopen_construct_as),
+       so a yielding one needs its clone as well: without it the original,
+       which has no function of its own, was named by the call (K-059: a
+       `blk.nil?`, a `block_given?` or a `yield` in a reopened IndexError's
+       initialize failed in the C compiler). */
     int exc_init = src->class_id >= 0 && sp_streq(src->name, "initialize") && !src->is_cmethod &&
-                   class_is_exc_subclass(c, src->class_id);
+                   (class_is_exc_subclass(c, src->class_id) || class_is_exc_reopen(c, src->class_id));
     /* (a method_missing Method's target is wanted by its captures' name,
        desugar_missing_method_obj) */
     const char *bsym = src->def_node >= 0 ? nt_str(nt, src->def_node, "bam_sym") : NULL;

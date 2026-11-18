@@ -5750,7 +5750,10 @@ static int emit_and_or_begin_expr(Compiler *c, int id, Buf *b, const NodeTable *
     Buf rarm; memset(&rarm, 0, sizeof rarm);
     Buf rpre; memset(&rpre, 0, sizeof rpre);
     #define EMIT_ARM(IS_RIGHT, TB) do { \
-      if (IS_RIGHT) { emit_ternary_arm_o(c, right, res, ro, (TB)); } \
+      if (IS_RIGHT) { \
+        if (lhandle && (res == TY_STRING || res == TY_STRBUF)) emit_strbuf_handle_of(c, right, (TB)); \
+        else emit_ternary_arm_o(c, right, res, ro, (TB)); \
+      } \
       else { if (res == TY_POLY && lt != TY_POLY) { /* box the temp by left type */ \
                /* In `a && b` the kept-left arm is reached only when the left is
                   FALSY, and for a scalar slot that means it holds nil:
@@ -5811,13 +5814,8 @@ static int emit_and_or_begin_expr(Compiler *c, int id, Buf *b, const NodeTable *
     EMIT_ARM(0, &larm);
     { Buf *sv_pre2 = g_pre; g_pre = &rpre; EMIT_ARM(1, &rarm); g_pre = sv_pre2; }
     #undef EMIT_ARM
-    if (lhandle && (res == TY_STRING || res == TY_STRBUF) && rarm.p) {
-      Buf hr; memset(&hr, 0, sizeof hr);
-      buf_printf(&hr, "SP_STR_HDL(%s)", rarm.p);
-      free(rarm.p); rarm = hr;
-    }
     /* (one representation: a right arm of either face beside a bytes left) */
-    else if (!lhandle && !lo && lt == TY_STRING && res == TY_STRING && rarm.p) {
+    if (!lhandle && !lo && lt == TY_STRING && res == TY_STRING && rarm.p) {
       Buf hr; memset(&hr, 0, sizeof hr);
       buf_printf(&hr, "SP_STR_B(%s)", rarm.p);
       free(rarm.p); rarm = hr;

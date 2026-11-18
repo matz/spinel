@@ -19,7 +19,8 @@ cd "$ROOT" || exit 2
 # Entries added by the S2-ASKS PR, in three groups. The program-level dispatchers, each emitted once per program for
 # every class (a switch on the class id): emit_user_coerce_dispatch and emit_obj_succ_dispatch (the numeric hooks),
 # hash_reader_ivar (the key hash of a class whose `hash` is a reader), emit_cls_answers_dispatch (Struct's members and
-# keyword_init?) and emit_exc_text_dispatch_at (the exception text hooks of a builtin exception's reopenings). No call
+# keyword_init?), emit_exc_text_tail (the exception text hooks), emit_display_overrides (the object display hooks)
+# and emit_obj_to_str_bridge (the implicit String conversion hook). No call
 # stands behind an arm: the switch is the class's, so its question is the table's with no site, asked for every class
 # of the program, as the others of this list are. The readers of the compiler's own synthesized helper: obj_each_elems_text
 # and an_phase_procs, for every class an `__enum_to_a` call may reach (its `each` and `__enum_to_a`), whose call is a
@@ -29,7 +30,6 @@ cd "$ROOT" || exit 2
 # no point of the load is that call's own; the table's method is the answer until the entries of step 4.
 FUNCS="
 src/analyze_infer.c:class_any_cmethod_eqq
-src/codegen_util.c:exc_text_override_calls_super
 src/analyze_util.c:class_coerce_emittable
 src/codegen.c:emit_cls_user_display_hooks
 src/codegen.c:emit_struct_default_inspect
@@ -39,7 +39,6 @@ src/codegen.c:pp_prints_by_rt
 src/codegen.c:user_deconstruct_scope
 src/compiler.c:prog_has_cls_user_display
 src/analyze.c:pdn_lookup
-src/analyze.c:ur_iter_overridden
 src/analyze.c:synth_enum_to_a
 src/analyze.c:synth_struct_each
 src/analyze.c:synth_to_enum_generators
@@ -74,6 +73,8 @@ src/codegen.c:program_has_user_eql
 src/codegen.c:emit_obj_valeq_dispatch
 src/codegen.c:emit_obj_hashkey_dispatch
 src/codegen.c:emit_obj_inspect_dispatch
+src/codegen.c:emit_display_overrides
+src/codegen.c:emit_obj_to_str_bridge
 src/codegen.c:class_range_linear
 src/codegen.c:class_succ_dispatched
 src/codegen.c:class_opens_cmp
@@ -86,7 +87,7 @@ src/codegen.c:emit_user_coerce_dispatch
 src/codegen.c:emit_obj_succ_dispatch
 src/codegen.c:hash_reader_ivar
 src/codegen.c:emit_cls_answers_dispatch
-src/codegen.c:emit_exc_text_dispatch_at
+src/codegen.c:emit_exc_text_tail
 src/codegen.c:sg_delegate_scope
 src/codegen.c:emit_method
 src/analyze_pass.c:sg_override_ret

@@ -54559,7 +54559,15 @@ static void an_phase_method_backstops(Compiler *c) {
      holding `M.callee`'s parameter open, and the .rbs never mentioned callee
      (#4165). The fixpoint's own copy runs after its binding, which is why it
      recovered on the next iteration and this loop never did. */
-  for (int it = 0; it < 8; it++) {
+  /* The rounds run until one changes nothing, under the fixpoint's cap
+     (an_round_cap_step), which a chain extends and an oscillation does not.
+     A type crosses one call a round here too, and the re-narrow before this
+     phase can leave a chain mid-way: stopped at a fixed eight rounds, a
+     boxed value following an Integer down eleven methods reached the tenth
+     and not the last, which kept its Integer parameter, and the call into it
+     converted a Float to an Integer and a String to 0 with nothing raised. */
+  AnRoundCap brc = { 128, 0, 0, NULL, 0 };
+  for (int it = 0; it < brc.cap; it++) {
     reassert_rbs_param_seeds(c);
     int ch = infer_param_types(c);
     /* A binding here is a type change after the fixpoint too: a parameter
@@ -54573,9 +54581,14 @@ static void an_phase_method_backstops(Compiler *c) {
        sides in fact carry and passed it to the int parameter (the C did not
        build, #4684). */
     ch |= infer_write_types(c);
+    /* ... and the ivars it is stored in, whose readers' returns follow */
+    ch |= infer_ivar_types(c);
     ch |= infer_return_types(c);
     if (!ch) break;
+    an_round_cap_step(c, &brc, it);
+    if (it + 1 == brc.cap) g_fixpoint_capped = 1;   /* (warned of with the fixpoint's) */
   }
+  free(brc.seen);
   reassert_rbs_param_seeds(c);
 
   /* Block splat params reach only the lowerings that bind them; the rest

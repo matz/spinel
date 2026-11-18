@@ -733,7 +733,9 @@ the member:
   where mutable strings come from.
 - A compiled method returning a String passes the object through direct calls,
   a bound Method, an extension callback, and a return that crosses an ensure.
-  Each caller receives the same object, including its mutation and freeze state.
+  Spinel callers and callbacks that receive the handle see the same object,
+  including its mutation and freeze state. The CRuby extension shim copies
+  the result into a new Ruby String.
 - **`nil` meeting a String is a nullable String, not untyped.** Where a
   value can be either nil or a String -- a ternary, an `if` with no else, a
   `return nil if ...` ahead of a String, a `case` with no matching arm, a
@@ -1481,8 +1483,8 @@ semantics.)
 String (not frozen; its first mutation warns, under `-W:deprecated`, that
 it "will be frozen in the future"); Spinel answers it frozen, as it does
 literals: `:a.to_s.frozen?`, `:a.id2name.frozen?` and `String(:a).frozen?`
-are `true`, `:a.to_s << "x"` raises FrozenError, and a mutable copy comes
-from `+:a.to_s` or `dup`. Each call still answers its own object
+are `true`. Appending to either `:a.to_s` or `:a.id2name` raises
+FrozenError. Use unary `+` or `dup` for a mutable copy. Each call still answers its own object
 (`:a.to_s.equal?(:a.to_s)` is `false`), as in CRuby.
 `Symbol#name` returns the same frozen spelling on each call.
 

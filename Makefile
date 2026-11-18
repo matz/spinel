@@ -4079,8 +4079,13 @@ build/inline-rbs-results/%.res: FORCE | rbs-seed-extractor $(SP_RT_LIB) $(SPINEL
 	if ! $(SPINEL) $(IRB)/$$f.rb -c --no-line-map -o "$$tmp/f.c" 2>/dev/null; then \
 	  echo "inline-rbs-test: FAIL ($$f: the compile failed)"; ok=0; continue; fi; \
 	if $(CC) -O0 -Ilib $(RBS_SEED_STRICT) -DSP_RBS_CHECK "$$tmp/f.c" $(SP_RT_LIB) $(LDFLAGS) -lm -o "$$tmp/f" 2>/dev/null; then \
+	  if [ "$$f" = check_false_string_ensure ]; then \
+	    "$$tmp/f" valid > "$$tmp/f.valid" 2>&1 && printf '%s\n' '"honest"' nil true | cmp -s - "$$tmp/f.valid" || { echo "inline-rbs-test: FAIL ($$f: valid String and nil returns differ)"; cat "$$tmp/f.valid"; ok=0; }; \
+	  fi; \
 	  if "$$tmp/f" > "$$tmp/f.out" 2>&1; then echo "inline-rbs-test: FAIL ($$f: a false inline annotation did NOT abort under -DSP_RBS_CHECK)"; ok=0; \
-	  else grep -q "seed violated" "$$tmp/f.out" || { echo "inline-rbs-test: FAIL ($$f: a false inline annotation aborted without naming the slot)"; sed -n 1,3p "$$tmp/f.out"; ok=0; }; fi; \
+	  else diagnostic='seed violated'; \
+	    if [ "$$f" = check_false_string_ensure ]; then diagnostic='seed violated: the return value'; fi; \
+	    grep -Fq "$$diagnostic" "$$tmp/f.out" || { echo "inline-rbs-test: FAIL ($$f: a false inline annotation aborted without naming the slot)"; sed -n 1,3p "$$tmp/f.out"; ok=0; }; fi; \
 	else echo "inline-rbs-test: FAIL ($$f: C did not compile)"; ok=0; fi; \
 	done; \
 	for h in check_honest builtin_classes; do \

@@ -5,7 +5,7 @@ module Reader
     int callback_bytes(read_cb fn, long flag) {
       const char *bytes = fn(flag);
       if (!flag) return !bytes && sp_ffi_bin_len == 0 ? 0 : -2;
-      if (!bytes || sp_ffi_bin_len != 3) return -2;
+      if (!bytes || sp_ffi_bin_len != 3 || bytes[0] != 'a' || bytes[1] != 0) return -2;
       return sp_ffi_bin_len * 1000 + (unsigned char)bytes[2];
     }
     int callback_text(read_cb fn, long flag) {

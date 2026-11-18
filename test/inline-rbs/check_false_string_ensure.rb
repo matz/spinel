@@ -12,5 +12,8 @@ end
 
 values = ["honest", nil, 17]
 result = CheckedResult.new
-p result.pick(values[0]), result.pick(values[1]), $cleaned
-p result.pick(values[2])
+if ARGV.empty?
+  p result.pick(values[2])
+else
+  p result.pick(values[0]), result.pick(values[1]), $cleaned
+end

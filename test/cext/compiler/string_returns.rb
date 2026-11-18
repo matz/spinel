@@ -24,3 +24,15 @@ text = +"abc"
   p value.equal?(text)
   p ReadText.read(source, text, 1)
 end
+
+class FreshText
+  #: (String, Integer) -> String
+  def answer(text, mode)
+    text.dup
+  ensure
+    GC.start
+  end
+end
+
+fresh = ReadText.read(FreshText.new, text, 0)
+p [fresh, fresh.equal?(text)]

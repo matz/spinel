@@ -107,9 +107,9 @@ int emit_op_hash_default_proc(Compiler *c, const BopCtx *x, Buf *b) {
     buf_puts(b, "), (sp_Proc *)NULL)");
     return 1;
   }
-  static char hdp_done[2];
-  if (!hdp_done[hdp_v]) {
-    hdp_done[hdp_v] = 1;
+  char key[64];
+  snprintf(key, sizeof key, " _hdp_tramp_%s(", hnn);
+  if (!g_procs.p || !strstr(g_procs.p, key)) {
     if (!g_needs_proc_poly_argslot) {
       g_needs_proc_poly_argslot = 1;
       buf_puts(&g_proc_protos, "extern SP_TLS sp_RbVal _sp_proc_poly_args[SP_PROC_ARG_SLOTS];\n");

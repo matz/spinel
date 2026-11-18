@@ -1539,8 +1539,8 @@ int elab_class_ref_at(Compiler *c, int node, int *core) {
   }
   if (core) *core = co;
   if (r->check) lr_check_class_ref(c, node, ci);
-  /* (asked again: the answer's own asks can renew the memo under the one taken above) */
-  if (memo && ci >= LR_BUILTIN && co >= -1 && (memo = lr_cref_memo(c)) && node < r->ncref) { memo[2 * node] = ci - LR_BUILTIN + 1; memo[2 * node + 1] = co + 2; }
+  /* (asked again: the answer's own asks can renew the memo under the one taken above; an unplaced node's unknown is not kept, since a later placement can answer it) */
+  if (memo && framed && ci >= LR_BUILTIN && co >= -1 && (memo = lr_cref_memo(c)) && node < r->ncref) { memo[2 * node] = ci - LR_BUILTIN + 1; memo[2 * node + 1] = co + 2; }
   return ci;
 }
 

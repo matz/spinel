@@ -24,18 +24,42 @@
 
 sp_int sp_poly_arg_int(sp_RbVal v) { return sp_poly_arg_int_chk(v); }
 
+/* A sole chomp: arrives with its truth value. General keyword lists
+   still have their original keys for argument checking at method entry. */
+static sp_bool sp_string_line_chomp(sp_RbVal keywords) {
+  if (keywords.tag == SP_TAG_BOOL) return keywords.v.b;
+  if (sp_poly_nil_p(keywords)) return 0;
+  SP_GC_ROOT_RBVAL(keywords);
+  sp_bool chomp = 0;
+  char unknown[256] = "";
+  int used = 0, count = 0;
+  sp_int length = sp_poly_length(keywords);
+  for (sp_int i = 0; i < length; i++) {
+    sp_RbVal key, value;
+    sp_poly_hash_pair(keywords, i, &key, &value);
+    if (key.tag == SP_TAG_SYM && (sp_sym)key.v.i == sp_sym_intern("chomp"))
+      chomp = sp_poly_truthy(value);
+    else sp_kwargs_list_add(unknown, &used, &count, sp_poly_inspect(key));
+  }
+  if (count) sp_raise_kw_error("unknown", count, unknown);
+  return chomp;
+}
+
 sp_StrArray *sp_poly_string_lines(sp_RbVal receiver, sp_RbVal separator,
-                                sp_bool chomp, const char *method) {
+                                sp_RbVal keywords, sp_int argc, const char *method) {
   SP_GC_ROOT_RBVAL(receiver);
   SP_GC_ROOT_RBVAL(separator);
+  SP_GC_ROOT_RBVAL(keywords);
   if (!sp_poly_face_str_ok(receiver)) sp_raise_poly_nomethod(method, receiver);
+  if (argc > 1) sp_raise_arity(argc, 0, 1, NULL);
+  sp_bool chomp = sp_string_line_chomp(keywords);
   sp_StrArray *lines = sp_StrArray_new();
   SP_GC_ROOT(lines);
-  if (sp_poly_nil_p(separator)) {
+  if (argc && sp_poly_nil_p(separator)) {
     sp_StrArray_push_e(lines, sp_poly_as_strbuf(receiver));
     return lines;
   }
-  const char *sep = sp_poly_arg_str_chk(separator);
+  const char *sep = argc ? sp_poly_arg_str_chk(separator) : SPL("\n");
   SP_GC_ROOT_STR(sep);
   const char *text = sp_poly_recv_s(receiver, method);
   SP_GC_ROOT_STR(text);
@@ -48,31 +72,38 @@ sp_StrArray *sp_poly_string_lines(sp_RbVal receiver, sp_RbVal separator,
 typedef struct {
   sp_RbVal receiver;
   sp_RbVal separator;
-  sp_bool chomp;
+  sp_RbVal keywords;
+  sp_int argc;
 } sp_StringLineCap;
 
 static void sp_string_line_scan(void *p) {
   sp_StringLineCap *cap = (sp_StringLineCap *)p;
   sp_mark_rbval(cap->receiver);
   sp_mark_rbval(cap->separator);
+  sp_mark_rbval(cap->keywords);
 }
 
 static void sp_string_line_gen(sp_Fiber *f) {
   sp_StringLineCap *cap = (sp_StringLineCap *)f->user_data;
   SP_GC_ROOT(cap);
-  if (cap->separator.tag == SP_TAG_NIL) {
+  if (cap->argc > 1) sp_raise_arity(cap->argc, 0, 1, NULL);
+  sp_bool chomp = sp_string_line_chomp(cap->keywords);
+  if (cap->argc && sp_poly_nil_p(cap->separator)) {
     sp_Fiber_yield(cap->receiver);
   }
   else {
     /* Convert the captured argument and take the byte views at the start of
        each walk. A mutation during a yield cannot change its remaining lines. */
-    const char *sep = sp_poly_arg_str_chk(cap->separator);
+    const char *sep = SPL("\n");
     SP_GC_ROOT_STR(sep);
-    sep = sp_str_dup(sep);
+    if (cap->argc) {
+      sep = sp_poly_arg_str_chk(cap->separator);
+      sep = sp_str_dup(sep);
+    }
     const char *text = sp_str_dup(sp_poly_recv_s(cap->receiver, "each_line"));
     SP_GC_ROOT_STR(text);
     size_t offset = 0;
-    for (sp_String *line; (line = sp_str_line_next(text, sep, &offset, cap->chomp));)
+    for (sp_String *line; (line = sp_str_line_next(text, sep, &offset, chomp));)
       sp_Fiber_yield(sp_box_obj(line, SP_BUILTIN_STRBUF));
   }
   sp_gc_wb((void *)f);
@@ -80,18 +111,20 @@ static void sp_string_line_gen(sp_Fiber *f) {
 }
 
 sp_Enumerator *sp_poly_string_line_enum(sp_RbVal receiver, sp_RbVal separator,
-                                      sp_bool chomp, sp_bool chomp_given) {
+                                      sp_RbVal keywords, sp_int argc, sp_bool chomp_given) {
   SP_GC_ROOT_RBVAL(receiver);
   SP_GC_ROOT_RBVAL(separator);
+  SP_GC_ROOT_RBVAL(keywords);
   if (!sp_poly_face_str_ok(receiver)) sp_raise_poly_nomethod("each_line", receiver);
   sp_StringLineCap *cap = (sp_StringLineCap *)sp_gc_alloc(sizeof *cap, NULL, sp_string_line_scan);
   SP_GC_ROOT(cap);
   cap->receiver = receiver;
   cap->separator = separator;
-  cap->chomp = chomp;
+  cap->keywords = keywords;
+  cap->argc = argc;
   sp_Enumerator *e = sp_Enumerator_new_gen(sp_string_line_gen, cap, sp_box_nil());
-  const char *label = chomp_given
-    ? (chomp ? SPL("each_line(chomp: true)") : SPL("each_line(chomp: false)"))
+  const char *label = chomp_given && keywords.tag == SP_TAG_BOOL
+    ? (keywords.v.b ? SPL("each_line(chomp: true)") : SPL("each_line(chomp: false)"))
     : SPL("each_line");
   return sp_enum_with_src(e, receiver, label);
 }

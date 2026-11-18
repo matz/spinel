@@ -6230,7 +6230,10 @@ static int emit_array_call_arms(Compiler *c, int id, Buf *b) {
   if (recv >= 0 && rt == TY_POLY && sp_streq(name, "lines") && nt_ref(nt, id, "block") < 0 &&
       (argc == 0 || poly_lines_args(c, argc, argv)) && string_line_args(c, argc, argv) &&
       !user_defines_or_reads(c, name)) {
+    int boxed = repr_of(c, id).kind == RK_BOXED;
+    if (boxed) buf_puts(b, "sp_box_str_array(");
     emit_string_lines_array(c, recv, argc, argv, b);
+    if (boxed) buf_puts(b, ")");
     return 1;
   }
   if (recv >= 0 && rt == TY_POLY && sp_streq(name, "each_line") &&
@@ -6244,10 +6247,10 @@ static int emit_array_call_arms(Compiler *c, int id, Buf *b) {
       nt_kind(nt, nt_ref(nt, id, "block")) == NK_BlockNode &&
       (argc == 0 || poly_lines_args(c, argc, argv)) && string_line_args(c, argc, argv) &&
       !user_defines_or_reads(c, name)) {
-    int tr, ts, tc, ta = ++g_tmp;
-    emit_string_line_operands(c, recv, argc, argv, &tr, &ts, &tc, b);
-    buf_printf(b, "sp_StrArray *_t%d = sp_poly_string_lines(_t%d, _t%d, _t%d, \"%s\"); SP_GC_ROOT(_t%d);",
-               ta, tr, ts, tc, name, ta);
+    int tr, ts, tc, n, ta = ++g_tmp;
+    emit_string_line_operands(c, recv, argc, argv, &tr, &ts, &tc, &n, b);
+    buf_printf(b, "sp_StrArray *_t%d = sp_poly_string_lines(_t%d, _t%d, _t%d, _t%d, \"%s\"); SP_GC_ROOT(_t%d);",
+               ta, tr, ts, tc, n, name, ta);
     int eblk = nt_ref(nt, id, "block");
     Repr result = repr_of(c, id);
     const char *ebp = block_param_name(c, eblk, 0);

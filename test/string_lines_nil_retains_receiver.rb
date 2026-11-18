@@ -27,3 +27,32 @@ answer = record(log, :receiver, text).lines(record(log, :separator, (text = +"ne
   p part.equal?(saved)
 end
 p [answer.equal?(saved), log, text]
+
+separators = ["|"]
+p "a|b".each_line(*separators, chomp: (separators[0] = "/"; true)).to_a
+enumerator = "a|b".each_line(*["|", "/"])
+p enumerator.class
+begin
+  enumerator.to_a
+rescue ArgumentError => error
+  p error.message
+end
+
+class LineOverride < String
+  def lines = super(nil)
+end
+line = LineOverride.new("label")
+p line.lines.first.equal?(line)
+
+def keyword_value
+  puts "keyword evaluated"
+  3
+end
+
+enumerator = "a|b".each_line("|", bogus: keyword_value)
+p enumerator.class
+begin
+  enumerator.next
+rescue ArgumentError => error
+  p error.message
+end

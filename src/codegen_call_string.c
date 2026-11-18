@@ -1230,8 +1230,8 @@ int emit_call_symbol_bool_string_arms(Compiler *c, int id, Buf *b, const NodeTab
     int th_ech = 0;
     NodeKind rk_ech = nt_kind(nt, recv);
     Buf hb_ech; memset(&hb_ech, 0, sizeof hb_ech);
-    int tr_line = 0, ts_line = 0, tc_line = 0;
-    if (is_line) emit_string_line_operands(c, recv, argc, argv, &tr_line, &ts_line, &tc_line, b);
+    int tr_line = 0, ts_line = 0, tc_line = 0, n_line = 0;
+    if (is_line) emit_string_line_operands(c, recv, argc, argv, &tr_line, &ts_line, &tc_line, &n_line, b);
     else {
       Buf rb = expr_buf(c, recv);
       if ((rk_ech == NK_InstanceVariableReadNode || rk_ech == NK_ClassVariableReadNode ||
@@ -1254,8 +1254,8 @@ int emit_call_symbol_bool_string_arms(Compiler *c, int id, Buf *b, const NodeTab
     }
     if (is_line) {
       int tl = ++g_tmp;
-      buf_printf(b, "sp_StrArray *_t%d = sp_poly_string_lines(_t%d, _t%d, _t%d, \"%s\"); ",
-                 tl, tr_line, ts_line, tc_line, name);
+      buf_printf(b, "sp_StrArray *_t%d = sp_poly_string_lines(_t%d, _t%d, _t%d, _t%d, \"%s\"); ",
+                 tl, tr_line, ts_line, tc_line, n_line, name);
       /* The array of lines is this loop's own value -- nothing in the Ruby
          program names it -- and its length is the loop bound, re-read every
          turn. Unrooted, a block that allocated collected it, and the loop
@@ -1757,9 +1757,9 @@ int str_fresh_value(Compiler *c, int n) {
    receiver raises under dedup (#9347). The receiver the nil fact says is
    never nil keeps the plain call. */
 void emit_string_lines_array(Compiler *c, int recv, int argc, const int *argv, Buf *b) {
-  int tr, ts, tc;
-  emit_string_line_operands(c, recv, argc, argv, &tr, &ts, &tc, b);
-  buf_printf(b, "sp_poly_string_lines(_t%d, _t%d, _t%d, \"lines\"); })", tr, ts, tc);
+  int tr, ts, tc, n;
+  emit_string_line_operands(c, recv, argc, argv, &tr, &ts, &tc, &n, b);
+  buf_printf(b, "sp_poly_string_lines(_t%d, _t%d, _t%d, _t%d, \"lines\"); })", tr, ts, tc, n);
 }
 
 int emit_op_string_lines(Compiler *c, const BopCtx *x, Buf *b) {

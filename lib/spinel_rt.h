@@ -21857,9 +21857,9 @@ sp_Enumerator *sp_Enumerator_new_gen(void (*gen)(sp_Fiber *), void *cap, sp_RbVa
    (lib/sp_cold.c) */
 sp_Enumerator *sp_enum_str_each_h(sp_String *h, const char *meth);
 sp_Enumerator *sp_poly_string_line_enum(sp_RbVal receiver, sp_RbVal separator,
-                                      sp_bool chomp, sp_bool chomp_given);
+                                      sp_RbVal keywords, sp_int argc, sp_bool chomp_given);
 sp_StrArray *sp_poly_string_lines(sp_RbVal receiver, sp_RbVal separator,
-                                sp_bool chomp, const char *method);
+                                sp_RbVal keywords, sp_int argc, const char *method);
 /* A blockless each_char / each_line / each_byte / each_codepoint on a boxed
    receiver: CRuby's Enumerator, as on a typed String. A box of a shared
    String's handle (--share-strings) gives the Enumerator over that handle,

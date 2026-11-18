@@ -1727,12 +1727,13 @@ int poly_lines_args(Compiler *c, int argc, const int *argv) {
   return 0;
 }
 
-/* One positional separator, possibly forwarded through a splat, and a
-   literal keyword hash. The separator is converted when the walk starts. */
+/* A lone positional splat and a literal keyword hash can be captured
+   without general argument packing. Explicit positionals keep their count. */
 int string_line_args(Compiler *c, int argc, const int *argv) {
   const NodeTable *nt = c->nt;
   int kw = nt_argv_kwh(nt, argv, argc);
-  return argc - (kw >= 0) <= 1 &&
+  int positional = argc - (kw >= 0);
+  return (positional <= 1 || !nt_argv_has_splat(nt, argv, positional)) &&
          !nt_argv_has(nt, argv, argc, NT_ARG_FORWARDING | NT_ARG_BLOCK) &&
          (kw < 0 || !nt_hash_has_splat(nt, kw));
 }

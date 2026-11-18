@@ -10761,6 +10761,19 @@ static void sp_poly_match_check(sp_RbVal a, const char *m, sp_int n, sp_RbVal *a
         (b.tag == SP_TAG_OBJ && (b.cls_id == SP_BUILTIN_STRBUF || b.cls_id == SP_BUILTIN_REGEX))))
     sp_scan_bad_pattern(b);
 }
+/* Coercing the position can run Ruby code that changes the subject. */
+static sp_bool sp_poly_match_p_at_arg(sp_RbVal subject, mrb_regexp_pattern *pattern, sp_RbVal position) {
+  SP_GC_ROOT_RBVAL(subject);
+  SP_GC_ROOT_RBVAL(position);
+  sp_RbVal boxed_pattern = sp_box_nullable_obj(pattern, SP_BUILTIN_REGEX);
+  if (subject.tag != SP_TAG_SYM && !sp_rbval_is_string(subject)) {
+    sp_RbVal args[] = {boxed_pattern, position};
+    sp_poly_match_check(subject, "match?", 2, args);
+    return FALSE;
+  }
+  sp_int offset = sp_poly_arg_int_chk(position);
+  return sp_poly_match_p_at(subject, boxed_pattern, offset);
+}
 /* start_with? of a candidate known only at run time: a Regexp matches at
    the start of s, anything else is a String prefix or CRuby's TypeError */
 static sp_bool sp_str_start_with_boxed(const char *s, sp_RbVal pat) SP_UNUSED;

@@ -71,6 +71,27 @@ static void emit_re_subject_at(Compiler *c, const char *fn, const char *pat, int
   emit_int_expr(c, pos, b); buf_puts(b, "); })");
 }
 
+/* Hold the subject through evaluation and integer coercion of the position.
+   Read its bytes only when the matcher is ready to consume them. */
+static void emit_string_match_p_at(Compiler *c, int recv, TyKind rt, const char *pattern, int pos, Buf *b) {
+  int subject = ++g_tmp, position = ++g_tmp;
+  buf_puts(b, "({ ");
+  if (rt == TY_STRING) {
+    subject = hold_operand(c, recv, TY_STRING, 0, subject, 1, " ", b);
+    position = hold_operand(c, pos, TY_POLY, 1, position, 1, " ", b);
+    if (!recv_never_nil(c, recv))
+      buf_printf(b, "if (!SP_STR_B(_t%d)) sp_nil_recv(\"match?\"); ", subject);
+    int offset = ++g_tmp;
+    buf_printf(b, "sp_int _t%d = sp_poly_arg_int_chk(_t%d); "
+                  "sp_str_re_match_p_at(%s, SP_STR_B(_t%d), _t%d); })",
+               offset, position, pattern, subject, offset);
+  } else {
+    subject = hold_operand(c, recv, TY_POLY, 1, subject, 1, " ", b);
+    position = hold_operand(c, pos, TY_POLY, 1, position, 1, " ", b);
+    buf_printf(b, "sp_poly_match_p_at_arg(_t%d, %s, _t%d); })", subject, pattern, position);
+  }
+}
+
 /* The body of a match block, inside its hit arm with m bound: each
    statement's setup (an Array literal's pushes, an argument's temp) lands
    beside it rather than hoisted before the match, where it read m's nil;
@@ -336,67 +357,37 @@ no_gsub_enum:
     /* match?(pattern) or match?(pattern, pos): another count is the
        boxed dispatch's, which raises the arity error */
     if (are >= 0 && sp_streq(name, "match?") && rpoly && argc > 2) return 0;
-    if (are >= 0 && sp_streq(name, "match?") && rpoly) {
-      int tv = ++g_tmp, tr = ++g_tmp;
-      /* boxed where the analyzer counted a class's match? this call cannot
-         reach (a one-argument native one, for `match?(re, pos)`) */
-      int bx = repr_of(c, id).kind == RK_BOXED;
-      if (bx) buf_puts(b, "sp_box_bool(");
-      /* The receiver is held, rooted, while the position runs, which may
-         allocate; the String it reads is taken after. A shared-string handle
-         is a String (#4279), its bytes kept by the held handle. */
-      buf_printf(b, "({ sp_RbVal _t%d = ", tr); emit_expr(c, recv, b);
-      buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d);", tr);
-      /* the position runs before the receiver is judged, whatever it is */
-      int tq = 0;
-      if (argc == 2) {
-        tq = ++g_tmp;
-        buf_printf(b, " sp_RbVal _t%d = ", tq); emit_boxed(c, argv[1], b);
-        buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d);", tq);
-      }
-      buf_printf(b, " sp_RbVal _t%d = _t%d;", tv, tr);
-      buf_printf(b, " const char *_s%d = _t%d.tag == SP_TAG_SYM ? sp_sym_to_s((sp_sym)_t%d.v.i) : sp_rbval_string_bytes(_t%d);",
-                 tv, tv, tv, tv);
-      buf_printf(b, " (sp_bool)((sp_rbval_is_string(_t%d) || _t%d.tag == SP_TAG_SYM) ? ", tv, tv);
-      if (argc == 1) buf_printf(b, "sp_re_match_p(sp_re_pat_%d, _s%d)", are, tv);
-      else buf_printf(b, "sp_str_re_match_p_at(sp_re_pat_%d, _s%d, sp_poly_arg_int_chk(_t%d))", are, tv, tq);
-      /* any other receiver raises as CRuby does (sp_poly_match_check): a
-         Regexp's TypeError for the pattern, anything else's NoMethodError
-         (nil reads as itself) with the pattern and the position as its
-         args */
-      buf_printf(b, " : (sp_poly_match_check(_t%d, \"match?\", %d, (sp_RbVal[]){", tv, argc);
-      emit_boxed(c, argv[0], b);
-      if (argc == 2) buf_printf(b, ", _t%d", tq);
-      buf_puts(b, "}), 0)); })");
-      if (bx) buf_puts(b, ")");
+    if (are >= 0 && sp_streq(name, "match?") && argc == 2 && (rpoly || rt == TY_STRING)) {
+      char pattern[32];
+      snprintf(pattern, sizeof pattern, "sp_re_pat_%d", are);
+      int boxed = repr_of(c, id).kind == RK_BOXED;
+      if (boxed) buf_puts(b, "sp_box_bool(");
+      emit_string_match_p_at(c, recv, rt, pattern, argv[1], b);
+      if (boxed) buf_puts(b, ")");
       return 1;
     }
-    /* String#match? on a String. Any other receiver declines: the boxed
-       dispatch asks this for a Class value's default arm
-       (emit_poly_cls_value_builtin), where it handed the class to the
-       matcher as its String */
-    if (are >= 0 && sp_streq(name, "match?") && rt == TY_STRING) {
-      /* the matcher takes a NULL subject for no match, as Regexp#match?(nil)
-         answers: a receiver that can be nil raises nil's NoMethodError first */
-      int nn = !recv_never_nil(c, recv);
-      if (argc == 1) {
-        buf_printf(b, "sp_re_match_p(sp_re_pat_%d, %s", are, nn ? "sp_nil_recv_named(" : "");
-        emit_expr(c, recv, b); buf_puts(b, nn ? ", \"match?\"))" : ")");
-        return 1;
-      }
-      /* a position that runs code runs ahead of the test, as CRuby runs the
-         arguments ahead of the missing method: the receiver and it are held */
-      if (nn && subtree_has_side_effect(c, argv[1]) && !arg_ran_first(argv[1], 0)) {
-        int tr = ++g_tmp, tp = ++g_tmp;
-        buf_printf(b, "({ const char *_t%d = ", tr); emit_expr(c, recv, b); buf_puts(b, "; ");
-        if (operand_may_allocate(c, argv[1])) buf_printf(b, "SP_GC_ROOT_STR(_t%d); ", tr);
-        buf_printf(b, "sp_int _t%d = ", tp); emit_int_expr(c, argv[1], b); buf_puts(b, "; ");
-        nil_recv_check("match?", tr, b);
-        buf_printf(b, " sp_str_re_match_p_at(sp_re_pat_%d, _t%d, _t%d); })", are, tr, tp);
-        return 1;
-      }
-      buf_printf(b, "sp_str_re_match_p_at(sp_re_pat_%d, %s", are, nn ? "sp_nil_recv_named(" : ""); emit_expr(c, recv, b);
-      buf_puts(b, nn ? ", \"match?\"), " : ", "); emit_int_expr(c, argv[1], b); buf_puts(b, ")");
+    if (are >= 0 && sp_streq(name, "match?") && rpoly) {
+      int subject = ++g_tmp;
+      int boxed = repr_of(c, id).kind == RK_BOXED;
+      if (boxed) buf_puts(b, "sp_box_bool(");
+      buf_printf(b, "({ sp_RbVal _t%d = ", subject);
+      emit_expr(c, recv, b);
+      buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); "
+                    "(sp_bool)(sp_rbval_is_string(_t%d) ? sp_re_match_p(sp_re_pat_%d, sp_rbval_string_bytes(_t%d))"
+                    " : _t%d.tag == SP_TAG_SYM ? sp_re_match_p(sp_re_pat_%d, sp_sym_to_s((sp_sym)_t%d.v.i))"
+                    " : (sp_poly_match_check(_t%d, \"match?\", 1, (sp_RbVal[]){",
+                 subject, subject, are, subject, subject, are, subject, subject);
+      emit_boxed(c, argv[0], b);
+      buf_puts(b, "}), 0)); })");
+      if (boxed) buf_puts(b, ")");
+      return 1;
+    }
+    /* A nullable String receiver raises before the matcher. */
+    if (are >= 0 && sp_streq(name, "match?") && rt == TY_STRING && argc == 1) {
+      int nullable = !recv_never_nil(c, recv);
+      buf_printf(b, "sp_re_match_p(sp_re_pat_%d, %s", are, nullable ? "sp_nil_recv_named(" : "");
+      emit_expr(c, recv, b);
+      buf_puts(b, nullable ? ", \"match?\"))" : ")");
       return 1;
     }
     /* a program class answers match itself: the boxed dispatch has its arm,
@@ -571,9 +562,11 @@ no_gsub_enum:
                reach, as for a literal pattern */
             int bx = repr_of(c, id).kind == RK_BOXED;
             if (bx) buf_puts(b, "sp_box_bool(");
+            if (argc == 2)
+              emit_string_match_p_at(c, recv, rt, rp.p, argv[1], b);
             /* A symbol receiver matches over its name, so feed the runtime
                pattern the symbol's string rather than the raw sp_sym. */
-            if (rt == TY_SYMBOL) { buf_printf(b, "sp_re_match_p(%s, sp_sym_to_s(", rp.p); emit_expr(c, recv, b); buf_puts(b, "))"); }
+            else if (rt == TY_SYMBOL) { buf_printf(b, "sp_re_match_p(%s, sp_sym_to_s(", rp.p); emit_expr(c, recv, b); buf_puts(b, "))"); }
             /* emit_str_expr, not emit_expr: a poly receiver (a String read out
                of a widened container) needs coercing into the const char* slot
                the same way the precompiled-literal arms do it (#3389). */
@@ -581,28 +574,19 @@ no_gsub_enum:
                pattern's arm has it: held with the pattern and the position
                when one of them runs code, and tested once they have run) */
             else if (rt == TY_STRING && !recv_never_nil(c, recv) &&
-                     ((subtree_has_side_effect(c, argv[0]) && !arg_ran_first(argv[0], 0)) ||
-                      (argc == 2 && subtree_has_side_effect(c, argv[1]) && !arg_ran_first(argv[1], 0)))) {
-              int tr = ++g_tmp, tq = ++g_tmp, tp = argc == 2 ? ++g_tmp : 0;
+                     subtree_has_side_effect(c, argv[0]) && !arg_ran_first(argv[0], 0)) {
+              int tr = ++g_tmp, tq = ++g_tmp;
               buf_printf(b, "({ const char *_t%d = ", tr); emit_str_expr(c, recv, b); buf_puts(b, "; ");
-              if (operand_may_allocate(c, argv[0]) || (tp && operand_may_allocate(c, argv[1])))
+              if (operand_may_allocate(c, argv[0]))
                 buf_printf(b, "SP_GC_ROOT_STR(_t%d); ", tr);
               buf_printf(b, "mrb_regexp_pattern *_t%d = %s; ", tq, rp.p);
-              if (tp) { buf_printf(b, "sp_int _t%d = ", tp); emit_int_expr(c, argv[1], b); buf_puts(b, "; "); }
               nil_recv_check("match?", tr, b);
-              if (tp) buf_printf(b, " sp_str_re_match_p_at(_t%d, _t%d, _t%d); })", tq, tr, tp);
-              else buf_printf(b, " sp_re_match_p(_t%d, _t%d); })", tq, tr);
+              buf_printf(b, " sp_re_match_p(_t%d, _t%d); })", tq, tr);
             }
-            else if (argc == 1) {
+            else {
               int nn = rt == TY_STRING && !recv_never_nil(c, recv);
               buf_printf(b, "sp_re_match_p(%s, %s", rp.p, nn ? "sp_nil_recv_named(" : "");
               emit_str_expr(c, recv, b); buf_puts(b, nn ? ", \"match?\"))" : ")");
-            }
-            /* match?(re, pos) starts the scan at pos */
-            else {
-              int nn = rt == TY_STRING && !recv_never_nil(c, recv);
-              buf_printf(b, "sp_str_re_match_p_at(%s, %s", rp.p, nn ? "sp_nil_recv_named(" : ""); emit_str_expr(c, recv, b);
-              buf_puts(b, nn ? ", \"match?\"), " : ", "); emit_int_expr(c, argv[1], b); buf_puts(b, ")");
             }
             if (bx) buf_puts(b, ")");
             free(rp.p); return 1;

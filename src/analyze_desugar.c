@@ -28563,6 +28563,31 @@ static int mm_has_super(const NodeTable *nt, int n) {
   }
   return 0;
 }
+/* mm_has_super's answer for a method_missing scope, kept while the node
+   table stands as it was asked: an edit may move a super into or out of
+   the body, a new node be one. desugar_missing_method_calls asks it for
+   every call site and every class the receiver can be, each round, and
+   the walk over a framework's method_missing bodies was most of a large
+   program's fixpoint. 0: not asked; 1: no super; 2: a super. */
+static signed char *mm_super_memo;
+static int mm_super_n;
+static unsigned long mm_super_edits;
+static unsigned mm_super_version;
+static int mm_scope_has_super(Compiler *c, int mi) {
+  const NodeTable *nt = c->nt;
+  if (!mm_super_memo || mm_super_n < c->nscopes || mm_super_edits != nt->edits || mm_super_version != nt->version) {
+    if (mm_super_n < c->nscopes) {
+      free(mm_super_memo);
+      mm_super_n = c->nscopes;
+      mm_super_memo = malloc((size_t)mm_super_n);
+      if (!mm_super_memo) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    }
+    memset(mm_super_memo, 0, (size_t)mm_super_n);
+    mm_super_edits = nt->edits; mm_super_version = nt->version;
+  }
+  if (!mm_super_memo[mi]) mm_super_memo[mi] = mm_has_super(nt, c->scopes[mi].body) ? 2 : 1;
+  return mm_super_memo[mi] == 2;
+}
 /* the program's method_missing class k answers with, or -1; not one that
    calls super, whose BasicObject#method_missing (the NoMethodError naming
    the call) a spliced super does not reach */
@@ -28571,7 +28596,7 @@ static int mm_user(Compiler *c, int id, int k) {
   if (mi < 0 || mi >= c->nscopes) return -1;
   int d = c->scopes[mi].def_node;
   if (d < 0 || nt_int(c->nt, d, "node_bi", 0)) return -1;
-  return mm_has_super(c->nt, c->scopes[mi].body) ? -1 : mi;
+  return mm_scope_has_super(c, mi) ? -1 : mi;
 }
 /* `r.method_missing(:nm, <args>, &blk)` on a copy of r, with id's facts */
 static int mm_call(Compiler *c, NodeTable *nt, int id, int r, const char *nm, int args, int blk) {

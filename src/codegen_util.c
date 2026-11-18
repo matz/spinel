@@ -2033,6 +2033,40 @@ int bigl_intern(const char *v) {
   g_bigl_val[g_bigl_n] = strdup(v);
   return g_bigl_n++;
 }
+int bigl_lookup(const char *v) {
+  if (!v) return -1;
+  for (int i = 0; i < g_bigl_n; i++) if (sp_streq(g_bigl_val[i], v)) return i;
+  return -1;
+}
+void bigl_int_text(Compiler *c, int lit, char out[32]) {
+  snprintf(out, 32, "%lld", (long long)nt_int(c->nt, lit, "value", 0));
+}
+int bigl_shift_text(Compiler *c, int call, char *out, size_t cap) {
+  const NodeTable *nt = c->nt;
+  if (call < 0 || nt_kind(nt, call) != NK_CallNode || !sp_streq(nt_str(nt, call, "name"), "<<")) return 0;
+  int recv = nt_ref(nt, call, "receiver"), argc = 0;
+  const int *argv = call_args(nt, call, &argc);
+  if (recv < 0 || argc != 1 || nt_kind(nt, recv) != NK_IntegerNode || nt_kind(nt, argv[0]) != NK_IntegerNode) return 0;
+  if (nt_str(nt, recv, "bigval") || nt_str(nt, argv[0], "bigval") || !repr_of(c, call).big) return 0;
+  long long v = (long long)nt_int(nt, recv, "value", 0), n = (long long)nt_int(nt, argv[0], "value", 0);
+  if (n < 0 || n > 1024 || v == 0) return 0;
+  /* |v| * 2**n in decimal, least significant digit first, by doubling */
+  unsigned long long u = v < 0 ? 0ULL - (unsigned long long)v : (unsigned long long)v;
+  char dig[400]; int len = 0;
+  while (u) { dig[len++] = (char)(u % 10); u /= 10; }
+  for (long long k = 0; k < n; k++) {
+    int carry = 0;
+    for (int i = 0; i < len; i++) { int d = dig[i] * 2 + carry; dig[i] = (char)(d % 10); carry = d / 10; }
+    if (carry) { if (len >= (int)sizeof dig) return 0; dig[len++] = (char)carry; }
+  }
+  size_t need = (size_t)len + (v < 0) + 1;
+  if (need > cap) return 0;
+  size_t o = 0;
+  if (v < 0) out[o++] = '-';
+  for (int i = len - 1; i >= 0; i--) out[o++] = (char)('0' + dig[i]);
+  out[o] = 0;
+  return 1;
+}
 int g_uses_symbols = 0;
 int g_uses_marshal = 0;
 int g_emit_sym_rt = 0;
@@ -5297,6 +5331,7 @@ void emit_coerce_text(Compiler *c, int node, TyKind from, TyKind slot, int how,
     RCCT(CF_NIL_SENT);
     return;
   case CF_INT2BIG:
+    if (emit_bigint_lit(c, node, b)) { RCCT(CF_INT2BIG); return; }
     buf_printf(b, "sp_bigint_new_int(%s)", text);
     RCCT(CF_INT2BIG);
     return;

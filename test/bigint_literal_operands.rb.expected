@@ -1,0 +1,25 @@
+and: 1
+or: 18446744073709551617
+xor: -18446744073709551618
+and negative literal: 18446744073709551616
+compare zero: true
+compare: true
+spaceship: 1
+literal on the left: -1
+case equality: false
+plus: 18446744073709551618
+minus: 18446744073709551614
+times: -36893488147419103234
+shift past a word: 18446744073709551616
+negative shift past a word: -3541774862152233910272
+shift that fits: 40
+wrap negative: -5
+wrap positive: 5
+wrap past: 9
+ivar or-write: 0
+default argument: 18446744073709551615
+given argument: 18446744073709551618
+chained write: [0, 0]
+word minimum: 18446744073709551616
+ivar from zero: 18446744073709551619
+loop: 22527

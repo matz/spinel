@@ -718,9 +718,29 @@ void emit_bigint_operand(Compiler *c, int node, Buf *b) {
     buf_printf(b, "; _t%d.nil ? NULL : sp_bigint_new_int(_t%d.v); })", tv, tv);
     return;
   }
+  if (emit_bigint_lit(c, node, b)) return;
   buf_puts(b, "sp_bigint_new_int(");
   emit_coerce(c, node, TY_INT, CO_HOLD, "an Integer operand of a Bignum operation", b);
   buf_puts(b, ")");
+}
+/* (bigl_intern_program interned the literal's decimal beside the big ones) */
+int emit_bigint_lit(Compiler *c, int node, Buf *b) {
+  if (node < 0 || nt_kind(c->nt, node) != NK_IntegerNode || nt_str(c->nt, node, "bigval")) return 0;
+  char t[32]; bigl_int_text(c, node, t);
+  int slot = bigl_lookup(t);
+  if (slot < 0) return 0;
+  buf_printf(b, "sp_bigl_get(%d)", slot);
+  return 1;
+}
+/* A literal shift past a word (`1 << 64`): the value the program scan
+   computed and interned (bigl_shift_text) */
+int emit_bigint_shift_lit(Compiler *c, int call, Buf *b) {
+  char txt[400];
+  if (!bigl_shift_text(c, call, txt, sizeof txt)) return 0;
+  int slot = bigl_lookup(txt);
+  if (slot < 0) return 0;
+  buf_printf(b, "sp_bigl_get(%d)", slot);
+  return 1;
 }
 /* Same, reachable from the other emitters (the ivar op-assign). */
 void emit_bigint_operand_ext(Compiler *c, int node, Buf *b) { emit_bigint_operand(c, node, b); }
@@ -17475,10 +17495,10 @@ static int emit_case_eq_call(Compiler *c, int id, Buf *b) {
         (rt == TY_BIGINT || a0 == TY_BIGINT)) {
       buf_puts(b, "(sp_bigint_cmp(");
       if (rt == TY_BIGINT) emit_expr(c, recv, b);
-      else { buf_puts(b, "sp_bigint_new_int("); emit_expr(c, recv, b); buf_puts(b, ")"); }
+      else if (!emit_bigint_lit(c, recv, b)) { buf_puts(b, "sp_bigint_new_int("); emit_expr(c, recv, b); buf_puts(b, ")"); }
       buf_puts(b, ", ");
       if (a0 == TY_BIGINT) emit_expr(c, argv[0], b);
-      else { buf_puts(b, "sp_bigint_new_int("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
+      else if (!emit_bigint_lit(c, argv[0], b)) { buf_puts(b, "sp_bigint_new_int("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
       buf_puts(b, ") == 0)");
       return 1;
     }

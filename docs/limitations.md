@@ -550,8 +550,8 @@ waits, written or held in a variable, a parameter, a keyword or a box (one
 that can hold a number too included), and a value that is not a number
 raises TypeError ("can't convert String into time interval").
 `#addr` / `#peeraddr` return CRuby's numeric 4-element form. The numeric
-host and IP in one address row can share the same String. A new lookup
-produces its own result. `#accept` parks
+host and IP in an address row, including a row from `recvfrom`, can share
+the same String. Each lookup produces its own result. `#accept` parks
 cooperatively on the green-thread scheduler, so a thread-per-connection server
 does not stall its siblings, and socket writes bypass stdio (`#sync` is true,
 as in CRuby).

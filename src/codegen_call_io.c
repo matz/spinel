@@ -736,26 +736,9 @@ static int socket_recv_call(const char *name, int argc) {
    len: the typed arm's, and a socket a block or a thread takes as its
    parameter (a boxed handle) answers the same way. */
 static void emit_io_socket_recv_call(Compiler *c, const char *name, const char *r, int len, Buf *b) {
-  if (sp_streq(name, "recv")) {
-    buf_printf(b, "sp_sock_recv(%s, ", r); emit_int_expr(c, len, b); buf_puts(b, ")");
-    return;
-  }
-  /* recvfrom -> [payload, ["AF_INET", port, ip, ip]]; the payload and
-     the peer's address are new Strings, held while the Arrays are made */
-  int tp = ++g_tmp, ti = ++g_tmp, to = ++g_tmp, ta = ++g_tmp, tw = ++g_tmp;
-  buf_printf(b, "({ const char *_t%d = NULL; sp_int _t%d = 0;"
-                " const char *_t%d = sp_sock_recvfrom(%s, ", ti, tp, to, r);
+  buf_printf(b, "%s(%s, ", sp_streq(name, "recv") ? "sp_sock_recv" : "sp_sock_recvfrom", r);
   emit_int_expr(c, len, b);
-  buf_printf(b, ", &_t%d, &_t%d); SP_GC_ROOT(_t%d); SP_GC_ROOT(_t%d);"
-                " sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);"
-                " sp_PolyArray_push(_t%d, sp_box_str(strchr(_t%d, ':') ? SPL(\"AF_INET6\") : SPL(\"AF_INET\")));"
-                " sp_PolyArray_push(_t%d, sp_box_int(_t%d));"
-                " sp_PolyArray_push(_t%d, sp_box_str(_t%d));"
-                " sp_PolyArray_push(_t%d, sp_box_str(_t%d));"
-                " sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);"
-                " sp_PolyArray_push(_t%d, sp_box_str(_t%d));"
-                " sp_PolyArray_push(_t%d, sp_box_poly_array(_t%d)); _t%d; })",
-             ti, tp, ti, to, ta, ta, ta, ti, ta, tp, ta, ti, ta, ti, tw, tw, tw, to, tw, ta, tw);
+  buf_puts(b, ")");
 }
 
 /* The socket calls emit_io_socket_call answers, at the arities it does:

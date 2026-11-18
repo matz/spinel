@@ -321,7 +321,7 @@ sp_int sp_sock_send(sp_File *f, const char *data, sp_int len, sp_int flags, cons
 sp_int sp_sock_shutdown(sp_File *f, sp_int how);
 sp_int sp_sock_const(const char *n);
 const char *sp_sock_recv(sp_File *f, sp_int len);
-const char *sp_sock_recvfrom(sp_File *f, sp_int len, const char **ip_out, sp_int *port_out);
+sp_PolyArray *sp_sock_recvfrom(sp_File *f, sp_int len);
 sp_int sp_sock_optval(sp_RbVal v);
 sp_int sp_sock_setsockopt(sp_File *f, sp_int level, sp_int opt, sp_int value);
 sp_SockOpt *sp_sock_getsockopt(sp_File *f, sp_int level, sp_int opt);

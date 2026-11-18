@@ -12180,11 +12180,20 @@ static int desugar_missing_method_obj(Compiler *c) {
     const char *sym = method_sym_arg(c, id);
     int recv = nt_ref(nt, id, "receiver"), k = -1, sc = c->nscope[id];
     TyKind rt = TY_UNKNOWN;
-    if (!sym || !sym[0] || strlen(sym) > 200 || strncmp(sym, "__bam_", 6) == 0) continue;
+    if (!sym || !sym[0] || strlen(sym) > 200) continue;
     if (recv >= 0) rt = infer_type(c, recv);
     else if (sc >= 0 && c->scopes[sc].class_id >= 0 && !c->scopes[sc].is_cmethod) rt = ty_object(c->scopes[sc].class_id);
-    if (!ty_is_object(rt) || (k = ty_object_class(rt)) < 0 || is_builtin_reopen(c->classes[k].name) ||
-        !cplan_capture_misses(c, id, k, sym)) continue;
+    if (strncmp(sym, "__bam_", 6) == 0) {
+      int an = 0;
+      const int *av = call_args(nt, id, &an);
+      sym = an == 1 ? nt_str(nt, av[0], "bam_sym") : NULL;
+      if (!sym || !is_string_boxed_reader(sym)) continue;
+      if (rt == TY_STRING || rt == TY_STRBUF || rt == TY_POLY) k = comp_core_class(c, CORE_STRING);
+    } else if (ty_is_object(rt)) {
+      int cls = ty_object_class(rt);
+      if (cls >= 0 && !is_builtin_reopen(c->classes[cls].name)) k = cls;
+    }
+    if (k < 0 || !cplan_capture_misses(c, id, k, sym)) continue;
     char wname[256], qname[256];
     snprintf(wname, sizeof wname, "__mm %s", sym);
     snprintf(qname, sizeof qname, "__rtm %s", sym);

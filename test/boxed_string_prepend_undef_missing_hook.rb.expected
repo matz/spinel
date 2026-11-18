@@ -1,0 +1,6 @@
+[true, true]
+[:bound, 3]
+[:public, 3]
+[false, true]
+[:bound, 72]
+:public_absent

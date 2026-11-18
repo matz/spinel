@@ -3980,7 +3980,10 @@ static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigne
     int settled = at == ELAB_NO || elab_chain_settled(c, rcls, sg, name, w.from);
     const Scope *in = comp_scope_of(c, id);
     /* (an entry only where the call takes it, in a body that may run; an
-       Kernel.String's Symbol callback can also look up a late history) */
+       Kernel.String's Symbol callback can also look up a late history. A body
+       the fixpoint has not reached yet may be reached later: its answer is
+       not kept, MethodLookup.unsure) */
+    ml->unsure = in && c->ver_built && !comp_scope_may_run(c, (int)(in - c->scopes));
     /* (a variable-like call's entry raises NameError where none is live: its own face's,
        where its else arm raises: one that runs a method is the entry of no face, VerEntry.anyform) */
     int nface = face == VF_VCALL ? VF_VCALL : VF_NONE, nix = face == VF_VCALL ? own : ix;
@@ -4074,7 +4077,7 @@ static int ct_version(Compiler *c, int id, int cls, const char *name, unsigned f
   MethodLookup at = *ml;
   if (memo) at.def_class = -2;   /* (the class it answers, -2 for the table's) */
   int vi = ct_version_at(c, id, cls, name, flags, mi, &at);
-  if (memo) {
+  if (memo && !at.unsure) {
     *ver_memo_slot(c, id, cls, name, flags) = (struct VerMemo){ name_dup(name), id, cls, flags, vi, at.def_class, at.kind, at.why, at.copies, at.n };
     c->ver_memo_n++;
   }

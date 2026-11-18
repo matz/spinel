@@ -364,7 +364,9 @@ typedef enum { ML_METHOD, ML_ENTRY, ML_NONE, ML_OBJECT, ML_TABLE, ML_SINGLETON, 
    (ct_before_versions). Any other why on an ML_NONE (0, or UNASKED from
    cplan_hook_target) is a none the tables give */
 typedef enum { MLW_UNPLACED = 1, MLW_MOVES, MLW_MANY, MLW_UNMAPPED, MLW_DISAGREE, MLW_NEVER, MLW_UNASKED, MLW_ACCESSOR, MLW_RECORD, MLW_VIS, MLW_UNDEF } MlWhy;
-typedef struct { MlKind kind; unsigned char why, copies, survey; short n; int def_class, from; const char *bowner; } MethodLookup;
+/* unsure: the answer is one for a body the fixpoint has not reached yet,
+   which asked no entry; the plan keeps no memo of it (ct_version) */
+typedef struct { MlKind kind; unsigned char why, copies, survey, unsure; short n; int def_class, from; const char *bowner; } MethodLookup;
 /* ml (NULL for a caller that wants the scope only) */
 int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, MethodLookup *ml);
 /* Does an attribute (attr_reader, attr_writer, a Struct member) answer this

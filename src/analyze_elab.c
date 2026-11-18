@@ -7185,7 +7185,7 @@ static void lr_closure_time(Compiler *c, const int *par, int n, int i, int v) {
     if (o >= 0) lr_ext_time(c, par, n, o);
     int ofrom = o >= 0 ? r->ext[o].from : 0, ocount = o >= 0 ? r->ext[o].count : LR_CNT_ONCE;
     int stmt = s < r->n && r->at[s] >= 0 ? lr_ext_stmt(r, r->at[s]) : 0;
-    if (ocount == LR_CNT_ZERO || ofrom == LR_NEVER) continue;
+    if (ocount == LR_CNT_ZERO || ofrom == LR_NEVER || stmt == LR_NEVER) continue;   /* (a call no run reaches) */
     const LrStmt *st = lr_stmt_of(r, s);
     int sf = stmt > ofrom ? stmt : ofrom, loop = 0;
     for (int p = s < n ? par[s] : -1; st && p >= 0 && p < n && p != st->node; p = par[p])
@@ -7223,10 +7223,10 @@ static void lr_ext_time(Compiler *c, const int *par, int n, int i) {
     lr_closure_time(c, par, n, i, body == LR_B_LAMBDA ? node : call);
     return;
   }
-  int end = body == LR_B_END || (body == LR_B_BLOCK && e->cb && nt_kind(nt, call) == NK_CallNode && is_at_exit_name(nt_str(nt, call, "name")) && !lr_defines(r, "at_exit"));   /* (a method of the program's of the name may run the block at once) */
+  int end = body == LR_B_END || (body == LR_B_BLOCK && e->cb && nt_kind(nt, call) == NK_CallNode && is_at_exit_name(nt_str(nt, call, "name")) && !lr_named(c, "at_exit"));   /* (a method of the program's of the name, or one a computed name makes, may run the block at once) */
   if (end) {   /* registered where it stands, run when the program exits */
     e->from = e->from == LR_NEVER ? LR_NEVER : LR_POST;
-    e->count = e->from == LR_NEVER ? LR_CNT_ZERO : body == LR_B_END || (!again && ocount == LR_CNT_ONCE && st) ? LR_CNT_ONCE : LR_CNT_MANY;
+    e->count = e->from == LR_NEVER ? LR_CNT_ZERO : !e->redo && (body == LR_B_END || (!again && ocount == LR_CNT_ONCE && st)) ? LR_CNT_ONCE : LR_CNT_MANY;
   }
   else if (body == LR_B_BLOCK && e->inplace && e->from != LR_NEVER) {
     int sure, cnt = lr_block_count(c, call, e->runs == ELAB_BLK_NOW, &sure);
@@ -7250,11 +7250,11 @@ static void lr_extents(Compiler *c) {
   int n;
   const int *par = elab_node_parents(c, &n);
   for (int id = 0; id < n; id++) lr_ext_of(c, par, n, id);
-  NT_FOREACH_KIND(c->nt, NK_RedoNode, id) {   /* a redo restarts the block (or loop) it stands in */
+  NT_FOREACH_KIND(c->nt, NK_RedoNode, id) {   /* a redo restarts the block, lambda (or loop) it stands in */
     for (int p = id < n ? par[id] : -1; p >= 0 && p < n; p = par[p]) {
       NodeKind k = nt_kind(c->nt, p);
-      if (k == NK_BlockNode) { if (p < r->cextix && r->extix[p]) r->ext[r->extix[p] - 1].redo = 1; break; }
-      if (k == NK_WhileNode || k == NK_UntilNode || k == NK_ForNode || k == NK_DefNode || k == NK_LambdaNode) break;
+      if (k == NK_BlockNode || k == NK_LambdaNode) { if (p < r->cextix && r->extix[p]) r->ext[r->extix[p] - 1].redo = 1; break; }
+      if (k == NK_WhileNode || k == NK_UntilNode || k == NK_ForNode || k == NK_DefNode) break;
     }
   }
   for (int f = 1; f < nt_nroots(c->nt); f++) {

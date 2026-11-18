@@ -146,7 +146,9 @@ The record holds, for each:
   record has no fact, `never` when no run reaches it, or its count is
   `zero`). `LR_POST` (`post`)
   is the phase after the load: it comes after every statement of region 0,
-  and is where exit handlers start and where `lr_rta` seeds the
+  and is where exit handlers start (an `at_exit` call only where no method
+  of the program's may take the name, `lr_named`, as one may run the block
+  at once) and where `lr_rta` seeds the
   `--ext-entry` methods. A region's `from` is the statement its load may
   first run on (`rentry`); a node of a body that has no point of its own
   starts no earlier than the body around it. A lambda or proc starts at the
@@ -190,8 +192,8 @@ The record holds, for each:
   called by one call that runs once, which nothing else of the program can
   reach, is `once`; a block of a literal receiver counts by its iterator
   row (`IterRow.runs`: once, by the receiver's value, a step per element;
-  a call with no receiver reads Kernel's, `catch`), and a block with a
-  `redo` in it is `many`. A lambda or proc whose invoking calls are known
+  a call with no receiver reads Kernel's, `catch`), and a block, lambda or
+  exit handler with a `redo` in it is `many`. A lambda or proc whose invoking calls are known
   is `once` when one call invokes it, that call runs once and its body has
   no `redo` (its
   statement does not repeat, no loop stands between them, and the body

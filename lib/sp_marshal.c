@@ -455,7 +455,7 @@ static sp_RbVal sp_mar_r_range(sp_mar_rd *r) {
   int bi = bg.tag == SP_TAG_INT, ei = ed.tag == SP_TAG_INT;
   int bn = bg.tag == SP_TAG_NIL, en = ed.tag == SP_TAG_NIL;
   if ((bs || es) && (bs || bn) && (es || en))
-    return sp_box_srange(sp_srange_new(sp_rbval_string_bytes(bg), sp_rbval_string_bytes(ed), excl));
+    return sp_box_srange(sp_srange_new_box(bg, ed, excl));
   if (bi && ef) return sp_box_range(sp_range_new_fend(bg.v.i, ed.v.f, excl));
   if ((bf || ef) && (bf || bi || bn) && (ef || ei || en)) {
     int om = (bn ? 1 : bi ? SP_FRANGE_INT_BEGIN : 0) | (en ? 2 : ei ? SP_FRANGE_INT_END : 0);

@@ -3295,14 +3295,6 @@ static inline const char *sp_strbuf_read_own(sp_String *h) {
   if (h && SP_UNLIKELY(sp_String_is_frozen(h))) return sp_String_cstr(h);
   return h ? sp_str_concat(sp_String_cstr(h), (&("\xff")[1])) : NULL;
 }
-/* --share-strings (#8321): a String Range made from shared handles keeps
-   them (hf / hl), and a read of the Range takes each handle's bytes as they
-   are now, so a change in place to the endpoint's String shows through it. */
-static inline sp_StrRange sp_srange_new_h(const char *f, const char *l, sp_int e, sp_String *hf, sp_String *hl) {
-  sp_StrRange r = sp_srange_new(f, l, e);
-  r.hf = hf; r.hl = hl;
-  return r;
-}
 /* --share-strings (#8321): a String Range's begin / end as a String. An
    endpoint the Range keeps as a handle holds NULL in its byte field, and is
    read as the handle's read face (sp_strbuf_read); any other is the bytes
@@ -5089,26 +5081,6 @@ static SP_UNUSED sp_oint sp_range_lo_bound(sp_RbVal v) {
   if (SP_UNLIKELY(v.tag == SP_TAG_FLT))
     sp_raise_cls("NotImplementedError", "a Range with a Float begin decided at run time is not supported by spinel");
   return v.tag == SP_TAG_NIL ? sp_oint_nil() : sp_oint_of(sp_poly_to_i(v));
-}
-/* The String end of a Range read out of a box: nil is the absent end, a
-   String the end (a shared String's handle is kept, its byte field NULL as
-   an endpoint kept as a handle holds it: sp_srange_new_h), and anything else
-   cannot be compared with a String, CRuby's ArgumentError (`"a"..1`). */
-static SP_UNUSED const char *sp_srange_bound(sp_RbVal v, sp_String **h) {
-  *h = NULL;
-  if (v.tag == SP_TAG_NIL) return NULL;
-  if (sp_poly_is_strbuf(v) && v.v.p) { *h = (sp_String *)v.v.p; return NULL; }
-  if (v.tag == SP_TAG_STR) return v.v.s ? v.v.s : sp_str_empty;
-  sp_raise_cls("ArgumentError", "bad value for range");
-  return NULL;
-}
-/* A String Range with a boxed end (`s..a[0]`), or two (sp_range_new_box) */
-static SP_UNUSED sp_StrRange sp_srange_new_box(sp_RbVal f, sp_RbVal l, sp_int x) {
-  SP_GC_ROOT_RBVAL(f); SP_GC_ROOT_RBVAL(l);
-  sp_String *hf, *hl;
-  const char *a = sp_srange_bound(f, &hf); SP_GC_ROOT_STR(a);
-  const char *z = sp_srange_bound(l, &hl);
-  return sp_srange_new_h(a, z, x, hf, hl);
 }
 /* Range#include? / #member? of a boxed String Range: a String (a Symbol in
    a Range of Symbols) is a member by succession, anything else is not one

@@ -17707,16 +17707,15 @@ static int emit_case_eq_call(Compiler *c, int id, Buf *b) {
             buf_printf(b, " && %s(_t%d->iv_%s, _t%d->iv_%s)", peq, ta, ivn, tb2, ivn); break;
           default: {
             /* boxed comparison covers arrays/hashes/objects uniformly */
-            Buf ba; memset(&ba, 0, sizeof ba);
+            Buf ba = {0}, bb = {0};
             char lx[128], rx[128];
             snprintf(lx, sizeof lx, "_t%d->iv_%s", ta, ivn);
             snprintf(rx, sizeof rx, "_t%d->iv_%s", tb2, ivn);
-            buf_printf(b, " && %s(", peq);
-            emit_boxed_text(c, ivt, lx, b);
-            buf_puts(b, ", ");
-            emit_boxed_text(c, ivt, rx, b);
-            buf_puts(b, ")");
-            free(ba.p);
+            emit_boxed_text(c, ivt, lx, &ba);
+            emit_boxed_text(c, ivt, rx, &bb);
+            buf_puts(b, " && ");
+            emit_member_cmp_text(c, sci, j, peq, ba.p, bb.p, b);
+            free(ba.p); free(bb.p);
             break;
           }
           }

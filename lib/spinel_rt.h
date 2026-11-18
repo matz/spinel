@@ -7073,7 +7073,27 @@ static SP_UNUSED sp_bool sp_rational_eq_complex(sp_Rational q, sp_Complex z) {
   sp_RbVal qv = sp_box_rational(q); SP_GC_ROOT_RBVAL(qv);
   return sp_poly_eq(qv, re);
 }
+/* A value no arm of sp_poly_eq_slow can find equal to an Integer: a String,
+   a Symbol, nil, a boolean, or a builtin Array or Hash. The walk below asks
+   a user object's own ==, the numeric tower and #to_ary; none of these is a
+   user object or a number, and an Integer answers no #to_ary, so the walk
+   ends at its tag test with false. A program's subclass of Array or Hash is
+   boxed with the builtin's id and may define its own ==, so it is left to the
+   walk (sp_poly_bsub_obj). */
+static SP_INLINE int sp_poly_never_eq_int(sp_RbVal v) {
+  switch (v.tag) {
+  case SP_TAG_STR: case SP_TAG_SYM: case SP_TAG_NIL: case SP_TAG_BOOL: return 1;
+  case SP_TAG_OBJ:
+    if (!sp_poly_is_array_kind(v.cls_id) && !sp_poly_is_hash_kind(v.cls_id)) return 0;
+    return !sp_bsub_cls_fn || sp_bsub_cls_fn(v) < 0;
+  default: return 0;
+  }
+}
 static SP_NOINLINE sp_bool sp_poly_eq_slow(sp_RbVal a, sp_RbVal b) {
+  /* An Integer against a value that can never equal one -- `case op when 1`
+     over a list that also holds Arrays -- answers before the walk, which
+     would only reach the same false at its tag test. */
+  if ((a.tag == SP_TAG_INT && sp_poly_never_eq_int(b)) || (b.tag == SP_TAG_INT && sp_poly_never_eq_int(a))) return FALSE;
   /* a user class's own == answers before any builtin reading, the way its
      other operators now do; the field-wise hook below stays the default for
      a class that does not define one (#3501) */

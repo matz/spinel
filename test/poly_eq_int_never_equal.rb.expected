@@ -1,0 +1,16 @@
+int: true true true when 1
+string: false false false else
+symbol: false false false else
+nil: false false false else
+true: false false false else
+false: false false false else
+array: false false false else
+hash: false false false else
+float: true true true when 1
+rational: true true true when 1
+complex: true true true when 1
+always: true true true when 1
+mylist: true - when 1
+mymap: true - when 1
+two: false false false else
+{one: 4, two: 2, three: 2}

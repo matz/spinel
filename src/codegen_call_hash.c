@@ -89,27 +89,32 @@ int emit_op_hash_pattern_all(Compiler *c, const BopCtx *x, Buf *b) {
 int emit_op_hash_default_proc(Compiler *c, const BopCtx *x, Buf *b) {
   int recv = x->recv;
   TyKind rt = x->rt;
+  if (rt == TY_STR_POLY_HASH) {
+    /* String-keyed storage retains the Proc assigned by default_proc=.
+       An explicit Proc call is free to pass a key of any Ruby class. */
+    int temp = ++g_tmp;
+    buf_printf(b, "({ sp_StrPolyHash *_t%d = ", temp);
+    emit_expr(c, recv, b);
+    buf_printf(b, "; (_t%d && _t%d->dproc) ? (sp_Proc *)_t%d->dproc_self : NULL; })",
+               temp, temp, temp);
+    return 1;
+  }
   const char *hnn = ty_hash_cname(rt);
-  int hdp_v = !hnn ? -1
-            : sp_streq(hnn, "SymPoly") ? 0
-            : sp_streq(hnn, "StrPoly") ? 1
-            : sp_streq(hnn, "PolyPoly") ? 2 : -1;
+  int hdp_v = rt == TY_SYM_POLY_HASH ? 0 : rt == TY_POLY_POLY_HASH ? 1 : -1;
   if (hdp_v < 0) {
     buf_puts(b, "((void)(");
     emit_expr_for_effect(c, recv, b);
     buf_puts(b, "), (sp_Proc *)NULL)");
     return 1;
   }
-  static char hdp_done[3];
+  static char hdp_done[2];
   if (!hdp_done[hdp_v]) {
     hdp_done[hdp_v] = 1;
     if (!g_needs_proc_poly_argslot) {
       g_needs_proc_poly_argslot = 1;
       buf_puts(&g_proc_protos, "extern SP_TLS sp_RbVal _sp_proc_poly_args[SP_PROC_ARG_SLOTS];\n");
     }
-    const char *kexpr = hdp_v == 0 ? "(sp_sym)sp_poly_to_i(_sp_proc_poly_args[1])"
-                      : hdp_v == 1 ? "sp_rbval_string_bytes(_sp_proc_poly_args[1])"
-                      : "_sp_proc_poly_args[1]";
+    const char *kexpr = hdp_v == 0 ? "(sp_sym)sp_poly_to_i(_sp_proc_poly_args[1])" : "_sp_proc_poly_args[1]";
     buf_printf(&g_procs,
       "static sp_int _hdp_tramp_%s(void *cap, sp_int argc, sp_int *args) {\n"
       "  sp_%sHash *src = (sp_%sHash *)cap; (void)args;\n"

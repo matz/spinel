@@ -1719,10 +1719,10 @@ sp_RbVal sp_builtin_class_new(int kind, sp_int argc, const sp_RbVal *av, sp_Proc
   case 'S': {
     sp_dyn_new_arity(argc, 1);
     if (argc == 0) return sp_box_str(sp_str_dup_external((&("\xff")[1])));
-    sp_RbVal s = sp_poly_is_strbuf(av[0]) ? sp_poly_strbuf_deref(av[0]) : av[0];
-    if (s.tag != SP_TAG_STR)
+    sp_RbVal s = av[0];
+    if (!sp_rbval_is_string(s))
       sp_raise_cls("TypeError", sp_sprintf("no implicit conversion of %s into String", sp_poly_class_name(s)));
-    return sp_box_str(sp_str_dup(s.v.s));
+    return sp_box_str(sp_str_dup(sp_rbval_string_bytes(s)));
   }
   case 'A': {
     sp_dyn_new_arity(argc, 2);
@@ -1907,11 +1907,7 @@ else {
       }
       v = a->data[idx]; idx++;
     }
-    /* A mutable String arrives as a shared handle, not a plain String:
-       `%c` of one printed nothing and `%d` and `%f` refused it as no String,
-       where CRuby reads the String. Every conversion reads the handle as its
-       value, as %s did through sp_poly_to_s. */
-    if (sp_poly_is_strbuf(v)) v = sp_poly_strbuf_deref(v);
+    const char *text = sp_rbval_string_bytes(v);
     if (conv == 'd' || conv == 'i' || conv == 'x' || conv == 'X' || conv == 'o' ||
         conv == 'b' || conv == 'B') {
       long long lv = 0;
@@ -1980,7 +1976,7 @@ else {
       else if (v.tag == SP_TAG_FLT) lv = (long long)v.v.f;
       /* a String argument converts the way Integer() does, so unparseable text
          is an ArgumentError rather than a silent zero (#3554) */
-      else if (v.tag == SP_TAG_STR && v.v.s) lv = (long long)sp_str_to_i_strict(v.v.s);
+      else if (text) lv = (long long)sp_str_to_i_strict(text);
       /* Anything else is not a number at all, and formatting it as 0 was a
          quiet wrong answer where CRuby refuses (#4010). Same wording and same
          value spelling as Integer() uses. */
@@ -2014,7 +2010,7 @@ else if (conv == 'f' || conv == 'e' || conv == 'E' || conv == 'g' || conv == 'G'
       else if (v.tag == SP_TAG_BIGINT) dv = sp_poly_to_f(v);
       /* a String converts the way Float() does; anything else is not a number
          and CRuby refuses rather than formatting a zero (#4010) */
-      else if (v.tag == SP_TAG_STR) dv = (double)sp_str_to_f_strict(v.v.s ? v.v.s : sp_str_empty);
+      else if (sp_rbval_is_string(v)) dv = (double)sp_str_to_f_strict(text ? text : sp_str_empty);
       /* a user object converts through its #to_f, which may allocate */
       else if (sp_poly_is_user_obj(v)) {
         SP_GC_ROOT(a); SP_GC_ROOT_STR(fmt);
@@ -2079,10 +2075,10 @@ else if (conv == 'c') {
          first whole character -- not a single truncated byte (#3083) */
       char cbuf[8]; int clen = 0;
       if (v.tag == SP_TAG_INT) clen = sp_utf8_encode((uint32_t)v.v.i, cbuf);
-      else if (v.tag == SP_TAG_STR && v.v.s && v.v.s[0]) {
-        clen = sp_utf8_advance(v.v.s);
+      else if (text && text[0]) {
+        clen = sp_utf8_advance(text);
         if (clen > 8) clen = 8;
-        memcpy(cbuf, v.v.s, (size_t)clen);
+        memcpy(cbuf, text, (size_t)clen);
       }
       /* the character occupies one column; honor a width and the '-' flag */
       int left = 0, width = 0;

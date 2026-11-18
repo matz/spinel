@@ -3861,11 +3861,13 @@ static SP_UNUSED sp_int sp_bigint_arg_int_chk(sp_Bigint *b) {
   return (sp_int)sp_bigint_to_int(b);
 }
 static SP_NOINLINE sp_int sp_poly_to_i_cold(sp_RbVal v) {
-  v = sp_poly_strbuf_deref(v);   /* a shared String handle reads as its String (#7263) */
   if (v.tag == SP_TAG_BIGINT) return sp_i64_to_int(sp_bigint_to_int((sp_Bigint *)v.v.p));   /* a 32-bit sp_int refuses what does not fit (RangeError); 64-bit keeps its wrap */
   /* String#to_i as the typed receiver answers it: `_` between digits, and
      a RangeError past the word where strtoll saturated (#9941) */
-  if (v.tag == SP_TAG_STR) return sp_str_to_i_cruby(v.v.s ? v.v.s : sp_str_empty);
+  if (sp_rbval_is_string(v)) {
+    const char *bytes = sp_rbval_string_bytes(v);
+    return sp_str_to_i_cruby(bytes ? bytes : sp_str_empty);
+  }
   if (v.tag == SP_TAG_BOOL) return v.v.b ? 1 : 0;
   /* a boxed Rational truncates toward zero, as Rational#to_i does */
   if (sp_poly_is_rational(v) && v.v.p) { sp_Rational _r = *(sp_Rational *)v.v.p; return _r.den ? _r.num / _r.den : 0; }
@@ -3902,8 +3904,10 @@ static sp_int sp_poly_slot_i(sp_RbVal v) {
   if (v.tag == SP_TAG_OBJ && v.cls_id >= 0) return 0;
   /* nor is a String: to_i raises past the Integer word (#9941), and a block
      handed a boxed String of a hundred digits raised before it ran (#10462) */
-  sp_RbVal s = sp_poly_strbuf_deref(v);
-  if (s.tag == SP_TAG_STR) return (sp_int)strtoll(s.v.s ? s.v.s : sp_str_empty, NULL, 10);
+  if (sp_rbval_is_string(v)) {
+    const char *bytes = sp_rbval_string_bytes(v);
+    return (sp_int)strtoll(bytes ? bytes : sp_str_empty, NULL, 10);
+  }
   /* nor is a Bignum past the word: a 32-bit sp_int raised RangeError for a
      53-bit id handed to a block whose parameter reads the boxed side */
   if (v.tag == SP_TAG_BIGINT) return (sp_int)sp_bigint_to_int((sp_Bigint *)v.v.p);
@@ -4512,9 +4516,11 @@ static sp_float sp_poly_to_f(sp_RbVal v) {
    else has no #to_f and is NoMethodError (a user class that defines one has
    its own arm in the poly dispatch). */
 static sp_float sp_poly_to_f_meth(sp_RbVal v) {
-  if (SP_UNLIKELY(sp_poly_is_strbuf(v))) v = sp_poly_strbuf_deref(v);
   if (v.tag == SP_TAG_NIL) return 0.0;
-  if (v.tag == SP_TAG_STR) return sp_str_to_f_cruby(v.v.s ? v.v.s : sp_str_empty);
+  if (sp_rbval_is_string(v)) {
+    const char *bytes = sp_rbval_string_bytes(v);
+    return sp_str_to_f_cruby(bytes ? bytes : sp_str_empty);
+  }
   if (v.tag == SP_TAG_FLT || v.tag == SP_TAG_INT || v.tag == SP_TAG_BIGINT ||
       (v.tag == SP_TAG_OBJ && (v.cls_id == SP_BUILTIN_RATIONAL || v.cls_id == SP_BUILTIN_BIG_RATIONAL ||
                                v.cls_id == SP_BUILTIN_TIME || v.cls_id == SP_BUILTIN_COMPLEX)))
@@ -5486,9 +5492,8 @@ static SP_UNUSED sp_Time *sp_time_civil_list(sp_PolyArray *a, int is_utc) {
 static SP_UNUSED sp_int sp_ffi_int_of(sp_RbVal v) { return sp_poly_arg_int_chk(v); }
 static SP_UNUSED sp_int sp_ffi_int_of_i(sp_oint v) { if (SP_UNLIKELY(v.nil)) sp_ffi_nil_int_raise(); return v.v; }
 static SP_UNUSED sp_float sp_ffi_dbl_of(sp_RbVal v) {
-  v = sp_poly_strbuf_deref(v);
   if (SP_UNLIKELY(v.tag == SP_TAG_NIL)) sp_ffi_nil_dbl_raise();
-  if (SP_UNLIKELY(v.tag == SP_TAG_STR)) sp_raise_cls("TypeError", "no implicit conversion to float from string");
+  if (SP_UNLIKELY(sp_rbval_is_string(v))) sp_raise_cls("TypeError", "no implicit conversion to float from string");
   if (SP_UNLIKELY(v.tag == SP_TAG_BOOL))
     sp_raise_cls("TypeError", v.v.b ? "no implicit conversion to float from true" : "no implicit conversion to float from false");
   return sp_poly_Float(v);
@@ -5500,7 +5505,6 @@ static SP_UNUSED sp_float sp_ffi_dbl_of_f(sp_ofloat v) { if (SP_UNLIKELY(v.nil))
    raised, and a nil was a silent false). */
 static SP_NOINLINE SP_COLD void sp_ffi_nil_bool_raise(void) { sp_raise_cls("TypeError", "wrong argument type nil (expected a boolean parameter)"); }
 static SP_UNUSED int sp_ffi_bool_of(sp_RbVal v) {
-  v = sp_poly_strbuf_deref(v);
   if (SP_LIKELY(v.tag == SP_TAG_BOOL)) return v.v.b != 0;
   if (v.tag == SP_TAG_INT) return v.v.i != 0;
   if (v.tag == SP_TAG_NIL) sp_ffi_nil_bool_raise();
@@ -5524,10 +5528,8 @@ static SP_NORETURN void sp_complex_reject_bool(sp_RbVal re, sp_RbVal im, int arg
   if (re.tag == SP_TAG_NIL || (argc == 2 && im.tag == SP_TAG_NIL))
     sp_raise_cls("TypeError", "can't convert nil into Complex");
   if (argc == 2) {
-    if (sp_poly_is_strbuf(re)) re = sp_poly_strbuf_deref(re);
-    if (sp_poly_is_strbuf(im)) im = sp_poly_strbuf_deref(im);
-    if (re.tag == SP_TAG_STR) (void)sp_str_to_c_strict(re.v.s);
-    if (im.tag == SP_TAG_STR) (void)sp_str_to_c_strict(im.v.s);
+    if (sp_rbval_is_string(re)) (void)sp_str_to_c_strict(sp_rbval_string_bytes(re));
+    if (sp_rbval_is_string(im)) (void)sp_str_to_c_strict(sp_rbval_string_bytes(im));
     sp_raise_cls("TypeError", "not a real");
   }
   sp_raise_cls("TypeError", re.v.b ? "can't convert true into Complex" :
@@ -16047,7 +16049,6 @@ static sp_RbVal sp_poly_with_m(sp_RbVal v, sp_RbVal ov) {
   sp_raise_nomethod(sp_nomethod_msg("with", v));  /* CRuby's wording, as for to_r */
 }
 static sp_RbVal sp_poly_to_r_m(sp_RbVal v) {
-  v = sp_poly_strbuf_deref(v);   /* a shared String handle reads as its String (#7263) */
   if (v.tag == SP_TAG_NIL) return sp_box_rational(sp_rational_new(0, 1));
   if (v.tag == SP_TAG_INT) return sp_box_rational(sp_rational_new(v.v.i, 1));
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_RATIONAL) return v;
@@ -16069,8 +16070,10 @@ static sp_RbVal sp_poly_to_r_m(sp_RbVal v) {
      none. sp_poly_to_c_m has carried the matching String arm all along; this
      one raised NoMethodError for a String the receiver happened to widen to
      poly, and `v&.to_r` is exactly that shape. */
-  if (v.tag == SP_TAG_STR) return sp_box_rational(sp_str_to_r(v.v.s ? v.v.s : sp_str_empty));
-  if (sp_poly_is_strbuf(v)) return sp_poly_to_r_m(sp_poly_strbuf_deref(v));
+  if (sp_rbval_is_string(v)) {
+    const char *bytes = sp_rbval_string_bytes(v);
+    return sp_box_rational(sp_str_to_r(bytes ? bytes : sp_str_empty));
+  }
   /* a Complex is its Complex#to_r, as the typed receiver answers */
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_COMPLEX && v.v.p) return sp_box_rational(sp_complex_to_r(*(sp_Complex *)v.v.p));
   sp_raise_nomethod(sp_nomethod_msg("to_r", v));  /* "for true", "for an instance of Array", as CRuby words it */
@@ -16170,7 +16173,6 @@ static sp_RbVal sp_poly_rationalize_m(sp_RbVal v, int argc, sp_RbVal eps) {
   sp_raise_nomethod(sp_nomethod_msg("rationalize", v));  /* CRuby's wording, as for to_r */
 }
 static sp_RbVal sp_poly_to_c_m(sp_RbVal v) {
-  v = sp_poly_strbuf_deref(v);   /* a shared String handle reads as its String (#7263) */
   /* fl carries the per-component int/float flag inspect renders from, so it has
      to be set, not left as whatever the stack held. The typed path is the
      oracle here: `n.to_c` emits `(sp_Complex){n, 0, <1 for a Float, 0 for an
@@ -16180,8 +16182,10 @@ static sp_RbVal sp_poly_to_c_m(sp_RbVal v) {
     sp_Complex z = {sp_poly_to_f(v), 0, (unsigned char)(v.tag == SP_TAG_FLT ? SP_CPLX_RE_F : 0)};
     return sp_box_complex(z);
   }
-  if (v.tag == SP_TAG_STR) return sp_box_complex(sp_str_to_c(v.v.s ? v.v.s : sp_str_empty));
-  if (sp_poly_is_strbuf(v)) return sp_poly_to_c_m(sp_poly_strbuf_deref(v));
+  if (sp_rbval_is_string(v)) {
+    const char *bytes = sp_rbval_string_bytes(v);
+    return sp_box_complex(sp_str_to_c(bytes ? bytes : sp_str_empty));
+  }
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_COMPLEX) return v;
   sp_raise_nomethod(sp_nomethod_msg("to_c", v));  /* "for true", "for an instance of Array", as CRuby words it */
 }

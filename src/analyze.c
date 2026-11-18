@@ -41473,6 +41473,18 @@ static int arg_reads_nil_default_param(Compiler *c, int a) {
       return s->pdefault[k] >= 0 && nt_kind(nt, s->pdefault[k]) == NK_NilNode;
   return 0;
 }
+/* Is argument a (-1: none) a nil an object parameter takes: a literal nil,
+   or a parameter already holding one (#5088)? */
+static int obj_nil_arg(Compiler *c, int a) {
+  const NodeTable *nt = c->nt;
+  if (a < 0) return 0;
+  if (nt_kind(nt, a) == NK_NilNode) return 1;
+  if (nt_kind(nt, a) != NK_LocalVariableReadNode) return 0;
+  Scope *as = comp_scope_of(c, a);
+  const char *an = nt_str(nt, a, "name");
+  LocalVar *al = as && an ? scope_local(as, an) : NULL;
+  return al && al->is_param && al->obj_nilable;
+}
 static int mark_nullable_params_of_call(Compiler *c, int id, int mi) {
   const NodeTable *nt = c->nt;
   int changed = 0;
@@ -41486,16 +41498,7 @@ static int mark_nullable_params_of_call(Compiler *c, int id, int mi) {
     LocalVar *p = a >= 0 && m->pnames[k] ? scope_local(m, m->pnames[k]) : NULL;
     if (!p) continue;
     /* an object parameter handed nil, or handed one that was (#5088) */
-    if (ty_is_object(p->type) && !p->obj_nilable) {
-      int nilarg = nt_kind(nt, a) == NK_NilNode;
-      if (!nilarg && nt_kind(nt, a) == NK_LocalVariableReadNode) {
-        Scope *as = comp_scope_of(c, a);
-        const char *an2 = nt_str(nt, a, "name");
-        LocalVar *al = as && an2 ? scope_local(as, an2) : NULL;
-        nilarg = al && al->is_param && al->obj_nilable;
-      }
-      if (nilarg) { p->obj_nilable = 1; changed = 1; }
-    }
+    if (ty_is_object(p->type) && !p->obj_nilable && obj_nil_arg(c, a)) { p->obj_nilable = 1; changed = 1; }
     /* A boxed Array argument converts into the typed parameter
        (sp_poly_as_int_array and its kin), a nil element carried as the
        slot's nil, and nothing marks a box's elements. Only a late widening
@@ -41525,16 +41528,41 @@ static int mark_nullable_params_of_call(Compiler *c, int id, int mi) {
        already carrying one: boxing the parameter has to answer nil (#5085) */
     if (!p->box_nullable && box_nullable_arg(c, a)) { p->box_nullable = 1; changed = 1; }
   }
-  /* a keyword parameter takes the value its key names (`k: nil`) */
+  /* a keyword parameter takes the value its key names (`k: nil`): an
+     Integer or Float one its nil, an object one the nil as the positional
+     ones above do */
   int kwh = nt_argv_kwh(nt, av, an);
   for (int k = 0; kwh >= 0 && k < m->nparams; k++) {
     const char *pk = m->pnames[k];
     LocalVar *p = pk ? scope_local(m, pk) : NULL;
-    if (!p || (p->type != TY_INT && p->type != TY_FLOAT) || p->nullable_int ||
-        !callee_param_is_declared_kwarg(c, m, pk)) continue;
+    if (!p || !callee_param_is_declared_kwarg(c, m, pk)) continue;
+    if (ty_is_object(p->type)) {
+      if (!p->obj_nilable && obj_nil_arg(c, ie_kwhash_value(c, kwh, pk))) { p->obj_nilable = 1; changed = 1; }
+      continue;
+    }
+    if ((p->type != TY_INT && p->type != TY_FLOAT) || p->nullable_int) continue;
     if (nullable_int_value(c, ie_kwhash_value(c, kwh, pk))) { p->nullable_int = 1; changed = 1; }
   }
   arg_layout_free(&L);
+  return changed;
+}
+
+/* A builtin `new` at call id binds each initialize the call plan lists for
+   the site (cplan_entries): `new(...)` or `self.new(...)` in a class method
+   and `self.class.new(...)` in an instance method (a `dup` handing a nil
+   on) build the method's class or, run for a subclass, that subclass's; a
+   Class value the class facts bound, each class it may hold. Each takes the
+   nil an argument can be. The caller's lookup names a constant's class's
+   initialize only (mi, skipped here), and the nil reached a parameter left
+   plain: refused at emission, or its class's arm left out of a Class-value
+   dispatch (ctor_arm_incompat). */
+static int mark_nullable_params_of_new(Compiler *c, int id, int mi) {
+  const NodeTable *nt = c->nt;
+  const char *nm = nt_str(nt, id, "name");
+  if (!nm || !is_new_name(nm) || nt_ref(nt, id, "arguments") < 0) return 0;
+  int ent[CPT_MAX], ne = cplan_entries(c, id, ent, CPT_MAX), changed = 0;
+  for (int j = 0; j < ne; j++)
+    if (ent[j] >= 0 && ent[j] != mi) changed |= mark_nullable_params_of_call(c, id, ent[j]);
   return changed;
 }
 
@@ -43677,6 +43705,7 @@ static void mark_nullable_int_locals(Compiler *c) {
                : (c->node_cbody && id < c->node_cap ? c->node_cbody[id] : -1);
         if (bk >= 0) mi = cplan_hook_target(c, bs->def_node >= 0 ? -1 : id, bk, "initialize", NULL);
       }
+      changed |= mark_nullable_params_of_new(c, id, mi);
       if (mi < 0 && recv >= 0) {
         TyKind rt = infer_type(c, recv);
         if (ty_is_object(rt))

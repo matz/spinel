@@ -24686,14 +24686,6 @@ static inline const char *sp_strface_bc_bytes(const char *s) {
   return s;
 }
 static inline sp_RbVal sp_strface_box_h(sp_String *h) { return h ? sp_box_obj(h, SP_BUILTIN_STRBUF) : sp_box_nil(); }
-/* A String the program keeps in a box is a handle box (a box is a String
-   slot): the handle of a payload view, a new handle over other mutable
-   bytes; a frozen String stays its bytes, which nothing changes */
-static inline sp_RbVal sp_strface_box_new(const char *s) {
-  if (!s) return sp_box_nil();
-  if (((const unsigned char *)s)[-1] == 0xfd || !sp_str_is_frozen_val(s)) return sp_box_obj(sp_String_new_fresh(s), SP_BUILTIN_STRBUF);
-  return sp_box_str(s);
-}
 /* (each spells its operand once, in a statement expression: the operand may
    be a statement expression of its own with labels in it, and it is as long
    as an emitter made it) */
@@ -24716,7 +24708,7 @@ static inline sp_RbVal sp_strface_box_self(sp_RbVal v) { return v; }
    (a String argument is its bytes; the runtime finds a payload view's
    handle itself, sp_String_new_shared, sp_box_str) */
 #define SP_STR_HDL(x) SP_ONE_FACE(x, sp_strface_h_self, sp_strface_h_bytes, sp_strface_zero_h, sp_strface_h_box)
-#define SP_STR_BOX(x) SP_ONE_FACE(x, sp_strface_box_h, sp_strface_box_new, sp_strface_zero_box, sp_strface_box_self)
+#define SP_STR_BOX(x) SP_ONE_FACE(x, sp_strface_box_h, sp_box_str_new, sp_strface_zero_box, sp_strface_box_self)
 /* ...and a String of either face as the face slot `dst` has, where the
    emitter of `dst = v` knows neither (a block parameter a typed walk binds) */
 #define SP_STR_TO(dst, v) _Generic((dst), sp_String *: SP_STR_HDL(v), default: SP_STR_B(v))

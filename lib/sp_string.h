@@ -385,16 +385,10 @@ static inline const char*sp_String_cstr(sp_String*s){return s->data;}
 static inline const char*sp_String_cstr_nil(sp_String*s){return s?s->data:NULL;}
 static inline int64_t sp_String_length(sp_String*s){return s->len;}
 
-/* Box a new String or the owner of a live payload. An emitted frozen
-   literal already has its static handle. Other frozen bytes keep their
-   current box until their producers supply the handle. */
+/* Box a managed String, using the owner of its live payload or the
+   static handle of a frozen literal when it already has one. */
 static inline sp_RbVal sp_box_str_new(const char *v) {
-  if (!v) return sp_box_nil();
-  unsigned char m = ((const unsigned char *)v)[-1];
-  if (m == 0xfd || m == 0xfe || m == 0xfc || m == 0xff)
-    return sp_box_obj(sp_String_new_fresh(v), SP_BUILTIN_STRBUF);
-  sp_String *literal = sp_String_of_literal(v);
-  return literal ? sp_box_obj(literal, SP_BUILTIN_STRBUF) : sp_box_str(v);
+  return sp_box_nullable_obj(sp_String_new_shared(v), SP_BUILTIN_STRBUF);
 }
 
 /* sp_box_str_new for a String that may be nil (NULL): the nil box, else the new String's handle box */

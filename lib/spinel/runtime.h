@@ -26,8 +26,9 @@
  *
  *   Boxing a new String (sp_string.h):
  *     sp_box_str_new  (the package's newly built String or the owner of a
- *                      live String payload. A change through the box reaches
- *                      all copies. Use it for a parser's String values.
+ *                      live String payload, boxed as a handle. A change
+ *                      through the box reaches all copies. Use it for a
+ *                      parser's String values.
  *                      Object keys follow the frozen Hash key contract.)
  *
  *   Float digits (sp_dtoa.h):

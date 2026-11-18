@@ -12936,6 +12936,30 @@ static SP_NOINLINE const char *sp_io_read_splat(sp_File *f, sp_PolyArray *a) {
   if (!sp_poly_nil_p(buf)) (void)sp_poly_str_become(buf, r ? r : sp_str_empty);
   return r;
 }
+/* IO#pread returns its supplied String, including its encoding and an
+   unchanged zero-length read. At EOF the caller must publish the emptied
+   buffer to any value-form local before raising. */
+static sp_String *sp_io_pread_buffer(sp_File *f, sp_int length, sp_int offset,
+                                     sp_RbVal buffer, sp_bool *eof) {
+  SP_GC_ROOT(f);
+  SP_GC_ROOT_RBVAL(buffer);
+  *eof = FALSE;
+  if (sp_poly_nil_p(buffer))
+    return sp_String_new_fresh(sp_File_pread_checked(f, length, offset));
+  sp_String *result = sp_poly_arg_str_handle(buffer);
+  SP_GC_ROOT(result);
+  if (sp_String_is_immutable(result)) sp_raise_frozen_str(result->data);
+  if (length < 0) {
+    sp_pread_check(f, length, 1);
+    errno = EINVAL;
+    sp_pread_raise_errno(f);
+  }
+  const char *bytes = sp_File_pread_or_nil(f, length, offset);
+  *eof = bytes == NULL;
+  if (length) sp_String_set_bin(result, bytes ? bytes : sp_str_empty);
+  return result;
+}
+
 /* A value-form nonblocking read fills an existing buffer or clears it at
    EOF. The caller writes a plain String back to its local before raising;
    would-block leaves the buffer unchanged. No new String handle is made. */

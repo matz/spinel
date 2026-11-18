@@ -753,6 +753,8 @@ def probe_kernel
   %i[format sprintf printf].each do |mname|
     probe("Kernel", mname.to_s) { |mk| h = { a: mk.(:elem), b: mk.(:elem) }; -> { Kernel.__send__(mname, "%{a} %<b>s", h) } }
   end
+  # The output buffer converts after pread has converted the length and offset.
+  probe("File", "pread") { |mk| o = mk.(:arg); -> { File.open(File::NULL) { |f| f.pread(0, 0, o) } } }
   probe("File", "printf") { |mk| h = { a: mk.(:elem), b: mk.(:elem) }; f = File.new(File::NULL, "w"); -> { f.printf("%{a} %<b>s", h) } }
   probe("StringIO", "printf") { |mk| h = { a: mk.(:elem), b: mk.(:elem) }; io = StringIO.new(+""); -> { io.printf("%{a} %<b>s", h) } }
   probe("String", "%") { |mk| o = mk.(:arg); -> { +"%s %d %f" % [o, o, o] } }

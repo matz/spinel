@@ -12048,7 +12048,7 @@ static int method_recv_all_named(Compiler *c, int recv, int nmn) {
     const char *wn = nt_str(nt, w, "name");
     if (comp_scope_of(c, w) == sc && wn && sp_streq(wn, vn)) nmn--;
   }
-  return nmn == 0;
+  return nmn == 0 && !local_takes_unwritten_value(c, sc, vn);
 }
 
 int infer_param_types(Compiler *c) { return infer_param_types_ex(c, 0, NULL); }

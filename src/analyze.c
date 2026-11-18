@@ -5433,12 +5433,21 @@ static void ie_rb_mark(const NodeTable *nt, unsigned char *rb, int n, int node, 
    OWN and IN. (the block itself, so its parameters' defaults count, which run
    on the receiver too) */
 static void ie_rb_scan(Compiler *c, unsigned char *rb, int n) {
-  NT_FOREACH_KIND(c->nt, NK_CallNode, call) {
-    int b = ie_own_recv_block(c, call);
-    if (b < 0 || b >= n) continue;
-    rb[b] |= IE_RB_ROOT;
-    ie_rb_mark(c->nt, rb, n, b, IE_RB_IN | IE_RB_OWN);
-  }
+  /* (only a call named instance_eval or instance_exec has such a block, so
+     the walk is of those calls, by name: ie_rebound_marks scans again each
+     time the table grows, which register_includes does once per method it
+     copies into an includer, and a walk of every call per copy made that
+     phase quadratic in the program. The marks are a union, so the order
+     the calls come in does not matter.) */
+  static const char *const fam[] = { "instance_eval", "instance_exec" };
+  for (int f = 0; f < 2; f++)
+    for (int call = an_calls_named_first(c, fam[f]); call >= 0; call = an_calls_named_next(call)) {
+      if (nt_kind(c->nt, call) != NK_CallNode) continue;
+      int b = ie_own_recv_block(c, call);
+      if (b < 0 || b >= n) continue;
+      rb[b] |= IE_RB_ROOT;
+      ie_rb_mark(c->nt, rb, n, b, IE_RB_IN | IE_RB_OWN);
+    }
 }
 /* See analyze_internal.h. */
 const unsigned char *ie_rebound_marks(Compiler *c) {

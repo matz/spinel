@@ -87,12 +87,16 @@ typedef struct {
      keyed on node identity or name can revalidate against it. */
   unsigned version;
   /* The parts of version that a local variable read appended by
-     nt_new_local_read, a call renamed by nt_node_swap_str or
-     nt_node_restore_str (nt_stamp_holds), and a subtree appended by
-     nt_clone_subtree bumped: a clone touches no node below the count it
-     found, so an index of the nodes by name extends over the clones when
-     every bump since its build was one (an_calls_named_first). */
-  unsigned read_version, rename_version, clone_version;
+     nt_new_local_read and a call renamed by nt_node_swap_str or
+     nt_node_restore_str bumped (nt_stamp_holds). */
+  unsigned read_version, rename_version;
+  /* The count an index of the nodes by name was built over (low_mark, set
+     by nt_low_watch), and whether an edit since changed the type or a
+     string field of a node below it (low_touched). An edit of the nodes
+     appended since leaves it clear, so the index extends over them instead
+     of being rebuilt (an_calls_named_first). */
+  int low_mark;
+  unsigned char low_touched;
   /* The last NT_RENAME_LOG of the renames rename_version counts, by that
      count: the name each replaced and the one it set (nt_renames_spare). */
   NtRename rename_log[NT_RENAME_LOG];
@@ -389,6 +393,8 @@ int  nt_new_int(NodeTable *nt, long long v);                     /* a new Intege
    Such a read is a leaf, so a whole-tree index built before it was appended
    (one that reads no local variable read) is still the index of the table. */
 int  nt_appended_only_local_reads(const NodeTable *nt, int from);
+/* Start watching the nodes below the count for edits (low_mark, low_touched). */
+void nt_low_watch(NodeTable *nt);
 /* A new local variable read of name, counted in read_version. */
 int  nt_new_local_read(NodeTable *nt, const char *name);
 /* The table's version when an index was built, with its two counted parts.

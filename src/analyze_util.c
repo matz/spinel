@@ -1248,15 +1248,16 @@ const char *an_regex_lit_src(Compiler *c, int nid) {
   }
   return NULL;
 }
-/* The CallNodes of each name, ascending, rebuilt whenever the node table
-   changes (a rename or a new node bumps its version). Passes that asked "the
-   calls named m" walked every call per ask (rubys/roundhouse#72). A caller
-   must still check the node, which a re-point since the build may have
-   changed; the list only narrows the walk. */
+/* The CallNodes of each name, ascending, rebuilt whenever a node the index
+   holds may have changed its type or name (low_touched), and extended over
+   the nodes appended since otherwise. Passes that asked "the calls named m"
+   walked every call per ask (rubys/roundhouse#72). A caller must still check
+   the node, which a re-point since the build may have changed; the list
+   only narrows the walk. */
 static ANameHash g_cn_names;
 static int *g_cn_first, *g_cn_next, *g_cn_last, g_cn_cap;
 static const NodeTable *g_cn_nt;
-static unsigned g_cn_ver, g_cn_clones;
+static unsigned g_cn_ver;
 static int g_cn_cnt = -1;
 static int g_cn_empty = -1;
 /* call `id` onto its name's chain, at the end: the chains are ascending */
@@ -1281,20 +1282,24 @@ static void cn_add(const NodeTable *nt, int id) {
 int an_calls_named_first(Compiler *c, const char *name) {
   const NodeTable *nt = c->nt;
   if (!name) return -1;
-  if (g_cn_nt == nt && nt->count > g_cn_cnt && g_cn_ver != nt->version &&
-      nt->version - g_cn_ver == nt->clone_version - g_cn_clones) {
-    /* Only subtrees were cloned since the build, onto the end of the
-       table: the nodes indexed are as they were, and the clones' calls go
-       onto their chains. make_yield_proc_forms asks for the calls of each
-       yielding method's name and clones between the asks, and each ask
-       rebuilt the index over every call of the program (600k on a Rails
-       program, 85% of a sampled window). */
+  if (g_cn_nt == nt && nt->count >= g_cn_cnt && g_cn_ver != nt->version &&
+      nt->low_mark == g_cn_cnt && !nt->low_touched) {
+    /* No node the index holds changed its type or a string field since
+       the build: only nodes were appended (a clone, a new node and the
+       names set on it), so the indexed calls are as they were, and the new
+       calls go onto their chains. make_yield_proc_forms asks for the calls
+       of each yielding method's name and clones between the asks, and each
+       ask rebuilt the index over every call of the program (600k on a Rails
+       program, 85% of a sampled window); the rebound marks ask once per
+       method an include copies or a mixin statement appends
+       (ie_rebound_marks). */
     int *grown = realloc(g_cn_next, sizeof(int) * (size_t)nt->count);
     if (!grown) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
     g_cn_next = grown;
     for (int id = g_cn_cnt; id < nt->count; id++)
       if (nt_kind(nt, id) == NK_CallNode) cn_add(nt, id);
-    g_cn_ver = nt->version; g_cn_clones = nt->clone_version; g_cn_cnt = nt->count;
+    g_cn_ver = nt->version; g_cn_cnt = nt->count;
+    nt_low_watch((NodeTable *)nt);
   }
   if (g_cn_nt != nt || g_cn_ver != nt->version || g_cn_cnt != nt->count) {
     anh_free(&g_cn_names); memset(&g_cn_names, 0, sizeof g_cn_names);
@@ -1305,7 +1310,8 @@ int an_calls_named_first(Compiler *c, const char *name) {
     g_cn_next = malloc(sizeof(int) * (size_t)(nt->count > 0 ? nt->count : 1));
     if (!g_cn_first || !g_cn_next || !g_cn_last) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
     for (int id = comp_kind_first(c, NK_CallNode); id >= 0; id = comp_kind_next(c, id)) cn_add(nt, id);
-    g_cn_nt = nt; g_cn_ver = nt->version; g_cn_clones = nt->clone_version; g_cn_cnt = nt->count;
+    g_cn_nt = nt; g_cn_ver = nt->version; g_cn_cnt = nt->count;
+    nt_low_watch((NodeTable *)nt);
   }
   int k = anh_find(&g_cn_names, name);
   return k >= 0 ? g_cn_first[k] : -1;

@@ -1106,17 +1106,27 @@ int emit_transform_hash_expr(Compiler *c, int id, Buf *b) {
   int lastv = bb[bn - 1];
   int has_next = fold_body_has_next(c, body);
   int box_last = !keys && dr.val == TY_POLY && (bret == TY_STRING || bret == TY_STRBUF);
-  int oset_v = !keys && dvn && dr.val == TY_INT && !has_next &&
-               (bret == TY_POLY || bret == TY_UNKNOWN || node_has_oint_form(c, lastv));
+  int oset_v = !keys && dvn && dr.val == TY_INT &&
+               (has_next || bret != TY_INT || node_has_oint_form(c, lastv));
+  int value_oint = oset_v && (bret == TY_INT || bret == TY_NIL);
   /* a `next <v>` answers for this pair: the body writes a slot and the
      set below reads it, where the bare `continue` of a tail read skipped
      the set and dropped the pair */
   if (has_next) {
     int tv = ++g_tmp;
     char dst[32]; snprintf(dst, sizeof dst, "_t%d", tv);
-    if (box_last) bret = TY_POLY;
-    emit_indent(g_pre, g_indent + 1); emit_ctype(c, bret, g_pre);
-    buf_printf(g_pre, " %s = %s;", dst, bret == TY_POLY ? "sp_box_nil()" : default_value_from_compiler(c, bret));
+    if (box_last || (oset_v && !value_oint)) bret = TY_POLY;
+    emit_indent(g_pre, g_indent + 1);
+    if (value_oint) {
+      bret = TY_INT;
+      buf_printf(g_pre, "sp_oint %s = sp_oint_nil();", dst);
+      g_bv_dest_ty = TY_INT;
+      g_bv_dest_oint = 1;
+    }
+    else {
+      emit_ctype(c, bret, g_pre);
+      buf_printf(g_pre, " %s = %s;", dst, bret == TY_POLY ? "sp_box_nil()" : default_value_from_compiler(c, bret));
+    }
     /* A valued next keeps this slot live while its ensure clauses run. */
     if (ty_gc_holds_refs(c, bret)) {
       buf_puts(g_pre, " ");
@@ -1129,8 +1139,8 @@ int emit_transform_hash_expr(Compiler *c, int id, Buf *b) {
   else {
     for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, g_indent + 1);
     int save = g_indent; g_indent++;
-    if (oset_v && bret == TY_INT) emit_oint_expr(c, lastv, TY_INT, &vb);
-    else if (box_last) emit_boxed(c, lastv, &vb);
+    if (value_oint) { emit_oint_expr(c, lastv, TY_INT, &vb); bret = TY_INT; }
+    else if (box_last || oset_v) { emit_boxed(c, lastv, &vb); bret = TY_POLY; }
     else emit_expr(c, bb[bn - 1], &vb);
     g_indent = save;
   }

@@ -42690,6 +42690,19 @@ static int mark_hash_nil_values(Compiler *c) {
   int changed = 0;
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
     const char *nm = nt_str(nt, id, "name");
+    if (nm && is_hash_transform(nm)) {
+      unsigned char *f = hash_vnil_flag(c, infer_type(c, id));
+      if (!f || *f) continue;
+      int recv = nt_ref(nt, id, "receiver"), block = nt_ref(nt, id, "block");
+      if (recv < 0 || nt_kind(nt, block) != NK_BlockNode) continue;
+      const IterRow *row = iter_row_of(infer_type(c, recv), nm, call_plain_argc(c, id));
+      if (!row || row->answer != IA_BLOCKVALS || cplan_user(c, id).dispatch != CP_NONE) continue;
+      if (hash_store_val_may_nil(c, nt_ref(nt, block, "body")) || block_jumps_nil(c, block)) {
+        *f = 1;
+        changed = 1;
+      }
+      continue;
+    }
     if (!nm || (!sp_streq(nm, "[]=") && !sp_streq(nm, "store"))) continue;
     unsigned char *f = hash_vnil_flag(c, infer_type(c, nt_ref(nt, id, "receiver")));
     if (!f || *f) continue;

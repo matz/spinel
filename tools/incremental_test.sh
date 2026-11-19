@@ -317,13 +317,14 @@ for u in "$U"/unit_*.c; do
   grep -q " $h " "$U/units.txt" || hmis=$((hmis + 1))
 done
 diff -r "$U" "$T/u2" > /dev/null 2>&1 && det=1 || det=0
-# __COUNTER__ as a macro argument, so a comment that names it does not count
+# The pointer, boxed, string and caller-context guards use __COUNTER__.
+# Count macro arguments so a comment that names it does not count.
 nctr=$(grep -c '[(,][ 	]*__COUNTER__[ 	]*)' lib/sp_gc.h)
 other=$(grep -rl --include='*.h' '[(,][ 	]*__COUNTER__[ 	]*)' lib | grep -v '^lib/sp_gc.h$' | wc -l | tr -d ' ')
 o=0
 [ $r1 = 0 ] && [ $r2 = 0 ] && [ "$nu" -gt 0 ] && [ "$nu" = "$lines" ] && [ "$npr" = 0 ] && [ "$nproto" = 0 ] &&
   [ "$nuse" -gt 0 ] && [ "$nbody" = 0 ] && [ "$gaps" = 0 ] && [ "$dupl" = 0 ] && [ "$dupf" = 0 ] &&
-  [ "$hmis" = 0 ] && [ $det = 1 ] && [ "$nctr" = 3 ] && [ "$other" = 0 ] && o=1
+  [ "$hmis" = 0 ] && [ $det = 1 ] && [ "$nctr" = 4 ] && [ "$other" = 0 ] && o=1
 report "10 unit directory" $o "units=$nu manifest=$lines pragmas=$npr header-method-protos=$nproto (unit uses $nuse) header-non-inline-bodies=$nbody gcr-gaps=$gaps (of $ngcr) dup-labels=$dupl dup-files=$dupf hash-mismatches=$hmis deterministic=$det __COUNTER__=$nctr+$other"
 [ "$nbody" = 0 ] || head -3 "$T/u.bodies" | sed 's/^/    /'
 

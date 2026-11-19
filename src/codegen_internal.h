@@ -3416,7 +3416,6 @@ void emit_poly_quantifier_walk(Compiler *c, int id, int ta, int tp, int tn, int 
 void emit_poly_iter_obj_reject_as(Compiler *c, int call, int tv, const char *name, const char *shown, Buf *b);
 void emit_poly_iter_recv_reject(Compiler *c, int call, const char *name, Buf *rb, Buf *out, int indent);
 void emit_method_signature(Compiler *c, Scope *s, Buf *b);
-void emit_method(Compiler *c, Scope *s, Buf *b);
 int is_nested_block(const char *ty);
 void proc_collect_locals(Compiler *c, int id, NameSet *locals);
 int conv_reads_shared_storage(Compiler *c, int node);

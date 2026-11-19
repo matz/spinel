@@ -113,9 +113,12 @@ static inline void **sp_gc_root_at(int i) {
 static inline int _sp_gc_root_push(void **p) { (void)p; return 0; }
 static inline void _sp_gc_root_pop(int *added) { (void)added; }
 #else
-static inline int _sp_gc_root_push(void **p) {
-  if (sp_gc_nroots < SP_GC_STACK_MAX) { sp_gc_roots[sp_gc_nroots++] = p; return 1; }
+static inline int sp_gc_push_at(int *depth, void ***slots, void **p) {
+  if (*depth < SP_GC_STACK_MAX) { slots[(*depth)++] = p; return 1; }
   return sp_gc_root_push_slow(p);
+}
+static inline int _sp_gc_root_push(void **p) {
+  return sp_gc_push_at(&sp_gc_nroots, sp_gc_roots, p);
 }
 static inline void _sp_gc_root_pop(int *added) { if (*added) sp_gc_nroots--; }
 #endif
@@ -173,6 +176,32 @@ typedef struct { int nv; int np; } sp_gc_frame_hdr;
 #define SP_GC_ENTRY_PTR(v)   ((void**)((uintptr_t)&(v) | _SP_GC_SLOT_TAG(v)))
 #define SP_GC_ENTRY_RBVAL(v) ((void**)((uintptr_t)&(v) | (uintptr_t)1))
 #define SP_GC_ENTRY_STR(v)   ((void**)((uintptr_t)&(v) | (uintptr_t)2))
+
+/* A direct caller can resolve the worker's TLS addresses outside its loop.
+   A started thread stays on its worker. Fiber switches change the contents
+   of these slots, so pass only their addresses. The overflow segment can
+   move and is looked up on each slow push. */
+typedef struct { int *depth; void ***slots; } sp_gc_root_ctx;
+static inline sp_gc_root_ctx sp_gc_current_roots(void) {
+  return (sp_gc_root_ctx){ &sp_gc_nroots, sp_gc_roots };
+}
+#ifdef SP_GC_NONE
+#define SP_GC_SAVE_CTX(ctx) SP_GC_SAVE()
+#define SP_GC_ROOT_CTX(ctx, entry) ((void)0)
+#define SP_GC_ROOT_FRAME_CTX(ctx, f) ((void)0)
+#else
+typedef struct { int *depth; int value; } sp_gc_root_mark;
+static inline void sp_gc_restore_mark(sp_gc_root_mark *mark) { *mark->depth = mark->value; }
+static inline void sp_gc_pop_mark(sp_gc_root_mark *mark) { if (mark->value) --*mark->depth; }
+#define SP_GC_SAVE_CTX(ctx) int _gc_saved = *(ctx).depth; \
+  sp_gc_root_mark SP_CLEANUP(sp_gc_restore_mark) _sp_gc_saved_mark = {(ctx).depth, _gc_saved}
+#define SP_GC_ROOT_CTX(ctx, entry) sp_gc_root_mark SP_CLEANUP(sp_gc_pop_mark) \
+  _SP_GC_CONCAT(_sp_gcr_, __COUNTER__) = {(ctx).depth, sp_gc_push_at((ctx).depth, (ctx).slots, (entry))}
+#define SP_GC_ROOT_FRAME_CTX(ctx, f) ((void)sp_gc_push_at((ctx).depth, (ctx).slots, (void**)((uintptr_t)&(f) | (uintptr_t)3)))
+#endif
+#define SP_GC_ROOT_PTR_CTX(ctx, v)   SP_GC_ROOT_CTX(ctx, SP_GC_ENTRY_PTR(v))
+#define SP_GC_ROOT_RBVAL_CTX(ctx, v) SP_GC_ROOT_CTX(ctx, SP_GC_ENTRY_RBVAL(v))
+#define SP_GC_ROOT_STR_CTX(ctx, v)   SP_GC_ROOT_CTX(ctx, SP_GC_ENTRY_STR(v))
 
 /* --gc=none (the emitted TU defines SP_GC_NONE): no collector runs, so
    nothing reads a root. The TU registers none -- its frames, its slots and

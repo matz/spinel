@@ -31,3 +31,10 @@ receiver
 ["first", "second", nil]
 receiver
 "zero block"
+receiver
+[1, "wrapped"]
+receiver
+[[2, "right"], nil]
+receiver
+[[3, "left"], nil]
+[[4, "ordinary call"], nil]

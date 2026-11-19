@@ -48,3 +48,13 @@ p choose(curries, 0).call(*["second"]) { "call block" }
 p choose(curries, 0).yield("second", &nil)
 zero = ->(&block) { block&.call }.curry
 p choose([zero, Yielder.new], 0).yield { "zero block" }
+
+first = ->(value, &block) { [value, block&.call] }
+second = ->(value, &block) { [value, block&.call] }
+wrapped = first.curry.to_proc.curry(1)
+p choose([wrapped, Yielder.new], 0).yield(1) { "wrapped" }
+right = (first >> second).curry(1)
+left = (second << first).curry(1)
+p choose([right, Yielder.new], 0).yield(2) { "right" }
+p choose([left, Yielder.new], 0).yield(*[3]) { "left" }
+p (first >> second).call(4) { "ordinary call" }

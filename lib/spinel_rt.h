@@ -23864,6 +23864,9 @@ typedef struct { sp_Proc *outer; sp_Proc *inner; } sp_ProcCompose;
 static void sp_proc_compose_scan(void *p) { sp_gc_mark(p); sp_ProcCompose *c = (sp_ProcCompose *)p; if (c->outer) sp_gc_mark(c->outer); if (c->inner) sp_gc_mark(c->inner); }
 static sp_int sp_proc_compose_fn(void *cap, sp_int argc, sp_int *args) {
   sp_ProcCompose *c = (sp_ProcCompose *)cap;
+  sp_Proc *blk = _sp_proc_blk;
+  _sp_proc_blk = NULL;
+  SP_GC_ROOT(blk);
   /* The composed proc is usually anonymous at its call site -- `(f >> g).call`
      holds it in no variable -- so nothing keeps the capture alive while this
      body runs, and a collection triggered by the inner proc's own allocations
@@ -23880,9 +23883,9 @@ static sp_int sp_proc_compose_fn(void *cap, sp_int argc, sp_int *args) {
   sp_int inner_args[16] = {0};
   sp_int *inner = argc > 16 && args ? args : inner_args;
   for (sp_int _i = 0; inner == inner_args && _i < argc && _i < 16; _i++) inner_args[_i] = args ? args[_i] : 0;
-  /* the caller already published the boxed argument(s) to the side-channel, so
-     the inner proc reads them back regardless of its parameters' static types */
-  sp_proc_call(c->inner, inner == inner_args && argc > 16 ? 16 : argc, inner);
+  /* The first proc receives the original call's arguments and block.
+     The second proc receives only the first proc's result. */
+  sp_proc_call_blk(c->inner, blk, inner == inner_args && argc > 16 ? 16 : argc, inner);
   /* the inner proc publishes its (boxed) result through the return slot;
      thread it to the outer proc on BOTH channels -- a poly parameter reads
      the side-channel, a concrete one reads the sp_int slot. */
@@ -24045,6 +24048,8 @@ static sp_RbVal sp_curry_call_channel(sp_Curry *c, sp_int n, sp_Proc *blk) {
    composes exactly like the proc it stands for (#3864). */
 static sp_int sp_curry_proc_fn(void *cap, sp_int argc, sp_int *args) {
   sp_Curry *cy = (sp_Curry *)cap;
+  sp_Proc *blk = _sp_proc_blk;
+  _sp_proc_blk = NULL;
   (void)args;
   /* what the caller said of its trailing argument is consumed here, as a
      proc's prologue consumes it: a curry that is this wrapper's target set
@@ -24055,7 +24060,7 @@ static sp_int sp_curry_proc_fn(void *cap, sp_int argc, sp_int *args) {
   /* apply-and-decide, like every other application path: a call that does
      not reach the accumulator's count answers the next curry, not the
      target called short */
-  _sp_proc_poly_ret = sp_curry_call_channel(cy, argc, NULL);
+  _sp_proc_poly_ret = sp_curry_call_channel(cy, argc, blk);
   return sp_poly_to_i(_sp_proc_poly_ret);
 }
 /* sp_Proc_scan calls cap_scan WITHOUT marking the capture first, so this hook

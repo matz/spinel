@@ -67,6 +67,8 @@ Boxed callable dispatch holds the receiver and arguments before it
 binds the block operand. Proc invocation carries the captured block and
 the keyword marker through the same call as the argument vector. A boxed
 curried Proc forwards the block of the call that completes its arguments.
+A composed Proc forwards the block to its first function and passes that
+function's result to the second.
 
 A scoped String local stores an `sp_String *`. A byte reader projects
 the payload from that object at its use. Nil uses a null handle.

@@ -287,7 +287,7 @@ answer next to it (`lr_body_def_version`, over `lr_body_forms`). The scope
 is the name, program-wide: the plan answers no other entry as a body's
 version yet, and once a name has versions its readers (the entries' arms,
 the poly arms, the presence readers, `respond_to?`, `method_defined?` and
-the list readers, the hooks) ask the record's by-name index, which holds
+the list readers, the hooks: "Readers of a body's versions" below) ask the record's by-name index, which holds
 every history of the name in every class on both sides, and read them as
 versions only. The entries that bar it are, anywhere in the program, a def
 that is not public where it runs, a def, an alias or an undef that lands
@@ -425,13 +425,50 @@ receiver's class. Each reader asks the entries a call at its point asks
 visibility with `true`; a `method_defined?`'s as a list asks): a test
 that reads a cell no reader kept is an internal error.
 
-A reader that answers from the final tables instead (a list of methods
-such as `instance_methods.include?`) keeps the table's answer
-for the calls of the names it may read: such a version is not late
-(`elab_body_reflected`), so a guard and the call it guards answer alike.
-Only list readers of the same side count: a class-side list
-(`K.singleton_methods`) leaves an instance method's versions to the
-cells.
+A `respond_to?` of a literal name, with include_all or without, on a
+value that may be a class asks the class side of each class it may be
+(`cplan_class_value_presence`): a class whose class method a body
+defines answers by that method's version cells, as the builtin does
+where none is live; one the record proves has no class method of the
+name live at the reader answers as the builtin does; any other answers
+from the table. A module's instance method a body defines answers so
+on a class that extends the module. Codegen renders the plan's arms as
+one test of the value's class (`class_value_responds`).
+
+A list of a class's own instance methods on a constant
+(`C.instance_methods(false)` and its `public_`, `protected_` and
+`private_` forms, `list_cells_shape`) is a reader of each name a body
+may define there, on the class's own side (`CT_OWN`): the list holds the
+name where one of its cells says it is live (a body's version is public,
+so a list that shows public names). It asks the class object, live from
+its header on, where no instance may exist yet (`ct_version_at`).
+
+A reader that answers from the final tables instead keeps the table's
+answer for the calls of the names it may read: such a version is not
+late (`elab_body_reflected`), so a guard and the call it guards answer
+alike. Those are a list that includes inherited names
+(`K.instance_methods`, `instance_methods.include?`), a list on a
+module (`M.instance_methods(false)`), a list on a receiver that is not
+a constant, and every reader of a program that defines
+`respond_to_missing?`; there a body's def is listed, and answers
+`respond_to?`, before it runs. A module's def such a list may read is
+the table's on a class that extends the module too, so the class value's
+`respond_to?` answers it from the start. Only list readers of the same
+side count: a class-side list (`K.singleton_methods`) leaves an instance
+method's versions to the cells. A body that makes a definition the
+record cannot follow (a `private def`) is listed whole from the start.
+
+A reader called inside a body (a class method that defines `m2` and then
+calls one that asks `respond_to?(:m2)` or calls `m2`) reads what that
+body does: the record follows a def it holds as a body's version
+(`lr_body_held`) instead of taking the call for one that may define
+anything (`lr_callee_defines`), so the reader's call there takes the
+entry, which finds the def once it has run. These still make the body's
+calls opaque, and the reader answers from the start: a reader reached
+through `super`, a literal `send` or `public_send`, or a Proc kept in a
+constant; a reader that makes a lambda, or takes a block and calls it; a
+body that passes its block on to the reader (`look(&b)`); and a body that
+calls itself.
 
 ## Freshness and cost
 

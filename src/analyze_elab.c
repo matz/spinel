@@ -2779,7 +2779,8 @@ static int lr_most(int o, int w) {
    program's it may run: 0 nothing, else the most any of them may
    (LR_OPAQUE_*)? The most of what each place the program defines the name
    may do (lr_body_defines), and define, where a def is not recorded yet
-   (past the frontier, or in a method body, while the record is made), or
+   (past the frontier, or in a method body, while the record is made, but
+   one it holds as a body's version, lr_body_held), or
    the place is an attr, an alias or a define_method. A name the program
    defines nowhere is a builtin's, which lr_node_defines answers for by its
    name. */
@@ -2792,7 +2793,12 @@ static int lr_callee_defines(Compiler *c, const char *name, int direct, int dept
   if (nd < nn) return LR_OPAQUE_DEFINES;
   for (int i = 0; i < nd; i++) {
     LoadPoint p = elab_point_of(c, d[i].node);
-    if (!r->recorded && (p.region < 0 || p.seq >= r->frontier)) return LR_OPAQUE_DEFINES;
+    /* (a def the record holds as a body's version is followed: its body
+       says, lr_body_held; asked unkept first, as a no of a class the walk
+       has not reached yet would be kept) */
+    int held = !r->recorded && p.region < 0 && nt_kind(c->nt, d[i].node) == NK_DefNode && lr_body_holds(c, d[i].node) && lr_body_held(c, d[i].node);
+    if (!r->recorded && (p.region < 0 ? !held : p.seq >= r->frontier))
+      return LR_OPAQUE_DEFINES;
     o = lr_most(o, lr_body_defines(c, d[i].node, direct, depth + 1));
     if (o == LR_OPAQUE_DEFINES) return o;
   }

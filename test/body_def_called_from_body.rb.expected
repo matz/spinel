@@ -1,0 +1,12 @@
+[:before, NoMethodError, NoMethodError, [NoMethodError, NoMethodError, NoMethodError], false]
+[:run, false, NoMethodError]
+[:in0, NoMethodError, NoMethodError, [NoMethodError, NoMethodError, NoMethodError], false]
+[:in1, [:m2, 5, [6], 7], [:m2, 1, [], 2], [[:m2, 1, [], 2], NoMethodError, NoMethodError], true]
+[:after, [:m2, 5, [6], 7], [:m2, 1, [], 2], [[:m2, 1, [], 2], NoMethodError, NoMethodError], true]
+[:run, true, [:m2, 1, [], 2]]
+[NoMethodError, NoMethodError]
+[:l2, :l4]
+NoMethodError
+:q
+:old
+:new

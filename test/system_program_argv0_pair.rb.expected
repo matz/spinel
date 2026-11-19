@@ -20,3 +20,7 @@ statement
 "no implicit conversion of Integer into String"
 "no implicit conversion of Integer into String"
 "wrong first argument"
+original
+true
+mutated
+true

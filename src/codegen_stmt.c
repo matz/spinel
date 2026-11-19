@@ -846,6 +846,7 @@ void emit_system_call(Compiler *c, int id, const int *argv, int argc, Buf *b) {
   const NodeTable *nt = c->nt;
   if (!nt_argv_has_splat(nt, argv, argc)) system_refuse_unsupported(c, id, argv, argc);
   int ta = ++g_tmp, tv = ++g_tmp, tr = ++g_tmp, te = ++g_tmp, tp = ++g_tmp, tq = ++g_tmp;
+  int t0 = ++g_tmp;
   buf_printf(b, "({ sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", ta, ta);
   for (int k = 0; k < argc; k++) {
     if (nt_kind(nt, argv[k]) == NK_SplatNode) {
@@ -867,18 +868,19 @@ void emit_system_call(Compiler *c, int id, const int *argv, int argc, Buf *b) {
                 " if (_t%d->len == 0) sp_raise_cls(\"ArgumentError\", \"wrong number of arguments (given 0, expected 1+)\");"
                 " sp_system_env_check(_t%d); }",
              te, te, ta, te, ta, ta, te);
-  /* [program, argv0]: exactly two elements, each converted as an argument
-     is; argv0 takes the pair's place, and the rooted program is run */
-  buf_printf(b, " sp_RbVal _t%d = sp_box_nil(); SP_GC_ROOT_RBVAL(_t%d); sp_PolyArray *_t%d = NULL; SP_GC_ROOT(_t%d);"
-                " if (sp_json_kind(_t%d->data[0]) == 1) { _t%d = sp_poly_to_poly_array(_t%d->data[0]);"
+  /* Hold both values before converting either. The program's to_str can
+     replace the caller's argv0 slot or mutate the original argv0 String. */
+  buf_printf(b, " sp_RbVal _t%d = sp_box_nil(); SP_GC_ROOT_RBVAL(_t%d);"
+                " if (sp_json_kind(_t%d->data[0]) == 1) { sp_PolyArray *_t%d = sp_poly_to_poly_array(_t%d->data[0]);"
                 " if (_t%d->len != 2) sp_raise_cls(\"ArgumentError\", \"wrong first argument\");"
+                " sp_RbVal _t%d = _t%d->data[1]; SP_GC_ROOT_RBVAL(_t%d);"
                 " _t%d = sp_system_arg_box(_t%d->data[0]);"
-                " sp_PolyArray_set(_t%d, 0, sp_system_arg_box(_t%d->data[1])); }",
-             tp, tp, tq, tq, ta, tq, ta, tq, tp, tq, ta, tq);
-  /* every element converts once, before anything is allocated, so a TypeError
-     from one does not leak the argv and a to_str runs only once; the rooted
-     array keeps the converted String */
-  buf_printf(b, " for (sp_int _i = 0; _i < _t%d->len; _i++) sp_PolyArray_set(_t%d, _i, sp_system_arg_box(_t%d->data[_i]));", ta, ta, ta);
+                " sp_PolyArray_set(_t%d, 0, sp_system_arg_box(_t%d)); }",
+             tp, tp, ta, tq, ta, tq, t0, tq, t0, tp, tq, ta, t0);
+  /* The rooted array holds each conversion. Finish before allocating
+     the native argument vector, so a conversion failure can't leak it. */
+  buf_printf(b, " for (sp_int _i = _t%d.tag == SP_TAG_NIL ? 0 : 1; _i < _t%d->len; _i++)"
+                " sp_PolyArray_set(_t%d, _i, sp_system_arg_box(_t%d->data[_i]));", tp, ta, ta, ta);
   buf_printf(b, " const char **_t%d = (const char **)malloc(sizeof(char *) * (size_t)(_t%d->len + 1));", tv, ta);
   buf_printf(b, " for (sp_int _i = 0; _i < _t%d->len; _i++) _t%d[_i] = sp_rbval_string_bytes(_t%d->data[_i]);", ta, tv, ta);
   buf_printf(b, " _t%d[_t%d->len] = NULL; sp_RbVal _t%d = sp_system_answer(sp_system_prog_env_args(_t%d,"

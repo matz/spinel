@@ -84,7 +84,10 @@ class PP < PrettyPrint
       pp_members "#<struct #{obj.class.name}", obj.members, obj.to_a
     when Data
       h = obj.to_h
-      pp_members "#<data #{obj.class.name}", h.keys, h.values
+      # no space after "data" for a class with no name, as CRuby's
+      # Data#pretty_print; its Struct#pretty_print keeps the space
+      name = obj.class.name
+      pp_members(name ? "#<data #{name}" : "#<data", h.keys, h.values)
     else
       if obj.respond_to?(:pretty_print)
         obj.pretty_print(self)

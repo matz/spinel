@@ -202,8 +202,10 @@ These are deliberate consequences of real parallelism, listed in
 | `SPINEL_GC_SWEEPERS` | how many sweeper threads sweep the old lists (default the worker count, at most 8, and none where the process may use a single CPU: the collector then sweeps under the barrier, as with `SPINEL_GC_CONC=0`). `SPINEL_GC_OWNER=0` hands them the young lists too, instead of each worker sweeping its own |
 | `SPINEL_GC_TRIM_SEC` | how often the container buffers glibc still holds are given back to the OS with `malloc_trim` (default 1, `0` never). A trim walks every arena, tens of milliseconds on a many-core box; it runs on its own thread beside the program, but a worker that allocates from the arena being walked waits for it, so a longer interval buys latency for memory: on a 32-core server `10` took the room page's p99 from 122 to 102 ms and its RSS from 950 MB to 1.4 GB |
 
-The floor is scaled by the worker pool size. The collector retunes the
-result after each collection unless the floor is fixed. With
+The configured worker limit scales the floor. `SPINEL_WORKERS` sets that
+limit, and the pool starts with one worker and adds helpers on demand.
+The collector retunes the threshold after each collection in adaptive
+mode. GC stress bypasses worker scaling and retuning. With
 `SPINEL_GC_STATS=1`, the `trigger` field reports the pool-wide budget in
 MB. See [The collector](internals/gc.md) for the counters and phases.
 

@@ -1,5 +1,6 @@
 #include "sp_cext.h"
 #include "sp_string.h"
+#include "sp_str.h"
 #include <assert.h>
 #include <stdio.h>
 
@@ -59,10 +60,26 @@ int main(void) {
         sp_RbVal cls = {SP_TAG_CLASS, SP_CLASS_BY_NAME, {.s = name}};
         VALUE canonical = sp_cext_value(cls);
         sp_fd_retire(payload);
+        char *binary_payload = malloc(SP_FD_OVH + 3);
+        assert(binary_payload);
+        const char *binary = sp_fd_setup(binary_payload);
+        SP_GC_ROOT_STR(binary);
+        memcpy((char *)binary, "\x80\0b", 4);
+        sp_str_set_len((char *)binary, 3);
+        sp_str_mark_binary((char *)binary);
+        sp_fd_retire(binary_payload);
         sp_gc_full_next = 1;
         sp_gc_collect();
         assert(sp_cext_handle_count() == 1 && sp_cext_value(cls) == canonical);
         assert(strcmp(name, "Name") == 0);
+        assert(sp_str_byte_len(binary) == 3 && sp_str_is_binary(binary));
+        char *copy = (char *)sp_str_from_bytes("\x80\0b", 3);
+        SP_GC_ROOT_STR(copy);
+        sp_str_mark_binary(copy);
+        const sp_str_hdr *retired = (const sp_str_hdr *)binary_payload;
+        uint64_t generation = retired->hash;
+        assert(sp_str_probe_eq(binary, copy) && sp_str_hash(binary) == sp_str_hash(copy));
+        assert(retired->hash == generation);
     }
     sp_gc_full_next = 1;
     sp_gc_collect();

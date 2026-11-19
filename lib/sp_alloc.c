@@ -144,9 +144,8 @@ void sp_alloc_worker_tune(int workers) {
      the adaptive threshold had become: 76 MB -> 2.4 GB on a 32-core machine,
      with no collection involved, and the churn that followed then ran to a
      997 MB heap against a 66 MB live set without collecting once. The
-     multiplier is the POOL size (min(cores, SPINEL_WORKERS)), not the thread
-     count the program asked for, so the damage scales with the machine
-     (#4146). */
+     multiplier is the configured worker limit. The number of live Ruby
+     threads can differ from it (#4146). */
   { size_t cur = SP_GC_CTR_GET(sp_gc_threshold);
     if (sp_gc_threshold_init > cur) SP_GC_CTR_SET(sp_gc_threshold, sp_gc_threshold_init); }
 }
@@ -289,14 +288,8 @@ void sp_gc_retune_object(size_t before) {
      count that had itself wrapped. */
   size_t freed = before > live ? before - live : 0;
 
-  if (freed < before / 4) {
-    sp_gc_threshold = sp_gc_sat_mul(before, 2);
-  } else if (live > 0) {
-    sp_gc_threshold = sp_gc_sat_mul(live, 2);
-    if (sp_gc_threshold < sp_gc_threshold_init) sp_gc_threshold = sp_gc_threshold_init;
-  } else {
-    sp_gc_threshold = sp_gc_threshold_init;
-  }
+  size_t next = sp_gc_sat_mul(freed < before / 4 ? before : live, 2);
+  sp_gc_threshold = next < sp_gc_threshold_init ? sp_gc_threshold_init : next;
 }
 /* The collector the allocation triggers call. A program built with
    --gc=none defines this pointer itself, as NULL: the definition here, being

@@ -363,7 +363,7 @@ static inline const char*sp_str_hash_walk(const char*s,uint64_t*hp,int*hip){
 /* The byte length of a String with a header that goes on past the NUL at q,
    else 0 */
 static inline size_t sp_str_hash_past_nul(const char*s,unsigned char m,const char*q){
-  if(m==0xfe||m==0xfd||m==0xf1||m==0xfb||m==0xfa){
+  if(sp_str_marker_has_hdr(m)){
     uint32_t l=(((const sp_str_hdr*)(s-1))-1)->len;
     if(l!=SP_STR_LEN_UNSET&&l>(size_t)(q-s))return l;
   }
@@ -391,7 +391,7 @@ static inline uint64_t sp_str_hash_compute(const char*s){
    call, so this function calls nothing and needs no frame. */
 static SP_NOINLINE uint64_t sp_str_hash_miss_nul(const char*s,unsigned char m){
   uint64_t h=sp_str_hash_compute(s);
-  if(m==0xfd)return h;
+  if(m==0xfd||m==0xf9)return h;
   sp_str_hdr*hd=((sp_str_hdr*)(s-1))-1;
   hd->hash=h?h:1;
   return hd->hash;
@@ -402,11 +402,12 @@ static SP_NOINLINE uint64_t sp_str_hash_miss(const char*s,unsigned char m){
      String goes on past the NUL (an unset length goes to
      sp_str_hash_miss_nul too, which reads it), whether it is BINARY, and
      whether it keeps its hash */
-  if(m==0xfe||m==0xfd||m==0xf1||m==0xfb||m==0xfa){
+  if(sp_str_marker_has_hdr(m)){
     sp_str_hdr*hd=((sp_str_hdr*)(s-1))-1;
     if(SP_UNLIKELY(hd->len>(size_t)(q-s)))return sp_str_hash_miss_nul(s,m);
     if(hi&&(hd->size&SP_STR_SIZE_BINARY))h^=0x9e3779b97f4a7c15ULL;
-    if(m==0xfd)return h;
+    /* A retired view uses the hash word for its mark generation. */
+    if(m==0xfd||m==0xf9)return h;
     hd->hash=h?h:1;
     return hd->hash;
   }

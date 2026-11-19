@@ -93,6 +93,8 @@
 #      reads 6 at both SPINEL_WORKERS=8 and 12, which is to say those two
 #      cells are the same run under two labels. Give LOCALITY_CHURN at least the
 #      largest W on the ladder to reach the requested pool size.
+#      Check the observed `workers=` count in SPINEL_SCHED_STATS=2 output
+#      during churn before comparing cells.
 #
 # The defaults here are sized for the gate, not for the ladder: small enough
 # to run with the suite, large enough to collect, and with eight churn threads

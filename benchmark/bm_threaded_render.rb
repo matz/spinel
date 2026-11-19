@@ -24,10 +24,9 @@
 #   3. FRESHLY ALLOCATED TEXT.  Every string interpolates the request id, so
 #      no two requests share one. Rendering from a fixture would pin the live
 #      set flat and the concurrency axis would go away with it.
-#   4. STRING BYTES OVER OBJECT BYTES.  The retained graph is small objects
-#      pointing at large strings. That is the ratio under which the object
-#      budget is priced off the smaller of the two quantities a mark walks
-#      (#4384), and a program whose object heap dominates cannot ask it.
+#   4. STRINGS DOMINATE THE LIVE BYTES. Small objects keep large Strings.
+#      The current collector charges the String handles and payloads to the
+#      same budget as the rest of the graph.
 #
 # What it shows. The claim in #4384 is that the mark does not parallelize:
 # its per-collection cost RISES as workers are added while the slot sweep
@@ -35,16 +34,17 @@
 # because the adaptive budget scales per worker and a wider budget collects
 # less often with more live at each collection -- which moves the mark for a
 # reason that is not the mark's. So the aggregate budget is pinned across the
-# ladder (the object floor is pool-wide, the string floor per worker, so both
-# bases are divided by the worker count):
+# ladder. The allocator scales the configured base by the worker limit, so
+# the base below divides the aggregate budget by that limit:
 #
 #   SPINEL_GC_OBJ_BUDGET=fixed \
 #   SPINEL_GC_THRESHOLD_OBJ_KB=$((65536/W)) \
 #   SPINEL_WORKERS=$W SPINEL_GC_PHASES=1
 #
-# On the machine this was written on (Apple M-series, 6 performance cores),
-# where `root walk` is the roots + fibers + globals fields of the [gcph] mark
-# split and `scan` is the trace:
+# Measurements below used the older split-heap collector on Apple M-series
+# hardware with six performance cores. In those rows, `root walk` is the
+# roots + fibers + globals fields of the [gcph] mark split and `scan` is
+# the trace.
 #
 #   W    colls   objs/coll   mark/coll   root walk   scan      ns/obj   slot sweep/coll
 #   1     37      182,158      2.81 ms    0.000 ms   2.81 ms    15.4       5.89 ms

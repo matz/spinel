@@ -3702,7 +3702,7 @@ static int sp_available_cpus(void) {
   return n;
 }
 
-/* min(available CPUs, SPINEL_WORKERS); the env var overrides the autodetect. */
+/* The configured worker limit, or the detected CPU count by default. */
 static int sp_worker_count(void) {
   const char *e = getenv("SPINEL_WORKERS");
   int n;

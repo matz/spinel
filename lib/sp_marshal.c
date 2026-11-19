@@ -125,6 +125,19 @@ static void sp_mar_w_hash(sp_mar_buf *b, sp_RbVal v) {
   }
   if (d.tag != SP_TAG_NIL) sp_mar_w(b, d);
 }
+static void sp_mar_w_string(sp_mar_buf *b, const char *bytes, size_t len, int binary, void *identity);
+
+static void sp_mar_w_range_bound(sp_mar_buf *b, sp_RbVal end, int symbol_name) {
+  if (symbol_name && end.tag != SP_TAG_NIL) {
+    /* A Symbol bound is written as a String record. Its spelling shares no
+       object link with the String returned by Symbol#name. */
+    sp_String *name = end.v.p;
+    sp_mar_w_string(b, name->data, (size_t)name->len, name->binary, NULL);
+    return;
+  }
+  sp_mar_w(b, end);
+}
+
 /* A Range (Integer, Float or String), as CRuby writes one: an `o` record of
    class Range with its exclude-end flag and its two ends, in that order. An
    absent end (beginless, endless) is nil. Each kind reads its own layout:
@@ -134,13 +147,14 @@ static void sp_mar_w_hash(sp_mar_buf *b, sp_RbVal v) {
    writes its endpoint handles and holds NULL for an absent end. */
 static void sp_mar_w_range(sp_mar_buf *b, sp_RbVal v) {
   sp_RbVal bg = mk_nil(), ed = mk_nil();
-  int excl;
+  int excl, symbol_names = 0;
   SP_GC_ROOT_RBVAL(bg); SP_GC_ROOT_RBVAL(ed);
   if (v.cls_id == SP_BUILTIN_STR_RANGE) {
     sp_StrRange s = sp_srange_value(v.v.p);
     if (s.first) bg = mk_strbuf(s.first);
     if (s.last) ed = mk_strbuf(s.last);
     excl = s.excl != 0;
+    symbol_names = s.sym;
   }
   else if (v.cls_id == SP_BUILTIN_FLOAT_RANGE) {
     sp_FloatRange *f = (sp_FloatRange *)v.v.p;
@@ -157,8 +171,8 @@ static void sp_mar_w_range(sp_mar_buf *b, sp_RbVal v) {
   }
   sp_mar_b(b, 'o'); sp_mar_sym(b, "Range"); sp_mar_long(b, 3);
   sp_mar_sym(b, "excl"); sp_mar_w(b, mk_bool(excl));
-  sp_mar_sym(b, "begin"); sp_mar_w(b, bg);
-  sp_mar_sym(b, "end"); sp_mar_w(b, ed);
+  sp_mar_sym(b, "begin"); sp_mar_w_range_bound(b, bg, symbol_names);
+  sp_mar_sym(b, "end"); sp_mar_w_range_bound(b, ed, symbol_names);
 }
 /* An Integer: a Fixnum record `i` while it fits CRuby's 31-bit marshal
    Fixnum (-2**30 ... 2**30 - 1), else the Bignum record `l` -- a sign, a

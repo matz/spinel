@@ -39,3 +39,10 @@ p z[0], z[1], z[2].begin, z[2].end, z[3][:k], z[4]
 p z[0].sum, z[1].to_a, z[1].begin.frozen?, z[3][:k].to_a
 GC.start
 p Marshal.load(Marshal.dump("aa".."ad")).to_a
+
+# The Symbol name and a bound have distinct object records. The objects
+# that follow them still use the correct link numbers.
+names = [:a, :c, 1]
+after = String.new("after the bounds")
+linked = Marshal.load(Marshal.dump([:a.name, names[0]..names[1], after, after]))
+p linked[0].equal?(linked[1].begin), linked[2].equal?(linked[3])

@@ -678,6 +678,34 @@ static const char *sp_timev_strftime_n(sp_Time t, const char *fmt, size_t flen) 
       long gc = gy >= 0 ? gy / 100 : -((-gy + 99) / 100);
       snprintf(val, sizeof val, "%02ld", gy - gc * 100);
     }
+    /* the numeric fields, as the C locale's strftime writes them (two
+       digits zero-padded, %e %k %l space-padded, %j three digits, %u %w
+       one), written from the fields where each was a call of strftime */
+    else if (strchr("dHMSmjeklIuw", d)) {
+      int v = 0, w = 2, sp = 0;
+      switch (d) {
+        case 'd': v = tmv.tm_mday; break;
+        case 'e': v = tmv.tm_mday; sp = 1; break;
+        case 'H': v = tmv.tm_hour; break;
+        case 'k': v = tmv.tm_hour; sp = 1; break;
+        case 'I': v = tmv.tm_hour % 12 ? tmv.tm_hour % 12 : 12; break;
+        case 'l': v = tmv.tm_hour % 12 ? tmv.tm_hour % 12 : 12; sp = 1; break;
+        case 'M': v = tmv.tm_min; break;
+        case 'S': v = tmv.tm_sec; break;
+        case 'm': v = tmv.tm_mon + 1; break;
+        case 'j': v = tmv.tm_yday + 1; w = 3; break;
+        case 'u': v = tmv.tm_wday ? tmv.tm_wday : 7; w = 1; break;
+        case 'w': v = tmv.tm_wday; w = 1; break;
+      }
+      if (v < 0 || v > 999) snprintf(val, sizeof val, sp ? "%*d" : "%0*d", w, v);
+      else {
+        char dg[3] = { (char)('0' + v / 100), (char)('0' + v / 10 % 10), (char)('0' + v % 10) };
+        int nd = v >= 100 ? 3 : v >= 10 ? 2 : 1, k = 0;
+        for (int i = nd; i < w; i++) val[k++] = sp ? ' ' : '0';
+        for (int i = 3 - nd; i < 3; i++) val[k++] = dg[i];
+        val[k] = 0;
+      }
+    }
     else if (strchr("aAbBcCdDeFgGhHIjklmMnprRSTtuUvVwWxXyYzZ", d)) {
       /* a standard Ruby directive: format the bare `%X` (we redo width/case
          ourselves for portability) */

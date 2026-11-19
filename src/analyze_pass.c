@@ -7455,12 +7455,8 @@ static int local_is_class_new_super(Compiler *c, int mi, const char *name) {
    its own either. */
 int method_answers_receiver(Compiler *c, int mi) {
   if (mi < 0 || !c->scopes[mi].is_cmethod || c->scopes[mi].class_id < 0 || comp_ary_root(c, c->scopes[mi].class_id) >= 0) return 0;
-  /* A class that can receive the call and has a `self.new` of its own
-     decides what its calls answer, so mi's answer is not its instance. */
-  int nd = 0;
-  const int *ds = comp_descendants(c, c->scopes[mi].class_id, &nd);
-  for (int i = 0; i < nd; i++)
-    if (comp_new_receiver(c, ds[i]) && call_target(c, -1, ds[i], "new", CT_CMETHOD | CT_OWN, NULL) >= 0) return 0;
+  /* (the values first: they settle most methods, a `self.field(n) = n.to_s`,
+     without the descendants' lookups, one per class the method's class has) */
   int lv[16];
   int n = method_value_leaves(c, mi, lv, 16);
   if (n <= 0) return 0;
@@ -7470,6 +7466,12 @@ int method_answers_receiver(Compiler *c, int mi) {
         local_is_class_new_super(c, mi, nt_str(c->nt, lv[i], "name"))) continue;
     return 0;
   }
+  /* A class that can receive the call and has a `self.new` of its own
+     decides what its calls answer, so mi's answer is not its instance. */
+  int nd = 0;
+  const int *ds = comp_descendants(c, c->scopes[mi].class_id, &nd);
+  for (int i = 0; i < nd; i++)
+    if (comp_new_receiver(c, ds[i]) && call_target(c, -1, ds[i], "new", CT_CMETHOD | CT_OWN, NULL) >= 0) return 0;
   return 1;
 }
 

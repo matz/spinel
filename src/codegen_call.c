@@ -20790,9 +20790,10 @@ void emit_class_value_responds_helper(Compiler *c, const char *const *texts, int
    otherwise the call's literal block (if any) is lowered here. */
 void emit_cmethod_block_arg(Compiler *c, int id, Scope *cm, int blk_tmp, Buf *b) {
   if (!cm->blk_param || !cm->blk_param[0] || cm->yields) return;
+  if (cm->nparams > 0 || cmethod_takes_self_cls(c, cm)) buf_puts(b, ", ");
+  if (blk_tmp >= 0) { buf_printf(b, "_t%d", blk_tmp); return; }
   int blk0 = nt_ref(c->nt, id, "block");
   int blk_node = resolve_forwarded_block(c, blk0);
-  if (cm->nparams > 0 || cmethod_takes_self_cls(c, cm)) buf_puts(b, ", ");
   /* a forwarded block inside a body inlined for a caller that handed it a
      real proc (`fw(&pr)`) is that proc (forwarded_real_proc) */
   const char *fwd = forwarded_real_proc(blk0, blk_node);
@@ -20812,19 +20813,7 @@ void emit_cmethod_block_arg(Compiler *c, int id, Scope *cm, int blk_tmp, Buf *b)
     }
     buf_puts(b, "NULL"); return;
   }
-  if (blk_tmp < 0) {
-    blk_tmp = ++g_tmp;
-    Buf pb; memset(&pb, 0, sizeof pb);
-    emit_proc_literal(c, blk_node, &pb);
-    emit_indent(g_pre, g_indent);
-    buf_printf(g_pre, "sp_Proc *_t%d = %s;\n", blk_tmp, pb.p ? pb.p : "NULL");
-    /* Root the proc box: an allocating argument evaluated after this hoist
-       (or the callee prologue) may GC before the callee roots lv_blk. */
-    emit_indent(g_pre, g_indent);
-    buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", blk_tmp);
-    free(pb.p);
-  }
-  buf_printf(b, "_t%d", blk_tmp);
+  buf_printf(b, "_t%d", hoist_block_proc(c, blk_node));
 }
 
 /* Emit a compile-time trampoline that lets a compiled Ruby method be passed as

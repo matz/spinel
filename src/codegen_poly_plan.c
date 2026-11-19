@@ -3748,8 +3748,13 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
       int undef = sci < 0 || builtin ? 0 : cplan_undef_at(c, T->id, sci, name);
       if (undef < 0) undef = cplan_undef_before(c, T->id, sci, name) || cplan_undef_stops(c, T->id, sci, name);
       int raise_undef = undef && !cplan_has_method_missing(c, T->id, sci, 0);
-      if (raise_undef || builtin || (!undef && !string_reopen_defines(c, T->id, name)))
+      if (raise_undef)
         buf_printf(b, "if (sp_rbval_is_string(_t%d) && !sp_poly_is_str_subclass(_t%d)) { ", tv, tv);
+      else if (builtin || (!undef && !string_reopen_defines(c, T->id, name))) {
+        buf_puts(b, "if (");
+        emit_poly_str_guard(c, tv, name, b);
+        buf_puts(b, ") { ");
+      }
       else
         buf_printf(b, "if (_t%d.tag == SP_TAG_STR) { ", tv);
       if (raise_undef) {

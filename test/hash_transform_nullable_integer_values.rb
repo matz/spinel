@@ -13,3 +13,8 @@ p({ "a" => first, "b" => +"bbb" }.transform_values do |value|
     GC.start
   end
 end)
+
+# The Integer-valued layout carries nil even for this Hash. A next arm
+# still supplies the optional value the collecting block expects.
+a = {1 => 1, 2 => 2}
+p a.transform_values { |v| v == 1 ? (next v) : v + 2 }

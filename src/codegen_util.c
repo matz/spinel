@@ -9022,6 +9022,15 @@ void emit_oint_expr(Compiler *c, int node, TyKind t, Buf *b) {
     int pn = 0; const int *pv = nt_arr(nt, vc, "body", &pn);
     vc = pv && pn == 1 ? nt_paren_single(nt, pv[0]) : -1;
   }
+  /* A collecting block reads a tail next as its result. Read that result
+     in the requested optional form, as for an ordinary tail. Other next
+     expressions still leave the block through the statement emitter. */
+  if (nt_kind(nt, vc) == NK_NextNode && next_is_block_value(c, vc)) {
+    int argc = 0;
+    const int *argv = call_args(nt, vc, &argc);
+    if (argc == 0) { buf_puts(b, oint_nil(t)); return; }
+    if (argc == 1) { emit_oint_expr(c, argv[0], t, b); return; }
+  }
   /* a value with no C type of its own (a call on a method that answers
      nothing included): evaluated for its effect, then nil */
   if (vt == TY_NIL || vt == TY_VOID ||

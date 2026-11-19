@@ -58,3 +58,50 @@ left = (second << first).curry(1)
 p choose([right, Yielder.new], 0).yield(2) { "right" }
 p choose([left, Yielder.new], 0).yield(*[3]) { "left" }
 p (first >> second).call(4) { "ordinary call" }
+
+def keep_proc(&block)
+  block
+end
+
+saved = first.curry
+captured = keep_proc(&saved).curry(1)
+p choose([captured, Yielder.new], 0).yield(5) { "captured" }
+two_arguments = ->(x, y, &block) { [x, y, block&.call] }.curry
+p keep_proc(&two_arguments).call(6, 7) { "two arguments" }
+
+class LaterKeeper
+  def keep(&block)
+    block
+  end
+end
+
+def later_keeper
+  LaterKeeper.new
+end
+
+def keep_through_call(value)
+  later_keeper.keep(&value)
+end
+
+def check_later_receiver
+  value = ->(x, y, &block) { [x, y, block&.call] }.curry
+  p keep_through_call(value).call(8, 9) { "later receiver" }
+end
+
+check_later_receiver
+
+class AnotherKeeper
+  def keep(&block)
+    block
+  end
+end
+
+def make_kept_curry
+  puts "make curry"
+  ->(x, y, &block) { [x, y, block&.call] }.curry
+end
+
+[LaterKeeper.new, AnotherKeeper.new].each do |keeper|
+  kept = keeper.keep(&make_kept_curry)
+  p kept.call(10, 11) { "boxed receiver" }
+end

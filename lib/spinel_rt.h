@@ -24067,9 +24067,10 @@ static sp_int sp_curry_proc_fn(void *cap, sp_int argc, sp_int *args) {
    marks the curry itself before walking it (see sp_proc_compose_scan). */
 static void sp_curry_proc_scan(void *p) { sp_gc_mark(p); sp_curry_scan(p); }
 static sp_Proc *sp_curry_to_proc(sp_Curry *cy) {
+  if (!cy) return NULL;
   SP_GC_ROOT(cy);
   return sp_proc_new_meta((void *)sp_curry_proc_fn, cy, sp_curry_proc_scan, -1,
-                          (cy && cy->target) ? cy->target->lambda_p : TRUE, 1, NULL, NULL);
+                          cy->target ? cy->target->lambda_p : TRUE, 1, NULL, NULL);
 }
 
 /* Call a boxed callable. A Proc runs; a curried Proc (which a poly slot now

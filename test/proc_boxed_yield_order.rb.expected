@@ -38,3 +38,11 @@ receiver
 receiver
 [[3, "left"], nil]
 [[4, "ordinary call"], nil]
+receiver
+[5, "captured"]
+[6, 7, "two arguments"]
+[8, 9, "later receiver"]
+make curry
+[10, 11, "boxed receiver"]
+make curry
+[10, 11, "boxed receiver"]

@@ -8,3 +8,5 @@ lift 4
 reg1 5
 reg2a 11
 reg2b 12
+curried 22
+curried 24

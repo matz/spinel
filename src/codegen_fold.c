@@ -140,7 +140,8 @@ int resolve_forwarded_block(Compiler *c, int block) {
 /* The value of a `&expr` block argument as the sp_Proc * a `&blk`
    parameter takes: a Proc as itself, a boxed value through
    sp_poly_to_block (nil is no block), a Method through its trampoline
-   proc. Writes nothing and returns 0 for any other type. Each site that
+   proc, and a native Curry through its Proc wrapper. Writes nothing and
+   returns 0 for any other type. Each site that
    hands a block argument to a real `&blk` parameter goes through here;
    they each had the Proc arm alone and passed NULL for the rest, so the
    method ran without its block and the expression was never evaluated. */
@@ -150,6 +151,10 @@ int emit_block_arg_proc(Compiler *c, int fe, Buf *b) {
   if (t == TY_PROC) { emit_expr(c, fe, b); return 1; }
   if (fr.kind == RK_BOXED) {
     buf_puts(b, "sp_poly_to_block("); emit_boxed(c, fe, b); buf_puts(b, ")");
+    return 1;
+  }
+  if (t == TY_CURRY) {
+    buf_puts(b, "sp_curry_to_proc("); emit_expr(c, fe, b); buf_puts(b, ")");
     return 1;
   }
   if (t == TY_METHOD) {

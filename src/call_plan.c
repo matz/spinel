@@ -2683,6 +2683,15 @@ static int ct_pin_below(Compiler *c, int id, int cls, const char *name, unsigned
   const Scope *s = pin >= 0 ? &c->scopes[pin] : NULL;
   return s && !s->is_cmethod == !(flags & CT_CMETHOD) && s->class_id >= 0 && is_descendant(c, s->class_id, cls) ? pin : -1;
 }
+/* ...a pin of call id, of name, to a method of a class cls is at or below, on the side flags ask: an entry's arm or
+   else arm runs its own method, static, for every receiver of that class or a subclass, whether or not the receiver
+   class's own lookup lands on a version, a guard or an entry. A subclass's method of the same name (a def a prepend
+   hid under the same hidden name) is no target of it */
+static int ct_pin_binds(Compiler *c, int id, int cls, const char *name, unsigned flags) {
+  int pin = id >= 0 && cls >= 0 ? ct_pin_for(c, id, name) : -1;
+  const Scope *s = pin >= 0 ? &c->scopes[pin] : NULL;
+  return s && !s->is_cmethod == !(flags & CT_CMETHOD) && s->class_id >= 0 && is_descendant(c, cls, s->class_id);
+}
 int cplan_pinned_vis(const Compiler *c, int id) {
   const struct VerPin *p = ct_pin_find(c, id);
   return p ? p->vis : 0;
@@ -5608,7 +5617,8 @@ int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, 
     }
     r = mi;
   }
-  else if ((ct_versioned(c, mi, name) || c->scopes[mi].mixin_guarded || c->scopes[mi].entry) && (pin = ct_pin_for(c, id, name)) != -1 &&
+  else if ((ct_versioned(c, mi, name) || c->scopes[mi].mixin_guarded || c->scopes[mi].entry || ct_pin_binds(c, id, cls, name, flags)) &&
+           (pin = ct_pin_for(c, id, name)) != -1 &&
            /* (a pin answers the side its entry is on: an instance entry's
               arm, asked for a class method of a Class value its receiver
               may hold, finds that class's own method. A call on main takes

@@ -29,6 +29,11 @@ static inline int sp_utf8_advance(const char*p){int cn=sp_utf8_char_len((unsigne
    RFC 3629 and CRuby's precise length have it. An ASCII byte answers 0 too;
    the caller takes it alone. */
 static inline int sp_utf8_valid_len(const unsigned char*p,size_t avail){unsigned c=p[0];int n=(c>=0xC2&&c<=0xDF)?2:(c>=0xE0&&c<=0xEF)?3:(c>=0xF0&&c<=0xF4)?4:0;if(!n||avail<(size_t)n)return 0;for(int i=1;i<n;i++)if((p[i]&0xC0)!=0x80)return 0;if(n==3&&((c==0xE0&&p[1]<0xA0)||(c==0xED&&p[1]>=0xA0)))return 0;if(n==4&&((c==0xF0&&p[1]<0x90)||(c==0xF4&&p[1]>=0x90)))return 0;return n;}
+/* At a known byte position inside the payload, malformed bytes take one unit. */
+static inline size_t sp_utf8_unit_len(const char *p, size_t available) {
+  int width = sp_utf8_valid_len((const unsigned char *)p, available);
+  return width > 0 ? (size_t)width : 1;
+}
 static inline int sp_utf8_decode(const char*p,uint32_t*out){unsigned char c=(unsigned char)p[0];if(c<0x80){*out=c;return 1;}if(c<0xC0){*out=c;return 1;}unsigned char c1=(unsigned char)p[1];if((c1&0xC0)!=0x80){*out=c;return 1;}if(c<0xE0){*out=((uint32_t)(c&0x1F)<<6)|(c1&0x3F);return 2;}unsigned char c2=(unsigned char)p[2];if((c2&0xC0)!=0x80){*out=c;return 1;}if(c<0xF0){*out=((uint32_t)(c&0x0F)<<12)|((uint32_t)(c1&0x3F)<<6)|(c2&0x3F);return 3;}unsigned char c3=(unsigned char)p[3];if((c3&0xC0)!=0x80){*out=c;return 1;}*out=((uint32_t)(c&0x07)<<18)|((uint32_t)(c1&0x3F)<<12)|((uint32_t)(c2&0x3F)<<6)|(c3&0x3F);return 4;}
 static inline int sp_utf8_encode(uint32_t cp,char*out){if(cp<0x80){out[0]=(char)cp;return 1;}if(cp<0x800){out[0]=(char)(0xC0|(cp>>6));out[1]=(char)(0x80|(cp&0x3F));return 2;}if(cp<0x10000){out[0]=(char)(0xE0|(cp>>12));out[1]=(char)(0x80|((cp>>6)&0x3F));out[2]=(char)(0x80|(cp&0x3F));return 3;}out[0]=(char)(0xF0|(cp>>18));out[1]=(char)(0x80|((cp>>12)&0x3F));out[2]=(char)(0x80|((cp>>6)&0x3F));out[3]=(char)(0x80|(cp&0x3F));return 4;}
 #define sp_str_lcache_hash sp_str_lcache_slot

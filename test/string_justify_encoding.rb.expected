@@ -10,3 +10,8 @@ incompatible character encodings: BINARY (ASCII-8BIT) and UTF-8
 [[195, 169, 255, 32], "UTF-8"]
 [[32, 195, 169, 255], "UTF-8"]
 [[195, 169, 255, 32], "UTF-8"]
+2
+[[195, 169, 255], [195, 169, 255], [195, 169, 255]]
+[3, false, false]
+[[226], [130]]
+invalid byte sequence in UTF-8

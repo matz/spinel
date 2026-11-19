@@ -22,3 +22,15 @@ p capture_text("a".center(2, mixed))
 p capture_text(mixed.ljust(3))
 p capture_text(mixed.rjust(3))
 p capture_text(mixed.center(3))
+
+p mixed.length
+p [mixed.ljust(mixed.length).bytes, mixed.rjust(mixed.length).bytes,
+   mixed.center(mixed.length).bytes]
+broken = [0xff, 0xe2, 0x82].pack("C*").force_encoding("UTF-8")
+p [broken.length, broken.ascii_only?, broken.valid_encoding?]
+p [broken[1, 1].bytes, broken[2, 1].bytes]
+begin
+  mixed.split(",")
+rescue ArgumentError => error
+  puts error.message
+end

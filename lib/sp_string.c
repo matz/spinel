@@ -91,7 +91,7 @@ void sp_String_splice_chars(sp_String *s, sp_int from, sp_int n, const char *val
   else {
     b = sp_utf8_byte_offset(d, from);
     e = b;
-    for (sp_int k = n; k > 0 && e < bl; k--) e += (size_t)sp_utf8_advance(d + e);
+    for (sp_int k = n; k > 0 && e < bl; k--) e += sp_utf8_unit_len(d + e, bl - e);
     if (e > bl) e = bl;
   }
   sp_String_splice_in(s, b, e, val, sp_str_byte_len(val), bin);

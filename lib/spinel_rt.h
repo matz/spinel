@@ -17771,8 +17771,16 @@ static SP_NOINLINE SP_COLD void *sp_exc_caught_obj_make(void) {
   return e;
 }
 static inline void *sp_exc_caught_obj(void) {
-  void *o = sp_exc_obj[sp_exc_top];
-  return o || !sp_pending_cause ? o : sp_exc_caught_obj_make();
+  sp_Exception *e = (sp_Exception *)sp_exc_obj[sp_exc_top];
+  if (!sp_pending_cause) return e;
+  if (!e) return sp_exc_caught_obj_make();
+  /* A raise carrying an object can still have its cause pending. An
+     ensure rethrows that object using the cause already attached to it. */
+  if (!e->cause) {
+    sp_gc_wb(e);
+    e->cause = (sp_Exception *)sp_pending_cause;
+  }
+  return e;
 }
 /* Each of the fixed-depth handler stacks below fails the same way when a
    program nests deeper than its array holds: CRuby's SystemStackError words,

@@ -678,7 +678,6 @@ static int share_plan_need(Compiler *c, int v) { return share_plan_need_of(share
 /* What a consumer in `role` needs of value v, whose own need (what its
    facts say a taker needs) is `need`. */
 static int share_plan_role_need(Compiler *c, int v, int role, int need) {
-  if (role == SPR_IDENTITY) return SPN_OBJECT;
   /* A frozen literal already has its object. A fresh String can adopt
      its payload's owner when the producer hands on bytes. */
   if (role == SPR_BOX) {
@@ -779,52 +778,8 @@ SharePlan share_plan_with_need(Compiler *c, int v, int role, int need) {
   SharePlan p = { .need = (unsigned char)need, .form = SPF_BYTES };
   if (need == SPN_BYTES) return p;
   int supply = share_plan_supplies(c, v) && (role != SPR_STORE || share_plan_store_renders(c, v)) ? SPS_HANDLE : SPS_BYTES;
-  /* an exception's message asked its identity is the box the exception
-     keeps it in (exc_message_identity_operand), which the identity reads
-     where the value is read as bytes: no handle is attached to the read,
-     so no other consumer has it */
-  if (role == SPR_IDENTITY && supply == SPS_BYTES && exc_message_identity_operand(c, v)) supply = SPS_HANDLE;
-  /* (an identity is the handle or the bytes' pointer; a frozen String's
-     is its bytes' pointer, which every handle of it names too, and so is
-     a call's that answers a literal) */
-  int bytes_id = role == SPR_IDENTITY &&
-                 (supply == SPS_BYTES || share_frozen_string(c, v) || share_plan_call_answers_literal(c, v));
-  p.form = (unsigned char)(bytes_id ? SPF_BYTES : share_plan_form(p.need, supply));
+  p.form = (unsigned char)share_plan_form(p.need, supply);
   return p;
-}
-
-
-/* Does an arm of conditional (or begin, `||`, `&&`) v, or v itself where it
-   is a call, answer by a route boxes cannot render (strbuf_box_unrendered)?
-   The arms are an `if`, `unless`, `case` and begin's, and both operands of
-   `||` and `&&`; share_plan_arms_ok also takes a `case`/`in` and a rescue
-   modifier, and the right operand of `&&` only. */
-static int share_plan_arm_unrendered(const VpLeaf *lf, void *ud) {
-  Compiler *c = ud;
-  if (lf->kind == VPK_GAVE_UP) return 1;
-  return lf->kind != VPK_NIL && nt_kind(c->nt, lf->node) == NK_CallNode && strbuf_box_unrendered(c, lf->node);
-}
-static int share_plan_arms_unrendered(Compiler *c, int v) {
-  return for_each_value_position(c->nt, v, VP_AND_LEFT | VPS_IF | VPS_UNLESS | VPS_CASE | VPS_BEGIN | VPS_LOGIC,
-                                 share_plan_arm_unrendered, c);
-}
-
-/* (see share.h) The plan names the handle as the form of a box of v's String
-   (SPR_BOX, the object a lift needs), but only where an emitter renders v so:
-   a call whose route boxes cannot render (strbuf_box_unrendered, also on an
-   arm of a conditional) boxes as it did, from its bytes. */
-int share_plan_box_handle(Compiler *c, int v) {
-  if (c->share && v >= 0 && strbuf_self_chain_base(c, v) >= 0) return 1;
-  if (!c->share || v < 0 || share_plan_arms_unrendered(c, v) ||
-      share_plan_with_need(c, v, SPR_BOX, SPN_OBJECT).form != SPF_HANDLE)
-    return 0;
-  /* ...and a route the emitters take: a value that hands on its handle, or
-     a bang or an iterator given a block on a slot (`@s.upcase!`, `@s.tap { }`),
-     whose handle form boxes that slot (emit_boxed_bang_self) */
-  int u = nt_paren_single(c->nt, v);
-  int r = u >= 0 && nt_kind(c->nt, u) == NK_CallNode ? nt_paren_single(c->nt, nt_ref(c->nt, u, "receiver")) : -1;
-  return strbuf_value_carries(c, u) ||
-         (r >= 0 && nt_kind(c->nt, r) != NK_CallNode && strbuf_bang_self_local(c, u) && strbuf_slot_has(c, r));
 }
 
 

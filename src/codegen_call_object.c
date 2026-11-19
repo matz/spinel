@@ -361,16 +361,11 @@ int emit_call_identity_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
       emit_expr(c, recv, b);
       buf_puts(b, boxed_ans ? "))" : ")");
     }
-    /* a String: a mutable one held as its shared sp_String has that
-       handle's identity, the one a box of it carries (its text is a fresh
-       copy on every read); any other is its bytes. Which it is, is the
-       String plan's to say (emit_str_form). A nullable String boxes NULL as
-       nil, whose fixed id must not be the NULL pointer's integer value. */
-    else if ((comp_recv_type(c, recv) == TY_STRING && repr_of(c, recv).may_nil) || rt == TY_STRING) {
-      StrForm sf;
-      emit_str_form(c, recv, SPR_IDENTITY, SPX_ID, 0, &sf);
-      str_form_settle(c, &sf, b);
-      str_form_free(&sf);
+    else if (rt == TY_STRING || rt == TY_STRBUF ||
+             (comp_recv_type(c, recv) == TY_STRING && repr_of(c, recv).may_nil)) {
+      buf_puts(b, "sp_poly_object_id(");
+      emit_boxed(c, recv, b);
+      buf_puts(b, ")");
     }
     /* unboxed value structs have no identity: derive a stable Integer from
        the value hash (see the identity note in docs/limitations.md) */
@@ -1905,7 +1900,8 @@ static int emit_safe_nav_freeze_handle(Compiler *c, int id, const char *name, in
    or nil. A guard holding x's bytes made every later link take the handle
    by running x again. */
 static int emit_safe_nav_self_handle(Compiler *c, int id, int recv, Buf *b) {
-  if (g_sn_skip == id || !strbuf_self_route(c, recv) || !strbuf_bang_self_local(c, id))
+  if (g_sn_skip == id || repr_string_iterator_handle(c, id) ||
+      !strbuf_self_route(c, recv) || !strbuf_bang_self_local(c, id))
     return 0;
   TyKind rt = repr_of(c, id).as_ty;
   int hres = repr_of(c, id).demand || rt == TY_STRBUF;

@@ -32,7 +32,7 @@ Three rules follow from it:
 | what a module method's, or a class's, `super` reaches: the owner after a def at each position                     | the load record                                    | `analyze_elab.c:elab_module_super_owners`, `elab_class_super_owner`; the builtin side `builtin_names.c:builtin_ancestor_at`, `builtin_owns_instance_method` | a scan of every node per forwarder; a name list standing for "a builtin may answer"; a second reading of the class bodies for their mixins and defs                                                                                                                                                                    |
 | which classes a value can hold                                                                                    | the class facts                                    | `analyze_cls.c:cls_fact_node`; `compiler.c:comp_poly_candidates_at`                                                                                         | every class that defines the method's name taken as a target                                                                                                                                                                                                                                                           |
 | which builtin classes a value can hold, and which of them a boxed send tests                                      | the class facts' builtin part                      | `analyze_cls.c:cls_fact_may_hold_builtin`; `call_plan.c:cplan_send_split_owners`                                                                            | every builtin class that answers the name taken as an owner                                                                                                                                                                                                                                                            |
-| a String's form: the object, its bytes, a new handle                                                              | the String plan                                    | `share_plan.c:share_plan_of`, `share_plan_producer`; renderer `codegen_str.c:emit_str_form`                                                                 | an emitter choosing handle or copy itself; a copy written as literal text; a refusal or copy keyed on one method name                                                                                                                                                                                                  |
+| a String's form: the object, its bytes, a new handle                                                              | the String plan                                    | `share_plan.c:share_plan_of`, `share_plan_producer`; native slot renderer `codegen_str.c:emit_str_handle_form`                                                                 | an emitter choosing handle or copy itself; a copy written as literal text; a refusal or copy keyed on one method name                                                                                                                                                                                                  |
 | layout in codegen: boxed, scalar, sentinel, handle, struct                                                        | `Repr` and the type traits                         | `repr.c:repr_of`, `repr_of_slot`; `holder.c:holder_of_node`; `types.h:ty_traits_of`; `codegen_util.c:emit_coerce`                                           | layout decided from `comp_ntype`; hand-written boxing or nil tests; a cast into a slot instead of `emit_coerce`                                                                                                                                                                                                        |
 | where a value comes from, how its parent uses it, a Prism flag                                                    | the value-position walkers and the node predicates | `value_pos.c:for_each_value_position`, `vp_one`, `vp_climb`; `node_table.h:nt_paren_single`, `nt_safe_nav`                                                  | recursion over `elsif` or `rescue` with a depth limit; `sp_streq(op, "&.")`; a raw flag bit                                                                                                                                                                                                                            |
 | a fact about one emission, or one poly arm's state                                                                | views and `ArmCtx`                                 | `codegen_view.c:view_push`, `view_push_repr`, `view_bind`, `view_push_arm`                                                                                  | a node's type, flag or name overwritten and restored around an emitter call; a new `g_*` global                                                                                                                                                                                                                        |
@@ -82,7 +82,9 @@ dispatch arms use the row they emitted to box the result. An override-capable
 display conversion still returns its actual boxed value.
 A boxed String carries the `sp_String *` handle in an `SP_TAG_OBJ` box
 with class ID `SP_BUILTIN_STRBUF`. This includes frozen literals and the
-objects retained by Hashes, Enumerators, and callbacks. Byte comparisons
+objects retained by Hashes, Enumerators, and callbacks. Ordinary boxing
+reads the expression's representation, including results held by a call
+or written into a slot. Byte comparisons
 and private conversion buffers can borrow its payload through
 `sp_rbval_string_bytes`.
 Boxed Array pushes hold each argument across evaluation of the next.
@@ -103,12 +105,16 @@ held across a block. UTF-8 character positions count each valid sequence
 once and each malformed byte separately. The length cache records only
 validated text, so validation and optimized character seeks can reuse it. When File.join walks boxed path components, it
 keeps the bytes of each selected segment through later conversions.
+Native package readers that declare a handle result return it through the
+same call view, including inherited bindings and calls through super.
 Fiber context switches carry the active GC roots and exception state.
 A receiver-answering iterator at method tail keeps its receiver in the
 operand view across the block and returns it through the physical result
 slot, including a String handle slot. Builtin rows identify self answers;
 the subclass adapter retains the original object when its builtin reads
 String bytes. A block break keeps its own boxed result outside that adapter.
+The ordinary expression view also keeps the handle for a builtin
+receiver-answering String iterator.
 String line methods retain the receiver through separator and chomp
 evaluation. With a nil separator the receiver is the only line, including
 for an empty String. A line Enumerator retains its receiver and separator

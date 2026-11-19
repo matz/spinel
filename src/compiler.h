@@ -2347,7 +2347,7 @@ void comp_class_path_moved(void);
 /* The program class whose Ruby path is PATH ("A::B", "::A::B", or a
    top-level "A"), whatever name the class table keys it by; -1 for none */
 int comp_class_at_ruby_path(Compiler *c, const char *path);
-int comp_const_write_valued(const Compiler *c, const LocalVar *cv);
+int comp_const_write_valued(const LocalVar *cv);
 LocalVar *comp_const_intern(Compiler *c, const char *name);
 /* 1 when `pred` is a statically-false `defined?(Const)` if-guard (optionally
    the left arm of an `&&` chain) over a constant that resolves to nothing;

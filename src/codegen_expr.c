@@ -3307,7 +3307,7 @@ static int emit_ivar_cvar_gvar_expr(Compiler *c, int id, Buf *b, const NodeTable
                                  "block, a lambda or an expression) is not supported: assign it on a line of its own");
       return 1;
     }
-    if (!comp_const_write_valued(c, cv)) {
+    if (!comp_const_write_valued(cv)) {
       char msg[400];
       snprintf(msg, sizeof msg, "`%s = ...` used as a value is not supported for a constant holding this kind of "
                "value; assign %s on a line of its own and use %s", nm ? nm : "?", nm ? nm : "it", nm ? nm : "it");
@@ -3316,7 +3316,13 @@ static int emit_ivar_cvar_gvar_expr(Compiler *c, int id, Buf *b, const NodeTable
     }
     buf_puts(b, "({ ");
     emit_stmt_inner(c, id, b, 0);
-    buf_printf(b, "cst_%s; })", nm);
+    if (repr_of_slot(c, cv).kind == RK_STRBUF) {
+      Buf ref = {0};
+      buf_printf(&ref, "cst_%s", nm);
+      emit_strbuf_slot_read(c, id, repr_of(c, id), ref.p, b);
+      free(ref.p);
+    } else buf_printf(b, "cst_%s", nm);
+    buf_puts(b, "; })");
     return 1;
   }
   if (sp_streq(ty, "GlobalVariableOrWriteNode") || sp_streq(ty, "GlobalVariableAndWriteNode")) {
@@ -3548,10 +3554,12 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
     LocalVar *cv = nm ? comp_const(c, nm) : NULL;
     /* --share-strings: a constant holding the shared handle (#6765) */
     if (cv && !slot && repr_of_slot(c, cv).kind == RK_STRBUF && !cv->init_guarded) {
-      char sref[256]; snprintf(sref, sizeof sref, "cst_%s", nm);
+      Buf ref = {0};
+      buf_printf(&ref, "cst_%s", nm);
       emit_const_read_open(c, id, cv, b);
-      emit_strbuf_slot_read(c, id, repr_of(c, id), sref, b);
+      emit_strbuf_slot_read(c, id, repr_of(c, id), ref.p, b);
       emit_const_read_close(c, id, cv, b);
+      free(ref.p);
       return 1;
     }
     if (cv && cv->type != TY_UNKNOWN) {
@@ -5513,16 +5521,6 @@ static int emit_if_expr(Compiler *c, int id, Buf *b, const NodeTable *nt, const 
   }
   return 0;
 }
-/* Is `left` a `||`, `&&` or conditional (parentheses aside) whose String
-   the rule hands on as a handle, so an enclosing chain holds it boxed by
-   that handle, as emit_boxed_cond_arms boxes it? */
-static int logic_left_carries(Compiler *c, int left) {
-  int u = nt_paren_single(c->nt, left);
-  NodeKind k = u >= 0 ? nt_kind(c->nt, u) : NK_NONE;
-  if (k == NK_OrNode || k == NK_AndNode || k == NK_CaseNode) return strbuf_value_carries(c, u);
-  return (k == NK_IfNode || k == NK_UnlessNode) && strbuf_cond_has_handle_leaf(c, u);
-}
-
 /* See codegen_internal.h. */
 int logic_value_handle(Compiler *c, int v) {
   int u = nt_paren_single(c->nt, v);
@@ -5630,25 +5628,9 @@ static int emit_and_or_begin_expr(Compiler *c, int id, Buf *b, const NodeTable *
        void -- a VOID/UNKNOWN unified type (`() && true`, an empty-parens operand
        whose cached type settled void) becomes poly so the temp is not `void`. */
     if (res == TY_VOID || res == TY_UNKNOWN || res == TY_NIL) res = TY_POLY;
-    /* --share-strings: a left typed as the String handle (a value the
-       container store demanded as one, strbuf_demand_value_leaves) beside a
-       boxed result is held boxed, as a conditional's arm boxes it
-       (emit_ternary_arm): held as an sp_String *, the left's text was the
-       String's bytes, and the kept-left arm put a pointer beside the boxed
-       right one. So is a String bang on a boxed receiver (`x.strip! || x`):
-       its box is the receiver's own (emit_boxed_bang_self), where the bytes
-       boxed again were a new String. So is a String left a store lifts
-       (poly_strbuf_lift: a seeded String method's tail `s || v`), boxed by
-       the handle it publishes, or by the receiver's where it is a builtin
-       call answering its receiver (`s.itself || v`, share_plan_box_handle),
-       not from its bytes. */
-    int lt_hbox = res == TY_POLY &&
-                  (lt == TY_STRBUF ||
-                   (lt == TY_STRING && (face_str_bang_call(c, nt_paren_single(c->nt, left)) ||
-                                        strbuf_var_handle(c, nt_paren_single(c->nt, left), NULL) ||
-                                        (repr_of(c, nt_paren_single(c->nt, left)).poly_lift &&
-                                         (repr_call_returns_handle(c, left) || logic_left_carries(c, left) ||
-                                          share_plan_box_handle(c, nt_paren_single(c->nt, left)))))));
+    /* A boxed result keeps the same String as any other boxed operand.
+       Evaluate it once before testing truthiness or entering the right arm. */
+    int lt_hbox = res == TY_POLY && (lt == TY_STRING || lt == TY_STRBUF);
     if (lt_hbox) lt = TY_POLY;
     int t = ++g_tmp;
     int lt_falsy_const = (lt == TY_NIL || lt == TY_VOID);  /* a nil/void left has no C-typed value */
@@ -5763,7 +5745,6 @@ static int emit_and_or_begin_expr(Compiler *c, int id, Buf *b, const NodeTable *
                if (oint_kind(lt) && lo) buf_printf((TB), "%s(_t%d)", oint_box(lt), t); \
                else if (lt==TY_INT) { if (is_and) buf_puts((TB), "sp_box_nil()"); \
                                  else buf_printf((TB), "sp_box_int(_t%d)", t); } \
-               else if (lt==TY_STRING) buf_printf((TB), "SP_STR_BOX(_t%d)", t); \
                else if (lt==TY_FLOAT) { if (is_and) buf_puts((TB), "sp_box_nil()"); \
                                         else buf_printf((TB), "sp_box_float(_t%d)", t); } \
                else if (lt==TY_BOOL) buf_printf((TB), "sp_box_bool(_t%d)", t); \

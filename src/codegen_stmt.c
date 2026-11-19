@@ -19,8 +19,8 @@ static void emit_args_for_effect(Compiler *c, int call, Buf *b, int indent);
    value (comp_const_write_valued) but the statement form ends on something
    else (its set flag, its class name): a body inlined as a statement
    expression (`run { A = 3.5 }`) answers its last statement. */
-static void emit_const_write_last_value(Compiler *c, const LocalVar *lv, const char *key, Buf *b, int indent) {
-  if (!comp_const_write_valued(c, lv) || !(const_has_flag(lv) || lv->type == TY_CLASS)) return;
+static void emit_const_write_last_value(const LocalVar *lv, const char *key, Buf *b, int indent) {
+  if (!comp_const_write_valued(lv) || !(const_has_flag(lv) || lv->type == TY_CLASS)) return;
   emit_indent(b, indent);
   buf_printf(b, "cst_%s;\n", key);
 }
@@ -22102,7 +22102,7 @@ static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int in
         emit_indent(b, indent); buf_printf(b, "sp_init_in_progress_%s = 0;\n", key);
       }
       if (!isg) emit_const_flag_set(lv, key, b, indent);
-      if (!isg) emit_const_write_last_value(c, lv, key, b, indent);
+      if (!isg) emit_const_write_last_value(lv, key, b, indent);
       return 1;
     }
     /* a global that holds its nil takes the value's oint form */
@@ -22233,7 +22233,7 @@ static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int in
                     "sp_class_assign_name(sp_unbox_class(cst_%s), SPL(\"%s%s%s\"));\n",
                  key, key, key, prefix ? prefix : "", prefix ? "::" : "", nm);
     }
-    if (!isg) emit_const_write_last_value(c, lv, key, b, indent);
+    if (!isg) emit_const_write_last_value(lv, key, b, indent);
     return 1;
   }
   if (sp_streq(ty, "ConstantPathWriteNode")) {
@@ -23912,11 +23912,13 @@ void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent) {
   if (k == NK_ConstantWriteNode) {
     const char *cn9 = const_key_at(c, id);
     LocalVar *cv9 = cn9 ? comp_const(c, cn9) : NULL;
-    if (comp_const_write_valued(c, cv9) && tail_slot_reaches_ret(c, cv9->type)) {
+    if (comp_const_write_valued(cv9) && tail_slot_reaches_ret(c, cv9->type)) {
       emit_stmt(c, id, b, indent);
-      char cref9[300]; snprintf(cref9, sizeof cref9, "cst_%s", cn9);
+      Buf ref = {0};
+      buf_printf(&ref, "cst_%s", cn9);
       emit_indent(b, indent); emit_tail_lead(b);
-      emit_tail_slot(c, cv9->type, cref9, b, id);
+      emit_tail_slot(c, cv9->type, ref.p, b, id);
+      free(ref.p);
       return;
     }
   }

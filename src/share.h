@@ -144,9 +144,9 @@ enum { SPN_BYTES, SPN_NEW, SPN_OBJECT };              /* need */
 enum { SPS_BYTES, SPS_HANDLE };                       /* supply */
 enum { SPF_BYTES, SPF_HANDLE, SPF_COPY };             /* form */
 /* The consumer takes the value, stores it in a multiple assignment,
-   checks its identity, or boxes it for a slot, element, or argument.
-   The memo records the value's need. */
-enum { SPR_TAKE, SPR_STORE, SPR_IDENTITY, SPR_BOX };
+   or boxes it for a slot, element, or argument. The memo records the
+   value's need. */
+enum { SPR_TAKE, SPR_STORE, SPR_BOX };
 /* the producer that supplies a value's handle (share_plan_producer), one
    kind per route codegen hands a String on by; each face renders each
    kind (codegen_str.c):
@@ -221,11 +221,6 @@ int share_plan_targets_cover(Compiler *c, int u);
    box of them, is the literal's handle, and
    its identity is its bytes' pointer, as a frozen String's is? */
 int share_plan_call_answers_literal(Compiler *c, int v);
-/* Is node v, a String call a store lifts into a handle (poly_strbuf_lift),
-   boxed by the handle its producer supplies (the plan's SPR_BOX form
-   with the object a lift needs), not from its bytes? A call whose route
-   boxes cannot render (strbuf_box_unrendered) is not. Asked live. */
-int share_plan_box_handle(Compiler *c, int v);
 
 
 

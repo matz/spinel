@@ -12824,6 +12824,13 @@ static int emit_native_pattern_poly(Compiler *c, const char *name, int nm,
    and its value to the call's. */
 static void emit_native_call_on(Compiler *c, int id, const NativeMethod *m, int recv, const char *self_text,
                                 int argc, const int *argv, Buf *b) {
+  const char *handle = repr_native_string_symbol(m);
+  if (handle && repr_native_call_handle(c, id)) {
+    buf_printf(b, "%s(", handle);
+    if (self_text) buf_puts(b, self_text); else emit_expr(c, recv, b);
+    buf_puts(b, ")");
+    return;
+  }
   int wrap = sp_streq(m->ret, "string?");
   int cstr_ret = sp_streq(m->ret, "cstring");
   int bin_ret = sp_streq(m->ret, "cbinstr");

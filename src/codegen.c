@@ -3434,7 +3434,8 @@ void emit_boxed_operand(Compiler *c, const int *argv, int argc, int k, Buf *b) {
   emit_boxed(c, argv[k], b);
 }
 
-static void emit_boxed_string(Compiler *c, int node, Buf *b);
+static int emit_boxed_routes(Compiler *c, int node, Buf *b);
+static void emit_boxed_by_repr(Compiler *c, int node, Buf *b);
 void emit_boxed(Compiler *c, int node, Buf *b) {
   if (b == g_pre) { emit_into_pre_line(c, emit_boxed, node); return; }
   int substitute = substituted_local_node(c->nt, node);
@@ -3475,18 +3476,18 @@ void emit_boxed(Compiler *c, int node, Buf *b) {
       return;
     }
   }
-  emit_boxed_string(c, node, b);
+  if (!emit_boxed_routes(c, node, b)) emit_boxed_by_repr(c, node, b);
 }
 
 /* The lift a String stored into a boxed slot the rule shares takes
    (poly_strbuf_lift): its box is lifted into its handle. */
-int emit_boxed_lift(Compiler *c, int node) {
+static int emit_boxed_lift(Compiler *c, int node) {
   return node >= 0 && comp_poly_strbuf_lift_stored(c, node) && comp_ntype(c, node) == TY_STRING;
 }
 
 /* An argument that ran ahead as the handle it hands on (a lifted call
    result): that handle's box; 0 with nothing emitted for any other. */
-int emit_boxed_lift_ran_first(Compiler *c, int node, Buf *b) {
+static int emit_boxed_lift_ran_first(Compiler *c, int node, Buf *b) {
   if (!emit_boxed_lift(c, node) || ran_first_handle(node) < 0) return 0;
   str_box_handle_tmp(b, ran_first_handle(node));
   return 1;
@@ -3644,7 +3645,7 @@ static int emit_boxed_routes(Compiler *c, int node, Buf *b) {
 
 /* ...and the value's box by its representation (emit_boxed_impl), lifted
    into its handle where a store lifts it. */
-void emit_boxed_by_repr(Compiler *c, int node, Buf *b) {
+static void emit_boxed_by_repr(Compiler *c, int node, Buf *b) {
   int lift = emit_boxed_lift(c, node);
   /* --share-strings: a boxed call's answer a container store lifts into a
      handle (strbuf_demand_store_leaf), so a mutation through the element
@@ -3657,26 +3658,6 @@ void emit_boxed_by_repr(Compiler *c, int node, Buf *b) {
   emit_boxed_impl(c, node, b);
   rc_depth--;
   if (lift) buf_puts(b, ")");
-}
-
-/* The box of value node: under --share-strings, a String's by its
-   producer's kind (emit_str_form's box face, codegen_str.c); else the route
-   arms, then the representation's. */
-static void emit_boxed_string(Compiler *c, int node, Buf *b) {
-  TyKind bt = node >= 0 ? comp_ntype(c, node) : TY_UNKNOWN;
-  if (bt == TY_STRING || bt == TY_STRBUF) {
-    StrForm sf;
-    if (emit_str_form(c, node, SPR_BOX, SPX_BOX, 0, &sf) >= 0) {
-      str_form_settle(c, &sf, b);
-      str_form_close(&sf, b);
-      if (sf.rf >= 0) rc_note(c, node, sf.rf, sf.rw, 0);
-      str_form_free(&sf);
-      return;
-    }
-    str_form_free(&sf);
-  }
-  if (emit_boxed_routes(c, node, b)) return;
-  emit_boxed_by_repr(c, node, b);
 }
 
 /* `vol` makes the local volatile (required for locals live across a setjmp

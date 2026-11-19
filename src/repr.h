@@ -160,6 +160,10 @@ int repr_handle_apart(Compiler *c, int v, Repr r);
 /* Does a call's settled return route hand back a shared String handle? */
 int repr_native_call_handle(Compiler *c, int node);
 int repr_call_returns_handle(Compiler *c, int v);
+int repr_string_iterator_handle(Compiler *c, int node);
+/* The handle entry of a zero-argument native String reader. */
+const char *repr_native_string_symbol(const NativeMethod *m);
+const NativeMethod *repr_native_string_reader(Compiler *c, int node);
 int scope_always_raises(Compiler *c, int mi);
 const NativeMethod *repr_super_native_keeps(Compiler *c, int n); /* super into a native keeps binding (#9258) */
 /* The native binding whose handle a boxed call's arm for class k publishes. */

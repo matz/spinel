@@ -830,12 +830,6 @@ spinel: test/reject/const_value_not_a_class.rb:5: A is not a class: it is assign
 spinel: test/reject/const_value_not_a_module.rb:4: B is not a module: it is assigned a value on line 4, and declared with module on line 6
 == test/reject/const_value_not_a_module.rb [promote] rc=1
 spinel: test/reject/const_value_not_a_module.rb:4: B is not a module: it is assigned a value on line 4, and declared with module on line 6
-== test/reject/constant_write_as_value_string.rb [default] rc=1
-spinel: test/reject/constant_write_as_value_string.rb:4: `S = ...` used as a value is not supported for a constant holding this kind of value; assign S on a line of its own and use S
-spinel: 1 refusal, nothing written
-== test/reject/constant_write_as_value_string.rb [promote] rc=1
-spinel: test/reject/constant_write_as_value_string.rb:4: `S = ...` used as a value is not supported for a constant holding this kind of value; assign S on a line of its own and use S
-spinel: 1 refusal, nothing written
 == test/reject/def_delegators_splat.rb [default] rc=1
 spinel: test/reject/def_delegators_splat.rb:10: def_delegators with arguments other than a literal symbol list is not supported (write the names as symbols: `def_delegators :@target, :name, ...`)
 == test/reject/def_delegators_splat.rb [promote] rc=1

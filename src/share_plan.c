@@ -678,7 +678,6 @@ static int share_plan_need(Compiler *c, int v) { return share_plan_need_of(share
 /* What a consumer in `role` needs of value v, whose own need (what its
    facts say a taker needs) is `need`. */
 static int share_plan_role_need(Compiler *c, int v, int role, int need) {
-  if (role == SPR_IDENTITY) return SPN_OBJECT;
   /* A frozen literal already has its object. A fresh String can adopt
      its payload's owner when the producer hands on bytes. */
   if (role == SPR_BOX) {
@@ -779,17 +778,7 @@ SharePlan share_plan_with_need(Compiler *c, int v, int role, int need) {
   SharePlan p = { .need = (unsigned char)need, .form = SPF_BYTES };
   if (need == SPN_BYTES) return p;
   int supply = share_plan_supplies(c, v) && (role != SPR_STORE || share_plan_store_renders(c, v)) ? SPS_HANDLE : SPS_BYTES;
-  /* an exception's message asked its identity is the box the exception
-     keeps it in (exc_message_identity_operand), which the identity reads
-     where the value is read as bytes: no handle is attached to the read,
-     so no other consumer has it */
-  if (role == SPR_IDENTITY && supply == SPS_BYTES && exc_message_identity_operand(c, v)) supply = SPS_HANDLE;
-  /* (an identity is the handle or the bytes' pointer; a frozen String's
-     is its bytes' pointer, which every handle of it names too, and so is
-     a call's that answers a literal) */
-  int bytes_id = role == SPR_IDENTITY &&
-                 (supply == SPS_BYTES || share_frozen_string(c, v) || share_plan_call_answers_literal(c, v));
-  p.form = (unsigned char)(bytes_id ? SPF_BYTES : share_plan_form(p.need, supply));
+  p.form = (unsigned char)share_plan_form(p.need, supply);
   return p;
 }
 

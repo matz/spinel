@@ -460,13 +460,9 @@ typedef struct {
 /* Node v in the form the String plan (share_plan.c) gives it for a
    consumer in `role` (SPR_*), in the face the consumer holds it in, into
    sf; answers the form it rendered (SPF_*). The faces:
-     SPX_ID      its object id, an sp_int (object_id, __id__);
      SPX_HANDLE  the sp_String * a slot that is the shared handle takes
                  (a method's parameter; under --share-strings also a block
                  parameter that is a String buffer);
-     SPX_IDENT   what its identity is held in, for the identity role
-                 (equal?): the handle, the bytes or a box, whichever its
-                 producer holds (sf->cty TY_STRBUF, TY_STRING, TY_POLY);
      SPX_BOX     an sp_RbVal (sf->cty TY_POLY) for a consumer that boxes
                  the value (a poly slot, a container's element, a poly
                  argument), in the plan's SPR_BOX form. Only the box of a
@@ -479,7 +475,7 @@ typedef struct {
      SFD_OWN     it holds its own copy (a parameter that is the handle
                  because a Method reaches it, LocalVar.dyn_handle): a new
                  handle keeps its bytes inside the object. */
-enum { SPX_ID, SPX_HANDLE, SPX_IDENT, SPX_BOX };
+enum { SPX_HANDLE, SPX_BOX };
 enum { SFD_OWN = 1 };
 int emit_str_form(Compiler *c, int v, int role, int face, unsigned dest, StrForm *sf);
 /* Node v, a String, boxed in the plan's form for the taker of a dispatch's

@@ -144,9 +144,9 @@ enum { SPN_BYTES, SPN_NEW, SPN_OBJECT };              /* need */
 enum { SPS_BYTES, SPS_HANDLE };                       /* supply */
 enum { SPF_BYTES, SPF_HANDLE, SPF_COPY };             /* form */
 /* The consumer takes the value, stores it in a multiple assignment,
-   checks its identity, or boxes it for a slot, element, or argument.
-   The memo records the value's need. */
-enum { SPR_TAKE, SPR_STORE, SPR_IDENTITY, SPR_BOX };
+   or boxes it for a slot, element, or argument. The memo records the
+   value's need. */
+enum { SPR_TAKE, SPR_STORE, SPR_BOX };
 /* the producer that supplies a value's handle (share_plan_producer), one
    kind per route codegen hands a String on by; each face renders each
    kind (codegen_str.c):

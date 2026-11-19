@@ -3308,7 +3308,7 @@ static int emit_ivar_cvar_gvar_expr(Compiler *c, int id, Buf *b, const NodeTable
                                  "block, a lambda or an expression) is not supported: assign it on a line of its own");
       return 1;
     }
-    if (!comp_const_write_valued(c, cv)) {
+    if (!comp_const_write_valued(cv)) {
       char msg[400];
       snprintf(msg, sizeof msg, "`%s = ...` used as a value is not supported for a constant holding this kind of "
                "value; assign %s on a line of its own and use %s", nm ? nm : "?", nm ? nm : "it", nm ? nm : "it");
@@ -3317,7 +3317,12 @@ static int emit_ivar_cvar_gvar_expr(Compiler *c, int id, Buf *b, const NodeTable
     }
     buf_puts(b, "({ ");
     emit_stmt_inner(c, id, b, 0);
-    buf_printf(b, "cst_%s; })", nm);
+    if (repr_of_slot(c, cv).kind == RK_STRBUF) {
+      char ref[256];
+      snprintf(ref, sizeof ref, "cst_%s", nm);
+      emit_strbuf_slot_read(c, id, repr_of(c, id), ref, b);
+    } else buf_printf(b, "cst_%s", nm);
+    buf_puts(b, "; })");
     return 1;
   }
   if (sp_streq(ty, "GlobalVariableOrWriteNode") || sp_streq(ty, "GlobalVariableAndWriteNode")) {

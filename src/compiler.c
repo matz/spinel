@@ -796,13 +796,10 @@ void comp_add_gvar_alias(Compiler *c, const char *from, const char *to) {
   c->gvar_alias_to[c->ngvar_aliases]   = strdup(to);
   c->ngvar_aliases++;
 }
-/* Can `A = v` stand as a value (`m(A = v)`): a typed constant whose slot
-   the write leaves holding the value. Not a String constant, whose read
-   would hand back a copy instead of the String the constant holds, nor
-   one set by a guarded Class.new. */
-int comp_const_write_valued(const Compiler *c, const LocalVar *cv) {
-  return cv && cv->type != TY_UNKNOWN && cv->type != TY_STRING && !cv->init_guarded &&
-         repr_slot_kind(c, cv) != RK_STRBUF;
+/* A typed constant write answers the value in its slot. A guarded class
+   builder still has its separate placement rules. */
+int comp_const_write_valued(const LocalVar *cv) {
+  return cv && cv->type != TY_UNKNOWN && !cv->init_guarded;
 }
 /* A `klass::NM` read on a class value names whichever constant the runtime
    class owns: the one keyed "<c_name>__NM", or "<...>__<c_name>__NM" under an

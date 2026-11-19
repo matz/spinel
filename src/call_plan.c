@@ -4731,13 +4731,17 @@ int cplan_presence_list(Compiler *c, int id, TyKind rt, CplanPresList *out) {
   return 1;
 }
 /* See call_plan.h. */
+int cplan_class_builtin_responds(Compiler *c, int ci, const char *qm) {
+  return class_object_builtin_responds(qm, comp_class_is_module(c, &c->classes[ci]), class_is_exc_subclass(c, ci), class_struct_kind(c, ci));
+}
+/* See call_plan.h. */
 int cplan_class_responds(Compiler *c, int ci, const char *qm, int id) {
   if (!cplan_cmethod_later(c, id, ci, qm)) {
     CplanPresence pr;
     cplan_table_presence(c, ci, CT_CMETHOD, qm, &pr);
     if (pr.table) return 1;
   }
-  return class_responds_builtin(c, ci, qm);
+  return cplan_class_builtin_responds(c, ci, qm);
 }
 /* See call_plan.h. */
 int cplan_class_value_presence(Compiler *c, int id, const char *qm, CplanPresList *out) {
@@ -4748,11 +4752,11 @@ int cplan_class_value_presence(Compiler *c, int id, const char *qm, CplanPresLis
   for (int k = 0; k < c->nclasses; k++) {
     /* (its version cells, where they answer; their els the builtin's answer where none is live) */
     if (cplan_cmethod_presence(c, id, k, qm, 0, 0, &cs) && cplan_cells_testable(c, &cs)) {
-      cs.els = cs.els || class_responds_builtin(c, k, qm);
+      cs.els = cs.els || cplan_class_builtin_responds(c, k, qm);
       presence_arm(c, out, k, &cs, -1);
     }
     else if (cplan_class_responds(c, k, qm, id) &&
-             (cplan_presence(c, id, k, CT_CMETHOD, qm, &pr) != PR_ABSENT || class_responds_builtin(c, k, qm)))
+             (cplan_presence(c, id, k, CT_CMETHOD, qm, &pr) != PR_ABSENT || cplan_class_builtin_responds(c, k, qm)))
       presence_arm(c, out, k, NULL, PRA_YES);
     else continue;
     any |= !uni && out->arm[out->n - 1].ans != PRA_NO;

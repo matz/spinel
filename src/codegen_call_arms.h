@@ -124,8 +124,6 @@ int object_defines_cmp(Compiler *c);
 int any_class_defines(Compiler *c, const char *qm);
 int any_class_responds(Compiler *c, const char *qm);
 int class_struct_kind(Compiler *c, int cid);
-int class_object_universal_method(const char *qm);
-int class_responds_builtin(Compiler *c, int ci, const char *qm);
 int class_value_arms(Compiler *c, int id, const char *qm, CplanPresList *l, int *asked);
 void class_value_responds(Compiler *c, const CplanPresList *l, int tv, Buf *b);
 void class_value_responds_runtime(int tv, Buf *b);

@@ -1665,9 +1665,12 @@ int cplan_class_value_presence(Compiler *c, int id, const char *qm, CplanPresLis
 /* Does class object ci answer `qm` to respond_to?, asked at call id: its
    own class methods and singleton attrs only once one is defined where id
    runs (cplan_cmethod_later), from the table, and every builtin one
-   (class_responds_builtin); -1 for no call, the program's answer
+   (cplan_class_builtin_responds); -1 for no call, the program's answer
    anywhere. */
 int cplan_class_responds(Compiler *c, int ci, const char *qm, int id);
+/* ...with none of its program's class methods: the builtin ones
+   (class_object_builtin_responds, of the class's kind) */
+int cplan_class_builtin_responds(Compiler *c, int ci, const char *qm);
 void cplan_presence_list_free(CplanPresList *l);
 /* What an instance of program class cid answers to Object#respond_to?(qm) where call id runs (-1: no call): 2
    true, 1 only to include_all (a private or protected match), 0 false; the method-table reading, without the

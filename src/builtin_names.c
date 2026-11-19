@@ -3464,3 +3464,77 @@ int is_block_value_dropped_iter(const char *n) {
   return is_block_loop_method(n) || is_each_walk(n) || is_each_window(n) || is_str_each_iter(n) ||
          is_hash_key_value_each(n) || sp_streq(n, "each_pair") || sp_streq(n, "each_with_object");
 }
+
+/* The Class/Module surface every class object carries, `new` included (a
+   MODULE object answers everything here except `new`, which its callers gate).
+   One list, so a core class object and a user one answer alike (#3494). */
+/* Class's public instance methods beyond Object's, from ruby 4.0.1 */
+static const char *const cls_uni[] = {
+  "new", "allocate", "attached_object", "subclasses", "superclass",
+  "<", "<=", ">", ">=", "alias_method", "ancestors", "attr", "attr_accessor",
+  "attr_reader", "attr_writer", "autoload", "autoload?", "class_eval", "class_exec",
+  "class_variable_defined?", "class_variable_get", "class_variable_set",
+  "class_variables", "const_defined?", "const_get", "const_missing", "const_set",
+  "const_source_location", "constants", "define_method", "deprecate_constant",
+  "include", "include?", "included_modules", "instance_method", "instance_methods",
+  "method_defined?", "module_eval", "module_exec", "name", "prepend",
+  "private_class_method", "private_constant", "private_instance_methods",
+  "private_method_defined?", "protected_instance_methods", "protected_method_defined?",
+  "public_class_method", "public_constant", "public_instance_method",
+  "public_instance_methods", "public_method_defined?", "refinements",
+  "remove_class_variable", "remove_method", "set_temporary_name", "singleton_class?",
+  "undef_method", "undefined_instance_methods", NULL };
+int class_object_universal_method(const char *qm) {
+  for (int u = 0; cls_uni[u]; u++) if (sp_streq(qm, cls_uni[u])) return 1;
+  return 0;
+}
+/* ...the i-th of them, NULL past the last (the run-time helper's list, emit_class_value_responds_helper) */
+const char *class_object_universal_name(int i) {
+  return cls_uni[i];
+}
+/* The ones a module object does not have: they are Class's own. */
+int class_only_method(const char *qm) {
+  return sp_streq(qm, "new") || sp_streq(qm, "allocate") || sp_streq(qm, "attached_object") ||
+         sp_streq(qm, "subclasses") || sp_streq(qm, "superclass");
+}
+/* Class's or Module's private instance methods beyond Object's, which a
+   class object answers only to respond_to?(name, true). Not
+   ruby2_keywords, which spinel refuses (docs/limitations.md): code guarded
+   by respond_to?(:ruby2_keywords, true) skips it. */
+int class_object_private_method(const char *qm, int is_module) {
+  static const char *const both[] = {
+    "const_added", "extended", "included", "method_added", "method_removed",
+    "method_undefined", "prepended", "private", "protected", "public", "remove_const",
+    "using", NULL };
+  static const char *const module_only[] = {
+    "append_features", "extend_object", "module_function", "prepend_features", "refine", NULL };
+  for (int u = 0; both[u]; u++) if (sp_streq(qm, both[u])) return 1;
+  if (!is_module) return sp_streq(qm, "inherited");
+  for (int u = 0; module_only[u]; u++) if (sp_streq(qm, module_only[u])) return 1;
+  return 0;
+}
+/* Does a class object (a module's when is_module) answer `qm` with one of
+   Class's or Module's own methods, public or private: what a bare call in
+   its body or in one of its class methods reaches? */
+int class_object_answers_builtin(const char *qm, int is_module) {
+  if (class_object_universal_method(qm)) return !(is_module && class_only_method(qm));
+  return class_object_private_method(qm, is_module);
+}
+/* Does a class object (a module's when is_module; an Exception class's when exc; a Struct's or Data's
+   class when record is 1 or 2) answer respond_to?(qm) with one of its builtin class methods? */
+int class_object_builtin_responds(const char *qm, int is_module, int exc, int record) {
+  /* A module's `module_function` methods are recorded class-level, the
+     program's (cplan_class_responds). Its plain `def m` are instance methods,
+     which the module object itself does NOT respond to -- answering true for
+     those made `Greeter.respond_to?(:greet)` disagree with CRuby (#3467). */
+  /* builtin Class/Module methods every class object inherits; a module
+     lacks Class's own (`new`, `superclass`, ...) */
+  if (class_object_universal_method(qm)) return !(is_module && class_only_method(qm));
+  /* Exception's class-level `exception` */
+  if (is_exception_ctor_name(qm) && exc) return 1;
+  /* A Struct or Data CLASS object answers its record class's own builtins
+     (is_record_class_cmethod: `members`, a Struct's `keyword_init?`, ...)
+     the way its instances answer theirs (#3482), before a program's def of
+     one as after it, an anonymous `Struct.new(...)` too */
+  return record && is_record_class_cmethod(qm, record == 2);
+}

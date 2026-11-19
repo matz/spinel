@@ -20528,78 +20528,6 @@ void emit_responds_name(Compiler *c, int k, const char *nm, Buf *pub, Buf *priv)
   buf_puts(b, "\", ");
 }
 
-/* The Class/Module surface every class object carries, `new` included (a
-   MODULE object answers everything here except `new`, which its callers gate).
-   One list, so a core class object and a user one answer alike (#3494). */
-/* Class's public instance methods beyond Object's, from ruby 4.0.1 */
-static const char *const cls_uni[] = {
-  "new", "allocate", "attached_object", "subclasses", "superclass",
-  "<", "<=", ">", ">=", "alias_method", "ancestors", "attr", "attr_accessor",
-  "attr_reader", "attr_writer", "autoload", "autoload?", "class_eval", "class_exec",
-  "class_variable_defined?", "class_variable_get", "class_variable_set",
-  "class_variables", "const_defined?", "const_get", "const_missing", "const_set",
-  "const_source_location", "constants", "define_method", "deprecate_constant",
-  "include", "include?", "included_modules", "instance_method", "instance_methods",
-  "method_defined?", "module_eval", "module_exec", "name", "prepend",
-  "private_class_method", "private_constant", "private_instance_methods",
-  "private_method_defined?", "protected_instance_methods", "protected_method_defined?",
-  "public_class_method", "public_constant", "public_instance_method",
-  "public_instance_methods", "public_method_defined?", "refinements",
-  "remove_class_variable", "remove_method", "set_temporary_name", "singleton_class?",
-  "undef_method", "undefined_instance_methods", NULL };
-int class_object_universal_method(const char *qm) {
-  for (int u = 0; cls_uni[u]; u++) if (sp_streq(qm, cls_uni[u])) return 1;
-  return 0;
-}
-/* The ones a module object does not have: they are Class's own. */
-static int class_only_method(const char *qm) {
-  return sp_streq(qm, "new") || sp_streq(qm, "allocate") || sp_streq(qm, "attached_object") ||
-         sp_streq(qm, "subclasses") || sp_streq(qm, "superclass");
-}
-/* Class's or Module's private instance methods beyond Object's, which a
-   class object answers only to respond_to?(name, true). Not
-   ruby2_keywords, which spinel refuses (docs/limitations.md): code guarded
-   by respond_to?(:ruby2_keywords, true) skips it. */
-static int class_object_private_method(const char *qm, int is_module) {
-  static const char *const both[] = {
-    "const_added", "extended", "included", "method_added", "method_removed",
-    "method_undefined", "prepended", "private", "protected", "public", "remove_const",
-    "using", NULL };
-  static const char *const module_only[] = {
-    "append_features", "extend_object", "module_function", "prepend_features", "refine", NULL };
-  for (int u = 0; both[u]; u++) if (sp_streq(qm, both[u])) return 1;
-  if (!is_module) return sp_streq(qm, "inherited");
-  for (int u = 0; module_only[u]; u++) if (sp_streq(qm, module_only[u])) return 1;
-  return 0;
-}
-/* Does a class object (a module's when is_module) answer `qm` with one of
-   Class's or Module's own methods, public or private: what a bare call in
-   its body or in one of its class methods reaches? */
-int class_object_answers_builtin(const char *qm, int is_module) {
-  if (class_object_universal_method(qm)) return !(is_module && class_only_method(qm));
-  return class_object_private_method(qm, is_module);
-}
-
-/* Does class object ci answer `qm` with none of its program's class methods: the builtin ones (the
-   program's: cplan_class_responds) */
-int class_responds_builtin(Compiler *c, int ci, const char *qm) {
-  int is_module = comp_class_is_module(c, &c->classes[ci]);
-  /* A module's `module_function` methods are recorded class-level and were
-     already matched above. Its plain `def m` are instance methods, which the
-     module object itself does NOT respond to -- answering true for those made
-     `Greeter.respond_to?(:greet)` disagree with CRuby (#3467). */
-  /* builtin Class/Module methods every class object inherits; a module
-     lacks Class's own (`new`, `superclass`, ...) */
-  if (class_object_universal_method(qm)) return !(is_module && class_only_method(qm));
-  /* Exception's class-level `exception` */
-  if (is_exception_ctor_name(qm) && class_is_exc_subclass(c, ci)) return 1;
-  /* A Struct or Data CLASS object answers its record class's own builtins
-     (is_record_class_cmethod: `members`, a Struct's `keyword_init?`, ...)
-     the way its instances answer theirs (#3482), before a program's def of
-     one as after it, an anonymous `Struct.new(...)` too */
-  int sk = class_struct_kind(c, ci);
-  return sk && is_record_class_cmethod(qm, sk == 2);
-}
 /* (the global of cell `cell` a test reads, which the C declares: a reader keeps each cell it reads
    (ver_cells_settle), and one it did not keep is the plan's internal error, not C that fails to compile) */
 static LocalVar *cells_test_cell(Compiler *c, const char *cell) {
@@ -20751,7 +20679,7 @@ int emit_respond_to_cells(Compiler *c, int id, int recv, TyKind rt, const char *
   cplan_presence_list_free(&l);
   if (ci < 0 || !cplan_cmethod_presence(c, id, ci, qm, all, 0, &cs) || !cplan_cells_testable(c, &cs)) return 0;
   if (!b) return 1;
-  int els = cs.els || class_responds_builtin(c, ci, qm) || (all && class_object_private_method(qm, comp_class_is_module(c, &c->classes[ci])));
+  int els = cs.els || cplan_class_builtin_responds(c, ci, qm) || (all && class_object_private_method(qm, comp_class_is_module(c, &c->classes[ci])));
   buf_puts(b, repr_of(c, id).kind == RK_BOXED ? "sp_box_bool" : "");
   emit_class_cells_answer(c, &cs, els, b);
   return 1;
@@ -20811,10 +20739,11 @@ void emit_class_value_responds_helper(Compiler *c, const char *const *texts, int
   Buf uni, cls_only, reopen;
   memset(&uni, 0, sizeof uni); memset(&cls_only, 0, sizeof cls_only); memset(&reopen, 0, sizeof reopen);
   /* the Class/Module surface, split by what a module object lacks */
-  for (int u = 0; cls_uni[u]; u++) {
-    buf_puts(class_only_method(cls_uni[u]) ? &cls_only : &uni, "\"");
-    emit_c_escaped(class_only_method(cls_uni[u]) ? &cls_only : &uni, cls_uni[u]);
-    buf_puts(class_only_method(cls_uni[u]) ? &cls_only : &uni, "\", ");
+  for (int u = 0; class_object_universal_name(u); u++) {
+    const char *nm = class_object_universal_name(u);
+    buf_puts(class_only_method(nm) ? &cls_only : &uni, "\"");
+    emit_c_escaped(class_only_method(nm) ? &cls_only : &uni, nm);
+    buf_puts(class_only_method(nm) ? &cls_only : &uni, "\", ");
   }
   /* a `class Class` reopening's methods, every class's */
   Buf seen;

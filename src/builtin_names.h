@@ -225,6 +225,12 @@ int is_object_loader(const char *recv, const char *meth, int argc); /* Marshal.l
 int is_method_bind_name(const char *n); /* bind bind_call */
 int is_timeout_call(const char *recv, const char *meth); /* Timeout.timeout(sec, klass) */
 int is_exception_ctor_name(const char *n); /* exception */
+int class_object_universal_method(const char *n); /* Class's public instance methods beyond Object's: new superclass ancestors attr ... */
+const char *class_object_universal_name(int i); /* ...the i-th of them, NULL past the last */
+int class_only_method(const char *n); /* new allocate attached_object subclasses superclass: not a module object's */
+int class_object_private_method(const char *n, int is_module); /* Class's or Module's private ones beyond Object's: included private ... */
+int class_object_answers_builtin(const char *n, int is_module); /* one of the two a class (module) object answers */
+int class_object_builtin_responds(const char *n, int is_module, int exc, int record); /* ...to respond_to?, with exception and a record class's own */
 int is_enumerator_maker(const char *n); /* to_enum enum_for */
 int is_allocate_name(const char *n); /* allocate */
 int is_ivar_remove_name(const char *n); /* remove_instance_variable */

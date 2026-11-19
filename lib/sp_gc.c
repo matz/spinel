@@ -462,8 +462,16 @@ static SP_COLD SP_NOINLINE int sp_gc_mark_string_view(void *obj, unsigned char m
   case 0xf9:
   case 0xfd: {
     sp_str_hdr *view = ((sp_str_hdr *)((char *)obj - 1)) - 1;
-    if (marker == 0xf9)
+    /* (a 64-bit field is only 4-aligned in an i386 struct, so its atomic
+       store is a libatomic call the runtime does not link: a 32-bit target
+       writes it plainly, as the readers in sp_str.h read it) */
+    if (marker == 0xf9) {
+#if UINTPTR_MAX > 0xffffffffu
       SP_ATOMIC_STORE(&view->hash, (uint64_t)sp_gc_mark_gen, __ATOMIC_RELAXED);
+#else
+      view->hash = (uint64_t)sp_gc_mark_gen;
+#endif
+    }
     if (view->next) sp_gc_mark(view->next);
     return 1;
   }

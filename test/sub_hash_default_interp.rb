@@ -18,3 +18,11 @@ p "hello".gsub(/[#{x}e]/, {"l" => 1, "e" => :E})
 p "hello".gsub(/#{x}/, h)
 p "hello".gsub(/#{x}/, "*")
 p "hello".gsub(/l/, {"l" => 1})
+
+# A new default String must stay live while the converted Hash is built.
+poly = Hash.new(424242)
+poly["e"] = :v
+p "hello".gsub(/[el]/, poly)
+p "hello".sub("e".dup, poly)
+p "hello".gsub("e".dup, g)
+p "hello".sub("l".dup, {"l" => nil})

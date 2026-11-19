@@ -2412,8 +2412,8 @@ static const BuiltinOp bop_rows[] = {
   { TY_STRING, "unpack",          1,   1, BF_NONE,     TY_POLY_ARRAY, BOPE_TEMPLATE, "sp_str_unpack($r, $s0)", 0, 0, BOPF_KEYWORDS },
   { TY_STRING, "unpack",          1,   2, BF_NONE,     TY_POLY_ARRAY, BOPE_NONE, NULL, 0, 0, BOPF_KEYWORDS },  /* a block yields each value (desugar_unpack_block) */
   { TY_STRING, "sub",             2,   2, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_sub_str_str_hash($r, $e0, $e1)", 0, BOP_K(TY_STR_STR_HASH) },
-  { TY_STRING, "sub",             2,   2, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_sub_str_str_hash($r, $e0, sp_StrPolyHash_to_s_values($e1))", 0, BOP_K(TY_STR_POLY_HASH) },
-  { TY_STRING, "sub",             2,   2, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_sub_str_str_hash($r, $e0, sp_StrIntHash_to_s_values($e1))", 0, BOP_K(TY_STR_INT_HASH) },
+  { TY_STRING, "sub",             2,   2, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_replace_hash_values($r, $e0, sp_box_obj($e1, SP_BUILTIN_STR_POLY_HASH), 0)", 0, BOP_K(TY_STR_POLY_HASH) },
+  { TY_STRING, "sub",             2,   2, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_replace_hash_values($r, $e0, sp_box_obj($e1, SP_BUILTIN_STR_INT_HASH), 0)", 0, BOP_K(TY_STR_INT_HASH) },
   { TY_STRING, "sub",             2,   2, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_sub($r, $s0, $s1)", 0 },
   { TY_STRING, "sub",             0, 127, BF_ANY,      TY_STRING,     BOPE_NONE },
   { TY_STRING, "center",          1,   1, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_center($r, $i0)", 0 },
@@ -2447,8 +2447,8 @@ static const BuiltinOp bop_rows[] = {
   { TY_STRING, "lines",           0,   2, BF_NONE,     TY_STR_ARRAY,  BOPE_STRING_LINES, NULL, 0, 0, BOPF_KEYWORDS },
   { TY_STRING, "lines",           0,   2, BF_REQUIRED, TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF | BOPF_KEYWORDS },
   { TY_STRING, "gsub",            2,   2, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_gsub_str_str_hash($r, $e0, $e1)", 0, BOP_K(TY_STR_STR_HASH) },
-  { TY_STRING, "gsub",            2,   2, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_gsub_str_str_hash($r, $e0, sp_StrPolyHash_to_s_values($e1))", 0, BOP_K(TY_STR_POLY_HASH) },
-  { TY_STRING, "gsub",            2,   2, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_gsub_str_str_hash($r, $e0, sp_StrIntHash_to_s_values($e1))", 0, BOP_K(TY_STR_INT_HASH) },
+  { TY_STRING, "gsub",            2,   2, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_replace_hash_values($r, $e0, sp_box_obj($e1, SP_BUILTIN_STR_POLY_HASH), 1)", 0, BOP_K(TY_STR_POLY_HASH) },
+  { TY_STRING, "gsub",            2,   2, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_replace_hash_values($r, $e0, sp_box_obj($e1, SP_BUILTIN_STR_INT_HASH), 1)", 0, BOP_K(TY_STR_INT_HASH) },
   { TY_STRING, "gsub",            2,   2, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_gsub($r, $s0, $s1)", 0 },
   { TY_STRING, "inspect",         0, 127, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "({ const char *_t$t = $r; _t$t ? sp_str_inspect(_t$t) : SPL(\"nil\"); })", 0, 0, BOPF_BOXED },
   /* String: the methods no row above has, so that each has a row with its

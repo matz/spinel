@@ -242,9 +242,8 @@ GC.compact   # accepted, but see below
 ```
 
 `GC.stat` reports `bytes`, `old_bytes`, `threshold`, `cycle`, `full_runs`,
-`str_bytes`, `str_count`. The string figures are there because the string heap
-is excluded from `bytes`, and without them "RSS huge but bytes tiny" on a
-string-heavy workload has no explanation.
+`remembered`, `remembered_peak` and `heap_live_slots`. String handles and
+their collected payloads contribute to the object heap's counters.
 
 `GC.compact` is accepted and collects. **Nothing moves** -- the collector is
 non-moving, and the method exists so that code written for CRuby does not have

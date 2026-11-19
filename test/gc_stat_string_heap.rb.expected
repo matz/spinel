@@ -1,3 +1,0 @@
-str_count >= 1000: yes
-str_bytes > 0: yes
-retained: 1000

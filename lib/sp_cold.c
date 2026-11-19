@@ -4510,61 +4510,21 @@ sp_StrStrHash *sp_env_update_h(sp_StrStrHash *h, int replace) {
 /* Keys are spinel rodata literals (SPL: 0xff marker prefix) so the str-hash
    header cache's s[-1] read is in-bounds -- a bare C literal here would
    overread (and could alias a heap marker on some rodata layouts). */
-struct sp_gc_stat_str_acc { size_t *b; sp_int *c; };
-static void sp_gc_stat_str_cb(void *hdr, void *arg) {
-  struct sp_gc_stat_str_acc *a = (struct sp_gc_stat_str_acc *)arg;
-  *a->b += ((sp_str_hdr *)hdr)->size & SP_STR_SIZE_MASK; (*a->c)++;
+sp_StrIntHash *sp_gc_stat(void) {
+  /* Count objects before allocating the result. */
+  long long live_objs = sp_gc_live_objects();
+  sp_StrIntHash *stats = sp_StrIntHash_new();
+  SP_GC_ROOT(stats);
+  sp_StrIntHash_set(stats, SPL("bytes"), (sp_int)SP_GC_CTR_GET(sp_gc_bytes));
+  sp_StrIntHash_set(stats, SPL("heap_live_slots"), (sp_int)live_objs);
+  sp_StrIntHash_set(stats, SPL("old_bytes"), (sp_int)sp_gc_old_bytes);
+  sp_StrIntHash_set(stats, SPL("threshold"), (sp_int)sp_gc_threshold);
+  sp_StrIntHash_set(stats, SPL("cycle"), (sp_int)sp_gc_cycle);
+  sp_StrIntHash_set(stats, SPL("full_runs"), (sp_int)sp_gc_full_runs);
+  sp_StrIntHash_set(stats, SPL("remembered"), (sp_int)sp_gc_nremembered);
+  sp_StrIntHash_set(stats, SPL("remembered_peak"), (sp_int)sp_gc_rem_peak);
+  return stats;
 }
-void sp_slab_each_object(int young, int old, void (*fn)(void *hdr, void *arg), void *arg);
-static void sp_gc_stat_one_str_cb(void *hdr, void *arg) {
-  struct sp_gc_stat_str_acc *a = (struct sp_gc_stat_str_acc *)arg;
-  char *o = (char *)hdr + sizeof(sp_gc_hdr);
-  sp_str_hdr *sh = (sp_str_hdr *)(void *)(o + sizeof(struct sp_String_s));
-  if ((char *)SP_STR_BORN_LINK(sh) != o) return;
-  unsigned char m = ((unsigned char *)(sh + 1))[0];
-  if (m != 0xfe && m != 0xfa && m != 0xf1 && m != 0xfd) return;
-  *a->b += ((sp_gc_hdr *)hdr)->size; (*a->c)++;
-}
-sp_StrIntHash*sp_gc_stat(void){
-  /* The string heap (sp_str_heap) is malloc'd separately and deliberately
-     excluded from sp_gc_bytes (see sp_str_alloc). Surface its footprint so
-     GC.stat can explain "RSS huge but bytes tiny" for string-heavy workloads.
-     Prototype: O(n) walk; a production version maintains a running counter.
-     The walk holds the heap lock: sp_str_alloc pushes onto this list under
-     it from any worker, and an unlocked traversal could read a half-linked
-     node. Unlock before building the hash -- sp_gc_alloc takes the same
-     (non-recursive) lock. */
-  size_t str_bytes=0; sp_int str_count=0;
-  /* the slab strings: a bit per slot in the chunks' bitmaps, either
-     generation (a racy read against the allocating workers, benign for an
-     introspection stat), then the lists of the strings too large for it */
-  { struct sp_gc_stat_str_acc acc = { &str_bytes, &str_count };
-    sp_slab_each_string(1, 1, sp_gc_stat_str_cb, &acc);
-    /* one representation: a String lives in its handle's GC object, the
-       bytes inside it (sp_str_alloc_born, sp_String_new_inline_len) */
-    sp_slab_each_object(1, 1, sp_gc_stat_one_str_cb, &acc);
-  }
-#ifdef SP_THREADS
-  /* Per-worker lists (see sp_alloc.h): each has a single pusher, and only the
-     head moves, so a snapshot walk reaches fully-linked nodes -- at worst it
-     misses a just-pushed one (benign undercount for an introspection stat). */
-  { int nw = sp_active_workers; if (nw < 1) nw = 1; if (nw > SP_MAX_WORKERS) nw = SP_MAX_WORKERS;
-    for (int wi = 0; wi < nw; wi++) {
-      for(int sub=0; sub<SP_STR_YSUB; sub++)
-        for(sp_str_hdr*sh=sp_str_wslot[wi].young[sub]; sh; sh=sh->next){ str_bytes+=sh->size & SP_STR_SIZE_MASK; str_count++; }
-      for(sp_str_hdr*sh=sp_str_wslot[wi].old; sh; sh=sh->next){ str_bytes+=sh->size & SP_STR_SIZE_MASK; str_count++; } } }
-#else
-  SP_HEAP_LOCK();
-  /* Both generations: the split is an internal sweep optimization, so the
-     reported footprint has to stay the whole string heap. */
-  for(sp_str_hdr*sh=sp_str_heap; sh; sh=sh->next){ str_bytes+=sh->size & SP_STR_SIZE_MASK; str_count++; }
-  for(sp_str_hdr*sh=sp_str_old; sh; sh=sh->next){ str_bytes+=sh->size & SP_STR_SIZE_MASK; str_count++; }
-  SP_HEAP_UNLOCK();
-#endif
-  /* CRuby's count of the objects the heap holds (sp_gc_live_objects), so a
-     program can measure a release the same way on both */
-  long long live_objs=sp_gc_live_objects();
-  sp_StrIntHash*h=sp_StrIntHash_new();sp_StrIntHash_set(h,SPL("bytes"),(sp_int)SP_GC_CTR_GET(sp_gc_bytes));sp_StrIntHash_set(h,SPL("heap_live_slots"),(sp_int)live_objs);sp_StrIntHash_set(h,SPL("old_bytes"),(sp_int)sp_gc_old_bytes);sp_StrIntHash_set(h,SPL("threshold"),(sp_int)sp_gc_threshold);sp_StrIntHash_set(h,SPL("cycle"),(sp_int)sp_gc_cycle);sp_StrIntHash_set(h,SPL("full_runs"),(sp_int)sp_gc_full_runs);sp_StrIntHash_set(h,SPL("remembered"),(sp_int)sp_gc_nremembered);sp_StrIntHash_set(h,SPL("remembered_peak"),(sp_int)sp_gc_rem_peak);sp_StrIntHash_set(h,SPL("str_bytes"),(sp_int)str_bytes);sp_StrIntHash_set(h,SPL("str_count"),str_count);return h;}
 /* String#setbyte over value-semantics strings: copy-on-write (a literal's
    bytes are static storage). The caller re-binds an lvalue receiver. */
 const char *sp_str_setbyte_cow(const char *s, sp_int i, sp_int v) {SP_GC_ROOT_STR(s);

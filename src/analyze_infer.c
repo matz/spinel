@@ -455,7 +455,47 @@ static int udr_nscopes = -1, udr_nclasses = -1;
    before it. Rebuilt with the memo's stamp. */
 static int *udc_head = NULL, *udc_next = NULL;
 static int udc_buckets = 0;
+/* The names any class could answer an instance call of (udn_*, a set by
+   hash): a scope's name, a reader's, an alias's either side, a prepend
+   chain link's and a native binding's. A name outside it has no class to
+   answer it, so the walk of every class is skipped (built with udc_*;
+   SP_UDR_CHECK walks anyway and stops on a disagreement). */
+static const char **udn_key = NULL;
+static int udn_cap = 0;
+static void udn_add(const char *nm) {
+  if (!nm || !udn_cap) return;
+  unsigned h = sp_strhash(nm) & (unsigned)(udn_cap - 1);
+  while (udn_key[h]) { if (sp_streq(udn_key[h], nm)) return; h = (h + 1) & (unsigned)(udn_cap - 1); }
+  udn_key[h] = nm;
+}
+static int udn_has(const char *nm) {
+  unsigned h = sp_strhash(nm) & (unsigned)(udn_cap - 1);
+  while (udn_key[h]) { if (sp_streq(udn_key[h], nm)) return 1; h = (h + 1) & (unsigned)(udn_cap - 1); }
+  return 0;
+}
+static void udn_build(Compiler *c) {
+  int n = c->nscopes + c->n_native_methods;
+  for (int k = 0; k < c->nclasses; k++) {
+    const ClassInfo *ci = &c->classes[k];
+    n += ci->nreaders + 2 * ci->naliases + 2 * ci->nprep_chain;
+  }
+  free(udn_key);
+  udn_cap = 16;
+  while (udn_cap < 2 * n + 16) udn_cap <<= 1;
+  udn_key = calloc((size_t)udn_cap, sizeof *udn_key);
+  if (!udn_key) { udn_cap = 0; return; }
+  for (int sc = 0; sc < c->nscopes; sc++)
+    if (!c->scopes[sc].is_cmethod) udn_add(c->scopes[sc].name);   /* (a class method answers no instance call) */
+  for (int i = 0; i < c->n_native_methods; i++) udn_add(c->native_methods[i].name);
+  for (int k = 0; k < c->nclasses; k++) {
+    const ClassInfo *ci = &c->classes[k];
+    for (int i = 0; i < ci->nreaders; i++) udn_add(ci->readers[i]);
+    for (int i = 0; i < ci->naliases; i++) { udn_add(ci->alias_new[i]); udn_add(ci->alias_old[i]); }
+    for (int i = 0; i < ci->nprep_chain; i++) { udn_add(ci->prep_from[i]); udn_add(ci->prep_to[i]); }
+  }
+}
 static void udc_build(Compiler *c) {
+  udn_build(c);
   free(udc_head); free(udc_next);
   udc_buckets = 1;
   while (udc_buckets < 2 * c->nscopes) udc_buckets <<= 1;
@@ -558,7 +598,13 @@ int an_user_defines_or_reads(Compiler *c, const char *name) {
       if (comp_poly_arm_defines(c, k, name)) ans = 1;
       else if (!c->classes[k].is_native_class && comp_reader_in_chain(c, k, name, NULL)) ans = 1;
     }
-  for (int k = 0; k < c->nclasses && !ans; k++) {
+  int none = memo && udn_cap && !udn_has(name);
+#ifdef SP_UDR_CHECK
+  int walk = 1;
+#else
+  int walk = !none;
+#endif
+  for (int k = 0; walk && k < c->nclasses && !ans; k++) {
     /* comp_poly_arm_defines: a native class counts only through its
        declared bindings (#4504) -- counting its Ruby-side defs here made
        every caller stand its builtin arm down, and merely loading
@@ -566,6 +612,9 @@ int an_user_defines_or_reads(Compiler *c, const char *name) {
     if (comp_poly_arm_defines(c, k, name)) ans = 1;
     else if (!c->classes[k].is_native_class && comp_reader_in_chain(c, k, name, NULL)) ans = 1;
   }
+#ifdef SP_UDR_CHECK
+  if (none && ans) { fprintf(stderr, "spinel: SP_UDR_CHECK: %s is answered outside the name set\n", name); abort(); }
+#endif
   mtab_leave(c);
   /* A CLASS method of the same name is deliberately not consulted: it is only
      reachable through a Class-valued receiver, so it cannot be the answer to

@@ -11655,9 +11655,41 @@ static int range_end_no_number(Compiler *c, int node) {
   }
   return 0;
 }
+/* Is local read n a parameter of a block around it whose call iterates a
+   container of boxed values (`rows.each { |b, e| b..e }` over an Array of
+   Arrays, which --int-overflow=promote keeps boxed)? Such a parameter is
+   an element, as a `[]` of the container is. */
+static int range_end_block_elem(Compiler *c, int n) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  const char *vn = nt_str(nt, n, "name");
+  const int *par = nt_parents(nt);
+  if (!vn || !par) return 0;
+  for (int b = par[n], d = 0; b >= 0 && d < 256; b = par[b], d++) {
+    NodeKind bk = nt_kind(nt, b);
+    if (bk == NK_DefNode || bk == NK_LambdaNode) return 0;
+    if (bk != NK_BlockNode) continue;
+    int params = nt_ref(nt, b, "parameters"), np = 0, own = 0;
+    int *ids = params >= 0 ? nt_subtree_ids(nt, &params, 1, &np) : NULL;
+    for (int i = 0; ids && i < np && !own; i++) {
+      NodeKind pk = nt_kind(nt, ids[i]);
+      const char *pn = nt_str(nt, ids[i], "name");
+      own = pn && sp_streq(pn, vn) && (pk == NK_RequiredParameterNode || pk == NK_OptionalParameterNode);
+    }
+    free(ids);
+    if (!own) continue;
+    int call = par[b];
+    if (call < 0 || nt_kind(nt, call) != NK_CallNode || nt_ref(nt, call, "block") != b) return 0;
+    int recv = nt_ref(nt, call, "receiver");
+    if (recv < 0) return 0;
+    TyKind rt = infer_type(c, recv);
+    return rt == TY_POLY_ARRAY || (ty_is_hash(rt) && ty_hash_val(rt) == TY_POLY);
+  }
+  return 0;
+}
 static int range_end_reads_poly_elem(Compiler *c, int n) {
   const NodeTable *nt = c->nt;
   if (n < 0 || vp_one(nt, n, VPS_NONE | VP_PARENS_ONLY, &n) != VP1_NODE) return 0;
+  if (nt_kind(nt, n) == NK_LocalVariableReadNode) return range_end_block_elem(c, n);
   if (nt_kind(nt, n) != NK_CallNode) return 0;
   const char *nm = nt_str(nt, n, "name");
   int recv = nt_ref(nt, n, "receiver");

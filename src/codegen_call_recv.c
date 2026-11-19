@@ -20308,9 +20308,13 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
 
   /* poly receiver: gsub/sub with a regex literal -- extract the string
      payload (poly values reaching here are strings) and route to the
-     engine, just like a TY_STRING receiver. */
+     engine, just like a TY_STRING receiver. A class of the program owning
+     the name is served by the per-class dispatch, as the run-time pattern
+     arm below is: the plan is that switch, and a slot reading the call as
+     the switch's String (repr_native_call_handle) took this arm's bytes;
+     the dispatch's String arm comes back here. */
   if (recv >= 0 && rt == TY_POLY && (is_substitution(name)) &&
-      argc == 2 && re_lit_index(c, argv[0]) >= 0) {
+      argc == 2 && re_lit_index(c, argv[0]) >= 0 && !user_defines_or_reads(c, name)) {
     /* the replacement as the TY_STRING receiver's arm takes it: a boxed one
        (`String.new(s, encoding: e)` or a user object) converts as a String
        argument does */

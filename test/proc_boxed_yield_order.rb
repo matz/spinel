@@ -38,3 +38,13 @@ end
 
 p choose(list, 1).take { :zero }
 p choose(list, 1).take(9) { :one }
+
+curry = ->(first, second, &block) { [first, second, block&.call] }.curry
+partial = curry.call("first")
+curries = [partial, Yielder.new]
+p choose(curries, 0).yield("second") { "fixed block" }
+p choose(curries, 0).yield(*["second"], &block_value)
+p choose(curries, 0).call(*["second"]) { "call block" }
+p choose(curries, 0).yield("second", &nil)
+zero = ->(&block) { block&.call }.curry
+p choose([zero, Yielder.new], 0).yield { "zero block" }

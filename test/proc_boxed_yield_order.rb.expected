@@ -20,3 +20,14 @@ receiver
 [[], :zero]
 receiver
 [[9], :one]
+receiver
+["first", "second", "fixed block"]
+receiver
+block
+["first", "second", "block result"]
+receiver
+["first", "second", "call block"]
+receiver
+["first", "second", nil]
+receiver
+"zero block"

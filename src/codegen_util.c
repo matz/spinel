@@ -6841,7 +6841,7 @@ static void emit_hash_key_value(Compiler *c, int key, TyKind kt, Buf *b) {
        answer a value no key can equal and let the lookup miss. */
     buf_puts(b, "({ sp_RbVal _hk = ");
     emit_boxed(c, key, b);
-    /* Either String box supplies a byte key. Other kinds miss (#4279). */
+    /* A String box supplies a byte key. Other kinds miss. */
     if (kt == TY_STRING)      buf_puts(b, "; sp_rbval_string_bytes(_hk); })");
     else if (kt == TY_SYMBOL) buf_puts(b, "; _hk.tag == SP_TAG_SYM ? (sp_sym)_hk.v.i : (sp_sym)-1; })");
     else                      buf_puts(b, "; sp_poly_hkey_i(_hk); })");   /* another kind raises (A5) */
@@ -6852,23 +6852,7 @@ static void emit_hash_key_value(Compiler *c, int key, TyKind kt, Buf *b) {
     emit_boxed(c, key, b);
     return;
   }
-  /* a read marked to hand out a shared String's handle (a dynamic call's
-     argument the read also is, at another round) keys a String-keyed hash by
-     a copy of its bytes, which publishes nothing on the side channel. A key
-     whose handle is formed apart from its String (a literal a rest
-     parameter's earlier round marked, repr_handle_apart) is the String
-     already: emit_expr answers its bytes, which are the key as they are. */
-  Repr kr = repr_of(c, key);
-  if (kt == TY_STRING && comp_ntype(c, key) == TY_STRBUF && kr.handle && !repr_handle_apart(c, key, kr)) {
-    int t = ++g_tmp;
-    buf_printf(b, "({ sp_String *_t%d = ", t);
-    emit_expr(c, key, b);
-    /* (one representation: the key is read as the handle's view; the Hash
-       copies a key it keeps, sp_hash_key_str) */
-    buf_printf(b, "; _t%d ? sp_String_cstr(_t%d) : NULL; })", t, t);
-    return;
-  }
-  /* (one representation: a String key of either face, as bytes) */
+  /* Borrow the String's current bytes. The Hash owns any key it keeps. */
   if (kt == TY_STRING) { buf_puts(b, "SP_STR_B("); emit_expr(c, key, b); buf_puts(b, ")"); return; }
   emit_expr(c, key, b);
 }

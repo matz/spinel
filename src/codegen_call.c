@@ -20045,20 +20045,26 @@ void refl_emit_sym_array(Compiler *c, int cid, ReflNames *r, Buf *b) {
     CplanCells cs;
     int guarded = r->at && r->vis_mask && !(r->at_side & CT_CMETHOD) &&
                   cplan_guarded_presence(c, r->at_cls, r->v[i], (r->at_side & CT_OWN) != 0, &cs);
+    /* a name whose versions the record cannot order against the list: listed where one of its cells says it is
+       live (cplan_list_cells), as a respond_to? there answers, of the visibilities the list shows, of a class-side
+       list or of a list of a class's own instance methods; the cells answer its visibility, so the table's,
+       which the list shows the name by otherwise, is not asked */
+    int cells = r->at && !guarded && (r->at_side & (CT_CMETHOD | CT_OWN)) && !(r->show[i] & REFL_ROW) &&
+                cplan_list_cells(c, r->at - 1, r->at_cls, r->at_side, r->v[i], r->vis_mask ? r->vis_mask : 3, &cs) &&
+                cplan_cells_testable(c, &cs);
     if (guarded) {
       buf_puts(b, "if (");
       emit_guarded_presence(c, &cs, b);
       buf_printf(b, " & %d) ", r->vis_mask);
-    } else {
+    } else if (!cells) {
       if (!(r->show[i] & REFL_SHOWN)) continue;
       if (cplan_undefined(c, cid, 0, r->v[i])) continue;
     }
-    /* a name whose versions the record cannot order against the list: listed where one of its cells says it is
-       live (cplan_list_cells), as a respond_to? there answers; of the visibilities the list shows, of a class-side
-       list or of a list of a class's own instance methods (one the table shows: above) */
-    if (r->at && !guarded && (r->at_side & (CT_CMETHOD | CT_OWN)) && !(r->show[i] & REFL_ROW) &&
-        cplan_list_cells(c, r->at - 1, r->at_cls, r->at_side, r->v[i], r->vis_mask ? r->vis_mask : 3, &cs) &&
-        cplan_cells_testable(c, &cs)) {
+    if (cells) {
+      /* (where no version has run the list leaves the name out, its else: where no version answers for the
+         visibilities the list shows, the plan fixes that answer and the name is not listed) */
+      cs.els = 0;
+      if (cplan_cells_fixed(&cs)) continue;
       buf_puts(b, "if (");
       int open = emit_cells_test(c, &cs, 0, b);
       buf_puts(b, "0");

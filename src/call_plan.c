@@ -4558,14 +4558,13 @@ static int ver_entry_vis(const Compiler *c, int scope) {
     if (c->ver_entries[i].scope == scope) return c->ver_entries[i].vis;
   return 0;
 }
-/* The cells of entry e over the versions of cls's `name` on side sg (own:
-   cls's own history alone), as cplan_cmethod_presence gives them */
-static int presence_cells(Compiler *c, int e, int cls, int sg, const char *name, int mask, int own, CplanCells *out) {
+/* The cells over the versions of cls's `name` on side sg (own: cls's own
+   history alone), as cplan_cmethod_presence gives them: finds, what a call
+   runs where none is live (VER_FINDS_*); vis_kept, whether a version's
+   visibility only the run knows has its cell written for the readers */
+static int presence_cells_of(Compiler *c, int cls, int sg, const char *name, int mask, int own, int finds, int vis_kept, CplanCells *out) {
   ElabVersion vs[VER_MAX_ARMS];
-  if (e < 0 || c->scopes[e].entry != ENTRY_DISPATCH) return 0;
   int nv = own ? elab_history_versions(c, cls, sg, name, vs, VER_MAX_ARMS) : elab_chain_versions(c, cls, sg, name, vs, VER_MAX_ARMS);
-  /* (with none live, what the call runs: the entry's else arm, the visibility of the method it finds) */
-  int finds = cplan_entry_finds(c, e);
   out->n = 0;
   out->mask = mask;
   for (int i = 0; i < nv; i++) {
@@ -4574,7 +4573,7 @@ static int presence_cells(Compiler *c, int e, int cls, int sg, const char *name,
     /* (the visibility its arm takes, a later `private :s` among it; one only the run knows, -1, is read from its
        visibility cell, which the entry writes for a respond_to? that reads it, ver_presence_mark) */
     int vis = gone || mask == 7 ? SP_VIS_PUBLIC : elab_version_vis(c, &vs[i]);
-    if (vis < 0 && !ver_entry_vis(c, e)) return 0;
+    if (vis < 0 && !vis_kept) return 0;
     ver_cell_name(vs[i].cell, out->cell[out->n]);
     out->vis[out->n][0] = 0;
     if (vis < 0) ver_vis_cell_name(vs[i].cell, out->vis[out->n]);
@@ -4584,6 +4583,14 @@ static int presence_cells(Compiler *c, int e, int cls, int sg, const char *name,
   out->els = (finds == VER_FINDS_PUBLIC ? core_bit_of_vis(SP_VIS_PUBLIC) : finds == VER_FINDS_PROTECTED ? core_bit_of_vis(SP_VIS_PROTECTED) :
               finds == VER_FINDS_PRIVATE ? core_bit_of_vis(SP_VIS_PRIVATE) : 0) & mask ? 1 : 0;
   return 1;
+}
+/* ...those of entry e: with none live, what the call runs is the entry's
+   else arm, the visibility of the method it finds; a visibility only the
+   run knows is read from its cell, which the entry writes for a reader
+   (ver_presence_mark) */
+static int presence_cells(Compiler *c, int e, int cls, int sg, const char *name, int mask, int own, CplanCells *out) {
+  if (e < 0 || c->scopes[e].entry != ENTRY_DISPATCH) return 0;
+  return presence_cells_of(c, cls, sg, name, mask, own, cplan_entry_finds(c, e), ver_entry_vis(c, e), out);
 }
 static int ver_first_stmt(const NodeTable *nt, int stmts);
 
@@ -4644,7 +4651,14 @@ int cplan_presence_cells(Compiler *c, int id, int cls, unsigned side, const char
   MethodLookup ml = { .def_class = -1 };
   if (id < 0 || cls < 0 || (side & (CT_CMETHOD | CT_TOP)) || respond_to_missing_defined(c)) return 0;
   int e = call_target(c, id, cls, name, side | CT_REACH, &ml);
-  return ml.kind == ML_ENTRY && presence_cells(c, e, cls, 0, name, mask, (side & CT_OWN) != 0, out);
+  if (ml.kind == ML_ENTRY) return presence_cells(c, e, cls, 0, name, mask, (side & CT_OWN) != 0, out);
+  /* (a method live where the reader runs, whose visibility a body's word sets where it runs (elab_method_vis_at
+     answers none): the words' versions' cells, which the words write, and the method's own where none has run) */
+  if (ml.kind != ML_METHOD || e < 0 || !elab_method_body_word(c, name) || elab_method_vis_at(c, cls, name, 0, elab_point_of(c, id)) >= 0)
+    return 0;
+  int v = guard_visibility(c, e);
+  return presence_cells_of(c, cls, 0, name, mask, (side & CT_OWN) != 0,
+                           v == SP_VIS_PUBLIC ? VER_FINDS_PUBLIC : v == SP_VIS_PROTECTED ? VER_FINDS_PROTECTED : VER_FINDS_PRIVATE, 1, out);
 }
 /* See call_plan.h. */
 int cplan_list_cells(Compiler *c, int id, int cls, unsigned side, const char *name, int mask, CplanCells *out) {

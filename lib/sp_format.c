@@ -179,10 +179,112 @@ sp_Complex sp_complex_fmul(sp_float v, sp_Complex a) {
 }
 sp_Complex sp_complex_conjugate(sp_Complex a) { sp_Complex c; c.re = a.re; c.im = -a.im; c.fl = a.fl; return c; }
 sp_Complex sp_complex_sub(sp_Complex a, sp_Complex b) { sp_Complex c; c.re = a.re - b.re; c.im = a.im - b.im; c.fl = a.fl | b.fl; return c; }
+/* With both divisor parts Integers below 2**53, CRuby's exact Rationals for
+   f_divide, reduced before each multiplication and converted as Rational#to_f */
+typedef struct { uint64_t hi, lo; } sp_cdiv_u128;
+static int sp_cdiv_int(sp_float v, sp_float lim) { return fabs(v) < lim && v == floor(v); }
+static uint64_t sp_cdiv_gcd(uint64_t a, uint64_t b) { while (b) { uint64_t t = a % b; a = b; b = t; } return a; }
+static uint64_t sp_cdiv_mag(sp_float v) { return (uint64_t)fabs(v); }
+static sp_cdiv_u128 sp_cdiv_mul(uint64_t a, uint64_t b) {
+  uint64_t al = a & 0xffffffffu, ah = a >> 32, bl = b & 0xffffffffu, bh = b >> 32;
+  uint64_t ll = al * bl, lh = al * bh, hl = ah * bl, hh = ah * bh;
+  uint64_t mid = (ll >> 32) + (lh & 0xffffffffu) + (hl & 0xffffffffu);
+  sp_cdiv_u128 r;
+  r.lo = (mid << 32) | (ll & 0xffffffffu);
+  r.hi = hh + (lh >> 32) + (hl >> 32) + (mid >> 32);
+  return r;
+}
+static sp_cdiv_u128 sp_cdiv_add(sp_cdiv_u128 x, sp_cdiv_u128 y) {
+  sp_cdiv_u128 r; r.lo = x.lo + y.lo; r.hi = x.hi + y.hi + (r.lo < x.lo); return r;
+}
+/* the double nearest x, as a Bignum converts */
+static sp_float sp_cdiv_to_f(sp_cdiv_u128 x) {
+  if (!x.hi) return (sp_float)x.lo;
+  int lz = SP_CLZ64(x.hi);
+  uint64_t top = lz ? (x.hi << lz) | (x.lo >> (64 - lz)) : x.hi;
+  if (lz ? (x.lo << lz) != 0 : x.lo != 0) top |= 1;   /* the bits below, as one sticky bit */
+  return ldexp((sp_float)top, 64 - lz);
+}
+/* the reduced x / den (den > 0) as Rational#to_f divides it */
+static sp_float sp_cdiv_q(int neg, sp_cdiv_u128 x, uint64_t den) {
+  sp_float q = sp_cdiv_to_f(x) / (sp_float)den;
+  return neg ? -q : q;
+}
+#define SP_CDIV_LIM 9007199254740992.0   /* 2**53 */
+static sp_float sp_cdiv_unsigned(sp_float v) { return v == 0 ? 0.0 : v; }
+/* r = num / den, the ratio of the divisor's parts; b_int is 2 on the exact path */
+static sp_float sp_complex_div_ratio(int b_int, sp_float num, sp_float den) {
+  if (b_int == 2) {
+    uint64_t n = sp_cdiv_mag(num), d = sp_cdiv_mag(den), g;
+    if (n == 0) return 0.0;
+    g = sp_cdiv_gcd(n, d);
+    sp_cdiv_u128 x = { 0, n / g };
+    return sp_cdiv_q((num < 0) != (den < 0), x, d / g);
+  }
+  return b_int ? sp_cdiv_unsigned(num / den) : num / den;
+}
+/* n = den * (1 + r * r), which is (num * num + den * den) / den. With
+   g = gcd(num, den), num = g * a, den = g * b and h = gcd(g, b), the reduced
+   form is (a * num / h + b * den / h) / (b / h). */
+static sp_float sp_complex_div_norm(int b_int, sp_float num, sp_float den, sp_float r) {
+  if (b_int == 2) {
+    uint64_t n = sp_cdiv_mag(num), d = sp_cdiv_mag(den), g = sp_cdiv_gcd(n, d);
+    uint64_t a = n / g, b = d / g, h = sp_cdiv_gcd(g, b);
+    sp_cdiv_u128 t = sp_cdiv_add(sp_cdiv_mul(a, n / h), sp_cdiv_mul(b, d / h));
+    return sp_cdiv_q(den < 0, t, b / h);
+  }
+  return b_int ? ((num * num) + (den * den)) / den : den * (1 + r * r);
+}
+/* a part p of the dividend times r: exact when p and the divisor parts are
+   Integers, as Integer * Rational is in CRuby */
+static sp_float sp_complex_div_term(sp_float p, int p_int, int b_int, sp_float num, sp_float den, sp_float r) {
+  if (p_int && b_int == 2 && sp_cdiv_int(p, 18446744073709551616.0)) {
+    uint64_t up = sp_cdiv_mag(p), un = sp_cdiv_mag(num), ud = sp_cdiv_mag(den), g;
+    if (up == 0 || un == 0) return 0.0;
+    g = sp_cdiv_gcd(un, ud); un /= g; ud /= g;
+    g = sp_cdiv_gcd(up, ud); up /= g; ud /= g;
+    return sp_cdiv_q(((p < 0) != (num < 0)) != (den < 0), sp_cdiv_mul(up, un), ud);
+  }
+  return (p_int && b_int) ? sp_cdiv_unsigned((p * num) / den) : p * r;
+}
+/* x + y or x - y as complex.c's f_add and f_sub. A kind is 0 for an Integer,
+   1 for a Rational and 2 for a Float; an Integer 0 operand leaves the other
+   one unchanged, and a zero with no Float operand has no sign. */
+static sp_float sp_cdiv_addsub(sp_float x, int xk, sp_float y, int yk, int sub) {
+  if (yk == 0 && y == 0) return x;
+  if (!sub && xk == 0 && x == 0) return y;
+  sp_float s = sub ? x - y : x + y;
+  return (xk < 2 && yk < 2) ? sp_cdiv_unsigned(s) : s;
+}
+/* Complex#/ by a Complex, as CRuby's f_divide computes it: Smith's method
+   when a part is a Float. With only Integer parts, CRuby returns the exact
+   Rational, which the conjugate formula approximates in Floats. */
 sp_Complex sp_complex_div(sp_Complex a, sp_Complex b) {
-  sp_float d = (b.re * b.re) + (b.im * b.im); sp_Complex c;
-  c.re = ((a.re * b.re) + (a.im * b.im)) / d; c.im = ((a.im * b.re) - (a.re * b.im)) / d;
-  c.fl = (a.fl | b.fl) ? (SP_CPLX_RE_F | SP_CPLX_IM_F) : 0;
+  sp_Complex c;
+  if (!(a.fl | b.fl)) {
+    sp_float d = (b.re * b.re) + (b.im * b.im);
+    c.re = ((a.re * b.re) + (a.im * b.im)) / d; c.im = ((a.im * b.re) - (a.re * b.im)) / d;
+    c.fl = 0;
+    return c;
+  }
+  int b_int = !(b.fl & (SP_CPLX_RE_F | SP_CPLX_IM_F));
+  if (b_int && sp_cdiv_int(b.re, SP_CDIV_LIM) && sp_cdiv_int(b.im, SP_CDIV_LIM) && (b.re != 0 || b.im != 0)) b_int = 2;
+  int re_int = !(a.fl & SP_CPLX_RE_F), im_int = !(a.fl & SP_CPLX_IM_F);
+  int re_k = re_int ? 0 : 2, im_k = im_int ? 0 : 2;
+  int re_tk = (re_int && b_int) ? 1 : 2, im_tk = (im_int && b_int) ? 1 : 2;
+  if (fabs(b.re) > fabs(b.im)) {
+    sp_float r = sp_complex_div_ratio(b_int, b.im, b.re);
+    sp_float n = sp_complex_div_norm(b_int, b.im, b.re, r);
+    c.re = sp_cdiv_addsub(a.re, re_k, sp_complex_div_term(a.im, im_int, b_int, b.im, b.re, r), im_tk, 0) / n;
+    c.im = sp_cdiv_addsub(a.im, im_k, sp_complex_div_term(a.re, re_int, b_int, b.im, b.re, r), re_tk, 1) / n;
+  }
+  else {
+    sp_float r = sp_complex_div_ratio(b_int, b.re, b.im);
+    sp_float n = sp_complex_div_norm(b_int, b.re, b.im, r);
+    c.re = sp_cdiv_addsub(sp_complex_div_term(a.re, re_int, b_int, b.re, b.im, r), re_tk, a.im, im_k, 0) / n;
+    c.im = sp_cdiv_addsub(sp_complex_div_term(a.im, im_int, b_int, b.re, b.im, r), im_tk, a.re, re_k, 1) / n;
+  }
+  c.fl = SP_CPLX_RE_F | SP_CPLX_IM_F;
   return c;
 }
 /* Complex divided by a real scalar divides each component -- unlike the
@@ -207,23 +309,64 @@ sp_Complex sp_complex_div_int(sp_Complex a, sp_int b) {
 }
 sp_Complex sp_complex_neg(sp_Complex a) { sp_Complex c; c.re = -a.re; c.im = -a.im; c.fl = a.fl; return c; }
 sp_float sp_complex_abs2(sp_Complex a) { return (a.re * a.re) + (a.im * a.im); }
-sp_float sp_complex_abs(sp_Complex a) { return sqrt((a.re * a.re) + (a.im * a.im)); }
+/* Complex#abs, as CRuby's rb_complex_abs: the other part's magnitude when a
+   part is zero, else Math.hypot */
+sp_float sp_complex_abs(sp_Complex a) {
+  if (a.re == 0.0) return fabs(a.im);
+  if (a.im == 0.0) return fabs(a.re);
+  return hypot(a.re, a.im);
+}
 sp_bool sp_complex_eq(sp_Complex a, sp_Complex b) { return a.re == b.re && a.im == b.im; }
-/* z ** w for a non-integer exponent: exp(w * ln z); an integral real w
-   defers to the exact integer power (preserving component classes). */
+/* Complex#fdiv by a Complex, as CRuby's f_divide with f_fdiv: Smith's method
+   in Floats, whatever the classes of the parts */
+sp_Complex sp_complex_fdiv(sp_Complex a, sp_Complex b) {
+  sp_Complex c;
+  int re_k = (a.fl & SP_CPLX_RE_F) ? 2 : 0, im_k = (a.fl & SP_CPLX_IM_F) ? 2 : 0;
+  if (fabs(b.re) > fabs(b.im)) {
+    sp_float r = b.im / b.re, n = b.re * (1 + r * r);
+    c.re = sp_cdiv_addsub(a.re, re_k, a.im * r, 2, 0) / n;
+    c.im = sp_cdiv_addsub(a.im, im_k, a.re * r, 2, 1) / n;
+  }
+  else {
+    sp_float r = b.re / b.im, n = b.im * (1 + r * r);
+    c.re = sp_cdiv_addsub(a.re * r, 2, a.im, im_k, 0) / n;
+    c.im = sp_cdiv_addsub(a.im * r, 2, a.re, re_k, 1) / n;
+  }
+  c.fl = SP_CPLX_RE_F | SP_CPLX_IM_F;
+  return c;
+}
+/* Complex.polar of a Float magnitude and angle, as CRuby's
+   f_complex_polar_real: a zero magnitude or angle, and the angles pi, pi/2
+   and 3pi/2, give exact parts without cos and sin */
+static sp_Complex sp_complex_polar_ff(sp_float x, sp_float y) {
+  sp_Complex c; c.fl = SP_CPLX_RE_F | SP_CPLX_IM_F;
+  if (x == 0.0 || y == 0.0) { c.re = x; c.im = 0.0; }
+  else if (y == M_PI) { c.re = -x; c.im = 0.0; }
+  else if (y == M_PI_2) { c.re = 0.0; c.im = x; }
+  else if (y == M_PI_2 + M_PI) { c.re = 0.0; c.im = -x; }
+  else { c.re = x * cos(y); c.im = x * sin(y); }
+  return c;
+}
+/* z ** e for a real e that is not an Integer, as CRuby's rb_complex_pow:
+   the polar form of abs ** e and arg * e */
+sp_Complex sp_complex_pow_f(sp_Complex z, sp_float e) {
+  return sp_complex_polar_ff(pow(sp_complex_abs(z), e), atan2(z.im, z.re) * e);
+}
+/* z ** w for a Complex w. An Integer imaginary part of 0 makes w real: an
+   integral Integer is the exact integer power, any other the real power.
+   Else CRuby's polar form of exp(w.re * log r - w.im * theta) and
+   theta * w.re + w.im * log r. */
 sp_Complex sp_complex_pow_c(sp_Complex z, sp_Complex w) {
-  if (w.im == 0.0 && w.re == (sp_float)(sp_int)w.re && !(w.fl & SP_CPLX_RE_F))
+  /* rb_complex_pow treats a zero Complex as an exact zero, whatever the
+     classes of its parts, and returns the Integer 1 */
+  if (w.re == 0.0 && w.im == 0.0) { sp_Complex one = { 1, 0, 0 }; return one; }
+  int real_w = w.im == 0.0 && !(w.fl & SP_CPLX_IM_F);
+  if (real_w && w.re == (sp_float)(sp_int)w.re && !(w.fl & SP_CPLX_RE_F))
     return sp_complex_pow(z, (sp_int)w.re);
-  sp_float lr = 0.5 * log(z.re * z.re + z.im * z.im);
+  if (real_w) return sp_complex_pow_f(z, w.re);
+  sp_float lr = log(sp_complex_abs(z));
   sp_float th = atan2(z.im, z.re);
-  sp_float xa = w.re * lr - w.im * th;
-  sp_float xb = w.re * th + w.im * lr;
-  sp_float m = exp(xa);
-  sp_Complex r;
-  r.re = m * cos(xb);
-  r.im = m * sin(xb);
-  r.fl = SP_CPLX_RE_F | SP_CPLX_IM_F;
-  return r;
+  return sp_complex_polar_ff(exp(w.re * lr - w.im * th), th * w.re + w.im * lr);
 }
 sp_Complex sp_complex_pow(sp_Complex a, sp_int e) {
   if (e < 0 && a.re == 0.0 && a.im == 0.0)
@@ -238,7 +381,7 @@ sp_Complex sp_complex_pow(sp_Complex a, sp_int e) {
    integer power; a fractional exponent computes in floats. (#2962) */
 sp_Complex sp_complex_pow_rational(sp_Complex z, sp_Rational w) {
   if (w.den == 1) return sp_complex_pow(z, w.num);
-  return sp_complex_pow_c(z, (sp_Complex){sp_rational_to_f(w), 0, SP_CPLX_RE_F | SP_CPLX_IM_F});
+  return sp_complex_pow_f(z, sp_rational_to_f(w));
 }
 
 /* ---- Rational arithmetic ----

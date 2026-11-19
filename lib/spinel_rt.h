@@ -3389,16 +3389,8 @@ static inline sp_PolyArray *sp_StrArray_to_poly_handles(sp_StrArray *a) {
   }
   return r;
 }
-/* A POLY variable's value as it is handed to a parameter the callee appends
-   to in place: a plain String becomes the shared handle, boxed, and the
-   caller stores it back into the variable before the call, so the callee's
-   `sp_poly_shl` & co. append to the String the variable holds (#6179). A
-   plain String box is a value: appended to, it answered a new String in the
-   callee's own copy of the parameter, and the caller's variable never
-   changed. The handle takes the header's length and marks
-   (sp_poly_as_strbuf), so a binary String keeps its bytes and a frozen one
-   still raises FrozenError on the append. Any other value, a handle
-   included, is passed as it is. */
+/* The String plan can still emit a lift. Every boxed String already
+   holds its handle, so a lift passes through the original value. */
 static inline sp_RbVal sp_poly_strbuf_lift(sp_RbVal v) {
   return v;
 }
@@ -3487,11 +3479,7 @@ static inline sp_RbVal sp_poly_inspect_box(sp_RbVal v) {
   return sp_box_str_new(sp_poly_inspect(v));
 }
 
-/* A boxed value unboxed into a String slot. A mutable String's box carries
-   its sp_String handle in the union, so reading `.v.s` there hands the slot
-   the handle, not the bytes; the bytes are the handle's data, the same live
-   buffer sp_poly_to_s answers. A box with no handle, and every other tag,
-   reads the union as the plain `.v.s` did (a nil box is NULL). */
+/* Borrow the live payload of a boxed String, or NULL for another value. */
 static inline const char *sp_poly_unbox_s(sp_RbVal v) {
   return sp_rbval_string_bytes(v);
 }
@@ -23740,7 +23728,7 @@ static sp_StrStrHash *sp_env_update_h_blk(sp_StrStrHash *h, sp_Proc *p) { SP_GC_
       if (ov && p) {
         const char *ovh = sp_str_dup_external(ov);  /* environ may move */
         ((unsigned char *)ovh)[-1] = 0xfa;
-        SP_GC_ROOT(ovh);
+        SP_GC_ROOT_STR(ovh);
         _sp_proc_poly_args[0] = sp_box_str_new(k);
         _sp_proc_poly_args[1] = sp_box_str_new(ovh);
         _sp_proc_poly_args[2] = sp_box_str_new(nv ? nv : sp_str_empty);
@@ -23776,7 +23764,7 @@ static sp_StrStrHash *sp_env_update_v_blk(sp_RbVal hv, sp_Proc *p) {
     if (ov && p) {
       const char *ovh = sp_str_dup_external(ov);  /* environ may move */
       ((unsigned char *)ovh)[-1] = 0xfa;
-      SP_GC_ROOT(ovh);
+      SP_GC_ROOT_STR(ovh);
       sp_RbVal old = sp_box_str_new(ovh); SP_GC_ROOT_RBVAL(old);
       _sp_proc_poly_args[0] = k;
       _sp_proc_poly_args[1] = old;

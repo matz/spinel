@@ -60,8 +60,6 @@ int an_recv_may_be_string(Compiler *c, int r, const PolyLits *lits);
 /* Can value v be a String, as an_recv_may_be_string reads a variable's
    written value (by its type, or its form with `lits`)? */
 int an_value_may_be_string(Compiler *c, int v, const PolyLits *lits);
-/* A noncaptured, nonparameter local with fresh writes, read nowhere else. */
-int an_local_read_once(Compiler *c, int n);
 int ffi_find_buf(Compiler *c, const char *mod, const char *name);
 int ffi_find_reader(Compiler *c, const char *mod, const char *name);
 int ffi_find_writer(Compiler *c, const char *mod, const char *name);

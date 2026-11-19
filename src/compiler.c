@@ -5271,10 +5271,9 @@ int comp_ivar_owner(Compiler *c, int node) {
   return holder_ivar_side(c, node, &cid) ? cid : -1;
 }
 
-/* The variable a site names, by the read kind, name and key the String
-   refusals name a variable by (SaName): a local by its scope, an ivar by its
-   owning class (comp_ivar_owner), a global by its name with aliases resolved
-   (key -1). 0 when node `v` names none of them. */
+/* A site's read kind, name and key. Locals use their scope and instance
+   variables use their owning class. Globals resolve aliases. Globals,
+   constants and class variables use key -1. Returns 0 for other nodes. */
 static int vsite_key(Compiler *c, int v, NodeKind *kind, const char **name, int *key) {
   const NodeTable *nt = c->nt;
   const char *nm = v >= 0 ? key_name(c, v) : NULL;

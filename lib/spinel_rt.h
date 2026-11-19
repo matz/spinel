@@ -17461,12 +17461,19 @@ static sp_RbVal sp_json_symbolize(sp_RbVal v) {
   return v;
 }
 extern sp_RbVal sp_json_parse_limit(const char *s, sp_int max_nesting);
-extern sp_RbVal sp_json_parse_duplicates(const char *s, sp_int max_nesting, int allow_duplicate_key);
+extern sp_RbVal sp_json_parse_with(const char *s, sp_int max_nesting, int allow_duplicate_key,
+                                   int allow_nan, int allow_trailing_comma, int allow_control_characters);
+/* JSON.parse(s, opts): the options read as json 2.18.0 (Ruby 4.0.9's) reads
+   them. max_nesting, symbolize_names, allow_duplicate_key, allow_nan,
+   allow_trailing_comma and allow_control_characters are honoured; an option
+   that would change the answer and is not supported raises ArgumentError by
+   name; any other name is ignored, as there. */
 static inline sp_RbVal sp_json_parse_options(const char *s, sp_RbVal options, int ostruct) {
   SP_GC_ROOT_STR(s); SP_GC_ROOT_RBVAL(options);
   sp_int limit = 100;
   sp_bool symbolize = FALSE;
   sp_bool duplicates = TRUE;
+  int allow_nan = 0, trailing_comma = 0, control_characters = 0;
   sp_sym nesting_key = sp_json_sym_intern_fn("max_nesting"), symbol_key = sp_json_sym_intern_fn("symbolize_names");
   for (sp_int i = 0; options.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(options.cls_id) && i < sp_poly_length(options); i++) {
     sp_RbVal key, value; sp_poly_hash_pair(options, i, &key, &value);
@@ -17474,6 +17481,9 @@ static inline sp_RbVal sp_json_parse_options(const char *s, sp_RbVal options, in
     if (key.v.i == nesting_key) limit = sp_json_nesting_limit(value);
     else if (key.v.i == symbol_key) symbolize = sp_poly_truthy(value);
     else if (key.v.i == sp_json_sym_intern_fn("allow_duplicate_key")) duplicates = sp_poly_truthy(value);
+    else if (key.v.i == sp_json_sym_intern_fn("allow_nan")) allow_nan = sp_poly_truthy(value);
+    else if (key.v.i == sp_json_sym_intern_fn("allow_trailing_comma")) trailing_comma = sp_poly_truthy(value);
+    else if (key.v.i == sp_json_sym_intern_fn("allow_control_characters")) control_characters = sp_poly_truthy(value);
     else if (key.v.i == sp_json_sym_intern_fn("on_load") ||
              (key.v.i == sp_json_sym_intern_fn("create_additions") && sp_poly_truthy(value)) ||
              (key.v.i == sp_json_sym_intern_fn("array_class") && sp_poly_truthy(value) &&
@@ -17486,7 +17496,7 @@ static inline sp_RbVal sp_json_parse_options(const char *s, sp_RbVal options, in
                 (ostruct && !strcmp(sp_class_val_name(value), "OpenStruct")))))))
       sp_raise_cls("ArgumentError", sp_sprintf("unsupported JSON.parse option: %s", sp_sym_name_fn((sp_sym)key.v.i)));
   }
-  sp_RbVal value = sp_json_parse_duplicates(s, limit, duplicates);
+  sp_RbVal value = sp_json_parse_with(s, limit, duplicates, allow_nan, trailing_comma, control_characters);
   return symbolize ? sp_json_symbolize(value) : value;
 }
 /* JSON.generate(obj, opts) and JSON.pretty_generate(obj, opts): the options

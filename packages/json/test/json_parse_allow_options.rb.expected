@@ -1,0 +1,80 @@
+JSON::ParserError: unexpected character: ']' at line 1 column 4
+[1]
+JSON::ParserError: unexpected character: ']' at line 1 column 6
+[1]
+JSON::ParserError: unexpected character: ']' at line 1 column 9
+[1]
+JSON::ParserError: unexpected character: '],]' at line 1 column 5
+[[1]]
+JSON::ParserError: expected object key, got: '}' at line 1 column 8
+{"a" => 1}
+JSON::ParserError: expected object key, got: '}' at line 1 column 9
+{"a" => 1}
+JSON::ParserError: unexpected character: ',]' at line 1 column 4
+JSON::ParserError: unexpected character: ',]' at line 1 column 4
+JSON::ParserError: unexpected character: ',]' at line 1 column 2
+JSON::ParserError: unexpected character: ',]' at line 1 column 2
+JSON::ParserError: expected object key, got ',}' at line 1 column 2
+JSON::ParserError: expected object key, got ',}' at line 1 column 2
+JSON::ParserError: expected object key, got: ',}' at line 1 column 8
+JSON::ParserError: expected object key, got: ',}' at line 1 column 8
+JSON::ParserError: unexpected character: ']]' at line 1 column 4
+JSON::ParserError: unexpected token at end of stream ']' at line 1 column 5
+JSON::ParserError: unexpected token at end of stream ',' at line 1 column 2
+JSON::ParserError: unexpected token at end of stream ',' at line 1 column 2
+[]
+[]
+JSON::ParserError: unexpected character: ']' at line 1 column 4
+[1]
+JSON::ParserError: unexpected character: ']' at line 1 column 4
+JSON::ParserError: unexpected token 'NaN' at line 1 column 1
+NaN
+JSON::ParserError: unexpected token 'NaN]' at line 1 column 2
+[NaN]
+JSON::ParserError: unexpected token 'Infinity]' at line 1 column 2
+[Infinity]
+JSON::ParserError: unexpected token '-Infinity]' at line 1 column 2
+[-Infinity]
+JSON::ParserError: unexpected token 'NaN}' at line 1 column 6
+{"a" => NaN}
+JSON::ParserError: unexpected token 'NaNx]' at line 1 column 2
+JSON::ParserError: expected ',' or ']' after array value at line 1 column 5
+JSON::ParserError: unexpected token 'Infinityx]' at line 1 column 2
+JSON::ParserError: expected ',' or ']' after array value at line 1 column 10
+JSON::ParserError: invalid number: '-Inf]' at line 1 column 2
+JSON::ParserError: invalid number: '-Inf]' at line 1 column 2
+JSON::ParserError: invalid number: '-NaN]' at line 1 column 2
+JSON::ParserError: invalid number: '-NaN]' at line 1 column 2
+JSON::ParserError: unexpected token 'nan]' at line 1 column 2
+JSON::ParserError: unexpected token 'nan]' at line 1 column 2
+JSON::ParserError: unexpected token 'Infinit]' at line 1 column 2
+JSON::ParserError: unexpected token 'Infinit]' at line 1 column 2
+JSON::ParserError: unexpected character: '+Infinity]' at line 1 column 2
+JSON::ParserError: unexpected character: '+Infinity]' at line 1 column 2
+JSON::ParserError: unexpected token 'NaN]' at line 1 column 2
+[Float, Float, Float]
+[true, false, false]
+[nil, 1, -1]
+JSON::ParserError: invalid ASCII control character in string: 	b"] at line 1 column 4
+["a\tb"]
+JSON::ParserError: invalid ASCII control character in string: 
+b"] at line 1 column 0
+["a\nb"]
+JSON::ParserError: invalid ASCII control character in string: '"]' at line 1 column 3
+["\u0001\u001F"]
+JSON::ParserError: invalid ASCII control character in string:  at line 1 column 4
+["a\u0000b"]
+JSON::ParserError: invalid ASCII control character in string: 	b":1} at line 1 column 4
+{"a\tb" => 1}
+JSON::ParserError: invalid ASCII control character in string: 	b\n"] at line 1 column 4
+["a\tb\n"]
+JSON::ParserError: invalid ASCII control character in string: 	"] at line 1 column 9
+["é\t"]
+JSON::ParserError: invalid escape character in string: '\q"]' at line 1 column 3
+JSON::ParserError: invalid escape character in string: '\q"]' at line 1 column 3
+JSON::ParserError: invalid ASCII control character in string: 	\""] at line 1 column 3
+["\t\""]
+[3]
+[Infinity, -Infinity, NaN]
+{"a\tb": NaN}
+"nesting of 3 is too deep"

@@ -179,7 +179,7 @@ struct LoadRecord {
   char **refl_capt; int nrefl_capt, crefl_capt;      /* ...a Method's maker that takes the entry, as a call */
   char **refl_fixed[2]; int nrefl_fixed[2], crefl_fixed[2];   /* ...the table's readers but a respond_to? or method_defined? of an instance's (elab_body_reflected) */
   unsigned char refl_any;               /* ...and one names a name the record cannot read */
-  unsigned char refl_cell_list;         /* ...a class's class-side method list the version cells may answer, of any class method name */
+  unsigned char refl_cell_list;         /* ...a method list the version cells may answer, of any name (list_cells_shape's sides: 1 a class's class-side list, 2 its own instance methods') */
   unsigned char names_any;              /* ...and one it defines by a name the record cannot read */
   /* the method histories by name (lr_vers_index), as of nentries entries */
   long nentries, indexed;
@@ -2327,9 +2327,11 @@ static void lr_reopens_take(Compiler *c) {
    list of methods or a name the record cannot read may be any (refl_any).
    A respond_to? the version cells may answer (respond_to_cells_shape), and
    a defined? of a call on a constant or self, which becomes one, go to
-   refl_cell instead, and a class-side list on a constant (list_cells_shape)
-   to refl_cell_list (its cells, of every class method it may list; it names
-   no instance method), and a Method's maker of that shape
+   refl_cell instead, and a method list on a constant (list_cells_shape)
+   to refl_cell_list (its cells, of every method of its side it may list:
+   a class-side list names no instance method, nor an instance-method list
+   a class method; an instance's body versions it lists are late, as for
+   the instance's presence readers), and a Method's maker of that shape
    (capture_cells_shape) to refl_capt: of a class's own class method, they
    read the cells of the entry its call takes (cplan_cmethod_presence), or
    take the entry. Every other reader but a Method's maker answers from
@@ -2376,8 +2378,9 @@ static void lr_refl_take(Compiler *c) {
       if (ac) lr_refl_add(r, NULL, LR_REFL_TABLE, 3, 0);   /* (a send with no argument reads no name) */
       continue;
     }
-    if (list_cells_shape(nt, n) && sp_streq(rn, nt_str(nt, n, "name"))) {   /* (reads every class method's cells; an instance method it does not name) */
-      r->refl_cell_list = 1;
+    int ls = list_cells_shape(nt, n);
+    if (ls && sp_streq(rn, nt_str(nt, n, "name"))) {   /* (reads the cells of every method of its side; one of the other side it does not name) */
+      r->refl_cell_list |= (unsigned char)ls;
       continue;
     }
     if ((pq = is_method_presence_query(rn)))
@@ -4324,7 +4327,7 @@ static int lr_refl_has(char *const *l, int n, const char *name) {
    says the method is gone while it is live)? */
 static int lr_refl_cell_table(Compiler *c, const char *name, int cside) {
   LoadRecord *r = c->lrec;
-  if (!lr_refl_has(r->refl_cell, r->nrefl_cell, name) && !(cside && r->refl_cell_list)) return 0;
+  if (!lr_refl_has(r->refl_cell, r->nrefl_cell, name) && !(cside && (r->refl_cell_list & 1))) return 0;
   if (!cside || respond_to_missing_defined(c)) return 1;
   const LrVers *x = lr_vers(r, name);
   for (int h = x ? x->first : -1; h >= 0; h = r->hist[h].nlink)
@@ -4407,8 +4410,9 @@ static int lr_list_may_list(Compiler *c, int id, int a) {
    (cplan_cmethod_presence), unless the table answers it after all
    (lr_refl_cell_table), or a Method's maker that takes the entry
    (refl_capt), which binds as the call does. One the record cannot read
-   (refl_any) stops every name. LrVers.late is 2 where some history of
-   the name is late. */
+   (refl_any) stops every name, and a list the cells answer
+   (refl_cell_list) every placed history on the instance side. LrVers.late
+   is 2 where some history of the name is late. */
 static void lr_late_make(Compiler *c) {
   LoadRecord *r = c->lrec;
   lr_vers_index(r);
@@ -4435,7 +4439,7 @@ static void lr_late_make(Compiler *c) {
     int nn = call_node_names(c, id, nm);
     ElabWindow w;
     int win = -1;   /* the node's window: not opened yet, none, or open */
-    int all = r->refl_cell_list && list_cells_shape(c->nt, id);   /* (a class-side list asks every name it may list) */
+    int all = (r->refl_cell_list & 1) && list_cells_shape(c->nt, id) == 1;   /* (a class-side list asks every name it may list) */
     for (int k = 0; k < (all ? r->nvers : nn); k++) {
       LrVers *x = all ? &r->vers[k] : lr_vers(r, nm[k]);
       for (int h = x ? x->first : -1; h >= 0 && x->pend; h = r->hist[h].nlink) {
@@ -4497,8 +4501,9 @@ int elab_body_reflected(Compiler *c, const char *name, int sg) {
          (sg ? lr_refl_cell_table(c, name, 1) : lr_name_asked(c->lrec, name, 0) && respond_to_missing_defined(c));
 }
 
-/* Does a reader name `name` (see elab_method_asked); a class-side list the cells answer (refl_cell_list) among them
-   where lists is set: it names a class method, never an instance method */
+/* Does a reader name `name` (see elab_method_asked); a method list the cells answer (refl_cell_list: a class-side
+   list, bit 1, or a class's own instance-method list, bit 2) among them where lists is set: it may name any method
+   of its side */
 static int lr_name_asked(const LoadRecord *r, const char *name, int lists) {
   if (!r || !r->recorded || !name) return 0;
   return r->refl_any || (lists && r->refl_cell_list) || lr_refl_has(r->refl, r->nrefl, name) || lr_refl_has(r->refl_cell, r->nrefl_cell, name) ||

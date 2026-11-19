@@ -7129,10 +7129,13 @@ int respond_to_cells_shape(const NodeTable *nt, int id) {
 /* See analyze_internal.h. */
 int list_cells_shape(const NodeTable *nt, int id) {
   int ac = 0, recv = nt_kind(nt, id) == NK_CallNode ? nt_ref(nt, id, "receiver") : -1;
-  if (recv < 0 || !is_singleton_method_list(nt_str(nt, id, "name")) || nt_ref(nt, id, "block") >= 0) return 0;
+  const char *nm = recv >= 0 ? nt_str(nt, id, "name") : NULL;
+  int side = !nm ? 0 : is_singleton_method_list(nm) ? 1 : is_instance_method_list(nm) ? 2 : 0;
+  if (!side || nt_ref(nt, id, "block") >= 0) return 0;
   const int *av = call_args(nt, id, &ac);
   NodeKind rk = nt_kind(nt, recv), ak = ac == 1 ? nt_kind(nt, av[0]) : NK_TrueNode;
-  return ac <= 1 && (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) && (ak == NK_TrueNode || ak == NK_FalseNode);
+  /* (an instance-method list folds only in its `(false)` form, emit_class_own_instance_methods) */
+  return ac <= 1 && (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) && (ak == NK_FalseNode || (side == 1 && ak == NK_TrueNode)) ? side : 0;
 }
 /* See analyze_internal.h. */
 int capture_cells_shape(const NodeTable *nt, int id) {

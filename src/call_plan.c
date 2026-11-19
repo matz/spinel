@@ -3958,11 +3958,15 @@ static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigne
       return -1;
     }
   }
+  /* (whether the call asks rcls's class object, live from its header on, where no instance may be yet: a class
+     method's call, or a reach ask's reader, a list or a method_defined?) */
+  int on_class = sg || (flags & CT_REACH);
   if (at == ELAB_YES) {
     vi = ct_def_version(c, rcls, name, sg, d, &dc);
     if (vi < 0 && (flags & CT_CAPTURE) && d && d->kind == LR_DEF && rcls >= 0) vi = comp_shadowed_body(c, rcls, sg, d->node, &dc);
   }
-  else if (at == ELAB_NO) none = late && !d && elab_class_live_at(c, rcls, sg, p);   /* (not an undef's, nor on a class no call can run on yet) */
+  /* (not an undef's, nor on a class no call can run on yet) */
+  else if (at == ELAB_NO) none = late && !d && elab_class_live_at(c, rcls, on_class, p);
   else if (m.win == ELAB_YES) {
     n = m.n;
     for (int k = 0; k < n && k < VER_MAX_ARMS; k++) none |= late && !ds[k];
@@ -4271,7 +4275,7 @@ static int cplan_presence_asks(Compiler *c, int id, int cls, const char *name);
 /* See call_plan.h. */
 int cplan_list_class(Compiler *c, int id, int *own) {
   const NodeTable *nt = c->nt;
-  if (!list_cells_shape(nt, id)) return -1;
+  if (list_cells_shape(nt, id) != 1) return -1;
   int ac = 0;
   const int *av = call_args(nt, id, &ac);
   *own = ac == 1 && nt_kind(nt, av[0]) == NK_FalseNode;
@@ -4295,28 +4299,50 @@ static void list_asks(Compiler *c, int id, void (*fn)(Compiler *, int, const cha
    respond_to? (defined?'s) of a literal name on a receiver, or a
    method_defined? kin on a constant or on `x.class`, asks fn (flags 0) of
    each class whose instances it may ask of, where it runs, as a call of
-   the name on such an instance there asks it */
+   the name on such an instance there asks it; a list of a class's own
+   instance methods on a constant (list_cells_shape 2), of that class, for
+   each name it may list */
 typedef struct { int id; CtClassFn fn; void *arg; } PresAsk;
+typedef struct { Compiler *c; int id, cls; CtClassFn fn; void *arg; } PresListAsk;
+static void pres_list_one(void *ud, const char *name, int vis) {
+  const PresListAsk *a = ud;
+  (void)vis;
+  if (ct_version_named(a->c, name)) a->fn(a->c, a->id, name, a->cls, 0, a->arg);
+}
 static void pres_ask_one(Compiler *c, int id, const char *nm, int k, unsigned flags, void *arg) {
   const PresAsk *a = arg;
   (void)id;
   if (k >= 0 && !(flags & (CT_CMETHOD | CT_TOP))) a->fn(c, a->id, nm, k, 0, a->arg);
 }
-/* How presence reader id (a respond_to? or a method_defined? kin of a literal name) reads the cells, as
-   cplan_presence_list asks them: a respond_to?'s are the chain's versions' (CT_REACH), of every visibility where
-   its second argument is `true` (*all); a method_defined? kin's are a list's (*list, cplan_list_cells), its own
-   class's alone where its inherit argument is `false` (CT_OWN) */
+/* Does list id, of a class's own instance methods on a constant (list_cells_shape 2), read the version cells of
+   class cls's names: the class its receiver names, one of the program's or a builtin it reopens, in a program
+   whose respond_to? asks only the methods? The keep (presence_asks) and the read (cplan_list_cells) ask this
+   alike */
+static int list_own_reads_cells(Compiler *c, int id, int cls) {
+  return id >= 0 && cls >= 0 && list_cells_shape(c->nt, id) == 2 && cls == class_recv_static_ci(c, nt_ref(c->nt, id, "receiver")) &&
+         !respond_to_missing_defined(c);
+}
+/* How presence reader id (a respond_to? or a method_defined? kin of a literal name, or a list of a class's own
+   instance methods) reads the cells, as cplan_presence_list asks them: a respond_to?'s are the chain's versions'
+   (CT_REACH), of every visibility where its second argument is `true` (*all); a method_defined? kin's are a list's
+   (*list, cplan_list_cells), its own class's alone where its inherit argument is `false` (CT_OWN), as a list's are */
 static unsigned presence_reader_side(const NodeTable *nt, int id, int *all, int *list) {
   int ac = 0;
   const int *av = call_args(nt, id, &ac);
   int flag = ac == 2 && nt_kind(nt, av[1]) == NK_TrueNode;
-  *list = !is_respond_to_name(nt_str(nt, id, "name"));
+  const char *rn = nt_str(nt, id, "name");
+  *list = !is_respond_to_name(rn);
   *all = flag && !*list;
-  return !*list || ac == 1 || flag ? CT_REACH : CT_OWN;
+  return !*list || (ac == 1 && !is_instance_method_list(rn)) || flag ? CT_REACH : CT_OWN;
 }
 static void presence_asks(Compiler *c, int id, CtClassFn fn, void *arg) {
   const NodeTable *nt = c->nt;
   const char *rn = nt_kind(nt, id) == NK_CallNode ? nt_str(nt, id, "name") : NULL;
+  if (list_cells_shape(nt, id) == 2) {
+    PresListAsk la = { c, id, class_recv_static_ci(c, nt_ref(nt, id, "receiver")), fn, arg };
+    if (list_own_reads_cells(c, id, la.cls)) cplan_list_candidates(c, la.cls, CT_OWN, pres_list_one, &la);
+    return;
+  }
   const char *qm = is_method_presence_name_query(rn) ? method_sym_arg(c, id) : NULL;
   if (!qm || !ct_version_named(c, qm) || respond_to_missing_defined(c)) return;
   int r = nt_ref(nt, id, "receiver"), k;
@@ -4332,8 +4358,9 @@ static void presence_asks(Compiler *c, int id, CtClassFn fn, void *arg) {
 }
 /* ...each such reader's of the program (written: in a scope the C writes, ver_scope_written) */
 static int ver_scope_written(const Scope *s);
+static int presence_reader_name(const char *n) { return is_method_presence_name_query(n) || is_instance_method_list(n); }
 static void presence_readers(Compiler *c, int written, CtClassFn fn, void *arg) {
-  int *ids = NULL, n = an_calls_named_if(c, is_method_presence_name_query, c->nt->count, &ids);
+  int *ids = NULL, n = an_calls_named_if(c, presence_reader_name, c->nt->count, &ids);
   for (int i = 0; i < n; i++)
     if (!written || ver_scope_written(comp_scope_of(c, ids[i]))) presence_asks(c, ids[i], fn, arg);
   free(ids);
@@ -4441,6 +4468,8 @@ int cplan_presence_cells(Compiler *c, int id, int cls, unsigned side, const char
 int cplan_list_cells(Compiler *c, int id, int cls, unsigned side, const char *name, CplanCells *out) {
   CplanCells all;
   int own = (side & CT_OWN) != 0, cm = (side & CT_CMETHOD) != 0;
+  /* (an instance-method list reads them in the shape its asks were made for, presence_asks) */
+  if (!cm && id >= 0 && is_instance_method_list(nt_str(c->nt, id, "name")) && !list_own_reads_cells(c, id, cls)) return 0;
   /* some version has cells, and each answers the same with or without the private ones: a list shows public and
      protected methods, so a version with another visibility is the table's to answer (an undef's cell counts in
      both) */

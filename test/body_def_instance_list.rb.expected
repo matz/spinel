@@ -1,0 +1,6 @@
+[:before, [:o, :pr], [:o], [:pr], [:pv], false, NoMethodError, false]
+[:after, [:m, :n, :o, :pr], [:m, :n, :o], [:pr], [:pv], true, :m, true]
+[false, false, [], [[], [:s]]]
+[true, true, [:j], [[:j], [:s]], :j]
+[:a, [:m], :old]
+[:b, [:m], :new]

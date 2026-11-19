@@ -20027,9 +20027,10 @@ void refl_emit_sym_array(Compiler *c, int cid, ReflNames *r, Buf *b) {
       if (!(r->show[i] & REFL_SHOWN)) continue;
       if (cplan_undefined(c, cid, 0, r->v[i])) continue;
     }
-    /* a class-side name whose versions the record cannot order against the list: listed where one of its
-       cells says it is live (cplan_cmethod_presence), as a respond_to? there answers; public versions only */
-    if (r->at && (r->at_side & CT_CMETHOD) && !(r->show[i] & REFL_ROW) &&
+    /* a name whose versions the record cannot order against the list: listed where one of its cells says it is
+       live (cplan_list_cells), as a respond_to? there answers; public versions only, of a class-side list or of a
+       list of a class's own instance methods (one the table shows: above) */
+    if (r->at && !guarded && (r->at_side & (CT_CMETHOD | CT_OWN)) && !(r->show[i] & REFL_ROW) &&
         cplan_list_cells(c, r->at - 1, r->at_cls, r->at_side, r->v[i], &cs) && cplan_cells_testable(c, &cs)) {
       buf_puts(b, "if (");
       int open = emit_cells_test(c, &cs, 0, b);

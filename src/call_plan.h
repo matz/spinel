@@ -1663,7 +1663,8 @@ int cplan_list_class(Compiler *c, int id, int *own);
 /* The cells that answer whether list id lists method `name` of cls on side (CT_CMETHOD for a class-side list,
    CT_OWN for its own versions), or a method_defined? there finds it: the public versions' cells, where
    cplan_cmethod_presence (cplan_presence_cells) gives some and every version is public (a list shows public and
-   protected methods); 0 where the table answers it. */
+   protected methods); 0 where the table answers it, and for an instance-method list of another shape than
+   list_cells_shape's, whose names the survey does not ask. */
 int cplan_list_cells(Compiler *c, int id, int cls, unsigned side, const char *name, CplanCells *out);
 /* Whether name answers on cls's chain where presence site id runs, as a
    call of the name there finds it, from call_target with CT_REACH (side: 0

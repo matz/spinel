@@ -1381,6 +1381,12 @@ static sp_RbVal sp_poly_pair_copy(sp_RbVal e) {
   return sp_box_poly_array(p);
 }
 
+static int sp_srange_to_h_first(const char *member, void *found) {
+  (void)member;
+  *(sp_bool *)found = 1;
+  return 1;
+}
+
 sp_RbVal sp_poly_to_h_m(sp_RbVal v)
 {
   if (v.tag == SP_TAG_NIL) return sp_box_obj(sp_SymPolyHash_new(), SP_BUILTIN_SYM_POLY_HASH);
@@ -1462,10 +1468,18 @@ sp_RbVal sp_poly_to_h_m(sp_RbVal v)
     if (sp_range_count(*(sp_Range *)v.v.p) <= 0) return sp_box_obj(sp_SymPolyHash_new(), SP_BUILTIN_SYM_POLY_HASH);
     sp_raise_cls("TypeError", "wrong element type Integer (expected array)");
   }
-  /* a String Range likewise, its elements Strings */
+  /* Test the walk: a digit Range can yield members even if min is nil. */
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_STR_RANGE && v.v.p) {
-    if (!sp_srange_min_v(sp_srange_value(v.v.p))) return sp_box_obj(sp_SymPolyHash_new(), SP_BUILTIN_SYM_POLY_HASH);
-    sp_raise_cls("TypeError", "wrong element type String (expected array)");
+    SP_GC_ROOT_RBVAL(v);
+    sp_StrRange r = sp_srange_value(v.v.p);
+    const char *first = sp_srange_first(r), *last = sp_srange_last(r);
+    if (!first) sp_raise_cls("TypeError", "can't iterate from NilClass");
+    sp_bool found = !last;
+    if (last) sp_str_upto_each(first, last, r.excl, sp_srange_to_h_first, &found);
+    if (found)
+      sp_raise_cls("TypeError", r.sym ? "wrong element type Symbol (expected array)"
+                                     : "wrong element type String (expected array)");
+    return sp_box_obj(sp_SymPolyHash_new(), SP_BUILTIN_SYM_POLY_HASH);
   }
   sp_raise_nomethod(sp_nomethod_msg("to_h", v));  /* "for true", "for an instance of String", as CRuby words it */
 }

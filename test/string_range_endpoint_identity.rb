@@ -14,3 +14,12 @@ p [:order, q.begin.equal?(assigned), q.end.equal?(b), q.exclude_end?, a]
 p [:frozen, ("hello".."there").begin.equal?("hello"), ("hello".."there").begin.frozen?]
 p [:open, (..hi).begin, (lo..).end, (lo..).min.equal?(lo), (..hi).max.equal?(hi)]
 p [:exceptions, ((..hi).first rescue $!.class), ((lo..).last rescue $!.class)]
+
+# A boxed String Range can yield members even when its minimum is nil.
+names = [:"9", :"11", :a, true]
+[("9"..."11"), ("2"..."02"), ("b".."a"), (""..""), (.."a"), ("a"..),
+ (names[0]...names[1]), (names[2]...names[2]), true].each do |value|
+  p value.to_h
+rescue TypeError, NoMethodError => e
+  puts e.message.lines.first.chomp
+end

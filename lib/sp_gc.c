@@ -452,17 +452,45 @@ void sp_gc_mark_str(const char *s) {
   if (owner && (const char *)owner + sizeof(struct sp_String_s) == (const char *)h)
     sp_gc_mark(owner);
 }
-void sp_gc_mark(void*obj){if(!obj)return;unsigned char pm=((unsigned char*)obj)[-1];if((pm|0x04)==0xfe){sp_gc_mark_str((const char*)obj);return;}
-  /* one representation (string-one-repr-design.md): the bytes of a handle's
-     payload (marker 0xfd) are held as a String's read face, in a root, a
-     Hash key or a box, so they keep the handle alive: the payload's owner
-     link (sp_fd_own) names it. (The root fiber's guard byte is 0xff under
-     this build, sp_fiber.c, so nothing else is marked 0xfd.) */
-  if(pm==0xfd){sp_str_hdr*fh=(sp_str_hdr*)((char*)obj-sizeof(sp_str_hdr)-1);if(fh->next)sp_gc_mark((void*)fh->next);return;}
-  /* a view of a payload a growth moved (0xf9, sp_fd_retire): its owner
-     still, and the payload is stamped with the cycle that reached it */
-  if(pm==0xf9){sp_str_hdr*fh=(sp_str_hdr*)((char*)obj-sizeof(sp_str_hdr)-1);SP_ATOMIC_STORE(&fh->hash,(uint64_t)sp_gc_mark_gen,__ATOMIC_RELAXED);if(fh->next)sp_gc_mark((void*)fh->next);return;}
-  if(pm==0xff||pm==0xf1||pm==0xfb)return;sp_gc_hdr*h=(sp_gc_hdr*)((char*)obj-sizeof(sp_gc_hdr));if(sp_gc_verify&&!sp_gc_obj_registered(h))sp_gc_verify_fail(obj,h);if(sp_gc_verify_probe_on){if(!h->old&&h->marked==sp_gc_verify_probe)sp_gc_verify_probe_hit=1;return;}if(sp_gc_young_probe_on){if(!h->old)sp_gc_young_probe_hit=1;return;}if(sp_gc_root_phase&&!h->old)h->aged=1;
+/* Only String views and static byte operands need marker-specific work. */
+static SP_COLD SP_NOINLINE int sp_gc_mark_string_view(void *obj, unsigned char marker) {
+  switch (marker) {
+  case 0xfa:
+  case 0xfe:
+    sp_gc_mark_str(obj);
+    return 1;
+  case 0xf9:
+  case 0xfd: {
+    sp_str_hdr *view = ((sp_str_hdr *)((char *)obj - 1)) - 1;
+    if (marker == 0xf9)
+      SP_ATOMIC_STORE(&view->hash, (uint64_t)sp_gc_mark_gen, __ATOMIC_RELAXED);
+    if (view->next) sp_gc_mark(view->next);
+    return 1;
+  }
+  case 0xf1:
+  case 0xfb:
+  case 0xff:
+    return 1;
+  default:
+    return 0;
+  }
+}
+
+void sp_gc_mark(void *obj) {
+  if (!obj) return;
+  unsigned char marker = ((const unsigned char *)obj)[-1];
+  if (SP_UNLIKELY(marker >= 0xf1) && sp_gc_mark_string_view(obj, marker)) return;
+  sp_gc_hdr *h = (sp_gc_hdr *)obj - 1;
+  if (sp_gc_verify && !sp_gc_obj_registered(h)) sp_gc_verify_fail(obj, h);
+  if (sp_gc_verify_probe_on) {
+    if (!h->old && h->marked == sp_gc_verify_probe) sp_gc_verify_probe_hit = 1;
+    return;
+  }
+  if (sp_gc_young_probe_on) {
+    if (!h->old) sp_gc_young_probe_hit = 1;
+    return;
+  }
+  if (sp_gc_root_phase && !h->old) h->aged = 1;
   int was_young=0;
 #ifdef SP_THREADS
   if(sp_gc_par_mark){

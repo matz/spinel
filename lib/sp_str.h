@@ -141,6 +141,7 @@ const char*sp_str_byteslice1(const char*s,sp_int i);
 const char*sp_str_byteslice_range(const char*s,sp_int lo,sp_int hi,int excl,int lo_none,int hi_none);
 const char*sp_str_bytesplice(const char*s,sp_int start,sp_int len,const char*val);
 const char*sp_str_bytesplice5(const char*s,sp_int start,sp_int len,const char*val,sp_int vstart,sp_int vlen);
+int sp_str_splice_encoding(const char *s, const char *val);
 int sp_str_bytesplice_check(const char*s,sp_int*start,sp_int*len,const char*val,sp_int*vstart,sp_int*vlen);
 int sp_str_ascii_only(const char*s);
 int sp_str_enc_step(int state, const char *acc, size_t acc_len, const char *part, size_t part_len, int part_bin);

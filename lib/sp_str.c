@@ -553,10 +553,13 @@ static void sp_str_bsp_span(const char*s,sp_int*beg,sp_int*len){
    a binary buffer from a text literal), and an ASCII value settles it, so
    the receiver is not read end to end on every call. Answers whether the
    result is BINARY. */
-int sp_str_bytesplice_check(const char*s,sp_int*start,sp_int*len,const char*val,sp_int*vstart,sp_int*vlen){
-  sp_str_bsp_span(s,start,len);sp_str_bsp_span(val,vstart,vlen);
+int sp_str_splice_encoding(const char *s, const char *val) {
   sp_str_check_compatible_encoding(s, val);
   return sp_str_cat_binary(s,val);
+}
+int sp_str_bytesplice_check(const char*s,sp_int*start,sp_int*len,const char*val,sp_int*vstart,sp_int*vlen){
+  sp_str_bsp_span(s,start,len);sp_str_bsp_span(val,vstart,vlen);
+  return sp_str_splice_encoding(s, val);
 }
 const char*sp_str_bytesplice5(const char*s,sp_int start,sp_int len,const char*val,sp_int vstart,sp_int vlen){
   SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(val);

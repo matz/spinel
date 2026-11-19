@@ -4335,7 +4335,7 @@ int emit_tap_then_expr(Compiler *c, int id, Buf *b) {
   if (unbox) { use_shadow = 0; for (int j = 0; j < bn; j++) infer_subtree(c, bb[j]); }
   int din = g_indent;
   if (use_shadow) {
-    lv_set_type(tlv0, et);
+    lv_set_storage_type(tlv0, et);
     for (int j = 0; j < bn; j++) infer_subtree(c, bb[j]);
     emit_indent(g_pre, g_indent); buf_puts(g_pre, "{\n");
     din = g_indent + 1;
@@ -4411,7 +4411,7 @@ int emit_tap_then_expr(Compiler *c, int id, Buf *b) {
   step_arm_end(c, arm);
   g_indent = sv;
   if (use_shadow) { emit_indent(g_pre, g_indent); buf_puts(g_pre, "}\n"); }
-  if (tlv0) lv_set_type(tlv0, tsaved0);
+  if (tlv0) lv_set_storage_type(tlv0, tsaved0);
 
   /* a receiver read as the shared handle (a block parameter that appends to
      it is the handle, promote_shared_stored_strings): tap's value is that
@@ -4914,8 +4914,8 @@ int emit_hash_filter_loop(Compiler *c, int recv, int block, TyKind rt, const cha
   LocalVar *vlv = (vp && hs) ? scope_local(hs, p1_raw) : NULL;
   TyKind ksaved = klv ? klv->type : TY_UNKNOWN;
   TyKind vsaved = vlv ? vlv->type : TY_UNKNOWN;
-  if (klv) lv_set_type(klv, hkt);
-  if (vlv) lv_set_type(vlv, hvt);
+  if (klv) lv_set_storage_type(klv, hkt);
+  if (vlv) lv_set_storage_type(vlv, hvt);
   for (int j = 0; j < bn; j++) infer_subtree(c, bb[j]);
   int t = ++g_tmp, ti = ++g_tmp, to = ++g_tmp, tw = ++g_tmp;
   int tn = ++g_tmp, tk = ++g_tmp, tkey = ++g_tmp, tnv = ++g_tmp;
@@ -5011,8 +5011,8 @@ int emit_hash_filter_loop(Compiler *c, int recv, int block, TyKind rt, const cha
   emit_indent(b, indent); buf_puts(b, "}\n");
   emit_indent(b, indent);
   buf_printf(b, "sp_int _t%d = _t%d ? _t%d->len : 0;\n", tw, t, t);
-  if (klv) lv_set_type(klv, ksaved);
-  if (vlv) lv_set_type(vlv, vsaved);
+  if (klv) lv_set_storage_type(klv, ksaved);
+  if (vlv) lv_set_storage_type(vlv, vsaved);
   *tr = t; *torig = to; *twp = tw;
   return 1;
 }
@@ -5078,7 +5078,7 @@ int emit_array_filter_loop(Compiler *c, int recv, int block, TyKind rt, const ch
     /* a widened parameter shadowed at a numeric element type still holds
        the element's nil */
     if (fsaved == TY_POLY && (et == TY_INT || et == TY_FLOAT)) flv->nullable_int = 1;
-    lv_set_type(flv, et); for (int j = 0; j < bn; j++) infer_subtree(c, bb[j]);
+    lv_set_storage_type(flv, et); for (int j = 0; j < bn; j++) infer_subtree(c, bb[j]);
   }
   int t = ++g_tmp, ti = ++g_tmp, to = ++g_tmp, tw = ++g_tmp, tk = ++g_tmp, tnv = ++g_tmp, te = ++g_tmp;
   int eid = ++g_tmp, tj = ++g_tmp;
@@ -5243,7 +5243,7 @@ int emit_array_filter_loop(Compiler *c, int recv, int block, TyKind rt, const ch
     /* (a block that cut the array leaves it cut, as CRuby does: the kept
        elements past its new end are gone) */
     else buf_printf(b, "if (_t%d && _t%d->len > _t%d) _t%d->len = _t%d;\n", t, t, tw, t, tw);
-    if (flv) { lv_set_type(flv, fsaved); flv->nullable_int = fnsaved; }
+    if (flv) { lv_set_storage_type(flv, fsaved); flv->nullable_int = fnsaved; }
     *tr = t; *torig = to; *twp = tw;
     return 1;
   }
@@ -5307,7 +5307,7 @@ int emit_array_filter_loop(Compiler *c, int recv, int block, TyKind rt, const ch
     emit_indent(b, indent);
     buf_printf(b, "if (_excf%d) { sp_pending_exc_obj = _excobj%d; sp_reraise_continues = 1; sp_raise_cls(_exccls%d, _excmsg%d); }\n", eid, eid, eid, eid);
   }
-  if (flv) { lv_set_type(flv, fsaved); flv->nullable_int = fnsaved; }
+  if (flv) { lv_set_storage_type(flv, fsaved); flv->nullable_int = fnsaved; }
   *tr = t; *torig = to; *twp = tw;
   return 1;
 }
@@ -5684,7 +5684,7 @@ static int iter_tap_slice_string_arms(Compiler *c, int id, Buf *b, int indent, c
     if (tap_next) g_ie_next_var = NULL;
     if (use_shadow_t && !tap_escapes) {
       int tbody_bn = 0; const int *tbody_bb = body >= 0 ? nt_arr(nt, body, "body", &tbody_bn) : NULL;
-      lv_set_type(tlv0, et);
+      lv_set_storage_type(tlv0, et);
       arm_body_infer(c, ARM_SITE_TAP, block, et, tbody_bb, tbody_bn);
       emit_indent(b, indent); buf_puts(b, tap_next ? "do {\n" : "{\n");
       emit_indent(b, indent + 1); emit_ctype(c, et, b);
@@ -5692,7 +5692,7 @@ static int iter_tap_slice_string_arms(Compiler *c, int id, Buf *b, int indent, c
       else buf_printf(b, " lv_%s = _t%d;\n", p0, tr);
       emit_loop_body(c, body, b, indent + 1);
       emit_indent(b, indent); buf_puts(b, tap_next ? "} while (0);\n" : "}\n");
-      lv_set_type(tlv0, tsaved0);
+      lv_set_storage_type(tlv0, tsaved0);
     }
     else {
       if (p0) {
@@ -5763,7 +5763,7 @@ static int iter_tap_slice_string_arms(Compiler *c, int id, Buf *b, int indent, c
     }
     else if (use_shadow_es) {
       int esb_bn = 0; const int *esb_bb = body >= 0 ? nt_arr(nt, body, "body", &esb_bn) : NULL;
-      lv_set_type(clv0, rt);
+      lv_set_storage_type(clv0, rt);
       arm_body_infer(c, ARM_SITE_EACH_SLICE, block, rt, esb_bb, esb_bn);
       emit_indent(b, bodyIndent); buf_puts(b, "{\n"); bodyIndent++;
       emit_indent(b, bodyIndent); emit_ctype(c, rt, b);
@@ -5776,7 +5776,7 @@ static int iter_tap_slice_string_arms(Compiler *c, int id, Buf *b, int indent, c
       emit_loop_body(c, body, b, bodyIndent);
       bodyIndent--;
       emit_indent(b, bodyIndent); buf_puts(b, "}\n");
-      lv_set_type(clv0, csaved0);
+      lv_set_storage_type(clv0, csaved0);
     }
     else {
       if (p0) { emit_indent(b, bodyIndent); buf_printf(b, "lv_%s = sp_%sArray_slice(_t%d, _t%d, _t%d);\n", p0, k, ta, ti, ts); }
@@ -5848,14 +5848,14 @@ static int iter_tap_slice_string_arms(Compiler *c, int id, Buf *b, int indent, c
          it, its body inferred over that slot) */
       int ss0 = clv0->str_shared;
       clv0->str_shared = 1; comp_touch_scope(clv0->owner);
-      lv_set_type(clv0, TY_STRBUF);
+      lv_set_storage_type(clv0, TY_STRBUF);
       arm_body_infer(c, ARM_SITE_SPLIT, block, TY_STRBUF, sb_bb, sb_bn);
       emit_indent(b, spIndent); buf_puts(b, "{\n"); spIndent++;
       emit_indent(b, spIndent); buf_printf(b, "sp_String *lv_%s = sp_StrArray_get_e(_t%d, _t%d);\n", p0, tm, ti);
       emit_loop_body(c, body, b, spIndent);
       spIndent--;
       emit_indent(b, spIndent); buf_puts(b, "}\n");
-      lv_set_type(clv0, csaved0); { clv0->str_shared = ss0; comp_touch_scope(clv0->owner); }
+      lv_set_storage_type(clv0, csaved0); { clv0->str_shared = ss0; comp_touch_scope(clv0->owner); }
     }
     else {
       if (p0) {
@@ -5936,14 +5936,14 @@ static int iter_tap_slice_string_arms(Compiler *c, int id, Buf *b, int indent, c
       int scb_bn = 0; const int *scb_bb = body >= 0 ? nt_arr(nt, body, "body", &scb_bn) : NULL;
       int ss0 = clv0->str_shared;   /* (see the split form) */
       clv0->str_shared = 1; comp_touch_scope(clv0->owner);
-      lv_set_type(clv0, TY_STRBUF);
+      lv_set_storage_type(clv0, TY_STRBUF);
       arm_body_infer(c, ARM_SITE_SCAN, block, TY_STRBUF, scb_bb, scb_bn);
       emit_indent(b, bodyIndent); buf_puts(b, "{\n"); bodyIndent++;
       emit_indent(b, bodyIndent); buf_printf(b, "sp_String *lv_%s = %s;\n", p0, sc_get_e);
       emit_loop_body(c, body, b, bodyIndent);
       bodyIndent--;
       emit_indent(b, bodyIndent); buf_puts(b, "}\n");
-      lv_set_type(clv0, csaved0); { clv0->str_shared = ss0; comp_touch_scope(clv0->owner); }
+      lv_set_storage_type(clv0, csaved0); { clv0->str_shared = ss0; comp_touch_scope(clv0->owner); }
     }
     else {
       if (p0) {
@@ -6029,12 +6029,12 @@ static int iter_range_upto_arms(Compiler *c, int id, Buf *b, int indent, const N
           int sbn = 0; const int *sbb = body >= 0 ? nt_arr(nt, body, "body", &sbn) : NULL;
           int ss0 = slv->str_shared;   /* (see the split form) */
           slv->str_shared = 1; comp_touch_scope(slv->owner);
-          lv_set_type(slv, TY_STRBUF);
+          lv_set_storage_type(slv, TY_STRBUF);
           arm_body_infer(c, ARM_SITE_STR_UPTO, block, TY_STRBUF, sbb, sbn);
           emit_indent(b, indent + 1);
           buf_printf(b, "sp_String *lv_%s = sp_StrArray_get_e(_t%d, _t%d);\n", p0, ta, ti);
           emit_loop_body(c, body, b, indent + 1);
-          lv_set_type(slv, saved); { slv->str_shared = ss0; comp_touch_scope(slv->owner); }
+          lv_set_storage_type(slv, saved); { slv->str_shared = ss0; comp_touch_scope(slv->owner); }
         }
         else {
           emit_indent(b, indent + 1);
@@ -6370,7 +6370,7 @@ static int iter_combination_cons_arms(Compiler *c, int id, Buf *b, int indent, c
       int use_shadow_ec = clv_ec && clv_ec->type != rt && rt != TY_UNKNOWN;
       if (use_shadow_ec) {
         int bodyBn = 0; const int *bodyBb = body >= 0 ? nt_arr(nt, body, "body", &bodyBn) : NULL;
-        lv_set_type(clv_ec, rt);
+        lv_set_storage_type(clv_ec, rt);
         arm_body_infer(c, ARM_SITE_COMB_CONS, block, rt, bodyBb, bodyBn);
         emit_indent(b, indent + 1); buf_puts(b, "{\n");
         emit_indent(b, indent + 2); emit_ctype(c, rt, b);
@@ -6380,7 +6380,7 @@ static int iter_combination_cons_arms(Compiler *c, int id, Buf *b, int indent, c
           emit_indent(b, indent + 2); emit_gc_root_var(c, rt, vn, b); buf_puts(b, "\n"); }
         emit_loop_body(c, body, b, indent + 2);
         emit_indent(b, indent + 1); buf_puts(b, "}\n");
-        lv_set_type(clv_ec, csaved_ec);
+        lv_set_storage_type(clv_ec, csaved_ec);
       }
       else {
         emit_indent(b, indent + 1);

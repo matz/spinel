@@ -175,7 +175,7 @@ typedef struct {
 enum { NIE_MARKED = 1, NIE_STORED = 2, NIE_REACH = 4 };
 typedef struct {
   char *name;       /* Ruby local name (without sigil) */
-  SP_TY_FIELD TyKind type; /* inferred type, written by lv_set_type */
+  SP_TY_FIELD TyKind type; /* written by the local slot setters */
   SlotWhy why;      /* how `type` came to be untyped, if it is */
   int last_src;     /* the node whose value last set `type` while it was concrete; -1 = none */
   int gc_root;      /* scratch during analysis; rooting is type-derived in codegen */
@@ -444,13 +444,22 @@ typedef struct {
                        to the same kind again is no change */
 } LocalVar;
 
-static inline TyKind lv_set_type(LocalVar *lv, TyKind t) {
+/* Scoped locals store the String object. Byte views have no slot. */
+static inline TyKind lv_storage_type(const LocalVar *lv, TyKind t) {
+  return t == TY_STRING && lv->owner >= 0 ? TY_STRBUF : t;
+}
+
+/* Record a binding's already selected physical type. */
+static inline TyKind lv_set_storage_type(LocalVar *lv, TyKind t) {
   if (lv->type != t) {
     *(TyKind *)&lv->type = t;
     if (comp_lv_touch_count && lv->owner >= 0 && lv->owner < comp_scope_ver_cap) comp_lv_touch_count[lv->owner]++;
     comp_touch_scope(lv->owner);
   }
   return t;
+}
+static inline TyKind lv_set_type(LocalVar *lv, TyKind t) {
+  return lv_set_storage_type(lv, lv_storage_type(lv, t));
 }
 static inline int lv_set_proc_ret(LocalVar *lv, int t) {
   if (lv->proc_ret != t) {

@@ -102,11 +102,11 @@ static void arm_record_x(Compiler *c, int block, LocalVar *lv, TyKind kind, int 
     int n = i < len ? nodes[i] : bnodes[i - len];
     rsaved[i] = n < c->node_cap ? c->bop_inf[n] : NULL;
   }
-  if (lv) lv_set_type(lv, kind);
+  if (lv) lv_set_storage_type(lv, kind);
   for (int j = 0; j < bn; j++) infer_type(c, bb[j]);
   if (extra >= 0) infer_type(c, extra);
   for (int i = 0; i < len; i++) types[i] = comp_ntype_settled(c, nodes[i]);
-  if (lv) lv_set_type(lv, lsaved);
+  if (lv) lv_set_storage_type(lv, lsaved);
   for (int i = 0; i < len; i++) if (nodes[i] < c->node_cap) comp_set_ntype(c, nodes[i], saved[i]);
   for (int i = 0; i < blen; i++) if (bnodes[i] < c->node_cap) comp_set_ntype(c, bnodes[i], bsaved[i]);
   for (int i = 0; usaved && i < len + blen; i++) {

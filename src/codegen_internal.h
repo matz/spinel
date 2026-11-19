@@ -872,6 +872,7 @@ extern int g_scopes_settled;   /* analysis done: scope_is_shadowed caches (codeg
    name to substitute and the literal node to emit in its place (-1 = none). */
 extern const char *g_dm_subst_name;
 extern int g_dm_subst_node;
+int substituted_local_node(const NodeTable *nt, int node);
 /* When inside an instance_eval block, the class id of the receiver (-1 outside).
    Used so InstanceVariableReadNode/WriteNode use g_self->iv_X instead of civ_Toplevel_X. */
 extern int g_ie_class_id;

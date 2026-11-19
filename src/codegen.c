@@ -3437,6 +3437,8 @@ void emit_boxed_operand(Compiler *c, const int *argv, int argc, int k, Buf *b) {
 static void emit_boxed_string(Compiler *c, int node, Buf *b);
 void emit_boxed(Compiler *c, int node, Buf *b) {
   if (b == g_pre) { emit_into_pre_line(c, emit_boxed, node); return; }
+  int substitute = substituted_local_node(c->nt, node);
+  if (substitute >= 0 && !arg_ran_first(node, 0)) { emit_boxed(c, substitute, b); return; }
   if (emit_const_class_call_wrap(c, node, b, emit_boxed)) return;
   if (c->n_cext_extensions && ran_first_handle(node) >= 0) {
     str_box_handle_tmp(b, ran_first_handle(node));
@@ -4416,7 +4418,7 @@ void emit_scope_decls_ends(Compiler *c, Scope *s, Buf *b, size_t *ends) {
          loop emitter binds it, and an empty literal receiver leaves no element
          type to infer, so `[].each_with_index { |x, i| }` referenced an
          undeclared lv_x (#3853). A boxed slot is what the binding writes. */
-      if (lv->type == TY_UNKNOWN && lv->is_block_param) lv_set_type(lv, TY_POLY);
+      if (lv->type == TY_UNKNOWN && lv->is_block_param) lv_set_storage_type(lv, TY_POLY);
       int vol = has_begin && (all_vol || name_list_has(volnames, nvol, lv->name));
       declare_local(c, b, lv, vol);
     }
@@ -6286,7 +6288,7 @@ static void inherit_transplant_locals(Compiler *c, Scope *s) {
       LocalVar sl = src->locals[k];  /* copy: intern may realloc src->locals */
       if (!sl.name || scope_local(s, sl.name)) continue;
       LocalVar *dl = scope_local_intern(s, sl.name);
-      lv_set_type(dl, sl.type);
+      lv_set_storage_type(dl, sl.type);
       dl->is_param = sl.is_param;
       dl->is_block_param = sl.is_block_param;
       lv_set_proc_ret(dl, sl.proc_ret);

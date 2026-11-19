@@ -1,0 +1,4 @@
+[String, true]
+[String, true]
+["cat", true, String, 3, "CAT", true]
+["dog", true, String, 3, "DOG", true]

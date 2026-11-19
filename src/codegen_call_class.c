@@ -2332,7 +2332,7 @@ static int emit_setter_assign_value(Compiler *c, int id, const int *argv, Buf *b
     if (esc) {
       char svn[32]; snprintf(svn, sizeof svn, "__sv%d", ++g_tmp);
       LocalVar *lv = scope_local_intern(esc, svn);
-      lv_set_type(lv, at);
+      lv_set_storage_type(lv, at);
       { lv->str_shared = shr; comp_touch_scope(lv->owner); }
       /* the temporary holds the argument's value, nil included: an
          Integer one that can be nil (`r.x = h[k]&.to_i`) keeps the

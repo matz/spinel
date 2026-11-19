@@ -1719,6 +1719,19 @@ static int block_yields_int_too(const NodeTable *nt, int blk) {
     if (nt_ref(nt, calls[i], "block") == blk && is_byte_codepoint_each(nt_str(nt, calls[i], "name"))) return 1;
   return 0;
 }
+
+/* A return-type query can revisit the call after its block slot is declared. */
+static void infer_boxed_string_param(Compiler *c, int block) {
+  if (an_read_only_inference()) return;
+  const char *param = block_param_name(c, block, 0);
+  Scope *scope = param ? comp_scope_of(c, block) : NULL;
+  LocalVar *slot = scope ? scope_local(scope, param) : NULL;
+  if (!slot || slot->type == TY_STRING || slot->type == TY_STRBUF) return;
+  TyKind type = slot->type == TY_INT ||
+    (slot->type == TY_POLY && block_yields_int_too(c->nt, block)) ? TY_POLY : TY_STRING;
+  lv_set_type(slot, type);
+}
+
 int poly_lines_args(Compiler *c, int argc, const int *argv) {
   const NodeTable *nt = c->nt;
   int kw = nt_argv_kwh(nt, argv, argc) >= 0;
@@ -2162,13 +2175,7 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
       nt_kind(nt, nt_ref(nt, id, "block")) == NK_BlockNode &&
       (argc == 0 || poly_lines_args(c, argc, argv)) && string_line_args(c, argc, argv) &&
       !an_user_defines_or_reads(c, name)) {
-    int block = nt_ref(nt, id, "block");
-    const char *param = block_param_name(c, block, 0);
-    Scope *scope = param ? comp_scope_of(c, block) : NULL;
-    LocalVar *slot = scope ? scope_local(scope, param) : NULL;
-    if (slot && slot->type != TY_STRING && !(slot->type == TY_STRBUF && slot->str_shared))
-      lv_set_type(slot, slot->type == TY_INT ||
-                        (slot->type == TY_POLY && block_yields_int_too(nt, block)) ? TY_POLY : TY_STRING);
+    infer_boxed_string_param(c, nt_ref(nt, id, "block"));
     *out = TY_POLY;
     return 1;
   }
@@ -2180,12 +2187,7 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
       (sp_streq(name, "each_char") || sp_streq(name, "each_line")) &&
       nt_ref(nt, id, "block") >= 0 && !an_user_defines_or_reads(c, name) &&
       !an_user_defines_or_reads(c, sp_streq(name, "each_char") ? "chars" : "lines")) {
-    int eb = nt_ref(nt, id, "block");
-    const char *ebp = block_param_name(c, eb, 0);
-    Scope *ebs = ebp ? comp_scope_of(c, eb) : NULL;
-    LocalVar *ebl = (ebs && ebp) ? scope_local(ebs, ebp) : NULL;
-    if (ebl && ebl->type != TY_STRING && !(ebl->type == TY_STRBUF && ebl->str_shared))
-      lv_set_type(ebl, ebl->type == TY_INT || (ebl->type == TY_POLY && block_yields_int_too(nt, eb)) ? TY_POLY : TY_STRING);
+    infer_boxed_string_param(c, nt_ref(nt, id, "block"));
     { *out = TY_STRING; return 1; }
   }
   if (recv >= 0 && rt == TY_POLY && argc == 0 && is_byte_codepoint_each(name) &&
@@ -2194,7 +2196,8 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
     const char *ebp = block_param_name(c, eb, 0);
     Scope *ebs = ebp ? comp_scope_of(c, eb) : NULL;
     LocalVar *ebl = (ebs && ebp) ? scope_local(ebs, ebp) : NULL;
-    if (ebl && ebl->type != TY_INT && ebl->type != TY_POLY) lv_set_type(ebl, ebl->type == TY_UNKNOWN ? TY_INT : TY_POLY);
+    if (!an_read_only_inference() && ebl && ebl->type != TY_INT && ebl->type != TY_POLY)
+      lv_set_type(ebl, ebl->type == TY_UNKNOWN ? TY_INT : TY_POLY);
     { *out = TY_STRING; return 1; }
   }
   /* `poly.empty?`: the dispatch carries builtin String / Array / Hash arms, so

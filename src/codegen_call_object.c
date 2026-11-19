@@ -1835,7 +1835,7 @@ int emit_call_freeze_dup_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
         int use_shadow_th = tlv0 && tlv0->type != rtype && rtype != TY_UNKNOWN;
         /* Pin block param type early so body_ty is computed with correct cache */
         if (use_shadow_th && tlv0) {
-          lv_set_type(tlv0, rtype);
+          lv_set_storage_type(tlv0, rtype);
           arm_body_infer(c, ARM_SITE_THEN, blk, rtype, then_bb, then_bn);
         }
         /* the tail's type as the arm typed it (the fact just applied), or
@@ -1864,7 +1864,7 @@ int emit_call_freeze_dup_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
         g_indent = save_ind;
         emit_indent(g_pre, bodyIndent); buf_printf(g_pre, "_t%d = %s;\n", tres, vb.p ? vb.p : "0"); free(vb.p);
         if (use_shadow_th) { emit_indent(g_pre, g_indent); buf_puts(g_pre, "}\n"); }
-        if (use_shadow_th && tlv0) lv_set_type(tlv0, tsaved0);
+        if (use_shadow_th && tlv0) lv_set_storage_type(tlv0, tsaved0);
         buf_printf(b, "_t%d", tres);
         return 1;
       }

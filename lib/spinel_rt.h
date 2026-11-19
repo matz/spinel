@@ -2516,6 +2516,28 @@ static sp_bool sp_poly_responds_builtin(sp_RbVal v, const char *m) {
   if (strcmp(cn, "UnboundMethod") == 0) return sp_str_in_list(m, umethm);
   if (strcmp(cn, "Regexp") == 0) return sp_str_in_list(m, regm);
   if (strcmp(cn, "MatchData") == 0) return sp_str_in_list(m, mdm);
+  /* Complex and Rational: the methods that work on a boxed receiver.
+     Complex#fdiv and Rational's clamp, step and to_c raise NoMethodError
+     there, so they are left out until boxed dispatch has them. */
+  if (strcmp(cn, "Complex") == 0) {
+    static const char *const cpxm[] = {
+      "*", "**", "+", "+@", "-", "-@", "/", "abs", "abs2", "angle", "arg", "coerce",
+      "conj", "conjugate", "denominator", "finite?", "imag", "imaginary", "infinite?",
+      "integer?", "magnitude", "nonzero?", "numerator", "phase", "polar", "quo",
+      "rationalize", "real", "real?", "rect", "rectangular", "to_c", "to_f", "to_i",
+      "to_int", "to_r", "zero?", NULL };
+    return sp_str_in_list(m, cpxm);
+  }
+  if (strcmp(cn, "Rational") == 0) {
+    static const char *const ratm[] = {
+      "%", "*", "**", "+", "+@", "-", "-@", "/", "<", "<=", ">", ">=", "abs", "abs2",
+      "angle", "arg", "between?", "ceil", "coerce", "conj", "conjugate", "denominator",
+      "div", "divmod", "fdiv", "finite?", "floor", "i", "imag", "imaginary", "infinite?",
+      "integer?", "magnitude", "modulo", "negative?", "nonzero?", "numerator", "phase",
+      "polar", "positive?", "quo", "rationalize", "real", "real?", "rect", "rectangular",
+      "remainder", "round", "to_f", "to_i", "to_int", "to_r", "truncate", "zero?", NULL };
+    return sp_str_in_list(m, ratm);
+  }
   /* a boxed Time (a parameter with a nil default that a call passes a
      Time): Time's own public methods and Comparable's */
   if (strcmp(cn, "Time") == 0) {

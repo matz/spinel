@@ -24,9 +24,9 @@
 # tally/to_set/transform_keys!/unicode_normalize at least, found while
 # writing this script -- tracked separately, NOT fixed here).
 #
-# Scope: all 11 classes sp_poly_responds_builtin branches on -- Array,
+# Scope: 13 classes sp_poly_responds_builtin branches on -- Array,
 # Hash, String, Integer, Float, Range, Symbol, Proc, Exception, Regexp,
-# MatchData. Exception's
+# MatchData, Complex, Rational. Exception's
 # per-subclass accessors (errno, key, receiver, name, result, ...) are
 # gated at runtime by sp_exc_is_a (the boxed exception's own ancestor
 # walk), not by a flat name list, since bop_rows has no owning-subclass
@@ -35,8 +35,8 @@
 # one (brp_key_error for Exception), so this only probes the names every
 # exception shares -- the subclass-specific ones are covered by
 # test/respond_to_builtin_mutator_surface.rb instead, not by this script.
-# File/Queue/Mutex/Time/Random/Method/Enumerator/
-# Rational/Complex go through other mechanisms (sp_io_typed_responds, or
+# File/Queue/Mutex/Time/Random/Method/Enumerator
+# go through other mechanisms (sp_io_typed_responds, or
 # are not branched here at all) and are out of scope for this script.
 # Rows tagged BOP_IVAR_LESS (compiler-internal reflection helpers like
 # __bivar_get, never real Ruby-level methods) are excluded by name
@@ -68,22 +68,24 @@ SPINEL = ENV["SPINEL"] || File.join(ROOT, "bin/spinel")
 ref_ruby = "ruby"
 ARGV.each_with_index { |a, i| ref_ruby = ARGV[i + 1] if a == "--ref" }
 
-# The 11 classes sp_poly_responds_builtin actually answers for. Each entry
+# The 13 classes this script audits. Each entry
 # is one BuiltinRowGen family name -> one sample receiver expression
 # (reused from BuiltinRowGen::FAMILIES, first sample only: respond_to?
 # does not care which instance, so one representative is enough).
-SCOPE = %w[Array Hash String Integer Float Range Symbol Proc Exception Regexp MatchData].freeze
+SCOPE = %w[Array Hash String Integer Float Range Symbol Proc Exception Regexp MatchData Complex Rational].freeze
 
 INTERNAL_NAME = BuiltinRowGen::INTERNAL_NAME
 
-# Names bop_rows has for a typed Regexp / MatchData that a boxed one cannot
-# be called with yet (the call raises NoMethodError, or for ~ does integer
-# conversion instead of matching $_), so its table leaves
-# them out on purpose: answering true would send a respond_to?-guarded call
-# into that raise.
+# Names bop_rows has for a typed Regexp / MatchData / Complex / Rational
+# that a boxed one cannot be called with yet (the call raises
+# NoMethodError, or for ~ does integer conversion instead of matching $_),
+# so its table leaves them out on purpose: answering true would send a
+# respond_to?-guarded call into that raise.
 BOXED_UNCALLABLE = {
   "Regexp" => %w[encoding fixed_encoding? timeout ~],
   "MatchData" => %w[bytebegin byteend deconstruct deconstruct_keys match],
+  "Complex" => %w[fdiv],
+  "Rational" => %w[clamp to_c],
 }.freeze
 
 pairs = BuiltinRowGen.method_list.select do |family, name|

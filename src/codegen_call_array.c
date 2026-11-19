@@ -2949,6 +2949,46 @@ int frange_index_view(Compiler *c, int id) {
   return mark;
 }
 
+/* Keep the original operands until the store checks frozen and converts the
+   index. A statement also needs these holds when an Integer index can collect
+   and its boxed value would otherwise be evaluated beside it. */
+int emit_poly_array_ordered_set(Compiler *c, int recv, const int *argv, int statement, Buf *b) {
+  int idx = argv[0], value = argv[1];
+  Repr ix = repr_of(c, idx);
+  int converts = ix.as_ty != TY_INT || ix.kind == RK_BOXED || node_may_be_nil(c, idx);
+  if (!converts && !(statement && operand_allocates_beside(c, idx) &&
+                     (operand_allocates_beside(c, value) || repr_box_allocates(c, repr_of(c, value)))))
+    return 0;
+
+  buf_puts(b, "({ ");
+  Buf *saved_pre = g_pre;
+  g_pre = b;
+  int tr = hold_operand(c, recv, TY_POLY_ARRAY, 0, ++g_tmp, 1, " ", b);
+  TyKind optional = repr_opt_kind(c, idx);
+  int ti = ++g_tmp;
+  if (optional) {
+    Buf oi; memset(&oi, 0, sizeof oi);
+    emit_oint_expr(c, idx, optional, &oi);
+    buf_printf(b, "%s _t%d = %s; ", oint_ctype(optional), ti, oi.p);
+    free(oi.p);
+  }
+  else ti = hold_operand(c, idx, ix.as_ty, ix.kind == RK_BOXED, ti, 1, " ", b);
+  int tv = hold_operand(c, value, TY_POLY, 1, ++g_tmp, 1, " ", b);
+  if (converts) {
+    buf_printf(b, "if (_t%d && _t%d->frozen) sp_raise_frozen_array_at(_t%d, SP_BUILTIN_POLY_ARRAY); ", tr, tr, tr);
+    Buf index; memset(&index, 0, sizeof index);
+    int bind = optional ? view_bind_temp_o(idx, ti) : view_bind_temp(idx, ti);
+    emit_int_expr(c, idx, &index);
+    view_unbind(bind);
+    ti = ++g_tmp;
+    buf_printf(b, "sp_int _t%d = %s; ", ti, index.p);
+    free(index.p);
+  }
+  g_pre = saved_pre;
+  buf_printf(b, "sp_PolyArray_set(_t%d, _t%d, _t%d); _t%d; })", tr, ti, tv, tv);
+  return 1;
+}
+
 /* an Array receiver: a store in expression position (a[i] = v, a[i, n] = src, a[range] = src),
    sum and the other methods of an empty literal, then the Array emitters (emit_array_call) */
 int emit_call_array_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt) {
@@ -2977,6 +3017,7 @@ int emit_call_array_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const
       emit_array_splice(c, id, recv, rt, -1, -1, argv[0], argv[1], b);
       return 1;
     }
+    if (rt == TY_POLY_ARRAY && emit_poly_array_ordered_set(c, recv, argv, 0, b)) return 1;
     if (k) {
       int t = ++g_tmp, ti = ++g_tmp, tv = ++g_tmp;
       buf_printf(b, "({ sp_%sArray *_t%d = ", k, t); emit_expr(c, recv, b); buf_puts(b, "; ");

@@ -17956,8 +17956,11 @@ static int masgn_store(Compiler *c, int id, const MasgnTmps *mt, int tgt, const 
    value as the outer assignment does (an Array spreads, anything else is a
    one-element list), or any target masgn_store writes. `src` is the node
    that builds the value, when the assignment's literal right side names
-   it, else -1. */
-static void emit_massign_poly_target(Compiler *c, int id, const MasgnTmps *mt, int tgt, const char *val,
+   it, else -1; vt, the type the value had before it was boxed (TY_POLY
+   where it is not known): an Array's (the Array an element's own to_ary
+   gave, which the right side's temps hold) a nested target spreads with
+   no to_ary of its own. */
+static void emit_massign_poly_target(Compiler *c, int id, const MasgnTmps *mt, int tgt, const char *val, TyKind vt,
                                      int src, int indent, Buf *b) {
   const NodeTable *nt = c->nt;
   const char *ty = nt_type(nt, tgt);
@@ -17989,8 +17992,8 @@ static void emit_massign_poly_target(Compiler *c, int id, const MasgnTmps *mt, i
   int tv = ++g_tmp, tn = ++g_tmp;
   emit_indent(b, indent);
   buf_printf(b, "sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d);\n", tv, val, tv);
-  /* the element converts as the nested target's implied to_ary of it (its row) */
-  tv = emit_boxed_to_ary(c, tgt, NTI_YIELDED, tv, b, indent);
+  /* the element converts as the nested target's implied to_ary of it (its row); an Array is one already */
+  if (!ty_is_array(vt) && !ty_is_obj_array(vt)) tv = emit_boxed_to_ary(c, tgt, NTI_YIELDED, tv, b, indent);
   /* its elements as it spreads them, before a store changes them */
   if (masgn_takes_elements_first(c, tgt, src)) tv = masgn_take_elements_boxed(tv, b, indent);
   emit_indent(b, indent);
@@ -18003,7 +18006,7 @@ static void emit_massign_poly_target(Compiler *c, int id, const MasgnTmps *mt, i
   for (int i = 0; i < ln; i++) {
     char ge[96];
     snprintf(ge, sizeof ge, "(%dLL >= _t%d ? sp_box_nil() : sp_poly_massign_get(_t%d, %dLL))", i, tn, tv, i);
-    emit_massign_poly_target(c, id, mt, lefts[i], ge, i < sn ? sels[i] : -1, indent, b);
+    emit_massign_poly_target(c, id, mt, lefts[i], ge, TY_POLY, i < sn ? sels[i] : -1, indent, b);
   }
   if (inner >= 0) {
     int tr = ++g_tmp, ti = ++g_tmp;
@@ -18032,7 +18035,7 @@ static void emit_massign_poly_target(Compiler *c, int id, const MasgnTmps *mt, i
                tix, tn, rn, j, ln + j, tn, rn, j, ln + j);
     char rgx[128];
     snprintf(rgx, sizeof rgx, "(_t%d >= _t%d ? sp_box_nil() : sp_poly_massign_get(_t%d, _t%d))", tix, tn, tv, tix);
-    emit_massign_poly_target(c, id, mt, rights[j], rgx, -1, indent, b);
+    emit_massign_poly_target(c, id, mt, rights[j], rgx, TY_POLY, -1, indent, b);
   }
 }
 
@@ -18546,7 +18549,7 @@ static int emit_multi_write_scalar(Compiler *c, int id, Buf *b, int indent, cons
         buf_printf(&ge, "(%dLL >= _t%d->len ? sp_box_nil() : ", i, tarr);
         emit_boxed_text(c, elem, gx, &ge);
         buf_puts(&ge, ")");
-        emit_massign_poly_target(c, id, mt, lefts[i], ge.p, -1, indent, b);
+        emit_massign_poly_target(c, id, mt, lefts[i], ge.p, TY_POLY, -1, indent, b);
         free(ge.p);
       }
       else if (lk == NK_LocalVariableTargetNode) {
@@ -18786,7 +18789,7 @@ static int emit_multi_write_scalar(Compiler *c, int id, Buf *b, int indent, cons
           buf_printf(&ge, "(_t%d >= _t%d->len ? sp_box_nil() : ", tix, tarr);
           emit_boxed_text(c, elem, gx, &ge);
           buf_puts(&ge, ")");
-          emit_massign_poly_target(c, id, mt, rights[j], ge.p, -1, indent, b);
+          emit_massign_poly_target(c, id, mt, rights[j], ge.p, TY_POLY, -1, indent, b);
           free(ge.p);
           continue;
         }
@@ -18832,7 +18835,7 @@ static int emit_multi_write_scalar(Compiler *c, int id, Buf *b, int indent, cons
       if (lk == NK_MultiTargetNode) {
         /* nested (a, (b, c)) target: recurse over the boxed sub-value */
         char ge[80]; snprintf(ge, sizeof ge, "sp_poly_massign_get(_t%d, %dLL)", tarr, i);
-        emit_massign_poly_target(c, id, mt, lefts[i], ge, -1, indent, b);
+        emit_massign_poly_target(c, id, mt, lefts[i], ge, TY_POLY, -1, indent, b);
       }
       else if (lk == NK_LocalVariableTargetNode) {
         const char *lnm = nt_str(nt, lefts[i], "name");
@@ -18929,7 +18932,7 @@ static int emit_multi_write_scalar(Compiler *c, int id, Buf *b, int indent, cons
         if (lk != NK_LocalVariableTargetNode) {
           char rgx[128];
           snprintf(rgx, sizeof rgx, "(_t%d >= _t%d ? sp_box_nil() : sp_poly_massign_get(_t%d, _t%d))", tix, tn, tarr, tix);
-          emit_massign_poly_target(c, id, mt, rights[j], rgx, -1, indent, b);
+          emit_massign_poly_target(c, id, mt, rights[j], rgx, TY_POLY, -1, indent, b);
           continue;
         }
         emit_indent(b, indent);
@@ -19602,7 +19605,7 @@ static int emit_multi_write_stmt_body(Compiler *c, int id, Buf *b, int indent, c
         }
       }
       else if (lk == NK_MultiTargetNode)
-        emit_massign_poly_target(c, id, mt, lefts[i], "sp_box_nil()", -1, indent, b);
+        emit_massign_poly_target(c, id, mt, lefts[i], "sp_box_nil()", TY_POLY, -1, indent, b);
       /* every other target past the supplied elements takes nil */
       else if (!masgn_store(c, id, mt, lefts[i], NULL, TY_NIL, -1, ttr[i], ttk[i], indent, b))
         unsupported(c, id, "multiple assignment target");
@@ -19744,7 +19747,7 @@ static int emit_multi_write_stmt_body(Compiler *c, int id, Buf *b, int indent, c
       char ex[32]; snprintf(ex, sizeof ex, "_t%d", tmps[i]);
       Buf ge; memset(&ge, 0, sizeof ge);
       emit_boxed_text(c, tmpts[i], ex, &ge);
-      emit_massign_poly_target(c, id, mt, lefts[i], ge.p ? ge.p : "sp_box_nil()", els[i], indent, b);
+      emit_massign_poly_target(c, id, mt, lefts[i], ge.p ? ge.p : "sp_box_nil()", tmpts[i], els[i], indent, b);
       free(ge.p);
     }
     else if (lk == NK_GlobalVariableTargetNode) {
@@ -20020,7 +20023,7 @@ static int emit_multi_write_stmt_body(Compiler *c, int id, Buf *b, int indent, c
       if (lk == NK_MultiTargetNode) {
         Buf ge; memset(&ge, 0, sizeof ge);
         if (ridx >= 0) emit_boxed_text(c, rvt, rv, &ge);
-        emit_massign_poly_target(c, id, mt, rights[j], ge.p ? ge.p : "sp_box_nil()",
+        emit_massign_poly_target(c, id, mt, rights[j], ge.p ? ge.p : "sp_box_nil()", ridx >= 0 ? rvt : TY_POLY,
                                  ridx >= 0 && ridx < en ? els[ridx] : -1, indent, b);
         free(ge.p);
       }

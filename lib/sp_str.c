@@ -407,7 +407,7 @@ const char *sp_str_chr(const char *s) {
   if (!s) sp_nil_recv("chr");
   size_t len = sp_str_byte_len(s);
   size_t width = len ? sp_str_char_width(s, len, 0) : 0;
-  return sp_str_bin_like(s, sp_str_from_bytes(s, width));
+  return sp_str_bin_like(s, (char *)sp_str_from_bytes(s, width));   /* (a String of its own: its bytes are the answer's to mark) */
 }
 /* The character index at byte offset `byteoff`; preserves -1 (no match) and 0.
    Used to report a regexp match position in characters, not bytes (#3056). */

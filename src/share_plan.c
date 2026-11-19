@@ -14,10 +14,8 @@
              holds it (SPS_HANDLE, share_plan_supplies), or only its bytes
              (SPS_BYTES);
      form   what the two give (share_plan_form): the bytes (SPF_BYTES);
-             the producer's handle (SPF_HANDLE); the bytes wrapped into a
-             new handle, which no other name can tell from the object
-             (SPF_WRAP); or the bytes, which the consumer that needs the
-             object makes a handle of (SPF_COPY).
+             the producer's handle (SPF_HANDLE); or a copy when the
+             consumer needs the producer's object (SPF_COPY).
 
    A need is a consumer's. A value has one consumer, the node it sits in,
    whose role says what it does with it (share_plan_role): it takes the
@@ -101,7 +99,7 @@
 static int share_plan_form(int need, int supply) {
   if (need == SPN_BYTES) return SPF_BYTES;
   if (supply == SPS_HANDLE) return SPF_HANDLE;
-  return need == SPN_NEW ? SPF_WRAP : SPF_COPY;
+  return need == SPN_OBJECT ? SPF_COPY : SPF_BYTES;
 }
 
 
@@ -691,23 +689,16 @@ static int share_plan_need_of(int need) {
 /* The value's need (what a taker needs), asked live. */
 static int share_plan_need(Compiler *c, int v) { return share_plan_need_of(share_value_needs_handle(c, v)); }
 
-static int share_plan_box_kept(Compiler *c, int v);
-
 /* What a consumer in `role` needs of value v, whose own need (what its
    facts say a taker needs) is `need`. */
 static int share_plan_role_need(Compiler *c, int v, int role, int need) {
   if (role == SPR_READ) return SPN_BYTES;
   if (role == SPR_IDENTITY) return SPN_OBJECT;
-  /* A box is copied by value, so a box of a String's bytes is a String of
-     its own once a copy is changed in place: a box of a String no other
-     name holds is a new handle, which every copy names, unless the box
-     goes into nothing that keeps it (share_plan_box_kept): a builtin that
-     only reads it is handed the bytes. A frozen literal is its own object already. Any
-     other value needs what a taker does. */
+  /* A frozen literal already has its object. A fresh String can adopt
+     its payload's owner when the producer hands on bytes. */
   if (role == SPR_BOX) {
     if (share_frozen_literal(c, v)) return SPN_BYTES;
-    if (share_value_fresh(c, v, 0))
-      return !share_plan_box_kept(c, v) ? SPN_BYTES : SPN_NEW;
+    if (share_value_fresh(c, v, 0)) return SPN_NEW;
   }
   return need;
 }
@@ -963,111 +954,6 @@ static void share_plan_roles_build(Compiler *c) {
     share_plan_identity_roles(c, n);
     share_plan_reader_roles(c, n);
   }
-}
-
-/* Does builtin call `call` keep or hand on the argument it is given: a
-   store into its receiver's elements, a constructor, an ivar store, a proc
-   call (its parameter keeps it), Array(); or answer it (2: its consumer
-   decides)? A builtin that only reads it (0) is handed its bytes. */
-static int share_plan_builtin_keeps(Compiler *c, int call) {
-  const NodeTable *nt = c->nt;
-  const char *nm = nt_str(nt, call, "name");
-  int recv = nt_ref(nt, call, "receiver");
-  if (!nm) return 0;
-  TyKind rt = comp_ntype_settled(c, recv);
-  TyKind fams[6];
-  int nf = 0;
-  if (rt == TY_STRING || rt == TY_STRBUF) fams[nf++] = TY_STRING;
-  else if (ty_is_array(rt) || ty_is_ptr_array(rt)) fams[nf++] = BOP_ANY_ARRAY;
-  else if (ty_is_hash(rt)) fams[nf++] = BOP_ANY_HASH;
-  else if (rt == TY_PROC || rt == TY_METHOD || rt == TY_CURRY) fams[nf++] = BOP_CALLABLE;
-  else if (rt == TY_ENV) fams[nf++] = BOP_ENV;
-  else if (recv >= 0 && rt != TY_POLY && rt != TY_UNKNOWN) fams[nf++] = rt;
-  else { fams[nf++] = BOP_ANY_ARRAY; fams[nf++] = BOP_ANY_HASH; fams[nf++] = TY_CLASS; fams[nf++] = BOP_CALLABLE; }
-  fams[nf++] = BOP_ANY_RECV;
-  int keep = 0;
-  for (int i = 0; i < nf; i++) {
-    switch (bop_share_named(fams[i], nm)) {
-    case BSH_STORE_LAST: case BSH_STORE_ALL: case BSH_STORE_TAIL: case BSH_MERGE: case BSH_ARRAY_OF:
-    case BSH_CALL: case BSH_IVAR_SET: case BSH_EXEC: case BSH_NEW: case BSH_NEW_FILL: case BSH_NEW_DEFAULT:
-    case BSH_NEW_FIELDS: case BSH_FILL: case BSH_SUM:
-      return 1;
-    case BSH_LAST: case BSH_FETCH:
-      keep = 2;
-      break;
-    default: break;
-    }
-  }
-  return keep;
-}
-
-static int share_plan_box_kept(Compiler *c, int v) {
-  const NodeTable *nt = c->nt;
-  int n = c->share_parent_n;
-  /* the parents form a tree, so a walk of n steps reaches the root; the
-     bound only guards a malformed map, and running out of it answers
-     "kept": a handle is never wrong, bytes would be a copy */
-  for (int depth = 0; depth < n; depth++) {
-    int p = c->share_parent && v >= 0 && v < n ? c->share_parent[v] : -1;
-    if (p < 0 || p >= n) return 0;
-    const char *pty = nt_type(nt, p);
-    /* (no node kinds of their own) an argument list's call, a `when` arm */
-    if (is_arguments_node_type(pty)) {
-      int call = c->share_parent[p];
-      if (call < 0 || call >= n) return 0;
-      if (nt_kind(nt, call) != NK_CallNode)
-        return nt_kind(nt, call) == NK_SuperNode || nt_kind(nt, call) == NK_YieldNode;
-      const CallPlan cp = cplan_user(c, call);
-      if (cp.mi >= 0 || cp.dispatch != CP_NONE) return 1;
-      int k = share_plan_builtin_keeps(c, call);
-      if (k != 2) return k;
-      v = call;
-      continue;
-    }
-    if (is_when_node_type(pty)) { v = p; continue; }
-    switch (nt_kind(nt, p)) {
-    /* a holder: a container literal, a variable, a constant, a value a
-       method, block or jump hands on */
-    case NK_ArrayNode: case NK_HashNode: case NK_KeywordHashNode:
-    case NK_LocalVariableWriteNode: case NK_InstanceVariableWriteNode: case NK_GlobalVariableWriteNode:
-    case NK_ClassVariableWriteNode: case NK_ConstantWriteNode: case NK_ConstantPathWriteNode:
-    case NK_LocalVariableOrWriteNode: case NK_InstanceVariableOrWriteNode: case NK_GlobalVariableOrWriteNode:
-    case NK_ClassVariableOrWriteNode: case NK_LocalVariableAndWriteNode: case NK_InstanceVariableAndWriteNode:
-    case NK_GlobalVariableAndWriteNode: case NK_ClassVariableAndWriteNode: case NK_MultiWriteNode:
-    case NK_ReturnNode: case NK_NextNode: case NK_BreakNode: case NK_YieldNode: case NK_SplatNode:
-    case NK_DefNode: case NK_BlockNode: case NK_LambdaNode: case NK_OptionalParameterNode:
-    case NK_OptionalKeywordParameterNode:
-      return 1;
-    case NK_AssocNode:
-      /* a Hash keeps a value; a String key is copied and frozen */
-      if (nt_ref(nt, p, "value") != v) return 0;
-      v = p;
-      continue;
-    /* the value of a conditional, a sequence's last statement, a group:
-       its own consumer decides */
-    case NK_ParenthesesNode: case NK_IfNode: case NK_UnlessNode: case NK_ElseNode:
-    case NK_CaseNode: case NK_InNode: case NK_CaseMatchNode: case NK_AndNode: case NK_OrNode: case NK_BeginNode:
-    case NK_RescueModifierNode:
-      v = p;
-      continue;
-    case NK_StatementsNode: {
-      int bn = 0;
-      const int *bv = nt_arr(nt, p, "body", &bn);
-      if (bn <= 0 || bv[bn - 1] != v) return 0;
-      v = p;
-      continue;
-    }
-    /* an arm of a dynamic send (dyn_send_arms) is the send's value when
-       the name selects it: its consumer decides */
-    case NK_CallNode:
-      if (!nt_int(nt, v, "dyn_arm", 0)) return 0;
-      v = p;
-      continue;
-    default:
-      return 0;
-    }
-  }
-  return 1;
 }
 
 void share_plan_free(Compiler *c) {

@@ -3343,9 +3343,9 @@ static void emit_boxed_impl(Compiler *c, int node, Buf *b) {
     return;
   }
   if (t == TY_STRING) {
-    /* The String plan's box form selects the operand for the handle box. */
-    int wrap = share_plan_of(c, node, SPR_BOX).form == SPF_WRAP;
-    emit_str_box_leaf(c, node, wrap, b);
+    buf_puts(b, "SP_STR_BOX(");
+    emit_expr(c, node, b);
+    buf_puts(b, ")");
     RC(RF_STR, RW_NONE);
     return;
   }

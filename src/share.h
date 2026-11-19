@@ -142,7 +142,7 @@ int share_node_carry_kind_unlifted(const Compiler *c, int n, int *op);
    (codegen_internal.h). */
 enum { SPN_BYTES, SPN_NEW, SPN_OBJECT };              /* need */
 enum { SPS_BYTES, SPS_HANDLE };                       /* supply */
-enum { SPF_BYTES, SPF_HANDLE, SPF_WRAP, SPF_COPY };   /* form */
+enum { SPF_BYTES, SPF_HANDLE, SPF_COPY };             /* form */
 /* the role of a value's consumer: it takes the value (keeps, changes,
    compares or hands it on), reads its bytes, tests it for nil or false,
    stores it into a multiple write's target, or asks its identity (equal?,

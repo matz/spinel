@@ -5108,15 +5108,8 @@ static void emit_dynamic_send_arm(Compiler *c, int arm, int t, int mo, int *seen
   /* an arm answering an Integer or Float that may be nil boxes its oint:
      unwrapped first, its nil raised TypeError where the send answers nil */
   int arm_oint = !self_ret && oint_kind(at) && node_may_be_nil(c, arm);
-  /* --share-strings: an arm answering a String the plan gives the handle
-     is boxed as that handle (the one the target holds or publishes), as
-     a direct call of the method is: its bytes boxed were a copy, and a
-     change through the answer missed the target's String. One the plan
-     wraps (a new String, a literal) is boxed as the new handle it is, so
-     the answer's copies name one String. */
-  int arm_form = !self_ret && (at == TY_STRING || at == TY_STRBUF)
-                 ? share_plan_of(c, arm, share_plan_role(c, arm)).form : SPF_BYTES;
-  int arm_str = arm_form == SPF_HANDLE || arm_form == SPF_WRAP;
+  /* The dispatch publishes the selected String answer as a box. */
+  int arm_str = !self_ret && (at == TY_STRING || at == TY_STRBUF);
   if (setjmp(g_unsup_recover) == 0) {
     if (self_ret) emit_strbuf_handle_of(c, arm, &body);
     else if (arm_oint) emit_oint_expr(c, arm, at, &body);

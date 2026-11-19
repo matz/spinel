@@ -16,3 +16,7 @@ receiver
 [[], {}, nil]
 receiver
 [[1], {marker: 2}, "literal result"]
+receiver
+[[], :zero]
+receiver
+[[9], :one]

@@ -1,4 +1,8 @@
 class Yielder
+  def take(*values, &block)
+    [values, block.call]
+  end
+
   def yield(*values, **kw, &block)
     [values, kw, block&.call]
   end
@@ -31,3 +35,6 @@ list.length.times do |index|
   p choose(list, index).yield
   p choose(list, index).yield(1, marker: 2) { "literal result" }
 end
+
+p choose(list, 1).take { :zero }
+p choose(list, 1).take(9) { :one }

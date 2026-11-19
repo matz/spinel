@@ -2372,7 +2372,7 @@ void emit_poly_prearms0(Compiler *c, int id, const char *name, const PolySpecial
 /* The proc a boxed callable's pre-arm hands an invocation with a
    block (the dispatch's own, `have`, or one built here), or -1 */
 static int callable_prearm_blk(Compiler *c, int id, const char *name, int have) {
-  if (!name || !is_call_or_yield(name) || nt_ref(c->nt, id, "block") < 0) return -1;
+  if (!name || !is_call_or_yield(name) || nt_ref(c->nt, id, "block") < 0) return have;
   return poly_call_blk_proc(c, id, have);
 }
 

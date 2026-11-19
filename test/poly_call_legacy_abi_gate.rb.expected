@@ -6,7 +6,8 @@ rest_unused: no raise
 rest_anon: no raise
 keyword: no raise
 arity: ArgumentError: wrong number of arguments (given 1, expected 2)
-cmethod: NoMethodError
+cmethod: no raise
+9
 slice: no raise
 ptr_to_untyped: no raise
 ptr_mismatch: TypeError: wrong argument type Array (expected String)

@@ -84,7 +84,8 @@ class Base
 end
 
 # A descendant makes the class method's C signature lead with its receiving
-# class (cmethod_takes_self_cls), which the legacy cast cannot supply.
+# class (cmethod_takes_self_cls), which the legacy cast cannot supply: its
+# Method's thunk passes the class instead.
 class Derived < Base; end
 # (named, so the program keeps it: a class nothing names is left out)
 DERIVED = Derived
@@ -107,8 +108,9 @@ expect_nome("rest_unused") { [Base.new.method(:rest_unused)][0].call(1, 2, 3) }
 expect_nome("rest_anon")   { [Base.new.method(:rest_anon)][0].call(1, 2, 3) }
 expect_nome("rest_aref")   { [Base.new.method(:rest_unused)][0][5] }
 expect_nome("rest_slice")  { [Base.new.method(:rest_unused)][0][1, 2] }
-# a class method whose C signature needs its receiving class declines
+# a class method whose C signature needs its receiving class runs through its thunk
 expect_nome("cmethod") { [Base.method(:cmethod)][0].call(5) }
+p [Base.method(:cmethod)][0].call(5)   # (the thunk passes Base: 4 + 5)
 
 class C
   attr_accessor :x

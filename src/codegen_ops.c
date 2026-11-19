@@ -619,10 +619,20 @@ static int (*const bop_emitters[BOPE__COUNT])(Compiler *, const BopCtx *, Buf *)
   [BOPE_IO_SET_WINSIZE] = emit_op_io_set_winsize,
 };
 
+/* A reader of a Method whose capture raises wherever it runs (CallPlan.absent): the capture, its NameError, and the
+   row's type's zero, which nothing reads. 0 for any other row */
+static int emit_absent_method_reader(Compiler *c, const BopCtx *x, Buf *b) {
+  if (bop_family_of(x->rt) != TY_METHOD || x->op->emit == BOPE_TEMPLATE || x->recv < 0 || !cplan_method_call(c, x->id).absent) return 0;
+  buf_puts(b, "((void)(");
+  emit_expr_for_effect(c, x->recv, b);
+  buf_printf(b, "), %s)", default_value_from_compiler(c, repr_of(c, x->id).as_ty));
+  return 1;
+}
+
 static int emit_selected_op(Compiler *c, const BopCtx *x, int observe, Buf *b) {
   const BuiltinOp *op = x->op;
   if (!op || op->emit == BOPE_NONE || !bop_emitters[op->emit]) return 0;
-  if (!bop_emitters[op->emit](c, x, b)) return 0;
+  if (!emit_absent_method_reader(c, x, b) && !bop_emitters[op->emit](c, x, b)) return 0;
   if (g_plan_check && observe) plan_check_observe(c, x->id, x->rt, op);
   return 1;
 }

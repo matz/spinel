@@ -114,16 +114,17 @@ is every `||=`.
 The histories hold what the load phase runs. A definition or write in a
 method body, a lambda or a block kept to run later has no point, so no
 query at a point sees it. Most are in no history; three kinds of entry are:
-`def K.m` on a constant the record resolves in a method body, a version
-with the body's extent (`LrDef.body`, `lr_version_order`); a constant
-write marked `LR_LATE`, held as a possible write (`lr_record_unplaced`);
-and a visibility word that runs later or is sent, held on the table it
-names (`lr_unplaced_words`). A class body that is no statement of the load phase (in a
-lambda, in a block kept to run later, a class builder's block in an
-expression) is its class's body all the same: its definitions are
-recorded after the placed bodies, `unplaced`, so the registrations apply
-them but no query at a point sees them (`lr_record_unplaced`,
-`lr_body_defs`).
+a public keyword `def` whose class the record resolves, a version with the
+body's extent (`LrDef.body`, `lr_version_order`, "Versions bodies make"
+below); a constant write marked `LR_LATE`, held as a possible write
+(`lr_record_unplaced`); and a visibility word that runs later or is sent,
+held on the table it names (`lr_unplaced_words`). A class body that is no
+statement of the load phase (in a lambda, in a block kept to run later, a
+class builder's block in an expression) is its class's body all the same:
+its public defs are versions of the body around it, and its other
+definitions are recorded after the placed bodies, `unplaced`, so the
+registrations apply them but no query at a point sees them
+(`lr_record_unplaced`, `lr_body_defs`).
 
 Some answers wait for the whole record. A file in a region after region 0
 is walked after everything the entry does, so the answers recorded on the
@@ -211,6 +212,80 @@ body's `from` for the versions it makes. `--dump-load-record` prints each
 extent and where the post-load phase starts (`extent` and `post` lines,
 test/load_graph/record_extents_main.rb).
 
+### Versions bodies make
+
+A keyword `def` with no point (in a method body, a lambda, a block or an
+exit handler) is a version of the history it writes (`lr_body_versions`):
+`def self.m`, `def K.m` and `def m` take the class the record resolves for
+their frame (`lr_body_frame`, `lr_body_target`); the dump marks it
+`in def#N` with its body's `from`. Only a public def is such a version,
+and only of a name the program makes no entry of that the call plan cannot
+answer next to it (`lr_body_def_version`, over `lr_body_forms`). The scope
+is the name, program-wide: the plan answers no other entry as a body's
+version yet, and once a name has versions its readers (the entries' arms,
+the poly arms, the presence readers, `respond_to?`, `method_defined?` and
+the list readers, the hooks) ask the record's by-name index, which holds
+every history of the name in every class on both sides, and read them as
+versions only. The entries that bar it are, anywhere in the program, a def
+that is not public where it runs, a def, an alias or an undef that lands
+on main (Object's private method, whatever word takes it, which the plan
+answers over main's own path, not as a version; a `module Kernel` def
+hoisted to the top level is Kernel's and does not count), a visibility
+word naming the name, an entry a literal send makes
+(`send(:define_method, :m)`: Spinel makes no method of it, so a version
+would hide the method CRuby has; a send of a visibility word is none) and
+any other entry not public where it runs; in a body, also every other
+entry it makes (an alias, an undef, an accessor, a `define_method`, a
+`define_singleton_method`, a `module_function` copy); at the top level, an
+alias of a name barred so. A public def, and a public version at the top
+level (an alias, an accessor, a `define_method`, an undef), are versions
+the plan answers. So the rest a body makes stay unplaced, applied from the
+start, a non-public def in a method body stays a definition the record
+cannot follow, and a public def of a barred name keeps the same form:
+`private :m` after `def m` in a class body in a Proc, a `private def m` in
+one class method and a `def m` in another, a top-level `private :m`, a
+`define_singleton_method` of the name, or a `private :m` in another
+class's body. Nor does the plan answer a version of a body that first runs
+only once the load is over (`from` is `post`, `lr_body_post`: an exit
+handler, a block or closure only exit handlers run, an `--ext-entry`
+method): a call's window ends with the load, so a call in an exit handler
+would take it for one that never ran. As the extents are made, every
+body's version of a history that holds such a one takes the unplaced form,
+applied from the start (`lr_post_unplace`), until windows run past the
+load. A method only exit handlers call is no such body: `lr_rta` starts it
+at the statement that registers the handler, so its version is not known
+after that statement and a call there reads its cell. Any other version's
+order against a point (`lr_version_order`) is its body's extent's:
+
+- after the point where the point comes before `from` and `from` does not
+  run again before it, and after every point for a body that never runs;
+- before the point from the statement after `sure` on, where nothing else
+  of the history runs after `sure` (`lr_alone_after`): a body one placed
+  statement runs once takes that statement's point, so the calls after it
+  are direct, and so is a call in that statement that runs
+  after the call that runs the body (`p K.setup, K.made`, `lr_run_order`);
+- not known otherwise, since the body may run any number of times: a call
+  there reads the version cell (the entry).
+
+The order is asked while calls are bound, and `lr_rta` binds calls while
+it builds the extents. Until `lr_extents` is done, a body's version
+answers "not known" (`LoadRecord.ext_building`), so no binding reads a
+half-built extent; `lr_run_points` aborts if a run point is read while the
+extents are being built.
+
+A hook a body defines (`def self.method_added`, `def self.inherited`,
+`def self.included` and the like, in a class method or a `class << self`
+there) may be live when the walk fires hooks: `lr_hook_live` and
+`lr_fire_inherited` count one whose target is on the class's chain
+(`lr_hook_body_def`), so the walk grafts the hook's call. Which body that
+call runs is the call plan's: it is bound against the versions after the
+walk, and where none of the program's is live at the call, its entry's
+else arm is the core's no-op hook (`VK_NOOP`, `is_definition_hook_name`),
+not `super`, which from a subclass's entry would reach the superclass's
+version. A class-side def a body makes fires `singleton_method_added`
+after it on each run of the body (`lr_body_hook`), when the class's chain
+holds a version of that hook.
+
 ### What an answer means
 
 The queries answer `ELAB_YES`, `ELAB_NO` or `ELAB_UNKNOWN` as of a point
@@ -271,6 +346,33 @@ only (`elab_class_surface`). An entry with no point does not apply,
 unless its body is one the walk does not place. A mixin takes the test
 as the record is made (`LrMixin.applied`). A mixin in a branch the scope
 walk proves unreachable leaves the existing method history in place.
+
+### Readers of a body's versions
+
+A call of a method that a method body defines takes the entry of the
+method's versions before the body has run (its version is late,
+`lr_late_make`). A `respond_to?`, `defined?` or `method_defined?` (and
+`public_method_defined?`) of that name answers as the call there would
+find it: where a call of the name at the reader takes the entry
+(`cplan_presence`'s `PR_CELLS`), the call plan gives the reader's answer
+for each class its receiver may be (`cplan_presence_list`): yes, no, or
+the version cells. That covers an instance (a typed receiver, nil, and
+self in an instance method, which a receiverless `respond_to?(:m)` or
+`defined?(m)` asks), a boxed receiver, and a class value's
+`method_defined?`; codegen renders the list as one test of the
+receiver's class. Each reader asks the entries a call at its point asks
+(`presence_asks`) and keeps the cells it reads, in the form it asks them
+(`presence_reader_side`: a `respond_to?`'s public versions, or every
+visibility with `true`; a `method_defined?`'s as a list asks): a test
+that reads a cell no reader kept is an internal error.
+
+A reader that answers from the final tables instead (a list of methods
+such as `instance_methods.include?`) keeps the table's answer
+for the calls of the names it may read: such a version is not late
+(`elab_body_reflected`), so a guard and the call it guards answer alike.
+Only list readers of the same side count: a class-side list
+(`K.singleton_methods`) leaves an instance method's versions to the
+cells.
 
 ## Freshness and cost
 

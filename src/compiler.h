@@ -1949,11 +1949,13 @@ typedef struct {
      that are closed to it raise for (call_plan.h); vis, 1 where a class method's respond_to? reads the
      entry's cells (cplan_cmethod_presence), so its versions' visibility cells are written whatever the face
      (ver_presence_mark), or 2 where an instance guard reflects a hidden
-     String history. Each name
+     String history; anyform, 1 where its else arm runs a method or
+     the core's no-op, raising nothing of its own, so a variable-like call
+     takes it as a call with a receiver does (ver_late_make). Each name
      is the entry's own copy (ver_entry_add), as in ver_late, ver_memo and
      the chain counts: a caller may ask with a name it frees itself
      (desugar_call_op_write's setter name) */
-  struct VerEntry { char *name; int guard, cls, sg, ar, scope, absent, cells, finds, from, behind, face, vis; } *ver_entries;
+  struct VerEntry { char *name; int guard, cls, sg, ar, scope, absent, cells, finds, from, behind, face, vis, anyform; } *ver_entries;
   int nver_entries;
   /* per global (c->gvars' index, the first nver_cell_dropped of them): 1 for
      a version cell no emitted code reads, whose declaration and writes the C
@@ -1994,6 +1996,11 @@ typedef struct {
   char **rsc_names;   /* the names a class or module body defines, which `::Name` must not be read as the bare Name for (analyze_desugar.c, desugar_root_scoped_constants) */
   int n_rsc_names;
   int nvcall_twins;   /* the VF_VCALL twins ver_vcall_twins made: call_target asks for one only when there are any */
+  /* the thunks of class methods taking their receiving class (cmethod_takes_self_cls) a
+     bind site stamps, one per (method scope, class) (emit_method_thunk): ok 0 where the
+     trampoline declines */
+  struct BmtCls { int mi, cls, ok, tmin, tmax; char *name; } *bmt_cls;
+  int nbmt_cls;
   int ncond_lone_disp;  /* those of them a lone def at the top level, in a module or in Object or BasicObject is lowered to (call_plan.c, feature_limit) */
   /* the open histories no reader names yet, sorted by name (call_plan.c,
      ver_named_one): made once a call names one, taken 1 when asked for and

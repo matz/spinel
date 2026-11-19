@@ -81,7 +81,7 @@ src/codegen.c:class_range_linear
 src/codegen.c:class_succ_dispatched
 src/codegen.c:class_opens_cmp
 src/codegen.c:conv_bridge_callee
-src/codegen_call.c:root_reopen_defines
+src/call_plan.c:root_reopen_defines
 src/compiler.c:mixin_answers_first
 src/compiler.c:toplevel_mod_method
 src/compiler.c:comp_poly_arm_reader_any

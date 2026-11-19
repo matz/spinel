@@ -1,0 +1,60 @@
+A b
+K b
+S singleton_method_added
+S b
+C b
+inc Inc1
+inh Sub1
+tw singleton_method_added
+tw install
+tw made
+tw made
+tw after
+seen mid
+seen after
+:made
+s2 singleton_method_added
+s2 extra
+s2 singleton_method_added
+s2 extra
+[1, 1]
+pair z
+parent late on Child
+left got L1
+right got R1
+mx in E1
+mx ext E1
+boxed q
+tail singleton_method_added
+tail last
+tail arm
+tail guarded
+tail a
+:a
+tail b
+tail c
+:b
+:c
+tail d
+ensured
+:d
+tail e
+:e
+nil
+NoMethodError
+:mine
+false
+false
+true
+true
+nil
+true
+false
+SupB.inh SupD
+SupB.inh SupE
+SupA.inh SupE
+HookRecv.added singleton_method_added
+HookRecv.added made
+HookRecv.added made
+:ok
+end

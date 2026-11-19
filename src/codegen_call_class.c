@@ -1114,7 +1114,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
         if (run) buf_puts(b, "; })");
         return 1;
       }
-      if (emit_respond_to_cells(c, id, qm, argc, argv, b)) return 1;
+      if (emit_respond_to_cells(c, id, recv, rt, qm, argc, argv, b)) return 1;
       if (ans < 0 && emit_respond_to_flag_split(c, id, recv, rt, qm, argc, argv, b)) return 1;
       /* a user object's include_all known only at run time, or one of
          Object's private methods (exit, puts) to a literal one where some
@@ -1257,9 +1257,20 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
               emit_nil_side_answer(c, id, qm, argc, argv, ia_once ? tv : 0, b);
               buf_puts(b, ") : ");
             } }
+          /* (the classes whose versions' cells answer, the plan's list: cplan_presence_list) */
+          CplanPresList pl;
+          int listed = cplan_presence_list(c, id, rt, &pl) && pl.form == PRL_BOXED;
+          if (listed) {
+            char key[24];
+            snprintf(key, sizeof key, "_k%d == ", tv);
+            emit_presence_arms(c, &pl, key, b);
+          }
           buf_puts(b, "(");
           int first = 1, root_seen = 0, own[256], nown = 0, own_full = 0;
           for (int k = 0; k < c->nclasses; k++) {
+            int arm = 0;
+            for (int i = 0; listed && i < pl.n; i++) arm |= pl.arm[i].cls == k;
+            if (arm) continue;
             /* (an undef hides a root class's method from the class's values) */
             CplanPresence pr;
             PresenceKind pk = presence_at(c, id, k, CT_REACH, qm, &pr);
@@ -1355,6 +1366,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
           emit_io_reopen_responds(c, id, tv, qm, argc >= 2 && nt_kind(nt, argv[1]) == NK_TrueNode, b);
           class_value_responds(c, id, tv, qm, b);
           buf_puts(b, "; })");
+          cplan_presence_list_free(&pl);
           return 1;
         }
       }
@@ -1437,6 +1449,14 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       CplanPresence pr;
       PresenceKind pk = presence_at(c, id, ci, inherit ? CT_REACH : CT_OWN, qm, &pr);
       if (pr.undef) { buf_puts(b, "FALSE"); return 1; }
+      /* a call there that takes the entry: its public versions' cells (the plan's list, cplan_presence_list) */
+      CplanPresList pl;
+      const CplanPresArm *pa = NULL;
+      int np = cplan_presence_list(c, id, rt, &pl) ? pl.n : 0;
+      for (int i = 0; i < np; i++) if (pl.arm[i].cls == ci) pa = &pl.arm[i];
+      if (pa) emit_presence_answer(c, pa, b);
+      cplan_presence_list_free(&pl);
+      if (pa) return 1;
       int found = pk != PR_ABSENT && pr.table;
       /* a name the program's defs leave open is answered by CRuby's own
          methods of the builtin classes and modules above the class, Object
@@ -1486,8 +1506,20 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
        refl_md_dynamic_used, which writes the table, does not count it */
     if (inherit_lit >= 0 && (recv >= 0 || self_cls) && (nty == TY_SYMBOL || nty == TY_STRING) &&
         !refl_md_literal_call(nt, recv, argv[0])) {
-      int mask = (md_pub ? 1 : 0) | (md_prot ? 2 : 0) | (md_priv ? 4 : 0);
-      buf_puts(b, "sp_refl_method_defined(");
+      int mask = (md_pub ? 1 : 0) | (md_prot ? 2 : 0) | (md_priv ? 4 : 0), t = 0;
+      /* the classes whose call there takes the entry: their cells (the plan's list, cplan_presence_list), the
+         reflection table for any other */
+      CplanPresList pl;
+      Buf arms = {0};
+      if (cplan_presence_list(c, id, rt, &pl)) {
+        char key[64];
+        t = ++g_tmp;
+        snprintf(key, sizeof key, "!sp_class_sclass_p(_c%d) && _c%d.cls_id == ", t, t);
+        emit_presence_arms(c, &pl, key, &arms);
+        cplan_presence_list_free(&pl);
+      }
+      if (t) buf_printf(b, "({ sp_Class _c%d = ", t);
+      else buf_puts(b, "sp_refl_method_defined(");
       /* a class held boxed (out of an Array, say) is unboxed to its sp_Class */
       if (recv >= 0 && infer_type(c, recv) == TY_POLY) {
         buf_puts(b, "sp_unbox_class(");
@@ -1496,9 +1528,11 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       }
       else if (recv >= 0) emit_expr(c, recv, b);
       else buf_puts(b, self_cls);
+      if (t) buf_printf(b, "; %ssp_refl_method_defined(_c%d", arms.p, t);
+      free(arms.p);
       buf_puts(b, nty == TY_SYMBOL ? ", sp_sym_to_s_frozen(" : ", (");
       emit_expr(c, argv[0], b);
-      buf_printf(b, "), %d, %d)", mask, inherit_lit);
+      buf_printf(b, "), %d, %d)%s", mask, inherit_lit, t ? "; })" : "");
       return 1;
     }
   }

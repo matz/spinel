@@ -71,7 +71,6 @@ Mixer.included: def#13 end=yes
 const Watch: write#14
 Watch.method_added: def#15 end=yes
 const Sub: write#16
-opaque Tracker: opaque#17
 const Host: write#18
 form #19 runs code
 Watch#tick: def#22 end=yes

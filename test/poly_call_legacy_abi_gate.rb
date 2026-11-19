@@ -7,12 +7,12 @@
 # sites stamp method_legacy_int_abi as 1 (callable) with a per-position type
 # signature, or 0 (decline), and the poly `.call`/`[]` paths compare each
 # position's type against it. A target that cannot ride the cast -- a
-# float return, a keyword parameter, a rest parameter, a class
-# method that needs its receiving class, an argument count that does not match
-# the signature, or a pointer of the wrong kind (a String parameter fed an
-# IntArray, or an object of another class) -- falls through to NoMethodError
-# instead of reading (or being read as) the wrong C type: garbage or a
-# segfault.
+# float return, a keyword parameter, a rest parameter, an argument count
+# that does not match the signature, or a pointer of the wrong kind (a
+# String parameter fed an IntArray, or an object of another class) -- falls
+# through to NoMethodError instead of reading (or being read as) the wrong
+# C type: garbage or a segfault. A class method that needs its receiving
+# class runs through its Method's thunk, which passes the class.
 #
 # A parameter nothing typed is no longer one of those cases. It used to be
 # pinned to `sp_int`, so a String handed to it would have been read as an
@@ -109,6 +109,7 @@ expect_nome("rest_anon")     { [Base.new.method(:rest_anon)][0].call(1, 2, 3) }
 expect_nome("keyword")       { [Base.new.method(:kw_method)][0].call }
 expect_nome("arity")         { [Base.new.method(:two_args)][0].call(1) }
 expect_nome("cmethod")       { [Base.method(:cmethod)][0].call(5) }
+p [Base.method(:cmethod)][0].call(5)   # (the thunk passes Base: 4 + 5)
 expect_nome("slice")         { [Base.new.method(:rest_used)][0][1, 2] }
 expect_nome("ptr_to_untyped"){ [Base.new.method(:untyped_method)][0].call("hello") }
 # The pointer positions must agree by type, not merely by pointer-ness.

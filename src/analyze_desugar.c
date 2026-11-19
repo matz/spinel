@@ -1811,7 +1811,11 @@ static int kernel_reopen_top(const Compiler *c, NodeTable *nt, int top, const ch
         nt_node_set_int(nt, d, "kernel_def", 1);   /* (cplan_kernel_def asks for it) */
         nb[nbn++] = d;
         if (*nn < KR_MAX && nt_str(nt, d, "name")) names[(*nn)++] = nt_str(nt, d, "name");
-        if (objd) { int cl = nt_clone_subtree(nt, d); if (cl >= 0) objd[nobj++] = cl; }
+        if (objd) {
+          int cl = nt_clone_subtree(nt, d);
+          /* (the copy carries Kernel's visibility, with the reopening's words: lr_kernel_copy reads it) */
+          if (cl >= 0) objd[nobj++] = cl, nt_node_set_int(nt, d, "kernel_copy", cl + 1);
+        }
         continue;
       }
       const char *vm = nt_kind(nt, d) == NK_CallNode && nt_ref(nt, d, "receiver") < 0

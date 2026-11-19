@@ -1,0 +1,7 @@
+[[:smm, 1], [NoMethodError]]
+[[:q, 1], [:q, 2]]
+[:hmm, [1], {k: 2}, 3]
+[NoMethodError]
+[NoMethodError]
+[[:c, 1], [NoMethodError]]
+[[:cc, 1], [NoMethodError]]

@@ -5,7 +5,8 @@ rest_unused: no raise
 rest_anon: no raise
 rest_aref: no raise
 rest_slice: no raise
-cmethod: NoMethodError
+cmethod: no raise
+9
 5
 7
 7

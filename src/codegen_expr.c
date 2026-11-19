@@ -120,7 +120,8 @@ static int interp_emit_completed(Compiler *c, int id, Buf *b);
    this segment can change the receiver's bytes. */
 static int interp_repeat_piece(Compiler *c, int expr, Buf *decls, WPart *part) {
   const NodeTable *nt = c->nt;
-  if (nt_kind(nt, expr) != NK_CallNode || !is_mul_op(nt_str(nt, expr, "name")) ||
+  const char *name = view_call_name(c, expr);
+  if (nt_kind(nt, expr) != NK_CallNode || !is_mul_op(name) ||
       nt_safe_nav(nt, expr) || nt_ref(nt, expr, "block") >= 0 || view_ran_first(expr))
     return 0;
   int recv = nt_ref(nt, expr, "receiver"), argc = 0;
@@ -128,7 +129,11 @@ static int interp_repeat_piece(Compiler *c, int expr, Buf *decls, WPart *part) {
   TyKind rt = recv >= 0 ? comp_recv_type(c, recv) : TY_UNKNOWN;
   if (argc != 1 || (rt != TY_STRING && rt != TY_STRBUF) ||
       comp_ntype(c, argv[0]) != TY_INT ||
-      subtree_has_side_effect(c, argv[0]) || cplan_user(c, expr).dispatch != CP_NONE)
+      subtree_has_side_effect(c, argv[0]) || cplan_user(c, expr).dispatch != CP_NONE ||
+      cplan_pinned_vis(c, expr))
+    return 0;
+  int cls = comp_core_class(c, CORE_STRING);
+  if (cls >= 0 && cplan_method_vis(c, expr, cls, name, 0, NULL) != SP_VIS_PUBLIC)
     return 0;
   int t = ++g_tmp;
   buf_printf(decls, "const char *_t%d = ", t);

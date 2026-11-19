@@ -17221,6 +17221,13 @@ static int masgn_rodata(Compiler *c, int id) {
   return node_is_pure_literal(c->nt, id) && !subtree_allocates(c, id) && comp_ntype(c, id) != TY_BIGINT &&
          decide_node(c->nt, id, "masgn-root", NULL);
 }
+/* Holding a String RHS can allocate its handle even when the Ruby
+   expression only reads a value, as a regexp capture does. */
+static int masgn_hold_allocates(Compiler *c, int id) {
+  TyKind type = repr_of(c, id).as_ty;
+  return masgn_part_allocates(c, id) ||
+         ((type == TY_STRING || type == TY_STRBUF) && ran_first_handle(id) < 0 && !masgn_rodata(c, id));
+}
 /* The root push for a temp, after the `;` of the statement that set it, when
    `emit_gc_root_tmp` has one for the type. */
 static void masgn_root(Compiler *c, TyKind t, int tmp, Buf *b) {
@@ -19465,7 +19472,7 @@ static int emit_multi_write_stmt_body(Compiler *c, int id, Buf *b, int indent, c
       buf_puts(b, ";");
       tmpts[i] = TY_STRBUF;
       int later_alloc = store_alloc || fresh_stmt;
-      for (int j = i + 1; j < en && !later_alloc; j++) later_alloc = masgn_part_allocates(c, els[j]);
+      for (int j = i + 1; j < en && !later_alloc; j++) later_alloc = masgn_hold_allocates(c, els[j]);
       if (later_alloc) masgn_root(c, TY_STRBUF, tmps[i], b);
       buf_puts(b, "\n");
       masgn_el_pre_flush(b, el_at, &el_pre, el_sv_pre);
@@ -19547,7 +19554,7 @@ static int emit_multi_write_stmt_body(Compiler *c, int id, Buf *b, int indent, c
        allocate after it can run user code that drops its other holder, so
        it is rooted while a later value or a store can collect. */
     int later_alloc = store_alloc || fresh_stmt;
-    for (int j = i + 1; j < en && !later_alloc; j++) later_alloc = masgn_part_allocates(c, els[j]);
+    for (int j = i + 1; j < en && !later_alloc; j++) later_alloc = masgn_hold_allocates(c, els[j]);
     if (!nilish && !masgn_rodata(c, els[i]) && later_alloc) masgn_root(c, boxed_el ? TY_POLY : elt, tmps[i], b);
     buf_puts(b, "\n");
     masgn_el_pre_flush(b, el_at, &el_pre, el_sv_pre);

@@ -2457,11 +2457,15 @@ static int lr_body_around(const NodeTable *nt, const int *par, int n, int node) 
 /* The class constant k names, read where statement e stands (a body's
    receiver the walk does not enter: placed as the climb places it, as a
    placed def's receiver is, lr_receiver), when the constant is bound once
-   (lr_const_final): a body's definer may run long after the load phase, and
-   a later write would change what it names; LR_UNKNOWN_CLASS for any other */
-static int lr_body_const(Compiler *c, int k, int e) {
+   (lr_const_final, where fin is set): a body's definer may run long after the
+   load phase, and a later write would change what it names. A def's own
+   receiver is asked without it for the version it makes (lr_body_target,
+   not walk), as it was before: the version is ordered against the calls by
+   its extent, which for a body no call reaches is never, and the def is no
+   held one (lr_body_holds asks with it). LR_UNKNOWN_CLASS for any other */
+static int lr_body_const(Compiler *c, int k, int e, int fin) {
   const NodeTable *nt = c->nt;
-  if (k < 0 || e < 0 || nt_kind(nt, k) != NK_ConstantReadNode || !lr_const_final(c, lr_written_name(nt, k))) return LR_UNKNOWN_CLASS;
+  if (k < 0 || e < 0 || nt_kind(nt, k) != NK_ConstantReadNode || (fin && !lr_const_final(c, lr_written_name(nt, k)))) return LR_UNKNOWN_CLASS;
   lr_place_ref(c->lrec, nt, k, e, LR_LATE | LR_BODY);
   int cls = lr_class_ref_at(c, k, NULL);
   return cls >= LR_MAIN ? cls : LR_UNKNOWN_CLASS;
@@ -2488,19 +2492,19 @@ static int lr_body_frame(Compiler *c, const int *par, int n, int node, int e, in
       if (self) return LR_UNKNOWN_CLASS;
       int ex = nt_ref(nt, p, "expression"), xfs;
       *fs = LR_FS_SCLASS;
-      return nt_kind(nt, ex) == NK_SelfNode ? lr_body_frame(c, par, n, p, e, 1, &xfs) : lr_body_const(c, ex, e);
+      return nt_kind(nt, ex) == NK_SelfNode ? lr_body_frame(c, par, n, p, e, 1, &xfs) : lr_body_const(c, ex, e, 1);
     }
     if (k == NK_BlockNode && par[p] >= 0 && nt_ref(nt, par[p], "block") == p && elab_opens_frame(nt, par[p])) {
       const char *nm = nt_str(nt, par[p], "name");
       int rv = nt_ref(nt, par[p], "receiver"), xfs;
       if (!is_class_eval_family(nm) && !is_instance_eval_family(nm)) return LR_UNKNOWN_CLASS;   /* (a class builder's block: lr_body_defs) */
-      int cls = rv < 0 || nt_kind(nt, rv) == NK_SelfNode ? lr_body_frame(c, par, n, par[p], e, 1, &xfs) : lr_body_const(c, rv, e);
+      int cls = rv < 0 || nt_kind(nt, rv) == NK_SelfNode ? lr_body_frame(c, par, n, par[p], e, 1, &xfs) : lr_body_const(c, rv, e, 1);
       if (!self && is_instance_eval_family(nm)) *fs = LR_FS_IEVAL;
       return cls;
     }
     if (k == NK_DefNode && self) {   /* self in a method's body: the class whose singleton method it is */
       int rv = nt_ref(nt, p, "receiver"), rk = rv >= 0 ? nt_def_receiver(nt, rv) : -1, xfs;
-      if (rk >= 0) return nt_kind(nt, rk) == NK_SelfNode ? lr_body_frame(c, par, n, p, e, 1, &xfs) : lr_body_const(c, rk, e);
+      if (rk >= 0) return nt_kind(nt, rk) == NK_SelfNode ? lr_body_frame(c, par, n, p, e, 1, &xfs) : lr_body_const(c, rk, e, 1);
       int cls = lr_body_frame(c, par, n, p, e, 0, &xfs);
       return xfs == LR_FS_SCLASS || xfs == LR_FS_IEVAL ? cls : LR_UNKNOWN_CLASS;
     }
@@ -2524,7 +2528,7 @@ static int lr_body_target(Compiler *c, const int *par, int n, int d, int walk, i
   LoadRecord *r = c->lrec;
   int e = d >= 0 && d < r->n ? r->at[d] : -1, rv = nt_ref(nt, d, "receiver"), rk = rv >= 0 ? nt_def_receiver(nt, rv) : -1, fs;
   if (e < 0) return 0;
-  if (rk >= 0) *cls = nt_kind(nt, rk) == NK_SelfNode ? lr_body_frame(c, par, n, d, e, 1, &fs) : lr_body_const(c, rk, e), *sg = 1;
+  if (rk >= 0) *cls = nt_kind(nt, rk) == NK_SelfNode ? lr_body_frame(c, par, n, d, e, 1, &fs) : lr_body_const(c, rk, e, walk), *sg = 1;
   else *cls = lr_body_frame(c, par, n, d, e, 0, &fs), *sg = fs != LR_FS_NONE;
   if (*cls < LR_MAIN || lr_chain_open(c, *cls)) return 0;
   for (int a = *cls, k = 0; walk && a >= 0 && a < c->nclasses && k < lr_chain_bound(c); a = lr_super(c, a), k++) {

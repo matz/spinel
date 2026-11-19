@@ -8431,7 +8431,7 @@ static sp_RbVal sp_poly_pow(sp_RbVal a, sp_RbVal b) {
     if (b.tag == SP_TAG_OBJ && b.cls_id == SP_BUILTIN_COMPLEX)
       return sp_box_complex(sp_complex_pow_c(ca, sp_poly_as_complex(b)));
     if (b.tag == SP_TAG_FLT)
-      return sp_box_complex(sp_complex_pow_c(ca, (sp_Complex){b.v.f, 0.0, SP_CPLX_RE_F | SP_CPLX_IM_F}));
+      return sp_box_complex(sp_complex_pow_f(ca, b.v.f));
   }
   double r = pow((double)sp_poly_to_f(a), (double)sp_poly_to_f(b));
   return sp_box_float((sp_float)r);

@@ -37,6 +37,8 @@ sp_Complex sp_complex_neg(sp_Complex a);
 sp_Complex sp_complex_conjugate(sp_Complex a);
 sp_Complex sp_complex_pow(sp_Complex a, sp_int e);
 sp_Complex sp_complex_pow_c(sp_Complex z, sp_Complex w);   /* z ** w (general) */
+sp_Complex sp_complex_pow_f(sp_Complex z, sp_float e);   /* z ** a real non-Integer e */
+sp_Complex sp_complex_fdiv(sp_Complex a, sp_Complex b);  /* Complex#fdiv by a Complex */
 sp_Complex sp_complex_pow_rational(sp_Complex z, sp_Rational w);  /* z ** Rational (#2962) */
 sp_float sp_complex_abs(sp_Complex a);
 sp_float sp_complex_abs2(sp_Complex a);

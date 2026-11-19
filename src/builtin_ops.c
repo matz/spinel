@@ -742,7 +742,8 @@ static const BuiltinOp bop_rows[] = {
   /* a whole-number Rational exponent stays exact (integer pow); a
      fractional one computes in floats (#2962) */
   { TY_COMPLEX, "**",  1, 1, BF_ANY, TY_COMPLEX, BOPE_TEMPLATE, "sp_complex_pow($r, (sp_int)($e0))", BOP_K(TY_INT) },
-  { TY_COMPLEX, "**",  1, 1, BF_ANY, TY_COMPLEX, BOPE_TEMPLATE, "sp_complex_pow_c($r, $c0)", BOP_K(TY_FLOAT) | BOP_K(TY_COMPLEX) },
+  { TY_COMPLEX, "**",  1, 1, BF_ANY, TY_COMPLEX, BOPE_TEMPLATE, "sp_complex_pow_f($r, $e0)", BOP_K(TY_FLOAT) },
+  { TY_COMPLEX, "**",  1, 1, BF_ANY, TY_COMPLEX, BOPE_TEMPLATE, "sp_complex_pow_c($r, $c0)", BOP_K(TY_COMPLEX) },
   { TY_COMPLEX, "**",  1, 1, BF_ANY, TY_COMPLEX, BOPE_TEMPLATE, "sp_complex_pow_rational($r, $e0)", BOP_K(TY_RATIONAL) },
   /* a boxed exponent: sp_poly_pow picks the form by its class at run time
      and answers a boxed Complex for a Complex base, which the row's
@@ -812,7 +813,7 @@ static const BuiltinOp bop_rows[] = {
      coerce/fdiv against a non-numeric operand raise TypeError, not
      NoMethodError (#2964) */
   { TY_COMPLEX, "fdiv",        1,   1, BF_ANY, TY_COMPLEX,    BOPE_TEMPLATE, "sp_complex_div_real($r, (sp_float)($e0))", BOP_K(TY_INT) | BOP_K(TY_FLOAT) },
-  { TY_COMPLEX, "fdiv",        1,   1, BF_ANY, TY_COMPLEX,    BOPE_TEMPLATE, "sp_complex_div($r, $e0)", BOP_K(TY_COMPLEX) },
+  { TY_COMPLEX, "fdiv",        1,   1, BF_ANY, TY_COMPLEX,    BOPE_TEMPLATE, "sp_complex_fdiv($r, $e0)", BOP_K(TY_COMPLEX) },
   { TY_COMPLEX, "fdiv",        1,   1, BF_ANY, TY_COMPLEX,    BOPE_TEMPLATE, CX_TYPEERROR },
   { TY_COMPLEX, "coerce",      1,   1, BF_ANY, TY_POLY_ARRAY, BOPE_TEMPLATE,
     "({ sp_PolyArray *_t$t = sp_PolyArray_new(); SP_GC_ROOT(_t$t);"

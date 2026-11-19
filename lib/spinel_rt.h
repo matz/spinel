@@ -13513,7 +13513,7 @@ static void sp_poly_warn_line(sp_RbVal v, FILE *f) {
   }
   const char *s = sp_poly_to_s(v);
   if (!s) s = sp_str_empty;
-  size_t n = v.tag == SP_TAG_STR ? sp_str_byte_len(s) : strlen(s);
+  size_t n = sp_rbval_is_string(v) ? sp_str_byte_len(s) : strlen(s);
   fwrite(s, 1, n, f);
   if (!n || s[n - 1] != '\n') fputc('\n', f);
 }
@@ -13531,7 +13531,7 @@ static const char *sp_poly_warn_text(sp_RbVal v) {
   const char *s = sp_poly_to_s(v);
   if (!s) s = sp_str_empty;
   SP_GC_ROOT_STR(s);
-  size_t n = v.tag == SP_TAG_STR ? sp_str_byte_len(s) : strlen(s);
+  size_t n = sp_rbval_is_string(v) ? sp_str_byte_len(s) : strlen(s);
   return (!n || s[n - 1] != '\n') ? sp_str_concat(s, "\n") : s;
 }
 /* The C stream a boxed $stderr writes to: the IO it holds, else (never

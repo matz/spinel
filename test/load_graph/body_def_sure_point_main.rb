@@ -24,3 +24,14 @@ R.setup
 p R.n
 def again = R.n
 p again
+# A def in the same statement that runs after the call that runs the body (or before it) is the
+# call's answer to the version that runs later: the arguments run in order.
+class S
+  def self.setup
+    def self.v = :body
+  end
+end
+begin; p S.v; rescue NoMethodError => e; p e.class; end
+p S.setup, (def S.v = :placed), S.v
+p S.setup, S.v
+p((def S.v = :first), S.setup, S.v)

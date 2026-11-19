@@ -6824,15 +6824,17 @@ static int lr_node_runs(Compiler *c, int id) {
 enum { LR_CORE = -4, RQ_INST = 1, RQ_CLASS = 2, LR_RG_NAMED = 1, LR_RG_IN = 2 };
 /* Does nothing of history h but v (a version a body makes) run after
    statement sure of region 0: every other entry at a point of region 0
-   no later than sure? A body's other version may run any time, and so
-   does an entry with no point (unplaced, absent) */
-static int lr_alone_after(Compiler *c, const LrHist *h, const LrDef *v, int sure) {
+   no later than sure, and one in statement sure itself run before the
+   call bind that runs the body (lr_run_order)? A body's other version may
+   run any time, and so does an entry with no point (unplaced, absent) */
+static int lr_alone_after(Compiler *c, const LrHist *h, const LrDef *v, int sure, int bind) {
   for (int i = 0; h && i < h->n; i++) {
     const LrDef *w = &h->v[i];
     if (w == v) continue;
     if (w->body || w->unplaced || w->absent) return 0;
     LoadPoint q = elab_point_of(c, w->node);
     if (q.region != 0 || q.seq < 0 || q.seq > sure) return 0;
+    if (q.seq == sure && (bind < 0 || lr_run_order(c, w->node, bind) != PROG_BEFORE)) return 0;
   }
   return 1;
 }
@@ -6862,7 +6864,7 @@ static int lr_version_order(Compiler *c, const LrHist *h, const LrDef *v, LoadPo
   /* (at the sure statement itself, a point its one run (LrExt.bind) comes
      before: `p K.setup, K.made`) */
   int at = e && late != 1 && p.region == 0 && p.seq == sure && e->bind >= 0 && p.node >= 0 && lr_run_order(c, e->bind, p.node) == PROG_BEFORE;
-  if (h && sure < LR_POST && (late == 1 || (p.region == 0 && p.seq > sure) || at) && lr_alone_after(c, h, v, sure)) return PROG_BEFORE;
+  if (h && sure < LR_POST && (late == 1 || (p.region == 0 && p.seq > sure) || at) && lr_alone_after(c, h, v, sure, e ? e->bind : -1)) return PROG_BEFORE;
   return PROG_UNKNOWN;
 }
 /* The class a builder's constant write w makes (`P = Struct.new(:x)`,

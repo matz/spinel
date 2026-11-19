@@ -12178,7 +12178,7 @@ static int pos_versions(Compiler *c, const Scope *s, int t, int *to, ElabVersion
     ElabVersion lv[VER_MAX_ARMS];
     ElabVersion *v = vs ? vs : lv;
     n = mixin_copy_versions(c, t, from, to, v, 1);
-    *late = n && !s && elab_versions_late(c, comp_scope_user_name(m), v, n) == 2;
+    *late = n && elab_versions_late(c, comp_scope_user_name(m), v, n) == 2;
     if (!vs && pos_memo_fill()) {
       key[0] = *late;
       memcpy(key + 1, to, sizeof *to * (size_t)n);

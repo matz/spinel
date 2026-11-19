@@ -16298,6 +16298,9 @@ static void emit_super_block_arg(Compiler *c, int id, Scope *s, Scope *pm, int l
      never declared there). */
   int blk0 = nt_ref(c->nt, id, "block");
   int blk = resolve_forwarded_block(c, blk0);
+  /* (a `&blk` the body forwards, inlined into an entry's arm that was handed a real proc and no literal block: that proc) */
+  const char *rp = forwarded_real_proc(blk0, blk);
+  if (rp) { buf_puts(b, rp); return; }
   if (blk < 0) blk = blk0;
   NodeKind bk = nt_kind(c->nt, blk);
   if (bk == NK_BlockNode) { emit_proc_literal(c, blk, b); return; }

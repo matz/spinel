@@ -3128,7 +3128,11 @@ int emit_call_poly_callable_arms(Compiler *c, int id, Buf *b, const NodeTable *n
         if (call_args_need_spread(nt, argv, argc)) {
           char kwp[24];
           int ta = emit_spread_args_kw(c, argv, argc, kwp, sizeof kwp);
-          buf_printf(b, "sp_poly_callable_spread(_t%d, sp_box_poly_array(_t%d), %s)%s", t, ta, kwp, yield_else);
+          int tblk = nt_ref(nt, id, "block") >= 0 ? poly_call_blk_proc(c, id, -1) : -1;
+          if (tblk >= 0)
+            buf_printf(b, "sp_poly_callable_spread_blk(_t%d, sp_box_poly_array(_t%d), %s, _t%d)%s", t, ta, kwp, tblk, yield_else);
+          else
+            buf_printf(b, "sp_poly_callable_spread(_t%d, sp_box_poly_array(_t%d), %s)%s", t, ta, kwp, yield_else);
           return 1;
         }
       }

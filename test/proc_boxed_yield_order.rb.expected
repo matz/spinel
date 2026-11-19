@@ -1,0 +1,18 @@
+receiver
+positionals
+keywords
+block
+[[1, 2], {marker: 3}, "block result"]
+receiver
+[[], {}, nil]
+receiver
+[[1], {marker: 2}, "literal result"]
+receiver
+positionals
+keywords
+block
+[[1, 2], {marker: 3}, "block result"]
+receiver
+[[], {}, nil]
+receiver
+[[1], {marker: 2}, "literal result"]

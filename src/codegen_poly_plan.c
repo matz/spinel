@@ -2369,21 +2369,19 @@ void emit_poly_prearms0(Compiler *c, int id, const char *name, const PolySpecial
   free(hcb.p);
 }
 
-/* The proc a boxed callable's pre-arm hands a `call`/`()`/`[]` with a
+/* The proc a boxed callable's pre-arm hands an invocation with a
    block (the dispatch's own, `have`, or one built here), or -1 */
 static int callable_prearm_blk(Compiler *c, int id, const char *name, int have) {
-  if (!name || !is_call_alias(name) || nt_ref(c->nt, id, "block") < 0) return -1;
+  if (!name || !is_call_or_yield(name) || nt_ref(c->nt, id, "block") < 0) return -1;
   return poly_call_blk_proc(c, id, have);
 }
 
-/* The rest of a zero-argument poly dispatch's pre-arms, after the tag
-   chain (emit_poly_prearms0): the block a candidate takes, hoisted once as
-   a proc (its temp is the result), a builtin container or Mutex driving
-   that proc, a callable value, a class value's class-side arms. */
-int emit_poly_prearms0_blk(Compiler *c, int id, const char *name, const PolySpecials0 *ps, TyKind ret,
-                           int tv, int tr, Buf *b) {
+int emit_poly_dispatch_block0(Compiler *c, int id, const char *name, Buf *b) {
   const NodeTable *nt = c->nt;
-  int argc = 0;
+  Buf block;
+  memset(&block, 0, sizeof block);
+  Buf *outer = g_pre;
+  g_pre = &block;
   /* class 0 emits a `case 0:` arm here when it defines/inherits the method
      (nrequired 0) or exposes it as a reader; the dispatch key is then guarded
      so a boxed scalar (cls_id 0) does not alias it (issue #1576). */
@@ -2415,6 +2413,21 @@ int emit_poly_prearms0_blk(Compiler *c, int id, const char *name, const PolySpec
         }
       }
     } }
+  blk_tmp0 = callable_prearm_blk(c, id, name, blk_tmp0);
+  g_pre = outer;
+  if (block.p) buf_puts(b, block.p);
+  free(block.p);
+  return blk_tmp0;
+}
+
+/* The rest of a zero-argument poly dispatch's pre-arms, after the tag
+   chain (emit_poly_prearms0): the block a candidate takes, hoisted once as
+   a proc (its temp is the result), a builtin container or Mutex driving
+   that proc, a callable value, a class value's class-side arms. */
+void emit_poly_prearms0_blk(Compiler *c, int id, const char *name, const PolySpecials0 *ps, TyKind ret,
+                           int tv, int tr, int blk_tmp0, Buf *b) {
+  const NodeTable *nt = c->nt;
+  int argc = 0;
   /* A builtin Array receiver reaching a dispatch that exists only because
      a USER class defines this name. Without an arm it falls to the raise:
      `NoMethodError: undefined method 'map' for an instance of Array` at a
@@ -2562,7 +2575,7 @@ int emit_poly_prearms0_blk(Compiler *c, int id, const char *name, const PolySpec
   }
   /* a boxed Proc/Curry/Method in a slot a user `call`/`[]` shadows (#4395) */
   if (emit_poly_callable_prearm(c, name, 0, NULL, NULL, NULL, tv, tr, ret, 0,
-                                callable_prearm_blk(c, id, name, blk_tmp0), b) && g_plan_check)
+                                blk_tmp0, b) && g_plan_check)
     pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_CALLABLE, -1, TY_UNKNOWN, PC_SAME);
   /* a class-valued receiver dispatches class-side, ahead of the instance
      arms (#4218) */
@@ -2576,7 +2589,6 @@ int emit_poly_prearms0_blk(Compiler *c, int id, const char *name, const PolySpec
       buf_printf(b, "if (_t%d.tag == SP_TAG_CLASS) sp_raise_nomethod(sp_nomethod_msg(\"members\", _t%d)); else ",
                  tv, tv);
   }
-  return blk_tmp0;
 }
 
 /* The builtin `case` arms a zero-argument poly dispatch writes after its
@@ -3858,22 +3870,12 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
   }
 }
 
-/* The pre-arms of a poly dispatch with arguments after its tag pre-arms:
-   the block a candidate takes, hoisted once as a proc (its temp is the
-   result), a class value's class-side arms, a callable value's call (with
-   the keyword split rebuilt as the trailing hash, or a lone splat spread).
-   atmp and atmp_ty are the dispatch's own: the callable's keyword hash
-   takes the slot after the positionals. */
-int emit_poly_prearms_n_blk(Compiler *c, int id, const char *name, const PolySpecialsN *ps, const PolyTemps *T,
-                            int *atmp, TyKind *atmp_ty, const PolyKw *kw, const int *htmp, int is_setter_val,
-                            int splat_a, int splat_last, int stk, Buf *b) {
+int emit_poly_dispatch_block_n(Compiler *c, int id, const char *name, int callable_shape, Buf *b) {
   const NodeTable *nt = c->nt;
-  int argc = T->argc, pos_argc = T->pos_argc, kwall = T->kwall, kwh = ps->kwh;
-  const int *argv = T->argv;
-  TyKind ret = T->ret;
-  int tv = T->tv, tr = T->tr;
-  int kw_pos = ps->kw_pos, has_splat_arg = ps->has_splat_arg;
-  int called = 0;
+  Buf block;
+  memset(&block, 0, sizeof block);
+  Buf *outer = g_pre;
+  g_pre = &block;
   /* class 0 emits a `case 0:` arm here when it defines/inherits the method
      with its arity satisfied; guard the key so a boxed scalar (cls_id 0)
      cannot alias it (issue #1576). */
@@ -3896,6 +3898,29 @@ int emit_poly_prearms_n_blk(Compiler *c, int id, const char *name, const PolySpe
         }
       }
     } }
+  if (callable_shape) blk_tmp2 = callable_prearm_blk(c, id, name, blk_tmp2);
+  g_pre = outer;
+  if (block.p) buf_puts(b, block.p);
+  free(block.p);
+  return blk_tmp2;
+}
+
+/* The pre-arms of a poly dispatch with arguments after its tag pre-arms:
+   the block a candidate takes, hoisted once as a proc (its temp is the
+   result), a class value's class-side arms, a callable value's call (with
+   the keyword split rebuilt as the trailing hash, or a lone splat spread).
+   atmp and atmp_ty are the dispatch's own: the callable's keyword hash
+   takes the slot after the positionals. */
+void emit_poly_prearms_n_blk(Compiler *c, int id, const char *name, const PolySpecialsN *ps, const PolyTemps *T,
+                            int *atmp, TyKind *atmp_ty, const PolyKw *kw, const int *htmp, int is_setter_val,
+                            int splat_a, int splat_last, int stk, int blk_tmp2, Buf *b) {
+  const NodeTable *nt = c->nt;
+  int argc = T->argc, pos_argc = T->pos_argc, kwall = T->kwall, kwh = ps->kwh;
+  const int *argv = T->argv;
+  TyKind ret = T->ret;
+  int tv = T->tv, tr = T->tr;
+  int kw_pos = ps->kw_pos, has_splat_arg = ps->has_splat_arg;
+  int called = 0;
   /* a class-valued receiver dispatches class-side, ahead of the instance
      arms (#4218). */
   int cls_side = emit_poly_cls_value_prearm(c, id, name, pos_argc, atmp, atmp_ty, htmp, kw, tv,
@@ -3924,22 +3949,20 @@ int emit_poly_prearms_n_blk(Compiler *c, int id, const char *name, const PolySpe
      the keyword split binds by name to a user candidate, so skip it. A
      splatted argument is one temp holding an array, not one temp per
      value, so the positional publish sequence below cannot spread it. */
-  int tblk = (kw_pos || kwh >= 0) && !has_splat_arg ? callable_prearm_blk(c, id, name, blk_tmp2) : -1;
   if (kw_pos && !has_splat_arg) {
     if (kwall >= 0) {
       for (int e = 0; e < 2; e++) {
         char kg[48];
         snprintf(kg, sizeof kg, "_t%d->len %s 0 && ", kwall, e ? ">" : "==");
         called |= emit_poly_callable_prearm(c, name, pos_argc + e, atmp, atmp_ty, kg, tv, tr, ret,
-                                            e ? 2 : pos_argc > 0 ? 1 : 0, tblk, b);
+                                            e ? 2 : pos_argc > 0 ? 1 : 0, blk_tmp2, b);
       }
     }
     else called = emit_poly_callable_prearm(c, name, argc, atmp, atmp_ty, NULL, tv, tr, ret,
                                             argc == 0 ? 0 : nt_argv_kwh(nt, argv, argc) >= 0 ? 2 : 1,
-                                            tblk, b);
+                                            blk_tmp2, b);
   }
-  else if (kwh >= 0 && !has_splat_arg &&
-           is_call_alias(name)) {
+  else if (kwh >= 0 && !has_splat_arg && is_call_or_yield(name)) {
     /* The keyword split has no hash for a callable to take: the one built
        from the per-key temps ahead of the pre-arms (emit_poly_callable_kwh_decl,
        the dispatch declared it where a declaration can stand), passed as
@@ -3956,15 +3979,20 @@ int emit_poly_prearms_n_blk(Compiler *c, int id, const char *name, const PolySpe
     }
     atmp[pos_argc] = kht;
     atmp_ty[pos_argc] = TY_SYM_POLY_HASH;
-    called = emit_poly_callable_prearm(c, name, argc, atmp, atmp_ty, NULL, tv, tr, ret, 2, tblk, b);
+    called = emit_poly_callable_prearm(c, name, argc, atmp, atmp_ty, NULL, tv, tr, ret, 2, blk_tmp2, b);
   }
-  else if (splat_last)
+  else if (splat_last) {
+    char kwpos[40] = "0";
+    if (stk >= 0) {
+      if (kwall >= 0) snprintf(kwpos, sizeof kwpos, "(_t%d->len > 0 ? 2 : 1)", kwall);
+      else strcpy(kwpos, "2");
+    }
     called = emit_poly_callable_spread_prearm(c, name, splat_a, atmp, atmp_ty,
-                                              stk >= 0 ? stk : atmp[splat_a], tv, tr, ret, b);
+                                              stk >= 0 ? stk : atmp[splat_a], kwpos, blk_tmp2, tv, tr, ret, b);
+  }
   else if (splat_a >= 0 && is_call_alias(name))
     unsupported(c, id, "a splat before other arguments into a method called on a value of more than one type");
   if (called && g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_CALLABLE, -1, TY_UNKNOWN, PC_SAME);
-  return blk_tmp2;
 }
 
 /* The Hash a callable (a Proc, a Curry, a Method) takes for a keyword
@@ -3975,7 +4003,7 @@ int emit_poly_prearms_n_blk(Compiler *c, int id, const char *name, const PolySpe
    when the dispatch has no such arm. */
 int emit_poly_callable_kwh_decl(Compiler *c, const char *name, const PolySpecialsN *ps, const PolyTemps *T,
                                 const PolyKw *kw, Buf *b) {
-  if (ps->kwh < 0 || ps->has_splat_arg || ps->kw_pos || !is_call_alias(name)) return 0;
+  if (ps->kwh < 0 || ps->has_splat_arg || ps->kw_pos || !is_call_or_yield(name)) return 0;
   int kht = ++g_tmp, tv = T->tv;
   buf_printf(b, "sp_SymPolyHash *_t%d = NULL; SP_GC_ROOT(_t%d); "
                 "if (_t%d.tag == SP_TAG_OBJ && (_t%d.cls_id == SP_BUILTIN_PROC"

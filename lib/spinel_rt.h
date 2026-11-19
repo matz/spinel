@@ -24204,7 +24204,7 @@ static sp_RbVal sp_bm_call_spread(sp_BoundMethod *m, sp_Proc *blk, sp_RbVal arr,
    A Method with more than 16 arguments has no slot to land in and declines --
    the trampoline's own `argc > 16` guard never sees the overlong count if this
    helper clamps first. */
-static sp_RbVal sp_poly_callable_spread(sp_RbVal v, sp_RbVal arr, int kwpos) {
+static sp_RbVal sp_poly_callable_spread_blk(sp_RbVal v, sp_RbVal arr, int kwpos, sp_Proc *blk) {
   if (v.tag == SP_TAG_OBJ && v.v.p && v.cls_id == SP_BUILTIN_CURRY) {
     sp_Curry *c = (sp_Curry *)v.v.p;
     SP_GC_ROOT(c); SP_GC_ROOT_RBVAL(arr);
@@ -24213,13 +24213,17 @@ static sp_RbVal sp_poly_callable_spread(sp_RbVal v, sp_RbVal arr, int kwpos) {
     return sp_curry_settle(c);
   }
   if (v.tag == SP_TAG_OBJ && v.v.p && v.cls_id == SP_BUILTIN_METHOD)
-    return sp_bm_call_spread((sp_BoundMethod *)v.v.p, NULL, arr, kwpos);
+    return sp_bm_call_spread((sp_BoundMethod *)v.v.p, blk, arr, kwpos);
   if (v.tag == SP_TAG_OBJ && v.v.p && v.cls_id == SP_BUILTIN_PROC) {
-    sp_proc_call_spread((sp_Proc *)v.v.p, arr, kwpos);
+    sp_proc_call_spread_blk((sp_Proc *)v.v.p, blk, arr, kwpos);
     return _sp_proc_poly_ret;
   }
   sp_raise_cls("NoMethodError", sp_nomethod_msg("call", v));
   return sp_box_nil();
+}
+
+static sp_RbVal sp_poly_callable_spread(sp_RbVal v, sp_RbVal arr, int kwpos) {
+  return sp_poly_callable_spread_blk(v, arr, kwpos, NULL);
 }
 
 /* Fiber.new(&x) / Thread.new(&x): x lives in the fiber (user_data, one

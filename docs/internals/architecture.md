@@ -59,6 +59,9 @@ A default argument is evaluated on the callee. Binding a String default
 uses the same handle as the expression that supplied it.
 An ordered operand keeps its saved handle until its argument binding is
 removed. An abandoned emission also removes the corresponding binding.
+Boxed callable dispatch holds the receiver and arguments before it
+binds the block operand. Proc invocation carries the captured block and
+the keyword marker through the same call as the argument vector.
 
 A scoped String local stores an `sp_String *`. A byte reader projects
 the payload from that object at its use. Nil uses a null handle.

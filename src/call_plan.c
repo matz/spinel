@@ -9595,7 +9595,7 @@ static void cpoly_prearms_n(Compiler *c, int id, const char *name, int argc, con
   PolyArgs A = { argv, pos_argc, NULL, atmp_ty, &kw, NULL };
   cpoly_cls_value_arms(c, id, name, pos_argc, &A, ret, !is_setter_val, p, cap);
   free(kwty);
-  int callable = is_call_alias(name);
+  int callable = is_call_or_yield(name);
   /* (of any argument count: one past the channel's slots rides the call's
      wide store) */
   if (callable && ((!ps.has_splat_arg && (ps.kw_pos || kwh >= 0)) || splat_last))
@@ -9891,7 +9891,7 @@ static void cpoly_prearms0_blk(Compiler *c, int id, const char *name, const Poly
                    sp_streq(name, "each_byte") || sp_streq(name, "each_codepoint")))
     cpoly_family(p, cap, PB_ENUM_PROC);
   if (live_blk && sp_streq(name, "synchronize")) cpoly_family(p, cap, PB_SYNC);
-  if (is_call_alias(name)) cpoly_family(p, cap, PB_CALLABLE);
+  if (is_call_or_yield(name)) cpoly_family(p, cap, PB_CALLABLE);
   PolyArgs none = { NULL, 0, NULL, NULL, NULL, NULL };
   if (!cpoly_cls_value_arms(c, id, name, 0, &none, ret, 1, p, cap) && ps->cls_members)
     cpoly_family(p, cap, PB_CLS_MEMBERS);

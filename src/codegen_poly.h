@@ -123,9 +123,10 @@ int trange_poly_name(const char *name, int argc);
 void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps, const PolyTemps *T, Buf *b);
 void emit_poly_str_aset_prearm(Compiler *c, int recv, const PolySpecialsN *ps, const PolyTemps *T, Buf *b);
 void emit_poly_str_aset_recv(Compiler *c, int recv, const PolySpecialsN *ps, const int *argv, Buf *b);
-int  emit_poly_prearms_n_blk(Compiler *c, int id, const char *name, const PolySpecialsN *ps, const PolyTemps *T,
+int emit_poly_dispatch_block_n(Compiler *c, int id, const char *name, int callable_shape, Buf *b);
+void emit_poly_prearms_n_blk(Compiler *c, int id, const char *name, const PolySpecialsN *ps, const PolyTemps *T,
                              int *atmp, TyKind *atmp_ty, const PolyKw *kw, const int *htmp, int is_setter_val,
-                             int splat_a, int splat_last, int stk, Buf *b);
+                             int splat_a, int splat_last, int stk, int blk_tmp2, Buf *b);
 void emit_kwh_sym_hash(Compiler *c, const PolyKw *kw, Scope *skip_kw, Buf *out);
 void emit_poly_fetch_absent(Compiler *c, int argc, const int *atmp, TyKind dty,
                             int key_node, TyKind ret, TyKind trt, Buf *b);
@@ -155,11 +156,13 @@ static inline int kwh_param_fits(TyKind kpt, int kwall_any) {
 }
 int poly_call_blk_proc(Compiler *c, int id, int have);
 int  emit_poly_callable_spread_prearm(Compiler *c, const char *name, int sa, const int *atmp,
-                                      const TyKind *atmp_ty, int st, int tv, int tr, TyKind ret, Buf *b);
+                                      const TyKind *atmp_ty, int st, const char *kwpos, int blk,
+                                      int tv, int tr, TyKind ret, Buf *b);
 void emit_poly_prearms0(Compiler *c, int id, const char *name, const PolySpecials0 *ps, TyKind ret,
                         int tv, int tr, Buf *b);
-int  emit_poly_prearms0_blk(Compiler *c, int id, const char *name, const PolySpecials0 *ps, TyKind ret,
-                            int tv, int tr, Buf *b);
+int emit_poly_dispatch_block0(Compiler *c, int id, const char *name, Buf *b);
+void emit_poly_prearms0_blk(Compiler *c, int id, const char *name, const PolySpecials0 *ps, TyKind ret,
+                            int tv, int tr, int blk_tmp0, Buf *b);
 int  emit_poly_callable_prearm(Compiler *c, const char *name, int argc,
                                const int *atmp, const TyKind *atmp_ty, const char *guard,
                                int tv, int tr, TyKind ret, int kwpos, int tblk, Buf *b);

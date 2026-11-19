@@ -1,0 +1,9 @@
+true
+load baz true false NoMethodError
+load
+load2 baz false NoMethodError
+before_grow baz false NoMethodError
+exit new true true nw
+lam
+end
+ran

@@ -224,7 +224,8 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
        the same END register it once */
     if (end_once) buf_printf(b, "({ static int _t%d; if (!SP_ATOMIC_EXCHANGE(&_t%d, 1, __ATOMIC_ACQ_REL)) { ", to, to);
     buf_puts(b, "sp_at_exit_push(");
-    emit_proc_literal(c, id, b);
+    /* (`at_exit(&pr)` registers the Proc the expression holds, not a block of its own) */
+    if (!emit_forwarded_proc_arg(c, nt_ref(nt, id, "block"), b)) emit_proc_literal(c, id, b);
     buf_puts(b, ")");
     if (end_once) buf_puts(b, "; } 0; })");
     return 1;

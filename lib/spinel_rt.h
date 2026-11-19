@@ -421,6 +421,14 @@ static inline sp_RbVal sp_system_answer(int r) { return r < 0 ? sp_box_nil() : s
    unlike Integer.sqrt which quotes "isqrt". */
 static inline sp_float sp_math_sqrt(sp_float x){if(x<0.0)sp_raise_cls("Math::DomainError","Numerical argument is out of domain - sqrt");return x==0.0?0.0:sqrt(x);}  /* normalize sqrt(-0.0) to +0.0 like CRuby */
 static inline sp_float sp_math_log(sp_float x){if(x<0.0)sp_raise_cls("Math::DomainError","Numerical argument is out of domain - log");return log(x);}
+/* rb_math_log: pole checks, then log2(x)/log2(base) plus its 0/log2(base) term */
+static inline sp_float sp_math_log_base(sp_float x, sp_float b){
+  if(x<0.0||b<0.0)sp_raise_cls("Math::DomainError","Numerical argument is out of domain - log");
+  if(x==0.0)return b!=0.0?-HUGE_VAL:NAN;
+  if(b==0.0)return -0.0;
+  sp_float lb=log2(b);
+  return log2(x)/lb+0.0/lb;
+}
 static inline sp_float sp_math_log1p(sp_float x){if(x<-1.0)sp_raise_cls("Math::DomainError","Numerical argument is out of domain - log1p");return log1p(x);}
 static inline sp_float sp_math_log2(sp_float x){if(x<0.0)sp_raise_cls("Math::DomainError","Numerical argument is out of domain - log2");return log2(x);}
 static inline sp_float sp_math_log10(sp_float x){if(x<0.0)sp_raise_cls("Math::DomainError","Numerical argument is out of domain - log10");return log10(x);}

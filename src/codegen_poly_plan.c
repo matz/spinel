@@ -3163,8 +3163,8 @@ void poly_specials_n(Compiler *c, int id, const char *name, int argc, const int 
   /* The multi-set forms of count/delete/squeeze (String's alone) when a
      user class also owns the name: the switch needs a String pre-arm or
      a genuine String receiver falls to its NoMethodError default, the
-     same hole the single-set delete had (#4195). String-typed sets only:
-     the temps below carry them as const char *. */
+     same hole the single-set delete had (#4195). The String-typed sets
+     can be held by either face. */
   int is_strsetop_n = ((sp_streq(name, "count") || sp_streq(name, "squeeze") || sp_streq(name, "strip") ||
                           sp_streq(name, "lstrip") || sp_streq(name, "rstrip"))
                          ? argc >= 1     /* their 1-set form has no other pre-arm */
@@ -3732,9 +3732,10 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
         for (int a = 0; a < argc && sl < (int)sizeof sets - 16; a++) {
           int t = atmp[a];
           /* A later set read can allocate before the helper consumes this one. */
-          if (atmp_ty[a] == TY_STRBUF) {
+          if (atmp_ty[a] == TY_STRBUF || atmp_ty[a] == TY_STRING) {
+            const char *read = atmp_ty[a] == TY_STRBUF ? "sp_strbuf_read" : "SP_STR_B";
             t = ++g_tmp;
-            buf_printf(b, "const char *_t%d = sp_strbuf_read(_t%d); SP_GC_ROOT(_t%d); ", t, atmp[a], t);
+            buf_printf(b, "const char *_t%d = %s(_t%d); SP_GC_ROOT_STR(_t%d); ", t, read, atmp[a], t);
           }
           sl += snprintf(sets + sl, sizeof sets - (size_t)sl, "%s_t%d", a ? ", " : "", t);
         }

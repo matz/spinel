@@ -4808,7 +4808,7 @@ static int emit_array_hash_literal_expr(Compiler *c, int id, Buf *b, const NodeT
               /* a String Range held in a variable: its bounds are in the value */
               buf_printf(g_pre, "{ sp_StrArray *_sa = sp_srange_to_a(%s); if (_sa) for (sp_int _si = 0; _si < _sa->len; _si++) sp_PolyArray_push(_t%d, %s); }\n", ep, t, ONE_SA_BOX);
             else {
-              buf_printf(g_pre, "{ sp_Range _sr = %s; sp_int _e = _sr.last+(_sr.excl?0:1); for (sp_int _si = _sr.first; _si < _e; _si++) sp_PolyArray_push(_t%d, sp_box_int(_si)); }\n", ep, t);
+              buf_printf(g_pre, "{ sp_Range _sr = %s; sp_range_to_a_check(_sr); sp_int _e = _sr.last+(_sr.excl?0:1); for (sp_int _si = _sr.first; _si < _e; _si++) sp_PolyArray_push(_t%d, sp_box_int(_si)); }\n", ep, t);
             }
           }
           else if (ir.elem == TY_INT) {
@@ -4921,7 +4921,7 @@ static int emit_array_hash_literal_expr(Compiler *c, int id, Buf *b, const NodeT
             free(lo2.p); free(hi2.p);
           }
           else {
-            buf_printf(g_pre, "{ sp_Range _sr = %s; sp_int _e = _sr.last+(_sr.excl?0:1); for (sp_int _si = _sr.first; _si < _e; _si++) sp_%sArray_push(_t%d, _si); }\n", ep, k, t);
+            buf_printf(g_pre, "{ sp_Range _sr = %s; sp_range_to_a_check(_sr); sp_int _e = _sr.last+(_sr.excl?0:1); for (sp_int _si = _sr.first; _si < _e; _si++) sp_%sArray_push(_t%d, _si); }\n", ep, k, t);
           }
         }
         else if (ir.elem == TY_INT && sp_streq(k, "Int"))

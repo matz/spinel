@@ -24,3 +24,6 @@ true
 [[nil, 5], [1, nil], [nil, "z"], ["a", nil], [nil, 3], [nil, "e"], ["b", nil]]
 [:n, :n]
 [3, 3, 1.5, "ab", 4]
+[nil, nil, nil, true]
+nil
+"method"

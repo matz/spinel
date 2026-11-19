@@ -1023,8 +1023,18 @@ void rewrite_never_set_ivar_reads(Compiler *c) {
   for (int j = 0; j < kn; j++) {
     int id = ids[j];
     const char *nm = nt_str(nt, id, "name");
-    /* (defined?(@x) asks whether it is set, not its value) */
-    if (!nm || (par && par[id] >= 0 && nt_kind(nt, par[id]) == NK_DefinedNode)) continue;
+    if (!nm) continue;
+    /* defined?(@x), and defined?(@x.m) through its receiver, asks whether
+       the ivar is set, not its value: a read anywhere under a defined? in
+       its method keeps the read */
+    int under_defined = 0;
+    for (int a = par ? par[id] : -1; a >= 0 && !under_defined; a = par[a]) {
+      NodeKind ak = nt_kind(nt, a);
+      if (ak == NK_DefinedNode) under_defined = 1;
+      else if (ak == NK_DefNode || ak == NK_ClassNode || ak == NK_ModuleNode ||
+               ak == NK_SingletonClassNode) break;
+    }
+    if (under_defined) continue;
     Scope *s = comp_scope_of(c, id);
     int cls = s && s->class_id >= 0 ? s->class_id :
               s && !s->is_cmethod && id < c->node_cap && c->node_cbody && c->node_cbody[id] >= 0 ? c->node_cbody[id] :

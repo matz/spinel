@@ -10644,7 +10644,16 @@ static int case_subject_needs_root(Compiler *c, TyKind pt, const int *whens, int
   if (!needs_root(pt) || comp_ty_value_obj(c, pt)) return 0;
   for (int w = 0; w < nw; w++) {
     int wc = 0; const int *conds = nt_arr(nt, whens[w], "conditions", &wc);
-    for (int k = 0; k < wc; k++) if (subtree_allocates(c, conds[k])) return 1;
+    for (int k = 0; k < wc; k++) {
+      if (subtree_allocates(c, conds[k])) return 1;
+      /* `when *x` of anything but a typed Array boxes x and spreads it at
+         run time (sp_case_splat_match), which allocates */
+      if (nt_kind(nt, conds[k]) == NK_SplatNode) {
+        int in = nt_ref(nt, conds[k], "expression");
+        TyKind at = in >= 0 ? comp_ntype(c, in) : TY_UNKNOWN;
+        if (at != TY_INT_ARRAY && at != TY_STR_ARRAY && at != TY_FLOAT_ARRAY && at != TY_POLY_ARRAY) return 1;
+      }
+    }
   }
   /* no operand allocates: the unrooted subject is a decision, keyed at the
      first `when` */
@@ -10983,15 +10992,19 @@ static void emit_when_boxed_test(Compiler *c, int cond, int t, TyKind pt, Buf *b
   buf_puts(b, "); })");
 }
 
+/* The splatted value is built and rooted before the subject is boxed: a
+   boxed value object is a fresh copy, which building the splat (a Range of
+   such objects) could collect before the match reads it. */
 static void emit_when_splat_test(Compiler *c, int cond, int t, TyKind pt, Buf *b) {
   int sp_in = nt_ref(c->nt, cond, "expression");
   char stmp[32]; snprintf(stmp, sizeof stmp, "_t%d", t);
-  buf_puts(b, "sp_case_splat_match(");
+  int tsp = ++g_tmp;
+  buf_printf(b, "({ sp_RbVal _t%d = ", tsp);
+  if (sp_in >= 0) emit_boxed(c, sp_in, b); else buf_puts(b, "sp_box_nil()");
+  buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_case_splat_match(", tsp);
   if (pt == TY_POLY) buf_puts(b, stmp);
   else emit_boxed_text(c, pt, stmp, b);
-  buf_puts(b, ", ");
-  if (sp_in >= 0) emit_boxed(c, sp_in, b); else buf_puts(b, "sp_box_nil()");
-  buf_puts(b, ")");
+  buf_printf(b, ", _t%d); })", tsp);
 }
 
 /* `when Integer` / `when NilClass` on an Integer, Float or String
@@ -11451,7 +11464,11 @@ void emit_case(Compiler *c, int id, Buf *b, int indent) {
             buf_puts(b, "); })");
             break;
           default:
-            buf_puts(b, "0 /* unsupported splat type */");
+            /* any other value (a Range, a boxed one) spreads at run time
+               as the case-as-value form does: a Range as its to_a, which
+               raises for an open one. This arm was 0, so `when *(1..3)`
+               matched nothing. */
+            emit_when_splat_test(c, conds[j], t, pt, b);
             break;
           }
         }

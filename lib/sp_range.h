@@ -109,14 +109,18 @@ static inline sp_int sp_range_bit_width(sp_Range r, sp_int lo){
   uintptr_t d=(uintptr_t)r.last-(uintptr_t)lo;
   return d>=64?64:(sp_int)d+(r.excl?0:1);
 }
+/* An open Integer Range cannot become an Array: CRuby's to_a raises
+   (endless first) where a walk from the sentinel would hang or answer []. */
+static inline void sp_range_to_a_check(sp_Range r){
+  if(r.noend)sp_raise_cls("RangeError","cannot convert endless range to an array");
+  if(r.nobeg)sp_raise_cls("TypeError","can't iterate from NilClass");
+}
 /* Materialize the range into an int array (ascending or descending per step).
    The +1 stride (every literal `a..b` range) keeps the tight from_range loop; a
    real step only appears for downto / explicit step, so it pays the general
    path only then. */
 static inline sp_IntArray *sp_range_to_ia(sp_Range r){
-  /* an endless range cannot materialize (CRuby raises instead of hanging) */
-  if(r.noend)sp_raise_cls("RangeError","cannot convert endless range to an array");
-  if(r.nobeg)sp_raise_cls("TypeError","can't iterate from NilClass");
+  sp_range_to_a_check(r);
   sp_int s=sp_range_step(r);
   if(s==1){
     /* `a...-2**63` holds nothing: its last element would be below sp_int */

@@ -128,3 +128,22 @@ class Folds
 end
 
 p Folds.new.m
+
+# defined? asks whether the ivar is set, through a call on it as well: a
+# read under a defined? keeps its own answer, set to nil or never set.
+class Asks
+  def chk = defined?(@missing.nil?)
+  def chk2 = defined?(@missing.to_s.size)
+  def chk3 = defined?(@missing)
+  def val = @missing.nil?
+end
+class AsksSet
+  def chk = defined?(@x.nil?)
+  def set = (@x = nil)
+end
+q = Asks.new
+p [q.chk, q.chk2, q.chk3, q.val]
+qs = AsksSet.new
+p qs.chk
+qs.set
+p qs.chk

@@ -2548,8 +2548,7 @@ static int lr_body_target(Compiler *c, const int *par, int n, int d, int walk, i
    it is no instance method CRuby makes private (initialize and its kin)?
    The call plan answers no other visibility of a body's version yet, so
    such a def keeps the form it has where the record holds no body
-   versions. Nor does it answer a version of a body that first runs only
-   once the load is over (lr_body_post): that one keeps the same form. */
+   versions. */
 static int lr_body_def_public(const NodeTable *nt, const int *par, int n, int d, int sg) {
   int a = d < n ? par[d] : -1, w = a >= 0 && nt_kind(nt, a) == NK_ArgumentsNode ? par[a] : -1;
   if (w >= 0 && nt_kind(nt, w) == NK_CallNode && nt_ref(nt, w, "receiver") < 0) {
@@ -2566,23 +2565,6 @@ static int lr_body_def_public(const NodeTable *nt, const int *par, int n, int d,
     }
   return sec == BVIS_PUBLIC;
 }
-/* Does body b (a def's, a lambda's, a block's, an exit handler's) first
-   run only once the load is over (LrExt.from LR_POST: an exit handler, a
-   block or closure that only exit handlers run, an --ext-entry method)?
-   The call plan does not answer a version such a body makes until a
-   call's window runs past the load: the window ends with the load, so a
-   call in an exit handler would take it for a version that never ran.
-   Such a version keeps the form it has where the record holds no body
-   versions, unplaced, its answer from the start (lr_post_unplace). Asked
-   of the extents (lr_run_points). A method only exit handlers call is no
-   such body: lr_rta starts it at the statement that registers the
-   handler, so its version is not known after that statement, and a call
-   there reads the version's cell, which holds however late the body runs. */
-static int lr_def_from(const LoadRecord *r, int d);
-static int lr_body_post(const LoadRecord *r, int b) {
-  return lr_def_from(r, b) == LR_POST;
-}
-
 /* The program's entries, by name, that bar a body's version of the name
    (lr_body_def_version): the ones the call plan cannot answer as versions
    next to a body's version. Anywhere in the program, a body or the top
@@ -2746,9 +2728,7 @@ static void lr_body_forms(Compiler *c, const int *par, int n) {
    (lr_body_forms), in any class, on either side, in a body or at the top
    level. Otherwise every entry bodies make of the name keeps the form it
    has where the record holds no body versions: unplaced in a class body,
-   a definition the record cannot follow in a method body. So does, once
-   the extents are made, every version of a history that holds one of a
-   body that runs only after the load (lr_body_post, lr_post_unplace). */
+   a definition the record cannot follow in a method body. */
 static int lr_body_def_version(Compiler *c, const int *par, int n, int d, int sg) {
   const NodeTable *nt = c->nt;
   LoadRecord *r = c->lrec;
@@ -3614,7 +3594,6 @@ enum { LR_OWNERS_WALK = 1, LR_OWNERS_HELD = 2 };   /* lr_def_owners' checks */
 static void lr_def_owners(Compiler *c, int check);
 static void lr_later_settle(Compiler *c);
 static void lr_early_settle(Compiler *c);
-static void lr_post_settle(Compiler *c);
 static void lr_block_cond_dms(Compiler *c);
 
 /* The definitions of a body of class ci that the record holds with no
@@ -3789,13 +3768,7 @@ static void lr_check_held(Compiler *c) {
     int def = r->hist[i].b, found = 0, now, cls, sg;
     const int *par = r->plan_depth ? r->plan_par : r->up ? r->up : comp_parent_map(c);
     const LrHist *h = lr_body_target(c, par, r->n, def, 0, &cls, &sg) ? lr_hist(r, cls, sg, nt_str(nt, def, "name"), 0) : NULL;
-    /* (a version, or kept unplaced where the history holds one of a body that runs after the load: lr_post_unplace) */
-    int post = 0;
-    for (int j = 0; h && j < h->n && !post; j++) {
-      int b = lr_body_around(nt, par, r->n, h->v[j].node);
-      post = b >= 0 && lr_body_post(r, b);
-    }
-    for (int j = 0; h && j < h->n; j++) found |= h->v[j].node == def && (h->v[j].body || (post && h->v[j].unplaced));
+    for (int j = 0; h && j < h->n; j++) found |= h->v[j].node == def && h->v[j].body;
     f->asked++;
     if ((now = lr_body_holds(c, def)) && found) continue;
     f->differ++;
@@ -3937,7 +3910,6 @@ static void lr_record_again(ElabRec *x) {
   lr_later_settle(x->c);
   lr_record_unplaced(x->c);
   r->recorded = 1;
-  lr_post_settle(x->c);
   lr_early_settle(x->c);
 }
 
@@ -4030,7 +4002,6 @@ void elab_program(Compiler *c, struct HostStep *h) {
   lr_later_settle(c);
   lr_record_unplaced(c);
   r->recorded = 1;
-  lr_post_settle(c);
   lr_early_settle(c);
   if (r->check) {   /* the same record made after the walk, as a check */
     lr_check_held(c);
@@ -7614,7 +7585,6 @@ static void lr_region_runs(Compiler *c) {
    singleton's or a builtin class's, or one with a module mixed into one
    of those (global). */
 static void lr_extents(Compiler *c);
-static void lr_post_unplace(Compiler *c);
 static void lr_run_points(Compiler *c) {
   LoadRecord *r = elab_fresh(c);
   if (r->rend && r->runs_of == r->builds) return;
@@ -7667,7 +7637,6 @@ static void lr_run_points(Compiler *c) {
   lr_extents(c);
   r->ext_building = 0;
   r->runs_of = r->builds;
-  lr_post_unplace(c);
 }
 
 /* The statement of region 0 that code of statement e (of any region) starts
@@ -7947,48 +7916,6 @@ static void lr_extents(Compiler *c) {
     if (root >= 0 && root < n && r->at[root] >= 0 && r->st[r->at[root]].region > 0 && !(root < r->cextix && r->extix[root])) lr_ext_make(c, root, LR_B_REGION);
   }
   for (int i = 0; i < r->next; i++) lr_ext_time(c, par, n, i);
-}
-
-/* Each body's version of a history that holds one whose body first runs
-   only once the load is over (lr_body_post) takes the form it has where
-   the record holds no body versions: unplaced, its answer from the start,
-   as lr_body_def_version keeps a history whole. Done as the extents are
-   made (lr_run_points), the first time the record knows them. */
-static void lr_post_unplace(Compiler *c) {
-  LoadRecord *r = c->lrec;
-  int moved = 0;
-  for (int i = 0; i < r->nhist; i++) {
-    int post = 0;
-    for (int j = 0; j < r->hist[i].n && !post; j++) post = r->hist[i].v[j].body && lr_body_post(r, r->hist[i].v[j].body);
-    for (int j = 0; post && j < r->hist[i].n; j++) {   /* (the whole history: lr_body_def_version) */
-      LrDef *v = &r->hist[i].v[j];
-      if (!v->body) continue;
-      v->unplaced = 1;
-      v->body = 0;
-      moved = 1;
-    }
-  }
-  if (!moved) return;
-  /* (what was read of the entries' forms, as lr_record_drop drops it: the by-name index and its version counts, the
-     open and late bits, the slots, the surface) */
-  r->hgen++;
-  r->slot_builds = -1;
-  r->indexed = r->opened = r->lated = -1;
-  free(r->surf); free(r->surf_at); r->surf = NULL; r->surf_at = NULL;
-}
-/* ...asked once the record is made, where it holds a body's version, so that
-   no reader sees one of a body that runs only after the load: also of a
-   record made again over the same run points (lr_record_again), which
-   lr_run_points does not build again */
-static void lr_post_settle(Compiler *c) {
-  LoadRecord *r = c->lrec;
-  for (int i = 0; i < r->nhist; i++)
-    for (int j = 0; j < r->hist[i].n; j++)
-      if (r->hist[i].v[j].body) {
-        lr_run_points(c);
-        lr_post_unplace(c);
-        return;
-      }
 }
 
 /* How many statements in seq [a, b) may run code of the program's */

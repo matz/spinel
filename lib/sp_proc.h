@@ -21,6 +21,7 @@
 #include "sp_types.h"   /* sp_int, sp_sym, sp_bool */
 #include "sp_gc.h"      /* sp_RbVal, sp_gc_alloc, sp_gc_mark */
 #include "sp_alloc.h"   /* sp_PolyArray, sp_box_sym, sp_box_poly_array, sp_raise_cls */
+#include "sp_string.h"  /* sp_box_str_new */
 
 typedef struct sp_Proc { void *fn; void *cap; void (*cap_scan)(void *); sp_int arity; sp_bool lambda_p; sp_int param_count; const sp_sym *param_kinds; const sp_sym *param_names; sp_bool frozen; /* Object#freeze observed (sp_gc_alloc zero-fills) */ void *origin; /* dup/clone lineage root for Proc#== (NULL: self is the root) */ sp_int ie_cls; } sp_Proc;
 /* arity: the count this accumulator realizes at -- Proc#curry(n)'s n, else
@@ -287,7 +288,7 @@ static inline sp_RbVal sp_bm_box_ret(sp_BoundMethod *m, sp_int raw) {
   sp_int r = m ? m->legacy_ret : SP_BM_RET_INT;
   switch (SP_BM_RET_KIND(r)) {
     case SP_BM_RET_STRBUF:    return sp_box_nullable_obj((void *)(uintptr_t)raw, SP_BUILTIN_STRBUF);
-    case SP_BM_RET_STR:       return sp_box_str((const char *)(uintptr_t)raw);
+    case SP_BM_RET_STR:       return sp_box_str_new((const char *)(uintptr_t)raw);
     case SP_BM_RET_INT_ARRAY: return sp_box_nullable_obj((void *)(uintptr_t)raw, SP_BUILTIN_INT_ARRAY);
     case SP_BM_RET_STR_ARRAY: return sp_box_nullable_obj((void *)(uintptr_t)raw, SP_BUILTIN_STR_ARRAY);
     case SP_BM_RET_NIL:       return sp_box_nil();
@@ -310,7 +311,7 @@ static inline sp_int sp_bm_norm_ret(sp_BoundMethod *m, sp_int raw) {
 static inline sp_RbVal sp_bm_self_boxed(const sp_BoundMethod *m) {
   switch (m->self_kind) {
     case SP_BM_SELF_OBJ:  return sp_box_nullable_obj_dyn(m->self, 0);
-    case SP_BM_SELF_STR:  return sp_box_str((const char *)m->self);
+    case SP_BM_SELF_STR:  return sp_box_str_new((const char *)m->self);
     case SP_BM_SELF_BOOL: return sp_box_bool((sp_bool)(uintptr_t)m->self);
     case SP_BM_SELF_SYM:  return sp_box_sym((sp_sym)(uintptr_t)m->self);
     case SP_BM_SELF_MAIN: return sp_main_self();
@@ -340,7 +341,7 @@ static inline sp_RbVal sp_bm_receiver(const sp_BoundMethod *m) {
   if (m->held) return sp_bm_held_recv(m->self);
   switch (m->self_kind) {
     case SP_BM_SELF_OBJ:  return !m->self ? sp_box_nil() : m->self_cls ? sp_box_obj(m->self, (int)m->self_cls) : sp_box_nullable_obj_dyn(m->self, 0);
-    case SP_BM_SELF_STR:  return m->self ? sp_box_str((const char *)m->self) : sp_box_nil();
+    case SP_BM_SELF_STR:  return sp_box_str_new((const char *)m->self);
     case SP_BM_SELF_BOOL: return sp_box_bool(m->self != NULL);
     case SP_BM_SELF_SYM:  return sp_box_sym((sp_sym)(uintptr_t)m->self);
     case SP_BM_SELF_MAIN: return sp_main_self();

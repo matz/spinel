@@ -310,24 +310,28 @@ int emit_op_hash_default(Compiler *c, const BopCtx *x, Buf *b) {
     /* default(key): a hash built with a block calls its default_proc with
        (self, key); default() (or a hash with no proc) returns default_v
        (#2464). Only the poly-value variants carry a dproc. */
-    /* The proc takes the key in the hash's own key representation, so an
-       argument of another type cannot be handed to it -- passing an
-       Integer where a `const char *` key is expected did not even
-       typecheck. Such a key can never be in this hash, so answer the
-       plain default. */
+    /* A key the typed table cannot hold goes to its foreign-key miss path. */
     TyKind dkt = argc == 1 ? comp_ntype(c, argv[0]) : TY_UNKNOWN;
     int dkey_ok = rt == TY_POLY_POLY_HASH ||
                   (rt == TY_SYM_POLY_HASH && dkt == TY_SYMBOL) ||
                   (rt == TY_STR_POLY_HASH && (dkt == TY_STRING || dkt == TY_STRBUF));
+    if (argc == 1) buf_printf(b, "; SP_GC_ROOT(_t%d)", t);
     if (argc == 1 && dkey_ok) {
-      buf_printf(b, "; (_t%d && _t%d->dproc) ? _t%d->dproc(_t%d, ", t, t, t, t);
+      int k = ++g_tmp;
+      const char *key_type = rt == TY_POLY_POLY_HASH ? "sp_RbVal"
+                           : rt == TY_SYM_POLY_HASH ? "sp_sym" : "const char *";
+      buf_printf(b, "; %s _t%d = ", key_type, k);
       if (rt == TY_POLY_POLY_HASH) emit_boxed(c, argv[0], b);
       else emit_expr(c, argv[0], b);
-      buf_printf(b, ", _t%d->dproc_self) : (_t%d ? _t%d->default_v : sp_box_nil()); })", t, t, t);
+      buf_printf(b, "; (_t%d && _t%d->dproc) ? _t%d->dproc(_t%d, _t%d,"
+                    " _t%d->dproc_self) : (_t%d ? _t%d->default_v : sp_box_nil()); })",
+                 t, t, t, t, k, t, t, t);
     }
     else if (argc == 1) {
-      buf_printf(b, "; (void)("); emit_expr_for_effect(c, argv[0], b);
-      buf_printf(b, "); _t%d ? _t%d->default_v : sp_box_nil(); })", t, t);
+      int k = ++g_tmp;
+      buf_printf(b, "; sp_RbVal _t%d = ", k); emit_boxed(c, argv[0], b);
+      buf_printf(b, "; sp_poly_hash_foreign_miss(sp_box_nullable_obj(_t%d, %s), _t%d); })",
+                 t, hash_box_cls(rt), k);
     }
     else {
       buf_printf(b, "; _t%d ? _t%d->default_v : sp_box_nil(); })", t, t);
@@ -733,7 +737,7 @@ int emit_op_hash_shift(Compiler *c, const BopCtx *x, Buf *b) {
   buf_printf(b, " sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", tp, tp);
   if (rt == TY_POLY_POLY_HASH) buf_printf(b, " sp_PolyArray_push(_t%d, _t%d);", tp, tk);
   else if (kt == TY_SYMBOL) buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_sym(_t%d));", tp, tk);
-  else if (kt == TY_STRING) buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_str(_t%d));", tp, tk);
+  else if (kt == TY_STRING) buf_printf(b, " sp_PolyArray_push(_t%d, SP_SEBOX(sp_String_key_handle(_t%d)));", tp, tk);
   else buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_int(_t%d));", tp, tk);
   if (rt == TY_POLY_POLY_HASH) buf_printf(b, " sp_PolyArray_push(_t%d, _t%d->vals[_t%d->order[0]]);", tp, th, th);
   else if (vt == TY_POLY) buf_printf(b, " sp_PolyArray_push(_t%d, sp_%sHash_get(_t%d, _t%d));", tp, hn, th, tk);
@@ -826,7 +830,7 @@ int emit_op_hash_invert(Compiler *c, const BopCtx *x, Buf *b) {
     if (kt == TY_SYMBOL)
       buf_printf(b, " sp_RbVal _k%d = sp_box_sym(_t%d->order[_t%d]);", ti, th, ti);
     else if (kt == TY_STRING)
-      buf_printf(b, " sp_RbVal _k%d = sp_box_str(_t%d->order[_t%d]);", ti, th, ti);
+      buf_printf(b, " sp_RbVal _k%d = SP_SEBOX(sp_String_key_handle(_t%d->order[_t%d])); SP_GC_ROOT_RBVAL(_k%d);", ti, th, ti, ti);
     else if (kt == TY_INT)
       buf_printf(b, " sp_RbVal _k%d = sp_box_int(_t%d->order[_t%d]);", ti, th, ti);
     else
@@ -1104,7 +1108,7 @@ int emit_op_hash_assoc(Compiler *c, const BopCtx *x, Buf *b) {
   if (one_k)
     buf_printf(b, " SP_GC_ROOT(_t%d); sp_PolyArray_push(_t%d, SP_STR_BOX(_t%d));", tr, tr, tk);
   else if (env) {
-    buf_printf(b, " SP_GC_ROOT(_t%d); sp_PolyArray_push(_t%d, sp_box_str(", tr, tr);
+    buf_printf(b, " SP_GC_ROOT(_t%d); sp_PolyArray_push(_t%d, sp_box_str_new(", tr, tr);
     if (is_rassoc) buf_printf(b, "sp_str_dup_external(_t%d->order[_t%d])", th, ti);
     else buf_printf(b, "_t%d", ta);
     buf_puts(b, "));");

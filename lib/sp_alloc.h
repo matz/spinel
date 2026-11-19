@@ -302,7 +302,8 @@ static SP_ALWAYS_INLINE inline char *sp_str_alloc_born(size_t len, int nogc) {
   char *body = (char *)(h + 1);
   body[0] = (char)0xfe;
   body[1 + len] = 0;
-  r->data = body + 1; r->len = (int64_t)len; r->cap = (int64_t)len; r->binary = 0; r->temporarily_locked = 0;
+  r->data = body + 1; r->len = (int64_t)len; r->cap = (int64_t)len; r->binary = 0;
+  r->temporarily_locked = 0; r->copy_on_intern = 0;
   if (sp_alloc_report_on) sp_alloc_report_str(len);
   return body + 1;
 }
@@ -730,10 +731,8 @@ void *sp_pl_realloc(void *p, size_t newn);   /* lib/sp_slab.c: a slab block know
                                           proc runs on that fiber). */
 
 static inline sp_RbVal sp_box_int(sp_int v)    { sp_RbVal r; r.tag = SP_TAG_INT;  r.cls_id = 0; r.v.i = v; return r; }
-/* A NULL char* IS Ruby nil throughout the string paths (the nullable-string
-   invariant); preserve that across the boxing boundary, or a boxed nil-string
-   carries SP_TAG_STR and fails tag-keyed comparisons -- `defined?(x).should
-   == nil` compared STR(NULL) against NIL and answered false. */
+/* A temporary bytes view for readers of the legacy tag. A String value
+   leaving the reader is boxed with its handle. NULL is the nil box. */
 static inline sp_RbVal sp_box_str(const char *v){ sp_RbVal r; if (!v) { r.tag = SP_TAG_NIL; r.cls_id = 0; r.v.s = NULL; return r; } r.tag = SP_TAG_STR;  r.cls_id = 0; r.v.s = v; return r; }
 /* Read a boxed base String without converting its representation. */
 static inline sp_bool sp_rbval_is_string(sp_RbVal v) {
@@ -765,7 +764,7 @@ static inline sp_RbVal sp_rbval_str(sp_RbVal v) {
 /* A String mutator's value from a poly arm, which answers the box or the
    unboxed String by mutator: boxed either way (a NULL String is nil). */
 static inline sp_RbVal sp_box_same(sp_RbVal v){ return v; }
-#define SP_BOX_STR_OR_POLY(x) _Generic((x), sp_RbVal: sp_box_same, default: sp_box_str)(x)
+#define SP_BOX_STR_OR_POLY(x) _Generic((x), sp_RbVal: sp_box_same, default: sp_box_str_new)(x)
 static inline sp_RbVal sp_box_float(sp_float v){ sp_RbVal r; r.tag = SP_TAG_FLT;  r.cls_id = 0; r.v.f = v; return r; }
 /* Write the full union word, not just the narrow `b` member: hash keys and
    poly equality compare bool values through `v.i`, so bytes left
@@ -796,9 +795,8 @@ static inline sp_RbVal sp_box_ofloat(sp_ofloat o) { return o.nil ? sp_box_nil() 
    by the C type the arm's value has. Expanded only in a program's own C,
    after every type it names is declared. */
 static inline sp_RbVal sp_bi_box_id(sp_RbVal v) { return v; }
-static inline sp_RbVal sp_bi_box_mstr(char *v) { return sp_box_str(v); }
 #define SP_BI_BOX(x) _Generic((x), sp_RbVal: sp_bi_box_id, sp_int: sp_box_int, sp_float: sp_box_float, \
-  sp_bool: sp_box_bool, const char *: sp_box_str, char *: sp_bi_box_mstr, sp_oint: sp_box_oint, \
+  sp_bool: sp_box_bool, const char *: sp_box_str_new, char *: sp_box_str_new, sp_oint: sp_box_oint, \
   sp_ofloat: sp_box_ofloat, sp_PolyArray *: sp_box_poly_array, \
   sp_FloatArray *: sp_box_float_array, sp_StrArray *: sp_box_str_array)(x)
 /* The value of a nullable slot used where CRuby's nil would raise. The three

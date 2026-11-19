@@ -3134,7 +3134,7 @@ static int ct_implied_row(Compiler *c, int id, const char *name, int op) {
    function of the name (cls is not read), as call_target's flags; the planned
    rows ask instances. -1 with ML_NONE where cls has no
    class, the table holds no method, or an undef of the name on cls's chain
-   provably ran before id (ct_undef_before: *ml is ML_NONE with MLW_RECORD; a
+   provably ran before id (cplan_undef_before: *ml is ML_NONE with MLW_RECORD; a
    planned row's reader takes the table's program-wide undef, as it always
    did): the call is lowered as a
    call of `name`, which binds through the table, so that call is not the
@@ -3149,7 +3149,7 @@ static int ct_table(Compiler *c, int cls, const char *name, unsigned flags, int 
    the record places it, not in a method's body or a block it cannot place,
    which may run before the undef? Anywhere else the table's method stands, as
    cplan_hook_target keeps it. */
-static int ct_undef_before(Compiler *c, int site, int cls, const char *name) {
+int cplan_undef_before(Compiler *c, int site, int cls, const char *name) {
   if (site < 0 || elab_in_unplaced_block(c, site)) return 0;
   int framed = elab_plan_enter(c, site);
   LoadPoint p = elab_point_of(c, site);
@@ -3177,7 +3177,7 @@ int cplan_implied_target(Compiler *c, int site, int op, int cls, const char *nam
      the sites before the undef, as cplan_undef_stops takes the undef
      program-wide) */
   if (undef && planned) return -1;
-  if (undef && ct_undef_before(c, site, cls, name)) {
+  if (undef && cplan_undef_before(c, site, cls, name)) {
     m->why = MLW_RECORD;   /* (the record proves the call raises, as call_target's none) */
     return -1;
   }
@@ -9210,7 +9210,6 @@ CallPlan cplan_refuse(Compiler *c, int id) {
 
 static void cpoly_family(PolyPlan *p, int *cap, int fam);
 static void cpoly_trial(PolyPlan *p, int *cap, int t);
-static int cpoly_has_family(const PolyPlan *p, int fam);
 static int cpoly_str_trial(Compiler *c, int id, const char *name, int argc, const int *argv,
                            const TyKind *atmp_ty, TyKind ret, const PolyPlan *p);
 static int cpoly_cls_value_arms(Compiler *c, int id, const char *name, int argc, const PolyArgs *A,
@@ -9603,16 +9602,16 @@ static void cpoly_prearms_n(Compiler *c, int id, const char *name, int argc, con
   if (ps.kw_pos && !ps.has_splat_arg && cpoly_str_trial(c, id, name, argc, argv, atmp_ty, ret, p))
     cpoly_trial(p, cap, PT_STR);
   cpoly_cases_n(c, id, name, argc, argv, ret, atmp_ty, &ps, splat_a, p, cap);
-  if (cpoly_has_family(p, PB_ND_GENERIC) && !cpoly_has_family(p, PB_ND_REPLACE) &&
-      !cpoly_has_family(p, PB_ND_UPTO) &&
-      !cpoly_has_family(p, PB_ND_ROUND) && !cpoly_has_family(p, PB_ND_NUM) &&
+  if (cplan_poly_has_family(p, PB_ND_GENERIC) && !cplan_poly_has_family(p, PB_ND_REPLACE) &&
+      !cplan_poly_has_family(p, PB_ND_UPTO) &&
+      !cplan_poly_has_family(p, PB_ND_ROUND) && !cplan_poly_has_family(p, PB_ND_NUM) &&
       !cpoly_obj_default_n(c, id, name, kwh, pos_argc, splat_a, p, cap))
     cpoly_trial(p, cap, PT_GENERIC_TAIL);
   /* the families that write the switch's `default:` themselves */
   static const int dflt[] = { PB_ND_GENERIC, PB_ND_FIRSTN, PB_ND_KEYS, PB_ND_MERGE, PB_ND_AREF2, PB_ND_AREF,
                               PB_PUSH, PB_INCLUDE_CASES, PB_PRED_N };
   int has_default = ps.cover || (ps.strftime && ps.ncand == 0);
-  for (size_t i = 0; i < sizeof dflt / sizeof dflt[0]; i++) has_default |= cpoly_has_family(p, dflt[i]);
+  for (size_t i = 0; i < sizeof dflt / sizeof dflt[0]; i++) has_default |= cplan_poly_has_family(p, dflt[i]);
   if (!is_setter_val && !has_default) cpoly_trial(p, cap, PT_DEFAULT_N);
 }
 
@@ -9792,7 +9791,7 @@ static void cpoly_trial(PolyPlan *p, int *cap, int t) {
   cpoly_add(p, cap, PA_TRIAL, PA_KEY_TRIAL + t, -1, TY_UNKNOWN, PC_SAME);
 }
 
-static int cpoly_has_family(const PolyPlan *p, int fam) {
+int cplan_poly_has_family(const PolyPlan *p, int fam) {
   for (int i = 0; i < p->n; i++)
     if (p->arm[i].key == PA_KEY_BUILTIN + fam) return 1;
   return 0;
@@ -9811,9 +9810,9 @@ static int cpoly_str_trial(Compiler *c, int id, const char *name, int argc, cons
   static const int str_tag[] = { PB_LEN, PB_EMPTY, PB_STRT, PB_SPLIT, PB_UNPACK1, PB_STR_DELETE,
                                  PB_STR_PARTITION, PB_STR_SETOP, PB_STR_ENCODE, PB_STR_SPLIT_N };
   for (size_t i = 0; i < sizeof str_tag / sizeof str_tag[0]; i++)
-    if (cpoly_has_family(p, str_tag[i])) return 0;
+    if (cplan_poly_has_family(p, str_tag[i])) return 0;
   /* an Integer's bit reference reads a String's character too */
-  if (cpoly_has_family(p, PB_INT_BITREF) && (ret == TY_POLY || ret == TY_STRING)) return 0;
+  if (cplan_poly_has_family(p, PB_INT_BITREF) && (ret == TY_POLY || ret == TY_STRING)) return 0;
   return 1;
 }
 
@@ -10008,8 +10007,8 @@ static void cpoly_resolve(Compiler *c, int id, PolyPlan *p, int full) {
     /* a default written by now (the Object reopening's, a builtin one), or
        the builtin surface's, and the raise when it declines */
     int done = n1 > n0;
-    for (int f = PB_D_ENUM_EACH; f <= PB_D_HASH; f++) done |= cpoly_has_family(p, f);
-    if (cpoly_has_family(p, PB_D_ARRAY_TRANSFORM)) cpoly_trial(p, &cap, PT_ARRAY_FALLBACK);
+    for (int f = PB_D_ENUM_EACH; f <= PB_D_HASH; f++) done |= cplan_poly_has_family(p, f);
+    if (cplan_poly_has_family(p, PB_D_ARRAY_TRANSFORM)) cpoly_trial(p, &cap, PT_ARRAY_FALLBACK);
     if (!done) cpoly_trial(p, &cap, PT_DEFAULT0);
   }
   else cpoly_user_arms_n(c, id, name, argc, nt_arr(c->nt, args, "arguments", &argc), p->ret, p, full);
@@ -10248,6 +10247,7 @@ int cplan_visibility_class(Compiler *c, int id, int ci) {
    as ct_main_stopped's. cplan_mm_chain stays on the tables: its one caller is
    the entry path (ver_mm_at), which reads the record. */
 static int cplan_mm_method(Compiler *c, int id, int ci, int cmethod) {
+  if (ci >= 0 && !cmethod && cplan_undef_before(c, id, ci, METHOD_MISSING_NAME)) return -1;
   int t = ci < 0 ? -1 : call_target(c, id, ci, METHOD_MISSING_NAME, CT_REACH | (cmethod ? CT_CMETHOD : 0), NULL);
   if (t >= 0 || (!cmethod && ci >= 0 && class_is_blank_slate(c, ci))) return t;
   int obj = comp_core_class(c, CORE_OBJECT);
@@ -10265,6 +10265,25 @@ int cplan_has_method_missing(Compiler *c, int id, int ci, int cmethod) {
   return cplan_mm_method(c, id, ci, cmethod) >= 0;
 }
 
+int cplan_string_missing(Compiler *c, int id, const char *name, int *hook, int *undef) {
+  int ci = comp_core_class(c, CORE_STRING);
+  if (ci < 0 || !elab_method_versions(c, name) || cplan_builtin_call(c, id) || !builtin_instance_method_known("String", name)) return 0;
+  *undef = cplan_undef_before(c, id, ci, name) ? 1 : cplan_undef_at(c, id, ci, name);
+  if (!*undef) return 0;
+  *hook = cplan_mm_method(c, id, ci, 0);
+  return 1;
+}
+
+int cplan_string_builtin_fallback(Compiler *c, int id, const char *name) {
+  if (cplan_builtin_call(c, id) || nt_int(c->nt, id, "string_live_builtin", 0)) return 1;
+  int cls = comp_core_class(c, CORE_STRING);
+  if (cls < 0 || !elab_method_versions(c, name) || !cplan_runs_once(c, id)) return 0;
+  int framed = elab_plan_enter(c, id);
+  const LrDef *d = NULL;
+  int state = elab_method_at(c, cls, name, 0, elab_point_of(c, id), &d);
+  if (framed) elab_plan_leave(c);
+  return state == ELAB_NO && !d;
+}
 /* The super a method's body is, unconditionally (`super`, `super(n, *a)`):
    its only statement; -1 for any other body */
 static int cplan_body_super(Compiler *c, int mi) {
@@ -13005,6 +13024,71 @@ static int ver_guard_at_cmp(const void *a, const void *b) {
   const VerGuardAt *x = a, *y = b;
   return x->depth != y->depth ? y->depth - x->depth : x->id - y->id;
 }
+static void ver_need_history_guard(Compiler *c, int cls, const char *name) {
+  int k = 0;
+  while (k < c->nver_guards && !(c->ver_guards[k].cls == cls && sp_streq(c->ver_guards[k].name, name))) k++;
+  if (k < c->nver_guards) return;
+  if (!(k & (k - 1)) && !(c->ver_guards = realloc(c->ver_guards, sizeof *c->ver_guards * (size_t)(k ? 2 * k : 1)))) {
+    fprintf(stderr, "spinel: out of memory\n"); exit(1);
+  }
+  c->ver_guards[c->nver_guards++] = (struct VerGuard){ name, cls, 0 };
+}
+/* See call_plan.h. An undef in this class's own history stops lookup
+   only when no prepend answers ahead of it. A non-undef in the same
+   history can restore a Ruby method or reveal one behind it. */
+int cplan_string_undef_guard(Compiler *c, int id, const char *name) {
+  int cls = comp_core_class(c, CORE_STRING);
+  if (!builtin_owns_instance_method("String", name)) return -1;
+  ElabVersion own[VER_MAX_ARMS], chain[VER_MAX_ARMS];
+  int nv = elab_history_versions(c, cls, 0, name, own, VER_MAX_ARMS);
+  if (nv <= 0) return -1;
+  DispArm arm[VER_MAX_ARMS];
+  char sel[VER_MAX_ARMS][32];
+  for (int i = 0; i < nv; i++) {
+    const LrDef *v = own[i].v;
+    if (v->may == LR_MAY_IN || v->body || v->kind != LR_UNDEF) return -1;
+    ver_cell_name(own[i].cell, sel[i]);
+    arm[i] = (DispArm){ sel[i], own[i].n, name, own[i].cell + 1, 0 };
+  }
+  int nc = elab_chain_versions(c, cls, 0, name, chain, VER_MAX_ARMS);
+  if (nc != nv || chain[0].hist != own[0].hist || call_answers(c, id, cls, name, 0, NULL)) return -1;
+  ver_need_history_guard(c, cls, name);
+  return disp_cell_any((NodeTable *)c->nt, arm, nv);
+}
+
+int cplan_string_hook_guard(Compiler *c, int id, int hook) {
+  int cls = comp_core_class(c, CORE_STRING);
+  if (hook < 0 || c->scopes[hook].class_id != cls) return -1;
+  const char *selector = cplan_conditional_entry_selector(c, hook);
+  if (selector) {
+    const NodeTable *nt = c->nt;
+    int def = c->scopes[hook].def_node, n = 0;
+    DispArm arms[VER_MAX_ARMS];
+    for (int a = nt_int(nt, def, "cond_first_arm", 0); a > 0; a = nt_int(nt, a, "cond_next_arm", 0)) {
+      if (n == VER_MAX_ARMS) return -1;
+      arms[n] = (DispArm){ selector, n + 1, METHOD_MISSING_NAME, 0, 0 };
+      n++;
+    }
+    return n ? disp_cell_any((NodeTable *)nt, arms, n) : -1;
+  }
+  int framed = elab_plan_enter(c, id);
+  const LrDef *d = NULL;
+  int placed = elab_method_at(c, cls, METHOD_MISSING_NAME, 0, elab_point_of(c, id), &d);
+  if (framed) elab_plan_leave(c);
+  if (placed == ELAB_YES && cplan_runs_once(c, id)) return -1;
+  /* A single conditional def has one callable implementation. The chain
+     must otherwise be empty so a clear cell means the default hook. */
+  ElabVersion v[1];
+  if (elab_chain_versions(c, cls, 0, METHOD_MISSING_NAME, v, 1) != 1 ||
+      v[0].v->kind != LR_DEF || !v[0].v->may || v[0].v->may == LR_MAY_IN || v[0].v->body) return -1;
+  ElabVersion own[1];
+  if (elab_history_versions(c, cls, 0, METHOD_MISSING_NAME, own, 1) != 1 || own[0].hist != v[0].hist) return -1;
+  char sel[32];
+  ver_cell_name(v[0].cell, sel);
+  DispArm arm = { sel, v[0].n, METHOD_MISSING_NAME, v[0].cell + 1, 0 };
+  ver_need_history_guard(c, cls, METHOD_MISSING_NAME);
+  return disp_cell_any((NodeTable *)c->nt, &arm, 1);
+}
 static void ver_main_undef_guards(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   ElabVersion vs[VER_MAX_ARMS];
@@ -13045,13 +13129,7 @@ static void ver_main_undef_guards(Compiler *c) {
     if (in_list) for (int k = 0; k < np; k++) ver_list_put(nt, pl, top, 0, pre[k]);
     else nt_replace_child(nt, pl, top, disp_ahead(nt, pre, np, top));
     free(pre);
-    int k = 0;
-    while (k < c->nver_guards && !sp_streq(c->ver_guards[k].name, name)) k++;
-    if (k < c->nver_guards) continue;
-    if (!(k & (k - 1)) && !(c->ver_guards = realloc(c->ver_guards, sizeof *c->ver_guards * (size_t)(k ? 2 * k : 1)))) {
-      fprintf(stderr, "spinel: out of memory\n"); exit(1);
-    }
-    c->ver_guards[c->nver_guards++] = (struct VerGuard){ name, 0 };
+    ver_need_history_guard(c, -1, name);
   }
   free(at);
   free(par);
@@ -13654,10 +13732,13 @@ static int ver_cells_put(Compiler *c) {
       ver_write_version(nt, par, &cells, &vs[j], rt, pass, &w, &nw, &nh);
     }
   }
-  for (int i = 0; i < c->nver_guards; i++) {   /* (and the cells a guard at a call reads: ver_main_undef_guards) */
-    if (c->ver_guards[i].cells == pass) continue;
-    c->ver_guards[i].cells = 1;
-    for (int j = 0, nv = elab_chain_versions(c, -1, 1, c->ver_guards[i].name, vs, VER_MAX_ARMS); j < nv; j++)
+  for (int i = 0; i < c->nver_guards; i++) {
+    struct VerGuard *g = &c->ver_guards[i];
+    if (g->cells == pass) continue;
+    g->cells = 1;
+    int nv = g->cls < 0 ? elab_chain_versions(c, -1, 1, g->name, vs, VER_MAX_ARMS)
+                        : elab_history_versions(c, g->cls, 0, g->name, vs, VER_MAX_ARMS);
+    for (int j = 0; j < nv; j++)
       ver_write_version(nt, par, &cells, &vs[j], 0, pass, &w, &nw, &nh);
   }
   if (c->nver_vis_reads) ver_guard_writes(c, par, &cells, &w, &nw, &nh, pass);   /* (and a guarded call's, CallPlan.vis_cell) */
@@ -13822,7 +13903,8 @@ int ver_entries_demand(Compiler *c) {
         if (callbacks[i].roles & BCR_ARG) call_target(c, id, symbol, callbacks[i].name, CT_IMPLIED, NULL);
     }
   late = c->nver_late;
-  if (!any && !late && !c->ver_vis_read_new) return 0;
+  int new_guard = c->nver_guards && !c->ver_guards[c->nver_guards - 1].cells;
+  if (!any && !late && !c->ver_vis_read_new && !new_guard) return 0;
   const NodeTable *nt = c->nt;
   unsigned long sum0 = ver_entries_sum(c), edits0 = nt->edits;
   unsigned ver0 = nt->version;
@@ -13834,5 +13916,5 @@ int ver_entries_demand(Compiler *c) {
   if (ver_cells_put(c) || taken || any || late || sum0 != ver_entries_sum(c) || scopes0 != c->nscopes ||
       nodes0 != nt->count || ver0 != nt->version || edits0 != nt->edits)
     ver_memo_drop(c);   /* (the versions kept before the entries and the writes are asked again) */
-  return any || late;
+  return any || late || new_guard;
 }

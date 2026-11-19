@@ -33,7 +33,7 @@ ARM	src/codegen_call_method.c	emit_method_obj_target	sp_%sArray_push	2	a String 
 ARM	src/codegen_call_method.c	emit_method_obj_target	sp_%sArray_set	2	a String kind takes the _e arm before this one; this arm is the other kinds
 ROW	src/codegen_call_recv.c	emit_array_splat_mutator	sp_%sArray_insert	1	the suffix is the container row's (typed_elem_store_sfx, nil_store_sfx, or a variable assigned from them) in the same statement, formatted here and not routed through emit_elem_entry
 ROW	src/codegen_call_recv.c	emit_array_splat_mutator	sp_%sArray_unshift	1	the suffix is the container row's (typed_elem_store_sfx, nil_store_sfx, or a variable assigned from them) in the same statement, formatted here and not routed through emit_elem_entry
-READ	src/codegen_call_recv.c	emit_hash_call	sp_%sHash_	6	the operation is a read or an aggregate chosen at the site (get, oget, vget, entries, to_a, min, max, a set operation, a length), not a store or a search
+READ	src/codegen_call_recv.c	emit_hash_call	sp_%sHash_	5	the operation is a read or an aggregate chosen at the site (get, oget, vget, entries, to_a, min, max, a set operation, a length), not a store or a search
 POLY	src/codegen_call_recv.c	emit_hash_call	sp_%sHash_set	2	the container holds boxed (Poly) values
 READ	src/codegen_call_recv.c	emit_hash_entry_copy	sp_%sHash_	2	the operation is a read or an aggregate chosen at the site (get, oget, vget, entries, to_a, min, max, a set operation, a length), not a store or a search
 READ	src/codegen_call_recv.c	emit_kind_array_call	sp_%sArray_	6	the operation is a read or an aggregate chosen at the site (get, oget, vget, entries, to_a, min, max, a set operation, a length), not a store or a search

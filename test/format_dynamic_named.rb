@@ -16,3 +16,19 @@ begin
 rescue KeyError => e
   puts "KeyError"
 end
+begin
+  format("%{name}", {"name" => "string"})
+rescue KeyError => e
+  p [e.message, e.key]
+end
+puts format("%{name}", {"name" => "string", :name => "symbol"})
+h = {"name" => "string", "other" => 2}
+h.default = "fallback"
+puts format("%{name}", h)
+puts "%{name}" % h
+h = Hash.new { |owner, key| key.inspect }
+h[:present] = nil
+p format("%{missing}", h), format("%{present}", h)
+typed = {"name" => "string", "other" => 2}
+typed.default_proc = proc { |owner, key| key.class.to_s }
+p format("%{name}", typed)

@@ -192,7 +192,7 @@ static int emit_exc_detailed_options(Compiler *c, int id, int recv, int argc, co
   buf_printf(b, "const char *_msg%d = %s(_e%d); ", te,
              exc_has_user_msg_override(c) ? "sp_user_exc_message" : "sp_exc_message", te);
   int boxed = repr_of(c, id).kind == RK_BOXED;
-  if (boxed) buf_puts(b, "sp_box_str(");
+  if (boxed) buf_puts(b, "sp_box_str_new(");
   buf_printf(b, "_h%d ? sp_exc_detailed_highlight(_e%d, _msg%d) : "
                 "sp_exc_detailed_text(_e%d, _msg%d)", th, te, te, te, te);
   buf_puts(b, boxed ? "); })" : "; })");

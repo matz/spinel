@@ -1731,10 +1731,14 @@ sp_PolyArray *sp_sock_getaddrinfo(const char *host, sp_int port, sp_int family, 
     const char *ips = sp_str_from_bytes(ip, strlen(ip));
     SP_GC_ROOT_STR(ips);   /* held across the row's allocation */
     sp_PolyArray *row = sp_PolyArray_new();
-    sp_PolyArray_push(row, sp_box_str(fam == AF_INET6 ? SPL("AF_INET6") : SPL("AF_INET")));
+    SP_GC_ROOT(row);
+    sp_PolyArray_push(row, sp_box_str_new(fam == AF_INET6 ? SPL("AF_INET6") : SPL("AF_INET")));
     sp_PolyArray_push(row, sp_box_int((sp_int)p));
-    sp_PolyArray_push(row, sp_box_str(ips));
-    sp_PolyArray_push(row, sp_box_str(ips));
+    /* The numeric host and IP share one String in this row. */
+    sp_RbVal address = sp_box_str_new(ips);
+    SP_GC_ROOT_RBVAL(address);
+    sp_PolyArray_push(row, address);
+    sp_PolyArray_push(row, address);
     sp_PolyArray_push(row, sp_box_int((sp_int)fam));
     sp_PolyArray_push(row, sp_box_int((sp_int)stype));
     sp_PolyArray_push(row, sp_box_int((sp_int)proto));
@@ -1807,7 +1811,7 @@ sp_PolyArray *sp_sock_unpack_sockaddr_in(const char *sa) {SP_GC_ROOT_STR(sa);
   sp_PolyArray *out = sp_PolyArray_new();
   SP_GC_ROOT(out);
   sp_PolyArray_push(out, sp_box_int((sp_int)port));
-  sp_PolyArray_push(out, sp_box_str(sp_str_from_bytes(ip, strlen(ip))));
+  sp_PolyArray_push(out, sp_box_str_new(sp_str_from_bytes(ip, strlen(ip))));
   return out;
 }
 
@@ -2044,8 +2048,8 @@ const char *sp_sock_recv(sp_File *f, sp_int len) {SP_GC_ROOT(f);
   sp_str_mark_binary(s);
   return s;
 }
-/* Fills the caller's address slots; returns the payload. */
-const char *sp_sock_recvfrom(sp_File *f, sp_int len, const char **ip_out, sp_int *port_out) {SP_GC_ROOT(f);
+/* Returns the binary payload and its sender's address row. */
+sp_PolyArray *sp_sock_recvfrom(sp_File *f, sp_int len) {SP_GC_ROOT(f);
   extern int sp_net_udp_recv_from(int fd, char *buf, int cap, char *ipbuf, int ipcap, int *port_out);
   sp_sock_require(f, "recvfrom");
   char ipbuf[64];
@@ -2075,11 +2079,22 @@ const char *sp_sock_recvfrom(sp_File *f, sp_int len, const char **ip_out, sp_int
     { int e = errno; sp_io_unuse(f); errno = e; }
   }
   if (n < 0) sp_file_raise_errno("recvfrom", "");
-  char *s = (char *)sp_str_from_bytes(buf, (size_t)n); SP_GC_ROOT_STR(s);   /* across the address's copy */
-  sp_str_mark_binary(s);
-  *ip_out = sp_str_from_bytes(ipbuf, strlen(ipbuf));
-  *port_out = (sp_int)port;
-  return s;
+  sp_RbVal payload = sp_box_obj(sp_String_from_cbinstr(buf, n), SP_BUILTIN_STRBUF);
+  SP_GC_ROOT_RBVAL(payload);
+  sp_PolyArray *from = sp_PolyArray_new();
+  SP_GC_ROOT(from);
+  const char *family = strchr(ipbuf, ':') ? "AF_INET6" : "AF_INET";
+  sp_PolyArray_push(from, sp_box_obj(sp_String_from_cstr(family), SP_BUILTIN_STRBUF));
+  sp_PolyArray_push(from, sp_box_int(port));
+  sp_RbVal address = sp_box_obj(sp_String_from_cstr(ipbuf), SP_BUILTIN_STRBUF);
+  SP_GC_ROOT_RBVAL(address);
+  sp_PolyArray_push(from, address);
+  sp_PolyArray_push(from, address);
+  sp_PolyArray *result = sp_PolyArray_new();
+  SP_GC_ROOT(result);
+  sp_PolyArray_push(result, payload);
+  sp_PolyArray_push(result, sp_box_poly_array(from));
+  return result;
 }
 sp_int sp_sock_shutdown(sp_File *f, sp_int how) {SP_GC_ROOT(f);
   extern int sp_net_shutdown(int fd, int how);

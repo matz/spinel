@@ -189,6 +189,7 @@ void sp_re_switch_in(sp_re_switch *s);
 void sp_re_thread_begin(void);   /* a new thread starts with no match */
 sp_MatchData *sp_re_matchdata_at(mrb_regexp_pattern *pat, const char *str, sp_int cpos);
 const char *sp_MatchData_aref(sp_MatchData *m, sp_int i);
+sp_RbVal sp_MatchData_aref_box(sp_MatchData *m, sp_int i);
 const char *sp_MatchData_aref_name(sp_MatchData *m, const char *name);
 sp_StrArray *sp_MatchData_names(sp_MatchData *m);
 const char *sp_MatchData_string(sp_MatchData *m);

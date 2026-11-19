@@ -5721,7 +5721,14 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
             else snprintf(nb, sizeof nb, "%s(_t%d)", comp_class_reader_fn(c, name, 0), tk9);
             buf_puts(b, " default: ");
             emit_exc_cls_name_pick(c, id, name, tk9, tr9, slot9, onil9, 0, b);
-            if (slot9 == TY_POLY) buf_printf(b, "_t%d = sp_box_nullable_str(%s); break;", tr9, nb);
+            if (slot9 == TY_POLY && !is_class_name_name(name)) {
+              /* A class display override returns its Ruby object directly.
+                 The builtin display borrows a C name for a fresh String. */
+              buf_printf(b, "if (!sp_user_display_box(sp_box_class(_t%d), %d, &_t%d)) "
+                            "_t%d = SP_SEBOX(sp_String_from_cstr(%s(_t%d))); break;",
+                         tk9, is_inspect_name(name), tr9, tr9, comp_class_reader_fn(c, name, 1), tk9);
+            }
+            else if (slot9 == TY_POLY) buf_printf(b, "_t%d = sp_box_str_new(%s); break;", tr9, nb);
             else if (slot9 == TY_STRBUF) buf_printf(b, "_t%d = SP_STR_HDL(%s); break;", tr9, nb);
             else buf_printf(b, "_t%d = %s; break;", tr9, nb);
           }
@@ -6076,7 +6083,8 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
   if (recv >= 0 && argc == 0 && is_name_reader(name) &&
       nt_kind(nt, recv) == NK_CallNode &&
       nt_str(nt, recv, "name") && sp_streq(nt_str(nt, recv, "name"), "class")) {
-    if (comp_ntype(c, recv) == TY_CLASS) {
+    Repr class_recv = repr_of(c, recv);
+    if (class_recv.as_ty == TY_CLASS) {
       /* A class method `name` / `to_s` / `inspect` of the program's own:
          the class value dispatch calls it for the classes that define one.
          Only for the class of a program object (not an exception, whose
@@ -6109,7 +6117,8 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
       buf_printf(b, "; %s(_cl%d); })",
                  comp_class_reader_fn(c, name, 0), _clt);
     }
-    else emit_expr(c, recv, b);
+    else if (class_recv.as_ty == TY_STRING && class_recv.kind == RK_PTR) emit_expr(c, recv, b);
+    else return 0;
     return 1;
   }
   /* obj.class.cmeth(...) -> dispatch class method on obj's runtime class

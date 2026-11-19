@@ -2576,7 +2576,7 @@ int emit_srange_route_boxed(Compiler *c, int v, Buf *b) {
   else if (se) buf_printf(b, "(sp_String *)%s.%s", r, se == 1 ? "hf" : "hl");
   else buf_printf(b, "sp_srange_extreme_h(%s, %d)", r, sx == 2);
   str_box_close(b);
-  buf_puts(b, " : sp_box_str(");
+  buf_puts(b, " : sp_box_str_new(");
   /* this arm runs for an endpoint the Range keeps no handle for: what it
      boxes is no String the rule shares */
   size_t arm_at = b->len;

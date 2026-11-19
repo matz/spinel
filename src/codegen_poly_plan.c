@@ -890,7 +890,7 @@ static int poly_user_arm_n_replay(Compiler *c, int id, const char *name, const P
       if (!rm) return 0;
       Buf cb; memset(&cb, 0, sizeof cb);
       int sp = stk >= 0 ? stk : atmp[0];
-      if (sp_streq(rm->ret, "string?")) buf_puts(&cb, "sp_box_nullable_str(");
+      if (sp_streq(rm->ret, "string?")) buf_puts(&cb, "sp_box_nullable_str_new(");
       buf_printf(&cb, "%s((%s *)_t%d.v.p, _t%d->len, _t%d->data)",
                  rm->csym, c->classes[nk].c_struct, tv, sp, sp);
       if (sp_streq(rm->ret, "string?")) buf_puts(&cb, ")");
@@ -2041,7 +2041,7 @@ void emit_poly_prearms0(Compiler *c, int id, const char *name, const PolySpecial
   const char *hopen = hob.p ? hob.p : "", *hclose = hcb.p ? hcb.p : "";
   if (is_class_named) {
     if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_CLASS_NAMED, -1, TY_UNKNOWN, PC_SAME);
-    const char *sbopen = (ret == TY_POLY) ? "sp_box_str(" : hopen;
+    const char *sbopen = (ret == TY_POLY) ? "sp_box_str_new(" : hopen;
     const char *sbclose = (ret == TY_POLY) ? ")" : hclose;
     /* a boxed class's #name is the interned frozen String the typed
        forms answer (sp_str_frozen_name, which emit_call wraps around
@@ -2054,6 +2054,9 @@ void emit_poly_prearms0(Compiler *c, int id, const char *name, const PolySpecial
       buf_printf(b, "if (_t%d.tag == SP_TAG_CLASS) { const char *_cn%d = sp_class_name_or_nil(sp_unbox_class(_t%d)); "
                     "_t%d = _cn%d ? %ssp_str_uminus_val(_cn%d)%s : %s; } else ",
                  tv, tv, tv, tr, tv, sbopen, tv, sbclose, ret == TY_POLY ? "sp_box_nil()" : "NULL");
+    else if (!fzn && ret == TY_POLY)
+      buf_printf(b, "if (_t%d.tag == SP_TAG_CLASS) _t%d = SP_SEBOX(sp_String_from_cstr(%s(_t%d))); else ",
+                 tv, tr, c->has_anonymous_classes ? "sp_class_val_display" : "sp_class_val_name", tv);
     else
       buf_printf(b, "if (_t%d.tag == SP_TAG_CLASS) _t%d = %s%s%s(_t%d)%s%s; else ",
                  tv, tr, sbopen, fzn ? "sp_str_uminus_val(" : "",
@@ -2071,7 +2074,7 @@ void emit_poly_prearms0(Compiler *c, int id, const char *name, const PolySpecial
      they stand beside the program's arm (`instance_methods(false).each
      { |m| m.name }` in a program with a name of its own) */
   else if (sp_streq(name, "name") && (ret == TY_POLY || ret == TY_STRING || ret == TY_STRBUF)) {
-    const char *sbopen = (ret == TY_POLY) ? "sp_box_str(" : hopen;
+    const char *sbopen = (ret == TY_POLY) ? "sp_box_str_new(" : hopen;
     const char *sbclose = (ret == TY_POLY) ? ")" : hclose;
     buf_printf(b, "if (_t%d.tag == SP_TAG_ENCODING) _t%d = %ssp_str_uminus_val(_t%d.v.s)%s; "
                   "else if (_t%d.tag == SP_TAG_SYM) "
@@ -2343,7 +2346,7 @@ void emit_poly_prearms0(Compiler *c, int id, const char *name, const PolySpecial
       if (ret != TY_POLY) buf_printf(b, "%s(_t%d.v.s)", str_op->fn, tv);
       else if (str_op->result == TY_INT_ARRAY) buf_printf(b, "sp_box_int_array(%s(_t%d.v.s))", str_op->fn, tv);
       else if (str_op->result == TY_STR_ARRAY) buf_printf(b, "sp_box_str_array(%s(_t%d.v.s))", str_op->fn, tv);
-      else buf_printf(b, "sp_box_str(%s(_t%d.v.s))", str_op->fn, tv);
+      else buf_printf(b, "sp_box_str_new(%s(_t%d.v.s))", str_op->fn, tv);
       buf_puts(b, "; }\nelse ");
     }
     /* #split is the same shape but answers an ARRAY, so it needs the slot
@@ -3717,7 +3720,7 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
   if (is_strdel && (ret == TY_POLY || ret == TY_STRING)) {
     if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_STR_DELETE, -1, TY_UNKNOWN, PC_SAME);
     buf_printf(b, "if (_t%d.tag == SP_TAG_STR) { _t%d = ", tv, tr);
-    if (ret == TY_POLY) buf_printf(b, "sp_box_str(sp_str_delete(_t%d.v.s, %s))", tv, strarg);
+    if (ret == TY_POLY) buf_printf(b, "sp_box_str_new(sp_str_delete(_t%d.v.s, %s))", tv, strarg);
     else buf_printf(b, "sp_str_delete(_t%d.v.s, %s)", tv, strarg);
     buf_puts(b, "; }\nelse ");
   }
@@ -3733,34 +3736,57 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
       buf_printf(b, "sp_str_%s(_t%d.v.s, %s)", name, tv, strarg);
     buf_puts(b, "; }\nelse ");
   }
-  /* the multi-set forms on a TAG_STR receiver (#4195) */
+  /* The set operation owns the builtin base String arm. Reopened methods
+     and subclass receivers reach the class switch below. */
   if (is_strsetop_n) {
     int is_cnt = sp_streq(name, "count");
     if ((is_cnt && (ret == TY_POLY || ret == TY_INT)) ||
         (!is_cnt && (ret == TY_POLY || ret == TY_STRING))) {
       if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_STR_SETOP, -1, TY_UNKNOWN, PC_SAME);
-      buf_printf(b, "if (_t%d.tag == SP_TAG_STR) { ", tv);
-      char sets[256]; int sl;
-      sl = snprintf(sets, sizeof sets, "(const char *[]){");
-      for (int a = 0; a < argc && sl < (int)sizeof sets - 16; a++) {
-        int t = atmp[a];
-        /* A later set read can allocate before the helper consumes this one. */
-        if (atmp_ty[a] == TY_STRBUF) {
-          t = ++g_tmp;
-          buf_printf(b, "const char *_t%d = sp_strbuf_read(_t%d); SP_GC_ROOT(_t%d); ", t, atmp[a], t);
+      int sci = comp_core_class(c, CORE_STRING);
+      int builtin = cplan_string_builtin_fallback(c, T->id, name);
+      int undef = sci < 0 || builtin ? 0 : cplan_undef_at(c, T->id, sci, name);
+      if (undef < 0) undef = cplan_undef_before(c, T->id, sci, name) || cplan_undef_stops(c, T->id, sci, name);
+      int raise_undef = undef && !cplan_has_method_missing(c, T->id, sci, 0);
+      if (raise_undef || builtin || (!undef && !string_reopen_defines(c, T->id, name)))
+        buf_printf(b, "if (sp_rbval_is_string(_t%d) && !sp_poly_is_str_subclass(_t%d)) { ", tv, tv);
+      else
+        buf_printf(b, "if (_t%d.tag == SP_TAG_STR) { ", tv);
+      if (raise_undef) {
+        int first = g_tmp + 1;
+        g_tmp += argc;
+        for (int a = 0; a < argc; a++) {
+          char arg[32];
+          snprintf(arg, sizeof arg, "_t%d", atmp[a]);
+          buf_printf(b, "sp_RbVal _t%d = ", first + a);
+          emit_boxed_text(c, atmp_ty[a], arg, b);
+          buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ", first + a);
         }
-        sl += snprintf(sets + sl, sizeof sets - (size_t)sl, "%s_t%d", a ? ", " : "", t);
+        buf_printf(b, "sp_raise_nomethod(sp_nomethod_msg_args(\"%s\", _t%d, %d, (sp_RbVal[]){", name, tv, argc);
+        for (int a = 0; a < argc; a++) buf_printf(b, "%s_t%d", a ? ", " : "", first + a);
+        buf_puts(b, "})); }\nelse ");
+      } else {
+        char sets[256]; int sl;
+        sl = snprintf(sets, sizeof sets, "(const char *[]){");
+        for (int a = 0; a < argc && sl < (int)sizeof sets - 16; a++) {
+          int t = atmp[a];
+          /* A later set read can allocate before the helper consumes this one. */
+          if (atmp_ty[a] == TY_STRBUF) {
+            t = ++g_tmp;
+            buf_printf(b, "const char *_t%d = sp_strbuf_read(_t%d); SP_GC_ROOT(_t%d); ", t, atmp[a], t);
+          }
+          sl += snprintf(sets + sl, sizeof sets - (size_t)sl, "%s_t%d", a ? ", " : "", t);
+        }
+        snprintf(sets + sl, sizeof sets - (size_t)sl, "}, %d", argc);
+        char call[384];
+        snprintf(call, sizeof call, "sp_str_%s_n(sp_poly_recv_s(_t%d, \"%s\"), %s)", name, tv, name, sets);
+        buf_printf(b, "_t%d = ", tr);
+        if (ret == TY_POLY) buf_printf(b, "%s(%s)", is_cnt ? "sp_box_int" : "sp_box_str_new", call);
+        /* A nullable integer result slot takes the count with its nil flag. */
+        else if (is_cnt && plan_slot_oint(c, T->id, ret)) buf_printf(b, "sp_oint_of(%s)", call);
+        else buf_puts(b, call);
+        buf_puts(b, "; }\nelse ");
       }
-      snprintf(sets + sl, sizeof sets - (size_t)sl, "}, %d", argc);
-      char call[384];
-      snprintf(call, sizeof call, "sp_str_%s_n(_t%d.v.s ? _t%d.v.s : \"\", %s)", name, tv, tv, sets);
-      buf_printf(b, "_t%d = ", tr);
-      if (ret == TY_POLY) buf_printf(b, "%s(%s)", is_cnt ? "sp_box_int" : "sp_box_str", call);
-      /* a result slot that holds a nil another arm answers (an oint,
-         plan_slot_oint) takes the count lifted (#8492) */
-      else if (is_cnt && plan_slot_oint(c, T->id, ret)) buf_printf(b, "sp_oint_of(%s)", call);
-      else buf_puts(b, call);
-      buf_puts(b, "; }\nelse ");
     }
   }
   /* Hash#store on a boxed hash receiver (#4195) */
@@ -3855,7 +3881,7 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
        covers SP_TAG_OBJ variants, so without this tag arm a String receiver
        fell through and returned the seed (nil/0). */
     if (ret == TY_POLY)
-      buf_printf(b, "if (_t%d.tag == SP_TAG_STR) { _t%d = sp_box_nullable_str(sp_str_char_at_or_nil(_t%d.v.s, %s)); }\nelse ", tv, tr, tv, idxref);
+      buf_printf(b, "if (_t%d.tag == SP_TAG_STR) { _t%d = sp_box_str_fresh(sp_str_char_at_or_nil(_t%d.v.s, %s)); }\nelse ", tv, tr, tv, idxref);
     else if (ret == TY_STRING)
       buf_printf(b, "if (_t%d.tag == SP_TAG_STR) { _t%d = sp_str_char_at_or_nil(_t%d.v.s, %s); }\nelse ", tv, tr, tv, idxref);
   }
@@ -4080,9 +4106,9 @@ void emit_poly_cases_n(Compiler *c, int id, const char *name, const PolySpecials
     buf_printf(b, "_t%d = ", tr);
     if (ret == TY_POLY) {
       if (no_exc7)
-        buf_printf(b, "_t%d ? sp_box_str(_t%d) : (_e%d ? sp_box_nil() : sp_box_sym(sp_sym_intern(\"wait_readable\")))",
+        buf_printf(b, "_t%d ? sp_box_str_new(_t%d) : (_e%d ? sp_box_nil() : sp_box_sym(sp_sym_intern(\"wait_readable\")))",
                    trd7, trd7, te7);
-      else buf_printf(b, "sp_box_str(_t%d)", trd7);
+      else buf_printf(b, "sp_box_str_new(_t%d)", trd7);
     }
     else buf_printf(b, "_t%d", trd7);
     buf_puts(b, "; break; }");
@@ -4097,7 +4123,7 @@ void emit_poly_cases_n(Compiler *c, int id, const char *name, const PolySpecials
     if (atmp_ty[0] == TY_POLY) buf_printf(b, "sp_poly_arg_int_chk(_t%d)", atmp[0]);
     else buf_printf(b, "(sp_int)_t%d", atmp[0]);
     buf_printf(b, "); _t%d = ", tr);
-    if (ret == TY_POLY) buf_printf(b, "sp_box_str(_t%d)", trp);
+    if (ret == TY_POLY) buf_printf(b, "sp_box_str_new(_t%d)", trp);
     else buf_printf(b, "_t%d", trp);
     buf_puts(b, "; break; }");
   }
@@ -4141,7 +4167,7 @@ void emit_poly_cases_n(Compiler *c, int id, const char *name, const PolySpecials
     }
     free(hr.p);
     buf_printf(b, "_t%d = ", tr);
-    if (ret == TY_POLY) buf_printf(b, "sp_box_str(_t%d)", trp);
+    if (ret == TY_POLY) buf_printf(b, "sp_box_str_new(_t%d)", trp);
     else buf_printf(b, "_t%d", trp);
     buf_puts(b, "; break; }");
   }
@@ -4295,7 +4321,7 @@ void emit_poly_cases_n(Compiler *c, int id, const char *name, const PolySpecials
         buf_printf(b, "sp_File_seek((sp_File *)_t%d.v.p, %s, %s)", tv, iv[0], argc == 2 ? iv[1] : "0");
       }
       else {
-        if (ret == TY_POLY) buf_puts(b, "sp_box_nullable_str(");
+        if (ret == TY_POLY) buf_puts(b, "sp_box_nullable_str_new(");
         buf_printf(b, "sp_File_read_n((sp_File *)_t%d.v.p, %s)", tv, iv[0]);
       }
       if (ret == TY_POLY) buf_puts(b, ")");
@@ -4323,7 +4349,7 @@ void emit_poly_cases_n(Compiler *c, int id, const char *name, const PolySpecials
                   "if (_t%d->len == 0 || _t%d->data[0].tag == SP_TAG_NIL) _s%d = sp_File_read(_f%d); "
                   "else _s%d = sp_File_read_n(_f%d, sp_poly_arg_i(_t%d->data[0])); ",
                tr, tv, tr, ta, ta, ta, tr, tr, tr, tr, ta);
-    if (ret == TY_POLY) buf_printf(b, "_t%d = sp_box_nullable_str(_s%d); } break;", tr, tr);
+    if (ret == TY_POLY) buf_printf(b, "_t%d = sp_box_nullable_str_new(_s%d); } break;", tr, tr);
     else buf_printf(b, "_t%d = _s%d; } break;", tr, tr);
   }
   if (is_unshift) {
@@ -4696,7 +4722,7 @@ void emit_poly_cases_n(Compiler *c, int id, const char *name, const PolySpecials
     if (repr_of(c, argv[0]).kind == RK_BOXED) snprintf(fa, sizeof fa, "sp_poly_arg_str_chk(_t%d)", atmp[0]);
     else snprintf(fa, sizeof fa, "%s", strarg);
     if (ret == TY_POLY)
-      buf_printf(b, " case SP_BUILTIN_TIME: _t%d = sp_box_str(sp_time_strftime_s((sp_Time *)_t%d.v.p, %s)); break;", tr, tv, fa);
+      buf_printf(b, " case SP_BUILTIN_TIME: _t%d = sp_box_str_new(sp_time_strftime_s((sp_Time *)_t%d.v.p, %s)); break;", tr, tv, fa);
     else
       buf_printf(b, " case SP_BUILTIN_TIME: _t%d = sp_time_strftime_s((sp_Time *)_t%d.v.p, %s); break;", tr, tv, fa);
     /* with user arms in the switch, the default is theirs to emit */
@@ -4749,8 +4775,8 @@ void emit_poly_cases_n(Compiler *c, int id, const char *name, const PolySpecials
        mistake a stored nil for absence). */
     if (is_aref || is_fetch) {
       char getx[220], hx[220];
-      snprintf(getx, sizeof getx, "sp_PolyPolyHash_get((sp_PolyPolyHash *)_t%d.v.p, sp_box_str(%s))", tv, strarg);
-      snprintf(hx, sizeof hx, "sp_PolyPolyHash_has_key((sp_PolyPolyHash *)_t%d.v.p, sp_box_str(%s))", tv, strarg);
+      snprintf(getx, sizeof getx, "sp_PolyPolyHash_get((sp_PolyPolyHash *)_t%d.v.p, sp_box_str_new(%s))", tv, strarg);
+      snprintf(hx, sizeof hx, "sp_PolyPolyHash_has_key((sp_PolyPolyHash *)_t%d.v.p, sp_box_str_new(%s))", tv, strarg);
       buf_printf(b, " case SP_BUILTIN_POLY_POLY_HASH: _t%d = ", tr);
       if (is_fetch) buf_printf(b, "%s ? ", hx);
       if (ret == TY_POLY) buf_puts(b, getx);

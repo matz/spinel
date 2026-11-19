@@ -1700,7 +1700,7 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
                       " _t%d = _t%d ? sp_env_str(_t%d) : NULL;"
                       " unsetenv(_t%d); ", t2, t1, t2, t2, t2, t1);
         if (dhandle) buf_printf(b, "sp_String *_t%d = sp_String_new_shared(_t%d); ", result, t2);
-        else if (dpoly) buf_printf(b, "sp_RbVal _t%d = sp_box_str(_t%d); ", result, t2);
+        else if (dpoly) buf_printf(b, "sp_RbVal _t%d = sp_box_str_new(_t%d); ", result, t2);
         if (dblk >= 0) {
           const char *dp0 = block_param_name(c, dblk, 0);
           int dbody = nt_ref(nt, dblk, "body");
@@ -1725,7 +1725,7 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
               buf_printf(b, "sp_RbVal lv_%s = sp_box_nullable_obj(%s, SP_BUILTIN_STRBUF); SP_GC_ROOT_RBVAL(lv_%s); ",
                          rename_local(dp0), kref.p, rename_local(dp0));
             else if (dpt == TY_POLY)
-              buf_printf(b, "sp_RbVal lv_%s = sp_box_str(_t%d); (void)lv_%s; ",
+              buf_printf(b, "sp_RbVal lv_%s = sp_box_str_new(_t%d); SP_GC_ROOT_RBVAL(lv_%s); ",
                          rename_local(dp0), t1, rename_local(dp0));
             else
               buf_printf(b, "const char *lv_%s = _t%d; (void)lv_%s; ",
@@ -1849,13 +1849,13 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
         emit_ctype(c, fhandle ? TY_STRBUF : fpoly ? TY_POLY : TY_STRING, b);
         buf_printf(b, " _t%d = _t%d ? ", tv, tk);
         if (fhandle) buf_printf(b, "sp_String_new_shared(sp_env_str(_t%d)) : ", tk);
-        else if (fpoly) buf_printf(b, "sp_box_str(sp_env_str(_t%d)) : ", tk);
+        else if (fpoly) buf_printf(b, "sp_box_str_new(sp_env_str(_t%d)) : ", tk);
         else buf_printf(b, "sp_env_str(_t%d) : ", tk);
         if (argc >= 2) buf_printf(b, "_t%d", td);
         else
           /* no default: CRuby raises KeyError naming the key. Route it through
              sp_raise_key_not_found so the key is staged for #key (#3027). */
-          buf_printf(b, "(sp_raise_key_not_found(sp_box_str(_t%d)), %s)", tky,
+          buf_printf(b, "(sp_raise_key_not_found(SP_STR_BOX(_t%d)), %s)", tky,
                      fhandle ? "(sp_String *)0" : fpoly ? "sp_box_nil()" : "(const char *)0");
         buf_printf(b, "; _t%d; })", tv);
         return 1;

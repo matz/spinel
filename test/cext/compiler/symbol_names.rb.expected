@@ -1,0 +1,37 @@
+[[104, 101, 108, 108, 111], true]
+true
+true
+frozen
+[[104, 101, 108, 108, 111, 33], [104, 101, 108, 108, 111]]
+[false, false]
+[[], true]
+true
+true
+frozen
+[[33], []]
+[false, false]
+[[97, 0, 98], true]
+true
+true
+frozen
+[[97, 0, 98, 33], [97, 0, 98]]
+[false, false]
+[[99, 97, 102, 195, 169], true]
+true
+true
+frozen
+[[99, 97, 102, 195, 169, 33], [99, 97, 102, 195, 169]]
+[false, false]
+[[100, 121, 110, 97, 109, 105, 99, 45, 49, 55], true]
+true
+true
+frozen
+[[100, 121, 110, 97, 109, 105, 99, 45, 49, 55, 33], [100, 121, 110, 97, 109, 105, 99, 45, 49, 55]]
+[false, false]
+true
+true
+"unrelated-17"
+false
+false
+true
+true

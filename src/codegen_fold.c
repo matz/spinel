@@ -670,7 +670,7 @@ static void emit_hash_pair_at(Compiler *c, Repr hr, const char *hn,
   if (kt == TY_SYMBOL)
     buf_printf(g_pre, " sp_PolyArray_push(_t%d, sp_box_sym(_t%d->order[_t%d]));", dest, trecv, ti);
   else if (kt == TY_STRING)
-    buf_printf(g_pre, " sp_PolyArray_push(_t%d, sp_box_str(_t%d->order[_t%d]));", dest, trecv, ti);
+    buf_printf(g_pre, " sp_PolyArray_push(_t%d, SP_SEBOX(sp_String_key_handle(_t%d->order[_t%d])));", dest, trecv, ti);
   else if (kt == TY_INT)
     buf_printf(g_pre, " sp_PolyArray_push(_t%d, sp_box_int(_t%d->order[_t%d]));", dest, trecv, ti);
   else
@@ -1877,7 +1877,7 @@ static int emit_gsub_block_split(Compiler *c, int id, int recv, Buf *b) {
     buf_printf(g_pre, "if (_t%d.tag == SP_TAG_STR || sp_poly_is_strbuf(_t%d)) {\n", tr, tr);
     if (spre.p) buf_puts(g_pre, spre.p);
     emit_indent(g_pre, g_indent + 1);
-    buf_printf(g_pre, "_t%d = sp_box_str(%s);\n", tres, sval.p ? sval.p : "\"\"");
+    buf_printf(g_pre, "_t%d = sp_box_str_new(%s);\n", tres, sval.p ? sval.p : "sp_str_empty");
     emit_indent(g_pre, g_indent); buf_puts(g_pre, "} else {\n");
     if (dpre.p) buf_puts(g_pre, dpre.p);
     emit_indent(g_pre, g_indent + 1);
@@ -2074,7 +2074,7 @@ int emit_gsub_block_expr(Compiler *c, int id, Buf *b) {
     int hnd = !box && plv && repr_of_slot(c, plv).handle;
     emit_indent(g_pre, g_indent + 1);
     buf_printf(g_pre, "lv_%s = %ssp_str_substr(_t%d, _t%d + _t%d, _t%d - _t%d)%s;\n",
-               p0, box ? "sp_box_str(" : hnd ? "SP_STR_HDL(" : "", ts, tpos, tms, tme, tms,
+               p0, box ? "sp_box_str_new(" : hnd ? "SP_STR_HDL(" : "", ts, tpos, tms, tme, tms,
                (box || hnd) ? ")" : "");
   }
   IterStep st; emit_iter_step_open(c, block, 0, g_indent + 1, &st);
@@ -3765,7 +3765,7 @@ int emit_inject_expr(Compiler *c, int id, Buf *b) {
     int rinit = (init >= 0) ? init : ((block < 0 && argc == 2) ? argv[0] : -1);
     int ta = ++g_tmp, tacc = ++g_tmp, ti = ++g_tmp, tn = ++g_tmp, tsy = ++g_tmp;
     const char *boxfn = et == TY_INT ? "sp_box_int" : et == TY_FLOAT ? "sp_box_float"
-                      : et == TY_STRING ? "sp_box_str" : NULL;
+                      : et == TY_STRING ? "sp_box_str_new" : NULL;
     buf_printf(b, "({ sp_%sArray *_t%d = ", k, ta); emit_expr(c, recv, b);
     /* The receiver temp has to be a GC root for the whole fold: the boxed seed
        allocates before the loop and every sp_poly_binop_sym allocates inside

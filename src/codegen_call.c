@@ -1145,7 +1145,8 @@ static void emit_block_arg_check(Compiler *c, int fe, const char *cn, Buf *b) {
                tv, cn[0] ? cn : "FalseClass");
   } else
     buf_printf(b, "; if (_t%d.tag == SP_TAG_INT || _t%d.tag == SP_TAG_FLT || _t%d.tag == SP_TAG_BOOL || "
-                  "_t%d.tag == SP_TAG_STR || _t%d.tag == SP_TAG_BIGINT || (_t%d.tag == SP_TAG_OBJ && "
+                  "sp_rbval_is_string(_t%d) || "
+                  "_t%d.tag == SP_TAG_BIGINT || (_t%d.tag == SP_TAG_OBJ && "
                   "(_t%d.cls_id == SP_BUILTIN_OBJECT || _t%d.cls_id == SP_BUILTIN_BASIC_OBJECT))) "
                   "sp_raise_cls(\"TypeError\", sp_sprintf(\"no implicit conversion of %%s into Proc\", sp_poly_class_name(_t%d))); })",
                tv, tv, tv, tv, tv, tv, tv, tv, tv);
@@ -8792,8 +8793,8 @@ static int emit_poly_builtin_default_spread(Compiler *c, int id, int recv, const
        the value (re-entered, the emission folds the empty forward) */
     if (n == 0 && (sp_streq(name, "inspect") || sp_streq(name, "to_s")) &&
         (ret == TY_POLY || ret == TY_STRING)) {
-      buf_printf(&arms, " if (_t%d->len == 0) { _t%d = %ssp_poly_%s(_t%d)%s; break; }", atmp[0], tr,
-                 ret == TY_POLY ? "sp_box_str(" : "", name, tv, ret == TY_POLY ? ")" : "");
+      buf_printf(&arms, " if (_t%d->len == 0) { _t%d = sp_poly_%s%s(_t%d); break; }", atmp[0], tr,
+                 name, ret == TY_POLY ? "_box" : "", tv);
       any = 1;
       continue;
     }
@@ -11520,7 +11521,7 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
       if (g_plan_check) cplan_served("poly-form-n");
       /* a genuine String in a slot whose name a user class owns (#4816) */
       if (kw_pos) emit_poly_str_aset_prearm(c, recv, &ps, &ptemps, b);
-      if (kw_pos && !has_splat_arg)
+      if (kw_pos && !has_splat_arg && !cplan_poly_has_family(&pform, PB_STR_SETOP))
         emit_poly_str_prearm(c, id, recv, name, argc, argv, atmp, atmp_ty, ret, tv, tr, b);
       buf_puts(b, "switch (");
       /* where this switch starts, so its end can tell whether any arm below
@@ -13842,12 +13843,8 @@ static void emit_builtin_new_arms_text(Compiler *c, const char *pre, const char 
     for (int ci = 0; ci < c->nclasses; ci++)
       if (is_builtin_reopen(c->classes[ci].name) && sp_streq(c->classes[ci].name, bnew[k].name))
         buf_printf(b, "case %d: ", ci);
-    if (bnew[k].kind == 'S')
-      buf_printf(b, "{ %s_t%d = (%s == 0 ? sp_box_str(sp_str_empty_binary()) : sp_builtin_class_new('S', %s, %s, %s)); } break; ",
-                 pre, rt2, argc_txt, argc_txt, argv_txt, blk);
-    else
-      buf_printf(b, "{ %s_t%d = sp_builtin_class_new('%c', %s, %s, %s); } break; ",
-                 pre, rt2, bnew[k].kind, argc_txt, argv_txt, blk);
+    buf_printf(b, "{ %s_t%d = sp_builtin_class_new('%c', %s, %s, %s); } break; ",
+               pre, rt2, bnew[k].kind, argc_txt, argv_txt, blk);
   }
   if (boxed)
     buf_printf(b, "default: { %s_t%d = sp_class_value_new_fallback(_t%d, _t%d.tag == SP_TAG_CLASS ? "
@@ -23594,21 +23591,22 @@ int emit_blockless_enumerator(Compiler *c, int id, Buf *b) {
     }
     /* spill the receiver once: it feeds both the snapshot and the
        inspect-visible source stamp */
-    int tsrc = ++g_tmp;
+    int tsrc = ++g_tmp, tbox = ++g_tmp;
     buf_printf(b, "({ const char *_t%d = ", tsrc);
     emit_expr(c, recv, b);
     buf_printf(b, "; SP_GC_ROOT(_t%d); ", tsrc);
     /* the item reads raise a nil receiver under chars' or bytes' name, or
        read it as "": it raises under the iterator's own */
     if (!recv_never_nil(c, recv)) { nil_recv_check(name, tsrc, b); buf_puts(b, " "); }
+    buf_printf(b, "sp_RbVal _t%d = sp_box_str_new(_t%d); SP_GC_ROOT_RBVAL(_t%d); ", tbox, tsrc, tbox);
     if (is_byte_codepoint_each(name)) {
       const char *fn = sp_streq(name, "each_byte") ? "sp_str_bytes" : "sp_str_codepoints";
       buf_printf(b, "sp_enum_with_src(sp_Enumerator_new_from(sp_box_int_array(%s(_t%d))), "
-                    "sp_box_str(_t%d), SPL(\"%s\")); })", fn, tsrc, tsrc, name);
+                    "_t%d, SPL(\"%s\")); })", fn, tsrc, tbox, name);
       return 1;
     }
     buf_printf(b, "sp_enum_with_src(sp_Enumerator_new_from_items(sp_str_chars_poly(_t%d)), "
-                  "sp_box_str(_t%d), SPL(\"%s\")); })", tsrc, tsrc, name);
+                  "_t%d, SPL(\"%s\")); })", tsrc, tbox, name);
     return 1;
   }
   /* e.each_slice(n) / e.each_cons(n) with no block on an Enumerator, which
@@ -25244,7 +25242,7 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
     if (utf8 || bytes) {
       int tvC = ++g_tmp;
       buf_printf(b, "({ sp_RbVal _t%d = ", tvC); emit_boxed(c, recv, b);
-      buf_printf(b, "; sp_box_str(%s(sp_poly_recv_i(\"chr\", _t%d))); })", utf8 ? "sp_int_chr_utf8" : "sp_int_chr", tvC);
+      buf_printf(b, "; sp_box_str_fresh(%s(sp_poly_recv_i(\"chr\", _t%d))); })", utf8 ? "sp_int_chr_utf8" : "sp_int_chr", tvC);
       return 1;
     }
   }
@@ -26193,8 +26191,11 @@ int emit_poly_isa_test(Compiler *c, const char *cn, const char *v, int exact, Bu
      migration, reproduces with zero migration mechanism involved:
      `def wrap(v)=v; wrap(2**80).is_a?(Integer)` answered false). */
   if (is_integer_class_name(cn)) buf_printf(b, "(%s.tag == SP_TAG_INT || %s.tag == SP_TAG_BIGINT)", v, v);
-  else if (sp_streq(cn, "String"))
-    buf_printf(b, "(%s.tag == SP_TAG_STR || (%s.tag == SP_TAG_OBJ && %s.cls_id == SP_BUILTIN_STRBUF))", v, v, v);
+  else if (sp_streq(cn, "String")) {
+    buf_printf(b, "(sp_rbval_is_string(%s)", v);
+    if (exact && program_has_strsub(c)) buf_printf(b, " && !sp_poly_is_str_subclass(%s)", v);
+    buf_puts(b, ")");
+  }
   else if (sp_streq(cn, "Float"))    buf_printf(b, "%s.tag == SP_TAG_FLT", v);
   else if (sp_streq(cn, "Symbol"))   buf_printf(b, "%s.tag == SP_TAG_SYM", v);
   else if (sp_streq(cn, "NilClass")) buf_printf(b, "%s.tag == SP_TAG_NIL", v);

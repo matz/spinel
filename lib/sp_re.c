@@ -921,11 +921,23 @@ const char *sp_re_scan_next(mrb_regexp_pattern *pat, sp_re_scan_it *it) {
   it->data = h->data; it->len = h->len;
   return sp_str_bin_like(str, m);
 }
+/* Each participating span makes its own mutable String, even when empty.
+   Construct the handle directly from the byte span and its encoding. */
+static sp_RbVal sp_re_capture_box(const char *str, int start, int end) {
+  if (start < 0 || end < start) return sp_box_nil();
+  int length = end - start;
+  sp_String *value = sp_str_is_binary(str)
+                   ? sp_String_from_cbinstr(str + start, length)
+                   : sp_String_new_inline_len(str + start, length);
+  return sp_box_obj(value, SP_BUILTIN_STRBUF);
+}
+
 /* ...and for a pattern with groups: the next match's row of groups, each a
    String of its own or nil, as sp_re_scan_poly's rows are */
 sp_PolyArray *sp_re_scan_next_row(mrb_regexp_pattern *pat, sp_re_scan_it *it) {
   sp_String *h = it->h;
   if (!h) sp_nil_recv("scan");
+  SP_GC_ROOT(h);
   if (it->started && h->len != it->len)
     sp_raise_cls("RuntimeError", "string modified");
   const char *str = h->data;
@@ -945,17 +957,8 @@ sp_PolyArray *sp_re_scan_next_row(mrb_regexp_pattern *pat, sp_re_scan_it *it) {
   sp_PolyArray *row = sp_PolyArray_new();
   SP_GC_ROOT(row);
   int pairs = n / 2;
-  for (int gi = pairs <= 1 ? 0 : 1; gi < (pairs <= 1 ? 1 : pairs); gi++) {
-    if (caps[gi * 2] >= 0 && caps[(gi * 2) + 1] >= 0) {
-      int glen = caps[(gi * 2) + 1] - caps[gi * 2];
-      char *gm = sp_str_alloc_raw(glen + 1);
-      memcpy(gm, h->data + caps[gi * 2], glen);
-      gm[glen] = 0;
-      sp_str_set_len(gm, (size_t)glen);
-      sp_PolyArray_push(row, sp_box_str(sp_str_bin_like(h->data, gm)));
-    }
-    else sp_PolyArray_push(row, sp_box_nil());
-  }
+  for (int gi = pairs <= 1 ? 0 : 1; gi < (pairs <= 1 ? 1 : pairs); gi++)
+    sp_PolyArray_push(row, sp_re_capture_box(h->data, caps[gi * 2], caps[gi * 2 + 1]));
   it->pos = caps[1]; if (caps[0] == caps[1]) it->pos++;
   it->data = h->data; it->len = h->len;
   return row;
@@ -1142,7 +1145,7 @@ const char *sp_re_named_capture(const mrb_regexp_pattern *pat, const char *name)
   int len = e - b;
   char *out = sp_str_alloc(len);
   memcpy(out, sp_re_last_str + b, len);
-  return out;
+  return sp_str_bin_like(sp_re_last_str, out);
 }
 /* `a|b`, built byte-wise: sp_sprintf's %s ends at an embedded NUL, so a
    branch carrying one joined short. Used by Regexp.union, both the runtime
@@ -1247,29 +1250,12 @@ sp_PolyArray *sp_re_scan_poly(mrb_regexp_pattern *pat, const char *str) {
     if (sp_re_track_last) { lastn = n > ncaps ? ncaps : n; memcpy(lastcaps, caps, sizeof(int) * (size_t)lastn); }
     int pairs = (n > ncaps ? ncaps : n) / 2;
     if (pairs <= 1) {
-      int len = caps[1] - caps[0];
-      char *m = sp_str_alloc_raw(len + 1);
-      memcpy(m, str + caps[0], len);
-      m[len] = 0;
-      sp_str_set_len(m, (size_t)len);
-      sp_PolyArray_push(arr, sp_box_str(sp_str_bin_like(str, m)));
-    }
-else {
+      sp_PolyArray_push(arr, sp_re_capture_box(str, caps[0], caps[1]));
+    } else {
       sp_PolyArray *row = sp_PolyArray_new();
       SP_GC_ROOT(row);
-      for (int gi = 1; gi < pairs; gi++) {
-        if (caps[gi * 2] >= 0 && caps[(gi * 2) + 1] >= 0) {
-          int glen = caps[(gi * 2) + 1] - caps[gi * 2];
-          char *gm = sp_str_alloc_raw(glen + 1);
-          memcpy(gm, str + caps[gi * 2], glen);
-          gm[glen] = 0;
-          sp_str_set_len(gm, (size_t)glen);
-          sp_PolyArray_push(row, sp_box_str(sp_str_bin_like(str, gm)));
-        }
-else {
-          sp_PolyArray_push(row, sp_box_nil());
-        }
-      }
+      for (int gi = 1; gi < pairs; gi++)
+        sp_PolyArray_push(row, sp_re_capture_box(str, caps[gi * 2], caps[gi * 2 + 1]));
       sp_PolyArray_push(arr, sp_box_poly_array(row));
     }
     pos = caps[1];
@@ -1305,9 +1291,8 @@ sp_PolyArray *sp_re_match_data(mrb_regexp_pattern *pat, const char *str) {
       memcpy(buf, str + start, len);
       buf[len] = 0;
       sp_str_set_len(buf, (size_t)len);
-      sp_PolyArray_push(arr, sp_box_str(sp_str_bin_like(str, buf)));
-    }
-else {
+      sp_PolyArray_push(arr, sp_box_str_new(sp_str_bin_like(str, buf)));
+    } else {
       sp_PolyArray_push(arr, sp_box_nil());
     }
   }
@@ -1432,14 +1417,27 @@ sp_MatchData *sp_re_matchdata_at(mrb_regexp_pattern *pat, const char *str, sp_in
   for (int i = 0; i < pairs * 2; i++) m->caps[i] = caps[i];
   return m;
 }
-/* group i substring, or NULL for a non-participating / out-of-range group */
-const char *sp_MatchData_aref(sp_MatchData *m, sp_int i) {SP_GC_ROOT(m);
-  if (!m) return NULL;
+/* Offset into the span table, or -1 for an out-of-range group. */
+static sp_int sp_md_span(const sp_MatchData *m, sp_int i) {
+  if (!m) return -1;
   /* A negative index reaches the CAPTURE groups only: m[-1] is the last one and
      m[-(ncap)] -- which would be the whole match -- is nil, as in CRuby (#3628). */
-  if (i < 0) { i += m->ncap; if (i < 1) return NULL; }
-  if (i >= m->ncap) return NULL;
-  int s = m->caps[i * 2], e = m->caps[(i * 2) + 1];
+  if (i < 0) { i += m->ncap; if (i < 1) return -1; }
+  return i < m->ncap ? i * 2 : -1;
+}
+
+sp_RbVal sp_MatchData_aref_box(sp_MatchData *m, sp_int i) {
+  sp_int span = sp_md_span(m, i);
+  if (span < 0) return sp_box_nil();
+  return sp_re_capture_box(m->source, m->caps[span], m->caps[span + 1]);
+}
+
+/* group i substring, or NULL for a non-participating / out-of-range group */
+const char *sp_MatchData_aref(sp_MatchData *m, sp_int i) {
+  SP_GC_ROOT(m);
+  sp_int span = sp_md_span(m, i);
+  if (span < 0) return NULL;
+  int s = m->caps[span], e = m->caps[span + 1];
   if (s < 0 || e < s) return NULL;
   int len = e - s;
   char *b = sp_str_alloc((size_t)len);

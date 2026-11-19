@@ -292,9 +292,11 @@ int emit_call_regexp_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
                   "sp_Enumerator *_t%d = sp_Enumerator_new_from(sp_box_str_array(", tpat, ten);
     if (gre >= 0) buf_printf(b, "sp_re_scan(sp_re_pat_%d, _t%d)", gre, tsg);
     else buf_printf(b, "sp_scan_boxed(_t%d, _t%d)", tsg, tpat);
-    buf_printf(b, ")); SP_GC_ROOT(_t%d); sp_enum_with_src(_t%d, sp_box_str(_t%d), "
+    int tbox = ++g_tmp;
+    buf_printf(b, ")); SP_GC_ROOT(_t%d); sp_RbVal _t%d = sp_box_str_new(_t%d); SP_GC_ROOT_RBVAL(_t%d); "
+                  "sp_enum_with_src(_t%d, _t%d, "
                   "sp_sprintf(\"%s(%%s)\", sp_poly_inspect(_t%d))); })",
-               ten, ten, tsg, name, tpat);
+               ten, tbox, tsg, tbox, ten, tbox, name, tpat);
     return 1;
   }
 no_gsub_enum:
@@ -1289,7 +1291,7 @@ int emit_call_symbol_bool_string_arms(Compiler *c, int id, Buf *b, const NodeTab
       if (p0) {
         char step[96];
         snprintf(step, sizeof step, "sp_str_char_step(_t%d, _t%d, &_t%d)", ts, tn, ti);
-        if (p0_box_poly_ech) buf_printf(b, "lv_%s = sp_box_str(%s); ", p0, step);
+        if (p0_box_poly_ech) buf_printf(b, "lv_%s = sp_box_str_new(%s); ", p0, step);
         else if (p0_handle_ech) buf_printf(b, "lv_%s = sp_String_new_shared(%s); ", p0, step);
         else buf_printf(b, "lv_%s = %s; ", p0, step);
       }
@@ -1388,7 +1390,7 @@ int emit_op_string_scrub_block(Compiler *c, const BopCtx *x, Buf *b) {
     int hnd = !box && plv && repr_of_slot(c, plv).handle;
     emit_indent(g_pre, g_indent + 1);
     buf_printf(g_pre, "lv_%s = %ssp_str_substr(_t%d, _t%d, _t%d)%s;\n",
-               rename_local(p0), box ? "sp_box_str(" : hnd ? "SP_STR_HDL(" : "", ts, tb, tn,
+               rename_local(p0), box ? "sp_box_str_new(" : hnd ? "SP_STR_HDL(" : "", ts, tb, tn,
                (box || hnd) ? ")" : "");
   }
   int save = g_indent; g_indent++;

@@ -141,12 +141,13 @@ static void sp_mar_w_range(sp_mar_buf *b, sp_RbVal v) {
     /* the Range as it is held, not as sp_srange_live reads it: an end that
        keeps its handle (--share-strings) is written as the handle's box, the
        identity a String element of the same object is written under, so the
-       two link as CRuby's do */
+       two link as CRuby's do. A byte-held literal uses its static handle
+       too, as Range#begin and Range#end do when boxed. */
     sp_StrRange s = *(sp_StrRange *)v.v.p;
     if (s.hf) bg = mk_strbuf(s.hf);
-    else if (s.first) bg = mk_str(s.first);
+    else if (s.first) bg = sp_box_str_new(s.first);
     if (s.hl) ed = mk_strbuf(s.hl);
-    else if (s.last) ed = mk_str(s.last);
+    else if (s.last) ed = sp_box_str_new(s.last);
     excl = s.excl != 0;
   }
   else if (v.cls_id == SP_BUILTIN_FLOAT_RANGE) {
@@ -500,11 +501,20 @@ static sp_RbVal sp_mar_r(sp_mar_rd *r) {
     case '"': {
       /* a bare String record is ASCII-8BIT: CRuby writes every other
          encoding as an ivar of an `I` around it, which the `I` arm reads */
+      long n = sp_mar_rlong(r);
+      if (n < 0) {
+        mar_raise("ArgumentError", "negative string size (or size too big)");
+        return mk_nil();
+      }
+      if ((size_t)n > r->len - r->pos) {
+        mar_raise("ArgumentError", "marshal data too short");
+        return mk_nil();
+      }
       int id = sp_mar_reg(r);
-      char *s = sp_mar_rstr(r, sp_mar_rlong(r));
-      sp_str_mark_binary(s);
-      sp_RbVal v = mk_str(s);
-      r->objs[id] = v; return v;
+      sp_String *s = sp_String_new_inline_len(r->s + r->pos, n);
+      sp_String_force_encoding(s, 1);
+      r->pos += (size_t)n;
+      return r->objs[id] = mk_strbuf(s);
     }
     case 'I': {
       if (r->pos < r->len && r->s[r->pos] == 'C') { r->pos++; return sp_mar_r_bsub(r, 1); }

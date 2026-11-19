@@ -22,6 +22,7 @@
 #include <sys/stat.h>
 
 extern const char *sp_sprintf(const char *fmt, ...);
+extern const char *sp_poly_class_name(sp_RbVal v);
 extern SP_NORETURN void sp_raise_cls(const char *cls, const char *msg);
 
 /* sp_bigint.c helpers (sp_bigint.h is mruby-shim territory; the u64 pair is
@@ -71,12 +72,12 @@ static void iob_writable(sp_IOBuffer *b) {
 /* the value's Ruby spelling for TypeError messages (nil/true/false read as
    themselves, like CRuby's) */
 static const char *iob_val_name(sp_RbVal v) {
+  if (sp_rbval_is_string(v)) return sp_poly_class_name(v);
   switch (v.tag) {
     case SP_TAG_NIL:  return "nil";
     case SP_TAG_BOOL: return v.v.i ? "true" : "false";
     case SP_TAG_INT: case SP_TAG_BIGINT: return "Integer";
     case SP_TAG_FLT:  return "Float";
-    case SP_TAG_STR:  return "String";
     case SP_TAG_SYM:  return "Symbol";
     case SP_TAG_CLASS: return "Class";
     case SP_TAG_OBJ:

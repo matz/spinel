@@ -449,18 +449,12 @@ int emit_op_array_plus(Compiler *c, const BopCtx *x, Buf *b) {
       int tL = ++g_tmp, tR = ++g_tmp, tO = ++g_tmp, ti = ++g_tmp;
       Buf lbuf = expr_buf(c, recv);
       Buf rbuf = expr_buf(c, argv[0]);
-      const char *box_l = (rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY) ? typed_elem_box_fn(rt) :
-                          (rt == TY_STR_ARRAY) ? "sp_box_str" : NULL;
-      const char *box_r = (a0r.elem == TY_INT || a0r.elem == TY_FLOAT) ? typed_elem_box_fn(a0) :
-                          (a0r.elem == TY_STRING) ? "sp_box_str" : NULL;
-      /* an Integer or Float side boxes each element with its nil bit:
-         sp_IntArray_box_elem / sp_FloatArray_box_elem */
-      const char *box_l_elem = rt == TY_INT_ARRAY ? "sp_IntArray_box_elem" : rt == TY_FLOAT_ARRAY ? "sp_FloatArray_box_elem" : NULL;
-      const char *box_r_elem = a0r.elem == TY_INT ? "sp_IntArray_box_elem" : a0r.elem == TY_FLOAT ? "sp_FloatArray_box_elem" : NULL;
-      const char *get_l = (rt == TY_POLY_ARRAY) ? "sp_PolyArray_get" :
-                          NULL;
-      const char *get_r = (a0r.elem == TY_POLY) ? "sp_PolyArray_get" :
-                          NULL;
+      const char *box_l_elem = rt == TY_INT_ARRAY ? "sp_IntArray_box_elem" :
+                               rt == TY_FLOAT_ARRAY ? "sp_FloatArray_box_elem" :
+                               rt == TY_STR_ARRAY ? "sp_StrArray_box_handle" : NULL;
+      const char *box_r_elem = a0r.elem == TY_INT ? "sp_IntArray_box_elem" :
+                               a0r.elem == TY_FLOAT ? "sp_FloatArray_box_elem" :
+                               a0r.elem == TY_STRING ? "sp_StrArray_box_handle" : NULL;
       emit_indent(g_pre, g_indent);
       buf_printf(g_pre, "sp_%sArray *_t%d = %s; SP_GC_ROOT(_t%d);\n", k, tL, lbuf.p ? lbuf.p : "", tL); free(lbuf.p);
       emit_indent(g_pre, g_indent);
@@ -474,8 +468,6 @@ int emit_op_array_plus(Compiler *c, const BopCtx *x, Buf *b) {
         buf_printf(g_pre, "sp_PolyArray_push(_t%d, sp_PolyArray_get(_t%d, _t%d));\n", tO, tL, ti);
       else if (box_l_elem)
         buf_printf(g_pre, "sp_PolyArray_push(_t%d, %s(_t%d, _t%d));\n", tO, box_l_elem, tL, ti);
-      else if (box_l)
-        buf_printf(g_pre, "sp_PolyArray_push(_t%d, %s(sp_%sArray_get(_t%d, _t%d)));\n", tO, box_l, k, tL, ti);
       emit_indent(g_pre, g_indent);
       buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++)\n", ti, ti, k2, tR, ti);
       emit_indent(g_pre, g_indent + 1);
@@ -483,10 +475,7 @@ int emit_op_array_plus(Compiler *c, const BopCtx *x, Buf *b) {
         buf_printf(g_pre, "sp_PolyArray_push(_t%d, sp_PolyArray_get(_t%d, _t%d));\n", tO, tR, ti);
       else if (box_r_elem)
         buf_printf(g_pre, "sp_PolyArray_push(_t%d, %s(_t%d, _t%d));\n", tO, box_r_elem, tR, ti);
-      else if (box_r)
-        buf_printf(g_pre, "sp_PolyArray_push(_t%d, %s(sp_%sArray_get(_t%d, _t%d)));\n", tO, box_r, k2, tR, ti);
       buf_printf(b, "_t%d", tO);
-      (void)get_l; (void)get_r;
       return 1;
     }
   }

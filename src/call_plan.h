@@ -1135,6 +1135,7 @@ PolyPlan cplan_poly(Compiler *c, int id);
    receiver form). Cheaper: the builtin families and trials, which only the
    --plan-check shadow compares, are left out. */
 PolyPlan cplan_poly_arms(Compiler *c, int id);
+int cplan_poly_has_family(const PolyPlan *p, int fam);
 int cplan_send_split_owners(Compiler *c, int recv, const char *name, const char **out, int max);   /* the classes a boxed send of name tests: the builtin ones recv may be, and the program's under them */
 /* Resolve the complete plan without reading or writing the per-node memo.
    Use while inference facts are still moving. */
@@ -1170,6 +1171,12 @@ PolyPlan cplan_poly_cmeth(Compiler *c, int id);
 PolyPlan cplan_poly_cls_values(Compiler *c, int id);
 int cplan_visibility_class(Compiler *c, int id, int ci);
 int cplan_has_method_missing(Compiler *c, int id, int ci, int cmethod);
+/* A String builtin may be undefined. *hook is the Ruby hook's scope or
+   -1, and *undef is one for proved absence or negative for a live test. */
+int cplan_string_missing(Compiler *c, int id, const char *name, int *hook, int *undef);
+/* Does this call's String arm reach the original builtin before a reopen,
+   or after a guard has excluded the undef? */
+int cplan_string_builtin_fallback(Compiler *c, int id, const char *name);
 int cplan_super_needs_method_missing(Compiler *c, int id);
 int cplan_cmethod_visible(Compiler *c, int id, int ci, const char *name);
 /* The visibility of the method call id binds on class ci's chain (its class
@@ -1388,6 +1395,14 @@ int cplan_missing(Compiler *c, int id, char *self_text, size_t cap, int *anon);
    raises: ver_entry_make)? The call then raises NoMethodError where it
    is. */
 int cplan_undef_stops(Compiler *c, int id, int cls, const char *name);
+/* Whether the load record places an active undef on the chain before this call. */
+int cplan_undef_before(Compiler *c, int id, int cls, const char *name);
+/* A cell test for an undef on String. A clear cell reaches the original
+   builtin. -1 when the history needs different arms. */
+int cplan_string_undef_guard(Compiler *c, int id, const char *name);
+/* A cell test for a conditional String#method_missing. A clear cell
+   reaches the default hook. -1 when this test does not apply. */
+int cplan_string_hook_guard(Compiler *c, int id, int hook);
 /* Does class or module k itself answer `name` at its own level of call id's
    instance lookup: a def of its own (not a copy an include made), a reader
    its own body declared, or an alias? As the record proves it where the

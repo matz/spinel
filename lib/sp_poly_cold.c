@@ -329,10 +329,12 @@ int sp_cext_integer_pack(sp_RbVal v, void *words, size_t numwords, size_t wordsi
   if (!fits) return sign < 0 ? -2 : 2;
   return sign;
 }
-/* rb_sym2str: the Symbol's name as a frozen String */
+#ifdef SP_CEXT
+/* rb_sym2str uses the generated unit's frozen Symbol-name handle. */
 sp_RbVal sp_cext_sym2str(sp_sym s) {
-  return sp_box_str(sp_sym_to_s(s));
+  return sp_box_obj(sp_cext_sym_name_handle(s), SP_BUILTIN_STRBUF);
 }
+#endif
 /* rb_str_plus: a new String of both, ASCII-8BIT when either is */
 sp_RbVal sp_cext_str_plus(sp_RbVal a, sp_RbVal b) {
   SP_GC_ROOT_RBVAL(a); SP_GC_ROOT_RBVAL(b);
@@ -538,7 +540,9 @@ void sp_poly_puts(sp_RbVal v)
    Symbol#name and byte readers can reuse the spelling itself. */
 sp_String *sp_sym_to_s_new(sp_sym id)
 {
-  return sp_String_freeze(sp_String_new_unfrozen(sp_sym_to_s_frozen(id)));
+  sp_String *s = sp_String_freeze(sp_String_new_unfrozen(sp_sym_to_s_frozen(id)));
+  s->copy_on_intern = 1;
+  return s;
 }
 
 /* Object#to_s when a user override returns a non-String. */
@@ -768,7 +772,7 @@ sp_RbVal sp_poly_slice(sp_RbVal a, sp_int start, sp_int len)
 {
   if (sp_rbval_is_string(a)) {
     const char *bytes = sp_rbval_string_bytes(a);
-    return sp_box_nullable_str(sp_str_sub_range(bytes ? bytes : sp_str_empty, start, len));
+    return sp_box_str_fresh(sp_str_sub_range(bytes ? bytes : sp_str_empty, start, len));
   }
   /* An Integer answers `n[start, len]`, the len-bit field starting at bit
      `start` -- the two-argument form of the bit read, which the typed arms
@@ -791,7 +795,7 @@ sp_RbVal sp_poly_slice(sp_RbVal a, sp_int start, sp_int len)
      the default below made `[:sym, nil][0][0, 4]` nil, which then went on
      being used as one. */
   if (a.tag == SP_TAG_SYM)
-    return sp_box_nullable_str(sp_str_sub_range(sp_sym_to_s((sp_sym)a.v.i), start, len));
+    return sp_box_str_fresh(sp_str_sub_range(sp_sym_to_s((sp_sym)a.v.i), start, len));
   /* Everything else here -- nil, a Float, true, false -- simply has no `[]`,
      and CRuby says so. The default used to answer nil for all of them, so a
      receiver that was never sliceable produced a value indistinguishable
@@ -1021,7 +1025,7 @@ sp_StrStrHash *sp_StrPolyHash_to_s_values(sp_StrPolyHash *h)
 const char *sp_PolyPolyHash_repl(sp_PolyPolyHash *h, const char *key)
 {
   SP_GC_ROOT(h);
-  return sp_poly_to_s(sp_PolyPolyHash_get(h, sp_box_str(key)));
+  return sp_poly_to_s(sp_PolyPolyHash_get(h, sp_box_str_new(key)));
 }
 
 sp_SymPolyHash*sp_SymPolyHash_merge(sp_SymPolyHash*a,sp_SymPolyHash*b)
@@ -1085,7 +1089,7 @@ sp_RbVal sp_poly_clear(sp_RbVal v)
   /* String#clear on a plain string box: a fresh empty string the receiver
      takes back, as the typed clear builds; a frozen one raises. It answered
      the box untouched. */
-  if (v.tag == SP_TAG_STR) { sp_str_check_mutable(v.v.s); return sp_box_str(sp_str_from_bytes("", 0)); }
+  if (v.tag == SP_TAG_STR) { sp_str_check_mutable(v.v.s); return sp_box_str_new(sp_str_from_bytes("", 0)); }
   sp_poly_coll_chk(v, "clear");
   sp_poly_hash_check_mutable(v);
   if (v.tag != SP_TAG_OBJ || !v.v.p) return v;
@@ -1126,8 +1130,8 @@ sp_RbVal sp_poly_slice_or_call(sp_RbVal v, sp_RbVal a, sp_RbVal b)
     if (b.tag == SP_TAG_INT) {
       if (sp_re_match(pattern, subject ? subject : sp_str_empty) < 0) return sp_box_nil();
       sp_int n = sp_re_group_nth(b.v.i);
-      if (n == 0) return sp_box_nullable_str(sp_re_match_str);
-      if (n >= 1 && n <= 9) return sp_box_nullable_str(sp_re_captures[n]);
+      if (n == 0) return sp_box_str_new(sp_re_match_str);
+      if (n >= 1 && n <= 9) return sp_box_str_new(sp_re_captures[n]);
       return sp_box_nil();
     }
     if (sp_rbval_is_string(b) || b.tag == SP_TAG_SYM) {
@@ -1135,7 +1139,7 @@ sp_RbVal sp_poly_slice_or_call(sp_RbVal v, sp_RbVal a, sp_RbVal b)
                                             : sp_rbval_string_bytes(b);
       SP_GC_ROOT_STR(name);
       if (sp_re_match(pattern, subject ? subject : sp_str_empty) < 0) return sp_box_nil();
-      return sp_box_nullable_str(sp_re_named_capture(pattern, name ? name : sp_str_empty));
+      return sp_box_str_new(sp_re_named_capture(pattern, name ? name : sp_str_empty));
     }
   }
   /* a Method's [] too: its arguments of any kind are the call's, where
@@ -1267,10 +1271,10 @@ sp_RbVal sp_poly_dup(sp_RbVal v, int keep_frozen)
      gsub! on the "copy" raised FrozenError (Benchmark::Tms#format). */
   if (v.tag == SP_TAG_STR && v.v.s) {
     const char *src = v.v.s;
-    const char *d = sp_str_dup(src);
-    if (keep_frozen && sp_str_is_frozen_val(src)) d = sp_str_freeze_val(d);
-    v.v.s = d;
-    return v;
+    int frozen = keep_frozen && sp_str_is_frozen_val(src);
+    sp_String *d = sp_String_new_unfrozen(src);
+    if (frozen) sp_String_freeze(d);
+    return sp_box_obj(d, SP_BUILTIN_STRBUF);
   }
   /* String#dup/#clone on a boxed shared handle (#6179): a new handle over a
      copy of the bytes, its ASCII-8BIT tag kept and its frozen flag only for
@@ -1390,8 +1394,8 @@ static sp_RbVal sp_poly_pair_copy(sp_RbVal e) {
   SP_GC_ROOT_RBVAL(e);
   sp_PolyArray *p = sp_PolyArray_new(); SP_GC_ROOT(p);
   sp_RbVal k = sp_poly_arr_get(e, 0); SP_GC_ROOT_RBVAL(k);
-  if (k.tag == SP_TAG_STR && k.v.s) k.v.s = sp_hash_key_str(k.v.s);
-  else if (sp_poly_is_strbuf(k)) k = sp_box_str(sp_hash_key_str(sp_String_cstr((sp_String *)k.v.p)));
+  const char *bytes = sp_rbval_string_bytes(k);
+  if (bytes) k = sp_box_str_new(sp_hash_key_str(bytes));
   sp_PolyArray_push(p, k);
   sp_PolyArray_push(p, sp_poly_arr_get(e, 1));
   return sp_box_poly_array(p);
@@ -1741,11 +1745,11 @@ sp_RbVal sp_builtin_class_new(int kind, sp_int argc, const sp_RbVal *av, sp_Proc
   switch (kind) {
   case 'S': {
     sp_dyn_new_arity(argc, 1);
-    if (argc == 0) return sp_box_str(sp_str_dup_external((&("\xff")[1])));
+    if (argc == 0) return sp_box_obj(sp_String_from_cbinstr("", 0), SP_BUILTIN_STRBUF);
     sp_RbVal s = av[0];
     if (!sp_rbval_is_string(s))
       sp_raise_cls("TypeError", sp_sprintf("no implicit conversion of %s into String", sp_poly_class_name(s)));
-    return sp_box_str(sp_str_dup(sp_rbval_string_bytes(s)));
+    return sp_box_obj(sp_String_new_unfrozen(sp_rbval_string_bytes(s)), SP_BUILTIN_STRBUF);
   }
   case 'A': {
     sp_dyn_new_arity(argc, 2);
@@ -1824,6 +1828,7 @@ const char *sp_str_format_polyarr(const char *fmt, sp_PolyArray *a) {
   /* CRuby refuses to mix numbered (%1$s), sequential (%s) and named (%<a>d)
      references in one format string (#3723) */
   sp_bool used_numbered = FALSE, used_sequential = FALSE, used_named = FALSE;
+  sp_RbVal named_v = sp_box_nil(); SP_GC_ROOT_RBVAL(named_v);
   while (p < pend) {
     if (*p != '%') {
       if (out + 1 >= cap) { cap = cap * 2; buf = (char *)realloc(buf, cap); }
@@ -1854,7 +1859,8 @@ const char *sp_str_format_polyarr(const char *fmt, sp_PolyArray *a) {
        `%0<n>5d`). %<name> substitutes the value for the conversion that
        follows; %{name} is the conversion itself, the value's to_s, padded as
        a %s when flags came before it. */
-    sp_RbVal named_v = sp_box_nil(); sp_bool have_named = FALSE, brace_named = FALSE;
+    named_v = sp_box_nil();
+    sp_bool have_named = FALSE, brace_named = FALSE;
     while (p < pend && sl < sizeof(spec) - 8) {
       char c = *p;
       if (c == '*') {

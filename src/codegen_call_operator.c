@@ -1377,7 +1377,7 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
          class: its own class name is the one to compare */
       buf_printf(b, "(_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_EXCEPTION && _t%d.v.p) ? "
                     "strcmp(((sp_Exception *)_t%d.v.p)->cls_name, sp_class_to_s(_t%d)) == 0 : "
-                    "sp_poly_get_class(_t%d).cls_id == _t%d.cls_id; })", t, t, t, t, k, t, k);
+                    "sp_class_eq(sp_poly_get_class(_t%d), _t%d); })", t, t, t, t, k, t, k);
     else
       buf_printf(b, "sp_poly_is_a(_t%d, _t%d); })", t, k);
     if (boxed_ans) buf_puts(b, ")");
@@ -1777,13 +1777,17 @@ int emit_call_operator_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
     const char *keyct = hrr.key == TY_SYMBOL ? "sp_sym"
                       : hrr.key == TY_STRING ? "const char *" : "sp_RbVal";
     const char *kbox = hrr.key == TY_SYMBOL ? "sp_box_sym(_key)"
-                     : hrr.key == TY_STRING ? "sp_box_str(_key)" : "_key";
+                     : hrr.key == TY_STRING ? "sp_box_str_new(_key)" : "_key";
     const char *dn2 = uid_new();
     buf_printf(&g_procs,
       "static sp_RbVal _sp_hash_dproc_%s(sp_%sHash *_self_h, %s _key, void *_dproc_self) {\n"
+      "  SP_GC_ROOT(_self_h);\n"
+      "  SP_GC_ROOT(_dproc_self);\n"
+      "  sp_RbVal _boxed_key = %s;\n"
+      "  SP_GC_ROOT_RBVAL(_boxed_key);\n"
       "  return sp_penum_call2((sp_Proc *)_dproc_self,"
-      " sp_box_nullable_obj((void *)_self_h, %s), %s);\n}\n",
-      dn2, hn2, keyct, hash_box_cls(hrt), kbox);
+      " sp_box_nullable_obj((void *)_self_h, %s), _boxed_key);\n}\n",
+      dn2, hn2, keyct, kbox, hash_box_cls(hrt));
     int th2 = ++g_tmp, tp2 = ++g_tmp;
     buf_printf(b, "({ sp_%sHash *_t%d = ", hn2, th2); emit_expr(c, recv, b);
     buf_printf(b, "; sp_Proc *_t%d = ", tp2); emit_expr(c, argv[0], b);

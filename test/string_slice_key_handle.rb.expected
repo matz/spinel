@@ -1,0 +1,6 @@
+[[98], [0, 98], nil, nil]
+[false, false, "ASCII-8BIT", [0, 98], false]
+[177, 2, 2, 3]
+[false, nil]
+["ASCII-8BIT", nil]
+Encoding::CompatibilityError

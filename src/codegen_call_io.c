@@ -94,6 +94,28 @@ static void emit_line_param_decl(Compiler *c, int id, const char *pn, int lt, Bu
   else buf_printf(b, " const char *lv_%s = _t%d; SP_GC_ROOT_STR(lv_%s);", pn, lt, pn);
 }
 
+/* Publish a value-form local before raising at EOF. A handle or a
+   converted #to_str result already holds the change in its own object. */
+static void emit_pread_buffer_result(Compiler *c, int ob, int file, int length, int offset,
+                                     int buffer, int handle_result, Buf *b) {
+  int eof = ++g_tmp, result = ++g_tmp;
+  buf_printf(b, "sp_bool _t%d; sp_String *_t%d = sp_io_pread_buffer(_t%d, _t%d, _t%d, _t%d, &_t%d); ",
+             eof, result, file, length, offset, buffer, eof);
+  if (!handle_result && nt_kind(c->nt, ob) == NK_LocalVariableReadNode && !strbuf_slot_has(c, ob)) {
+    const char *nm = nt_str(c->nt, ob, "name");
+    LocalVar *lv = scope_local(comp_scope_of(c, ob), nm);
+    TyKind slot = lv ? repr_of_slot(c, lv).as_ty : TY_UNKNOWN;
+    if (slot == TY_STRING || slot == TY_POLY) {
+      buf_printf(b, "if (sp_rbval_is_string(_t%d)) { ", buffer);
+      emit_local_ref(c, ob, nm, b);
+      buf_printf(b, " = %s(_t%d); } ", slot == TY_STRING ? "sp_String_cstr" : "SP_SEBOX", result);
+    }
+  }
+  buf_printf(b, "if (_t%d) sp_raise_cls(\"EOFError\", \"end of file reached\"); ", eof);
+  if (handle_result) buf_printf(b, "_t%d; })", result);
+  else buf_printf(b, "sp_String_cstr(_t%d); })", result);
+}
+
 /* The output buffer `ob` of read(len, buf), readpartial and sysread(len,
    buf) and pread(len, off, buf), when it is not a String. CRuby evaluates
    the arguments, dispatches (a nil handle is NoMethodError), converts the
@@ -132,7 +154,12 @@ static void emit_io_read_buffer(Compiler *c, const char *name, const char *fn, c
   for (int k = 0; k < nint; k++) {
     buf_printf(b, "sp_int _t%d = ", ti + k);
     if (k == 0 && rest) buf_printf(b, "sp_poly_nil_p(_t%d) ? 0 : ", ta);
-    buf_printf(b, "sp_poly_arg_int_chk(_t%d); ", ta + k);
+    if (nint == 2) buf_printf(b, "sp_poly_arg_int_chk_w(_t%d, %d); ", ta + k, k + 1);
+    else buf_printf(b, "sp_poly_arg_int_chk(_t%d); ", ta + k);
+  }
+  if (nint == 2) {
+    emit_pread_buffer_result(c, ob, tf, ti, ti + 1, ta + nint, shared, b);
+    return;
   }
   if (sp_streq(name, "read") || sp_streq(name, "readpartial"))
     buf_printf(b, "if (_t%d < 0) sp_raise_cls(\"ArgumentError\", sp_sprintf(\"negative length %%lld given\", (long long)_t%d)); ",
@@ -364,7 +391,7 @@ static void emit_io_read_nonblock_value(Compiler *c, int id, Buf *b) {
   buf_printf(b, "if (!_t%d && _t%d) { if (_e%d) sp_raise_cls(\"EOFError\", \"end of file reached\"); "
                 "sp_raise_cls(\"IO::EAGAINWaitReadable\", \"Resource temporarily unavailable - read would block\"); } ", tr, te, eof);
   if (repr_of(c, id).kind == RK_BOXED)
-    buf_printf(b, "_t%d ? sp_box_str(_t%d) : (_e%d ? sp_box_nil() : sp_box_sym(sp_sym_intern(\"wait_readable\")))", tr, tr, eof);
+    buf_printf(b, "_t%d ? sp_box_str_new(_t%d) : (_e%d ? sp_box_nil() : sp_box_sym(sp_sym_intern(\"wait_readable\")))", tr, tr, eof);
   else buf_printf(b, "_t%d", tr);
   buf_puts(b, "; })");
 }
@@ -454,7 +481,7 @@ static void emit_io_read_nonblock_buffer(Compiler *c, int id, int handle, Buf *b
     if (shared)
       buf_printf(b, "(sp_poly_nil_p(_t%d) ? sp_box_obj(sp_String_new_shared(_t%d), SP_BUILTIN_STRBUF) : _t%d)",
                  held[1], tb, held[1]);
-    else buf_printf(b, "(sp_poly_nil_p(_t%d) ? sp_box_str(_t%d) : _t%d)", held[1], tb, held[1]);
+    else buf_printf(b, "(sp_poly_nil_p(_t%d) ? sp_box_str_new(_t%d) : _t%d)", held[1], tb, held[1]);
     buf_printf(b, " : (_e%d ? sp_box_nil() : sp_box_sym(sp_sym_intern(\"wait_readable\")))", eof);
   }
   else buf_printf(b, "_t%d", tb);
@@ -736,26 +763,9 @@ static int socket_recv_call(const char *name, int argc) {
    len: the typed arm's, and a socket a block or a thread takes as its
    parameter (a boxed handle) answers the same way. */
 static void emit_io_socket_recv_call(Compiler *c, const char *name, const char *r, int len, Buf *b) {
-  if (sp_streq(name, "recv")) {
-    buf_printf(b, "sp_sock_recv(%s, ", r); emit_int_expr(c, len, b); buf_puts(b, ")");
-    return;
-  }
-  /* recvfrom -> [payload, ["AF_INET", port, ip, ip]]; the payload and
-     the peer's address are new Strings, held while the Arrays are made */
-  int tp = ++g_tmp, ti = ++g_tmp, to = ++g_tmp, ta = ++g_tmp, tw = ++g_tmp;
-  buf_printf(b, "({ const char *_t%d = NULL; sp_int _t%d = 0;"
-                " const char *_t%d = sp_sock_recvfrom(%s, ", ti, tp, to, r);
+  buf_printf(b, "sp_sock_%s(%s, ", name, r);
   emit_int_expr(c, len, b);
-  buf_printf(b, ", &_t%d, &_t%d); SP_GC_ROOT(_t%d); SP_GC_ROOT(_t%d);"
-                " sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);"
-                " sp_PolyArray_push(_t%d, sp_box_str(strchr(_t%d, ':') ? SPL(\"AF_INET6\") : SPL(\"AF_INET\")));"
-                " sp_PolyArray_push(_t%d, sp_box_int(_t%d));"
-                " sp_PolyArray_push(_t%d, sp_box_str(_t%d));"
-                " sp_PolyArray_push(_t%d, sp_box_str(_t%d));"
-                " sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);"
-                " sp_PolyArray_push(_t%d, sp_box_str(_t%d));"
-                " sp_PolyArray_push(_t%d, sp_box_poly_array(_t%d)); _t%d; })",
-             ti, tp, ti, to, ta, ta, ta, ti, ta, tp, ta, ti, ta, ti, tw, tw, tw, to, tw, ta, tw);
+  buf_puts(b, ")");
 }
 
 /* The socket calls emit_io_socket_call answers, at the arities it does:
@@ -792,7 +802,7 @@ static void emit_io_socket_call(Compiler *c, const NodeTable *nt, const char *na
       int tw = ++g_tmp, te = ++g_tmp;
       buf_printf(b, "({ %ssp_bool _e%d; const char *_t%d = sp_sock_read_nb(%s, ", pre.p ? pre.p : "", te, tw, r);
       emit_nonblock_operand(c, op[0], argv[0], 'i', b);
-      buf_printf(b, ", %s, 1, &_e%d); _t%d ? sp_box_str(_t%d)"
+      buf_printf(b, ", %s, 1, &_e%d); _t%d ? sp_box_str_new(_t%d)"
                     " : (_e%d ? sp_box_nil() : sp_box_sym(sp_sym_intern(\"wait_readable\"))); })",
                  x.p, te, tw, tw, te);
     }
@@ -1525,7 +1535,7 @@ int emit_call_poly_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
             int tw9 = ++g_tmp, te9 = ++g_tmp;
             buf_printf(b, "sp_bool _e%d; const char *_t%d = sp_sock_read_nb(_t%d, ", te9, tw9, tio2);
             emit_nonblock_operand(c, op9[0], argv[0], 'i', b);
-            buf_printf(b, ", %s, 0, &_e%d); _t%d ? sp_box_str(_t%d)"
+            buf_printf(b, ", %s, 0, &_e%d); _t%d ? sp_box_str_new(_t%d)"
                           " : (_e%d ? sp_box_nil() : sp_box_sym(sp_sym_intern(\"wait_readable\"))); })",
                          x9.p, te9, tw9, tw9, te9);
           }
@@ -1794,27 +1804,8 @@ static int emit_boxed_positional_io(Compiler *c, int recv, const char *name, int
   buf_printf(b, "sp_int _t%d = sp_poly_arg_int_chk_w(_t%d, 1); ", tfirst, th[0]);
   if (argc >= 2) buf_printf(b, "sp_int _t%d = sp_poly_arg_int_chk_w(_t%d, 2); ", toff, th[1]);
   else buf_printf(b, "sp_int _t%d = 0; ", toff);
-  /* pread's buffer: a plain String or boxed local is checked mutable and
-     rebound to the read result, as the typed arm rebinds it */
-  const char *bufn = NULL;
-  TyKind bt = TY_UNKNOWN;
-  if (argc == 3 && nt_kind(c->nt, argv[2]) == NK_LocalVariableReadNode) {
-    bt = comp_ntype(c, argv[2]);
-    if (bt == TY_STRING || bt == TY_POLY) bufn = nt_str(c->nt, argv[2], "name");
-  }
-  if (bufn) buf_printf(b, "if (_t%d.tag == SP_TAG_STR) sp_str_check_mutable(_t%d.v.s); ", th[2], th[2]);
-  int tpr = ++g_tmp;
-  /* a rebound buffer reads through the output-buffer form and is written
-     back before the EOFError, as the typed arm does: the end of the stream
-     leaves it "". Its length 0 then takes no shortcut (sp_pread_check) */
-  buf_printf(b, "const char *_t%d = %s(_t%d, _t%d, _t%d); ", tpr, bufn ? "sp_File_pread_or_nil" : io_pread_entry(argc), tio, tfirst, toff);
-  if (bufn) {
-    emit_local_ref(c, argv[2], bufn, b);
-    if (bt == TY_STRING) buf_printf(b, " = _t%d ? _t%d : sp_str_empty; ", tpr, tpr);
-    else buf_printf(b, " = sp_box_str(_t%d ? _t%d : sp_str_empty); ", tpr, tpr);
-    buf_printf(b, "if (!_t%d) sp_raise_cls(\"EOFError\", \"end of file reached\"); ", tpr);
-  }
-  buf_printf(b, "_t%d; })", tpr);
+  if (argc == 3) emit_pread_buffer_result(c, argv[2], tio, tfirst, toff, th[2], 0, b);
+  else buf_printf(b, "%s(_t%d, _t%d, _t%d); })", io_pread_entry(argc), tio, tfirst, toff);
   return 1;
 }
 
@@ -2024,31 +2015,13 @@ int emit_call_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const ch
     }
     if (sp_streq(name, "pread") && argc >= 1) {
       if (argc > 3) { emit_io_read_overcount(c, name, r, argv, argc, "2..3", b); free(rb.p); return 1; }
-      if (argc == 3 && emit_io_read_outbuf(c, id, name, "sp_File_pread_or_nil", r, argv, 2, argv[2], 0, b)) {
+      if (argc == 3) {
+        emit_io_read_buffer(c, name, "sp_File_pread_or_nil", r, argv, 2, argv[2], 0, 1, 0, NULL, b);
         free(rb.p); return 1;
       }
-      /* pread(len, off, buf): CRuby fills the buffer argument; when it is a
-         plain local, rebind it to the read result (#3131) */
-      const char *bufn = NULL;
-      if (argc >= 3 &&
-          nt_kind(nt, argv[2]) == NK_LocalVariableReadNode)
-        bufn = nt_str(nt, argv[2], "name");
-      int tpr = ++g_tmp;
-      if (bufn) {
-        /* the output buffer must be mutable, checked before the read (#3335) */
-        buf_puts(b, "({ sp_str_check_mutable("); emit_expr(c, argv[2], b); buf_puts(b, "); ");
-        buf_printf(b, "const char *_t%d = ", tpr);
-      }
-      /* the length is NUM2SIZET's, the offset NUM2OFFT's: each words its
-         nil its own way */
-      buf_printf(b, "%s(%s, ", bufn ? "sp_File_pread_or_nil" : io_pread_entry(argc), r); emit_int_expr_conv(c, argv[0], b); buf_puts(b, ", ");
+      buf_printf(b, "%s(%s, ", io_pread_entry(argc), r); emit_int_expr_conv(c, argv[0], b); buf_puts(b, ", ");
       if (argc >= 2) emit_int_expr_offt(c, argv[1], b); else buf_puts(b, "0");
       buf_puts(b, ")");
-      if (bufn) {
-        buf_puts(b, "; ");
-        emit_local_ref(c, argv[2], bufn, b);
-        buf_printf(b, " = _t%d ? _t%d : sp_str_empty; if (!_t%d) sp_raise_cls(\"EOFError\", \"end of file reached\"); _t%d; })", tpr, tpr, tpr, tpr);
-      }
       free(rb.p); return 1;
     }
     if (sp_streq(name, "pwrite") && argc >= 1) {
@@ -2110,7 +2083,7 @@ int emit_call_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const ch
           emit_nonblock_operand(c, op8[0], argv[0], 'i', b);
           buf_printf(b, ", %s, 0, &_e%d); ", x8.p, te);
           if (ob >= 0) buf_printf(b, "if (_t%d) { %s} ", tob, obset.p ? obset.p : "");
-          buf_printf(b, "_t%d ? sp_box_str(_t%d)"
+          buf_printf(b, "_t%d ? sp_box_str_new(_t%d)"
                         " : (_e%d ? sp_box_nil() : sp_box_sym(sp_sym_intern(\"wait_readable\"))); })",
                      tob, tob, te);
         }
@@ -2227,7 +2200,7 @@ int emit_call_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const ch
                       " while ((_t%d = sp_File_getc(_t%d)) != NULL) {", lt2, lt2, lt2, rf2);
       if (bpn2 && file_block_param_poly(c, id, bpn2))
         buf_printf(b, " sp_RbVal lv_%s = %s(_t%d); SP_GC_ROOT_RBVAL(lv_%s);", bpn2,
-                   (is_byte || is_cp) ? "sp_box_int" : "sp_box_str", lt2, bpn2);
+                   (is_byte || is_cp) ? "sp_box_int" : "sp_box_str_new", lt2, bpn2);
       /* A character is a fresh String, bound just as a fresh line is. */
       else if (bpn2 && !is_byte && !is_cp && repr_of_slot(c, scope_local(comp_scope_of(c, blk2), bp2)).kind == RK_STRBUF)
         emit_line_param_decl(c, id, bpn2, lt2, b);
@@ -2508,7 +2481,7 @@ int emit_call_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const ch
                     " while ((_t%d = sp_File_gets_sep(_t%d, _t%d, _t%d, _t%d)) != NULL) {",
                  lt, lt, lt, rf, ls, ll, lc);
       if (bpn && file_block_param_poly(c, id, bpn))
-        buf_printf(b, " sp_RbVal lv_%s = sp_box_str(_t%d); SP_GC_ROOT_RBVAL(lv_%s);", bpn, lt, bpn);
+        buf_printf(b, " sp_RbVal lv_%s = sp_box_str_new(_t%d); SP_GC_ROOT_RBVAL(lv_%s);", bpn, lt, bpn);
       else if (bpn) emit_line_param_decl(c, id, bpn, lt, b);
       emit_io_loop_body(c, blk, bp, bbb, bbn, b);
       buf_printf(b, " } (sp_File *)_t%d; })", rf);

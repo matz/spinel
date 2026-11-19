@@ -52,7 +52,7 @@ registry, or stack reification -- none of which exist in a flat compiled binary.
 | Feature | Behaviour | Why it's fundamental |
 |---|---|---|
 | `eval` / `instance_eval("str")` / `class_eval("str")` | unsupported, refused at compile time | needs a runtime parser + type system. (Block forms -- `instance_eval { }` -- DO work; the block is compiled. A `def` in an `instance_eval` / `instance_exec` block defines a class method when the receiver is a class or module the program defines, or `self` directly in a class body, and the block holds defs only; a `def` in any other such block is refused.) One String form is expanded at compile time: `class_eval` / `module_eval` on self in a class or module body with a literal String, whose interpolations are only the loop variable of an enclosing `each` over a literal array (or its `to_s` / `upcase` / `downcase` / `capitalize`). Any other String `class_eval` or `module_eval` (an interpolated constant, a String only the run time has, an explicit receiver), and `instance_eval` of a String, is refused. Code in a branch a `RUBY_ENGINE == "..."` check rules out (`if RUBY_ENGINE == "spinel" ... else eval(...) end`) is dropped before analysis, so a library can keep an eval backend for other engines. |
-| `method_missing` | dispatched only where the analysis knows the receiver's classes and one of them has no method of the name but a `method_missing` of the program's that does not call `super`: the call becomes `method_missing(:name, ...)` for those classes (a receiverless call in a method, or in an `instance_eval` block whose self is known, by self's class and its subclasses). Anywhere else it is not dispatched (defining it warns at compile time) | every call site is a direct C call, so an undefined-method call has no per-receiver hook to fall back to unless the analysis can name the class whose `method_missing` answers. Only calls that had no target are rewritten, so the type of no other call is widened. A `method_missing` that calls `super` is left out because BasicObject's is not modelled. The method is still callable explicitly. |
+| `method_missing` | dispatched where analysis knows a receiver class that has a hook and lacks the requested method. Receiverless calls use self's class and its subclasses, including when self is known in an `instance_eval` block. A base String can also reach its hook when an `undef` removes a builtin. That lookup uses the versions the load record can resolve, including supported conditional definitions. Splitting calls with literal blocks and resolving `super` from the hook remain limited | each call site is a direct C call or dispatch over known targets. Analysis includes the hook's result wherever the call can reach it. Defining the hook can warn at compile time. The hook is also callable explicitly. |
 | `WeakRef` (`require "weakref"`, packages/weakref) | keeps its object alive, `weakref_alive?` is true (CRuby's word for a true, false or nil) as long as the WeakRef lives, and it forwards no calls to the object: read it with `__getobj__` | the collector hands out no weak references, and CRuby's WeakRef is a Delegator, which forwards through `method_missing` (above) |
 | `class_eval` of a string | compiled when the string is a literal or a heredoc with no interpolation, or one whose interpolations are the loop variable of the `CONST.each` / `%w().each` around it, or a constant in call position (racc's `#{Racc_Main_Parsing_Routine}(_racc_setup(), false)`, the send of the method the constant names); any other string is refused | the text has to be known at compile time |
 | An Array a method yields to a C extension's block through a name the extension computes (`rb_block_call(recv, SYM2ID(mid), ...)`, racc's `yyparse(recv, mid)`) | reaches C as a poly Array copy of its elements, with its Strings shared; a change the C side makes to that Array does not reach the typed Array the method yielded | the analysis widens the Arrays that reach an extension by the routes it sees (an argument, an ivar's); a block handed to a method by a computed name reaches any method |
@@ -549,7 +549,9 @@ omitted. The timeout converts as CRuby's time interval does, in both: nil
 waits, written or held in a variable, a parameter, a keyword or a box (one
 that can hold a number too included), and a value that is not a number
 raises TypeError ("can't convert String into time interval").
-`#addr` / `#peeraddr` return CRuby's numeric 4-element form. `#accept` parks
+`#addr` / `#peeraddr` return CRuby's numeric 4-element form. The numeric
+host and IP in an address row, including a row from `recvfrom`, can share
+the same String. Each lookup produces its own result. `#accept` parks
 cooperatively on the green-thread scheduler, so a thread-per-connection server
 does not stall its siblings, and socket writes bypass stdio (`#sync` is true,
 as in CRuby).
@@ -714,9 +716,15 @@ the member:
   is not converted: typed, it is refused at compile time; boxed, it raises
   TypeError. The other FileTest predicates take no IO operand at all.
 
+- **`File#pread` with an output buffer** -- returns the converted String
+  itself. A zero-length read leaves its contents and encoding intact. A read
+  that reaches EOF clears the buffer before raising `EOFError`.
+
 - **`Dir.foreach` and `Dir.each_child` without a block** -- the Enumerator
   reads the directory's entries on its first pull and closes it then, so an
-  entry removed between pulls is still listed. A splatted argument is refused
+  entry removed between pulls is still listed. A collected entry keeps its
+  String identity when fetched from the resulting Array.
+  A splatted argument is refused
   at compile time (with a block it fails to build).
 
 - **`File::Stat#rdev_major` and `#rdev_minor`** -- refused at compile time
@@ -1485,8 +1493,13 @@ it "will be frozen in the future"); Spinel answers it frozen, as it does
 literals: `:a.to_s.frozen?`, `:a.id2name.frozen?` and `String(:a).frozen?`
 are `true`. Appending to either `:a.to_s` or `:a.id2name` raises
 FrozenError. Use unary `+` or `dup` for a mutable copy. Each call still answers its own object
-(`:a.to_s.equal?(:a.to_s)` is `false`), as in CRuby.
-`Symbol#name` returns the same frozen spelling on each call.
+(`:a.to_s.equal?(:a.to_s)` is `false`), as in CRuby. Unary `-` and
+`dedup` return the canonical frozen String, distinct from the conversion
+result.
+Repeated `Symbol#name` calls through the same dispatch path return the
+same frozen spelling. The native extension API `rb_sym2str` shares the
+typed call's String. A boxed Ruby call can choose a different object when
+its spelling also occurs in the frozen String pool.
 
 **Strings are UTF-8, whatever the source encoding.** An `# encoding:` (or
 `coding:`) magic comment naming another encoding warns at compile time,
@@ -1569,6 +1582,9 @@ further: since 3.4 CRuby steps a non-numeric range by repeated `+`, so
 `("a".."e").step("x")` diverges, while spinel takes every Nth element -- a
 stride a String cannot name -- and raises.
 
+An endless String range yields a fresh String at each step. `peek` and
+the following `next` return the same item.
+
 #### Conditional prepends on String
 
 A placed conditional `prepend` in a String reopening can install a module
@@ -1586,9 +1602,15 @@ conditional path.
 
 Strings store embedded NUL bytes, and the byte-exact core matches CRuby:
 literals (`"a\0b"`), `length` / `bytesize` / `bytes`, `==` (`"a\0b" == "a"`
-is false), Hash keys, slicing (`s[i]`, `s[a, n]`, ranges, `byteslice`),
+is false), Hash keys, slicing (`s[i]`, `s[a, n]`, `s[needle]`, ranges, `byteslice`),
 `dup` / `clone`, concatenation, `0.chr`, `File.write` / `File.read`
-round-trips, StringIO, pack/unpack, and Marshal.
+round-trips, StringIO, pack/unpack, and Marshal. In a decoded Marshal
+graph, references to one String share the same object, including its
+encoding and any subsequent changes.
+Slicing with a String needle produces a fresh mutable String with the
+needle's encoding when the needle matches.
+The two-argument positional slice keeps its own mutable String through
+boxed receivers too, including short and empty results.
 
 The transforms and searches are byte-exact too: the case ops, the `strip`
 family, `chomp` / `chop` / `delete_prefix` / `delete_suffix`, `index` /
@@ -1811,13 +1833,13 @@ Proc, a Method, a Thread, a Mutex, a Queue, an exception, a Dir, a Class) or
 a Symbol, nil, true or false (#9171). Keys are then found by `equal?`: two
 instances whose `eql?` and `hash` agree are two keys, and an Array or a Hash
 key is its object, not its content. A hash that already holds entries is
-rebuilt, and `compare_by_identity?` answers true.
+rebuilt, and `compare_by_identity?` answers true. A String key is accepted
+when Spinel can establish its identity, as with a fresh String made by unary
+`+`. The identity Hash retains that object and can still find it after mutation.
 
-It stays refused at compile time, naming why, where a key may be a String
-(equal-content Strings may be one object here, through the frozen literal
-pool, where CRuby has two), an Integer or a Float (held by value here, where
-CRuby makes a new object of each Bignum and non-flonum Float), a Rational, a
-Complex, or a boxed value that may hold any of them. The hash also has to be
+Compilation refuses keys whose identity Spinel cannot establish, including
+uncertain String keys, Integers, Floats, Rationals, Complex values, and boxed
+values that may hold any of them. The hash also has to be
 held in one local or instance variable that is given no other hash (nil or a
 new one is fine), every use of it a call on it the compiler follows: `[]`,
 `[]=`, `store`, `fetch`, `key?` and its kin, `delete`, `dig`, an index
@@ -1944,7 +1966,8 @@ requires shipping and maintaining the Unicode grapheme-break property tables,
 which Spinel deliberately does not carry. `String#grapheme_clusters` and
 `String#each_grapheme_cluster` are therefore not supported. For codepoint- or
 byte-level iteration, use the supported `String#chars`, `#each_char`,
-`#codepoints`, or `#bytes`.
+`#codepoints`, or `#bytes`. Characters from an ASCII-8BIT String keep
+that encoding.
 
 #### `Time` sub-nanosecond precision
 
@@ -2023,7 +2046,10 @@ UTF-8 agree on every one. What differs:
 1.chr.inspect        # CRuby: "\x01"        Spinel: "\u0001"
 ```
 
-The encoding's NAME, and `inspect`'s escape form for a non-printable byte.
+The encoding's name, and `inspect`'s escape form for a non-printable byte.
+Normalization can also affect object identity. A boxed `Symbol#name` can
+share an object with an equal-byte deduplicated UTF-8 String where CRuby
+keeps separate objects for their encodings.
 CRuby needs the name because encodings are first-class objects and every string
 must report one; a program cannot name an encoding in spinel, so there is
 nothing for the third name to distinguish. The 7-bit fact itself is not lost --

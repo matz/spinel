@@ -1,0 +1,3 @@
+[:strip, ["x"], true]
+nil
+[:operand]

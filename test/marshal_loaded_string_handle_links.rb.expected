@@ -1,0 +1,7 @@
+[true, true, false]
+["UTF-8", [195, 169, 0, 33], "ASCII-8BIT", [255, 0]]
+[304, 304, 304, 4]
+[true, 302, "ASCII-8BIT"]
+[4, 2]
+"marshal data too short"
+"negative string size (or size too big)"

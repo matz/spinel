@@ -19,6 +19,7 @@ sp_RbVal sp_cext_ary_delete(sp_RbVal, sp_RbVal);
 double sp_cext_num2dbl(sp_RbVal);
 int sp_cext_integer_pack(sp_RbVal, void *, size_t, size_t);
 sp_RbVal sp_cext_sym2str(sp_sym);
+struct sp_String_s *sp_cext_sym_name_handle(sp_sym);
 sp_RbVal sp_cext_str_plus(sp_RbVal, sp_RbVal);
 sp_RbVal sp_cext_widen_array(sp_RbVal);
 

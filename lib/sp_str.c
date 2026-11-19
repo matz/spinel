@@ -237,7 +237,7 @@ void sp_exc_stage_recv(sp_RbVal v);   /* generated TU: stages FrozenError#receiv
 void sp_raise_locked_str(void) {
   sp_raise_cls("RuntimeError", "can't modify string; temporarily locked");
 }
-void sp_raise_frozen_str(const char*s){if(sp_str_is_locked(s))sp_raise_locked_str();SP_GC_ROOT_STR(s);const char*ins=sp_str_inspect(s);SP_GC_ROOT_STR(ins);const char*msg=sp_str_concat(&("\xff" "can't modify frozen String: ")[1],ins);SP_GC_ROOT_STR(msg);sp_exc_stage_recv(sp_box_str(s));sp_raise_cls("FrozenError",msg);}
+void sp_raise_frozen_str(const char*s){if(sp_str_is_locked(s))sp_raise_locked_str();SP_GC_ROOT_STR(s);const char*ins=sp_str_inspect(s);SP_GC_ROOT_STR(ins);const char*msg=sp_str_concat(&("\xff" "can't modify frozen String: ")[1],ins);SP_GC_ROOT_STR(msg);sp_exc_stage_recv(sp_box_str_new(s));sp_raise_cls("FrozenError",msg);}
 /* Unicode case mapping, CRuby's (#11345): the tables are generated from CRuby
    by tools/gen_unicase_map.rb. A one-codepoint mapping is a range lookup, a
    run of codepoints that map by one delta (every one of them, or every other
@@ -459,6 +459,14 @@ static void sp_str_check_compatible_encoding(const char *s, const char *other) {
     sp_raise_cls("Encoding::CompatibilityError", binary
       ? "incompatible character encodings: BINARY (ASCII-8BIT) and UTF-8"
       : "incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)");
+}
+sp_String *sp_str_slice_key(const char *s, const char *key) {
+  if (!s) sp_nil_recv("[]");
+  if (!key) sp_raise_cls("TypeError", "no implicit conversion from nil to integer");
+  sp_str_check_compatible_encoding(s, key);
+  if (!sp_str_valid_encoding(key) || !sp_str_include(s, key)) return NULL;
+  SP_GC_ROOT_STR(key);
+  return sp_String_new_unfrozen(key);
 }
 static size_t sp_str_nl_at(const char*q,const char*e){return q<e&&*q=='\n'?1:e-q>=2&&q[0]=='\r'&&q[1]=='\n'?2:0;}
 /* Read one line from the byte views taken for this walk. A nil separator

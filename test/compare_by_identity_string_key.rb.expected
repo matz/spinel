@@ -1,1 +1,6 @@
 2
+[true, false, 3, nil, "key!"]
+3
+[false, true, 4, nil]
+[true, :first, :first]
+[1, :second, :second]

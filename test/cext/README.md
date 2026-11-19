@@ -86,6 +86,12 @@ retained object archive passed with `--link`. Native methods use the ordinary
 call plan, data objects carry their Ruby ivars, and boundary sharing is decided
 by analysis.
 
+The `symbol_names` fixture checks native `rb_sym2str` frozen state and
+identity, including empty, dynamically interned and embedded-NUL names,
+across collections. It also checks explicitly typed Symbol name readers
+and separation from same-content String literals. `Symbol#to_s` keeps its documented distinct frozen
+String behavior.
+
 The later steps (sqlite3 and racc/cparse end to end, #7210) are listed at
 the end of [the recorder contract](../../docs/internals/cext-recorder.md):
 hidden instance variables, spread sends, `Class.new` during Init, the

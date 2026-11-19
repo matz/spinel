@@ -346,8 +346,7 @@ static int str_render_ident(Compiler *c, int v, int form, StrForm *sf) {
     return SPF_HANDLE;
   }
   else if ((bx = share_plan_producer(c, v, NULL) == SPK_OPERAND ? strbuf_route_box_operand(c, v) : -1) >= 0) {
-    size_t at = b->len;
-    buf_puts(b, "sp_box_str(");
+    buf_puts(b, "sp_box_str_new(");
     emit_expr(c, v, b);
     buf_puts(b, ")");
     return SPF_HANDLE;
@@ -467,7 +466,7 @@ void str_box_kept(Buf *b, int t, const char *h, const char *e) {
   snprintf(kept, sizeof kept, "_t%d.%s", t, h);
   buf_printf(b, "%s ? ", kept);
   str_box_handle(b, kept);
-  buf_printf(b, " : _t%d.%s ? sp_box_str(_t%d.%s) : sp_box_nil()", t, e, t, e);
+  buf_printf(b, " : _t%d.%s ? sp_box_str_new(_t%d.%s) : sp_box_nil()", t, e, t, e);
 }
 
 /* The box face's last arms, where the value is boxed by its representation

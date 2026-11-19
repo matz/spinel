@@ -13,6 +13,12 @@ c = String.new("zz")
 c << "y"
 r = (c.."zzz")
 p Marshal.dump([c, r, r.end])
+literal_end = Marshal.load(Marshal.dump([r, r.end]))
+p literal_end[0].end.equal?(literal_end[1])
+reversed_end = Marshal.load(Marshal.dump([r.end, r]))
+p reversed_end[1].end.equal?(reversed_end[0])
+distinct_end = Marshal.load(Marshal.dump([r, r.end.dup]))
+p distinct_end[0].end.equal?(distinct_end[1])
 a = String.new("m")
 a << "m"
 b = String.new("n")

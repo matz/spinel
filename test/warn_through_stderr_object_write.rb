@@ -34,6 +34,10 @@ p s.buf
 io = StringIO.new
 with_stderr(io) { warn "into sio", "two" }
 p io.string
+binary = StringIO.new
+message = [1, +"a\0b\n"].last
+with_stderr(binary) { warn [message] }
+p binary.string.bytes
 with_stderr(Loud.new) { warn "dropped" }
 with_stderr(s) { warn; warn [] }
 p s.buf.last(2)

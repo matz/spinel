@@ -129,6 +129,7 @@ const char*sp_str_chop(const char*s);
 const char*sp_str_chr(const char*s);
 sp_int sp_str_byte_to_char(const char*s,sp_int byteoff);
 sp_bool sp_str_include(const char*s,const char*sub);
+sp_String *sp_str_slice_key(const char *s, const char *key);
 sp_bool sp_str_start_with(const char*s,const char*p);
 sp_bool sp_str_end_with(const char*s,const char*suf);
 sp_StrArray *sp_str_partition(const char *s, const char *sep);

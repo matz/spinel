@@ -697,6 +697,8 @@ typedef struct {
   unsigned char *weak_done;     /* per scope: its reads counted unreached */
   int all;
   int typed;                    /* the node types are settled */
+  int *kid_first, *kid_next;    /* class -> its first subclass (parent link), class -> the next */
+  int *desc, *desc_seen, kid_n, desc_stamp;  /* cr_live_desc's answer and its visit stamps */
 } CrLive;
 
 static int cr_live_gated(Compiler *c, int k) {
@@ -711,6 +713,23 @@ static int cr_live_gated(Compiler *c, int k) {
 static int cr_live_descends(Compiler *c, int k, int anc) {
   for (int h = 0; k >= 0 && k < c->nclasses && h <= c->nclasses; k = c->classes[k].parent, h++) if (k == anc) return 1;
   return 0;
+}
+
+/* anc and the classes whose parent chain reaches it (cr_live_descends),
+   ascending, into lv->desc: the walk down the subclass links in place of a
+   chain walk from every class of the program. -1 when the class table has
+   grown since the links were made. */
+static int cr_desc_cmp(const void *a, const void *b) { return *(const int *)a - *(const int *)b; }
+static int cr_live_desc(CrLive *lv, int anc) {
+  Compiler *c = lv->c;
+  if (lv->kid_n != c->nclasses || !lv->desc || anc < 0 || anc >= c->nclasses) return -1;
+  int n = 0, stamp = ++lv->desc_stamp;
+  lv->desc[n++] = anc; lv->desc_seen[anc] = stamp;
+  for (int i = 0; i < n; i++)
+    for (int k = lv->kid_first[lv->desc[i]]; k >= 0; k = lv->kid_next[k])
+      if (lv->desc_seen[k] != stamp) { lv->desc_seen[k] = stamp; lv->desc[n++] = k; }
+  qsort(lv->desc, (size_t)n, sizeof(int), cr_desc_cmp);
+  return n;
 }
 
 static const char *cr_live_segment(const char *nm) {
@@ -1105,6 +1124,14 @@ static void cr_live_event(CrLive *lv, const CrRead *r) {
   if (lv->all) return;
   if (r->kind == CR_SELF_CALL) {
     /* self is the class or a subclass of it the program names */
+    int nd = cr_live_desc(lv, r->cls);
+    if (nd >= 0) {
+      for (int i = 0; i < nd; i++) {
+        int d = lv->desc[i];
+        if (d == r->cls || !lv->held_c[d]) cr_live_call(lv, d, r->call);
+      }
+      return;
+    }
     for (int d = 0; d < c->nclasses; d++)
       if (d == r->cls || (!lv->held_c[d] && cr_live_descends(c, d, r->cls))) cr_live_call(lv, d, r->call);
     return;
@@ -1169,8 +1196,14 @@ static void cr_live_scope(CrLive *lv, int s, char **calls, int ncalls) {
        (sc->def_node >= 0 && cr_live_builds(c, nt_ref(c->nt, sc->def_node, "parameters"), sc->name)))) {
     lv->builds[k] = 1;
     /* it runs for k, or for a subclass the program names */
-    for (int d = 0; d < c->nclasses; d++)
-      if ((d == k || !lv->held_c[d]) && cr_live_descends(c, d, k)) cr_live_instance(lv, d);
+    int nd = cr_live_desc(lv, k);
+    if (nd >= 0) {
+      for (int i = 0; i < nd; i++)
+        if (lv->desc[i] == k || !lv->held_c[lv->desc[i]]) cr_live_instance(lv, lv->desc[i]);
+    }
+    else
+      for (int d = 0; d < c->nclasses; d++)
+        if ((d == k || !lv->held_c[d]) && cr_live_descends(c, d, k)) cr_live_instance(lv, d);
   }
   static const char *const finders[] = {
     "const_get", "eval", "class_eval", "module_eval", "instance_eval", "constants",
@@ -1207,6 +1240,19 @@ static void cr_live_begin(CrLive *lv, Compiler *c, int *queue, int *qtail) {
   lv->held_c = calloc((size_t)nc, 1);
   lv->held_i = calloc((size_t)nc, 1);
   lv->builds = calloc((size_t)nc, 1);
+  lv->kid_first = malloc(sizeof(int) * (size_t)nc);
+  lv->kid_next = malloc(sizeof(int) * (size_t)nc);
+  lv->desc = malloc(sizeof(int) * (size_t)nc);
+  lv->desc_seen = calloc((size_t)nc, sizeof(int));
+  if (lv->kid_first && lv->kid_next && lv->desc && lv->desc_seen) {
+    for (int k = 0; k < c->nclasses; k++) lv->kid_first[k] = lv->kid_next[k] = -1;
+    for (int k = c->nclasses - 1; k >= 0; k--) {
+      int p = c->classes[k].parent;
+      if (p >= 0 && p < c->nclasses && p != k) { lv->kid_next[k] = lv->kid_first[p]; lv->kid_first[p] = k; }
+    }
+    lv->kid_n = c->nclasses;
+  }
+  else lv->kid_n = -1;
   lv->pend_c = malloc(sizeof(int) * (size_t)nc);
   lv->pend_i = malloc(sizeof(int) * (size_t)nc);
   lv->seg_next = malloc(sizeof(int) * (size_t)nc);
@@ -1311,6 +1357,7 @@ static void cr_live_end(CrLive *lv) {
   free(lv->pend_c); free(lv->pend_i); free(lv->pend_next); free(lv->pend_mark);
   free(lv->open_next); free(lv->cls_first); free(lv->cls_next); free(lv->weak_done);
   free(lv->seg_first); free(lv->seg_next); anh_free(&lv->seg);
+  free(lv->kid_first); free(lv->kid_next); free(lv->desc); free(lv->desc_seen);
 }
 
 /* The scopes of a name, from `first` along `link`, that can take `argc`

@@ -51,9 +51,9 @@ begin
     converted << "g" * 64
     p wrapper.value.bytesize
     begin
-      io.pread(-1, 0, wrapper)
-    rescue Errno::EINVAL
-      p [wrapper.value.bytesize, wrapper.calls]
+      io.pread(1, 10, wrapper)
+    rescue EOFError
+      p [converted.equal?(wrapper.value), converted.bytes, wrapper.calls]
     end
   end
 ensure

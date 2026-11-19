@@ -1120,9 +1120,8 @@ static int share_plan_memo_need(Compiler *c, int v) {
   return m ? c->share_plan[v] & SPM_NEED : -1;
 }
 
-SharePlan share_plan_of(Compiler *c, int v, int role, int *memo) {
+SharePlan share_plan_of(Compiler *c, int v, int role) {
   int m = share_plan_memo_need(c, v);
-  if (memo) *memo = m >= 0;
   SharePlan p = share_plan_with_need(c, v, role, m >= 0 ? m : share_plan_need(c, v));
   /* (the producer, where the supply was asked) */
   if (p.need != SPN_BYTES) p.kind = (unsigned char)share_plan_producer(c, v, NULL);

@@ -3344,7 +3344,7 @@ static void emit_boxed_impl(Compiler *c, int node, Buf *b) {
   }
   if (t == TY_STRING) {
     /* The String plan's box form selects the operand for the handle box. */
-    int wrap = share_plan_of(c, node, SPR_BOX, NULL).form == SPF_WRAP;
+    int wrap = share_plan_of(c, node, SPR_BOX).form == SPF_WRAP;
     emit_str_box_leaf(c, node, wrap, b);
     RC(RF_STR, RW_NONE);
     return;
@@ -3630,7 +3630,7 @@ static int emit_boxed_routes(Compiler *c, int node, Buf *b) {
     } }
   if (lift || (!arg_ran_first(node, 0) && (strbuf_route_reader(c, node) ||
                                                 (strbuf_route_ivar_get(c, node) &&
-                                                 share_plan_of(c, node, SPR_BOX, NULL).form == SPF_HANDLE) ||
+                                                 share_plan_of(c, node, SPR_BOX).form == SPF_HANDLE) ||
                                                 strbuf_route_boxed_exc_message(c, node)))) {
     Buf hb; memset(&hb, 0, sizeof hb);
     if (emit_strbuf_route(c, node, &hb)) {

@@ -3790,7 +3790,7 @@ int emit_object_ivar_call(Compiler *c, int id, const char *name, int recv, TyKin
           /* (--share-strings: the handle the String plan gives, rendered by
              the handle face: a boxed receiver's call whose arms answer one) */
           else if (share_plan_producer(c, argv[1], NULL) == SPK_POLY_ARMS &&
-                   share_plan_of(c, argv[1], SPR_STORE, NULL).form == SPF_HANDLE)
+                   share_plan_of(c, argv[1], SPR_STORE).form == SPF_HANDLE)
             emit_str_form_handle(c, argv[1], b);
           else {
             buf_puts(b, "sp_String_new_shared(");

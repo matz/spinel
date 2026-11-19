@@ -5115,7 +5115,7 @@ static void emit_dynamic_send_arm(Compiler *c, int arm, int t, int mo, int *seen
      wraps (a new String, a literal) is boxed as the new handle it is, so
      the answer's copies name one String. */
   int arm_form = !self_ret && (at == TY_STRING || at == TY_STRBUF)
-                 ? share_plan_of(c, arm, share_plan_role(c, arm), NULL).form : SPF_BYTES;
+                 ? share_plan_of(c, arm, share_plan_role(c, arm)).form : SPF_BYTES;
   int arm_str = arm_form == SPF_HANDLE || arm_form == SPF_WRAP;
   if (setjmp(g_unsup_recover) == 0) {
     if (self_ret) emit_strbuf_handle_of(c, arm, &body);
@@ -27704,8 +27704,8 @@ static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
                 strbuf_poly_ivar_get(c, operand[i]) && strbuf_poly_ivar_mutated(c, operand[i])) ||
                (operand[i] != recv && comp_ntype(c, operand[i]) == TY_STRING &&
                 nt_kind(c->nt, operand[i]) == NK_CallNode && !arg_ran_first(operand[i], 0) &&
-                share_plan_of(c, operand[i], SPR_BOX, NULL).form == SPF_HANDLE &&
-                share_plan_of(c, operand[i], SPR_BOX, NULL).kind == SPK_POLY_ARMS));
+                share_plan_of(c, operand[i], SPR_BOX).form == SPF_HANDLE &&
+                share_plan_of(c, operand[i], SPR_BOX).kind == SPK_POLY_ARMS));
     int bfb = bsh || operand[i] == harg ? 0
             : operand_binds_face_box(c, operand[i]) ? 1
             : operand_binds_identity_box(c, id, operand[i]) ? 3

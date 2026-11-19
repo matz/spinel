@@ -1828,12 +1828,6 @@ int strbuf_bang_chain(Compiler *c, int v) {
    `o.x ||= s` and `o.x &&= s`, whose value is the String the field holds
    after it: repr_write_share): a leaf a handle route reads as that handle
    (emit_strbuf_write_handle). */
-/* ...on a receiver whose class is known only at run time? */
-static int strbuf_assign_boxed_recv(Compiler *c, int v) {
-  int r = nt_ref(c->nt, nt_paren_single(c->nt, v), "receiver");
-  TyKind rt = r >= 0 ? comp_ntype(c, r) : TY_UNKNOWN;
-  return r >= 0 && (rt == TY_POLY || rt == TY_UNKNOWN);
-}
 int strbuf_assign_leaf(Compiler *c, int v) {
   v = nt_paren_single(c->nt, v);
   NodeKind k = v >= 0 ? nt_kind(c->nt, v) : NK_NONE;
@@ -19255,7 +19249,7 @@ int masgn_face_elem(Compiler *c, int mw, int el) {
   /* (a value past the targets is stored nowhere, and the Array a write used
      as a value answers holds it) */
   for (int i = 0; i < en; i++)
-    if (e[i] == el) return share_plan_of(c, el, SPR_STORE, NULL).form == SPF_HANDLE;
+    if (e[i] == el) return share_plan_of(c, el, SPR_STORE).form == SPF_HANDLE;
   return 0;
 }
 
@@ -26882,7 +26876,7 @@ void emit_index_and_or_write(Compiler *c, int id, Buf *b, int indent, int is_or)
    SPR_BOX form answers it: a value it gives only the bytes (SPF_COPY) is
    the one a box cannot carry. */
 static int strbuf_box_carries(Compiler *c, int v) {
-  SharePlan p = share_plan_of(c, v, SPR_BOX, NULL);
+  SharePlan p = share_plan_of(c, v, SPR_BOX);
   int u = nt_paren_single(c->nt, v);
   /* (a boxed receiver's call whose every arm answers a String it
      publishes or a new one is boxed arm by arm, each its own handle:

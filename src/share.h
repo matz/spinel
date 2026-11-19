@@ -26,7 +26,6 @@ typedef struct {
                            SHK_RET: the method scope */
   int cid;              /* SHK_IVAR: the owning class */
   const char *name;     /* SHK_IVAR/GVAR/CVAR/CONST */
-  int node;             /* a node that names the holder, for a message */
 } ShareHolder;
 
 /* (Re)build c->share's tables from the current types and calls. */
@@ -211,9 +210,8 @@ void share_plan_build(Compiler *c);
 void share_plan_free(Compiler *c);
 /* The plan of node v for a consumer in `role` (SPR_*) where codegen is:
    the value's need from the memo where the node is read as itself, else
-   asked live (*memo, which may be NULL, says which); the supply always
-   asked live, as it reads repr_of. */
-SharePlan share_plan_of(Compiler *c, int v, int role, int *memo);
+   asked live. The supply is always asked live because it reads repr_of. */
+SharePlan share_plan_of(Compiler *c, int v, int role);
 /* The plan for a consumer in `role` of node v, whose need is given. */
 SharePlan share_plan_with_need(Compiler *c, int v, int role, int need);
 /* The role of the consumer node v sits in, as the program has it (a taker

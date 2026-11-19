@@ -1145,7 +1145,8 @@ static void emit_block_arg_check(Compiler *c, int fe, const char *cn, Buf *b) {
                tv, cn[0] ? cn : "FalseClass");
   } else
     buf_printf(b, "; if (_t%d.tag == SP_TAG_INT || _t%d.tag == SP_TAG_FLT || _t%d.tag == SP_TAG_BOOL || "
-                  "_t%d.tag == SP_TAG_STR || _t%d.tag == SP_TAG_BIGINT || (_t%d.tag == SP_TAG_OBJ && "
+                  "sp_rbval_is_string(_t%d) || "
+                  "_t%d.tag == SP_TAG_BIGINT || (_t%d.tag == SP_TAG_OBJ && "
                   "(_t%d.cls_id == SP_BUILTIN_OBJECT || _t%d.cls_id == SP_BUILTIN_BASIC_OBJECT))) "
                   "sp_raise_cls(\"TypeError\", sp_sprintf(\"no implicit conversion of %%s into Proc\", sp_poly_class_name(_t%d))); })",
                tv, tv, tv, tv, tv, tv, tv, tv, tv);

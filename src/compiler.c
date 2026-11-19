@@ -1947,7 +1947,7 @@ static int sm_batch_lookup(Compiler *c, int class_id, const char *name, int side
     }
     /* (by class, then scope: of a class's pairs the highest scope is kept,
        the reverse scan's first) */
-    qsort(smb.tmp, (size_t)m, 2 * sizeof(int), smb_pair_cmp);
+    if (m > 1) qsort(smb.tmp, (size_t)m, 2 * sizeof(int), smb_pair_cmp);
     int k = 0;
     for (int j = 0; j < m; j++) {
       if (j + 1 < m && smb.tmp[2 * (j + 1)] == smb.tmp[2 * j]) continue;

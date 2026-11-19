@@ -12239,6 +12239,12 @@ static int pos_runs_front(Compiler *c, int mi, int *to) {
 /* The entry made for position t with ar parameters (kept in ver_entries as
    VER_ENTRY_LAYER from t + 1), its scope; -1 for none. The memo of the
    build, whose index is made after it. */
+/* Does the lookup past the entry e (a late layer's) end at the receiver's method_missing or a NoMethodError (pos_entry)? */
+static int pos_end_arm(const Compiler *c, int e) {
+  for (int i = 0; i < c->nver_entries; i++)
+    if (c->ver_entries[i].guard == VER_ENTRY_LAYER && c->ver_entries[i].scope == e) return c->ver_entries[i].end_arm;
+  return 0;
+}
 static int pos_made(const Compiler *c, int t, int ar) {
   for (int i = 0; i < c->nver_entries; i++) {
     const struct VerEntry *e = &c->ver_entries[i];
@@ -12247,6 +12253,7 @@ static int pos_made(const Compiler *c, int t, int ar) {
   return -1;
 }
 static void ver_entry_add(Compiler *c, const char *name, struct VerEntry e);
+static int guard_behind_finds_none(Compiler *c, int behind, int cls, int sg, const char *name);
 static int guard_entry_make(Compiler *c, int mi, int ar, int face, int *behind);
 static int guard_else_bare(Compiler *c, int behind, int cls, int sg, const char *name, int *hooks);
 /* The guard entry of the class behind a late layer (kept in ver_entries as VER_ENTRY_GUARD, as the entries' build
@@ -12298,7 +12305,7 @@ static int pos_entry(Compiler *c, const Scope *s, int t, int ar) {
     ver_cell_name(vs[k].cell, sel[k]);
     arm[k] = (DispArm){ sel[k], vs[k].n, c->scopes[to[k]].name, vs[k].cell + 1 };
   }
-  int past = late ? pos_next(c, t) : -1, els_to = to[nv - 1];
+  int past = late ? pos_next(c, t) : -1, els_to = to[nv - 1], els = -1, kind = VK_KEEP;
   int cls = c->scopes[t].class_id, sg = c->scopes[t].is_cmethod;
   const char *name = comp_scope_user_name(&c->scopes[t]);
   if (past >= 0) {
@@ -12306,8 +12313,49 @@ static int pos_entry(Compiler *c, const Scope *s, int t, int ar) {
     blk |= c->scopes[els_to].blk_param || c->scopes[els_to].yields;
     spliced &= c->scopes[els_to].yields;
   }
-  int e = ver_entry_emit(c, cls, sg, name, ar, blk, spliced, arm, to, NULL, nv, els_to, -1, 0);
-  ver_entry_add(c, name, (struct VerEntry){ NULL, VER_ENTRY_LAYER, cls, sg, ar, e, .from = t + 1 });
+  /* (the end of the lookup: no method behind t, or the hidden method a mixin stands in front of where the class had
+     none of its own, which finds none: CRuby calls the receiver's method_missing, or raises where it has none,
+     guard_behind_finds_none) */
+  int end_here = past >= 0 ? els_to == past && guard_behind_finds_none(c, past, cls, sg, name) : late && !cplan_other_answers(c, cls, sg, name, 1);
+  int end_arm = end_here || (past >= 0 && pos_end_arm(c, els_to));   /* (the lookup past t ends so) */
+  if (end_here) {
+    kind = cplan_mm_method(c, -1, cls, sg) >= 0 ? VK_MM : VK_NOMETHOD;
+    els = ver_absent_else(c, kind, cls, sg, name, past >= 0 ? &past : to, past >= 0 ? 1 : nv, ar, 0, &blk, &spliced);
+  }
+  if (end_arm) {
+    /* (where the class has none and a subclass defines its own, a receiver of that class, or of one below it, calls it,
+       and any other raises: the arm's receiver is tested by its class, innermost last. A subclass's method_missing that
+       a method body defines, which is there only once that body has run, or that the call hands a block to, which a
+       method_missing only subclasses define cannot take, is no answer the record can tell: its receivers run the
+       version of the position they reach, at every position of the layers, as before the else arm answered them (R's
+       form, which a layer's body's super reaches position by position: the version of t, its last, pinned) */
+    int nd = 0;
+    const int *ds = !sg && cplan_mm_method(c, -1, cls, sg) < 0 ? comp_descendants(c, cls, &nd) : NULL;
+    for (int i = nd - 1; i >= 0; i--) {
+      int own = c->classes[ds[i]].unreferenced ? -1 : cplan_mm_method(c, -1, ds[i], 0);
+      int test = own >= 0 ? disp_self_class_is(c, ds[i]) : -1;
+      if (test < 0) continue;
+      /* (a method_missing that takes a block parameter has no function of its own where the block is only called: no
+         dispatch arm, and nothing to call, so it is no answer either) */
+      int rform = blk || elab_body_def(c, c->scopes[own].def_node) >= 0 || (c->scopes[own].blk_param && c->scopes[own].blk_param[0]), call;
+      if (!rform && !end_here) continue;
+      if (els < 0) {   /* (no else arm yet: the position behind, as the entry pins it) */
+        els = disp_forward_call((NodeTable *)c->nt, c->scopes[els_to].name, ar, blk);
+        ver_pin(c, els, els_to, 0);
+      }
+      if (rform) {
+        call = disp_forward_call((NodeTable *)c->nt, c->scopes[to[nv - 1]].name, ar, blk);
+        ver_pin(c, call, to[nv - 1], 0);
+      }
+      else {
+        comp_sym_intern(c, name);
+        call = disp_method_missing_call((NodeTable *)c->nt, name, ar, blk);
+      }
+      els = disp_choose((NodeTable *)c->nt, test, call, els);
+    }
+  }
+  int e = ver_entry_emit(c, cls, sg, name, ar, blk, spliced, arm, to, NULL, nv, els_to, els, 0);
+  ver_entry_add(c, name, (struct VerEntry){ NULL, VER_ENTRY_LAYER, cls, sg, ar, e, .finds = ver_else_finds(c, kind, cls, sg, name, SP_VIS_PUBLIC, -1), .from = t + 1, .end_arm = end_arm });
   return e;
 }
 /* The methods a super in s may run, for the readers that ask before the

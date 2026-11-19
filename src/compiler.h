@@ -1949,7 +1949,7 @@ typedef struct {
      is the entry's own copy (ver_entry_add), as in ver_late, ver_memo and
      the chain counts: a caller may ask with a name it frees itself
      (desugar_call_op_write's setter name) */
-  struct VerEntry { char *name; int guard, cls, sg, ar, scope, absent, cells, finds, from, behind, face, vis, anyform; } *ver_entries;
+  struct VerEntry { char *name; int guard, cls, sg, ar, scope, absent, cells, finds, from, behind, face, vis, anyform, end_arm; } *ver_entries;
   int nver_entries;
   /* per global (c->gvars' index, the first nver_cell_dropped of them): 1 for
      a version cell no emitted code reads, whose declaration and writes the C

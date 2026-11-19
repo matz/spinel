@@ -17085,7 +17085,9 @@ static void emit_super_value(Compiler *c, int id, Buf *b) {
     buf_puts(b, "(");
     /* (the shadow is a method of an ancestor of the receiver's class when the
        super is a copy of an alias's) */
-    if (smi >= 0 && st->class_id != s->class_id && !repr_self_handle(c, smi)) buf_printf(b, "(sp_%s *)", c->classes[st->class_id].c_name);
+    /* (or of the class an entry's arm inlined this body for, which is the receiver's: a subclass's entry holds self as its own) */
+    if (smi >= 0 && (st->class_id != s->class_id || (g_emitting_class_id >= 0 && g_emitting_class_id != st->class_id)) && !repr_self_handle(c, smi))
+      buf_printf(b, "(sp_%s *)", c->classes[st->class_id].c_name);
     emit_reopen_self_arg(c, id, smi, b);
     if (ty_k == NK_ForwardingSuperNode && smi >= 0) {
       /* laid out over the shadow's parameters as any bare super is: passed

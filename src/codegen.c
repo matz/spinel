@@ -13972,9 +13972,25 @@ static int scope_ret_is_void(Compiler *c, int mi) {
    method were not there, and CRuby's ArgumentError never came. The call
    answers NULL, so the document is what it always was for a method that
    returns -- and for one that does not, the raise is the answer. */
+/* The reopened builtin whose own #to_json the hook dispatches: CRuby's json
+   writes an Integer, a Float, a String, nil, true, false, an Array and a
+   Hash itself and calls no #to_json for them, but calls it for any other
+   value. Of those, a Time and a Range are boxed as one object id
+   (SP_BUILTIN_TIME, SP_BUILTIN_RANGE) and a Symbol as its own tag, which
+   the hook keys on; the reopenings of the other builtins have no arm. */
+static int obj_to_json_builtin(Compiler *c, int cid) {
+  const char *n = c->classes[cid].name;
+  return sp_streq(n, "Time") || sp_streq(n, "Range") || sp_streq(n, "Symbol");
+}
 static int obj_to_json_method(Compiler *c, int cid, int *defc) {
   ClassInfo *ci = &c->classes[cid];
-  if (ci->is_native_class || !ci->instantiated) return -1;
+  if (ci->is_native_class) return -1;
+  /* (a reopened builtin has no struct of its own, and its values carry no
+     user class id: only the arms obj_to_json_builtin keys) */
+  if (class_is_builtin_reopen(c, cid)) {
+    if (!obj_to_json_builtin(c, cid)) return -1;
+  }
+  else if (!ci->instantiated) return -1;
   int dc = cid;
   /* (the dispatcher's arm for every class: no call's point, the final tables' answer) */
   MethodLookup jml = { .def_class = -1 };
@@ -14013,20 +14029,36 @@ static void emit_obj_to_json_dispatch(Compiler *c, Buf *b) {
   if (!g_gen_obj_to_json) return;
   buf_puts(b, "static const char *sp_obj_to_json(sp_RbVal v) {\n");
   emit_hook_object_root(b, "SP_GC_ROOT_RBVAL", "v");
-  buf_puts(b, "  switch (v.cls_id) {\n");
-  for (int i = 0; i < c->nclasses; i++) {
-    if (comp_class_is_module(c, &c->classes[i])) continue;   /* no instances (#4654) */
-    int defc = -1;
-    int mi = obj_to_json_method(c, i, &defc);
-    if (mi < 0) continue;
-    int vobj = comp_ty_value_obj(c, ty_object(defc));
-    int novalue = scope_ret_is_void(c, mi);
-    buf_printf(b, "    case %d: %s", i, novalue ? "" : "return sp_strbuf_read(");
-    buf_printf(b, "%s(%s(sp_%s *)v.v.p%s)",
-               mc_method(c, &c->scopes[mi]), vobj ? "*" : "",
-               c->classes[defc].c_name,
-               c->scopes[mi].nparams == 1 ? ", sp_PolyArray_new()" : "");
-    buf_puts(b, novalue ? "; return NULL;\n" : ");\n");
+  /* A reopened builtin's arm takes self as the reopen's method does: a
+     Symbol by its tag, ahead of the switch; a Time or a Range by its
+     builtin id (as emit_obj_cmp_dispatch keys them). Only an object is
+     keyed by its class id below. */
+  for (int pass = 0; pass < 2; pass++) {
+    if (pass == 1) buf_puts(b, "  if (v.tag != SP_TAG_OBJ) return NULL;\n  switch (v.cls_id) {\n");
+    for (int i = 0; i < c->nclasses; i++) {
+      if (comp_class_is_module(c, &c->classes[i])) continue;   /* no instances (#4654) */
+      int bi = class_is_builtin_reopen(c, i);
+      const char *bn = c->classes[i].name;
+      if ((pass == 0) != (bi && sp_streq(bn, "Symbol"))) continue;
+      int defc = -1;
+      int mi = obj_to_json_method(c, i, &defc);
+      if (mi < 0) continue;
+      int novalue = scope_ret_is_void(c, mi);
+      char self[64];
+      if (bi && sp_streq(bn, "Symbol")) snprintf(self, sizeof self, "(sp_sym)v.v.i");
+      else if (bi && sp_streq(bn, "Time")) snprintf(self, sizeof self, "(sp_Time *)v.v.p");
+      else if (bi) snprintf(self, sizeof self, "*(sp_Range *)v.v.p");
+      else snprintf(self, sizeof self, "%s(sp_%s *)v.v.p",
+                    comp_ty_value_obj(c, ty_object(defc)) ? "*" : "", c->classes[defc].c_name);
+      if (pass == 0) buf_puts(b, "  if (v.tag == SP_TAG_SYM) ");
+      else if (bi) buf_printf(b, "    case %s: ", sp_streq(bn, "Time") ? "SP_BUILTIN_TIME" : "SP_BUILTIN_RANGE");
+      else buf_printf(b, "    case %d: ", i);
+      if (pass == 0 && novalue) buf_puts(b, "{ ");
+      buf_printf(b, "%s%s(%s%s)", novalue ? "" : "return sp_strbuf_read(",
+                 mc_method(c, &c->scopes[mi]), self,
+                 c->scopes[mi].nparams == 1 ? ", sp_PolyArray_new()" : "");
+      buf_puts(b, novalue ? (pass == 0 ? "; return NULL; }\n" : "; return NULL;\n") : ");\n");
+    }
   }
   buf_puts(b, "    default: return NULL;\n  }\n}\n");
 }

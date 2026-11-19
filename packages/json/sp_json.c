@@ -511,7 +511,7 @@ static void sp_json_val_b(jbuf *b, sp_RbVal v, int depth);
    that does not parse -- leave this frame without coming back to it, so the
    walk moves the buffer to the collector before it calls any of that code. */
 const char *sp_json_val(sp_RbVal v) {
-  if (v.tag != SP_TAG_OBJ) return sp_json_scalar(v);
+  if (v.tag != SP_TAG_OBJ && !(v.tag == SP_TAG_SYM && sp_obj_to_json_fn)) return sp_json_scalar(v);
   SP_GC_ROOT_RBVAL(v);   /* see sp_json_pretty below */
   char stk[JB_STACK_N]; jbuf b; JB_ON_STACK(b, stk);
   SP_GC_ROOT_STR(b.heap);
@@ -522,7 +522,7 @@ const char *sp_json_val(sp_RbVal v) {
    but the caller's LIMIT (0 for none; past it, ArgumentError "exceed depth
    limit"), and NaN / Infinity written out */
 const char *sp_json_dump(sp_RbVal v, sp_int limit) {
-  if (v.tag != SP_TAG_OBJ) return sp_json_scalar_o(v, 1);
+  if (v.tag != SP_TAG_OBJ && !(v.tag == SP_TAG_SYM && sp_obj_to_json_fn)) return sp_json_scalar_o(v, 1);
   SP_GC_ROOT_RBVAL(v);
   char stk[JB_STACK_N]; jbuf b; JB_ON_STACK(b, stk);
   b.dump = 1;
@@ -545,7 +545,16 @@ static void sp_json_leaf_b(jbuf *b, sp_RbVal v) {
          walk's buffer is released first, as for its other raises */
       if (!b->dump && !b->allow_nan) jb_release(b);
       break;
-    case SP_TAG_SYM: jb_sym(b, (sp_sym)v.v.i); return;
+    case SP_TAG_SYM:
+      /* a reopened Symbol's own #to_json, which CRuby's json calls (it
+         writes only Integer, Float, String, nil, true and false itself);
+         the hook answers NULL where the program has none */
+      if (sp_obj_to_json_fn) {
+        jb_to_heap(b);   /* the user's method may raise, throw, or return past us */
+        const char *uj = sp_obj_to_json_fn(v);
+        if (uj) { jb_gcs(b, uj, (size_t)sp_str_byte_len(uj)); return; }
+      }
+      jb_sym(b, (sp_sym)v.v.i); return;
     case SP_TAG_BOOL: if (v.v.b) jb_add(b, "true", 4); else jb_add(b, "false", 5); return;
     case SP_TAG_NIL: jb_add(b, "null", 4); return;
     default: break;

@@ -1,3 +1,7 @@
+["pre DefSelf.cs15", "NoMethodError"]
+["pre DefSelf.respond_to?(:cs15)", false]
+["pre SclassDef.cs216", "NoMethodError"]
+["pre SclassDef.respond_to?(:cs216)", false]
 ["VisNames.new.baz0", "NoMethodError"]
 ["VisNames.new.respond_to?(:baz0)", false]
 ["VisNames.method_defined?(:baz0)", false]

@@ -187,6 +187,11 @@ mods = -> {
   end
   nil
 }
+# before the blocks run: no class method of the two defs yet
+show("pre DefSelf.cs15") { p ["pre DefSelf.cs15", DefSelf.cs15] }
+show("pre DefSelf.respond_to?(:cs15)") { p ["pre DefSelf.respond_to?(:cs15)", DefSelf.respond_to?(:cs15)] }
+show("pre SclassDef.cs216") { p ["pre SclassDef.cs216", SclassDef.cs216] }
+show("pre SclassDef.respond_to?(:cs216)") { p ["pre SclassDef.respond_to?(:cs216)", SclassDef.respond_to?(:cs216)] }
 b0.call
 b1.call
 b2.call

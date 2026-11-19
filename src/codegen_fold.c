@@ -1105,7 +1105,11 @@ int emit_transform_hash_expr(Compiler *c, int id, Buf *b) {
      an oint-formed value is emitted as its oint, a boxed one unboxed with it */
   int lastv = bb[bn - 1];
   int has_next = fold_body_has_next(c, body);
-  int box_last = !keys && dr.val == TY_POLY && (bret == TY_STRING || bret == TY_STRBUF);
+  /* A boxed destination takes a String handle or an optional numeric
+     result through ordinary boxing, including a value supplied by next. */
+  int box_result = !keys && dr.val == TY_POLY &&
+                   (bret == TY_STRING || bret == TY_STRBUF ||
+                    (oint_kind(bret) && (has_next || node_has_oint_form(c, lastv))));
   int oset_v = !keys && dvn && dr.val == TY_INT &&
                (has_next || bret != TY_INT || node_has_oint_form(c, lastv));
   int value_oint = oset_v && (bret == TY_INT || bret == TY_NIL);
@@ -1115,7 +1119,7 @@ int emit_transform_hash_expr(Compiler *c, int id, Buf *b) {
   if (has_next) {
     int tv = ++g_tmp;
     char dst[32]; snprintf(dst, sizeof dst, "_t%d", tv);
-    if (box_last || (oset_v && !value_oint)) bret = TY_POLY;
+    if (box_result || (oset_v && !value_oint)) bret = TY_POLY;
     emit_indent(g_pre, g_indent + 1);
     if (value_oint) {
       bret = TY_INT;
@@ -1140,7 +1144,7 @@ int emit_transform_hash_expr(Compiler *c, int id, Buf *b) {
     for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, g_indent + 1);
     int save = g_indent; g_indent++;
     if (value_oint) { emit_oint_expr(c, lastv, TY_INT, &vb); bret = TY_INT; }
-    else if (box_last || oset_v) { emit_boxed(c, lastv, &vb); bret = TY_POLY; }
+    else if (box_result || oset_v) { emit_boxed(c, lastv, &vb); bret = TY_POLY; }
     else emit_expr(c, bb[bn - 1], &vb);
     g_indent = save;
   }
@@ -1200,7 +1204,6 @@ int emit_transform_hash_expr(Compiler *c, int id, Buf *b) {
       else buf_puts(&hv, vb.p ? vb.p : "0");
       emit_typed_elem_hold(c, -1, dt, hv.p, g_pre); free(hv.p);
     }
-    else if (box_last) buf_puts(g_pre, vb.p ? vb.p : "sp_box_nil()");
     else if (dvt == TY_POLY && bret != TY_POLY) {
       Buf bx; memset(&bx, 0, sizeof bx); emit_boxed_text(c, bret, vb.p ? vb.p : "", &bx);
       buf_puts(g_pre, bx.p ? bx.p : ""); free(bx.p);

@@ -27207,7 +27207,7 @@ static int cb_struct_act(const NodeTable *nt, int s) {
   return is_record_block_self_cmethod(nm);
 }
 
-static int cb_give_self(NodeTable *nt, int node, const char *builtin, int strct, const char *cname) {
+static int cb_give_self(NodeTable *nt, int node, const char *builtin, int strct, const char *cname, int inblk) {
   if (node < 0) return 0;
   NodeKind k = nt_kind(nt, node);
   if (k == NK_DefNode || class_def_opens_frame(nt, node) || k == NK_SingletonClassNode ||
@@ -27231,20 +27231,35 @@ static int cb_give_self(NodeTable *nt, int node, const char *builtin, int strct,
      program's own methods alone: they are refused rather than answered
      without the builtin's methods. */
   else if (((strct && cb_struct_act(nt, node)) || (cb_self_act(nt, node) && !cb_program_defines(nt, cm, cname))) &&
-           !(builtin && is_instance_method_table_read(cm))) {
+           !(builtin && is_instance_method_table_read(cm)) && !(inblk && !is_name_reader(cm))) {
     int self = fwd_new_node_like(nt, node, "SelfNode");
     if (self >= 0) {
       nt_set_self_receiver(nt, node, self);
       changed = 1;
     }
   }
+  /* a block keeps the self around it (a Hash's default block, an iterator's),
+     unless its call runs it with another (instance_eval, a class builder,
+     define_method: is_block_self_call). In a block only the answers that
+     cannot change during the load are given self (is_name_reader: name,
+     to_s, inspect): the others (ancestors, include?, is_a? after an extend,
+     the method-table readers) answer from the point the block runs at, which
+     the plan does not place yet for a def or an include made later, so they
+     stay as before, bare and refused. */
+  int blk = k == NK_CallNode ? nt_ref(nt, node, "block") : -1;
+  const char *rn = r >= 0 && nt_kind(nt, r) == NK_ConstantReadNode ? nt_str(nt, r, "name") : NULL;
+  int keeps = blk >= 0 && nt_kind(nt, blk) == NK_BlockNode && !is_block_self_call(rn, cm);
+  if (keeps) changed |= cb_give_self(nt, nt_ref(nt, blk, "body"), builtin, strct, cname, 1);
   int nr = nt_num_refs(nt, node);
-  for (int i = 0; i < nr; i++) changed |= cb_give_self(nt, nt_ref_at(nt, node, i), builtin, strct, cname);
+  for (int i = 0; i < nr; i++) {
+    int ch = nt_ref_at(nt, node, i);
+    if (ch != blk || !keeps) changed |= cb_give_self(nt, ch, builtin, strct, cname, inblk);
+  }
   int na = nt_num_arrs(nt, node);
   for (int i = 0; i < na; i++) {
     int cnt = 0;
     const int *ids = nt_arr_at(nt, node, i, &cnt);
-    for (int j = 0; j < cnt; j++) changed |= cb_give_self(nt, ids[j], builtin, strct, cname);
+    for (int j = 0; j < cnt; j++) changed |= cb_give_self(nt, ids[j], builtin, strct, cname, inblk);
   }
   return changed;
 }
@@ -27372,7 +27387,7 @@ int desugar_class_body_object_acts(Compiler *c) {
     const char *cname = cpk == NK_ConstantReadNode || cpk == NK_ConstantPathNode ? key_name(c, cp) : NULL;
     int builtin = cname && (is_builtin_class_name(cname) || is_builtin_module_name(cname)) &&
                   (cpk == NK_ConstantReadNode ? !engine_lexically_nested(nt, cn) : nt_ref(nt, cp, "parent") < 0);
-    changed |= cb_give_self(nt, class_def_body(nt, cn), builtin ? cname : NULL, 0, cname);
+    changed |= cb_give_self(nt, class_def_body(nt, cn), builtin ? cname : NULL, 0, cname, 0);
   }
   /* a Struct.new / Data.define block a constant or a local holds is the
      class's body, where self is the class as well */
@@ -27381,7 +27396,7 @@ int desugar_class_body_object_acts(Compiler *c) {
     if (wk != NK_ConstantWriteNode && wk != NK_LocalVariableWriteNode) continue;
     int val = nt_ref(nt, w, "value");
     int blk = class_def_is_record_call(nt, val) ? nt_ref(nt, val, "block") : -1;
-    if (blk >= 0 && nt_kind(nt, blk) == NK_BlockNode) changed |= cb_give_self(nt, nt_ref(nt, blk, "body"), NULL, 1, NULL);
+    if (blk >= 0 && nt_kind(nt, blk) == NK_BlockNode) changed |= cb_give_self(nt, nt_ref(nt, blk, "body"), NULL, 1, NULL, 0);
   }
   if (changed) comp_grow_node_arrays(c);
   return changed;

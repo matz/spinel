@@ -207,6 +207,28 @@ void sp_mar_w_body(sp_mar_buf *b, sp_RbVal v) {
   sp_mar_b(b, '['); sp_int n = sp_json_len_fn(v); sp_mar_long(b, n);
   for (sp_int i = 0; i < n; i++) sp_mar_w(b, sp_json_aref_fn(v, i));
 }
+/* The head of a builtin subclass instance's record, as CRuby writes it:
+   `I` when ivars follow, `C`, the class, the builtin's body, and the count
+   of the ivars after it, which the caller writes. A String's body is its
+   bytes (`"`), and its encoding is one more ivar, `:E` true, written first
+   unless the String is binary; an Array's or a Hash's is its elements. */
+void sp_mar_w_bsub(sp_mar_buf *b, const char *nm, sp_RbVal v, long niv) {
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_STRBUF) {
+    sp_String *h = (sp_String *)v.v.p;
+    int bin = h && h->binary;
+    long tot = niv + (bin ? 0 : 1);
+    if (tot) sp_mar_b(b, 'I');
+    sp_mar_b(b, 'C'); sp_mar_sym(b, nm);
+    sp_mar_b(b, '"'); sp_mar_bytes(b, h ? h->data : "", h ? (size_t)h->len : 0);
+    if (tot) sp_mar_long(b, tot);
+    if (!bin) { sp_mar_sym(b, "E"); sp_mar_b(b, 'T'); }
+    return;
+  }
+  if (niv) sp_mar_b(b, 'I');
+  sp_mar_b(b, 'C'); sp_mar_sym(b, nm);
+  sp_mar_w_body(b, v);
+  if (niv) sp_mar_long(b, niv);
+}
 void sp_mar_w(sp_mar_buf *b, sp_RbVal v) {
   /* an Array or Hash subclass instance, boxed as its builtin (#7449): its
      class's own record, `C` with the class, the builtin's body and the ivars
@@ -405,19 +427,42 @@ static sp_RbVal sp_mar_r_bsub(sp_mar_rd *r, int ivars) {
   if (!ok || !sp_bsub_cls_fn || sp_bsub_cls_fn(v) < 0) mar_raise("ArgumentError", "undefined class/module in Marshal.load");
   SP_GC_ROOT_RBVAL(v);
   int kind = sp_json_kind_fn ? sp_json_kind_fn(v) : 0;
+  int str = v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_STRBUF;
   unsigned char t = sp_mar_rb(r);
-  if (!((t == '[' && kind == 1) || (t == '{' && kind == 2))) mar_raise("ArgumentError", "dump format error (user class)");
+  if (!((t == '[' && kind == 1) || (t == '{' && kind == 2) || (t == '"' && str)))
+    mar_raise("ArgumentError", "dump format error (user class)");
   int id = sp_mar_reg(r);
   r->objs[id] = v;
   long len = sp_mar_rlong(r);
-  for (long i = 0; i < len; i++) {
-    if (kind == 1) sp_marshal_v.any_push(v, sp_mar_r(r));
-    else { sp_RbVal k = sp_mar_r(r); SP_GC_ROOT_RBVAL(k); sp_marshal_v.hash_set(v, k, sp_mar_r(r)); }
+  if (str) {
+    /* a String subclass's bytes, binary until an `:E` ivar says text */
+    if (len < 0 || (size_t)len > r->len - r->pos) mar_raise("ArgumentError", "marshal data too short");
+    sp_String *h = (sp_String *)v.v.p;
+    sp_String_force_encoding(h, 1);
+    h->len = 0;
+    sp_fd_append_len(h, r->s + r->pos, (int64_t)len);
+    r->pos += (size_t)len;
   }
+  else
+    for (long i = 0; i < len; i++) {
+      if (kind == 1) sp_marshal_v.any_push(v, sp_mar_r(r));
+      else { sp_RbVal k = sp_mar_r(r); SP_GC_ROOT_RBVAL(k); sp_marshal_v.hash_set(v, k, sp_mar_r(r)); }
+    }
   long n = ivars ? sp_mar_rlong(r) : 0;
   for (long i = 0; i < n; i++) {
-    sp_marshal_v.arr_push(iv, sp_mar_r(r));   /* ivar symbol */
-    sp_marshal_v.arr_push(iv, sp_mar_r(r));   /* ivar value  */
+    sp_RbVal k = sp_mar_r(r); SP_GC_ROOT_RBVAL(k);
+    sp_RbVal val = sp_mar_r(r); SP_GC_ROOT_RBVAL(val);
+    const char *kn = str && k.tag == SP_TAG_SYM && sp_sym_name_fn ? sp_sym_name_fn((sp_sym)k.v.i) : NULL;
+    /* (a String's encoding is no ivar: :E, or :encoding with its name) */
+    if (kn && (!strcmp(kn, "E") || !strcmp(kn, "encoding"))) {
+      const char *enc = !strcmp(kn, "encoding") ? sp_rbval_string_bytes(val) : NULL;
+      int text = enc ? !(strcasecmp(enc, "ASCII-8BIT") == 0 || strcasecmp(enc, "BINARY") == 0)
+                     : (val.tag == SP_TAG_BOOL && val.v.b);
+      if (text) sp_String_force_encoding((sp_String *)v.v.p, 0);
+      continue;
+    }
+    sp_marshal_v.arr_push(iv, k);     /* ivar symbol */
+    sp_marshal_v.arr_push(iv, val);   /* ivar value  */
   }
   if (n) sp_marshal_v.obj_load(cn, v, iv, &ok);
   return v;

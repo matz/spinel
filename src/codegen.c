@@ -15809,16 +15809,13 @@ static void emit_marshal_generic(Compiler *c, int nn, int nanon, int any_anon, i
     "  int _ixv[d->niv > 0 ? d->niv : 1]; sp_int _niv = 0;\n"
     "  if (d->flags & SP_MARC_RANKED) _niv = d->order(p, _ixv);\n"
     "  else for (int j = 0; j < d->niv; j++) _niv += sp_mar_iv_set(&d->ivs[j], o);\n"
-    /* an Array subclass instance (#7449) is written as CRuby writes it: `C`,
-       its class, its elements as an Array's, and its ivars after them under
-       `I` when it has any; an exception subclass writes its message and
-       backtrace first, as CRuby does, then its own ivars */
-    "  if (d->flags & SP_MARC_ARY) {\n"
-    "    if (_niv) sp_mar_b(b, 'I');\n"
-    "    sp_mar_b(b, 'C'); sp_mar_sym(b, nm);\n"
-    "    sp_mar_w_body(b, d->dyn ? sp_box_nullable_obj_dyn(p, d->boxid) : sp_box_nullable_obj(p, d->boxid));\n"
-    "    if (_niv) sp_mar_long(b, _niv);\n"
-    "  }\n"
+    /* an Array, Hash or String subclass instance (#7449) is written as
+       CRuby writes it (sp_mar_w_bsub): `C`, its class, its builtin's body
+       (a String's bytes, then its encoding as an ivar), and its ivars after
+       them under `I` when it has any; an exception subclass writes its
+       message and backtrace first, as CRuby does, then its own ivars */
+    "  if (d->flags & SP_MARC_ARY)\n"
+    "    sp_mar_w_bsub(b, nm, d->dyn ? sp_box_nullable_obj_dyn(p, d->boxid) : sp_box_nullable_obj(p, d->boxid), _niv);\n"
     "  else if (d->flags & SP_MARC_EXC) sp_mar_w_exc_head(b, nm, p, _niv);\n"
     "  else { sp_mar_b(b, 'o'); sp_mar_sym(b, nm); sp_mar_long(b, _niv); }\n"
     "  if (d->flags & SP_MARC_RANKED)\n"

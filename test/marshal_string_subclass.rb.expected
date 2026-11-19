@@ -1,0 +1,20 @@
+"\x04\bIC:\tName\"\truby\a:\x06ET:\n@lang:\aja"
+"ruby"
+Name
+:ja
+#<Encoding:UTF-8>
+true
+"\x04\bIC:\nPlain\"\ncaf\xC3\xA9\x06:\x06ET"
+"café"
+Plain
+#<Encoding:UTF-8>
+4
+"\x04\bC:\nPlain\"\a\xFF\x00"
+[255, 0]
+Plain
+#<Encoding:BINARY (ASCII-8BIT)>
+["ruby", "ruby"]
+true
+:ja
+""
+"\x04\bIC:\tName\"\x00\x06:\x06ET"

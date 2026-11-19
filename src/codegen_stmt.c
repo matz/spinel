@@ -24268,7 +24268,15 @@ void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent) {
        the layouts match by construction, but C needs the cast spelled (#3418). */
     if (!g_result_var) emit_obj_upcast_prefix(c, g_ret_type, vty, b);
     else if (g_result_ty != TY_UNKNOWN) emit_obj_upcast_prefix(c, g_result_ty, vty, b);
-    emit_tail_value(c, id, b);
+    /* A `super` no method answers raises where it runs, and its token (a boxed nil) is no value of a
+       typed result slot (emit_unresolved_coerced_text yields the slot's default) */
+    if (g_result_var && !g_result_poly && g_result_ty != TY_UNKNOWN && (k == NK_SuperNode || k == NK_ForwardingSuperNode)) {
+      Buf tb; memset(&tb, 0, sizeof tb);
+      emit_tail_value(c, id, &tb);
+      emit_unresolved_coerced_text(c, id, g_result_ty, tb.p ? tb.p : "", b);
+      free(tb.p);
+    }
+    else emit_tail_value(c, id, b);
   }
   buf_puts(b, ";\n");
 }

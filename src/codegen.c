@@ -3343,9 +3343,7 @@ static void emit_boxed_impl(Compiler *c, int node, Buf *b) {
     return;
   }
   if (t == TY_STRING) {
-    buf_puts(b, "SP_STR_BOX(");
-    emit_expr(c, node, b);
-    buf_puts(b, ")");
+    emit_str_box_rooted(c, node, b);
     RC(RF_STR, RW_NONE);
     return;
   }

@@ -460,6 +460,34 @@ void str_box_kept(Buf *b, int t, const char *h, const char *e) {
   buf_printf(b, " : _t%d.%s ? sp_box_str_new(_t%d.%s) : sp_box_nil()", t, e, t, e);
 }
 
+/* The box face of a String value by its representation (emit_boxed_impl's
+   TY_STRING arm): SP_STR_BOX of the value. A value that may allocate (a
+   call's answer, a new String) is boxed into a rooted temp first: the box
+   can go to a runtime call that allocates (an Array push, a Hash lookup)
+   while it is held by no root. The temp is named ahead of the operand's
+   own temps (StrForm.tmp), so the operand's keep their numbers. */
+void emit_str_box_rooted(Compiler *c, int v, Buf *b) {
+  if (!operand_may_allocate(c, v)) {
+    buf_puts(b, "SP_STR_BOX(");
+    emit_expr(c, v, b);
+    buf_puts(b, ")");
+    return;
+  }
+  StrForm sf;
+  memset(&sf, 0, sizeof sf);
+  sf.rf = -1;
+  sf.cty = TY_POLY;
+  sf.tmp = ++g_tmp;
+  sf.needs = SF_EVAL_ONCE | SF_ROOT_UNTIL_USE | SF_ALLOCATES;
+  buf_puts(&sf.expr, "SP_STR_BOX(");
+  emit_expr(c, v, &sf.expr);
+  buf_puts(&sf.expr, ")");
+  str_form_settle(c, &sf, b);
+  buf_printf(b, "_t%d", sf.tmp);
+  str_form_close(&sf, b);
+  str_form_free(&sf);
+}
+
 /* Record the box form (RF_*, repr.h) the box face wrote and why it may
    differ from the one repr_of predicts for the node (RW_*). */
 static void str_box_note(StrForm *sf, int rf, int rw) {

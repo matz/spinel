@@ -510,6 +510,9 @@ void str_read_handle_close(Buf *b);
 void str_new_handle_open(Buf *b);
 void str_new_handle_close(Buf *b);
 void str_box_kept(Buf *b, int t, const char *h, const char *e);
+/* The box face of a String value by its representation: SP_STR_BOX, into a
+   rooted temp when the value may allocate (codegen_str.c) */
+void emit_str_box_rooted(Compiler *c, int v, Buf *b);
 /* A write in value position (a local's whose slot is a String buffer, any
    other whose slot holds the shared handle) as the handle it writes, into
    out; 0, writing nothing, for any other node. */

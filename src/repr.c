@@ -1122,7 +1122,7 @@ static int repr_strbuf_src(const Compiler *c, int node, TyKind t) {
     Scope *s = ln ? comp_scope_of(mc, node) : NULL;
     LocalVar *lv = s ? scope_local(s, ln) : NULL;
     if (lv && lv->type == TY_POLY && comp_nilnarrow_stored(c, node) == TY_STRBUF) return RS_SLOT_POLY;
-    return lv && lv->type == TY_STRBUF && lv->str_shared ? RS_HANDLE : RS_NONE;
+    return lv && repr_of_slot(c, lv).handle ? RS_HANDLE : RS_NONE;
   }
   if (t != TY_STRBUF) return RS_NONE;
   if (k == NK_LocalVariableReadNode) {
@@ -1599,9 +1599,7 @@ Repr repr_of_slot(const Compiler *c, const LocalVar *lv) {
   if (lv->or_written) r.may_nil = 1;
   /* a pointer slot that can hold nil (repr_may_nil) */
   if (repr_may_nil(lv->type, lv->obj_may_nil)) r.may_nil = 1;
-  /* str_shared refines TY_STRBUF; it can outlive that storage type */
-  if (lv->type == TY_STRBUF && lv->str_shared) r.handle = 1;
-  /* under the rule, that handle is the one it assigned */
+  r.handle = k == RK_STRBUF;
   r.share = r.handle;
   r.elem_nil_marked = (unsigned)repr_elem_nil(r.elem, lv->nullable_int_elem & NIE_MARKED, lv->obj_elem_may_nil);
   r.elem_nil_reach = (unsigned)repr_elem_nil(r.elem, lv->nullable_int_elem & (NIE_MARKED | NIE_REACH), 0);
@@ -1628,19 +1626,8 @@ static void repr_check_block_params(Compiler *c) {
   }
 }
 
-/* A String slot is the handle or bytes, and the rule marks every handle
-   (slot_take_string_handle): no local, global, instance variable or class
-   variable holds TY_STRBUF without the mark, which repr_of_slot reads as bytes. */
+/* Global and member storage still needs the String handle mark. */
 static void repr_check_string_slots(Compiler *c) {
-  for (int si = 0; si < c->nscopes; si++) {
-    Scope *sc = &c->scopes[si];
-    for (int i = 0; i < sc->nlocals; i++) {
-      const LocalVar *lv = &sc->locals[i];
-      if (lv->type == TY_STRBUF && !lv->str_shared)
-        fprintf(stderr, "repr-check: conflict: scope %s local %s: slot string buffer without the handle mark\n",
-                sc->name ? sc->name : "?", lv->name ? lv->name : "?");
-    }
-  }
   for (int g = 0; g < c->ngvars; g++)
     if (c->gvars[g].type == TY_STRBUF && !c->gvars[g].str_shared)
       fprintf(stderr, "repr-check: conflict: global %s: slot string buffer without the handle mark\n",

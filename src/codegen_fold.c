@@ -481,8 +481,8 @@ static char *emit_hash_block_eval(Compiler *c, int block, Repr hr, const char *h
         buf_printf(g_pre, "lv_%s = sp_%sHash_get(_t%d, _t%d->order[_t%d]);\n", p1, hn, trecv, trecv, ti);
     }
   }
-  if (ns0 && p0_lv) lv_set_type(p0_lv, p0_actual);
-  if (ns1 && p1_lv) lv_set_type(p1_lv, p1_actual);
+  if (ns0 && p0_lv) lv_set_storage_type(p0_lv, p0_actual);
+  if (ns1 && p1_lv) lv_set_storage_type(p1_lv, p1_actual);
   TyKind bret = (bb && bn > 0) ? repr_of(c, bb[bn - 1]).as_ty : TY_UNKNOWN;
   /* A value-carrying next widens the block value past the tail, so the temp is
      boxed when a next yields a different type than the tail expression. */
@@ -514,8 +514,8 @@ static char *emit_hash_block_eval(Compiler *c, int block, Repr hr, const char *h
   if (!want_poly && !vo && bret == TY_STRING) g_bv_dest_ty = TY_STRING;
   emit_block_value_into(c, block, tvvb, want_poly, g_indent + 1);
   g_bv_dest_oint = sv_bvo;
-  if (ns0 && p0_lv) lv_set_type(p0_lv, p0_decl);
-  if (ns1 && p1_lv) lv_set_type(p1_lv, p1_decl);
+  if (ns0 && p0_lv) lv_set_storage_type(p0_lv, p0_decl);
+  if (ns1 && p1_lv) lv_set_storage_type(p1_lv, p1_decl);
   if (sri1 >= 0) { if (srn1) g_nren = sri1; else buf_setf(&g_ren_to[sri1], "%s", sro1); }
   free(sro1);
   if (sri0 >= 0) { if (srn0) g_nren = sri0; else buf_setf(&g_ren_to[sri0], "%s", sro0); }
@@ -1649,9 +1649,9 @@ void bp_elem_read(Compiler *c, int block, const char *orig, const char *k, int t
 static int bp_pinned_oint(LocalVar *lv, TyKind et) {
   if (!lv || !oint_kind(et)) return 0;
   TyKind saved = lv->type;
-  lv_set_type(lv, et);
+  lv_set_storage_type(lv, et);
   int r = slot_is_oint(lv);
-  lv_set_type(lv, saved);
+  lv_set_storage_type(lv, saved);
   return r;
 }
 
@@ -1711,7 +1711,7 @@ int emit_poly_uniq_block(Compiler *c, int id, Buf *b) {
     if (use_shadow) {
       TyKind bt = one_elem_decl_type(rk, et);
       one_elem_bind_slot(clv0, bt);
-      lv_set_type(clv0, bt);
+      lv_set_storage_type(clv0, bt);
       for (int j = 0; j < bn; j++) infer_subtree(c, bb[j]);
       emit_indent(g_pre, din); buf_puts(g_pre, "{\n"); din++;
       emit_indent(g_pre, din);
@@ -1763,7 +1763,7 @@ int emit_poly_uniq_block(Compiler *c, int id, Buf *b) {
     else buf_printf(g_pre, "if (!_t%d) { sp_PolyArray_push(_t%d, _t%d); sp_%sArray_push%s(_t%d, lv_%s); }\n", tdup, tseen, tkey, rk,
                     keep_nil ? "_o" : "", tres, p0);
     if (use_shadow) { din--; emit_indent(g_pre, din); buf_puts(g_pre, "}\n"); }
-    if (clv0) lv_set_type(clv0, csaved0);
+    if (clv0) lv_set_storage_type(clv0, csaved0);
     emit_indent(g_pre, g_indent); buf_puts(g_pre, "}\n");
     if (bang) {
       int tm = ++g_tmp, tn = ++g_tmp, to = ++g_tmp;
@@ -2163,7 +2163,7 @@ int emit_sum_block_poly_expr(Compiler *c, int id, Buf *b) {
   Scope *bsc = p0 ? comp_scope_of(c, block) : NULL;
   LocalVar *blv = (bsc && p0) ? scope_local(bsc, p0) : NULL;
   TyKind saved = blv ? blv->type : TY_UNKNOWN;
-  if (blv) lv_set_type(blv, TY_POLY);
+  if (blv) lv_set_storage_type(blv, TY_POLY);
   arm_body_infer(c, ARM_SITE_FOLD_POLY, block, TY_POLY, bb, bn);
 
   int ta = ++g_tmp, tacc = ++g_tmp, ti = ++g_tmp, tr = ++g_tmp;
@@ -2227,7 +2227,7 @@ int emit_sum_block_poly_expr(Compiler *c, int id, Buf *b) {
     free(inner.p); free(valb.p);
   }
   buf_printf(b, " sp_sum_result(&_t%dS); })", tacc);
-  if (blv) lv_set_type(blv, saved);
+  if (blv) lv_set_storage_type(blv, saved);
   return 1;
 }
 static int emit_sum_block_over(Compiler *c, int id, int recv, int block, Buf *b);
@@ -2603,13 +2603,13 @@ int emit_slice_when_chunk_inspect_expr(Compiler *c, int id, Buf *b) {
     LocalVar *lva = bsc ? scope_local(bsc, p0n) : NULL;
     LocalVar *lvb = bsc ? scope_local(bsc, p1n) : NULL;
     TyKind pta = lva ? lva->type : TY_UNKNOWN, ptb = lvb ? lvb->type : TY_UNKNOWN;
-    if (lva && lva->type != TY_POLY) lv_set_type(lva, TY_INT);
-    if (lvb && lvb->type != TY_POLY) lv_set_type(lvb, TY_INT);
+    if (lva && lva->type != TY_POLY) lv_set_storage_type(lva, TY_INT);
+    if (lvb && lvb->type != TY_POLY) lv_set_storage_type(lvb, TY_INT);
     for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, g_indent + 2);
     int save = g_indent; g_indent += 2;
     Buf cb; memset(&cb, 0, sizeof cb); emit_expr(c, bb[bn - 1], &cb); g_indent = save;
-    if (lva) lv_set_type(lva, pta);
-    if (lvb) lv_set_type(lvb, ptb);
+    if (lva) lv_set_storage_type(lva, pta);
+    if (lvb) lv_set_storage_type(lvb, ptb);
     emit_indent(g_pre, g_indent + 2);
     buf_printf(g_pre, "if (%s) {\n", cb.p ? cb.p : "0"); free(cb.p);
     emit_indent(g_pre, g_indent + 3);
@@ -2653,11 +2653,11 @@ int emit_slice_when_chunk_inspect_expr(Compiler *c, int id, Buf *b) {
   Scope *bsc = comp_scope_of(c, block);
   LocalVar *lv0 = bsc ? scope_local(bsc, p0n) : NULL;
   TyKind pt0 = lv0 ? lv0->type : TY_UNKNOWN;
-  if (lv0) lv_set_type(lv0, TY_INT);
+  if (lv0) lv_set_storage_type(lv0, TY_INT);
   for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, g_indent + 1);
   int save = g_indent; g_indent++;
   Buf kb; memset(&kb, 0, sizeof kb); emit_expr(c, bb[bn - 1], &kb); g_indent = save;
-  if (lv0) lv_set_type(lv0, pt0);
+  if (lv0) lv_set_storage_type(lv0, pt0);
   emit_indent(g_pre, g_indent + 1);
   buf_printf(g_pre, "sp_int _tkey_%d = %s;\n", ta, kb.p ? kb.p : "0"); free(kb.p);
   emit_indent(g_pre, g_indent + 1);
@@ -2881,11 +2881,11 @@ int emit_chunk_first_class_expr(Compiler *c, int id, Buf *b) {
   Scope *bsc = comp_scope_of(c, block);
   LocalVar *lv0 = bsc ? scope_local(bsc, p0n) : NULL;
   TyKind pt0 = lv0 ? lv0->type : TY_UNKNOWN;
-  if (lv0) lv_set_type(lv0, TY_INT);
+  if (lv0) lv_set_storage_type(lv0, TY_INT);
   for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, g_indent + 1);
   int save = g_indent; g_indent++;
   Buf kb; memset(&kb, 0, sizeof kb); emit_expr(c, bb[bn - 1], &kb); g_indent = save;
-  if (lv0) lv_set_type(lv0, pt0);
+  if (lv0) lv_set_storage_type(lv0, pt0);
   emit_indent(g_pre, g_indent + 1);
   buf_printf(g_pre, "sp_int _tkey_%d = %s;\n", ta, kb.p ? kb.p : "0"); free(kb.p);
   emit_indent(g_pre, g_indent + 1);
@@ -3047,15 +3047,15 @@ int emit_chunk_while_expr(Compiler *c, int id, Buf *b) {
   LocalVar *lva = bsc ? scope_local(bsc, p0n) : NULL;
   LocalVar *lvb = bsc ? scope_local(bsc, p1n) : NULL;
   TyKind pta = lva ? lva->type : TY_UNKNOWN, ptb = lvb ? lvb->type : TY_UNKNOWN;
-  if (lva && lva->type != TY_POLY) lv_set_type(lva, TY_INT);
-  if (lvb && lvb->type != TY_POLY) lv_set_type(lvb, TY_INT);
+  if (lva && lva->type != TY_POLY) lv_set_storage_type(lva, TY_INT);
+  if (lvb && lvb->type != TY_POLY) lv_set_storage_type(lvb, TY_INT);
   for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, g_indent + 2);
   int save = g_indent; g_indent += 2;
   /* the block's value by Ruby's truth: a boxed one (`a.send(s, b)`) is no C
      scalar, and an Integer one is true even at 0 */
   Buf cb; memset(&cb, 0, sizeof cb); emit_cond(c, bb[bn - 1], &cb); g_indent = save;
-  if (lva) lv_set_type(lva, pta);
-  if (lvb) lv_set_type(lvb, ptb);
+  if (lva) lv_set_storage_type(lva, pta);
+  if (lvb) lv_set_storage_type(lvb, ptb);
   emit_indent(g_pre, g_indent + 2);
   buf_printf(g_pre, is_sw ? "if (%s) {\n" : "if (!(%s)) {\n", cb.p ? cb.p : "0"); free(cb.p);
   emit_indent(g_pre, g_indent + 3);
@@ -3179,8 +3179,8 @@ static int emit_chunk_family_runs(Compiler *c, int ck) {
      it and the boxed element is unboxed into it, as for a typed receiver */
   int pin_a = pin_poly && lva && (lva->type == TY_POLY || lva->type == TY_UNKNOWN);
   int pin_b = pin_poly && lvb && (lvb->type == TY_POLY || lvb->type == TY_UNKNOWN);
-  if (pin_a) lv_set_type(lva, TY_POLY);
-  if (pin_b) lv_set_type(lvb, TY_POLY);
+  if (pin_a) lv_set_storage_type(lva, TY_POLY);
+  if (pin_b) lv_set_storage_type(lvb, TY_POLY);
   TyKind at0 = (lva && lva->type != TY_UNKNOWN) ? lva->type : TY_POLY;
   TyKind at1 = (lvb && lvb->type != TY_UNKNOWN) ? lvb->type : TY_POLY;
 
@@ -3330,8 +3330,8 @@ static int emit_chunk_family_runs(Compiler *c, int ck) {
     buf_printf(g_pre, "if (_t%d) { sp_PolyArray *_pr = sp_PolyArray_new(); SP_GC_ROOT(_pr); sp_PolyArray_push(_pr, _t%d); sp_PolyArray_push(_pr, sp_box_poly_array(_t%d)); sp_PolyArray_push(_t%d, sp_box_poly_array(_pr)); }\n", thas, tpk, tcur, tout);
   else
     buf_printf(g_pre, "if (sp_PolyArray_length(_t%d) > 0) sp_PolyArray_push(_t%d, sp_box_poly_array(_t%d));\n", tcur, tout, tcur);
-  if (lva) lv_set_type(lva, pta);
-  if (lvb) lv_set_type(lvb, ptb);
+  if (lva) lv_set_storage_type(lva, pta);
+  if (lvb) lv_set_storage_type(lvb, ptb);
   return tout;
 }
 
@@ -4044,8 +4044,8 @@ int emit_reduce_block_expr(Compiler *c, int id, Buf *b) {
     LocalVar *pl0 = (psc && p0_orig) ? scope_local(psc, p0_orig) : NULL;
     LocalVar *pl1 = (psc && p1_orig) ? scope_local(psc, p1_orig) : NULL;
     TyKind s0 = pl0 ? pl0->type : TY_UNKNOWN, s1 = pl1 ? pl1->type : TY_UNKNOWN;
-    if (pl0) lv_set_type(pl0, acc_ty);
-    if (pl1) lv_set_type(pl1, et);
+    if (pl0) lv_set_storage_type(pl0, acc_ty);
+    if (pl1) lv_set_storage_type(pl1, et);
     for (int j = 0; j < bn; j++) infer_subtree(c, bb[j]);
     Repr br9 = repr_of(c, bb[bn - 1]);
     TyKind bt9 = br9.as_ty;
@@ -4053,8 +4053,8 @@ int emit_reduce_block_expr(Compiler *c, int id, Buf *b) {
        does: `reduce([9]) { |a, b| a & b }` over an array of arrays answers a
        poly array, which an int-array accumulator slot cannot hold (#3966) */
     if (br9.kind == RK_BOXED || (ty_is_array(bt9) && br9.elem != ty_array_elem(acc_ty))) acc_ty = TY_POLY_ARRAY;
-    if (pl0) lv_set_type(pl0, s0);
-    if (pl1) lv_set_type(pl1, s1);
+    if (pl0) lv_set_storage_type(pl0, s0);
+    if (pl1) lv_set_storage_type(pl1, s1);
   }
   /* --share-strings: read as the handle (emit_strbuf_route,
      strbuf_route_inject), the accumulator is the handle its seed hands on,
@@ -4101,12 +4101,12 @@ int emit_reduce_block_expr(Compiler *c, int id, Buf *b) {
     LocalVar *l0 = (lsc && p0_orig) ? scope_local(lsc, p0_orig) : NULL;
     LocalVar *l1 = (lsc && p1_orig) ? scope_local(lsc, p1_orig) : NULL;
     TyKind s0 = l0 ? l0->type : TY_UNKNOWN, s1 = l1 ? l1->type : TY_UNKNOWN;
-    if (l0) lv_set_type(l0, acc_ty);
-    if (l1) lv_set_type(l1, et);
+    if (l0) lv_set_storage_type(l0, acc_ty);
+    if (l1) lv_set_storage_type(l1, et);
     for (int j = 0; j < bn; j++) infer_subtree(c, bb[j]);
     Repr br9 = repr_of(c, bb[bn - 1]);
-    if (l0) lv_set_type(l0, s0);
-    if (l1) lv_set_type(l1, s1);
+    if (l0) lv_set_storage_type(l0, s0);
+    if (l1) lv_set_storage_type(l1, s1);
     if (br9.kind == RK_BOXED || br9.big) acc_ty = TY_POLY;
     for (int j = 0; j < bn; j++) infer_subtree(c, bb[j]);
   }
@@ -4180,12 +4180,12 @@ int emit_reduce_block_expr(Compiler *c, int id, Buf *b) {
   LocalVar *rlv1 = (rsc && p1_orig) ? scope_local(rsc, p1_orig) : NULL;
   TyKind rpt0 = rlv0 ? rlv0->type : TY_UNKNOWN;
   TyKind rpt1 = rlv1 ? rlv1->type : TY_UNKNOWN;
-  if (rlv0) lv_set_type(rlv0, acc_ty);
+  if (rlv0) lv_set_storage_type(rlv0, acc_ty);
   /* (one representation: the element parameter's slot is the handle the
      String Array keeps, declared so below; the body reads it as one) */
   TyKind et1 = !range && !nested && !p1_multi && !(rlv1 && oint_kind(et) && slot_is_oint(rlv1))
                ? one_elem_decl_type(k, et) : et;
-  if (rlv1) { one_elem_bind_slot(rlv1, et1); lv_set_type(rlv1, et1); }
+  if (rlv1) { one_elem_bind_slot(rlv1, et1); lv_set_storage_type(rlv1, et1); }
   for (int j = 0; j < bn; j++) infer_subtree(c, bb[j]);  /* refresh ntype cache */
   if (range) {
     int ts = ++g_tmp, te = ++g_tmp;
@@ -4305,8 +4305,8 @@ int emit_reduce_block_expr(Compiler *c, int id, Buf *b) {
      call's slot holds its nil (a block value that is a Proc call's) */
   else if (oint_kind(acc_ty) && node_is_oint(c, id)) buf_printf(b, "%s(_t%d); })", oint_of(acc_ty), tacc);
   else buf_printf(b, "_t%d; })", tacc);
-  if (rlv0) lv_set_type(rlv0, rpt0);
-  if (rlv1) lv_set_type(rlv1, rpt1);
+  if (rlv0) lv_set_storage_type(rlv0, rpt0);
+  if (rlv1) lv_set_storage_type(rlv1, rpt1);
   /* the body's nodes back to the parameters' own types: they were typed
      for this fold's accumulator, and the block emitted again elsewhere (a
      program class's inject beside it takes the block as a proc, whose
@@ -4677,18 +4677,18 @@ int emit_each_with_index_chain(Compiler *c, int id, Buf *b) {
   if (g_promote_mode && ty_is_numeric(acc_ty) && acc_ty != TY_BIGINT) {
     Scope *lsc = comp_scope_of(c, block);
     LocalVar *l0 = lsc ? scope_local(lsc, p0o) : NULL;
-    TyKind s0 = l0 ? l0->type : TY_UNKNOWN; if (l0) lv_set_type(l0, acc_ty);
+    TyKind s0 = l0 ? l0->type : TY_UNKNOWN; if (l0) lv_set_storage_type(l0, acc_ty);
     LocalVar *lv9 = NULL, *li9 = NULL, *lp9 = NULL; TyKind sv9 = TY_UNKNOWN, si9 = TY_UNKNOWN, sp9 = TY_UNKNOWN;
     if (multi) {
       lv9 = lsc ? scope_local(lsc, vo) : NULL; li9 = lsc ? scope_local(lsc, io) : NULL;
       sv9 = lv9 ? lv9->type : TY_UNKNOWN; si9 = li9 ? li9->type : TY_UNKNOWN;
-      if (lv9) lv_set_type(lv9, elem_t); if (li9) lv_set_type(li9, TY_INT);
+      if (lv9) lv_set_storage_type(lv9, elem_t); if (li9) lv_set_storage_type(li9, TY_INT);
     }
-    else { lp9 = lsc ? scope_local(lsc, pairo) : NULL; sp9 = lp9 ? lp9->type : TY_UNKNOWN; if (lp9) lv_set_type(lp9, pair_ty); }
+    else { lp9 = lsc ? scope_local(lsc, pairo) : NULL; sp9 = lp9 ? lp9->type : TY_UNKNOWN; if (lp9) lv_set_storage_type(lp9, pair_ty); }
     for (int j = 0; j < bn; j++) infer_subtree(c, bb[j]);
     Repr br9 = repr_of(c, bb[bn - 1]);
-    if (l0) lv_set_type(l0, s0);
-    if (lv9) lv_set_type(lv9, sv9); if (li9) lv_set_type(li9, si9); if (lp9) lv_set_type(lp9, sp9);
+    if (l0) lv_set_storage_type(l0, s0);
+    if (lv9) lv_set_storage_type(lv9, sv9); if (li9) lv_set_storage_type(li9, si9); if (lp9) lv_set_storage_type(lp9, sp9);
     if (br9.kind == RK_BOXED || br9.big) acc_ty = TY_POLY;
     for (int j = 0; j < bn; j++) infer_subtree(c, bb[j]);
   }
@@ -4722,7 +4722,7 @@ int emit_each_with_index_chain(Compiler *c, int id, Buf *b) {
      re-infer (same pattern as emit_reduce_block_expr). */
   Scope *rsc = comp_scope_of(c, block);
   LocalVar *lacc = rsc ? scope_local(rsc, p0o) : NULL;
-  TyKind sacc = lacc ? lacc->type : TY_UNKNOWN; if (lacc) lv_set_type(lacc, acc_ty);
+  TyKind sacc = lacc ? lacc->type : TY_UNKNOWN; if (lacc) lv_set_storage_type(lacc, acc_ty);
   LocalVar *lv = NULL, *li = NULL, *lp = NULL; TyKind sv = TY_UNKNOWN, si = TY_UNKNOWN, sp = TY_UNKNOWN;
   if (multi) {
     lv = rsc ? scope_local(rsc, vo) : NULL; li = rsc ? scope_local(rsc, io) : NULL;
@@ -4730,11 +4730,11 @@ int emit_each_with_index_chain(Compiler *c, int id, Buf *b) {
     /* (one representation: the element's slot is the handle it is declared
        as below, and the body reads it as one) */
     TyKind ve = bp_slot_oint(c, block, vo, k) ? elem_t : one_elem_decl_type(k, elem_t);
-    if (lv) { one_elem_bind_slot(lv, ve); lv_set_type(lv, ve); } if (li) lv_set_type(li, TY_INT);
+    if (lv) { one_elem_bind_slot(lv, ve); lv_set_storage_type(lv, ve); } if (li) lv_set_storage_type(li, TY_INT);
   }
   else {
     lp = rsc ? scope_local(rsc, pairo) : NULL; sp = lp ? lp->type : TY_UNKNOWN;
-    if (lp) lv_set_type(lp, pair_ty);
+    if (lp) lv_set_storage_type(lp, pair_ty);
   }
   for (int j = 0; j < bn; j++) infer_subtree(c, bb[j]);
 
@@ -4781,8 +4781,8 @@ int emit_each_with_index_chain(Compiler *c, int id, Buf *b) {
     free(tb.p); free(inner.p); }
   buf_printf(b, "_t%d; })", tacc);
 
-  if (lacc) lv_set_type(lacc, sacc);
-  if (lv) lv_set_type(lv, sv); if (li) lv_set_type(li, si); if (lp) lv_set_type(lp, sp);
+  if (lacc) lv_set_storage_type(lacc, sacc);
+  if (lv) lv_set_storage_type(lv, sv); if (li) lv_set_storage_type(li, si); if (lp) lv_set_storage_type(lp, sp);
   return 1;
 }
 
@@ -4912,8 +4912,8 @@ int emit_each_with_index_terminal(Compiler *c, int id, Buf *b) {
     /* (one representation: the element's slot is the handle it is declared
        as below, and the body reads it as one) */
     TyKind ve = bp_slot_oint(c, block, vo, k) ? elem_t : one_elem_decl_type(k, elem_t);
-    lv = scope_local(bsc, vo); sv = lv ? lv->type : TY_UNKNOWN; if (lv) { one_elem_bind_slot(lv, ve); lv_set_type(lv, ve); }
-    li = scope_local(bsc, io); si = li ? li->type : TY_UNKNOWN; if (li) lv_set_type(li, TY_INT);
+    lv = scope_local(bsc, vo); sv = lv ? lv->type : TY_UNKNOWN; if (lv) { one_elem_bind_slot(lv, ve); lv_set_storage_type(lv, ve); }
+    li = scope_local(bsc, io); si = li ? li->type : TY_UNKNOWN; if (li) lv_set_storage_type(li, TY_INT);
     int body = nt_ref(nt, block, "body");
     int bn = 0; const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
     for (int j = 0; j < bn; j++) infer_subtree(c, bb[j]);
@@ -5050,7 +5050,7 @@ int emit_each_with_index_terminal(Compiler *c, int id, Buf *b) {
 
   emit_indent(g_pre, g_indent); buf_puts(g_pre, "}\n");
 
-  if (lv) lv_set_type(lv, sv); if (li) lv_set_type(li, si);
+  if (lv) lv_set_storage_type(lv, sv); if (li) lv_set_storage_type(li, si);
 
   char res[32]; TyKind res_t;
   if (is_map || collect_pair || is_toh) {
@@ -5419,8 +5419,8 @@ else {
   /* (one representation: a String element's parameter is its handle, so
      a change through it, `a << "!"`, reaches the element) */
   TyKind pet = one_elem_decl_type(k, et);
-  if (slv0) { one_elem_bind_slot(slv0, pet); lv_set_type(slv0, pet); }
-  if (slv1) { one_elem_bind_slot(slv1, pet); lv_set_type(slv1, pet); }
+  if (slv0) { one_elem_bind_slot(slv0, pet); lv_set_storage_type(slv0, pet); }
+  if (slv1) { one_elem_bind_slot(slv1, pet); lv_set_storage_type(slv1, pet); }
   for (int j = 0; j < bn; j++) infer_subtree(c, bb[j]);  /* refresh ntype cache */
   int save = g_indent; g_indent += 3;
   /* Shadow the outer (possibly poly) block params with et-typed locals */
@@ -5468,8 +5468,8 @@ else {
              tc, tbuf, to, tb, tj, tbuf, to, ta, ti);
   g_indent--; g_indent = save;
   emit_indent(g_pre, g_indent + 3); buf_puts(g_pre, "}\n");
-  if (slv0) lv_set_type(slv0, spt0);
-  if (slv1) lv_set_type(slv1, spt1);
+  if (slv0) lv_set_storage_type(slv0, spt0);
+  if (slv1) lv_set_storage_type(slv1, spt1);
   emit_indent(g_pre, g_indent + 2); buf_puts(g_pre, "}\n");   /* while merge */
   emit_indent(g_pre, g_indent + 2);
   { char rd[96];
@@ -5626,8 +5626,8 @@ int emit_minmax_cmp_expr(Compiler *c, int id, Buf *b) {
      - emit C shadow declarations inside { } to give lv_p0/lv_p1 the right C type */
   TyKind saved_p0 = lv_p0 ? lv_p0->type : TY_UNKNOWN;
   TyKind saved_p1 = lv_p1 ? lv_p1->type : TY_UNKNOWN;
-  if (lv_p0) lv_set_type(lv_p0, et);
-  if (lv_p1) lv_set_type(lv_p1, et);
+  if (lv_p0) lv_set_storage_type(lv_p0, et);
+  if (lv_p1) lv_set_storage_type(lv_p1, et);
   for (int j = 0; j < bn; j++) infer_subtree(c, bb[j]);  /* refresh cache */
   int save = g_indent; g_indent++;
   int tacc = is_min ? tmin : tmax;
@@ -5665,8 +5665,8 @@ int emit_minmax_cmp_expr(Compiler *c, int id, Buf *b) {
   free(sg.p);
   free(cm.p);
   emit_indent(g_pre, g_indent); buf_puts(g_pre, "}\n");
-  if (lv_p0) lv_set_type(lv_p0, saved_p0);
-  if (lv_p1) lv_set_type(lv_p1, saved_p1);
+  if (lv_p0) lv_set_storage_type(lv_p0, saved_p0);
+  if (lv_p1) lv_set_storage_type(lv_p1, saved_p1);
   g_indent = save;
   emit_indent(g_pre, g_indent); buf_puts(g_pre, "}\n");
   free(ect.p);
@@ -6300,7 +6300,7 @@ int emit_collect_expr(Compiler *c, int id, Buf *b) {
     Scope *csc2 = p0p ? comp_scope_of(c, block) : NULL;
     LocalVar *clv2 = (csc2 && p0p) ? scope_local(csc2, p0p) : NULL;
     TyKind csaved2 = clv2 ? clv2->type : TY_UNKNOWN;
-    if (clv2) lv_set_type(clv2, TY_POLY);
+    if (clv2) lv_set_storage_type(clv2, TY_POLY);
     arm_body_infer(c, ARM_SITE_FOLD_POLY2, block, TY_POLY, bb2, bn2);
     int spair = tpair2 && np2 == 1 && nt_str(nt, block, "sym_proc_arg") ? nt_ref(nt, block, "sym_proc_pair") : -1;
     int tpacked2 = 0;
@@ -6427,7 +6427,7 @@ int emit_collect_expr(Compiler *c, int id, Buf *b) {
     buf_puts(g_pre, "}\n");
     emit_indent(g_pre, g_indent);
     buf_puts(g_pre, "}\n");
-    if (clv2) lv_set_type(clv2, csaved2);
+    if (clv2) lv_set_storage_type(clv2, csaved2);
     buf_printf(b, "_t%d", tres2);
     return 1;
   }
@@ -6574,7 +6574,7 @@ int emit_collect_expr(Compiler *c, int id, Buf *b) {
   int use_shadow = !boxed_cell && !as_handle && !args_view && clv0 && clv0->type != et_elem && et_elem != TY_UNKNOWN;
   if (use_shadow) {
     one_elem_bind_slot(clv0, one_elem_decl_type(k, et_elem));   /* (one representation: a handle slot) */
-    lv_set_type(clv0, one_elem_decl_type(k, et_elem));
+    lv_set_storage_type(clv0, one_elem_decl_type(k, et_elem));
     for (int j = 0; j < bn; j++) infer_subtree(c, bb[j]);
   }
 
@@ -6703,7 +6703,7 @@ int emit_collect_expr(Compiler *c, int id, Buf *b) {
     }
   }
   if (use_shadow) { emit_indent(g_pre, bodyIndent); buf_puts(g_pre, "}\n"); }
-  if (use_shadow && clv0) lv_set_type(clv0, csaved0);
+  if (use_shadow && clv0) lv_set_storage_type(clv0, csaved0);
   emit_indent(g_pre, g_indent);
   buf_puts(g_pre, "}\n");
   /* the kept (or mapped-to-itself) elements carry the receiver's nils: an

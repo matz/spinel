@@ -185,6 +185,8 @@ int holder_of_node_in(const Compiler *c, int node, int body, HolderRef *out) {
   switch (hk) {
   case HK_LOCAL: {
     Scope *s = comp_scope_of(mc, node);
+    /* An unrolled define_method reads its substituted expression. */
+    if (s && s->dm_subst_name && sp_streq(s->dm_subst_name, nm)) return 0;
     out->lv = s ? scope_local(s, nm) : NULL;
     if (!out->lv) return 0;
     break;

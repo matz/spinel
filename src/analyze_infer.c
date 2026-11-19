@@ -278,6 +278,7 @@ static int an_pinned_node = -1;
 int an_pin_node(int id) { int sv = an_pinned_node; an_pinned_node = id; return sv; }
 void an_pure_read_begin(void) { an_pure_reads++; }
 void an_pure_read_end(void) { an_pure_reads--; }
+int an_read_only_inference(void) { return an_builtin_only || an_pure_reads; }
 /* What call `id` would be typed if no user class owned the name: the
    builtin answer alone. Nothing is cached and no node's type is written
    under the flag (see infer_type), so this is safe to ask after analysis --
@@ -5253,8 +5254,8 @@ static int infer_builtin_cmethod_call(Compiler *c, int id, const NodeTable *nt, 
    --share-strings rule made the handle stays the handle: reset to String
    here each round, the rule set it back the next and the storage fixpoint
    never settled. */
-static void an_bind_line_param(Compiler *c, LocalVar *blv) {
-  if (blv && !(blv->type == TY_STRBUF && blv->str_shared))
+static void an_bind_line_param(LocalVar *blv) {
+  if (!an_read_only_inference() && blv && !(blv->type == TY_STRBUF && blv->str_shared))
     lv_set_type(blv, TY_STRING);
 }
 
@@ -5292,7 +5293,7 @@ static int infer_handle_call(Compiler *c, int id, const NodeTable *nt, const cha
         const char *bp0 = block_param_name(c, blk, 0);
         Scope *bs = bp0 ? comp_scope_of(c, blk) : NULL;
         LocalVar *blv = (bs && bp0) ? scope_local(bs, bp0) : NULL;
-        if (!an_pure_reads) an_bind_line_param(c, blv);
+        an_bind_line_param(blv);
       }
       { *out = TY_ARGF; return 1; }
     }
@@ -5328,7 +5329,7 @@ static int infer_handle_call(Compiler *c, int id, const NodeTable *nt, const cha
       if (dblk3 >= 0) {
         const char *dbp3 = block_param_name(c, dblk3, 0);
         Scope *dbs3 = dbp3 ? comp_scope_of(c, dblk3) : NULL;
-        an_bind_line_param(c, (dbs3 && dbp3) ? scope_local(dbs3, dbp3) : NULL);
+        an_bind_line_param((dbs3 && dbp3) ? scope_local(dbs3, dbp3) : NULL);
       }
       { *out = TY_DIR; return 1; }
     }
@@ -5395,12 +5396,12 @@ static int infer_handle_call(Compiler *c, int id, const NodeTable *nt, const cha
         sp_streq(name, "each_char") || sp_streq(name, "each_byte") ||
         sp_streq(name, "each_codepoint")) {
       int blk = nt_ref(nt, id, "block");
-      if (blk >= 0) {
+      if (blk >= 0 && !an_read_only_inference()) {
         const char *bp0 = block_param_name(c, blk, 0);
         Scope *bs = bp0 ? comp_scope_of(c, blk) : NULL;
         LocalVar *blv = (bs && bp0) ? scope_local(bs, bp0) : NULL;
         if (blv && is_byte_codepoint_each(name)) lv_set_type(blv, TY_INT);
-        else an_bind_line_param(c, blv);
+        else an_bind_line_param(blv);
       }
       { *out = TY_IO; return 1; }
     }
@@ -7761,11 +7762,11 @@ static int infer_universal_call(Compiler *c, int id, const NodeTable *nt, const 
       Scope *bs = bp0 ? comp_scope_of(c, blk_id) : NULL;
       LocalVar *blv = (bs && bp0) ? scope_local(bs, bp0) : NULL;
       TyKind saved_blv = blv ? blv->type : TY_UNKNOWN;
-      if (blv && rt != TY_UNKNOWN) lv_set_type(blv, rt);
+      if (blv && rt != TY_UNKNOWN) lv_set_storage_type(blv, rt);
       g_infer_blv_pin++;
       TyKind result = then_block_value_ty(c, bdy, infer_type(c, bbb[bbn - 1]));
       g_infer_blv_pin--;
-      if (blv) lv_set_type(blv, saved_blv);
+      if (blv) lv_set_storage_type(blv, saved_blv);
       { *out = result; return 1; }
     }
   }

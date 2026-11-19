@@ -2465,9 +2465,8 @@ static int emit_local_ivar_write_expr(Compiler *c, int id, Buf *b, const NodeTab
       return 1;
     }
     /* compile-time define_method substitution: the loop var IS the literal */
-    if (g_dm_subst_name && lrn && sp_streq(lrn, g_dm_subst_name) && g_dm_subst_node >= 0) {
-      emit_expr(c, g_dm_subst_node, b); return 1;
-    }
+    int substitute = substituted_local_node(nt, id);
+    if (substitute >= 0) { emit_expr(c, substitute, b); return 1; }
     /* a `return .. if p.nil?`-guarded param read: unbox the poly slot to the
        non-nil type the narrowing pass proved (#1661) */
     if (comp_nilnarrow_stored(c, id) != TY_UNKNOWN) {

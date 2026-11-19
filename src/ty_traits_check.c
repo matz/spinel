@@ -77,7 +77,7 @@ static TyTraits trait_from_functions(Compiler *c, TyKind t) {
   r.unbox_rhs = poly_rhs_unbox_fn(t);
   r.unbox_sink = poly_sink_unbox_fn(t);
   r.unbox_token = token_unbox_fmt(t);
-  { LocalVar lv; memset(&lv, 0, sizeof lv); lv_set_type(&lv, t);
+  { LocalVar lv = { .owner = -1 }; lv_set_storage_type(&lv, t);
     Buf b; memset(&b, 0, sizeof b);
     if (local_nil_test(c, &lv, "$e", &b)) r.nil_test_local = b.p ? b.p : strdup("");
     else free(b.p); }

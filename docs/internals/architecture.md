@@ -60,6 +60,10 @@ uses the same handle as the expression that supplied it.
 An ordered operand keeps its saved handle until its argument binding is
 removed. An abandoned emission also removes the corresponding binding.
 
+A scoped String local stores an `sp_String *`. A byte reader projects
+the payload from that object at its use. Nil uses a null handle.
+Temporary emission bindings use the type of the C declaration they name.
+
 A method inferred or declared to return String returns `sp_String *`.
 `repr_method_ret_storage` supplies the physical result type to signatures,
 return slots and callers. A nullable String uses the same pointer and returns

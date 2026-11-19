@@ -1474,6 +1474,13 @@ int g_class_body_id = -1;
 int g_emitting_class_id = -1;
 const char *g_dm_subst_name = NULL;
 int g_dm_subst_node = -1;
+
+int substituted_local_node(const NodeTable *nt, int node) {
+  if (!g_dm_subst_name || g_dm_subst_node < 0 || nt_kind(nt, node) != NK_LocalVariableReadNode)
+    return -1;
+  const char *name = nt_str(nt, node, "name");
+  return name && sp_streq(name, g_dm_subst_name) ? g_dm_subst_node : -1;
+}
 int g_ie_class_id = -1;
 int g_ie_discard_value = 0;
 int g_ie_nil_ivars = 0;

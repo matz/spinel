@@ -32696,7 +32696,7 @@ static void emit_callee_local_decls(Compiler *c, Scope *tm, Buf *b) {
     /* The method prologue normalizes an untyped block param to a boxed slot;
        this frame may be emitted before that prologue runs, and declare_local
        rejects TY_UNKNOWN. */
-    if (blv->type == TY_UNKNOWN) lv_set_type(blv, TY_POLY);
+    if (blv->type == TY_UNKNOWN) lv_set_storage_type(blv, TY_POLY);
     if (!blv->is_cell) { declare_local_named(c, b, blv, blv->name, 0); continue; }
     /* A celled local: emit_inlined_local_decl declares the plain shadow slot
        the inline iterator binds, then the heap cell the closure reads. */
@@ -32834,7 +32834,7 @@ int declare_default_locals(Compiler *c, Scope *m, int dnode) {
         unsupported_feature(c, dnode, "a parameter default that assigns a local the method body reads "
                                       "(the default is evaluated at the call site)");
     if (!uid) uid = ++g_tmp;
-    if (lv->type == TY_UNKNOWN) lv_set_type(lv, TY_POLY);
+    if (lv->type == TY_UNKNOWN) lv_set_storage_type(lv, TY_POLY);
     /* past the table's last entry the local is declared as the default
        spells it, unrenamed */
     if (g_nren >= MAX_RENAME) {

@@ -16067,14 +16067,12 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
          the arity check ahead of it raised ArgumentError for a method the
          module does not have. */
       if (comp_class_is_module(c, &c->classes[ci])) {
-        int plain = 1;
-        for (int a = 0; a < argc && plain; a++) {
-          NodeKind ak = nt_kind(nt, argv[a]);
-          plain = ak != NK_SplatNode && ak != NK_KeywordHashNode && ak != NK_BlockArgumentNode &&
-                  ak != NK_ForwardingArgumentsNode;
-        }
+        /* the arguments run first, in source order and whatever their form
+           (a splat, a keyword, an Array literal whose build hoists), as the
+           arity error's do: run inside this expression, one that hoisted
+           ran ahead of an earlier one, and a keyword or a splat ran none */
+        emit_args_run(c, argv, argc);
         buf_puts(b, "(");
-        for (int a = 0; plain && a < argc; a++) { buf_puts(b, "(void)("); emit_expr(c, argv[a], b); buf_puts(b, "), "); }
         buf_printf(b, "sp_raise_cls(\"NoMethodError\", \"undefined method 'new' for module %s\")",
                    class_ruby_name(c, ci) ? class_ruby_name(c, ci) : c->classes[ci].name);
         emit_raise_placeholder(c, id, b);

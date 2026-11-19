@@ -1,0 +1,13 @@
+mark 1
+mark 2
+undefined method 'new' for module M
+mark 3
+mark 4
+undefined method 'new' for module M
+mark 5
+mark 6
+undefined method 'new' for module M
+mark 7
+undefined method 'new' for module M
+mark 9
+9

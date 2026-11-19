@@ -34317,13 +34317,15 @@ void emit_bm_spread_call(Compiler *c, int id, int recv, const int *argv, int arg
 
 /* The class a class method bound by the Method `recv` runs on: the
    constant its `K.method(:m)` names, which for an inherited one is the
-   subclass (`Sub.method(:make).call` constructs a Sub), else `dflt`, the
-   defining class. */
+   subclass (`Sub.method(:make).call` constructs a Sub), also through a
+   `super_method`, else `dflt`, the defining class. */
 int method_node_recv_class(Compiler *c, int recv, int dflt) {
   const NodeTable *nt = c->nt;
   int mn = method_recv_node(c, recv);
   const char *nm = mn >= 0 ? nt_str(nt, mn, "name") : NULL;
-  if (!nm || !sp_streq(nm, "method")) return dflt;
+  /* (a super_method keeps its Method's receiver: the same class) */
+  while (is_super_method_name(nm) && (mn = method_recv_node(c, nt_ref(nt, mn, "receiver"))) >= 0) nm = nt_str(nt, mn, "name");
+  if (mn < 0 || !is_method_ref_name(nm)) return dflt;
   int mr = nt_ref(nt, mn, "receiver");
   if (mr < 0 || (nt_kind(nt, mr) != NK_ConstantReadNode && nt_kind(nt, mr) != NK_ConstantPathNode))
     return dflt;

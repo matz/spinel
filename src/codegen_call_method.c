@@ -749,7 +749,7 @@ int emit_op_method_super_method(Compiler *c, const BopCtx *x, Buf *b) {
          is receiver-bound, a class method is not */
       int _prb = c->scopes[pmip].class_id >= 0 && !c->scopes[pmip].is_cmethod;
       int _tmin = 0, _tmax = 0;
-      const char *_th = sup_unb ? NULL : emit_method_thunk(c, fmip, _prb, -1, &_tmin, &_tmax);
+      const char *_th = sup_unb ? NULL : emit_method_thunk(c, fmip, _prb, method_node_recv_class(c, recv, c->scopes[fmip].class_id), &_tmin, &_tmax);
       emit_bm_abi_args(b, _rbb, _ab, _s, _fx, _rs, _ab ? _rt : _prt, _pa, _pf, _th, _tmin, _tmax); }
     if (sup_unb) buf_puts(b, ")");
     if (pp) buf_printf(b, ", %s)", pp);

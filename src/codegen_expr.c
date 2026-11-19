@@ -4845,8 +4845,9 @@ static int emit_array_hash_literal_expr(Compiler *c, int id, Buf *b, const NodeT
             free(bx.p);
           }
           else if (it == TY_NIL)
-            /* a statically-nil splat contributes nothing (`[*nil]` == []) */
-            buf_printf(g_pre, ";\n");
+            /* a statically-nil splat contributes nothing (`[*nil]` == []);
+               a call answering it still runs */
+            buf_printf(g_pre, "(void)(%s);\n", ep);
           /* a nullable Integer or Float holding nil is that nil */
           else if ((it == TY_INT || it == TY_FLOAT) && call_returns_nullable_int(c, inner)) {
             Buf bx; memset(&bx, 0, sizeof bx); emit_boxed(c, inner, &bx);
@@ -4933,8 +4934,9 @@ static int emit_array_hash_literal_expr(Compiler *c, int id, Buf *b, const NodeT
         else if (ir.elem == TY_FLOAT && sp_streq(k, "Float"))
           buf_printf(g_pre, "{ sp_FloatArray *_sa = %s; if (_sa) for (sp_int _si = 0; _si < _sa->len; _si++) sp_FloatArray_push_o(_t%d, sp_FloatArray_oget(_sa, _si)); }\n", ep, t);
         else if (it == TY_NIL)
-          /* a statically-nil splat contributes nothing (`[*nil]` == []) */
-          buf_printf(g_pre, ";\n");
+          /* a statically-nil splat contributes nothing (`[*nil]` == []);
+             a call answering it still runs */
+          buf_printf(g_pre, "(void)(%s);\n", ep);
         /* nor does a nullable Integer or Float holding nil */
         else if (((it == TY_INT && sp_streq(k, "Int")) || (it == TY_FLOAT && sp_streq(k, "Float"))) &&
                  call_returns_nullable_int(c, inner)) {

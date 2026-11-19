@@ -72,3 +72,13 @@ def fresh = [1, 2]
     p [e.class, e.message]
   end
 end
+
+# each element is asked once, as `elem === subject`: a pattern whose == has
+# state sees one call
+class Counted
+  def initialize = (@calls = 0)
+  def ==(o) = (@calls += 1; @calls > 1)
+  attr_reader :calls
+end
+cp = Counted.new
+p [(case Object.new when *[cp] then :in else :out end), cp.calls]

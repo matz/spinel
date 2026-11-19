@@ -9074,8 +9074,9 @@ static sp_bool sp_poly_case_eq_match(sp_RbVal pat, sp_RbVal e);   /* defined bel
    a Range as its to_a, which raises for an open one, nil as [] and a
    String, Symbol or number as [x]. Read as an Array, a Range held no
    elements (`when *(1..3)` matched nothing) and a String its byte count of
-   nils (`when *"ab"` matched a nil subject). The element is asked first,
-   as CRuby's `elem === subject` does. */
+   nils (`when *"ab"` matched a nil subject). Each element is asked once,
+   as CRuby's `elem === subject` (sp_poly_case_eq_match, whose last arm is
+   Object#=== calling ==). */
 static sp_RbVal sp_splat_to_array(sp_RbVal v);
 static sp_bool sp_case_splat_match(sp_RbVal scrut, sp_RbVal arr) {
   SP_GC_ROOT_RBVAL(scrut);
@@ -9083,8 +9084,7 @@ static sp_bool sp_case_splat_match(sp_RbVal scrut, sp_RbVal arr) {
   if (!(arr.tag == SP_TAG_OBJ && sp_poly_is_array_kind(arr.cls_id))) arr = sp_splat_to_array(arr);
   sp_int n = sp_poly_length(arr);
   for (sp_int i = 0; i < n; i++)
-    if (sp_poly_rb_equal(sp_poly_arr_get(arr, i), scrut) || sp_poly_case_eq_match(sp_poly_arr_get(arr, i), scrut))
-      return TRUE;
+    if (sp_poly_case_eq_match(sp_poly_arr_get(arr, i), scrut)) return TRUE;
   return FALSE;
 }
 /* `break *x` / `next *x`: Ruby's splat-to-array -- nil becomes [], an array

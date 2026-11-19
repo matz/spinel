@@ -147,3 +147,14 @@ qs = AsksSet.new
 p qs.chk
 qs.set
 p qs.chk
+
+# A splat of a method answering the read adds nothing to an array literal,
+# and the method still runs
+class Spreads
+  def f
+    puts "f ran"
+    @missing
+  end
+  def m = [[0, *f], [0, "s", *f], [1.5, *f]]
+end
+p Spreads.new.m

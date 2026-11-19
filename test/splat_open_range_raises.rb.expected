@@ -32,3 +32,4 @@
 [TypeError, "can't iterate from Float"]
 2
 2
+[:out, 1]

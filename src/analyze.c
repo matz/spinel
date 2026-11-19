@@ -41530,12 +41530,14 @@ static int arg_reads_nil_default_param(Compiler *c, int a) {
   return 0;
 }
 /* Is argument a (-1: none) a nil an object parameter takes: a literal nil,
-   a value typed nil (an ivar nothing sets), or a parameter already holding
-   one (#5088)? */
+   a read of an ivar nothing sets (typed nil from the first round, which no
+   later round changes, as a nil a round passes through would), or a
+   parameter already holding one (#5088)? */
 static int obj_nil_arg(Compiler *c, int a) {
   const NodeTable *nt = c->nt;
   if (a < 0) return 0;
-  if (nt_kind(nt, a) == NK_NilNode || infer_type(c, a) == TY_NIL) return 1;
+  if (nt_kind(nt, a) == NK_NilNode) return 1;
+  if (nt_kind(nt, a) == NK_InstanceVariableReadNode) return infer_type(c, a) == TY_NIL;
   if (nt_kind(nt, a) != NK_LocalVariableReadNode) return 0;
   Scope *as = comp_scope_of(c, a);
   const char *an = nt_str(nt, a, "name");

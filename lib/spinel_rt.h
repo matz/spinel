@@ -6421,7 +6421,7 @@ static sp_RbVal sp_poly_real(sp_RbVal v) {
     sp_Complex *c = (sp_Complex *)v.v.p;
     return sp_complex_comp_v(c->re, c->fl & SP_CPLX_RE_F);
   }
-  if (sp_poly_numeric_p(v) || sp_poly_is_rational(v)) return v;
+  if (sp_poly_numeric_p(v) || sp_poly_is_rational(v) || sp_poly_is_brat(v)) return v;
   sp_raise_poly_nomethod("real", v);
 }
 static sp_RbVal sp_poly_imaginary(sp_RbVal v) {
@@ -6429,7 +6429,7 @@ static sp_RbVal sp_poly_imaginary(sp_RbVal v) {
     sp_Complex *c = (sp_Complex *)v.v.p;
     return sp_complex_comp_v(c->im, c->fl & SP_CPLX_IM_F);
   }
-  if (sp_poly_numeric_p(v) || sp_poly_is_rational(v)) return sp_box_int(0);
+  if (sp_poly_numeric_p(v) || sp_poly_is_rational(v) || sp_poly_is_brat(v)) return sp_box_int(0);
   sp_raise_poly_nomethod("imaginary", v);
 }
 /* Sign of a boxed Rational / big Rational: its numerator's, both being kept
@@ -6464,7 +6464,7 @@ static sp_bool sp_poly_zero_p(sp_RbVal v) { if (v.tag == SP_TAG_INT) return v.v.
 static sp_RbVal sp_poly_conjugate(sp_RbVal v) {
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_COMPLEX)
     return sp_box_complex(sp_complex_conjugate(*(sp_Complex *)v.v.p));
-  if (sp_poly_numeric_p(v) || sp_poly_is_rational(v)) return v;
+  if (sp_poly_numeric_p(v) || sp_poly_is_rational(v) || sp_poly_is_brat(v)) return v;
   sp_raise_poly_nomethod("conjugate", v);
 }
 /* Range#begin / #end on a boxed value (an int-backed sp_Range read out of a

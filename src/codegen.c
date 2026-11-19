@@ -19340,7 +19340,7 @@ static char *build_symbol_map_json(Compiler *c) {
   int n = 0;
   for (int si = 1; si < c->nscopes; si++) {
     Scope *s = &c->scopes[si];
-    if (!s->name || !*s->name) continue;
+    if (!s->name || !*s->name || mc_version_unkept(s)) continue;
     Buf cb; memset(&cb, 0, sizeof cb);
     buf_puts(&cb, mc_method(c, s));
     Buf rb; memset(&rb, 0, sizeof rb);

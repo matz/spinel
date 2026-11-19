@@ -7137,7 +7137,7 @@ static char *mc_version_name(const Scope *s) {
 }
 /* A replaced version no call marked reachable has no number and no
    function: spelled from its name it would be the table's method */
-static int mc_version_unkept(const Scope *s) {
+int mc_version_unkept(const Scope *s) {
   return s->replaced && !s->reachable && !s->version_n && !s->main_n && !s->entry && !s->c_name;
 }
 const char *mc_method(Compiler *c, const Scope *s) {

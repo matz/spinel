@@ -2227,6 +2227,7 @@ const char *mc_reopen_cls(Compiler *c, int class_id, const char *mname);
 const char *mc_top(Compiler *c, const char *name);
 /* A method's C function, spelled from the method (codegen_util.c) */
 const char *mc_method(Compiler *c, const Scope *s);
+int mc_version_unkept(const Scope *s);
 /* The next of the eight names mc_method's answers live in, set to the
    formatted text: valid for the next seven spellings */
 const char *mc_ring_setf(Compiler *c, const char *fmt, ...) __attribute__((format(printf, 2, 3)));

@@ -2151,6 +2151,37 @@ check-stores-test: $(SPINEL)
 	rm -rf "$$tmp"; \
 	if [ $$ok -eq 1 ]; then echo "check-stores-test: pass"; else exit 1; fi
 
+.PHONY: symbol-map-test
+# One of test-run's legs, named here beside its recipe.
+test-run: symbol-map-test
+# The symbol map (--emit-symbol-map, and the app.symbols.json --profile
+# writes) of a program whose methods are replaced by a later def. Each
+# map's C name for one of the program's methods is a function body in the
+# program's C; a version no call keeps (no function) is not listed; each
+# version that has a function is, by its def's line. (A map also lists
+# library methods nothing calls, which have no function either; those are
+# not checked here.)
+symbol-map-test: $(SPINEL) $(SP_RT_LIB)
+	@ok=1; tmp=$$(mktemp -d /tmp/spinel-symmap.XXXXXX); t=test/symbol-map/replaced_versions.rb; \
+	$(SPINEL) "$$t" --emit-symbol-map -o "$$tmp/m.json" >"$$tmp/m.out" 2>&1 || { echo "symbol-map-test: FAIL (--emit-symbol-map)"; sed -n 1,3p "$$tmp/m.out"; ok=0; }; \
+	$(SPINEL) "$$t" --profile -o "$$tmp/p" >"$$tmp/p.out" 2>&1 || { echo "symbol-map-test: FAIL (--profile)"; sed -n 1,3p "$$tmp/p.out"; ok=0; }; \
+	[ "$$("$$tmp/p" 2>&1)" = "$$(printf '"A"\nnew\n[1, 2]')" ] || { echo "symbol-map-test: FAIL (the --profile build's output)"; ok=0; }; \
+	$(SPINEL) "$$t" -c --no-line-map -o "$$tmp/m.c" >/dev/null 2>&1 || { echo "symbol-map-test: FAIL (-c)"; ok=0; }; \
+	for map in "$$tmp/m.json" "$$tmp/p.symbols.json"; do \
+	  [ -f "$$map" ] || { echo "symbol-map-test: FAIL (no map at $${map##*/})"; ok=0; continue; }; \
+	  for n in $$(grep -E '"ruby":"(Dispatcher|Box|Tally)[.#]' "$$map" | grep -o '"c":"[^"]*"' | cut -d'"' -f4); do \
+	    grep -qE "^[^ #].*[^A-Za-z0-9_]$$n\([^;]*\{$$" "$$tmp/m.c" || { echo "symbol-map-test: FAIL ($${map##*/} lists $$n, which the C does not define)"; ok=0; }; \
+	  done; \
+	  for r in 'Dispatcher.instantiate:14' 'Dispatcher.dispatch:10' 'Box#label:27' 'Box#show:23' 'Tally#count:31' 'Tally#count:38'; do \
+	    n=$$(grep -c "\"ruby\":\"$${r%:*}\".*\"line\":$${r#*:}}" "$$map"); [ "$$n" = 1 ] || { echo "symbol-map-test: FAIL ($${map##*/} lists $${r%:*} of line $${r#*:} $$n times, want 1)"; ok=0; }; \
+	  done; \
+	  for r in 'Dispatcher.instantiate:8' 'Box#label:22'; do \
+	    ! grep -q "\"ruby\":\"$${r%:*}\".*\"line\":$${r#*:}}" "$$map" || { echo "symbol-map-test: FAIL ($${map##*/} lists the replaced $${r%:*} of line $${r#*:}, which has no function)"; ok=0; }; \
+	  done; \
+	done; \
+	rm -rf "$$tmp"; \
+	if [ $$ok -eq 1 ]; then echo "symbol-map-test: pass"; else exit 1; fi
+
 .PHONY: decisions-test
 # One of test-run's legs, named here beside its recipe.
 test-run: decisions-test

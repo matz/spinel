@@ -232,7 +232,7 @@ typedef enum {
   RF_FLT,           /* sp_box_float */
   RF_FLT_NIL,       /* a Float boxed with its nil: sp_box_ofloat */
   RF_BIGINT,        /* a Bignum, NULL as nil */
-  RF_STR,           /* sp_box_str */
+  RF_STR,           /* String handle box */
   RF_BOOL,
   RF_SYM,
   RF_STRUCT,        /* a by-value struct: a Range, Time, Complex, Rational,

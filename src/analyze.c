@@ -54315,8 +54315,8 @@ static void an_phase_late_widen(Compiler *c, NodeTypes *promote_before) {
       /* A lowered self-recursive yield method returns its block's value through
          a raw sp_int carrier (a string is laundered through the slot, an int
          rides it directly), and every call site casts that carrier back to its
-         own block's concrete type. Widening the return to poly would emit a
-         `sp_box_str(sp_int)` over that raw carrier and mismatch the per-call
+         own block's concrete type. Widening the return to poly would box
+         the raw carrier as one fixed type and mismatch the per-call
          casts; keep it as the carrier, exactly as default/wrap mode does. */
       if (sc->ret == TY_INT && !is_spaceship && !sc->is_lowered_yield) scope_set_ret(sc, TY_POLY);
       /* the blockless answer of an `if block_given?` tail (#4659) widens

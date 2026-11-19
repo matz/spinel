@@ -301,6 +301,7 @@ static const char *pk_val_name(sp_RbVal v) {
     case SP_TAG_BOOL: return v.v.b ? "true" : "false";
     case SP_TAG_SYM:  return "Symbol";
     case SP_TAG_OBJ:
+      if (v.cls_id == SP_BUILTIN_STRBUF) return "String";
       if (v.cls_id >= 0 && sp_obj_cls_name_fn) return sp_obj_cls_name_fn((int)v.cls_id);
       return "Object";
     default:          return "Object";

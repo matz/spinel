@@ -271,8 +271,7 @@ static int str_route_names_handle(Compiler *c, int v) {
        holds), the box a proc's answer or a spliced call's tails are handed
        on in (emit_strbuf_route_box), a call's published handle else the
        String it answered (emit_string_call_handle), or a route over a box
-       answering the String the box holds, read live and boxed by
-       sp_box_str as the handle that owns it (no copy);
+       answering the String the box holds, read live with its owner;
      - a handle: a variable's or a reader's slot, an element a String
        Array of handles reads or removes, a call answering its receiver
        (emit_bang_self_handle), a route that names its handle
@@ -398,8 +397,7 @@ static int str_render_ident(Compiler *c, int v, int form, StrForm *sf) {
    nil). The handle's own text is the caller's: str_box_handle boxes text
    already written, str_box_handle_tmp a temp, and str_box_open /
    str_box_close wrap text the caller emits between them. */
-/* (one representation: the text may be of either face, a handle or a view
-   of one; sp_box_nullable_str / sp_box_str box the handle either way) */
+/* SP_STR_BOX accepts a handle or its byte view and boxes the handle. */
 void str_box_open(Buf *b, int nullable) {
   (void)nullable;
   buf_puts(b, "SP_STR_BOX(");
@@ -472,13 +470,9 @@ void str_box_kept(Buf *b, int t, const char *h, const char *e) {
 /* The box face's last arms, where the value is boxed by its representation
    (emit_boxed_impl's TY_STRING arm): a String the plan wraps (`wrap`) as
    the new handle it is (sp_box_str_new), so the box's copies name one
-   String, any other as its bytes, which sp_box_str boxes as their handle
-   where a handle owns them. The new handle is an object only this box
-   holds, and the box is often a temporary handed to a runtime call that
-   allocates before it is done with it (a Hash lookup's key): it is rooted
-   where it is bound, as the runtime roots a String key by its tag but not
-   a handle's box. Unrooted, a collection inside the lookup freed the
-   handle and its inline bytes. The temp is named ahead of the operand's
+   String. Boxing a byte view with an owner uses that owner. A temporary
+   box can go to a runtime call that allocates (for example a Hash lookup),
+   so root it where it is bound. The temp is named ahead of the operand's
    own temps (StrForm.tmp), so the operand's keep their numbers. */
 void emit_str_box_leaf(Compiler *c, int v, int wrap, Buf *b) {
   StrForm sf;
@@ -512,9 +506,8 @@ static void str_box_note(StrForm *sf, int rf, int rw) {
 /* --share-strings: the box face of a String value (or one the rule
    holds as the handle), by its producer's kind (share.h's SPK_*), asked
    where it is boxed; 0 with nothing emitted for any other value:
-     NONE, FROZEN  the value's box by its representation: its bytes boxed
-                   (sp_box_str, or the new handle sp_box_str_new where the
-                   plan wraps it), a new handle's box, a lift; one that ran
+     NONE, FROZEN  the value's box by its representation, including a new
+                   handle where the plan wraps it; one that ran
                    first into a store's lift: the handle it took;
      BOX           the box itself, by its representation (or as above);
      PROC_CALL     a proc's answer: the box the proc hands back, the call
@@ -667,8 +660,7 @@ static void str_identity_operand_form(Compiler *c, int v, StrForm *sf) {
   free(bx.p);
 }
 
-/* Form sf (written as `e`) as a box: a handle's box, sp_box_str of bytes
-   (the handle that owns them, if one does), a box as it is. */
+/* Box the handle or the byte view's owner. A box passes through as it is. */
 static void str_identity_box_text(const StrForm *sf, const char *e, Buf *b) {
   if (sf->cty == TY_POLY) buf_puts(b, e);
   else if (sf->cty == TY_STRBUF) str_box_handle(b, e);

@@ -39,6 +39,10 @@ Three rules follow from it:
 | membership in a family of names                                                                                   | the name predicates                                | `builtin_names.c:is_call_alias`, `is_then_alias`, ...                                                                                                       | the same inline `sp_streq` chain in inference and in codegen                                                                                                                                                                                                                                                           |
 | when a pass runs, and what inference reads                                                                        | the phase driver and the counted setters           | `analyze.c:analyze_program`; `comp_set_ntype`, `lv_set_type`, `ivar_set_type`                                                                               | a loop appended to `analyze_program`; a direct write to a table `infer_type` reads                                                                                                                                                                                                                                     |
 
+A boxed Proc call preserves the distinction between a positional trailing
+Hash and explicit keywords. An empty keyword splat still affects whether
+the Proc unpacks a positional Array.
+
 String slots hold object handles. The remaining String plan, sharing facts
 and byte routes serve builtin producers still being migrated under #11391.
 Boxing a String preserves the object emitted by its producer. A dynamic

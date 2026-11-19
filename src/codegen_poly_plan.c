@@ -3955,7 +3955,7 @@ void emit_poly_prearms_n_blk(Compiler *c, int id, const char *name, const PolySp
         char kg[48];
         snprintf(kg, sizeof kg, "_t%d->len %s 0 && ", kwall, e ? ">" : "==");
         called |= emit_poly_callable_prearm(c, name, pos_argc + e, atmp, atmp_ty, kg, tv, tr, ret,
-                                            e ? 2 : pos_argc > 0 ? 1 : 0, blk_tmp2, b);
+                                            e ? 2 : 3, blk_tmp2, b);
       }
     }
     else called = emit_poly_callable_prearm(c, name, argc, atmp, atmp_ty, NULL, tv, tr, ret,
@@ -3982,9 +3982,9 @@ void emit_poly_prearms_n_blk(Compiler *c, int id, const char *name, const PolySp
     called = emit_poly_callable_prearm(c, name, argc, atmp, atmp_ty, NULL, tv, tr, ret, 2, blk_tmp2, b);
   }
   else if (splat_last) {
-    char kwpos[40] = "0";
+    char kwpos[40] = "1";
     if (stk >= 0) {
-      if (kwall >= 0) snprintf(kwpos, sizeof kwpos, "(_t%d->len > 0 ? 2 : 1)", kwall);
+      if (kwall >= 0) snprintf(kwpos, sizeof kwpos, "(_t%d->len > 0 ? 2 : 3)", kwall);
       else strcpy(kwpos, "2");
     }
     called = emit_poly_callable_spread_prearm(c, name, splat_a, atmp, atmp_ty,

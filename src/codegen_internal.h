@@ -1419,9 +1419,10 @@ int boxed_writer_attr_wins(Compiler *c, int k, const char *base);
    `x=` with one value) give the classes with an attr writer `base=` their
    field-write arms (emit_boxed_writer_arms)? base is written to wbase. The
    switch's user arms (and the plan's) leave out the classes where
-   boxed_writer_attr_wins. */
+   boxed_writer_attr_wins. ret is the call's result type, val_ty the
+   value's: the result is the value, boxed or of the value's scalar kind. */
 int poly_writer_attr_arms(Compiler *c, int id, const char *name, int argc, int pos_argc, int kwh,
-                          int splat_a, TyKind ret, int is_setter_val, char *wbase, size_t cap);
+                          int splat_a, TyKind ret, TyKind val_ty, int is_setter_val, char *wbase, size_t cap);
 /* The classes (by id, 1 = skip) emit_poly_user_arms_n emits no user arm
    for while set: another arm of the same switch takes them. */
 extern const unsigned char *g_poly_user_arm_skip;

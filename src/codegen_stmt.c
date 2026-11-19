@@ -16879,10 +16879,14 @@ int boxed_writer_attr_wins(Compiler *c, int k, const char *base) {
 }
 
 int poly_writer_attr_arms(Compiler *c, int id, const char *name, int argc, int pos_argc, int kwh,
-                          int splat_a, TyKind ret, int is_setter_val, char *wbase, size_t cap) {
+                          int splat_a, TyKind ret, TyKind val_ty, int is_setter_val, char *wbase, size_t cap) {
   int wr_kw = argc == 1 && pos_argc == 0 && kwh >= 0;
+  /* the result is the value: boxed, or the value's own scalar kind (a
+     computed send of one known name with an Integer, `public_send("#{n}=",
+     1)`, is typed by its one arm's def, not boxed) */
+  int ret_fits = ret == TY_POLY || (pos_argc == 1 && ret != TY_UNKNOWN && ret == val_ty && is_scalar_ret(ret));
   if (is_setter_val || argc != 1 || !(pos_argc == 1 || wr_kw) || splat_a >= 0 || !(kwh < 0 || wr_kw) ||
-      ret != TY_POLY || nt_ref(c->nt, id, "block") >= 0 || !name_is_plain_setter(name) ||
+      !ret_fits || nt_ref(c->nt, id, "block") >= 0 || !name_is_plain_setter(name) ||
       !setter_base_name(name, wbase, cap))
     return 0;
   for (int k = 0; k < c->nclasses; k++)

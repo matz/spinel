@@ -9683,8 +9683,8 @@ static void cpoly_user_arms_n(Compiler *c, int id, const char *name, int argc, c
   char wbase[256];
   /* (as the dispatch reads the result: a call typed as no value answers boxed) */
   TyKind wret = repr_poly_result_slot(is_scalar_ret(ret) ? ret : TY_POLY);
-  int attr_wr = poly_writer_attr_arms(c, id, name, argc, pos_argc, kwh, splat_a, wret, is_setter_val,
-                                      wbase, sizeof wbase);
+  int attr_wr = poly_writer_attr_arms(c, id, name, argc, pos_argc, kwh, splat_a, wret,
+                                      pos_argc == 1 ? atmp_ty[0] : TY_POLY, is_setter_val, wbase, sizeof wbase);
   for (int ki = 0; ki < nks; ki++) {
     int k = ks[ki];
     if (attr_wr && boxed_writer_attr_wins(c, k, wbase)) continue;

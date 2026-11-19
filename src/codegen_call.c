@@ -11489,8 +11489,8 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
       char wbase[256];
       /* (keywords alone, `o.send(:x=, **h)`, hand the writer their Hash) */
       int wr_kw = argc == 1 && pos_argc == 0 && kwh >= 0;
-      int attr_wr = poly_writer_attr_arms(c, id, name, argc, pos_argc, kwh, splat_a, ret, is_setter_val,
-                                          wbase, sizeof wbase);
+      int attr_wr = poly_writer_attr_arms(c, id, name, argc, pos_argc, kwh, splat_a, ret,
+                                          pos_argc == 1 ? atmp_ty[0] : TY_POLY, is_setter_val, wbase, sizeof wbase);
       int wr_src = attr_wr ? (wr_kw ? ++g_tmp : atmp[0]) : -1;
       TyKind wr_ty = wr_kw ? TY_POLY : attr_wr ? atmp_ty[0] : TY_UNKNOWN;
       if (attr_wr && wr_kw) {
@@ -11498,9 +11498,11 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
         buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ", wr_src);
       }
       if (attr_wr) {
+        /* the result is the value: boxed into a boxed result, or the value
+           itself where the call is typed as the value's scalar kind */
         char an[32]; snprintf(an, sizeof an, "_t%d", wr_src);
         buf_printf(b, "_t%d = ", tr);
-        if (wr_ty == TY_POLY) buf_puts(b, an); else emit_boxed_text(c, wr_ty, an, b);
+        if (wr_ty == TY_POLY || ret != TY_POLY) buf_puts(b, an); else emit_boxed_text(c, wr_ty, an, b);
         buf_puts(b, "; ");
       }
       ptemps.kwh_tmp = emit_poly_callable_kwh_decl(c, name, &ps, &ptemps, &kw, b);

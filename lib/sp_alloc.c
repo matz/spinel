@@ -144,9 +144,8 @@ void sp_alloc_worker_tune(int workers) {
      the adaptive threshold had become: 76 MB -> 2.4 GB on a 32-core machine,
      with no collection involved, and the churn that followed then ran to a
      997 MB heap against a 66 MB live set without collecting once. The
-     multiplier is the POOL size (min(cores, SPINEL_WORKERS)), not the thread
-     count the program asked for, so the damage scales with the machine
-     (#4146). */
+     multiplier is the configured worker limit. The number of live Ruby
+     threads can differ from it (#4146). */
   { size_t cur = SP_GC_CTR_GET(sp_gc_threshold);
     if (sp_gc_threshold_init > cur) SP_GC_CTR_SET(sp_gc_threshold, sp_gc_threshold_init); }
 }

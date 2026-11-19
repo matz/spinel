@@ -1138,7 +1138,13 @@ int emit_transform_hash_expr(Compiler *c, int id, Buf *b) {
     int tv = ++g_tmp;
     char dst[32]; snprintf(dst, sizeof dst, "_t%d", tv);
     emit_indent(g_pre, g_indent + 1); emit_ctype(c, bret, g_pre);
-    buf_printf(g_pre, " %s = %s;\n", dst, bret == TY_POLY ? "sp_box_nil()" : default_value_from_compiler(c, bret));
+    buf_printf(g_pre, " %s = %s;", dst, bret == TY_POLY ? "sp_box_nil()" : default_value_from_compiler(c, bret));
+    /* A valued next keeps this slot live while its ensure clauses run. */
+    if (ty_gc_holds_refs(c, bret)) {
+      buf_puts(g_pre, " ");
+      emit_gc_root_tmp_refs(c, bret, tv, g_pre);
+    }
+    buf_puts(g_pre, "\n");
     emit_block_value_into(c, block, dst, bret == TY_POLY, g_indent + 1);
     buf_puts(&vb, dst);
   }

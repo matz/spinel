@@ -402,6 +402,7 @@ void nn_inference_round(Compiler *c);
 int ivw_shared_first(Compiler *c, const char *name);
 int ivw_shared_node(int rec);
 int ivw_shared_next(int rec);
+int ivar_never_set_in(Compiler *c, const char *name, int cls);   /* every read of the ivar in cls's methods is nil */
 /* The body return type of a proc-creating node (proc/lambda CallNode literal,
    or a LambdaNode). The last statement of the block/lambda body is the value. */
 TyKind proc_node_ret(Compiler *c, int create);

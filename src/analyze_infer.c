@@ -12321,6 +12321,12 @@ TyKind infer_uncached(Compiler *c, int id) {
         if (comp_ivar_index(&c->classes[k], nm) >= 0) ie = 0;
       return ie && nm ? TY_NIL : TY_UNKNOWN;
     }
+    /* an ivar the program never sets reads nil: left to the slot, it read
+       unknown, the slot fell to poly after the fixpoint (its storage), and
+       the poly widened what it was passed to (`self.class.new(@size)`). A
+       slot a declaration types keeps that type. */
+    if ((ci->ivar_types[iv] == TY_UNKNOWN || ci->ivar_types[iv] == TY_POLY) &&
+        ivar_never_set_in(c, nm, cls_id)) return TY_NIL;
     /* an UNMARKED read of a shared-mutable string slot demotes to the plain
        string type (copy-read), mirroring the local-read demotion (#3227) */
     if (ci->ivar_types[iv] == TY_STRBUF) return TY_STRING;

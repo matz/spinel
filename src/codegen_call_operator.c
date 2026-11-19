@@ -1257,6 +1257,9 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
         return 1;
       }
     }
+    /* nil answers none of these: the general call's missing-method path,
+       as for arithmetic (codegen_call.c) */
+    if (rt == TY_NIL) return 0;
     /* an object whose class has no such method and no Comparable to supply
        it (a `<=>` alone gives none): CRuby's NoMethodError, raised once the
        argument has run */

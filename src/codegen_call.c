@@ -19358,6 +19358,11 @@ static int emit_array_arith_call(Compiler *c, int id, Buf *b) {
        the coerce path above did not claim it: at run time the object's own
        #coerce answers, or the TypeError CRuby raises does -- refusing to
        compile made an ordinary "can't be coerced" into a build failure. */
+    /* nil answers none of these (`nil + 1`, an ivar nothing sets): the
+       general call's missing-method path raises CRuby's NoMethodError, as
+       it does for `nil.foo`; refusing made a program that reads such an
+       ivar a build failure (the boxed operator would read nil as 0) */
+    if (recv >= 0 && rt == TY_NIL) return 0;
     if (recv >= 0 && (rt == TY_UNKNOWN || a0 == TY_UNKNOWN ||
                       (ty_is_object(a0) &&
                        (rt == TY_INT || rt == TY_FLOAT || rt == TY_BIGINT || rt == TY_RATIONAL)))) {

@@ -4866,6 +4866,8 @@ infer-test-1: $(SPINEL) $(SP_RT_LIB)
 	awk '/^struct sp_Left_s \{/,/^\}/' "$$tmp/gbo.c" | grep -Fq 'sp_PolyPolyHash * iv_letters;' && awk '/^struct sp_Right_s \{/,/^\}/' "$$tmp/gbo.c" | grep -Fq 'sp_PolyPolyHash * iv_numbers;' || { echo "infer-test: FAIL (a boxed getter receiver lost a possible owner)"; ok=0; }; \
 	$(SPINEL) test/obj_array_reduce_narrows.rb -c --no-line-map -o "$$tmp/oar.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (compile obj_array_reduce_narrows)"; exit 1; }; \
 	awk '/^struct sp_Bin_s \{/,/^\}/' "$$tmp/oar.c" | grep -Fq 'sp_PtrArray * iv_cells;' || { echo "infer-test: FAIL (a reduce or an inject over an Array of one class kept it boxed)"; ok=0; }; \
+	$(SPINEL) test/ivar_never_set_reads_nil.rb -c --no-line-map -o "$$tmp/insn.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (ivar_never_set_reads_nil: -c)"; ok=0; }; \
+	awk '/^struct sp_Board_s \{/,/^\}/' "$$tmp/insn.c" | grep -Fq 'sp_int iv_size;' && grep -q '^static void sp_Game_initialize(sp_Game \*self, sp_oint lv_size' "$$tmp/insn.c" && grep -q 'sp_int sp_Game_limit(sp_Game \*self)' "$$tmp/insn.c" || { echo "infer-test: FAIL (an ivar nothing sets read untyped and boxed what it reached)"; ok=0; }; \
 	$(SPINEL) test/infer/object_array_unnamed_method.rb -c --no-line-map -o "$$tmp/oau.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (compile object_array_unnamed_method)"; exit 1; }; \
 	awk '/^struct sp_Store_s \{/,/^\}/' "$$tmp/oau.c" | grep -Fq 'sp_PtrArray * iv_items;' || { echo "infer-test: FAIL (a select a method nothing names answers kept an Array of one class boxed)"; ok=0; }; \
 	$(SPINEL) test/infer/object_array_dead_dynamic_read.rb -c --no-line-map -o "$$tmp/oad.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (compile object_array_dead_dynamic_read)"; ok=0; }; \

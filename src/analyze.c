@@ -41603,6 +41603,25 @@ static int mark_nullable_params_of_call(Compiler *c, int id, int mi) {
   return changed;
 }
 
+/* Can an argument of call id, or a keyword's value, be nil, as
+   mark_nullable_params_of_call would take it? */
+static int nil_arg_value(Compiler *c, int a) {
+  return a >= 0 && (infer_type(c, a) == TY_NIL || obj_nil_arg(c, a) || nullable_int_value(c, a) ||
+                    arg_reads_nil_default_param(c, a) || box_nullable_arg(c, a));
+}
+static int call_has_nil_arg(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  int ca = nt_ref(nt, id, "arguments"), an = 0;
+  const int *av = ca >= 0 ? nt_arr(nt, ca, "arguments", &an) : NULL;
+  for (int i = 0; i < an; i++) {
+    if (nil_arg_value(c, av[i])) return 1;
+    if (nt_kind(nt, av[i]) != NK_KeywordHashNode) continue;
+    int en = 0; const int *els = nt_arr(nt, av[i], "elements", &en);
+    for (int e = 0; e < en; e++)
+      if (nt_kind(nt, els[e]) == NK_AssocNode && nil_arg_value(c, nt_ref(nt, els[e], "value"))) return 1;
+  }
+  return 0;
+}
 /* A builtin `new` at call id binds each initialize the call plan lists for
    the site (cplan_entries): `new(...)` or `self.new(...)` in a class method
    and `self.class.new(...)` in an instance method (a `dup` handing a nil
@@ -41619,6 +41638,19 @@ static int mark_nullable_params_of_new(Compiler *c, int id, int mi) {
   int ent[CPT_MAX], ne = cplan_entries(c, id, ent, CPT_MAX), changed = 0;
   for (int j = 0; j < ne; j++)
     if (ent[j] >= 0 && ent[j] != mi) changed |= mark_nullable_params_of_call(c, id, ent[j]);
+  /* A Class value the plan cannot list (`k = [A, B][i]; k.new(nil)`) is
+     dispatched over every class it may hold, an arm per class whose
+     initialize takes the arguments (codegen_call_class.c's boxed `new`):
+     each of those initializes takes the nil too, or its arm is left out
+     (ctor_arm_incompat) and the class raises NoMethodError `new` */
+  int recv = nt_ref(nt, id, "receiver");
+  if (ne != CPT_UNKNOWN || recv < 0 || !call_has_nil_arg(c, id)) return changed;
+  for (int ci = 0; ci < c->nclasses; ci++) {
+    if (!c->classes[ci].instantiated || comp_class_is_module(c, &c->classes[ci]) ||
+        cls_fact_excludes_class_value(c, recv, ci)) continue;
+    int initm = cplan_new_arm_initialize(c, id, ci);
+    if (initm >= 0 && initm != mi) changed |= mark_nullable_params_of_call(c, id, initm);
+  }
   return changed;
 }
 
@@ -56404,6 +56436,9 @@ static void an_phase_reconcile_check(Compiler *c) {
       const char *ivn = nt_str(c->nt, tail, "name");
       int iv = ivn ? comp_ivar_index(&c->classes[sc->class_id], ivn) : -1;
       if (iv < 0 || c->classes[sc->class_id].ivar_types[iv] != TY_POLY) continue;
+      /* a slot only the backstop made poly, of an ivar never set: its
+         read answers nil (infer_uncached), and so does the method */
+      if (ivar_never_set_in(c, ivn, sc->class_id)) continue;
     }
     /* the value is a call THIS pass widened: the method answers it. Only a
        call this pass touched -- a tail call that was already poly says nothing

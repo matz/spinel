@@ -1713,11 +1713,15 @@ normally.
 
 #### Negative Float `**` fractional exponent
 
-CRuby promotes `(-2.0) ** 0.5` to a `Complex`. Spinel's Float stays a C
-double, so that case raises `Math::DomainError` loudly (the class
-`Math.sqrt(-1)` uses) rather than returning C's silent `NaN` or widening
-every float power to a boxed union. Compute via `Complex(x) ** y` where the
-complex result is really wanted.
+CRuby promotes `(-2.0) ** 0.5` to a `Complex`. A boxed base, whose result
+is boxed already, returns the `Complex` as CRuby does, and so does a typed
+`Rational ** Rational`. A typed base with a Float exponent, or a typed
+Integer or Float base with a Rational exponent, gives a Float, a C double,
+so a negative base there raises `Math::DomainError` loudly for a
+fractional or NaN exponent (the class `Math.sqrt(-1)` uses) rather than
+returning C's silent `NaN` or widening every such power to a boxed union.
+Compute via `Complex(x) ** y` where the complex result is really wanted
+from a typed base.
 
 #### `const_get` with a runtime name is a static dispatch
 

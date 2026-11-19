@@ -1006,13 +1006,14 @@ static const BuiltinOp bop_rows[] = {
     " sp_PolyArray_push(_t$w, sp_box_float(_t$t - (sp_float)_t$v * _t$u)); _t$w; })", BOP_K(TY_FLOAT) },
   { TY_RATIONAL, "divmod", 1, 1, BF_ANY, TY_POLY_ARRAY, BOPE_NONE },
   /* ** computes in floats except against an Integer (CRuby; a negative
-     base with a fractional exponent would be Complex, out of the value
-     model -- it yields NaN here) */
+     base with a fractional exponent is a Complex: the Float-exponent row
+     raises Math::DomainError through sp_float_pow, and the boxed
+     Rational-exponent row returns the Complex) */
   /* a Rational exponent with denominator 1 is the exact power, any other a
      Float (CRuby's rational ** rational): which, only the run time knows */
   { TY_RATIONAL, "**",        1, 1, BF_ANY, TY_POLY, BOPE_TEMPLATE, "sp_poly_pow(sp_box_rational($r), sp_box_rational($e0))", BOP_K(TY_RATIONAL) },
   { TY_RATIONAL, "**",        1, 1, BF_ANY, TY_RATIONAL, BOPE_TEMPLATE, "sp_rational_pow($r, (sp_int)($e0))", BOP_K(TY_INT) },
-  { TY_RATIONAL, "**",        1, 1, BF_ANY, TY_FLOAT, BOPE_TEMPLATE, "pow(sp_rational_to_f($r), $f0)", BOP_K(TY_FLOAT) },
+  { TY_RATIONAL, "**",        1, 1, BF_ANY, TY_FLOAT, BOPE_TEMPLATE, "sp_float_pow(sp_rational_to_f($r), $f0)", BOP_K(TY_FLOAT) },
   { TY_RATIONAL, "**", 1, 1, BF_ANY, TY_POLY, BOPE_NONE, NULL, BOP_K(TY_POLY) },
   { TY_RATIONAL, "**", 1, 1, BF_ANY, TY_FLOAT, BOPE_NONE, NULL, RAT_NOT_POLY },
   { TY_RATIONAL, "-@",          0,   0, BF_ANY, TY_RATIONAL,   BOPE_TEMPLATE, "sp_rational_neg($r)" },

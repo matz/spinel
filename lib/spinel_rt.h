@@ -7482,14 +7482,14 @@ static sp_bool sp_poly_order_gt(sp_RbVal a, sp_RbVal b) {
   if (a.tag == SP_TAG_NIL && b.tag == SP_TAG_NIL) return FALSE;
   return sp_poly_gt(a, b);
 }
-/* Float ** Float: CRuby promotes a negative base with a fractional exponent
-   to a Complex. Spinel's float type cannot carry that, so the case raises
-   loudly (Math::DomainError, the same class Math.sqrt(-1) uses) instead of
-   returning C's silent NaN. See docs/limitations.md. */
+/* A typed real ** a Float or Rational: CRuby promotes a negative base with a
+   fractional exponent to a Complex. Spinel's float type cannot carry that,
+   so the case raises loudly (Math::DomainError, the same class Math.sqrt(-1)
+   uses) instead of returning C's silent NaN. See docs/limitations.md. */
 static inline sp_float sp_float_pow(sp_float a, sp_float b) {
-  if (a < 0 && b != (sp_float)(long long)b)
+  if (a < 0 && b != round(b))
     sp_raise_cls("Math::DomainError",
-                 "negative Float raised to a fractional power is a Complex (unsupported; use Complex(x) if needed)");
+                 "a negative base raised to a fractional power is a Complex (unsupported; use Complex(x) if needed)");
   return pow(a, b);
 }
 /* rb_cmperr operand description: special constants and Floats read as their
@@ -8332,6 +8332,31 @@ static sp_RbVal sp_poly_clamp_range(sp_RbVal v, sp_Range r) {
 sp_int sp_int_round_half(sp_int v, sp_int nd, int mode) SP_UNUSED;
 /* sp_int_round_half: moved to lib/sp_cold.c */
 sp_int sp_int_round_half(sp_int v, sp_int nd, int mode);
+/* abs rotated by ang * pi, as CRuby's rb_dbl_complex_new_polar_pi: a
+   negative base raised to a fractional power. A half turn is an exact
+   imaginary part and a whole turn a Float; cospi and sinpi as CRuby's
+   configure picks them (__cospi where libm has it). */
+#if defined(__APPLE__)
+#define SP_COSPI(x) __cospi(x)
+#define SP_SINPI(x) __sinpi(x)
+#else
+#define SP_COSPI(x) cos((x) * M_PI)
+#define SP_SINPI(x) sin((x) * M_PI)
+#endif
+static sp_RbVal sp_poly_polar_pi(sp_float abs, sp_float ang) {
+  double fi;
+  const double fr = modf(ang, &fi);
+  int pos = fr == +0.5;
+  if (pos || fr == -0.5) {
+    if ((modf(fi / 2.0, &fi) != fr) ^ pos) abs = -abs;
+    return sp_box_complex((sp_Complex){0.0, abs, SP_CPLX_RE_F | SP_CPLX_IM_F});
+  }
+  if (fr == 0.0) {
+    if (modf(fi / 2.0, &fi) != 0.0) abs = -abs;
+    return sp_box_float(abs);
+  }
+  return sp_box_complex((sp_Complex){abs * SP_COSPI(ang), abs * SP_SINPI(ang), SP_CPLX_RE_F | SP_CPLX_IM_F});
+}
 static sp_RbVal sp_poly_pow(sp_RbVal a, sp_RbVal b) {
   /* a number raised to nil / true / false is the coerce TypeError */
   if (SP_UNLIKELY(sp_poly_numeric_p(a) && (b.tag == SP_TAG_NIL || b.tag == SP_TAG_BOOL))) return sp_poly_binop_bad("**", a, b);
@@ -8405,6 +8430,12 @@ static sp_RbVal sp_poly_pow(sp_RbVal a, sp_RbVal b) {
       return sp_box_complex(sp_complex_pow_c(ca, sp_poly_as_complex(b)));
     if (b.tag == SP_TAG_FLT)
       return sp_box_complex(sp_complex_pow_f(ca, b.v.f));
+  }
+  /* a negative real raised to a fractional power is a Complex, as fix_pow,
+     rb_big_pow, rb_float_pow and nurat_expt make it */
+  if ((b.tag == SP_TAG_FLT || sp_poly_is_rat_kind(b)) && sp_poly_tower_p(a) && !(a.tag == SP_TAG_OBJ && a.cls_id == SP_BUILTIN_COMPLEX)) {
+    sp_float dx = sp_poly_to_f_with_rational(a), dy = sp_poly_to_f_with_rational(b);
+    if (dx < 0 && dy != round(dy)) return sp_poly_polar_pi(pow(-dx, dy), dy);
   }
   double r = pow((double)sp_poly_to_f(a), (double)sp_poly_to_f(b));
   return sp_box_float((sp_float)r);

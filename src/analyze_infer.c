@@ -449,6 +449,28 @@ static int *udr_next = NULL, *udr_head = NULL;
 static int udr_n = 0, udr_cap = 0;
 static unsigned udr_gen = (unsigned)-1;
 static int udr_nscopes = -1, udr_nclasses = -1;
+/* With the memo, the instance-method scopes by name (udc_head by hash,
+   udc_next by scope): the classes that own a def of the name are asked
+   first, so a name one class defines (`get123`) does not walk every class
+   before it. Rebuilt with the memo's stamp. */
+static int *udc_head = NULL, *udc_next = NULL;
+static int udc_buckets = 0;
+static void udc_build(Compiler *c) {
+  free(udc_head); free(udc_next);
+  udc_buckets = 1;
+  while (udc_buckets < 2 * c->nscopes) udc_buckets <<= 1;
+  udc_head = malloc(sizeof(int) * (size_t)udc_buckets);
+  udc_next = malloc(sizeof(int) * (size_t)(c->nscopes > 0 ? c->nscopes : 1));
+  if (!udc_head || !udc_next) { free(udc_head); free(udc_next); udc_head = udc_next = NULL; udc_buckets = 0; return; }
+  for (int i = 0; i < udc_buckets; i++) udc_head[i] = -1;
+  for (int sc = c->nscopes - 1; sc >= 0; sc--) {
+    const Scope *m = &c->scopes[sc];
+    udc_next[sc] = -1;
+    if (!m->name || m->is_cmethod || m->class_id < 0) continue;
+    unsigned h = sp_strhash(m->name) & (unsigned)(udc_buckets - 1);
+    udc_next[sc] = udc_head[h]; udc_head[h] = sc;
+  }
+}
 
 /* Does the program spawn a Thread anywhere (`Thread.new` / `.start` /
    `.fork`)? Then a boxed receiver's `join` may be a Thread's, whose answer is
@@ -517,6 +539,7 @@ int an_user_defines_or_reads(Compiler *c, const char *name) {
       }
       for (int i = 0; i < udr_cap; i++) udr_head[i] = -1;
       udr_gen = gen; udr_nscopes = c->nscopes; udr_nclasses = c->nclasses;
+      udc_build(c);
     }
     if (udr_cap) {
       b = sp_strhash(name) & (unsigned)(udr_cap - 1);
@@ -527,6 +550,14 @@ int an_user_defines_or_reads(Compiler *c, const char *name) {
   }
   int ans = 0;
   mtab_enter(c);   /* (a scan of every class, as the candidates are) */
+  /* (the answer is any class's: the owners of a def of the name first) */
+  if (memo && udc_buckets)
+    for (int sc = udc_head[sp_strhash(name) & (unsigned)(udc_buckets - 1)]; sc >= 0 && !ans; sc = udc_next[sc]) {
+      int k = c->scopes[sc].class_id;
+      if (!sp_streq(c->scopes[sc].name, name) || k >= c->nclasses) continue;
+      if (comp_poly_arm_defines(c, k, name)) ans = 1;
+      else if (!c->classes[k].is_native_class && comp_reader_in_chain(c, k, name, NULL)) ans = 1;
+    }
   for (int k = 0; k < c->nclasses && !ans; k++) {
     /* comp_poly_arm_defines: a native class counts only through its
        declared bindings (#4504) -- counting its Ruby-side defs here made

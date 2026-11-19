@@ -26881,7 +26881,7 @@ static int strbuf_box_carries(Compiler *c, int v) {
   /* (a boxed receiver's call whose every arm answers a String it
      publishes or a new one is boxed arm by arm, each its own handle:
      strbuf_poly_user_boxes, emit_boxed) */
-  if (p.form == SPF_HANDLE && p.kind == SPK_READER && !strbuf_route_reader(c, u) && !strbuf_route_ivar_get(c, u) &&
+  if (p.form == SPF_HANDLE && share_plan_producer(c, v, NULL) == SPK_READER && !strbuf_route_reader(c, u) && !strbuf_route_ivar_get(c, u) &&
       !strbuf_poly_user_boxes(c, u))
     return p.need != SPN_OBJECT;
   return p.form != SPF_COPY;

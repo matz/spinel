@@ -143,13 +143,10 @@ int share_node_carry_kind_unlifted(const Compiler *c, int n, int *op);
 enum { SPN_BYTES, SPN_NEW, SPN_OBJECT };              /* need */
 enum { SPS_BYTES, SPS_HANDLE };                       /* supply */
 enum { SPF_BYTES, SPF_HANDLE, SPF_COPY };             /* form */
-/* the role of a value's consumer: it takes the value (keeps, changes,
-   compares or hands it on), reads its bytes, tests it for nil or false,
-   stores it into a multiple write's target, or asks its identity (equal?,
-   object_id, __id__); or it boxes the value (a poly slot, a container's
-   element, a poly argument), the role a box's emitter asks for (SPR_BOX),
-   which the memo never holds */
-enum { SPR_TAKE, SPR_READ, SPR_STORE, SPR_IDENTITY, SPR_BOX };
+/* The consumer takes the value, stores it in a multiple assignment,
+   checks its identity, or boxes it for a slot, element, or argument.
+   The memo records the value's need. */
+enum { SPR_TAKE, SPR_STORE, SPR_IDENTITY, SPR_BOX };
 /* the producer that supplies a value's handle (share_plan_producer), one
    kind per route codegen hands a String on by; each face renders each
    kind (codegen_str.c):
@@ -196,8 +193,6 @@ int share_plan_multi_renders(Compiler *c, int mw, int e);
 int share_plan_emits_handle(Compiler *c, int e);
 typedef struct {
   unsigned char need, form;
-  unsigned char kind;   /* SPK_*, which share_plan_of fills where the supply
-                           was asked (a need above bytes) */
 } SharePlan;
 /* Fill the memo of each node's need (the end of repr_seal); free it with
    the Compiler. */
@@ -209,8 +204,6 @@ void share_plan_free(Compiler *c);
 SharePlan share_plan_of(Compiler *c, int v, int role);
 /* The plan for a consumer in `role` of node v, whose need is given. */
 SharePlan share_plan_with_need(Compiler *c, int v, int role, int need);
-/* The role of v's consumer. A node made after seal has a taking consumer. */
-int share_plan_role(Compiler *c, int v);
 /* The producer of node v's handle where codegen is (SPK_*), asked live as
    the supply is, whatever a consumer needs; *operand (may be NULL) is the
    node whose supply an SPK_SELF, SPK_OPERAND or SPK_SEQUENCE value hands

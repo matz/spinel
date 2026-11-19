@@ -658,46 +658,6 @@ static void str_identity_box_text(const StrForm *sf, const char *e, Buf *b) {
   else buf_printf(b, "SP_STR_BOX(%s)", e);
 }
 
-/* Node v, a String, as the box a dispatch answers it in (an arm of a
-   dynamic send, whose answer the caller keeps): where the plan gives the
-   handle for the taker, the box of what its producer holds, as the
-   identity face renders it (emit_str_form's SPX_IDENT: the handle a
-   target holds or publishes, a call's published handle else its String);
-   any other form is emit_boxed's. The handle's box is the String itself,
-   so a change through the answer reaches the String the target holds,
-   where its bytes boxed were a copy. */
-void emit_str_form_box(Compiler *c, int v, Buf *b) {
-  TyKind t = comp_ntype(c, v);
-  /* (a reader's handle is taken by emit_boxed's route for it: the
-     identity face has no arm for a field read) */
-  if ((t != TY_STRING && t != TY_STRBUF) || share_plan_of(c, v, share_plan_role(c, v)).form != SPF_HANDLE ||
-      (share_plan_producer(c, v, NULL) == SPK_READER ||
-       share_plan_producer(c, v, NULL) == SPK_POLY_ARMS)) {
-    emit_boxed(c, v, b);
-    return;
-  }
-  StrForm sf;
-  Buf e;
-  memset(&e, 0, sizeof e);
-  /* (`tap` and `then` with a literal block hand on a handle, which the
-     identity face would take for a box: the handle face, boxed here) */
-  if (str_then_tap_block(c, v)) {
-    emit_str_form(c, v, share_plan_role(c, v), SPX_HANDLE, 0, &sf);
-    str_form_settle(c, &sf, &e);
-    str_box_handle(b, e.p ? e.p : "NULL");
-    str_form_close(&sf, b);
-    str_form_free(&sf);
-    free(e.p);
-    return;
-  }
-  emit_str_form(c, v, share_plan_role(c, v), SPX_IDENT, 0, &sf);
-  str_form_settle(c, &sf, &e);
-  str_identity_box_text(&sf, e.p ? e.p : "NULL", b);
-  str_form_close(&sf, b);
-  str_form_free(&sf);
-  free(e.p);
-}
-
 /* --share-strings: `x.equal?(y)` where a side is a String: both operands
    in the plan's form for an identity (SPX_IDENT). Two handles, or two
    bytes, are one object exactly when they are one pointer; otherwise both
@@ -721,9 +681,14 @@ int emit_str_equal(Compiler *c, int id, Buf *b) {
   if (argc != 1 || nt_argv_has_splat(nt, argv, argc)) return 0;
   TyKind rt = comp_recv_type(c, recv);
   int builtin = (rt == TY_STRING || rt == TY_STRBUF) && cplan_targets(c, id, tg, CPT_MAX) == 0;
-  if (!builtin && !(share_plan_role(c, recv) == SPR_IDENTITY &&
-                    (str_identity_operand(c, recv) || str_identity_operand(c, argv[0]))))
-    return 0;
+  if (!builtin) {
+    if (nt_int(nt, id, "dyn_arm", 0) || call_plain_argc(c, id) != 1 ||
+        (!str_identity_operand(c, recv) && !str_identity_operand(c, argv[0]))) return 0;
+    int count = 0;
+    const PolyCand *candidates = comp_poly_candidates(c, nm, &count);
+    for (int i = 0; i < count; i++)
+      if (candidates[i].mi >= 0 || candidates[i].rdcls >= 0) return 0;
+  }
   StrForm x, y;
   str_identity_operand_form(c, recv, &x);
   str_identity_operand_form(c, argv[0], &y);

@@ -17,24 +17,10 @@
              the producer's handle (SPF_HANDLE); or a copy when the
              consumer needs the producer's object (SPF_COPY).
 
-   A need is a consumer's. A value has one consumer, the node it sits in,
-   whose role says what it does with it (share_plan_role): it takes the
-   value -- keeps it, changes it, compares it, hands it on (SPR_TAKE); it
-   reads its bytes and keeps nothing, as an interpolation does, or a
-   freeze of a variable's String, which reaches the String through the
-   variable, or a String iterator's Enumerator walked where it is made
-   or tests for nil or false, as a predicate does (SPR_READ);
-   or, for an element of the Array literal a multiple write splits (also
-   through a splat, `a, b = *[s, t]`), the target the element is stored
-   into takes it (SPR_STORE), where the literal is no container; or it
-   asks the value's identity, as equal?, object_id and __id__ do where no
-   class of the program defines them (SPR_IDENTITY). A taker needs what
-   the value's facts say (share_value_needs_handle), as a store does; a
-   reader and a test need its bytes. An identity asks for the object, and is the
-   handle where the producer has one (for an exception's message, the box
-   the exception keeps it in) and the bytes' pointer where it has only
-   bytes, which are then all the String there is: never a new handle,
-   which no other name holds, and never a refusal.
+   The emitter supplies its consuming role. A taker keeps or passes the
+   value. A multiple assignment can store an Array literal's element
+   directly in its target. Identity asks for the producing object. Boxing
+   publishes the value for a polymorphic consumer.
    Some values have a second consumer:
      - a call that answers its receiver or nil (rule 4 below) answers its
        receiver's String, so its own answer is only tested for nil;
@@ -56,7 +42,7 @@
    repr_of is not memoised, and neither is anything that reads it. The
    need reads the share facts, final at seal, the node's type, names and
    scope's reachability; it is memoised at the end of repr_seal, in one
-   byte per node beside the node's consumer role. Each guard of the memo
+   byte per node. Each guard of the memo
    covers one way codegen makes a node read as something else:
      - a view, a scope move or a splice: cplan_plain_ctx, the call plan's
        own rule; a poly dispatch arm: the arm context at rest;
@@ -681,7 +667,7 @@ static int share_plan_supplies(Compiler *c, int v) { return share_plan_supplies_
    a node whose scope was unreachable at seal (codegen can still make its
    method reachable, so its need is asked live), and above it, in the
    byte's other six bits, the role of the node's consumer (SPR_*). */
-enum { SPN_ASK = 3, SPM_NEED = 3, SPM_ROLE_SHIFT = 2 };
+enum { SPN_ASK = 3 };
 
 static int share_plan_need_of(int need) {
   return need == SHN_NO ? SPN_BYTES : SPN_OBJECT;
@@ -692,7 +678,6 @@ static int share_plan_need(Compiler *c, int v) { return share_plan_need_of(share
 /* What a consumer in `role` needs of value v, whose own need (what its
    facts say a taker needs) is `need`. */
 static int share_plan_role_need(Compiler *c, int v, int role, int need) {
-  if (role == SPR_READ) return SPN_BYTES;
   if (role == SPR_IDENTITY) return SPN_OBJECT;
   /* A frozen literal already has its object. A fresh String can adopt
      its payload's owner when the producer hands on bytes. */
@@ -843,119 +828,6 @@ int share_plan_box_handle(Compiler *c, int v) {
 }
 
 
-int share_plan_role(Compiler *c, int v) {
-  return v >= 0 && v < c->share_plan_n ? c->share_plan[v] >> SPM_ROLE_SHIFT : SPR_TAKE;
-}
-
-
-/* Give node n's consumer `role`, and through parentheses and a statement
-   list's last statement, the node whose value n is. */
-static void share_plan_role_mark(Compiler *c, int n, int role) {
-  const NodeTable *nt = c->nt;
-  while (n >= 0 && n < c->share_plan_n) {
-    c->share_plan[n] = (unsigned char)((c->share_plan[n] & SPM_NEED) | (role << SPM_ROLE_SHIFT));
-    NodeKind k = nt_kind(nt, n);
-    /* a dynamic send's value is the value of the arm the name selects: the
-       arms have the send's consumer */
-    if (k == NK_CallNode) {
-      int na = 0;
-      const int *arms = nt_arr(nt, n, "dyn_send_arms", &na);
-      for (int i = 0; i < na; i++)
-        if (arms[i] >= 0 && arms[i] < c->share_plan_n)
-          c->share_plan[arms[i]] = (unsigned char)((c->share_plan[arms[i]] & SPM_NEED) | (role << SPM_ROLE_SHIFT));
-    }
-    if (k == NK_ParenthesesNode) n = nt_ref(nt, n, "body");
-    else if (k == NK_StatementsNode) {
-      int bn = 0;
-      const int *bv = nt_arr(nt, n, "body", &bn);
-      n = bn > 0 ? bv[bn - 1] : -1;
-    }
-    else break;
-  }
-}
-
-/* The elements a multiple write's value v -- an Array literal, and the
-   literals splatted in it (`a, b = *[s, t]`) -- stores into its targets. */
-static void share_plan_masgn_stores(Compiler *c, int v) {
-  const NodeTable *nt = c->nt;
-  v = nt_paren_single(nt, v);
-  if (v >= 0 && nt_kind(nt, v) == NK_SplatNode) v = nt_paren_single(nt, nt_ref(nt, v, "expression"));
-  if (v < 0 || nt_kind(nt, v) != NK_ArrayNode) return;
-  int en = 0;
-  const int *el = nt_arr(nt, v, "elements", &en);
-  for (int i = 0; i < en; i++) {
-    if (nt_kind(nt, el[i]) == NK_SplatNode) share_plan_masgn_stores(c, el[i]);
-    else share_plan_role_mark(c, el[i], SPR_STORE);
-  }
-}
-
-/* The operands of identity query n (equal?'s receiver and argument,
-   object_id's and __id__'s receiver), where no class of the program
-   defines its name: a method of the program's own takes them. An arm of
-   a dynamic send shares the send's receiver, which the send takes. */
-static void share_plan_identity_roles(Compiler *c, int n) {
-  const NodeTable *nt = c->nt;
-  const char *nm = nt_str(nt, n, "name");
-  int recv = nt_ref(nt, n, "receiver"), args = nt_ref(nt, n, "arguments"), np = 0, an = 0;
-  if (!nm || recv < 0 || nt_ref(nt, n, "block") >= 0 || !is_identity_query(nm) || is_freeze_family(nm) ||
-      nt_int(nt, n, "dyn_arm", 0))
-    return;
-  int pair = is_equality_name(nm);
-  const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
-  if (an != pair || call_plain_argc(c, n) != pair) return;
-  const PolyCand *pc = comp_poly_candidates(c, nm, &np);
-  for (int i = 0; i < np; i++)
-    if (pc[i].mi >= 0 || pc[i].rdcls >= 0) return;
-  share_plan_role_mark(c, recv, SPR_IDENTITY);
-  if (pair) share_plan_role_mark(c, av[0], SPR_IDENTITY);
-}
-
-/* Is call n a freeze of a String variable's read (a local, an instance
-   variable, a global or a constant), with no method of the program's own?
-   The String it freezes is the one the variable holds: the C freezes the
-   handle the variable's slot keeps (sp_String_freeze), whose flag every
-   name of the String reads, and the read of the variable gives the bytes
-   the call answers frozen. The variable's value is only read. */
-static int share_plan_freeze_read(Compiler *c, int n) {
-  const NodeTable *nt = c->nt;
-  const char *nm = nt_str(nt, n, "name");
-  int recv = nt_paren_single(nt, nt_ref(nt, n, "receiver")), tg[CPT_MAX];
-  if (!nm || recv < 0 || !is_freeze_name(nm) || nt_ref(nt, n, "arguments") >= 0 || nt_ref(nt, n, "block") >= 0)
-    return 0;
-  NodeKind k = nt_kind(nt, recv);
-  if (k != NK_LocalVariableReadNode && k != NK_InstanceVariableReadNode && !repr_static_read_kind(k)) return 0;
-  return (comp_ntype(c, recv) == TY_STRING || comp_ntype(c, recv) == TY_STRBUF) && cplan_targets(c, n, tg, CPT_MAX) == 0;
-}
-
-/* The roles of the receivers that a builtin call only reads: a freeze of
-   a variable's String (share_plan_freeze_read), and a blockless String
-   iterator whose Enumerator is walked where it is made
-   (str_each_enum_walked_here): the walk reads the String as it is there,
-   and the Enumerator's source box dies with the expression. One that
-   outlives it holds the handle, and its receiver stays a taker. */
-static void share_plan_reader_roles(Compiler *c, int n) {
-  if (share_plan_freeze_read(c, n) || str_each_enum_walked_here(c, n))
-    share_plan_role_mark(c, nt_ref(c->nt, n, "receiver"), SPR_READ);
-}
-
-/* The roles other than a taker's, from the consumers that have them: an
-   interpolation reads, a predicate tests, a multiple write stores each
-   element of its value's literal (and of a literal splatted in it) into
-   its target, an identity query asks its operands' identity, and a
-   builtin that only reads its receiver reads it. One pass over each kind. */
-static void share_plan_roles_build(Compiler *c) {
-  const NodeTable *nt = c->nt;
-  NT_FOREACH_KIND(nt, NK_EmbeddedStatementsNode, e) share_plan_role_mark(c, nt_ref(nt, e, "statements"), SPR_READ);
-  static const NodeKind preds[] = { NK_IfNode, NK_UnlessNode, NK_WhileNode, NK_UntilNode };
-  for (int k = 0; k < 4; k++)
-    NT_FOREACH_KIND(nt, preds[k], n) share_plan_role_mark(c, nt_ref(nt, n, "predicate"), SPR_READ);
-  NT_FOREACH_KIND(nt, NK_MultiWriteNode, mw) share_plan_masgn_stores(c, nt_ref(nt, mw, "value"));
-  NT_FOREACH_KIND(nt, NK_CallNode, n) {
-    share_plan_identity_roles(c, n);
-    share_plan_reader_roles(c, n);
-  }
-}
-
 void share_plan_free(Compiler *c) {
   free(c->share_parent);
   c->share_parent = NULL;
@@ -970,7 +842,7 @@ void share_plan_free(Compiler *c) {
 }
 
 /* Once per compile, over the node table: each node's need, with the type
-   and the table version it was asked under, and its consumer's role. */
+   and the table version it was asked under. */
 void share_plan_build(Compiler *c) {
   share_plan_free(c);
   if (!c->share) return;
@@ -985,7 +857,6 @@ void share_plan_build(Compiler *c) {
   }
   c->share_plan_n = n;
   c->share_plan_ver = c->nt->version;
-  share_plan_roles_build(c);
   c->share_parent = an_parent_map(c->nt);
   if (!c->share_parent) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   c->share_parent_n = n;
@@ -1000,15 +871,12 @@ static int share_plan_plain_ctx(void) {
 
 /* The memo's need of node v where codegen is, or -1 where it cannot answer. */
 static int share_plan_memo_need(Compiler *c, int v) {
-  int m = v >= 0 && v < c->share_plan_n && (c->share_plan[v] & SPM_NEED) != SPN_ASK &&
+  int m = v >= 0 && v < c->share_plan_n && c->share_plan[v] != SPN_ASK &&
           c->nt->version == c->share_plan_ver && comp_ntype_settled(c, v) == c->share_plan_ty[v] && share_plan_plain_ctx();
-  return m ? c->share_plan[v] & SPM_NEED : -1;
+  return m ? c->share_plan[v] : -1;
 }
 
 SharePlan share_plan_of(Compiler *c, int v, int role) {
   int m = share_plan_memo_need(c, v);
-  SharePlan p = share_plan_with_need(c, v, role, m >= 0 ? m : share_plan_need(c, v));
-  /* (the producer, where the supply was asked) */
-  if (p.need != SPN_BYTES) p.kind = (unsigned char)share_plan_producer(c, v, NULL);
-  return p;
+  return share_plan_with_need(c, v, role, m >= 0 ? m : share_plan_need(c, v));
 }

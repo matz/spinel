@@ -150,6 +150,17 @@ static int ic_calls(Compiler *c, int id, IcSink *s, IcMode mode) {
       if (s->roles & BCR_ARG) ic_push(s, "to_int", id, BCR_ARG, 0, NULL);
       return s->n;
     }
+    /* ENV writes convert their two arguments through to_str. ENV is a
+       singleton value, so the core class callback rows have no row for it. */
+    if (nk == NK_CallNode && is_store_alias(name) && call_plain_argc(c, id) == 2) {
+      int recv = nt_ref(nt, id, "receiver");
+      int env = c->ic && c->ic->typed ? env_value_recv(c, recv, comp_ntype(c, recv))
+                : nt_kind(nt, recv) == NK_ConstantReadNode && is_env_const(nt_str(nt, recv, "name"));
+      if (env) {
+        if (s->roles & BCR_ARG) ic_push(s, "to_str", id, BCR_ARG, 0, NULL);
+        return s->n;
+      }
+    }
     /* a method a C extension defines receives values the extension's C code
        calls CRuby's protocol methods on (rb_num2long asks for to_int, and so
        on) and sends names it computes: any callback name, as for a core name

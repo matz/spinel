@@ -3197,36 +3197,9 @@ int emit_strbuf_route(Compiler *c, int v, Buf *b) {
   }
   if (x == v) {
     if (is_store_alias(nt_str(nt, v, "name"))) {
-      int argc = 0; const int *argv = call_args(nt, v, &argc);
-      int tk = ++g_tmp, tv = ++g_tmp;
-      Buf key; memset(&key, 0, sizeof key);
-      Repr vr = repr_of(c, argv[1]);
-      buf_puts(b, "({ ");
-      if (nt_kind(nt, argv[0]) != NK_StringNode &&
-          (subtree_has_side_effect(c, argv[0]) || subtree_has_side_effect(c, argv[1]))) {
-        tk = hold_operand(c, argv[0], TY_POLY, 1, tk,
-                          operand_may_allocate(c, argv[1]) || vr.kind != RK_STRBUF, " ", b);
-        buf_printf(&key, "_t%d", tk);
-      }
-      else emit_boxed(c, argv[0], &key);
-      if (vr.as_ty == TY_STRING || vr.as_ty == TY_STRBUF || strbuf_boxed_local(c, argv[1])) {
-        buf_printf(b, "sp_String *_t%d = ", tv);
-        if (strbuf_boxed_local(c, argv[1])) {
-          Buf value; memset(&value, 0, sizeof value);
-          emit_local_ref(c, argv[1], nt_str(nt, argv[1], "name"), &value);
-          buf_printf(b, "sp_poly_as_strbuf((%s = sp_poly_strbuf_lift(%s)))", value.p, value.p);
-          free(value.p);
-        }
-        else emit_strbuf_handle_of(c, argv[1], b);
-        buf_printf(b, "; SP_GC_ROOT(_t%d); sp_env_aset(sp_poly_arg_str_chk(%s), ", tv, key.p);
-        str_box_handle_tmp(b, tv);
-        buf_printf(b, "); _t%d; })", tv);
-        free(key.p);
-        return 1;
-      }
-      tv = hold_operand(c, argv[1], TY_POLY, 1, tv, 1, " ", b);
-      buf_printf(b, "sp_env_aset(sp_poly_arg_str_chk(%s), _t%d); sp_poly_as_strbuf(_t%d); })", key.p, tv, tv);
-      free(key.p);
+      int argc;
+      const int *argv = call_args(nt, v, &argc);
+      emit_env_store_value(c, v, argv, TY_STRBUF, b);
       return 1;
     }
     /* `then` answers its block's value, or a `next`'s: read as the handle

@@ -1109,6 +1109,16 @@ static void emit_env_str(Compiler *c, int v, int value, Buf *b) {
   emit_str_expr(c, v, b);
   if (env_str_checked(c, v)) buf_printf(b, ", %d)", value);
 }
+/* The ordinary operand holders keep both Ruby objects through the write. */
+void emit_env_store_value(Compiler *c, int id, const int *argv, TyKind face, Buf *b) {
+  buf_puts(b, "({ ");
+  int key = hold_operand(c, argv[0], TY_POLY, 1, ++g_tmp, 1, " ", b);
+  int value = hold_operand(c, argv[1], TY_POLY, 1, ++g_tmp, 1, " ", b);
+  if (face == TY_STRBUF) buf_puts(b, "sp_strface_h_box(");
+  else if (face == TY_STRING) buf_puts(b, "sp_strface_b_box(");
+  buf_printf(b, "sp_env_aset(_t%d, _t%d, %d)%s; })", key, value, nt_attr_write(c->nt, id),
+             face == TY_STRBUF || face == TY_STRING ? ")" : "");
+}
 /* The value ENV.delete(k)'s literal block answers when k is unset: its
    last statement (codegen_internal.h; repr_call_returns_handle asks it) */
 int env_delete_block_value(Compiler *c, int v) {
@@ -1538,7 +1548,11 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
     if (env_value_recv(c, erecv, comp_ntype(c, erecv))) {
       const char *enm = nt_str(nt, id, "name");
       int eac = 0; const int *eav = call_args(nt, id, &eac);
-      /* a non-String key never converts: TypeError at the call (#2765/#2766) */
+      if (enm && eac == 2 && is_store_alias(enm)) {
+        emit_env_store_value(c, id, eav, repr_of(c, id).kind == RK_BOXED ? TY_POLY : TY_STRING, b);
+        return 1;
+      }
+      /* scalar keys to these readers raise TypeError. */
       if (enm && eac >= 1 &&
           (sp_streq(enm, "[]") || sp_streq(enm, "fetch") || sp_streq(enm, "key?") ||
            sp_streq(enm, "has_key?") || sp_streq(enm, "include?") || sp_streq(enm, "member?") ||
@@ -1736,13 +1750,6 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
         buf_printf(b, "_t%d; })", result);
         return 1;
       }
-      /* ENV.store(k, v) is []= */
-      if (enm && sp_streq(enm, "store") && eac == 2) {
-        buf_puts(b, "sp_env_aset(");
-        emit_str_expr(c, eav[0], b); buf_puts(b, ", ");
-        emit_boxed(c, eav[1], b); buf_puts(b, ")");
-        return 1;
-      }
     }
   }
   /* ENV[key] -> getenv */
@@ -1750,39 +1757,6 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
     {
       if (env_value_recv(c, recv, comp_ntype(c, recv))) {
         buf_puts(b, "sp_env_str(getenv("); emit_env_str(c, argv[0], 0, b); buf_puts(b, "))");
-        return 1;
-      }
-    }
-  }
-  /* ENV[key] = value -> setenv (value nil unsets, like CRuby) */
-  if (recv >= 0 && sp_streq(name, "[]=") && argc == 2) {
-    {
-      if (env_value_recv(c, recv, comp_ntype(c, recv))) {
-        TyKind evt = comp_ntype(c, argv[1]);
-        NodeKind v1k = nt_kind(nt, argv[1]);
-        int lit_nil = v1k == NK_NilNode;
-        if (evt == TY_STRING || lit_nil) {
-          int tk = ++g_tmp, tv = ++g_tmp;
-          buf_printf(b, "({ const char *_t%d = ", tk); emit_str_expr(c, argv[0], b);
-          /* a key the operand builds (`ENV["K#{i}"] = v`) is held across the
-             value's evaluation when that can allocate */
-          if (operand_allocates_beside(c, argv[0]) && operand_allocates_beside(c, argv[1]))
-            buf_printf(b, "; SP_GC_ROOT(_t%d)", tk);
-          /* a nil VALUE unsets the variable; only the key is strict */
-          buf_printf(b, "; const char *_t%d = ", tv); emit_str_expr_nilable(c, argv[1], b);
-          if (env_str_checked(c, argv[0])) buf_printf(b, "; sp_env_chk(_t%d, 0)", tk);
-          buf_printf(b, "; if (_t%d) setenv(_t%d, %s_t%d%s, 1); else unsetenv(_t%d); _t%d; })", tv, tk,
-                     env_str_checked(c, argv[1]) ? "sp_env_chk(" : "", tv, env_str_checked(c, argv[1]) ? ", 1)" : "", tk, tv);
-        }
-        else {
-          /* runtime-typed RHS: nil deletes, a String sets, anything else
-             raises CRuby's TypeError (naming the actual class) */
-          buf_puts(b, "sp_env_aset(");
-          emit_str_expr(c, argv[0], b);
-          buf_puts(b, ", ");
-          emit_boxed(c, argv[1], b);
-          buf_puts(b, ")");
-        }
         return 1;
       }
     }

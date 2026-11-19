@@ -560,7 +560,7 @@ const char *sp_re_operand(sp_RbVal v, int strict) {SP_GC_ROOT_RBVAL(v);
   if (v.tag == SP_TAG_NIL) return NULL;
   if (v.tag == SP_TAG_SYM && sp_sym_name_fn) return sp_sym_name_fn((sp_sym)v.v.i);
   if (v.tag == SP_TAG_OBJ && v.cls_id >= 0 && v.v.p && sp_obj_to_str_fn) {
-    const char *r = sp_String_cstr_nil(sp_obj_to_str_fn((int)v.cls_id, v.v.p));
+    const char *r = sp_String_cstr_nil(sp_obj_to_str_handle((int)v.cls_id, v.v.p));
     if (r) return r;
   }
   if (!strict) return NULL;

@@ -1583,19 +1583,19 @@ TEST_WARN_SUPPRESS := -Wno-unused-value
 RBS_SEED_STRICT := -Werror=incompatible-pointer-types
 
 # ---- Precompiled runtime header for the per-test compiles ----
-# Every generated test TU includes the same lib/spinel_rt.h; the cc step is
-# >99% of a test's cost and roughly half of that is parsing the header, so
-# the suite precompiles it once per make invocation (measured: gcc -15%,
-# clang -23% on the per-test compile). Three variants cover the plain header
-# and the two single defines that omit polymorphic render or value code. GCC
+# Every generated test TU includes lib/spinel_rt.h. Parsing it takes a large
+# share of a cache miss, so precompile it once per configuration. Three
+# variants cover the plain header and the two single defines that omit
+# polymorphic render or value code. GCC
 # finds the .gch on the include path. Clang needs an explicit -include-pch.
 # Each variant dir also carries a copy of spinel_rt.h so gcc degrades to a
 # normal textual include if the .gch is unusable. Key the directory on every
 # flag used to build the header. Clang can silently accept a stale PCH built
 # with a different -D, including the overflow mode (#4538).
-CC_KIND  := $(if $(findstring clang,$(shell $(CC) --version 2>/dev/null | head -1)),clang,gcc)
+CC_VERSION := $(shell $(CC) --version 2>/dev/null)
+CC_KIND := $(if $(findstring clang,$(CC_VERSION)),clang,gcc)
 PCH_FLAGS = $(CFLAGS) $(SP_OV_DEFINE) -Werror $(TEST_WARN_SUPPRESS) $(SEC_FLAGS)
-PCH_ROOT := build/pch/$(CC_KIND)-$(shell tools/result_cache.sh pch-key "$(CC)" $(PCH_FLAGS))
+PCH_ROOT := build/pch/$(CC_KIND)-$(shell tools/result_cache.sh pch-key "$(CC)" "$(CC_VERSION)" $(PCH_FLAGS))
 # The last explicit -O wins among ordinary flags. Leave opaque options
 # (such as compiler response files) to the textual include on an override.
 TEST_PCH_OPT := $(if $(filter-out -O% -Wno-% -ffp-contract=off -g -g0 -g1 -g2 -g3 -D% -U% -I%,$(CFLAGS)),,$(lastword $(filter -O%,$(CFLAGS))))
@@ -4394,6 +4394,9 @@ RESULT_CACHE_FP = $(if $(filter 0,$(GATE_CACHE)),off,$(eval RESULT_CACHE_FP := $
 # only (the C is the same with and without it, so the result cache still
 # matches), and tools/plan_check.sh --from-results reads the reports instead
 # of compiling the corpus a second time.
+# A response file can carry flags whose values change at the same path. The
+# single-invocation driver can also see frontend flags among the link inputs.
+# Use the textual header when those inputs could change its meaning.
 # TEST_LD=lld selects LLD for the generated test executables on Linux.
 # Keep the driver default for normal runs and pass the selector only at link.
 TEST_LDFLAGS = $(LDFLAGS)$(if $(TEST_LD), -fuse-ld=$(TEST_LD))
@@ -4450,7 +4453,18 @@ ckey=""; hit=0; own=0; \
     rtlib=$$(echo "$$rtlib" | sed 's|\.a$$|_nogc.a|'); pchuse=""; \
   fi; \
   xlibs="$$xobjs $$xlibs"; \
-  if [ -f "$<.expected" ]; then \
+  cacheable=1; \
+  if [ -n "$(filter @%,$(CC) $(PCH_FLAGS))" ]; then pchuse=""; cacheable=0; fi; \
+  case " $$bigopt " in *" @"*) cacheable=0;; esac; \
+  for arg in $(TEST_LDFLAGS) $$xlibs $(GC_FLAGS); do \
+    case "$$arg" in \
+      -Wl,*@*) cacheable=0;; \
+      -l?*|-L?*|-Wl,?*|-fuse-ld=?*) ;; \
+      @*) pchuse=""; cacheable=0;; \
+      -*) [ -z "$(TEST_SINGLE_INVOKE)" ] || pchuse="";; \
+    esac; \
+  done; \
+  if [ $$cacheable = 1 ] && [ -f "$<.expected" ]; then \
     ckey=$$(RC_CC="$(CC)" tools/result_cache.sh key "$<" "$$cfile" \
       "$(RESULT_CACHE_FP)|$(RESULT_CACHE_HARNESS)|$(CC)|$(TEST_SINGLE_INVOKE)|$(CFLAGS) $$bigopt $(SP_OV_DEFINE) $$mtdef -Werror $(TEST_WARN_SUPPRESS) $(SEC_FLAGS) $$pchuse -Ilib|$$natobjs $$rtlib $(TEST_LDFLAGS) -lm $$mtld $$xlibs $(GC_FLAGS)|$(TIMEOUT10)" \
       "$<.expected" "$<.err.expected" "$<.args" "$<.stdin"); \

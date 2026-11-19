@@ -101,3 +101,16 @@ class Sized
 end
 
 p Sized.new.r, Sized.new.r.map(&:nil?)
+
+# A Range end held as nil is the open bound a written nil is, a String
+# range's too, and a case/in subject held as nil matches `in nil`: an ivar
+# nothing sets, a method answering nil and a written nil alike.
+class Spans
+  def initialize = (@b = 1)
+  def none = nil
+  def r = [(@missing..5), (1..@missing), (@missing.."z"), ("a"..@missing), (none..3), (nil.."e"), ("b"..nil)]
+  def m = [(case @missing; in nil then :n; in Integer then :i; end), (case nil; in nil then :n; end)]
+end
+
+sp = Spans.new
+p sp.r, sp.r.map { |x| [x.begin, x.end] }, sp.m

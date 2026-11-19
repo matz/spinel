@@ -3982,8 +3982,9 @@ int emit_reduce_block_expr(Compiler *c, int id, Buf *b) {
     if (it != TY_UNKNOWN) acc_ty = it;
     /* a nil seed carries no accumulator type -- TY_NIL emits as `void` -- and
        the fold really is "nothing yet, then whatever the block returns", so
-       accumulate boxed (#3356) */
-    if (nt_kind(nt, init) == NK_NilNode) acc_ty = TY_POLY;
+       accumulate boxed (#3356); a seed held as nil that is no written one
+       (an ivar nothing sets, a method answering nil) too */
+    if (nt_kind(nt, init) == NK_NilNode || repr_of(c, init).as_ty == TY_NIL) acc_ty = TY_POLY;
   }
   /* An int seed folded over floats accumulates float (matches the reduce
      return-type promotion in infer_type); keep the C accumulator type in step.

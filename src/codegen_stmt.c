@@ -9673,7 +9673,10 @@ static void emit_case_match_in(Compiler *c, int id, Buf *b, int indent, int tail
   int lbl = ++g_tmp;
   int th = -1;
   Repr pr = repr_of(c, pred);
-  TyKind pt = pred < 0 || pr.kind == RK_NONE || pr.kind == RK_BOXED ? TY_POLY : pr.as_ty;
+  /* (a subject held as nil, a literal or a value typed nil -- an ivar
+     nothing sets, a method answering nil -- has no C storage of its own:
+     it is held boxed, as an unknown one is; `void _tN` did not build) */
+  TyKind pt = pred < 0 || pr.kind == RK_NONE || pr.kind == RK_BOXED || pr.as_ty == TY_NIL ? TY_POLY : pr.as_ty;
   /* Evaluate the scrutinee first so its own prelude is flushed to g_pre before
      the `_tN =` initializer. In value position b IS g_pre, so emitting the
      scrutinee inline would splice its prelude into the middle of this line. */

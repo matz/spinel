@@ -11981,6 +11981,11 @@ TyKind infer_uncached(Compiler *c, int id) {
        is a String range too, its missing bound a nil (NULL) endpoint. */
     if ((lo >= 0 || hi >= 0) && (lo < 0 || lt == TY_STRING) && (hi < 0 || ht == TY_STRING))
       return TY_STR_RANGE;
+    /* ... and so is a String beside a nil end, written (nil.."e") or a value
+       typed nil (an ivar nothing sets, a method answering nil): that end is
+       the open bound, where an Integer range read the String as a number */
+    if ((lt == TY_STRING && hi >= 0 && ht == TY_NIL) || (ht == TY_STRING && lo >= 0 && lt == TY_NIL))
+      return TY_STR_RANGE;
     /* A String beside a boxed end is a String range too: the boxed end can
        only be a String or nil in CRuby, anything else being its ArgumentError
        (sp_srange_new_box checks it at run time). */

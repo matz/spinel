@@ -6379,8 +6379,13 @@ static int emit_range_literal(Compiler *c, int id, Buf *b, const NodeTable *nt) 
   /* an open side, written or arriving at run time (a boxed bound, an Integer
      that may be nil), is the Range's nobeg / noend flag: sp_range_new_o takes
      each bound as an sp_oint. A bound known present is the plain one. */
-  int lo_o = left_unbounded || (left >= 0 && (repr_of(c, left).kind == RK_BOXED || (comp_ntype(c, left) == TY_INT && node_has_oint_form(c, left))));
-  int hi_o = right_unbounded || (right >= 0 && !fend && !pend && comp_ntype(c, right) == TY_INT && node_has_oint_form(c, right));
+  /* an end held as nil that is no written nil (an ivar nothing sets, a
+     method answering nil) is the open bound too; it still runs, in its
+     turn, for what it does. Converted as a number it raised TypeError. */
+  int left_nil = !left_unbounded && left >= 0 && repr_of(c, left).as_ty == TY_NIL;
+  int right_nil = !right_unbounded && right >= 0 && rt_end == TY_NIL;
+  int lo_o = left_unbounded || left_nil || (left >= 0 && (repr_of(c, left).kind == RK_BOXED || (comp_ntype(c, left) == TY_INT && node_has_oint_form(c, left))));
+  int hi_o = right_unbounded || right_nil || (right >= 0 && !fend && !pend && comp_ntype(c, right) == TY_INT && node_has_oint_form(c, right));
   /* Ruby runs the begin before the end; C does not order a call's
      arguments (gcc ran `at(3)` before `at(1)` in `x&.slice(at(1)..at(3))`
      on a boxed x). Where an end can do something, the two go to temps in
@@ -6394,9 +6399,11 @@ static int emit_range_literal(Compiler *c, int id, Buf *b, const NodeTable *nt) 
   if (!fend && !pend && (lo_o || hi_o)) {
     fn = "sp_range_new_o";
     if (left_unbounded) buf_puts(&lo, "sp_oint_nil()");
+    else if (left_nil) { buf_puts(&lo, "({ (void)("); emit_expr(c, left, &lo); buf_puts(&lo, "); sp_oint_nil(); })"); }
     else if (repr_of(c, left).kind == RK_BOXED) { buf_puts(&lo, "sp_range_lo_bound("); emit_expr(c, left, &lo); buf_puts(&lo, ")"); }
     else emit_oint_expr(c, left, TY_INT, &lo);
     if (right_unbounded) buf_puts(&hi, "sp_oint_nil()");
+    else if (right_nil) { buf_puts(&hi, "({ (void)("); emit_expr(c, right, &hi); buf_puts(&hi, "); sp_oint_nil(); })"); }
     else if (range_rat_walk_end(c, id, right, &hi, 1)) ;
     else emit_oint_expr(c, right, TY_INT, &hi);
     emit_range_build(b, fn, &lo, &hi, excl, in_order);

@@ -20,3 +20,6 @@ true
 5
 [nil, nil, nil, nil]
 [true, true, true, true]
+[..5, 1.., .."z", "a".., ..3, .."e", "b"..]
+[[nil, 5], [1, nil], [nil, "z"], ["a", nil], [nil, 3], [nil, "e"], ["b", nil]]
+[:n, :n]

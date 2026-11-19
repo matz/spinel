@@ -25,3 +25,8 @@ p sup(K)
 def nn(x = nil) = x&.name&.length
 p nn
 p nn(K)
+
+# The first safe navigation keeps the Class boxed when the input is boxed.
+def boxed_name(value) = value&.class&.name
+items = [+"string", 1, nil]
+p boxed_name(items[0]), boxed_name(items[1]), boxed_name(items[2])

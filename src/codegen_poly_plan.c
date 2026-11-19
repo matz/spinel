@@ -3147,11 +3147,11 @@ void poly_specials_n(Compiler *c, int id, const char *name, int argc, const int 
   int is_unshift = (is_prepend_alias(name)) && argc >= 1;
   /* delete(chars) with a string arg: the poly value may be a string even
      when a user class also defines `delete` (the bundled Set does), so the
-     switch needs a TAG_STR pre-arm routing to String#delete (doom's
+     switch needs a pre-arm routing to String#delete (doom's
      `data[offset, 8].delete("\x00").upcase` WAD name fields). */
   int is_strdel = sp_streq(name, "delete") && argc == 1 &&
                   comp_ntype(c, argv[0]) == TY_STRING;
-  /* partition / rpartition on a TAG_STR receiver. They have no poly arm of
+  /* partition / rpartition on a boxed String receiver. They have no poly arm of
      their own ahead of the name-collision test -- which is why `split`,
      `upcase` and `strip` survived a same-named user method and these did
      not -- so a genuine String fell to the switch's raising default and
@@ -3161,7 +3161,7 @@ void poly_specials_n(Compiler *c, int id, const char *name, int argc, const int 
   int is_strpart = (is_partition_family(name)) &&
                    argc == 1 && comp_ntype(c, argv[0]) == TY_STRING;
   /* The multi-set forms of count/delete/squeeze (String's alone) when a
-     user class also owns the name: the switch needs a TAG_STR pre-arm or
+     user class also owns the name: the switch needs a String pre-arm or
      a genuine String receiver falls to its NoMethodError default, the
      same hole the single-set delete had (#4195). String-typed sets only:
      the temps below carry them as const char *. */
@@ -3187,7 +3187,7 @@ void poly_specials_n(Compiler *c, int id, const char *name, int argc, const int 
   int is_straset = is_element_access(name) && is_store_alias(name) && argc == 2 && !has_splat_arg &&
                    nt_ref(nt, id, "block") < 0 &&
                    (straset_k == TY_INT || straset_k == TY_STRING || straset_k == TY_REGEX || straset_k == TY_POLY);
-  /* split(sep) on a TAG_STR receiver, when a user class also owns `split`
+  /* split(sep) on a boxed String receiver, when a user class also owns `split`
      (the bundled Pathname does) and the dispatch therefore lost the String
      arm. Same hole #3394 closed for the zero-arg form (#3401). */
   int is_strsplit = sp_streq(name, "split") && argc == 1 &&
@@ -3196,7 +3196,7 @@ void poly_specials_n(Compiler *c, int id, const char *name, int argc, const int 
                      comp_ntype(c, argv[0]) == TY_NIL ||
                      comp_ntype(c, argv[0]) == TY_REGEX);
   int is_pred = poly_pred_kind(name, argc);
-  /* String#encode when a user class also owns `encode`: the TAG_STR receiver
+  /* String#encode when a user class also owns `encode`: the String receiver
      needs a pre-arm, or a genuine String falls to the switch's raising
      default -- `content.encode("UTF-8", "binary", invalid: :replace, ...)`
      on an untyped value raised NoMethodError naming String once Active
@@ -3643,13 +3643,9 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
     buf_puts(b, "; }\nelse ");
     free(ub.p);
   }
-  /* include? on a TAG_STR receiver: check tag before entering cls_id switch.
-     Boxed when a user arm widened the dispatch result to poly (#4072). */
-  /* A shared-string handle is a String too. The receiver temp is NOT
-     dereferenced at the spill -- the mutating arms sharing it need the
-     handle -- so this arm widens its own guard and reads the bytes with
-     sp_poly_recv_s. Without it a heap String fell through to the cls_id
-     switch and answered false, silently (#4279). */
+  /* include? on a boxed String: the receiver temp keeps the handle for
+     the mutating arms. This arm borrows bytes through sp_poly_recv_s.
+     A user arm can widen the dispatch result to poly (#4072, #4279). */
   /* String answers include? alone (member?/key? are NoMethodError), and
      its argument must be a String: another class is CRuby's TypeError,
      and a boxed one is checked at run time. */
@@ -3677,7 +3673,7 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
                ret == TY_POLY ? ")" : "");
     free(ab6.p);
   }
-  /* delete(chars) on a TAG_STR receiver: String#delete, boxed when the
+  /* delete(chars) on a boxed String receiver: String#delete, boxed when the
      dispatch result stays poly. */
   if (str_builtin && is_strdel && (ret == TY_POLY || ret == TY_STRING)) {
     if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_STR_DELETE, -1, TY_UNKNOWN, PC_SAME);
@@ -3687,7 +3683,7 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
     else buf_printf(b, "sp_str_delete(sp_rbval_string_bytes(_t%d), %s)", tv, strarg);
     buf_puts(b, "; }\nelse ");
   }
-  /* partition / rpartition on a TAG_STR receiver: sp_str_partition answers
+  /* partition / rpartition on a boxed String receiver: sp_str_partition answers
      the sp_StrArray CRuby's three-element result is, boxed when a user arm
      widened the dispatch's result to poly. */
   if (str_builtin && is_strpart && (ret == TY_POLY || ret == TY_STR_ARRAY)) {
@@ -3760,7 +3756,7 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
     if (atmp_ty[1] == TY_POLY) buf_puts(b, a1); else emit_boxed_text(c, atmp_ty[1], a1, b);
     buf_puts(b, "); }\nelse ");
   }
-  /* encode(enc[, from][, invalid:, undef:, replace:]) on a TAG_STR receiver */
+  /* encode(enc[, from][, invalid:, undef:, replace:]) on a boxed String */
   if (str_builtin && is_strencode && pos_argc <= 2 && (ret == TY_POLY || ret == TY_STRING)) {
     if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_STR_ENCODE, -1, TY_UNKNOWN, PC_SAME);
     Buf eb; memset(&eb, 0, sizeof eb);
@@ -3803,7 +3799,7 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
     buf_puts(b, "; }\nelse ");
     free(eb.p);
   }
-  /* split(sep) on a TAG_STR receiver. A nil separator splits on
+  /* split(sep) on a boxed String receiver. A nil separator splits on
      whitespace, as CRuby's does. */
   if (str_builtin && is_strsplit && (ret == TY_STR_ARRAY || ret == TY_POLY_ARRAY || ret == TY_POLY)) {
     if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_STR_SPLIT_N, -1, TY_UNKNOWN, PC_SAME);

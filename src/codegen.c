@@ -2573,8 +2573,8 @@ static void emit_boxed_strbuf(Compiler *c, int node, TyKind t, const Repr *rp, B
   if (t == TY_STRING) {
     /* The node-type cache is finalized before the late handle passes run,
        so a local promoted to a shared handle still reads as String here
-       while its C slot is an sp_String *. Box the HANDLE: sp_box_str would
-       hand the callee a copy, and the append would land in the copy (the
+       while its C slot is an sp_String *. Box that handle to preserve
+       mutations through the argument (the
        mixed case -- one callee reached with a reader argument and a plain
        local -- printed the unchanged string). An argument that already ran
        is the handle it read then: the slot read here is late, after a later
@@ -2938,7 +2938,7 @@ static void emit_boxed_impl(Compiler *c, int node, Buf *b) {
   /* An inlined yield's value type is per-CALL-SITE: the method AST has ONE
      YieldNode but each call site supplies its own block, so the node's cached
      type is whichever site inference visited (a string-block site poisoned an
-     int-block site into sp_box_str(int) -- a segfault). Box by the CURRENT
+     int-block site into a String box with an Integer payload). Box by the CURRENT
      block's inferred result instead. */
   /* A proc-form body has no inline block by construction -- the block arrives
      as an sp_Proc * parameter -- so the yield lowers to a call on it, not to
@@ -3343,10 +3343,7 @@ static void emit_boxed_impl(Compiler *c, int node, Buf *b) {
     return;
   }
   if (t == TY_STRING) {
-    /* --share-strings: the String plan's form for a box (SPR_BOX): a String
-       the plan wraps is boxed as the new handle it is (sp_box_str_new), so
-       the box's copies name one String; any other is boxed as its bytes,
-       which sp_box_str boxes as their handle where a handle owns them */
+    /* The String plan's box form selects the operand for the handle box. */
     int wrap = share_plan_of(c, node, SPR_BOX, NULL).form == SPF_WRAP;
     emit_str_box_leaf(c, node, wrap, b);
     RC(RF_STR, RW_NONE);

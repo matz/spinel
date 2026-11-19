@@ -8588,6 +8588,7 @@ static int emit_poly_str_prearm(Compiler *c, int id, int recv, const char *name,
   /* `to_i(base)` is String's alone: the radix form, which the other
      builtins' zero-argument to_i refuses */
   if (recv < 0 || !name || !(poly_string_read_p(name) || (argc == 1 && sp_streq(name, "to_i")))) return 0;
+  if (cplan_poly_string_arm(c, id, name) != CP_STR_BUILTIN) return 0;
   if (nt_ref(nt, id, "block") >= 0) return 0;
   if (argc > 0 && (!atmp || !atmp_ty)) return 0;
   if (g_pd_skip == id || g_n_argov + argc + 1 > MAX_ARG_OVERRIDE) return 0;
@@ -8688,8 +8689,7 @@ static int emit_poly_str_prearm(Compiler *c, int id, int recv, const char *name,
     if (g_plan_check) pa_observe_at(id, PA_TRIAL, PA_KEY_TRIAL + PT_STR, -1, TY_UNKNOWN, pa_kept);
     return 0;
   }
-  /* a shared-mutable string is a builtin OBJ box, not SP_TAG_STR, and is a
-     string: sp_poly_recv_s takes both, so the guard has to as well */
+  /* The guard selects the builtin String arm for eligible handle boxes. */
   buf_puts(b, "if ("); emit_poly_str_guard(c, tv, name, b);
   buf_printf(b, ") { %s _t%d = %s; }\nelse ", arm_pre ? arm_pre : "", tr, ib.p);
   free(ib.p); free(arm_pre);
@@ -11520,7 +11520,7 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
       if (g_plan_check) cplan_served("poly-form-n");
       /* a genuine String in a slot whose name a user class owns (#4816) */
       if (kw_pos) emit_poly_str_aset_prearm(c, recv, &ps, &ptemps, b);
-      if (kw_pos && !has_splat_arg) {
+      if (kw_pos && !has_splat_arg && ps.str_arm == CP_STR_BUILTIN) {
         /* The switch form omits builtin families. Ask for the planned
            set operation before adding a general String fallback. */
         const PolyPlan prearms = ps.strsetop_n ? cplan_poly(c, id) : (PolyPlan){0};

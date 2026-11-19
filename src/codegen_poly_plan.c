@@ -1962,9 +1962,7 @@ void emit_poly_prearms0(Compiler *c, int id, const char *name, const PolySpecial
   int is_lengthlike = ps->lengthlike, is_empty = ps->empty, is_class_named = ps->class_named;
   int is_class_reflect = ps->class_reflect, is_ostruct = ps->ostruct, is_poly_to_a = ps->poly_to_a;
   int is_io_rewind = ps->io_rewind;
-  int str_reopen_owns = 0;
-  { int sci = comp_core_class(c, CORE_STRING);
-    if (sci >= 0 && call_target(c, id, sci, name, 0, NULL) >= 0) str_reopen_owns = 1; }
+  int str_reopen_owns = cplan_poly_string_arm(c, id, name) != CP_STR_BUILTIN;
   /* When the dispatch result feeds a poly context, tr is sp_RbVal, so the
      length-like answer is boxed */
   /* ...and an oint result slot (plan_slot_oint) takes it lifted */
@@ -3364,6 +3362,9 @@ void poly_specials_n(Compiler *c, int id, const char *name, int argc, const int 
   s->pstore = is_pstore;
   s->straset = is_straset;
   s->strsplit = is_strsplit;
+  s->str_arm = (is_strdel || is_strpart || is_strencode || is_strsplit ||
+                is_strsetop_n || is_ppack || is_include || is_index || is_straset)
+             ? cplan_poly_string_arm(c, id, name) : CP_STR_NONE;
   s->pred = is_pred;
   s->strencode = is_strencode;
   s->strftime = is_strftime;
@@ -3425,7 +3426,7 @@ static void str_aset_store_text(Compiler *c, const PolyTemps *T, const char *rv,
   buf_puts(out, ")");
 }
 void emit_poly_str_aset_prearm(Compiler *c, int recv, const PolySpecialsN *ps, const PolyTemps *T, Buf *b) {
-  if (!ps->straset || recv < 0) return;
+  if (ps->str_arm != CP_STR_BUILTIN || !ps->straset || recv < 0) return;
   if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_STR_ASET, -1, TY_UNKNOWN, PC_SAME);
   int tv = T->tv, tr = T->tr;
   TyKind ret = T->ret, vty = T->atmp_ty[1];
@@ -3455,7 +3456,8 @@ void emit_poly_str_aset_prearm(Compiler *c, int recv, const PolySpecialsN *ps, c
    ahead of them, and of a prelude they move ahead of the statement, as
    CRuby reads it; any other call reads it in place. */
 void emit_poly_str_aset_recv(Compiler *c, int recv, const PolySpecialsN *ps, const int *argv, Buf *b) {
-  if (ps->straset && ps->kw_pos && aset_recv_rebinds_only(c, recv, argv[0], argv[1])) emit_aset_recv_read(c, recv, b);
+  if (ps->straset && ps->str_arm == CP_STR_BUILTIN && ps->kw_pos &&
+      aset_recv_rebinds_only(c, recv, argv[0], argv[1])) emit_aset_recv_read(c, recv, b);
   else emit_expr(c, recv, b);
 }
 /* The tag pre-arms of a poly dispatch with arguments, ahead of its cls_id
@@ -3488,6 +3490,7 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
   int is_cover = ps->cover, is_ctryconv = ps->ctryconv, is_gcdlcm = ps->gcdlcm, is_ppack = ps->ppack;
   int is_include = ps->include, is_strdel = ps->strdel, is_strpart = ps->strpart;
   int is_strsetop_n = ps->strsetop_n, is_pstore = ps->pstore, is_strencode = ps->strencode;
+  int str_builtin = ps->str_arm == CP_STR_BUILTIN;
   int is_strsplit = ps->strsplit, is_index = ps->index;
   /* a boxed Range of Times answers its methods through sp_trange_send */
   if (trange_poly_name(name, pos_argc) && kwn == 0 && pos_argc == argc && !nt_argv_has_splat(nt, argv, argc) &&
@@ -3622,7 +3625,7 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
   /* unpack1 on a TAG_STR receiver: its own poly arm stands down when a user
      class owns the name, so the String case needs one here -- and the old
      fallthrough read the receiver as a char * whatever it held. */
-  if (is_ppack && sp_streq(name, "unpack1")) {
+  if (str_builtin && is_ppack && sp_streq(name, "unpack1")) {
     if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_UNPACK1, -1, TY_UNKNOWN, PC_SAME);
     Buf ub; memset(&ub, 0, sizeof ub);
     /* the format read as the pack arm below reads it: a boxed argument is
@@ -3649,15 +3652,15 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
      its argument must be a String: another class is CRuby's TypeError,
      and a boxed one is checked at run time. */
   if (is_include) if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_INCLUDE, -1, TY_UNKNOWN, PC_SAME);
-  if (is_include && !sp_streq(name, "include?"))
+  if (str_builtin && is_include && !sp_streq(name, "include?"))
     { buf_puts(b, "if ("); emit_poly_str_guard(c, tv, name, b);
       buf_printf(b, ") sp_raise_poly_nomethod(\"%s\", _t%d);\nelse ", name, tv); }
-  else if (is_include && comp_ntype(c, argv[0]) == TY_STRING)
+  else if (str_builtin && is_include && comp_ntype(c, argv[0]) == TY_STRING)
     { buf_puts(b, "if ("); emit_poly_str_guard(c, tv, name, b);
       buf_printf(b, ") { _t%d = %ssp_str_include(sp_poly_recv_s(_t%d, \"include?\"), %s)%s; }\nelse ",
                  tr, ret == TY_POLY ? "sp_box_bool(" : "", tv, strarg,
                  ret == TY_POLY ? ")" : ""); }
-  else if (is_include) {
+  else if (str_builtin && is_include) {
     Buf ab6; memset(&ab6, 0, sizeof ab6);
     char tn6[24]; snprintf(tn6, sizeof tn6, "_t%d", atmp[0]);
     if (atmp_ty[0] == TY_POLY) buf_puts(&ab6, tn6);
@@ -3674,7 +3677,7 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
   }
   /* delete(chars) on a TAG_STR receiver: String#delete, boxed when the
      dispatch result stays poly. */
-  if (is_strdel && (ret == TY_POLY || ret == TY_STRING)) {
+  if (str_builtin && is_strdel && (ret == TY_POLY || ret == TY_STRING)) {
     if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_STR_DELETE, -1, TY_UNKNOWN, PC_SAME);
     buf_puts(b, "if ("); emit_poly_str_guard(c, tv, name, b);
     buf_printf(b, ") { _t%d = ", tr);
@@ -3685,7 +3688,7 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
   /* partition / rpartition on a TAG_STR receiver: sp_str_partition answers
      the sp_StrArray CRuby's three-element result is, boxed when a user arm
      widened the dispatch's result to poly. */
-  if (is_strpart && (ret == TY_POLY || ret == TY_STR_ARRAY)) {
+  if (str_builtin && is_strpart && (ret == TY_POLY || ret == TY_STR_ARRAY)) {
     if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_STR_PARTITION, -1, TY_UNKNOWN, PC_SAME);
     buf_puts(b, "if ("); emit_poly_str_guard(c, tv, name, b);
     buf_printf(b, ") { _t%d = ", tr);
@@ -3697,13 +3700,12 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
   }
   /* The set operation owns the builtin base String arm. Reopened methods
      and subclass receivers reach the class switch below. */
-  StringSetopArm setop = is_strsetop_n ? cplan_string_setop_arm(c, T->id, name) : CP_STR_SETOP_NONE;
-  if (setop != CP_STR_SETOP_NONE) {
+  if (is_strsetop_n && ps->str_arm != CP_STR_NONE) {
     int is_cnt = sp_streq(name, "count");
     if ((is_cnt && (ret == TY_POLY || ret == TY_INT)) ||
         (!is_cnt && (ret == TY_POLY || ret == TY_STRING))) {
       if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_STR_SETOP, -1, TY_UNKNOWN, PC_SAME);
-      if (setop == CP_STR_SETOP_UNDEF) {
+      if (ps->str_arm == CP_STR_UNDEF) {
         buf_printf(b, "if (sp_rbval_is_string(_t%d) && !sp_poly_is_str_subclass(_t%d)) { ", tv, tv);
         int first = g_tmp + 1;
         g_tmp += argc;
@@ -3757,7 +3759,7 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
     buf_puts(b, "); }\nelse ");
   }
   /* encode(enc[, from][, invalid:, undef:, replace:]) on a TAG_STR receiver */
-  if (is_strencode && pos_argc <= 2 && (ret == TY_POLY || ret == TY_STRING)) {
+  if (str_builtin && is_strencode && pos_argc <= 2 && (ret == TY_POLY || ret == TY_STRING)) {
     if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_STR_ENCODE, -1, TY_UNKNOWN, PC_SAME);
     Buf eb; memset(&eb, 0, sizeof eb);
     buf_printf(&eb, "sp_str_encode(sp_rbval_string_bytes(_t%d), %d", tv, pos_argc);
@@ -3801,7 +3803,7 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
   }
   /* split(sep) on a TAG_STR receiver. A nil separator splits on
      whitespace, as CRuby's does. */
-  if (is_strsplit && (ret == TY_STR_ARRAY || ret == TY_POLY_ARRAY || ret == TY_POLY)) {
+  if (str_builtin && is_strsplit && (ret == TY_STR_ARRAY || ret == TY_POLY_ARRAY || ret == TY_POLY)) {
     if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_STR_SPLIT_N, -1, TY_UNKNOWN, PC_SAME);
     TyKind sat = comp_ntype(c, argv[0]);
     char call[192];
@@ -3822,11 +3824,16 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
        read the index as an Integer and raised TypeError for it, so any
        other index on those receivers takes the generic lookup, as it does
        where no user class defines `[]`. */
-    if (atmp_ty[0] == TY_POLY && ret == TY_POLY)
-      buf_printf(b, "if (_t%d.tag != SP_TAG_INT && (_t%d.tag == SP_TAG_INT || sp_rbval_is_string(_t%d) || "
-                    "(_t%d.tag == SP_TAG_OBJ && sp_poly_is_array_kind(_t%d.cls_id)))) "
+    if (atmp_ty[0] == TY_POLY && ret == TY_POLY) {
+      buf_printf(b, "if (_t%d.tag != SP_TAG_INT && (_t%d.tag == SP_TAG_INT || ", atmp[0], tv);
+      if (str_builtin) {
+        emit_poly_str_guard(c, tv, name, b);
+        buf_puts(b, " || ");
+      }
+      buf_printf(b, "(_t%d.tag == SP_TAG_OBJ && sp_poly_is_array_kind(_t%d.cls_id)))) "
                     "{ _t%d = sp_poly_index_poly(_t%d, _t%d); }\nelse ",
-                 atmp[0], tv, tv, tv, tv, tr, tv, atmp[0]);
+                 tv, tv, tr, tv, atmp[0]);
+    }
     if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_INT_BITREF, -1, TY_UNKNOWN, PC_SAME);
     if (ret == TY_POLY)
       buf_printf(b, "if (_t%d.tag == SP_TAG_INT) { _t%d = sp_box_int((_t%d.v.i >> %s) & 1); }\nelse ", tv, tr, tv, idxref);
@@ -3837,10 +3844,11 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
        single character at the index, or nil. The cls_id switch below only
        covers SP_TAG_OBJ variants, so without this tag arm a String receiver
        fell through and returned the seed (nil/0). */
-    if (ret == TY_POLY)
-      buf_printf(b, "if (sp_rbval_is_string(_t%d)) { _t%d = sp_box_str_fresh(sp_str_char_at_or_nil(sp_rbval_string_bytes(_t%d), %s)); }\nelse ", tv, tr, tv, idxref);
-    else if (ret == TY_STRING)
-      buf_printf(b, "if (sp_rbval_is_string(_t%d)) { _t%d = sp_str_char_at_or_nil(sp_rbval_string_bytes(_t%d), %s); }\nelse ", tv, tr, tv, idxref);
+    if (str_builtin && (ret == TY_POLY || ret == TY_STRING)) {
+      buf_puts(b, "if ("); emit_poly_str_guard(c, tv, name, b);
+      buf_printf(b, ") { _t%d = %ssp_str_char_at_or_nil(sp_rbval_string_bytes(_t%d), %s)%s; }\nelse ",
+                 tr, ret == TY_POLY ? "sp_box_str_fresh(" : "", tv, idxref, ret == TY_POLY ? ")" : "");
+    }
   }
 }
 

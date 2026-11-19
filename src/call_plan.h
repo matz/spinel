@@ -1176,9 +1176,9 @@ int cplan_string_missing(Compiler *c, int id, const char *name, int *hook, int *
 /* Does this call's String arm reach the original builtin before a reopen,
    or after a guard has excluded the undef? */
 int cplan_string_builtin_fallback(Compiler *c, int id, const char *name);
-/* The base String entry of a boxed set operation. */
-typedef enum { CP_STR_SETOP_NONE, CP_STR_SETOP_BUILTIN, CP_STR_SETOP_UNDEF } StringSetopArm;
-StringSetopArm cplan_string_setop_arm(Compiler *c, int id, const char *name);
+/* The pre-arm a boxed base String can take at this call. */
+typedef enum { CP_STR_NONE, CP_STR_BUILTIN, CP_STR_UNDEF } PolyStringArm;
+PolyStringArm cplan_poly_string_arm(Compiler *c, int id, const char *name);
 int cplan_super_needs_method_missing(Compiler *c, int id);
 int cplan_cmethod_visible(Compiler *c, int id, int ci, const char *name);
 /* The visibility of the method call id binds on class ci's chain (its class

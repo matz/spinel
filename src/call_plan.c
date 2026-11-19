@@ -9563,17 +9563,20 @@ static void cpoly_prearms_n(Compiler *c, int id, const char *name, int argc, con
   if (ps.cover) cpoly_family(p, cap, PB_COVER);
   if (ps.ctryconv) cpoly_family(p, cap, PB_TRY_CONVERT);
   if (ps.gcdlcm) cpoly_family(p, cap, PB_GCDLCM);
-  if (ps.ppack && sp_streq(name, "unpack1")) cpoly_family(p, cap, PB_UNPACK1);
+  if (ps.str_arm == CP_STR_BUILTIN && ps.ppack && sp_streq(name, "unpack1"))
+    cpoly_family(p, cap, PB_UNPACK1);
   if (ps.include) cpoly_family(p, cap, PB_INCLUDE);
-  if (ps.strdel && (ret == TY_POLY || ret == TY_STRING)) cpoly_family(p, cap, PB_STR_DELETE);
-  if (ps.strpart && (ret == TY_POLY || ret == TY_STR_ARRAY)) cpoly_family(p, cap, PB_STR_PARTITION);
-  if (ps.strsetop_n && cplan_string_setop_arm(c, id, name) != CP_STR_SETOP_NONE &&
+  if (ps.str_arm == CP_STR_BUILTIN) {
+    if (ps.strdel && (ret == TY_POLY || ret == TY_STRING)) cpoly_family(p, cap, PB_STR_DELETE);
+    if (ps.strpart && (ret == TY_POLY || ret == TY_STR_ARRAY)) cpoly_family(p, cap, PB_STR_PARTITION);
+    if (ps.strencode && pos_argc <= 2 && (ret == TY_POLY || ret == TY_STRING)) cpoly_family(p, cap, PB_STR_ENCODE);
+    if (ps.strsplit && (ret == TY_STR_ARRAY || ret == TY_POLY_ARRAY || ret == TY_POLY))
+      cpoly_family(p, cap, PB_STR_SPLIT_N);
+  }
+  if (ps.strsetop_n && ps.str_arm != CP_STR_NONE &&
       (sp_streq(name, "count") ? ret == TY_POLY || ret == TY_INT : ret == TY_POLY || ret == TY_STRING))
     cpoly_family(p, cap, PB_STR_SETOP);
   if (ps.pstore && ret == TY_POLY) cpoly_family(p, cap, PB_STORE);
-  if (ps.strencode && pos_argc <= 2 && (ret == TY_POLY || ret == TY_STRING)) cpoly_family(p, cap, PB_STR_ENCODE);
-  if (ps.strsplit && (ret == TY_STR_ARRAY || ret == TY_POLY_ARRAY || ret == TY_POLY))
-    cpoly_family(p, cap, PB_STR_SPLIT_N);
   if (ps.index) cpoly_family(p, cap, PB_INT_BITREF);
   /* the class-side arms read the keyword values' types when the keywords
      split off one by one */
@@ -9598,7 +9601,7 @@ static void cpoly_prearms_n(Compiler *c, int id, const char *name, int argc, con
      wide store) */
   if (callable && ((!ps.has_splat_arg && (ps.kw_pos || kwh >= 0)) || splat_last))
     cpoly_family(p, cap, PB_CALLABLE);
-  if (ps.kw_pos && ps.straset) cpoly_family(p, cap, PB_STR_ASET);
+  if (ps.kw_pos && ps.straset && ps.str_arm == CP_STR_BUILTIN) cpoly_family(p, cap, PB_STR_ASET);
   if (ps.kw_pos && !ps.has_splat_arg && cpoly_str_trial(c, id, name, argc, argv, atmp_ty, ret, p))
     cpoly_trial(p, cap, PT_STR);
   cpoly_cases_n(c, id, name, argc, argv, ret, atmp_ty, &ps, splat_a, p, cap);
@@ -9802,7 +9805,7 @@ int cplan_poly_has_family(const PolyPlan *p, int fam) {
 static int cpoly_str_trial(Compiler *c, int id, const char *name, int argc, const int *argv,
                            const TyKind *atmp_ty, TyKind ret, const PolyPlan *p) {
   if (!(poly_string_read_p(name) || (argc == 1 && sp_streq(name, "to_i")))) return 0;
-  if (nt_ref(c->nt, id, "block") >= 0) return 0;
+  if (nt_ref(c->nt, id, "block") >= 0 || cplan_poly_string_arm(c, id, name) != CP_STR_BUILTIN) return 0;
   for (int a = 0; a < argc; a++)
     if (subtree_has_side_effect(c, argv[a]) && comp_ntype(c, argv[a]) != atmp_ty[a]) return 0;
   TyKind bt = c->poly_builtin_ty && id < c->node_cap ? c->poly_builtin_ty[id] : TY_UNKNOWN;
@@ -9839,8 +9842,7 @@ static void cpoly_prearms0(Compiler *c, int id, const char *name, const PolySpec
   if (blockless && sp_streq(name, "puts")) cpoly_family(p, cap, PB_IO_PUTS);
   if (blockless && cpoly_name_in(name, ioz)) cpoly_family(p, cap, PB_IOZ);
   if (blockless && cpoly_name_in(name, reduce)) cpoly_family(p, cap, PB_REDUCE);
-  int sci = comp_core_class(c, CORE_STRING);
-  if (sci >= 0 && call_target(c, id, sci, name, 0, NULL) >= 0) return;   /* the reopen answers */
+  if (cplan_poly_string_arm(c, id, name) != CP_STR_BUILTIN) return;
   int fits = cpoly_name_in(name, strt_s) ? ret == TY_POLY || ret == TY_STRING
            : sp_streq(name, "bytes") ? ret == TY_POLY || ret == TY_INT_ARRAY
            : sp_streq(name, "chars") ? ret == TY_POLY || ret == TY_STR_ARRAY : 0;
@@ -10271,13 +10273,13 @@ int cplan_string_builtin_fallback(Compiler *c, int id, const char *name) {
   if (framed) elab_plan_leave(c);
   return state == ELAB_NO && !d;
 }
-StringSetopArm cplan_string_setop_arm(Compiler *c, int id, const char *name) {
+PolyStringArm cplan_poly_string_arm(Compiler *c, int id, const char *name) {
   int cls = comp_core_class(c, CORE_STRING);
-  if (cls < 0 || cplan_string_builtin_fallback(c, id, name)) return CP_STR_SETOP_BUILTIN;
+  if (cls < 0 || cplan_string_builtin_fallback(c, id, name)) return CP_STR_BUILTIN;
   int undef = cplan_undef_at(c, id, cls, name);
   if (undef < 0) undef = cplan_undef_before(c, id, cls, name) || cplan_undef_stops(c, id, cls, name);
-  if (undef) return cplan_has_method_missing(c, id, cls, 0) ? CP_STR_SETOP_NONE : CP_STR_SETOP_UNDEF;
-  return call_answers(c, id, cls, name, 0, NULL) ? CP_STR_SETOP_NONE : CP_STR_SETOP_BUILTIN;
+  if (undef) return cplan_has_method_missing(c, id, cls, 0) ? CP_STR_NONE : CP_STR_UNDEF;
+  return call_answers(c, id, cls, name, 0, NULL) ? CP_STR_NONE : CP_STR_BUILTIN;
 }
 /* The super a method's body is, unconditionally (`super`, `super(n, *a)`):
    its only statement; -1 for any other body */

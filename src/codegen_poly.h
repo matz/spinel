@@ -6,6 +6,7 @@
 #define SPINEL_CODEGEN_POLY_H
 
 #include "codegen_internal.h"
+#include "call_plan.h"
 
 int  class_is_prim_reopen(Compiler *c, int k);
 const int *comp_prim_reopen_classes(Compiler *c, int *n);   /* the classes it answers for, per class table */
@@ -95,6 +96,7 @@ int poly_class_reflect_arm(Compiler *c, int id, const char *name, int *cls_only)
 typedef struct {
   int index, fetch, pdelete, pdig, pvalues_at, pfirstn, include, intersect, arr_index, push, unshift, strdel, strpart, strsetop_n, pstore, straset, strsplit, pred, strencode, strftime, pmerge, pjoin, ppack, cover, gcdlcm, ctryconv;
   int has_splat_arg, kwh, pos_argc, kw_ds, kw_strkey, kw_pos, ncand;
+  PolyStringArm str_arm;
 } PolySpecialsN;
 void poly_specials_n(Compiler *c, int id, const char *name, int argc, const int *argv, PolySpecialsN *s);
 void poly_specials_n_splat(Compiler *c, const int *argv, PolySpecialsN *s, int *splat_a, int *splat_last);

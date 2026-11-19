@@ -12326,7 +12326,7 @@ TyKind infer_uncached(Compiler *c, int id) {
        the poly widened what it was passed to (`self.class.new(@size)`). A
        slot a declaration types keeps that type. */
     if ((ci->ivar_types[iv] == TY_UNKNOWN || ci->ivar_types[iv] == TY_POLY) &&
-        ivar_never_set_in(c, nm, cls_id)) return TY_NIL;
+        !class_ivar_pinned(ci, nm) && ivar_never_set_in(c, nm, cls_id)) return TY_NIL;
     /* an UNMARKED read of a shared-mutable string slot demotes to the plain
        string type (copy-read), mirroring the local-read demotion (#3227) */
     if (ci->ivar_types[iv] == TY_STRBUF) return TY_STRING;
@@ -12861,12 +12861,14 @@ TyKind infer_uncached(Compiler *c, int id) {
        the join the arms of an `if` make (a slot that cannot hold a nil, a
        Range or a bool, is boxed). Any other nil-typed expression is taken
        as one that diverges (a raise the folder has turned into a call).
-       Empty parentheses and a literal nil also carry a nil value. */
+       Empty parentheses, a literal nil and a read of an ivar nothing sets
+       (ivar_never_set_in) also carry a nil value. */
     if (et == TY_NIL && rt != TY_UNKNOWN && rt != TY_VOID && e >= 0) {
       int one;
       switch (vp_one(nt, e, VPS_NONE | VP_PARENS_ONLY, &one)) {
       case VP1_NODE:
-        if (is_yield_or_blk_param_call(c, one) || nt_kind(nt, one) == NK_NilNode) return ty_unify(et, rt);
+        if (is_yield_or_blk_param_call(c, one) || nt_kind(nt, one) == NK_NilNode ||
+            nt_kind(nt, one) == NK_InstanceVariableReadNode) return ty_unify(et, rt);
         break;
       case VP1_NIL: return ty_unify(et, rt);
       case VP1_MANY: break;

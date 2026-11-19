@@ -41530,11 +41530,12 @@ static int arg_reads_nil_default_param(Compiler *c, int a) {
   return 0;
 }
 /* Is argument a (-1: none) a nil an object parameter takes: a literal nil,
-   or a parameter already holding one (#5088)? */
+   a value typed nil (an ivar nothing sets), or a parameter already holding
+   one (#5088)? */
 static int obj_nil_arg(Compiler *c, int a) {
   const NodeTable *nt = c->nt;
   if (a < 0) return 0;
-  if (nt_kind(nt, a) == NK_NilNode) return 1;
+  if (nt_kind(nt, a) == NK_NilNode || infer_type(c, a) == TY_NIL) return 1;
   if (nt_kind(nt, a) != NK_LocalVariableReadNode) return 0;
   Scope *as = comp_scope_of(c, a);
   const char *an = nt_str(nt, a, "name");
@@ -41606,7 +41607,7 @@ static int mark_nullable_params_of_call(Compiler *c, int id, int mi) {
 /* Can an argument of call id, or a keyword's value, be nil, as
    mark_nullable_params_of_call would take it? */
 static int nil_arg_value(Compiler *c, int a) {
-  return a >= 0 && (infer_type(c, a) == TY_NIL || obj_nil_arg(c, a) || nullable_int_value(c, a) ||
+  return a >= 0 && (obj_nil_arg(c, a) || nullable_int_value(c, a) ||
                     arg_reads_nil_default_param(c, a) || box_nullable_arg(c, a));
 }
 static int call_has_nil_arg(Compiler *c, int id) {
@@ -56438,7 +56439,7 @@ static void an_phase_reconcile_check(Compiler *c) {
       if (iv < 0 || c->classes[sc->class_id].ivar_types[iv] != TY_POLY) continue;
       /* a slot only the backstop made poly, of an ivar never set: its
          read answers nil (infer_uncached), and so does the method */
-      if (ivar_never_set_in(c, ivn, sc->class_id)) continue;
+      if (!class_ivar_pinned(&c->classes[sc->class_id], ivn) && ivar_never_set_in(c, ivn, sc->class_id)) continue;
     }
     /* the value is a call THIS pass widened: the method answers it. Only a
        call this pass touched -- a tail call that was already poly says nothing

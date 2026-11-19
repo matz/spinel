@@ -70,3 +70,22 @@ class Unit < Data.define(:n)
 end
 
 p Span.new(1, 5).lo, Unit.new(n: 4).n
+
+# The nil such a read answers is a value: a rescue modifier keeps it beside
+# its rescue arm's Symbol, and an object parameter it reaches takes it.
+class Owner2
+  def v = 5
+end
+
+def owner_v(o) = o.nil? ? :none : o.v
+
+class Lookup
+  def initialize = (@b = 1)
+  def sym = (@missing rescue :fallback)
+  def num = (@missing rescue 3)
+  def str = (@missing rescue "s")
+  def owner = owner_v(@missing)
+end
+
+lk = Lookup.new
+p lk.sym, lk.sym.nil?, lk.num.nil?, lk.str.nil?, (lk.sym || :d), lk.owner, owner_v(Owner2.new)

@@ -48,11 +48,6 @@ int share_call_stores_block(Compiler *c, int n);
 int sh_may_hold(const Compiler *c, TyKind t);
 
 
-/* Once the analysis is final: mark each String-keyed Hash call's key that
-   reads a shared handle, with nothing run between the read and the call,
-   as strbuf_read_raw, so it hands over the live buffer instead of a copy. */
-void share_mark_borrows(Compiler *c);
-
 /* Does method scope mi answer no String: each expression its value can be
    (a nil among them) is none a String can be, by its type or form or by what
    is written to an instance variable it reads? A method whose values are

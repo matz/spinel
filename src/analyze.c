@@ -56927,9 +56927,6 @@ void analyze_program(Compiler *c) {
   /* the operand-order record: where each operand of a list is evaluated,
      from the settled types, before the String marks read it */
   AN_PHASE("operand_order", order_facts_build(c));
-  /* a String-keyed Hash's key borrows a handle's bytes, read off the final
-     types and flags */
-  share_mark_borrows(c);
   /* --share-strings: the methods whose value is a shared String's handle */
   AN_STEP_V("an_mark_return_origins", an_mark_return_origins(c));
   /* Identity operands can ask the settled call-return fact now. */

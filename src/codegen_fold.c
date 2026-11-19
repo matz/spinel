@@ -1128,7 +1128,7 @@ int emit_transform_hash_expr(Compiler *c, int id, Buf *b) {
   int conv_op = box_eligible ? fold_boxed_conversion_operand(c, lastv) : -1;
   int box_last = box_eligible && conv_op < 0 && share_plan_producer_unlifted(c, lastv, NULL) != SPK_OPERAND &&
                  share_plan_producer_unlifted(c, lastv, NULL) != SPK_NONE &&
-                 share_plan_of(c, lastv, SPR_BOX, NULL).form == SPF_HANDLE;
+                 share_plan_of(c, lastv, SPR_BOX).form == SPF_HANDLE;
   int oset_v = !keys && dvn && dr.val == TY_INT && !fold_body_has_next(c, body) &&
                (bret == TY_POLY || bret == TY_UNKNOWN || node_has_oint_form(c, lastv));
   /* a `next <v>` answers for this pair: the body writes a slot and the

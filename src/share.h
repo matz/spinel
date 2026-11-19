@@ -26,7 +26,6 @@ typedef struct {
                            SHK_RET: the method scope */
   int cid;              /* SHK_IVAR: the owning class */
   const char *name;     /* SHK_IVAR/GVAR/CVAR/CONST */
-  int node;             /* a node that names the holder, for a message */
 } ShareHolder;
 
 /* (Re)build c->share's tables from the current types and calls. */
@@ -155,7 +154,7 @@ enum { SPF_BYTES, SPF_HANDLE, SPF_WRAP, SPF_COPY };   /* form */
    object_id, __id__); or it boxes the value (a poly slot, a container's
    element, a poly argument), the role a box's emitter asks for (SPR_BOX),
    which the memo never holds */
-enum { SPR_TAKE, SPR_READ, SPR_TEST, SPR_STORE, SPR_IDENTITY, SPR_BOX };
+enum { SPR_TAKE, SPR_READ, SPR_STORE, SPR_IDENTITY, SPR_BOX };
 /* the producer that supplies a value's handle (share_plan_producer), one
    kind per route codegen hands a String on by; each face renders each
    kind (codegen_str.c):
@@ -201,7 +200,7 @@ int share_plan_multi_renders(Compiler *c, int mw, int e);
 /* ...and emit_expr gives it as the handle already (share_plan.c)? */
 int share_plan_emits_handle(Compiler *c, int e);
 typedef struct {
-  unsigned char need, supply, form;
+  unsigned char need, form;
   unsigned char kind;   /* SPK_*, which share_plan_of fills where the supply
                            was asked (a need above bytes) */
 } SharePlan;
@@ -211,14 +210,11 @@ void share_plan_build(Compiler *c);
 void share_plan_free(Compiler *c);
 /* The plan of node v for a consumer in `role` (SPR_*) where codegen is:
    the value's need from the memo where the node is read as itself, else
-   asked live (*memo, which may be NULL, says which); the supply always
-   asked live, as it reads repr_of. */
-SharePlan share_plan_of(Compiler *c, int v, int role, int *memo);
+   asked live. The supply is always asked live because it reads repr_of. */
+SharePlan share_plan_of(Compiler *c, int v, int role);
 /* The plan for a consumer in `role` of node v, whose need is given. */
 SharePlan share_plan_with_need(Compiler *c, int v, int role, int need);
-/* The role of the consumer node v sits in, as the program has it (a taker
-   for a node made after seal), and the role of its second consumer, or -1:
-   a call answering its receiver's String has its own answer tested. */
+/* The role of v's consumer. A node made after seal has a taking consumer. */
 int share_plan_role(Compiler *c, int v);
 /* The producer of node v's handle where codegen is (SPK_*), asked live as
    the supply is, whatever a consumer needs; *operand (may be NULL) is the

@@ -1299,7 +1299,7 @@ int exc_msg_handle(Compiler *c, int arg, Buf *b) {
    opened (-1 otherwise); exc_msg_release closes it after the exception. */
 int exc_msg_holds(Compiler *c, int arg) {
   return arg >= 0 && comp_ntype(c, arg) == TY_STRING &&
-         share_plan_of(c, arg, SPR_TAKE, NULL).form == SPF_HANDLE;
+         share_plan_of(c, arg, SPR_TAKE).form == SPF_HANDLE;
 }
 int exc_msg_hold(Compiler *c, int arg, Buf *b, Buf *mh, int *mark) {
   *mark = -1;

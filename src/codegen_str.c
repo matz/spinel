@@ -296,7 +296,7 @@ static int str_render_ident(Compiler *c, int v, int form, StrForm *sf) {
     for (int i = 0; i < n - 1; i++) emit_stmt(c, bv[i], g_pre, 0);
     StrForm last;
     memset(&last, 0, sizeof last);
-    int lf = str_render_ident(c, bv[n - 1], share_plan_of(c, bv[n - 1], SPR_IDENTITY, NULL).form, &last);
+    int lf = str_render_ident(c, bv[n - 1], share_plan_of(c, bv[n - 1], SPR_IDENTITY).form, &last);
     g_pre = sv;
     buf_printf(b, "({ %s%s; })", pre.p ? pre.p : "", last.expr.p ? last.expr.p : "");
     sf->cty = last.cty;
@@ -449,13 +449,6 @@ void str_new_handle_close(Buf *b) {
   buf_puts(b, ")");
 }
 
-/* A box for the String expression already rendered in e. */
-void str_box_bytes(Buf *b, const char *e) {
-  /* (one representation: the text may be the handle whatever the plan
-     read it as, so it is boxed through its face) */
-  buf_printf(b, "SP_STR_BOX(%s)", e);
-}
-
 /* The box of a String Range's endpoint held in temp `t` (an sp_StrRange):
    the handle the Range keeps for it (field `h`), else the String it holds
    (field `e`) as bytes, else nil for an open end. */
@@ -558,7 +551,7 @@ static int str_box_by_kind(Compiler *c, int node, StrForm *sf) {
   case SPK_BLOCK_VALUE:
     if (nt_kind(c->nt, nt_paren_single(c->nt, node)) == NK_CallNode && nt_ref(c->nt, nt_paren_single(c->nt, node), "block") >= 0 &&
         !arg_ran_first(node, 0) && !emit_boxed_lift(c, node) &&
-        share_plan_of(c, node, SPR_BOX, NULL).form == SPF_HANDLE) {
+        share_plan_of(c, node, SPR_BOX).form == SPF_HANDLE) {
       Buf hb; memset(&hb, 0, sizeof hb);
       if (emit_strbuf_route(c, node, &hb)) {
         str_box_handle(b, hb.p);
@@ -617,7 +610,7 @@ int emit_str_form(Compiler *c, int v, int role, int face, unsigned dest, StrForm
     sf->cty = TY_POLY;
     return str_box_by_kind(c, v, sf) ? 0 : -1;
   }
-  int form = share_plan_of(c, v, role, NULL).form;
+  int form = share_plan_of(c, v, role).form;
   switch (face) {
   case SPX_ID:
     sf->cty = TY_INT;
@@ -679,7 +672,7 @@ void emit_str_form_box(Compiler *c, int v, Buf *b) {
   TyKind t = comp_ntype(c, v);
   /* (a reader's handle is taken by emit_boxed's route for it: the
      identity face has no arm for a field read) */
-  if ((t != TY_STRING && t != TY_STRBUF) || share_plan_of(c, v, share_plan_role(c, v), NULL).form != SPF_HANDLE ||
+  if ((t != TY_STRING && t != TY_STRBUF) || share_plan_of(c, v, share_plan_role(c, v)).form != SPF_HANDLE ||
       (share_plan_producer(c, v, NULL) == SPK_READER ||
        share_plan_producer(c, v, NULL) == SPK_POLY_ARMS)) {
     emit_boxed(c, v, b);

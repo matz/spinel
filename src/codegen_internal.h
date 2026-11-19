@@ -494,12 +494,11 @@ void emit_boxed_by_repr(Compiler *c, int node, Buf *b);
 /* The box of a String handle (SP_BUILTIN_STRBUF), written in one place
    (codegen_str.c): of text already written, of a temp, or around text the
    caller emits between the open and the close; `nullable` boxes a NULL
-   handle as nil; str_box_bytes boxes the bytes of a String */
+   handle as nil. */
 void str_box_handle(Buf *b, const char *h);
 void str_box_handle_tmp(Buf *b, int tmp);
 void str_box_open(Buf *b, int nullable);
 void str_box_close(Buf *b);
-void str_box_bytes(Buf *b, const char *e);
 /* Borrow bytes from a handle expression or from an already held temp. */
 void str_read_handle(Buf *b, const char *h);
 void str_read_handle_tmp(Buf *b, int tmp);

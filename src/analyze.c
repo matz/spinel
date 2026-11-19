@@ -27817,7 +27817,7 @@ static ShareHolder *slot_holders(Compiler *c, int *out_n) {
     if (n == cap) { cap *= 2; hs = realloc(hs, sizeof *hs * (size_t)cap); \
                     if (!hs) { fprintf(stderr, "spinel: out of memory\n"); exit(1); } } \
     hs[n].kind = (unsigned char)(k); hs[n].scope = (s_); hs[n].local = (l_); \
-    hs[n].cid = (cid_); hs[n].name = (nm_); hs[n].node = -1; n++; } while (0)
+    hs[n].cid = (cid_); hs[n].name = (nm_); n++; } while (0)
   for (int s = 0; s < c->nscopes; s++) {
     Scope *sc = &c->scopes[s];
     for (int i = 0; i < sc->nlocals; i++) {

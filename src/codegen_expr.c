@@ -1077,10 +1077,8 @@ int loop_has_valued_break(Compiler *c, int root) {
   return 0;
 }
 
-/* A call that runs Kernel's raise (cplan_kernel_raise): it diverges, so in
-   a value position it yields no value (its C form is void). A branch whose
-   value is such a call must be emitted as a statement, not assigned to the
-   result temp. */
+/* Kernel's raise never reaches the branch result. Its C form may be void
+   or boxed; the result slot has its own representation. */
 static int node_is_raise(Compiler *c, int nd) {
   return nd >= 0 && cplan_kernel_raise(c, nd);
 }
@@ -1106,6 +1104,13 @@ static void emit_ternary_arm(Compiler *c, int nd, TyKind res, Buf *b) {
    arm is its oint form, a nil arm its nil */
 static void emit_ternary_arm_o(Compiler *c, int nd, TyKind res, int res_o, Buf *b) {
   const NodeTable *nt = c->nt;
+  /* The call can start with cause or message setup before the actual raise. */
+  if (node_is_raise(c, nt_paren_single(nt, nd))) {
+    buf_puts(b, "((void)(");
+    emit_expr_for_effect(c, nd, b);
+    buf_printf(b, "), %s)", res_o && oint_kind(res) ? oint_nil(res) : raise_tail_value_c(c, res));
+    return;
+  }
   if (node_is_empty_container(c, nd)) nd = nt_paren_single(c->nt, nd);   /* `([])` is `[]` */
   NodeKind bk = nt_kind(nt, nd);
   if (res_o && oint_kind(res)) { emit_oint_expr(c, nd, res, b); return; }
@@ -5460,11 +5465,6 @@ static int emit_if_expr(Compiler *c, int id, Buf *b, const NodeTable *nt, const 
          still counted) takes the arm in its oint form, as the unfolded pair
          renders each arm: emitted raw, a plain sp_int went into the sp_oint */
       int fo = cond_res_oint(c, id, fres);
-      if (ln == 1) {
-        if (fo) emit_ternary_arm_o(c, lb[0], fres, 1, b);
-        else if (fbox || fempty) emit_ternary_arm(c, lb[0], fres, b); else emit_expr(c, lb[0], b);
-        return 1;
-      }
       /* The leading statements go into the PRELUDE, not inside a statement
          expression around the value. The last element is emitted with
          emit_expr, and an arm that is itself a conditional hoists its own
@@ -5475,9 +5475,10 @@ static int emit_if_expr(Compiler *c, int id, Buf *b, const NodeTable *nt, const 
          won and a branch reached its tail without running its own first
          line (#4139). The prelude keeps them in source order. */
       for (int j = 0; j < ln - 1; j++) emit_stmt(c, lb[j], g_pre, g_indent);
-      if (fo) emit_ternary_arm_o(c, lb[ln - 1], fres, 1, b);
-      else if (fbox || fempty) emit_ternary_arm(c, lb[ln - 1], fres, b);
-      else emit_expr(c, lb[ln - 1], b);
+      int tail = lb[ln - 1];
+      if (fo || fbox || fempty || node_is_raise(c, nt_paren_single(nt, tail)))
+        emit_ternary_arm_o(c, tail, fres, fo, b);
+      else emit_expr(c, tail, b);
       return 1;
     }
   }

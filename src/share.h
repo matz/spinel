@@ -221,11 +221,6 @@ int share_plan_targets_cover(Compiler *c, int u);
    box of them, is the literal's handle, and
    its identity is its bytes' pointer, as a frozen String's is? */
 int share_plan_call_answers_literal(Compiler *c, int v);
-/* Is node v, a String call a store lifts into a handle (poly_strbuf_lift),
-   boxed by the handle its producer supplies (the plan's SPR_BOX form
-   with the object a lift needs), not from its bytes? A call whose route
-   boxes cannot render (strbuf_box_unrendered) is not. Asked live. */
-int share_plan_box_handle(Compiler *c, int v);
 
 
 

@@ -1426,9 +1426,9 @@ static inline const char *sp_File_read_n(sp_File *f, sp_int n) {
   /* a negative length is CRuby's ArgumentError, checked before the stream */
   if (n < 0) sp_raise_cls("ArgumentError", sp_sprintf("negative length %lld given", (long long)n));
   sp_io_check_readable(f);
+  if (n == 0) return sp_str_empty_binary();
   if (SP_ATOMIC_LOAD(&f->timeout, __ATOMIC_ACQUIRE)) return sp_File_read_timed(f, n);
   sp_io_wait_readable(f);
-  if (n == 0) return sp_str_empty_binary();
   char *r = sp_str_alloc((size_t)n);
   size_t got;
   if (f->own_buf) {   /* reads straight into r, and can park with it */

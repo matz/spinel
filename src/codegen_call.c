@@ -20664,6 +20664,36 @@ int emit_cells_answer(Compiler *c, const CplanCells *cs, Buf *b) {
 }
 /* See codegen_call_arms.h. Each cell holds an Integer as the entries' arms
    read it (emit_cells_test) */
+/* See codegen_call_arms.h. */
+int emit_vis_word_absent(Compiler *c, int id, Buf *b) {
+  const NodeTable *nt = c->nt;
+  if (visibility_of_name(nt_str(nt, id, "name")) <= BVIS_MODULE_FUNCTION) return 0;
+  int vcid = g_class_body_id >= 0 ? g_class_body_id : (comp_scope_of(c, id) ? comp_scope_of(c, id)->class_id : -1);
+  int vargs = vcid >= 0 ? nt_ref(nt, id, "arguments") : -1, van = 0;
+  const int *vav = vargs >= 0 ? nt_arr(nt, vargs, "arguments", &van) : NULL;
+  for (int vi = 0; vi < van; vi++) {
+    NodeKind vak = nt_kind(nt, vav[vi]);
+    const char *mn = NULL;
+    if (vak == NK_SymbolNode) mn = nt_str(nt, vav[vi], "value");
+    else if (vak == NK_StringNode) mn = nt_str(nt, vav[vi], "unescaped");
+    else if (vak == NK_DefNode && nt_ref(nt, vav[vi], "receiver") >= 0) mn = nt_str(nt, vav[vi], "name");
+    if (!mn) continue;
+    char wb[256]; wb[0] = '\0';
+    setter_base_name(mn, wb, sizeof wb);
+    /* the name is defined where the word runs: a def, or a reader or
+       writer whose attr_* has run by this call, as the call plan
+       answers at it */
+    int found = call_target(c, id, vcid, mn, CT_NOFACE, NULL) >= 0 ||
+                call_attr_target(c, id, vcid, mn, CT_ATTR, NULL) ||
+                (wb[0] && call_attr_target(c, id, vcid, wb, CT_ATTR | CT_WRITER, NULL));
+    if (!found) {
+      buf_printf(b, "sp_raise_cls(\"NameError\", \"undefined method '%s' for class '%s'\")",
+                 mn, class_ruby_name(c, vcid) ? class_ruby_name(c, vcid) : c->classes[vcid].name);
+      return 1;
+    }
+  }
+  return 0;
+}
 int emit_vis_cell_write(Compiler *c, int id, Buf *b) {
   const LocalVar *g;
   int v = 0, n = 0, only;

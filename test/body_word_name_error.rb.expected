@@ -1,0 +1,5 @@
+NameError
+[:cs, true]
+[NameError, "undefined method 'nope' for class 'K'"]
+[NameError, "undefined method 'nope2' for class 'K'"]
+[NameError, "undefined method 'nope3' for class 'K'"]

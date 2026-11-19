@@ -20244,35 +20244,12 @@ static int emit_call_stmt(Compiler *c, int id, Buf *b, int indent, const NodeTab
           buf_puts(b, "sp_raise_cls(\"NoMethodError\", \"undefined method 'protected' for main\");\n");
         return 1;
       }
-      if (visibility_of_name(nm) > BVIS_MODULE_FUNCTION) {
-        int vcid = g_class_body_id >= 0 ? g_class_body_id
-                 : (comp_scope_of(c, id) ? comp_scope_of(c, id)->class_id : -1);
-        if (vcid >= 0) {
-          int vargs = nt_ref(nt, id, "arguments");
-          int van = 0;
-          const int *vav = vargs >= 0 ? nt_arr(nt, vargs, "arguments", &van) : NULL;
-          for (int vi = 0; vi < van; vi++) {
-            NodeKind vak = nt_kind(nt, vav[vi]);
-            const char *mn = NULL;
-            if (vak == NK_SymbolNode) mn = nt_str(nt, vav[vi], "value");
-            else if (vak == NK_StringNode) mn = nt_str(nt, vav[vi], "unescaped");
-            if (!mn) continue;
-            char wb[256]; wb[0] = '\0';
-            setter_base_name(mn, wb, sizeof wb);
-            /* the name is defined where the word runs: a def, or a reader or
-               writer whose attr_* has run by this call, as the call plan
-               answers at it */
-            int found = call_target(c, id, vcid, mn, CT_NOFACE, NULL) >= 0 ||
-                        call_attr_target(c, id, vcid, mn, CT_ATTR, NULL) ||
-                        (wb[0] && call_attr_target(c, id, vcid, wb, CT_ATTR | CT_WRITER, NULL));
-            if (!found) {
-              emit_indent(b, indent);
-              buf_printf(b, "sp_raise_cls(\"NameError\", \"undefined method '%s' for class '%s'\");\n",
-                         mn, class_ruby_name(c, vcid) ? class_ruby_name(c, vcid) : c->classes[vcid].name);
-              return 1;
-            }
-          }
-        }
+      {
+        Buf eb; memset(&eb, 0, sizeof eb);
+        int absent = emit_vis_word_absent(c, id, &eb);
+        if (absent) { emit_indent(b, indent); buf_printf(b, "%s;\n", eb.p); }
+        free(eb.p);
+        if (absent) return 1;
       }
       /* (a word inside an expression emitted as a statement writes its
          visibility cell: cplan_vis_cell_after) */

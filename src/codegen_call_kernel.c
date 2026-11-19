@@ -241,8 +241,9 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
   {
     int vk = vis_decl_call(c, id), cw = 0;
     if (vk) {
+      /* (one that names a method the class has none of raises NameError where it runs, as its statement does) */
       Buf wb; memset(&wb, 0, sizeof wb);
-      if ((cw = emit_vis_cell_write(c, id, &wb))) buf_printf(b, "(%s, ", wb.p);
+      if ((cw = emit_vis_word_absent(c, id, &wb)) || (cw = emit_vis_cell_write(c, id, &wb))) buf_printf(b, "(%s, ", wb.p);
       free(wb.p);
     }
     if (vk == VIS_DECL_NIL) buf_puts(b, "0");

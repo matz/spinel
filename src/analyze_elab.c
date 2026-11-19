@@ -2533,7 +2533,7 @@ static int lr_body_self(Compiler *c, const int *par, int n, int node, int e) {
 /* A visibility word a method body runs on the methods it names
    (`private :m`, `protected :a, :b`, `public [:c]`, `private def m`): one
    with no receiver but self and at least one argument, each a literal name,
-   an array of them, or a def. Its visibility (BVIS_*), else 0; a bare word
+   an array of them, or a def with no receiver. Its visibility (BVIS_*), else 0; a bare word
    there changes nothing, and module_function's copies are left out. */
 static int lr_body_word(const NodeTable *nt, int node) {
   int bvis = nt_kind(nt, node) == NK_CallNode ? visibility_of_name(nt_str(nt, node, "name")) : 0;
@@ -2543,6 +2543,8 @@ static int lr_body_word(const NodeTable *nt, int node) {
   for (int i = 0; i < ac; i++) {
     int en = 1;
     const int *ev = nt_kind(nt, av[i]) == NK_ArrayNode ? nt_arr(nt, av[i], "elements", &en) : &av[i];
+    /* (a `def self.m` makes a class method, whose name the word looks up among the instance methods: NameError) */
+    if (nt_kind(nt, av[i]) == NK_DefNode && nt_ref(nt, av[i], "receiver") >= 0) return 0;
     for (int k = 0; k < en; k++)
       if (!vis_arg_name(nt, ev[k]) && (ev != &av[i] || nt_kind(nt, av[i]) != NK_DefNode)) return 0;
   }

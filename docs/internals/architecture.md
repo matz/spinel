@@ -105,9 +105,10 @@ held across a block. UTF-8 character positions count each valid sequence
 once and each malformed byte separately. The length cache records only
 validated text, so validation and optimized character seeks can reuse it.
 Exception construction keeps the message's String object and projects
-bytes where the constructor reads them. When File.join walks boxed path
-components, it
-keeps the bytes of each selected segment through later conversions.
+bytes where the constructor reads them. Multiple assignment holds each
+String through later values and writes. A value-producing assignment
+returns those same objects. File.join keeps the bytes of each boxed path
+component through later conversions.
 Native package readers that declare a handle result return it through the
 same call view, including inherited bindings and calls through super.
 A native binding uses the producer's declared String

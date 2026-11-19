@@ -7154,10 +7154,8 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
         continue;
       TyKind vt = vk == NK_SplatNode ? TY_POLY_ARRAY : repr_of(c, v).as_ty;
       if (vt == TY_UNKNOWN) continue;
-      /* --share-strings: an element the String plan gives as the handle is
-         rendered through the handle face into a rooted handle temp, which the
-         write stores and whose String the value reads (ran_first_bind_read) */
-      if (i >= 0 && masgn_face_elem(c, id, v)) {
+      /* Both the assignment and its result use the held String object. */
+      if (i >= 0 && (vt == TY_STRING || vt == TY_STRBUF)) {
         Buf hw; memset(&hw, 0, sizeof hw);
         emit_str_form_handle(c, v, &hw);
         int th = ++g_tmp;

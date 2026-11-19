@@ -107,171 +107,6 @@ typedef struct {
 static void interp_plan_free(InterpPlan *pl) {
   free(pl->lits.p); free(pl->decls.p); free(pl->wp); free(pl->flat);
 }
-/* --share-strings: is part k of parts[0..n), whose value is expr, a call
-   publishing the handle of a String the rule shares
-   (call_publishes_shared_handle) before a later part that can change a String in place
-   (operand_may_change_string)? CRuby reads every part's String once all of
-   them ran (`"#{x.change} #{x.change}"`); its bytes taken as the part ran,
-   the result kept the String as it was then. */
-static int interp_part_reads_late(Compiler *c, const int *parts, int n, int k, int expr) {
-  /* (a call publishing the handle of a String the rule shares, a read of a
-     slot that is the handle, a boxed receiver's call whose arms answer one:
-     any value the String plan can hand over as the handle) */
-  int u = nt_paren_single(c->nt, expr);
-  int holds = call_publishes_shared_handle(c, expr);
-  if (!holds && u >= 0 && comp_ntype(c, u) == TY_STRING && !arg_ran_first(u, 0))
-    holds = share_plan_with_need(c, u, SPR_TAKE, SPN_OBJECT).form == SPF_HANDLE &&
-            share_plan_producer(c, u, NULL) != SPK_NONE;
-  if (!holds) return 0;
-  for (int j = k + 1; j < n; j++)
-    if (operand_may_change_string(c, parts[j])) return 1;
-  return 0;
-}
-
-/* ...is nm, called with argc arguments on a String, a conversion (to_s,
-   to_str, +@) that turns a nil receiver into a String? */
-static int interp_nil_conversion(const char *nm, int argc) {
-  return argc == 0 && is_string_conversion(nm);
-}
-/* ...is nm a String method that answers its receiver or nil (`upcase!`,
-   `sub!`, `strip!`)? */
-static int interp_link_nilable(const char *nm, int argc, int has_blk) {
-  return (bop_answers_self(TY_STRING, nm, argc, has_blk) & BOPF_SELF_OR_NIL) != 0;
-}
-/* ...is n a writer of the instance variable iv, an attr_writer's or a
-   `def s=` (`o.s = x`, `o.s, y = ...`), on any receiver, self among them? */
-static int interp_is_ivar_writer(const NodeTable *nt, int n, const char *iv) {
-  NodeKind k = nt_kind(nt, n);
-  const char *nm = k == NK_CallNode || k == NK_CallTargetNode ? nt_str(nt, n, "name") : NULL;
-  size_t l = nm ? strlen(nm) : 0;
-  return l > 1 && nm[l - 1] == '=' && iv[0] == '@' && strlen(iv + 1) == l - 1 && !strncmp(nm, iv + 1, l - 1);
-}
-/* --share-strings: what the subtree at n does to the variable v reads (a
-   local, an instance variable or a global of that name): bit 1, a String
-   mutator called on it; bit 2, a write that rebinds it. */
-static int interp_changes_var(Compiler *c, int n, NodeKind vk, const char *vn) {
-  const NodeTable *nt = c->nt;
-  if (n < 0) return 0;
-  NodeKind k = nt_kind(nt, n);
-  int bits = 0;
-  if (k == NK_CallNode && vn) {
-    int r = nt_ref(nt, n, "receiver");
-    const char *nm = nt_str(nt, n, "name");
-    if (r >= 0 && nt_kind(nt, r) == vk && nt_str(nt, r, "name") && sp_streq(nt_str(nt, r, "name"), vn) && nm &&
-        (is_string_rebind_mutator(nm) || bop_name_mutates(nm, 0)))
-      bits |= 1;
-  }
-  if (vk == NK_InstanceVariableReadNode && vn && interp_is_ivar_writer(nt, n, vn)) bits |= 2;
-  if (vn && nt_str(nt, n, "name") && sp_streq(nt_str(nt, n, "name"), vn) &&
-      ((vk == NK_LocalVariableReadNode && (k == NK_LocalVariableWriteNode || k == NK_LocalVariableOperatorWriteNode ||
-                                           k == NK_LocalVariableOrWriteNode || k == NK_LocalVariableAndWriteNode ||
-                                           k == NK_LocalVariableTargetNode)) ||
-       (vk == NK_InstanceVariableReadNode && (k == NK_InstanceVariableWriteNode || k == NK_InstanceVariableOperatorWriteNode ||
-                                              k == NK_InstanceVariableOrWriteNode || k == NK_InstanceVariableAndWriteNode ||
-                                              k == NK_InstanceVariableTargetNode)) ||
-       (vk == NK_GlobalVariableReadNode && (k == NK_GlobalVariableWriteNode || k == NK_GlobalVariableOperatorWriteNode ||
-                                            k == NK_GlobalVariableOrWriteNode || k == NK_GlobalVariableAndWriteNode ||
-                                            k == NK_GlobalVariableTargetNode))))
-    bits |= 2;
-  /* code the walk cannot see into: a method of the program's own, a dispatch,
-     a send, a proc's call, a block, a yield, a super. It may change the
-     String in place through a parameter it is handed (`f(s)`), and it may
-     rebind a global or an instance variable (`def reset = (@s = +"z")`), or a
-     local a proc captured: the part then keeps the String it named. */
-  {
-    const char *nm = k == NK_CallNode ? nt_str(nt, n, "name") : NULL;
-    int has_blk = k == NK_CallNode && nt_ref(nt, n, "block") >= 0;
-    int callish = nm && is_rebinding_reach_call(nm);
-    int user = k == NK_CallNode && (cplan_user(c, n).mi >= 0 || cplan_user(c, n).dispatch != CP_NONE);
-    int opaque = user || has_blk || callish || k == NK_YieldNode || k == NK_SuperNode || k == NK_ForwardingSuperNode ||
-                 k == NK_LambdaNode;
-    if (opaque && vn) {
-      if (user) {
-        int args = nt_ref(nt, n, "arguments"), an = 0;
-        const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
-        for (int i = 0; i < an; i++)
-          if (nt_kind(nt, av[i]) == vk && nt_str(nt, av[i], "name") && sp_streq(nt_str(nt, av[i], "name"), vn)) bits |= 1;
-      }
-      Scope *sc = comp_scope_of(c, n);
-      if (vk == NK_LocalVariableReadNode) {
-        if (has_blk || callish || k == NK_YieldNode || k == NK_LambdaNode) bits |= 2;
-      }
-      else if (vk != NK_InstanceVariableReadNode || !sc || subtree_may_write_ivar(c, n, vn, sc->class_id, 0))
-        bits |= 2;
-    }
-  }
-  for (int i = 0; i < nt_num_refs(nt, n); i++) bits |= interp_changes_var(c, nt_ref_at(nt, n, i), vk, vn);
-  for (int i = 0; i < nt_num_arrs(nt, n); i++) {
-    int m = 0; const int *ids = nt_arr_at(nt, n, i, &m);
-    for (int j = 0; j < m; j++) bits |= interp_changes_var(c, ids[j], vk, vn);
-  }
-  return bits;
-}
-/* ...the instance variable a call to a method of the program's own that
-   answers it (`def m = @s`, an attr_reader) reads: its name, or NULL */
-static const char *interp_reader_var(Compiler *c, int call, char *buf, size_t cap) {
-  const NodeTable *nt = c->nt;
-  if (nt_kind(nt, call) != NK_CallNode) return NULL;
-  const CallPlan p = cplan_user(c, call);
-  if (p.mi >= 0 && p.dispatch == CP_DIRECT) {
-    int body = c->scopes[p.mi].body, n = 0;
-    const int *st = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &n) : NULL;
-    int last = n == 1 ? st[0] : (body >= 0 && nt_kind(nt, body) == NK_InstanceVariableReadNode ? body : -1);
-    return last >= 0 && nt_kind(nt, last) == NK_InstanceVariableReadNode ? nt_str(nt, last, "name") : NULL;
-  }
-  /* an attr_reader of the class the call is made in (self) */
-  const char *nm = nt_str(nt, call, "name");
-  int r = nt_ref(nt, call, "receiver");
-  Scope *sc = comp_scope_of(c, call);
-  if (p.mi < 0 && nm && (r < 0 || nt_kind(nt, r) == NK_SelfNode) && nt_ref(nt, call, "arguments") < 0 &&
-      nt_ref(nt, call, "block") < 0 && sc && sc->class_id >= 0 && !sc->is_cmethod &&
-      call_attr_target(c, -1, sc->class_id, nm, 0, NULL)) {
-    snprintf(buf, cap, "@%s", nm);
-    return buf;
-  }
-  return NULL;
-}
-/* ...is part k, a read of a variable that holds its bytes (no handle), changed
-   in place by a later part and rebound by none? CRuby reads the String after
-   the last part ran, so the variable is read there (a rebinding write keeps
-   the String the part named). */
-static int interp_var_read_late(Compiler *c, const int *parts, int n, int k, int expr, int *base) {
-  const NodeTable *nt = c->nt;
-  int u = nt_paren_single(c->nt, expr);
-  if (u < 0) return 0;
-  int kind = 1, b = u, nil_converted = 0;
-  /* a String method that answers its receiver, or nil (`s << "a"`,
-     `s.upcase!`, `s.itself`, `s.to_s`, `+s`, `s&.itself`), over a variable: the
-     part is the variable's String itself, the call run where it stands and the
-     String read after the last part */
-  while (b >= 0 && nt_kind(nt, b) == NK_CallNode) {
-    const char *nm = nt_str(nt, b, "name");
-    int r = nt_paren_single(c->nt, nt_ref(nt, b, "receiver")), argc = call_plain_argc(c, b);
-    if (!nm || r < 0 || comp_ntype(c, r) != TY_STRING || cplan_user(c, b).mi >= 0) break;
-    int self = (bop_answers_self(TY_STRING, nm, argc, nt_ref(nt, b, "block") >= 0) & (BOPF_SELF | BOPF_SELF_OR_NIL)) ||
-               (argc == 0 && is_string_self_answer(nm));
-    if (!self) break;
-    /* (a nil from a bang below a conversion reads as "" there, not as the variable) */
-    if (nil_converted && interp_link_nilable(nm, argc, nt_ref(nt, b, "block") >= 0)) return 0;
-    if (interp_nil_conversion(nm, argc)) nil_converted = 1;
-    kind = 2;
-    b = r;
-  }
-  if (kind == 2 && (nt_kind(nt, b) == NK_CallNode)) kind = 1, b = u;
-  /* (a call that answers an instance variable is a read of it) */
-  char rvb[96];
-  const char *rv = kind == 1 ? interp_reader_var(c, b, rvb, sizeof rvb) : NULL;
-  NodeKind uk = rv ? NK_InstanceVariableReadNode : nt_kind(nt, b);
-  const char *un = rv ? rv : nt_str(nt, b, "name");
-  if (uk != NK_LocalVariableReadNode && uk != NK_InstanceVariableReadNode && uk != NK_GlobalVariableReadNode) return 0;
-  if (!un || comp_ntype(c, u) != TY_STRING || comp_ntype(c, b) != TY_STRING || arg_ran_first(u, 0)) return 0;
-  int bits = 0;
-  for (int j = k + 1; j < n; j++) bits |= interp_changes_var(c, parts[j], uk, un);
-  if (bits != 1) return 0;
-  if (base) *base = b;
-  return kind;
-}
-
 static void interp_read_held_bytes(Buf *out, int target, int handle) {
   buf_printf(out, "const char *_t%d = sp_str_or_empty(sp_String_cstr_nil(_t%d)); "
                   "SP_GC_ROOT(_t%d); size_t _l%d = sp_str_byte_len(_t%d); ",
@@ -298,10 +133,7 @@ static void interp_plan(Compiler *c, int id, InterpPlan *pl) {
   int nwp = 0, ndyn_or_scalar = 0;
   Buf lits; memset(&lits, 0, sizeof lits);
   Buf decls; memset(&decls, 0, sizeof decls);
-  /* a part that is a shared String slot's read is a fresh copy of its
-     bytes; CRuby interpolates the String as it is when the whole string
-     is built, so beside a later part that runs code (`"#{a}#{a << "x"}"`)
-     the copy is read after every part, here */
+  /* Borrow the current bytes of held parts when this literal joins them. */
   Buf late; memset(&late, 0, sizeof late);
   long fixed_cap = 0;
 
@@ -395,24 +227,6 @@ static void interp_plan(Compiler *c, int id, InterpPlan *pl) {
         buf_puts(&decls, "; ");
         snprintf(vexpr, sizeof vexpr, "_t%d", tv);
       }
-      /* --share-strings: such a part's handle is taken here, in order, and
-         read as the String it holds after every part ran (late) */
-      if (!vexpr[0] && bn == 1 && interp_part_reads_late(c, parts, n, k, expr)) {
-        Buf hb; memset(&hb, 0, sizeof hb);
-        emit_strbuf_handle_of(c, expr, &hb);
-        int hv = ++g_tmp, tv3 = ++g_tmp;
-        buf_printf(&decls, "sp_String *_t%d = SP_STR_HDL(%s); SP_GC_ROOT(_t%d); ", hv, hb.p ? hb.p : "NULL", hv);
-        interp_read_held_bytes(&late, tv3, hv);
-        free(hb.p);
-        wp[nwp].kind = WK_DYN; wp[nwp].tmp = tv3; wp[nwp].plain = 0; wp[nwp].neutral = -1;
-        wp[nwp].lit_off = 0; wp[nwp].lit_esc_len = 0; wp[nwp].lit_len = 0;
-        nwp++;
-        ndyn_or_scalar++;
-        continue;
-      }
-      /* --share-strings: a call answering its receiver, over a variable that a
-         later part changes in place, is run here and its String read late */
-      int late_call = t == TY_STRING && !vexpr[0] && interp_var_read_late(c, parts, n, k, expr, NULL) == 2;
       /* Build this part's conversion expression. Bounded scalars keep their
          native C type (written digit-by-digit later); everything else
          converts to a marker-carrying string whose byte length is summed. */
@@ -458,18 +272,14 @@ static void interp_plan(Compiler *c, int id, InterpPlan *pl) {
         wkind = WK_INT;
         EMIT_IV();
       }
-      else if (t == TY_STRING) {
-        /* a nullable string (NULL) interpolates as the empty string (a part
-           read after the last part keeps its nil, to read nothing then) */
-        if (late_call) EMIT_IV();
-        /* (one-String mode: a value of either face, `"#{file || "-"}"`
-           with file a String-or-nil handle) */
-        else { buf_puts(&conv, "sp_str_or_empty(SP_STR_B("); EMIT_IV(); buf_puts(&conv, "))"); }
-      }
-      else if (t == TY_STRBUF) {
-        /* (one representation: a part whose value is a handle, a write's in
-           value position; read through its face) */
-        buf_puts(&conv, "sp_str_or_empty(SP_STR_B("); EMIT_IV(); buf_puts(&conv, "))");
+      else if (t == TY_STRING || t == TY_STRBUF) {
+        /* Take the object before the next part runs and borrow its current
+           payload only when the literal joins its parts. A final operand
+           has no later code that can change its String. */
+        held_string = k < last_operand;
+        buf_puts(&conv, held_string ? "SP_STR_HDL(" : "sp_str_or_empty(SP_STR_B(");
+        EMIT_IV();
+        buf_puts(&conv, held_string ? ")" : "))");
       }
       else if (t == TY_FLOAT) {
         /* and a nullable Float holding nil writes nothing too */
@@ -705,45 +515,8 @@ static void interp_plan(Compiler *c, int id, InterpPlan *pl) {
         buf_printf(&decls, "sp_String *_t%d = %s; SP_GC_ROOT(_t%d); ", th, conv.p, th);
         interp_read_held_bytes(&late, tv2, th);
       }
-      else if (t == TY_STRING && !vexpr[0] && repr_of(c, expr).strbuf_src == RS_HANDLE &&
-               (nt_kind(nt, expr) == NK_LocalVariableReadNode || nt_kind(nt, expr) == NK_InstanceVariableReadNode) &&
-               /* (not a define_method loop variable the literal stands in for) */
-               !(g_dm_subst_name && nt_kind(nt, expr) == NK_LocalVariableReadNode && sp_streq(nt_str(nt, expr, "name"), g_dm_subst_name))) {
-        /* one representation: the part is held as its handle where it is
-           evaluated and read when the parts are joined, as CRuby collects
-           the parts' objects first (a later part that rebinds the variable
-           leaves this part's String; one that changes it in place shows) */
-        int th = ++g_tmp;
-        Buf hb; memset(&hb, 0, sizeof hb);
-        /* (a local through emit_local_ref: a captured or renamed one is not
-           its bare lv_ name) */
-        if (nt_kind(nt, expr) == NK_LocalVariableReadNode) emit_local_ref(c, expr, nt_str(nt, expr, "name"), &hb);
-        else emit_strbuf_handle_of(c, expr, &hb);
-        buf_printf(&decls, "sp_String *_t%d = SP_STR_HDL(%s); SP_GC_ROOT(_t%d); ", th, hb.p ? hb.p : "NULL", th);
-        interp_read_held_bytes(&late, tv2, th);
-        free(hb.p);
-      }
       else {
-        int defer = 0;
-        if (bn == 1 && t == TY_STRING && !vexpr[0] && strbuf_read_copies(c, expr))
-          for (int k2 = k + 1; k2 < n && !defer; k2++)
-            defer = nt_kind(nt, parts[k2]) == NK_EmbeddedStatementsNode && subtree_has_side_effect(c, parts[k2]);
-        /* --share-strings: a variable that holds its bytes, changed in place by a later part */
-        int late_base = -1;
-        if (!defer && t == TY_STRING && !vexpr[0]) defer = interp_var_read_late(c, parts, n, k, expr, &late_base);
-        if (defer == 2) {
-          /* the call runs here, its String is read after the last part
-             (nil, a bang that changed nothing, reads as nothing) */
-          int tr = ++g_tmp;
-          Buf rd; memset(&rd, 0, sizeof rd);
-          emit_expr(c, late_base, &rd);
-          buf_printf(&decls, "const char *_t%d = %s; SP_GC_ROOT(_t%d); ", tr, conv.p ? conv.p : "NULL", tr);
-          buf_printf(&late, "const char *_t%d = _t%d ? sp_str_or_empty(%s) : sp_str_empty; SP_GC_ROOT(_t%d); "
-                     "size_t _l%d = sp_str_byte_len(_t%d); ", tv2, tr, rd.p ? rd.p : "sp_str_empty", tv2, tv2, tv2);
-          free(rd.p);
-        }
-        else
-        buf_printf(defer ? &late : &decls, "const char *_t%d = %s; SP_GC_ROOT(_t%d); size_t _l%d = sp_str_byte_len(_t%d); ",
+        buf_printf(&decls, "const char *_t%d = %s; SP_GC_ROOT(_t%d); size_t _l%d = sp_str_byte_len(_t%d); ",
                    tv2, conv.p ? conv.p : "sp_str_empty", tv2, tv2, tv2);
       }
       free(conv.p);

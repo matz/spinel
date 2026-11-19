@@ -82,9 +82,10 @@ and private conversion buffers can borrow its payload through
 The ENV read paths that return a String default or a missing-key block's
 String use the same result view. The selected branch hands back its
 String handle directly.
-The IO output-buffer emitters return the rooted buffer through that view
-when the result is a String. Calls that can also return a wait Symbol keep
-their boxed result.
+IO reads hold the output buffer through argument evaluation. The runtime
+converts it once and writes through the resulting String handle. A
+successful read returns that handle. Nonblocking reads with a possible
+wait Symbol keep their boxed result.
 The native String result passes its handle directly through C. Byte
 consumers project the contents and take a snapshot where the read is
 held across a block. UTF-8 character positions count each valid sequence

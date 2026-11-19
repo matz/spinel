@@ -235,6 +235,8 @@ const char *handle_attr_store(const char *n, int write); /* Thread Fiber: thread
 int is_frozen_value_class(const char *n); /* Integer Float Symbol NilClass TrueClass FalseClass Range */
 int is_nonblock_io(const char *n); /* read_nonblock write_nonblock */
 int is_io_read(const char *n); /* read */
+int is_io_sysread(const char *n);
+int io_output_buffer_pos(const char *n);
 
 int is_mul_or_pow(const char *n); /* * ** */
 int is_unary_sign(const char *n); /* +@ -@ */

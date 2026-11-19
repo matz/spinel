@@ -1,0 +1,23 @@
+convert
+[true, "ab"]
+convert
+[true, "cd"]
+convert
+[true, "ef"]
+convert
+[true, "gh"]
+convert
+[nil, ""]
+[true, ""]
+[true, ""]
+[true, ""]
+[true, "grow"]
+"abc"
+[true, "unchanged"]
+[true, [195, 169], "UTF-8"]
+[true, [], "UTF-8"]
+[true, [195, 169], "ASCII-8BIT"]
+[true, [], "ASCII-8BIT"]
+[true, "ab"]
+[true, "c"]
+[nil, ""]

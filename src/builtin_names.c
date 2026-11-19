@@ -1939,6 +1939,13 @@ int is_nil_method(const char *n) {
 }
 
 int is_io_read(const char *n) { return n && sp_streq(n, "read"); }
+int is_io_sysread(const char *n) { return sp_streq(n, "sysread"); }
+int io_output_buffer_pos(const char *n) {
+  if (!n) return -1;
+  if (sp_streq(n, "pread")) return 2;
+  if (is_io_read(n) || is_io_sysread(n) || sp_streq(n, "readpartial") || sp_streq(n, "read_nonblock")) return 1;
+  return -1;
+}
 int is_positional_io(const char *n) {
   return sp_streq(n, "pread") || sp_streq(n, "pwrite");
 }

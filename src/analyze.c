@@ -41647,8 +41647,9 @@ static int mark_nullable_params_of_new(Compiler *c, int id, int mi) {
   int recv = nt_ref(nt, id, "receiver");
   if (ne != CPT_UNKNOWN || recv < 0 || !call_has_nil_arg(c, id)) return changed;
   for (int ci = 0; ci < c->nclasses; ci++) {
-    if (!c->classes[ci].instantiated || comp_class_is_module(c, &c->classes[ci]) ||
-        cls_fact_excludes_class_value(c, recv, ci)) continue;
+    /* the classes the dispatch builds a constructor arm for */
+    if (!cplan_new_arm_class(c, recv, ci) || !c->classes[ci].instantiated ||
+        comp_class_is_module(c, &c->classes[ci])) continue;
     int initm = cplan_new_arm_initialize(c, id, ci);
     if (initm >= 0 && initm != mi) changed |= mark_nullable_params_of_call(c, id, initm);
   }

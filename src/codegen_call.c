@@ -19358,11 +19358,6 @@ static int emit_array_arith_call(Compiler *c, int id, Buf *b) {
        the coerce path above did not claim it: at run time the object's own
        #coerce answers, or the TypeError CRuby raises does -- refusing to
        compile made an ordinary "can't be coerced" into a build failure. */
-    /* nil answers none of these (`nil + 1`, an ivar nothing sets): the
-       general call's missing-method path raises CRuby's NoMethodError, as
-       it does for `nil.foo`; refusing made a program that reads such an
-       ivar a build failure (the boxed operator would read nil as 0) */
-    if (recv >= 0 && rt == TY_NIL) return 0;
     if (recv >= 0 && (rt == TY_UNKNOWN || a0 == TY_UNKNOWN ||
                       (ty_is_object(a0) &&
                        (rt == TY_INT || rt == TY_FLOAT || rt == TY_BIGINT || rt == TY_RATIONAL)))) {
@@ -19411,6 +19406,14 @@ static int emit_array_arith_call(Compiler *c, int id, Buf *b) {
         nt_kind(nt, recv) == NK_LocalVariableReadNode &&
         nt_kind(nt, argv[0]) == NK_LocalVariableReadNode &&
         nt_ref(nt, id, "block") < 0 && !nt_safe_nav(nt, id)) return 0;
+    /* a nil receiver (`nil + 1`, an ivar nothing sets: held as nil) whose
+       call the plan proves raises is the general call's, whose
+       missing-method gate raises CRuby's NoMethodError after the operands,
+       as for `nil.foo`; refusing made such a program a build failure */
+    if (recv >= 0 && repr_of(c, recv).as_ty == TY_NIL) {
+      char own[128];
+      if (cplan_unrouted(c, id, own, sizeof own, NULL) == CU_RAISES) return 0;
+    }
     unsupported(c, id, "arithmetic");
   }
   return 0;

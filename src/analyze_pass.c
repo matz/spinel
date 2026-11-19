@@ -873,9 +873,9 @@ int ivw_shared_next(int rec) { return ivw_shared_ix.next[rec]; }
    ivar write (every kind: `=`, `||=`, `&&=`, `op=`, a multiple-assignment or
    rescue target) notes its name with the class whose method or body holds
    it, -1 where that is no class (a top-level method, which any object
-   answers); each attr writer a class has (ClassInfo.writers, and the
-   singleton's) and each Struct or Data member notes its name with that
-   class. Everything may be set when the program can set an ivar it does
+   answers); each attr writer the load record registers on a class side
+   (elab_entries, those under a run-time condition too) and each Struct or
+   Data member notes its name with that class. Everything may be set when the program can set an ivar it does
    not spell, or in an object it does not name: an instance_variable_set or
    an instance_eval/exec (called, or named for a send or a method object), a
    define_singleton_method, an attr writer of a name it computes,
@@ -886,7 +886,7 @@ int ivw_shared_next(int rec) { return ivw_shared_ix.next[rec]; }
    scope-index epoch tick) and when the classes or their shape change. */
 typedef struct { ANameHash names; int *head, hcap; int *cls, *next, n, cap; } IvnSet;
 static IvnSet ivn_w;   /* "@x": the ivar writes */
-static IvnSet ivn_a;   /* "x": the attr writers */
+static IvnSet ivn_a;   /* "x=": the attr writers */
 static int ivn_all = 0;
 static const Compiler *ivn_c = NULL;
 static const NodeTable *ivn_nt = NULL;
@@ -921,12 +921,6 @@ static void ivn_note(IvnSet *v, const char *nm, int cls) {
   v->cls[v->n] = cls; v->next[v->n] = v->head[k]; v->head[k] = v->n++;
 }
 
-static int ivn_dyn_writer(const char *s) {
-  return s && (sp_streq(s, "instance_variable_set") || is_instance_eval_family(s) ||
-               sp_streq(s, "define_singleton_method") || sp_streq(s, "Marshal") ||
-               sp_streq(s, "YAML") || sp_streq(s, "Psych"));
-}
-
 static void ivn_build(Compiler *c) {
   const NodeTable *nt = c->nt;
   ivn_reset(&ivn_w); ivn_reset(&ivn_a);
@@ -943,25 +937,30 @@ static void ivn_build(Compiler *c) {
       ivn_note(&ivn_w, nm, w);
     }
   }
+  /* the attr writers the load record registers, those under a run-time
+     condition too (ELAB_ENTRY_MAY), by their writer name ("x="); main's
+     (cls < 0) are Object's, which any object answers */
+  int nwe = 0;
+  ElabEntry *we = elab_entries(c, 1u << LR_WRITER | ELAB_ENTRY_MAY, &nwe);
+  for (int i = 0; i < nwe; i++) if (we[i].name) ivn_note(&ivn_a, we[i].name, we[i].cls >= 0 ? we[i].cls : -1);
+  free(we);
+  /* a Struct's or Data's members: the slots its generated constructor
+     and writers set, which no write node spells */
   for (int k = 0; k < c->nclasses; k++) {
     ClassInfo *ci = &c->classes[k];
-    for (int i = 0; i < ci->nwriters; i++) if (ci->writers[i]) ivn_note(&ivn_a, ci->writers[i], k);
-    for (int i = 0; i < ci->nsg_writers; i++) if (ci->sg_writers[i]) ivn_note(&ivn_a, ci->sg_writers[i], k);
-    /* a Struct's or Data's members: the slots its generated constructor
-       and writers set, which no write node spells */
     if (ci->is_struct || ci->is_data)
       for (int i = 0; i < ci->nmembers && i < ci->nivars; i++) if (ci->ivars[i]) ivn_note(&ivn_w, ci->ivars[i], k);
   }
-  NT_FOREACH_KIND(nt, NK_SymbolNode, id) if (ivn_dyn_writer(nt_str(nt, id, "value"))) ivn_all = 1;
-  NT_FOREACH_KIND(nt, NK_StringNode, id) if (ivn_dyn_writer(nt_str(nt, id, "content"))) ivn_all = 1;
-  NT_FOREACH_KIND(nt, NK_ConstantReadNode, id) if (ivn_dyn_writer(nt_str(nt, id, "name"))) ivn_all = 1;
-  NT_FOREACH_KIND(nt, NK_ConstantPathNode, id) if (ivn_dyn_writer(nt_str(nt, id, "name"))) ivn_all = 1;
+  NT_FOREACH_KIND(nt, NK_SymbolNode, id) if (is_unspelled_ivar_writer(nt_str(nt, id, "value"))) ivn_all = 1;
+  NT_FOREACH_KIND(nt, NK_StringNode, id) if (is_unspelled_ivar_writer(nt_str(nt, id, "content"))) ivn_all = 1;
+  NT_FOREACH_KIND(nt, NK_ConstantReadNode, id) if (is_unspelled_ivar_writer(nt_str(nt, id, "name"))) ivn_all = 1;
+  NT_FOREACH_KIND(nt, NK_ConstantPathNode, id) if (is_unspelled_ivar_writer(nt_str(nt, id, "name"))) ivn_all = 1;
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
     const char *cn = nt_str(nt, id, "name");
     if (!cn) continue;
     /* (a C extension's manifest call, whichever pass registers it) */
-    if (ivn_dyn_writer(cn) || !strncmp(cn, "__cext_", 7)) { ivn_all = 1; continue; }
-    if (!is_attr_writer_family(cn) && !sp_streq(cn, "attr")) continue;
+    if (is_unspelled_ivar_writer(cn) || !strncmp(cn, "__cext_", 7)) { ivn_all = 1; continue; }
+    if (!is_attr_may_write(cn)) continue;
     /* a name the program computes: the class table cannot list it */
     int a = nt_ref(nt, id, "arguments"), an = 0;
     const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
@@ -1005,7 +1004,9 @@ int ivar_never_set_in(Compiler *c, const char *name, int cls) {
       ivn_ncext != c->n_cext_extensions + c->n_cext_classes ||
       ivn_gen != comp_scope_index_gen() || ivn_shape != comp_class_shape_gen()) ivn_build(c);
   if (ivn_all) return 0;
-  return !ivn_set_by(c, &ivn_w, name, cls) && !ivn_set_by(c, &ivn_a, name + 1, cls);
+  char wn[256];   /* "@x" -> its writer's name "x=" */
+  if (snprintf(wn, sizeof wn, "%s=", name + 1) >= (int)sizeof wn) return 0;
+  return !ivn_set_by(c, &ivn_w, name, cls) && !ivn_set_by(c, &ivn_a, wn, cls);
 }
 
 /* `x, y = obj.m` where the callee's body ends in `return a, b` with statically

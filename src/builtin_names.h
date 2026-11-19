@@ -151,6 +151,7 @@ int is_endpoint_query(const char *n); /* first last: collection or Range endpoin
 int is_map_alias(const char *n); /* map collect: Enumerable transformation aliases */
 int is_instance_eval_family(const char *n); /* instance_eval instance_exec */
 int is_reflective_access(const char *n); /* instance_variable_get/set, class_variable_get/set, const_get/set, remove_* */
+int is_unspelled_ivar_writer(const char *n); /* instance_variable_set, instance_eval/exec, define_singleton_method, Marshal, YAML, Psych */
 int is_name_checked_call(const char *n); /* CRuby's answer turns on the name given: a NameError for one not allowed or not there */
 int is_reflective_listing(const char *n); /* instance_variables class_variables constants */
 int is_local_reflection(const char *n); /* eval binding local_variable_get/set local_variables */
@@ -800,6 +801,7 @@ int is_method_naming_call(const char *n);  /* define_method define_singleton_met
 int is_attr_name(const char *n);           /* attr attr_reader attr_writer attr_accessor: the Module methods that define accessors */
 int is_attr_decl_reader(const char *n);    /* attr attr_reader attr_accessor, and Spinel's class-body attribute attributes: declare a reader of each name */
 int is_attr_decl_writer(const char *n);    /* attr_writer attr_accessor attribute attributes: declare a writer of each name */
+int is_attr_may_write(const char *n);      /* is_attr_decl_writer's, and attr (`attr :x, true`) */
 int class_method_vis_of_name(const char *n); /* private_class_method public_class_method: BVIS_PRIVATE / BVIS_PUBLIC, else 0 */
 int is_refine_name(const char *n);         /* refine */
 int is_enum_helper_name(const char *n);   /* __enum_pairs __enum_count_int: the compiler's helpers a receiverless call names */

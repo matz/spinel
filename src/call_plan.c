@@ -3352,6 +3352,12 @@ int cplan_new_arm_initialize(Compiler *c, int id, int ci) {
   if (framed) elab_plan_leave(c);
   return cplan_hook_target(c, live ? id : -1, ci, "initialize", NULL);
 }
+/* See call_plan.h. */
+int cplan_new_arm_class(Compiler *c, int recv, int ci) {
+  if (ci < 0 || ci >= c->nclasses) return 0;
+  const ClassInfo *k = &c->classes[ci];
+  return !is_builtin_reopen(k->name) && !k->is_native_class && !cls_fact_excludes_class_value(c, recv, ci);
+}
 /* The window step of cplan_implied_target, for a call node id makes */
 static int ct_implied_at(Compiler *c, int id, int cls, const char *name, MethodLookup *m) {
   const LrDef *ds[VER_MAX_ARMS];

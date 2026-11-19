@@ -493,7 +493,7 @@ void sp_poly_puts(sp_RbVal v)
         }
         case SP_BUILTIN_RANGE: puts(sp_range_str(*(sp_Range *)v.v.p)); break;
         case SP_BUILTIN_FLOAT_RANGE: puts(sp_frange_inspect(*(sp_FloatRange *)v.v.p)); break;
-        case SP_BUILTIN_STR_RANGE: puts(sp_srange_to_s(SP_SRANGE_OF(v.v.p))); break;
+        case SP_BUILTIN_STR_RANGE: puts(sp_srange_to_s(sp_srange_value(v.v.p))); break;
         /* a Time subclass instance, boxed as its Time, shows through its
            class's to_s (an override of its own included) */
         case SP_BUILTIN_TIME: sp_puts_str_line(sp_poly_time_display(v, 0, NULL)); break;
@@ -569,7 +569,7 @@ static const char *sp_poly_to_s_impl(sp_RbVal v, size_t *length)
         case SP_BUILTIN_POLY_ARRAY: return sp_PolyArray_inspect((sp_PolyArray *)v.v.p);
         case SP_BUILTIN_RANGE: return sp_range_str(*(sp_Range *)v.v.p);
         case SP_BUILTIN_FLOAT_RANGE: return sp_frange_inspect(*(sp_FloatRange *)v.v.p);
-        case SP_BUILTIN_STR_RANGE: return sp_srange_to_s(SP_SRANGE_OF(v.v.p));
+        case SP_BUILTIN_STR_RANGE: return sp_srange_to_s(sp_srange_value(v.v.p));
         case SP_BUILTIN_TIME: return sp_poly_time_display(v, 0, length);
         case SP_BUILTIN_STRBUF: return sp_display_counted_bytes(sp_String_cstr((sp_String *)v.v.p), length);   /* live buffer (#3227) */
         case SP_BUILTIN_METHOD: return sp_method_desc_cstr((sp_BoundMethod *)v.v.p);
@@ -921,7 +921,7 @@ const char *sp_poly_inspect(sp_RbVal v)
         case SP_BUILTIN_POLY_ARRAY: return sp_PolyArray_inspect((sp_PolyArray *)v.v.p);
         case SP_BUILTIN_RANGE:     return sp_Range_inspect((sp_Range *)v.v.p);
         case SP_BUILTIN_FLOAT_RANGE: return sp_frange_inspect(*(sp_FloatRange *)v.v.p);
-        case SP_BUILTIN_STR_RANGE: return sp_srange_inspect(SP_SRANGE_OF(v.v.p));
+        case SP_BUILTIN_STR_RANGE: return sp_srange_inspect(sp_srange_value(v.v.p));
         case SP_BUILTIN_TIME:      return sp_poly_time_display(v, 1, NULL);
       case SP_BUILTIN_STRBUF: return sp_str_inspect(sp_String_cstr((sp_String *)v.v.p));   /* (#3227) */
       case SP_BUILTIN_METHOD: return sp_method_desc_cstr((sp_BoundMethod *)v.v.p);
@@ -1381,6 +1381,12 @@ static sp_RbVal sp_poly_pair_copy(sp_RbVal e) {
   return sp_box_poly_array(p);
 }
 
+static int sp_srange_to_h_first(const char *member, void *found) {
+  (void)member;
+  *(sp_bool *)found = 1;
+  return 1;
+}
+
 sp_RbVal sp_poly_to_h_m(sp_RbVal v)
 {
   if (v.tag == SP_TAG_NIL) return sp_box_obj(sp_SymPolyHash_new(), SP_BUILTIN_SYM_POLY_HASH);
@@ -1462,10 +1468,18 @@ sp_RbVal sp_poly_to_h_m(sp_RbVal v)
     if (sp_range_count(*(sp_Range *)v.v.p) <= 0) return sp_box_obj(sp_SymPolyHash_new(), SP_BUILTIN_SYM_POLY_HASH);
     sp_raise_cls("TypeError", "wrong element type Integer (expected array)");
   }
-  /* a String Range likewise, its elements Strings */
+  /* Test the walk: a digit Range can yield members even if min is nil. */
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_STR_RANGE && v.v.p) {
-    if (!sp_srange_min_v(SP_SRANGE_OF(v.v.p))) return sp_box_obj(sp_SymPolyHash_new(), SP_BUILTIN_SYM_POLY_HASH);
-    sp_raise_cls("TypeError", "wrong element type String (expected array)");
+    SP_GC_ROOT_RBVAL(v);
+    sp_StrRange r = sp_srange_value(v.v.p);
+    const char *first = sp_srange_first(r), *last = sp_srange_last(r);
+    if (!first) sp_raise_cls("TypeError", "can't iterate from NilClass");
+    sp_bool found = !last;
+    if (last) sp_str_upto_each(first, last, r.excl, sp_srange_to_h_first, &found);
+    if (found)
+      sp_raise_cls("TypeError", r.sym ? "wrong element type Symbol (expected array)"
+                                     : "wrong element type String (expected array)");
+    return sp_box_obj(sp_SymPolyHash_new(), SP_BUILTIN_SYM_POLY_HASH);
   }
   sp_raise_nomethod(sp_nomethod_msg("to_h", v));  /* "for true", "for an instance of String", as CRuby words it */
 }

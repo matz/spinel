@@ -9559,15 +9559,7 @@ static void emit_arg_temp(Compiler *c, int v) {
      in the temp (view_bind_o below): `a[i] = xs.max` stores the nil */
   int to = !wshare && oint_kind(at) && node_is_oint(c, v);
   if (wshare && at == TY_STRBUF) buf_printf(&hb, "_t%d", th);
-  else if (srange) {
-    /* the handle's read where the Range keeps it, the plain read of what
-       it holds where it keeps none: no String the rule shares */
-    char rt[24]; snprintf(rt, sizeof rt, "_t%d", tr);
-    emit_srange_kept_test(c, stail, rt, &hb);
-    buf_printf(&hb, " ? sp_strbuf_read(_t%d) : ", th);
-    size_t arm_at = hb.len;
-    emit_expr(c, stail, &hb);
-  }
+  else if (srange) buf_printf(&hb, "sp_strbuf_read(_t%d)", th);
   /* a bang (or a conditional with one on an arm) ran for its handle, which is
      the String's or nil: its bytes are the handle's read, where the node's
      Repr says handle */
@@ -10890,9 +10882,7 @@ void emit_pd_param_bind(Compiler *c, Scope *m, int i, int uid, const char *val, 
      default can collect while this named copy is their only root. */
   else if (pt == TY_STR_RANGE) {
     emit_indent(g_pre, g_indent);
-    buf_printf(g_pre, "SP_GC_ROOT_STR(lv_%s.first); SP_GC_ROOT_STR(lv_%s.last);", uniq, uniq);
-    { char ref[64]; snprintf(ref, sizeof ref, "lv_%s", uniq); emit_srange_handle_roots(c, ref, g_pre); }
-    buf_puts(g_pre, "\n");
+    buf_printf(g_pre, "SP_GC_ROOT_SRANGE(lv_%s);\n", uniq);
   }
   emit_pd_cell_alias(c, plv, uniq);
   /* Register the rename AFTER emitting temp i so param i+1's default reads

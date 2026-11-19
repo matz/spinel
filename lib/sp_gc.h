@@ -146,9 +146,8 @@ static inline void sp_gc_cleanup(int *p) { sp_gc_nroots = *p; }
    byte is exactly 0xfe -- safe on arbitrary memory, unlike sp_gc_mark's
    header walk. Use this for string parameters in runtime helpers. */
 #define SP_GC_ROOT_STR(v) int SP_CLEANUP(_sp_gc_root_pop) _SP_GC_CONCAT(_sp_gcr_, __COUNTER__) = _sp_gc_root_push((void**)((uintptr_t)&(v) | (uintptr_t)2))
-/* a String Range by value: its endpoint strings and, built --share-strings,
-   the handles they came from (#8321) */
-#define SP_GC_ROOT_SRANGE(v) SP_GC_ROOT_STR((v).first); SP_GC_ROOT_STR((v).last); SP_GC_ROOT((v).hf); SP_GC_ROOT((v).hl)
+/* A by-value String Range owns its two endpoint handles. */
+#define SP_GC_ROOT_SRANGE(v) SP_GC_ROOT((v).first); SP_GC_ROOT((v).last)
 #define SP_GC_RESTORE() sp_gc_nroots = _gc_saved
 
 /* ---- root frames ----
@@ -864,10 +863,8 @@ static inline void sp_cell_scan_rbval(void *p) { sp_mark_rbval(*(sp_RbVal *)p); 
    strings to mark (sp_box_srange's scan, for the cell). */
 static inline void sp_cell_scan_srange(void *p) {
   sp_StrRange *r = (sp_StrRange *)p;
-  if (r->first) sp_mark_string(r->first);
-  if (r->last) sp_mark_string(r->last);
-  if (r->hf) sp_gc_mark(r->hf);
-  if (r->hl) sp_gc_mark(r->hl);
+  sp_gc_mark(r->first);
+  sp_gc_mark(r->last);
 }
 /* A captured Proc rides in an sp_int cell as (sp_int)(uintptr_t)ptr -- the cell
    is an integer slot, but what it holds is a collectable object, and without a

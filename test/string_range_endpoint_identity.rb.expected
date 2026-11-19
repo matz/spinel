@@ -1,0 +1,17 @@
+[:identity, true, true, true, true, true, true, true, "ac", false]
+[:minmax, true, true, true]
+[:mutate, "ab", "ab", "ae", true, true, "ad"]
+[:empty, nil, nil, nil, nil]
+[:order, true, true, true, "different"]
+[:frozen, true, true]
+[:open, nil, nil, true, true]
+[:exceptions, RangeError, RangeError]
+wrong element type String (expected array)
+{}
+{}
+{}
+can't iterate from NilClass
+wrong element type String (expected array)
+wrong element type Symbol (expected array)
+{}
+undefined method 'to_h' for true

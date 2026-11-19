@@ -1359,17 +1359,13 @@ int emit_call_freeze_dup_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
   }
   /* TY_STRING freeze: update the variable to the frozen copy and return it */
   if (recv >= 0 && argc == 0 && sp_streq(name, "freeze") && comp_ntype(c, recv) == TY_STRING) {
-    /* --share-strings: a String Range's begin / end freezes the String the
-       Range holds: a kept endpoint's handle, which frozen? reads (#8321),
-       else the bytes it holds, in place */
     int se = strbuf_route_srange_end(c, recv);
     if (se) {
-      const char *h = se == 1 ? "hf" : "hl", *e = se == 1 ? "first" : "last";
       int t = ++g_tmp;
-      buf_printf(b, "({ sp_StrRange _t%d = ", t);
+      buf_printf(b, "({ sp_String *_t%d = (", t);
       emit_srange_end_recv(c, recv, b);
-      buf_printf(b, "; SP_GC_ROOT(_t%d.%s); _t%d.%s ? (sp_String_freeze((sp_String *)_t%d.%s), sp_strbuf_read((sp_String *)_t%d.%s))"
-                    " : sp_str_freeze_val(_t%d.%s); })", t, h, t, h, t, h, t, h, t, e);
+      buf_printf(b, ").%s; SP_GC_ROOT(_t%d); sp_strbuf_read(sp_String_freeze(_t%d)); })",
+                 se == 1 ? "first" : "last", t, t);
       return 1;
     }
     const char *rtyf = nt_type(nt, recv);

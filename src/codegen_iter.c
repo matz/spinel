@@ -7543,25 +7543,19 @@ void emit_srange_walk_open(Compiler *c, int recv, int stride, char *elem, size_t
   int tr = ++g_tmp, tk = ++g_tmp, ta = ++g_tmp, tx = ++g_tmp, ti = ++g_tmp, tn = ++g_tmp, tc = ++g_tmp;
   g_srange_walk_tr = tr; g_srange_walk_recv = recv;
   emit_indent(b, indent);
-  buf_printf(b, "sp_StrRange _t%d = ", tr); emit_expr(c, recv, b); buf_puts(b, ";\n");
+  buf_printf(b, "sp_StrRange _t%d = ", tr); emit_expr(c, recv, b);
+  buf_printf(b, "; SP_GC_ROOT_SRANGE(_t%d);\n", tr);
   emit_indent(b, indent);
   buf_printf(b, "sp_int _t%d = ", tk);
   if (stride >= 0) emit_int_expr(c, stride, b); else buf_puts(b, "1");
   buf_puts(b, ";\n");
-  /* --share-strings: an end the Range keeps as a handle is read off it
-     (#8321): the walk starts from the begin's read face, a String of its
-     own (sp_srange_first), and the end is there if either form is */
-  {
-    emit_indent(b, indent);
-    buf_printf(b, "SP_GC_ROOT(_t%d.hf); SP_GC_ROOT(_t%d.hl);\n", tr, tr);
-    emit_indent(b, indent);
-    buf_printf(b, "const char *_t%d = sp_srange_first(_t%d); SP_GC_ROOT(_t%d);\n", tx, tr, tx);
-    emit_indent(b, indent);
-    buf_printf(b, "if (!_t%d) sp_raise_cls(\"TypeError\", \"can't iterate from NilClass\");\n", tx);
-    emit_indent(b, indent);
-    buf_printf(b, "sp_StrArray *_t%d = (_t%d.hl || _t%d.last) ? sp_srange_to_a(_t%d) : NULL; SP_GC_ROOT(_t%d);\n",
-               ta, tr, tr, tr, ta);
-  }
+  emit_indent(b, indent);
+  buf_printf(b, "const char *_t%d = sp_srange_first(_t%d); SP_GC_ROOT_STR(_t%d);\n", tx, tr, tx);
+  emit_indent(b, indent);
+  buf_printf(b, "if (!_t%d) sp_raise_cls(\"TypeError\", \"can't iterate from NilClass\");\n", tx);
+  emit_indent(b, indent);
+  buf_printf(b, "sp_StrArray *_t%d = _t%d.last ? sp_srange_to_a(_t%d) : NULL; SP_GC_ROOT(_t%d);\n",
+             ta, tr, tr, ta);
   emit_indent(b, indent);
   buf_printf(b, "const char *_t%d = NULL; SP_GC_ROOT(_t%d);\n", tn, tn);
   emit_indent(b, indent);

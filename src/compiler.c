@@ -2021,16 +2021,53 @@ int comp_cmethod_in_class(Compiler *c, int class_id, const char *name) {
 static unsigned cmc_shape = 0;
 void comp_class_shape_changed(void) { cmc_shape++; comp_touch_global(); }   /* (a parent link or an alias: every answer may read a chain) */
 unsigned comp_class_shape_gen(void) { return cmc_shape; }
-static char **cmc_name; static unsigned char *cmc_cm; static int **cmc_ans;
+static char **cmc_name; static unsigned char *cmc_cm; static int *cmc_sid;   /* per slot: its id in the answers (cmc_pair) */
 static int **cmc_resp; static int *cmc_nresp;   /* per slot: the responders (comp_name_responders), -1 unbuilt */
 static int cmc_cap = 0, cmc_n = 0;
 static unsigned cmc_epoch;   /* bumped when a slot's index can move: a clear, a growth */
 static const Compiler *cmc_c; static unsigned cmc_gen, cmc_shape_at, cmc_table_at;
 static int cmc_nscopes = -1, cmc_nclasses = -1;
+/* The answers by (slot id, class): the method (or reader found) and the
+   class that defines it. A hash of the pairs asked, where each slot held
+   two ints for every class of the program: a program with a method name
+   per class (`get123` in Widget123) asks a name or two of each class, and
+   the per-class arrays grew as classes x names. */
+typedef struct { int sid, k, mi, dc; } CmcPair;
+static CmcPair *cmc_pair; static int cmc_pcap, cmc_pn;
+static void cmc_pairs_clear(void) { free(cmc_pair); cmc_pair = NULL; cmc_pcap = cmc_pn = 0; }
+static unsigned cmc_phash(int sid, int k) { return ((unsigned)sid * 2654435761u) ^ ((unsigned)k * 2246822519u); }
+/* the answer of class k at slot sid, -2 while unasked (*dc its definer) */
+static int cmc_get(int sid, int k, int *dc) {
+  if (!cmc_pcap) return -2;
+  for (unsigned h = cmc_phash(sid, k) & (unsigned)(cmc_pcap - 1); cmc_pair[h].sid >= 0; h = (h + 1) & (unsigned)(cmc_pcap - 1))
+    if (cmc_pair[h].sid == sid && cmc_pair[h].k == k) { *dc = cmc_pair[h].dc; return cmc_pair[h].mi; }
+  return -2;
+}
+static void cmc_put(int sid, int k, int mi, int dc) {
+  if (cmc_pn * 2 >= cmc_pcap) {
+    CmcPair *op = cmc_pair; int ocap = cmc_pcap;
+    cmc_pcap = ocap ? ocap * 2 : 1024;
+    cmc_pair = malloc(sizeof *cmc_pair * (size_t)cmc_pcap);
+    if (!cmc_pair) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    for (int i = 0; i < cmc_pcap; i++) cmc_pair[i].sid = -1;
+    for (int i = 0; i < ocap; i++) {
+      if (op[i].sid < 0) continue;
+      unsigned h = cmc_phash(op[i].sid, op[i].k) & (unsigned)(cmc_pcap - 1);
+      while (cmc_pair[h].sid >= 0) h = (h + 1) & (unsigned)(cmc_pcap - 1);
+      cmc_pair[h] = op[i];
+    }
+    free(op);
+  }
+  unsigned h = cmc_phash(sid, k) & (unsigned)(cmc_pcap - 1);
+  while (cmc_pair[h].sid >= 0 && !(cmc_pair[h].sid == sid && cmc_pair[h].k == k)) h = (h + 1) & (unsigned)(cmc_pcap - 1);
+  if (cmc_pair[h].sid < 0) cmc_pn++;
+  cmc_pair[h] = (CmcPair){ sid, k, mi, dc };
+}
 static void cmc_clear(void) {
-  for (int i = 0; i < cmc_cap; i++) if (cmc_name && cmc_name[i]) { free(cmc_name[i]); free(cmc_ans[i]); free(cmc_resp[i]); }
-  free(cmc_name); free(cmc_cm); free(cmc_ans); free(cmc_resp); free(cmc_nresp);
-  cmc_name = NULL; cmc_cm = NULL; cmc_ans = NULL; cmc_resp = NULL; cmc_nresp = NULL; cmc_cap = cmc_n = 0;
+  for (int i = 0; i < cmc_cap; i++) if (cmc_name && cmc_name[i]) { free(cmc_name[i]); free(cmc_resp[i]); }
+  free(cmc_name); free(cmc_cm); free(cmc_sid); free(cmc_resp); free(cmc_nresp);
+  cmc_name = NULL; cmc_cm = NULL; cmc_sid = NULL; cmc_resp = NULL; cmc_nresp = NULL; cmc_cap = cmc_n = 0;
+  cmc_pairs_clear();
   cmc_epoch++;
 }
 /* (is_cm is 0 the instance side, 1 the class side, 2 a capture's, and 3 and 4
@@ -2047,21 +2084,21 @@ static int cmc_slot_idx(Compiler *c, const char *name, int is_cm) {
     cmc_nscopes = c->nscopes; cmc_nclasses = c->nclasses;
   }
   if (cmc_n * 2 >= cmc_cap) {
-    int ocap = cmc_cap; char **on = cmc_name; unsigned char *ocm = cmc_cm; int **oa = cmc_ans;
+    int ocap = cmc_cap; char **on = cmc_name; unsigned char *ocm = cmc_cm; int *oa = cmc_sid;
     int **orp = cmc_resp; int *onr = cmc_nresp;
     cmc_cap = ocap ? ocap * 2 : 256;
     cmc_name = calloc((size_t)cmc_cap, sizeof(char *));
     cmc_cm = calloc((size_t)cmc_cap, 1);
-    cmc_ans = calloc((size_t)cmc_cap, sizeof(int *));
+    cmc_sid = calloc((size_t)cmc_cap, sizeof(int));
     cmc_resp = calloc((size_t)cmc_cap, sizeof(int *));
     cmc_nresp = malloc(sizeof(int) * (size_t)cmc_cap);
-    if (!cmc_name || !cmc_cm || !cmc_ans || !cmc_resp || !cmc_nresp) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    if (!cmc_name || !cmc_cm || !cmc_sid || !cmc_resp || !cmc_nresp) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
     for (int i = 0; i < cmc_cap; i++) cmc_nresp[i] = -1;
     for (int i = 0; i < ocap; i++) {
       if (!on[i]) continue;
       unsigned j = (sp_strhash(on[i]) ^ ocm[i]) & (unsigned)(cmc_cap - 1);
       while (cmc_name[j]) j = (j + 1) & (unsigned)(cmc_cap - 1);
-      cmc_name[j] = on[i]; cmc_cm[j] = ocm[i]; cmc_ans[j] = oa[i]; cmc_resp[j] = orp[i]; cmc_nresp[j] = onr[i];
+      cmc_name[j] = on[i]; cmc_cm[j] = ocm[i]; cmc_sid[j] = oa[i]; cmc_resp[j] = orp[i]; cmc_nresp[j] = onr[i];
     }
     free(on); free(ocm); free(oa); free(orp); free(onr);
     cmc_epoch++;
@@ -2086,28 +2123,29 @@ static int cmc_slot_idx(Compiler *c, const char *name, int is_cm) {
     j = (j + 1) & (unsigned)(cmc_cap - 1);
   }
   if (!cmc_name[j]) {
-    int *a = malloc(sizeof(int) * 2 * (size_t)c->nclasses);
     cmc_name[j] = strdup(name);
-    if (!a || !cmc_name[j]) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-    for (int k = 0; k < 2 * c->nclasses; k++) a[k] = -2;
-    cmc_cm[j] = (unsigned char)is_cm; cmc_ans[j] = a; cmc_resp[j] = NULL; cmc_nresp[j] = -1; cmc_n++;
+    if (!cmc_name[j]) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    cmc_cm[j] = (unsigned char)is_cm; cmc_sid[j] = cmc_n; cmc_resp[j] = NULL; cmc_nresp[j] = -1; cmc_n++;
   }
   last[last_at].name = name; last[last_at].cm = is_cm; last[last_at].j = (int)j; last[last_at].epoch = cmc_epoch;
   last_at = (last_at + 1) % CMC_LAST;
   return (int)j;
 }
-/* The answers for (name, is_cm), two ints per class (-2 while unasked), or
-   NULL when the memo cannot be trusted now. */
-static int *cmc_slot(Compiler *c, const char *name, int is_cm) {
+/* The id of (name, is_cm)'s answers (cmc_get, cmc_put), or -1 when the
+   memo cannot be trusted now. */
+static int cmc_slot(Compiler *c, const char *name, int is_cm) {
   int j = cmc_slot_idx(c, name, is_cm);
-  return j < 0 ? NULL : cmc_ans[j];
+  return j < 0 ? -1 : cmc_sid[j];
 }
 static const char *resolve_alias_side(Compiler *c, int class_id, const char *name, int *start_cls, int *builtin, int sg);
 static int chain_lookup(Compiler *c, int class_id, const char *name, int *def_class, int is_cm) {
-  int *a = class_id >= 0 && class_id < c->nclasses ? cmc_slot(c, name, is_cm) : NULL;
-  if (a && a[2 * class_id] != -2) {
-    if (a[2 * class_id] >= 0 && def_class) *def_class = a[2 * class_id + 1];
-    return a[2 * class_id];
+  int sid = class_id >= 0 && class_id < c->nclasses ? cmc_slot(c, name, is_cm) : -1;
+  if (sid >= 0) {
+    int kdc = -1, kmi = cmc_get(sid, class_id, &kdc);
+    if (kmi != -2) {
+      if (kmi >= 0 && def_class) *def_class = kdc;
+      return kmi;
+    }
   }
   int start = class_id, mi = -1, dc = -1, bi = 0;
   const char *rn = resolve_alias_side(c, class_id, name, &start, &bi, is_cm == 1 ? 1 : 2);
@@ -2126,7 +2164,7 @@ static int chain_lookup(Compiler *c, int class_id, const char *name, int *def_cl
     int m = comp_cmethod_in_class(c, cid, rn);
     if (m >= 0 && c->scopes[m].def_node == c->scopes[mi].def_node) { mi = m; dc = cid; break; }
   }
-  if (a) { a[2 * class_id] = mi; a[2 * class_id + 1] = dc; }
+  if (sid >= 0) cmc_put(sid, class_id, mi, dc);
   if (mi >= 0 && def_class) *def_class = dc;
   return mi;
 }
@@ -3929,14 +3967,15 @@ static int accessor_chain_possible(const Compiler *c, int class_id, int writer) 
    inference that asked keeps no per-class dependency on the chain. */
 static int accessor_chain(Compiler *c, int class_id, const char *name, int *def_class, int writer) {
   if (class_id >= 0 && class_id < c->nclasses && !accessor_chain_possible(c, class_id, writer)) return 0;
-  int *a = class_id >= 0 && class_id < c->nclasses ? cmc_slot(c, name, writer ? 4 : 3) : NULL;
-  int found = 0, dc = -1;
-  if (a && a[2 * class_id] != -2) { found = a[2 * class_id]; dc = a[2 * class_id + 1]; }
+  int sid = class_id >= 0 && class_id < c->nclasses ? cmc_slot(c, name, writer ? 4 : 3) : -1;
+  int found = 0, dc = -1, kmi = sid >= 0 ? cmc_get(sid, class_id, &dc) : -2;
+  if (kmi != -2) found = kmi;
   else {
+    dc = -1;
     const char *rn = writer ? name : comp_resolve_alias(c, class_id, name);
     for (int cid = class_id; cid >= 0; cid = c->classes[cid].parent)
       if (writer ? comp_is_writer(&c->classes[cid], rn) : comp_is_reader(&c->classes[cid], rn)) { found = 1; dc = cid; break; }
-    if (a) { a[2 * class_id] = found; a[2 * class_id + 1] = dc; }
+    if (sid >= 0) cmc_put(sid, class_id, found, dc);
   }
   if (found && def_class) *def_class = dc;
   return found;

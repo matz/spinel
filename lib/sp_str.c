@@ -85,16 +85,6 @@ sp_int sp_str_casecmp(const char*a,const char*b){if(!a)sp_nil_recv("casecmp");if
   size_t la=sp_str_byte_len(a),lb=sp_str_byte_len(b),n=la<lb?la:lb;
   for(size_t i=0;i<n;i++){int ca=tolower((unsigned char)a[i]),cb=tolower((unsigned char)b[i]);if(ca!=cb)return ca<cb?-1:1;}
   return la==lb?0:(la<lb?-1:1);}
-/* ASCII-8BIT has no invalid byte sequence -- every byte is a character -- so a
-   BINARY string is valid by definition and never walked. On the text side the
-   walk is bounded by the byte length rather than by a terminator: a NUL is a
-   valid UTF-8 character, and stopping there would call "a\0\xff" valid. */
-sp_bool sp_str_valid_encoding(const char*s){if(!s)sp_nil_recv("valid_encoding?");
-  if(sp_str_is_binary(s))return TRUE;
-  const unsigned char*p=(const unsigned char*)s;const unsigned char*e=p+sp_str_byte_len(s);while(p<e){unsigned c=*p;if(c<0x80){p++;continue;}int extra;unsigned cp;unsigned min;if((c&0xE0)==0xC0){extra=1;cp=c&0x1F;min=0x80;}
-else if((c&0xF0)==0xE0){extra=2;cp=c&0x0F;min=0x800;}
-else if((c&0xF8)==0xF0){extra=3;cp=c&0x07;min=0x10000;}
-else return FALSE;p++;for(int i=0;i<extra;i++){if(p>=e||(*p&0xC0)!=0x80)return FALSE;cp=(cp<<6)|(*p&0x3F);p++;}if(cp<min)return FALSE;if(cp>=0xD800&&cp<=0xDFFF)return FALSE;if(cp>0x10FFFF)return FALSE;}return TRUE;}
 /* Extract the n-th field (0-based) from s split by sep, without
    allocating a full StrArray.  Returns a newly allocated string.
    If the field doesn't exist, returns "". */
@@ -658,60 +648,58 @@ sp_int sp_str_count_chars(const char *s, size_t bl) {
   }
   return n;
 }
-/* Length in "units" for String#length/size, validating and counting in a
-   single walk: count UTF-8 codepoints while the bytes stay valid UTF-8, but
-   fall back to the raw byte count the moment an invalid byte appears
-   (near-certain for genuine binary data, e.g. a binary-mode File.read of a WAD
-   lump) -- matching Ruby's ASCII-8BIT semantics for binary I/O without a
-   separate per-string encoding tag. Folding validation into the count keeps
-   String#length off a two-pass hot path; valid text still costs one walk. */
-static sp_int sp_str_count_units(const char *s, size_t bl) {
+/* Each valid UTF-8 sequence takes one unit. Count each malformed byte
+   separately, as the padding walk does. Remember actual ASCII separately
+   from the unit count, because a malformed byte can also take one unit. */
+static sp_int sp_str_count_units(const char *s, size_t bl, int check_only, int *ascii, int *valid) {
   const unsigned char *p = (const unsigned char *)s, *end = p + bl;
   sp_int n = 0;
+  int ascii_only = 1, valid_utf8 = 1;
   for (;;) {
-    /* ASCII fast path: 8 bytes at a time, each a valid single-unit codepoint */
-    while (p + 8 <= end) {
+    while ((size_t)(end - p) >= sizeof(uint64_t)) {
       uint64_t w;
       memcpy(&w, p, sizeof(w));
       if (w & 0x8080808080808080ULL) break;
-      p += 8; n += 8;
+      p += sizeof(w);
+      n += sizeof(w);
     }
-    if (p >= end) break;
-    unsigned c = *p;
-    if (c < 0x80) { p++; n++; continue; }
-    int extra; unsigned cp, min;
-    if ((c & 0xE0) == 0xC0) { extra = 1; cp = c & 0x1F; min = 0x80; }
-    else if ((c & 0xF0) == 0xE0) { extra = 2; cp = c & 0x0F; min = 0x800; }
-    else if ((c & 0xF8) == 0xF0) { extra = 3; cp = c & 0x07; min = 0x10000; }
-    else return (sp_int)bl;   /* invalid lead byte -> count bytes */
-    p++;
-    if (p + extra > end) return (sp_int)bl;
-    for (int i = 0; i < extra; i++) {
-      if ((*p & 0xC0) != 0x80) return (sp_int)bl;
-      cp = (cp << 6) | (*p & 0x3F);
-      p++;
+    if (p == end) break;
+    if (*p < 0x80) p++;
+    else {
+      ascii_only = 0;
+      int width = sp_utf8_valid_len(p, (size_t)(end - p));
+      if (width == 0) {
+        valid_utf8 = 0;
+        if (check_only) break;
+        width = 1;
+      }
+      p += width;
     }
-    if (cp < min || (cp >= 0xD800 && cp <= 0xDFFF) || cp > 0x10FFFF) return (sp_int)bl;
     n++;
   }
+  *ascii = ascii_only;
+  *valid = valid_utf8;
   return n;
 }
-sp_int sp_str_length(const char*s){
-  if (!s) return 0;
-  /* binary bytes are one unit each, whatever they happen to spell in UTF-8;
-     a string a scan has proved 7-bit counts the same way, and answering from
-     the header skips the pointer-keyed cache probe entirely */
-  { size_t fb; if (sp_str_fixed_width(s, &fb)) return (sp_int)fb; }
-  if (sp_str_is_binary(s)) return (sp_int)sp_str_byte_len(s);
-  if (!sp_str_cacheable(s)) return sp_str_count_units(s, sp_str_byte_len(s));
-  unsigned h = sp_str_lcache_hash(s);
-  for (unsigned w = 0; w < SP_STR_LCACHE_WAYS; w++)
-    if (sp_str_lcache[h + w].s == s) return sp_str_lcache[h + w].char_len;
+/* Cached entries describe valid text. Callers checking validity can stop
+   at the first bad byte, while length still counts the remaining units. */
+static sp_int sp_str_measure(const char *s, int *valid_out) {
+  int cacheable = sp_str_cacheable(s);
+  unsigned h = cacheable ? sp_str_lcache_hash(s) : 0;
+  if (cacheable) {
+    for (unsigned w = 0; w < SP_STR_LCACHE_WAYS; w++) {
+      if (sp_str_lcache[h + w].s == s) {
+        if (valid_out) *valid_out = 1;
+        return sp_str_lcache[h + w].char_len;
+      }
+    }
+  }
   size_t bl = sp_str_byte_len(s);
-  sp_int n = sp_str_count_units(s, bl);
-  /* the walk just told us: char count == byte count means every byte is
-     below 0x80, so remember it in the header and never walk (or probe) again */
-  if ((size_t)n == bl) sp_str_mark_ascii7(s);
+  int ascii, valid;
+  sp_int n = sp_str_count_units(s, bl, valid_out != NULL, &ascii, &valid);
+  if (valid_out) *valid_out = valid;
+  if (!valid || !cacheable) return n;
+  if (ascii) sp_str_mark_ascii7(s);
   /* Evict the cheapest entry to recompute, not the oldest: a scan over one long
      subject allocates a stream of short strings, and measuring those pushed the
      subject out of its bucket over and over -- each miss another walk of the
@@ -726,6 +714,22 @@ sp_int sp_str_length(const char*s){
   sp_str_lcache[victim].byte_len = bl;
   sp_str_lcache[victim].char_len = n;
   return n;
+}
+
+sp_int sp_str_length(const char *s) {
+  if (!s) return 0;
+  size_t bytes;
+  if (sp_str_fixed_width(s, &bytes)) return (sp_int)bytes;
+  if (sp_str_is_binary(s)) return (sp_int)sp_str_byte_len(s);
+  return sp_str_measure(s, NULL);
+}
+
+sp_bool sp_str_valid_encoding(const char *s) {
+  if (!s) sp_nil_recv("valid_encoding?");
+  if (sp_str_is_binary(s) || sp_str_is_ascii7(s)) return TRUE;
+  int valid;
+  (void)sp_str_measure(s, &valid);
+  return valid;
 }
 /* The byte length comes from sp_str_byte_len, which knows every marker: this
    spelled out 0xfe/0xfc itself and fell to strlen for the rest, so a
@@ -768,8 +772,7 @@ size_t sp_utf8_byte_offset(const char*s,sp_int char_idx){
     size_t bl = sp_str_byte_len(s), off = (size_t)char_idx;
     return off > bl ? bl : off;
   }
-  /* fewer characters than bytes in the length cache: the walk that counted
-     them found valid UTF-8 (an invalid byte makes it count bytes) */
+  /* The length cache only admits valid UTF-8. */
   int valid = 0;
   if (sp_str_cacheable(s)) {
     unsigned h = sp_str_lcache_hash(s);
@@ -792,10 +795,9 @@ size_t sp_utf8_byte_offset(const char*s,sp_int char_idx){
   const char *end = s + blen;
   if (valid) return sp_utf8_valid_byte_offset(s, blen, char_idx);
   while (char_idx > 0 && p < end) {
-    p += sp_utf8_advance(p);
+    p += sp_utf8_unit_len(p, (size_t)(end - p));
     char_idx--;
   }
-  if (p > end) p = end;
   return (size_t)(p - s);
 }
 uint32_t*sp_utf8_decode_all(const char*s,size_t*out_n){size_t cap=8,n=0;uint32_t*cps=(uint32_t*)malloc(cap*sizeof(uint32_t));if(!cps){*out_n=0;return NULL;}const char*p=s;const char*end=s?s+sp_str_byte_len(s):s;/* byte-exact: a NUL is a code point (#4527) */while(s&&p<end){if(n>=cap){size_t nc=cap*2;uint32_t*nx=(uint32_t*)realloc(cps,nc*sizeof(uint32_t));if(!nx){free(cps);*out_n=0;return NULL;}cps=nx;cap=nc;}uint32_t cp;p+=sp_utf8_decode(p,&cp);cps[n++]=cp;}*out_n=n;return cps;}
@@ -861,22 +863,10 @@ static void sp_str_piece(sp_StrArray*a,const char*s,const char*p,size_t n){char*
 /* CRuby refuses to split a UTF-8 String whose bytes are invalid (ArgumentError),
    as a regexp search refuses it (sp_re_check_subject). Fewer characters than
    bytes is valid text: the length cache answers for the same String again.
-   The bytes answer first, 8 at a time: with no byte from 0x80 up the String
-   is ASCII, so it is valid and takes the 7-bit bit. A String that a split or
-   a gets just made has no bit yet, and this keeps it from two walks of its
-   bytes (the length and the ASCII test) on each check. The 7-bit bit is set
-   on a String the length walk counted as bytes, which an invalid byte makes
-   it do too (sp_str_length), so with it set a byte from 0x80 up is the
-   invalid one. */
-void sp_str_check_valid(const char*s){
-  if(!s||sp_str_is_binary(s))return;
-  const unsigned char*p=(const unsigned char*)s,*e=p+sp_str_byte_len(s);
-  uint64_t w,hi=0;
-  for(;p+8<=e;p+=8){memcpy(&w,p,8);hi|=w;}
-  for(;p<e;p++)hi|=*p;
-  if(!(hi&0x8080808080808080ULL)){sp_str_mark_ascii7(s);return;}
-  if(!sp_str_is_ascii7(s)&&(size_t)sp_str_length(s)!=sp_str_byte_len(s))return;
-  sp_raise_cls("ArgumentError",(&("\xff" "invalid byte sequence in UTF-8")[1]));
+   A previously validated String can reuse its length cache entry. */
+void sp_str_check_valid(const char *s) {
+  if (!s || sp_str_valid_encoding(s)) return;
+  sp_raise_cls("ArgumentError", SPL("invalid byte sequence in UTF-8"));
 }
 void sp_str_split_into(sp_StrArray*a,const char*s,const char*sep){
   SP_GC_ROOT(a);
@@ -1104,7 +1094,7 @@ static const char *sp_char_one(unsigned char c, int bin) {
    (or before -length) and a negative len return NULL; start == length and
    len == 0 return "". A single-char ASCII result aliases the per-process
    sp_char_cache so common indexing avoids an allocation. */
-const char*sp_str_sub_range(const char*s,sp_int start,sp_int len){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("[]");size_t _fb;int fixed=sp_str_fixed_width(s,&_fb);sp_int cl=fixed?(sp_int)_fb:sp_str_length(s);if(start<0)start+=cl;if(start<0||start>cl||len<0)return NULL;if(start==cl||len==0){return sp_str_is_binary(s)?sp_str_empty_binary():&("\xff" "")[1];}if(len>cl-start)len=cl-start;int bin=fixed?sp_str_is_binary(s):0;size_t boff=fixed?(size_t)start:sp_utf8_byte_offset(s,start);size_t blen_total=fixed?_fb:sp_str_byte_len(s);size_t bp=boff;sp_int rem=len;while(rem>0&&bp<blen_total){bp+=fixed?1:sp_utf8_advance(s+bp);rem--;}if(bp>blen_total)bp=blen_total;size_t bend=bp;size_t blen=bend-boff;if(len==1&&blen==1){const char*one=sp_char_one((unsigned char)s[boff],bin);if(one)return one;}char*r=sp_str_alloc_raw(blen+1);memcpy(r,s+boff,blen);r[blen]=0;sp_str_set_len(r,blen);if(bin)sp_str_mark_binary(r);return r;}
+const char*sp_str_sub_range(const char*s,sp_int start,sp_int len){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("[]");size_t _fb;int fixed=sp_str_fixed_width(s,&_fb);sp_int cl=fixed?(sp_int)_fb:sp_str_length(s);if(start<0)start+=cl;if(start<0||start>cl||len<0)return NULL;if(start==cl||len==0){return sp_str_is_binary(s)?sp_str_empty_binary():&("\xff" "")[1];}if(len>cl-start)len=cl-start;int bin=fixed?sp_str_is_binary(s):0;size_t boff=fixed?(size_t)start:sp_utf8_byte_offset(s,start);size_t blen_total=fixed?_fb:sp_str_byte_len(s);size_t bp=boff;sp_int rem=len;while(rem>0&&bp<blen_total){bp+=fixed?1:sp_utf8_unit_len(s+bp,blen_total-bp);rem--;}if(bp>blen_total)bp=blen_total;size_t bend=bp;size_t blen=bend-boff;if(len==1&&blen==1){const char*one=sp_char_one((unsigned char)s[boff],bin);if(one)return one;}char*r=sp_str_alloc_raw(blen+1);memcpy(r,s+boff,blen);r[blen]=0;sp_str_set_len(r,blen);if(bin)sp_str_mark_binary(r);return r;}
 /* Single-character `s[i]`. Returns NULL on out-of-bounds so the caller can
    yield CRuby's `"hello"[20] -> nil`. Byte-indexed text (BINARY, or proved
    7-bit) reads the byte at i: counting its characters and slicing one out
@@ -1130,8 +1120,8 @@ const char *sp_str_char_at_or_nil(const char *s, sp_int index) {
 /* The width in bytes of the character at byte `at` of s, which ends at
    byte blen: one on a BINARY string, as #chars counts. */
 size_t sp_str_char_width(const char*s,size_t blen,size_t at){
-  size_t n = sp_str_is_binary(s) ? 1 : (size_t)sp_utf8_advance(s + at);
-  return at + n > blen ? blen - at : n;
+  if (at >= blen) return 0;
+  return sp_str_is_binary(s) ? 1 : sp_utf8_unit_len(s + at, blen - at);
 }
 /* each_char's step: the character at byte *at of s, and *at moved past it.
    Walking by byte keeps the loop linear; indexing the i-th character counted
@@ -1150,7 +1140,7 @@ const char*sp_str_char_step(const char*s,size_t blen,size_t*at){
   if (bin) sp_str_mark_binary(r);
   return r;
 }
-const char*sp_str_sub_range_len(const char*s,sp_int cl,sp_int start,sp_int len){SP_GC_ROOT_STR(s);if(start<0)start+=cl;if(start<0||start>cl||len<0)return NULL;if(start==cl||len==0){return sp_str_is_binary(s)?sp_str_empty_binary():&("\xff" "")[1];}if(len>cl-start)len=cl-start;size_t _fb;int fixed=sp_str_fixed_width(s,&_fb);int bin=fixed?sp_str_is_binary(s):0;size_t boff=fixed?(size_t)start:sp_utf8_byte_offset(s,start);size_t blen_total=fixed?_fb:sp_str_byte_len(s);size_t bp=boff;sp_int rem=len;while(rem>0&&bp<blen_total){bp+=fixed?1:sp_utf8_advance(s+bp);rem--;}if(bp>blen_total)bp=blen_total;size_t bend=bp;size_t blen=bend-boff;if(len==1&&blen==1){const char*one=sp_char_one((unsigned char)s[boff],bin);if(one)return one;}char*r=sp_str_alloc_raw(blen+1);memcpy(r,s+boff,blen);r[blen]=0;sp_str_set_len(r,blen);if(bin)sp_str_mark_binary(r);return r;}
+const char*sp_str_sub_range_len(const char*s,sp_int cl,sp_int start,sp_int len){SP_GC_ROOT_STR(s);if(start<0)start+=cl;if(start<0||start>cl||len<0)return NULL;if(start==cl||len==0){return sp_str_is_binary(s)?sp_str_empty_binary():&("\xff" "")[1];}if(len>cl-start)len=cl-start;size_t _fb;int fixed=sp_str_fixed_width(s,&_fb);int bin=fixed?sp_str_is_binary(s):0;size_t boff=fixed?(size_t)start:sp_utf8_byte_offset(s,start);size_t blen_total=fixed?_fb:sp_str_byte_len(s);size_t bp=boff;sp_int rem=len;while(rem>0&&bp<blen_total){bp+=fixed?1:sp_utf8_unit_len(s+bp,blen_total-bp);rem--;}if(bp>blen_total)bp=blen_total;size_t bend=bp;size_t blen=bend-boff;if(len==1&&blen==1){const char*one=sp_char_one((unsigned char)s[boff],bin);if(one)return one;}char*r=sp_str_alloc_raw(blen+1);memcpy(r,s+boff,blen);r[blen]=0;sp_str_set_len(r,blen);if(bin)sp_str_mark_binary(r);return r;}
 const char*sp_str_sub_range_r(const char*s,sp_int start,sp_int end_,sp_int excl){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("[]");sp_int cl=sp_str_length(s);if(end_<0)end_+=cl;if(start<0)start+=cl;if(start<0)return NULL;if(end_>=cl){end_=cl;excl=1;}sp_int n=end_-start+(excl?0:1);if(n<0)n=0;return sp_str_sub_range_len(s,cl,start,n);}
 const char*sp_str_sub_range_len_r(const char*s,sp_int cl,sp_int start,sp_int end_,sp_int excl){SP_GC_ROOT_STR(s);if(end_<0)end_+=cl;if(start<0)start+=cl;if(start<0)return NULL;if(end_>=cl){end_=cl;excl=1;}sp_int n=end_-start+(excl?0:1);if(n<0)n=0;return sp_str_sub_range_len(s,cl,start,n);}
 /* walks by INDEX to the header length: `while(*p)` stopped at an embedded NUL
@@ -1329,8 +1319,7 @@ static size_t sp_justify_walk(const char *s, size_t len, sp_int *units) {
   sp_int count = 0;
   size_t offset = 0;
   while (offset < len && count < *units) {
-    int n = sp_utf8_valid_len((const unsigned char *)s + offset, len - offset);
-    offset += (size_t)(n > 0 ? n : 1);
+    offset += sp_utf8_unit_len(s + offset, len - offset);
     count++;
   }
   *units = count;

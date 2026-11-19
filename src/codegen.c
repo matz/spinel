@@ -6108,7 +6108,8 @@ const char *method_ret_zero(Compiler *c, const Scope *s) {
   return default_value_from_compiler(c, repr_method_ret_storage(s));
 }
 
-void emit_method_signature(Compiler *c, Scope *s, Buf *b) {
+typedef enum { METHOD_ENTRY, ROOT_CONTEXT_BODY, ROOT_CONTEXT_ENTRY } MethodSignature;
+static void method_signature(Compiler *c, Scope *s, Buf *b, MethodSignature form, Buf *args) {
   note_method_file(c, s);
   /* In a debug build, give instance/class methods external linkage so
      -rdynamic exposes sp_<Class>_<method> to backtrace_symbols and the
@@ -6128,20 +6129,25 @@ void emit_method_signature(Compiler *c, Scope *s, Buf *b) {
   const char *unused = (s->class_id >= 0 && !s->is_cmethod &&
                         !c->classes[s->class_id].instantiated)
                        ? "SP_UNUSED " : "";
-  const char *ihint = s->is_ext_entry ? ""   /* exported: no inline linkage */
+  const char *ihint = form == ROOT_CONTEXT_ENTRY ? "inline SP_ALWAYS_INLINE "
+                    : s->is_ext_entry ? ""   /* exported: no inline linkage */
                     : method_noinline_sjlj(c, s) ? "SP_NOINLINE "
                     : method_inline_force(c, s) ? "inline SP_ALWAYS_INLINE "
                     : (method_inline_hint(c, s) ? "inline " : "");
   if (method_is_void(s)) { buf_puts(b, stor); buf_puts(b, ihint); buf_puts(b, unused); buf_puts(b, "void "); }
   else { buf_puts(b, stor); buf_puts(b, ihint); buf_puts(b, unused); emit_method_ret_ctype(c, s, b); buf_puts(b, " "); }
-  buf_puts(b, mc_method(c, s));
-  buf_puts(b, "(");
-  int wrote = 0;
+  const char *cn = mc_method(c, s);
+  if (form == ROOT_CONTEXT_BODY) buf_printf(b, "sp_0roots_%s(sp_gc_root_ctx _sp_roots", cn + 3);
+  else buf_printf(b, "%s(", cn);
+  int wrote = form == ROOT_CONTEXT_BODY;
   if (cmethod_takes_self_cls(c, s)) {
+    if (wrote++) buf_puts(b, ", ");
     buf_puts(b, "sp_Class _sp_cls");
-    wrote = 1;
+    if (args) buf_puts(args, ", _sp_cls");
   }
   if (s->class_id >= 0 && !s->is_cmethod) {
+    if (wrote++) buf_puts(b, ", ");
+    if (args) buf_puts(args, ", self");
     const char *cn = c->classes[s->class_id].c_name;
     if (repr_self_handle(c, (int)(s - c->scopes))) { buf_puts(b, "sp_String *self"); }
     else if (is_string_class_name(cn)) { buf_puts(b, "const char *self"); }
@@ -6167,7 +6173,6 @@ void emit_method_signature(Compiler *c, Scope *s, Buf *b) {
       int is_init = s->name && sp_streq(s->name, "initialize");
       buf_printf(b, "sp_%s %sself", cn, (vt && !is_init) ? "" : "*");
     }
-    wrote = 1;
   }
   /* a parameter the body reassigns inside a begin (and reads after the
      rescue or the retry's longjmp) is as indeterminate there as a local
@@ -6189,7 +6194,8 @@ void emit_method_signature(Compiler *c, Scope *s, Buf *b) {
     if (p && p->type != TY_UNKNOWN) emit_slot_ctype(c, p, b); else emit_ctype(c, pt, b);
     /* gcc does not keep a volatile parameter across the longjmp at -O2:
        the body works on a volatile local copy (see emit_method_body) */
-    buf_printf(b, pv ? " lv_%s__in" : " lv_%s", s->pnames[i]);
+    buf_printf(b, " lv_%s%s", s->pnames[i], pv ? "__in" : "");
+    if (args) buf_printf(args, ", lv_%s%s", s->pnames[i], pv ? "__in" : "");
   }
   free(pvol);
   /* &block param that escapes (not inlined): passes the block as sp_Proc *.
@@ -6199,9 +6205,14 @@ void emit_method_signature(Compiler *c, Scope *s, Buf *b) {
   if (s->blk_param && s->blk_param[0] && !s->yields) {
     if (wrote++) buf_puts(b, ", ");
     buf_printf(b, "sp_Proc *const lv_%s", s->blk_param);
+    if (args) buf_printf(args, ", lv_%s", s->blk_param);
   }
   if (!wrote) buf_puts(b, "void");
   buf_puts(b, ")");
+}
+
+void emit_method_signature(Compiler *c, Scope *s, Buf *b) {
+  method_signature(c, s, b, METHOD_ENTRY, NULL);
 }
 
 /* CS_SYNTH_* markers (mirror of analyze_scope.c). */
@@ -6768,7 +6779,8 @@ static void line_map_reanchor(Buf *b) {
   *b = o;
 }
 
-static int gc_frame_build(Compiler *c, Buf *b, size_t ins, const char *site) {
+enum { GC_NO_FRAME, GC_FRAME, GC_FRAME_WITH_CONTEXT };
+static int gc_frame_build_with_context(Compiler *c, Buf *b, size_t ins, const char *site, int context) {
   /* the frame is decided by the function's text: its marks go first */
   if (ins >= b->len) return 0;
   const char *p = b->p;
@@ -6823,6 +6835,10 @@ static int gc_frame_build(Compiler *c, Buf *b, size_t ins, const char *site) {
           i = q + 1; continue;
         }
       }
+      if (context) {
+        buf_printf(&nb, "SP_GC_ROOT_%s_CTX(_sp_roots, ", n == 16 ? "RBVAL" : n == 14 ? "STR" : "PTR");
+        i = m; continue;
+      }
       buf_putn(&nb, p + i, n); i = k; continue;
     }
     size_t tl = frame_temp_len(p + i, end - i);
@@ -6849,16 +6865,24 @@ static int gc_frame_build(Compiler *c, Buf *b, size_t ins, const char *site) {
   free(ts.v); free(ts.h);
   if (peak == 0 && np == 0) { free(nb.p); return 0; }
   if (!decide_fn("root-frame", site, NULL)) { free(nb.p); return 0; }
+  if (context && !decide_fn("root-context", site, NULL)) {
+    free(nb.p);
+    return gc_frame_build_with_context(c, b, ins, site, 0);
+  }
   /* b is the whole program's text so far, the function its tail: the
      frame replaces the tail in place, not by copying the program */
   b->len = ins;
   buf_puts(b, "    struct { sp_gc_frame_hdr h;");
   if (peak) buf_printf(b, " sp_RbVal v[%d];", peak);
   if (np) buf_printf(b, " void **p[%d];", np);
-  buf_printf(b, " } _gcf = {{%d, %d}}; SP_GC_ROOT_FRAME(_gcf);\n", peak, np);
+  buf_printf(b, " } _gcf = {{%d, %d}}; %s;\n", peak, np,
+             context ? "SP_GC_ROOT_FRAME_CTX(_sp_roots, _gcf)" : "SP_GC_ROOT_FRAME(_gcf)");
   buf_putn(b, nb.p ? nb.p : "", nb.len);
   free(nb.p);
-  return 1;
+  return context ? GC_FRAME_WITH_CONTEXT : GC_FRAME;
+}
+static void gc_frame_build(Compiler *c, Buf *b, size_t ins, const char *site) {
+  gc_frame_build_with_context(c, b, ins, site, 0);
 }
 
 /* ---- splitting the top level ----
@@ -8071,7 +8095,46 @@ static void emit_rbs_cont_ret_wrapper(Compiler *c, Scope *s, const char *sig, Bu
              s->name ? s->name : "");
   free(args.p);
 }
-void emit_method(Compiler *c, Scope *s, Buf *b) {
+/* A resolved call syntactically inside a loop can amortize its TLS lookup.
+   Stop at a new Ruby scope: a closure created there may run elsewhere. */
+static unsigned char *root_context_loop_callees(Compiler *c) {
+  /* Debug/profile builds name the Ruby frame, and incremental units need a
+     standalone entry. Keep their usual calling convention. */
+  if (!g_uses_threads || g_gc_none || g_no_root_frame || g_debug || g_opt_profile_symbol_map || g_incremental) return NULL;
+  unsigned char *targets = calloc((size_t)c->nscopes, 1);
+  if (!targets) return NULL;
+  const NodeTable *nt = c->nt;
+  const int *parents = codegen_node_parents(c, nt->count - 1);
+  NT_FOREACH_KIND(nt, NK_CallNode, id) {
+    for (int p = parents[id]; p >= 0; p = parents[p]) {
+      NodeKind k = nt_kind(nt, p);
+      if (k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode || k == NK_SingletonClassNode ||
+          k == NK_LambdaNode || k == NK_BlockNode) break;
+      if (k == NK_WhileNode || k == NK_UntilNode || k == NK_ForNode) {
+        int target;
+        if (cplan_targets(c, id, &target, 1) == 1) targets[target] = 1;
+        break;
+      }
+    }
+  }
+  return targets;
+}
+
+/* An ordinary method entry stays callable through its original type. Its
+   inline wrapper resolves TLS in the caller, where the C compiler can hoist
+   the two addresses across repeated calls, even with split compilation. */
+static void wrap_root_context(Compiler *c, Scope *s, Buf *b, size_t sig_off, size_t sig_end) {
+  Buf inner = {0}, args = {0};
+  method_signature(c, s, &inner, ROOT_CONTEXT_BODY, NULL);
+  buf_erase(b, sig_off, sig_end - sig_off);
+  buf_insert_at(b, sig_off, inner.p);
+  method_signature(c, s, b, ROOT_CONTEXT_ENTRY, &args);
+  buf_printf(b, " {\n  %ssp_0roots_%s(sp_gc_current_roots()%s);\n}\n",
+             method_is_void(s) ? "" : "return ", mc_method(c, s) + 3, args.p ? args.p : "");
+  free(args.p); free(inner.p);
+}
+
+static void emit_method(Compiler *c, Scope *s, Buf *b, int loop_callee) {
   { char grp[UNIT_TAG_MAX];
     /* the unit is named after the function, past its sp_ */
     unit_begin_in(b, mc_method(c, s) + 3, method_unit_group(c, s, grp, sizeof grp)); }
@@ -8133,11 +8196,13 @@ void emit_method(Compiler *c, Scope *s, Buf *b) {
      the method's own name checks what it answers (emit_rbs_cont_ret_wrapper) */
   Buf rh_sig; memset(&rh_sig, 0, sizeof rh_sig);
   int rh_wrap = s->ret_rbs_cont && s->ret == TY_POLY;
+  size_t sig_off = b->len;
   if (rh_wrap) {
     emit_method_signature(c, s, &rh_sig);
     emit_rbs_cont_ret_body_sig(c, s, rh_sig.p ? rh_sig.p : "", b);
   }
   else emit_method_signature(c, s, b);
+  size_t sig_end = b->len;
   buf_puts(b, " {\n");
   /* the program's own #inspect, #to_s or #message, where a pp prints
      through sp_pp_inspect (pp_prints_by_rt): it runs as outside a pp, so its p and inspect
@@ -8388,8 +8453,14 @@ void emit_method(Compiler *c, Scope *s, Buf *b) {
   buf_puts(b, "}\n");
   if (!g_no_root_elision) gc_roots_take_back(c, s, b, gc_save_off);
   const char *site = decide_method_site(c, s);
-  if (!g_no_root_frame) gc_frame_build(c, b, gc_save_off + gc_save_len, site);
-  gc_save_take_back(b, gc_save_off, gc_save_len, site);
+  int context = loop_callee && !rh_wrap && !s->is_ext_entry && !poll_pure_wrapped(c, s->idx) && !method_inline_force(c, s) &&
+                !method_noinline_sjlj(c, s) && !fi_body_has_loop(c, s->body, 0);
+  int frame = g_no_root_frame ? GC_NO_FRAME : gc_frame_build_with_context(c, b, gc_save_off + gc_save_len, site, context);
+  if (frame == GC_FRAME_WITH_CONTEXT) {
+    buf_erase(b, gc_save_off, gc_save_len);
+    buf_insert_at(b, gc_save_off, "    SP_GC_SAVE_CTX(_sp_roots);\n");
+    wrap_root_context(c, s, b, sig_off, sig_end);
+  } else gc_save_take_back(b, gc_save_off, gc_save_len, site);
   if (rh_wrap) emit_rbs_cont_ret_wrapper(c, s, rh_sig.p ? rh_sig.p : "", b);
   free(rh_sig.p);
 }
@@ -24992,6 +25063,7 @@ char *codegen_program(const NodeTable *nt) {
   /* user-object Marshal dispatchers (after every class struct + pool define) */
   emit_obj_dispatchers(c, body);
   tcg = cg_phase(tcg, "cg_classes");
+  unsigned char *loop_callees = root_context_loop_callees(c);
   int cg_prev_s = -1, cg_methods = 0;
   double cg_prev_t = 0;
   for (int i = 0; i < CG_SLOW_N; i++) cg_slow_s[i] = -1;
@@ -25008,7 +25080,8 @@ char *codegen_program(const NodeTable *nt) {
     int orphan = scope_is_orphan_method(c, s);
     if (orphan) g_unsup_quiet = 1;
     size_t pm_at = body->len;
-    EMIT_COLLECT_UNIT(emit_method(c, &c->scopes[s], body));
+    int loop_callee = loop_callees && loop_callees[s];
+    EMIT_COLLECT_UNIT(emit_method(c, &c->scopes[s], body, loop_callee));
     g_unsup_quiet = 0;
     if (g_ndiags == ndiag0 && poll_pure_wrapped(c, s)) poll_pure_split(c, s, body, pm_at);
     /* An instance method of a class no instance of which is ever built is
@@ -25030,7 +25103,7 @@ char *codegen_program(const NodeTable *nt) {
       int nb = deferred_raise_body(c, ob, s, dmsg);
       if (nb >= 0) {
         { c->scopes[s].body = nb; comp_touch_scope(c->scopes[s].idx); }
-        EMIT_COLLECT_UNIT(emit_method(c, &c->scopes[s], body));
+        EMIT_COLLECT_UNIT(emit_method(c, &c->scopes[s], body, loop_callee));
         { c->scopes[s].body = ob; comp_touch_scope(c->scopes[s].idx); }
       }
       continue;
@@ -25049,11 +25122,12 @@ char *codegen_program(const NodeTable *nt) {
       int nb = deferred_raise_body(c, ob, s, dmsg);
       if (nb >= 0) {
         { c->scopes[s].body = nb; comp_touch_scope(c->scopes[s].idx); }
-        EMIT_COLLECT_UNIT(emit_method(c, &c->scopes[s], body));
+        EMIT_COLLECT_UNIT(emit_method(c, &c->scopes[s], body, loop_callee));
         { c->scopes[s].body = ob; comp_touch_scope(c->scopes[s].idx); }
       }
     }
   }
+  free(loop_callees);
   if (sp_timing_on()) {
     if (cg_prev_s >= 0) cg_slow_note(cg_prev_s, sp_timing_now() - cg_prev_t);
     for (int s = 1; s < c->nscopes; s++)

@@ -928,6 +928,7 @@ file, no compiler, a bad option). This is a contract.
 | `nn-inb` | an index read is proved in bounds, so its value is not nil; denied, likewise |
 | `root-elide` | a local or a container ivar's temp takes no GC root (`--no-root-elision` for all of them); denied, it is rooted |
 | `gc-save` | a method whose roots are all elided drops its root-stack save and restore; denied, it keeps them |
+| `root-context` | a loop calls a known method with a GC root frame and passes the worker-local root stack addresses |
 | `root-frame` | a method, proc, Fiber or END body roots through one frame (`--no-root-frame`); denied, each root is pushed |
 | `inline-force` | a hot small method is forced inline (`--no-inline-hot`); denied, the C compiler decides |
 | `pd-hoist` | a poly dispatch's switch is moved out of line, into a function its call sites share (`SPINEL_NO_PD_HOIST`); denied, it stays inline at the call |

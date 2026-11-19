@@ -22168,7 +22168,8 @@ static sp_PolyArray *sp_zip_arg(sp_RbVal v) {
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_RANGE)
     return sp_poly_to_poly_array(v);
   /* (the value kinds have no each: a Rational, a Complex, a Time) */
-  if (v.tag == SP_TAG_OBJ && v.cls_id != SP_BUILTIN_RATIONAL && v.cls_id != SP_BUILTIN_BIG_RATIONAL &&
+  if (v.tag == SP_TAG_OBJ && (!sp_rbval_is_string(v) || sp_poly_is_str_subclass(v)) &&
+      v.cls_id != SP_BUILTIN_RATIONAL && v.cls_id != SP_BUILTIN_BIG_RATIONAL &&
       v.cls_id != SP_BUILTIN_COMPLEX && v.cls_id != SP_BUILTIN_TIME) return sp_poly_arr_recv(v, "each");
   sp_raise_cls("TypeError", sp_sprintf("wrong argument type %s (must respond to :each)",
                                        sp_poly_class_name(v)));

@@ -33,6 +33,9 @@ FrozenError
 "iv12376"
 "bx7"
 ["x", "x"]
+["x", true]
+["x", true, "ASCII-8BIT"]
+[[0, 97], [0, 97, 120], false]
 ["abc1", true, 1]
 ["abc12", true, 2]
 ["abc123", true, 3]

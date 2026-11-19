@@ -84,6 +84,8 @@ and private conversion buffers can borrow its payload through
 Boxed Array pushes hold each argument across evaluation of the next.
 Array element stores hold the receiver, index, and value before a checked
 index conversion. The frozen check precedes that conversion.
+The capitalization routines return an empty operand's byte view. Boxing
+that result preserves the original empty String and its encoding.
 The ENV read paths that return a String default or a missing-key block's
 String use the same result view. The selected branch hands back its
 String handle directly.

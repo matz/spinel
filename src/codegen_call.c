@@ -5113,7 +5113,7 @@ static void emit_dynamic_send_arm(Compiler *c, int arm, int t, int mo, int *seen
   if (setjmp(g_unsup_recover) == 0) {
     if (self_ret) emit_strbuf_handle_of(c, arm, &body);
     else if (arm_oint) emit_oint_expr(c, arm, at, &body);
-    else if (arm_str) emit_str_form_box(c, arm, &body);
+    else if (arm_str) emit_boxed(c, arm, &body);
     else emit_expr(c, arm, &body);
     ok = 1;
   }
@@ -5279,12 +5279,7 @@ static int emit_dynamic_send(Compiler *c, int id, Buf *b) {
   buf_puts(b, "default: ");
   if (mo) {
     buf_printf(b, "{ sp_raise_cls(\"NameError\", sp_sprintf(\"undefined method '%%s' for class '%%s'\", sp_sym_to_s(_t%d), sp_poly_class_name(", t);
-    if (recv_held) {
-      /* (the receiver is named in the message only: its bytes are a read) */
-      size_t at = b->len;
-      emit_boxed(c, recv, b);
-    }
-    else emit_str_form_box(c, recv, b);
+    emit_boxed(c, recv, b);
     buf_printf(b, "))); _r%d = sp_box_nil(); } } _r%d; })", t, t);
   }
   /* a name no candidate answers is CRuby's NoMethodError naming the
@@ -5292,12 +5287,7 @@ static int emit_dynamic_send(Compiler *c, int id, Buf *b) {
      a receiver with side effects was read once into its temp above */
   else if (recv >= 0) {
     buf_printf(b, "{ sp_raise_nomethod(sp_nomethod_msg(sp_sym_to_s(_t%d), ", t);
-    if (recv_held) {
-      /* (the receiver is named in the message only: its bytes are a read) */
-      size_t at = b->len;
-      emit_boxed(c, recv, b);
-    }
-    else emit_str_form_box(c, recv, b);
+    emit_boxed(c, recv, b);
     buf_printf(b, ")); _r%d = sp_box_nil(); } } _r%d; })", t, t);
   }
   else buf_printf(b, "{ sp_raise_cls(\"NoMethodError\", sp_sprintf(\"undefined method '%%s'\", sp_sym_to_s(_t%d))); _r%d = sp_box_nil(); } } _r%d; })", t, t, t);
@@ -23348,11 +23338,6 @@ int str_each_enum_keeps(Compiler *c, int id) {
   return str_each_enum_call(c, id) && str_each_recv_shares(c, nt_ref(c->nt, id, "receiver")) &&
          enum_outlives_expr(c, id);
 }
-/* ...and one walked where it is made reads its receiver's String as it is
-   there: a copy of it is no other String than the walk sees */
-int str_each_enum_walked_here(Compiler *c, int id) {
-  return str_each_enum_call(c, id) && !enum_outlives_expr(c, id);
-}
 /* Is call id a blockless String iterator on a boxed receiver answering an
    Enumerator (poly_str_iter_enum), which is over the handle for a box of a
    shared String's (sp_poly_str_each_enum)? */
@@ -27698,7 +27683,7 @@ static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
                (operand[i] != recv && comp_ntype(c, operand[i]) == TY_STRING &&
                 nt_kind(c->nt, operand[i]) == NK_CallNode && !arg_ran_first(operand[i], 0) &&
                 share_plan_of(c, operand[i], SPR_BOX).form == SPF_HANDLE &&
-                share_plan_of(c, operand[i], SPR_BOX).kind == SPK_POLY_ARMS));
+                share_plan_producer(c, operand[i], NULL) == SPK_POLY_ARMS));
     int bfb = bsh || operand[i] == harg ? 0
             : operand_binds_face_box(c, operand[i]) ? 1
             : operand_binds_identity_box(c, id, operand[i]) ? 3

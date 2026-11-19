@@ -484,7 +484,6 @@ enum { SFD_OWN = 1 };
 int emit_str_form(Compiler *c, int v, int role, int face, unsigned dest, StrForm *sf);
 /* Node v, a String, boxed in the plan's form for the taker of a dispatch's
    answer (codegen_str.c): the handle's box where the plan gives the handle. */
-void emit_str_form_box(Compiler *c, int v, Buf *b);
 /* What codegen.c's box path shares with the box face (codegen_str.c): a
    value that ran ahead as its handle, a store's lift, and the
    representation's box */
@@ -3089,7 +3088,6 @@ int emit_string_line_loop_start(int receiver, int separator, int keywords, int c
 void emit_string_line_enum(Compiler *c, int id, int recv, int argc, const int *argv, Buf *b);
 int str_each_recv_shares(Compiler *c, int recv);
 int str_each_enum_keeps(Compiler *c, int id);   /* --share-strings: a String iterator's Enumerator holds the handle */
-int str_each_enum_walked_here(Compiler *c, int id);   /* ...or is walked where it is made */
 int str_enum_h_made(Compiler *c);                   /* ...does the program make one anywhere */
 int emit_unresolved_call(Compiler *c, int id, Buf *b);
 int emit_array_call(Compiler *c, int id, Buf *b);

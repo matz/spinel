@@ -6047,52 +6047,35 @@ static int emit_and_or_begin_expr(Compiler *c, int id, Buf *b, const NodeTable *
   return 0;
 }
 
-/* Does String Range `range` keep endpoint `end` as its handle? Every
-   String endpoint but nil and a frozen literal, which never changes, so its
-   identity is its bytes' own (#8321). */
-static int srange_end_keeps(Compiler *c, int range, int end) {
-  (void)range;
-  return end >= 0 && comp_ntype(c, end) != TY_NIL && !share_frozen_literal(c, end);
-}
-/* ...one end into rooted temps: the handle `_t<ht>` and a NULL byte field
-   `_t<st>` for an end kept so, else no handle and the end's bytes (NULL for
-   a nil or an absent end). */
-static void emit_srange_end_h(Compiler *c, int end, int keep, int ht, int st, Buf *b) {
-  if (keep) {
-    buf_printf(b, "sp_String *_t%d = ", ht);
-    emit_strbuf_handle_of(c, end, b);
-    buf_printf(b, "; SP_GC_ROOT(_t%d); const char *_t%d = NULL; ", ht, st);
-    return;
-  }
-  buf_printf(b, "sp_String *_t%d = NULL; const char *_t%d = ", ht, st);
-  if (end >= 0) emit_str_expr_nilable(c, end, b); else buf_puts(b, "NULL");
-  buf_printf(b, "; SP_GC_ROOT_STR(_t%d); ", st);
-}
-
-/* An end of a String Range that makes nothing and runs nothing: a literal,
-   or a read of a variable or a constant. */
-static int srange_end_is_plain(Compiler *c, int id) {
-  NodeKind k = nt_kind(c->nt, id);
-  return k == NK_StringNode || k == NK_ConstantReadNode || k == NK_GlobalVariableReadNode ||
-         subtree_is_pure_read(c, id);
-}
-
-/* A Range whose kind only the values at run time decide: a boxed Range
-   built by sp_range_new_box, or a String Range with a boxed end checked by
-   sp_srange_new_box. The begin runs first, rooted while the end runs. 0 for
-   any other Range. */
-static int emit_range_boxed_ends(Compiler *c, int id, int left, int right, int excl, Buf *b) {
-  const char *ctor;
-  if (repr_of(c, id).kind == RK_BOXED) ctor = "sp_range_new_box";
-  else if (repr_of(c, id).range == TY_STRING &&
-           ((left >= 0 && repr_of(c, left).kind == RK_BOXED) ||
-            (right >= 0 && repr_of(c, right).kind == RK_BOXED))) ctor = "sp_srange_new_box";
-  else return 0;
+/* A Range takes the endpoint values. Keep each endpoint's prelude with
+   its value so the begin is held before the end can rebind it. */
+static int emit_range_endpoint(Compiler *c, int end, Buf *b) {
   int t = ++g_tmp;
-  buf_printf(b, "({ sp_RbVal _t%d = ", t);
-  if (left >= 0) emit_boxed(c, left, b); else buf_puts(b, "sp_box_nil()");
-  buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); %s(_t%d, ", t, ctor, t);
-  if (right >= 0) emit_boxed(c, right, b); else buf_puts(b, "sp_box_nil()");
+  if (end < 0) return -1;
+  Buf pre = {0}, bind = {0};
+  Buf *outer = g_pre;
+  g_pre = &pre;
+  t = hold_operand(c, end, TY_POLY, 1, t, 1, " ", &bind);
+  g_pre = outer;
+  if (pre.p) buf_puts(b, pre.p);
+  if (bind.p) buf_puts(b, bind.p);
+  free(pre.p);
+  free(bind.p);
+  return t;
+}
+
+static int emit_range_boxed_ends(Compiler *c, int id, int left, int right, int excl, Buf *b) {
+  Repr range = repr_of(c, id);
+  const char *ctor = range.kind == RK_BOXED ? "sp_range_new_box"
+                     : range.range == TY_STRING ? "sp_srange_new_box" : NULL;
+  if (!ctor) return 0;
+  buf_puts(b, "({ ");
+  int first = emit_range_endpoint(c, left, b);
+  int last = emit_range_endpoint(c, right, b);
+  buf_printf(b, "%s(", ctor);
+  if (first >= 0) buf_printf(b, "_t%d", first); else buf_puts(b, "sp_box_nil()");
+  buf_puts(b, ", ");
+  if (last >= 0) buf_printf(b, "_t%d", last); else buf_puts(b, "sp_box_nil()");
   buf_printf(b, ", %d); })", excl);
   return 1;
 }
@@ -6229,84 +6212,6 @@ static int emit_range_literal(Compiler *c, int id, Buf *b, const NodeTable *nt) 
     }
     buf_puts(b, ")");
     if (lpoly || rpoly) buf_puts(b, "; })");
-    return 1;
-  }
-  /* ("a".."e"): the distinct string range, endpoints kept as strings (#3064) */
-  if (repr_of(c, id).range == TY_STRING) {
-    /* Two ends each made on the spot (`(i.to_s..j.to_s)`) were siblings in
-       one C call: nothing held the one made first while the other was made,
-       so a collection in between freed it, and gcc made the end before the
-       begin. The begin goes into a rooted temp ahead of the end. An end that
-       is a literal or a plain read is nothing to collect or to order, and a
-       begin that already ran into a temp is held there. */
-    int bind = left >= 0 && right >= 0 && !arg_ran_first(left, 0) &&
-               !srange_end_is_plain(c, left) && !srange_end_is_plain(c, right);
-    /* A read beside an end that runs something (`(s..(s = t; j.to_s))`) stays
-       where the C compiler puts it, and goes into a rooted slot there: the
-       other end may let go of the String it read, and the Range would carry
-       an end already freed. So do two ends that each make a String though
-       one is a read (a shared String is read as a copy), either of which a
-       collection in the other could take. */
-    int lt = 0, rt = 0;
-    if (!bind && left >= 0 && right >= 0) {
-      int lran = arg_ran_first(left, 0), rran = arg_ran_first(right, 0);
-      int lrun = !lran && !srange_end_is_plain(c, left), rrun = !rran && !srange_end_is_plain(c, right);
-      int lmk = !lran && operand_may_allocate(c, left), rmk = !rran && operand_may_allocate(c, right);
-      /* a literal or a nil that makes nothing is nothing to keep */
-      int lcon = !lmk && (nt_kind(nt, left) == NK_StringNode || nt_kind(nt, left) == NK_NilNode);
-      int rcon = !rmk && (nt_kind(nt, right) == NK_StringNode || nt_kind(nt, right) == NK_NilNode);
-      /* a local the other end does not name and cannot reach through a
-         Proc still holds its String when the Range is made */
-      const char *ln = nt_kind(nt, left) == NK_LocalVariableReadNode ? nt_str(nt, left, "name") : NULL;
-      const char *rn = nt_kind(nt, right) == NK_LocalVariableReadNode ? nt_str(nt, right, "name") : NULL;
-      int lkept = !lmk && ln && !subtree_reads_local(nt, right, ln) &&
-                  !subtree_writes_var(c, right, ln, VW_LOCAL) && !subtree_may_run_proc(c, right);
-      int rkept = !rmk && rn && !subtree_reads_local(nt, left, rn) &&
-                  !subtree_writes_var(c, left, rn, VW_LOCAL) && !subtree_may_run_proc(c, left);
-      if (!lran && !lcon && !lkept && (rrun || (lmk && rmk))) lt = ++g_tmp;
-      if (!rran && !rcon && !rkept && (lrun || (lmk && rmk))) rt = ++g_tmp;
-    }
-    /* --share-strings: an endpoint the Range keeps as its handle holds NULL
-       in its byte field, the handle its only holder: a reader takes the
-       bytes off the handle where it uses them (sp_srange_first /
-       sp_srange_last), so a change in place to the endpoint's String shows
-       through the Range (#8321) */
-    int lsh = srange_end_keeps(c, id, left);
-    int rsh = srange_end_keeps(c, id, right);
-    if (lsh || rsh) {
-      int hl = ++g_tmp, hr = ++g_tmp, tl = ++g_tmp, tr = ++g_tmp;
-      buf_puts(b, "({ ");
-      emit_srange_end_h(c, left, lsh, hl, tl, b);
-      emit_srange_end_h(c, right, rsh, hr, tr, b);
-      buf_printf(b, "sp_srange_new_h(_t%d, _t%d, %d, _t%d, _t%d); })", tl, tr, excl, hl, hr);
-      return 1;
-    }
-    int bt = bind ? ++g_tmp : 0;
-    if (bind) {
-      buf_printf(b, "({ const char *_t%d = ", bt);
-      emit_str_expr_nilable(c, left, b);
-      buf_printf(b, "; SP_GC_ROOT(_t%d); ", bt);
-    }
-    if (lt || rt) buf_puts(b, "({ ");
-    if (lt) buf_printf(b, "const char *_t%d = NULL; SP_GC_ROOT(_t%d); ", lt, lt);
-    if (rt) buf_printf(b, "const char *_t%d = NULL; SP_GC_ROOT(_t%d); ", rt, rt);
-    buf_puts(b, "sp_srange_new(");
-    if (bind) buf_printf(b, "_t%d", bt);
-    else if (left >= 0) {
-      if (lt) buf_printf(b, "(_t%d = ", lt);
-      emit_str_expr_nilable(c, left, b);
-      if (lt) buf_puts(b, ")");
-    }
-    else buf_puts(b, "NULL");
-    buf_puts(b, ", ");
-    if (right >= 0) {
-      if (rt) buf_printf(b, "(_t%d = ", rt);
-      emit_str_expr_nilable(c, right, b);
-      if (rt) buf_puts(b, ")");
-    }
-    else buf_puts(b, "NULL");
-    buf_printf(b, ", %d)", excl);
-    if (bind || lt || rt) buf_puts(b, "; })");
     return 1;
   }
   /* sp_Range holds sp_int bounds, so a Range OBJECT over user objects has

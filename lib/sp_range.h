@@ -211,33 +211,18 @@ sp_bool sp_frange_eq(sp_FloatRange a, sp_FloatRange b);
 const char *sp_frange_inspect(sp_FloatRange r);
 sp_RbVal sp_box_frange(sp_FloatRange v);
 sp_float sp_frange_max(sp_FloatRange r);
-sp_StrRange sp_srange_new(const char *f, const char *l, sp_int e);
-/* A handle endpoint stays part of the Range across changes to its payload. */
-static inline sp_StrRange sp_srange_new_h(const char *f, const char *l, sp_int e,
-                                        struct sp_String_s *hf, struct sp_String_s *hl) {
-  sp_StrRange r = sp_srange_new(f, l, e);
-  r.hf = hf;
-  r.hl = hl;
-  return r;
+static inline sp_StrRange sp_srange_new(struct sp_String_s *first, struct sp_String_s *last, sp_int exclusive) {
+  return (sp_StrRange){ .hf = first, .hl = last, .excl = exclusive != 0 };
 }
-static inline const char *sp_srange_bound(sp_RbVal value, struct sp_String_s **handle) {
-  *handle = NULL;
+static inline struct sp_String_s *sp_srange_bound(sp_RbVal value) {
   if (value.tag == SP_TAG_NIL) return NULL;
   if (!sp_rbval_is_string(value)) sp_raise_cls("ArgumentError", "bad value for range");
-  if (value.tag == SP_TAG_OBJ) {
-    *handle = value.v.p;
-    return NULL;
-  }
-  const char *bytes = sp_rbval_string_bytes(value);
-  return bytes ? bytes : sp_str_empty;
+  return value.v.p;
 }
 static inline sp_StrRange sp_srange_new_box(sp_RbVal first, sp_RbVal last, sp_int exclusive) {
-  SP_GC_ROOT_RBVAL(first);
-  SP_GC_ROOT_RBVAL(last);
-  struct sp_String_s *first_handle, *last_handle;
-  const char *first_bytes = sp_srange_bound(first, &first_handle);
-  const char *last_bytes = sp_srange_bound(last, &last_handle);
-  return sp_srange_new_h(first_bytes, last_bytes, exclusive, first_handle, last_handle);
+  struct sp_String_s *begin = sp_srange_bound(first);
+  struct sp_String_s *end = sp_srange_bound(last);
+  return sp_srange_new(begin, end, exclusive);
 }
 /* a Range read with the handles it keeps as they are now (#8321) */
 sp_StrRange sp_srange_live(sp_StrRange r);

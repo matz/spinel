@@ -5078,10 +5078,6 @@ static sp_StrRange sp_srange_held(sp_StrRange r) {
   if (hl) r.last = sp_String_cstr(hl);
   return r;
 }
-sp_StrRange sp_srange_new(const char *f, const char *l, sp_int e) {
-  /* (the Range keeps its endpoints and answers them again: sp_str_retained) */
-  sp_StrRange r; r.first = sp_str_retained(f); r.last = sp_str_retained(l); r.excl = e; r.unfrozen = 0; r.sym = 0; r.hf = NULL; r.hl = NULL; return r;
-}
 sp_StrArray *sp_srange_to_a(sp_StrRange r) {
   r = sp_srange_held(r);
   SP_GC_ROOT_SRANGE(r);

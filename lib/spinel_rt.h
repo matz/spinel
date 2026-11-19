@@ -5150,7 +5150,10 @@ static SP_UNUSED sp_RbVal sp_range_new_box(sp_RbVal f, sp_RbVal l, sp_int x) {
   if ((fs || ls) && (fs || fn) && (ls || ln)) return sp_box_srange(sp_srange_new_box(f, l, x));
   if (fs || ls) sp_raise_cls("ArgumentError", "bad value for range");
   if ((f.tag == SP_TAG_SYM || fn) && (l.tag == SP_TAG_SYM || ln) && !(fn && ln)) {
-    sp_StrRange r = sp_srange_new(fn ? NULL : sp_sym_to_s((sp_sym)f.v.i), ln ? NULL : sp_sym_to_s((sp_sym)l.v.i), x);
+    sp_String *first = fn ? NULL : sp_sym_name_handle((sp_sym)f.v.i);
+    SP_GC_ROOT(first);
+    sp_String *last = ln ? NULL : sp_sym_name_handle((sp_sym)l.v.i);
+    sp_StrRange r = sp_srange_new(first, last, x);
     r.sym = 1;
     return sp_box_srange(r);
   }

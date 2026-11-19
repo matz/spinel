@@ -1,3 +1,4 @@
+# spinel: not-cruby -- GC.stat["cycle"] is Spinel's count of collections; CRuby has no "cycle" key
 # Regression for #1450. Appending to a String with + repeatedly allocates
 # new Strings. This workload keeps little live data and must collect.
 before = GC.stat["cycle"]

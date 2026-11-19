@@ -7148,7 +7148,18 @@ int capture_cells_shape(const NodeTable *nt, int id) {
          (rk == NK_SelfNode || rk == NK_ConstantReadNode || rk == NK_ConstantPathNode);
 }
 /* See analyze_internal.h. */
-int respond_to_missing_defined(Compiler *c) { return !an_name_binder_free(c, "respond_to_missing?"); }
+int respond_to_missing_defined(Compiler *c) {
+  /* (asked once for each state of the tree and the tables: a presence reader asks it for each class it may hold) */
+  const NodeTable *nt = c->nt;
+  unsigned tgen = comp_table_gen, shape = comp_class_shape_gen();
+  if (!c->rtm_memo.ans || c->rtm_memo.count != nt->count || c->rtm_memo.version != nt->version || c->rtm_memo.edits != nt->edits ||
+      c->rtm_memo.tgen != tgen || c->rtm_memo.shape != shape || c->rtm_memo.ncls != c->nclasses) {
+    int ans = 1 + !an_name_binder_free(c, "respond_to_missing?");
+    c->rtm_memo.ans = ans; c->rtm_memo.count = nt->count; c->rtm_memo.ncls = c->nclasses; c->rtm_memo.version = nt->version;
+    c->rtm_memo.tgen = tgen; c->rtm_memo.shape = shape; c->rtm_memo.edits = nt->edits;
+  }
+  return c->rtm_memo.ans == 2;
+}
 /* Do def's parameters hold `...` (a ForwardingParameterNode as keyword_rest)? */
 int def_takes_forwarding(const NodeTable *nt, int def) {
   int pn = def >= 0 && nt_kind(nt, def) == NK_DefNode ? nt_ref(nt, def, "parameters") : -1;

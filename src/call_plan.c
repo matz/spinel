@@ -4299,10 +4299,12 @@ static void list_asks(Compiler *c, int id, void (*fn)(Compiler *, int, const cha
    respond_to? (defined?'s) of a literal name on a receiver, or a
    method_defined? kin on a constant or on `x.class`, asks fn (flags 0) of
    each class whose instances it may ask of, where it runs, as a call of
-   the name on such an instance there asks it; a list of a class's own
-   instance methods on a constant (list_cells_shape 2), of that class, for
-   each name it may list */
-typedef struct { int id; CtClassFn fn; void *arg; } PresAsk;
+   the name on such an instance there asks it; a respond_to? also of each
+   class whose class object it may ask of (flags CT_CMETHOD), whose arm
+   reads the cells there (cplan_class_value_presence, cplan_presence_asks); a
+   list of a class's own instance methods on a constant (list_cells_shape
+   2), of that class, for each name it may list */
+typedef struct { int id, cside; CtClassFn fn; void *arg; } PresAsk;
 typedef struct { Compiler *c; int id, cls; CtClassFn fn; void *arg; } PresListAsk;
 static void pres_list_one(void *ud, const char *name, int vis) {
   const PresListAsk *a = ud;
@@ -4312,7 +4314,9 @@ static void pres_list_one(void *ud, const char *name, int vis) {
 static void pres_ask_one(Compiler *c, int id, const char *nm, int k, unsigned flags, void *arg) {
   const PresAsk *a = arg;
   (void)id;
-  if (k >= 0 && !(flags & (CT_CMETHOD | CT_TOP))) a->fn(c, a->id, nm, k, 0, a->arg);
+  if (k < 0 || (flags & CT_TOP)) return;
+  if (!(flags & CT_CMETHOD)) a->fn(c, a->id, nm, k, 0, a->arg);
+  else if (a->cside && cplan_presence_asks(c, a->id, k, nm)) a->fn(c, a->id, nm, k, CT_CMETHOD, a->arg);
 }
 /* Does list id, of a class's own instance methods on a constant (list_cells_shape 2), read the version cells of
    class cls's names: the class its receiver names, one of the program's or a builtin it reopens, in a program
@@ -4346,7 +4350,7 @@ static void presence_asks(Compiler *c, int id, CtClassFn fn, void *arg) {
   const char *qm = is_method_presence_name_query(rn) ? method_sym_arg(c, id) : NULL;
   if (!qm || !ct_version_named(c, qm) || respond_to_missing_defined(c)) return;
   int r = nt_ref(nt, id, "receiver"), k;
-  PresAsk a = { id, fn, arg };
+  PresAsk a = { id, is_respond_to_name(rn), fn, arg };
   NodeKind rk = r >= 0 ? nt_kind(nt, r) : NK_SelfNode;
   if (is_respond_to_name(rn)) ct_version_classes(c, id, qm, pres_ask_one, &a);
   else if (!is_method_defined_query(rn) || r < 0) return;
@@ -4725,6 +4729,36 @@ int cplan_presence_list(Compiler *c, int id, TyKind rt, CplanPresList *out) {
   for (int i = 0; i < out->n; i++) cells |= out->arm[i].ans == PRA_CELLS || out->form != PRL_OBJECT;
   if (!ok || !cells || !out->n) { cplan_presence_list_free(out); return 0; }
   return 1;
+}
+/* See call_plan.h. */
+int cplan_class_responds(Compiler *c, int ci, const char *qm, int id) {
+  if (!cplan_cmethod_later(c, id, ci, qm)) {
+    CplanPresence pr;
+    cplan_table_presence(c, ci, CT_CMETHOD, qm, &pr);
+    if (pr.table) return 1;
+  }
+  return class_responds_builtin(c, ci, qm);
+}
+/* See call_plan.h. */
+int cplan_class_value_presence(Compiler *c, int id, const char *qm, CplanPresList *out) {
+  int uni = class_object_universal_method(qm), any = class_reopen_cmethod(c, -1, -1, qm) >= 0;
+  *out = (CplanPresList){ PRL_CLASS_VALUE, -1, 0, NULL, uni || any };
+  CplanCells cs;
+  CplanPresence pr;
+  for (int k = 0; k < c->nclasses; k++) {
+    /* (its version cells, where they answer; their els the builtin's answer where none is live) */
+    if (cplan_cmethod_presence(c, id, k, qm, 0, 0, &cs) && cplan_cells_testable(c, &cs)) {
+      cs.els = cs.els || class_responds_builtin(c, k, qm);
+      presence_arm(c, out, k, &cs, -1);
+    }
+    else if (cplan_class_responds(c, k, qm, id) &&
+             (cplan_presence(c, id, k, CT_CMETHOD, qm, &pr) != PR_ABSENT || class_responds_builtin(c, k, qm)))
+      presence_arm(c, out, k, NULL, PRA_YES);
+    else continue;
+    any |= !uni && out->arm[out->n - 1].ans != PRA_NO;
+  }
+  if (!any) cplan_presence_list_free(out);
+  return any;
 }
 /* See call_plan.h. */
 int cplan_entry_finds(const Compiler *c, int e) {
@@ -13352,7 +13386,7 @@ static int guard_else_bare(Compiler *c, int behind, int cls, int sg, const char 
 static void list_ver_need(Compiler *c, int id, const char *name, int cls, void *arg) { ver_need(c, id, name, cls, CT_CMETHOD, arg); }
 static void pres_target(Compiler *c, int id, const char *nm, int k, unsigned flags, void *arg) {
   (void)arg;
-  call_target(c, id, k, nm, flags | CT_REACH, NULL);
+  call_target(c, id, k, nm, flags & CT_CMETHOD ? CT_CMETHOD | CT_CAPTURE : flags | CT_REACH, NULL);   /* (a class arm's: cplan_cmethod_presence) */
 }
 static void list_ver_target(Compiler *c, int id, const char *name, int cls, void *arg) {
   (void)arg;
@@ -13802,7 +13836,10 @@ static void ver_obj_presence_keep(Compiler *c, int id, const char *name, int cls
   CplanCells cs;
   int all, list;
   unsigned side = presence_reader_side(c->nt, id, &all, &list);
-  (void)flags; (void)arg;
+  if (flags & CT_CMETHOD) {   /* (a respond_to?'s class arm: a class's own respond_to?'s cells) */
+    ver_presence_keep(c, id, name, cls, arg);
+    return;
+  }
   if (!(list ? cplan_list_cells(c, id, cls, side, name, &cs) : cplan_presence_cells(c, id, cls, side, name, all, &cs)) ||
       cplan_cells_fixed(&cs)) return;
   for (int i = 0; i < cs.n; i++) {
@@ -13968,11 +14005,12 @@ static void ver_entry_vis_mark(Compiler *c, int e) {
   for (int i = 0; e >= 0 && i < c->nver_entries; i++)
     if (c->ver_entries[i].scope == e && c->ver_entries[i].vis != VER_VIS_STRING_HISTORY) c->ver_entries[i].vis = VER_VIS_PRESENT;
 }
-/* (an instance's presence reader's, presence_asks: the entry a call there takes) */
+/* (an instance's presence reader's, presence_asks: the entry a call there takes; a class arm's, the class
+   method's, as pres_target asks it) */
 static void ver_obj_presence_mark(Compiler *c, int id, const char *name, int cls, unsigned flags, void *arg) {
   MethodLookup ml = { .def_class = -1 };
-  (void)flags; (void)arg;
-  int e = call_target(c, id, cls, name, CT_REACH, &ml);
+  (void)arg;
+  int e = call_target(c, id, cls, name, flags & CT_CMETHOD ? CT_CMETHOD | CT_CAPTURE : CT_REACH, &ml);
   if (ml.kind == ML_ENTRY) ver_entry_vis_mark(c, e);
 }
 /* (mark the entry each written respond_to? of a class method reads the cells of, cplan_cmethod_presence, and of

@@ -2339,7 +2339,9 @@ static void lr_reopens_take(Compiler *c) {
    methods it may report (sides: 1 the instance side, 2 the class side);
    but a respond_to?, defined? or method_defined? of an instance's method,
    which the plan's presence answers (cplan_presence), to refl_fixed too
-   (pres: its class side alone). */
+   (pres: its class side alone); and a respond_to? called by its name, on
+   any value, to neither for the class side, whose class method a class
+   value's arm answers by its cells (pres 3: cplan_class_value_presence). */
 enum { LR_REFL_TABLE, LR_REFL_MAKER, LR_REFL_CELL, LR_REFL_CAPT };
 static void lr_refl_list(LoadRecord *r, char ***l, int *n, int *cap, const char *name) {
   *l = lr_grow(*l, cap, *n, sizeof **l);
@@ -2352,7 +2354,7 @@ static void lr_refl_add(LoadRecord *r, const char *name, int kind, int sides, in
   lr_refl_list(r, &r->refl, &r->nrefl, &r->crefl, name);
   if (kind != LR_REFL_TABLE) return;
   for (int sg = 0; sg < 2; sg++) {
-    if (!(sides & (1 << sg))) continue;
+    if (!(sides & (1 << sg)) || (sg && (pres & 2))) continue;
     lr_refl_list(r, &r->refl_table[sg], &r->nrefl_table[sg], &r->crefl_table[sg], name);
     if (sg || !pres) lr_refl_list(r, &r->refl_fixed[sg], &r->nrefl_fixed[sg], &r->crefl_fixed[sg], name);
   }
@@ -2387,7 +2389,7 @@ static void lr_refl_take(Compiler *c) {
       lr_refl_add(r, pq == 1 && a < ac ? vis_arg_name(nt, av[a]) : NULL,
                   respond_to_cells_shape(nt, n) ? LR_REFL_CELL : capture_cells_shape(nt, n) ? LR_REFL_CAPT :
                   is_method_object_maker(rn) ? LR_REFL_MAKER : LR_REFL_TABLE, lr_refl_sides(nt, n, rn),
-                  is_method_presence_name_query(rn));
+                  !is_method_presence_name_query(rn) ? 0 : is_respond_to_name(nt_str(nt, n, "name")) ? 3 : 1);
   }
   NT_FOREACH_KIND(nt, NK_DefinedNode, n) {
     int v = nt_ref(nt, n, "value"), rv = v >= 0 ? nt_ref(nt, v, "receiver") : -1;
@@ -4254,7 +4256,7 @@ static void lr_settle_regions(Compiler *c) {
    define_method, an attr, an alias, a module_function copy, an undef or
    remove), not a visibility change. lr_vers_index indexes the histories as
    they stand, again once more entries have been recorded. */
-typedef struct LrVers { const char *name; int first, nver, next, pend, alias; unsigned char captured, replaced, late, visvar; } LrVers;   /* captured: elab_version_captured's memo, 1 no, 2 yes; visvar: elab_method_vis_varies's, the same; replaced: one history holds two versions, or an alias; late: lr_late_make's, 1 no history late, 2 one is, 3 none asked; pend: the histories asked that are not late yet; alias: the first alias of the name, in LoadRecord.valias, -1 for none */
+typedef struct LrVers { const char *name; int first, nver, next, pend, alias; unsigned char captured, replaced, late, visvar, supply; } LrVers;   /* captured: elab_version_captured's memo, 1 no, 2 yes; visvar: elab_method_vis_varies's, the same; supply: lr_vers_unordered's, the same; replaced: one history holds two versions, or an alias; late: lr_late_make's, 1 no history late, 2 one is, 3 none asked; pend: the histories asked that are not late yet; alias: the first alias of the name, in LoadRecord.valias, -1 for none */
 
 static int lr_is_version(const LrDef *v) { return v->kind <= LR_REMOVE && !v->unplaced && !v->absent; }
 
@@ -4487,7 +4489,7 @@ int elab_method_reflected(Compiler *c, const char *name, int sg) {
   if (!r || !r->recorded || !name) return 0;
   sg = sg != 0;
   return r->refl_any || (!sg && r->refl_cell_list) || lr_refl_has(r->refl_table[sg], r->nrefl_table[sg], name) ||
-         (sg && lr_refl_has(r->refl_table[0], r->nrefl_table[0], name) && lr_singleton_mixed(r)) ||
+         (sg && lr_refl_has(r->refl_fixed[0], r->nrefl_fixed[0], name) && lr_singleton_mixed(r)) ||
          lr_refl_cell_table(c, name, sg);
 }
 
@@ -8906,16 +8908,27 @@ static int lr_unplaced(Compiler *c, int node) {
    (a send, an eval of a String) run on one before p, but code that only
    writes (LR_OPAQUE_WRITES)? */
 static int lr_unplaced_def(const LrDef *v) { return v->kind <= LR_REMOVE && v->unplaced == 1 && !v->absent; }
+/* ...does some history of x's name hold a version a pass made or a def in a body the record holds at no point:
+   all that lr_unordered_supply's walk of the histories counts, asked once per name (memo supply), so that an ask
+   on each class of a program does not walk every class's history */
+static int lr_vers_unordered(Compiler *c, LrVers *x) {
+  LoadRecord *r = c->lrec;
+  for (int i = x->first; !x->supply && i >= 0; i = r->hist[i].nlink)
+    for (int j = 0; j < r->hist[i].n; j++)
+      if (lr_unplaced_def(&r->hist[i].v[j]) || (lr_is_version(&r->hist[i].v[j]) && lr_unplaced(c, r->hist[i].v[j].node))) x->supply = 2;
+  if (!x->supply) x->supply = 1;
+  return x->supply == 2;
+}
 static int lr_unordered_supply(Compiler *c, int cls, int sg, const char *name, LoadPoint p, int own) {
   LoadRecord *r = c->lrec;
-  const LrVers *x = own ? NULL : lr_vers(r, name);
+  LrVers *x = own ? NULL : lr_vers(r, name);
   /* (a def of the name in a body the record holds at no point, a class body in a value or a builder's
      block, runs when that body does, which the record does not order against p: it counts where its class may
      be on cls's chain (cls, a superclass, a module mixed in: lr_in_ancestry), or is no class the record
      names, and where no def of the name the record places is on the chain, whose points the record orders
      the call by, as it does a version of the name a pass made) */
   int unpl = 0, placed = 0;
-  for (int i = x ? x->first : -1; i >= 0; i = r->hist[i].nlink) {
+  for (int i = x && lr_vers_unordered(c, x) ? x->first : -1; i >= 0; i = r->hist[i].nlink) {
     int on = -1;
     for (int j = 0; j < r->hist[i].n; j++) {
       const LrDef *v = &r->hist[i].v[j];

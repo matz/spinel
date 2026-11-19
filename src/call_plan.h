@@ -1640,14 +1640,34 @@ int cplan_cells_testable(Compiler *c, const CplanCells *cs);
    nil (nil -1: self, never nil); PRL_BOXED: a boxed receiver's classes
    whose cells answer, the others' answer the reader's own; PRL_CLASS: a
    class value's classes whose cells answer, any other class the
-   reflection table's. 0, with no arms, where no cell answers, and where a
-   class the receiver may be answers by its own respond_to?. Freed with
+   reflection table's; PRL_CLASS_VALUE (cplan_class_value_presence). 0,
+   with no arms, where no cell answers, and where a class the receiver may
+   be answers by its own respond_to?. Freed with
    cplan_presence_list_free. */
 enum { PRA_NO, PRA_YES, PRA_CELLS };
-enum { PRL_OBJECT, PRL_BOXED, PRL_CLASS };
+enum { PRL_OBJECT, PRL_BOXED, PRL_CLASS, PRL_CLASS_VALUE };
 typedef struct { int cls, ans; CplanCells cells; } CplanPresArm;
-typedef struct { int form, nil, n; CplanPresArm *arm; } CplanPresList;
+typedef struct { int form, nil, n; CplanPresArm *arm; int other; } CplanPresList;
 int cplan_presence_list(Compiler *c, int id, TyKind rt, CplanPresList *out);
+/* What a class value answers to respond_to?(qm) at call id, with an
+   include_all or without (a class method a body defines is public), form
+   PRL_CLASS_VALUE: an arm for each program class that may answer
+   true, PRA_YES or PRA_CELLS (its class method's version cells,
+   cplan_cmethod_presence, whose els is the builtin's answer where none is
+   live); a program class with no arm answers false. The table answers a
+   class whose name the record cannot order (the builtin's where the
+   record proves none of its class methods of the name live there,
+   cplan_presence), and other the answer of a class value the program does
+   not define (the Class surface, a `class Class` reopening's method). 0,
+   with no arms, where none answers true but by Class's own surface, which
+   the caller's builtin answers. Freed with cplan_presence_list_free. */
+int cplan_class_value_presence(Compiler *c, int id, const char *qm, CplanPresList *out);
+/* Does class object ci answer `qm` to respond_to?, asked at call id: its
+   own class methods and singleton attrs only once one is defined where id
+   runs (cplan_cmethod_later), from the table, and every builtin one
+   (class_responds_builtin); -1 for no call, the program's answer
+   anywhere. */
+int cplan_class_responds(Compiler *c, int ci, const char *qm, int id);
 void cplan_presence_list_free(CplanPresList *l);
 /* What an instance of program class cid answers to Object#respond_to?(qm) where call id runs (-1: no call): 2
    true, 1 only to include_all (a private or protected match), 0 false; the method-table reading, without the

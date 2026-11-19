@@ -1791,6 +1791,9 @@ typedef struct {
   int *hdr_cp, hdr_cp_n, hdr_cp_count;
   unsigned hdr_cp_ver;
   unsigned long hdr_cp_edits;
+  /* respond_to_missing_defined's answer, 1 + it (0 unasked), and the state it read: the tree's (count, version,
+     edits) and the class tables' comp_name_reader_any keys on */
+  struct { int ans, count, ncls; unsigned version, tgen, shape; unsigned long edits; } rtm_memo;
   /* the last eight method C names mc_method spelled, and the next to reuse:
      each grown to its name (mc_ring_setf), which no length bounds */
   char *mc_ring[8]; size_t mc_ring_cap[8]; int mc_ring_next;

@@ -20547,7 +20547,7 @@ static const char *const cls_uni[] = {
   "public_instance_methods", "public_method_defined?", "refinements",
   "remove_class_variable", "remove_method", "set_temporary_name", "singleton_class?",
   "undef_method", "undefined_instance_methods", NULL };
-static int class_object_universal_method(const char *qm) {
+int class_object_universal_method(const char *qm) {
   for (int u = 0; cls_uni[u]; u++) if (sp_streq(qm, cls_uni[u])) return 1;
   return 0;
 }
@@ -20580,22 +20580,9 @@ int class_object_answers_builtin(const char *qm, int is_module) {
   return class_object_private_method(qm, is_module);
 }
 
-/* Does class object ci answer `qm`, asked at call id: its own class
-   methods and singleton attrs only once one is defined where id runs, as
-   the plan says (cplan_cmethod_later), and every builtin one; -1 for no
-   call, the program's answer anywhere. */
-static int class_responds_builtin(Compiler *c, int ci, const char *qm);
-static int class_responds_to(Compiler *c, int ci, const char *qm, int id) {
-  if (!cplan_cmethod_later(c, id, ci, qm)) {
-    /* the class's own class methods and its singleton accessors, from the call plan's table answer */
-    CplanPresence pr;
-    cplan_table_presence(c, ci, CT_CMETHOD, qm, &pr);
-    if (pr.table) return 1;
-  }
-  return class_responds_builtin(c, ci, qm);
-}
-/* ...with none of its program's class methods: the builtin ones */
-static int class_responds_builtin(Compiler *c, int ci, const char *qm) {
+/* Does class object ci answer `qm` with none of its program's class methods: the builtin ones (the
+   program's: cplan_class_responds) */
+int class_responds_builtin(Compiler *c, int ci, const char *qm) {
   int is_module = comp_class_is_module(c, &c->classes[ci]);
   /* A module's `module_function` methods are recorded class-level and were
      already matched above. Its plain `def m` are instance methods, which the
@@ -20740,6 +20727,14 @@ void emit_presence_object(Compiler *c, const CplanPresList *l, int recv, Buf *b)
   emit_presence_arms(c, l, key, b);
   buf_puts(b, "0; })");
 }
+/* (what the version cells *cs answer at the run, els where none of their versions is live: a parenthesized C
+   truth value) */
+static void emit_class_cells_answer(Compiler *c, const CplanCells *cs, int els, Buf *b) {
+  buf_puts(b, "(");
+  int open = emit_cells_test(c, cs, els, b);
+  buf_printf(b, "%d", els);
+  while (open-- >= 0) buf_puts(b, ")");
+}
 int emit_respond_to_cells(Compiler *c, int id, int recv, TyKind rt, const char *qm, int argc, const int *argv, Buf *b) {
   int all = argc >= 2 && nt_kind(c->nt, argv[1]) == NK_TrueNode, ci = cplan_presence_class(c, id);
   CplanCells cs;
@@ -20757,22 +20752,30 @@ int emit_respond_to_cells(Compiler *c, int id, int recv, TyKind rt, const char *
   if (ci < 0 || !cplan_cmethod_presence(c, id, ci, qm, all, 0, &cs) || !cplan_cells_testable(c, &cs)) return 0;
   if (!b) return 1;
   int els = cs.els || class_responds_builtin(c, ci, qm) || (all && class_object_private_method(qm, comp_class_is_module(c, &c->classes[ci])));
-  buf_puts(b, repr_of(c, id).kind == RK_BOXED ? "sp_box_bool(" : "(");
-  int open = emit_cells_test(c, &cs, els, b);
-  buf_printf(b, "%d", els);
-  while (open-- >= 0) buf_puts(b, ")");
+  buf_puts(b, repr_of(c, id).kind == RK_BOXED ? "sp_box_bool" : "");
+  emit_class_cells_answer(c, &cs, els, b);
   return 1;
 }
-
-int class_value_responds(Compiler *c, int id, int tv, const char *qm, Buf *b) {
-  int any = (class_reopen_cmethod(c, -1, -1, qm) >= 0);
-  for (int k = 0; k < c->nclasses && !class_object_universal_method(qm); k++) any |= class_responds_to(c, k, qm, id);
-  if (!any || !b) return any;
-  buf_printf(b, " || (_t%d.tag == SP_TAG_CLASS && (_t%d.cls_id < 0 || _t%d.cls_id == SP_CLASS_BY_NAME ? %d : (0", tv, tv, tv,
-             class_object_universal_method(qm) || (class_reopen_cmethod(c, -1, -1, qm) >= 0));
-  for (int k = 0; k < c->nclasses; k++) if (class_responds_to(c, k, qm, id)) buf_printf(b, " || _t%d.cls_id == %d", tv, k);
+/* The plan's arms for a class value's respond_to?(qm) at call id (cplan_class_value_presence), asked once a site:
+   *asked is -1 until they are, then their answer; the caller frees l where it is 1 */
+int class_value_arms(Compiler *c, int id, const char *qm, CplanPresList *l, int *asked) {
+  if (*asked < 0) *asked = cplan_class_value_presence(c, id, qm, l);
+  return *asked;
+}
+/* A class value's respond_to? held in _t<tv>, after the builtin's answer: the arms l (class_value_arms), each
+   class's own answer */
+void class_value_responds(Compiler *c, const CplanPresList *l, int tv, Buf *b) {
+  buf_printf(b, " || (_t%d.tag == SP_TAG_CLASS && (_t%d.cls_id < 0 || _t%d.cls_id == SP_CLASS_BY_NAME ? %d : (0", tv, tv, tv, l->other);
+  for (int i = 0; i < l->n; i++) {
+    const CplanPresArm *a = &l->arm[i];
+    if (a->ans == PRA_NO) continue;
+    buf_printf(b, " || %s_t%d.cls_id == %d", a->ans == PRA_CELLS ? "(" : "", tv, a->cls);
+    if (a->ans != PRA_CELLS) continue;
+    buf_puts(b, " && ");
+    emit_class_cells_answer(c, &a->cells, a->cells.els, b);
+    buf_puts(b, ")");
+  }
   buf_puts(b, ")))");
-  return 1;
 }
 
 /* The same for a name known only at run time: a class value answers the
@@ -35340,9 +35343,9 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
          very constructor the same program calls (#3482). */
       /* A CORE class object answers the Class/Module surface every class
          has -- `new`, `instance_method`, `ancestors` -- but it has no user
-         entry, so class_responds_to was never consulted and the probe
+         entry, so cplan_class_responds was never consulted and the probe
          cannot type a bare `Range.new` (#3494). Answer those here. A
-         module is excluded from `new` the same way class_responds_to
+         module is excluded from `new` the same way cplan_class_responds
          excludes it. */
       if (!resolved && rcn && ci < 0 && builtin_class_id(rcn) != 0 &&
           class_object_universal_method(qm) &&
@@ -35358,7 +35361,7 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
                sp_streq(qm, "define")) { resolved = 1; yes = 1; }
       else if (ci >= 0) {
         resolved = 1;
-        yes = class_responds_to(c, ci, qm, id);
+        yes = cplan_class_responds(c, ci, qm, id);
         /* A reopening retains the builtin methods its own table does not list. */
         if (!yes && (is_builtin_class_name(rcn) || is_builtin_module_const_name(rcn)) &&
             !(comp_class_is_module(c, &c->classes[ci]) && class_only_method(qm)))
@@ -35395,7 +35398,7 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
       const char *rcn = c->classes[ci].name;
       int mod = comp_class_is_module(c, &c->classes[ci]);
       resolved = 1;
-      yes = class_responds_to(c, ci, qm, id);
+      yes = cplan_class_responds(c, ci, qm, id);
       if (!yes && (is_builtin_class_name(rcn) || is_builtin_module_const_name(rcn)) && !(mod && class_only_method(qm)))
         rt_probe_answer(c, id, &yes);
       if (yes && foldable && cplan_method_vis(c, -1, ci, qm, CPV_CMETHOD, NULL) != SP_VIS_PUBLIC) yes = include_all;
@@ -35437,7 +35440,7 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
              the explicit `Const.respond_to?` fold, including the
              builtin Class/Module capabilities (:new, :name, ...). */
           resolved = 1;
-          yes = class_responds_to(c, cid, qm, id);
+          yes = cplan_class_responds(c, cid, qm, id);
           if (yes && foldable && cplan_method_vis(c, -1, cid, qm, CPV_CMETHOD, NULL) != SP_VIS_PUBLIC)
             yes = include_all;
           if (!yes && foldable && include_all && class_object_private_method(qm, comp_class_is_module(c, &c->classes[cid])))
@@ -35462,7 +35465,7 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
       else if (ss && c->node_cbody && id < c->node_cap && c->node_cbody[id] >= 0) {
         int cid = c->node_cbody[id];
         resolved = 1;
-        yes = class_responds_to(c, cid, qm, id);
+        yes = cplan_class_responds(c, cid, qm, id);
         if (yes && foldable && cplan_method_vis(c, -1, cid, qm, CPV_CMETHOD, NULL) != SP_VIS_PUBLIC)
           yes = include_all;
         if (!yes && foldable && include_all && class_object_private_method(qm, comp_class_is_module(c, &c->classes[cid])))

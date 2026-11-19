@@ -1062,11 +1062,39 @@ static int uk_b64val(unsigned char ch) {
   if (ch == '/') return 63;
   return -1;
 }
+/* `m0`: strict RFC 4648, as CRuby's pack.c and the base64 package's
+   b64_dec_strict: a length that is a multiple of 4, `=` only as the padding
+   of the last block, and zero in the bits the padding drops */
+static char *uk_b64_decode_rfc4648(const char *src, size_t n) {
+  if (n % 4 != 0) sp_raise_cls("ArgumentError", "invalid base64");
+  char *out = sp_str_alloc(n);
+  size_t o = 0;
+  for (size_t i = 0; i < n; i += 4) {
+    int q[4], npad = 0;
+    for (int k = 0; k < 4; k++) {
+      unsigned char ch = (unsigned char)src[i + k];
+      if (ch == '=') {
+        if (i + 4 != n || k < 2) sp_raise_cls("ArgumentError", "invalid base64");
+        npad++; q[k] = 0;
+      }
+      else {
+        int val = uk_b64val(ch);
+        if (npad || val < 0) sp_raise_cls("ArgumentError", "invalid base64");
+        q[k] = val;
+      }
+    }
+    if ((npad == 2 && (q[1] & 0xF)) || (npad == 1 && (q[2] & 0x3)))
+      sp_raise_cls("ArgumentError", "invalid base64");
+    out[o++] = (char)((q[0] << 2) | (q[1] >> 4));
+    if (npad < 2) out[o++] = (char)((q[1] << 4) | (q[2] >> 2));
+    if (npad < 1) out[o++] = (char)((q[2] << 6) | q[3]);
+  }
+  out[o] = 0; sp_str_set_len(out, o);
+  return out;
+}
 /* Decode `n` base64 bytes from `src` into a fresh GC string (the `m` directive).
-   Non-alphabet bytes (whitespace, newlines) are skipped; `=` ends the data. In
-   `strict` mode (the `m0` count) any non-alphabet byte is an ArgumentError, as
-   RFC 4648 requires. */
-static char *uk_b64_decode_strict(const char *src, size_t n, int strict) {
+   Non-alphabet bytes (whitespace, newlines) are skipped; `=` ends the data. */
+static char *uk_b64_decode(const char *src, size_t n) {
   char *out = sp_str_alloc(n);   /* decoded size <= input size */
   size_t o = 0;
   int quad[4], qi = 0;
@@ -1074,7 +1102,7 @@ static char *uk_b64_decode_strict(const char *src, size_t n, int strict) {
     unsigned char ch = (unsigned char)src[i];
     if (ch == '=') break;
     int val = uk_b64val(ch);
-    if (val < 0) { if (strict) sp_raise_cls("ArgumentError", "invalid base64"); continue; }
+    if (val < 0) continue;
     quad[qi++] = val;
     if (qi == 4) {
       out[o++] = (char)((quad[0] << 2) | (quad[1] >> 4));
@@ -1090,7 +1118,6 @@ static char *uk_b64_decode_strict(const char *src, size_t n, int strict) {
   out[o] = 0; sp_str_set_len(out, o);
   return out;
 }
-static char *uk_b64_decode(const char *src, size_t n) { return uk_b64_decode_strict(src, n, 0); }
 /* Decode `n` quoted-printable bytes into a fresh GC string (the `M` directive):
    `=XX` is a hex byte, `=\n` (soft line break) is dropped, everything else is
    literal. */
@@ -1339,9 +1366,9 @@ else if (spec == 'Z') {
        one string (the count/`0` modifier only tweaks strictness, not framing). */
     if (spec == 'm' || spec == 'M') {
       size_t avail = slen - off;
-      /* `m0` is strict RFC 4648: reject any non-alphabet byte. */
-      char *s = (spec == 'm') ? uk_b64_decode_strict(str + off, avail, count == 0)
-                              : uk_qp_decode(str + off, avail);
+      char *s = (spec == 'M') ? uk_qp_decode(str + off, avail)
+              : (count == 0) ? uk_b64_decode_rfc4648(str + off, avail)
+                             : uk_b64_decode(str + off, avail);
       sp_str_mark_binary(s);   /* unpack answers BYTES here: ASCII-8BIT, as CRuby (the b/B/h/H arms build ASCII TEXT and stay on the text side) */
       sp_PolyArray_push(out, sp_box_str_new(s));
       off = slen;

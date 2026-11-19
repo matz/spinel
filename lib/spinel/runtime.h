@@ -10,7 +10,7 @@
  *
  *   Values / tags:
  *     sp_RbVal            boxed value       (sp_gc.h)
- *     SP_TAG_INT/FLT/BOOL/NIL/STR/SYM/OBJ   value tags
+ *     SP_TAG_INT/FLT/BOOL/NIL/SYM/OBJ   value tags
  *
  *   Container reflection hooks (installed by the generated program at startup;
  *   a package reads a program's typed containers only through these):
@@ -30,6 +30,7 @@
  *                      through the box reaches all copies. Use it for a
  *                      parser's String values.
  *                      Object keys follow the frozen Hash key contract.)
+ *     sp_poly_arg_string  (retain a String or the result of its #to_str)
  *
  *   Float digits (sp_dtoa.h):
  *     sp_float_shortest  (the shortest round-trip digits and exponent, for a
@@ -65,5 +66,7 @@
 #include "sp_alloc.h"   /* sp_str_alloc, sp_str_set_len, sp_int_to_s, sp_float_to_s, sp_oom_die */
 #include "sp_dtoa.h"    /* sp_float_shortest */
 #include "sp_string.h"   /* sp_box_str_new */
+
+sp_String *sp_poly_arg_string(sp_RbVal value);
 
 #endif /* SPINEL_RUNTIME_H */

@@ -1,0 +1,9 @@
+true
+[true, [98, 0], 3]
+true
+[true, [98, 0], 3]
+["before", 0]
+true
+[false, "ASCII-8BIT", "", "UTF-8"]
+[true, "UTF-8", 1, 2]
+[true, "ASCII-8BIT", 2, 2]

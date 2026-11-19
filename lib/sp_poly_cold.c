@@ -23,6 +23,7 @@
 #include "spinel_rt.h"
 
 sp_int sp_poly_arg_int(sp_RbVal v) { return sp_poly_arg_int_chk(v); }
+sp_String *sp_poly_arg_string(sp_RbVal v) { return sp_poly_arg_str_handle(v); }
 
 /* A sole chomp: arrives with its truth value. General keyword lists
    still have their original keys for argument checking at method entry. */

@@ -152,6 +152,10 @@ Strings through
 the current contents and leaves the original box intact. Keep that box
 or its owner live across operations that can allocate.
 
+StringIO retains its backing String. A read into a supplied buffer
+retains the converted destination through length conversion and
+publishes its bytes and encoding on that object.
+
 The load record's rows are described in [load-model.md](load-model.md):
 what the record holds, what its answers mean, and what keeps it cheap for
 a pass that edits the tree.

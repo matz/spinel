@@ -1,0 +1,18 @@
+["q!|s?", "q!", "s?"]
+["t!?|t!?|t!?", "t!?", "t!?"]
+["s!?|s!?|s!?", "Gc|Gc|Gc", "N|S", "N", "S", "Gc"]
+["S+-|S+-", "S+-", "S+-"]
+["xcde|xcde", "xcde", "xcde"]
+["s!?1|s!?1", "s!?1", "s!?1"]
+["s!?1a2|s!?1a2", "s!?1a2", "s!?1a2"]
+["s!?1a2b3|s!?1a2b3", "s!?1a2b3", "s!?1a2b3"]
+["s!?1a2b3c|s!?1a2b3c4", "s!?1a2b3c4", "s!?1a2b3c4"]
+["S!?1A2B3C4D|S!?1A2B3C4D", "S!?1A2B3C4D", "S!?1A2B3C4D"]
+["R|R", "R", "R"]
+["wfg|wfg|wfg", "wfg"]
+["[s!?|s!?]-<s!?>", "s!?", "s!?"]
+["s!?hi|s!?hi\n", "s!?hi", "s!?hi"]
+:"s!?hiyz|s!?hiyz"
+["s!?hiyzAB|s!?hiyzAB", "s!?hiyzAB"]
+"abc|abcABC"
+["ABC", "ABC"]

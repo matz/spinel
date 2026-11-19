@@ -42,35 +42,32 @@ static int subtree_has_unresolved_const(Compiler *c, int id) {
   return 0;
 }
 
-/* Adjacent string literals joined by `\`-continuation (or `+`-folded at parse
-   time) produce an InterpolatedStringNode whose own parts are themselves
-   InterpolatedStringNodes. Flatten the part tree into one list of leaf parts
-   (StringNode / EmbeddedStatementsNode) so the format/arg assembly below sees a
-   single flat sequence and emits one sp_sprintf call. */
-static void interp_flatten_own(const NodeTable *nt, int id, int **out, int **own, int *n, int *cap) {
+/* Fold an adjacent tree only when all its parts are literals. */
+static void interp_flatten(const NodeTable *nt, int id, int **out, int *n, int *cap) {
   int pn = 0;
   const int *parts = nt_arr(nt, id, "parts", &pn);
   for (int k = 0; k < pn; k++) {
-    int pid = parts[k];
-    NodeKind pk = nt_kind(nt, pid);
-    if (pk == NK_InterpolatedStringNode) {
-      interp_flatten_own(nt, pid, out, own, n, cap);
+    int part = parts[k];
+    if (nt_kind(nt, part) == NK_InterpolatedStringNode) {
+      interp_flatten(nt, part, out, n, cap);
       continue;
     }
     if (*n >= *cap) {
       int ncap = *cap ? *cap * 2 : 8;
       int *grown = realloc(*out, (size_t)ncap * sizeof(int));
-      int *og = own ? realloc(*own, (size_t)ncap * sizeof(int)) : NULL;
-      if (!grown || (own && !og)) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-      *out = grown; if (own) *own = og;
+      if (!grown) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      *out = grown;
       *cap = ncap;
     }
-    if (own) (*own)[*n] = id;
-    (*out)[(*n)++] = pid;
+    (*out)[(*n)++] = part;
   }
 }
-static void interp_flatten(const NodeTable *nt, int id, int **out, int *n, int *cap) {
-  interp_flatten_own(nt, id, out, NULL, n, cap);
+static int interp_has_segments(const NodeTable *nt, int id) {
+  int n = 0;
+  const int *parts = nt_arr(nt, id, "parts", &n);
+  for (int k = 0; k < n; k++)
+    if (nt_kind(nt, parts[k]) == NK_InterpolatedStringNode) return 1;
+  return 0;
 }
 
 /* Does the InterpolatedStringNode id fold to one literal: every leaf part of
@@ -104,6 +101,7 @@ typedef struct {
   Buf lits;      /* escaped literal texts, concatenated */
   Buf decls;     /* the pre-evaluated temps, as statements */
   long fixed_cap;
+  int single_expression;
   int *flat;
 } InterpPlan;
 static void interp_plan_free(InterpPlan *pl) {
@@ -274,20 +272,27 @@ static int interp_var_read_late(Compiler *c, const int *parts, int n, int k, int
   return kind;
 }
 
+static void interp_read_held_bytes(Buf *out, int target, int handle) {
+  buf_printf(out, "const char *_t%d = sp_str_or_empty(sp_String_cstr_nil(_t%d)); "
+                  "SP_GC_ROOT(_t%d); size_t _l%d = sp_str_byte_len(_t%d); ",
+             target, handle, target, target, target);
+}
+
 static void interp_plan(Compiler *c, int id, InterpPlan *pl) {
   const NodeTable *nt = c->nt;
-  int n = 0;
-  int *flat = NULL, fcap = 0, *own = NULL;
-  interp_flatten_own(nt, id, &flat, &own, &n, &fcap);
+  int n = 0, fcap = 0;
+  int *flat = NULL;
+  if (interp_has_segments(nt, id) && interp_is_literal_fold(nt, id)) {
+    interp_flatten(nt, id, &flat, &n, &fcap);
+  } else {
+    const int *parts = nt_arr(nt, id, "parts", &n);
+    flat = malloc((size_t)(n ? n : 1) * sizeof(int));
+    if (!flat) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    if (n) memcpy(flat, parts, (size_t)n * sizeof(int));
+  }
   const int *parts = flat;
   int last_operand = n - 1;
   while (last_operand >= 0 && nt_kind(nt, parts[last_operand]) == NK_StringNode) last_operand--;
-  /* (each adjacent literal is built on its own: a part is held only until
-     the end of its segment, sn[k] parts in) */
-  int *sn = malloc(sizeof(int) * (size_t)(n > 0 ? n : 1));
-  if (!sn) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  for (int k = n - 1; k >= 0; k--)
-    sn[k] = k + 1 < n && own[k + 1] == own[k] ? sn[k + 1] : k + 1;
   WPart *wp = malloc(sizeof(WPart) * (size_t)(n > 0 ? n : 1));
   if (!wp) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   int nwp = 0, ndyn_or_scalar = 0;
@@ -300,11 +305,23 @@ static void interp_plan(Compiler *c, int id, InterpPlan *pl) {
   Buf late; memset(&late, 0, sizeof late);
   long fixed_cap = 0;
 
+  Buf *outer_pre = g_pre;
+  g_pre = &decls;
   for (int k = 0; k < n; k++) {
     int pid = parts[k];
     NodeKind pk = nt_kind(nt, pid);
-    /* a segment's held parts are read where it ends */
-    if (k > 0 && own[k] != own[k - 1] && late.p) { buf_puts(&decls, late.p); late.len = 0; late.p[0] = '\0'; }
+    if (pk == NK_InterpolatedStringNode) {
+      /* Finish an adjacent segment before evaluating the following one. */
+      Buf segment = {0};
+      emit_interp(c, pid, &segment);
+      int tv = ++g_tmp;
+      buf_printf(&decls, "const char *_t%d = %s; SP_GC_ROOT(_t%d); size_t _l%d = sp_str_byte_len(_t%d); ",
+                 tv, segment.p, tv, tv, tv);
+      free(segment.p);
+      wp[nwp++] = (WPart){ .kind = WK_DYN, .tmp = tv, .neutral = -1 };
+      ndyn_or_scalar++;
+      continue;
+    }
     if (pk == NK_StringNode) {
       const char *content = nt_str(nt, pid, "content");
       int off = lits.len;
@@ -380,13 +397,12 @@ static void interp_plan(Compiler *c, int id, InterpPlan *pl) {
       }
       /* --share-strings: such a part's handle is taken here, in order, and
          read as the String it holds after every part ran (late) */
-      if (!vexpr[0] && bn == 1 && interp_part_reads_late(c, parts, sn[k], k, expr)) {
+      if (!vexpr[0] && bn == 1 && interp_part_reads_late(c, parts, n, k, expr)) {
         Buf hb; memset(&hb, 0, sizeof hb);
         emit_strbuf_handle_of(c, expr, &hb);
         int hv = ++g_tmp, tv3 = ++g_tmp;
         buf_printf(&decls, "sp_String *_t%d = SP_STR_HDL(%s); SP_GC_ROOT(_t%d); ", hv, hb.p ? hb.p : "NULL", hv);
-        buf_printf(&late, "const char *_t%d = sp_str_or_empty(sp_strbuf_read(_t%d)); SP_GC_ROOT(_t%d); "
-                   "size_t _l%d = sp_str_byte_len(_t%d); ", tv3, hv, tv3, tv3, tv3);
+        interp_read_held_bytes(&late, tv3, hv);
         free(hb.p);
         wp[nwp].kind = WK_DYN; wp[nwp].tmp = tv3; wp[nwp].plain = 0; wp[nwp].neutral = -1;
         wp[nwp].lit_off = 0; wp[nwp].lit_esc_len = 0; wp[nwp].lit_len = 0;
@@ -396,7 +412,7 @@ static void interp_plan(Compiler *c, int id, InterpPlan *pl) {
       }
       /* --share-strings: a call answering its receiver, over a variable that a
          later part changes in place, is run here and its String read late */
-      int late_call = t == TY_STRING && !vexpr[0] && interp_var_read_late(c, parts, sn[k], k, expr, NULL) == 2;
+      int late_call = t == TY_STRING && !vexpr[0] && interp_var_read_late(c, parts, n, k, expr, NULL) == 2;
       /* Build this part's conversion expression. Bounded scalars keep their
          native C type (written digit-by-digit later); everything else
          converts to a marker-carrying string whose byte length is summed. */
@@ -649,6 +665,7 @@ static void interp_plan(Compiler *c, int id, InterpPlan *pl) {
       }
       else {
         free(conv.p); free(lits.p); free(decls.p); free(late.p); free(wp); free(flat);
+        g_pre = outer_pre;
         unsupported(c, pid, "interpolation value");
       }
       iv_done:
@@ -686,12 +703,7 @@ static void interp_plan(Compiler *c, int id, InterpPlan *pl) {
       else if (held_string) {
         int th = ++g_tmp;
         buf_printf(&decls, "sp_String *_t%d = %s; SP_GC_ROOT(_t%d); ", th, conv.p, th);
-        /* Adjacent literals finish separately. Preserve a completed
-           segment's bytes while subsequent literals evaluate. */
-        int snapshot = sn[k] <= last_operand;
-        buf_printf(&late, "const char *_t%d = %ssp_str_or_empty(sp_String_cstr_nil(_t%d))%s; "
-                   "SP_GC_ROOT(_t%d); size_t _l%d = sp_str_byte_len(_t%d); ",
-                   tv2, snapshot ? "sp_str_dup(" : "", th, snapshot ? ")" : "", tv2, tv2, tv2);
+        interp_read_held_bytes(&late, tv2, th);
       }
       else if (t == TY_STRING && !vexpr[0] && repr_of(c, expr).strbuf_src == RS_HANDLE &&
                (nt_kind(nt, expr) == NK_LocalVariableReadNode || nt_kind(nt, expr) == NK_InstanceVariableReadNode) &&
@@ -708,18 +720,17 @@ static void interp_plan(Compiler *c, int id, InterpPlan *pl) {
         if (nt_kind(nt, expr) == NK_LocalVariableReadNode) emit_local_ref(c, expr, nt_str(nt, expr, "name"), &hb);
         else emit_strbuf_handle_of(c, expr, &hb);
         buf_printf(&decls, "sp_String *_t%d = SP_STR_HDL(%s); SP_GC_ROOT(_t%d); ", th, hb.p ? hb.p : "NULL", th);
-        buf_printf(&late, "const char *_t%d = sp_str_or_empty(SP_STR_B(_t%d)); SP_GC_ROOT(_t%d); size_t _l%d = sp_str_byte_len(_t%d); ",
-                   tv2, th, tv2, tv2, tv2);
+        interp_read_held_bytes(&late, tv2, th);
         free(hb.p);
       }
       else {
         int defer = 0;
         if (bn == 1 && t == TY_STRING && !vexpr[0] && strbuf_read_copies(c, expr))
-          for (int k2 = k + 1; k2 < sn[k] && !defer; k2++)
+          for (int k2 = k + 1; k2 < n && !defer; k2++)
             defer = nt_kind(nt, parts[k2]) == NK_EmbeddedStatementsNode && subtree_has_side_effect(c, parts[k2]);
         /* --share-strings: a variable that holds its bytes, changed in place by a later part */
         int late_base = -1;
-        if (!defer && t == TY_STRING && !vexpr[0]) defer = interp_var_read_late(c, parts, sn[k], k, expr, &late_base);
+        if (!defer && t == TY_STRING && !vexpr[0]) defer = interp_var_read_late(c, parts, n, k, expr, &late_base);
         if (defer == 2) {
           /* the call runs here, its String is read after the last part
              (nil, a bang that changed nothing, reads as nothing) */
@@ -745,55 +756,19 @@ static void interp_plan(Compiler *c, int id, InterpPlan *pl) {
     }
     else {
       free(lits.p); free(decls.p); free(late.p); free(wp); free(flat);
+      g_pre = outer_pre;
       unsupported(c, pid, "interpolation part");
     }
   }
   if (late.p) buf_puts(&decls, late.p);
   free(late.p);
-  free(own); free(sn);
+  g_pre = outer_pre;
   pl->wp = wp; pl->nwp = nwp; pl->ndyn_or_scalar = ndyn_or_scalar;
   pl->lits = lits; pl->decls = decls; pl->fixed_cap = fixed_cap; pl->flat = flat;
-}
-
-/* Does the subtree at n call a String mutator? */
-static int interp_part_mutates(const NodeTable *nt, int n) {
-  if (n < 0) return 0;
-  if (nt_kind(nt, n) == NK_CallNode && nt_str(nt, n, "name") && is_string_rebind_mutator(nt_str(nt, n, "name"))) return 1;
-  for (int i = 0; i < nt_num_refs(nt, n); i++)
-    if (interp_part_mutates(nt, nt_ref_at(nt, n, i))) return 1;
-  for (int i = 0; i < nt_num_arrs(nt, n); i++) {
-    int m = 0; const int *ids = nt_arr_at(nt, n, i, &m);
-    for (int j = 0; j < m; j++) if (interp_part_mutates(nt, ids[j])) return 1;
-  }
-  return 0;
-}
-
-/* --share-strings: an interpolation whose part changes an attribute
-   assignment's String while another part changes a String too. CRuby reads
-   every part's String after all of them ran; the parts here are read as each
-   runs, a copy of the String at that moment (as for a variable). */
-static void interp_refuse_assign_order(Compiler *c, int id) {
-  const NodeTable *nt = c->nt;
-  int *flat = NULL, n = 0, cap = 0;
-  interp_flatten(nt, id, &flat, &n, &cap);
-  int hit = 0;
-  for (int i = 0; i < n && !hit; i++) {
-    int body = nt_ref(nt, flat[i], "statements"), bn = 0;
-    const int *bb = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &bn) : NULL;
-    if (bn != 1 || !strbuf_assign_route(c, bb[0]) || !interp_part_mutates(nt, bb[0])) continue;
-    for (int j = 0; j < n && !hit; j++)
-      if (j != i && interp_part_mutates(nt, flat[j])) hit = 1;
-  }
-  free(flat);
-  if (hit)
-    unsupported_feature(c, id, "an interpolation that changes an attribute assignment's String "
-                        "in one part and a String in another reads each part as it runs, where CRuby reads them all "
-                        "after the last (a String is not yet shared by reference through an interpolation). Make the "
-                        "changes statements of their own.");
+  pl->single_expression = n == 1 && nt_kind(nt, parts[0]) == NK_EmbeddedStatementsNode;
 }
 
 void emit_interp(Compiler *c, int id, Buf *b) {
-  interp_refuse_assign_order(c, id);
   InterpPlan pl; memset(&pl, 0, sizeof pl);
   interp_plan(c, id, &pl);
   WPart *wp = pl.wp; int nwp = pl.nwp, ndyn_or_scalar = pl.ndyn_or_scalar;
@@ -837,7 +812,8 @@ void emit_interp(Compiler *c, int id, Buf *b) {
      part can be binary; without one the result is UTF-8. */
   int eid = -1;
   for (int k = 0; k < nwp && eid < 0; k++) if (wp[k].kind == WK_DYN) eid = ++g_tmp;
-  /* a leading literal makes it UTF-8 from the start */
+  /* A leading literal sets the initial encoding. A literal consisting of
+     one interpolation has an implicit empty literal as its first part. */
   int lead = -1;
   for (int k = 0; k < nwp && lead < 0; k++)
     if (wp[k].kind == WK_DYN || wp[k].kind == WK_LIT) {
@@ -845,7 +821,7 @@ void emit_interp(Compiler *c, int id, Buf *b) {
       lead = k;
     }
   int lead_lit = lead >= 0 && wp[lead].kind == WK_LIT;
-  if (eid >= 0) buf_printf(b, "int _e%d = %d; ", eid, lead_lit ? 0 : -1);
+  if (eid >= 0) buf_printf(b, "int _e%d = %d; ", eid, lead_lit || pl.single_expression ? 0 : -1);
   for (int k = 0; k < nwp; k++) {
     if (eid >= 0 && wp[k].kind == WK_LIT && wp[k].lit_len > 0 && !(lead_lit && k == lead))
       buf_printf(b, "_e%d = sp_str_enc_step_i(_e%d, _t%d, (size_t)(_t%d - _t%d), \"%.*s\", %ld, 0); ",
@@ -898,6 +874,7 @@ void emit_interp(Compiler *c, int id, Buf *b) {
    through `open_n`/`close_n` when it has one. Answers 0 when the plan has no
    dynamic part (a literal fold, left to the plain path). */
 int emit_interp_append(Compiler *c, int id, const char *open, const char *open_n, Buf *b, int indent) {
+  if (interp_has_segments(c->nt, id)) return 0;
   InterpPlan pl; memset(&pl, 0, sizeof pl);
   interp_plan(c, id, &pl);
   if (pl.ndyn_or_scalar == 0) { interp_plan_free(&pl); return 0; }

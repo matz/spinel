@@ -26,3 +26,6 @@ test/loop_bigint_return.rb
 # a local a while multiplies past 2^64: the default mode grows it into a
 # Bignum (#10094), which wrap never makes
 test/while_mul_keeps_local_kind.rb
+# bytes_to_i multiplies a local from 0 past 2^64: the default mode grows
+# it into a Bignum (#10094), which wrap never makes
+test/bigint_op_assign_nilable_int.rb

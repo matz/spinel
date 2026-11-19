@@ -302,7 +302,8 @@ static SP_ALWAYS_INLINE inline char *sp_str_alloc_born(size_t len, int nogc) {
   char *body = (char *)(h + 1);
   body[0] = (char)0xfe;
   body[1 + len] = 0;
-  r->data = body + 1; r->len = (int64_t)len; r->cap = (int64_t)len; r->binary = 0; r->temporarily_locked = 0;
+  r->data = body + 1; r->len = (int64_t)len; r->cap = (int64_t)len; r->binary = 0;
+  r->temporarily_locked = 0; r->copy_on_intern = 0;
   if (sp_alloc_report_on) sp_alloc_report_str(len);
   return body + 1;
 }

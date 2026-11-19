@@ -540,7 +540,9 @@ void sp_poly_puts(sp_RbVal v)
    Symbol#name and byte readers can reuse the spelling itself. */
 sp_String *sp_sym_to_s_new(sp_sym id)
 {
-  return sp_String_freeze(sp_String_new_unfrozen(sp_sym_to_s_frozen(id)));
+  sp_String *s = sp_String_freeze(sp_String_new_unfrozen(sp_sym_to_s_frozen(id)));
+  s->copy_on_intern = 1;
+  return s;
 }
 
 /* Object#to_s when a user override returns a non-String. */

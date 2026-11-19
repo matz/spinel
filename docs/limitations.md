@@ -1493,7 +1493,9 @@ it "will be frozen in the future"); Spinel answers it frozen, as it does
 literals: `:a.to_s.frozen?`, `:a.id2name.frozen?` and `String(:a).frozen?`
 are `true`. Appending to either `:a.to_s` or `:a.id2name` raises
 FrozenError. Use unary `+` or `dup` for a mutable copy. Each call still answers its own object
-(`:a.to_s.equal?(:a.to_s)` is `false`), as in CRuby.
+(`:a.to_s.equal?(:a.to_s)` is `false`), as in CRuby. Unary `-` and
+`dedup` return the canonical frozen String, distinct from the conversion
+result.
 Repeated `Symbol#name` calls through the same dispatch path return the
 same frozen spelling. The native extension API `rb_sym2str` shares the
 typed call's String. A boxed Ruby call can choose a different object when

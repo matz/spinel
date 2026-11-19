@@ -1185,6 +1185,7 @@ static inline const char *sp_str_uminus_val(const char *s) {
   /* A frozen String with instance state or a subclass keeps that state
      on its own object instead of entering the base String table. */
   sp_String *owner = sp_str_fd_owner(s);
+  if (owner && owner->copy_on_intern) return sp_str_dedup(s);
   if (owner && (sp_ivtbl_get(owner) ||
                 (sp_bsub_cls_fn && sp_bsub_cls_fn(sp_box_obj(owner, SP_BUILTIN_STRBUF)) >= 0))) return s;
   SP_GC_ROOT_STR(s);

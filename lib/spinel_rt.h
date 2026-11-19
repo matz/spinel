@@ -3694,6 +3694,7 @@ static sp_PolyArray *sp_poly_transpose_rows(sp_PolyArray *a) {
   sp_int cols = -1;
   for (sp_int j = 0; j < n; j++) {
     sp_RbVal e = j < a->len ? a->data[j] : sp_box_nil();
+    SP_GC_ROOT_RBVAL(e);  /* The converted row lives through the snapshot allocation. */
     if (sp_poly_is_user_obj(e) && e.v.p) {
       sp_RbVal got = sp_obj_to_ary_fn(e); SP_GC_ROOT_RBVAL(got);
       const char *cn = sp_poly_class_name(e);
@@ -18832,10 +18833,14 @@ static sp_RbVal sp_poly_exc_acc(sp_RbVal v, const char *which) {
     return e->backtrace ? sp_box_obj(e->backtrace, SP_BUILTIN_STR_ARRAY) : sp_box_nil();
   if (!strcmp(which, "cause"))
     return e->cause ? sp_box_obj(e->cause, SP_BUILTIN_EXCEPTION) : sp_box_nil();
-  if (!strcmp(which, "full_message"))
+  if (!strcmp(which, "full_message")) {
+    SP_GC_ROOT(e);
     return sp_box_str_new(sp_exc_full_text(e, sp_exc_message(e)));
-  if (!strcmp(which, "detailed_message"))
+  }
+  if (!strcmp(which, "detailed_message")) {
+    SP_GC_ROOT(e);
     return sp_box_str_new(sp_exc_detailed_text(e, sp_exc_message(e)));
+  }
   /* nil for an exception never raised, the frames once it was -- the
      logger gem's Formatter asks `if msg.backtrace` of a poly message */
   if (!strcmp(which, "backtrace")) return e->backtrace ? sp_box_str_array(e->backtrace) : sp_box_nil();

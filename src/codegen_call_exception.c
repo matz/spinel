@@ -312,7 +312,8 @@ int emit_call_exception_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, c
       { int tfm = ++g_tmp;
         Buf rbm = expr_buf(c, recv);
         emit_indent(g_pre, g_indent);
-        buf_printf(g_pre, "sp_Exception *_t%d = (sp_Exception *)(%s);\n", tfm, rbm.p ? rbm.p : "");
+        buf_printf(g_pre, "sp_Exception *_t%d = (sp_Exception *)(%s); SP_GC_ROOT(_t%d);\n",
+                   tfm, rbm.p ? rbm.p : "", tfm);
         free(rbm.p);
         const char *mfn = exc_has_user_msg_override(c) ? "sp_user_exc_message" : "sp_exc_message";
         if (sp_streq(name, "full_message"))
@@ -511,9 +512,9 @@ int emit_call_exception_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, c
         int t = ++g_tmp;
         buf_printf(b, "({ sp_RbVal _t%d = ", t);
         emit_expr(c, recv, b);
-        buf_printf(b, "; sp_Exception *_e%d = (_t%d.tag == SP_TAG_OBJ && _t%d.v.p && "
+        buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_Exception *_e%d = (_t%d.tag == SP_TAG_OBJ && _t%d.v.p && "
                       "(_t%d.cls_id == SP_BUILTIN_EXCEPTION || sp_is_exc_subclass_cls(_t%d.cls_id)))"
-                      " ? (sp_Exception *)_t%d.v.p : NULL; ", t, t, t, t, t, t);
+                      " ? (sp_Exception *)_t%d.v.p : NULL; ", t, t, t, t, t, t, t);
         if (sp_streq(name, "full_message"))
           buf_printf(b, "_e%d ? sp_exc_full_text(_e%d, sp_user_exc_message(_e%d))",
                      t, t, t);
@@ -723,6 +724,8 @@ int emit_call_exception_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, c
     }
     if (sp_streq(name, "full_message")) {
       int t = hoist_exc_recv(c, recv);
+      emit_indent(g_pre, g_indent);
+      buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", t);
       const char *mfn = exc_has_user_msg_override(c) ? "sp_user_exc_message" : "sp_exc_message";
       buf_printf(b, "sp_exc_full_text(_t%d, %s(_t%d))", t, mfn, t);
       return 1;
@@ -730,6 +733,8 @@ int emit_call_exception_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, c
     /* detailed_message without keywords -> "message (ClassName)" */
     if (sp_streq(name, "detailed_message")) {
       int t = hoist_exc_recv(c, recv);
+      emit_indent(g_pre, g_indent);
+      buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", t);
       const char *mfn = exc_has_user_msg_override(c) ? "sp_user_exc_message" : "sp_exc_message";
       buf_printf(b, "sp_exc_detailed_text(_t%d, %s(_t%d))", t, mfn, t);
       return 1;

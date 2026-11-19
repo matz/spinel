@@ -1879,7 +1879,7 @@ static int sm_name_matches(const Compiler *c, int s, const char *name) {
    index's ordering. Side 3 + side asks a top-level method's (sm_top_last). */
 static int sm_scan(Compiler *c, int class_id, const char *name, int side) {
   for (int s = c->nscopes - 1; s >= 0; s--)
-    if (side >= 3 ? sm_toplevel(c, s) && !c->scopes[s].is_cmethod == !(side - 3) && c->scopes[s].name &&
+    if ((NT_WORK(), 0) || side >= 3 ? sm_toplevel(c, s) && !c->scopes[s].is_cmethod == !(side - 3) && c->scopes[s].name &&
                     sp_streq(c->scopes[s].name, name)
                   : sm_owns_side(c, s, class_id, side) && sm_name_matches(c, s, name)) return s;
   return -1;

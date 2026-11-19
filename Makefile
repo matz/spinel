@@ -6300,34 +6300,32 @@ ALIAS_RAISE_LIMIT ?= 2.2
 # one statement list are placed in one rebuild of it, where one copy of the
 # list per write grew as K^2.
 COND_DEFS_LIMIT ?= 2.2
-# The same program at K=800 and K=3200, by CPU time (the best of three
-# compiles each): work the count does not see, as a parent map of the whole
-# program rebuilt per history was (13.5x, where it reads 5.8x to 6.7x; the
-# rest of the compiler grows faster than linearly in the K classes: a
-# compiler without the entries, which stops at the program's first such
-# def, reads 7.0x to 7.4x). A time ratio moves with the machine's load; only a
-# rise past the limit is a finding.
-COND_DEFS_CPU_LIMIT ?= 9.0
+# The same program at K=800 and K=3200, by the whole compile's work: a
+# parent map of the whole program rebuilt per history (nt_parents counts
+# its walk) read 13.5x by CPU time, where the program reads 5.8x to 6.7x
+# (the rest of the compiler grows faster than linearly in the K classes).
+# It was timed until the count saw the walk; a time ratio moved with the
+# machine's cores and load (#12183).
+COND_DEFS_CPU_LIMIT ?= 6.5
 # A Base with N subclasses and 200 methods calling two methods on one of
-# them, at N=400 and N=800 (test/scale/face_landings.sh), by the CPU time of
-# the pre-fixpoint phase (the best of three): the face each class a call may
-# land on asks (ct_face_for) did lookups the count does not see, Object's
-# method_missing and the top-level methods, once per class (3.1x; 2.1x
-# without). A time ratio moves with the machine's load; only a rise past the
-# limit is a finding.
-FACE_LANDINGS_LIMIT ?= 2.6
+# them, at N=400 and N=800 (test/scale/face_landings.sh), by the work of
+# the pre-fixpoint phase: the face each class a call may land on asks
+# (ct_face_for) looked up Object's method_missing and the top-level methods
+# once per class (3.27x; 1.97x without). Those lookups scan the scopes
+# (sm_scan counts each scope it reads); the line was timed until the count
+# saw them, and a time ratio moved with the machine's cores and load
+# (#12183).
+FACE_LANDINGS_LIMIT ?= 2.2
 # N classes under a chain of six, each calling four class methods the
 # chain's root defines in its body (test/scale/inherited_class_calls.sh), at
-# N=200 and N=800, by the class structure phase's time (SP_TIMING's elapsed
-# time, the best of three): before the scope index is frozen each lookup of
-# a call's name up the class's chain scanned every scope
-# (specialize_inherited_cls_new, comp_name_answered), work the count does
-# not see (15.1x at 4x the classes;
-# 7.8x to 8.5x with one walk of the scopes per name for every class,
-# comp_scope_batch_begin, where the rest of the phase grows faster than
-# linearly in the classes). A time ratio moves with the machine's load; only
-# a rise past the limit is a finding.
-INHERITED_CLASS_CALLS_LIMIT ?= 11.5
+# N=200 and N=800, by the class structure phase's work: before the scope
+# index is frozen each lookup of a call's name up the class's chain scanned
+# every scope (specialize_inherited_cls_new, comp_name_answered): 13.85x at
+# 4x the classes, 3.53x with one walk of the scopes per name for every
+# class (comp_scope_batch_begin). sm_scan counts each scope it reads; the
+# line was timed until it did, and a time ratio moved with the machine's
+# cores and load (#12183).
+INHERITED_CLASS_CALLS_LIMIT ?= 4.4
 # N nested classes, each of a leaf name of its own (test/scale/class_qualification.sh),
 # and ten calls per class, at N=400 and N=800: the work of the nested program
 # less the work of the same program with the classes at the top level, which
@@ -6421,8 +6419,14 @@ CONST_COLLISIONS_LIMIT ?= 2.2
 # names before its own defs (`read`) keeps each extend's copy behind the own
 # def, and the record asks every call of the name whether it meets the
 # module's version (elab_version_met): it reads 2.29x to 2.33x, against
-# 2.26x before those questions, so it takes the same limit.
-MODULE_FUNCTIONS_LIMIT ?= 2.4
+# 2.26x before those questions, so it takes the same limit. Since sm_scan
+# counts each scope it reads (#12183) the pair reads 2.51x and the `read`
+# pair 2.63x: before the scope index is frozen, register_extends' copies
+# (specialize_cmethod_for, cmethod_needs_specialization) look the class
+# methods up by a scan of every scope, which the count did not see and the
+# compile's time does (3.0x at N=100 and N=200). The limit sits above that
+# until those lookups stop scanning.
+MODULE_FUNCTIONS_LIMIT ?= 2.9
 # N classes that each extend one module, read its method in the body and
 # then define it on their own singleton (test/scale/shadowed_extends.sh), at
 # N=400 and N=800: the work of that program less the work of the same
@@ -6598,26 +6602,15 @@ scale-test: $(SPINEL_WORK)
 	bcb=$$(sw -c -o "$$tmp/bc4.c" "$$tmp/bc4.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	bpa=$$(sw -c -o "$$tmp/bp2.c" "$$tmp/bp2.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	bpb=$$(sw -c -o "$$tmp/bp4.c" "$$tmp/bp4.rb") || { rm -rf "$$tmp"; exit 1; }; \
-	cpu () { b=; for i in 1 2 3; do \
-	  o=$$( ( $(SPINEL_WORK) -c -o "$$tmp/qt.c" "$$tmp/$$1" >/dev/null 2>&1 || exit 1; times ) ) || \
-	    { echo "scale-test: FAIL (spinel-work failed on $$1)" >&2; return 1; }; \
-	  t=$$(echo "$$o" | tail -1 | awk '{ split($$1, u, /[ms]/); split($$2, s, /[ms]/); print u[1] * 60 + u[2] + s[1] * 60 + s[2] }'); \
-	  b=$$(awk -v b="$$b" -v t="$$t" 'BEGIN { print (b == "" || t < b) ? t : b }'); done; echo "$$b"; }; \
 	gen cond_defs 800 q8.rb; gen cond_defs 3200 q32.rb; \
-	qta=$$(cpu q8.rb) || { rm -rf "$$tmp"; exit 1; }; \
-	qtb=$$(cpu q32.rb) || { rm -rf "$$tmp"; exit 1; }; \
-	phase () { b=; for i in 1 2 3; do \
-	  o=$$(SP_TIMING=1 $(SPINEL_WORK) -c -o "$$tmp/fl.c" "$$tmp/$$1" 2>&1); r=$$?; \
-	  if [ $$r -ne 0 ]; then echo "scale-test: FAIL (spinel-work exited $$r on $$1)" >&2; echo "$$o" | tail -3 >&2; return 1; fi; \
-	  t=$$(echo "$$o" | sed -n "s/^spinel-timing: phase=$$2 ms=//p" | head -1); \
-	  [ -n "$$t" ] || { echo "scale-test: FAIL (spinel-work timed no $$2 on $$1)" >&2; return 1; }; \
-	  b=$$(awk -v b="$$b" -v t="$$t" 'BEGIN { print (b == "" || t < b) ? t : b }'); done; echo "$$b"; }; \
+	qta=$$(sw -c -o "$$tmp/q8.c" "$$tmp/q8.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	qtb=$$(sw -c -o "$$tmp/q32.c" "$$tmp/q32.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	gen face_landings 400 fl4.rb; gen face_landings 800 fl8.rb; \
-	fla=$$(phase fl4.rb an_pre_fixpoint) || { rm -rf "$$tmp"; exit 1; }; \
-	flb=$$(phase fl8.rb an_pre_fixpoint) || { rm -rf "$$tmp"; exit 1; }; \
+	fla=$$(sws an_pre_fixpoint -c -o "$$tmp/fl4.c" "$$tmp/fl4.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	flb=$$(sws an_pre_fixpoint -c -o "$$tmp/fl8.c" "$$tmp/fl8.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	gen inherited_class_calls 200 ih2.rb; gen inherited_class_calls 800 ih8.rb; \
-	iha=$$(phase ih2.rb an_class_structure) || { rm -rf "$$tmp"; exit 1; }; \
-	ihb=$$(phase ih8.rb an_class_structure) || { rm -rf "$$tmp"; exit 1; }; \
+	iha=$$(sws an_class_structure -c -o "$$tmp/ih2.c" "$$tmp/ih2.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	ihb=$$(sws an_class_structure -c -o "$$tmp/ih8.c" "$$tmp/ih8.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	rm -rf "$$tmp"; \
 	if [ -z "$$wa" ] || [ -z "$$wb" ] || [ -z "$$fa" ] || [ -z "$$fb" ] || [ -z "$$pa" ] || [ -z "$$pb" ] || \
 	   [ -z "$$ha" ] || [ -z "$$hb" ] || [ -z "$$ca" ] || [ -z "$$cb" ] || [ -z "$$sa" ] || [ -z "$$sb" ] || \
@@ -6728,14 +6721,14 @@ scale-test: $(SPINEL_WORK)
 	  r = b / a; \
 	  printf "scale-test: block condition work at 2x the methods is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
 	  { [ $$? -eq 2 ] || echo "scale-test: FAIL (the block_given? rewrite walked the whole table for each method's block parameter: see an_phase_class_structure)"; exit 1; }; \
-	awk -v a="$$qta" -v b="$$qtb" -v lim="$(COND_DEFS_CPU_LIMIT)" 'BEGIN { if (a <= 0) a = 0.01; r = b / a; \
-	  printf "scale-test: open method history CPU time at 4x the histories is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
+	awk -v a="$$qta" -v b="$$qtb" -v lim="$(COND_DEFS_CPU_LIMIT)" 'BEGIN { if (a <= 0) a = 1; r = b / a; \
+	  printf "scale-test: open method history work at 4x the histories is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
 	  { echo "scale-test: FAIL (the open histories' asks or makes did work the count does not see once per history, such as a whole-program map: see ver_entries_build)"; exit 1; }; \
-	awk -v a="$$fla" -v b="$$flb" -v lim="$(FACE_LANDINGS_LIMIT)" 'BEGIN { if (a <= 0) a = 0.01; r = b / a; \
-	  printf "scale-test: visibility face CPU time at 2x the landing classes is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
+	awk -v a="$$fla" -v b="$$flb" -v lim="$(FACE_LANDINGS_LIMIT)" 'BEGIN { if (a <= 0) a = 1; r = b / a; \
+	  printf "scale-test: visibility face work at 2x the landing classes is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
 	  { echo "scale-test: FAIL (each class a call may land on asked lookups that answer the same for every class: see ct_face_for)"; exit 1; }; \
-	awk -v a="$$iha" -v b="$$ihb" -v lim="$(INHERITED_CLASS_CALLS_LIMIT)" 'BEGIN { if (a <= 0) a = 0.01; r = b / a; \
-	  printf "scale-test: inherited class method lookup phase time at 4x the classes is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
+	awk -v a="$$iha" -v b="$$ihb" -v lim="$(INHERITED_CLASS_CALLS_LIMIT)" 'BEGIN { if (a <= 0) a = 1; r = b / a; \
+	  printf "scale-test: inherited class method lookup work at 4x the classes is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
 	  { echo "scale-test: FAIL (each class-body call scanned every scope per ancestor for its name: see comp_scope_batch_begin)"; exit 1; }
 
 .PHONY: bisect-test

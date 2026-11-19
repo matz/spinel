@@ -56639,9 +56639,12 @@ static void an_phase_reconcile_check(Compiler *c) {
 }
 
 /* an analysis phase under --timing: `phase=an_<name>`; a step named
-   `an_<name>` around the passes of its list that are no step of their own */
-#define AN_PHASE(nm, call) do { double _ph0 = sp_timing_now(); infer_memo_boundary(); AN_STEP_V("an_" nm, call); \
-  infer_memo_boundary(); sp_timing_end(_ph0, "an_" nm, ""); } while (0)
+   `an_<name>` around the passes of its list that are no step of their own;
+   and spinel-work's count of its work (nt_work_step), which make scale-test
+   reads for a phase a program shape stresses */
+#define AN_PHASE(nm, call) do { double _ph0 = sp_timing_now(); unsigned long long _phw = nt_work_now(); \
+  infer_memo_boundary(); AN_STEP_V("an_" nm, call); \
+  infer_memo_boundary(); sp_timing_end(_ph0, "an_" nm, ""); nt_work_step("an_" nm, _phw); } while (0)
 /* Does a node hold a Hash of another shape than at the snapshots: one the
    marks, or promote's widening before them, made poly-valued? */
 static int an_hash_reshaped(Compiler *c, const NodeTypes *settled, const NodeTypes *calls) {

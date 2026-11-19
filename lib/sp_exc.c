@@ -1340,11 +1340,11 @@ const char *sp_exc_cat(int n, ...) {
   for (int i = 0; i < n && i < 8; i++) { memcpy(w, parts[i], lens[i]); w += lens[i]; }
   return r;
 }
-/* "<Class>: <msg>" and "<msg> (<Class>)": the class name is read from the exception
-   itself (no allocation), msg is the Spinel String the caller computed first, and the
-   copy runs with no collection, so no argument needs a root. */
+/* "<Class>: <msg>" and "<msg> (<Class>)": the class display can allocate.
+   Keep the message bytes the caller computed live until the copy. */
 const char *sp_exc_full_text(volatile sp_Exception *ve, const char *msg) {
   sp_Exception *e = (sp_Exception *)ve;
+  SP_GC_ROOT_STR(msg);
   const char *cn = sp_exc_cls_display(e && e->cls_name ? e->cls_name : "RuntimeError");
   size_t lc = strlen(cn), lm = sp_str_byte_len(msg);
   char *r = sp_str_alloc_nogc(lc + 2 + lm);
@@ -1353,6 +1353,7 @@ const char *sp_exc_full_text(volatile sp_Exception *ve, const char *msg) {
 }
 const char *sp_exc_detailed_text(volatile sp_Exception *ve, const char *msg) {
   sp_Exception *e = (sp_Exception *)ve;
+  SP_GC_ROOT_STR(msg);
   const char *cn = sp_exc_cls_display(e && e->cls_name ? e->cls_name : "RuntimeError");
   size_t lc = strlen(cn), lm = sp_str_byte_len(msg);
   /* An empty message names the class, except RuntimeError's default text.

@@ -2820,11 +2820,12 @@ static int ct_window_version(Compiler *c, int id, int cls, const char *name, int
   return ct_every_span(c, id, cls, name, sg, ds, 2) == 1 ? ct_window_def(c, cls, name, sg, aliased, ds[0]) : -1;
 }
 /* How call id asks the record for the versions it may meet
-   (elab_call_meet): after its point where it runs later, and as the
+   (elab_call_meet): after its point where it runs later (also in a block
+   that may run from an exit handler, elab_runs_after_load), and as the
    mixin's copy's call in a mixin's copy of its body */
 static int ct_meet_how(Compiler *c, int id) {
   const Scope *own = comp_scope_of(c, id);
-  return ct_after_point(c, id) | (own && own->origin_module_ci > 0 ? ELAB_MEET_COPY : 0);
+  return (ct_after_point(c, id) || elab_runs_after_load(c, id)) | (own && own->origin_module_ci > 0 ? ELAB_MEET_COPY : 0);
 }
 /* The one version node id meets as cls's `name` (singleton when sg): the
    one the record answers at id's point, or the one over the statements id
@@ -3925,7 +3926,7 @@ static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigne
     return vi;
   }
   ElabMeet m;
-  int kept = ct_after_point(c, id);   /* (it runs at its point only if nothing around it runs later) */
+  int kept = ct_after_point(c, id) || elab_runs_after_load(c, id);   /* (it runs at its point only if nothing around it runs later, nor a handler may run its block) */
   const Scope *own = comp_scope_of(c, id);
   elab_call_meet(c, id, rcls, name, sg, kept | (own && own->origin_module_ci > 0 ? ELAB_MEET_COPY : 0), &m, ds, VER_MAX_ARMS);
   /* (a call in a body that never runs meets no version at any time: the

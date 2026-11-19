@@ -6872,7 +6872,7 @@ typedef struct {
   Compiler *c; LoadRecord *r;
   int s, n, *key, *ustart, *ulist, *stack, nstack, *hnext, *hfirst, *pend, npend, *hq, nhq;
   unsigned char *hreach, *hn, *rq, *sub, *ext, *seen, *rbits;   /* (rbits: by region, LR_RG_*; hn: by history, how many times it was reached, to 255; seen: by def node, then by handler's block + n) */
-  int allinst, cb, allcls, any, builders, ncname, allreg, post;   /* (post: the post-load pass is running) */
+  int allinst, cb, allcls, any, builders, ncname, allreg;
   LrRtaName *cname;
   int *kid, *kids;   /* the classes by superclass: kids[kid[p + 1] .. kid[p + 2]) are p's (main's at p = LR_MAIN) */
 } LrRta;
@@ -8083,6 +8083,16 @@ int elab_runs_later(Compiler *c, int id) {
   int n;
   const int *par = elab_node_parents(c, &n);
   return lr_in_body(c, par, n, id, LRW_LATER, 0);
+}
+/* Does node id, which has a point of its own, run in a block the record does
+   not take to run at once (a Hash's default block, one a builtin keeps) in a
+   program that may run code after the load (LoadRecord.post)? The block may
+   be run from an exit handler, so the call may meet versions made after the
+   load, which its point does not hold: it is answered by its window. */
+int elab_runs_after_load(Compiler *c, int id) {
+  LoadRecord *r = elab_fresh(c);
+  lr_run_points(c);
+  return r->post && elab_in_unplaced_block(c, id);
 }
 int elab_in_unplaced_block(Compiler *c, int id) {
   int n;

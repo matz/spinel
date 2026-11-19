@@ -3180,6 +3180,7 @@ int brk_wrapper_light(Compiler *c, int id);
 int brk_wrapper_surely_light(Compiler *c, int id);
 void emit_array_splice(Compiler *c, int id, int recv, TyKind rt, int start_node, int len_node, int range_node, int rhs_node, Buf *b);
 int aset_range_held(Compiler *c, TyKind rt, const int *argv);
+int emit_poly_array_ordered_set(Compiler *c, int recv, const int *argv, int statement, Buf *b);
 void emit_aset_range_held(Compiler *c, int id, int recv, TyKind rt, const int *argv, Buf *b);
 int frange_index_view(Compiler *c, int id);
 int splice_to_ary_mi(Compiler *c, int op, TyKind rhs_ty);

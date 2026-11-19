@@ -25655,6 +25655,10 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
         return 1;
       }
       emit_indent(b, indent);
+      if (emit_poly_array_ordered_set(c, recv, argv, 1, b)) {
+        buf_puts(b, ";\n");
+        return 1;
+      }
       /* the receiver read first, as the typed Arrays' store holds it: in
          the prelude, ahead of any statement the index or the value puts
          there (a block's, a rescue's) */
@@ -25761,11 +25765,21 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
     if (!has_user && sp_streq(name, "push") && argc != 1 && !splat && an_queue_timeout_arg(nt, id) < 0) {
       int tr = ++g_tmp, ta = ++g_tmp;
       emit_indent(b, indent);
-      buf_printf(b, "{ sp_RbVal _t%d = ", tr); emit_expr(c, recv, b);
-      buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_RbVal _t%d[%d] = {", tr, ta, argc > 0 ? argc : 1);
-      for (int a = 0; a < argc; a++) { buf_puts(b, a ? ", " : " "); emit_boxed(c, argv[a], b); }
-      if (argc == 0) buf_puts(b, " sp_box_nil()");
-      buf_printf(b, " }; if (!sp_poly_queue_push_n(_t%d, %d, _t%d)) {", tr, argc, ta);
+      buf_puts(b, "{ ");
+      Buf *saved_pre = g_pre;
+      g_pre = b;
+      tr = hold_operand(c, recv, TY_POLY, 1, tr, 1, " ", b);
+      buf_printf(b, "sp_RbVal _t%d[%d];", ta, argc > 0 ? argc : 1);
+      /* Each box must survive evaluation of the remaining arguments and
+         any allocation while the Array appends them. */
+      for (int a = 0; a < argc; a++) {
+        buf_puts(b, " ");
+        int tv = hold_operand(c, argv[a], TY_POLY, 1, ++g_tmp, 1, " ", b);
+        buf_printf(b, "_t%d[%d] = _t%d;", ta, a, tv);
+      }
+      g_pre = saved_pre;
+      if (argc == 0) buf_printf(b, " _t%d[0] = sp_box_nil();", ta);
+      buf_printf(b, " if (!sp_poly_queue_push_n(_t%d, %d, _t%d)) {", tr, argc, ta);
       buf_printf(b, " if (!(_t%d.tag == SP_TAG_OBJ && sp_poly_is_array_kind(_t%d.cls_id)))"
                     " sp_raise_nomethod(sp_nomethod_msg(\"push\", _t%d));", tr, tr, tr);
       /* a frozen Array raises even when no value is given */
@@ -25786,6 +25800,19 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
       /* one argument is left: `<<` is sp_poly_shl's whatever the receiver;
          push and append are an Array's (sp_poly_push_stmt) */
       int shl = sp_streq(name, "<<");
+      if (argc == 1 && operand_allocates_beside(c, recv) &&
+          (operand_allocates_beside(c, argv[0]) || repr_box_allocates(c, repr_of(c, argv[0])))) {
+        Buf *saved_pre = g_pre;
+        emit_indent(b, indent);
+        buf_puts(b, "{ ");
+        g_pre = b;
+        int tr = hold_operand(c, recv, TY_POLY, 1, ++g_tmp, 1, " ", b);
+        int tv = hold_operand(c, argv[0], TY_POLY, 1, ++g_tmp, 1, " ", b);
+        g_pre = saved_pre;
+        if (shl) buf_printf(b, "sp_poly_shl(_t%d, _t%d); }\n", tr, tv);
+        else buf_printf(b, "sp_poly_push_stmt(_t%d, _t%d, \"%s\"); }\n", tr, tv, name);
+        return 1;
+      }
       for (int a = 0; a < argc; a++) {
         emit_indent(b, indent);
         buf_puts(b, shl ? "sp_poly_shl(" : "sp_poly_push_stmt("); emit_expr(c, recv, b); buf_puts(b, ", "); emit_boxed(c, argv[a], b);

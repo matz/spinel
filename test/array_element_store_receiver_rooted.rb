@@ -68,3 +68,26 @@ bx = Box.new
 v = (bx.p[(bx.swap!; 1)] = "q" * 40)
 p v
 bx.show
+
+# A Proc's String result goes into the boxed element after the index runs.
+run = -> { +"through proc" }
+bx.p[(churn(10); 0)] = run.call
+p bx.p
+
+# The index and value run before the frozen check, and a frozen Array
+# raises without calling the index object's to_int.
+$store_events = []
+class Index
+  def to_int
+    $store_events << :convert
+    0
+  end
+end
+
+frozen_array = [1, :original].freeze
+begin
+  frozen_array[($store_events << :index; Index.new)] =
+    ($store_events << :value; +"result")
+rescue FrozenError
+  p $store_events
+end

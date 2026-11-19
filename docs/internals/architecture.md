@@ -81,6 +81,9 @@ with class ID `SP_BUILTIN_STRBUF`. This includes frozen literals and the
 objects retained by Hashes, Enumerators, and callbacks. Byte comparisons
 and private conversion buffers can borrow its payload through
 `sp_rbval_string_bytes`.
+Boxed Array pushes hold each argument across evaluation of the next.
+Array element stores hold the receiver, index, and value before a checked
+index conversion. The frozen check precedes that conversion.
 The ENV read paths that return a String default or a missing-key block's
 String use the same result view. The selected branch hands back its
 String handle directly.

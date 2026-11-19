@@ -3672,6 +3672,7 @@ static sp_PolyArray *sp_poly_transpose_rows(sp_PolyArray *a) {
   sp_int cols = -1;
   for (sp_int j = 0; j < n; j++) {
     sp_RbVal e = j < a->len ? a->data[j] : sp_box_nil();
+    SP_GC_ROOT_RBVAL(e);  /* The converted row lives through the snapshot allocation. */
     if (sp_poly_is_user_obj(e) && e.v.p) {
       sp_RbVal got = sp_obj_to_ary_fn(e); SP_GC_ROOT_RBVAL(got);
       const char *cn = sp_poly_class_name(e);

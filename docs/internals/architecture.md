@@ -137,6 +137,11 @@ MatchData's named capture hashes and boxed String scan results construct
 String handles from the counted capture spans. A participating empty
 capture has its own mutable String. A missing capture occupies a nil slot.
 
+A String Range stores the two endpoint handles. The same layout serves
+typed and boxed membership, coverage and Marshal operations. Symbol
+spellings retain their byte count and distinguish binary and text names
+when the bytes include non-ASCII characters.
+
 A conditional assignment to a String instance variable evaluates
 the right-hand side only when the store is taken. It checks whether the
 receiver is frozen after evaluating that value and before updating the slot.

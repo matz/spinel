@@ -23085,7 +23085,7 @@ int emit_arg_type_guards(Compiler *c, int id, Buf *b) {
                         " : (_t%d.tag == SP_TAG_OBJ && _t%d.v.p && _t%d.cls_id == SP_BUILTIN_FLOAT_RANGE)"
                         " ? sp_range_cover_frange(_t%d, *(sp_FloatRange *)_t%d.v.p)"
                         " : (_t%d.tag == SP_TAG_OBJ && _t%d.v.p && _t%d.cls_id == SP_BUILTIN_STR_RANGE)"
-                        " ? sp_range_cover_srange(_t%d, SP_SRANGE_OF(_t%d.v.p))"
+                        " ? sp_range_cover_srange(_t%d, sp_srange_value(_t%d.v.p))"
                         " : sp_poly_case_eq(sp_box_range(_t%d), _t%d); })",
                      tA, tA, tA, tA, tR, tA, tA, tA, tA, tR, tA, tA, tA, tA, tR, tA, tR, tA);
           return 1;

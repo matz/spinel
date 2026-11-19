@@ -20868,7 +20868,7 @@ static sp_Enumerator *sp_Enumerator_new_from(sp_RbVal arr) {
     return e;
   }
   /* ...and an endless String Range streams by succ the same way (its end as
-     the handle it keeps reads it, SP_SRANGE_OF: a shared end is only there) */
+     read the stored endpoint handles from the boxed Range) */
   if (arr.tag == SP_TAG_OBJ && arr.cls_id == SP_BUILTIN_STR_RANGE && arr.v.p &&
       !sp_srange_value(arr.v.p).last)
     return sp_srange_endless_enum(arr, 1);

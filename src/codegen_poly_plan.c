@@ -4597,7 +4597,7 @@ void emit_poly_cases_n(Compiler *c, int id, const char *name, const PolySpecials
       char tn7[24]; snprintf(tn7, sizeof tn7, "_t%d", atmp[0]);
       if (atmp_ty[0] == TY_POLY) buf_puts(&ab7, tn7);
       else emit_boxed_text(c, atmp_ty[0], tn7, &ab7);
-      buf_printf(b, " case SP_BUILTIN_STR_RANGE: _t%d = %ssp_srange_include_poly(SP_SRANGE_OF(_t%d.v.p), %s)%s; break;",
+      buf_printf(b, " case SP_BUILTIN_STR_RANGE: _t%d = %ssp_srange_include_poly(sp_srange_value(_t%d.v.p), %s)%s; break;",
                  tr, ibo, tv, ab7.p ? ab7.p : "sp_box_nil()", ibc);
       free(ab7.p); }
     else buf_printf(b, " case SP_BUILTIN_STR_RANGE: sp_raise_poly_nomethod(\"%s\", _t%d); break;", name, tv);

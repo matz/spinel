@@ -109,6 +109,7 @@ expect_nome("rest_anon")     { [Base.new.method(:rest_anon)][0].call(1, 2, 3) }
 expect_nome("keyword")       { [Base.new.method(:kw_method)][0].call }
 expect_nome("arity")         { [Base.new.method(:two_args)][0].call(1) }
 expect_nome("cmethod")       { [Base.method(:cmethod)][0].call(5) }
+p [Base.method(:cmethod)][0].call(5)   # (the thunk passes Base: 4 + 5)
 expect_nome("slice")         { [Base.new.method(:rest_used)][0][1, 2] }
 expect_nome("ptr_to_untyped"){ [Base.new.method(:untyped_method)][0].call("hello") }
 # The pointer positions must agree by type, not merely by pointer-ness.

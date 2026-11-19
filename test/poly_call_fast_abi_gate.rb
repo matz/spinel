@@ -110,6 +110,7 @@ expect_nome("rest_aref")   { [Base.new.method(:rest_unused)][0][5] }
 expect_nome("rest_slice")  { [Base.new.method(:rest_unused)][0][1, 2] }
 # a class method whose C signature needs its receiving class runs through its thunk
 expect_nome("cmethod") { [Base.method(:cmethod)][0].call(5) }
+p [Base.method(:cmethod)][0].call(5)   # (the thunk passes Base: 4 + 5)
 
 class C
   attr_accessor :x

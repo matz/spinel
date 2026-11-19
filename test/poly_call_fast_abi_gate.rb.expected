@@ -6,6 +6,7 @@ rest_anon: no raise
 rest_aref: no raise
 rest_slice: no raise
 cmethod: no raise
+9
 5
 7
 7

@@ -11449,11 +11449,9 @@ else if (orecv >= 0 && onm) {
     int lreq = arity + nposts + num_extra;
     emit_lambda_arity_check(c, create, lreq, proc_has_rest(c, create) ? -1 : lreq + nopts, pb);
   }
-  /* CRuby proc auto-splat: a single Array passed to a non-lambda proc is
-     destructured across the parameters by the rule a yield's block follows
-     (block_auto_splats): `proc { |k, v = 5| }.call([:a, 1])` binds k = :a.
-     Rewrite the argument view (both the sp_int[] slots and the boxed
-     side-channel) from the array's elements before binding. */
+  /* A non-lambda proc uses the same auto-splat rule as a yield's block.
+     Destructure its single Array argument into both the scalar slots
+     and the boxed channel before binding the parameters. */
   if (!is_lambda && block_auto_splats(arity, nopts, nposts, has_rest_marker)) {
     g_needs_proc_poly_argslot = 1;
     /* a lone object of the program's converts through its own to_ary
@@ -11482,7 +11480,8 @@ else if (orecv >= 0 && onm) {
     buf_puts(pb, "      for (sp_int _i = 0; _i < _sp_as_n; _i++) {\n");
     buf_puts(pb, "        sp_RbVal _e = sp_poly_arr_get(_sp_as_a, _i);\n");
     buf_puts(pb, "        _sp_proc_poly_args[_i] = _e;\n");
-    buf_puts(pb, "        _sp_as_buf[_i] = (_e.tag == SP_TAG_OBJ || sp_rbval_is_string(_e)) ? (sp_int)(uintptr_t)_e.v.p : _e.v.i;\n");
+    buf_puts(pb, "        _sp_as_buf[_i] = sp_rbval_is_string(_e) ? (sp_int)(uintptr_t)sp_poly_unbox_s(_e)\n"
+                 "            : _e.tag == SP_TAG_OBJ ? (sp_int)(uintptr_t)_e.v.p : _e.v.i;\n");
     buf_puts(pb, "      }\n");
     buf_puts(pb, "      args = _sp_as_buf; argc = _sp_as_n;\n");
     buf_puts(pb, "    }\n");

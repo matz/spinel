@@ -1504,9 +1504,11 @@ sp_int sp_int_round_half(sp_int v, sp_int nd, int mode) {
 }
 
 sp_RbVal sp_poly_replace(sp_RbVal recv, sp_RbVal src);
+const char *sp_poly_class_name(sp_RbVal v);   /* lib/sp_poly_cold.c */
 
 static const char *sp_typed_elem_class(sp_RbVal v) {
   switch (v.tag) {
+    case SP_TAG_OBJ: return sp_poly_class_name(v);
     case SP_TAG_INT: case SP_TAG_BIGINT: return "Integer";
     case SP_TAG_FLT: return "Float";
     case SP_TAG_SYM: return "Symbol";
@@ -1903,6 +1905,7 @@ static int sp_transpose_row_p(sp_RbVal rv) {
 }
 static const char *sp_transpose_row_class(sp_RbVal rv) {
   switch (rv.tag) {
+    case SP_TAG_OBJ: return sp_poly_class_name(rv);
     case SP_TAG_NIL: return "nil";
     case SP_TAG_BOOL: return rv.v.i ? "true" : "false";
     case SP_TAG_INT: return "Integer";
@@ -6176,7 +6179,6 @@ sp_File *sp_io_wait_events(sp_File *f, double timeout, sp_int kind) {SP_GC_ROOT(
    ready_error], or nil when the timeout expires first. A nil array stands for
    "watch nothing", so all three nil is just a sleep. */
 sp_File *(*sp_user_to_io_hook)(sp_RbVal) = NULL;
-const char *sp_poly_class_name(sp_RbVal v);   /* lib/sp_poly_cold.c */
 static sp_File *sp_select_io_of(sp_RbVal v) {
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_IO && v.v.p) return (sp_File *)v.v.p;
   /* A user object that answers #to_io names the handle to wait on -- CRuby

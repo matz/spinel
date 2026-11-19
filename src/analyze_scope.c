@@ -5453,9 +5453,8 @@ static int alias_string_reader_scope(Compiler *c, const ElabEntry *e) {
   int arity = string_boxed_reader_arity(target);
   if (arity < 0) return 0;
   NodeTable *nt = (NodeTable *)c->nt;
-  int call = disp_self_call(nt, target, arity, 0);
-  nt_mark_builtin_call(nt, call);
-  int def = disp_def_build(nt, e->node, target, 0, arity, 0, NULL, 0, call);
+  int call;
+  int def = disp_string_reader_def(nt, e->node, target, arity, &call);
   nt_node_set_int(nt, def, "alias_forwarder", 1);
   int scope = c->nscopes;
   comp_grow_node_arrays(c);
@@ -8281,7 +8280,7 @@ static int mixin_method_behind(Compiler *c, int ci, const char *name, int like, 
   int line = (int)nt_int(nt, like, "node_line", 0);
   int call, def;
   if (builtin_arity >= 0) {
-    def = disp_string_reader_def(nt, name, builtin_arity, &call);
+    def = disp_string_reader_def(nt, -1, name, builtin_arity, &call);
   }
   else {
     call = nt_new_node(nt, "ForwardingSuperNode");

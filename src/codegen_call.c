@@ -7076,6 +7076,34 @@ void emit_base_arg(Compiler *c, int arg, int t, char *bv, size_t n, Buf *b) {
   if (ib) emit_int_expr(c, arg, b);
   else emit_boxed(c, arg, b);
 }
+
+/* Evaluate the arguments before trying any candidate. Each conversion may
+   change the held receiver, so borrow its bytes after the conversion. */
+static void emit_poly_string_affix(Compiler *c, const char *name, int recv, const int *argv, int argc, Buf *b) {
+  int prefix = sp_streq(name, "start_with?");
+  const char *fn = prefix ? "sp_str_start_with" : "sp_str_end_with";
+  buf_puts(b, "({ ");
+  int tv = emit_rooted_arg_list(c, &recv, 1, "sp_RbVal", "SP_GC_ROOT_RBVAL", emit_boxed, NULL, b);
+  int first = emit_rooted_arg_list(c, argv, argc, "sp_RbVal", "SP_GC_ROOT_RBVAL", emit_boxed, NULL, b);
+  char subject[112];
+  snprintf(subject, sizeof subject, "_t%d.tag == SP_TAG_SYM ? sp_sym_to_s((sp_sym)_t%d.v.i) : sp_rbval_string_bytes(_t%d)",
+           tv, tv, tv);
+  buf_printf(b, "(sp_rbval_is_string(_t%d) || _t%d.tag == SP_TAG_SYM) ? (", tv, tv);
+  for (int j = 0; j < argc; j++) {
+    int a = first + j, t = ++g_tmp;
+    if (j) buf_puts(b, " || ");
+    if (prefix)
+      buf_printf(b, "(_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_REGEX"
+                    " ? sp_re_start_with((mrb_regexp_pattern *)_t%d.v.p, %s) : ", a, a, a, subject);
+    buf_printf(b, "({ const char *_t%d = sp_strface_b_box(_t%d);"
+                  " if (!_t%d) _t%d = sp_poly_arg_str_chk(_t%d);"
+                  " SP_GC_ROOT_STR(_t%d); %s(%s, _t%d); })",
+               t, a, t, t, a, t, fn, subject, t);
+    if (prefix) buf_puts(b, ")");
+  }
+  buf_printf(b, ") : (sp_bool)(sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d)), 0); })", name, tv);
+}
+
 static int emit_poly_builtin_method(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
@@ -7554,28 +7582,7 @@ static int emit_poly_builtin_method(Compiler *c, int id, Buf *b) {
      (any match), the same as the direct-String path (#3211, #3254). A Symbol
      answers them over its name, as a typed Symbol does. */
   if ((sp_streq(name, "start_with?") || sp_streq(name, "end_with?")) && argc >= 1 && argv) {
-    const char *fn = sp_streq(name, "start_with?") ? "sp_str_start_with" : "sp_str_end_with";
-    int tv = ++g_tmp;
-    /* a shared-string handle is a String: deref it into the immediate form the
-       arm reads, or the guard is single-armed and raises for it (#4279) */
-    buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_expr(c, recv, b);
-    buf_printf(b, "; const char *_s%d = _t%d.tag == SP_TAG_SYM ? sp_sym_to_s((sp_sym)_t%d.v.i) : sp_rbval_string_bytes(_t%d);",
-               tv, tv, tv, tv);
-    buf_printf(b, " (sp_rbval_is_string(_t%d) || _t%d.tag == SP_TAG_SYM) ? (", tv, tv);
-    for (int j = 0; j < argc; j++) {
-      if (j) buf_puts(b, " || ");
-      /* start_with?(re): a Regexp matches at index 0, as the typed String
-         path answers it */
-      if (sp_streq(name, "start_with?")) {
-        char sv[24]; snprintf(sv, sizeof sv, "_s%d", tv);
-        emit_start_with_arg(c, argv[j], sv, b);
-        continue;
-      }
-      buf_printf(b, "%s(_s%d, ", fn, tv);
-      emit_str_expr(c, argv[j], b);
-      buf_puts(b, ")");
-    }
-    buf_printf(b, ") : (sp_bool)(sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d)), 0); })", name, tv);
+    emit_poly_string_affix(c, name, recv, argv, argc, b);
     return 1;
   }
   /* #clear on a poly value (a mixed Array/Hash element via `&:clear`): empty the

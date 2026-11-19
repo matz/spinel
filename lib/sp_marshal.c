@@ -198,7 +198,7 @@ void sp_mar_w_exc_head(sp_mar_buf *b, const char *cls, void *p, long nivar) {
   const char *m = sp_exc_msg_text(e);
   sp_mar_b(b, 'o'); sp_mar_sym(b, cls); sp_mar_long(b, 2 + nivar);
   sp_mar_sym(b, "mesg");
-  if (m) sp_mar_w_string(b, m, sp_str_byte_len(m), sp_str_is_binary(m), (void *)m);
+  if (m) sp_mar_w_string(b, m, sp_str_byte_len(m), sp_str_is_binary(m), e->msg_h ? e->msg_h : (void *)m);
   else sp_mar_b(b, '0');
   sp_mar_sym(b, "bt"); sp_mar_w(b, e->backtrace ? sp_box_str_array(e->backtrace) : mk_nil());
 }

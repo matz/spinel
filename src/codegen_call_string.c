@@ -1918,17 +1918,27 @@ static void str_mut_boxed(Compiler *c, const StrMutOp *o, Buf *b) {
    any other value raises CRuby's TypeError (sp_str_aset_rep, where the
    String-slot conversion would splice in a Class's or an Encoding's to_s).
    The caller places it where CRuby converts the value. */
-static int str_mut_convert(Compiler *c, const StrMutOp *o, Buf *b) {
+static int str_mut_convert(Compiler *c, const StrMutOp *o, int recv, Buf *b) {
   int ts = ++g_tmp;
   /* (an object's #to_str renders here, inline, rooted as _s<ts>: collected
      into the call's conversion hold (conv_hold_begin), it was declared in
      front of the row, ahead of the hold of the operand it reads) */
   ConvHold *hold0 = g_conv_hold;
   g_conv_hold = NULL;
+  if (recv >= 0) {
+    if (!o->boxed && ty_is_object(repr_of(c, o->node).as_ty))
+      buf_printf(b, " int _one%d = sp_str_aset_single_byte(_t%d);", ts, recv);
+    else
+      buf_printf(b, " int _one%d = 0;", ts);
+  }
   buf_printf(b, " const char *_s%d = ", ts);
   /* (insert's `*r` takes out its one element, whatever the splat reads as) */
   if (o->boxed && nt_kind(c->nt, o->node) != NK_SplatNode) {
-    buf_puts(b, "sp_str_aset_rep("); str_mut_boxed(c, o, b); buf_puts(b, ")");
+    if (recv >= 0) buf_printf(b, "sp_str_aset_rep_at(_t%d, ", recv);
+    else buf_puts(b, "sp_str_aset_rep(");
+    str_mut_boxed(c, o, b);
+    if (recv >= 0) buf_printf(b, ", &_one%d", ts);
+    buf_puts(b, ")");
   }
   else emit_str_insert_text(c, o->node, b);
   buf_printf(b, "; SP_GC_ROOT_STR(_s%d);", ts);
@@ -1956,7 +1966,7 @@ static void str_mut_value_answer(Compiler *c, const BopCtx *x, const StrMutOp *o
 }
 
 /* `splice`, a call that changes `_t<t>` where it lives
-   (sp_String_splice_chars or sp_String_splice_bytes): it raises its
+   (sp_String_splice_chars or sp_String_splice_match): it raises its
    IndexError first and FrozenError after it, the order CRuby checks them in
    for []= and insert, and leaves the String in the encoding the
    compatibility rule picked (an ASCII-only binary receiver takes a UTF-8
@@ -2009,8 +2019,8 @@ int emit_op_string_aset(Compiler *c, const BopCtx *x, Buf *b) {
     /* s[i] = v: the character at i (-len..len, len appends); the value is
        converted before the index is checked */
     buf_printf(b, " sp_int _t%d = ", tn); str_mut_index(c, &k[0], b); buf_puts(b, ";");
-    ts = str_mut_convert(c, &v, b);
-    buf_printf(&sp, "sp_String_splice_chars(_t%d, _t%d, 1, _s%d, 0, 0)", t, tn, ts);
+    ts = str_mut_convert(c, &v, t, b);
+    buf_printf(&sp, "sp_String_splice_chars(_t%d, _t%d, 1, _s%d, _one%d, 0)", t, tn, ts, ts);
     break;
   case SA_RANGE:
     /* s[range] = v: the range's character span (a negative length inserts);
@@ -2018,19 +2028,10 @@ int emit_op_string_aset(Compiler *c, const BopCtx *x, Buf *b) {
        outside the String is CRuby's RangeError, naming the Range, ahead of
        the value's conversion */
     buf_printf(b, " sp_Range _r%d = ", tn); emit_expr(c, argv[0], b);
-    buf_printf(b, "; sp_Range _t%d = sp_range_ix(_r%d);", tn, tn);
-    buf_printf(b, " sp_int _len%d = (sp_int)sp_str_length(%s);", tn, cs.p);
-    buf_printf(b, " sp_int _a%d = _t%d.nobeg ? 0 :"
-                  " (_t%d.first < 0 ? _t%d.first + _len%d : _t%d.first);", tn, tn, tn, tn, tn, tn);
-    buf_printf(b, " if (_a%d < 0 || _a%d > _len%d)"
-                  " sp_raise_cls(\"RangeError\", sp_sprintf(\"%%s out of range\", sp_range_str(_r%d)));",
-               tn, tn, tn, tn);
-    buf_printf(b, " int _oe%d = _t%d.noend;", tn, tn);
-    buf_printf(b, " sp_int _e%d = _oe%d ? _len%d - 1 :"
-                  " (_t%d.last < 0 ? _t%d.last + _len%d : _t%d.last);", tn, tn, tn, tn, tn, tn, tn);
-    buf_printf(b, " sp_int _n%d = _e%d - _a%d + ((_t%d.excl && !_oe%d) ? 0 : 1);", tn, tn, tn, tn, tn);
-    ts = str_mut_convert(c, &v, b);
-    buf_printf(&sp, "sp_String_splice_chars(_t%d, _a%d, _n%d < 0 ? 0 : _n%d, _s%d, 1, 0)", t, tn, tn, tn, ts);
+    buf_printf(b, "; sp_int _a%d, _n%d; sp_str_aset_range_span(_r%d, (sp_int)sp_str_length(%s), &_a%d, &_n%d);",
+               tn, tn, tn, cs.p, tn, tn);
+    ts = str_mut_convert(c, &v, t, b);
+    buf_printf(&sp, "sp_String_splice_chars(_t%d, _a%d, _n%d, _s%d, _one%d, 0)", t, tn, tn, ts, ts);
     break;
   case SA_RE:
   case SA_RE_N:
@@ -2043,9 +2044,8 @@ int emit_op_string_aset(Compiler *c, const BopCtx *x, Buf *b) {
     buf_printf(b, ", %s, ", cs.p);
     if (form == SA_RE_N) buf_printf(b, "_t%d", tn); else buf_puts(b, "0");
     buf_printf(b, ", &_b%d, &_e%d);", tn, tn);
-    ts = str_mut_convert(c, &v, b);
-    buf_printf(&sp, "sp_String_splice_bytes(_t%d, _b%d, _e%d - _b%d, _s%d, 0, (sp_int)sp_str_byte_len(_s%d), 0)",
-               t, tn, tn, tn, ts, ts);
+    ts = str_mut_convert(c, &v, -1, b);
+    buf_printf(&sp, "sp_String_splice_match(_t%d, _b%d, _e%d - _b%d, _s%d)", t, tn, tn, tn, ts);
     break;
   case SA_STR:
     /* s["sub"] = v: the first occurrence; none raises IndexError, before v
@@ -2054,8 +2054,9 @@ int emit_op_string_aset(Compiler *c, const BopCtx *x, Buf *b) {
     buf_printf(b, "; SP_GC_ROOT_STR(_k%d);", tn);
     buf_printf(b, " sp_oint _a%d = sp_str_index_opt(%s, _k%d);"
                   " if (_a%d.nil) sp_raise_cls(\"IndexError\", \"string not matched\");", tn, cs.p, tn, tn);
-    ts = str_mut_convert(c, &v, b);
-    buf_printf(&sp, "sp_String_splice_chars(_t%d, _a%d.v, (sp_int)sp_str_length(_k%d), _s%d, 0, 0)", t, tn, tn, ts);
+    buf_printf(b, " sp_int _n%d = (sp_int)sp_str_length(_k%d);", tn, tn);
+    ts = str_mut_convert(c, &v, t, b);
+    buf_printf(&sp, "sp_String_splice_chars(_t%d, _a%d.v, _n%d, _s%d, _one%d, 0)", t, tn, tn, ts, ts);
     break;
   default:
     /* s[start, len] = v: the start and the length are converted, and a
@@ -2063,8 +2064,8 @@ int emit_op_string_aset(Compiler *c, const BopCtx *x, Buf *b) {
     buf_printf(b, " sp_int _t%d = ", tn); str_mut_index(c, &k[0], b);
     buf_printf(b, "; sp_int _l%d = ", tn); str_mut_index(c, &k[1], b); buf_puts(b, ";");
     buf_printf(b, " if (_l%d < 0) sp_raise_cls(\"IndexError\", sp_sprintf(\"negative length %%lld\", (long long)_l%d));", tn, tn);
-    ts = str_mut_convert(c, &v, b);
-    buf_printf(&sp, "sp_String_splice_chars(_t%d, _t%d, _l%d, _s%d, 0, 0)", t, tn, tn, ts);
+    ts = str_mut_convert(c, &v, t, b);
+    buf_printf(&sp, "sp_String_splice_chars(_t%d, _t%d, _l%d, _s%d, _one%d, 0)", t, tn, tn, ts, ts);
     break;
   }
   if (sp.p) str_mut_set(b, sp.p);
@@ -2086,7 +2087,7 @@ int emit_op_string_insert(Compiler *c, const BopCtx *x, Buf *b) {
      an Integer CRuby's TypeError), then the value */
   int ti = ++g_tmp;
   buf_printf(b, " sp_int _t%d = ", ti); str_mut_index(c, &a, b); buf_puts(b, ";");
-  int ts = str_mut_convert(c, &v, b);
+  int ts = str_mut_convert(c, &v, -1, b);
   /* insert(i, x): x spliced in at i; -1 appends, and any other negative i
      counts from the end and inserts after that character (i + 1); an index
      past the ends raises IndexError */

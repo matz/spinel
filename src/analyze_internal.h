@@ -1111,7 +1111,7 @@ int disp_raise_no_method(Compiler *c, const char *name, const char *msg, int ar,
 int disp_raise_no_method_self(Compiler *c, const char *name, const char *head, int inst, int ar, int vcall);
 int disp_forward_call(NodeTable *nt, const char *callee, int ar, int blk);
 int disp_self_call(NodeTable *nt, const char *callee, int ar, int blk);
-int disp_string_reader_def(NodeTable *nt, const char *name, int arity, int *call);
+int disp_string_reader_def(NodeTable *nt, int like, const char *name, int arity, int *call);
 int disp_when_fixed_arity(Compiler *c, int call, int arity, int builtin_keywords);
 int an_builtin_keyword_hash(NodeTable *nt, const char *name, int hash);
 const char *an_builtin_one_keyword(const char *name, const char **default_kind);

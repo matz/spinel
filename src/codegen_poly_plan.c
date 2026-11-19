@@ -3163,8 +3163,8 @@ void poly_specials_n(Compiler *c, int id, const char *name, int argc, const int 
   /* The multi-set forms of count/delete/squeeze (String's alone) when a
      user class also owns the name: the switch needs a String pre-arm or
      a genuine String receiver falls to its NoMethodError default, the
-     same hole the single-set delete had (#4195). String-typed sets only:
-     the temps below carry them as const char *. */
+     same hole the single-set delete had (#4195). The String-typed sets
+     can be held by either face. */
   int is_strsetop_n = ((sp_streq(name, "count") || sp_streq(name, "squeeze") || sp_streq(name, "strip") ||
                           sp_streq(name, "lstrip") || sp_streq(name, "rstrip"))
                          ? argc >= 1     /* their 1-set form has no other pre-arm */
@@ -3629,15 +3629,21 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
      A reopened or versioned String method has its own class arm. */
   if (str_builtin && ps->unpack1) {
     if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_UNPACK1, -1, TY_UNKNOWN, PC_SAME);
-    Buf ub; memset(&ub, 0, sizeof ub);
-    /* the format read as the pack arm below reads it: a boxed argument is
-       checked for a String, which CRuby's TypeError wants for anything else
-       (the boxed value went straight into sp_str_unpack's const char * slot) */
-    if (atmp_ty[0] == TY_POLY)
-      buf_printf(&ub, "sp_PolyArray_get(sp_str_unpack(sp_rbval_string_bytes(_t%d), sp_poly_arg_str_chk(_t%d)), 0)", tv, atmp[0]);
-    else buf_printf(&ub, "sp_PolyArray_get(sp_str_unpack(sp_rbval_string_bytes(_t%d), %s), 0)", tv, strarg);
     buf_puts(b, "if ("); emit_poly_str_guard(c, tv, name, b);
-    buf_printf(b, ") { _t%d = ", tr);
+    buf_puts(b, ") { ");
+    /* The format's to_str can grow the receiver. Only borrow the receiver
+       bytes after that conversion, while the format bytes are rooted. */
+    const char *format = strarg;
+    char ftmp[32];
+    if (atmp_ty[0] == TY_POLY) {
+      int t = ++g_tmp;
+      buf_printf(b, "const char *_t%d = sp_poly_arg_str_chk(_t%d); SP_GC_ROOT_STR(_t%d); ", t, atmp[0], t);
+      snprintf(ftmp, sizeof ftmp, "_t%d", t);
+      format = ftmp;
+    }
+    Buf ub = {0};
+    buf_printf(&ub, "sp_PolyArray_get(sp_str_unpack(sp_rbval_string_bytes(_t%d), %s), 0)", tv, format);
+    buf_printf(b, "_t%d = ", tr);
     if (ret == TY_POLY) buf_puts(b, ub.p ? ub.p : "");
     else emit_unbox_text(c, is_scalar_ret(ret) ? ret : TY_INT, ub.p ? ub.p : "", b);
     buf_puts(b, "; }\nelse ");
@@ -3726,9 +3732,10 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
         for (int a = 0; a < argc && sl < (int)sizeof sets - 16; a++) {
           int t = atmp[a];
           /* A later set read can allocate before the helper consumes this one. */
-          if (atmp_ty[a] == TY_STRBUF) {
+          if (atmp_ty[a] == TY_STRBUF || atmp_ty[a] == TY_STRING) {
+            const char *read = atmp_ty[a] == TY_STRBUF ? "sp_strbuf_read" : "SP_STR_B";
             t = ++g_tmp;
-            buf_printf(b, "const char *_t%d = sp_strbuf_read(_t%d); SP_GC_ROOT(_t%d); ", t, atmp[a], t);
+            buf_printf(b, "const char *_t%d = %s(_t%d); SP_GC_ROOT_STR(_t%d); ", t, read, atmp[a], t);
           }
           sl += snprintf(sets + sl, sizeof sets - (size_t)sl, "%s_t%d", a ? ", " : "", t);
         }
@@ -5106,10 +5113,7 @@ void emit_poly_defaults_n(Compiler *c, int id, int recv, const char *name, const
       }
       free(ab9.p); free(bb9.p);
     }
-    /* index/rindex also belong to String, whose box carries no cls_id, so
-       no case above can claim it. Answer it here, ahead of the raise, or a
-       substring search on a boxed String reports a missing method (#3445).
-       find_index is Enumerable-only and keeps falling through. */
+    /* Search a boxed String before the Enumerable fallback. */
     else if (is_arr_index && !sp_streq(name, "find_index")) {
       if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_ND_STR_INDEX, -1, TY_UNKNOWN, PC_SAME);
       int tsi = ++g_tmp;
@@ -5119,17 +5123,16 @@ void emit_poly_defaults_n(Compiler *c, int id, int recv, const char *name, const
         else if (atmp_ty[0] == TY_REGEX) buf_printf(&ab5, "sp_box_regexp(%s)", tn5);
         else emit_boxed_text(c, atmp_ty[0], tn5, &ab5); }
       if (argc == 2) {
-        char sx[160];
-        if (atmp_ty[1] == TY_INT || atmp_ty[1] == TY_FLOAT) snprintf(sx, sizeof sx, "(sp_int)_t%d", atmp[1]);
-        else if (atmp_ty[1] == TY_POLY) snprintf(sx, sizeof sx, "sp_poly_arg_int_chk(_t%d)", atmp[1]);
-        /* a keyword hash or any other object is no offset: TypeError, as in CRuby */
-        else { Buf ob; memset(&ob, 0, sizeof ob); char on[32]; snprintf(on, sizeof on, "_t%d", atmp[1]);
-          emit_boxed_text(c, atmp_ty[1], on, &ob);
-          snprintf(sx, sizeof sx, "sp_poly_arg_int_chk(%s)", ob.p ? ob.p : "sp_box_nil()"); free(ob.p); }
+        Buf offset = {0};
+        char on[32];
+        snprintf(on, sizeof on, "_t%d", atmp[1]);
+        if (atmp_ty[1] == TY_POLY) buf_puts(&offset, on);
+        else emit_boxed_text(c, atmp_ty[1], on, &offset);
         buf_printf(b, " if (sp_rbval_is_string(_t%d) || sp_poly_is_strbuf(_t%d)) {"
                       " sp_oint _t%d = sp_poly_str_index_from_val(_t%d, %s, %s, %d); _t%d = ",
-                   tv, tv, tsi, tv, ab5.p ? ab5.p : "sp_box_nil()", sx,
+                   tv, tv, tsi, tv, ab5.p ? ab5.p : "sp_box_nil()", offset.p ? offset.p : "sp_box_nil()",
                    sp_streq(name, "rindex") ? 1 : 0, tr);
+        free(offset.p);
         /* the result slot carries whatever the call was inferred as: a
            nullable Integer rides as its oint, a poly slot boxes */
         if (ret == TY_POLY) buf_printf(b, "sp_box_oint(_t%d)", tsi);

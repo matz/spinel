@@ -563,10 +563,13 @@ static void sp_str_bsp_span(const char*s,sp_int*beg,sp_int*len){
    a binary buffer from a text literal), and an ASCII value settles it, so
    the receiver is not read end to end on every call. Answers whether the
    result is BINARY. */
-int sp_str_bytesplice_check(const char*s,sp_int*start,sp_int*len,const char*val,sp_int*vstart,sp_int*vlen){
-  sp_str_bsp_span(s,start,len);sp_str_bsp_span(val,vstart,vlen);
+int sp_str_splice_encoding(const char *s, const char *val) {
   sp_str_check_compatible_encoding(s, val);
   return sp_str_cat_binary(s,val);
+}
+int sp_str_bytesplice_check(const char*s,sp_int*start,sp_int*len,const char*val,sp_int*vstart,sp_int*vlen){
+  sp_str_bsp_span(s,start,len);sp_str_bsp_span(val,vstart,vlen);
+  return sp_str_splice_encoding(s, val);
 }
 const char*sp_str_bytesplice5(const char*s,sp_int start,sp_int len,const char*val,sp_int vstart,sp_int vlen){
   SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(val);
@@ -608,18 +611,6 @@ static const char *sp_justify_size_err(uint64_t have, uint64_t add) {
 }
 static void sp_justify_size_raise(const char *cls) {
   sp_raise_cls(cls, cls[0] == 'A' ? "argument too big" : "failed to allocate memory");
-}
-/* The bytes `need` characters of a cycling pad take, counted per cycle
-   rather than per character; UINT64_MAX on overflow. */
-static uint64_t sp_pad_bytes(const uint32_t *cps, size_t pn, uint64_t need) {
-  char tmp[4]; uint64_t cyc = 0, part = 0, rem = need % pn;
-  for (size_t i = 0; i < pn; i++) {
-    uint64_t b = (uint64_t)sp_utf8_encode(cps[i], tmp);
-    cyc += b; if (i < rem) part += b;
-  }
-  uint64_t full = need / pn;
-  if (cyc && full > (UINT64_MAX - part) / cyc) return UINT64_MAX;
-  return full * cyc + part;
 }
 const char*sp_str_repeat(const char*s,sp_int n){SP_GC_ROOT_STR(s);
   if(n<0) sp_raise_cls("ArgumentError","negative argument");
@@ -1338,12 +1329,87 @@ const char *sp_str_scrub_utf8(const char *s, const char *repl) {SP_GC_ROOT_STR(s
   free(out);
   return res;
 }
-const char*sp_str_ljust(const char*s,sp_int w){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("ljust");sp_int cl=sp_str_length(s);if(cl>=w)return sp_str_dup(s);size_t bl=sp_str_byte_len(s);const char*e=sp_justify_size_err(bl,(uint64_t)(w-cl));if(e)sp_justify_size_raise(e);size_t pad=(size_t)(w-cl);char*r=sp_str_alloc_raw(bl+pad+1);memcpy(r,s,bl);memset(r+bl,' ',pad);r[bl+pad]=0;sp_str_set_len(r,bl+pad);return sp_str_bin_like(s,r);}
-const char*sp_str_rjust(const char*s,sp_int w){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("rjust");sp_int cl=sp_str_length(s);if(cl>=w)return sp_str_dup(s);size_t bl=sp_str_byte_len(s);const char*e=sp_justify_size_err(bl,(uint64_t)(w-cl));if(e)sp_justify_size_raise(e);size_t pad=(size_t)(w-cl);char*r=sp_str_alloc_raw(bl+pad+1);memset(r,' ',pad);memcpy(r+pad,s,bl);r[bl+pad]=0;sp_str_set_len(r,bl+pad);return sp_str_bin_like(s,r);}
-const char*sp_str_center(const char*s,sp_int w){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("center");sp_int cl=sp_str_length(s);if(cl>=w)return sp_str_dup(s);size_t bl=sp_str_byte_len(s);const char*e=sp_justify_size_err(bl,(uint64_t)(w-cl));if(e)sp_justify_size_raise(e);sp_int pad=w-cl;sp_int left=pad/2;sp_int right=pad-left;char*r=sp_str_alloc_raw(bl+pad+1);memset(r,' ',left);memcpy(r+left,s,bl);memset(r+left+bl,' ',right);r[bl+pad]=0;sp_str_set_len(r,bl+(size_t)pad);return sp_str_bin_like(s,r);}
-const char*sp_str_ljust2(const char*s,sp_int w,const char*pad){SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(pad);if(!s)sp_nil_recv("ljust");/* an empty pad is rejected whatever the width, before the no-op case */if(!pad||sp_str_byte_len(pad)==0)sp_raise_cls("ArgumentError","zero width padding");sp_int cl=sp_str_length(s);if(cl>=w)return sp_str_dup(s);size_t bl=sp_str_byte_len(s);size_t pn;uint32_t*pcps=sp_utf8_decode_all(pad,&pn);if(pn==0){free(pcps);char*r=sp_str_alloc_raw(bl+1);memcpy(r,s,bl+1);sp_str_set_len(r,bl);return r;}sp_int need=w-cl;const char*e=sp_justify_size_err(bl,sp_pad_bytes(pcps,pn,(uint64_t)need));if(e){free(pcps);sp_justify_size_raise(e);}size_t padb=(size_t)sp_pad_bytes(pcps,pn,(uint64_t)need);char*r=sp_str_alloc_raw(bl+padb+1);memcpy(r,s,bl);size_t n=bl;for(sp_int i=0;i<need;i++)n+=sp_utf8_encode(pcps[i%pn],r+n);r[n]=0;sp_str_set_len(r,n);free(pcps);return r;}
-const char*sp_str_rjust2(const char*s,sp_int w,const char*pad){SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(pad);if(!s)sp_nil_recv("rjust");/* an empty pad is rejected whatever the width, before the no-op case */if(!pad||sp_str_byte_len(pad)==0)sp_raise_cls("ArgumentError","zero width padding");sp_int cl=sp_str_length(s);if(cl>=w)return sp_str_dup(s);size_t bl=sp_str_byte_len(s);size_t pn;uint32_t*pcps=sp_utf8_decode_all(pad,&pn);if(pn==0){free(pcps);char*r=sp_str_alloc_raw(bl+1);memcpy(r,s,bl+1);sp_str_set_len(r,bl);return r;}sp_int need=w-cl;const char*e=sp_justify_size_err(bl,sp_pad_bytes(pcps,pn,(uint64_t)need));if(e){free(pcps);sp_justify_size_raise(e);}size_t padb=(size_t)sp_pad_bytes(pcps,pn,(uint64_t)need);char*r=sp_str_alloc_raw(bl+padb+1);size_t n=0;for(sp_int i=0;i<need;i++)n+=sp_utf8_encode(pcps[i%pn],r+n);memcpy(r+n,s,bl);r[n+bl]=0;sp_str_set_len(r,n+bl);free(pcps);return r;}
-const char*sp_str_center2(const char*s,sp_int w,const char*pad){SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(pad);if(!s)sp_nil_recv("center");/* an empty pad is rejected whatever the width, before the no-op case */if(!pad||sp_str_byte_len(pad)==0)sp_raise_cls("ArgumentError","zero width padding");sp_int cl=sp_str_length(s);if(cl>=w)return sp_str_dup(s);size_t bl=sp_str_byte_len(s);size_t pn;uint32_t*pcps=sp_utf8_decode_all(pad,&pn);if(pn==0){free(pcps);char*r=sp_str_alloc_raw(bl+1);memcpy(r,s,bl+1);sp_str_set_len(r,bl);return r;}sp_int pd=w-cl;sp_int left=pd/2;sp_int right=pd-left;uint64_t lb64=sp_pad_bytes(pcps,pn,(uint64_t)left),rb64=sp_pad_bytes(pcps,pn,(uint64_t)right);const char*e=sp_justify_size_err(bl,(lb64==UINT64_MAX||rb64==UINT64_MAX||lb64>UINT64_MAX-rb64)?UINT64_MAX:lb64+rb64);if(e){free(pcps);sp_justify_size_raise(e);}size_t leftb=(size_t)lb64,rightb=(size_t)rb64;char*r=sp_str_alloc_raw(leftb+bl+rightb+1);size_t n=0;for(sp_int i=0;i<left;i++)n+=sp_utf8_encode(pcps[i%pn],r+n);memcpy(r+n,s,bl);n+=bl;for(sp_int i=0;i<right;i++)n+=sp_utf8_encode(pcps[i%pn],r+n);r[n]=0;sp_str_set_len(r,n);free(pcps);return r;}
+/* A pad's prefix is counted in its own character units and copied as
+   bytes. This preserves binary and invalid UTF-8 payloads verbatim. */
+static size_t sp_justify_walk(const char *s, size_t len, sp_int *units) {
+  if (sp_str_is_binary(s)) {
+    if ((uint64_t)*units > len) *units = (sp_int)len;
+    return (size_t)*units;
+  }
+  sp_int count = 0;
+  size_t offset = 0;
+  while (offset < len && count < *units) {
+    int n = sp_utf8_valid_len((const unsigned char *)s + offset, len - offset);
+    offset += (size_t)(n > 0 ? n : 1);
+    count++;
+  }
+  *units = count;
+  return offset;
+}
+
+static uint64_t sp_justify_pad_size(const char *pad, size_t len, sp_int chars, sp_int need) {
+  sp_int remainder = need % chars;
+  size_t tail = sp_justify_walk(pad, len, &remainder);
+  uint64_t full = (uint64_t)(need / chars);
+  return full > (UINT64_MAX - tail) / len ? UINT64_MAX : full * len + tail;
+}
+
+static void sp_justify_fill(char *out, size_t count, const char *pad, size_t len) {
+  if (count == 0) return;
+  size_t written = count < len ? count : len;
+  memcpy(out, pad, written);
+  while (written < count) {
+    size_t next = count - written < written ? count - written : written;
+    memcpy(out + written, out, next);
+    written += next;
+  }
+}
+
+static const char *sp_str_justify_pad(const char *s, sp_int width, const char *pad,
+                                      const char *method, int placement) {
+  SP_GC_ROOT_STR(s);
+  SP_GC_ROOT_STR(pad);
+  if (!s) sp_nil_recv(method);
+  size_t pad_len = pad ? sp_str_byte_len(pad) : 0;
+  if (!pad_len) sp_raise_cls("ArgumentError", "zero width padding");
+  sp_str_check_compatible_encoding(s, pad);
+  size_t len = sp_str_byte_len(s);
+  if (width <= 0) return sp_str_dup(s);
+  sp_int chars = width;
+  sp_justify_walk(s, len, &chars);
+  if (chars == width) return sp_str_dup(s);
+  sp_int need = width - chars;
+  sp_int left = placement == 0 ? 0 : placement == 1 ? need : need / 2;
+  sp_int pad_chars = (sp_int)pad_len;
+  sp_justify_walk(pad, pad_len, &pad_chars);
+  uint64_t before = sp_justify_pad_size(pad, pad_len, pad_chars, left);
+  uint64_t after = sp_justify_pad_size(pad, pad_len, pad_chars, need - left);
+  uint64_t added = before > UINT64_MAX - after ? UINT64_MAX : before + after;
+  const char *error = sp_justify_size_err(len, added);
+  if (error) sp_justify_size_raise(error);
+  size_t size = (size_t)(len + added);
+  char *out = sp_str_alloc_raw(size + 1);
+  sp_justify_fill(out, (size_t)before, pad, pad_len);
+  memcpy(out + before, s, len);
+  sp_justify_fill(out + before + len, (size_t)after, pad, pad_len);
+  out[size] = 0;
+  sp_str_set_len(out, size);
+  if (sp_str_cat_binary(s, pad)) sp_str_mark_binary(out);
+  return out;
+}
+
+const char *sp_str_ljust2(const char *s, sp_int width, const char *pad) {
+  return sp_str_justify_pad(s, width, pad, "ljust", 0);
+}
+const char *sp_str_rjust2(const char *s, sp_int width, const char *pad) {
+  return sp_str_justify_pad(s, width, pad, "rjust", 1);
+}
+const char *sp_str_center2(const char *s, sp_int width, const char *pad) {
+  return sp_str_justify_pad(s, width, pad, "center", 2);
+}
+const char *sp_str_ljust(const char *s, sp_int width) { return sp_str_ljust2(s, width, sp_plain_char(' ')); }
+const char *sp_str_rjust(const char *s, sp_int width) { return sp_str_rjust2(s, width, sp_plain_char(' ')); }
+const char *sp_str_center(const char *s, sp_int width) { return sp_str_center2(s, width, sp_plain_char(' ')); }
 sp_oint sp_str_index_opt(const char *s, const char *sub)                         {SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(sub); sp_int n = sp_str_index(s, sub);              return n < 0 ? sp_oint_nil() : sp_oint_of(n); }
 sp_oint sp_str_index_from_opt(const char *s, const char *sub, sp_int start)     {SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(sub); sp_int n = sp_str_index_from(s, sub, start);  return n < 0 ? sp_oint_nil() : sp_oint_of(n); }
 sp_oint sp_str_rindex_opt(const char *s, const char *sub)                        {SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(sub); sp_int n = sp_str_rindex(s, sub);             return n < 0 ? sp_oint_nil() : sp_oint_of(n); }

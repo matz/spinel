@@ -57,10 +57,10 @@ static void sp_String_splice_in(sp_String *s, size_t b, size_t e, const char *v,
   if (ascii7) sp_str_mark_ascii7(d);
 }
 /* s[from, n] = val by characters, in place: String#[]= of an index, a start
-   and a length, a Range or a substring, and String#insert. The checks are
-   sp_str_splice_at's, in its order (a negative length, then a start outside
-   the String: IndexError, or with range_form the RangeError), and the
-   result's encoding is the one its pieces joined in: the receiver's, unless
+   and a length, a Range or a substring, and String#insert. It checks the
+   length and start before splicing. A String store can use byte indexing
+   chosen before the replacement's conversion changes the receiver.
+   The result's encoding is the one its pieces joined in: the receiver's, unless
    val has high bytes in the other encoding, which the result takes where
    the receiver's kept bytes are all ASCII and is BINARY where they are not.
    keep_enc leaves the receiver's encoding as it is, as sp_String_set_bin did.
@@ -70,36 +70,29 @@ static void sp_String_splice_in(sp_String *s, size_t b, size_t e, const char *v,
    retirement are malloc and realloc), so neither can be collected under
    them, and a raise from a check leaves no root of theirs behind (an inline
    rescue does not restore sp_gc_nroots). */
-void sp_String_splice_chars(sp_String *s, sp_int from, sp_int n, const char *val, int range_form, int keep_enc) {
+void sp_String_splice_chars(sp_String *s, sp_int from, sp_int n, const char *val, int single_byte, int keep_enc) {
   if (SP_UNLIKELY(!s)) sp_nil_recv("[]=");
   /* (an empty String with the marker byte the readers look behind: a bare
      "" has none, and sp_str_byte_len reads the byte before it) */
-  if (!val) val = &("\xff" "")[1];
+  if (!val) val = sp_str_empty;
   const char *d = s->data;
-  sp_int len = (sp_int)sp_str_length(d);
   if (n < 0) { sp_raise_cls("IndexError", sp_sprintf("negative length %lld", (long long)n)); return; }
+  int bin = keep_enc ? -1 : sp_str_splice_encoding(d, val);
+  sp_int len = (sp_int)sp_str_length(d);
   sp_int from0 = from;
   if (from < 0) from += len;
   if (from < 0 || from > len) {
-    if (range_form) sp_raise_cls("RangeError", sp_sprintf("%lld out of range", (long long)from0));
-    else sp_raise_cls("IndexError", sp_sprintf("index %lld out of string", (long long)from0));
+    sp_raise_cls("IndexError", sp_sprintf("index %lld out of string", (long long)from0));
     return;
   }
   if (n > len - from) n = len - from;
   size_t bl = sp_str_byte_len(d), b, e, fb;
-  if (sp_str_fixed_width(d, &fb) || sp_str_is_binary(d)) { b = (size_t)from; e = b + (size_t)n; }
+  if (single_byte || sp_str_fixed_width(d, &fb) || sp_str_is_binary(d)) { b = (size_t)from; e = b + (size_t)n; }
   else {
     b = sp_utf8_byte_offset(d, from);
     e = b;
     for (sp_int k = n; k > 0 && e < bl; k--) e += (size_t)sp_utf8_advance(d + e);
     if (e > bl) e = bl;
-  }
-  int bin = -1;
-  if (!keep_enc) {
-    int sb = sp_str_is_binary(d), vb = sp_str_is_binary(val);
-    bin = sb;
-    if (sb != vb && !sp_str_ascii_only(val))
-      bin = sp_bytes_ascii(d, b) && sp_bytes_ascii(d + e, bl - e) ? vb : 1;
   }
   sp_String_splice_in(s, b, e, val, sp_str_byte_len(val), bin);
 }
@@ -113,6 +106,23 @@ void sp_String_splice_bytes(sp_String *s, sp_int start, sp_int len, const char *
   if (!val) val = &("\xff" "")[1];
   int bin = sp_str_bytesplice_check(s->data, &start, &len, val, &vstart, &vlen);
   sp_String_splice_in(s, (size_t)start, (size_t)(start + len), val + vstart, (size_t)vlen, keep_enc ? -1 : bin);
+}
+/* A match supplies a byte span in the pre-conversion String. The replacement
+   may have changed the String, including the character boundaries at that span. */
+void sp_String_splice_match(sp_String *s, sp_int start, sp_int len, const char *val) {
+  if (!s) sp_nil_recv("[]=");
+  const char *bytes = sp_String_cstr(s);
+  if (!val) val = sp_str_empty;
+  int bin = sp_str_splice_encoding(bytes, val);
+  if (sp_String_is_immutable(s)) sp_raise_frozen_str(bytes);
+  size_t begin = (size_t)start, count = (size_t)len, length = (size_t)s->len;
+  if (begin > length || (begin == length && count > 0)) return;
+  size_t replacement = sp_str_byte_len(val);
+  if (count > length - begin) {
+    if (replacement == count) replacement = length - begin;
+    count = length - begin;
+  }
+  sp_String_splice_in(s, begin, begin + count, val, replacement, bin);
 }
 /* String#replace(s): replace entire content. */
 void sp_String_replace(sp_String*s,const char*t){SP_GC_ROOT(s);SP_GC_ROOT_STR(t);if (SP_UNLIKELY(!s)) sp_nil_recv("replace"); if (!t)return;if(sp_String_is_immutable(s)){sp_raise_frozen_str(s->data);return;}int64_t tl=(int64_t)strlen(t);if(!sp_fd_grow(s,tl))return;memcpy(s->data,t,tl);s->data[tl]='\0';s->len=tl;sp_fd_publish(s);}

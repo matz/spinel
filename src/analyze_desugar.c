@@ -17073,12 +17073,12 @@ int disp_self_call(NodeTable *nt, const char *callee, int ar, int blk) {
   nt_node_set_ref(nt, call, "receiver", nt_new_node(nt, "SelfNode"));
   return call;
 }
-/* The String builtin behind a prepend. Give its positional operand a
-   slot the bound Method thunk can bind. */
-int disp_string_reader_def(NodeTable *nt, const char *name, int arity, int *call) {
+/* A String builtin captured by a prepend, alias or bound Method. Give its
+   operands slots the caller can bind, including the builtin's keyword. */
+int disp_string_reader_def(NodeTable *nt, int like, const char *name, int arity, int *call) {
   *call = disp_self_call(nt, name, arity, 0);
   nt_mark_builtin_call(nt, *call);
-  int def = disp_def_build(nt, -1, name, 0, arity, 0, NULL, 0, *call);
+  int def = disp_def_build(nt, like, name, 0, arity, 0, NULL, 0, *call);
   if (arity) {
     int argc, np;
     const int *args = call_args(nt, *call, &argc);

@@ -4118,8 +4118,22 @@ static void sp_str_aset_refuse(sp_RbVal val) {
   (void)sp_poly_arg_str_chk_slow(val);
 }
 static const char *sp_str_aset_rep(sp_RbVal val) {
-  if (sp_rbval_is_string(val)) return sp_rbval_string_bytes(val) ? sp_rbval_string_bytes(val) : sp_str_empty;
+  const char *bytes = sp_strface_b_box(val);
+  if (bytes) return bytes;
   sp_str_aset_refuse(val);
+  return sp_poly_arg_str_chk(val);
+}
+static int sp_str_aset_single_byte(sp_String *s) {
+  const char *bytes = sp_String_cstr(s);
+  return sp_str_is_binary(bytes) || sp_str_ascii_only(bytes);
+}
+/* Keep the indexing mode chosen before the replacement's to_str.
+   The splice validates the offset against the updated length. */
+static const char *sp_str_aset_rep_at(sp_String *s, sp_RbVal val, int *single_byte) {
+  const char *bytes = sp_strface_b_box(val);
+  if (bytes) return bytes;
+  sp_str_aset_refuse(val);
+  *single_byte = sp_str_aset_single_byte(s);
   return sp_poly_arg_str_chk(val);
 }
 static sp_RbVal sp_system_arg_box(sp_RbVal v) {
@@ -9759,18 +9773,13 @@ static int sp_poly_splice_unboxed(sp_RbVal recv, sp_int start, sp_int len, sp_Po
   return 1;
 }
 static sp_RbVal sp_poly_splice(sp_RbVal recv, sp_int start, sp_int len, sp_RbVal src) {
-  /* `s[start, len] = v` through a poly receiver: spinel strings splice into a
-     fresh buffer, so a plain string box answers the new value for the caller to
-     store back, while a shared handle absorbs it in place -- which is the only
-     form an element receiver can use, and the write was silently dropped
-     before (#3940). */
   if (sp_rbval_is_string(recv)) {
-    const char *cur = sp_rbval_string_bytes(recv);
-    const char *rep = sp_str_aset_rep(src);
-    SP_GC_ROOT(cur); SP_GC_ROOT(rep);
-    SP_GC_ROOT_RBVAL(recv);
-    const char *out = sp_str_splice_at(cur, start, len, rep, 0);
-    sp_String_set_bin((sp_String *)recv.v.p, out);
+    if (len < 0) sp_raise_cls("IndexError", sp_sprintf("negative length %lld", (long long)len));
+    SP_GC_ROOT_RBVAL(recv); SP_GC_ROOT_RBVAL(src);
+    sp_String *s = recv.v.p;
+    int single_byte = 0;
+    const char *rep = sp_str_aset_rep_at(s, src, &single_byte);
+    sp_String_splice_chars(s, start, len, rep, single_byte, 0);
     return recv;
   }
   if (recv.tag != SP_TAG_OBJ) return recv;
@@ -9869,29 +9878,31 @@ static sp_RbVal sp_poly_splice(sp_RbVal recv, sp_int start, sp_int len, sp_RbVal
                                  : recv.cls_id == SP_BUILTIN_FLT_ARRAY ? "Float" : "String");
   return recv;
 }
+/* Resolve a String store's range before the replacement can change its length. */
+static void sp_str_aset_range_span(sp_Range original, sp_int len, sp_int *first, sp_int *count) {
+  sp_Range r = sp_range_ix(original);
+  *first = r.nobeg ? 0 : (r.first < 0 ? r.first + len : r.first);
+  if (*first < 0 || *first > len)
+    sp_raise_cls("RangeError", sp_sprintf("%s out of range", sp_range_str(original)));
+  if (r.noend || r.last >= len) {
+    *count = len - *first;
+  } else {
+    sp_int last = r.last < 0 ? r.last + len : r.last;
+    *count = last >= *first ? last - *first + (r.excl ? 0 : 1) : 0;
+  }
+}
 /* `arr[range] = src` on a poly receiver: resolve beginless (-> 0) and
    endless (-> length) endpoints and negative endpoints against the
    runtime length, then splice. A begin index below -length raises RangeError
    (CRuby uses RangeError here, not the (start,len) form's IndexError). */
 static sp_RbVal sp_poly_splice_range(sp_RbVal recv, sp_Range r, sp_RbVal src) {
-  r = sp_range_ix(r);   /* an index span: each end through to_int */
-  /* a string receiver measures the range against its CHARACTER length, which
-     sp_poly_arr_len answers 0 for (#3940) */
   if (sp_rbval_is_string(recv)) {
-    const char *cur = sp_rbval_string_bytes(recv);
-    sp_int slen = (sp_int)sp_str_length(cur);
-    sp_int sfirst = r.first;
-    if (r.nobeg) sfirst = 0;
-    else if (sfirst < 0) sfirst += slen;
-    sp_int slen2;
-    if (r.noend) { slen2 = slen - sfirst; if (slen2 < 0) slen2 = 0; }
-    else {
-      sp_int last = r.last < 0 ? r.last + slen : r.last;
-      slen2 = last - sfirst + (r.excl ? 0 : 1);
-      if (slen2 < 0) slen2 = 0;
-    }
-    return sp_poly_splice(recv, sfirst, slen2, src);
+    SP_GC_ROOT_RBVAL(recv); SP_GC_ROOT_RBVAL(src);
+    sp_int first, count;
+    sp_str_aset_range_span(r, (sp_int)sp_str_length(sp_rbval_string_bytes(recv)), &first, &count);
+    return sp_poly_splice(recv, first, count, src);
   }
+  r = sp_range_ix(r);   /* an index span: each end through to_int */
   /* frozen precedes range validation (CRuby's modify-check runs first) */
   if (recv.tag == SP_TAG_OBJ && sp_typed_arr_frozen(recv)) sp_raise_frozen_array_v(recv);
   sp_int alen = sp_poly_arr_len(recv);
@@ -15315,96 +15326,36 @@ static sp_RbVal sp_poly_arr_widen_and_set(sp_RbVal v, sp_int idx, sp_RbVal val) 
     sp_poly_set_poly(v, sp_box_int(idx), val);
     return v;
   }
-  if (sp_poly_is_strbuf(v)) {
-    sp_String *sh = (sp_String *)v.v.p;
-    const char *rep = sp_str_aset_rep(val);
-    SP_GC_ROOT_RBVAL(v);
-    SP_GC_ROOT(rep);
-    sp_String_splice_chars(sh, idx, 1, rep, 0, 1);
-    return v;
-  }
+  if (sp_rbval_is_string(v)) return sp_poly_splice(v, idx, 1, val);
   sp_poly_arr_set(v, idx, val);
   return v;
 }
-/* `s[key] = v` on a boxed receiver, as String#[]= takes its key: an
-   Integer index (one character), a Range, a String (its first match;
-   IndexError when there is none) or a Regexp. sp_poly_set_str and
-   sp_poly_set_poly have no String arm, so the store was dropped. A plain
-   String splices to a fresh buffer, which is answered for the caller to
-   store back; a shared one absorbs the splice and is answered itself. Any
-   other receiver, or key, stores as before and is answered unchanged. */
-static sp_RbVal sp_poly_str_aset_key(sp_RbVal v, sp_RbVal key, sp_RbVal val) {
-  /* a shared String key is its contents, as the typed stores read it */
+static sp_RbVal sp_str_aset_box_key(sp_String *h, sp_RbVal key, sp_RbVal val);
 
-  int re = key.tag == SP_TAG_OBJ && key.cls_id == SP_BUILTIN_REGEX && key.v.p;
-  int rng = key.tag == SP_TAG_OBJ && key.cls_id == SP_BUILTIN_RANGE && key.v.p;
-  /* an Integer index into an Array widens a typed one for a value of
-     another kind, as the store with an unboxed index does
-     (sp_poly_arr_widen_and_set; a boxed index is how --int-overflow=promote
-     holds every Integer), and answers the Array the caller stores back */
-  if (key.tag == SP_TAG_INT && v.tag == SP_TAG_OBJ && sp_poly_is_array_kind(v.cls_id))
-    return sp_poly_arr_widen_and_set(v, key.v.i, val);
-  if (!(sp_rbval_is_string(v)) || !(sp_rbval_is_string(key) || key.tag == SP_TAG_INT || re || rng)) {
-    if (sp_rbval_is_string(key)) sp_poly_set_str(v, sp_rbval_string_bytes(key) ? sp_rbval_string_bytes(key) : sp_str_empty, val);
-    else sp_poly_set_poly(v, key, val);
+/* A boxed store returns the receiver that the caller keeps. */
+static sp_RbVal sp_poly_str_aset_key(sp_RbVal v, sp_RbVal key, sp_RbVal val) {
+  if (sp_rbval_is_string(v)) {
+    SP_GC_ROOT_RBVAL(v); SP_GC_ROOT_RBVAL(key); SP_GC_ROOT_RBVAL(val);
+    (void)sp_str_aset_box_key((sp_String *)v.v.p, key, val);
     return v;
   }
-  /* refused before anything is rooted: a raise past a root would leave it
-     dangling under an inline rescue */
-  sp_str_aset_refuse(val);
-  SP_GC_ROOT_RBVAL(v); SP_GC_ROOT_RBVAL(key); SP_GC_ROOT_RBVAL(val);
-  const char *cur = sp_rbval_string_bytes(v);
-  const char *rep = sp_str_aset_rep(val);
-  SP_GC_ROOT(cur); SP_GC_ROOT(rep);
-  const char *out;
-  if (re) out = sp_str_splice_re((mrb_regexp_pattern *)key.v.p, cur, rep);
-  else if (key.tag == SP_TAG_INT) out = sp_str_splice_at(cur, key.v.i, 1, rep, 0);
-  else if (rng) {
-    /* the span as CRuby's rb_range_beg_len reads it: a Float end through
-       to_int, a beginless one from 0, an endless one (noend) to the
-       end without the e - a + 1 that overflows, and a begin outside the
-       String a RangeError naming the Range */
-    sp_Range r0 = *(sp_Range *)key.v.p, r = sp_range_ix(r0);
-    sp_int len = (sp_int)sp_str_length(cur);
-    sp_int a = r.nobeg ? 0 : (r.first < 0 ? r.first + len : r.first);
-    if (a < 0 || a > len) sp_raise_cls("RangeError", sp_sprintf("%s out of range", sp_range_str(r0)));
-    sp_int n;
-    if (r.noend) n = len - a;
-    else {
-      sp_int e = r.last < 0 ? r.last + len : r.last;
-      n = e - a + (r.excl ? 0 : 1);
-    }
-    out = sp_str_splice_at(cur, a, n < 0 ? 0 : n, rep, 1);
+  if (key.tag == SP_TAG_INT && v.tag == SP_TAG_OBJ && sp_poly_is_array_kind(v.cls_id))
+    return sp_poly_arr_widen_and_set(v, key.v.i, val);
+  if (sp_rbval_is_string(key)) {
+    const char *bytes = sp_rbval_string_bytes(key);
+    sp_poly_set_str(v, bytes ? bytes : sp_str_empty, val);
+  } else {
+    sp_poly_set_poly(v, key, val);
   }
-  else {
-    const char *k = sp_rbval_string_bytes(key) ? sp_rbval_string_bytes(key) : sp_str_empty;
-    sp_oint at = sp_str_index_opt(cur, k);
-    if (at.nil) sp_raise_cls("IndexError", "string not matched");
-    out = sp_str_splice_at(cur, at.v, (sp_int)sp_str_length(k), rep, 0);
-  }
-  sp_String_set_bin((sp_String *)v.v.p, out);
   return v;
 }
-/* String#[]= with a boxed key on the String handle h, written in place,
-   the key's class picking the form as CRuby's rb_str_aset_m picks it: a
-   String (its first occurrence; IndexError when there is none), a Regexp
-   (its first match), a Range (its span; a start outside the String a
-   RangeError naming the Range), and any other key an index, converted as
-   CRuby's NUM2LONG converts it (a Float truncated, anything else the
-   TypeError), which splices one character. The checks come in CRuby's
-   order: the key's conversion and its match or range; then the value's
-   conversion (TypeError), then an index outside the String (IndexError),
-   then FrozenError, and for a Regexp key the encoding check the byte splice
-   makes. The caller holds h, key and val rooted; this roots nothing, so a
-   raise never longjmps with a root of its own live (an inline rescue does
-   not restore sp_gc_nroots), as sp_poly_str_aset_key refuses before it
-   roots. Answers val. */
+/* Resolve a boxed String store's key before converting its replacement.
+   The caller roots the receiver, key and value across conversion. */
 static sp_RbVal sp_str_aset_box_key(sp_String *h, sp_RbVal key, sp_RbVal val) {
   const char *cur = sp_String_cstr(h);
-  sp_int len = (sp_int)sp_str_length(cur), a = 0, n = 1;
-  int bytes = 0, index = 0;
-  if (sp_rbval_is_string(key)) {
-    const char *k = sp_rbval_string_bytes(key) ? sp_rbval_string_bytes(key) : sp_str_empty;
+  sp_int a, n = 1;
+  const char *k = sp_strface_b_box(key);
+  if (k) {
     sp_oint at = sp_str_index_opt(cur, k);
     if (at.nil) sp_raise_cls("IndexError", "string not matched");
     a = at.v; n = (sp_int)sp_str_length(k);
@@ -15412,49 +15363,31 @@ static sp_RbVal sp_str_aset_box_key(sp_String *h, sp_RbVal key, sp_RbVal val) {
   else if (key.tag == SP_TAG_OBJ && key.v.p && key.cls_id == SP_BUILTIN_REGEX) {
     sp_int e;
     sp_re_nth_span((mrb_regexp_pattern *)key.v.p, cur, 0, &a, &e);
-    n = e - a; bytes = 1;
+    const char *rep = sp_str_aset_rep(val);
+    sp_String_splice_match(h, a, e - a, rep);
+    return val;
   }
   else if (key.tag == SP_TAG_OBJ && key.v.p && key.cls_id == SP_BUILTIN_RANGE) {
-    /* the span as CRuby's rb_range_beg_len reads it: a beginless one from
-       0, an endless one (noend) to the end */
-    sp_Range r0 = *(sp_Range *)key.v.p, r = sp_range_ix(r0);
-    a = r.nobeg ? 0 : (r.first < 0 ? r.first + len : r.first);
-    if (a < 0 || a > len) sp_raise_cls("RangeError", sp_sprintf("%s out of range", sp_range_str(r0)));
-    if (r.noend) n = len - a;
-    else n = (r.last < 0 ? r.last + len : r.last) - a + (r.excl ? 0 : 1);
-    if (n < 0) n = 0;
+    sp_str_aset_range_span(*(sp_Range *)key.v.p, (sp_int)sp_str_length(cur), &a, &n);
   }
-  else { a = sp_poly_arg_int_chk(key); index = 1; }
-  /* the value's conversion (a #to_str runs here); what it answers needs no
-     root: nothing allocates between here and the splice, which does not
-     allocate from the collector either, and after a raise it is not read */
-  const char *rep = sp_str_aset_rep(val);
-  cur = sp_String_cstr(h);
-  len = (sp_int)sp_str_length(cur);
-  if (index) {
-    sp_int i = a < 0 ? a + len : a;
-    if (i < 0 || i > len) sp_raise_cls("IndexError", sp_sprintf("index %lld out of string", (long long)a));
-    a = i;
+  else {
+    a = sp_poly_arg_int_chk(key);
   }
-  if (sp_String_is_frozen(h)) sp_raise_frozen_str(cur);
-  if (a + n > (sp_int)(bytes ? sp_str_byte_len(cur) : sp_str_length(cur)))
-    n = (sp_int)(bytes ? sp_str_byte_len(cur) : sp_str_length(cur)) - a;
-  /* spliced where h lives, in the encoding the compatibility rule picked:
-     an ASCII-only binary String given a UTF-8 text becomes UTF-8 */
-  if (bytes) sp_String_splice_bytes(h, a, n, rep, 0, (sp_int)sp_str_byte_len(rep), 0);
-  else sp_String_splice_chars(h, a, n, rep, 0, 0);
+  int single_byte = 0;
+  const char *rep = sp_str_aset_rep_at(h, val, &single_byte);
+  sp_String_splice_chars(h, a, n, rep, single_byte, 0);
   return val;
 }
 /* poly_val[key] = val for a key of no kind the String store picks a form by
    (a Float, nil, a Rational): a String receiver takes it as an index,
    converted as CRuby's NUM2LONG converts it (a Float truncated, anything
-   else the TypeError), raised before anything is rooted, and splices as
+   else the TypeError), and splices as
    sp_poly_str_aset_key does, answering what it answers for the caller to
    store back; any other receiver stores as sp_poly_set_poly does and is
    answered unchanged. */
 static sp_RbVal sp_poly_aset_index_key(sp_RbVal v, sp_RbVal key, sp_RbVal val) {
   if (sp_rbval_is_string(v))
-    return sp_poly_str_aset_key(v, sp_box_int(sp_poly_arg_int_chk(key)), val);
+    return sp_poly_str_aset_key(v, key, val);
   (void)sp_poly_set_poly(v, key, val);
   return v;
 }
@@ -15737,36 +15670,43 @@ sp_bool sp_poly_cbi_p(sp_RbVal v) SP_UNUSED;
 sp_bool sp_poly_cbi_p(sp_RbVal v);
 /* boxed count(v): value-equality element count over an Array, a Hash, a
    Range or an Enumerator (0 for anything else) */
-/* String#index / #rindex on a boxed receiver: the byte offset of a substring,
-   nil when absent. The receiver switch that serves the array kinds
-   dispatches on cls_id, which a String box does not carry, so its default arm
-   routes here before reporting a missing method (#3445). */
-/* The pattern is a String or a Regexp; anything else is CRuby's TypeError
-   (it was read as "absent" and answered nil). */
-static sp_oint sp_poly_str_index_val(sp_RbVal v, sp_RbVal sub, int from_end) {
-  sp_RbVal s = v, a = sub;
-  const char *sp = sp_rbval_string_bytes(s) ? sp_rbval_string_bytes(s) : (&("\xff")[1]);
-  if (a.tag == SP_TAG_OBJ && a.cls_id == SP_BUILTIN_REGEX && a.v.p)
-    return from_end ? sp_re_rindex_opt((mrb_regexp_pattern *)a.v.p, sp)
-                    : sp_re_index_from_opt((mrb_regexp_pattern *)a.v.p, sp, 0);
-  const char *ap = sp_poly_arg_str_chk(a);
-  if (!ap) ap = (&("\xff")[1]);
-  return from_end ? sp_str_rindex_opt(sp, ap) : sp_str_index_opt(sp, ap);
+/* Convert the needle before borrowing the receiver's current payload.
+   The caller has already normalized the position against the old length. */
+static sp_oint sp_poly_str_index_text(sp_RbVal recv, sp_RbVal sub, sp_int start, int from_end) {
+  SP_GC_ROOT_RBVAL(recv);
+  const char *needle = sp_strface_b_box(sub);
+  if (!needle) needle = sp_poly_arg_str_chk(sub);
+  const char *bytes = sp_rbval_string_bytes(recv);
+  if (!needle) needle = sp_str_empty;
+  if (!bytes) bytes = sp_str_empty;
+  if (from_end) return sp_str_rindex_from(bytes, needle, start);
+  return start ? sp_str_index_from_opt(bytes, needle, start) : sp_str_index_opt(bytes, needle);
 }
-/* the two-argument String#index/#rindex on a boxed receiver: the search starts
-   at (index) or stops at (rindex) the given offset. Array owns neither form --
-   its index takes one argument -- so this arm is String's alone (#4149). */
-static sp_oint sp_poly_str_index_from_val(sp_RbVal v, sp_RbVal sub, sp_int start,
-                                          int from_end) {
-  sp_RbVal s = v, a = sub;
-  const char *sp = sp_rbval_string_bytes(s) ? sp_rbval_string_bytes(s) : (&("\xff")[1]);
-  if (a.tag == SP_TAG_OBJ && a.cls_id == SP_BUILTIN_REGEX && a.v.p)
-    return from_end ? sp_re_rindex_from_opt((mrb_regexp_pattern *)a.v.p, sp, start)
-                    : sp_re_index_from_opt((mrb_regexp_pattern *)a.v.p, sp, start);
-  const char *ap = sp_poly_arg_str_chk(a);
-  if (!ap) ap = (&("\xff")[1]);
-  if (!from_end) return sp_str_index_from_opt(sp, ap, start);
-  return sp_str_rindex_from(sp, ap, start);
+static sp_oint sp_poly_str_index_val(sp_RbVal recv, sp_RbVal sub, int from_end) {
+  const char *bytes = sp_rbval_string_bytes(recv);
+  if (!bytes) bytes = sp_str_empty;
+  if (sub.tag == SP_TAG_OBJ && sub.cls_id == SP_BUILTIN_REGEX && sub.v.p)
+    return from_end ? sp_re_rindex_opt((mrb_regexp_pattern *)sub.v.p, bytes)
+                    : sp_re_index_from_opt((mrb_regexp_pattern *)sub.v.p, bytes, 0);
+  return sp_poly_str_index_text(recv, sub, from_end ? (sp_int)sp_str_length(bytes) : 0, from_end);
+}
+static sp_oint sp_poly_str_index_from_val(sp_RbVal recv, sp_RbVal sub, sp_RbVal offset, int from_end) {
+  SP_GC_ROOT_RBVAL(recv); SP_GC_ROOT_RBVAL(sub);
+  sp_int len = (sp_int)sp_str_length(sp_rbval_string_bytes(recv));
+  sp_int start = sp_poly_arg_int_chk(offset);
+  int regex = sub.tag == SP_TAG_OBJ && sub.cls_id == SP_BUILTIN_REGEX && sub.v.p;
+  if (start < 0) start += len;
+  if (start < 0 || (!from_end && start > len)) {
+    if (regex) sp_re_clear_last_match();
+    return sp_oint_nil();
+  }
+  if (start > len) start = len;
+  if (regex) {
+    const char *bytes = sp_str_or_empty(sp_rbval_string_bytes(recv));
+    return from_end ? sp_re_rindex_from_opt((mrb_regexp_pattern *)sub.v.p, bytes, start)
+                    : sp_re_index_from_opt((mrb_regexp_pattern *)sub.v.p, bytes, start);
+  }
+  return sp_poly_str_index_text(recv, sub, start, from_end);
 }
 static sp_int sp_poly_count_val(sp_RbVal v, sp_RbVal x) {
   /* String#count on a boxed receiver counts characters from a set, not

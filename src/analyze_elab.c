@@ -4495,20 +4495,25 @@ int elab_method_reflected(Compiler *c, const char *name, int sg) {
          lr_refl_cell_table(c, name, sg);
 }
 
+static int lr_name_asked(const LoadRecord *r, const char *name, int lists);
 int elab_body_reflected(Compiler *c, const char *name, int sg) {
   LoadRecord *r = c->lrec;
   if (!r || !r->recorded || !name) return 0;
   sg = sg != 0;
   return r->refl_any || lr_refl_has(r->refl_fixed[sg], r->nrefl_fixed[sg], name) ||
          (sg && lr_refl_has(r->refl_fixed[0], r->nrefl_fixed[0], name) && lr_singleton_mixed(r)) ||
-         (sg ? lr_refl_cell_table(c, name, 1) : elab_method_asked(c, name) && respond_to_missing_defined(c));
+         (sg ? lr_refl_cell_table(c, name, 1) : lr_name_asked(c->lrec, name, 0) && respond_to_missing_defined(c));
 }
 
-int elab_method_asked(Compiler *c, const char *name) {
-  const LoadRecord *r = c->lrec;
+/* Does a reader name `name` (see elab_method_asked); a class-side list the cells answer (refl_cell_list) among them
+   where lists is set: it names a class method, never an instance method */
+static int lr_name_asked(const LoadRecord *r, const char *name, int lists) {
   if (!r || !r->recorded || !name) return 0;
-  return r->refl_any || r->refl_cell_list || lr_refl_has(r->refl, r->nrefl, name) || lr_refl_has(r->refl_cell, r->nrefl_cell, name) ||
+  return r->refl_any || (lists && r->refl_cell_list) || lr_refl_has(r->refl, r->nrefl, name) || lr_refl_has(r->refl_cell, r->nrefl_cell, name) ||
          lr_refl_has(r->refl_capt, r->nrefl_capt, name);
+}
+int elab_method_asked(Compiler *c, const char *name) {
+  return lr_name_asked(c->lrec, name, 1);
 }
 
 int elab_method_replaced(Compiler *c, const char *name) {

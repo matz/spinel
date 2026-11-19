@@ -1179,6 +1179,11 @@ int cplan_has_method_missing(Compiler *c, int id, int ci, int cmethod);
 /* A String builtin may be undefined. *hook is the Ruby hook's scope or
    -1, and *undef is one for proved absence or negative for a live test. */
 int cplan_string_missing(Compiler *c, int id, const char *name, int *hook, int *undef);
+/* Can an undef make a call to String's builtin name miss: String has a class
+   id, the name has versions, and String's chain holds an undef of it in the
+   record's version index (which places no node). 0 lets a pass skip the
+   call without asking where it runs. */
+int cplan_string_may_undef(Compiler *c, const char *name);
 /* Does this call's String arm reach the original builtin before a reopen,
    or after a guard has excluded the undef? */
 int cplan_string_builtin_fallback(Compiler *c, int id, const char *name);

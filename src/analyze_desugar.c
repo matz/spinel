@@ -29022,15 +29022,19 @@ int desugar_missing_method_calls(Compiler *c) {
   if (!c->cls_fact) return 0;
   int str_class = comp_core_class(c, CORE_STRING);
   int str_missing = str_class >= 0;
-  int any = str_missing;
-  for (int k = 0; k < c->nclasses && !any; k++) any = mm_user(c, -1, k) >= 0;
-  if (!any) return 0;
+  int mm_any = 0;
+  for (int k = 0; k < c->nclasses && !mm_any; k++) mm_any = mm_user(c, -1, k) >= 0;
+  if (!mm_any && !str_missing) return 0;
   int n0 = nt->count, changed = 0, *parent = NULL;
   for (int id = 0; id < n0; id++) {
     if (nt_kind(nt, id) != NK_CallNode || nt_int(nt, id, "mm_split", 0) || nt_int(nt, id, "dyn_arm", 0)) continue;
     const char *nm = nt_str(nt, id, "name");
     int r = nt_ref(nt, id, "receiver");
     if (!nm || sp_streq(nm, "method_missing")) continue;
+    /* (no method_missing of the program's: only a String call that an undef
+       may make miss is split, and every other call keeps its plan, as the
+       pass's early return had it before String's misses were planned) */
+    if (!mm_any && !cplan_string_may_undef(c, nm)) continue;
     /* (an assignment's value is what it assigns, not what method_missing answers) */
     size_t nl = strlen(nm);
     if (nl > 1 && nm[nl - 1] == '=' && !sp_streq(nm, "==") && !sp_streq(nm, "!=") && !sp_streq(nm, "<=") &&

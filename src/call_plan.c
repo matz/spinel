@@ -3153,8 +3153,29 @@ static int ct_table(Compiler *c, int cls, const char *name, unsigned flags, int 
    the record places it, not in a method's body or a block it cannot place,
    which may run before the undef? Anywhere else the table's method stands, as
    cplan_hook_target keeps it. */
+/* Does cls's instance chain hold an undef of name among the record's
+   versions? Read from the version index alone: it places no node, so it
+   does not rebuild the record's map after the table changed, which
+   placing the call outside a plan frame does once per ask (#12194). 1
+   where the index cannot say. */
+static int cplan_chain_undef(Compiler *c, int cls, const char *name) {
+  ElabVersion vs[VER_MAX_ARMS];
+  int nv = elab_chain_versions(c, cls, 0, name, vs, VER_MAX_ARMS);
+  if (nv < 0 || nv >= VER_MAX_ARMS) return 1;   /* (the index cannot say, or holds more: ask) */
+  for (int i = 0; i < nv; i++)
+    if (vs[i].v && vs[i].v->kind == LR_UNDEF) return 1;
+  return 0;
+}
+/* See call_plan.h. */
+int cplan_string_may_undef(Compiler *c, const char *name) {
+  int ci = comp_core_class(c, CORE_STRING);
+  return ci >= 0 && elab_method_versions(c, name) && builtin_instance_method_known("String", name) &&
+         cplan_chain_undef(c, ci, name);
+}
 int cplan_undef_before(Compiler *c, int site, int cls, const char *name) {
-  if (site < 0 || elab_in_unplaced_block(c, site)) return 0;
+  /* (no undef on the chain: none is in force at any point, and the answer
+     below is 1 only for an undef) */
+  if (site < 0 || !cplan_chain_undef(c, cls, name) || elab_in_unplaced_block(c, site)) return 0;
   int framed = elab_plan_enter(c, site);
   LoadPoint p = elab_point_of(c, site);
   const LrDef *d = NULL;
@@ -10600,6 +10621,9 @@ int cplan_has_method_missing(Compiler *c, int id, int ci, int cmethod) {
 int cplan_string_missing(Compiler *c, int id, const char *name, int *hook, int *undef) {
   int ci = comp_core_class(c, CORE_STRING);
   if (ci < 0 || !elab_method_versions(c, name) || cplan_builtin_call(c, id) || !builtin_instance_method_known("String", name)) return 0;
+  /* (no undef of the name on String's chain: no call misses it, and
+     cplan_undef_at would place the call outside a plan frame to say so) */
+  if (!cplan_chain_undef(c, ci, name)) return 0;
   *undef = cplan_undef_before(c, id, ci, name) ? 1 : cplan_undef_at(c, id, ci, name);
   if (!*undef) return 0;
   *hook = cplan_mm_method(c, id, ci, 0);

@@ -68,7 +68,8 @@ Beyond the root array the mark walk consults three hook groups, in this order:
 2. **globals** -- `sp_gc_mark_globals_hook`, installed by the *generated*
    translation unit, which owns state the collector cannot see: the regexp
    match registers, `ARGV`, `$0`, the in-flight exception stack, reassigned
-   standard streams;
+   standard streams, and the top-level `main` object. Its Object scan marks
+   the instance variable table and the values it holds;
 3. **the mark stack drain**, below.
 
 The root array holds `SP_GC_STACK_MAX` (65536) entries -- a 512 KB static

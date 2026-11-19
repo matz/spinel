@@ -22,6 +22,17 @@
 #define sp_sym_intern_n sp_poly_cold_sym_intern_n
 #include "spinel_rt.h"
 
+/* Top-level self uses Object's allocation and ivar scan. */
+sp_RbVal sp_main_self(void) {
+  void *m = SP_ATOMIC_LOAD(&sp_main_obj, __ATOMIC_ACQUIRE);
+  if (!m) {
+    void *fresh = sp_Object_new();
+    if (SP_ATOMIC_CAS(&sp_main_obj, &m, fresh, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+      m = fresh;   /* else another thread won; m holds its object */
+  }
+  return sp_box_obj(m, SP_BUILTIN_OBJECT);
+}
+
 sp_int sp_poly_arg_int(sp_RbVal v) { return sp_poly_arg_int_chk(v); }
 sp_String *sp_poly_arg_string(sp_RbVal v) { return sp_poly_arg_str_handle(v); }
 

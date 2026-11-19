@@ -1,4 +1,4 @@
-/* sp_slab.c -- size-class slab allocation for GC objects and heap strings,
+/* sp_slab.c -- size-class slab allocation for GC objects and raw payloads,
  * with the generations and the mark kept in bitmaps beside the chunks.
  *
  * Every object and every heap string used to be one malloc and, when it
@@ -11,14 +11,13 @@
  * free, not the arithmetic.
  *
  * Here a block is a slot in a 16 KB chunk of one size class, and what the
- * collector knows about a slot lives in seven bitmaps kept in the arena's
+ * collector knows about a slot lives in six bitmaps kept in the arena's
  * metadata chunks, one bit per slot each, never in the slot itself:
  *
  *   young[0], young[1]  allocated in the epoch of that parity (see below)
  *   old                 promoted
  *   mark                reached by this cycle's mark
  *   fin                 an object whose death runs a finalizer or recycler
- *   str                 a heap string (its bytes count on the string side)
  *   pin                 never freed by a sweep: a frozen heap string, a
  *                       container payload, a dead header parked on its
  *                       pool (the last two are in no generation at all and
@@ -50,7 +49,7 @@
  * untouched, uncommitted pages; smaller where the system refuses), so a free
  * tells a slab block from a malloc'd one by a range check, and a slot finds
  * its chunk by masking its address. The range is handed out in 4 MB arenas
- * whose first chunk holds the arena's chunk headers and whose next seven
+ * whose first chunk holds the arena's chunk headers and whose next six
  * hold the bitmaps, so a released chunk keeps no resident page at all. At
  * the end of a full cycle every chunk that is entirely free, beyond a small
  * reserve per worker, is given back to the OS with madvise and re-carved
@@ -90,8 +89,8 @@
 #define SP_SLAB_NCLS    27
 #define SP_SLAB_MAX     2048
 /* chunk 0 is the header table (256 x 64 B); chunks 1..SP_SLAB_META hold the
-   bitmaps (256 x 448 B = 112 KB = 7 chunks); the rest are carved */
-#define SP_SLAB_META    7
+   bitmaps (256 x 384 B = 96 KB = 6 chunks); the rest are carved */
+#define SP_SLAB_META    6
 #define SP_SLAB_FIRST   (1 + SP_SLAB_META)
 /* fully free chunks a worker keeps resident across a full cycle per class, at least (64 KB) */
 #define SP_SLAB_RESERVE 4
@@ -137,16 +136,15 @@ typedef struct sp_slab_chunk {
 } sp_slab_chunk;
 typedef char sp_slab_chunk_is_one_line[sizeof(sp_slab_chunk) == 64 ? 1 : -1];
 
-/* one slot's worth of state per chunk: seven bitmaps of SP_SLAB_NW words */
+/* one slot's worth of state per chunk: six bitmaps of SP_SLAB_NW words */
 typedef struct sp_slab_bm {
   uint64_t young[2][SP_SLAB_NW];
   uint64_t old[SP_SLAB_NW];
   uint64_t mark[SP_SLAB_NW];
   uint64_t fin[SP_SLAB_NW];
-  uint64_t str[SP_SLAB_NW];
   uint64_t pin[SP_SLAB_NW];
 } sp_slab_bm;
-typedef char sp_slab_bm_is_448[sizeof(sp_slab_bm) == 448 ? 1 : -1];
+typedef char sp_slab_bm_is_384[sizeof(sp_slab_bm) == 384 ? 1 : -1];
 typedef char sp_slab_meta_fits[SP_SLAB_NCHUNK * sizeof(sp_slab_bm) <= SP_SLAB_META * SP_SLAB_CHUNK ? 1 : -1];
 
 typedef struct sp_slab_arena {
@@ -157,8 +155,8 @@ typedef struct {
   sp_slab_chunk *cur[SP_SLAB_NCLS];
   sp_slab_chunk *avail[SP_SLAB_NCLS];
   /* The allocation cache, per class: a word of the current chunk with its
-     free bits (wmask, not claimed yet), and per KIND (0: objects and
-     strings, claimed in the epoch's young word; 1: payloads, claimed in
+     free bits (wmask, not claimed yet), and per kind (0: objects, claimed
+     in the epoch's young word; 1: payloads, claimed in
      pin) a RUN of consecutive slots cut from that word, claimed in the
      bitmap all at once and handed out by a bump of rnext up to rend. The
      two kinds keep their runs through each other's refills: dropping a
@@ -172,14 +170,12 @@ typedef struct {
   uint64_t *wyoung[SP_SLAB_NCLS];   /* the cached word in this epoch's young bitmap */
   uint64_t *wpin[SP_SLAB_NCLS];     /* the same word of the pin bitmap */
   uint64_t *wfin[SP_SLAB_NCLS];     /* the same word of the fin bitmap */
-  uint64_t *wstr[SP_SLAB_NCLS];     /* the same word of the str bitmap */
   char *wbase[SP_SLAB_NCLS];        /* slot 0 of that word */
   char *rnext[2][SP_SLAB_NCLS];     /* the run's next slot, per kind */
   char *rend[2][SP_SLAB_NCLS];      /* one past the run's last slot */
   char *rbase[2][SP_SLAB_NCLS];     /* slot 0 of the run's word (the fin bit is computed from it) */
   uint64_t *rclaim[2][SP_SLAB_NCLS];   /* the word the run was claimed in (unclaimed from there at a release) */
   uint64_t *rfin[2][SP_SLAB_NCLS];     /* the run's word in the fin bitmap */
-  uint64_t *rstr[2][SP_SLAB_NCLS];     /* the run's word in the str bitmap */
   sp_slab_chunk *owned;              /* every chunk this worker carved, doubly linked */
   long taken;        /* chunks this worker started allocating into since the last release */
   int taken_cls[SP_SLAB_NCLS];   /* the same, per class: what each class will need again next cycle */
@@ -225,7 +221,7 @@ static pthread_mutex_t sp_slab_lock = PTHREAD_MUTEX_INITIALIZER;
    aligns a uint64_t in a struct to 4, and clang then turns a 64-bit atomic
    into a libatomic call (__atomic_load_8), which nothing links; gcc inlines
    it either way. The words are 8-aligned in fact: the bitmaps sit in a page-
-   aligned arena, in 448-byte records of nothing but uint64_t. */
+   aligned arena, in 384-byte records of nothing but uint64_t. */
 #if SP_ATOMICS_BUILTIN
 typedef uint64_t sp_bm_aword __attribute__((aligned(8)));
 #else
@@ -526,7 +522,6 @@ static int sp_slab_run(sp_slab_worker *wk, int cls, int payload) {
     wk->rbase[payload][cls] = wk->wbase[cls];
     wk->rclaim[payload][cls] = claim;
     wk->rfin[payload][cls] = wk->wfin[cls];
-    wk->rstr[payload][cls] = wk->wstr[cls];
     return 1;
   }
   return 0;
@@ -561,7 +556,6 @@ static inline void *sp_slab_take(sp_slab_worker *wk, int cls, sp_slab_chunk *ch,
     wk->wyoung[cls] = &bm->young[e][w];
     wk->wpin[cls] = &bm->pin[w];
     wk->wfin[cls] = &bm->fin[w];
-    wk->wstr[cls] = &bm->str[w];
     wk->wbase[cls] = sp_slab_chunk_base(ch) + (size_t)(w << 6) * csize;
     if (sp_slab_run(wk, cls, payload)) {
       char *p = wk->rnext[payload][cls];
@@ -898,7 +892,7 @@ static SP_NOINLINE void *sp_gc_alloc_full(size_t sz, void (*fin)(void *), void (
   return (char *)h + sizeof(sp_gc_hdr);
 #endif
 }
-/* A block the collector will sweep: an object (zeroed) or a heap string */
+/* A zeroed object slot the collector will sweep. */
 void *sp_slab_alloc(size_t need) {
   void *p = sp_slab_alloc_in(need, 0, 0, 1);
   if (SP_EXPECT(sp_slab_verify_on, 0)) sp_slab_note(p, 1);
@@ -1005,9 +999,8 @@ static size_t sp_slab_quar_bytes = 0;
 static inline uint64_t *sp_slab_quar_of(sp_slab_chunk *ch) {
   return sp_slab_quar + ((uintptr_t)sp_slab_chunk_base(ch) - sp_slab_base) / SP_SLAB_CHUNK * SP_SLAB_NW;
 }
-/* the slots of one bitmap word a sweep found dead (`strs`: which of them are
-   strings), or the one slot of an explicit free (`whole`: no header to keep) */
-static SP_NOINLINE void sp_slab_quarantine(sp_slab_chunk *ch, sp_slab_bm *bm, unsigned w, uint64_t dead, uint64_t strs, int whole) {
+/* Poison a swept object's body, or all of an explicitly freed slot. */
+static SP_NOINLINE void sp_slab_quarantine(sp_slab_chunk *ch, sp_slab_bm *bm, unsigned w, uint64_t dead, int whole) {
   unsigned csize = sp_slab_csize[ch->cls];
   bm_or(&bm->pin[w], dead);
   bm_or(&sp_slab_quar_of(ch)[w], dead);
@@ -1015,10 +1008,6 @@ static SP_NOINLINE void sp_slab_quarantine(sp_slab_chunk *ch, sp_slab_bm *bm, un
     unsigned b = (unsigned)SP_CTZ64(v);
     char *slot = sp_slab_chunk_base(ch) + (size_t)((w << 6) + b) * csize;
     if (whole) memset(slot, SP_SLAB_POISON, csize);
-    else if ((strs >> b) & 1) {
-      size_t room = csize - sizeof(sp_str_hdr) - 2, len = ((sp_str_hdr *)slot)->len;
-      memset(slot + sizeof(sp_str_hdr) + 1, SP_SLAB_POISON, len < room ? len : room);
-    }
     else memset(slot + sizeof(sp_gc_hdr), SP_SLAB_POISON, csize - sizeof(sp_gc_hdr));
   }
 #ifdef SP_THREADS
@@ -1033,22 +1022,17 @@ int sp_slab_is_quarantined(const void *p) {
   return (bm_load(&sp_slab_quar_of(l.ch)[l.w]) & l.bit) != 0;
 }
 
-int sp_slab_is_str(const void *p) {
-  sp_slab_loc l; sp_slab_locate(p, &l);
-  return (l.bm->str[l.w] & l.bit) != 0;
-}
 /* the verifiers' report: what the bitmaps say about a slot */
 void sp_slab_describe(const void *p) {
   if (sp_slab_on <= 0 || !sp_slab_owns(p)) { fprintf(stderr, "  slab: not a slab block\n"); return; }
   sp_slab_loc l; sp_slab_locate(p, &l);
-  fprintf(stderr, "  slab: chunk wid=%u cls=%u (%u B) in_use=%d slot=%u epoch=%u young0=%d young1=%d old=%d mark=%d fin=%d str=%d pin=%d\n",
+  fprintf(stderr, "  slab: chunk wid=%u cls=%u (%u B) in_use=%d slot=%u epoch=%u young0=%d young1=%d old=%d mark=%d fin=%d pin=%d\n",
           l.ch->wid, l.ch->cls, sp_slab_csize[l.ch->cls], l.ch->in_use, l.idx, sp_slab_epoch,
           !!(l.bm->young[0][l.w] & l.bit), !!(l.bm->young[1][l.w] & l.bit), !!(l.bm->old[l.w] & l.bit),
-          !!(l.bm->mark[l.w] & l.bit), !!(l.bm->fin[l.w] & l.bit), !!(l.bm->str[l.w] & l.bit), !!(l.bm->pin[l.w] & l.bit));
+          !!(l.bm->mark[l.w] & l.bit), !!(l.bm->fin[l.w] & l.bit), !!(l.bm->pin[l.w] & l.bit));
 }
 /* SPINEL_GC_VERIFY: every chunk's bitmaps against their invariants -- a
-   finalizer, string or pin bit on a slot in no generation is a slot that was
-   freed without being cleared, or claimed without being free. */
+   mark or finalizer bit on an unallocated slot is a stale bit. */
 int sp_slab_verify_on = 0;   /* declared above */
 /* under the verifier: who last set a slot's bits (a byte per 32-byte slot
    over the whole reservation, touched only where slots are) */
@@ -1074,23 +1058,22 @@ static void sp_slab_verify_chunk(sp_slab_chunk *ch, const char *when) {
   unsigned nw = (ch->nslots + 63) >> 6, csize = sp_slab_csize[ch->cls];
   for (unsigned w = 0; w < nw; w++) {
     uint64_t gen = bm->young[0][w] | bm->young[1][w] | bm->old[w] | bm->pin[w];
-    uint64_t stray = (bm->fin[w] | bm->str[w] | bm->mark[w]) & ~gen;
+    uint64_t stray = (bm->fin[w] | bm->mark[w]) & ~gen;
     uint64_t both = bm->young[0][w] & bm->young[1][w];
-    uint64_t finstr = bm->fin[w] & bm->str[w];
     uint64_t ymark = (bm->young[0][w] | bm->young[1][w]) & bm->mark[w] & (when[0] == 'a' && when[1] == 't' ? ~(uint64_t)0 : 0);   /* at the barrier: no young slot carries a mark */
-    uint64_t bad = stray | both | finstr | ymark;
+    uint64_t bad = stray | both | ymark;
     while (bad) {
       unsigned b = (unsigned)SP_CTZ64(bad); bad &= bad - 1;
       void *slot = sp_slab_chunk_base(ch) + (size_t)((w << 6) + b) * csize;
       fprintf(stderr, "*** SPINEL_GC_VERIFY: slab invariant broken at %p (%s), %s:\n", slot,
-              (stray >> b) & 1 ? "bits on a free slot" : (both >> b) & 1 ? "in both epochs" : (finstr >> b) & 1 ? "finalizer bit on a string" : "a mark on a young slot", when);
+              (stray >> b) & 1 ? "bits on a free slot" : (both >> b) & 1 ? "in both epochs" : "a mark on a young slot", when);
       sp_slab_describe(slot);
       { const uint64_t *q = (const uint64_t *)slot;
         fprintf(stderr, "  slot words: %016llx %016llx %016llx %016llx %016llx %016llx\n",
                 (unsigned long long)q[0], (unsigned long long)q[1], (unsigned long long)q[2],
                 (unsigned long long)q[3], (unsigned long long)q[4], (unsigned long long)q[5]);
         sp_slab_shadow_rec *sh = SP_SHADOW(slot);
-        fprintf(stderr, "  history (1 obj alloc, 2 str alloc, 3 raw alloc, 4 set_fin, 5/15 relive into y0/y1, 6 free, 7 swept dead, 8/18 parked sweeping y0/y1, 9 pin, 30/31 survived sweep of y0/y1, 40-43 take into y0/y1/(+2 payload)), oldest first; now cycle %d:\n", sp_gc_cycle);
+        fprintf(stderr, "  history (1 obj alloc, 3 raw alloc, 4 set_fin, 5/15 relive into y0/y1, 6 free, 7 swept dead, 8/18 parked sweeping y0/y1, 9 pin, 30/31 survived sweep of y0/y1, 40-43 take into y0/y1/(+2 payload)), oldest first; now cycle %d:\n", sp_gc_cycle);
         if (sh) for (unsigned k = 0; k < 8; k++) { sp_slab_shadow_ev *e = &sh->ev[(sh->n + k) & 7]; if (e->what) fprintf(stderr, "    what=%d worker=%d cycle=%d\n", e->what, e->wid, e->cycle); } }
       abort();
     }
@@ -1100,7 +1083,7 @@ static void sp_slab_verify_chunk(sp_slab_chunk *ch, const char *when) {
 void sp_slab_history(const void *p) {
   if (sp_slab_on <= 0 || !sp_slab_owns(p)) return;
   sp_slab_shadow_rec *sh = SP_SHADOW(p);
-  fprintf(stderr, "  history (1 obj alloc, 2 str alloc, 3 raw alloc, 4 set_fin, 5/15 relive, 6 free, 7 swept dead, 8/18 parked, 9 pin, 30/31 survived sweep, 40-43 take), oldest first; now cycle %d:\n", sp_gc_cycle);
+  fprintf(stderr, "  history (1 obj alloc, 3 raw alloc, 4 set_fin, 5/15 relive, 6 free, 7 swept dead, 8/18 parked, 9 pin, 30/31 survived sweep, 40-43 take), oldest first; now cycle %d:\n", sp_gc_cycle);
   if (sh) for (unsigned k = 0; k < 8; k++) { sp_slab_shadow_ev *e = &sh->ev[(sh->n + k) & 7]; if (e->what) fprintf(stderr, "    what=%d worker=%d cycle=%d\n", e->what, e->wid, e->cycle); }
 }
 void sp_slab_verify_all(void) {
@@ -1122,11 +1105,6 @@ int sp_slab_is_live(const void *p) {
   if (SP_EXPECT(sp_slab_quar != NULL, 0) && (sp_slab_quar_of(l.ch)[l.w] & l.bit)) return 0;   /* pinned, and freed */
   return ((l.bm->young[0][l.w] | l.bm->young[1][l.w] | l.bm->old[l.w] | l.bm->pin[l.w]) & l.bit) != 0;
 }
-int sp_slab_is_old(const void *p) {
-  sp_slab_loc l; sp_slab_locate(p, &l);
-  return (l.bm->old[l.w] & l.bit) != 0;
-}
-
 /* A chunk a free put a slot back into rejoins its owner's available list,
    unless it is there already or is the chunk the owner allocates from. The
    owner's current chunk is read racily: when it is mid-refill the chunk it
@@ -1167,10 +1145,9 @@ void sp_slab_free(void *p) {
   SP_SLAB_CLEAR(l.bm->young[0][l.w]);
   SP_SLAB_CLEAR(l.bm->young[1][l.w]);
   SP_SLAB_CLEAR(l.bm->fin[l.w]);
-  SP_SLAB_CLEAR(l.bm->str[l.w]);
   SP_SLAB_CLEAR(l.bm->mark[l.w]);
   SP_SLAB_CLEAR(l.bm->old[l.w]);
-  if (SP_EXPECT(sp_slab_quar != NULL, 0)) { sp_slab_frees++; if (sp_slab_verify_on) sp_slab_note(p, 6); sp_slab_quarantine(l.ch, l.bm, l.w, l.bit, 0, 1); return; }
+  if (SP_EXPECT(sp_slab_quar != NULL, 0)) { sp_slab_frees++; if (sp_slab_verify_on) sp_slab_note(p, 6); sp_slab_quarantine(l.ch, l.bm, l.w, l.bit, 1); return; }
   SP_SLAB_CLEAR(l.bm->pin[l.w]);
 #undef SP_SLAB_CLEAR
   sp_slab_frees++;
@@ -1216,17 +1193,6 @@ int sp_slab_mark(const void *p, int aging, int *was_young) {
   if (!aging) bm_or(&l.bm->old[l.w], l.bit);
   return 1;
 }
-/* is the slot marked this cycle? (the string side's "already marked" test) */
-int sp_slab_is_marked(const void *p) {
-  sp_slab_loc l; sp_slab_locate(p, &l);
-  return (bm_load(&l.bm->mark[l.w]) & l.bit) != 0;
-}
-/* the verifiers' probe unmarks a slot to see who marks it again */
-void sp_slab_unmark(const void *p) {
-  sp_slab_loc l; sp_slab_locate(p, &l);
-  bm_and(&l.bm->mark[l.w], ~l.bit);
-}
-
 /* ---- the sweep ----
    Under the barrier, before the sweep of the epoch that just closed starts:
    new allocations go to the other parity from here. */
@@ -1320,9 +1286,7 @@ void sp_slab_sweep_worker(int wid, int full, int aging, int (*die)(void *hdr), s
         uint64_t parked_now = pv & bm_load(&bm->fin[w]) & ~(yv | ov | bm_load(&bm->young[e][w]));
         if (parked_now) acc.parked += (size_t)SP_POPCOUNT64(parked_now) * csize;
       }
-      /* a word with nothing to reclaim is skipped, unless it carries marks:
-         a minor's mark reaches old strings too, and a mark left behind would
-         read as "already marked" next cycle and keep a dead string */
+      /* A word with nothing to reclaim can still have marks to clear. */
       if (!yv && !mv && !(full && ov)) continue;
       uint64_t dead = yv & ~mv & ~ov & ~pv;
       if (full) dead |= ov & ~mv & ~pv;
@@ -1364,15 +1328,11 @@ void sp_slab_sweep_worker(int wid, int full, int aging, int (*die)(void *hdr), s
       }
       if (sp_slab_verify_on) { uint64_t v = yv & ~dead; while (v) { unsigned b = (unsigned)SP_CTZ64(v); v &= v - 1; sp_slab_note(sp_slab_chunk_base(ch) + (size_t)((w << 6) + b) * csize, 30 + (int)pe); } }
       if (dead) {
-        uint64_t sd = dead & bm_load(&bm->str[w]);
-        acc.freed_str += (size_t)SP_POPCOUNT64(sd) * csize;
-        acc.freed_obj += (size_t)SP_POPCOUNT64(dead & ~sd) * csize;
         if (fdead | (dead & bm_load(&bm->fin[w]))) bm_and(&bm->fin[w], ~dead);
-        if (sd) bm_and(&bm->str[w], ~dead);
         if (full && (ov & dead)) bm_and(&bm->old[w], ~dead);
         freed += (size_t)SP_POPCOUNT64(dead);
         if (sp_slab_verify_on) { uint64_t v = dead; while (v) { unsigned b = (unsigned)SP_CTZ64(v); v &= v - 1; sp_slab_note(sp_slab_chunk_base(ch) + (size_t)((w << 6) + b) * csize, 7); } }
-        if (SP_EXPECT(sp_slab_quar != NULL, 0)) sp_slab_quarantine(ch, bm, w, dead, sd, 0);
+        if (SP_EXPECT(sp_slab_quar != NULL, 0)) sp_slab_quarantine(ch, bm, w, dead, 0);
       }
       /* the epoch's word is spent: dead, promoted or carried, every bit is
          accounted for. So are the marks: the next cycle starts clean. */
@@ -1386,8 +1346,7 @@ void sp_slab_sweep_worker(int wid, int full, int aging, int (*die)(void *hdr), s
   SP_ATOMIC_STORE(&wk->sweeping, 0, __ATOMIC_RELEASE);
   if (st) *st = acc;
 }
-/* The verifiers walk every allocated slot of every chunk: objects (not
-   strings) whose generation is young, old, or either. */
+/* Walk the allocated object slots in the selected generations. */
 void sp_slab_each_object(int young, int old, void (*fn)(void *hdr, void *arg), void *arg) {
   if (sp_slab_on <= 0) return;
   for (uintptr_t a = sp_slab_base; a < sp_slab_brk; a += SP_SLAB_ARENA) {
@@ -1401,7 +1360,6 @@ void sp_slab_each_object(int young, int old, void (*fn)(void *hdr, void *arg), v
         uint64_t v = 0;
         if (young) v |= bm->young[0][w] | bm->young[1][w];
         if (old) v |= bm->old[w];
-        v &= ~bm->str[w];   /* not strings; a payload or a parked header is pinned and in no generation */
         while (v) {
           unsigned b = (unsigned)SP_CTZ64(v); v &= v - 1;
           fn(sp_slab_chunk_base(ch) + (size_t)((w << 6) + b) * csize, arg);
@@ -1410,30 +1368,6 @@ void sp_slab_each_object(int young, int old, void (*fn)(void *hdr, void *arg), v
     }
   }
 }
-/* the same over heap strings (the slot's start; the body follows the header) */
-void sp_slab_each_string(int young, int old, void (*fn)(void *hdr, void *arg), void *arg) {
-  if (sp_slab_on <= 0) return;
-  for (uintptr_t a = sp_slab_base; a < sp_slab_brk; a += SP_SLAB_ARENA) {
-    sp_slab_arena *ar = (sp_slab_arena *)a;
-    for (int i = SP_SLAB_FIRST; i < (int)SP_SLAB_NCHUNK; i++) {
-      sp_slab_chunk *ch = &ar->ch[i];
-      if (!ch->in_use) continue;
-      sp_slab_bm *bm = sp_slab_bm_of(ch);
-      unsigned nw = (ch->nslots + 63) >> 6, csize = sp_slab_csize[ch->cls];
-      for (unsigned w = 0; w < nw; w++) {
-        uint64_t v = 0;
-        if (young) v |= bm->young[0][w] | bm->young[1][w];
-        if (old) v |= bm->old[w];
-        v &= bm->str[w];
-        while (v) {
-          unsigned b = (unsigned)SP_CTZ64(v); v &= v - 1;
-          fn(sp_slab_chunk_base(ch) + (size_t)((w << 6) + b) * csize, arg);
-        }
-      }
-    }
-  }
-}
-
 /* ---- release: fully free chunks back to the OS ---- */
 /* The available lists are rebuilt in ADDRESS order. A chunk joins the list
    whenever a sweep frees its first slot, in whatever order the sweep meets

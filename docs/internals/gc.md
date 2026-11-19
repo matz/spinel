@@ -4,22 +4,11 @@ Spinel's garbage collector is **mark and sweep, non-moving, and precise**:
 every root is registered explicitly, so no stack or register is ever scanned
 conservatively and no pointer is ever guessed at.
 
-There are two heaps. This is the first thing to understand about the design,
-because almost everything else follows from it.
-
-|                | Object heap                                                   | String heap                                       |
-|----------------|---------------------------------------------------------------|---------------------------------------------------|
-| Allocator      | `sp_gc_alloc` (`lib/sp_alloc.c`)                              | `sp_str_alloc` (`lib/sp_alloc.c`)                 |
-| Header         | 48-byte `sp_gc_hdr` immediately before the object             | 24-byte `sp_str_hdr` plus **one marker byte**     |
-| What is handed out | `(char *)hdr + 48`                                        | `(char *)(hdr + 1) + 1` -- one past the marker     |
-| Live bytes     | `sp_gc_bytes`                                                 | a separate counter, deliberately not folded in    |
-| Swept          | inside `sp_gc_collect`                                        | through `sp_gc_str_sweep_hook`, on its own gate   |
-
-A Ruby `String` is a plain `const char *` in generated C. There is nowhere to
-put a header the caller can see, so a heap string is identified by **the byte
-immediately before the pointer**. That single decision shapes the mark path,
-and it is also the source of the collector's most persistent bug family (see
-[Marker bytes](#marker-bytes)).
+Strings use the object heap. A Ruby String is an `sp_String *`, with
+an `sp_gc_hdr` before the handle. Code borrowing its bytes can register
+a byte root. The marker byte and the `sp_str_hdr` before the payload
+let the collector follow that view back to its owner. See
+[Marker bytes](#marker-bytes).
 
 ## Roots
 
@@ -37,7 +26,7 @@ The low two bits of the stored address are a tag:
 |-----|---------------------|---------------------------------------------------|
 | 0   | `SP_GC_ROOT`        | `sp_gc_mark` -- a direct GC pointer                 |
 | 1   | `SP_GC_ROOT_RBVAL`  | `sp_mark_rbval` -- the pointer lives in a union at a nonzero offset, and only for the STR/OBJ/BIGINT tags |
-| 2   | `SP_GC_ROOT_STR`    | `sp_mark_string` -- touches nothing unless the marker byte is exactly `0xfe`, so it is safe on a stack buffer or an external `char *` |
+| 2   | `SP_GC_ROOT_STR`    | `sp_mark_string` follows a recognized byte view to its owner |
 
 `SP_GC_SAVE()` snapshots the root depth for a whole function; `SP_GC_RESTORE()`
 returns to it.
@@ -93,14 +82,15 @@ formality.
 
 `sp_gc_mark` reads `((unsigned char *)obj)[-1]` and dispatches:
 
-| Byte   | Meaning                                            | Action                          |
-|--------|----------------------------------------------------|---------------------------------|
-| `0xfe` | heap string, unmarked                              | write `0xfc`, done              |
-| `0xfc` | heap string, already marked                        | skip                            |
-| `0xff` | a literal in static storage (rodata, `.bss`)       | skip                            |
-| `0xfd` | an `sp_String` buffer                              | skip                            |
-| `0xf1` | frozen                                             | skip                            |
-| *anything else* | a real GC object                          | header at `obj - 48`, stamp, push |
+| Byte | Meaning | Action |
+|---|---|---|
+| `0xfe`, `0xfa` | bytes allocated with the handle, mutable or frozen | follow the owner link |
+| `0xfd` | the handle's current payload | mark the owner |
+| `0xf9` | a retired payload still visible through a view | stamp the view and mark the owner |
+| `0xff`, `0xfb` | static bytes | skip |
+| `0xf1` | frozen bytes | skip on the object path. A typed String root can follow an adjacent owner |
+| *anything else* | a GC object | read its object header and mark it |
+
 
 The last row is unconditional: any pointer that reaches `sp_gc_mark` and does
 not carry a known marker is **treated as a GC object**, its header read out of
@@ -148,17 +138,12 @@ first literal it marks. They do not pin `old` or `pinned`, which only save work.
 
 ## Marking
 
-The mark phase is **full by default**. `sp_gc_mark_all` walks every root every
-cycle, and only the *sweep* is generational -- a distinction worth stating
-plainly, because "generational GC" usually implies the opposite.
+A minor mark traces young objects through roots and the old holders
+recorded by the write barrier. A full mark traces the whole reachable
+heap. `SPINEL_GC_MINOR=0` makes every mark full.
 
-`SPINEL_GC_MINOR=1` makes the mark generational too, through the write barrier
-and the remembered set. It is opt-in, for a measured reason rather than a
-doubtful one; see "The generational mark, and why it is opt-in" below.
-
-Marks are a 30-bit generation stamp (`sp_gc_mark_gen`), so a new cycle unmarks
-the whole heap without touching a single object. On the (rare) wrap the heap is
-cleared once so no stale stamp can alias the reused value.
+Marks use a 27-bit generation stamp (`sp_gc_mark_gen`). On wrap,
+the collector clears the heap's stamps before it reuses them.
 
 Tracing uses an explicit mark stack of 65536 entries. When it is full,
 `sp_gc_mark` calls `scan` directly instead -- correct, but recursive, so a very
@@ -166,42 +151,25 @@ deep object graph falls back to the C stack.
 
 ## Sweeping
 
-**Object heap.** Each worker owns a young list. Every collection sweeps young:
+Each worker owns a young list. Every collection sweeps young:
 dead objects are freed (through `recycle` if the type supplies one, else
 `finalize` + `free`), survivors are promoted onto the single shared old list.
 The old list is walked only on a **full** cycle, every 8th
 (`SP_GC_FULL_INTERVAL`). Between fulls an old object that dies is reclaimed
 late -- delayed reclamation, not a leak.
 
-**String heap.** The same young/old split, but gated on the string heap's own
-threshold. The collector used to run the full live-string walk on *every*
-object collection, making each one O(live strings) -- the dominant cost of
-allocation-heavy programs (2.9 s of an 8.0 s GC total on one profile). Skipping
-is safe because string marks accumulate: a dead string at worst survives to the
-next string sweep, and that sweep resets the marks. The old string generation is
-gated one level further, on a threshold of its own.
-
 ## Thresholds
 
-| Heap                  | Initial | Under `SPINEL_GC_STRESS` |
-|-----------------------|---------|--------------------------|
-| Object                | 256 KB  | 2048 B                   |
-| String (young)        | 256 KB  | 2048 B                   |
-| String (old)          | 1 MB    | unchanged                |
+The collection floor defaults to 256 KB and scales with the worker pool.
+`SPINEL_GC_THRESHOLD_KB` sets the base and `SPINEL_GC_THRESHOLD_OBJ_KB`
+overrides it. Stress level 1 starts with a 2048 B floor. Starting a worker pool
+scales the floor by the pool size and rereads any explicit threshold override.
+Level 2 sets the floor to zero for every allocation point that can collect.
 
-`SPINEL_GC_STRESS=2` pins the first two at 0 instead, over any
-`SPINEL_GC_THRESHOLD_*KB` floor: every allocation after the first collects.
-
-After each collection the threshold is retuned from what the sweep actually
-recovered:
-
-- freed less than a quarter of the pre-collect bytes: the heap is genuinely
-  growing, so `threshold = before * 2` and back off;
-- otherwise `threshold = live * 4`, floored at the initial value.
-
-A promoted string counts as a survivor, not a reclamation. Leaving it out would
-read as a very productive sweep and shrink the trigger, collecting harder and
-harder as the old generation grows.
+After a collection that frees less than a quarter of the previous bytes,
+the collector doubles the previous live count for the next threshold.
+Otherwise it takes twice the surviving bytes, with the initial floor.
+Object handles and their String payloads contribute to the same count.
 
 ## Threads
 
@@ -227,12 +195,6 @@ tidiness:
   four workers. The trigger then lags the true total by at most
   quantum x workers, which is bounded overshoot for a heuristic.
 
-The string threshold is **per worker** in the threaded build: each worker fires
-at the full value, so the aggregate bound scales with the worker count and the
-stop-the-world frequency per worker stays independent of N. Checking a shared
-aggregate against threshold/N instead multiplied the collection count by N and
-left allocation-heavy parallel workloads stop-the-world bound.
-
 ## What a program can see
 
 ```ruby
@@ -256,7 +218,7 @@ Environment variables:
 | `SPINEL_GC_STRESS`    | drops the thresholds to 2048 B, so nearly every allocation collects     |
 | `SPINEL_GC_STRESS=2`  | collects at every allocation, poisons what dies and keeps it out of reuse; see "A lost object, made visible" |
 | `SPINEL_GC_VERIFY`    | registry check on every mark, plus a SIGSEGV/SIGBUS reporter naming the phase and object |
-| `SPINEL_GC_PHASES`    | adds two `[gcph]` lines: collector time split into mark / old sweep / slot sweep / remembered clear / string sweep / trim, and the mark split again into roots / fibers / globals / scan. Named as the collector's own comments and `sp_gc_dbg_phase` name them; arms the reporter on its own |
+| `SPINEL_GC_PHASES`    | adds two `[gcph]` lines: collector time split into mark / old sweep / slot sweep / remembered clear / trim, and the mark split again into roots / fibers / globals / scan. Named as the collector's own comments and `sp_gc_dbg_phase` name them; arms the reporter on its own |
 | `SPINEL_GC_MINOR`     | generational MARK: a non-full cycle walks the young objects and the remembered set instead of the whole live graph. Opt-in; see below |
 | `SPINEL_MAX_HEAP_MB`  | RSS ceiling, checked at GC trigger points against `/proc/self/statm`; Linux only, off by default |
 
@@ -279,7 +241,7 @@ anyway, for three reasons, and `SPINEL_GC_STRESS=1` leaves all three standing:
 
 `SPINEL_GC_STRESS=2` takes the three away:
 
-- both thresholds are 0, so every allocation after the first collects;
+- the threshold is zero, so every allocation point that can collect does;
 - what a sweep or an explicit free (`sp_slab_free`) releases is filled with
   `0xdb` and quarantined: its pin bit keeps the allocator off the slot, and a
   bitmap of its own makes `sp_slab_is_live` answer no;
@@ -394,11 +356,6 @@ Also absent:
 - **incremental or concurrent marking** -- the pause is the whole mark;
 - **`ObjectSpace.define_finalizer`** -- `finalize` and `recycle` are internal
   hooks on `sp_gc_hdr`, with no Ruby-level surface.
-
-A nursery has been attempted twice and abandoned both times. The string heap's
-generational sweep, by contrast, worked (-6% runtime and -25% RSS on one
-benchmark) -- strings are leaves in the object graph, so the reason the nursery
-failed did not apply to them.
 
 The write barrier that section used to call the next step now exists (see
 above). The warning it carried is worth keeping, because it turned out to be

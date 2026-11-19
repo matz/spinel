@@ -34,9 +34,8 @@ const char *sp_re_startup_err = NULL;
 /* Stop-the-world support: push this worker's live match-register strings onto its
    GC root stack so a collector marks them while the worker is parked at a
    safepoint (the registers are per-worker TLS, so the collector's own globals
-   hook does not reach another worker's copy). Only heap strings still unmarked
-   (leading byte 0xfe, or 0xfa frozen) are pushed: frozen literals (0xf1) are
-   immortal and never swept, and sp_gc_mark only understands those markers. The
+   hook does not reach another worker's copy). Push the collectible register
+   views with marker 0xfe or 0xfa. The
    caller snapshots the root stack right after and then restores its depth, so
    these entries live only inside the published snapshot. */
 void sp_re_push_match_roots(void) {

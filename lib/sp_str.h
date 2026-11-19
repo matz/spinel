@@ -41,7 +41,7 @@ static inline int sp_utf8_encode(uint32_t cp,char*out){if(cp<0x80){out[0]=(char)
    it a scan loop over a built-up string rewalked the whole buffer per index. */
 static inline int sp_str_cacheable(const char *s) {
   unsigned char m = ((const unsigned char *)s)[-1];
-  return m == 0xfe || m == 0xfc || m == 0xff || m == 0xf1 || m == 0xfd || m == 0xfb || m == 0xfa || m == 0xf8;
+  return m == 0xfe || m == 0xff || m == 0xf1 || m == 0xfd || m == 0xfb || m == 0xfa;
 }
 /* Byte-exact comparison of two heap strings. strcmp stops at the first NUL,
    so two strings that differ only after one compared equal and sorted equal --
@@ -357,7 +357,7 @@ static inline const char*sp_str_hash_walk(const char*s,uint64_t*hp,int*hip){
 /* The byte length of a String with a header that goes on past the NUL at q,
    else 0 */
 static inline size_t sp_str_hash_past_nul(const char*s,unsigned char m,const char*q){
-  if(m==0xfe||m==0xfc||m==0xfd||m==0xf1||m==0xfb||m==0xfa||m==0xf8){
+  if(m==0xfe||m==0xfd||m==0xf1||m==0xfb||m==0xfa){
     uint32_t l=(((const sp_str_hdr*)(s-1))-1)->len;
     if(l!=SP_STR_LEN_UNSET&&l>(size_t)(q-s))return l;
   }
@@ -396,7 +396,7 @@ static SP_NOINLINE uint64_t sp_str_hash_miss(const char*s,unsigned char m){
      String goes on past the NUL (an unset length goes to
      sp_str_hash_miss_nul too, which reads it), whether it is BINARY, and
      whether it keeps its hash */
-  if(m==0xfe||m==0xfc||m==0xfd||m==0xf1||m==0xfb||m==0xfa||m==0xf8){
+  if(m==0xfe||m==0xfd||m==0xf1||m==0xfb||m==0xfa){
     sp_str_hdr*hd=((sp_str_hdr*)(s-1))-1;
     if(SP_UNLIKELY(hd->len>(size_t)(q-s)))return sp_str_hash_miss_nul(s,m);
     if(hi&&(hd->size&SP_STR_SIZE_BINARY))h^=0x9e3779b97f4a7c15ULL;
@@ -415,7 +415,7 @@ static inline uint64_t sp_str_hash(const char*s){
   unsigned char m=((const unsigned char*)s)[-1];
   /* (0xfb, a static String with a header -- a one-byte slice of a BINARY
      String -- is never changed in place, so its hash is kept too, #10548) */
-  if(m==0xfe||m==0xfc||m==0xf1||m==0xfa||m==0xf8||m==0xfb){
+  if(m==0xfe||m==0xf1||m==0xfa||m==0xfb){
     uint64_t cached=(((sp_str_hdr*)(s-1))-1)->hash;
     if(cached)return cached;
   }

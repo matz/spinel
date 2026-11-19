@@ -7309,9 +7309,8 @@ static int wb_holder_class(Compiler *c, const char *p, size_t st, size_t fn_off,
    block body writes it as `(*<cellptr>) = v` -- no `iv_` in sight, so the ivar
    scan above never sees it. Whether it holds a reference is written into its
    own allocation: `sp_cell_scan_ptr` and `sp_cell_scan_rbval` mark a GC object,
-   `sp_cell_scan_str` reaches the string heap. All three need the barrier: the
-   string heap is swept generationally too, so a young string stored into a
-   cell an old holder reaches is exactly as invisible as a young object. */
+   `sp_cell_scan_str` marks the owner through a byte view. All three need the
+   write barrier when an old holder can acquire a young reference. */
 typedef struct { char **v; int n, cap; } WbCells;
 static int wb_cells_has(WbCells *cs, const char *nm, size_t n) {
   for (int k = 0; k < cs->n; k++)
@@ -23435,9 +23434,8 @@ static void emit_sym_class_name_rt(Compiler *c, Buf *b) {
                 "if(ix[2+2*i]==h){int id=(int)d-1;const char*_c=SP_DSYM_LD(&sp_dyn_syms)[id];"
                 "if(sp_str_byte_len(_c)==n&&memcmp(_c,s,n)==0)return id;}"
                 "i=(i+1)&m;}}\n");
-    /* Those entries are string-heap strings (sp_str_dup_external) held only by
-       this static array, which the collector does not walk: the string sweep
-       freed them and the next intern compared against a corpse. Emitted here,
+    /* These byte views (sp_str_dup_external) live in a static array. Mark them
+       explicitly to keep their String objects alive. Emitted here,
        right after the array, so the declaration is always in scope. */
     buf_puts(b, "static void sp_mark_dyn_syms(void){for(int _i=0;_i<sp_ndyn;_i++)sp_mark_string(sp_dyn_syms[_i]);}\n");
     g_has_dyn_syms = 1;

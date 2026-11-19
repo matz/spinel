@@ -32,6 +32,41 @@ int main(void) {
     rb_gc_unregister_address(&registered);
     for (int i = 0; i < 256 && sp_cext_handle_count(); ++i) sp_gc_collect();
     assert(sp_cext_handle_count() == 0);
+    /* A class name large enough to use malloc instead of a slab slot. */
+    {
+        char *bytes = sp_str_alloc(4096);
+        memset(bytes, 'a', 4096);
+        const char *name = sp_str_retained(bytes);
+        SP_GC_ROOT_STR(name);
+        sp_RbVal cls = {SP_TAG_CLASS, SP_CLASS_BY_NAME, {.s = name}};
+        (void)sp_cext_value(cls);
+        sp_gc_full_next = 1;
+        sp_gc_collect();
+        assert(sp_cext_handle_count() == 1);
+    }
+    sp_gc_full_next = 1;
+    sp_gc_collect();
+    assert(sp_cext_handle_count() == 0);
+    /* Retiring an outside payload leaves a rooted byte view readable. Its
+       weak handle must still be canonical, and disappear with that view. */
+    {
+        char *payload = malloc(SP_FD_OVH + 4);
+        assert(payload);
+        char *bytes = sp_fd_setup(payload);
+        memcpy(bytes, "Name", 5);
+        const char *name = bytes;
+        SP_GC_ROOT_STR(name);
+        sp_RbVal cls = {SP_TAG_CLASS, SP_CLASS_BY_NAME, {.s = name}};
+        VALUE canonical = sp_cext_value(cls);
+        sp_fd_retire(payload);
+        sp_gc_full_next = 1;
+        sp_gc_collect();
+        assert(sp_cext_handle_count() == 1 && sp_cext_value(cls) == canonical);
+        assert(strcmp(name, "Name") == 0);
+    }
+    sp_gc_full_next = 1;
+    sp_gc_collect();
+    assert(sp_cext_handle_count() == 0);
     sp_cext_arena_mark outer = sp_cext_arena_enter();
     long *object = sp_gc_alloc(sizeof(long), finalize, NULL);
     *object = 42;
@@ -109,7 +144,8 @@ int main(void) {
     assert(sp_cext_value(string) == s);
     rb_gc_unregister_address(&s);
     size_t handles_before = sp_cext_handle_count();
-    for (int i = 0; i < 256 && sp_cext_handle_count() == handles_before; ++i) sp_gc_collect();
+    sp_gc_full_next = 1;
+    sp_gc_collect();
     assert(sp_cext_handle_count() < handles_before);
     /* Unwind several C calls at once, including an empty inner arena. */
     outer = sp_cext_arena_enter();

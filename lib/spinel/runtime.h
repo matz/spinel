@@ -17,7 +17,7 @@
  *     sp_json_kind_fn, sp_json_len_fn, sp_json_aref_fn, sp_json_hpair_fn
  *     sp_sym_name_fn
  *
- *   String heap + scalar formatting (sp_alloc.h):
+ *   String payload allocation and scalar formatting (sp_alloc.h):
  *     sp_str_alloc, sp_str_alloc_raw, sp_str_set_len, sp_str_empty
  *     sp_int_to_s, sp_float_to_s
  *     sp_oom_die

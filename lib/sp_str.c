@@ -336,7 +336,7 @@ static void sp_str_set_binary_to(const char *s, int bin) {
 /* `s << x`: append in place when the buffer has room, else move to a buffer
    with room to spare. The emitted form used to be `s = concat(s, x)`, a fresh
    exact-sized copy per append, so building a document one piece at a time was
-   quadratic (an 8MB log took minutes). Only a heap string (0xfe/0xfc) is
+   quadratic (an 8MB log took minutes). Only a heap string (0xfe) is
    written in place; a literal or a frozen string is copied, and the caller has
    already raised on a frozen receiver. */
 const char *sp_str_append_grow(const char *s, const char *t) {SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(t);
@@ -346,7 +346,7 @@ const char *sp_str_append_grow(const char *s, const char *t) {SP_GC_ROOT_STR(s);
   if (lb == 0) return s;
   int bin = sp_str_cat_binary_n(s, t, lb);
   unsigned char m = ((const unsigned char *)s)[-1];
-  if (m == 0xfe || m == 0xfc) {
+  if (m == 0xfe) {
     sp_str_hdr *h = ((sp_str_hdr *)(s - 1)) - 1;
     size_t total = (size_t)(h->size & SP_STR_SIZE_MASK);
     size_t cap = total > sizeof(sp_str_hdr) + 2 ? total - sizeof(sp_str_hdr) - 2 : 0;
@@ -378,7 +378,7 @@ const char *sp_str_append_grow_n(const char *s, const char *t, size_t lb) {SP_GC
   size_t la = sp_str_byte_len(s);
   int bin = sp_str_cat_binary_n(s, t, lb);
   unsigned char m = ((const unsigned char *)s)[-1];
-  if (m == 0xfe || m == 0xfc) {
+  if (m == 0xfe) {
     sp_str_hdr *h = ((sp_str_hdr *)(s - 1)) - 1;
     size_t total = (size_t)(h->size & SP_STR_SIZE_MASK);
     size_t cap = total > sizeof(sp_str_hdr) + 2 ? total - sizeof(sp_str_hdr) - 2 : 0;
@@ -737,7 +737,7 @@ sp_int sp_str_length(const char*s){
   return n;
 }
 /* The byte length comes from sp_str_byte_len, which knows every marker: this
-   spelled out 0xfe/0xfc itself and fell to strlen for the rest, so a
+   spelled out 0xfe itself and fell to strlen for the rest, so a
    header-bearing string whose first byte is NUL -- a 1-byte slice of a BINARY
    string, served from the static table -- measured 0 and raised. */
 sp_int sp_str_ord(const char*s){if(!s)sp_nil_recv("ord");
@@ -791,7 +791,7 @@ size_t sp_utf8_byte_offset(const char*s,sp_int char_idx){
   }
   /* Walk char_idx code points or stop at byte_len, whichever comes first.
      Bounding on byte_len (instead of "*p != 0") keeps the walk correct
-     past an embedded NUL byte -- a heap string with the 0xfe/0xfc marker
+     past an embedded NUL byte -- a heap string with the 0xfe marker
      carries its real length in the sp_str_hdr, so a NUL byte inside the
      payload no longer terminates the walk prematurely. For an external
      0xff literal sp_str_byte_len falls back to strlen which legitimately

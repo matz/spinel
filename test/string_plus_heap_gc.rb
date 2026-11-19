@@ -1,13 +1,5 @@
-# Regression for matz/spinel#1450. A `String#+` loop allocates only on the
-# string heap (no object-heap allocation), and before the fix the string heap
-# was swept only from sp_gc_collect, which fires on OBJECT-heap pressure
-# (sp_gc_bytes). So a string-only workload never collected and RSS grew without
-# bound. The fix drives collection off the string heap's own live-byte count.
-#
-# Assert that a collection actually fires here: GC.stat["cycle"] counts
-# sp_gc_collect runs, and since this loop never touches the object heap, the
-# ONLY thing that can advance it is the string-heap trigger. Pre-fix this prints
-# "NO COLLECTION"; post-fix it prints "collected".
+# Regression for #1450. Appending to a String with + repeatedly allocates
+# new Strings. This workload keeps little live data and must collect.
 before = GC.stat["cycle"]
 s = ""
 i = 0

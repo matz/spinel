@@ -1,7 +1,5 @@
 /* sp_gc.c -- the mark/sweep collector's non-inline machinery.
- * See sp_gc.h. The program root-marking and string-heap sweep are
- * supplied by the generated TU via sp_gc_mark_globals_hook /
- * sp_gc_str_sweep_hook. */
+ * See sp_gc.h. The generated TU supplies sp_gc_mark_globals_hook. */
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -21,15 +19,7 @@
 #include <signal.h>
 #include <unistd.h>
 #include "sp_marshal.h"   /* sp_marshal_vt -- the instance lives here (always linked) */
-void sp_str_verify_begin(void);   /* lib/sp_alloc.c: string side of the generational check */
 void sp_str_lcache_clear(void);   /* lib/sp_alloc.c: this thread's string-length cache */
-void sp_str_mark_settle(int full);  /* lib/sp_alloc.c: the slab strings' old total, from this mark */
-size_t sp_str_verify_end(void);
-void sp_str_verify_probe_arm(void);
-int sp_str_verify_probe_hit(void);
-void sp_str_verify_probe_done(void);
-int  sp_str_sweep_begin(int *major);   /* lib/sp_alloc.c: the string heap's gate, taken here before the concurrent sweep starts */
-
 /* ---- Globals shared with the generated TU (declared extern in sp_gc.h) ---- */
 SP_TLS void **sp_gc_roots[SP_GC_STACK_MAX];   /* per-worker (SP_TLS); see sp_gc.h */
 /* The overflow segment: roots SP_GC_STACK_MAX and up, grown on demand and
@@ -70,8 +60,7 @@ void (*sp_gc_mark_static_streams_hook)(void) = NULL;
 void (*sp_gc_mark_cext_hook)(void) = NULL;
 void (*sp_gc_sweep_cext_hook)(int full) = NULL;
 #endif
-void (*sp_gc_str_sweep_hook)(void) = NULL;
-int (*sp_gc_str_major_due_hook)(void) = NULL;
+
 int sp_gc_root_phase = 0;   /* the mark is walking the C roots (see sp_gc_mark_all) */
 const char *(*sp_sym_name_fn)(sp_sym) = NULL;
 int (*sp_json_kind_fn)(sp_RbVal) = NULL;
@@ -117,7 +106,7 @@ sp_marshal_vt sp_marshal_v = {0};   /* filled by the generated TU (sp_tu_init) *
    finishes the previous one -- joins the sweepers, splices the survivors,
    recycles the pooled dead, retunes the string budget. NULL: sweep under the
    barrier as before. */
-void (*sp_gc_conc_sweep_hook)(int full, int str_sweep, int str_major) = NULL;
+void (*sp_gc_conc_sweep_hook)(int full) = NULL;
 void (*sp_gc_conc_wait_hook)(void) = NULL;
 int sp_gc_conc_on = -1;          /* SPINEL_GC_CONC=0 turns the concurrent sweep off */
 int sp_gc_conc_promote = 0;      /* this cycle's mark promotes what it marks (the sweep is concurrent) */
@@ -227,7 +216,7 @@ static void sp_gc_verify_snapshot(void){ sp_gc_vsnap_n=0;
    (sp_StringLiteral): its header links to itself, where a listed header
    links to the next one or to nothing. */
 static int sp_gc_hdr_is_static(const sp_gc_hdr *h){ return h->next == h; }
-static int sp_gc_obj_registered(sp_gc_hdr *h){ if(sp_slab_owns(h))return sp_slab_is_live(h)&&!sp_slab_is_str(h); if(sp_gc_hdr_is_static(h))return 1; uintptr_t hv=(uintptr_t)h; size_t lo=0,hi=sp_gc_vsnap_n; while(lo<hi){ size_t m=lo+(hi-lo)/2; uintptr_t x=(uintptr_t)sp_gc_vsnap[m]; if(x==hv)return 1; if(x<hv)lo=m+1; else hi=m; } return 0; }
+static int sp_gc_obj_registered(sp_gc_hdr *h){ if(sp_slab_owns(h))return sp_slab_is_live(h); if(sp_gc_hdr_is_static(h))return 1; uintptr_t hv=(uintptr_t)h; size_t lo=0,hi=sp_gc_vsnap_n; while(lo<hi){ size_t m=lo+(hi-lo)/2; uintptr_t x=(uintptr_t)sp_gc_vsnap[m]; if(x==hv)return 1; if(x<hv)lo=m+1; else hi=m; } return 0; }
 /* Verify diagnostics: which phase/slot the bad pointer came from. */
 int sp_gc_verify_on(void) { return sp_gc_verify; }
 const char *sp_gc_dbg_phase = "?";
@@ -243,7 +232,7 @@ static void sp_gc_verify_fail(void *obj, sp_gc_hdr *h){
       "  obj = %p   phase = %s   ctx = %p\n", obj, ph, sp_gc_dbg_ctx);
     sp_slab_describe(h);
     if (sp_gc_verify == 1) sp_slab_history(h);
-    if (!sp_slab_is_str(h)) fprintf(stderr, "  freed: scan=%p size=%zu\n", (void *)(uintptr_t)h->scan, (size_t)h->size);
+    fprintf(stderr, "  freed: scan=%p size=%zu\n", (void *)(uintptr_t)h->scan, (size_t)h->size);
     if (sp_gc_dbg_ctx && (ph[0] == 's' || ph[0] == 'p' || (ph[0] == 'r' && ph[1] == 'e'))) {
       sp_gc_hdr *hc = (sp_gc_hdr *)((char *)sp_gc_dbg_ctx - sizeof(sp_gc_hdr));
       fprintf(stderr, "  holder: scan=%p size=%zu old=%d\n", (void *)(uintptr_t)hc->scan, (size_t)hc->size, (int)hc->old);
@@ -332,49 +321,15 @@ SP_CONSTRUCTOR static void sp_gc_debug_env(void){
   /* Read here rather than in sp_alloc_worker_tune, which a single-threaded
      program never calls: the budget policy is not a threads-only question. */
   { const char *ob = getenv("SPINEL_GC_OBJ_BUDGET");
-    /* The default GATES the widening on what the last collection actually
-       cost, rather than widening always (`walk`) or never (`obj`). Both of
-       those are kept, because a measurement wants to be able to pin the
-       policy at either end. */
+    /* The default reports the measured mark share. */
     sp_gc_obj_budget_mode = (ob && strcmp(ob, "obj") == 0)  ? 0
                           : (ob && strcmp(ob, "walk") == 0) ? 1
                           : 2;
-    /* PINNED, not floored. SPINEL_GC_THRESHOLD_*_KB sets where the budget
-       STARTS and the retune moves it from there, which is right for running a
-       program and wrong for asking what the retune itself is responsible for.
-       rubys wanted exactly that question answered -- whether a change that
-       lowers the rate of string garbage grows the resident set because the
-       budget lets it, or for some reason that has nothing to do with the
-       budget -- and said they had not run it because they did not know the
-       knob. There was none (#4396). With `fixed`, the budget is whatever the
-       floor says and stays there, so the two emits differ by the change and
-       not by two different pacing histories. */
-    sp_gc_obj_budget_fixed = (ob && strcmp(ob, "fixed") == 0);
-    const char *sb = getenv("SPINEL_GC_STR_BUDGET");
-    sp_gc_str_budget_fixed = (sb && strcmp(sb, "fixed") == 0);
-    /* The share of the object heap is gated by DEFAULT, as the object
-       budget's widening is, and for the same reason both ends are kept: `str`
-       is the way back to a string budget that sees the string heap alone,
-       `walk` carries the share whatever the last collection cost. */
-    sp_gc_str_budget_mode = (sb && strcmp(sb, "str") == 0)  ? 0
-                          : (sb && strcmp(sb, "walk") == 0) ? 1
-                          : 2;
-    /* The schedule is the DEFAULT. `size` is the escape hatch back to the gate
-       that shipped before it -- a size test re-aimed from its own leftover --
-       for anyone the change costs more than it saves. `fixed` pins both the
-       cadence and the backstop where the floor put them, as it always did. */
-    const char *sm = getenv("SPINEL_GC_STR_MAJOR");
-    sp_gc_str_major_fixed = (sm && strcmp(sm, "fixed") == 0);
-    sp_gc_str_major_sched = !(sm && strcmp(sm, "size") == 0); }
+    /* The fixed setting holds every collection to the configured floor. */
+    sp_gc_obj_budget_fixed = (ob && strcmp(ob, "fixed") == 0); }
   if (sp_gc_verify) { signal(SIGSEGV, sp_gc_fault_report); signal(SIGBUS, sp_gc_fault_report); }
 }
 #endif
-
-/* Tag byte preceding `obj`: 0xfe heap-unmarked -> 0xfc, 0xfa -> 0xf8;
- * 0xfc/0xf8/0xff/0xfd/0xf1/0xfb skipped; else a real GC object reached
- * through its scan hook. 0xfb is the static header-bearing table (the
- * 1-byte binary substrings): nothing before it is an sp_gc_hdr, so reaching
- * for one and calling its scan hook jumps into the payload byte. */
 
 static double sp_gc_stat_now(void);
 #ifdef SP_THREADS
@@ -486,45 +441,16 @@ static void sp_gc_mark_drain_all(void) {
 #endif
   sp_gc_mark_drain();
 }
-/* What this thread's marking counted on the string side: bytes reached, and
-   of those the young ones the mark promoted (the bitmap strings; a string
-   too large for the slab is counted by its list sweep). */
-static SP_TLS size_t sp_gc_mkl_str = 0, sp_gc_mkl_str_young = 0;
-size_t sp_gc_mk_str_bytes = 0, sp_gc_mk_str_young_bytes = 0;
-/* and the slab objects the mark promoted (their bytes; the list sweep counts
+/* The slab objects the mark promoted (their bytes; the list sweep counts
    its own promotions as it splices them) */
 static SP_TLS size_t sp_gc_mkl_promo = 0;
 size_t sp_gc_mk_promo_bytes = 0;
-/* A heap string the mark reached. A slab string's mark is a bit in its
-   chunk, and the bit is also the "already marked" test: the marker byte
-   stays 0xfe, since nothing resets a byte the sweep does not touch. A
-   string that fell back to malloc keeps the byte protocol (0xfe -> 0xfc,
-   0xfa -> 0xf8, reset by the list sweep that frees or promotes it). */
 #ifndef SP_GC_NONE   /* (--gc=none: both are inline and mark nothing, lib/sp_gc.h; #10699) */
 void sp_gc_mark_str(const char *s) {
-  sp_str_hdr *h = ((sp_str_hdr *)(s - 1)) - 1;
-  /* a String born inside its handle (sp_str_alloc_born) lives as the
-     handle's GC object */
-  { void *o = SP_STR_BORN_LINK(h);
-    if (o && (char *)o + sizeof(struct sp_String_s) == (char *)h) { sp_gc_mark(o); return; } }
-  if (sp_slab_owns(h)) {
-    int wy;
-    /* SPINEL_GC_VERIFY: a string slot the sweep has freed is nobody's to
-       mark; marking it would set generation bits on a free slot */
-    if (SP_EXPECT(sp_gc_verify, 0) && !sp_slab_is_live(h)) { fprintf(stderr, "*** SPINEL_GC_VERIFY: the mark reached a freed heap string %p\n", (const void *)s); sp_gc_verify_fail((void *)s, (sp_gc_hdr *)h); }
-    if (!sp_slab_mark(h, 0, &wy)) return;
-    size_t sz = h->size & 0x3FFFFFFFu;
-    sp_gc_mkl_str += sz;
-    if (wy) sp_gc_mkl_str_young += sz;
-    return;
-  }
-  /* 0xf8 too: a parallel marker may have got here first */
-  unsigned char m = (unsigned char)s[-1], mk = (m == 0xfa || m == 0xf8) ? 0xf8 : 0xfc;
-#ifdef SP_THREADS
-  SP_ATOMIC_STORE((unsigned char *)s - 1, mk, __ATOMIC_RELAXED);   /* several markers may set it; a plain byte store, spelled so TSan reads it as intended */
-#else
-  ((unsigned char *)s)[-1] = mk;
-#endif
+  const sp_str_hdr *h = ((const sp_str_hdr *)(s - 1)) - 1;
+  void *owner = SP_STR_BORN_LINK(h);
+  if (owner && (const char *)owner + sizeof(struct sp_String_s) == (const char *)h)
+    sp_gc_mark(owner);
 }
 void sp_gc_mark(void*obj){if(!obj)return;unsigned char pm=((unsigned char*)obj)[-1];if((pm|0x04)==0xfe){sp_gc_mark_str((const char*)obj);return;}
   /* one representation (string-one-repr-design.md): the bytes of a handle's
@@ -535,8 +461,8 @@ void sp_gc_mark(void*obj){if(!obj)return;unsigned char pm=((unsigned char*)obj)[
   if(pm==0xfd){sp_str_hdr*fh=(sp_str_hdr*)((char*)obj-sizeof(sp_str_hdr)-1);if(fh->next)sp_gc_mark((void*)fh->next);return;}
   /* a view of a payload a growth moved (0xf9, sp_fd_retire): its owner
      still, and the payload is stamped with the cycle that reached it */
-  if(pm==0xf9){sp_str_hdr*fh=(sp_str_hdr*)((char*)obj-sizeof(sp_str_hdr)-1);fh->hash=(uint64_t)sp_gc_mark_gen;if(fh->next)sp_gc_mark((void*)fh->next);return;}
-  if(pm==0xfc||pm==0xff||pm==0xfd||pm==0xf9||pm==0xf1||pm==0xfb||pm==0xf8)return;sp_gc_hdr*h=(sp_gc_hdr*)((char*)obj-sizeof(sp_gc_hdr));if(sp_gc_verify&&!sp_gc_obj_registered(h))sp_gc_verify_fail(obj,h);if(sp_gc_verify_probe_on){if(!h->old&&h->marked==sp_gc_verify_probe)sp_gc_verify_probe_hit=1;return;}if(sp_gc_young_probe_on){if(!h->old)sp_gc_young_probe_hit=1;return;}if(sp_gc_root_phase&&!h->old)h->aged=1;
+  if(pm==0xf9){sp_str_hdr*fh=(sp_str_hdr*)((char*)obj-sizeof(sp_str_hdr)-1);SP_ATOMIC_STORE(&fh->hash,(uint64_t)sp_gc_mark_gen,__ATOMIC_RELAXED);if(fh->next)sp_gc_mark((void*)fh->next);return;}
+  if(pm==0xff||pm==0xf1||pm==0xfb)return;sp_gc_hdr*h=(sp_gc_hdr*)((char*)obj-sizeof(sp_gc_hdr));if(sp_gc_verify&&!sp_gc_obj_registered(h))sp_gc_verify_fail(obj,h);if(sp_gc_verify_probe_on){if(!h->old&&h->marked==sp_gc_verify_probe)sp_gc_verify_probe_hit=1;return;}if(sp_gc_young_probe_on){if(!h->old)sp_gc_young_probe_hit=1;return;}if(sp_gc_root_phase&&!h->old)h->aged=1;
   int was_young=0;
 #ifdef SP_THREADS
   if(sp_gc_par_mark){
@@ -595,14 +521,12 @@ static void sp_gc_mkl_fold(void){
   SP_ATOMIC_FETCH_ADD(&sp_gc_ct_marked,sp_gc_mkl_marked,__ATOMIC_RELAXED);
   SP_ATOMIC_FETCH_ADD(&sp_gc_mk_bytes,sp_gc_mkl_bytes,__ATOMIC_RELAXED);
   SP_ATOMIC_FETCH_ADD(&sp_gc_mk_young_bytes,sp_gc_mkl_young,__ATOMIC_RELAXED);
-  SP_ATOMIC_FETCH_ADD(&sp_gc_mk_str_bytes,sp_gc_mkl_str,__ATOMIC_RELAXED);
-  SP_ATOMIC_FETCH_ADD(&sp_gc_mk_str_young_bytes,sp_gc_mkl_str_young,__ATOMIC_RELAXED);
   SP_ATOMIC_FETCH_ADD(&sp_gc_mk_promo_bytes,sp_gc_mkl_promo,__ATOMIC_RELAXED);
 #else
   sp_gc_ct_marked+=sp_gc_mkl_marked;sp_gc_mk_bytes+=sp_gc_mkl_bytes;sp_gc_mk_young_bytes+=sp_gc_mkl_young;
-  sp_gc_mk_str_bytes+=sp_gc_mkl_str;sp_gc_mk_str_young_bytes+=sp_gc_mkl_str_young;sp_gc_mk_promo_bytes+=sp_gc_mkl_promo;
+  sp_gc_mk_promo_bytes+=sp_gc_mkl_promo;
 #endif
-  sp_gc_mkl_marked=0;sp_gc_mkl_bytes=0;sp_gc_mkl_young=0;sp_gc_mkl_str=0;sp_gc_mkl_str_young=0;sp_gc_mkl_promo=0;
+  sp_gc_mkl_marked=0;sp_gc_mkl_bytes=0;sp_gc_mkl_young=0;sp_gc_mkl_promo=0;
 }
 
 void sp_gc_mark_drain(void){
@@ -697,7 +621,7 @@ void sp_gc_pin_remembered_slow(void *obj) {
   if (!obj) return;
   { unsigned char pm = ((unsigned char *)obj)[-1];
     if (pm == 0xfd || pm == 0xf9 || pm == 0xff || pm == 0xf1 || pm == 0xf0 ||
-        pm == 0xfe || pm == 0xfc || pm == 0xfb || pm == 0xfa || pm == 0xf8) return; }
+        pm == 0xfe || pm == 0xfb || pm == 0xfa) return; }
   sp_gc_hdr *h = (sp_gc_hdr *)obj - 1;
   if (h->pinned) return;
   /* The slot is claimed BEFORE the bit goes up, which is the opposite order to
@@ -730,7 +654,7 @@ void sp_gc_wb_slow(void *obj) {
      literal or a frozen string is not a GC allocation either. */
   { unsigned char pm = ((unsigned char *)obj)[-1];
     if (pm == 0xfd || pm == 0xf9 || pm == 0xff || pm == 0xf1 || pm == 0xf0 ||
-        pm == 0xfe || pm == 0xfc || pm == 0xfb || pm == 0xfa || pm == 0xf8) return; }
+        pm == 0xfe || pm == 0xfb || pm == 0xfa) return; }
   sp_gc_hdr *h = (sp_gc_hdr *)obj - 1;
   if (!h->old || h->dirty) return;
   /* The bit goes up before the entry goes in, so between here and the push an
@@ -771,7 +695,6 @@ void sp_gc_wb_slow(void *obj) {
   else sp_gc_rem_overflow = 1;
 #endif
 }
-int sp_gc_str_minor_only = 0;
 /* Object-threshold retune, installed by sp_alloc.c. Running it INSIDE every
    collection (not only on the object-triggered wrapper) keeps the trigger
    tracking the live size whichever heap initiated the collect; the old
@@ -936,7 +859,6 @@ static void sp_gc_rem_invariant_cb(void *hp,void *arg){
   }
 }
 static int sp_gc_sweep_full_now=0;   /* the cycle the stop-the-world sweep tasks are for */
-size_t sp_gc_ph_slab_freed_obj=0, sp_gc_ph_slab_freed_str=0;
 /* bytes of headers the pools hold, summed over the sweep of one cycle and
    folded into the live total the budget is sized from (sp_gc_parked_take) */
 static size_t sp_gc_parked_acc=0;
@@ -952,11 +874,9 @@ void sp_gc_sweep_chunks(int wid,int full){
   sp_slab_sweep_worker(wid,full,0,sp_gc_die_cb,&st);
   SP_GC_CTR_ADD(sp_gc_ct_swept,st.swept);
 #ifdef SP_THREADS
-  SP_ATOMIC_FETCH_ADD(&sp_gc_ph_slab_freed_obj,st.freed_obj,__ATOMIC_RELAXED);
-  SP_ATOMIC_FETCH_ADD(&sp_gc_ph_slab_freed_str,st.freed_str,__ATOMIC_RELAXED);
   SP_ATOMIC_FETCH_ADD(&sp_gc_parked_acc,st.parked,__ATOMIC_RELAXED);
 #else
-  sp_gc_ph_slab_freed_obj+=st.freed_obj; sp_gc_ph_slab_freed_str+=st.freed_str; sp_gc_parked_acc+=st.parked;
+  sp_gc_parked_acc+=st.parked;
 #endif
 }
 /* the form the stop-the-world parallel sweep (sp_sched.c) runs per slot */
@@ -1002,7 +922,6 @@ static SP_NOINLINE void sp_gc_verify_gen_run(void) {
        an old object the barrier failed to record. Without the snapshot the
        full mark's own stamps make the two indistinguishable. */
     unsigned minor_gen = sp_gc_mark_gen;
-    sp_str_verify_begin();
     size_t cap = 4096, n = 0;
     sp_gc_hdr **cand = (sp_gc_hdr **)malloc(sizeof(sp_gc_hdr *) * cap);
     if (cand) {
@@ -1048,21 +967,6 @@ static SP_NOINLINE void sp_gc_verify_gen_run(void) {
     sp_gc_mark_drain();
     /* the sweep keeps what this mark reached: the ivar tables too */
     if (sp_ivt_n) sp_ivt_mark(0, sp_gc_mark_drain);
-    size_t str_leaked = sp_str_verify_end();
-    if(str_leaked){
-      fprintf(stderr,"spinel: GC generational check: %zu young STRING(s) reachable only "
-                     "through an old object the barrier did not record\n", str_leaked);
-      for(sp_gc_hdr*h=sp_gc_old_heap;h;h=h->next){
-        if(h->dirty||!h->scan) continue;
-        sp_str_verify_probe_arm();
-        sp_gc_verify_probe=sp_gc_mark_gen; sp_gc_verify_probe_on=1;
-        h->scan((char*)h+sizeof(sp_gc_hdr));
-        sp_gc_verify_probe_on=0;
-        if(sp_str_verify_probe_hit()) fprintf(stderr,"spinel:   string holder scan=%p\n",(void*)h->scan);
-      }
-      sp_str_verify_probe_done();
-      sp_gc_verify_gen_fail = 1;
-    }
     size_t leaked = 0;
     for(size_t i=0;cand&&i<n;i++) if(cand[i]->marked==sp_gc_mark_gen) leaked++;
     if(leaked){
@@ -1123,10 +1027,10 @@ static SP_NOINLINE void sp_gc_verify_gen_run(void) {
 double sp_gc_ph_wait_top = 0;   /* joining the previous sweep at the top of the collection */
 double sp_gc_ph_park_sweeping = 0; unsigned long long sp_gc_ph_park_sweeping_n = 0;   /* the park wait spent while an owner sweep of the previous cycle was still running (sp_sched.c) */
 double sp_gc_ph_mark = 0, sp_gc_ph_oldsweep = 0, sp_gc_ph_slotsweep = 0,
-       sp_gc_ph_rembclear = 0, sp_gc_ph_strsweep = 0, sp_gc_ph_trim = 0;
-double sp_gc_ph_slot_max = 0, sp_gc_ph_task_sum = 0, sp_gc_ph_task_obj = 0, sp_gc_ph_task_sold = 0, sp_gc_ph_task_syoung = 0;   /* filled by the threaded sweep driver */
+       sp_gc_ph_rembclear = 0, sp_gc_ph_trim = 0;
+double sp_gc_ph_slot_max = 0, sp_gc_ph_task_sum = 0, sp_gc_ph_task_obj = 0;   /* filled by the threaded sweep driver */
 unsigned long long sp_gc_ph_mk_helpers = 0, sp_gc_ph_mk_drains = 0;
-double sp_gc_ph_conc_wait = 0, sp_gc_ph_conc_wall = 0, sp_gc_ph_barrier = 0, sp_gc_ph_park = 0, sp_gc_ph_apply_obj = 0, sp_gc_ph_apply_str = 0, sp_gc_ph_apply_release = 0; unsigned long long sp_gc_ph_conc_waits = 0;   /* joining the previous sweep under the barrier */
+double sp_gc_ph_conc_wait = 0, sp_gc_ph_conc_wall = 0, sp_gc_ph_barrier = 0, sp_gc_ph_park = 0, sp_gc_ph_apply_obj = 0, sp_gc_ph_apply_release = 0; unsigned long long sp_gc_ph_conc_waits = 0;   /* joining the previous sweep under the barrier */
 double sp_gc_ph_mk_roots = 0, sp_gc_ph_mk_fibers = 0,
        sp_gc_ph_mk_globals = 0, sp_gc_ph_mk_scan = 0;
 int sp_gc_ph_on = 0;
@@ -1254,7 +1158,7 @@ void sp_fin_set_runner(void (*f)(int64_t)) {
 }
 
 /* An object with a collector header is watched by address; any other value
-   (an immediate, a string on the string heap) is matched by its bits and
+   (an immediate or a borrowed byte view) is matched by its bits and
    keeps its finalizer until exit, which is when its storage goes too. */
 static void sp_fin_ident(sp_RbVal obj, void **p, int *tag, uint64_t *bits) {
   *p = (obj.tag == SP_TAG_OBJ) ? obj.v.p : NULL;
@@ -1424,7 +1328,7 @@ void sp_ivtbl_hidden_put(const void *obj, void *tbl) {
 static int sp_ivt_key_live(const void *obj, int full) {
   if ((uintptr_t)obj & 7) return 1;   /* a class's key (sp_bivar_key): no object behind it */
   unsigned char pm = ((const unsigned char *)obj)[-1];
-  if (pm == 0xfc || pm == 0xff || pm == 0xfd || pm == 0xf9 || pm == 0xf1 || pm == 0xfb || pm == 0xf8) return 1;
+  if (pm == 0xff || pm == 0xfd || pm == 0xf9 || pm == 0xf1 || pm == 0xfb) return 1;
   const sp_gc_hdr *h = (const sp_gc_hdr *)obj - 1;
   return full ? h->marked == sp_gc_mark_gen : (h->old || h->marked == sp_gc_mark_gen);
 }
@@ -1541,17 +1445,6 @@ void sp_gc_collect(void){
   int forced_full=0;
   if(!full&&!sp_gc_full_interval_fixed&&
      sp_gc_old_bytes>sp_gc_old_live*2+SP_GC_OLD_GROWTH_SLACK){ full=1; forced_full=1; }
-  /* The string heap runs its own major cadence, and a string major needs a
-     whole-heap mark: on a minor cycle the sweep has to stand it down, since
-     the old strings only old objects hold were never marked. Standing it down
-     silently let the string old generation grow to the object FULL cadence
-     instead of its own -- 36 MB of old strings against a 0.6 MB live set on
-     one benchmark, and the wall with it. So a due string major makes the
-     cycle full. Off-schedule for the object heap, so its cadence does not
-     adapt on the sample. */
-  int str_full=0;
-  if(!full&&sp_gc_minor_on&&!sp_gc_full_interval_fixed&&
-     sp_gc_str_major_due_hook&&sp_gc_str_major_due_hook()){ full=1; str_full=1; }
   if(full)sp_gc_full_runs++;
   if(!full)sp_gc_minors_since_full++;
   /* new mark generation: every object becomes unmarked without touching it.
@@ -1593,7 +1486,7 @@ void sp_gc_collect(void){
 #endif
   sp_gc_conc_promote = conc;
   sp_gc_mk_bytes = 0; sp_gc_mk_young_bytes = 0;
-  sp_gc_mk_str_bytes = 0; sp_gc_mk_str_young_bytes = 0; sp_gc_mk_promo_bytes = 0;
+  sp_gc_mk_promo_bytes = 0;
   /* the closed epoch is what the sweep frees from; everything allocated from
      here on is in the other parity and untouched by it (lib/sp_slab.c) */
   if(sp_gc_verify==1)sp_slab_verify_all();
@@ -1660,15 +1553,14 @@ void sp_gc_collect(void){
        While it is set every mark is whole-heap, so nothing is missed; once
        compaction has made room the set is authoritative again. */
     if (sp_gc_pin_overflow && keep < SP_GC_PINNED_MAX) sp_gc_pin_overflow = 0; }
-  /* the moved payloads no view reached, now the marks are final */
-  if (full && sp_fd_nretired) sp_fd_retired_sweep();
   if (sp_fin_n) sp_fin_after_mark(full);
   if (sp_ivt_n) sp_ivt_after_mark(full);
 #ifdef SP_CEXT
   if (sp_gc_sweep_cext_hook) sp_gc_sweep_cext_hook(full);
 #endif
+  /* Weak handles can inspect retired views until this reclamation. */
+  if (full && sp_fd_nretired) sp_fd_retired_sweep();
   SP_GC_PH(sp_gc_ph_mark);
-  sp_str_mark_settle(full);
   if(full){
     size_t old_before=sp_gc_old_bytes;
     if(conc){
@@ -1709,7 +1601,6 @@ void sp_gc_collect(void){
     if(!sp_gc_full_interval_fixed&&forced_full){
       if(sp_gc_full_interval>SP_GC_FULL_INTERVAL) sp_gc_full_interval/=2;
     }
-    else if(str_full){ /* the string heap's sample, not this heap's */ }
     else if(old_before>0&&!sp_gc_full_interval_fixed){
       size_t kept=sp_gc_old_bytes;
       if(kept>old_before-(old_before>>2)){            /* >75% survived */
@@ -1749,12 +1640,7 @@ void sp_gc_collect(void){
   /* minor: the old list is not walked at all -- an old object's stale stamp
      simply reads as unmarked next generation, which is what a fresh unmark
      pass used to produce. */
-  /* Decided BEFORE the object sweep, because the threaded path sweeps the
-     string heap from inside it (each worker takes its own slot) and would
-     otherwise read this flag while it was still 0 -- and then sweep the old
-     string list on a minor cycle, freeing strings only an old object holds. */
   SP_GC_PH(sp_gc_ph_oldsweep);
-  sp_gc_str_minor_only = (sp_gc_str_sweep_hook && !full && sp_gc_minor_on);
   /* Age survivors only on a minor whose remembered set is intact: a full
      cycle's old sweep clears every dirty bit and discards the array, so a
      holder of an object kept young would be forgotten; an overflowed set is
@@ -1769,9 +1655,6 @@ void sp_gc_collect(void){
        old generation grows by the young bytes it reached, and the live total
        is the old total. The lists themselves go to the driver, which detaches
        them from their workers and sweeps them once the world is running. */
-    int str_major=0;
-    int str_sweep=sp_str_sweep_begin(&str_major);
-    if(sp_gc_str_minor_only) str_major=0;
     sp_gc_old_bytes+=sp_gc_mk_young_bytes;
     sp_gc_bytes=sp_gc_old_bytes+sp_gc_parked_take();   /* the pooled headers the previous sweep counted */
     /* the remembered set: what it recorded led the mark to young objects
@@ -1783,12 +1666,10 @@ void sp_gc_collect(void){
     else for(int ri=0;ri<sp_gc_nremembered;ri++)((sp_gc_hdr*)sp_gc_remembered[ri]-1)->dirty=0;
     sp_gc_nremembered=0; sp_gc_rem_overflow=0;
     SP_GC_PH(sp_gc_ph_rembclear);
-    sp_gc_conc_sweep_hook(full,str_sweep,str_major);
+    sp_gc_conc_sweep_hook(full);
     { int n=sp_active_workers; if(n<1)n=1; if(n>SP_MAX_WORKERS)n=SP_MAX_WORKERS;
       for(int i=0;i<n;i++)sp_gc_wslot[i].flush_delta=0; }
     SP_GC_PH(sp_gc_ph_slotsweep);
-    SP_GC_PH(sp_gc_ph_strsweep);
-    sp_gc_str_minor_only = 0;
     if(full) sp_gc_trim_request();   /* the slab's own release waits for the sweep (the driver runs it) */
     SP_GC_PH(sp_gc_ph_trim);
     sp_gc_stat_collections++;
@@ -1927,32 +1808,6 @@ void sp_gc_collect(void){
     }
   }
   SP_GC_PH(sp_gc_ph_rembclear);
-  /* Sweep the string heap only when IT is over its trigger: the sweep is a
-     full walk of the live string list, and running it on every OBJECT-heap
-     collection made each collection O(live strings) -- the dominant cost of
-     an allocation-heavy run. Skipping is safe: string marks accumulate, so a
-     dead string at worst survives until the next string sweep (delayed
-     reclamation, not a leak), and the sweep itself resets marks for the next
-     cycle. The retune keeps the trigger tracking the live size. */
-  /* Only on a full cycle now. The string heap has no generation of its own, so
-     its sweep frees anything the mark did not reach -- and a minor mark does
-     not reach a string held by an old object, because it does not walk old
-     objects at all. Sweeping strings on a minor cycle therefore reaped live
-     ones (test/file_basename_gc). Deferring to the full cycle is the same
-     delayed reclamation the trigger already allowed. */
-  /* The string heap is generational in its own right, so a minor cycle can
-     sweep its young list -- the strings an old object holds live in the old
-     list, which this leaves alone, and a young string stored into an old
-     holder is what the barrier records. Deferring the whole sweep to the
-     full cycle instead made every string-heavy workload SLOWER with the
-     minor mark than without it (+17% on a string benchmark, and rubys'
-     ballast inversion on lobsters); sweeping young only turns that into
-     -52%. */
-  if(sp_gc_str_sweep_hook){
-    sp_gc_str_sweep_hook();
-  }
-  SP_GC_PH(sp_gc_ph_strsweep);
-  sp_gc_str_minor_only = 0;
   /* malloc_trim walks the allocator arena; once per full cycle was ~10% of
      collection time on allocation-heavy runs, and "every 4th full" was a
      fraction of that only while a full was one cycle in eight. Under the
@@ -1969,7 +1824,7 @@ void sp_gc_collect(void){
   }
   SP_GC_PH(sp_gc_ph_trim);
   /* Bump BEFORE the retune hook: the hook is where the stats line is printed
-     (sp_alloc.c sees both thresholds and the string heap), and it must read
+     (in sp_alloc.c), and it must read
      this collection, not the previous one. */
   sp_gc_stat_collections++;
   if(full)sp_gc_stat_fulls++;

@@ -39,7 +39,7 @@ static inline sp_bool sp_String_is_immutable(sp_String *s) {
 static inline sp_String*sp_String_freeze(sp_String*s){if(s){if(s->temporarily_locked)sp_raise_locked_str();sp_gc_hdr*h=(sp_gc_hdr*)((char*)s-sizeof(sp_gc_hdr));h->frozen=1;}return s;}
 
 /* A mutable String's payload carries the same length-bearing sp_str_hdr that
-   0xfe/0xfc heap strings use, so an escaped const char* is binary-safe (the
+   inline String views use, so an escaped const char* is binary-safe (the
    reader uses sp_str_byte_len, not strlen). Block layout:
    [sp_str_hdr][0xfd marker][data ...][NUL]. s->data points at `data`. The ctor
    and in-place mutators are also reached with bare C string literals (no marker
@@ -47,10 +47,8 @@ static inline sp_String*sp_String_freeze(sp_String*s){if(s){if(s->temporarily_lo
 #define SP_FD_HDR (sizeof(sp_str_hdr)+1)   /* header + marker byte */
 #define SP_FD_OVH (sizeof(sp_str_hdr)+2)   /* header + marker + NUL terminator */
 static inline char *sp_fd_base(const char *data){return (char*)data-SP_FD_HDR;}
-/* The payload's `next` field carries the owning sp_String rather than a heap
-   link: these blocks are malloc'd and never join the string heap, so nothing
-   walks that list, and a container holding the escaped `const char *` has no
-   other way back to the handle. Without it the mark reaches the bytes and
+/* The payload's `next` field points to the owning sp_String. A container
+   holding the escaped `const char *` uses this link to mark the handle. Without it the mark reaches the bytes and
    stops, the handle goes unreferenced, and sp_String_fin frees the bytes the
    container still points at. sp_fd_own publishes it; every path that lays out
    a payload has to call it. */

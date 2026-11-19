@@ -4545,7 +4545,7 @@ const char *sp_str_setbyte_cow(const char *s, sp_int i, sp_int v) {SP_GC_ROOT_ST
   }
   {
     unsigned char m = ((const unsigned char *)s)[-1];
-    if (m == 0xfe || m == 0xfc) {
+    if (m == 0xfe) {
       (((sp_str_hdr *)(s - 1)) - 1)->hash = 0;  /* invalidate cached key hash */
       (((sp_str_hdr *)(s - 1)) - 1)->size &= ~SP_STR_SIZE_ASCII7;  /* and the 7-bit answer */
       /* and the character count: an invalid byte changes it, and the

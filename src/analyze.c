@@ -51031,6 +51031,9 @@ static void an_phase_class_structure(Compiler *c) {
   register_include_attrs(c);
   AN_STEP_V("register_extends", register_extends(c));
   AN_STEP_V("register_prepends", register_prepends(c));
+  /* (the classes, their attrs and mixins are registered: a read of an ivar
+     nothing sets becomes the nil it always answers) */
+  AN_STEP_V("rewrite_never_set_ivar_reads", rewrite_never_set_ivar_reads(c));
   /* again, for the bodies the mixins cloned into their includers: a clone's
      binding is a slot of the copy's own, which the first pass never saw */
   type_rescue_bindings(c);

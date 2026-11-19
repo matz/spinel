@@ -403,6 +403,11 @@ int ivw_shared_first(Compiler *c, const char *name);
 int ivw_shared_node(int rec);
 int ivw_shared_next(int rec);
 int ivar_never_set_in(Compiler *c, const char *name, int cls);   /* every read of the ivar in cls's methods is nil */
+/* A read of an ivar no object of its class can have set (ivar_never_set_in)
+   is a written nil: it always answers nil and reads nothing that runs, so
+   every rule a literal nil takes applies to it. Run once the class tables,
+   the attrs and the mixins are registered, before inference. */
+void rewrite_never_set_ivar_reads(Compiler *c);
 /* The body return type of a proc-creating node (proc/lambda CallNode literal,
    or a LambdaNode). The last statement of the block/lambda body is the value. */
 TyKind proc_node_ret(Compiler *c, int create);

@@ -7874,6 +7874,7 @@ static int infer_enum_chain_call(Compiler *c, int id, const NodeTable *nt, const
         int args = nt_ref(nt, id, "arguments");
         int argc = 0; const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
         TyKind acc = (argc > 0 && argv) ? infer_type(c, argv[0]) : elem;
+        if (acc == TY_NIL) acc = TY_POLY;   /* a nil seed: boxed, as infer_array_reduce's */
         /* an empty `{}` seed is a general boxed-key/value hash builder, like
            each_with_object({}) -- not the element type (#2958) */
         if (acc == TY_UNKNOWN && argc > 0 && argv &&

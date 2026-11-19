@@ -114,3 +114,17 @@ end
 
 sp = Spans.new
 p sp.r, sp.r.map { |x| [x.begin, x.end] }, sp.m
+
+# An inject seed that is nil -- the read, a method answering it, a method
+# answering a written nil -- starts a boxed accumulator, as `inject(nil)`
+# does, whatever the elements are.
+class Folds
+  def initialize = (@b = 1)
+  def seed = @missing
+  def none = nil
+  def m = [[1, 2].inject(@missing) { |s, x| (s || 0) + x }, [1, 2].inject(seed) { |s, x| (s || 0) + x },
+           [1.5].inject(none) { |s, x| (s || 0) + x }, %w[a b].inject(seed) { |s, x| (s || "") + x },
+           [3, 4].each_with_index.inject(seed) { |s, (x, i)| (s || 0) + x * i }]
+end
+
+p Folds.new.m

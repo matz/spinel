@@ -1009,6 +1009,33 @@ int ivar_never_set_in(Compiler *c, const char *name, int cls) {
   return !ivn_set_by(c, &ivn_w, name, cls) && !ivn_set_by(c, &ivn_a, wn, cls);
 }
 
+/* See analyze_internal.h. Every read is decided before any is retyped: an
+   edit between two asks would rebuild the index (ivn_build) and the load
+   record's map behind it per ask. A read in a class body is the class's
+   own ivar; one outside every class is the top level's. */
+void rewrite_never_set_ivar_reads(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int kn = 0; const int *ids = nt_nodes_of_kind(nt, NK_InstanceVariableReadNode, &kn);
+  if (kn <= 0) return;
+  int *hit = malloc(sizeof(int) * (size_t)kn), nh = 0;
+  if (!hit) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  const int *par = nt_parents(nt);
+  for (int j = 0; j < kn; j++) {
+    int id = ids[j];
+    const char *nm = nt_str(nt, id, "name");
+    /* (defined?(@x) asks whether it is set, not its value) */
+    if (!nm || (par && par[id] >= 0 && nt_kind(nt, par[id]) == NK_DefinedNode)) continue;
+    Scope *s = comp_scope_of(c, id);
+    int cls = s && s->class_id >= 0 ? s->class_id :
+              s && !s->is_cmethod && id < c->node_cap && c->node_cbody && c->node_cbody[id] >= 0 ? c->node_cbody[id] :
+              c->toplevel_class;
+    if (cls < 0 || cls >= c->nclasses || class_ivar_pinned(&c->classes[cls], nm)) continue;
+    if (ivar_never_set_in(c, nm, cls)) hit[nh++] = id;
+  }
+  for (int i = 0; i < nh; i++) nt_node_reset(nt, hit[i], "NilNode");
+  free(hit);
+}
+
 /* `x, y = obj.m` where the callee's body ends in `return a, b` with statically
    known element types: yields those types so the destructured targets keep
    them instead of widening to poly with the tuple. The callee must be uniquely
@@ -18636,6 +18663,7 @@ static int infer_block_params_enum_arms(Compiler *c, const NodeTable *nt, int id
       int rargs = nt_ref(nt, id, "arguments"); int rargc = 0;
       const int *rargv = rargs >= 0 ? nt_arr(nt, rargs, "arguments", &rargc) : NULL;
       TyKind acc_t = (rargc > 0 && rargv) ? infer_type(c, rargv[0]) : elem;
+      if (acc_t == TY_NIL) acc_t = TY_POLY;   /* a nil seed: boxed, as the plain reduce arm's */
       if (acc_t == TY_UNKNOWN) acc_t = elem;
       if (p0) {
         if (bp_widen(bs, p0, acc_t)) changed = 1;
@@ -18777,6 +18805,9 @@ static int infer_block_params_enum_arms(Compiler *c, const NodeTable *nt, int id
     int rargc = 0;
     const int *rargv = rargs >= 0 ? nt_arr(nt, rargs, "arguments", &rargc) : NULL;
     TyKind acc_t = (rargc > 0 && rargv) ? infer_type(c, rargv[0]) : et2;
+    /* a nil seed, written or typed nil (a method answering nil), starts an
+       accumulator the block's value then fills: boxed (infer_array_reduce) */
+    if (acc_t == TY_NIL) acc_t = TY_POLY;
     int acc_wait = 0;
     /* An empty `[]` / `{}` seed the block only hands to a callable has no
        fill to type it from; the element type of the RECEIVER is not what it

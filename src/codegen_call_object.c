@@ -3776,20 +3776,7 @@ int emit_object_ivar_call(Compiler *c, int id, const char *name, int recv, TyKin
           /* nil into a plain Integer / Float field (no nil bit): the slot cannot hold it */
           buf_printf(b, "%s(%s)", oint_arg(mt), oint_nil(mt));
         }
-        else if (mt == TY_STRBUF) {
-          Buf srefIS; memset(&srefIS, 0, sizeof srefIS);
-          if (strbuf_slot_text(c, argv[1], &srefIS)) { buf_puts(b, srefIS.p); free(srefIS.p); }
-          /* (--share-strings: the handle the String plan gives, rendered by
-             the handle face: a boxed receiver's call whose arms answer one) */
-          else if (share_plan_producer(c, argv[1], NULL) == SPK_POLY_ARMS &&
-                   share_plan_of(c, argv[1], SPR_STORE).form == SPF_HANDLE)
-            emit_str_form_handle(c, argv[1], b);
-          else {
-            buf_puts(b, "sp_String_new_shared(");
-            emit_str_expr(c, argv[1], b);
-            buf_puts(b, ")");
-          }
-        }
+        else if (mt == TY_STRBUF) emit_strbuf_value(c, argv[1], b);
         /* nil into a scalar slot is the nil it holds beside the value, not
            the zero value the literal emits as */
         else if (nt_kind(nt, argv[1]) == NK_NilNode && nil_value(mt)) buf_puts(b, nil_value(mt));

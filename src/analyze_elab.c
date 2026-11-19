@@ -8041,7 +8041,8 @@ static int lr_climb_up(Compiler *c, const int *par, int a) {
 
 int elab_call_window(Compiler *c, int id, ElabWindow *w) {
   LoadRecord *r = elab_fresh(c);
-  const int *par = comp_parent_map(c);
+  int np;
+  const int *par = elab_node_parents(c, &np);
   int a = id;
   *w = (ElabWindow){ { -1, -1 }, { -1, -1 }, 0, 0, 0 };
   while (a >= 0 && a < r->n && elab_point_of(c, a).region < 0) a = lr_climb_up(c, par, a);

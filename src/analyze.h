@@ -544,6 +544,9 @@ int elab_method_vis_varies(Compiler *c, const char *name);
    self is there, which the record holds as the entries of that body (its
    value is then the word's, as in a class body)? */
 int elab_body_word(Compiler *c, int id);
+/* does a history of `name` hold such a word (elab_body_word), whose change
+   the record orders only against the points its body's extent spans? */
+int elab_method_body_word(Compiler *c, const char *name);
 /* may a method `name` the program gives be protected at some point of the
    load: does one of its histories hold a protected def, alias or visibility
    word of it? 1 where the load is not recorded. */

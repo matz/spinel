@@ -4645,6 +4645,14 @@ int elab_method_replaced(Compiler *c, const char *name) {
 }
 
 /* See analyze.h. */
+int elab_method_body_word(Compiler *c, const char *name) {
+  LoadRecord *r = c->lrec;
+  const LrVers *x = r && r->recorded && name ? lr_vers(r, name) : NULL;
+  for (int i = x ? x->first : -1; i >= 0; i = r->hist[i].nlink)
+    if (lr_body_word_of(&r->hist[i])) return 1;
+  return 0;
+}
+/* See analyze.h. */
 int elab_method_vis_varies(Compiler *c, const char *name) {
   LoadRecord *r = c->lrec;
   LrVers *x = r && r->recorded ? lr_vers(r, name) : NULL;
@@ -11612,8 +11620,10 @@ static int lr_vis_at(Compiler *c, int cls, const char *name, int sg, LoadPoint p
   const LrDef *d = NULL;
   return lr_search(c, cls, sg, name, -1, p, p.region < 0, 1, &d, 0) == ELAB_YES && d ? d->vis : -1;
 }
+/* (where p has no point, the answer is the load's end; a visibility word a method body runs, whose body may run
+   before or after the call, leaves it unknown there: elab_method_body_word) */
 int elab_method_vis_at(Compiler *c, int cls, const char *name, int sg, LoadPoint p) {
-  return lr_ready(c, p) ? lr_vis_at(c, cls, name, sg, p) : -1;
+  return lr_ready(c, p) && (p.region >= 0 || !elab_method_body_word(c, name)) ? lr_vis_at(c, cls, name, sg, p) : -1;
 }
 
 /* See analyze.h. */

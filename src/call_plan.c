@@ -5980,6 +5980,11 @@ PresenceKind cplan_presence(Compiler *c, int id, int cls, unsigned side, const c
   if (ml.kind == ML_ENTRY && !(side & (CT_CMETHOD | CT_TOP)) && !respond_to_missing_defined(c)) return PR_CELLS;
   if (ml.kind == ML_TABLE || ml.kind == ML_ENTRY) return PR_TABLE;
   if (ml.kind == ML_NONE && ml.why == MLW_RECORD) return PR_ABSENT;   /* (the record's none) */
+  /* (a visibility word a method body runs gives the table no visibility: the one the record has where id runs,
+     elab_method_body_word) */
+  LoadPoint p = out->table && id >= 0 && !(side & CT_TOP) && elab_method_body_word(c, name) ? elab_point_of(c, id) : (LoadPoint){ -1, -1, -1 };
+  int vis = p.region >= 0 ? elab_method_vis_at(c, cls, name, (side & CT_CMETHOD) != 0, p) : -1;
+  if (vis >= 0) out->vis = vis;
   return out->table ? PR_PRESENT : PR_ABSENT;
 }
 /* See call_plan.h. */

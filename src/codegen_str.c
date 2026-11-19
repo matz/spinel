@@ -4,7 +4,6 @@
 #include "call_plan.h"
 #include "codegen_call_arms.h"
 #include "repr.h"
-#include "share.h"
 
 /* Is node v a read of a variable (a local, an ivar, a global, a class
    variable or a constant), which hands over the handle its slot holds? */
@@ -22,7 +21,7 @@ static int str_uplus_literal(Compiler *c, int v) {
   return nm && is_unary_plus(nm) && nt_ref(nt, v, "arguments") < 0 && r >= 0 && nt_kind(nt, r) == NK_StringNode;
 }
 
-/* The handle arms of str_render_handle, each answering 1 with the handle
+/* Each helper answers 1 with the handle
    rendered, or 0 with nothing emitted: a value that ran ahead of the
    binding (the handle it took there); a route over a handle; a variable's
    slot. */
@@ -47,34 +46,29 @@ static int str_handle_slot(Compiler *c, int v, Buf *b) {
   return 1;
 }
 
-/* ...and the new handle made of a value's bytes, which no other name sees
-   (a box's: the handle it holds where the form is the handle) */
-static int str_handle_new(Compiler *c, int v, int form, unsigned dest, Buf *b) {
+/* A boxed value carries the String object. For a byte producer, take
+   the existing payload owner or materialize the new String it answers. */
+static void str_handle_value(Compiler *c, int v, unsigned dest, Buf *b) {
   NodeKind k = nt_kind(c->nt, v);
   int own = (dest & SFD_OWN) && k != NK_LocalVariableReadNode && k != NK_InstanceVariableReadNode;
   if (!arg_ran_first(v, 0) && (dest & SFD_OWN) && str_uplus_literal(c, v)) {
     buf_puts(b, "sp_String_new_unfrozen(");
     emit_expr(c, nt_ref(c->nt, v, "receiver"), b);
     buf_puts(b, ")");
-    return SPF_HANDLE;
+    return;
   }
   /* (a nil that is no bare read -- a call answering nil -- runs first) */
   if (comp_ntype(c, v) == TY_NIL) {
     if (subtree_is_pure_read(c, v)) buf_puts(b, "NULL");
     else { buf_puts(b, "({ (void)("); emit_expr_for_effect(c, v, b); buf_puts(b, "); NULL; })"); }
-    return SPF_BYTES;
+    return;
   }
   if (repr_of(c, v).kind == RK_BOXED) {
     int t = ++g_tmp;
     buf_puts(b, "({ ");
     t = hold_operand(c, v, TY_POLY, 0, t, 1, " ", b);
-    /* (a box that holds a String's handle is that handle; a String's own
-       box, or anything else, is converted as the slot takes it) */
-    if (form == SPF_HANDLE)
-      buf_printf(b, "sp_poly_nil_p(_t%d) ? NULL : sp_poly_is_strbuf(_t%d) ? sp_poly_as_strbuf(_t%d) : ", t, t, t);
-    else buf_printf(b, "sp_poly_nil_p(_t%d) ? NULL : ", t);
-    buf_printf(b, "%s(sp_poly_arg_str_chk(_t%d)); })", own ? "sp_String_new_fresh" : "sp_String_new_shared", t);
-    return SPF_HANDLE;
+    buf_printf(b, "sp_poly_nil_p(_t%d) ? NULL : sp_poly_arg_str_handle(_t%d); })", t, t);
+    return;
   }
   if (own) {
     buf_puts(b, "sp_String_new_fresh(");
@@ -87,74 +81,6 @@ static int str_handle_new(Compiler *c, int v, int form, unsigned dest, Buf *b) {
     strbuf_new_of_text(c, v, e.p, b);
     free(e.p);
   }
-  return SPF_HANDLE;
-}
-
-/* Node v as the handle a handle slot takes (a method's parameter that is
-   the shared handle), in the plan's form. Where the plan gives the handle,
-   or gives no form (without --share-strings, or where the value's own
-   need is no more than its bytes or a new handle), the producer's handle
-   is handed over where it has one, in this order:
-     - a local buffer's write: that local's buffer;
-     - a value that ran ahead of the binding (arg_ran_first): the handle it
-       took there (ran_first_handle), a variable's at its read, so a later
-       argument that writes the variable does not change what is bound;
-     - a route over a handle (strbuf_arg_carries): emit_strbuf_handle_of;
-     - a variable that holds the handle: its slot;
-   and else a new handle is made of its bytes, which no other name sees
-   (str_handle_new):
-     - `+"lit"` into a slot that holds its own copy (SFD_OWN): straight
-       from the literal;
-     - nil: the NULL handle a nullable slot reads as nil
-       (`def initialize(o: nil)`);
-     - a box: the NULL handle where it holds nil (converted as a String
-       first, it raised TypeError where CRuby binds nil), else a handle of
-       its String; where the plan gives the handle, a box that holds a
-       String's handle hands over that handle (a box of a String that can
-       change holds its handle), which a copy of its bytes would fork;
-     - any other value: a handle made of its bytes, with the
-       bytes inside the object for a slot that holds its own copy.
-   Under --share-strings the producer's kind (share_plan_producer) picks
-   the arms instead, one render per kind (str_handle_by_kind). A form the
-   plan gives the handle that no arm hands over (a renderer gap the seal
-   did not see, under a view or an arm) is the new handle, as before the
-   plan was read; --share-check reports it. Answers the form rendered. */
-static int str_handle_by_kind(Compiler *c, int v, int form, unsigned dest, Buf *b);
-static int str_render_handle(Compiler *c, int v, int form, unsigned dest, Buf *b) {
-  if (!arg_ran_first(v, 0) && repr_native_call_handle(c, v)) {
-    emit_native_string_handle(c, v, b);
-    return SPF_HANDLE;
-  }
-  return str_handle_by_kind(c, v, form, dest, b);
-}
-
-/* --share-strings: the handle face's render of each producer kind
-   (share.h's SPK_*), asked where the value is bound:
-     NONE, FROZEN   a new handle of the bytes, which for a frozen literal
-                    is the literal's own (sp_String_new_shared), after a
-                    value that ran first, which holds what it took;
-     BOX            the box's handle or a handle of its String (a box
-                    that ran first is the handle it took);
-     any other      the handle the producer hands on: a local buffer's
-                    write, a value that ran first, a route over a handle,
-                    a variable's slot; a kind none of these renders (a
-                    renderer gap) is the new handle. */
-static int str_handle_by_kind(Compiler *c, int v, int form, unsigned dest, Buf *b) {
-  int kind = share_plan_producer(c, v, NULL);
-  _Static_assert(SPK__COUNT == 23, "a handle render for each producer kind");
-  switch (kind) {
-  case SPK_NONE: case SPK_FROZEN: case SPK_BOX:
-    if (str_handle_ran_first(c, v, b)) return SPF_HANDLE;
-    return str_handle_new(c, v, form, dest, b);
-  case SPK_SLOT: case SPK_DEMANDED: case SPK_ELEM: case SPK_SLOT_POLY: case SPK_SELF: case SPK_BANG_BOX:
-  case SPK_PROC_CALL: case SPK_POLY_ARMS: case SPK_EXC_MESSAGE: case SPK_EXC_SUPER: case SPK_NATIVE_CALL:
-  case SPK_READER: case SPK_WRITE: case SPK_ASSIGN: case SPK_OPERAND: case SPK_BLOCK_VALUE: case SPK_YIELD:
-  case SPK_COND: case SPK_SEQUENCE: case SPK_LIFT:
-    if (emit_strbuf_local_write_handle(c, v, b)) return SPF_HANDLE;
-    if (str_handle_ran_first(c, v, b) || str_handle_route(c, v, b) || str_handle_slot(c, v, b)) return SPF_HANDLE;
-    return str_handle_new(c, v, form, dest, b);
-  }
-  return str_handle_new(c, v, form, dest, b);
 }
 
 /* The box of a String handle (SP_BUILTIN_STRBUF): the one place its text is
@@ -241,11 +167,14 @@ void emit_str_box_rooted(Compiler *c, int v, Buf *b) {
 }
 
 void emit_str_handle_form(Compiler *c, int v, unsigned dest, Buf *b) {
-  Buf handle;
-  memset(&handle, 0, sizeof handle);
-  str_render_handle(c, v, share_plan_of(c, v, SPR_TAKE).form, dest, &handle);
-  buf_puts(b, handle.p ? handle.p : "");
-  free(handle.p);
+  if (!arg_ran_first(v, 0) && repr_native_call_handle(c, v)) {
+    emit_native_string_handle(c, v, b);
+    return;
+  }
+  if (emit_strbuf_local_write_handle(c, v, b) || str_handle_ran_first(c, v, b)) return;
+  if (repr_of(c, v).kind != RK_BOXED &&
+      (str_handle_route(c, v, b) || str_handle_slot(c, v, b))) return;
+  str_handle_value(c, v, dest, b);
 }
 
 void emit_str_form_handle(Compiler *c, int v, Buf *b) {

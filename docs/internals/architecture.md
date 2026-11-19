@@ -100,6 +100,9 @@ validated text, so validation and optimized character seeks can reuse it. When F
 keeps the bytes of each selected segment through later conversions.
 Native package readers that declare a handle result return it through the
 same call view, including inherited bindings and calls through super.
+A native binding uses the producer's declared String
+result, the handle of a held operand or slot, or a checked projection from
+the boxed Ruby value. The read of an existing String keeps its object.
 Fiber context switches carry the active GC roots and exception state.
 A receiver-answering iterator at method tail keeps its receiver in the
 operand view across the block and returns it through the physical result

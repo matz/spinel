@@ -999,9 +999,9 @@ const char*sp_StrPolyHash_inspect(sp_StrPolyHash*h)
 sp_StrStrHash *sp_StrPolyHash_to_s_values(sp_StrPolyHash *h)
 {
   SP_GC_ROOT(h);
-  sp_StrStrHash *r = sp_StrStrHash_new(); SP_GC_ROOT(r);
-  /* a missing match reads the default, as its to_s (nil's "" is no default) */
-  if (h && h->default_v.tag != SP_TAG_NIL) r->default_v = sp_String_new_shared(sp_poly_to_s(h->default_v));
+  sp_String *default_value = h && h->default_v.tag != SP_TAG_NIL ? sp_String_new_shared(sp_poly_to_s(h->default_v)) : NULL;
+  sp_StrStrHash *r = sp_StrStrHash_new_with_default_e(default_value);
+  SP_GC_ROOT(r);
   if (h) for (sp_int i = 0; i < h->len; i++) {
     const char *k = h->order[i];
     sp_StrStrHash_set_e(r, k, sp_String_new_shared(sp_poly_to_s(sp_StrPolyHash_get(h, k))));

@@ -11674,13 +11674,25 @@ sp_StrStrHash *sp_StrPolyHash_to_s_values(sp_StrPolyHash *h);
 /* ...and an Integer-valued one, the same way */
 static sp_StrStrHash *sp_StrIntHash_to_s_values(sp_StrIntHash *h) {
   SP_GC_ROOT(h);
-  sp_StrStrHash *r = sp_StrStrHash_new(); SP_GC_ROOT(r);
-  if (h && !h->default_nil) r->default_v = sp_String_new_shared(sp_int_to_s(h->default_v));
+  sp_String *default_value = h && !h->default_nil ? sp_String_new_shared(sp_int_to_s(h->default_v)) : NULL;
+  sp_StrStrHash *r = sp_StrStrHash_new_with_default_e(default_value);
+  SP_GC_ROOT(r);
   if (h) for (sp_int i = 0; i < h->len; i++) {
     const char *k = h->order[i];
     { sp_oint v = sp_StrIntHash_vget(h, k); sp_StrStrHash_set_e(r, k, v.nil ? sp_String_new_shared(sp_str_empty) : sp_String_new_shared(sp_int_to_s(v.v))); }   /* nil.to_s is "" */
   }
   return r;
+}
+/* Converting the replacement may collect. Hold the subject and String
+   pattern before making the converted Hash. */
+static const char *sp_str_replace_hash_values(const char *subject, const char *pattern, sp_RbVal replacement, int global) {
+  SP_GC_ROOT_STR(subject);
+  SP_GC_ROOT_STR(pattern);
+  SP_GC_ROOT_RBVAL(replacement);
+  sp_StrStrHash *h = replacement.cls_id == SP_BUILTIN_STR_INT_HASH
+    ? sp_StrIntHash_to_s_values((sp_StrIntHash *)replacement.v.p)
+    : sp_StrPolyHash_to_s_values((sp_StrPolyHash *)replacement.v.p);
+  return global ? sp_str_gsub_str_str_hash(subject, pattern, h) : sp_str_sub_str_str_hash(subject, pattern, h);
 }
 static sp_StrPolyHash*sp_StrPolyHash_from_str_str_hash(sp_StrStrHash*h){SP_GC_ROOT(h);sp_StrPolyHash*r=sp_StrPolyHash_new();if(!h)return r;if(h->default_v)r->default_v=SP_SEBOX(h->default_v);for(sp_int i=0;i<h->len;i++){const char*k=h->order[i];sp_StrPolyHash_set(r,k,SP_SEBOX(sp_StrStrHash_get_e(h,k)));}if(sp_gc_is_frozen(h))sp_gc_freeze(r);return r;}
 /* MatchData#named_captures: {String name => group substring | nil}. A

@@ -15375,7 +15375,7 @@ static sp_RbVal sp_poly_arr_widen_and_set(sp_RbVal v, sp_int idx, sp_RbVal val) 
   if (v.tag == SP_TAG_OBJ &&
       ((v.cls_id == SP_BUILTIN_INT_ARRAY && val.tag != SP_TAG_INT) ||
        (v.cls_id == SP_BUILTIN_FLT_ARRAY && val.tag != SP_TAG_FLT) ||
-       (v.cls_id == SP_BUILTIN_STR_ARRAY && val.tag != SP_TAG_STR) ||
+       (v.cls_id == SP_BUILTIN_STR_ARRAY && !sp_rbval_is_string(val)) ||
        (v.cls_id == SP_BUILTIN_PTR_ARRAY && !sp_PtrArray_elem_ok((sp_PtrArray *)v.v.p, val, &_pe)))) {
     if (sp_typed_arr_frozen(v)) sp_raise_frozen_array_v(v);
     SP_GC_ROOT_RBVAL(val);

@@ -5175,6 +5175,31 @@ sp_bool sp_srange_include(sp_StrRange r, const char *x) {
   if (!r.first || !r.last)
     sp_raise_cls("TypeError", "cannot determine inclusion in beginless/endless ranges");
   if (!x) return 0;
+  /* Two all-digit ends of at most 18 digits: sp_str_upto_each walks the
+     numbers between, each zero-padded to the begin's width, so x is one of
+     them when it is all digits, its number lies between the ends, and its
+     length is that width or its number's own, the longer. Answered from x
+     alone, where the walk built every string up to it
+     (('1'..'200000').include?('199999') built 199,999 of them). */
+  size_t sl = sp_str_byte_len(r.first), el = sp_str_byte_len(r.last), xl = sp_str_byte_len(x);
+  int digits = sl > 0 && el > 0 && sl <= 18 && el <= 18;
+  for (size_t i = 0; digits && i < sl; i++) if (r.first[i] < '0' || r.first[i] > '9') digits = 0;
+  for (size_t i = 0; digits && i < el; i++) if (r.last[i] < '0' || r.last[i] > '9') digits = 0;
+  if (digits) {
+    if (xl == 0 || xl > 19) return 0;
+    unsigned long long n = 0;
+    size_t lead = 0;
+    for (size_t i = 0; i < xl; i++) {
+      if (x[i] < '0' || x[i] > '9') return 0;
+      n = n * 10 + (unsigned long long)(x[i] - '0');
+      if (n == 0) lead = i + 1;
+    }
+    size_t own = xl - lead;   /* (the digits of n, 1 for 0) */
+    if (own == 0) own = 1;
+    if (xl != (own > sl ? own : sl)) return 0;
+    unsigned long long bi = strtoull(r.first, NULL, 10), ei = strtoull(r.last, NULL, 10);
+    return n >= bi && (r.excl ? n < ei : n <= ei);
+  }
   const char *v = x;
   SP_GC_ROOT_STR(v);
   sp_str_upto_each(r.first, r.last, r.excl, sp_srange_include_i, &v);

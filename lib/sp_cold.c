@@ -2888,7 +2888,6 @@ int sp_open_fifo_aware(const char *path, int fl, int perm) {
   struct stat st;
   if (stat(path, &st) != 0 || !S_ISFIFO(st.st_mode))
     return open(path, fl, (mode_t)perm);
-  extern void sp_Thread_pass(void);
   for (;;) {
     int fd = open(path, fl | O_NONBLOCK, (mode_t)perm);
     if (fd >= 0) {
@@ -2900,10 +2899,13 @@ int sp_open_fifo_aware(const char *path, int fl, int perm) {
        invents: "no reader yet". Every other errno is the caller's, and is
        the same errno the blocking form would have given. */
     if (!(errno == ENXIO && (fl & O_ACCMODE) == O_WRONLY)) return -1;
-    sp_Thread_pass();
-    /* nothing else runnable: do not spin the worker. nanosleep rather than a
-       zero-fd poll, which is not portable to macOS. */
-    { struct timespec ts; ts.tv_sec = 0; ts.tv_nsec = 1000000; SP_SIG_BLOCKING(nanosleep(&ts, NULL)); }
+    /* The wait is a sleep of the scheduler: the green thread parks, so the
+       other threads run on this worker meanwhile, and the worker parks at
+       the barrier of a collection another worker starts. A Thread.pass and
+       a plain nanosleep did neither when nothing else was runnable here,
+       and a collector waiting for this worker waited for good, while the
+       thread that was to start the reader waited for the collection. */
+    sp_sleep(0.001);
   }
 }
 sp_File *sp_File_open_flags_perm(const char *path, sp_int fl, sp_oint perm) {SP_GC_ROOT_STR(path);

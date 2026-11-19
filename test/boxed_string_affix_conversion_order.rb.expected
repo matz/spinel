@@ -1,0 +1,10 @@
+true
+[:receiver, :first, :second, :third, :miss, :match]
+4096
+true
+[:receiver, :first, :second, :match]
+4096
+true
+[:receiver, :first, :second, :match, :receiver, :first, :second, :third]
+true
+true

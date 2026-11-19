@@ -1296,16 +1296,12 @@ static int emit_call_raise_arms_in(Compiler *c, int id, Buf *b, const NodeTable 
 int exc_msg_handle(Compiler *c, int arg, Buf *b) {
   return arg >= 0 && strbuf_var_handle(c, arg, b);
 }
-/* ...and so does a message that is any other String value the plan hands
-   over as its handle (a reader's or a method's answer, a conversion, a
-   conditional): exc_msg_handle for a variable, else the handle held in a
-   temp the statement expression opened in b binds, which the message's
-   bytes read and the exception holds, so the value is evaluated once. 1
-   with *mh the handle's text, and *mark the bound node's mark when b was
-   opened (-1 otherwise); exc_msg_release closes it after the exception. */
+/* A String message uses its object. Keep the value rooted until the
+   constructor records it, and bind its bytes only where they are read. */
 int exc_msg_holds(Compiler *c, int arg) {
-  return arg >= 0 && comp_ntype(c, arg) == TY_STRING &&
-         share_plan_of(c, arg, SPR_TAKE).form == SPF_HANDLE;
+  if (arg < 0) return 0;
+  Repr r = repr_of(c, arg);
+  return r.as_ty == TY_STRING || r.kind == RK_STRBUF;
 }
 int exc_msg_hold(Compiler *c, int arg, Buf *b, Buf *mh, int *mark) {
   *mark = -1;

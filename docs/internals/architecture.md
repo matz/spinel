@@ -103,7 +103,10 @@ The native String result passes its handle directly through C. Byte
 consumers project the contents and take a snapshot where the read is
 held across a block. UTF-8 character positions count each valid sequence
 once and each malformed byte separately. The length cache records only
-validated text, so validation and optimized character seeks can reuse it. When File.join walks boxed path components, it
+validated text, so validation and optimized character seeks can reuse it.
+Exception construction keeps the message's String object and projects
+bytes where the constructor reads them. When File.join walks boxed path
+components, it
 keeps the bytes of each selected segment through later conversions.
 Native package readers that declare a handle result return it through the
 same call view, including inherited bindings and calls through super.

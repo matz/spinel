@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 def inspect_value(x)
   [x.class, x.object_id == x.object_id]
 end

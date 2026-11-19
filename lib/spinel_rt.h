@@ -3292,31 +3292,16 @@ static inline sp_StrRange sp_srange_upto_recv(sp_StrRange r) {
   if (SP_UNLIKELY(!r.first && !r.hf)) sp_nil_recv("upto");
   return r;
 }
-/* ...and #min (greatest 0) / #max (1) with no block as a String, as
-   CRuby's range_min / range_max answer them. #min walks nothing: a
-   beginless Range raises, one empty by <=> (the begin past the end, or at
-   an excluded end) is nil (NULL), and any other answers its begin object,
-   an endless one's too. #max is an inclusive Range's end object, nil where
-   the begin is past it, and an excluded end's walk answers a new String
-   (sp_srange_max_v, which raises for an open side). An endpoint the Range
-   keeps is its handle; any other is a new handle over the bytes it holds. */
+/* Min and inclusive max return the Range's endpoint. An exclusive max
+   returns a new String produced by the succession walk. */
 static inline sp_String *sp_srange_extreme_h(sp_StrRange r, int greatest) {
-  SP_GC_ROOT(r.hf); SP_GC_ROOT(r.hl);
-  if (!greatest) {
-    sp_StrRange l = sp_srange_live(r);
-    if (!l.first) sp_raise_cls("RangeError", "cannot get the minimum of beginless range");
-    int c = l.last ? strcmp(l.first, l.last) : -1;
-    if (c > 0 || (c == 0 && r.excl)) return NULL;
-    if (r.hf) return (sp_String *)r.hf;
-    const char *b = r.first;
-    SP_GC_ROOT_STR(b);
-    return sp_String_new_shared(b);
-  }
-  const char *v = sp_srange_max_v(r);
-  if (!v) return NULL;
-  if (r.hl && !r.excl) return (sp_String *)r.hl;
-  SP_GC_ROOT_STR(v);
-  return sp_String_new_shared(v);
+  SP_GC_ROOT_SRANGE(r);
+  const char *value = greatest ? sp_srange_max_v(r) : sp_srange_min_v(r);
+  if (!value) return NULL;
+  if (!greatest) return r.hf;
+  if (!r.excl) return r.hl;
+  SP_GC_ROOT_STR(value);
+  return sp_String_new_shared(value);
 }
 static inline sp_bool sp_poly_is_strbuf(sp_RbVal v) {
   return v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_STRBUF;

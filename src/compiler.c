@@ -4792,25 +4792,39 @@ int comp_method_overridden(Compiler *c, int cid, const char *name, int cmeth) {
    ascending order, the order the loops it replaces visited them in -- and
    rebuilt only when the class count changes. */
 static int **desc_lists; static int *desc_counts; static int desc_nclasses = -1;
+/* (each class's subclasses by its parent link, made with the lists: a
+   list is the walk down them, sorted, where it read every class's chain) */
+static int *desc_kid_first, *desc_kid_next;
+static int desc_int_cmp(const void *a, const void *b) { return *(const int *)a - *(const int *)b; }
 const int *comp_descendants(Compiler *c, int cid, int *n) {
   if (cid < 0 || cid >= c->nclasses) { *n = 0; return NULL; }
   if (desc_nclasses != c->nclasses) {
     for (int i = 0; i < desc_nclasses; i++) free(desc_lists[i]);
-    free(desc_lists); free(desc_counts);
+    free(desc_lists); free(desc_counts); free(desc_kid_first); free(desc_kid_next);
     desc_lists = calloc((size_t)c->nclasses, sizeof *desc_lists);
     desc_counts = calloc((size_t)c->nclasses, sizeof *desc_counts);
+    desc_kid_first = malloc(sizeof(int) * (size_t)c->nclasses);
+    desc_kid_next = malloc(sizeof(int) * (size_t)c->nclasses);
+    if (!desc_lists || !desc_counts || !desc_kid_first || !desc_kid_next) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    for (int k = 0; k < c->nclasses; k++) desc_kid_first[k] = desc_kid_next[k] = -1;
+    for (int k = c->nclasses - 1; k >= 0; k--) {
+      int p = c->classes[k].parent;
+      if (p >= 0 && p < c->nclasses && p != k) { desc_kid_next[k] = desc_kid_first[p]; desc_kid_first[p] = k; }
+    }
     desc_nclasses = c->nclasses;
   }
   if (!desc_lists[cid]) {
     int *v = NULL, cnt = 0, cap = 0;
-    for (int k = 0; k < c->nclasses; k++) {
-      int is_desc = 0;
-      for (int p = c->classes[k].parent; p >= 0; p = c->classes[p].parent)
-        if (p == cid) { is_desc = 1; break; }
-      if (!is_desc) continue;
+    for (int k = desc_kid_first[cid]; k >= 0; k = desc_kid_next[k]) {
       if (cnt == cap) { cap = cap ? cap * 2 : 8; v = realloc(v, sizeof *v * (size_t)cap); }
       v[cnt++] = k;
     }
+    for (int i = 0; i < cnt && cnt <= c->nclasses; i++)
+      for (int k = desc_kid_first[v[i]]; k >= 0; k = desc_kid_next[k]) {
+        if (cnt == cap) { cap = cap ? cap * 2 : 8; v = realloc(v, sizeof *v * (size_t)cap); }
+        v[cnt++] = k;
+      }
+    if (cnt > 1) qsort(v, (size_t)cnt, sizeof *v, desc_int_cmp);
     if (!v) v = malloc(sizeof *v);   /* a non-NULL sentinel for "computed, empty" */
     desc_lists[cid] = v; desc_counts[cid] = cnt;
   }

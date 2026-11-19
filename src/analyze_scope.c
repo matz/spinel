@@ -8095,14 +8095,44 @@ void resolve_inherited_aliases(Compiler *c) {
 
 /* True if the method scope's body contains a `super` (an explicit-arg SuperNode
    or a bare ForwardingSuperNode). */
+/* The super nodes of the table (sbs_*), found once and extended by the
+   nodes appended since: the question is asked for every class method a
+   pass meets, and each ask read every node of the program. A node's scope
+   is read at the ask (nscope), so a node moved to another scope answers
+   for that one. SP_SBS_CHECK reads every node as well and stops on a
+   disagreement. */
+static const NodeTable *sbs_nt;
+static int sbs_scanned, *sbs_ids, sbs_n, sbs_cap;
 static int scope_body_has_super(Compiler *c, int scope_idx) {
   const NodeTable *nt = c->nt;
-  for (int id = 0; id < nt->count; id++) {
+  if (sbs_nt != nt || sbs_scanned > nt->count) { sbs_nt = nt; sbs_scanned = 0; sbs_n = 0; }
+  for (; sbs_scanned < nt->count; sbs_scanned++) {
+    NodeKind k = nt_kind(nt, sbs_scanned);
+    if (k != NK_SuperNode && k != NK_ForwardingSuperNode) continue;
+    if (sbs_n == sbs_cap) {
+      sbs_cap = sbs_cap ? sbs_cap * 2 : 64;
+      int *ni = realloc(sbs_ids, sizeof(int) * (size_t)sbs_cap);
+      if (!ni) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      sbs_ids = ni;
+    }
+    sbs_ids[sbs_n++] = sbs_scanned;
+  }
+  int ans = 0;
+  for (int i = 0; i < sbs_n && !ans; i++) {
+    int id = sbs_ids[i];
+    NodeKind k = nt_kind(nt, id);
+    if (c->nscope[id] == scope_idx && (k == NK_SuperNode || k == NK_ForwardingSuperNode)) ans = 1;
+  }
+#ifdef SP_SBS_CHECK
+  int full = 0;
+  for (int id = 0; id < nt->count && !full; id++) {
     if (c->nscope[id] != scope_idx) continue;
     NodeKind k = nt_kind(nt, id);
-    if (k == NK_SuperNode || k == NK_ForwardingSuperNode) return 1;
+    if (k == NK_SuperNode || k == NK_ForwardingSuperNode) full = 1;
   }
-  return 0;
+  if (full != ans) { fprintf(stderr, "spinel: SP_SBS_CHECK: scope %d: %d, the scan %d\n", scope_idx, ans, full); abort(); }
+#endif
+  return ans;
 }
 
 /* Does something reach the super of method scope mi, cls's method of
@@ -10743,8 +10773,10 @@ void specialize_inherited_cls_new(Compiler *c) {
     if (!c->scopes[mi].is_cmethod || !c->scopes[mi].name || c->scopes[mi].class_id < 0) continue;
     int def_cls = c->scopes[mi].class_id;
     const char *mname = c->scopes[mi].name;
-    int *tgt = NULL, ntgt = 0;
-    for (int k = 0; k < c->nclasses; k++) {
+    int *tgt = NULL, ntgt = 0, nds = 0;
+    const int *ds = comp_descendants(c, def_cls, &nds);   /* (ascending, as the loop over every class was) */
+    for (int di = 0; di < nds; di++) {
+      int k = ds[di];
       if (k == def_cls || !is_descendant(c, k, def_cls) || !class_value_escapes(c, k)) continue;
       /* the original, or a copy made above for an intermediate class */
       int kmi = comp_cmethod_in_chain(c, k, mname, NULL);
@@ -10774,7 +10806,14 @@ void specialize_inherited_cls_new(Compiler *c) {
       if (!c->scopes[mi].is_cmethod || !c->scopes[mi].name || c->scopes[mi].class_id < 0) continue;
       int def_cls = c->scopes[mi].class_id;
       const char *mname = c->scopes[mi].name;
-      for (int k = 0; k < c->nclasses; k++) {
+      int nds = 0;
+      const int *ds0 = comp_descendants(c, def_cls, &nds);
+      /* (a copy: the copies made below may rebuild the lists) */
+      int *ds = nds > 0 ? malloc(sizeof(int) * (size_t)nds) : NULL;
+      if (nds > 0 && !ds) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      if (nds > 0) memcpy(ds, ds0, sizeof(int) * (size_t)nds);
+      for (int di = 0; di < nds; di++) {
+        int k = ds[di];
         if (k == def_cls || !is_descendant(c, k, def_cls) || !ext_class_exported(c, k)) continue;
         int kmi = comp_cmethod_in_chain(c, k, mname, NULL);
         if (kmi != mi && (kmi < snap || c->scopes[kmi].def_node != c->scopes[mi].def_node ||
@@ -10783,6 +10822,7 @@ void specialize_inherited_cls_new(Compiler *c) {
         if (cmethod_needs_specialization(c, mi, k, def_cls, &has_new))
           specialize_cmethod_for(c, mi, NULL, def_cls, k, 0, -1);
       }
+      free(ds);
     }
   /* a class's own class method whose super reaches its parent's */
   /* (the copies made above for subclasses as well: each copy's super runs

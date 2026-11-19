@@ -35,3 +35,12 @@ begin; p S.v; rescue NoMethodError => e; p e.class; end
 p S.setup, (def S.v = :placed), S.v
 p S.setup, S.v
 p((def S.v = :first), S.setup, S.v)
+# A def after an argument or a receiver that leaves the body early does not run with the body.
+class J
+  def self.setup
+    p([1].each { return :stopped }, (def J.made = :ok))
+  end
+end
+begin; p J.made; rescue NoMethodError => e; p e.class; end
+p J.setup
+begin; p J.made; rescue NoMethodError => e; p e.class; end

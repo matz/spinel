@@ -3647,9 +3647,10 @@ static void lr_body_defs(Compiler *c, int ci, int body, int fnode) {
 /* Does def node d run whenever the body around it does (lr_body_around),
    once the body gets past its start: a statement of the body's own list (in
    parentheses, or the argument of a call: `private def m`), after no
-   statement of it that may leave the body early (a return, a break, a next,
-   a throw)? A def under a condition, in a rescued begin, in a block of its
-   own or after an early exit may not run with it. */
+   statement of it, argument before it or receiver of its call that may
+   leave the body early (a return, a break, a next, a throw)? A def under a
+   condition, in a rescued begin, in a block of its own or after an early
+   exit may not run with it. */
 static int lr_jumps(const NodeTable *nt, int node);
 static int lr_runs_with_body(const NodeTable *nt, const int *par, int n, int d, int body) {
   for (int v = d, p; v >= 0 && v < n && (p = par[v]) >= 0 && p < n; v = p) {
@@ -3660,8 +3661,16 @@ static int lr_runs_with_body(const NodeTable *nt, const int *par, int n, int d, 
       const int *st = nt_arr(nt, p, "body", &m);
       for (int i = 0; i < m && st[i] != v; i++) if (lr_jumps(nt, st[i])) return 0;
     }
-    else if (k == NK_ArgumentsNode) { if (par[p] < 0 || nt_kind(nt, par[p]) != NK_CallNode || nt_safe_nav(nt, par[p])) return 0; }
-    else if (k != NK_ParenthesesNode && !(k == NK_CallNode && nt_ref(nt, p, "arguments") == v)) return 0;
+    else if (k == NK_ArgumentsNode) {
+      /* (the arguments before it run first) */
+      int m = 0;
+      const int *av = nt_arr(nt, p, "arguments", &m);
+      for (int i = 0; i < m && av[i] != v; i++) if (lr_jumps(nt, av[i])) return 0;
+      if (par[p] < 0 || nt_kind(nt, par[p]) != NK_CallNode || nt_safe_nav(nt, par[p])) return 0;
+    }
+    /* (the receiver runs before the arguments) */
+    else if (k == NK_CallNode && nt_ref(nt, p, "arguments") == v) { if (lr_jumps(nt, nt_ref(nt, p, "receiver"))) return 0; }
+    else if (k != NK_ParenthesesNode) return 0;
   }
   return 0;
 }

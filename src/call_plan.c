@@ -11885,7 +11885,7 @@ static void ver_refl_count(Compiler *c, int vis) {
 static int ver_capture_builtin(Compiler *c, const VerNamed *w) {
   NodeTable *nt = (NodeTable *)c->nt;
   int call;
-  int def = disp_string_reader_def(nt, w->name, string_boxed_reader_arity(w->name), &call);
+  int def = disp_string_reader_def(nt, -1, w->name, string_boxed_reader_arity(w->name), &call);
   ver_pin(c, call, CT_PIN_BUILTIN, 0);
   char hidden[320];
   comp_shadow_name(c, w->cls, w->name, hidden, sizeof hidden);

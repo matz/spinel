@@ -3469,7 +3469,7 @@ static inline sp_RbVal sp_poly_to_s_box(sp_RbVal v) {
   if (sp_user_display_box(v, 0, &user)) return user;
   if (sp_poly_is_str_subclass(v))
     return sp_box_obj(sp_String_new_unfrozen(sp_String_cstr((sp_String *)v.v.p)), SP_BUILTIN_STRBUF);
-  if ((sp_rbval_is_string(v)) || (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_STRBUF && v.v.p)) return v;
+  if (sp_rbval_is_string(v)) return v;
   if (v.tag == SP_TAG_SYM) return sp_box_obj(sp_sym_to_s_new((sp_sym)v.v.i), SP_BUILTIN_STRBUF);
   return sp_box_str_new(sp_poly_to_s(v));
 }
@@ -19455,13 +19455,26 @@ const char *sp_backtick(const char *cmd);
 /* sp_file_basename: moved to lib/sp_cold.c */
 const char *sp_file_basename(const char *path);
 const char *sp_file_basename2(const char *path, const char *suffix);
-/* File.join consumes a segment before the next component's conversion
-   can change it. Keep the selected bytes alive in the scanned parts array. */
-static void sp_file_join_push_part(sp_StrArray *parts, const char *bytes) {
+/* A later path conversion can mutate this String. Hold the bytes selected
+   by the current conversion until the file operation consumes them. */
+static sp_String *sp_file_path_snapshot(const char *bytes) {
   SP_GC_ROOT_STR(bytes);
-  sp_String *part = sp_str_is_frozen_val(bytes)
+  return sp_str_is_frozen_val(bytes)
       ? sp_String_new_shared(bytes) : sp_String_new_unfrozen(bytes);
-  sp_StrArray_push_e(parts, part);
+}
+static sp_int sp_file_delete_splat(sp_RbVal args) {
+  sp_PolyArray *paths = sp_PolyArray_splat(sp_poly_to_poly_array(args));
+  SP_GC_ROOT(paths);
+  /* Convert every argument before the first unlink. A conversion can
+     mutate the caller's Array as well as any of its Strings. */
+  for (sp_int i = 0; i < paths->len; i++) {
+    const char *bytes = sp_poly_arg_path(paths->data[i]);
+    sp_file_path_check(bytes);
+    sp_PolyArray_set(paths, i, SP_SEBOX(sp_file_path_snapshot(bytes)));
+  }
+  for (sp_int i = 0; i < paths->len; i++)
+    sp_file_delete(sp_rbval_string_bytes(paths->data[i]));
+  return paths->len;
 }
 /* Arrays flatten recursively (#2786); non-Arrays use the path protocol. */
 static void sp_file_join_flat(sp_RbVal v, sp_StrArray *parts, int depth) {
@@ -19472,7 +19485,7 @@ static void sp_file_join_flat(sp_RbVal v, sp_StrArray *parts, int depth) {
     for (sp_int i = 0; i < n; i++) sp_file_join_flat(sp_poly_arr_get(v, i), parts, depth + 1);
     return;
   }
-  sp_file_join_push_part(parts, sp_poly_arg_path(v));
+  sp_StrArray_push_e(parts, sp_file_path_snapshot(sp_poly_arg_path(v)));
 }
 static const char *sp_file_join_vals(sp_RbVal *vals, int n) {
   sp_StrArray *parts = sp_StrArray_new();

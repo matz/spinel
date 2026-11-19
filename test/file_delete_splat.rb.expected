@@ -6,4 +6,9 @@ Errno::ENOENT
 false
 Errno::ENOENT
 [false, false, true]
+true
+2
+[false, true, false]
+"path name contains null byte"
+[true, true]
 "a/b/c"

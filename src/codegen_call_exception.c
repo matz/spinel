@@ -1170,17 +1170,10 @@ static int emit_call_raise_arms_in(Compiler *c, int id, Buf *b, const NodeTable 
         else {
           /* an explicitly given message is kept even when empty, unlike the
              class-only form, which falls back to the class name (#3711) */
-          Buf mh; memset(&mh, 0, sizeof mh);
-          int mk;
-          if (comp_ntype(c, av[1]) == TY_STRING && exc_msg_hold(c, av[1], b, &mh, &mk)) {
-            /* the exception is built here, holding the handle, as the
-               rescue would build it (sp_exc_new_for_catch) */
-            buf_printf(b, "%s(sp_Exception *)sp_exc_attach_msg(sp_exc_new_for_catch(\"%s\", "
-                          "sp_exc_msg_given(%s", raise_fn("sp_raise_exc"), effn, "SP_STR_B(");
-            emit_expr(c, av[1], b);
-            buf_printf(b, "%s)), %s))", ")", mh.p);
-            exc_msg_release(b, mk);
-            free(mh.p);
+          if (comp_ntype(c, av[1]) == TY_STRING && exc_msg_holds(c, av[1])) {
+            buf_printf(b, "%s\"%s\", ", raise_fn("sp_raise_cls_handle"), effn);
+            emit_str_form_handle(c, av[1], b);
+            buf_puts(b, ")");
           }
           else if (comp_ntype(c, av[1]) == TY_STRING) {
             buf_printf(b, "%s\"%s\", sp_exc_msg_given(%s", raise_fn("sp_raise_cls"), effn, "SP_STR_B(");
@@ -1237,8 +1230,6 @@ static int emit_call_raise_arms_in(Compiler *c, int id, Buf *b, const NodeTable 
       else if (at == TY_STRING) {
         /* `raise "msg"` raises RuntimeError with the message, holding a
            shared String's handle (exc_msg_handle) */
-        Buf mh; memset(&mh, 0, sizeof mh);
-        int mk;
         /* `raise "msg"` is `raise RuntimeError, "msg"`: a RuntimeError
            reopening's own initialize runs on it, as that form's does
            (emit_exc_reopen_construct). Raised by name, it skipped the
@@ -1253,13 +1244,10 @@ static int emit_call_raise_arms_in(Compiler *c, int id, Buf *b, const NodeTable 
           /* A reader's box keeps its shared field as the message. */
           buf_puts(b, raise_fn("sp_raise_poly")); emit_boxed(c, av[0], b); buf_puts(b, ")");
         }
-        else if (exc_msg_hold(c, av[0], b, &mh, &mk)) {
-          buf_printf(b, "%s(sp_Exception *)sp_exc_attach_msg(sp_exc_new_for_catch(\"RuntimeError\", "
-                      "sp_exc_msg_given(%s", raise_fn("sp_raise_exc"), "SP_STR_B(");
-          emit_expr(c, av[0], b);
-          buf_printf(b, "%s)), %s))", ")", mh.p);
-          exc_msg_release(b, mk);
-          free(mh.p);
+        else if (exc_msg_holds(c, av[0])) {
+          buf_printf(b, "%s\"RuntimeError\", ", raise_fn("sp_raise_cls_handle"));
+          emit_str_form_handle(c, av[0], b);
+          buf_puts(b, ")");
         }
         else { buf_puts(b, raise_fn("sp_raise")); buf_puts(b, "sp_exc_msg_given(SP_STR_B("); emit_expr(c, av[0], b); buf_puts(b, ")))"); }
       }

@@ -109,7 +109,9 @@ held across a block. UTF-8 character positions count each valid sequence
 once and each malformed byte separately. The length cache records only
 validated text, so validation and optimized character seeks can reuse it.
 Exception construction keeps the message's String object and projects
-bytes where the constructor reads them. Multiple assignment holds each
+bytes where the constructor reads them. A typed raise passes that handle
+to the runtime. Cleanup keeps the cause of an exception it will rethrow.
+Multiple assignment holds each
 String through later values and writes. A value-producing assignment
 returns those same objects. File.join keeps the bytes of each boxed path
 component through later conversions.

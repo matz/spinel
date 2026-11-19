@@ -38,8 +38,8 @@
 # ladder (the object floor is pool-wide, the string floor per worker, so both
 # bases are divided by the worker count):
 #
-#   SPINEL_GC_OBJ_BUDGET=fixed SPINEL_GC_STR_BUDGET=fixed \
-#   SPINEL_GC_THRESHOLD_OBJ_KB=$((65536/W)) SPINEL_GC_THRESHOLD_STR_KB=$((65536/W)) \
+#   SPINEL_GC_OBJ_BUDGET=fixed \
+#   SPINEL_GC_THRESHOLD_OBJ_KB=$((65536/W)) \
 #   SPINEL_WORKERS=$W SPINEL_GC_PHASES=1
 #
 # On the machine this was written on (Apple M-series, 6 performance cores),

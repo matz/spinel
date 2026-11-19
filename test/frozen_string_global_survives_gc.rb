@@ -1,7 +1,4 @@
-# A heap string frozen by .freeze and bound to a constant is rooted via
-# sp_mark_user_globals, but the string-pool sweeper (sp_str_sweep) only kept
-# 0xfc-marked strings and freed the frozen (0xf1) one -- a GC use-after-free
-# on the next collect. Frozen globals must survive collection. (#1449)
+# Global marking keeps the owner of a frozen String live across collections.
 VERSION = "0.8.0".freeze
 NAME = ("spinel-" + "rt").freeze
 GC.start

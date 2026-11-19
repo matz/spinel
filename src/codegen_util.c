@@ -6539,8 +6539,8 @@ void emit_str_literal_n(Buf *b, const char *content, size_t len, int frozen) {
      The heap string it builds is writable (0xfe), so a frozen literal is
      sealed with sp_str_freeze_val (flips the heap marker to 0xf1 in place). */
   if (len > strlen(content)) {
-    /* A FROZEN NUL-containing literal is immortal (sp_str_sweep never frees a
-       0xf1 string), so build it once into a call-site-local static and reuse it.
+    /* A frozen NUL-containing literal is pinned. Build it once at this
+       call site and reuse it.
        This avoids re-allocating it on every evaluation -- which, besides the
        churn, made the literal a GC-triggering sibling that could sweep an
        unrooted operand mid-expression (e.g. the receiver in

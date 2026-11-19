@@ -244,9 +244,7 @@ static int sp_exc_level_matches(const char *cls, const char *target) {
 /* Class names are rodata by contract -- every caller passes a bare literal and
    sp_exc_gc_scan never marks them -- so they take no string root here or in
    the raise path. Rooting one had the collector read its marker byte, which
-   for a bare literal is the byte BEFORE the object: an out-of-bounds read on
-   every raise, and a WRITE of 0xfc over whatever precedes it whenever that
-   byte happened to read as an unmarked heap string. */
+   for a bare literal is the byte before the object, an out-of-bounds read. */
 int sp_exc_cls_matches(const char *raised, const char *target) {
   if (!raised || !target) return 0;
 #ifdef SP_CEXT
@@ -465,7 +463,7 @@ sp_Exception *sp_exc_new_for_catch(const char *cls, const char *msg) {
   /* every caller hands a message with a marker byte (a raise's, from the
      handler stack, or sp_exc_msg_given's): a frozen one stays frozen */
   int fz = msg && msg != sp_exc_no_msg && !sp_cmsg_p(msg) &&
-           (((const unsigned char *)msg)[-1] == 0xfa || ((const unsigned char *)msg)[-1] == 0xf8);
+           (((const unsigned char *)msg)[-1] == 0xfa);
   /* the caller's message may be held by nothing else: rooted before the
      copy allocates (#8323) */
   const char *msg0 = msg; SP_GC_ROOT_STR(msg0);
@@ -582,15 +580,11 @@ sp_RbVal sp_Exception_set_backtrace(sp_Exception *e, sp_StrArray *bt) {
 }
 /* cls_name is rodata -- every caller passes a bare literal, and the scan below
    says so and never marks it. Rooting it as a STRING had the collector read
-   its marker byte, which for a bare literal is the byte BEFORE the object: a
-   global-buffer-overflow on every raise, and a WRITE of 0xfc over whatever
-   precedes it whenever that byte happens to read as an unmarked heap string.
-   ASAN reports it on the first collection inside any raise. */
-/* The message is copied onto the string heap first, then rooted. The caller's
+   its marker byte, which for a bare literal is outside the object. */
+/* The message is copied into a String object first, then rooted. The caller's
    pointer cannot be rooted as it stands: a bare C literal -- which every raise
    the runtime and the generated code issue passes -- has no marker byte, so
-   sp_mark_string reads the byte BEFORE the object, and WRITES 0xfc over it
-   whenever that byte reads as an unmarked heap string. The copy runs with no
+   sp_mark_string would read outside the object. The copy runs with no
    collection in between (sp_msg_heapify), so an unrooted heap message cannot
    be swept out from under it either. The no-message sentinel keeps its
    identity: it is what tells an empty message apart from none at all. */
@@ -748,7 +742,7 @@ const char *sp_exc_class_name(volatile sp_Exception *ve) {
      that byte -- hand back a marked copy instead. One copy is made for a name
      and kept, as a literal is. A Class value carries its name in a plain
      struct that no root and no scan knows (`k = e.class` held in a local, a
-     parameter or an instance variable), so a copy on the string heap was
+     parameter or an instance variable), so a managed copy was
      collected under it and `k.to_s` answered the String that took its place. */
   struct kept_name { const char *key, *copy; };
   static struct kept_name *kept = NULL;   /* guarded by the heap lock */
@@ -1973,7 +1967,7 @@ SP_NORETURN SP_COLD void sp_raise_cls(const char *cls, const char *msg) {
   /* a raise leaves any region a signal may be raised in at once (#9222):
      what follows allocates */
   sp_sig_async_ok = 0;
-  /* Launder the message onto the string heap and root the copy before anything
+  /* Launder the message into a String object and root the copy before anything
      below allocates. `msg` is the caller's own pointer and comes in one of two
      shapes, neither of which survives a collection here. A raiser that formats
      its text -- sp_sprintf, as sp_raise_poly_nomethod and its kin do -- hands
@@ -2086,7 +2080,7 @@ SP_NORETURN SP_COLD void sp_raise_cls(const char *cls, const char *msg) {
     }
   }
   /* The slot takes the laundered copy made at the top of this function (or the
-     bare-raise sentinel, or NULL) as it stands: it is already a string-heap
+     bare-raise sentinel, or NULL) as it stands: it is already a managed
      one with a marker byte, so sp_mark_in_flight_exceptions can mark it from
      here to the landing, and copying it a second time would only reintroduce
      an allocation between the last read of the caller's pointer and this
@@ -2208,7 +2202,7 @@ void sp_fiber_reraise(const char *cls, const char *msg, void *obj) {
      frozen one (a literal's, sp_exc_msg_plain) is handed on counted, so
      the re-raise keeps its mark */
   if (msg && !sp_exc_msg_empty_given(msg) && !sp_cmsg_p(msg) &&
-      (((const unsigned char *)msg)[-1] == 0xfa || ((const unsigned char *)msg)[-1] == 0xf8))
+      (((const unsigned char *)msg)[-1] == 0xfa))
     msg = sp_exc_msg_counted_frozen(msg, sp_str_byte_len(msg));
   sp_raise_cls(cls, msg);
 }

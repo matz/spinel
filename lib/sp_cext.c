@@ -176,8 +176,8 @@ void sp_cext_arena_context_dispose(sp_cext_arena_context *ctx) {
     if (ctx->errinfo && !SPECIAL_CONST_P(ctx->errinfo)) handle_unpin((sp_cext_handle *)(uintptr_t)ctx->errinfo);
     free(entries); memset(ctx, 0, sizeof(*ctx));
 }
-/* Called after the mark drains, before either object or string sweep can
- * recycle an address. Canonical handles of live objects survive even without
+/* Called after the mark drains, before the sweep can recycle an address.
+ * Canonical handles of live objects survive even without
  * a C root; the table itself must never keep those objects alive. */
 static int live(sp_cext_handle *h, int full) {
     sp_RbVal v = h->value;
@@ -193,15 +193,21 @@ static int live(sp_cext_handle *h, int full) {
         if (!s) return 0;
         unsigned char tag = (unsigned char)s[-1];
         if (tag == 0xff || tag == 0xfb || tag == 0xf1) return 1; /* immortal */
+        const sp_str_hdr *view = ((const sp_str_hdr *)(s - 1)) - 1;
+        if (tag == 0xf9) return !full || view->hash == (uint64_t)sp_gc_mark_gen;
+        const void *owner;
         if (tag == 0xfd) {
-            void *owner = (void *)(((const sp_str_hdr *)(s - 1)) - 1)->next;
+            owner = view->next;
             if (!owner) return 1;
-            const sp_gc_hdr *hdr = (const sp_gc_hdr *)owner - 1;
-            return hdr->marked == sp_gc_mark_gen || (!full && hdr->old);
+        } else if ((tag | 0x04) == 0xfe) {
+            owner = SP_STR_BORN_LINK(view);
+            if (!owner || (const char *)owner + sizeof(struct sp_String_s) != (const char *)view)
+                return !full;
+        } else {
+            return !full;
         }
-        if (sp_slab_owns(s))
-            return sp_slab_is_marked(s) || (!full && sp_slab_is_old(s));
-        return tag == 0xfc || tag == 0xf8 || !full;
+        const sp_gc_hdr *hdr = (const sp_gc_hdr *)owner - 1;
+        return hdr->marked == sp_gc_mark_gen || (!full && hdr->old);
     }
     /* Heap liveness above is authoritative even on a GC generation wrap;
        an old handle stamp must never retain a pointer the sweep will free. */

@@ -253,13 +253,9 @@ typedef struct sp_gc_hdr { struct sp_gc_hdr *next; void (*finalize)(void *); voi
       generation until a full cycle -- promoted garbage was a third of an
       interpreter's heap and a third of its wall. */
    unsigned old : 1; unsigned dirty : 1; unsigned aged : 1; void (*recycle)(struct sp_gc_hdr *); } sp_gc_hdr;
-/* size/len packed to uint32 (4 GB per-string cap, far beyond any real
-   string) so the cached FNV `hash` fits without growing the 24-byte
-   header -- i.e. zero per-string RSS cost vs the pre-cache layout.
-   `size` is vestigial (written by sp_str_alloc, never read back; the
-   str-heap sweep no longer folds string bytes into sp_gc_bytes).
-   `hash` caches sp_str_hash for heap/heap-frozen keys; 0 == not yet
-   computed, invalidated to 0 on any in-place mutation (setbyte/set_len). */
+/* Byte length and the encoding and ASCII hints fit in two 32-bit words.
+   The last word caches the FNV hash or carries a retired payload's GC
+   stamp. Mutation clears the cached hash. */
 typedef struct sp_str_hdr { struct sp_str_hdr *next; uint32_t size; uint32_t len; uint64_t hash; } sp_str_hdr;
 /* One String representation, U2 (sp_str_alloc_born): a heap String's link
    to the handle it was born in, bit 1 set when the runtime keeps the String
@@ -343,8 +339,8 @@ struct sp_String_s {
 };
 /* A frozen literal is one static String object: a GC header and the handle,
    beside its static bytes ([sp_str_hdr][0xf1][bytes][NUL]), whose header
-   links to the handle, tagged with bit 0 to tell it from the aligned links
-   of the string heap (sp_String_of_literal). The generated unit defines one
+   links to the handle, tagged with bit 0 to distinguish the static link
+   (sp_String_of_literal). The generated unit defines one
    per literal it names (fzl_emit_defs) and the runtime its own frozen
    Strings (sp_alloc.c), each with SP_STRING_LITERAL_INIT, so the handle is
    a constant address: no slot to load, no handle made on first use and no

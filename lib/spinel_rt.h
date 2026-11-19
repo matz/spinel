@@ -11,7 +11,7 @@
 #ifdef SP_CEXT
 #include "sp_cext.h"
 #endif
-#include "sp_alloc.h"   /* shared string-heap state + allocators (extern; see sp_alloc.c) */
+#include "sp_alloc.h"   /* shared object allocation and String byte views */
 #include "sp_marshal.h" /* Marshal.dump/load (lib/sp_marshal.c) + the sp_marshal_v vtable */
 #include "sp_format.h"  /* cold value-type display helpers (lib/sp_format.c) */
 #include "sp_string.h"  /* sp_String builder (hot core inline; cold mutators in lib/sp_string.c) */
@@ -465,7 +465,7 @@ static inline sp_float sp_math_gamma(sp_float x){if(x<0.0&&x==floor(x))sp_raise_
    are the GC-aware wrappers -- sp_box_timev copies the value onto the
    GC heap, and the *_gc string forwarders allocate a small stack buf,
    call the libspinel_rt format helper, then sp_str_dup_external the
-   result into the GC string heap. is_utc distinguishes UTC-coerced
+   result into a String object. is_utc distinguishes UTC-coerced
    times from local-zone times; the underlying epoch is the same. */
 #include "sp_time.h"
 
@@ -507,13 +507,6 @@ sp_RbVal sp_process_wait_flags(sp_int pid, sp_int flags, int pair);   /* the wai
  *   a garbage address and is near-impossible to attribute).
  * Default OFF; with it unset, behavior and codegen are unchanged. */
 /* GC verify state + helpers live in lib/sp_gc.c. */
-
-/* ---- String GC ---- */
-/* The string heap state (sp_str_heap, sp_str_heap_bytes, sp_str_threshold...),
-   the allocators (sp_str_alloc / _raw / byte_len / set_len / from_bytes /
-   dup_external), sp_str_empty, and the UTF-8 length cache now live in
-   sp_alloc.h / sp_alloc.c, shared (extern) so standalone lib C files can
-   allocate onto the same heap. sp_str_sweep moved to sp_alloc.c. */
 
 /* RUBY_PLATFORM's parts -- host arch + OS. Detected at C compile time
    so cross-builds report the target platform. Issue #890. */
@@ -603,11 +596,11 @@ static inline sp_Encoding sp_encoding_binary(void){return(sp_Encoding){&("\xff" 
    by sp_str_length / sp_utf8_byte_offset; the same entries unlock both calls
    so iterating a single string with `s.length` + `s[i]` walks UTF-8 once
    instead of per access. ASCII strings (char_len == byte_len) take an O(1)
-   byte_offset fast path. Cleared by sp_str_sweep so freed-and-reused heap
+   byte_offset fast path. Cleared at collection so freed-and-reused heap
    addresses can't leak stale entries. Skipped for sp_String wrappers (marker
    0xfd) whose buffers can move on realloc. */
 /* SP_STR_LCACHE_*, sp_str_lcache, and sp_str_lcache_clear live in sp_alloc.h /
-   sp_alloc.c (shared so the archive-side sweep flushes this TU's cache). */
+   sp_alloc.c (shared so the collector clears this TU's cache). */
 
 /* Count UTF-8 code points in s[0..bl). The 8-byte ASCII-detect prologue skips
    bytes 8 at a time while the high bit stays clear, so pure-ASCII strings (the
@@ -615,7 +608,7 @@ static inline sp_Encoding sp_encoding_binary(void){return(sp_Encoding){&("\xff" 
    the per-byte advance loop they used to fall through. */
 
 /* True when `s` carries one of spinel's own string markers in the
-   preceding byte (0xfe / 0xfc heap, 0xff rodata literal). FFI returns
+   preceding byte (0xfe heap, 0xff rodata literal). FFI returns
    a bare `const char *` whose preceding byte is whatever C variable
    sits before the buffer in memory -- using the pointer as a cache
    key without this gate aliased subsequent FFI calls into the prior
@@ -630,12 +623,9 @@ static inline sp_Encoding sp_encoding_binary(void){return(sp_Encoding){&("\xff" 
    NOT handled (separate v1 scope). Result is a malloc'd flat
    codepoint array -- caller frees. */
 
-/* sp_mark_string is an inline helper in sp_gc.h. sp_str_sweep moved to
-   sp_alloc.c (single definition, registered with the GC there). */
-
 /* Time formatters (strftime / iso8601 / zone / inspect_v) and the cold
    value ops (cmp / add_f / add_i / sub_i / sub_t) live in lib/sp_time.c;
-   the formatters now return GC-heap strings directly, so no trampoline
+   the formatters return managed String bytes directly, so no trampoline
    is needed here. */
 
 /* SP_GC_STACK_MAX, sp_gc_roots, sp_gc_nroots come from sp_gc.h / lib/sp_gc.c. */
@@ -974,7 +964,7 @@ static sp_StrArray*sp_readlines(void){sp_StrArray*a=sp_StrArray_new();SP_GC_ROOT
    collapses adjacent duplicates only among the translated bytes
    (untranslated runs keep their original characters). */
 /* Build into a malloc temp and read all of `s` BEFORE the result sp_str_alloc:
-   that allocation can now trigger a string-heap collection, which would sweep
+   that allocation can trigger a collection, which would sweep
    an unrooted `s` mid-copy (the read-first pattern sp_str_tr/sp_str_format use). */
 /* Issue #921: shrink the heap-string header length to match the
    squeezed payload -- the alloc gives bl+1 bytes, the squeezed
@@ -1013,7 +1003,7 @@ const char *sp_crypto_hmac_sha256_b64url(const char *key, const char *msg);
    string literals are frozen, mutation requires a heap-allocated
    buffer (e.g. via .dup or string concatenation). The runtime
    marker byte at s[-1] tells us the provenance:
-     0xfe / 0xfc -> sp_str_alloc heap (writable, GC unmarked / marked)
+     0xfe        -> bytes inline in a String object (writable)
      0xfd        -> sp_String wrapper buffer (writable)
      0xff        -> rodata literal (frozen -> FrozenError)
      other       -> FFI / unknown provenance, treated as frozen
@@ -1038,7 +1028,7 @@ static inline sp_oint sp_str_getbyte_opt(const char *s, sp_int i) {
 static inline sp_int sp_str_setbyte(const char *s, sp_int i, sp_int v) {
   if (!s) sp_nil_recv("setbyte");
   unsigned char m = ((const unsigned char *)s)[-1];
-  if (m == 0xfe || m == 0xfc) {
+  if (m == 0xfe) {
     (((sp_str_hdr *)(s - 1)) - 1)->hash = 0;  /* invalidate cached key hash */
       (((sp_str_hdr *)(s - 1)) - 1)->size &= ~SP_STR_SIZE_ASCII7;  /* and the 7-bit answer */
     ((char *)s)[i] = (char)v;
@@ -1072,7 +1062,7 @@ static const char *sp_str_frozen_name(const char *s) {
      name is kept; the interning copy roots the heap one across its
      allocation (sp_str_dedup). */
   { unsigned char m = ((const unsigned char *)s)[-1];
-    if (m == 0xfe || m == 0xfc || m == 0xfd) return sp_str_uminus_val(s); }
+    if (m == 0xfe || m == 0xfd) return sp_str_uminus_val(s); }
   for (int i = 0; i < n; i++) if (src[i] == s) return frz[i];
   if (n == cap) {
     int nc = cap ? cap * 2 : 16;
@@ -1091,7 +1081,7 @@ static inline const char *sp_str_freeze_val(const char *s) {
   if (!s) return s;
   if (sp_str_is_locked(s)) sp_raise_locked_str();
   unsigned char m = ((const unsigned char *)s)[-1];
-  if (m == 0xfe || m == 0xfc) {
+  if (m == 0xfe) {
     /* a frozen heap string is immortal, as a literal is: the sweep is told */
     ((unsigned char *)s)[-1] = 0xf1;
     sp_slab_pin(s);
@@ -1278,9 +1268,7 @@ const char *sp_str_splice_at(const char *s, sp_int from, sp_int n, const char *v
    is needed. */
 /* File / IO handle ops live in libspinel_rt.a (lib/sp_io.c); the sp_File
    struct and the allocation-free op prototypes come from sp_io.h. The
-   string-returning readers below (gets / read / read_n / path) stay
-   inline here because they allocate via the hot static sp_str_alloc,
-   whose per-TU sp_str_heap can't be shared across translation units. */
+   string-returning readers below use the shared String allocator. */
 #include "sp_io.h"
 static inline const char *sp_File_gets(sp_File *f) {
   SP_GC_ROOT(f);   /* `File.new(path).gets` holds the File nowhere else */
@@ -1354,8 +1342,7 @@ const char *sp_File_readpartial_or_nil(sp_File *f, sp_int n);
 /* The same read into a shared String handle's own room: NULL at EOF, with
    the handle emptied; else the handle's bytes. */
 const char *sp_File_readpartial_into(sp_File *f, sp_int n, sp_String *buf);
-/* IO#pread(len, offset): read without moving the file position. Inline
-   because it allocates from this TU's string heap (#3038). */
+/* IO#pread(len, offset): read without moving the file position. */
 static inline const char *sp_File_pread(sp_File *f, sp_int len, sp_int off) {
   SP_GC_ROOT(f);   /* `File.new(path).pread(n, off)` holds the handle nowhere else */
   sp_pread_check(f, len, 0);
@@ -1531,12 +1518,7 @@ static const char*sp_SymArrayPtrArray_inspect(sp_PtrArray*a){SP_GC_ROOT(a);sp_St
 /* Regexp engine (link with libspre.a from lib/regexp/) */
 
 /* Regexp globals: $1-$9 captures */
-/* NULL (not "") so sp_mark_string's null-guard handles the unset case
-   without reaching the `s[-1]` access. The rodata `""` literal would
-   trigger -Wstringop-overflow under -O3 + sp_mark_string inlining at
-   the call site in sp_re_mark_globals -- gcc proves the `s[-1] = 0xfc`
-   write would be out-of-bounds even though the runtime guard
-   `s[-1] == 0xfe` (always false for rodata) prevents it from firing. */
+/* Unset captures are NULL. A non-null byte view has a marker at s[-1]. */
 
 /* Symbolic back-references populated alongside the numbered captures.
    Read by codegen's BackReferenceReadNode arm:
@@ -1545,14 +1527,7 @@ static const char*sp_SymArrayPtrArray_inspect(sp_PtrArray*a){SP_GC_ROOT(a);sp_St
      $'  -> sp_re_match_post (substring after the match)
    $~ falls back to $& since Spinel has no MatchData wrapper. */
 
-/* ARGV runtime: argv[i] strings are dup'd via sp_str_dup_external on
-   main() entry, which allocates from the str-heap with mark byte
-   0xfe. Without explicit marking they get reaped on the first
-   sp_str_sweep, leaving sp_argv.data[i] as a dangling pointer that
-   later `ARGV[i]` reads dereference. The exact length boundary
-   triggering the segfault depends on malloc's reuse pattern (so the
-   bug surfaces non-deterministically by string length), but the
-   underlying issue is unconditional. */
+/* ARGV's byte views keep their String owners live through the global mark. */
 #ifdef SPINEL_EXT_HOST
 extern sp_Argv sp_argv;
 #else
@@ -1603,12 +1578,7 @@ static void sp_mark_brk_vals(void);
 /* Mark the registered at_exit hooks; defined with the hook table further down. */
 static void sp_mark_at_exit_hooks(void);
 
-/* Mark the regex globals as live during GC. Each holds a pointer to a
-   string allocated via sp_str_alloc_raw on the str-heap; without this
-   sp_str_sweep would reap them on the next collect, leaving dangling
-   pointers in $1..$9, $&, $`, $'. sp_mark_string is null-safe and
-   no-ops on non-heap strings (the empty-string default of
-   sp_re_last_str), so it's safe to call unconditionally. */
+/* The global mark retains the String owners of regexp capture views. */
 /* sp_fiber_root.storage needs marking here because sp_fiber_root is
    a static (not sp_gc_alloc'd), so its normal sp_Fiber_scan never
    runs via the heap walker. Without this, top-level `Fiber[:k] = v`
@@ -1671,13 +1641,12 @@ static void sp_re_mark_globals(void) {
 #undef SP_GLB_PHASE
 }
 
-/* Hand the collector (lib/sp_gc.c) this TU's root-marking and string-heap
-   sweep. Runs before main, so the hooks are set before the first
+/* Hand the collector (lib/sp_gc.c) this TU's root-marking hook.
+   Runs before main, so the hook is set before the first
    allocation can trigger a collection. */
 #ifndef SP_GC_NONE   /* (--gc=none: no collection marks them) */
 SP_CONSTRUCTOR static void sp_gc_install_tu_hooks(void) {
   sp_gc_mark_globals_hook = sp_re_mark_globals;
-  /* sp_gc_str_sweep_hook is installed by sp_alloc.c's constructor. */
 }
 #endif
 

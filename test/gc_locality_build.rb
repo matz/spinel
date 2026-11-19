@@ -69,8 +69,8 @@
 #
 #   for W in 1 2 4 8 12; do
 #     LOCALITY_BUILD=$B LOCALITY_CHURN=16 LOCALITY_NODES=400000 LOCALITY_ROUNDS=12000 \
-#     SPINEL_WORKERS=$W SPINEL_GC_OBJ_BUDGET=fixed SPINEL_GC_STR_BUDGET=fixed \
-#     SPINEL_GC_THRESHOLD_OBJ_KB=$((65536/W)) SPINEL_GC_THRESHOLD_STR_KB=$((65536/W)) \
+#     SPINEL_WORKERS=$W SPINEL_GC_OBJ_BUDGET=fixed \
+#     SPINEL_GC_THRESHOLD_OBJ_KB=$((65536/W)) \
 #     SPINEL_GC_PHASES=1 ./gc_locality_build
 #   done
 #
@@ -92,8 +92,7 @@
 #      workers a cell actually runs. At LOCALITY_CHURN=4 the participant count
 #      reads 6 at both SPINEL_WORKERS=8 and 12, which is to say those two
 #      cells are the same run under two labels. Give LOCALITY_CHURN at least the
-#      largest W on the ladder and read `str/worker x N` back to check; the
-#      table above carries that column for exactly this reason.
+#      largest W on the ladder to reach the requested pool size.
 #
 # The defaults here are sized for the gate, not for the ladder: small enough
 # to run with the suite, large enough to collect, and with eight churn threads

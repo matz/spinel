@@ -1,17 +1,6 @@
-# The object collection budget widens by the string live set only when the
-# MARK is what a collection costs. This program is the end where it is not:
-# it churns small arrays past a live string set, so the sweep is what the
-# collections cost and the gate declines to widen. gc_obj_budget_mark.rb is
-# the other end, where the same binary widens all the way.
-#
-# SPINEL_GC_OBJ_BUDGET=walk pins the widening on and `obj` pins it off, and
-# the leg reads all three so that the gate has to sit between them rather than
-# at one end.
-# Single-threaded on purpose: the pool-wide floor (256 KB x workers) is what
-# the budget has to clear before the retune is visible at all, and with one
-# worker that floor is 256 KB rather than megabytes. It also takes the worker
-# count out of the numbers, which is what made a threaded version of this
-# check compare two different moments and flake.
+# Keep a live set of Strings while churning short-lived Arrays. The object
+# collector visits the live set and reclaims the temporary Arrays.
+
 held = []
 20000.times { |i| held << ("held-" * 40 + i.to_s) }
 

@@ -763,6 +763,9 @@ typedef struct {
   const char *p, *end;
   const char *start;
   int allow_duplicate_key;
+  /* JSON.parse's allow_nan, allow_trailing_comma and
+     allow_control_characters */
+  int allow_nan, allow_trailing_comma, allow_control_characters;
   sp_int max_nesting;           /* zero disables the nesting check */
   int in_array;                 /* arrays open around the read */
   int nkeys; jkey keys[JP_KEYS];   /* by length, then bytes */
@@ -885,13 +888,18 @@ static void jp_utf8(jbuf *b, unsigned cp) {
    where json 2.18.0 places it: a \u cut short by the string's end, and a
    high surrogate without its low one, at the start of the run of plain
    bytes before it (`seg`); a bad hex digit and anything else at its
-   backslash. */
+   backslash.
+   allow_control_characters takes a raw control character as itself. A
+   backslash before one is still an error: json 2.18.0 answers the run before
+   it twice there (`"a\<TAB>"` reads as `aa\<TAB>`), which json 2.19 fixed by
+   raising an invalid escape; this follows 2.19. */
 static const char *jp_string(jrd *j) {
   const char *s = j->p + 1, *q = s;
   int escaped = 0;
   while (q < j->end && *q != '"') {
     if (*q == '\\') { escaped = 1; q += 2; continue; }
-    if ((unsigned char)*q < 0x20) jp_raise(j, q, "invalid ASCII control character in string: ", 1);
+    if ((unsigned char)*q < 0x20 && !j->allow_control_characters)
+      jp_raise(j, q, "invalid ASCII control character in string: ", 1);
     q++;
   }
   if (q >= j->end) jp_raise(j, q, "unexpected end of input, expected closing \"", 0);
@@ -939,6 +947,7 @@ static const char *jp_string(jrd *j) {
         break;
       }
       default:
+        if (j->allow_control_characters) JP_STR_RAISE(e, "invalid escape character in string: ");
         if (x == '\n') JP_STR_RAISE(e, "Invalid unescaped newline character (\\n) in string: ");
         if ((unsigned char)x < 0x20) JP_STR_RAISE(e, "invalid ASCII control character in string: ");
         JP_STR_RAISE(e, "invalid escape character in string: ");
@@ -1098,7 +1107,14 @@ static sp_RbVal jp_array(jrd *j, int depth) {
     j->in_array--;
     sp_PolyArray_push((sp_PolyArray *)box.v.p, v);
     jp_ws(j);
-    if (j->p < j->end && *j->p == ',') { j->p++; continue; }
+    if (j->p < j->end && *j->p == ',') {
+      j->p++;
+      if (j->allow_trailing_comma) {
+        jp_ws(j);
+        if (j->p < j->end && *j->p == ']') { j->p++; break; }
+      }
+      continue;
+    }
     if (j->p < j->end && *j->p == ']') { j->p++; break; }
     jp_raise(j, j->p, "expected ',' or ']' after array value", 0);
   }
@@ -1135,7 +1151,11 @@ static sp_RbVal jp_object(jrd *j, int depth) {
     sp_json_hash_set_fn(box, key, v);
     if (!j->allow_duplicate_key && !duplicate && before == sp_json_len_fn(box)) duplicate = key;
     jp_ws(j);
-    if (j->p < j->end && *j->p == ',') { j->p++; jp_ws(j); continue; }
+    if (j->p < j->end && *j->p == ',') {
+      j->p++; jp_ws(j);
+      if (j->allow_trailing_comma && j->p < j->end && *j->p == '}') { j->p++; break; }
+      continue;
+    }
     if (j->p < j->end && *j->p == '}') { j->p++; break; }
     jp_raise(j, j->p, "expected ',' or '}' after object value, got: ", 1);
   }
@@ -1153,14 +1173,27 @@ static sp_RbVal jp_value(jrd *j, int depth) {
   if (c == 't') { if (j->end - j->p >= 4 && !memcmp(j->p, "true", 4))  { j->p += 4; return sp_box_bool(1); } jp_raise(j, j->p, "unexpected token ", 1); }
   if (c == 'f') { if (j->end - j->p >= 5 && !memcmp(j->p, "false", 5)) { j->p += 5; return sp_box_bool(0); } jp_raise(j, j->p, "unexpected token ", 1); }
   if (c == 'n') { if (j->end - j->p >= 4 && !memcmp(j->p, "null", 4))  { j->p += 4; return sp_box_nil(); } jp_raise(j, j->p, "unexpected token ", 1); }
-  /* NaN and the infinities are words of their own, refused as tokens */
-  if (c == 'N' || c == 'I' || (c == '-' && j->end - j->p >= 9 && !memcmp(j->p + 1, "Infinity", 8)))
+  /* NaN and the infinities are words of their own: refused as tokens, or
+     with allow_nan the Floats, read as a whole word only ("NaNx" leaves the
+     x to what follows) */
+  if (c == 'N') {
+    if (j->allow_nan && j->end - j->p >= 3 && !memcmp(j->p, "NaN", 3)) { j->p += 3; return sp_box_float(NAN); }
     jp_raise(j, j->p, "unexpected token ", 1);
+  }
+  if (c == 'I') {
+    if (j->allow_nan && j->end - j->p >= 8 && !memcmp(j->p, "Infinity", 8)) { j->p += 8; return sp_box_float(INFINITY); }
+    jp_raise(j, j->p, "unexpected token ", 1);
+  }
+  if (c == '-' && j->end - j->p >= 9 && !memcmp(j->p + 1, "Infinity", 8)) {
+    if (j->allow_nan) { j->p += 9; return sp_box_float(-INFINITY); }
+    jp_raise(j, j->p, "unexpected token ", 1);
+  }
   if (c == '-' || (c >= '0' && c <= '9')) return jp_number(j);
   jp_raise(j, j->p, "unexpected character: ", 1);
 }
 
-sp_RbVal sp_json_parse_duplicates(const char *s, sp_int max_nesting, int allow_duplicate_key) {
+sp_RbVal sp_json_parse_with(const char *s, sp_int max_nesting, int allow_duplicate_key,
+                            int allow_nan, int allow_trailing_comma, int allow_control_characters) {
   /* The reader walks `s` in place while the parse allocates every container
      and string it builds, so the input has to stay rooted for the whole walk:
      a caller passing it straight in (`JSON.parse File.read path`) holds it in
@@ -1173,6 +1206,9 @@ sp_RbVal sp_json_parse_duplicates(const char *s, sp_int max_nesting, int allow_d
   jrd j;
   j.max_nesting = max_nesting;
   j.allow_duplicate_key = allow_duplicate_key;
+  j.allow_nan = allow_nan;
+  j.allow_trailing_comma = allow_trailing_comma;
+  j.allow_control_characters = allow_control_characters;
   j.in_array = 0; j.nkeys = 0; j.held = &held;
   j.p = s ? s : "";
   j.start = j.p;
@@ -1183,7 +1219,7 @@ sp_RbVal sp_json_parse_duplicates(const char *s, sp_int max_nesting, int allow_d
   return v;
 }
 sp_RbVal sp_json_parse_limit(const char *s, sp_int max_nesting) {
-  return sp_json_parse_duplicates(s, max_nesting, 1);
+  return sp_json_parse_with(s, max_nesting, 1, 0, 0, 0);
 }
 
 sp_RbVal sp_json_parse(const char *s) { return sp_json_parse_limit(s, SP_JSON_MAX_NESTING); }

@@ -18,7 +18,9 @@ const char *sp_json_pretty(sp_RbVal v);   /* two-space-indented serialization */
 const char *sp_json_generate_with(sp_RbVal v, int esc, int allow_nan, int limit_set, sp_int max_nesting, int pretty);
 sp_RbVal sp_json_parse(const char *s);    /* parse JSON text into a boxed value */
 sp_RbVal sp_json_parse_limit(const char *s, sp_int max_nesting);
-sp_RbVal sp_json_parse_duplicates(const char *s, sp_int max_nesting, int allow_duplicate_key);
+/* JSON.parse with its options already read (see spinel_rt.h) */
+sp_RbVal sp_json_parse_with(const char *s, sp_int max_nesting, int allow_duplicate_key,
+                            int allow_nan, int allow_trailing_comma, int allow_control_characters);
 /* An object serializes as CRuby's json does, which is method dispatch: a class
    with its own #to_json answers through the sp_obj_to_json_fn hook (declared in
    sp_gc.h, installed by the generated program), and everything else is its

@@ -131,7 +131,7 @@ static void sp_mar_w_hash(sp_mar_buf *b, sp_RbVal v) {
    an Integer Range flags an absent end (nobeg / noend) and keeps a
    Float end beside an Integer begin in fend; a Float Range records which
    ends it was written without, or as Integers (sp_types.h); a String Range
-   holds NULL for an absent end and, when it keeps handles, writes those. */
+   writes its endpoint handles and holds NULL for an absent end. */
 static void sp_mar_w_range(sp_mar_buf *b, sp_RbVal v) {
   sp_RbVal bg = mk_nil(), ed = mk_nil();
   int excl;

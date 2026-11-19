@@ -2072,10 +2072,8 @@ static int ivar_class_body_slot(Compiler *c, int id, Scope *s, char *out, size_t
   return 1;
 }
 
-/* A variable's read as the slot itself, to assign to: no sp_srange_live
-   around a String Range's (#8321). A read of a String Range takes no wrapper
-   now either: its kept endpoints stay handles, read where they are used
-   (sp_srange_first / sp_srange_last), so the slot form is the read. */
+/* Emit a variable's slot for assignment. A String Range's slot has the
+   same layout as its reads, which take endpoint bytes where needed. */
 void emit_slot_expr(Compiler *c, int id, Buf *b) {
   emit_expr_node(c, id, b);
 }

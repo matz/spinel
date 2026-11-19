@@ -138,9 +138,8 @@ String handles from the counted capture spans. A participating empty
 capture has its own mutable String. A missing capture occupies a nil slot.
 
 A String Range stores the two endpoint handles. The same layout serves
-typed and boxed membership, coverage and Marshal operations. Symbol
-spellings retain their byte count and distinguish binary and text names
-when the bytes include non-ASCII characters.
+typed and boxed membership, coverage and Marshal operations. A reader
+that needs bytes borrows them from the stored endpoint.
 
 A conditional assignment to a String instance variable evaluates
 the right-hand side only when the store is taken. It checks whether the

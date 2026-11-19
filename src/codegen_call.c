@@ -15950,6 +15950,21 @@ static void array_new_size_convert(Compiler *c, int size, int form, int ts, int 
 }
 
 static void emit_raise_placeholder(Compiler *c, int id, Buf *b);
+/* Array.new(n) with a block filling a fresh result (_tr, of kind k): the
+   walk over i in [0, n) runs inside an outer loop of runs of up to
+   SP_FRESH_CAP, each run's slots made ahead of it (sp_<k>Array_fresh_to);
+   opens both loops (the caller closes both) and leaves g_indent inside the
+   inner one's body less one, as the plain walk's header does. */
+static void array_new_fresh_runs(const char *k, int tr, int tn, int ti, int trun, int tend) {
+  buf_printf(g_pre, "for (sp_int _t%d = 0, _t%d; _t%d < _t%d; _t%d = _t%d) {\n", trun, tend, trun, tn, trun, tend);
+  g_indent++;
+  emit_indent(g_pre, g_indent);
+  buf_printf(g_pre, "_t%d = _t%d - _t%d > SP_FRESH_CAP ? _t%d + SP_FRESH_CAP : _t%d;\n", tend, tn, trun, trun, tn);
+  emit_indent(g_pre, g_indent);
+  buf_printf(g_pre, "if (_t%d > _t%d->len) sp_%sArray_fresh_to(_t%d, _t%d, _t%d);\n", tend, tr, k, tr, tend, tn);
+  emit_indent(g_pre, g_indent);
+  buf_printf(g_pre, "for (sp_int _t%d = _t%d; _t%d < _t%d; _t%d++) {\n", ti, trun, ti, tend, ti);
+}
 static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, int *out) {
   if (!(recv >= 0 && (is_hash_constructor(name)))) return 0;
   NodeKind rk = nt_kind(nt, recv);
@@ -16625,11 +16640,29 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       emit_indent(g_pre, g_indent);
       buf_printf(g_pre, "if (_t%d < 0) sp_raise_cls(\"ArgumentError\", \"negative array size\");\n", tn);
       free(nb.p);
+      /* each value goes in through the plain store of its kind (not a
+         number that can be nil, nor a String handle): the result is made at
+         its full length and each value stored into its slot, as a while
+         loop's `r[i] = v` stores, where a push wrote the length per element
+         and grew the buffer from 16 (sp_<k>Array_new_fresh, _store_fresh).
+         The slots are made a run of up to SP_FRESH_CAP at a time
+         (_fresh_to), an outer loop around the walk: a block that throws or
+         raises early pays for one run, not for n slots it never fills. A
+         `break` of the block is no C break (it would leave the inner loop
+         only), so a block with one appends as before */
+      int fresh = bn > 0 && bb && array_has_new_cap(k) && typed_elem_held(at) != TY_STRBUF &&
+                  !*nil_store_sfx(c, k, bb[bn - 1]) &&
+                  !((sp_streq(k, "Int") || sp_streq(k, "Float")) && subtree_has_own_next(nt, bbody) &&
+                    block_next_may_be_nil(c, bbody)) &&
+                  !subtree_has_loop_break(c, bbody);
       emit_indent(g_pre, g_indent);
-      buf_printf(g_pre, "sp_%sArray *_t%d = sp_%sArray_new();\n", k, tr, k);
+      int trun = fresh ? ++g_tmp : -1, tend = fresh ? ++g_tmp : -1;
+      if (fresh) buf_printf(g_pre, "sp_%sArray *_t%d = sp_%sArray_new_fresh(_t%d < SP_FRESH_CAP ? _t%d : SP_FRESH_CAP);\n", k, tr, k, tn, tn);
+      else buf_printf(g_pre, "sp_%sArray *_t%d = sp_%sArray_new();\n", k, tr, k);
       emit_indent(g_pre, g_indent); buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", tr);
       emit_indent(g_pre, g_indent);
-      buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < _t%d; _t%d++) {\n", ti, ti, tn, ti);
+      if (fresh) array_new_fresh_runs(k, tr, tn, ti, trun, tend);
+      else buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < _t%d; _t%d++) {\n", ti, ti, tn, ti);
       g_indent++;
       if (irn) { emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_int lv_%s = _t%d;\n", irn, ti); }
       /* Fresh block-locals per run, as every other inlined iterator gets
@@ -16700,7 +16733,8 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
         }
         emit_indent(g_pre, g_indent);
         if (sp_streq(k, "Poly")) {
-          buf_printf(g_pre, "sp_PolyArray_push(_t%d, ", tr);
+          if (fresh) buf_printf(g_pre, "sp_PolyArray_store_fresh(_t%d, _t%d, ", tr, ti);
+          else buf_printf(g_pre, "sp_PolyArray_push(_t%d, ", tr);
           Repr vr = repr_of(c, bb[bn - 1]);
           TyKind vt = vr.as_ty;
           if (tail_strbuf || an_next) buf_puts(g_pre, vb.p ? vb.p : "sp_box_nil()");   /* the next slot is boxed already */
@@ -16717,17 +16751,21 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
           else buf_puts(g_pre, vb.p ? vb.p : "sp_box_nil()");
           buf_puts(g_pre, ");\n");
         }
+        else if (sp_streq(k, "Ptr") && fresh)
+          buf_printf(g_pre, "sp_PtrArray_store_fresh(_t%d, _t%d, (void *)(%s));\n", tr, ti, vb.p ? vb.p : "0");
         else if (sp_streq(k, "Ptr"))
           buf_printf(g_pre, "sp_PtrArray_push(_t%d, (void *)(%s));\n", tr, vb.p ? vb.p : "0");
         /* (one representation: the tail may be the handle or its bytes; a String Array holds the handle) */
         else if (tail_hdl || (typed_elem_held(at) == TY_STRBUF && !tail_o && !nil_store_sfx(c, k, bb[bn - 1])[0])) {
           emit_kind_push(c, g_pre, k, tr, vb.p ? vb.p : "NULL"); buf_puts(g_pre, ";\n");
         }
+        else if (fresh) buf_printf(g_pre, "sp_%sArray_store_fresh(_t%d, _t%d, %s);\n", k, tr, ti, vb.p ? vb.p : "");
         else { buf_printf(g_pre, "sp_%sArray_push%s(_t%d, %s);\n", k, tail_o ? "_nilable" : nil_store_sfx(c, k, bb[bn - 1]), tr, vb.p ? vb.p : ""); }
         free(vb.p);
       }
       g_indent--;
       emit_indent(g_pre, g_indent); buf_puts(g_pre, "}\n");
+      if (fresh) { g_indent--; emit_indent(g_pre, g_indent); buf_puts(g_pre, "}\n"); }
       buf_printf(b, "_t%d", tr);
       { *out = 1; return 1; }
     }

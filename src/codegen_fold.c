@@ -6516,8 +6516,22 @@ int emit_collect_expr(Compiler *c, int id, Buf *b) {
   buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", trecv);
   emit_indent(g_pre, g_indent);
   /* a map answers one value per element: its result takes them all at its
-     first size, where pushes grew it from 16 by doubling */
-  if (is_map && array_has_new_cap(rk))
+     first size, where pushes grew it from 16 by doubling. Where each value
+     goes in through the plain store of its kind (not a number that can be
+     nil, nor a String handle) the result is made at that full length and
+     each value stored into its slot, as a while loop's `r[i] = v` stores;
+     a push wrote the length per element (sp_<rk>Array_new_fresh,
+     _put_fresh, and _end_fresh where the block shrank the receiver) */
+  int fresh = is_map && array_has_new_cap(rk) && !(resr.elem == TY_STRING && !res_poly) &&
+              !(!res_poly && bv_value_may_be_nil(c, block, resr.elem)) &&
+              !*nil_store_sfx(c, rk, bn > 0 ? bb[bn - 1] : -1);
+  int tfill = fresh ? ++g_tmp : -1;
+  if (fresh) {
+    buf_printf(g_pre, "sp_%sArray *_t%d = sp_%sArray_new_fresh(sp_%sArray_length(_t%d));\n", rk, tres, rk, k, trecv);
+    emit_indent(g_pre, g_indent);
+    buf_printf(g_pre, "sp_int _t%d = 0;\n", tfill);
+  }
+  else if (is_map && array_has_new_cap(rk))
     buf_printf(g_pre, "sp_%sArray *_t%d = sp_%sArray_new_cap(sp_%sArray_length(_t%d));\n", rk, tres, rk, k, trecv);
   else buf_printf(g_pre, "sp_%sArray *_t%d = sp_%sArray_new();\n", rk, tres, rk);
   emit_indent(g_pre, g_indent);
@@ -6648,7 +6662,8 @@ int emit_collect_expr(Compiler *c, int id, Buf *b) {
       buf_printf(g_pre, "sp_StrArray_push_e(_t%d, _t%d);\n", tres, tv);
     else { const char *nsfx = nil_store_sfx(c, rk, bn > 0 ? bb[bn - 1] : -1), *sfx = array_push_sfx(rk, nsfx);
       char tvt[24]; snprintf(tvt, sizeof tvt, "_t%d", tv);
-      emit_elem_entry(g_pre, 0, array_kind_ty(rk), rk, "push", nsfx); buf_printf(g_pre, "(_t%d, ", tres);
+      if (fresh) buf_printf(g_pre, "sp_%sArray_put_fresh(_t%d, _t%d++, ", rk, tres, tfill);
+      else { emit_elem_entry(g_pre, 0, array_kind_ty(rk), rk, "push", nsfx); buf_printf(g_pre, "(_t%d, ", tres); }
       emit_lifted(c, g_pre, rk, sfx, tvt); buf_puts(g_pre, ");\n"); }
   }
   else {
@@ -6706,6 +6721,7 @@ int emit_collect_expr(Compiler *c, int id, Buf *b) {
   if (use_shadow && clv0) lv_set_type(clv0, csaved0);
   emit_indent(g_pre, g_indent);
   buf_puts(g_pre, "}\n");
+  if (fresh) { emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_%sArray_end_fresh(_t%d, _t%d);\n", rk, tres, tfill); }
   /* the kept (or mapped-to-itself) elements carry the receiver's nils: an
      element read out of an Integer or Float array is typed as a number even
      where a gap left a nil, so its nil bits are handed on whole */
@@ -6807,8 +6823,17 @@ int emit_with_index_expr(Compiler *c, int id, Buf *b) {
     emit_indent(g_pre, g_indent);
     buf_printf(g_pre, "if (_t%d && _t%d->frozen) sp_raise_frozen_array_at(_t%d, %s);\n", trecv, trecv, trecv, array_frozen_cls(rt));
   }
+  /* a map's values each go in through the plain store of their kind (not a
+     number that can be nil, nor a String handle): the result is made at the
+     receiver's length and each value stored into its slot, as the plain
+     map's are (emit_collect_expr); map! reads back the value it appended */
+  int fresh = is_map && !is_mapbang && array_has_new_cap(rk) && bn > 0 && !*nil_store_sfx(c, rk, bb[bn - 1]) &&
+              !(!res_poly && bv_value_may_be_nil(c, block, resr.elem));
+  int tfill = fresh ? ++g_tmp : -1;
   if (collecting) {
-    emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_%sArray *_t%d = sp_%sArray_new();\n", rk, tres, rk);
+    emit_indent(g_pre, g_indent);
+    if (fresh) buf_printf(g_pre, "sp_%sArray *_t%d = sp_%sArray_new_fresh(sp_%sArray_length(_t%d)); sp_int _t%d = 0;\n", rk, tres, rk, k, trecv, tfill);
+    else buf_printf(g_pre, "sp_%sArray *_t%d = sp_%sArray_new();\n", rk, tres, rk);
     emit_indent(g_pre, g_indent); buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", tres);
   }
   emit_indent(g_pre, g_indent);
@@ -6848,7 +6873,9 @@ int emit_with_index_expr(Compiler *c, int id, Buf *b) {
     if (is_map) {
       const char *sfx = nil_store_sfx(c, rk, bb[bn - 1]);
       const char *psfx = array_push_sfx(rk, sfx);
-      emit_indent(g_pre, innerIndent); emit_elem_entry(g_pre, 0, array_kind_ty(rk), rk, "push", sfx); buf_printf(g_pre, "(_t%d, ", tres);
+      emit_indent(g_pre, innerIndent);
+      if (fresh) buf_printf(g_pre, "sp_%sArray_put_fresh(_t%d, _t%d++, ", rk, tres, tfill);
+      else { emit_elem_entry(g_pre, 0, array_kind_ty(rk), rk, "push", sfx); buf_printf(g_pre, "(_t%d, ", tres); }
       if (res_poly && body_ty != TY_POLY) {
         Buf bx; memset(&bx, 0, sizeof bx); emit_boxed_text(c, body_ty, vb.p ? vb.p : "", &bx);
         buf_puts(g_pre, bx.p ? bx.p : ""); free(bx.p);
@@ -6893,6 +6920,7 @@ int emit_with_index_expr(Compiler *c, int id, Buf *b) {
     free(vb.p);
   }
   emit_indent(g_pre, g_indent); buf_puts(g_pre, "}\n");
+  if (fresh) { emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_%sArray_end_fresh(_t%d, _t%d);\n", rk, tres, tfill); }
   /* a kept element carries the receiver's nils (the map arm notes its own) */
   if (collecting && !is_map && !range_src && k && rk && sp_streq(rk, k) && (is_numeric_literal_tag(k))) {
     emit_indent(g_pre, g_indent);

@@ -10555,7 +10555,7 @@ static void emit_case_match_in(Compiler *c, int id, Buf *b, int indent, int tail
    `when` must break the loop, but a C `break` inside a `switch` only exits the
    switch -- so a case whose when-bodies break the loop must use the if-else
    form instead, where C `break` correctly targets the loop. */
-static int subtree_has_loop_break(Compiler *c, int root) {
+int subtree_has_loop_break(Compiler *c, int root) {
   if (root < 0) return 0;
   const NodeTable *nt = c->nt;
   const char *ty = nt_type(nt, root);

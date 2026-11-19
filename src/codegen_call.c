@@ -3158,10 +3158,15 @@ int exc_user_method_name(Compiler *c, int id, const char *name, int argc) {
      and a JSON::ParserError's #line alike). That arm takes no block, and
      the dispatch does not check visibility, so a call with a block, or a
      name some class of the program's makes private or protected, keeps the
-     reader. */
+     reader. line and column are the exception: before JSON::ParserError
+     answered them they were no reader's, and such a call always reached
+     the program's own method. The reader must not take that away, so those
+     two go through the boxed dispatch whatever the block or visibility, as
+     they did then (the builtin arm ignores a block, as json's attr_reader
+     does). */
   static const char *const poly_gated[] = {
     "errno", "error_code", "line", "column", "key", "receiver", "args", "private_call?", NULL };
-  if (argc == 0 && exc_gated_acc_fn(name)) {
+  if (argc == 0 && exc_gated_acc_fn(name) && !sp_streq(name, "line") && !sp_streq(name, "column")) {
     int boxed = 0;
     for (int i = 0; poly_gated[i]; i++) if (sp_streq(name, poly_gated[i])) boxed = 1;
     if (!boxed || (id >= 0 && nt_ref(c->nt, id, "block") >= 0)) return 0;
@@ -9076,10 +9081,14 @@ static int emit_poly_builtin_default_at(Compiler *c, int id, int recv, const cha
      call is blockless here, and its builtin answers as one (a Hash's
      each_pair its Enumerator) */
   /* The builtin text method accepts a block and leaves it unused. Its
-     Ruby override has already received the block through the dispatch. */
+     Ruby override has already received the block through the dispatch.
+     So do JSON::ParserError#line and #column, json's attr_readers, which
+     a block call on a rescued exception reaches through this arm when a
+     class of the program's defines the name (exc_user_method_name). */
   int omit_block = 0;
   { int fb0 = nt_ref(nt, id, "block");
     omit_block = fb0 >= 0 && (is_exception_message(name) ||
+                sp_streq(name, "line") || sp_streq(name, "column") ||
                 (nt_kind(nt, fb0) == NK_BlockArgumentNode &&
                  resolve_forwarded_block(c, fb0) < 0 && !forwarded_real_proc(fb0, -1))); }
   /* a block call without arguments takes the builtin's arm only for the

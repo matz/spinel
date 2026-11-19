@@ -299,11 +299,15 @@ int builtin_read_ignores_block(const char *nm) {
   return 0;
 }
 
-/* `recv.take(n, &b)`: the call hands on a block the builtin leaves unused */
+/* `recv.take(n, &b)`: the call hands on a block the builtin leaves unused.
+   JSON::ParserError#line and #column, json's attr_readers, leave any block
+   unused: `e.line { }` on a rescued exception, beside a class of the
+   program's with its own #line, has a builtin arm all the same. */
 static int an_block_unused_by_builtin(Compiler *c, int id) {
   int blk = nt_kind(c->nt, id) == NK_CallNode ? nt_ref(c->nt, id, "block") : -1;
-  return blk >= 0 && nt_kind(c->nt, blk) == NK_BlockArgumentNode &&
-         builtin_read_ignores_block(nt_str(c->nt, id, "name"));
+  const char *nm = blk >= 0 ? nt_str(c->nt, id, "name") : NULL;
+  return blk >= 0 && ((nt_kind(c->nt, blk) == NK_BlockArgumentNode && builtin_read_ignores_block(nm)) ||
+                      sp_streq(nm, "line") || sp_streq(nm, "column"));
 }
 TyKind an_builtin_answer(Compiler *c, int id) {
   int was = an_builtin_only, was_recv = an_bo_recv;

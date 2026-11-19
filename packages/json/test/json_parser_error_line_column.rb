@@ -2,7 +2,8 @@
 # as json 2.18.0 (Ruby 4.0.9) records them. nil on an error the program makes
 # itself and on a NestingError; NoMethodError on another exception class. A
 # class of the program's with methods of those names keeps its own, also
-# when the error is rescued under a class above it.
+# when the error is rescued under a class above it, called with a block, or
+# when another class makes the name private.
 require "json"
 
 def err(text, **options)
@@ -71,15 +72,27 @@ class Place
   def column = :place_column
 end
 p [Place.new.line, Place.new.column]
+# another class's private #line leaves OwnError's public one reachable
+class QuietError < StandardError
+  private
+
+  def line = :quiet_line
+end
 begin
   raise OwnError.new("own", 9)
 rescue StandardError => error
   p [error.line, error.column, error.respond_to?(:line), error.send(:line)]
+  p [error.line { 1 }, error.column { 2 }]
 end
 [-> { raise OwnError.new("own", 7) }, -> { JSON.parse("[1 2]") }, -> { raise Sub, "sub" }].each do |block|
   block.call
 rescue OwnError, JSON::ParserError => error
-  p [error.class, error.line, error.column]
+  p [error.class, error.line, error.column, error.line { 1 }, error.column { 2 }]
+end
+begin
+  raise QuietError, "quiet"
+rescue => error
+  p error.send(:line)
 end
 class OwnSub < JSON::ParserError
   def line = :own_line

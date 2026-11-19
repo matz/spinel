@@ -26,8 +26,10 @@ undefined method 'line' for an instance of StandardError
 [7, 99]
 [:place_line, :place_column]
 [9, 99, true, 9]
-[OwnError, 7, 99]
-[JSON::ParserError, 1, 4]
-[Sub, nil, nil]
+[9, 99]
+[OwnError, 7, 99, 7, 99]
+[JSON::ParserError, 1, 4, 1, 4]
+[Sub, nil, nil, nil, nil]
+:quiet_line
 [:own_line, nil]
 [:missing, :missing]

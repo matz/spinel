@@ -1847,8 +1847,12 @@ static int sm_owns_side(const Compiler *c, int s, int class_id, int side) {
    moved scopes and ver_built are as they were when it began; any other ask
    scans. An answer keeps only the classes a scope answers (a name is
    defined on few classes): a row of every class per name held names x
-   classes until the batch ended. */
-typedef struct { char *name; int side, n; int *ans; } SmbEntry;   /* ans: n (class, scope) pairs, by class */
+   classes until the batch ended. A name's first ask scans, as an unbatched
+   ask does, and stops at its first hit; its answer is kept for that class,
+   and the walk is made when another class asks the name (a name only its
+   own class asks, a class body's own singleton method, otherwise paid a
+   walk of every scope for one class's answer). */
+typedef struct { char *name; int side, n, built, first_cls, first_ans; int *ans; } SmbEntry;   /* ans: n (class, scope) pairs, by class */
 static struct { const Compiler *c; int depth, nscopes, nclasses, ver_built, n, cap; SmbEntry *e; int *slot, nslot, *tmp, tcap; } smb;
 static int smb_pair_cmp(const void *a, const void *b) {
   const int *x = a, *y = b;
@@ -1870,12 +1874,23 @@ static int sm_name_matches(const Compiler *c, int s, const char *name) {
   return c->scopes[s].name && (sp_streq(c->scopes[s].name, name) ||
          (!c->ver_built && c->scopes[s].mixin_guarded && sp_streq(comp_scope_user_name(&c->scopes[s]), name)));
 }
+/* The reverse scan: the highest scope that answers (class_id, name, side),
+   so a later (reopened / transplanted) definition wins, matching the frozen
+   index's ordering. Side 3 + side asks a top-level method's (sm_top_last). */
+static int sm_scan(Compiler *c, int class_id, const char *name, int side) {
+  for (int s = c->nscopes - 1; s >= 0; s--)
+    if (side >= 3 ? sm_toplevel(c, s) && !c->scopes[s].is_cmethod == !(side - 3) && c->scopes[s].name &&
+                    sp_streq(c->scopes[s].name, name)
+                  : sm_owns_side(c, s, class_id, side) && sm_name_matches(c, s, name)) return s;
+  return -1;
+}
 /* The batch's answer for (class_id, name, side), or -2 when the batch does
    not answer. Side 3 + side is a top-level method's (sm_top_last), whose
    answer is kept at class slot nclasses. */
 static int sm_batch_lookup(Compiler *c, int class_id, const char *name, int side) {
   if (smb.depth <= 0 || smb.c != c || mv_n || c->nscopes != smb.nscopes || c->nclasses != smb.nclasses ||
       c->ver_built != smb.ver_built || class_id < (side >= 3 ? -1 : 0) || class_id >= smb.nclasses) return -2;
+  int scan_cls = class_id;
   if (side >= 3) class_id = smb.nclasses;
   /* (the entries by (name, side): open addressing over twice their count) */
   if (2 * (smb.n + 1) > smb.nslot) {
@@ -1904,6 +1919,13 @@ static int sm_batch_lookup(Compiler *c, int class_id, const char *name, int side
     }
     char *nm = strdup(name);
     if (!nm) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    int r = sm_scan(c, scan_cls, name, side);   /* (the first ask scans) */
+    smb.e[i].name = nm; smb.e[i].side = side; smb.e[i].n = 0; smb.e[i].built = 0; smb.e[i].ans = NULL;
+    smb.e[i].first_cls = class_id; smb.e[i].first_ans = r; smb.n++;
+    return r;
+  }
+  if (!smb.e[i].built && class_id == smb.e[i].first_cls) return smb.e[i].first_ans;
+  if (!smb.e[i].built) {
     /* (every scope that answers its class, as (class, scope) pairs) */
     int m = 0;
     for (int s = 0; s < c->nscopes; s++) {
@@ -1937,7 +1959,7 @@ static int sm_batch_lookup(Compiler *c, int class_id, const char *name, int side
       if (!ans) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
       memcpy(ans, smb.tmp, 2 * sizeof(int) * (size_t)k);
     }
-    smb.e[i].name = nm; smb.e[i].side = side; smb.e[i].n = k; smb.e[i].ans = ans; smb.n++;
+    smb.e[i].n = k; smb.e[i].ans = ans; smb.e[i].built = 1;
   }
   const int *ans = smb.e[i].ans;
   for (int lo = 0, hi = smb.e[i].n - 1; lo <= hi; ) {
@@ -1960,13 +1982,8 @@ static int sm_lookup(Compiler *c, int class_id, const char *name, int is_cm) {
 #endif
       return b;
     }
-    /* scope shape may still change: scan in reverse so a later (reopened /
-       transplanted) definition wins, matching the frozen index's ordering. */
-    for (int s = c->nscopes - 1; s >= 0; s--)
-      if (sm_owns_side(c, s, class_id, is_cm) &&
-          c->scopes[s].name && (sp_streq(c->scopes[s].name, name) ||
-            (!c->ver_built && c->scopes[s].mixin_guarded && sp_streq(comp_scope_user_name(&c->scopes[s]), name)))) return s;
-    return -1;
+    /* scope shape may still change: scan in reverse */
+    return sm_scan(c, class_id, name, is_cm);
   }
   if (sm_nscopes != c->nscopes) sm_build(c);
   if (!sm_buckets) return -1;
@@ -5502,10 +5519,7 @@ static int sm_top_last(Compiler *c, const char *name, int side) {
       return b;
     }
     /* in reverse, so a redefinition wins, matching the frozen index */
-    for (int s = c->nscopes - 1; s >= 0; s--)
-      if (sm_toplevel(c, s) && !c->scopes[s].is_cmethod == !side && c->scopes[s].name &&
-          sp_streq(c->scopes[s].name, name)) return s;
-    return -1;
+    return sm_scan(c, -1, name, 3 + side);
   }
   if (sm_nscopes != c->nscopes) sm_build(c);
   if (!sm_buckets) return -1;

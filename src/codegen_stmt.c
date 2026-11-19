@@ -23910,9 +23910,11 @@ void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent) {
     LocalVar *cv9 = cn9 ? comp_const(c, cn9) : NULL;
     if (comp_const_write_valued(cv9) && tail_slot_reaches_ret(c, cv9->type)) {
       emit_stmt(c, id, b, indent);
-      char cref9[300]; snprintf(cref9, sizeof cref9, "cst_%s", cn9);
+      Buf ref = {0};
+      buf_printf(&ref, "cst_%s", cn9);
       emit_indent(b, indent); emit_tail_lead(b);
-      emit_tail_slot(c, cv9->type, cref9, b, id);
+      emit_tail_slot(c, cv9->type, ref.p, b, id);
+      free(ref.p);
       return;
     }
   }

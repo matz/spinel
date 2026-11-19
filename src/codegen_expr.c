@@ -3318,9 +3318,10 @@ static int emit_ivar_cvar_gvar_expr(Compiler *c, int id, Buf *b, const NodeTable
     buf_puts(b, "({ ");
     emit_stmt_inner(c, id, b, 0);
     if (repr_of_slot(c, cv).kind == RK_STRBUF) {
-      char ref[256];
-      snprintf(ref, sizeof ref, "cst_%s", nm);
-      emit_strbuf_slot_read(c, id, repr_of(c, id), ref, b);
+      Buf ref = {0};
+      buf_printf(&ref, "cst_%s", nm);
+      emit_strbuf_slot_read(c, id, repr_of(c, id), ref.p, b);
+      free(ref.p);
     } else buf_printf(b, "cst_%s", nm);
     buf_puts(b, "; })");
     return 1;
@@ -3554,10 +3555,12 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
     LocalVar *cv = nm ? comp_const(c, nm) : NULL;
     /* --share-strings: a constant holding the shared handle (#6765) */
     if (cv && !slot && repr_of_slot(c, cv).kind == RK_STRBUF && !cv->init_guarded) {
-      char sref[256]; snprintf(sref, sizeof sref, "cst_%s", nm);
+      Buf ref = {0};
+      buf_printf(&ref, "cst_%s", nm);
       emit_const_read_open(c, id, cv, b);
-      emit_strbuf_slot_read(c, id, repr_of(c, id), sref, b);
+      emit_strbuf_slot_read(c, id, repr_of(c, id), ref.p, b);
       emit_const_read_close(c, id, cv, b);
+      free(ref.p);
       return 1;
     }
     if (cv && cv->type != TY_UNKNOWN) {

@@ -3029,7 +3029,7 @@ int emit_native_object_protocol(Compiler *c, int id, Buf *b);
 void emit_slot_nil_test(Compiler *c, TyKind t, int tmp, int want_nil, Buf *b);
 int emit_native_case_eq(Compiler *c, int cond, TyKind subj_t, const char *subj_ref, Buf *b);
 int exc_subclass_defines(Compiler *c, const char *name);
-int exc_user_method_name(Compiler *c, const char *name, int argc);
+int exc_user_method_name(Compiler *c, int id, const char *name, int argc);
 int emit_value_recv_call(Compiler *c, int id, Buf *b);
 int emit_range_call(Compiler *c, int id, Buf *b);
 int emit_boxed_class_aref(Compiler *c, int id, Buf *b);

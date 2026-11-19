@@ -1862,6 +1862,7 @@ static const struct { const char *name; const char *owners[4]; } gated_exc_acc[]
   {"signo", {"SignalException"}}, {"signm", {"SignalException"}},
   {"name", {"NameError"}}, {"errno", {"SystemCallError"}},
   {"error_code", {"Socket::ResolutionError"}}, {"result", {"StopIteration"}},
+  {"line", {"JSON::ParserError"}}, {"column", {"JSON::ParserError"}},
 };
 const char *const *gated_exception_accessor_owners(const char *n) {
   if (!n) return NULL;

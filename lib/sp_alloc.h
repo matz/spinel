@@ -758,6 +758,8 @@ static inline void *sp_gc_alloc_sized(size_t sz, void (*scn)(void *)) {
 void *sp_gc_alloc_nogc(size_t sz, void (*fin)(void *), void (*scn)(void *));
 
 SP_NORETURN void sp_raise_cls(const char *cls, const char *msg);  /* lib/sp_core.c */
+/* ...with the line and column its #line / #column answer (lib/sp_exc.c) */
+SP_NORETURN void sp_raise_parse_error(const char *cls, const char *msg, sp_int line, sp_int column);
 SP_NORETURN void sp_raise_frozen_str(const char *s);              /* lib/sp_str.c */
 /* The message carries the rodata marker byte: an in-flight exception's msg is
    marked by the GC (sp_mark_string reads s[-1]), so a bare literal -- whose

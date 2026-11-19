@@ -1214,6 +1214,28 @@ sp_RbVal sp_exc_error_code_acc(sp_Exception *e) {SP_GC_ROOT(e);
   sp_exc_acc_gate(e, SP_BCLS_SOCKET_RESOLUTIONERROR, "Socket::ResolutionError", "error_code");
   return e->xkey;
 }
+/* A parse error that knows where it is: JSON::ParserError, raised by the
+   json package's reader with the line and column its message names, which
+   #line and #column answer. They ride the xkey and result slots, which no
+   other accessor reads on that class. */
+SP_NORETURN void sp_raise_parse_error(const char *cls, const char *msg, sp_int line, sp_int column) {
+  sp_pending_exc_key = sp_box_int(line);
+  sp_pending_exc_val = sp_box_int(column);
+  sp_pending_exc_flags |= 2 | 4;
+  sp_raise_cls(cls, msg);
+}
+/* JSON::ParserError#line / #column (NestingError inherits them): what the
+   parser recorded, nil on one the program made itself or a NestingError, as
+   in json, whose reader sets @line and @column only on the errors it
+   positions. */
+sp_RbVal sp_exc_parse_line_acc(sp_Exception *e) {SP_GC_ROOT(e);
+  sp_exc_acc_gate(e, SP_BCLS_JSON_PARSERERROR, "JSON::ParserError", "line");
+  return e->has_key ? e->xkey : sp_box_nil();
+}
+sp_RbVal sp_exc_parse_column_acc(sp_Exception *e) {SP_GC_ROOT(e);
+  sp_exc_acc_gate(e, SP_BCLS_JSON_PARSERERROR, "JSON::ParserError", "column");
+  return e->has_key ? e->result : sp_box_nil();
+}
 /* A builtin class's direct superclass by name (SP_EXC_HIER, above). */
 const char *sp_exc_parent_of_name(const char *cls) {
   if (!cls) return NULL;
@@ -1244,6 +1266,7 @@ sp_bool sp_exc_has_acc(sp_Exception *e, const char *acc) {
     {"signo", "SignalException"}, {"signm", "SignalException"},
     {"name", "NameError"}, {"errno", "SystemCallError"}, {"result", "StopIteration"},
     {"error_code", "Socket::ResolutionError"},
+    {"line", "JSON::ParserError"}, {"column", "JSON::ParserError"},
   };
   for (size_t i = 0; i < sizeof OWN / sizeof OWN[0]; i++)
     if (!strcmp(acc, OWN[i][0])) return sp_exc_cls_matches(c, OWN[i][1]);

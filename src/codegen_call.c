@@ -3141,7 +3141,7 @@ int exc_subclass_defines(Compiler *c, const char *name) {
    poly dispatch keys by its user class (sp_exc_user_cls_id), and anything
    else -- a builtin exception, a subclass without the method -- raises
    NoMethodError there. */
-int exc_user_method_name(Compiler *c, const char *name, int argc) {
+int exc_user_method_name(Compiler *c, int id, const char *name, int argc) {
   static const char *const surface[] = {
     "message", "to_s", "to_str", "inspect", "full_message", "detailed_message", "exception",
     "backtrace", "backtrace_locations", "set_backtrace", "cause", "result", "class",
@@ -3151,7 +3151,24 @@ int exc_user_method_name(Compiler *c, const char *name, int argc) {
     "instance_variable_set", "instance_variables", "<=>", "display", NULL };
   if (!name || !exc_subclass_defines(c, name)) return 0;
   for (int i = 0; surface[i]; i++) if (sp_streq(name, surface[i])) return 0;
-  if (argc == 0 && exc_gated_acc_fn(name)) return 0;
+  /* A class-gated reader keeps the call, unless sp_poly_exc_acc answers it:
+     then the boxed dispatch takes the program's classes to their own
+     method, and its builtin arm takes every other exception to the reader
+     (`rescue => e; e.line` reaches a REXML::ParseException's attr_reader
+     and a JSON::ParserError's #line alike). That arm takes no block, and
+     the dispatch does not check visibility, so a call with a block, or a
+     name some class of the program's makes private or protected, keeps the
+     reader. */
+  static const char *const poly_gated[] = {
+    "errno", "error_code", "line", "column", "key", "receiver", "args", "private_call?", NULL };
+  if (argc == 0 && exc_gated_acc_fn(name)) {
+    int boxed = 0;
+    for (int i = 0; poly_gated[i]; i++) if (sp_streq(name, poly_gated[i])) boxed = 1;
+    if (!boxed || (id >= 0 && nt_ref(c->nt, id, "block") >= 0)) return 0;
+    for (int k = 0; k < c->nclasses; k++)
+      if (class_is_exc_subclass(c, k) && call_answers(c, -1, k, name, 0, NULL) &&
+          cplan_method_vis(c, id, k, name, 0, NULL) != SP_VIS_PUBLIC) return 0;
+  }
   int xr[1];
   if (exc_reopen_definers(c, name, xr, 1) > 0) return 0;
   return 1;
@@ -5715,6 +5732,7 @@ const char *exc_gated_acc_fn(const char *name) {
     {"signo", "sp_exc_signo_acc"}, {"signm", "sp_exc_signm_acc"},
     {"errno", "sp_exc_errno_acc"}, {"name", "sp_exc_name_acc"},
     {"error_code", "sp_exc_error_code_acc"}, {"result", "sp_exc_result_acc"},
+    {"line", "sp_exc_parse_line_acc"}, {"column", "sp_exc_parse_column_acc"},
     /* LoadError#path: the feature of a require that loaded nothing, and
        nil for a LoadError raised by hand, as in CRuby */
     {"path", "sp_exc_path_acc"},

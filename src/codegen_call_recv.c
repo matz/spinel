@@ -20155,12 +20155,8 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
       return 1;
     }
   }
-  /* poly receiver: String#unpack1(fmt) -- unbox via sp_poly_to_s first. A
-     String value that widened to poly (doom's binary WAD/texture parsing)
-     was entirely unhandled here and hit the generic poly method dispatch,
-     raising "undefined method 'unpack1' for poly". Mirrors the rt==TY_STRING
-     codegen and its inference rule (a single-directive numeric format
-     yields an unboxed int or float). */
+  /* Boxed String#unpack1(fmt), with the nil flag kept when a
+     single-directive numeric format yields an unboxed result. */
   if (recv >= 0 && rt == TY_POLY && sp_streq(name, "unpack1") && argc == 1 &&
       !user_defines_or_reads(c, name)) {
     TyKind u1t = repr_of(c, id).as_ty;
@@ -20168,12 +20164,13 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
     /* the receiver and the format are held first: a value that is no
        String has no unpack1 (NoMethodError, the format as its args),
        where it was read as its #to_s */
-    int tu = ++g_tmp, tf = ++g_tmp;
+    int tu = ++g_tmp, tf = ++g_tmp, fmt = ++g_tmp;
     buf_puts(b, "({ "); tu = hold_operand(c, recv, TY_POLY, 1, tu, 1, " ", b);
     tf = hold_operand(c, argv[0], TY_POLY, 1, tf, 1, " ", b);
     buf_printf(b, "if (SP_UNLIKELY(!(sp_rbval_is_string(_t%d) || sp_poly_is_strbuf(_t%d))))"
                   " sp_raise_nomethod(sp_nomethod_msg_args(\"unpack1\", _t%d, 1, &_t%d));"
-                  " sp_PolyArray_get(sp_str_unpack(sp_poly_to_s(_t%d), sp_poly_arg_str_chk(_t%d)), 0); })", tu, tu, tu, tf, tu, tf);
+                  " const char *_t%d = sp_poly_arg_str_chk(_t%d); SP_GC_ROOT_STR(_t%d);"
+                  " sp_PolyArray_get(sp_str_unpack(sp_rbval_string_bytes(_t%d), _t%d), 0); })", tu, tu, tu, tf, fmt, tf, fmt, tu, fmt);
     if (oint_kind(u1t)) { buf_puts(b, ")"); oint_close(c, id, b); }
     return 1;
   }

@@ -3629,15 +3629,21 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
      A reopened or versioned String method has its own class arm. */
   if (str_builtin && ps->unpack1) {
     if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_UNPACK1, -1, TY_UNKNOWN, PC_SAME);
-    Buf ub; memset(&ub, 0, sizeof ub);
-    /* the format read as the pack arm below reads it: a boxed argument is
-       checked for a String, which CRuby's TypeError wants for anything else
-       (the boxed value went straight into sp_str_unpack's const char * slot) */
-    if (atmp_ty[0] == TY_POLY)
-      buf_printf(&ub, "sp_PolyArray_get(sp_str_unpack(sp_rbval_string_bytes(_t%d), sp_poly_arg_str_chk(_t%d)), 0)", tv, atmp[0]);
-    else buf_printf(&ub, "sp_PolyArray_get(sp_str_unpack(sp_rbval_string_bytes(_t%d), %s), 0)", tv, strarg);
     buf_puts(b, "if ("); emit_poly_str_guard(c, tv, name, b);
-    buf_printf(b, ") { _t%d = ", tr);
+    buf_puts(b, ") { ");
+    /* The format's to_str can grow the receiver. Only borrow the receiver
+       bytes after that conversion, while the format bytes are rooted. */
+    const char *format = strarg;
+    char ftmp[32];
+    if (atmp_ty[0] == TY_POLY) {
+      int t = ++g_tmp;
+      buf_printf(b, "const char *_t%d = sp_poly_arg_str_chk(_t%d); SP_GC_ROOT_STR(_t%d); ", t, atmp[0], t);
+      snprintf(ftmp, sizeof ftmp, "_t%d", t);
+      format = ftmp;
+    }
+    Buf ub = {0};
+    buf_printf(&ub, "sp_PolyArray_get(sp_str_unpack(sp_rbval_string_bytes(_t%d), %s), 0)", tv, format);
+    buf_printf(b, "_t%d = ", tr);
     if (ret == TY_POLY) buf_puts(b, ub.p ? ub.p : "");
     else emit_unbox_text(c, is_scalar_ret(ret) ? ret : TY_INT, ub.p ? ub.p : "", b);
     buf_puts(b, "; }\nelse ");

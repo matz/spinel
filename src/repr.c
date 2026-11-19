@@ -811,20 +811,54 @@ int repr_write_share(const Compiler *c, int node) {
   return 0;
 }
 
-/* --share-strings: the binding a boxed receiver's call v takes for native
-   class k, when it answers the String its object keeps (`native_share ...
-   "answers"`), has that String's handle form and the rule shares the
-   receiver's Strings; else NULL. The dispatch's arm for k returns that
-   handle, which carries the native object's String identity. */
+const char *repr_native_string_symbol(const NativeMethod *m) {
+  return m && m->kind == 0 && m->nargs == 0 && !m->rest && (m->share & NSH_ANSWERS)
+         ? m->share_csym : NULL;
+}
+
+const NativeMethod *repr_native_string_reader(Compiler *c, int node) {
+  const NodeTable *nt = c->nt;
+  if (node < 0) return NULL;
+  NodeKind kind = nt_kind(nt, node);
+  int cid;
+  const char *name;
+  if (kind == NK_CallNode) {
+    int recv = nt_ref(nt, node, "receiver");
+    TyKind rt = recv >= 0 ? comp_ntype(c, recv) : TY_UNKNOWN;
+    if (!ty_is_object(rt)) return NULL;
+    name = nt_str(nt, node, "name");
+    cid = comp_native_answer_class(c, ty_object_class(rt), name);
+  }
+  else if (kind == NK_SuperNode) {
+    const Scope *scope = comp_scope_of(c, node);
+    if (!scope || scope->is_cmethod || scope->class_id < 0) return NULL;
+    cid = c->classes[scope->class_id].nsub_root - 1;
+    if (cid < 0) return NULL;
+    const Scope *site = comp_super_site(c, scope);
+    name = comp_super_name(c, cplan_super_start(c, site), site);
+  }
+  else return NULL;
+  if (cid < 0 || !name) return NULL;
+  int argc = 0;
+  call_args(nt, node, &argc);
+  if (argc != 0) return NULL;
+  int nm = comp_native_method_find(c, cid, name, argc, 0);
+  const NativeMethod *m = nm >= 0 ? &c->native_methods[nm] : NULL;
+  return repr_native_string_symbol(m) ? m : NULL;
+}
+
+/* A selected native arm publishes the binding's existing String handle. */
 const NativeMethod *repr_native_arm_handle(Compiler *c, int v, int k) {
   const NodeTable *nt = c->nt;
   int recv = v >= 0 && nt_kind(nt, v) == NK_CallNode ? nt_ref(nt, v, "receiver") : -1;
-  if (!c->share || recv < 0 || k < 0 || k >= c->nclasses || !c->classes[k].is_native_class ||
+  if (recv < 0 ||
       nt_ref(nt, v, "arguments") >= 0 || nt_ref(nt, v, "block") >= 0)
     return NULL;
-  int nm = comp_native_method_find(c, k, nt_str(nt, v, "name"), 0, 0);
+  const char *name = nt_str(nt, v, "name");
+  int cid = comp_native_binding_class(c, k, name);
+  int nm = cid >= 0 ? comp_native_method_find(c, cid, name, 0, 0) : -1;
   const NativeMethod *m = nm >= 0 ? &c->native_methods[nm] : NULL;
-  return m && (m->share & NSH_ANSWERS) && m->share_csym ? m : NULL;
+  return repr_native_string_symbol(m) ? m : NULL;
 }
 /* Is v a boxed receiver's call whose arm, for each class the receiver can
    hold, is such a native binding (`o.string` where o holds a StringIO or a
@@ -938,9 +972,11 @@ int repr_native_call_handle(Compiler *c, int v) {
   const CallPlan plan = cplan_user(c, v);
   if (plan.dispatch == CP_DIRECT && plan.mi >= 0)
     return repr_method_ret_storage(&c->scopes[plan.mi]) == TY_STRBUF;
-  if (plan.dispatch != CP_SWITCH && plan.dispatch != CP_PER_ARM)
+  if (plan.dispatch != CP_SWITCH && plan.dispatch != CP_PER_ARM) {
+    if (repr_native_string_reader(c, v)) return 1;
     return k == NK_CallNode ? repr_boxed_native_handle(c, v)
                             : cplan_builtin_handle_row(c, v) || repr_super_native_keeps(c, v);
+  }
   /* The switch has an explicit join even when its target set exceeds
      CPT_MAX. This says nothing about what an unknown arm does with arguments. */
   return repr_call_result_storage(t) == TY_STRBUF;

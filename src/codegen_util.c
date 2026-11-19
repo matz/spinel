@@ -4098,17 +4098,7 @@ int strbuf_call_reads_handle(Compiler *c, int recv) {
 const NativeMethod *strbuf_native_answer(Compiler *c, int n) {
   const NodeTable *nt = c->nt;
   if (n < 0 || nt_kind(nt, n) != NK_CallNode || nt_ref(nt, n, "block") >= 0) return NULL;
-  int r = nt_ref(nt, n, "receiver");
-  TyKind rt = r >= 0 ? comp_ntype(c, r) : TY_UNKNOWN;
-  /* (or a subclass of one, where no method of the program's answers the name first) */
-  int nk = ty_is_object(rt) ? comp_native_answer_class(c, ty_object_class(rt), nt_str(nt, n, "name")) : -1;
-  if (nk < 0 || !c->classes[nk].is_native_class) return NULL;
-  int a = nt_ref(nt, n, "arguments"), argc = 0;
-  if (a >= 0) nt_arr(nt, a, "arguments", &argc);
-  int nm = comp_native_method_find(c, nk, nt_str(nt, n, "name"), argc, 0);
-  const NativeMethod *m = nm >= 0 ? &c->native_methods[nm] : NULL;
-  if (!m || !(m->share & NSH_ANSWERS) || !m->share_csym || argc != 0) return NULL;
-  return m;
+  return repr_native_string_reader(c, n);
 }
 /* The handle text of recv's slot, appended to b of any length, and with b
    NULL only the answer is given, nothing emitted. The one place the paths
@@ -4290,19 +4280,10 @@ static int strbuf_slot_into(Compiler *c, int recv, Buf *b) {
   }
   /* a native method answering the String its object keeps: its handle
      form's call */
-  const NativeMethod *nm = strbuf_native_answer(c, recv);
-  if (nm) {
+  if (strbuf_native_answer(c, recv) && repr_native_call_handle(c, recv)) {
     if (!b) return 1;
-    Buf rb; memset(&rb, 0, sizeof rb);
-    emit_expr(c, nt_ref(c->nt, recv, "receiver"), &rb);
-    int fit = rb.p != NULL;
-    /* (the native object of a subclass's instance is cast, as the call's receiver is, #9269) */
-    TyKind ort = comp_ntype(c, nt_ref(c->nt, recv, "receiver"));
-    int sub = ty_is_object(ort) && ty_object_class(ort) != nm->class_id;
-    if (fit && sub) buf_printf(b, "%s((%s *)(%s))", nm->share_csym, c->classes[nm->class_id].c_struct, rb.p);
-    else if (fit) buf_printf(b, "%s(%s)", nm->share_csym, rb.p);
-    free(rb.p);
-    if (fit) return 1;
+    emit_native_string_handle(c, recv, b);
+    return 1;
   }
   /* (--share-strings: a value route over a handle, `(+s)`, whose handle
      already ran into a temp (emit_bang_self_handle): that temp holds it,

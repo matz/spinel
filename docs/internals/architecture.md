@@ -98,6 +98,8 @@ held across a block. UTF-8 character positions count each valid sequence
 once and each malformed byte separately. The length cache records only
 validated text, so validation and optimized character seeks can reuse it. When File.join walks boxed path components, it
 keeps the bytes of each selected segment through later conversions.
+Native package readers that declare a handle result return it through the
+same call view, including inherited bindings and calls through super.
 Fiber context switches carry the active GC roots and exception state.
 A receiver-answering iterator at method tail keeps its receiver in the
 operand view across the block and returns it through the physical result

@@ -98,9 +98,11 @@ static inline unsigned sp_str_lcache_slot(const char *s) {
    at all, which leaves nowhere to put the BINARY tag or a NUL-safe length.
    0xfb is 0xff plus a header: it joins the "has a header" group below and
    stays OUT of the "is a mutable heap string" group used by setbyte and append_grow. */
+static inline int sp_str_marker_has_hdr(unsigned char m) {
+  return m == 0xfe || m == 0xfd || m == 0xf1 || m == 0xfb || m == 0xfa || m == 0xf9;
+}
 static inline int sp_str_has_hdr(const char *s) {
-  unsigned char m = ((const unsigned char *)s)[-1];
-  return m == 0xfe || m == 0xfd || m == 0xf1 || m == 0xfb || m == 0xfa;
+  return sp_str_marker_has_hdr(((const unsigned char *)s)[-1]);
 }
 /* "This string indexes at fixed width", verified once and remembered: every
    byte is below 0x80, or the length walk counted it as bytes, which an
@@ -334,11 +336,8 @@ static inline void sp_str_mark_ascii7(const char *s) {
 
 static inline size_t sp_str_byte_len(const char *s) {
   if (!s) return 0;
-  unsigned char marker = ((const unsigned char *)s)[-1];
-  /* 0xf1 (frozen heap string / frozen literal) also carries a real sp_str_hdr
-     whose len is the true byte length, so an embedded NUL survives freezing
-     (#2462 dedup, .freeze). */
-  if (marker == 0xfe || marker == 0xfd || marker == 0xf1 || marker == 0xfb || marker == 0xfa) {
+  /* Frozen literals and retired views retain their recorded byte length. */
+  if (sp_str_has_hdr(s)) {
     uint32_t l = (((const sp_str_hdr *)(s - 1)) - 1)->len;
     if (l != SP_STR_LEN_UNSET) return l;
   }

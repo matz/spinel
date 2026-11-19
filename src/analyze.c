@@ -5433,12 +5433,21 @@ static void ie_rb_mark(const NodeTable *nt, unsigned char *rb, int n, int node, 
    OWN and IN. (the block itself, so its parameters' defaults count, which run
    on the receiver too) */
 static void ie_rb_scan(Compiler *c, unsigned char *rb, int n) {
-  NT_FOREACH_KIND(c->nt, NK_CallNode, call) {
-    int b = ie_own_recv_block(c, call);
-    if (b < 0 || b >= n) continue;
-    rb[b] |= IE_RB_ROOT;
-    ie_rb_mark(c->nt, rb, n, b, IE_RB_IN | IE_RB_OWN);
-  }
+  /* (only a call named instance_eval or instance_exec has such a block, so
+     the walk is of those calls, by name: ie_rebound_marks scans again each
+     time the table grows, which register_includes does once per method it
+     copies into an includer, and a walk of every call per copy made that
+     phase quadratic in the program. The marks are a union, so the order
+     the calls come in does not matter.) */
+  static const char *const fam[] = { "instance_eval", "instance_exec" };
+  for (int f = 0; f < 2; f++)
+    for (int call = an_calls_named_first(c, fam[f]); call >= 0; call = an_calls_named_next(call)) {
+      if (nt_kind(c->nt, call) != NK_CallNode) continue;
+      int b = ie_own_recv_block(c, call);
+      if (b < 0 || b >= n) continue;
+      rb[b] |= IE_RB_ROOT;
+      ie_rb_mark(c->nt, rb, n, b, IE_RB_IN | IE_RB_OWN);
+    }
 }
 /* See analyze_internal.h. */
 const unsigned char *ie_rebound_marks(Compiler *c) {
@@ -51070,6 +51079,16 @@ static void an_phase_class_structure(Compiler *c) {
   {
     NodeTable *nt = (NodeTable *)c->nt;
     int n0 = nt->count;
+    /* The local reads and writes of each scope, ascending (sc_ids from
+       sc_at[s] to sc_at[s + 1]), and each node's parent, made at the first
+       method that asks and kept to the end: the loop adds no node, moves
+       none to another scope and retypes only a read with no children into a
+       call with none, so neither goes stale, and a node a retype took out
+       of the reads is skipped by its kind below. Each method asked for a
+       walk of the whole table twice and a parent map of its own, which was
+       never freed: quadratic in the program, in time and in memory, on one
+       with many such methods (gems' DSLs). */
+    int *par = NULL, *sc_at = NULL, *sc_ids = NULL, built = 0;
     for (int p = 0; p < n0; p++) {
       NodeKind pk = nt_kind(nt, p);
       if (!(pk == NK_IfNode || pk == NK_UnlessNode || pk == NK_WhileNode || pk == NK_UntilNode)) continue;
@@ -51078,19 +51097,47 @@ static void an_phase_class_structure(Compiler *c) {
       const char *pn = nt_str(nt, pr, "name");
       Scope *ms = comp_scope_of(c, pr);
       if (!pn || !ms || !ms->name || !ms->blk_param || !ms->blk_param[0] || !sp_streq(ms->blk_param, pn)) continue;
+      if (!built) {
+        built = 1;
+        par = an_parent_map(nt);
+        sc_at = calloc((size_t)c->nscopes + 1, sizeof(int));
+        int nloc = 0;
+        for (int pass = 0; pass < 2 && sc_at; pass++) {
+          if (pass == 1) {
+            for (int s = 0; s < c->nscopes; s++) sc_at[s + 1] += sc_at[s];
+            sc_ids = malloc(sizeof(int) * (size_t)(nloc > 0 ? nloc : 1));
+            if (!sc_ids) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+          }
+          int *fill = pass == 1 ? calloc((size_t)c->nscopes, sizeof(int)) : NULL;
+          if (pass == 1 && !fill) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+          for (int id = 0; id < n0; id++) {
+            NodeKind k = nt_kind(nt, id);
+            if (!(k == NK_LocalVariableReadNode || k == NK_LocalVariableWriteNode || k == NK_LocalVariableOrWriteNode ||
+                  k == NK_LocalVariableAndWriteNode || k == NK_LocalVariableOperatorWriteNode || k == NK_LocalVariableTargetNode)) continue;
+            int s = (int)(comp_scope_of(c, id) - c->scopes);
+            if (pass == 0) { sc_at[s + 1]++; nloc++; }
+            else sc_ids[sc_at[s] + fill[s]++] = id;
+          }
+          free(fill);
+        }
+        if (!sc_at) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      }
+      int msi = (int)(ms - c->scopes);
       int written = 0;
-      for (int w = 0; w < n0 && !written; w++)
+      for (int j = sc_at[msi]; j < sc_at[msi + 1] && !written; j++) {
+        int w = sc_ids[j];
         if ((nt_kind(nt, w) == NK_LocalVariableWriteNode || nt_kind(nt, w) == NK_LocalVariableOrWriteNode ||
              nt_kind(nt, w) == NK_LocalVariableAndWriteNode || nt_kind(nt, w) == NK_LocalVariableOperatorWriteNode ||
              nt_kind(nt, w) == NK_LocalVariableTargetNode) &&
             comp_scope_of(c, w) == ms && sp_streq(nt_str(nt, w, "name"), pn)) written = 1;
+      }
       if (written) continue;
       /* Only where blk is read for nothing else but such a condition or a
          `&blk` forward: a `blk.call` beside the test keeps the value, and
          block_given? and the value then answer apart */
-      int *par = an_parent_map(nt);
       int other = !par, forwards = 0;
-      for (int r = 0; r < n0 && !other; r++) {
+      for (int j = sc_at[msi]; j < sc_at[msi + 1] && !other; j++) {
+        int r = sc_ids[j];
         if (nt_kind(nt, r) != NK_LocalVariableReadNode || comp_scope_of(c, r) != ms || !sp_streq(nt_str(nt, r, "name"), pn)) continue;
         int up = par[r];
         NodeKind uk = up >= 0 ? nt_kind(nt, up) : NK_NONE;
@@ -51132,6 +51179,7 @@ static void an_phase_class_structure(Compiler *c) {
       nt_node_set_ref(nt, pr, "arguments", -1);
       nt_node_set_ref(nt, pr, "block", -1);
     }
+    free(par); free(sc_at); free(sc_ids);
   }
 
   /* mark block-aware methods (contain yield or block_given?) -- these are

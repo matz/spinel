@@ -280,6 +280,7 @@ void nt_truncate(NodeTable *nt, int count) {
   if (count < 0 || count >= nt->count) return;
   /* (the dropped nodes' slots counted toward the nodes they held) */
   par_drop(nt);
+  if (count < nt->low_mark) nt->low_touched = 1;   /* (the ids from count on are made again) */
   nt->count = count;
 }
 
@@ -318,10 +319,21 @@ NodeTable *nt_new_table(void) {
   return nt;
 }
 
+/* An edit of the type or a string field of node id: noted when the node is
+   below the mark an index was built to (low_mark). */
+static void nt_low_touch(NodeTable *nt, int id) {
+  if (id < nt->low_mark) nt->low_touched = 1;
+}
+void nt_low_watch(NodeTable *nt) {
+  nt->low_mark = nt->count;
+  nt->low_touched = 0;
+}
+
 /* The node at `id`, the table first extended to it; the slots it grows by
    start empty. */
 static SpNode *node_put(NodeTable *nt, int id) {
   if (id < 0) return NULL;
+  nt_low_touch(nt, id);
   if (id >= nt->node_cap) {
     int nc = nt->node_cap ? nt->node_cap : 256;
     while (nc <= id) {
@@ -596,7 +608,7 @@ int nt_clone_subtree(NodeTable *nt, int root) {
   nt_aux(nt, nt->count - 1);
   nt_aux_reset(nt, base, nt->count);
   if (nt->orig_lo) for (int i = 0; i < sn; i++) nt_set_origin(nt, base + i, list[i], 'c', 0);
-  nt->version++; nt->edits++; nt->clone_version++;
+  nt->version++; nt->edits++;
   par_cover(nt);
   for (int i = 0; i < sn; i++) par_node(nt, base + i);
   free(list);
@@ -615,6 +627,7 @@ void nt_node_set_type(NodeTable *nt, int id, const char *type) {
   if (id < 0 || id >= nt->count || !type) return;
   NodeKind was = nt_kind(nt, id);
   SpNode *nd = &nt->nodes[id];
+  nt_low_touch(nt, id);
   node_set_type(nt, nd, type, strlen(type));
   nd->kind = 0;          /* the cached NodeKind is stale now */
   nt->version++; nt->edits++;
@@ -685,6 +698,7 @@ void nt_node_reset(NodeTable *nt, int id, const char *type) {
   if (!nd) return;
   NodeKind was = nt_kind(nt, id);
   nt->version++; nt->edits++;
+  nt_low_touch(nt, id);
   nt_retire(nt, nd->type); nd->type = NULL;
   nt_retire(nt, nd->content); nd->content = NULL;
   for (int j = 0; j < nd->ns; j++) { nt_retire(nt, nd->s[j].key); nt_retire(nt, nd->s[j].val); }
@@ -720,6 +734,7 @@ void nt_node_set_str(NodeTable *nt, int id, const char *key, const char *val) {
   SpNode *nd = (SpNode *)node_at(nt, id);
   if (!nd) return;
   nt->version++; nt->edits++;
+  nt_low_touch(nt, id);
   size_t klen = strlen(key), vlen = strlen(val);
   if (vlen == 16 && !strcmp(val, "__cext_extension") && !strcmp(key, "name")) nt->has_cext_decls = 1;
   if (!strcmp(key, "name")) nt_stale_ckey(nt, nd);
@@ -745,6 +760,7 @@ char *nt_node_swap_str(NodeTable *nt, int id, const char *key, const char *val) 
   SpNode *nd = (SpNode *)node_at(nt, id);
   if (!nd) return NULL;
   nt->version++;
+  nt_low_touch(nt, id);
   if (nt_kind(nt, id) == NK_CallNode && sp_streq(key, "name")) {
     nt_rename_note(nt, nt_str(nt, id, "name"), val);
     nt->rename_version++;
@@ -764,6 +780,7 @@ void nt_node_restore_str(NodeTable *nt, int id, const char *key, char *held) {
   SpNode *nd = (SpNode *)node_at(nt, id);
   if (!nd) { free(held); return; }
   nt->version++;
+  nt_low_touch(nt, id);
   if (nt_kind(nt, id) == NK_CallNode && sp_streq(key, "name")) {
     nt_rename_note(nt, nt_str(nt, id, "name"), held);
     nt->rename_version++;
@@ -1172,6 +1189,7 @@ void nt_swap_nodes(NodeTable *nt, int a, int b) {
   nt->nodes[a] = nt->nodes[b];
   nt->nodes[b] = t;
   nt->version++; nt->edits++;
+  nt_low_touch(nt, a); nt_low_touch(nt, b);
   par_drop(nt);   /* every node a or b held, and each that holds them, moves */
   nki_drop(nt);   /* the kind index lists ids by kind: rebuild it */
 }
@@ -1220,6 +1238,7 @@ void nt_renumber(NodeTable *nt, const int *order) {
   for (int i = 0; i < nt->nautoloads; i++) nt->autoloads[i].node = perm[nt->autoloads[i].node];
   free(perm);
   nt->version++; nt->edits++;
+  if (nt->low_mark > 0) nt->low_touched = 1;   /* (every id moved) */
   par_drop(nt);
   nki_drop(nt);   /* the ids of each kind moved */
   free(nt->aux); nt->aux = NULL; nt->aux_cap = 0;   /* and so did each one's entry */
@@ -1229,6 +1248,7 @@ int nt_set_str(NodeTable *nt, int id, const char *key, const char *val) {
   SpNode *nd = (SpNode *)node_at(nt, id);
   if (!nd) return 0;
   nt->version++; nt->edits++;
+  nt_low_touch(nt, id);
   if (!strcmp(key, "name")) nt_stale_ckey(nt, nd);
   size_t vlen = strlen(val);
   for (int j = 0; j < nd->ns; j++) {

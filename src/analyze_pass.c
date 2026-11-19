@@ -12025,6 +12025,11 @@ static int bind_boxed_args_to_captures(Compiler *c, int id, int **caps, int *nca
     for (int i = 0; i < m->nparams; i++) {
       LocalVar *p = m->pnames[i] ? scope_local(m, m->pnames[i]) : NULL;
       if (!p || p->rbs_seeded || p->type == TY_UNKNOWN || p->type == TY_POLY) continue;
+      /* A parameter a direct call typed Method keeps its Method: a boxed one
+         answers call and the reflection the boxed dispatch knows, and lost
+         super_method, original_name and source_location, and the refusal of
+         receiver-less bind at compile time. The gate still checks the value. */
+      if (p->type == TY_METHOD) continue;
       int a = layout_source_arg(c, m, argv, &L, i);
       if (a < 0 || infer_type(c, a) != TY_POLY) continue;
       /* (it stays boxed through the re-narrow, as a boxed receiver's argument

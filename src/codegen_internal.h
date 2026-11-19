@@ -3239,8 +3239,7 @@ void emit_print_one(Compiler *c, int arg, Buf *b, int indent);
 void emit_p_one(Compiler *c, int arg, Buf *b, int indent);
 int emit_output_call(Compiler *c, int id, Buf *b, int indent);
 void refuse_unredirected_output(Compiler *c, int id);   /* a bare print past a reassigned $stdout */
-void system_refuse_unsupported(Compiler *c, int id, const int *argv, int argc);
-int emit_system_splat(Compiler *c, int id, const int *argv, int argc, Buf *b);
+void emit_system_call(Compiler *c, int id, const int *argv, int argc, Buf *b);
 int int_value_plain(Compiler *c, int node);   /* an Integer that can never be nil */
 int emit_output_spilled(Compiler *c, int id, const char *name, int argc, const int *argv, Buf *b, int indent);
 void emit_assign(Compiler *c, int id, Buf *b, int indent);

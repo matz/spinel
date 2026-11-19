@@ -840,31 +840,11 @@ static int tail_output_has_value(const char *nm) {
                 sp_streq(nm, "rand") || sp_streq(nm, "srand") || sp_streq(nm, "putc"));
 }
 
-/* system(a, *rest) / system(*args): the command and its arguments are spread
-   at run time, as Process.spawn's are (#7192), and each converts to a String as
-   the literal list's do. A Hash ahead of the command (`system(env, cmd)`, or
-   one a splat brings) is the child's environment, as Process.spawn takes it:
-   the test is made at run time, where a splat's first element is known.
-   An Array at the command's place is a [program, argv0] pair: the program
-   runs with argv0 as the argv[0] it sees, never through the shell.
-   Writes the expression (true, false or nil) and answers 1 when a splat is among the
-   arguments, the first is a Hash or a boxed value that may be one, or the
-   command is an Array; 0 otherwise, with nothing written (#7868). */
-int emit_system_splat(Compiler *c, int id, const int *argv, int argc, Buf *b) {
+static void system_refuse_unsupported(Compiler *c, int id, const int *argv, int argc);
+/* Hold the Ruby operands before converting the command and its arguments. */
+void emit_system_call(Compiler *c, int id, const int *argv, int argc, Buf *b) {
   const NodeTable *nt = c->nt;
-  int has_splat = nt_argv_has_splat(nt, argv, argc);
-  TyKind t0 = argc >= 1 && nt_kind(nt, argv[0]) != NK_SplatNode ? comp_ntype(c, argv[0]) : TY_UNKNOWN;
-  /* an empty `{}` literal infers no element types and stays TY_UNKNOWN */
-  int env_first = argc >= 1 && nt_kind(nt, argv[0]) != NK_SplatNode
-                  && (ty_is_hash(t0) || t0 == TY_POLY || (t0 == TY_UNKNOWN && nt_kind(nt, argv[0]) == NK_HashNode));
-  int cmd = env_first ? 1 : 0;
-  /* an empty `[]` literal stays TY_UNKNOWN too */
-  int pair_cmd = !has_splat && cmd < argc
-                 && (ty_is_array(comp_ntype(c, argv[cmd]))
-                     || (comp_ntype(c, argv[cmd]) == TY_UNKNOWN && nt_kind(nt, argv[cmd]) == NK_ArrayNode));
-  if (!has_splat && !env_first && !pair_cmd) return 0;
-  /* the shapes after the Hash the literal list refuses stay refused */
-  if (!has_splat) system_refuse_unsupported(c, id, argv, argc);
+  if (!nt_argv_has_splat(nt, argv, argc)) system_refuse_unsupported(c, id, argv, argc);
   int ta = ++g_tmp, tv = ++g_tmp, tr = ++g_tmp, te = ++g_tmp, tp = ++g_tmp, tq = ++g_tmp;
   buf_printf(b, "({ sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", ta, ta);
   for (int k = 0; k < argc; k++) {
@@ -892,22 +872,21 @@ int emit_system_splat(Compiler *c, int id, const int *argv, int argc, Buf *b) {
   buf_printf(b, " sp_RbVal _t%d = sp_box_nil(); SP_GC_ROOT_RBVAL(_t%d); sp_PolyArray *_t%d = NULL; SP_GC_ROOT(_t%d);"
                 " if (sp_json_kind(_t%d->data[0]) == 1) { _t%d = sp_poly_to_poly_array(_t%d->data[0]);"
                 " if (_t%d->len != 2) sp_raise_cls(\"ArgumentError\", \"wrong first argument\");"
-                " _t%d = sp_poly_arg_str_box_chk(_t%d->data[0]);"
-                " sp_PolyArray_set(_t%d, 0, sp_poly_arg_str_box_chk(_t%d->data[1])); }",
+                " _t%d = sp_system_arg_box(_t%d->data[0]);"
+                " sp_PolyArray_set(_t%d, 0, sp_system_arg_box(_t%d->data[1])); }",
              tp, tp, tq, tq, ta, tq, ta, tq, tp, tq, ta, tq);
   /* every element converts once, before anything is allocated, so a TypeError
      from one does not leak the argv and a to_str runs only once; the rooted
      array keeps the converted String */
-  buf_printf(b, " for (sp_int _i = 0; _i < _t%d->len; _i++) sp_PolyArray_set(_t%d, _i, sp_poly_arg_str_box_chk(_t%d->data[_i]));", ta, ta, ta);
+  buf_printf(b, " for (sp_int _i = 0; _i < _t%d->len; _i++) sp_PolyArray_set(_t%d, _i, sp_system_arg_box(_t%d->data[_i]));", ta, ta, ta);
   buf_printf(b, " const char **_t%d = (const char **)malloc(sizeof(char *) * (size_t)(_t%d->len + 1));", tv, ta);
   buf_printf(b, " for (sp_int _i = 0; _i < _t%d->len; _i++) _t%d[_i] = sp_rbval_string_bytes(_t%d->data[_i]);", ta, tv, ta);
   buf_printf(b, " _t%d[_t%d->len] = NULL; sp_RbVal _t%d = sp_system_answer(sp_system_prog_env_args(_t%d,"
                 " _t%d.tag == SP_TAG_NIL ? NULL : sp_rbval_string_bytes(_t%d), (int)_t%d->len, _t%d)); free(_t%d); _t%d; })",
              tv, ta, tr, te, tp, tp, ta, tv, tv, tr);
-  return 1;
 }
 
-void system_refuse_unsupported(Compiler *c, int id, const int *argv, int argc) {
+static void system_refuse_unsupported(Compiler *c, int id, const int *argv, int argc) {
   /* A trailing options Hash (`out:`, `err:`, `chdir:`, ...) was converted
      like any other argument, so it reached #to_str and raised "no implicit
      conversion of Hash into String" at run time -- naming a conversion the
@@ -1013,23 +992,10 @@ else {
     return 1;
   }
   if (sp_streq(name, "system") && argc >= 1) {
-    { Buf sb; memset(&sb, 0, sizeof sb);
-      if (emit_system_splat(c, id, argv, argc, &sb)) {
-        emit_indent(b, indent); buf_puts(b, "(void)"); buf_puts(b, sb.p ? sb.p : ""); buf_puts(b, ";\n");
-        free(sb.p);
-        return 1;
-      } }
-    system_refuse_unsupported(c, id, argv, argc);
-    int ts = ++g_tmp;
     emit_indent(b, indent);
-    buf_puts(b, "{ ");
-    for (int k = 0; k < argc; k++) {
-      buf_printf(b, "const char *_sys_%d_%d = ", ts, k); emit_str_expr(c, argv[k], b);
-      buf_printf(b, "; SP_GC_ROOT_STR(_sys_%d_%d); ", ts, k);
-    }
-    buf_printf(b, "const char *_sys_%d[] = { ", ts);
-    for (int k = 0; k < argc; k++) { if (k > 0) buf_puts(b, ", "); buf_printf(b, "_sys_%d_%d", ts, k); }
-    buf_printf(b, ", NULL }; sp_system_args(%d, _sys_%d); }\n", argc, ts);
+    buf_puts(b, "(void)");
+    emit_system_call(c, id, argv, argc, b);
+    buf_puts(b, ";\n");
     return 1;
   }
   if (sp_streq(name, "printf") && argc >= 1) {

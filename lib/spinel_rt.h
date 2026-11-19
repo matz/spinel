@@ -4100,11 +4100,20 @@ static const char *sp_str_aset_rep(sp_RbVal val) {
   sp_str_aset_refuse(val);
   return sp_poly_arg_str_chk(val);
 }
-static sp_RbVal sp_poly_arg_str_box_chk(sp_RbVal v) {
-  if (sp_rbval_is_string(v)) return v;
-  if (v.tag == SP_TAG_OBJ && v.cls_id >= 0)
-    return sp_box_obj(sp_poly_arg_str_obj(v), SP_BUILTIN_STRBUF);
-  return sp_box_str_new(sp_poly_arg_str_chk_slow(v));
+static sp_RbVal sp_system_arg_box(sp_RbVal v) {
+  if (!sp_rbval_is_string(v)) {
+    if (v.tag == SP_TAG_OBJ && v.cls_id >= 0)
+      v = sp_box_obj(sp_poly_arg_str_obj(v), SP_BUILTIN_STRBUF);
+    else v = sp_box_str_new(sp_poly_arg_str_chk_slow(v));
+  }
+  SP_GC_ROOT_RBVAL(v);
+  const char *s = sp_rbval_string_bytes(v);
+  if (s && memchr(s, 0, sp_str_byte_len(s)))
+    sp_raise_cls("ArgumentError", SPL("string contains null byte"));
+  if (!s || sp_String_is_frozen(v.v.p)) return v;
+  /* Later conversions can modify the source String. The child gets these
+     validated bytes, as they were when this argument was converted. */
+  return SP_SEBOX(sp_String_new_unfrozen(s));
 }
 /* String#split's separator slot: the one String slot CRuby documents nil in
    (nil = whitespace mode). NULL preserves that answer, where the loose form

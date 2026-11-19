@@ -1808,16 +1808,18 @@ test-corpus-summary: test-corpus-results
 	@pass=$$(grep -l '^PASS' $(TEST_RESULT_DIR)/*.ok 2>/dev/null | wc -l); \
 	fail=$$(grep -l '^FAIL' $(TEST_RESULT_DIR)/*.ok 2>/dev/null | wc -l); \
 	err=$$(grep -l '^ERR' $(TEST_RESULT_DIR)/*.ok 2>/dev/null | wc -l); \
-	for f in $(TEST_RESULT_DIR)/*.ok; do \
-	  bn=$$(basename "$$f" .ok); \
-	  status=$$(cat "$$f"); \
-	  if [ "$$status" = FAIL ]; then \
-	    echo "FAIL: $$bn"; \
-	    head -40 "$$f.diff"; \
-	  elif [ "$$status" = ERR ]; then \
-	    echo "ERR:  $$bn"; \
-	  fi; \
-	done; \
+	if [ $$pass -eq 0 ] || [ $$fail -ne 0 ] || [ $$err -ne 0 ]; then \
+		for f in $(TEST_RESULT_DIR)/*.ok; do \
+		  bn=$$(basename "$$f" .ok); \
+		  status=$$(cat "$$f"); \
+		  if [ "$$status" = FAIL ]; then \
+		    echo "FAIL: $$bn"; \
+		    head -40 "$$f.diff"; \
+		  elif [ "$$status" = ERR ]; then \
+		    echo "ERR:  $$bn"; \
+		  fi; \
+		done; \
+	fi; \
 	echo "Tests: $$pass pass, $$fail fail, $$err error"; \
 	if [ $$fail -ne 0 ] || [ $$err -ne 0 ]; then exit 1; fi
 

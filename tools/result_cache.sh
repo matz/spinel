@@ -8,6 +8,8 @@
 # same as in a run that passed. The reasoning, and what is deliberately out of
 # scope, is in the Makefile's comment above RUN_ONE_TEST.
 #
+#   pch-key CC FLAG...
+#       Hash the compiler command and the ordered arguments of a PCH build.
 #   fp FILE... [-- STRING...]
 #       The fingerprint of a configuration: the content of each FILE (a
 #       missing one counts as missing), every header under lib/ and packages/,
@@ -93,6 +95,10 @@ nocache() {
 }
 
 case "${1:-}" in
+pch-key)
+  shift
+  printf '%s\0' "$@" | rc_sha | cut -c1-64
+  ;;
 fp)
   shift
   files=; strs=

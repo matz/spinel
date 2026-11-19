@@ -1591,25 +1591,15 @@ RBS_SEED_STRICT := -Werror=incompatible-pointer-types
 # the include. gcc picks the .gch up implicitly from the include path; clang
 # ignores gcc-style implicit lookup and needs an explicit -include-pch.
 # Each variant dir also carries a copy of spinel_rt.h so gcc degrades to a
-# normal textual include if the .gch is unusable. The PCH path is keyed on
-# compiler kind, $(OPT) and the overflow mode because a PCH only loads under
-# the exact flags it was built with. The mode was missing from the key, and
-# a -D mismatch is one clang accepts SILENTLY: after a raise-mode run, the
-# promote suite reused the raise-mode .gch and every test ran against
-# raise-semantics runtime inlines -- the mode-sensitive tests failed and the
-# rest tested the wrong runtime without a word (#4538).
+# normal textual include if the .gch is unusable. Key the directory on every
+# flag used to build the header. Clang can silently accept a stale PCH built
+# with a different -D, including the overflow mode (#4538).
 CC_KIND  := $(if $(findstring clang,$(shell $(CC) --version 2>/dev/null | head -1)),clang,gcc)
-# The key has to be ONE path component: $(OPT) is a flag LIST, so a
-# multi-flag setting (`COPT := -O2 -g0` in config.mk) put a space in the
-# middle and every use of PCH_ROOT then split into two words -- two make
-# targets, an -I pointing at the wrong directory, and a mkdir of /plain
-# (#4256). Strip the characters that cannot appear in one component:
-# the dashes the key never wanted, then spaces, slashes and equals.
-sp_empty :=
-sp_space := $(sp_empty) $(sp_empty)
-sp_pathify = $(subst =,,$(subst /,,$(subst $(sp_space),,$(subst -,,$(1)))))
-PCH_ROOT := build/pch/$(CC_KIND)$(call sp_pathify,$(OPT))$(if $(SP_OV_DEFINE),$(SPINEL_INT_OVERFLOW))
 PCH_FLAGS = $(CFLAGS) $(SP_OV_DEFINE) -Werror $(TEST_WARN_SUPPRESS) $(SEC_FLAGS)
+PCH_ROOT := build/pch/$(CC_KIND)-$(shell tools/result_cache.sh pch-key "$(CC)" $(PCH_FLAGS))
+# The last explicit -O wins among ordinary flags. Leave opaque options
+# (such as compiler response files) to the textual include on an override.
+TEST_PCH_OPT := $(if $(filter-out -O% -Wno-% -ffp-contract=off -g -g0 -g1 -g2 -g3 -D% -U% -I%,$(CFLAGS)),,$(lastword $(filter -O%,$(CFLAGS))))
 PCH_PLAIN  := $(PCH_ROOT)/plain/spinel_rt.h.gch
 PCH_NOPOLY := $(PCH_ROOT)/nopoly/spinel_rt.h.gch
 SP_LIB_HDRS := $(wildcard lib/*.h) $(PLATFORM_HDRS)
@@ -4345,8 +4335,8 @@ endif
 # has a 5373-line main: 82s at -O1 against 1.6s at -O0, with a roughly cubic
 # curve through it (928 lines 0.9s, 3219 lines 15s, 4407 lines 43s). Past 2000
 # generated lines that one function dominates and -O0 wins by a wide margin. The
-# PCH is dropped with it, since it was built under the other -O and would not
-# load anyway. The binaries are the same speed here -- these are wide-API tests
+# PCH still applies when the test was already built at that level. The binaries
+# are the same speed here -- these are wide-API tests
 # rather than loops, 0.023s vs 0.024s on the worst one.
 #
 # The result cache (tools/result_cache.sh). spinel always runs: the C it emits
@@ -4404,8 +4394,7 @@ RESULT_CACHE_FP = $(if $(filter 0,$(GATE_CACHE)),off,$(eval RESULT_CACHE_FP := $
 # finish: test/cmethod_chain_reachability.rb's 24-deep static-inline chain,
 # which clang's inliner expands in full once the checked arithmetic lost the
 # sentinel test that kept each frame from inlining (the test checks the
-# reachability walk, not the C). Like the >= 2000-line rule it drops the
-# PCH, which was built at the default level.
+# reachability walk, not the C). The same PCH compatibility check covers both overrides.
 # TEST_PLAN_CHECK=--plan-check (the gate's corpus leg sets it): the compile
 # that writes each test's C also reports the call decisions --plan-check
 # compares, into <test>.plan beside the result. The flag adds report lines
@@ -4438,16 +4427,19 @@ ckey=""; hit=0; own=0; \
   if [ -n "$(TEST_PLAN_CHECK)" ]; then { grep "^plan-check:" "$$tmpdir/sperr" | sed "s|^|$<: |"; \
     [ "$$sprc" -eq 0 ] || echo "$<: plan-check-exit: $$sprc"; } > "$@.plan"; fi; \
   [ "$$sprc" -eq 0 ]; } && \
-{ pchuse="$(PCH_USE_PLAIN)"; pchf="$(PCH_PLAIN)"; \
-  if head -2 "$$cfile" | grep -q SP_TU_NO_POLY_RENDER; then pchuse="$(PCH_USE_NOPOLY)"; pchf="$(PCH_NOPOLY)"; fi; \
-  [ -f "$$pchf" ] || pchuse=""; \
-  if sed -n '1,/^#include "spinel_rt.h"/p' "$$cfile" | grep '^#define' | grep -qv SP_TU_NO_POLY_RENDER; then pchuse=""; fi; \
+{ rtdefs=$$(sed -n '/^#include "spinel_rt.h"/q; /^#define/p' "$$cfile"); \
+  pchuse=""; \
+  case "$$rtdefs" in \
+    '') [ ! -f "$(PCH_PLAIN)" ] || pchuse="$(PCH_USE_PLAIN)";; \
+    '#define SP_TU_NO_POLY_RENDER 1') [ ! -f "$(PCH_NOPOLY)" ] || pchuse="$(PCH_USE_NOPOLY)";; \
+  esac; \
   xlibs=$$(sed -n 's|^/\* SPINEL_LINK: \(.*\) \*/$$|\1|p' "$$cfile" | tr '\n' ' '); \
   xobjs=$$(sed -n 's|^/\* SPINEL_LINK_OBJ: \(.*\) \*/$$|\1|p' "$$cfile" | tr '\n' ' '); \
   keep=""; for o in $$xobjs; do case " $(BUNDLED_NATIVE_OBJS) " in *" $$o "*) ;; *) keep="$$keep $$o";; esac; done; xobjs="$$keep"; \
   bigopt=""; \
-  if [ "$$(wc -l < "$$cfile")" -ge 2000 ]; then bigopt="-O0"; pchuse=""; fi; \
-  if [ -f "$<.opt" ]; then bigopt=$$(cat "$<.opt"); pchuse=""; fi; \
+  if [ "$$(wc -l < "$$cfile")" -ge 2000 ]; then bigopt="-O0"; fi; \
+  if [ -f "$<.opt" ]; then bigopt=$$(cat "$<.opt"); fi; \
+  if [ -n "$$bigopt" ] && [ "$$bigopt" != "$(TEST_PCH_OPT)" ]; then pchuse=""; fi; \
   mtdef=""; rtlib="$(SP_RT_LIB)"; natobjs="$(BUNDLED_NATIVE_OBJS)"; mtld=""; \
   if grep -q SPINEL_USES_THREADS "$$cfile"; then \
     mtdef="$(MT_DEF)"; rtlib="$(SP_RT_MT_LIB)"; natobjs="$(BUNDLED_NATIVE_MT_OBJS)"; mtld="-lpthread"; pchuse=""; \

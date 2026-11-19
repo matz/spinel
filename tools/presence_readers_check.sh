@@ -17,8 +17,6 @@ set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT" || exit 2
 FUNCS="
-src/codegen_call.c:presence_at
-src/codegen_call.c:obj_responds_answer
 src/codegen_call.c:rto_exact_class_answer
 src/codegen_call.c:rto_subtree_answer
 src/codegen_call.c:rto_exc_by_cls
@@ -31,7 +29,6 @@ src/codegen_call.c:private_answer_overridden
 src/codegen_call.c:bool_side_responds
 src/codegen_call.c:reopen_own_live
 src/codegen_call.c:rt_probe_unfounded
-src/codegen_call.c:root_reopen_method_vis
 src/codegen_call.c:emit_io_pick_public
 src/codegen_call.c:emit_io_reopen_responds
 src/codegen_call.c:emit_class_value_responds_helper

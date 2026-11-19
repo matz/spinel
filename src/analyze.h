@@ -670,8 +670,11 @@ int elab_version_on_singleton(Compiler *c, int cls, const char *name, int node);
    reaches it, and no --ext-entry lets a host call in after the load), so
    the call runs at no statement at all; from and to then hold its
    region's last statement only to stay a window, and prove nothing about
-   which version the call meets. */
-typedef struct { LoadPoint from, to; unsigned char closed, wraps, never; } ElabWindow;
+   which version the call meets. post: the call may also run in the
+   post-load phase, once the load is over (an exit handler's body, or one
+   a handler runs: LrExt.post), so the window reaches past `to` into the
+   versions bodies make there (an exit handler's, a method only one calls). */
+typedef struct { LoadPoint from, to; unsigned char closed, wraps, never, post; } ElabWindow;
 int elab_call_window(Compiler *c, int id, ElabWindow *w);
 /* is the def (a DefNode) made before call id can first run, in the order the load phase runs, so that every run of the call
    finds it? 0 where the record cannot say (a call in a closure that may run ahead of it, a def under a condition's window) */

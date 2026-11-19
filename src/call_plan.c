@@ -12373,6 +12373,52 @@ int cplan_super_runs(Compiler *c, Scope *s, int *to) {
   }
   return n;
 }
+/* What a Method's super_method names for the method of scope mi: its super's target, the entry over it where that is a
+   layer (the one a super of its program made, any arity: a Method's arms tell the versions apart, not the call's
+   arguments), else the target itself; -1 for none */
+int cplan_super_method_target(Compiler *c, int mi) {
+  ElabVersion vs[VER_MAX_ARMS];
+  int to[VER_MAX_ARMS], late, from = mi, t;
+  /* (a layer's entry stands for the position it is made of: the method behind that is its super's) */
+  for (int i = 0; i < c->nver_entries; i++)
+    if (c->ver_entries[i].guard == VER_ENTRY_LAYER && c->ver_entries[i].scope == mi) from = c->ver_entries[i].from - 1;
+  t = from != mi ? pos_next(c, from) : cplan_super_target(c, -1, &c->scopes[mi], NULL);
+  if (t < 0 || !c->ver_built || !pos_versions(c, comp_super_site(c, &c->scopes[from]), t, to, vs, &late)) return t;
+  for (int i = 0; i < c->nver_entries; i++)
+    if (c->ver_entries[i].guard == VER_ENTRY_LAYER && c->ver_entries[i].from == t + 1) return c->ver_entries[i].scope;
+  return t;
+}
+/* The Methods a super_method of the Method of scope mi holds. Of the Method of an entry (a guard's or a late layer's),
+   which the run picked an arm of, the arms of the entry (cplan_method_arms) in the order a lookup takes them, one
+   scope for each version, each under the test of its cells: its super_method is the next live arm after the one the
+   Method is of (*after_own). Of the Method of a method that is none, those of the entry over the late layer its
+   super passes (each under the test of its cells), the first live one: where the entry's own else arm finds no
+   method, CPLAN_ARM_NONE, its super_method nil. A target that is no layer is one arm, tested by nothing; no
+   target, none. How many, into out (and tests, two for each). */
+int cplan_super_method_arms(Compiler *c, int mi, int *out, int *tests, int *after_own) {
+  int n = 0, t;
+  *after_own = 0;
+  if (c->scopes[mi].entry == ENTRY_DISPATCH || c->scopes[mi].entry == ENTRY_TABLE) {
+    n = cplan_method_arms(c, mi, -1, out, tests);
+    for (int k = 0; k < n; k++)
+      if (out[k] < 0 || out[k] == mi) out[k] = CPLAN_ARM_NONE;
+    if (n > 0) {
+      *after_own = 1;
+      return n;
+    }
+  }
+  t = cplan_super_method_target(c, mi);
+  if (t < 0) return 0;
+  if (c->scopes[t].entry != ENTRY_DISPATCH) {
+    out[0] = t;
+    tests[0] = tests[1] = -1;
+    return 1;
+  }
+  n = cplan_method_arms(c, t, -1, out, tests);
+  for (int k = 0; k < n; k++)
+    if (out[k] < 0 || out[k] == t) out[k] = CPLAN_ARM_NONE;
+  return n;
+}
 /* ...the entry over a layer a super of node id reaches, made for its
    arguments at the entries' build (ver_entries_build, by the position and
    the program's name); -1 for none */
@@ -13336,6 +13382,23 @@ static int capture_else_arm(Compiler *c, int e, int cap) {
   if (cap < 0 || c->scopes[e].is_cmethod || bh < 0) return e;
   return capture_hook_reach(c, c->scopes[e].class_id) ? bh : CPLAN_ARM_NONE;
 }
+/* Is e the entry of a late layer (pos_entry)? */
+static int ver_is_layer_entry(const Compiler *c, int e) {
+  for (int i = 0; i < c->nver_entries; i++)
+    if (c->ver_entries[i].guard == VER_ENTRY_LAYER && c->ver_entries[i].scope == e) return 1;
+  return 0;
+}
+/* The arms of entry e (ver_entry_targets), where an arm is the entry of the layer behind a late layer (its else arm)
+   replaced by that entry's arms in turn, nearest first: the lookup passes one late layer to the next, so a Method of
+   the entry holds the versions of each, in order. At most lim of them. */
+static int ver_layer_arms(const Compiler *c, int e, int *out, int *tests, int lim) {
+  int sub[VER_MAX_ARMS + 1], st[VER_MAX_ARMS + 1], n = 0, ns = ver_entry_targets(c, e, sub, st);
+  for (int j = 0; j < ns && n < lim; j++) {
+    if (sub[j] >= 0 && lim - n > 1 && ver_is_layer_entry(c, sub[j])) n += ver_layer_arms(c, sub[j], out + n, tests + n, lim - n);
+    else out[n] = sub[j], tests[n++] = st[j];
+  }
+  return n;
+}
 /* ...as a Method made of entry e holds them, each the method that runs
    at the bind: an arm that is itself the entry over a mixin's versions
    (pos_entry) by its own arms, under its test and theirs, and
@@ -13356,7 +13419,8 @@ int cplan_method_arms(Compiler *c, int e, int cap, int *out, int *tests) {
   for (int k = 0; k < n; k++) {
     int sub[VER_MAX_ARMS + 1], st[VER_MAX_ARMS + 1], ns = 0;
     const struct VerEntry *history = to[k] >= 0 ? guard_history_of(c, to[k]) : NULL;
-    if (history || (to[k] >= 0 && c->scopes[to[k]].entry == ENTRY_DISPATCH)) ns = ver_entry_targets(c, to[k], sub, st);
+    if (history) ns = ver_entry_targets(c, to[k], sub, st);
+    else if (to[k] >= 0 && c->scopes[to[k]].entry == ENTRY_DISPATCH) ns = ver_layer_arms(c, to[k], sub, st, VER_MAX_ARMS + 1);
     if (history && ns) sub[ns - 1] = history->behind - 1;
     for (int j = 0; j < ns && m < 2 * (VER_MAX_ARMS + 1); j++, m++) {
       if (tests) tests[2 * m] = t[k], tests[2 * m + 1] = st[j];

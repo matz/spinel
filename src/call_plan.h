@@ -158,6 +158,8 @@ int cplan_accessor_classes(Compiler *c, int id, int *out, int cap);
    to[VER_MAX_ARMS]: that one, or each version a layer of a mixin's copies
    holds below a later one. How many, 0 for none */
 int cplan_super_runs(Compiler *c, Scope *s, int *to);
+int cplan_super_method_target(Compiler *c, int mi);
+int cplan_super_method_arms(Compiler *c, int mi, int *out, int *tests, int *after_own);
 /* A conversion performed by a helper, separately from the enclosing call. */
 CallPlan cplan_conversion(Compiler *c, int id, int op, int ci, const char *name);
 CallPlan cplan_method_call(Compiler *c, int id);

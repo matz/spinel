@@ -5476,7 +5476,7 @@ static int method_obj_lookup(Compiler *c, int node, int *cls, int *sg) {
   if (node >= 0 && nt_kind(nt, node) == NK_CallNode && is_super_method_name(nt_str(nt, node, "name"))) {
     int imn = method_recv_node(c, nt_ref(nt, node, "receiver"));
     int mi = imn >= 0 ? method_obj_lookup(c, imn, NULL, NULL) : -1;
-    return mi >= 0 ? cplan_super_target(c, -1, &c->scopes[mi], NULL) : -1;
+    return mi >= 0 ? cplan_super_method_target(c, mi) : -1;
   }
   const char *sym = method_sym_arg(c, node);
   if (!sym) return -1;

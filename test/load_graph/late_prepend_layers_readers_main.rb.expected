@@ -1,0 +1,10 @@
+[true, Q2, Q2, [:q2, :k1], K1, :k1]
+[Q2, [:q2, [:q1, :k1]], Q1, [:q1, :k1], K1]
+[Q2, Q1, [:q1, :k1]]
+[K2, :k2, K2, true, [true, false]]
+[K2, :k2, Q2b, [:q2, :k2], Q2b]
+nil
+Q8
+[A, nil]
+[L1, A]
+[L3, L1, A]

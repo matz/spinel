@@ -12861,14 +12861,18 @@ TyKind infer_uncached(Compiler *c, int id) {
        the join the arms of an `if` make (a slot that cannot hold a nil, a
        Range or a bool, is boxed). Any other nil-typed expression is taken
        as one that diverges (a raise the folder has turned into a call).
-       Empty parentheses, a literal nil and a read of an ivar nothing sets
-       (ivar_never_set_in) also carry a nil value. */
+       Empty parentheses, a literal nil, a read of an ivar nothing sets
+       (ivar_never_set_in) and a call that reaches a method of the
+       program's (call_reaches_program_method: one answering such a read,
+       or a literal nil) also carry a nil value: a Range or boolean rescue
+       arm took that nil as its own `0..0`/false. */
     if (et == TY_NIL && rt != TY_UNKNOWN && rt != TY_VOID && e >= 0) {
       int one;
       switch (vp_one(nt, e, VPS_NONE | VP_PARENS_ONLY, &one)) {
       case VP1_NODE:
         if (is_yield_or_blk_param_call(c, one) || nt_kind(nt, one) == NK_NilNode ||
-            nt_kind(nt, one) == NK_InstanceVariableReadNode) return ty_unify(et, rt);
+            nt_kind(nt, one) == NK_InstanceVariableReadNode ||
+            (nt_kind(nt, one) == NK_CallNode && call_reaches_program_method(c, one))) return ty_unify(et, rt);
         break;
       case VP1_NIL: return ty_unify(et, rt);
       case VP1_MANY: break;

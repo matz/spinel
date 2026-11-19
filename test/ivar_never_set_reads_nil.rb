@@ -89,3 +89,15 @@ end
 
 lk = Lookup.new
 p lk.sym, lk.sym.nil?, lk.num.nil?, lk.str.nil?, (lk.sym || :d), lk.owner, owner_v(Owner2.new)
+
+# A method answering such a read (or a literal nil) is a value in a rescue
+# modifier too: a Range or boolean rescue arm, which holds no nil of its own,
+# keeps the nil rather than reading it as 0..0 or false.
+class Sized
+  def initialize = (@b = 1)
+  def sz = @size
+  def none = nil
+  def r = [(sz rescue (1..2)), (sz rescue true), (none rescue (3..4)), (none rescue false)]
+end
+
+p Sized.new.r, Sized.new.r.map(&:nil?)

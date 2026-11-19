@@ -6112,6 +6112,11 @@ static sp_float sp_num_to_f(sp_RbVal v) {
   sp_raise_cls("TypeError", sp_sprintf("can't convert %s into Float", w));
   return 0.0;
 }
+/* Math.sqrt of a boxed value: a Complex returns a Complex (rb_math_sqrt) */
+static inline sp_RbVal sp_poly_math_sqrt(sp_RbVal v) {
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_COMPLEX && v.v.p) return sp_box_complex(sp_complex_math_sqrt(sp_poly_as_complex(v)));
+  return sp_box_float(sp_math_sqrt(sp_num_to_f(v)));
+}
 /* Exception introspection staging: the runtime raisers stage the receiver /
    key / carried value here just before raising, and sp_raise_cls materializes
    a carried exception exposing them via #receiver / #key / #tag / #reason /

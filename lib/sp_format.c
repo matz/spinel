@@ -208,6 +208,19 @@ sp_Complex sp_complex_div_int(sp_Complex a, sp_int b) {
 sp_Complex sp_complex_neg(sp_Complex a) { sp_Complex c; c.re = -a.re; c.im = -a.im; c.fl = a.fl; return c; }
 sp_float sp_complex_abs2(sp_Complex a) { return (a.re * a.re) + (a.im * a.im); }
 sp_float sp_complex_abs(sp_Complex a) { return sqrt((a.re * a.re) + (a.im * a.im)); }
+/* Math.sqrt of a Complex, as CRuby's rb_math_sqrt: hypot is the double
+   rb_complex_abs returns, and the sign of the imaginary part (f_signbit, no
+   sign for NaN) gives the sign of the result's */
+sp_Complex sp_complex_math_sqrt(sp_Complex a) {
+  int neg = (a.fl & SP_CPLX_IM_F) ? (!isnan(a.im) && signbit(a.im)) : a.im < 0;
+  sp_float d = hypot(a.re, a.im);
+  sp_Complex c;
+  c.im = sqrt((d - a.re) / 2.0);
+  c.re = sqrt((d + a.re) / 2.0);
+  if (neg) c.im = -c.im;
+  c.fl = SP_CPLX_RE_F | SP_CPLX_IM_F;
+  return c;
+}
 sp_bool sp_complex_eq(sp_Complex a, sp_Complex b) { return a.re == b.re && a.im == b.im; }
 /* z ** w for a non-integer exponent: exp(w * ln z); an integral real w
    defers to the exact integer power (preserving component classes). */

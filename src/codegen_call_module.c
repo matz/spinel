@@ -1551,6 +1551,16 @@ else {
     else if (sp_streq(name, "erf"))   cfn = "erf";
     else if (sp_streq(name, "erfc"))  cfn = "erfc";
     else if (sp_streq(name, "gamma")) cfn = "sp_math_gamma";
+    if (cfn && argc == 1 && sp_streq(name, "sqrt")) {
+      if (repr_of(c, argv[0]).as_ty == TY_COMPLEX) {
+        buf_puts(b, "sp_complex_math_sqrt("); emit_expr(c, argv[0], b); buf_puts(b, ")");
+        return 1;
+      }
+      if (repr_of(c, id).as_ty == TY_POLY) {
+        buf_puts(b, "sp_poly_math_sqrt("); emit_boxed(c, argv[0], b); buf_puts(b, ")");
+        return 1;
+      }
+    }
     if (cfn && argc == 1) {
       /* emit_math_arg casts a plain int and coerces a poly value alike -- a
          bare `if (a0t==TY_INT) "(double)"` cast left a poly-typed arg (e.g.

@@ -281,34 +281,98 @@ A keyword `def` with no point (in a method body, a lambda, a block or an
 exit handler) is a version of the history it writes (`lr_body_versions`):
 `def self.m`, `def K.m` and `def m` take the class the record resolves for
 their frame (`lr_body_frame`, `lr_body_target`); the dump marks it
-`in def#N` with its body's `from`. Only a public def is such a version,
-and only of a name the program makes no entry of that the call plan cannot
-answer next to it (`lr_body_def_version`, over `lr_body_forms`). The scope
+`in def#N` with its body's `from`. So is a visibility word such a body
+runs with literal names (`private :m`, `protected :a, :b`, `public [:c]`,
+`private def m`; `lr_body_word`), a version of each name it takes, where
+the tree spells the class self is there (a class method's body, self's
+eval blocks, and a `class << self` it opens, whose word names the class
+side: `lr_body_word_frame`). Not `module_function`, which copies, nor a
+`def self.m` argument, which names a class method the word looks up
+among the instance methods: that word raises NameError where it runs, as
+any word naming a method the class has none of does, in a statement or
+for its value (`emit_vis_word_absent`). A def's version holds the
+visibility it has where it runs (`lr_body_def_vis`: a word that takes
+it, a bare word before it in a class body's statements, private for
+`initialize` and its kin); a word's version holds the visibility it sets,
+which the plan reads where the word runs (`lr_version_vis`, from the
+version's visibility cell where only the run decides). Only a def or a
+word of a name the program makes no entry of that the call plan cannot
+answer next to it is such a version (`lr_body_def_version`, over
+`lr_body_forms`). The scope
 is the name, program-wide: the plan answers no other entry as a body's
 version yet, and once a name has versions its readers (the entries' arms,
 the poly arms, the presence readers, `respond_to?`, `method_defined?` and
 the list readers, the hooks: "Readers of a body's versions" below) ask the record's by-name index, which holds
 every history of the name in every class on both sides, and read them as
-versions only. The entries that bar it are, anywhere in the program, a def
-that is not public where it runs, a def, an alias or an undef that lands
+versions only. The entries that bar it are, anywhere in the program,
+`initialize` and its kin, a def, an alias or an undef that lands
 on main (Object's private method, whatever word takes it, which the plan
 answers over main's own path, not as a version; a `module Kernel` def
 hoisted to the top level is Kernel's and does not count), a visibility
-word naming the name, an entry a literal send makes
+word naming the name that is no body's version (one at the top level or
+in a class body the load places, one with a name only the run spells,
+one whose frame the tree does not spell), an entry a literal send makes
 (`send(:define_method, :m)`: Spinel makes no method of it, so a version
-would hide the method CRuby has; a send of a visibility word is none) and
-any other entry not public where it runs; in a body, also every other
+would hide the method CRuby has; a send of a visibility word is none);
+in a body, also every other
 entry it makes (an alias, an undef, an accessor, a `define_method`, a
 `define_singleton_method`, a `module_function` copy); at the top level, an
-alias of a name barred so. A public def, and a public version at the top
+alias of a name barred so. Five more bars keep a body's word, or its
+non-public def, in the form it has where the record holds no body
+versions, until the readers it needs read the version cells; each says
+in the source what drops it. They ask what one walk over the tree
+gathers (`lr_body_names_read`), so each ask is a lookup:
+
+- a word on a module's method, on a name a module body defines (a def,
+  an attribute, a `define_method`, an `alias_method` or an `alias`), or
+  on a name the class does not define itself on the word's side but
+  another class, a module or a core class does (`lr_body_word_barred`):
+  an include, extend or prepend copy carries the module's def versions
+  only, not a word's, and an inherited method keeps its own visibility
+  until the word runs, where a version would be the word's from the
+  start. A name nothing defines is no bar: the word raises NameError
+  where it runs, which its version answers;
+- any body word in a program that defines `method_missing` or
+  `respond_to_missing?`: the entry's else arm and the presence readers
+  answer from the table there;
+- a word or a non-public def in a body whose own calls may reach a send,
+  a super, a yield, an eval or a definition form, itself or through a
+  method of the program it calls (`lr_body_followed`, read from the tree
+  alone: `lr_body_defines` with `LR_DEFINES_TREE`, where every def and
+  word counts as followed, so the answer is the same while the walk
+  records and after it): the readers those calls reach answer from the
+  start, where a version would be its own visibility before CRuby has the
+  method;
+- a word or a non-public def in a class method a call may run on a
+  subclass (`lr_body_self_unsure`): where a class header's superclass
+  constant resolves, in the record, to the class or to no class it knows,
+  or a superclass no constant names, a `Class.new` with a superclass, or a
+  `dup` or `clone` of a constant may make one, and a call of the method is
+  not on a constant or in a class body the record resolves to the class
+  itself (`lr_body_site_class`: a call on an alias of a subclass, on
+  `K = Class.new(A::K)`, on a constant it cannot resolve, on another
+  receiver, on self in a method or a block, a send, a Method, a
+  block-pass symbol, an alias, a `super`, or a send or a Method maker of a
+  name the tree does not spell anywhere). The word acts on the class the
+  call runs on, and the record places the version on the class the method
+  is written in;
+- a class-side word (in a `class << self` body a class method opens) or
+  a class method's non-public def, where a reader that reads no
+  class-side version names it (`lr_cside_unfollowed`): a list of an
+  object's methods, a `respond_to?` or a Method maker naming it, a
+  `defined?` of a call of it, or a call or a send of it on a receiver that
+  is no constant or self. Those readers answer from the table, so a
+  version there would let a guarded call raise; the class side has no
+  face entries or visibility cells yet.
+
+A public def, a body's version as above, and a public version at the top
 level (an alias, an accessor, a `define_method`, an undef), are versions
 the plan answers. So the rest a body makes stay unplaced, applied from the
-start, a non-public def in a method body stays a definition the record
-cannot follow, and a public def of a barred name keeps the same form:
-`private :m` after `def m` in a class body in a Proc, a `private def m` in
-one class method and a `def m` in another, a top-level `private :m`, a
-`define_singleton_method` of the name, or a `private :m` in another
-class's body. A version of a body that first runs once the load is over (`from` is
+start, a non-public def a bar keeps stays a definition the record cannot
+follow (public from the start), and a def of a barred name keeps the same
+form: a top-level `private :m`, a `private :m` a class body the load
+places runs after a body's version, a `define_singleton_method` of the
+name, or a `send(:private, :m)`. A version of a body that first runs once the load is over (`from` is
 `post`: an exit handler, a block or closure only exit handlers run, an
 `--ext-entry` method, a method only exit handlers call) is after every
 point of the load, and a window with `post` holds it, so a call in an exit
@@ -439,9 +503,21 @@ A list of a class's own instance methods on a constant
 (`C.instance_methods(false)` and its `public_`, `protected_` and
 `private_` forms, `list_cells_shape`) is a reader of each name a body
 may define there, on the class's own side (`CT_OWN`): the list holds the
-name where one of its cells says it is live (a body's version is public,
-so a list that shows public names). It asks the class object, live from
-its header on, where no instance may exist yet (`ct_version_at`).
+name where one of its cells says it is live with a visibility the form
+shows. It asks the class object, live from its header on, where no
+instance may exist yet (`ct_version_at`). A method live there whose
+visibility a body's word sets where it runs is read the same way: the
+word's version cell and its visibility cell decide, and the method's own
+visibility where no word has run (`cplan_presence_cells`), not the
+visibility the table ends with, so the private form lists the name once
+the word has run and the public form stops listing it.
+
+A call, `respond_to?` or `method_defined?` at a point the load places,
+before or after a call of a class method whose body runs a word, reads
+the visibility the record holds at that point: the method's own before
+the body may have run, the word's after a statement that surely ran it
+(`elab_method_vis_at`), and the visibility cell where the body may have
+run any number of times.
 
 A reader that answers from the final tables instead keeps the table's
 answer for the calls of the names it may read: such a version is not
@@ -456,7 +532,8 @@ the table's on a class that extends the module too, so the class value's
 `respond_to?` answers it from the start. Only list readers of the same
 side count: a class-side list (`K.singleton_methods`) leaves an instance
 method's versions to the cells. A body that makes a definition the
-record cannot follow (a `private def`) is listed whole from the start.
+record cannot follow (a non-public def a bar keeps, above) is listed
+whole from the start.
 
 A reader called inside a body (a class method that defines `m2` and then
 calls one that asks `respond_to?(:m2)` or calls `m2`) reads what that

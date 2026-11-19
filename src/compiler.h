@@ -1926,8 +1926,8 @@ typedef struct {
      (class, side, name, parameter count) for the calls whose version is
      known only at run time, or by guard (VER_ENTRY_*, call_plan.h), for
      the calls that reach a later prepend's copy (Scope.mixin_guarded), or
-     for the supers that reach a layer of a mixin's copies of a module's
-     versions (call_plan.c, super_layer_entry), and each of its arms'
+     for the supers and calls that reach a layer of a mixin's copies of a
+     module's versions (call_plan.c, pos_entry), and each of its arms'
      calls pinned to the method it runs. absent: asked for a call that may
      meet no version of the chain yet, 2 when the entry's else arm answers
      for none, 1 when it keeps the last version (ver_entries_demand);

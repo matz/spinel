@@ -1821,7 +1821,9 @@ enum { VER_FINDS_NONE, VER_FINDS_HIDDEN, VER_FINDS_PUBLIC };
    the versions a chain holds for a call whose version is known only at
    run time; a later mixin's guarded copies (Scope.mixin_guarded); an open
    history's versions, for a call that may meet none yet; the versions of
-   a layer of a mixin's copies that a super reaches (super_layer_entry) */
+   a layer of a mixin's copies, the entry over its versions (pos_entry): a guard's
+   arm, a super that reaches it (super_layer_entry) or a call that takes it as
+   the class's first position (pos_front) runs it */
 enum { VER_ENTRY_CHAIN, VER_ENTRY_GUARD, VER_ENTRY_HISTORY, VER_ENTRY_LAYER };
 int cplan_entry_finds(const Compiler *c, int e);
 /* The program's `self.new` a `new` call id on class ci runs, -1 for

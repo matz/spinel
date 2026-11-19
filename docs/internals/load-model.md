@@ -470,6 +470,76 @@ constant; a reader that makes a lambda, or takes a block and calls it; a
 body that passes its block on to the reader (`look(&b)`); and a body that
 calls itself.
 
+### Late layers of a class's chain
+
+A mixin copies its module's methods into the class's lookup: a prepend's
+copy in front of the class's own def, an include's or an extend's behind
+it, the stand-in a mixin has in front of a class with no method of its
+own (`super_behind`). Each copy is a *position* of the chain. A position
+is a *layer* when a call may meet none of its versions live yet (a
+version a method body makes, or a def a later statement makes, ahead of
+which a call may run: `elab_versions_late`), or the module holds several
+versions (a guarded copy, an include's or an extend's hidden copy). CRuby's
+lookup passes a module until its method exists, and so does a `super` from
+a position in front of it.
+
+The call plan makes one entry for each layer, once (`pos_entry`, kept in
+`ver_entries` as `VER_ENTRY_LAYER` from the position's scope): an if-chain
+over the cells of the versions' histories, nearest first, its else arm what
+lies behind the position: the entry of the next position where that is a
+layer too (`pos_next`), else its method, or, where a later prepend guards
+the method of the class behind it, that class's guard entry (`pos_guard`),
+which tests the prepend's cell first. Where nothing lies behind it, the else
+arm is what a call that meets no version made gets: the receiver's
+`method_missing`, or NoMethodError. A subclass's own `method_missing`
+answers its receivers where the class has none (tested by the receiver's
+class), and a class that has one answers every receiver but those of a
+subclass that defines its own (the dispatch of the arm). A subclass whose
+`method_missing` a method body defines, and every subclass where the call
+hands a block (a `method_missing` only subclasses define cannot take one:
+codegen refuses it), keeps a version for its receivers, as before the arm
+answered: at each position of the layers whose lookup ends so, the version of
+that position (its last, pinned), so that a layer's body's `super` reaches the
+next position's entry, which pins its own, as the entries of a chain ran
+before. The record does not ask the cell of a body's `method_missing` (a
+builtin name), so it would be taken for there from the start. Every reader of a position asks that entry, so the lookup behind a late
+layer is made once, whatever reaches it:
+
+- a later prepend's guard entry (`guard_entry_make`) calls the entry of each
+  guarded copy it arms and of the method behind its arms, testing the
+  mixin's cell and then the version's cell;
+- a prepend in a class body in front of the class's own def, which the table
+  answers, is the class's first position (`pos_front`): the call takes its
+  entry, whose else arm is the own def under its hidden name;
+- a `super` that reaches a layer takes the same entry (`super_layer_entry`);
+  where the layer's cell is set wherever the super's method runs
+  (`layer_ran_before`), only its versions' cells are tested, else the guard
+  entry's;
+- `Method#super_method` writes one Method for each of the entry's arms, as a
+  capture of an entry does (`cplan_super_method_target`).
+
+The pin of an entry's arm, and of its else arm, is static: it binds the
+method of a class the receiver's class is at or below, whatever the
+receiver's own lookup finds (`ct_pin_binds`), so no arm dispatches on the
+receiver's class and a subclass's method of the same hidden name is no
+target of it. A position in a superclass's part of the chain is the
+superclass's: a subclass's `super` into it takes the superclass's entry.
+
+A chain of guarded copies longer than `VER_MAX_ARMS` (64: one more than a
+guard entry holds, with the method behind it) has no guard entry at all, as
+on any chain: a call keeps the table's answer, the copy in front, and a late
+layer there is not passed. It is a silent fallback, not a refusal; the chain
+would have to be cut into entries of at most 63 arms, each else arm the next.
+
+What it does not cover: an include or an extend in a class body in front
+of no method of the class's own, answered by its module's open history; a
+class's own def that is itself a method body's version behind a late
+prepend; a conditional prepend behind another prepend, which the table
+takes for a copy that is always there; a `super` that finds no method where
+the class defines `method_missing` (the NoMethodError a `super` raises
+there is not the call to `method_missing` that CRuby's is), also where no
+layer is late.
+
 ## Freshness and cost
 
 The map of points is a function of the tree as it stands. `elab_fresh`

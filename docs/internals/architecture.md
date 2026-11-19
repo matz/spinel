@@ -44,7 +44,8 @@ and byte routes serve builtin producers still being migrated under #11391.
 Boxing a String preserves the object emitted by its producer. A dynamic
 send uses that same path for the String returned by its selected method.
 A named reflective write to an existing String instance variable uses
-the ordinary String slot writer.
+the ordinary String slot writer. It holds the original receiver before
+running the assignment's right-hand side.
 Hash key insertion consults the runtime String's frozen state. It retains a
 frozen key and makes a frozen key object for an unfrozen input, including a
 static empty or one-character result. The Hash stores the key's byte view.

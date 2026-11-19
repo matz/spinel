@@ -3753,7 +3753,8 @@ int emit_object_ivar_call(Compiler *c, int id, const char *name, int recv, TyKin
         int rdp = ivar_set_slot_read(c, id, mt), tvp = rdp ? ++g_tmp : 0;
         int held = recv_lvalue || arg_ran_first(recv, 0);
         int ref_slot = needs_root(mt) || mt == TY_STR_RANGE;
-        int stmt = !is_val && (rdp || !held || (ref_slot && !comp_value_dropped(c, id)));
+        int string_effect = mt == TY_STRBUF && subtree_has_side_effect(c, argv[1]);
+        int stmt = !is_val && (rdp || !held || string_effect || (ref_slot && !comp_value_dropped(c, id)));
         Buf lhs; memset(&lhs, 0, sizeof lhs);
         if (rdp && is_val) {
           buf_puts(b, "({ "); buf_puts(&lhs, "("); emit_expr(c, recv, &lhs);
@@ -3763,7 +3764,7 @@ int emit_object_ivar_call(Compiler *c, int id, const char *name, int recv, TyKin
         else if (stmt) {
           int trp = ++g_tmp;
           buf_printf(b, "({ sp_%s *_t%d = ", c->classes[cid].c_name, trp);
-          emit_ivar_set_recv(c, recv, trp, recv_lvalue && !rdp, b);
+          emit_ivar_set_recv(c, recv, trp, recv_lvalue && !rdp && !string_effect, b);
           buf_printf(&lhs, "_t%d->iv_%s", trp, iv_c(sym + 1));
           buf_printf(b, "%s = ", lhs.p);
         }
@@ -3776,7 +3777,17 @@ int emit_object_ivar_call(Compiler *c, int id, const char *name, int recv, TyKin
           /* nil into a plain Integer / Float field (no nil bit): the slot cannot hold it */
           buf_printf(b, "%s(%s)", oint_arg(mt), oint_nil(mt));
         }
-        else if (mt == TY_STRBUF) emit_strbuf_value(c, argv[1], b);
+        else if (mt == TY_STRBUF) {
+          /* Run the value's prelude after holding the write receiver. */
+          Buf value = {0}, pre = {0}, *outer_pre = g_pre;
+          g_pre = &pre;
+          emit_strbuf_value(c, argv[1], &value);
+          g_pre = outer_pre;
+          if (pre.len) buf_printf(b, "({ %s%s; })", pre.p, value.p);
+          else buf_puts(b, value.p);
+          free(value.p);
+          free(pre.p);
+        }
         /* nil into a scalar slot is the nil it holds beside the value, not
            the zero value the literal emits as */
         else if (nt_kind(nt, argv[1]) == NK_NilNode && nil_value(mt)) buf_puts(b, nil_value(mt));

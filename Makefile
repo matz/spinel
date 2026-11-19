@@ -6318,10 +6318,11 @@ COND_DEFS_CPU_LIMIT ?= 9.0
 FACE_LANDINGS_LIMIT ?= 2.6
 # N classes under a chain of six, each calling four class methods the
 # chain's root defines in its body (test/scale/inherited_class_calls.sh), at
-# N=200 and N=800, by the CPU time of the class structure phase (the best of
-# three): before the scope index is frozen each lookup of a call's name up
-# the class's chain scanned every scope (specialize_inherited_cls_new,
-# comp_name_answered), work the count does not see (15.1x at 4x the classes;
+# N=200 and N=800, by the class structure phase's time (SP_TIMING's elapsed
+# time, the best of three): before the scope index is frozen each lookup of
+# a call's name up the class's chain scanned every scope
+# (specialize_inherited_cls_new, comp_name_answered), work the count does
+# not see (15.1x at 4x the classes;
 # 7.8x to 8.5x with one walk of the scopes per name for every class,
 # comp_scope_batch_begin, where the rest of the phase grows faster than
 # linearly in the classes). A time ratio moves with the machine's load; only
@@ -6577,7 +6578,9 @@ scale-test: $(SPINEL_WORK)
 	qta=$$(cpu q8.rb) || { rm -rf "$$tmp"; exit 1; }; \
 	qtb=$$(cpu q32.rb) || { rm -rf "$$tmp"; exit 1; }; \
 	phase () { b=; for i in 1 2 3; do \
-	  t=$$(SP_TIMING=1 $(SPINEL_WORK) -c -o "$$tmp/fl.c" "$$tmp/$$1" 2>&1 | sed -n "s/^spinel-timing: phase=$$2 ms=//p" | head -1); \
+	  o=$$(SP_TIMING=1 $(SPINEL_WORK) -c -o "$$tmp/fl.c" "$$tmp/$$1" 2>&1); r=$$?; \
+	  if [ $$r -ne 0 ]; then echo "scale-test: FAIL (spinel-work exited $$r on $$1)" >&2; echo "$$o" | tail -3 >&2; return 1; fi; \
+	  t=$$(echo "$$o" | sed -n "s/^spinel-timing: phase=$$2 ms=//p" | head -1); \
 	  [ -n "$$t" ] || { echo "scale-test: FAIL (spinel-work timed no $$2 on $$1)" >&2; return 1; }; \
 	  b=$$(awk -v b="$$b" -v t="$$t" 'BEGIN { print (b == "" || t < b) ? t : b }'); done; echo "$$b"; }; \
 	gen face_landings 400 fl4.rb; gen face_landings 800 fl8.rb; \
@@ -6691,7 +6694,7 @@ scale-test: $(SPINEL_WORK)
 	  printf "scale-test: visibility face CPU time at 2x the landing classes is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
 	  { echo "scale-test: FAIL (each class a call may land on asked lookups that answer the same for every class: see ct_face_for)"; exit 1; }; \
 	awk -v a="$$iha" -v b="$$ihb" -v lim="$(INHERITED_CLASS_CALLS_LIMIT)" 'BEGIN { if (a <= 0) a = 0.01; r = b / a; \
-	  printf "scale-test: inherited class method lookup CPU time at 4x the classes is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
+	  printf "scale-test: inherited class method lookup phase time at 4x the classes is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
 	  { echo "scale-test: FAIL (each class-body call scanned every scope per ancestor for its name: see comp_scope_batch_begin)"; exit 1; }
 
 .PHONY: bisect-test

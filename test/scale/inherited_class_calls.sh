@@ -7,7 +7,8 @@
 # is frozen, where a lookup scans every scope. A scan of the scopes for each
 # call and each ancestor grows as N^2; one walk of the scopes per name
 # answers every class (comp_scope_batch_begin). The scans read no node, so
-# make scale-test takes this leg by the phase's CPU time.
+# make scale-test takes this leg by the phase's time (SP_TIMING's elapsed
+# time, the best of three).
 N=${1:-10}
 awk -v N="$N" 'BEGIN {
   print "class Base0"

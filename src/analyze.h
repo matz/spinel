@@ -540,6 +540,10 @@ int elab_method_replaced(Compiler *c, const char *name);
    do the methods its versions give have more than one visibility (a
    module's private one and a class's public one)? */
 int elab_method_vis_varies(Compiler *c, const char *name);
+/* is call id a visibility word with names a method body runs on the class
+   self is there, which the record holds as the entries of that body (its
+   value is then the word's, as in a class body)? */
+int elab_body_word(Compiler *c, int id);
 /* may a method `name` the program gives be protected at some point of the
    load: does one of its histories hold a protected def, alias or visibility
    word of it? 1 where the load is not recorded. */

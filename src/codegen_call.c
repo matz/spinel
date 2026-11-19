@@ -20054,10 +20054,11 @@ void refl_emit_sym_array(Compiler *c, int cid, ReflNames *r, Buf *b) {
       if (cplan_undefined(c, cid, 0, r->v[i])) continue;
     }
     /* a name whose versions the record cannot order against the list: listed where one of its cells says it is
-       live (cplan_list_cells), as a respond_to? there answers; public versions only, of a class-side list or of a
-       list of a class's own instance methods (one the table shows: above) */
+       live (cplan_list_cells), as a respond_to? there answers; of the visibilities the list shows, of a class-side
+       list or of a list of a class's own instance methods (one the table shows: above) */
     if (r->at && !guarded && (r->at_side & (CT_CMETHOD | CT_OWN)) && !(r->show[i] & REFL_ROW) &&
-        cplan_list_cells(c, r->at - 1, r->at_cls, r->at_side, r->v[i], &cs) && cplan_cells_testable(c, &cs)) {
+        cplan_list_cells(c, r->at - 1, r->at_cls, r->at_side, r->v[i], r->vis_mask ? r->vis_mask : 3, &cs) &&
+        cplan_cells_testable(c, &cs)) {
       buf_puts(b, "if (");
       int open = emit_cells_test(c, &cs, 0, b);
       buf_puts(b, "0");
@@ -20568,6 +20569,20 @@ static void emit_cell_match(Compiler *c, const char *cell, int value, Buf *b) {
   buf_printf(b, repr_slot_kind(c, cells_test_cell(c, cell)) == RK_BOXED ? "sp_poly_eq(gv_%s, sp_box_int(%dLL))" : "gv_%s == %d",
              cell + 1, value);
 }
+/* ...the test that visibility cell vis holds a visibility mask counts (core_bit_of_vis; 0, a producer's that sets
+   none, counts the public one): the one it counts, or each but the one it leaves out */
+static void emit_vis_match(Compiler *c, const char *vis, int mask, Buf *b) {
+  const int order[3] = { SP_VIS_PUBLIC, SP_VIS_PROTECTED, SP_VIS_PRIVATE };
+  int in = 0, one = SP_VIS_PUBLIC, out = SP_VIS_PUBLIC;
+  if (!mask) mask = core_bit_of_vis(SP_VIS_PUBLIC);
+  for (int k = 0; k < 3; k++)
+    if (core_bit_of_vis(order[k]) & mask) in++, one = order[k];
+    else out = order[k];
+  if (in == 1) { emit_cell_match(c, vis, one, b); return; }
+  buf_puts(b, "!(");
+  emit_cell_match(c, vis, out, b);
+  buf_puts(b, ")");
+}
 /* See codegen_call_arms.h. */
 void emit_guarded_presence(Compiler *c, const CplanCells *cs, Buf *b) {
   buf_puts(b, "(");
@@ -20597,7 +20612,7 @@ static int emit_cells_test(Compiler *c, const CplanCells *cs, int tail, Buf *b) 
     if (i > last) buf_puts(b, " || ");
     else if (cs->vis[i][0]) {
       buf_puts(b, " ? (");
-      emit_cell_match(c, cs->vis[i], SP_VIS_PUBLIC, b);
+      emit_vis_match(c, cs->vis[i], cs->mask, b);
       buf_puts(b, ") : (");
       open++;
     }
@@ -20703,7 +20718,7 @@ int emit_respond_to_cells(Compiler *c, int id, int recv, TyKind rt, const char *
     return 1;
   }
   cplan_presence_list_free(&l);
-  if (ci < 0 || !cplan_cmethod_presence(c, id, ci, qm, all, 0, &cs) || !cplan_cells_testable(c, &cs)) return 0;
+  if (ci < 0 || !cplan_cmethod_presence(c, id, ci, qm, all ? 7 : 1, 0, &cs) || !cplan_cells_testable(c, &cs)) return 0;
   if (!b) return 1;
   int els = cs.els || cplan_class_builtin_responds(c, ci, qm) || (all && class_object_private_method(qm, comp_class_is_module(c, &c->classes[ci])));
   buf_puts(b, repr_of(c, id).kind == RK_BOXED ? "sp_box_bool" : "");
@@ -24103,11 +24118,19 @@ int method_vis_for_caller(Compiler *c, int id, int vcid, const char *vnm) {
       !nt_str(c->nt, id, "vis_enforce")) return SP_VIS_PUBLIC;
   if (vis == SP_VIS_PROTECTED) {
     /* the caller's self must be an instance of the declaring class: that
-       class itself or a descendant */
+       class itself or a descendant; in a block that may run with another
+       self, that self (cplan_protected_caller). Where nothing tells, the
+       visibility is the plan's at no point, the declared one, read with the
+       scope's self, as where the record holds no body versions */
     Scope *cs = comp_scope_of(c, id);
-    int caller = (cs && !cs->is_cmethod) ? cs->class_id : -1;
-    if (caller < 0 && cs && !cs->is_cmethod) caller = scalar_copy_self_class(c, cs);
-    int singleton = cs && cs->is_cmethod;
+    int scope = (cs && !cs->is_cmethod) ? cs->class_id : -1;
+    if (scope < 0 && cs && !cs->is_cmethod) scope = scalar_copy_self_class(c, cs);
+    int caller = cplan_protected_caller(c, id, scope);
+    if (caller == CPLAN_SELF_UNKNOWN) {
+      caller = scope;
+      vis = cplan_method_vis(c, -1, vcid, vnm, 0, &owner);
+    }
+    int singleton = caller == scope && cs && cs->is_cmethod;
     if (cplan_protected_owner_open(c, singleton ? cs->class_id : caller, singleton, owner))
       vis = SP_VIS_PUBLIC;
     /* A prepend can supply the caller's copy without an include edge. */

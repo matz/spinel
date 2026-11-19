@@ -576,6 +576,7 @@ void comp_free(Compiler *c) {
   free(c->splat_views); c->splat_views = NULL; c->nsplat_views = 0;
   for (int i = 0; i < c->nver_entries; i++) free(c->ver_entries[i].name);
   free(c->ver_entries); c->ver_entries = NULL; c->nver_entries = 0;
+  free(c->ver_scope_face); c->ver_scope_face = NULL; c->ver_scope_face_n = c->ver_scope_face_ns = 0;
   ver_memo_drop(c);
   for (int i = 0; i < c->nver_late; i++) free(c->ver_late[i].name);
   free(c->ver_late); c->ver_late = NULL; c->nver_late = 0;

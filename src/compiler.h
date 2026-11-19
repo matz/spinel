@@ -1959,6 +1959,10 @@ typedef struct {
      (desugar_call_op_write's setter name) */
   struct VerEntry { char *name; int guard, cls, sg, ar, scope, absent, cells, finds, from, behind, face, vis, anyform, end_arm; } *ver_entries;
   int nver_entries;
+  /* by scope, 1 where an entry of that scope has a face (cplan_guarded_call_visibility), read again once the entries
+     are not the ver_scope_face_n they were */
+  unsigned char *ver_scope_face;
+  int ver_scope_face_n, ver_scope_face_ns;
   /* per global (c->gvars' index, the first nver_cell_dropped of them): 1 for
      a version cell no emitted code reads, whose declaration and writes the C
      leaves out (call_plan.c, ver_cells_settle) */

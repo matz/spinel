@@ -2144,6 +2144,42 @@ int emit_op_string_bytesplice(Compiler *c, const BopCtx *x, Buf *b) {
   return 1;
 }
 
+int emit_op_string_append_as_bytes(Compiler *c, const BopCtx *x, Buf *b) {
+  int argc, chk = 0, t, a = ++g_tmp;
+  const int *argv = call_args(c->nt, x->id, &argc);
+  int boxed = x->op->recv == BOP_BOXED_FALLBACK;
+  if (boxed && poly_name_user_claimed(c, x->name, argc)) return 0;
+  if (boxed) {
+    t = ++g_tmp;
+    buf_printf(b, "({ sp_RbVal _t%d = ", t);
+    if (x->rtext) buf_puts(b, x->rtext); else emit_boxed(c, x->recv, b);
+    buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d);", t);
+  } else t = str_mut_open(c, x, &chk, b);
+  int splat = 0;
+  for (int i = 0; i < argc; i++) if (nt_kind(c->nt, argv[i]) == NK_SplatNode) splat = 1;
+  if (splat) emit_gather_call_args(c, argv, argc, a, b);
+  else if (argc) {
+    buf_printf(b, " sp_RbVal _t%d[%d];", a, argc);
+    for (int i = 0; i < argc; i++) {
+      buf_printf(b, " _t%d[%d] = ", a, i); emit_boxed(c, argv[i], b);
+      buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d[%d]);", a, i);
+    }
+  }
+  if (boxed) {
+    buf_printf(b, " if (!sp_strface_b_box(_t%d)) sp_raise_poly_nomethod(\"append_as_bytes\", _t%d);"
+                  " sp_strbuf_append_as_bytes((sp_String *)_t%d.v.p, ", t, t, t);
+  } else {
+    str_mut_nil_check(x, t, chk, b);
+    buf_printf(b, " sp_strbuf_append_as_bytes(_t%d, ", t);
+  }
+  if (splat) buf_printf(b, "_t%d->len, _t%d->data);", a, a);
+  else if (argc) buf_printf(b, "%d, _t%d);", argc, a);
+  else buf_puts(b, "0, NULL);");
+  if (boxed) buf_printf(b, " _t%d; })", t);
+  else str_mut_self_answer(c, x, t, b);
+  return 1;
+}
+
 int emit_op_string_clear(Compiler *c, const BopCtx *x, Buf *b) {
   /* emptied in place (a frozen String raises, an empty one too) */
   int chk, t = str_mut_open(c, x, &chk, b);

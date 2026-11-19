@@ -2732,6 +2732,11 @@ int builtin_method_fixed_any(const char *m) {
 int method_scope_arity(Compiler *c, int target, int *out) {
   if (target < 0 || c->scopes[target].def_node < 0) return 0;
   const NodeTable *nt = c->nt;
+  int dn = c->scopes[target].def_node;
+  if (nt_int(nt, dn, "bam_native", 0)) {
+    const char *owner = nt_str(nt, dn, "bam_owner"), *name = nt_str(nt, dn, "bam_sym");
+    if (owner && name && builtin_method_arity(owner, name, out)) return 1;
+  }
   /* A receiverless Kernel wrapper (`method(:String)`) has no receiver class to
      key on, but its one declared parameter IS a real argument, so the wrapper
      shape under-reports the builtin's arity. Read the builtin's real arity off
@@ -2764,7 +2769,7 @@ int method_scope_arity(Compiler *c, int target, int *out) {
     /* ...and one of Enumerable's own, which no class's table lists */
     if (cs && rd != -2 && own && is_enumerable_module_name(own) && builtin_enumerable_arity(cs, out)) return 1;
   }
-  int pn = nt_ref(nt, c->scopes[target].def_node, "parameters");
+  int pn = nt_ref(nt, dn, "parameters");
   int n_req = 0, n_opt = 0, n_post = 0;
   int has_rest = 0, has_forward = 0, kw_block = 0, has_req_kw = 0;
   if (pn >= 0) {

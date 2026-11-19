@@ -3306,7 +3306,8 @@ void poly_specials_n(Compiler *c, int id, const char *name, int argc, const int 
      alongside the user arms: their own arms stand down when a user class owns
      the name, and without these the builtin case reached the raise -- or, for
      unpack1, read an object through a char * (#4071's shape). */
-  int is_ppack = (sp_streq(name, "pack") || sp_streq(name, "unpack1")) &&
+  int is_unpack1 = sp_streq(name, "unpack1");
+  int is_ppack = (sp_streq(name, "pack") || is_unpack1) &&
                  argc == 1 && !has_splat_arg && nt_ref(nt, id, "block") < 0;
   /* ...and only where the argument could BE a format string, the same guard
      the join arm above carries: the arm passes the call's own argument temp
@@ -3363,8 +3364,9 @@ void poly_specials_n(Compiler *c, int id, const char *name, int argc, const int 
   s->pstore = is_pstore;
   s->straset = is_straset;
   s->strsplit = is_strsplit;
+  s->unpack1 = is_ppack && is_unpack1;
   s->str_arm = (is_strdel || is_strpart || is_strencode || is_strsplit ||
-                is_strsetop_n || is_index || is_straset)
+                is_strsetop_n || is_index || is_straset || is_unpack1)
              ? cplan_poly_string_arm(c, id, name) : CP_STR_BUILTIN;
   s->pred = is_pred;
   s->strencode = is_strencode;
@@ -3488,7 +3490,7 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
            ? "sp_strbuf_read(_t%d)"
            : argc > 0 && atmp_ty[0] == TY_STRING ? "SP_STR_B(_t%d)" : "_t%d",   /* (one representation: a handle held) */
            argc > 0 ? atmp[0] : 0);
-  int is_cover = ps->cover, is_ctryconv = ps->ctryconv, is_gcdlcm = ps->gcdlcm, is_ppack = ps->ppack;
+  int is_cover = ps->cover, is_ctryconv = ps->ctryconv, is_gcdlcm = ps->gcdlcm;
   int is_include = ps->include, is_strdel = ps->strdel, is_strpart = ps->strpart;
   int is_strsetop_n = ps->strsetop_n, is_pstore = ps->pstore, is_strencode = ps->strencode;
   int str_builtin = ps->str_arm == CP_STR_BUILTIN;
@@ -3623,10 +3625,9 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
     else buf_printf(b, "(sp_int)(uintptr_t)_t%d", tg2);
     buf_puts(b, "; }\nelse ");
   }
-  /* unpack1 on a TAG_STR receiver: its own poly arm stands down when a user
-     class owns the name, so the String case needs one here -- and the old
-     fallthrough read the receiver as a char * whatever it held. */
-  if (is_ppack && sp_streq(name, "unpack1")) {
+  /* A boxed String takes the builtin here when the call plan selects it.
+     A reopened or versioned String method has its own class arm. */
+  if (str_builtin && ps->unpack1) {
     if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_UNPACK1, -1, TY_UNKNOWN, PC_SAME);
     Buf ub; memset(&ub, 0, sizeof ub);
     /* the format read as the pack arm below reads it: a boxed argument is
@@ -4430,10 +4431,8 @@ void emit_poly_cases_n(Compiler *c, int id, const char *name, const PolySpecials
     }
   }
   if (is_ppack) {
-    int upk = sp_streq(name, "unpack1");
     Buf pb2; memset(&pb2, 0, sizeof pb2);
-    if (upk) { /* a String receiver: handled by the tag pre-arm above */ }
-    else {
+    if (!ps->unpack1) {
       if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_PACK, -1, TY_UNKNOWN, PC_SAME);
       buf_puts(b, " case SP_BUILTIN_INT_ARRAY: case SP_BUILTIN_STR_ARRAY:"
                   " case SP_BUILTIN_FLT_ARRAY: case SP_BUILTIN_POLY_ARRAY: ");

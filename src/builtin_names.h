@@ -127,6 +127,7 @@ int is_load_path_write(const char *n); /* << push append unshift prepend concat:
 int is_poly_object_surface_name(const char *n); /* hash object_id __id__ instance_variables: a boxed receiver's call is emitted as Object's builtin, whatever a reopened builtin defines */
 int is_identity_query(const char *n); /* equal? object_id __id__ frozen?: tells an object from its copy */
 int is_string_boxed_reader(const char *n);
+int string_boxed_reader_arity(const char *n);
 int is_len_alias(const char *n);      /* length size */
 int is_length_spelling(const char *n); /* size count empty? */
 int is_difference_spelling(const char *n); /* difference */

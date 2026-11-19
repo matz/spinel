@@ -484,9 +484,14 @@ int is_identity_query(const char *n) {
   return sp_streq(n, "equal?") || sp_streq(n, "object_id") || sp_streq(n, "__id__") || sp_streq(n, "frozen?");
 }
 
-/* Boxed String readers with a builtin arm in the general send. */
+/* Fixed arity of a boxed String reader's builtin fallback in a general send. */
+int string_boxed_reader_arity(const char *n) {
+  if (is_len_alias(n) || sp_streq(n, "empty?")) return 0;
+  if (is_spaceship_name(n) || sp_streq(n, "unpack1")) return 1;
+  return -1;
+}
 int is_string_boxed_reader(const char *n) {
-  return is_len_alias(n) || sp_streq(n, "empty?") || is_spaceship_name(n);
+  return string_boxed_reader_arity(n) >= 0;
 }
 
 int is_len_alias(const char *n) {

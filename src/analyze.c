@@ -44454,6 +44454,12 @@ static int kwb_row(const char *name) {
   for (int i = 0; name && kwb_rows[i][0]; i++) if (sp_streq(name, kwb_rows[i][0])) return i;
   return -1;
 }
+const char *an_builtin_one_keyword(const char *name, const char **default_kind) {
+  int row = kwb_row(name);
+  if (row < 0) return NULL;
+  *default_kind = kwb_rows[row][2];
+  return kwb_rows[row][1];
+}
 static int kwb_lv(NodeTable *nt, Scope *sc, const char *nm, int value) {
   if (sc) scope_local_intern(sc, nm);
   int n = nt_new_node(nt, value >= 0 ? "LocalVariableWriteNode" : "LocalVariableReadNode");
@@ -44620,6 +44626,12 @@ static int kwb_explicit(NodeTable *nt, const char *kname, const char *dflt, int 
   int kh = nt_new_node(nt, "KeywordHashNode");
   nt_node_set_arr(nt, kh, "elements", &as, 1);
   return kh;
+}
+/* The argument of a pinned builtin reached from a versioned fallback.
+   Its keyword rest follows the same binding as a written **hash. */
+int an_builtin_keyword_hash(NodeTable *nt, const char *name, int hash) {
+  const char *dflt, *key = an_builtin_one_keyword(name, &dflt);
+  return key ? kwb_explicit(nt, key, dflt, hash, NULL) : -1;
 }
 /* A literal keyword hash naming a key the builtin does not take, as the Hash
    kwb_explicit checks: its values run in order and the call raises CRuby's

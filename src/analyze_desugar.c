@@ -17073,8 +17073,8 @@ int disp_self_call(NodeTable *nt, const char *callee, int ar, int blk) {
   nt_node_set_ref(nt, call, "receiver", nt_new_node(nt, "SelfNode"));
   return call;
 }
-/* The String builtin behind a prepend. It can also be bound as a Method,
-   so give its comparison operand a slot the Method thunk can bind. */
+/* The String builtin behind a prepend. Give its positional operand a
+   slot the bound Method thunk can bind. */
 int disp_string_reader_def(NodeTable *nt, const char *name, int arity, int *call) {
   *call = disp_self_call(nt, name, arity, 0);
   nt_mark_builtin_call(nt, *call);
@@ -17086,15 +17086,40 @@ int disp_string_reader_def(NodeTable *nt, const char *name, int arity, int *call
     nt_node_set_str(nt, args[0], "name", "other");
     nt_node_set_str(nt, req[0], "name", "other");
   }
+  const char *default_kind, *keyword = an_builtin_one_keyword(name, &default_kind);
+  if (arity && keyword) {
+    int value = nt_new_node(nt, default_kind);
+    if (nt_kind(nt, value) == NK_IntegerNode) nt_node_set_int(nt, value, "value", 0);
+    int param = cdef_local(nt, "OptionalKeywordParameterNode", keyword);
+    nt_node_set_ref(nt, param, "value", value);
+    nt_node_set_arr(nt, nt_ref(nt, def, "parameters"), "keywords", &param, 1);
+
+    int key = nt_new_node(nt, "SymbolNode"), entry = nt_new_node(nt, "AssocNode");
+    nt_node_set_str(nt, key, "value", keyword);
+    nt_node_set_int(nt, key, "key_only", 1);
+    nt_node_set_ref(nt, entry, "key", key);
+    nt_node_set_ref(nt, entry, "value", cdef_local(nt, "LocalVariableReadNode", keyword));
+    int hash = nt_new_node(nt, "KeywordHashNode"), count;
+    nt_node_set_arr(nt, hash, "elements", &entry, 1);
+    const int *args = call_args(nt, *call, &count);
+    int av[arity + 1];
+    for (int i = 0; i < arity; i++) av[i] = args[i];
+    av[arity] = hash;
+    nt_node_set_arr(nt, nt_ref(nt, *call, "arguments"), "arguments", av, arity + 1);
+  }
   nt_node_set_str(nt, def, "bam_sym", name);
   nt_node_set_str(nt, def, "bam_owner", core_class_name(CORE_STRING));
   nt_node_set_int(nt, def, "bam_native", 1);
   return def;
 }
 /* A dispatcher accepting *args and **keywords calls a builtin at its
-   fixed arity. The keyword Hash is one argument when it is present. */
-int disp_when_fixed_arity(Compiler *c, int call, int arity) {
+   fixed positional arity. Builtins without keyword parameters see
+   a nonempty keyword Hash as a positional argument. */
+int disp_when_fixed_arity(Compiler *c, int call, int arity, int builtin_keywords) {
   NodeTable *nt = (NodeTable *)c->nt;
+  int keywords = builtin_keywords
+      ? an_builtin_keyword_hash(nt, nt_str(nt, call, "name"),
+                                cdef_local(nt, "LocalVariableReadNode", "__condk")) : -1;
   int iff = nt_new_node(nt, "IfNode"), el = nt_new_node(nt, "ElseNode"), both = nt_new_node(nt, "AndNode");
   nt_node_set_ref(nt, both, "left", fwd_new_call(nt, cdef_local(nt, "LocalVariableReadNode", "__condr"), "empty?", -1));
   nt_node_set_ref(nt, both, "right", fwd_new_call(nt, cdef_local(nt, "LocalVariableReadNode", "__condk"), "empty?", -1));
@@ -17105,11 +17130,18 @@ int disp_when_fixed_arity(Compiler *c, int call, int arity) {
   nt_node_set_ref(nt, kw, "statements", cdef_stmts(nt, zero));
   nt_node_set_ref(nt, kel, "statements", cdef_stmts(nt, one));
   nt_node_set_ref(nt, kw, "subsequent", kel);
-  int given = fwd_new_call(nt, fwd_new_call(nt, cdef_local(nt, "LocalVariableReadNode", "__condr"), "size", -1), "+", kw);
+  int given = fwd_new_call(nt, cdef_local(nt, "LocalVariableReadNode", "__condr"), "size", -1);
+  if (keywords < 0) given = fwd_new_call(nt, given, "+", kw);
   int condition = both;
   if (arity > 0) {
-    int values[arity];
+    int values[arity + 1], count = arity;
     for (int i = 0; i < arity; i++) {
+      int nth_arg = fwd_new_call(nt, cdef_local(nt, "LocalVariableReadNode", "__condr"),
+                                 "[]", nt_new_int(nt, i));
+      if (keywords >= 0) {
+        values[i] = nth_arg;
+        continue;
+      }
       int rest = cdef_local(nt, "LocalVariableReadNode", "__condr");
       int size = fwd_new_call(nt, rest, "size", -1);
       int index = nt_new_int(nt, i);
@@ -17117,13 +17149,12 @@ int disp_when_fixed_arity(Compiler *c, int call, int arity) {
       nt_node_set_ref(nt, hash_only, "predicate", fwd_new_call(nt, size, "==", index));
       nt_node_set_ref(nt, hash_only, "statements",
                       cdef_stmts(nt, cdef_local(nt, "LocalVariableReadNode", "__condk")));
-      nt_node_set_ref(nt, nth, "statements",
-                      cdef_stmts(nt, fwd_new_call(nt, cdef_local(nt, "LocalVariableReadNode", "__condr"),
-                                                  "[]", nt_new_int(nt, i))));
+      nt_node_set_ref(nt, nth, "statements", cdef_stmts(nt, nth_arg));
       nt_node_set_ref(nt, hash_only, "subsequent", nth);
       values[i] = hash_only;
     }
-    nt_node_set_arr(nt, nt_ref(nt, call, "arguments"), "arguments", values, arity);
+    if (keywords >= 0) values[count++] = keywords;
+    nt_node_set_arr(nt, nt_ref(nt, call, "arguments"), "arguments", values, count);
     condition = fwd_new_call(nt, nt_clone_subtree(nt, given), "==", nt_new_int(nt, arity));
   }
   int msg = nt_new_node(nt, "InterpolatedStringNode"), hd = nt_new_node(nt, "StringNode"), es = nt_new_node(nt, "EmbeddedStatementsNode"), tl = nt_new_node(nt, "StringNode");

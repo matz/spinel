@@ -94,7 +94,7 @@ int poly_class_reflect_arm(Compiler *c, int id, const char *name, int *cls_only)
 /* what a poly dispatch with arguments answers beside its user arms, and its
    keyword split and user candidates (poly_specials_n) */
 typedef struct {
-  int index, fetch, pdelete, pdig, pvalues_at, pfirstn, include, intersect, arr_index, push, unshift, strdel, strpart, strsetop_n, pstore, straset, strsplit, pred, strencode, strftime, pmerge, pjoin, ppack, cover, gcdlcm, ctryconv;
+  int index, fetch, pdelete, pdig, pvalues_at, pfirstn, include, intersect, arr_index, push, unshift, strdel, strpart, strsetop_n, pstore, straset, strsplit, pred, strencode, strftime, pmerge, pjoin, ppack, unpack1, cover, gcdlcm, ctryconv;
   int has_splat_arg, kwh, pos_argc, kw_ds, kw_strkey, kw_pos, ncand;
   PolyStringArm str_arm;
 } PolySpecialsN;

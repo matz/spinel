@@ -9563,7 +9563,7 @@ static void cpoly_prearms_n(Compiler *c, int id, const char *name, int argc, con
   if (ps.cover) cpoly_family(p, cap, PB_COVER);
   if (ps.ctryconv) cpoly_family(p, cap, PB_TRY_CONVERT);
   if (ps.gcdlcm) cpoly_family(p, cap, PB_GCDLCM);
-  if (ps.ppack && sp_streq(name, "unpack1")) cpoly_family(p, cap, PB_UNPACK1);
+  if (ps.unpack1 && ps.str_arm == CP_STR_BUILTIN) cpoly_family(p, cap, PB_UNPACK1);
   if (ps.include) cpoly_family(p, cap, PB_INCLUDE);
   if (ps.str_arm == CP_STR_BUILTIN) {
     if (ps.strdel && (ret == TY_POLY || ret == TY_STRING)) cpoly_family(p, cap, PB_STR_DELETE);
@@ -11885,7 +11885,7 @@ static void ver_refl_count(Compiler *c, int vis) {
 static int ver_capture_builtin(Compiler *c, const VerNamed *w) {
   NodeTable *nt = (NodeTable *)c->nt;
   int call;
-  int def = disp_string_reader_def(nt, w->name, is_spaceship_name(w->name), &call);
+  int def = disp_string_reader_def(nt, w->name, string_boxed_reader_arity(w->name), &call);
   ver_pin(c, call, CT_PIN_BUILTIN, 0);
   char hidden[320];
   comp_shadow_name(c, w->cls, w->name, hidden, sizeof hidden);
@@ -12011,12 +12011,12 @@ static int ver_named_else(Compiler *c, const VerNamed *w) {
        receiver; a reopened builtin's own public method, on self) */
     int str_reader = ct_versioned_string_reader(c, w->cls, sg, name);
     int own = !sg && w->cls >= 0 && w->ar >= 0 && !bop_kernel_answers(name, -1, 0) && ver_builtin_instance_answers(c, w->cls, name, w->ar);
-    int ar = bare ? (str_reader && is_spaceship_name(name)) : w->ar;
+    int ar = bare ? (str_reader ? string_boxed_reader_arity(name) : 0) : w->ar;
     int call = sg || own || str_reader ? disp_self_call(nt, name, ar, w->blk)
                                       : disp_forward_call(nt, name, w->ar, w->blk);
     if (str_reader) nt_mark_builtin_call(nt, call);
     ver_pin(c, call, CT_PIN_BUILTIN, 0);
-    return bare ? disp_when_fixed_arity(c, call, ar) : call;
+    return bare ? disp_when_fixed_arity(c, call, ar, str_reader && ar > 0) : call;
   }
   case VK_IVAR: {
     char iv[256];
@@ -12384,10 +12384,11 @@ static void ver_named_add(VerNamedAsks *q, int cls, int sg, const char *name, co
      the row at that count */
   int bycount = held && !refuse && ar < 0 && !sg && cls >= 0 && bop_kernel_answers(name, -1, 0) && cplan_class_kernel(c, cls) != KERN_LACKS;
   int str_behind = undef;
-  if (ct_versioned_string_reader(c, cls, sg, name) && cls == hcls)
+  int string_reader = ct_versioned_string_reader(c, cls, sg, name);
+  if (string_reader && cls == hcls)
     for (int i = 0; i < nv; i++)
       str_behind |= to[i] >= 0 && c->scopes[to[i]].shadow == SHADOW_PREP && !c->scopes[to[i]].origin_module_ci;
-  if (str_behind && ar != is_spaceship_name(name)) ar = -1;
+  if (str_behind && ar != (string_reader ? string_boxed_reader_arity(name) : is_spaceship_name(name))) ar = -1;
   if (!refuse && !bycount)
     els = str_behind ? VK_BUILTIN : ver_named_kind(q, cls, sg, name, to, nv, vs[0].hist, vs[0].v->vis, ar, blk, 1);
   if (els == VK_KEEP && !held) return;

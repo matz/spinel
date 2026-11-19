@@ -5450,9 +5450,9 @@ static int alias_string_reader_scope(Compiler *c, const ElabEntry *e) {
     target = original->alias_of;
   }
   else if (found != ELAB_NO || d) return 0;
-  if (!is_string_boxed_reader(target)) return 0;
+  int arity = string_boxed_reader_arity(target);
+  if (arity < 0) return 0;
   NodeTable *nt = (NodeTable *)c->nt;
-  int arity = is_spaceship_name(target);
   int call = disp_self_call(nt, target, arity, 0);
   nt_mark_builtin_call(nt, call);
   int def = disp_def_build(nt, e->node, target, 0, arity, 0, NULL, 0, call);
@@ -11158,7 +11158,7 @@ static void process_prepend_body(Compiler *c, int ci, int body) {
         /* A later prepend's cell selects the builtin or inherited method
            behind the copy until the prepend runs. */
         if (guard && active_mi < 0) {
-          int builtin_arity = str_reader ? is_spaceship_name(method_name) : -1;
+          int builtin_arity = str_reader ? string_boxed_reader_arity(method_name) : -1;
           behind = mixin_method_behind(c, ci, method_name, sc->def_node, builtin_arity);
           sc = &c->scopes[ms];   /* mixin_method_behind's comp_scope_new may realloc */
           method_name = sc->name;

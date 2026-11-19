@@ -100,7 +100,6 @@ Err#exception: def#20 runs=#32 def#50 runs=#32 end=yes
 const Bell: write#21
 Bell#ring: def#22 runs=#34 def#52 runs=#34 end=yes
 const Host: write#35
-Host.__spinel_civget_mixed: def#36 end=yes
 form #37 runs code
 versions Mix.append_features: def#2..#54 seen=def#2, def#54..end seen=def#54; 2 of the name
 versions Shout#shout: def#5..?, def#57..end seen=unknown; 2 of the name
@@ -134,4 +133,4 @@ extent def ring line 101: from=#34 sure=never count=many kept=no
 extent def append_features line 105: from=#37 sure=never count=many kept=no
 extent block refine line 111: from=#56 sure=never count=many kept=yes
 extent def shout line 112: from=#38 sure=never count=many kept=no
-extent def __spinel_civget_mixed line 71: from=#58 sure=#58 count=once kept=no
+extent def __spinel_civget_mixed line 71: from=any sure=never count=many kept=no

@@ -37986,17 +37986,18 @@ static int jump_value_nil(Compiler *c, int j) {
 }
 /* Can a `next` or `break` that leaves block blk hand on nil: a bare one, or
    one whose value can be nil (a body too deep to walk: it may) */
-static int block_jumps_nil(Compiler *c, int blk) {
+static int block_jump_kind_nil(Compiler *c, int blk, NodeKind k) {
   const NodeTable *nt = c->nt;
-  static const NodeKind ks[2] = { NK_NextNode, NK_BreakNode };
-  int r = 0;
-  for (int i = 0; i < 2 && !r; i++) {
-    int *jv = NULL, n = 0, cap = 0;
-    if (block_jumps_d(nt, nt_ref(nt, blk, "body"), ks[i], &jv, &n, &cap, 0) < 0) r = 1;
-    for (int j = 0; j < n && !r; j++) r = jump_value_nil(c, jv[j]);
-    free(jv);
-  }
+  int *jv = NULL, n = 0, cap = 0;
+  int r = block_jumps_d(nt, nt_ref(nt, blk, "body"), k, &jv, &n, &cap, 0) < 0;
+  for (int j = 0; j < n && !r; j++) r = jump_value_nil(c, jv[j]);
+  free(jv);
   return r;
+}
+
+static int block_jumps_nil(Compiler *c, int blk) {
+  return block_jump_kind_nil(c, blk, NK_NextNode) ||
+         block_jump_kind_nil(c, blk, NK_BreakNode);
 }
 /* Each value a jump of kind k out of block blk hands on is the array's */
 static int elem_slots_jumps(Compiler *c, int blk, NodeKind k, int depth, ElemSlotFn fn, void *ud) {
@@ -42697,7 +42698,10 @@ static int mark_hash_nil_values(Compiler *c) {
       if (recv < 0 || nt_kind(nt, block) != NK_BlockNode) continue;
       const IterRow *row = iter_row_of(infer_type(c, recv), nm, call_plain_argc(c, id));
       if (!row || row->answer != IA_BLOCKVALS || cplan_user(c, id).dispatch != CP_NONE) continue;
-      if (hash_store_val_may_nil(c, nt_ref(nt, block, "body")) || block_jumps_nil(c, block)) {
+      /* A break answers for the call. Only next and the ordinary tail
+         answer for the entry the transform is collecting. */
+      if (hash_store_val_may_nil(c, nt_ref(nt, block, "body")) ||
+          block_jump_kind_nil(c, block, NK_NextNode)) {
         *f = 1;
         changed = 1;
       }

@@ -1586,10 +1586,9 @@ RBS_SEED_STRICT := -Werror=incompatible-pointer-types
 # Every generated test TU includes the same lib/spinel_rt.h; the cc step is
 # >99% of a test's cost and roughly half of that is parsing the header, so
 # the suite precompiles it once per make invocation (measured: gcc -15%,
-# clang -23% on the per-test compile). Two variants cover the two TU shapes
-# the emitter produces: plain, and `#define SP_TU_NO_POLY_RENDER 1` before
-# the include. gcc picks the .gch up implicitly from the include path; clang
-# ignores gcc-style implicit lookup and needs an explicit -include-pch.
+# clang -23% on the per-test compile). Three variants cover the plain header
+# and the two single defines that omit polymorphic render or value code. GCC
+# finds the .gch on the include path. Clang needs an explicit -include-pch.
 # Each variant dir also carries a copy of spinel_rt.h so gcc degrades to a
 # normal textual include if the .gch is unusable. Key the directory on every
 # flag used to build the header. Clang can silently accept a stale PCH built
@@ -1600,34 +1599,28 @@ PCH_ROOT := build/pch/$(CC_KIND)-$(shell tools/result_cache.sh pch-key "$(CC)" $
 # The last explicit -O wins among ordinary flags. Leave opaque options
 # (such as compiler response files) to the textual include on an override.
 TEST_PCH_OPT := $(if $(filter-out -O% -Wno-% -ffp-contract=off -g -g0 -g1 -g2 -g3 -D% -U% -I%,$(CFLAGS)),,$(lastword $(filter -O%,$(CFLAGS))))
-PCH_PLAIN  := $(PCH_ROOT)/plain/spinel_rt.h.gch
-PCH_NOPOLY := $(PCH_ROOT)/nopoly/spinel_rt.h.gch
+TEST_PCHS := $(addsuffix /spinel_rt.h.gch,$(addprefix $(PCH_ROOT)/,plain nopoly novalues))
 SP_LIB_HDRS := $(wildcard lib/*.h) $(PLATFORM_HDRS)
 
 .PHONY: test-pch
-test-pch: $(PCH_PLAIN) $(PCH_NOPOLY)
+test-pch: $(TEST_PCHS)
 
-$(PCH_PLAIN): $(SP_LIB_HDRS) lib/spinel_rt_responds_generated.h
+$(PCH_ROOT)/nopoly/spinel_rt.h.gch: PCH_TU_DEFINE := -DSP_TU_NO_POLY_RENDER=1
+$(PCH_ROOT)/novalues/spinel_rt.h.gch: PCH_TU_DEFINE := -DSP_TU_NO_POLY_VALUES=1
+$(TEST_PCHS): $(SP_LIB_HDRS) lib/spinel_rt_responds_generated.h
 	@mkdir -p $(@D)
 	@cp lib/spinel_rt.h $(@D)/spinel_rt.h
-	@$(CC) $(PCH_FLAGS) -Ilib -x c-header $(@D)/spinel_rt.h -o $@
-
-$(PCH_NOPOLY): $(SP_LIB_HDRS) lib/spinel_rt_responds_generated.h
-	@mkdir -p $(@D)
-	@cp lib/spinel_rt.h $(@D)/spinel_rt.h
-	@$(CC) $(PCH_FLAGS) -DSP_TU_NO_POLY_RENDER=1 -Ilib -x c-header $(@D)/spinel_rt.h -o $@
+	@$(CC) $(PCH_FLAGS) $(PCH_TU_DEFINE) -Ilib -x c-header $(@D)/spinel_rt.h -o $@
 
 ifeq ($(CC_KIND),clang)
-PCH_USE_PLAIN  = -include-pch $(PCH_PLAIN)
-PCH_USE_NOPOLY = -include-pch $(PCH_NOPOLY)
+PCH_USE = -include-pch $$pchdir/spinel_rt.h.gch
 # clang tests compile+link in ONE driver invocation: sccache declines to
 # cache -include-pch compiles, so the split buys nothing there, and the
 # extra ~2000 driver spawns are expensive on macOS (process launch cost).
 # gcc keeps the split: its separate compile step is sccache-cacheable.
 TEST_SINGLE_INVOKE := 1
 else
-PCH_USE_PLAIN  = -I$(PCH_ROOT)/plain
-PCH_USE_NOPOLY = -I$(PCH_ROOT)/nopoly
+PCH_USE = -I$$pchdir
 TEST_SINGLE_INVOKE :=
 endif
 
@@ -4431,11 +4424,13 @@ ckey=""; hit=0; own=0; \
     [ "$$sprc" -eq 0 ] || echo "$<: plan-check-exit: $$sprc"; } > "$@.plan"; fi; \
   [ "$$sprc" -eq 0 ]; } && \
 { rtdefs=$$(sed -n '/^#include "spinel_rt.h"/q; /^#define/p' "$$cfile"); \
-  pchuse=""; \
   case "$$rtdefs" in \
-    '') [ ! -f "$(PCH_PLAIN)" ] || pchuse="$(PCH_USE_PLAIN)";; \
-    '#define SP_TU_NO_POLY_RENDER 1') [ ! -f "$(PCH_NOPOLY)" ] || pchuse="$(PCH_USE_NOPOLY)";; \
+    '') pchdir="$(PCH_ROOT)/plain";; \
+    '#define SP_TU_NO_POLY_RENDER 1') pchdir="$(PCH_ROOT)/nopoly";; \
+    '#define SP_TU_NO_POLY_VALUES 1') pchdir="$(PCH_ROOT)/novalues";; \
+    *) pchdir="";; \
   esac; \
+  pchuse=""; if [ -n "$$pchdir" ] && [ -f "$$pchdir/spinel_rt.h.gch" ]; then pchuse="$(PCH_USE)"; fi; \
   xlibs=$$(sed -n 's|^/\* SPINEL_LINK: \(.*\) \*/$$|\1|p' "$$cfile" | tr '\n' ' '); \
   xobjs=$$(sed -n 's|^/\* SPINEL_LINK_OBJ: \(.*\) \*/$$|\1|p' "$$cfile" | tr '\n' ' '); \
   keep=""; for o in $$xobjs; do case " $(BUNDLED_NATIVE_OBJS) " in *" $$o "*) ;; *) keep="$$keep $$o";; esac; done; xobjs="$$keep"; \
@@ -4520,12 +4515,12 @@ endef
 # Per-package test rules (one pattern rule per bundled package: GNU Make
 # patterns allow a single %, so the package name is fixed per rule).
 define PKG_TEST_RULE
-$(TEST_RESULT_DIR)/pkg.$(1).%.ok: packages/$(1)/test/%.rb $$(SP_RT_LIB) $$(SP_RT_MT_LIB) $$(BUNDLED_NATIVE_OBJS) $$(BUNDLED_NATIVE_MT_OBJS) $$(BUNDLED_CEXT_STAMPS) $$(PCH_PLAIN) $$(PCH_NOPOLY) | $$(SPINEL) $$(SPINEL_TIMEOUT)
+$(TEST_RESULT_DIR)/pkg.$(1).%.ok: packages/$(1)/test/%.rb $$(SP_RT_LIB) $$(SP_RT_MT_LIB) $$(BUNDLED_NATIVE_OBJS) $$(BUNDLED_NATIVE_MT_OBJS) $$(BUNDLED_CEXT_STAMPS) $$(TEST_PCHS) | $$(SPINEL) $$(SPINEL_TIMEOUT)
 	$$(RUN_ONE_TEST)
 endef
 $(foreach d,$(wildcard packages/*/test),$(eval $(call PKG_TEST_RULE,$(patsubst packages/%/test,%,$(d)))))
 
-$(TEST_RESULT_DIR)/%.ok: test/%.rb $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SP_RT_NOGC_LIB) $(SP_RT_MT_NOGC_LIB) $(BUNDLED_NATIVE_OBJS) $(BUNDLED_NATIVE_MT_OBJS) $(PCH_PLAIN) $(PCH_NOPOLY) | $(SPINEL) $(SPINEL_TIMEOUT)
+$(TEST_RESULT_DIR)/%.ok: test/%.rb $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SP_RT_NOGC_LIB) $(SP_RT_MT_NOGC_LIB) $(BUNDLED_NATIVE_OBJS) $(BUNDLED_NATIVE_MT_OBJS) $(TEST_PCHS) | $(SPINEL) $(SPINEL_TIMEOUT)
 	$(RUN_ONE_TEST)
 
 clean-test-results:

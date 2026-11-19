@@ -1928,11 +1928,11 @@ int emit_call_callable_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
     return 1;
   }
 
-  /* <proc>.call(args) / .() / [] -> sp_proc_call with the sp_int[] ABI.
+  /* <proc>.call(args) / .() / [] / yield -> sp_proc_call with the sp_int[] ABI.
      (A `&block`-param `.call` is handled earlier by the inline path, whose
      receiver name matches g_block_param_name; this is the escaped-value case.) */
   if (recv >= 0 && comp_ntype(c, recv) == TY_PROC &&
-      (is_call_alias(name) ||
+      (is_call_or_yield(name) ||
        (sp_streq(name, "===") && argc == 1))) {
     Repr rtyr = repr_of(c, id);
     TyKind rty = rtyr.as_ty;       /* the call's result = proc's body return */

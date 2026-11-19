@@ -510,9 +510,6 @@ void str_read_handle_close(Buf *b);
 void str_new_handle_open(Buf *b);
 void str_new_handle_close(Buf *b);
 void str_box_kept(Buf *b, int t, const char *h, const char *e);
-/* The box face's arms for a value boxed by its representation: a String
-   the plan wraps as the new handle it is (`wrap`), else its bytes */
-void emit_str_box_leaf(Compiler *c, int v, int wrap, Buf *b);
 /* A write in value position (a local's whose slot is a String buffer, any
    other whose slot holds the shared handle) as the handle it writes, into
    out; 0, writing nothing, for any other node. */

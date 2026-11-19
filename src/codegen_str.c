@@ -135,7 +135,7 @@ static int str_handle_new(Compiler *c, int v, int form, unsigned dest, StrForm *
     emit_expr(c, nt_ref(c->nt, v, "receiver"), b);
     buf_puts(b, ")");
     sf->needs |= SF_ALLOCATES;
-    return SPF_WRAP;
+    return SPF_HANDLE;
   }
   /* (a nil that is no bare read -- a call answering nil -- runs first) */
   if (comp_ntype(c, v) == TY_NIL) {
@@ -154,7 +154,7 @@ static int str_handle_new(Compiler *c, int v, int form, unsigned dest, StrForm *
     else buf_printf(b, "sp_poly_nil_p(_t%d) ? NULL : ", t);
     buf_printf(b, "%s(sp_poly_arg_str_chk(_t%d)); })", own ? "sp_String_new_fresh" : "sp_String_new_shared", t);
     sf->needs |= SF_ALLOCATES;
-    return form == SPF_HANDLE ? SPF_HANDLE : SPF_WRAP;
+    return SPF_HANDLE;
   }
   if (own) {
     buf_puts(b, "sp_String_new_fresh(");
@@ -168,7 +168,7 @@ static int str_handle_new(Compiler *c, int v, int form, unsigned dest, StrForm *
     free(e.p);
   }
   sf->needs |= SF_ALLOCATES;
-  return SPF_WRAP;
+  return SPF_HANDLE;
 }
 
 /* Node v as the handle a handle slot takes (a method's parameter that is
@@ -460,35 +460,6 @@ void str_box_kept(Buf *b, int t, const char *h, const char *e) {
   buf_printf(b, " : _t%d.%s ? sp_box_str_new(_t%d.%s) : sp_box_nil()", t, e, t, e);
 }
 
-/* The box face's last arms, where the value is boxed by its representation
-   (emit_boxed_impl's TY_STRING arm): a String the plan wraps (`wrap`) as
-   the new handle it is (sp_box_str_new), so the box's copies name one
-   String. Boxing a byte view with an owner uses that owner. A temporary
-   box can go to a runtime call that allocates (for example a Hash lookup),
-   so root it where it is bound. The temp is named ahead of the operand's
-   own temps (StrForm.tmp), so the operand's keep their numbers. */
-void emit_str_box_leaf(Compiler *c, int v, int wrap, Buf *b) {
-  StrForm sf;
-  memset(&sf, 0, sizeof sf);
-  sf.rf = -1;
-  sf.cty = TY_POLY;
-  if (wrap) {
-    sf.tmp = ++g_tmp;
-    sf.needs = SF_EVAL_ONCE | SF_ROOT_UNTIL_USE | SF_ALLOCATES;
-    /* (the new handle around its bytes, whichever face the leaf answers) */
-    buf_puts(&sf.expr, "sp_box_str_new(SP_STR_B(");
-  }
-  /* (one representation: the leaf's text may be the handle, boxed through
-     its face) */
-  else buf_puts(&sf.expr, "SP_STR_BOX(");
-  emit_expr(c, v, &sf.expr);
-  buf_puts(&sf.expr, wrap ? "))" : ")");
-  str_form_settle(c, &sf, b);
-  if (wrap) buf_printf(b, "_t%d", sf.tmp);
-  str_form_close(&sf, b);
-  str_form_free(&sf);
-}
-
 /* Record the box form (RF_*, repr.h) the box face wrote and why it may
    differ from the one repr_of predicts for the node (RW_*). */
 static void str_box_note(StrForm *sf, int rf, int rw) {
@@ -499,9 +470,8 @@ static void str_box_note(StrForm *sf, int rf, int rw) {
 /* --share-strings: the box face of a String value (or one the rule
    holds as the handle), by its producer's kind (share.h's SPK_*), asked
    where it is boxed; 0 with nothing emitted for any other value:
-     NONE, FROZEN  the value's box by its representation, including a new
-                   handle where the plan wraps it; one that ran
-                   first into a store's lift: the handle it took;
+     NONE, FROZEN  the value's box by its representation, or the handle
+                   already held by an earlier store operand;
      BOX           the box itself, by its representation (or as above);
      PROC_CALL     a proc's answer: the box the proc hands back, the call
                    emitted as a box (a catch's or a reopened method's

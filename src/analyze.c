@@ -37966,6 +37966,10 @@ static int block_jumps_d(const NodeTable *nt, int id, NodeKind k, int **out, int
     (*out)[(*n)++] = id;
     return 0;
   }
+  /* A for evaluates its collection before entering the loop. A next
+     there still leaves the enclosing block. */
+  if (nk == NK_ForNode && k == NK_NextNode)
+    return block_jumps_d(nt, nt_ref(nt, id, "collection"), k, out, n, cap, depth + 1);
   if (nk == NK_DefNode || nk == NK_ClassNode || nk == NK_ModuleNode || nk == NK_WhileNode ||
       nk == NK_UntilNode || nk == NK_LambdaNode || nk == NK_ForNode || nk == NK_BlockNode) return 0;
   int nr = nt_num_refs(nt, id);

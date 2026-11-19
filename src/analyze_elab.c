@@ -5489,8 +5489,24 @@ static int lr_vis_cellable(Compiler *c, const LrHist *h, const LrHist *t) {
     }
   return 1;
 }
+/* The entry, in Object's history of v's name, of the copy a reopened
+   Kernel's def v in main's history has in Object's reopening
+   (desugar_kernel_reopen, kernel_copy): the one that carries Kernel's
+   visibility, with the reopening's visibility words, where main's entry
+   has main's private default. NULL for any other entry. *oh: its history */
+static const LrDef *lr_kernel_copy(Compiler *c, const LrHist *h, const LrDef *v, const LrHist **oh) {
+  LoadRecord *r = c->lrec;
+  int cp = h->a == LR_MAIN ? (int)nt_int(c->nt, v->node, "kernel_copy", 0) - 1 : -1, o = lr_core(r, CORE_OBJECT);
+  *oh = cp >= 0 && o >= 0 ? lr_hist(r, o, 0, h->name, 0) : NULL;
+  for (int j = 0; *oh && j < (*oh)->n; j++)
+    if ((*oh)->v[j].node == cp) return &(*oh)->v[j];
+  return NULL;
+}
 static int lr_version_vis(Compiler *c, const LrHist *h, const LrDef *v, int *unmapped, int physical) {
   const NodeTable *nt = c->nt;
+  const LrHist *kh = NULL;
+  const LrDef *k = lr_kernel_copy(c, h, v, &kh);
+  if (k) return lr_version_vis(c, kh, k, unmapped, physical);   /* (Kernel's method: its copy's visibility) */
   const LrHist *t = lr_table_twin(c, h);
   LoadPoint pv = elab_point_of(c, v->node), pw = { -1, -1, -1 };
   int vis = v->vis, changed = 0;

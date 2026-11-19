@@ -1,0 +1,11 @@
+[:m, :m]
+[:m, true, true, :m2]
+[:a, true, :a]
+[:a, false]
+[1, true]
+true
+[7, NoMethodError, NoMethodError]
+[NoMethodError, NoMethodError, 7]
+[7, NoMethodError]
+[:qm, :qm]
+[NoMethodError, NoMethodError]

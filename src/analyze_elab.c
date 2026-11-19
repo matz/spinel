@@ -2418,6 +2418,8 @@ static void lr_refl_take(Compiler *c) {
    record cannot pin). Only the defining ones may supply a method
    (lr_unordered_supply). */
 enum { LR_OPAQUE_WRITES = 1, LR_OPAQUE_DEFINES };
+/* (lr_body_defines' direct for the answer that reads the tree alone: lr_node_defines) */
+enum { LR_DEFINES_TREE = 2 };
 
 static int lr_body_defines(Compiler *c, int def, int direct, int depth);
 static int lr_callbacks_define(Compiler *c, int depth);
@@ -2711,6 +2713,326 @@ static int lr_body_word_frame(Compiler *c, const int *par, int n, int node) {
   int fs, cls = lr_body_frame(c, par, n, node, -1, 1, &fs);
   return cls >= 0 && !lr_chain_open(c, cls);
 }
+/* ...or does a bar keep the word's names in the form they have where the record holds no body versions? Two:
+   - the word changes a module's method, or a name a module body defines: an include, extend or prepend copy
+     carries the module's def versions only, not the word's, so the class would keep the copy's public answer
+     after the word ran (dropped once the copies carry the word's versions);
+   - the program defines method_missing or respond_to_missing? (mm): the entry's else arm and the presence
+     readers answer from the table there, and a word's version leaves the name out of it, so a call after the
+     word would reach the method, not method_missing (dropped once those read the cells) */
+static int lr_call_defines(Compiler *c, const char *nm, int direct, int depth);
+/* ...does the method body around node (lr_body_around; none: yes) call only
+   code the record can follow? Each call it makes itself (in no def nested
+   in it, nor a word it holds: those are its own entries) is asked what the
+   methods it may run may do, read from the tree (lr_call_defines with
+   LR_DEFINES_TREE); a super or a yield is code it cannot follow. A body
+   whose call may reach a send, a super, a yield, an eval or a definition
+   form that way is followed as one that may do anything: a non-public
+   entry it makes is no body's version, the readers its calls reach
+   answering from the start,
+   whose answer for a version is its own visibility where CRuby has no
+   method yet. So a non-public def or a word in such a body bars its names,
+   which keep the public answer they have where the record holds no body
+   versions (dropped once those calls are followed as plain calls are).
+   Kept by the body (LR_KEY_DEFINES, "follows"). */
+static int lr_body_followed(Compiler *c, const int *par, int n, int node) {
+  const NodeTable *nt = c->nt;
+  LoadRecord *r = c->lrec;
+  int body = lr_body_around(nt, par, n, node);
+  if (body < 0) return 1;
+  const LrHist *h = lr_hist(r, LR_KEY_DEFINES, body, "follows", 0);
+  if (h && h->n) return h->v[h->n - 1].vis;
+  int m = 0, ok = 1, *ids = nt_subtree_ids((NodeTable *)nt, &body, 1, &m);
+  for (int i = 0; i < m && ok; i++) {
+    int id = ids[i], own = 1;
+    NodeKind k = nt_kind(nt, id);
+    if (k != NK_CallNode && k != NK_SuperNode && k != NK_ForwardingSuperNode && k != NK_YieldNode) continue;
+    for (int v = id; own && v >= 0 && v < n && v != body; v = par[v])
+      own = v == id || (nt_kind(nt, v) != NK_DefNode && !(nt_kind(nt, v) == NK_CallNode && lr_body_word(nt, v)));
+    if (!own || (k == NK_CallNode && lr_body_word(nt, id))) continue;
+    ok = k == NK_CallNode && lr_call_defines(c, nt_str(nt, id, "name"), LR_DEFINES_TREE, 0) != LR_OPAQUE_DEFINES;
+  }
+  free(ids);
+  lr_version(r, LR_KEY_DEFINES, body, "follows", (LrDef){ body, LR_OPAQUE, (unsigned char)ok, 0, 0, NULL });
+  return ok;
+}
+/* What the tree holds that the bars of lr_body_forms ask of each word and
+   def, read in one walk over it (lr_body_names_read), so that each ask is a
+   lookup, not a walk of its own:
+   - mm: a def of method_missing or respond_to_missing?;
+   - own: by name, 4 * class + 2 * side (the class side 1) + writer (1: an
+     attr_writer's or attr_accessor's `name=`) of each class that defines the
+     name itself, where lr_body_frame places it: a def, an attribute, a
+     define_method, an alias_method or an alias;
+   - mod: the names a module body defines so;
+   - cread, lists: the names a reader that reads no class-side version
+     names, and whether a list of an object's methods is anywhere
+     (lr_cside_unfollowed);
+   - sites: by name, each call of the name on a constant, or with no
+     receiver directly in a class body, as the constant receiver or the
+     class header (where its self is the class the record resolves it to,
+     lr_body_site_class); unsure: the names called otherwise (on another
+     receiver, on self in a method or a block, through a send, a Method, a
+     block-pass symbol, an alias, a super in a def of the name); dyn: a
+     send or a Method maker of a name the tree does not spell;
+   - headers: the class headers that name a superclass by a constant, whose
+     class the record resolves (lr_body_has_sub); anon: a superclass no
+     constant names, a Class.new with a superclass, a dup or a clone of a
+     constant (a class the tree names no superclass of) */
+typedef struct LrBodyNames {
+  ANameIndex own, sites;
+  ANameHash mod, cread, unsure;
+  int *headers, nheaders, cheaders, mm, lists, dyn, anon;
+} LrBodyNames;
+/* ...the last segment of the constant cp spells (NULL for no constant) */
+static const char *lr_leaf(const NodeTable *nt, int cp) {
+  NodeKind k = cp >= 0 ? nt_kind(nt, cp) : NK_NilNode;
+  const char *s = k == NK_ConstantReadNode || k == NK_ConstantPathNode ? lr_written_name(nt, cp) : NULL;
+  const char *q = s ? strrchr(s, ':') : NULL;
+  return q ? q + 1 : s;
+}
+/* ...the class node whose body node sits in directly, with no method,
+   block or `class << x` around it there (-1 for none) */
+static int lr_body_header(const NodeTable *nt, const int *par, int n, int node) {
+  for (int v = node, p; v >= 0 && v < n && (p = par[v]) >= 0 && p < n; v = p) {
+    NodeKind k = nt_kind(nt, p);
+    if (k == NK_ClassNode) return nt_ref(nt, p, "body") == v ? p : -1;
+    if (k == NK_ModuleNode || k == NK_DefNode || k == NK_BlockNode || k == NK_LambdaNode || k == NK_SingletonClassNode) return -1;
+  }
+  return -1;
+}
+/* ...a definition of name nm at node, on the class lr_body_frame places it
+   on (self: as where self is, a call's or a `def self.m`'s; -1, none the
+   tree spells: only a module body's is read), on its class side for a
+   `def self.m` (sg) or in a `class << self` */
+static void lr_body_names_own(Compiler *c, const int *par, int n, int node, int self, int sg, const char *nm, int w, LrBodyNames *x) {
+  const NodeTable *nt = c->nt;
+  int fs = LR_FS_NONE, cls = nm && self >= 0 ? lr_body_frame(c, par, n, node, -1, self, &fs) : -1;
+  if (cls >= 0 && cls < c->nclasses) ani_add(&x->own, nm, 4 * cls + 2 * (sg || fs == LR_FS_SCLASS || fs == LR_FS_IEVAL_SCLASS) + w);
+  for (int v = node, p; nm && v >= 0 && v < n && (p = par[v]) >= 0 && p < n; v = p)
+    if (nt_kind(nt, p) == NK_ClassNode || nt_kind(nt, p) == NK_ModuleNode) {
+      if (nt_kind(nt, p) == NK_ModuleNode) anh_add(&x->mod, nm);
+      break;
+    }
+}
+static void lr_body_names_read(Compiler *c, const int *par, int n, LrBodyNames *x) {
+  const NodeTable *nt = c->nt;
+  *x = (LrBodyNames){ 0 };
+  for (int id = 0; id < n; id++) {
+    NodeKind k = nt_kind(nt, id);
+    if (k == NK_DefNode) {
+      const char *dn = nt_str(nt, id, "name");
+      int dr = nt_ref(nt, id, "receiver");
+      x->mm |= is_method_missing_name(dn);
+      lr_body_names_own(c, par, n, id, dr < 0 ? 0 : nt_kind(nt, dr) == NK_SelfNode ? 1 : -1, dr >= 0, dn, 0, x);
+    }
+    else if (k == NK_AliasMethodNode) {
+      int nn = nt_ref(nt, id, "new_name"), on = nt_ref(nt, id, "old_name");
+      lr_body_names_own(c, par, n, id, 0, 0, nn >= 0 ? vis_arg_name(nt, nn) : NULL, 0, x);
+      if (on >= 0 && vis_arg_name(nt, on)) anh_add(&x->unsure, vis_arg_name(nt, on));
+    }
+    else if (k == NK_SuperNode || k == NK_ForwardingSuperNode) {
+      for (int p = par[id]; p >= 0 && p < n; p = par[p])
+        if (nt_kind(nt, p) == NK_DefNode) { anh_add(&x->unsure, nt_str(nt, p, "name")); break; }
+    }
+    else if (k == NK_BlockArgumentNode) {
+      int ex = nt_ref(nt, id, "expression");
+      if (ex >= 0 && nt_kind(nt, ex) == NK_SymbolNode && vis_arg_name(nt, ex)) anh_add(&x->unsure, vis_arg_name(nt, ex));
+    }
+    else if (k == NK_ClassNode) {
+      int sp = nt_ref(nt, id, "superclass");
+      if (sp >= 0 && lr_leaf(nt, sp)) {
+        if (x->nheaders == x->cheaders) x->headers = realloc(x->headers, sizeof(int) * (size_t)(x->cheaders = x->cheaders ? 2 * x->cheaders : 16));
+        x->headers[x->nheaders++] = id;
+      }
+      else if (sp >= 0) x->anon = 1;
+    }
+    if (k != NK_CallNode) continue;
+    const char *cn = nt_str(nt, id, "name");
+    int rv = nt_ref(nt, id, "receiver"), ac = 0, rself = rv < 0 || nt_kind(nt, rv) == NK_SelfNode;
+    const int *av = call_args(nt, id, &ac);
+    const char *a0 = ac >= 1 ? vis_arg_name(nt, av[0]) : NULL, *rl = lr_leaf(nt, rv);
+    if (!cn) continue;
+    /* (the definitions: attributes, define_method, alias_method) */
+    if (rself && is_attr_name(cn))
+      for (int i = 0; i < ac; i++) {
+        if (!is_attr_writer_family(cn) || is_attr_reader_family(cn)) lr_body_names_own(c, par, n, id, 1, 0, vis_arg_name(nt, av[i]), 0, x);
+        if (is_attr_writer_family(cn)) lr_body_names_own(c, par, n, id, 1, 0, vis_arg_name(nt, av[i]), 1, x);
+      }
+    if (rself && (is_define_method_name(cn) || is_alias_method_name(cn))) lr_body_names_own(c, par, n, id, 1, 0, a0, 0, x);
+    if (is_alias_method_name(cn) && ac >= 2 && vis_arg_name(nt, av[1])) anh_add(&x->unsure, vis_arg_name(nt, av[1]));
+    /* (the calls of a name, as a class method's) */
+    if (rl) ani_add(&x->sites, cn, rv);
+    else if (rself && lr_body_header(nt, par, n, id) >= 0) ani_add(&x->sites, cn, lr_body_header(nt, par, n, id));
+    else anh_add(&x->unsure, cn);
+    if (is_send_family(cn) || is_method_object_maker(cn)) {
+      if (a0) anh_add(&x->unsure, a0);
+      else x->dyn = 1;
+    }
+    if (rl && ((is_class_new(rl, cn) && ac > 0) || is_object_copy(cn))) x->anon = 1;
+    /* (the readers that read no class-side version) */
+    int q = is_method_presence_query(cn);
+    if (q >= 2 && !is_instance_method_list(cn)) x->lists = 1;
+    if ((is_respond_to_name(cn) || is_method_object_maker(cn)) && a0) anh_add(&x->cread, a0);
+    if (rv >= 0 && !rl && nt_kind(nt, rv) != NK_SelfNode) anh_add(&x->cread, is_send_family(cn) && a0 ? a0 : cn);
+    for (int v = id; v >= 0 && v < n; v = par[v])
+      if (nt_kind(nt, v) == NK_DefinedNode) { anh_add(&x->cread, cn); break; }
+  }
+  ani_sort(&x->own);
+  ani_sort(&x->sites);
+}
+static void lr_body_names_free(LrBodyNames *x) {
+  ani_free(&x->own); ani_free(&x->sites);
+  anh_free(&x->mod); anh_free(&x->cread); anh_free(&x->unsure);
+  free(x->headers);
+}
+/* ...the attribute name a writer name `nm=` spells, in buf (NULL for a
+   name that is no writer's) */
+static const char *lr_writer_base(const char *nm, char *buf, size_t cap) {
+  size_t ln = strlen(nm);
+  if (ln < 2 || ln >= cap || nm[ln - 1] != '=') return NULL;
+  memcpy(buf, nm, ln - 1);
+  buf[ln - 1] = 0;
+  return buf;
+}
+/* ...does class cls define nm itself on side sg (a writer `nm=` as an
+   attribute's too)? */
+static int lr_body_names_owns(const LrBodyNames *x, int cls, int sg, const char *nm) {
+  char buf[256];
+  const char *base = lr_writer_base(nm, buf, sizeof buf);
+  for (int i = ani_first(&x->own, nm); i < x->own.n && sp_streq(x->own.e[i].name, nm); i++)
+    if (x->own.e[i].v == 4 * cls + 2 * sg) return 1;
+  for (int i = base ? ani_first(&x->own, base) : x->own.n; i < x->own.n && sp_streq(x->own.e[i].name, base); i++)
+    if (x->own.e[i].v == 4 * cls + 2 * sg + 1) return 1;
+  return 0;
+}
+/* ...does any class, module or core class define nm as an instance method
+   or a class method (a writer `nm=` as an attribute's too)? A name none
+   does is absent: a word naming it raises NameError where it runs
+   (emit_vis_word_absent), which its version answers */
+static int lr_body_names_known(const LrBodyNames *x, const char *nm) {
+  char buf[256];
+  const char *base = lr_writer_base(nm, buf, sizeof buf);
+  int i = ani_first(&x->own, nm), j = base ? ani_first(&x->own, base) : x->own.n;
+  return (i < x->own.n && sp_streq(x->own.e[i].name, nm)) || (j < x->own.n && sp_streq(x->own.e[j].name, base)) ||
+         anh_has(&x->mod, nm) || (base && anh_has(&x->mod, base)) || core_method_name_any(nm);
+}
+/* ...does a module body define nm (a writer `nm=` through its attribute's
+   name, which mod holds for both)? */
+static int lr_body_names_mod(const LrBodyNames *x, const char *nm) {
+  char buf[256];
+  const char *base = lr_writer_base(nm, buf, sizeof buf);
+  return anh_has(&x->mod, nm) || (base && anh_has(&x->mod, base));
+}
+/* ...is class-side name nm (a class method's) read by a reader that reads
+   no class-side version: a list of an object's methods, a respond_to? or a
+   Method maker naming it, a defined? of a call of it, or a call or a send
+   of it on a receiver that is no constant or self (a boxed or poly
+   value's)? Such a reader answers from the table, whose visibility a
+   class-side word's version does not change; so a word a body runs on the
+   class side bars nm, which keeps the form it has where the record holds
+   no body versions (dropped once the class side has face entries and
+   visibility cells, as the instance side does) */
+static int lr_cside_unfollowed(const LrBodyNames *x, const char *nm) {
+  return nm && (x->lists || anh_has(&x->cread, nm));
+}
+/* ...the class method around node whose self a word or a def there acts
+   on: a `def self.m` or `def K.m`, or a def in a `class << self` body,
+   around the node with no class body, `class << x` of another object, or
+   an eval block on a constant between; -1 for none (a class body's own
+   code, an instance method's) */
+static int lr_body_cmethod(const NodeTable *nt, const int *par, int n, int node) {
+  int inst = -1;
+  for (int v = node, p; v >= 0 && v < n && (p = par[v]) >= 0 && p < n; v = p) {
+    NodeKind k = nt_kind(nt, p);
+    if (k == NK_ClassNode || k == NK_ModuleNode) return -1;
+    if (k == NK_SingletonClassNode) {
+      if (nt_kind(nt, nt_ref(nt, p, "expression")) != NK_SelfNode) return -1;
+      if (inst >= 0) return inst;
+    }
+    const char *bn = k == NK_BlockNode && par[p] >= 0 && par[p] < n && nt_kind(nt, par[p]) == NK_CallNode ? nt_str(nt, par[p], "name") : NULL;
+    if (bn && (is_class_eval_family(bn) || is_instance_eval_family(bn)) && lr_leaf(nt, nt_ref(nt, par[p], "receiver"))) return -1;
+    if (k == NK_DefNode && nt_ref(nt, p, "receiver") >= 0) return p;
+    if (k == NK_DefNode && inst < 0) inst = p;
+  }
+  return -1;
+}
+/* ...the class a site's self is (lr_body_names_read's sites): a class
+   header's, as the record registered it (elab_header_class), or the class
+   the record resolves the receiver constant to where the call stands
+   (lr_class_ref_at: an alias's class, a Class.new's own); below 0 for none
+   it knows (a constant only the run time binds, one no walk has reached),
+   LR_BUILTIN for a core class */
+static int lr_body_site_class(Compiler *c, int v) {
+  if (nt_kind(c->nt, v) == NK_ClassNode) return elab_header_class(c, v, NULL, NULL);
+  int core = -1, ci = lr_class_ref_at(c, v, &core);
+  return core >= 0 ? LR_BUILTIN : ci;
+}
+/* ...may a class of the program have cls as its superclass: a header whose
+   superclass constant the record resolves to cls, or to no class it knows,
+   or a superclass no constant names (anon)? */
+static int lr_body_has_sub(Compiler *c, const LrBodyNames *x, int cls) {
+  if (x->anon) return 1;
+  for (int i = 0; i < x->nheaders; i++) {
+    int sc = lr_body_site_class(c, nt_ref(c->nt, x->headers[i], "superclass"));
+    if (sc == cls || (sc < LR_MAIN && sc != LR_BUILTIN)) return 1;
+  }
+  return 0;
+}
+/* ...may class method d of class cls run with a self other than cls? Not
+   where no class of the program may have cls as its superclass
+   (lr_body_has_sub); else where some call of it is not on a constant or in
+   a class body whose self the record resolves to cls itself (an alias of
+   a subclass, a Class.new of cls, a constant it cannot resolve), or is one
+   lr_body_names_read cannot place (unsure, dyn). A word or a non-public
+   def there acts on the class the call runs on, which the record does not
+   place a version on, so it bars its names (dropped once a body's version
+   is placed on each class a call of it runs on) */
+static int lr_body_self_unsure(Compiler *c, const LrBodyNames *x, int d, int cls) {
+  const NodeTable *nt = c->nt;
+  const char *dn = d >= 0 ? nt_str(nt, d, "name") : NULL;
+  if (d < 0) return 0;
+  if (cls < 0 || cls >= c->nclasses) return 1;
+  if (!lr_body_has_sub(c, x, cls)) return 0;
+  if (!dn || x->dyn || anh_has(&x->unsure, dn)) return 1;
+  for (int i = ani_first(&x->sites, dn); i < x->sites.n && sp_streq(x->sites.e[i].name, dn); i++)
+    if (lr_body_site_class(c, x->sites.e[i].v) != cls) return 1;
+  return 0;
+}
+/* ...does a body's word at node bar its names (lr_body_forms), keeping the
+   unplaced form? In a program that defines method_missing, on a module
+   (an include, extend or prepend copy carries the module's def versions
+   only), in a body that may reach code the record cannot follow
+   (lr_body_followed), in a class method a call may run on a subclass
+   (lr_body_self_unsure); and for a name the class does not define itself
+   on that side but something does (a version would be the word's from the
+   start, where the inherited method's visibility holds until the word
+   runs; a name nothing defines raises NameError there), one a module
+   body defines, or, on the class side, one a reader that reads no
+   class-side version names (lr_cside_unfollowed) */
+static int lr_body_word_barred(Compiler *c, const int *par, int n, int node, const LrBodyNames *x) {
+  const NodeTable *nt = c->nt;
+  int fs, cls = lr_body_frame(c, par, n, node, -1, 1, &fs), sg = fs == LR_FS_SCLASS || fs == LR_FS_IEVAL_SCLASS;
+  if (x->mm || (cls >= 0 && cls < c->nclasses && comp_class_is_module(c, &c->classes[cls])) || !lr_body_followed(c, par, n, node) ||
+      lr_body_self_unsure(c, x, lr_body_cmethod(nt, par, n, node), cls))
+    return 1;
+  for (int k = 0; lr_word_name(nt, node, k); k++) {
+    const char *nm = lr_word_name(nt, node, k);
+    if ((!lr_body_names_owns(x, cls, sg, nm) && lr_body_names_known(x, nm)) || lr_body_names_mod(x, nm) || (sg && lr_cside_unfollowed(x, nm))) return 1;
+  }
+  return 0;
+}
+/* ...does a body's non-public def at node d bar its name (lr_body_forms)? In a body that may reach code the record
+   cannot follow (lr_body_followed), in a class method a call may run on a subclass, which the word the def's value is
+   given to acts on (lr_body_self_unsure), and for a class method's def a reader that reads no class-side version
+   names (lr_cside_unfollowed) */
+static int lr_body_def_barred(Compiler *c, const int *par, int n, int d, const LrBodyNames *x) {
+  const NodeTable *nt = c->nt;
+  int fs, dr = nt_ref(nt, d, "receiver"), cls = lr_body_frame(c, par, n, d, -1, 1, &fs);
+  int cside = (dr >= 0 && nt_kind(nt, dr) == NK_SelfNode) || fs == LR_FS_SCLASS || fs == LR_FS_IEVAL_SCLASS;
+  return !lr_body_followed(c, par, n, d) || (cside && lr_cside_unfollowed(x, nt_str(nt, d, "name"))) ||
+         lr_body_self_unsure(c, x, lr_body_cmethod(nt, par, n, d), cls);
+}
 static void lr_body_forms(Compiler *c, const int *par, int n) {
   const NodeTable *nt = c->nt;
   LoadRecord *r = c->lrec;
@@ -2719,6 +3041,8 @@ static void lr_body_forms(Compiler *c, const int *par, int n) {
   struct LrBodyForm *old = nold ? r->bform : NULL;
   if (!old) free(r->bform);
   r->bform = NULL; r->nbform = 0;
+  LrBodyNames x;   /* (the tree's names the bars ask, lr_body_word_barred) */
+  lr_body_names_read(c, par, n, &x);
   for (int id = 0; id < n; id++) {
     NodeKind k = nt_kind(nt, id);
     /* (a literal send names the entry it makes, `send(:define_method, :m)`; used, the arguments the sends take.
@@ -2732,13 +3056,15 @@ static void lr_body_forms(Compiler *c, const int *par, int n) {
     /* (a body's word is a version, lr_body_def_version, where the tree spells the class self is, lr_body_word_frame;
        a placed one still bars: its version's visibility the plan answers from where the word runs, ahead of the
        readers before it, lr_version_vis) */
-    if (k == NK_CallNode && !used && lr_body_word(nt, id) && lr_body_around(nt, par, n, id) >= 0 && lr_body_word_frame(c, par, n, id))
+    if (k == NK_CallNode && !used && lr_body_word(nt, id) && lr_body_around(nt, par, n, id) >= 0 && lr_body_word_frame(c, par, n, id) &&
+        !lr_body_word_barred(c, par, n, id, &x))
       continue;
     if (k != NK_DefNode && k != NK_AliasMethodNode && k != NK_UndefNode && k != NK_CallNode) continue;
     if (k == NK_DefNode) {
       int dr = nt_ref(nt, id, "receiver");
       if (lr_body_def_kin(nt, id, dr >= 0) ||
-          ((dr < 0 || nt_kind(nt, dr) == NK_SelfNode) && !nt_int(nt, id, "kernel_def", 0) && lr_frame_main(nt, par, n, id)))
+          ((dr < 0 || nt_kind(nt, dr) == NK_SelfNode) && !nt_int(nt, id, "kernel_def", 0) && lr_frame_main(nt, par, n, id)) ||
+          (lr_body_around(nt, par, n, id) >= 0 && !lr_body_def_public(nt, par, n, id, dr >= 0) && lr_body_def_barred(c, par, n, id, &x)))
         lr_bform_add(r, &cap, nt_str(nt, id, "name"), id, 0);
       continue;
     }
@@ -2789,6 +3115,7 @@ static void lr_body_forms(Compiler *c, const int *par, int n) {
     }
   }
   free(al);
+  lr_body_names_free(&x);
   if (old) { lr_bform_check(old, nold, r); free(old); }
   r->bform_n = r->walk ? -(n + 1) : n + 1;
 }
@@ -2899,8 +3226,9 @@ static int lr_callee_defines(Compiler *c, const char *name, int direct, int dept
     /* (a def the record holds as a body's version is followed: its body
        says, lr_body_held; asked unkept first, as a no of a class the walk
        has not reached yet would be kept) */
-    int held = !r->recorded && p.region < 0 && nt_kind(c->nt, d[i].node) == NK_DefNode && lr_body_holds(c, d[i].node) && lr_body_held(c, d[i].node);
-    if (!r->recorded && (p.region < 0 ? !held : p.seq >= r->frontier))
+    int tree = direct == LR_DEFINES_TREE,
+        held = !tree && !r->recorded && p.region < 0 && nt_kind(c->nt, d[i].node) == NK_DefNode && lr_body_holds(c, d[i].node) && lr_body_held(c, d[i].node);
+    if (!tree && !r->recorded && (p.region < 0 ? !held : p.seq >= r->frontier))
       return LR_OPAQUE_DEFINES;
     o = lr_most(o, lr_body_defines(c, d[i].node, direct, depth + 1));
     if (o == LR_OPAQUE_DEFINES) return o;
@@ -2967,7 +3295,10 @@ static int lr_variable_op_write(NodeKind k) {
 /* What may node n, run, do (lr_body_defines): 0 nothing, LR_OPAQUE_WRITES
    write an instance variable or a class variable, LR_OPAQUE_DEFINES define
    or write anything else. With direct, the runtime's own calls back into the
-   program are left out */
+   program are left out; with LR_DEFINES_TREE too, and every def and body
+   word counts as one the record follows (where it may not), so the answer
+   reads the tree and the program's names alone, never what the record holds
+   or has reached (lr_body_followed) */
 static int lr_node_defines(Compiler *c, int n, int direct, int depth) {
   static const NodeKind kinds[] = {
     NK_DefNode, NK_AliasMethodNode, NK_AliasGlobalVariableNode, NK_UndefNode, NK_YieldNode,
@@ -2979,8 +3310,9 @@ static int lr_node_defines(Compiler *c, int n, int direct, int depth) {
   NodeKind k = nt_kind(nt, n);
   int nc = 0, o = lr_variable_write(k) ? LR_OPAQUE_WRITES : 0;
   const NodeKind *ck = elab_const_write_kinds(&nc);
-  if (k == NK_DefNode && lr_body_held(c, n)) return 0;   /* (the record follows it) */
-  int word = k == NK_CallNode && lr_body_word(nt, n) && lr_body_held(c, n);   /* (it follows the word, and asks its defs) */
+  int tree = direct == LR_DEFINES_TREE;
+  if (k == NK_DefNode && (tree || lr_body_held(c, n))) return 0;   /* (the record follows it) */
+  int word = k == NK_CallNode && lr_body_word(nt, n) && (tree || lr_body_held(c, n));   /* (it follows the word, and asks its defs) */
   for (int i = 0; i < (int)(sizeof kinds / sizeof *kinds); i++) if (k == kinds[i]) return LR_OPAQUE_DEFINES;
   for (int i = 0; i < nc; i++) if (k == ck[i]) return LR_OPAQUE_DEFINES;
   if (k == NK_BlockArgumentNode && nt_kind(nt, nt_ref(nt, n, "expression")) != NK_SymbolNode) return LR_OPAQUE_DEFINES;   /* a block passed on */
@@ -3014,7 +3346,7 @@ static int lr_node_defines(Compiler *c, int n, int direct, int depth) {
    Memoized by the def (LR_KEY_DEFINES; "direct" for the direct answer). */
 static int lr_body_defines(Compiler *c, int def, int direct, int depth) {
   LoadRecord *r = c->lrec;
-  const char *key = direct ? "direct" : "";
+  const char *key = direct == LR_DEFINES_TREE ? "tree" : direct ? "direct" : "";
   const LrHist *h = lr_hist(r, LR_KEY_DEFINES, def, key, 0);
   if (h && h->n) return h->v[h->n - 1].vis;
   if (depth > 64) return LR_OPAQUE_DEFINES;

@@ -12828,36 +12828,52 @@ static sp_RbVal sp_poly_str_become_ex(sp_RbVal v, const char *s, int enc) {
 }
 static sp_RbVal sp_poly_str_become(sp_RbVal v, const char *s) { return sp_poly_str_become_ex(v, s, 0); }
 static sp_RbVal sp_poly_str_become_enc(sp_RbVal v, const char *s) { return sp_poly_str_become_ex(v, s, 1); }
-/* IO#read with its arguments in a list a splat supplied (`def read(*a) =
-   @f.read(*a)`): none, or a nil length, reads to the end; a length reads that
-   many bytes, nil at the end of the stream. A buffer is checked for a freeze
-   before the read and then holds what was read, where it can be written in
-   place (a shared String). A plain String's new contents could not reach
-   the caller's variable through the list, so that raises before reading. */
-static SP_NOINLINE const char *sp_io_read_splat(sp_File *f, sp_PolyArray *a) {
-  SP_GC_ROOT(f); SP_GC_ROOT(a);
-  sp_int n = a ? a->len : 0;
-  if (n > 2) sp_raise_arity(n, 0, 2, NULL);
-  sp_RbVal len = n > 0 ? a->data[0] : sp_box_nil();
-  sp_RbVal buf = n > 1 ? a->data[1] : sp_box_nil();
-  sp_int ln = sp_poly_nil_p(len) ? 0 : sp_poly_arg_int_chk(len);
-  if (!sp_poly_nil_p(buf)) {
-    if (sp_poly_is_strbuf(buf)) {
-      if (sp_String_is_immutable((sp_String *)buf.v.p)) sp_raise_frozen_str(sp_String_cstr((sp_String *)buf.v.p));
-    }
-    else {
-      sp_str_check_mutable(sp_poly_arg_str_chk(buf));
-      sp_raise_cls("NotImplementedError", "IO#read into a String buffer passed through a splat is not supported by spinel");
-    }
+/* A supplied output String keeps its identity. Reading to the end uses the
+   stream's encoding. A zero-length sysread keeps the buffer's contents. */
+static sp_String *sp_io_read_buffer(sp_File *f, sp_int n, sp_RbVal buffer,
+                                   int read, int rest, int sysread) {
+  SP_GC_ROOT(f);
+  SP_GC_ROOT_RBVAL(buffer);
+  if (!sysread && n < 0)
+    sp_raise_cls("ArgumentError", sp_sprintf("negative length %lld given", (long long)n));
+  sp_String *out = sp_poly_nil_p(buffer) ? NULL : sp_poly_arg_str_handle(buffer);
+  SP_GC_ROOT(out);
+  if (out && sp_String_is_immutable(out)) sp_raise_frozen_str(out->data);
+  if (sysread && n < 0) sp_raise_cls("ArgumentError", "negative string size (or size too big)");
+  if (sysread && !n) return out ? out : sp_String_new_shared(sp_str_empty_binary());
+  const char *bytes;
+  if (read) {
+    bytes = rest ? sp_File_read(f) : sp_File_read_n(f, n);
+    if (out && rest) sp_String_set_bin_enc(out, bytes ? bytes : sp_str_empty);
+    else if (out) sp_String_set_bin(out, bytes ? bytes : sp_str_empty);
+  } else if (out) {
+    bytes = sp_File_readpartial_into(f, n, out);
+  } else {
+    bytes = sp_File_readpartial_or_nil(f, n);
   }
-  const char *r = sp_poly_nil_p(len) ? sp_File_read(f) : sp_File_read_n(f, ln);
-  SP_GC_ROOT_STR(r);
-  if (!sp_poly_nil_p(buf)) (void)sp_poly_str_become(buf, r ? r : sp_str_empty);
-  return r;
+  if (!bytes) {
+    if (!read) sp_raise_cls("EOFError", "end of file reached");
+    return NULL;
+  }
+  return out ? out : sp_String_new_shared(bytes);
 }
-/* IO#pread returns its supplied String, including its encoding and an
-   unchanged zero-length read. At EOF the caller must publish the emptied
-   buffer to any value-form local before raising. */
+
+/* The gathered form uses the same output-buffer operation as read(len, buf). */
+static SP_NOINLINE const char *sp_io_read_splat(sp_File *f, sp_PolyArray *a) {
+  SP_GC_ROOT(f);
+  SP_GC_ROOT(a);
+  sp_int count = a ? a->len : 0;
+  if (count > 2) sp_raise_arity(count, 0, 2, NULL);
+  sp_RbVal length = count > 0 ? a->data[0] : sp_box_nil();
+  sp_RbVal buffer = count > 1 ? a->data[1] : sp_box_nil();
+  SP_GC_ROOT_RBVAL(buffer);
+  int rest = sp_poly_nil_p(length);
+  sp_int n = rest ? 0 : sp_poly_arg_int_chk(length);
+  return sp_String_cstr_nil(sp_io_read_buffer(f, n, buffer, 1, rest, 0));
+}
+
+/* IO#pread keeps the supplied String and its encoding. A zero-length read
+   leaves it unchanged. At EOF the handle is cleared before the caller raises. */
 static sp_String *sp_io_pread_buffer(sp_File *f, sp_int length, sp_int offset,
                                      sp_RbVal buffer, sp_bool *eof) {
   SP_GC_ROOT(f);
@@ -12879,27 +12895,28 @@ static sp_String *sp_io_pread_buffer(sp_File *f, sp_int length, sp_int offset,
   return result;
 }
 
-/* A value-form nonblocking read fills an existing buffer or clears it at
-   EOF. The caller writes a plain String back to its local before raising;
-   would-block leaves the buffer unchanged. No new String handle is made. */
-static const char *sp_io_read_nonblock_buffer(sp_File *f, sp_int n, sp_RbVal *buffer,
+/* A nonblocking read preserves the supplied buffer, including a String
+   returned by #to_str. EOF clears it and would-block leaves it alone. */
+static sp_String *sp_io_read_nonblock_buffer(sp_File *f, sp_int n, sp_RbVal buffer,
                                              const sp_RbVal *exception, sp_bool *eof) {
   SP_GC_ROOT(f);
-  sp_RbVal v = *buffer;
-  SP_GC_ROOT_RBVAL(v);
+  SP_GC_ROOT_RBVAL(buffer);
   if (n < 0) sp_raise_cls("ArgumentError", sp_sprintf("negative length %lld given", (long long)n));
-  const char *s = sp_poly_nil_p(v) ? NULL : sp_poly_arg_str_chk(v);
-  if (s && sp_poly_is_strbuf(v) && sp_String_is_immutable((sp_String *)v.v.p)) sp_raise_frozen_str(s);
-  if (s) sp_str_check_mutable(s);
+  sp_String *out = sp_poly_nil_p(buffer) ? NULL : sp_poly_arg_str_handle(buffer);
+  SP_GC_ROOT(out);
+  if (out && sp_String_is_immutable(out)) sp_raise_frozen_str(out->data);
   if (exception && exception->tag != SP_TAG_BOOL)
     sp_raise_cls("ArgumentError", sp_sprintf("expected true or false as exception: %s", sp_poly_inspect(*exception)));
-  int text = s && !sp_str_is_binary(s);
-  const char *r = sp_sock_read_nb(f, n, 0, 0, eof);
-  /* Replacing the buffer grows its malloc-backed payload without a GC
-     allocation, so the read result needs no root across that copy. */
-  if (r && text) sp_str_as_text(r);
-  if (s && (r || *eof)) *buffer = sp_poly_str_become(v, r ? r : sp_str_empty);
-  return r;
+  const char *bytes = sp_sock_read_nb(f, n, 0, 0, eof);
+  if (out && (bytes || *eof)) sp_String_set_bin(out, bytes ? bytes : sp_str_empty);
+  if (!bytes) {
+    if (!exception || sp_poly_truthy(*exception)) {
+      if (*eof) sp_raise_cls("EOFError", "end of file reached");
+      sp_raise_cls("IO::EAGAINWaitReadable", "Resource temporarily unavailable - read would block");
+    }
+    return NULL;
+  }
+  return out ? out : sp_String_new_shared(bytes);
 }
 /* The same through a receiver that is no variable -- an element read, a Hash
    value: a shared handle absorbs the new contents and every alias observes

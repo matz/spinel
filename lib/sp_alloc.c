@@ -289,14 +289,8 @@ void sp_gc_retune_object(size_t before) {
      count that had itself wrapped. */
   size_t freed = before > live ? before - live : 0;
 
-  if (freed < before / 4) {
-    sp_gc_threshold = sp_gc_sat_mul(before, 2);
-  } else if (live > 0) {
-    sp_gc_threshold = sp_gc_sat_mul(live, 2);
-    if (sp_gc_threshold < sp_gc_threshold_init) sp_gc_threshold = sp_gc_threshold_init;
-  } else {
-    sp_gc_threshold = sp_gc_threshold_init;
-  }
+  size_t next = sp_gc_sat_mul(freed < before / 4 ? before : live, 2);
+  sp_gc_threshold = next < sp_gc_threshold_init ? sp_gc_threshold_init : next;
 }
 /* The collector the allocation triggers call. A program built with
    --gc=none defines this pointer itself, as NULL: the definition here, being

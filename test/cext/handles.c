@@ -99,9 +99,7 @@ int main(void) {
     for (int i = 0; i < 256 && !data_freed; ++i) sp_gc_collect();
     assert(data_freed == 1 && finalized == before + 1);
     outer = sp_cext_arena_enter();
-    char *text = sp_str_alloc(4);
-    memcpy(text, "text", 4);
-    sp_RbVal string = sp_box_obj(sp_String_new_fresh(text), SP_BUILTIN_STRBUF);
+    sp_RbVal string = sp_box_obj(sp_String_from_cstr("text"), SP_BUILTIN_STRBUF);
     VALUE s = sp_cext_value(string);
     assert(s == sp_cext_value(string));
     rb_global_variable(&s);

@@ -15648,36 +15648,43 @@ sp_bool sp_poly_cbi_p(sp_RbVal v) SP_UNUSED;
 sp_bool sp_poly_cbi_p(sp_RbVal v);
 /* boxed count(v): value-equality element count over an Array, a Hash, a
    Range or an Enumerator (0 for anything else) */
-/* String#index / #rindex on a boxed receiver: the byte offset of a substring,
-   nil when absent. The receiver switch that serves the array kinds
-   dispatches on cls_id, which a String box does not carry, so its default arm
-   routes here before reporting a missing method (#3445). */
-/* The pattern is a String or a Regexp; anything else is CRuby's TypeError
-   (it was read as "absent" and answered nil). */
-static sp_oint sp_poly_str_index_val(sp_RbVal v, sp_RbVal sub, int from_end) {
-  sp_RbVal s = v, a = sub;
-  const char *sp = sp_rbval_string_bytes(s) ? sp_rbval_string_bytes(s) : (&("\xff")[1]);
-  if (a.tag == SP_TAG_OBJ && a.cls_id == SP_BUILTIN_REGEX && a.v.p)
-    return from_end ? sp_re_rindex_opt((mrb_regexp_pattern *)a.v.p, sp)
-                    : sp_re_index_from_opt((mrb_regexp_pattern *)a.v.p, sp, 0);
-  const char *ap = sp_poly_arg_str_chk(a);
-  if (!ap) ap = (&("\xff")[1]);
-  return from_end ? sp_str_rindex_opt(sp, ap) : sp_str_index_opt(sp, ap);
+/* Convert the needle before borrowing the receiver's current payload.
+   The caller has already normalized the position against the old length. */
+static sp_oint sp_poly_str_index_text(sp_RbVal recv, sp_RbVal sub, sp_int start, int from_end) {
+  SP_GC_ROOT_RBVAL(recv);
+  const char *needle = sp_strface_b_box(sub);
+  if (!needle) needle = sp_poly_arg_str_chk(sub);
+  const char *bytes = sp_rbval_string_bytes(recv);
+  if (!needle) needle = sp_str_empty;
+  if (!bytes) bytes = sp_str_empty;
+  if (from_end) return sp_str_rindex_from(bytes, needle, start);
+  return start ? sp_str_index_from_opt(bytes, needle, start) : sp_str_index_opt(bytes, needle);
 }
-/* the two-argument String#index/#rindex on a boxed receiver: the search starts
-   at (index) or stops at (rindex) the given offset. Array owns neither form --
-   its index takes one argument -- so this arm is String's alone (#4149). */
-static sp_oint sp_poly_str_index_from_val(sp_RbVal v, sp_RbVal sub, sp_int start,
-                                          int from_end) {
-  sp_RbVal s = v, a = sub;
-  const char *sp = sp_rbval_string_bytes(s) ? sp_rbval_string_bytes(s) : (&("\xff")[1]);
-  if (a.tag == SP_TAG_OBJ && a.cls_id == SP_BUILTIN_REGEX && a.v.p)
-    return from_end ? sp_re_rindex_from_opt((mrb_regexp_pattern *)a.v.p, sp, start)
-                    : sp_re_index_from_opt((mrb_regexp_pattern *)a.v.p, sp, start);
-  const char *ap = sp_poly_arg_str_chk(a);
-  if (!ap) ap = (&("\xff")[1]);
-  if (!from_end) return sp_str_index_from_opt(sp, ap, start);
-  return sp_str_rindex_from(sp, ap, start);
+static sp_oint sp_poly_str_index_val(sp_RbVal recv, sp_RbVal sub, int from_end) {
+  const char *bytes = sp_rbval_string_bytes(recv);
+  if (!bytes) bytes = sp_str_empty;
+  if (sub.tag == SP_TAG_OBJ && sub.cls_id == SP_BUILTIN_REGEX && sub.v.p)
+    return from_end ? sp_re_rindex_opt((mrb_regexp_pattern *)sub.v.p, bytes)
+                    : sp_re_index_from_opt((mrb_regexp_pattern *)sub.v.p, bytes, 0);
+  return sp_poly_str_index_text(recv, sub, from_end ? (sp_int)sp_str_length(bytes) : 0, from_end);
+}
+static sp_oint sp_poly_str_index_from_val(sp_RbVal recv, sp_RbVal sub, sp_RbVal offset, int from_end) {
+  SP_GC_ROOT_RBVAL(recv); SP_GC_ROOT_RBVAL(sub);
+  sp_int len = (sp_int)sp_str_length(sp_rbval_string_bytes(recv));
+  sp_int start = sp_poly_arg_int_chk(offset);
+  int regex = sub.tag == SP_TAG_OBJ && sub.cls_id == SP_BUILTIN_REGEX && sub.v.p;
+  if (start < 0) start += len;
+  if (start < 0 || (!from_end && start > len)) {
+    if (regex) sp_re_clear_last_match();
+    return sp_oint_nil();
+  }
+  if (start > len) start = len;
+  if (regex) {
+    const char *bytes = sp_str_or_empty(sp_rbval_string_bytes(recv));
+    return from_end ? sp_re_rindex_from_opt((mrb_regexp_pattern *)sub.v.p, bytes, start)
+                    : sp_re_index_from_opt((mrb_regexp_pattern *)sub.v.p, bytes, start);
+  }
+  return sp_poly_str_index_text(recv, sub, start, from_end);
 }
 static sp_int sp_poly_count_val(sp_RbVal v, sp_RbVal x) {
   /* String#count on a boxed receiver counts characters from a set, not

@@ -413,28 +413,6 @@ int str_mut_var_recv(Compiler *c, int recv);
 void emit_str_frozen_check(Compiler *c, int recv, Buf *b);
 int strbuf_boxed_elem_read(Compiler *c, int v);
 int emit_strbuf_read_ref(Compiler *c, int recv, Buf *b);
-/* A String value rendered for a consumer (codegen_str.c, #8328): its C
-   expression, and what the expression needs from where it is used, which
-   str_form_settle meets. Two flags are needs of the value itself:
-     SF_EVAL_ONCE       the value is used more than once (in two forms, or
-                        twice), so it is evaluated once, into a temp of
-                        type `cty` that the uses read (`tmp`; a renderer
-                        that must name it ahead of its operand's own temps
-                        reserves the number in `tmp` itself);
-     SF_ROOT_UNTIL_USE  the value is an object made here that what runs
-                        before its use could collect, so it stays rooted
-                        until then.
-   The third describes the form's effect on other values:
-     SF_ALLOCATES       producing this form may allocate (it wraps a new
-                        handle around bytes or makes a String), so any
-                        other value live across it must be rooted. It is
-                        never set where the form reads an existing slot,
-                        box or handle; the value's own evaluation is the
-                        consumer's to judge, as operand_may_allocate does.
-                        The schedule layer reads it, and so is the
-                        argument binder's rooting of the values that run
-                        ahead to; str_form_settle does not act on it. */
-enum { SF_EVAL_ONCE = 1, SF_ROOT_UNTIL_USE = 2, SF_ALLOCATES = 4 };
 /* Why a box's form can differ from the one repr_of predicts for its node
    (--repr-check, codegen.c): what at the site explains it */
 enum {
@@ -445,47 +423,9 @@ enum {
   RW_HANDLE_ROUTE,   /* a conditional boxed through its shared handle route */
   RW_LITERAL         /* an empty literal or Hash.new boxed by its shape */
 };
-/* tmp: the temp an SF_EVAL_ONCE value is bound to (str_form_settle numbers
-   it unless the renderer reserved one). rf, rw: the box form (RF_*,
-   repr.h) the box face wrote and why it may differ from the predicted one
-   (RW_*), -1 and RW_NONE where it noted none; the consumer records them
-   (--repr-check). */
-typedef struct {
-  Buf expr;
-  unsigned needs;
-  TyKind cty;
-  int tmp;
-  int rf, rw;
-} StrForm;
-/* Node v in the form the String plan (share_plan.c) gives it for a
-   consumer in `role` (SPR_*), in the face the consumer holds it in, into
-   sf; answers the form it rendered (SPF_*). The faces:
-     SPX_HANDLE  the sp_String * a slot that is the shared handle takes
-                 (a method's parameter; under --share-strings also a block
-                 parameter that is a String buffer);
-     SPX_BOX     an sp_RbVal (sf->cty TY_POLY) for a consumer that boxes
-                 the value (a poly slot, a container's element, a poly
-                 argument), in the plan's SPR_BOX form. Only the box of a
-                 String by its producer's kind is rendered here; the
-                 answer is 0 where a box was written (its form is its
-                 own text) and -1, with nothing written, for a value
-                 whose kind has none, which the consumer boxes by its
-                 representation (emit_boxed_string, codegen.c).
-   `dest` says what the destination does with a new handle (SFD_*):
-     SFD_OWN     it holds its own copy (a parameter that is the handle
-                 because a Method reaches it, LocalVar.dyn_handle): a new
-                 handle keeps its bytes inside the object. */
-enum { SPX_HANDLE, SPX_BOX };
+/* Select the String object for a slot that takes its handle. */
 enum { SFD_OWN = 1 };
-int emit_str_form(Compiler *c, int v, int role, int face, unsigned dest, StrForm *sf);
-/* Node v, a String, boxed in the plan's form for the taker of a dispatch's
-   answer (codegen_str.c): the handle's box where the plan gives the handle. */
-/* What codegen.c's box path shares with the box face (codegen_str.c): a
-   value that ran ahead as its handle, a store's lift, and the
-   representation's box */
-int emit_boxed_lift(Compiler *c, int node);
-int emit_boxed_lift_ran_first(Compiler *c, int node, Buf *b);
-void emit_boxed_by_repr(Compiler *c, int node, Buf *b);
+void emit_str_handle_form(Compiler *c, int v, unsigned dest, Buf *b);
 /* The box of a String handle (SP_BUILTIN_STRBUF), written in one place
    (codegen_str.c): of text already written, of a temp, or around text the
    caller emits between the open and the close; `nullable` boxes a NULL
@@ -512,22 +452,8 @@ void emit_str_box_rooted(Compiler *c, int v, Buf *b);
    other whose slot holds the shared handle) as the handle it writes, into
    out; 0, writing nothing, for any other node. */
 int emit_strbuf_local_write_handle(Compiler *c, int node, Buf *out);
-/* --share-strings: String#equal? through the plan (codegen_str.c); 0,
-   with nothing emitted, where it does not answer. */
 int emit_str_equal(Compiler *c, int id, Buf *b);
-/* Write sf's expression into b with its needs met: the one place a String
-   form's evaluation, hold and root are decided. An SF_EVAL_ONCE value
-   opens a statement expression that binds it; the consumer writes its
-   uses of _t<sf->tmp>, and str_form_close ends it. */
-void str_form_settle(Compiler *c, StrForm *sf, Buf *b);
-/* The form of an expression a producer's renderer wrote that is not behind
-   emit_str_form yet (a handle parameter's argument, a nilable handle's
-   identity), with the needs it states. */
-void str_form_of_text(StrForm *sf, const char *expr, TyKind cty, unsigned needs);
-void str_form_close(const StrForm *sf, Buf *b);
-void str_form_free(StrForm *sf);
-/* Node v into a slot that holds the shared handle (an ivar's store, its
-   `||=`), in the plan's form: emit_str_form's handle face, settled. */
+/* Node v into a slot that holds a String handle. */
 void emit_str_form_handle(Compiler *c, int v, Buf *b);
 /* The sp_String * an element read, pop or shift of a String Array of
    handles answers (codegen_util.c), and whether an element read reads like

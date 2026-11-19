@@ -7964,10 +7964,7 @@ static void emit_arg_or_default_fill(Compiler *c, Scope *m, int idx, int provide
      non-lvalue argument's mutation is invisible to the caller in CRuby
      too). */
   if (provided >= 0 && repr_of_slot(c, p).handle) {
-    StrForm sf;
-    emit_str_form(c, provided, SPR_TAKE, SPX_HANDLE, p->dyn_handle ? SFD_OWN : 0, &sf);
-    str_form_settle(c, &sf, out);
-    str_form_free(&sf);
+    emit_str_handle_form(c, provided, p->dyn_handle ? SFD_OWN : 0, out);
     return;
   }
   /* `show(buf = +"abc")`: the write runs, and the argument is the local's
@@ -9023,16 +9020,7 @@ static void emit_arg_rooted(Compiler *c, Scope *m, int idx, int provided, int he
     if (!arg_read_converts(c, pt, dn)) { emit_arg_or_default(c, m, idx, provided, out); return; }
     Buf cb; memset(&cb, 0, sizeof cb);
     emit_arg_or_default(c, m, idx, provided, &cb);
-    /* a String a handle parameter takes made here (a handle around the
-       argument's bytes) states that it stays rooted until the call, and
-       that making it may allocate */
-    if (pt == TY_STRBUF) {
-      StrForm sf;
-      str_form_of_text(&sf, cb.p ? cb.p : "NULL", pt, SF_ROOT_UNTIL_USE | SF_ALLOCATES);
-      str_form_settle(c, &sf, out);
-      str_form_free(&sf);
-    }
-    else emit_rooted_conversion(c, pt, cb.p ? cb.p : "NULL", out);
+    emit_rooted_conversion(c, pt, cb.p ? cb.p : "NULL", out);
     free(cb.p);
     return;
   }

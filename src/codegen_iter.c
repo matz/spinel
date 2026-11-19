@@ -1560,12 +1560,7 @@ static void emit_block_arg_coerced(Compiler *c, int node, TyKind ot, Buf *b) {
      assignment of one takes it (#6039). Under --share-strings it takes the
      String plan's form (emit_str_form's handle face), the handle wherever
      a method's parameter takes one */
-  else if (ot == TY_STRBUF && at == TY_STRING) {
-    StrForm sf;
-    emit_str_form(c, node, SPR_TAKE, SPX_HANDLE, 0, &sf);
-    str_form_settle(c, &sf, b);
-    str_form_free(&sf);
-  }
+  else if (ot == TY_STRBUF && at == TY_STRING) emit_str_form_handle(c, node, b);
   /* the shared handle, its read marked for a proc a yield of it may call,
      into a plain String parameter: the copy a plain read takes */
   else if (at == TY_STRBUF && ot == TY_STRING && nk == NK_LocalVariableReadNode) {

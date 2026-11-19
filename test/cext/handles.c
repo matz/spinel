@@ -1,5 +1,5 @@
 #include "sp_cext.h"
-#include "sp_alloc.h"
+#include "sp_string.h"
 #include <assert.h>
 #include <stdio.h>
 
@@ -99,20 +99,15 @@ int main(void) {
     for (int i = 0; i < 256 && !data_freed; ++i) sp_gc_collect();
     assert(data_freed == 1 && finalized == before + 1);
     outer = sp_cext_arena_enter();
-    char *text = sp_str_alloc(4);
-    memcpy(text, "text", 4);
-    sp_RbVal string = {SP_TAG_STR, 0, {.s = text}};
+    sp_RbVal string = sp_box_obj(sp_String_from_cstr("text"), SP_BUILTIN_STRBUF);
     VALUE s = sp_cext_value(string);
     assert(s == sp_cext_value(string));
     rb_global_variable(&s);
     sp_cext_arena_restore(outer);
     sp_gc_collect();
-    assert(strcmp(sp_cext_rbval(s).v.s, "text") == 0);
+    assert(strcmp(sp_rbval_string_bytes(sp_cext_rbval(s)), "text") == 0);
     assert(sp_cext_value(string) == s);
     rb_gc_unregister_address(&s);
-    /* The list string heap has its own sweep gate. Drive it rather than
-       assuming object collections reclaim strings immediately. */
-    sp_str_threshold = 0; sp_str_old_threshold = 0;
     size_t handles_before = sp_cext_handle_count();
     for (int i = 0; i < 256 && sp_cext_handle_count() == handles_before; ++i) sp_gc_collect();
     assert(sp_cext_handle_count() < handles_before);

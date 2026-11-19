@@ -2749,6 +2749,8 @@ sp_bool sp_file_exist(const char *path) { struct stat st; return path && stat(pa
    File.delete refuses (EPERM here, EISDIR on Linux), as CRuby does. */
 void sp_file_path_check(const char *path) {
   if (!path) sp_raise_cls("TypeError", "no implicit conversion of nil into String");
+  if (memchr(path, '\0', sp_str_byte_len(path)))
+    sp_raise_cls("ArgumentError", "path name contains null byte");
 }
 void sp_file_delete(const char *path) {SP_GC_ROOT_STR(path);
   sp_file_path_check(path);

@@ -1,6 +1,11 @@
 stmt_ok
 true
 true
+evaluate later argument
+string contains null byte
+initial end
+"changed\u0000tail"
+string contains null byte
 false
 false
 true

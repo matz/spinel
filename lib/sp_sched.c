@@ -3647,7 +3647,7 @@ sp_bool sp_Thread_get_report(sp_thread *t) { return t->report_on_exception; }
 sp_thread *sp_Thread_main(void) { return &g_main_thread; }
 
 sp_RbVal sp_Thread_get_name(sp_thread *t) { return t->name; }
-sp_RbVal sp_Thread_set_name(sp_thread *t, sp_RbVal v) { if (v.tag == SP_TAG_STR) sp_str_retained(v.v.s); sp_gc_wb((void*)t); t->name = v; return v; }
+sp_RbVal sp_Thread_set_name(sp_thread *t, sp_RbVal v) { sp_gc_wb((void*)t); t->name = v; return v; }
 /* #priority= as CRuby's rb_thread_priority_set: the Integer value (a Float
    truncates, nil is a TypeError: the generated call converts), clamped to
    -3..3. CRuby treats it as a

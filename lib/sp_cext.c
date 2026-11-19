@@ -188,7 +188,7 @@ static int live(sp_cext_handle *h, int full) {
         const sp_gc_hdr *hdr = (const sp_gc_hdr *)v.v.p - 1;
         return hdr->marked == sp_gc_mark_gen || (!full && hdr->old);
     }
-    if (v.tag == SP_TAG_STR || (v.tag == SP_TAG_CLASS && v.cls_id == SP_CLASS_BY_NAME)) {
+    if (v.tag == SP_TAG_CLASS && v.cls_id == SP_CLASS_BY_NAME) {
         const char *s = v.v.s;
         if (!s) return 0;
         unsigned char tag = (unsigned char)s[-1];

@@ -13,11 +13,11 @@
  * raise-site introspection staging slots) are the same shape: already
  * SP_TLS globals, just needed `static` removed.
  *
- * sp_exc_sym_slot/sp_exc_recover_named (need sp_sym_intern, a REAL
+ * sp_exc_recover_named (need sp_sym_intern, a REAL
  * program-generated function whose body differs per compiled program --
  * not a hook) stay in spinel_rt.h,
  * along with sp_exc_reason_acc/sp_exc_tag_acc (the two accessors that
- * call sp_exc_sym_slot) and the raise/longjmp control flow
+ * access the staged value) and the raise/longjmp control flow
  * (sp_raise_exc/sp_raise_cls and friends), which threads through the
  * TU-local exception-stack globals.
  *

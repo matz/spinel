@@ -2632,7 +2632,6 @@ int program_has_arysub(Compiler *c);
 int program_has_timesub(Compiler *c);   /* codegen.c: some class is a Time subclass (sp_timesub_copy) */
 int program_has_strsub(Compiler *c);   /* a class of the program that subclasses String */
 void emit_obj_switch_key(Compiler *c, int tv, Buf *b);   /* codegen.c: a class switch's key, Array subclasses included */
-void emit_poly_recv_deref(Compiler *c, int recv, const char *name, Buf *b);   /* codegen.c: a dispatch receiver read as its String value, a String subclass with its own method kept */
 void emit_poly_str_guard(Compiler *c, int tv, const char *name, Buf *b);   /* codegen.c: the String arm's test, a String subclass with its own method left to the switch */
 void emit_arysub_machinery(Compiler *c, Buf *b);
 /* a call Array answers on an Array subclass instance (#7449), as an
@@ -3240,8 +3239,7 @@ void emit_print_one(Compiler *c, int arg, Buf *b, int indent);
 void emit_p_one(Compiler *c, int arg, Buf *b, int indent);
 int emit_output_call(Compiler *c, int id, Buf *b, int indent);
 void refuse_unredirected_output(Compiler *c, int id);   /* a bare print past a reassigned $stdout */
-void system_refuse_unsupported(Compiler *c, int id, const int *argv, int argc);
-int emit_system_splat(Compiler *c, int id, const int *argv, int argc, Buf *b);
+void emit_system_call(Compiler *c, int id, const int *argv, int argc, Buf *b);
 int int_value_plain(Compiler *c, int node);   /* an Integer that can never be nil */
 int emit_output_spilled(Compiler *c, int id, const char *name, int argc, const int *argv, Buf *b, int indent);
 void emit_assign(Compiler *c, int id, Buf *b, int indent);

@@ -419,8 +419,8 @@ SP_NORETURN void sp_pread_raise_errno(sp_File *f);
    offset answers "", which its caller writes over the buffer. CRuby
    answers the buffer unchanged in each case. */
 void sp_pread_check(sp_File *f, sp_int len, sp_bool outbuf);
-/* A nil path (a NULL string at run time) is CRuby's TypeError, raised before
-   any syscall sees it; the multi-path File.delete checks every path first. */
+/* Reject nil and embedded NUL before passing a path to a syscall.
+   The multi-path File.delete checks every path first. */
 void sp_file_path_check(const char *path);
 
 #include <dirent.h>

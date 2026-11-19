@@ -5893,7 +5893,7 @@ void emit_walk_arity_raise(Compiler *c, int id, int recv, const char *name, int 
   if (nt_argv_has(nt, av, an, NT_ARG_SPLAT | NT_ARG_KEYWORDS | NT_ARG_BLOCK)) return;
   int has_blk = nt_ref(nt, site, "block") >= 0;
   const struct { const char *cls, *test; } kinds[] = {
-    { "String", "_t%d.tag == SP_TAG_STR || sp_poly_is_strbuf(_t%d)" },
+    { "String", "sp_rbval_is_string(_t%d) || sp_poly_is_strbuf(_t%d)" },
     { "Symbol", "_t%d.tag == SP_TAG_SYM" },
     { "Integer", "_t%d.tag == SP_TAG_INT || _t%d.tag == SP_TAG_BIGINT" },
     { "Float", "_t%d.tag == SP_TAG_FLT" },

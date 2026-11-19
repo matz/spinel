@@ -2302,9 +2302,9 @@ int emit_call_append_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
     emit_boxed(c, argv[0], &ab);
     emit_poly_shl_call(c, id, argv, t, ab.p, b);
     free(ab.p);
-    buf_printf(b, "; if (_t%d.tag == SP_TAG_STR) { sp_RbVal _t%d = ", t, cur);
+    buf_printf(b, "; if (sp_rbval_is_string(_t%d)) { sp_RbVal _t%d = ", t, cur);
     holder_slot_buf(c, &holder, b);
-    buf_printf(b, "; if (_t%d.tag == SP_TAG_STR && _t%d.v.s == _t%d.v.s) ", cur, cur, t);
+    buf_printf(b, "; if (sp_rbval_is_string(_t%d) && sp_rbval_string_bytes(_t%d) == sp_rbval_string_bytes(_t%d)) ", cur, cur, t);
     holder_slot_buf(c, &holder, b);
     buf_printf(b, " = _t%d; } _t%d; })", got, got);
     c->args_in_call = recv;

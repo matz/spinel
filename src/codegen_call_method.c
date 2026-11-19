@@ -378,7 +378,7 @@ static void emit_method_params_literal(Compiler *c, int mi, Buf *b) {
    parameters by, and the test of each on the receiver _t<n> (twice) */
 static const char *const BAM_RECV_CLS[] = { "String", "Array", "Hash", "Integer", "Float", "Symbol", "Range", NULL };
 static const char *const BAM_RECV_TST[] = {
-  "_t%d.tag == SP_TAG_STR || sp_poly_is_strbuf(_t%d)",
+  "sp_rbval_is_string(_t%d) || sp_poly_is_strbuf(_t%d)",
   "_t%d.tag == SP_TAG_OBJ && sp_poly_is_array_kind(_t%d.cls_id)",
   "_t%d.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(_t%d.cls_id)",
   "_t%d.tag == SP_TAG_INT && _t%d.tag == SP_TAG_INT",
@@ -1300,7 +1300,12 @@ int emit_op_method_arity(Compiler *c, const BopCtx *x, Buf *b) {
     }
   }
   if (target >= 0 && c->scopes[target].def_node >= 0) {
-    int pn = nt_ref(c->nt, c->scopes[target].def_node, "parameters");
+    int dn = c->scopes[target].def_node, native_arity;
+    if (nt_int(nt, dn, "bam_native", 0) && method_scope_arity(c, target, &native_arity)) {
+      buf_printf(b, "%d", native_arity);
+      return 1;
+    }
+    int pn = nt_ref(nt, dn, "parameters");
     int ok = 1;
     int n_req = 0, n_opt = 0, n_post = 0;
     int has_rest = 0, has_forward = 0, kw_block = 0, has_req_kw = 0;

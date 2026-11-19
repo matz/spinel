@@ -36,7 +36,7 @@ static void emit_io_readlines_args(Compiler *c, const char *r, const int *pos, i
              tc, chomp, tf, ts, tl);
   if (np == 1)
     buf_printf(b, "if (sp_poly_nil_p(_t%d)) _t%d = NULL;\n"
-                  "else if (_t%d.tag == SP_TAG_STR || sp_poly_is_strbuf(_t%d)) _t%d = sp_poly_arg_str_chk(_t%d);\n"
+                  "else if (sp_rbval_is_string(_t%d) || sp_poly_is_strbuf(_t%d)) _t%d = sp_poly_arg_str_chk(_t%d);\n"
                   "else if ((_t%d = sp_poly_arg_int_chk(_t%d)) == 0) "
                   "sp_raise_cls(\"ArgumentError\", \"invalid limit: 0 for readlines\"); ",
                ta, ts, ta, ta, ts, ta, tl, ta);
@@ -561,13 +561,7 @@ int emit_strbuf_io_read(Compiler *c, int id, Buf *b) {
     /* a boxed buffer may be no String at all: it is the handle when it is
        one, else itself, whose check names its class (a Rational read as
        no handle became a nil buffer, and the read went on) */
-    else if (i == ob && strbuf_value_carries(c, argv[i]) && comp_ntype(c, argv[i]) == TY_POLY) {
-      held[i] = ++g_tmp;
-      buf_printf(b, "sp_RbVal _t%d = sp_poly_outbuf_handle(", held[i]);
-      emit_boxed(c, argv[i], b);
-      buf_printf(b, "); SP_GC_ROOT_RBVAL(_t%d); ", held[i]);
-    }
-    else if (i == ob && strbuf_value_carries(c, argv[i])) {
+    else if (i == ob && strbuf_value_carries(c, argv[i]) && repr_of(c, argv[i]).kind != RK_BOXED) {
       held[i] = ++g_tmp;
       buf_printf(b, "sp_RbVal _t%d = sp_box_nullable_obj(", held[i]);
       emit_strbuf_handle_of(c, argv[i], b);
@@ -2689,7 +2683,7 @@ int emit_op_io_copy_stream(Compiler *c, const BopCtx *x, Buf *b) {
     if (a0_poly) {
       int ts = ++g_tmp;
       buf_puts(b, "({ "); ts = hold_operand(c, argv[0], TY_POLY, repr_of(c, argv[0]).kind != RK_BOXED, ts, 1, " ", b);
-      buf_printf(b, "(_t%d.tag == SP_TAG_STR || sp_poly_is_strbuf(_t%d))"
+      buf_printf(b, "(sp_rbval_is_string(_t%d) || sp_poly_is_strbuf(_t%d))"
                     " ? sp_file_read(sp_poly_unbox_s(_t%d)) : ", ts, ts, ts);
       if (sio_cid >= 0)
         buf_printf(b, "_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == %d"
@@ -2705,7 +2699,7 @@ int emit_op_io_copy_stream(Compiler *c, const BopCtx *x, Buf *b) {
     if (a1_poly) {
       int tdd = ++g_tmp;
       tdd = hold_operand(c, argv[1], TY_POLY, repr_of(c, argv[1]).kind != RK_BOXED, tdd, 1, " ", b);
-      buf_printf(b, "(_t%d.tag == SP_TAG_STR || sp_poly_is_strbuf(_t%d))"
+      buf_printf(b, "(sp_rbval_is_string(_t%d) || sp_poly_is_strbuf(_t%d))"
                     " ? sp_file_write(sp_poly_unbox_s(_t%d), _t%d) : ", tdd, tdd, tdd, td);
       if (sio_cid >= 0)
         buf_printf(b, "_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == %d"

@@ -56,7 +56,7 @@ int main(void) {
   for (int i = 0; i < NSAMPLE; i++) k[i] = sp_box_class((sp_Class){ all->data[i].cls_id, 0 });
   sp_RbVal lazy = sp_box_class(sp_ExtNew_s_lazy()), oops = sp_box_class(sp_ExtNew_s_oops());
   sp_RbVal a[4] = { sp_box_int(5), sp_box_int(6), sp_box_int(7), sp_box_int(8) };
-  sp_RbVal s[1] = { sp_box_str("host") };
+  sp_RbVal s[1] = { sp_box_str_new(SPL("host")) };
   SP_GC_ROOT_RBVAL(s[0]);
   sp_RbVal b = sp_box_proc(sp_proc_new((void *)add_ten, NULL, NULL));
   SP_GC_ROOT_RBVAL(b);

@@ -1805,7 +1805,7 @@ static void emit_poly_dispatch_key_pick(Compiler *c, int tv, int key_guard, int 
   }
   static const struct { const char *tag; int cls; } P[] = {
     {"SP_TAG_INT", CORE_INTEGER}, {"SP_TAG_FLT", CORE_FLOAT},
-    {"SP_TAG_STR", CORE_STRING},  {"SP_TAG_SYM", CORE_SYMBOL},
+    {"SP_TAG_SYM", CORE_SYMBOL},
     {"SP_TAG_NIL", CORE_NILCLASS},
   };
   /* a boxed Time / Range is an OBJ box whose cls_id names the builtin, so
@@ -2732,6 +2732,11 @@ int builtin_method_fixed_any(const char *m) {
 int method_scope_arity(Compiler *c, int target, int *out) {
   if (target < 0 || c->scopes[target].def_node < 0) return 0;
   const NodeTable *nt = c->nt;
+  int dn = c->scopes[target].def_node;
+  if (nt_int(nt, dn, "bam_native", 0)) {
+    const char *owner = nt_str(nt, dn, "bam_owner"), *name = nt_str(nt, dn, "bam_sym");
+    if (owner && name && builtin_method_arity(owner, name, out)) return 1;
+  }
   /* A receiverless Kernel wrapper (`method(:String)`) has no receiver class to
      key on, but its one declared parameter IS a real argument, so the wrapper
      shape under-reports the builtin's arity. Read the builtin's real arity off
@@ -2764,7 +2769,7 @@ int method_scope_arity(Compiler *c, int target, int *out) {
     /* ...and one of Enumerable's own, which no class's table lists */
     if (cs && rd != -2 && own && is_enumerable_module_name(own) && builtin_enumerable_arity(cs, out)) return 1;
   }
-  int pn = nt_ref(nt, c->scopes[target].def_node, "parameters");
+  int pn = nt_ref(nt, dn, "parameters");
   int n_req = 0, n_opt = 0, n_post = 0;
   int has_rest = 0, has_forward = 0, kw_block = 0, has_req_kw = 0;
   if (pn >= 0) {
@@ -7553,11 +7558,10 @@ static int emit_poly_builtin_method(Compiler *c, int id, Buf *b) {
     int tv = ++g_tmp;
     /* a shared-string handle is a String: deref it into the immediate form the
        arm reads, or the guard is single-armed and raises for it (#4279) */
-    buf_printf(b, "({ sp_RbVal _t%d = sp_poly_strbuf_deref(", tv); emit_expr(c, recv, b);
-    buf_puts(b, ")");
-    buf_printf(b, "; const char *_s%d = _t%d.tag == SP_TAG_SYM ? sp_sym_to_s((sp_sym)_t%d.v.i) : _t%d.v.s;",
+    buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_expr(c, recv, b);
+    buf_printf(b, "; const char *_s%d = _t%d.tag == SP_TAG_SYM ? sp_sym_to_s((sp_sym)_t%d.v.i) : sp_rbval_string_bytes(_t%d);",
                tv, tv, tv, tv);
-    buf_printf(b, " (_t%d.tag == SP_TAG_STR || _t%d.tag == SP_TAG_SYM) ? (", tv, tv);
+    buf_printf(b, " (sp_rbval_is_string(_t%d) || _t%d.tag == SP_TAG_SYM) ? (", tv, tv);
     for (int j = 0; j < argc; j++) {
       if (j) buf_puts(b, " || ");
       /* start_with?(re): a Regexp matches at index 0, as the typed String
@@ -8621,7 +8625,7 @@ static int emit_poly_str_prearm(Compiler *c, int id, int recv, const char *name,
      arm on the same tag is unreachable, and the one already there is the more
      specific. */
   { char seen[48];
-    snprintf(seen, sizeof seen, "if (_t%d.tag == SP_TAG_STR)", tv);
+    snprintf(seen, sizeof seen, "if (sp_rbval_is_string(_t%d))", tv);
     if (b->p && strstr(b->p, seen)) return 0; }
   int slot = view_bind_temp(recv, tv);
   int pa_kept = 0;
@@ -8689,8 +8693,7 @@ static int emit_poly_str_prearm(Compiler *c, int id, int recv, const char *name,
     if (g_plan_check) pa_observe_at(id, PA_TRIAL, PA_KEY_TRIAL + PT_STR, -1, TY_UNKNOWN, pa_kept);
     return 0;
   }
-  /* a shared-mutable string is a builtin OBJ box, not SP_TAG_STR, and is a
-     string: sp_poly_recv_s takes both, so the guard has to as well */
+  /* The guard selects the builtin String arm for eligible handle boxes. */
   buf_puts(b, "if ("); emit_poly_str_guard(c, tv, name, b);
   buf_printf(b, ") { %s _t%d = %s; }\nelse ", arm_pre ? arm_pre : "", tr, ib.p);
   free(ib.p); free(arm_pre);
@@ -9663,7 +9666,7 @@ static void bi_generic_arity_raise(Compiler *c, const char *name, int rep, int t
    answers (File's rows stand for IO's methods too). */
 #define BI_GENERIC_OWNERS 64
 static void bi_generic_owner_test(const char *cls, const char *name, int tv, Buf *b) {
-  if (sp_streq(cls, "String")) buf_printf(b, "_t%d.tag == SP_TAG_STR || sp_poly_is_strbuf(_t%d)", tv, tv);
+  if (sp_streq(cls, "String")) buf_printf(b, "sp_rbval_is_string(_t%d) || sp_poly_is_strbuf(_t%d)", tv, tv);
   else if (sp_streq(cls, "Integer")) buf_printf(b, "_t%d.tag == SP_TAG_INT || _t%d.tag == SP_TAG_BIGINT", tv, tv);
   else if (sp_streq(cls, "Float")) buf_printf(b, "_t%d.tag == SP_TAG_FLT", tv);
   else if (sp_streq(cls, "Symbol")) buf_printf(b, "_t%d.tag == SP_TAG_SYM", tv);
@@ -11051,9 +11054,9 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
       const PolyPlan pform = cplan_poly_arms(c, id);
       unsigned form = pform.flags & ~PPF_SEEN;
       if (g_plan_check) cplan_served("poly-form0");
-      int root_recv = (form & PPF_ROOT) != 0, reads_value = (form & PPF_DEREF) != 0;
+      int root_recv = (form & PPF_ROOT) != 0;
       buf_printf(b, "({ sp_RbVal _t%d = ", tv);
-      if (reads_value) emit_poly_recv_deref(c, recv, name, b); else emit_expr(c, recv, b);
+      emit_expr(c, recv, b);
       buf_puts(b, "; ");
       if (root_recv) buf_printf(b, "SP_GC_ROOT_RBVAL(_t%d); ", tv);
       emit_poly_vis_precheck(c, id, tv, b);
@@ -11521,7 +11524,7 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
       if (g_plan_check) cplan_served("poly-form-n");
       /* a genuine String in a slot whose name a user class owns (#4816) */
       if (kw_pos) emit_poly_str_aset_prearm(c, recv, &ps, &ptemps, b);
-      if (kw_pos && !has_splat_arg) {
+      if (kw_pos && !has_splat_arg && ps.str_arm == CP_STR_BUILTIN) {
         /* The switch form omits builtin families. Ask for the planned
            set operation before adding a general String fallback. */
         const PolyPlan prearms = ps.strsetop_n ? cplan_poly(c, id) : (PolyPlan){0};
@@ -11602,7 +11605,6 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
         free(pid); free(pty);
       }
       if (!pd_done) buf_puts(b, " }");
-      if (kw_pos) emit_poly_str_aset_writeback(c, recv, &ps, &ptemps, b);
       /* A handle the call is typed a String for answers its bytes, as the
          static receiver's setter does: the handle itself put an sp_String *
          where a const char * is read (a safe-navigation nil arm's NULL). */
@@ -11984,9 +11986,9 @@ int emit_time_civil_ctor(Compiler *c, int id, int is_utc, int is_new, Buf *b) {
      other value read as the year */
   if (is_new && argc == 1 && nt_kind(nt, argv[0]) != NK_SplatNode && repr_of(c, argv[0]).kind == RK_BOXED) {
     int tv = ++g_tmp;
-    buf_printf(b, "({ sp_RbVal _t%d = sp_poly_strbuf_deref(", tv);
+    buf_printf(b, "({ sp_RbVal _t%d = ", tv);
     emit_boxed(c, argv[0], b);
-    buf_printf(b, "); _t%d.tag == SP_TAG_STR ? sp_time_parse(_t%d.v.s) : sp_time_new(sp_poly_time_field(_t%d, 0), 1, 1, 0, 0, 0); })", tv, tv, tv);
+    buf_printf(b, "; sp_rbval_is_string(_t%d) ? sp_time_parse(sp_rbval_string_bytes(_t%d)) : sp_time_new(sp_poly_time_field(_t%d, 0), 1, 1, 0, 0, 0); })", tv, tv, tv);
     return 1;
   }
   /* a splat leaves the count, and so the form, to run time */
@@ -13900,7 +13902,7 @@ static int exc_sub_new_arm_text(Compiler *c, int id, int ci, int argc, const cha
     buf_printf(b, "case %d: { %ssp_dyn_new_arity(%s, 1); const char *_m = ", ci, pre, argc_txt);
     if (argc != 0)
       buf_printf(b, "%s.tag == SP_TAG_NIL ? (&(\"\\xff\")[1]) : sp_exc_msg_given("
-                    "%s.tag == SP_TAG_STR ? %s.v.s : sp_poly_to_s(%s)); ", a0, a0, a0, a0);
+                    "sp_rbval_is_string(%s) ? sp_rbval_string_bytes(%s) : sp_poly_to_s(%s)); ", a0, a0, a0, a0);
     else buf_puts(b, "(&(\"\\xff\")[1]); ");
   }
   if (comp_inst_ivar_count(&c->classes[ci]) > 0)
@@ -22354,7 +22356,7 @@ static int poly_arity_rows(Compiler *c, int id, const char *name, int with_block
     "String", "Integer", "Float", "Symbol", "Array", "Hash", "Range",
     "NilClass", "TrueClass", "Object" };
   static const char *const TST[POLY_ARITY_BUILTINS] = {
-    "_t%d.tag == SP_TAG_STR || sp_poly_is_strbuf(_t%d)",
+    "sp_rbval_is_string(_t%d) || sp_poly_is_strbuf(_t%d)",
     "_t%d.tag == SP_TAG_INT || _t%d.tag == SP_TAG_BIGINT",
     "_t%d.tag == SP_TAG_FLT && _t%d.tag == SP_TAG_FLT",
     "_t%d.tag == SP_TAG_SYM && _t%d.tag == SP_TAG_SYM",
@@ -36358,7 +36360,7 @@ static int emit_cext_call(Compiler *c, int id, Buf *b) {
     }
     if (cn && sp_streq(cn, "__cext_share_new_array")) {
       if (argc != 1) unsupported_feature(c, id, "invalid fresh C extension array");
-      buf_puts(b, "sp_cext_share_new_array(");emit_expr(c, argv[0], b);buf_puts(b, ")");return 1;
+      emit_expr(c, argv[0], b); return 1;
     }
     if (cn && sp_streq(cn, "__cext_constant_value")) {
       int ext = argc == 2 ? nt_int(c->nt, argv[0], "value", -1) : -1;

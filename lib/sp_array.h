@@ -569,7 +569,7 @@ static inline sp_RbVal sp_PtrArray_get_box(sp_PtrArray *a, sp_int i) {
 /* the class a boxed value would name in a TypeError, from what this header can see */
 static inline const char *sp_PtrArray_val_class(sp_RbVal v) {
   switch (v.tag) {
-    case SP_TAG_INT: return "Integer"; case SP_TAG_FLT: return "Float"; case SP_TAG_STR: return "String";
+    case SP_TAG_INT: return "Integer"; case SP_TAG_FLT: return "Float";
     case SP_TAG_NIL: return "NilClass"; case SP_TAG_SYM: return "Symbol";
     case SP_TAG_BOOL: return v.v.b ? "TrueClass" : "FalseClass";
     case SP_TAG_OBJ:

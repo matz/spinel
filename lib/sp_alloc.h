@@ -647,7 +647,7 @@ void *sp_pl_realloc(void *p, size_t newn);   /* lib/sp_slab.c: a slab block know
    state. SP_BUILTIN_FOREIGN_PTR/COMPLEX/RATIONAL are in sp_gc.h. */
 #define SP_BUILTIN_ARRAY_OF(tag) (-(tag) - 1)
 #define SP_BUILTIN_INT_ARRAY SP_BUILTIN_ARRAY_OF(SP_TAG_INT) /* -1 */
-#define SP_BUILTIN_STR_ARRAY SP_BUILTIN_ARRAY_OF(SP_TAG_STR) /* -2 */
+#define SP_BUILTIN_STR_ARRAY (-2)
 #define SP_BUILTIN_FLT_ARRAY SP_BUILTIN_ARRAY_OF(SP_TAG_FLT) /* -3 */
 #define SP_BUILTIN_PTR_ARRAY SP_BUILTIN_ARRAY_OF(SP_TAG_OBJ) /* -6 */
 #define SP_BUILTIN_SYM_ARRAY SP_BUILTIN_ARRAY_OF(SP_TAG_SYM) /* -7 */
@@ -731,17 +731,12 @@ void *sp_pl_realloc(void *p, size_t newn);   /* lib/sp_slab.c: a slab block know
                                           proc runs on that fiber). */
 
 static inline sp_RbVal sp_box_int(sp_int v)    { sp_RbVal r; r.tag = SP_TAG_INT;  r.cls_id = 0; r.v.i = v; return r; }
-/* A temporary bytes view for readers of the legacy tag. A String value
-   leaving the reader is boxed with its handle. NULL is the nil box. */
-static inline sp_RbVal sp_box_str(const char *v){ sp_RbVal r; if (!v) { r.tag = SP_TAG_NIL; r.cls_id = 0; r.v.s = NULL; return r; } r.tag = SP_TAG_STR;  r.cls_id = 0; r.v.s = v; return r; }
-/* Read a boxed base String without converting its representation. */
+/* A String value is boxed as its handle. Borrow its payload for byte reads. */
 static inline sp_bool sp_rbval_is_string(sp_RbVal v) {
-  return v.tag == SP_TAG_STR ||
-         (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_STRBUF && v.v.p);
+  return v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_STRBUF && v.v.p;
 }
 
 static inline const char *sp_rbval_string_bytes(sp_RbVal v) {
-  if (v.tag == SP_TAG_STR) return v.v.s;
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_STRBUF && v.v.p) {
     const struct sp_String_s *s = v.v.p;
     return s->data;
@@ -749,18 +744,6 @@ static inline const char *sp_rbval_string_bytes(sp_RbVal v) {
   return NULL;
 }
 
-/* A boxed value as the String it holds, for a reader that takes a String
-   by its tag: a shared String's handle (SP_BUILTIN_STRBUF) reads as a box
-   of its bytes, the handle's first field (sp_String.data); any other value
-   is itself. */
-static inline sp_RbVal sp_rbval_str(sp_RbVal v) {
-  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_STRBUF && v.v.p) {
-    v.tag = SP_TAG_STR;
-    v.cls_id = 0;
-    v.v.s = *(const char **)v.v.p;
-  }
-  return v;
-}
 /* A String mutator's value from a poly arm, which answers the box or the
    unboxed String by mutator: boxed either way (a NULL String is nil). */
 static inline sp_RbVal sp_box_same(sp_RbVal v){ return v; }

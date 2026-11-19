@@ -18700,6 +18700,17 @@ static int infer_block_params_enum_arms(Compiler *c, const NodeTable *nt, int id
    changed in bit 0, and bit 1 for the loop's continue) */
 static int infer_block_params_call_arms(Compiler *c, const NodeTable *nt, int id, int block, const char *name, int recv) {
   int changed = 0;
+  /* ENV's conflict block sees the incoming value before String conversion. */
+  if (is_hash_merge_bang(name) && env_value_recv(c, recv, infer_type(c, recv))) {
+    Scope *scope = comp_scope_of(c, block);
+    const char *key = block_param_name(c, block, 0);
+    const char *old = block_param_name(c, block, 1);
+    const char *value = block_param_name(c, block, 2);
+    if (key) changed |= bp_widen(scope, key, TY_STRING);
+    if (old) changed |= bp_widen(scope, old, TY_STRING);
+    if (value) changed |= bp_widen(scope, value, TY_POLY);
+    return changed | 2;
+  }
   /* ENV's missing-key block receives the String key, as fetch's does. */
   if (env_value_recv(c, recv, infer_type(c, recv)) &&
       bop_share_named(BOP_ENV, name) == BSH_FETCH) {
@@ -19713,8 +19724,8 @@ int infer_block_params(Compiler *c) {
       pt = TY_STRING;
     else if (rt == TY_STRING && (sp_streq(name, "each_byte") || sp_streq(name, "bytes") || sp_streq(name, "codepoints")))
       pt = TY_INT;
-    /* a boxed receiver's scan block binds each match boxed (the emitter's
-       sp_box_str), as infer_call has the call answer its checked receiver */
+    /* A boxed receiver's scan block binds each match boxed, and the call
+       answers its checked receiver. */
     else if (rt == TY_POLY && is_scan_name(name) && !an_user_defines_or_reads(c, name))
       pt = TY_POLY;
     else if (rt == TY_STRING && sp_streq(name, "scan")) {

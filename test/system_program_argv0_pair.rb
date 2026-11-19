@@ -37,3 +37,28 @@ begin
 rescue ArgumentError => e
   p e.message
 end
+
+class ReplaceArgv0Slot
+  def to_str
+    $program_pair[1] = "replacement"
+    GC.start
+    "sh"
+  end
+end
+
+class MutateArgv0
+  def initialize(argv0)
+    @argv0 = argv0
+  end
+
+  def to_str
+    @argv0.replace("mutated")
+    GC.start
+    "sh"
+  end
+end
+
+$program_pair = [ReplaceArgv0Slot.new, +"original"]
+p system($program_pair, "-c", 'echo "$0"')
+argv0 = +"original"
+p system([MutateArgv0.new(argv0), argv0], "-c", 'echo "$0"')

@@ -6,6 +6,7 @@
 #define SPINEL_CODEGEN_POLY_H
 
 #include "codegen_internal.h"
+#include "call_plan.h"
 
 int  class_is_prim_reopen(Compiler *c, int k);
 const int *comp_prim_reopen_classes(Compiler *c, int *n);   /* the classes it answers for, per class table */
@@ -93,8 +94,9 @@ int poly_class_reflect_arm(Compiler *c, int id, const char *name, int *cls_only)
 /* what a poly dispatch with arguments answers beside its user arms, and its
    keyword split and user candidates (poly_specials_n) */
 typedef struct {
-  int index, fetch, pdelete, pdig, pvalues_at, pfirstn, include, intersect, arr_index, push, unshift, strdel, strpart, strsetop_n, pstore, straset, strsplit, pred, strencode, strftime, pmerge, pjoin, ppack, cover, gcdlcm, ctryconv;
+  int index, fetch, pdelete, pdig, pvalues_at, pfirstn, include, intersect, arr_index, push, unshift, strdel, strpart, strsetop_n, pstore, straset, strsplit, pred, strencode, strftime, pmerge, pjoin, ppack, unpack1, cover, gcdlcm, ctryconv;
   int has_splat_arg, kwh, pos_argc, kw_ds, kw_strkey, kw_pos, ncand;
+  PolyStringArm str_arm;
 } PolySpecialsN;
 void poly_specials_n(Compiler *c, int id, const char *name, int argc, const int *argv, PolySpecialsN *s);
 void poly_specials_n_splat(Compiler *c, const int *argv, PolySpecialsN *s, int *splat_a, int *splat_last);
@@ -120,7 +122,6 @@ int  emit_poly_callable_kwh_decl(Compiler *c, const char *name, const PolySpecia
 int trange_poly_name(const char *name, int argc);
 void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps, const PolyTemps *T, Buf *b);
 void emit_poly_str_aset_prearm(Compiler *c, int recv, const PolySpecialsN *ps, const PolyTemps *T, Buf *b);
-void emit_poly_str_aset_writeback(Compiler *c, int recv, const PolySpecialsN *ps, const PolyTemps *T, Buf *b);
 void emit_poly_str_aset_recv(Compiler *c, int recv, const PolySpecialsN *ps, const int *argv, Buf *b);
 int  emit_poly_prearms_n_blk(Compiler *c, int id, const char *name, const PolySpecialsN *ps, const PolyTemps *T,
                              int *atmp, TyKind *atmp_ty, const PolyKw *kw, const int *htmp, int is_setter_val,

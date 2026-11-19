@@ -1509,7 +1509,6 @@ static const char *sp_typed_elem_class(sp_RbVal v) {
   switch (v.tag) {
     case SP_TAG_INT: case SP_TAG_BIGINT: return "Integer";
     case SP_TAG_FLT: return "Float";
-    case SP_TAG_STR: return "String";
     case SP_TAG_SYM: return "Symbol";
     case SP_TAG_BOOL: return v.v.i ? "true" : "false";
     default: return "Object";
@@ -1564,8 +1563,7 @@ static void sp_typed_array_replace_boxed(sp_RbVal recv, sp_RbVal src) {
       sp_StrArray *st = sp_StrArray_new(); SP_GC_ROOT(st);
       for (sp_int i = 0; i < els->len; i++) {
         sp_RbVal e = els->data[i];
-        if (e.tag == SP_TAG_STR) sp_StrArray_push_e(st, sp_String_new_shared(e.v.s));
-        else if (e.tag == SP_TAG_OBJ && e.cls_id == SP_BUILTIN_STRBUF)
+        if (e.tag == SP_TAG_OBJ && e.cls_id == SP_BUILTIN_STRBUF)
           sp_StrArray_push_e(st, (sp_strelem)e.v.p);   /* the handle itself: one String */
         else if (e.tag == SP_TAG_NIL) sp_StrArray_push_e(st, NULL);
         else sp_typed_replace_elem_error(e, "String");
@@ -1909,7 +1907,6 @@ static const char *sp_transpose_row_class(sp_RbVal rv) {
     case SP_TAG_BOOL: return rv.v.i ? "true" : "false";
     case SP_TAG_INT: return "Integer";
     case SP_TAG_FLT: return "Float";
-    case SP_TAG_STR: return "String";
     case SP_TAG_SYM: return "Symbol";
     default: return "Object";
   }
@@ -6890,7 +6887,7 @@ static const char *sp_enc_str_arg(sp_RbVal v) {
     if (r) return r;
   }
   sp_raise_cls("TypeError", sp_sprintf("no implicit conversion of %s into String",
-                                       v.tag == SP_TAG_NIL || v.tag == SP_TAG_STR ? "nil"
+                                       v.tag == SP_TAG_NIL ? "nil"
                                        : v.tag == SP_TAG_BOOL ? (v.v.b ? "true" : "false")
                                        : sp_poly_class_name(v)));
   return NULL;

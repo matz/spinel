@@ -3651,7 +3651,7 @@ static int emit_poly_recv_block_dispatch_x(Compiler *c, int id, Buf *b, int inde
       emit_indent(&sw, indent); buf_puts(&sw, "default: {\n");
       if (str_arm) {
         emit_indent(&sw, indent + 1);
-        buf_printf(&sw, "if (_t%d.tag == SP_TAG_STR || sp_poly_is_strbuf(_t%d)) {\n", trecv, trecv);
+        buf_printf(&sw, "if (sp_rbval_is_string(_t%d) || sp_poly_is_strbuf(_t%d)) {\n", trecv, trecv);
         emit_indent(&sw, indent + 2);
         buf_printf(&sw, "const char *_t%d = sp_poly_recv_s(_t%d, \"%s\"); SP_GC_ROOT_STR(_t%d);\n",
                    ts, trecv, name, ts);

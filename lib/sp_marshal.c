@@ -39,7 +39,6 @@ static sp_RbVal sp_mar_cplx_part(sp_float v, int is_f) {
     return mk_int((sp_int)(int64_t)v);
   return mk_float(v);
 }
-static sp_RbVal mk_str(const char *s){ sp_RbVal r; r.tag = SP_TAG_STR;  r.cls_id = 0; r.v.s = s; return r; }
 static sp_RbVal mk_sym(sp_sym s)    { sp_RbVal r; r.tag = SP_TAG_SYM;  r.cls_id = 0; r.v.i = (sp_int)s; return r; }
 static sp_RbVal mk_strbuf(void *h)  { sp_RbVal r; r.tag = SP_TAG_OBJ; r.cls_id = SP_BUILTIN_STRBUF; r.v.p = h; return r; }
 static sp_RbVal mk_bigint(void *p)  { sp_RbVal r; r.tag = SP_TAG_BIGINT; r.cls_id = 0; r.v.p = p; return r; }
@@ -184,6 +183,12 @@ static void sp_mar_w_int(sp_mar_buf *b, sp_int n) {
   sp_mar_b(b, 'l'); sp_mar_b(b, w < 0 ? '-' : '+'); sp_mar_long(b, (long)nwords);
   for (size_t i = 0; i < nwords * 2; i++) sp_mar_b(b, (unsigned char)(i < 8 ? m >> (8 * i) : 0));
 }
+static void sp_mar_w_string(sp_mar_buf *b, const char *bytes, size_t len, int binary, void *identity) {
+  if (sp_mar_seen(b, identity)) return;
+  if (!binary) sp_mar_b(b, 'I');
+  sp_mar_b(b, '"'); sp_mar_bytes(b, bytes, len);
+  if (!binary) { sp_mar_long(b, 1); sp_mar_sym(b, "E"); sp_mar_b(b, 'T'); }
+}
 /* An exception, as CRuby writes one: `o`, its class, then `mesg` (the
    message, nil when none was given) and `bt` (the backtrace set on it, else
    nil). `nivar` more ivars follow: a user subclass's own, written by its
@@ -192,7 +197,9 @@ void sp_mar_w_exc_head(sp_mar_buf *b, const char *cls, void *p, long nivar) {
   sp_Exception *e = (sp_Exception *)p;
   const char *m = sp_exc_msg_text(e);
   sp_mar_b(b, 'o'); sp_mar_sym(b, cls); sp_mar_long(b, 2 + nivar);
-  sp_mar_sym(b, "mesg"); sp_mar_w(b, m ? mk_str(m) : mk_nil());
+  sp_mar_sym(b, "mesg");
+  if (m) sp_mar_w_string(b, m, sp_str_byte_len(m), sp_str_is_binary(m), (void *)m);
+  else sp_mar_b(b, '0');
   sp_mar_sym(b, "bt"); sp_mar_w(b, e->backtrace ? sp_box_str_array(e->backtrace) : mk_nil());
 }
 void sp_mar_w_body(sp_mar_buf *b, sp_RbVal v) {
@@ -228,17 +235,6 @@ void sp_mar_w(sp_mar_buf *b, sp_RbVal v) {
       break;
     }
     case SP_TAG_SYM:  sp_mar_sym(b, sp_sym_name_fn ? sp_sym_name_fn((sp_sym)v.v.i) : ""); break;
-    case SP_TAG_STR: {
-      const char *s = v.v.s ? v.v.s : "";
-      if (sp_mar_seen(b, (void *)(uintptr_t)s)) break;
-      /* CRuby wraps a String in an encoding ivar: I "<bytes>" 1 :E T. */
-      /* A binary String has no encoding ivar. */
-      int binary = sp_str_is_binary(v.v.s);
-      if (!binary) sp_mar_b(b, 'I');
-      sp_mar_b(b, '"'); sp_mar_bytes(b, s, sp_str_byte_len(s));
-      if (!binary) { sp_mar_long(b, 1); sp_mar_sym(b, "E"); sp_mar_b(b, 'T'); }
-      break;
-    }
     case SP_TAG_OBJ:
       if (v.cls_id == SP_BUILTIN_COMPLEX) {
         if (sp_mar_seen(b, v.v.p)) break;
@@ -273,16 +269,9 @@ void sp_mar_w(sp_mar_buf *b, sp_RbVal v) {
           if (sp_mar_seen(b, v.v.p)) break;
           sp_mar_w_hash(b, v);
         }
-        /* a shared String handle in a box (--share-strings, #6765): the
-           String it holds, with the handle as its identity */
         else if (v.cls_id == SP_BUILTIN_STRBUF) {
-          if (sp_mar_seen(b, v.v.p)) break;
           sp_String *h = (sp_String *)v.v.p;
-          int binary = h && h->binary;
-          if (!binary) sp_mar_b(b, 'I');
-          sp_mar_b(b, '"');
-          sp_mar_bytes(b, h && h->data ? h->data : "", h && h->data ? (size_t)h->len : 0);
-          if (!binary) { sp_mar_long(b, 1); sp_mar_sym(b, "E"); sp_mar_b(b, 'T'); }
+          sp_mar_w_string(b, h ? h->data : "", h ? (size_t)h->len : 0, h && h->binary, h);
         }
         else if (v.cls_id == SP_BUILTIN_EXCEPTION) {
           if (sp_mar_seen(b, v.v.p)) break;

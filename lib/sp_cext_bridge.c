@@ -560,12 +560,9 @@ VALUE rb_str_export_to_enc(VALUE value,rb_encoding *to) { return string_in_encod
 static sp_String *string(VALUE value) {
     sp_RbVal r=sp_cext_rbval(value);
     if(r.tag==SP_TAG_OBJ && r.cls_id==SP_BUILTIN_STRBUF)return r.v.p;
-    if(r.tag==SP_TAG_STR)sp_str_check_mutable(r.v.s);
     rb_raise(rb_eTypeError,"expected a shared String");
 }
 VALUE rb_str_freeze(VALUE v) {
-    sp_RbVal r=sp_cext_rbval(v);
-    if(r.tag==SP_TAG_STR && sp_str_is_frozen_val(r.v.s))return v;
     sp_String_freeze(string(v));return v;
 }
 VALUE rb_utf8_str_new(const char *bytes,long length) {
@@ -616,23 +613,6 @@ static sp_PolyArray *array(VALUE value) {
     sp_RbVal r=sp_cext_rbval(value);
     if(r.tag==SP_TAG_OBJ && r.cls_id==SP_BUILTIN_POLY_ARRAY)return r.v.p;
     rb_raise(rb_eTypeError,"expected a widened Array");
-}
-sp_PolyArray *sp_cext_share_new_array(sp_PolyArray *array) {
-    SP_GC_ROOT(array);
-    if(!array)return array;
-    for(sp_int i=0;i<array->len;i++) {
-        sp_RbVal value=array->data[i];
-        if(value.tag==SP_TAG_STR && value.v.s && !sp_str_is_frozen_val(value.v.s)) {
-            sp_RbVal shared=value;
-            if(((const unsigned char *)value.v.s)[-1]==0xfd) {
-                sp_String *owner=(sp_String *)(void *)((sp_str_hdr *)sp_fd_base(value.v.s))->next;
-                if(owner && owner->data==value.v.s)shared=sp_box_obj(owner,SP_BUILTIN_STRBUF);
-            }
-            if(shared.tag==SP_TAG_STR)shared=sp_box_obj(sp_String_new_shared(value.v.s),SP_BUILTIN_STRBUF);
-            sp_gc_wb(array);array->data[i]=shared;
-        }
-    }
-    return array;
 }
 VALUE rb_ary_new(void) { return sp_cext_value(sp_box_poly_array(sp_PolyArray_new())); }
 VALUE rb_hash_new(void) { return sp_cext_value(sp_cext_hash_new()); }

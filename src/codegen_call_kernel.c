@@ -1486,19 +1486,7 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
 
   /* system(cmd, ...) expr: run, and answer true, false or nil */
   if (recv < 0 && sp_streq(name, "system") && argc >= 1 && !bare_call_class_owned(c, id)) {
-    if (emit_system_splat(c, id, argv, argc, b)) return 1;
-    system_refuse_unsupported(c, id, argv, argc);
-    /* each argument converts and is rooted before the next converts: a
-       #to_str's answer is a heap String the following conversion may collect */
-    int ts = ++g_tmp;
-    buf_puts(b, "({ ");
-    for (int k = 0; k < argc; k++) {
-      buf_printf(b, "const char *_sys_%d_%d = ", ts, k); emit_str_expr(c, argv[k], b);
-      buf_printf(b, "; SP_GC_ROOT_STR(_sys_%d_%d); ", ts, k);
-    }
-    buf_printf(b, "const char *_sys_%d[] = { ", ts);
-    for (int k = 0; k < argc; k++) { if (k > 0) buf_puts(b, ", "); buf_printf(b, "_sys_%d_%d", ts, k); }
-    buf_printf(b, ", NULL }; sp_system_answer(sp_system_args(%d, _sys_%d)); })", argc, ts);
+    emit_system_call(c, id, argv, argc, b);
     return 1;
   }
   /* trap(...) / Signal.trap(...): install the handler (a string command or a
@@ -1524,7 +1512,7 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
         buf_puts(b, ")");
       }
       else if (argc >= 2) emit_boxed(c, argv[1], b);
-      else buf_puts(b, "sp_box_str(\"DEFAULT\")");
+      else buf_puts(b, "sp_box_str_new((&(\"\\xff\" \"DEFAULT\")[1]))");
       buf_puts(b, ")");
       return 1;
     }

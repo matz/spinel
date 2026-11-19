@@ -34,7 +34,6 @@ typedef struct {
     size_t constant_count;
     const char *name;   /* the extension's name: its Class.new classes are named by it */
 } sp_cext_extension;
-sp_PolyArray *sp_cext_share_new_array(sp_PolyArray *);
 void sp_cext_init(sp_cext_extension *);
 void sp_cext_lock(void);
 void sp_cext_unlock(void);

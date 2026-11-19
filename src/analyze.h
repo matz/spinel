@@ -672,7 +672,7 @@ int elab_version_on_singleton(Compiler *c, int cls, const char *name, int node);
    region's last statement only to stay a window, and prove nothing about
    which version the call meets. post: the call may also run in the
    post-load phase, once the load is over (an exit handler's body, or one
-   a handler runs: LrExt.post), so the window reaches past `to` into the
+   a handler runs: LoadRecord.post), so the window reaches past `to` into the
    versions bodies make there (an exit handler's, a method only one calls). */
 typedef struct { LoadPoint from, to; unsigned char closed, wraps, never, post; } ElabWindow;
 int elab_call_window(Compiler *c, int id, ElabWindow *w);

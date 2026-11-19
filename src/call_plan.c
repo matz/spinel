@@ -2819,13 +2819,23 @@ static int ct_window_version(Compiler *c, int id, int cls, const char *name, int
   const LrDef *ds[2];
   return ct_every_span(c, id, cls, name, sg, ds, 2) == 1 ? ct_window_def(c, cls, name, sg, aliased, ds[0]) : -1;
 }
+/* Does call id meet versions after its point (elab_call_meet's 1): it runs
+   later (ct_after_point), or the record keeps a block around it
+   (elab_in_record_kept_block), which adds ELAB_MEET_RECORD, so that a window
+   that cannot tell leaves the answer at its point */
+static int ct_meet_after(Compiler *c, int id) {
+  if (ct_after_point(c, id)) return 1;
+  return elab_in_record_kept_block(c, id) ? 1 | ELAB_MEET_RECORD : 0;
+}
 /* How call id asks the record for the versions it may meet
    (elab_call_meet): after its point where it runs later (also in a block
-   that may run from an exit handler, elab_runs_after_load), and as the
+   the record keeps to run at a time the syntax does not tell, which may run
+   after any later statement and from an exit handler:
+   elab_in_record_kept_block), and as the
    mixin's copy's call in a mixin's copy of its body */
 static int ct_meet_how(Compiler *c, int id) {
   const Scope *own = comp_scope_of(c, id);
-  return (ct_after_point(c, id) || elab_runs_after_load(c, id)) | (own && own->origin_module_ci > 0 ? ELAB_MEET_COPY : 0);
+  return ct_meet_after(c, id) | (own && own->origin_module_ci > 0 ? ELAB_MEET_COPY : 0);
 }
 /* The one version node id meets as cls's `name` (singleton when sg): the
    one the record answers at id's point, or the one over the statements id
@@ -3926,7 +3936,7 @@ static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigne
     return vi;
   }
   ElabMeet m;
-  int kept = ct_after_point(c, id) || elab_runs_after_load(c, id);   /* (it runs at its point only if nothing around it runs later, nor a handler may run its block) */
+  int kept = ct_meet_after(c, id);   /* (it runs at its point only if nothing around it runs later, nor the record keeps a block around it to run at another time) */
   const Scope *own = comp_scope_of(c, id);
   elab_call_meet(c, id, rcls, name, sg, kept | (own && own->origin_module_ci > 0 ? ELAB_MEET_COPY : 0), &m, ds, VER_MAX_ARMS);
   /* (a call in a body that never runs meets no version at any time: the

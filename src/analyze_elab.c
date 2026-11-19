@@ -4714,8 +4714,9 @@ static int lr_def_from(const LoadRecord *r, int d) {
    answers ELAB_BLK_LATER for), does not run now (LRW_UNPLACED: any answer but
    ELAB_BLK_NOW), or is taken to run at once (LRW_ASSUMED: ELAB_BLK_ASSUMED; with
    kept, only where its typed call target keeps it, blk_kept, which also counts
-   a call the record does not know; an END is not one of these) */
-enum { LRW_LATER, LRW_UNPLACED, LRW_ASSUMED };
+   a call the record does not know; an END is not one of these), or is kept by
+   the record to run at a time the syntax does not tell (LRW_KEPT: LrExt.kept) */
+enum { LRW_LATER, LRW_UNPLACED, LRW_ASSUMED, LRW_KEPT };
 static int lr_in_body(Compiler *c, const int *par, int n, int id, int which, int kept) {
   for (int a = id; a >= 0 && a < n && par[a] >= 0; a = par[a]) {
     const LrExt *e = lr_ext_of(c, par, n, a);
@@ -4726,6 +4727,11 @@ static int lr_in_body(Compiler *c, const int *par, int n, int id, int which, int
       continue;
     }
     if (!e->cb) continue;
+    if (which == LRW_KEPT) {   /* (an assumed block runs at once by its call's name, or by a lazy chain's; one given to a method of the program's may yield at once as well as keep it: neither is known later) */
+      const char *cn = e->cb && nt_kind(c->nt, par[a]) == NK_CallNode ? nt_str(c->nt, par[a], "name") : NULL;
+      if (e->kept && e->runs != ELAB_BLK_ASSUMED && cn && !lr_named(c, cn)) return 1;
+      continue;
+    }
     if (which == LRW_LATER) { if (e->runs == ELAB_BLK_LATER) return 1; continue; }
     if (which == LRW_UNPLACED) { if (e->runs != ELAB_BLK_NOW) return 1; continue; }
     int marked = (int)nt_int(c->nt, par[a], "blk_kept", 0);
@@ -8084,15 +8090,17 @@ int elab_runs_later(Compiler *c, int id) {
   const int *par = elab_node_parents(c, &n);
   return lr_in_body(c, par, n, id, LRW_LATER, 0);
 }
-/* Does node id, which has a point of its own, run in a block the record does
-   not take to run at once (a Hash's default block, one a builtin keeps) in a
-   program that may run code after the load (LoadRecord.post)? The block may
-   be run from an exit handler, so the call may meet versions made after the
-   load, which its point does not hold: it is answered by its window. */
-int elab_runs_after_load(Compiler *c, int id) {
-  LoadRecord *r = elab_fresh(c);
+/* Does node id, which has a point of its own, run in a block the record keeps
+   to run at a time the syntax does not tell (LrExt.kept: a Hash's default
+   block, one a builtin or a method of the program's may keep)? It may run
+   after any later statement of the load and from an exit handler, so a call
+   there may meet versions its point does not hold: it is answered by its
+   window. */
+int elab_in_record_kept_block(Compiler *c, int id) {
+  int n;
+  const int *par = elab_node_parents(c, &n);
   lr_run_points(c);
-  return r->post && elab_in_unplaced_block(c, id);
+  return lr_in_body(c, par, n, id, LRW_KEPT, 0);
 }
 int elab_in_unplaced_block(Compiler *c, int id) {
   int n;
@@ -8479,6 +8487,23 @@ void elab_call_meet(Compiler *c, int id, int cls, const char *name, int sg, int 
   m->n = elab_call_span(c, id, cls, name, sg, after, &m->w, out, cap);
   m->win = m->n == ELAB_SPAN_NO_WINDOW ? ELAB_UNKNOWN : ELAB_YES;
   if (m->win != ELAB_YES) m->n = 0;
+  if ((how & ELAB_MEET_RECORD) && p.region >= 0 && !(how & ELAB_MEET_COPY)) {
+    /* (the window cannot tell, or holds a def of the statement the call
+       stands in: the class body applies its defs as the statement starts, so
+       a cell would hold the last of them however early the block runs, where
+       the version at the point is the one a block that runs during the
+       statement meets) */
+    LoadRecord *r = elab_fresh(c);
+    int later = 0;
+    for (int k = 0; m->n > 0 && k < m->n && k < cap; k++) {
+      int e = out[k] && !out[k]->body && out[k]->node >= 0 && out[k]->node < r->n ? r->at[out[k]->node] : -1;
+      later |= e >= 0 && r->st[e].region == p.region && r->st[e].top == r->st[p.seq].top;
+    }
+    if (m->n == -1 || later) {
+      m->at = elab_method_at(c, cls, name, sg, p, &m->d);
+      if (m->at != ELAB_UNKNOWN) { m->win = ELAB_NO; m->n = 0; }
+    }
+  }
 }
 int elab_call_span(Compiler *c, int id, int cls, const char *name, int sg, int open, ElabWindow *w, const LrDef **out, int cap) {
   ElabWindow own;

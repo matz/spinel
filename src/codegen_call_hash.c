@@ -310,24 +310,28 @@ int emit_op_hash_default(Compiler *c, const BopCtx *x, Buf *b) {
     /* default(key): a hash built with a block calls its default_proc with
        (self, key); default() (or a hash with no proc) returns default_v
        (#2464). Only the poly-value variants carry a dproc. */
-    /* The proc takes the key in the hash's own key representation, so an
-       argument of another type cannot be handed to it -- passing an
-       Integer where a `const char *` key is expected did not even
-       typecheck. Such a key can never be in this hash, so answer the
-       plain default. */
+    /* A key the typed table cannot hold goes to its foreign-key miss path. */
     TyKind dkt = argc == 1 ? comp_ntype(c, argv[0]) : TY_UNKNOWN;
     int dkey_ok = rt == TY_POLY_POLY_HASH ||
                   (rt == TY_SYM_POLY_HASH && dkt == TY_SYMBOL) ||
                   (rt == TY_STR_POLY_HASH && (dkt == TY_STRING || dkt == TY_STRBUF));
+    if (argc == 1) buf_printf(b, "; SP_GC_ROOT(_t%d)", t);
     if (argc == 1 && dkey_ok) {
-      buf_printf(b, "; (_t%d && _t%d->dproc) ? _t%d->dproc(_t%d, ", t, t, t, t);
+      int k = ++g_tmp;
+      const char *key_type = rt == TY_POLY_POLY_HASH ? "sp_RbVal"
+                           : rt == TY_SYM_POLY_HASH ? "sp_sym" : "const char *";
+      buf_printf(b, "; %s _t%d = ", key_type, k);
       if (rt == TY_POLY_POLY_HASH) emit_boxed(c, argv[0], b);
       else emit_expr(c, argv[0], b);
-      buf_printf(b, ", _t%d->dproc_self) : (_t%d ? _t%d->default_v : sp_box_nil()); })", t, t, t);
+      buf_printf(b, "; (_t%d && _t%d->dproc) ? _t%d->dproc(_t%d, _t%d,"
+                    " _t%d->dproc_self) : (_t%d ? _t%d->default_v : sp_box_nil()); })",
+                 t, t, t, t, k, t, t, t);
     }
     else if (argc == 1) {
-      buf_printf(b, "; (void)("); emit_expr_for_effect(c, argv[0], b);
-      buf_printf(b, "); _t%d ? _t%d->default_v : sp_box_nil(); })", t, t);
+      int k = ++g_tmp;
+      buf_printf(b, "; sp_RbVal _t%d = ", k); emit_boxed(c, argv[0], b);
+      buf_printf(b, "; sp_poly_hash_foreign_miss(sp_box_nullable_obj(_t%d, %s), _t%d); })",
+                 t, hash_box_cls(rt), k);
     }
     else {
       buf_printf(b, "; _t%d ? _t%d->default_v : sp_box_nil(); })", t, t);

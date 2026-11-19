@@ -1781,9 +1781,13 @@ int emit_call_operator_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
     const char *dn2 = uid_new();
     buf_printf(&g_procs,
       "static sp_RbVal _sp_hash_dproc_%s(sp_%sHash *_self_h, %s _key, void *_dproc_self) {\n"
+      "  SP_GC_ROOT(_self_h);\n"
+      "  SP_GC_ROOT(_dproc_self);\n"
+      "  sp_RbVal _boxed_key = %s;\n"
+      "  SP_GC_ROOT_RBVAL(_boxed_key);\n"
       "  return sp_penum_call2((sp_Proc *)_dproc_self,"
-      " sp_box_nullable_obj((void *)_self_h, %s), %s);\n}\n",
-      dn2, hn2, keyct, hash_box_cls(hrt), kbox);
+      " sp_box_nullable_obj((void *)_self_h, %s), _boxed_key);\n}\n",
+      dn2, hn2, keyct, kbox, hash_box_cls(hrt));
     int th2 = ++g_tmp, tp2 = ++g_tmp;
     buf_printf(b, "({ sp_%sHash *_t%d = ", hn2, th2); emit_expr(c, recv, b);
     buf_printf(b, "; sp_Proc *_t%d = ", tp2); emit_expr(c, argv[0], b);

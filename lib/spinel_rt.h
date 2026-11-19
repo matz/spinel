@@ -10548,7 +10548,8 @@ static void sp_puts_elems(sp_RbVal a) {
   for (sp_int i = 0; i < n; i++) {
     sp_RbVal e = sp_poly_arr_get(a, i);
     if (e.tag == SP_TAG_OBJ && sp_poly_is_array_kind(e.cls_id)) { sp_puts_elems(e); continue; }
-    if (e.tag == SP_TAG_STR && e.v.s) { sp_puts_str_line(e.v.s); continue; }
+    const char *s = sp_rbval_string_bytes(e);
+    if (s) { sp_puts_str_line(s); continue; }
     sp_puts_cstr_line(sp_poly_to_s(e));
   }
   sp_poly_recur_pop(pmark);
@@ -12592,27 +12593,27 @@ static sp_RbVal sp_poly_call_aref_held(sp_RbVal v, sp_RbVal arg) {
   SP_GC_ROOT_RBVAL(arg);
   return sp_poly_call_aref(v, arg);
 }
-/* A key of a kind the Hash's storage cannot hold (a String or an Integer on a
-   Symbol-keyed Hash, a Symbol or an Integer on a String-keyed one, a Float or
-   an Array on any typed kind, ...) is a miss, and answers the Hash's default:
-   its default block when it has one, else its default value. A block's key
-   parameter is typed by the storage kind, so it is handed a key of that kind:
-   on a Symbol-keyed Hash an Integer read as a Symbol id and Symbol 0 for any
-   other key, on a String-keyed one the name of a Symbol or an Integer read as
-   a Symbol id and "" for any other key. A block that ignores its key answers
-   as CRuby does. */
+static sp_RbVal sp_penum_call2(sp_Proc *blk, sp_RbVal v, sp_RbVal w);
+static sp_bool sp_hash_default_is_proc(void *env) {
+  return env && ((sp_gc_hdr *)((char *)env - sizeof(sp_gc_hdr)))->scan == sp_Proc_scan;
+}
+/* A foreign key misses the typed table. A Ruby Proc receives the original
+   key, while the compiled callback takes the table's key representation. */
 static sp_RbVal sp_poly_hash_foreign_miss(sp_RbVal recv, sp_RbVal key) {
   if (recv.tag != SP_TAG_OBJ || !recv.v.p) return sp_box_nil();
+  SP_GC_ROOT_RBVAL(recv); SP_GC_ROOT_RBVAL(key);
   switch (recv.cls_id) {
     case SP_BUILTIN_SYM_POLY_HASH: {
       sp_SymPolyHash *h = (sp_SymPolyHash *)recv.v.p;
       if (!h->dproc) return h->default_v;
+      if (sp_hash_default_is_proc(h->dproc_self)) return sp_penum_call2(h->dproc_self, recv, key);
       sp_sym k = key.tag == SP_TAG_INT ? (sp_sym)key.v.i : (sp_sym)0;
       return h->dproc(h, k, h->dproc_self);
     }
     case SP_BUILTIN_STR_POLY_HASH: {
       sp_StrPolyHash *h = (sp_StrPolyHash *)recv.v.p;
       if (!h->dproc) return h->default_v;
+      if (sp_hash_default_is_proc(h->dproc_self)) return sp_penum_call2(h->dproc_self, recv, key);
       const char *nm = (key.tag == SP_TAG_SYM || key.tag == SP_TAG_INT) && sp_sym_name_fn
                          ? sp_sym_name_fn((sp_sym)key.v.i) : "";
       return h->dproc(h, nm ? nm : "", h->dproc_self);
@@ -12805,39 +12806,22 @@ static void sp_PolyPolyHash_delete(sp_PolyPolyHash*h,sp_RbVal k){
     idx=(idx+1)&h->mask;
   }
 }
-/* format's %<name> / %{name}: find the key in the trailing hash argument by
-   its name (a keyword hash boxes as SymPolyHash; string-keyed and fully-poly
-   hashes are accepted too). A missing name is CRuby's KeyError. */
+static sp_bool sp_fmt_hash_lookup(sp_RbVal h, sp_sym name, sp_RbVal *value);
+/* format's %<name> / %{name}: look up a Symbol in the trailing Hash. */
 /* `own` is the caller's format buffer: a missing name raises out of here, and
    the raise would otherwise leak it (a plain malloc, not a GC string).
    `nclose` spells the message the way the directive was written -- CRuby says
    `key<a>` for %<a> and `key{a}` for %{a}. */
 static sp_RbVal sp_fmt_named_ref(sp_PolyArray *a, const char *nm, char nclose, char *own) {
   sp_RbVal h = (a && a->len > 0) ? a->data[a->len - 1] : sp_box_nil();
-  if (h.tag == SP_TAG_OBJ && h.v.p) {
-    if (h.cls_id == SP_BUILTIN_SYM_POLY_HASH) {
-      sp_SymPolyHash *sh = (sp_SymPolyHash *)h.v.p;
-      for (sp_int i = 0; i < sh->len; i++)
-        if (sp_str_eq_cstr(sp_sym_to_s(sh->order[i]), nm))
-          return sp_SymPolyHash_get(sh, sh->order[i]);
-    }
-    else if (h.cls_id == SP_BUILTIN_STR_POLY_HASH) {
-      sp_StrPolyHash *th = (sp_StrPolyHash *)h.v.p;
-      for (sp_int i = 0; i < th->len; i++)
-        if (sp_str_eq_cstr(th->order[i], nm)) return sp_StrPolyHash_get(th, th->order[i]);
-    }
-    else if (h.cls_id == SP_BUILTIN_POLY_POLY_HASH) {
-      sp_PolyPolyHash *ph = (sp_PolyPolyHash *)h.v.p;
-      for (sp_int i = 0; i < ph->len; i++) {
-        sp_RbVal k = ph->keys[ph->order[i]];
-        if ((k.tag == SP_TAG_SYM && sp_str_eq_cstr(sp_sym_to_s((sp_sym)k.v.i), nm)) ||
-            (k.tag == SP_TAG_STR && k.v.s && sp_str_eq_cstr(k.v.s, nm)))
-          return ph->vals[ph->order[i]];
-      }
-    }
-  }
+  SP_GC_ROOT_RBVAL(h);
+  sp_sym name = sp_sym_intern(nm);
+  sp_RbVal value;
+  if (sp_fmt_hash_lookup(h, name, &value)) return value;
   { const char *m = sp_sprintf(nclose == '}' ? "key{%s} not found" : "key<%s> not found", nm);
     free(own);
+    sp_exc_stage_recv(h);
+    sp_exc_stage_key(sp_box_sym(name));
     sp_raise_cls("KeyError", m); }
 }
 static sp_int sp_PolyPolyHash_length(sp_PolyPolyHash*h){return h->len;}
@@ -13601,10 +13585,11 @@ static sp_StrIntHash *sp_StrIntHash_from_poly_hash(sp_PolyPolyHash *src) {
   sp_StrIntHash *h = sp_StrIntHash_new(); SP_GC_ROOT(h);
   for (sp_int i = 0; src && i < src->len; i++) {
     sp_RbVal k = src->keys[src->order[i]], v = sp_PolyPolyHash_get(src, k);
+    const char *key = sp_rbval_string_bytes(k);
     /* (a nil value is kept, as the variant keeps one) */
-    if (k.tag == SP_TAG_STR && v.tag == SP_TAG_NIL) { sp_StrIntHash_set_nil(h, k.v.s); continue; }
-    if (k.tag != SP_TAG_STR || v.tag != SP_TAG_INT) { sp_raise_cls("TypeError", "wrong Hash entry type for the parameter"); return h; }
-    sp_StrIntHash_set(h, k.v.s, v.v.i);
+    if (key && v.tag == SP_TAG_NIL) { sp_StrIntHash_set_nil(h, key); continue; }
+    if (!key || v.tag != SP_TAG_INT) { sp_raise_cls("TypeError", "wrong Hash entry type for the parameter"); return h; }
+    sp_StrIntHash_set(h, key, v.v.i);
   }
   return h;
 }
@@ -13613,10 +13598,11 @@ static sp_StrStrHash *sp_StrStrHash_from_poly_hash(sp_PolyPolyHash *src) {
   sp_StrStrHash *h = sp_StrStrHash_new(); SP_GC_ROOT(h);
   for (sp_int i = 0; src && i < src->len; i++) {
     sp_RbVal k = src->keys[src->order[i]], v = sp_PolyPolyHash_get(src, k);
+    const char *key = sp_rbval_string_bytes(k);
     /* (a String value read out of a typed variant is boxed as its handle;
        a nil value is kept as the variant's NULL, which sp_poly_elem_e gives) */
-    if (k.tag != SP_TAG_STR || (v.tag != SP_TAG_STR && v.tag != SP_TAG_NIL && !sp_poly_is_strbuf(v))) { sp_raise_cls("TypeError", "wrong Hash entry type for the parameter"); return h; }
-    sp_StrStrHash_set_e(h, k.v.s, sp_poly_elem_e(v));
+    if (!key || (v.tag != SP_TAG_NIL && !sp_rbval_is_string(v))) { sp_raise_cls("TypeError", "wrong Hash entry type for the parameter"); return h; }
+    sp_StrStrHash_set_e(h, key, sp_poly_elem_e(v));
   }
   return h;
 }
@@ -14306,12 +14292,22 @@ static sp_bool sp_poly_has_key(sp_RbVal recv, sp_RbVal key) {
     default: return FALSE;
   }
 }
-/* `"%{name}" % hash` / `"%<name>s" % hash`: a missing key is CRuby's KeyError,
-   not a nil that renders as the empty string (#3554). */
+/* Named formatting accepts a stored nil or a non-nil Hash default. */
+static sp_bool sp_fmt_hash_lookup(sp_RbVal h, sp_sym name, sp_RbVal *value) {
+  if (h.tag != SP_TAG_OBJ || !h.v.p || !sp_poly_is_hash_kind(h.cls_id)) return FALSE;
+  SP_GC_ROOT_RBVAL(h);
+  sp_bool present = sp_poly_has_key(h, sp_box_sym(name));
+  *value = sp_poly_get_sym(h, name);
+  return present || value->tag != SP_TAG_NIL;
+}
 static sp_RbVal sp_fmt_hash_fetch(sp_RbVal h, sp_sym k, const char *nm) {
-  if (!sp_poly_has_key(h, sp_box_sym(k)))
-    sp_raise_cls("KeyError", sp_sprintf("key%s not found", nm));
-  return sp_poly_index_poly(h, sp_box_sym(k));
+  SP_GC_ROOT_RBVAL(h);
+  sp_RbVal value;
+  if (sp_fmt_hash_lookup(h, k, &value)) return value;
+  const char *message = sp_sprintf("key%s not found", nm);
+  sp_exc_stage_recv(h);
+  sp_exc_stage_key(sp_box_sym(k));
+  sp_raise_cls("KeyError", message);
 }
 
 /* Kind-dispatching `delete`, `dig` and `values_at` for a poly receiver. Each

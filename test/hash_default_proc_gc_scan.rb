@@ -6,3 +6,17 @@ h = { "seed" => 1, "text" => "v" }
 h.default_proc = proc { |hh, key| key + suffix }
 GC.start
 p h["missing"]
+
+def fresh_hash
+  hash = {"seed" => 1, "text" => "v"}
+  hash.default_proc = proc { |owner, key| [owner["seed"], key] }
+  hash
+end
+
+def default_key
+  GC.start
+  +"key"
+end
+
+p fresh_hash.default(default_key)
+p fresh_hash.default(12)

@@ -9,3 +9,10 @@
 x-9
 1.23
 KeyError
+["key{name} not found", :name]
+symbol
+fallback
+fallback
+":missing"
+""
+"Symbol"

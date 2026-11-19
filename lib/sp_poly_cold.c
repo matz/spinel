@@ -1828,6 +1828,7 @@ const char *sp_str_format_polyarr(const char *fmt, sp_PolyArray *a) {
   /* CRuby refuses to mix numbered (%1$s), sequential (%s) and named (%<a>d)
      references in one format string (#3723) */
   sp_bool used_numbered = FALSE, used_sequential = FALSE, used_named = FALSE;
+  sp_RbVal named_v = sp_box_nil(); SP_GC_ROOT_RBVAL(named_v);
   while (p < pend) {
     if (*p != '%') {
       if (out + 1 >= cap) { cap = cap * 2; buf = (char *)realloc(buf, cap); }
@@ -1858,7 +1859,8 @@ const char *sp_str_format_polyarr(const char *fmt, sp_PolyArray *a) {
        `%0<n>5d`). %<name> substitutes the value for the conversion that
        follows; %{name} is the conversion itself, the value's to_s, padded as
        a %s when flags came before it. */
-    sp_RbVal named_v = sp_box_nil(); sp_bool have_named = FALSE, brace_named = FALSE;
+    named_v = sp_box_nil();
+    sp_bool have_named = FALSE, brace_named = FALSE;
     while (p < pend && sl < sizeof(spec) - 8) {
       char c = *p;
       if (c == '*') {

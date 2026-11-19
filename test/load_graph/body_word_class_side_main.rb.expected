@@ -1,0 +1,6 @@
+[:before, :im, true, true, true]
+[:before, :i, true, false]
+[:closed, :im, true, true, true]
+[:closed, :i, true, false]
+[:after, :im, true, true, true]
+[:after, NoMethodError, false, true]

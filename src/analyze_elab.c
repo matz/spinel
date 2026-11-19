@@ -2478,6 +2478,7 @@ static int lr_body_const(Compiler *c, int k, int e, int fin) {
   return cls >= LR_MAIN ? cls : LR_UNKNOWN_CLASS;
 }
 
+static int lr_body_self(Compiler *c, const int *par, int n, int node, int e);
 /* Where a definer at node with no point defines, as CRuby's cref and self
    take it where it runs, climbing the tree from it to the file's top level:
    a class or module body's class, a `class << x` body's singleton
@@ -2485,10 +2486,12 @@ static int lr_body_const(Compiler *c, int k, int e, int fin) {
    receiver's singleton (LR_FS_IEVAL), main's at the top level (LR_MAIN);
    a method's, a lambda's or a block's body keeps the scope it is written in.
    With self, the class object self is there instead (LR_UNKNOWN_CLASS for
-   no class: main, an object, a singleton class): a class body's class, an
-   eval block's receiver, and in a method body the class whose singleton
-   method the method is. LR_UNKNOWN_CLASS where the record cannot tell (a
-   receiver it does not resolve, e statement the receivers are read at). */
+   no class: main, an object): a class body's class, an eval block's
+   receiver, in a method body the class whose singleton method the method
+   is, and in a `class << x` body x's singleton, as x's class with
+   LR_FS_SCLASS. LR_UNKNOWN_CLASS where the record cannot tell (a receiver
+   it does not resolve, e statement the receivers are read at; e < 0 reads
+   none, so only the frames the tree spells resolve). */
 static int lr_body_frame(Compiler *c, const int *par, int n, int node, int e, int self, int *fs) {
   const NodeTable *nt = c->nt;
   *fs = LR_FS_NONE;
@@ -2496,27 +2499,33 @@ static int lr_body_frame(Compiler *c, const int *par, int n, int node, int e, in
     NodeKind k = nt_kind(nt, p);
     if ((k == NK_ClassNode || k == NK_ModuleNode) && nt_ref(nt, p, "body") == v) return elab_header_class(c, p, NULL, NULL);
     if (k == NK_SingletonClassNode && nt_ref(nt, p, "body") == v) {
-      if (self) return LR_UNKNOWN_CLASS;
-      int ex = nt_ref(nt, p, "expression"), xfs;
+      int ex = nt_ref(nt, p, "expression");
       *fs = LR_FS_SCLASS;
-      return nt_kind(nt, ex) == NK_SelfNode ? lr_body_frame(c, par, n, p, e, 1, &xfs) : lr_body_const(c, ex, e, 1);
+      return nt_kind(nt, ex) == NK_SelfNode ? lr_body_self(c, par, n, p, e) : lr_body_const(c, ex, e, 1);
     }
     if (k == NK_BlockNode && par[p] >= 0 && nt_ref(nt, par[p], "block") == p && elab_opens_frame(nt, par[p])) {
       const char *nm = nt_str(nt, par[p], "name");
-      int rv = nt_ref(nt, par[p], "receiver"), xfs;
+      int rv = nt_ref(nt, par[p], "receiver");
       if (!is_class_eval_family(nm) && !is_instance_eval_family(nm)) return LR_UNKNOWN_CLASS;   /* (a class builder's block: lr_body_defs) */
-      int cls = rv < 0 || nt_kind(nt, rv) == NK_SelfNode ? lr_body_frame(c, par, n, par[p], e, 1, &xfs) : lr_body_const(c, rv, e, 1);
+      int cls = rv < 0 || nt_kind(nt, rv) == NK_SelfNode ? lr_body_self(c, par, n, par[p], e) : lr_body_const(c, rv, e, 1);
       if (!self && is_instance_eval_family(nm)) *fs = LR_FS_IEVAL;
       return cls;
     }
     if (k == NK_DefNode && self) {   /* self in a method's body: the class whose singleton method it is */
       int rv = nt_ref(nt, p, "receiver"), rk = rv >= 0 ? nt_def_receiver(nt, rv) : -1, xfs;
-      if (rk >= 0) return nt_kind(nt, rk) == NK_SelfNode ? lr_body_frame(c, par, n, p, e, 1, &xfs) : lr_body_const(c, rk, e, 1);
+      if (rk >= 0) return nt_kind(nt, rk) == NK_SelfNode ? lr_body_self(c, par, n, p, e) : lr_body_const(c, rk, e, 1);
       int cls = lr_body_frame(c, par, n, p, e, 0, &xfs);
       return xfs == LR_FS_SCLASS || xfs == LR_FS_IEVAL ? cls : LR_UNKNOWN_CLASS;
     }
   }
   return self ? LR_UNKNOWN_CLASS : LR_MAIN;
+}
+/* ...the class object self is at node, as lr_body_frame takes it with self;
+   LR_UNKNOWN_CLASS for a singleton class (self in a `class << x` body),
+   whose singleton the record holds no history of */
+static int lr_body_self(Compiler *c, const int *par, int n, int node, int e) {
+  int fs, cls = lr_body_frame(c, par, n, node, e, 1, &fs);
+  return fs == LR_FS_NONE ? cls : LR_UNKNOWN_CLASS;
 }
 
 /* A visibility word a method body runs on the methods it names
@@ -2557,8 +2566,9 @@ static const char *lr_word_name(const NodeTable *nt, int word, int k) {
    receiver (`def K.m`: K's singleton; `def self.m`: self's class's, where
    self is one) or its frame (lr_body_frame), in *cls and *sg (main's, of a
    def in a top-level method's body: Object's public method); a visibility
-   word's (lr_body_word), the instance side of the class self is; 0 where the
-   record cannot tell, or where the class's chain is not one the record
+   word's (lr_body_word), the instance side of the class self is (in a
+   `class << x` body, x's singleton: the class side); 0 where the record
+   cannot tell, or where the class's chain is not one the record
    holds to its end, on facts that cannot change later (lr_chain_open: a
    class a builder call makes, whose calls are not ordered against
    versions). walk: asked while the walk records (lr_def_held), where a
@@ -2570,8 +2580,8 @@ static int lr_body_target(Compiler *c, const int *par, int n, int d, int walk, i
   LoadRecord *r = c->lrec;
   int e = d >= 0 && d < r->n ? r->at[d] : -1, rv = nt_ref(nt, d, "receiver"), rk = rv >= 0 ? nt_def_receiver(nt, rv) : -1, fs;
   if (e < 0) return 0;
-  if (nt_kind(nt, d) == NK_CallNode) *cls = lr_body_frame(c, par, n, d, e, 1, &fs), *sg = 0;
-  else if (rk >= 0) *cls = nt_kind(nt, rk) == NK_SelfNode ? lr_body_frame(c, par, n, d, e, 1, &fs) : lr_body_const(c, rk, e, walk), *sg = 1;
+  if (nt_kind(nt, d) == NK_CallNode) *cls = lr_body_frame(c, par, n, d, e, 1, &fs), *sg = fs == LR_FS_SCLASS;
+  else if (rk >= 0) *cls = nt_kind(nt, rk) == NK_SelfNode ? lr_body_self(c, par, n, d, e) : lr_body_const(c, rk, e, walk), *sg = 1;
   else *cls = lr_body_frame(c, par, n, d, e, 0, &fs), *sg = fs != LR_FS_NONE;
   if (*cls < LR_MAIN || lr_chain_open(c, *cls)) return 0;
   for (int a = *cls, k = 0; walk && a >= 0 && a < c->nclasses && k < lr_chain_bound(c); a = lr_super(c, a), k++) {
@@ -2693,6 +2703,14 @@ static int lr_frame_main(const NodeTable *nt, const int *par, int n, int node) {
   }
   return 1;
 }
+/* ...does the tree spell the class self is at a body's word at node (lr_body_frame reading no receiver: a class or
+   module body, a `class << self`, `def self.m` and self's eval blocks around those), on a chain the record holds
+   (lr_body_target)? Such a word's target is known where it runs, so it is a version; any other word bars its names:
+   it would be neither, and run from the start where the record holds no versions (lr_unplaced_words). */
+static int lr_body_word_frame(Compiler *c, const int *par, int n, int node) {
+  int fs, cls = lr_body_frame(c, par, n, node, -1, 1, &fs);
+  return cls >= 0 && !lr_chain_open(c, cls);
+}
 static void lr_body_forms(Compiler *c, const int *par, int n) {
   const NodeTable *nt = c->nt;
   LoadRecord *r = c->lrec;
@@ -2711,9 +2729,11 @@ static void lr_body_forms(Compiler *c, const int *par, int n) {
     int recv = k == NK_CallNode ? nt_ref(nt, id, "receiver") : -1, vis = nm && (visibility_of_name(nm) || class_method_vis_of_name(nm));
     if (used && vis) continue;
     if (k == NK_CallNode && (!nm || (recv >= 0 && nt_kind(nt, recv) != NK_SelfNode) || !(vis || is_method_naming_call(nm)))) continue;
-    /* (a body's word is a version, lr_body_def_version; a placed one still bars: its version's visibility the plan
-       answers from where the word runs, ahead of the readers before it, lr_version_vis) */
-    if (k == NK_CallNode && !used && lr_body_word(nt, id) && lr_body_around(nt, par, n, id) >= 0) continue;
+    /* (a body's word is a version, lr_body_def_version, where the tree spells the class self is, lr_body_word_frame;
+       a placed one still bars: its version's visibility the plan answers from where the word runs, ahead of the
+       readers before it, lr_version_vis) */
+    if (k == NK_CallNode && !used && lr_body_word(nt, id) && lr_body_around(nt, par, n, id) >= 0 && lr_body_word_frame(c, par, n, id))
+      continue;
     if (k != NK_DefNode && k != NK_AliasMethodNode && k != NK_UndefNode && k != NK_CallNode) continue;
     if (k == NK_DefNode) {
       int dr = nt_ref(nt, id, "receiver");
@@ -3838,7 +3858,7 @@ static void lr_body_versions(Compiler *c) {
     ElabRec x = { c, r, .unplaced = 1, .body = body };
     if (word) {   /* (have: a class body's own statement, lr_body_defs) */
       for (int k = 0; !have && lr_word_name(nt, id, k); k++)
-        lr_method(&x, cls, 0, lr_word_name(nt, id, k), id, LR_VIS, word, !lr_runs_with_body(nt, par, r->n, id, body), NULL);
+        lr_method(&x, cls, sg, lr_word_name(nt, id, k), id, LR_VIS, word, !lr_runs_with_body(nt, par, r->n, id, body), NULL);
       continue;
     }
     if (!have)   /* (else a class body's own statement: lr_body_defs, whose hook the body still owes) */

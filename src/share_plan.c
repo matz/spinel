@@ -207,13 +207,6 @@ static int share_plan_producer_core(Compiler *c, int v, int *op, int unlifted) {
 
 static int share_plan_producer_at(Compiler *c, int v, int *op) { return share_plan_producer_core(c, v, op, 0); }
 
-
-int share_plan_producer_unlifted(Compiler *c, int v, int *operand) {
-  int rv, k = share_plan_producer_core(c, v, &rv, 1);
-  if (operand) *operand = rv;
-  return k;
-}
-
 int share_plan_producer(Compiler *c, int v, int *operand) {
   int rv, k = share_plan_producer_at(c, v, &rv);
   if (operand) *operand = rv;

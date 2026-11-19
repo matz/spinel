@@ -933,24 +933,6 @@ int emit_hash_reduce_scalar_expr(Compiler *c, int id, Buf *b) {
 }
 
 
-/* The boxed operand a conversion of one hands on, `v.to_s` or `String(v)`
-   with no argument beside it, no block and no method of the program's own
-   in the way, else -1: the conversion answers a String operand itself. */
-static int fold_boxed_conversion_operand(Compiler *c, int v) {
-  const NodeTable *nt = c->nt;
-  v = nt_paren_single(nt, v);
-  if (v < 0 || nt_kind(nt, v) != NK_CallNode || nt_ref(nt, v, "block") >= 0 || nt_safe_nav(nt, v)) return -1;
-  const char *nm = nt_str(nt, v, "name");
-  int recv = nt_ref(nt, v, "receiver"), argc = 0;
-  const int *argv = call_args(nt, v, &argc);
-  int op = -1;
-  if (nm && is_to_s_name(nm) && recv >= 0 && argc == 0) op = recv;
-  else if (nm && is_string_class_name(nm) && recv < 0 && argc == 1 && !nt_argv_has_splat(nt, argv, argc) &&
-           call_target(c, v, -1, nm, CT_TOP, NULL) < 0 && !bare_call_class_owned(c, v)) op = argv[0];
-  if (op < 0 || repr_of(c, op).kind != RK_BOXED || cplan_user(c, v).dispatch != CP_NONE) return -1;
-  return op;
-}
-
 /* hash.transform_keys { |k| nk } / transform_values { |v| nv }: rebuild the
    hash applying the block to every key (or value), keeping the other half.
    Returns 1 if handled. */
@@ -1122,21 +1104,17 @@ int emit_transform_hash_expr(Compiler *c, int id, Buf *b) {
   /* the block's value carries its nil into a result whose values may be nil:
      an oint-formed value is emitted as its oint, a boxed one unboxed with it */
   int lastv = bb[bn - 1];
-  int box_eligible = !keys && dr.val == TY_POLY && (bret == TY_STRING || bret == TY_STRBUF) && !fold_body_has_next(c, body);
-  /* a conversion of a boxed value (`v.to_s`, `String(v)`) answers the
-     value's own box when it is a String, and bytes otherwise */
-  int conv_op = box_eligible ? fold_boxed_conversion_operand(c, lastv) : -1;
-  int box_last = box_eligible && conv_op < 0 && share_plan_producer_unlifted(c, lastv, NULL) != SPK_OPERAND &&
-                 share_plan_producer_unlifted(c, lastv, NULL) != SPK_NONE &&
-                 share_plan_of(c, lastv, SPR_BOX).form == SPF_HANDLE;
-  int oset_v = !keys && dvn && dr.val == TY_INT && !fold_body_has_next(c, body) &&
+  int has_next = fold_body_has_next(c, body);
+  int box_last = !keys && dr.val == TY_POLY && (bret == TY_STRING || bret == TY_STRBUF);
+  int oset_v = !keys && dvn && dr.val == TY_INT && !has_next &&
                (bret == TY_POLY || bret == TY_UNKNOWN || node_has_oint_form(c, lastv));
   /* a `next <v>` answers for this pair: the body writes a slot and the
      set below reads it, where the bare `continue` of a tail read skipped
      the set and dropped the pair */
-  if (fold_body_has_next(c, body)) {
+  if (has_next) {
     int tv = ++g_tmp;
     char dst[32]; snprintf(dst, sizeof dst, "_t%d", tv);
+    if (box_last) bret = TY_POLY;
     emit_indent(g_pre, g_indent + 1); emit_ctype(c, bret, g_pre);
     buf_printf(g_pre, " %s = %s;", dst, bret == TY_POLY ? "sp_box_nil()" : default_value_from_compiler(c, bret));
     /* A valued next keeps this slot live while its ensure clauses run. */
@@ -1152,13 +1130,6 @@ int emit_transform_hash_expr(Compiler *c, int id, Buf *b) {
     for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, g_indent + 1);
     int save = g_indent; g_indent++;
     if (oset_v && bret == TY_INT) emit_oint_expr(c, lastv, TY_INT, &vb);
-    /* The converter boxes the result directly, including the native
-       handle of a fresh Symbol spelling and the value of a user override. */
-    else if (conv_op >= 0) {
-      buf_puts(&vb, "sp_poly_to_s_box(");
-      emit_boxed(c, conv_op, &vb);
-      buf_puts(&vb, ")");
-    }
     else if (box_last) emit_boxed(c, lastv, &vb);
     else emit_expr(c, bb[bn - 1], &vb);
     g_indent = save;
@@ -1219,7 +1190,7 @@ int emit_transform_hash_expr(Compiler *c, int id, Buf *b) {
       else buf_puts(&hv, vb.p ? vb.p : "0");
       emit_typed_elem_hold(c, -1, dt, hv.p, g_pre); free(hv.p);
     }
-    else if (box_last || conv_op >= 0) buf_puts(g_pre, vb.p ? vb.p : "sp_box_nil()");
+    else if (box_last) buf_puts(g_pre, vb.p ? vb.p : "sp_box_nil()");
     else if (dvt == TY_POLY && bret != TY_POLY) {
       Buf bx; memset(&bx, 0, sizeof bx); emit_boxed_text(c, bret, vb.p ? vb.p : "", &bx);
       buf_puts(g_pre, bx.p ? bx.p : ""); free(bx.p);

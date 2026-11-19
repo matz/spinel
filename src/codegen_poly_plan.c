@@ -1444,6 +1444,7 @@ void emit_poly_user_arms_n(Compiler *c, int id, const char *name, const PolyUser
     int nold = 0;
     for (int k = 0; k < c->nclasses; k++)
       if (!cls_fact_excludes(c, nt_ref(c->nt, id, "receiver"), k) &&   /* as the plan leaves them out (#8530) */
+          !(g_poly_user_arm_skip && g_poly_user_arm_skip[k]) &&   /* (and a computed writer's attr arm takes, as below) */
           poly_user_arm_n_decide(c, id, name, U, k, &old[nold])) nold++;
     poly_arms_assert(c, id, "poly-user-n", arms, n, old, nold);
     free(old);

@@ -25,7 +25,7 @@
    reads its bytes and keeps nothing, as an interpolation does, or a
    freeze of a variable's String, which reaches the String through the
    variable, or a String iterator's Enumerator walked where it is made
-   (SPR_READ); it only asks whether it is nil or false, as a predicate does (SPR_TEST);
+   or tests for nil or false, as a predicate does (SPR_READ);
    or, for an element of the Array literal a multiple write splits (also
    through a splat, `a, b = *[s, t]`), the target the element is stored
    into takes it (SPR_STORE), where the literal is no container; or it
@@ -39,8 +39,7 @@
    which no other name holds, and never a refusal.
    Some values have a second consumer:
      - a call that answers its receiver or nil (rule 4 below) answers its
-       receiver's String, so its own answer is only tested for nil
-       (share_plan_second_role: SPR_TEST);
+       receiver's String, so its own answer is only tested for nil;
      - a write, an attribute or index assignment, an `||=` or `&&=` and a
        call answering its receiver answer a value they also store or
        change: that second consumer is the answering node's own, asked of
@@ -697,7 +696,7 @@ static int share_plan_box_kept(Compiler *c, int v);
 /* What a consumer in `role` needs of value v, whose own need (what its
    facts say a taker needs) is `need`. */
 static int share_plan_role_need(Compiler *c, int v, int role, int need) {
-  if (role == SPR_READ || role == SPR_TEST) return SPN_BYTES;
+  if (role == SPR_READ) return SPN_BYTES;
   if (role == SPR_IDENTITY) return SPN_OBJECT;
   /* A box is copied by value, so a box of a String's bytes is a String of
      its own once a copy is changed in place: a box of a String no other
@@ -801,20 +800,20 @@ static int share_plan_store_renders(Compiler *c, int v) {
 /* The plan of value v for a consumer in `role`, v's own need known. */
 SharePlan share_plan_with_need(Compiler *c, int v, int role, int need) {
   need = share_plan_role_need(c, v, role, need);
-  SharePlan p = { (unsigned char)need, SPS_BYTES, SPF_BYTES };
+  SharePlan p = { .need = (unsigned char)need, .form = SPF_BYTES };
   if (need == SPN_BYTES) return p;
-  p.supply = share_plan_supplies(c, v) && (role != SPR_STORE || share_plan_store_renders(c, v)) ? SPS_HANDLE : SPS_BYTES;
+  int supply = share_plan_supplies(c, v) && (role != SPR_STORE || share_plan_store_renders(c, v)) ? SPS_HANDLE : SPS_BYTES;
   /* an exception's message asked its identity is the box the exception
      keeps it in (exc_message_identity_operand), which the identity reads
      where the value is read as bytes: no handle is attached to the read,
      so no other consumer has it */
-  if (role == SPR_IDENTITY && p.supply == SPS_BYTES && exc_message_identity_operand(c, v)) p.supply = SPS_HANDLE;
+  if (role == SPR_IDENTITY && supply == SPS_BYTES && exc_message_identity_operand(c, v)) supply = SPS_HANDLE;
   /* (an identity is the handle or the bytes' pointer; a frozen String's
      is its bytes' pointer, which every handle of it names too, and so is
      a call's that answers a literal) */
   int bytes_id = role == SPR_IDENTITY &&
-                 (p.supply == SPS_BYTES || share_frozen_string(c, v) || share_plan_call_answers_literal(c, v));
-  p.form = (unsigned char)(bytes_id ? SPF_BYTES : share_plan_form(p.need, p.supply));
+                 (supply == SPS_BYTES || share_frozen_string(c, v) || share_plan_call_answers_literal(c, v));
+  p.form = (unsigned char)(bytes_id ? SPF_BYTES : share_plan_form(p.need, supply));
   return p;
 }
 
@@ -958,7 +957,7 @@ static void share_plan_roles_build(Compiler *c) {
   NT_FOREACH_KIND(nt, NK_EmbeddedStatementsNode, e) share_plan_role_mark(c, nt_ref(nt, e, "statements"), SPR_READ);
   static const NodeKind preds[] = { NK_IfNode, NK_UnlessNode, NK_WhileNode, NK_UntilNode };
   for (int k = 0; k < 4; k++)
-    NT_FOREACH_KIND(nt, preds[k], n) share_plan_role_mark(c, nt_ref(nt, n, "predicate"), SPR_TEST);
+    NT_FOREACH_KIND(nt, preds[k], n) share_plan_role_mark(c, nt_ref(nt, n, "predicate"), SPR_READ);
   NT_FOREACH_KIND(nt, NK_MultiWriteNode, mw) share_plan_masgn_stores(c, nt_ref(nt, mw, "value"));
   NT_FOREACH_KIND(nt, NK_CallNode, n) {
     share_plan_identity_roles(c, n);

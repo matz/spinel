@@ -484,6 +484,7 @@ int emit_call_exception_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, c
       nt_ref(nt, id, "block") < 0 &&
       (sp_streq(name, "message") || sp_streq(name, "result") ||
        sp_streq(name, "errno") || sp_streq(name, "error_code") ||
+       sp_streq(name, "line") || sp_streq(name, "column") ||
        sp_streq(name, "key") || sp_streq(name, "receiver") ||
        sp_streq(name, "args") || sp_streq(name, "private_call?") ||
        sp_streq(name, "backtrace") || sp_streq(name, "cause") ||
@@ -551,7 +552,7 @@ int emit_call_exception_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, c
      as the exception it is, and the poly dispatch keys it by its user class,
      raising NoMethodError for any exception whose class lacks the method */
   static int exc_um_skip = -1;   /* the call being re-entered below */
-  if (recv >= 0 && exc_um_skip != id && comp_ntype(c, recv) == TY_EXCEPTION && exc_user_method_name(c, name, argc)) {
+  if (recv >= 0 && exc_um_skip != id && comp_ntype(c, recv) == TY_EXCEPTION && exc_user_method_name(c, id, name, argc)) {
     int tv = ++g_tmp;
     buf_printf(b, "({ sp_RbVal _t%d = sp_box_nullable_obj((void *)(", tv);
     emit_expr(c, recv, b);

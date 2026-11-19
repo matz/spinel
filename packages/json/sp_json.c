@@ -775,7 +775,7 @@ typedef struct {
 /* A parse error says what json 2.18.0's parser (the gate's reference, Ruby
    4.0.9) says, at the place it says it (raise_parse_error there): the
    message, then with `frag` the input from `at` (below), then the line and
-   column of `at`.
+   column of `at`, which the error's #line and #column answer too.
    - The column counts the bytes back from `at`, itself included, to the
      newline before it; the line counts the newlines before that one. So the
      line is one short past the first line, and an error on a newline is at
@@ -824,7 +824,7 @@ static SP_NORETURN void jp_raise(jrd *j, const char *at, const char *msg, int fr
   }
   if (len > INT_MAX) len = INT_MAX;
   const char *m = sp_sprintf("%s%s%.*s%s at line %ld column %ld", msg, quote, (int)len, body, quote, line, column);
-  sp_raise_cls("JSON::ParserError", m);
+  sp_raise_parse_error("JSON::ParserError", m, line, column);
 }
 /* Whitespace, and the comments json 2.18.0 takes by default between tokens
    (`// ...` to the end of the line, `/ * ... * /`). */

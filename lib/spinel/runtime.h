@@ -38,6 +38,8 @@
  *
  *   Errors:
  *     sp_raise_cls   (raise a named exception class)
+ *     sp_raise_parse_error  (raise one with the line and column that its
+ *                            #line and #column answer: JSON::ParserError)
  *
  *   GC roots (sp_gc.h):
  *     SP_GC_ROOT, SP_GC_ROOT_STR, SP_GC_ROOT_RBVAL

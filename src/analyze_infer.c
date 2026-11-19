@@ -8012,7 +8012,7 @@ static int infer_exception_call(Compiler *c, int id, const NodeTable *nt, const 
   /* a method only the program's exception classes define, on a receiver
      typed as a generic exception: typed as the boxed exception's dispatch
      types it, which codegen re-enters (exc_user_method_name) */
-  if (recv >= 0 && rt == TY_EXCEPTION && !face_active() && exc_user_method_name(c, name, argc)) {
+  if (recv >= 0 && rt == TY_EXCEPTION && !face_active() && exc_user_method_name(c, id, name, argc)) {
     an_face_push(recv, TY_POLY);
     TyKind ut = infer_call(c, id);
     an_face_pop();
@@ -9246,7 +9246,8 @@ static TyKind infer_call_prelude(Compiler *c, int id) {
 static int is_poly_exc_boxed_accessor(const char *name) {
   return sp_streq(name, "backtrace") || sp_streq(name, "result") || sp_streq(name, "errno") ||
          sp_streq(name, "error_code") || sp_streq(name, "key") || sp_streq(name, "receiver") ||
-         sp_streq(name, "args") || sp_streq(name, "private_call?");
+         sp_streq(name, "args") || sp_streq(name, "private_call?") ||
+         sp_streq(name, "line") || sp_streq(name, "column");
 }
 /* ...called with no argument, and #exception with or without a message:
    the receiver or a copy of it, boxed (the emitter's poly arm) */

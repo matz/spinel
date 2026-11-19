@@ -406,12 +406,78 @@ void sp_IntArray_rotate_bang(sp_IntArray*a,sp_int n){SP_GC_ROOT(a);
   }
   if(t!=stackbuf)sp_pl_free(t);
 }
-static int _sp_int_cmp(const void*a,const void*b){sp_int va=*(const sp_int*)a,vb=*(const sp_int*)b;return(va>vb)-(va<vb);}
+/* Sorting an Integer or a Float Array by value: an introsort whose
+   comparison is the element type's `<` written in place, where qsort
+   called a comparison function per comparison. A run already in order
+   returns at once and a strictly descending one is reversed; partitions
+   pick the median of three (of three medians past 128 elements), a short
+   range ends in insertion sort, and a recursion past twice the log of the
+   length goes to heapsort. Equal Integers are the same value, so the
+   order among them is not observable; a Float Array takes this path only
+   when equal elements are the same value too (no NaN, not both 0.0 and
+   -0.0: sp_fsort_fits), qsort's order otherwise. */
+#define SP_SORT_SMALL 24
+static void sp_isort_ins(sp_int*v,sp_int n){for(sp_int i=1;i<n;i++){sp_int x=v[i],j=i;while(j>0&&x<v[j-1]){v[j]=v[j-1];j--;}v[j]=x;}}
+static void sp_isort_sift(sp_int*v,sp_int n,sp_int i){sp_int x=v[i];for(;;){sp_int c=2*i+1;if(c>=n)break;if(c+1<n&&v[c]<v[c+1])c++;if(!(x<v[c]))break;v[i]=v[c];i=c;}v[i]=x;}
+static void sp_isort_heap(sp_int*v,sp_int n){for(sp_int i=n/2-1;i>=0;i--)sp_isort_sift(v,n,i);for(sp_int e=n-1;e>0;e--){sp_int t=v[0];v[0]=v[e];v[e]=t;sp_isort_sift(v,e,0);}}
+static sp_int sp_isort_med3(sp_int*v,sp_int a,sp_int b,sp_int c){return v[a]<v[b]?(v[b]<v[c]?b:(v[a]<v[c]?c:a)):(v[a]<v[c]?a:(v[b]<v[c]?c:b));}
+static void sp_isort_rec(sp_int*v,sp_int n,int depth){
+  while(n>SP_SORT_SMALL){
+    if(depth--<=0){sp_isort_heap(v,n);return;}
+    sp_int m=n/2,pi;
+    if(n>128){sp_int e=n/8;pi=sp_isort_med3(v,sp_isort_med3(v,0,e,2*e),sp_isort_med3(v,m-e,m,m+e),sp_isort_med3(v,n-1-2*e,n-1-e,n-1));}
+    else pi=sp_isort_med3(v,0,m,n-1);
+    /* (the pivot first: the Hoare split then leaves both sides non-empty) */
+    {sp_int t=v[0];v[0]=v[pi];v[pi]=t;}
+    sp_int p=v[0],i=-1,j=n;
+    for(;;){do i++;while(v[i]<p);do j--;while(p<v[j]);if(i>=j)break;sp_int t=v[i];v[i]=v[j];v[j]=t;}
+    sp_int ln=j+1;
+    if(ln<n-ln){sp_isort_rec(v,ln,depth);v+=ln;n-=ln;}else{sp_isort_rec(v+ln,n-ln,depth);n=ln;}
+  }
+  sp_isort_ins(v,n);
+}
+static int sp_sort_depth(sp_int n){int d=0;while(n>1){n>>=1;d++;}return 2*d+2;}
+static void sp_isort(sp_int*v,sp_int n){
+  if(n<2)return;
+  sp_int k=1;while(k<n&&!(v[k]<v[k-1]))k++;
+  if(k==n)return;
+  if(k==1){k=1;while(k<n&&v[k]<v[k-1])k++;if(k==n){for(sp_int i=0,j=n-1;i<j;i++,j--){sp_int t=v[i];v[i]=v[j];v[j]=t;}return;}}
+  sp_isort_rec(v,n,sp_sort_depth(n));
+}
+static void sp_fsort_ins(sp_float*v,sp_int n){for(sp_int i=1;i<n;i++){sp_float x=v[i];sp_int j=i;while(j>0&&x<v[j-1]){v[j]=v[j-1];j--;}v[j]=x;}}
+static void sp_fsort_sift(sp_float*v,sp_int n,sp_int i){sp_float x=v[i];for(;;){sp_int c=2*i+1;if(c>=n)break;if(c+1<n&&v[c]<v[c+1])c++;if(!(x<v[c]))break;v[i]=v[c];i=c;}v[i]=x;}
+static void sp_fsort_heap(sp_float*v,sp_int n){for(sp_int i=n/2-1;i>=0;i--)sp_fsort_sift(v,n,i);for(sp_int e=n-1;e>0;e--){sp_float t=v[0];v[0]=v[e];v[e]=t;sp_fsort_sift(v,e,0);}}
+static sp_int sp_fsort_med3(sp_float*v,sp_int a,sp_int b,sp_int c){return v[a]<v[b]?(v[b]<v[c]?b:(v[a]<v[c]?c:a)):(v[a]<v[c]?a:(v[b]<v[c]?c:b));}
+static void sp_fsort_rec(sp_float*v,sp_int n,int depth){
+  while(n>SP_SORT_SMALL){
+    if(depth--<=0){sp_fsort_heap(v,n);return;}
+    sp_int m=n/2,pi;
+    if(n>128){sp_int e=n/8;pi=sp_fsort_med3(v,sp_fsort_med3(v,0,e,2*e),sp_fsort_med3(v,m-e,m,m+e),sp_fsort_med3(v,n-1-2*e,n-1-e,n-1));}
+    else pi=sp_fsort_med3(v,0,m,n-1);
+    {sp_float t=v[0];v[0]=v[pi];v[pi]=t;}
+    sp_float p=v[0];sp_int i=-1,j=n;
+    for(;;){do i++;while(v[i]<p);do j--;while(p<v[j]);if(i>=j)break;sp_float t=v[i];v[i]=v[j];v[j]=t;}
+    sp_int ln=j+1;
+    if(ln<n-ln){sp_fsort_rec(v,ln,depth);v+=ln;n-=ln;}else{sp_fsort_rec(v+ln,n-ln,depth);n=ln;}
+  }
+  sp_fsort_ins(v,n);
+}
+/* no NaN, and not both signs of zero: equal elements are the same value */
+static int sp_fsort_fits(const sp_float*v,sp_int n){int pz=0,nz=0;for(sp_int i=0;i<n;i++){sp_float x=v[i];if(x!=x)return 0;if(x==0){if(signbit(x))nz=1;else pz=1;}}return !(pz&&nz);}
+static int _sp_float_cmp(const void*a,const void*b);
+static void sp_fsort(sp_float*v,sp_int n){
+  if(n<2)return;
+  if(!sp_fsort_fits(v,n)){qsort(v,(size_t)n,sizeof(sp_float),_sp_float_cmp);return;}
+  sp_int k=1;while(k<n&&!(v[k]<v[k-1]))k++;
+  if(k==n)return;
+  if(k==1){k=1;while(k<n&&v[k]<v[k-1])k++;if(k==n){for(sp_int i=0,j=n-1;i<j;i++,j--){sp_float t=v[i];v[i]=v[j];v[j]=t;}return;}}
+  sp_fsort_rec(v,n,sp_sort_depth(n));
+}
 /* sort with a nil element: nil against a number is CRuby's ArgumentError
    (sp_IntArray_nil_cmp_ck), and an array of nils alone is already sorted */
 static int ia_sort_nils(sp_IntArray*a){if(!a->nilbits)return 0;sp_IntArray_nil_cmp_ck(a);return sp_IntArray_has_nil(a);}
-sp_IntArray*sp_IntArray_sort(sp_IntArray*a){SP_GC_ROOT(a);if (SP_UNLIKELY(!a)) sp_nil_recv("sort");sp_IntArray*b=sp_IntArray_dup(a);if(ia_sort_nils(b))return b;qsort(b->data+b->start,b->len,sizeof(sp_int),_sp_int_cmp);return b;}
-void sp_IntArray_sort_bang(sp_IntArray*a){SP_GC_ROOT(a);if (SP_UNLIKELY(!a)) sp_nil_recv("sort!");if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_INT_ARRAY);return;}if(ia_sort_nils(a))return;qsort(a->data+a->start,a->len,sizeof(sp_int),_sp_int_cmp);}
+sp_IntArray*sp_IntArray_sort(sp_IntArray*a){SP_GC_ROOT(a);if (SP_UNLIKELY(!a)) sp_nil_recv("sort");sp_IntArray*b=sp_IntArray_dup(a);if(ia_sort_nils(b))return b;sp_isort(b->data+b->start,b->len);return b;}
+void sp_IntArray_sort_bang(sp_IntArray*a){SP_GC_ROOT(a);if (SP_UNLIKELY(!a)) sp_nil_recv("sort!");if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_INT_ARRAY);return;}if(ia_sort_nils(a))return;sp_isort(a->data+a->start,a->len);}
 /* The Array set operations (uniq, uniq!, &, |, -, intersect?) asked
    include? of a growing or a foreign array once per element: quadratic, so
    `uniq` of 100,000 Integers made billions of compares where CRuby, which
@@ -648,7 +714,7 @@ void sp_FloatArray_rotate_bang(sp_FloatArray*a,sp_int n){SP_GC_ROOT(a);
 }
 static int _sp_float_cmp(const void*a,const void*b){sp_float va=*(const sp_float*)a,vb=*(const sp_float*)b;return(va>vb)-(va<vb);}
 static int fa_sort_nils(sp_FloatArray*a){if(!a->nilbits)return 0;sp_FloatArray_nil_cmp_ck(a);return sp_FloatArray_has_nil(a);}
-void sp_FloatArray_sort_bang(sp_FloatArray*a){SP_GC_ROOT(a);if (SP_UNLIKELY(!a)) sp_nil_recv("sort!");if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_FLT_ARRAY);return;}if(fa_sort_nils(a))return;qsort(a->data,a->len,sizeof(sp_float),_sp_float_cmp);}
+void sp_FloatArray_sort_bang(sp_FloatArray*a){SP_GC_ROOT(a);if (SP_UNLIKELY(!a)) sp_nil_recv("sort!");if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_FLT_ARRAY);return;}if(fa_sort_nils(a))return;sp_fsort(a->data,a->len);}
 void sp_FloatArray_shuffle_bang(sp_FloatArray*a){SP_GC_ROOT(a);if (SP_UNLIKELY(!a)) sp_nil_recv("shuffle!");if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_FLT_ARRAY);return;}if(SP_UNLIKELY(a->nilbits)){sp_ofloat*p=fa_pack(a);for(sp_int i=a->len-1;i>0;i--){sp_int j=sp_krand_below(i+1);sp_ofloat t=p[i];p[i]=p[j];p[j]=t;}fa_unpack(a,p,a->len);return;}for(sp_int i=a->len-1;i>0;i--){sp_int j=sp_krand_below(i+1);sp_float t=a->data[i];a->data[i]=a->data[j];a->data[j]=t;}}
 sp_FloatArray*sp_FloatArray_dup(sp_FloatArray*a){if(!a)return NULL;SP_GC_ROOT(a);sp_FloatArray*b=sp_FloatArray_new();sp_FloatArray_replace(b,a);return b;}
 sp_FloatArray*sp_FloatArray_sort(sp_FloatArray*a){SP_GC_ROOT(a);if (SP_UNLIKELY(!a)) sp_nil_recv("sort");sp_FloatArray*b=sp_FloatArray_dup(a);sp_FloatArray_sort_bang(b);return b;}

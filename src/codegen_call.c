@@ -33200,6 +33200,10 @@ int emit_method_tramp_fn(Compiler *c, Scope *tm, int shift, const char *fname,
   Buf mtp_body; memset(&mtp_body, 0, sizeof mtp_body);
   Buf *pb = &mtp_body;
   buf_printf(pb, "static sp_int %s(void *cap, sp_int argc, sp_int *args) {\n", fname);
+  /* the class the call passes first, named before any default is spelled: a default of the method that reads
+     its receiving class (`v = new`) spells the class this names (cmethod_cls_token) */
+  Buf clsarg = {0};
+  const char *clslead = emit_cmethod_self_cls_arg(c, (int)(tm - c->scopes), self_cls, &clsarg);
   if (bind && tm->rest_idx >= 0) buf_puts(pb, "  SP_GC_SAVE();\n");
   buf_puts(pb, "  sp_BoundMethod *_m = (sp_BoundMethod *)cap; (void)_m; (void)argc; (void)args;\n");
   /* the block a `.call { }` or `.call(&b)` gave this call (_sp_proc_blk),
@@ -33545,8 +33549,6 @@ int emit_method_tramp_fn(Compiler *c, Scope *tm, int shift, const char *fname,
   /* an inherited class method reading its class runs on the one the
      Method was taken from (`Sub.method(:make).to_proc`): passed first, where
      it had been left out and every argument read one slot off */
-  Buf clsarg = {0};
-  const char *clslead = emit_cmethod_self_cls_arg(c, (int)(tm - c->scopes), self_cls, &clsarg);
   if (clsarg.len) buf_puts(&selfless, np > shift || takes_blk ? "sp_Class, " : "sp_Class");
   if (np > shift || takes_blk) {
     for (int k = shift; k < np; k++) {

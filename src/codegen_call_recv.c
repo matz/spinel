@@ -15925,7 +15925,7 @@ static TyKind emit_face_arm(Compiler *c, int id, unsigned kind, unsigned flags, 
        its own bytes, and setbyte wrote them before the write-back raised. */
     case PF_STRING:
       buf_printf(g_pre, "const char *%s = sp_poly_recv_s%s(%s, \"%s\"); SP_GC_ROOT(%s);\n",
-                 tn.s, (flags & PF_MUT) ? "_mut" : "", rs, name, tn.s);
+                 tn.s, (flags & PF_MUT) && !(flags & PF_SAME_OK) ? "_mut" : "", rs, name, tn.s);
       break;
     case PF_INT:
       /* The block iterators check: `"x".times { }` is a NoMethodError in

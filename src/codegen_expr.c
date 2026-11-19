@@ -92,7 +92,7 @@ int interp_is_literal_fold(const NodeTable *nt, int id) {
    one heap string per part and ran an sp_sprintf pass over them.)
    The plan is shared with the append form (`s << "..#{x}.."`), which
    writes the same parts into the receiver instead of a fresh string. */
-enum { WK_LIT, WK_INT, WK_BOOL, WK_NIL, WK_DYN };
+enum { WK_LIT, WK_INT, WK_BOOL, WK_NIL, WK_DYN, WK_SEGMENT };
 /* neutral: the temp of a boxed part's flag, set when its value was no
    String, or -1; such a part takes no part in the result's encoding */
 typedef struct { int kind; int tmp; int lit_off; int lit_esc_len; long lit_len; int plain; int neutral; } WPart;
@@ -113,7 +113,7 @@ static void interp_read_held_bytes(Buf *out, int target, int handle) {
              target, handle, target, target, target);
 }
 
-static void interp_plan(Compiler *c, int id, InterpPlan *pl) {
+static void interp_plan(Compiler *c, int id, InterpPlan *pl, int tail) {
   const NodeTable *nt = c->nt;
   int n = 0, fcap = 0;
   int *flat = NULL;
@@ -143,6 +143,11 @@ static void interp_plan(Compiler *c, int id, InterpPlan *pl) {
     int pid = parts[k];
     NodeKind pk = nt_kind(nt, pid);
     if (pk == NK_InterpolatedStringNode) {
+      if (pid == tail) {
+        wp[nwp++] = (WPart){ .kind = WK_SEGMENT, .tmp = -1, .neutral = -1 };
+        ndyn_or_scalar++;
+        continue;
+      }
       /* Finish an adjacent segment before evaluating the following one. */
       Buf segment = {0};
       emit_interp(c, pid, &segment);
@@ -541,60 +546,32 @@ static void interp_plan(Compiler *c, int id, InterpPlan *pl) {
   pl->single_expression = n == 1 && nt_kind(nt, parts[0]) == NK_EmbeddedStatementsNode;
 }
 
-void emit_interp(Compiler *c, int id, Buf *b) {
-  InterpPlan pl; memset(&pl, 0, sizeof pl);
-  interp_plan(c, id, &pl);
-  WPart *wp = pl.wp; int nwp = pl.nwp, ndyn_or_scalar = pl.ndyn_or_scalar;
-  Buf lits = pl.lits, decls = pl.decls; long fixed_cap = pl.fixed_cap; int *flat = pl.flat;
+static void interp_emit_cap(Buf *b, const InterpPlan *pl) {
+  buf_printf(b, "%ldUL", pl->fixed_cap);
+  for (int k = 0; k < pl->nwp; k++)
+    if (pl->wp[k].kind == WK_DYN) buf_printf(b, " + _l%d", pl->wp[k].tmp);
+}
 
-  if (ndyn_or_scalar == 0) {
-    /* adjacent literals ("a" "b") fold to one literal: frozen per the
-       InterpolatedStringNode's own file pragma flag. A frozen fold is the
-       same object as the literal of its bytes, with the full static header
-       -- the bare "\xf1" prefix promises an sp_str_hdr that would not exist
-       (#1749 family). */
-    if (nt_int(c->nt, id, "fzl", 0)) {
-      size_t raw3 = 0;
-      for (int k = 0; k < nwp; k++) raw3 += (size_t)wp[k].lit_len;
-      Buf e; memset(&e, 0, sizeof e);
-      for (int k = 0; k < nwp; k++)
-        buf_printf(&e, "%.*s", wp[k].lit_esc_len, (lits.p ? lits.p : "") + wp[k].lit_off);
-      emit_frozen_literal(b, e.p, e.len, raw3);
-      free(e.p);
-    }
-    else {
-      buf_puts(b, "(&(\"\\xff\" \"");
-      for (int k = 0; k < nwp; k++)
-        buf_printf(b, "%.*s", wp[k].lit_esc_len, (lits.p ? lits.p : "") + wp[k].lit_off);
-      buf_puts(b, "\")[1])");
-    }
-    free(lits.p); free(decls.p); free(wp); free(flat);
-    return;
-  }
+static int interp_emit_parts(Buf *b, const InterpPlan *pl, const InterpPlan *tail, int rid, int wpid) {
+  const WPart *wp = pl->wp;
+  int nwp = pl->nwp;
+  Buf lits = pl->lits;
 
-  int rid = ++g_tmp, wpid = ++g_tmp;
-  buf_printf(b, "({ %s", decls.p ? decls.p : "");
-  buf_printf(b, "size_t _cap%d = %ldUL", rid, fixed_cap);
-  for (int k = 0; k < nwp; k++)
-    if (wp[k].kind == WK_DYN) buf_printf(b, " + _l%d", wp[k].tmp);
-  buf_puts(b, "; ");
-  buf_printf(b, "char *_t%d = sp_str_alloc_raw(_cap%d + 1); ", rid, rid);
-  buf_printf(b, "char *_t%d = _t%d; ", wpid, rid);
   /* The result's encoding, part by part as CRuby picks it: the first part's,
      taken over by a later part's high bytes (sp_str_enc_step). Only a String
      part can be binary; without one the result is UTF-8. */
   int eid = -1;
-  for (int k = 0; k < nwp && eid < 0; k++) if (wp[k].kind == WK_DYN) eid = ++g_tmp;
+  for (int k = 0; k < nwp && eid < 0; k++) if ((wp[k].kind == WK_DYN || wp[k].kind == WK_SEGMENT)) eid = ++g_tmp;
   /* A leading literal sets the initial encoding. A literal consisting of
      one interpolation has an implicit empty literal as its first part. */
   int lead = -1;
   for (int k = 0; k < nwp && lead < 0; k++)
-    if (wp[k].kind == WK_DYN || wp[k].kind == WK_LIT) {
+    if (wp[k].kind == WK_DYN || wp[k].kind == WK_SEGMENT || wp[k].kind == WK_LIT) {
       if (wp[k].kind == WK_LIT && wp[k].lit_len == 0) continue;
       lead = k;
     }
   int lead_lit = lead >= 0 && wp[lead].kind == WK_LIT;
-  if (eid >= 0) buf_printf(b, "int _e%d = %d; ", eid, lead_lit || pl.single_expression ? 0 : -1);
+  if (eid >= 0) buf_printf(b, "int _e%d = %d; ", eid, lead_lit || pl->single_expression ? 0 : -1);
   for (int k = 0; k < nwp; k++) {
     if (eid >= 0 && wp[k].kind == WK_LIT && wp[k].lit_len > 0 && !(lead_lit && k == lead))
       buf_printf(b, "_e%d = sp_str_enc_step_i(_e%d, _t%d, (size_t)(_t%d - _t%d), \"%.*s\", %ld, 0); ",
@@ -620,16 +597,84 @@ void emit_interp(Compiler *c, int id, Buf *b) {
         break;
       case WK_NIL:
         break;
+      case WK_SEGMENT: {
+        int segment = ++g_tmp;
+        buf_printf(b, "char *_t%d = _t%d; ", segment, wpid);
+        int enc = interp_emit_parts(b, tail, NULL, segment, wpid);
+        buf_printf(b, "_e%d = sp_str_enc_step_i(_e%d, _t%d, (size_t)(_t%d - _t%d), _t%d, (size_t)(_t%d - _t%d), ",
+                   eid, eid, rid, segment, rid, segment, wpid, segment);
+        if (enc < 0) buf_puts(b, "0); ");
+        else buf_printf(b, "_e%d == 1); ", enc);
+        break;
+      }
       default:
         buf_printf(b, "memcpy(_t%d, _t%d, _l%d); _t%d += _l%d; ",
                    wpid, wp[k].tmp, wp[k].tmp, wpid, wp[k].tmp);
         break;
     }
   }
+  return eid;
+}
+
+void emit_interp(Compiler *c, int id, Buf *b) {
+  /* The left segment is already complete before the right runs. For a
+     pair the right's bytes can go straight into the final allocation.
+     Its encoding is decided over those bytes before the two encodings
+     are combined. */
+  const NodeTable *nt = c->nt;
+  int n = 0;
+  const int *parts = nt_arr(nt, id, "parts", &n);
+  int tail_id = n == 2 && nt_kind(nt, parts[1]) == NK_InterpolatedStringNode &&
+                !interp_is_literal_fold(nt, parts[1]) ? parts[1] : -1;
+  InterpPlan pl = {0}, tail = {0};
+  interp_plan(c, id, &pl, tail_id);
+  if (tail_id >= 0) interp_plan(c, tail_id, &tail, -1);
+  WPart *wp = pl.wp;
+  int nwp = pl.nwp, ndyn_or_scalar = pl.ndyn_or_scalar;
+  Buf lits = pl.lits;
+
+  if (ndyn_or_scalar == 0) {
+    /* adjacent literals ("a" "b") fold to one literal: frozen per the
+       InterpolatedStringNode's own file pragma flag. A frozen fold is the
+       same object as the literal of its bytes, with the full static header
+       -- the bare "\xf1" prefix promises an sp_str_hdr that would not exist
+       (#1749 family). */
+    if (nt_int(c->nt, id, "fzl", 0)) {
+      size_t raw3 = 0;
+      for (int k = 0; k < nwp; k++) raw3 += (size_t)wp[k].lit_len;
+      Buf e; memset(&e, 0, sizeof e);
+      for (int k = 0; k < nwp; k++)
+        buf_printf(&e, "%.*s", wp[k].lit_esc_len, (lits.p ? lits.p : "") + wp[k].lit_off);
+      emit_frozen_literal(b, e.p, e.len, raw3);
+      free(e.p);
+    }
+    else {
+      buf_puts(b, "(&(\"\\xff\" \"");
+      for (int k = 0; k < nwp; k++)
+        buf_printf(b, "%.*s", wp[k].lit_esc_len, (lits.p ? lits.p : "") + wp[k].lit_off);
+      buf_puts(b, "\")[1])");
+    }
+    interp_plan_free(&pl);
+    return;
+  }
+
+  int rid = ++g_tmp, wpid = ++g_tmp;
+  buf_printf(b, "({ %s%s", pl.decls.p ? pl.decls.p : "", tail.decls.p ? tail.decls.p : "");
+  buf_printf(b, "size_t _cap%d = ", rid);
+  interp_emit_cap(b, &pl);
+  if (tail_id >= 0) {
+    buf_puts(b, " + ");
+    interp_emit_cap(b, &tail);
+  }
+  buf_puts(b, "; ");
+  buf_printf(b, "char *_t%d = sp_str_alloc_raw(_cap%d + 1); ", rid, rid);
+  buf_printf(b, "char *_t%d = _t%d; ", wpid, rid);
+  int eid = interp_emit_parts(b, &pl, tail_id >= 0 ? &tail : NULL, rid, wpid);
   buf_printf(b, "*_t%d = 0; sp_str_set_len(_t%d, (size_t)(_t%d - _t%d)); ", wpid, rid, wpid, rid);
   if (eid >= 0) buf_printf(b, "if (_e%d == 1) sp_str_mark_binary(_t%d); ", eid, rid);
   buf_printf(b, "(const char *)_t%d; })", rid);
-  free(lits.p); free(decls.p); free(wp); free(flat);
+  interp_plan_free(&pl);
+  interp_plan_free(&tail);
 }
 
 /* `s << "lit #{x} lit"`: the interpolation's parts appended to `s` one by
@@ -649,7 +694,7 @@ void emit_interp(Compiler *c, int id, Buf *b) {
 int emit_interp_append(Compiler *c, int id, const char *open, const char *open_n, Buf *b, int indent) {
   if (interp_has_segments(c->nt, id)) return 0;
   InterpPlan pl; memset(&pl, 0, sizeof pl);
-  interp_plan(c, id, &pl);
+  interp_plan(c, id, &pl, -1);
   if (pl.ndyn_or_scalar == 0) { interp_plan_free(&pl); return 0; }
   emit_indent(b, indent);
   buf_printf(b, "{ %s\n", pl.decls.p ? pl.decls.p : "");

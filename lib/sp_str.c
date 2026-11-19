@@ -81,9 +81,19 @@ const char *sp_bytestr(const char *hay, size_t hn, const char *need, size_t nn) 
 int sp_utf8_set_has(const uint32_t*cps,size_t n,uint32_t cp){for(size_t i=0;i<n;i++)if(cps[i]==cp)return 1;return 0;}
 /* Case-insensitive byte comparison over the REAL lengths: stopping at the
    first NUL made two strings differing only after one compare equal (#3471). */
+/* the eight bytes of w with 'A'..'Z' made lowercase, the rest as they are
+   (the C locale's tolower, which no setlocale changes here) */
+static inline uint64_t sp_ascii_fold8(uint64_t w){
+  const uint64_t ones=0x0101010101010101ull,high=0x8080808080808080ull;
+  uint64_t x=w&~high,ge_a=x+(0x80-'A')*ones,gt_z=x+(0x80-'Z'-1)*ones;
+  return w|((ge_a&~gt_z&~w&high)>>2);
+}
+/* casecmp: eight bytes at a time while their folded words agree, the bytes
+   of the first word that differs one by one for the order */
 sp_int sp_str_casecmp(const char*a,const char*b){if(!a)sp_nil_recv("casecmp");if(!b)return 1;
-  size_t la=sp_str_byte_len(a),lb=sp_str_byte_len(b),n=la<lb?la:lb;
-  for(size_t i=0;i<n;i++){int ca=tolower((unsigned char)a[i]),cb=tolower((unsigned char)b[i]);if(ca!=cb)return ca<cb?-1:1;}
+  size_t la=sp_str_byte_len(a),lb=sp_str_byte_len(b),n=la<lb?la:lb,i=0;
+  for(;i+8<=n;i+=8){uint64_t wa,wb;memcpy(&wa,a+i,8);memcpy(&wb,b+i,8);if(wa!=wb&&sp_ascii_fold8(wa)!=sp_ascii_fold8(wb))break;}
+  for(;i<n;i++){int ca=tolower((unsigned char)a[i]),cb=tolower((unsigned char)b[i]);if(ca!=cb)return ca<cb?-1:1;}
   return la==lb?0:(la<lb?-1:1);}
 /* ASCII-8BIT has no invalid byte sequence -- every byte is a character -- so a
    BINARY string is valid by definition and never walked. On the text side the

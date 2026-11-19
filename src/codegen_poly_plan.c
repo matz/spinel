@@ -1962,7 +1962,8 @@ void emit_poly_prearms0(Compiler *c, int id, const char *name, const PolySpecial
   int is_lengthlike = ps->lengthlike, is_empty = ps->empty, is_class_named = ps->class_named;
   int is_class_reflect = ps->class_reflect, is_ostruct = ps->ostruct, is_poly_to_a = ps->poly_to_a;
   int is_io_rewind = ps->io_rewind;
-  int str_reopen_owns = cplan_poly_string_arm(c, id, name) != CP_STR_BUILTIN;
+  int sci = comp_core_class(c, CORE_STRING);
+  int str_reopen_owns = sci >= 0 && call_target(c, id, sci, name, 0, NULL) >= 0;
   /* When the dispatch result feeds a poly context, tr is sp_RbVal, so the
      length-like answer is boxed */
   /* ...and an oint result slot (plan_slot_oint) takes it lifted */
@@ -3363,8 +3364,8 @@ void poly_specials_n(Compiler *c, int id, const char *name, int argc, const int 
   s->straset = is_straset;
   s->strsplit = is_strsplit;
   s->str_arm = (is_strdel || is_strpart || is_strencode || is_strsplit ||
-                is_strsetop_n || is_ppack || is_include || is_index || is_straset)
-             ? cplan_poly_string_arm(c, id, name) : CP_STR_NONE;
+                is_strsetop_n || is_index || is_straset)
+             ? cplan_poly_string_arm(c, id, name) : CP_STR_BUILTIN;
   s->pred = is_pred;
   s->strencode = is_strencode;
   s->strftime = is_strftime;
@@ -3625,7 +3626,7 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
   /* unpack1 on a TAG_STR receiver: its own poly arm stands down when a user
      class owns the name, so the String case needs one here -- and the old
      fallthrough read the receiver as a char * whatever it held. */
-  if (str_builtin && is_ppack && sp_streq(name, "unpack1")) {
+  if (is_ppack && sp_streq(name, "unpack1")) {
     if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_UNPACK1, -1, TY_UNKNOWN, PC_SAME);
     Buf ub; memset(&ub, 0, sizeof ub);
     /* the format read as the pack arm below reads it: a boxed argument is
@@ -3652,15 +3653,15 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
      its argument must be a String: another class is CRuby's TypeError,
      and a boxed one is checked at run time. */
   if (is_include) if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_INCLUDE, -1, TY_UNKNOWN, PC_SAME);
-  if (str_builtin && is_include && !sp_streq(name, "include?"))
+  if (is_include && !sp_streq(name, "include?"))
     { buf_puts(b, "if ("); emit_poly_str_guard(c, tv, name, b);
       buf_printf(b, ") sp_raise_poly_nomethod(\"%s\", _t%d);\nelse ", name, tv); }
-  else if (str_builtin && is_include && comp_ntype(c, argv[0]) == TY_STRING)
+  else if (is_include && comp_ntype(c, argv[0]) == TY_STRING)
     { buf_puts(b, "if ("); emit_poly_str_guard(c, tv, name, b);
       buf_printf(b, ") { _t%d = %ssp_str_include(sp_poly_recv_s(_t%d, \"include?\"), %s)%s; }\nelse ",
                  tr, ret == TY_POLY ? "sp_box_bool(" : "", tv, strarg,
                  ret == TY_POLY ? ")" : ""); }
-  else if (str_builtin && is_include) {
+  else if (is_include) {
     Buf ab6; memset(&ab6, 0, sizeof ab6);
     char tn6[24]; snprintf(tn6, sizeof tn6, "_t%d", atmp[0]);
     if (atmp_ty[0] == TY_POLY) buf_puts(&ab6, tn6);

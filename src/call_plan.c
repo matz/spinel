@@ -9563,8 +9563,7 @@ static void cpoly_prearms_n(Compiler *c, int id, const char *name, int argc, con
   if (ps.cover) cpoly_family(p, cap, PB_COVER);
   if (ps.ctryconv) cpoly_family(p, cap, PB_TRY_CONVERT);
   if (ps.gcdlcm) cpoly_family(p, cap, PB_GCDLCM);
-  if (ps.str_arm == CP_STR_BUILTIN && ps.ppack && sp_streq(name, "unpack1"))
-    cpoly_family(p, cap, PB_UNPACK1);
+  if (ps.ppack && sp_streq(name, "unpack1")) cpoly_family(p, cap, PB_UNPACK1);
   if (ps.include) cpoly_family(p, cap, PB_INCLUDE);
   if (ps.str_arm == CP_STR_BUILTIN) {
     if (ps.strdel && (ret == TY_POLY || ret == TY_STRING)) cpoly_family(p, cap, PB_STR_DELETE);
@@ -9602,7 +9601,8 @@ static void cpoly_prearms_n(Compiler *c, int id, const char *name, int argc, con
   if (callable && ((!ps.has_splat_arg && (ps.kw_pos || kwh >= 0)) || splat_last))
     cpoly_family(p, cap, PB_CALLABLE);
   if (ps.kw_pos && ps.straset && ps.str_arm == CP_STR_BUILTIN) cpoly_family(p, cap, PB_STR_ASET);
-  if (ps.kw_pos && !ps.has_splat_arg && cpoly_str_trial(c, id, name, argc, argv, atmp_ty, ret, p))
+  if (ps.kw_pos && !ps.has_splat_arg && ps.str_arm == CP_STR_BUILTIN &&
+      cpoly_str_trial(c, id, name, argc, argv, atmp_ty, ret, p))
     cpoly_trial(p, cap, PT_STR);
   cpoly_cases_n(c, id, name, argc, argv, ret, atmp_ty, &ps, splat_a, p, cap);
   if (cplan_poly_has_family(p, PB_ND_GENERIC) && !cplan_poly_has_family(p, PB_ND_REPLACE) &&
@@ -9805,7 +9805,7 @@ int cplan_poly_has_family(const PolyPlan *p, int fam) {
 static int cpoly_str_trial(Compiler *c, int id, const char *name, int argc, const int *argv,
                            const TyKind *atmp_ty, TyKind ret, const PolyPlan *p) {
   if (!(poly_string_read_p(name) || (argc == 1 && sp_streq(name, "to_i")))) return 0;
-  if (nt_ref(c->nt, id, "block") >= 0 || cplan_poly_string_arm(c, id, name) != CP_STR_BUILTIN) return 0;
+  if (nt_ref(c->nt, id, "block") >= 0) return 0;
   for (int a = 0; a < argc; a++)
     if (subtree_has_side_effect(c, argv[a]) && comp_ntype(c, argv[a]) != atmp_ty[a]) return 0;
   TyKind bt = c->poly_builtin_ty && id < c->node_cap ? c->poly_builtin_ty[id] : TY_UNKNOWN;
@@ -9842,7 +9842,8 @@ static void cpoly_prearms0(Compiler *c, int id, const char *name, const PolySpec
   if (blockless && sp_streq(name, "puts")) cpoly_family(p, cap, PB_IO_PUTS);
   if (blockless && cpoly_name_in(name, ioz)) cpoly_family(p, cap, PB_IOZ);
   if (blockless && cpoly_name_in(name, reduce)) cpoly_family(p, cap, PB_REDUCE);
-  if (cplan_poly_string_arm(c, id, name) != CP_STR_BUILTIN) return;
+  int sci = comp_core_class(c, CORE_STRING);
+  if (sci >= 0 && call_target(c, id, sci, name, 0, NULL) >= 0) return;
   int fits = cpoly_name_in(name, strt_s) ? ret == TY_POLY || ret == TY_STRING
            : sp_streq(name, "bytes") ? ret == TY_POLY || ret == TY_INT_ARRAY
            : sp_streq(name, "chars") ? ret == TY_POLY || ret == TY_STR_ARRAY : 0;

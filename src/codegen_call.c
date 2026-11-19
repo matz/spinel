@@ -8588,7 +8588,6 @@ static int emit_poly_str_prearm(Compiler *c, int id, int recv, const char *name,
   /* `to_i(base)` is String's alone: the radix form, which the other
      builtins' zero-argument to_i refuses */
   if (recv < 0 || !name || !(poly_string_read_p(name) || (argc == 1 && sp_streq(name, "to_i")))) return 0;
-  if (cplan_poly_string_arm(c, id, name) != CP_STR_BUILTIN) return 0;
   if (nt_ref(nt, id, "block") >= 0) return 0;
   if (argc > 0 && (!atmp || !atmp_ty)) return 0;
   if (g_pd_skip == id || g_n_argov + argc + 1 > MAX_ARG_OVERRIDE) return 0;

@@ -1101,7 +1101,6 @@ static inline int pa_class_value_trial(const PolyArm *a) {
 /* how the dispatch holds its receiver and keys its switch */
 enum {
   PPF_ROOT     = 1,   /* the receiver temp is rooted: an arm can allocate */
-  PPF_DEREF    = 2,   /* read through sp_poly_strbuf_deref: a String arm reads the value */
   PPF_KEY_CLS0 = 4,   /* class 0 has an arm: a non-object value is kept off it */
   PPF_KEY_PRIM = 8,   /* a primitive reopening has an arm: the tag maps to its class */
   PPF_KEY_EXC  = 16,  /* a user exception class answers: the exception is re-keyed */
@@ -1177,6 +1176,9 @@ int cplan_string_missing(Compiler *c, int id, const char *name, int *hook, int *
 /* Does this call's String arm reach the original builtin before a reopen,
    or after a guard has excluded the undef? */
 int cplan_string_builtin_fallback(Compiler *c, int id, const char *name);
+/* The base String entry of a boxed set operation. */
+typedef enum { CP_STR_SETOP_NONE, CP_STR_SETOP_BUILTIN, CP_STR_SETOP_UNDEF } StringSetopArm;
+StringSetopArm cplan_string_setop_arm(Compiler *c, int id, const char *name);
 int cplan_super_needs_method_missing(Compiler *c, int id);
 int cplan_cmethod_visible(Compiler *c, int id, int ci, const char *name);
 /* The visibility of the method call id binds on class ci's chain (its class

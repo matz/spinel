@@ -9567,7 +9567,7 @@ static void cpoly_prearms_n(Compiler *c, int id, const char *name, int argc, con
   if (ps.include) cpoly_family(p, cap, PB_INCLUDE);
   if (ps.strdel && (ret == TY_POLY || ret == TY_STRING)) cpoly_family(p, cap, PB_STR_DELETE);
   if (ps.strpart && (ret == TY_POLY || ret == TY_STR_ARRAY)) cpoly_family(p, cap, PB_STR_PARTITION);
-  if (ps.strsetop_n &&
+  if (ps.strsetop_n && cplan_string_setop_arm(c, id, name) != CP_STR_SETOP_NONE &&
       (sp_streq(name, "count") ? ret == TY_POLY || ret == TY_INT : ret == TY_POLY || ret == TY_STRING))
     cpoly_family(p, cap, PB_STR_SETOP);
   if (ps.pstore && ret == TY_POLY) cpoly_family(p, cap, PB_STORE);
@@ -9954,20 +9954,7 @@ static void cpoly_flags0(Compiler *c, int id, const char *name, PolyPlan *p, Pol
   if (ps.ostruct && (p->ret == TY_UNKNOWN || p->ret == TY_VOID || p->ret == TY_NIL)) p->ret = TY_POLY;
   int root = ps.ncall_arm > 0 || ps.lengthlike || ps.empty || ps.pred || ps.class_named ||
              ps.class_reflect || ps.ostruct || ps.io_rewind || ps.poly_to_a || ps.poly_to_h;
-  /* A String mutated in place and then stored is boxed as its
-     shared-mutable handle, which no String arm below reads: the chain
-     built for a name a user class shares answered it with the switch's
-     NoMethodError (#5048). A reading method sees the handle's live
-     string, so it is read through the deref; a mutator, and a question
-     about the object itself rather than its value, keep the handle. */
-  /* Only a name String answers (the face table's String rows, and the
-     length-like and empty? arms above them) builds a String arm, so only
-     those dispatches pay the deref: the hottest one, an attr reader
-     shared by an AST's node classes, never sees a String. */
-  unsigned sface = ty_poly_face_owners(name, 0, nt_ref(c->nt, id, "block") >= 0, 1, 1);
-  int deref = (ps.lengthlike || ps.empty || ((sface & PF_STRING) && !(sface & PF_MUT))) &&
-              !sp_str_mutator(name, SP_MUT_LOCAL);
-  p->flags = (root ? PPF_ROOT : 0) | (deref ? PPF_DEREF : 0) |
+  p->flags = (root ? PPF_ROOT : 0) |
              (poly_key_cls0(c, id, name, 0, -1, 0, -1) ? PPF_KEY_CLS0 : 0) |
              (poly_key_prim(c, id, name, 0, -1, 0, -1) ? PPF_KEY_PRIM : 0) |
              (cpoly_key_clsv(c, id, name) ? PPF_KEY_CLSV : 0) |
@@ -10283,6 +10270,14 @@ int cplan_string_builtin_fallback(Compiler *c, int id, const char *name) {
   int state = elab_method_at(c, cls, name, 0, elab_point_of(c, id), &d);
   if (framed) elab_plan_leave(c);
   return state == ELAB_NO && !d;
+}
+StringSetopArm cplan_string_setop_arm(Compiler *c, int id, const char *name) {
+  int cls = comp_core_class(c, CORE_STRING);
+  if (cls < 0 || cplan_string_builtin_fallback(c, id, name)) return CP_STR_SETOP_BUILTIN;
+  int undef = cplan_undef_at(c, id, cls, name);
+  if (undef < 0) undef = cplan_undef_before(c, id, cls, name) || cplan_undef_stops(c, id, cls, name);
+  if (undef) return cplan_has_method_missing(c, id, cls, 0) ? CP_STR_SETOP_NONE : CP_STR_SETOP_UNDEF;
+  return call_answers(c, id, cls, name, 0, NULL) ? CP_STR_SETOP_NONE : CP_STR_SETOP_BUILTIN;
 }
 /* The super a method's body is, unconditionally (`super`, `super(n, *a)`):
    its only statement; -1 for any other body */

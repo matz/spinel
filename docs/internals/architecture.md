@@ -74,10 +74,11 @@ set to `TY_STRBUF`. Semantic inference reads the result as `TY_STRING`.
 The call plan gives the renderer and Repr the same selected producer. Boxed
 dispatch arms use the row they emitted to box the result. An override-capable
 display conversion still returns its actual boxed value.
-A boxed String result carries the `sp_String` handle, including frozen
-literals and the objects retained by Hashes, Enumerators, and callbacks.
-Byte comparisons and private conversion buffers borrow the payload when
-they consume it.
+A boxed String carries the `sp_String *` handle in an `SP_TAG_OBJ` box
+with class ID `SP_BUILTIN_STRBUF`. This includes frozen literals and the
+objects retained by Hashes, Enumerators, and callbacks. Byte comparisons
+and private conversion buffers can borrow its payload through
+`sp_rbval_string_bytes`.
 The ENV read paths that return a String default or a missing-key block's
 String use the same result view. The selected branch hands back its
 String handle directly.

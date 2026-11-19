@@ -196,7 +196,6 @@ int sp_cext_type(sp_RbVal v, int (*data_class)(int)) {
   case SP_TAG_BIGINT: return T_BIGNUM;
   case SP_TAG_FLT: return T_FLOAT;
   case SP_TAG_SYM: return T_SYMBOL;
-  case SP_TAG_STR: return T_STRING;
   case SP_TAG_CLASS:
     return sp_class_is_module_fn && sp_class_is_module_fn((sp_Class){v.cls_id, NULL}) ? T_MODULE : T_CLASS;
   case SP_TAG_OBJ:
@@ -358,7 +357,7 @@ sp_RbVal sp_cext_widen_array(sp_RbVal v) {
   SP_GC_ROOT_RBVAL(v);
   sp_PolyArray *copy = sp_poly_to_poly_array(v);
   SP_GC_ROOT(copy);
-  return sp_box_poly_array(sp_cext_share_new_array(copy));
+  return sp_box_poly_array(copy);
 }
 void sp_cext_hash_set(sp_RbVal hash, sp_RbVal key, sp_RbVal value) {
   if(hash.tag != SP_TAG_OBJ || hash.cls_id != SP_BUILTIN_POLY_POLY_HASH)
@@ -436,12 +435,6 @@ void sp_poly_puts(sp_RbVal v)
 {
   switch (v.tag) {
     case SP_TAG_INT: printf("%lld\n", (long long)v.v.i); break;
-    case SP_TAG_STR: if (v.v.s) {
-        size_t _n = sp_str_byte_len(v.v.s);
-        fwrite(v.v.s, 1, _n, stdout);
-        if (!_n || v.v.s[_n - 1] != '\n') putchar('\n');
-      }
-      else putchar('\n'); break;
     case SP_TAG_FLT: { fputs(sp_float_to_s(v.v.f), stdout); putchar('\n'); break; }
     case SP_TAG_BOOL: puts(v.v.b ? "true" : "false"); break;
     case SP_TAG_NIL: putchar('\n'); break;
@@ -556,7 +549,6 @@ static const char *sp_poly_to_s_impl(sp_RbVal v, size_t *length)
 {
   switch (v.tag) {
     case SP_TAG_INT: return sp_int_to_s(v.v.i);
-    case SP_TAG_STR: return sp_display_counted_bytes(v.v.s ? v.v.s : sp_str_frozen_empty, length);
     case SP_TAG_FLT: return sp_float_to_s(v.v.f);
     case SP_TAG_BOOL: return v.v.b ? sp_str_frozen_true : sp_str_frozen_false;
     case SP_TAG_NIL: return sp_str_frozen_empty;
@@ -662,7 +654,6 @@ static const char *sp_poly_class_name_arm(sp_RbVal v, int *id)
   *id = -1;
   switch (v.tag) {
     case SP_TAG_INT: return (*id = SP_BCLS_INTEGER, SPL("Integer"));
-    case SP_TAG_STR: return (*id = SP_BCLS_STRING, SPL("String"));
     case SP_TAG_FLT: return (*id = SP_BCLS_FLOAT, SPL("Float"));
     case SP_TAG_BOOL: return v.v.b ? (*id = SP_BCLS_TRUECLASS, SPL("TrueClass")) : (*id = SP_BCLS_FALSECLASS, SPL("FalseClass"));
     case SP_TAG_NIL: return (*id = SP_BCLS_NILCLASS, SPL("NilClass"));
@@ -898,7 +889,6 @@ const char *sp_poly_inspect(sp_RbVal v)
 {
   switch (v.tag) {
     case SP_TAG_INT:  return sp_int_to_s(v.v.i);
-    case SP_TAG_STR:  return sp_str_inspect(v.v.s);
     case SP_TAG_FLT:  return sp_float_to_s(v.v.f);
     /* true.inspect is true.to_s, the frozen one; nil.inspect is a new "nil" */
     case SP_TAG_BOOL: return v.v.b ? sp_str_frozen_true : sp_str_frozen_false;
@@ -1089,7 +1079,6 @@ sp_RbVal sp_poly_clear(sp_RbVal v)
   /* String#clear on a plain string box: a fresh empty string the receiver
      takes back, as the typed clear builds; a frozen one raises. It answered
      the box untouched. */
-  if (v.tag == SP_TAG_STR) { sp_str_check_mutable(v.v.s); return sp_box_str_new(sp_str_from_bytes("", 0)); }
   sp_poly_coll_chk(v, "clear");
   sp_poly_hash_check_mutable(v);
   if (v.tag != SP_TAG_OBJ || !v.v.p) return v;
@@ -1265,16 +1254,6 @@ sp_RbVal sp_poly_dup(sp_RbVal v, int keep_frozen)
   if (v.tag == SP_TAG_OBJ && v.v.p && v.cls_id == SP_BUILTIN_OPENSTRUCT) {
     v.v.p = sp_OpenStruct_dup((sp_OpenStruct *)v.v.p, keep_frozen);
     return v;
-  }
-  /* String#dup on a boxed string: a copy, unfrozen unless kept. Handed back
-     as-is, a `(fmt || FORMAT).dup` aliased the frozen constant and the next
-     gsub! on the "copy" raised FrozenError (Benchmark::Tms#format). */
-  if (v.tag == SP_TAG_STR && v.v.s) {
-    const char *src = v.v.s;
-    int frozen = keep_frozen && sp_str_is_frozen_val(src);
-    sp_String *d = sp_String_new_unfrozen(src);
-    if (frozen) sp_String_freeze(d);
-    return sp_box_obj(d, SP_BUILTIN_STRBUF);
   }
   /* String#dup/#clone on a boxed shared handle (#6179): a new handle over a
      copy of the bytes, its ASCII-8BIT tag kept and its frozen flag only for
@@ -1641,11 +1620,11 @@ void sp_poly_hash_writeback_ex(sp_RbVal orig, sp_PolyPolyHash *work, int with_de
     sp_int j = work->order[i];
     sp_RbVal k = work->keys[j], v = work->vals[j];
     switch (orig.cls_id) {
-      case SP_BUILTIN_STR_INT_HASH: sp_hash_wb_want(k, SP_TAG_STR, 0, "key", "String keys"); sp_hash_wb_want(v, SP_TAG_INT, 1, "value", "Integer values"); break;   /* a nil value is kept (D3b-ii) */
-      case SP_BUILTIN_STR_STR_HASH: sp_hash_wb_want(k, SP_TAG_STR, 0, "key", "String keys"); sp_hash_wb_want(v, SP_TAG_STR, 1, "value", "String values"); break;
-      case SP_BUILTIN_INT_STR_HASH: sp_hash_wb_want(k, SP_TAG_INT, 0, "key", "Integer keys"); sp_hash_wb_want(v, SP_TAG_STR, 1, "value", "String values"); break;
+      case SP_BUILTIN_STR_INT_HASH: sp_hash_wb_want_string(k, 0, "key", "String keys"); sp_hash_wb_want(v, SP_TAG_INT, 1, "value", "Integer values"); break;   /* a nil value is kept (D3b-ii) */
+      case SP_BUILTIN_STR_STR_HASH: sp_hash_wb_want_string(k, 0, "key", "String keys"); sp_hash_wb_want_string(v, 1, "value", "String values"); break;
+      case SP_BUILTIN_INT_STR_HASH: sp_hash_wb_want(k, SP_TAG_INT, 0, "key", "Integer keys"); sp_hash_wb_want_string(v, 1, "value", "String values"); break;
       case SP_BUILTIN_INT_INT_HASH: sp_hash_wb_want(k, SP_TAG_INT, 0, "key", "Integer keys"); sp_hash_wb_want(v, SP_TAG_INT, 1, "value", "Integer values"); break;
-      case SP_BUILTIN_STR_POLY_HASH: sp_hash_wb_want(k, SP_TAG_STR, 0, "key", "String keys"); break;
+      case SP_BUILTIN_STR_POLY_HASH: sp_hash_wb_want_string(k, 0, "key", "String keys"); break;
       case SP_BUILTIN_SYM_POLY_HASH: sp_hash_wb_want(k, SP_TAG_SYM, 0, "key", "Symbol keys"); break;
       default: return;
     }
@@ -1665,7 +1644,7 @@ void sp_poly_hash_writeback_ex(sp_RbVal orig, sp_PolyPolyHash *work, int with_de
                                            sp_poly_class_name(orig)));
     switch (orig.cls_id) {
       case SP_BUILTIN_STR_INT_HASH: case SP_BUILTIN_INT_INT_HASH: sp_hash_wb_want(work->default_v, SP_TAG_INT, 1, "default", "Integer values"); break;
-      case SP_BUILTIN_STR_STR_HASH: case SP_BUILTIN_INT_STR_HASH: sp_hash_wb_want(work->default_v, SP_TAG_STR, 1, "default", "String values"); break;
+      case SP_BUILTIN_STR_STR_HASH: case SP_BUILTIN_INT_STR_HASH: sp_hash_wb_want_string(work->default_v, 1, "default", "String values"); break;
       default: break;
     }
   }

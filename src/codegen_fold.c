@@ -1874,7 +1874,7 @@ static int emit_gsub_block_split(Compiler *c, int id, int recv, Buf *b) {
   view_unbind(slot);
   if (ok) {
     emit_indent(g_pre, g_indent);
-    buf_printf(g_pre, "if (_t%d.tag == SP_TAG_STR || sp_poly_is_strbuf(_t%d)) {\n", tr, tr);
+    buf_printf(g_pre, "if (sp_rbval_is_string(_t%d) || sp_poly_is_strbuf(_t%d)) {\n", tr, tr);
     if (spre.p) buf_puts(g_pre, spre.p);
     emit_indent(g_pre, g_indent + 1);
     buf_printf(g_pre, "_t%d = sp_box_str_new(%s);\n", tres, sval.p ? sval.p : "sp_str_empty");
@@ -1984,7 +1984,7 @@ int emit_gsub_block_expr(Compiler *c, int id, Buf *b) {
     buf_printf(g_pre, "mrb_regexp_pattern *_t%d = _t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_REGEX ? (mrb_regexp_pattern *)_t%d.v.p : NULL;\n",
                tre, tp, tp, tp);
     emit_indent(g_pre, g_indent);
-    buf_printf(g_pre, "const char *_t%d = _t%d || !(_t%d.tag == SP_TAG_STR || sp_poly_is_strbuf(_t%d)) ? NULL : sp_poly_recv_s(_t%d, \"%s\");\n",
+    buf_printf(g_pre, "const char *_t%d = _t%d || !(sp_rbval_is_string(_t%d) || sp_poly_is_strbuf(_t%d)) ? NULL : sp_poly_recv_s(_t%d, \"%s\");\n",
                tnd, tre, tp, tp, tp, name);
     emit_indent(g_pre, g_indent);
     buf_printf(g_pre, "if (!_t%d && !_t%d) sp_raise_cls(\"TypeError\", sp_sprintf(\"wrong argument type %%s (expected Regexp)\", sp_poly_class_name(_t%d)));\n",
@@ -2181,8 +2181,8 @@ int emit_sum_block_poly_expr(Compiler *c, int id, Buf *b) {
   else snprintf(bits, sizeof bits, "16");
   buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); if (sp_poly_no_enum(_t%d))"
                 " sp_raise_nomethod(sp_nomethod_msg_args(\"sum\", _t%d, %d, &_t%d));"
-                " int _s%d = _t%d.tag == SP_TAG_STR || sp_poly_is_strbuf(_t%d);"
-                " if (_s%d) _t%d = sp_box_int(sp_str_sum_bits(sp_poly_strbuf_deref(_t%d).v.s, %s));"
+                " int _s%d = sp_rbval_is_string(_t%d) || sp_poly_is_strbuf(_t%d);"
+                " if (_s%d) _t%d = sp_box_int(sp_str_sum_bits(sp_rbval_string_bytes(_t%d), %s));"
                 " sp_RbVal _t%d = _s%d ? sp_box_poly_array(sp_PolyArray_new())"
                 " : _t%d.tag == SP_TAG_OBJ && sp_poly_is_array_kind(_t%d.cls_id) ? _t%d"
                 " : sp_box_poly_array(sp_poly_to_a_arr(_t%d)); SP_GC_ROOT_RBVAL(_t%d)",

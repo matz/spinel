@@ -378,7 +378,7 @@ static void emit_method_params_literal(Compiler *c, int mi, Buf *b) {
    parameters by, and the test of each on the receiver _t<n> (twice) */
 static const char *const BAM_RECV_CLS[] = { "String", "Array", "Hash", "Integer", "Float", "Symbol", "Range", NULL };
 static const char *const BAM_RECV_TST[] = {
-  "_t%d.tag == SP_TAG_STR || sp_poly_is_strbuf(_t%d)",
+  "sp_rbval_is_string(_t%d) || sp_poly_is_strbuf(_t%d)",
   "_t%d.tag == SP_TAG_OBJ && sp_poly_is_array_kind(_t%d.cls_id)",
   "_t%d.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(_t%d.cls_id)",
   "_t%d.tag == SP_TAG_INT && _t%d.tag == SP_TAG_INT",

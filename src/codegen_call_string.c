@@ -1603,7 +1603,7 @@ int emit_op_poly_case_options(Compiler *c, const BopCtx *x, Buf *b) {
           buf_printf(b, "}) ? sp_poly_case_conv(_t%d, _t%d.tag == SP_TAG_SYM ? sp_str_%s_turkic_sym : sp_str_%s_turkic, \"%s\") : ({ ",
                      tv, tv, name, name, name);
         }
-        buf_printf(b, "if (_t%d.tag == SP_TAG_STR || _t%d.tag == SP_TAG_SYM || sp_poly_is_strbuf(_t%d)) "
+        buf_printf(b, "if (sp_rbval_is_string(_t%d) || _t%d.tag == SP_TAG_SYM || sp_poly_is_strbuf(_t%d)) "
                       "sp_case_opts_check(%d, (sp_RbVal[]){", tv, tv, tv, argc);
         for (int i = 0; i < argc; i++) {
           if (i) buf_puts(b, ", ");
@@ -1641,8 +1641,8 @@ static int emit_string_slice_poly(Compiler *c, const BopCtx *x, int arg, int two
   arm.rtext = rt; arm.t0 = th;
   int ta = ++g_tmp, tr = ++g_tmp;
   buf_printf(b, " ({ sp_RbVal _t%d = ", ta); emit_boxed(c, arg, b);
-  buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); _t%d = sp_poly_strbuf_deref(_t%d); const char *_t%d; ",
-             ta, ta, ta, tr);
+  buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); const char *_t%d; ",
+             ta, tr);
   int bind, v;
   /* the second argument runs before either form reads the first */
   int b2 = -1;
@@ -1662,8 +1662,8 @@ static int emit_string_slice_poly(Compiler *c, const BopCtx *x, int arg, int two
   str_mut_nil_check(x, th, chk, b);
   buf_puts(b, " ");
   if (!two) {
-    buf_printf(b, "if (_t%d.tag == SP_TAG_STR) { _t%d = ", ta, tr);
-    bind = view_bind(arg, "_t%d.v.s", ta);
+    buf_printf(b, "if (sp_rbval_is_string(_t%d)) { _t%d = ", ta, tr);
+    bind = view_bind(arg, "sp_rbval_string_bytes(_t%d)", ta);
     v = view_push(c, arg, TY_STRING);
     emit_op_string_slice(c, &arm, b);
     view_pop(c, v);

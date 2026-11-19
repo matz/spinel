@@ -18,7 +18,6 @@
  * The mark helpers below dispatch on the tag, so the type lives here
  * rather than in the generated TU. */
 #define SP_TAG_INT 0
-#define SP_TAG_STR 1
 #define SP_TAG_FLT 2
 #define SP_TAG_BOOL 3
 #define SP_TAG_NIL 4
@@ -831,13 +830,12 @@ static inline void sp_mark_string(const char *s) {
      sp_str_sweep instead (#1449). */
 }
 static inline void sp_mark_rbval(sp_RbVal v) {
-  if (v.tag == SP_TAG_STR) sp_mark_string(v.v.s);
   /* A class boxed by name holds its name: a Method's owner is named with a
      fresh copy, and nothing else keeps that copy -- an Array holding the
      class printed the next string allocated in its place. Literal names
      (SPL), and the copy kept for an exception's class (sp_exc_class_name),
      are not heap strings and mark as nothing. */
-  else if (v.tag == SP_TAG_CLASS && v.cls_id == SP_CLASS_BY_NAME) sp_mark_string(v.v.s);
+  if (v.tag == SP_TAG_CLASS && v.cls_id == SP_CLASS_BY_NAME) sp_mark_string(v.v.s);
   else if (v.tag == SP_TAG_OBJ && v.cls_id != SP_BUILTIN_FOREIGN_PTR &&
            v.cls_id != SP_BUILTIN_REGEX && v.cls_id != SP_BUILTIN_ARGF && v.cls_id != SP_BUILTIN_ENV) sp_gc_mark(v.v.p);
   else if (v.tag == SP_TAG_BIGINT) sp_gc_mark(v.v.p);
@@ -850,7 +848,7 @@ static inline void sp_mark_rbval(sp_RbVal v) {
    some live object, marked a cycle longer than needed, which is harmless. */
 static inline void sp_mark_rbval_scratch(sp_RbVal v) {
   const void *h = NULL;
-  if (v.tag == SP_TAG_STR || (v.tag == SP_TAG_CLASS && v.cls_id == SP_CLASS_BY_NAME)) { if (v.v.s && ((unsigned char)v.v.s[-1] | 0x04) == 0xfe) h = ((const sp_str_hdr *)(v.v.s - 1)) - 1; }
+  if (v.tag == SP_TAG_CLASS && v.cls_id == SP_CLASS_BY_NAME) { if (v.v.s && ((unsigned char)v.v.s[-1] | 0x04) == 0xfe) h = ((const sp_str_hdr *)(v.v.s - 1)) - 1; }
   else if ((v.tag == SP_TAG_OBJ && v.cls_id != SP_BUILTIN_FOREIGN_PTR && v.cls_id != SP_BUILTIN_REGEX && v.cls_id != SP_BUILTIN_ARGF && v.cls_id != SP_BUILTIN_ENV) || v.tag == SP_TAG_BIGINT) { if (v.v.p) h = (const char *)v.v.p - sizeof(sp_gc_hdr); }
   /* (a String born inside its handle: the handle's GC object is the slot) */
   if (h && v.tag != SP_TAG_OBJ && v.tag != SP_TAG_BIGINT) {

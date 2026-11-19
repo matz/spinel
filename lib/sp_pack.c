@@ -299,7 +299,6 @@ static const char *pk_val_name(sp_RbVal v) {
   switch (v.tag) {
     case SP_TAG_NIL:  return "nil";
     case SP_TAG_BOOL: return v.v.b ? "true" : "false";
-    case SP_TAG_STR:  return "String";
     case SP_TAG_SYM:  return "Symbol";
     case SP_TAG_OBJ:
       if (v.cls_id >= 0 && sp_obj_cls_name_fn) return sp_obj_cls_name_fn((int)v.cls_id);
@@ -470,7 +469,6 @@ static const char *pk_conv_name(sp_RbVal v) {
    Array is its live bytes; it too read as none. */
 static const char *pk_str_elem_bytes(char spec, sp_RbVal v, size_t *n) {
   *n = 0;
-  if (v.tag == SP_TAG_STR && v.v.s) { *n = sp_str_byte_len(v.v.s); return v.v.s; }
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_STRBUF && v.v.p) {
     sp_String *h = (sp_String *)v.v.p;
     if (!h->data) return "";

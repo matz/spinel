@@ -75,7 +75,7 @@ static int str_render_id(Compiler *c, int v, int form, StrForm *sf) {
   buf_puts(b, "sp_poly_object_id(");
   if (iv.cty == TY_POLY) buf_puts(b, e);
   else if (iv.cty == TY_STRBUF) str_box_handle(b, e);
-  else buf_printf(b, "sp_box_str(%s)", e);
+  else buf_printf(b, "SP_STR_BOX(%s)", e);
   buf_puts(b, ")");
   str_form_close(&iv, b);
   free(eb.p);

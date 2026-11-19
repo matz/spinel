@@ -547,9 +547,9 @@ int emit_call_file_dir_time_arms(Compiler *c, int id, Buf *b, const NodeTable *n
         buf_printf(b, "({ sp_PolyArray *_t%d = sp_poly_to_poly_array(", tl); emit_boxed(c, argv[0], b);
         buf_printf(b, "); SP_GC_ROOT(_t%d); sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);"
                       " for (sp_int _i = 0; _i < _t%d->len; _i++)"
-                      " sp_PolyArray_push(_t%d, sp_box_str(sp_poly_arg_path(_t%d->data[_i])));"
-                      " for (sp_int _i = 0; _i < _t%d->len; _i++) sp_file_path_check(_t%d->data[_i].v.s);"
-                      " for (sp_int _i = 0; _i < _t%d->len; _i++) sp_file_delete(_t%d->data[_i].v.s);"
+                      " sp_PolyArray_push(_t%d, sp_box_str_new(sp_poly_arg_path(_t%d->data[_i])));"
+                      " for (sp_int _i = 0; _i < _t%d->len; _i++) sp_file_path_check(sp_rbval_string_bytes(_t%d->data[_i]));"
+                      " for (sp_int _i = 0; _i < _t%d->len; _i++) sp_file_delete(sp_rbval_string_bytes(_t%d->data[_i]));"
                       " _t%d->len; })",
                    tl, tq, tq, tl, tq, tl, tq, tq, tq, tq, tq);
         return 1;
@@ -1798,7 +1798,7 @@ int emit_call_builtin_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable 
           if (sym_ok) buf_printf(b, "_t%d.tag == SP_TAG_SYM ? sp_time_s_parse_sym(%s, sp_sym_to_s((sp_sym)_t%d.v.i)) : ", tv, tfn, tv);
           buf_printf(b, "%s(_t%d.tag == SP_TAG_NIL ? (const char *)0 : ", tfn, tv);
           if (sp_streq(tfn, "sp_time_s_httpdate"))
-            buf_printf(b, "(_t%d.tag != SP_TAG_STR && !sp_poly_is_strbuf(_t%d))"
+            buf_printf(b, "(!sp_rbval_is_string(_t%d) && !sp_poly_is_strbuf(_t%d))"
                           " ? (sp_raise_nomethod(sp_nomethod_msg(\"match?\", _t%d)), (const char *)0) : ", tv, tv, tv);
           buf_printf(b, "sp_poly_arg_str_chk(_t%d)); })", tv);
         }

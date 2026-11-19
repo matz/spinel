@@ -796,7 +796,6 @@ static int emit_boxed_responds_builtin_absent(Compiler *c, int recv, const char 
   static const struct { const char *core, *other, *mask; } kinds[] = {
     { "Integer", NULL, "(UINT32_C(1) << SP_TAG_INT) | (UINT32_C(1) << SP_TAG_BIGINT)" },
     { "Float", NULL, "(UINT32_C(1) << SP_TAG_FLT)" },
-    { "String", NULL, "(UINT32_C(1) << SP_TAG_STR)" },
     { "Symbol", NULL, "(UINT32_C(1) << SP_TAG_SYM)" },
     { "NilClass", NULL, "(UINT32_C(1) << SP_TAG_NIL)" },
     { "TrueClass", "FalseClass", "(UINT32_C(1) << SP_TAG_BOOL)" }

@@ -663,8 +663,11 @@ sp_MatchData *sp_poly_match_data_at(sp_RbVal a, sp_RbVal b, sp_int pos) {SP_GC_R
 sp_oint sp_poly_match_index(sp_RbVal a, sp_RbVal b) {SP_GC_ROOT_RBVAL(a);SP_GC_ROOT_RBVAL(b);
   mrb_regexp_pattern *p; const char *s;
   /* the subject of `re =~ x` converts as reg_operand takes it */
-  if (a.tag == SP_TAG_OBJ && a.cls_id == SP_BUILTIN_REGEX) b = sp_box_str(sp_re_operand(b, 1));
-  if (!sp_poly_match_pair(a, b, &p, &s)) return sp_oint_nil();
+  if (a.tag == SP_TAG_OBJ && a.cls_id == SP_BUILTIN_REGEX) {
+    p = a.v.p;
+    s = sp_re_operand(b, 1);
+    if (!s || !p) return sp_oint_nil();
+  } else if (!sp_poly_match_pair(a, b, &p, &s)) return sp_oint_nil();
   sp_int r = sp_re_match(p, s);
   /* a character position, as the typed form answers: sp_re_match's is a
      byte offset, which is not one past a multibyte character */

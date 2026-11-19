@@ -187,11 +187,11 @@ and callbacks.
   slot holds its handle, so a change made through one name is seen through
   every other name that holds the same String (`dup`, `clone` and
   `String.new` make a new one). A method's String result is a handle too;
-  its physical return type comes from Repr. Builtin results and boxes are
-  still being migrated to that contract. The remaining sharing analysis,
+  its physical return type comes from Repr. A boxed String carries the same
+  handle. The remaining sharing analysis,
   String plan and byte routes (`share_plan_*`, `strbuf_*`,
   `emit_strbuf_*`) are scheduled for deletion, so a change does not add to
-  them, freshness rules, copy refusals or bytes boxes. A
+  them, freshness rules or copy refusals. A
   program that answers differently from CRuby is welcome as a new issue,
   with a reduction.
 

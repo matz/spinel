@@ -1021,7 +1021,7 @@ void emit_rbs_checked_text(Compiler *c, TyKind slot, const char *slotname,
   switch (slot) {
     case TY_INT:    tag = "SP_TAG_INT"; want = "Integer"; break;
     case TY_FLOAT:  tag = "SP_TAG_FLT"; want = "Float";   break;
-    case TY_STRBUF: case TY_STRING: tag = "SP_TAG_STR"; want = "String"; break;
+    case TY_STRBUF: case TY_STRING: tag = "SP_TAG_OBJ"; cls = "SP_BUILTIN_STRBUF"; want = "String"; break;
     case TY_SYMBOL: tag = "SP_TAG_SYM"; want = "Symbol";  break;
     case TY_BOOL:   tag = "SP_TAG_BOOL"; want = "a boolean"; break;
     /* a builtin class's value an RBS type names (builtin_value_kind): boxed
@@ -2955,7 +2955,7 @@ static void emit_boxed_impl(Compiler *c, int node, Buf *b) {
        the raise never executes there; the boxed nil keeps the comma expression
        well-typed for the value position. */
     refuse_yield_lost_block(c, node);
-    buf_puts(b, "(sp_exc_stage_key(sp_box_str((&(\"\\xff\" \"noreason\")[1]))), "
+    buf_puts(b, "(sp_exc_stage_key(sp_box_sym(sp_sym_intern(\"noreason\"))), "
                 "sp_raise_cls(\"LocalJumpError\", \"no block given (yield)\"), sp_box_nil())");
     RC(RF_SPECIAL, RW_YIELD);
     return;
@@ -10550,20 +10550,10 @@ void emit_proc_literal(Compiler *c, int create, Buf *b) {
   g_emitting_class_id = sv_emcls; g_nren = sv_nren;
 }
 
-/* A boxed parameter of a shared class may receive a fresh plain String.
-   Lift it once at binding, before aliases or stores read it; an incoming
-   handle and non-Strings pass through unchanged. Frozen plain Strings
-   keep their original box, including a literal's interned identity. */
-static void emit_param_string_lift(const char *prefix, const char *name, Buf *pb, int rooted) {
-  if (!rooted) buf_printf(pb, "    SP_GC_ROOT_RBVAL(%s%s);\n", prefix, name);
-  buf_printf(pb, "    if (%s%s.tag == SP_TAG_STR && %s%s.v.s && !sp_str_is_frozen_val(%s%s.v.s))\n"
-                 "      %s%s = sp_poly_strbuf_lift(%s%s);\n",
-             prefix, name, prefix, name, prefix, name, prefix, name, prefix, name);
-}
 void emit_block_param_share(Compiler *c, Scope *bs, LocalVar *lv, const char *name, Buf *pb, int rooted) {
   if (!lv || repr_of_slot(c, lv).kind != RK_BOXED ||
       !repr_local_shares(c, bs, lv)) return;
-  emit_param_string_lift("lv_", name, pb, rooted);
+  if (!rooted) buf_printf(pb, "    SP_GC_ROOT_RBVAL(lv_%s);\n", name);
 }
 /* A rest binds each argument into a fresh container. Its element holder,
    rather than the Array holder itself, decides whether Strings share. */
@@ -10577,7 +10567,6 @@ static void emit_proc_rest_bind(Compiler *c, Scope *bs, const char *name, int ar
   if (lift) {
     buf_puts(pb, "      sp_RbVal _sp_rest_value = sp_box_nil(); SP_GC_ROOT_RBVAL(_sp_rest_value);\n"
                  "      for (; __k < __hi; __k++) { _sp_rest_value = sp_proc_arg(__k);\n");
-    emit_param_string_lift("", "_sp_rest_value", pb, 1);
     buf_printf(pb, "        sp_PolyArray_push(lv_%s, _sp_rest_value); } }\n", name);
   }
   else
@@ -11496,7 +11485,7 @@ else if (orecv >= 0 && onm) {
     buf_puts(pb, "      for (sp_int _i = 0; _i < _sp_as_n; _i++) {\n");
     buf_puts(pb, "        sp_RbVal _e = sp_poly_arr_get(_sp_as_a, _i);\n");
     buf_puts(pb, "        _sp_proc_poly_args[_i] = _e;\n");
-    buf_puts(pb, "        _sp_as_buf[_i] = (_e.tag == SP_TAG_OBJ || _e.tag == SP_TAG_STR) ? (sp_int)(uintptr_t)_e.v.p : _e.v.i;\n");
+    buf_puts(pb, "        _sp_as_buf[_i] = (_e.tag == SP_TAG_OBJ || sp_rbval_is_string(_e)) ? (sp_int)(uintptr_t)_e.v.p : _e.v.i;\n");
     buf_puts(pb, "      }\n");
     buf_puts(pb, "      args = _sp_as_buf; argc = _sp_as_n;\n");
     buf_puts(pb, "    }\n");
@@ -12597,23 +12586,6 @@ static int emit_strsub_own_test(Compiler *c, const char *v, const char *name, Bu
   return 1;
 }
 
-/* The boxed receiver of a dispatch on `name`, read through
-   sp_poly_strbuf_deref so the String arms read its value. A String subclass
-   instance with a `name` of its own keeps its handle: the switch keys on its
-   class (sp_bsub_cls_of) and calls that method. */
-void emit_poly_recv_deref(Compiler *c, int recv, const char *name, Buf *b) {
-  int t = ++g_tmp;
-  char v[24]; snprintf(v, sizeof v, "_t%d", t);
-  Buf own; memset(&own, 0, sizeof own);
-  if (!emit_strsub_own_test(c, v, name, &own)) {
-    buf_puts(b, "sp_poly_strbuf_deref("); emit_expr(c, recv, b); buf_puts(b, ")");
-    return;
-  }
-  buf_printf(b, "({ sp_RbVal _t%d = ", t); emit_expr(c, recv, b);
-  buf_printf(b, "; %s ? _t%d : sp_poly_strbuf_deref(_t%d); })", own.p, t, t);
-  free(own.p);
-}
-
 /* The test a dispatch on `name` puts before its String arm: the boxed
    _t<tv> is a String, a shared String's handle included, but not a String
    subclass instance with a `name` of its own, which the class switch
@@ -12622,10 +12594,10 @@ void emit_poly_str_guard(Compiler *c, int tv, const char *name, Buf *b) {
   char v[24]; snprintf(v, sizeof v, "_t%d", tv);
   Buf own; memset(&own, 0, sizeof own);
   if (!emit_strsub_own_test(c, v, name, &own)) {
-    buf_printf(b, "(_t%d.tag == SP_TAG_STR || sp_poly_is_strbuf(_t%d))", tv, tv);
+    buf_printf(b, "sp_rbval_is_string(_t%d)", tv);
     return;
   }
-  buf_printf(b, "(_t%d.tag == SP_TAG_STR || (sp_poly_is_strbuf(_t%d) && !%s))", tv, tv, own.p);
+  buf_printf(b, "(sp_rbval_is_string(_t%d) && !%s)", tv, own.p);
   free(own.p);
 }
 
@@ -18131,11 +18103,11 @@ static int user_dispatch_arg(Compiler *c, Scope *m, int pi, const char *v,
   }
   else if (pt == TY_INT) { snprintf(guard, gsz, "%s.tag == SP_TAG_INT", v); snprintf(arg, asz, "%s.v.i", v); }
   else if (pt == TY_FLOAT) { snprintf(guard, gsz, "%s.tag == SP_TAG_FLT", v); snprintf(arg, asz, "%s.v.f", v); }
-  else if (pt == TY_STRING) { snprintf(guard, gsz, "%s.tag == SP_TAG_STR", v); snprintf(arg, asz, "%s.v.s", v); }
+  else if (pt == TY_STRING) { snprintf(guard, gsz, "sp_rbval_is_string(%s)", v); snprintf(arg, asz, "sp_rbval_string_bytes(%s)", v); }
   /* a parameter that is the shared handle: a boxed handle is passed as
      itself, a plain String box as a fresh handle */
   else if (pt == TY_STRBUF) {
-    snprintf(guard, gsz, "(%s.tag == SP_TAG_STR || sp_poly_is_strbuf(%s))", v, v);
+    snprintf(guard, gsz, "(sp_rbval_is_string(%s) || sp_poly_is_strbuf(%s))", v, v);
     snprintf(arg, asz, "sp_poly_as_strbuf(%s)", v);
   }
   else if (pt == TY_SYMBOL) { snprintf(guard, gsz, "%s.tag == SP_TAG_SYM", v); snprintf(arg, asz, "(sp_sym)%s.v.i", v); }
@@ -22782,7 +22754,6 @@ static void emit_class_machinery(const NodeTable *nt, Compiler *c, Buf *b, char 
       "  case SP_TAG_INT: return ((sp_Class){-100});\n"
       /* a Bignum is an Integer too, to grep, all? and === */
       "  case SP_TAG_BIGINT: return ((sp_Class){-100});\n"
-      "  case SP_TAG_STR: return ((sp_Class){-102});\n"
       "  case SP_TAG_FLT: return ((sp_Class){-101});\n"
       "  case SP_TAG_BOOL: return v.v.b?((sp_Class){-111}):((sp_Class){-112});\n"
       "  case SP_TAG_NIL: return ((sp_Class){-110});\n"

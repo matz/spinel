@@ -892,17 +892,17 @@ int emit_system_splat(Compiler *c, int id, const int *argv, int argc, Buf *b) {
   buf_printf(b, " sp_RbVal _t%d = sp_box_nil(); SP_GC_ROOT_RBVAL(_t%d); sp_PolyArray *_t%d = NULL; SP_GC_ROOT(_t%d);"
                 " if (sp_json_kind(_t%d->data[0]) == 1) { _t%d = sp_poly_to_poly_array(_t%d->data[0]);"
                 " if (_t%d->len != 2) sp_raise_cls(\"ArgumentError\", \"wrong first argument\");"
-                " _t%d = sp_box_str(sp_poly_arg_str_chk(_t%d->data[0]));"
-                " _t%d->data[0] = sp_box_str(sp_poly_arg_str_chk(_t%d->data[1])); }",
+                " _t%d = sp_poly_arg_str_box_chk(_t%d->data[0]);"
+                " sp_PolyArray_set(_t%d, 0, sp_poly_arg_str_box_chk(_t%d->data[1])); }",
              tp, tp, tq, tq, ta, tq, ta, tq, tp, tq, ta, tq);
   /* every element converts once, before anything is allocated, so a TypeError
      from one does not leak the argv and a to_str runs only once; the rooted
      array keeps the converted String */
-  buf_printf(b, " for (sp_int _i = 0; _i < _t%d->len; _i++) _t%d->data[_i] = sp_box_str(sp_poly_arg_str_chk(_t%d->data[_i]));", ta, ta, ta);
+  buf_printf(b, " for (sp_int _i = 0; _i < _t%d->len; _i++) sp_PolyArray_set(_t%d, _i, sp_poly_arg_str_box_chk(_t%d->data[_i]));", ta, ta, ta);
   buf_printf(b, " const char **_t%d = (const char **)malloc(sizeof(char *) * (size_t)(_t%d->len + 1));", tv, ta);
-  buf_printf(b, " for (sp_int _i = 0; _i < _t%d->len; _i++) _t%d[_i] = _t%d->data[_i].v.s;", ta, tv, ta);
+  buf_printf(b, " for (sp_int _i = 0; _i < _t%d->len; _i++) _t%d[_i] = sp_rbval_string_bytes(_t%d->data[_i]);", ta, tv, ta);
   buf_printf(b, " _t%d[_t%d->len] = NULL; sp_RbVal _t%d = sp_system_answer(sp_system_prog_env_args(_t%d,"
-                " _t%d.tag == SP_TAG_NIL ? NULL : _t%d.v.s, (int)_t%d->len, _t%d)); free(_t%d); _t%d; })",
+                " _t%d.tag == SP_TAG_NIL ? NULL : sp_rbval_string_bytes(_t%d), (int)_t%d->len, _t%d)); free(_t%d); _t%d; })",
              tv, ta, tr, te, tp, tp, ta, tv, tv, tr);
   return 1;
 }
@@ -2750,7 +2750,7 @@ void emit_exc_message_idbox(Compiler *c, int v, Buf *b) {
     buf_printf(b, "; SP_GC_ROOT_RBVAL(_b%d); (_b%d.tag == SP_TAG_OBJ && _b%d.v.p && "
                   "(_b%d.cls_id == SP_BUILTIN_EXCEPTION || sp_is_exc_subclass_cls(_b%d.cls_id))) ? "
                   "%s((sp_Exception *)_b%d.v.p) : ", t, t, t, t, t, ask, t);
-    if (!message) buf_printf(b, "(sp_poly_is_strbuf(_b%d) || _b%d.tag == SP_TAG_STR) ? _b%d : ", t, t, t);
+    if (!message) buf_printf(b, "(sp_poly_is_strbuf(_b%d) || sp_rbval_is_string(_b%d)) ? _b%d : ", t, t, t);
     int mark = view_bind(recv, "_b%d", t);
     /* the read is this arm's alone: a conversion in it is not hoisted ahead
        of the call, where it would run beside the identity ask */
@@ -7398,7 +7398,7 @@ static int emit_poly_class_when_value(Compiler *c, int cond_id, const char *tmp,
     buf_printf(b, "(%s.tag == SP_TAG_INT || %s.tag == SP_TAG_BIGINT)", tmp, tmp);
   /* a mutable String boxes as its handle; a box with no handle is not one */
   else if (sp_streq(cn, "String"))
-    buf_printf(b, "(%s.tag == SP_TAG_STR || (sp_poly_is_strbuf(%s) && %s.v.p))", tmp, tmp, tmp);
+    buf_printf(b, "(sp_rbval_is_string(%s) || (sp_poly_is_strbuf(%s) && %s.v.p))", tmp, tmp, tmp);
   else if (sp_streq(cn, "Float"))
     buf_printf(b, "%s.tag == SP_TAG_FLT", tmp);
   else if (sp_streq(cn, "Symbol"))
@@ -11444,9 +11444,9 @@ void emit_case(Compiler *c, int id, Buf *b, int indent) {
             int ts = ++g_tmp;
             const char *ak = at == TY_INT_ARRAY ? "Int" : at == TY_STR_ARRAY ? "Str" : "Float";
             buf_printf(b, "({ sp_%sArray *_t%d = ", ak, ta); emit_expr(c, inner, b);
-            buf_printf(b, "; sp_RbVal _t%d = sp_poly_strbuf_deref(_t%d); _t%d && ", ts, t, ta);
+            buf_printf(b, "; sp_RbVal _t%d = _t%d; _t%d && ", ts, t, ta);
             if (at == TY_STR_ARRAY)
-              buf_printf(b, "_t%d.tag == SP_TAG_STR && sp_StrArray_include(_t%d, _t%d.v.s); })", ts, ta, ts);
+              buf_printf(b, "sp_rbval_is_string(_t%d) && sp_StrArray_include(_t%d, sp_rbval_string_bytes(_t%d)); })", ts, ta, ts);
             else if (at == TY_INT_ARRAY)
               buf_printf(b, "(_t%d.tag == SP_TAG_INT ? sp_IntArray_include(_t%d, _t%d.v.i) : "
                             "_t%d.tag == SP_TAG_FLT && _t%d.v.f == (double)(sp_int)_t%d.v.f && "
@@ -22709,7 +22709,7 @@ static void emit_stmt_node(Compiler *c, int id, Buf *b, int indent) {
          `if (0)` and never executes the raise). */
       refuse_yield_lost_block(c, id);
       emit_indent(b, indent);
-      buf_puts(b, "sp_exc_stage_key(sp_box_str((&(\"\\xff\" \"noreason\")[1])));\n");
+      buf_puts(b, "sp_exc_stage_key(sp_box_sym(sp_sym_intern(\"noreason\")));\n");
       emit_indent(b, indent);
       buf_puts(b, "sp_raise_cls(\"LocalJumpError\", \"no block given (yield)\");\n");
       return;

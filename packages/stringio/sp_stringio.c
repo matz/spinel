@@ -179,7 +179,7 @@ static const char *sio_read_chunk(sp_StringIO *s, sp_int count, int rest, sp_Str
   out->len = length;
   out->data[length] = '\0';
   if (length) memmove(out->data, source + s->pos, (size_t)length);
-  if (rest) out->binary = binary;
+  if (rest) sp_String_force_encoding(out, binary);
   sp_fd_publish(out);
   sio_sync(s);
   s->pos += length;

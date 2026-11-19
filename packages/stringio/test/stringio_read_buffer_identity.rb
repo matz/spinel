@@ -40,3 +40,9 @@ reader.read
 buffer << "before"
 value = reader.read(0, buffer)
 p [value.equal?(buffer), value.encoding.name, buffer, buffer.encoding.name]
+
+buffer = +"before".b
+value = StringIO.new("é").read(nil, buffer)
+p [value.equal?(buffer), buffer.encoding.name, buffer.length, buffer.bytesize]
+value = StringIO.new("é".b).read(nil, buffer)
+p [value.equal?(buffer), buffer.encoding.name, buffer.length, buffer.bytesize]

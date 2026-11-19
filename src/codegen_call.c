@@ -31559,7 +31559,8 @@ static void emit_call_lifted(Compiler *c, int id, Buf *b) {
   if (nk >= 0) buf_printf(b, "((%s *)(", class_ctype(c, nk));
   /* A subclass's builtin view can re-enter the call. Pass the native
      result through that view and read its bytes at this boundary. */
-  int native = reads_string && (cplan_builtin_handle_row(c, id) || repr_native_string_reader(c, id))
+  int native = reads_string && (cplan_builtin_handle_row(c, id) || repr_native_string_reader(c, id) ||
+                                repr_string_iterator_handle(c, id))
                ? view_push(c, id, TY_STRBUF) : -1;
   emit_reading_no_value(c, id, emit_call_inner, b);
   if (native >= 0) view_pop(c, native);

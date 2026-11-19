@@ -106,6 +106,8 @@ operand view across the block and returns it through the physical result
 slot, including a String handle slot. Builtin rows identify self answers;
 the subclass adapter retains the original object when its builtin reads
 String bytes. A block break keeps its own boxed result outside that adapter.
+The ordinary expression view also keeps the handle for a builtin
+receiver-answering String iterator.
 String line methods retain the receiver through separator and chomp
 evaluation. With a nil separator the receiver is the only line, including
 for an empty String. A line Enumerator retains its receiver and separator

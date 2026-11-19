@@ -947,6 +947,24 @@ static int repr_env_string_handle(Compiler *c, int v) {
   return argc == 2 && repr_of(c, argv[1]).kind == RK_STRBUF;
 }
 
+/* A once-only iterator whose builtin answer is its String receiver has
+   the receiver handle it held for the block. A break can give it another
+   answer. */
+int repr_string_iterator_handle(Compiler *c, int node) {
+  const NodeTable *nt = c->nt;
+  if (node < 0 || nt_kind(nt, node) != NK_CallNode || call_plain_argc(c, node) != 0)
+    return 0;
+  int recv = nt_ref(nt, node, "receiver"), block = nt_ref(nt, node, "block");
+  if (recv < 0 || nt_kind(nt, block) != NK_BlockNode) return 0;
+  TyKind rt = comp_ntype(c, recv);
+  if (rt != TY_STRING && rt != TY_STRBUF) return 0;
+  const IterRow *row = iter_row_of(rt, view_call_name(c, node), 0);
+  return row && row->runs == IR_ONCE && row->answer == IA_RECV &&
+         row->nyield == 1 && row->yield[0] == YS_RECV &&
+         !call_breaks(c, node) && !cplan_pinned_vis(c, node) &&
+         cplan_user(c, node).dispatch == CP_NONE;
+}
+
 /* A call with a native String result has an object to pass to its caller.
    Reflection keeps its callee's signature. A setter expression selects its
    argument independently of what the invoked method returns. */
@@ -974,7 +992,7 @@ int repr_native_call_handle(Compiler *c, int v) {
     return repr_method_ret_storage(&c->scopes[plan.mi]) == TY_STRBUF;
   if (plan.dispatch != CP_SWITCH && plan.dispatch != CP_PER_ARM) {
     if (repr_native_string_reader(c, v)) return 1;
-    return k == NK_CallNode ? repr_boxed_native_handle(c, v)
+    return k == NK_CallNode ? repr_string_iterator_handle(c, v) || repr_boxed_native_handle(c, v)
                             : cplan_builtin_handle_row(c, v) || repr_super_native_keeps(c, v);
   }
   /* The switch has an explicit join even when its target set exceeds

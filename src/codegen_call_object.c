@@ -1900,7 +1900,8 @@ static int emit_safe_nav_freeze_handle(Compiler *c, int id, const char *name, in
    or nil. A guard holding x's bytes made every later link take the handle
    by running x again. */
 static int emit_safe_nav_self_handle(Compiler *c, int id, int recv, Buf *b) {
-  if (g_sn_skip == id || !strbuf_self_route(c, recv) || !strbuf_bang_self_local(c, id))
+  if (g_sn_skip == id || repr_string_iterator_handle(c, id) ||
+      !strbuf_self_route(c, recv) || !strbuf_bang_self_local(c, id))
     return 0;
   TyKind rt = repr_of(c, id).as_ty;
   int hres = repr_of(c, id).demand || rt == TY_STRBUF;

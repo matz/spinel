@@ -174,15 +174,13 @@ typedef struct{sp_float first;sp_float last;sp_int excl;unsigned char omitted;un
    include?/...) materializes the element array through
    sp_StrArray_from_string_range, which is how the range behaved before it was
    a value of its own. */
-/* hf / hl (--share-strings, #8321): the shared handles (sp_String *) the
-   endpoints were made from, or NULL. A Range keeps the String object, so a
-   change in place to it shows through #begin; sp_srange_live reads each
-   handle's bytes as they are now. sym: a Range of Symbols, its ends the
-   Symbols' names; Symbol#succ is String#succ on the name, so the walk and
-   the comparisons are the String Range's, and the readers that answer an
-   end or a member make the Symbol of it (sp_srange_box_end). */
-/* (one representation: the endpoints' handles typed, which the face macros read as the handle) */
-typedef struct{const char *first;const char *last;unsigned char excl;unsigned char unfrozen;unsigned char sym;struct sp_String_s *hf;struct sp_String_s *hl;}sp_StrRange;
+/* A nullable handle for each Range endpoint. Symbol ranges retain the
+   frozen String names of the Symbols and publish Symbols to Ruby. */
+typedef struct {
+  struct sp_String_s *first;
+  struct sp_String_s *last;
+  unsigned char excl, unfrozen, sym;
+} sp_StrRange;
 /* A class value. `name`, when non-NULL, is a rodata class name carried by a
    class whose cls_id table entry may not exist (an exception's class -- the
    Errno:: family and many builtin error classes have no assigned cls_id). It

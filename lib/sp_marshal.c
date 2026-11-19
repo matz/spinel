@@ -137,16 +137,9 @@ static void sp_mar_w_range(sp_mar_buf *b, sp_RbVal v) {
   int excl;
   SP_GC_ROOT_RBVAL(bg); SP_GC_ROOT_RBVAL(ed);
   if (v.cls_id == SP_BUILTIN_STR_RANGE) {
-    /* the Range as it is held, not as sp_srange_live reads it: an end that
-       keeps its handle (--share-strings) is written as the handle's box, the
-       identity a String element of the same object is written under, so the
-       two link as CRuby's do. A byte-held literal uses its static handle
-       too, as Range#begin and Range#end do when boxed. */
-    sp_StrRange s = *(sp_StrRange *)v.v.p;
-    if (s.hf) bg = mk_strbuf(s.hf);
-    else if (s.first) bg = sp_box_str_new(s.first);
-    if (s.hl) ed = mk_strbuf(s.hl);
-    else if (s.last) ed = sp_box_str_new(s.last);
+    sp_StrRange s = sp_srange_value(v.v.p);
+    if (s.first) bg = mk_strbuf(s.first);
+    if (s.last) ed = mk_strbuf(s.last);
     excl = s.excl != 0;
   }
   else if (v.cls_id == SP_BUILTIN_FLOAT_RANGE) {

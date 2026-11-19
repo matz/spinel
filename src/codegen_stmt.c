@@ -2491,68 +2491,32 @@ void emit_srange_end_recv(Compiler *c, int v, Buf *b) {
   emit_expr(c, nt_ref(c->nt, v, "receiver"), b);
   if (chk) buf_printf(b, ", %d)", is_range_end_reader(nm));
 }
-/* The test, over the String Range `r` that String Range route v
-   (strbuf_route_srange_kept) reads, that the Range keeps a handle for the
-   endpoint v answers: #max's is the end only of an inclusive Range */
-void emit_srange_kept_test(Compiler *c, int v, const char *r, Buf *b) {
-  int se = strbuf_route_srange_end(c, v), sx = se ? 0 : strbuf_route_srange_extreme(c, v);
-  buf_printf(b, "%s.%s", r, se == 2 || sx == 2 ? "hl" : "hf");
-  if (sx == 2) buf_printf(b, " && !%s.excl", r);
-}
-/* String Range route v (strbuf_route_srange_kept) as a box: the handle
-   the Range keeps for the endpoint v answers, and any other answer as the
-   String it is. An endpoint the Range keeps no handle for is the String
-   the Range holds, where a new handle over a copy of it was another
-   (`S.new(f.min, 1)`). An argument that ran ahead (emit_arg_temp) took
-   the Range, which its receiver reads, the handle and the String; one
-   that ran ahead as the handle alone is that handle's box, and one that
-   ran ahead otherwise is left to the caller (0). */
+/* A Range's endpoint and min/max answers already have their String
+   handle. A held argument is boxed from the temp that evaluated it. */
 int emit_srange_route_boxed(Compiler *c, int v, Buf *b) {
-  int u = strbuf_srange_tail(c, v), recv = u >= 0 ? nt_ref(c->nt, u, "receiver") : -1;
-  if (u < 0) return 0;
-  int se = strbuf_route_srange_end(c, u), sx = se ? 0 : strbuf_route_srange_extreme(c, u);
-  int ran = arg_ran_first(v, 0), th = ran ? ran_first_handle(v) : -1;
-  /* (statements ahead of the route run only where the argument ran) */
-  if ((ran && th < 0) || (!ran && u != nt_paren_single(c->nt, v))) return 0;
-  if (ran && !arg_ran_first(recv, 0)) {
-    str_box_handle_tmp(b, th);
+  int tail = strbuf_srange_tail(c, v);
+  if (tail < 0) return 0;
+  if (arg_ran_first(v, 0)) {
+    int held = ran_first_handle(v);
+    if (held < 0) return 0;
+    str_box_handle_tmp(b, held);
     return 1;
   }
-  Buf rb; memset(&rb, 0, sizeof rb);
-  int q = -1;
-  if (ran) emit_expr(c, recv, &rb);
-  else {
-    q = ++g_tmp;
-    buf_printf(b, "({ sp_StrRange _t%d = ", q);
-    if (se) emit_srange_end_recv(c, u, b);
-    else emit_expr(c, recv, b);
-    buf_puts(b, "; ");
-    buf_printf(&rb, "_t%d", q);
+  if (tail != nt_paren_single(c->nt, v)) return 0;
+  int end = strbuf_route_srange_end(c, tail);
+  if (end) {
+    buf_puts(b, "SP_SEBOX((");
+    emit_srange_end_recv(c, tail, b);
+    buf_printf(b, ").%s)", end == 1 ? "first" : "last");
   }
-  const char *r = rb.p ? rb.p : "";
-  emit_srange_kept_test(c, u, r, b);
-  /* (min / max of an empty Range is nil) */
-  buf_puts(b, " ? ");
-  str_box_open(b, sx != 0);
-  if (ran) buf_printf(b, "_t%d", th);
-  else if (se) buf_printf(b, "(sp_String *)%s.%s", r, se == 1 ? "hf" : "hl");
-  else buf_printf(b, "sp_srange_extreme_h(%s, %d)", r, sx == 2);
-  str_box_close(b);
-  buf_puts(b, " : sp_box_str_new(");
-  /* this arm runs for an endpoint the Range keeps no handle for: what it
-     boxes is no String the rule shares */
-  size_t arm_at = b->len;
-  if (ran) emit_expr(c, v, b);
-  else if (se) buf_printf(b, "%s.%s", r, se == 1 ? "first" : "last");
   else {
-    int mark = view_bind_temp(recv, q);
-    emit_expr(c, u, b);
-    view_unbind(mark);
+    buf_puts(b, "SP_SEBOX(sp_srange_extreme_h(");
+    emit_expr(c, nt_ref(c->nt, tail, "receiver"), b);
+    buf_printf(b, ", %d))", strbuf_route_srange_extreme(c, tail) == 2);
   }
-  buf_puts(b, ran ? ")" : "); })");
-  free(rb.p);
   return 1;
 }
+
 static int exc_text_call(Compiler *c, int v) { return exc_text_call_on(c, v, 0); }
 /* --share-strings: an exception's #message read off a boxed receiver every
    class of which (the boxed-receiver walk) is an exception class or answers
@@ -3032,19 +2996,14 @@ int emit_strbuf_route(Compiler *c, int v, Buf *b) {
         ops[2] >= 0 && nt_kind(nt, ops[2]) != NK_NilNode)
       buf_puts(b, "sp_raise_cls(\"ArgumentError\", \"cannot clamp with an exclusive range\"); ");
     if (rvar) {
-      /* an endpoint the Range keeps as a handle is that handle, any other
-         the String its field holds, an open one nil */
       int tr = ++g_tmp;
       buf_printf(b, "sp_StrRange _t%d = ", tr);
       emit_expr(c, argv[0], b);
-      buf_printf(b, "; SP_GC_ROOT_SRANGE(_t%d); if (_t%d.excl && (_t%d.last || _t%d.hl))"
+      buf_printf(b, "; SP_GC_ROOT_SRANGE(_t%d); if (_t%d.excl && _t%d.last)"
                     " sp_raise_cls(\"ArgumentError\", \"cannot clamp with an exclusive range\"); ",
-                 tr, tr, tr, tr);
-      buf_printf(b, "sp_poly_recv_ck(_t%d, \"clamp\"); sp_poly_as_strbuf(sp_obj_clamp(_t%d, ", ts[0], ts[0]);
-      str_box_kept(b, tr, "hf", "first");
-      buf_puts(b, ", ");
-      str_box_kept(b, tr, "hl", "last");
-      buf_puts(b, ")); })");
+                 tr, tr, tr);
+      buf_printf(b, "sp_poly_recv_ck(_t%d, \"clamp\"); sp_poly_as_strbuf(sp_obj_clamp(_t%d, "
+                    "SP_SEBOX(_t%d.first), SP_SEBOX(_t%d.last))); })", ts[0], ts[0], tr, tr);
       return 1;
     }
     buf_printf(b, "sp_poly_recv_ck(_t%d, \"clamp\"); sp_poly_as_strbuf(sp_obj_clamp(_t%d, _t%d, _t%d)); })",
@@ -3131,17 +3090,10 @@ int emit_strbuf_route(Compiler *c, int v, Buf *b) {
   }
   int se = strbuf_route_srange_end(c, v);
   if (se) {
-    /* the handle the Range keeps, or a new one for an endpoint it does not */
     v = nt_paren_single(c->nt, v);
-    int t = ++g_tmp;
-    const char *h = se == 1 ? "hf" : "hl", *e = se == 1 ? "first" : "last";
-    buf_printf(b, "({ sp_StrRange _t%d = ", t);
+    buf_puts(b, "(");
     emit_srange_end_recv(c, v, b);
-    buf_printf(b, "; _t%d.%s ? (sp_String *)_t%d.%s : ", t, h, t, h);
-    str_new_handle_open(b);
-    buf_printf(b, "_t%d.%s", t, e);
-    str_new_handle_close(b);
-    buf_puts(b, "; })");
+    buf_printf(b, ").%s", se == 1 ? "first" : "last");
     return 1;
   }
   int sx = strbuf_route_srange_extreme(c, v);

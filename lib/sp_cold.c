@@ -5047,43 +5047,11 @@ sp_float sp_frange_max(sp_FloatRange r) {
   if (r.excl) sp_raise_cls("TypeError", "cannot exclude end value with non Integer begin value");
   return r.last;
 }
-/* String range ("a".."e"). The endpoints are the value; every traversal
-   materializes the element array, which is how a string range behaved before
-   it became a value of its own (#3064). A NULL endpoint is a nil bound: the
-   range is beginless or endless. */
-/* --share-strings (#8321): the Range read with each handle it keeps taken
-   as its bytes are now, so a change in place to the endpoint's String
-   shows through the Range. A Range without handles is answered as it is.
-   An endpoint the Range keeps as a handle holds NULL in its byte field (the
-   handle is its only holder, so no stale pointer is ever kept or marked);
-   this fills that field with the handle's own bytes, uncopied, for a read
-   that compares or formats them and keeps nothing: they are good only
-   until the next change to that String. sp_srange_held is the form whose
-   endpoints may be kept. */
-sp_StrRange sp_srange_live(sp_StrRange r) {
-  if (r.hf) r.first = sp_String_cstr((sp_String *)r.hf);
-  if (r.hl) r.last = sp_String_cstr((sp_String *)r.hl);
-  return r;
-}
-/* ...the Range with each kept endpoint read as a String of its own (a
-   copy of the handle's bytes): for an answer that may keep an endpoint, an
-   element of #to_a or the String #min / #max answer. */
-static sp_StrRange sp_srange_held(sp_StrRange r) {
-  sp_String *hf = (sp_String *)r.hf, *hl = (sp_String *)r.hl;
-  SP_GC_ROOT(hf); SP_GC_ROOT(hl);
-  /* one representation: the endpoint's bytes are the handle's own (a sink
-     finds the handle through them), as CRuby's #min answers the begin
-     object itself */
-  if (hf) r.first = sp_String_cstr(hf);
-  if (hl) r.last = sp_String_cstr(hl);
-  return r;
-}
 sp_StrArray *sp_srange_to_a(sp_StrRange r) {
-  r = sp_srange_held(r);
   SP_GC_ROOT_SRANGE(r);
   if (!r.first) sp_raise_cls("TypeError", "can't iterate from NilClass");
   if (!r.last) sp_raise_cls("RangeError", "cannot convert endless range to an array");
-  return sp_StrArray_from_string_range(r.first, r.last, r.excl);
+  return sp_StrArray_from_string_range(sp_srange_first(r), sp_srange_last(r), r.excl);
 }
 /* Range#first(n) and Range#take(n) on a String Range: the first n members,
    walked by succ and stopped at n, so an endless range (last NULL) answers
@@ -5097,8 +5065,8 @@ static int sp_srange_take_push(const char *m, void *arg) {
 }
 sp_StrArray *sp_srange_first_n(sp_RbVal box, sp_int n, int take) {
   SP_GC_ROOT_RBVAL(box);
-  sp_StrRange r = sp_srange_live(*(sp_StrRange *)box.v.p);
-  const char *cur = r.first, *last = r.last;
+  sp_StrRange r = *(sp_StrRange *)box.v.p;
+  const char *cur = sp_srange_first(r), *last = sp_srange_last(r);
   SP_GC_ROOT_STR(cur); SP_GC_ROOT_STR(last);
   if (n < 0) sp_raise_cls("ArgumentError", take ? "attempt to take negative size" : "negative array size (or size too big)");
   if (!cur) {
@@ -5117,8 +5085,8 @@ sp_StrArray *sp_srange_first_n(sp_RbVal box, sp_int n, int take) {
   return a;
 }
 sp_bool sp_srange_eq(sp_StrRange a, sp_StrRange b) {
-  a = sp_srange_live(a); b = sp_srange_live(b);
-  return a.excl == b.excl && a.sym == b.sym && sp_str_eq(a.first, b.first) && sp_str_eq(a.last, b.last);
+  return a.excl == b.excl && a.sym == b.sym && sp_str_eq(sp_srange_first(a), sp_srange_first(b)) &&
+         sp_str_eq(sp_srange_last(a), sp_srange_last(b));
 }
 /* #include? / #member?: whether the walk String#upto takes meets x, as
    CRuby's rb_str_include_range_p, stopping at the first equal member;
@@ -5130,7 +5098,6 @@ static int sp_srange_include_i(const char *m, void *arg) {
   return 1;
 }
 sp_bool sp_srange_include(sp_StrRange r, const char *x) {
-  r = sp_srange_live(r);
   SP_GC_ROOT_SRANGE(r);
   if (!r.first || !r.last)
     sp_raise_cls("TypeError", "cannot determine inclusion in beginless/endless ranges");
@@ -5162,15 +5129,14 @@ sp_bool sp_srange_include(sp_StrRange r, const char *x) {
   }
   const char *v = x;
   SP_GC_ROOT_STR(v);
-  sp_str_upto_each(r.first, r.last, r.excl, sp_srange_include_i, &v);
+  sp_str_upto_each(sp_srange_first(r), sp_srange_last(r), r.excl, sp_srange_include_i, &v);
   return v == NULL;
 }
 /* #cover? / #=== compare lexicographically, no materialization. */
 sp_bool sp_srange_cover(sp_StrRange r, const char *x) {
-  r = sp_srange_live(r);
   if (!x) return 0;
-  if (r.first && strcmp(x, r.first) < 0) return 0;
-  if (r.last) { int d = strcmp(x, r.last); if (r.excl ? d >= 0 : d > 0) return 0; }
+  if (r.first && sp_str_cmp_bytes(x, sp_srange_first(r)) < 0) return 0;
+  if (r.last) { int d = sp_str_cmp_bytes(x, sp_srange_last(r)); if (r.excl ? d >= 0 : d > 0) return 0; }
   return 1;
 }
 /* An excluded String end has no predecessor operation. Max walks the
@@ -5185,38 +5151,33 @@ static const char *sp_srange_walk_max(sp_StrRange r) {
   return best;
 }
 const char *sp_srange_min_v(sp_StrRange r) {
-  r = sp_srange_live(r);
   if (!r.first) sp_raise_cls("RangeError", "cannot get the minimum of beginless range");
   if (r.last) {
-    int order = sp_str_cmp_bytes(r.first, r.last);
+    int order = sp_str_cmp_bytes(sp_srange_first(r), sp_srange_last(r));
     if (order > 0 || (order == 0 && r.excl)) return NULL;
   }
-  return r.first;
+  return sp_srange_first(r);
 }
 const char *sp_srange_max_v(sp_StrRange r) {
-  r = sp_srange_held(r);
   if (!r.last) sp_raise_cls("RangeError", "cannot get the maximum of endless range");
   if (r.excl) {
     if (!r.first) sp_raise_cls("RangeError", "cannot get the maximum of beginless range with custom comparison method");
     return sp_srange_walk_max(r);
   }
-  if (r.first && sp_str_cmp_bytes(r.first, r.last) > 0) return NULL;
-  return r.last;
+  if (r.first && sp_str_cmp_bytes(sp_srange_first(r), sp_srange_last(r)) > 0) return NULL;
+  return sp_srange_last(r);
 }
 const char *sp_srange_to_s(sp_StrRange r) {
-  r = sp_srange_live(r);
   SP_GC_ROOT_SRANGE(r);
-  return sp_sprintf("%s%s%s", r.first ? r.first : sp_str_empty,
-                    r.excl ? "..." : "..", r.last ? r.last : sp_str_empty);
+  return sp_sprintf("%s%s%s", r.first ? sp_srange_first(r) : sp_str_empty,
+                    r.excl ? "..." : "..", r.last ? sp_srange_last(r) : sp_str_empty);
 }
 /* The begin's inspect is a new String the end's inspect can collect, and
    the caller's range is a by-value pair nothing may root (#8322): both
    ends and the first answer are held here. */
 const char *sp_srange_inspect(sp_StrRange r) {
-  r = sp_srange_live(r);
-  SP_GC_ROOT(r.hf); SP_GC_ROOT(r.hl);
-  const char *f = r.first, *l = r.last;
-  SP_GC_ROOT_STR(f); SP_GC_ROOT_STR(l);
+  SP_GC_ROOT_SRANGE(r);
+  const char *f = sp_srange_first(r), *l = sp_srange_last(r);
   /* a Range of Symbols shows its ends as Symbols (:a..:c) */
   const char *(*show)(const char *) = r.sym ? sp_sym_inspect_name : sp_str_inspect;
   const char *lo = f ? show(f) : sp_str_empty;
@@ -5232,15 +5193,11 @@ const char *sp_srange_inspect(sp_StrRange r) {
    on the 32-bit target). */
 static void sp_srange_scan(void *p) {
   sp_StrRange *r = (sp_StrRange *)p;
-  if (r->first) sp_mark_string(r->first);
-  if (r->last) sp_mark_string(r->last);
-  if (r->hf) sp_gc_mark(r->hf);
-  if (r->hl) sp_gc_mark(r->hl);
+  sp_gc_mark(r->first);
+  sp_gc_mark(r->last);
 }
 sp_RbVal sp_box_srange(sp_StrRange v) {
-  const char *f = v.first, *l = v.last;
-  void *hf = v.hf, *hl = v.hl;
-  SP_GC_ROOT_STR(f); SP_GC_ROOT_STR(l); SP_GC_ROOT(hf); SP_GC_ROOT(hl);
+  SP_GC_ROOT_SRANGE(v);
   sp_StrRange *p = (sp_StrRange *)sp_gc_alloc(sizeof(sp_StrRange), NULL, sp_srange_scan);
   *p = v;
   return sp_box_obj(p, SP_BUILTIN_STR_RANGE);
@@ -5252,14 +5209,14 @@ sp_RbVal sp_box_srange(sp_StrRange v) {
    sp_endless_range_gen), so #next, #first(n) and a lazy chain over it need no
    member Array, which an endless range cannot make. The capture holds the
    begin, which its scan marks. */
-typedef struct { const char *first; sp_int step; int sym; } sp_endless_srange_cap;
+typedef struct { struct sp_String_s *first; sp_int step; int sym; } sp_endless_srange_cap;
 static void sp_endless_srange_cap_scan(void *p) {
   sp_endless_srange_cap *cap = (sp_endless_srange_cap *)p;
-  if (cap->first) sp_mark_string(cap->first);
+  sp_gc_mark(cap->first);
 }
 static void sp_endless_srange_gen(sp_Fiber *f) {
   sp_endless_srange_cap *cap = (sp_endless_srange_cap *)f->user_data;
-  const char *cur = cap->first;
+  const char *cur = sp_str_dup(cap->first->data);
   SP_GC_ROOT_STR(cur);
   for (;;) {
     /* a Range of Symbols yields the Symbol of the name */
@@ -5272,15 +5229,13 @@ static void sp_endless_srange_gen(sp_Fiber *f) {
    members at a time; it reports `box` as its source. */
 sp_Enumerator *sp_srange_endless_enum(sp_RbVal box, sp_int step) {
   SP_GC_ROOT_RBVAL(box);
-  /* the begin as it is now (a copy, under --share-strings: the walk outlives
-     the handle's bytes) is held across the capture's allocation */
-  sp_StrRange held = sp_srange_held(*(sp_StrRange *)box.v.p);
-  const char *first = held.first;
-  SP_GC_ROOT_STR(first);
-  if (!first) sp_raise_cls("TypeError", "can't iterate from NilClass");
+  sp_StrRange range = *(sp_StrRange *)box.v.p;
+  if (!range.first) sp_raise_cls("TypeError", "can't iterate from NilClass");
   sp_endless_srange_cap *cap = (sp_endless_srange_cap *)sp_gc_alloc(sizeof *cap, NULL, sp_endless_srange_cap_scan);
   SP_GC_ROOT(cap);
-  cap->first = first; cap->step = step; cap->sym = held.sym;
+  cap->first = range.first;
+  cap->step = step;
+  cap->sym = range.sym;
   sp_Enumerator *e = sp_Enumerator_new_gen(sp_endless_srange_gen, cap, sp_box_nil());
   e->source = box; e->has_src = TRUE;   /* it inspects as the Range's own */
   e->size_nil = TRUE;   /* and has no size, as a String Range's own is nil */
@@ -5296,8 +5251,8 @@ sp_Enumerator *sp_srange_endless_enum(sp_RbVal box, sp_int step) {
 sp_Enumerator *sp_srange_stepped_enum(sp_RbVal src, sp_int n, const char *label, int written) {
   SP_GC_ROOT_STR(label);
   SP_GC_ROOT_RBVAL(src);
-  sp_StrRange r = sp_srange_held(*(sp_StrRange *)src.v.p);
-  SP_GC_ROOT_STR(r.first); SP_GC_ROOT_STR(r.last);
+  sp_StrRange r = *(sp_StrRange *)src.v.p;
+  SP_GC_ROOT_SRANGE(r);
   if (n <= 0 && r.last) {
     sp_srange_to_a(r);   /* a beginless range raises its TypeError first */
     sp_raise_cls("ArgumentError", "step can't be 0");

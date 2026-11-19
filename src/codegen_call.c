@@ -14649,11 +14649,7 @@ static int emit_struct_member_temp(Compiler *c, ClassInfo *cls, int a, int vnode
   emit_ctype(c, mt, g_pre);
   buf_printf(g_pre, " _t%d = %s;", t, lv.p ? lv.p : default_value_from_compiler(c, mt));
   if (mt == TY_POLY) buf_printf(g_pre, " SP_GC_ROOT_RBVAL(_t%d);", t);
-  else if (mt == TY_STR_RANGE) {   /* two GC strings by value, as a String range local */
-    buf_printf(g_pre, " SP_GC_ROOT_STR(_t%d.first); SP_GC_ROOT_STR(_t%d.last);", t, t);
-    char ref[32]; snprintf(ref, sizeof ref, "_t%d", t);
-    emit_srange_handle_roots(c, ref, g_pre);
-  }
+  else if (mt == TY_STR_RANGE) buf_printf(g_pre, " SP_GC_ROOT_SRANGE(_t%d);", t);
   else if (comp_ty_value_obj(c, mt)) { buf_puts(g_pre, " "); emit_gc_root_tmp_refs(c, mt, t, g_pre); }
   else if (needs_root(mt)) buf_printf(g_pre, " SP_GC_ROOT(_t%d);", t);
   buf_puts(g_pre, "\n");

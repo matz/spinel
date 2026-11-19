@@ -449,17 +449,6 @@ void str_new_handle_close(Buf *b) {
   buf_puts(b, ")");
 }
 
-/* The box of a String Range's endpoint held in temp `t` (an sp_StrRange):
-   the handle the Range keeps for it (field `h`), else the String it holds
-   (field `e`) as bytes, else nil for an open end. */
-void str_box_kept(Buf *b, int t, const char *h, const char *e) {
-  char kept[48];
-  snprintf(kept, sizeof kept, "_t%d.%s", t, h);
-  buf_printf(b, "%s ? ", kept);
-  str_box_handle(b, kept);
-  buf_printf(b, " : _t%d.%s ? sp_box_str_new(_t%d.%s) : sp_box_nil()", t, e, t, e);
-}
-
 /* The box face of a String value by its representation (emit_boxed_impl's
    TY_STRING arm): SP_STR_BOX of the value. A value that may allocate (a
    call's answer, a new String) is boxed into a rooted temp first: the box

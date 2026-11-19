@@ -3752,21 +3752,7 @@ void declare_local_named(Compiler *c, Buf *b, LocalVar *lv, const char *name, in
   if (vol && ptr) buf_puts(b, "volatile ");  /* cty ends with "* "; -> "* volatile " */
   buf_printf(b, " lv_%s = %s;\n", name, init);
   if (t == TY_POLY) buf_printf(b, "    SP_GC_ROOT_RBVAL(lv_%s);\n", name);
-  /* A String range is a by-value struct carrying two GC strings, so the
-     struct's own address is not a root the collector can follow -- it would
-     read the first endpoint as if it were the object. Each endpoint slot is
-     rooted instead, the way a value-type object's string fields below are.
-     Without this both endpoints were collected while the range still named
-     them: `("a#{i}".."z#{i}")` read back wrong on 14 of 400 turns plainly and
-     on all 400 under GC stress (#4353 left this open). */
-  else if (t == TY_STR_RANGE) {
-    buf_printf(b, "    SP_GC_ROOT_STR(lv_%s.first);\n", name);
-    buf_printf(b, "    SP_GC_ROOT_STR(lv_%s.last);\n", name);
-    {
-      buf_printf(b, "    SP_GC_ROOT(lv_%s.hf);\n", name);
-      buf_printf(b, "    SP_GC_ROOT(lv_%s.hl);\n", name);
-    }
-  }
+  else if (t == TY_STR_RANGE) buf_printf(b, "    SP_GC_ROOT_SRANGE(lv_%s);\n", name);
   /* A String slot takes the STRING root form, not the object one. Both reach
      an ordinary heap string, but a mutable String's PAYLOAD (marker 0xfd) is
      owned by the handle in front of it, and only sp_mark_string -- which the
@@ -4399,14 +4385,7 @@ void emit_scope_decls_ends(Compiler *c, Scope *s, Buf *b, size_t *ends) {
          struct's first word (the tag). */
       switch (lv->type) {
       case TY_POLY: buf_printf(b, "    SP_GC_ROOT_RBVAL(lv_%s);\n", lv->name); break;
-      case TY_STR_RANGE:   /* two GC strings by value; see emit_local_decl */
-        buf_printf(b, "    SP_GC_ROOT_STR(lv_%s.first);\n", lv->name);
-        buf_printf(b, "    SP_GC_ROOT_STR(lv_%s.last);\n", lv->name);
-        {
-          buf_printf(b, "    SP_GC_ROOT(lv_%s.hf);\n", lv->name);
-          buf_printf(b, "    SP_GC_ROOT(lv_%s.hl);\n", lv->name);
-        }
-        break;
+      case TY_STR_RANGE: buf_printf(b, "    SP_GC_ROOT_SRANGE(lv_%s);\n", lv->name); break;
       case TY_STRING: buf_printf(b, "    SP_GC_ROOT_STR(lv_%s);\n", lv->name); break;   /* see emit_local_decl */
       default:
         if (needs_root(lv->type) && !comp_ty_value_obj(c, lv->type)) buf_printf(b, "    SP_GC_ROOT(lv_%s);\n", lv->name);
@@ -10511,13 +10490,8 @@ void emit_inlined_local_decl(Compiler *c, LocalVar *lv, const char *rn, Buf *b, 
     else if (needs_root(lv->type) && !comp_ty_value_obj(c, lv->type)) {
       emit_indent(b, din); buf_printf(b, "SP_GC_ROOT(lv_%s);\n", rn);
     }
-    /* two GC strings by value; see emit_local_decl */
     else if (lv->type == TY_STR_RANGE) {
-      emit_indent(b, din); buf_printf(b, "SP_GC_ROOT_STR(lv_%s.first); SP_GC_ROOT_STR(lv_%s.last);", rn, rn);
-      Buf ref; memset(&ref, 0, sizeof ref); buf_printf(&ref, "lv_%s", rn);
-      emit_srange_handle_roots(c, ref.p, b);
-      free(ref.p);
-      buf_puts(b, "\n");
+      emit_indent(b, din); buf_printf(b, "SP_GC_ROOT_SRANGE(lv_%s);\n", rn);
     }
     return;
   }
@@ -13106,15 +13080,9 @@ static void emit_ctor_params(Compiler *c, int init, int init_has_blk, Buf *b) {
   else buf_puts(b, "void");
 }
 
-/* A String Range parameter of a constructor, held by value: its endpoint
-   strings and, built --share-strings, the handles it keeps, rooted before
-   the object is allocated. The argument is often a Range literal whose own
-   roots ended with the expression that made it, and nothing else holds an
-   endpoint made on the spot until the object stores it. */
+/* Root the Range's two handles before allocating its destination object. */
 static void emit_srange_param_root(Compiler *c, const char *name, Buf *b) {
-  buf_printf(b, "  SP_GC_ROOT_STR(%s.first); SP_GC_ROOT_STR(%s.last);", name, name);
-  emit_srange_handle_roots(c, name, b);
-  buf_puts(b, "\n");
+  buf_printf(b, "  SP_GC_ROOT_SRANGE(%s);\n", name);
 }
 /* ...each String Range parameter of the initialize the constructor takes */
 static void emit_ctor_srange_roots(Compiler *c, int init, Buf *b) {

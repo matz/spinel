@@ -212,7 +212,7 @@ const char *sp_frange_inspect(sp_FloatRange r);
 sp_RbVal sp_box_frange(sp_FloatRange v);
 sp_float sp_frange_max(sp_FloatRange r);
 static inline sp_StrRange sp_srange_new(struct sp_String_s *first, struct sp_String_s *last, sp_int exclusive) {
-  return (sp_StrRange){ .hf = first, .hl = last, .excl = exclusive != 0 };
+  return (sp_StrRange){ .first = first, .last = last, .excl = exclusive != 0 };
 }
 static inline struct sp_String_s *sp_srange_bound(sp_RbVal value) {
   if (value.tag == SP_TAG_NIL) return NULL;
@@ -224,10 +224,9 @@ static inline sp_StrRange sp_srange_new_box(sp_RbVal first, sp_RbVal last, sp_in
   struct sp_String_s *end = sp_srange_bound(last);
   return sp_srange_new(begin, end, exclusive);
 }
-/* a Range read with the handles it keeps as they are now (#8321) */
-sp_StrRange sp_srange_live(sp_StrRange r);
-/* a boxed String Range read so */
-#define SP_SRANGE_OF(p) sp_srange_live(*(sp_StrRange *)(p))
+static inline sp_StrRange sp_srange_value(const void *box) { return *(const sp_StrRange *)box; }
+static inline const char *sp_srange_first(sp_StrRange r) { return r.first ? r.first->data : NULL; }
+static inline const char *sp_srange_last(sp_StrRange r) { return r.last ? r.last->data : NULL; }
 sp_StrArray *sp_srange_to_a(sp_StrRange r);
 sp_StrArray *sp_srange_first_n(sp_RbVal box, sp_int n, int take);
 sp_bool sp_srange_eq(sp_StrRange a, sp_StrRange b);

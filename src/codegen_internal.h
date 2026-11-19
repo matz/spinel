@@ -377,7 +377,6 @@ int strbuf_route_srange_extreme(Compiler *c, int v);
 int strbuf_route_srange_kept(Compiler *c, int v);
 int strbuf_srange_tail(Compiler *c, int v);
 void emit_srange_end_recv(Compiler *c, int v, Buf *b);
-void emit_srange_kept_test(Compiler *c, int v, const char *r, Buf *b);
 int emit_srange_route_boxed(Compiler *c, int v, Buf *b);
 void emit_slot_expr(Compiler *c, int id, Buf *b);
 /* A `next` value a block's boxed answer slot takes: a shared String as its
@@ -508,7 +507,6 @@ void str_read_handle_close(Buf *b);
    field `h`, String field `e`), written in one place (codegen_str.c) */
 void str_new_handle_open(Buf *b);
 void str_new_handle_close(Buf *b);
-void str_box_kept(Buf *b, int t, const char *h, const char *e);
 /* The box face of a String value by its representation: SP_STR_BOX, into a
    rooted temp when the value may allocate (codegen_str.c) */
 void emit_str_box_rooted(Compiler *c, int v, Buf *b);
@@ -3303,7 +3301,6 @@ void emit_gc_root_tmp(Compiler *c, TyKind t, int tmp, Buf *b);
 int text_uses_tmp(const char *txt, int n);
 int ty_gc_holds_refs(Compiler *c, TyKind t);
 void emit_gc_root_tmp_refs(Compiler *c, TyKind t, int tmp, Buf *b);
-void emit_srange_handle_roots(Compiler *c, const char *ref, Buf *b);
 void emit_srange_marks(Compiler *c, const char *ref, Buf *b);
 void emit_srange_walk_open(Compiler *c, int recv, int stride, char *elem, size_t elemcap, Buf *b, int indent);
 void emit_srange_member_param(Compiler *c, int block, const char *p0_orig, const char *p0, const char *elem, Buf *b, int indent);

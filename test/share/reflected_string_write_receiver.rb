@@ -27,3 +27,12 @@ reflected_write(first, other, shared)
 reflected_write_dropped(first, other, shared)
 shared << "!"
 p first.value
+
+target = ReflectionCell.new(+"held")
+events = []
+begin
+  target.instance_variable_set(:@value, (target.freeze; events << :ran; GC.start; +"new"))
+rescue FrozenError
+  events << :frozen
+end
+p [events, target.value]

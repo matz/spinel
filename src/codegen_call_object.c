@@ -3576,8 +3576,8 @@ static void emit_ivar_set_recv(Compiler *c, int recv, int t, int held, Buf *b) {
   else emit_recv_rooted(c, recv, t, "SP_GC_ROOT", b);
 }
 
-/* Reflection-only slots keep an assigned bit beside their value. Evaluate
-   the value before either the frozen check or the successful store. */
+/* Hold the receiver and value before the frozen check and write.
+   Reflection-only slots also keep an assigned bit beside their value. */
 static void emit_reflect_ivar_set(Compiler *c, int id, int recv, int value, int cid,
                                   const char *sym, TyKind mt, int is_val, Buf *b) {
   int tr = ++g_tmp, tv = ++g_tmp;
@@ -3592,6 +3592,17 @@ static void emit_reflect_ivar_set(Compiler *c, int id, int recv, int value, int 
   int nb = oint_kind(mt) && iv >= 0 && ivar_has_nilbit(c, cid, iv);
   if (nb) buf_printf(b, "%s _t%d = ", oint_ctype(mt), tv); else { emit_ctype(c, mt, b); buf_printf(b, " _t%d = ", tv); }
   if (nb) emit_oint_expr(c, value, mt, b);
+  else if (mt == TY_STRBUF) {
+    /* Run the value's prelude after holding the write receiver. */
+    Buf rhs = {0}, pre = {0}, *outer_pre = g_pre;
+    g_pre = &pre;
+    emit_strbuf_value(c, value, &rhs);
+    g_pre = outer_pre;
+    if (pre.len) buf_printf(b, "({ %s%s; })", pre.p, rhs.p);
+    else buf_puts(b, rhs.p);
+    free(rhs.p);
+    free(pre.p);
+  }
   else if (emit_array_into_poly_slot(c, mt, value, b)) { }
   else emit_coerce(c, value, mt, CO_HOLD, "an instance variable write", b);
   buf_puts(b, "; ");
@@ -3687,7 +3698,7 @@ int emit_object_ivar_call(Compiler *c, int id, const char *name, int recv, TyKin
       TyKind mt = c->classes[cid].ivar_types[mi];
       const char *acc = is_val ? "." : "->";
       if (is_set) {
-        if (ivar_set_kind(c, cid, sym) == 3) {
+        if (mt == TY_STRBUF || ivar_set_kind(c, cid, sym) == 3) {
           emit_reflect_ivar_set(c, id, recv, argv[1], cid, sym, mt, is_val, b);
           return 1;
         }
@@ -3695,9 +3706,8 @@ int emit_object_ivar_call(Compiler *c, int id, const char *name, int recv, TyKin
            FrozenError rather than taking it (#3872) */
         if (!is_val && c->classes[cid].freeze_observed) {
           int tf9 = ++g_tmp;
-          int rdf = ivar_set_slot_read(c, id, mt);
           buf_printf(b, "({ sp_%s *_t%d = ", c->classes[cid].c_name, tf9);
-          emit_ivar_set_recv(c, recv, tf9, recv_lvalue && !rdf, b);
+          emit_ivar_set_recv(c, recv, tf9, recv_lvalue, b);
           char selft[32]; snprintf(selft, sizeof selft, "_t%d", tf9);
           emit_frozen_obj_guard(c, cid, selft, b);
           if (oint_kind(mt) && ivar_has_nilbit(c, cid, mi)) {
@@ -3718,13 +3728,6 @@ int emit_object_ivar_call(Compiler *c, int id, const char *name, int recv, TyKin
           else if (emit_array_into_poly_slot(c, mt, argv[1], b)) { }
           else emit_coerce(c, argv[1], mt, CO_HOLD, "an instance variable write", b);
           buf_printf(b, "; _t%d->iv_%s = _t%d; ", tf9, iv_c(sym + 1), tv9);
-          if (rdf) {
-            Buf ivt; memset(&ivt, 0, sizeof ivt);
-            buf_printf(&ivt, "_t%d->iv_%s", tf9, iv_c(sym + 1));
-            emit_strbuf_node_read(c, id, ivt.p, b);
-            buf_puts(b, "; ");
-            free(ivt.p);
-          }
           buf_puts(b, "})");
           return 1;
         }
@@ -3743,28 +3746,21 @@ int emit_object_ivar_call(Compiler *c, int id, const char *name, int recv, TyKin
         }
         /* The receiver is taken into a temp first (emit_ivar_set_recv) and
            the store is a statement of its own, with the slot read after it
-           as the call's value (as a String where one is asked): the
+           as the call's value: the
            write-barrier pass puts a statement's barrier after the value is
            built, while an assignment inside an expression takes a wrapper
            that can run the barrier first. A receiver held already keeps
            the expression where no barrier is at stake: a value object, a
            slot that holds no reference, or a dropped value, whose
            parenthesised statement takes its barrier after the value. */
-        int rdp = ivar_set_slot_read(c, id, mt), tvp = rdp ? ++g_tmp : 0;
         int held = recv_lvalue || arg_ran_first(recv, 0);
         int ref_slot = needs_root(mt) || mt == TY_STR_RANGE;
-        int string_effect = mt == TY_STRBUF && subtree_has_side_effect(c, argv[1]);
-        int stmt = !is_val && (rdp || !held || string_effect || (ref_slot && !comp_value_dropped(c, id)));
+        int stmt = !is_val && (!held || (ref_slot && !comp_value_dropped(c, id)));
         Buf lhs; memset(&lhs, 0, sizeof lhs);
-        if (rdp && is_val) {
-          buf_puts(b, "({ "); buf_puts(&lhs, "("); emit_expr(c, recv, &lhs);
-          buf_printf(&lhs, ").iv_%s", iv_c(sym + 1));
-          buf_printf(b, "%s = ", lhs.p);
-        }
-        else if (stmt) {
+        if (stmt) {
           int trp = ++g_tmp;
           buf_printf(b, "({ sp_%s *_t%d = ", c->classes[cid].c_name, trp);
-          emit_ivar_set_recv(c, recv, trp, recv_lvalue && !rdp && !string_effect, b);
+          emit_ivar_set_recv(c, recv, trp, recv_lvalue, b);
           buf_printf(&lhs, "_t%d->iv_%s", trp, iv_c(sym + 1));
           buf_printf(b, "%s = ", lhs.p);
         }
@@ -3777,17 +3773,6 @@ int emit_object_ivar_call(Compiler *c, int id, const char *name, int recv, TyKin
           /* nil into a plain Integer / Float field (no nil bit): the slot cannot hold it */
           buf_printf(b, "%s(%s)", oint_arg(mt), oint_nil(mt));
         }
-        else if (mt == TY_STRBUF) {
-          /* Run the value's prelude after holding the write receiver. */
-          Buf value = {0}, pre = {0}, *outer_pre = g_pre;
-          g_pre = &pre;
-          emit_strbuf_value(c, argv[1], &value);
-          g_pre = outer_pre;
-          if (pre.len) buf_printf(b, "({ %s%s; })", pre.p, value.p);
-          else buf_puts(b, value.p);
-          free(value.p);
-          free(pre.p);
-        }
         /* nil into a scalar slot is the nil it holds beside the value, not
            the zero value the literal emits as */
         else if (nt_kind(nt, argv[1]) == NK_NilNode && nil_value(mt)) buf_puts(b, nil_value(mt));
@@ -3795,13 +3780,7 @@ int emit_object_ivar_call(Compiler *c, int id, const char *name, int recv, TyKin
            `@x = v` write does */
         else if (emit_array_into_poly_slot(c, mt, argv[1], b)) { }
         else emit_coerce(c, argv[1], mt, CO_HOLD, "an instance variable write", b);
-        if (rdp) {
-          char tvn[32]; snprintf(tvn, sizeof tvn, "_t%d", tvp);
-          buf_printf(b, "; sp_String *%s = %s; SP_GC_ROOT(%s); ", tvn, lhs.p, tvn);
-          emit_strbuf_node_read(c, id, tvn, b);
-          buf_puts(b, "; })");
-        }
-        else if (stmt) buf_printf(b, "; %s; })", lhs.p);
+        if (stmt) buf_printf(b, "; %s; })", lhs.p);
         else buf_puts(b, ")");
         free(lhs.p);
       }

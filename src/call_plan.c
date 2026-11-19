@@ -4505,11 +4505,19 @@ static int list_core_vis_mask(const char *n) {
   for (int v = SP_VIS_PUBLIC; v <= SP_VIS_PROTECTED; v++) if ((vm >> v) & 1) m |= core_bit_of_vis(v);
   return m;
 }
-static unsigned presence_reader_side(const NodeTable *nt, int id, int *mask, int *list) {
+/* The visibilities a respond_to? id counts (core bits): the public one, or
+   every one where its second argument is `true`; 0 where that argument is
+   one only the run knows */
+static int respond_to_vis_mask(const NodeTable *nt, int id) {
   int ac = 0;
   const int *av = call_args(nt, id, &ac);
-  int flag = ac == 2 && nt_kind(nt, av[1]) == NK_TrueNode;
+  NodeKind ak = ac >= 2 ? nt_kind(nt, av[1]) : NK_FalseNode;
+  return ak == NK_TrueNode ? 7 : ak == NK_FalseNode || ak == NK_NilNode ? 1 : 0;
+}
+static unsigned presence_reader_side(const NodeTable *nt, int id, int *mask, int *list) {
+  int ac = 0, rm = respond_to_vis_mask(nt, id), flag = rm == 7;
   const char *rn = nt_str(nt, id, "name");
+  call_args(nt, id, &ac);
   *list = !is_respond_to_name(rn);
   *mask = !*list ? (flag ? 7 : 1) : is_instance_method_list(rn) ? list_core_vis_mask(rn) : method_defined_vis_mask(rn);
   return !*list || (ac == 1 && !is_instance_method_list(rn)) || flag ? CT_REACH : CT_OWN;
@@ -4929,21 +4937,42 @@ int cplan_class_responds(Compiler *c, int ci, const char *qm, int id) {
   }
   return cplan_class_builtin_responds(c, ci, qm);
 }
+/* Does class k's class method qm, which its table holds (pr), count for a
+   reader of the visibilities in mask at call id: by the visibility the
+   record has where id runs; else the table's where the name's visibility
+   does not vary over the load (elab_method_vis_varies), or the one every
+   version of it on k's class-side chain takes (elab_version_vis); where
+   none tells (a version's that only the run knows), as the table holds it */
+static int class_value_vis_counts(Compiler *c, int id, int k, const char *qm, const CplanPresence *pr, int mask) {
+  ElabVersion vs[VER_MAX_ARMS];
+  LoadPoint p = elab_point_of(c, id);
+  int vis = p.region >= 0 ? elab_method_vis_at(c, k, qm, 1, p) : -1;
+  if (vis < 0 && !elab_method_vis_varies(c, qm)) vis = pr->vis;
+  for (int i = 0, nv = vis < 0 ? elab_chain_versions(c, k, 1, qm, vs, VER_MAX_ARMS) : 0, v; i < nv; i++) {
+    v = vs[i].v->kind == LR_UNDEF || vs[i].v->kind == LR_REMOVE ? -1 : elab_version_vis(c, &vs[i]);
+    if (v < 0 || (i && v != vis)) { vis = -1; break; }
+    vis = v;
+  }
+  return vis < 0 || (core_bit_of_vis(vis) & mask);
+}
 /* See call_plan.h. */
 int cplan_class_value_presence(Compiler *c, int id, const char *qm, CplanPresList *out) {
   int uni = class_object_universal_method(qm), any = class_reopen_cmethod(c, -1, -1, qm) >= 0;
   *out = (CplanPresList){ PRL_CLASS_VALUE, -1, 0, NULL, uni || any };
   CplanCells cs;
   CplanPresence pr;
+  int mask = respond_to_vis_mask(c->nt, id);
   for (int k = 0; k < c->nclasses; k++) {
+    PresenceKind pk;
     /* (its version cells, where they answer; their els the builtin's answer where none is live) */
-    if (cplan_cmethod_presence(c, id, k, qm, 1, 0, &cs) && cplan_cells_testable(c, &cs)) {
+    if (cplan_cmethod_presence(c, id, k, qm, mask ? mask : 1, 0, &cs) && cplan_cells_testable(c, &cs)) {
       cs.els = cs.els || cplan_class_builtin_responds(c, k, qm);
       presence_arm(c, out, k, &cs, -1);
     }
+    /* (else the table's method, of the visibility it has where the reader runs: class_value_vis_counts) */
     else if (cplan_class_responds(c, k, qm, id) &&
-             (cplan_presence(c, id, k, CT_CMETHOD, qm, &pr) != PR_ABSENT || cplan_class_builtin_responds(c, k, qm)))
-      presence_arm(c, out, k, NULL, PRA_YES);
+             ((pk = cplan_presence(c, id, k, CT_CMETHOD, qm, &pr)) != PR_ABSENT || cplan_class_builtin_responds(c, k, qm)))
+      presence_arm(c, out, k, NULL, !mask || pk == PR_ABSENT || !pr.table || class_value_vis_counts(c, id, k, qm, &pr, mask) ? PRA_YES : PRA_NO);
     else continue;
     any |= !uni && out->arm[out->n - 1].ans != PRA_NO;
   }

@@ -1673,15 +1673,16 @@ enum { PRL_OBJECT, PRL_BOXED, PRL_CLASS, PRL_CLASS_VALUE };
 typedef struct { int cls, ans; CplanCells cells; } CplanPresArm;
 typedef struct { int form, nil, n; CplanPresArm *arm; int other; } CplanPresList;
 int cplan_presence_list(Compiler *c, int id, TyKind rt, CplanPresList *out);
-/* What a class value answers to respond_to?(qm) at call id, with an
-   include_all or without (a class method a body defines is public), form
-   PRL_CLASS_VALUE: an arm for each program class that may answer
-   true, PRA_YES or PRA_CELLS (its class method's version cells,
+/* What a class value answers to respond_to?(qm) at call id, of the
+   visibilities it counts (public, or every one where a literal `true`
+   follows the name), form PRL_CLASS_VALUE: an arm for each program class,
+   PRA_YES, PRA_NO or PRA_CELLS (its class method's version cells,
    cplan_cmethod_presence, whose els is the builtin's answer where none is
    live); a program class with no arm answers false. The table answers a
    class whose name the record cannot order (the builtin's where the
    record proves none of its class methods of the name live there,
-   cplan_presence), and other the answer of a class value the program does
+   cplan_presence), with the visibility the record has where the reader
+   runs, or the table's where the name's does not vary; and other the answer of a class value the program does
    not define (the Class surface, a `class Class` reopening's method). 0,
    with no arms, where none answers true but by Class's own surface, which
    the caller's builtin answers. Freed with cplan_presence_list_free. */

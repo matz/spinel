@@ -786,7 +786,7 @@ static int collect_dm_each_unroll(Compiler *c, int id, const WalkCtx *w) {
     Scope *ms = comp_scope_new(c, names[k], dc);
     free(names[k]);
     { ms->body = kbody; comp_touch_scope(ms->idx); }
-    { ms->class_id = class_id; comp_touch_scope(ms->idx); }
+    { ms->class_id = class_id; comp_touch_scope_shape(c, ms->idx); }
     ms->dm_subst_name = strdup(bv);
     ms->dm_subst_node = elems[k];
     /* the define_method block's parameters are the method's, as for a
@@ -969,7 +969,7 @@ static void cs_synth_method(Compiler *c, int class_id, int def_node, const char 
     if (c->scopes[s].class_id == class_id && c->scopes[s].name &&
         sp_streq(c->scopes[s].name, name)) return;  /* already present */
   Scope *s = comp_scope_new(c, name, def_node);
-  { s->class_id = class_id; comp_touch_scope(s->idx); }
+  { s->class_id = class_id; comp_touch_scope_shape(c, s->idx); }
   s->cs_synth = cs_synth;
   scope_set_ret(s, ret);
   { s->body = -1; comp_touch_scope(s->idx); }
@@ -1281,8 +1281,8 @@ static void sclass_walk_stmt(Compiler *c, int s, const WalkCtx *w, int target_cl
     int new_idx = c->nscopes - 1;
     elab_def_scope(c, s, new_idx);
     { sc->body = nt_ref(nt, s, "body"); comp_touch_scope(sc->idx); }
-    { sc->class_id = target_class; comp_touch_scope(sc->idx); }
-    { sc->is_cmethod = 1; comp_touch_scope(sc->idx); }
+    { sc->class_id = target_class; comp_touch_scope_shape(c, sc->idx); }
+    { sc->is_cmethod = 1; comp_touch_scope_shape(c, sc->idx); }
     if (def_takes_forwarding(nt, s)) sc->params_later = 1;   /* (scope_forwarding_params) */
     else collect_def_params(c, s, sc);
     /* Assign scope to the def node and its body */
@@ -1499,7 +1499,7 @@ static int detached_scope(Compiler *c) {
     if (c->scopes[s].name && sp_streq(c->scopes[s].name, "__spinel_detached") && c->scopes[s].def_node < 0)
       return s;
   Scope *ds = comp_scope_new(c, "__spinel_detached", -1);
-  { ds->class_id = -1; comp_touch_scope(ds->idx); }
+  { ds->class_id = -1; comp_touch_scope_shape(c, ds->idx); }
   return c->nscopes - 1;
 }
 static void file_detached(Compiler *c, int n, int ds, int depth) {
@@ -1884,11 +1884,11 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
     int new_idx = c->nscopes - 1;
     elab_def_scope(c, id, new_idx);
     { s->body = nt_ref(c->nt, id, "body"); comp_touch_scope(s->idx); }
-    { s->class_id = class_id; comp_touch_scope(s->idx); }   /* instance method of the enclosing class */
+    { s->class_id = class_id; comp_touch_scope_shape(c, s->idx); }   /* instance method of the enclosing class */
     /* `def self.foo` / `def Klass.foo`: a class (singleton) method. */
     int defrecv = nt_ref(c->nt, id, "receiver");
     if (defrecv >= 0) {
-      { s->is_cmethod = 1; comp_touch_scope(s->idx); }
+      { s->is_cmethod = 1; comp_touch_scope_shape(c, s->idx); }
       defrecv = nt_def_receiver(c->nt, defrecv);
       /* `def Klass.foo` with an explicit constant receiver (typically defined
          outside the class body, where the enclosing class_id is -1) attaches
@@ -1896,7 +1896,7 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
          function. `def self.foo` keeps the enclosing class. */
       if (nt_kind(c->nt, defrecv) == NK_ConstantReadNode || nt_kind(c->nt, defrecv) == NK_ConstantPathNode) {
         int rci = singleton_const_class(c, defrecv, class_id);
-        if (rci >= 0) { s->class_id = rci; comp_touch_scope(s->idx); }
+        if (rci >= 0) { s->class_id = rci; comp_touch_scope_shape(c, s->idx); }
         else if (rci == -2) singleton_reopen_mark(c, id, defrecv, class_id);
       }
     }
@@ -2073,8 +2073,8 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
           { dm_s->body = nt_ref(c->nt, dm_blk, "body"); comp_touch_scope(dm_s->idx); }
           /* the block is a method's body from here on: its `next` is a `return` */
           method_body_next_to_return((NodeTable *)c->nt, dm_s->body);
-          { dm_s->class_id = dm_cls; comp_touch_scope(dm_s->idx); }
-          { dm_s->is_cmethod = dm_cmethod; comp_touch_scope(dm_s->idx); }
+          { dm_s->class_id = dm_cls; comp_touch_scope_shape(c, dm_s->idx); }
+          { dm_s->is_cmethod = dm_cmethod; comp_touch_scope_shape(c, dm_s->idx); }
           /* the block's params are the defined method's params (e.g. the
              `&:to_s`-rewritten `{ |_spx| _spx.to_s }`'s _spx), all of
              them: a define_method that desugar_define_method_keywords
@@ -2181,7 +2181,7 @@ void walk_scope_stmt(Compiler *c, int stmt, int k, int scope_idx, ElabPos pos) {
 }
 
 static void mf_mark(Compiler *c, int mi) {
-  { c->scopes[mi].is_cmethod = 1; comp_touch_scope(c->scopes[mi].idx); }
+  { c->scopes[mi].is_cmethod = 1; comp_touch_scope_shape(c, c->scopes[mi].idx); }
   c->scopes[mi].is_module_function = 1;
 }
 
@@ -3838,13 +3838,13 @@ static int scope_copy_to_class(Compiler *c, int ms, int newci, const char *nm, i
     if (nb >= 0) {
       comp_grow_node_arrays(c);
       src = &c->scopes[ms]; dst = &c->scopes[dst_idx];
-      { dst->body = nb; dst->is_cmethod = sg; comp_touch_scope(dst->idx); }
+      { dst->body = nb; dst->is_cmethod = sg; comp_touch_scope_shape(c, dst->idx); }
       walk_scope(c, nb, dst_idx, newci);
     }
     else { dst->body = src->body; comp_touch_scope(dst->idx); }
   }
-  { dst->class_id = newci; comp_touch_scope(dst->idx); }
-  { dst->is_cmethod = sg; comp_touch_scope(dst->idx); }
+  { dst->class_id = newci; comp_touch_scope_shape(c, dst->idx); }
+  { dst->is_cmethod = sg; comp_touch_scope_shape(c, dst->idx); }
   { dst->reachable = src->reachable; comp_touch_scope(dst->idx); }
   scope_copy_method_shape(dst, src);
   /* The copy's parameter locals carry the original's types. A method
@@ -4048,8 +4048,8 @@ static int sg_parked_class(Compiler *c, int node) {
 static void sg_reattach_scope(Compiler *c, int node, int ci) {
   for (int ds = 1; ds < c->nscopes; ds++) {
     if (c->scopes[ds].def_node == node) {
-      { c->scopes[ds].class_id = ci; comp_touch_scope(c->scopes[ds].idx); }
-      { c->scopes[ds].is_cmethod = 0; comp_touch_scope(c->scopes[ds].idx); }
+      { c->scopes[ds].class_id = ci; comp_touch_scope_shape(c, c->scopes[ds].idx); }
+      { c->scopes[ds].is_cmethod = 0; comp_touch_scope_shape(c, c->scopes[ds].idx); }
       break;
     }
   }
@@ -4710,6 +4710,7 @@ static int alias_capture_earlier_def(Compiler *c, ClassInfo *cls,
     snprintf(hidden, sizeof hidden, "%s#%s", od, comp_node_tag(c, alias_node));
     free(c->scopes[before].name);
     c->scopes[before].name = strdup(nw_redef ? hidden : nw);
+    comp_touch_scope_shape(c, c->scopes[before].idx);
     if (!nw_redef) return 1;
   }
   char *target = strdup(c->scopes[before].name);
@@ -5029,8 +5030,8 @@ static const char *alias_body_copy(Compiler *c, int k, int want, const char *od)
       src = &c->scopes[si]; dst = &c->scopes[di];
     }
   }
-  { dst->class_id = k; comp_touch_scope(dst->idx); }
-  { dst->is_cmethod = 0; comp_touch_scope(dst->idx); }
+  { dst->class_id = k; comp_touch_scope_shape(c, dst->idx); }
+  { dst->is_cmethod = 0; comp_touch_scope_shape(c, dst->idx); }
   dst->is_include_copy = src->is_include_copy;
   { dst->origin_module_ci = src->origin_module_ci; comp_touch_scope(dst->idx); }
   { dst->reachable = 1; comp_touch_scope(dst->idx); }
@@ -5049,7 +5050,7 @@ static const char *alias_body_copy(Compiler *c, int k, int want, const char *od)
 static void mf_copy_scope(Compiler *c, int cls, int si, const char *name) {
   comp_scope_new(c, name, c->scopes[si].def_node);
   int di = c->nscopes - 1;
-  { c->scopes[di].class_id = cls; c->scopes[di].is_cmethod = 1; comp_touch_scope(c->scopes[di].idx); }
+  { c->scopes[di].class_id = cls; c->scopes[di].is_cmethod = 1; comp_touch_scope_shape(c, c->scopes[di].idx); }
   int body = c->scopes[si].body, nb = body >= 0 ? nt_clone_subtree((NodeTable *)c->nt, body) : -1;
   if (nb >= 0) comp_grow_node_arrays(c);
   { c->scopes[di].body = nb >= 0 ? nb : body; comp_touch_scope(c->scopes[di].idx); }
@@ -5273,7 +5274,7 @@ static int alias_accessor_method(Compiler *c, const ElabEntry *e, int w, int at,
   walk_scope(c, def, c->nscope[e->node], e->cls);
   if (s >= c->nscopes || c->scopes[s].def_node != def) return 0;
   free(c->scopes[s].name);
-  { c->scopes[s].name = strdup(e->name); c->scopes[s].accessor_of = accessor; comp_touch_scope(c->scopes[s].idx); }
+  { c->scopes[s].name = strdup(e->name); c->scopes[s].accessor_of = accessor; comp_touch_scope_shape(c, c->scopes[s].idx); }
   snprintf(ivname, sizeof ivname, "@%s", base);
   comp_ivar_intern(&c->classes[e->cls], ivname, IVS_INST);
   elab_attr_scope(c, e, s);
@@ -5462,6 +5463,7 @@ static int alias_string_reader_scope(Compiler *c, const ElabEntry *e) {
   Scope *alias = &c->scopes[scope];
   free(alias->name);
   alias->name = strdup(e->name);
+  comp_touch_scope_shape(c, alias->idx);
   alias->alias_of = strdup(target);
   if (!alias->name || !alias->alias_of) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   comp_touch_scope(alias->idx);
@@ -8301,8 +8303,9 @@ static int mixin_method_behind(Compiler *c, int ci, const char *name, int like, 
   if (e >= c->nscopes) return -1;
   free(c->scopes[e].name);
   c->scopes[e].name = strdup(shadow);
+  comp_touch_scope_shape(c, c->scopes[e].idx);
   comp_scope_set_shadow(c, e, SHADOW_PREP, name);
-  { c->scopes[e].class_id = ci; comp_touch_scope(c->scopes[e].idx); }
+  { c->scopes[e].class_id = ci; comp_touch_scope_shape(c, c->scopes[e].idx); }
   { c->scopes[e].reachable = 1; comp_touch_scope(c->scopes[e].idx); }
   c->scopes[e].super_behind = builtin_arity < 0;
   g_inc_did_clone = 1;
@@ -8754,8 +8757,8 @@ else {
       { dst->body = src->body; comp_touch_scope(dst->idx); }
     }
     { dst->origin_module_ci = src->class_id + 1; comp_touch_scope(dst->idx); }  /* #owner names it (#3662) */
-    { dst->class_id = ci; comp_touch_scope(dst->idx); }
-    { dst->is_cmethod = 0; comp_touch_scope(dst->idx); }
+    { dst->class_id = ci; comp_touch_scope_shape(c, dst->idx); }
+    { dst->is_cmethod = 0; comp_touch_scope_shape(c, dst->idx); }
     dst->is_include_copy = 1;
     { dst->reachable = src->reachable; comp_touch_scope(dst->idx); }
     /* ...but a module_function original keeps its module-side spelling:
@@ -8794,6 +8797,7 @@ else {
     int b = -1 - m->guard_behind;
     m->guard_behind = b >= 0 && b < snap && made[b] ? made[b] - 1 : -1;
     if (m->guard_behind < 0) m->mixin_guarded = 0;   /* (nothing to stand in front of: unguarded) */
+    comp_touch_scope_shape(c, d);
   }
   include_chain_copy(c, ci, mod_id, made, snap, 0);
   free(made);
@@ -9219,7 +9223,7 @@ void process_include_body(Compiler *c, int ci, int body_node) {
     int plain = (here && !guard) || unplaced;
     include_module_methods(c, ci, mod_id, guard, plain, cells, mx[j].stmt);
     for (int s = s0; plain && s < c->nscopes; s++)
-      if (c->scopes[s].class_id == ci && c->scopes[s].is_include_copy) c->scopes[s].mixin_unversioned = 1;
+      if (c->scopes[s].class_id == ci && c->scopes[s].is_include_copy) { c->scopes[s].mixin_unversioned = 1; comp_touch_scope_shape(c, s); }
     for (int s = s0; here && !guard && !layered && s < c->nscopes; s++)
       if (c->scopes[s].class_id == ci && c->scopes[s].is_include_copy) c->scopes[s].mixin_plain_late = 1;
     /* the writes that set the cells its copies' guard entries read, one
@@ -9420,6 +9424,7 @@ static void prepend_copy_name(Compiler *c, int mi) {
     if (sp_streq(cl->prep_from[k], key)) { free(cl->prep_from[k]); cl->prep_from[k] = strdup(renamed); break; }
   char *user = m->name;
   m->name = strdup(shadow);
+  comp_touch_scope_shape(c, m->idx);
   comp_scope_set_shadow(c, mi, SHADOW_PREP, user);
   free(user);
 }
@@ -9816,6 +9821,7 @@ static int extend_class_with(Compiler *c, int ci, int mod_id, int inherited, int
       /* aside while the copy takes the name, then back */
       own_name = c->scopes[own].name;
       c->scopes[own].name = strdup("\x01own");
+      comp_touch_scope_shape(c, c->scopes[own].idx);
     }
     else if (own >= 0) {
       /* An earlier extend put this name here. The later module comes first
@@ -9909,9 +9915,10 @@ static int extend_class_with(Compiler *c, int ci, int mod_id, int inherited, int
         comp_cmethod_extend_vis_set(&c->classes[ci], src->name, src->is_module_function && ci != mod_id
                                     ? SP_VIS_PRIVATE : comp_method_vis_in_chain(c, mod_id, src->name));
       if (own_name) {
-        if (cp >= 0) { free(c->scopes[cp].name); c->scopes[cp].name = strdup(behind); comp_scope_set_shadow(c, cp, SHADOW_INC, src->name); }
+        if (cp >= 0) { free(c->scopes[cp].name); c->scopes[cp].name = strdup(behind); comp_touch_scope_shape(c, c->scopes[cp].idx); comp_scope_set_shadow(c, cp, SHADOW_INC, src->name); }
         free(c->scopes[own].name);
         c->scopes[own].name = own_name;
+        comp_touch_scope_shape(c, c->scopes[own].idx);
       } }
     if (guard) prepend_copy_name(c, comp_cmethod_in_class(c, ci, src->name));
     did_clone = 1;
@@ -10136,7 +10143,7 @@ void register_extends(Compiler *c) {
         int s0 = c->nscopes;
         did_clone |= extend_class_with(c, ci, mod_id, inherited, sprep, plain, guard ? &cell : NULL);
         for (int k = s0; plain && k < c->nscopes; k++)
-          if (c->scopes[k].class_id == ci && c->scopes[k].is_cmethod) c->scopes[k].mixin_unversioned = 1;
+          if (c->scopes[k].class_id == ci && c->scopes[k].is_cmethod) { c->scopes[k].mixin_unversioned = 1; comp_touch_scope_shape(c, k); }
       }
       /* after the call's last module, the write that sets the cell its
          copies read */
@@ -10426,8 +10433,8 @@ static void cmethod_copy_into(Compiler *c, int mi, const char *as, int def_cls, 
   comp_scope_copy_shadow(c, dst_idx, mi, NULL);
   { dst->body = new_body; comp_touch_scope(dst->idx); }
   if (new_body >= 0) walk_scope(c, new_body, dst_idx, ci);
-  { dst->class_id = ci; comp_touch_scope(dst->idx); }
-  { dst->is_cmethod = 1; comp_touch_scope(dst->idx); }
+  { dst->class_id = ci; comp_touch_scope_shape(c, dst->idx); }
+  { dst->is_cmethod = 1; comp_touch_scope_shape(c, dst->idx); }
   { dst->is_cmethod_copy = 1; comp_touch_scope(dst->idx); }
   /* an extended module's method, as an include's copy: #owner names the
      module (#3662) */
@@ -10596,6 +10603,7 @@ static void specialize_super_cmethod(Compiler *c, int own, int snap) {
   /* aside while each copy takes the name, then back */
   char *own_name = os->name;
   c->scopes[own].name = strdup("\x01own");
+  comp_touch_scope_shape(c, c->scopes[own].idx);
   /* Up the chain: each parent's method is copied behind the one whose super
      reaches it, and a parent's own super reaches the next copy, so every
      method of the chain runs with self ci (Rails' LogSubscriber.attach_to
@@ -10614,6 +10622,7 @@ static void specialize_super_cmethod(Compiler *c, int own, int snap) {
     if (cp < 0 || cp == own || cp == cur) break;
     free(c->scopes[cp].name);
     c->scopes[cp].name = strdup(behind);
+    comp_touch_scope_shape(c, c->scopes[cp].idx);
     comp_scope_set_shadow(c, cp, SHADOW_INC, own_name);
     comp_cprep_chain_add(&c->classes[ci], cur == own ? own_name : c->scopes[cur].name, behind);
     if (!scope_body_has_super(c, pm)) break;
@@ -10622,6 +10631,7 @@ static void specialize_super_cmethod(Compiler *c, int own, int snap) {
   }
   free(c->scopes[own].name);
   c->scopes[own].name = own_name;
+  comp_touch_scope_shape(c, c->scopes[own].idx);
 }
 
 void specialize_inherited_cls_new(Compiler *c) {
@@ -11265,8 +11275,8 @@ static void process_prepend_body(Compiler *c, int ci, int body) {
           }
           else { dst->body = sc->body; comp_touch_scope(dst->idx); }
           sc = &c->scopes[ms_i]; dst = &c->scopes[dst_i];
-          { dst->class_id = ci; comp_touch_scope(dst->idx); }
-          { dst->is_cmethod = 0; comp_touch_scope(dst->idx); }
+          { dst->class_id = ci; comp_touch_scope_shape(c, dst->idx); }
+          { dst->is_cmethod = 0; comp_touch_scope_shape(c, dst->idx); }
           dst->is_include_copy = 1;
           dst->is_prepend_copy = 1;
           /* a call reaches the method behind it until the reopening's

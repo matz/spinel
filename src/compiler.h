@@ -2047,7 +2047,11 @@ typedef struct {
      entries are made (call_plan.c, guard_chain): at[mi] - 1 is where in
      `to` their count and then they are, 0 for a scope not asked yet;
      dropped with ver_memo */
-  struct GuardMemo { int *at, nat, *to, nto, cto; } guard_memo;
+  struct GuardMemo { int *at, nat, *to, nto, cto; } guard_memo, pos_memo, posv_memo, pnext_memo;   /* (call_plan.c: a late layer's runs, pos_runs_front; its versions, pos_versions; the position behind it, pos_next; each dropped when the scope index's generation, a scope's shape edit, a class's shape or mixin record, or the copies made, posv_ns, change (posv_key), and the first and last when the entries are made) */
+  unsigned scope_edit_gen;   /* (bumped by comp_touch_scope_shape: a scope's shape moved) */
+  struct PosKey { unsigned index, edit, shape, mixin, table; int nclasses; } posv_key;   /* (what the position memos were filled at, pos_memos_sync) */
+  int posv_ns;
+  struct LrbMemo { unsigned long long *key; unsigned char *val; int n, cap; } lrb_memo;   /* (call_plan.c, pos_ran_before) */
   /* the operand-local reads splat_dispatch_on_length marked splat_view,
      which desugar_splat_view_scalars rewrites once typed (-1 once seen) */
   int *splat_views;
@@ -2106,6 +2110,12 @@ typedef struct {
   int bvi_epoch, bvi_calls, bvi_mdepth, bvi_low;
   struct { unsigned long ty, edits; unsigned version, scope_gen; int nscopes; } bvi_stamp;
 } Compiler;
+/* A scope's shape moved: its name, its class, is_cmethod, its entry kind or the flags that say what copy it is and what it
+   guards (mixin_guarded, guard_behind, mixin_unversioned, mixin_conditional, shadow, is_include_copy, is_extend_copy,
+   is_prepend_copy, origin_module_ci). Kept apart from the type edits (comp_touch_scope alone), as the position memos
+   (call_plan.c, pos_memos_sync) read these and not those. Every write to one of them on a scope that was made before the
+   write calls it; a scope the writer has just made needs none, the memos' key counts the scopes made (posv_ns). */
+static inline void comp_touch_scope_shape(Compiler *c, int idx) { c->scope_edit_gen++; comp_touch_scope(idx); }
 enum { PRES_UNMARKED = 1, PRES_REMOVED = 2 };
 enum { IE_RB_IN = 1, IE_RB_OWN = 2, IE_RB_ROOT = 4, IE_RB_FWD = 8 };
 

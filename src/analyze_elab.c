@@ -4112,7 +4112,7 @@ static void lr_def_owners(Compiler *c, int check) {
         if ((sc->class_id != cls || sc->is_cmethod != h->b) && f->differ++ < LR_CHECK_SHOW)
           fprintf(stderr, "spinel-elab-check: owner %s walk=%d/%d record=%d/%d\n", sc->name, sc->class_id, sc->is_cmethod, cls, h->b);
       }
-      if (sc->class_id != cls || sc->is_cmethod != h->b) { sc->class_id = cls; sc->is_cmethod = h->b; comp_touch_scope(sc->idx); c->lrec->hgen++; }
+      if (sc->class_id != cls || sc->is_cmethod != h->b) { sc->class_id = cls; sc->is_cmethod = h->b; comp_touch_scope_shape(c, sc->idx); c->lrec->hgen++; }
     }
   }
   lr_unrolled_owners(c);
@@ -4149,7 +4149,7 @@ static void lr_def_owners(Compiler *c, int check) {
 static void lr_unrolled_owner(Compiler *c, int call, int ci) {
   int dn = nt_kind(c->nt, call) == NK_CallNode ? dm_each_inner(c->nt, call) : -1;
   for (int k = 0; dn >= 0 && k < c->nscopes; k++)
-    if (c->scopes[k].def_node == dn && c->scopes[k].class_id != ci) { c->scopes[k].class_id = ci; comp_touch_scope(c->scopes[k].idx); c->lrec->hgen++; }
+    if (c->scopes[k].def_node == dn && c->scopes[k].class_id != ci) { c->scopes[k].class_id = ci; comp_touch_scope_shape(c, c->scopes[k].idx); c->lrec->hgen++; }
 }
 static void lr_unrolled_owners(Compiler *c) {
   LoadRecord *r = elab_fresh(c);

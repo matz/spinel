@@ -2405,17 +2405,17 @@ static int ver_call_arity(Compiler *c, int id, int rcls, int sg, const char *nam
 }
 /* guard_chain's answer kept for mi (Compiler.guard_memo), into to: their
    count, 0 for none kept */
-static int guard_memo_get(Compiler *c, int mi, int *to) {
-  const struct GuardMemo *g = &c->guard_memo;
+static int guard_memo_get(const struct GuardMemo *g, int mi, int *to) {
   if (mi >= g->nat || !g->at[mi]) return 0;
   const int *p = g->to + g->at[mi] - 1;
   memcpy(to, p + 1, sizeof *to * (size_t)p[0]);
   return p[0];
 }
-static void guard_memo_put(Compiler *c, int mi, const int *to, int n) {
-  struct GuardMemo *g = &c->guard_memo;
+static void guard_memo_put(struct GuardMemo *g, int mi, const int *to, int n) {
   if (mi >= g->nat) {
-    int nat = c->nscopes > mi ? c->nscopes : mi + 1, *at = realloc(g->at, sizeof *at * (size_t)nat);
+    int nat = g->nat ? g->nat : 64, *at;
+    while (nat <= mi) nat *= 2;
+    at = realloc(g->at, sizeof *at * (size_t)nat);
     if (!at) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
     memset(at + g->nat, 0, sizeof *at * (size_t)(nat - g->nat));
     g->at = at; g->nat = nat;
@@ -2431,7 +2431,7 @@ static void guard_memo_put(Compiler *c, int mi, const int *to, int n) {
    the method behind the last. Kept once the entries are made, when the
    scopes no longer change (as ct_version's answers are) */
 static int guard_chain(Compiler *c, int mi, int *to, DispArm *arm, char sel[][32]) {
-  int memo = !arm && c->ver_built, asked = mi, n = memo ? guard_memo_get(c, mi, to) : 0;
+  int memo = !arm && c->ver_built, asked = mi, n = memo ? guard_memo_get(&c->guard_memo, mi, to) : 0;
   if (n) return n;
   if (c->scopes[mi].entry == ENTRY_TABLE) mi = c->scopes[mi].guard_behind;
   while (n < VER_MAX_ARMS && c->scopes[mi].mixin_guarded && c->scopes[mi].guard_behind >= 0) {
@@ -2466,10 +2466,10 @@ static int guard_chain(Compiler *c, int mi, int *to, DispArm *arm, char sel[][32
     }
   }
   to[n++] = mi;
-  if (memo) guard_memo_put(c, asked, to, n);
+  if (memo) guard_memo_put(&c->guard_memo, asked, to, n);
   return n;
 }
-static int mixin_copy_versions(Compiler *c, int mi, int from, int *to, ElabVersion *vs);
+static int mixin_copy_versions(Compiler *c, int mi, int from, int *to, ElabVersion *vs, int one);
 static int ver_closed_to(int vis, int face);
 int cplan_caller_includes_module(Compiler *c, int caller, int module) {
   for (int d = 0; caller >= 0 && caller < c->nclasses && d <= c->nclasses; caller = c->classes[caller].parent, d++)
@@ -2625,11 +2625,11 @@ static int ct_guard(Compiler *c, int id, int mi, unsigned flags, MethodLookup *m
     const LrDef *d = NULL;
     LoadPoint p = elab_point_of(c, id);
     /* (a mixin's arm, or the copy of its module's version live there:
-       guard_layer_versions) */
+       pos_entry) */
     if (p.region >= 0 && elab_method_at(c, m->class_id, name, m->is_cmethod, p, &d) == ELAB_YES && d)
       for (int i = 0; i < n; i++) {
         ElabVersion vs[VER_MAX_ARMS];
-        int vt[VER_MAX_ARMS], nv = c->scopes[to[i]].mixin_guarded ? mixin_copy_versions(c, to[i], m->class_id, vt, vs) : 0;
+        int vt[VER_MAX_ARMS], nv = c->scopes[to[i]].mixin_guarded ? mixin_copy_versions(c, to[i], m->class_id, vt, vs, 0) : 0;
         if (!nv) vt[nv++] = to[i];
         for (int k = 0; k < nv; k++)
           if (c->scopes[vt[k]].def_node == d->node) {
@@ -3900,8 +3900,29 @@ static int ct_call_face(Compiler *c, int id, int rcls, int sg, const char *name,
    is in a body that never runs (ElabWindow.never); copies set for the
    copies' entry, whose n is 2; kind and why (MethodLookup). */
 static int mixin_copies_module(Compiler *c, int mi, int *to, ElabVersion *vs, int *n);
+static int pos_front(Compiler *c, int mi);
+static int pos_runs(Compiler *c, const Scope *s, int t, int *to, int *layer);
+static int pos_runs_front(Compiler *c, int mi, int *to);
+/* The entry a call that reaches mi, a late layer the class's table answers (pos_front), runs: over mi's versions,
+   its else arm what lies behind it (pos_entry); mi, with ML_TABLE, when asked before the entries are made */
+static int ct_front_layer(Compiler *c, int id, int rcls, int mi, unsigned flags, MethodLookup *ml) {
+  int to[VER_MAX_ARMS], n = pos_runs_front(c, mi, to);
+  const Scope *m = &c->scopes[mi];
+  int ix = c->ver_built ? ver_entry_ix(c, VER_ENTRY_LAYER, mi + 1, m->class_id, m->is_cmethod, comp_scope_user_name(m), ver_arity(c, id, to, n), VF_NONE) : -1;
+  ml->n = 2;
+  if (ix < 0) {
+    ml->kind = ML_TABLE;
+    ml->why = MLW_MANY;
+    return mi;
+  }
+  if (!(flags & CT_TOP)) ml->def_class = m->class_id;
+  ml->kind = ML_ENTRY;
+  return c->ver_entries[ix].scope;
+}
 static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigned flags, int mi, MethodLookup *ml) {
   int sg = (flags & CT_CMETHOD) != 0, rcls = flags & CT_TOP ? ct_top_chain(c, name, sg) : cls, vi = -1, dc = -1, n = 0, first_def = 0, none = 0, body = 0, cl = 0;
+  /* (the table's answer a late layer in front of the chain: its entry, whose arms tell the live version) */
+  if (mi >= 0 && !(flags & CT_TOP) && pos_front(c, mi)) return ct_front_layer(c, id, rcls, mi, flags, ml);
   /* (a program class under a reopened builtin that holds every version: the builtin's chain) */
   { int bh = !sg && rcls >= 0 ? ct_builtin_versions_holder(c, rcls, name) : -1; if (bh >= 0) rcls = bh; }
   const LrDef *d = NULL, *ds[VER_MAX_ARMS];
@@ -5656,7 +5677,7 @@ int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, 
     }
   }
   else {
-    int asked = ct_versioned(c, mi, name) || (flags & CT_CAPTURE) || kernel_string_implies(c, id, cls, name, flags);
+    int asked = ct_versioned(c, mi, name) || (flags & CT_CAPTURE) || kernel_string_implies(c, id, cls, name, flags) || pos_front(c, mi);
     if (asked) mi = ct_version(c, id, cls, name, flags, mi, ml);
     /* An alias's record already selected its captured definition. */
     if (mi >= 0 && c->scopes[mi].mixin_guarded && sp_streq(name, c->scopes[mi].name)) r = ct_guard(c, id, mi, flags, ml);
@@ -11979,7 +12000,8 @@ static int ver_entry_emit(Compiler *c, int rcls, int sg, const char *name, int a
    version it copies on the chain of class `from` (vs[k], whose history's
    cell tells it): mi's class's own, or the module's, whose instance
    methods an extend's class-side copies copy. In the chain's order.
-   How many, 0 where one is not on the chain (mi stands alone). */
+   How many, 0 where one is not on the chain, and where mi stands alone
+   unless one (a position that may meet none of them live: pos_versions). */
 /* The scopes of one (class, side, name), for mixin_copy_versions's walk: a
    hashed index over the scopes, in chains, held while the scope index is
    frozen (every scope's class, side and name then hold, and scopes are only
@@ -12016,7 +12038,7 @@ static int mcv_first(Compiler *c, int class_id, const char *name, int is_cm) {
   }
   return mcv_head[mcv_hash(class_id, name, is_cm) % (unsigned)mcv_nb];
 }
-static int mixin_copy_versions(Compiler *c, int mi, int from, int *to, ElabVersion *vs) {
+static int mixin_copy_versions(Compiler *c, int mi, int from, int *to, ElabVersion *vs, int one) {
   const Scope *m = &c->scopes[mi];
   ElabVersion cv[VER_MAX_ARMS];
   int side = m->is_extend_copy && from == m->origin_module_ci - 1 ? 0 : m->is_cmethod;
@@ -12042,7 +12064,7 @@ static int mixin_copy_versions(Compiler *c, int mi, int from, int *to, ElabVersi
     vs[n] = cv[i];
     to[n++] = at[i];
   }
-  return ns > 1 && n == ns ? n : 0;
+  return ns > !one && n == ns ? n : 0;
 }
 /* The module whose versions mi, the table's answer in its class, is one of
    the unguarded copies of (mixin_copy_versions, asked of the module's
@@ -12053,46 +12075,265 @@ static int mixin_copy_versions(Compiler *c, int mi, int from, int *to, ElabVersi
 static int mixin_copies_module(Compiler *c, int mi, int *to, ElabVersion *vs, int *n) {
   const Scope *m = &c->scopes[mi];
   if (!m->versioned || !(m->is_include_copy || m->is_extend_copy) || m->mixin_guarded || m->mixin_unversioned || m->origin_module_ci <= 0) return -1;
-  *n = mixin_copy_versions(c, mi, m->origin_module_ci - 1, to, vs);
+  *n = mixin_copy_versions(c, mi, m->origin_module_ci - 1, to, vs, 0);
   return *n ? m->origin_module_ci - 1 : -1;
 }
-/* The entry over the versions of guarded copy mi, one layer of a guard
-   chain (mixin_copy_versions, asked of class from's chain: mi's class's,
-   or for a layer below the mixins the module's, super_layer_versions): an
-   if-chain over the cells of their histories, nearest first, whose arm
-   for each version calls its copy; mi where it stands alone, -1 where
-   none can be made */
-static int guard_layer_versions(Compiler *c, int mi, int from, int ar) {
+static int layer_ran_before(Compiler *c, const Scope *s, const Scope *t);
+static void guard_memo_drop(struct GuardMemo *g) {
+  free(g->at); free(g->to);
+  *g = (struct GuardMemo){ NULL, 0, NULL, 0, 0 };
+}
+/* The memos that hold a layer's runs, versions and next position, and the pairs layer_ran_before answered, are those
+   of one generation of the scope index (comp_scope_index_gen) and of the scopes made so far: a scope renamed, or a
+   copy made, drops them, as it drops the walk's index (mcv_first). */
+/* (never filled while a scope is moved for an instance_exec block: its class is not the one the memo is keyed on) */
+static int pos_memo_fill(void) { return !comp_scope_moving(); }
+static void pos_memos_sync(Compiler *c) {
+  /* (what the memos' callees read: the scope index's freeze, the scopes' names, classes and entry kinds, the classes'
+     shapes and mixin records, the tables, the class count, and the copies made) */
+  struct PosKey k = { comp_scope_index_gen(), c->scope_edit_gen, comp_class_shape_gen(), c->mixin_gen, comp_table_gen, c->nclasses };
+  int keep = memcmp(&k, &c->posv_key, sizeof k) == 0 && c->posv_ns <= c->nscopes;
+  /* (the entries the build makes are scopes too, and no copy: they leave every answer as it was) */
+  for (int s = c->posv_ns; keep && s < c->nscopes; s++) keep = c->scopes[s].entry != ENTRY_NONE;
+  if (!keep || comp_scope_moving()) {
+    guard_memo_drop(&c->posv_memo); guard_memo_drop(&c->pnext_memo); guard_memo_drop(&c->pos_memo);
+    free(c->lrb_memo.key); free(c->lrb_memo.val);
+    memset(&c->lrb_memo, 0, sizeof c->lrb_memo);
+    c->posv_key = k;
+  }
+  c->posv_ns = c->nscopes;
+}
+/* layer_ran_before(s, t), asked of every position at every super and every call that reaches one, and each ask
+   searches the class's mixin statements: kept for the pair (an open-addressing table of pairs, Compiler.lrb_memo) */
+static int pos_ran_before(Compiler *c, const Scope *s, const Scope *t) {
+  struct LrbMemo *g = &c->lrb_memo;
+  if (!pos_memo_fill()) return layer_ran_before(c, s, t);
+  unsigned long long key = ((unsigned long long)(unsigned)(s - c->scopes) << 32) | (unsigned)(t - c->scopes);
+  unsigned i = g->cap ? (unsigned)((key * 0x9E3779B97F4A7C15ull) >> 40) & (unsigned)(g->cap - 1) : 0;
+  for (; g->cap && g->val[i]; i = (i + 1) & (unsigned)(g->cap - 1))
+    if (g->key[i] == key) return g->val[i] > 1;
+  int r = layer_ran_before(c, s, t);
+  if (2 * (g->n + 1) > g->cap) {   /* (grown: every pair moves) */
+    int ocap = g->cap, ncap = ocap ? 2 * ocap : 64;
+    unsigned long long *ok = g->key;
+    unsigned char *ov = g->val;
+    g->key = calloc((size_t)ncap, sizeof *g->key);
+    g->val = calloc((size_t)ncap, 1);
+    if (!g->key || !g->val) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    g->cap = ncap;
+    for (int k = 0; k < ocap; k++) {
+      if (!ov[k]) continue;
+      unsigned h = (unsigned)((ok[k] * 0x9E3779B97F4A7C15ull) >> 40) & (unsigned)(ncap - 1);
+      while (g->val[h]) h = (h + 1) & (unsigned)(ncap - 1);
+      g->key[h] = ok[k]; g->val[h] = ov[k];
+    }
+    free(ok); free(ov);
+    i = (unsigned)((key * 0x9E3779B97F4A7C15ull) >> 40) & (unsigned)(ncap - 1);
+    while (g->val[i]) i = (i + 1) & (unsigned)(ncap - 1);
+  }
+  g->key[i] = key;
+  g->val[i] = (unsigned char)(r + 1);
+  g->n++;
+  return r;
+}
+/* The versions a position t, a mixin's copy in a class's lookup chain, stands
+   for, into to and vs (mixin_copy_versions: those of its class's chain where
+   a later mixin guards the copy, its module's otherwise), nearest first:
+   how many, 0 where t is no layer of its own, one that tests nothing: a
+   single version that exists wherever t is reached, or a copy the entries
+   keep out of it (a mixin that may not run: Scope.mixin_unversioned).
+   Several versions are a layer for a guarded copy and for an include's or
+   an extend's hidden copy; one that a call may meet none of live (a method
+   body's version: elab_versions_late, *late) is for every copy. For the
+   super of s (NULL: none, the arm of a guard entry or the method behind its
+   arms), a guarded copy below s's that always ran before s's mixin did
+   (layer_ran_before): its cell is set wherever s runs, and only its
+   module's version tells which of its copies runs. */
+static int layer_ran_before(Compiler *c, const Scope *s, const Scope *t);
+static int pos_versions(Compiler *c, const Scope *s, int t, int *to, ElabVersion *vs, int *late) {
+  const Scope *m = &c->scopes[t];
+  int from, many;
+  *late = 0;
+  pos_memos_sync(c);
+  if (m->mixin_guarded) {
+    if (s && (m->entry || !m->shadow || !pos_ran_before(c, s, m))) return 0;
+    from = m->class_id;
+    many = 1;
+  }
+  else if ((m->is_include_copy || m->is_extend_copy || m->is_prepend_copy) && !m->entry && !m->mixin_unversioned && m->origin_module_ci > 0) {
+    from = m->origin_module_ci - 1;
+    many = m->shadow && (m->is_include_copy || m->is_extend_copy);
+  }
+  else return 0;
+  /* (kept for the layer, as the walk over its class's chain costs a version for each layer that asks it: Compiler.posv_memo,
+     dropped by pos_memos_sync. vs is read only by the entry's make) */
+  int n, key[VER_MAX_ARMS + 1], raw = 0;
+  if (!vs) raw = guard_memo_get(&c->posv_memo, t, key);
+  if (raw) {
+    n = raw - 1;
+    *late = key[0];
+    memcpy(to, key + 1, sizeof *to * (size_t)n);
+  }
+  else {
+    ElabVersion lv[VER_MAX_ARMS];
+    ElabVersion *v = vs ? vs : lv;
+    n = mixin_copy_versions(c, t, from, to, v, 1);
+    *late = n && !s && elab_versions_late(c, comp_scope_user_name(m), v, n) == 2;
+    if (!vs && pos_memo_fill()) {
+      key[0] = *late;
+      memcpy(key + 1, to, sizeof *to * (size_t)n);
+      guard_memo_put(&c->posv_memo, t, key, n + 1);
+    }
+  }
+  return *late || (many && n > 1) ? n : 0;
+}
+/* Is mi, the method a class's table answers, a late layer (pos_versions) in front of its chain: a prepend's copy of
+   a module's version that a call may meet none of live? (An include's or an extend's, which stands in front of no
+   method of the class's own, is answered by its module's open history: ver_named_asks.) */
+static int pos_front(Compiler *c, int mi) {
+  const Scope *m = &c->scopes[mi];
+  int to[VER_MAX_ARMS], late;
+  if (m->mixin_guarded || m->shadow || m->entry || !m->is_prepend_copy) return 0;
+  return pos_versions(c, NULL, mi, to, NULL, &late) && late;
+}
+/* The position behind t in its class's lookup, as the chain holds it: the
+   copy a later prepend's guard stands in front of, else the method a super
+   in t reaches; -1 for none */
+static int pos_next(Compiler *c, int t) {
+  const Scope *m = &c->scopes[t];
+  int next[1];
+  if (m->mixin_guarded && m->guard_behind >= 0) return m->guard_behind;
+  pos_memos_sync(c);
+  /* (the super's target reads every scope of the name: kept for the position, as the layers behind it ask it for each) */
+  if (guard_memo_get(&c->pnext_memo, t, next) > 0) return next[0] - 1;
+  next[0] = cplan_super_target(c, -1, m, NULL) + 1;
+  if (pos_memo_fill()) guard_memo_put(&c->pnext_memo, t, next, 1);
+  return next[0] - 1;
+}
+/* The scopes a lookup that reaches position t (from s's super: pos_versions)
+   may run: t's versions where it is a layer, and where a call may meet none
+   of them live, what is behind it in turn; t alone where it is no layer.
+   How many, into to (at most VER_MAX_ARMS); *layer: whether t is a layer. */
+static int pos_runs(Compiler *c, const Scope *s, int t, int *to, int *layer) {
+  int n = 0, late = 1;
+  if (layer) *layer = 0;
+  for (; late && t >= 0 && n < VER_MAX_ARMS; s = &c->scopes[t], t = pos_next(c, t)) {
+    int vt[VER_MAX_ARMS], nv = pos_versions(c, s, t, vt, NULL, &late);
+    if (layer && !n) *layer = nv > 0;
+    if (!nv) vt[nv++] = t;
+    for (int k = 0; k < nv && n < VER_MAX_ARMS; k++) to[n++] = vt[k];
+  }
+  return n;
+}
+/* ...for mi, a late layer the class's table answers (pos_front), kept for the layer (Compiler.pos_memo): each call of its
+   name asks it, and each answer reads every scope of the name (cplan_super_target). Dropped when the entries are made,
+   whose scopes the answer then names. */
+static int pos_runs_front(Compiler *c, int mi, int *to) {
+  pos_memos_sync(c);
+  int n = guard_memo_get(&c->pos_memo, mi, to);
+  if (n) return n;
+  n = pos_runs(c, NULL, mi, to, NULL);
+  if (n && pos_memo_fill()) guard_memo_put(&c->pos_memo, mi, to, n);
+  return n;
+}
+/* The entry made for position t with ar parameters (kept in ver_entries as
+   VER_ENTRY_LAYER from t + 1), its scope; -1 for none. The memo of the
+   build, whose index is made after it. */
+static int pos_made(const Compiler *c, int t, int ar) {
+  for (int i = 0; i < c->nver_entries; i++) {
+    const struct VerEntry *e = &c->ver_entries[i];
+    if (e->guard == VER_ENTRY_LAYER && e->from == t + 1 && e->ar == ar) return e->scope;
+  }
+  return -1;
+}
+static void ver_entry_add(Compiler *c, const char *name, struct VerEntry e);
+static int guard_entry_make(Compiler *c, int mi, int ar, int face, int *behind);
+static int guard_else_bare(Compiler *c, int behind, int cls, int sg, const char *name, int *hooks);
+/* The guard entry of the class behind a late layer (kept in ver_entries as VER_ENTRY_GUARD, as the entries' build
+   keeps it), where a later prepend guards that class's method g: a lookup that passes the layer finds the guard's
+   arms first, not the copy g stands in front of. The memo of the build. */
+static int pos_guard_made(const Compiler *c, int g, int ar) {
+  const Scope *m = &c->scopes[g];
+  const char *name = comp_scope_user_name(m);
+  for (int i = 0; i < c->nver_entries; i++) {
+    const struct VerEntry *e = &c->ver_entries[i];
+    if (e->guard == VER_ENTRY_GUARD && !e->from && e->cls == m->class_id && e->sg == m->is_cmethod && e->ar == ar && e->face == VF_NONE && sp_streq(e->name, name)) return e->scope;
+  }
+  return -1;
+}
+static int pos_guard(Compiler *c, int g, int ar) {
+  int e = pos_guard_made(c, g, ar), behind = -1, hooks = -1, to[VER_MAX_ARMS + 1];
+  if (e >= 0) return e;
+  e = guard_entry_make(c, g, ar, VF_NONE, &behind);
+  if (e < 0) return g;
+  const Scope *m = &c->scopes[g];
+  int n = guard_chain(c, g, to, NULL, NULL);
+  int finds = n && guard_else_bare(c, to[n - 1], m->class_id, m->is_cmethod, comp_scope_user_name(m), &hooks) ? VER_FINDS_NONE
+            : ver_else_finds(c, VK_KEEP, m->class_id, m->is_cmethod, comp_scope_user_name(m), SP_VIS_PUBLIC, -1);
+  ver_entry_add(c, c->scopes[e].name, (struct VerEntry){ NULL, VER_ENTRY_GUARD, m->class_id, m->is_cmethod, ar, e, .finds = finds, .behind = behind + 1 });
+  return e;
+}
+/* The entry over the versions of position t (pos_versions), a layer of a
+   lookup: an if-chain over the cells of their histories, nearest first,
+   whose arm for each version calls its copy. Where a call may meet none of
+   them live (a method body's version), its else arm runs what the lookup
+   finds past t, as CRuby's lookup passes a module with no method of the
+   name yet: the position behind t (pos_next), its entry where that is a
+   layer too. Each position's entry is made once and kept, whatever asks
+   it: the guard entry's arm for t, the method behind a guard's arms, a
+   super that reaches t, a call that takes t as the class's first. t itself
+   where it is no layer. */
+static int pos_entry(Compiler *c, const Scope *s, int t, int ar) {
   ElabVersion vs[VER_MAX_ARMS];
   DispArm arm[VER_MAX_ARMS];
   char sel[VER_MAX_ARMS][32];
-  int to[VER_MAX_ARMS], nv = mixin_copy_versions(c, mi, from, to, vs), blk = 0, spliced = 1;
-  if (!nv) return mi;
+  int to[VER_MAX_ARMS], late, nv = pos_versions(c, s, t, to, NULL, &late), blk = 0, spliced = 1;
+  if (!nv) return t;
+  int made = pos_made(c, t, ar);
+  if (made >= 0) return made;
+  nv = pos_versions(c, s, t, to, vs, &late);
   for (int k = 0; k < nv; k++) {
     blk |= c->scopes[to[k]].blk_param || c->scopes[to[k]].yields;
     spliced &= c->scopes[to[k]].yields;
     ver_cell_name(vs[k].cell, sel[k]);
     arm[k] = (DispArm){ sel[k], vs[k].n, c->scopes[to[k]].name, vs[k].cell + 1 };
   }
-  const Scope *m = &c->scopes[mi];
-  return ver_entry_emit(c, m->class_id, m->is_cmethod, comp_scope_user_name(m), ar, blk, spliced, arm, to, NULL, nv, to[nv - 1], -1, 0);
+  int past = late ? pos_next(c, t) : -1, els_to = to[nv - 1];
+  int cls = c->scopes[t].class_id, sg = c->scopes[t].is_cmethod;
+  const char *name = comp_scope_user_name(&c->scopes[t]);
+  if (past >= 0) {
+    els_to = c->scopes[past].mixin_guarded && c->scopes[past].class_id != cls ? pos_guard(c, past, ar) : pos_entry(c, NULL, past, ar);
+    blk |= c->scopes[els_to].blk_param || c->scopes[els_to].yields;
+    spliced &= c->scopes[els_to].yields;
+  }
+  int e = ver_entry_emit(c, cls, sg, name, ar, blk, spliced, arm, to, NULL, nv, els_to, -1, 0);
+  ver_entry_add(c, name, (struct VerEntry){ NULL, VER_ENTRY_LAYER, cls, sg, ar, e, .from = t + 1 });
+  return e;
 }
-/* The copies t is one of, a mixin's unguarded copies of a module's
-   versions under one hidden name (a layer the class's chain holds below a
-   later mixin's copy, which the prepend chain's super reaches: sb22's
-   middle include), into to: their count, 0 for none (mixin_copy_versions,
-   asked of the module's chain). For the super of s (NULL: none), also a
-   later mixin's guarded copies below s's that always ran before s's mixin
-   did (layer_ran_before): their cell is set wherever s runs, and the
-   copies are those its guard entry's arm tests, of the versions on their
-   class's chain (guard_entry_make). */
-static int layer_ran_before(Compiler *c, const Scope *s, const Scope *t);
-static int super_layer_versions(Compiler *c, const Scope *s, int t, int *to) {
-  ElabVersion vs[VER_MAX_ARMS];
+/* The methods a super in s may run, for the readers that ask before the
+   entries are made, or for no call (the yields and block marking, a
+   super's lifted block): the target cplan_super_target answers, or, where
+   that is a layer (pos_runs), every one the entry over it may run. How many,
+   0 for none. */
+int cplan_super_runs(Compiler *c, Scope *s, int *to) {
+  int layer = 0, t = cplan_super_target(c, -1, s, NULL), n = t >= 0 ? pos_runs(c, s, t, to, &layer) : 0;
+  if (n && !layer && c->scopes[t].mixin_conditional) {
+    int tail[VER_MAX_ARMS + 1];
+    n = guard_chain(c, t, tail, NULL, NULL);
+    if (n > VER_MAX_ARMS) n = VER_MAX_ARMS;
+    memcpy(to, tail, (size_t)n * sizeof *to);
+  }
+  return n;
+}
+/* ...the entry over a layer a super of node id reaches, made for its
+   arguments at the entries' build (ver_entries_build, by the position and
+   the program's name); -1 for none */
+static int super_layer_entry(Compiler *c, int id, int t) {
+  int to[VER_MAX_ARMS], layer, n = pos_runs(c, comp_scope_of(c, id), t, to, &layer);
+  if (!layer) return -1;
   const Scope *m = &c->scopes[t];
-  if (m->mixin_guarded && s && !m->entry && m->shadow && layer_ran_before(c, s, m)) return mixin_copy_versions(c, t, m->class_id, to, vs);
-  if (!(m->is_include_copy || m->is_extend_copy) || !m->shadow || m->mixin_guarded || m->entry || m->mixin_unversioned || m->origin_module_ci <= 0) return 0;
-  return mixin_copy_versions(c, t, m->origin_module_ci - 1, to, vs);
+  int i = ver_entry_ix(c, VER_ENTRY_LAYER, t + 1, m->class_id, m->is_cmethod, comp_scope_user_name(m), ver_arity(c, id, to, n), VF_NONE);
+  return i >= 0 ? c->ver_entries[i].scope : -1;
 }
 /* Has t, a later mixin's guarded copy below s, the copy of a later mixin
    whose super reaches it, always run where s runs: is t's module mixed
@@ -12109,33 +12350,6 @@ static int layer_ran_before(Compiler *c, const Scope *s, const Scope *t) {
     any = 1;
   }
   return any;
-}
-/* The methods a super in s may run, for the readers that ask before the
-   entries are made, or for no call (the yields and block marking, a
-   super's lifted block): the target cplan_super_target answers, or, where
-   that is one of a layer's copies of a module's versions
-   (super_layer_versions), every one of them, any of which the entry over
-   them may run. How many, 0 for none. */
-int cplan_super_runs(Compiler *c, Scope *s, int *to) {
-  int t = cplan_super_target(c, -1, s, NULL), n = t >= 0 ? super_layer_versions(c, s, t, to) : 0;
-  if (t >= 0 && !n && c->scopes[t].mixin_conditional) {
-    int tail[VER_MAX_ARMS + 1];
-    n = guard_chain(c, t, tail, NULL, NULL);
-    if (n > VER_MAX_ARMS) n = VER_MAX_ARMS;
-    memcpy(to, tail, (size_t)n * sizeof *to);
-  }
-  if (t >= 0 && !n) to[n++] = t;
-  return n;
-}
-/* ...the entry over them a super of node id reaches, made for its
-   arguments at the entries' build (ver_entries_build, guard 3: by the
-   module, its class and the program's name); -1 for none */
-static int super_layer_entry(Compiler *c, int id, int t) {
-  int to[VER_MAX_ARMS], n = super_layer_versions(c, comp_scope_of(c, id), t, to);
-  if (!n) return -1;
-  const Scope *m = &c->scopes[t];
-  int i = ver_entry_ix(c, VER_ENTRY_LAYER, m->origin_module_ci, m->class_id, m->is_cmethod, comp_scope_user_name(m), ver_arity(c, id, to, n), VF_NONE);
-  return i >= 0 ? c->ver_entries[i].scope : -1;
 }
 /* A super starts at its own tail of the prepend chain. The same user name
    can have multiple tails, keyed by the first copy in each one. */
@@ -12216,7 +12430,7 @@ int cplan_guarded_presence(Compiler *c, int cls, const char *name, int own, Cpla
    cells of the prepends in front of the method, nearest first, its else
    arm the method behind them all. The arm of a mixin whose module defines
    the method again runs the entry over its copies of the versions
-   (guard_layer_versions): whether the mixin has run and which version its
+   (pos_entry): whether the mixin has run and which version its
    module holds are told apart, each by its own cell. *behind: the method
    behind them all where the else arm calls method_missing in its place,
    -1 otherwise. */
@@ -12246,15 +12460,12 @@ static int guard_entry_make(Compiler *c, int mi, int ar, int face, int *behind) 
   /* Cloned forwarding bodies retain the hidden name even when the clone
      has no pin in the original entry's node index. */
   for (int k = 0; k < n - 1; k++) {
-    int e = c->scopes[to[k]].mixin_guarded ? guard_layer_versions(c, to[k], c->scopes[to[k]].class_id, ar) : to[k];
-    if (e < 0) return -1;
+    int e = c->scopes[to[k]].mixin_guarded ? pos_entry(c, NULL, to[k], ar) : to[k];
     arm[k].callee = e == to[k] ? c->scopes[to[k]].name : comp_scope_user_name(&c->scopes[mi]);
     to[k] = e;
   }
-  /* (the method behind them all one of a layer's versions below them: the
-     entry over those, super_layer_versions) */
-  int vt[VER_MAX_ARMS], e = super_layer_versions(c, NULL, to[n - 1], vt) ? guard_layer_versions(c, to[n - 1], c->scopes[to[n - 1]].origin_module_ci - 1, ar) : -1;
-  if (e >= 0) to[n - 1] = e;
+  /* (the method behind them all a layer too: its entry, pos_entry) */
+  to[n - 1] = pos_entry(c, NULL, to[n - 1], ar);
   for (int k = 0; k < n; k++) {
     blk |= c->scopes[to[k]].blk_param || c->scopes[to[k]].yields;
     spliced &= c->scopes[to[k]].yields;
@@ -12390,13 +12601,13 @@ static void ver_named_make(Compiler *c, const VerNamed *w) {
       if (m->class_id != w->cls || !m->mixin_guarded) continue;
       if (m->guard_behind == last) {
         m->guard_behind = e;
-        comp_touch_scope(s);
+        comp_touch_scope_shape(c, s);
         continue;
       }
       for (int i = 0; i < nv; i++)
         if (to[i] >= 0 && m->guard_behind == to[i]) {
           m->guard_behind = e;
-          comp_touch_scope(s);
+          comp_touch_scope_shape(c, s);
           break;
         }
     }
@@ -13079,7 +13290,7 @@ static int capture_else_arm(Compiler *c, int e, int cap) {
 }
 /* ...as a Method made of entry e holds them, each the method that runs
    at the bind: an arm that is itself the entry over a mixin's versions
-   (guard_layer_versions) by its own arms, under its test and theirs, and
+   (pos_entry) by its own arms, under its test and theirs, and
    a later include's behind (Scope.super_behind) by what its super
    reaches, and an else arm the entry answers itself (a method_missing
    call: guard_entry_make) by the method_missing Method's target that
@@ -13169,6 +13380,12 @@ static void ver_need_add(VerNeeds *o, VerNeed w) {
     for (at = ver_key_hash(w.cls, w.sg, w.name, w.ar) & (o->nb - 1); o->ix[at] >= 0; at = (at + 1) & (o->nb - 1)) {}
     o->ix[at] = o->n - 1;
   }
+}
+static void ver_need_front(Compiler *c, VerNeeds *o, int id, int mi) {
+  int to[VER_MAX_ARMS], n = pos_runs_front(c, mi, to);
+  const Scope *m = &c->scopes[mi];
+  VerNeed w = { VER_ENTRY_LAYER, m->class_id, m->is_cmethod, mi, ver_arity(c, id, to, n), comp_scope_user_name(m), mi + 1 };
+  if (!ver_need_has(c, o, w)) ver_need_add(o, w);
 }
 static void ver_need_guard(Compiler *c, VerNeeds *o, int id, int mi) {
   const Scope *m = &c->scopes[mi];
@@ -13307,8 +13524,11 @@ static void ver_entries_index(Compiler *c) {
     c->ver_ix_next[i] = c->ver_ix[b];
     c->ver_ix[b] = i;
     c->ver_names_next[i] = -1;
-    if (e->scope < 0 || e->guard == VER_ENTRY_HISTORY || e->guard == VER_ENTRY_LAYER ||
-        (e->guard == VER_ENTRY_GUARD && e->from)) continue;   /* (an open history's entry is the table's answer; a super's layer entry none) */
+    /* (an open history's entry is the table's answer; so is the entry of a late layer in front of a chain: pos_front. The
+       entry of a layer behind others, which a guard's arm or a super reaches, none) */
+    int front = e->guard == VER_ENTRY_LAYER && !c->scopes[e->from - 1].mixin_guarded && !c->scopes[e->from - 1].shadow;
+    if (e->scope < 0 || e->guard == VER_ENTRY_HISTORY || (e->guard == VER_ENTRY_LAYER && !front) ||
+        (e->guard == VER_ENTRY_GUARD && e->from)) continue;
     int dup = 0;
     for (int j = c->ver_names[m]; j >= 0 && !dup; j = c->ver_names_next[j]) {
       const struct VerEntry *v = &c->ver_entries[j];
@@ -13605,6 +13825,20 @@ void ver_entries_build(Compiler *c) {
     gc[ngc++] = s;
     ver_need_guard(c, &o, -1, s);
   }
+  /* (and the late layers in front of a class's chain, which its table answers: pos_front) */
+  int *fl = NULL, nfl = 0;
+  for (int s = 0; s < c->nscopes; s++) {
+    const Scope *m = &c->scopes[s];
+    if (!pos_front(c, s)) continue;
+    if (m->class_id >= 0 && !m->is_cmethod && comp_class_is_module(c, &c->classes[m->class_id])) continue;
+    const char *name = comp_scope_user_name(m);
+    mtab_enter(c);
+    int last = m->is_cmethod ? comp_cmethod_in_class(c, m->class_id, name) : comp_method_in_class(c, m->class_id, name);
+    mtab_leave(c);
+    if (last != s) continue;
+    if (!(nfl & (nfl - 1)) && !(fl = realloc(fl, sizeof *fl * (size_t)(nfl ? 2 * nfl : 1)))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    fl[nfl++] = s;
+  }
   ver_main_undef_guards(c);
   /* the open histories' entries first: the table answers them, and no call
      of their names asks an entry of the chain behind them */
@@ -13627,6 +13861,8 @@ void ver_entries_build(Compiler *c) {
         if (!sp_streq(comp_scope_user_name(m), names[i]) && !is_send_family(names[i])) continue;
         ver_need_guard(c, &o, id, gc[j]);
       }
+      for (int j = 0; j < nfl; j++)
+        if (sp_streq(comp_scope_user_name(&c->scopes[fl[j]]), names[i]) || is_send_family(names[i])) ver_need_front(c, &o, id, fl[j]);
     }
   }
   presence_readers(c, 0, ver_need, &o);   /* (an instance's presence reader, of the classes it may ask of) */
@@ -13635,11 +13871,12 @@ void ver_entries_build(Compiler *c) {
   for (int k = 0; k < 2; k++)
     for (int id = comp_kind_first(c, k ? NK_ForwardingSuperNode : NK_SuperNode); id >= 0; id = comp_kind_next(c, id)) {
       Scope *s = comp_scope_of(c, id);
-      int to[VER_MAX_ARMS], t = s && s->class_id >= 0 && s->name ? cplan_super_target(c, id, s, NULL) : -1;
-      int n = t >= 0 ? super_layer_versions(c, s, t, to) : 0;
+      int to[VER_MAX_ARMS], layer = 0, t = s && s->class_id >= 0 && s->name ? cplan_super_target(c, id, s, NULL) : -1;
+      int n = t >= 0 ? pos_runs(c, s, t, to, &layer) : 0;
+      if (!layer) n = 0;
       const Scope *m = n ? &c->scopes[t] : NULL;
       VerNeed w = { VER_ENTRY_LAYER, m ? m->class_id : -1, m ? m->is_cmethod : 0, t, n ? ver_arity(c, id, to, n) : 0, m ? comp_scope_user_name(m) : NULL,
-                    m ? m->origin_module_ci : 0 };
+                    t + 1 };
       if (n && !ver_need_has(c, &o, w)) ver_need_add(&o, w);
       if (!n && t >= 0 && c->scopes[t].mixin_conditional) {
         m = &c->scopes[t];
@@ -13650,15 +13887,19 @@ void ver_entries_build(Compiler *c) {
   comp_ver_asking(c, 0);
   int hooks = -1;   /* (guard_else_bare) */
   for (int i = 0; i < o.n; i++) {
+    /* (a layer's entry registers itself, once: pos_entry) */
+    if (o.v[i].guard == VER_ENTRY_LAYER) {
+      pos_entry(c, NULL, o.v[i].mi, o.v[i].ar);
+      continue;
+    }
+    if (o.v[i].guard == VER_ENTRY_GUARD && !o.v[i].from && o.v[i].face == VF_NONE && pos_guard_made(c, o.v[i].mi, o.v[i].ar) >= 0) continue;
     /* (a guard entry's else arm runs the method behind the mixins: for a
        later include's behind, what its super reaches, if anything) */
     int to[VER_MAX_ARMS + 1], n = o.v[i].guard != VER_ENTRY_CHAIN ? guard_chain(c, o.v[i].mi, to, NULL, NULL) : 0;
     int finds = n && guard_else_bare(c, to[n - 1], o.v[i].cls, o.v[i].sg, o.v[i].name, &hooks) ? VER_FINDS_NONE : ver_else_finds(c, VK_KEEP, o.v[i].cls, o.v[i].sg, o.v[i].name, SP_VIS_PUBLIC, -1);
-    const Scope *lm = &c->scopes[o.v[i].mi];   /* (a guarded layer's versions are its class's: super_layer_versions) */
-    int behind = -1, e = o.v[i].guard == VER_ENTRY_LAYER ? guard_layer_versions(c, o.v[i].mi, lm->mixin_guarded ? lm->class_id : o.v[i].from - 1, o.v[i].ar)
-          : o.v[i].guard != VER_ENTRY_CHAIN ? guard_entry_make(c, o.v[i].mi, o.v[i].ar, o.v[i].face, &behind)
+    int behind = -1, e = o.v[i].guard != VER_ENTRY_CHAIN ? guard_entry_make(c, o.v[i].mi, o.v[i].ar, o.v[i].face, &behind)
                          : ver_entry_make(c, NULL, o.v[i].from ? o.v[i].from - 1 : o.v[i].cls, o.v[i].cls, o.v[i].sg, o.v[i].name, o.v[i].mi, o.v[i].ar, 1, o.v[i].face, NULL, &finds, NULL);
-    int super = o.v[i].guard == VER_ENTRY_LAYER || (o.v[i].guard == VER_ENTRY_GUARD && o.v[i].from);
+    int super = o.v[i].guard == VER_ENTRY_GUARD && o.v[i].from;
     ver_entry_add(c, e >= 0 && !super ? c->scopes[e].name : o.v[i].name, (struct VerEntry){ NULL, o.v[i].guard, o.v[i].cls, o.v[i].sg, o.v[i].ar, e, .finds = finds, .from = o.v[i].from, .behind = behind + 1, .face = o.v[i].face });
   }
   free(o.v); free(o.ix); free(o.pre);
@@ -13675,8 +13916,14 @@ void ver_entries_build(Compiler *c) {
     c->scopes[e].entry = ENTRY_TABLE;
     c->scopes[e].mixin_guarded = m->mixin_guarded;
     c->scopes[e].guard_behind = mi;
+    comp_touch_scope_shape(c, e);
   }
   free(gc);
+  free(fl);
+  free(c->pos_memo.at); free(c->pos_memo.to);
+  c->pos_memo = (struct GuardMemo){ NULL, 0, NULL, 0, 0 };
+  free(c->pnext_memo.at); free(c->pnext_memo.to);
+  c->pnext_memo = (struct GuardMemo){ NULL, 0, NULL, 0, 0 };
   c->ver_built = 1;
 }
 /* `cell = v`, in at's scope and on its line (ver_cell_put places it) */
@@ -14180,16 +14427,17 @@ static int ver_cells_put(Compiler *c) {
     int arms[VER_MAX_ARMS + 1], tests[2 * (VER_MAX_ARMS + 1)];
     int na = e->guard == VER_ENTRY_GUARD || e->guard == VER_ENTRY_LAYER ? ver_entry_targets(c, e->scope, arms, tests) : 0;
     /* (and an arm's own, of the entry over a mixin's versions:
-       guard_layer_versions) */
+       pos_entry) */
     for (int k = 0, n0 = na; k < n0; k++)
       if (arms[k] >= 0 && c->scopes[arms[k]].entry == ENTRY_DISPATCH) {
         int sub[VER_MAX_ARMS + 1], st[VER_MAX_ARMS + 1];
         for (int j = 0, ns = ver_entry_targets(c, arms[k], sub, st); j < ns && na < 2 * (VER_MAX_ARMS + 1); j++) tests[na++] = st[j];
       }
-    /* (a guarded layer's copies: versions on cls's chain, super_layer_versions) */
-    int lg = e->guard == VER_ENTRY_LAYER && na && arms[0] >= 0 && c->scopes[arms[0]].mixin_guarded, mod = e->from && !lg && e->guard != VER_ENTRY_GUARD;
+    /* (a layer's copies: versions on its class's chain where a later mixin guards them, its module's otherwise, pos_versions) */
+    const Scope *lm = e->guard == VER_ENTRY_LAYER ? &c->scopes[e->from - 1] : NULL;
+    int mod = e->guard == VER_ENTRY_LAYER ? !lm->mixin_guarded : e->from && e->guard != VER_ENTRY_GUARD;
     int nv = e->guard == VER_ENTRY_HISTORY ? elab_history_versions(c, e->cls, e->sg, e->name, vs, VER_MAX_ARMS)
-                           : elab_chain_versions(c, mod ? e->from - 1 : e->cls, mod ? 0 : e->sg, e->name, vs, VER_MAX_ARMS);
+                           : elab_chain_versions(c, mod ? (lm ? lm->origin_module_ci : e->from) - 1 : e->cls, mod ? 0 : e->sg, e->name, vs, VER_MAX_ARMS);
     /* (a face's arm of a version whose visibility only the run tells reads
        its cell's visibility cell: written beside each version's write,
        with its def's visibility, and after each visibility word of the
@@ -14286,6 +14534,14 @@ void ver_memo_drop(Compiler *c) {
   c->ver_memo = NULL;
   c->ver_memo_cap = c->ver_memo_n = 0;
   free(c->guard_memo.at); free(c->guard_memo.to);
+  free(c->lrb_memo.key); free(c->lrb_memo.val);
+  memset(&c->lrb_memo, 0, sizeof c->lrb_memo);
+  free(c->pnext_memo.at); free(c->pnext_memo.to);
+  c->pnext_memo = (struct GuardMemo){ NULL, 0, NULL, 0, 0 };
+  free(c->posv_memo.at); free(c->posv_memo.to);
+  c->posv_memo = (struct GuardMemo){ NULL, 0, NULL, 0, 0 };
+  free(c->pos_memo.at); free(c->pos_memo.to);
+  c->pos_memo = (struct GuardMemo){ NULL, 0, NULL, 0, 0 };
   c->guard_memo = (struct GuardMemo){ NULL, 0, NULL, 0, 0 };
   new_sites_free(c);
   attr_facts_free(c);

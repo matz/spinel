@@ -1064,7 +1064,7 @@ Scope *comp_scope_new(Compiler *c, const char *name, int def_node) {
   s->name = name ? strdup(name) : NULL;
   { s->def_node = def_node; comp_touch_scope(s->idx); }
   { s->body = -1; comp_touch_scope(s->idx); }
-  { s->class_id = -1; comp_touch_scope(s->idx); }
+  { s->class_id = -1; comp_touch_scope_shape(c, s->idx); }
   s->rest_idx = -1;
   s->kwrest_idx = -1;
   *(TyKind *)&s->ret = TY_UNKNOWN;
@@ -1719,6 +1719,7 @@ void comp_scope_move_unwind(int depth) {
     mv_n--;
     mv_c->scopes[mv_s[mv_n]].class_id = mv_cls[mv_n];
     mv_c->scopes[mv_s[mv_n]].is_cmethod = mv_cm[mv_n];
+    comp_touch_scope_shape(mv_c, mv_s[mv_n]);
   }
 }
 int comp_scope_own_class(const Compiler *c, int s, int *is_cmethod) {
@@ -6183,6 +6184,7 @@ void comp_scope_set_shadow(Compiler *c, int si, int kind, const char *user) {
   Scope *s = &c->scopes[si];
   free(s->shadow_user);
   s->shadow = (unsigned char)kind;
+  comp_touch_scope_shape(c, si);
   s->shadow_user = strdup(user);
   for (int i = 0; i < c->nshadow_copies; i++)
     if (c->shadow_copies[i] == si) return;

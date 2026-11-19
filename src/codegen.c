@@ -3627,10 +3627,9 @@ static int emit_boxed_routes(Compiler *c, int node, Buf *b) {
       view_pop(c, sv);
       return 1;
     } }
-  if (lift || (!arg_ran_first(node, 0) && (strbuf_route_reader(c, node) ||
-                                                (strbuf_route_ivar_get(c, node) &&
-                                                 share_plan_of(c, node, SPR_BOX).form == SPF_HANDLE) ||
-                                                strbuf_route_boxed_exc_message(c, node)))) {
+  if (lift || (!arg_ran_first(node, 0) &&
+               (strbuf_route_reader(c, node) || strbuf_route_ivar_get(c, node) ||
+                strbuf_route_boxed_exc_message(c, node)))) {
     Buf hb; memset(&hb, 0, sizeof hb);
     if (emit_strbuf_route(c, node, &hb)) {
       str_box_handle(b, hb.p);

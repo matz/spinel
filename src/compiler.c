@@ -1853,7 +1853,8 @@ static int sm_owns_side(const Compiler *c, int s, int class_id, int side) {
    own class asks, a class body's own singleton method, otherwise paid a
    walk of every scope for one class's answer). */
 typedef struct { char *name; int side, n, built, first_cls, first_ans; int *ans; } SmbEntry;   /* ans: n (class, scope) pairs, by class */
-static struct { const Compiler *c; int depth, nscopes, nclasses, ver_built, n, cap; SmbEntry *e; int *slot, nslot, *tmp, tcap; } smb;
+static struct { const Compiler *c; int depth, nscopes, nclasses, ver_built, n, cap; SmbEntry *e; int *slot, nslot, *tmp, tcap;
+                unsigned *nx_key; int nx_n, nx_built; } smb;
 static int smb_pair_cmp(const void *a, const void *b) {
   const int *x = a, *y = b;
   if (x[0] != y[0]) return x[0] < y[0] ? -1 : 1;
@@ -1868,6 +1869,7 @@ void comp_scope_batch_end(void) {
   for (int i = 0; i < smb.n; i++) { free(smb.e[i].name); free(smb.e[i].ans); }
   free(smb.slot); smb.slot = NULL; smb.nslot = 0;
   free(smb.tmp); smb.tmp = NULL; smb.tcap = 0;
+  free(smb.nx_key); smb.nx_key = NULL; smb.nx_n = 0; smb.nx_built = 0;
   smb.n = 0; smb.c = NULL;
 }
 static int sm_name_matches(const Compiler *c, int s, const char *name) {
@@ -1882,6 +1884,57 @@ static int sm_scan(Compiler *c, int class_id, const char *name, int side) {
     if (side >= 3 ? sm_toplevel(c, s) && !c->scopes[s].is_cmethod == !(side - 3) && c->scopes[s].name &&
                     sp_streq(c->scopes[s].name, name)
                   : sm_owns_side(c, s, class_id, side) && sm_name_matches(c, s, name)) return s;
+  return -1;
+}
+/* The batch's scopes by name (nx_key: pairs of a name's hash and a scope,
+   sorted): the scopes a name's walk below can match, its own name or, as
+   sm_name_matches reads it, the user name of a mixin-guarded copy. A
+   name's first ask and its walk read those scopes alone, where each read
+   every scope of the program: a program with a method name per class
+   (`get123`) walked the scopes once per name. */
+static int smb_u_cmp(const void *a, const void *b) {
+  const unsigned *x = a, *y = b;
+  if (x[0] != y[0]) return x[0] < y[0] ? -1 : 1;
+  return (x[1] > y[1]) - (x[1] < y[1]);
+}
+static void smb_names_build(Compiler *c) {
+  smb.nx_built = 1;
+  smb.nx_key = malloc(2 * sizeof(unsigned) * (2 * (size_t)c->nscopes + 1));
+  if (!smb.nx_key) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  int n = 0;
+  for (int s = 0; s < c->nscopes; s++) {
+    const char *nm = c->scopes[s].name;
+    if (!nm) continue;
+    smb.nx_key[2 * n] = sp_strhash(nm); smb.nx_key[2 * n + 1] = (unsigned)s; n++;
+    if (!c->ver_built && c->scopes[s].mixin_guarded) {
+      const char *un = comp_scope_user_name(&c->scopes[s]);
+      if (un && !sp_streq(un, nm)) { smb.nx_key[2 * n] = sp_strhash(un); smb.nx_key[2 * n + 1] = (unsigned)s; n++; }
+    }
+  }
+  if (n > 1) qsort(smb.nx_key, (size_t)n, 2 * sizeof(unsigned), smb_u_cmp);
+  smb.nx_n = n;
+}
+/* the first and one past the last of the name's pairs, by scope ascending */
+static void smb_named(Compiler *c, const char *name, int *lo, int *hi) {
+  if (!smb.nx_built) smb_names_build(c);
+  unsigned h = sp_strhash(name);
+  int a = 0, b = smb.nx_n;
+  while (a < b) { int m = a + (b - a) / 2; if (smb.nx_key[2 * m] < h) a = m + 1; else b = m; }
+  int e = a;
+  while (e < smb.nx_n && smb.nx_key[2 * e] == h) e++;
+  *lo = a; *hi = e;
+}
+/* sm_scan over the name's scopes: the highest that answers */
+static int smb_scan_named(Compiler *c, int class_id, const char *name, int side) {
+  int lo, hi;
+  smb_named(c, name, &lo, &hi);
+  for (int i = hi - 1; i >= lo; i--) {
+    int s = (int)smb.nx_key[2 * i + 1];
+    if (i + 1 < hi && (int)smb.nx_key[2 * (i + 1) + 1] == s) continue;   /* (a scope under both its names) */
+    if (side >= 3 ? sm_toplevel(c, s) && !c->scopes[s].is_cmethod == !(side - 3) && c->scopes[s].name &&
+                    sp_streq(c->scopes[s].name, name)
+                  : sm_owns_side(c, s, class_id, side) && sm_name_matches(c, s, name)) return s;
+  }
   return -1;
 }
 /* The batch's answer for (class_id, name, side), or -2 when the batch does
@@ -1919,7 +1972,7 @@ static int sm_batch_lookup(Compiler *c, int class_id, const char *name, int side
     }
     char *nm = strdup(name);
     if (!nm) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-    int r = sm_scan(c, scan_cls, name, side);   /* (the first ask scans) */
+    int r = smb_scan_named(c, scan_cls, name, side);   /* (the first ask scans, the name's scopes) */
     smb.e[i].name = nm; smb.e[i].side = side; smb.e[i].n = 0; smb.e[i].built = 0; smb.e[i].ans = NULL;
     smb.e[i].first_cls = class_id; smb.e[i].first_ans = r; smb.n++;
     return r;
@@ -1927,8 +1980,11 @@ static int sm_batch_lookup(Compiler *c, int class_id, const char *name, int side
   if (!smb.e[i].built && class_id == smb.e[i].first_cls) return smb.e[i].first_ans;
   if (!smb.e[i].built) {
     /* (every scope that answers its class, as (class, scope) pairs) */
-    int m = 0;
-    for (int s = 0; s < c->nscopes; s++) {
+    int m = 0, lo, hi;
+    smb_named(c, name, &lo, &hi);
+    for (int ni = lo; ni < hi; ni++) {
+      int s = (int)smb.nx_key[2 * ni + 1];
+      if (ni > lo && (int)smb.nx_key[2 * (ni - 1) + 1] == s) continue;   /* (a scope under both its names) */
       int cls;
       if (side >= 3) {
         if (!(sm_toplevel(c, s) && !c->scopes[s].is_cmethod == !(side - 3) && c->scopes[s].name &&

@@ -92,7 +92,7 @@ int interp_is_literal_fold(const NodeTable *nt, int id) {
    one heap string per part and ran an sp_sprintf pass over them.)
    The plan is shared with the append form (`s << "..#{x}.."`), which
    writes the same parts into the receiver instead of a fresh string. */
-enum { WK_LIT, WK_INT, WK_BOOL, WK_NIL, WK_DYN, WK_COMPLETED, WK_SEGMENT };
+enum { WK_LIT, WK_INT, WK_BOOL, WK_NIL, WK_DYN, WK_COMPLETED, WK_REPEAT, WK_SEGMENT };
 /* neutral: the temp of a boxed part's flag, set when its value was no
    String, or -1; such a part takes no part in the result's encoding */
 typedef struct { int kind; int tmp; int lit_off; int lit_esc_len; long lit_len; int plain; int neutral; } WPart;
@@ -115,7 +115,32 @@ static void interp_read_held_bytes(Buf *out, int target, int handle) {
 
 static int interp_emit_completed(Compiler *c, int id, Buf *b);
 
-static void interp_plan(Compiler *c, int id, InterpPlan *pl, int tail) {
+/* The last operand can write a builtin String repeat into the final
+   buffer. Its scalar count runs no callbacks and nothing later in
+   this segment can change the receiver's bytes. */
+static int interp_repeat_piece(Compiler *c, int expr, Buf *decls, WPart *part) {
+  const NodeTable *nt = c->nt;
+  if (nt_kind(nt, expr) != NK_CallNode || !is_mul_op(nt_str(nt, expr, "name")) ||
+      nt_safe_nav(nt, expr) || nt_ref(nt, expr, "block") >= 0 || view_ran_first(expr))
+    return 0;
+  int recv = nt_ref(nt, expr, "receiver"), argc = 0;
+  const int *argv = call_args(nt, expr, &argc);
+  TyKind rt = recv >= 0 ? comp_recv_type(c, recv) : TY_UNKNOWN;
+  if (argc != 1 || (rt != TY_STRING && rt != TY_STRBUF) ||
+      comp_ntype(c, argv[0]) != TY_INT ||
+      subtree_has_side_effect(c, argv[0]) || cplan_user(c, expr).dispatch != CP_NONE)
+    return 0;
+  int t = ++g_tmp;
+  buf_printf(decls, "const char *_t%d = ", t);
+  emit_str_expr(c, recv, decls);
+  buf_printf(decls, "; SP_GC_ROOT(_t%d); sp_int _n%d = ", t, t);
+  emit_int_expr(c, argv[0], decls);
+  buf_printf(decls, "; size_t _u%d, _l%d = sp_str_repeat_size(_t%d, _n%d, &_u%d); ", t, t, t, t, t);
+  *part = (WPart){ .kind = WK_REPEAT, .tmp = t, .neutral = -1 };
+  return 1;
+}
+
+static void interp_plan(Compiler *c, int id, InterpPlan *pl, int tail, int writes_buffer) {
   const NodeTable *nt = c->nt;
   int n = 0, fcap = 0;
   int *flat = NULL;
@@ -239,6 +264,12 @@ static void interp_plan(Compiler *c, int id, InterpPlan *pl, int tail) {
         if (lvp && slot_is_oint(lvp)) buf_puts(&decls, ".v");   /* the written value, never nil */
         buf_puts(&decls, "; ");
         snprintf(vexpr, sizeof vexpr, "_t%d", tv);
+      }
+      if (writes_buffer && k == last_operand && (t == TY_STRING || t == TY_STRBUF) &&
+          interp_repeat_piece(c, expr, &decls, &wp[nwp])) {
+        nwp++;
+        ndyn_or_scalar++;
+        continue;
       }
       /* Build this part's conversion expression. Bounded scalars keep their
          native C type (written digit-by-digit later); everything else
@@ -557,7 +588,7 @@ static void interp_plan(Compiler *c, int id, InterpPlan *pl, int tail) {
 static void interp_emit_cap(Buf *b, const InterpPlan *pl) {
   buf_printf(b, "%ldUL", pl->fixed_cap);
   for (int k = 0; k < pl->nwp; k++)
-    if (pl->wp[k].kind == WK_DYN || pl->wp[k].kind == WK_COMPLETED)
+    if (pl->wp[k].kind == WK_DYN || pl->wp[k].kind == WK_COMPLETED || pl->wp[k].kind == WK_REPEAT)
       buf_printf(b, " + _l%d", pl->wp[k].tmp);
 }
 
@@ -571,13 +602,13 @@ static int interp_emit_parts(Buf *b, const InterpPlan *pl, const InterpPlan *tai
      part can be binary; without one the result is UTF-8. */
   int eid = -1;
   for (int k = 0; k < nwp && eid < 0; k++)
-    if (wp[k].kind == WK_DYN || wp[k].kind == WK_COMPLETED || wp[k].kind == WK_SEGMENT)
+    if (wp[k].kind == WK_DYN || wp[k].kind == WK_COMPLETED || wp[k].kind == WK_REPEAT || wp[k].kind == WK_SEGMENT)
       eid = ++g_tmp;
   /* A leading literal sets the initial encoding. A literal consisting of
      one interpolation has an implicit empty literal as its first part. */
   int lead = -1;
   for (int k = 0; k < nwp && lead < 0; k++)
-    if (wp[k].kind == WK_DYN || wp[k].kind == WK_COMPLETED ||
+    if (wp[k].kind == WK_DYN || wp[k].kind == WK_COMPLETED || wp[k].kind == WK_REPEAT ||
         wp[k].kind == WK_SEGMENT || wp[k].kind == WK_LIT) {
       if (wp[k].kind == WK_LIT && wp[k].lit_len == 0) continue;
       lead = k;
@@ -589,14 +620,21 @@ static int interp_emit_parts(Buf *b, const InterpPlan *pl, const InterpPlan *tai
       buf_printf(b, "_e%d = sp_str_enc_step_i(_e%d, _t%d, (size_t)(_t%d - _t%d), \"%.*s\", %ld, 0); ",
                  eid, eid, rid, wpid, rid, wp[k].lit_esc_len, (lits.p ? lits.p : "") + wp[k].lit_off,
                  wp[k].lit_len);
-    else if (eid >= 0 && (wp[k].kind == WK_DYN || wp[k].kind == WK_COMPLETED)) {
+    else if (eid >= 0 && (wp[k].kind == WK_DYN || wp[k].kind == WK_COMPLETED || wp[k].kind == WK_REPEAT)) {
       if (wp[k].neutral >= 0) buf_printf(b, "if (!_t%d) ", wp[k].neutral);
-      buf_printf(b, "_e%d = sp_str_enc_step_i(_e%d, _t%d, (size_t)(_t%d - _t%d), _t%d, _l%d, ",
-                 eid, eid, rid, wpid, rid, wp[k].tmp, wp[k].tmp);
+      int t = wp[k].tmp;
+      buf_printf(b, "_e%d = sp_str_enc_step_i(_e%d, _t%d, (size_t)(_t%d - _t%d), _t%d, ",
+                 eid, eid, rid, wpid, rid, t);
+      if (wp[k].kind == WK_REPEAT) buf_printf(b, "_l%d ? _u%d : 0, ", t, t);
+      else buf_printf(b, "_l%d, ", t);
       if (wp[k].kind == WK_COMPLETED) buf_printf(b, "_bin%d); ", wp[k].tmp);
       else buf_printf(b, "sp_str_is_binary(_t%d)); ", wp[k].tmp);
     }
     switch (wp[k].kind) {
+      case WK_REPEAT:
+        buf_printf(b, "_t%d = sp_str_repeat_write(_t%d, _t%d, _u%d, _l%d); ",
+                   wpid, wpid, wp[k].tmp, wp[k].tmp, wp[k].tmp);
+        break;
       case WK_LIT:
         if (wp[k].lit_len > 0)
           buf_printf(b, "memcpy(_t%d, \"%.*s\", %ld); _t%d += %ld; ",
@@ -636,7 +674,7 @@ static int interp_emit_parts(Buf *b, const InterpPlan *pl, const InterpPlan *tai
    a rooted allocation through the rest of the expression. */
 static int interp_emit_completed(Compiler *c, int id, Buf *b) {
   InterpPlan segment = {0};
-  interp_plan(c, id, &segment, -1);
+  interp_plan(c, id, &segment, -1, 1);
   int start = ++g_tmp, cursor = ++g_tmp;
   buf_printf(b, "char _small%d[128], *_heap%d = NULL; SP_GC_ROOT(_heap%d); ", start, start, start);
   buf_printf(b, "char *_t%d; size_t _l%d; int _bin%d; { ", start, start, start);
@@ -669,8 +707,8 @@ void emit_interp(Compiler *c, int id, Buf *b) {
   int tail_id = n == 2 && nt_kind(nt, parts[1]) == NK_InterpolatedStringNode &&
                 !interp_is_literal_fold(nt, parts[1]) ? parts[1] : -1;
   InterpPlan pl = {0}, tail = {0};
-  interp_plan(c, id, &pl, tail_id);
-  if (tail_id >= 0) interp_plan(c, tail_id, &tail, -1);
+  interp_plan(c, id, &pl, tail_id, 1);
+  if (tail_id >= 0) interp_plan(c, tail_id, &tail, -1, 1);
   WPart *wp = pl.wp;
   int nwp = pl.nwp, ndyn_or_scalar = pl.ndyn_or_scalar;
   Buf lits = pl.lits;
@@ -736,7 +774,7 @@ void emit_interp(Compiler *c, int id, Buf *b) {
 int emit_interp_append(Compiler *c, int id, const char *open, const char *open_n, Buf *b, int indent) {
   if (interp_has_segments(c->nt, id)) return 0;
   InterpPlan pl; memset(&pl, 0, sizeof pl);
-  interp_plan(c, id, &pl, -1);
+  interp_plan(c, id, &pl, -1, 0);
   if (pl.ndyn_or_scalar == 0) { interp_plan_free(&pl); return 0; }
   emit_indent(b, indent);
   buf_printf(b, "{ %s\n", pl.decls.p ? pl.decls.p : "");

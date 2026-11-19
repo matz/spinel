@@ -53,4 +53,8 @@ false
 SupB.inh SupD
 SupB.inh SupE
 SupA.inh SupE
+HookRecv.added singleton_method_added
+HookRecv.added made
+HookRecv.added made
+:ok
 end

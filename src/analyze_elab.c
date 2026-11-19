@@ -3747,9 +3747,10 @@ static void lr_body_versions(Compiler *c) {
     const LrHist *h = lr_hist(r, cls, sg, nt_str(nt, id, "name"), 0);
     int have = 0;
     for (int j = 0; h && j < h->n && !have; j++) have = h->v[j].node == id;
-    if (have) continue;   /* (a class body's own statement: lr_body_defs) */
-    ElabRec x = { c, r, .unplaced = 1, .body = body };
-    lr_method(&x, cls, sg, nt_str(nt, id, "name"), id, LR_DEF, BVIS_PUBLIC, !lr_runs_with_body(nt, par, r->n, id, body), NULL);
+    if (!have) {   /* (else a class body's own statement: lr_body_defs, whose hook the body still owes) */
+      ElabRec x = { c, r, .unplaced = 1, .body = body };
+      lr_method(&x, cls, sg, nt_str(nt, id, "name"), id, LR_DEF, BVIS_PUBLIC, !lr_runs_with_body(nt, par, r->n, id, body), NULL);
+    }
     if (sg) { hooked[nh++] = id; hooked[nh++] = cls; }
   }
   for (int i = 0; i < nh; i += 2) lr_body_hook(c, par, hooked[i], hooked[i + 1], 1);   /* (after the walk over the defs: it adds nodes) */

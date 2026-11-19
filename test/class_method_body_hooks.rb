@@ -220,4 +220,14 @@ class SupD < SupB; end
 SupA.install
 class SupE < SupB; end
 
+# A def with a receiver in a class body a lambda opens is a statement of that body, and the hook of
+# the receiver's class fires each time the lambda runs.
+class HookRecv
+  def self.singleton_method_added(n) = puts("HookRecv.added #{n}")
+end
+opens = -> { class HookBox; def HookRecv.made = :ok; end }
+opens.call
+opens.call
+p HookRecv.made
+
 puts :end

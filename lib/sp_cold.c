@@ -2029,8 +2029,7 @@ sp_PolyArray *sp_str_chars_poly(const char *s) {SP_GC_ROOT_STR(s);
   int bin = sp_str_is_binary(s);
   const char *end = s + sp_str_byte_len(s);
   for (const char *p = s; p < end; ) {
-    int n = bin ? 1 : sp_utf8_advance(p);
-    if (p + n > end) n = (int)(end - p);
+    size_t n = bin ? 1 : sp_utf8_unit_len(p, (size_t)(end - p));
     sp_String *ch = bin ? sp_String_from_cbinstr(p, n) : sp_String_new_inline_len(p, n);
     sp_PolyArray_push(a, sp_box_obj(ch, SP_BUILTIN_STRBUF));
     p += n;

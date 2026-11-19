@@ -22,16 +22,9 @@ static int sp_bytes_ascii(const char *p, size_t n) {
    sp_String_set_bin raised it after the splice it was handed. v may be a
    view of s's own bytes (`s[0] = s`), and is copied first.
 
-   The 7-bit bit (SP_STR_SIZE_ASCII7) says the length walk counted s as
-   bytes: all of them below 0x80, or an invalid one among them
-   (sp_str_length). The splice keeps it, so the next index into s reads no
-   bytes, only where it cannot change what any other byte decodes as: the
-   bytes taken out and put in are ASCII, and so are the bytes on either side
-   of the splice (or an end of s). An ASCII byte ends any sequence, so every
-   other byte decodes as it did, and a String the walk counted as bytes
-   still counts so. Anywhere else (`"\xffé"` given an ASCII first byte is
-   valid text again, `"\xC3a\xA9".slice!(1)` joins two bytes into "é") the
-   bit is cleared, and the next walk sets it again if it holds. */
+   SP_STR_SIZE_ASCII7 records that every byte is ASCII. A splice preserves
+   that proof only when the replacement and affected bytes are ASCII. An
+   arbitrary splice leaves the next reader to check the resulting bytes. */
 static void sp_String_splice_in(sp_String *s, size_t b, size_t e, const char *v, size_t vl, int bin) {
   if (sp_String_is_immutable(s)) { sp_raise_frozen_str(s->data); return; }
   char *own = NULL;

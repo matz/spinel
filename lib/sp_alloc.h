@@ -104,17 +104,10 @@ static inline int sp_str_marker_has_hdr(unsigned char m) {
 static inline int sp_str_has_hdr(const char *s) {
   return sp_str_marker_has_hdr(((const unsigned char *)s)[-1]);
 }
-/* "This string indexes at fixed width", verified once and remembered: every
-   byte is below 0x80, or the length walk counted it as bytes, which an
-   invalid byte makes it do (sp_str_length). Then #length is its byte length
-   and `s[i]` is the byte at i -- no walk, and no probe of the pointer-keyed
-   length cache either, which is what the walk had already been folded into.
-   The bit is a HINT: set only after a scan proved it, cleared when the bytes
-   change unless the change cannot alter how any other byte decodes (setbyte
-   of an ASCII byte on a 7-bit string, sp_String_splice_in with ASCII on both
-   sides), and every reader falls back to the cache when it is off. It says
-   nothing about the string's encoding -- US-ASCII and UTF-8 are compatible and
-   spinel does not distinguish them (docs/limitations.md). */
+/* Every byte is ASCII. A scan can remember this proof so #length and
+   indexing can use the byte length directly. A mutation clears it unless
+   the result is still known to contain only ASCII. The flag is independent
+   of the String's encoding, and malformed UTF-8 never sets it. */
 #define SP_STR_SIZE_ASCII7 0x40000000u
 static inline void sp_str_ascii7_clear(const char *s) {
   if (!s || !sp_str_has_hdr(s)) return;
@@ -156,15 +149,10 @@ void sp_alloc_report_tag(void *scan, const char *name);
 void sp_alloc_report_count(void *scan, size_t bytes);
 void sp_alloc_report_str(size_t bytes);
 
-/* Binary (ASCII-8BIT) strings. spinel keeps no per-string encoding tag:
-   String#length counts UTF-8 code points while the bytes stay valid UTF-8 and
-   falls back to the byte count once an invalid byte shows up, which lands on
-   Ruby's answer for text and for almost all binary data. "Almost" is the gap:
-   a short draw of random bytes is valid UTF-8 by chance about 1.5% of the
-   time, and Random.urandom(4).length then answered 3 (#3474). One bit says
-   "these bytes are data, count them as bytes" for the few producers that know
-   it. It rides in the top bit of the header's `size` (the allocation total,
-   far below 2GB), so no string grows by a byte. */
+/* A binary (ASCII-8BIT) String indexes and counts each byte separately.
+   UTF-8 text counts valid sequences as single characters and malformed
+   bytes individually. The binary marker occupies the top bit of the
+   payload allocation size. */
 #define SP_STR_SIZE_BINARY 0x80000000u
 /* bit 30 is SP_STR_SIZE_ASCII7 (declared above, with the length cache it
    short-circuits); the allocation total keeps the low 30, so a single string
@@ -326,8 +314,7 @@ static inline void sp_str_mark_ascii7(const char *s) {
   sp_str_hdr *h = ((sp_str_hdr *)(s - 1)) - 1;
   if (h->size & SP_STR_SIZE_ASCII7) return;
   /* a frozen literal's header is read-only (fzl_emit_defs): a 7-bit one has
-     the bit from the start, and one that only counts as many characters as
-     bytes (invalid UTF-8, sp_str_length) is left unmarked. The test, the
+     the bit from the start. Non-ASCII literals are left unmarked. The test, the
      marker and the link sp_String_of_literal reads, also passes over a
      frozen slab String whose stale link is odd: that one is walked again. */
   if (((const unsigned char *)s)[-1] == 0xf1 && ((uintptr_t)h->next & 1)) return;

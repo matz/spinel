@@ -131,6 +131,20 @@ fx = fobjs.first.send(fn[0]); fx << "7"; p fl.s
 e0 = +""
 e1 = e0.send([:capitalize, :size].first); e1 << "x"; p [e0, e1]
 
+case_method = [:capitalize, :upcase].first
+ascii_empty = +""
+ascii_result = ascii_empty.send(case_method, :ascii)
+ascii_result << "x"
+p [ascii_empty, ascii_result.equal?(ascii_empty)]
+binary_empty = "".b
+binary_result = binary_empty.send(case_method, :ascii)
+binary_result << "x"
+p [binary_empty, binary_result.equal?(binary_empty), binary_result.encoding.name]
+nul_string = +"\0a"
+nul_result = nul_string.send(case_method, :ascii)
+nul_result << "x"
+p [nul_string.bytes, nul_result.bytes, nul_result.equal?(nul_string)]
+
 # a receiver that runs code is evaluated once, ahead of the name and the
 # arguments, and the arm that answers its String answers that String
 $gn = 0

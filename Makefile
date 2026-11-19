@@ -4401,6 +4401,9 @@ RESULT_CACHE_FP = $(if $(filter 0,$(GATE_CACHE)),off,$(eval RESULT_CACHE_FP := $
 # only (the C is the same with and without it, so the result cache still
 # matches), and tools/plan_check.sh --from-results reads the reports instead
 # of compiling the corpus a second time.
+# TEST_LD=lld selects LLD for the generated test executables on Linux.
+# Keep the driver default for normal runs and pass the selector only at link.
+TEST_LDFLAGS = $(LDFLAGS)$(if $(TEST_LD), -fuse-ld=$(TEST_LD))
 define RUN_ONE_TEST
 @mkdir -p $(TEST_RESULT_DIR)
 @# Raise the descriptor soft limit toward the hard one, best effort. A test
@@ -4454,7 +4457,7 @@ ckey=""; hit=0; own=0; \
   xlibs="$$xobjs $$xlibs"; \
   if [ -f "$<.expected" ]; then \
     ckey=$$(RC_CC="$(CC)" tools/result_cache.sh key "$<" "$$cfile" \
-      "$(RESULT_CACHE_FP)|$(RESULT_CACHE_HARNESS)|$(CC)|$(TEST_SINGLE_INVOKE)|$(CFLAGS) $$bigopt $(SP_OV_DEFINE) $$mtdef -Werror $(TEST_WARN_SUPPRESS) $(SEC_FLAGS) $$pchuse -Ilib|$$natobjs $$rtlib $(LDFLAGS) -lm $$mtld $$xlibs $(GC_FLAGS)|$(TIMEOUT10)" \
+      "$(RESULT_CACHE_FP)|$(RESULT_CACHE_HARNESS)|$(CC)|$(TEST_SINGLE_INVOKE)|$(CFLAGS) $$bigopt $(SP_OV_DEFINE) $$mtdef -Werror $(TEST_WARN_SUPPRESS) $(SEC_FLAGS) $$pchuse -Ilib|$$natobjs $$rtlib $(TEST_LDFLAGS) -lm $$mtld $$xlibs $(GC_FLAGS)|$(TIMEOUT10)" \
       "$<.expected" "$<.err.expected" "$<.args" "$<.stdin"); \
     if [ -n "$$ckey" ]; then \
       if tools/result_cache.sh get "$$ckey" 2>/dev/null | grep -qx PASS; then hit=1; \
@@ -4465,10 +4468,10 @@ ckey=""; hit=0; own=0; \
   if [ $$hit = 1 ]; then \
     :; \
   elif [ -n "$(TEST_SINGLE_INVOKE)" ]; then \
-    $(CC) $(CFLAGS) $$bigopt $(SP_OV_DEFINE) $$mtdef -Werror $(TEST_WARN_SUPPRESS) $(SEC_FLAGS) $$pchuse -Ilib $$cextinc "$$cfile" $$natobjs $$rtlib $(LDFLAGS) -lm $$mtld $$xlibs $(GC_FLAGS) -o "$$bin" 2>/dev/null; \
+    $(CC) $(CFLAGS) $$bigopt $(SP_OV_DEFINE) $$mtdef -Werror $(TEST_WARN_SUPPRESS) $(SEC_FLAGS) $$pchuse -Ilib $$cextinc "$$cfile" $$natobjs $$rtlib $(TEST_LDFLAGS) -lm $$mtld $$xlibs $(GC_FLAGS) -o "$$bin" 2>/dev/null; \
   else \
     $(CC) $(CFLAGS) $$bigopt $(SP_OV_DEFINE) $$mtdef -Werror $(TEST_WARN_SUPPRESS) $(SEC_FLAGS) $$pchuse -Ilib $$cextinc -c "$$cfile" -o "$$cfile.o" 2>/dev/null && \
-    $(CC) $(CFLAGS) "$$cfile.o" $$natobjs $$rtlib $(LDFLAGS) -lm $$mtld $$xlibs $(GC_FLAGS) -o "$$bin" 2>/dev/null; \
+    $(CC) $(CFLAGS) "$$cfile.o" $$natobjs $$rtlib $(TEST_LDFLAGS) -lm $$mtld $$xlibs $(GC_FLAGS) -o "$$bin" 2>/dev/null; \
   fi; }; \
 built=$$?; \
 if [ $$built -eq 0 ] && [ $$hit = 1 ]; then \

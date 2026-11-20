@@ -12636,6 +12636,34 @@ static int hc_reads_var(Compiler *c, int n, const char *text) {
   return same;
 }
 
+/* The counter half of the proof hc_bounded_index and hc_walk_counter make:
+   `prev`, the statement just ahead of a loop, sets the local `in` to an
+   Integer literal (0 with zero_start, at least 0 without), and `in += 1`
+   closes the loop's body `body` and is its only write of `in` there. A
+   loop inside the body of a program that runs Ruby code at its polls is
+   out (a thread, a finalizer or a trap could write `in` there). */
+static int hc_counter_steps(Compiler *c, int prev, int body, const char *in, int zero_start) {
+  const NodeTable *nt = c->nt;
+  if (prev < 0 || body < 0 || !in || nt_kind(nt, prev) != NK_LocalVariableWriteNode || !nt_str(nt, prev, "name") ||
+      !sp_streq(nt_str(nt, prev, "name"), in)) return 0;
+  int pv = nt_ref(nt, prev, "value");
+  if (pv < 0 || nt_kind(nt, pv) != NK_IntegerNode || nt_str(nt, pv, "bigval")) return 0;
+  long long v0 = nt_int(nt, pv, "value", -1);
+  if (zero_start ? v0 != 0 : v0 < 0) return 0;
+  if (nt_kind(nt, body) != NK_StatementsNode) return 0;
+  int bn = 0;
+  const int *bs = nt_arr(nt, body, "body", &bn);
+  if (bn < 1) return 0;
+  int inc = bs[bn - 1];
+  if (nt_kind(nt, inc) != NK_LocalVariableOperatorWriteNode || !nt_str(nt, inc, "name") ||
+      !sp_streq(nt_str(nt, inc, "name"), in) || !nt_str(nt, inc, "binary_operator") ||
+      !sp_streq(nt_str(nt, inc, "binary_operator"), "+")) return 0;
+  int one = nt_ref(nt, inc, "value");
+  if (one < 0 || nt_kind(nt, one) != NK_IntegerNode || nt_int(nt, one, "value", 0) != 1) return 0;
+  for (int k = 0; k < bn - 1; k++) if (subtree_changes_local(c, bs[k], in)) return 0;
+  if ((g_uses_threads || g_uses_finalizers || g_uses_traps) && hc_subtree_loops(nt, body)) return 0;
+  return 1;
+}
 static void hc_bounded_index(Compiler *c, int prev, int pred, int body, HcRegion *r) {
   const NodeTable *nt = c->nt;
   if (prev < 0 || pred < 0 || body < 0 || nt_kind(nt, pred) != NK_CallNode) return;
@@ -12657,25 +12685,10 @@ static void hc_bounded_index(Compiler *c, int prev, int pred, int body, HcRegion
   TyKind at = comp_ntype(c, av);
   if (!an || (at != TY_INT_ARRAY && at != TY_FLOAT_ARRAY && at != TY_STR_ARRAY && !ty_is_ptr_array(at)) ||
       nameset_has(&r->wl, an)) return;
-  /* i = <literal >= 0>, the statement just ahead of the loop */
-  if (nt_kind(nt, prev) != NK_LocalVariableWriteNode || !nt_str(nt, prev, "name") ||
-      !sp_streq(nt_str(nt, prev, "name"), in)) return;
-  int pv = nt_ref(nt, prev, "value");
-  if (pv < 0 || nt_kind(nt, pv) != NK_IntegerNode || nt_str(nt, pv, "bigval") || nt_int(nt, pv, "value", -1) < 0) return;
-  /* `i += 1` closes the body, and is its only write of i */
-  if (nt_kind(nt, body) != NK_StatementsNode) return;
-  int bn = 0;
-  const int *bs = nt_arr(nt, body, "body", &bn);
-  if (bn < 1) return;
-  int inc = bs[bn - 1];
-  if (nt_kind(nt, inc) != NK_LocalVariableOperatorWriteNode || !nt_str(nt, inc, "name") ||
-      !sp_streq(nt_str(nt, inc, "name"), in) || !nt_str(nt, inc, "binary_operator") ||
-      !sp_streq(nt_str(nt, inc, "binary_operator"), "+")) return;
-  int one = nt_ref(nt, inc, "value");
-  if (one < 0 || nt_kind(nt, one) != NK_IntegerNode || nt_int(nt, one, "value", 0) != 1) return;
-  for (int k = 0; k < bn - 1; k++) if (subtree_changes_local(c, bs[k], in)) return;
+  /* i = <literal >= 0>, the statement just ahead of the loop, and `i += 1`
+     closes the body, its only write of i (hc_counter_steps) */
+  if (!hc_counter_steps(c, prev, body, in, 0)) return;
   if (subtree_changes_local(c, pred, in)) return;
-  if ((g_uses_threads || g_uses_finalizers || g_uses_traps) && hc_subtree_loops(nt, body)) return;
   r->bi = in;
   r->ba = an;
   r->bic = hc_var_text(c, iv);
@@ -12864,6 +12877,12 @@ typedef struct HcVer {
   char trip[256];        /* every pass's index lies in [0, trip) */
   int n;
   struct { char *recv; int kind; } e[8];
+  /* a yield in the body runs the spliced block ublk (body ubody) inside the
+     loop, -1 when none does; alias, the C variables of that block's
+     parameters a yield binds from bi at each pass (hcv_alias_param) */
+  int ubody, ublk;
+  int nalias;
+  char *alias[4];
   struct HcVer *up;
   Buf **bp, *out;        /* the loop's text goes into buf; out is where it lands */
   Buf buf;
@@ -12899,6 +12918,9 @@ static int hcv_binds(Compiler *c, int n, const char *nm) {
 int hcv_node_stable(Compiler *c, int body, int blk, int n) {
   const NodeTable *nt = c->nt;
   NodeKind k = n >= 0 ? nt_kind(nt, n) : NK_NONE;
+  /* (self is one object for the whole method: an enumerable.rb walk's
+     receiver) */
+  if (k == NK_SelfNode) return 1;
   const char *nm = n >= 0 ? nt_str(nt, n, "name") : NULL;
   if (!nm) return 0;
   if (k == NK_LocalVariableReadNode) {
@@ -12915,28 +12937,123 @@ int hcv_node_stable(Compiler *c, int body, int blk, int n) {
    walks an array (its own polls go to an enclosing loop). Its text goes
    into a buffer of its own until hcv_end. NULL leaves the loop as it is. */
 int g_loop_quiet = 0;
-void *hcv_begin(Compiler *c, int node, int body, int blk, const char *bi, const char *bic,
-                const char *trip, int trip_node, int walk, Buf **bp) {
+/* bi_steps: bi is a counter the body steps, which the caller proved stays
+   within [0, trip) (hc_walk_counter), not a block parameter the loop binds */
+static void *hcv_begin_ex(Compiler *c, int node, int body, int blk, const char *bi, const char *bic,
+                          const char *trip, int trip_node, int walk, int bi_steps, Buf **bp) {
   /* (a while's index steps in its body, as hc_bounded_index proved; a block
      loop's parameter is its count only while the body leaves it alone; a
      trip the loop reads again at each pass, through trip_node, holds only
      while the body leaves that alone) */
   if (!g_hc || !trip || !*trip || body < 0 || hc_subtree_stores(c->nt, body) ||
-      (bi && !bic) || (bi && blk >= 0 && (subtree_changes_local(c, body, bi) || hcv_binds(c, body, bi))) ||
+      (bi && !bic) || (bi && blk >= 0 && !bi_steps && (subtree_changes_local(c, body, bi) || hcv_binds(c, body, bi))) ||
       (trip_node >= 0 && !hcv_node_stable(c, body, blk, trip_node)) ||
       strlen(trip) >= sizeof ((HcVer *)0)->trip) return NULL;
+  /* a yield in the body runs the block a splice put in (g_block_id) at each
+     pass: its body may write an element or a variable as the loop's own
+     may, so it is held to the same tests (one that yields again runs its
+     own caller's block, which nothing here sees) */
+  int ublk = -1, ubody = -1;
+  if (proc_body_has_yield(c, body)) {
+    if (g_block_id < 0 || nt_kind(c->nt, g_block_id) != NK_BlockNode) return NULL;
+    ublk = g_block_id; ubody = nt_ref(c->nt, ublk, "body");
+    if (ubody >= 0 && (hc_subtree_stores(c->nt, ubody) || proc_body_has_yield(c, ubody))) return NULL;
+    if (trip_node >= 0 && ubody >= 0 && !hcv_node_stable(c, ubody, ublk, trip_node)) return NULL;
+  }
   /* (the next emit_loop_body is this loop's, which leaves the polls; hcv_end
      clears it for a loop that took none) */
   if (walk && (g_uses_threads || g_uses_finalizers) && g_poll_loop_nest > 0) g_loop_quiet = 1;
   HcVer *v = calloc(1, sizeof *v);
   if (!v) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   v->id = ++g_hcv_seq; v->node = node; v->body = body; v->blk = blk; v->bi = bi;
+  v->ubody = ubody; v->ublk = ublk;
   v->bic = bic ? strdup(bic) : NULL;
   snprintf(v->trip, sizeof v->trip, "%s", trip);
   v->up = g_hcv; v->bp = bp; v->out = *bp;
   *bp = &v->buf;
   g_hcv = v;
   return v;
+}
+void *hcv_begin(Compiler *c, int node, int body, int blk, const char *bi, const char *bic,
+                const char *trip, int trip_node, int walk, Buf **bp) {
+  return hcv_begin_ex(c, node, body, blk, bi, bic, trip, trip_node, walk, 0, bp);
+}
+/* The first read of the local nm within n (outside a def), or -1 */
+static int hc_find_local_read(const NodeTable *nt, int n, const char *nm) {
+  if (n < 0) return -1;
+  NodeKind k = nt_kind(nt, n);
+  if (k == NK_DefNode) return -1;
+  if (k == NK_LocalVariableReadNode && nt_str(nt, n, "name") && sp_streq(nt_str(nt, n, "name"), nm)) return n;
+  int nr = nt_num_refs(nt, n);
+  for (int i = 0; i < nr; i++) { int r = hc_find_local_read(nt, nt_ref_at(nt, n, i), nm); if (r >= 0) return r; }
+  int na = nt_num_arrs(nt, n);
+  for (int i = 0; i < na; i++) {
+    int an = 0; const int *av = nt_arr_at(nt, n, i, &an);
+    for (int j = 0; j < an; j++) { int r = hc_find_local_read(nt, av[j], nm); if (r >= 0) return r; }
+  }
+  return -1;
+}
+/* A counter that is a block loop's index: `i = 0` the statement just ahead
+   of the loop `id` (hc_prev_stmt), and `i += 1` the last statement of its
+   body `body`, its only write of i. At every read in the body i is at most
+   the pass's index (a `next` that skips the step leaves it lower), so it
+   lies in [0, trip) as the loop's own index does: hc_bounded_index's proof,
+   for an array's walk. NULL, or i's name with *bic its C variable (on the
+   heap). */
+static const char *hc_walk_counter(Compiler *c, int id, int body, int blk, char **bic) {
+  const NodeTable *nt = c->nt;
+  *bic = NULL;
+  int prev = hc_prev_stmt(c, id);
+  const char *in = prev >= 0 && nt_kind(nt, prev) == NK_LocalVariableWriteNode ? nt_str(nt, prev, "name") : NULL;
+  if (!in || !hc_counter_steps(c, prev, body, in, 1) || hcv_binds(c, body, in)) return NULL;
+  for (int j = 0; blk >= 0 && block_param_name(c, blk, j); j++)
+    if (sp_streq(block_param_name(c, blk, j), in)) return NULL;
+  /* (a counter held as a plain Integer: one a box or an oint holds is no C index) */
+  int rd = hc_find_local_read(nt, body, in);
+  Repr rr = rd >= 0 ? repr_of(c, rd) : (Repr){0};
+  if (rd < 0 || rr.kind != RK_SCALAR || rr.as_ty != TY_INT) return NULL;
+  *bic = hc_var_text(c, rd);
+  return *bic ? in : NULL;
+}
+/* An array's block walk over the index _t<ti>... versioned with the counter
+   hc_walk_counter finds as its index, or with none (its own element read
+   in place still) */
+void *hcv_begin_walk(Compiler *c, int node, int body, int blk, const char *trip, int trip_node, Buf **bp) {
+  char *bic = NULL;
+  const char *bi = hc_walk_counter(c, node, body, blk, &bic);
+  void *v = hcv_begin_ex(c, node, body, blk, bi, bic, trip, trip_node, 1, bi != NULL, bp);
+  free(bic);
+  return v;
+}
+/* The parameters a yield in a versioned loop binds from the loop's index
+   read as that index too, in the block's body: hcv_alias_param records the
+   C variable of the block's parameter k when hcv_yield_arg_is_index says
+   the yield's argument k reads the index (asked on the method's side of
+   the splice; hcv_alias_param on the block's, before its body); hcv_alias_drop(mark)
+   forgets them after the body. A parameter the body writes or binds again
+   is not one. */
+int hcv_alias_mark(void) { return g_hcv ? g_hcv->nalias : 0; }
+int hcv_yield_arg_is_index(Compiler *c, int yarg) {
+  HcVer *v = g_hcv;
+  return v && v->bi && v->bic && !g_hc_cob_off && yarg >= 0 && nt_kind(c->nt, yarg) == NK_LocalVariableReadNode &&
+         hc_reads_var(c, yarg, v->bic);
+}
+void hcv_alias_param(Compiler *c, int blk, int k) {
+  const NodeTable *nt = c->nt;
+  HcVer *v = g_hcv;
+  if (!v || v->nalias >= (int)(sizeof v->alias / sizeof v->alias[0]) || blk < 0 || blk != v->ublk) return;
+  const char *pn = block_param_name(c, blk, k);
+  int ub = nt_ref(nt, blk, "body");
+  if (!pn || block_param_is_multi(c, blk, k) || ub < 0 || subtree_changes_local(c, ub, pn) || hcv_binds(c, ub, pn)) return;
+  int rd = hc_find_local_read(nt, ub, pn);
+  Repr rr = rd >= 0 ? repr_of(c, rd) : (Repr){0};
+  if (rd < 0 || rr.kind != RK_SCALAR || rr.as_ty != TY_INT) return;
+  char *t = hc_var_text(c, rd);
+  if (t) v->alias[v->nalias++] = t;
+}
+void hcv_alias_drop(int mark) {
+  HcVer *v = g_hcv;
+  while (v && v->nalias > mark) free(v->alias[--v->nalias]);
 }
 
 /* Can the loop being versioned read array recv in place at any index in
@@ -12951,6 +13068,7 @@ int hc_cob_entry_of(Compiler *c, int recv, char *d, size_t cap) {
   TyKind rt = repr_of(c, recv).as_ty;
   if (rt != TY_INT_ARRAY && rt != TY_FLOAT_ARRAY) return 0;
   if (!hcv_node_stable(c, v->body, v->blk, recv)) return 0;
+  if (v->ubody >= 0 && !hcv_node_stable(c, v->ubody, v->ublk, recv)) return 0;
   int sv_tmp = g_tmp;
   Buf t; memset(&t, 0, sizeof t);
   emit_expr(c, recv, &t);
@@ -12978,8 +13096,11 @@ int hc_cob_entry(Compiler *c, int recv, int idx, char *d, size_t cap) {
   const NodeTable *nt = c->nt;
   HcVer *v = g_hcv;
   if (!v || !v->bi || g_hc_cob_off || recv < 0 || idx < 0 || nt_kind(nt, idx) != NK_LocalVariableReadNode ||
-      !nt_str(nt, idx, "name") || !sp_streq(nt_str(nt, idx, "name"), v->bi) || !hc_reads_var(c, idx, v->bic))
+      !nt_str(nt, idx, "name"))
     return 0;
+  int hit = sp_streq(nt_str(nt, idx, "name"), v->bi) && hc_reads_var(c, idx, v->bic);
+  for (int a = 0; !hit && a < v->nalias; a++) hit = hc_reads_var(c, idx, v->alias[a]);
+  if (!hit) return 0;
   return hc_cob_entry_of(c, recv, d, cap);
 }
 /* The header cache's emission state, for a unit or a probe a refusal
@@ -12989,15 +13110,18 @@ int hc_cob_entry(Compiler *c, int recv, int idx, char *d, size_t cap) {
    loop the jump left open is freed, as its hcv_end would have. */
 void hc_state_save(HcState *s) {
   s->hc = g_hc; s->hcv = g_hcv; s->cob_off = g_hc_cob_off; s->loop_quiet = g_loop_quiet;
+  s->nalias = g_hcv ? g_hcv->nalias : 0;
 }
 void hc_state_restore(const HcState *s) {
   while (g_hcv && g_hcv != s->hcv) {
     HcVer *v = g_hcv;
     g_hcv = v->up;
     for (int i = 0; i < v->n; i++) free(v->e[i].recv);
+    for (int i = 0; i < v->nalias; i++) free(v->alias[i]);
     free(v->bic); free(v->buf.p); free(v);
   }
   g_hc = s->hc; g_hcv = s->hcv; g_hc_cob_off = s->cob_off; g_loop_quiet = s->loop_quiet;
+  hcv_alias_drop(s->nalias);
 }
 
 /* The marks around the two forms: 0 ahead of the element in place, 1
@@ -13084,6 +13208,7 @@ void hcv_end(Compiler *c, void *hv, int indent) {
     emit_indent(b, indent); buf_puts(b, "}\n");
   }
   for (int i = 0; i < v->n; i++) free(v->e[i].recv);
+  for (int i = 0; i < v->nalias; i++) free(v->alias[i]);
   free(v->bic); free(v->buf.p); free(v);
 }
 

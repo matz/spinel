@@ -2200,24 +2200,40 @@ int sp_sched_other_threads_live(void) {
    thread and several fibers.
 
    Poll and hand the scheduler back between attempts, but only while another
-   thread is alive -- a program with one thread keeps the blocking wait and its
-   exact wake-up. sp_Thread_pass runs a runnable sibling immediately; the sleep
+   thread is alive or a trap is set -- a program with one thread and no trap
+   keeps the blocking wait and its exact wake-up. sp_Thread_pass runs a runnable sibling immediately; the sleep
    only keeps a busy loop from burning the core while the child works, and it
    caps at 5ms, which is nothing against a wait long enough to matter. */
 int sp_sched_wait_child(int pid, int *status) { return sp_sched_wait_child_flags(pid, status, 0); }
 /* The same with the flags of waitpid(2): WNOHANG asks once and answers 0 for
    a child still running, with no wait and no poll; WUNTRACED takes a stopped
    child too. The poll keeps the caller's flags beside its own WNOHANG. */
+static inline void sp_sig_run_if_pending(void);   /* (below, beside the trap thread) */
+int sp_sig_trap_set(void);                        /* lib/sp_cold.c */
 int sp_sched_wait_child_flags(int pid, int *status, int flags) {
   int r;
-  if ((flags & WNOHANG) || !sp_sched_other_threads_live()) {
+  if (flags & WNOHANG) {
     do { r = (int)waitpid((pid_t)pid, status, flags); } while (r < 0 && errno == EINTR);
     return r;
   }
+  /* One thread and no trap: the blocking wait, inside SP_SIG_BLOCKING so the
+     default SIGINT / SIGTERM raises in it, as it does in a read or a sleep.
+     Outside it the handler recorded the signal for a safe point, the wait
+     went on (EINTR, retried), and the Interrupt came after the child if at
+     all: a program whose end follows the wait has no safe point left. */
+  if (!sp_sched_other_threads_live() && !sp_sig_trap_set()) {
+    do { r = (int)SP_SIG_BLOCKING(waitpid((pid_t)pid, status, flags)); } while (r < 0 && errno == EINTR);
+    return r;
+  }
+  /* A program with a trap set polls with one thread too: the trap handler
+     only records the delivery, and its SA_RESTART keeps waitpid from
+     returning, so the proc ran neither in the wait nor after it. Here it
+     runs between two asks, as it does in a sleep. */
   { double back = 0.0002;
     for (;;) {
       do { r = (int)waitpid((pid_t)pid, status, WNOHANG | flags); } while (r < 0 && errno == EINTR);
       if (r != 0) return r;   /* reaped, or an error for the caller to report */
+      sp_sig_run_if_pending();
       sp_Thread_pass();
 #ifdef SP_THREADS
       sp_sched_sleep(back);

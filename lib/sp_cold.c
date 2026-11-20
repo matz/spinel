@@ -4251,6 +4251,13 @@ void sp_sig_run_pending(void) {
     sp_sig_unblock(no, 0);
   }
 }
+/* Is a proc set for a signal (EXIT aside)? A child wait of a program with
+   one thread polls while one is, so the proc runs in the wait
+   (sp_sched_wait_child_flags). */
+int sp_sig_trap_set(void) {
+  for (int no = 1; no < SP_SIG_MAX; no++) if (sp_trap_proc[no]) return 1;
+  return 0;
+}
 #ifdef SP_THREADS
 /* The threaded runtime's trap thread: parks on the wake pipe the handler
    writes, and runs the procs (sp_sig_thread_dispatch hands a raise out of

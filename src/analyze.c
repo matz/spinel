@@ -37979,8 +37979,13 @@ static int block_jumps_d(const NodeTable *nt, int id, NodeKind k, int **out, int
   if (nk == k) {
     if (*n == *cap) { *cap = *cap ? *cap * 2 : 16; int *g = realloc(*out, sizeof(int) * (size_t)*cap); if (!g) { fprintf(stderr, "spinel: out of memory\n"); exit(1); } *out = g; }
     (*out)[(*n)++] = id;
-    return 0;
+    /* An argument can leave the block before the outer jump runs. */
+    return block_jumps_d(nt, nt_ref(nt, id, "arguments"), k, out, n, cap, depth + 1);
   }
+  /* A for evaluates its collection before entering the loop. A next
+     there still leaves the enclosing block. */
+  if (nk == NK_ForNode && k == NK_NextNode)
+    return block_jumps_d(nt, nt_ref(nt, id, "collection"), k, out, n, cap, depth + 1);
   if (nk == NK_DefNode || nk == NK_ClassNode || nk == NK_ModuleNode || nk == NK_WhileNode ||
       nk == NK_UntilNode || nk == NK_LambdaNode || nk == NK_ForNode || nk == NK_BlockNode) return 0;
   int nr = nt_num_refs(nt, id);
@@ -38001,17 +38006,18 @@ static int jump_value_nil(Compiler *c, int j) {
 }
 /* Can a `next` or `break` that leaves block blk hand on nil: a bare one, or
    one whose value can be nil (a body too deep to walk: it may) */
-static int block_jumps_nil(Compiler *c, int blk) {
+static int block_jump_kind_nil(Compiler *c, int blk, NodeKind k) {
   const NodeTable *nt = c->nt;
-  static const NodeKind ks[2] = { NK_NextNode, NK_BreakNode };
-  int r = 0;
-  for (int i = 0; i < 2 && !r; i++) {
-    int *jv = NULL, n = 0, cap = 0;
-    if (block_jumps_d(nt, nt_ref(nt, blk, "body"), ks[i], &jv, &n, &cap, 0) < 0) r = 1;
-    for (int j = 0; j < n && !r; j++) r = jump_value_nil(c, jv[j]);
-    free(jv);
-  }
+  int *jv = NULL, n = 0, cap = 0;
+  int r = block_jumps_d(nt, nt_ref(nt, blk, "body"), k, &jv, &n, &cap, 0) < 0;
+  for (int j = 0; j < n && !r; j++) r = jump_value_nil(c, jv[j]);
+  free(jv);
   return r;
+}
+
+static int block_jumps_nil(Compiler *c, int blk) {
+  return block_jump_kind_nil(c, blk, NK_NextNode) ||
+         block_jump_kind_nil(c, blk, NK_BreakNode);
 }
 /* Each value a jump of kind k out of block blk hands on is the array's */
 static int elem_slots_jumps(Compiler *c, int blk, NodeKind k, int depth, ElemSlotFn fn, void *ud) {
@@ -42705,6 +42711,22 @@ static int mark_hash_nil_values(Compiler *c) {
   int changed = 0;
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
     const char *nm = nt_str(nt, id, "name");
+    if (nm && is_hash_transform(nm)) {
+      unsigned char *f = hash_vnil_flag(c, infer_type(c, id));
+      if (!f || *f) continue;
+      int recv = nt_ref(nt, id, "receiver"), block = nt_ref(nt, id, "block");
+      if (recv < 0 || nt_kind(nt, block) != NK_BlockNode) continue;
+      const IterRow *row = iter_row_of(infer_type(c, recv), nm, call_plain_argc(c, id));
+      if (!row || row->answer != IA_BLOCKVALS || cplan_user(c, id).dispatch != CP_NONE) continue;
+      /* A break answers for the call. Only next and the ordinary tail
+         answer for the entry the transform is collecting. */
+      if (hash_store_val_may_nil(c, nt_ref(nt, block, "body")) ||
+          block_jump_kind_nil(c, block, NK_NextNode)) {
+        *f = 1;
+        changed = 1;
+      }
+      continue;
+    }
     if (!nm || (!sp_streq(nm, "[]=") && !sp_streq(nm, "store"))) continue;
     unsigned char *f = hash_vnil_flag(c, infer_type(c, nt_ref(nt, id, "receiver")));
     if (!f || *f) continue;

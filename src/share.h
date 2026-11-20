@@ -207,9 +207,6 @@ SharePlan share_plan_with_need(Compiler *c, int v, int role, int need);
    node whose supply an SPK_SELF, SPK_OPERAND or SPK_SEQUENCE value hands
    on, the receiver whose box an SPK_BANG_BOX call answers, else -1. */
 int share_plan_producer(Compiler *c, int v, int *operand);
-/* ...asked as if no store lifted v into a handle (poly_strbuf_lift): the
-   route v hands its String on by itself */
-int share_plan_producer_unlifted(Compiler *c, int v, int *operand);
 /* Are the targets the plan lists for call u all it can reach: every value
    its receiver can be answers the name by a method of the program's own,
    and it is no exception's builtin message or to_s? */

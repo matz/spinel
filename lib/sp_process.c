@@ -768,6 +768,7 @@ void sp_process_exec(sp_RbVal cmd, sp_RbVal args_box, sp_RbVal opts_box) {
    backtick stored. */
 static pid_t process_wait_reap(sp_int pid, int flags, int *status) {
   extern int sp_sched_wait_child_flags(int pid, int *status, int flags);   /* see the note at the top on this TU's includes */
+  extern void sp_sig_after_wait(void);                                     /* lib/sp_cold.c */
   *status = 0;
   pid_t r = (pid_t)sp_sched_wait_child_flags((int)pid, status, flags);
   if (r < 0) {
@@ -780,6 +781,9 @@ static pid_t process_wait_reap(sp_int pid, int flags, int *status) {
     sp_last_status = *status;
     sp_last_pid = (int)r;
   }
+  /* a signal recorded while the wait went on runs now that $? is stored, as
+     CRuby runs it on the way out of its wait (lib/sp_cold.c) */
+  sp_sig_after_wait();
   return r;
 }
 

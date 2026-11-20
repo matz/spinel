@@ -23790,6 +23790,7 @@ void sp_sig_c_handler(int no);
    points poll the flag in a program that traps */
 extern volatile int sp_sig_pending_flag;
 void sp_sig_run_pending(void);
+void sp_sig_after_wait(void);   /* after a child wait stored $? */
 void sp_sig_exit_dispatch(void);
 sp_RbVal sp_signal_trap(sp_RbVal sig, sp_RbVal handler);
 /* Process.kill: send `sig` to one pid; raises the errno family on failure and

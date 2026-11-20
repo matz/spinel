@@ -231,11 +231,13 @@ static int sp_system_run(const char *prog, int argc, const char *const *argv, ch
      can exit. sp_sched_wait_child polls and hands the scheduler back while any
      other thread is alive, and keeps the blocking wait when none is. */
   int status = 0;
+  extern void sp_sig_after_wait(void);   /* lib/sp_cold.c */
   {
     extern int sp_sched_wait_child(int pid, int *status);
     if (sp_sched_wait_child((int)pid, &status) < 0) { sp_last_status = -1; return FALSE; }
   }
   sp_last_status = status;
   sp_last_pid = (int)pid;
+  sp_sig_after_wait();   /* a signal recorded in the wait (lib/sp_cold.c) */
   return (WIFEXITED(status) && WEXITSTATUS(status) == 0) ? TRUE : FALSE;
 }

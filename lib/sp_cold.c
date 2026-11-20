@@ -1808,6 +1808,7 @@ const char *sp_backtick(const char *cmd) {SP_GC_ROOT_STR(cmd);
   int st = 0;
   { extern int sp_sched_wait_child(int pid, int *status);
     if (sp_sched_wait_child((int)pid, &st) < 0) st = -1; }
+  void sp_sig_after_wait(void);
   /* the same wait-status layout sp_system_args leaves in $? */
   sp_last_status = st;
   sp_last_pid = (int)pid;
@@ -1816,6 +1817,10 @@ const char *sp_backtick(const char *cmd) {SP_GC_ROOT_STR(cmd);
   r[len] = 0;
   sp_str_set_len(r, len);
   free(buf);
+  /* the signals recorded in the wait run once the output is a String and
+     the buffer is freed: a trap that raises leaves nothing behind */
+  SP_GC_ROOT_STR(r);
+  sp_sig_after_wait();
   return r;
 }
 
@@ -4250,6 +4255,13 @@ void sp_sig_run_pending(void) {
     sp_trap_call(p, no);
     sp_sig_unblock(no, 0);
   }
+}
+/* A wait for a child has answered and its caller has stored $?: the signals
+   recorded while it went on run now, as CRuby runs them on the way out of
+   its wait (a trap for CHLD, which the child's own end records; a default
+   SIGINT, whose raise then leaves $? set). */
+void sp_sig_after_wait(void) {
+  if (SP_ATOMIC_LOAD(&sp_sig_pending_flag, __ATOMIC_ACQUIRE)) sp_sig_run_pending();
 }
 /* Is a proc set for a signal (EXIT aside)? A child wait of a program with
    one thread polls while one is, so the proc runs in the wait

@@ -16938,6 +16938,19 @@ static void oa_uf_union(OAS *sl, int a, int b) {
    row joins it to this, and the component stays the boxed table. */
 #define OA_CLS_PIA (-1002)
 #define OA_CLS_IS_ROW(x) (OA_CLS_IS_NESTED(x) || (x) == OA_CLS_PIA)
+/* What a boxed value's class facts say of the class of a pointer array it
+   is put in: the one class of the program's it is an instance of, -2 for a
+   value that is no object of the program or is one of several classes, and
+   -1 where the facts leave it open (it may be a builtin value as well). */
+static int oa_boxed_class_of(Compiler *c, int node) {
+  const ClsSet *s = cls_fact_node(c, node);
+  if (!s || s->all || s->os) return -1;
+  int builtin = s->bv || cls_bk_any(s);
+  if (s->n == 0) return builtin ? -2 : -1;
+  if (builtin) return -1;
+  int k = cls_set_next(s, -1);
+  return s->n == 1 && k < c->nclasses ? k : -2;
+}
 /* the single user-object class of a node's value, a nested scalar-array
    sentinel, or -1 if neither a lone object nor a lone scalar array. */
 static int oa_obj_class_of(Compiler *c, int node) {
@@ -16976,10 +16989,12 @@ static int oa_obj_class_of(Compiler *c, int node) {
      or an Integer pushed or `[]=`-stored into the array puts something in it
      the pointer array cannot hold (`a[0] = "x"` was joined as "nothing seen"
      and the store then initialised an sp_Vec * from a string, #4444). A type
-     not known yet, nil (a NULL element) and a boxed poly value stay neutral:
-     the poly may well be the class (a widened return, #4293), and the push
-     emitter unboxes it with the class check at run time. */
-  if (t == TY_UNKNOWN || t == TY_NIL || t == TY_POLY) return -1;
+     not known yet and nil (a NULL element) stay neutral. A boxed value may
+     well be the class (a widened return, #4293), and the push emitter
+     unboxes it with the class check at run time: it is evidence only as far
+     as its class facts go (oa_boxed_class_of). */
+  if (t == TY_UNKNOWN || t == TY_NIL) return -1;
+  if (t == TY_POLY) return oa_boxed_class_of(c, node);
   return -2;
 }
 /* class evidence join: -1 = none seen, -2 = conflicting classes. */

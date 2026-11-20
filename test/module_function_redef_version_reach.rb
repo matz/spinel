@@ -54,3 +54,28 @@ end
 calls << (Kit.new.pick rescue :private)
 calls << Tools.pick
 p calls
+
+# A plain def after a module function of the name is the includer's later
+# version; its super reaches past the module, to the superclass's method,
+# not the module function's earlier copy.
+class Root
+  def tag = :root
+end
+
+module Tagging
+  module_function
+
+  def tag = :module
+end
+
+module Tagging
+  public
+
+  def tag = [:own, super]
+end
+
+class Leaf < Root
+  include Tagging
+end
+
+p Leaf.new.tag, Tagging.tag

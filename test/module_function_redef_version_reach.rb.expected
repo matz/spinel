@@ -7,3 +7,5 @@ NoMethodError
 :third
 :second
 [:first, :private, :second]
+[:own, :root]
+:module

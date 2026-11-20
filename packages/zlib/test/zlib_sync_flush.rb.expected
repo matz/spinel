@@ -48,4 +48,5 @@ after finish, deflate("x", NO_FLUSH): Zlib::StreamError
 after finish, << "": 
 after finish, << "x": Zlib::StreamError
 never flushed is Zlib.deflate: true total_in true
+GzipWriter#flush flushes the IO: 2
 GzipWriter#flush: grows true prefixes [true, true, true] round trip true

@@ -399,6 +399,7 @@ module Zlib
     # byte: a reader of the IO can inflate it before the end.
     def flush(mode = Zlib::SYNC_FLUSH)
       @io.write(@deflate.flush(mode)) unless mode == Zlib::NO_FLUSH
+      @io.flush if @io.respond_to?(:flush)
       self
     end
 

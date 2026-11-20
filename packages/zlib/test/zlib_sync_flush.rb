@@ -133,5 +133,22 @@ prefixes = []
   prefixes << (Zlib::Inflate.new(-Zlib::MAX_WBITS).inflate(closed) == sent)
 end
 gz.close
+# GzipWriter#flush flushes the IO too, in every mode.
+class CountingIO < StringIO
+  def flushes = @flushes || 0
+
+  def flush
+    @flushes = flushes + 1
+    self
+  end
+end
+
+counted = CountingIO.new
+gz2 = Zlib::GzipWriter.new(counted)
+gz2.write("a")
+gz2.flush
+gz2.flush(Zlib::NO_FLUSH)
+puts "GzipWriter#flush flushes the IO: #{counted.flushes}"
+
 puts "GzipWriter#flush: grows #{sizes.each_cons(2).all? { |a, b| b > a } && sizes[0] > 10} prefixes #{prefixes.inspect} " \
      "round trip #{Zlib.gunzip(io.string) == sent}"

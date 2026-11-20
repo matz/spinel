@@ -2688,7 +2688,7 @@ static int emit_local_ivar_write_expr(Compiler *c, int id, Buf *b, const NodeTab
       if (hcn) buf_printf(b, "sp_%sHash_new()", hcn);
       else emit_expr(c, v, b);
     }
-    else if (ivt2 == TY_STRBUF && (rp.as_ty != TY_STRBUF || repr_handle_apart(c, v, rp)) && rp.kind != RK_BOXED) {
+    else if (ivt2 == TY_STRBUF && (rp.as_ty != TY_STRBUF || repr_handle_apart(rp)) && rp.kind != RK_BOXED) {
       /* a shared-handle slot takes an alias RHS by handle and wraps anything
          else in a fresh handle, exactly as the statement form does; the raw
          const char * went into the sp_String * slot here (a value-position

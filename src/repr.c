@@ -1248,8 +1248,8 @@ static int repr_strbuf_src(const Compiler *c, int node, TyKind t) {
 }
 
 /* See repr.h. */
-int repr_handle_apart(Compiler *c, int v, Repr r) {
-  return r.as_ty == TY_STRBUF && (r.strbuf_src == RS_FRESH || strbuf_srange_tail(c, v) >= 0);
+int repr_handle_apart(Repr r) {
+  return r.as_ty == TY_STRBUF && r.strbuf_src == RS_FRESH;
 }
 
 /* The type a node is STORED as, given its cached type t (comp_ntype's

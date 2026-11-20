@@ -1,0 +1,13 @@
+get with a block: "GET /a ", 200
+get with dest: "before GET /b "
+get alone: "GET /c "
+post with a block: "POST /d data"
+patch with dest: "PATCH /e more"
+request_get: ["200", "GET /f "]
+request_get alone: "GET /g "
+request_head block: 200
+request_head: nil
+request_post: "POST /i posted"
+request_put: "PUT /j put"
+get2: "GET /k ", head2: 200, post2: "POST /m x", put2: "PUT /n y"
+get streams: 2

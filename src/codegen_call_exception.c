@@ -220,6 +220,10 @@ const char *isa_exc_class_name(Compiler *c, int arg, char *buf, size_t bufsz) {
   return buf;
 }
 
+/* the call emit_call_exception_arms re-enters on the boxed exception
+   (exc_user_method_name), -1 outside it */
+static int exc_um_skip = -1;
+int exc_um_reentered(int id) { return id >= 0 && id == exc_um_skip; }
 int emit_call_exception_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv) {
   if (recv >= 0 && is_exception_message(name) && (argc || nt_ref(nt, id, "block") >= 0) &&
       repr_of(c, recv).exc && exc_has_user_msg_override(c) && emit_exc_bound_send(c, id, recv, b)) return 1;
@@ -488,7 +492,8 @@ int emit_call_exception_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, c
        sp_streq(name, "key") || sp_streq(name, "receiver") ||
        sp_streq(name, "args") || sp_streq(name, "private_call?") ||
        sp_streq(name, "backtrace") || sp_streq(name, "cause") ||
-       is_exception_full_message(name)) &&
+       is_exception_full_message(name) ||
+       (exc_um_skip == id && exc_um_only_acc(name))) &&
       repr_of(c, recv).as_ty == TY_POLY) {
     int pu = user_defines_or_reads(c, name) || cls_value_owns_name(c, id, name);
     if (!pu || g_poly_builtin_arm) {
@@ -551,7 +556,6 @@ int emit_call_exception_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, c
      parameter it is passed to): the call re-enters with the receiver boxed
      as the exception it is, and the poly dispatch keys it by its user class,
      raising NoMethodError for any exception whose class lacks the method */
-  static int exc_um_skip = -1;   /* the call being re-entered below */
   if (recv >= 0 && exc_um_skip != id && comp_ntype(c, recv) == TY_EXCEPTION && exc_user_method_name(c, id, name, argc)) {
     int tv = ++g_tmp;
     buf_printf(b, "({ sp_RbVal _t%d = sp_box_nullable_obj((void *)(", tv);

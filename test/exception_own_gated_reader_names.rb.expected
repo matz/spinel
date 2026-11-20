@@ -1,0 +1,26 @@
+[9, "p9", :r, :t, 18, 10, "SIG9", [9], 27, false]
+[AppError, [0, true, "p0", :r, :t, 0, 0]]
+[SystemExit, [4, false, :nm, :nm, :nm, :nm, :nm]]
+[LoadError, [:nm, :nm, nil, :nm, :nm, :nm, :nm]]
+[RuntimeError, [:nm, :nm, :nm, :nm, :nm, :nm, :nm]]
+[3, false]
+nil
+"y"
+"n"
+"STR"
+[5, Integer]
+4
+6
+NoMethodError
+4
+7
+[6, 3, 13, -1, 3, 4]
+[:zz, {}]
+6
+nil
+nil
+:nm
+:own
+:zork
+:zork
+:nm

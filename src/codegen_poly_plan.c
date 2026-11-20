@@ -91,7 +91,7 @@ static void pa_arm_text(Compiler *c, const PolyArm *a, char *out, size_t n) {
                                      "io-rewind", "io-puts", "io-zero", "reduce", "int-chr", "str-transform",
                                      "split", "enum-proc", "synchronize", "callable", "class-members",
                                      "len-cases", "clear", "empty-cases", "compare_by_identity?",
-                                     "default enum-each", "default to_s", "default case-conv", "default numeric",
+                                     "default exc-gated", "default enum-each", "default to_s", "default case-conv", "default numeric",
                                      "default digits", "default array-transform", "default predicate",
                                      "default to_i/to_f", "default any?/none?", "default to_h", "default display",
                                      "default hash",
@@ -2687,6 +2687,18 @@ int emit_poly_defaults0(Compiler *c, int id, int recv, const char *name, const P
   const NodeTable *nt = c->nt;
   int argc = 0, is_pred = ps->pred;
   (void)recv;
+  /* a class-gated reader on an exception exc_user_method_name boxed for its
+     program classes: any other exception reads it through the runtime's
+     gated accessor, whose own NoMethodError answers a class off the gate
+     (a File#path or Thread#status default would take it otherwise) */
+  if (!obj_default_done && exc_um_reentered(id) && exc_um_only_acc(name)) {
+    if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_D_EXC_ACC, -1, TY_UNKNOWN, PC_SAME);
+    char ev[64]; snprintf(ev, sizeof ev, "sp_poly_exc_acc_m(_t%d, \"%s\")", tv, name);
+    buf_printf(b, " default: _t%d = ", tr);
+    if (ret == TY_POLY) buf_puts(b, ev); else emit_unbox_text(c, ret, ev, b);
+    buf_puts(b, "; break;");
+    obj_default_done = 1;
+  }
   /* `x.enum_for` on a boxed value, rewritten to the generator helper the
      classes with a yielding each carry: any other value is enumerated
      as the builtin it is */

@@ -2291,7 +2291,8 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
        sp_streq(name, "line") || sp_streq(name, "column") ||
        sp_streq(name, "key") || sp_streq(name, "receiver") ||
        sp_streq(name, "backtrace") || sp_streq(name, "cause") ||
-       sp_streq(name, "full_message") || sp_streq(name, "detailed_message")))
+       sp_streq(name, "full_message") || sp_streq(name, "detailed_message") ||
+       (an_exc_um_reentry(id) && exc_um_only_acc(name))))
     { *out = (sp_streq(name, "message") && !exc_has_nonstring_msg_override(c)) ||
              is_exception_full_message(name) ? TY_STRING : TY_POLY;
       return 1; }

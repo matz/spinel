@@ -162,21 +162,23 @@ static inline void sp_IntArray_push(sp_IntArray*a,sp_int v){if(a->frozen){sp_rai
    place, where n pushes grew it from 16 by doubling -- a realloc and a copy
    at every step, and a frozen and a capacity test per element. */
 static sp_IntArray*sp_IntArray_new_fill(sp_int n,sp_int v){if((uintmax_t)n>SIZE_MAX/sizeof(sp_int))sp_oom_die();sp_IntArray*a=sp_IntArray_new_cap(n);for(sp_int i=0;i<n;i++)a->data[i]=v;a->len=n;return a;}
-/* A result an iterator fills by index (map, Array.new with a block): made
-   at its full length holding the kind's empty value (0, 0.0, NULL), each
-   value stored into its slot, one past the end (the receiver grew in the
-   block) appended, and the length cut to the values stored when the walk
-   ends (_end_fresh). A store writes no length, which a push does per
-   element (SP_ARR_LEN_ONCE): a fill runs as a while loop's stores do. The
-   array is the iterator's own until it answers it, so no frozen test. */
+/* An Integer or Float result an iterator fills by index (map, Array.new
+   with a block): made at its full length, each value stored into its slot,
+   one past the end (the receiver grew in the block) appended, and the
+   length cut to the values stored when the walk ends (_end_fresh). A store
+   writes no length, which a push does per element (SP_ARR_LEN_ONCE): a fill
+   runs as a while loop's stores do. The array is the iterator's own until
+   it answers it, so no frozen test, and its slots are not set ahead: none
+   is read before its store, and a walk that ends early drops the array (a
+   block that breaks or raises at the first element costs what a push did). */
 #define SP_FRESH_CAP 65536   /* Array.new(n) with a block makes at most this many slots up front */
-static inline sp_IntArray*sp_IntArray_new_fresh(sp_int n){return sp_IntArray_new_fill(n,0);}
+static inline sp_IntArray*sp_IntArray_new_fresh(sp_int n){sp_IntArray*a=sp_IntArray_new_cap(n);a->len=n;return a;}
 static inline void sp_IntArray_put_fresh(sp_IntArray*a,sp_int i,sp_int v){if(SP_LIKELY((unsigned long long)i<(unsigned long long)a->len))a->data[a->start+i]=v;else sp_IntArray_push(a,v);}
 static inline void sp_IntArray_end_fresh(sp_IntArray*a,sp_int n){if(n<a->len)a->len=n;}
 /* ... Array.new(n) with a block fills it a run of up to SP_FRESH_CAP slots at a time: _fresh_to makes the next run's slots
    (empty, the capacity doubling up to n), and each value goes into its slot unchecked (_store_fresh). A block that breaks,
    throws or raises early so pays for one run, not for n slots it never fills. */
-static SP_NOINLINE void sp_IntArray_fresh_to(sp_IntArray*a,sp_int m,sp_int n){if(m>a->cap){sp_int c=a->cap*2;if(c<m)c=m;if(c>n)c=n;sp_IntArray_set_cap(a,c);}for(sp_int i=a->len;i<m;i++)a->data[a->start+i]=0;a->len=m;}
+static SP_NOINLINE void sp_IntArray_fresh_to(sp_IntArray*a,sp_int m,sp_int n){if(m>a->cap){sp_int c=a->cap*2;if(c<m)c=m;if(c>n)c=n;sp_IntArray_set_cap(a,c);}a->len=m;}
 static inline void sp_IntArray_store_fresh(sp_IntArray*a,sp_int i,sp_int v){a->data[a->start+i]=v;}
 /* Array.new(n) with no default: n nils, so the bitmap exists from the start
    with every live bit set (and the data zeroed, so a bit cleared by a later
@@ -354,10 +356,10 @@ static inline void sp_FloatArray_push(sp_FloatArray*a,sp_float v){if(a->frozen){
 /* Array.new(n, v): see sp_IntArray_new_fill */
 static sp_FloatArray*sp_FloatArray_new_fill(sp_int n,sp_float v){if((uintmax_t)n>SIZE_MAX/sizeof(sp_float))sp_oom_die();sp_FloatArray*a=sp_FloatArray_new_cap(n);for(sp_int i=0;i<n;i++)a->data[i]=v;a->len=n;return a;}
 /* (as sp_IntArray_new_fresh) */
-static inline sp_FloatArray*sp_FloatArray_new_fresh(sp_int n){return sp_FloatArray_new_fill(n,0.0);}
+static inline sp_FloatArray*sp_FloatArray_new_fresh(sp_int n){sp_FloatArray*a=sp_FloatArray_new_cap(n);a->len=n;return a;}
 static inline void sp_FloatArray_put_fresh(sp_FloatArray*a,sp_int i,sp_float v){if(SP_LIKELY((unsigned long long)i<(unsigned long long)a->len))a->data[i]=v;else sp_FloatArray_push(a,v);}
 static inline void sp_FloatArray_end_fresh(sp_FloatArray*a,sp_int n){if(n<a->len)a->len=n;}
-static SP_NOINLINE void sp_FloatArray_fresh_to(sp_FloatArray*a,sp_int m,sp_int n){if(m>a->cap){sp_int c=a->cap*2;if(c<m)c=m;if(c>n)c=n;sp_FloatArray_set_cap(a,c);}for(sp_int i=a->len;i<m;i++)a->data[i]=0.0;a->len=m;}
+static SP_NOINLINE void sp_FloatArray_fresh_to(sp_FloatArray*a,sp_int m,sp_int n){if(m>a->cap){sp_int c=a->cap*2;if(c<m)c=m;if(c>n)c=n;sp_FloatArray_set_cap(a,c);}a->len=m;}
 static inline void sp_FloatArray_store_fresh(sp_FloatArray*a,sp_int i,sp_float v){a->data[i]=v;}
 static SP_COLD sp_FloatArray*sp_FloatArray_new_nil(sp_int n){sp_FloatArray*a=sp_FloatArray_new_fill(n,0.0);if(n>0){SP_NILBITS_NEW_A(a);SP_NILBITS_SET_RANGE_A(a, 0, n);}return a;}
 static SP_NOINLINE SP_COLD void sp_FloatArray_clr_nil(sp_FloatArray*a,sp_int i);
@@ -548,14 +550,6 @@ static sp_PtrArray*sp_PtrArray_new_noscan(void){return sp_PtrArray_new_scan(NULL
    pushes run about twice as long. It never changes len. */
 static SP_NOINLINE void sp_PtrArray_push_grow(sp_PtrArray*a){if(a->head>0){int room=a->head>=a->len;SP_ARR_REBASE(a);if(room)return;}sp_gc_hdr*h=(sp_gc_hdr*)((char*)a-sizeof(sp_gc_hdr));sp_gc_bytes_sub(sizeof(void*)*a->cap);h->size-=sizeof(void*)*a->cap;a->cap=sp_array_grown_cap(a->cap);void*nd=sp_pl_realloc(a->data,sizeof(void*)*a->cap);if(!nd)sp_oom_die();a->data=(void**)nd;h->size+=sizeof(void*)*a->cap;sp_gc_bytes_add(sizeof(void*)*a->cap);}
 static inline void sp_PtrArray_push(sp_PtrArray*a,void*v){sp_gc_wb((void*)a); if(!a)return;if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_PTR_ARRAY);return;}sp_int l=SP_ARR_LEN_ONCE(a);if(l>=a->cap)sp_PtrArray_push_grow(a);a->data[l]=v;a->len=l+1;}
-/* (as sp_IntArray_new_fresh; its empty slots are NULL, nil to the scan,
-   and a store keeps the write barrier: the block may allocate, and a
-   collection may have aged the array) */
-static inline sp_PtrArray*sp_PtrArray_new_fresh(sp_int n){if((uintmax_t)n>SIZE_MAX/sizeof(void*))sp_oom_die();sp_PtrArray*a=sp_PtrArray_new_cap(n);for(sp_int i=0;i<n;i++)a->data[i]=NULL;a->len=n;return a;}
-static inline void sp_PtrArray_put_fresh(sp_PtrArray*a,sp_int i,void*v){if(SP_LIKELY((unsigned long long)i<(unsigned long long)a->len)){sp_gc_wb((void*)a);a->data[i]=v;}else sp_PtrArray_push(a,v);}
-static inline void sp_PtrArray_end_fresh(sp_PtrArray*a,sp_int n){if(n<a->len)a->len=n;}
-static SP_NOINLINE void sp_PtrArray_fresh_to(sp_PtrArray*a,sp_int m,sp_int n){(void)n;while(m>a->cap)sp_PtrArray_push_grow(a);for(sp_int i=a->len;i<m;i++)a->data[i]=NULL;a->len=m;}
-static inline void sp_PtrArray_store_fresh(sp_PtrArray*a,sp_int i,void*v){sp_gc_wb((void*)a);a->data[i]=v;}
 /* Array#pop on a `<X>_ptr_array`. Returns NULL when empty (matches CRuby's
    nil for typed-element arrays since the slot can't carry nil). #520. */
 static inline void *sp_PtrArray_pop(sp_PtrArray*a){sp_gc_wb((void*)a); if(!a)return NULL;if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_PTR_ARRAY);return NULL;}if(a->len==0)return NULL;return a->data[--a->len];}

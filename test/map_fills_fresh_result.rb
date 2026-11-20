@@ -1,8 +1,9 @@
-# map and map.with_index build their result at the receiver's length and
-# store each value into its slot: a receiver the block grows appends past
-# that length, one it shrinks cuts the result to the values made, and a
-# break, next or raise leaves as before. Object and boxed results keep their
-# elements across a collection the block's allocations start.
+# map and map.with_index build an Integer or Float result at the receiver's
+# length and store each value into its slot: a receiver the block grows
+# appends past that length, one it shrinks cuts the result to the values
+# made, and a break, next or raise leaves as before. Object and boxed results
+# append as before and keep their elements across a collection the block's
+# allocations start.
 class Pt
   attr_reader :v
   def initialize(v) = (@v = v)

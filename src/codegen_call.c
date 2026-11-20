@@ -16640,20 +16640,20 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       emit_indent(g_pre, g_indent);
       buf_printf(g_pre, "if (_t%d < 0) sp_raise_cls(\"ArgumentError\", \"negative array size\");\n", tn);
       free(nb.p);
-      /* each value goes in through the plain store of its kind (not a
-         number that can be nil, nor a String handle): the result is made at
-         its full length and each value stored into its slot, as a while
-         loop's `r[i] = v` stores, where a push wrote the length per element
-         and grew the buffer from 16 (sp_<k>Array_new_fresh, _store_fresh).
+      /* an Integer or Float result whose values each go in through the
+         plain store of its kind (not one that can be nil) is made at its
+         full length and each value stored into its slot, as a while loop's
+         `r[i] = v` stores, where a push wrote the length per element and
+         grew the buffer from 16 (sp_<k>Array_new_fresh, _store_fresh); an
+         object or boxed result, whose store keeps the write barrier, gains
+         nothing by it and appends as before.
          The slots are made a run of up to SP_FRESH_CAP at a time
          (_fresh_to), an outer loop around the walk: a block that throws or
          raises early pays for one run, not for n slots it never fills. A
          `break` of the block is no C break (it would leave the inner loop
          only), so a block with one appends as before */
-      int fresh = bn > 0 && bb && array_has_new_cap(k) && typed_elem_held(at) != TY_STRBUF &&
-                  !*nil_store_sfx(c, k, bb[bn - 1]) &&
-                  !((sp_streq(k, "Int") || sp_streq(k, "Float")) && subtree_has_own_next(nt, bbody) &&
-                    block_next_may_be_nil(c, bbody)) &&
+      int fresh = bn > 0 && bb && is_numeric_literal_tag(k) && !*nil_store_sfx(c, k, bb[bn - 1]) &&
+                  !(subtree_has_own_next(nt, bbody) && block_next_may_be_nil(c, bbody)) &&
                   !subtree_has_loop_break(c, bbody);
       emit_indent(g_pre, g_indent);
       int trun = fresh ? ++g_tmp : -1, tend = fresh ? ++g_tmp : -1;
@@ -16733,8 +16733,7 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
         }
         emit_indent(g_pre, g_indent);
         if (sp_streq(k, "Poly")) {
-          if (fresh) buf_printf(g_pre, "sp_PolyArray_store_fresh(_t%d, _t%d, ", tr, ti);
-          else buf_printf(g_pre, "sp_PolyArray_push(_t%d, ", tr);
+          buf_printf(g_pre, "sp_PolyArray_push(_t%d, ", tr);
           Repr vr = repr_of(c, bb[bn - 1]);
           TyKind vt = vr.as_ty;
           if (tail_strbuf || an_next) buf_puts(g_pre, vb.p ? vb.p : "sp_box_nil()");   /* the next slot is boxed already */
@@ -16751,8 +16750,6 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
           else buf_puts(g_pre, vb.p ? vb.p : "sp_box_nil()");
           buf_puts(g_pre, ");\n");
         }
-        else if (sp_streq(k, "Ptr") && fresh)
-          buf_printf(g_pre, "sp_PtrArray_store_fresh(_t%d, _t%d, (void *)(%s));\n", tr, ti, vb.p ? vb.p : "0");
         else if (sp_streq(k, "Ptr"))
           buf_printf(g_pre, "sp_PtrArray_push(_t%d, (void *)(%s));\n", tr, vb.p ? vb.p : "0");
         /* (one representation: the tail may be the handle or its bytes; a String Array holds the handle) */

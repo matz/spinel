@@ -6516,14 +6516,13 @@ int emit_collect_expr(Compiler *c, int id, Buf *b) {
   buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", trecv);
   emit_indent(g_pre, g_indent);
   /* a map answers one value per element: its result takes them all at its
-     first size, where pushes grew it from 16 by doubling. Where each value
-     goes in through the plain store of its kind (not a number that can be
-     nil, nor a String handle) the result is made at that full length and
-     each value stored into its slot, as a while loop's `r[i] = v` stores;
-     a push wrote the length per element (sp_<rk>Array_new_fresh,
-     _put_fresh, and _end_fresh where the block shrank the receiver) */
-  int fresh = is_map && array_has_new_cap(rk) && !(resr.elem == TY_STRING && !res_poly) &&
-              !(!res_poly && bv_value_may_be_nil(c, block, resr.elem)) &&
+     first size, where pushes grew it from 16 by doubling. An Integer or
+     Float result whose values each go in through the plain store of its
+     kind (not one that can be nil) is made at that full length and each
+     value stored into its slot, as a while loop's `r[i] = v` stores; a push
+     wrote the length per element (sp_<rk>Array_new_fresh, _put_fresh, and
+     _end_fresh where the block shrank the receiver) */
+  int fresh = is_map && rk && is_numeric_literal_tag(rk) && !bv_value_may_be_nil(c, block, resr.elem) &&
               !*nil_store_sfx(c, rk, bn > 0 ? bb[bn - 1] : -1);
   int tfill = fresh ? ++g_tmp : -1;
   if (fresh) {
@@ -6823,12 +6822,12 @@ int emit_with_index_expr(Compiler *c, int id, Buf *b) {
     emit_indent(g_pre, g_indent);
     buf_printf(g_pre, "if (_t%d && _t%d->frozen) sp_raise_frozen_array_at(_t%d, %s);\n", trecv, trecv, trecv, array_frozen_cls(rt));
   }
-  /* a map's values each go in through the plain store of their kind (not a
-     number that can be nil, nor a String handle): the result is made at the
+  /* an Integer or Float map's values each go in through the plain store of
+     their kind (not one that can be nil): the result is made at the
      receiver's length and each value stored into its slot, as the plain
      map's are (emit_collect_expr); map! reads back the value it appended */
-  int fresh = is_map && !is_mapbang && array_has_new_cap(rk) && bn > 0 && !*nil_store_sfx(c, rk, bb[bn - 1]) &&
-              !(!res_poly && bv_value_may_be_nil(c, block, resr.elem));
+  int fresh = is_map && !is_mapbang && rk && is_numeric_literal_tag(rk) && bn > 0 &&
+              !*nil_store_sfx(c, rk, bb[bn - 1]) && !bv_value_may_be_nil(c, block, resr.elem);
   int tfill = fresh ? ++g_tmp : -1;
   if (collecting) {
     emit_indent(g_pre, g_indent);

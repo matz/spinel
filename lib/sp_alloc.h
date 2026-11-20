@@ -900,13 +900,6 @@ static inline sp_PolyArray *sp_PolyArray_new_cap(sp_int n) {
   return a;
 }
 static inline void sp_PolyArray_push(sp_PolyArray *a, sp_RbVal v) { if (!a) return; sp_gc_wb((void*)a); if (a->frozen) { sp_raise_frozen_array_at(a, SP_BUILTIN_POLY_ARRAY); return; } sp_int l = SP_ARR_LEN_ONCE(a); if (l >= a->cap) sp_PolyArray_grow(a); a->data[l] = v; a->len = l + 1; }
-/* A result an iterator fills by index: see sp_IntArray_new_fresh. Its
-   empty slots hold nil, and a store keeps the write barrier. */
-static inline sp_PolyArray *sp_PolyArray_new_fresh(sp_int n) { if ((uintmax_t)n > SIZE_MAX / sizeof(sp_RbVal)) sp_oom_die(); sp_PolyArray *a = sp_PolyArray_new_cap(n); for (sp_int i = 0; i < n; i++) a->data[i] = sp_box_nil(); a->len = n; return a; }
-static inline void sp_PolyArray_put_fresh(sp_PolyArray *a, sp_int i, sp_RbVal v) { if (SP_LIKELY((unsigned long long)i < (unsigned long long)a->len)) { sp_gc_wb((void*)a); a->data[i] = v; } else sp_PolyArray_push(a, v); }
-static inline void sp_PolyArray_end_fresh(sp_PolyArray *a, sp_int n) { if (n < a->len) a->len = n; }
-static SP_NOINLINE void sp_PolyArray_fresh_to(sp_PolyArray *a, sp_int m, sp_int n) { if (m > a->cap) { sp_int c = a->cap * 2; if (c < m) c = m; if (c > n) c = n; sp_PolyArray_grow_to(a, c); } for (sp_int i = a->len; i < m; i++) a->data[i] = sp_box_nil(); a->len = m; }
-static inline void sp_PolyArray_store_fresh(sp_PolyArray *a, sp_int i, sp_RbVal v) { sp_gc_wb((void*)a); a->data[i] = v; }
 static inline sp_RbVal sp_PolyArray_get(sp_PolyArray *a, sp_int i) { if (!a) return sp_box_nil(); if ((unsigned long long)i < (unsigned long long)a->len) return a->data[i]; if (i < 0) i += a->len; if (i < 0 || i >= a->len) return sp_box_nil(); return a->data[i]; }
 static inline sp_RbVal sp_PolyArray_get_m(sp_PolyArray *a, sp_int i) { if (SP_UNLIKELY(!a)) sp_nil_recv("[]"); return sp_PolyArray_get(a, i); }
 /* ---- relocated from spinel_rt.h: frozen-string check primitives used

@@ -2950,7 +2950,7 @@ static int sp_fifo_opened(int fd) {
    meets the end of the file where CRuby's reader gets the writer's bytes.
    With no other green thread alive the blocking open waits, in a native
    section so a collection does not wait for it; nothing else runs here
-   anyway. With one alive the open is retried until a writer is there, which
+   anyway. With one alive the descriptor is asked until a writer is there, which
    the kernel tells only through a read: bytes waiting (FIONREAD), or EAGAIN
    for a writer that has sent none, where no writer answers the end of the
    file. A byte that arrives between the two asks is read here and kept for
@@ -2966,9 +2966,13 @@ static int sp_fifo_open_read(const char *path, int fl, int perm) {
     errno = e;
     return fd;
   }
+  /* (opened once and asked again on the one descriptor, as CRuby's reader
+     holds the FIFO from its open on: a retry of the open by path met
+     ENOENT once the program had deleted the FIFO under a reader still
+     waiting, and the thread died of it at the program's end) */
+  int fd = open(path, fl | O_NONBLOCK, (mode_t)perm);
+  if (fd < 0) return -1;
   for (;;) {
-    int fd = open(path, fl | O_NONBLOCK, (mode_t)perm);
-    if (fd < 0) return -1;
 #ifdef FIONREAD
     int avail = 0;
     if (ioctl(fd, FIONREAD, &avail) == 0 && avail > 0) return sp_fifo_opened(fd);
@@ -2977,7 +2981,7 @@ static int sp_fifo_open_read(const char *path, int fl, int perm) {
     ssize_t n = read(fd, &c, 1);
     if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return sp_fifo_opened(fd);
     if (n > 0) { sp_fifo_pushback_fd = fd; sp_fifo_pushback_byte = c; return sp_fifo_opened(fd); }
-    close(fd);
+    if (n < 0 && errno != EINTR) { int e = errno; close(fd); errno = e; return -1; }
     sp_sleep(0.001);
   }
 }

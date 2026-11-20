@@ -19673,6 +19673,10 @@ int infer_block_params(Compiler *c) {
   MtabMark mt_pass = mtab_mark(c);
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
     mtab_pop(c, mt_pass);
+    int blk = nt_ref(nt, id, "block");
+    if (blk < 0) continue;
+    int pn = nt_ref(nt, blk, "parameters");
+    if (pn < 0) continue;
     mtab_push_in(c, id);   /* (the call's own trampoline question) */
     const char *cname = nt_str(nt, id, "name");
     if (!cname) continue;
@@ -19710,10 +19714,6 @@ int infer_block_params(Compiler *c) {
       if (!sp_streq(cname, "instance_eval") &&
           comp_trampoline_kind(c, call_target(c, id, ty_object_class(rt), cname, 0, NULL)) != 1) continue;
     }
-    int blk = nt_ref(nt, id, "block");
-    if (blk < 0) continue;
-    int pn = nt_ref(nt, blk, "parameters");
-    if (pn < 0) continue;
     Scope *bs = comp_scope_of(c, blk);
     NodeKind pnk = nt_kind(nt, pn);
     if (pnk == NK_NumberedParametersNode) {
@@ -19744,6 +19744,10 @@ int infer_block_params(Compiler *c) {
   mtab_pop(c, mt_pass);
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
     mtab_pop(c, mt_pass);
+    int blk = nt_ref(nt, id, "block");
+    if (blk < 0) continue;
+    int pn = nt_ref(nt, blk, "parameters");
+    if (pn < 0) continue;
     mtab_push_in(c, id);
     const char *cname = nt_str(nt, id, "name");
     if (!cname) continue;
@@ -19758,10 +19762,6 @@ int infer_block_params(Compiler *c) {
       if (!ty_is_object(xrt) ||
           comp_trampoline_kind(c, call_target(c, id, ty_object_class(xrt), cname, 0, NULL)) != 2) continue;
     }
-    int blk = nt_ref(nt, id, "block");
-    if (blk < 0) continue;
-    int pn = nt_ref(nt, blk, "parameters");
-    if (pn < 0) continue;
     int iargs = nt_ref(nt, id, "arguments");
     int iac = 0; const int *iav = iargs >= 0 ? nt_arr(nt, iargs, "arguments", &iac) : NULL;
     /* mixed-args trampoline (`instance_exec(x, @base, 7, &b)`): the block

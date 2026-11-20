@@ -3445,10 +3445,9 @@ int emit_recv_route_handle(Compiler *c, int id, int recv, Buf *b) {
   else {
     free(hb.p); memset(&hb, 0, sizeof hb);
     if (pre && g_pre == pre && pre->len > pre_mark) { pre->len = pre_mark; pre->p[pre_mark] = '\0'; }
-    if (share_plan_producer(c, recv, NULL) == SPK_POLY_ARMS) {
-      /* a boxed receiver's call whose arms each answer a String is read as
-         a box whose handle is bound: the handle face renders it */
-      emit_str_form_handle(c, recv, &hb);
+    Repr r = repr_of(c, recv);
+    if ((!r.may_nil || r.nil_tested) && repr_call_returns_handle(c, recv)) {
+      emit_strbuf_handle_of(c, nt_paren_single(c->nt, recv), &hb);
       nonnil = 1;
     }
     else {

@@ -2246,20 +2246,10 @@ int emit_call_safe_nav_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
            the re-entered call reads the receiver through the override text --
            the oint temp where the receiver node is an oint (the dispatcher
            unwraps it), its plain value otherwise */
-        /* --share-strings: a receiver that is a call answering its own
-           receiver over a handle (`id(s).concat(x)&.frozen?`) is held as
-           that handle, run once here: the call's arms that read the handle
-           take it from the guard (ran_first_handle), where they ran the
-           receiver again */
-        /* ...or a boxed receiver's call whose every arm answers a String
-           or no String (`px.pick(s)&.<<(x)`, strbuf_poly_user_boxes): the
-           guard holds the handle its box carries, or NULL for the arm
-           that answers nil, where the bytes it read were a copy */
-        int sn_self = rrt == TY_STRING && !sn_obj && !sn_scalar && !sn_cont &&
-                      strbuf_self_route(c, recv);
-        int sn_poly = !sn_self && rrt == TY_STRING && !sn_obj && !sn_scalar &&
-                      !sn_cont && share_plan_producer(c, recv, NULL) == SPK_POLY_ARMS;
-        int sn_hold = sn_self || sn_poly;
+        /* Keep the call's String result in the guard's own handle slot,
+           including NULL when the call returns nil. */
+        int sn_hold = rrt == TY_STRING && !sn_obj && !sn_scalar && !sn_cont &&
+                      (strbuf_self_route(c, recv) || repr_call_returns_handle(c, recv));
         /* arguments that run code, which a String receiver's change in
            place must reach (sn_args_run_late) */
         int sn_late = rrt == TY_STRING && !sn_obj && !sn_scalar && !sn_cont && !sn_hold ? sn_args_run_late(c, id, recv) : 0;
@@ -2285,8 +2275,7 @@ int emit_call_safe_nav_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
           tsh = ++g_tmp;
           emit_indent(g_pre, g_indent);
           buf_printf(g_pre, "sp_String *_t%d = ", tsh);
-          if (sn_poly) emit_str_form_handle(c, recv, g_pre);
-          else emit_strbuf_handle_of(c, nt_paren_single(c->nt, recv), g_pre);
+          emit_strbuf_handle_of(c, nt_paren_single(c->nt, recv), g_pre);
           buf_printf(g_pre, "; SP_GC_ROOT(_t%d);\n", tsh);
           buf_printf(&rsn, "_t%d ? sp_String_cstr(_t%d) : (const char *)NULL", tsh, tsh);
         }

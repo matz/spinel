@@ -72,6 +72,8 @@ uses the same handle as the expression that supplied it.
 An ordered operand keeps its saved handle until its argument binding is
 removed. For a call with a native String result, it holds the handle
 from the call's result. An abandoned emission also removes the binding.
+Safe navigation holds the call's native String result through its nil
+test. Mutators can use the same handle after the receiver is known.
 Boxed callable dispatch holds the receiver and arguments before it
 binds the block operand. Proc invocation carries the captured block and
 the keyword marker through the same call as the argument vector. A boxed

@@ -23,10 +23,12 @@ def noise(n, seed)
 end
 
 # The deflate data of a stream: the bytes after the zlib or gzip header.
+# (By bytes: a StringIO's string is UTF-8, and the gzip mtime can read as
+# a character.)
 def body_of(stream, framing)
   return stream if framing == "raw"
   skip = framing == "gzip" ? 10 : 2
-  stream[skip, stream.bytesize - skip]
+  stream.byteslice(skip, stream.bytesize - skip)
 end
 
 def inflater(framing)

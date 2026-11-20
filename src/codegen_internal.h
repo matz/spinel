@@ -1151,6 +1151,10 @@ static inline int poll_in_pure(Compiler *c, int n) {
   return sc && poll_pure_method(c, (int)(sc - c->scopes));
 }
 extern int g_loop_uncounted, g_poll_loop_nest;
+/* the loop being emitted polls for a delivered signal at its latch: the end
+   of its body, and each jump to its next pass (next, redo) */
+extern int g_loop_sig_latch;
+void emit_loop_latch_poll(Buf *b, const char *end);
 extern int g_uses_ensure;   /* the program holds an ensure clause: only then is an exception ever in flight (sp_inflight_cause) */
 extern int g_has_user_cmp;
 extern int g_has_user_binop;
@@ -1297,7 +1301,7 @@ TyKind emit_range_step_array(Compiler *c, int id, Buf *b);
 void emit_range_step_stride(Compiler *c, int argc, const int *argv, int as_float, Buf *b);
 int  emit_iteration_stmt(Compiler *c, int id, Buf *b, int indent);
 void emit_loop_body(Compiler *c, int body, Buf *b, int indent);
-void emit_loop_polls(Compiler *c, int body, Buf *b, int indent, int uncounted, int nest);
+int  emit_loop_polls(Compiler *c, int body, Buf *b, int indent, int uncounted, int nest, int latch);
 int  subtree_has_own_redo(const NodeTable *nt, int id);
 int  subtree_has_own_next(const NodeTable *nt, int id);
 int  subtree_owns_next(const NodeTable *nt, int body, int next);

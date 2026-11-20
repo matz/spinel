@@ -23293,7 +23293,7 @@ static int with_index_answer_known(Compiler *c, int id) {
       nt_ref(nt, r, "arguments") >= 0) return 0;
   const char *m = nt_str(nt, r, "name");
   if (ty_iter_shape(m) != TY_ITER_NONE) return 1;
-  if (!m || !sp_streq(m, "each")) return 0;
+  if (!m || !is_each_name(m)) return 0;
   int x = nt_ref(nt, r, "receiver");
   TyKind xt = x >= 0 ? repr_of(c, x).as_ty : TY_UNKNOWN;
   return ty_is_array(xt) || xt == TY_RANGE;

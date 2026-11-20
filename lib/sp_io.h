@@ -131,6 +131,10 @@ int sp_io_make_pipe(int fds[2]);
 /* IO.pipe end: wrap a raw pipe fd in a GC-managed sp_File. */
 sp_File *sp_io_fdopen(int fd, const char *mode);
 sp_File *sp_io_fdopen_ex(int fd, const char *mode, int owns_fd);
+/* a byte a read-only FIFO open took asking for a writer (lib/sp_cold.c): the
+   handle made of the descriptor gets it back */
+void sp_fifo_pushback_apply(sp_File *f);
+int sp_fifo_pushback_take(int fd, unsigned char *c);
 sp_File *sp_File_open_perm(const char *path, const char *mode, sp_oint perm);   /* a nil perm is CRuby's default, 0666 */
 int sp_io_mode_open_flags(const char *m);   /* the open(2) flags of a mode string, -1 for one File.open refuses */
 const char *sp_io_fdopen_mode(int fl);      /* the stdio mode that fits those flags */

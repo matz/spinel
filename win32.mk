@@ -101,7 +101,7 @@ TEST_SKIP += $(wildcard packages/pty/test/*.rb)
 # no job control: SIGSTOP ends a child, so no wait sees one stopped
 TEST_SKIP += test/process_wait_wuntraced.rb test/process_wait_flags_thread.rb
 # FIFOs (File.mkfifo)
-TEST_SKIP += test/fifo_open_does_not_pin_worker.rb test/issue_3118.rb
+TEST_SKIP += test/fifo_open_does_not_pin_worker.rb test/issue_3118.rb test/fifo_read_open_waits.rb
 # Linux's numeric O_* flags; ELF-only asm; NTFS's 100 ns file times
 TEST_SKIP += test/io_sysopen_flags.rb test/ffi_bool_return_low_byte.rb test/file_utime_nanoseconds.rb
 # what RbConfig and Gem.win_platform? answer on Windows, as in CRuby there

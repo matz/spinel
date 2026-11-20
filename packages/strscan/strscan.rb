@@ -52,6 +52,7 @@ module StringScannerPackage
   native_method :rest?,      [], :bool,           "sp_StringScanner_rest_p"
   native_method :terminate,  [], :self,           "sp_StringScanner_terminate"
   native_method :string,     [], :string,         "sp_StringScanner_string"
+  native_method :string=,    [:string], :string,  "sp_StringScanner_string_set"
   native_method :pre_match,  [], :nstring,        "sp_StringScanner_pre_match"
   native_method :post_match, [], :nstring,        "sp_StringScanner_post_match"
   native_method :reset,      [], :self,           "sp_StringScanner_reset"

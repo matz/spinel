@@ -542,6 +542,21 @@ const char *sp_StringScanner_post_match(sp_StringScanner *sc) {
   return sc_substr(sc->source, start, rem);
 }
 
+/* #string=: scan another String from the start (CRuby resets the scanner
+   as #reset does) and answer it */
+const char *sp_StringScanner_string_set(sp_StringScanner *sc, const char *str) {
+  if (!sc) return str;
+  sp_gc_wb((void *)sc);
+  sc->source = str ? str : sp_str_empty;
+  sc->pos = 0;
+  sc->last_pos = 0;
+  sc->match_start = 0;
+  sc->m_len = 0;
+  sc->matched_p = 0;
+  sc->ncaps = 0;
+  return str;
+}
+
 sp_StringScanner *sp_StringScanner_reset(sp_StringScanner *sc) {
   if (!sc) return sc;
   sc->pos = 0;

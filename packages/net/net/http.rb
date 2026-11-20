@@ -961,16 +961,17 @@ module Net
     IDEMPOTENT_METHODS = %w[GET HEAD PUT DELETE OPTIONS TRACE].freeze
 
     # CRuby's transport_request: a connection that fails before the response
-    # arrives (the server closed it while it sat idle, or reset it) is opened
-    # again and an idempotent request sent again, max_retries times. A POST
-    # is not: the server may have acted on it.
+    # arrives (the server closed it while it sat idle, reset it, or stopped
+    # reading the request) is opened again and an idempotent request sent
+    # again, max_retries times. A POST is not: the server may have acted on
+    # it.
     def perform(req)
       count = 0
       begin
         begin_transport(req)
         write_request(req)
         read_response(req.method, req.decode_content)
-      rescue EOFError, IOError, Errno::ECONNRESET, Errno::ECONNABORTED, Errno::EPIPE, ReadTimeout => e
+      rescue EOFError, IOError, Errno::ECONNRESET, Errno::ECONNABORTED, Errno::EPIPE, ReadTimeout, WriteTimeout => e
         raise if count >= @max_retries || !IDEMPOTENT_METHODS.include?(req.method)
         debug "Conn close because of error #{e.message}, and retry"
         close_socket

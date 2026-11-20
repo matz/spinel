@@ -20682,6 +20682,9 @@ int emit_vis_word_absent(Compiler *c, int id, Buf *b) {
   int vcid = g_class_body_id >= 0 ? g_class_body_id : (comp_scope_of(c, id) ? comp_scope_of(c, id)->class_id : -1);
   int vargs = vcid >= 0 ? nt_ref(nt, id, "arguments") : -1, van = 0;
   const int *vav = vargs >= 0 ? nt_arr(nt, vargs, "arguments", &van) : NULL;
+  /* (one Array's names in its place, `private [:a, :b]`) */
+  int arr = van == 1 && nt_kind(nt, vav[0]) == NK_ArrayNode;
+  if (arr) vav = nt_arr(nt, vav[0], "elements", &van);
   for (int vi = 0; vi < van; vi++) {
     NodeKind vak = nt_kind(nt, vav[vi]);
     const char *mn = NULL;
@@ -20696,11 +20699,12 @@ int emit_vis_word_absent(Compiler *c, int id, Buf *b) {
        answers at it, or, in a class body, whose form applies a word on
        one, a builtin method the class has (Kernel's puts, Comparable's
        between?). A method body's word has no form that applies it to a
-       builtin method yet: it raises, as it did */
+       builtin method yet: a name it takes raises, as it did, and an
+       Array's, which it read none of, still does not */
     int found = call_target(c, id, vcid, mn, CT_NOFACE, NULL) >= 0 ||
                 call_attr_target(c, id, vcid, mn, CT_ATTR, NULL) ||
                 (wb[0] && call_attr_target(c, id, vcid, wb, CT_ATTR | CT_WRITER, NULL)) ||
-                (g_class_body_id >= 0 && class_builtin_has_method(c, vcid, mn));
+                ((g_class_body_id >= 0 || arr) && class_builtin_has_method(c, vcid, mn));
     if (!found) {
       const char *cn = class_ruby_name(c, vcid) ? class_ruby_name(c, vcid) : c->classes[vcid].name;
       buf_puts(b, "sp_raise_cls(\"NameError\", \"undefined method '");

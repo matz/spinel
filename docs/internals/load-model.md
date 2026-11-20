@@ -328,13 +328,13 @@ gathers (`lr_body_names_read`), so each ask is a lookup:
 
 - a word on a module's method, on a name a module body defines (a def,
   an attribute, a `define_method`, an `alias_method` or an `alias`), or
-  on a name the class does not define itself on the word's side but
-  another class, a module or a core class does (`lr_body_word_barred`):
-  an include, extend or prepend copy carries the module's def versions
-  only, not a word's, and an inherited method keeps its own visibility
-  until the word runs, where a version would be the word's from the
-  start. A name nothing defines is no bar: the word raises NameError
-  where it runs, which its version answers;
+  on a name the class does not define itself on the word's side
+  (`lr_body_word_barred`): an include, extend or prepend copy carries
+  the module's def versions only, not a word's, and an inherited method
+  keeps its own visibility until the word runs, where a version would be
+  the word's from the start. A name nothing defines has no method a
+  reader may count: the word raises NameError where it runs, and a
+  version would make the readers count it;
 - any body word in a program that defines `method_missing` or
   `respond_to_missing?`: the entry's else arm and the presence readers
   answer from the table there;

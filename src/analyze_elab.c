@@ -3070,17 +3070,6 @@ static int lr_body_names_owns(const LrBodyNames *x, int cls, int sg, const char 
     if (x->own.e[i].v == 4 * cls + 2 * sg + 1) return 1;
   return 0;
 }
-/* ...does any class, module or core class define nm as an instance method
-   or a class method (a writer `nm=` as an attribute's too)? A name none
-   does is absent: a word naming it raises NameError where it runs
-   (emit_vis_word_absent), which its version answers */
-static int lr_body_names_known(const LrBodyNames *x, const char *nm) {
-  char buf[256];
-  const char *base = lr_writer_base(nm, buf, sizeof buf);
-  int i = ani_first(&x->own, nm), j = base ? ani_first(&x->own, base) : x->own.n;
-  return (i < x->own.n && sp_streq(x->own.e[i].name, nm)) || (j < x->own.n && sp_streq(x->own.e[j].name, base)) ||
-         anh_has(&x->mod, nm) || (base && anh_has(&x->mod, base)) || core_method_name_any(nm);
-}
 /* ...does a module body define nm (a writer `nm=` through its attribute's
    name, which mod holds for both)? */
 static int lr_body_names_mod(const LrBodyNames *x, const char *nm) {
@@ -3164,9 +3153,10 @@ static int lr_body_self_unsure(Compiler *c, LrBodyNames *x, int d, int cls) {
    only), in a body that may reach code the record cannot follow
    (lr_body_followed), in a class method a call may run on a subclass
    (lr_body_self_unsure); and for a name the class does not define itself
-   on that side but something does (a version would be the word's from the
-   start, where the inherited method's visibility holds until the word
-   runs; a name nothing defines raises NameError there), one a module
+   on that side (a version would be the word's from the start, where an
+   inherited method's visibility holds until the word runs, and a name
+   nothing defines has no method a reader may count: the word raises
+   NameError where it runs, emit_vis_word_absent), one a module
    body defines, or, on the class side, one a reader that reads no
    class-side version names (lr_cside_unfollowed); and for a method body's
    protected word, a name a call in a block whose self nothing tells calls
@@ -3181,7 +3171,7 @@ static int lr_body_word_barred(Compiler *c, const int *par, int n, int node, LrB
   int untold = lr_body_word(nt, node) == BVIS_PROTECTED && lr_body_def(nt, par, n, node) >= 0;
   for (int k = 0; lr_word_name(nt, node, k); k++) {
     const char *nm = lr_word_name(nt, node, k);
-    if ((!lr_body_names_owns(x, cls, sg, nm) && lr_body_names_known(x, nm)) || lr_body_names_mod(x, nm) || (sg && lr_cside_unfollowed(x, nm)) ||
+    if (!lr_body_names_owns(x, cls, sg, nm) || lr_body_names_mod(x, nm) || (sg && lr_cside_unfollowed(x, nm)) ||
         (untold && anh_has(&x->untold, nm)))
       return 1;
   }

@@ -61,3 +61,20 @@ class K
     p e.message
   end
 end
+# a class method's word on a name nothing defines leaves no method a
+# reader counts, before or after it raises, and an Array's names raise
+# too, in a class method and in a class body
+class N0
+  def self.hide = private(:zz)
+  def self.hide2 = private([:zz, :zz2])
+end
+p [N0.private_method_defined?(:zz), N0.new.respond_to?(:zz, true)]
+p [(N0.hide rescue $!.class), (N0.hide2 rescue $!.class)]
+p [N0.private_method_defined?(:zz), N0.new.respond_to?(:zz, true)]
+class N1
+  begin
+    private [:zz]
+  rescue NameError => e
+    p e.message
+  end
+end

@@ -7,3 +7,7 @@ NameError
 "undefined method 'nope4' for module 'T1'"
 :puts
 "undefined method 'a\"b' for class 'K'"
+[false, false]
+[NameError, NameError]
+[false, false]
+"undefined method 'zz' for class 'N1'"

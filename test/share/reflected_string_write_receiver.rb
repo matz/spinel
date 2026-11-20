@@ -24,7 +24,7 @@ first = ReflectionCell.new(+"first")
 other = ReflectionCell.new(+"other")
 shared = +"value"
 reflected_write(first, other, shared)
-reflected_write_dropped(first, other, shared)
+reflected_write_dropped(ReflectionCell.new(+"dropped"), other, shared)
 shared << "!"
 p first.value
 

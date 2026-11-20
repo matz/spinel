@@ -17403,19 +17403,6 @@ static int masgn_index_writer(Compiler *c, TyKind rt, int *cdef, TyKind *kt) {
   }
   return wmi;
 }
-/* Whether storing into the target can allocate or run user code, and so
-   collect: that (the plan's cplan_target_store_effect), or an index store
-   on the general hash, on a String-keyed hash (which copies a mutable key,
-   #6410) or on a Struct. */
-static int masgn_store_allocates(Compiler *c, int tgt) {
-  if (cplan_target_store_effect(c, tgt) & CPS_CODE) return 1;
-  int r, k;
-  masgn_target_parts(c->nt, tgt, &r, &k);
-  if (r < 0 || k < 0 || nt_kind(c->nt, tgt) == NK_CallTargetNode) return 0;
-  TyKind rt = comp_ntype(c, r);
-  return rt == TY_POLY_POLY_HASH || (ty_is_hash(rt) && ty_hash_key(rt) == TY_STRING) ||
-         nt_int(c->nt, tgt, "struct_aset", 0);
-}
 /* Target i of a multiple assignment or a nested target, in the order the
    stores run: the lefts, the splat, the rights; -1 past the last. */
 static int masgn_target_at(const NodeTable *nt, int mw, int i) {
@@ -17468,6 +17455,70 @@ static int masgn_takes_elements_first(Compiler *c, int mw, int src) {
   }
   return 0;
 }
+/* The C slot type of a variable or constant target masgn_store writes, or
+   TY_UNKNOWN for a target reached through a receiver. */
+static TyKind masgn_slot_type(Compiler *c, int id, int tgt) {
+  const NodeTable *nt = c->nt;
+  const char *ty = nt_type(nt, tgt), *nm = nt_str(nt, tgt, "name");
+  NodeKind k = nt_kind(nt, tgt);
+  if (!ty || !nm) return TY_UNKNOWN;
+  if (k == NK_LocalVariableTargetNode) {
+    const LocalVar *lv = scope_local(comp_scope_of(c, tgt), nm);
+    return lv ? lv->type : TY_UNKNOWN;
+  }
+  if (k == NK_GlobalVariableTargetNode) {
+    const char *name = comp_resolve_gvar(c, nm + 1);
+    const LocalVar *gv = name ? comp_gvar(c, name) : NULL;
+    return gv ? gv->type : TY_UNKNOWN;
+  }
+  if (k == NK_InstanceVariableTargetNode) {
+    HolderRef h;
+    if (!masgn_ivar_home(c, tgt, &h)) return TY_UNKNOWN;
+    int ix = comp_ivar_index(&c->classes[h.cid], nm);
+    return ix >= 0 ? c->classes[h.cid].ivar_types[ix] : TY_UNKNOWN;
+  }
+  if (k == NK_ClassVariableTargetNode) {
+    int cid = masgn_cvar_class(c, id, nm);
+    int cx = cid >= 0 ? comp_cvar_index(&c->classes[cid], nm) : -1;
+    return cx >= 0 ? c->classes[cid].cvar_types[cx] : TY_UNKNOWN;
+  }
+  if (k == NK_ConstantTargetNode || k == NK_ConstantPathTargetNode) {
+    LocalVar *cv = comp_const(c, const_key_at(c, tgt));
+    return cv ? cv->type : TY_UNKNOWN;
+  }
+  return TY_UNKNOWN;
+}
+/* Unboxing into an Array slot can allocate a conversion of a typed Array. */
+static int masgn_slot_unbox_allocates(Compiler *c, int id, int tgt) {
+  TyKind ty = masgn_slot_type(c, id, tgt);
+  return ty_is_array(ty) || ty_is_obj_array(ty);
+}
+/* Whether a store can collect while tuple values are waiting. Destructuring
+   may run to_ary or snapshot its source, and a named splat builds an Array.
+   A leaf store can run the program's code or allocate in its container. */
+static int masgn_store_allocates(Compiler *c, int id, int tgt, int boxed) {
+  const NodeTable *nt = c->nt;
+  NodeKind kind = nt_kind(nt, tgt);
+  if (kind == NK_SplatNode) return nt_ref(nt, tgt, "expression") >= 0;
+  if (kind == NK_MultiWriteNode || kind == NK_MultiTargetNode) {
+    if (kind == NK_MultiTargetNode) {
+      int one;
+      if (cplan_boxed_to_ary_classes(c, tgt, NTI_YIELDED, &one, NULL, 1) > 0 ||
+          masgn_takes_elements_first(c, tgt, -1)) return 1;
+    }
+    for (int i = 0, t; (t = masgn_target_at(nt, tgt, i)) >= 0; i++)
+      if (masgn_store_allocates(c, id, t, kind == NK_MultiTargetNode)) return 1;
+    return 0;
+  }
+  if (boxed && masgn_slot_unbox_allocates(c, id, tgt)) return 1;
+  if (cplan_target_store_effect(c, tgt) & CPS_CODE) return 1;
+  int r, k;
+  masgn_target_parts(nt, tgt, &r, &k);
+  if (r < 0 || k < 0 || kind == NK_CallTargetNode) return 0;
+  TyKind rt = comp_ntype(c, r);
+  return rt == TY_POLY_POLY_HASH || (ty_is_hash(rt) && ty_hash_key(rt) == TY_STRING) ||
+         nt_int(nt, tgt, "struct_aset", 0);
+}
 /* The elements of the Array in `_t<src>`, of storage kind k, taken before
    any store (masgn_takes_elements_first): a copy the targets read from. */
 static int masgn_take_elements(const char *k, int src, Buf *b, int indent) {
@@ -17498,30 +17549,6 @@ static void masgn_index_key(Compiler *c, int key, TyKind kt, Buf *b) {
   else if (kt == TY_INT) emit_int_expr(c, key, b);
   else if (kt == TY_STRBUF) emit_strbuf_handle_of(c, key, b);
   else emit_expr(c, key, b);
-}
-/* The C slot type of a variable or constant target masgn_store writes, or
-   TY_UNKNOWN for a target that is not one. */
-static TyKind masgn_slot_type(Compiler *c, int id, int tgt) {
-  const NodeTable *nt = c->nt;
-  const char *ty = nt_type(nt, tgt), *nm = nt_str(nt, tgt, "name");
-  NodeKind k = nt_kind(nt, tgt);
-  if (!ty || !nm) return TY_UNKNOWN;
-  if (k == NK_InstanceVariableTargetNode) {
-    HolderRef h;
-    if (!masgn_ivar_home(c, tgt, &h)) return TY_UNKNOWN;
-    int ix = comp_ivar_index(&c->classes[h.cid], nm);
-    return ix >= 0 ? c->classes[h.cid].ivar_types[ix] : TY_UNKNOWN;
-  }
-  if (k == NK_ClassVariableTargetNode) {
-    int cid = masgn_cvar_class(c, id, nm);
-    int cx = cid >= 0 ? comp_cvar_index(&c->classes[cid], nm) : -1;
-    return cx >= 0 ? c->classes[cid].cvar_types[cx] : TY_UNKNOWN;
-  }
-  if (k == NK_ConstantTargetNode || k == NK_ConstantPathTargetNode) {
-    LocalVar *cv = comp_const(c, const_key_at(c, tgt));
-    return cv ? cv->type : TY_UNKNOWN;
-  }
-  return TY_UNKNOWN;
 }
 /* Store `val` (of type `vt`, NULL for nil) into a multiple-assignment target
    the arms destructuring a run-time value reach that is not a local: an
@@ -19328,15 +19355,15 @@ static int emit_multi_write_stmt_body(Compiler *c, int id, Buf *b, int indent, c
      value that is a by-value struct into a slot that boxes it -- comes
      after every value is built and after the targets before it have taken
      theirs, so it can collect what an earlier target dropped. */
-  int store_alloc = rest_var || rest_gvar || rest_tgt >= 0;
-  for (int i = 0; i < ln && !store_alloc; i++) store_alloc = masgn_store_allocates(c, lefts[i]);
+  int store_alloc = masgn_store_allocates(c, id, id, 0);
+  int right_start = en - rn > ln ? en - rn : ln;
   for (int i = 0; i < en && !store_alloc; i++) {
     Repr vr = repr_of(c, els[i]);
     store_alloc = (vr.kind == RK_STRUCT || vr.kind == RK_VOBJ) && masgn_slot_boxes(c, id, lefts, ln, i, vr.as_ty);
-    /* a box into a general Array ivar is converted at its store, and a box
-       holding a typed Array converts to a new one */
-    if (!store_alloc && i < ln && vr.kind == RK_BOXED && nt_kind(nt, lefts[i]) == NK_InstanceVariableTargetNode)
-      store_alloc = masgn_slot_type(c, id, lefts[i]) == TY_POLY_ARRAY;
+    if (!store_alloc && vr.kind == RK_BOXED) {
+      int tgt = i < ln ? lefts[i] : i >= right_start ? rights[i - right_start] : -1;
+      store_alloc = tgt >= 0 && masgn_slot_unbox_allocates(c, id, tgt);
+    }
   }
   /* evaluate all RHS values into temps first (so `a, b = b, a` swaps).
      Save each temp index separately: emit_expr may consume extra g_tmp
@@ -19901,9 +19928,8 @@ static int emit_multi_write_stmt_body(Compiler *c, int id, Buf *b, int indent, c
      just past the splat's actual length (max(0, en-ln-rn)); a target whose
      source index runs off the end lands nil (`a, *b, c, d = [1, 2]` ->
      c=2, d=nil) instead of reusing a leading element. */
-  int blen_r = en - ln - rn; if (blen_r < 0) blen_r = 0;
   for (int j = 0; j < rn; j++) {
-    int ridx = ln + blen_r + j;
+    int ridx = right_start + j;
     if (ridx >= en) ridx = -1;
     const char *lty = nt_type(nt, rights[j]);
     NodeKind lk = nt_kind(nt, rights[j]);

@@ -99,10 +99,4 @@ int share_frozen_literal_alone(Compiler *c, int n);
    object too (share_frozen_string) */
 int share_frozen_string(Compiler *c, int n);
 
-/* Does n supply its handle or a box holding that handle? */
-int share_node_carries_handle(const Compiler *c, int n);
-
-
-
-
 #endif

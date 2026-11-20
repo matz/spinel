@@ -306,7 +306,7 @@ already answers, or should:
 - a call-plan or row change that records a decision for `--plan-check`
   while the emitter beside it still decides on its own;
 - an inline `sp_streq(name, "...")` where a row or a predicate fits;
-- a decision in a renderer that the String plan should make;
+- a renderer that reconstructs a String result from its source slot after a callback;
 - a special case keyed on one method name;
 - hand recursion over node kinds where a walker exists;
 - a fact re-derived at one call site that a layer already answers;

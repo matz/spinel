@@ -188,9 +188,10 @@ and callbacks.
   every other name that holds the same String (`dup`, `clone` and
   `String.new` make a new one). A method's String result is a handle too;
   its physical return type comes from Repr. A boxed String carries the same
-  handle. The remaining sharing analysis, String plan and byte routes
-  (`share_plan_*`, `strbuf_*`, `emit_strbuf_*`) are scheduled for deletion,
-  so a change does not add to them, freshness rules or copy refusals.
+  handle. For a call that runs a block, emit the result from the selected
+  call path. The block can reassign the original receiver's slot. Changes
+  should use that result and the ordinary representation views as the
+  remaining freshness rules, byte routes and copy refusals are removed.
   A program that answers differently from CRuby is welcome as a new issue,
   with a reduction.
 

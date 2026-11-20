@@ -4427,16 +4427,13 @@ int emit_tap_then_expr(Compiler *c, int id, Buf *b) {
   if (use_shadow) { emit_indent(g_pre, g_indent); buf_puts(g_pre, "}\n"); }
   if (tlv0) lv_set_storage_type(tlv0, tsaved0);
 
-  /* A native call reads tap's retained receiver through its requested
-     handle view. Its caller projects the result to bytes when needed. */
+  /* The retained receiver supplies tap's result after the block. Its
+     bytes view uses the live payload so a subsequent box keeps the
+     same String object. */
   TyKind result_view = TY_UNKNOWN;
-  if (is_tap && et == TY_STRBUF &&
-      (repr_of(c, id).demand || (view_type_top(id, &result_view) && result_view == TY_STRBUF)))
-    buf_printf(b, "_t%d", tr);
-  else if (is_tap && hparam && repr_of(c, id).as_ty == TY_STRING && strbuf_value_carries(c, recv))
-    str_read_handle_tmp(b, tr);
-  else if (is_tap && et == TY_STRBUF && repr_of(c, id).as_ty == TY_STRING)
-    buf_printf(b, "(_t%d ? sp_String_cstr(_t%d) : NULL)", tr, tr);
+  if (is_tap && et == TY_STRBUF && repr_of(c, id).as_ty == TY_STRING &&
+      !repr_of(c, id).demand && !(view_type_top(id, &result_view) && result_view == TY_STRBUF))
+    buf_printf(b, "sp_strbuf_read(_t%d)", tr);
   /* tap's value is the receiver's oint, unwrapped for a plain reader */
   else if (is_tap && ro && !node_is_oint(c, id)) buf_printf(b, "%s(_t%d)", oint_arg(et), tr);
   /* (one representation: a then the mode collected as the handle answers

@@ -1,0 +1,3 @@
+[true, "ab!", "new"]
+[true, "ab!", "changed"]
+[:stopped, "changed"]

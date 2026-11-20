@@ -3642,12 +3642,20 @@ static int push_escape_widen(Compiler *c, int id, int recv, int is_push, TyKind 
 }
 
 typedef struct {
+  const char *name;
+  int scope, depth;
+} ContainerLocalVisit;
+typedef struct {
   int *items, count, capacity;
   int small[32];
+  ContainerLocalVisit *locals;
+  int nlocals, local_capacity;
+  ContainerLocalVisit small_locals[8];
 } ContainerLiterals;
 static void container_literals(Compiler *c, int n, ContainerLiterals *out, int depth);
 static void free_container_literals(ContainerLiterals *list) {
   if (list->items != list->small) free(list->items);
+  if (list->locals != list->small_locals) free(list->locals);
 }
 static int value_node_or_self(const NodeTable *nt, int n);
 /* Sets the Hash literals value `v` hands over to `want`. A chain of locals
@@ -7367,11 +7375,38 @@ static void add_container_literal(ContainerLiterals *out, int n, int nodes) {
     int *larger = malloc(sizeof *larger * (size_t)capacity);
     if (!larger) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
     memcpy(larger, out->items, sizeof *larger * (size_t)out->count);
-    free_container_literals(out);
+    if (out->items != out->small) free(out->items);
     out->items = larger;
     out->capacity = capacity;
   }
   out->items[out->count++] = n;
+}
+
+/* Revisit a slot only from a shorter path, where the depth bound permits
+   more of its producers to be reached. Keep separate visits for an
+   element read's intermediate collection of receiver literals. */
+static int container_local_seen(ContainerLiterals *out, int scope, const char *name, int depth) {
+  for (int i = 0; i < out->nlocals; i++) {
+    ContainerLocalVisit *visit = &out->locals[i];
+    if (visit->scope != scope || !sp_streq(visit->name, name)) continue;
+    if (visit->depth <= depth) return 1;
+    visit->depth = depth;
+    return 0;
+  }
+  if (!out->locals) {
+    out->locals = out->small_locals;
+    out->local_capacity = (int)(sizeof out->small_locals / sizeof *out->small_locals);
+  } else if (out->nlocals == out->local_capacity) {
+    int capacity = out->local_capacity * 2;
+    ContainerLocalVisit *larger = malloc(sizeof *larger * (size_t)capacity);
+    if (!larger) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    memcpy(larger, out->locals, sizeof *larger * (size_t)out->nlocals);
+    if (out->locals != out->small_locals) free(out->locals);
+    out->locals = larger;
+    out->local_capacity = capacity;
+  }
+  out->locals[out->nlocals++] = (ContainerLocalVisit){name, scope, depth};
+  return 0;
 }
 
 /* Collects into out the container literals `n` can evaluate to, as far
@@ -7432,6 +7467,7 @@ static void container_literals(Compiler *c, int n, ContainerLiterals *out, int d
   if (!sc) return;
   if (k == NK_LocalVariableReadNode) {
     int si = (int)(sc - c->scopes);
+    if (container_local_seen(out, si, nm, depth)) return;
     for (int r = lw_shared_first(c, nm, si); r >= 0; r = lw_shared_next(r)) {
       int w = lw_shared_node(r);
       if (nt_kind(nt, w) != NK_LocalVariableWriteNode || comp_scope_of(c, w) != sc ||

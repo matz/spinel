@@ -723,18 +723,32 @@ module Net
       http.start { |h| yield h }
     end
 
-    # Net::HTTP.get(uri) -> the body String.
-    def self.get(uri)
-      get_response(uri).body
+    # Net::HTTP.get(uri, headers) -> the body String.
+    def self.get(uri, headers = nil)
+      get_response(uri, headers).body
     end
 
-    # Net::HTTP.get_response(uri) -> HTTPResponse.
-    def self.get_response(uri)
+    # Net::HTTP.get_response(uri, headers) -> HTTPResponse.
+    def self.get_response(uri, headers = nil)
       u = URI(uri)
       https = u.scheme == "https"
       http = HTTP.new(u.host, u.port)
       http.use_ssl = https
-      http.start { |h| h.request(HTTPRequest.new("GET", u.request_uri)) }
+      http.start { |h| h.request(HTTPRequest.new("GET", u.request_uri, headers)) }
+    end
+
+    def self.post(uri, body, headers = nil)
+      u = URI(uri)
+      http = HTTP.new(u.host, u.port)
+      http.use_ssl = (u.scheme == "https")
+      http.start { |h| h.post(u.request_uri, body, headers) }
+    end
+
+    def self.put(uri, body, headers = nil)
+      u = URI(uri)
+      http = HTTP.new(u.host, u.port)
+      http.use_ssl = (u.scheme == "https")
+      http.start { |h| h.put(u.request_uri, body, headers) }
     end
 
     def self.post_form(uri, params)

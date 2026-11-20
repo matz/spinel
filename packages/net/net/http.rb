@@ -657,6 +657,18 @@ module Net
       end
     end
 
+    class Options < HTTPRequest
+      def initialize(path, initheader = nil)
+        super("OPTIONS", path, initheader)
+      end
+    end
+
+    class Trace < HTTPRequest
+      def initialize(path, initheader = nil)
+        super("TRACE", path, initheader)
+      end
+    end
+
     attr_reader :address, :port
     attr_accessor :use_ssl, :open_timeout, :read_timeout
 
@@ -1000,6 +1012,14 @@ module Net
     # Sends Depth: Infinity unless headers are given, as in CRuby.
     def delete(path, headers = { "Depth" => "Infinity" })
       request(Delete.new(path, headers))
+    end
+
+    def options(path, headers = nil)
+      request(Options.new(path, headers))
+    end
+
+    def trace(path, headers = nil)
+      request(Trace.new(path, headers))
     end
 
     def send_request(name, path, body = nil, headers = nil)

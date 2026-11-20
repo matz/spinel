@@ -1583,61 +1583,68 @@ TEST_WARN_SUPPRESS := -Wno-unused-value
 RBS_SEED_STRICT := -Werror=incompatible-pointer-types
 
 # ---- Precompiled runtime header for the per-test compiles ----
-# Every generated test TU includes the same lib/spinel_rt.h; the cc step is
-# >99% of a test's cost and roughly half of that is parsing the header, so
-# the suite precompiles it once per make invocation (measured: gcc -15%,
-# clang -23% on the per-test compile). Two variants cover the two TU shapes
-# the emitter produces: plain, and `#define SP_TU_NO_POLY_RENDER 1` before
-# the include. gcc picks the .gch up implicitly from the include path; clang
-# ignores gcc-style implicit lookup and needs an explicit -include-pch.
+# Every generated test TU includes lib/spinel_rt.h. Parsing it takes a large
+# share of a cache miss, so precompile it once per configuration. Three
+# variants cover the plain header and the two single defines that omit
+# polymorphic render or value code. GCC
+# finds the .gch on the include path. Clang needs an explicit -include-pch.
 # Each variant dir also carries a copy of spinel_rt.h so gcc degrades to a
-# normal textual include if the .gch is unusable. The PCH path is keyed on
-# compiler kind, $(OPT) and the overflow mode because a PCH only loads under
-# the exact flags it was built with. The mode was missing from the key, and
-# a -D mismatch is one clang accepts SILENTLY: after a raise-mode run, the
-# promote suite reused the raise-mode .gch and every test ran against
-# raise-semantics runtime inlines -- the mode-sensitive tests failed and the
-# rest tested the wrong runtime without a word (#4538).
-CC_KIND  := $(if $(findstring clang,$(shell $(CC) --version 2>/dev/null | head -1)),clang,gcc)
-# The key has to be ONE path component: $(OPT) is a flag LIST, so a
-# multi-flag setting (`COPT := -O2 -g0` in config.mk) put a space in the
-# middle and every use of PCH_ROOT then split into two words -- two make
-# targets, an -I pointing at the wrong directory, and a mkdir of /plain
-# (#4256). Strip the characters that cannot appear in one component:
-# the dashes the key never wanted, then spaces, slashes and equals.
-sp_empty :=
-sp_space := $(sp_empty) $(sp_empty)
-sp_pathify = $(subst =,,$(subst /,,$(subst $(sp_space),,$(subst -,,$(1)))))
-PCH_ROOT := build/pch/$(CC_KIND)$(call sp_pathify,$(OPT))$(if $(SP_OV_DEFINE),$(SPINEL_INT_OVERFLOW))
+# normal textual include if the .gch is unusable. Key the directory on every
+# flag used to build the header. Clang can silently accept a stale PCH built
+# with a different -D, including the overflow mode (#4538).
+CC_VERSION := $(shell $(CC) --version 2>/dev/null)
+CC_KIND := $(if $(findstring clang,$(CC_VERSION)),clang,gcc)
 PCH_FLAGS = $(CFLAGS) $(SP_OV_DEFINE) -Werror $(TEST_WARN_SUPPRESS) $(SEC_FLAGS)
-PCH_PLAIN  := $(PCH_ROOT)/plain/spinel_rt.h.gch
-PCH_NOPOLY := $(PCH_ROOT)/nopoly/spinel_rt.h.gch
+# The last explicit -O wins among ordinary flags. Leave opaque options
+# (such as compiler response files) to the textual include on an override.
+TEST_PCH_OPT := $(if $(filter-out -O% -Wno-% -ffp-contract=off -g -g0 -g1 -g2 -g3 -D% -U% -I%,$(CFLAGS)),,$(lastword $(filter -O%,$(CFLAGS))))
+# Inspect the shell's argument words. Only options with self-contained
+# inputs can share a header, even if the driver accepts other spellings.
+TEST_LOCAL_CFLAGS := -O | -O[0-3] | -Og | -Os | -Oz | -Ofast | \
+  -g | -g[0-3] | -D?* | -U?* | -std=* | -Wall | -Wextra | -Werror | -Werror=* | -Wno-* | \
+  -ffp-contract=* | -ffunction-sections | -fdata-sections | -Ilib/win32
+TEST_INDIRECT_OPTS := @* | --* | -specs | -specs=* | \
+  -I* | -F* | -i* | -vfsoverlay* | --sysroot* | -resource-dir* | -B* | \
+  -fmodule-file* | -fmodule-map-file* | -Xclang | -Xpreprocessor | -Xlinker | -Wp,*
+TEST_OPENSSL_INCLUDE := $(if $(SPINEL_OPENSSL_LIBDIR),$(patsubst %/lib,%/include,$(SPINEL_OPENSSL_LIBDIR)))
+# The Makefile may export the Homebrew OpenSSL search path itself. Include
+# that directory's contents in the key. User-supplied search paths fall back.
+TEST_MANAGED_INCLUDE := $(filter $(TEST_OPENSSL_INCLUDE),$(CPATH))
+TEST_INCLUDE_ENV := $(strip $(filter-out $(TEST_MANAGED_INCLUDE),$(CPATH)) $(C_INCLUDE_PATH) $(SDKROOT))
+TEST_INDIRECT_FLAGS := $(if $(TEST_INCLUDE_ENV),1,$(shell \
+  for arg in $(CC); do \
+    case "$$arg" in ($(TEST_LOCAL_CFLAGS)) ;; (-* | @* | *=*) printf 1; exit;; esac; \
+  done; \
+  for arg in $(PCH_FLAGS); do \
+    case "$$arg" in ($(TEST_LOCAL_CFLAGS)) ;; (*) printf 1; exit;; esac; \
+  done))
+TEST_PCH_KEY := $(if $(TEST_INDIRECT_FLAGS),,$(shell tools/result_cache.sh pch-key "$(CC)" "$(CC_VERSION)" "$(TEST_MANAGED_INCLUDE)" $(PCH_FLAGS)))
+PCH_ROOT := build/pch/$(CC_KIND)-$(TEST_PCH_KEY)
+TEST_HOST_OS := $(shell uname -s)
+TEST_PCHS := $(if $(TEST_PCH_KEY),$(addsuffix /spinel_rt.h.gch,$(addprefix $(PCH_ROOT)/,plain nopoly novalues)))
 SP_LIB_HDRS := $(wildcard lib/*.h) $(PLATFORM_HDRS)
 
 .PHONY: test-pch
-test-pch: $(PCH_PLAIN) $(PCH_NOPOLY)
+test-pch: $(TEST_PCHS)
 
-$(PCH_PLAIN): $(SP_LIB_HDRS) lib/spinel_rt_responds_generated.h
+$(PCH_ROOT)/nopoly/spinel_rt.h.gch: PCH_TU_DEFINE := -DSP_TU_NO_POLY_RENDER=1
+$(PCH_ROOT)/novalues/spinel_rt.h.gch: PCH_TU_DEFINE := -DSP_TU_NO_POLY_VALUES=1
+ifneq ($(TEST_PCHS),)
+$(TEST_PCHS): $(SP_LIB_HDRS) lib/spinel_rt_responds_generated.h
 	@mkdir -p $(@D)
 	@cp lib/spinel_rt.h $(@D)/spinel_rt.h
-	@$(CC) $(PCH_FLAGS) -Ilib -x c-header $(@D)/spinel_rt.h -o $@
-
-$(PCH_NOPOLY): $(SP_LIB_HDRS) lib/spinel_rt_responds_generated.h
-	@mkdir -p $(@D)
-	@cp lib/spinel_rt.h $(@D)/spinel_rt.h
-	@$(CC) $(PCH_FLAGS) -DSP_TU_NO_POLY_RENDER=1 -Ilib -x c-header $(@D)/spinel_rt.h -o $@
+	@$(CC) $(PCH_FLAGS) $(PCH_TU_DEFINE) -Ilib -x c-header $(@D)/spinel_rt.h -o $@
+endif
 
 ifeq ($(CC_KIND),clang)
-PCH_USE_PLAIN  = -include-pch $(PCH_PLAIN)
-PCH_USE_NOPOLY = -include-pch $(PCH_NOPOLY)
+PCH_USE = -include-pch $$pchdir/spinel_rt.h.gch
 # clang tests compile+link in ONE driver invocation: sccache declines to
 # cache -include-pch compiles, so the split buys nothing there, and the
 # extra ~2000 driver spawns are expensive on macOS (process launch cost).
 # gcc keeps the split: its separate compile step is sccache-cacheable.
 TEST_SINGLE_INVOKE := 1
 else
-PCH_USE_PLAIN  = -I$(PCH_ROOT)/plain
-PCH_USE_NOPOLY = -I$(PCH_ROOT)/nopoly
+PCH_USE = -I$$pchdir
 TEST_SINGLE_INVOKE :=
 endif
 
@@ -4349,8 +4356,8 @@ endif
 # has a 5373-line main: 82s at -O1 against 1.6s at -O0, with a roughly cubic
 # curve through it (928 lines 0.9s, 3219 lines 15s, 4407 lines 43s). Past 2000
 # generated lines that one function dominates and -O0 wins by a wide margin. The
-# PCH is dropped with it, since it was built under the other -O and would not
-# load anyway. The binaries are the same speed here -- these are wide-API tests
+# PCH still applies when the test was already built at that level. The binaries
+# are the same speed here -- these are wide-API tests
 # rather than loops, 0.023s vs 0.024s on the worst one.
 #
 # The result cache (tools/result_cache.sh). spinel always runs: the C it emits
@@ -4408,14 +4415,19 @@ RESULT_CACHE_FP = $(if $(filter 0,$(GATE_CACHE)),off,$(eval RESULT_CACHE_FP := $
 # finish: test/cmethod_chain_reachability.rb's 24-deep static-inline chain,
 # which clang's inliner expands in full once the checked arithmetic lost the
 # sentinel test that kept each frame from inlining (the test checks the
-# reachability walk, not the C). Like the >= 2000-line rule it drops the
-# PCH, which was built at the default level.
+# reachability walk, not the C). The same PCH compatibility check covers both overrides.
 # TEST_PLAN_CHECK=--plan-check (the gate's corpus leg sets it): the compile
 # that writes each test's C also reports the call decisions --plan-check
 # compares, into <test>.plan beside the result. The flag adds report lines
 # only (the C is the same with and without it, so the result cache still
 # matches), and tools/plan_check.sh --from-results reads the reports instead
 # of compiling the corpus a second time.
+# A response file can carry flags whose values change at the same path. The
+# single-invocation driver can also see frontend flags among the link inputs.
+# Use the textual header when those inputs could change its meaning.
+# TEST_LD=lld selects LLD for the generated test executables on Linux.
+# Keep the driver default for normal runs and pass the selector only at link.
+TEST_LDFLAGS = $(LDFLAGS)$(if $(TEST_LD), -fuse-ld=$(TEST_LD))
 define RUN_ONE_TEST
 @mkdir -p $(TEST_RESULT_DIR)
 @# Raise the descriptor soft limit toward the hard one, best effort. A test
@@ -4442,16 +4454,21 @@ ckey=""; hit=0; own=0; \
   if [ -n "$(TEST_PLAN_CHECK)" ]; then { grep "^plan-check:" "$$tmpdir/sperr" | sed "s|^|$<: |"; \
     [ "$$sprc" -eq 0 ] || echo "$<: plan-check-exit: $$sprc"; } > "$@.plan"; fi; \
   [ "$$sprc" -eq 0 ]; } && \
-{ pchuse="$(PCH_USE_PLAIN)"; pchf="$(PCH_PLAIN)"; \
-  if head -2 "$$cfile" | grep -q SP_TU_NO_POLY_RENDER; then pchuse="$(PCH_USE_NOPOLY)"; pchf="$(PCH_NOPOLY)"; fi; \
-  [ -f "$$pchf" ] || pchuse=""; \
-  if sed -n '1,/^#include "spinel_rt.h"/p' "$$cfile" | grep '^#define' | grep -qv SP_TU_NO_POLY_RENDER; then pchuse=""; fi; \
+{ rtdefs=$$(sed -n '/^#include "spinel_rt.h"/q; /^#define/p' "$$cfile"); \
+  case "$$rtdefs" in \
+    '') pchdir="$(PCH_ROOT)/plain";; \
+    '#define SP_TU_NO_POLY_RENDER 1') pchdir="$(PCH_ROOT)/nopoly";; \
+    '#define SP_TU_NO_POLY_VALUES 1') pchdir="$(PCH_ROOT)/novalues";; \
+    *) pchdir="";; \
+  esac; \
+  pchuse=""; if [ -n "$$pchdir" ] && [ -f "$$pchdir/spinel_rt.h.gch" ]; then pchuse="$(PCH_USE)"; fi; \
   xlibs=$$(sed -n 's|^/\* SPINEL_LINK: \(.*\) \*/$$|\1|p' "$$cfile" | tr '\n' ' '); \
   xobjs=$$(sed -n 's|^/\* SPINEL_LINK_OBJ: \(.*\) \*/$$|\1|p' "$$cfile" | tr '\n' ' '); \
   keep=""; for o in $$xobjs; do case " $(BUNDLED_NATIVE_OBJS) " in *" $$o "*) ;; *) keep="$$keep $$o";; esac; done; xobjs="$$keep"; \
   bigopt=""; \
-  if [ "$$(wc -l < "$$cfile")" -ge 2000 ]; then bigopt="-O0"; pchuse=""; fi; \
-  if [ -f "$<.opt" ]; then bigopt=$$(cat "$<.opt"); pchuse=""; fi; \
+  if [ "$$(wc -l < "$$cfile")" -ge 2000 ]; then bigopt="-O0"; fi; \
+  if [ -f "$<.opt" ]; then bigopt=$$(cat "$<.opt"); fi; \
+  if [ -n "$$bigopt" ] && [ "$$bigopt" != "$(TEST_PCH_OPT)" ]; then pchuse=""; fi; \
   mtdef=""; rtlib="$(SP_RT_LIB)"; natobjs="$(BUNDLED_NATIVE_OBJS)"; mtld=""; \
   if grep -q SPINEL_USES_THREADS "$$cfile"; then \
     mtdef="$(MT_DEF)"; rtlib="$(SP_RT_MT_LIB)"; natobjs="$(BUNDLED_NATIVE_MT_OBJS)"; mtld="-lpthread"; pchuse=""; \
@@ -4464,9 +4481,27 @@ ckey=""; hit=0; own=0; \
     rtlib=$$(echo "$$rtlib" | sed 's|\.a$$|_nogc.a|'); pchuse=""; \
   fi; \
   xlibs="$$xobjs $$xlibs"; \
-  if [ -f "$<.expected" ]; then \
+  cacheable=1; \
+  if [ -z "$(TEST_PCH_KEY)" ]; then pchuse=""; cacheable=0; fi; \
+  for arg in $$bigopt; do \
+    case "$$arg" in $(TEST_LOCAL_CFLAGS)) ;; *) pchuse=""; cacheable=0;; esac; \
+  done; \
+  for arg in $(TEST_LDFLAGS) $$xlibs $(GC_FLAGS); do \
+    case "$$arg" in \
+      $(TEST_INDIRECT_OPTS)) pchuse=""; cacheable=0;; \
+      -Wl,-rpath,@loader_path|-Wl,-rpath,@loader_path/*|-Wl,-rpath,@executable_path|-Wl,-rpath,@executable_path/*) \
+        case "$$arg" in \
+          -Wl,-rpath,@*,*) cacheable=0;; \
+          *) [ "$(TEST_HOST_OS)" = Darwin ] || cacheable=0;; \
+        esac;; \
+      -Wl,*@*) cacheable=0;; \
+      -l?*|-L?*|-Wl,?*|-fuse-ld=?*) ;; \
+      -*) [ -z "$(TEST_SINGLE_INVOKE)" ] || pchuse="";; \
+    esac; \
+  done; \
+  if [ $$cacheable = 1 ] && [ -f "$<.expected" ]; then \
     ckey=$$(RC_CC="$(CC)" tools/result_cache.sh key "$<" "$$cfile" \
-      "$(RESULT_CACHE_FP)|$(RESULT_CACHE_HARNESS)|$(CC)|$(TEST_SINGLE_INVOKE)|$(CFLAGS) $$bigopt $(SP_OV_DEFINE) $$mtdef -Werror $(TEST_WARN_SUPPRESS) $(SEC_FLAGS) $$pchuse -Ilib|$$natobjs $$rtlib $(LDFLAGS) -lm $$mtld $$xlibs $(GC_FLAGS)|$(TIMEOUT10)" \
+      "$(RESULT_CACHE_FP)|$(RESULT_CACHE_HARNESS)|$(CC)|$(TEST_SINGLE_INVOKE)|$(CFLAGS) $$bigopt $(SP_OV_DEFINE) $$mtdef -Werror $(TEST_WARN_SUPPRESS) $(SEC_FLAGS) $$pchuse -Ilib|$$natobjs $$rtlib $(TEST_LDFLAGS) -lm $$mtld $$xlibs $(GC_FLAGS)|$(TIMEOUT10)" \
       "$<.expected" "$<.err.expected" "$<.args" "$<.stdin"); \
     if [ -n "$$ckey" ]; then \
       if tools/result_cache.sh get "$$ckey" 2>/dev/null | grep -qx PASS; then hit=1; \
@@ -4477,10 +4512,10 @@ ckey=""; hit=0; own=0; \
   if [ $$hit = 1 ]; then \
     :; \
   elif [ -n "$(TEST_SINGLE_INVOKE)" ]; then \
-    $(CC) $(CFLAGS) $$bigopt $(SP_OV_DEFINE) $$mtdef -Werror $(TEST_WARN_SUPPRESS) $(SEC_FLAGS) $$pchuse -Ilib $$cextinc "$$cfile" $$natobjs $$rtlib $(LDFLAGS) -lm $$mtld $$xlibs $(GC_FLAGS) -o "$$bin" 2>/dev/null; \
+    $(CC) $(CFLAGS) $$bigopt $(SP_OV_DEFINE) $$mtdef -Werror $(TEST_WARN_SUPPRESS) $(SEC_FLAGS) $$pchuse -Ilib $$cextinc "$$cfile" $$natobjs $$rtlib $(TEST_LDFLAGS) -lm $$mtld $$xlibs $(GC_FLAGS) -o "$$bin" 2>/dev/null; \
   else \
     $(CC) $(CFLAGS) $$bigopt $(SP_OV_DEFINE) $$mtdef -Werror $(TEST_WARN_SUPPRESS) $(SEC_FLAGS) $$pchuse -Ilib $$cextinc -c "$$cfile" -o "$$cfile.o" 2>/dev/null && \
-    $(CC) $(CFLAGS) "$$cfile.o" $$natobjs $$rtlib $(LDFLAGS) -lm $$mtld $$xlibs $(GC_FLAGS) -o "$$bin" 2>/dev/null; \
+    $(CC) $(CFLAGS) "$$cfile.o" $$natobjs $$rtlib $(TEST_LDFLAGS) -lm $$mtld $$xlibs $(GC_FLAGS) -o "$$bin" 2>/dev/null; \
   fi; }; \
 built=$$?; \
 if [ $$built -eq 0 ] && [ $$hit = 1 ]; then \
@@ -4529,12 +4564,12 @@ endef
 # Per-package test rules (one pattern rule per bundled package: GNU Make
 # patterns allow a single %, so the package name is fixed per rule).
 define PKG_TEST_RULE
-$(TEST_RESULT_DIR)/pkg.$(1).%.ok: packages/$(1)/test/%.rb $$(SP_RT_LIB) $$(SP_RT_MT_LIB) $$(BUNDLED_NATIVE_OBJS) $$(BUNDLED_NATIVE_MT_OBJS) $$(BUNDLED_CEXT_STAMPS) $$(PCH_PLAIN) $$(PCH_NOPOLY) | $$(SPINEL) $$(SPINEL_TIMEOUT)
+$(TEST_RESULT_DIR)/pkg.$(1).%.ok: packages/$(1)/test/%.rb $$(SP_RT_LIB) $$(SP_RT_MT_LIB) $$(BUNDLED_NATIVE_OBJS) $$(BUNDLED_NATIVE_MT_OBJS) $$(BUNDLED_CEXT_STAMPS) $$(TEST_PCHS) | $$(SPINEL) $$(SPINEL_TIMEOUT)
 	$$(RUN_ONE_TEST)
 endef
 $(foreach d,$(wildcard packages/*/test),$(eval $(call PKG_TEST_RULE,$(patsubst packages/%/test,%,$(d)))))
 
-$(TEST_RESULT_DIR)/%.ok: test/%.rb $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SP_RT_NOGC_LIB) $(SP_RT_MT_NOGC_LIB) $(BUNDLED_NATIVE_OBJS) $(BUNDLED_NATIVE_MT_OBJS) $(PCH_PLAIN) $(PCH_NOPOLY) | $(SPINEL) $(SPINEL_TIMEOUT)
+$(TEST_RESULT_DIR)/%.ok: test/%.rb $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SP_RT_NOGC_LIB) $(SP_RT_MT_NOGC_LIB) $(BUNDLED_NATIVE_OBJS) $(BUNDLED_NATIVE_MT_OBJS) $(TEST_PCHS) | $(SPINEL) $(SPINEL_TIMEOUT)
 	$(RUN_ONE_TEST)
 
 clean-test-results:

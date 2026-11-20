@@ -1927,6 +1927,16 @@ ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SP_RT_PIC_LIB) $(SP_RT_MT_PIC
 	  else echo "ext-test: FAIL (late_new host C did not compile)"; sed -n 1,6p "$$tmp/cc.err"; ok=0; fi; \
 	fi; \
 	if [ $$ok -eq 1 ]; then \
+	  if ! $(SPINEL) test/ext/reopen_include.rb -c --no-line-map --ext-init Init_ext_reopen_include \
+	      --ext-entry ExtReopenMain.make --ext-class ExtReopenP -o "$$tmp/r.c" >/dev/null 2>&1; then \
+	    echo "ext-test: FAIL (reopen_include emission)"; ok=0; \
+	  elif $(CC) -O1 -w $(PLATFORM_FLAGS) -Ilib -I"$$tmp" test/ext/reopen_include_host.c "$$tmp/r.c" $(SP_RT_LIB) $(LDFLAGS) -lm -o "$$tmp/rhost" 2>"$$tmp/cc.err"; then \
+	    "$$tmp/rhost" > "$$tmp/out" 2>&1; rc=$$?; \
+	    printf 'b? -> true\nk -> 3\nnew/0 k/0 b?/0\n' | cmp -s - "$$tmp/out" && [ $$rc -eq 0 ] || \
+	      { echo "ext-test: FAIL (reopen_include host output mismatch, or status $$rc)"; cat "$$tmp/out"; ok=0; }; \
+	  else echo "ext-test: FAIL (reopen_include host C did not compile)"; sed -n 1,6p "$$tmp/cc.err"; ok=0; fi; \
+	fi; \
+	if [ $$ok -eq 1 ]; then \
 	  if ! $(SPINEL) test/ext/rbs_object_array.rb -c --no-line-map --ext-init Init_ext_geo \
 	      --ext-entry ExtGeo.pts,ExtGeo.length -o "$$tmp/g.c" >"$$tmp/g.out" 2>&1; then \
 	    echo "ext-test: FAIL (rbs_object_array emission)"; ok=0; \

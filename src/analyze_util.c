@@ -7358,7 +7358,12 @@ static int ext_method_shape(Compiler *c, int class_id, int si) {
   if (si <= 0 || si >= c->nscopes || class_id < 0 || class_id >= c->nclasses) return 0;
   Scope *sc = &c->scopes[si];
   if (!sc->name || sc->class_id < 0 || is_initialize_name(sc->name)) return 0;
-  if (sc->replaced || sc->entry != ENTRY_NONE) return 0;
+  /* a hidden copy (a prepend's or an include's behind its version cell,
+     Scope.shadow) is answered through the entry of its name, the guard
+     the table answers by that name (ENTRY_TABLE) or an open history's
+     (ENTRY_NAMED), which is the row (#12224): the copy's own name is the
+     compiler's. A dispatch entry (ENTRY_DISPATCH) answers no name. */
+  if (sc->replaced || sc->shadow || sc->entry == ENTRY_DISPATCH) return 0;
   /* a forwarder stands for the method it calls: that method is public,
      and the class answers the one the forwarder was written beside. A
      forwarder of `new` names its class in the call: the class answers the

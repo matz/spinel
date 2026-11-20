@@ -1,0 +1,8 @@
+class TupleAttributeSlotBase
+  @array: Array[untyped]
+  @number: Integer
+end
+
+class TupleAttributeSlot < TupleAttributeSlotBase
+  def assign: (untyped) -> untyped
+end

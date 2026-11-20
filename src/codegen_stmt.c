@@ -17265,6 +17265,11 @@ static void masgn_conv_o(Compiler *c, TyKind st, TyKind vt, const char *val, Buf
   else buf_printf(b, "%s(%s)", oint_of(st), val);
   (void)c;
 }
+static int masgn_attr_field(Compiler *c, int cls, const char *name,
+                            const MethodLookup *lookup, int *owner) {
+  *owner = lookup->kind == ML_ATTR && lookup->def_class >= 0 ? lookup->def_class : cls;
+  return comp_ivar_index(&c->classes[*owner], name);
+}
 /* Can the writer a call target `o.x` runs take an element with its nil (a
    writer's parameter that holds one or is boxed, a field with a nil bit or a
    boxed one)? A native writer, or a plain Integer parameter or field, takes
@@ -17288,7 +17293,7 @@ static int masgn_writer_takes_nil(Compiler *c, int tgt) {
   snprintf(ivn, sizeof ivn, "@%s", base);
   MethodLookup wml = { .def_class = -1 };
   call_target(c, -1, crc, base, CT_WRITER, &wml);
-  int wcls = wml.kind == ML_ATTR && wml.def_class >= 0 ? wml.def_class : crc, ix = comp_ivar_index(&c->classes[wcls], ivn);
+  int wcls, ix = masgn_attr_field(c, crc, ivn, &wml, &wcls);
   TyKind ivt = ix >= 0 ? c->classes[wcls].ivar_types[ix] : TY_UNKNOWN;
   return ix < 0 || ivt == TY_POLY || (oint_kind(ivt) && ivar_has_nilbit(c, wcls, ix));
 }
@@ -17488,9 +17493,26 @@ static TyKind masgn_slot_type(Compiler *c, int id, int tgt) {
   }
   return TY_UNKNOWN;
 }
+/* A synthesized attribute writer stores directly into this field. */
+static TyKind masgn_attr_slot_type(Compiler *c, int tgt) {
+  const NodeTable *nt = c->nt;
+  int recv = nt_ref(nt, tgt, "receiver");
+  TyKind rt = recv >= 0 ? repr_of(c, recv).as_ty : TY_UNKNOWN;
+  const char *name = nt_str(nt, tgt, "name");
+  char base[256], ivn[260];
+  if (!ty_is_object(rt) || !setter_base_name(name, base, sizeof base)) return TY_UNKNOWN;
+  int cls = ty_object_class(rt);
+  MethodLookup writer = { .def_class = -1 };
+  if (call_target(c, tgt, cls, base, CT_WRITER, &writer) >= 0 || writer.kind != ML_ATTR)
+    return TY_UNKNOWN;
+  snprintf(ivn, sizeof ivn, "@%s", base);
+  int owner, ix = masgn_attr_field(c, cls, ivn, &writer, &owner);
+  return ix >= 0 ? c->classes[owner].ivar_types[ix] : TY_UNKNOWN;
+}
 /* Unboxing into an Array slot can allocate a conversion of a typed Array. */
 static int masgn_slot_unbox_allocates(Compiler *c, int id, int tgt) {
-  TyKind ty = masgn_slot_type(c, id, tgt);
+  TyKind ty = nt_kind(c->nt, tgt) == NK_CallTargetNode ?
+              masgn_attr_slot_type(c, tgt) : masgn_slot_type(c, id, tgt);
   return ty_is_array(ty) || ty_is_obj_array(ty);
 }
 /* Whether a store can collect while tuple values are waiting. Destructuring
@@ -17952,8 +17974,7 @@ static int masgn_store(Compiler *c, int id, const MasgnTmps *mt, int tgt, const 
       char ivn[260]; snprintf(ivn, sizeof ivn, "@%s", base);
       MethodLookup wml = { .def_class = -1 };
       call_target(c, -1, crc, base, CT_WRITER, &wml);
-      int wcls = wml.kind == ML_ATTR && wml.def_class >= 0 ? wml.def_class : crc;
-      int ix = comp_ivar_index(&c->classes[wcls], ivn);
+      int wcls, ix = masgn_attr_field(c, crc, ivn, &wml, &wcls);
       TyKind ivt = ix >= 0 ? c->classes[wcls].ivar_types[ix] : vt;
       /* the receiver is held once for the assigned mark */
       int pk = comp_ivar_index(&c->classes[crc], ivn) >= 0 && ivar_set_kind(c, crc, ivn) == 3;
@@ -19661,10 +19682,8 @@ static int emit_multi_write_stmt_body(Compiler *c, int id, Buf *b, int indent, c
         continue;
       }
       char ivn2[260]; snprintf(ivn2, sizeof ivn2, "@%s", base2);
-      int defc2 = wml2.def_class;
-      int iv2 = comp_ivar_index(&c->classes[defc2 < 0 ? rc2 : defc2], ivn2);
-      TyKind ivt2 = iv2 >= 0 ? c->classes[defc2 < 0 ? rc2 : defc2].ivar_types[iv2] : TY_UNKNOWN;
-      int wcls2 = defc2 < 0 ? rc2 : defc2;
+      int wcls2, iv2 = masgn_attr_field(c, rc2, ivn2, &wml2, &wcls2);
+      TyKind ivt2 = iv2 >= 0 ? c->classes[wcls2].ivar_types[iv2] : TY_UNKNOWN;
       /* a field with a nil bit takes the element with its nil, the bit kept in step */
       int nb2 = iv2 >= 0 && oint_kind(ivt2) && ivar_has_nilbit(c, wcls2, iv2);
       char expr2[32]; snprintf(expr2, sizeof expr2, "_t%d", tmps[i]);
@@ -19689,7 +19708,7 @@ static int emit_multi_write_stmt_body(Compiler *c, int id, Buf *b, int indent, c
       if (!nb2) masgn_conv(c, id, ivt2, tmpts[i], masgn_nil_el(c, els[i]) ? NULL : expr2, b);
       char ro[300], mk[300];
       snprintf(ro, sizeof ro, "(%s)", rb.p ? rb.p : "");
-      const char *m = iv2 >= 0 ? ivar_set_mark(c, defc2 < 0 ? rc2 : defc2, ivn2, ro, "->", mk, sizeof mk) : NULL;
+      const char *m = iv2 >= 0 ? ivar_set_mark(c, wcls2, ivn2, ro, "->", mk, sizeof mk) : NULL;
       if (m) buf_printf(b, "; %s\n", m);
       else buf_puts(b, ";\n");
       free(rb.p);

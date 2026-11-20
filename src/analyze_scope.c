@@ -8468,11 +8468,16 @@ static void include_chain_copy(Compiler *c, int ci, int mod_id, const int *made,
    method of the name at a time, so a later version is a version of that
    copy, under its name: the record orders them (elab_mark_versions,
    ct_def_version), and the super of each reaches past the module. */
+static int mixin_inst_side(const Scope *k) { return !k->is_cmethod || k->is_module_function; }
 static int mixin_prev_version(Compiler *c, int mod_id, int ms, const int *made) {
   const Scope *src = &c->scopes[ms];
   for (int s = ms - 1; s >= 0; s--) {
     const Scope *k = &c->scopes[s];
-    if (k->class_id != mod_id || k->shadow || k->is_cmethod != src->is_cmethod || !k->name || !sp_streq(k->name, src->name)) continue;
+    /* (an instance def after a module function of the name is a later
+       version of the module function's instance side, whose super reaches
+       past the module as each version's does) */
+    int same = k->is_cmethod == src->is_cmethod || (!src->is_cmethod && k->is_module_function);
+    if (k->class_id != mod_id || k->shadow || !same || !k->name || !sp_streq(k->name, src->name)) continue;
     return made[s] ? made[s] - 1 : -1;
   }
   return -1;
@@ -8483,7 +8488,7 @@ static int mixin_prev_version(Compiler *c, int mod_id, int ms, const int *made) 
 static int mixin_versions_super_reached(Compiler *c, int mod_id, const char *name) {
   for (int s = 0; s < c->nscopes; s++) {
     const Scope *k = &c->scopes[s];
-    if (k->class_id == mod_id && !k->shadow && !k->is_cmethod && k->name && sp_streq(k->name, name) && inc_super_reached(c, s, mod_id, name)) return 1;
+    if (k->class_id == mod_id && !k->shadow && mixin_inst_side(k) && k->name && sp_streq(k->name, name) && inc_super_reached(c, s, mod_id, name)) return 1;
   }
   return 0;
 }
@@ -8547,19 +8552,10 @@ static void include_module_methods(Compiler *c, int ci, int mod_id, int guard, i
        class-level method stays module-side */
     if (src->is_cmethod && !src->is_module_function)
       continue;
-    /* a module function a later instance def of the name replaced (`def a`
-       after `module_function :a`): the includer gets that public def, not
-       a private copy of the module function */
-    if (src->is_cmethod) {
-      int live = comp_self_method_in_chain(c, mod_id, src->name, NULL);
-      if (live >= 0 && live != ms && !c->scopes[live].is_cmethod) continue;
-    }
-    /* an instance def a later module function of the name replaced: the
-       module function is the module's instance method of the name */
-    if (mod_mf && !src->is_cmethod) {
-      int live = comp_self_method_in_chain(c, mod_id, src->name, NULL);
-      if (live >= 0 && live != ms && c->scopes[live].is_module_function) continue;
-    }
+    /* (a module function and an instance def of the name, either replacing
+       the other, both come over, each a version of the includer's method:
+       a call reaches the one that is live when it runs, the module
+       function's instance side private, the def public) */
     const char *dst_name = src->name;
     char inc_shadow[256];
     /* a hidden copy the module holds (what its own include or prepend put

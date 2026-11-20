@@ -1,0 +1,11 @@
+:first
+:first
+NoMethodError
+:second
+:second
+:third
+:third
+:second
+[:first, :private, :second]
+[:own, :root]
+:module

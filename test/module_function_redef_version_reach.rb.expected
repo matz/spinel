@@ -9,3 +9,6 @@ NoMethodError
 [:first, :private, :second]
 [:own, :root]
 :module
+[:own, :base]
+[:own, :base]
+:module

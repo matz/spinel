@@ -27951,12 +27951,9 @@ static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
     }
     if (!bindable && unb < 0) unb = i;
     int fr = operand[i] != harg && operand[i] != recv && operand_fresh_str(c, operand[i]);
-    /* (a mutator's receiver that is a boxed receiver's call whose arms answer
-       a String, or a sequence ending in one, is bound as its box's handle:
-       strbuf_poly_user_base. An argument is read as its bytes) */
-    /* (...and so is an argument whose box the plan wants as that handle,
-       a container's element: bound as its bytes, the box was asked of a
-       const char * temp, #9758) */
+    /* A native String argument keeps the result handle of its call.
+       A mutator can also take the handle from a boxed receiver's call or
+       from an ivar it reads through boxed self. */
     int bsh = operand[i] != harg &&
               (operand_binds_self_handle(c, operand[i]) || operand_binds_boxed_to_s(c, id, operand[i]) ||
                operand_binds_exc_msg(c, id, operand[i]) ||
@@ -27966,10 +27963,8 @@ static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
                   the mutator changes: its box's handle, strbuf_poly_ivar_get) */
                (operand[i] == recv && !arg_ran_first(operand[i], 0) &&
                 strbuf_poly_ivar_get(c, operand[i]) && strbuf_poly_ivar_mutated(c, operand[i])) ||
-               (operand[i] != recv && comp_ntype(c, operand[i]) == TY_STRING &&
-                nt_kind(c->nt, operand[i]) == NK_CallNode && !arg_ran_first(operand[i], 0) &&
-                share_plan_of(c, operand[i], SPR_BOX).form == SPF_HANDLE &&
-                share_plan_producer(c, operand[i], NULL) == SPK_POLY_ARMS));
+               (operand[i] != recv && repr_of(c, operand[i]).as_ty == TY_STRING &&
+                !arg_ran_first(operand[i], 0) && repr_native_call_handle(c, operand[i])));
     int bfb = bsh || operand[i] == harg ? 0
             : operand_binds_face_box(c, operand[i]) ? 1
             : operand_binds_identity_box(c, id, operand[i]) ? 3

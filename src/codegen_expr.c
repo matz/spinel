@@ -5454,11 +5454,16 @@ static int emit_and_or_begin_expr(Compiler *c, int id, Buf *b, const NodeTable *
     if (res == TY_POLY && emit_boxed_self_answer_cond(c, id, b)) return 1;
     /* `v = lookup or return`: the right operand diverges, so it has no value
        for an arm to assign. Run it as a statement inside the short-circuit and
-       answer the left, which is the only value the chain can produce (#3777). */
-    if (right >= 0 && nt_type(nt, right) &&
-        (nt_kind(nt, right) == NK_ReturnNode ||
-         nt_kind(nt, right) == NK_BreakNode ||
-         nt_kind(nt, right) == NK_NextNode)) {
+       answer the left, which is the only value the chain can produce (#3777).
+       A return or a break in parentheses is the same jump:
+       `(v = h[k]) || (return "none")`. A `next` in parentheses is an
+       expression that leaves the block by itself (emit_next_expr). */
+    int jump = right >= 0 ? nt_paren_single(nt, right) : -1;
+    if (jump >= 0 && jump != right && nt_kind(nt, jump) == NK_NextNode) jump = right;
+    if (jump >= 0 &&
+        (nt_kind(nt, jump) == NK_ReturnNode ||
+         nt_kind(nt, jump) == NK_BreakNode ||
+         nt_kind(nt, jump) == NK_NextNode)) {
       TyKind vt = lt;
       if (vt == TY_VOID || vt == TY_UNKNOWN || vt == TY_NIL) vt = TY_POLY;
       int t2 = ++g_tmp;
@@ -5486,7 +5491,7 @@ static int emit_and_or_begin_expr(Compiler *c, int id, Buf *b, const NodeTable *
       emit_res_ctype(c, vt, lo2, b);
       buf_printf(b, " _t%d = %s; if (%s%s) {\n", t2, lb.p ? lb.p : "0",
                  is_and ? "" : "!", tc2.p ? tc2.p : "1");
-      emit_stmt(c, right, b, g_indent + 1);
+      emit_stmt(c, jump, b, g_indent + 1);
       if (lo2 && !ro2) buf_printf(b, "}\n _t%d.v; })", t2);
       else if (!lo2 && ro2) buf_printf(b, "}\n %s(_t%d); })", oint_of(vt), t2);
       else buf_printf(b, "}\n _t%d; })", t2);

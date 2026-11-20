@@ -2987,7 +2987,9 @@ static int sp_fifo_open_read(const char *path, int fl, int perm) {
     int pr = poll(&pf, 1, 0);
     if (pr > 0 && (pf.revents & (POLLIN | POLLHUP | POLLERR))) return sp_fifo_opened(fd);
     if (pr < 0 && errno != EINTR) { int e = errno; close(fd); errno = e; return -1; }
-    if (!sp_sched_wait_io(fd, POLLIN)) return sp_fifo_opened(fd);   /* (shutdown) */
+    /* (the IO layer's park, in both runtimes: the one without threads has
+       no scheduler wait to link, and never comes here) */
+    sp_io_wait_fd_readable(fd);
   }
 #else
   for (;;) {

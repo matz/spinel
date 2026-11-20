@@ -1655,29 +1655,6 @@ int strbuf_chain_has_block(Compiler *c, int v) {
     if (nt_ref(nt, v, "block") >= 0) return 1;
   return 0;
 }
-/* --share-strings: does call v, or a link of its receiver chain, answer its
-   receiver's handle by a route that boxes cannot render? The plan reads a
-   call that answers its receiver as handing on that receiver's handle, but
-   three shapes have no such emitter, and their box is a copy: a `tap`
-   given a literal block that is no handle route (strbuf_route_tap) over a
-   call that is no chain over a slot (`gs.tap { }`); a call over a bang or
-   an iterator given a block (`s.upcase!.itself`) that is no such chain
-   either, which the held-chain form does not box; and
-   a call without a block over one that mutates or freezes its receiver
-   (`(+(s << x))`, `gs.freeze.itself`). */
-int strbuf_box_unrendered(Compiler *c, int v) {
-  const NodeTable *nt = c->nt;
-  if (strbuf_self_chain_base(c, v) >= 0) return 0;
-  for (v = nt_paren_single(c->nt, v); v >= 0 && nt_kind(nt, v) == NK_CallNode; v = nt_paren_single(c->nt, nt_ref(nt, v, "receiver"))) {
-    int r = nt_paren_single(c->nt, nt_ref(nt, v, "receiver")), blk = nt_ref(nt, v, "block");
-    if (r < 0 || nt_kind(nt, r) != NK_CallNode) continue;
-    const char *nm = nt_str(nt, v, "name"), *rn = nt_str(nt, r, "name");
-    if (nm && is_tap_name(nm) && blk >= 0 && nt_kind(nt, blk) == NK_BlockNode && !strbuf_route_tap(c, v)) return 1;
-    if (rn && bop_share_self_answer(rn, nt_ref(nt, r, "block") >= 0)) return 1;
-    if (rn && blk < 0 && (bop_name_mutates(rn, 0) || is_freeze_name(rn))) return 1;
-  }
-  return 0;
-}
 /* A shared Hash default setter stores and answers the same argument.
    Its boxed value slot can keep the argument's String handle. */
 int strbuf_hash_default_arg(Compiler *c, int v) {
@@ -2900,14 +2877,6 @@ void emit_string_call_handle(Compiler *c, int v, int box, Buf *b) {
   if (box) str_box_open(b, 0);
   emit_native_string_handle(c, v, b);
   if (box) str_box_close(b);
-}
-/* --share-strings: the boxed operand whose String route v answers (`y.to_s`,
-   `+y`, `String(y)` with y boxed: strbuf_route_operand), or -1. The
-   route's read takes that String as the box holds it: a plain String's
-   bytes, or a handle's live buffer, never a copy. */
-int strbuf_route_box_operand(Compiler *c, int v) {
-  int x = strbuf_route_operand(c, v);
-  return x >= 0 && x != nt_paren_single(c->nt, v) && repr_of(c, x).kind == RK_BOXED ? x : -1;
 }
 /* --share-strings: `x.then { |v| ... }` (yield_self) or `x.tap { |v| ... }`
    with a literal block and no `&.` (whose guard is the bang's,

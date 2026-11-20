@@ -311,14 +311,8 @@ int strbuf_route_inline_call(Compiler *c, int v);
 /* --share-strings: a route that hands its String on as a box (a proc's
    answer, a spliced call's tails), as that box (codegen_stmt.c) */
 int emit_strbuf_route_box(Compiler *c, int v, Buf *b);
-/* --share-strings: the boxed operand whose String a route answers, or -1
-   (codegen_stmt.c) */
-int strbuf_route_box_operand(Compiler *c, int v);
 /* The selected native String result, as a handle or a box. */
 void emit_string_call_handle(Compiler *c, int v, int box, Buf *b);
-/* --share-strings: a call on v's receiver chain that answers its receiver's
-   handle by a route boxes cannot render (codegen_stmt.c) */
-int strbuf_box_unrendered(Compiler *c, int v);
 /* --share-strings: the slot a chain of calls answering their receiver ends
    in, or -1 (codegen_stmt.c) */
 int strbuf_self_chain_base(Compiler *c, int v);

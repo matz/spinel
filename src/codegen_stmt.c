@@ -2443,32 +2443,6 @@ void emit_srange_end_recv(Compiler *c, int v, Buf *b) {
   emit_expr(c, nt_ref(c->nt, v, "receiver"), b);
   if (chk) buf_printf(b, ", %d)", is_range_end_reader(nm));
 }
-/* A Range's endpoint and min/max answers already have their String
-   handle. A held argument is boxed from the temp that evaluated it. */
-int emit_srange_route_boxed(Compiler *c, int v, Buf *b) {
-  int tail = strbuf_srange_tail(c, v);
-  if (tail < 0) return 0;
-  if (arg_ran_first(v, 0)) {
-    int held = ran_first_handle(v);
-    if (held < 0) return 0;
-    str_box_handle_tmp(b, held);
-    return 1;
-  }
-  if (tail != nt_paren_single(c->nt, v)) return 0;
-  int end = strbuf_route_srange_end(c, tail);
-  if (end) {
-    buf_puts(b, "SP_SEBOX((");
-    emit_srange_end_recv(c, tail, b);
-    buf_printf(b, ").%s)", end == 1 ? "first" : "last");
-  }
-  else {
-    buf_puts(b, "SP_SEBOX(sp_srange_extreme_h(");
-    emit_expr(c, nt_ref(c->nt, tail, "receiver"), b);
-    buf_printf(b, ", %d))", strbuf_route_srange_extreme(c, tail) == 2);
-  }
-  return 1;
-}
-
 static int exc_text_call(Compiler *c, int v) { return exc_text_call_on(c, v, 0); }
 /* --share-strings: an exception's #message read off a boxed receiver every
    class of which (the boxed-receiver walk) is an exception class or answers

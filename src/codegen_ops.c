@@ -59,7 +59,6 @@ static char *op_recv_text(Compiler *c, const BopCtx *x) {
           (array_frozen_cls)
      $eN  argument N by emit_expr
      $jN  argument N run for its effect, "(void)(...), ": nothing for a plain read (a variable, self, a literal)
-     $B / $E  endpoint bytes read from a String Range held in _t$T
           (sp_srange_first / sp_srange_last)
      $bN  argument N boxed (emit_boxed)
      $fN  argument N as a double (emit_float_expr)
@@ -269,16 +268,6 @@ static int emit_op_template(Compiler *c, const BopCtx *x, Buf *b) {
     }
     else if (p[0] == '$' && p[1] == 'T') {
       buf_printf(b, "%d", x->t0);
-      p++;
-    }
-    /* Read the endpoint bytes of the Range held in _t$T. #first and #last
-       check for an open bound first (sp_srange_need_end). */
-    else if (p[0] == '$' && (p[1] == 'B' || p[1] == 'E')) {
-      int beg = p[1] == 'B';
-      int chk = x->name && is_endpoint_query(x->name);
-      if (chk)
-        buf_printf(b, "sp_srange_%s(sp_srange_need_end(_t%d, %d))", beg ? "first" : "last", x->t0, !beg);
-      else buf_printf(b, "sp_srange_%s(_t%d)", beg ? "first" : "last", x->t0);
       p++;
     }
     else if (p[0] == '$' && p[1] == 'R') {

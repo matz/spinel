@@ -42,3 +42,16 @@ def d10(s) = s.each_char.map.with_index { |c, i| c * i }
 p d1([1, 2, 3]), d2([1, :a]), d3([1, :a]), d4([1, :a]), d5([1, :a, 2]), d6([1, :a, 2])
 p d7({ a: 1, b: 2 }), d8({ a: 1 })
 p d1([1.5, nil]), d4([2.5])
+
+# an Integer Range's each.with_index answers the Range, boxed where the
+# value is (a method's tail, a local)
+def f(n)
+  (1..n).each.with_index { |x, i| puts x }
+end
+p f(2)
+def g(n) = (1..n).each.with_index { |x, i| x }
+p g(3)
+r = (1..3).each.with_index { |x, i| x }
+p r
+def h(n) = (2..n).each.with_index(5) { |x, i| x * i }
+p h(4)

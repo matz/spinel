@@ -6925,7 +6925,13 @@ int emit_with_index_expr(Compiler *c, int id, Buf *b) {
 
   if (is_mapbang) buf_printf(b, "_t%d", trecv);   /* map! returns the mutated receiver */
   else if (collecting) buf_printf(b, "_t%d", tres);
-  else if (range_src) buf_printf(b, "_t%d", trng);  /* each yields the Range itself */
+  else if (range_src) {
+    /* each yields the Range itself, boxed where the call's value is a boxed
+       one (a method's tail typed for any value, a boxed slot) */
+    char rv[32]; snprintf(rv, sizeof rv, "_t%d", trng);
+    if (repr_of(c, id).as_ty == TY_POLY) emit_boxed_text(c, TY_RANGE, rv, b);
+    else buf_puts(b, rv);
+  }
   else buf_printf(b, "_t%d", trecv);  /* each.with_index yields the receiver */
   return 1;
 }

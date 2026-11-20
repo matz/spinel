@@ -9526,7 +9526,7 @@ static void emit_arg_temp(Compiler *c, int v) {
      the handle taken here: that is a new handle over a copy, and
      `S.new(f.begin, f.begin)` bound two Strings. The Range is held,
      rooted, where the argument runs, and its receiver reads that hold from
-     here on: the handle, the read and a box (emit_srange_route_boxed) take
+     here on: the handle, the read and a box take
      the one Range. Parentheses around the route (strbuf_srange_tail) run
      their statements first, once, and their value is the route's. */
   int stail = conversion ? strbuf_srange_tail(c, v) : -1, srange = stail >= 0, tr = -1;
@@ -12691,7 +12691,7 @@ void emit_args_filled_argv(Compiler *c, int callee_idx, const int *argv, int arg
       /* --share-strings: a String Range's endpoint, or parentheses that end
          in one (strbuf_srange_tail), runs as emit_arg_temp runs it: the
          Range held, the handle it keeps taken, and the String read off it,
-         which a box takes as the endpoint (emit_srange_route_boxed) */
+         which a box takes as the endpoint. */
       if (at == TY_STRING && strbuf_srange_tail(c, argv[k]) >= 0) { emit_arg_temp(c, argv[k]); continue; }
       /* an Integer / Float argument that can be nil is held with its nil
          (emit_arg_temp's oint): the plain temp unwrapped it here, ahead of

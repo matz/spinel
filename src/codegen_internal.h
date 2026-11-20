@@ -368,7 +368,6 @@ int strbuf_route_srange_extreme(Compiler *c, int v);
 int strbuf_route_srange_kept(Compiler *c, int v);
 int strbuf_srange_tail(Compiler *c, int v);
 void emit_srange_end_recv(Compiler *c, int v, Buf *b);
-int emit_srange_route_boxed(Compiler *c, int v, Buf *b);
 void emit_slot_expr(Compiler *c, int id, Buf *b);
 /* A `next` value a block's boxed answer slot takes: a shared String as its
    handle's box under --share-strings (codegen_stmt.c) */

@@ -3603,20 +3603,8 @@ static int emit_boxed_routes(Compiler *c, int node, Buf *b) {
     view_pop(c, sv);
     return 1;
   }
-  /* a route that hands on a handle (`q ||= s.then { |v| v }`,
-     emit_strbuf_route): that handle's box, not a new handle around a copy;
-     a String Range's min / max (strbuf_route_srange_extreme) is the
-     endpoint the Range keeps, as a yield to a boxed block parameter hands
-     it on */
   /* A shared field's boxed value carries its handle even without a
      container-store lift, including defaults, throw and break values. */
-  /* a String Range's begin / end / min / max (strbuf_route_srange_kept),
-     also the value of parentheses that ran ahead (strbuf_srange_tail):
-     the handle the Range keeps for that endpoint, boxed, as a yield to a
-     boxed block parameter hands it on; any other answer is boxed as the
-     String it is, as its read answers it, also where a store lifts it
-     (a new handle over a copy was another String) */
-  if (strbuf_srange_tail(c, node) >= 0 && emit_srange_route_boxed(c, node, b)) return 1;
   if (emit_boxed_lift_ran_first(c, node, b)) return 1;
   /* a boxed receiver's reader whose arms each box the field's handle
      (repr_boxed_reader_handle): the box the dispatch answers, where the

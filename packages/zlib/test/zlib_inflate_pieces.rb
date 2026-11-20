@@ -154,6 +154,7 @@ show("and again after the error") do
 end
 show("not deflate") { Zlib::Inflate.new.inflate([0x77, 0x09].pack("C*")) }
 show("a window too large") { Zlib::Inflate.new(8).inflate(dynamic) }
+show("the window the header names") { [0, 32].map { |bits| Zlib::Inflate.new(bits).inflate(dynamic) == fox } + [Zlib::Inflate.new(32).inflate(named) == fox] }
 show("gzip to a zlib inflater") { Zlib::Inflate.new.inflate(gz) }
 show("zlib to a gzip inflater") { Zlib::Inflate.new(Zlib::MAX_WBITS + 16).inflate(z) }
 show("half a gzip magic") { i = Zlib::Inflate.new(Zlib::MAX_WBITS + 16); [i.inflate([0x1f].pack("C")), i.inflate([0x8b].pack("C"))] }

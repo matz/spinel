@@ -61,6 +61,7 @@ one byte of a header: ["", false]
 and again after the error: Zlib::DataError: incorrect header check
 not deflate: Zlib::DataError: unknown compression method
 a window too large: Zlib::DataError: invalid window size
+the window the header names: [true, true, true]
 gzip to a zlib inflater: Zlib::DataError: incorrect header check
 zlib to a gzip inflater: Zlib::DataError: incorrect header check
 half a gzip magic: ["", ""]

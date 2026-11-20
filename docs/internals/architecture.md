@@ -43,10 +43,6 @@ String slots hold object handles. The remaining String plan, sharing facts
 and byte routes serve builtin producers still being migrated under #11391.
 Boxing a String preserves the object emitted by its producer. A dynamic
 send uses that same path for the String returned by its selected method.
-A named reflective write to an existing String instance variable uses
-the ordinary String slot writer. It holds the original receiver before
-running the assignment's right-hand side and checks whether that receiver
-is frozen before storing the value.
 Hash key insertion consults the runtime String's frozen state. It retains a
 frozen key and makes a frozen key object for an unfrozen input, including a
 static empty or one-character result. The Hash stores the key's byte view.
@@ -108,6 +104,10 @@ consumers project the contents and take a snapshot where the read is
 held across a block. UTF-8 character positions count each valid sequence
 once and each malformed byte separately. The length cache records only
 validated text, so validation and optimized character seeks can reuse it.
+A named reflective write to an existing String instance variable uses
+the ordinary String slot writer. It holds the original receiver before
+running the assignment's right-hand side and checks whether that receiver
+is frozen before storing the value.
 Exception construction keeps the message's String object and projects
 bytes where the constructor reads them. A typed raise passes that handle
 to the runtime. Cleanup keeps the cause of an exception it will rethrow.

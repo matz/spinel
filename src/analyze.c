@@ -40768,8 +40768,9 @@ int nullable_int_value(Compiler *c, int v) {
     if (rcv0 >= 0 && cn && is_tap_name(cn) && nt_ref(nt, v, "arguments") < 0 && nt_ref(nt, v, "block") >= 0 &&
         cplan_reopen_binding(cplan_user_fresh(c, v)) < 0 && nullable_int_value(c, rcv0)) return 1;
     /* Array#fetch answers its default argument, or its block's value, for
-       an index out of range: either can be nil */
-    if (rcv0 >= 0 && cn && sp_streq(cn, "fetch") && ty_is_array(infer_type(c, rcv0))) {
+       an index out of range, and Hash#fetch for a missing key: either can
+       be nil (`x = h.fetch(k, nil)` into an Integer local, #12223) */
+    if (rcv0 >= 0 && cn && sp_streq(cn, "fetch") && (ty_is_array(infer_type(c, rcv0)) || ty_is_hash(infer_type(c, rcv0)))) {
       int fa = nt_ref(nt, v, "arguments"), fn = 0;
       const int *fav = fa >= 0 ? nt_arr(nt, fa, "arguments", &fn) : NULL;
       if (fn == 2 && (nt_kind(nt, fav[1]) == NK_NilNode || nullable_int_value(c, fav[1]))) return 1;

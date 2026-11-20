@@ -479,8 +479,24 @@ module Net
   # forwards a request of any method builds directly (#11347). The two flags
   # say whether the method's request and response carry a body.
   class HTTPGenericRequest
-    attr_reader :method, :path, :decode_content
-    attr_accessor :body
+    attr_reader :method, :path, :decode_content, :body
+
+    # An IO the body is read from as it goes out, in place of `body`, as
+    # CRuby's: a body too large to hold, a file uploaded as it is read, a
+    # body a proxy forwards. The request states its length (Content-Length)
+    # or goes out chunked (Transfer-Encoding: chunked). Setting either of
+    # body and body_stream drops the other.
+    attr_reader :body_stream
+
+    def body=(body)
+      @body_stream = nil
+      @body = body
+    end
+
+    def body_stream=(io)
+      @body = ""
+      @body_stream = io
+    end
 
     def initialize(method, request_has_body, response_has_body, path, initheader = nil)
       @request_has_body = request_has_body
@@ -512,6 +528,7 @@ module Net
       @header_names = {}
       @fields = {}
       @body = ""
+      @body_stream = nil
       @decode_content = false
       # CRuby's initheader half strips the value before it looks at it, and
       # so raises NoMethodError for anything without `strip`; this package
@@ -650,11 +667,18 @@ module Net
       nil
     end
 
+    # Whether Transfer-Encoding names chunked, as CRuby's chunked?.
+    def chunked?
+      field = self["Transfer-Encoding"]
+      !field.nil? && /(?:\A|[^\-\w])chunked(?![\-\w])/i.match?(field)
+    end
+
     def content_type=(v)
       self["Content-Type"] = v
     end
 
     def set_form_data(hash)
+      @body_stream = nil
       @body = URI.encode_www_form(hash)
       self["Content-Type"] = "application/x-www-form-urlencoded"
       @body
@@ -1107,6 +1131,9 @@ module Net
     # A request with no session is the session's only one, and asks the
     # server to close after it, as CRuby's does (write_request).
     def request(req, &blk)
+      if !req.body_stream.nil? && !req.key?("content-length") && !req.chunked?
+        raise ArgumentError, "Content-Length not given and Transfer-Encoding is not `chunked'"
+      end
       started = @started
       start unless started
       @one_shot = !started
@@ -1130,7 +1157,8 @@ module Net
     # arrives (the server closed it while it sat idle, reset it, or stopped
     # reading the request) is opened again and an idempotent request sent
     # again, max_retries times. A POST is not: the server may have acted on
-    # it.
+    # it. Nor is a request whose body came from body_stream, which was read
+    # as it went and cannot be read again; Go's Transport refuses the same.
     def perform(req)
       count = 0
       begin
@@ -1138,7 +1166,7 @@ module Net
         write_request(req)
         read_response(req.method, req.decode_content)
       rescue EOFError, IOError, Errno::ECONNRESET, Errno::ECONNABORTED, Errno::EPIPE, ReadTimeout, WriteTimeout => e
-        raise if count >= @max_retries || !IDEMPOTENT_METHODS.include?(req.method)
+        raise if count >= @max_retries || !IDEMPOTENT_METHODS.include?(req.method) || !req.body_stream.nil?
         debug "Conn close because of error #{e.message}, and retry"
         close_socket
         count += 1
@@ -1276,15 +1304,54 @@ module Net
         have_len = true if k.downcase == "content-length"
         out << "#{k}: #{v}\r\n"
       end
+      stream = req.body_stream
       body = req.body.to_s
       # A request that carries a body states its length even when it is
-      # zero, as CRuby's does; some servers answer 411 without it.
-      out << "Content-Length: #{body.bytesize}\r\n" if !have_len && (req.request_body_permitted? || !body.empty?)
+      # zero, as CRuby's does; some servers answer 411 without it. One read
+      # from body_stream states its own (see #request).
+      out << "Content-Length: #{body.bytesize}\r\n" if stream.nil? && !have_len && (req.request_body_permitted? || !body.empty?)
       out << "Connection: close\r\n" if @one_shot && !req.key?("connection")
       out << "\r\n"
       out << body
       debug "<- #{out.dump}"
       wire_write(out)
+      write_body_stream(stream, req.chunked?, req["content-length"].to_i) unless stream.nil?
+      nil
+    end
+
+    # The body read from body_stream in pieces of 16 KB, as CRuby's
+    # copy_stream reads it: each piece a chunk when the request is chunked,
+    # else written as it is. A stream that gives more than Content-Length
+    # stops before the extra bytes, which the server would take for the next
+    # request; one that gives fewer leaves the server waiting. Either is an
+    # ArgumentError and the connection closes, as Go's Transport has it;
+    # CRuby writes whatever the stream gives.
+    def write_body_stream(io, chunked, length)
+      sent = 0
+      while (piece = read_piece(io))
+        next if piece.empty?
+        if chunked
+          wire_write("#{piece.bytesize.to_s(16)}\r\n#{piece}\r\n")
+        else
+          if sent + piece.bytesize > length
+            raise ArgumentError, "body_stream gave more than the #{length} bytes of Content-Length"
+          end
+          wire_write(piece)
+        end
+        sent += piece.bytesize
+      end
+      if chunked
+        wire_write("0\r\n\r\n")
+      elsif sent != length
+        raise ArgumentError, "body_stream gave #{sent} bytes, Content-Length is #{length}"
+      end
+      nil
+    end
+
+    def read_piece(io)
+      io.readpartial(16384)
+    rescue EOFError
+      nil
     end
 
     def read_response(method, decode_content)

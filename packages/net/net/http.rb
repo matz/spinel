@@ -840,28 +840,16 @@ module Net
     end
     private :do_finish
 
-    # open_timeout, honoured rather than stored: a non-blocking connect and a
-    # bounded wait for writability. A timeout of 0 or less means "no limit",
+    # open_timeout, honoured rather than stored: TCPSocket's own connect
+    # deadline, as CRuby's connect uses, which reads a refused connection
+    # from the socket's error. A timeout of 0 or less means "no limit",
     # which is how CRuby reads nil there.
     def connect_with_timeout
       limit = @open_timeout.nil? ? 0 : @open_timeout
-      target = conn_address
-      return TCPSocket.new(target, @port) if limit <= 0
-      s = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
-      begin
-        s.connect_nonblock(target, @port)
-      rescue IO::WaitWritable
-        if IO.select(nil, [s], nil, limit).nil?
-          s.close
-          raise OpenTimeout
-        end
-        begin
-          s.connect_nonblock(target, @port)
-        rescue Errno::EISCONN
-          # already connected: the wait above is what completed it
-        end
-      end
-      s
+      return TCPSocket.new(conn_address, @port) if limit <= 0
+      TCPSocket.new(conn_address, @port, connect_timeout: limit)
+    rescue IO::TimeoutError
+      raise OpenTimeout
     end
 
     # CRuby's private hook for the address the socket connects to: the pinned

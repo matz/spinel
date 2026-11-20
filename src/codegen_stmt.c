@@ -2759,7 +2759,7 @@ void emit_string_call_handle(Compiler *c, int v, int box, Buf *b) {
   v = nt_paren_single(c->nt, v);
   /* Use the handle already evaluated and held by argument staging. */
   { Repr r = repr_of(c, v);
-    if (r.as_ty == TY_STRBUF && !repr_handle_apart(c, v, r))
+    if (r.as_ty == TY_STRBUF && !repr_handle_apart(r))
       for (int i = g_n_argov - 1; i >= 0; i--)
         if (g_argov_node[i] == v) {
           /* (one ran_first_bind_read bound reads as its String: the

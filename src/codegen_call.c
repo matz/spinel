@@ -9967,11 +9967,8 @@ static int emit_poly_arg_temp(Compiler *c, int node, TyKind ty, int boxed, int t
      the handle in the box: it is taken out, not wrapped */
   int poly_src = as_handle && infer_type(c, node) == TY_POLY;
   if (as_handle) buf_puts(&val, poly_src ? "sp_poly_as_strbuf(" : "SP_AS_STRING_HANDLE(");
-  /* (a value whose handle is formed apart from its String,
-     repr_handle_apart, is held as the String, the mark asking for its
-     handle) */
   Repr nr = repr_of(c, node);
-  if (!boxed && ty == TY_STRBUF && nr.strbuf_src == RS_HANDLE && !repr_handle_apart(c, node, nr))
+  if (!boxed && ty == TY_STRBUF && nr.strbuf_src == RS_HANDLE)
     emit_strbuf_handle_of(c, node, &val);
   else if (boxed == 2) emit_identity_operand_box(c, node, &val);
   else if (boxed) emit_boxed(c, node, &val);
@@ -27313,17 +27310,10 @@ static int emit_operands_before_unbound(Compiler *c, int id, const int *operand,
   return 1;
 }
 
-/* Is argument `node` a String value stored where a shared handle is wanted,
-   whose handle the store forms apart from its String (repr_handle_apart):
-   a fresh one it wraps around it (repr_of's RS_FRESH: `+"x"` in
-   `@a << +"x"` whose element is appended to later), or the one a String
-   Range keeps for its endpoint? The store reads it as a String with the
-   handle mark lifted (emit_boxed_strbuf), so its temp is rendered and
-   declared that way; its stored type, the handle, declared an sp_String *
-   for the String. A receiver is read by its own call, as the handle it
-   renders (`s << a << b`). */
+/* A fresh String is held in the form its emitter produces. The store
+   applies the handle demand when it consumes the value. */
 static int operand_fresh_str(Compiler *c, int node) {
-  return repr_handle_apart(c, node, repr_of(c, node));
+  return repr_handle_apart(repr_of(c, node));
 }
 /* One operand of emit_operands_in_order rendered into `out`, with the
    statements its emission hoists caught in `pre` rather than the enclosing
@@ -28829,12 +28819,10 @@ static int nil_target_operand(Compiler *c, int v, int a, int boxed, NilOperands 
   if (k == NK_SplatNode) return nil_target_operand(c, nt_ref(nt, v, "expression"), a, boxed, o);
   Repr tr = repr_of(c, v);
   TyKind t = tr.as_ty;
-  /* a String the store wraps in a handle of its own (`+"x"` pushed where the
-     element is a handle, a Range's endpoint: repr_handle_apart) renders as
-     its bytes where its stored type is the handle, so no temp of that type
-     holds it: it runs in the call */
+  /* A fresh byte result that the store wraps in a handle runs in
+     the call, where its destination can consume it. */
   if ((!read && !nil_target_bindable(k, boxed)) || tr.untyped || t == TY_VOID || comp_ty_value_obj(c, t) ||
-      repr_handle_apart(c, v, tr))
+      repr_handle_apart(tr))
     return 0;
   nil_operands_add(o, v, t);
   return 1;

@@ -205,7 +205,8 @@ capture has its own mutable String. A missing capture occupies a nil slot.
 A String Range stores the two endpoint handles. The same layout serves
 typed and boxed membership, coverage and Marshal operations. The typed
 builtin readers publish their result through the ordinary String handle
-ABI. A reader that needs bytes borrows them from that handle. The boxed
+ABI. An operand held for a later call keeps the returned handle.
+A reader that needs bytes borrows them from that handle. The boxed
 `to_h` conversion checks the iteration, which can yield a member when
 `min` is nil.
 

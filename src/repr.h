@@ -150,13 +150,8 @@ typedef enum {
                     scope, read and written through *_cell_<name> */
 } ReprCell;
 
-/* Is value v (of representation r) typed as the handle while its own text
-   is its String's bytes, the handle formed apart from that text: a fresh
-   one, wrapped around the bytes where it is stored (RS_FRESH), or the
-   handle a String Range keeps for its endpoint (strbuf_srange_tail), read
-   off the Range? An operand or an argument held ahead of its call is
-   held as the String, and the handle taken as its route takes it. */
-int repr_handle_apart(Compiler *c, int v, Repr r);
+/* Does the storage of r take a fresh handle formed from its byte result? */
+int repr_handle_apart(Repr r);
 /* Does a call's settled return route hand back a shared String handle? */
 int repr_native_call_handle(Compiler *c, int node);
 int repr_call_returns_handle(Compiler *c, int v);

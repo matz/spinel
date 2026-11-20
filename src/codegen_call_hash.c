@@ -9,6 +9,7 @@
 #include "codegen_internal.h"
 #include "builtin_ops.h"
 #include "codegen_call_arms.h"
+#include "order_plan.h"
 #include "repr.h"
 
 /* ---- nil out of band: an emitter whose C result is an sp_oint / sp_ofloat
@@ -922,23 +923,35 @@ int emit_op_hash_nil_recv(Compiler *c, const BopCtx *x, Buf *b) {
   return 1;
 }
 
-/* Hash#value? and has_value?: the function names value?, so has_value? on a
-   receiver that can be nil must raise under its own name, once the argument
-   has run (#9347); value? takes the same block, which names the call as
-   written. A receiver the nil fact says is never nil keeps the plain call. */
+/* A value search retains its receiver across the needle's evaluation.
+   The nil check follows that evaluation and reports the name used by
+   the call (#9347). */
 int emit_hash_has_value(Compiler *c, int recv, int arg, TyKind rt, const char *hn, int poly,
                         const char *name, Buf *b) {
-  /* a Hash that holds the handle searches for the needle's handle (of either face) */
-  int hold = !poly && typed_elem_held(rt) == TY_STRBUF;
-  if (!recv_never_nil(c, recv)) {
+  int guard = !recv_never_nil(c, recv);
+  int string_values = !poly && typed_elem_held(rt) == TY_STRBUF;
+  int root = operand_may_allocate(c, arg);
+  if (guard || (string_values && (root || order_runs_code(c, recv) || order_runs_code(c, arg)))) {
     Buf rx = expr_buf(c, recv);
     char ct[48]; snprintf(ct, sizeof ct, "sp_%sHash *", hn);
-    int t = nil_recv_open(c, recv, rx.p ? rx.p : "", ct, NULL, subtree_may_allocate(c, arg), b);
+    int t = nil_recv_open(c, recv, rx.p ? rx.p : "", ct, NULL, root, b);
     free(rx.p);
+    Repr needle = repr_of(c, arg);
+    int nil_needle = string_values && (needle.ty == TY_NIL || needle.ty == TY_VOID ||
+                                       needle.as_ty == TY_NIL || needle.as_ty == TY_VOID);
+    Buf pre = {0}, value = {0};
+    emit_split_pre(c, arg, nil_needle ? emit_expr_for_effect : poly ? emit_boxed : emit_expr,
+                   &pre, &value);
+    if (pre.p) buf_puts(b, pre.p);
     int ta = ++g_tmp;
-    buf_printf(b, "%s _t%d = ", poly ? "sp_RbVal" : c_type_name(ty_hash_val(rt)), ta);
-    if (poly) emit_boxed(c, arg, b); else emit_expr(c, arg, b);
-    buf_puts(b, "; "); nil_recv_check(name, t, b);
+    if (nil_needle)
+      buf_printf(b, "const char *_t%d = ((void)(%s), (const char *)NULL); ",
+                 ta, value.p && value.p[0] ? value.p : "0");
+    else
+      buf_printf(b, "%s _t%d = %s; ", poly ? "sp_RbVal" : c_type_name(ty_hash_val(rt)),
+                 ta, value.p ? value.p : poly ? "sp_box_nil()" : "0");
+    free(pre.p); free(value.p);
+    if (guard) nil_recv_check(name, t, b);
     char nd[24]; snprintf(nd, sizeof nd, "_t%d", ta);
     buf_puts(b, " "); emit_hash_entry(b, rt, "has_value"); buf_printf(b, "(_t%d, ", t);
     emit_typed_elem_hold(c, arg, rt, nd, b);

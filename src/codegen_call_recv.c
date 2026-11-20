@@ -435,6 +435,12 @@ static int value_kind_misses(Compiler *c, int node, TyKind ek) {
          ty_is_array(t) || ty_is_hash(t);
 }
 
+/* A null handle is a value in a String-valued Hash. */
+static int hash_value_kind_misses(Compiler *c, int needle, TyKind hash) {
+  if (typed_elem_held(hash) == TY_STRBUF && repr_of(c, needle).ty == TY_NIL) return 0;
+  return value_kind_misses(c, needle, ty_hash_val(hash));
+}
+
 /* An Integer or Float array whose elements can be nil: the array keeps a
    bit per element (nilbits, sp_types.h). There nil is an element like any
    other -- found, counted, deleted, compared -- so a nil needle is not the
@@ -7717,7 +7723,7 @@ else {
                      ti, ti, th, ti, th, ti, ta, tr, tr);
           return 1;
         }
-        if (!poly && value_kind_misses(c, argv[0], ty_hash_val(rt))) {
+        if (!poly && hash_value_kind_misses(c, argv[0], rt)) {
           buf_puts(b, "({ (void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "); (void)("); emit_expr_for_effect(c, argv[0], b); buf_puts(b, "); 0; })");
           return 1;
         }

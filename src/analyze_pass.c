@@ -14343,7 +14343,8 @@ int desugar_class_eval_value(Compiler *c) {
     const char *nm = nt_str(nt, id, "name");
     if (!nm || !is_class_eval_family(nm)) continue;
     int recv = nt_ref(nt, id, "receiver");
-    if (recv < 0 || nt_kind(nt, recv) != NK_ConstantReadNode) continue;
+    /* (a constant path -- `Outer::Inner.class_eval { }`, `::Base.class_eval { }` -- names its class as a bare constant does) */
+    if (recv < 0 || (nt_kind(nt, recv) != NK_ConstantReadNode && nt_kind(nt, recv) != NK_ConstantPathNode)) continue;
     const char *cname = key_name(c, recv);
     int rci = cname ? const_node_class_index(c, recv) : -1;
     if (rci < 0) continue;

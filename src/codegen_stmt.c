@@ -25202,8 +25202,12 @@ static int str_mutate_append_bang_arms(Compiler *c, int id, Buf *b, int indent, 
         int tbA = ++g_tmp;
         char *sv_nm = nt_node_swap_str((NodeTable *)nt, id, "name", abase);
         emit_indent(b, indent);
-        buf_printf(b, "{ sp_String *_t%d = SP_STR_HDL(%s); sp_String_set_bin(_t%d, ",
-                   tbA, srefA.p, tbA);
+        /* (a substitution's answer has the encoding its receiver and
+           replacement share, which the receiver takes with the bytes; tr!
+           and delete! leave it the receiver's) */
+        int sub_enc = sp_streq(abase, "gsub") || sp_streq(abase, "sub");
+        buf_printf(b, "{ sp_String *_t%d = SP_STR_HDL(%s); sp_String_set_bin%s(_t%d, ",
+                   tbA, srefA.p, sub_enc ? "_enc" : "", tbA);
         free(srefA.p);
         size_t wb_at = b->len;
         emit_expr(c, id, b);

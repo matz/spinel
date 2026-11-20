@@ -487,5 +487,7 @@ const char*sp_str_gsub(const char*s,const char*pat,const char*rep){SP_GC_ROOT_ST
   }
   /* `$~` is the last match, or nil when there was none */
   if(sp_re_track_last){if(last)sp_re_set_lit_match(s,(sp_int)(last-s),(sp_int)(last-s+pl));else sp_re_clear_last_match();}
-  out[ol]=0;char*r=sp_str_alloc(ol);memcpy(r,out,ol);sp_str_set_len(r,ol);free(out);if(rep_exp)free(rep_exp);return sp_str_bin_like(s,r);
+  out[ol]=0;char*r=sp_str_alloc(ol);memcpy(r,out,ol);sp_str_set_len(r,ol);free(out);if(rep_exp)free(rep_exp);
+  /* (with a replacement made, the encoding the receiver and the replacement share; with none, the receiver's) */
+  return last?sp_str_bin_cat_like(s,rep,r):sp_str_bin_like(s,r);
 }

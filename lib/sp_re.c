@@ -810,10 +810,12 @@ const char *sp_re_gsub(mrb_regexp_pattern *pat, const char *str, const char *rep
   char *out = (char *)malloc(cap); size_t olen = 0;
   int64_t pos = 0; int caps[64];
   int lastcaps[64], lastn = 0;   /* the last match, for `$~` */
+  int hit = 0;   /* a replacement was made */
   while (pos <= slen) {
     int n = spinel_re_exec(pat, str, slen, pos, caps, 64, sp_str_is_binary(str));
     if (n <= 0 || caps[0] < 0) break;
     sp_re_sub_matched = 1;
+    hit = 1;
     if (sp_re_track_last) { lastn = n > 64 ? 64 : n; memcpy(lastcaps, caps, sizeof(int) * (size_t)lastn); }
     size_t before = caps[0] - pos;
     if (olen+before+rlen >= cap) { cap = ((olen+before+rlen)*2)+64; out = (char*)realloc(out, cap); }
@@ -847,7 +849,8 @@ else {
   char *res = sp_str_alloc(olen);
   memcpy(res, out, olen);
   free(out);
-  return sp_str_bin_cat_like(str, rep, res);
+  /* (no match: nothing of rep is in the result, which keeps the subject's encoding) */
+  return hit ? sp_str_bin_cat_like(str, rep, res) : sp_str_bin_like(str, res);
 }
 const char *sp_re_sub(mrb_regexp_pattern *pat, const char *str, const char *rep) {SP_GC_ROOT_STR(str);SP_GC_ROOT_STR(rep);if(!str)sp_nil_recv("sub");
   sp_re_check_subject(str);

@@ -6831,8 +6831,8 @@ int emit_with_index_expr(Compiler *c, int id, Buf *b) {
   buf_printf(g_pre, " _t%d = %s;\n", trecv, rb.p ? rb.p : ""); free(rb.p);
   emit_indent(g_pre, g_indent); buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", trecv);
   /* a nil receiver raises as its walk (`each`, `map`) would on nil: a nil
-     Array is a NULL whose length reads 0 (a cached header's too), so the
-     walk ran no pass and answered as if empty. Not on a chain with a `&.`
+     Array is a NULL whose length reads 0, so the walk ran no pass and
+     answered as if empty. Not on a chain with a `&.`
      (call_chain_safe_nav), whose guard decides what a nil answers. */
   if (!range_src && !call_chain_safe_nav(nt, id)) {
     emit_indent(g_pre, g_indent);
@@ -6894,11 +6894,12 @@ int emit_with_index_expr(Compiler *c, int id, Buf *b) {
   }
   /* each.with_index's body is a loop body, as `each`'s is (emit_loop_body):
      it polls as `each` does (a threaded program's safepoint, a delivered
-     signal where no loop of the function encloses the walk); a `next` or a
-     `break` in it, inside a begin / rescue / ensure, unwinds only the frames
-     the body opened and runs the ensure's skip; and its `next` leaves this
-     walk's pass, never assigning the value slot of a collecting block
-     around it. */
+     signal where no loop of the function encloses the walk); a `next` in
+     it, inside a begin / rescue / ensure, unwinds only the frames the body
+     opened and runs the ensure's skip (as does a `break` of a loop within
+     the block; a block's own `break` is lowered before it gets here); and
+     its `next` leaves this walk's pass, never assigning the value slot of a
+     collecting block around it. */
   if (is_each) emit_loop_body(c, body, g_pre, innerIndent);
   else {
     IterStep st; emit_iter_step_open(c, block, !is_map, innerIndent, &st);

@@ -2060,13 +2060,6 @@ int emit_call_builtin_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable 
           last_is_opts = 1;
         }
       }
-      /* exec's options (chdir:, redirections) are not taken: refused, not
-         dropped */
-      if (is_exec && last_is_opts) {
-        unsupported_feature(c, id, "exec with an options Hash (Process.spawn takes chdir: and the redirections)");
-        buf_puts(b, "0");
-        return 1;
-      }
       int n_args = extra - (last_is_opts ? 1 : 0);
       int has_splat = nt_argv_has_splat(nt, argv, n_args + 1);
       if (has_splat) {
@@ -2117,7 +2110,7 @@ int emit_call_builtin_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable 
          time, so the test is made there */
       int tenv = 0;
       TyKind tfirst = nt_kind(nt, argv[0]) == NK_SplatNode ? TY_POLY : repr_of(c, argv[0]).as_ty;
-      if (!is_exec && (ty_is_hash(tfirst) || tfirst == TY_POLY || tfirst == TY_UNKNOWN)) {
+      if (ty_is_hash(tfirst) || tfirst == TY_POLY || tfirst == TY_UNKNOWN) {
         tenv = ++g_tmp;
         buf_printf(b, " sp_RbVal _t%d = sp_box_nil(); SP_GC_ROOT_RBVAL(_t%d);", tenv, tenv);
         buf_printf(b, " if (sp_json_kind(_t%d) == 2) { if (_t%d->len == 0) sp_raise_cls(\"ArgumentError\", \"wrong number of arguments (given 0, expected 1+)\");"
@@ -2214,8 +2207,8 @@ int emit_call_builtin_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable 
       if (tenv) buf_printf(b, " sp_PolyArray_push(_t%d, _t%d);", topts, tenv);
       else buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_nil());", topts);
       buf_printf(b, " sp_PolyArray_push(_t%d, _t%d);", topts, tunset);
-      if (is_exec)   /* Kernel#exec: the process becomes the command, or raises its Errno */
-        buf_printf(b, " sp_process_exec(_t%d, sp_box_poly_array(_t%d)); sp_int _r = 0; (void)_t%d;", tcmd, targs, topts);
+      if (is_exec)   /* Kernel#exec: the process becomes the command, with the options applied to it, or raises its Errno */
+        buf_printf(b, " sp_process_exec(_t%d, sp_box_poly_array(_t%d), sp_box_poly_array(_t%d)); sp_int _r = 0;", tcmd, targs, topts);
       else
         buf_printf(b, " sp_int _r = sp_process_spawn(_t%d, sp_box_poly_array(_t%d), sp_box_poly_array(_t%d));", tcmd, targs, topts);
       buf_printf(b, " _r; })\n");

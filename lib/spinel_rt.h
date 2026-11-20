@@ -491,7 +491,7 @@ sp_int sp_process_spawn(sp_RbVal cmd, sp_RbVal args, sp_RbVal opts);
 sp_RbVal sp_process_redirect_value(sp_RbVal opts, int slot, sp_bool *found, int *prior);   /* lib/sp_poly_cold.c: needs this header's Hash walk */
 void sp_system_env_check(sp_RbVal env);   /* raises as system would, before argv is built */
 int sp_system_prog_env_args(sp_RbVal env, const char *prog, int argc, const char *const *argv);   /* lib/sp_process.c: prog NULL unless system([program, argv0], ...); env nil for none */
-void sp_process_exec(sp_RbVal cmd, sp_RbVal args);   /* lib/sp_process.c: Kernel#exec */
+void sp_process_exec(sp_RbVal cmd, sp_RbVal args, sp_RbVal opts);   /* lib/sp_process.c: Kernel#exec, with spawn's options */
 int sp_process_open_redirect(const char *path, int slot, int *owned);
 SP_NORETURN void sp_process_spawn_fail(int *owned, const char *cls, const char *msg);
 sp_PolyArray *sp_process_waitpid2(sp_int pid);

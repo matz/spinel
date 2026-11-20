@@ -1,0 +1,5 @@
+ENOENT names the program: true
+environment kept: nil "1"
+the pipe of in: is still readable: "still here\n"
+ENOENT names the directory: true
+end

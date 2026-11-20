@@ -293,13 +293,23 @@ static int slot_to_fd(sp_RbVal v) {
   return -1;
 }
 
-sp_int sp_process_spawn(sp_RbVal cmd, sp_RbVal args_box,
-                        sp_RbVal opts_box) {
-  SP_GC_ROOT_RBVAL(cmd);
-  SP_GC_ROOT_RBVAL(args_box);
-  SP_GC_ROOT_RBVAL(opts_box);
+/* The options of a spawn or an exec, read from the array the generated
+   program builds (the slots at the top of this file): the descriptors of
+   the three standard streams, -1 for one left as it is; the process group;
+   the rlimits; the directory; the environment Hash and unsetenv_others. */
+typedef struct {
+  int in_fd, out_fd, err_fd;
+  int pgroup;                /* 0 inherit, 1 new, >1 the pgid */
+  int rlimit_cpu_set, rlimit_as_set;
+  rlim_t rlimit_cpu_val, rlimit_as_val;
+  const char *chdir_to;      /* NULL for none */
+  sp_RbVal env;              /* nil for none */
+  int unsetenv_others;
+} sp_spawn_opts;
 
-  /* opts_box must be a PolyArray of 8 elements. */
+/* Read the options array into *o; owned gets the fds the generated program
+   opened for this call (slot 7), which the raises below release. */
+static void spawn_opts_read(sp_RbVal opts_box, sp_spawn_opts *o, int *owned) {
   if (opts_box.tag != SP_TAG_OBJ ||
       opts_box.cls_id != SP_BUILTIN_POLY_ARRAY) {
     sp_raise_cls("TypeError", "opts must be a PolyArray (codegen bug)");
@@ -308,32 +318,32 @@ sp_int sp_process_spawn(sp_RbVal cmd, sp_RbVal args_box,
   if (opts->len < 8) {
     sp_raise_cls("ArgumentError", "opts array too short (codegen bug)");
   }
-  int in_fd  = slot_to_fd(opts->data[0]);
-  int out_fd = slot_to_fd(opts->data[1]);
-  int err_fd = slot_to_fd(opts->data[2]);
+  o->in_fd  = slot_to_fd(opts->data[0]);
+  o->out_fd = slot_to_fd(opts->data[1]);
+  o->err_fd = slot_to_fd(opts->data[2]);
   /* Slot 7: a bit per slot the generated program had this file open for
-     it, so those fds are the spawn's to close; a caller's IO stays open. */
+     it, so those fds are the call's to close; a caller's IO stays open. */
   int owned_mask = opts->data[7].tag == SP_TAG_INT ? (int)opts->data[7].v.i : 0;
-  int owned[3] = { owned_mask & 1 ? in_fd : -1,
-                   owned_mask & 2 ? out_fd : -1,
-                   owned_mask & 4 ? err_fd : -1 };
+  owned[0] = owned_mask & 1 ? o->in_fd : -1;
+  owned[1] = owned_mask & 2 ? o->out_fd : -1;
+  owned[2] = owned_mask & 4 ? o->err_fd : -1;
 
-  int pgroup = 0;
-  if (opts->data[3].tag == SP_TAG_NIL) pgroup = 0;
-  else if (opts->data[3].tag == SP_TAG_BOOL && opts->data[3].v.i == 1) pgroup = 1;
-  else if (opts->data[3].tag == SP_TAG_INT) pgroup = (int)opts->data[3].v.i;
+  o->pgroup = 0;
+  if (opts->data[3].tag == SP_TAG_NIL) o->pgroup = 0;
+  else if (opts->data[3].tag == SP_TAG_BOOL && opts->data[3].v.i == 1) o->pgroup = 1;
+  else if (opts->data[3].tag == SP_TAG_INT) o->pgroup = (int)opts->data[3].v.i;
   else sp_process_spawn_fail(owned, "TypeError", "pgroup must be true, 0, or Integer");
 
-  int rlimit_cpu_set = 0;
-  rlim_t rlimit_cpu_val = 0;
-  if (opts->data[4].tag == SP_TAG_INT) { rlimit_cpu_set = 1; rlimit_cpu_val = (rlim_t)opts->data[4].v.i; }
+  o->rlimit_cpu_set = 0;
+  o->rlimit_cpu_val = 0;
+  if (opts->data[4].tag == SP_TAG_INT) { o->rlimit_cpu_set = 1; o->rlimit_cpu_val = (rlim_t)opts->data[4].v.i; }
   else if (opts->data[4].tag != SP_TAG_NIL)
     sp_process_spawn_fail(owned, "TypeError", "rlimit_cpu must be Integer");
 
-  int rlimit_as_set = 0;
-  rlim_t rlimit_as_val = 0;
+  o->rlimit_as_set = 0;
+  o->rlimit_as_val = 0;
 #ifdef RLIMIT_AS
-  if (opts->data[5].tag == SP_TAG_INT) { rlimit_as_set = 1; rlimit_as_val = (rlim_t)opts->data[5].v.i; }
+  if (opts->data[5].tag == SP_TAG_INT) { o->rlimit_as_set = 1; o->rlimit_as_val = (rlim_t)opts->data[5].v.i; }
   else if (opts->data[5].tag != SP_TAG_NIL)
     sp_process_spawn_fail(owned, "TypeError", "rlimit_as must be Integer");
 #else
@@ -343,16 +353,90 @@ sp_int sp_process_spawn(sp_RbVal cmd, sp_RbVal args_box,
 #endif
 
   sp_RbVal dir = opts->data[6];
-  const char *chdir_to = sp_rbval_string_bytes(dir);
+  o->chdir_to = sp_rbval_string_bytes(dir);
   if (dir.tag != SP_TAG_NIL && !sp_rbval_is_string(dir))
     sp_process_spawn_fail(owned, "TypeError", "chdir must be a String");
 
-  sp_RbVal env = opts->len > 8 ? opts->data[8] : sp_box_nil();
+  o->env = opts->len > 8 ? opts->data[8] : sp_box_nil();
   sp_RbVal clear = opts->len > 9 ? opts->data[9] : sp_box_nil();
   if (clear.tag != SP_TAG_NIL && clear.tag != SP_TAG_BOOL)
     sp_process_spawn_fail(owned, "ArgumentError", "expected true or false as unsetenv_others");
-  int unsetenv_others = clear.tag == SP_TAG_BOOL && clear.v.b;
-  if (env.tag != SP_TAG_NIL) sp_spawn_env_check(env, owned);
+  o->unsetenv_others = clear.tag == SP_TAG_BOOL && clear.v.b;
+  if (o->env.tag != SP_TAG_NIL) sp_spawn_env_check(o->env, owned);
+}
+
+/* Apply the options to this process: the directory, the rlimits, the
+   process group, then the redirections, in the order the forked child of a
+   spawn has always made them. The sources of the redirections are closed in
+   a child (for_exec 0); an exec marks them close-on-exec instead, so a
+   failed exec still has them. 0, or -1 with errno set and *which 1 for a
+   chdir that failed and 0 for a redirection, as the child reports them. */
+static int spawn_opts_apply(const sp_spawn_opts *o, int for_exec, int *which) {
+  if (o->chdir_to && chdir(o->chdir_to) != 0) { *which = 1; return -1; }
+  if (o->rlimit_cpu_set) {
+    struct rlimit rl = { o->rlimit_cpu_val, RLIM_INFINITY };
+    setrlimit(RLIMIT_CPU, &rl);
+  }
+#ifdef RLIMIT_AS
+  if (o->rlimit_as_set) {
+    struct rlimit rl = { o->rlimit_as_val, RLIM_INFINITY };
+    setrlimit(RLIMIT_AS, &rl);
+  }
+#endif
+  if (o->pgroup == 1) setpgid(0, 0);
+  else if (o->pgroup > 1) setpgid(0, o->pgroup);
+  if (apply_redirect(0, o->in_fd) != 0 || apply_redirect(1, o->out_fd) != 0 ||
+      apply_redirect(2, o->err_fd) != 0) { *which = 0; return -1; }
+  if (!for_exec) close_redirect_srcs(o->in_fd, o->out_fd, o->err_fd);
+  else {
+    int fds[3] = { o->in_fd, o->out_fd, o->err_fd };
+    for (int i = 0; i < 3; i++) {
+      if (fds[i] <= 2) continue;
+      int fl = fcntl(fds[i], F_GETFD);
+      if (fl >= 0) fcntl(fds[i], F_SETFD, fl | FD_CLOEXEC);
+    }
+  }
+  return 0;
+}
+
+/* Become prog: execvp, through the search path of the parent's environment
+   when the child's has none (unsetenv_others, with no PATH of its own).
+   Returns only when the exec failed, with its errno. */
+static void exec_prog(const char *prog, char **argv, const char *search_path) {
+  if (search_path && !strchr(prog, '/')) {
+    for (const char *p = search_path;;) {
+      const char *end = strchr(p, ':');
+      size_t len = end ? (size_t)(end - p) : strlen(p);
+      char path[PATH_MAX];
+      if (len + strlen(prog) + 2 > sizeof path) errno = ENAMETOOLONG;
+      else {
+        snprintf(path, sizeof path, "%.*s/%s", (int)(len ? len : 1), len ? p : ".", prog);
+        execvp(path, argv);
+      }
+      if (errno != EACCES && errno != ENOENT && errno != ENOTDIR && errno != ENAMETOOLONG) return;
+      if (!end) { errno = ENOENT; return; }
+      p = end + 1;
+    }
+  }
+  execvp(prog, argv);
+}
+
+sp_int sp_process_spawn(sp_RbVal cmd, sp_RbVal args_box,
+                        sp_RbVal opts_box) {
+  SP_GC_ROOT_RBVAL(cmd);
+  SP_GC_ROOT_RBVAL(args_box);
+  SP_GC_ROOT_RBVAL(opts_box);
+
+  int owned[3] = { -1, -1, -1 };
+  sp_spawn_opts o;
+  spawn_opts_read(opts_box, &o, owned);
+  int in_fd = o.in_fd, out_fd = o.out_fd, err_fd = o.err_fd;
+  int pgroup = o.pgroup;
+  int rlimit_cpu_set = o.rlimit_cpu_set, rlimit_as_set = o.rlimit_as_set;
+  rlim_t rlimit_cpu_val = o.rlimit_cpu_val, rlimit_as_val = o.rlimit_as_val;
+  const char *chdir_to = o.chdir_to;
+  sp_RbVal env = o.env;
+  int unsetenv_others = o.unsetenv_others;
 
   /* Resolve cmd + args into argv. */
   const char *prog = NULL;
@@ -540,53 +624,14 @@ sp_int sp_process_spawn(sp_RbVal cmd, sp_RbVal args_box,
        because the exit code is the same regardless of exec failure
        reason. */
     close(err_pipe[0]);
-    if (chdir_to) {
-      if (chdir(chdir_to) != 0) {
-        int fail[2] = { errno, 1 };
+    { int which = 0;
+      if (spawn_opts_apply(&o, 0, &which) != 0) {
+        int fail[2] = { errno, which };
         (void)!write(err_pipe[1], fail, sizeof fail);
         _exit(127);
-      }
-    }
-    if (rlimit_cpu_set) {
-      struct rlimit rl = { rlimit_cpu_val, RLIM_INFINITY };
-      setrlimit(RLIMIT_CPU, &rl);
-    }
-#ifdef RLIMIT_AS
-    if (rlimit_as_set) {
-      struct rlimit rl = { rlimit_as_val, RLIM_INFINITY };
-      setrlimit(RLIMIT_AS, &rl);
-    }
-#endif
-    if (pgroup == 1) {
-      setpgid(0, 0);
-    }
-    else if (pgroup > 1) {
-      setpgid(0, pgroup);
-    }
-    if (apply_redirect(0, in_fd) != 0 || apply_redirect(1, out_fd) != 0 ||
-        apply_redirect(2, err_fd) != 0) {
-      int fail[2] = { errno, 0 };
-      (void)!write(err_pipe[1], fail, sizeof fail);
-      _exit(127);
-    }
-    close_redirect_srcs(in_fd, out_fd, err_fd);
+      } }
     if (envp) environ = envp;
-    if (search_path && !strchr(prog, '/')) {
-      for (const char *p = search_path;;) {
-        const char *end = strchr(p, ':');
-        size_t len = end ? (size_t)(end - p) : strlen(p);
-        char path[PATH_MAX];
-        if (len + strlen(prog) + 2 > sizeof path) errno = ENAMETOOLONG;
-        else {
-          snprintf(path, sizeof path, "%.*s/%s", (int)(len ? len : 1), len ? p : ".", prog);
-          execvp(path, argv);
-        }
-        if (errno != EACCES && errno != ENOENT && errno != ENOTDIR && errno != ENAMETOOLONG) break;
-        if (!end) { errno = ENOENT; break; }
-        p = end + 1;
-      }
-    }
-    else execvp(prog, argv);
+    exec_prog(prog, argv, search_path);
     /* exec returned: failure. Send the errno to the parent. */
     int fail[2] = { errno, 0 };
     (void)!write(err_pipe[1], fail, sizeof fail);
@@ -631,10 +676,21 @@ sp_int sp_process_spawn(sp_RbVal cmd, sp_RbVal args_box,
 
 /* Kernel#exec / Process.exec: replace the process with the command, read
    as spawn reads it -- one String a command line, through the shell when it
-   carries a shell character; [program, argv0]; the arguments Strings. What
-   the program has buffered for its streams is not written, as under CRuby.
-   Returns only by raising the Errno the exec failed with. */
-void sp_process_exec(sp_RbVal cmd, sp_RbVal args_box) {
+   carries a shell character; [program, argv0]; the arguments Strings -- with
+   spawn's options (spawn_opts_read): the redirections of the standard
+   streams, chdir:, pgroup:, the rlimits, and the environment Hash ahead of
+   the command. The options are applied to this process, which becomes the
+   command. What the program has buffered for its streams is not written, as
+   under CRuby. Returns only by raising the Errno the exec, or a chdir of
+   its, failed with; the environment is then as it was, and the streams and
+   the directory stay as the options made them, as CRuby leaves them. */
+void sp_process_exec(sp_RbVal cmd, sp_RbVal args_box, sp_RbVal opts_box) {
+  SP_GC_ROOT_RBVAL(cmd);
+  SP_GC_ROOT_RBVAL(args_box);
+  SP_GC_ROOT_RBVAL(opts_box);
+  int owned[3] = { -1, -1, -1 };
+  sp_spawn_opts o;
+  spawn_opts_read(opts_box, &o, owned);
   sp_PolyArray *args = (args_box.tag == SP_TAG_OBJ && args_box.cls_id == SP_BUILTIN_POLY_ARRAY)
                        ? (sp_PolyArray *)args_box.v.p : NULL;
   int na = args ? (int)args->len : 0;
@@ -643,40 +699,62 @@ void sp_process_exec(sp_RbVal cmd, sp_RbVal args_box) {
   if (sp_rbval_is_string(cmd)) prog = argv0 = sp_rbval_string_bytes(cmd);
   else if (cmd.tag == SP_TAG_OBJ && cmd.cls_id == SP_BUILTIN_POLY_ARRAY) {
     sp_PolyArray *pa = (sp_PolyArray *)cmd.v.p;
-    if (pa->len != 2) sp_raise_cls("ArgumentError", "wrong first argument");
+    if (pa->len != 2) sp_process_spawn_fail(owned, "ArgumentError", "wrong first argument");
     for (int i = 0; i < 2; i++)
-      if (!sp_rbval_is_string(pa->data[i])) sp_raise_cls("TypeError", sp_errf_conv(pa->data[i]));
+      if (!sp_rbval_is_string(pa->data[i])) sp_process_spawn_fail(owned, "TypeError", sp_errf_conv(pa->data[i]));
     prog = sp_rbval_string_bytes(pa->data[0]); argv0 = sp_rbval_string_bytes(pa->data[1]);
   }
-  else sp_raise_cls("TypeError", "wrong first argument type (expected String or Array)");
+  else sp_process_spawn_fail(owned, "TypeError", "wrong first argument type (expected String or Array)");
   for (int i = 0; i < na; i++)
-    if (!sp_rbval_is_string(args->data[i])) sp_raise_cls("TypeError", sp_errf_conv(args->data[i]));
+    if (!sp_rbval_is_string(args->data[i])) sp_process_spawn_fail(owned, "TypeError", sp_errf_conv(args->data[i]));
   /* a command line as Process.spawn reads one (sp_cmdline_shell_p) */
   int line = sp_rbval_is_string(cmd) && na == 0;
   int via_shell = line && sp_cmdline_shell_p(prog);
   char **argv;
   if (line && !via_shell) {
     int wn = 0;
-    if (!(argv = sp_cmdline_words(prog, &wn))) sp_raise_cls("NoMemoryError", "out of memory");
-    if (wn == 0) { free(argv); sp_raise_cls("Errno::ENOENT", sp_errf_path(ENOENT, prog)); }
+    if (!(argv = sp_cmdline_words(prog, &wn))) sp_process_spawn_fail(owned, "NoMemoryError", "out of memory");
+    if (wn == 0) { free(argv); sp_process_spawn_fail(owned, "Errno::ENOENT", sp_errf_path(ENOENT, prog)); }
     prog = argv[0];
     if (strlen(prog) < sizeof prog_copy) prog = strcpy(prog_copy, prog);
   }
   else {
     argv = (char **)malloc(sizeof(char *) * (size_t)(na + 4));
-    if (!argv) sp_raise_cls("NoMemoryError", "out of memory");
+    if (!argv) sp_process_spawn_fail(owned, "NoMemoryError", "out of memory");
     int ai = 0;
     if (via_shell) { argv[ai++] = (char *)"/bin/sh"; argv[ai++] = (char *)"-c"; }
     argv[ai++] = (char *)argv0;
     for (int i = 0; i < na; i++) argv[ai++] = (char *)sp_rbval_string_bytes(args->data[i]);
     argv[ai] = NULL;
   }
-  execvp(via_shell ? "/bin/sh" : prog, argv);
+  /* (the error of a failed exec names the command line, not the shell) */
+  const char *target = via_shell ? "/bin/sh" : prog;
+  char **envp = NULL;
+  if ((o.env.tag != SP_TAG_NIL || o.unsetenv_others) && !(envp = sp_spawn_envp(o.env, o.unsetenv_others))) {
+    free(argv);
+    sp_process_spawn_fail(owned, "NoMemoryError", "out of memory");
+  }
+  /* a missing PATH of the command's environment still has the parent's for
+     the lookup, as in a spawn */
+  const char *search_path = o.unsetenv_others ? getenv("PATH") : NULL;
+  if (o.unsetenv_others) for (char **e = envp; *e; e++)
+    if (strncmp(*e, "PATH=", 5) == 0) search_path = NULL;
+  char **env_was = environ;   /* (a failure gives the environment back) */
+  give_blocking(o.in_fd, o.out_fd, o.err_fd);
+  int which = 0;
+  int applied = spawn_opts_apply(&o, 1, &which);
+  if (applied == 0) {
+    if (envp) environ = envp;
+    exec_prog(target, argv, search_path);
+  }
   int e = errno;
+  environ = env_was;
+  const char *at = applied != 0 && which == 1 ? o.chdir_to : prog;
   free(argv);
+  free(envp);
   errno = e;
-  sp_raise_cls(e == ENOENT ? "Errno::ENOENT" : e == EACCES ? "Errno::EACCES" : "SystemCallError",
-               sp_errf_path(e, prog));
+  sp_process_spawn_fail(owned, e == ENOENT ? "Errno::ENOENT" : e == EACCES ? "Errno::EACCES" :
+                        e == ENOTDIR ? "Errno::ENOTDIR" : "SystemCallError", sp_errf_path(e, at));
 }
 
 /* The wait itself lives in the scheduler (sp_sched_wait_child): a blocking

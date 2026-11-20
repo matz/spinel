@@ -33,5 +33,19 @@ NO_FLUSH with input:
 then SYNC_FLUSH answers true; the stream inflates to "abcdef"
 flush after finish: Zlib::StreamError
 deflate after finish: Zlib::StreamError
-never flushed is Zlib.deflate: true
+after finish, deflate(nil, FINISH): 
+after finish, deflate(nil, FULL_FLUSH): 
+after finish, deflate(nil, SYNC_FLUSH): 
+after finish, deflate(nil, NO_FLUSH): 
+after finish, deflate("", FINISH): 
+after finish, deflate("", FULL_FLUSH): Zlib::StreamError
+after finish, deflate("", SYNC_FLUSH): Zlib::StreamError
+after finish, deflate("", NO_FLUSH): 
+after finish, deflate("x", FINISH): Zlib::BufError
+after finish, deflate("x", FULL_FLUSH): Zlib::StreamError
+after finish, deflate("x", SYNC_FLUSH): Zlib::StreamError
+after finish, deflate("x", NO_FLUSH): Zlib::StreamError
+after finish, << "": 
+after finish, << "x": Zlib::StreamError
+never flushed is Zlib.deflate: true total_in true
 GzipWriter#flush: grows true prefixes [true, true, true] round trip true

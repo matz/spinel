@@ -75,7 +75,7 @@ end
 # A flush with nothing new: the first writes the header and an empty
 # block; a SYNC_FLUSH after a flush is a BufError, as zlib answers; a
 # FULL_FLUSH writes the empty stored block (00 00 00 ff ff). After finish,
-# a flush or a deflate is a StreamError.
+# new input is refused, as is a flush.
 def attempt(stream, label)
   out = yield
   stream << out
@@ -97,10 +97,27 @@ puts "then SYNC_FLUSH answers #{out.bytesize > 0}; the stream inflates to #{Zlib
 attempt(stream, "flush after finish") { d.flush }
 attempt(stream, "deflate after finish") { d.deflate("x") }
 
+# Past finish, new input is refused: a BufError at FINISH, a StreamError
+# otherwise. Each case on a stream of its own.
+def finished_deflate
+  d = Zlib::Deflate.new
+  d.finish
+  d
+end
+
+[nil, "", "x"].each do |s|
+  [["FINISH", Zlib::FINISH], ["FULL_FLUSH", Zlib::FULL_FLUSH], ["SYNC_FLUSH", Zlib::SYNC_FLUSH],
+   ["NO_FLUSH", Zlib::NO_FLUSH]].each do |name, mode|
+    attempt(String.new, "after finish, deflate(#{s.inspect}, #{name})") { finished_deflate.deflate(s, mode) }
+  end
+end
+attempt(String.new, "after finish, << \"\"") { finished_deflate << ""; String.new }
+attempt(String.new, "after finish, << \"x\"") { finished_deflate << "x"; String.new }
+
 # Never flushed: finish writes the stream Zlib.deflate writes.
 d = Zlib::Deflate.new
 d << text
-puts "never flushed is Zlib.deflate: #{d.finish == Zlib.deflate(text)}"
+puts "never flushed is Zlib.deflate: #{d.finish == Zlib.deflate(text)} total_in #{d.total_in == text.bytesize}"
 
 io = StringIO.new
 gz = Zlib::GzipWriter.new(io)

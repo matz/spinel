@@ -1504,17 +1504,40 @@ int redo_label_push(int owner) {
   g_redo_rescue_base[g_redo_depth] = g_rescue_save_depth;
   return g_redo_stack[g_redo_depth++] = ++g_tmp;
 }
-/* A redo goes back to the innermost label: it pops the frames of the begins it
-   is written in, as a `next` does for its loop, and the exceptions of the
-   rescue clauses entered since the label. With an ensure between, it is the
-   bare goto it was; so it is where the regions are no longer counted, since
-   an ensure there could not be seen. */
-void emit_redo_unwind(Buf *b) {
-  int top = g_redo_depth - 1;
-  if (g_ensure_depth != g_redo_ensure_base[top] || g_ensure_depth >= MAX_ENSURE_DEPTH) return;
-  int pops = g_exc_frame_depth - g_redo_exc_base[top], k = g_rescue_save_depth - g_redo_rescue_base[top];
+static void emit_redo_frame_pops(Buf *b, int exc_base, int rescue_base) {
+  int pops = g_exc_frame_depth - exc_base;
   if (pops > 0) buf_printf(b, "sp_exc_top -= %d; ", pops);
-  if (k > 0) buf_printf(b, "sp_rescue_sp -= %d; ", k);
+  emit_rescue_pops_to(b, rescue_base);
+}
+
+/* Leave each protected region on the way back to the block or loop body. */
+void emit_redo_transfer(Buf *b) {
+  int top = g_redo_depth - 1;
+  if (g_ensure_depth > g_redo_ensure_base[top]) {
+    EnsureCtx *region = &g_ensure_stack[g_ensure_depth - 1];
+    region->has_redo = 1;
+    buf_printf(b, "_redof%d = 1; ", region->lid);
+    emit_redo_frame_pops(b, region->exc_base, region->rescue_base);
+    buf_printf(b, "goto _ensure%d;", region->lid);
+    return;
+  }
+  emit_redo_frame_pops(b, g_redo_exc_base[top], g_redo_rescue_base[top]);
+  emit_loop_latch_poll(b, " ");
+  buf_printf(b, "goto _redo_%d;", g_redo_stack[top]);
+}
+
+void emit_redo_region_open(Buf *b, int label, int indent) {
+  if (g_redo_depth <= 0) return;
+  emit_indent(b, indent);
+  buf_printf(b, "int _redof%d = 0; (void)_redof%d;\n", label, label);
+}
+
+void emit_redo_region_close(Buf *b, const EnsureCtx *region, int indent) {
+  if (!region->has_redo) return;
+  emit_indent(b, indent);
+  buf_printf(b, "if (_redof%d) { ", region->lid);
+  emit_redo_transfer(b);
+  buf_puts(b, " }\n");
 }
 const char *g_loop_break_var = NULL;
 /* When a direct instance_exec/eval splice is wrapped in a do{}while(0), this

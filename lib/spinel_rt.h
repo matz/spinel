@@ -17979,6 +17979,7 @@ static sp_StrArray *sp_caller(sp_int start, sp_bool have_len, sp_int len) {
 struct sp_proc_home;
 extern SP_TLS int sp_unwind_kind, sp_unwind_target, sp_unwind_exc_top;  /* per-worker (see sp_exc_stack) */
 extern SP_TLS struct sp_proc_home *sp_unwind_home;  /* PROCRET target (THROW uses sp_unwind_target) */
+SP_NORETURN void sp_unwind_resume(void);
 /* forward: materialize the exception object for a raise that carried none
    (a bare `raise "msg"` / `raise Cls, msg` / builtin runtime raise), so `$!`
    and `rescue => e` bind one real object with a stable identity. The struct
@@ -19095,12 +19096,12 @@ static void sp_throw(const char *tag, int kind, sp_RbVal val) {
     }
     if (sp_catch_tag_kind[i] == kind &&
         (kind ? sp_catch_tag[i] == tag : strcmp(sp_catch_tag[i], tag) == 0)) {
-      sp_catch_val[i] = val; sp_catch_top = i + 1;
+      sp_catch_val[i] = val;
       if (sp_exc_top > sp_catch_exc_top[i]) {       /* run intervening ensures first */
         sp_unwind_kind = SP_UNWIND_THROW; sp_unwind_target = i; sp_unwind_exc_top = sp_catch_exc_top[i];
-        sp_poly_recur_unwind();
-        longjmp(sp_exc_stack[sp_exc_top - 1], 1);
+        sp_unwind_resume();
       }
+      sp_catch_top = i + 1;
       sp_poly_recur_pop(sp_catch_recur_mark[i]);
       longjmp(sp_catch_stack[i], 1);
     }
@@ -19193,13 +19194,12 @@ static SP_NORETURN void sp_brk_throw(sp_int serial, sp_RbVal v) {
   for (int i = sp_brk_top - 1; i >= 0; i--) {
     if (sp_brk_serial[i] != serial) continue;
     sp_brk_val[i] = v;
-    sp_brk_top = i + 1;                    /* drop scopes above the target */
     if (sp_exc_top > sp_brk_exc_top[i]) {  /* run intervening ensures first */
       sp_unwind_kind = SP_UNWIND_BREAK; sp_unwind_target = i;
       sp_unwind_exc_top = sp_brk_exc_top[i];
-      sp_poly_recur_unwind();
-      longjmp(sp_exc_stack[sp_exc_top - 1], 1);
+      sp_unwind_resume();
     }
+    sp_brk_top = i + 1;
     sp_poly_recur_pop(sp_brk_recur_mark[i]);
     longjmp(sp_brk_stack[i], 1);
   }
@@ -19270,8 +19270,7 @@ static void sp_proc_return(sp_int id, sp_RbVal v) {
       h->val = v;
       if (sp_exc_top > h->exc_top) {   /* run intervening ensures first */
         sp_unwind_kind = SP_UNWIND_PROCRET; sp_unwind_home = h; sp_unwind_exc_top = h->exc_top;
-        sp_poly_recur_unwind();
-        longjmp(sp_exc_stack[sp_exc_top - 1], 1);
+        sp_unwind_resume();
       }
       sp_poly_recur_pop(h->recur_mark);
       longjmp(h->jb, 1);
@@ -19344,7 +19343,6 @@ SP_CONSTRUCTOR static void sp_install_safepoint_publish(void) {
   sp_safepoint_publish_hook = sp_publish_worker_roots;
 }
 #endif
-void sp_unwind_resume(void);   /* lib/sp_exc.c */
 #if defined(SP_CEXT) && !defined(SPINEL_EXT_HOST)
 int sp_cext_unwinding(void) { return sp_unwind_kind != SP_UNWIND_NONE; }
 void sp_cext_resume_unwind(void) { sp_unwind_resume(); }

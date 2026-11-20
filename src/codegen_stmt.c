@@ -15722,6 +15722,7 @@ void emit_begin(Compiler *c, int id, Buf *b, int indent, const char *resultvar) 
                       (ty_is_object(g_ret_type) || c_type_name(g_ret_type) != NULL));
     emit_indent(b, indent); buf_printf(b, "int _retf%d = 0;\n", eid);
     emit_indent(b, indent); buf_printf(b, "int _nxtf%d = 0; (void)_nxtf%d;\n", eid, eid);
+    emit_redo_region_open(b, eid, indent);
     /* only a region opened inside a C loop can be left by a loop's break */
     if (g_c_loop_depth > 0) {
       emit_indent(b, indent); buf_printf(b, "int _brkf%d = 0; (void)_brkf%d;\n", eid, eid);
@@ -15863,7 +15864,7 @@ void emit_begin(Compiler *c, int id, Buf *b, int indent, const char *resultvar) 
       /* No rescue: save exception info for re-raise after ensure runs.
          sp_exc_top has just been decremented so sp_exc_top is the right index. */
       emit_indent(b, indent + 2);
-      buf_printf(b, "_excf%d = 1; _excmsg%d = sp_exc_msg[sp_exc_top]; _exccls%d = sp_exc_cls[sp_exc_top]; _excobj%d = sp_exc_caught_obj();\n",
+      buf_printf(b, "if (sp_unwind_kind == SP_UNWIND_NONE) { _excf%d = 1; _excmsg%d = sp_exc_msg[sp_exc_top]; _exccls%d = sp_exc_cls[sp_exc_top]; _excobj%d = sp_exc_caught_obj(); }\n",
                  eid, eid, eid, eid);
     }
     emit_indent(b, indent + 1); buf_puts(b, "}\n");
@@ -15873,15 +15874,12 @@ void emit_begin(Compiler *c, int id, Buf *b, int indent, const char *resultvar) 
     g_ensure_depth--;
 
     /* Ensure label: reached by deferred-return goto AND by normal fall-through. */
-    buf_printf(b, "_ensure%d: ;\n", eid);
-    /* Save the in-flight unwind state across the ensure body: a nested throw /
-       catch / proc-return that completes *inside* this ensure resets the globals
-       to SP_UNWIND_NONE, which would otherwise drop an outer unwind passing
-       through. An ensure that starts its own escaping unwind longjmps out before
-       the restore, so that new unwind correctly supersedes. */
+    buf_printf(b, "_ensure%d: {\n", eid);
+    /* Suspend the incoming unwind while the ensure runs. Nested handlers
+       see only transfers started in this body. Leaving the body by a new
+       transfer bypasses the restore and replaces the pending unwind. */
     emit_indent(b, indent);
-    buf_printf(b, "int _uk%d = sp_unwind_kind, _ut%d = sp_unwind_target, _ue%d = sp_unwind_exc_top; sp_proc_home *_uh%d = sp_unwind_home;\n",
-               eid, eid, eid, eid);
+    buf_printf(b, "sp_unwind_state _uw%d = sp_unwind_pause(); SP_GC_ROOT_RBVAL(_uw%d.value);\n", eid, eid);
     /* an exception raised from inside this ensure takes the one unwinding
        through it as its cause (#3745) */
     emit_indent(b, indent);
@@ -15921,8 +15919,7 @@ void emit_begin(Compiler *c, int id, Buf *b, int indent, const char *resultvar) 
     emit_indent(b, indent);
     buf_puts(b, "}\n");
     emit_indent(b, indent);
-    buf_printf(b, "sp_unwind_kind = _uk%d; sp_unwind_target = _ut%d; sp_unwind_exc_top = _ue%d; sp_unwind_home = _uh%d;\n",
-               eid, eid, eid, eid);
+    buf_printf(b, "sp_unwind_restore(&_uw%d);\n", eid);
 
     if (g_debug) {
       emit_indent(b, indent);
@@ -15930,11 +15927,13 @@ void emit_begin(Compiler *c, int id, Buf *b, int indent, const char *resultvar) 
                     " if (_ebn%d) memcpy(sp_bt_buf, _ebt%d, sizeof(void *) * (size_t)_ebn%d); }\n#endif\n",
                  eid, eid, eid, eid, eid);
     }
+    emit_indent(b, indent); buf_puts(b, "}\n");
     /* A non-local unwind passing through has now run this ensure: continue to the
        next handler or deliver to its target (never falls through to the
        deferred-return / re-raise propagation below). */
     emit_indent(b, indent);
     buf_puts(b, "if (sp_unwind_kind != SP_UNWIND_NONE) sp_unwind_resume();\n");
+    emit_redo_region_close(b, &self_ctx, indent);
 
     /* a deferred `next`: chain to the enclosing ensure when that region is
        still inside the loop, else run the C continue here */
@@ -16084,12 +16083,12 @@ void emit_begin(Compiler *c, int id, Buf *b, int indent, const char *resultvar) 
     /* preserve an outer unwind across a nested one completing inside the ensure */
     int uid = ++g_tmp;
     emit_indent(b, indent + 1);
-    buf_printf(b, "int _uk%d = sp_unwind_kind, _ut%d = sp_unwind_target, _ue%d = sp_unwind_exc_top; sp_proc_home *_uh%d = sp_unwind_home;\n",
-               uid, uid, uid, uid);
-    emit_stmts(c, ensure_stmts, b, indent + 1);
+    buf_printf(b, "{ sp_unwind_state _uw%d = sp_unwind_pause(); SP_GC_ROOT_RBVAL(_uw%d.value);\n", uid, uid);
+    emit_stmts(c, ensure_stmts, b, indent + 2);
+    emit_indent(b, indent + 2);
+    buf_printf(b, "sp_unwind_restore(&_uw%d);\n", uid);
     emit_indent(b, indent + 1);
-    buf_printf(b, "sp_unwind_kind = _uk%d; sp_unwind_target = _ut%d; sp_unwind_exc_top = _ue%d; sp_unwind_home = _uh%d;\n",
-               uid, uid, uid, uid);
+    buf_puts(b, "}\n");
   }
   emit_indent(b, indent + 1); buf_puts(b, "if (sp_unwind_kind != SP_UNWIND_NONE) sp_unwind_resume();\n");
   emit_indent(b, indent); buf_puts(b, "}\n");
@@ -22933,9 +22932,8 @@ static void emit_stmt_node(Compiler *c, int id, Buf *b, int indent) {
        (a `continue` there left the block as `next` does, or re-ran an
        enclosing loop instead) */
     if (g_redo_depth > 0 && subtree_owns_redo(nt, g_redo_owner[g_redo_depth - 1], id)) {
-      emit_redo_unwind(b);
-      emit_loop_latch_poll(b, " ");
-      buf_printf(b, "goto _redo_%d;\n", g_redo_stack[g_redo_depth - 1]);
+      emit_redo_transfer(b);
+      buf_puts(b, "\n");
     }
     else unsupported_feature(c, id, "redo in this block (its iterator cannot re-run the body)");
     return;

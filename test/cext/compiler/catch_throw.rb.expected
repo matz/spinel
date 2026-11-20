@@ -12,3 +12,5 @@ ensure ran
 2
 ensure ran
 :finished
+"escaped"
+:return

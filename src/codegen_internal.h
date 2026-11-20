@@ -806,7 +806,7 @@ extern int g_redo_pending;
 /* The body whose own `redo`s each label serves (subtree_owns_redo). */
 extern int g_redo_owner[64];
 int redo_label_push(int owner);
-void emit_redo_unwind(Buf *b);   /* pops what a redo leaves on its way to the label */
+void emit_redo_transfer(Buf *b);
 int subtree_owns_redo(const NodeTable *nt, int body, int redo);
 int block_of_body(Compiler *c, int body);
 int block_param_rebind_len(const NodeTable *nt, int body);
@@ -955,6 +955,7 @@ void emit_line_directive(Compiler *c, int id, Buf *b);
    g_ret_type at the store site therefore asked the wrong function whether to
    box, and a String went into an sp_RbVal slot unboxed. */
 typedef struct { int lid; int has_retval; int exc_base; TyKind retv_ty; int rescue_base; int catches;
+                 int has_redo;
                  int retv_o;   /* the frame's slot holds its nil beside the value (sp_oint) */
                  /* the return funnel a `return` written where the frame opens takes
                     (g_method_pr_label then); a deferred return that takes another one
@@ -965,6 +966,8 @@ typedef struct { int lid; int has_retval; int exc_base; TyKind retv_ty; int resc
                  int oret; const char *oret_label, *oret_var; TyKind oret_ty; int oret_exc, oret_ens; } EnsureCtx;
 extern EnsureCtx g_ensure_stack[MAX_ENSURE_DEPTH];
 extern int       g_ensure_depth;
+void emit_redo_region_open(Buf *b, int label, int indent);
+void emit_redo_region_close(Buf *b, const EnsureCtx *region, int indent);
 
 /* One entry per rescue body currently being emitted. exc_base records
    g_exc_frame_depth at that body's entry so a non-local exit can tell which

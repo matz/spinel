@@ -171,6 +171,17 @@ value, and reads their bytes for the environment after the conversions.
 The setter method returns the converted String object. The assignment
 expression retains its original value operand.
 Fiber context switches carry the active GC roots and exception state.
+Each protected region on a `redo` transfer runs its `ensure` before
+control returns to the loop or block body. The transfer leaves the
+exception and rescue frames of the regions it crosses.
+An ensure suspends a pending nonlocal transfer while its body runs.
+Normal completion resumes the saved transfer. A transfer leaving the
+ensure body replaces it.
+Each jump to a protected region drops the handler scopes it crosses.
+The remaining targets stay available while the ensure runs.
+A catch remembers the active Proc return homes at entry. A throw
+restores that chain when it lands, retiring the homes of exited methods
+while keeping homes in the enclosing calls.
 A receiver-answering iterator at method tail keeps its receiver in the
 operand view across the block and returns it through the physical result
 slot, including a String handle slot. Builtin rows identify self answers;

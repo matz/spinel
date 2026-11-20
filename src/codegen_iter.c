@@ -5158,6 +5158,7 @@ int emit_array_filter_loop(Compiler *c, int recv, int block, TyKind rt, const ch
      which the region encloses) */
   if (region) {
     emit_indent(b, indent); buf_printf(b, "int _retf%d = 0;\n", eid);
+    emit_redo_region_open(b, eid, indent);
     emit_indent(b, indent); buf_printf(b, "int _excf%d = 0;\n", eid);
     emit_indent(b, indent); buf_printf(b, "const char *_excmsg%d = NULL;\n", eid);
     emit_indent(b, indent); buf_printf(b, "const char *_exccls%d = NULL;\n", eid);
@@ -5270,7 +5271,7 @@ int emit_array_filter_loop(Compiler *c, int recv, int block, TyKind rt, const ch
              eid, eid, eid, eid);
   emit_indent(b, indent + 1); buf_puts(b, "}\n");
   emit_indent(b, indent); buf_puts(b, "}\n");
-  g_ensure_depth--;
+  EnsureCtx completed = g_ensure_stack[--g_ensure_depth];
   buf_printf(b, "_ensure%d: ;\n", eid);
   /* the ensure body: the elements from the one the block was given on are
      moved down behind the kept ones, and the length is cut */
@@ -5287,6 +5288,7 @@ int emit_array_filter_loop(Compiler *c, int recv, int block, TyKind rt, const ch
     else buf_printf(b, " if (_t%d->len > _t%d) _t%d->len = _t%d; }\n", t, tw, t, tw);
   }
   emit_indent(b, indent); buf_puts(b, "if (sp_unwind_kind != SP_UNWIND_NONE) sp_unwind_resume();\n");
+  emit_redo_region_close(b, &completed, indent);
   emit_indent(b, indent);
   if (g_ensure_depth > 0) {
     EnsureCtx *outer = &g_ensure_stack[g_ensure_depth - 1];

@@ -12,8 +12,8 @@
 #   form, or #inflate with the last chunk) gets nothing. A true streaming
 #   inflater keeps a 32K window across calls; this one keeps the input.
 # * deflate writes a block per flush: Deflate#deflate with SYNC_FLUSH or
-#   FULL_FLUSH, and Deflate#flush, answer what was written so far, ending
-#   on a byte. Each block starts with an empty window (what
+#   FULL_FLUSH, Deflate#flush and GzipWriter#flush answer what was written
+#   so far, ending on a byte. Each block starts with an empty window (what
 #   zlib calls FULL_FLUSH), so a match never reaches back past a flush.
 # * deflate emits fixed-Huffman blocks. The output is a valid stream every
 #   inflater reads, at a ratio below zlib's own, which builds a dynamic table
@@ -366,18 +366,24 @@ module Zlib
 
     def initialize(io, level = Zlib::DEFAULT_COMPRESSION)
       @io = io
-      @level = level
-      @buf = String.new
+      @deflate = Deflate.new(level, Zlib::MAX_WBITS + 16)
     end
 
     def write(str)
       s = str.to_s
-      @buf << s
+      @deflate << s
       s.bytesize
     end
 
     def <<(str)
-      @buf << str.to_s
+      @deflate << str.to_s
+      self
+    end
+
+    # Writes to the IO what was written so far, as a block that ends on a
+    # byte: a reader of the IO can inflate it before the end.
+    def flush(mode = Zlib::SYNC_FLUSH)
+      @io.write(@deflate.flush(mode)) unless mode == Zlib::NO_FLUSH
       self
     end
 
@@ -392,7 +398,7 @@ module Zlib
     end
 
     def close
-      @io.write(Zlib.raw_deflate(@buf, @level, Zlib::MAX_WBITS + 16))
+      @io.write(@deflate.finish)
       @io.close
       nil
     end

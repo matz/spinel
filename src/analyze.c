@@ -37964,7 +37964,8 @@ static int block_jumps_d(const NodeTable *nt, int id, NodeKind k, int **out, int
   if (nk == k) {
     if (*n == *cap) { *cap = *cap ? *cap * 2 : 16; int *g = realloc(*out, sizeof(int) * (size_t)*cap); if (!g) { fprintf(stderr, "spinel: out of memory\n"); exit(1); } *out = g; }
     (*out)[(*n)++] = id;
-    return 0;
+    /* An argument can leave the block before the outer jump runs. */
+    return block_jumps_d(nt, nt_ref(nt, id, "arguments"), k, out, n, cap, depth + 1);
   }
   /* A for evaluates its collection before entering the loop. A next
      there still leaves the enclosing block. */

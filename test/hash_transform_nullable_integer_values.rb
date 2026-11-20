@@ -18,3 +18,4 @@ end)
 # still supplies the optional value the collecting block expects.
 a = {1 => 1, 2 => 2}
 p a.transform_values { |v| v == 1 ? (next v) : v + 2 }
+p a.transform_values { |v| next (next nil if v == 1; v + 1) }

@@ -1831,13 +1831,6 @@ typedef struct {
   /* the operand-order record (order_plan.c): per operand list, where each
      operand is evaluated; built by the analysis phase operand_order */
   struct OrderFacts *order;
-  /* the String plan's memo (share_plan.c): per node, its need, the role of
-     its consumer, and its type when the need was asked, filled at seal under
-     --share-strings, and the node table's version then */
-  unsigned char *share_plan;
-  TyKind *share_plan_ty;
-  int share_plan_n;
-  unsigned share_plan_ver;
   /* the String plan's supply along chains of self-answering calls, per
      link, for the whole compile; an entry is reused only while the view
      epoch, the node table's version and its deciding node's answer are
@@ -1852,9 +1845,6 @@ typedef struct {
      (comp_class_may_be_value), built for the node and class counts kept */
   unsigned char *cls_value;
   int cls_value_n, cls_value_nodes;
-  /* Each node's parent at seal, for finding multiple-assignment targets. */
-  int *share_parent;
-  int share_parent_n;
   /* strbuf_bang_self_local's answers within one outermost query
      (codegen_util.c): per node, the query it was answered in and the
      answer. Its recursion over a receiver chain reaches each link by

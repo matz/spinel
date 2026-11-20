@@ -1699,9 +1699,8 @@ static void repr_check_string_slots(Compiler *c) {
 void repr_seal(Compiler *c) {
   if (g_repr_check) { repr_check_block_params(c); repr_check_string_slots(c); }
   repr_sealed_flag = 1;
-  /* the String plan (share_plan.c), from the final facts and flags, asked
-     as codegen will ask them: sealed */
-  share_plan_build(c);
+  /* Drop producer-supply answers computed before the representation was sealed. */
+  share_plan_free(c);
 }
 
 

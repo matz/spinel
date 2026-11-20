@@ -280,7 +280,6 @@ int strbuf_boxed_local(Compiler *c, int v);
 /* Is a variable holding the shared handle (or, --share-strings, a route or
    a box) one of the values conditional v can hand over (codegen_stmt.c)? */
 int strbuf_cond_has_handle_leaf(Compiler *c, int v);
-int masgn_boxed_index_keeps(Compiler *c, int t, int e);
 /* String mutator id's receiver recv as the handle it changes: 1 a slot, 2
    a route (read once, nil raising NoMethodError for id), 0 neither
    (codegen_stmt.c) */

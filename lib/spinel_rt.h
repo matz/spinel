@@ -11349,10 +11349,12 @@ const char *sp_OpenStruct_inspect(struct sp_OpenStruct_s *o);
 static const char *sp_enum_inspect_boxed(sp_RbVal v);  /* defined below, after sp_enum.h */
 const char *sp_poly_inspect(sp_RbVal v);
 /* FrozenError for a frozen user instance: "can't modify frozen <Name>: <inspect>".
-   `what` carries the class-bearing prefix ("can't modify frozen C"), rodata
-   marker-prefixed at the emit site; the receiver renders through the full
-   poly inspect (per-class ivar walk). */
+   `what` carries the class-bearing prefix ("can't modify frozen C").
+   A subclass prefix can be allocated. Keep it and the receiver live
+   while inspect renders the receiver and the exception message is built. */
 static SP_NOINLINE SP_COLD void sp_raise_frozen_obj(sp_RbVal v, const char *what) {
+  SP_GC_ROOT_RBVAL(v);
+  SP_GC_ROOT_STR(what);
   const char *ins = sp_poly_inspect(v);
   SP_GC_ROOT_STR(ins);
   const char *msg = sp_str_concat3(what, (&("\xff" ": ")[1]), ins);
@@ -20601,7 +20603,7 @@ static sp_RbVal sp_poly_replace_any(sp_RbVal recv, sp_RbVal src) {
      replace checks it (str_modifiable, rb_ary_modify_check) before
      StringValue / to_ary run */
   if ((r_str || r_arr) && sp_poly_frozen(recv))
-    sp_raise_frozen_obj(recv, r_str ? "can't modify frozen String" : "can't modify frozen Array");
+    sp_raise_frozen_obj(recv, r_str ? SPL("can't modify frozen String") : SPL("can't modify frozen Array"));
   /* a String's source converts through #to_str (StringValue) */
   if (r_str && !sp_rbval_is_string(src)) {
     const char *cs = sp_poly_check_str(src);

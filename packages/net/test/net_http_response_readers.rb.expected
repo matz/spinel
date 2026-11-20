@@ -1,0 +1,14 @@
+[["content-type", "text/plain"], ["set-cookie", "a=1, b=2"], ["x-one", "1"], ["content-length", "2"], ["connection", "close"]]
+["content-type", "set-cookie", "x-one", "content-length", "connection"]
+["content-type", "set-cookie", "x-one", "content-length", "connection"]
+["text/plain", "a=1, b=2", "1", "2", "close"]
+{"content-type" => ["text/plain"], "set-cookie" => ["a=1", "b=2"], "x-one" => ["1"], "content-length" => ["2"], "connection" => ["close"]}
+nil
+"1"
+"a=1, b=2"
+"default"
+"no x-none"
+nil
+[KeyError, "key not found: \"x-none\""]
+2
+[nil, "until the end"]

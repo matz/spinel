@@ -16083,6 +16083,14 @@ static void array_new_size_convert(Compiler *c, int size, int form, int ts, int 
 }
 
 static void emit_raise_placeholder(Compiler *c, int id, Buf *b);
+/* Whether `Cls.new(...)` on the builtin exception cn has its arguments read by the run time, as initialize
+   reads them: a splat's count is the run time's (the classes whose initialize takes arguments of its own
+   keep their arms), and so is a `**h` keyword hash of the classes that take key: and receiver: (K-061: the
+   arm that reads literal keywords recorded neither the key nor the receiver of a `**h`). */
+static int exc_new_args_at_run_time(const NodeTable *nt, const char *cn, int argc, const int *argv) {
+  return (nt_argv_has_splat(nt, argv, argc) && !exc_init_takes_own_args(cn)) ||
+         (nt_argv_has_kwsplat(nt, argv, argc) && exc_attrs_family_name(cn));
+}
 static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, int *out) {
   if (!(recv >= 0 && (is_hash_constructor(name)))) return 0;
   NodeKind rk = nt_kind(nt, recv);
@@ -16245,7 +16253,7 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       /* `.new(*a)`: how many arguments the splat gives is the run time's,
          which reads them as initialize does. The classes whose initialize
          takes arguments of its own keep their arms below. */
-      if (nt_argv_has_splat(nt, argv, argc) && !exc_init_takes_own_args(cn)) {
+      if (exc_new_args_at_run_time(nt, cn, argc, argv)) {
         emit_exc_new_runtime_args(c, id, -1, cn, argc, argv, b);
         { *out = 1; return 1; }
       }

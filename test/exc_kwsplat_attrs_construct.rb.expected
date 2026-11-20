@@ -1,0 +1,32 @@
+"a"
+:q
+3
+"b"
+:only
+"no recv"
+:lit
+:f
+9
+8
+[1]
+"r"
+:dyn
+{}
+"no key"
+:hk
+"m"
+:sub
+[1]
+"pk"
+:sub
+[1]
+"r"
+:sub
+[1]
+"empty"
+"no key"
+ArgumentError
+"unknown keyword: :foo"
+:rr
+:rr
+:rr

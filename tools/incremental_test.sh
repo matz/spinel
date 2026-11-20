@@ -65,8 +65,8 @@ t_last=$(date +%s)
 # the fields of the last --cache-stats summary in a log
 stats() {
   _line=$(grep '^spinel: cache: units=' "$1" 2>/dev/null | tail -1)
-  units=$(field units); hit=$(field hit); miss=$(field miss); rtf=$(field rt)
-  : "${units:=-1}" "${hit:=-1}" "${miss:=-1}" "${rtf:=-}"
+  units=$(field units); hit=$(field hit); miss=$(field miss); rtf=$(field rt); tagf=$(field tagged)
+  : "${units:=-1}" "${hit:=-1}" "${miss:=-1}" "${rtf:=-}" "${tagf:=-}"
 }
 field() { printf '%s\n' "$_line" | tr ' ' '\n' | sed -n "s/^$1=//p"; }
 # every binary is linked as $T/o_NAME/prog and then moved to $T/NAME: the
@@ -207,28 +207,36 @@ p8=$!
 # reported once both are done.
 edit_warm() {  # edit_warm EDIT: the warm build, its counts kept for the report
   cp "$T/$1.rb" "$P"
+  wptag=${tagf#*/}   # (the tagged units of the build this one is warm from)
   ib "w_$1" "$P"
-  wrc=$rc; wmiss=$miss; wunits=$units; wrt=$rtf
+  wrc=$rc; wmiss=$miss; wunits=$units; wrt=$rtf; wtag=${tagf#*/}
 }
 edit_scratch() {  # edit_scratch EDIT: the from-scratch build, in the background
   mkdir -p "$T/s6/$1"
   cp "$T/$1.rb" "$T/s6/$1/prog.rb"
   ( SPINEL_NO_CACHE=1; export SPINEL_NO_CACHE; ib "s_$1" "$T/s6/$1/prog.rb"; exit $rc ) &
   ps6=$!
-  ewrc=$wrc; ewmiss=$wmiss; ewunits=$wunits; ewrt=$wrt
+  ewrc=$wrc; ewmiss=$wmiss; ewunits=$wunits; ewrt=$wrt; ewtag=$wtag; ewptag=$wptag
 }
 # edit_report EDIT BOUND WHAT: bound is the most units the edit may miss
 # (-1: no bound, but the runtime units must all hit); every edit must miss
-# at least one, or it never reached the C
+# at least one, or it never reached the C. The bound holds while the edit
+# leaves the count of tagged units as it was: that count is the program's
+# size over the unit size (cs_assign_units), and an edit that takes the
+# size over a multiple of it gives every class a bucket anew, so every
+# tagged unit misses. Such an edit is held to the runtime units alone,
+# and its line says the count moved.
 edit_report() {
   v=$1; bound=$2; what=$3
+  moved_n=""
+  if [ "$bound" -ge 0 ] && [ "$ewtag" != "$ewptag" ]; then bound=-1; moved_n=", tagged units $ewptag -> $ewtag"; fi
   wait $ps6; src=$?
   o=0
   if [ $ewrc = 0 ] && [ $src = 0 ] && cmp -s "$T/w_$v" "$T/s_$v" && [ "$ewmiss" -ge 1 ]; then
     if [ "$bound" -ge 0 ]; then [ "$ewmiss" -le "$bound" ] && o=1
     else r1=${ewrt%/*}; r2=${ewrt#*/}; [ "$r1" = "$r2" ] && [ "$r2" -gt 0 ] && o=1; fi
   fi
-  lim="limit $bound"; [ "$bound" -ge 0 ] || lim="rt=$ewrt must be all hits"
+  lim="limit $bound"; [ "$bound" -ge 0 ] || lim="rt=$ewrt must be all hits$moved_n"
   report "6 edit $v ($what)" $o "rc=$ewrc/$src miss=$ewmiss of $ewunits ($lim) cmp-scratch=$(same "$T/w_$v" "$T/s_$v")"
   [ $ewrc = 0 ] || { rc=$ewrc; tail_of "w_$v"; }
   [ $src = 0 ] || { rc=$src; tail_of "s_$v"; }

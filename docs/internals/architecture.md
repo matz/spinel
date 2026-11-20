@@ -176,6 +176,9 @@ Normal completion resumes the saved transfer. A transfer leaving the
 ensure body replaces it.
 Each jump to a protected region drops the handler scopes it crosses.
 The remaining targets stay available while the ensure runs.
+A catch remembers the active Proc return homes at entry. A throw
+restores that chain when it lands, retiring the homes of exited methods
+while keeping homes in the enclosing calls.
 A receiver-answering iterator at method tail keeps its receiver in the
 operand view across the block and returns it through the physical result
 slot, including a String handle slot. Builtin rows identify self answers;

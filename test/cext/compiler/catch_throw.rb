@@ -24,6 +24,13 @@ class CatchCounter
   end
 end
 
+class CatchHomeStepper
+  def step(_tag)
+    $saved_cext_return = proc { return "expired" }
+    throw :cext_jump, +"escaped"
+  end
+end
+
 p CextCatch.run(CatchStepper.new(:return))
 p CextCatch.run(CatchStepper.new(:throw))
 begin
@@ -46,3 +53,10 @@ p CextCatch.first_two(CatchCounter.new)
 p CextCatch.first_above([1, 5, 9], 4)
 p CextCatch.first_above(CatchCounter.new, 1)
 p CextCatch.first_above(CatchCounter.new, 7)
+p CextCatch.run(CatchHomeStepper.new)
+GC.start
+begin
+  $saved_cext_return.call
+rescue LocalJumpError => error
+  p error.reason
+end

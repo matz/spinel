@@ -1383,6 +1383,9 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
       int cic = g_uses_ensure ? ++g_tmp : 0;
       /* ...and the handler stack, which such a body pushed it on as $! */
       if (cic) { emit_indent(g_pre, g_indent); buf_printf(g_pre, "void *_cic%d = sp_inflight_cause; int _cicr%d = sp_rescue_sp;\n", cic, cic); }
+      /* A throw can leave a method with a Proc return home at this same
+         exception depth. Restore the chain that was live at catch entry. */
+      emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_proc_home *_cph%d = sp_proc_ret_head;\n", t);
       emit_indent(g_pre, g_indent);
       buf_puts(g_pre, "if (setjmp(sp_catch_stack[sp_catch_top-1]) == 0) {\n");
       /* a bare break in a catch body keeps today's C-break behavior */
@@ -1424,6 +1427,7 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
       emit_indent(g_pre, g_indent); buf_puts(g_pre, "else {\n");
       emit_indent(g_pre, g_indent + 1); buf_puts(g_pre, "sp_catch_top--;\n");
       emit_indent(g_pre, g_indent + 1); buf_puts(g_pre, "sp_gc_nroots = sp_catch_rootmark[sp_catch_top];\n");
+      emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "sp_proc_ret_head = _cph%d;\n", t);
       if (cic) { emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "sp_inflight_cause = _cic%d; sp_rescue_sp = _cicr%d;\n", cic, cic); }
       emit_indent(g_pre, g_indent + 1);
       /* a kind with an unbox of its own reads through it (emit_unbox_text): a

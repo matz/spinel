@@ -23,7 +23,8 @@ src/codegen_call.c:rto_exc_by_cls
 src/codegen_call.c:respond_to_user_defined
 src/codegen_call.c:emit_responds_name
 src/codegen_call.c:any_class_responds
-src/codegen_call.c:class_responds_to
+src/codegen_call.c:class_value_arms
+src/codegen_call.c:emit_class_cells_answer
 src/codegen_call.c:class_value_responds
 src/codegen_call.c:private_answer_overridden
 src/codegen_call.c:bool_side_responds

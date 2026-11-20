@@ -21,6 +21,7 @@
 #include <stdlib.h>
 #include <stdarg.h>   /* sp_sprintf */
 #include <unistd.h>
+#include <pwd.h>     /* getpwnam for File.expand_path("~user") */
 #include "sp_alloc.h"   /* sp_str_alloc / sp_str_set_len / sp_raise_cls */
 #include "sp_array.h"   /* sp_StrArray for Dir.glob */
 #include "sp_hash.h"    /* sp_StrIntHash for Dir.glob(sort: false) */
@@ -260,6 +261,28 @@ int sp_fmt_binary_big(const char *spec, size_t sl, char conv, const char *mag,
   return o;
 }
 
+/* "~name" at the start of p: the home of that user from the passwd database,
+   as CRuby expands it, with *rest at the path after the name; ArgumentError
+   for a user it has not. NULL when p is not of that form ("~", "~/x", a
+   name with no tilde). Windows has no passwd database: NULL there. */
+static const char *sp_file_tilde_home(const char *p, const char **rest) {
+#if defined(_WIN32)
+  (void)p; (void)rest;
+  return NULL;
+#else
+  if (p[0] != '~' || p[1] == '\0' || p[1] == '/') return NULL;
+  size_t n = strcspn(p + 1, "/");
+  char user[256];
+  size_t m = n < sizeof user ? n : sizeof user - 1;
+  memcpy(user, p + 1, m);
+  user[m] = 0;
+  struct passwd *pw = getpwnam(user);
+  if (!pw) sp_raise_cls("ArgumentError", sp_sprintf("user %s doesn't exist", user));
+  *rest = p + 1 + n;
+  return pw->pw_dir;
+#endif
+}
+
 /* File.expand_path(path[, base]): absolute, `.`/`..`/`//`-normalized path.
    Depends only on sp_alloc.h + libc; no program-generated symbols. */
 const char *sp_file_expand_path(const char *path, const char *base) {
@@ -283,7 +306,11 @@ const char *sp_file_expand_path(const char *path, const char *base) {
      silences -Wformat-truncation (an error under the test harness's
      -Werror). 4000 chars/component is well past PATH_MAX, so real paths
      never truncate. */
-  if (path[0] == '~' && (path[1] == '\0' || path[1] == '/')) {
+  const char *urest, *uhome = sp_file_tilde_home(path, &urest);
+  if (uhome) {   /* ~user */
+    snprintf(raw, sizeof(raw), "%.4000s%.4000s", uhome, urest);
+  }
+  else if (path[0] == '~' && (path[1] == '\0' || path[1] == '/')) {
     snprintf(raw, sizeof(raw), "%.4000s%.4000s", home, path + 1);
   }
 #if defined(_WIN32)
@@ -297,7 +324,12 @@ const char *sp_file_expand_path(const char *path, const char *base) {
     char basebuf[8192];
     const char *b;
     if (base && base[0]) {
-      if (base[0] == '~' && (base[1] == '\0' || base[1] == '/')) {
+      const char *brest, *bhome = sp_file_tilde_home(base, &brest);
+      if (bhome) {   /* ~user */
+        snprintf(basebuf, sizeof(basebuf), "%.4000s%.4000s", bhome, brest);
+        b = basebuf;
+      }
+      else if (base[0] == '~' && (base[1] == '\0' || base[1] == '/')) {
         snprintf(basebuf, sizeof(basebuf), "%.4000s%.4000s", home, base + 1);
         b = basebuf;
       }
@@ -2350,7 +2382,6 @@ sp_StrArray *sp_bt_format(void **buf, int n) {
 
 #include <fcntl.h>
 #include <sys/file.h>
-#include <pwd.h>
 #include "sp_sched.h"   /* sp_native_enter / sp_native_leave for a waiting flock */
 #include <sys/wait.h>
 

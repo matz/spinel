@@ -23,10 +23,12 @@ def noise(n, seed)
 end
 
 # The deflate data of a stream: the bytes after the zlib or gzip header.
+# (By bytes: a StringIO's string is UTF-8, and the gzip mtime can read as
+# a character.)
 def body_of(stream, framing)
   return stream if framing == "raw"
   skip = framing == "gzip" ? 10 : 2
-  stream[skip, stream.bytesize - skip]
+  stream.byteslice(skip, stream.bytesize - skip)
 end
 
 def inflater(framing)
@@ -75,7 +77,7 @@ end
 # A flush with nothing new: the first writes the header and an empty
 # block; a SYNC_FLUSH after a flush is a BufError, as zlib answers; a
 # FULL_FLUSH writes the empty stored block (00 00 00 ff ff). After finish,
-# a flush or a deflate is a StreamError.
+# new input is refused, as is a flush.
 def attempt(stream, label)
   out = yield
   stream << out
@@ -97,10 +99,27 @@ puts "then SYNC_FLUSH answers #{out.bytesize > 0}; the stream inflates to #{Zlib
 attempt(stream, "flush after finish") { d.flush }
 attempt(stream, "deflate after finish") { d.deflate("x") }
 
+# Past finish, new input is refused: a BufError at FINISH, a StreamError
+# otherwise. Each case on a stream of its own.
+def finished_deflate
+  d = Zlib::Deflate.new
+  d.finish
+  d
+end
+
+[nil, "", "x"].each do |s|
+  [["FINISH", Zlib::FINISH], ["FULL_FLUSH", Zlib::FULL_FLUSH], ["SYNC_FLUSH", Zlib::SYNC_FLUSH],
+   ["NO_FLUSH", Zlib::NO_FLUSH]].each do |name, mode|
+    attempt(String.new, "after finish, deflate(#{s.inspect}, #{name})") { finished_deflate.deflate(s, mode) }
+  end
+end
+attempt(String.new, "after finish, << \"\"") { finished_deflate << ""; String.new }
+attempt(String.new, "after finish, << \"x\"") { finished_deflate << "x"; String.new }
+
 # Never flushed: finish writes the stream Zlib.deflate writes.
 d = Zlib::Deflate.new
 d << text
-puts "never flushed is Zlib.deflate: #{d.finish == Zlib.deflate(text)}"
+puts "never flushed is Zlib.deflate: #{d.finish == Zlib.deflate(text)} total_in #{d.total_in == text.bytesize}"
 
 io = StringIO.new
 gz = Zlib::GzipWriter.new(io)
@@ -116,5 +135,22 @@ prefixes = []
   prefixes << (Zlib::Inflate.new(-Zlib::MAX_WBITS).inflate(closed) == sent)
 end
 gz.close
+# GzipWriter#flush flushes the IO too, in every mode.
+class CountingIO < StringIO
+  def flushes = @flushes || 0
+
+  def flush
+    @flushes = flushes + 1
+    self
+  end
+end
+
+counted = CountingIO.new
+gz2 = Zlib::GzipWriter.new(counted)
+gz2.write("a")
+gz2.flush
+gz2.flush(Zlib::NO_FLUSH)
+puts "GzipWriter#flush flushes the IO: #{counted.flushes}"
+
 puts "GzipWriter#flush: grows #{sizes.each_cons(2).all? { |a, b| b > a } && sizes[0] > 10} prefixes #{prefixes.inspect} " \
      "round trip #{Zlib.gunzip(io.string) == sent}"

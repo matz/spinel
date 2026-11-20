@@ -186,14 +186,16 @@ module Zlib
     end
 
     def <<(str)
-      @buf << str.to_s
+      s = str.to_s
+      raise StreamError, "stream error" if @finished && !s.empty?
+      @buf << s
       self
     end
 
     # What this call wrote: nothing for NO_FLUSH, the input so far as a block
     # for SYNC_FLUSH and FULL_FLUSH, the end of the stream for FINISH.
     def deflate(str = nil, mode = Zlib::NO_FLUSH)
-      raise StreamError, "stream error" if @finished && mode != Zlib::FINISH
+      return after_finish(str, mode) if @finished
       @buf << str.to_s unless str.nil?
       flush(mode)
     end
@@ -217,8 +219,10 @@ module Zlib
       return String.new if @finished
       @finished = true
       unless @started
-        @total_in = @buf.bytesize
-        return Zlib.raw_deflate(@buf, @level, @window_bits)
+        data = @buf
+        @buf = String.new
+        @total_in = data.bytesize
+        return Zlib.raw_deflate(data, @level, @window_bits)
       end
       out = block(1)
       out << trailer
@@ -243,6 +247,17 @@ module Zlib
     end
 
     private
+
+    # Past finish, zlib takes no more input: a BufError at FINISH, a
+    # StreamError otherwise. With no input only a flush is refused, and
+    # with none given at all nothing is.
+    def after_finish(str, mode)
+      return String.new if str.nil?
+      s = str.to_s
+      raise BufError, "buffer error" if mode == Zlib::FINISH && !s.empty?
+      raise StreamError, "stream error" unless s.empty? && (mode == Zlib::NO_FLUSH || mode == Zlib::FINISH)
+      String.new
+    end
 
     # The input since the last flush as one block, BFINAL set when final
     # is 1; the checksum moves on over it.
@@ -384,6 +399,7 @@ module Zlib
     # byte: a reader of the IO can inflate it before the end.
     def flush(mode = Zlib::SYNC_FLUSH)
       @io.write(@deflate.flush(mode)) unless mode == Zlib::NO_FLUSH
+      @io.flush if @io.respond_to?(:flush)
       self
     end
 

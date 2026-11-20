@@ -54,6 +54,10 @@ Comparing Struct or Data members can allocate boxes for by-value fields
 other member and until the comparison returns. Rooting the containing
 Struct or Data alone does not retain those separate boxes.
 
+A frozen-object error keeps both the receiver and its message prefix
+rooted while inspecting the receiver. The prefix can be allocated when
+the object's class is determined at runtime.
+
 Beyond the root array the mark walk consults three hook groups, in this order:
 
 1. **fibers** -- `sp_gc_mark_suspended_fibers_hook`: the saved root stacks of

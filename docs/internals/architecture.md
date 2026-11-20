@@ -70,7 +70,9 @@ uses the same handle as the expression that supplied it.
 An ordered operand keeps its saved handle until its argument binding is
 removed. An abandoned emission also removes the corresponding binding.
 Boxed callable dispatch holds the receiver and arguments before it
-binds the block operand. Proc invocation carries the captured block and
+binds the block operand. For safe navigation, the argument statements
+and explicit block expression run only after the held receiver passes
+the nil guard. Proc invocation carries the captured block and
 the keyword marker through the same call as the argument vector. A boxed
 curried Proc forwards the block of the call that completes its arguments.
 An Enumerable fallback in boxed dispatch uses the same staged block as

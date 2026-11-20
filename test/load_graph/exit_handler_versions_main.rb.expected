@@ -1,0 +1,13 @@
+load A: baz false false
+load B: baz false false
+load C: baz false false
+load D: baz false false
+load E: baz false false
+e_last_registered E: new true true
+e_first_registered E: new true true
+d_outer D: baz false false
+d_after_def D: new true true
+d_inner D: new true true
+c_end C: new true true
+b_first B: baz false false
+a_second A: new true true

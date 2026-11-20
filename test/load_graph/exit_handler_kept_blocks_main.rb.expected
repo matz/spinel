@@ -1,0 +1,2 @@
+[:load, [1, "baz"], "baz", [[1, "baz"]], "baz", "baz", "baz"]
+[:last, [2, "new"], "new", [[1, "new"]], "new", "new", "new"]

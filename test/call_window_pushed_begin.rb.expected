@@ -1,0 +1,7 @@
+before ["baz", 0, "baz", "baz", "baz", "baz"]
+before ["baz"]
+none ["baz", 0, "baz", "baz", "baz", "NoMethodError"]
+after ["new", 0, "new", "new", "new", "new"]
+after ["new"]
+exit ["exit", 0, "exit", "exit", "exit", "exit"]
+exit ["exit"]

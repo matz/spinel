@@ -1,0 +1,8 @@
+NoMethodError
+NoMethodError
+false
+proc_load baz false NoMethodError
+cm_load NoMethodError false
+cm_exit cm true
+proc_exit new true nw
+reg k

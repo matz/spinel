@@ -150,7 +150,7 @@ The record holds, for each:
   and is where exit handlers start (an `at_exit` call only where no method
   of the program's may take the name, `lr_named`, as one may run the block
   at once) and where `lr_rta` seeds the
-  `--ext-entry` methods. A region's `from` is the statement its load may
+  `--ext-entry` methods (see "The post-load phase" below). A region's `from` is the statement its load may
   first run on (`rentry`); a node of a body that has no point of its own
   starts no earlier than the body around it. A lambda or proc starts at the
   first statement one of the calls that invoke it may run on, where the
@@ -202,6 +202,69 @@ The record holds, for each:
 - `kept`: it runs at a time the syntax does not tell (a block whose call
   keeps it or the record does not know, a lambda, a handler).
 
+#### The post-load phase
+
+The exit handlers (`at_exit` blocks, `END`) run after the last statement of
+the load. `lr_rta` does not scan a handler's body where the handler is
+registered: its nodes are a unit of their own (`lr_handler_body`), queued
+where the registering call is scanned (`lr_rta_handler`, also from a
+method the load reaches, or from another handler), and scanned once the
+load statements are done, in a post pass with the `--ext-entry` methods.
+That pass reaches again what the handlers call, from the end of the load:
+a method no load statement reached starts at `LR_POST`, and one the load
+reached too keeps its `from`. A handler registered by a handler, or by an
+`--ext-entry` method, is queued as it is scanned. A method that a handler registered
+during the load calls does not run from the registering call.
+
+The pass does not order the handlers against each other (CRuby runs them
+last-registered first, an `END` on the same stack, a handler registered by
+a handler after the one that registered it, and the statements of one
+handler in order).
+
+Whether code may run after the load is one fact of the record
+(`LoadRecord.post`, set in `lr_rta`): the program has an exit handler, an
+`at_exit` call or an `END` anywhere, reached or not, or is built with
+`--ext-entry`. The record does not follow every path to a body a handler
+runs (a closure kept in a global, an ivar or a table, a handler given by
+`&`, a Method's `call`, a method a closure calls), so it cannot prove that
+any body is done with the load, and where `post` holds every call in a
+body, a block or a lambda has `ElabWindow.post`. A call in a load statement
+does not, unless it stands in a block the record keeps to run at a time the
+syntax does not tell (`LrExt.kept`) and gives a point of its own (a Hash's
+default block, a lazy chain's block: the dump shows a point for them, though
+the block may run after any later statement and from a handler; an
+Enumerator's, a `proc` and a `define_method` body have none and are
+answered by their window). That holds with no handler too: it is
+`elab_in_record_kept_block`, in any program, and the call plan asks such a
+call's versions as it does for a block that runs later (`ct_meet_how`,
+`ct_version_at`) instead of answering from its point alone, so a def made
+after the block and before it runs is met. Only a block a builtin may keep
+counts (`LrExt.kept` with a call answer of "later" or "not known"): the block
+of a call the record takes to run it at once by its name or its receiver (an
+iterator over a local, `tap`, `then`: `ELAB_BLK_ASSUMED`, a lazy chain's
+name among them) and one given to a method of the program's (`try { }`, which
+may yield at once as well as keep it) keep the answer of their point, as does a
+block the record proves runs at once. Even a kept block keeps its point's
+answer where its window holds a def of the top-level statement the call stands
+in, or cannot tell (`ELAB_MEET_RECORD` in `elab_call_meet`): a class body
+applies its defs as the statement starts, so a cell would already hold the last
+of them, and a block that runs during the statement (a Hash default block
+called there) meets the version at its point. (Only
+the answers that cannot change during the load, `name`, `to_s` and `inspect`
+(`is_name_reader`), are given a class body's `self` as their receiver in a
+block of its body. `ancestors`, `include?`, `is_a?` after an `extend`, and the
+method-table readers (`instance_methods`, `method_defined?`, `instance_method`)
+answer from the point the block runs at, which the plan does not place yet for
+a def or an include made later, so a bare one in a block stays refused.) A call with
+`ElabWindow.post` has a window that holds the versions bodies make that
+first run after the load, so a
+version a handler makes is one more version in the window, and a call
+that may meet it and another reads the version cell, which holds the one
+the run made last: the cell follows the order the run takes, so the
+answers follow CRuby's handler order without the record knowing it. A
+call in the load, whose window ends with the load, never meets such a
+version.
+
 A block's entry also holds the record's reading of its call
 (`elab_block_runs`) and whether it runs where its call does, read again
 at each ask. `elab_runs_later`, `elab_in_unplaced_block` and
@@ -245,17 +308,13 @@ cannot follow, and a public def of a barred name keeps the same form:
 `private :m` after `def m` in a class body in a Proc, a `private def m` in
 one class method and a `def m` in another, a top-level `private :m`, a
 `define_singleton_method` of the name, or a `private :m` in another
-class's body. Nor does the plan answer a version of a body that first runs
-only once the load is over (`from` is `post`, `lr_body_post`: an exit
-handler, a block or closure only exit handlers run, an `--ext-entry`
-method): a call's window ends with the load, so a call in an exit handler
-would take it for one that never ran. As the extents are made, every
-body's version of a history that holds such a one takes the unplaced form,
-applied from the start (`lr_post_unplace`), until windows run past the
-load. A method only exit handlers call is no such body: `lr_rta` starts it
-at the statement that registers the handler, so its version is not known
-after that statement and a call there reads its cell. Any other version's
-order against a point (`lr_version_order`) is its body's extent's:
+class's body. A version of a body that first runs once the load is over (`from` is
+`post`: an exit handler, a block or closure only exit handlers run, an
+`--ext-entry` method, a method only exit handlers call) is after every
+point of the load, and a window with `post` holds it, so a call in an exit
+handler or in a method one runs reads the cell. A version of a
+body the load runs has its order against a point (`lr_version_order`) from
+its body's extent:
 
 - after the point where the point comes before `from` and `from` does not
   run again before it, and after every point for a body that never runs;

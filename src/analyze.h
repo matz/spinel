@@ -280,10 +280,10 @@ typedef struct {
                            (a def, a lambda, a block, an exit handler); such
                            a version has no load point but an extent, from
                            the first statement that body may run on, any
-                           number of times (lr_version_order); 0 for one at
-                           a point, and for one of a body that first runs
-                           only once the load is over, which is kept
-                           unplaced (lr_post_unplace) */
+                           number of times (lr_version_order), after every
+                           point of the load for a body that first runs
+                           once it is over (ElabWindow.post); 0 for one at
+                           a point */
   int scope;            /* a def's or a define_method's: the method scope
                            the scope walk made of it (its Scope index; 0,
                            the program's top level, for none); a
@@ -670,8 +670,11 @@ int elab_version_on_singleton(Compiler *c, int cls, const char *name, int node);
    reaches it, and no --ext-entry lets a host call in after the load), so
    the call runs at no statement at all; from and to then hold its
    region's last statement only to stay a window, and prove nothing about
-   which version the call meets. */
-typedef struct { LoadPoint from, to; unsigned char closed, wraps, never; } ElabWindow;
+   which version the call meets. post: the call may also run in the
+   post-load phase, once the load is over (an exit handler's body, or one
+   a handler runs: LoadRecord.post), so the window reaches past `to` into the
+   versions bodies make there (an exit handler's, a method only one calls). */
+typedef struct { LoadPoint from, to; unsigned char closed, wraps, never, post; } ElabWindow;
 int elab_call_window(Compiler *c, int id, ElabWindow *w);
 /* is the def (a DefNode) made before call id can first run, in the order the load phase runs, so that every run of the call
    finds it? 0 where the record cannot say (a call in a closure that may run ahead of it, a def under a condition's window) */
@@ -708,6 +711,12 @@ int elab_in_kept_block(Compiler *c, int id);
    (elab_block_runs: a lazy chain's) or in an END body: it may run any time
    after its point too */
 int elab_runs_later(Compiler *c, int id);
+/* Does call id, which has a point of its own, stand in a block the record keeps
+   to run at a time the syntax does not tell (LrExt.kept: a Hash's default
+   block, one a builtin or a method of the program's may keep)? It may run after
+   any later statement of the load and from an exit handler, so its versions are
+   asked over its window, not at its point (ct_meet_how). */
+int elab_in_record_kept_block(Compiler *c, int id);
 /* ...and whether node id is in a block whose run time the record does not
    place for certain (elab_block_runs: any answer but ELAB_BLK_NOW, a
    block kept, assumed to run now, given to a call the record cannot read,
@@ -744,7 +753,12 @@ int elab_instance_span(Compiler *c, int cls, const char *name, const LrDef **out
    the call in a mixin's copy of the body holding it: at no point, in the
    window elab_call_window answers for the copy's call. */
 typedef struct { int at, win, n; const LrDef *d; ElabWindow w; } ElabMeet;
-enum { ELAB_MEET_COPY = 2 };
+enum { ELAB_MEET_COPY = 2, ELAB_MEET_RECORD = 4 };
+/* ELAB_MEET_RECORD (with 1): the call runs after its point only because the
+   record keeps the block around it (elab_in_record_kept_block), not because
+   the plan proves it runs later: where the window gives no answer (the span
+   cannot tell: the chain may move in it), the version live at the point is
+   the answer, as it was before the window was asked. */
 void elab_call_meet(Compiler *c, int id, int cls, const char *name, int sg, int how, ElabMeet *m, const LrDef **out, int cap);
 /* ...and its window half, which needs no point: the versions of cls's
    `name` (singleton when sg) call id may meet over its window

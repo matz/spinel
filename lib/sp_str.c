@@ -161,6 +161,13 @@ static int sp_str_cat_binary(const char *a, const char *b) {
   if (sp_str_ascii_only(a)) return bb;
   return 1;
 }
+/* The result r of a substitution of rep into s: binary as s + rep is, since
+   CRuby gives a substitution the encoding its receiver and replacement
+   share (sp_re_gsub, sp_str_gsub and their kin). */
+char *sp_str_bin_cat_like(const char *s, const char *rep, char *r) {
+  if (sp_str_cat_binary(s, rep)) sp_str_mark_binary(r);
+  return r;
+}
 /* The same rule folded over a run of parts: `bin` is the encoding of the
    `pl` bytes of r already joined, s the next part. The prefix is scanned only
    when the two encodings differ. */

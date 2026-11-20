@@ -150,6 +150,7 @@ int sp_str_splice_encoding(const char *s, const char *val);
 int sp_str_bytesplice_check(const char*s,sp_int*start,sp_int*len,const char*val,sp_int*vstart,sp_int*vlen);
 int sp_str_ascii_only(const char*s);
 int sp_str_enc_step(int state, const char *acc, size_t acc_len, const char *part, size_t part_len, int part_bin);
+char *sp_str_bin_cat_like(const char *s, const char *rep, char *r);   /* a substitution's result, as s + rep */
 /* the common step inline: a part in the encoding so far keeps it */
 static inline int sp_str_enc_step_i(int state, const char *acc, size_t acc_len, const char *part, size_t part_len, int part_bin) {
   if (state == part_bin) return state;

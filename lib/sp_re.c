@@ -847,7 +847,7 @@ else {
   char *res = sp_str_alloc(olen);
   memcpy(res, out, olen);
   free(out);
-  return sp_str_bin_like(str, res);
+  return sp_str_bin_cat_like(str, rep, res);
 }
 const char *sp_re_sub(mrb_regexp_pattern *pat, const char *str, const char *rep) {SP_GC_ROOT_STR(str);SP_GC_ROOT_STR(rep);if(!str)sp_nil_recv("sub");
   sp_re_check_subject(str);
@@ -872,7 +872,7 @@ const char *sp_re_sub(mrb_regexp_pattern *pat, const char *str, const char *rep)
   char *res = sp_str_alloc(olen);
   memcpy(res, out, olen);
   free(out);
-  return sp_str_bin_like(str, res);
+  return sp_str_bin_cat_like(str, rep, res);
 }
 sp_StrArray *sp_re_scan(mrb_regexp_pattern *pat, const char *str) {
   sp_re_check_subject(str);

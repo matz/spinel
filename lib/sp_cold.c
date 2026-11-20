@@ -5842,6 +5842,7 @@ const char *sp_str_sub_str_str_hash(const char *str, const char *pat, sp_StrStrH
   memcpy(out, str, before);
   memcpy(out + before, rep, rlen);
   memcpy(out + before + rlen, found + plen, rest);
+  sp_str_bin_cat_like(str, rep, out);
   out[total] = 0;
   sp_str_set_len(out, total);
   return out;
@@ -5886,7 +5887,7 @@ const char *sp_str_gsub_str_str_hash(const char *str, const char *pat, sp_StrStr
   out[o] = 0;
   sp_str_set_len(out, o);
   if (sp_re_track_last) sp_re_set_lit_match(str, (sp_int)last, (sp_int)(last + plen));
-  return out;
+  return sp_str_bin_cat_like(str, rep, out);
 }
 /* Array#sum with a String initial value: concatenation fold ("abc" from
    ["a","b","c"].sum("")), CRuby's + on each element. */
@@ -6522,6 +6523,7 @@ static const char *re_gsub_hash(mrb_regexp_pattern *pat, const char *str, sp_Str
      the stack: the malloc was one of the two a page render made per escape */
   char out_sb[512];
   size_t cap = (slen * 2) + 64; char *out = cap <= sizeof out_sb ? out_sb : (char *)malloc(cap); size_t olen = 0;
+  int st = sp_str_is_binary(str) ? 1 : 0;   /* the encoding so far, by the rule of String#+ (sp_str_enc_step) */
   int64_t pos = 0; int caps[64];
   int lastcaps[64], lastn = 0;   /* the last match, for `$~` */
   #define GSH_GROW(need) do { size_t _nc = (need); \
@@ -6554,6 +6556,7 @@ static const char *re_gsub_hash(mrb_regexp_pattern *pat, const char *str, sp_Str
     size_t rlen = sp_str_byte_len(rep);
     if (olen + before + rlen >= cap) GSH_GROW(((olen + before + rlen) * 2) + 64);
     memcpy(out + olen, str + pos, before); olen += before;
+    if (st != 1) st = sp_str_enc_step(st, out, olen, rep, rlen, sp_str_is_binary(rep));
     memcpy(out + olen, rep, rlen); olen += rlen;
     if (kbuf != keybuf) free(kbuf);
     if (caps[0] == caps[1]) {
@@ -6579,7 +6582,8 @@ else {
   char *res = sp_str_alloc(olen);
   memcpy(res, out, olen);
   if (out != out_sb) free(out);
-  return sp_str_bin_like(str, res);   /* in the subject's encoding, as sp_re_gsub's */
+  if (st == 1) sp_str_mark_binary(res);   /* the receiver's encoding, or the one its replacements took it to */
+  return res;
 }
 const char *sp_re_gsub_str_str_hash(mrb_regexp_pattern *pat, const char *str, sp_StrStrHash *h) {
   return re_gsub_hash(pat, str, h, NULL);
@@ -6622,7 +6626,7 @@ static const char *re_sub_hash(mrb_regexp_pattern *pat, const char *str, sp_StrS
   out[total] = 0;
   sp_str_set_len(out, total);
   if (kbuf != keybuf) free(kbuf);
-  return sp_str_bin_like(str, out);   /* in the subject's encoding, as sp_re_sub's */
+  return sp_str_bin_cat_like(str, rep, out);   /* as the receiver + the replacement, as sp_re_sub's */
 }
 const char *sp_re_sub_str_str_hash(mrb_regexp_pattern *pat, const char *str, sp_StrStrHash *h) {
   return re_sub_hash(pat, str, h, NULL);

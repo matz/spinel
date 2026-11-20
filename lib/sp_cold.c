@@ -505,6 +505,7 @@ sp_Complex sp_str_to_c_strict(const char *s) { return sp_str_to_c_impl(s, 1); }
 /* FNM_DOTMATCH mode for the walk below: hidden entries (and ".") match a
    non-dot pattern; ".." never does, as CRuby's glob. Set by the _dot wrapper. */
 static int sp_glob_dotmatch = 0;
+static int sp_glob_flags = 0;   /* FNM_CASEFOLD and FNM_NOESCAPE of the running glob */
 /* A glob walk holds open directories and brace buffers (as File.fnmatch's
    FNM_EXTGLOB holds the latter), so the matcher's ArgumentError waits until
    they are let go: under sp_glob_defer
@@ -690,10 +691,13 @@ static int sp_fnm_match(const char *p, const char *s, int flags) {
    leading dot is hidden unless the pattern asks for one or the glob runs
    under FNM_DOTMATCH, which is CRuby's rule. */
 static int sp_glob_comp_match(const char *comp, const char *name) {
-  return sp_fnm_match(comp, name, sp_glob_dotmatch ? SP_FNM_DOTMATCH : 0);
+  return sp_fnm_match(comp, name, (sp_glob_dotmatch ? SP_FNM_DOTMATCH : 0) | (sp_glob_flags & (SP_FNM_CASEFOLD | SP_FNM_NOESCAPE)));
 }
 
+/* Under FNM_CASEFOLD a literal component matches a name by case too, so it
+   is read from the directory like a pattern. */
 static int sp_glob_has_meta(const char *comp) {
+  if (sp_glob_flags & SP_FNM_CASEFOLD) return 1;
   for (const char *p = comp; *p; p++)
     if (*p == '*' || *p == '?' || *p == '[') return 1;
   return 0;
@@ -835,6 +839,7 @@ static void sp_glob_finish(void) {
   if (!sp_glob_bad) return;
   sp_glob_bad = 0;
   sp_glob_dotmatch = 0;
+  sp_glob_flags = 0;
   sp_raise_cls("ArgumentError", (&("\xff" "invalid byte sequence in UTF-8")[1]));
 }
 
@@ -1021,14 +1026,17 @@ sp_StrArray *sp_dir_glob_base(const char *pattern, const char *base) {
 }
 
 const char *sp_poly_inspect(sp_RbVal v);   /* lib/sp_poly_cold.c */
-/* Dir.glob's keyword options reuse the walk; sort: false keeps the walk's
-   order, which the filesystem gives. */
-sp_StrArray *sp_dir_glob_options(const char *pattern, const char *base, sp_bool dotmatch, sp_RbVal sort) {
+/* Dir.glob's flags and keyword options reuse the walk: FNM_DOTMATCH,
+   FNM_CASEFOLD and FNM_NOESCAPE reach the matcher of each component (the
+   others change nothing in a glob, as in CRuby); sort: false keeps the
+   walk's order, which the filesystem gives. */
+sp_StrArray *sp_dir_glob_flags(const char *pattern, const char *base, sp_int flags, sp_RbVal sort) {
   SP_GC_ROOT_STR(pattern); SP_GC_ROOT_STR(base); SP_GC_ROOT_RBVAL(sort);
   if (sort.tag != SP_TAG_BOOL)
     sp_raise_cls("ArgumentError", sp_sprintf("expected true or false as sort: %s", sp_poly_inspect(sort)));
-  int old_dotmatch = sp_glob_dotmatch;
-  sp_glob_dotmatch = dotmatch;
+  int old_dotmatch = sp_glob_dotmatch, old_flags = sp_glob_flags;
+  sp_glob_dotmatch = (flags & SP_FNM_DOTMATCH) != 0;
+  sp_glob_flags = (int)flags;
   sp_StrArray *a;
   if (sort.v.i) a = sp_dir_glob_base(pattern, base);
   else {
@@ -1053,7 +1061,12 @@ sp_StrArray *sp_dir_glob_options(const char *pattern, const char *base, sp_bool 
     a->len = w;
   }
   sp_glob_dotmatch = old_dotmatch;
+  sp_glob_flags = old_flags;
   return a;
+}
+
+sp_StrArray *sp_dir_glob_options(const char *pattern, const char *base, sp_bool dotmatch, sp_RbVal sort) {
+  return sp_dir_glob_flags(pattern, base, dotmatch ? SP_FNM_DOTMATCH : 0, sort);
 }
 
 sp_StrArray *sp_dir_glob(const char *pattern) { return sp_dir_glob_base(pattern, NULL); }

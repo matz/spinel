@@ -3586,6 +3586,14 @@ static sp_RbVal sp_poly_binop_bad(const char *op, sp_RbVal recv, sp_RbVal arg) {
 static inline int sp_poly_is_user_obj(sp_RbVal v) {
   return v.tag == SP_TAG_OBJ && v.cls_id >= 0;
 }
+/* The array a program object's Enumerable methods walk: the elements its
+   #each yields, or what its #to_a answers when it has none of those (a
+   Struct). nil when neither hook answers an array. */
+static sp_RbVal sp_obj_walk_a(sp_RbVal v) {
+  sp_RbVal a = sp_obj_each_a_fn ? sp_obj_each_a_fn(v) : sp_box_nil();
+  if (!(a.tag == SP_TAG_OBJ && sp_poly_is_array_kind(a.cls_id)) && sp_obj_to_a_fn) a = sp_obj_to_a_fn(v);
+  return a.tag == SP_TAG_OBJ && sp_poly_is_array_kind(a.cls_id) ? a : sp_box_nil();
+}
 /* The operand of an Array operator (+ - | & concat) converted implicitly,
    as CRuby's to_ary: a program object answering #to_ary becomes that
    Array, and one whose #to_ary answers a non-Array is CRuby's TypeError.
@@ -23549,11 +23557,12 @@ static sp_RbVal sp_poly_enum_proc(sp_RbVal recv, int op, sp_Proc *blk) {
     }
   }
   SP_GC_ROOT_RBVAL(walk);
-  /* a program object that is Enumerable walks the elements the generated
-     hook materializes, as sp_poly_arr_recv does for a literal block (#3761) */
-  if (sp_poly_is_user_obj(walk) && walk.v.p && sp_obj_to_a_fn) {
-    sp_RbVal a = sp_obj_to_a_fn(walk);
-    if (a.tag == SP_TAG_OBJ && sp_poly_is_array_kind(a.cls_id)) walk = a;
+  /* a program object that is Enumerable walks the elements its #each
+     yields, which may not be what its own #to_a answers; one without that
+     hook walks its #to_a, as sp_poly_arr_recv does (#3761) */
+  if (sp_poly_is_user_obj(walk) && walk.v.p) {
+    sp_RbVal a = sp_obj_walk_a(walk);
+    if (a.tag == SP_TAG_OBJ) walk = a;
   }
   /* An Array is walked live, as CRuby's Array methods walk it: the length
      and the element are read at every step, so the block sees what it

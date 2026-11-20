@@ -4408,15 +4408,11 @@ int emit_tap_then_expr(Compiler *c, int id, Buf *b) {
   if (use_shadow) { emit_indent(g_pre, g_indent); buf_puts(g_pre, "}\n"); }
   if (tlv0) lv_set_storage_type(tlv0, tsaved0);
 
-  /* a receiver read as the shared handle (a block parameter that appends to
-     it is the handle, promote_shared_stored_strings): tap's value is that
-     String, read as one */
-  /* one bound above (hparam) to a variable's handle: its read face, a
-     copy, as that variable's own read (a fresh one's String is read as
-     below) */
-  /* read as the handle (emit_strbuf_route, strbuf_route_tap): the handle
-     itself, which keeps the receiver's frozen mark */
-  if (is_tap && (hparam || et == TY_STRBUF) && repr_of(c, id).demand)
+  /* A native call reads tap's retained receiver through its requested
+     handle view. Its caller projects the result to bytes when needed. */
+  TyKind result_view = TY_UNKNOWN;
+  if (is_tap && et == TY_STRBUF &&
+      (repr_of(c, id).demand || (view_type_top(id, &result_view) && result_view == TY_STRBUF)))
     buf_printf(b, "_t%d", tr);
   else if (is_tap && hparam && repr_of(c, id).as_ty == TY_STRING && strbuf_value_carries(c, recv))
     str_read_handle_tmp(b, tr);

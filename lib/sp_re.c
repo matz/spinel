@@ -1700,11 +1700,18 @@ void sp_re_default_error_handler(const char *msg) {SP_GC_ROOT_STR(msg);
    copy (re_compile), with no tag byte in front: hashed over its bytes, as a
    String of it would be, not through sp_str_hash, which reads the byte
    before it for a header and writes the hash into one when it finds a tag
-   there -- the allocator's bytes, before the block. */
+   there -- the allocator's bytes, before the block. sp_str_hash_bytes reads
+   that byte too, for the length of a String that goes on past a NUL: the
+   pattern holds its own length, and the walk goes on to it. */
 sp_int sp_re_source_hash(void *pat) {
   const char *src = pat ? sp_re_source(pat) : NULL;
-  int hi = 0;
-  return src ? (sp_int)sp_str_hash_bytes(src, &hi) : (sp_int)sp_str_hash(NULL);
+  if (!src) return (sp_int)sp_str_hash(NULL);
+  uint64_t h;
+  int hi;
+  const char *q = sp_str_hash_walk(src, &h, &hi);
+  size_t n = sp_re_source_len(pat);
+  if (n > (size_t)(q - src)) h = sp_str_hash_walk_on(src, q, n, h, &hi);
+  return (sp_int)h;
 }
 /* Regexp#hash: the source AND the flags. /ab/ and /ab/i are not eql?, so a
    hash over the source alone made them collide as Hash keys (#3816). */

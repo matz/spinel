@@ -54,3 +54,22 @@ end
 
 p throw_from_case(false, word)
 p throw_from_case(true, word).equal?(word)
+
+def throw_from_match(value)
+  catch(:done) do
+    case value
+    in [0]
+      begin
+        throw :done, 7
+      ensure
+        puts :match_ensure
+        GC.start
+      end
+    else
+      1
+    end
+  end
+end
+
+p throw_from_match([1])
+p throw_from_match([0])

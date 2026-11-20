@@ -8552,6 +8552,12 @@ static void emit_pm_body_value(Compiler *c, int stmts, TyKind rt, int cr,
   int saved_gi = g_indent; g_indent = indent;
   if (rt == TY_POLY && lr.kind != RK_BOXED) emit_boxed(c, last, &le);
   else if (res_o) emit_oint_expr(c, last, rt, &le);
+  else if (lt == TY_POLY && rt != TY_POLY) {
+    Buf boxed = {0};
+    emit_boxed(c, last, &boxed);
+    emit_unbox_text(c, rt, boxed.p, &le);
+    free(boxed.p);
+  }
   else emit_expr(c, last, &le);
   g_indent = saved_gi;
   emit_indent(b, indent);

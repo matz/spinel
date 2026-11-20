@@ -19050,23 +19050,6 @@ static int masgn_fresh_stmt(Compiler *c, int id, const int *lefts, int ln, const
   return any && !masgn_program_may_own();
 }
 
-/* --share-strings: does index target t (of a multiple write) store into a
-   container that holds boxes -- a general Array or Hash, or one typed at
-   run time -- and is value e a parenthesized sequence or a conditional
-   whose String emit_boxed gives as its handle (emit_boxed_sequence,
-   emit_boxed_cond_arms)? The write holds such a value as that box. */
-int masgn_boxed_index_keeps(Compiler *c, int t, int e) {
-  const NodeTable *nt = c->nt;
-  if (t < 0 || nt_kind(nt, t) != NK_IndexTargetNode || e < 0) return 0;
-  int r = nt_ref(nt, t, "receiver");
-  TyKind rt = comp_ntype_settled(c, r);
-  if (rt != TY_POLY_ARRAY && rt != TY_POLY && rt != TY_SYM_POLY_HASH && rt != TY_STR_POLY_HASH && rt != TY_POLY_POLY_HASH)
-    return 0;
-  TyKind et = comp_ntype_settled(c, e);
-  NodeKind ek = nt_kind(nt, e);
-  return (et == TY_STRING || et == TY_STRBUF) &&
-         (ek == NK_ParenthesesNode || ek == NK_IfNode || ek == NK_UnlessNode) && strbuf_cond_has_handle_leaf(c, e);
-}
 /* A multiple write's value's own prelude, put in the statement right
    before that value's hold (at), and the statement's prelude back. */
 static void masgn_el_pre_flush(Buf *b, size_t at, Buf *el_pre, Buf *sv_pre) {

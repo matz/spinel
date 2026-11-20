@@ -133,17 +133,6 @@ int share_node_carry_kind(const Compiler *c, int n, int *op);
    lift being the store's: the route n hands the handle on by itself */
 int share_node_carry_kind_unlifted(const Compiler *c, int n, int *op);
 
-/* ---- the String plan (share_plan.c, #8328) ----
-   For each String value, once the analysis is final: what its consumer
-   needs, what its producer supplies, and the form those give. A consumer
-   asks for a String in the plan's form through emit_str_form
-   (codegen_internal.h). */
-enum { SPN_BYTES, SPN_NEW, SPN_OBJECT };              /* need */
-enum { SPF_BYTES, SPF_HANDLE };                       /* form */
-/* The consumer takes the value, stores it in a multiple assignment,
-   or boxes it for a slot, element, or argument. The memo records the
-   value's need. */
-enum { SPR_TAKE, SPR_STORE, SPR_BOX };
 /* the producer that supplies a value's handle (share_plan_producer), one
    kind per route codegen hands a String on by; each face renders each
    kind (codegen_str.c):
@@ -184,21 +173,7 @@ enum { SPR_TAKE, SPR_STORE, SPR_BOX };
 enum { SPK_NONE, SPK_BOX, SPK_SLOT, SPK_DEMANDED, SPK_ELEM, SPK_SLOT_POLY, SPK_FROZEN, SPK_SELF, SPK_BANG_BOX,
        SPK_PROC_CALL, SPK_POLY_ARMS, SPK_EXC_MESSAGE, SPK_EXC_SUPER, SPK_NATIVE_CALL, SPK_READER, SPK_WRITE,
        SPK_ASSIGN, SPK_OPERAND, SPK_BLOCK_VALUE, SPK_YIELD, SPK_COND, SPK_SEQUENCE, SPK_LIFT, SPK__COUNT };
-/* ...which, for an element of multiple write mw, the seal asks of the write */
-int share_plan_multi_renders(Compiler *c, int mw, int e);
-/* ...and emit_expr gives it as the handle already (share_plan.c)? */
-int share_plan_emits_handle(Compiler *c, int e);
-typedef struct {
-  unsigned char form;
-} SharePlan;
-/* Fill the memo of each node's need (the end of repr_seal); free it with
-   the Compiler. */
-void share_plan_build(Compiler *c);
 void share_plan_free(Compiler *c);
-/* The plan of node v for a consumer in `role` (SPR_*) where codegen is:
-   the value's need from the memo where the node is read as itself, else
-   asked live. The supply is always asked live because it reads repr_of. */
-SharePlan share_plan_of(Compiler *c, int v, int role);
 /* The producer of node v's handle where codegen is (SPK_*), asked live as
    the supply is, whatever a consumer needs; *operand (may be NULL) is the
    node whose supply an SPK_SELF, SPK_OPERAND or SPK_SEQUENCE value hands

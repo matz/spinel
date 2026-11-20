@@ -168,6 +168,9 @@ value, and reads their bytes for the environment after the conversions.
 The setter method returns the converted String object. The assignment
 expression retains its original value operand.
 Fiber context switches carry the active GC roots and exception state.
+Each protected region on a `redo` transfer runs its `ensure` before
+control returns to the loop or block body. The transfer leaves the
+exception and rescue frames of the regions it crosses.
 A receiver-answering iterator at method tail keeps its receiver in the
 operand view across the block and returns it through the physical result
 slot, including a String handle slot. Builtin rows identify self answers;

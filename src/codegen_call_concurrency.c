@@ -425,6 +425,7 @@ int emit_call_synchronize_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
          declares them (codegen_stmt.c): without them the nested ensure's
          epilogue named fields this frame did not have (#7342) */
       buf_printf(b, "int _nxtf%d = 0; (void)_nxtf%d; void *_excobj%d = NULL; ", eid, eid, eid);
+      emit_redo_region_open(b, eid, 0);
       if (g_c_loop_depth > 0) buf_printf(b, "int _brkf%d = 0; (void)_brkf%d; ", eid, eid);
       if (has_retval) {
         /* a number slot holding its nil beside the value is the oint */
@@ -488,12 +489,13 @@ int emit_call_synchronize_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
       }
     }
     if (is_mx) {
-      g_ensure_depth--;
+      EnsureCtx region = g_ensure_stack[--g_ensure_depth];
       g_exc_frame_depth--;
       buf_printf(b, "sp_exc_top--; }\nelse { sp_exc_top--; sp_gc_nroots = sp_exc_rootmark[sp_exc_top]; if (sp_unwind_kind == SP_UNWIND_NONE) { _excf%d = 1; _excmsg%d = sp_exc_msg[sp_exc_top]; _exccls%d = sp_exc_cls[sp_exc_top]; _excobj%d = sp_exc_caught_obj(); } } ",
                  eid, eid, eid, eid);
       buf_printf(b, "_ensure%d: ; sp_Mutex_unlock(_t%d); ", eid, mtmp);
       buf_puts(b, "if (sp_unwind_kind != SP_UNWIND_NONE) sp_unwind_resume(); ");
+      emit_redo_region_close(b, &region, 0);
       /* a deferred `next` or `break` a nested ensure handed up, passed on the
          way an ordinary ensure frame passes its own (codegen_stmt.c) */
       if (g_ensure_depth > g_loop_ensure_base) {

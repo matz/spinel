@@ -1,0 +1,2 @@
+[1, :inner, :outer, 2, :inner, :outer]
+true

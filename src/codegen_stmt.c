@@ -15692,6 +15692,7 @@ void emit_begin(Compiler *c, int id, Buf *b, int indent, const char *resultvar) 
                       (ty_is_object(g_ret_type) || c_type_name(g_ret_type) != NULL));
     emit_indent(b, indent); buf_printf(b, "int _retf%d = 0;\n", eid);
     emit_indent(b, indent); buf_printf(b, "int _nxtf%d = 0; (void)_nxtf%d;\n", eid, eid);
+    emit_redo_region_open(b, eid, indent);
     /* only a region opened inside a C loop can be left by a loop's break */
     if (g_c_loop_depth > 0) {
       emit_indent(b, indent); buf_printf(b, "int _brkf%d = 0; (void)_brkf%d;\n", eid, eid);
@@ -15905,6 +15906,7 @@ void emit_begin(Compiler *c, int id, Buf *b, int indent, const char *resultvar) 
        deferred-return / re-raise propagation below). */
     emit_indent(b, indent);
     buf_puts(b, "if (sp_unwind_kind != SP_UNWIND_NONE) sp_unwind_resume();\n");
+    emit_redo_region_close(b, &self_ctx, indent);
 
     /* a deferred `next`: chain to the enclosing ensure when that region is
        still inside the loop, else run the C continue here */
@@ -22905,9 +22907,8 @@ static void emit_stmt_node(Compiler *c, int id, Buf *b, int indent) {
        (a `continue` there left the block as `next` does, or re-ran an
        enclosing loop instead) */
     if (g_redo_depth > 0 && subtree_owns_redo(nt, g_redo_owner[g_redo_depth - 1], id)) {
-      emit_redo_unwind(b);
-      emit_loop_latch_poll(b, " ");
-      buf_printf(b, "goto _redo_%d;\n", g_redo_stack[g_redo_depth - 1]);
+      emit_redo_transfer(b);
+      buf_puts(b, "\n");
     }
     else unsupported_feature(c, id, "redo in this block (its iterator cannot re-run the body)");
     return;

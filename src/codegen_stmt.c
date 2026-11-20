@@ -6982,6 +6982,8 @@ int static_block_given_cond(Compiler *c, int pred) {
        ENCLOSING method's block: the answer is whether that one exists at
        this expansion (a lowered enclosing method asks at run time) */
     if (nt_int(nt, g_block_id, "fwd_yield", 0)) {
+      /* a proc form's own block, NULL where its caller gave none */
+      if (fwd_yield_proc_form_block(c)) return -1;
       if (g_yield_block_fallback >= 0 || g_yield_proc_ref_fallback) return 1;
       if (g_yield_lowered_fallback) return -1;
       return 0;
@@ -6996,6 +6998,18 @@ int static_block_given_cond(Compiler *c, int pred) {
   return 0;
 }
 
+/* Does the `{ |__fwd| yield __fwd }` a forwarded block became (g_block_id)
+   stand for the block of the proc form it is in? That block is the proc a
+   dispatch arm or a Method hands the form, NULL where the call gave none,
+   so whether it is there is asked where the form runs. Any other proc the
+   enclosing method was handed (`m(&f)`) is taken as given, as the
+   analysis types its calls. */
+int fwd_yield_proc_form_block(Compiler *c) {
+  const char *ref = g_yield_proc_ref_fallback;
+  if (!ref || strncmp(ref, "lv_", 3) != 0 || g_block_id < 0) return 0;
+  Scope *s = comp_scope_of(c, g_block_id);
+  return s && s->is_proc_form && s->blk_param && sp_streq(ref + 3, s->blk_param);
+}
 /* The static answer of one arm's predicate of a statement if: 1 or 0 for
    a guard the compiler decides, -1 for a run-time one. */
 static int if_arm_static_cond(Compiler *c, int pred) {

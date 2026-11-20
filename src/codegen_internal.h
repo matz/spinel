@@ -1850,6 +1850,7 @@ void emit_str_cmp_prologue(Compiler *c, const char *rtxt, int operand,
 int prog_has_conv_method(Compiler *c, int op, const char *conv, TyKind want);
 
 __attribute__((noreturn)) void unsupported(Compiler *c, int id, const char *what);
+int fwd_yield_proc_form_block(Compiler *c);
 int unsup_message(Compiler *c, int id, const char *what, int self_ci, char *msg, size_t cap);
 void refuse_from_plan(Compiler *c, int id, int from, const char *site);
 /* --defer-refusals: the plan refusals the passes ahead of emission make

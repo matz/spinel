@@ -19882,8 +19882,8 @@ static sp_PolyArray *sp_enum_items_from(sp_RbVal v) {
        synthesized for an Enumerable that defines #each), the way sp_poly_arr_recv
        already does. Without the arm every such object fell to the empty array
        below, so an external enumerator over one yielded nothing (#4022). */
-    if (v.cls_id >= 0 && sp_obj_to_a_fn) {
-      sp_RbVal a = sp_obj_to_a_fn(v);
+    if (v.cls_id >= 0) {
+      sp_RbVal a = sp_obj_walk_a(v);
       /* A #to_a answer that already is a poly array is copied through the
          poly-array arm above rather than handed back as is: a user's own
          #to_a may answer the array it keeps, and the reverse_each constructor
@@ -21136,10 +21136,7 @@ static sp_Enumerator *sp_poly_lazy_src(sp_RbVal v) {
   int ok = sp_poly_is_array_kind(v.cls_id) || sp_poly_is_hash_kind(v.cls_id) ||
            v.cls_id == SP_BUILTIN_RANGE || v.cls_id == SP_BUILTIN_STR_RANGE || v.cls_id == SP_BUILTIN_OBJ_RANGE;
   /* a user object streams through its own #to_a, as sp_enum_items_from reads it */
-  if (!ok && v.cls_id >= 0 && sp_obj_to_a_fn) {
-    sp_RbVal a = sp_obj_to_a_fn(v);
-    ok = a.tag == SP_TAG_OBJ && sp_poly_is_array_kind(a.cls_id);
-  }
+  if (!ok && v.cls_id >= 0) ok = sp_obj_walk_a(v).tag == SP_TAG_OBJ;
   if (!ok) sp_raise_nomethod(sp_nomethod_msg("lazy", v));
   return sp_Enumerator_new_from(v);
 }

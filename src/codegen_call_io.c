@@ -408,7 +408,8 @@ static int boxed_socket_opt(const NodeTable *nt, const char *name, int argc, con
    check comes after theirs. So pre then takes, in that order, the operands'
    values (argv[0..strlen(conv))), the switch's, each operand's conversion
    (conv[i]: 'i' an Integer, 's' a String, 'w' write_nonblock's data) and the
-   switch's, and op[i] names the converted operand. With a literal switch
+   switch's, and op[i] names the converted operand ('w': its bytes and
+   their count, for sp_sock_write_nb_n). With a literal switch
    or none, or no operand to order it after, pre stays empty and op[i] is
    "": the call converts in place. */
 static int emit_nonblock_exc(Compiler *c, const NodeTable *nt, const char *name, const int *argv, int argc,
@@ -430,8 +431,14 @@ static int emit_nonblock_exc(Compiler *c, const NodeTable *nt, const char *name,
   for (int i = 0; i < npos; i++) {
     int t = ++g_tmp;
     if (conv[i] == 'i') buf_printf(pre, "sp_int _t%d = sp_poly_arg_int_chk(_t%d); ", t, held[i]);
-    else buf_printf(pre, "const char *_t%d = %s(_t%d); SP_GC_ROOT(_t%d); ", t,
-                    conv[i] == 's' ? "sp_poly_arg_str_chk" : "sp_poly_to_s", held[i], t);
+    else if (conv[i] == 'w') {
+      int tn = ++g_tmp;
+      buf_printf(pre, "size_t _t%d; const char *_t%d = sp_poly_to_s_bytes(_t%d, &_t%d); SP_GC_ROOT(_t%d); ",
+                 tn, t, held[i], tn, t);
+      snprintf(op[i], 32, "_t%d, _t%d", t, tn);
+      continue;
+    }
+    else buf_printf(pre, "const char *_t%d = sp_poly_arg_str_chk(_t%d); SP_GC_ROOT(_t%d); ", t, held[i], t);
     snprintf(op[i], 32, "_t%d", t);
   }
   tx = ++g_tmp;
@@ -445,8 +452,24 @@ static int emit_nonblock_exc(Compiler *c, const NodeTable *nt, const char *name,
 static void emit_nonblock_operand(Compiler *c, const char *op, int node, char conv, Buf *b) {
   if (op[0]) buf_puts(b, op);
   else if (conv == 'i') emit_int_expr(c, node, b);
-  else if (conv == 's') emit_str_expr(c, node, b);
-  else emit_to_s_expr(c, node, b);
+  else emit_str_expr(c, node, b);
+}
+
+/* write_nonblock's entry and data, up to the exc argument: a String keeps its
+   byte length, a boxed operand its bytes past a NUL (op names them once
+   converted), and anything else goes through to_s, whose static class and
+   symbol names carry no marker byte */
+static void emit_write_nb_head(Compiler *c, const char *io, const char *op, int node, Buf *b) {
+  Repr r = repr_of(c, node);
+  if (op[0]) buf_printf(b, "sp_sock_write_nb_n(%s, %s", io, op);
+  else if (r.kind == RK_BOXED) {
+    buf_printf(b, "sp_sock_write_nb_poly(%s, ", io);
+    emit_boxed(c, node, b);
+  }
+  else {
+    buf_printf(b, "%s(%s, ", r.as_ty == TY_STRING ? "sp_sock_write_nb_bin" : "sp_sock_write_nb", io);
+    emit_to_s_expr(c, node, b);
+  }
 }
 
 /* A setsockopt or getsockopt level: an Integer as given, a Symbol or String
@@ -1336,15 +1359,13 @@ int emit_call_poly_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
           }
         }
         else {
-          /* a String operand keeps its byte length (an embedded NUL is a byte
-             of the message); anything else goes through to_s */
-          int skw9 = repr_of(c, argv[0]).as_ty == TY_STRING;
-          const char *wfn9 = skw9 ? "sp_sock_write_nb_bin" : "sp_sock_write_nb";
           int tw9 = ++g_tmp;
+          char io9[32];
+          snprintf(io9, sizeof io9, "_t%d", tio2);
           /* the runtime answers an sp_oint: nil where the write would block
              (exception: false), which CRuby answers :wait_writable */
-          buf_printf(b, "sp_oint _t%d = %s(_t%d, ", tw9, wfn9, tio2);
-          emit_nonblock_operand(c, op9[0], argv[0], 'w', b);
+          buf_printf(b, "sp_oint _t%d = ", tw9);
+          emit_write_nb_head(c, io9, op9[0], argv[0], b);
           if (no_exc9)
             buf_printf(b, ", %s); _t%d.nil ? sp_box_sym(sp_sym_intern(\"wait_writable\")) : sp_box_int(_t%d.v); })",
                        x9.p, tw9, tw9);
@@ -1889,20 +1910,15 @@ int emit_call_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const ch
         free(obset.p);
       }
       else {
-        /* String operand -> the _bin entry (header length, so an embedded NUL
-           is written); anything else reaches sp_poly_to_s, whose static
-           class/symbol names carry no marker byte. See sp_File_write above. */
-        int skw = repr_of(c, argv[0]).as_ty == TY_STRING;
-        const char *wfn = skw ? "sp_sock_write_nb_bin" : "sp_sock_write_nb";
         if (no_exc8) {
           int tw = ++g_tmp;
-          buf_printf(b, "({ %ssp_oint _t%d = %s(%s, ", pre8.p ? pre8.p : "", tw, wfn, r);
-          emit_nonblock_operand(c, op8[0], argv[0], 'w', b);
+          buf_printf(b, "({ %ssp_oint _t%d = ", pre8.p ? pre8.p : "", tw);
+          emit_write_nb_head(c, r, op8[0], argv[0], b);
           buf_printf(b, ", %s); _t%d.nil"
                         " ? sp_box_sym(sp_sym_intern(\"wait_writable\")) : sp_box_int(_t%d.v); })", x8.p, tw, tw);
         }
         else {
-          buf_printf(b, "%s(%s, ", wfn, r); emit_to_s_expr(c, argv[0], b);
+          emit_write_nb_head(c, r, "", argv[0], b);
           buf_puts(b, ", 1).v");
         }
       }

@@ -273,6 +273,8 @@ const char *sp_sock_read_nb(sp_File *f, sp_int len, sp_bool exc, sp_bool is_recv
 /* the byte count, or nil when the call would block (exception: false) */
 sp_oint sp_sock_write_nb(sp_File *f, const char *data, sp_bool exc);
 sp_oint sp_sock_write_nb_bin(sp_File *f, const char *data, sp_bool exc);
+sp_oint sp_sock_write_nb_n(sp_File *f, const char *data, size_t len, sp_bool exc);
+sp_oint sp_sock_write_nb_poly(sp_File *f, sp_RbVal v, sp_bool exc);
 sp_oint sp_sock_connect_nb(sp_File *f, const char *host, sp_int port, sp_bool exc);
 /* Addrinfo-form connect_nonblock (already-resolved endpoint) */
 sp_oint sp_sock_connect_nb_sa(sp_File *f, const char *sa, sp_int salen,

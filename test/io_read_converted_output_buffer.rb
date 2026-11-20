@@ -9,6 +9,8 @@ class BufferCarrier
   end
 end
 
+# Use stdio so an idle pipe exercises the descriptor wait path.
+ENV["SPINEL_SOCK_STDIO"] = "1"
 original = +"old"
 carrier = BufferCarrier.new(original)
 r, w = IO.pipe
@@ -63,3 +65,34 @@ p [read_gathered(r, 2, buffer).equal?(buffer), buffer]
 p [read_gathered(r, 2, buffer).equal?(buffer), buffer]
 p [read_gathered(r, 2, buffer), buffer]
 r.close
+
+r, w = IO.pipe
+buffer = +"idle"
+carrier = BufferCarrier.new(buffer)
+p [r.read_nonblock(1, carrier, exception: false), buffer]
+w.close
+p [r.read_nonblock(1, carrier, exception: false), buffer]
+r.close
+
+file = File.open(__FILE__)
+buffer = +"old"
+carrier = BufferCarrier.new(buffer)
+p [file.pread(2, 0, carrier).equal?(buffer), buffer]
+begin
+  file.pread(2, 100_000, carrier)
+rescue EOFError => error
+  p [error.class, buffer]
+end
+file.close
+
+r, w = IO.pipe
+buffer = +"idle"
+carrier = BufferCarrier.new(buffer)
+p [read_gathered(r, 0, carrier).equal?(buffer), buffer]
+w.close
+r.close
+begin
+  read_gathered(r, 0, carrier)
+rescue IOError => error
+  puts error.class
+end

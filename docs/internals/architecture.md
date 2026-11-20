@@ -98,7 +98,8 @@ String handle directly.
 IO reads hold the output buffer through argument evaluation. The runtime
 converts it once and writes through the resulting String handle. A
 successful read returns that handle. Nonblocking reads with a possible
-wait Symbol keep their boxed result.
+wait Symbol keep their boxed result. A zero-length read checks the stream's
+readability and returns before waiting for input.
 The native String result passes its handle directly through C. Byte
 consumers project the contents and take a snapshot where the read is
 held across a block. UTF-8 character positions count each valid sequence

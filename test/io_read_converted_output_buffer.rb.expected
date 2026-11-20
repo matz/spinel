@@ -21,3 +21,15 @@ convert
 [true, "ab"]
 [true, "c"]
 [nil, ""]
+convert
+[:wait_readable, "idle"]
+convert
+[nil, ""]
+convert
+[true, "cl"]
+convert
+[EOFError, ""]
+convert
+[true, ""]
+convert
+IOError

@@ -23954,7 +23954,6 @@ static void emit_exc_reinit_dispatch(Compiler *c, Buf *b) {
   buf_printf(b, "\n  if (_xi%d < 0) return NULL;\n"
                 "  sp_Exception *e = (sp_Exception *)obj;\n"
                 "  if (!e) e = sp_exc_new(cls, (&(\"\\xff\")[1]));\n"
-                "  else { e->msg_h = NULL; e->msg = NULL; }   /* an object the runtime made: the message is the initialize's to set */\n"
                 "  SP_GC_ROOT(e);\n", pk);
   for (int q = 0; q < xn; q++) {
     int im = call_target(c, -1, xr[q], "initialize", CT_METHODS, NULL);
@@ -23965,7 +23964,9 @@ static void emit_exc_reinit_dispatch(Compiler *c, Buf *b) {
     else if (c->scopes[im].yields) continue;   /* (no clone: the runtime's message stands) */
     Buf arm = {0};
     if (!emit_reinit_init_text(c, im, "e", "msg", &arm)) { free(arm.p); continue; }   /* (the runtime's message stands) */
-    buf_printf(b, "  if (_xi%d == %d) {%s return e; }\n", pk, q, arm.p ? arm.p : "");
+    /* an object the runtime made: the message is the initialize's to set, so it is cleared here, in an arm that
+       runs one: a class whose reopening has no arm keeps the message the runtime built */
+    buf_printf(b, "  if (_xi%d == %d) { if (obj) { e->msg_h = NULL; e->msg = NULL; }%s return e; }\n", pk, q, arm.p ? arm.p : "");
     free(arm.p);
   }
   buf_puts(b, "  return NULL;\n}\n");

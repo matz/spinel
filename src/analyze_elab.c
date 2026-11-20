@@ -314,6 +314,17 @@ static int lr_target_runs_block(Compiler *c, int call);
 static int lr_reopen_answers(Compiler *c, const char *cls, const char *name);
 static int lr_reopens_hold_methods(Compiler *c);
 
+/* The name of the call a block given to call runs under: a send of a
+   literal name is the call it sends (call_sent_name), as the lowering that
+   rewrites it into that call makes it, so the record's frame and the tree
+   after that pass read one call; a send of a computed name stays the send,
+   whose block nothing places */
+static const char *lr_block_call_name(const NodeTable *nt, int call) {
+  if (nt_kind(nt, call) != NK_CallNode) return NULL;
+  const char *sent = call_sent_name(nt, call, NULL);
+  return sent ? sent : nt_str(nt, call, "name");
+}
+
 /* When the block of `call` runs, from the syntax alone (the receiver is
    not typed yet): ELAB_BLK_NOW before the call answers, for certain: a
    builtin iterator's (the iterator rows) on a literal of a builtin class
@@ -332,7 +343,7 @@ static int lr_reopens_hold_methods(Compiler *c);
    see every def of the record. */
 static int elab_block_when(Compiler *c, int call, int lazy) {
   const NodeTable *nt = c->nt;
-  const char *nm = nt_kind(nt, call) == NK_CallNode ? nt_str(nt, call, "name") : NULL;
+  const char *nm = lr_block_call_name(nt, call);
   int rv = nm ? nt_ref(nt, call, "receiver") : -1;
   const char *rn = rv >= 0 && nt_kind(nt, rv) == NK_ConstantReadNode ? key_name(c, rv) : NULL;
   if (!nm) return ELAB_BLK_UNKNOWN;
@@ -5320,7 +5331,7 @@ static LrExt *lr_ext_of(Compiler *c, const int *par, int n, int node) {
   if (body == LR_B_BLOCK) {
     int call = par[node];
     int cb = call >= 0 && call < n && nt_ref(c->nt, call, "block") == node;
-    const char *nm = cb && nt_kind(c->nt, call) == NK_CallNode ? nt_str(c->nt, call, "name") : NULL;
+    const char *nm = cb ? lr_block_call_name(c->nt, call) : NULL;
     int w = cb ? elab_block_runs(c, call) : ELAB_BLK_UNKNOWN;
     e = lr_ext_make(c, node, body);   /* (the reading may have made entries: the table moved) */
     e->cb = (unsigned char)cb;
@@ -5357,7 +5368,7 @@ static int lr_in_body(Compiler *c, const int *par, int n, int id, int which, int
     }
     if (!e->cb) continue;
     if (which == LRW_KEPT) {   /* (an assumed block runs at once by its call's name, or by a lazy chain's; one given to a method of the program's may yield at once as well as keep it: neither is known later) */
-      const char *cn = e->cb && nt_kind(c->nt, par[a]) == NK_CallNode ? nt_str(c->nt, par[a], "name") : NULL;
+      const char *cn = e->cb ? lr_block_call_name(c->nt, par[a]) : NULL;
       if (e->kept && e->runs != ELAB_BLK_ASSUMED && cn && !lr_named(c, cn)) return 1;
       continue;
     }

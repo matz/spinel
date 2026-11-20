@@ -16106,6 +16106,66 @@ static void array_new_fresh_runs(const char *k, int tr, int tn, int ti, int trun
   emit_indent(g_pre, g_indent);
   buf_printf(g_pre, "for (sp_int _t%d = _t%d; _t%d < _t%d; _t%d++) {\n", ti, trun, ti, tend, ti);
 }
+
+static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, int *out);
+
+/* A builtin exception whose own initialize reads more than the message (NameError's name, NoMethodError's
+   args, KeyError's and FrozenError's key: and receiver:, SystemExit's status ...) is built by a native arm.
+   CRuby's initialize of those reads its arguments and then calls super with the message alone, so a
+   reopening of StandardError#initialize (or Exception's) runs on that message. The initialize it would
+   run, or -1: a reopening between the class and StandardError (NameError's under NoMethodError) is handed
+   other arguments, so those keep the construction they had. */
+static int native_exc_reinit_initialize(Compiler *c, int id, const char *cn) {
+  if (!(exc_init_takes_own_args(cn) || sp_streq(cn, "NameError") || sp_streq(cn, "NoMethodError") ||
+        sp_streq(cn, "KeyError") || sp_streq(cn, "FrozenError"))) return -1;
+  int rci = comp_builtin_class_named(c, cn);
+  if (rci >= 0 && exc_reopen_initialize(c, id, rci) >= 0) return -1;
+  int mi = exc_reopen_initialize_above(c, cn, 0, -1);
+  if (mi < 0) return -1;
+  int oc = c->scopes[mi].class_id;
+  if (oc < 0 || !(sp_streq(c->classes[oc].name, "StandardError") || sp_streq(c->classes[oc].name, "Exception"))) return -1;
+  int sv = cplan_hook_target(c, id, oc, "initialize", NULL);
+  if (sv >= 0 && c->scopes[sv].class_id == oc && c->scopes[sv].reachable) mi = sv;
+  if (c->scopes[mi].yields) {
+    int pf = scope_proc_form_of(c, mi);
+    if (pf < 0) return -1;
+    mi = pf;
+  }
+  Buf probe = {0};
+  int ok = emit_reinit_init_text(c, mi, "_p", "_m", &probe);
+  free(probe.p);
+  return ok ? mi : -1;
+}
+/* the call whose native construction the reopening wraps (its arms are asked again inside) */
+static int g_native_reinit_id = -1;
+
+/* `Cls.new(...)` on the builtin exception cn: a reopening's own initialize runs on the runtime's exception
+   (not for the error a dispatcher's no-method arm builds, builtin_new); else a native arm builds it and a
+   reopening above runs on its message (native_exc_reinit_initialize). 1 = the call is emitted into b. */
+static int emit_builtin_exc_new_reopened(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name,
+                                         int recv, const char *cn, int argc, const int *argv, int *out) {
+  if (nt_int(nt, id, "builtin_new", 0)) return 0;
+  int rim = exc_builtin_reopen_initialize(c, id, cn, argc, argv);
+  if (rim >= 0) { emit_exc_reopen_construct_as(c, cn, rim, nt_ref(nt, id, "arguments"), -1, id, b); *out = 1; return 1; }
+  if (g_native_reinit_id == id) return 0;
+  int sri = native_exc_reinit_initialize(c, id, cn);
+  if (sri < 0) return 0;
+  /* the native arms run again for this call, into a buffer of their own: their text is wrapped only if
+     one of them took the call */
+  Buf in; memset(&in, 0, sizeof in);
+  g_native_reinit_id = id;
+  int r = emit_new_call_arms(c, id, &in, nt, name, recv, argc, argv, out);
+  g_native_reinit_id = -1;
+  if (r && in.p) {
+    int t = 0;
+    syserr_reinit_open(&t, b);
+    buf_puts(b, in.p);
+    syserr_reinit_close(c, sri, t, b);
+  }
+  free(in.p);
+  return r;
+}
+
 static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, int *out) {
   if (!(recv >= 0 && (is_hash_constructor(name)))) return 0;
   NodeKind rk = nt_kind(nt, recv);
@@ -16258,9 +16318,7 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
     if (cn && is_exc_name(cn)) {
       /* a reopening's own initialize runs on the runtime's exception, but
          not for the error a dispatcher's no-method arm builds (builtin_new) */
-      if (!nt_int(nt, id, "builtin_new", 0)) {
-        int rim = exc_builtin_reopen_initialize(c, id, cn, argc, argv);
-        if (rim >= 0) { emit_exc_reopen_construct_as(c, cn, rim, nt_ref(nt, id, "arguments"), -1, id, b); { *out = 1; return 1; } } }
+      if (emit_builtin_exc_new_reopened(c, id, b, nt, name, recv, cn, argc, argv, out)) return 1;
       /* SystemCallError#initialize builds the message from the errno:
          Errno::ENOENT.new("x") is "No such file or directory - x", and
          SystemCallError.new("x", 2) an Errno::ENOENT */

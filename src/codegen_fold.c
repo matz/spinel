@@ -6731,13 +6731,35 @@ int emit_collect_expr(Compiler *c, int id, Buf *b) {
   return 1;
 }
 
+/* Does a call of the receiver chain ending at `id` (`id` itself, its
+   receiver, that one's ...) navigate safely (`&.`)? Such a chain keeps the
+   drained-Enumerator path, whose `&.` guard answers nil where the safe
+   navigation reaches the with_index (`s&.each_char&.with_index { }` on a nil
+   s), and where the walk's NoMethodError for a nil receiver would not. */
+static int call_chain_safe_nav(const NodeTable *nt, int id) {
+  for (int n = id; n >= 0 && nt_kind(nt, n) == NK_CallNode; n = nt_ref(nt, n, "receiver"))
+    if (nt_safe_nav(nt, n)) return 1;
+  return 0;
+}
+/* `X.each.with_index(off) { }`, its each blockless and without arguments
+   and no `&.` along the chain: the node X the chain walks, else -1 */
+int with_index_each_array(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  const char *name = id >= 0 && nt_kind(nt, id) == NK_CallNode ? nt_str(nt, id, "name") : NULL;
+  if (!name || !sp_streq(name, "with_index") || call_chain_safe_nav(nt, id)) return -1;
+  int recv = nt_ref(nt, id, "receiver");
+  if (recv < 0 || nt_kind(nt, recv) != NK_CallNode || nt_ref(nt, recv, "block") >= 0 ||
+      nt_ref(nt, recv, "arguments") >= 0 || !nt_str(nt, recv, "name") || !sp_streq(nt_str(nt, recv, "name"), "each"))
+    return -1;
+  return nt_ref(nt, recv, "receiver");
+}
 /* arr.map.with_index(off) { |x, i| } / arr.each.with_index(off) { |x, i| } /
    arr.select.with_index(off) { |x, i| } (and collect/filter/reject): the
    receiver is a blockless enumerator over an array, and with_index binds the
    element plus a running index that starts at `off` (default 0). `map` collects
    the block value; `select`/`reject` collect the element conditionally; `each`
-   runs the body for side effect and yields the receiver array. Arrays only --
-   a range enumerator is a later slice. Returns 1 if handled. */
+   runs the body for side effect and yields the receiver array. An Integer
+   Range source is materialized first. Returns 1 if handled. */
 int emit_with_index_expr(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
@@ -6809,6 +6831,14 @@ int emit_with_index_expr(Compiler *c, int id, Buf *b) {
   emit_indent(g_pre, g_indent); emit_ctype(c, rt, g_pre);
   buf_printf(g_pre, " _t%d = %s;\n", trecv, rb.p ? rb.p : ""); free(rb.p);
   emit_indent(g_pre, g_indent); buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", trecv);
+  /* a nil receiver raises as its walk (`each`, `map`) would on nil: a nil
+     Array is a NULL whose length reads 0, so the walk ran no pass and
+     answered as if empty. Not on a chain with a `&.`
+     (call_chain_safe_nav), whose guard decides what a nil answers. */
+  if (!range_src && !call_chain_safe_nav(nt, id)) {
+    emit_indent(g_pre, g_indent);
+    buf_printf(g_pre, "if (SP_UNLIKELY(!_t%d)) sp_nil_recv_raise(\"%s\");\n", trecv, inner);
+  }
   /* running index, seeded with the offset */
   emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_int _t%d = ", tidx);
   /* as an Integer: a boxed offset (`with_index(body.first_line)` on a value
@@ -6833,6 +6863,14 @@ int emit_with_index_expr(Compiler *c, int id, Buf *b) {
     else buf_printf(g_pre, "sp_%sArray *_t%d = sp_%sArray_new();\n", rk, tres, rk);
     emit_indent(g_pre, g_indent); buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", tres);
   }
+  /* an Array's each.with_index keeps the headers of the arrays its block
+     reads as `each` does (hc_iter_begin), so the walk's poll reloads none
+     of them. Its own receiver is read through the temp it walks: a header
+     the cache reloaded after a poll is the variable's, which a trap or
+     another thread may have pointed at another array meanwhile. */
+  Buf *ew_sv_pre = g_pre, *ew_pb = g_pre;
+  void *ew_hc = is_each && !range_src ? hc_iter_begin(c, id, &ew_pb) : NULL;
+  g_pre = ew_pb;
   emit_indent(g_pre, g_indent);
   buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++, _t%d++) {\n",
              ti, ti, k, trecv, ti, tidx);
@@ -6855,7 +6893,15 @@ int emit_with_index_expr(Compiler *c, int id, Buf *b) {
     if (clv1 && clv1->type == TY_POLY) buf_printf(g_pre, "lv_%s = sp_box_int(_t%d);\n", p1, tidx);
     else buf_printf(g_pre, "lv_%s = _t%d;\n", p1, tidx);
   }
-  if (is_each) emit_iter_step_body(c, block, g_pre, innerIndent);
+  /* each.with_index's body is a loop body, as `each`'s is (emit_loop_body):
+     it polls as `each` does (a threaded program's safepoint, a delivered
+     signal where no loop of the function encloses the walk); a `next` in
+     it, inside a begin / rescue / ensure, unwinds only the frames the body
+     opened and runs the ensure's skip (as does a `break` of a loop within
+     the block; a block's own `break` is lowered before it gets here); and
+     its `next` leaves this walk's pass, never assigning the value slot of a
+     collecting block around it. */
+  if (is_each) emit_loop_body(c, body, g_pre, innerIndent);
   else {
     IterStep st; emit_iter_step_open(c, block, !is_map, innerIndent, &st);
     int saveInd = g_indent; g_indent = innerIndent;
@@ -6917,6 +6963,8 @@ int emit_with_index_expr(Compiler *c, int id, Buf *b) {
     free(vb.p);
   }
   emit_indent(g_pre, g_indent); buf_puts(g_pre, "}\n");
+  g_pre = ew_sv_pre;
+  hc_iter_end(ew_hc, &ew_pb, g_indent, 1);
   if (fresh) { emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_%sArray_end_fresh(_t%d, _t%d);\n", rk, tres, tfill); }
   /* a kept element carries the receiver's nils (the map arm notes its own) */
   if (collecting && !is_map && !range_src && k && rk && sp_streq(rk, k) && (is_numeric_literal_tag(k))) {

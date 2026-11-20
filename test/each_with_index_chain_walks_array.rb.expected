@@ -1,0 +1,51 @@
+32.0
+[[:a, 1], [:b, 2]]
+[-2, -1, 0]
+14
+["0:x", "1:y"]
+4
+[[Integer, 0], [String, 1], [Float, 2], [NilClass, 3]]
+110
+[[1, 5], [2, 6], [3, 7]]
+[30, 2]
+4
+2
+-1
+[1, 2, 99]
+[1, 2]
+[1, 2]
+[7, 8]
+3
+[3, 8]
+[[1, 0], [2, 1]]
+[1, 1, 3]
+5.0
+12
+0.0
+28582720836250.0
+11
+11
+7.5
+[2.0, 4.0, 6.0]
+[2.0, 4.0, 6.0]
+[5, 5]
+3
+4
+FrozenError
+TypeError
+2.0
+9
+[:NoMethodError, "undefined method 'each' for nil"]
+[:NoMethodError, "undefined method 'each' for nil"]
+["8", "8"]
+["1", "2"]
+[1, 3]
+1333
+801731
+ArgumentError
+[1, :ens, :after, :ens, 3, :ens, :after]
+1021
+[0, 1]
+[]
+["", "b"]
+[]

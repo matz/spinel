@@ -1,0 +1,37 @@
+zlib one byte level -1: answers [true] prefixes [true] round trip true total_in true
+zlib one byte level 0: answers [true] prefixes [true] round trip true total_in true
+zlib one byte level 9: answers [true] prefixes [true] round trip true total_in true
+zlib text level -1: answers [true, true, true, true] prefixes [true, true, true, true] round trip true total_in true
+zlib text level 0: answers [true, true, true, true] prefixes [true, true, true, true] round trip true total_in true
+zlib text level 9: answers [true, true, true, true] prefixes [true, true, true, true] round trip true total_in true
+zlib past 64 KB level -1: answers [true, true, true] prefixes [true, true, true] round trip true total_in true
+zlib past 64 KB level 0: answers [true, true, true] prefixes [true, true, true] round trip true total_in true
+zlib past 64 KB level 9: answers [true, true, true] prefixes [true, true, true] round trip true total_in true
+gzip one byte level -1: answers [true] prefixes [true] round trip true total_in true
+gzip one byte level 0: answers [true] prefixes [true] round trip true total_in true
+gzip one byte level 9: answers [true] prefixes [true] round trip true total_in true
+gzip text level -1: answers [true, true, true, true] prefixes [true, true, true, true] round trip true total_in true
+gzip text level 0: answers [true, true, true, true] prefixes [true, true, true, true] round trip true total_in true
+gzip text level 9: answers [true, true, true, true] prefixes [true, true, true, true] round trip true total_in true
+gzip past 64 KB level -1: answers [true, true, true] prefixes [true, true, true] round trip true total_in true
+gzip past 64 KB level 0: answers [true, true, true] prefixes [true, true, true] round trip true total_in true
+gzip past 64 KB level 9: answers [true, true, true] prefixes [true, true, true] round trip true total_in true
+raw one byte level -1: answers [true] prefixes [true] round trip true total_in true
+raw one byte level 0: answers [true] prefixes [true] round trip true total_in true
+raw one byte level 9: answers [true] prefixes [true] round trip true total_in true
+raw text level -1: answers [true, true, true, true] prefixes [true, true, true, true] round trip true total_in true
+raw text level 0: answers [true, true, true, true] prefixes [true, true, true, true] round trip true total_in true
+raw text level 9: answers [true, true, true, true] prefixes [true, true, true, true] round trip true total_in true
+raw past 64 KB level -1: answers [true, true, true] prefixes [true, true, true] round trip true total_in true
+raw past 64 KB level 0: answers [true, true, true] prefixes [true, true, true] round trip true total_in true
+raw past 64 KB level 9: answers [true, true, true] prefixes [true, true, true] round trip true total_in true
+first flush, nothing in: 789c000000ffff
+SYNC_FLUSH, nothing new: Zlib::BufError
+flush, nothing new: Zlib::BufError
+FULL_FLUSH, nothing new: 000000ffff
+NO_FLUSH with input: 
+then SYNC_FLUSH answers true; the stream inflates to "abcdef"
+flush after finish: Zlib::StreamError
+deflate after finish: Zlib::StreamError
+never flushed is Zlib.deflate: true
+GzipWriter#flush: grows true prefixes [true, true, true] round trip true

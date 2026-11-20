@@ -19652,6 +19652,7 @@ void sp_dir_glob_rec(const char *fsdir, const char *outprefix,
 sp_StrArray *sp_dir_glob(const char *pattern);
 sp_StrArray *sp_dir_glob_base(const char *pattern, const char *base);
 sp_StrArray *sp_dir_glob_options(const char *pattern, const char *base, sp_bool dotmatch, sp_RbVal sort);
+sp_StrArray *sp_dir_glob_flags(const char *pattern, const char *base, sp_int flags, sp_RbVal sort);
 /* Dir.glob(pattern, base:, flags:, sort:): the values come boxed, in source
    order; a keyword not given is nil with its `given` flag 0. A nil base: is
    no base, flags: converts as an Integer argument (a Float truncates, a
@@ -19663,9 +19664,7 @@ static sp_StrArray *sp_dir_glob_keywords(sp_RbVal pattern, sp_RbVal base, sp_RbV
   const char *p = sp_poly_arg_path(pattern); SP_GC_ROOT_STR(p);
   const char *bp = base.tag == SP_TAG_NIL ? NULL : sp_poly_arg_path(base); SP_GC_ROOT_STR(bp);
   sp_int f = flags_given ? sp_poly_arg_int_chk(flags) : 0;
-  if (f != 0 && f != SP_FNM_DOTMATCH)
-    sp_raise_cls("NotImplementedError", "Dir.glob flags: other than 0 and File::FNM_DOTMATCH");
-  return sp_dir_glob_options(p, bp, f == SP_FNM_DOTMATCH, sort_given ? sort : sp_box_bool(TRUE));
+  return sp_dir_glob_flags(p, bp, f, sort_given ? sort : sp_box_bool(TRUE));
 }
 sp_StrArray *sp_dir_glob_dot(const char *pattern);
 /* Dir.entries / Dir.children: every entry of one directory, dotfiles

@@ -1,0 +1,12 @@
+true
+true
+true
+["a.txt", "b.txt", "sub/c.txt"]
+["a*b"]
+["a\\b"]
+["a\\b"]
+[".", ".hid", "a*b", "a.txt", "a\\b", "b.txt", "sub"]
+[".", ".hid", "a*b", "a.txt", "a\\b", "b.txt", "sub"]
+["a.txt", "b.txt"]
+["a.txt", "b.txt"]
+[]

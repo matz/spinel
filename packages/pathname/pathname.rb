@@ -178,19 +178,31 @@ class Pathname
     [dirname, basename]
   end
 
-  # Each name component in order, without separators. Yields when given a
-  # block, and answers the Array either way -- CRuby answers self with a block
-  # and an Enumerator without one, but a method whose return type depends on
-  # whether a block was passed has no single representation here. `.to_a` on
-  # the result still works, which is how it is usually spelled.
+  # Each name component in order, without separators. With a block it yields
+  # them and answers nil, as CRuby does; without one it answers an Enumerator
+  # over them. So do #descend and #ascend.
   def each_filename
-    parts = Pathname.split_str(@path)
-    parts.each { |x| yield x } if block_given?
-    parts
+    return to_enum(:each_filename) unless block_given?
+    Pathname.split_str(@path).each { |x| yield x }
+    nil
   end
 
   # Root first, receiver last.
   def descend
+    return to_enum(:descend) unless block_given?
+    descend_paths.each { |x| yield x }
+    nil
+  end
+
+  # Receiver first, root last.
+  def ascend
+    return to_enum(:ascend) unless block_given?
+    descend_paths.reverse.each { |x| yield x }
+    nil
+  end
+
+  # The Pathnames #descend walks, root first.
+  def descend_paths
     out = []
     parts = Pathname.split_str(@path)
     acc = absolute? ? SEPARATOR : ""
@@ -199,16 +211,9 @@ class Pathname
       acc = acc == "" ? part : (acc == SEPARATOR ? "#{SEPARATOR}#{part}" : "#{acc}#{SEPARATOR}#{part}")
       out.push(Pathname.new(acc))
     end
-    out.each { |x| yield x } if block_given?
     out
   end
-
-  # Receiver first, root last. Same return rule as #descend.
-  def ascend
-    out = descend.reverse
-    out.each { |x| yield x } if block_given?
-    out
-  end
+  private :descend_paths
 
   # The path that reaches self when resolved against base. Lexical, so it can
   # answer for paths that do not exist; raises when the two share no anchor
@@ -329,9 +334,12 @@ class Pathname
     File.readlines(@path)
   end
 
+  # With a block, answers nil (CRuby's Pathname#each_line is IO.foreach's);
+  # without one, an Enumerator over the lines.
   def each_line
+    return to_enum(:each_line) unless block_given?
     File.foreach(@path) { |line| yield line }
-    self
+    nil
   end
 
   def open(mode = "r")
@@ -352,7 +360,9 @@ class Pathname
     with_directory ? names.map { |x| self + x } : names.map { |x| Pathname.new(x) }
   end
 
+  # With a block, answers the children; without one, an Enumerator over them.
   def each_child(with_directory = true)
+    return to_enum(:each_child, with_directory) unless block_given?
     out = children(with_directory)
     out.each { |x| yield x }
     out

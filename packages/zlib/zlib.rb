@@ -217,7 +217,7 @@ module Zlib
       unless raw?
         return if @buf.bytesize < 2
         @gzip = @window_bits >= 24 &&
-          (@window_bits < 40 || (@buf.getbyte(0) == 0x1f && @buf.getbyte(1) == 0x8b))
+          (@window_bits < 32 || (@buf.getbyte(0) == 0x1f && @buf.getbyte(1) == 0x8b))
         size = @gzip ? gzip_header : zlib_header
         return if size < 0
         @check = 0 if @gzip
@@ -232,7 +232,8 @@ module Zlib
       flg = @buf.getbyte(1)
       raise DataError, "incorrect header check" unless ((cmf << 8) | flg) % 31 == 0
       raise DataError, "unknown compression method" unless cmf & 0x0f == 8
-      raise DataError, "invalid window size" if (cmf >> 4) + 8 > @window_bits % 16
+      limit = @window_bits % 16
+      raise DataError, "invalid window size" if limit > 0 && (cmf >> 4) + 8 > limit
       return 2 if flg & 0x20 == 0
       return -1 if @buf.bytesize < 6
       raise NeedDict, "need dictionary"

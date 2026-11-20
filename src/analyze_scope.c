@@ -8547,19 +8547,10 @@ static void include_module_methods(Compiler *c, int ci, int mod_id, int guard, i
        class-level method stays module-side */
     if (src->is_cmethod && !src->is_module_function)
       continue;
-    /* a module function a later instance def of the name replaced (`def a`
-       after `module_function :a`): the includer gets that public def, not
-       a private copy of the module function */
-    if (src->is_cmethod) {
-      int live = comp_self_method_in_chain(c, mod_id, src->name, NULL);
-      if (live >= 0 && live != ms && !c->scopes[live].is_cmethod) continue;
-    }
-    /* an instance def a later module function of the name replaced: the
-       module function is the module's instance method of the name */
-    if (mod_mf && !src->is_cmethod) {
-      int live = comp_self_method_in_chain(c, mod_id, src->name, NULL);
-      if (live >= 0 && live != ms && c->scopes[live].is_module_function) continue;
-    }
+    /* (a module function and an instance def of the name, either replacing
+       the other, both come over, each a version of the includer's method:
+       a call reaches the one that is live when it runs, the module
+       function's instance side private, the def public) */
     const char *dst_name = src->name;
     char inc_shadow[256];
     /* a hidden copy the module holds (what its own include or prepend put

@@ -32,3 +32,11 @@ m = [1, :a, "z"]; p m.reject.with_index { m.shift; false }
 x = %w[a b]; y = x.reject.with_index { false }; p y[0].equal?(x[0])
 z = [true, false, nil]; p z.reject.with_index { z.pop; false }
 w = %w[a b c]; p w.select.with_index { w.shift; true }
+
+# an Integer or Float Array's reject keeps the element (and its nil) it
+# yielded too, with or without a parameter
+n1 = [1, 2, 3]; p n1.reject.with_index { n1.shift; false }
+n2 = [1, 2, 3]; p n2.reject.with_index { |x, i| n2.shift; false }
+n3 = [1.5, nil, 3.5]; p n3.reject.with_index { n3.shift; false }
+n4 = [nil, 2, 3]; p n4.reject.with_index { |x, i| n4[0] = 7; i == 2 }
+n5 = [1, 2, 3]; p n5.select.with_index { n5.shift; true }

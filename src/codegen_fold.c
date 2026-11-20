@@ -6859,13 +6859,18 @@ int emit_with_index_expr(Compiler *c, int id, Buf *b) {
     /* an Integer or Float Array's kept element is read from the receiver,
        its nil kept (oget) */
     int num_keep = !range_src && k && rk && sp_streq(rk, k) && is_numeric_literal_tag(k);
-    /* a select or reject whose block names no element (`select.with_index
-       { true }`) has no parameter to push: reject keeps the element it
-       yielded, as it was before the block ran (CRuby's ary_reject), so it is
-       held here, boxed and rooted; select reads it back afterwards, as
-       rb_ary_elt does */
+    /* reject keeps the element it yielded, as it was before the block ran
+       (CRuby's ary_reject); select reads it back afterwards, as rb_ary_elt
+       does. An Integer or Float Array's is held here with its nil, and so is
+       any element where the block names none (`reject.with_index { false }`
+       has no parameter to push), boxed and rooted */
     int tkept = 0;
-    if (is_rej && !p0 && !num_keep) {
+    if (is_rej && num_keep) {
+      tkept = ++g_tmp;
+      emit_indent(g_pre, innerIndent);
+      buf_printf(g_pre, "%s _t%d = sp_%sArray_oget(_t%d, _t%d);\n", oint_ctype(elem_t), tkept, k, trecv, ti);
+    }
+    else if (is_rej && !p0) {
       tkept = ++g_tmp;
       char src[256]; typed_elem_getf(src, sizeof src, rt, k, "_t%d, _t%d", trecv, ti);
       emit_indent(g_pre, innerIndent); buf_printf(g_pre, "sp_RbVal _t%d = ", tkept);
@@ -6925,8 +6930,13 @@ int emit_with_index_expr(Compiler *c, int id, Buf *b) {
       emit_indent(g_pre, innerIndent);
       buf_printf(g_pre, "if (%s(", is_rej ? "!" : "");
       buf_puts(g_pre, vb.p ? vb.p : ""); buf_puts(g_pre, ")) ");
-      if (num_keep)
-        buf_printf(g_pre, "sp_%sArray_push_o(_t%d, sp_%sArray_oget(_t%d, _t%d));\n", rk, tres, k, trecv, ti);
+      if (num_keep) {
+        /* reject's element was held before the block; select's is read now */
+        char kept[96];
+        if (tkept) snprintf(kept, sizeof kept, "_t%d", tkept);
+        else snprintf(kept, sizeof kept, "sp_%sArray_oget(_t%d, _t%d)", k, trecv, ti);
+        buf_printf(g_pre, "sp_%sArray_push_o(_t%d, %s);\n", rk, tres, kept);
+      }
       else if (!p0) {
         Buf pv = {0};
         if (tkept) {

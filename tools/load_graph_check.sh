@@ -728,7 +728,7 @@ fi
 # alike. An alias of the load path or of the loaded features
 # (`alias $lp $LOAD_PATH`, either way round) sets the flag the same way, but
 # is refused before any C is made, so no case can show it.
-held() { "$SPINEL" $2 "$1" -S --no-line-map 2>/dev/null | grep -c 'sp_String_new_shared(.*SP_GC_ENTRY_PTR'; }
+held() { "$SPINEL" $2 "$1" -S --no-line-map 2>/dev/null | grep -cE '(sp_String_new_shared|SP_STR_HDL)\(.*SP_GC_ENTRY_PTR'; }
 unread_flag() {   # FILE HELD WHAT
   for m in inline graph; do
     got=$(held "$1" --load-model=$m)

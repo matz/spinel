@@ -866,6 +866,17 @@ int emit_call_file_dir_time_arms(Compiler *c, int id, Buf *b, const NodeTable *n
     if (sp_streq(name, "glob") && argc == 3 && nt_kind(nt, argv[2]) == NK_KeywordHashNode &&
         nt_kind(nt, argv[1]) != NK_KeywordHashNode &&
         emit_dir_glob_options(c, argv[0], argv[2], argv[1], b)) return 1;
+    /* Dir.glob(pattern, flags): a positional flag word with no keyword, which
+       sp_dir_glob_keywords reads as flags: does */
+    if (sp_streq(name, "glob") && argc == 2 && nt_kind(nt, argv[1]) != NK_KeywordHashNode &&
+        nt_kind(nt, argv[1]) != NK_SplatNode && nt_kind(nt, argv[0]) != NK_SplatNode &&
+        nt_kind(nt, argv[0]) != NK_ArrayNode && !ty_is_array(comp_ntype(c, argv[0])) &&
+        (comp_ntype(c, argv[1]) == TY_INT || nt_kind(nt, argv[1]) == NK_ConstantPathNode)) {
+      buf_puts(b, "({ ");
+      int first = emit_rooted_arg_list(c, argv, 2, "sp_RbVal", "SP_GC_ROOT_RBVAL", emit_boxed, NULL, b);
+      buf_printf(b, "sp_dir_glob_keywords(_t%d, sp_box_nil(), _t%d, 1, sp_box_nil(), 0); })", first, first + 1);
+      return 1;
+    }
     /* Dir[*pats] / Dir.glob(*pats), and Dir[a, b]: every pattern a splat
        holds or an argument names, gathered into one list for the union */
     if (sp_streq(name, "glob") && argc >= 1 &&

@@ -2782,8 +2782,8 @@ static int lr_body_followed(Compiler *c, const int *par, int n, int node) {
      autoload naming it); copen: one that may bind any (a computed name, a
      send of those, a const_missing, a String eval);
    - hkey: by name, the class and module headers, whose lexical paths
-     (lr_body_key, kept in keys; hid: by node, 1 + the header's place in
-     hkey) are the classes the bars compare, so that no answer waits for
+     (lr_body_key, kept in keys once kdone marks them asked; hid: by node,
+     1 + the header's place in hkey) are the classes the bars compare, so that no answer waits for
      what the walk has reached;
    - subs: the paths a class header's superclass constant names
      (lr_body_ref_key); subany: a superclass constant the tree does not fix;
@@ -2794,6 +2794,7 @@ typedef struct LrBodyNames {
   ANameHash mod, cread, unsure, cw, subs;
   const int *par;
   char **keys;
+  unsigned char *kdone;
   int n, *hid, mm, lists, dyn, anon, copen, subany;
 } LrBodyNames;
 /* ...the last segment of the constant cp spells (NULL for no constant) */
@@ -2828,7 +2829,6 @@ static void lr_body_names_own(Compiler *c, const int *par, int n, int node, int 
     }
 }
 static int lr_defines_const_missing(const NodeTable *nt, int id);
-static char lr_no_key[1];   /* (a key computed as none) */
 static const char *lr_body_ref_key(Compiler *c, LrBodyNames *x, const char *leaf, int depth);
 /* ...the lexical path ("A::K") of the class or module header h, which is one
    class wherever it is written: the enclosing header's path and the name h
@@ -2841,8 +2841,8 @@ static const char *lr_body_key(Compiler *c, LrBodyNames *x, int h, int depth) {
   const NodeTable *nt = c->nt;
   int i = h >= 0 && h < x->n ? x->hid[h] - 1 : -1;
   if (i < 0 || x->copen || depth > 16) return NULL;
-  if (x->keys[i]) return x->keys[i] == lr_no_key ? NULL : x->keys[i];
-  x->keys[i] = lr_no_key;
+  if (x->kdone[i]) return x->keys[i];
+  x->kdone[i] = 1;
   int enc = -1, seg[16], ns = 0, lexical = 0;   /* lexical: the path's first segment is a bare name */
   for (int p = x->par[h]; p >= 0 && p < x->n && enc < 0; p = x->par[p]) {
     if (nt_kind(nt, p) == NK_SingletonClassNode) return NULL;
@@ -2961,8 +2961,9 @@ static void lr_body_names_read(Compiler *c, const int *par, int n, LrBodyNames *
   ani_sort(&x->hkey);
   x->par = par; x->n = n;
   x->keys = calloc((size_t)x->hkey.n + 1, sizeof *x->keys);
+  x->kdone = calloc((size_t)x->hkey.n + 1, 1);
   x->hid = calloc((size_t)n + 1, sizeof *x->hid);
-  if (!x->keys || !x->hid) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  if (!x->keys || !x->kdone || !x->hid) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   for (int i = 0; i < x->hkey.n; i++) x->hid[x->hkey.e[i].v] = i + 1;
   /* (the classes a class of the program's may have as its superclass, once per build) */
   for (int i = 0; i < x->hkey.n; i++) {
@@ -2975,9 +2976,9 @@ static void lr_body_names_read(Compiler *c, const int *par, int n, LrBodyNames *
 static void lr_body_names_free(LrBodyNames *x) {
   ani_free(&x->own); ani_free(&x->sites);
   anh_free(&x->mod); anh_free(&x->cread); anh_free(&x->unsure); anh_free(&x->cw); anh_free(&x->subs);
-  for (int i = 0; x->keys && i < x->hkey.n; i++) if (x->keys[i] != lr_no_key) free(x->keys[i]);
+  for (int i = 0; x->keys && i < x->hkey.n; i++) free(x->keys[i]);
   ani_free(&x->hkey);
-  free(x->keys); free(x->hid);
+  free(x->keys); free(x->kdone); free(x->hid);
 }
 /* ...the attribute name a writer name `nm=` spells, in buf (NULL for a
    name that is no writer's) */

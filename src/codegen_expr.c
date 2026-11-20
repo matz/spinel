@@ -136,11 +136,13 @@ static int interp_repeat_piece(Compiler *c, int expr, Buf *decls, WPart *part) {
   if (cls >= 0 && cplan_method_vis(c, expr, cls, name, 0, NULL) != SP_VIS_PUBLIC)
     return 0;
   int t = ++g_tmp;
-  buf_printf(decls, "const char *_t%d = ", t);
+  /* Operand preludes splice before their declaration's line. Give each
+     declaration a line so a prelude stays after the earlier operands. */
+  buf_printf(decls, "\nconst char *_t%d = ", t);
   emit_str_expr(c, recv, decls);
-  buf_printf(decls, "; SP_GC_ROOT(_t%d); sp_int _n%d = ", t, t);
+  buf_printf(decls, "; SP_GC_ROOT(_t%d);\nsp_int _n%d = ", t, t);
   emit_int_expr(c, argv[0], decls);
-  buf_printf(decls, "; size_t _u%d, _l%d = sp_str_repeat_size(_t%d, _n%d, &_u%d); ", t, t, t, t, t);
+  buf_printf(decls, "; size_t _u%d, _l%d = sp_str_repeat_size(_t%d, _n%d, &_u%d);\n", t, t, t, t, t);
   *part = (WPart){ .kind = WK_REPEAT, .tmp = t, .neutral = -1 };
   return 1;
 }

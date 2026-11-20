@@ -11992,9 +11992,15 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
    lane and the gate. A parameter nothing typed is left to the backstop, as
    before. A method the call's count or keywords cannot enter is no target:
    its ArgumentError comes before a parameter is read. *caps is the program's
-   `method(:sym)` nodes, listed on first use (*ncaps -1 until then). */
+   `method(:sym)` nodes, listed on first use (*ncaps -1 until then); *ctmi
+   the method each names, resolved once a round (CAP_UNASKED until a site
+   asks): every boxed site asked every capture again, and resolving a
+   capture (method_obj_target_mi) was most of the backstops phase on a large
+   program. A target a site changes within the round is read fresh by the
+   next round, which the change brings. -1 names no method to bind. */
+#define CAP_UNASKED (-2)
 static int boxed_recv_may_be_callable(Compiler *c, int recv, const char *name);
-static int bind_boxed_args_to_captures(Compiler *c, int id, int **caps, int *ncaps) {
+static int bind_boxed_args_to_captures(Compiler *c, int id, int **caps, int **ctmi, int *ncaps) {
   const NodeTable *nt = c->nt;
   int args = nt_ref(nt, id, "arguments"), argc = 0, boxed = 0, changed = 0;
   const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
@@ -12012,14 +12018,21 @@ static int bind_boxed_args_to_captures(Compiler *c, int id, int **caps, int *nca
       if (*ncaps == cap) {
         cap = cap ? cap * 2 : 8;
         *caps = realloc(*caps, sizeof **caps * (size_t)cap);
-        if (!*caps) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+        *ctmi = realloc(*ctmi, sizeof **ctmi * (size_t)cap);
+        if (!*caps || !*ctmi) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
       }
+      (*ctmi)[*ncaps] = CAP_UNASKED;
       (*caps)[(*ncaps)++] = mn;
     }
   }
   for (int j = 0; j < *ncaps; j++) {
-    int tmi = method_obj_target_mi(c, (*caps)[j]);
-    if (tmi < 0 || method_call_param_shift(c, (*caps)[j], tmi)) continue;
+    int tmi = (*ctmi)[j];
+    if (tmi == CAP_UNASKED) {
+      tmi = method_obj_target_mi(c, (*caps)[j]);
+      if (tmi >= 0 && method_call_param_shift(c, (*caps)[j], tmi)) tmi = -1;
+      (*ctmi)[j] = tmi;
+    }
+    if (tmi < 0) continue;
     Scope *m = &c->scopes[tmi];
     if (!method_takes_call_args(c, m, id)) continue;
     ArgLayout L;
@@ -12076,7 +12089,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
   sb_targets_share_begin(&changed, &any);
   IptWork w;
   ipt_work_begin(c, &w);
-  int *caps = NULL, ncaps = -1;   /* (bind_boxed_args_to_captures) */
+  int *caps = NULL, *ctmi = NULL, ncaps = -1;   /* (bind_boxed_args_to_captures) */
   /* A class method `===` of the program's own is called by `when` and `in`
      arms, grep and a class held as a value, with any kind of value: its
      parameter takes a boxed value. */
@@ -12092,6 +12105,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
   int nids = nt->count;
   MtabMark mt_pass = mtab_mark(c);
   for (;;) {
+  for (int j = 0; j < ncaps; j++) ctmi[j] = CAP_UNASKED;   /* (the captures' targets, as this round stands) */
   for (int k = 0; k < nids; k++, wbas_share_step(&changed, &any)) {
     mtab_pop(c, mt_pass);
     int id = ids ? ids[k] : k;
@@ -12319,14 +12333,14 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
         else changed |= bind_call_params(c, id, tmi);
       }
       free(mns);
-      if (!method_recv_all_named(c, recv, nmn)) changed |= bind_boxed_args_to_captures(c, id, &caps, &ncaps);
+      if (!method_recv_all_named(c, recv, nmn)) changed |= bind_boxed_args_to_captures(c, id, &caps, &ctmi, &ncaps);
       continue;
     }
     /* ... and `call` or `[]` on a boxed receiver whose class facts do not
        rule a Method out */
     if (recv >= 0 && name && (sp_streq(name, "call") || sp_streq(name, "()") || sp_streq(name, "[]")) &&
         infer_type(c, recv) == TY_POLY && boxed_recv_may_be_callable(c, recv, name))
-      changed |= bind_boxed_args_to_captures(c, id, &caps, &ncaps);
+      changed |= bind_boxed_args_to_captures(c, id, &caps, &ctmi, &ncaps);
 
     /* <unbound>.bind_call(obj, args...): the args after the receiver bind to
        the target's params, same as <method>.call -- without this the target's
@@ -12907,7 +12921,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
   if (!settle || !ipt_work_next(c, &w, &ids, &nids)) break;
   }
   ipt_work_end(&w);
-  free(caps);
+  free(caps); free(ctmi);
   sb_targets_share_end();
   wbas_share_end();
   return changed | any;

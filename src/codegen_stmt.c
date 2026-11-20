@@ -24246,11 +24246,26 @@ void emit_hash_store_key(Compiler *c, int key, TyKind rt, Buf *b) {
   }
   emit_hash_key(c, key, kt, b);
 }
+/* A boxed key read still needs staging when the value can run Ruby code. */
+int hash_store_hold_boxed_key(Compiler *c, TyKind rt, int key, int value) {
+  return ty_hash_key(rt) == TY_STRING && repr_of(c, key).kind == RK_BOXED &&
+         order_runs_code(c, value);
+}
+
 /* A String key is an object until insertion. Keep it rooted through the
    value operand and let the store take the bytes it has then. */
 TyKind hold_hash_store_key(Compiler *c, int key, TyKind rt, int temp, Buf *b) {
   TyKind kt = ty_hash_key(rt);
   Repr kr = repr_of(c, key);
+  if (kt == TY_STRING && kr.kind == RK_BOXED) {
+    Buf held = {0}, *saved_pre = g_pre;
+    g_pre = b;
+    emit_expr(c, key, &held);
+    g_pre = saved_pre;
+    buf_printf(b, "sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d); ", temp, held.p, temp);
+    free(held.p);
+    return TY_POLY;
+  }
   if (kt == TY_STRING && (kr.as_ty == TY_STRING || kr.as_ty == TY_STRBUF)) {
     Buf held = {0}, *saved_pre = g_pre;
     g_pre = b;
@@ -24269,6 +24284,13 @@ TyKind hold_hash_store_key(Compiler *c, int key, TyKind rt, int temp, Buf *b) {
     buf_puts(b, " ");
   }
   return kt;
+}
+
+void emit_held_hash_store_key(TyKind rt, TyKind held, int temp, Buf *b) {
+  if (held == TY_STRBUF) buf_printf(b, "SP_STR_B(_t%d)", temp);
+  else if (held == TY_POLY && ty_hash_key(rt) == TY_STRING)
+    buf_printf(b, "sp_poly_hkey_s(_t%d)", temp);
+  else buf_printf(b, "_t%d", temp);
 }
 /* A store into an Integer-valued typed Hash of a value that can be nil (a
    nil, an oint, a boxed value): it goes through `_oset`, which keeps the nil
@@ -25296,10 +25318,11 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
          hash's set roots what it is handed across the key's hook (#4201).
          The receiver's temp spares the frozen check a second evaluation, and
          lets the check follow the operands, as CRuby's does. A store whose
-         receiver and key are both reads or plain literals keeps the bare
-         call: the key is held by its slot. */
+         receiver and key are both reads or plain literals can keep the
+         bare call when the value cannot invalidate the key's byte view. */
       emit_indent(b, indent);
-      if (subtree_may_allocate(c, recv) || subtree_may_allocate(c, argv[0])) {
+      if (subtree_may_allocate(c, recv) || subtree_may_allocate(c, argv[0]) ||
+          hash_store_hold_boxed_key(c, rt, argv[0], argv[1])) {
         int tr = ++g_tmp, tk = ++g_tmp, tv = ++g_tmp;
         buf_printf(b, "{ %s _t%d = ", c_type_name(rt), tr); emit_expr(c, recv, b); buf_puts(b, "; ");
         if (subtree_may_allocate(c, recv) || subtree_has_side_effect(c, argv[0]) || subtree_has_side_effect(c, argv[1])) { emit_gc_root_tmp(c, rt, tr, b); buf_puts(b, " "); }
@@ -25307,7 +25330,7 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
         int vo = hash_store_oset(c, argv[1], rt);
         const char *vct = vo ? "sp_oint" : c_type_name(typed_elem_held(rt));
         Buf value = {0}, *saved_pre = g_pre;
-        if (kt == TY_STRBUF) g_pre = b;
+        if (kt == TY_STRBUF || (kt == TY_POLY && ty_hash_key(rt) == TY_STRING)) g_pre = b;
         emit_hash_store_val(c, argv[1], rt, &value);
         g_pre = saved_pre;
         buf_printf(b, "%s _t%d = ", vct ? vct : "sp_RbVal", tv);
@@ -25316,7 +25339,7 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
         const char *hbc = hash_box_cls(rt);
         buf_printf(b, "; if (sp_gc_is_frozen(_t%d)) sp_raise_frozen_hash_at(_t%d, %s); ", tr, tr, hbc ? hbc : "0");
         buf_printf(b, "sp_%sHash_%s%s(_t%d, ", hn, vo ? "oset" : "set", vo ? "" : typed_elem_store_sfx(rt), tr);
-        buf_printf(b, kt == TY_STRBUF ? "SP_STR_B(_t%d)" : "_t%d", tk);
+        emit_held_hash_store_key(rt, kt, tk, b);
         buf_printf(b, ", _t%d); }\n", tv);
         return 1;
       }

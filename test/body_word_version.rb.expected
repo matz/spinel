@@ -12,3 +12,5 @@
 [:setup, NoMethodError, false, true, true, false]
 [:before, ["baz", true, "baz", true]]
 [:after, [NoMethodError, false, :hidden, false]]
+[NoMethodError, NoMethodError, NoMethodError]
+[:pv, :pv]

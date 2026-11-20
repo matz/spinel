@@ -49,3 +49,18 @@ end
 hchk(:before)
 pr.call
 hchk(:after)
+# a word with one Array of names, and a protected method called in an
+# instance_exec block inside one on an instance of its class
+class J
+  def ja = :ja
+  def jb = :jb
+  def pv = :pv
+  def self.hide = private([:ja, :jb])
+  def self.prot = protected(:pv)
+end
+j = J.new
+J.hide
+J.prot
+p [(j.ja rescue $!.class), (j.jb rescue $!.class), (j.pv rescue $!.class)]
+def jx(j) = [J.new.instance_exec { instance_exec { j.pv } }, J.new.instance_exec { self.instance_exec { j.pv } }]
+p jx(j)

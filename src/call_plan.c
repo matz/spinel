@@ -3950,8 +3950,9 @@ static int block_self_call_in(Compiler *c, const int *par, int n, int node, cons
    receiver spells it: the class of an instance_eval's or instance_exec's
    `K.new` where no class method `new` of the program's is on K's chain
    (-1, no program class's instance, for a builtin class's,
-   `Object.new`), the scope's self (caller) for one with no receiver or on
-   self, and -1 for an eval block on a constant, whose self is the class
+   `Object.new`), for one with no receiver or on self the self of the
+   block around it that may run with another self (the scope's self,
+   caller, outside any), and -1 for an eval block on a constant, whose self is the class
    value; a bare `new` in a class method, outside any block that may run
    with another self, is an instance of the method's class where no class
    of the program's subclasses it. CPLAN_SELF_UNKNOWN for any other
@@ -3969,6 +3970,10 @@ static int ct_block_self_caller(Compiler *c, const int *par, int n, int bsc, int
   int ie = nm && is_instance_eval_family(nm), rv = nm ? nt_ref(nt, bsc, "receiver") : -1;
   if (!ie && !(nm && is_class_eval_family(nm))) return CPLAN_SELF_UNKNOWN;
   NodeKind rk = rv >= 0 ? nt_kind(nt, rv) : NK_SelfNode;
+  /* (self there is the self of the block around bsc that may run with another, `K.new.instance_exec {
+     instance_exec { ... } }`, else the scope's) */
+  int out = rk == NK_SelfNode && ie ? block_self_call_in(c, par, n, bsc, tree) : -1;
+  if (out >= 0) return ct_block_self_caller(c, par, n, out, caller, tree);
   if (rk == NK_SelfNode) return ie ? caller : -1;
   if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) return -1;
   int nw = ie && rk == NK_CallNode && is_new_name(call_sent_name(nt, rv, NULL)), nr = nw ? nt_ref(nt, rv, "receiver") : -1;

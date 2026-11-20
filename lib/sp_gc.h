@@ -727,6 +727,10 @@ extern const char *const *sp_poly_enum_lacks_names;
 /* user-object #to_a for container-read poly receivers (#3234): installed by
    the generated prologue when any instantiated class defines a no-arg to_a */
 extern sp_RbVal (*sp_obj_to_a_fn)(sp_RbVal);
+/* the elements a program Enumerable's #each yields, whatever its own #to_a
+   answers: installed when any instantiated class with an #each reaches
+   Enumerable */
+extern sp_RbVal (*sp_obj_each_a_fn)(sp_RbVal);
 /* #to_ary, the CONVERSION protocol -- distinct from to_a, the enumeration
    one: Kernel#Array asks to_ary first, and only a class that defines it
    answers here (#4187). */

@@ -14493,6 +14493,35 @@ static void emit_obj_to_a_dispatch(Compiler *c, Buf *b) {
   emit_basicobject_singleton_to_a_wrappers(c, b);
 }
 
+/* User-object #each elements, installed as sp_obj_each_a_fn: cls_id switch
+   over every instantiated class that reaches Enumerable and has the
+   synthesized __enum_to_a. The runtime's Enumerable methods walk these on a
+   boxed receiver, as an includer's arm does, not what the class's own #to_a
+   answers. */
+static int obj_each_a_any(Compiler *c) {
+  char elems[320];
+  for (int i = 0; i < c->nclasses; i++) {
+    ClassInfo *ci = &c->classes[i];
+    if (ci->is_native_class || !ci->instantiated || comp_class_is_module(c, ci)) continue;
+    if (comp_enum_reaches(c, i) && obj_each_elems_text(c, i, "v", elems, sizeof elems)) return 1;
+  }
+  return 0;
+}
+static void emit_obj_each_a_dispatch(Compiler *c, Buf *b) {
+  if (!obj_each_a_any(c)) return;
+  buf_puts(b, "static sp_RbVal sp_obj_each_a(sp_RbVal v) {\n");
+  emit_hook_object_root(b, "SP_GC_ROOT_RBVAL", "v");
+  buf_puts(b, "  switch (v.cls_id) {\n");
+  for (int i = 0; i < c->nclasses; i++) {
+    ClassInfo *ci = &c->classes[i];
+    char elems[320];
+    if (ci->is_native_class || !ci->instantiated || comp_class_is_module(c, ci)) continue;
+    if (!comp_enum_reaches(c, i) || !obj_each_elems_text(c, i, "v", elems, sizeof elems)) continue;
+    buf_printf(b, "    case %d: return %s;\n", i, elems);
+  }
+  buf_puts(b, "    default: return sp_box_nil();\n  }\n}\n");
+}
+
 /* User-object #to_ary, installed as sp_obj_to_ary_fn: the CONVERSION protocol
    Kernel#Array asks first, distinct from to_a (enumeration). Only classes that
    define a no-arg to_ary get a case; sp_kernel_array falls to the to_a hook
@@ -19048,6 +19077,8 @@ void emit_regex_section(Compiler *c, Buf *b) {
     buf_puts(b, "static sp_RbVal sp_obj_struct_values(sp_RbVal v);\n");
   if (obj_to_a_any(c, -1, -1))
     buf_puts(b, "static sp_RbVal sp_obj_to_a(sp_RbVal v);\n");
+  if (obj_each_a_any(c))
+    buf_puts(b, "static sp_RbVal sp_obj_each_a(sp_RbVal v);\n");
   if (obj_to_ary_any(c))
     buf_puts(b, "static sp_RbVal sp_obj_to_ary(sp_RbVal v);\n");
   if (obj_deconstruct_any(c)) {
@@ -19263,6 +19294,8 @@ void emit_regex_section(Compiler *c, Buf *b) {
   }
   if (obj_to_a_any(c, -1, -1))
     buf_puts(b, "  sp_obj_to_a_fn = sp_obj_to_a;\n");
+  if (obj_each_a_any(c))
+    buf_puts(b, "  sp_obj_each_a_fn = sp_obj_each_a;\n");
   if (obj_to_ary_any(c))
     buf_puts(b, "  sp_obj_to_ary_fn = sp_obj_to_ary;\n");
   if (obj_deconstruct_any(c)) {
@@ -24299,6 +24332,7 @@ static void emit_obj_dispatchers(Compiler *c, Buf *body) {
   emit_obj_deconstruct_dispatch(c, body);
   emit_obj_is_data(c, body);
   emit_obj_to_a_dispatch(c, body);
+  emit_obj_each_a_dispatch(c, body);
   emit_obj_to_ary_dispatch(c, body);
   emit_obj_with_dispatch(c, body);
 }

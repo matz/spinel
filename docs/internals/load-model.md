@@ -283,14 +283,17 @@ exit handler) is a version of the history it writes (`lr_body_versions`):
 their frame (`lr_body_frame`, `lr_body_target`); the dump marks it
 `in def#N` with its body's `from`. So is a visibility word such a body
 runs with literal names (`private :m`, `protected :a, :b`, `public [:c]`,
-`private def m`; `lr_body_word`), a version of each name it takes, where
+`private def m`, an Array only as the word's one argument; `lr_body_word`),
+a version of each name it takes, where
 the tree spells the class self is there (a class method's body, self's
 eval blocks, and a `class << self` it opens, whose word names the class
 side: `lr_body_word_frame`). Not `module_function`, which copies, nor a
 `def self.m` argument, which names a class method the word looks up
 among the instance methods: that word raises NameError where it runs, as
 any word naming a method the class has none of does, in a statement or
-for its value (`emit_vis_word_absent`). A def's version holds the
+for its value (`emit_vis_word_absent`). In a class body a builtin method
+the class has counts, its builtin root's or an included builtin
+module's; a method body's word on one raises still. A def's version holds the
 visibility it has where it runs (`lr_body_def_vis`: a word that takes
 it, a bare word before it in a class body's statements, private for
 `initialize` and its kin); a word's version holds the visibility it sets,
@@ -380,7 +383,8 @@ gathers (`lr_body_names_read`), so each ask is a lookup:
   caller, so a protected version would close the call where the block
   runs with an instance of the class; the form with no body versions
   keeps the method's visibility there. A block the tree tells the self of
-  (an `instance_exec` on `K.new` or on self, an eval block on a constant,
+  (an `instance_exec` on `K.new` or on self, which runs with the self of
+  the block around it, an eval block on a constant,
   a bare `new` in a class method of a class nothing subclasses, a block of
   a builtin that keeps self) is no bar.
 

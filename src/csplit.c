@@ -55,6 +55,35 @@
 #include "csplit.h"
 #include "sha256.h"
 
+/* Every allocation here is checked: a failed one stops the build with
+   "out of memory", as the analysis does. Read on, a NULL buffer crashed
+   the split (a preprocessed unit of 22 GB, whose fread went into a NULL
+   from malloc), and there is no smaller unit to fall back to. */
+static void cs_oom(void) {
+  fprintf(stderr, "spinel: out of memory\n");
+  exit(1);
+}
+static void *cs_malloc(size_t n) {
+  void *p = malloc(n ? n : 1);
+  if (!p) cs_oom();
+  return p;
+}
+static void *cs_calloc(size_t n, size_t sz) {
+  void *p = calloc(n ? n : 1, sz ? sz : 1);
+  if (!p) cs_oom();
+  return p;
+}
+static void *cs_realloc(void *q, size_t n) {
+  void *p = realloc(q, n ? n : 1);
+  if (!p) cs_oom();
+  return p;
+}
+static char *cs_strdup(const char *t) {
+  char *p = strdup(t);
+  if (!p) cs_oom();
+  return p;
+}
+
 typedef enum { IT_HDR, IT_FN, IT_VAR, IT_PROTO, IT_MARK, IT_UNIT } ItemKind;
 typedef struct {
   size_t st, en;        /* [st, en) in the text */
@@ -534,7 +563,7 @@ static int cs_lex(const char *t, size_t n, Item **items, int *nitems, UnitPragma
     /* an empty declaration declares nothing (a macro that expands to
        nothing before its `;`, sys/socket.h in the macOS 27 SDK) */
     if (t[i] == ';') { i++; continue; }
-    if (nit == cap) { cap = cap ? cap * 2 : 4096; it = realloc(it, sizeof *it * (size_t)cap); }
+    if (nit == cap) { cap = cap ? cap * 2 : 4096; it = cs_realloc(it, sizeof *it * (size_t)cap); }
     Item *x = &it[nit];
     memset(x, 0, sizeof *x);
     x->st = i;
@@ -544,7 +573,7 @@ static int cs_lex(const char *t, size_t n, Item **items, int *nitems, UnitPragma
       while (i < n && t[i] != '\n') i++;
       x->en = i; x->kind = mark ? IT_MARK : IT_HDR;
       if (!mark) {
-        if (nup == upcap) { upcap = upcap ? upcap * 2 : 256; up = realloc(up, sizeof *up * (size_t)upcap); }
+        if (nup == upcap) { upcap = upcap ? upcap * 2 : 256; up = cs_realloc(up, sizeof *up * (size_t)upcap); }
         int u = unit_pragma(t, x->st, x->en, &up[nup]);
         if (u < 0) { ok = 0; break; }
         if (u) { x->kind = IT_UNIT; x->body = (size_t)nup++; }
@@ -691,7 +720,7 @@ static int cs_lex(const char *t, size_t n, Item **items, int *nitems, UnitPragma
      unless a static local needs its one definition. */
   {
     int np2 = 0;
-    const char **pin = malloc(sizeof(char *) * (size_t)(nit + 1));
+    const char **pin = cs_malloc(sizeof(char *) * (size_t)(nit + 1));
     for (int k = 0; k < nit; k++) if (it[k].kind == IT_PROTO && it[k].keep_inline) pin[np2++] = it[k].name;
     qsort(pin, (size_t)np2, sizeof *pin, cmpstr);
     for (int k = 0; k < nit; k++) {
@@ -714,7 +743,7 @@ int c_split(const char *pre_path, const char *out_dir, int nparts,
   long fl = ftell(in);
   fseek(in, 0, SEEK_SET);
   if (fl <= 0) { fclose(in); return -1; }
-  char *t = malloc((size_t)fl + 1);
+  char *t = cs_malloc((size_t)fl + 1);
   size_t n = fread(t, 1, (size_t)fl, in);
   fclose(in);
   t[n] = 0;
@@ -731,14 +760,14 @@ int c_split(const char *pre_path, const char *out_dir, int nparts,
     if (it[k].kind == IT_FN && !it[k].keep_inline) { nfn++; fn_bytes += fn_weight(t, it[k].st, it[k].en); }
   /* sorted names of the inline-kept functions, for the prototype rule */
   int ninl = 0;
-  const char **inl = malloc(sizeof(char *) * (size_t)(nit + 1));
+  const char **inl = cs_malloc(sizeof(char *) * (size_t)(nit + 1));
   for (int k = 0; k < nit; k++) if (it[k].kind == IT_FN && it[k].keep_inline) inl[ninl++] = it[k].name;
   qsort(inl, (size_t)ninl, sizeof *inl, cmpstr);
 
   snprintf(hdr_path, hdr_sz, "%s/sp_split.h", out_dir);
   FILE *h = fopen(hdr_path, "wb");
   if (!h) { free(t); free(it); free(inl); return -1; }
-  FILE **pf = calloc((size_t)nparts, sizeof(FILE *));
+  FILE **pf = cs_calloc((size_t)nparts, sizeof(FILE *));
   for (int p = 0; p < nparts; p++) {
     snprintf(part_paths[p], 4096, "%s/sp_part%d.c", out_dir, p);
     pf[p] = fopen(part_paths[p], "wb");
@@ -755,8 +784,8 @@ int c_split(const char *pre_path, const char *out_dir, int nparts,
   int cur = 0;
   Out oh;
   out_init(&oh, h, out_dir, "h");
-  Out *op = calloc((size_t)nparts, sizeof(Out));
-  char (*ptag)[16] = calloc((size_t)nparts, sizeof *ptag);
+  Out *op = cs_calloc((size_t)nparts, sizeof(Out));
+  char (*ptag)[16] = cs_calloc((size_t)nparts, sizeof *ptag);
   for (int p = 0; p < nparts; p++) {
     snprintf(ptag[p], sizeof ptag[p], "p%d_", p);
     out_init(&op[p], pf[p], out_dir, ptag[p]);
@@ -907,9 +936,9 @@ static int nm_find(const NameMap *m, const char *s, size_t l) {
 static void nm_put(NameMap *m, const char *s, int v) {
   if ((m->n + 1) * 2 > m->cap) {
     NameMap g = { NULL, NULL, NULL, m->cap ? m->cap * 2 : 1024, 0 };
-    g.key = calloc(g.cap, sizeof *g.key);
-    g.klen = calloc(g.cap, sizeof *g.klen);
-    g.val = calloc(g.cap, sizeof *g.val);
+    g.key = cs_calloc(g.cap, sizeof *g.key);
+    g.klen = cs_calloc(g.cap, sizeof *g.klen);
+    g.val = cs_calloc(g.cap, sizeof *g.val);
     for (size_t i = 0; i < m->cap; i++) if (m->key[i]) nm_put(&g, m->key[i], m->val[i]);
     free(m->key); free(m->klen); free(m->val);
     *m = g;
@@ -991,7 +1020,7 @@ static char *cs_canon_markers(const char *t, size_t n, size_t *nout) {
     }
     i = e + 1;
   }
-  char *o = malloc(n + hits * cl + 1);
+  char *o = cs_malloc(n + hits * cl + 1);
   size_t w = 0;
   for (size_t i = 0; i < n; ) {
     size_t e = i;
@@ -1053,8 +1082,8 @@ static int cs_regions(Item *it, int nit, const char *t) {
    item after it carries that tag, until the next pragma or a `prog prog`
    reset. The runtime region holds no pragma and is never tagged. */
 static void cs_tags(Split *S) {
-  S->ptag = malloc(sizeof(int) * (size_t)(S->nup + 1));
-  S->tag_group = malloc(sizeof(int) * (size_t)(S->nup + 1));
+  S->ptag = cs_malloc(sizeof(int) * (size_t)(S->nup + 1));
+  S->tag_group = cs_malloc(sizeof(int) * (size_t)(S->nup + 1));
   for (int p = 0; p < S->nup; p++) {
     UnitPragma *u = &S->up[p];
     if (strcmp(u->tag, "prog") == 0 && strcmp(u->group, "prog") == 0) { S->ptag[p] = -1; continue; }
@@ -1288,7 +1317,7 @@ static void put_body(FILE *f, const char *t, size_t st, size_t en) {
     int k = 0;
     while (k < ns && !(seenl[k] == i - d && memcmp(t + seen[k], t + d, i - d) == 0)) k++;
     if (k == ns) {
-      if (ns == cap) { cap = cap ? cap * 2 : 16; seen = realloc(seen, sizeof *seen * (size_t)cap); seenl = realloc(seenl, sizeof *seenl * (size_t)cap); }
+      if (ns == cap) { cap = cap ? cap * 2 : 16; seen = cs_realloc(seen, sizeof *seen * (size_t)cap); seenl = cs_realloc(seenl, sizeof *seenl * (size_t)cap); }
       seen[ns] = d; seenl[ns] = i - d; ns++;
     }
     fprintf(f, "_sp_gcr_%d", k + 1);
@@ -1299,10 +1328,10 @@ static void put_body(FILE *f, const char *t, size_t st, size_t en) {
 static void cs_decl_add(Split *S, const char *name, int kind, int item, int k) {
   if (!name[0] || nm_find(&S->dmap, name, strlen(name)) >= 0) return;   /* the first declaration wins */
   if (S->opts->drop_decl && strcmp(name, S->opts->drop_decl) == 0) return;
-  if (S->ndecl == S->dcap) { S->dcap = S->dcap ? S->dcap * 2 : 4096; S->decl = realloc(S->decl, sizeof *S->decl * (size_t)S->dcap); }
+  if (S->ndecl == S->dcap) { S->dcap = S->dcap ? S->dcap * 2 : 4096; S->decl = cs_realloc(S->decl, sizeof *S->decl * (size_t)S->dcap); }
   CsDecl *d = &S->decl[S->ndecl];
   memset(d, 0, sizeof *d);
-  d->name = strdup(name);
+  d->name = cs_strdup(name);
   d->kind = kind; d->item = item; d->k = k;
   nm_put(&S->dmap, d->name, S->ndecl++);
 }
@@ -1362,7 +1391,7 @@ static void cs_refs(Split *S, size_t st, size_t en, int **list, int *nl, int *ca
     int d = nm_find(&S->dmap, t + s, i - s);
     if (d < 0 || S->decl[d].pinned || S->decl[d].stamp == S->stamp) continue;
     S->decl[d].stamp = S->stamp;
-    if (*nl == *cap) { *cap = *cap ? *cap * 2 : 256; *list = realloc(*list, sizeof **list * (size_t)*cap); }
+    if (*nl == *cap) { *cap = *cap ? *cap * 2 : 256; *list = cs_realloc(*list, sizeof **list * (size_t)*cap); }
     (*list)[(*nl)++] = d;
   }
 }
@@ -1411,8 +1440,8 @@ static int cmpxlabel(const void *a, const void *b) {
 static void cs_assign_units(Split *S) {
   size_t U = S->opts->unit_bytes ? S->opts->unit_bytes : 262144;
   int nit = S->nit;
-  int *slot = malloc(sizeof(int) * (size_t)(nit + 1));
-  size_t *group_w = calloc((size_t)S->ngroup + 1, sizeof *group_w);
+  int *slot = cs_malloc(sizeof(int) * (size_t)(nit + 1));
+  size_t *group_w = cs_calloc((size_t)S->ngroup + 1, sizeof *group_w);
   size_t acc = 0, w_prog = 0, w_common = 0;
   int nrt = 0;
   for (int k = 0; k < nit; k++) {
@@ -1432,14 +1461,14 @@ static void cs_assign_units(Split *S) {
   int bp = w_prog ? (int)ceil_div(w_prog, U) : 1;
   int bg = w_common ? (int)ceil_div(w_common, U) : 1;
   /* over-cap groups: sub-buckets at xbase[g] .. xbase[g] + S_g */
-  int *xbase = calloc((size_t)S->ngroup + 1, sizeof(int));
+  int *xbase = cs_calloc((size_t)S->ngroup + 1, sizeof(int));
   int nx = 0;
   for (int g = 0; g < S->ngroup; g++) {
     xbase[g] = nx;
     if (group_w[g] > U) nx += (int)ceil_div(group_w[g], U);
   }
-  const char **gname = calloc((size_t)S->ngroup + 1, sizeof *gname);
-  const char **tname = calloc((size_t)S->ntag + 1, sizeof *tname);
+  const char **gname = cs_calloc((size_t)S->ngroup + 1, sizeof *gname);
+  const char **tname = cs_calloc((size_t)S->ntag + 1, sizeof *tname);
   for (int p = 0; p < S->nup; p++)
     if (S->ptag[p] >= 0) { tname[S->ptag[p]] = S->up[p].tag; gname[S->tag_group[S->ptag[p]]] = S->up[p].group; }
   for (int k = 0; k < nit; k++) {
@@ -1454,7 +1483,7 @@ static void cs_assign_units(Split *S) {
   }
   /* the unit of each (stream, slot), -1 while empty */
   int base[4] = { 0, nrt, nrt + bp, nrt + bp + bg }, nslot = nrt + bp + bg + nx;
-  int *su = malloc(sizeof(int) * (size_t)(nslot + 1));
+  int *su = cs_malloc(sizeof(int) * (size_t)(nslot + 1));
   for (int s = 0; s < nslot; s++) su[s] = -1;
   for (int k = 0; k < nit; k++) {
     Item *x = &S->it[k];
@@ -1464,7 +1493,7 @@ static void cs_assign_units(Split *S) {
     slot[k] += base[st];
     su[slot[k]] = 0;
   }
-  S->u = calloc((size_t)nslot + 1, sizeof *S->u);
+  S->u = cs_calloc((size_t)nslot + 1, sizeof *S->u);
   for (int s = 0; s < base[3]; s++) {
     if (su[s] < 0) continue;
     CsUnit *u = &S->u[S->nu];
@@ -1473,7 +1502,7 @@ static void cs_assign_units(Split *S) {
     else { u->kind = UK_TAGGED; snprintf(u->label, sizeof u->label, "g%03d", s - base[2]); }
     su[s] = S->nu++;
   }
-  XLabel *xl = calloc((size_t)nx + 1, sizeof *xl);
+  XLabel *xl = cs_calloc((size_t)nx + 1, sizeof *xl);
   int nxl = 0;
   for (int g = 0; g < S->ngroup; g++) {
     if (group_w[g] <= U) continue;
@@ -1498,7 +1527,7 @@ static void cs_assign_units(Split *S) {
     S->it[k].home = su[slot[k]];
     S->u[S->it[k].home].nitems++;
   }
-  for (int j = 0; j < S->nu; j++) { S->u[j].items = malloc(sizeof(int) * (size_t)(S->u[j].nitems + 1)); S->u[j].nitems = 0; }
+  for (int j = 0; j < S->nu; j++) { S->u[j].items = cs_malloc(sizeof(int) * (size_t)(S->u[j].nitems + 1)); S->u[j].nitems = 0; }
   for (int k = 0; k < nit; k++) {
     Item *x = &S->it[k];
     if (x->home < 0) continue;
@@ -1507,7 +1536,7 @@ static void cs_assign_units(Split *S) {
   }
   /* a unit at a time, so that gseen[g] == j + 1 means listed in this unit:
      an over-cap group's items alternate between its sub-units */
-  int *gseen = calloc((size_t)S->ngroup + 1, sizeof(int));
+  int *gseen = cs_calloc((size_t)S->ngroup + 1, sizeof(int));
   for (int j = 0; j < S->nu; j++) {
     CsUnit *u = &S->u[j];
     size_t glen = 0;
@@ -1518,7 +1547,7 @@ static void cs_assign_units(Split *S) {
       if (gseen[g] == j + 1) continue;
       gseen[g] = j + 1;
       size_t l = strlen(gname[g]);
-      u->groups = realloc(u->groups, glen + l + 2);
+      u->groups = cs_realloc(u->groups, glen + l + 2);
       if (glen) u->groups[glen++] = ',';
       memcpy(u->groups + glen, gname[g], l + 1);
       glen += l;
@@ -1538,7 +1567,7 @@ static int cs_hash_file(const char *path, int keep_markers, Sha256 *h, size_t *b
   char *buf = NULL; size_t n = 0, cap = 0, r;
   char chunk[65536];
   while ((r = fread(chunk, 1, sizeof chunk, f)) > 0) {
-    if (n + r > cap) { cap = (n + r) * 2; buf = realloc(buf, cap); }
+    if (n + r > cap) { cap = (n + r) * 2; buf = cs_realloc(buf, cap); }
     memcpy(buf + n, chunk, r); n += r;
   }
   int bad = ferror(f);
@@ -1706,7 +1735,7 @@ static int cs_write_unit(Split *S, int ui, CSplitUnit *cu, const CSplitUnit *don
   snprintf(cu->label, sizeof cu->label, "%s", u->label);
   snprintf(cu->path, sizeof cu->path, "%s/unit_%.16s.c", S->dir, cu->hash);
   cu->is_rt = u->kind == UK_RT;
-  cu->groups = u->groups ? strdup(u->groups) : NULL;
+  cu->groups = u->groups ? cs_strdup(u->groups) : NULL;
   /* the same name twice (the same text, or a 64-bit prefix collision)
      would compile one object for two units */
   for (int k = 0; k < ndone; k++)
@@ -1749,8 +1778,7 @@ int c_split_units_manifest(const char *path) {
 
 char *c_link_flags(const char *flags) {
   size_t n = strlen(flags);
-  char *out = malloc(n + 1);
-  if (!out) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  char *out = cs_malloc(n + 1);
   size_t w = 0;
   for (size_t i = 0; i < n; ) {
     if ((i == 0 || flags[i - 1] == ' ') && strncmp(flags + i, "-mllvm ", 7) == 0) {
@@ -1788,7 +1816,7 @@ int c_split_units(const char *pre_path, const char *out_dir, const CSplitOpts *o
   long fl = ftell(in);
   fseek(in, 0, SEEK_SET);
   if (fl <= 0) { fclose(in); return -1; }
-  char *raw = malloc((size_t)fl + 1);
+  char *raw = cs_malloc((size_t)fl + 1);
   size_t n = fread(raw, 1, (size_t)fl, in);
   fclose(in);
   raw[n] = 0;
@@ -1814,7 +1842,7 @@ int c_split_units(const char *pre_path, const char *out_dir, const CSplitOpts *o
     rc = cs_write_headers(&S, res);
   }
   if (rc == 0) {
-    res->units = calloc((size_t)S.nu + 1, sizeof *res->units);
+    res->units = cs_calloc((size_t)S.nu + 1, sizeof *res->units);
     for (int j = 0; j < S.nu && rc == 0; j++) {
       rc = cs_write_unit(&S, j, &res->units[j], res->units, j);
       if (rc == 0) res->n++;

@@ -1,5 +1,6 @@
 # get, post and patch hand the body to a block in pieces, or append it to a
-# dest. Each request here is its own connection; the server
+# dest; request_get and its siblings hand the response to the block before
+# its body is read. Each request here is its own connection; the server
 # answers with the verb, the path and the body it got.
 require "net/http"
 
@@ -50,6 +51,25 @@ puts "post with a block: #{pieces.join.inspect}"
 dest = +""
 http.patch("/e", "more", nil, dest)
 puts "patch with dest: #{dest.inspect}"
+
+pieces = []
+status = nil
+http.request_get("/f") do |r|
+  status = r.code
+  r.read_body { |piece| pieces << piece }
+end
+puts "request_get: #{[status, pieces.join].inspect}"
+puts "request_get alone: #{http.request_get("/g").body.inspect}"
+
+res = http.request_head("/h") { |r| puts "request_head block: #{r.code}" }
+puts "request_head: #{res.body.inspect}"
+
+seen = ""
+http.request_post("/i", "posted") { |r| seen = r.body }
+puts "request_post: #{seen.inspect}"
+puts "request_put: #{http.request_put("/j", "put").body.inspect}"
+puts "get2: #{http.get2("/k").body.inspect}, head2: #{http.head2("/l").code}, " \
+     "post2: #{http.post2("/m", "x").body.inspect}, put2: #{http.put2("/n", "y").body.inspect}"
 
 http.get("/stop")
 t.join

@@ -940,6 +940,17 @@ module Net
       request(req, &blk)
     end
 
+    def request_put(path, body, headers = nil, &blk)
+      req = Put.new(path, headers)
+      req.body = body
+      request(req, &blk)
+    end
+
+    alias get2 request_get
+    alias head2 request_head
+    alias post2 request_post
+    alias put2 request_put
+
     # Keep the connection alive through the block, then consume an unread body.
     # An explicit block parameter also keeps the no-block spelling callable.
     # A request with no session is the session's only one, and asks the

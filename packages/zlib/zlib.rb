@@ -6,19 +6,21 @@
 #
 # What is absent is absent the way a subset is:
 #
-# * the codec is ONE-SHOT. `<<` accumulates and `finish` runs the whole
+# * inflate is ONE-SHOT. `<<` accumulates and `finish` runs the whole
 #   transform, so a caller that feeds a stream in pieces gets the right answer
 #   but not incremental output, and one that never calls finish (or the block
 #   form, or #inflate with the last chunk) gets nothing. A true streaming
 #   inflater keeps a 32K window across calls; this one keeps the input.
+# * deflate writes a block per flush: Deflate#deflate with SYNC_FLUSH or
+#   FULL_FLUSH, and Deflate#flush, answer what was written so far, ending
+#   on a byte. Each block starts with an empty window (what
+#   zlib calls FULL_FLUSH), so a match never reaches back past a flush.
 # * deflate emits fixed-Huffman blocks. The output is a valid stream every
 #   inflater reads, at a ratio below zlib's own, which builds a dynamic table
 #   per block. Zlib::BEST_COMPRESSION buys a deeper match search, not a
 #   different format.
 # * no preset dictionaries, no Zlib::ZStream introspection (total_in,
-#   total_out, #avail_in), no #set_dictionary, no #params, no #flush modes
-#   (SYNC_FLUSH and friends are accepted and ignored -- one block is written
-#   at finish either way).
+#   total_out, #avail_in), no #set_dictionary, no #params.
 # * GzipReader reads a whole member; a multi-member .gz stops after the first,
 #   as CRuby's does without #each_entry.
 module Zlib
@@ -58,6 +60,7 @@ module Zlib
     # heap, so an embedded NUL survives and no strlen is taken of it.
     native_func :inflate,    [:string, :int],       :string, "sp_zlib_inflate"
     native_func :deflate,    [:string, :int, :int], :string, "sp_zlib_deflate"
+    native_func :deflate_block, [:string, :int, :int], :string, "sp_zlib_deflate_block"
     native_func :crc32,      [:string, :any],       :any,    "sp_zlib_crc32_of"
     native_func :adler32,    [:string, :any],       :any,    "sp_zlib_adler32_of"
     native_func :last_error, [],                    :cstring, "sp_zlib_last_error"
@@ -160,6 +163,10 @@ module Zlib
     end
   end
 
+  # A stream never flushed is compressed whole at finish, as one block. Once
+  # flushed, each flush writes the input since the last one as a block of its
+  # own, and this side writes the wrapper the blocks go in: the zlib or gzip
+  # header before the first, the checksum and length after the last.
   class Deflate
     def self.deflate(str, level = Zlib::DEFAULT_COMPRESSION)
       Zlib.raw_deflate(str, level, Zlib::MAX_WBITS)
@@ -172,6 +179,10 @@ module Zlib
       @buf = String.new
       @finished = false
       @closed = false
+      @started = false
+      @total_in = 0
+      @adler = 1
+      @crc = 0
     end
 
     def <<(str)
@@ -179,20 +190,43 @@ module Zlib
       self
     end
 
-    def deflate(str = nil, flush = Zlib::NO_FLUSH)
+    # What this call wrote: nothing for NO_FLUSH, the input so far as a block
+    # for SYNC_FLUSH and FULL_FLUSH, the end of the stream for FINISH.
+    def deflate(str = nil, mode = Zlib::NO_FLUSH)
+      raise StreamError, "stream error" if @finished && mode != Zlib::FINISH
       @buf << str.to_s unless str.nil?
-      return String.new unless flush == Zlib::FINISH
-      finish
+      flush(mode)
+    end
+
+    # A SYNC_FLUSH with nothing new since the last flush is a BufError, as
+    # zlib answers Z_BUF_ERROR to a call that cannot make progress; a
+    # FULL_FLUSH writes the empty block all the same. Past finish, a flush is
+    # a StreamError, as is #deflate.
+    def flush(mode = Zlib::SYNC_FLUSH)
+      return finish if mode == Zlib::FINISH
+      return String.new if mode == Zlib::NO_FLUSH
+      raise StreamError, "stream error" if @finished
+      raise BufError, "buffer error" if mode == Zlib::SYNC_FLUSH && @started && @buf.empty?
+      out = @started ? String.new : header
+      @started = true
+      out << block(0)
+      out
     end
 
     def finish
       return String.new if @finished
       @finished = true
-      Zlib.raw_deflate(@buf, @level, @window_bits)
+      unless @started
+        @total_in = @buf.bytesize
+        return Zlib.raw_deflate(@buf, @level, @window_bits)
+      end
+      out = block(1)
+      out << trailer
+      out
     end
 
     def total_in
-      @buf.bytesize
+      @total_in + @buf.bytesize
     end
 
     def finished?
@@ -206,6 +240,48 @@ module Zlib
 
     def closed?
       @closed
+    end
+
+    private
+
+    # The input since the last flush as one block, BFINAL set when final
+    # is 1; the checksum moves on over it.
+    def block(final)
+      data = @buf
+      @buf = String.new
+      @total_in += data.bytesize
+      if gzip?
+        @crc = Zlib.crc32(data, @crc)
+      elsif !raw?
+        @adler = Zlib.adler32(data, @adler)
+      end
+      out = Native.deflate_block(data, @level, final)
+      raise Error, Native.last_error if out.nil?
+      out
+    end
+
+    # The window_bits of zlib: negative raw deflate, +16 gzip, +32 either
+    # (zlib when writing).
+    def raw?
+      @window_bits < 0
+    end
+
+    def gzip?
+      @window_bits >= 24 && @window_bits < 40
+    end
+
+    # The bytes the C side writes before a whole stream, so a stream in
+    # pieces starts the same way.
+    def header
+      return String.new if raw?
+      return [0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 0xff].pack("C*") if gzip?
+      [0x78, 0x9c].pack("C*")
+    end
+
+    def trailer
+      return String.new if raw?
+      return [@crc, @total_in & 0xffffffff].pack("VV") if gzip?
+      [@adler].pack("N")
     end
   end
 

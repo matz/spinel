@@ -15985,6 +15985,18 @@ static TyKind emit_face_arm(Compiler *c, int id, unsigned kind, unsigned flags, 
     call_args(nt, id, &argc);
     if (bop_answers_self(as, name, argc, has_blk) == BOPF_SELF) nat = as;
   }
+  /* ...and a program's method of the name (another class's minmax) widens
+     the call to a box, while this arm is the owner's builtin, whose typed
+     emitter answers the Array of its own kind (a Float Range's Float
+     Array): read as the box it was handed to the slot raw. The arm's
+     value is the builtin's answer, as the call reads with no method of the
+     program's. */
+  if (nat == TY_POLY && an_user_defines_or_reads(c, name)) {
+    an_pure_read_begin();
+    TyKind bt = an_builtin_answer(c, id);
+    an_pure_read_end();
+    if (bt != TY_POLY && (ty_is_array(bt) || bt == TY_POLY_ARRAY)) nat = bt;
+  }
   Buf cb; memset(&cb, 0, sizeof cb);
   /* An Integer or Float answer that can be nil (bsearch finding nothing)
      comes back as its oint: a poly slot boxes the nil, a plain one unwraps

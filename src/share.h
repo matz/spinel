@@ -59,17 +59,6 @@ int share_scope_answers_no_string(Compiler *c, int mi);
 int share_builtin_overridden(Compiler *c, const char *cls, const char *name);
 
 
-/* The literal blocks method scope mi yields to, as a list in *blocks:
-   their count, or -1 when a block the table does not list reaches its
-   yields (a block passed as a value, a zsuper's, a dynamic call's). */
-int share_method_blocks(const Compiler *c, int mi, const int **blocks);
-/* The literal blocks that can reach method scope mi's yields: its own
-   and, through each method that hands mi the block it was given (`&blk`),
-   that method's, each method once, into out (at most cap): their count, or
-   -1 when a zsuper's or a dynamic call's block reaches one of them, or
-   there are more than cap. Any other block that reaches them is a proc
-   the yield calls. */
-int share_method_reaching_blocks(const Compiler *c, int mi, int *out, int cap);
 /* The class that `K.new(...)` (through parentheses) builds exactly: a class
    of the program's with no `def self.new` in its chain. -1 for any other
    node. */
@@ -114,71 +103,9 @@ int share_frozen_literal_alone(Compiler *c, int n);
    object too (share_frozen_string) */
 int share_frozen_string(Compiler *c, int n);
 
-/* Must the String node v evaluates to be its handle where it is emitted,
-   and not its bytes: SHN_YES for every String but nil, a literal, a frozen
-   String and one in a method no call reaches. */
-enum { SHN_NO, SHN_YES };
-int share_value_needs_handle(Compiler *c, int v);
-/* Does node n hand over the shared handle (or a box holding it), not a
-   copy of its bytes? The carry a deferred route is checked against
-   (share_route_defer), and the String plan's supply for a value held as
-   bytes. */
+/* Does n supply its handle or a box holding that handle? */
 int share_node_carries_handle(const Compiler *c, int n);
-/* ... the kind (SPK_*) of the route it hands it over by, SPK_NONE for
-   none, not counting a value represented as the handle (the String plan
-   reads the representation itself); *op is the node whose supply an
-   SPK_SELF or SPK_OPERAND route hands on, else -1. */
-int share_node_carry_kind(const Compiler *c, int n, int *op);
-/* ...asked as if no store lifted n into a handle (poly_strbuf_lift), the
-   lift being the store's: the route n hands the handle on by itself */
-int share_node_carry_kind_unlifted(const Compiler *c, int n, int *op);
 
-/* the producer that supplies a value's handle (share_plan_producer), one
-   kind per route codegen hands a String on by; each face renders each
-   kind (codegen_str.c):
-     NONE         its bytes only;
-     BOX          a box, which hands over itself;
-     SLOT         a variable's or a write's slot that holds the handle, a
-                  String Range's kept endpoint (repr_of's RS_HANDLE);
-     DEMANDED     a reader or receiver call that renders the handle under a
-                  handle mark or demand (RS_DEMANDED);
-     ELEM         a boxed container's element, a box of the handle (RS_ELEM);
-     SLOT_POLY    a narrowed box's slot (RS_SLOT_POLY);
-     FROZEN       a frozen String: a literal (share_frozen_literal) or a
-                  builtin String constant, its own handle;
-     SELF         a call that answers its String receiver, whose supply is
-                  that receiver's (the operand);
-     BANG_BOX     a bang on a boxed receiver: the receiver's box or nil;
-     PROC_CALL    a proc's (or a catch's) answer, which comes back boxed;
-     POLY_ARMS    a boxed receiver's call whose every arm answers a handle
-                  it publishes or a new String, boxed arm by arm;
-     EXC_MESSAGE  an exception's message, the handle it keeps;
-     EXC_SUPER    super in an exception's message or to_s override that
-                  hands on the builtin's: the kept message's handle;
-     PUBLISHED    a call whose targets publish their handle (the return
-                  pickup), a spliced call answering a variable;
-     READER       a reader of a slot that holds the handle;
-     WRITE        a write in value position whose slot holds the handle;
-     ASSIGN       an attribute assignment's value, the handle it stores;
-     OPERAND      a route that answers the String it is handed (`+s`,
-                  String(s), tap, a conversion): the operand's supply;
-     BLOCK_VALUE  a call answering its block's value (then, inject, loop,
-                  instance_exec's splice, a spliced yielding call): each
-                  value the block answers;
-     YIELD        a yield spliced with a literal block: the block's value;
-     COND         a conditional or begin taken arm by arm: each arm;
-     SEQUENCE     parentheses or statements: the last statement (the
-                  operand);
-     LIFT         a box codegen lifts into its handle (poly_strbuf_lift) */
-enum { SPK_NONE, SPK_BOX, SPK_SLOT, SPK_DEMANDED, SPK_ELEM, SPK_SLOT_POLY, SPK_FROZEN, SPK_SELF, SPK_BANG_BOX,
-       SPK_PROC_CALL, SPK_POLY_ARMS, SPK_EXC_MESSAGE, SPK_EXC_SUPER, SPK_NATIVE_CALL, SPK_READER, SPK_WRITE,
-       SPK_ASSIGN, SPK_OPERAND, SPK_BLOCK_VALUE, SPK_YIELD, SPK_COND, SPK_SEQUENCE, SPK_LIFT, SPK__COUNT };
-void share_plan_free(Compiler *c);
-/* The producer of node v's handle where codegen is (SPK_*), asked live as
-   the supply is, whatever a consumer needs; *operand (may be NULL) is the
-   node whose supply an SPK_SELF, SPK_OPERAND or SPK_SEQUENCE value hands
-   on, the receiver whose box an SPK_BANG_BOX call answers, else -1. */
-int share_plan_producer(Compiler *c, int v, int *operand);
 /* Are the targets the plan lists for call u all it can reach: every value
    its receiver can be answers the name by a method of the program's own,
    and it is no exception's builtin message or to_s? */

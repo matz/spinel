@@ -72,6 +72,9 @@ uses the same handle as the expression that supplied it.
 An ordered operand keeps its saved handle until its argument binding is
 removed. For a call with a native String result, it holds the handle
 from the call's result. An abandoned emission also removes the binding.
+Safe navigation holds the call's native String result through its nil
+test and argument evaluation. The selected call can read the held
+String's current bytes after an argument mutates it.
 Boxed callable dispatch holds the receiver and arguments before it
 binds the block operand. For safe navigation, the argument statements
 and explicit block expression run only after the held receiver passes

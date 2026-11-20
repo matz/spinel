@@ -1133,12 +1133,11 @@ int repr_env_store_operand(Compiler *c, int v) {
 }
 /* Does string conversion `node` hand on a handle: the operand it ends in,
    through further conversions, is a boxed value or a route that carries
-   one (strbuf_route_kind, the arms emit_strbuf_value takes the conversion
-   by)? */
+   one through the value emitter? */
 static int repr_conversion_hands_handle(Compiler *c, int node) {
-  int x = repr_string_conversion_operand(c, node), op, more;
+  int x = repr_string_conversion_operand(c, node), more;
   while ((more = x >= 0 ? repr_string_conversion_operand(c, x) : -1) >= 0) x = more;
-  return x >= 0 && (repr_of(c, x).kind == RK_BOXED || strbuf_route_kind(c, x, &op) != SPK_NONE ||
+  return x >= 0 && (repr_of(c, x).kind == RK_BOXED || strbuf_route_carries(c, x, 0) ||
                     strbuf_cond_has_handle_leaf(c, x));
 }
 /* Where the boxed form of a shared-mutable String comes from, as emit_boxed
@@ -1699,8 +1698,6 @@ static void repr_check_string_slots(Compiler *c) {
 void repr_seal(Compiler *c) {
   if (g_repr_check) { repr_check_block_params(c); repr_check_string_slots(c); }
   repr_sealed_flag = 1;
-  /* Drop producer-supply answers computed before the representation was sealed. */
-  share_plan_free(c);
 }
 
 

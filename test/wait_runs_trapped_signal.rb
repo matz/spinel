@@ -27,3 +27,11 @@ rescue Interrupt
   puts "Interrupt in the wait"
 end
 Process.wait(pid) rescue nil
+
+# a trap for CHLD, which the child's own end records: its proc runs once the
+# wait has answered, before the program goes on, even when the wait was the
+# program's last line
+trap("CHLD") { puts "CHLD ran" }
+pid = spawn("sleep", "0.3")
+Process.wait(pid)
+puts "wait returned #{$?.exitstatus}"

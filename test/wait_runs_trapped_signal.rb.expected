@@ -5,3 +5,5 @@ system returned 0
 handler ran
 wait2 returned true 0
 Interrupt in the wait
+CHLD ran
+wait returned 0

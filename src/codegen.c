@@ -3004,26 +3004,12 @@ static void emit_boxed_impl(Compiler *c, int node, Buf *b) {
         else plain = bt == TY_INT && int_value_plain(c, tail); }
       break;
     }
-    /* --share-strings: a block whose value is a String a holder keeps as
-       the handle answers that handle (strbuf_route_yield): boxed as its
-       bytes, the box held a copy */
-    /* ...but a String Range's endpoint is boxed by the Range's own test for
-       the handle it keeps, else the endpoint's own String, as a `next` of it
-       is (emit_boxed_next_value): the splice yields the box */
-    if ((bt == TY_STRING || bt == TY_STRBUF) && strbuf_yield_tail_srange(c)) {
+    /* The inline block can publish its String directly in a box,
+       including a nullable result or an early next. */
+    if (bt == TY_STRING || bt == TY_STRBUF) {
       emit_block_invoke(c, node, b, 0, 1, TY_POLY);
       RC(RF_YIELD, RW_YIELD);
       return;
-    }
-    if ((bt == TY_STRING || bt == TY_STRBUF) && strbuf_yield_tail_held(c)) {
-      Buf hb; memset(&hb, 0, sizeof hb);
-      if (emit_strbuf_route(c, node, &hb)) {
-        str_box_handle(b, hb.p);
-        free(hb.p);
-        RC(RF_STRBUF_HANDLE, RW_YIELD);
-        return;
-      }
-      free(hb.p);
     }
     /* The same Integer type can still differ in whether INTPTR_MIN is nil. */
     if ((bt != t || plain) && bt != TY_UNKNOWN) {

@@ -2924,13 +2924,17 @@ void emit_block_invoke(Compiler *c, int site, Buf *b, int indent, int as_expr,
       /* (and so is any carrier of a body that diverges: its tail types no
          site, the boxed slot reads the splice as it is, and the carrier is
          the splice's value) */
-      g_ie_res_poly = nx_bt != TY_STRBUF && (nx_bt == TY_POLY || (want_poly && (ty_is_object(nx_bt) || oint_kind(nx_bt) ||
-                                                                               stmts_diverge(c, bbody))));
+      int string_result = nx_bt == TY_STRING || nx_bt == TY_STRBUF;
+      g_ie_res_poly = nx_bt == TY_POLY || (want_poly && (string_result || ty_is_object(nx_bt) ||
+                                                       oint_kind(nx_bt) || stmts_diverge(c, bbody)));
       /* a `next nil` into an Integer or Float slot is the slot's nil, and
          a `next` into the handle carrier adopts its value */
       g_ie_next_ty = (nx_bt == TY_INT || nx_bt == TY_FLOAT || nx_bt == TY_STRBUF) ? nx_bt : TY_UNKNOWN;
       g_ie_next_oint = ywo && oint_kind(nx_bt);
-      if (g_ie_res_poly) buf_printf(b, "sp_RbVal _t%d = sp_box_nil(); ", nx_tmp);
+      if (g_ie_res_poly) {
+        buf_printf(b, "sp_RbVal _t%d = sp_box_nil(); ", nx_tmp);
+        if (string_result) buf_printf(b, "SP_GC_ROOT_RBVAL(_t%d); ", nx_tmp);
+      }
       else if (g_ie_next_oint) buf_printf(b, "%s _t%d = %s; ", oint_ctype(nx_bt), nx_tmp, oint_nil(nx_bt));
       else if (nx_bt == TY_INT || nx_bt == TY_BOOL || nx_bt == TY_SYMBOL)
         buf_printf(b, "sp_int _t%d = 0; ", nx_tmp);

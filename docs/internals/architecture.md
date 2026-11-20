@@ -125,7 +125,8 @@ A boxed String carries the `sp_String *` handle in an `SP_TAG_OBJ` box
 with class ID `SP_BUILTIN_STRBUF`. This includes frozen literals and the
 objects retained by Hashes, Enumerators, and callbacks. Ordinary boxing
 reads the expression's representation, including results held by a call
-or written into a slot. Byte comparisons
+or written into a slot. A boxed inline yield keeps the block's String
+handle, including a value supplied by an early `next`. Byte comparisons
 and private conversion buffers can borrow its payload through
 `sp_rbval_string_bytes`.
 Boxed Array pushes hold each argument across evaluation of the next.

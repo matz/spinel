@@ -2003,15 +2003,6 @@ int strbuf_next_srange_value(Compiler *c, int v) {
   const int *av = nt_kind(c->nt, v) == NK_NextNode ? call_args(c->nt, v, &na) : NULL;
   return na == 1 && av[0] >= 0 && strbuf_cond_arm_any(c, av[0], strbuf_srange_unheld_leaf, 0);
 }
-/* ...and is the value of the literal block spliced here (no `next` in it) one
-   (strbuf_srange_arm)? */
-int strbuf_yield_tail_srange(Compiler *c) {
-  const NodeTable *nt = c->nt;
-  if (g_block_id < 0) return 0;
-  int body = nt_ref(nt, g_block_id, "body"), n = 0;
-  const int *bb = body >= 0 ? nt_arr(nt, body, "body", &n) : NULL;
-  return n > 0 && strbuf_srange_arm(c, bb[n - 1]) && !subtree_has_own_next(nt, body);
-}
 /* The tail of the literal block spliced here, past each tail that is
    itself a yield, or -1. */
 static int strbuf_site_tail(Compiler *c) {

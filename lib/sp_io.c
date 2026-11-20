@@ -1493,6 +1493,69 @@ sp_int sp_sock_const(const char *n) {
 #ifdef IP_TTL
     { "IP_TTL", IP_TTL },
 #endif
+#ifdef IP_TOS
+    { "IP_TOS", IP_TOS },
+#endif
+#ifdef IP_HDRINCL
+    { "IP_HDRINCL", IP_HDRINCL },
+#endif
+#ifdef IP_MULTICAST_IF
+    { "IP_MULTICAST_IF", IP_MULTICAST_IF },
+#endif
+#ifdef IP_MULTICAST_TTL
+    { "IP_MULTICAST_TTL", IP_MULTICAST_TTL },
+#endif
+#ifdef IP_MULTICAST_LOOP
+    { "IP_MULTICAST_LOOP", IP_MULTICAST_LOOP },
+#endif
+#ifdef IP_ADD_MEMBERSHIP
+    { "IP_ADD_MEMBERSHIP", IP_ADD_MEMBERSHIP },
+#endif
+#ifdef IP_DROP_MEMBERSHIP
+    { "IP_DROP_MEMBERSHIP", IP_DROP_MEMBERSHIP },
+#endif
+#ifdef IPV6_UNICAST_HOPS
+    { "IPV6_UNICAST_HOPS", IPV6_UNICAST_HOPS },
+#endif
+#ifdef IPV6_MULTICAST_IF
+    { "IPV6_MULTICAST_IF", IPV6_MULTICAST_IF },
+#endif
+#ifdef IPV6_MULTICAST_HOPS
+    { "IPV6_MULTICAST_HOPS", IPV6_MULTICAST_HOPS },
+#endif
+#ifdef IPV6_MULTICAST_LOOP
+    { "IPV6_MULTICAST_LOOP", IPV6_MULTICAST_LOOP },
+#endif
+#ifdef IPV6_JOIN_GROUP
+    { "IPV6_JOIN_GROUP", IPV6_JOIN_GROUP },
+#endif
+#ifdef IPV6_LEAVE_GROUP
+    { "IPV6_LEAVE_GROUP", IPV6_LEAVE_GROUP },
+#endif
+#ifdef SO_TIMESTAMP
+    { "SO_TIMESTAMP", SO_TIMESTAMP },
+#endif
+#ifdef SO_NOSIGPIPE
+    { "SO_NOSIGPIPE", SO_NOSIGPIPE },
+#endif
+#ifdef TCP_FASTOPEN
+    { "TCP_FASTOPEN", TCP_FASTOPEN },
+#endif
+#ifdef TCP_NOPUSH
+    { "TCP_NOPUSH", TCP_NOPUSH },
+#endif
+#ifdef TCP_CORK
+    { "TCP_CORK", TCP_CORK },
+#endif
+#ifdef IPPROTO_ICMP
+    { "IPPROTO_ICMP", IPPROTO_ICMP },
+#endif
+#ifdef IPPROTO_ICMPV6
+    { "IPPROTO_ICMPV6", IPPROTO_ICMPV6 },
+#endif
+#ifdef IPPROTO_RAW
+    { "IPPROTO_RAW", IPPROTO_RAW },
+#endif
 #ifdef SOCK_RAW
     { "SOCK_RAW", SOCK_RAW },
 #endif
@@ -2117,6 +2180,58 @@ sp_int sp_sock_optval(sp_RbVal v) {
   }
   sp_raise_cls("TypeError", "no implicit conversion into Integer");
   return 0;
+}
+
+/* A setsockopt or getsockopt level or option name as the int it names: an
+   Integer, or a Symbol or String with or without its prefix (:TCP and
+   :IPPROTO_TCP, :NODELAY and :TCP_NODELAY), as CRuby's rsock_level_arg and
+   rsock_optname_arg take it. */
+static const char *sp_sock_opt_name(sp_RbVal v) {
+  if (sp_rbval_is_string(v)) return sp_rbval_string_bytes(v);
+  if (v.tag == SP_TAG_SYM) return sp_sym_to_s_frozen((sp_sym)v.v.i);
+  return NULL;
+}
+/* a name with a NUL in it names nothing */
+static int sp_sock_opt_name_nul(const char *name) {
+  return sp_str_byte_len(name) != strlen(name);
+}
+static sp_int sp_sock_opt_int(sp_RbVal v) {
+  if (v.tag == SP_TAG_FLT) return (sp_int)v.v.f;
+  if (v.tag == SP_TAG_NIL) sp_raise_cls("TypeError", "no implicit conversion from nil to integer");
+  extern const char *sp_poly_class_name(sp_RbVal v);
+  const char *what = v.tag == SP_TAG_SYM ? "Symbol"
+                   : v.tag == SP_TAG_BOOL ? (v.v.i ? "true" : "false")
+                   : v.tag == SP_TAG_OBJ ? sp_poly_class_name(v) : "Object";
+  sp_raise_cls("TypeError", sp_sprintf("no implicit conversion of %s into Integer", what));
+  return 0;
+}
+sp_int sp_sock_level_arg(sp_RbVal v) {SP_GC_ROOT_RBVAL(v);
+  if (v.tag == SP_TAG_INT) return v.v.i;
+  const char *name = sp_sock_opt_name(v);
+  if (!name) return sp_sock_opt_int(v);
+  if (!sp_sock_opt_name_nul(name) && (strcmp(name, "SOCKET") == 0 || strcmp(name, "SOL_SOCKET") == 0)) return SOL_SOCKET;
+  const char *full = strncmp(name, "IPPROTO_", 8) == 0 ? name : sp_sprintf("IPPROTO_%s", name);
+  sp_int level = sp_sock_opt_name_nul(name) ? -1 : sp_sock_const(full);
+  if (level < 0) sp_raise_cls("SocketError", sp_sprintf("unknown protocol level: %s", name));
+  return level;
+}
+sp_int sp_sock_optname_arg(sp_int level, sp_RbVal v) {SP_GC_ROOT_RBVAL(v);
+  if (v.tag == SP_TAG_INT) return v.v.i;
+  const char *name = sp_sock_opt_name(v);
+  const char *prefix = NULL, *what = NULL;
+  if (level == SOL_SOCKET) { prefix = "SO_"; what = "socket"; }
+  else if (level == IPPROTO_IP) { prefix = "IP_"; what = "IP"; }
+  else if (level == IPPROTO_TCP) { prefix = "TCP_"; what = "TCP"; }
+  else if (level == IPPROTO_UDP) { prefix = "UDP_"; what = "UDP"; }
+#ifdef IPPROTO_IPV6
+  else if (level == IPPROTO_IPV6) { prefix = "IPV6_"; what = "IPv6"; }
+#endif
+  if (!name || !prefix) return sp_sock_opt_int(v);
+  size_t n = strlen(prefix);
+  const char *full = strncmp(name, prefix, n) == 0 ? name : sp_sprintf("%s%s", prefix, name);
+  sp_int opt = sp_sock_opt_name_nul(name) ? -1 : sp_sock_const(full);
+  if (opt < 0) sp_raise_cls("SocketError", sp_sprintf("unknown %s level option name: %s", what, name));
+  return opt;
 }
 
 sp_int sp_sock_setsockopt(sp_File *f, sp_int level, sp_int opt, sp_int value) {SP_GC_ROOT(f);

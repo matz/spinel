@@ -449,6 +449,19 @@ static void emit_nonblock_operand(Compiler *c, const char *op, int node, char co
   else emit_to_s_expr(c, node, b);
 }
 
+/* A setsockopt or getsockopt level: an Integer as given, a Symbol or String
+   name through sp_sock_level_arg */
+static void emit_sockopt_level(Compiler *c, int node, Buf *b) {
+  if (repr_of(c, node).as_ty == TY_INT) { emit_int_expr(c, node, b); return; }
+  buf_puts(b, "sp_sock_level_arg("); emit_boxed(c, node, b); buf_puts(b, ")");
+}
+/* An option name at the level in temp tl: an Integer as given, a Symbol or
+   String name through sp_sock_optname_arg */
+static void emit_sockopt_optname(Compiler *c, int tl, int node, Buf *b) {
+  if (repr_of(c, node).as_ty == TY_INT) { emit_int_expr(c, node, b); return; }
+  buf_printf(b, "sp_sock_optname_arg(_t%d, ", tl); emit_boxed(c, node, b); buf_puts(b, ")");
+}
+
 /* connect_nonblock, setsockopt and getsockopt of the socket in C expression
    r: the typed arm's, and a socket read back out of a container (a boxed
    handle) answers the same way. Returns 1 when it emitted the call. */
@@ -505,9 +518,10 @@ static int emit_io_socket_opt_call(Compiler *c, const NodeTable *nt, const char 
     }
   }
   if (sp_streq(name, "setsockopt") && argc == 3) {
-    buf_printf(b, "sp_sock_setsockopt(%s, ", r);
-    emit_int_expr(c, argv[0], b); buf_puts(b, ", ");
-    emit_int_expr(c, argv[1], b); buf_puts(b, ", ");
+    int tl = ++g_tmp;
+    buf_printf(b, "({ sp_int _t%d = ", tl); emit_sockopt_level(c, argv[0], b);
+    buf_printf(b, "; sp_sock_setsockopt(%s, _t%d, ", r, tl);
+    emit_sockopt_optname(c, tl, argv[1], b); buf_puts(b, ", ");
     /* the value is an Integer, true/false (1/0) or the option's packed
        bytes, as CRuby takes it; only an Integer converts directly */
     TyKind vty = repr_of(c, argv[2]).as_ty;
@@ -517,13 +531,14 @@ static int emit_io_socket_opt_call(Compiler *c, const NodeTable *nt, const char 
       emit_boxed(c, argv[2], b);
       buf_puts(b, ")");
     }
-    buf_puts(b, ")");
+    buf_puts(b, "); })");
     return 1;
   }
   if (sp_streq(name, "getsockopt") && argc == 2) {
-    buf_printf(b, "sp_sock_getsockopt(%s, ", r);
-    emit_int_expr(c, argv[0], b); buf_puts(b, ", ");
-    emit_int_expr(c, argv[1], b); buf_puts(b, ")");
+    int tl = ++g_tmp;
+    buf_printf(b, "({ sp_int _t%d = ", tl); emit_sockopt_level(c, argv[0], b);
+    buf_printf(b, "; sp_sock_getsockopt(%s, _t%d, ", r, tl);
+    emit_sockopt_optname(c, tl, argv[1], b); buf_puts(b, "); })");
     return 1;
   }
   return 0;

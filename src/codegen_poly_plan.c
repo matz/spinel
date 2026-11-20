@@ -258,6 +258,17 @@ static void emit_zero_arg_defaults(Compiler *c, Scope *ds, Buf *cb, Buf *pre) {
    a boxed one unboxed with its nil, an oint one assigned as it is. */
 static int plan_slot_oint(Compiler *c, int id, TyKind ret) { return is_scalar_ret(ret) && oint_kind(ret) && node_is_oint(c, id); }
 static void plan_put_plain(int so, TyKind ret, const char *text, Buf *b) { if (so) buf_printf(b, "%s(%s)", oint_of(ret), text); else buf_puts(b, text); }
+/* A setsockopt level, option name or value in temp t of type ty: an Integer as
+   given, another type boxed through conv (sp_sock_level_arg(,
+   sp_sock_optname_arg(level, or sp_sock_optval( ) */
+static void plan_sockopt_name(Compiler *c, TyKind ty, int t, const char *conv, Buf *b) {
+  char tn[24];
+  snprintf(tn, sizeof tn, "_t%d", t);
+  if (ty == TY_INT) { buf_printf(b, "(sp_int)%s", tn); return; }
+  buf_puts(b, conv);
+  if (ty == TY_POLY) buf_puts(b, tn); else emit_boxed_text(c, ty, tn, b);
+  buf_puts(b, ")");
+}
 static void plan_put_boxed(Compiler *c, int so, TyKind slotty, const char *text, Buf *b) { if (so) buf_printf(b, "%s(%s)", oint_unbox(slotty), text); else emit_unbox_text(c, slotty, text, b); }
 
 /* An arm whose method answers an instance of a String subclass (a
@@ -4156,12 +4167,19 @@ void emit_poly_cases_n(Compiler *c, int id, const char *name, const PolySpecials
      owns the name (SSLSocket): the Socket raised NoMethodError */
   if (sp_streq(name, "setsockopt") && argc == 3 && kwh < 0 && splat_a < 0) {
     if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_IO_SETSOCKOPT, -1, TY_UNKNOWN, PC_SAME);
-    buf_printf(b, " case SP_BUILTIN_IO: { sp_sock_setsockopt((sp_File *)_t%d.v.p", tv);
-    for (int k = 0; k < 3; k++) {
-      if (atmp_ty[k] == TY_POLY) buf_printf(b, ", sp_poly_arg_i(_t%d)", atmp[k]);
-      else if (atmp_ty[k] == TY_BOOL) buf_printf(b, ", (sp_int)(_t%d ? 1 : 0)", atmp[k]);
-      else buf_printf(b, ", (sp_int)_t%d", atmp[k]);
-    }
+    /* a level or option name as a Symbol or String (:TCP, :NODELAY) converts
+       at run time; the option name is looked up at the level */
+    int tl = ++g_tmp;
+    buf_printf(b, " case SP_BUILTIN_IO: { sp_int _t%d = ", tl);
+    plan_sockopt_name(c, atmp_ty[0], atmp[0], "sp_sock_level_arg(", b);
+    buf_printf(b, "; sp_sock_setsockopt((sp_File *)_t%d.v.p, _t%d, ", tv, tl);
+    char conv[48];
+    snprintf(conv, sizeof conv, "sp_sock_optname_arg(_t%d, ", tl);
+    plan_sockopt_name(c, atmp_ty[1], atmp[1], conv, b);
+    buf_puts(b, ", ");
+    /* the value as the typed call takes it: an Integer, or sp_sock_optval's
+       reading of true/false and the option's packed bytes */
+    plan_sockopt_name(c, atmp_ty[2], atmp[2], "sp_sock_optval(", b);
     buf_printf(b, "); _t%d = ", tr);
     if (ret == TY_POLY) buf_puts(b, "sp_box_int(0)");
     else if (ret == TY_INT) buf_puts(b, "0");

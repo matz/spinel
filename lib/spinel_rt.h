@@ -16308,10 +16308,9 @@ static sp_RbVal sp_poly_to_c_m(sp_RbVal v) {
    reachable; the ops consult it rather than answering for an empty one.
    sp_poly_length already did this; the rest did not (#3761). */
 static sp_PolyArray *sp_poly_user_elems(sp_RbVal v) {
-  if (v.tag != SP_TAG_OBJ || v.cls_id < 0 || !sp_obj_to_a_fn) return NULL;
-  sp_RbVal a = sp_obj_to_a_fn(v);
-  if (a.tag == SP_TAG_OBJ && sp_poly_is_array_kind(a.cls_id)) return sp_poly_to_poly_array(a);
-  return NULL;
+  if (v.tag != SP_TAG_OBJ || v.cls_id < 0) return NULL;
+  sp_RbVal a = sp_obj_walk_a(v);
+  return a.tag == SP_TAG_OBJ ? sp_poly_to_poly_array(a) : NULL;
 }
 static sp_oint sp_enum_find_index_val(sp_RbVal recv, sp_RbVal x) SP_UNUSED;
 /* A boxed Dir's Enumerable probes walk the open handle, restarting each

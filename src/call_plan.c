@@ -9969,7 +9969,7 @@ static void cpoly_prearms_n(Compiler *c, int id, const char *name, int argc, con
   PolyArgs A = { argv, pos_argc, NULL, atmp_ty, &kw, NULL };
   cpoly_cls_value_arms(c, id, name, pos_argc, &A, ret, !is_setter_val, p, cap);
   free(kwty);
-  int callable = is_call_alias(name);
+  int callable = is_call_or_yield(name);
   /* (of any argument count: one past the channel's slots rides the call's
      wide store) */
   if (callable && ((!ps.has_splat_arg && (ps.kw_pos || kwh >= 0)) || splat_last))
@@ -10265,7 +10265,7 @@ static void cpoly_prearms0_blk(Compiler *c, int id, const char *name, const Poly
                    sp_streq(name, "each_byte") || sp_streq(name, "each_codepoint")))
     cpoly_family(p, cap, PB_ENUM_PROC);
   if (live_blk && sp_streq(name, "synchronize")) cpoly_family(p, cap, PB_SYNC);
-  if (is_call_alias(name)) cpoly_family(p, cap, PB_CALLABLE);
+  if (is_call_or_yield(name)) cpoly_family(p, cap, PB_CALLABLE);
   PolyArgs none = { NULL, 0, NULL, NULL, NULL, NULL };
   if (!cpoly_cls_value_arms(c, id, name, 0, &none, ret, 1, p, cap) && ps->cls_members)
     cpoly_family(p, cap, PB_CLS_MEMBERS);
@@ -10330,7 +10330,8 @@ static void cpoly_flags0(Compiler *c, int id, const char *name, PolyPlan *p, Pol
   *out = ps;
   if (ps.ostruct && (p->ret == TY_UNKNOWN || p->ret == TY_VOID || p->ret == TY_NIL)) p->ret = TY_POLY;
   int root = ps.ncall_arm > 0 || ps.lengthlike || ps.empty || ps.pred || ps.class_named ||
-             ps.class_reflect || ps.ostruct || ps.io_rewind || ps.poly_to_a || ps.poly_to_h;
+             ps.class_reflect || ps.ostruct || ps.io_rewind || ps.poly_to_a || ps.poly_to_h ||
+             (nt_ref(c->nt, id, "block") >= 0 && (poly_blk_prearm_name(name) || is_call_or_yield(name)));
   p->flags = (root ? PPF_ROOT : 0) |
              (poly_key_cls0(c, id, name, 0, -1, 0, -1) ? PPF_KEY_CLS0 : 0) |
              (poly_key_prim(c, id, name, 0, -1, 0, -1) ? PPF_KEY_PRIM : 0) |

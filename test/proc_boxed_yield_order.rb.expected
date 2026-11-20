@@ -1,0 +1,48 @@
+receiver
+positionals
+keywords
+block
+[[1, 2], {marker: 3}, "block result"]
+receiver
+[[], {}, nil]
+receiver
+[[1], {marker: 2}, "literal result"]
+receiver
+positionals
+keywords
+block
+[[1, 2], {marker: 3}, "block result"]
+receiver
+[[], {}, nil]
+receiver
+[[1], {marker: 2}, "literal result"]
+receiver
+[[], :zero]
+receiver
+[[9], :one]
+receiver
+["first", "second", "fixed block"]
+receiver
+block
+["first", "second", "block result"]
+receiver
+["first", "second", "call block"]
+receiver
+["first", "second", nil]
+receiver
+"zero block"
+receiver
+[1, "wrapped"]
+receiver
+[[2, "right"], nil]
+receiver
+[[3, "left"], nil]
+[[4, "ordinary call"], nil]
+receiver
+[5, "captured"]
+[6, 7, "two arguments"]
+[8, 9, "later receiver"]
+make curry
+[10, 11, "boxed receiver"]
+make curry
+[10, 11, "boxed receiver"]

@@ -117,3 +117,9 @@ Reg2.handler = H2a
 Reg2.handler.run(10) { |v| puts "reg2a #{v}" } # reg2a 11
 Reg2.handler = H2b
 Reg2.handler.run(10) { |v| puts "reg2b #{v}" } # reg2b 12
+
+curried = ->(v) { puts "curried #{v * 2}" }.curry
+Reg2.handler = H2a
+Reg2.handler.run(10, &curried)
+Reg2.handler = H2b
+Reg2.handler.run(10, &curried)

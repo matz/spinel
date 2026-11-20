@@ -36,9 +36,35 @@ class Matcher
   def count = -1
 end
 
+class HiddenMatcher
+  private
+
+  def map = :hidden_map
+end
+
 specs = [Cat.new(Node.new(nil), nil), Node.new(nil), Matcher.new, Or.new(nil, nil)]
 specs.each do |spec|
   p spec.find_all(&:group?).size
   p spec.map { |n| n.class.name }
   p spec.count { |n| n.weight > 5 }
+end
+
+def ordered_enum_receiver(index)
+  puts "receiver"
+  values = [Cat.new(Node.new(nil), nil), Matcher.new, HiddenMatcher.new]
+  values[index]
+end
+
+def ordered_enum_block
+  puts "block"
+  GC.start
+  proc { |node| node.weight }
+end
+
+3.times do |index|
+  begin
+    p ordered_enum_receiver(index).map(&ordered_enum_block)
+  rescue NoMethodError
+    puts "private map"
+  end
 end

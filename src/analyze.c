@@ -2613,6 +2613,8 @@ static int a_block_call_target(Compiler *c, int id, int roots, int *cls, int *cl
   return mi;
 }
 
+static int a_call_lifts_block(Compiler *c, int id);
+
 int a_block_is_lifted(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   NodeKind ty_k = nt_kind(nt, id);
@@ -2631,6 +2633,11 @@ int a_block_is_lifted(Compiler *c, int id) {
   if (ty_k != NK_CallNode) return 0;
   int blk = nt_ref(nt, id, "block");
   if (blk < 0 || nt_kind(nt, blk) != NK_BlockNode) return 0;
+  return a_call_lifts_block(c, id);
+}
+
+static int a_call_lifts_block(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
   if (!name) return 0;
   int recv = nt_ref(nt, id, "receiver");
@@ -15709,9 +15716,10 @@ static int desugar_yielder_block_arg(Compiler *c) {
   return changed;
 }
 
-/* `iter(&curried)`: a curried Proc has no proc object to hand a block slot,
-   so drive it through a literal block that applies one element -- exactly what
-   CRuby's Proc#curry answers to `&` (#3654). */
+/* Inline iterators can apply a Curry through the single argument they
+   yield. A call that materializes its block takes the ordinary Proc
+   wrapper, which retains the Curry and accepts the later call's args
+   and block. */
 static int desugar_curry_block_arg(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;
@@ -15724,6 +15732,13 @@ static int desugar_curry_block_arg(Compiler *c) {
     if (blk < 0 || nt_kind(nt, blk) != NK_BlockArgumentNode) continue;
     int e = nt_ref(nt, blk, "expression");
     if (e < 0 || infer_type(c, e) != TY_CURRY) continue;
+    int recv = nt_ref(nt, id, "receiver");
+    /* The inline rewrite is permanent, so wait for the receiver's type. */
+    if (recv >= 0) {
+      TyKind rt = infer_type(c, recv);
+      if (rt == TY_UNKNOWN || rt == TY_VOID) continue;
+    }
+    if (a_call_lifts_block(c, id)) continue;
     char pnm[48];
     snprintf(pnm, sizeof pnm, "__curry_e_%s", comp_node_tag(c, id));
     int preq = nt_new_node(nt, "RequiredParameterNode");

@@ -39,6 +39,10 @@ Three rules follow from it:
 | membership in a family of names                                                                                   | the name predicates                                | `builtin_names.c:is_call_alias`, `is_then_alias`, ...                                                                                                       | the same inline `sp_streq` chain in inference and in codegen                                                                                                                                                                                                                                                           |
 | when a pass runs, and what inference reads                                                                        | the phase driver and the counted setters           | `analyze.c:analyze_program`; `comp_set_ntype`, `lv_set_type`, `ivar_set_type`                                                                               | a loop appended to `analyze_program`; a direct write to a table `infer_type` reads                                                                                                                                                                                                                                     |
 
+A boxed Proc call preserves the distinction between a positional trailing
+Hash and explicit keywords. An empty keyword splat still affects whether
+the Proc unpacks a positional Array.
+
 String slots hold object handles. The remaining String plan, sharing facts
 and byte routes serve builtin producers still being migrated under #11391.
 Boxing a String preserves the object emitted by its producer. A dynamic
@@ -59,6 +63,18 @@ A default argument is evaluated on the callee. Binding a String default
 uses the same handle as the expression that supplied it.
 An ordered operand keeps its saved handle until its argument binding is
 removed. An abandoned emission also removes the corresponding binding.
+Boxed callable dispatch holds the receiver and arguments before it
+binds the block operand. Proc invocation carries the captured block and
+the keyword marker through the same call as the argument vector. A boxed
+curried Proc forwards the block of the call that completes its arguments.
+An Enumerable fallback in boxed dispatch uses the same staged block as
+the builtin and user arms, with the receiver held across its conversion.
+A composed Proc forwards the block to its first function and passes that
+function's result to the second.
+A call that materializes a curried block uses its runtime Proc wrapper.
+The wrapper retains the Curry and receives the arguments and block of
+each later call. Boxed dispatch passes the staged Proc to the selected
+method.
 
 A scoped String local stores an `sp_String *`. A byte reader projects
 the payload from that object at its use. Nil uses a null handle.

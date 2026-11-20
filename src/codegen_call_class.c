@@ -3210,21 +3210,14 @@ int emit_call_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
            shared by every candidate branch (lowering it per-branch would
            emit the proc function once per candidate). */
         int blk_tmp = -1;
-        int casc_blk = resolve_forwarded_block(c, nt_ref(nt, id, "block"));
-        if (casc_blk >= 0) {
-          for (int k = 0; k < ncand && blk_tmp < 0; k++) {
+        if (nt_ref(nt, id, "block") >= 0) {
+          for (int k = 0; k < ncand; k++) {
             int mi = call_target(c, id, cand[k], name, CT_CMETHOD, NULL);
             if (mi < 0) continue;
             Scope *cm = &c->scopes[mi];
             if (cm->blk_param && cm->blk_param[0] && !cm->yields) {
-              blk_tmp = ++g_tmp;
-              Buf pb; memset(&pb, 0, sizeof pb);
-              emit_proc_literal(c, casc_blk, &pb);
-              emit_indent(g_pre, g_indent);
-              buf_printf(g_pre, "sp_Proc *_t%d = %s;\n", blk_tmp, pb.p ? pb.p : "NULL");
-              emit_indent(g_pre, g_indent);
-              buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", blk_tmp);
-              free(pb.p);
+              blk_tmp = hoist_call_block_proc(c, id);
+              break;
             }
           }
         }

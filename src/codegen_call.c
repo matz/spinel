@@ -8338,9 +8338,7 @@ void emit_bm_abi_args(Buf *b, const char *rb, int abi, const char *sig, int fixe
 int emit_poly_callable_prearm(Compiler *c, const char *name, int argc,
                               const int *atmp, const TyKind *atmp_ty, const char *guard,
                               int tv, int tr, TyKind ret, int kwpos, int tblk, Buf *b) {
-  if (!name ||
-      !is_call_alias(name))
-    return 0;
+  if (!name || !is_call_or_yield(name)) return 0;
   /* A Curry reads its arguments from the one-global _sp_proc_poly_args
      channel, so publish the boxed args as a comma sequence immediately in
      front of the call. It is collected (not emitted as a standalone
@@ -8511,15 +8509,17 @@ int emit_poly_callable_prearm(Compiler *c, const char *name, int argc,
                 " || _t%d.cls_id == SP_BUILTIN_CURRY", guard ? guard : "", tv, tv, tv);
   /* a Method is admitted on its stamped ABI, or on the thunk its bind site
      synthesized for any count the signature binds (#4542) */
-  buf_printf(b, " || (_t%d.cls_id == SP_BUILTIN_METHOD && (", tv);
-  if (method_ok) {
-    if (mabi_poly)
-      buf_printf(b, "(((sp_BoundMethod *)_t%d.v.p)->fn"
-                    " && sp_bm_poly_abi_ok((sp_BoundMethod *)_t%d.v.p, %d))", tv, tv, argc);
-    else emit_bm_legacy_ok(b, tv, argc, method_sig);
-    buf_puts(b, " || ");
+  if (is_call_alias(name)) {
+    buf_printf(b, " || (_t%d.cls_id == SP_BUILTIN_METHOD && (", tv);
+    if (method_ok) {
+      if (mabi_poly)
+        buf_printf(b, "(((sp_BoundMethod *)_t%d.v.p)->fn"
+                      " && sp_bm_poly_abi_ok((sp_BoundMethod *)_t%d.v.p, %d))", tv, tv, argc);
+      else emit_bm_legacy_ok(b, tv, argc, method_sig);
+      buf_puts(b, " || ");
+    }
+    buf_printf(b, "sp_bm_thunk_ok((sp_BoundMethod *)_t%d.v.p, %d)))", tv, argc);
   }
-  buf_printf(b, "sp_bm_thunk_ok((sp_BoundMethod *)_t%d.v.p, %d)))", tv, argc);
   buf_printf(b, ")) { %s_t%d = ", holds.p ? holds.p : "", tr);
   if (ret == TY_POLY) buf_puts(b, eb.p ? eb.p : "");
   else emit_unbox_poly_ret(c, ret, eb.p ? eb.p : "", b);
@@ -8530,16 +8530,14 @@ int emit_poly_callable_prearm(Compiler *c, const char *name, int argc,
 
 int emit_poly_callable_spread_prearm(Compiler *c, const char *name, int sa,
                                             const int *atmp, const TyKind *atmp_ty, int st,
-                                            int tv, int tr, TyKind ret, Buf *b) {
-  if (!name ||
-      !is_call_alias(name))
-    return 0;
+                                            const char *kwpos, int blk, int tv, int tr, TyKind ret, Buf *b) {
+  if (!name || !is_call_or_yield(name)) return 0;
   g_needs_proc_poly_argslot = 1;
   int ta = ++g_tmp;
   buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && (_t%d.cls_id == SP_BUILTIN_PROC"
-                " || _t%d.cls_id == SP_BUILTIN_CURRY || _t%d.cls_id == SP_BUILTIN_METHOD))"
-                " { sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);",
-             tv, tv, tv, tv, ta, ta);
+                " || _t%d.cls_id == SP_BUILTIN_CURRY", tv, tv, tv);
+  if (is_call_alias(name)) buf_printf(b, " || _t%d.cls_id == SP_BUILTIN_METHOD", tv);
+  buf_printf(b, ")) { sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", ta, ta);
   for (int k = 0; k < sa; k++) {
     char tn[24]; snprintf(tn, sizeof tn, "_t%d", atmp[k]);
     buf_printf(b, " sp_PolyArray_push(_t%d, ", ta);
@@ -8548,8 +8546,11 @@ int emit_poly_callable_spread_prearm(Compiler *c, const char *name, int sa,
     buf_puts(b, ");");
   }
   buf_printf(b, " sp_PolyArray_append_all(_t%d, _t%d); _t%d = ", ta, st, tr);
-  char call[96];
-  snprintf(call, sizeof call, "sp_poly_callable_spread(_t%d, sp_box_poly_array(_t%d), 0)", tv, ta);
+  char call[128];
+  if (blk >= 0)
+    snprintf(call, sizeof call, "sp_poly_callable_spread_blk(_t%d, sp_box_poly_array(_t%d), %s, _t%d)", tv, ta, kwpos, blk);
+  else
+    snprintf(call, sizeof call, "sp_poly_callable_spread(_t%d, sp_box_poly_array(_t%d), %s)", tv, ta, kwpos);
   if (ret == TY_POLY) buf_puts(b, call);
   else emit_unbox_poly_ret(c, ret, call, b);
   buf_puts(b, "; }\nelse ");
@@ -11102,6 +11103,7 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
       emit_expr(c, recv, b);
       buf_puts(b, "; ");
       if (root_recv) buf_printf(b, "SP_GC_ROOT_RBVAL(_t%d); ", tv);
+      int blk_tmp0 = emit_poly_dispatch_block0(c, id, name, b);
       emit_poly_vis_precheck(c, id, tv, b);
       size_t pd_from = b->len;   /* the region pd_hoist may move out of line */
       /* the result slot: an Integer / Float dispatch whose answer can be nil
@@ -11115,7 +11117,7 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
       int pa_frame0 = g_plan_check ? pa_begin(id) : -1;
       int sv_csd0 = g_cls_tag_skip;
       emit_poly_prearms0(c, id, name, &ps, ret, tv, tr, b);
-      int blk_tmp0 = emit_poly_prearms0_blk(c, id, name, &ps, ret, tv, tr, b);
+      emit_poly_prearms0_blk(c, id, name, &ps, ret, tv, tr, blk_tmp0, b);
       /* a genuine String in a slot whose name a user class owns (#4816) */
       emit_poly_str_prearm(c, id, recv, name, 0, NULL, NULL, NULL, ret, tv, tr, b);
       buf_puts(b, "switch (");
@@ -11489,6 +11491,7 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
          supplied default, so a receiver whose runtime variant matches no switch
          arm (e.g. an empty `{}` that boxed as PolyPolyHash) still yields the
          default rather than a bare default_value_from_compiler(c, ) (an empty string). */
+      int blk_tmp2 = emit_poly_dispatch_block_n(c, id, name, !has_splat_arg || splat_last, b);
       size_t pd_from = b->len;   /* the region pd_hoist may move out of line */
       /* an Integer / Float answer that can be nil (node_is_oint) is held as
          the oint, as the zero-argument seed does; the arms assign that form */
@@ -11561,8 +11564,8 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
       ptemps.kwh_tmp = emit_poly_callable_kwh_decl(c, name, &ps, &ptemps, &kw, b);
       emit_poly_prearms_n(c, name, &ps, &ptemps, b);
       int sv_csd2 = g_cls_tag_skip;
-      int blk_tmp2 = emit_poly_prearms_n_blk(c, id, name, &ps, &ptemps, atmp, atmp_ty, &kw, htmp,
-                                             is_setter_val, splat_a, splat_last, stk, b);
+      emit_poly_prearms_n_blk(c, id, name, &ps, &ptemps, atmp, atmp_ty, &kw, htmp,
+                              is_setter_val, splat_a, splat_last, stk, blk_tmp2, b);
       /* The plan supplies the switch key form. */
       const PolyPlan pform = cplan_poly_arms(c, id);
       unsigned form = pform.flags & ~PPF_SEEN;
@@ -20885,9 +20888,10 @@ void emit_class_value_responds_helper(Compiler *c, const char *const *texts, int
    otherwise the call's literal block (if any) is lowered here. */
 void emit_cmethod_block_arg(Compiler *c, int id, Scope *cm, int blk_tmp, Buf *b) {
   if (!cm->blk_param || !cm->blk_param[0] || cm->yields) return;
+  if (cm->nparams > 0 || cmethod_takes_self_cls(c, cm)) buf_puts(b, ", ");
+  if (blk_tmp >= 0) { buf_printf(b, "_t%d", blk_tmp); return; }
   int blk0 = nt_ref(c->nt, id, "block");
   int blk_node = resolve_forwarded_block(c, blk0);
-  if (cm->nparams > 0 || cmethod_takes_self_cls(c, cm)) buf_puts(b, ", ");
   /* a forwarded block inside a body inlined for a caller that handed it a
      real proc (`fw(&pr)`) is that proc (forwarded_real_proc) */
   const char *fwd = forwarded_real_proc(blk0, blk_node);
@@ -20907,19 +20911,7 @@ void emit_cmethod_block_arg(Compiler *c, int id, Scope *cm, int blk_tmp, Buf *b)
     }
     buf_puts(b, "NULL"); return;
   }
-  if (blk_tmp < 0) {
-    blk_tmp = ++g_tmp;
-    Buf pb; memset(&pb, 0, sizeof pb);
-    emit_proc_literal(c, blk_node, &pb);
-    emit_indent(g_pre, g_indent);
-    buf_printf(g_pre, "sp_Proc *_t%d = %s;\n", blk_tmp, pb.p ? pb.p : "NULL");
-    /* Root the proc box: an allocating argument evaluated after this hoist
-       (or the callee prologue) may GC before the callee roots lv_blk. */
-    emit_indent(g_pre, g_indent);
-    buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", blk_tmp);
-    free(pb.p);
-  }
-  buf_printf(b, "_t%d", blk_tmp);
+  buf_printf(b, "_t%d", hoist_block_proc(c, blk_node));
 }
 
 /* Emit a compile-time trampoline that lets a compiled Ruby method be passed as

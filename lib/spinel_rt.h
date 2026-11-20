@@ -23888,6 +23888,9 @@ typedef struct { sp_Proc *outer; sp_Proc *inner; } sp_ProcCompose;
 static void sp_proc_compose_scan(void *p) { sp_gc_mark(p); sp_ProcCompose *c = (sp_ProcCompose *)p; if (c->outer) sp_gc_mark(c->outer); if (c->inner) sp_gc_mark(c->inner); }
 static sp_int sp_proc_compose_fn(void *cap, sp_int argc, sp_int *args) {
   sp_ProcCompose *c = (sp_ProcCompose *)cap;
+  sp_Proc *blk = _sp_proc_blk;
+  _sp_proc_blk = NULL;
+  SP_GC_ROOT(blk);
   /* The composed proc is usually anonymous at its call site -- `(f >> g).call`
      holds it in no variable -- so nothing keeps the capture alive while this
      body runs, and a collection triggered by the inner proc's own allocations
@@ -23904,9 +23907,9 @@ static sp_int sp_proc_compose_fn(void *cap, sp_int argc, sp_int *args) {
   sp_int inner_args[16] = {0};
   sp_int *inner = argc > 16 && args ? args : inner_args;
   for (sp_int _i = 0; inner == inner_args && _i < argc && _i < 16; _i++) inner_args[_i] = args ? args[_i] : 0;
-  /* the caller already published the boxed argument(s) to the side-channel, so
-     the inner proc reads them back regardless of its parameters' static types */
-  sp_proc_call(c->inner, inner == inner_args && argc > 16 ? 16 : argc, inner);
+  /* The first proc receives the original call's arguments and block.
+     The second proc receives only the first proc's result. */
+  sp_proc_call_blk(c->inner, blk, inner == inner_args && argc > 16 ? 16 : argc, inner);
   /* the inner proc publishes its (boxed) result through the return slot;
      thread it to the outer proc on BOTH channels -- a poly parameter reads
      the side-channel, a concrete one reads the sp_int slot. */
@@ -23964,8 +23967,10 @@ static void *sp_proc_compose_v(void *outer, void *inner) {
    slots into the call's wide store, for a poly-param target to read back
    with each arg's real type. A curry of more than 16 arguments takes its
    slots off the heap for the call's length. */
-static SP_NOINLINE void sp_curry_call_target(sp_Curry *c) {
+static SP_NOINLINE sp_RbVal sp_curry_call_target(sp_Curry *c, sp_Proc *blk) {
+  if (!c || !c->target) return sp_box_nil();
   SP_GC_ROOT(c);  /* c->args is read during the call; the target can allocate */
+  SP_GC_ROOT(blk);
   sp_int n = c->nargs;
   sp_int slots_s[16], *slots = slots_s, *heap = NULL;
   SP_GC_ROOT(heap);
@@ -23991,21 +23996,20 @@ static SP_NOINLINE void sp_curry_call_target(sp_Curry *c) {
      Method proc without a thunk runs a stamped lane, which never clears
      it, and a 1 left there reached the next call (sp_bm_enter). */
   sp_BoundMethod *tm = c->target->fn == (void *)sp_method_proc_tramp ? (sp_BoundMethod *)c->target->cap : NULL;
-  _sp_proc_kwpos = tm && !(tm->thunk && !tm->unbound) ? 0 : 1;
+  int stamped = tm && !(tm->thunk && !tm->unbound);
+  _sp_proc_kwpos = stamped ? 0 : 1;
   /* the target publishes its (boxed) result through the return slot */
-  sp_proc_call(c->target, n, slots);
+  sp_proc_call_blk(c->target, stamped ? NULL : blk, n, slots);
+  return _sp_proc_poly_ret;
 }
 static sp_int sp_curry_to_int(sp_Curry *c) {
   if (!c || !c->target) return 0;
-  sp_curry_call_target(c);
-  return sp_poly_to_i(_sp_proc_poly_ret);
+  return sp_poly_to_i(sp_curry_call_target(c, NULL));
 }
 /* Realization for a target whose return is not statically int: the boxed
    result flows through unchanged. */
 static sp_RbVal sp_curry_realize_poly(sp_Curry *c) {
-  if (!c || !c->target) return sp_box_nil();
-  sp_curry_call_target(c);
-  return _sp_proc_poly_ret;
+  return sp_curry_call_target(c, NULL);
 }
 
 /* `curry.call(a, ...)` where the base proc's arity is NOT statically known --
@@ -24043,23 +24047,23 @@ static sp_Curry *sp_curry_new_v(sp_Proc *p, sp_RbVal n, sp_int max) {
 }
 /* the accumulator carries its own completion count -- curry(n)'s n, else
    the target's required count, stamped at creation */
-static sp_RbVal sp_curry_settle(sp_Curry *c) {
-  if (c->nargs >= c->arity) return sp_curry_realize_poly(c);
+static sp_RbVal sp_curry_settle(sp_Curry *c, sp_Proc *blk) {
+  if (c->nargs >= c->arity) return sp_curry_call_target(c, blk);
   return sp_box_obj((void *)c, SP_BUILTIN_CURRY);
 }
 static sp_RbVal sp_curry_call_poly(sp_Curry *c, sp_int argc, const sp_RbVal *args) {
   if (!c) return sp_box_nil();
   SP_GC_ROOT(c);
   for (sp_int i = 0; i < argc; i++) c = sp_curry_apply(c, args[i]);
-  return sp_curry_settle(c);
+  return sp_curry_settle(c, NULL);
 }
 /* The same over the call that entered: its n boxed arguments on the side
    channel, and past its slots in the call's wide store. */
-static sp_RbVal sp_curry_call_channel(sp_Curry *c, sp_int n) {
+static sp_RbVal sp_curry_call_channel(sp_Curry *c, sp_int n, sp_Proc *blk) {
   if (!c) return sp_box_nil();
-  SP_GC_ROOT(c);
+  SP_GC_ROOT(c); SP_GC_ROOT(blk);
   for (sp_int i = 0; i < n; i++) c = sp_curry_apply(c, sp_proc_arg(i));
-  return sp_curry_settle(c);
+  return sp_curry_settle(c, blk);
 }
 
 /* Proc#>> / #<< over a curried Proc: composition threads sp_Proc values, and a
@@ -24068,6 +24072,8 @@ static sp_RbVal sp_curry_call_channel(sp_Curry *c, sp_int n) {
    composes exactly like the proc it stands for (#3864). */
 static sp_int sp_curry_proc_fn(void *cap, sp_int argc, sp_int *args) {
   sp_Curry *cy = (sp_Curry *)cap;
+  sp_Proc *blk = _sp_proc_blk;
+  _sp_proc_blk = NULL;
   (void)args;
   /* what the caller said of its trailing argument is consumed here, as a
      proc's prologue consumes it: a curry that is this wrapper's target set
@@ -24078,16 +24084,17 @@ static sp_int sp_curry_proc_fn(void *cap, sp_int argc, sp_int *args) {
   /* apply-and-decide, like every other application path: a call that does
      not reach the accumulator's count answers the next curry, not the
      target called short */
-  _sp_proc_poly_ret = sp_curry_call_channel(cy, argc);
+  _sp_proc_poly_ret = sp_curry_call_channel(cy, argc, blk);
   return sp_poly_to_i(_sp_proc_poly_ret);
 }
 /* sp_Proc_scan calls cap_scan WITHOUT marking the capture first, so this hook
    marks the curry itself before walking it (see sp_proc_compose_scan). */
 static void sp_curry_proc_scan(void *p) { sp_gc_mark(p); sp_curry_scan(p); }
 static sp_Proc *sp_curry_to_proc(sp_Curry *cy) {
+  if (!cy) return NULL;
   SP_GC_ROOT(cy);
   return sp_proc_new_meta((void *)sp_curry_proc_fn, cy, sp_curry_proc_scan, -1,
-                          (cy && cy->target) ? cy->target->lambda_p : TRUE, 1, NULL, NULL);
+                          cy->target ? cy->target->lambda_p : TRUE, 1, NULL, NULL);
 }
 
 /* Call a boxed callable. A Proc runs; a curried Proc (which a poly slot now
@@ -24097,7 +24104,7 @@ static sp_Proc *sp_curry_to_proc(sp_Curry *cy) {
    parameters (_sp_proc_kwpos); 0 when the caller does not say */
 static sp_RbVal sp_poly_callable_call_kw(sp_RbVal v, sp_int n, const sp_int *args, int kwpos) {
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_CURRY)
-    return sp_curry_call_channel((sp_Curry *)v.v.p, n);
+    return sp_curry_call_channel((sp_Curry *)v.v.p, n, NULL);
   /* A bound Method that fell through a call arm's own gate still has the
      generic trampoline, whose poly-ABI and legacy gates read the published
      boxed side-channel -- a typed-array adapter or an int-parameter target
@@ -24145,10 +24152,12 @@ static void sp_bm_enter(sp_BoundMethod *m, sp_int n, sp_int *slots, int kwpos, s
 }
 /* A boxed callable called with a block (`slot.call(x) { }`): a bound
    Method enters its thunk with the block, a Proc takes it on the block
-   channel as sp_proc_call_blk hands it, and a curried Proc, which no block
-   reaches, takes the arguments. */
+   channel as sp_proc_call_blk hands it, and a curried Proc takes it only
+   when the application reaches its required argument count. */
 static sp_RbVal sp_poly_callable_call_blk(sp_RbVal v, sp_int n, const sp_int *args, int kwpos, sp_Proc *blk) SP_UNUSED;
 static sp_RbVal sp_poly_callable_call_blk(sp_RbVal v, sp_int n, const sp_int *args, int kwpos, sp_Proc *blk) {
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_CURRY)
+    return sp_curry_call_channel((sp_Curry *)v.v.p, n, blk);
   if (v.tag == SP_TAG_OBJ && v.v.p && (v.cls_id == SP_BUILTIN_METHOD || v.cls_id == SP_BUILTIN_PROC)) {
     sp_int slots_s[16], *slots = n > 16 ? (sp_int *)args : slots_s;
     for (sp_int i = 0; i < n && i < 16; i++) slots[i] = args[i];
@@ -24228,22 +24237,26 @@ static sp_RbVal sp_bm_call_spread(sp_BoundMethod *m, sp_Proc *blk, sp_RbVal arr,
    A Method with more than 16 arguments has no slot to land in and declines --
    the trampoline's own `argc > 16` guard never sees the overlong count if this
    helper clamps first. */
-static sp_RbVal sp_poly_callable_spread(sp_RbVal v, sp_RbVal arr, int kwpos) {
+static sp_RbVal sp_poly_callable_spread_blk(sp_RbVal v, sp_RbVal arr, int kwpos, sp_Proc *blk) {
   if (v.tag == SP_TAG_OBJ && v.v.p && v.cls_id == SP_BUILTIN_CURRY) {
     sp_Curry *c = (sp_Curry *)v.v.p;
-    SP_GC_ROOT(c); SP_GC_ROOT_RBVAL(arr);
+    SP_GC_ROOT(c); SP_GC_ROOT_RBVAL(arr); SP_GC_ROOT(blk);
     sp_int n = sp_poly_length(arr);
     for (sp_int i = 0; i < n; i++) c = sp_curry_apply(c, sp_poly_arr_get(arr, i));
-    return sp_curry_settle(c);
+    return sp_curry_settle(c, blk);
   }
   if (v.tag == SP_TAG_OBJ && v.v.p && v.cls_id == SP_BUILTIN_METHOD)
-    return sp_bm_call_spread((sp_BoundMethod *)v.v.p, NULL, arr, kwpos);
+    return sp_bm_call_spread((sp_BoundMethod *)v.v.p, blk, arr, kwpos);
   if (v.tag == SP_TAG_OBJ && v.v.p && v.cls_id == SP_BUILTIN_PROC) {
-    sp_proc_call_spread((sp_Proc *)v.v.p, arr, kwpos);
+    sp_proc_call_spread_blk((sp_Proc *)v.v.p, blk, arr, kwpos);
     return _sp_proc_poly_ret;
   }
   sp_raise_cls("NoMethodError", sp_nomethod_msg("call", v));
   return sp_box_nil();
+}
+
+static sp_RbVal sp_poly_callable_spread(sp_RbVal v, sp_RbVal arr, int kwpos) {
+  return sp_poly_callable_spread_blk(v, arr, kwpos, NULL);
 }
 
 /* Fiber.new(&x) / Thread.new(&x): x lives in the fiber (user_data, one

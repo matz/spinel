@@ -1,0 +1,5 @@
+[true, EnvStoreText, "value"]
+[true, "value"]
+["value!", "value"]
+can't convert EnvStoreArgument to String (EnvStoreArgument#to_str gives NilClass)
+nil

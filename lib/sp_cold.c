@@ -6819,7 +6819,7 @@ static const char *sp_enc_str_arg(sp_RbVal v) {
   if (bytes) return bytes;
   if (v.tag == SP_TAG_OBJ && v.cls_id >= 0 && v.v.p && sp_obj_to_str_fn) {
     SP_GC_ROOT_RBVAL(v);   /* across the user #to_str */
-    const char *r = sp_String_cstr_nil(sp_obj_to_str_fn((int)v.cls_id, v.v.p));
+    const char *r = sp_String_cstr_nil(sp_obj_to_str_handle((int)v.cls_id, v.v.p));
     if (r) return r;
   }
   sp_raise_cls("TypeError", sp_sprintf("no implicit conversion of %s into String",

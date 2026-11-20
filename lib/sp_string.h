@@ -383,6 +383,13 @@ static inline const char*sp_String_cstr(sp_String*s){return s->data;}
 static inline const char*sp_String_cstr_nil(sp_String*s){return s?s->data:NULL;}
 static inline int64_t sp_String_length(sp_String*s){return s->len;}
 
+/* Borrow the handle in a checked String result when the caller reads bytes. */
+static inline sp_String *sp_obj_to_str_handle(int cls_id, void *object) {
+  int found;
+  sp_RbVal value = sp_obj_to_str_fn(cls_id, object, &found);
+  return value.tag == SP_TAG_NIL ? NULL : (sp_String *)value.v.p;
+}
+
 /* Box a managed String, using the owner of its live payload or the
    static handle of a frozen literal when it already has one. */
 static inline sp_RbVal sp_box_str_new(const char *v) {

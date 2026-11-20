@@ -15323,12 +15323,12 @@ static const char *ppu_close(Compiler *c) { return pp_prints_by_rt(c) ? ")" : ""
    including one whose arguments all have defaults. A String subclass is
    already a String. Judge every other object's actual return once. */
 static void emit_obj_to_str_bridge(Compiler *c, Buf *b) {
-  buf_puts(b, "static sp_String *sp_obj_to_str_sw(int k, void *p) {\n"
-              "  SP_GC_ROOT(p); switch (k) {\n");
+  buf_puts(b, "static sp_RbVal sp_obj_to_str_sw(int k, void *p, int *found) {\n"
+              "  *found = 1; SP_GC_ROOT(p); switch (k) {\n");
   for (int k = 0; k < c->nclasses; k++) {
     if (!class_has_obj_arm(c, k) || c->classes[k].is_native_class) continue;
     if (comp_ary_is_str(c, k)) {
-      buf_printf(b, "    case %d: return (sp_String *)p;\n", k);
+      buf_printf(b, "    case %d: return sp_box_obj(p, k);\n", k);
       continue;
     }
     MethodLookup lookup = { .def_class = -1 };
@@ -15341,9 +15341,9 @@ static void emit_obj_to_str_bridge(Compiler *c, Buf *b) {
     snprintf(self, sizeof self, "%s((sp_%s *)p)", comp_ty_value_obj(c, ty_object(def)) ? "*" : "", c->classes[def].c_name);
     buf_printf(b, "    case %d: { sp_RbVal r = ", k);
     emit_zero_arg_boxed_call(c, mi, self, b);
-    buf_puts(b, "; SP_GC_ROOT_RBVAL(r); return sp_str_cmp_conv(r, sp_box_obj(p, k)) ? sp_poly_as_strbuf(r) : NULL; }\n");
+    buf_puts(b, "; SP_GC_ROOT_RBVAL(r); return sp_str_cmp_conv(r, sp_box_obj(p, k)) ? r : sp_box_nil(); }\n");
   }
-  buf_puts(b, "    default: return NULL;\n  }\n}\n");
+  buf_puts(b, "    default: *found = 0; return sp_box_nil();\n  }\n}\n");
 }
 static void emit_display_overrides(Compiler *c, Buf *b) {
   buf_puts(b, "static int sp_display_override(int k, void *p, int inspect, sp_RbVal *out) {\n");
@@ -24798,7 +24798,7 @@ char *codegen_program(const NodeTable *nt) {
     buf_puts(&b, "static sp_RbVal sp_obj_to_s_sw(int cls_id, void *p, int *found) SP_COLD SP_NOINLINE;\n");
     if (obj_kernel_inspect_used(c)) buf_puts(&b, "static const char *sp_obj_kernel_inspect(int cls_id, void *p) SP_COLD SP_NOINLINE;\n");
     buf_puts(&b, "static sp_int sp_obj_to_int_sw(int cls_id, void *p, int *ok) SP_COLD SP_NOINLINE;\n");
-    buf_puts(&b, "static sp_String *sp_obj_to_str_sw(int cls_id, void *p) SP_COLD SP_NOINLINE;\n");
+    buf_puts(&b, "static sp_RbVal sp_obj_to_str_sw(int cls_id, void *p, int *found) SP_COLD SP_NOINLINE;\n");
     buf_puts(&b, "static const char *sp_obj_to_path_sw(int cls_id, void *p) SP_COLD SP_NOINLINE;\n");
     if (c->uses_kconv || c->uses_kw_to_hash || c->uses_blk_conv)
       buf_puts(&b, "static int sp_obj_conv_sw(int cls_id, void *p, int which, sp_RbVal *out) SP_COLD SP_NOINLINE;\n");

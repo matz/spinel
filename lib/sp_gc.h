@@ -749,10 +749,11 @@ extern sp_RbVal (*sp_obj_inspect_fn)(int cls_id, void *p, int *found);
 extern sp_RbVal (*sp_obj_to_s_fn)(int cls_id, void *p, int *found);
 /* CRuby's implicit conversion protocol on BOXED user objects: the runtime's
    Integer/String conversion sites (pack, typed-slot coercions) reach a
-   compiled #to_int / #to_str through these. A class without the method is
-   the default arm (*ok = 0 / NULL) and the caller raises CRuby's TypeError. */
+   compiled #to_int / #to_str through these. The default arm clears the
+   output flag. The String bridge returns the boxed result, preserving a
+   String subclass and distinguishing a missing conversion from nil. */
 extern sp_int (*sp_obj_to_int_fn)(int cls_id, void *p, int *ok);
-extern struct sp_String_s *(*sp_obj_to_str_fn)(int cls_id, void *p);
+extern sp_RbVal (*sp_obj_to_str_fn)(int cls_id, void *p, int *found);
 /* #to_path, which File/Dir/IO's path slots ask before #to_str (CRuby's
    rb_get_path); NULL when the class defines none. */
 extern const char *(*sp_obj_to_path_fn)(int cls_id, void *p);

@@ -9502,6 +9502,15 @@ static int infer_kernel_row(Compiler *c, int id, const char *name, int argc, con
   *out = bop_result_args(kop, BOP_KERNEL, argc, an_bop_arg_type, &a, 0);
   return *out != TY_UNKNOWN;
 }
+
+/* ENV's setter can answer a String subclass, and an assignment can
+   retain a non-String operand that supplied the converted String. */
+static TyKind infer_env_store_result(Compiler *c, int argc, const int *argv) {
+  if (argc != 2) return TY_POLY;
+  TyKind value = infer_type(c, argv[1]);
+  return value == TY_STRING || value == TY_STRBUF || value == TY_NIL ? TY_STRING : TY_POLY;
+}
+
 /* The type call node id answers, from its receiver, name and arguments:
    the rules below, in their order, the first that knows the call deciding
    it. */
@@ -10431,7 +10440,7 @@ static TyKind infer_call_inner(Compiler *c, int id) {
       if (sp_streq(name, "[]") && argc != 1) return TY_POLY;
       if (sp_streq(name, "fetch") && (argc == 0 || argc > 2)) return TY_POLY;
       if (sp_streq(name, "delete")) return TY_STRING;   /* nullable string: NULL is nil */
-      if (is_store_alias(name)) return TY_STRING;
+      if (is_store_alias(name)) return infer_env_store_result(c, argc, argv);
       if (sp_streq(name, "dup") || sp_streq(name, "clone") || sp_streq(name, "freeze")) return TY_POLY;
     }
   }

@@ -113,8 +113,6 @@ int share_frozen_literal_alone(Compiler *c, int n);
 /* ...or a read of a builtin String constant (RUBY_ENGINE ...), one frozen
    object too (share_frozen_string) */
 int share_frozen_string(Compiler *c, int n);
-/* A fresh value or a single-use local whose destination is its only live name. */
-int share_value_unobserved(Compiler *c, int n);
 
 /* Must the String node v evaluates to be its handle where it is emitted,
    and not its bytes: SHN_YES for every String but nil, a literal, a frozen

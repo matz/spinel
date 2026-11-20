@@ -112,6 +112,10 @@ A native binding uses the producer's declared String
 result, the handle of a held operand or slot, or a checked projection from
 the boxed Ruby value. The read of an existing String keeps its object.
 Boxing a reflective String read uses the handle from the selected slot.
+An ENV write holds both Ruby operands, converts the key and then the
+value, and reads their bytes for the environment after the conversions.
+The setter method returns the converted String object. The assignment
+expression retains its original value operand.
 Fiber context switches carry the active GC roots and exception state.
 A receiver-answering iterator at method tail keeps its receiver in the
 operand view across the block and returns it through the physical result

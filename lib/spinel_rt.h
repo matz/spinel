@@ -2792,17 +2792,6 @@ static inline sp_RbVal sp_rbs_cont_ret(sp_RbVal v, int cont, int nil_ok, const c
   sp_raise_cls("TypeError", buf);
   return v;
 }
-/* ENV[key] = value with a boxed RHS: a String sets, nil deletes, anything
-   else raises CRuby's TypeError. Returns the assigned string (NULL = nil),
-   matching the statically-string path's expression type. */
-static const char *sp_env_aset(const char *k, sp_RbVal v) {
-  if (v.tag == SP_TAG_NIL) { unsetenv(sp_env_chk(k, 0)); return NULL; }
-  if (!sp_rbval_is_string(v)) sp_raise_no_str_conversion(v);
-  sp_env_chk(k, 0);
-  const char *bytes = sp_rbval_string_bytes(v);
-  if (bytes) setenv(k, sp_env_chk(bytes, 1), 1); else unsetenv(k);
-  return bytes;
-}
 static sp_bool sp_PolyArray_eq(sp_PolyArray *a, sp_PolyArray *b);
 static sp_float sp_poly_to_f(sp_RbVal v);  /* defined below; used by the bigint+float arms */
 static sp_int sp_poly_to_i(sp_RbVal v);    /* defined below; used by the rational helper */
@@ -3888,7 +3877,7 @@ static SP_NOINLINE sp_int sp_poly_arg_int_obj(sp_RbVal v) {
 static SP_NOINLINE sp_String *sp_poly_arg_str_obj(sp_RbVal v) {
   if (v.v.p && sp_obj_to_str_fn) {
     SP_GC_ROOT_RBVAL(v);   /* across the user #to_str, as sp_poly_check_str_obj roots it */
-    sp_String *r = sp_obj_to_str_fn((int)v.cls_id, v.v.p);
+    sp_String *r = sp_obj_to_str_handle((int)v.cls_id, v.v.p);
     if (r) return r;
   }
   sp_raise_cls("TypeError",
@@ -3931,16 +3920,17 @@ static SP_INLINE sp_oint sp_poly_gets_olim(sp_RbVal v) { return v.tag == SP_TAG_
    is handed, so rooting this copy keeps that object alive. Both callers rely
    on this one root: sp_poly_cmp_to_str below, and the poly casecmp arm the
    emitter renders. */
-static SP_NOINLINE sp_String *sp_poly_check_str_obj(sp_RbVal v) {
+static SP_NOINLINE sp_RbVal sp_poly_check_str_obj(sp_RbVal v) {
   SP_GC_ROOT_RBVAL(v);
-  return sp_obj_to_str_fn((int)v.cls_id, v.v.p);
+  int found;
+  return sp_obj_to_str_fn((int)v.cls_id, v.v.p, &found);
 }
 /* A conversion returning a Ruby value keeps the original String object.
    A comparison or a native argument borrows its bytes at the read. */
 static inline sp_RbVal sp_poly_check_str_box(sp_RbVal v) {
   if (sp_poly_is_strbuf(v) || sp_strface_b_box(v)) return v;
   if (v.tag == SP_TAG_OBJ && v.cls_id >= 0 && v.v.p && sp_obj_to_str_fn)
-    return sp_box_nullable_obj(sp_poly_check_str_obj(v), SP_BUILTIN_STRBUF);
+    return sp_poly_check_str_obj(v);
   return sp_box_nil();
 }
 static inline sp_RbVal sp_kernel_string_to_s_result(sp_RbVal v, sp_RbVal s) {
@@ -3960,7 +3950,7 @@ static SP_INLINE const char *sp_poly_check_str(sp_RbVal v) {
   /* a shared String (--share-strings) is a String: its bytes as they are now */
   if (sp_rbval_is_string(v)) return sp_rbval_string_bytes(v);
   if (v.tag == SP_TAG_OBJ && v.cls_id >= 0 && v.v.p && sp_obj_to_str_fn)
-    return sp_String_cstr_nil(sp_poly_check_str_obj(v));
+    return sp_strface_b_box(sp_poly_check_str_obj(v));
   return NULL;
 }
 /* The ANSWER of a #to_str the analysis could pin no further than poly, on its
@@ -3973,7 +3963,8 @@ static SP_INLINE const char *sp_poly_check_str(sp_RbVal v) {
    no-conversion path too. */
 static SP_NOINLINE const char *sp_str_cmp_conv(sp_RbVal r, sp_RbVal obj) {
   /* a shared String's handle is a String too (sp_obj_conv_str_of) */
-  if (sp_poly_is_strbuf(r)) return sp_String_cstr((sp_String *)r.v.p);
+  const char *bytes = sp_strface_b_box(r);
+  if (bytes) return bytes;
   if (r.tag == SP_TAG_NIL) return NULL;
   sp_raise_cls("TypeError",
                sp_sprintf("can't convert %s to String (%s#to_str gives %s)",
@@ -3988,7 +3979,8 @@ static SP_NOINLINE const char *sp_str_cmp_conv(sp_RbVal r, sp_RbVal obj) {
    String (R#to_str gives Integer)" -- as sp_obj_to_int_answer does for
    #to_int. `cn` is the receiver's class name. */
 static SP_NOINLINE SP_UNUSED const char *sp_obj_to_str_answer(sp_RbVal r, const char *cn) {
-  if (sp_poly_is_strbuf(r)) return sp_String_cstr((sp_String *)r.v.p);
+  const char *bytes = sp_strface_b_box(r);
+  if (bytes) return bytes;
   sp_raise_cls("TypeError",
                sp_sprintf("can't convert %s to String (%s#to_str gives %s)", cn, cn,
                           sp_poly_class_name(r)));
@@ -4034,6 +4026,44 @@ static SP_INLINE sp_String *sp_poly_arg_str_handle(sp_RbVal v) {
   if (v.tag == SP_TAG_OBJ && v.cls_id >= 0) return sp_poly_arg_str_obj(v);
   return sp_String_new_shared(sp_poly_arg_str_chk(v));
 }
+/* An ENV argument uses the original String or its implicit conversion. */
+static sp_RbVal sp_env_store_arg(sp_RbVal value) {
+  if (sp_strface_b_box(value)) return value;
+  if (value.tag == SP_TAG_OBJ && value.cls_id >= 0 && value.v.p && sp_obj_to_str_fn) {
+    int found;
+    sp_RbVal text = sp_obj_to_str_fn((int)value.cls_id, value.v.p, &found);
+    if (found) {
+      if (text.tag != SP_TAG_NIL) return text;
+      const char *name = sp_poly_class_name(value);
+      sp_raise_cls("TypeError", sp_sprintf("can't convert %s to String (%s#to_str gives NilClass)", name, name));
+    }
+    sp_raise_no_str_conversion(value);
+  }
+  (void)sp_poly_arg_str_chk_slow(value);
+  return sp_box_nil();
+}
+
+/* Convert both operands before borrowing the key's potentially moved bytes.
+   The method returns the converted String. Assignment returns its operand. */
+static sp_RbVal sp_env_aset(sp_RbVal key, sp_RbVal value, int assignment) {
+  SP_GC_ROOT_RBVAL(key);
+  SP_GC_ROOT_RBVAL(value);
+  sp_RbVal name = sp_env_store_arg(key);
+  SP_GC_ROOT_RBVAL(name);
+  sp_RbVal text = value.tag == SP_TAG_NIL ? value : sp_env_store_arg(value);
+  const char *bytes = sp_env_chk(sp_strface_b_box(name), 0);
+  if (text.tag == SP_TAG_NIL) {
+    unsetenv(bytes);
+    return text;
+  }
+  const char *stored = sp_env_chk(sp_strface_b_box(text), 1);
+  if (setenv(bytes, stored, 1) != 0) {
+    int err = errno;
+    sp_raise_cls(sp_errno_class_name(err), sp_sprintf("%s - setenv(%s)", strerror(err), bytes));
+  }
+  return assignment ? value : text;
+}
+
 /* A String argument that is nil at run time (a String-or-nil, such as
    byteslice answers): TypeError, where a NULL passed on was taken as
    nothing to do. */
@@ -10733,7 +10763,7 @@ static sp_RbVal sp_poly_pattern_chk(sp_RbVal v, int nil_ok) {
   /* a user object without #to_str is no pattern either */
   if (v.tag == SP_TAG_OBJ && v.cls_id >= 0) {
     SP_GC_ROOT_RBVAL(v);
-    sp_String *r = v.v.p && sp_obj_to_str_fn ? sp_obj_to_str_fn((int)v.cls_id, v.v.p) : NULL;
+    sp_String *r = v.v.p && sp_obj_to_str_fn ? sp_obj_to_str_handle((int)v.cls_id, v.v.p) : NULL;
     if (!r) sp_scan_bad_pattern(v);
     return sp_box_obj(r, SP_BUILTIN_STRBUF);
   }

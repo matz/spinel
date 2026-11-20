@@ -1672,11 +1672,6 @@ int share_value_fresh(Compiler *c, int n, int depth) {
   return !for_each_value_position(c->nt, n, VPS_IF | VPS_UNLESS, sh_fresh_arm_bad, &f);
 }
 
-/* A fresh value, or a local's fresh value handed on at its only read. */
-int share_value_unobserved(Compiler *c, int n) {
-  return share_value_fresh(c, n, 0) || an_local_read_once(c, n);
-}
-
 /* Does the String (or a box that may hold one) node v evaluates to have to
    be the String's handle where it is emitted -- stored, boxed, mutated --
    and not its bytes? Under the one representation every String does, but

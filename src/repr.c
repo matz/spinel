@@ -1119,20 +1119,15 @@ int repr_string_conversion_operand(Compiler *c, int v) {
          comp_recv_type(c, r) == TY_STRING &&
          (cplan_user(c, v).dispatch == CP_NONE || repr_user_answers_self(c, v)) ? r : -1;
 }
-/* ENV copies its stored bytes, but a store answers its value operand.
-   A boxed operand can still hold plain bytes: an observable alias stays
-   refused. A mutable key held across value evaluation that can change it
-   must carry its handle too. */
+/* A String-typed environment write hands back a String handle. */
 int repr_env_store_operand(Compiler *c, int v) {
   const NodeTable *nt = c->nt;
   if (v < 0 || nt_kind(nt, v) != NK_CallNode) return -1;
-  int r = nt_ref(nt, v, "receiver"), argc = 0;
+  const char *name = nt_str(nt, v, "name");
+  int recv = nt_ref(nt, v, "receiver"), argc;
   const int *argv = call_args(nt, v, &argc);
-  return r >= 0 && env_value_recv(c, r, comp_ntype(c, r)) &&
-         argc == 2 && bop_share_named(BOP_ENV, nt_str(nt, v, "name")) == BSH_LAST &&
-         (repr_of(c, argv[1]).kind != RK_BOXED || share_value_unobserved(c, argv[1])) &&
-         (repr_of(c, argv[0]).handle || share_value_fresh(c, argv[0], 0) || !subtree_has_side_effect(c, argv[1]))
-         ? argv[1] : -1;
+  return recv >= 0 && name && is_store_alias(name) && argc == 2 &&
+         env_value_recv(c, recv, comp_ntype(c, recv)) ? argv[1] : -1;
 }
 /* Does string conversion `node` hand on a handle: the operand it ends in,
    through further conversions, is a boxed value or a route that carries

@@ -1595,17 +1595,25 @@ RBS_SEED_STRICT := -Werror=incompatible-pointer-types
 CC_VERSION := $(shell $(CC) --version 2>/dev/null)
 CC_KIND := $(if $(findstring clang,$(CC_VERSION)),clang,gcc)
 PCH_FLAGS = $(CFLAGS) $(SP_OV_DEFINE) -Werror $(TEST_WARN_SUPPRESS) $(SEC_FLAGS)
-PCH_ROOT := build/pch/$(CC_KIND)-$(shell tools/result_cache.sh pch-key "$(CC)" "$(CC_VERSION)" $(PCH_FLAGS))
 # The last explicit -O wins among ordinary flags. Leave opaque options
 # (such as compiler response files) to the textual include on an override.
 TEST_PCH_OPT := $(if $(filter-out -O% -Wno-% -ffp-contract=off -g -g0 -g1 -g2 -g3 -D% -U% -I%,$(CFLAGS)),,$(lastword $(filter -O%,$(CFLAGS))))
 # Inspect the shell's argument words, including quoted response-file names.
 # These options can read contents which the command and tracked headers
 # alone do not fingerprint.
-TEST_INDIRECT_OPTS := @*|--config|--config=*|--config-*|-include*|-imacros*|-ivfsoverlay*|-fmodule-file*|-fmodule-map-file*|-Xclang|-Xpreprocessor|-Xlinker|-Wp,*
-TEST_INDIRECT_FLAGS := $(shell for arg in $(CC) $(PCH_FLAGS); do case "$$arg" in ($(TEST_INDIRECT_OPTS)) printf 1; break;; esac; done)
+TEST_INDIRECT_OPTS := @* | --config | --config=* | --config-* | -specs | -specs=* | \
+  -I* | -F* | -i* | -vfsoverlay* | --sysroot* | -resource-dir* | -B* | \
+  -fmodule-file* | -fmodule-map-file* | -Xclang | -Xpreprocessor | -Xlinker | -Wp,*
+TEST_OPENSSL_INCLUDE := $(if $(SPINEL_OPENSSL_LIBDIR),$(patsubst %/lib,%/include,$(SPINEL_OPENSSL_LIBDIR)))
+# The Makefile may export the Homebrew OpenSSL search path itself. Include
+# that directory's contents in the key. User-supplied search paths fall back.
+TEST_MANAGED_INCLUDE := $(filter $(TEST_OPENSSL_INCLUDE),$(CPATH))
+TEST_INCLUDE_ENV := $(strip $(filter-out $(TEST_MANAGED_INCLUDE),$(CPATH)) $(C_INCLUDE_PATH) $(SDKROOT))
+TEST_INDIRECT_FLAGS := $(if $(TEST_INCLUDE_ENV),1,$(shell for arg in $(CC) $(PCH_FLAGS); do case "$$arg" in ($(TEST_INDIRECT_OPTS) | -Wl,*@*) printf 1; break;; esac; done))
+TEST_PCH_KEY := $(if $(TEST_INDIRECT_FLAGS),,$(shell tools/result_cache.sh pch-key "$(CC)" "$(CC_VERSION)" "$(TEST_MANAGED_INCLUDE)" $(PCH_FLAGS)))
+PCH_ROOT := build/pch/$(CC_KIND)-$(TEST_PCH_KEY)
 TEST_HOST_OS := $(shell uname -s)
-TEST_PCHS := $(if $(TEST_INDIRECT_FLAGS),,$(addsuffix /spinel_rt.h.gch,$(addprefix $(PCH_ROOT)/,plain nopoly novalues)))
+TEST_PCHS := $(if $(TEST_PCH_KEY),$(addsuffix /spinel_rt.h.gch,$(addprefix $(PCH_ROOT)/,plain nopoly novalues)))
 SP_LIB_HDRS := $(wildcard lib/*.h) $(PLATFORM_HDRS)
 
 .PHONY: test-pch
@@ -4462,7 +4470,7 @@ ckey=""; hit=0; own=0; \
   fi; \
   xlibs="$$xobjs $$xlibs"; \
   cacheable=1; \
-  if [ -n "$(TEST_INDIRECT_FLAGS)" ]; then pchuse=""; cacheable=0; fi; \
+  if [ -z "$(TEST_PCH_KEY)" ]; then pchuse=""; cacheable=0; fi; \
   for arg in $$bigopt; do \
     case "$$arg" in $(TEST_INDIRECT_OPTS)) pchuse=""; cacheable=0;; esac; \
   done; \

@@ -8,8 +8,9 @@
 # same as in a run that passed. The reasoning, and what is deliberately out of
 # scope, is in the Makefile's comment above RUN_ONE_TEST.
 #
-#   pch-key CC VERSION FLAG...
-#       Hash the compiler command, version and ordered arguments of a PCH build.
+#   pch-key CC VERSION INCLUDE_DIR FLAG...
+#       Hash the compiler command, version, any managed include directory
+#       and ordered arguments of a PCH build.
 #   fp FILE... [-- STRING...]
 #       The fingerprint of a configuration: the content of each FILE (a
 #       missing one counts as missing), every header under lib/ and packages/,
@@ -97,7 +98,18 @@ nocache() {
 case "${1:-}" in
 pch-key)
   shift
-  printf '%s\0' "$@" | rc_sha | cut -c1-64
+  include_files=
+  if [ -n "$3" ]; then
+    if command -v sha256sum >/dev/null 2>&1; then
+      include_files=$(find -L "$3" -type f -exec sha256sum {} +) || exit 1
+    else
+      include_files=$(find -L "$3" -type f -exec shasum -a 256 {} +) || exit 1
+    fi
+  fi
+  {
+    printf '%s\0' "$@"
+    if [ -n "$include_files" ]; then printf '%s\n' "$include_files" | sort; fi
+  } | rc_sha | cut -c1-64
   ;;
 fp)
   shift

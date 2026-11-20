@@ -910,6 +910,33 @@ module Net
       send_entity(req, dest, &block)
     end
 
+    # The response goes to the block before its body is read, so the block
+    # can read it in pieces with read_body.
+    def request_get(path, headers = nil, &block)
+      request(Get.new(path, headers), &block)
+    end
+
+    def request_head(path, headers = nil, &block)
+      request(Head.new(path, headers), &block)
+    end
+
+    def request_post(path, body, headers = nil, &block)
+      req = Post.new(path, headers)
+      req.body = body
+      request(req, &block)
+    end
+
+    def request_put(path, body, headers = nil, &block)
+      req = Put.new(path, headers)
+      req.body = body
+      request(req, &block)
+    end
+
+    alias get2 request_get
+    alias head2 request_head
+    alias post2 request_post
+    alias put2 request_put
+
     def send_entity(req, dest, &block)
       res = nil
       request(req) do |r|

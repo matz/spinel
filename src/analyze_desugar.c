@@ -10396,7 +10396,16 @@ int desugar_call_op_write(Compiler *c) {
        a Rational, which the ordinary writer call widens the attribute for
        (mark_int_pow_signed marks the power the rewrite makes a call). Under
        defined? nothing runs, so either stays as written */
-    if (!has_def_writer) {
+    /* A receiver known only at run time that can be an object of a native
+       class has no store to keep: that class's reader and writer are C
+       symbols, reached through the box as any reader and writer call is
+       (`ss.pos -= 1` on a value that is a String or a StringScanner) */
+    int boxed_native = 0;
+    if (!has_def_writer && infer_type(c, recv) == TY_POLY)
+      for (int k = 0; k < c->nclasses && !boxed_native; k++)
+        if (c->classes[k].is_native_class && comp_native_method_find(c, k, attr, 0, 0) >= 0 &&
+            comp_native_method_find(c, k, wname, 1, 0) >= 0) boxed_native = 1;
+    if (!has_def_writer && !boxed_native) {
       /* defined?(w.n += 1) is "assignment": as the writer call it read "method".
          desugar_defined_method_call has looked through any parentheses
          around it, so the defined? names it as its value. */

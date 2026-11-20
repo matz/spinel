@@ -52056,7 +52056,6 @@ static const char *const an_tree_only_passes[] = {
   "desugar_binding_lvget",
   "desugar_block_capture_wrap",
   "desugar_builtin_class_var_recv",
-  "desugar_call_op_write",
   "desugar_class_body_bare_new",
   "desugar_class_literal_ctors",
   "desugar_cmethod_cvar_reflection",

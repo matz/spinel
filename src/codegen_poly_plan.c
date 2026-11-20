@@ -2412,7 +2412,12 @@ int emit_poly_dispatch_block0(Compiler *c, int id, const char *name, Buf *b) {
           blk_tmp0 = hoist_dispatch_blk_proc(c, id, cblk0);
         }
       }
-    } }
+    }
+    /* The builtin and Enumerable fallback can use the block even when
+       every user arm ignores it. Stage the same Proc for both. */
+    if (blk_tmp0 < 0 && poly_blk_prearm_name(name))
+      blk_tmp0 = hoist_dispatch_blk_proc(c, id, cblk0);
+  }
   blk_tmp0 = callable_prearm_blk(c, id, name, blk_tmp0);
   g_pre = outer;
   if (block.p) buf_puts(b, block.p);
@@ -2426,8 +2431,6 @@ int emit_poly_dispatch_block0(Compiler *c, int id, const char *name, Buf *b) {
    that proc, a callable value, a class value's class-side arms. */
 void emit_poly_prearms0_blk(Compiler *c, int id, const char *name, const PolySpecials0 *ps, TyKind ret,
                            int tv, int tr, int blk_tmp0, Buf *b) {
-  const NodeTable *nt = c->nt;
-  int argc = 0;
   /* A builtin Array receiver reaching a dispatch that exists only because
      a USER class defines this name. Without an arm it falls to the raise:
      `NoMethodError: undefined method 'map' for an instance of Array` at a
@@ -2441,16 +2444,7 @@ void emit_poly_prearms0_blk(Compiler *c, int id, const char *name, const PolySpe
      non-yielding user `map` leaves a block-carrying call to the builtin
      path entirely, which is why the same shape is correct without the
      yield. */
-  { const char *pen_op = argc == 0 && nt_ref(nt, id, "block") >= 0
-                       ? poly_enum_op_for(name) : NULL;
-    /* A candidate that neither yields nor keeps a real &blk left no proc
-       materialized -- it ignores the block. The builtin arm still needs
-       one, so build it here; only one arm runs either way. */
-    if (pen_op && blk_tmp0 < 0) {
-      int cblk1 = resolve_forwarded_block(c, nt_ref(nt, id, "block"));
-      if (cblk1 < 0) pen_op = NULL;
-      else blk_tmp0 = hoist_block_proc(c, cblk1);
-    }
+  { const char *pen_op = blk_tmp0 >= 0 ? poly_enum_op_for(name) : NULL;
     if (pen_op) {
       if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_ENUM_PROC, -1, TY_UNKNOWN, PC_SAME);
       char pcall[160];
@@ -2471,64 +2465,46 @@ void emit_poly_prearms0_blk(Compiler *c, int id, const char *name, const PolySpe
      raise. The static arm (the lock/ensure shape in the synchronize
      emitter) cannot serve it here, the block being a materialized proc
      shared by every arm, so the runtime arm locks around the proc. */
-  if (sp_streq(name, "synchronize") && argc == 0 && nt_ref(nt, id, "block") >= 0) {
-    if (blk_tmp0 < 0) {
-      int cblk2 = resolve_forwarded_block(c, nt_ref(nt, id, "block"));
-      if (cblk2 >= 0) blk_tmp0 = hoist_block_proc(c, cblk2);
-    }
-    if (blk_tmp0 >= 0) {
-      if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_SYNC, -1, TY_UNKNOWN, PC_SAME);
-      char mcall[96];
-      snprintf(mcall, sizeof mcall, "sp_Mutex_synchronize_proc((sp_mutex *)_t%d.v.p, _t%d)", tv, blk_tmp0);
-      buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_MUTEX) { _t%d = ", tv, tv, tr);
-      if (ret == TY_POLY) buf_puts(b, mcall);
-      else emit_unbox_text(c, ret, mcall, b);
-      buf_puts(b, "; }\nelse ");
-    }
+  if (sp_streq(name, "synchronize") && blk_tmp0 >= 0) {
+    if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_SYNC, -1, TY_UNKNOWN, PC_SAME);
+    char mcall[96];
+    snprintf(mcall, sizeof mcall, "sp_Mutex_synchronize_proc((sp_mutex *)_t%d.v.p, _t%d)", tv, blk_tmp0);
+    buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_MUTEX) { _t%d = ", tv, tv, tr);
+    if (ret == TY_POLY) buf_puts(b, mcall);
+    else emit_unbox_text(c, ret, mcall, b);
+    buf_puts(b, "; }\nelse ");
   }
   /* each_index with a block on a boxed Array, in a dispatch that exists
      because a user class also defines it: the shared proc is driven over
      the indices, and the Array answers itself (the pre-arm above has no
      walk for it) */
-  if (sp_streq(name, "each_index") && argc == 0 && nt_ref(nt, id, "block") >= 0) {
-    if (blk_tmp0 < 0) {
-      int cblk3 = resolve_forwarded_block(c, nt_ref(nt, id, "block"));
-      if (cblk3 >= 0) blk_tmp0 = hoist_block_proc(c, cblk3);
-    }
-    if (blk_tmp0 >= 0) {
-      if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_ENUM_PROC, -1, TY_UNKNOWN, PC_SAME);
-      int ti = ++g_tmp;
-      char icall[256];
-      snprintf(icall, sizeof icall, "({ for (sp_int _t%d = 0; _t%d < sp_poly_length(_t%d); _t%d++)"
-                                    " sp_penum_call1(_t%d, sp_box_int(_t%d)); _t%d; })",
-               ti, ti, tv, ti, blk_tmp0, ti, tv);
-      buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && sp_poly_is_array_kind(_t%d.cls_id)) { _t%d = ", tv, tv, tr);
-      if (ret == TY_POLY) buf_puts(b, icall);
-      else emit_unbox_text(c, ret, icall, b);
-      buf_puts(b, "; }\nelse ");
-    }
+  if (sp_streq(name, "each_index") && blk_tmp0 >= 0) {
+    if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_ENUM_PROC, -1, TY_UNKNOWN, PC_SAME);
+    int ti = ++g_tmp;
+    char icall[256];
+    snprintf(icall, sizeof icall, "({ for (sp_int _t%d = 0; _t%d < sp_poly_length(_t%d); _t%d++)"
+                                  " sp_penum_call1(_t%d, sp_box_int(_t%d)); _t%d; })",
+             ti, ti, tv, ti, blk_tmp0, ti, tv);
+    buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && sp_poly_is_array_kind(_t%d.cls_id)) { _t%d = ", tv, tv, tr);
+    if (ret == TY_POLY) buf_puts(b, icall);
+    else emit_unbox_text(c, ret, icall, b);
+    buf_puts(b, "; }\nelse ");
   }
   /* times with a block on a boxed Integer, in a dispatch that exists
      because a user class also defines it (an options object's `times`
      reader): the shared proc is driven over 0...n, and the Integer
      answers itself */
-  if (sp_streq(name, "times") && argc == 0 && nt_ref(nt, id, "block") >= 0) {
-    if (blk_tmp0 < 0) {
-      int cblk4 = resolve_forwarded_block(c, nt_ref(nt, id, "block"));
-      if (cblk4 >= 0) blk_tmp0 = hoist_block_proc(c, cblk4);
-    }
-    if (blk_tmp0 >= 0) {
-      if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_ENUM_PROC, -1, TY_UNKNOWN, PC_SAME);
-      int ti = ++g_tmp;
-      char tcall[256];
-      snprintf(tcall, sizeof tcall, "({ for (sp_int _t%d = 0; _t%d < _t%d.v.i; _t%d++)"
-                                    " sp_penum_call1(_t%d, sp_box_int(_t%d)); _t%d; })",
-               ti, ti, tv, ti, blk_tmp0, ti, tv);
-      buf_printf(b, "if (_t%d.tag == SP_TAG_INT) { _t%d = ", tv, tr);
-      if (ret == TY_POLY) buf_puts(b, tcall);
-      else emit_unbox_text(c, ret, tcall, b);
-      buf_puts(b, "; }\nelse ");
-    }
+  if (sp_streq(name, "times") && blk_tmp0 >= 0) {
+    if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_ENUM_PROC, -1, TY_UNKNOWN, PC_SAME);
+    int ti = ++g_tmp;
+    char tcall[256];
+    snprintf(tcall, sizeof tcall, "({ for (sp_int _t%d = 0; _t%d < _t%d.v.i; _t%d++)"
+                                  " sp_penum_call1(_t%d, sp_box_int(_t%d)); _t%d; })",
+             ti, ti, tv, ti, blk_tmp0, ti, tv);
+    buf_printf(b, "if (_t%d.tag == SP_TAG_INT) { _t%d = ", tv, tr);
+    if (ret == TY_POLY) buf_puts(b, tcall);
+    else emit_unbox_text(c, ret, tcall, b);
+    buf_puts(b, "; }\nelse ");
   }
   /* each_line, each_char, each_byte or each_codepoint with a block on a
      boxed String, in a dispatch that exists because a user class also
@@ -2539,39 +2515,33 @@ void emit_poly_prearms0_blk(Compiler *c, int id, const char *name, const PolySpe
   int line_walk = sp_streq(name, "each_line");
   int str_walk = line_walk || sp_streq(name, "each_char");
   int int_walk = sp_streq(name, "each_byte") || sp_streq(name, "each_codepoint");
-  if ((str_walk || int_walk) && argc == 0 && nt_ref(nt, id, "block") >= 0) {
-    if (blk_tmp0 < 0) {
-      int cblk5 = resolve_forwarded_block(c, nt_ref(nt, id, "block"));
-      if (cblk5 >= 0) blk_tmp0 = hoist_block_proc(c, cblk5);
+  if ((str_walk || int_walk) && blk_tmp0 >= 0) {
+    if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_ENUM_PROC, -1, TY_UNKNOWN, PC_SAME);
+    Buf lcall = {0};
+    if (line_walk) {
+      buf_puts(&lcall, "({ ");
+      int line = emit_string_line_loop_start(tv, 0, 0, 0, name, &lcall);
+      buf_printf(&lcall, "sp_penum_call1(_t%d, SP_SEBOX(_t%d)); } _t%d; })", blk_tmp0, line, tv);
     }
-    if (blk_tmp0 >= 0) {
-      if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_ENUM_PROC, -1, TY_UNKNOWN, PC_SAME);
-      Buf lcall = {0};
-      if (line_walk) {
-        buf_puts(&lcall, "({ ");
-        int line = emit_string_line_loop_start(tv, 0, 0, 0, name, &lcall);
-        buf_printf(&lcall, "sp_penum_call1(_t%d, SP_SEBOX(_t%d)); } _t%d; })", blk_tmp0, line, tv);
-      }
-      else {
-        int ta = ++g_tmp, ti = ++g_tmp;
-        const char *walk = str_walk ? "sp_str_chars" : sp_streq(name, "each_byte") ? "sp_str_bytes" : "sp_str_codepoints";
-        if (str_walk)
-          buf_printf(&lcall, "({ sp_StrArray *_t%d = %s(sp_poly_recv_s(_t%d, \"%s\")); SP_GC_ROOT(_t%d);"
-                                      " for (sp_int _t%d = 0; _t%d < sp_StrArray_length(_t%d); _t%d++)"
-                                      " sp_penum_call1(_t%d, SP_SEBOX(sp_StrArray_get_e(_t%d, _t%d))); _t%d; })",
-                     ta, walk, tv, name, ta, ti, ti, ta, ti, blk_tmp0, ta, ti, tv);
-        else
-          buf_printf(&lcall, "({ sp_IntArray *_t%d = %s(sp_poly_recv_s(_t%d, \"%s\")); SP_GC_ROOT(_t%d);"
-                                      " for (sp_int _t%d = 0; _t%d < sp_IntArray_length(_t%d); _t%d++)"
-                                      " sp_penum_call1(_t%d, sp_box_int(sp_IntArray_get(_t%d, _t%d))); _t%d; })",
-                     ta, walk, tv, name, ta, ti, ti, ta, ti, blk_tmp0, ta, ti, tv);
-      }
-      buf_printf(b, "if (sp_rbval_is_string(_t%d) || sp_poly_is_strbuf(_t%d)) { _t%d = ", tv, tv, tr);
-      if (ret == TY_POLY) buf_puts(b, lcall.p);
-      else emit_unbox_text(c, ret, lcall.p, b);
-      free(lcall.p);
-      buf_puts(b, "; }\nelse ");
+    else {
+      int ta = ++g_tmp, ti = ++g_tmp;
+      const char *walk = str_walk ? "sp_str_chars" : sp_streq(name, "each_byte") ? "sp_str_bytes" : "sp_str_codepoints";
+      if (str_walk)
+        buf_printf(&lcall, "({ sp_StrArray *_t%d = %s(sp_poly_recv_s(_t%d, \"%s\")); SP_GC_ROOT(_t%d);"
+                                    " for (sp_int _t%d = 0; _t%d < sp_StrArray_length(_t%d); _t%d++)"
+                                    " sp_penum_call1(_t%d, SP_SEBOX(sp_StrArray_get_e(_t%d, _t%d))); _t%d; })",
+                   ta, walk, tv, name, ta, ti, ti, ta, ti, blk_tmp0, ta, ti, tv);
+      else
+        buf_printf(&lcall, "({ sp_IntArray *_t%d = %s(sp_poly_recv_s(_t%d, \"%s\")); SP_GC_ROOT(_t%d);"
+                                    " for (sp_int _t%d = 0; _t%d < sp_IntArray_length(_t%d); _t%d++)"
+                                    " sp_penum_call1(_t%d, sp_box_int(sp_IntArray_get(_t%d, _t%d))); _t%d; })",
+                   ta, walk, tv, name, ta, ti, ti, ta, ti, blk_tmp0, ta, ti, tv);
     }
+    buf_printf(b, "if (sp_rbval_is_string(_t%d) || sp_poly_is_strbuf(_t%d)) { _t%d = ", tv, tv, tr);
+    if (ret == TY_POLY) buf_puts(b, lcall.p);
+    else emit_unbox_text(c, ret, lcall.p, b);
+    free(lcall.p);
+    buf_puts(b, "; }\nelse ");
   }
   /* a boxed Proc/Curry/Method in a slot a user `call`/`[]` shadows (#4395) */
   if (emit_poly_callable_prearm(c, name, 0, NULL, NULL, NULL, tv, tr, ret, 0,

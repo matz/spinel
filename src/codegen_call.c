@@ -11050,8 +11050,8 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
       emit_expr(c, recv, b);
       buf_puts(b, "; ");
       if (root_recv) buf_printf(b, "SP_GC_ROOT_RBVAL(_t%d); ", tv);
-      emit_poly_vis_precheck(c, id, tv, b);
       int blk_tmp0 = emit_poly_dispatch_block0(c, id, name, b);
+      emit_poly_vis_precheck(c, id, tv, b);
       size_t pd_from = b->len;   /* the region pd_hoist may move out of line */
       /* the result slot: an Integer / Float dispatch whose answer can be nil
          (node_is_oint) holds it as the oint, and every arm assigns that form */

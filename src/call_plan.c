@@ -9956,7 +9956,8 @@ static void cpoly_flags0(Compiler *c, int id, const char *name, PolyPlan *p, Pol
   *out = ps;
   if (ps.ostruct && (p->ret == TY_UNKNOWN || p->ret == TY_VOID || p->ret == TY_NIL)) p->ret = TY_POLY;
   int root = ps.ncall_arm > 0 || ps.lengthlike || ps.empty || ps.pred || ps.class_named ||
-             ps.class_reflect || ps.ostruct || ps.io_rewind || ps.poly_to_a || ps.poly_to_h;
+             ps.class_reflect || ps.ostruct || ps.io_rewind || ps.poly_to_a || ps.poly_to_h ||
+             (nt_ref(c->nt, id, "block") >= 0 && (poly_blk_prearm_name(name) || is_call_or_yield(name)));
   p->flags = (root ? PPF_ROOT : 0) |
              (poly_key_cls0(c, id, name, 0, -1, 0, -1) ? PPF_KEY_CLS0 : 0) |
              (poly_key_prim(c, id, name, 0, -1, 0, -1) ? PPF_KEY_PRIM : 0) |

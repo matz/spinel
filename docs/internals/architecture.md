@@ -67,6 +67,8 @@ Boxed callable dispatch holds the receiver and arguments before it
 binds the block operand. Proc invocation carries the captured block and
 the keyword marker through the same call as the argument vector. A boxed
 curried Proc forwards the block of the call that completes its arguments.
+An Enumerable fallback in boxed dispatch uses the same staged block as
+the builtin and user arms, with the receiver held across its conversion.
 A composed Proc forwards the block to its first function and passes that
 function's result to the second.
 A call that materializes a curried block uses its runtime Proc wrapper.

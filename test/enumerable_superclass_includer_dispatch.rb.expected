@@ -10,3 +10,12 @@
 1
 ["Or"]
 0
+receiver
+block
+[10, 1]
+receiver
+block
+[:own_map]
+receiver
+block
+private map

@@ -131,10 +131,14 @@ Interpolation and printing call the display method selected at that site.
 They read the bytes of its native String result or format its boxed result
 while the receiver is rooted. Interpolation keeps a mutable conversion
 result until its literal segment is assembled, then reads its bytes and
-length together. This includes registered class conversions and a rescued
+length together. Adjacent segments finish in order. A segment's argument
+evaluations and encoding checks run before the next segment starts.
+This includes registered class conversions and a rescued
 exception’s override or stored message. A generated String member reader named to_s or inspect
 returns its stored field. The default Struct or Data renderer produces
-counted text. String comparisons borrow bytes from the selected conversion
+counted text. A segment can write a final builtin repeat into its counted
+destination after evaluating its String and Integer operands.
+String comparisons borrow bytes from the selected conversion
 result. Case comparisons hold the receiver through `to_str` and read its
 current bytes after conversion. Boxed String readers use the load record
 to select their builtin or an installed override. An alias that captures

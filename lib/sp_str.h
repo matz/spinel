@@ -159,6 +159,8 @@ const char*sp_str_format_strarr(const char*fmt,sp_StrArray*a);
 const char*sp_str_sub(const char*s,const char*pat,const char*rep);
 const char*sp_str_remove_first(const char*s,const char*pat);
 const char*sp_str_capitalize(const char*s);
+size_t sp_str_repeat_size(const char *s, sp_int n, size_t *unit);
+char *sp_str_repeat_write(char *dest, const char *s, size_t unit, size_t total);
 const char*sp_str_repeat(const char*s,sp_int n);
 sp_IntArray*sp_str_bytes(const char*s);
 const char *sp_str_crypt(const char *s, const char *salt);

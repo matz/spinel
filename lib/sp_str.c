@@ -129,19 +129,24 @@ static inline char *sp_str_bin_from(char *r, const char *a) {
   return r;
 }
 
-/* One step of CRuby's encoding rule over a string built part by part (an
-   interpolation, Array#join): `state` is the encoding so far, -1 while only
+/* One step of the encoding rule over an interpolation. `state` is the
+   encoding so far, -1 while only
    US-ASCII parts (an Integer's to_s, nothing yet) have gone in, 0 UTF-8, 1
    binary; `acc` holds the `acc_len` bytes already joined. A part in the same
    encoding, or an ASCII-only one, keeps it; one whose high bytes meet an
-   ASCII-only run so far takes the run over; two runs with high bytes in
-   different encodings stay binary (see above). */
+   ASCII-only run so far takes the run over. High bytes in two different
+   encodings are incompatible. */
 int sp_str_enc_step(int state, const char *acc, size_t acc_len, const char *part, size_t part_len, int part_bin) {
   if (state < 0) return part_len ? part_bin : -1;
   if (part_bin == state || part_len == 0) return state;
   for (size_t i = 0; i < part_len; i++)
     if ((unsigned char)part[i] >= 0x80) {
-      for (size_t j = 0; j < acc_len; j++) if ((unsigned char)acc[j] >= 0x80) return 1;
+      for (size_t j = 0; j < acc_len; j++) {
+        if ((unsigned char)acc[j] >= 0x80)
+          sp_raise_cls("Encoding::CompatibilityError", state == 1
+            ? "incompatible character encodings: BINARY (ASCII-8BIT) and UTF-8"
+            : "incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)");
+      }
       return part_bin;
     }
   return state;
@@ -608,24 +613,36 @@ static const char *sp_justify_size_err(uint64_t have, uint64_t add) {
 static void sp_justify_size_raise(const char *cls) {
   sp_raise_cls(cls, cls[0] == 'A' ? "argument too big" : "failed to allocate memory");
 }
-const char*sp_str_repeat(const char*s,sp_int n){SP_GC_ROOT_STR(s);
-  if(n<0) sp_raise_cls("ArgumentError","negative argument");
-  if(!s)sp_nil_recv("*");if(n<=0)return sp_str_is_binary(s)?sp_str_empty_binary():sp_str_empty;
-  /* the real byte length, not strlen: `0.chr * 3` is three NUL bytes, and a
-     repeat of "a\0b" carries the NUL through each copy (#3473) */
-  size_t l=sp_str_byte_len(s);
-  if(l==0) return sp_str_is_binary(s)?sp_str_empty_binary():sp_str_empty;
-  if((size_t)n>SIZE_MAX/l) sp_raise_cls("ArgumentError","string size too big");
-  size_t total=(size_t)n*l;
-  sp_str_check_size(0,total);
-  char*r=sp_str_alloc_raw(total+1);
-  /* one copy, then the filled part onto the rest, doubling: log2(n)
-     memcpys rather than n (a one-byte string times 20M was 20M calls) */
-  memcpy(r,s,l);
-  for(size_t done=l;done<total;){size_t c=done<total-done?done:total-done;memcpy(r+done,r,c);done+=c;}
-  r[total]=0;
-  sp_str_set_len(r,total);
-  return sp_str_bin_from(r,s);
+size_t sp_str_repeat_size(const char *s, sp_int n, size_t *unit) {
+  if (n < 0) sp_raise_cls("ArgumentError", "negative argument");
+  if (!s) sp_nil_recv("*");
+  *unit = n ? sp_str_byte_len(s) : 0;
+  if (!*unit) return 0;
+  if ((size_t)n > SIZE_MAX / *unit) sp_raise_cls("ArgumentError", "string size too big");
+  size_t total = (size_t)n * *unit;
+  sp_str_check_size(0, total);
+  return total;
+}
+/* Fill the counted buffer without allocating an intermediate String. */
+char *sp_str_repeat_write(char *dest, const char *s, size_t unit, size_t total) {
+  if (!total) return dest;
+  /* Copy the filled prefix to double it, using log2(n) calls. */
+  memcpy(dest, s, unit);
+  for (size_t done = unit; done < total;) {
+    size_t n = done < total - done ? done : total - done;
+    memcpy(dest + done, dest, n);
+    done += n;
+  }
+  return dest + total;
+}
+const char *sp_str_repeat(const char *s, sp_int n) {
+  SP_GC_ROOT_STR(s);
+  size_t unit, total = sp_str_repeat_size(s, n, &unit);
+  if (!total) return sp_str_is_binary(s) ? sp_str_empty_binary() : sp_str_empty;
+  char *r = sp_str_alloc_raw(total + 1);
+  *sp_str_repeat_write(r, s, unit, total) = 0;
+  sp_str_set_len(r, total);
+  return sp_str_bin_from(r, s);
 }
 /* root `s` before the IntArray's GC-alloc: the argument is often a fresh
    unrooted temp (`data[off, n].bytes` in a fused times.map -- doom's

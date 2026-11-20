@@ -1,0 +1,6 @@
+["abc|abcd", "d"]
+[[97, 120, 97, 120, 121], "UTF-8", "ASCII-8BIT"]
+["UTF-8", "ASCII-8BIT"]
+["ASCII-8BIT", "ASCII-8BIT"]
+"ASCII-8BIT"
+encoding_error

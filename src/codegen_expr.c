@@ -6538,14 +6538,11 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
        the temp. */
     if (loop_has_valued_break(c, nt_ref(nt, id, "statements"))) {
       int tr = ++g_tmp;
-      const char *saved_bv = g_loop_break_var;
-      int saved_rp = g_ie_res_poly;
       char bvbuf[24]; snprintf(bvbuf, sizeof bvbuf, "_t%d", tr);
-      g_loop_break_var = bvbuf; g_ie_res_poly = 1;
       if (g_pre) {
         emit_indent(g_pre, g_indent);
         buf_printf(g_pre, "sp_RbVal _t%d = sp_box_nil(); SP_GC_ROOT_RBVAL(_t%d);\n", tr, tr);
-        emit_while(c, id, g_pre, g_indent, ty_k == NK_UntilNode);
+        emit_control_loop(c, id, g_pre, g_indent, bvbuf);
         buf_printf(b, "_t%d", tr);
       }
       else {
@@ -6553,16 +6550,15 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
            back to a GCC statement expression, mirroring BeginNode. */
         buf_puts(b, "({ ");
         buf_printf(b, "sp_RbVal _t%d = sp_box_nil(); SP_GC_ROOT_RBVAL(_t%d);\n", tr, tr);
-        emit_while(c, id, b, 0, ty_k == NK_UntilNode);
+        emit_control_loop(c, id, b, 0, bvbuf);
         buf_printf(b, "_t%d; })", tr);
       }
-      g_loop_break_var = saved_bv; g_ie_res_poly = saved_rp;
       return;
     }
     /* No valued break: run for side effects inside a statement-expression and
        yield the boxed nil. */
     buf_puts(b, "({ ");
-    emit_while(c, id, b, 0, ty_k == NK_UntilNode);
+    emit_control_loop(c, id, b, 0, NULL);
     buf_puts(b, "sp_box_nil(); })");
     return;
   }
@@ -6601,12 +6597,8 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
     emit_indent(&lb, ind);
     buf_printf(&lb, "sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d);\n", tr, rb.p ? rb.p : "sp_box_nil()", tr);
     free(rb.p);
-    const char *saved_bv = g_loop_break_var, *saved_bs = g_brk_ser_var;
-    int saved_rp = g_ie_res_poly;
     char bvbuf[24]; snprintf(bvbuf, sizeof bvbuf, "_t%d", tr);
-    g_loop_break_var = bvbuf; g_ie_res_poly = 1; g_brk_ser_var = NULL;
-    emit_for(c, id, &lb, ind);
-    g_loop_break_var = saved_bv; g_ie_res_poly = saved_rp; g_brk_ser_var = saved_bs;
+    emit_control_loop(c, id, &lb, ind, bvbuf);
     view_unbind(sv_argov);
     if (g_pre) {
       if (lb.p) buf_puts(g_pre, lb.p);

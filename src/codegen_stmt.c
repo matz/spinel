@@ -13277,7 +13277,7 @@ int loop_body_polls_alone(Compiler *c, int body) {
    is chunked instead, where it would poll at each pass (a counted loop
    another loop of its function encloses polls nowhere, but for the second
    kind: loop_body_polls_alone). */
-void emit_while(Compiler *c, int id, Buf *b, int indent, int is_until) {
+static void emit_while(Compiler *c, int id, Buf *b, int indent, int is_until) {
   Scope *sc = comp_scope_of(c, id);
   int si = sc ? (int)(sc - c->scopes) : -1;
   int in_pure = g_pure_region > 0 || (si >= 0 && poll_pure_method(c, si));
@@ -13827,7 +13827,32 @@ static void emit_for_multi_scalar(Compiler *c, int idx, TyKind et, const char *e
   emit_for_poly_lefts(c, idx, tv, indent, b);
 }
 
-void emit_for(Compiler *c, int id, Buf *b, int indent) {
+typedef struct {
+  const char *serial, *result;
+  int poly;
+} LoopResultSave;
+
+static LoopResultSave loop_result_enter(const char *result) {
+  LoopResultSave saved = {g_brk_ser_var, g_loop_break_var, g_ie_res_poly};
+  g_brk_ser_var = NULL;
+  g_loop_break_var = result;
+  if (result) g_ie_res_poly = 1;
+  return saved;
+}
+
+static void loop_result_leave(LoopResultSave saved) {
+  g_brk_ser_var = saved.serial;
+  g_loop_break_var = saved.result;
+  g_ie_res_poly = saved.poly;
+}
+
+static void emit_for_body(Compiler *c, int body, Buf *b, int indent, const char *result) {
+  LoopResultSave saved = loop_result_enter(result);
+  emit_loop_body(c, body, b, indent);
+  loop_result_leave(saved);
+}
+
+static void emit_for(Compiler *c, int id, Buf *b, int indent, const char *result) {
   const NodeTable *nt = c->nt;
   int idx = nt_ref(nt, id, "index");
   int coll = nt_ref(nt, id, "collection");
@@ -13891,7 +13916,7 @@ void emit_for(Compiler *c, int id, Buf *b, int indent) {
       buf_printf(b, "; _t%d %s _t%d; _t%d++) {\n", tc, excl ? "<" : "<=", thi, tc);
       emit_indent(b, indent + 2);
       emit_local_ref(c, idx, vn, b); buf_printf(b, " = sp_box_int(_t%d);\n", tc);
-      emit_loop_body(c, body, b, indent + 2);
+      emit_for_body(c, body, b, indent + 2, result);
       emit_indent(b, indent + 1); buf_puts(b, "}\n");
       emit_indent(b, indent); buf_puts(b, "}\n");
       return;
@@ -13916,7 +13941,7 @@ void emit_for(Compiler *c, int id, Buf *b, int indent) {
       emit_indent(b, indent + 2);
       emit_local_ref(c, idx, vn, b); buf_printf(b, " = _t%d;\n", tc);
     }
-    emit_loop_body(c, body, b, indent + 2);
+    emit_for_body(c, body, b, indent + 2, result);
     emit_indent(b, indent + 1); buf_puts(b, "}\n");
     emit_indent(b, indent); buf_puts(b, "}\n");
     return;
@@ -13947,7 +13972,7 @@ void emit_for(Compiler *c, int id, Buf *b, int indent) {
       else buf_puts(b, el);
       buf_puts(b, ";\n");
     }
-    emit_loop_body(c, body, b, indent + 2);
+    emit_for_body(c, body, b, indent + 2, result);
     emit_indent(b, indent + 1); buf_puts(b, "}\n");
     emit_indent(b, indent); buf_puts(b, "}\n");
     return;
@@ -13969,7 +13994,7 @@ void emit_for(Compiler *c, int id, Buf *b, int indent) {
       else buf_puts(b, el);
       buf_puts(b, ";\n");
     }
-    emit_loop_body(c, body, b, indent + 2);
+    emit_for_body(c, body, b, indent + 2, result);
     emit_indent(b, indent + 1); buf_puts(b, "}\n");
     emit_indent(b, indent); buf_puts(b, "}\n");
     return;
@@ -13995,7 +14020,7 @@ void emit_for(Compiler *c, int id, Buf *b, int indent) {
       else
         buf_printf(b, "sp_RbVal _t%d = sp_PolyArray_get(_t%d, _t%d);\n", tv, ta, ti);
       emit_for_poly_lefts(c, idx, tv, indent + 2, b);
-      emit_loop_body(c, body, b, indent + 2);
+      emit_for_body(c, body, b, indent + 2, result);
       emit_indent(b, indent + 1); buf_puts(b, "}\n");
       emit_indent(b, indent); buf_puts(b, "}\n");
       return;
@@ -14029,7 +14054,7 @@ void emit_for(Compiler *c, int id, Buf *b, int indent) {
       else
         { emit_local_ref(c, idx, vn, b); buf_printf(b, " = sp_%sArray_get(_t%d, _t%d);\n", k ? k : "Poly", ta, ti); }   /* (a String Array's is the branch above) */
     }
-    emit_loop_body(c, body, b, indent + 2);
+    emit_for_body(c, body, b, indent + 2, result);
     emit_indent(b, indent + 1); buf_puts(b, "}\n");
     emit_indent(b, indent); buf_puts(b, "}\n");
     return;
@@ -14078,7 +14103,7 @@ void emit_for(Compiler *c, int id, Buf *b, int indent) {
       else emit_unbox_text(c, ivt, el, b);
       buf_puts(b, ";\n");
     }
-    emit_loop_body(c, body, b, indent + 2);
+    emit_for_body(c, body, b, indent + 2, result);
     /* a `break` leaves the chunk early, and the walk with it */
     emit_indent(b, indent + 1);
     buf_printf(b, "} while (_t%d >= _t%d->len && sp_poly_for_next(&_t%d, _t%d, &_t%d) == 0);\n", ti, ta, tr, ta, tb);
@@ -14106,7 +14131,7 @@ void emit_for(Compiler *c, int id, Buf *b, int indent) {
         emit_indent(b, indent + 2);
         emit_local_ref(c, idx, vn, b); buf_printf(b, " = sp_PolyArray_get(_t%d, _t%d);\n", ta, ti);
       }
-      emit_loop_body(c, body, b, indent + 2);
+      emit_for_body(c, body, b, indent + 2, result);
       emit_indent(b, indent + 1); buf_puts(b, "}\n");
       emit_indent(b, indent); buf_puts(b, "}\n");
       return;
@@ -14116,6 +14141,20 @@ void emit_for(Compiler *c, int id, Buf *b, int indent) {
      and said nothing, which is the worst answer available: say so instead
      (#4184). */
   unsupported(c, id, "for-loop over this collection");
+}
+
+/* A keyword loop owns its breaks. A value context supplies a boxed result
+   slot. A statement discards its result after evaluating the break value. */
+void emit_control_loop(Compiler *c, int id, Buf *b, int indent, const char *result) {
+  NodeKind kind = nt_kind(c->nt, id);
+  if (kind == NK_ForNode) {
+    /* The collection is evaluated in the enclosing control context. */
+    emit_for(c, id, b, indent, result);
+    return;
+  }
+  LoopResultSave saved = loop_result_enter(result);
+  emit_while(c, id, b, indent, kind == NK_UntilNode);
+  loop_result_leave(saved);
 }
 
 /* Emit `node` (statically poly) coerced to the non-poly return/slot type `t`.
@@ -22678,12 +22717,10 @@ static void emit_stmt_node(Compiler *c, int id, Buf *b, int indent) {
   if (ty_k == NK_IndexOrWriteNode)  { emit_index_and_or_write(c, id, b, indent, 1); return; }
   if (ty_k == NK_IfNode)     { emit_if(c, id, b, indent, 0, 0); return; }
   if (ty_k == NK_UnlessNode) { emit_if(c, id, b, indent, 1, 0); return; }
-  /* A `break` directly inside a Ruby while/until/for targets that loop, not an
-     enclosing break-wrapped iterator: suppress the longjmp lowering for the
-     loop body (a nested iterator inside re-establishes its own scope). */
-  if (ty_k == NK_WhileNode)  { const char *sv = g_brk_ser_var; g_brk_ser_var = NULL; emit_while(c, id, b, indent, 0); g_brk_ser_var = sv; return; }
-  if (ty_k == NK_UntilNode)  { const char *sv = g_brk_ser_var; g_brk_ser_var = NULL; emit_while(c, id, b, indent, 1); g_brk_ser_var = sv; return; }
-  if (ty_k == NK_ForNode)    { const char *sv = g_brk_ser_var; g_brk_ser_var = NULL; emit_for(c, id, b, indent); g_brk_ser_var = sv; return; }
+  if (ty_k == NK_WhileNode || ty_k == NK_UntilNode || ty_k == NK_ForNode) {
+    emit_control_loop(c, id, b, indent, NULL);
+    return;
+  }
   if (ty_k == NK_BreakNode) {
     /* A break in a fiber/thread body with no block wrapper and no C loop in
        scope has no target: CRuby's LocalJumpError. sp_brk_throw's not-found

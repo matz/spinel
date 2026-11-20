@@ -49,15 +49,36 @@ trap 'rm -rf "$TDIR"' EXIT
 # beside the spinel it runs), the headers the C includes, the driver's own
 # source (src/main.c assembles the cc line, src/csplit.c splits a large unit),
 # the C compiler it calls (`cc`) and RC_HARNESS, bumped when this file's
-# classification changes. Only a PASS is stored.
+# classification changes. Only a PASS is stored. The driver runs CACHE_HIT
+# with the Ruby and generated C paths as arguments. Only exit 0 skips cc.
+# A driver from before the hook uses a separate -c invocation for the lookup.
 RC="$(cd "$(dirname "$0")/.." && pwd)/result_cache.sh"
+CACHE_SCRIPT="${RC%/*}/rubyspec/cache_hit.sh"
+CACHE_HIT=""
 RC_HARNESS=1
 RC_FP=
 if [ "${GATE_CACHE:-1}" != 0 ]; then
   RC_ROOT=$(cd "$(dirname "$SPINEL")/.." && pwd)
   RC_FP=$(cd "$RC_ROOT" && RC_CC=cc "$RC" fp lib/libspinel_rt.a lib/libspinel_rt_mt.a packages/*/*.o \
     src/main.c src/csplit.c -- "rubyspec $RC_HARNESS $GATE")
+  if [ -n "$RC_FP" ] && [[ $("$SPINEL" --help 2>&1) == *'SPINEL_SKIP_BUILD_IF='* ]]; then
+    CACHE_HIT="$CACHE_SCRIPT"
+  fi
 fi
+
+# A SPINEL override can name an older driver. Ask the same predicate about
+# its -c output and fall through to the ordinary build on a miss.
+build_one() {
+  local f="$1" bin="$2"
+  local -x RUBYSPEC_CACHE_SLOT="$bin"
+  if [ -n "$RC_FP" ] && [ -z "$CACHE_HIT" ]; then
+    local hit=0
+    if "$SPINEL" "$f" -c -o "$bin.c" >/dev/null 2>&1 && sh "$CACHE_SCRIPT" "$f" "$bin.c"; then hit=1; fi
+    rm -f "$bin.c"
+    [ "$hit" = 0 ] || return 0
+  fi
+  SPINEL_SKIP_BUILD_IF="$CACHE_HIT" "$SPINEL" "$f" -o "$bin"
+}
 
 # classify_one FILE: write the example's TSV row to $TDIR/rows/<bn>.
 # Runs in a parallel worker, so it writes its own file (no shared append).
@@ -75,19 +96,12 @@ classify_one() {
       echo -e "$bn\tHARNESS-SKEW\t${cr:-crash}" > "$row"; return
     fi
   fi
-  # spinel runs every time: its C says whether the example changed. A hit
-  # skips the C compile and the run; a miss builds as before, through the
-  # driver, so a reject or a cc failure reads exactly as it did.
-  local ckey=""
-  if [ -n "$RC_FP" ] && "$SPINEL" "$f" -c -o "$TDIR/c-$bn.c" >/dev/null 2>&1; then
-    ckey=$("$RC" key "$f" "$TDIR/c-$bn.c" "$RC_FP")
-    rm -f "$TDIR/c-$bn.c"
-    local hit
-    if [ -n "$ckey" ] && hit=$("$RC" get "$ckey") && [ "${hit%%$'\t'*}" = PASS ]; then
-      printf '%s\t%s\n' "$bn" "$hit" > "$row"; return
-    fi
+  # The driver asks about its generated C before starting cc. A miss builds
+  # from that same file; a frontend refusal reaches the classifier directly.
+  local diag ckey=""
+  if diag=$(build_one "$f" "$bin" 2>&1 >/dev/null) && [ -s "$bin.hit" ] && [ ! -x "$bin" ]; then
+    { printf '%s\t' "$bn"; cat "$bin.hit"; } > "$row"; return
   fi
-  local diag; diag=$("$SPINEL" "$f" -o "$bin" 2>&1 >/dev/null)
   if [ ! -x "$bin" ]; then
     local reason; reason=$(grep -oE "unsupported [^:]*|Parse errors|cannot [a-z ]*|error: [^(]*" <<<"$diag" | head -1)
     # a refusal in the compiler's present wording ("Refinements are not
@@ -120,13 +134,14 @@ classify_one() {
     printf '%s\tERROR\trc=%s %s\n' "$bn" "$rc" "${last:0:200}" > "$row"
   elif grep -q "fail=0" <<<"$last"; then
     echo -e "$bn\tPASS\t$last" > "$row"
+    if [ -f "$bin.key" ]; then IFS= read -r ckey < "$bin.key"; fi
     [ -n "$ckey" ] && echo -e "PASS\t$last" | "$RC" put "$ckey"
   else
     echo -e "$bn\tFAIL\t$last" > "$row"
   fi
 }
-export -f classify_one
-export TDIR SPINEL GATE RC RC_FP TO
+export -f build_one classify_one
+export TDIR SPINEL GATE RC RC_FP CACHE_SCRIPT CACHE_HIT TO
 
 mkdir -p "$TDIR/rows"
 if [ -n "$ONLY" ]; then

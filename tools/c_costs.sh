@@ -6,6 +6,7 @@
 #   tools/c_costs.sh REF.c NEW.c [LABEL]        one program, ref against new
 #   tools/c_costs.sh --list FILE                the same for each line
 #                                               `LABEL REF.c NEW.c` of FILE
+#   tools/c_costs.sh --pairs-dir DIR            the gate's generated C pairs
 #   tools/c_costs.sh REF_SPINEL NEW_SPINEL PROGS...
 #                                               compile each program with both
 #                                               (-S --no-line-map) and compare
@@ -201,7 +202,7 @@ compare() {
   local label=$1 a b st
   a=$(count "$2") || return 2
   b=$(count "$3") || return 2
-  awk -v label="$label" -v cats="$CATS" '
+  awk -v label="$label" -v cats="$CATS" -v OFS='\t' '
     FNR == 1 { side++ }
     $1 == "T" { t[side, $2] = $3; l[side, $2] = $4 }
     $1 == "F" && ($2 == "snap" || $2 == "dup") { f[side, $2, $3] = $4; fk[$2 SUBSEP $3] = 1 }
@@ -220,12 +221,12 @@ compare() {
 }
 compared() {
   local out
-  if out=$(compare "$@"); then printf '%s\n' "$out"; else echo "S $1 the cost count failed"; fi
+  if out=$(compare "$@"); then printf '%s\n' "$out"; else printf 'S\t%s\tthe cost count failed\n' "$1"; fi
 }
 
 # The report over the P and L records of any number of programs.
 summarize() {
-  awk -v cats="$CATS" '
+  awk -F '\t' -v cats="$CATS" '
     BEGIN {
       name["snap"] = "handle snapshot copies"; name["dup"] = "dup/copy helpers"
       name["box"] = "boxings"; name["pd"] = "out-of-line dispatches"; name["root"] = "GC root registrations"
@@ -239,7 +240,7 @@ summarize() {
         d[$2] = d[$2] sprintf(" %s %s (%s in loops)", $3, sgn($6 - $4), sgn($7 - $5))
       }
     }
-    $1 == "S" { skipped[++ns] = $2 ": " substr($0, index($0, $3)) }
+    $1 == "S" { skipped[++ns] = $2 ": " $3 }
     $1 == "L" { strong[++nst] = sprintf("%s: %s %d -> %d in loops in %s", $2, ($3 == "snap" ? "snapshot copies" : "dup/copy helpers"), $5, $6, $4) }
     END {
       nc = split(cats, cl, " ")
@@ -263,7 +264,7 @@ summarize() {
     }'
 }
 
-usage() { sed -n '3,12p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '3,13p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 [ $# -ge 1 ] || usage
 if [ "$1" = --list ]; then
@@ -271,8 +272,18 @@ if [ "$1" = --list ]; then
   while read -r label a b; do
     [ -n "$label" ] || continue
     if [ -f "$a" ] && [ -f "$b" ]; then compared "$label" "$a" "$b"
-    else echo "S $label no C on one side"; fi
+    else printf 'S\t%s\tno C on one side\n' "$label"; fi
   done < "$2" | summarize
+elif [ "$1" = --pairs-dir ]; then
+  [ $# -eq 2 ] && [ -d "$2" ] || usage
+  set -o pipefail
+  for name in "$2"/*.name; do
+    [ -f "$name" ] || continue
+    label=$(cat "$name") || exit 2
+    pair=${name%.name}
+    if [ -f "$pair.ref.c" ] && [ -f "$pair.new.c" ]; then compared "$label" "$pair.ref.c" "$pair.new.c"
+    else printf 'S\t%s\tno C on one side\n' "$label"; fi
+  done | LC_ALL=C sort -s -t "$(printf '\t')" -k2,2 | summarize
 elif [ $# -eq 1 ]; then
   [ -f "$1" ] || usage
   count "$1" | awk '$1 == "T" { printf "%s %d (%d in loops)\n", $2, $3, $4 }'
@@ -293,7 +304,7 @@ else
     k=${1%%:*}; p=${1#*:}
     "$2" -S --no-line-map "$p" > "$4/$k.ref.c" 2>/dev/null; ra=$?
     "$3" -S --no-line-map "$p" > "$4/$k.new.c" 2>/dev/null; rb=$?
-    if [ $ra -ne 0 ] || [ $rb -ne 0 ]; then echo "S $p does not compile (ref $ra, new $rb)" > "$4/$k.rec"
+    if [ $ra -ne 0 ] || [ $rb -ne 0 ]; then printf "S\t%s\tdoes not compile (ref %s, new %s)\n" "$p" "$ra" "$rb" > "$4/$k.rec"
     else compared "$p" "$4/$k.ref.c" "$4/$k.new.c" > "$4/$k.rec"; fi
     rm -f "$4/$k.ref.c" "$4/$k.new.c"' _ {} "$REF" "$NEW" "$T" || { echo "c_costs: compiling the programs failed" >&2; exit 2; }
   cat "$T"/*.rec 2>/dev/null | summarize

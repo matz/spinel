@@ -438,6 +438,7 @@ module Net
       # stored them downcased all along.
       @headers = {}
       @header_names = {}
+      @fields = {}
       @body = ""
       @decode_content = false
       # CRuby's initheader half strips the value before it looks at it, and
@@ -491,6 +492,7 @@ module Net
       if value.nil?
         @headers.delete(k)
         @header_names.delete(k)
+        @fields.delete(k)
         return nil
       end
       # An Array joins with ", ", the way CRuby serves a multi-valued header:
@@ -510,7 +512,24 @@ module Net
       raise ArgumentError, "header field value cannot include CR/LF" if crlf?(text)
       @headers[k] = text
       @header_names[k] = name.to_s
+      @fields[k] = value.is_a?(Array) ? value.map { |v| v.to_s } : [text]
       value
+    end
+
+    # Adds a value to the header, after the ones it holds, or sets it.
+    def add_field(name, value)
+      k = name.to_s.downcase
+      values = @fields[k]
+      return self[name] = value if values.nil?
+      added = value.is_a?(Array) ? value.map { |v| v.to_s } : [value.to_s]
+      self[@header_names[k]] = values + added
+    end
+
+    # Each value of the header, in the order they were set, or nil when it
+    # is absent. A copy.
+    def get_fields(name)
+      values = @fields[name.to_s.downcase]
+      values.nil? ? nil : values.map { |v| v.dup }
     end
 
     # A copy, as CRuby's `@header[key].join(", ")` is a new String: appending

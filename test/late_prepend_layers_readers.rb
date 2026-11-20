@@ -46,3 +46,22 @@ L1.setup
 p [o.method(:j).super_method&.owner, o.method(:j).super_method&.super_method&.owner]
 L3.setup
 p [o.method(:j).super_method&.owner, o.method(:j).super_method&.super_method&.owner, o.method(:j).super_method&.super_method&.super_method&.owner]
+
+# the UnboundMethod of a super_method that passes a layer that is not live keeps the method it found: its owner and
+# parameters are that method's, not the entry over the layers'
+module QU1; def self.setup = (def j(a) = [:q1, a, super(a, 1)]); end
+module QU2; def self.setup = (def j(a, b) = [:q2, a, b, super(a)]); end
+module QU3; def self.setup = (def j(a, b = 5, *r) = [:q3, a, b, r, super(a, b)]); end
+class KU; def j(a, b = 2) = [:k, a, b]; end
+class KU; prepend QU1; prepend QU2; prepend QU3; end
+QU1.setup
+QU3.setup
+um = KU.new.method(:j)
+usm = um.super_method
+p [um.owner, um.parameters, um.unbind.owner, um.unbind.parameters]
+p [usm.owner, usm.parameters, usm.unbind.owner, usm.unbind.parameters]
+p [usm.super_method.owner, usm.super_method.unbind.owner, usm.super_method.unbind.parameters]
+QU2.setup
+um = KU.new.method(:j)
+usm = um.super_method
+p [usm.owner, usm.parameters, usm.unbind.owner, usm.unbind.parameters]

@@ -8,3 +8,7 @@ Q8
 [A, nil]
 [L1, A]
 [L3, L1, A]
+[QU3, [[:req, :a], [:opt, :b], [:rest, :r]], QU3, [[:req, :a], [:opt, :b], [:rest, :r]]]
+[QU1, [[:req, :a]], QU1, [[:req, :a]]]
+[KU, KU, [[:req, :a], [:opt, :b]]]
+[QU2, [[:req, :a], [:req, :b]], QU2, [[:req, :a], [:req, :b]]]

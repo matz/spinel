@@ -693,6 +693,9 @@ int emit_op_method_unbind(Compiler *c, const BopCtx *x, Buf *b) {
   int recv = x->recv;
   int mnu = method_recv_node(c, recv);
   int tmu = mnu >= 0 ? method_obj_target_mi(c, mnu) : -1;
+  /* (a target that is an entry over late layers stands for whichever method its run picked: the source Method's own
+     owner, parameters and file are that method's, not the entry's) */
+  if (tmu >= 0 && c->scopes[tmu].entry != ENTRY_NONE) tmu = -1;
   int tvu = ++g_tmp;
   buf_printf(b, "({ sp_BoundMethod *_t%d = ", tvu);
   emit_expr(c, recv, b);

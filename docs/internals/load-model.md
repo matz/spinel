@@ -525,11 +525,13 @@ receiver's class and a subclass's method of the same hidden name is no
 target of it. A position in a superclass's part of the chain is the
 superclass's: a subclass's `super` into it takes the superclass's entry.
 
-A chain of guarded copies longer than `VER_MAX_ARMS` (64: one more than a
-guard entry holds, with the method behind it) has no guard entry at all, as
-on any chain: a call keeps the table's answer, the copy in front, and a late
-layer there is not passed. It is a silent fallback, not a refusal; the chain
-would have to be cut into entries of at most 63 arms, each else arm the next.
+A chain of guarded copies longer than `VER_MAX_ARMS` (64) gets a guard entry
+that holds only the first 64 of them: `guard_chain` stops there, and the
+entry's else arm is the first scope after them, the 65th copy, run as if its
+prepend had run, so the copies from the 65th on are not tested and a late
+layer among them is not passed. It is a silent truncation, not a refusal; the
+chain would have to be cut into entries of at most 63 arms, each else arm the
+next.
 
 What it does not cover: an include or an extend in a class body in front
 of no method of the class's own, answered by its module's open history; a

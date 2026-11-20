@@ -174,7 +174,6 @@ size_t sp_io_rbuf_read(sp_File *f, void *buf, size_t n);
 ssize_t sp_io_rbuf_getline(sp_File *f, char **buf, size_t *cap);
 char *sp_io_rbuf_fgets(sp_File *f, char *buf, int size);
 size_t sp_io_rbuf_read_into(sp_File *f, char *buf, size_t n);
-size_t sp_io_rbuf_read_some(sp_File *f, char *buf, size_t n);
 size_t sp_io_rbuf_take(sp_File *f, void *buf, size_t n);
 /* Readers of an IO handle's stream call these instead of stdio: each is the
    stdio call of the same name on the handle's FILE, or, for a handle with

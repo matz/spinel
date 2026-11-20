@@ -653,6 +653,13 @@ static ssize_t sp_io_own_read(sp_File *f, int fd, void *buf, size_t n) {
   return read(fd, buf, n);
 }
 
+SP_NORETURN static void sp_sock_raise_errno(const char *syscall);
+/* sock_call names the system call of a socket read (#recv), NULL for a read */
+SP_NORETURN static void sp_io_raise_read_errno(const char *sock_call) {
+  if (sock_call) sp_sock_raise_errno(sock_call);
+  sp_file_raise_errno("read", "");
+}
+
 /* Bytes in rbuf: 1, or 0 at the end of the stream. When rbuf is empty, one
    read (sp_io_own_read) fills it; one that answers EAGAIN parks and tries
    again. The handle is held across the read only, never across the park.
@@ -664,7 +671,7 @@ static ssize_t sp_io_own_read(sp_File *f, int fd, void *buf, size_t n) {
    finds bytes without parking, or fills all the free space after a park
    (more were waiting: a stream), turns it off; and the sixteenth fill in a
    row reads first anyway, so no peer stays parked-first for good. */
-int sp_io_rbuf_fill(sp_File *f) {SP_GC_ROOT(f);
+static int sp_io_rbuf_fill_as(sp_File *f, const char *sock_call) {SP_GC_ROOT(f);
   int parked = 0;   /* this fill has parked */
   for (;;) {
     FILE *fp = sp_io_use(f);
@@ -701,12 +708,13 @@ int sp_io_rbuf_fill(sp_File *f) {SP_GC_ROOT(f);
     }
     if (r == 0) return 0;
     if (e == EINTR) continue;
-    if (e != EAGAIN && e != EWOULDBLOCK) { errno = e; sp_file_raise_errno("read", ""); }
+    if (e != EAGAIN && e != EWOULDBLOCK) { errno = e; sp_io_raise_read_errno(sock_call); }
     f->park_first = 1;
     sp_io_rbuf_park(f, fd);
     parked = 1;
   }
 }
+int sp_io_rbuf_fill(sp_File *f) { return sp_io_rbuf_fill_as(f, NULL); }
 
 /* Up to n of the bytes rbuf holds, never a read. */
 size_t sp_io_rbuf_take(sp_File *f, void *buf, size_t n) {
@@ -828,7 +836,7 @@ char *sp_io_rbuf_fgets(sp_File *f, char *buf, int size) {
    another reader's fill brought while this read parked are this read's
    next ones, not left behind in rbuf. buf is a String the caller holds
    rooted across the call, since the reads can park. */
-static size_t sp_io_rbuf_direct(sp_File *f, char *buf, size_t n, int all) {SP_GC_ROOT(f);
+static size_t sp_io_rbuf_direct(sp_File *f, char *buf, size_t n, int all, const char *sock_call) {SP_GC_ROOT(f);
   size_t got = 0;
   int parked = 0;   /* as in sp_io_rbuf_fill, for park_first */
   while (got < n) {
@@ -854,7 +862,7 @@ static size_t sp_io_rbuf_direct(sp_File *f, char *buf, size_t n, int all) {SP_GC
     }
     if (r == 0) break;
     if (e == EINTR) continue;
-    if (e != EAGAIN && e != EWOULDBLOCK) { errno = e; sp_file_raise_errno("read", ""); }
+    if (e != EAGAIN && e != EWOULDBLOCK) { errno = e; sp_io_raise_read_errno(sock_call); }
     f->park_first = 1;
     sp_io_rbuf_park(f, fd);
     parked = 1;
@@ -866,16 +874,9 @@ static size_t sp_io_rbuf_direct(sp_File *f, char *buf, size_t n, int all) {SP_GC
    into buf for the rest, so a large read neither grows rbuf nor copies its
    bytes twice. n bytes, fewer only at the end of the stream. */
 size_t sp_io_rbuf_read_into(sp_File *f, char *buf, size_t n) {
-  return sp_io_rbuf_direct(f, buf, n, 1);
+  return sp_io_rbuf_direct(f, buf, n, 1, NULL);
 }
 
-/* #readpartial / #recv of up to n bytes, n larger than rbuf: what rbuf
-   holds, or else the bytes one read straight into buf brings, so a large
-   read is one read as with stdio, not one per rbuf's worth. 0 at the end
-   of the stream. */
-size_t sp_io_rbuf_read_some(sp_File *f, char *buf, size_t n) {
-  return sp_io_rbuf_direct(f, buf, n, 0);
-}
 /* The descriptor form, for a pipe the runtime holds without a handle (a
    backtick's child): the same park, on the bare fd. */
 void sp_io_wait_fd_readable(int fd) { sp_io_park_fd_readable(fd, NULL); }
@@ -1603,10 +1604,17 @@ void sp_sock_set_dnrl(sp_File *f, sp_bool on) {
   f->rev_lookup = !on;
 }
 
+/* An Errno from a socket call, named by its system call as CRuby's
+   rb_sys_fail names it: "Invalid argument - setsockopt(2)" */
+SP_NORETURN static void sp_sock_raise_errno(const char *syscall) {
+  int e = errno;
+  sp_raise_cls(sp_errno_class_name(e), sp_sprintf("%s - %s", strerror(e), syscall));
+}
+
 const char *sp_sock_gethostname(void) {
   extern int sp_net_gethostname(char *buf, int cap);
   char buf[256];
-  if (sp_net_gethostname(buf, (int)sizeof buf) != 0) sp_file_raise_errno("gethostname", "");
+  if (sp_net_gethostname(buf, (int)sizeof buf) != 0) sp_sock_raise_errno("gethostname(3)");
   return sp_str_from_bytes(buf, strlen(buf));
 }
 /* Socket.new(domain, type, protocol) -- a bare socket the bind/listen/connect
@@ -1614,7 +1622,7 @@ const char *sp_sock_gethostname(void) {
 sp_File *sp_sock_new(sp_int domain, sp_int type, sp_int proto) {
   extern int sp_net_socket(int domain, int type, int protocol);
   int fd = sp_net_socket((int)domain, (int)type, (int)proto);
-  if (fd < 0) sp_file_raise_errno("socket", "");
+  if (fd < 0) sp_sock_raise_errno("socket(2)");
   sp_File *f = (sp_File *)sp_gc_alloc(sizeof(sp_File), sp_File_fin, sp_File_scan);
   f->fp = fdopen(fd, "r+");
   if (!f->fp) { close(fd); sp_raise_cls("IOError", "fdopen failed"); return NULL; }
@@ -1674,7 +1682,7 @@ sp_File *sp_sock_for_fd(sp_int fd, sp_int kind) {
 void sp_sock_socketpair(sp_int domain, sp_int type, sp_int proto, int fds[2]) {
   extern int sp_net_socketpair(int domain, int type, int protocol, int fds[2]);
   if (sp_net_socketpair((int)domain, (int)type, (int)proto, fds) != 0)
-    sp_file_raise_errno("socketpair", "");
+    sp_sock_raise_errno("socketpair(2)");
 }
 
 /* One end of a socket pair as a handle: a UNIXSocket for UNIXSocket.pair
@@ -1950,14 +1958,15 @@ sp_int sp_sock_send(sp_File *f, const char *data, sp_int len, sp_int flags, cons
       sp_io_unuse(f);
       if (put >= 0) return (sp_int)put;
       if (e == EINTR) continue;
-      if (e != EAGAIN && e != EWOULDBLOCK) { errno = e; sp_file_raise_errno("send", ""); }
+      if (e != EAGAIN && e != EWOULDBLOCK) { errno = e; sp_sock_raise_errno("send(2)"); }
       sp_io_write_wait(f, deadline);
     }
   }
   int n = sp_net_udp_send_to(fileno(f->fp), data, (int)len, sp_sock_int_arg(flags), host, (int)port);
   if (n < 0) {
     sp_sock_raise_if_unresolved("getaddrinfo");
-    sp_file_raise_errno("send", host ? host : "");
+    if (!host) sp_sock_raise_errno("send(2)");
+    sp_file_raise_errno("send", host);
   }
   return (sp_int)n;
 }
@@ -1973,11 +1982,11 @@ static const char *sp_io_rbuf_partial(sp_File *f, size_t n, int is_recv) {SP_GC_
     if (n > SP_IO_RBUF_MIN && !sp_io_pending(f)) {
       r = sp_str_alloc(n);
       SP_GC_ROOT_STR(r);
-      got = sp_io_rbuf_read_some(f, r, n);
+      got = sp_io_rbuf_direct(f, r, n, 0, is_recv ? "recvfrom(2)" : NULL);
       if (!got) return NULL;
     }
     else {
-      if (!sp_io_pending(f) && !sp_io_rbuf_fill(f)) return NULL;
+      if (!sp_io_pending(f) && !sp_io_rbuf_fill_as(f, is_recv ? "recvfrom(2)" : NULL)) return NULL;
       if (is_recv && n == 0) return NULL;
       size_t pend = sp_io_pending(f), want = n < pend ? n : pend;
       r = sp_str_alloc(want);
@@ -2041,7 +2050,7 @@ const char *sp_sock_recv(sp_File *f, sp_int len) {SP_GC_ROOT(f);
   int eof = n == 0 && getsockopt(fd, SOL_SOCKET, SO_TYPE, &st, &sl) == 0 && st == SOCK_STREAM;
   sp_io_unuse(f);
   errno = e;
-  if (n < 0) { free(buf); sp_file_raise_errno("recv", ""); }
+  if (n < 0) { free(buf); sp_sock_raise_errno("recvfrom(2)"); }
   if (eof) { free(buf); return NULL; }
   char *s = (char *)sp_str_from_bytes(buf, (size_t)n);
   free(buf);
@@ -2078,7 +2087,7 @@ sp_PolyArray *sp_sock_recvfrom(sp_File *f, sp_int len) {SP_GC_ROOT(f);
     n = sp_net_udp_recv_from(fd, buf, (int)len, ipbuf, (int)sizeof ipbuf, &port);
     { int e = errno; sp_io_unuse(f); errno = e; }
   }
-  if (n < 0) sp_file_raise_errno("recvfrom", "");
+  if (n < 0) sp_sock_raise_errno("recvfrom(2)");
   sp_RbVal payload = sp_box_obj(sp_String_from_cbinstr(buf, n), SP_BUILTIN_STRBUF);
   SP_GC_ROOT_RBVAL(payload);
   sp_PolyArray *from = sp_PolyArray_new();
@@ -2099,7 +2108,7 @@ sp_PolyArray *sp_sock_recvfrom(sp_File *f, sp_int len) {SP_GC_ROOT(f);
 sp_int sp_sock_shutdown(sp_File *f, sp_int how) {SP_GC_ROOT(f);
   extern int sp_net_shutdown(int fd, int how);
   sp_sock_require(f, "shutdown");
-  if (sp_net_shutdown(fileno(f->fp), (int)how) != 0) sp_file_raise_errno("shutdown", "");
+  if (sp_net_shutdown(fileno(f->fp), (int)how) != 0) sp_sock_raise_errno("shutdown(2)");
   return 0;
 }
 /* A setsockopt value as the int the option takes: an Integer, true/false as
@@ -2123,7 +2132,7 @@ sp_int sp_sock_setsockopt(sp_File *f, sp_int level, sp_int opt, sp_int value) {S
   extern int sp_net_setsockopt_int(int fd, int level, int optname, int value);
   sp_sock_require(f, "setsockopt");
   if (sp_net_setsockopt_int(fileno(f->fp), (int)level, (int)opt, (int)value) != 0)
-    sp_file_raise_errno("setsockopt", "");
+    sp_sock_raise_errno("setsockopt(2)");
   return 0;
 }
 sp_SockOpt *sp_sock_getsockopt(sp_File *f, sp_int level, sp_int opt) {SP_GC_ROOT(f);
@@ -2136,7 +2145,7 @@ sp_SockOpt *sp_sock_getsockopt(sp_File *f, sp_int level, sp_int opt) {SP_GC_ROOT
 }
 sp_int sp_sock_listen(sp_File *f, sp_int backlog) {SP_GC_ROOT(f);
   sp_sock_require(f, "listen");
-  if (listen(fileno(f->fp), (int)backlog) != 0) sp_file_raise_errno("listen", "");
+  if (listen(fileno(f->fp), (int)backlog) != 0) sp_sock_raise_errno("listen(2)");
   return 0;
 }
 
@@ -2251,9 +2260,9 @@ sp_File *sp_sock_accept_nb(sp_File *f, sp_bool exc) {SP_GC_ROOT(f);
   if (fd >= 0) return sp_io_fdopen_sock(fd, sp_sock_accepted_kind(f));
   if (sp_sock_would_block()) {
     if (!exc) return NULL;
-    sp_sock_raise_wait(0, "accept");
+    sp_sock_raise_wait(0, "accept(2)");
   }
-  sp_file_raise_errno("accept", "");
+  sp_sock_raise_errno("accept(2)");
 }
 /* read_nonblock / recv_nonblock -> the bytes read, or nil when it would block
    and the caller asked for no exception. EOF is nil in CRuby only for
@@ -2407,8 +2416,9 @@ const char *sp_sock_read_nb(sp_File *f, sp_int len, sp_bool exc, sp_bool is_recv
   free(buf);
   if (sp_sock_would_block()) {
     if (!exc) return NULL;
-    sp_sock_raise_wait(0, "read");
+    sp_sock_raise_wait(0, is_recv ? "recvfrom(2)" : "read");
   }
+  if (is_recv) sp_sock_raise_errno("recvfrom(2)");
   sp_file_raise_errno("read", "");
 }
 /* write_nonblock -> the byte count, or nil when it would block.

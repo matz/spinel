@@ -156,6 +156,8 @@ the subclass adapter retains the original object when its builtin reads
 String bytes. A block break keeps its own boxed result outside that adapter.
 The ordinary expression view also keeps the handle for a builtin
 receiver-answering String iterator.
+Native String freezing and frozen-state checks use the ordinary operand
+handle, including a String returned from a call or read from a container.
 String line methods retain the receiver through separator and chomp
 evaluation. With a nil separator the receiver is the only line, including
 for an empty String. A line Enumerator retains its receiver and separator

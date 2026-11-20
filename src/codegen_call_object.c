@@ -1131,51 +1131,6 @@ int emit_call_instance_eval_arms(Compiler *c, int id, Buf *b, const NodeTable *n
   return 0;
 }
 
-/* --share-strings: freeze over a receiver that hands on the shared handle
-   (a slot that holds it, a route over one, a write's or an attribute
-   assignment's value, a conditional with a handle arm): a freeze is an
-   in-place change, so it freezes that handle, which every name of the
-   String holds, and answers the frozen face, or nil for a nil receiver.
-   0 with nothing emitted for any other receiver. */
-static int emit_freeze_recv_handle(Compiler *c, int recv, Buf *b) {
-  Buf ref; memset(&ref, 0, sizeof ref);
-  int th;
-  if (strbuf_slot_text(c, recv, &ref) && !strbuf_call_result_may_nil(c, recv)) {
-    th = ++g_tmp;
-    buf_printf(b, "({ sp_String *_t%d = SP_STR_HDL(%s); ", th, ref.p);
-  }
-  else if (strbuf_assign_route(c, recv)) {
-    th = ++g_tmp;
-    buf_printf(b, "({ sp_String *_t%d = ", th);
-    emit_strbuf_route(c, recv, b);
-    buf_puts(b, "; ");
-  }
-  /* (or a bang over one, `id(t).upcase!.freeze`: its handle, or nil) */
-  else if (strbuf_value_carries(c, recv) ||
-           (nt_kind(c->nt, nt_paren_single(c->nt, recv)) == NK_CallNode &&
-            bop_share_self_answer(nt_str(c->nt, nt_paren_single(c->nt, recv), "name"),
-                                  nt_ref(c->nt, nt_paren_single(c->nt, recv), "block") >= 0) &&
-            strbuf_bang_self_local(c, nt_paren_single(c->nt, recv)))) {
-    th = ++g_tmp;
-    buf_printf(b, "({ sp_String *_t%d = ", th);
-    emit_strbuf_handle_of(c, recv, b);
-    buf_puts(b, "; ");
-  }
-  /* (or a boxed receiver's call whose arms each answer a String's handle,
-     read as the box's handle, as a mutator's receiver is:
-     emit_recv_route_handle) */
-  else if (share_plan_producer(c, recv, NULL) == SPK_POLY_ARMS) {
-    th = ++g_tmp;
-    buf_printf(b, "({ sp_String *_t%d = ", th);
-    emit_str_form_handle(c, recv, b);
-    buf_puts(b, "; ");
-  }
-  else { free(ref.p); return 0; }
-  free(ref.p);
-  buf_printf(b, "SP_GC_ROOT(_t%d); sp_String_freeze(_t%d); sp_str_freeze_val(sp_strbuf_read(_t%d)); })", th, th, th);
-  return 1;
-}
-
 /* freeze / frozen?, dup / clone, the identity methods that answer the receiver, and then / yield_self */
 static int emit_cext_copy(Compiler *c, int recv, int cid, int freeze_mode, const char *name, Repr repr, Buf *b) {
   int nil_arm = repr.may_nil && !repr.nil_tested;
@@ -1306,34 +1261,10 @@ int emit_call_freeze_dup_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), 1)");
       return 1;
     }
-    /* a shared String handle keeps its own frozen flag: read through it, not
-       through the String value the handle is read as (a fresh copy) */
-    Buf fsref; memset(&fsref, 0, sizeof fsref);
-    int up = 0;
-    if (frt == TY_STRING && strbuf_self_route_slot(c, recv, &up, &fsref) && !up) {
-      buf_printf(b, "sp_String_is_frozen(%s)", fsref.p);
-      free(fsref.p);
-      return 1;
-    }
-    fsref.len = 0;
-    if (fsref.p) fsref.p[0] = 0;
-    if ((frt == TY_STRING || frt == TY_STRBUF) && strbuf_slot_text(c, recv, &fsref)) {
-      buf_printf(b, "sp_String_is_frozen(%s)", fsref.p);
-      free(fsref.p);
-      return 1;
-    }
-    free(fsref.p);
-    /* --share-strings: so does a route that hands on the handle (`String(t)`,
-       `x.tap { }`, a conditional over one): its read face is an unfrozen
-       copy */
-    if (frt == TY_STRING && strbuf_value_carries(c, recv)) {
+    if (frt == TY_STRING || frt == TY_STRBUF) {
       buf_puts(b, "sp_String_is_frozen(");
-      emit_strbuf_handle_of(c, recv, b);
+      emit_str_form_handle(c, recv, b);
       buf_puts(b, ")");
-      return 1;
-    }
-    if (frt == TY_STRING) {
-      buf_puts(b, "sp_str_is_frozen_val("); emit_expr(c, recv, b); buf_puts(b, ")");
       return 1;
     }
     /* a class of the program's own `frozen?` answers for its objects: the
@@ -1344,93 +1275,16 @@ int emit_call_freeze_dup_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
     }
   }
 
-  /* --share-strings: freeze over a receiver read as the handle (a route a
-     caller bound as one, emit_bang_self_handle) freezes that handle, which
-     every name of the String holds, and answers its frozen face. The
-     identity shortcut below would drop the freeze. */
-  if (recv >= 0 && argc == 0 && is_freeze_name(name) &&
-      repr_of(c, recv).as_ty == TY_STRBUF) {
-    int th = ++g_tmp;
-    buf_printf(b, "({ sp_String *_t%d = ", th);
-    emit_expr(c, recv, b);
-    buf_printf(b, "; SP_GC_ROOT(_t%d); sp_String_freeze(_t%d); sp_str_freeze_val(sp_strbuf_read(_t%d)); })",
-               th, th, th);
-    return 1;
-  }
-  /* TY_STRING freeze: update the variable to the frozen copy and return it */
-  if (recv >= 0 && argc == 0 && sp_streq(name, "freeze") && comp_ntype(c, recv) == TY_STRING) {
-    int se = strbuf_route_srange_end(c, recv);
-    if (se) {
+  if (recv >= 0 && argc == 0 && is_freeze_name(name)) {
+    TyKind ty = repr_of(c, recv).as_ty;
+    if (ty == TY_STRING || ty == TY_STRBUF) {
       int t = ++g_tmp;
-      buf_printf(b, "({ sp_String *_t%d = (", t);
-      emit_srange_end_recv(c, recv, b);
-      buf_printf(b, ").%s; SP_GC_ROOT(_t%d); sp_strbuf_read(sp_String_freeze(_t%d)); })",
-                 se == 1 ? "first" : "last", t, t);
+      buf_printf(b, "({ sp_String *_t%d = ", t);
+      emit_str_form_handle(c, recv, b);
+      buf_printf(b, "; SP_GC_ROOT(_t%d); sp_String_freeze(_t%d); sp_str_freeze_val(sp_strbuf_read(_t%d)); })",
+                 t, t, t);
       return 1;
     }
-    const char *rtyf = nt_type(nt, recv);
-    NodeKind rtyf_k = nt_kind(nt, recv);
-    /* (a global holding the handle, --share-strings) */
-    int assignable_f = rtyf && (rtyf_k == NK_LocalVariableReadNode || rtyf_k == NK_InstanceVariableReadNode ||
-                                (repr_static_read_kind(nt_kind(nt, recv)) &&
-                                 strbuf_slot_has(c, recv)));
-    /* a shared String handle reads back as an expression (a copy), which
-       cannot be assigned to: freeze the handle, which every later mutation
-       through it checks, and answer its contents frozen */
-    Buf fzref; memset(&fzref, 0, sizeof fzref);
-    if (assignable_f && strbuf_slot_text(c, recv, &fzref)) {
-      buf_printf(b, "({ sp_String_freeze(%s); sp_str_freeze_val(", fzref.p);
-      free(fzref.p);
-      emit_expr(c, recv, b); buf_puts(b, "); })");
-      return 1;
-    }
-    /* an append chain on a handle (`(s << x).freeze`, `(o.name << x).freeze`)
-       answers that String: the handle is taken once, ahead of the chain,
-       then frozen for every name of the String. A reader call's read is the
-       handle itself, which the chain takes from the temp; a variable's slot
-       is read again. */
-    int fzu = nt_paren_single(c->nt, recv);
-    int fzb = !assignable_f && fzu >= 0 && nt_kind(nt, fzu) == NK_CallNode ? str_alias_chain_base(c, fzu) : fzu;
-    if (fzb != fzu && g_n_argov < MAX_ARG_OVERRIDE && strbuf_slot_text(c, fzb, &fzref)) {
-      int th = ++g_tmp;
-      char thr[24];
-      snprintf(thr, sizeof thr, "_t%d", th);
-      /* links that only answer their receiver, changing no bytes
-         (`s.to_s.freeze`, `s.itself`), have nothing to run: no chain is
-         emitted for them */
-      int fzrun = 0;
-      for (int k = fzu; k != fzb && k >= 0 && !fzrun; k = nt_paren_single(c->nt, nt_ref(nt, k, "receiver"))) {
-        if (nt_kind(nt, k) != NK_CallNode || call_plain_argc(c, k) != 0 || !str_self_call(nt, k) ||
-            bop_name_mutates(nt_str(nt, k, "name"), BOP_MUT_LOCAL))
-          fzrun = 1;
-      }
-      buf_printf(b, "({ sp_String *%s = %s; SP_GC_ROOT(%s);", thr, fzref.p, thr);
-      free(fzref.p);
-      if (fzrun) {
-        int fzcall = nt_kind(nt, fzb) == NK_CallNode;
-        int mk = fzcall ? view_bind_temp(fzb, th) : -1;
-        buf_puts(b, " (void)(");
-        emit_expr_for_effect(c, recv, b);
-        buf_puts(b, ");");
-        if (fzcall) view_unbind(mk);
-      }
-      buf_printf(b, " sp_String_freeze(%s); sp_str_freeze_val(", thr);
-      /* (a reader call typed as the handle reads as the handle) */
-      if (repr_of(c, fzb).as_ty == TY_STRBUF) buf_printf(b, "sp_strbuf_read(%s)", thr);
-      else emit_strbuf_node_read(c, fzb, thr, b);
-      buf_puts(b, "); })");
-      return 1;
-    }
-    if (assignable_f) {
-      buf_puts(b, "({ ");
-      emit_expr(c, recv, b); buf_puts(b, " = sp_str_freeze_val("); emit_expr(c, recv, b); buf_puts(b, "); ");
-      emit_expr(c, recv, b); buf_puts(b, "; })");
-    }
-    else if (emit_freeze_recv_handle(c, recv, b)) {}
-    else if (!emit_freeze_self_answer(c, id, recv, b)) {
-      buf_puts(b, "sp_str_freeze_val("); emit_expr(c, recv, b); buf_puts(b, ")");
-    }
-    return 1;
   }
 
   /* dup/clone of a user (pointer) object: allocate a fresh instance, shallow-copy

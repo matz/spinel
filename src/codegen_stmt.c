@@ -2311,31 +2311,6 @@ int strbuf_route_inline_call(Compiler *c, int v) {
   int body = c->scopes[mi].body;
   return strbuf_inline_arms_ok(c, mi, last, strbuf_has_return(nt, body)) && strbuf_inline_returns_ok(c, mi, body);
 }
-/* --share-strings: a call of a String reopening's yielding method with a
-   literal block, which emit_reopen_primitive_call runs through the
-   method's proc-form clone (a self that is no handle; the self-handle ABI
-   splices the method instead), and whose method answers what it yields:
-   the clone hands back the box the block's proc answers, and that box
-   holds the handle its tail is (emit_boxed), when each value the block
-   answers boxes as one (strbuf_reopen_pf_tails_carry). Read as the call's
-   own String type it came out as a copy of the box's bytes. */
-static int strbuf_reopen_pf_tails_carry(Compiler *c, int v);
-static int strbuf_route_reopen_pf(Compiler *c, int v) {
-  const NodeTable *nt = c->nt;
-  v = nt_paren_single(c->nt, v);
-  if (v < 0 || nt_kind(nt, v) != NK_CallNode) return 0;
-  int blk = nt_ref(nt, v, "block");
-  if (blk < 0 || nt_kind(nt, blk) != NK_BlockNode || call_breaks(c, v)) return 0;
-  TyKind vt = comp_ntype(c, v);
-  if (vt != TY_STRING && vt != TY_STRBUF) return 0;
-  const CallPlan p = cplan_user(c, v);
-  int mi = p.mi;
-  if (p.via != UC_REOPEN || mi < 0 || c->scopes[mi].class_id != comp_core_class(c, CORE_STRING) ||
-      !c->scopes[mi].yields || repr_self_handle(c, mi)) return 0;
-  int pf = scope_proc_form_of(c, mi), last = scope_body_last(c, mi);
-  return pf >= 0 && c->scopes[pf].ret == TY_POLY && last >= 0 && nt_kind(nt, last) == NK_YieldNode &&
-         !strbuf_has_return(nt, c->scopes[mi].body) && strbuf_reopen_pf_tails_carry(c, v);
-}
 /* --share-strings: `o.instance_exec(a) { |v| ... }` (or instance_eval)
    with a literal block on a receiver of its own, which the call splices
    with the receiver as self (emit_call_instance_eval_arms) and no `break`
@@ -2789,7 +2764,7 @@ static int strbuf_route_carries(Compiler *c, int v, int depth) {
   if (strbuf_route_clamp(c, v, ops)) return 1;
   if (strbuf_hash_default_arg(c, v) >= 0) return 1;
   if (strbuf_route_proc_call(c, v) || strbuf_route_ivar_get(c, v) || strbuf_route_begin(c, v) || strbuf_route_yield(c, v) ||
-      strbuf_route_inline_call(c, v) || strbuf_route_reopen_pf(c, v) || strbuf_route_ie(c, v) || strbuf_route_loop(c, v) || repr_call_returns_handle(c, v) ||
+      strbuf_route_inline_call(c, v) || strbuf_route_ie(c, v) || strbuf_route_loop(c, v) || repr_call_returns_handle(c, v) ||
       strbuf_route_exc_message(c, v) || strbuf_route_boxed_exc_message(c, v) || strbuf_route_reader(c, v) ||
       strbuf_route_srange_kept(c, v)) return 1;
   if (strbuf_assign_leaf(c, v) || strbuf_bang_leaf(c, v)) return 1;
@@ -2837,7 +2812,6 @@ int strbuf_route_kind(Compiler *c, int v, int *op) {
   if (strbuf_route_begin(c, v)) return SPK_COND;
   if (strbuf_route_yield(c, v)) return SPK_YIELD;
   if (strbuf_route_inline_call(c, v)) return SPK_BLOCK_VALUE;
-  if (strbuf_route_reopen_pf(c, v)) return SPK_PROC_CALL;
   if (strbuf_route_ie(c, v) || strbuf_route_loop(c, v)) return SPK_BLOCK_VALUE;
   if (repr_call_returns_handle(c, v)) return SPK_NATIVE_CALL;
   if (strbuf_route_exc_message(c, v) || strbuf_route_boxed_exc_message(c, v)) return SPK_EXC_MESSAGE;
@@ -2922,15 +2896,14 @@ static int strbuf_route_then(Compiler *c, int v) {
          !nt_safe_nav(nt, v) && strbuf_route_operand(c, v) == v;
 }
 /* --share-strings: route v that hands its String on as a box -- a proc's
-   answer (strbuf_route_proc_call), the box a proc-form clone hands back
-   (strbuf_route_reopen_pf), or the value of a call spliced in with its
+   answer (strbuf_route_proc_call), or the value of a call spliced in with its
    literal block (strbuf_route_inline_call) or of a `then` or `tap`
    (strbuf_route_then), each tail boxed as what it is -- as that box: its handle's, a plain String's, or nil. 0, with
    nothing emitted, for any other value. An identity compares the box as
    it is; emit_strbuf_route makes a plain String's box a new handle. */
 int emit_strbuf_route_box(Compiler *c, int v, Buf *b) {
   int pc = strbuf_route_proc_call(c, v);
-  if (!pc && !strbuf_route_reopen_pf(c, v) && !strbuf_route_inline_call(c, v) && !strbuf_route_then(c, v)) return 0;
+  if (!pc && !strbuf_route_inline_call(c, v) && !strbuf_route_then(c, v)) return 0;
   v = nt_paren_single(c->nt, v);
   int sv = view_push(c, v, TY_POLY);
   /* a block literal the call splices answers its tail boxed: asked as
@@ -3115,9 +3088,9 @@ int emit_strbuf_route(Compiler *c, int v, Buf *b) {
     buf_printf(b, "; _t%d.tag == SP_TAG_NIL ? (sp_String *)NULL : sp_poly_as_strbuf(_t%d); })", t, t);
     return 1;
   }
-  /* the box as the proc (or the proc-form clone) handed it back: its
+  /* the box as the proc handed it back: its
      handle, a plain String's new one, or nil */
-  if ((strbuf_route_proc_call(c, v) && !strbuf_route_yield(c, v)) || strbuf_route_reopen_pf(c, v)) {
+  if (strbuf_route_proc_call(c, v) && !strbuf_route_yield(c, v)) {
     int t = ++g_tmp;
     buf_printf(b, "({ sp_RbVal _t%d = ", t);
     emit_strbuf_route_box(c, v, b);
@@ -26854,77 +26827,6 @@ void emit_index_and_or_write(Compiler *c, int id, Buf *b, int indent, int is_or)
   }
 
   unsupported(c, id, is_or ? "index-or-write" : "index-and-write");
-}
-
-/* ---- the routes a String's handle takes (#6765) ----
-   Whether the consumer that takes a String hands its handle along, by the
-   emitters' own tests, consumer by consumer. */
-
-/* Does a box take value v as the handle it is? An element or a block's
-   value is boxed (the box face), which renders every producer kind but
-   one: a call that reads the handle only under a handle demand
-   (strbuf_call_reads_handle, a native binding's answer) is boxed as its
-   bytes, as a route reader (strbuf_route_reader) and a reflective ivar
-   read (strbuf_route_ivar_get) are not. The String plan's
-   SPR_BOX form answers it: a value it gives only the bytes (SPF_COPY) is
-   the one a box cannot carry. */
-static int strbuf_box_carries(Compiler *c, int v) {
-  SharePlan p = share_plan_of(c, v, SPR_BOX);
-  int u = nt_paren_single(c->nt, v);
-  /* (a boxed receiver's call whose every arm answers a String it
-     publishes or a new one is boxed arm by arm, each its own handle:
-     strbuf_poly_user_boxes, emit_boxed) */
-  if (p.form == SPF_HANDLE && share_plan_producer(c, v, NULL) == SPK_READER && !strbuf_route_reader(c, u) && !strbuf_route_ivar_get(c, u) &&
-      !strbuf_poly_user_boxes(c, u))
-    return p.need != SPN_OBJECT;
-  return p.form != SPF_COPY;
-}
-
-/* Does each `next` leaving the statements n (not one in a nested block,
-   lambda, method or loop, which leaves that) answer one value, and a
-   value a box carries? */
-static int strbuf_next_boxes(Compiler *c, int n) {
-  const NodeTable *nt = c->nt;
-  if (n < 0) return 1;
-  NodeKind nk = nt_kind(nt, n);
-  if (nk == NK_BlockNode || nk == NK_LambdaNode || nk == NK_DefNode || nk == NK_WhileNode ||
-      nk == NK_UntilNode || nk == NK_ForNode) return 1;
-  if (nk == NK_NextNode) {
-    int argc = 0; const int *argv = call_args(nt, n, &argc);
-    if (argc > 1 || (argc == 1 && !strbuf_box_carries(c, argv[0]))) return 0;
-  }
-  for (int i = 0; i < nt_num_refs(nt, n); i++)
-    if (!strbuf_next_boxes(c, nt_ref_at(nt, n, i))) return 0;
-  for (int i = 0; i < nt_num_arrs(nt, n); i++) {
-    int m = 0; const int *ids = nt_arr_at(nt, n, i, &m);
-    for (int j = 0; j < m; j++) if (!strbuf_next_boxes(c, ids[j])) return 0;
-  }
-  return 1;
-}
-
-/* The proc-form clone of strbuf_route_reopen_pf's call v hands back the
-   box its block's proc answers: is each value the block answers (its
-   tail, a next's) one a box carries as the handle it is
-   (strbuf_box_carries)? */
-static int strbuf_stmts_box(Compiler *c, int stmts) {
-  int n = 0;
-  const int *bb = stmts >= 0 && nt_kind(c->nt, stmts) == NK_StatementsNode ? nt_arr(c->nt, stmts, "body", &n) : NULL;
-  return n == 0 || strbuf_box_carries(c, bb[n - 1]);
-}
-static int strbuf_reopen_pf_tails_carry(Compiler *c, int v) {
-  const NodeTable *nt = c->nt;
-  int body = nt_ref(nt, nt_ref(nt, nt_paren_single(nt, v), "block"), "body");
-  if (body >= 0 && nt_kind(nt, body) == NK_BeginNode) {
-    /* a block with a rescue or ensure clause of its own: the begin answers
-       its body's last statement, or its else clause's when one follows,
-       and a rescue clause's */
-    int el = nt_ref(nt, body, "else_clause");
-    int ok = strbuf_stmts_box(c, el >= 0 ? nt_ref(nt, el, "statements") : nt_ref(nt, body, "statements"));
-    for (int rc = nt_ref(nt, body, "rescue_clause"); rc >= 0 && ok; rc = nt_ref(nt, rc, "subsequent"))
-      ok = strbuf_stmts_box(c, nt_ref(nt, rc, "statements"));
-    return ok && strbuf_next_boxes(c, body);
-  }
-  return strbuf_stmts_box(c, body) && strbuf_next_boxes(c, body);
 }
 
 /* Does every builtin row of name answer a String that is new (BSH_PURE),

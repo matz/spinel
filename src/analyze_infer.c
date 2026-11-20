@@ -4971,9 +4971,10 @@ static int rand_lit_range_float(Compiler *c, int arg) {
 }
 
 /* Does the program make a Complex: an imaginary literal, the Complex
-   constant, Kernel#Complex, a to_c or a Numeric#i? Asked once per compile,
-   for the boxed result of Math.sqrt, so a program with no Complex keeps a
-   Float one. */
+   constant, Kernel#Complex, a to_c, a Numeric#i, or a **, **= or pow whose
+   exponent is not an Integer literal (a negative real ** a fraction)? Asked
+   once per compile, for the boxed result of Math.sqrt, so a program with no
+   Complex keeps a Float one. */
 static int an_program_makes_complex(Compiler *c, const NodeTable *nt) {
   static const Compiler *mc_c; static int mc;
   if (mc_c == c) return mc;
@@ -4987,6 +4988,22 @@ static int an_program_makes_complex(Compiler *c, const NodeTable *nt) {
     for (int i = 0; !mc && i < n; i++) {
       const char *nm = nt_str(nt, ids[i], "name");
       mc = nm && (sp_streq(nm, "Complex") || (kinds[k] == NK_CallNode && (sp_streq(nm, "to_c") || sp_streq(nm, "i"))));
+      if (!mc && nm && kinds[k] == NK_CallNode && (sp_streq(nm, "**") || sp_streq(nm, "pow"))) {
+        int ac = 0; const int *av = call_args(nt, ids[i], &ac);
+        mc = ac >= 1 && nt_kind(nt, av[0]) != NK_IntegerNode;
+      }
+    }
+  }
+  static const NodeKind opw[] = { NK_LocalVariableOperatorWriteNode, NK_InstanceVariableOperatorWriteNode,
+                                  NK_ClassVariableOperatorWriteNode, NK_GlobalVariableOperatorWriteNode,
+                                  NK_IndexOperatorWriteNode, NK_CallOperatorWriteNode,
+                                  NK_ConstantOperatorWriteNode, NK_ConstantPathOperatorWriteNode };
+  for (size_t q = 0; !mc && q < sizeof opw / sizeof opw[0]; q++) {
+    const int *ids = nt_nodes_of_kind(nt, opw[q], &n);
+    for (int i = 0; !mc && i < n; i++) {
+      const char *op = nt_str(nt, ids[i], "binary_operator");
+      int v = nt_ref(nt, ids[i], "value");
+      mc = op && sp_streq(op, "**") && v >= 0 && nt_kind(nt, v) != NK_IntegerNode;
     }
   }
   return mc;

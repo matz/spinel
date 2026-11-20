@@ -726,9 +726,12 @@ static int sp_glob_comp_match(const char *comp, const char *name) {
   return sp_fnm_match(comp, name, (sp_glob_dotmatch ? SP_FNM_DOTMATCH : 0) | (sp_glob_flags & SP_FNM_NOESCAPE));
 }
 
+/* Whether a component is read from its directory by the matcher: a wildcard,
+   or a backslash, which escapes the character after it ("foo\\ bar" names
+   "foo bar") and so is not the name on the disk. */
 static int sp_glob_has_meta(const char *comp) {
   for (const char *p = comp; *p; p++)
-    if (*p == '*' || *p == '?' || *p == '[') return 1;
+    if (*p == '*' || *p == '?' || *p == '[' || *p == '\\') return 1;
   return 0;
 }
 

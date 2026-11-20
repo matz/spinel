@@ -532,6 +532,30 @@ module Net
       values.nil? ? nil : values.map { |v| v.dup }
     end
 
+    # The header's value; for an absent one the block's answer for the
+    # downcased name, else the default given, else a KeyError.
+    def fetch(name, *default)
+      k = name.to_s.downcase
+      values = @fields[k]
+      return values.join(", ") unless values.nil?
+      return yield(k) if block_given?
+      return default[0] unless default.empty?
+      raise KeyError, "key not found: #{k.inspect}"
+    end
+
+    # Removes the header and answers the values it held.
+    def delete(name)
+      k = name.to_s.downcase
+      @headers.delete(k)
+      @header_names.delete(k)
+      @fields.delete(k)
+    end
+
+    # Each header's values under its downcased name.
+    def to_hash
+      @fields.dup
+    end
+
     # A copy, as CRuby's `@header[key].join(", ")` is a new String: appending
     # to what `[]` answers leaves the stored value alone (and the stored one
     # may be a frozen literal).

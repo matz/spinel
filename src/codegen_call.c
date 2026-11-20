@@ -6575,7 +6575,7 @@ static int emit_complex_rational_call(Compiler *c, int id, Buf *b) {
         return 1;
       }
       if (sp_streq(name, "**")) {
-        buf_puts(b, "pow(");
+        buf_puts(b, "sp_float_pow(");
         if (lft_rat) { buf_puts(b, "sp_rational_to_f("); emit_expr(c, recv, b); buf_puts(b, ")"); }
         else emit_float_expr(c, recv, b);
         buf_puts(b, ", ");
@@ -6630,7 +6630,7 @@ static int emit_complex_rational_call(Compiler *c, int id, Buf *b) {
        Rational ** Rational). */
     if (crt == TY_INT && argc == 1 && sp_streq(name, "**") &&
         comp_ntype(c, argv[0]) == TY_RATIONAL) {
-      buf_puts(b, "pow((double)("); emit_expr(c, recv, b);
+      buf_puts(b, "sp_float_pow((sp_float)("); emit_expr(c, recv, b);
       buf_puts(b, "), sp_rational_to_f("); emit_expr(c, argv[0], b); buf_puts(b, "))");
       return 1;
     }

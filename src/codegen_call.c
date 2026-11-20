@@ -29841,7 +29841,8 @@ int nil_recv_guard(Compiler *c, int id, int *recv_out) {
    arms read the temp through the override table. divmod is one of them: its
    arm renders the receiver after the operand's temp, and
    `u.divmod((u = 0; 5))` answered [0, 0]. Operators that mutate their
-   receiver are left out. */
+   receiver are left out. A direct user call asks the order record whether
+   to retain its receiver while the arguments run. */
 static int g_recv_snapshot_node = -1;
 static int emit_recv_snapshot(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
@@ -29873,18 +29874,24 @@ static int emit_recv_snapshot(Compiler *c, int id, Buf *b) {
     return 1;
   }
   free(ref.p);
-  if (recv < 0 || args < 0 || nt_kind(nt, recv) != NK_LocalVariableReadNode) return 0;
-  const char *nm = nt_str(nt, id, "name");
-  static const char *const ops[] = {
-    "+", "-", "*", "/", "%", "**", "&", "|", "^", ">>", "==", "!=", "<", ">",
-    "<=", ">=", "<=>", "===", "=~", "[]", "divmod", NULL };
-  int op = 0;
-  for (int i = 0; nm && ops[i] && !op; i++) op = sp_streq(nm, ops[i]);
-  if (!op || !read_rebound_by(c, recv, args)) return 0;
+  if (recv < 0 || args < 0) return 0;
   Repr tr = repr_of(c, recv);
   TyKind t = tr.as_ty;
+  const OpSlot *slot = op_slot_of(c, id, recv);
+  int direct_hold = slot && slot->at == OPA_HOLD && !arg_ran_first(recv, 0) && ty_is_object(t) &&
+                    cplan_user(c, id).dispatch == CP_DIRECT;
+  if (!direct_hold) {
+    if (nt_kind(nt, recv) != NK_LocalVariableReadNode) return 0;
+    const char *nm = nt_str(nt, id, "name");
+    static const char *const ops[] = {
+      "+", "-", "*", "/", "%", "**", "&", "|", "^", ">>", "==", "!=", "<", ">",
+      "<=", ">=", "<=>", "===", "=~", "[]", "divmod", NULL };
+    int op = 0;
+    for (int i = 0; nm && ops[i] && !op; i++) op = sp_streq(nm, ops[i]);
+    if (!op || !read_rebound_by(c, recv, args)) return 0;
+  }
   if (t == TY_UNKNOWN || t == TY_VOID || t == TY_NIL ||
-      tr.kind == RK_STRUCT || tr.kind == RK_VOBJ) return 0;
+      tr.kind == RK_STRUCT || (!direct_hold && tr.kind == RK_VOBJ)) return 0;
   /* (a String is held as its handle, its bytes taken in the call: an
      argument that changes it in place before it rebinds the local is
      seen, as in CRuby) */
@@ -29901,7 +29908,7 @@ static int emit_recv_snapshot(Compiler *c, int id, Buf *b) {
     emit_indent(g_pre, g_indent);
     emit_ctype(c, t, g_pre);
     buf_printf(g_pre, " _t%d = %s; ", tn, rb.p ? rb.p : default_value_from_compiler(c, t));
-    emit_gc_root_tmp(c, t, tn, g_pre);
+    emit_gc_root_tmp_refs(c, t, tn, g_pre);
     buf_puts(g_pre, "\n");
     free(rb.p);
     view_bind_temp(recv, tn);

@@ -1850,7 +1850,6 @@ static int strbuf_freeze_leaf_d(Compiler *c, int v, int depth) {
 }
 int strbuf_freeze_leaf(Compiler *c, int v) { return strbuf_freeze_leaf_d(c, v, 0); }
 int strbuf_assign_route(Compiler *c, int v) { return strbuf_assign_route_d(c, v, 0); }
-static int strbuf_route_carries(Compiler *c, int v, int depth);
 static int strbuf_route_proc_call(Compiler *c, int v);
 int strbuf_route_ie(Compiler *c, int v);
 int strbuf_route_loop(Compiler *c, int v);
@@ -1948,8 +1947,7 @@ static int strbuf_route_yield(Compiler *c, int v) {
 /* --share-strings: a yield that calls the block's proc here (a method
    inlined with a forwarded proc, or emitted as a function), typed as a
    String and not its method's last statement: the proc hands its answer
-   back boxed, and the route takes that box's handle
-   (share_plan_yield_supply asks the same of every block that reaches it). */
+   back boxed, and the route takes that box's handle. */
 int strbuf_yield_proc_box(Compiler *c, int v) {
   const NodeTable *nt = c->nt;
   v = nt_paren_single(c->nt, v);
@@ -2645,7 +2643,6 @@ static int emit_clamp_lifted_bound(Compiler *c, int op, int t, Buf *b) {
   buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ", t);
   return 1;
 }
-static int strbuf_route_carries(Compiler *c, int v, int depth);
 /* --share-strings: is v an append chain over cb, a value route over a
    handle (`(+s) << x`, strbuf_route_operand), with no method of the
    program's own on a link? emit_strbuf_route_chain
@@ -2659,7 +2656,7 @@ static int strbuf_chain_over_route(Compiler *c, int v, int cb, int depth) {
 }
 /* Does value v hand over a String the rule shares as the handle itself: a
    slot holding it, or a route over one? */
-static int strbuf_route_carries(Compiler *c, int v, int depth) {
+int strbuf_route_carries(Compiler *c, int v, int depth) {
   int ops[3];
   if (strbuf_route_clamp(c, v, ops)) return 1;
   if (strbuf_hash_default_arg(c, v) >= 0) return 1;
@@ -2691,68 +2688,6 @@ static int strbuf_route_carries(Compiler *c, int v, int depth) {
   if (v >= 0 && nt_kind(c->nt, v) == NK_CallNode)
     return strbuf_native_answer(c, v) || strbuf_call_reads_handle(c, v);
   return strbuf_slot_has(c, v);
-}
-/* The String plan's producer kind (share.h's SPK_*) of route v, the arms
-   of strbuf_route_carries in its order, each named by the route it is; 0
-   (SPK_NONE) for a value that is none. *op is the node whose supply an
-   SPK_SELF or SPK_OPERAND route hands on, else -1. A route that answers
-   one of several operands (a String clamp) supplies what each of them
-   does: an SPK_OPERAND with *op -1, whose operands the plan asks
-   (share_plan.c). */
-int strbuf_route_kind(Compiler *c, int v, int *op) {
-  const NodeTable *nt = c->nt;
-  int ops[3], u = nt_paren_single(nt, v);
-  *op = -1;
-  if (strbuf_route_clamp(c, v, ops)) return SPK_OPERAND;
-  /* (a Hash's default setter stores the handle it is given, a new String
-     wrapped as one, and answers it: the route's own) */
-  if (strbuf_hash_default_arg(c, v) >= 0) return SPK_OPERAND;
-  if (strbuf_route_proc_call(c, v)) return SPK_PROC_CALL;
-  if (strbuf_route_ivar_get(c, v)) return SPK_READER;
-  if (strbuf_route_begin(c, v)) return SPK_COND;
-  if (strbuf_route_yield(c, v)) return SPK_YIELD;
-  if (strbuf_route_inline_call(c, v)) return SPK_BLOCK_VALUE;
-  if (strbuf_route_ie(c, v) || strbuf_route_loop(c, v)) return SPK_BLOCK_VALUE;
-  if (repr_call_returns_handle(c, v)) return SPK_NATIVE_CALL;
-  if (strbuf_route_exc_message(c, v) || strbuf_route_boxed_exc_message(c, v)) return SPK_EXC_MESSAGE;
-  if (strbuf_route_reader(c, v)) return SPK_READER;
-  if (strbuf_route_srange_kept(c, v)) return SPK_SLOT;
-  if (strbuf_assign_leaf(c, v)) return SPK_ASSIGN;
-  /* a bang on such a route, a receiver-answering call on a value route,
-     a chain over a leaf or a bang, or over a value route, or over freeze
-     on a leaf: each answers its receiver */
-  if (strbuf_bang_leaf(c, v) ||
-      (nt_kind(nt, u) == NK_CallNode && strbuf_route_operand(c, nt_ref(nt, u, "receiver")) >= 0 &&
-       strbuf_bang_self_local(c, u))) {
-    *op = nt_paren_single(nt, nt_ref(nt, u, "receiver"));
-    return SPK_SELF;
-  }
-  { int cb = nt_paren_single(nt, str_alias_chain_base(c, v)), args[32];
-    if ((cb != u && (strbuf_assign_leaf(c, cb) || strbuf_bang_chain(c, v)) && strbuf_chain_links(c, v, cb, args) > 0) ||
-        strbuf_chain_over_route(c, v, cb, 0)) {
-      *op = cb;
-      return SPK_SELF;
-    }
-    int ab = strbuf_append_base(c, v);
-    if (ab != u && strbuf_freeze_leaf(c, ab)) { *op = ab; return SPK_SELF; } }
-  int x = strbuf_route_operand(c, v);
-  /* then, inject, sum, an ENV store: what the call answers; tap: its
-     receiver */
-  if (x == u) {
-    if (is_tap_name(nt_str(nt, u, "name"))) { *op = nt_paren_single(nt, nt_ref(nt, u, "receiver")); return SPK_OPERAND; }
-    return SPK_BLOCK_VALUE;
-  }
-  /* (an operand that hands on the handle, as strbuf_route_carries asks
-     it; one that does not leaves the route none) */
-  if (x >= 0) {
-    if (repr_of(c, x).kind != RK_BOXED && !strbuf_route_carries(c, x, 1) && !strbuf_cond_has_handle_leaf(c, x))
-      return SPK_NONE;
-    *op = x;
-    return SPK_OPERAND;
-  }
-  if (v >= 0 && nt_kind(nt, v) == NK_CallNode)
-    return strbuf_native_answer(c, v) || strbuf_call_reads_handle(c, v) ? SPK_READER : SPK_NONE;
-  return strbuf_slot_has(c, v) ? SPK_SLOT : SPK_NONE;
 }
 /* Pass on an evaluated argument temp or the call's native result. */
 void emit_string_call_handle(Compiler *c, int v, int box, Buf *b) {
@@ -3218,42 +3153,6 @@ int strbuf_value_carries(Compiler *c, int v) {
      parenthesized one does (strbuf_cond_has_handle_leaf) */
   return strbuf_route_carries(c, v, 0) || strbuf_cond_has_handle_leaf(c, v) || strbuf_opwrite_handle(c, v, NULL) ||
          (k != NK_CallNode && repr_write_share(c, v));
-}
-/* The String plan's producer kind (SPK_*) of value v by the arms of
-   strbuf_value_carries, in its order; *op as strbuf_route_kind's. */
-int strbuf_value_kind(Compiler *c, int v, int *op) {
-  NodeKind k = v >= 0 ? nt_kind(c->nt, v) : NK_NONE;
-  *op = -1;
-  if ((k == NK_LocalVariableReadNode || k == NK_InstanceVariableReadNode || repr_static_read_kind(k)) &&
-      strbuf_slot_has(c, v))
-    return SPK_SLOT;
-  const char *nm = k == NK_CallNode ? nt_str(c->nt, v, "name") : NULL;
-  int recv = k == NK_CallNode ? nt_paren_single(c->nt, nt_ref(c->nt, v, "receiver")) : -1;
-  if (nm && !is_append_concat(nm) && strbuf_plain_self_call(c, v)) { *op = recv; return SPK_SELF; }
-  if (nm && is_append_concat(nm)) {
-    const char *an = recv >= 0 && nt_kind(c->nt, recv) == NK_CallNode ? nt_str(c->nt, recv, "name") : NULL;
-    if (an && !is_append_concat(an) && strbuf_plain_self_call(c, v)) { *op = recv; return SPK_SELF; }
-    /* (a chain of appends over such a call: the base call's supply) */
-    if (an && is_append_concat(an)) {
-      int cur = v;
-      while (strbuf_append_link(c, cur)) {
-        int nx = nt_paren_single(c->nt, nt_ref(c->nt, cur, "receiver"));
-        const char *nn = nx >= 0 && nt_kind(c->nt, nx) == NK_CallNode ? nt_str(c->nt, nx, "name") : NULL;
-        if (!nn || !is_append_concat(nn)) {
-          if (nx >= 0 && nt_kind(c->nt, nx) == NK_CallNode && strbuf_value_carries(c, nx)) { *op = nx; return SPK_SELF; }
-          return SPK_NONE;
-        }
-        cur = nx;
-      }
-    }
-  }
-  int cb = str_alias_chain_base(c, v);
-  if (cb != v && cb >= 0 && strbuf_var_handle(c, cb, NULL)) { *op = cb; return SPK_SELF; }
-  int rk = strbuf_route_kind(c, v, op);
-  if (rk != SPK_NONE) return rk;
-  if (strbuf_cond_has_handle_leaf(c, v)) return SPK_COND;
-  if (strbuf_opwrite_handle(c, v, NULL) || (k != NK_CallNode && repr_write_share(c, v))) return SPK_WRITE;
-  return SPK_NONE;
 }
 /* --share-strings: does argument v hand a parameter that is the handle its
    String as that handle (emit_strbuf_handle_of answers it): a value route
@@ -4845,7 +4744,7 @@ void emit_strbuf_value(Compiler *c, int v, Buf *b) {
       return;
     }
     /* ...and a bang's to_s or to_str on a boxed receiver is the box's
-       String (share_plan_self_recv), or for nil a frozen "" (to_s) or
+       String, or for nil a frozen "" (to_s) or
        nil's NoMethodError (to_str) */
     const char *wn = w >= 0 && nt_kind(c->nt, w) == NK_CallNode ? nt_str(c->nt, w, "name") : NULL;
     int wr = wn ? nt_paren_single(c->nt, nt_ref(c->nt, w, "receiver")) : -1;
@@ -4868,7 +4767,6 @@ void emit_strbuf_value(Compiler *c, int v, Buf *b) {
   Repr rpv = repr_of(c, v);
   /* A demanded fresh String arm still emits bytes (for example 123.to_s),
      which need their own handle; the demand alone is no reader slot. */
-  /* User calls keep their existing return pickup. */
   int fresh = rpv.strbuf_src == RS_FRESH &&
               nt_kind(c->nt, v) == NK_CallNode && cplan_user(c, v).dispatch == CP_NONE &&
               share_value_fresh(c, v, 0);

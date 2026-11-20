@@ -106,44 +106,6 @@ int share_frozen_string(Compiler *c, int n);
 /* Does n supply its handle or a box holding that handle? */
 int share_node_carries_handle(const Compiler *c, int n);
 
-/* String routes described by the existing emitters:
-     NONE         its bytes only;
-     BOX          a box, which hands over itself;
-     SLOT         a variable's or a write's slot that holds the handle, a
-                  String Range's kept endpoint (repr_of's RS_HANDLE);
-     DEMANDED     a reader or receiver call that renders the handle under a
-                  handle mark or demand (RS_DEMANDED);
-     ELEM         a boxed container's element, a box of the handle (RS_ELEM);
-     SLOT_POLY    a narrowed box's slot (RS_SLOT_POLY);
-     FROZEN       a frozen String: a literal (share_frozen_literal) or a
-                  builtin String constant, its own handle;
-     SELF         a call that answers its String receiver, whose supply is
-                  that receiver's (the operand);
-     BANG_BOX     a bang on a boxed receiver: the receiver's box or nil;
-     PROC_CALL    a proc's (or a catch's) answer, which comes back boxed;
-     POLY_ARMS    a boxed receiver's call whose every arm answers a handle
-                  it publishes or a new String, boxed arm by arm;
-     EXC_MESSAGE  an exception's message, the handle it keeps;
-     EXC_SUPER    super in an exception's message or to_s override that
-                  hands on the builtin's: the kept message's handle;
-     PUBLISHED    a call whose targets publish their handle (the return
-                  pickup), a spliced call answering a variable;
-     READER       a reader of a slot that holds the handle;
-     WRITE        a write in value position whose slot holds the handle;
-     ASSIGN       an attribute assignment's value, the handle it stores;
-     OPERAND      a route that answers the String it is handed (`+s`,
-                  String(s), tap, a conversion): the operand's supply;
-     BLOCK_VALUE  a call answering its block's value (then, inject, loop,
-                  instance_exec's splice, a spliced yielding call): each
-                  value the block answers;
-     YIELD        a yield spliced with a literal block: the block's value;
-     COND         a conditional or begin taken arm by arm: each arm;
-     SEQUENCE     parentheses or statements: the last statement (the
-                  operand);
-     LIFT         a box codegen lifts into its handle (poly_strbuf_lift) */
-enum { SPK_NONE, SPK_BOX, SPK_SLOT, SPK_DEMANDED, SPK_ELEM, SPK_SLOT_POLY, SPK_FROZEN, SPK_SELF, SPK_BANG_BOX,
-       SPK_PROC_CALL, SPK_POLY_ARMS, SPK_EXC_MESSAGE, SPK_EXC_SUPER, SPK_NATIVE_CALL, SPK_READER, SPK_WRITE,
-       SPK_ASSIGN, SPK_OPERAND, SPK_BLOCK_VALUE, SPK_YIELD, SPK_COND, SPK_SEQUENCE, SPK_LIFT, SPK__COUNT };
 /* Are the targets the plan lists for call u all it can reach: every value
    its receiver can be answers the name by a method of the program's own,
    and it is no exception's builtin message or to_s? */

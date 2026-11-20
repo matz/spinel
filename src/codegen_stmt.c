@@ -2378,70 +2378,19 @@ static int exc_text_call_on(Compiler *c, int v, int boxed) {
   if (!ks) { int nxs = 0; (void)comp_exc_subclasses(c, &nxs); return nxs > 0; }
   return 0;
 }
-/* --share-strings: a String Range's begin / first (1) or end / last (2),
-   with no argument and no override of the program's own: the endpoint's
-   String, which the Range keeps as a handle when it is shared (#8321) */
-int strbuf_route_srange_end(Compiler *c, int v) {
-  const NodeTable *nt = c->nt;
-  v = nt_paren_single(c->nt, v);
-  if (v < 0 || nt_kind(nt, v) != NK_CallNode) return 0;
-  const char *nm = nt_str(nt, v, "name");
-  int recv = nt_ref(nt, v, "receiver");
-  if (!nm || recv < 0 || nt_ref(nt, v, "arguments") >= 0 || nt_ref(nt, v, "block") >= 0 ||
-      comp_ntype(c, recv) != TY_STR_RANGE || cplan_user(c, v).dispatch != CP_NONE) return 0;
-  if (sp_streq(nm, "begin") || sp_streq(nm, "first")) return 1;
-  if (sp_streq(nm, "end") || sp_streq(nm, "last")) return 2;
-  return 0;
-}
-/* ...and its #min (1) or #max (2), likewise: the begin String, or an
-   inclusive Range's end String, the handle it keeps included, or nil
-   (sp_srange_extreme_h) */
-int strbuf_route_srange_extreme(Compiler *c, int v) {
-  const NodeTable *nt = c->nt;
-  v = nt_paren_single(c->nt, v);
-  if (v < 0 || nt_kind(nt, v) != NK_CallNode) return 0;
-  const char *nm = nt_str(nt, v, "name");
-  int recv = nt_ref(nt, v, "receiver");
-  if (!nm || recv < 0 || nt_ref(nt, v, "arguments") >= 0 || nt_ref(nt, v, "block") >= 0 ||
-      comp_ntype(c, recv) != TY_STR_RANGE || cplan_user(c, v).dispatch != CP_NONE) return 0;
-  /* (a reopening or a module may define the name, which the plan does not
-     see: the builtin's answer is not the call's) */
-  if (!is_minmax_query(nm) || share_builtin_overridden(c, "Range", nm)) return 0;
-  return sp_streq(nm, "max") ? 2 : 1;
-}
-/* Does v answer one of a String Range's endpoint Strings, as a route that
-   hands on the handle the Range keeps (either of the above), where no
-   method of the program's own may stand in for it? */
+/* This endpoint is the handle returned by the selected builtin row. */
 int strbuf_route_srange_kept(Compiler *c, int v) {
-  return (strbuf_route_srange_end(c, v) &&
-          !share_builtin_overridden(c, "Range", nt_str(c->nt, nt_paren_single(c->nt, v), "name"))) ||
-         strbuf_route_srange_extreme(c, v);
+  const NodeTable *nt = c->nt;
+  v = nt_paren_single(nt, v);
+  if (v < 0 || nt_ref(nt, v, "arguments") >= 0 || nt_ref(nt, v, "block") >= 0) return 0;
+  const BuiltinOp *row = cplan_builtin_handle_row(c, v);
+  return row && row->recv == TY_STR_RANGE && !share_builtin_overridden(c, "Range", row->name);
 }
-/* The String Range route (strbuf_route_srange_kept) that is the value of
-   v, through parentheses that run statements ahead of it (`(f.begin << "y";
-   f.min)`): that route's node, or -1. */
+
+/* The endpoint returned by the sequence's final expression. */
 int strbuf_srange_tail(Compiler *c, int v) {
-  for (int d = 0; v >= 0 && d < 64; d++) {
-    if (strbuf_route_srange_kept(c, v)) return nt_paren_single(c->nt, v);
-    if (nt_kind(c->nt, v) != NK_ParenthesesNode) return -1;
-    int body = nt_ref(c->nt, v, "body"), n = 0;
-    const int *bd = body >= 0 ? nt_arr(c->nt, body, "body", &n) : NULL;
-    if (n < 1) return -1;
-    v = bd[n - 1];
-  }
-  return -1;
-}
-/* The receiver of String Range route v (strbuf_route_srange_end), held as
-   the Range: for #first / #last, which raise for a beginless / endless
-   Range where #begin / #end answer nil, checked so
-   (sp_srange_need_end) */
-void emit_srange_end_recv(Compiler *c, int v, Buf *b) {
-  v = nt_paren_single(c->nt, v);
-  const char *nm = nt_str(c->nt, v, "name");
-  int chk = nm && is_endpoint_query(nm);
-  if (chk) buf_puts(b, "sp_srange_need_end(");
-  emit_expr(c, nt_ref(c->nt, v, "receiver"), b);
-  if (chk) buf_printf(b, ", %d)", is_range_end_reader(nm));
+  int tail;
+  return vp_one(c->nt, v, VPS_NONE | VP_PARENS_ONLY, &tail) == VP1_NODE && strbuf_route_srange_kept(c, tail) ? tail : -1;
 }
 static int exc_text_call(Compiler *c, int v) { return exc_text_call_on(c, v, 0); }
 /* --share-strings: an exception's #message read off a boxed receiver every
@@ -3002,24 +2951,6 @@ int emit_strbuf_route(Compiler *c, int v, Buf *b) {
     view_unbind(mark);
     str_new_handle_close(b);
     buf_puts(b, "; })");
-    return 1;
-  }
-  int se = strbuf_route_srange_end(c, v);
-  if (se) {
-    v = nt_paren_single(c->nt, v);
-    buf_puts(b, "(");
-    emit_srange_end_recv(c, v, b);
-    buf_printf(b, ").%s", se == 1 ? "first" : "last");
-    return 1;
-  }
-  int sx = strbuf_route_srange_extreme(c, v);
-  if (sx) {
-    /* min / max: the endpoint as above (an excluded end's max a new
-       String), or nil for an empty Range (sp_srange_extreme_h) */
-    v = nt_paren_single(c->nt, v);
-    buf_puts(b, "sp_srange_extreme_h(");
-    emit_expr(c, nt_ref(nt, v, "receiver"), b);
-    buf_printf(b, ", %d)", sx == 2);
     return 1;
   }
   /* ...and a yield that calls the block's proc: the box the proc answered */

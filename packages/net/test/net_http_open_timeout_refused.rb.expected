@@ -1,0 +1,3 @@
+open_timeout nil: Errno::ECONNREFUSED
+open_timeout 1.0: Errno::ECONNREFUSED
+a listening port with open_timeout: ok

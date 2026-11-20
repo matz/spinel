@@ -1812,12 +1812,15 @@ const char *sp_backtick(const char *cmd) {SP_GC_ROOT_STR(cmd);
   /* the same wait-status layout sp_system_args leaves in $? */
   sp_last_status = st;
   sp_last_pid = (int)pid;
-  sp_sig_after_wait();
   char *r = sp_str_alloc(len);
   if (len) memcpy(r, buf, len);
   r[len] = 0;
   sp_str_set_len(r, len);
   free(buf);
+  /* the signals recorded in the wait run once the output is a String and
+     the buffer is freed: a trap that raises leaves nothing behind */
+  SP_GC_ROOT_STR(r);
+  sp_sig_after_wait();
   return r;
 }
 

@@ -7,3 +7,4 @@ wait2 returned true 0
 Interrupt in the wait
 CHLD ran
 wait returned 0
+CHLD raised

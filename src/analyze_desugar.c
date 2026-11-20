@@ -26951,9 +26951,7 @@ int desugar_toplevel_hooked_mixins(Compiler *c) {
     int decl = 0;
     for (int m = 0; m < n0 && !decl; m++)
       if (qn[m] && sp_streq(qn[m], rp)) decl = class_def_is_module(nt, m) ? 2 : class_def_is_class(nt, m) ? 1 : 0;
-    /* (not a module's include: desugar_included_hooks splices no include in a module body, so the reopening
-       would run the hook nowhere either) */
-    if (!decl || (decl == 2 && k == 0)) continue;
+    if (!decl) continue;
     /* (a hook defined before the call: a later one is not the call's) */
     int hit = 0;
     /* (node order is source order within a file only: a hook another file defines is taken, that file having
@@ -27012,7 +27010,6 @@ int desugar_included_hooks(Compiler *c, HostStep *h) {
   char **qn = NULL;
   for (int cn = 0; cn < n0; cn++) {
     NodeKind ck = nt_kind(nt, cn);
-    int is_mod = class_def_is_module(nt, cn);
     const char *cls = NULL;
     int body = -1;
     if (class_def_opens_frame(nt, cn)) {
@@ -27042,7 +27039,6 @@ int desugar_included_hooks(Compiler *c, HostStep *h) {
       /* `extend M` runs M.extended(base) the same way */
       int is_ext = nm && sp_streq(nm, "extend");
       if (!nm || (!sp_streq(nm, "include") && !is_ext)) continue;
-      if (is_mod && !is_ext) continue;
       int an = nt_ref(nt, s, "arguments");
       int ac = 0; const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
       for (int j = 0; j < ac; j++) {

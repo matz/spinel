@@ -15584,6 +15584,14 @@ int desugar_block_capture_wrap(Compiler *c) {
     }
     if (ok) for (int k = 0; k < rn; k++) subtree_rename_local(nt, body, pn[k], wn[k], 0);
     if (!ok) continue;
+    /* The body's uses are the copy's now: a container kind they gave the
+       parameter is put back, for the call that binds it to decide. */
+    { Scope *bsc = comp_scope_of(c, blk);
+      for (int k = 0; bsc && k < rn; k++) {
+        LocalVar *olv = scope_local(bsc, pn[k]);
+        if (olv && !olv->is_param && (ty_is_hash(olv->type) || ty_is_array(olv->type)))
+          lv_set_type(olv, TY_UNKNOWN);
+      } }
     int wparams = nt_new_node(nt, "ParametersNode");
     int wlam = nt_new_node(nt, "LambdaNode");
     int wargs = nt_new_node(nt, "ArgumentsNode");

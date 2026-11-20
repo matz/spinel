@@ -128,7 +128,9 @@ with class ID `SP_BUILTIN_STRBUF`. This includes frozen literals and the
 objects retained by Hashes, Enumerators, and callbacks. Ordinary boxing
 reads the expression's representation, including results held by a call
 or written into a slot. A boxed inline yield keeps the block's String
-handle, including a value supplied by an early `next`. Byte comparisons
+handle, including a value supplied by an early `next`.
+The destination's boxed representation takes precedence over a native
+String source for both `next` and normal block completion. Byte comparisons
 and private conversion buffers can borrow its payload through
 `sp_rbval_string_bytes`.
 Boxed Array pushes hold each argument across evaluation of the next.

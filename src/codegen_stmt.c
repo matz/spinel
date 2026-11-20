@@ -22868,8 +22868,11 @@ static void emit_stmt_node(Compiler *c, int id, Buf *b, int indent) {
            arm's own struct does not fit it (#4747). */
         TyKind at9 = g_ie_next_ty == TY_POLY_ARRAY ? comp_ntype(c, nv[0]) : TY_UNKNOWN;
         const char *apf9 = at9 != TY_POLY_ARRAY ? array_to_poly_fn(at9) : NULL;
+        /* The destination owns the store's representation. A boxed yield
+           carrier boxes even a next value already held as a String handle. */
+        if (g_ie_res_poly) emit_boxed(c, nv[0], b);
         /* a next that leaves a block read as the handle (emit_strbuf_route) */
-        if (g_ie_next_ty == TY_STRBUF) {
+        else if (g_ie_next_ty == TY_STRBUF) {
           /* (one representation: the slot is the handle; a value of either face is adopted) */
           buf_puts(b, "SP_STR_HDL(");
           emit_expr(c, nv[0], b);
@@ -22878,7 +22881,6 @@ static void emit_stmt_node(Compiler *c, int id, Buf *b, int indent) {
         /* (one representation: a bytes slot takes a value of either face as its bytes) */
         else if (g_ie_next_ty == TY_STRING) { buf_puts(b, "SP_STR_B("); emit_expr(c, nv[0], b); buf_puts(b, ")"); }
         else if (comp_strbuf_handle_demand_stored(c, id)) emit_strbuf_handle_of(c, nv[0], b);
-        else if (g_ie_res_poly) emit_boxed(c, nv[0], b);
         else if (g_ie_next_oint && oint_kind(g_ie_next_ty)) emit_oint_expr(c, nv[0], g_ie_next_ty, b);
         else if (g_ie_next_ty == TY_INT || g_ie_next_ty == TY_FLOAT) {
           /* a plain slot never holds a nil: the backstop */

@@ -122,4 +122,5 @@ cruby_oracle('conversions')
 cruby_oracle('spread_sends')
 cruby_oracle('callback_versions')
 cruby_oracle('string_returns')
+cruby_oracle('yield_next_result')
 puts 'C extension compiler bridge: CRuby oracle and GC modes passed'

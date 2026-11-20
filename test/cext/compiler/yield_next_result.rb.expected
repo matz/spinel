@@ -1,0 +1,8 @@
+[true, "word!"]
+[true, "word!"]
+[true, "word!"]
+[true, false]
+[false, true]
+[true, "word!!"]
+[true, "word!!"]
+[true, [97, 0, 98, 33]]

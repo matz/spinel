@@ -191,6 +191,8 @@ String bytes. A block break keeps its own boxed result outside that adapter.
 A keyword loop in value position supplies its own result slot. A nested
 statement loop evaluates its break value without writing the enclosing slot.
 A for loop evaluates its collection before entering its own control context.
+A break with several values supplies one Array to its target. The jump
+lowering includes a trailing keyword hash among those values.
 The ordinary expression view also keeps the handle for a builtin
 receiver-answering String iterator.
 Native String freezing and frozen-state checks use the ordinary operand

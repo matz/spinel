@@ -1,0 +1,4 @@
+["word", {key: :value}]
+["word", :value, :unwind]
+[:first, :second, {extra: :third}]
+[:first, :second, :third]

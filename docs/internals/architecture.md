@@ -62,7 +62,8 @@ the selected arm, where that method's defaults and keywords are checked.
 A default argument is evaluated on the callee. Binding a String default
 uses the same handle as the expression that supplied it.
 An ordered operand keeps its saved handle until its argument binding is
-removed. An abandoned emission also removes the corresponding binding.
+removed. For a call with a native String result, it holds the handle
+from the call's result. An abandoned emission also removes the binding.
 Boxed callable dispatch holds the receiver and arguments before it
 binds the block operand. Proc invocation carries the captured block and
 the keyword marker through the same call as the argument vector. A boxed

@@ -11081,7 +11081,7 @@ static int infer_constant_path(Compiler *c, int id, const NodeTable *nt, NodeKin
   }
   if (par_nm && sp_streq(par_nm, "File")) {
     if (nm && (sp_streq(nm, "SEPARATOR") || sp_streq(nm, "PATH_SEPARATOR") ||
-               sp_streq(nm, "ALT_SEPARATOR") || sp_streq(nm, "NULL"))) { *out = TY_STRING; return 1; }
+               sp_streq(nm, "ALT_SEPARATOR"))) { *out = TY_STRING; return 1; }
     if (nm && (sp_streq(nm, "RDONLY") || sp_streq(nm, "WRONLY") || sp_streq(nm, "RDWR") ||
                sp_streq(nm, "CREAT") || sp_streq(nm, "EXCL") || sp_streq(nm, "TRUNC") ||
                sp_streq(nm, "APPEND") || sp_streq(nm, "NONBLOCK") || sp_streq(nm, "BINARY") ||
@@ -11099,6 +11099,8 @@ static int infer_constant_path(Compiler *c, int id, const NodeTable *nt, NodeKin
     /* IO#seek whence constants (File inherits them from IO) */
     if (nm && (sp_streq(nm, "SEEK_SET") || sp_streq(nm, "SEEK_CUR") ||
                sp_streq(nm, "SEEK_END"))) { *out = TY_INT; return 1; }
+    /* the null device, IO's and File's through it (the codegen arm) */
+    if (nm && sp_streq(nm, "NULL")) { *out = TY_STRING; return 1; }
   }
   if (par_nm && sp_streq(par_nm, "Process")) {
     /* clock ids (codegen emits their integer values) */

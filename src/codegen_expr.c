@@ -3792,9 +3792,6 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
       if (sp_streq(nm, "SEPARATOR"))      { emit_str_literal_src(b, "/", 1, 1); return 1; }
       if (sp_streq(nm, "PATH_SEPARATOR")) { emit_str_literal_src(b, ":", 1, 1); return 1; }
       if (sp_streq(nm, "ALT_SEPARATOR"))  { buf_puts(b, "((const char *)0)"); return 1; }  /* nil off Windows (#2781) */
-      /* the null device, the name Process.spawn/File.open take to discard a
-         stream. Windows is not a target, so it is /dev/null (#4284). */
-      if (sp_streq(nm, "NULL"))           { emit_str_literal_src(b, "/dev/null", 9, 1); return 1; }
       /* the open(2) flag constants, via the C macros (#2788) */
       if (sp_streq(nm, "RDONLY"))   { buf_puts(b, "((sp_int)O_RDONLY)"); return 1; }
       if (sp_streq(nm, "WRONLY"))   { buf_puts(b, "((sp_int)O_WRONLY)"); return 1; }
@@ -3831,6 +3828,10 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
       if (sp_streq(nm, "SEEK_SET")) { buf_puts(b, "((sp_int)0)"); return 1; }
       if (sp_streq(nm, "SEEK_CUR")) { buf_puts(b, "((sp_int)1)"); return 1; }
       if (sp_streq(nm, "SEEK_END")) { buf_puts(b, "((sp_int)2)"); return 1; }
+      /* the null device, the name Process.spawn/File.open take to discard a
+         stream: IO's, and File's through it, a frozen String as CRuby's is.
+         Windows is not a target, so it is /dev/null (#4284). */
+      if (sp_streq(nm, "NULL"))     { emit_str_literal_src(b, "/dev/null", 9, 1); return 1; }
     }
     if (par_nmc && sp_streq(par_nmc, "Process") && nm) {
       if (sp_streq(nm, "CLOCK_MONOTONIC")) { buf_puts(b, "((sp_int)CLOCK_MONOTONIC)"); return 1; }

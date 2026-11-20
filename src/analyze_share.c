@@ -1560,15 +1560,18 @@ int share_frozen_string(Compiler *c, int n) {
     const char *nm = nt_str(nt, u, "name");
     return is_engine_string_const(nm) && !comp_const(c, nm);
   }
-  /* (File::NULL and the separators, static literals while the program
-     has no File of its own) */
+  /* (File::NULL and the separators, and IO::NULL, static literals while
+     the program has no File, or IO, of its own) */
   if (u >= 0 && nt_kind(nt, u) == NK_ConstantPathNode) {
     int par = nt_ref(nt, u, "parent");
     const char *pn = par >= 0 && nt_kind(nt, par) == NK_ConstantReadNode ? nt_str(nt, par, "name") : NULL;
+    const char *cn = nt_str(nt, u, "name");
     /* (or while a File of the program writes no constant of the name: a
        reopen with methods of its own, const_path_in_closed_builtin) */
-    return pn && sp_streq(pn, "File") && (comp_core_class(c, CORE_FILE) < 0 || const_path_in_closed_builtin(c, u)) &&
-           is_file_string_const(nt_str(nt, u, "name"));
+    if (pn && sp_streq(pn, "File"))
+      return (comp_core_class(c, CORE_FILE) < 0 || const_path_in_closed_builtin(c, u)) && is_file_string_const(cn);
+    return pn && sp_streq(pn, "IO") && (comp_core_class(c, CORE_IO) < 0 || const_path_in_closed_builtin(c, u)) &&
+           cn && sp_streq(cn, "NULL");
   }
   return share_frozen_literal(c, n);
 }

@@ -5630,7 +5630,12 @@ int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, 
   char setter[300];
   /* (a writer's name is its attribute's base: the call is the setter) */
   if (flags & CT_WRITER) {
-    snprintf(setter, sizeof setter, "%s=", name);
+    /* (spelled by hand: snprintf here was a measurable share of the inference passes, asked at every attribute read) */
+    size_t nl = strlen(name);
+    if (nl + 2 > sizeof setter) nl = sizeof setter - 2;
+    memcpy(setter, name, nl);
+    setter[nl] = '=';
+    setter[nl + 1] = 0;
     name = setter;
   }
   /* (a no-site ask of a reader the call sites share, made while a node's frame is open: its read stays that node's) */

@@ -46,6 +46,15 @@ rc_sha() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum "$@"; else shasum -a 256 "$@"; fi
 }
 
+# Hash a sorted NUL-delimited file list without launching a hasher per path.
+rc_sha_paths() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    xargs -0 -r sha256sum
+  else
+    xargs -0 -r shasum -a 256
+  fi
+}
+
 # Identifiers whose use makes a program's outcome depend on something outside
 # its key, or on chance: the clock, the environment, randomness, concurrency
 # and other processes, the file system (a fixture a commit edits would not
@@ -123,7 +132,7 @@ fp)
     for f in $files; do
       if [ -f "$f" ]; then rc_sha "$f"; else echo "absent $f"; fi
     done
-    find lib packages -type f \( -name '*.h' -o -name '*.inc' -o -name '*.def' \) 2>/dev/null | sort | while read -r h; do rc_sha "$h"; done
+    find lib packages -type f \( -name '*.h' -o -name '*.inc' -o -name '*.def' \) -print0 2>/dev/null | sort -z | rc_sha_paths
     cc=${RC_CC:-cc}
     $cc --version 2>&1
     $cc -dumpmachine 2>&1

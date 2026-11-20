@@ -10644,20 +10644,34 @@ int cplan_string_missing(Compiler *c, int id, const char *name, int *hook, int *
 int cplan_string_builtin_fallback(Compiler *c, int id, const char *name) {
   if (cplan_builtin_call(c, id) || nt_int(c->nt, id, "string_live_builtin", 0)) return 1;
   int cls = comp_core_class(c, CORE_STRING);
-  if (cls < 0 || !elab_method_versions(c, name) || !cplan_runs_once(c, id)) return 0;
-  int framed = elab_plan_enter(c, id);
-  const LrDef *d = NULL;
-  int state = elab_method_at(c, cls, name, 0, elab_point_of(c, id), &d);
+  if (cls < 0 || !elab_method_versions(c, name)) return 0;
+  /* (where the call runs is asked inside the plan frame: outside it, a
+     table change since the last ask, a codegen rename, rebuilt the
+     record's map per call, #12194) */
+  int framed = elab_plan_enter(c, id), ans = 0;
+  if (cplan_runs_once(c, id)) {
+    const LrDef *d = NULL;
+    int state = elab_method_at(c, cls, name, 0, elab_point_of(c, id), &d);
+    ans = state == ELAB_NO && !d;
+  }
   if (framed) elab_plan_leave(c);
-  return state == ELAB_NO && !d;
+  return ans;
 }
-PolyStringArm cplan_poly_string_arm(Compiler *c, int id, const char *name) {
+static PolyStringArm cplan_poly_string_arm_framed(Compiler *c, int id, const char *name) {
   int cls = comp_core_class(c, CORE_STRING);
   if (cls < 0 || cplan_string_builtin_fallback(c, id, name)) return CP_STR_BUILTIN;
   int undef = cplan_undef_at(c, id, cls, name);
   if (undef < 0) undef = cplan_undef_before(c, id, cls, name) || cplan_undef_stops(c, id, cls, name);
   if (undef) return cplan_has_method_missing(c, id, cls, 0) ? CP_STR_NONE : CP_STR_UNDEF;
   return call_answers(c, id, cls, name, 0, NULL) ? CP_STR_NONE : CP_STR_BUILTIN;
+}
+/* (the questions below place the call, cplan_undef_at among them: in one
+   plan frame, as cplan_string_builtin_fallback's own) */
+PolyStringArm cplan_poly_string_arm(Compiler *c, int id, const char *name) {
+  int framed = id >= 0 ? elab_plan_enter(c, id) : 0;
+  PolyStringArm a = cplan_poly_string_arm_framed(c, id, name);
+  if (framed) elab_plan_leave(c);
+  return a;
 }
 /* The super a method's body is, unconditionally (`super`, `super(n, *a)`):
    its only statement; -1 for any other body */

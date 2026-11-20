@@ -4490,9 +4490,12 @@ ckey=""; hit=0; own=0; \
           -Wl,-rpath,@*,*) cacheable=0;; \
           *) [ "$(TEST_HOST_OS)" = Darwin ] || cacheable=0;; \
         esac;; \
-      -Wl,*@*) cacheable=0;; \
-      -l?*|-L?*|-Wl,?*|-fuse-ld=?*) ;; \
-      -*) [ -z "$(TEST_SINGLE_INVOKE)" ] || pchuse="";; \
+      -l:*|-l*/*) cacheable=0;; \
+      -l?*|-L?*|-fuse-ld=bfd|-fuse-ld=gold|-fuse-ld=lld|-fuse-ld=mold) ;; \
+      -static) [ -z "$(TEST_SINGLE_INVOKE)" ] || pchuse="";; \
+      -Wl,-dead_strip|-Wl,--gc-sections|-Wl,--no-gc-sections|-Wl,--as-needed|-Wl,--no-as-needed|-Wl,--stack,8388608) ;; \
+      -Wl,*) cacheable=0;; \
+      *) cacheable=0; [ -z "$(TEST_SINGLE_INVOKE)" ] || pchuse="";; \
     esac; \
   done; \
   if [ $$cacheable = 1 ] && [ -f "$<.expected" ]; then \

@@ -76,6 +76,10 @@ The wrapper retains the Curry and receives the arguments and block of
 each later call. Boxed dispatch passes the staged Proc to the selected
 method.
 
+Lazy `drop_while` binds its predicate with the same argument layout as
+the other fused stages. Destructuring and optional, rest and numbered
+parameters are handled before testing the predicate's result.
+
 A scoped String local stores an `sp_String *`. A byte reader projects
 the payload from that object at its use. Nil uses a null handle.
 Temporary emission bindings use the type of the C declaration they name.

@@ -3945,18 +3945,25 @@ static int ver_chain_undef(Compiler *c, int rcls, int sg, const char *name) {
   return 0;
 }
 static int ct_block_self_call(Compiler *c, int node);
+static int block_self_call_in(Compiler *c, const int *par, int n, int node, const CplanTreeFacts *tree);
 /* The self the block of call bsc (ct_block_self_call) runs with, as its
    receiver spells it: the class of an instance_eval's or instance_exec's
    `K.new` where no class method `new` of the program's is on K's chain
    (-1, no program class's instance, for a builtin class's,
    `Object.new`), the scope's self (caller) for one with no receiver or on
    self, and -1 for an eval block on a constant, whose self is the class
-   value. CPLAN_SELF_UNKNOWN for any other receiver or block (a local, a
-   lambda, a define_method's, one handed to a method of the program's). A
-   send of a literal name is the call it sends (call_sent_name), as the
-   lowering that rewrites it into that call makes it, so an answer asked
-   before that pass is the one asked after it */
-static int ct_block_self_caller(Compiler *c, int bsc, int caller) {
+   value; a bare `new` in a class method, outside any block that may run
+   with another self, is an instance of the method's class where no class
+   of the program's subclasses it. CPLAN_SELF_UNKNOWN for any other
+   receiver or block (a local, a lambda, a define_method's, one handed to a
+   method of the program's). A send of a literal name is the call it sends
+   (call_sent_name), as the lowering that rewrites it into that call makes
+   it, so an answer asked before that pass is the one asked after it.
+   tree: asked of the tree and its parent map par alone, as the load
+   record asks it (cplan_block_self_untold), whose facts tell which names
+   the program defines and which classes it may subclass: a `new` is a
+   class's own where it defines no method `new` at all */
+static int ct_block_self_caller(Compiler *c, const int *par, int n, int bsc, int caller, const CplanTreeFacts *tree) {
   const NodeTable *nt = c->nt;
   const char *nm = nt_kind(nt, bsc) == NK_CallNode ? call_sent_name(nt, bsc, NULL) : NULL;
   int ie = nm && is_instance_eval_family(nm), rv = nm ? nt_ref(nt, bsc, "receiver") : -1;
@@ -3964,8 +3971,14 @@ static int ct_block_self_caller(Compiler *c, int bsc, int caller) {
   NodeKind rk = rv >= 0 ? nt_kind(nt, rv) : NK_SelfNode;
   if (rk == NK_SelfNode) return ie ? caller : -1;
   if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) return -1;
-  int nr = rk == NK_CallNode && is_new_name(nt_str(nt, rv, "name")) ? nt_ref(nt, rv, "receiver") : -1;
-  if (!ie || nr < 0 || (nt_kind(nt, nr) != NK_ConstantReadNode && nt_kind(nt, nr) != NK_ConstantPathNode)) return CPLAN_SELF_UNKNOWN;
+  int nw = ie && rk == NK_CallNode && is_new_name(call_sent_name(nt, rv, NULL)), nr = nw ? nt_ref(nt, rv, "receiver") : -1;
+  const Scope *cs = nw && (nr < 0 || nt_kind(nt, nr) == NK_SelfNode) ? comp_scope_of(c, bsc) : NULL;
+  int own = nw && (!tree || !tree->takes(tree->ctx, "new"));
+  if (cs && cs->is_cmethod && cs->class_id >= 0 && block_self_call_in(c, par, n, bsc, tree) < 0)
+    return own && (tree ? !tree->subclassed(tree->ctx, bsc) : cplan_user_new(c, -1, cs->class_id) < 0 && !class_has_subclass(c, cs->class_id))
+           ? cs->class_id : CPLAN_SELF_UNKNOWN;
+  if (nr < 0 || (nt_kind(nt, nr) != NK_ConstantReadNode && nt_kind(nt, nr) != NK_ConstantPathNode)) return CPLAN_SELF_UNKNOWN;
+  if (tree) return own ? -1 : CPLAN_SELF_UNKNOWN;
   int ci = const_node_class_index(c, nr);
   /* (a class of the program's own `new` on its chain, wherever the program
      defines it, may answer anything: cplan_user_new) */
@@ -3974,8 +3987,16 @@ static int ct_block_self_caller(Compiler *c, int bsc, int caller) {
 }
 /* See call_plan.h. */
 int cplan_protected_caller(Compiler *c, int id, int caller) {
-  int bsc = ct_block_self_call(c, id);
-  return bsc >= 0 ? ct_block_self_caller(c, bsc, caller) : caller;
+  int n = 0, framed = id >= 0 ? elab_plan_enter(c, id) : 0;
+  const int *par = elab_node_parents(c, &n);
+  int bsc = block_self_call_in(c, par, n, id, NULL), r = bsc >= 0 ? ct_block_self_caller(c, par, n, bsc, caller, NULL) : caller;
+  if (framed) elab_plan_leave(c);
+  return r;
+}
+/* See call_plan.h. */
+int cplan_block_self_untold(Compiler *c, const int *par, int n, int node, const CplanTreeFacts *tf) {
+  int bsc = block_self_call_in(c, par, n, node, tf);
+  return bsc >= 0 && ct_block_self_caller(c, par, n, bsc, -1, tf) == CPLAN_SELF_UNKNOWN;
 }
 /* Is a protected version of name on program class rcls's instance chain
    closed to call id: is its caller's self (an instance of the class its
@@ -3984,7 +4005,10 @@ int cplan_protected_caller(Compiler *c, int id, int caller) {
    no instance of a class on the chain that holds a version of the name,
    the owner a protected method is open to (cplan_protected_owner_open)?
    Where nothing tells the caller's class, the scope's self is the caller,
-   as where the record holds no body versions (method_vis_for_caller) */
+   as where the record holds no body versions (method_vis_for_caller): the
+   versions such a call meets are the ones that form has too, since the
+   record keeps a method body's protected word or def of a name such a
+   call names in the unplaced form (lr_body_forms) */
 static int ver_protected_closed(Compiler *c, int id, int rcls, const char *name) {
   if (id < 0 || !elab_method_may_be_protected(c, name)) return 0;
   const Scope *cs = comp_scope_of(c, id);
@@ -5150,8 +5174,8 @@ static int cplan_record_new_gap(Compiler *c, int id) {
    handed on by a call that reaches its target by what it is given (send,
    call, new: is_opaque_reaching_call) may run later on another object
    (`o.instance_exec(&b)`), so its self is not known. */
-static int ct_block_keeps_self(Compiler *c, const char *rn, const char *nm) {
-  if (elab_program_may_take(c, nm)) return 0;
+static int ct_block_keeps_self(Compiler *c, const char *rn, const char *nm, const CplanTreeFacts *tree) {
+  if (tree ? tree->takes(tree->ctx, nm) : elab_program_may_take(c, nm)) return 0;
   return is_async_code_entry(rn, nm) || !is_opaque_reaching_call(nm);
 }
 /* The nearest call around node whose literal block may run with another
@@ -5161,12 +5185,19 @@ static int ct_block_keeps_self(Compiler *c, const char *rn, const char *nm) {
    a lambda literal is its own such node. A def or class body ends the
    climb. */
 static int ct_block_self_call(Compiler *c, int node) {
-  const NodeTable *nt = c->nt;
-  int n = 0, found = -1;
+  int n = 0;
   /* (the parents are read in the record's frame, which a node a pass appended since takes the facts of its origin
      in: outside it, each ask after an append rebuilds the map) */
   int framed = node >= 0 ? elab_plan_enter(c, node) : 0;
   const int *par = elab_node_parents(c, &n);
+  int found = block_self_call_in(c, par, n, node, NULL);
+  if (framed) elab_plan_leave(c);
+  return found;
+}
+/* ...over the parent map par of n nodes (tree: as ct_block_self_caller) */
+static int block_self_call_in(Compiler *c, const int *par, int n, int node, const CplanTreeFacts *tree) {
+  const NodeTable *nt = c->nt;
+  int found = -1;
   for (int p = node >= 0 && node < n ? par[node] : -1, k = 0; p >= 0 && p < n && k < n; p = par[p], k++) {
     NodeKind pk = nt_kind(nt, p);
     if (pk == NK_DefNode || pk == NK_ClassNode || pk == NK_ModuleNode || pk == NK_SingletonClassNode) break;
@@ -5177,9 +5208,8 @@ static int ct_block_self_call(Compiler *c, int node) {
     const char *rn = rv >= 0 && nt_kind(nt, rv) == NK_ConstantReadNode ? nt_str(nt, rv, "name") : NULL;
     /* (a send of a literal name is the call it sends, as the lowering makes it; of a computed one, opaque) */
     const char *nm = call_sent_name(nt, call, NULL);
-    if (!nm || is_block_self_call(rn, nm) || !ct_block_keeps_self(c, rn, nm)) { found = call; break; }
+    if (!nm || is_block_self_call(rn, nm) || !ct_block_keeps_self(c, rn, nm, tree)) { found = call; break; }
   }
-  if (framed) elab_plan_leave(c);
   return found;
 }
 static int ct_runs_on_main(Compiler *c, int id);

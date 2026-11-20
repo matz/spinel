@@ -1217,16 +1217,35 @@ int cplan_protected_owner_open(Compiler *c, int caller, int singleton, int owner
 /* The class of the self call id runs with, for a protected method's caller
    (cplan_protected_owner_open): in an instance_eval or instance_exec block,
    an instance of the class its receiver spells (`K.new` where the program
-   defines no `new` on K's chain; -1 for a builtin class's, or for an eval
-   block on a constant, whose self is the class value); caller, the scope's
-   self, outside any block that may run with another self
+   defines no `new` on K's chain, a bare `new` in a class method of a class
+   no class of the program's subclasses; -1 for a builtin class's, or for
+   an eval block on a constant, whose self is the class value); caller, the
+   scope's self, outside any block that may run with another self
    (ct_block_self_call) and in one with no receiver or on self.
    CPLAN_SELF_UNKNOWN where nothing tells (a local or any other receiver, a
    lambda, a define_method's block, one handed to a method of the
    program's): there the scope's self is the caller, both for the record's
-   body versions and for the table's visibility */
+   versions and for the table's visibility, and the record keeps a method
+   body's protected word or def of the call's name unplaced
+   (cplan_block_self_untold) */
 enum { CPLAN_SELF_UNKNOWN = -2 };
 int cplan_protected_caller(Compiler *c, int id, int caller);
+/* The facts of the tree alone cplan_block_self_untold asks of its caller:
+   takes, may the program define a method nm (or a method_missing);
+   subclassed, may a class of the program's have the class whose class
+   method holds node as its superclass (yes for a node in no class
+   method) */
+typedef struct CplanTreeFacts {
+  int (*takes)(const void *ctx, const char *nm);
+  int (*subclassed)(const void *ctx, int node);
+  const void *ctx;
+} CplanTreeFacts;
+/* Does nothing tell the self node runs with (CPLAN_SELF_UNKNOWN), asked of
+   the tree and its parent map par of n nodes alone, with tf's facts, as
+   the load record's bars ask it? For a call of the tree the record walks,
+   it answers yes wherever the call plan finds its self unknown, while tf
+   holds every name the program defines and every class it subclasses */
+int cplan_block_self_untold(Compiler *c, const int *par, int n, int node, const CplanTreeFacts *tf);
 TyKind cplan_poly_arg_storage(Compiler *c, int id);
 /* The re-entry of a call on an object whose static class cannot answer the
    name while one of its subclasses can (#4023). Computed afresh. */

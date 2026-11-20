@@ -2788,10 +2788,15 @@ static int lr_body_followed(Compiler *c, const int *par, int n, int node) {
    - subs: the paths a class header's superclass constant names
      (lr_body_ref_key); subany: a superclass constant the tree does not fix;
      anon: a superclass no constant names, a Class.new with a superclass, a
-     dup or a clone of a constant (a class the tree names no superclass of) */
+     dup or a clone of a constant (a class the tree names no superclass of);
+   - untold: the names a call on a receiver other than self calls (a
+     public_send's, the name it sends) in a block whose self nothing tells
+     (cplan_block_self_untold), of the names a method body's protected word
+     or def names (prot); defd: every name a definition above makes,
+     wherever it is */
 typedef struct LrBodyNames {
   ANameIndex own, sites, hkey;
-  ANameHash mod, cread, unsure, cw, subs;
+  ANameHash mod, cread, unsure, cw, subs, prot, untold, defd;
   const int *par;
   char **keys;
   unsigned char *kdone;
@@ -2821,6 +2826,7 @@ static int lr_body_header(const NodeTable *nt, const int *par, int n, int node) 
 static void lr_body_names_own(Compiler *c, const int *par, int n, int node, int self, int sg, const char *nm, int w, LrBodyNames *x) {
   const NodeTable *nt = c->nt;
   int fs = LR_FS_NONE, cls = nm && self >= 0 ? lr_body_frame(c, par, n, node, -1, self, &fs) : -1;
+  if (nm) anh_add(&x->defd, nm);
   if (cls >= 0 && cls < c->nclasses) ani_add(&x->own, nm, 4 * cls + 2 * (sg || fs == LR_FS_SCLASS || fs == LR_FS_IEVAL_SCLASS) + w);
   for (int v = node, p; nm && v >= 0 && v < n && (p = par[v]) >= 0 && p < n; v = p)
     if (nt_kind(nt, p) == NK_ClassNode || nt_kind(nt, p) == NK_ModuleNode) {
@@ -2880,6 +2886,29 @@ static const char *lr_body_ref_key(Compiler *c, LrBodyNames *x, const char *leaf
   if (core && k && !sp_streq(k, leaf)) return NULL;
   return k ? k : core ? "" : NULL;
 }
+/* The facts cplan_block_self_untold asks of the tree (CplanTreeFacts) */
+typedef struct LrBodyFacts { Compiler *c; LrBodyNames *x; } LrBodyFacts;
+/* ...may the program define a method nm: a def, an attribute, a
+   define_method, an alias_method or an alias of the name anywhere, or a
+   method_missing? */
+static int lr_body_names_takes(const void *ctx, const char *nm) {
+  const LrBodyNames *x = ((const LrBodyFacts *)ctx)->x;
+  return !nm || x->mm || anh_has(&x->defd, nm);
+}
+static int lr_body_cmethod(const NodeTable *nt, const int *par, int n, int node);
+static int lr_body_header_subclassed(Compiler *c, LrBodyNames *x, int d, const char **dk);
+/* ...may a class of the program's have as its superclass the class whose
+   class method holds node (lr_body_header_subclassed; yes outside one)? */
+static int lr_body_names_subclassed(const void *ctx, int node) {
+  const LrBodyFacts *f = ctx;
+  int d = lr_body_cmethod(f->c->nt, f->x->par, f->x->n, node);
+  return d < 0 || lr_body_header_subclassed(f->c, f->x, d, NULL);
+}
+/* ...a call of nm at node id, on a receiver other than self: untold where nm is a protected name of prot and the
+   call sits in a block whose self nothing tells (cplan_block_self_untold) */
+static void lr_body_untold_call(Compiler *c, const int *par, int n, int id, const char *nm, LrBodyNames *x, const CplanTreeFacts *tf) {
+  if (nm && anh_has(&x->prot, nm) && !anh_has(&x->untold, nm) && cplan_block_self_untold(c, par, n, id, tf)) anh_add(&x->untold, nm);
+}
 static void lr_body_names_read(Compiler *c, const int *par, int n, LrBodyNames *x) {
   const NodeTable *nt = c->nt;
   *x = (LrBodyNames){ 0 };
@@ -2889,6 +2918,7 @@ static void lr_body_names_read(Compiler *c, const int *par, int n, LrBodyNames *
       const char *dn = nt_str(nt, id, "name");
       int dr = nt_ref(nt, id, "receiver");
       x->mm |= is_method_missing_name(dn);
+      if (dr < 0 && lr_body_def(nt, par, n, id) >= 0 && lr_body_def_vis(nt, par, n, id, 0) == BVIS_PROTECTED) anh_add(&x->prot, dn);
       lr_body_names_own(c, par, n, id, dr < 0 ? 0 : nt_kind(nt, dr) == NK_SelfNode ? 1 : -1, dr >= 0, dn, 0, x);
     }
     else if (k == NK_AliasMethodNode) {
@@ -2923,6 +2953,8 @@ static void lr_body_names_read(Compiler *c, const int *par, int n, LrBodyNames *
     const int *av = call_args(nt, id, &ac);
     const char *a0 = ac >= 1 ? vis_arg_name(nt, av[0]) : NULL, *rl = lr_leaf(nt, rv);
     if (!cn) continue;
+    if (lr_body_word(nt, id) == BVIS_PROTECTED && lr_body_def(nt, par, n, id) >= 0)
+      for (int i = 0; lr_word_name(nt, id, i); i++) anh_add(&x->prot, lr_word_name(nt, id, i));
     /* (the definitions: attributes, define_method, alias_method) */
     if (rself && is_attr_name(cn))
       for (int i = 0; i < ac; i++) {
@@ -2972,10 +3004,34 @@ static void lr_body_names_read(Compiler *c, const int *par, int n, LrBodyNames *
     if (sp >= 0 && lr_leaf(nt, sp) && !sk) x->subany = 1;
     else if (sk && *sk) anh_add(&x->subs, sk);
   }
+  /* (the calls of those names in a block whose self nothing tells: a call's own name, a public_send's the name it
+     sends (a send's ignores the visibility), and the calls the syntax table says the node makes on a receiver, an
+     op-assign's reader and writer, an index op-assign's [] and []=, a target's writer (nt_implied_calls)) */
+  LrBodyFacts bf = { c, x };
+  CplanTreeFacts tf = { lr_body_names_takes, lr_body_names_subclassed, &bf };
+  for (int id = 0; x->prot.n && id < n; id++) {
+    if (nt_kind(nt, id) == NK_CallNode) {
+      const char *cn = nt_str(nt, id, "name");
+      int rv = nt_ref(nt, id, "receiver");
+      if (cn && is_public_send(cn)) cn = call_sent_name(nt, id, NULL);
+      if (rv >= 0 && nt_kind(nt, rv) != NK_SelfNode) lr_body_untold_call(c, par, n, id, cn, x, &tf);
+    }
+    NtImplied rb[16], *rows = rb;
+    int nr = nt_implied_calls(nt, id, rb, 16);
+    if (nr > 16) {
+      if (!(rows = malloc(sizeof *rows * (size_t)nr))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      nt_implied_calls(nt, id, rows, nr);
+    }
+    for (int i = 0; i < nr; i++)
+      if (rows[i].operand != NTI_SELF && (rows[i].operand < 0 || nt_kind(nt, rows[i].operand) != NK_SelfNode))
+        lr_body_untold_call(c, par, n, id, rows[i].name, x, &tf);
+    if (rows != rb) free(rows);
+  }
 }
 static void lr_body_names_free(LrBodyNames *x) {
   ani_free(&x->own); ani_free(&x->sites);
   anh_free(&x->mod); anh_free(&x->cread); anh_free(&x->unsure); anh_free(&x->cw); anh_free(&x->subs);
+  anh_free(&x->prot); anh_free(&x->untold); anh_free(&x->defd);
   for (int i = 0; x->keys && i < x->hkey.n; i++) free(x->keys[i]);
   ani_free(&x->hkey);
   free(x->keys); free(x->kdone); free(x->hid);
@@ -3051,6 +3107,17 @@ static int lr_body_cmethod(const NodeTable *nt, const int *par, int n, int node)
   }
   return -1;
 }
+/* ...may a class of the program's have as its superclass the class of the
+   header around class method d (subs, subany, anon)? *dk: that header's
+   path (lr_body_key) */
+static int lr_body_header_subclassed(Compiler *c, LrBodyNames *x, int d, const char **dk) {
+  const NodeTable *nt = c->nt;
+  int h = x->par[d];
+  while (h >= 0 && h < x->n && nt_kind(nt, h) != NK_ClassNode && nt_kind(nt, h) != NK_ModuleNode) h = x->par[h];
+  const char *k = lr_body_key(c, x, h, 0);
+  if (dk) *dk = k;
+  return x->anon || x->subany || (k ? anh_has(&x->subs, k) : x->subs.n > 0);
+}
 /* ...may class method d of class cls run with a self other than cls? Not
    where no class of the program may have the class of d's header as its
    superclass (subs, subany, anon); else where the tree does not fix that
@@ -3065,13 +3132,10 @@ static int lr_body_cmethod(const NodeTable *nt, const int *par, int n, int node)
    runs on) */
 static int lr_body_self_unsure(Compiler *c, LrBodyNames *x, int d, int cls) {
   const NodeTable *nt = c->nt;
-  const char *dn = d >= 0 ? nt_str(nt, d, "name") : NULL;
+  const char *dn = d >= 0 ? nt_str(nt, d, "name") : NULL, *dk = NULL;
   if (d < 0) return 0;
   if (cls < 0 || cls >= c->nclasses) return 1;
-  int h = x->par[d];
-  while (h >= 0 && h < x->n && nt_kind(nt, h) != NK_ClassNode && nt_kind(nt, h) != NK_ModuleNode) h = x->par[h];
-  const char *dk = lr_body_key(c, x, h, 0);
-  if (!x->anon && !x->subany && (dk ? !anh_has(&x->subs, dk) : !x->subs.n)) return 0;
+  if (!lr_body_header_subclassed(c, x, d, &dk)) return 0;
   if (!dk || !dn || x->dyn || anh_has(&x->unsure, dn)) return 1;
   for (int i = ani_first(&x->sites, dn); i < x->sites.n && sp_streq(x->sites.e[i].name, dn); i++) {
     int v = x->sites.e[i].v;
@@ -3090,29 +3154,37 @@ static int lr_body_self_unsure(Compiler *c, LrBodyNames *x, int d, int cls) {
    start, where the inherited method's visibility holds until the word
    runs; a name nothing defines raises NameError there), one a module
    body defines, or, on the class side, one a reader that reads no
-   class-side version names (lr_cside_unfollowed) */
+   class-side version names (lr_cside_unfollowed); and for a method body's
+   protected word, a name a call in a block whose self nothing tells calls
+   (untold): the call plan takes the scope's self there, which a protected
+   version would close where the block runs with an instance of the class */
 static int lr_body_word_barred(Compiler *c, const int *par, int n, int node, LrBodyNames *x) {
   const NodeTable *nt = c->nt;
   int fs, cls = lr_body_frame(c, par, n, node, -1, 1, &fs), sg = fs == LR_FS_SCLASS || fs == LR_FS_IEVAL_SCLASS;
   if (x->mm || (cls >= 0 && cls < c->nclasses && comp_class_is_module(c, &c->classes[cls])) || !lr_body_followed(c, par, n, node) ||
       lr_body_self_unsure(c, x, lr_body_cmethod(nt, par, n, node), cls))
     return 1;
+  int untold = lr_body_word(nt, node) == BVIS_PROTECTED && lr_body_def(nt, par, n, node) >= 0;
   for (int k = 0; lr_word_name(nt, node, k); k++) {
     const char *nm = lr_word_name(nt, node, k);
-    if ((!lr_body_names_owns(x, cls, sg, nm) && lr_body_names_known(x, nm)) || lr_body_names_mod(x, nm) || (sg && lr_cside_unfollowed(x, nm))) return 1;
+    if ((!lr_body_names_owns(x, cls, sg, nm) && lr_body_names_known(x, nm)) || lr_body_names_mod(x, nm) || (sg && lr_cside_unfollowed(x, nm)) ||
+        (untold && anh_has(&x->untold, nm)))
+      return 1;
   }
   return 0;
 }
 /* ...does a body's non-public def at node d bar its name (lr_body_forms)? In a body that may reach code the record
    cannot follow (lr_body_followed), in a class method a call may run on a subclass, which the word the def's value is
-   given to acts on (lr_body_self_unsure), and for a class method's def a reader that reads no class-side version
-   names (lr_cside_unfollowed) */
+   given to acts on (lr_body_self_unsure), for a class method's def a reader that reads no class-side version
+   names (lr_cside_unfollowed), and for a protected instance method's def a call in a block whose self nothing tells
+   (untold, as for a protected word) */
 static int lr_body_def_barred(Compiler *c, const int *par, int n, int d, LrBodyNames *x) {
   const NodeTable *nt = c->nt;
   int fs, dr = nt_ref(nt, d, "receiver"), cls = lr_body_frame(c, par, n, d, -1, 1, &fs);
   int cside = (dr >= 0 && nt_kind(nt, dr) == NK_SelfNode) || fs == LR_FS_SCLASS || fs == LR_FS_IEVAL_SCLASS;
   return !lr_body_followed(c, par, n, d) || (cside && lr_cside_unfollowed(x, nt_str(nt, d, "name"))) ||
-         lr_body_self_unsure(c, x, lr_body_cmethod(nt, par, n, d), cls);
+         lr_body_self_unsure(c, x, lr_body_cmethod(nt, par, n, d), cls) ||
+         (dr < 0 && lr_body_def(nt, par, n, d) >= 0 && lr_body_def_vis(nt, par, n, d, 0) == BVIS_PROTECTED && anh_has(&x->untold, nt_str(nt, d, "name")));
 }
 static void lr_body_forms(Compiler *c, const int *par, int n) {
   const NodeTable *nt = c->nt;

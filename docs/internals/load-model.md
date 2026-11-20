@@ -317,7 +317,7 @@ would hide the method CRuby has; a send of a visibility word is none);
 in a body, also every other
 entry it makes (an alias, an undef, an accessor, a `define_method`, a
 `define_singleton_method`, a `module_function` copy); at the top level, an
-alias of a name barred so. Five more bars keep a body's word, or its
+alias of a name barred so. Six more bars keep a body's word, or its
 non-public def, in the form it has where the record holds no body
 versions, until the readers it needs read the version cells; each says
 in the source what drops it. They ask what one walk over the tree
@@ -370,7 +370,19 @@ gathers (`lr_body_names_read`), so each ask is a lookup:
   `defined?` of a call of it, or a call or a send of it on a receiver that
   is no constant or self. Those readers answer from the table, so a
   version there would let a guarded call raise; the class side has no
-  face entries or visibility cells yet.
+  face entries or visibility cells yet;
+- a protected word or a protected def in a method body, where a call on a
+  receiver other than self (or a `public_send`) in a block whose self
+  nothing tells names it (`cplan_block_self_untold`: a block handed to a
+  method of the program, a lambda, a `define_method` block, an
+  `instance_exec` on a local; asked of the tree and the names the program
+  defines alone). The call plan takes the scope's self as such a call's
+  caller, so a protected version would close the call where the block
+  runs with an instance of the class; the form with no body versions
+  keeps the method's visibility there. A block the tree tells the self of
+  (an `instance_exec` on `K.new` or on self, an eval block on a constant,
+  a bare `new` in a class method of a class nothing subclasses, a block of
+  a builtin that keeps self) is no bar.
 
 A public def, a body's version as above, and a public version at the top
 level (an alias, an accessor, a `define_method`, an undef), are versions

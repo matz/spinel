@@ -141,8 +141,7 @@ int share_node_carry_kind_unlifted(const Compiler *c, int n, int *op);
    asks for a String in the plan's form through emit_str_form
    (codegen_internal.h). */
 enum { SPN_BYTES, SPN_NEW, SPN_OBJECT };              /* need */
-enum { SPS_BYTES, SPS_HANDLE };                       /* supply */
-enum { SPF_BYTES, SPF_HANDLE, SPF_COPY };             /* form */
+enum { SPF_BYTES, SPF_HANDLE };                       /* form */
 /* The consumer takes the value, stores it in a multiple assignment,
    or boxes it for a slot, element, or argument. The memo records the
    value's need. */
@@ -192,7 +191,7 @@ int share_plan_multi_renders(Compiler *c, int mw, int e);
 /* ...and emit_expr gives it as the handle already (share_plan.c)? */
 int share_plan_emits_handle(Compiler *c, int e);
 typedef struct {
-  unsigned char need, form;
+  unsigned char form;
 } SharePlan;
 /* Fill the memo of each node's need (the end of repr_seal); free it with
    the Compiler. */
@@ -202,8 +201,6 @@ void share_plan_free(Compiler *c);
    the value's need from the memo where the node is read as itself, else
    asked live. The supply is always asked live because it reads repr_of. */
 SharePlan share_plan_of(Compiler *c, int v, int role);
-/* The plan for a consumer in `role` of node v, whose need is given. */
-SharePlan share_plan_with_need(Compiler *c, int v, int role, int need);
 /* The producer of node v's handle where codegen is (SPK_*), asked live as
    the supply is, whatever a consumer needs; *operand (may be NULL) is the
    node whose supply an SPK_SELF, SPK_OPERAND or SPK_SEQUENCE value hands

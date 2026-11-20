@@ -485,6 +485,13 @@ static void interp_plan(Compiler *c, int id, InterpPlan *pl, int tail, int write
         buf_puts(&conv, t == TY_IO ? "sp_io_to_s(" : "sp_Dir_to_s(");
         EMIT_IV(); buf_puts(&conv, ")");
       }
+      else if (t == TY_PROCESS_STATUS) {
+        /* a Process::Status has a to_s of its own ("pid N exit 3"), which
+           CRuby's interpolation shows; the handle arm below would show its
+           inspect. NULL is nil, which interpolates as the empty string. */
+        buf_puts(&conv, "sp_process_status_str(");
+        EMIT_IV(); buf_puts(&conv, ", 0)");
+      }
       else if (ty_nullable_builtin_id(t)) {
         /* a reference-backed builtin handle (Proc, Fiber, Thread, ...):
            renders as its #inspect form rather than refusing the interpolation.

@@ -1,0 +1,10 @@
+pid N exit 3
+pid N exit 3
+pid N exit 3
+pid N exit 3, then
+[#<Process::Status: pid N exit 3>]
+[#<Process::Status: pid N exit 3>]
+pid N exit 3
+#<Process::Status: pid N exit 3>
+pid N SIGTERM (signal 15)
+pid N SIGTERM (signal 15)

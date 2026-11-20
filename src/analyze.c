@@ -53000,16 +53000,19 @@ static void an_phase_post_fixpoint(Compiler *c) {
      downstream, it reads as UNDEFINED: every reference reports the constant as
      defined nowhere and raises NameError, where CRuby answers the empty array
      (#4051). Default it the way an empty literal bound to a local defaults. This
-     runs after the fixpoint, so any real element evidence still wins. */
+     runs after the fixpoint, so any real element evidence still wins. A bare
+     `Array.new` is as empty, and so is a bare `Hash.new`, which defaults to
+     the general Hash: `TABLE = Hash.new` read before (or without) any store
+     was the same NameError. */
   for (int id = 0; id < c->nt->count; id++) {
     if (nt_kind(c->nt, id) != NK_ConstantWriteNode) continue;
     LocalVar *cwv = comp_const_at(c, id);
     if (!cwv || cwv->type != TY_UNKNOWN) continue;
     int cwval = nt_ref(c->nt, id, "value");
-    if (cwval < 0 || nt_kind(c->nt, cwval) != NK_ArrayNode) continue;
-    int cwn_els = 0;
-    nt_arr(c->nt, cwval, "elements", &cwn_els);
-    if (cwn_els == 0) lv_set_type(cwv, TY_POLY_ARRAY);
+    if (cwval < 0 || !node_is_empty_container(c, cwval)) continue;
+    int kind = an_empty_container_kind(c, cwval);
+    if (kind == 1) lv_set_type(cwv, TY_POLY_ARRAY);
+    else if (kind == 2) lv_set_type(cwv, TY_POLY_POLY_HASH);
   }
 
   /* Backstop: a parameter still unknown but with a `= nil` default is a

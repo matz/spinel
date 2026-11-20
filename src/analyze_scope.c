@@ -6790,7 +6790,9 @@ static TyKind slot_hash_variant_from_writes(Compiler *c, NodeKind rk, const char
     }
     int wr = nt_ref(nt, w, "receiver");
     if (wr < 0 || nt_kind(nt, wr) != rk) continue;
-    const char *rn = nt_str(nt, wr, "name");
+    /* a constant's slot goes by its key (`B__Map` where another constant or
+       class shares the leaf `Map`), which its reads carry beside their name */
+    const char *rn = rk == NK_ConstantReadNode ? const_key_at(c, wr) : nt_str(nt, wr, "name");
     if (!rn || !sp_streq(rk == NK_GlobalVariableReadNode ? rn + 1 : rn, sname)) continue;
     int wa = nt_ref(nt, w, "arguments");
     int wan = 0; const int *wav = wa >= 0 ? nt_arr(nt, wa, "arguments", &wan) : NULL;

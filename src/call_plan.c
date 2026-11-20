@@ -4291,8 +4291,11 @@ static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigne
     int ar = ver_call_arity(c, id, rcls, 0, name, mi), ix = ver_entry_ix(c, VER_ENTRY_CHAIN, 0, rcls, 0, name, ar, face);
     if (ix < 0 && !(flags & CT_IMPLIED) && c->ver_built && !ml->survey && own && comp_scope_may_run(c, (int)(own - c->scopes)))
       ver_absent_note(c, rcls, 0, name, mi, ar, 0, 1, face);
-    if (ix >= 0) vi = c->ver_entries[ix].scope, dc = rcls;
-    ml->n = ix >= 0 || ml->survey ? 2 : ml->n;
+    /* (an entry the build asked for but made no method of keeps scope -1,
+       ver_entry_make: as with none asked, the version stays) */
+    int ex = ix >= 0 ? c->ver_entries[ix].scope : -1;
+    if (ex >= 0) vi = ex, dc = rcls;
+    ml->n = ex >= 0 || ml->survey ? 2 : ml->n;
   }
   if (!(flags & CT_TOP)) ml->def_class = dc;
   ml->kind = c->scopes[vi].entry ? ML_ENTRY : ML_METHOD;

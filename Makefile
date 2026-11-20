@@ -5010,6 +5010,9 @@ infer-test-1: $(SPINEL) $(SP_RT_LIB)
 	  { echo "infer-test: FAIL (a while, times, each_index, Range each, upto or zip over two arrays no longer reads the second one in place behind one test: hcv_end)"; ok=0; }; \
 	[ "$$(awk '/^static inline [^(]* sp_(rb_)?(w_store|t_reindex)\(.*\{$$/,/^\}/' "$$tmp/lcb.c" | grep -c '_hcvr')" = 0 ] || \
 	  { echo "infer-test: FAIL (a loop that stores an element or reassigns its index was emitted twice)"; ok=0; }; \
+	$(SPINEL) test/array_fill_span.rb -c --no-line-map -o "$$tmp/afs.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (array_fill_span: -c)"; ok=0; }; \
+	[ "$$(grep -cE 'sp_(Int|Float)Array_fill_span\(' "$$tmp/afs.c")" -ge 20 ] && [ "$$(grep -cE 'sp_(Int|Float)Array_set(_nilable)?\(' "$$tmp/afs.c")" = 0 ] || \
+	  { echo "infer-test: FAIL (fill on an Integer or Float Array stores slot by slot again instead of its span: sp_<K>Array_fill_span)"; ok=0; }; \
 	$(SPINEL) test/loop_block_value_while_reads.rb -c --no-line-map -o "$$tmp/lbv.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (loop_block_value_while_reads: -c)"; ok=0; }; \
 	[ "$$(awk '/^static inline [^(]* sp_(rb_)?(dots|dots_int|dots_from_one)\(.*\{$$/,/^\}/' "$$tmp/lbv.c" | grep -c '_hcvr[0-9]*_[0-9]* >= ')" -ge 3 ] || \
 	  { echo "infer-test: FAIL (a while in a map block's value no longer sees the start ahead of it and reads the second row in place: hc_prev_stmt)"; ok=0; }; \

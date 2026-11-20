@@ -226,6 +226,13 @@ static SP_COLD void sp_IntArray_drop_nilbits(sp_IntArray*a);
    across a store) */
 static SP_NOINLINE SP_COLD void sp_IntArray_clr_nil(sp_IntArray*a,sp_int pi){sp_nilbit_clr(a->nilbits,pi);if((uint64_t)pi>=a->nil_lo&&!sp_nilbit_get(a->nilbits,a->nil_lo)&&(a->nil_lo=sp_nil_lo_up(a->nilbits,a->nil_lo,a->cap))==SP_NIL_LO_NONE)sp_IntArray_drop_nilbits(a);}
 static inline void sp_IntArray_set(sp_IntArray*a,sp_int i,sp_int v){if(SP_LIKELY(a&&!a->frozen&&i>=0&&i<a->len)){a->data[a->start+i]=v;if(SP_UNLIKELY(a->nilbits))sp_IntArray_clr_nil(a,a->start+i);return;}sp_IntArray_set_cold(a,i,v);}
+/* `fill(v, s, len)`'s stores, slots s up to e (s >= 0): what a sp_IntArray_set
+   per slot does, with its checks made once. The store at e - 1 goes first
+   when it is past the end (it grows the array and makes the gap before s
+   nil, as one store past the end does) or the receiver is frozen (it raises
+   as the first store would); the slots are then written in one run, which
+   the C compiler can vectorize where a store per slot re-read the header. */
+static inline void sp_IntArray_fill_span(sp_IntArray*a,sp_int s,sp_int e,sp_int v){if(!a||s>=e)return;if(SP_UNLIKELY(a->frozen||e>a->len))sp_IntArray_set(a,e-1,v);sp_int*d=a->data+a->start;for(sp_int i=s;i<e;i++)d[i]=v;if(SP_UNLIKELY(a->nilbits))sp_nilbits_clear_range(a->nilbits,a->start+s,a->start+e);}
 /* `a[i] = nil`: the slot's value is 0 and its bit set (the index rules of
    sp_IntArray_set: a negative index from the end, IndexError below -len, a
    gap of nils past the end) */
@@ -441,6 +448,8 @@ static SP_NOINLINE SP_COLD void sp_FloatArray_clr_nil(sp_FloatArray*a,sp_int i){
    nil-bit clear made it too big to inline (bm_matmul under promote) */
 static SP_NOINLINE SP_COLD void sp_FloatArray_set_cold(sp_FloatArray*a,sp_int i,sp_float v){if(!a)return;if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_FLT_ARRAY);return;}sp_int orig=i;if(i<0)i+=a->len;if(i<0)sp_raise_cls("IndexError",sp_sprintf("index %lld too small for array; minimum: %lld",(long long)orig,(long long)-a->len));while(i>=a->cap)sp_FloatArray_set_cap(a,a->cap*2+1);if(i>=a->len)sp_FloatArray_fill_to(a,i);a->data[i]=v;if(SP_UNLIKELY(a->nilbits))sp_FloatArray_clr_nil(a,i);}  /* the gap is nil, not 0.0 (#3836) */
 static inline void sp_FloatArray_set(sp_FloatArray*a,sp_int i,sp_float v){if(SP_LIKELY(a&&!a->frozen&&(unsigned long long)i<(unsigned long long)a->len)){a->data[i]=v;if(SP_UNLIKELY(a->nilbits))sp_FloatArray_clr_nil(a,i);return;}sp_FloatArray_set_cold(a,i,v);}
+/* `fill(v, s, len)` on a Float Array: see sp_IntArray_fill_span */
+static inline void sp_FloatArray_fill_span(sp_FloatArray*a,sp_int s,sp_int e,sp_float v){if(!a||s>=e)return;if(SP_UNLIKELY(a->frozen||e>a->len))sp_FloatArray_set(a,e-1,v);sp_float*d=a->data;for(sp_int i=s;i<e;i++)d[i]=v;if(SP_UNLIKELY(a->nilbits))sp_nilbits_clear_range(a->nilbits,s,e);}
 static SP_NOINLINE SP_COLD void sp_FloatArray_set_nil(sp_FloatArray*a,sp_int i){if (SP_UNLIKELY(!a)) sp_nil_recv("[]=");if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_FLT_ARRAY);return;}sp_int orig=i;if(i<0)i+=a->len;if(i<0)sp_raise_cls("IndexError",sp_sprintf("index %lld too small for array; minimum: %lld",(long long)orig,(long long)-a->len));while(i>=a->cap)sp_FloatArray_set_cap(a,a->cap*2+1);if(i>=a->len)sp_FloatArray_fill_to(a,i);a->data[i]=0.0;if(!a->nilbits)SP_NILBITS_NEW_A(a);SP_NILBIT_SET_A(a, i);}
 static inline void sp_FloatArray_oset(sp_FloatArray*a,sp_int i,sp_ofloat o){if(SP_UNLIKELY(o.nil))sp_FloatArray_set_nil(a,i);else sp_FloatArray_set(a,i,o.v);}
 static SP_NOINLINE SP_COLD void sp_FloatArray_push_nil(sp_FloatArray*a){sp_FloatArray_push(a,0.0);if(a->frozen)return;if(!a->nilbits)SP_NILBITS_NEW_A(a);SP_NILBIT_SET_A(a, a->len-1);}

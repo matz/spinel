@@ -1,0 +1,3 @@
+in=from-pipe
+pwd=/
+to-err probe=yes

@@ -590,26 +590,35 @@ static int sp_zlib_block_stored(sp_zlib_in *s, sp_zlib_out *o) {
   return o->err ? -1 : 0;
 }
 
+/* One literal, or one match with its length and distance: 1 at the end of
+   the block. Nothing is written for a match the input ends in the middle
+   of. Inlined into both of its calls. */
+static SP_INLINE int sp_zlib_block_code(sp_zlib_in *s, sp_zlib_out *o,
+                                        const sp_zlib_huff *lit, const sp_zlib_huff *dist) {
+  int sym = sp_zlib_huff_decode(s, lit);
+  if (sym < 0) return -1;
+  if (sym < 256) { sp_zlib_out_byte(o, (unsigned char)sym); return o->err ? -1 : 0; }
+  if (sym == 256) return 1;                       /* end of block */
+  sym -= 257;
+  if (sym >= 29) { s->err = 1; return -1; }
+  int extra = sp_zlib_in_bits(s, SP_Z_LEN_EXTRA[sym]);
+  if (extra < 0) return -1;
+  size_t len = (size_t)SP_Z_LEN_BASE[sym] + (size_t)extra;
+  int dsym = sp_zlib_huff_decode(s, dist);
+  if (dsym < 0) return -1;
+  if (dsym >= 30) { s->err = 1; return -1; }
+  int dextra = sp_zlib_in_bits(s, SP_Z_DIST_EXTRA[dsym]);
+  if (dextra < 0) return -1;
+  size_t d = (size_t)SP_Z_DIST_BASE[dsym] + (size_t)dextra;
+  sp_zlib_out_repeat(o, d, len);
+  return o->err ? -1 : 0;
+}
+
 static int sp_zlib_block_codes(sp_zlib_in *s, sp_zlib_out *o,
                             const sp_zlib_huff *lit, const sp_zlib_huff *dist) {
   for (;;) {
-    int sym = sp_zlib_huff_decode(s, lit);
-    if (sym < 0) return -1;
-    if (sym < 256) { sp_zlib_out_byte(o, (unsigned char)sym); if (o->err) return -1; continue; }
-    if (sym == 256) return 0;                     /* end of block */
-    sym -= 257;
-    if (sym >= 29) { s->err = 1; return -1; }
-    int extra = sp_zlib_in_bits(s, SP_Z_LEN_EXTRA[sym]);
-    if (extra < 0) return -1;
-    size_t len = (size_t)SP_Z_LEN_BASE[sym] + (size_t)extra;
-    int dsym = sp_zlib_huff_decode(s, dist);
-    if (dsym < 0) return -1;
-    if (dsym >= 30) { s->err = 1; return -1; }
-    int dextra = sp_zlib_in_bits(s, SP_Z_DIST_EXTRA[dsym]);
-    if (dextra < 0) return -1;
-    size_t d = (size_t)SP_Z_DIST_BASE[dsym] + (size_t)dextra;
-    sp_zlib_out_repeat(o, d, len);
-    if (o->err) return -1;
+    int rc = sp_zlib_block_code(s, o, lit, dist);
+    if (rc) return rc < 0 ? -1 : 0;
   }
 }
 
@@ -630,7 +639,8 @@ static const unsigned char SP_Z_CLEN_ORDER[19] = {
   16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15
 };
 
-static int sp_zlib_block_dynamic(sp_zlib_in *s, sp_zlib_out *o) {
+/* The two codes of a dynamic block, read from its header. */
+static int sp_zlib_dynamic_tables(sp_zlib_in *s, sp_zlib_huff *lit, sp_zlib_huff *dist) {
   int hlit  = sp_zlib_in_bits(s, 5); if (hlit  < 0) return -1;
   int hdist = sp_zlib_in_bits(s, 5); if (hdist < 0) return -1;
   int hclen = sp_zlib_in_bits(s, 4); if (hclen < 0) return -1;
@@ -669,9 +679,14 @@ static int sp_zlib_block_dynamic(sp_zlib_in *s, sp_zlib_out *o) {
   }
   if (lengths[256] == 0) { s->err = 1; return -1; }   /* no end-of-block code */
 
+  if (sp_zlib_huff_build(lit, lengths, nlen) < 0) { s->err = 1; return -1; }
+  if (sp_zlib_huff_build(dist, lengths + nlen, ndist) < 0) { s->err = 1; return -1; }
+  return 0;
+}
+
+static int sp_zlib_block_dynamic(sp_zlib_in *s, sp_zlib_out *o) {
   sp_zlib_huff lit, dist;
-  if (sp_zlib_huff_build(&lit, lengths, nlen) < 0) { s->err = 1; return -1; }
-  if (sp_zlib_huff_build(&dist, lengths + nlen, ndist) < 0) { s->err = 1; return -1; }
+  if (sp_zlib_dynamic_tables(s, &lit, &dist) < 0) return -1;
   return sp_zlib_block_codes(s, o, &lit, &dist);
 }
 

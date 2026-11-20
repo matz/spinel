@@ -1,3 +1,4 @@
+# spinel: int64
 # Array.new(n) { } builds an Integer or Float result at length n and stores
 # each value into its slot (it grew from an empty Array by pushes); object,
 # boxed and nested results append as before; and a break, next or raise in

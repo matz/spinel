@@ -14355,14 +14355,34 @@ static int block_with_own_self(Compiler *c, int call) {
    PARENT's ref/arr slot is retargeted (a node's type string is immutable).
    Does not descend into nested class/module/def bodies, or a block that
    runs with another self (block_with_own_self), whose self differs. */
+/* The reflective and identity questions every object answers about itself
+   (respond_to?, method_defined?, send, instance_variable_get, is_a? ...), and
+   a Class's own (new, superclass, ancestors):
+   bare in a block run with the class as self, they ask the class, and left
+   bare they asked the self of the code around the block (`Foo.class_eval {
+   respond_to?(:greet) }` answered main's false for Foo's class method). */
+static int bare_self_reflection_name(const char *nm) {
+  static const char *const R[] = {
+    "respond_to?", "method_defined?", "public_method_defined?", "private_method_defined?",
+    "protected_method_defined?", "instance_methods", "public_instance_methods",
+    "private_instance_methods", "instance_method", "public_instance_method", "method",
+    "methods", "public_method", "singleton_methods", "send", "__send__", "public_send",
+    "instance_variable_get", "instance_variable_set", "instance_variable_defined?",
+    "instance_variables", "const_get", "const_set", "const_defined?", "constants",
+    "is_a?", "kind_of?", "instance_of?", "frozen?", "object_id", "equal?",
+    "new", "allocate", "superclass", "ancestors", NULL };
+  return str_in(nm, R);
+}
 /* Does class `cname` answer a bare call of `nm` in a block run with the
    class as self: a class method in its chain (any visibility: the call
-   is marked self_call, so a private one stays callable), or Module's
-   name / to_s / inspect (which `Foo.name` reaches as the bare call does)? */
+   is marked self_call, so a private one stays callable), Module's
+   name / to_s / inspect (which `Foo.name` reaches as the bare call does),
+   or one of the questions above? */
 static int bare_call_on_class(Compiler *c, int ci, const char *nm) {
   if (ci < 0 || !nm) return 0;
   /* (what self is inside the block does not move with where the def is: the class's table, asked with no site) */
-  return call_target(c, -1, ci, nm, CT_CMETHOD | CT_SHARED, NULL) >= 0 || is_name_reader(nm);
+  return call_target(c, -1, ci, nm, CT_CMETHOD | CT_SHARED, NULL) >= 0 || is_name_reader(nm) ||
+         bare_self_reflection_name(nm);
 }
 static void subtree_self_to_const(Compiler *c, int root, const char *cname, int ci, int depth) {
   NodeTable *nt = (NodeTable *)c->nt;

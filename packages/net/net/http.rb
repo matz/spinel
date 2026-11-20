@@ -732,6 +732,20 @@ module Net
       http.start { |h| h.request(HTTPRequest.new("GET", u.request_uri, headers)) }
     end
 
+    def self.post(uri, body, headers = nil)
+      u = URI(uri)
+      http = HTTP.new(u.host, u.port)
+      http.use_ssl = (u.scheme == "https")
+      http.start { |h| h.post(u.request_uri, body, headers) }
+    end
+
+    def self.put(uri, body, headers = nil)
+      u = URI(uri)
+      http = HTTP.new(u.host, u.port)
+      http.use_ssl = (u.scheme == "https")
+      http.start { |h| h.put(u.request_uri, body, headers) }
+    end
+
     def self.post_form(uri, params)
       u = URI(uri)
       req = HTTPRequest.new("POST", u.request_uri)

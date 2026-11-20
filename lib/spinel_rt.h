@@ -12591,6 +12591,11 @@ static sp_RbVal sp_poly_hash_foreign_miss(sp_RbVal recv, sp_RbVal key) {
                          ? sp_sym_name_fn((sp_sym)key.v.i) : "";
       return h->dproc(h, nm ? nm : "", h->dproc_self);
     }
+    case SP_BUILTIN_POLY_POLY_HASH: {   /* (a copy in another variant asks for its source's) */
+      sp_PolyPolyHash *h = (sp_PolyPolyHash *)recv.v.p;
+      if (!h->dproc) return h->default_v;
+      return h->dproc(h, key, h->dproc_self);
+    }
     case SP_BUILTIN_STR_STR_HASH: return SP_SEBOX(((sp_StrStrHash *)recv.v.p)->default_v);
     case SP_BUILTIN_INT_STR_HASH: return SP_SEBOX(((sp_IntStrHash *)recv.v.p)->default_v);
     case SP_BUILTIN_STR_INT_HASH: { sp_StrIntHash *h = (sp_StrIntHash *)recv.v.p; return h->default_nil ? sp_box_nil() : sp_box_int(h->default_v); }
@@ -13530,6 +13535,58 @@ static FILE *sp_poly_warn_fp(sp_RbVal io) {
   return stderr;
 }
 
+/* A copy of a Hash in another variant (the three below) keeps the source's
+   default. The default value is copied as it is. A default block was compiled
+   for the source's own struct, so the copy keeps the source and, for a key it
+   lacks, runs the block there and takes the entry the block wrote: a
+   `Hash.new { |h, k| h[k] = [] }` built as one variant and held in a slot of
+   another answers a new key with an array -- the same array on every later
+   read -- where the entry-by-entry copy answered nil. */
+typedef struct sp_hash_conv_ctx { sp_RbVal source; } sp_hash_conv_ctx;
+static void sp_hash_conv_ctx_scan(void *p) { sp_mark_rbval(((sp_hash_conv_ctx *)p)->source); }
+static sp_RbVal sp_poly_index_poly(sp_RbVal recv, sp_RbVal idx);
+static sp_bool sp_poly_has_key(sp_RbVal recv, sp_RbVal key);
+/* the source's default for `key`, run on the source; *has says whether the
+   block left the key in the source, and *stored is then that entry */
+static sp_RbVal sp_hash_conv_miss(void *self, sp_RbVal key, sp_RbVal *stored, int *has) {
+  sp_RbVal source = ((sp_hash_conv_ctx *)self)->source;
+  SP_GC_ROOT_RBVAL(source); SP_GC_ROOT_RBVAL(key);
+  sp_RbVal v = sp_poly_hash_foreign_miss(source, key);
+  SP_GC_ROOT_RBVAL(v);
+  *has = sp_poly_has_key(source, key);
+  *stored = *has ? sp_poly_index_poly(source, key) : sp_box_nil();
+  return v;
+}
+static sp_RbVal sp_StrPolyHash_conv_dproc(sp_StrPolyHash *h, const char *k, void *self) {
+  SP_GC_ROOT(h);
+  sp_RbVal stored; int has;
+  sp_RbVal v = sp_hash_conv_miss(self, sp_box_str_new(k), &stored, &has);
+  if (has) sp_StrPolyHash_set(h, k, stored);
+  return v;
+}
+static sp_RbVal sp_SymPolyHash_conv_dproc(sp_SymPolyHash *h, sp_sym k, void *self) {
+  SP_GC_ROOT(h);
+  sp_RbVal stored; int has;
+  sp_RbVal v = sp_hash_conv_miss(self, sp_box_sym(k), &stored, &has);
+  if (has) sp_SymPolyHash_set(h, k, stored);
+  return v;
+}
+static sp_RbVal sp_PolyPolyHash_conv_dproc(sp_PolyPolyHash *h, sp_RbVal k, void *self) {
+  SP_GC_ROOT(h);
+  sp_RbVal stored; int has;
+  sp_RbVal v = sp_hash_conv_miss(self, k, &stored, &has);
+  if (has) sp_PolyPolyHash_set(h, k, stored);
+  return v;
+}
+/* the copy `h` of `src` takes src's default: a block through `bridge`, else the value */
+#define SP_HASH_CONV_KEEP_DEFAULT(h, src, bridge) do { \
+    int has_proc_; sp_RbVal d_ = sp_marv_hash_default((src), &has_proc_); \
+    if (has_proc_) { \
+      sp_hash_conv_ctx *ctx_ = (sp_hash_conv_ctx *)sp_gc_alloc(sizeof(*ctx_), NULL, sp_hash_conv_ctx_scan); \
+      ctx_->source = (src); \
+      sp_gc_wb((void *)(h)); (h)->dproc = (bridge); (h)->dproc_self = ctx_; \
+    } else if (d_.tag != SP_TAG_NIL) { sp_gc_wb((void *)(h)); (h)->default_v = d_; } \
+  } while (0)
 static sp_StrPolyHash *sp_StrPolyHash_from_poly(sp_RbVal src) {
   SP_GC_ROOT_RBVAL(src);   /* the source hash is a boxed temporary: the sets below allocate, and nothing else holds it */
   sp_StrPolyHash *h = sp_StrPolyHash_new(); SP_GC_ROOT(h);
@@ -13539,6 +13596,7 @@ static sp_StrPolyHash *sp_StrPolyHash_from_poly(sp_RbVal src) {
     sp_RbVal k = sp_poly_arr_get(e, 0), v = sp_poly_arr_get(e, 1);
     sp_StrPolyHash_set(h, sp_rbval_is_string(k) ? sp_rbval_string_bytes(k) : sp_poly_to_s(k), v);
   }
+  SP_HASH_CONV_KEEP_DEFAULT(h, src, sp_StrPolyHash_conv_dproc);
   if (sp_gc_is_frozen(src.v.p)) sp_gc_freeze(h);   /* a widened copy of a frozen Hash is frozen */
   return h;
 }
@@ -13551,6 +13609,7 @@ static sp_SymPolyHash *sp_SymPolyHash_from_poly(sp_RbVal src) {
     sp_RbVal k = sp_poly_arr_get(e, 0), v = sp_poly_arr_get(e, 1);
     sp_SymPolyHash_set(h, (sp_sym)k.v.i, v);
   }
+  SP_HASH_CONV_KEEP_DEFAULT(h, src, sp_SymPolyHash_conv_dproc);
   if (sp_gc_is_frozen(src.v.p)) sp_gc_freeze(h);   /* a widened copy of a frozen Hash is frozen */
   return h;
 }
@@ -13562,6 +13621,7 @@ static sp_PolyPolyHash *sp_PolyPolyHash_from_poly(sp_RbVal src) {
     sp_RbVal e = sp_poly_each_elem(src, i);
     sp_PolyPolyHash_set(h, sp_poly_arr_get(e, 0), sp_poly_arr_get(e, 1));
   }
+  SP_HASH_CONV_KEEP_DEFAULT(h, src, sp_PolyPolyHash_conv_dproc);
   if (sp_gc_is_frozen(src.v.p)) sp_gc_freeze(h);   /* a widened copy of a frozen Hash is frozen */
   return h;
 }
@@ -20337,16 +20397,17 @@ static sp_RbVal sp_poly_hash_dproc_bridge(sp_PolyPolyHash *h, sp_RbVal key, void
   if (source.tag != SP_TAG_OBJ || !source.v.p) return sp_box_nil();
   if (source.cls_id == SP_BUILTIN_STR_POLY_HASH && sp_rbval_is_string(skey)) {
     sp_StrPolyHash *sh = (sp_StrPolyHash *)source.v.p;
-    /* default_proc= stores the Proc in dproc_self; pass the merged result to
-       it, rather than the typed source retained by this bridge. */
-    if (sh->dproc_self)
+    /* a Ruby Proc default (default_proc=) gets the merged result, rather than
+       the typed source retained by this bridge; a compiled callback -- the
+       hash's own, or a copy's bridge to its source's -- takes the source */
+    if (sp_hash_default_is_proc(sh->dproc_self))
       return sp_penum_call2((sp_Proc *)sh->dproc_self,
                             sp_box_obj(h, SP_BUILTIN_POLY_POLY_HASH), key);
     return sh->dproc(sh, sp_rbval_string_bytes(skey), sh->dproc_self);
   }
   if (source.cls_id == SP_BUILTIN_SYM_POLY_HASH && key.tag == SP_TAG_SYM) {
     sp_SymPolyHash *sh = (sp_SymPolyHash *)source.v.p;
-    if (sh->dproc_self)
+    if (sp_hash_default_is_proc(sh->dproc_self))
       return sp_penum_call2((sp_Proc *)sh->dproc_self,
                             sp_box_obj(h, SP_BUILTIN_POLY_POLY_HASH), key);
     return sh->dproc(sh, (sp_sym)key.v.i, sh->dproc_self);

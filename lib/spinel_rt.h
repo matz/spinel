@@ -9460,11 +9460,11 @@ static sp_PolyArray *sp_poly_arr_recv(sp_RbVal v, const char *m) {
      Enumerable name reaching here wants (#3449). The few whose Hash result is
      itself a Hash rebuild one from the pairs at their own call site. */
   if (v.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(v.cls_id)) return sp_enum_items_from(v);
-  /* a user object with #to_a (a container-read Set): iterate its elements
-     through the generated hook (#3234) */
-  if (v.tag == SP_TAG_OBJ && sp_obj_to_a_fn) {
-    sp_RbVal a = sp_obj_to_a_fn(v);
-    if (a.tag == SP_TAG_OBJ && sp_poly_is_array_kind(a.cls_id)) return sp_poly_to_poly_array(a);
+  /* a user object with #each or #to_a (a container-read Set): iterate its
+     elements through the generated hooks (#3234) */
+  if (v.tag == SP_TAG_OBJ) {
+    sp_RbVal a = sp_obj_walk_a(v);
+    if (a.tag == SP_TAG_OBJ) return sp_poly_to_poly_array(a);
   }
   sp_raise_nomethod(sp_nomethod_msg(m, v));
   return NULL;  /* unreachable: sp_raise_nomethod does not return */

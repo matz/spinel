@@ -614,8 +614,8 @@ static void sp_justify_size_raise(const char *cls) {
   sp_raise_cls(cls, cls[0] == 'A' ? "argument too big" : "failed to allocate memory");
 }
 size_t sp_str_repeat_size(const char *s, sp_int n, size_t *unit) {
-  if (n < 0) sp_raise_cls("ArgumentError", "negative argument");
   if (!s) sp_nil_recv("*");
+  if (n < 0) sp_raise_cls("ArgumentError", "negative argument");
   *unit = n ? sp_str_byte_len(s) : 0;
   if (!*unit) return 0;
   if ((size_t)n > SIZE_MAX / *unit) sp_raise_cls("ArgumentError", "string size too big");

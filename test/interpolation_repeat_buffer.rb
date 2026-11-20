@@ -25,6 +25,12 @@ rescue ArgumentError => error
   puts error.message
 end
 
+begin
+  render(nil, -1)
+rescue NoMethodError => error
+  p error.name
+end
+
 p render_with_conditional_repeat(true)
 p render_with_conditional_repeat(false)
 

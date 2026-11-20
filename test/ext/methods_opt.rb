@@ -3,9 +3,25 @@
 # (methods_opt_host.c): a method the named class inherits, a singleton
 # method, a method the named class defines again with fixed parameters, a
 # method made private after its def, and a method with a keyword
-# parameter, which the table leaves out. methods_blk.rb has the methods
-# with a block.
+# parameter, which the table leaves out. A module that the named class
+# includes, and a module that module includes, are not in the list: their
+# methods with an optional parameter have their rows too. methods_blk.rb
+# has the methods with a block.
 module ExtOpt
+  module Deep
+    def deep(n = 1)
+      "deep #{n}"
+    end
+  end
+
+  module Tags
+    include Deep
+
+    def tag(t = 7, u = 8)
+      "tag #{t} #{u}"
+    end
+  end
+
   class Base
     def initialize
       @log = []
@@ -37,6 +53,8 @@ module ExtOpt
   end
 
   class Rel < Base
+    include Tags
+
     def order(*args)
       @log << "order(#{args.size})"
       self

@@ -56,6 +56,14 @@ int main(void) {
   call(k, "pick", 2, a);
   try_call(k, "pick", 0, NULL);
   try_call(k, "pick", 3, a);
+  /* a method of a module the class includes, and of a module that module
+     includes: neither module is in the list */
+  call(r, "tag", 0, NULL);
+  call(r, "tag", 1, a);
+  call(r, "tag", 2, a);
+  try_call(r, "tag", 3, a);
+  call(r, "deep", 0, NULL);
+  call(r, "deep", 1, a);
   /* not in the table: private, a keyword parameter */
   call(r, "hid", 0, NULL);
   call(r, "kw", 0, NULL);

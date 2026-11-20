@@ -7476,6 +7476,45 @@ int ext_class_def_wanted(Compiler *c, const char *key) {
   return ext_name_listed(key) || ext_listed_descendant(c, key);
 }
 
+/* Whether the module definition def is mixed into a definition a table can
+   hold: a class or module body with `include M` or `prepend M` of its leaf
+   name, wanted itself (ext_class_def_wanted) or a module mixed into one in
+   turn. The table of the class holds the methods of the module, so its
+   defs get their forwarders too. By the names the source writes, as
+   ext_listed_descendant reads them. */
+int ext_mixin_def_wanted(Compiler *c, int def, int depth) {
+  const NodeTable *nt = c->nt;
+  if (!g_ext_classes || !*g_ext_classes || def < 0 || nt_kind(nt, def) != NK_ModuleNode) return 0;
+  const char *leaf = ext_const_leaf(nt, class_def_path(nt, def));
+  if (!leaf) return 0;
+  static const NodeKind kinds[] = { NK_ClassNode, NK_ModuleNode };
+  for (int w = 0; w < 2; w++) {
+    int found = 0;
+    NT_FOREACH_KIND(nt, kinds[w], d) {
+      int body = found || d == def ? -1 : class_def_body(nt, d);
+      if (body < 0 || nt_kind(nt, body) != NK_StatementsNode) continue;
+      int n = 0, mixes = 0;
+      const int *st = nt_arr(nt, body, "body", &n);
+      for (int k = 0; k < n && !mixes; k++) {
+        if (nt_kind(nt, st[k]) != NK_CallNode || nt_ref(nt, st[k], "receiver") >= 0) continue;
+        const char *nm = nt_str(nt, st[k], "name");
+        if (!nm || (!sp_streq(nm, "include") && !sp_streq(nm, "prepend"))) continue;
+        int args = nt_ref(nt, st[k], "arguments"), na = 0;
+        const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &na) : NULL;
+        for (int a = 0; a < na && !mixes; a++) {
+          const char *al = ext_const_leaf(nt, av[a]);
+          mixes = al && sp_streq(al, leaf);
+        }
+      }
+      if (!mixes) continue;
+      const char *key = class_def_key(c, d);
+      found = (key && ext_class_def_wanted(c, key)) || (w == 1 && depth < 8 && ext_mixin_def_wanted(c, d, depth + 1));
+    }
+    if (found) return 1;
+  }
+  return 0;
+}
+
 /* A forwarder of desugar_ext_forwarders is named
    `spinel_ext_fwd__<n>__<name>` (n fixed arguments) or
    `spinel_ext_fwdr__<n>__<name>` (n fixed arguments, then the rest in an

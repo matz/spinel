@@ -44,6 +44,7 @@
 #include <sys/stat.h>
 #include <errno.h>
 #include <dirent.h>
+#include <spawn.h>
 #include "timing.h"
 
 extern int g_no_root_elision;
@@ -580,7 +581,10 @@ static void usage(void) {
     "  --dump-implied-calls  Print the methods CRuby calls for each node of the program\n"
     "              that its text does not name, and exit (debug)\n"
     "  --method-table-check  Print the reads of the static method tables made outside\n"
-    "              call_target, and the answers that are the table's last definition (debug)\n");
+    "              call_target, and the answers that are the table's last definition (debug)\n\n"
+    "Environment:\n"
+    "  SPINEL_SKIP_BUILD_IF=SCRIPT  Before building from a Ruby file, run the shell script\n"
+    "              with the Ruby source and generated C paths. Exit 0 skips the build.\n");
 }
 
 /* --dump-ast (1), --dump-value-positions (2), --check-value-pos (3),
@@ -887,6 +891,25 @@ static int cc_native_build(const char *cmd, size_t src_at, size_t src_end, const
   if (cc_rc != 0 && !(cc_jobs > 1 && getenv("SPINEL_SPLIT_STRICT")))
     cc_rc = system(cmd);   /* the single unit, or the fallback */
   return cc_rc;
+}
+
+/* A result-cache consumer can recognize a previous run from the C before
+   the native build starts. Only its explicit success skips the build: a
+   missing script, cache miss or interrupted child leaves cc in charge. */
+static int skip_native_build(const char *source, const char *c_path) {
+  const char *check = getenv("SPINEL_SKIP_BUILD_IF");
+  if (!check || !*check || access(check, R_OK) != 0) return 0;
+  extern char **environ;
+  /* Pass paths as argv, including on native Windows where CreateProcess
+     cannot run a file by its shebang. The runner has a POSIX shell. */
+  char *args[] = { "sh", "--", (char *)check, (char *)source, (char *)c_path, NULL };
+  pid_t pid;
+  if (posix_spawnp(&pid, "sh", NULL, NULL, args, environ) != 0) return 0;
+  int status;
+  while (waitpid(pid, &status, 0) < 0) {
+    if (errno != EINTR) return 0;
+  }
+  return WIFEXITED(status) && WEXITSTATUS(status) == 0;
 }
 
 /* A pointer of the wrong type in generated code is a miscompile, not a style
@@ -1481,6 +1504,12 @@ int main(int argc, char **argv) {
       }
     }
     if (!print_build) { free(csrc); return 0; }
+  }
+
+  if (!eval_used && !run_mode && !c_only && !print_build && skip_native_build(source, c_path)) {
+    remove(c_path);
+    free(csrc);
+    return 0;
   }
 
   /* ---------- link: cc <generated C> -> native binary ---------- */

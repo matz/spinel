@@ -24,6 +24,9 @@
 #       fingerprint and its compile line), the C text, the Ruby source, and
 #       each SIDECAR's content (an absent sidecar is recorded as absent, so
 #       adding one changes the key).
+#   lookup KEY_OUT RESULT_OUT SRC CFILE IDENT [SIDECAR...]
+#       Write an eligible key to KEY_OUT. On a cached PASS, also write its
+#       payload to RESULT_OUT and succeed. A miss exits 1.
 #   nocache SRC
 #       Exit 0 when SRC must always run: it carries `# spinel: no-cache`, or
 #       it or a file it requires reaches the clock, the environment, the
@@ -104,6 +107,61 @@ nocache() {
   return 1
 }
 
+rc_key_file_hash() {
+  case "$1" in
+    *'
+'*)
+      # Some sha256sum implementations print these names on multiple
+      # lines. Keep the prior per-line key input.
+      file_hash=$(rc_sha "$1" && printf .) || return 1
+      printf '%s' "${file_hash%.}" | cut -c1-64;;
+    *)
+      file_hash=$(rc_sha "$1") || return 1
+      printf '%.64s\n' "$file_hash";;
+  esac
+}
+
+rc_key() {
+  [ "${GATE_CACHE:-1}" = 0 ] && return 1
+  src=$1; cfile=$2; ident=$3; shift 3
+  [ -f "$src" ] && [ -f "$cfile" ] || return 1
+  # IDENT starts with the fingerprint; a fingerprint that failed to compute
+  # would key every program on the C alone, so no key at all then
+  fp=${ident%%|*}
+  case "$fp" in *[!0-9a-f]*) return 1;; esac
+  [ ${#fp} -eq 64 ] || return 1
+  nocache "$src" && return 1
+  # Send the producer's success marker around the pipe. The digest alone
+  # cannot distinguish a complete input from a failed component hash.
+  digest=$(
+    {
+      {
+        echo "format $RC_FORMAT"
+        echo "$ident"
+        for f in "$cfile" "$src"; do
+          rc_key_file_hash "$f" || exit 1
+        done
+        for s in "$@"; do
+          if [ -f "$s" ]; then rc_sha "$s" || exit 1; else echo "absent $s"; fi
+        done
+        printf 'ok\n' >&3
+      } | rc_sha
+    } 3>&1
+  ) || return 1
+  case "$digest" in
+    'ok
+'*) printf '%.64s\n' "${digest#*'
+'}";;
+    *) return 1;;
+  esac
+}
+
+rc_get() {
+  [ -f "$RC_DIR/$1" ] || return 1
+  touch "$RC_DIR/$1" 2>/dev/null
+  cat "$RC_DIR/$1"
+}
+
 case "${1:-}" in
 pch-key)
   shift
@@ -154,32 +212,26 @@ fp)
   printf '%.64s\n' "$fp_sum"
   ;;
 key)
-  [ "${GATE_CACHE:-1}" = 0 ] && exit 1
-  src=$2; cfile=$3; ident=$4; shift 4
-  [ -f "$src" ] && [ -f "$cfile" ] || exit 1
-  # IDENT starts with the fingerprint; a fingerprint that failed to compute
-  # would key every program on the C alone, so no key at all then
-  fp=${ident%%|*}
-  case "$fp" in *[!0-9a-f]*) exit 1;; esac
-  [ ${#fp} -eq 64 ] || exit 1
-  nocache "$src" && exit 1
-  {
-    echo "format $RC_FORMAT"
-    echo "$ident"
-    rc_sha "$cfile" | cut -c1-64
-    rc_sha "$src" | cut -c1-64
-    for s in "$@"; do
-      if [ -f "$s" ]; then rc_sha "$s"; else echo "absent $s"; fi
-    done
-  } | rc_sha | cut -c1-64
+  shift
+  rc_key "$@"
   ;;
 nocache)
   nocache "$2"
   ;;
 get)
-  [ -f "$RC_DIR/$2" ] || exit 1
-  touch "$RC_DIR/$2" 2>/dev/null
-  cat "$RC_DIR/$2"
+  rc_get "$2"
+  ;;
+lookup)
+  key_out=$2; result_out=$3; shift 3
+  key=$(rc_key "$@") && [ -n "$key" ] || exit 1
+  printf '%s\n' "$key" > "$key_out" || exit 1
+  hit=$(rc_get "$key") || exit 1
+  case "$hit" in
+    *'
+'*) exit 1;;
+    PASS|PASS"	"?*) printf '%s\n' "$hit" > "$result_out";;
+    *) exit 1;;
+  esac
   ;;
 put)
   mkdir -p "$RC_DIR"
@@ -206,6 +258,6 @@ prune)
   exit 0
   ;;
 *)
-  echo "usage: $0 fp|key|nocache|get|put|prune ..." >&2; exit 2
+  echo "usage: $0 fp|key|lookup|nocache|get|put|prune ..." >&2; exit 2
   ;;
 esac

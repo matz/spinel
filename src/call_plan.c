@@ -3937,10 +3937,13 @@ static int ct_block_self_call(Compiler *c, int node);
    `Object.new`), the scope's self (caller) for one with no receiver or on
    self, and -1 for an eval block on a constant, whose self is the class
    value. CPLAN_SELF_UNKNOWN for any other receiver or block (a local, a
-   lambda, a define_method's, one handed to a method of the program's) */
+   lambda, a define_method's, one handed to a method of the program's). A
+   send of a literal name is the call it sends (call_sent_name), as the
+   lowering that rewrites it into that call makes it, so an answer asked
+   before that pass is the one asked after it */
 static int ct_block_self_caller(Compiler *c, int bsc, int caller) {
   const NodeTable *nt = c->nt;
-  const char *nm = nt_kind(nt, bsc) == NK_CallNode ? nt_str(nt, bsc, "name") : NULL;
+  const char *nm = nt_kind(nt, bsc) == NK_CallNode ? call_sent_name(nt, bsc, NULL) : NULL;
   int ie = nm && is_instance_eval_family(nm), rv = nm ? nt_ref(nt, bsc, "receiver") : -1;
   if (!ie && !(nm && is_class_eval_family(nm))) return CPLAN_SELF_UNKNOWN;
   NodeKind rk = rv >= 0 ? nt_kind(nt, rv) : NK_SelfNode;
@@ -4040,7 +4043,7 @@ static int ct_front_layer(Compiler *c, int id, int rcls, int mi, unsigned flags,
 static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigned flags, int mi, MethodLookup *ml) {
   /* (a presence reader's own ask, respond_to? or method_defined?, reads the visibility cells of the face entry an
      enforcing call there takes: presence_cells) */
-  unsigned ff = (flags & CT_REACH) && id >= 0 && nt_kind(c->nt, id) == NK_CallNode && is_method_presence_name_query(nt_str(c->nt, id, "name")) ?
+  unsigned ff = (flags & CT_REACH) && id >= 0 && nt_kind(c->nt, id) == NK_CallNode && is_method_presence_name_query(call_sent_name(c->nt, id, NULL)) ?
                 flags | CT_PUBLIC : flags;
   int sg = (flags & CT_CMETHOD) != 0, rcls = flags & CT_TOP ? ct_top_chain(c, name, sg) : cls, vi = -1, dc = -1, n = 0, first_def = 0, none = 0, body = 0, cl = 0;
   /* (the table's answer a late layer in front of the chain: its entry, whose arms tell the live version) */
@@ -5157,8 +5160,9 @@ static int ct_block_self_call(Compiler *c, int node) {
     if (call < 0 || call >= n || nt_kind(nt, call) != NK_CallNode || nt_ref(nt, call, "block") != p) continue;
     int rv = nt_ref(nt, call, "receiver");
     const char *rn = rv >= 0 && nt_kind(nt, rv) == NK_ConstantReadNode ? nt_str(nt, rv, "name") : NULL;
-    const char *nm = nt_str(nt, call, "name");
-    if (is_block_self_call(rn, nm) || !ct_block_keeps_self(c, rn, nm)) { found = call; break; }
+    /* (a send of a literal name is the call it sends, as the lowering makes it; of a computed one, opaque) */
+    const char *nm = call_sent_name(nt, call, NULL);
+    if (!nm || is_block_self_call(rn, nm) || !ct_block_keeps_self(c, rn, nm)) { found = call; break; }
   }
   if (framed) elab_plan_leave(c);
   return found;

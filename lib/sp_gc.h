@@ -661,6 +661,9 @@ void sp_oom_die(void);
    the collector marks a table only while its object lives, and drops the
    entry of an object it frees (lib/sp_gc.c). */
 void *sp_ivtbl_get(const void *obj);
+/* the lock of the tables' contents: around every read and write of a table (lib/sp_gc.c) */
+void sp_ivtbl_tables_lock(void);
+void sp_ivtbl_tables_unlock(void);
 void sp_ivtbl_put(const void *obj, void *tbl);
 #ifdef SP_CEXT
 /* The same for the names a C extension sets without the @ (rb_iv_set(obj,

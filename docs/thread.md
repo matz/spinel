@@ -133,12 +133,15 @@ These are deliberate consequences of real parallelism, listed in
   What "race" means here is worth stating rather than leaving as *undefined*,
   because the kinds of state differ (#4166):
 
-  - **Objects never lose an ivar.** Every instance variable is a field of a
-    generated C struct, fixed when the program is compiled: an object's ivar
-    set cannot grow at run time, and `instance_variable_set` takes a literal
-    symbol only (a name decided at run time raises NoMethodError). So two
-    threads assigning two different ivars cannot lose either, and no ivar
-    write can be lost to a write of a *different* ivar.
+  - **Objects never lose an ivar.** An instance variable the program names
+    is a field of a generated C struct, fixed when the program is compiled.
+    So two threads assigning two different ivars cannot lose either, and no
+    ivar write can be lost to a write of a *different* ivar. An instance
+    variable whose name is decided at run time (`instance_variable_set`
+    with a computed name) lives in a table of the object beside its
+    fields; that table is read and written under a lock of the runtime,
+    so two threads setting two such names each keep theirs as well, and
+    `instance_variables` lists only names that were set.
   - **A word-sized ivar never tears.** A racing read of an Integer, Float,
     String, or object-reference ivar answers a value some thread wrote --
     never one nobody wrote, and never a half-written pointer. Which write it

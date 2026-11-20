@@ -14697,33 +14697,55 @@ static const void *sp_bivar_key(sp_RbVal o) {
 static int sp_bivar_keyed(sp_RbVal o) { return sp_bivar_key(o) != NULL; }
 static sp_RbVal sp_bivar_get(sp_RbVal o, sp_sym k) {
   const void *key = sp_bivar_key(o);
+  sp_ivtbl_tables_lock();
   sp_SymPolyHash *t = key ? (sp_SymPolyHash *)sp_ivtbl_get(key) : NULL;
-  if (!t || !sp_SymPolyHash_has_key(t, k)) return sp_box_nil();
-  return sp_SymPolyHash_get(t, k);
+  sp_RbVal r = t && sp_SymPolyHash_has_key(t, k) ? sp_SymPolyHash_get(t, k) : sp_box_nil();
+  sp_ivtbl_tables_unlock();
+  return r;
 }
 static sp_bool sp_bivar_defined(sp_RbVal o, sp_sym k) {
   const void *key = sp_bivar_key(o);
+  sp_ivtbl_tables_lock();
   sp_SymPolyHash *t = key ? (sp_SymPolyHash *)sp_ivtbl_get(key) : NULL;
-  return t && sp_SymPolyHash_has_key(t, k);
+  sp_bool r = t && sp_SymPolyHash_has_key(t, k);
+  sp_ivtbl_tables_unlock();
+  return r;
 }
 static sp_PolyArray *sp_bivar_list(sp_RbVal o) {
   const void *key = sp_bivar_key(o);
+  sp_PolyArray *a = sp_PolyArray_new(); SP_GC_ROOT(a);
+  sp_ivtbl_tables_lock();
   sp_SymPolyHash *t = key ? (sp_SymPolyHash *)sp_ivtbl_get(key) : NULL;
   SP_GC_ROOT(t);
-  sp_PolyArray *a = sp_PolyArray_new(); SP_GC_ROOT(a);
   for (sp_int i = 0; t && i < t->len; i++) sp_PolyArray_push(a, sp_box_sym(t->order[i]));
+  sp_ivtbl_tables_unlock();
+  return a;
+}
+/* A table's names and values, in order, as one Array [name, value, ...]:
+   copied out under the tables' lock, so that an inspect, which runs the
+   program's own #inspect, reads them with the lock released (a thread
+   that set a name meanwhile would otherwise wait on a lock held across
+   the program's code, or move the table under the walk) */
+static sp_PolyArray *sp_bivar_tbl_pairs(sp_SymPolyHash *t) {
+  SP_GC_ROOT(t);
+  sp_PolyArray *a = sp_PolyArray_new(); SP_GC_ROOT(a);
+  sp_ivtbl_tables_lock();
+  for (sp_int i = 0; t && i < t->len; i++) {
+    sp_PolyArray_push(a, sp_box_sym(t->order[i]));
+    sp_PolyArray_push(a, sp_SymPolyHash_get(t, t->order[i]));
+  }
+  sp_ivtbl_tables_unlock();
   return a;
 }
 /* Random#inspect's ivars (sp_Random_inspect, lib/sp_random.c) */
 static const char *sp_bivar_tbl_inspect(void *tp) {
-  sp_SymPolyHash *t = (sp_SymPolyHash *)tp;
-  SP_GC_ROOT(t);
+  sp_PolyArray *pr = sp_bivar_tbl_pairs((sp_SymPolyHash *)tp); SP_GC_ROOT(pr);
   sp_String *s = sp_String_new(""); SP_GC_ROOT(s);
-  for (sp_int i = 0; t && i < t->len; i++) {
+  for (sp_int i = 0; i + 1 < sp_PolyArray_length(pr); i += 2) {
     sp_String_append(s, i ? ", " : " ");
-    sp_String_append(s, sp_sym_to_s(t->order[i]));
+    sp_String_append(s, sp_sym_to_s((sp_sym)sp_PolyArray_get(pr, i).v.i));
     sp_String_append(s, "=");
-    sp_String_append(s, sp_poly_inspect(sp_SymPolyHash_get(t, t->order[i])));
+    sp_String_append(s, sp_poly_inspect(sp_PolyArray_get(pr, i + 1)));
   }
   return sp_str_concat(sp_String_cstr(s), (&("\xff")[1]));
 }
@@ -14731,24 +14753,30 @@ static const char *sp_bivar_tbl_inspect(void *tp) {
    table (#8219), after its declared ivars: into instance_variables' Array,
    and into its default inspect (sep: an ivar was shown before them) */
 static sp_bool sp_bivar_defined_p(const void *obj, sp_sym k) {
+  sp_ivtbl_tables_lock();
   sp_SymPolyHash *t = obj ? (sp_SymPolyHash *)sp_ivtbl_get(obj) : NULL;
-  return t && sp_SymPolyHash_has_key(t, k);
+  sp_bool r = t && sp_SymPolyHash_has_key(t, k);
+  sp_ivtbl_tables_unlock();
+  return r;
 }
 static void sp_bivar_names_into(sp_PolyArray *a, const void *obj) {
   sp_SymPolyHash *t = obj ? (sp_SymPolyHash *)sp_ivtbl_get(obj) : NULL;
   if (!t) return;
   SP_GC_ROOT(a); SP_GC_ROOT(t);
+  sp_ivtbl_tables_lock();
   for (sp_int i = 0; i < t->len; i++) sp_PolyArray_push(a, sp_box_sym(t->order[i]));
+  sp_ivtbl_tables_unlock();
 }
 static void sp_bivar_inspect_into(sp_String *s, const void *obj, int sep) {
   sp_SymPolyHash *t = obj ? (sp_SymPolyHash *)sp_ivtbl_get(obj) : NULL;
   if (!t) return;
   SP_GC_ROOT(s); SP_GC_ROOT(t);
-  for (sp_int i = 0; i < t->len; i++) {
+  sp_PolyArray *pr = sp_bivar_tbl_pairs(t); SP_GC_ROOT(pr);
+  for (sp_int i = 0; i + 1 < sp_PolyArray_length(pr); i += 2) {
     sp_String_append(s, sep || i ? ", " : " ");
-    sp_String_append(s, sp_sym_to_s(t->order[i]));
+    sp_String_append(s, sp_sym_to_s((sp_sym)sp_PolyArray_get(pr, i).v.i));
     sp_String_append(s, "=");
-    sp_String_append(s, sp_poly_inspect(sp_SymPolyHash_get(t, t->order[i])));
+    sp_String_append(s, sp_poly_inspect(sp_PolyArray_get(pr, i + 1)));
   }
 }
 static sp_RbVal sp_bivar_set(sp_RbVal o, sp_sym k, sp_RbVal v) {
@@ -14765,6 +14793,9 @@ static sp_RbVal sp_bivar_set(sp_RbVal o, sp_sym k, sp_RbVal v) {
                  sp_sprintf("instance_variable_set on a %s is not supported: the value keeps no identity "
                             "for the variable to live on", sp_poly_class_name(o)));
   SP_GC_ROOT_RBVAL(o); SP_GC_ROOT_RBVAL(v);
+  /* (the table is made and written under the tables' lock: two threads
+     setting two names on one object each keep theirs, #12254) */
+  sp_ivtbl_tables_lock();
   sp_SymPolyHash *t = (sp_SymPolyHash *)sp_ivtbl_get(key);
   if (!t) {
     t = sp_SymPolyHash_new();
@@ -14772,6 +14803,7 @@ static sp_RbVal sp_bivar_set(sp_RbVal o, sp_sym k, sp_RbVal v) {
     sp_ivtbl_inspect_fn = sp_bivar_tbl_inspect;
   }
   sp_SymPolyHash_set(t, k, v);
+  sp_ivtbl_tables_unlock();
   return v;
 }
 /* Object#dup / #clone: the copy takes the original's ivars */
@@ -14781,7 +14813,9 @@ static void sp_bivar_copy(sp_RbVal from, sp_RbVal to) {
   if (!t || to.tag != SP_TAG_OBJ || !sp_bivar_keyed(to) || from.v.p == to.v.p) return;
   SP_GC_ROOT_RBVAL(to); SP_GC_ROOT(t);
   sp_SymPolyHash *d = sp_SymPolyHash_new(); SP_GC_ROOT(d);
+  sp_ivtbl_tables_lock();
   for (sp_int i = 0; i < t->len; i++) sp_SymPolyHash_set(d, t->order[i], sp_SymPolyHash_get(t, t->order[i]));
+  sp_ivtbl_tables_unlock();
   sp_ivtbl_put(to.v.p, d);
 }
 /* the same for a program object's dup / clone, by its pointer (#8219) */
@@ -14790,7 +14824,9 @@ SP_UNUSED static void sp_bivar_copy_obj(const void *from, const void *to) {
   if (!t || !to || from == to) return;
   SP_GC_ROOT(t);
   sp_SymPolyHash *d = sp_SymPolyHash_new(); SP_GC_ROOT(d);
+  sp_ivtbl_tables_lock();
   for (sp_int i = 0; i < t->len; i++) sp_SymPolyHash_set(d, t->order[i], sp_SymPolyHash_get(t, t->order[i]));
+  sp_ivtbl_tables_unlock();
   sp_ivtbl_put(to, d);
 }
 /* A String's dup (clone: 1 keeps the frozen state) as a new handle, which
@@ -14811,12 +14847,15 @@ SP_UNUSED static sp_String *sp_String_dup_h(sp_String *src, int clone) {
 /* remove_instance_variable of a name in a program object's table (#8219):
    its value, or CRuby's NameError when the table holds no such name */
 SP_UNUSED static sp_RbVal sp_bivar_remove_obj(const void *obj, sp_sym k) {
-  sp_SymPolyHash *t = obj ? (sp_SymPolyHash *)sp_ivtbl_get(obj) : NULL;
-  if (!t || !sp_SymPolyHash_has_key(t, k))
-    sp_raise_cls("NameError", sp_sprintf("instance variable %s not defined", sp_sym_to_s(k)));
-  sp_RbVal v = sp_SymPolyHash_get(t, k);
+  sp_RbVal v = sp_box_nil();
   SP_GC_ROOT_RBVAL(v);
-  sp_SymPolyHash_delete(t, k);
+  sp_ivtbl_tables_lock();
+  sp_SymPolyHash *t = obj ? (sp_SymPolyHash *)sp_ivtbl_get(obj) : NULL;
+  int has = t && sp_SymPolyHash_has_key(t, k);
+  if (has) { v = sp_SymPolyHash_get(t, k); sp_SymPolyHash_delete(t, k); }
+  sp_ivtbl_tables_unlock();
+  /* (raised with the lock released) */
+  if (!has) sp_raise_cls("NameError", sp_sprintf("instance variable %s not defined", sp_sym_to_s(k)));
   return v;
 }
 /* Exception#exception(msg)'s copy (sp_exc_exception), through

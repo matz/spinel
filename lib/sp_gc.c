@@ -1308,6 +1308,29 @@ static void sp_ivt_reindex(int icap) {
 
 const char *(*sp_ivtbl_inspect_fn)(void *tbl) = NULL;
 
+/* One lock for the contents of every table (sp_ivtbl_tables_lock): the
+   registry's own lock above covers which object has which table, and a
+   table is a plain Hash, so two threads setting two names on one object
+   lost one of them or left a slot of its order half written (#12254).
+   A holder allocates (the Hash grows), so a waiter is out of the world
+   while it waits: a collection the holder starts does not wait for it.
+   Nothing that runs the program's code holds it. */
+#ifdef SP_THREADS
+static pthread_mutex_t sp_ivt_tables_mu = PTHREAD_MUTEX_INITIALIZER;
+extern void sp_native_enter(void);
+extern void sp_native_leave(void);
+void sp_ivtbl_tables_lock(void) {
+  if (pthread_mutex_trylock(&sp_ivt_tables_mu) == 0) return;
+  sp_native_enter();
+  pthread_mutex_lock(&sp_ivt_tables_mu);
+  sp_native_leave();
+}
+void sp_ivtbl_tables_unlock(void) { pthread_mutex_unlock(&sp_ivt_tables_mu); }
+#else
+void sp_ivtbl_tables_lock(void) {}
+void sp_ivtbl_tables_unlock(void) {}
+#endif
+
 void *sp_ivtbl_get(const void *obj) {
   void *t = NULL;
   SP_IVT_LOCK();

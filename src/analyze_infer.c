@@ -11072,7 +11072,7 @@ static int infer_constant_path(Compiler *c, int id, const NodeTable *nt, NodeKin
                sp_streq(nm, "MAX_EXP") || sp_streq(nm, "MIN_EXP") ||
                sp_streq(nm, "MAX_10_EXP") || sp_streq(nm, "MIN_10_EXP"))) { *out = TY_INT; return 1; }
   }
-  if (par_nm && sp_streq(par_nm, "Math")) {
+  if (comp_const_path_on_math(c, par_id)) {
     if (nm && (sp_streq(nm, "PI") || sp_streq(nm, "E"))) { *out = TY_FLOAT; return 1; }
   }
   if (par_nm && sp_streq(par_nm, "Regexp")) {

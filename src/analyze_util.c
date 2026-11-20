@@ -700,6 +700,8 @@ int const_seg_builtin(Compiler *c, int id) {
   char qn[256];
   snprintf(qn, sizeof qn, "%s::%s", pn, nm);
   if (builtin_const_name(qn)) return 1;
+  /* (Math's constants through a program class that includes Math: Calc::PI) */
+  if ((sp_streq(nm, "PI") || sp_streq(nm, "E")) && comp_const_path_on_math(c, par)) return 1;
   return builtin_const_name(pn) && infer_cext_builtin_constant(c, id);
 }
 /* Does the program define a class or module whose own name is `leaf`, nested

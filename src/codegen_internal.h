@@ -3546,11 +3546,6 @@ void emit_method_ret_ctype(Compiler *c, const Scope *s, Buf *b);
 const char *method_ret_zero(Compiler *c, const Scope *s);
 void emit_boxed_ret_call(Compiler *c, const Scope *s, const char *call, Buf *b);
 int emit_ptr_array_build(Compiler *c, int v, TyKind want, Buf *b);
-/* Is value v's String one no other name can see a copy of (codegen_stmt.c)?
-   share_value_needs_handle asks it. */
-int strbuf_flow_unseen(Compiler *c, int v);
-/* ...is v a conditional whose every arm's String is one, or nil? */
-int strbuf_flow_unseen_arms(Compiler *c, int v);
 
 void emit_cext_dispatch(Compiler *c, Buf *b);
 #endif

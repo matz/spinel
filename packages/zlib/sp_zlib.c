@@ -17,9 +17,10 @@
    the zlib and gzip wrappers and their checksums. Deflate is LZ77 with a hash
    chain emitting fixed-Huffman blocks -- a valid stream any inflater reads,
    at a ratio below zlib's own, which builds dynamic tables per block.
-   Inflate is one-shot: a whole input in, a whole output back. Deflate also
-   writes a stream in pieces, a block per flush, with no state kept here:
-   the Ruby side writes the wrapper and keeps the checksum.
+   Both also work on a stream in pieces, with no state kept here. Deflate
+   writes a block per flush, and inflate reads as far as the input it is
+   given goes and says where it stopped: the Ruby side keeps the wrapper,
+   the checksum, the input still to read and the window.
 
    Binary safe throughout: input length comes from the string header
    (sp_str_byte_len), output is a length-set BINARY string on the GC heap.
@@ -493,14 +494,15 @@ typedef struct {
   uint32_t bitbuf;
   int bitcnt;
   int err;
+  int eof;
 } sp_zlib_in;
 
 /* DEFLATE packs bits low-order first within each byte. -1 means the stream
-   ended mid-code, which is a truncated input rather than a malformed one; the
-   caller cannot tell them apart and neither can zlib. */
+   ended mid-code, which is a truncated input rather than a malformed one:
+   `eof` is set for it, and only an inflate in pieces tells them apart. */
 static int sp_zlib_in_bits(sp_zlib_in *s, int need) {
   while (s->bitcnt < need) {
-    if (s->pos >= s->len) { s->err = 1; return -1; }
+    if (s->pos >= s->len) { s->err = 1; s->eof = 1; return -1; }
     s->bitbuf |= (uint32_t)s->src[s->pos++] << s->bitcnt;
     s->bitcnt += 8;
   }
@@ -590,26 +592,36 @@ static int sp_zlib_block_stored(sp_zlib_in *s, sp_zlib_out *o) {
   return o->err ? -1 : 0;
 }
 
+/* One literal, or one match with its length and distance: 1 at the end of
+   the block. Nothing is written for a match the input ends in the middle
+   of. Inlined into both of its calls. */
+static SP_INLINE int sp_zlib_block_code(sp_zlib_in *s, sp_zlib_out *o,
+                                        const sp_zlib_huff *lit, const sp_zlib_huff *dist) {
+  int sym = sp_zlib_huff_decode(s, lit);
+  if (sym < 0) return -1;
+  if (sym < 256) { sp_zlib_out_byte(o, (unsigned char)sym); return o->err ? -1 : 0; }
+  if (sym == 256) return 1;                       /* end of block */
+  sym -= 257;
+  if (sym >= 29) { s->err = 1; return -1; }
+  int extra = sp_zlib_in_bits(s, SP_Z_LEN_EXTRA[sym]);
+  if (extra < 0) return -1;
+  size_t len = (size_t)SP_Z_LEN_BASE[sym] + (size_t)extra;
+  int dsym = sp_zlib_huff_decode(s, dist);
+  if (dsym < 0) return -1;
+  if (dsym >= 30) { s->err = 1; return -1; }
+  int dextra = sp_zlib_in_bits(s, SP_Z_DIST_EXTRA[dsym]);
+  if (dextra < 0) return -1;
+  size_t d = (size_t)SP_Z_DIST_BASE[dsym] + (size_t)dextra;
+  if (d > o->len) { s->err = 1; return -1; }      /* before the start of the output */
+  sp_zlib_out_repeat(o, d, len);
+  return o->err ? -1 : 0;
+}
+
 static int sp_zlib_block_codes(sp_zlib_in *s, sp_zlib_out *o,
                             const sp_zlib_huff *lit, const sp_zlib_huff *dist) {
   for (;;) {
-    int sym = sp_zlib_huff_decode(s, lit);
-    if (sym < 0) return -1;
-    if (sym < 256) { sp_zlib_out_byte(o, (unsigned char)sym); if (o->err) return -1; continue; }
-    if (sym == 256) return 0;                     /* end of block */
-    sym -= 257;
-    if (sym >= 29) { s->err = 1; return -1; }
-    int extra = sp_zlib_in_bits(s, SP_Z_LEN_EXTRA[sym]);
-    if (extra < 0) return -1;
-    size_t len = (size_t)SP_Z_LEN_BASE[sym] + (size_t)extra;
-    int dsym = sp_zlib_huff_decode(s, dist);
-    if (dsym < 0) return -1;
-    if (dsym >= 30) { s->err = 1; return -1; }
-    int dextra = sp_zlib_in_bits(s, SP_Z_DIST_EXTRA[dsym]);
-    if (dextra < 0) return -1;
-    size_t d = (size_t)SP_Z_DIST_BASE[dsym] + (size_t)dextra;
-    sp_zlib_out_repeat(o, d, len);
-    if (o->err) return -1;
+    int rc = sp_zlib_block_code(s, o, lit, dist);
+    if (rc) return rc < 0 ? -1 : 0;
   }
 }
 
@@ -630,7 +642,8 @@ static const unsigned char SP_Z_CLEN_ORDER[19] = {
   16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15
 };
 
-static int sp_zlib_block_dynamic(sp_zlib_in *s, sp_zlib_out *o) {
+/* The two codes of a dynamic block, read from its header. */
+static int sp_zlib_dynamic_tables(sp_zlib_in *s, sp_zlib_huff *lit, sp_zlib_huff *dist) {
   int hlit  = sp_zlib_in_bits(s, 5); if (hlit  < 0) return -1;
   int hdist = sp_zlib_in_bits(s, 5); if (hdist < 0) return -1;
   int hclen = sp_zlib_in_bits(s, 4); if (hclen < 0) return -1;
@@ -669,9 +682,14 @@ static int sp_zlib_block_dynamic(sp_zlib_in *s, sp_zlib_out *o) {
   }
   if (lengths[256] == 0) { s->err = 1; return -1; }   /* no end-of-block code */
 
+  if (sp_zlib_huff_build(lit, lengths, nlen) < 0) { s->err = 1; return -1; }
+  if (sp_zlib_huff_build(dist, lengths + nlen, ndist) < 0) { s->err = 1; return -1; }
+  return 0;
+}
+
+static int sp_zlib_block_dynamic(sp_zlib_in *s, sp_zlib_out *o) {
   sp_zlib_huff lit, dist;
-  if (sp_zlib_huff_build(&lit, lengths, nlen) < 0) { s->err = 1; return -1; }
-  if (sp_zlib_huff_build(&dist, lengths + nlen, ndist) < 0) { s->err = 1; return -1; }
+  if (sp_zlib_dynamic_tables(s, &lit, &dist) < 0) return -1;
   return sp_zlib_block_codes(s, o, &lit, &dist);
 }
 
@@ -773,7 +791,7 @@ const char *sp_zlib_inflate(const char *src, sp_int window_bits) {SP_GC_ROOT_STR
 
   sp_zlib_in s;
   s.src = p + off; s.len = n - off; s.pos = 0;
-  s.bitbuf = 0; s.bitcnt = 0; s.err = 0;
+  s.bitbuf = 0; s.bitcnt = 0; s.err = 0; s.eof = 0;
   sp_zlib_out o;
   o.p = NULL; o.len = 0; o.cap = 0; o.err = 0;
 
@@ -1115,6 +1133,108 @@ const char *sp_zlib_deflate_block(const char *src, sp_int level, sp_int final) {
     sp_zlib_out_write(&o, sync, 4);
   }
   else sp_zlib_bw_flush(&w);
+  return sp_zlib_out_str(&o);
+}
+
+/* ------------------------------------------------------- inflate in pieces */
+
+/* The bit of the input the reader is at. */
+static size_t sp_zlib_in_bit(const sp_zlib_in *s) {
+  return s->pos * 8 - (size_t)s->bitcnt;
+}
+
+static void sp_zlib_in_seek(sp_zlib_in *s, size_t bit) {
+  if (bit > s->len * 8) { s->err = 1; return; }
+  s->pos = bit / 8; s->bitbuf = 0; s->bitcnt = 0;
+  if (bit % 8) sp_zlib_in_bits(s, (int)(bit % 8));
+}
+
+/* A stored block as far as the input has it, from the bit `*go` when that
+   is inside its bytes. When the input ends first, `*go` is where the next
+   bytes of the block go on from. */
+static int sp_zlib_part_stored(sp_zlib_in *s, sp_zlib_out *o, size_t *go) {
+  s->bitbuf = 0; s->bitcnt = 0;              /* stored blocks start byte-aligned */
+  if (s->pos + 4 > s->len) { s->err = 1; s->eof = 1; return -1; }
+  size_t len  = (size_t)s->src[s->pos] | ((size_t)s->src[s->pos + 1] << 8);
+  size_t nlen = (size_t)s->src[s->pos + 2] | ((size_t)s->src[s->pos + 3] << 8);
+  if ((len ^ 0xffff) != nlen) { s->err = 1; return -1; }
+  size_t data = s->pos + 4;
+  size_t from = *go ? *go / 8 : data;
+  if (from < data || from > data + len || from > s->len) { s->err = 1; return -1; }
+  size_t left = data + len - from;
+  size_t n = s->len - from < left ? s->len - from : left;
+  if (n) sp_zlib_out_write(o, s->src + from, n);
+  if (o->err) return -1;
+  s->pos = from + n;
+  if (n < left) { *go = s->pos * 8; s->err = 1; s->eof = 1; return -1; }
+  return 0;
+}
+
+/* Where the last sp_zlib_inflate_part stopped: the bit its unfinished
+   block starts at (past the final block, the bit after it), the bit inside
+   that block to go on from (0 for its start), and whether the final block
+   ended. Read right after the call, as the error message is. */
+static SP_TLS sp_int sp_zlib_part_at[3];
+
+sp_int sp_zlib_inflate_at(sp_int which) {
+  return which >= 0 && which < 3 ? sp_zlib_part_at[which] : 0;
+}
+
+/* Zlib::Inflate over a stream that comes in pieces: the raw deflate data
+   in `src` as far as it goes, from the block at `bit`, or from `go` inside
+   that block when an earlier call stopped there. `window` is the output
+   before this call that a match may reach back into, and is not answered
+   again. No wrapper: the Ruby side reads the header and checks the
+   trailer. Input that ends early is not an error here, since the next
+   piece continues it; NULL is a malformed stream. */
+const char *sp_zlib_inflate_part(const char *src, sp_int bit, sp_int go, const char *window) {SP_GC_ROOT_STR(src);SP_GC_ROOT_STR(window);
+  sp_zlib_err = NULL;
+  size_t wn = window ? sp_str_byte_len(window) : 0;
+  sp_zlib_in s;
+  s.src = (const unsigned char *)src; s.len = src ? sp_str_byte_len(src) : 0; s.pos = 0;
+  s.bitbuf = 0; s.bitcnt = 0; s.err = 0; s.eof = 0;
+  sp_zlib_out o;
+  o.p = NULL; o.len = 0; o.cap = 0; o.err = 0;
+  if (wn) sp_zlib_out_write(&o, (const unsigned char *)window, wn);
+
+  size_t at = bit < 0 ? 0 : (size_t)bit;
+  size_t resume = go < 0 ? 0 : (size_t)go;
+  int ended = 0;
+  sp_zlib_in_seek(&s, at);
+  while (!s.err && !o.err) {
+    at = sp_zlib_in_bit(&s);
+    int final = sp_zlib_in_bits(&s, 1); if (final < 0) break;
+    int type  = sp_zlib_in_bits(&s, 2); if (type  < 0) break;
+    int rc;
+    if (type == 0) rc = sp_zlib_part_stored(&s, &o, &resume);
+    else if (type == 3) { s.err = 1; break; }
+    else {
+      sp_zlib_huff lit, dist;
+      if (type == 1) sp_zlib_fixed_tables(&lit, &dist);
+      else if (sp_zlib_dynamic_tables(&s, &lit, &dist) < 0) break;
+      if (resume) sp_zlib_in_seek(&s, resume);
+      for (;;) {
+        sp_zlib_in before = s;
+        rc = sp_zlib_block_code(&s, &o, &lit, &dist);
+        if (rc < 0 && s.eof) resume = sp_zlib_in_bit(&before);
+        if (rc) break;
+      }
+    }
+    if (rc < 0) break;
+    resume = 0;
+    if (final) { ended = 1; at = sp_zlib_in_bit(&s); break; }
+  }
+
+  if (o.err || (s.err && !s.eof)) {
+    sp_zlib_err = o.err ? "out of memory" : "invalid deflate data";
+    free(o.p);
+    return NULL;
+  }
+  sp_zlib_part_at[0] = (sp_int)at;
+  sp_zlib_part_at[1] = (sp_int)resume;
+  sp_zlib_part_at[2] = ended;
+  if (wn) memmove(o.p, o.p + wn, o.len - wn);
+  o.len -= wn;
   return sp_zlib_out_str(&o);
 }
 

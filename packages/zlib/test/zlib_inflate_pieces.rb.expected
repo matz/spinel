@@ -1,0 +1,84 @@
+dynamic by 1: whole true early true finished true total_in true rest ""
+dynamic by 2: whole true early true finished true total_in true rest ""
+dynamic by 3: whole true early true finished true total_in true rest ""
+dynamic by 7: whole true early true finished true total_in true rest ""
+dynamic by 64: whole true early true finished true total_in true rest ""
+dynamic by 1000: whole true early false finished true total_in true rest ""
+gzip with a name by 1: whole true early true finished true total_in true rest ""
+gzip with a name by 2: whole true early true finished true total_in true rest ""
+gzip with a name by 3: whole true early true finished true total_in true rest ""
+gzip with a name by 7: whole true early true finished true total_in true rest ""
+gzip with a name by 64: whole true early true finished true total_in true rest ""
+gzip with a name by 1000: whole true early false finished true total_in true rest ""
+gzip found by its header by 1: whole true early true finished true total_in true rest ""
+gzip found by its header by 2: whole true early true finished true total_in true rest ""
+gzip found by its header by 3: whole true early true finished true total_in true rest ""
+gzip found by its header by 7: whole true early true finished true total_in true rest ""
+gzip found by its header by 64: whole true early true finished true total_in true rest ""
+gzip found by its header by 1000: whole true early false finished true total_in true rest ""
+zlib found by its header by 1: whole true early true finished true total_in true rest ""
+zlib found by its header by 2: whole true early true finished true total_in true rest ""
+zlib found by its header by 3: whole true early true finished true total_in true rest ""
+zlib found by its header by 7: whole true early true finished true total_in true rest ""
+zlib found by its header by 64: whole true early true finished true total_in true rest ""
+zlib found by its header by 1000: whole true early false finished true total_in true rest ""
+stored by 1: whole true early true finished true total_in true rest ""
+stored by 2: whole true early true finished true total_in true rest ""
+stored by 3: whole true early true finished true total_in true rest ""
+stored by 7: whole true early true finished true total_in true rest ""
+stored by 64: whole true early false finished true total_in true rest ""
+stored by 1000: whole true early false finished true total_in true rest ""
+zlib past the window by 5: whole true early true finished true
+zlib past the window by 997: whole true early true finished true
+zlib past the window by 16384: whole true early true finished true
+gzip past the window by 5: whole true early true finished true
+gzip past the window by 997: whole true early true finished true
+gzip past the window by 16384: whole true early true finished true
+raw past the window by 5: whole true early true finished true
+raw past the window by 997: whole true early true finished true
+raw past the window by 16384: whole true early true finished true
+a flushed stream: ["one ", "two ", "three", ""] finished true
+<< then finish: [true, true, ""]
+<< then inflate: true
+<< then inflate(nil): true
+an empty piece: ["", false, 0]
+total_in on the way: 20
+finish with nothing: Zlib::BufError: buffer error
+inflate(nil) with nothing: Zlib::BufError: buffer error
+finish before the end: Zlib::BufError: buffer error
+and on after it: [true, true]
+the trailer still to come: [true, false, "", true]
+gzip, the trailer still to come: [true, false]
+input after the end: ["", "more", "", true]
+twice, then inflate(nil): ["ab", ""]
+after the end in one piece: [true, true, true, "extra"]
+after the end, then more: ["", "extrax"]
+<< past the end: ["", true]
+a second gzip member: [true, true]
+raw, after the end: ["raw", "zz"]
+not a zlib header: Zlib::DataError: incorrect header check
+one byte of a header: ["", false]
+and again after the error: Zlib::DataError: incorrect header check
+not deflate: Zlib::DataError: unknown compression method
+a window too large: Zlib::DataError: invalid window size
+gzip to a zlib inflater: Zlib::DataError: incorrect header check
+zlib to a gzip inflater: Zlib::DataError: incorrect header check
+half a gzip magic: ["", ""]
+gzip, not deflate: Zlib::DataError: unknown compression method
+gzip, unknown flags: Zlib::DataError: unknown header flags set
+a wrong adler32: Zlib::DataError: incorrect data check
+  the text came first: true
+a wrong adler32, in pieces: Zlib::DataError: incorrect data check
+a wrong crc32: Zlib::DataError: incorrect data check
+a wrong length: Zlib::DataError: incorrect length check
+a block of no type: Zlib::DataError
+a stored block with a wrong length: Zlib::DataError
+a match before the start: Zlib::DataError
+closed?: [false, nil, true]
+inflate when closed: Zlib::Error: stream is not ready
+<< when closed: Zlib::Error: stream is not ready
+finish when closed: Zlib::Error: stream is not ready
+finished? when closed: Zlib::Error: stream is not ready
+total_in when closed: Zlib::Error: stream is not ready
+close when closed: Zlib::Error: stream is not ready
+a whole stream: [true, true, true]

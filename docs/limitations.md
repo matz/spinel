@@ -1094,9 +1094,10 @@ stored; an Integer stored into a Float array is promoted, as CRuby's
 arithmetic would promote it. Every store route answers the same way: `<<`,
 `push`, `unshift`, `insert`, `concat`, `fill`, `[]=`, the runtime dispatch on
 a boxed array, and a typed-array `Method` adapter. A nested store through a
-general container (`grid[r][c] = v` where the row is typed) is the one route
-that widens the row to a general Array instead, since the container is what
-holds it.
+general container (`grid[r][c] = v` where the row is typed) can widen the
+row to a general Array. If a conditional selects the container for an
+element iterator, the compiler follows its possible values to the row
+literals and builds them to hold the values the block stores.
 
 #### A typed array the compiler cannot follow is not copied into a parameter the method mutates
 

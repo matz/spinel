@@ -242,7 +242,11 @@ void sp_exc_stage_recv(sp_RbVal v);   /* generated TU: stages FrozenError#receiv
 void sp_raise_locked_str(void) {
   sp_raise_cls("RuntimeError", "can't modify string; temporarily locked");
 }
-void sp_raise_frozen_str(const char*s){if(sp_str_is_locked(s))sp_raise_locked_str();SP_GC_ROOT_STR(s);const char*ins=sp_str_inspect(s);SP_GC_ROOT_STR(ins);const char*msg=sp_str_concat(&("\xff" "can't modify frozen String: ")[1],ins);SP_GC_ROOT_STR(msg);sp_exc_stage_recv(sp_box_str_new(s));sp_raise_cls("FrozenError",msg);}
+void sp_raise_frozen_str(const char*s){if(sp_str_is_locked(s))sp_raise_locked_str();SP_GC_ROOT_STR(s);
+  /* an instance of a program's String subclass is named by its class, as CRuby's message names it (sp_frozen_what) */
+  sp_String*own=sp_str_fd_owner(s);SP_GC_ROOT(own);
+  const char*what=own?sp_frozen_what(sp_box_obj(own,SP_BUILTIN_STRBUF),&("\xff" "can't modify frozen String")[1]):&("\xff" "can't modify frozen String")[1];SP_GC_ROOT_STR(what);
+  const char*ins=sp_str_inspect(s);SP_GC_ROOT_STR(ins);const char*msg=sp_str_concat3(what,&("\xff" ": ")[1],ins);SP_GC_ROOT_STR(msg);sp_exc_stage_recv(sp_box_str_new(s));sp_raise_cls("FrozenError",msg);}
 /* Unicode case mapping, CRuby's (#11345): the tables are generated from CRuby
    by tools/gen_unicase_map.rb. A one-codepoint mapping is a range lookup, a
    run of codepoints that map by one delta (every one of them, or every other

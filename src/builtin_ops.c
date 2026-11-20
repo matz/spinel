@@ -2901,7 +2901,7 @@ static const BuiltinOp bop_rows[] = {
   { BOP_ANY_ARRAY, "compact",               0,   0, BF_ANY,      BOPR_SELF,     BOPE_TEMPLATE, "sp_$AArray_compact($r)" },  /* drops the nil elements */
   { BOP_ANY_ARRAY, "shuffle",               0,   0, BF_ANY,      BOPR_SELF,     BOPE_TEMPLATE, "sp_$AArray_shuffle($r)", 0, 0, BOPF_KEYWORDS },
   { BOP_ANY_ARRAY, "reverse",               0,   0, BF_ANY,      BOPR_SELF,     BOPE_TEMPLATE, "({ sp_$AArray *_t$t = sp_$AArray_dup($r); sp_$AArray_reverse_bang(_t$t); _t$t; })" },
-  { BOP_ANY_ARRAY, "clear",                 0,   0, BF_ANY,      BOPR_SELF,     BOPE_TEMPLATE, "({ sp_$AArray *_t$t = $r; if (_t$t && _t$t->frozen) sp_raise_cls(\"FrozenError\", sp_sprintf(\"can't modify frozen Array: %s\", sp_$AArray_inspect(_t$t))); if (_t$t) _t$t->len = 0; _t$t; })", 0, 0, BOPF_SELF },
+  { BOP_ANY_ARRAY, "clear",                 0,   0, BF_ANY,      BOPR_SELF,     BOPE_TEMPLATE, "({ sp_$AArray *_t$t = $r; if (_t$t && _t$t->frozen) sp_raise_frozen_array_at(_t$t, $Y); if (_t$t) _t$t->len = 0; _t$t; })", 0, 0, BOPF_SELF },
   { BOP_ANY_ARRAY, "values_at",             0,   0, BF_ANY,      BOPR_SELF,     BOPE_TEMPLATE, "((void)($r), sp_$AArray_new())" },  /* no indices: empty (#2980) */
   { BOP_ANY_ARRAY, "intersection",          0,   0, BF_ANY,      BOPR_SELF,     BOPE_TEMPLATE, "sp_$AArray_dup($r)", 0, 0, BOPF_ARGS_BUILTIN },  /* a fold over nothing: a copy (#3851) */
   { BOP_ANY_ARRAY, "difference",            0,   0, BF_ANY,      BOPR_SELF,     BOPE_TEMPLATE, "sp_$AArray_dup($r)", 0, 0, BOPF_ARGS_BUILTIN },

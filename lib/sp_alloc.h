@@ -783,6 +783,8 @@ void sp_exc_stage_key(sp_RbVal v);
 /* the raise itself, in lib/sp_cold.c: the message carries the receiver's
    inspect, as CRuby's does ("can't modify frozen Array: [1, 2]") */
 SP_NORETURN void sp_raise_frozen_array_rv(sp_RbVal v);
+/* the prefix naming a frozen value's class, a program's subclass of Array, Hash or String by its own name (lib/sp_cold.c) */
+const char *sp_frozen_what(sp_RbVal v, const char *what);
 static SP_NOINLINE SP_COLD void sp_raise_frozen_array_at(void *a, int cls_id) {
   sp_raise_frozen_array_rv(sp_box_obj(a, cls_id));
 }

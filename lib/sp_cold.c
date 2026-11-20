@@ -7087,12 +7087,26 @@ void sp_warning_warn(const char *msg) {
 /* FrozenError for a store into a frozen Array: the receiver is staged for
    FrozenError#receiver and its inspect ends the message, as CRuby's
    "can't modify frozen Array: [1, 2]" does (#4924). */
+/* The prefix that names a frozen value's class: an instance of a program's
+   subclass of Array, Hash or String is boxed as the builtin, and its class
+   is the subclass (sp_bsub_cls_fn), which CRuby's message names ("can't
+   modify frozen MyA: [5]"); any other value keeps `what` */
+const char *sp_frozen_what(sp_RbVal v, const char *what) {
+  if (sp_bsub_cls_fn && sp_obj_cls_name_fn && v.tag == SP_TAG_OBJ && v.cls_id < 0 && v.v.p) {
+    int k = sp_bsub_cls_fn(v);
+    const char *n = k >= 0 ? sp_obj_cls_name_fn(k) : NULL;
+    if (n) return sp_str_concat(&("\xff" "can't modify frozen ")[1], n);
+  }
+  return what;
+}
 void sp_raise_frozen_array_rv(sp_RbVal v) {
   SP_GC_ROOT_RBVAL(v);
-  const char *msg = &("\xff" "can't modify frozen Array")[1];
+  const char *what = sp_frozen_what(v, &("\xff" "can't modify frozen Array")[1]);
+  SP_GC_ROOT_STR(what);
+  const char *msg = what;
   if (sp_poly_inspect_fn) {
     const char *ins = sp_poly_inspect_fn(v); SP_GC_ROOT_STR(ins);
-    msg = sp_str_concat(&("\xff" "can't modify frozen Array: ")[1], ins);
+    msg = sp_str_concat3(what, &("\xff" ": ")[1], ins);
   }
   SP_GC_ROOT_STR(msg);
   sp_exc_stage_recv(v);

@@ -11415,6 +11415,7 @@ const char *sp_poly_inspect(sp_RbVal v);
    while inspect renders the receiver and the exception message is built. */
 static SP_NOINLINE SP_COLD void sp_raise_frozen_obj(sp_RbVal v, const char *what) {
   SP_GC_ROOT_RBVAL(v);
+  what = sp_frozen_what(v, what);
   SP_GC_ROOT_STR(what);
   const char *ins = sp_poly_inspect(v);
   SP_GC_ROOT_STR(ins);

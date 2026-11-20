@@ -1,0 +1,7 @@
+[FrozenError, "can't modify frozen MyA: [5]"]
+[FrozenError, "can't modify frozen MyA: [5]"]
+[FrozenError, "can't modify frozen MyA: [5]"]
+[FrozenError, "can't modify frozen MyH: {a: 1}"]
+[FrozenError, "can't modify frozen MyH: {a: 1}"]
+[FrozenError, "can't modify frozen MyS: \"x\""]
+[FrozenError, "can't modify frozen MyS: \"x\""]

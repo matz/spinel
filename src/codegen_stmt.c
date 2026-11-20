@@ -4724,6 +4724,15 @@ void emit_strbuf_value(Compiler *c, int v, Buf *b) {
   { int vp = nt_paren_single(c->nt, v);
     if (arg_ran_first(v, 0) || (vp >= 0 && arg_ran_first(vp, 0))) { emit_strbuf_handle_of(c, v, b); return; } }
   if (repr_native_call_handle(c, v)) { emit_native_string_handle(c, v, b); return; }
+  /* The call's guard selects whether its arguments run, including when
+     the receiver is another call that answers a nullable handle. */
+  if (sn_guard_pending(c, v) && repr_call_returns_handle(c, nt_ref(c->nt, v, "receiver"))) {
+    const NodeTable *nt = c->nt;
+    int token = view_push_repr(c, v, VR_HANDLE_DEMAND, 1);
+    int handled = emit_call_safe_nav_arms(c, v, b, nt, nt_str(nt, v, "name"), nt_ref(nt, v, "receiver"));
+    view_pop(c, token);
+    if (handled) return;
+  }
   /* `x&.itself` is x, nil or not, and so is its handle */
   { int w = nt_paren_single(c->nt, v);
     if (w >= 0 && nt_kind(c->nt, w) == NK_CallNode &&

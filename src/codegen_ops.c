@@ -23,6 +23,7 @@ static char *op_recv_text(Compiler *c, const BopCtx *x) {
    so the C is emitted in the order the arm the row replaces emitted it:
      $r   the receiver, emitted at its first occurrence (or the text the
           caller rendered, x->rtext); a later $r repeats the same text
+     $S   the receiver as a String handle, including a value already held
      $R   the receiver emitted again, for an arm that emitted it twice
      $N   an Integer or Float receiver with its nil beside the value (an
           sp_oint / sp_ofloat, emit_oint_expr): a receiver that can be nil
@@ -179,6 +180,11 @@ static int emit_op_template(Compiler *c, const BopCtx *x, Buf *b) {
         r = strndup(b->p ? b->p + mark : "", b->len - mark);
       }
       else buf_puts(b, r);
+      p++;
+    }
+    else if (p[0] == '$' && p[1] == 'S') {
+      if (x->rtext) buf_printf(b, "SP_STR_HDL(%s)", x->rtext);
+      else emit_str_form_handle(c, x->recv, b);
       p++;
     }
     else if (p[0] == '$' && p[1] == 'N') {

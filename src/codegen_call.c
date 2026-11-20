@@ -27986,7 +27986,7 @@ static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
     }
     if (!bindable && unb < 0) unb = i;
     int fr = operand[i] != harg && operand[i] != recv && operand_fresh_str(c, operand[i]);
-    /* A native String argument keeps the result handle of its call.
+    /* An ordered operand keeps a native String result as its handle.
        A mutator can also take the handle from a boxed receiver's call or
        from an ivar it reads through boxed self. */
     int bsh = operand[i] != harg &&
@@ -27998,7 +27998,7 @@ static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
                   the mutator changes: its box's handle, strbuf_poly_ivar_get) */
                (operand[i] == recv && !arg_ran_first(operand[i], 0) &&
                 strbuf_poly_ivar_get(c, operand[i]) && strbuf_poly_ivar_mutated(c, operand[i])) ||
-               (operand[i] != recv && repr_of(c, operand[i]).as_ty == TY_STRING &&
+               (repr_of(c, operand[i]).as_ty == TY_STRING &&
                 !arg_ran_first(operand[i], 0) && repr_native_call_handle(c, operand[i])));
     int bfb = bsh || operand[i] == harg ? 0
             : operand_binds_face_box(c, operand[i]) ? 1

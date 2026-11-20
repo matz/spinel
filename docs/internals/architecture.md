@@ -47,8 +47,13 @@ String slots hold object handles. Sharing facts and byte routes serve
 builtin producers still being migrated under #11391.
 Boxing a String preserves the object emitted by its producer. A dynamic
 send uses that same path for the String returned by its selected method.
-String unary plus checks the returned handle's frozen state at runtime
-and copies the String only when it is frozen.
+The selected, blockless unary plus on a core String reads and returns a
+handle. A mutable String keeps its identity, and a frozen String yields
+a mutable copy. The block and String subclass call paths retain their
+own result handling.
+The safe-navigation guard holds a nullable String result through the
+call. It evaluates arguments in the nonnil arm and uses the same handle
+form for inline and hoisted results.
 Hash transformation uses the block's ordinary result when storing
 a boxed value, including a result returned through `next`.
 A nullable Integer or Float result keeps its nil through boxing.

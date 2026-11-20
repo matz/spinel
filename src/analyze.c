@@ -10121,7 +10121,7 @@ static void synth_struct_each(Compiler *c) {
     nt_node_set_str(nt, def, "synth", "struct");
     nt_node_set_ref(nt, def, "body", body);
     Scope *ms = comp_scope_new(c, "each", def);
-    { ms->class_id = ci; comp_touch_scope(ms->idx); }
+    { ms->class_id = ci; comp_touch_scope_shape(c, ms->idx); }
     { ms->body = body; comp_touch_scope(ms->idx); }
     ms->yields = 1;
     comp_grow_node_arrays(c);
@@ -10156,7 +10156,7 @@ static void synth_struct_each(Compiler *c) {
       nt_node_set_str(nt, pdef, "synth", "struct");
       nt_node_set_ref(nt, pdef, "body", pbody);
       Scope *ps = comp_scope_new(c, "each_pair", pdef);
-      { ps->class_id = ci; comp_touch_scope(ps->idx); }
+      { ps->class_id = ci; comp_touch_scope_shape(c, ps->idx); }
       { ps->body = pbody; comp_touch_scope(ps->idx); }
       ps->yields = 1;
       comp_grow_node_arrays(c);
@@ -10187,7 +10187,7 @@ static void synth_struct_each(Compiler *c) {
       nt_node_set_str(nt, wdef, "synth", "struct");
       nt_node_set_ref(nt, wdef, "body", wbody);
       Scope *ws = comp_scope_new(c, "each_with_index", wdef);
-      { ws->class_id = ci; comp_touch_scope(ws->idx); }
+      { ws->class_id = ci; comp_touch_scope_shape(c, ws->idx); }
       { ws->body = wbody; comp_touch_scope(ws->idx); }
       ws->yields = 1;
       comp_grow_node_arrays(c);
@@ -10455,7 +10455,7 @@ static void synth_enum_to_a(Compiler *c) {
 
       Scope *ms = comp_scope_new(c, raw ? "__enum_to_a_raw" : "__enum_to_a", eachdef[k]);
       elab_names_add(c, ms->name);   /* a call of it runs the program's #each */
-      { ms->class_id = cls[k]; comp_touch_scope(ms->idx); }
+      { ms->class_id = cls[k]; comp_touch_scope_shape(c, ms->idx); }
       { ms->body = body; comp_touch_scope(ms->idx); }
       int ms_idx = c->nscopes - 1;
       /* register_locals already ran (before synthesis), so intern this scope's
@@ -10606,7 +10606,7 @@ static void synth_to_enum_generators(Compiler *c) {
 
     Scope *ms = comp_scope_new(c, hname, tdef[k]);
     elab_names_add(c, hname);   /* a call of it runs the program's method m */
-    { ms->class_id = ci; comp_touch_scope(ms->idx); }
+    { ms->class_id = ci; comp_touch_scope_shape(c, ms->idx); }
     { ms->body = mbody; comp_touch_scope(ms->idx); }
     int ms_idx = c->nscopes - 1;
     if (nreq > 0) collect_def_params(c, tdef[k], ms);   /* m's required parameters, the helper's own */
@@ -11920,7 +11920,7 @@ static int desugar_builtin_method_obj(Compiler *c) {
       const char *kown = kcls < 0 ? builtin_function_owner(ksym) : NULL;
       if (kown) nt_node_set_str(nt, kdef, "bam_owner", kown);
       Scope *kws = comp_scope_new(c, kwname, kdef);
-      { kws->class_id = -1; comp_touch_scope(kws->idx); }
+      { kws->class_id = -1; comp_touch_scope_shape(c, kws->idx); }
       { kws->body = kbody; comp_touch_scope(kws->idx); }
       int kws_idx = c->nscopes - 1;
       collect_def_params(c, kdef, kws);
@@ -12168,7 +12168,7 @@ static int desugar_builtin_method_obj(Compiler *c) {
        another count raises (fwd_bam_lambda_count) */
     if (passed && nfwd != BAM_VARIADIC) nt_node_set_int(nt, def, "bam_lambda", 1);
     Scope *ws = comp_scope_new(c, wname, def);
-    { ws->class_id = -1; comp_touch_scope(ws->idx); }
+    { ws->class_id = -1; comp_touch_scope_shape(c, ws->idx); }
     { ws->body = body; comp_touch_scope(ws->idx); }
     int ws_idx = c->nscopes - 1;
     collect_def_params(c, def, ws);
@@ -12211,7 +12211,7 @@ static void mm_helper_reach(Compiler *c, int s) {
 int synth_def_scope(Compiler *c, int k, const char *name, int def, int run) {
   Scope *ws = comp_scope_new(c, name, def);
   int ws_idx = c->nscopes - 1;
-  { ws->class_id = k; comp_touch_scope(ws->idx); }
+  { ws->class_id = k; comp_touch_scope_shape(c, ws->idx); }
   { ws->body = nt_ref(c->nt, def, "body"); comp_touch_scope(ws->idx); }
   collect_def_params(c, def, ws);
   comp_grow_node_arrays(c);
@@ -36355,8 +36355,8 @@ int make_yield_proc_forms(Compiler *c) {
     comp_grow_node_arrays(c);
     src = &c->scopes[s];
     Scope *dst = &c->scopes[di];
-    { dst->class_id = src->class_id; comp_touch_scope(dst->idx); }
-    { dst->is_cmethod = src->is_cmethod; comp_touch_scope(dst->idx); }
+    { dst->class_id = src->class_id; comp_touch_scope_shape(c, dst->idx); }
+    { dst->is_cmethod = src->is_cmethod; comp_touch_scope_shape(c, dst->idx); }
     { dst->body = nb; comp_touch_scope(dst->idx); }
     { dst->reachable = 1; comp_touch_scope(dst->idx); }
     /* the method's shape, the posts after a rest and the rest of it included
@@ -50838,8 +50838,8 @@ static void an_phase_desugar_register(Compiler *c) {
       if (nt_ref(nt, d, "receiver") >= 0 || cls < 0 || cls >= c->nclasses || !sg || si <= 0 || si >= c->nscopes) continue;
       Scope *s = &c->scopes[si];
       if (s->class_id == cls && s->is_cmethod) continue;
-      { s->class_id = cls; comp_touch_scope(s->idx); }
-      { s->is_cmethod = 1; comp_touch_scope(s->idx); }
+      { s->class_id = cls; comp_touch_scope_shape(c, s->idx); }
+      { s->is_cmethod = 1; comp_touch_scope_shape(c, s->idx); }
     }
   }
   /* def m(...) = f(*a, **k) -> anon *, **: after the walk, which made each

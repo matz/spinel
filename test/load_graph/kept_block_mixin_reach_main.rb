@@ -7,7 +7,8 @@ module P1; def m = "pre"; end
 module E1; def m = "ext"; end
 module P2; def m = "pre2"; end
 class A; def m = "own"; end
-class B; def self.m = "own"; end
+class Base; def self.m = "own"; end
+class B < Base; end
 class C; def m = "own"; end
 class D; end
 h = Hash.new { |_, k| A.new.m }

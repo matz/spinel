@@ -13556,7 +13556,12 @@ static int g_disp_prune_scope = -1;
    and its parameters are not the call's to check (#11613). */
 static int disp_no_self(Compiler *c, int k) {
   int e = g_disp_prune_scope;
-  return e >= 0 && call_target(c, c->scopes[e].def_node, k, c->scopes[e].name, 0, NULL) != e;
+  if (e < 0) return 0;
+  const Scope *s = &c->scopes[e];
+  int got = call_target(c, s->def_node, k, s->name, 0, NULL);
+  /* (an entry, which its class's table answer reaches by the pins of its arms and else arms, is the self of every class
+     that table answers for) */
+  return got != e && (s->entry != ENTRY_DISPATCH || got != call_target(c, s->def_node, s->class_id, s->name, 0, NULL));
 }
 void emit_dispatch(Compiler *c, int cid, const char *name,
                           const char *selfptr, int argsNode, int blk_node, Buf *b) {

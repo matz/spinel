@@ -714,46 +714,100 @@ int emit_op_method_unbind(Compiler *c, const BopCtx *x, Buf *b) {
   return 0;
 }
 
+/* The Method of the method pmip, one step up the chain of the Method in temp _t<tvp>, bound to its receiver: a
+   yielding target is called through the clone that is emitted for it (#3399). */
+static void emit_super_method_of(Compiler *c, int recv, int tvp, int pmip, Buf *b) {
+  const int pfi = scope_proc_form_of(c, pmip), fmip = pfi >= 0 ? pfi : pmip;
+  int sup_unb = method_expr_is_unbound(c, recv);
+  const char *pp = proc_params_arg(method_proc_params(c, pmip));
+  if (pp) buf_puts(b, "sp_bm_set_proc_params(");
+  buf_printf(b, "%ssp_bm_set_thunk(sp_bm_set_abi(sp_bound_method_new_d(_t%d->self, _t%d->self_kind, (sp_int)(uintptr_t)&", sup_unb ? "sp_bm_set_unbound(" : "", tvp, tvp);
+  buf_puts(b, mc_method(c, &c->scopes[fmip]));
+  buf_puts(b, ", ");
+  emit_str_literal(b, comp_scope_user_name(&c->scopes[pmip]));
+  { int ar; if (method_scope_arity(c, pmip, &ar)) buf_printf(b, ", (sp_int)%d", ar); else buf_puts(b, ", (sp_int)-1"); }
+  buf_puts(b, ", ");
+  emit_method_desc_args(c, -1, pmip, -1, comp_scope_user_name(&c->scopes[pmip]), sup_unb, 0, b);
+  buf_puts(b, ")");
+  { char _s[8 * 64 + 1]; int _fx = 0, _rs = 0, _rt = 0, _pf = 0, _prt = 0;
+    int _ab = method_legacy_int_abi(c, fmip, !sup_unb, _s, sizeof _s, &_fx, &_rs, &_rt);
+    int _pa = method_poly_abi(c, fmip, !sup_unb, &_pf, &_prt);
+    char _rbb[32]; snprintf(_rbb, sizeof _rbb, "_t%d->recv_bound", tvp);
+    /* the parent's binding is the source Method's: an instance method
+       is receiver-bound, a class method is not */
+    int _prb = c->scopes[pmip].class_id >= 0 && !c->scopes[pmip].is_cmethod;
+    int _tmin = 0, _tmax = 0;
+    const char *_th = sup_unb ? NULL : emit_method_thunk(c, fmip, _prb, method_node_recv_class(c, recv, c->scopes[fmip].class_id), &_tmin, &_tmax);
+    emit_bm_abi_args(b, _rbb, _ab, _s, _fx, _rs, _ab ? _rt : _prt, _pa, _pf, _th, _tmin, _tmax); }
+  if (sup_unb) buf_puts(b, ")");
+  if (pp) buf_printf(b, ", %s)", pp);
+}
+
 /* Method#super_method: the same-named method one step up the ancestor
-   chain, bound to the same receiver; nil when there is none (#3247). */
+   chain, bound to the same receiver; nil when there is none (#3247). Where
+   the step is a layer whose versions a method body makes
+   (cplan_super_method_target), the Method of each version, under the test
+   of its cells, as a capture of the entry is made: before the body has run,
+   the method behind the layer. */
 int emit_op_method_super_method(Compiler *c, const BopCtx *x, Buf *b) {
   int recv = x->recv;
   int mnp = method_recv_node(c, recv);
   int imip = mnp >= 0 ? method_obj_target_mi(c, mnp) : -1;
-  int pmip = imip >= 0 ? cplan_super_target(c, -1, &c->scopes[imip], NULL) : -1;
-  if (pmip >= 0) {
-    /* a yielding target is called through the clone that is emitted for it (#3399) */
-    const int pfi = scope_proc_form_of(c, pmip), fmip = pfi >= 0 ? pfi : pmip;
+  int to[2 * (VER_MAX_ARMS + 1)], tests[4 * (VER_MAX_ARMS + 1)], after_own = 0;
+  int n = imip >= 0 ? cplan_super_method_arms(c, imip, to, tests, &after_own) : 0;
+  /* (the plan's arms: after the arm the Method is of, which its function tells, the next that is live; or the first) */
+  if (n > 0 && after_own) {
+    int tvp = ++g_tmp, tr = ++g_tmp, own = ++g_tmp;
+    buf_printf(b, "({ sp_BoundMethod *_t%d = ", tvp);
+    emit_expr(c, recv, b);
+    buf_printf(b, "; SP_GC_ROOT(_t%d); sp_BoundMethod *_t%d = NULL; int _t%d = 0;\n", tvp, tr, own);
+    for (int i = 0; i < n; i++) {
+      if (to[i] == CPLAN_ARM_NONE) continue;
+      const int *t = &tests[2 * i];
+      const int pf = scope_proc_form_of(c, to[i]), fm = pf >= 0 ? pf : to[i];
+      buf_printf(b, "if (!_t%d) { if (!_t%d) { if (_t%d->fn == (sp_int)(uintptr_t)&%s) _t%d = 1; } else ", tr, own, tvp, mc_method(c, &c->scopes[fm]), own);
+      if (t[0] >= 0 || t[1] >= 0) {
+        buf_puts(b, "if (");
+        emit_arm_cells_test(c, t, b);
+        buf_puts(b, ") ");
+      }
+      buf_printf(b, "{ _t%d = ", tr);
+      emit_super_method_of(c, recv, tvp, to[i], b);
+      buf_puts(b, "; } }\n");
+    }
+    buf_printf(b, "_t%d; })", tr);
+    return 1;
+  }
+  if (n > 0) {
     int tvp = ++g_tmp;
     buf_printf(b, "({ sp_BoundMethod *_t%d = ", tvp);
     emit_expr(c, recv, b);
     /* The new constructor allocates: root the source Method so its self
        (loaded as the new self below) cannot be swept mid-call. */
     buf_printf(b, "; SP_GC_ROOT(_t%d); ", tvp);
-    int sup_unb = method_expr_is_unbound(c, recv);
-    const char *pp = proc_params_arg(method_proc_params(c, pmip));
-    if (pp) buf_puts(b, "sp_bm_set_proc_params(");
-    buf_printf(b, "%ssp_bm_set_thunk(sp_bm_set_abi(sp_bound_method_new_d(_t%d->self, _t%d->self_kind, (sp_int)(uintptr_t)&", sup_unb ? "sp_bm_set_unbound(" : "", tvp, tvp);
-    buf_puts(b, mc_method(c, &c->scopes[fmip]));
-    buf_puts(b, ", ");
-    emit_str_literal(b, comp_scope_user_name(&c->scopes[pmip]));
-    { int ar; if (method_scope_arity(c, pmip, &ar)) buf_printf(b, ", (sp_int)%d", ar); else buf_puts(b, ", (sp_int)-1"); }
-    buf_puts(b, ", ");
-    emit_method_desc_args(c, -1, pmip, -1, comp_scope_user_name(&c->scopes[pmip]), sup_unb, 0, b);
-    buf_puts(b, ")");
-    { char _s[8 * 64 + 1]; int _fx = 0, _rs = 0, _rt = 0, _pf = 0, _prt = 0;
-      int _ab = method_legacy_int_abi(c, fmip, !sup_unb, _s, sizeof _s, &_fx, &_rs, &_rt);
-      int _pa = method_poly_abi(c, fmip, !sup_unb, &_pf, &_prt);
-      char _rbb[32]; snprintf(_rbb, sizeof _rbb, "_t%d->recv_bound", tvp);
-      /* the parent's binding is the source Method's: an instance method
-         is receiver-bound, a class method is not */
-      int _prb = c->scopes[pmip].class_id >= 0 && !c->scopes[pmip].is_cmethod;
-      int _tmin = 0, _tmax = 0;
-      const char *_th = sup_unb ? NULL : emit_method_thunk(c, fmip, _prb, method_node_recv_class(c, recv, c->scopes[fmip].class_id), &_tmin, &_tmax);
-      emit_bm_abi_args(b, _rbb, _ab, _s, _fx, _rs, _ab ? _rt : _prt, _pa, _pf, _th, _tmin, _tmax); }
-    if (sup_unb) buf_puts(b, ")");
-    if (pp) buf_printf(b, ", %s)", pp);
-    buf_puts(b, "; })");
+    if (n == 1 && tests[0] < 0 && tests[1] < 0) {
+      if (to[0] == CPLAN_ARM_NONE) buf_puts(b, "(sp_BoundMethod *)NULL");
+      else emit_super_method_of(c, recv, tvp, to[0], b);
+      buf_puts(b, "; })");
+    }
+    else {
+      int tr = ++g_tmp;
+      buf_printf(b, "sp_BoundMethod *_t%d; ", tr);
+      for (int i = 0; i < n; i++) {
+        if (i) buf_puts(b, "else ");
+        const int *t = &tests[2 * i];
+        if (t[0] >= 0 || t[1] >= 0) {
+          buf_puts(b, "if (");
+          emit_arm_cells_test(c, t, b);
+          buf_puts(b, ") ");
+        }
+        buf_printf(b, "{ _t%d = ", tr);
+        if (to[i] == CPLAN_ARM_NONE) buf_puts(b, "(sp_BoundMethod *)NULL");
+        else emit_super_method_of(c, recv, tvp, to[i], b);
+        buf_puts(b, "; }\n");
+      }
+      buf_printf(b, "_t%d; })", tr);
+    }
   }
   else {
     /* A local some write of which names a method, and that may hold another

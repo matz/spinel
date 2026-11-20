@@ -3688,6 +3688,23 @@ static const char *fill_range_fn(TyKind t) {
   return t == TY_RANGE ? "sp_array_fill_range" : t == TY_FLOAT_RANGE ? "sp_array_fill_frange" : NULL;
 }
 
+/* The stores of `fill(v, ...)`: slots _t<ts> (0 where ts < 0) up to _t<tn>
+   of sp_<fk>Array _t<t> take _t<tv>, and the expression answers _t<t>. An
+   Integer or Float Array storing a value that is never nil writes the span
+   in one run (sp_<fk>Array_fill_span); any other kind, or a nil value (the
+   _nilable store), stores slot by slot. */
+static void emit_fill_stores(Buf *b, const char *fk, const char *fsfx, int t, int ts, int tn, int tv, int ti) {
+  char from[24]; if (ts >= 0) snprintf(from, sizeof from, "_t%d", ts); else snprintf(from, sizeof from, "0");
+  if (!fsfx[0] && is_numeric_literal_tag(fk)) {
+    buf_puts(b, " "); emit_array_entry(b, fk, "fill_span");
+    buf_printf(b, "(_t%d, %s, _t%d, _t%d); _t%d; })", t, from, tn, tv, t);
+    return;
+  }
+  buf_printf(b, " for (sp_int _t%d = %s; _t%d < _t%d; _t%d++) ", ti, from, ti, tn, ti);
+  emit_elem_entry(b, 0, array_kind_ty(fk), fk, "set", fsfx);
+  buf_printf(b, "(_t%d, _t%d, _t%d); _t%d; })", t, ti, tv, t);
+}
+
 static int emit_typed_array_call(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt, TyKind a0, TyKind res, int *out) {
   if (!(recv >= 0 && ty_is_array(rt))) return 0;
   if (emit_scalar_array_conversion(c, id, recv, rt, name, argc, b)) { *out = 1; return 1; }
@@ -4165,9 +4182,7 @@ static int emit_typed_array_call(Compiler *c, int id, Buf *b, const NodeTable *n
            #3606), a begin before the start is CRuby's RangeError */
         buf_printf(b, " sp_int _t%d = %s(", ts, fill_range_fn(comp_ntype(c, argv[1]))); emit_expr(c, argv[1], b);
         buf_printf(b, ", &_t%d);", tn);
-        buf_printf(b, " for (sp_int _t%d = _t%d; _t%d < _t%d; _t%d++)"
-                      " sp_%sArray_set%s(_t%d, _t%d, _t%d); _t%d; })",
-                   ti, ts, ti, tn, ti, fk, fsfx, t, ti, tv, t);
+        emit_fill_stores(b, fk, fsfx, t, ts, tn, tv, ti);
       }
       else if (argc >= 2) {
         /* nil start / length are legal: "from the start" / "to the end" */
@@ -4197,14 +4212,10 @@ static int emit_typed_array_call(Compiler *c, int id, Buf *b, const NodeTable *n
           buf_printf(b, "; if (!_t%d.nil) { if (_t%d.v < 0) _t%d.v = 0; _t%d = _t%d + _t%d.v; }",
                      tl, tl, tl, tn, ts, tl);
         }
-        buf_printf(b, " for (sp_int _t%d = _t%d; _t%d < _t%d; _t%d++)"
-                      " sp_%sArray_set%s(_t%d, _t%d, _t%d); _t%d; })",
-                   ti, ts, ti, tn, ti, fk, fsfx, t, ti, tv, t);
+        emit_fill_stores(b, fk, fsfx, t, ts, tn, tv, ti);
       }
       else {
-        buf_printf(b, " for (sp_int _t%d = 0; _t%d < _t%d; _t%d++)"
-                      " sp_%sArray_set%s(_t%d, _t%d, _t%d); _t%d; })",
-                   ti, ti, tn, ti, fk, fsfx, t, ti, tv, t);
+        emit_fill_stores(b, fk, fsfx, t, -1, tn, tv, ti);
       }
       { *out = 1; return 1; }
     }

@@ -39,3 +39,12 @@ def step_value(x) = (x.pos += 1)
 
 p step_value(Cursor.new)
 p step_value(StringScanner.new("abc"))
+
+# under defined? nothing runs and the answer is the assignment's
+def probe(x) = defined?(x.pos += 1)
+
+p probe(StringScanner.new("abc"))
+p probe("abc")
+t = StringScanner.new("abc")
+probe(t)
+p t.pos

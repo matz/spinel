@@ -60,8 +60,11 @@ class Pathname
     Pathname.root_str(@path) != ""
   end
 
-  # Root first, receiver last.
-  def descend
+  # The Pathnames #descend walks, root first (#ascend walks them reversed),
+  # from the root root_str finds: a drive's "C:/" as well as "/". #descend
+  # and #ascend themselves are the base's, which answer nil with a block and
+  # an Enumerator without one.
+  def descend_paths
     out = []
     root = Pathname.root_str(@path)
     parts = Pathname.split_str(@path[root.length..])
@@ -71,9 +74,9 @@ class Pathname
       acc = acc == "" ? part : (acc.end_with?(SEPARATOR) ? "#{acc}#{part}" : "#{acc}#{SEPARATOR}#{part}")
       out.push(Pathname.new(acc))
     end
-    out.each { |x| yield x } if block_given?
     out
   end
+  private :descend_paths
 
   # The path that reaches self when resolved against base. Lexical, so it can
   # answer for paths that do not exist; raises when the two share no anchor

@@ -4098,10 +4098,24 @@ int next_is_block_value(Compiler *c, int next) {
    unless it is a pure one a rescue of Interrupt keeps from its pure region
    (loop_body_polls_alone) */
 int g_loop_uncounted = 0, g_poll_loop_nest = 0;
+/* The signal poll of the loop whose body is being emitted sits at its latch
+   (emit_loop_body): after the body, and ahead of each next and redo that
+   starts its next pass, once the frames the jump leaves are popped. At the
+   top of the body it sat where the pass begins, and a pass that began with
+   a call read back every value the body keeps in memory (a local the GC
+   frame holds) after the join, though the call was taken almost never:
+   a counter carried from one pass to the next went to the stack and came
+   straight back. Either place is a point between two statements. */
+int g_loop_sig_latch = 0;
+void emit_loop_latch_poll(Buf *b, const char *end) {
+  if (g_loop_sig_latch) buf_printf(b, "%s%s;%s", sig_poll_stmt(), hc_mark(), end);
+}
 /* The polls at the top of a loop body (emit_loop_body): `uncounted`, the
    loop may not end; `nest`, how many loops of its function hold the body,
-   the loop's own included. */
-void emit_loop_polls(Compiler *c, int body, Buf *b, int indent, int uncounted, int nest) {
+   the loop's own included. With `latch`, the signal poll is left to the
+   caller, who puts it at the loop's latch; the answer says whether the loop
+   takes one. */
+int emit_loop_polls(Compiler *c, int body, Buf *b, int indent, int uncounted, int nest, int latch) {
   /* an array's walk an enclosing loop polls for (hcv_begin) */
   int quiet = g_loop_quiet; g_loop_quiet = 0;
   if (g_uses_threads && !quiet) { emit_indent(b, indent); buf_printf(b, "if (SP_UNLIKELY(SP_SAFEPOINT_POLL())) sp_safepoint()%s;\n", hc_mark()); }
@@ -4111,8 +4125,10 @@ void emit_loop_polls(Compiler *c, int body, Buf *b, int indent, int uncounted, i
   if (g_uses_finalizers && !quiet) { emit_indent(b, indent); buf_printf(b, "if (SP_UNLIKELY(SP_ATOMIC_LOAD(&sp_fin_pending_flag, __ATOMIC_RELAXED))) sp_fin_run_pending()%s;\n", hc_mark()); }
   /* and for a delivered Signal.trap, Ruby code as a finalizer is */
   if (sig_polls() && (uncounted || nest == 1 || loop_body_polls_alone(c, body)) && !poll_in_pure(c, body)) {
+    if (latch) return 1;
     emit_indent(b, indent); buf_printf(b, "%s%s;\n", sig_poll_stmt(), hc_mark());
   }
+  return 0;
 }
 
 void emit_loop_body(Compiler *c, int body, Buf *b, int indent) {
@@ -4152,13 +4168,16 @@ void emit_loop_body(Compiler *c, int body, Buf *b, int indent) {
      there instead: see emit_while. */
   int polls_here = !g_loop_polls_in_cond;
   g_loop_polls_in_cond = 0;
-  if (polls_here) emit_loop_polls(c, body, b, indent, poll_uncounted, poll_nest);
+  int sv_latch = g_loop_sig_latch;
+  g_loop_sig_latch = polls_here && emit_loop_polls(c, body, b, indent, poll_uncounted, poll_nest, 1);
   /* a dispatch's builtin arm reads its RECEIVER as no object of the
      program's (g_poly_builtin_arm); the block's own calls are not that
      receiver's, and a user class owns their names as it does anywhere */
   int sv_arm = g_poly_builtin_arm ? view_push_arm(g_pd_skip, g_prbd_skip, 0) : -1;
   emit_stmts(c, body, b, indent);
   if (sv_arm >= 0) view_pop(c, sv_arm);
+  if (g_loop_sig_latch) { emit_indent(b, indent); emit_loop_latch_poll(b, "\n"); }
+  g_loop_sig_latch = sv_latch;
   if (has_redo) g_redo_depth--;
   g_poll_loop_nest--;
   g_c_loop_depth--;

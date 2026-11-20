@@ -13755,7 +13755,7 @@ int hv_emit(Compiler *c, int id, const char *count, Buf *b, int indent, char *st
   emit_indent(b, indent); buf_printf(b, "sp_int _hv%d_v = 0, _hv%d_n = %s;\n", hv, hv, count);
   emit_indent(b, indent); buf_puts(b, "{\n");
   emit_indent(b, indent + 1); buf_puts(b, "while (1) {\n");
-  if (!g_loop_polls_in_cond) emit_loop_polls(c, body, b, indent + 2, g_loop_uncounted, g_poll_loop_nest + 1);
+  if (!g_loop_polls_in_cond) emit_loop_polls(c, body, b, indent + 2, g_loop_uncounted, g_poll_loop_nest + 1, 0);
   emit_indent(b, indent + 2);
   buf_printf(b, "if (!(_hv%d_n > 0 && _hv%d_n <= INT64_MAX / 8 && _hv%d_v <= _hv%d_n - %d && _hv%d_n * %d <= %s",
              hv, hv, hv, hv, ch, hv, ow, ow_);
@@ -15924,6 +15924,7 @@ void emit_begin(Compiler *c, int id, Buf *b, int indent, const char *resultvar) 
       emit_indent(b, indent);
       buf_printf(b, "if (_nxtf%d) { ", eid);
       emit_loop_unwind(b);
+      emit_loop_latch_poll(b, " ");
       buf_puts(b, "continue; }\n");
     }
     /* a deferred `break`, the same way, popping the frames it leaves: down
@@ -22894,6 +22895,7 @@ static void emit_stmt_node(Compiler *c, int id, Buf *b, int indent) {
     }
     emit_indent(b, indent);
     emit_loop_unwind(b);
+    emit_loop_latch_poll(b, " ");
     buf_puts(b, "continue;\n"); return;
   }
   if (ty_k == NK_RedoNode)   {
@@ -22904,6 +22906,7 @@ static void emit_stmt_node(Compiler *c, int id, Buf *b, int indent) {
        enclosing loop instead) */
     if (g_redo_depth > 0 && subtree_owns_redo(nt, g_redo_owner[g_redo_depth - 1], id)) {
       emit_redo_unwind(b);
+      emit_loop_latch_poll(b, " ");
       buf_printf(b, "goto _redo_%d;\n", g_redo_stack[g_redo_depth - 1]);
     }
     else unsupported_feature(c, id, "redo in this block (its iterator cannot re-run the body)");

@@ -287,6 +287,42 @@ module Net
       nil
     end
 
+    def each
+      @fields.each { |k, values| yield k, values.join(", ") }
+      nil
+    end
+
+    def each_name
+      @fields.each_key { |k| yield k }
+      nil
+    end
+
+    def each_key
+      @fields.each_key { |k| yield k }
+      nil
+    end
+
+    def each_value
+      @fields.each_value { |values| yield values.join(", ") }
+      nil
+    end
+
+    # Each header's values under its downcased name.
+    def to_hash
+      @fields.dup
+    end
+
+    # The header's value; for an absent one the block's answer for the
+    # downcased name, else the default given, else a KeyError.
+    def fetch(name, *default)
+      k = name.to_s.downcase
+      values = @fields[k]
+      return values.join(", ") unless values.nil?
+      return yield(k) if block_given?
+      return default[0] unless default.empty?
+      raise KeyError, "key not found: #{k.inspect}"
+    end
+
     # The media type alone, as CRuby answers it: `text/html; charset=utf-8`
     # reads `text/html`. The whole header made a type check written against
     # CRuby (`res.content_type == "text/html"`) fail for nearly every real

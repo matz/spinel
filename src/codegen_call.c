@@ -3170,11 +3170,15 @@ int exc_user_method_name(Compiler *c, int id, const char *name, int argc) {
      builtin readers do. The dispatch does not check visibility, so a name
      some class of the program's makes private or protected keeps the
      reader, and so does one whose method calls super to reach the builtin
-     reader, which the boxed dispatch cannot. line and column are the
+     reader, which the boxed dispatch cannot, and so does a name the Object
+     reopening answers: its method takes that dispatch's default arm ahead
+     of the builtin reader. line and column are the
      exception: before JSON::ParserError
      answered them they were no reader's, and such a call always reached
      the program's own method, whatever the visibility. */
   if (argc == 0 && exc_gated_acc_fn(name) && !sp_streq(name, "line") && !sp_streq(name, "column")) {
+    int obj_cls = comp_core_class(c, CORE_OBJECT);
+    if (obj_cls >= 0 && call_answers(c, -1, obj_cls, name, 0, NULL)) return 0;
     for (int k = 0; k < c->nclasses; k++)
       if (class_is_exc_subclass(c, k) && call_answers(c, -1, k, name, 0, NULL) &&
           cplan_method_vis(c, id, k, name, 0, NULL) != SP_VIS_PUBLIC) return 0;

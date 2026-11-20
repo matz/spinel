@@ -3258,7 +3258,9 @@ static void lr_body_forms(Compiler *c, const int *par, int n) {
     if (v) v += skip, m -= skip;
     /* (alias_method, define_method: the first names the method) */
     if (nm && !is_method_list_call(nm) && !vis && m > 1) m = 1;
-    for (int a = 0; v && a < m; a++) lr_bform_add(r, &cap, vis_arg_name(nt, v[a]), id, nm && is_attr_name(nm));
+    /* (a visibility word's names, an Array's elements among them, as the bars read them: lr_word_name) */
+    for (int a = 0; vis && lr_word_name(nt, id, a); a++) lr_bform_add(r, &cap, lr_word_name(nt, id, a), id, 0);
+    for (int a = 0; !vis && v && a < m; a++) lr_bform_add(r, &cap, vis_arg_name(nt, v[a]), id, nm && is_attr_name(nm));
   }
   if (r->nbform) qsort(r->bform, (size_t)r->nbform, sizeof *r->bform, lr_bform_cmp);
   /* (an alias at the top level of a name the index holds, until none is new) */

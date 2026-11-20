@@ -1,3 +1,5 @@
 [false, NoMethodError, :q]
 [:m, true]
 [:m2, true]
+[:pm, :qm]
+:rm

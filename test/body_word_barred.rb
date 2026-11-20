@@ -31,3 +31,23 @@ K.setup
 p [k.respond_to?(:q), (k.q rescue $!.class), k.send(:q)]
 p [k.send(:m), k.respond_to?(:m, true)]
 p look(k)
+# a word with an Array of names, one of them inherited, and one a class
+# method may run on a subclass: the calls before it runs answer the
+# methods as they are
+class P0
+  def pm = :pm
+end
+class Q0 < P0
+  def qm = :qm
+  def self.hide = private([:pm, :qm])
+end
+q = Q0.new
+p [(q.pm rescue $!.class), (q.qm rescue $!.class)]
+Q0.hide
+class R0
+  def rm = :rm
+  def self.hide = private([:rm])
+end
+class S0 < R0; end
+S0.hide
+p((R0.new.rm rescue $!.class))

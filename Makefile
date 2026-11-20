@@ -2039,6 +2039,14 @@ ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SP_RT_PIC_LIB) $(SP_RT_MT_PIC
 	      --ext-entry ExtDup.go --ext-class Base -o "$$tmp/d.c" >"$$tmp/d.out" 2>&1; then \
 	    echo "ext-test: FAIL (--ext-class Base named two classes and compiled)"; ok=0; \
 	  else grep -q "names 2 classes" "$$tmp/d.out" || { echo "ext-test: FAIL (--ext-class Base refused without naming both classes)"; sed -n 1,3p "$$tmp/d.out"; ok=0; }; fi; \
+	  for xc in ExtDupTop ::ExtDupTop; do \
+	    if ! $(SPINEL) test/ext/dup_leaf.rb -c --no-line-map --ext-init Init_ext_dup \
+	        --ext-entry ExtDup.go,ExtDup.top --ext-class $$xc -o "$$tmp/d.c" >/dev/null 2>&1; then \
+	      echo "ext-test: FAIL (--ext-class $$xc emission)"; ok=0; \
+	    elif ! grep -Fq '"d")[1]), 0,' "$$tmp/d.c" || ! grep -Fq '"d")[1]), 1,' "$$tmp/d.c" || ! grep -Fq '"new")[1]), 1,' "$$tmp/d.c"; then \
+	      echo "ext-test: FAIL (--ext-class $$xc has no row of an optional parameter or of new)"; ok=0; \
+	    fi; \
+	  done; \
 	fi; \
 	if [ $$ok -eq 1 ]; then \
 	  awk 'BEGIN { print "module W"; for (i = 1; i <= 120; i++) printf "  def self.entry_with_a_long_name_%04d(x) = x + %d\n", i, i; print "end" }' > "$$tmp/w.rb"; \

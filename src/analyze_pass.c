@@ -3723,6 +3723,20 @@ static int push_escape_widen_each(Compiler *c, int id, int recv, int is_push, Ty
   return changed;
 }
 
+/* Each element of a multi-value store can widen the Arrays held by its
+   receiver. Joining the values first would lose their individual kinds. */
+static int widen_local_array_stores(Compiler *c, int call, int recv, const int *args,
+                                    int first, int count, TyKind value) {
+  if (!args || count - first <= 1)
+    return push_widens_arrays(c->nt, call, value) ? widen_boxed_array_sources(c, recv, value, 0) : 0;
+  int changed = 0;
+  for (int i = first; i < count; i++) {
+    TyKind elem = push_elem_ty(c, args[i]);
+    if (push_widens_arrays(c->nt, call, elem)) changed |= widen_boxed_array_sources(c, recv, elem, 0);
+  }
+  return changed;
+}
+
 static int fold_named_slot_evidence(Compiler *c, int recv, int is_push, int is_splice,
                                     int is_idx_write, TyKind kt, TyKind vt) {
   /* a qualified constant (`Codes::T["k"] = v`, `H::L << 64`) is the
@@ -4366,16 +4380,7 @@ static int infer_write_container_usage(Compiler *c, const NodeTable *nt, int nfb
           (lv->type == TY_POLY || (lv->is_block_param && ty_is_array(lv->type))) &&
           (is_push || (is_idx_write && (is_splice || kt == TY_INT))) &&
           !concat_scalar && (!is_splice || is_fill || splice_arr)) {
-        /* each pushed value is its own evidence (`z.push(1, [2])`): their
-           join is poly, which says nothing about the arrays z holds */
-        if (elem_argv && elem_an - elem_from > 1) {
-          for (int ai = elem_from; ai < elem_an; ai++) {
-            TyKind et = push_elem_ty(c, elem_argv[ai]);
-            if (push_widens_arrays(nt, id, et)) changed |= widen_boxed_array_sources(c, recv, et, 0);
-          }
-        }
-        else if (push_widens_arrays(nt, id, (TyKind)vt))
-          changed |= widen_boxed_array_sources(c, recv, (TyKind)vt, 0);
+        changed |= widen_local_array_stores(c, id, recv, elem_argv, elem_from, elem_an, (TyKind)vt);
       }
       /* A proc or lambda literal's boxed parameter written as a Hash
          (`proc { |t| t[:k] = 2 }`): the Hashes its calls hand it take the

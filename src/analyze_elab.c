@@ -11309,6 +11309,7 @@ static void lr_fire_mixin(Compiler *c, const LrEvent *v, int node, int frame, Lo
     for (int q = 0; q < hn; q++) incl_emit_stmt(nt, cp[q], &ids, &n, &cap, &fr);
     free(cp);
   }
+  incl_detach_shell(nt, clone, ids, n);   /* (the clone's shell, once its statements are the span's) */
   lr_span_add(out, ids, n, fr, param);
 }
 

@@ -26597,6 +26597,38 @@ void incl_emit_stmt(const NodeTable *nt, int s, int **out, int *no, int *cap, ch
   (*out)[(*no)++] = s;
 }
 
+/* The containers a splice unwrapped and left behind still name the live
+   statements: the cloned hook body (a StatementsNode) and each
+   class_eval-family call whose block's statements now stand in the body
+   (incl_emit_stmt). A pass that walks every node of a kind, not the tree,
+   reaches them there: the rebindable-literal marks found such a class_eval
+   block, took it for one a method of the program's might run on another
+   self, and rewrote the body's own ivar write through it, so the class's
+   slot was never declared while its reader read it. Each container not
+   placed in `out` (the statements the body took) lets go of its
+   statements, down through the eval calls it unwrapped. */
+void incl_detach_shell(NodeTable *nt, int node, const int *out, int no) {
+  if (node < 0) return;
+  for (int i = 0; i < no; i++) if (out[i] == node) return;
+  NodeKind k = nt_kind(nt, node);
+  int stmts = -1;
+  if (k == NK_StatementsNode) stmts = node;
+  else if (k == NK_CallNode && nt_ref(nt, node, "receiver") < 0 && nt_str(nt, node, "name") &&
+           is_eval_exec_family(nt_str(nt, node, "name"))) {
+    int blk = nt_ref(nt, node, "block");
+    stmts = blk >= 0 && nt_kind(nt, blk) == NK_BlockNode ? nt_ref(nt, blk, "body") : -1;
+    if (stmts >= 0 && nt_kind(nt, stmts) != NK_StatementsNode) stmts = -1;
+  }
+  if (stmts < 0) return;
+  int n = 0; const int *st = nt_arr(nt, stmts, "body", &n);
+  int *cp = n > 0 ? malloc(sizeof(int) * (size_t)n) : NULL;
+  if (n > 0 && !cp) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  if (n > 0) memcpy(cp, st, sizeof(int) * (size_t)n);
+  for (int i = 0; i < n; i++) incl_detach_shell(nt, cp[i], out, no);
+  free(cp);
+  nt_node_set_arr(nt, stmts, "body", NULL, 0);
+}
+
 /* Does the hook body hold a `return` that leaves the hook? Spliced into the
    class body it would end the program instead. A `def`, a lambda or a
    define_method block is a method of its own: its `return` stays inside. */
@@ -27034,6 +27066,7 @@ int desugar_included_hooks(Compiler *c, HostStep *h) {
     if ((!cls && ck != NK_LocalVariableWriteNode) || body < 0 || nt_kind(nt, body) != NK_StatementsNode) continue;
     int n = 0; const int *st = nt_arr(nt, body, "body", &n);
     int *out = NULL; int no = 0, cap = 0, spliced = 0;
+    int *clones = NULL, ncl = 0, ccl = 0;   /* the hook bodies cloned, for incl_detach_shell */
     InclRanges rg = {0};
     for (int k = 0; k < n; k++) {
       int s = st[k], was = no;
@@ -27081,6 +27114,12 @@ int desugar_included_hooks(Compiler *c, HostStep *h) {
         }
         int clone = nt_clone_subtree(nt, hb);
         if (clone < 0) continue;
+        if (ncl == ccl) {
+          ccl = ccl ? ccl * 2 : 8;
+          clones = realloc(clones, sizeof(int) * (size_t)ccl);
+          if (!clones) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+        }
+        clones[ncl++] = clone;
         InclSubst is = { param, cls, av[j], hook_mod, -1 };
         incl_subst(c, nt, clone, &is, 1);
         int hn = 0; const int *hs = nt_kind(nt, clone) == NK_StatementsNode ? nt_arr(nt, clone, "body", &hn) : NULL;
@@ -27098,7 +27137,13 @@ int desugar_included_hooks(Compiler *c, HostStep *h) {
       }
     }
     if (spliced) {
+      int *old = n > 0 ? malloc(sizeof(int) * (size_t)n) : NULL;
+      if (n > 0 && !old) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      if (n > 0) memcpy(old, st, sizeof(int) * (size_t)n);
       nt_node_set_arr(nt, body, "body", out, no);
+      for (int k = 0; k < n; k++) incl_detach_shell(nt, old[k], out, no);
+      for (int k = 0; k < ncl; k++) incl_detach_shell(nt, clones[k], out, no);
+      free(old);
       changed = 1;
       /* each range as the host leaves it: a graft can change its count */
       for (int i = 0, grew = 0; i < rg.len; i++)
@@ -27107,6 +27152,7 @@ int desugar_included_hooks(Compiler *c, HostStep *h) {
     for (int i = 0; i < rg.len; i++) { free(rg.frame[i]); free(rg.gone[i]); }
     free(rg.at); free(rg.n); free(rg.frame); free(rg.gone);
     free(out);
+    free(clones);
   }
   if (qn) for (int m = 0; m < n0; m++) free(qn[m]);
   free(qn);

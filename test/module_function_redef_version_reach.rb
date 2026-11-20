@@ -79,3 +79,36 @@ class Leaf < Root
 end
 
 p Leaf.new.tag, Tagging.tag
+
+# An instance def, then a module function, then a plain def calling super:
+# one history of the name, its last version's super past the module, for
+# an include in the class's first body and in a later one.
+class Base2
+  def mark = :base
+end
+
+module Marking
+  def mark = :old
+  module_function
+
+  def mark = :module
+end
+
+module Marking
+  public
+
+  def mark = [:own, super]
+end
+
+class Early < Base2
+  include Marking
+end
+
+class Late < Base2
+end
+
+class Late
+  include Marking
+end
+
+p Early.new.mark, Late.new.mark, Marking.mark

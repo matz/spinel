@@ -8473,11 +8473,15 @@ static int mixin_prev_version(Compiler *c, int mod_id, int ms, const int *made) 
   const Scope *src = &c->scopes[ms];
   for (int s = ms - 1; s >= 0; s--) {
     const Scope *k = &c->scopes[s];
-    /* (an instance def after a module function of the name is a later
-       version of the module function's instance side, whose super reaches
-       past the module as each version's does) */
-    int same = k->is_cmethod == src->is_cmethod || (!src->is_cmethod && k->is_module_function);
+    /* (a module function's instance side and an instance def of the name
+       are one history, whichever came first: a later one is a version of
+       the earlier, whose super reaches past the module as each version's
+       does; a class method that is no module function is not on it) */
+    int same = mixin_inst_side(k) == mixin_inst_side(src) && (k->is_cmethod == src->is_cmethod || k->is_module_function || src->is_module_function);
     if (k->class_id != mod_id || k->shadow || !same || !k->name || !sp_streq(k->name, src->name)) continue;
+    /* (a form of the other side the include left out, a guarded one's:
+       the version before it is the one this follows) */
+    if (!made[s] && k->is_module_function != src->is_module_function) continue;
     return made[s] ? made[s] - 1 : -1;
   }
   return -1;
@@ -8555,7 +8559,15 @@ static void include_module_methods(Compiler *c, int ci, int mod_id, int guard, i
     /* (a module function and an instance def of the name, either replacing
        the other, both come over, each a version of the includer's method:
        a call reaches the one that is live when it runs, the module
-       function's instance side private, the def public) */
+       function's instance side private, the def public. Not under a
+       guarded include, a later body's, whose copies stand under hidden
+       names behind the class's own: there the name's last form alone comes
+       over, as before) */
+    if (guard && !src->shadow) {
+      int live = comp_self_method_in_chain(c, mod_id, src->name, NULL);
+      if (live >= 0 && live != ms && (src->is_cmethod ? !c->scopes[live].is_cmethod : (mod_mf && c->scopes[live].is_module_function)))
+        continue;
+    }
     const char *dst_name = src->name;
     char inc_shadow[256];
     /* a hidden copy the module holds (what its own include or prepend put
@@ -8600,6 +8612,9 @@ static void include_module_methods(Compiler *c, int ci, int mod_id, int guard, i
        earlier one's copy, by its name, where that stands under the real
        name (mixin_prev_version) */
     int prev = src->shadow || plain ? -1 : mixin_prev_version(c, mod_id, ms, made), vguard = -1;
+    /* (a module function's copy does not stand under a guarded copy's
+       hidden name: its private instance side goes by its own name) */
+    if (prev >= 0 && src->is_module_function && c->scopes[prev].mixin_guarded) prev = -1;
     if (prev >= 0 && c->scopes[prev].mixin_guarded && c->scopes[prev].guard_behind >= 0 &&
         sp_streq(comp_scope_user_name(&c->scopes[prev]), src->name)) {
       /* (a guarded copy's: under its hidden name, with its guard) */

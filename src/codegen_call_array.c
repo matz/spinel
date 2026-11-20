@@ -2592,13 +2592,12 @@ int emit_call_store_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
            value can drop the hash, and the key when it can allocate, as the
            statement form roots them. */
         int tr = -1, tk = -1;
+        TyKind held_key = TY_UNKNOWN;
         if (subtree_may_allocate(c, recv) || subtree_may_allocate(c, argv[0])) {
-          TyKind kt = ty_hash_key(rt);
           tr = ++g_tmp; tk = ++g_tmp;
           buf_printf(b, "%s _t%d = ", c_type_name(rt), tr); emit_expr(c, recv, b); buf_puts(b, "; ");
           emit_index_recv_root(c, rt, id, recv, argv, 2, tr, 0, b);
-          buf_printf(b, "%s _t%d = ", c_type_name(kt), tk); emit_hash_store_key(c, argv[0], rt, b); buf_puts(b, "; ");
-          if (operand_may_allocate(c, argv[0]) && needs_root(kt)) { emit_gc_root_tmp(c, kt, tk, b); buf_puts(b, " "); }
+          held_key = hold_hash_store_key(c, argv[0], rt, tk, b);
         }
         /* For poly hashes with scalar values, store the scalar and box it for the hash call.
            A nil/void rhs (`return @cache[k] = nil`) has no C storage type --
@@ -2617,22 +2616,27 @@ int emit_call_store_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
            store; the expression answers it in the face it is typed */
         int vheld = typed_elem_held(rt) == TY_STRBUF && !unbox_poly_val && !coerce_unknown_val;
         if (vheld) decl_type = TY_STRBUF;
+        /* When the slot is poly but the rhs has no type yet (e.g. `{}`),
+           emit a boxed value so the sp_RbVal temp initialises correctly. */
+        Buf value = {0}, *saved_pre = g_pre;
+        if (held_key == TY_STRBUF) g_pre = b;
+        if (vpolyo) emit_oint_expr(c, argv[1], vpt, &value);
+        else if (voset) emit_oint_expr(c, argv[1], TY_INT, &value);
+        else if (vboxo) { buf_puts(&value, "sp_poly_hval_oi("); emit_expr(c, argv[1], &value); buf_puts(&value, ")"); }
+        else if (unbox_poly_val) {
+          const char *fn = hvt == TY_STRING ? "sp_poly_hval_s" : hvt == TY_INT ? "sp_poly_hval_i" : "sp_poly_hval_f";
+          buf_printf(&value, "%s(", fn); emit_expr(c, argv[1], &value); buf_puts(&value, ")");
+        }
+        else if (coerce_unknown_val) emit_unresolved_coerced(c, argv[1], hvt, &value);
+        else if (vheld) emit_typed_elem_value(c, argv[1], rt, &value);
+        else if (decl_type == TY_POLY) emit_boxed(c, argv[1], &value);
+        else emit_expr_face(c, argv[1], decl_type, &value);
+        g_pre = saved_pre;
         if (vpolyo) buf_puts(b, oint_ctype(vpt));
         else if (voset || vboxo) buf_puts(b, "sp_oint"); else emit_ctype(c, decl_type, b);
         buf_printf(b, " _t%d = ", tv);
-        /* When the slot is poly but the rhs has no type yet (e.g. `{}`),
-           emit a boxed value so the sp_RbVal temp initialises correctly. */
-        if (vpolyo) emit_oint_expr(c, argv[1], vpt, b);
-        else if (voset) emit_oint_expr(c, argv[1], TY_INT, b);
-        else if (vboxo) { buf_puts(b, "sp_poly_hval_oi("); emit_expr(c, argv[1], b); buf_puts(b, ")"); }
-        else if (unbox_poly_val) {
-          const char *fn = hvt == TY_STRING ? "sp_poly_hval_s" : hvt == TY_INT ? "sp_poly_hval_i" : "sp_poly_hval_f";
-          buf_printf(b, "%s(", fn); emit_expr(c, argv[1], b); buf_puts(b, ")");
-        }
-        else if (coerce_unknown_val) emit_unresolved_coerced(c, argv[1], hvt, b);
-        else if (vheld) emit_typed_elem_value(c, argv[1], rt, b);
-        else if (decl_type == TY_POLY) emit_boxed(c, argv[1], b);
-        else emit_expr_face(c, argv[1], decl_type, b);
+        if (value.p) buf_puts(b, value.p);
+        free(value.p);
         /* a key that is a shared String slot's read is a fresh copy, read
            in the set after the value: the value is held across it */
         if (tk < 0 && strbuf_read_copies(c, argv[0]) && (operand_may_allocate(c, argv[1]) || (vheld && typed_elem_hold_may_make(c, argv[1], rt)))) {
@@ -2642,7 +2646,7 @@ int emit_call_store_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
         buf_puts(b, ")) sp_raise_frozen_hash_at("); emit_node_or_tmp(c, recv, tr, b); buf_printf(b, ", %s); ", hash_box_cls(rt));
         buf_printf(b, "sp_%sHash_%s%s(", hn, voset || vboxo ? "oset" : "set", voset || vboxo ? "" : typed_elem_store_sfx(rt));
         emit_node_or_tmp(c, recv, tr, b); buf_puts(b, ", ");
-        if (tk >= 0) buf_printf(b, "_t%d", tk);
+        if (tk >= 0) buf_printf(b, held_key == TY_STRBUF ? "SP_STR_B(_t%d)" : "_t%d", tk);
         else emit_hash_store_key(c, argv[0], rt, b);  /* unbox a poly key to the hash's key type */
         buf_puts(b, ", ");
         char tvn[32]; snprintf(tvn, sizeof tvn, "_t%d", tv);

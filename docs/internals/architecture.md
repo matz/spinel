@@ -60,6 +60,8 @@ both the new key and the original value.
 Hash key insertion consults the runtime String's frozen state. It retains a
 frozen key and makes a frozen key object for an unfrozen input, including a
 static empty or one-character result. The Hash stores the key's byte view.
+An ordered typed store holds a String key through evaluation of the value
+and takes the key's bytes when inserting the pair.
 
 Conditional method dispatchers expose real call arguments even when their
 parameter names are synthesized. The shared argument binder judges those

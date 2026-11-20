@@ -1,0 +1,6 @@
+{"first" => "seed", "abc" => "value"}
+true
+false
+{"first" => "seed", "abc" => "value"}
+true
+{"first" => 1, "abc" => 2}

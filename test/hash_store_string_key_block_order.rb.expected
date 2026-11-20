@@ -1,0 +1,2 @@
+{"seed" => "value", "key!" => "saved"}
+[:receiver, :key, :value]

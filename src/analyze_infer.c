@@ -4969,6 +4969,27 @@ static int rand_lit_range_float(Compiler *c, int arg) {
   return (lo >= 0 && infer_type(c, lo) == TY_FLOAT) || (hi >= 0 && infer_type(c, hi) == TY_FLOAT);
 }
 
+/* Does the program make a Complex: an imaginary literal, the Complex
+   constant, Kernel#Complex, a to_c or a Numeric#i? Asked once per compile,
+   for the boxed result of Math.sqrt, so a program with no Complex keeps a
+   Float one. */
+static int an_program_makes_complex(Compiler *c, const NodeTable *nt) {
+  static const Compiler *mc_c; static int mc;
+  if (mc_c == c) return mc;
+  mc_c = c;
+  int n = 0;
+  nt_nodes_of_kind(nt, NK_ImaginaryNode, &n);
+  mc = n > 0;
+  static const NodeKind kinds[] = { NK_ConstantReadNode, NK_ConstantPathNode, NK_CallNode };
+  for (int k = 0; !mc && k < 3; k++) {
+    const int *ids = nt_nodes_of_kind(nt, kinds[k], &n);
+    for (int i = 0; !mc && i < n; i++) {
+      const char *nm = nt_str(nt, ids[i], "name");
+      mc = nm && (sp_streq(nm, "Complex") || (kinds[k] == NK_CallNode && (sp_streq(nm, "to_c") || sp_streq(nm, "i"))));
+    }
+  }
+  return mc;
+}
 static int infer_builtin_cmethod_call(Compiler *c, int id, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind *out) {
   /* StringIO: a native-bound class (packages/stringio); no arms here. .new
      resolves through the class table, .open is Ruby in the package, and
@@ -5062,6 +5083,14 @@ static int infer_builtin_cmethod_call(Compiler *c, int id, const NodeTable *nt, 
         !an_user_defines_method(c, name)) {
       TyKind vrt = infer_type(c, recv);
       if (vrt == TY_POLY || vrt == TY_CLASS) { *out = TY_POLY; return 1; }
+    }
+    /* Math.sqrt of a Complex is a Complex (rb_math_sqrt); a boxed argument
+       that may hold one, in a program that makes one, gives a boxed result */
+    if (rk == NK_ConstantReadNode && key_name(c, recv) && sp_streq(key_name(c, recv), "Math") &&
+        sp_streq(name, "sqrt") && argc == 1) {
+      TyKind at = infer_type(c, argv[0]);
+      if (at == TY_COMPLEX) { *out = TY_COMPLEX; return 1; }
+      if (at == TY_POLY && an_program_makes_complex(c, nt) && cls_fact_may_hold_builtin(c, argv[0], CORE_COMPLEX)) { *out = TY_POLY; return 1; }
     }
     if (rk == NK_ConstantReadNode &&
         key_name(c, recv) && sp_streq(key_name(c, recv), "Math") &&

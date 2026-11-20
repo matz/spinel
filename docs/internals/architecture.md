@@ -174,6 +174,8 @@ exception and rescue frames of the regions it crosses.
 An ensure suspends a pending nonlocal transfer while its body runs.
 Normal completion resumes the saved transfer. A transfer leaving the
 ensure body replaces it.
+Each jump to a protected region drops the handler scopes it crosses.
+The remaining targets stay available while the ensure runs.
 A receiver-answering iterator at method tail keeps its receiver in the
 operand view across the block and returns it through the physical result
 slot, including a String handle slot. Builtin rows identify self answers;

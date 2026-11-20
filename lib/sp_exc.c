@@ -1784,28 +1784,18 @@ void *sp_exc_ending_obj(const char *cls, const char *msg, void *obj, void *cause
   if (!e->cause) { sp_gc_wb((void *)e); e->cause = (sp_Exception *)cause; }
   return e;
 }
-/* Drop the catch entries, break scopes and proc-return homes a raise unwinds
-   past. sp_raise_cls calls this just before it longjmps to sp_exc_stack
-   [sp_exc_top-1]; that handler is the frame the exception lands in, and every
-   entry opened INSIDE it dies with the C frames the longjmp skips over.
+/* Drop the catch entries, break scopes and proc-return homes a jump unwinds
+   past before entering sp_exc_stack[sp_exc_top - 1]. Entries opened inside
+   that handler die with the C frames the longjmp skips over.
 
    Each of the three records the exception depth at its own entry, so "opened
    inside the landing frame" reads the same on all of them: the landing frame
    was armed at sp_exc_top-1, so anything entered after it recorded sp_exc_top
    or more, and anything entered before it recorded less.
 
-   The raise is the one place this can be done once. A landing pops the same
-   entries with `> sp_exc_top` after its own sp_exc_top--, but only six of the
-   ten emitted landings ever did so, and the four that did not -- Kernel#loop
-   in either form, the enumerator fold and the ext-host try -- leaked every
-   entry that unwound through them. Here it also costs the emitted code
-   nothing.
-
-   Not called for a proc return, a throw or a valued break: those longjmp to
-   sp_exc_stack themselves, and each trims its own target stack first
-   (sp_throw sets sp_catch_top, sp_brk_throw sets sp_brk_top, sp_proc_return
-   walks to a live home), so the entries between here and the target are still
-   the ones they mean to deliver to. */
+   A transfer may cross several handlers. Each jump drops only the scopes
+   crossed on that leg, so an ensure can still use targets outside its
+   landing frame. */
 static void sp_handler_stacks_unwind(void) {
   /* a dead catch entry is worse than a leak: sp_catch_top is fixed at 64, so a
      raise out of a catch in a loop walks it off the end -- and a later `throw`
@@ -2195,7 +2185,11 @@ SP_NORETURN SP_COLD void sp_raise_cls(const char *cls, const char *msg) {
    handlers lie between here and the target, longjmp to the next; otherwise
    deliver to the target (the proc-return home node, or the matched catch slot). */
 void sp_unwind_resume(void) {
-  if (sp_exc_top > sp_unwind_exc_top) { sp_poly_recur_unwind(); longjmp(sp_exc_stack[sp_exc_top - 1], 1); }
+  if (sp_exc_top > sp_unwind_exc_top) {
+    sp_handler_stacks_unwind();
+    sp_poly_recur_unwind();
+    longjmp(sp_exc_stack[sp_exc_top - 1], 1);
+  }
   int kind = sp_unwind_kind;
   sp_unwind_kind = SP_UNWIND_NONE;
   if (kind == SP_UNWIND_EXIT) exit(sp_exc_at_exit(0));
@@ -2207,9 +2201,11 @@ void sp_unwind_resume(void) {
     longjmp(sp_unwind_home->jb, 1);
   }
   if (kind == SP_UNWIND_BREAK) {
+    sp_brk_top = sp_unwind_target + 1;
     sp_poly_recur_pop(sp_brk_recur_mark[sp_unwind_target]);
     longjmp(sp_brk_stack[sp_unwind_target], 1);
   }
+  sp_catch_top = sp_unwind_target + 1;
   sp_poly_recur_pop(sp_catch_recur_mark[sp_unwind_target]);
   longjmp(sp_catch_stack[sp_unwind_target], 1);
 }

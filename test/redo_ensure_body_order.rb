@@ -62,3 +62,26 @@ end
 
 replaces_pending_throw
 keeps_pending_throw
+
+attempts = 0
+result = catch(:outer) do
+  catch(:inner) do
+    [1].each do
+      begin
+        attempts += 1
+        redo if attempts == 1
+        throw :inner, +"inner"
+      ensure
+        if attempts == 1
+          begin
+            throw :outer, +"discarded"
+          ensure
+            GC.start
+            redo
+          end
+        end
+      end
+    end
+  end
+end
+p [attempts, result]

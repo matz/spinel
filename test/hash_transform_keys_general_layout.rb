@@ -21,3 +21,4 @@ p mixed, strings, mixed[0.25].equal?(first)
 nullable = { "a" => 1, "b" => 2 }
 p nullable.transform_keys { |key| key.index("a") }
 p nullable.transform_keys { |key| next 0 if key == "a"; nil }
+p nullable.transform_keys { |key| next key.index("a") if key == "b"; 0 }

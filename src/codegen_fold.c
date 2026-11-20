@@ -6737,6 +6737,16 @@ int emit_collect_expr(Compiler *c, int id, Buf *b) {
    the block value; `select`/`reject` collect the element conditionally; `each`
    runs the body for side effect and yields the receiver array. Arrays only --
    a range enumerator is a later slice. Returns 1 if handled. */
+int with_index_each_array(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  const char *name = id >= 0 && nt_kind(nt, id) == NK_CallNode ? nt_str(nt, id, "name") : NULL;
+  if (!name || !sp_streq(name, "with_index")) return -1;
+  int recv = nt_ref(nt, id, "receiver");
+  if (recv < 0 || nt_kind(nt, recv) != NK_CallNode || nt_ref(nt, recv, "block") >= 0 ||
+      nt_ref(nt, recv, "arguments") >= 0 || !nt_str(nt, recv, "name") || !sp_streq(nt_str(nt, recv, "name"), "each"))
+    return -1;
+  return nt_ref(nt, recv, "receiver");
+}
 int emit_with_index_expr(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
@@ -6832,9 +6842,23 @@ int emit_with_index_expr(Compiler *c, int id, Buf *b) {
     else buf_printf(g_pre, "sp_%sArray *_t%d = sp_%sArray_new();\n", rk, tres, rk);
     emit_indent(g_pre, g_indent); buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", tres);
   }
+  /* an Array's each.with_index keeps the arrays' headers as `each` does
+     (hc_iter_begin), its own among them: an Integer or Float receiver is
+     walked through that header (its length, and its elements below the
+     nil-free length), so the walk's poll reloads none of them */
+  Buf *ew_sv_pre = g_pre, *ew_pb = g_pre;
+  void *ew_hc = is_each && !range_src ? hc_iter_begin(c, id, &ew_pb) : NULL;
+  g_pre = ew_pb;
+  char ewd[48] = "", ewl[48], eww[48], ewr[48];
+  if (ew_hc && (rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY) &&
+      hc_array(c, arr_recv, rt == TY_FLOAT_ARRAY, ewd, ewl, eww, sizeof ewd))
+    hc_read_len(ewd, ewr, sizeof ewr);
   emit_indent(g_pre, g_indent);
-  buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++, _t%d++) {\n",
-             ti, ti, k, trecv, ti, tidx);
+  if (ewd[0])
+    buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < %s; _t%d++, _t%d++) {\n", ti, ti, ewl, ti, tidx);
+  else
+    buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++, _t%d++) {\n",
+               ti, ti, k, trecv, ti, tidx);
 
   int innerIndent = g_indent + 1;
   TyKind elem_t = rr.elem;
@@ -6847,6 +6871,9 @@ int emit_with_index_expr(Compiler *c, int id, Buf *b) {
       char src[256]; typed_elem_getf(src, sizeof src, rt, k, "_t%d, _t%d", trecv, ti);
       buf_printf(g_pre, "lv_%s = ", p0); emit_boxed_elem_read(c, elem_t, src, g_pre); buf_puts(g_pre, ";\n");
     }
+    else if (ewd[0] && !bp_slot_oint(c, block, BP0(c, block), k))
+      buf_printf(g_pre, "lv_%s = SP_LIKELY((unsigned long long)_t%d < (unsigned long long)%s) ? %s[_t%d] : sp_%sArray_get(_t%d, _t%d);\n",
+                 p0, ti, ewr, ewd, ti, k, trecv, ti);
     else { buf_printf(g_pre, "lv_%s = ", p0); bp_elem_read(c, block, BP0(c, block), k, trecv, ti, g_pre); buf_puts(g_pre, ";\n"); }
   }
   if (p1) {
@@ -6854,7 +6881,17 @@ int emit_with_index_expr(Compiler *c, int id, Buf *b) {
     if (clv1 && clv1->type == TY_POLY) buf_printf(g_pre, "lv_%s = sp_box_int(_t%d);\n", p1, tidx);
     else buf_printf(g_pre, "lv_%s = _t%d;\n", p1, tidx);
   }
-  if (is_each) emit_iter_step_body(c, block, g_pre, innerIndent);
+  if (is_each) {
+    /* each.with_index polls as `each` over the array does (emit_loop_body):
+       a threaded program's safepoint, and a delivered signal where no loop
+       of the function encloses the walk and its body runs code -- a walk of
+       a long array whose block calls methods answered a Ctrl-C only once it
+       ended. The walk is the enclosing loop of any loop in its block. */
+    int nest = ++g_poll_loop_nest;
+    emit_loop_polls(c, body, g_pre, innerIndent, 0, nest);
+    emit_iter_step_body(c, block, g_pre, innerIndent);
+    g_poll_loop_nest--;
+  }
   else {
     IterStep st; emit_iter_step_open(c, block, !is_map, innerIndent, &st);
     int saveInd = g_indent; g_indent = innerIndent;
@@ -6916,6 +6953,8 @@ int emit_with_index_expr(Compiler *c, int id, Buf *b) {
     free(vb.p);
   }
   emit_indent(g_pre, g_indent); buf_puts(g_pre, "}\n");
+  g_pre = ew_sv_pre;
+  hc_iter_end(ew_hc, &ew_pb, g_indent, 1);
   if (fresh) { emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_%sArray_end_fresh(_t%d, _t%d);\n", rk, tres, tfill); }
   /* a kept element carries the receiver's nils (the map arm notes its own) */
   if (collecting && !is_map && !range_src && k && rk && sp_streq(rk, k) && (is_numeric_literal_tag(k))) {

@@ -2245,6 +2245,10 @@ TyKind emit_iter_step_tail(Compiler *c, const IterStep *st, Buf *vb);
 void emit_iter_step_cond(Compiler *c, const IterStep *st, int raw, Buf *cb);
 int emit_collect_expr(Compiler *c, int id, Buf *b);
 int emit_with_index_expr(Compiler *c, int id, Buf *b);
+/* For `X.each.with_index(off) { }` -- id the with_index call, its receiver a
+   blockless each without arguments -- the node X the chain walks; else -1
+   (codegen_fold.c) */
+int with_index_each_array(Compiler *c, int id);
 int emit_enum_with_index_expr(Compiler *c, int id, Buf *b);
 int emit_enum_find_expr(Compiler *c, int id, Buf *b);
 int emit_each_with_index_chain(Compiler *c, int id, Buf *b);

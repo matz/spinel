@@ -12317,6 +12317,16 @@ static int hc_block_loop(Compiler *c, int id) {
     return 1;
   if ((rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY || rt == TY_STR_ARRAY || ty_is_ptr_array(rt)) &&
       (sp_streq(nm, "each") || sp_streq(nm, "each_with_index"))) return 1;
+  /* ...and its each.with_index, by an Integer offset or none, which walks
+     the array itself (emit_with_index_expr) */
+  int ewa = with_index_each_array(c, id);
+  if (ewa >= 0) {
+    TyKind at = repr_of(c, ewa).as_ty;
+    int a = nt_ref(nt, id, "arguments"), an = 0;
+    const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+    return (at == TY_INT_ARRAY || at == TY_FLOAT_ARRAY || at == TY_STR_ARRAY || ty_is_ptr_array(at)) &&
+           an <= 1 && (an < 1 || repr_of(c, av[0]).as_ty == TY_INT);
+  }
   /* a typed array's zip with one typed array (emit_iteration_stmt_body's
      block form), which walks both by its count */
   if ((rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY) && is_zip_name(nm)) {
@@ -12350,7 +12360,10 @@ static int hc_block_loop_ok(Compiler *c, int id, HcRegion *r) {
     if (!pn) break;
     nameset_add(&r->wl, pn);
   }
-  if (!hc_node_ok(c, nt_ref(nt, id, "receiver"), 0, r)) return 0;
+  /* (a with_index's receiver is the blockless each over the array it walks) */
+  int rv = with_index_each_array(c, id);
+  if (rv < 0) rv = nt_ref(nt, id, "receiver");
+  if (!hc_node_ok(c, rv, 0, r)) return 0;
   int a = nt_ref(nt, id, "arguments"), an = 0;
   const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
   for (int i = 0; i < an; i++) if (!hc_node_ok(c, av[i], 0, r)) return 0;

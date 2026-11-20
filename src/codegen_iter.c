@@ -6410,6 +6410,15 @@ static int iter_enum_poly_walk_arms(Compiler *c, int id, Buf *b, int indent, con
      the chain emitters; this is the stored-value case. with_object desugars to
      to_a.each_with_object in analyze.) */
   if (rt == TY_ENUMERATOR && sp_streq(name, "with_index")) {
+    /* ...but not `arr.each.with_index(off) { }`, the immediate chain over
+       an Array or an Integer Range: emit_with_index_expr walks the array
+       itself, by its own kind, where draining the enumerator copied and
+       boxed every element first and unboxed it again for the block (9x a
+       while loop over a Float Array). The statement declines here and the
+       expression path takes the chain. */
+    int ewa = with_index_each_array(c, id);
+    TyKind ewt = ewa >= 0 ? repr_of(c, ewa).as_ty : TY_UNKNOWN;
+    if (ty_is_array(ewt) || ewt == TY_RANGE) return 0;
     int wargs = nt_ref(nt, id, "arguments");
     int wargc = 0;
     const int *wargv = wargs >= 0 ? nt_arr(nt, wargs, "arguments", &wargc) : NULL;

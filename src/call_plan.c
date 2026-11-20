@@ -10405,6 +10405,7 @@ static void cpoly_defaults0(Compiler *c, int id, const char *name, const PolySpe
   int blockless = nt_ref(c->nt, id, "block") < 0;
   int fam = -1;
   if (obj_done) fam = -1;
+  else if (exc_um_reentered(id) && exc_um_only_acc(name)) fam = PB_D_EXC_ACC;
   else if (sp_streq(name, "__to_enum_each") && (ret == TY_POLY || ret == TY_ENUMERATOR)) fam = PB_D_ENUM_EACH;
   else if (cplan_boxed_fallback_row(c, id, name, ret, NULL)) fam = PB_D_TO_S;
   else if (cpoly_name_in(name, case_conv)) fam = PB_D_CASE_CONV;
@@ -10483,7 +10484,7 @@ static void cpoly_resolve(Compiler *c, int id, PolyPlan *p, int full) {
     /* a default written by now (the Object reopening's, a builtin one), or
        the builtin surface's, and the raise when it declines */
     int done = n1 > n0;
-    for (int f = PB_D_ENUM_EACH; f <= PB_D_HASH; f++) done |= cplan_poly_has_family(p, f);
+    for (int f = PB_D_EXC_ACC; f <= PB_D_HASH; f++) done |= cplan_poly_has_family(p, f);
     if (cplan_poly_has_family(p, PB_D_ARRAY_TRANSFORM)) cpoly_trial(p, &cap, PT_ARRAY_FALLBACK);
     if (!done) cpoly_trial(p, &cap, PT_DEFAULT0);
   }

@@ -307,7 +307,8 @@ static int an_block_unused_by_builtin(Compiler *c, int id) {
   int blk = nt_kind(c->nt, id) == NK_CallNode ? nt_ref(c->nt, id, "block") : -1;
   const char *nm = blk >= 0 ? nt_str(c->nt, id, "name") : NULL;
   return blk >= 0 && ((nt_kind(c->nt, blk) == NK_BlockArgumentNode && builtin_read_ignores_block(nm)) ||
-                      sp_streq(nm, "line") || sp_streq(nm, "column"));
+                      sp_streq(nm, "line") || sp_streq(nm, "column") ||
+                      (an_exc_um_reentry(id) && exc_gated_acc_fn(nm)));
 }
 TyKind an_builtin_answer(Compiler *c, int id) {
   int was = an_builtin_only, was_recv = an_bo_recv;
@@ -8012,6 +8013,10 @@ static int infer_enum_chain_call(Compiler *c, int id, const NodeTable *nt, const
 }
 
 /* An exception receiver: an exception class's methods and an exception-shaped instance's queries (infer_call_inner's rules, in their order) */
+/* the call infer_exception_call re-infers on the boxed exception
+   (exc_user_method_name), -1 outside it */
+static int g_exc_um_infer = -1;
+int an_exc_um_reentry(int id) { return id >= 0 && id == g_exc_um_infer; }
 static int infer_exception_call(Compiler *c, int id, const NodeTable *nt, const char *name, int recv, int argc, TyKind rt, TyKind *out) {
   /* Exception.to_tty? answers whether stderr is a terminal (#2757). */
   if (recv >= 0 && (nt_kind(nt, recv) == NK_ConstantReadNode ||
@@ -8048,7 +8053,9 @@ static int infer_exception_call(Compiler *c, int id, const NodeTable *nt, const 
      types it, which codegen re-enters (exc_user_method_name) */
   if (recv >= 0 && rt == TY_EXCEPTION && !face_active() && exc_user_method_name(c, id, name, argc)) {
     an_face_push(recv, TY_POLY);
+    int sv_um = g_exc_um_infer; g_exc_um_infer = id;
     TyKind ut = infer_call(c, id);
+    g_exc_um_infer = sv_um;
     an_face_pop();
     if (ut != TY_UNKNOWN) { *out = ut; return 1; }
   }
@@ -9277,16 +9284,16 @@ static TyKind infer_call_prelude(Compiler *c, int id) {
 
 /* The exception accessors infer_call_inner types on a poly receiver: the
    ones sp_poly_exc_acc answers with a boxed value. */
-static int is_poly_exc_boxed_accessor(const char *name) {
-  return sp_streq(name, "backtrace") || sp_streq(name, "result") || sp_streq(name, "errno") ||
+static int is_poly_exc_boxed_accessor(int id, const char *name) {
+  return (an_exc_um_reentry(id) && exc_um_only_acc(name)) || sp_streq(name, "backtrace") || sp_streq(name, "result") || sp_streq(name, "errno") ||
          sp_streq(name, "error_code") || sp_streq(name, "key") || sp_streq(name, "receiver") ||
          sp_streq(name, "args") || sp_streq(name, "private_call?") ||
          sp_streq(name, "line") || sp_streq(name, "column");
 }
 /* ...called with no argument, and #exception with or without a message:
    the receiver or a copy of it, boxed (the emitter's poly arm) */
-static int is_poly_exc_boxed_call(const char *name, int argc) {
-  return (argc == 0 && is_poly_exc_boxed_accessor(name)) || (argc <= 1 && sp_streq(name, "exception"));
+static int is_poly_exc_boxed_call(int id, const char *name, int argc) {
+  return (argc == 0 && is_poly_exc_boxed_accessor(id, name)) || (argc <= 1 && sp_streq(name, "exception"));
 }
 
 /* A push onto a typed Array a builtin call just built (`s.scan(/\d+/) << 99`,
@@ -9752,7 +9759,7 @@ static TyKind infer_call_inner(Compiler *c, int id) {
        the exception has none -- `if msg.backtrace` in the logger gem's
        Formatter was refused as a non-bool condition because the call had
        no type at all */
-    if (is_poly_exc_boxed_call(name, argc)) return an_planned_call_ret(c, id, TY_POLY);
+    if (is_poly_exc_boxed_call(id, name, argc)) return an_planned_call_ret(c, id, TY_POLY);
   }
 
   /* A call with NO receiver resolves the way CRuby's ancestry does: the

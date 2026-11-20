@@ -1363,6 +1363,10 @@ int super_reaches_exc_text(Compiler *c, int id, int reopen);
 int exc_message_super_to_s(Compiler *c, int id, int *out, int cap);
 int exc_subclass_defines(Compiler *c, const char *name);
 int exc_user_method_name(Compiler *c, int id, const char *name, int argc);
+int exc_um_only_acc(const char *name);
+const char *exc_gated_acc_fn(const char *name);
+int exc_um_reentered(int id);
+int an_exc_um_reentry(int id);
 /* Defined in codegen_fold.c; 1 if class `k` is `anc` or a descendant of it. */
 int is_descendant(Compiler *c, int k, int anc);
 /* Defined in codegen_fold.c; distinct implementations of call `call`'s

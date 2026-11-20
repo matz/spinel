@@ -18947,6 +18947,8 @@ static sp_bool sp_exc_highlight_check(sp_RbVal v) {
   sp_raise_cls("ArgumentError", sp_sprintf("expected true or false as highlight: %s", text));
   return FALSE;
 }
+static sp_RbVal sp_exc_reason_acc(sp_Exception *e);
+static sp_RbVal sp_exc_tag_acc(sp_Exception *e);
 static sp_RbVal sp_poly_exc_acc(sp_RbVal v, const char *which) {
   /* a user exception subclass boxes under its own class id; its object is
      an sp_Exception all the same */
@@ -18966,6 +18968,15 @@ static sp_RbVal sp_poly_exc_acc(sp_RbVal v, const char *which) {
   if (!strcmp(which, "key"))     return sp_exc_key_acc(e);
   if (!strcmp(which, "receiver")) return sp_exc_receiver_acc(e);
   if (!strcmp(which, "name"))    return sp_exc_name_acc(e);
+  if (!strcmp(which, "path"))    return sp_exc_path_acc(e);
+  if (!strcmp(which, "status"))  return sp_box_int(sp_exc_status_acc(e));
+  if (!strcmp(which, "success?")) return sp_box_bool(sp_exc_success_acc(e));
+  if (!strcmp(which, "reason"))  return sp_exc_reason_acc(e);
+  if (!strcmp(which, "exit_value")) return sp_exc_exit_value_acc(e);
+  if (!strcmp(which, "tag"))     return sp_exc_tag_acc(e);
+  if (!strcmp(which, "value"))   return sp_exc_throw_value_acc(e);
+  if (!strcmp(which, "signo"))   return sp_box_int(sp_exc_signo_acc(e));
+  if (!strcmp(which, "signm"))   { SP_GC_ROOT(e); return sp_box_str_new(sp_exc_signm_acc(e)); }
   if (!strcmp(which, "backtrace"))
     return e->backtrace ? sp_box_obj(e->backtrace, SP_BUILTIN_STR_ARRAY) : sp_box_nil();
   if (!strcmp(which, "cause"))

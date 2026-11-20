@@ -3131,6 +3131,16 @@ int exc_subclass_defines(Compiler *c, const char *name) {
   return 0;
 }
 
+/* The class-gated readers the poly exception paths answer only for a call
+   exc_user_method_name sends through the boxed dispatch: elsewhere a poly
+   receiver of the name may be no exception at all (Thread#value,
+   Thread#status, File#path, Module#name), whose own arms must keep it. */
+int exc_um_only_acc(const char *name) {
+  static const char *const T[] = {
+    "path", "status", "success?", "reason", "exit_value", "tag", "value", "signo", "signm", "name", NULL };
+  for (int i = 0; T[i]; i++) if (sp_streq(name, T[i])) return 1;
+  return 0;
+}
 /* 1 iff a call of `name` on a TY_EXCEPTION receiver can only be one of the
    program's exception classes' own methods (HTTPStatus::Status#code): some
    user subclass defines it, no builtin exception reopening does (that has
@@ -3144,35 +3154,36 @@ int exc_subclass_defines(Compiler *c, const char *name) {
 int exc_user_method_name(Compiler *c, int id, const char *name, int argc) {
   static const char *const surface[] = {
     "message", "to_s", "to_str", "inspect", "full_message", "detailed_message", "exception",
-    "backtrace", "backtrace_locations", "set_backtrace", "cause", "result", "class",
+    "backtrace", "backtrace_locations", "set_backtrace", "cause", "class",
     "==", "!=", "===", "=~", "!", "eql?", "equal?", "hash", "object_id", "nil?", "frozen?",
     "freeze", "dup", "clone", "itself", "is_a?", "kind_of?", "instance_of?", "respond_to?",
     "send", "__send__", "public_send", "method", "tap", "then", "instance_variable_get",
     "instance_variable_set", "instance_variables", "<=>", "display", NULL };
   if (!name || !exc_subclass_defines(c, name)) return 0;
   for (int i = 0; surface[i]; i++) if (sp_streq(name, surface[i])) return 0;
-  /* A class-gated reader keeps the call, unless sp_poly_exc_acc answers it:
-     then the boxed dispatch takes the program's classes to their own
-     method, and its builtin arm takes every other exception to the reader
-     (`rescue => e; e.line` reaches a REXML::ParseException's attr_reader
-     and a JSON::ParserError's #line alike). That arm takes no block, and
-     the dispatch does not check visibility, so a call with a block, or a
-     name some class of the program's makes private or protected, keeps the
-     reader. line and column are the exception: before JSON::ParserError
+  /* A class-gated reader (exc_gated_acc_fn) goes through the boxed
+     dispatch too: it takes the program's classes to their own method, and
+     its builtin arm takes every other exception to the runtime's reader
+     through sp_poly_exc_acc, which raises NoMethodError off the reader's
+     class (`rescue => e; e.status` reaches an own attr_reader :status and
+     a SystemExit's #status alike). That arm leaves a block unused, as the
+     builtin readers do. The dispatch does not check visibility, so a name
+     some class of the program's makes private or protected keeps the
+     reader, and so does one whose method calls super to reach the builtin
+     reader, which the boxed dispatch cannot. line and column are the
+     exception: before JSON::ParserError
      answered them they were no reader's, and such a call always reached
-     the program's own method. The reader must not take that away, so those
-     two go through the boxed dispatch whatever the block or visibility, as
-     they did then (the builtin arm ignores a block, as json's attr_reader
-     does). */
-  static const char *const poly_gated[] = {
-    "errno", "error_code", "line", "column", "key", "receiver", "args", "private_call?", NULL };
+     the program's own method, whatever the visibility. */
   if (argc == 0 && exc_gated_acc_fn(name) && !sp_streq(name, "line") && !sp_streq(name, "column")) {
-    int boxed = 0;
-    for (int i = 0; poly_gated[i]; i++) if (sp_streq(name, poly_gated[i])) boxed = 1;
-    if (!boxed || (id >= 0 && nt_ref(c->nt, id, "block") >= 0)) return 0;
     for (int k = 0; k < c->nclasses; k++)
       if (class_is_exc_subclass(c, k) && call_answers(c, -1, k, name, 0, NULL) &&
           cplan_method_vis(c, id, k, name, 0, NULL) != SP_VIS_PUBLIC) return 0;
+    for (int s = 0; s < c->nscopes; s++) {
+      const Scope *sc = &c->scopes[s];
+      if (sc->def_node >= 0 && !sc->is_cmethod && sc->name && sp_streq(sc->name, name) &&
+          sc->class_id >= 0 && class_is_exc_subclass(c, sc->class_id) && scope_calls_super(c, s))
+        return 0;
+    }
   }
   int xr[1];
   if (exc_reopen_definers(c, name, xr, 1) > 0) return 0;
@@ -9116,6 +9127,7 @@ static int emit_poly_builtin_default_at(Compiler *c, int id, int recv, const cha
   { int fb0 = nt_ref(nt, id, "block");
     omit_block = fb0 >= 0 && (is_exception_message(name) ||
                 sp_streq(name, "line") || sp_streq(name, "column") ||
+                (exc_um_reentered(id) && exc_gated_acc_fn(name)) ||
                 (nt_kind(nt, fb0) == NK_BlockArgumentNode &&
                  resolve_forwarded_block(c, fb0) < 0 && !forwarded_real_proc(fb0, -1))); }
   /* a block call without arguments takes the builtin's arm only for the

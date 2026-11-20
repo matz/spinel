@@ -36115,6 +36115,12 @@ static int pf_wanted(Compiler *c, const char *name, const Scope *asker) {
     if (!nm || !sp_streq(nm, name)) continue;
     int recv = nt_ref(nt, id, "receiver");
     if (recv >= 0 && infer_type(c, recv) == TY_POLY) return 1;
+    /* a program exception class's method on a receiver typed as a generic
+       exception (`rescue => e`) is reached through the boxed dispatch
+       exc_user_method_name re-enters, which calls the clone; an unused one
+       is a static function the C compiler drops */
+    if (recv >= 0 && asker->class_id >= 0 && class_is_exc_subclass(c, asker->class_id) &&
+        infer_type(c, recv) == TY_EXCEPTION) return 1;
     /* a parameter typed one class so far may turn out boxed (handed a
        module method's self), and a dispatch with a block reaches an
        inherited yielding method only through its clone (#9261) */

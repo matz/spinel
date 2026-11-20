@@ -1,0 +1,25 @@
+["1"]
+nil
+["1", "2"]
+"1, 2"
+["3"]
+["3", "4", "5"]
+["6", "7"]
+"6, 7"
+["8"]
+ArgumentError
+["1", "2"]
+["1", "2"]
+{"x-a" => ["1", "2"], "accept-encoding" => ["gzip;q=1.0,deflate;q=0.6,identity;q=0.3"], "accept" => ["*/*"], "user-agent" => ["Ruby"], "x-b" => ["3", "4", "5"], "x-c" => ["8"]}
+nil
+"1, 2"
+"default"
+"no x-none"
+nil
+[KeyError, "key not found: \"x-none\""]
+["8"]
+nil
+[nil, false, nil]
+["*/*"]
+["x-a", "accept-encoding", "user-agent", "x-b"]
+"X-A: 1, 2 | X-B: 3, 4, 5"

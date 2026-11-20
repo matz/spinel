@@ -2929,7 +2929,8 @@ void emit_block_invoke(Compiler *c, int site, Buf *b, int indent, int as_expr,
                                                        oint_kind(nx_bt) || stmts_diverge(c, bbody)));
       /* a `next nil` into an Integer or Float slot is the slot's nil, and
          a `next` into the handle carrier adopts its value */
-      g_ie_next_ty = (nx_bt == TY_INT || nx_bt == TY_FLOAT || nx_bt == TY_STRBUF) ? nx_bt : TY_UNKNOWN;
+      g_ie_next_ty = (nx_bt == TY_INT || nx_bt == TY_FLOAT || nx_bt == TY_STRBUF ||
+                      ty_is_array(nx_bt) || ty_is_hash(nx_bt)) ? nx_bt : TY_UNKNOWN;
       g_ie_next_oint = ywo && oint_kind(nx_bt);
       if (g_ie_res_poly) {
         buf_printf(b, "sp_RbVal _t%d = sp_box_nil(); ", nx_tmp);
@@ -2940,6 +2941,9 @@ void emit_block_invoke(Compiler *c, int site, Buf *b, int indent, int as_expr,
         buf_printf(b, "sp_int _t%d = 0; ", nx_tmp);
       else if (proc_slot_is_ptr(nx_bt)) {
         emit_ctype(c, nx_bt, b); buf_printf(b, " _t%d = NULL; ", nx_tmp);
+        if (ty_is_array(nx_bt) || ty_is_hash(nx_bt)) {
+          emit_gc_root_tmp(c, nx_bt, nx_tmp, b); buf_puts(b, " ");
+        }
       }
       /* a Float, a Range, a Rational ...: the carrier is the value's own C
          type, not the sp_int it was declared as (a Float next truncated, a

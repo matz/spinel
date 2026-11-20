@@ -52,3 +52,22 @@ YIELD_BINARY = +"a\0b"
 YieldNextNative.append(YIELD_BINARY)
 result = boxed_result(true) { next YIELD_BINARY }
 p [result.equal?(YIELD_BINARY), result.bytes]
+
+# The Array constructor's element slot retains the handle before ensure.
+values = Array.new(2) do |index|
+  begin
+    next YIELD_WORD if index == 0
+    YIELD_WORD
+  ensure
+    YieldNextNative.append(YIELD_WORD)
+    GC.start
+  end
+end
+p values.map { |value| value.equal?(YIELD_WORD) }
+p values
+
+values = Array.new(2) do |index|
+  next nil if index == 0
+  YIELD_BINARY
+end
+p [values.first, values.last.equal?(YIELD_BINARY)]

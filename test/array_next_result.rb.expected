@@ -1,0 +1,5 @@
+[0, 11, 12]
+[0, 1, 2]
+[[0, 3], [7, 8]]
+["word", "word"]
+[:inner, :outer, :inner, :outer, :after, :finished]

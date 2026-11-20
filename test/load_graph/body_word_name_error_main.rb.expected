@@ -1,0 +1,13 @@
+NameError
+[:cs, true]
+[NameError, "undefined method 'nope' for class 'K'"]
+[NameError, "undefined method 'nope2' for class 'K'"]
+[NameError, "undefined method 'nope3' for class 'K'"]
+:between?
+"undefined method 'nope4' for module 'T1'"
+:puts
+"undefined method 'a\"b' for class 'K'"
+[false, false]
+[NameError, NameError]
+[false, false]
+"undefined method 'zz' for class 'N1'"

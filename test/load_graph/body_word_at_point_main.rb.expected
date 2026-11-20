@@ -1,0 +1,5 @@
+[:m, true]
+[NoMethodError, false]
+[false, [false, false]]
+[true, [:j, :none]]
+[false, [:none, :none], NoMethodError]

@@ -1223,6 +1223,38 @@ int cplan_method_vis(Compiler *c, int id, int ci, const char *name, int flags, i
 int cplan_guarded_call_visibility(Compiler *c, int id, int cls, const char *name);
 int cplan_caller_includes_module(Compiler *c, int caller, int module);
 int cplan_protected_owner_open(Compiler *c, int caller, int singleton, int owner);
+/* The class of the self call id runs with, for a protected method's caller
+   (cplan_protected_owner_open): in an instance_eval or instance_exec block,
+   an instance of the class its receiver spells (`K.new` where the program
+   defines no `new` on K's chain, a bare `new` in a class method of a class
+   no class of the program's subclasses; -1 for a builtin class's, or for
+   an eval block on a constant, whose self is the class value); caller, the
+   scope's self, outside any block that may run with another self
+   (ct_block_self_call) and in one with no receiver or on self.
+   CPLAN_SELF_UNKNOWN where nothing tells (a local or any other receiver, a
+   lambda, a define_method's block, one handed to a method of the
+   program's): there the scope's self is the caller, both for the record's
+   versions and for the table's visibility, and the record keeps a method
+   body's protected word or def of the call's name unplaced
+   (cplan_block_self_untold) */
+enum { CPLAN_SELF_UNKNOWN = -2 };
+int cplan_protected_caller(Compiler *c, int id, int caller);
+/* The facts of the tree alone cplan_block_self_untold asks of its caller:
+   takes, may the program define a method nm (or a method_missing);
+   subclassed, may a class of the program's have the class whose class
+   method holds node as its superclass (yes for a node in no class
+   method) */
+typedef struct CplanTreeFacts {
+  int (*takes)(const void *ctx, const char *nm);
+  int (*subclassed)(const void *ctx, int node);
+  const void *ctx;
+} CplanTreeFacts;
+/* Does nothing tell the self node runs with (CPLAN_SELF_UNKNOWN), asked of
+   the tree and its parent map par of n nodes alone, with tf's facts, as
+   the load record's bars ask it? For a call of the tree the record walks,
+   it answers yes wherever the call plan finds its self unknown, while tf
+   holds every name the program defines and every class it subclasses */
+int cplan_block_self_untold(Compiler *c, const int *par, int n, int node, const CplanTreeFacts *tf);
 TyKind cplan_poly_arg_storage(Compiler *c, int id);
 /* The re-entry of a call on an object whose static class cannot answer the
    name while one of its subclasses can (#4023). Computed afresh. */
@@ -1610,18 +1642,22 @@ int cplan_presence_class(Compiler *c, int id);
    version is the method, in the chain's order, nearest history first;
    ans[k], what the method's presence is while cell k's version is live: 1
    for a def, 0 for an undef, which says the method is gone whatever a
-   farther history holds, and 0 for a def that is not public (the
-   visibility its arm takes, elab_version_vis: a later `private :s` counts)
-   unless include_all; where that visibility is known only at run time (-1)
-   vis[k] names the visibility cell the live version's answer is read from
-   (public: 1; ans[k] 0), written beside the version's cell; and els,
+   farther history holds, and for a def 0 where the visibility its arm
+   takes (elab_version_vis: a later `private :s` counts) is none the
+   reader's mask counts (1 public, 2 protected, 4 private, as
+   core_bit_of_vis; respond_to? asks 1, or 7 with include_all, a
+   method_defined? kin its own, method_defined_vis_mask); where that
+   visibility is known only at run time (-1) vis[k] names the visibility
+   cell the live version's answer is read from (a visibility the mask
+   counts: 1; ans[k] 0), written beside the version's cell, and mask the
+   reader's mask; and els,
    whether the entry's else arm, which the call runs while none is live,
    finds the method so (cplan_entry_finds). 1 with the
    cells in *out, 0 where the answer is the table's or the record's at the
    point (cplan_cmethod_later), for a chain whose entry arms a remove, and
    in a program that defines respond_to_missing?
    (respond_to_missing_defined). */
-typedef struct CplanCells { int n; char cell[VER_MAX_ARMS][32]; char vis[VER_MAX_ARMS][32]; int val[VER_MAX_ARMS]; unsigned char ans[VER_MAX_ARMS]; int els; } CplanCells;
+typedef struct CplanCells { int n; char cell[VER_MAX_ARMS][32]; char vis[VER_MAX_ARMS][32]; int val[VER_MAX_ARMS]; unsigned char ans[VER_MAX_ARMS]; int els, mask; } CplanCells;
 /* Physical presence for a conditional prepend. Answers are visibility
    masks (public 1, protected 2, private 4), or 0 for an absent method.
    A null output asks only whether the selector decides the answer. */
@@ -1632,12 +1668,12 @@ int cplan_implied_entry_cells(Compiler *c, int mi, int undefined, CplanCells *ou
 /* A lowered conditional dispatcher's selector. It holds a positive arm
    number once any of its definitions has run. NULL for other scopes. */
 const char *cplan_conditional_entry_selector(Compiler *c, int mi);
-int cplan_cmethod_presence(Compiler *c, int id, int cls, const char *name, int include_all, int own, CplanCells *out);
+int cplan_cmethod_presence(Compiler *c, int id, int cls, const char *name, int mask, int own, CplanCells *out);
 /* The same cells for an instance of cls where presence site id runs, which
    a call of the name there finds through the entry (PR_CELLS; side as
    cplan_presence's, CT_OWN for cls's own versions): 0 for any other answer,
    and in a program that defines respond_to_missing? */
-int cplan_presence_cells(Compiler *c, int id, int cls, unsigned side, const char *name, int include_all, CplanCells *out);
+int cplan_presence_cells(Compiler *c, int id, int cls, unsigned side, const char *name, int mask, CplanCells *out);
 /* Does every version of cs answer as none live does (els), each known now: the answer reads no cell */
 int cplan_cells_fixed(const CplanCells *cs);
 /* Do the cells hold Integer slots the run-time test reads (repr_slot_kind), each visibility cell kept? */
@@ -1665,15 +1701,16 @@ enum { PRL_OBJECT, PRL_BOXED, PRL_CLASS, PRL_CLASS_VALUE };
 typedef struct { int cls, ans; CplanCells cells; } CplanPresArm;
 typedef struct { int form, nil, n; CplanPresArm *arm; int other; } CplanPresList;
 int cplan_presence_list(Compiler *c, int id, TyKind rt, CplanPresList *out);
-/* What a class value answers to respond_to?(qm) at call id, with an
-   include_all or without (a class method a body defines is public), form
-   PRL_CLASS_VALUE: an arm for each program class that may answer
-   true, PRA_YES or PRA_CELLS (its class method's version cells,
+/* What a class value answers to respond_to?(qm) at call id, of the
+   visibilities it counts (public, or every one where a literal `true`
+   follows the name), form PRL_CLASS_VALUE: an arm for each program class,
+   PRA_YES, PRA_NO or PRA_CELLS (its class method's version cells,
    cplan_cmethod_presence, whose els is the builtin's answer where none is
    live); a program class with no arm answers false. The table answers a
    class whose name the record cannot order (the builtin's where the
    record proves none of its class methods of the name live there,
-   cplan_presence), and other the answer of a class value the program does
+   cplan_presence), with the visibility the record has where the reader
+   runs, or the table's where the name's does not vary; and other the answer of a class value the program does
    not define (the Class surface, a `class Class` reopening's method). 0,
    with no arms, where none answers true but by Class's own surface, which
    the caller's builtin answers. Freed with cplan_presence_list_free. */
@@ -1700,11 +1737,11 @@ int cplan_slot_may_hold(Compiler *c, int k, int cid);
    cplan_list_cells gives its cells. */
 int cplan_list_class(Compiler *c, int id, int *own);
 /* The cells that answer whether list id lists method `name` of cls on side (CT_CMETHOD for a class-side list,
-   CT_OWN for its own versions), or a method_defined? there finds it: the public versions' cells, where
-   cplan_cmethod_presence (cplan_presence_cells) gives some and every version is public (a list shows public and
-   protected methods); 0 where the table answers it, and for an instance-method list of another shape than
-   list_cells_shape's, whose names the survey does not ask. */
-int cplan_list_cells(Compiler *c, int id, int cls, unsigned side, const char *name, CplanCells *out);
+   CT_OWN for its own versions), or a method_defined? kin there finds it: the cells cplan_cmethod_presence
+   (cplan_presence_cells) gives for the visibilities mask counts (a list shows public and protected methods, 3;
+   a method_defined? kin, its own); 0 where the table answers it, and for an instance-method list of another
+   shape than list_cells_shape's, whose names the survey does not ask. */
+int cplan_list_cells(Compiler *c, int id, int cls, unsigned side, const char *name, int mask, CplanCells *out);
 /* Whether name answers on cls's chain where presence site id runs, as a
    call of the name there finds it, from call_target with CT_REACH (side: 0
    for an instance's chain, CT_CMETHOD for the class side, with CT_OWN for
@@ -1828,9 +1865,9 @@ int cplan_module_listable(Compiler *c, int m, const char *name);
 void cplan_module_methods(Compiler *c, int m, int own, CplanCandFn fn, void *ud);
 /* What version entry scope e's else arm finds while no version of its
    chain is live, as respond_to? and a Method's maker see it
-   (VerEntry.finds): a public method, a private or protected one, or none
+   (VerEntry.finds): a public, a private or a protected method, or none
    (NoMethodError, method_missing); -1 for a scope that is no entry */
-enum { VER_FINDS_NONE, VER_FINDS_HIDDEN, VER_FINDS_PUBLIC };
+enum { VER_FINDS_NONE, VER_FINDS_PRIVATE, VER_FINDS_PUBLIC, VER_FINDS_PROTECTED };
 /* What a version entry tells apart (Compiler.ver_entries, VerEntry.guard):
    the versions a chain holds for a call whose version is known only at
    run time; a later mixin's guarded copies (Scope.mixin_guarded); an open

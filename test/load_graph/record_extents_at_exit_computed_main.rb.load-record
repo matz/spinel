@@ -1,12 +1,11 @@
-load record: 7 points, 1 regions
+load record: 5 points, 1 regions
 r0 #0 f0 ProgramNode line 3
 r0 #1 f0 LocalVariableWriteNode name line 3
 r0 #2 f0 CallNode send line 4
-  r0 #3 may f0 CallNode call line 4
-  r0 #4 may f0 LocalVariableReadNode b line 4
-r0 #5 f0 CallNode at_exit line 5
-r0 #6 f0 CallNode p line 6
+r0 #3 f0 CallNode at_exit line 5
+r0 #4 f0 CallNode p line 6
+block send line 4: later
 block at_exit line 5: later
-post: after #6
+post: after #4
 extent block send line 4: from=#2 sure=never count=many kept=yes
-extent block at_exit line 5: from=#5 sure=never count=many kept=yes
+extent block at_exit line 5: from=#3 sure=never count=many kept=yes

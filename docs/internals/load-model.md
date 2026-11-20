@@ -345,17 +345,24 @@ gathers (`lr_body_names_read`), so each ask is a lookup:
   method;
 - a word or a non-public def in a class method a call may run on a
   subclass (`lr_body_self_unsure`): where a class header's superclass
-  constant resolves, in the record, to the class or to no class it knows,
-  or a superclass no constant names, a `Class.new` with a superclass, or a
-  `dup` or `clone` of a constant may make one, and a call of the method is
-  not on a constant or in a class body the record resolves to the class
-  itself (`lr_body_site_class`: a call on an alias of a subclass, on
-  `K = Class.new(A::K)`, on a constant it cannot resolve, on another
+  constant names the class or one the tree does not fix, or a superclass
+  no constant names, a `Class.new` with a superclass, or a `dup` or
+  `clone` of a constant may make one, and a call of the method is not on a
+  constant or in a class body that is the class itself. The classes are
+  read from the tree alone, so that the walk's first ask answers as the
+  finished record does: a header is its lexical path (`lr_body_key`), and
+  a constant is the class whose path every header of its name has, where
+  no write other than a header may bind the name anywhere in the program
+  (`lr_body_ref_key`: a constant write or target, a `const_set`, a
+  `remove_const` or an `autoload` naming it, reached or not; with a
+  computed name, a send of those, a `const_missing` or a String eval, no
+  constant is fixed). So a call on an alias of a subclass, on
+  `K = Class.new(A::K)`, on a constant two classes are named by, on another
   receiver, on self in a method or a block, a send, a Method, a
   block-pass symbol, an alias, a `super`, or a send or a Method maker of a
-  name the tree does not spell anywhere). The word acts on the class the
-  call runs on, and the record places the version on the class the method
-  is written in;
+  name the tree does not spell anywhere bars the word. The word acts on
+  the class the call runs on, and the record places the version on the
+  class the method is written in;
 - a class-side word (in a `class << self` body a class method opens) or
   a class method's non-public def, where a reader that reads no
   class-side version names it (`lr_cside_unfollowed`): a list of an

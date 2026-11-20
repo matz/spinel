@@ -2772,19 +2772,29 @@ static int lr_body_followed(Compiler *c, const int *par, int n, int node) {
      (lr_cside_unfollowed);
    - sites: by name, each call of the name on a constant, or with no
      receiver directly in a class body, as the constant receiver or the
-     class header (where its self is the class the record resolves it to,
-     lr_body_site_class); unsure: the names called otherwise (on another
+     class header (whose self is the class the path lr_body_ref_key or
+     lr_body_key gives is); unsure: the names called otherwise (on another
      receiver, on self in a method or a block, through a send, a Method, a
      block-pass symbol, an alias, a super in a def of the name); dyn: a
      send or a Method maker of a name the tree does not spell;
-   - headers: the class headers that name a superclass by a constant, whose
-     class the record resolves (lr_body_has_sub); anon: a superclass no
-     constant names, a Class.new with a superclass, a dup or a clone of a
-     constant (a class the tree names no superclass of) */
+   - cw: the constant names a write other than a class or module header
+     binds (a constant write or target, a const_set, a remove_const or an
+     autoload naming it); copen: one that may bind any (a computed name, a
+     send of those, a const_missing, a String eval);
+   - hkey: by name, the class and module headers, whose lexical paths
+     (lr_body_key, kept in keys; hid: by node, 1 + the header's place in
+     hkey) are the classes the bars compare, so that no answer waits for
+     what the walk has reached;
+   - subs: the paths a class header's superclass constant names
+     (lr_body_ref_key); subany: a superclass constant the tree does not fix;
+     anon: a superclass no constant names, a Class.new with a superclass, a
+     dup or a clone of a constant (a class the tree names no superclass of) */
 typedef struct LrBodyNames {
-  ANameIndex own, sites;
-  ANameHash mod, cread, unsure;
-  int *headers, nheaders, cheaders, mm, lists, dyn, anon;
+  ANameIndex own, sites, hkey;
+  ANameHash mod, cread, unsure, cw, subs;
+  const int *par;
+  char **keys;
+  int n, *hid, mm, lists, dyn, anon, copen, subany;
 } LrBodyNames;
 /* ...the last segment of the constant cp spells (NULL for no constant) */
 static const char *lr_leaf(const NodeTable *nt, int cp) {
@@ -2817,6 +2827,59 @@ static void lr_body_names_own(Compiler *c, const int *par, int n, int node, int 
       break;
     }
 }
+static int lr_defines_const_missing(const NodeTable *nt, int id);
+static char lr_no_key[1];   /* (a key computed as none) */
+static const char *lr_body_ref_key(Compiler *c, LrBodyNames *x, const char *leaf, int depth);
+/* ...the lexical path ("A::K") of the class or module header h, which is one
+   class wherever it is written: the enclosing header's path and the name h
+   writes, or the path a rooted name (`::A::K`) or a top-level qualified one
+   whose first segment is a top-level header's spells. NULL where the tree
+   does not fix it: a segment a write other than a header binds (cw), any
+   constant where one may bind any name (copen), a path on an expression,
+   a qualified name in a nesting, a header in a `class << x` */
+static const char *lr_body_key(Compiler *c, LrBodyNames *x, int h, int depth) {
+  const NodeTable *nt = c->nt;
+  int i = h >= 0 && h < x->n ? x->hid[h] - 1 : -1;
+  if (i < 0 || x->copen || depth > 16) return NULL;
+  if (x->keys[i]) return x->keys[i] == lr_no_key ? NULL : x->keys[i];
+  x->keys[i] = lr_no_key;
+  int enc = -1, seg[16], ns = 0, lexical = 0;   /* lexical: the path's first segment is a bare name */
+  for (int p = x->par[h]; p >= 0 && p < x->n && enc < 0; p = x->par[p]) {
+    if (nt_kind(nt, p) == NK_SingletonClassNode) return NULL;
+    if (nt_kind(nt, p) == NK_ClassNode || nt_kind(nt, p) == NK_ModuleNode) enc = p;
+  }
+  for (int v = nt_ref(nt, h, "constant_path"); ; v = nt_ref(nt, v, "parent")) {
+    NodeKind vk = v >= 0 ? nt_kind(nt, v) : NK_NilNode;
+    if ((vk != NK_ConstantReadNode && vk != NK_ConstantPathNode) || ns == 16 || !lr_leaf(nt, v) || anh_has(&x->cw, lr_leaf(nt, v))) return NULL;
+    seg[ns++] = v;
+    if ((lexical = vk == NK_ConstantReadNode) || nt_ref(nt, v, "parent") < 0) break;
+  }
+  const char *first = lr_leaf(nt, seg[ns - 1]), *fk = lexical && ns > 1 && enc < 0 ? lr_body_ref_key(c, x, first, depth + 1) : NULL;
+  const char *pre = lexical && enc >= 0 ? lr_body_key(c, x, enc, depth + 1) : NULL;
+  if ((lexical && ns > 1 && (!fk || !sp_streq(fk, first))) || (lexical && enc >= 0 && !pre)) return NULL;
+  size_t len = pre ? strlen(pre) : 0, at = 0;
+  for (int j = 0; j < ns; j++) len += strlen(lr_leaf(nt, seg[j])) + 2;
+  char *k = malloc(len + 1);
+  if (!k) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  if (pre) at += (size_t)sprintf(k, "%s", pre);
+  for (int j = ns - 1; j >= 0; j--) at += (size_t)sprintf(k + at, "%s%s", at ? "::" : "", lr_leaf(nt, seg[j]));
+  return x->keys[i] = k;
+}
+/* ...the path of the class every constant named leaf the program binds is
+   (lr_body_key: each a header's, all one path; "" for only the core
+   class or module of the name), or NULL for none the tree fixes */
+static const char *lr_body_ref_key(Compiler *c, LrBodyNames *x, const char *leaf, int depth) {
+  if (!leaf || x->copen || anh_has(&x->cw, leaf)) return NULL;
+  const char *k = NULL;
+  for (int i = ani_first(&x->hkey, leaf); i < x->hkey.n && sp_streq(x->hkey.e[i].name, leaf); i++) {
+    const char *ki = lr_body_key(c, x, x->hkey.e[i].v, depth);
+    if (!ki || (k && !sp_streq(k, ki))) return NULL;
+    k = ki;
+  }
+  int core = is_builtin_class_name(leaf) || is_builtin_module_const_name(leaf);
+  if (core && k && !sp_streq(k, leaf)) return NULL;
+  return k ? k : core ? "" : NULL;
+}
 static void lr_body_names_read(Compiler *c, const int *par, int n, LrBodyNames *x) {
   const NodeTable *nt = c->nt;
   *x = (LrBodyNames){ 0 };
@@ -2841,14 +2904,19 @@ static void lr_body_names_read(Compiler *c, const int *par, int n, LrBodyNames *
       int ex = nt_ref(nt, id, "expression");
       if (ex >= 0 && nt_kind(nt, ex) == NK_SymbolNode && vis_arg_name(nt, ex)) anh_add(&x->unsure, vis_arg_name(nt, ex));
     }
-    else if (k == NK_ClassNode) {
-      int sp = nt_ref(nt, id, "superclass");
-      if (sp >= 0 && lr_leaf(nt, sp)) {
-        if (x->nheaders == x->cheaders) x->headers = realloc(x->headers, sizeof(int) * (size_t)(x->cheaders = x->cheaders ? 2 * x->cheaders : 16));
-        x->headers[x->nheaders++] = id;
-      }
-      else if (sp >= 0) x->anon = 1;
+    else if (k == NK_ClassNode || k == NK_ModuleNode) {
+      int sp = k == NK_ClassNode ? nt_ref(nt, id, "superclass") : -1;
+      if (sp >= 0 && !lr_leaf(nt, sp)) x->anon = 1;
+      const char *hl = lr_leaf(nt, nt_ref(nt, id, "constant_path"));
+      if (hl) ani_add(&x->hkey, hl, id);
     }
+    else if (k == NK_ConstantWriteNode || k == NK_ConstantOrWriteNode || k == NK_ConstantAndWriteNode ||
+             k == NK_ConstantOperatorWriteNode || k == NK_ConstantTargetNode || k == NK_ConstantPathTargetNode)
+      anh_add(&x->cw, nt_str(nt, id, "name"));
+    else if (k == NK_ConstantPathWriteNode || k == NK_ConstantPathOrWriteNode || k == NK_ConstantPathAndWriteNode ||
+             k == NK_ConstantPathOperatorWriteNode)
+      anh_add(&x->cw, nt_str(nt, nt_ref(nt, id, "target"), "name"));
+    x->copen |= lr_defines_const_missing(nt, id);
     if (k != NK_CallNode) continue;
     const char *cn = nt_str(nt, id, "name");
     int rv = nt_ref(nt, id, "receiver"), ac = 0, rself = rv < 0 || nt_kind(nt, rv) == NK_SelfNode;
@@ -2872,6 +2940,14 @@ static void lr_body_names_read(Compiler *c, const int *par, int n, LrBodyNames *
       else x->dyn = 1;
     }
     if (rl && ((is_class_new(rl, cn) && ac > 0) || is_object_copy(cn))) x->anon = 1;
+    /* (the constant writes a call makes) */
+    if (is_const_set_name(cn) || is_remove_const_name(cn) || is_autoload_name(cn)) {
+      if (a0) anh_add(&x->cw, a0);
+      else x->copen = 1;
+    }
+    if ((is_send_family(cn) || is_method_object_maker(cn)) && (!a0 || is_const_set_name(a0) || is_remove_const_name(a0) || is_autoload_name(a0)))
+      x->copen = 1;
+    if (is_code_eval_name(cn) && ac > 0) x->copen = 1;
     /* (the readers that read no class-side version) */
     int q = is_method_presence_query(cn);
     if (q >= 2 && !is_instance_method_list(cn)) x->lists = 1;
@@ -2882,11 +2958,26 @@ static void lr_body_names_read(Compiler *c, const int *par, int n, LrBodyNames *
   }
   ani_sort(&x->own);
   ani_sort(&x->sites);
+  ani_sort(&x->hkey);
+  x->par = par; x->n = n;
+  x->keys = calloc((size_t)x->hkey.n + 1, sizeof *x->keys);
+  x->hid = calloc((size_t)n + 1, sizeof *x->hid);
+  if (!x->keys || !x->hid) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int i = 0; i < x->hkey.n; i++) x->hid[x->hkey.e[i].v] = i + 1;
+  /* (the classes a class of the program's may have as its superclass, once per build) */
+  for (int i = 0; i < x->hkey.n; i++) {
+    int h = x->hkey.e[i].v, sp = nt_kind(nt, h) == NK_ClassNode ? nt_ref(nt, h, "superclass") : -1;
+    const char *sk = sp >= 0 && lr_leaf(nt, sp) ? lr_body_ref_key(c, x, lr_leaf(nt, sp), 0) : NULL;
+    if (sp >= 0 && lr_leaf(nt, sp) && !sk) x->subany = 1;
+    else if (sk && *sk) anh_add(&x->subs, sk);
+  }
 }
 static void lr_body_names_free(LrBodyNames *x) {
   ani_free(&x->own); ani_free(&x->sites);
-  anh_free(&x->mod); anh_free(&x->cread); anh_free(&x->unsure);
-  free(x->headers);
+  anh_free(&x->mod); anh_free(&x->cread); anh_free(&x->unsure); anh_free(&x->cw); anh_free(&x->subs);
+  for (int i = 0; x->keys && i < x->hkey.n; i++) if (x->keys[i] != lr_no_key) free(x->keys[i]);
+  ani_free(&x->hkey);
+  free(x->keys); free(x->hid);
 }
 /* ...the attribute name a writer name `nm=` spells, in buf (NULL for a
    name that is no writer's) */
@@ -2959,46 +3050,33 @@ static int lr_body_cmethod(const NodeTable *nt, const int *par, int n, int node)
   }
   return -1;
 }
-/* ...the class a site's self is (lr_body_names_read's sites): a class
-   header's, as the record registered it (elab_header_class), or the class
-   the record resolves the receiver constant to where the call stands
-   (lr_class_ref_at: an alias's class, a Class.new's own); below 0 for none
-   it knows (a constant only the run time binds, one no walk has reached),
-   LR_BUILTIN for a core class */
-static int lr_body_site_class(Compiler *c, int v) {
-  if (nt_kind(c->nt, v) == NK_ClassNode) return elab_header_class(c, v, NULL, NULL);
-  int core = -1, ci = lr_class_ref_at(c, v, &core);
-  return core >= 0 ? LR_BUILTIN : ci;
-}
-/* ...may a class of the program have cls as its superclass: a header whose
-   superclass constant the record resolves to cls, or to no class it knows,
-   or a superclass no constant names (anon)? */
-static int lr_body_has_sub(Compiler *c, const LrBodyNames *x, int cls) {
-  if (x->anon) return 1;
-  for (int i = 0; i < x->nheaders; i++) {
-    int sc = lr_body_site_class(c, nt_ref(c->nt, x->headers[i], "superclass"));
-    if (sc == cls || (sc < LR_MAIN && sc != LR_BUILTIN)) return 1;
-  }
-  return 0;
-}
 /* ...may class method d of class cls run with a self other than cls? Not
-   where no class of the program may have cls as its superclass
-   (lr_body_has_sub); else where some call of it is not on a constant or in
-   a class body whose self the record resolves to cls itself (an alias of
-   a subclass, a Class.new of cls, a constant it cannot resolve), or is one
-   lr_body_names_read cannot place (unsure, dyn). A word or a non-public
-   def there acts on the class the call runs on, which the record does not
-   place a version on, so it bars its names (dropped once a body's version
-   is placed on each class a call of it runs on) */
-static int lr_body_self_unsure(Compiler *c, const LrBodyNames *x, int d, int cls) {
+   where no class of the program may have the class of d's header as its
+   superclass (subs, subany, anon); else where the tree does not fix that
+   class (lr_body_key), or where some call of d is not on a constant or in
+   a class body that is that class (a constant some other write may bind,
+   one of a name two classes have: lr_body_ref_key), or is one
+   lr_body_names_read cannot place (unsure, dyn). All are facts of the
+   tree, so the walk's first ask answers as the finished record would. A
+   word or a non-public def there acts on the class the call runs on,
+   which the record does not place a version on, so it bars its names
+   (dropped once a body's version is placed on each class a call of it
+   runs on) */
+static int lr_body_self_unsure(Compiler *c, LrBodyNames *x, int d, int cls) {
   const NodeTable *nt = c->nt;
   const char *dn = d >= 0 ? nt_str(nt, d, "name") : NULL;
   if (d < 0) return 0;
   if (cls < 0 || cls >= c->nclasses) return 1;
-  if (!lr_body_has_sub(c, x, cls)) return 0;
-  if (!dn || x->dyn || anh_has(&x->unsure, dn)) return 1;
-  for (int i = ani_first(&x->sites, dn); i < x->sites.n && sp_streq(x->sites.e[i].name, dn); i++)
-    if (lr_body_site_class(c, x->sites.e[i].v) != cls) return 1;
+  int h = x->par[d];
+  while (h >= 0 && h < x->n && nt_kind(nt, h) != NK_ClassNode && nt_kind(nt, h) != NK_ModuleNode) h = x->par[h];
+  const char *dk = lr_body_key(c, x, h, 0);
+  if (!x->anon && !x->subany && (dk ? !anh_has(&x->subs, dk) : !x->subs.n)) return 0;
+  if (!dk || !dn || x->dyn || anh_has(&x->unsure, dn)) return 1;
+  for (int i = ani_first(&x->sites, dn); i < x->sites.n && sp_streq(x->sites.e[i].name, dn); i++) {
+    int v = x->sites.e[i].v;
+    const char *sk = nt_kind(nt, v) == NK_ClassNode ? lr_body_key(c, x, v, 0) : lr_body_ref_key(c, x, lr_leaf(nt, v), 0);
+    if (!sk || !sp_streq(sk, dk)) return 1;
+  }
   return 0;
 }
 /* ...does a body's word at node bar its names (lr_body_forms), keeping the
@@ -3012,7 +3090,7 @@ static int lr_body_self_unsure(Compiler *c, const LrBodyNames *x, int d, int cls
    runs; a name nothing defines raises NameError there), one a module
    body defines, or, on the class side, one a reader that reads no
    class-side version names (lr_cside_unfollowed) */
-static int lr_body_word_barred(Compiler *c, const int *par, int n, int node, const LrBodyNames *x) {
+static int lr_body_word_barred(Compiler *c, const int *par, int n, int node, LrBodyNames *x) {
   const NodeTable *nt = c->nt;
   int fs, cls = lr_body_frame(c, par, n, node, -1, 1, &fs), sg = fs == LR_FS_SCLASS || fs == LR_FS_IEVAL_SCLASS;
   if (x->mm || (cls >= 0 && cls < c->nclasses && comp_class_is_module(c, &c->classes[cls])) || !lr_body_followed(c, par, n, node) ||
@@ -3028,7 +3106,7 @@ static int lr_body_word_barred(Compiler *c, const int *par, int n, int node, con
    cannot follow (lr_body_followed), in a class method a call may run on a subclass, which the word the def's value is
    given to acts on (lr_body_self_unsure), and for a class method's def a reader that reads no class-side version
    names (lr_cside_unfollowed) */
-static int lr_body_def_barred(Compiler *c, const int *par, int n, int d, const LrBodyNames *x) {
+static int lr_body_def_barred(Compiler *c, const int *par, int n, int d, LrBodyNames *x) {
   const NodeTable *nt = c->nt;
   int fs, dr = nt_ref(nt, d, "receiver"), cls = lr_body_frame(c, par, n, d, -1, 1, &fs);
   int cside = (dr >= 0 && nt_kind(nt, dr) == NK_SelfNode) || fs == LR_FS_SCLASS || fs == LR_FS_IEVAL_SCLASS;

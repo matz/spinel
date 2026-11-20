@@ -881,9 +881,10 @@ module Net
     end
     private :debug
 
-    def get(path, headers = nil)
-      req = HTTPRequest.new("GET", path, headers)
-      request(req)
+    # With a block, the body goes to it in pieces as they arrive; with dest,
+    # it is appended to dest. As in CRuby, so do post and patch.
+    def get(path, headers = nil, dest = nil, &block)
+      send_entity(HTTPRequest.new("GET", path, headers), dest, &block)
     end
 
     def head(path, headers = nil)
@@ -891,10 +892,10 @@ module Net
       request(req)
     end
 
-    def post(path, body, headers = nil)
+    def post(path, body, headers = nil, dest = nil, &block)
       req = HTTPRequest.new("POST", path, headers)
       req.body = body
-      request(req)
+      send_entity(req, dest, &block)
     end
 
     def put(path, body, headers = nil)
@@ -903,11 +904,21 @@ module Net
       request(req)
     end
 
-    def patch(path, body, headers = nil)
+    def patch(path, body, headers = nil, dest = nil, &block)
       req = Patch.new(path, headers)
       req.body = body
-      request(req)
+      send_entity(req, dest, &block)
     end
+
+    def send_entity(req, dest, &block)
+      res = nil
+      request(req) do |r|
+        r.read_body(dest, &block)
+        res = r
+      end
+      res
+    end
+    private :send_entity
 
     # Sends Depth: Infinity unless headers are given, as in CRuby.
     def delete(path, headers = { "Depth" => "Infinity" })

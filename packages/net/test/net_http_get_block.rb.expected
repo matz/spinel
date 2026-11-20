@@ -1,0 +1,6 @@
+get with a block: "GET /a ", 200
+get with dest: "before GET /b "
+get alone: "GET /c "
+post with a block: "POST /d data"
+patch with dest: "PATCH /e more"
+get streams: 2

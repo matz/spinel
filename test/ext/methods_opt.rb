@@ -5,12 +5,31 @@
 # method made private after its def, and a method with a keyword
 # parameter, which the table leaves out. A module that the named class
 # includes, and a module that module includes, are not in the list: their
-# methods with an optional parameter have their rows too. methods_blk.rb
-# has the methods with a block.
+# methods with an optional parameter have their rows too. So have the
+# methods of a module that the top level mixes in with the class as the
+# receiver (Extra). Alt::Deep and Deep have one leaf name and Alt::Deep
+# includes Deep: the search for the classes that include them ends.
+# methods_blk.rb has the methods with a block.
 module ExtOpt
   module Deep
     def deep(n = 1)
       "deep #{n}"
+    end
+  end
+
+  module Alt
+    module Deep
+      include ExtOpt::Deep
+
+      def alt(n = 1)
+        "alt #{n}"
+      end
+    end
+  end
+
+  module Extra
+    def extra(n = 5)
+      "extra #{n}"
     end
   end
 
@@ -75,3 +94,5 @@ module ExtOpt
     Rel.new
   end
 end
+
+ExtOpt::Rel.include(ExtOpt::Extra)

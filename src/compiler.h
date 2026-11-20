@@ -2751,7 +2751,7 @@ int        ext_item_classes(Compiler *c, const char *item, int *a, int *b);
 int        ext_method_exported(Compiler *c, int class_id, int si, int typed);
 int        ext_scope_host_callable(Compiler *c, int si);
 int        ext_class_def_wanted(Compiler *c, const char *key);
-int        ext_mixin_def_wanted(Compiler *c, int def, int depth);
+int        ext_mixin_def_wanted(Compiler *c, int def);
 const char *ext_fwd_orig(const char *name, int *nfixed, int *rest, int *block);
 int        ext_fwd_callee(Compiler *c, int class_id, int si, int *is_new);
 int        ext_ty_crosses(TyKind t);

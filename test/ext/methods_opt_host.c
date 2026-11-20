@@ -64,6 +64,12 @@ int main(void) {
   try_call(r, "tag", 3, a);
   call(r, "deep", 0, NULL);
   call(r, "deep", 1, a);
+  /* a module the top level mixes in, with the class as the receiver */
+  call(r, "extra", 0, NULL);
+  call(r, "extra", 1, a);
+  /* a module of the leaf name of an included one, which the class does
+     not include */
+  call(r, "alt", 0, NULL);
   /* not in the table: private, a keyword parameter */
   call(r, "hid", 0, NULL);
   call(r, "kw", 0, NULL);

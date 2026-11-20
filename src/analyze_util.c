@@ -7476,43 +7476,97 @@ int ext_class_def_wanted(Compiler *c, const char *key) {
   return ext_name_listed(key) || ext_listed_descendant(c, key);
 }
 
-/* Whether the module definition def is mixed into a definition a table can
-   hold: a class or module body with `include M` or `prepend M` of its leaf
-   name, wanted itself (ext_class_def_wanted) or a module mixed into one in
-   turn. The table of the class holds the methods of the module, so its
-   defs get their forwarders too. By the names the source writes, as
-   ext_listed_descendant reads them. */
-int ext_mixin_def_wanted(Compiler *c, int def, int depth) {
+/* The module definitions one question of ext_mixin_def_wanted has reached:
+   each one is followed once, so a ring of includes ends. */
+typedef struct { int *defs; int n, cap; } ExtMixinSeen;
+
+/* The definition d takes a module the question follows. Answers 1 when d
+   is a definition a table can hold. A module that is not one joins the
+   definitions to follow. */
+static int ext_mixin_taken_by(Compiler *c, ExtMixinSeen *seen, int d) {
+  const char *key = class_def_key(c, d);
+  if (key && ext_class_def_wanted(c, key)) return 1;
+  if (nt_kind(c->nt, d) != NK_ModuleNode) return 0;
+  for (int i = 0; i < seen->n; i++) if (seen->defs[i] == d) return 0;
+  if (seen->n == seen->cap) {
+    seen->cap = seen->cap ? seen->cap * 2 : 8;
+    seen->defs = realloc(seen->defs, sizeof(int) * (size_t)seen->cap);
+  }
+  seen->defs[seen->n++] = d;
+  return 0;
+}
+
+/* The statements of one body: owner is the class or module definition of
+   the body, or -1 for the top level of a file. `include M` and `prepend M`
+   of the leaf name mix the module into the owner. With a constant as the
+   receiver (`C.include(M)`), they mix it into the definitions of that leaf
+   name. Answers 1 when one of them is a definition a table can hold. */
+static int ext_mixin_in_body(Compiler *c, ExtMixinSeen *seen, int body, int owner, const char *leaf) {
   const NodeTable *nt = c->nt;
-  if (!g_ext_classes || !*g_ext_classes || def < 0 || nt_kind(nt, def) != NK_ModuleNode) return 0;
-  const char *leaf = ext_const_leaf(nt, class_def_path(nt, def));
-  if (!leaf) return 0;
-  static const NodeKind kinds[] = { NK_ClassNode, NK_ModuleNode };
-  for (int w = 0; w < 2; w++) {
-    int found = 0;
-    NT_FOREACH_KIND(nt, kinds[w], d) {
-      int body = found || d == def ? -1 : class_def_body(nt, d);
-      if (body < 0 || nt_kind(nt, body) != NK_StatementsNode) continue;
-      int n = 0, mixes = 0;
-      const int *st = nt_arr(nt, body, "body", &n);
-      for (int k = 0; k < n && !mixes; k++) {
-        if (nt_kind(nt, st[k]) != NK_CallNode || nt_ref(nt, st[k], "receiver") >= 0) continue;
-        const char *nm = nt_str(nt, st[k], "name");
-        if (!nm || (!sp_streq(nm, "include") && !sp_streq(nm, "prepend"))) continue;
-        int args = nt_ref(nt, st[k], "arguments"), na = 0;
-        const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &na) : NULL;
-        for (int a = 0; a < na && !mixes; a++) {
-          const char *al = ext_const_leaf(nt, av[a]);
-          mixes = al && sp_streq(al, leaf);
-        }
-      }
-      if (!mixes) continue;
-      const char *key = class_def_key(c, d);
-      found = (key && ext_class_def_wanted(c, key)) || (w == 1 && depth < 8 && ext_mixin_def_wanted(c, d, depth + 1));
+  if (body < 0 || nt_kind(nt, body) != NK_StatementsNode) return 0;
+  int n = 0;
+  const int *st = nt_arr(nt, body, "body", &n);
+  for (int k = 0; k < n; k++) {
+    if (nt_kind(nt, st[k]) != NK_CallNode) continue;
+    const char *nm = nt_str(nt, st[k], "name");
+    if (!nm || (!sp_streq(nm, "include") && !sp_streq(nm, "prepend"))) continue;
+    int args = nt_ref(nt, st[k], "arguments"), na = 0, mixes = 0;
+    const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &na) : NULL;
+    for (int a = 0; a < na && !mixes; a++) {
+      const char *al = ext_const_leaf(nt, av[a]);
+      mixes = al && sp_streq(al, leaf);
     }
-    if (found) return 1;
+    if (!mixes) continue;
+    int recv = nt_ref(nt, st[k], "receiver");
+    if (recv < 0) {
+      if (owner >= 0 && ext_mixin_taken_by(c, seen, owner)) return 1;
+      continue;
+    }
+    const char *rl = ext_const_leaf(nt, recv);
+    if (!rl) continue;
+    static const NodeKind kinds[] = { NK_ClassNode, NK_ModuleNode };
+    for (int w = 0; w < 2; w++) {
+      int found = 0;
+      NT_FOREACH_KIND(nt, kinds[w], e) {
+        const char *el = found ? NULL : ext_const_leaf(nt, class_def_path(nt, e));
+        if (el && sp_streq(el, rl)) found = ext_mixin_taken_by(c, seen, e);
+      }
+      if (found) return 1;
+    }
   }
   return 0;
+}
+
+/* Whether the module definition def is mixed into a definition a table can
+   hold: a definition that is wanted itself (ext_class_def_wanted), or a
+   module mixed into one in turn. The mix is an `include M` or a
+   `prepend M` of the leaf name of the module, as a statement of a class
+   body, of a module body or of the top level of a file. The table of the
+   class holds the methods of the module, so its defs get their forwarders
+   too. By the names the source writes, as ext_listed_descendant reads
+   them: two modules of one leaf name are not told apart, and the answer
+   is then yes for both. */
+int ext_mixin_def_wanted(Compiler *c, int def) {
+  const NodeTable *nt = c->nt;
+  if (!g_ext_classes || !*g_ext_classes || def < 0 || nt_kind(nt, def) != NK_ModuleNode) return 0;
+  ExtMixinSeen seen = { 0 };
+  int found = 0;
+  if (ext_mixin_taken_by(c, &seen, def)) return 1;   /* wanted itself */
+  for (int i = 0; i < seen.n && !found; i++) {
+    const char *leaf = ext_const_leaf(nt, class_def_path(nt, seen.defs[i]));
+    if (!leaf) continue;
+    static const NodeKind kinds[] = { NK_ClassNode, NK_ModuleNode };
+    for (int w = 0; w < 2 && !found; w++) {
+      NT_FOREACH_KIND(nt, kinds[w], d) {
+        if (!found) found = ext_mixin_in_body(c, &seen, class_def_body(nt, d), d, leaf);
+      }
+    }
+    NT_FOREACH_KIND(nt, NK_ProgramNode, pg) {
+      if (!found) found = ext_mixin_in_body(c, &seen, nt_ref(nt, pg, "statements"), -1, leaf);
+    }
+  }
+  free(seen.defs);
+  return found;
 }
 
 /* A forwarder of desugar_ext_forwarders is named

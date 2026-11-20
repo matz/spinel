@@ -1599,7 +1599,13 @@ PCH_ROOT := build/pch/$(CC_KIND)-$(shell tools/result_cache.sh pch-key "$(CC)" "
 # The last explicit -O wins among ordinary flags. Leave opaque options
 # (such as compiler response files) to the textual include on an override.
 TEST_PCH_OPT := $(if $(filter-out -O% -Wno-% -ffp-contract=off -g -g0 -g1 -g2 -g3 -D% -U% -I%,$(CFLAGS)),,$(lastword $(filter -O%,$(CFLAGS))))
-TEST_PCHS := $(addsuffix /spinel_rt.h.gch,$(addprefix $(PCH_ROOT)/,plain nopoly novalues))
+# Inspect the shell's argument words, including quoted response-file names.
+# These options can read contents which the command and tracked headers
+# alone do not fingerprint.
+TEST_INDIRECT_OPTS := @*|--config|--config=*|--config-*|-include*|-imacros*|-ivfsoverlay*|-fmodule-file*|-fmodule-map-file*|-Xclang|-Xpreprocessor|-Xlinker|-Wp,*
+TEST_INDIRECT_FLAGS := $(shell for arg in $(CC) $(PCH_FLAGS); do case "$$arg" in ($(TEST_INDIRECT_OPTS)) printf 1; break;; esac; done)
+TEST_HOST_OS := $(shell uname -s)
+TEST_PCHS := $(if $(TEST_INDIRECT_FLAGS),,$(addsuffix /spinel_rt.h.gch,$(addprefix $(PCH_ROOT)/,plain nopoly novalues)))
 SP_LIB_HDRS := $(wildcard lib/*.h) $(PLATFORM_HDRS)
 
 .PHONY: test-pch
@@ -1607,10 +1613,12 @@ test-pch: $(TEST_PCHS)
 
 $(PCH_ROOT)/nopoly/spinel_rt.h.gch: PCH_TU_DEFINE := -DSP_TU_NO_POLY_RENDER=1
 $(PCH_ROOT)/novalues/spinel_rt.h.gch: PCH_TU_DEFINE := -DSP_TU_NO_POLY_VALUES=1
+ifneq ($(TEST_PCHS),)
 $(TEST_PCHS): $(SP_LIB_HDRS) lib/spinel_rt_responds_generated.h
 	@mkdir -p $(@D)
 	@cp lib/spinel_rt.h $(@D)/spinel_rt.h
 	@$(CC) $(PCH_FLAGS) $(PCH_TU_DEFINE) -Ilib -x c-header $(@D)/spinel_rt.h -o $@
+endif
 
 ifeq ($(CC_KIND),clang)
 PCH_USE = -include-pch $$pchdir/spinel_rt.h.gch
@@ -4454,13 +4462,20 @@ ckey=""; hit=0; own=0; \
   fi; \
   xlibs="$$xobjs $$xlibs"; \
   cacheable=1; \
-  if [ -n "$(filter @%,$(CC) $(PCH_FLAGS))" ]; then pchuse=""; cacheable=0; fi; \
-  case " $$bigopt " in *" @"*) cacheable=0;; esac; \
+  if [ -n "$(TEST_INDIRECT_FLAGS)" ]; then pchuse=""; cacheable=0; fi; \
+  for arg in $$bigopt; do \
+    case "$$arg" in $(TEST_INDIRECT_OPTS)) pchuse=""; cacheable=0;; esac; \
+  done; \
   for arg in $(TEST_LDFLAGS) $$xlibs $(GC_FLAGS); do \
     case "$$arg" in \
+      $(TEST_INDIRECT_OPTS)) pchuse=""; cacheable=0;; \
+      -Wl,-rpath,@loader_path|-Wl,-rpath,@loader_path/*|-Wl,-rpath,@executable_path|-Wl,-rpath,@executable_path/*) \
+        case "$$arg" in \
+          -Wl,-rpath,@*,*) cacheable=0;; \
+          *) [ "$(TEST_HOST_OS)" = Darwin ] || cacheable=0;; \
+        esac;; \
       -Wl,*@*) cacheable=0;; \
       -l?*|-L?*|-Wl,?*|-fuse-ld=?*) ;; \
-      @*) pchuse=""; cacheable=0;; \
       -*) [ -z "$(TEST_SINGLE_INVOKE)" ] || pchuse="";; \
     esac; \
   done; \

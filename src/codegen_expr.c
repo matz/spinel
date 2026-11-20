@@ -3754,7 +3754,7 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
       if (sp_streq(nm, "MAX_10_EXP")) { buf_printf(b, "((sp_int)DBL_MAX_10_EXP)"); return 1; }
       if (sp_streq(nm, "MIN_10_EXP")) { buf_printf(b, "((sp_int)DBL_MIN_10_EXP)"); return 1; }
     }
-    if (par_nmc && sp_streq(par_nmc, "Math") && nm) {
+    if (nm && comp_const_path_on_math(c, par_idc)) {
       if (sp_streq(nm, "PI")) { buf_puts(b, "M_PI"); return 1; }
       if (sp_streq(nm, "E"))  { buf_puts(b, "M_E"); return 1; }
     }

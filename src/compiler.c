@@ -4073,7 +4073,7 @@ int comp_writer_in_chain(Compiler *c, int class_id, const char *name, int *def_c
    precedence; neither query reconstructs includes from the node table. */
 /* What the mixin walk looks for: Enumerable, Comparable, or any core module
    (one of those, or a builtin module named by path) */
-enum { MX_ENUM = 0, MX_CMP = 1, MX_CORE = 2, MX_ANSWERS = 3 };   /* MX_ANSWERS: one of them has the name (mixin_here's `name`) ahead of Object */
+enum { MX_ENUM = 0, MX_CMP = 1, MX_CORE = 2, MX_ANSWERS = 3, MX_NAMED = 4 };   /* MX_ANSWERS: one of them has the name (mixin_here's `name`) ahead of Object; MX_NAMED: the builtin module named `name` */
 static int mixin_here(const ClassInfo *ci, int what, const char *name) {
   int en = ci->enum_inc_at || ci->enum_prepended, cm = ci->cmp_inc_at || ci->cmp_prepended;
   if (what == MX_ANSWERS) {
@@ -4082,6 +4082,11 @@ static int mixin_here(const ClassInfo *ci, int what, const char *name) {
         (cm && builtin_answers_ahead_of(core_class_name(CORE_COMPARABLE), name, NULL))) return 1;
     for (int i = 0; i < ci->nincluded_mod_names; i++)
       if (builtin_answers_ahead_of(ci->included_mod_names[i], name, NULL)) return 1;
+    return 0;
+  }
+  if (what == MX_NAMED) {
+    for (int i = 0; i < ci->nincluded_mod_names; i++)
+      if (sp_streq(ci->included_mod_names[i], name)) return 1;
     return 0;
   }
   return what == MX_ENUM ? en : what == MX_CMP ? cm : en || cm || ci->nincluded_mod_names > 0;
@@ -4098,6 +4103,7 @@ static int mixin_reaches_from(Compiler *c, int k, int what, const char *name, un
     int m = ci->included_mods[j];
     /* (a builtin module of the program's classes: Math) */
     if (what == MX_ANSWERS && m >= 0 && m < c->nclasses && c->classes[m].is_builtin_const && builtin_answers_ahead_of(c->classes[m].name, name, NULL)) return 1;
+    if (what == MX_NAMED && m >= 0 && m < c->nclasses && c->classes[m].is_builtin_const && sp_streq(c->classes[m].name, name)) return 1;
     if (m >= 0 && m < c->nclasses && !seen[m] && mixin_reaches_from(c, m, what, name, seen)) return 1;
   }
   return 0;
@@ -4209,6 +4215,26 @@ int comp_chain_core_answers(Compiler *c, int cid, const char *name) {
     if (k == c->classes[k].parent) break;
   }
   return 0;
+}
+/* Is builtin module `mod` (Math) among the ancestors of class cid: included by it, a superclass, or a module either
+   includes, at any depth? `Klass::PI` then reads Math's constant, as a bare PI does inside the class. */
+int comp_chain_includes_core(Compiler *c, int cid, const char *mod) {
+  int n = 0;
+  for (int k = cid; k >= 0 && k < c->nclasses && n < c->nclasses; k = c->classes[k].parent, n++) {
+    if (mixin_reaches(c, k, MX_NAMED, mod)) return 1;
+    if (k == c->classes[k].parent) break;
+  }
+  return 0;
+}
+/* The parent of a constant path names Math, or a program class or module with Math among its ancestors, so the
+   path reads Math's constants (PI, E). */
+int comp_const_path_on_math(Compiler *c, int par_id) {
+  NodeKind k = nt_kind(c->nt, par_id);
+  if (k != NK_ConstantReadNode && k != NK_ConstantPathNode) return 0;
+  const char *nm = nt_str(c->nt, par_id, "name");
+  if (nm && sp_streq(nm, "Math")) return 1;
+  int ci = const_node_class_index(c, par_id);
+  return ci >= 0 && !c->classes[ci].is_builtin_const && comp_chain_includes_core(c, ci, "Math");
 }
 /* Enumerable's methods are behind class `cid`: Enumerable is among its
    ancestors (itself or a superclass includes or prepends it), or an ancestor

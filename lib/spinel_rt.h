@@ -24208,7 +24208,8 @@ static sp_int sp_curry_proc_fn(void *cap, sp_int argc, sp_int *args) {
      not reach the accumulator's count answers the next curry, not the
      target called short */
   _sp_proc_poly_ret = sp_curry_call_channel(cy, argc, blk);
-  return sp_poly_to_i(_sp_proc_poly_ret);
+  /* Only a native Integer result has an answer in the scalar slot. */
+  return _sp_proc_poly_ret.tag == SP_TAG_INT ? _sp_proc_poly_ret.v.i : 0;
 }
 /* sp_Proc_scan calls cap_scan WITHOUT marking the capture first, so this hook
    marks the curry itself before walking it (see sp_proc_compose_scan). */

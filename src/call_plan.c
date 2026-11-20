@@ -2849,6 +2849,21 @@ static int ct_meet_after(Compiler *c, int id) {
   if (ct_after_point(c, id)) return 1;
   return elab_in_record_kept_block(c, id) ? 1 | ELAB_MEET_RECORD : 0;
 }
+/* ...asked by ct_version_at for each class a call may land on, once the
+   entries are made (memo): kept by node (Compiler.meet_memo) */
+static int ct_meet_after_kept(Compiler *c, int id, int memo) {
+  struct MeetMemo *m = &c->meet_memo;
+  if (!memo || id < 0) return ct_meet_after(c, id);
+  if (id >= m->cap) {
+    int cap = m->cap ? m->cap : 1024;
+    while (cap <= id) cap *= 2;
+    if (!(m->at = realloc(m->at, (size_t)cap))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    memset(m->at + m->cap, 0, (size_t)(cap - m->cap));
+    m->cap = cap;
+  }
+  if (!m->at[id]) m->at[id] = (unsigned char)(ct_meet_after(c, id) + 1);
+  return m->at[id] - 1;
+}
 /* How call id asks the record for the versions it may meet
    (elab_call_meet): after its point where it runs later (also in a block
    the record keeps to run at a time the syntax does not tell, which may run
@@ -4091,7 +4106,7 @@ static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigne
     return vi;
   }
   ElabMeet m;
-  int kept = ct_meet_after(c, id);   /* (it runs at its point only if nothing around it runs later, nor the record keeps a block around it to run at another time) */
+  int kept = ct_meet_after_kept(c, id, !ml->survey && c->ver_built && !elab_check_on(c));   /* (it runs at its point only if nothing around it runs later, nor the record keeps a block around it to run at another time) */
   const Scope *own = comp_scope_of(c, id);
   elab_call_meet(c, id, rcls, name, sg, kept | (own && own->origin_module_ci > 0 ? ELAB_MEET_COPY : 0), &m, ds, VER_MAX_ARMS);
   /* (a call in a body that never runs meets no version at any time: the
@@ -14873,6 +14888,8 @@ void ver_memo_drop(Compiler *c) {
   free(c->pos_memo.at); free(c->pos_memo.to);
   c->pos_memo = (struct GuardMemo){ NULL, 0, NULL, 0, 0 };
   c->guard_memo = (struct GuardMemo){ NULL, 0, NULL, 0, 0 };
+  free(c->meet_memo.at);
+  c->meet_memo = (struct MeetMemo){ NULL, 0 };
   new_sites_free(c);
   attr_facts_free(c);
 }

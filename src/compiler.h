@@ -2064,6 +2064,11 @@ typedef struct {
   struct PosKey { unsigned index, edit, shape, mixin, table; int nclasses; } posv_key;   /* (what the position memos were filled at, pos_memos_sync) */
   int posv_ns;
   struct LrbMemo { unsigned long long *key; unsigned char *val; int n, cap; } lrb_memo;   /* (call_plan.c, pos_ran_before) */
+  /* how each call node meets versions (call_plan.c, ct_meet_after), as
+     ct_version_at asks it once the entries are made: at[id] - 1, 0 for a
+     node not asked yet; kept as the versions are, and dropped with
+     ver_memo */
+  struct MeetMemo { unsigned char *at; int cap; } meet_memo;
   /* the operand-local reads splat_dispatch_on_length marked splat_view,
      which desugar_splat_view_scalars rewrites once typed (-1 once seen) */
   int *splat_views;

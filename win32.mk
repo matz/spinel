@@ -94,6 +94,7 @@ TEST_SKIP += test/process_spawn_failure_names_path.rb test/process_spawn_file_re
 TEST_SKIP += test/process_spawn_splat_and_pair.rb test/std_stream_stat.rb
 # the user database knows the current user alone, as uid 0, and no group
 TEST_SKIP += packages/etc/test/etc_each.rb packages/etc/test/etc_getgr.rb packages/etc/test/etc_getpw.rb
+TEST_SKIP += test/file_expand_path_user.rb
 # no fork: Process.daemon is NotImplementedError there, as in CRuby
 TEST_SKIP += test/process_daemon.rb
 # no pty package (PLATFORM_NO_PKG_OBJS above)

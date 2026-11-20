@@ -1588,6 +1588,19 @@ int main(int argc, char **argv) {
      0 means unlimited in both -- in each compiler's own spelling; an unknown
      -f flag is an error, not a warning (#4152). */
   s_add(&cmd, cc_is_clang(cc_cmd) ? "-ferror-limit=0 " : "-fmax-errors=0 ");
+  /* gcc's preprocessor keeps where each piece of a system header macro's
+     expansion came from, and -E writes that down: every NULL (or stdout, or
+     INT64_MAX) a line of the generated C expands gets a line marker into
+     the header and back, and the rest of the line is padded with spaces to
+     the column it stood in. A whole Ruby statement is one C line, so a
+     line holding a few hundred NULLs came out of -E megabytes long, and a
+     large program's preprocessed unit for the split build (cc_split_build,
+     unit_cache.c) was tens of GB. Asked not to track macro expansions, gcc
+     writes the expansion in place, as clang does; only the notes a
+     diagnostic adds about the macro an expression came from go with it. The
+     flag is gcc's alone (clang refuses it), so it is asked for where the -f
+     spellings above are. */
+  if (!cc_is_clang(cc_cmd)) s_add(&cmd, "-ftrack-macro-expansion=0 ");
   /* clang stops parsing at 256 nested brackets ("bracket nesting level
      exceeded maximum of 256"), a guard of its own stack against
      pathological input. The generated C nests a statement expression per

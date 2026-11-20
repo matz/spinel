@@ -1,0 +1,8 @@
+[Net::HTTPOK, "POST /r?q=1 HTTP/1.1 content-length=3 body=a=1"]
+"POST /r?q=1 HTTP/1.1 content-length=2 content-type=application/json body={}"
+"POST /r?q=1 HTTP/1.1 content-length=0 body="
+[Net::HTTPOK, "PUT /r?q=1 HTTP/1.1 content-length=1 body=x"]
+"PUT /r?q=1 HTTP/1.1 content-length=2 content-type=application/json body={}"
+"GET /r?q=1 HTTP/1.1  body="
+"GET /r?q=1 HTTP/1.1 x-a=1 body="
+[Net::HTTPOK, "GET /r?q=1 HTTP/1.1 x-a=2 body="]

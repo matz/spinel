@@ -2972,6 +2972,24 @@ static int sp_fifo_open_read(const char *path, int fl, int perm) {
      waiting, and the thread died of it at the program's end) */
   int fd = open(path, fl | O_NONBLOCK, (mode_t)perm);
   if (fd < 0) return -1;
+#ifdef __linux__
+  /* On Linux the descriptor itself says when to go on, and the thread
+     sleeps in the scheduler until it does: readable once a writer has
+     sent bytes, and hung up (POLLHUP) once a writer has come and gone,
+     which a FIFO no writer ever opened is not. Nothing is read here, so
+     no byte is taken from a child handed the descriptor, and the thread
+     is asleep the whole wait (Thread#status), where an ask every
+     millisecond ran between two asks. The open answers at the writer's
+     first byte or its close, not at its open: a writer that opens and
+     waits for the reader before it writes is not met. */
+  for (;;) {
+    struct pollfd pf = { fd, POLLIN, 0 };
+    int pr = poll(&pf, 1, 0);
+    if (pr > 0 && (pf.revents & (POLLIN | POLLHUP | POLLERR))) return sp_fifo_opened(fd);
+    if (pr < 0 && errno != EINTR) { int e = errno; close(fd); errno = e; return -1; }
+    if (!sp_sched_wait_io(fd, POLLIN)) return sp_fifo_opened(fd);   /* (shutdown) */
+  }
+#else
   for (;;) {
 #ifdef FIONREAD
     int avail = 0;
@@ -2984,6 +3002,7 @@ static int sp_fifo_open_read(const char *path, int fl, int perm) {
     if (n < 0 && errno != EINTR) { int e = errno; close(fd); errno = e; return -1; }
     sp_sleep(0.001);
   }
+#endif
 }
 
 /* open(2) on a FIFO waits for the other end, and it waits in the kernel with

@@ -106,7 +106,6 @@ src/analyze_cls.c cf_proto_ret_build the protocol methods' names
 src/analyze_cls.c cf_scal_build Enumerable's iterator names
 src/analyze_desugar.c class_answers_own to_ary / to_a
 src/analyze_infer.c kconv_integer_kind to_int / to_i
-src/call_plan.c pos_entry comp_method_in_chain the front layer a class's table answers for the name, whose version a subclass's receivers run behind the end arm, not one call's name
 src/call_plan.c cplan_conversion the conversion protocol's names
 src/call_plan.c cplan_level_answers one level of a mixin walk's lookup, its own table, where the record cannot tell
 src/call_plan.c cplan_mm_method =METHOD_MISSING_NAME method_missing, which a call of a name no method answers runs, not one call's name

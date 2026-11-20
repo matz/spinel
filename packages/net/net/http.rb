@@ -323,6 +323,13 @@ module Net
       raise KeyError, "key not found: #{k.inspect}"
     end
 
+    def content_length
+      return nil unless key?("content-length")
+      len = self["content-length"].slice(/\d+/)
+      raise HTTPHeaderSyntaxError, "wrong Content-Length format" if len.nil?
+      len.to_i
+    end
+
     # The media type alone, as CRuby answers it: `text/html; charset=utf-8`
     # reads `text/html`. The whole header made a type check written against
     # CRuby (`res.content_type == "text/html"`) fail for nearly every real

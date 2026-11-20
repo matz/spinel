@@ -13241,6 +13241,12 @@ static sp_RbVal sp_poly_iter_subject(sp_RbVal v) {
   if (v.tag == SP_TAG_OBJ && (v.cls_id == SP_BUILTIN_RANGE || v.cls_id == SP_BUILTIN_STR_RANGE || v.cls_id == SP_BUILTIN_OBJ_RANGE ||
                               v.cls_id == SP_BUILTIN_ENUMERATOR))
     return sp_box_poly_array(sp_enum_items_from(v));
+  /* a program Enumerable too: the walk reads its elements once, not at
+     every index */
+  if (sp_poly_is_user_obj(v) && v.v.p) {
+    sp_RbVal a = sp_obj_walk_a(v);
+    if (a.tag == SP_TAG_OBJ) return a;
+  }
   return v;
 }
 /* What a boxed receiver's element-by-element walk reads (the spliced poly
@@ -15861,7 +15867,7 @@ static sp_int sp_poly_length(sp_RbVal v){if(v.tag==SP_TAG_OBJ&&v.cls_id==SP_BUIL
 case SP_BUILTIN_IO:{sp_int sp_file_size(const char*);sp_File*_f=(sp_File*)v.v.p;if(_f&&sp_File_path(_f)[0]&&sp_File_path(_f)[0]!='<')return sp_file_size(sp_File_path(_f));return 0;}
 case SP_BUILTIN_STRBUF: return v.v.p ? ((sp_String *)v.v.p)->len : 0;
 /* a user object with #to_a (a container-read Set, #3234): its element count */
-default: if (sp_obj_to_a_fn) { sp_RbVal _a = sp_obj_to_a_fn(v); if (_a.tag == SP_TAG_OBJ && sp_poly_is_array_kind(_a.cls_id)) return sp_poly_length(_a); } return 0;}}
+default: { sp_RbVal _a = sp_obj_walk_a(v); if (_a.tag == SP_TAG_OBJ) return sp_poly_length(_a); } return 0;}}
 /* The member a constructor's keyword key names: a Symbol's name, or a
    String's, which CRuby takes for the member of that name too; NULL for a
    key of any other class. */
@@ -17492,9 +17498,9 @@ static sp_RbVal sp_poly_iter_elem(sp_RbVal recv, sp_int i) {
     return out;
   }
   /* a user object with #to_a (a container-read Set, #3234) */
-  if (recv.tag == SP_TAG_OBJ && !sp_poly_is_array_kind(recv.cls_id) && sp_obj_to_a_fn) {
-    sp_RbVal _a = sp_obj_to_a_fn(recv);
-    if (_a.tag == SP_TAG_OBJ && sp_poly_is_array_kind(_a.cls_id)) return sp_poly_arr_get(_a, i);
+  if (recv.tag == SP_TAG_OBJ && !sp_poly_is_array_kind(recv.cls_id)) {
+    sp_RbVal _a = sp_obj_walk_a(recv);
+    if (_a.tag == SP_TAG_OBJ) return sp_poly_arr_get(_a, i);
   }
   return sp_poly_arr_get_hash(recv, i);
 }

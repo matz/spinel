@@ -1,0 +1,44 @@
+"S[n]"
+:field
+"S[n]"
+:f
+5
+"S[n]"
+"S[]"
+"S[m]"
+:meth
+[1, 2]
+"S[m]"
+7
+"S[k]"
+:kk
+1
+"S[k]"
+"S[]"
+"S[f]"
+"r"
+"S[rn]"
+:zz
+"S[rk]"
+1
+"S[x]"
+"S[y]"
+"bye"
+3
+"only"
+"custom"
+"stop"
+"S[sp]"
+:nm
+"sp"
+"se"
+1
+"S[nme]"
+[1]
+"S[fz]"
+[1]
+"S[dyn]"
+["S[l1]", "S[l2]"]
+"S[cv]"
+"key not found: :b"
+"undefined method 'zork' for an instance of Integer"

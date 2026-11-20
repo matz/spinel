@@ -1178,6 +1178,7 @@ const char *rename_local(const char *nm);
 
 void emit_expr(Compiler *c, int id, Buf *b);
 void emit_expr_for_effect(Compiler *c, int node, Buf *b);
+int subtree_has_loop_break(Compiler *c, int root);
 /* Can evaluating `node` run none of the program's own code (codegen_call.c)?
    It may allocate, but writes no variable and calls no method of the
    program's, implicitly or explicitly. A constant that autoloads, or may be

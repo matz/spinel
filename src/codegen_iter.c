@@ -3132,7 +3132,8 @@ void emit_block_invoke(Compiler *c, int site, Buf *b, int indent, int as_expr,
                String): boxed, or the splice handed the raw sp_int to an
                sp_RbVal (`groups[yield(x)] ||= []` under two block kinds) */
             comp_ntype(c, bd3[bn3 - 1]) == TY_INT || comp_ntype(c, bd3[bn3 - 1]) == TY_FLOAT ||
-            comp_ntype(c, bd3[bn3 - 1]) == TY_STRING || comp_ntype(c, bd3[bn3 - 1]) == TY_BOOL ||
+            comp_ntype(c, bd3[bn3 - 1]) == TY_STRING || repr_of(c, bd3[bn3 - 1]).kind == RK_STRBUF ||
+            comp_ntype(c, bd3[bn3 - 1]) == TY_BOOL ||
             comp_ntype(c, bd3[bn3 - 1]) == TY_SYMBOL) &&
            nt_type(nt, bd3[bn3 - 1]) &&
            nt_kind(nt, bd3[bn3 - 1]) != NK_ReturnNode) {

@@ -1209,14 +1209,7 @@ module Net
       encoding = headers["content-encoding"].to_s.downcase
       case encoding
       when "gzip", "x-gzip", "deflate"
-        unless body.empty?
-          inflater = Zlib::Inflate.new(32 + Zlib::MAX_WBITS)
-          begin
-            body = inflater.inflate(body)
-          ensure
-            inflater.close
-          end
-        end
+        body = Zlib.raw_inflate(body, 32 + Zlib::MAX_WBITS) unless body.empty?
         headers.delete("content-encoding")
         headers["content-length"] = body.bytesize.to_s if headers.key?("content-length")
       when "identity", "none"

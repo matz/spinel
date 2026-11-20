@@ -53,6 +53,8 @@ A nullable Integer or Float result keeps its nil through boxing.
 For a typed Integer destination, the transform writes the value and its
 nil flag together. Both come from the receiver when changing the keys
 and from the block when changing the values.
+A builtin key transform uses a general Hash when no typed layout holds
+both the new key and the original value.
 Hash key insertion consults the runtime String's frozen state. It retains a
 frozen key and makes a frozen key object for an unfrozen input, including a
 static empty or one-character result. The Hash stores the key's byte view.

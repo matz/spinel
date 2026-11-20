@@ -1112,7 +1112,8 @@ int emit_transform_hash_expr(Compiler *c, int id, Buf *b) {
   int has_next = fold_body_has_next(c, body);
   /* A boxed destination takes a String handle or an optional numeric
      result through ordinary boxing, including a value supplied by next. */
-  int box_result = !keys && dr.val == TY_POLY &&
+  TyKind result_slot = keys ? dr.key : dr.val;
+  int box_result = result_slot == TY_POLY &&
                    (bret == TY_STRING || bret == TY_STRBUF ||
                     (oint_kind(bret) && (has_next || node_has_oint_form(c, lastv))));
   int oset_v = !keys && dvn && dr.val == TY_INT &&

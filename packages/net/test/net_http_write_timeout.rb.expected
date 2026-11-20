@@ -1,0 +1,5 @@
+60
+3
+POST: Net::WriteTimeout, a Timeout::Error: true, 1 connection(s), in time: true, started after: false
+PUT: Net::WriteTimeout, a Timeout::Error: true, 2 connection(s), in time: true, started after: false
+the slow reader got 4000000 bytes

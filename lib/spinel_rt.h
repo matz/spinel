@@ -3586,6 +3586,14 @@ static sp_RbVal sp_poly_binop_bad(const char *op, sp_RbVal recv, sp_RbVal arg) {
 static inline int sp_poly_is_user_obj(sp_RbVal v) {
   return v.tag == SP_TAG_OBJ && v.cls_id >= 0;
 }
+/* The array a program object's Enumerable methods walk: the elements its
+   #each yields, or what its #to_a answers when it has none of those (a
+   Struct). nil when neither hook answers an array. */
+static sp_RbVal sp_obj_walk_a(sp_RbVal v) {
+  sp_RbVal a = sp_obj_each_a_fn ? sp_obj_each_a_fn(v) : sp_box_nil();
+  if (!(a.tag == SP_TAG_OBJ && sp_poly_is_array_kind(a.cls_id)) && sp_obj_to_a_fn) a = sp_obj_to_a_fn(v);
+  return a.tag == SP_TAG_OBJ && sp_poly_is_array_kind(a.cls_id) ? a : sp_box_nil();
+}
 /* The operand of an Array operator (+ - | & concat) converted implicitly,
    as CRuby's to_ary: a program object answering #to_ary becomes that
    Array, and one whose #to_ary answers a non-Array is CRuby's TypeError.
@@ -9452,11 +9460,11 @@ static sp_PolyArray *sp_poly_arr_recv(sp_RbVal v, const char *m) {
      Enumerable name reaching here wants (#3449). The few whose Hash result is
      itself a Hash rebuild one from the pairs at their own call site. */
   if (v.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(v.cls_id)) return sp_enum_items_from(v);
-  /* a user object with #to_a (a container-read Set): iterate its elements
-     through the generated hook (#3234) */
-  if (v.tag == SP_TAG_OBJ && sp_obj_to_a_fn) {
-    sp_RbVal a = sp_obj_to_a_fn(v);
-    if (a.tag == SP_TAG_OBJ && sp_poly_is_array_kind(a.cls_id)) return sp_poly_to_poly_array(a);
+  /* a user object with #each or #to_a (a container-read Set): iterate its
+     elements through the generated hooks (#3234) */
+  if (v.tag == SP_TAG_OBJ) {
+    sp_RbVal a = sp_obj_walk_a(v);
+    if (a.tag == SP_TAG_OBJ) return sp_poly_to_poly_array(a);
   }
   sp_raise_nomethod(sp_nomethod_msg(m, v));
   return NULL;  /* unreachable: sp_raise_nomethod does not return */
@@ -13233,6 +13241,12 @@ static sp_RbVal sp_poly_iter_subject(sp_RbVal v) {
   if (v.tag == SP_TAG_OBJ && (v.cls_id == SP_BUILTIN_RANGE || v.cls_id == SP_BUILTIN_STR_RANGE || v.cls_id == SP_BUILTIN_OBJ_RANGE ||
                               v.cls_id == SP_BUILTIN_ENUMERATOR))
     return sp_box_poly_array(sp_enum_items_from(v));
+  /* a program Enumerable too: the walk reads its elements once, not at
+     every index */
+  if (sp_poly_is_user_obj(v) && v.v.p) {
+    sp_RbVal a = sp_obj_walk_a(v);
+    if (a.tag == SP_TAG_OBJ) return a;
+  }
   return v;
 }
 /* What a boxed receiver's element-by-element walk reads (the spliced poly
@@ -15853,7 +15867,7 @@ static sp_int sp_poly_length(sp_RbVal v){if(v.tag==SP_TAG_OBJ&&v.cls_id==SP_BUIL
 case SP_BUILTIN_IO:{sp_int sp_file_size(const char*);sp_File*_f=(sp_File*)v.v.p;if(_f&&sp_File_path(_f)[0]&&sp_File_path(_f)[0]!='<')return sp_file_size(sp_File_path(_f));return 0;}
 case SP_BUILTIN_STRBUF: return v.v.p ? ((sp_String *)v.v.p)->len : 0;
 /* a user object with #to_a (a container-read Set, #3234): its element count */
-default: if (sp_obj_to_a_fn) { sp_RbVal _a = sp_obj_to_a_fn(v); if (_a.tag == SP_TAG_OBJ && sp_poly_is_array_kind(_a.cls_id)) return sp_poly_length(_a); } return 0;}}
+default: { sp_RbVal _a = sp_obj_walk_a(v); if (_a.tag == SP_TAG_OBJ) return sp_poly_length(_a); } return 0;}}
 /* The member a constructor's keyword key names: a Symbol's name, or a
    String's, which CRuby takes for the member of that name too; NULL for a
    key of any other class. */
@@ -16294,10 +16308,9 @@ static sp_RbVal sp_poly_to_c_m(sp_RbVal v) {
    reachable; the ops consult it rather than answering for an empty one.
    sp_poly_length already did this; the rest did not (#3761). */
 static sp_PolyArray *sp_poly_user_elems(sp_RbVal v) {
-  if (v.tag != SP_TAG_OBJ || v.cls_id < 0 || !sp_obj_to_a_fn) return NULL;
-  sp_RbVal a = sp_obj_to_a_fn(v);
-  if (a.tag == SP_TAG_OBJ && sp_poly_is_array_kind(a.cls_id)) return sp_poly_to_poly_array(a);
-  return NULL;
+  if (v.tag != SP_TAG_OBJ || v.cls_id < 0) return NULL;
+  sp_RbVal a = sp_obj_walk_a(v);
+  return a.tag == SP_TAG_OBJ ? sp_poly_to_poly_array(a) : NULL;
 }
 static sp_oint sp_enum_find_index_val(sp_RbVal recv, sp_RbVal x) SP_UNUSED;
 /* A boxed Dir's Enumerable probes walk the open handle, restarting each
@@ -17484,9 +17497,9 @@ static sp_RbVal sp_poly_iter_elem(sp_RbVal recv, sp_int i) {
     return out;
   }
   /* a user object with #to_a (a container-read Set, #3234) */
-  if (recv.tag == SP_TAG_OBJ && !sp_poly_is_array_kind(recv.cls_id) && sp_obj_to_a_fn) {
-    sp_RbVal _a = sp_obj_to_a_fn(recv);
-    if (_a.tag == SP_TAG_OBJ && sp_poly_is_array_kind(_a.cls_id)) return sp_poly_arr_get(_a, i);
+  if (recv.tag == SP_TAG_OBJ && !sp_poly_is_array_kind(recv.cls_id)) {
+    sp_RbVal _a = sp_obj_walk_a(recv);
+    if (_a.tag == SP_TAG_OBJ) return sp_poly_arr_get(_a, i);
   }
   return sp_poly_arr_get_hash(recv, i);
 }
@@ -19869,8 +19882,8 @@ static sp_PolyArray *sp_enum_items_from(sp_RbVal v) {
        synthesized for an Enumerable that defines #each), the way sp_poly_arr_recv
        already does. Without the arm every such object fell to the empty array
        below, so an external enumerator over one yielded nothing (#4022). */
-    if (v.cls_id >= 0 && sp_obj_to_a_fn) {
-      sp_RbVal a = sp_obj_to_a_fn(v);
+    if (v.cls_id >= 0) {
+      sp_RbVal a = sp_obj_walk_a(v);
       /* A #to_a answer that already is a poly array is copied through the
          poly-array arm above rather than handed back as is: a user's own
          #to_a may answer the array it keeps, and the reverse_each constructor
@@ -21123,10 +21136,7 @@ static sp_Enumerator *sp_poly_lazy_src(sp_RbVal v) {
   int ok = sp_poly_is_array_kind(v.cls_id) || sp_poly_is_hash_kind(v.cls_id) ||
            v.cls_id == SP_BUILTIN_RANGE || v.cls_id == SP_BUILTIN_STR_RANGE || v.cls_id == SP_BUILTIN_OBJ_RANGE;
   /* a user object streams through its own #to_a, as sp_enum_items_from reads it */
-  if (!ok && v.cls_id >= 0 && sp_obj_to_a_fn) {
-    sp_RbVal a = sp_obj_to_a_fn(v);
-    ok = a.tag == SP_TAG_OBJ && sp_poly_is_array_kind(a.cls_id);
-  }
+  if (!ok && v.cls_id >= 0) ok = sp_obj_walk_a(v).tag == SP_TAG_OBJ;
   if (!ok) sp_raise_nomethod(sp_nomethod_msg("lazy", v));
   return sp_Enumerator_new_from(v);
 }
@@ -23549,11 +23559,12 @@ static sp_RbVal sp_poly_enum_proc(sp_RbVal recv, int op, sp_Proc *blk) {
     }
   }
   SP_GC_ROOT_RBVAL(walk);
-  /* a program object that is Enumerable walks the elements the generated
-     hook materializes, as sp_poly_arr_recv does for a literal block (#3761) */
-  if (sp_poly_is_user_obj(walk) && walk.v.p && sp_obj_to_a_fn) {
-    sp_RbVal a = sp_obj_to_a_fn(walk);
-    if (a.tag == SP_TAG_OBJ && sp_poly_is_array_kind(a.cls_id)) walk = a;
+  /* a program object that is Enumerable walks the elements its #each
+     yields, which may not be what its own #to_a answers; one without that
+     hook walks its #to_a, as sp_poly_arr_recv does (#3761) */
+  if (sp_poly_is_user_obj(walk) && walk.v.p) {
+    sp_RbVal a = sp_obj_walk_a(walk);
+    if (a.tag == SP_TAG_OBJ) walk = a;
   }
   /* An Array is walked live, as CRuby's Array methods walk it: the length
      and the element are read at every step, so the block sees what it

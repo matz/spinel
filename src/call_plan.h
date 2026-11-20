@@ -694,6 +694,12 @@ int cplan_hook_target(Compiler *c, int id, int ci, const char *name, MethodLooku
    is opened at no statement the call may run at (its window): no run
    takes that arm, which keeps the constructor's own */
 int cplan_new_arm_initialize(Compiler *c, int id, int ci);
+/* Is class ci one a `new` on a boxed Class value recv dispatches over: a
+   class of the program's own (not a reopened builtin, not a class bound to
+   C) that recv's class fact does not rule out? The boxed dispatch builds its
+   arms over these (codegen_call_class.c), and the nil marking binds the
+   initialize each one's arm runs (mark_nullable_params_of_new). */
+int cplan_new_arm_class(Compiler *c, int recv, int ci);
 /* Every initialize a builtin `new` of class ci may run, wherever it runs:
    the table's method, then each other version of it the record holds (a
    replaced one, in the history of the class that defines it) that an

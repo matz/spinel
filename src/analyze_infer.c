@@ -7908,6 +7908,7 @@ static int infer_enum_chain_call(Compiler *c, int id, const NodeTable *nt, const
         int args = nt_ref(nt, id, "arguments");
         int argc = 0; const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
         TyKind acc = (argc > 0 && argv) ? infer_type(c, argv[0]) : elem;
+        if (acc == TY_NIL) acc = TY_POLY;   /* a nil seed: boxed, as infer_array_reduce's */
         /* an empty `{}` seed is a general boxed-key/value hash builder, like
            each_with_object({}) -- not the element type (#2958) */
         if (acc == TY_UNKNOWN && argc > 0 && argv &&
@@ -12025,6 +12026,11 @@ TyKind infer_uncached(Compiler *c, int id) {
        is a String range too, its missing bound a nil (NULL) endpoint. */
     if ((lo >= 0 || hi >= 0) && (lo < 0 || lt == TY_STRING) && (hi < 0 || ht == TY_STRING))
       return TY_STR_RANGE;
+    /* ... and so is a String beside a nil end, written (nil.."e") or a value
+       typed nil (an ivar nothing sets, a method answering nil): that end is
+       the open bound, where an Integer range read the String as a number */
+    if ((lt == TY_STRING && hi >= 0 && ht == TY_NIL) || (ht == TY_STRING && lo >= 0 && lt == TY_NIL))
+      return TY_STR_RANGE;
     /* A String beside a boxed end is a String range too: the boxed end can
        only be a String or nil in CRuby, anything else being its ArgumentError
        (sp_srange_new_box checks it at run time). */
@@ -12365,6 +12371,12 @@ TyKind infer_uncached(Compiler *c, int id) {
         if (comp_ivar_index(&c->classes[k], nm) >= 0) ie = 0;
       return ie && nm ? TY_NIL : TY_UNKNOWN;
     }
+    /* an ivar the program never sets reads nil: left to the slot, it read
+       unknown, the slot fell to poly after the fixpoint (its storage), and
+       the poly widened what it was passed to (`self.class.new(@size)`). A
+       slot a declaration types keeps that type. */
+    if ((ci->ivar_types[iv] == TY_UNKNOWN || ci->ivar_types[iv] == TY_POLY) &&
+        !class_ivar_pinned(ci, nm) && ivar_never_set_in(c, nm, cls_id)) return TY_NIL;
     /* an UNMARKED read of a shared-mutable string slot demotes to the plain
        string type (copy-read), mirroring the local-read demotion (#3227) */
     if (ci->ivar_types[iv] == TY_STRBUF) return TY_STRING;
@@ -12899,12 +12911,18 @@ TyKind infer_uncached(Compiler *c, int id) {
        the join the arms of an `if` make (a slot that cannot hold a nil, a
        Range or a bool, is boxed). Any other nil-typed expression is taken
        as one that diverges (a raise the folder has turned into a call).
-       Empty parentheses and a literal nil also carry a nil value. */
+       Empty parentheses, a literal nil, a read of an ivar nothing sets
+       (ivar_never_set_in) and a call that reaches a method of the
+       program's (call_reaches_program_method: one answering such a read,
+       or a literal nil) also carry a nil value: a Range or boolean rescue
+       arm took that nil as its own `0..0`/false. */
     if (et == TY_NIL && rt != TY_UNKNOWN && rt != TY_VOID && e >= 0) {
       int one;
       switch (vp_one(nt, e, VPS_NONE | VP_PARENS_ONLY, &one)) {
       case VP1_NODE:
-        if (is_yield_or_blk_param_call(c, one) || nt_kind(nt, one) == NK_NilNode) return ty_unify(et, rt);
+        if (is_yield_or_blk_param_call(c, one) || nt_kind(nt, one) == NK_NilNode ||
+            nt_kind(nt, one) == NK_InstanceVariableReadNode ||
+            (nt_kind(nt, one) == NK_CallNode && call_reaches_program_method(c, one))) return ty_unify(et, rt);
         break;
       case VP1_NIL: return ty_unify(et, rt);
       case VP1_MANY: break;

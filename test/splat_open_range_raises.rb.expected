@@ -1,0 +1,35 @@
+[TypeError, "can't iterate from NilClass"]
+[RangeError, "cannot convert endless range to an array"]
+[TypeError, "can't iterate from NilClass"]
+[RangeError, "cannot convert endless range to an array"]
+[RangeError, "cannot convert endless range to an array"]
+[TypeError, "can't iterate from NilClass"]
+[RangeError, "cannot convert endless range to an array"]
+[TypeError, "can't iterate from NilClass"]
+[TypeError, "can't iterate from NilClass"]
+[TypeError, "can't iterate from NilClass"]
+[1, 2, 3]
+[1, 2, 5, 6]
+[]
+[TypeError, "can't iterate from NilClass"]
+[TypeError, "can't iterate from NilClass"]
+[RangeError, "cannot convert endless range to an array"]
+:in
+:out
+:in
+:in
+:hit
+:hit
+:hit
+[RangeError, "cannot convert endless range to an array"]
+[TypeError, "can't iterate from NilClass"]
+2
+:in
+:miss
+:miss
+:hit
+:hit
+[TypeError, "can't iterate from Float"]
+2
+2
+[:out, 1]

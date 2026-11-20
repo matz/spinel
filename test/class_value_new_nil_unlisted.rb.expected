@@ -1,0 +1,10 @@
+[nil, 2.5, 5]
+[nil, nil, :none]
+[4, nil, 5]
+nil
+3
+[nil, 2.5, 5]
+[nil, 1.5, 5]
+:none
+:none
+5

@@ -1,0 +1,33 @@
+nil
+19
+361
+21
+19
+nil
+4
+nil
+nil
+:t
+2
+2
+8
+nil
+true
+true
+true
+:d
+:none
+5
+[nil, nil, nil, nil]
+[true, true, true, true]
+[..5, 1.., .."z", "a".., ..3, .."e", "b"..]
+[[nil, 5], [1, nil], [nil, "z"], ["a", nil], [nil, 3], [nil, "e"], ["b", nil]]
+[:n, :n]
+[3, 3, 1.5, "ab", 4]
+[nil, nil, nil, true]
+nil
+"method"
+f ran
+f ran
+f ran
+[[0], [0, "s"], [1.5]]

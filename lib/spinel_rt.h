@@ -9112,14 +9112,22 @@ static sp_bool sp_poly_case_eq_match(sp_RbVal pat, sp_RbVal e);   /* defined bel
 /* `when *arr` in a case value: does any element of arr match the
    scrutinee? The scrutinee equal to the element, as before, or the element
    matching it through sp_poly_case_eq_match: a Class its instances, a Regexp
-   a String (setting $~, as a `when` arm does), a Range its members. */
+   a String (setting $~, as a `when` arm does), a Range its members. A
+   value that is not an Array spreads as a splat does (sp_splat_to_array):
+   a Range as its to_a, which raises for an open one, nil as [] and a
+   String, Symbol or number as [x]. Read as an Array, a Range held no
+   elements (`when *(1..3)` matched nothing) and a String its byte count of
+   nils (`when *"ab"` matched a nil subject). Each element is asked once,
+   as CRuby's `elem === subject` (sp_poly_case_eq_match, whose last arm is
+   Object#=== calling ==). */
+static sp_RbVal sp_splat_to_array(sp_RbVal v);
 static sp_bool sp_case_splat_match(sp_RbVal scrut, sp_RbVal arr) {
   SP_GC_ROOT_RBVAL(scrut);
   SP_GC_ROOT_RBVAL(arr);
+  if (!(arr.tag == SP_TAG_OBJ && sp_poly_is_array_kind(arr.cls_id))) arr = sp_splat_to_array(arr);
   sp_int n = sp_poly_length(arr);
   for (sp_int i = 0; i < n; i++)
-    if (sp_poly_rb_equal(scrut, sp_poly_arr_get(arr, i)) || sp_poly_case_eq_match(sp_poly_arr_get(arr, i), scrut))
-      return TRUE;
+    if (sp_poly_case_eq_match(sp_poly_arr_get(arr, i), scrut)) return TRUE;
   return FALSE;
 }
 /* `break *x` / `next *x`: Ruby's splat-to-array -- nil becomes [], an array
@@ -9135,6 +9143,8 @@ static sp_RbVal sp_splat_to_array(sp_RbVal v) {
   if (v.tag == SP_TAG_OBJ && sp_poly_is_array_kind(v.cls_id)) return v;
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_MATCHDATA && v.v.p) return sp_box_poly_array(sp_MatchData_to_a((sp_MatchData *)v.v.p));
   if (v.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(v.cls_id)) return sp_box_poly_array(sp_poly_to_a_arr(v));
+  /* a Float Range (a Float or nil begin) cannot iterate: its to_a raises */
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_FLOAT_RANGE && v.v.p) sp_frange_iter_raise(*(sp_FloatRange *)v.v.p, 1);
   if (v.tag == SP_TAG_OBJ && (v.cls_id == SP_BUILTIN_RANGE || v.cls_id == SP_BUILTIN_STR_RANGE || v.cls_id == SP_BUILTIN_OBJ_RANGE ||
                               (v.cls_id == SP_BUILTIN_ENUMERATOR && v.v.p)))
     return sp_box_poly_array(sp_enum_items_from(v));

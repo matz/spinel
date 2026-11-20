@@ -1,0 +1,3 @@
+["undefined method '+' for nil", "undefined method '-' for nil", "undefined method '*' for nil", "undefined method '/' for nil", "undefined method '%' for nil", "undefined method '**' for nil", "undefined method '<' for nil", "undefined method '<=' for nil", "undefined method '>' for nil", "undefined method '>=' for nil", false, true, false]
+[NoMethodError, NoMethodError, NoMethodError]
+[1, 1]

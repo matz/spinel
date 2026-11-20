@@ -587,6 +587,16 @@ int is_reflective_access(const char *n) {
          sp_streq(n, "const_get") || sp_streq(n, "const_set") || sp_streq(n, "remove_instance_variable") ||
          sp_streq(n, "remove_class_variable") || sp_streq(n, "remove_const");
 }
+/* The names that let a program set an instance variable it does not spell,
+   or one of an object it does not name: instance_variable_set, a block run
+   with another self (instance_eval, instance_exec, define_singleton_method),
+   and Marshal, YAML and Psych, which load objects with their ivars set
+   (ivar_never_set_in) */
+int is_unspelled_ivar_writer(const char *n) {
+  return n && (sp_streq(n, "instance_variable_set") || is_instance_eval_family(n) ||
+               sp_streq(n, "define_singleton_method") || sp_streq(n, "Marshal") ||
+               sp_streq(n, "YAML") || sp_streq(n, "Psych"));
+}
 /* The methods whose CRuby answer turns on the name they are given: a
    NameError for one not allowed as a name of its kind, or for one that is
    not there. The reflective accesses of a variable or constant by name and
@@ -3302,6 +3312,11 @@ int is_attr_decl_reader(const char *n) {
 }
 int is_attr_decl_writer(const char *n) {
   return n && (is_attr_writer_family(n) || sp_streq(n, "attribute") || sp_streq(n, "attributes"));
+}
+/* A call that may declare a writer: the writer declarations, and `attr`
+   (whose `attr :x, true` form is one) */
+int is_attr_may_write(const char *n) {
+  return n && (is_attr_decl_writer(n) || sp_streq(n, "attr"));
 }
 /* The class-body declarations that run no code of the class's own: a
    visibility change (of instance methods, class methods or constants), an

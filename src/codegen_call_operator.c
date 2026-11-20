@@ -1288,6 +1288,13 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
       }
     }
     if (rt == TY_UNKNOWN) return emit_untyped_recv_cmp(c, name, recv, argv[0], b);
+    /* a nil receiver whose call the plan proves raises (nil has no `<`):
+       the general call's missing-method gate, as for arithmetic
+       (emit_array_arith_call) */
+    if (recv >= 0 && repr_of(c, recv).as_ty == TY_NIL) {
+      char own[128];
+      if (cplan_unrouted(c, id, own, sizeof own, NULL) == CU_RAISES) return 0;
+    }
     unsupported(c, id, "comparison");
   }
 

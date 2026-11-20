@@ -869,6 +869,183 @@ int ivw_shared_first(Compiler *c, const char *name) {
 int ivw_shared_node(int rec) { return ivw_shared_ix.node[rec]; }
 int ivw_shared_next(int rec) { return ivw_shared_ix.next[rec]; }
 
+/* Which classes may set an ivar of a name, for ivar_never_set_in. Each
+   ivar write (every kind: `=`, `||=`, `&&=`, `op=`, a multiple-assignment or
+   rescue target) notes its name with the class whose method or body holds
+   it, -1 where that is no class (a top-level method, which any object
+   answers); each attr writer the load record registers on a class side
+   (elab_entries, those under a run-time condition too) and each Struct or
+   Data member notes its name with that class. Everything may be set when the program can set an ivar it does
+   not spell, or in an object it does not name: an instance_variable_set or
+   an instance_eval/exec (called, or named for a send or a method object), a
+   define_singleton_method, an attr writer of a name it computes,
+   Marshal/YAML/Psych, which load objects with their ivars set, or a C
+   extension (rb_ivar_set: racc's cparse sets its parser's @vstack). Built
+   from the node table, the scopes and the class table, and rebuilt on the
+   signals ivw_shared uses (the node table's identity or growth, a
+   scope-index epoch tick) and when the classes or their shape change. */
+typedef struct { ANameHash names; int *head, hcap; int *cls, *next, n, cap; } IvnSet;
+static IvnSet ivn_w;   /* "@x": the ivar writes */
+static IvnSet ivn_a;   /* "x=": the attr writers */
+static int ivn_all = 0;
+static const Compiler *ivn_c = NULL;
+static const NodeTable *ivn_nt = NULL;
+static int ivn_ntc = -1, ivn_ncls = -1, ivn_ncext = -1;
+static unsigned ivn_gen = 0, ivn_shape = 0;
+
+static const NodeKind ivn_write_kinds[5] = {
+  NK_InstanceVariableWriteNode, NK_InstanceVariableOrWriteNode, NK_InstanceVariableAndWriteNode,
+  NK_InstanceVariableOperatorWriteNode, NK_InstanceVariableTargetNode};
+
+static void ivn_reset(IvnSet *v) {
+  anh_free(&v->names); free(v->head); free(v->cls); free(v->next);
+  memset(v, 0, sizeof *v);
+}
+
+static void ivn_note(IvnSet *v, const char *nm, int cls) {
+  int k = anh_find(&v->names, nm);
+  if (k < 0) { anh_add(&v->names, nm); k = anh_find(&v->names, nm); }
+  if (k >= v->hcap) {
+    int nc = v->hcap ? v->hcap * 2 : 64;
+    while (nc <= k) nc *= 2;
+    v->head = realloc(v->head, sizeof(int) * (size_t)nc);
+    for (int i = v->hcap; i < nc; i++) v->head[i] = -1;
+    v->hcap = nc;
+  }
+  if (v->n == v->cap) {
+    v->cap = v->cap ? v->cap * 2 : 64;
+    v->cls = realloc(v->cls, sizeof(int) * (size_t)v->cap);
+    v->next = realloc(v->next, sizeof(int) * (size_t)v->cap);
+  }
+  if (!v->head || !v->cls || !v->next) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  v->cls[v->n] = cls; v->next[v->n] = v->head[k]; v->head[k] = v->n++;
+}
+
+static void ivn_build(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  ivn_reset(&ivn_w); ivn_reset(&ivn_a);
+  ivn_all = 0;
+  for (int t = 0; t < 5; t++) {
+    int kn; const int *ids = nt_nodes_of_kind(nt, ivn_write_kinds[t], &kn);
+    for (int j = 0; j < kn; j++) {
+      int id = ids[j];
+      const char *nm = nt_str(nt, id, "name");
+      if (!nm) continue;
+      Scope *s = comp_scope_of(c, id);
+      int w = s && s->class_id >= 0 ? s->class_id :
+              id < c->node_cap && c->node_cbody && c->node_cbody[id] >= 0 ? c->node_cbody[id] : -1;
+      ivn_note(&ivn_w, nm, w);
+    }
+  }
+  /* the attr writers the load record registers, those under a run-time
+     condition too (ELAB_ENTRY_MAY), by their writer name ("x="); main's
+     (cls < 0) are Object's, which any object answers */
+  int nwe = 0;
+  ElabEntry *we = elab_entries(c, 1u << LR_WRITER | ELAB_ENTRY_MAY, &nwe);
+  for (int i = 0; i < nwe; i++) if (we[i].name) ivn_note(&ivn_a, we[i].name, we[i].cls >= 0 ? we[i].cls : -1);
+  free(we);
+  /* a Struct's or Data's members: the slots its generated constructor
+     and writers set, which no write node spells */
+  for (int k = 0; k < c->nclasses; k++) {
+    ClassInfo *ci = &c->classes[k];
+    if (ci->is_struct || ci->is_data)
+      for (int i = 0; i < ci->nmembers && i < ci->nivars; i++) if (ci->ivars[i]) ivn_note(&ivn_w, ci->ivars[i], k);
+  }
+  NT_FOREACH_KIND(nt, NK_SymbolNode, id) if (is_unspelled_ivar_writer(nt_str(nt, id, "value"))) ivn_all = 1;
+  NT_FOREACH_KIND(nt, NK_StringNode, id) if (is_unspelled_ivar_writer(nt_str(nt, id, "content"))) ivn_all = 1;
+  NT_FOREACH_KIND(nt, NK_ConstantReadNode, id) if (is_unspelled_ivar_writer(nt_str(nt, id, "name"))) ivn_all = 1;
+  NT_FOREACH_KIND(nt, NK_ConstantPathNode, id) if (is_unspelled_ivar_writer(nt_str(nt, id, "name"))) ivn_all = 1;
+  NT_FOREACH_KIND(nt, NK_CallNode, id) {
+    const char *cn = nt_str(nt, id, "name");
+    if (!cn) continue;
+    /* (a C extension's manifest call, whichever pass registers it) */
+    if (is_unspelled_ivar_writer(cn) || !strncmp(cn, "__cext_", 7)) { ivn_all = 1; continue; }
+    if (!is_attr_may_write(cn)) continue;
+    /* a name the program computes: the class table cannot list it */
+    int a = nt_ref(nt, id, "arguments"), an = 0;
+    const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+    for (int i = 0; i < an; i++) {
+      NodeKind ak = nt_kind(nt, av[i]);
+      if (ak != NK_SymbolNode && ak != NK_StringNode && ak != NK_TrueNode && ak != NK_FalseNode) { ivn_all = 1; break; }
+    }
+  }
+  if (c->n_cext_extensions > 0 || c->n_cext_classes > 0) ivn_all = 1;
+  ivn_c = c; ivn_nt = nt; ivn_ntc = nt->count; ivn_ncls = c->nclasses;
+  ivn_ncext = c->n_cext_extensions + c->n_cext_classes;
+  ivn_gen = comp_scope_index_gen(); ivn_shape = comp_class_shape_gen();
+}
+
+/* Can an object a method (or the body) of class a sets an ivar in be one a
+   method of class b reads it in? Classes are single-inheritance, so only
+   when one is the other's ancestor. A module, the top level and a reopened
+   builtin (Object's methods reach every object) may meet any class. */
+static int ivn_related(Compiler *c, int a, int b) {
+  if (a < 0 || b < 0 || a >= c->nclasses || b >= c->nclasses) return 1;
+  if (a == c->toplevel_class || b == c->toplevel_class) return 1;
+  if (comp_class_is_module(c, &c->classes[a]) || comp_class_is_module(c, &c->classes[b])) return 1;
+  if (c->classes[a].is_builtin_const || c->classes[b].is_builtin_const) return 1;
+  for (int k = a; k >= 0; k = c->classes[k].parent) if (k == b) return 1;
+  for (int k = b; k >= 0; k = c->classes[k].parent) if (k == a) return 1;
+  return 0;
+}
+
+static int ivn_set_by(Compiler *c, const IvnSet *v, const char *nm, int cls) {
+  int k = anh_find(&v->names, nm);
+  if (k < 0 || k >= v->hcap) return 0;
+  for (int e = v->head[k]; e >= 0; e = v->next[e]) if (ivn_related(c, v->cls[e], cls)) return 1;
+  return 0;
+}
+
+/* No object a method of class cls reads the ivar in ever has it set, so
+   every such read is nil (ivn_build). */
+int ivar_never_set_in(Compiler *c, const char *name, int cls) {
+  if (!name || name[0] != '@' || cls < 0) return 0;
+  if (ivn_c != c || ivn_nt != c->nt || ivn_ntc != c->nt->count || ivn_ncls != c->nclasses ||
+      ivn_ncext != c->n_cext_extensions + c->n_cext_classes ||
+      ivn_gen != comp_scope_index_gen() || ivn_shape != comp_class_shape_gen()) ivn_build(c);
+  if (ivn_all) return 0;
+  char wn[256];   /* "@x" -> its writer's name "x=" */
+  if (snprintf(wn, sizeof wn, "%s=", name + 1) >= (int)sizeof wn) return 0;
+  return !ivn_set_by(c, &ivn_w, name, cls) && !ivn_set_by(c, &ivn_a, wn, cls);
+}
+
+/* See analyze_internal.h. Every read is decided before any is retyped: an
+   edit between two asks would rebuild the index (ivn_build) and the load
+   record's map behind it per ask. A read in a class body is the class's
+   own ivar; one outside every class is the top level's. */
+void rewrite_never_set_ivar_reads(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int kn = 0; const int *ids = nt_nodes_of_kind(nt, NK_InstanceVariableReadNode, &kn);
+  if (kn <= 0) return;
+  int *hit = malloc(sizeof(int) * (size_t)kn), nh = 0;
+  if (!hit) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  const int *par = nt_parents(nt);
+  for (int j = 0; j < kn; j++) {
+    int id = ids[j];
+    const char *nm = nt_str(nt, id, "name");
+    if (!nm) continue;
+    /* defined?(@x), and defined?(@x.m) through its receiver, asks whether
+       the ivar is set, not its value: a read anywhere under a defined? in
+       its method keeps the read */
+    int under_defined = 0;
+    for (int a = par ? par[id] : -1; a >= 0 && !under_defined; a = par[a]) {
+      NodeKind ak = nt_kind(nt, a);
+      if (ak == NK_DefinedNode) under_defined = 1;
+      else if (ak == NK_DefNode || ak == NK_ClassNode || ak == NK_ModuleNode ||
+               ak == NK_SingletonClassNode) break;
+    }
+    if (under_defined) continue;
+    Scope *s = comp_scope_of(c, id);
+    int cls = s && s->class_id >= 0 ? s->class_id :
+              s && !s->is_cmethod && id < c->node_cap && c->node_cbody && c->node_cbody[id] >= 0 ? c->node_cbody[id] :
+              c->toplevel_class;
+    if (cls < 0 || cls >= c->nclasses || class_ivar_pinned(&c->classes[cls], nm)) continue;
+    if (ivar_never_set_in(c, nm, cls)) hit[nh++] = id;
+  }
+  for (int i = 0; i < nh; i++) nt_node_reset(nt, hit[i], "NilNode");
+  free(hit);
+}
+
 /* `x, y = obj.m` where the callee's body ends in `return a, b` with statically
    known element types: yields those types so the destructured targets keep
    them instead of widening to poly with the tuple. The callee must be uniquely
@@ -18496,6 +18673,7 @@ static int infer_block_params_enum_arms(Compiler *c, const NodeTable *nt, int id
       int rargs = nt_ref(nt, id, "arguments"); int rargc = 0;
       const int *rargv = rargs >= 0 ? nt_arr(nt, rargs, "arguments", &rargc) : NULL;
       TyKind acc_t = (rargc > 0 && rargv) ? infer_type(c, rargv[0]) : elem;
+      if (acc_t == TY_NIL) acc_t = TY_POLY;   /* a nil seed: boxed, as the plain reduce arm's */
       if (acc_t == TY_UNKNOWN) acc_t = elem;
       if (p0) {
         if (bp_widen(bs, p0, acc_t)) changed = 1;
@@ -18637,6 +18815,9 @@ static int infer_block_params_enum_arms(Compiler *c, const NodeTable *nt, int id
     int rargc = 0;
     const int *rargv = rargs >= 0 ? nt_arr(nt, rargs, "arguments", &rargc) : NULL;
     TyKind acc_t = (rargc > 0 && rargv) ? infer_type(c, rargv[0]) : et2;
+    /* a nil seed, written or typed nil (a method answering nil), starts an
+       accumulator the block's value then fills: boxed (infer_array_reduce) */
+    if (acc_t == TY_NIL) acc_t = TY_POLY;
     int acc_wait = 0;
     /* An empty `[]` / `{}` seed the block only hands to a callable has no
        fill to type it from; the element type of the RECEIVER is not what it

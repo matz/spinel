@@ -947,9 +947,10 @@ int infer_array_reduce(Compiler *c, int id, TyKind rt, TyKind *out) {
     /* `reduce(nil) { |acc, t| acc.nil? ? t : acc + t }` -- the idiom for a
        fold with no natural identity. The seed says nothing about the
        accumulator except that it starts empty, so the fold is boxed: a
-       TY_NIL accumulator has no C representation at all (#3356). */
+       TY_NIL accumulator has no C representation at all (#3356). So is a
+       seed typed nil that is no written one (a method answering nil). */
     if (!is_sym_op && nt_ref(nt, id, "block") >= 0 &&
-        nt_kind(nt, argv[0]) == NK_NilNode)
+        (nt_kind(nt, argv[0]) == NK_NilNode || infer_type(c, argv[0]) == TY_NIL))
       { *out = TY_POLY; return 1; }
     if (!is_sym_op) {
       TyKind it = infer_type(c, argv[0]);

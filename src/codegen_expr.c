@@ -4704,7 +4704,7 @@ static int emit_array_hash_literal_expr(Compiler *c, int id, Buf *b, const NodeT
               /* a String Range held in a variable: its bounds are in the value */
               buf_printf(g_pre, "{ sp_StrArray *_sa = sp_srange_to_a(%s); if (_sa) for (sp_int _si = 0; _si < _sa->len; _si++) sp_PolyArray_push(_t%d, %s); }\n", ep, t, ONE_SA_BOX);
             else {
-              buf_printf(g_pre, "{ sp_Range _sr = %s; sp_int _e = _sr.last+(_sr.excl?0:1); for (sp_int _si = _sr.first; _si < _e; _si++) sp_PolyArray_push(_t%d, sp_box_int(_si)); }\n", ep, t);
+              buf_printf(g_pre, "{ sp_Range _sr = %s; sp_range_to_a_check(_sr); sp_int _e = _sr.last+(_sr.excl?0:1); for (sp_int _si = _sr.first; _si < _e; _si++) sp_PolyArray_push(_t%d, sp_box_int(_si)); }\n", ep, t);
             }
           }
           else if (ir.elem == TY_INT) {
@@ -4741,8 +4741,9 @@ static int emit_array_hash_literal_expr(Compiler *c, int id, Buf *b, const NodeT
             free(bx.p);
           }
           else if (it == TY_NIL)
-            /* a statically-nil splat contributes nothing (`[*nil]` == []) */
-            buf_printf(g_pre, ";\n");
+            /* a statically-nil splat contributes nothing (`[*nil]` == []);
+               a call answering it still runs */
+            buf_printf(g_pre, "(void)(%s);\n", ep);
           /* a nullable Integer or Float holding nil is that nil */
           else if ((it == TY_INT || it == TY_FLOAT) && call_returns_nullable_int(c, inner)) {
             Buf bx; memset(&bx, 0, sizeof bx); emit_boxed(c, inner, &bx);
@@ -4817,7 +4818,7 @@ static int emit_array_hash_literal_expr(Compiler *c, int id, Buf *b, const NodeT
             free(lo2.p); free(hi2.p);
           }
           else {
-            buf_printf(g_pre, "{ sp_Range _sr = %s; sp_int _e = _sr.last+(_sr.excl?0:1); for (sp_int _si = _sr.first; _si < _e; _si++) sp_%sArray_push(_t%d, _si); }\n", ep, k, t);
+            buf_printf(g_pre, "{ sp_Range _sr = %s; sp_range_to_a_check(_sr); sp_int _e = _sr.last+(_sr.excl?0:1); for (sp_int _si = _sr.first; _si < _e; _si++) sp_%sArray_push(_t%d, _si); }\n", ep, k, t);
           }
         }
         else if (ir.elem == TY_INT && sp_streq(k, "Int"))
@@ -4829,8 +4830,9 @@ static int emit_array_hash_literal_expr(Compiler *c, int id, Buf *b, const NodeT
         else if (ir.elem == TY_FLOAT && sp_streq(k, "Float"))
           buf_printf(g_pre, "{ sp_FloatArray *_sa = %s; if (_sa) for (sp_int _si = 0; _si < _sa->len; _si++) sp_FloatArray_push_o(_t%d, sp_FloatArray_oget(_sa, _si)); }\n", ep, t);
         else if (it == TY_NIL)
-          /* a statically-nil splat contributes nothing (`[*nil]` == []) */
-          buf_printf(g_pre, ";\n");
+          /* a statically-nil splat contributes nothing (`[*nil]` == []);
+             a call answering it still runs */
+          buf_printf(g_pre, "(void)(%s);\n", ep);
         /* nor does a nullable Integer or Float holding nil */
         else if (((it == TY_INT && sp_streq(k, "Int")) || (it == TY_FLOAT && sp_streq(k, "Float"))) &&
                  call_returns_nullable_int(c, inner)) {
@@ -6153,8 +6155,13 @@ static int emit_range_literal(Compiler *c, int id, Buf *b, const NodeTable *nt) 
   /* an open side, written or arriving at run time (a boxed bound, an Integer
      that may be nil), is the Range's nobeg / noend flag: sp_range_new_o takes
      each bound as an sp_oint. A bound known present is the plain one. */
-  int lo_o = left_unbounded || (left >= 0 && (repr_of(c, left).kind == RK_BOXED || (comp_ntype(c, left) == TY_INT && node_has_oint_form(c, left))));
-  int hi_o = right_unbounded || (right >= 0 && !fend && !pend && comp_ntype(c, right) == TY_INT && node_has_oint_form(c, right));
+  /* an end held as nil that is no written nil (an ivar nothing sets, a
+     method answering nil) is the open bound too; it still runs, in its
+     turn, for what it does. Converted as a number it raised TypeError. */
+  int left_nil = !left_unbounded && left >= 0 && repr_of(c, left).as_ty == TY_NIL;
+  int right_nil = !right_unbounded && right >= 0 && rt_end == TY_NIL;
+  int lo_o = left_unbounded || left_nil || (left >= 0 && (repr_of(c, left).kind == RK_BOXED || (comp_ntype(c, left) == TY_INT && node_has_oint_form(c, left))));
+  int hi_o = right_unbounded || right_nil || (right >= 0 && !fend && !pend && comp_ntype(c, right) == TY_INT && node_has_oint_form(c, right));
   /* Ruby runs the begin before the end; C does not order a call's
      arguments (gcc ran `at(3)` before `at(1)` in `x&.slice(at(1)..at(3))`
      on a boxed x). Where an end can do something, the two go to temps in
@@ -6168,9 +6175,11 @@ static int emit_range_literal(Compiler *c, int id, Buf *b, const NodeTable *nt) 
   if (!fend && !pend && (lo_o || hi_o)) {
     fn = "sp_range_new_o";
     if (left_unbounded) buf_puts(&lo, "sp_oint_nil()");
+    else if (left_nil) { buf_puts(&lo, "({ (void)("); emit_expr(c, left, &lo); buf_puts(&lo, "); sp_oint_nil(); })"); }
     else if (repr_of(c, left).kind == RK_BOXED) { buf_puts(&lo, "sp_range_lo_bound("); emit_expr(c, left, &lo); buf_puts(&lo, ")"); }
     else emit_oint_expr(c, left, TY_INT, &lo);
     if (right_unbounded) buf_puts(&hi, "sp_oint_nil()");
+    else if (right_nil) { buf_puts(&hi, "({ (void)("); emit_expr(c, right, &hi); buf_puts(&hi, "); sp_oint_nil(); })"); }
     else if (range_rat_walk_end(c, id, right, &hi, 1)) ;
     else emit_oint_expr(c, right, TY_INT, &hi);
     emit_range_build(b, fn, &lo, &hi, excl, in_order);

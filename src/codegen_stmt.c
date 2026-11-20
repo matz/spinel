@@ -4411,23 +4411,6 @@ static int freeze_self_answer(Compiler *c, int id) {
   return r >= 0 && nt_kind(nt, r) == NK_CallNode && !is_freeze_name(nt_str(nt, r, "name")) &&
          !arg_ran_first(r, 0) && (strbuf_bang_self_local(c, r) || strbuf_held_chain(c, r));
 }
-/* --share-strings: such a freeze (freeze_self_answer, call id): freezes the
-   handle, the String every name holds, and answers its contents frozen (nil
-   for nil). 0 with nothing emitted when recv renders no handle. */
-int emit_freeze_self_answer(Compiler *c, int id, int recv, Buf *b) {
-  recv = nt_paren_single(c->nt, recv);
-  if (!freeze_self_answer(c, id)) return 0;
-  Buf hb; memset(&hb, 0, sizeof hb);
-  emit_held_handle(c, recv, &hb);
-  int ok = hb.p && hb.p[0];
-  if (ok) {
-    int t = ++g_tmp;
-    buf_printf(b, "({ sp_String *_t%d = SP_STR_HDL(%s); SP_GC_ROOT(_t%d); _t%d ? (sp_String_freeze(_t%d), "
-                  "sp_str_freeze_val(sp_strbuf_read(_t%d))) : (const char *)NULL; })", t, hb.p, t, t, t, t);
-  }
-  free(hb.p);
-  return ok;
-}
 /* Is n `+@` or a conversion over a bang on a handle (`+id(s).upcase!`),
    which answers the String the bang changed (emit_held_handle)? */
 static int uplus_over_self_answer(Compiler *c, int n) {

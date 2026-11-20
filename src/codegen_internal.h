@@ -250,7 +250,6 @@ int emit_held_chain_handle(Compiler *c, int r, Buf *b);
    insert, clear, slice!), which takes its receiver's handle itself? */
 int str_in_place_row(Compiler *c, int id);
 int emit_call_on_held_self_answer(Compiler *c, int id, Buf *b);
-int emit_freeze_self_answer(Compiler *c, int id, int recv, Buf *b);
 int emit_equal_self_answer(Compiler *c, int recv, int arg, Buf *b);
 int emit_boxed_self_answer_cond(Compiler *c, int node, Buf *b);
 int strbuf_face_bang_cond(Compiler *c, int v);

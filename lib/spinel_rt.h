@@ -23549,6 +23549,12 @@ static sp_RbVal sp_poly_enum_proc(sp_RbVal recv, int op, sp_Proc *blk) {
     }
   }
   SP_GC_ROOT_RBVAL(walk);
+  /* a program object that is Enumerable walks the elements the generated
+     hook materializes, as sp_poly_arr_recv does for a literal block (#3761) */
+  if (sp_poly_is_user_obj(walk) && walk.v.p && sp_obj_to_a_fn) {
+    sp_RbVal a = sp_obj_to_a_fn(walk);
+    if (a.tag == SP_TAG_OBJ && sp_poly_is_array_kind(a.cls_id)) walk = a;
+  }
   /* An Array is walked live, as CRuby's Array methods walk it: the length
      and the element are read at every step, so the block sees what it
      appends to the receiver (`args.each { args.concat more }`) or removes

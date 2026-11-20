@@ -3,6 +3,7 @@
 # slot of the same programs (#7501).
 #
 #   tools/repr_diff.sh REF_SPINEL NEW_SPINEL PROGS...
+#   tools/repr_diff.sh REF_SPINEL NEW_SPINEL --pairs-dir DIR
 #
 # A slot's representation decides what every use of it costs: a String
 # slot that becomes a String buffer (strbuf, sp_String *: the shared handle
@@ -29,6 +30,15 @@ set -u
 [ $# -ge 3 ] || { sed -n '3,4p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 REF=$1 NEW=$2; shift 2
 [ -x "$REF" ] && [ -x "$NEW" ] || { echo "repr_diff: $REF and $NEW must be spinel binaries" >&2; exit 2; }
+PAIRS_DIR=
+if [ "$1" = --pairs-dir ]; then
+  [ $# -eq 2 ] && [ -d "$2" ] || { echo 'repr_diff: --pairs-dir needs a directory' >&2; exit 2; }
+  PAIRS_DIR=$2
+  shopt -s nullglob
+  set -- "$PAIRS_DIR"/*.name
+  shopt -u nullglob
+  [ $# -gt 0 ] || { echo 'repr_diff: no pairs in the directory' >&2; exit 2; }
+fi
 JOBS=${REPR_DIFF_JOBS:-2}
 T=$(mktemp -d "${TMPDIR:-/tmp}/spinel-repr-diff.XXXXXX") || exit 2
 trap 'rm -rf "$T"' EXIT
@@ -81,24 +91,31 @@ infn != "" && /^    [A-Za-z_][^=(;]* lv_[A-Za-z0-9_]+( = [^;]*)?;$/ {
   t = substr(d, 1, RSTART - 1); sub(/^ +(volatile )?/, "", t)
   print "local " infn " " substr(d, RSTART + 3) ": c=" norm(t); user = 1
 }'
-export MODE DECLS_AWK
+export MODE DECLS_AWK PAIRS_DIR
 
 # one dump per program and side, each job keyed by its input position so
 # no two paths share a file; a block parameter's numbered suffix
 # (`i__bp49`) follows node ids, so it is dropped
 i=0
-for p in "$@"; do i=$((i + 1)); printf '%06d:%s\n' "$i" "$p"; done | xargs -P "$JOBS" -I{} bash -c '
-  k=${1%%:*}; p=${1#*:}
+for p in "$@"; do i=$((i + 1)); printf '%06d:%s\0' "$i" "$p"; done | xargs -0 -P "$JOBS" -n 1 bash -c '
+  k=${4%%:*}; p=${4#*:}
+  pair=
+  if [ -n "$PAIRS_DIR" ]; then
+    pair=${p%.name}
+    p=$(cat "$p") || exit 2
+  fi
   for side in ref new; do
-    sp=$2; [ $side = new ] && sp=$3
-    if [ "$MODE" = repr ]; then "$sp" --dump-repr "$p" > "$4/$k.$side.raw" 2>/dev/null
-    else "$sp" -S --no-line-map "$p" 2>/dev/null > "$4/$k.$side.c" && awk "$DECLS_AWK" "$4/$k.$side.c" > "$4/$k.$side.raw"; fi
+    sp=$1; [ $side = new ] && sp=$2
+    if [ "$MODE" = repr ]; then "$sp" --dump-repr "$p" > "$3/$k.$side.raw" 2>/dev/null
+    elif [ -n "$pair" ] && [ -r "$pair.$side.c" ] && [ -z "${SPINEL_DECISIONS_LOG+x}${SPINEL_EMIT_TRACE+x}" ]; then
+      awk "$DECLS_AWK" "$pair.$side.c" > "$3/$k.$side.raw"
+    else "$sp" -S --no-line-map "$p" 2>/dev/null > "$3/$k.$side.c" && awk "$DECLS_AWK" "$3/$k.$side.c" > "$3/$k.$side.raw"; fi
     rc=$?
-    rm -f "$4/$k.$side.c"
-    [ $rc -eq 0 ] || { echo "$p" > "$4/$k.fail"; continue; }
-    sed -E "s/__bp[A-Za-z0-9_]+/__bp/g" "$4/$k.$side.raw" | LC_ALL=C sort > "$4/$k.$side"
+    rm -f "$3/$k.$side.c"
+    [ $rc -eq 0 ] || { echo "$p" > "$3/$k.fail"; continue; }
+    sed -E "s/__bp[A-Za-z0-9_]+/__bp/g" "$3/$k.$side.raw" | LC_ALL=C sort > "$3/$k.$side"
   done
-  printf "%s\n" "$p" > "$4/$k.name"' _ {} "$REF" "$NEW" "$T" || { echo "repr_diff: dumping the programs failed" >&2; exit 2; }
+  printf "%s\n" "$p" > "$3/$k.name"' _ "$REF" "$NEW" "$T" || { echo "repr_diff: dumping the programs failed" >&2; exit 2; }
 
 # Pair the slots by name (a repeated name pairs in order) and classify each
 # change: a slot that became a String buffer, became boxed, or left a

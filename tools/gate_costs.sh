@@ -53,27 +53,38 @@ if [ ! -x "$REFT/bin/spinel" ] || [ ! -f "$REFT/.done" ]; then
     git worktree remove --force "${d%/}" > /dev/null 2>&1; rm -rf "${d%/}" "${d%/}.lock" "${d%/}.build.log"
   done
 fi
-PROGS=$(ls test/*.rb benchmark/*.rb packages/*/test/*.rb 2>/dev/null; [ -f build/optcarrot-single.rb ] && echo build/optcarrot-single.rb)
+shopt -s nullglob
+programs=(benchmark/*.rb packages/*/test/*.rb test/*.rb)
+[ ! -f build/optcarrot-single.rb ] || programs+=(build/optcarrot-single.rb)
 # Each program to C once with each compiler; the reports look only at the
 # programs whose C differs, so a change that moves nothing costs two
 # compiles per program and no more.
 T=$(mktemp -d "${TMPDIR:-/tmp}/spinel-gate-costs.XXXXXX") || exit 2
 trap 'rm -rf "$T"' EXIT
-printf '%s\n' $PROGS | xargs -P "$JOBS" -I{} sh -c '
-  k=$(printf %s "$1" | tr / _)
-  timeout 120 "$2" -S --no-line-map "$1" > "$4/$k.ref.c" 2>/dev/null || rm -f "$4/$k.ref.c"
-  timeout 120 "$3" -S --no-line-map "$1" > "$4/$k.new.c" 2>/dev/null || rm -f "$4/$k.new.c"
-  if [ -f "$4/$k.ref.c" ] && [ -f "$4/$k.new.c" ]; then
-    if cmp -s "$4/$k.ref.c" "$4/$k.new.c"; then rm -f "$4/$k.ref.c" "$4/$k.new.c"
-    else printf "%s %s %s\n" "$1" "$4/$k.ref.c" "$4/$k.new.c" > "$4/$k.pair"; fi
-  else rm -f "$4/$k.ref.c" "$4/$k.new.c"; fi
-' _ {} "$REFT/bin/spinel" "$NEW" "$T"
-cat "$T"/*.pair 2>/dev/null | LC_ALL=C sort > "$T/pairs"
-nchg=$(wc -l < "$T/pairs" | tr -d ' ')
-echo "gate-costs: against ${SHA:0:9}, $(printf '%s\n' $PROGS | wc -l | tr -d ' ') programs, $nchg whose C differs"
+printf '%s\0' "${programs[@]}" | LC_ALL=C sort -z | {
+  i=0
+  while IFS= read -r -d '' p; do
+    [ -n "$p" ] || continue
+    i=$((i + 1)); printf '%06d:%s\0' "$i" "$p"
+  done
+} | xargs -0 -r -P "$JOBS" -n 1 sh -c '
+  k=${4%%:*}; p=${4#*:}; pair=$3/$k
+  timeout 120 "$1" -S --no-line-map "$p" > "$pair.ref.c" 2>/dev/null || {
+    rm -f "$pair.ref.c"
+    # The head invocation can still write requested diagnostic files.
+    [ -n "${SPINEL_DECISIONS_LOG+x}${SPINEL_EMIT_TRACE+x}" ] || exit 0
+  }
+  timeout 120 "$2" -S --no-line-map "$p" > "$pair.new.c" 2>/dev/null || rm -f "$pair.new.c"
+  if [ -f "$pair.ref.c" ] && [ -f "$pair.new.c" ] && ! cmp -s "$pair.ref.c" "$pair.new.c"; then
+    printf "%s\n" "$p" > "$pair.name"
+  else rm -f "$pair.ref.c" "$pair.new.c"; fi
+' _ "$REFT/bin/spinel" "$NEW" "$T" || { echo 'gate-costs: could not collect generated C' >&2; exit 2; }
+pairs=("$T"/*.name)
+nchg=${#pairs[@]}
+echo "gate-costs: against ${SHA:0:9}, ${#programs[@]} programs, $nchg whose C differs"
 if [ "$nchg" -gt 0 ]; then
-  REPR_DIFF_JOBS=$JOBS tools/repr_diff.sh "$REFT/bin/spinel" "$NEW" $(cut -d' ' -f1 "$T/pairs") 2>&1 | sed 's/^/  /' | head -${GATE_COST_LINES:-40}
-  C_COSTS_JOBS=$JOBS tools/c_costs.sh --list "$T/pairs" 2>&1 | sed 's/^/  /' | head -${GATE_COST_LINES:-40}
+  REPR_DIFF_JOBS=$JOBS tools/repr_diff.sh "$REFT/bin/spinel" "$NEW" --pairs-dir "$T" 2>&1 | sed 's/^/  /' | head -${GATE_COST_LINES:-40}
+  C_COSTS_JOBS=$JOBS tools/c_costs.sh --pairs-dir "$T" 2>&1 | sed 's/^/  /' | head -${GATE_COST_LINES:-40}
 fi
 echo "gate-costs: report only (#7501): a cost above is explained in the pull request"
 exit 0

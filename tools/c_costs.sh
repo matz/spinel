@@ -6,6 +6,7 @@
 #   tools/c_costs.sh REF.c NEW.c [LABEL]        one program, ref against new
 #   tools/c_costs.sh --list FILE                the same for each line
 #                                               `LABEL REF.c NEW.c` of FILE
+#   tools/c_costs.sh --pairs-dir DIR            the gate's generated C pairs
 #   tools/c_costs.sh REF_SPINEL NEW_SPINEL PROGS...
 #                                               compile each program with both
 #                                               (-S --no-line-map) and compare
@@ -273,6 +274,15 @@ if [ "$1" = --list ]; then
     if [ -f "$a" ] && [ -f "$b" ]; then compared "$label" "$a" "$b"
     else echo "S $label no C on one side"; fi
   done < "$2" | summarize
+elif [ "$1" = --pairs-dir ]; then
+  [ $# -eq 2 ] && [ -d "$2" ] || usage
+  for name in "$2"/*.name; do
+    [ -f "$name" ] || continue
+    label=$(cat "$name") || exit 2
+    pair=${name%.name}
+    if [ -f "$pair.ref.c" ] && [ -f "$pair.new.c" ]; then compared "$label" "$pair.ref.c" "$pair.new.c"
+    else echo "S $label no C on one side"; fi
+  done | summarize
 elif [ $# -eq 1 ]; then
   [ -f "$1" ] || usage
   count "$1" | awk '$1 == "T" { printf "%s %d (%d in loops)\n", $2, $3, $4 }'

@@ -4454,30 +4454,25 @@ ckey=""; hit=0; own=0; \
   if [ -n "$(TEST_PLAN_CHECK)" ]; then { grep "^plan-check:" "$$tmpdir/sperr" | sed "s|^|$<: |"; \
     [ "$$sprc" -eq 0 ] || echo "$<: plan-check-exit: $$sprc"; } > "$@.plan"; fi; \
   [ "$$sprc" -eq 0 ]; } && \
-{ rtdefs=$$(sed -n '/^#include "spinel_rt.h"/q; /^#define/p' "$$cfile"); \
-  case "$$rtdefs" in \
-    '') pchdir="$(PCH_ROOT)/plain";; \
-    '#define SP_TU_NO_POLY_RENDER 1') pchdir="$(PCH_ROOT)/nopoly";; \
-    '#define SP_TU_NO_POLY_VALUES 1') pchdir="$(PCH_ROOT)/novalues";; \
-    *) pchdir="";; \
-  esac; \
-  pchuse=""; if [ -n "$$pchdir" ] && [ -f "$$pchdir/spinel_rt.h.gch" ]; then pchuse="$(PCH_USE)"; fi; \
-  xlibs=$$(sed -n 's|^/\* SPINEL_LINK: \(.*\) \*/$$|\1|p' "$$cfile" | tr '\n' ' '); \
-  xobjs=$$(sed -n 's|^/\* SPINEL_LINK_OBJ: \(.*\) \*/$$|\1|p' "$$cfile" | tr '\n' ' '); \
+perl tools/test_c_metadata.pl < "$$cfile" > "$$tmpdir/cmeta" && \
+{ read -r pch_variant large threaded cext nogc && \
+  IFS= read -r xlibs && IFS= read -r xobjs; } < "$$tmpdir/cmeta" && \
+{ pchdir="$(PCH_ROOT)/$$pch_variant"; \
+  pchuse=""; if [ "$$pch_variant" != textual ] && [ -f "$$pchdir/spinel_rt.h.gch" ]; then pchuse="$(PCH_USE)"; fi; \
   keep=""; for o in $$xobjs; do case " $(BUNDLED_NATIVE_OBJS) " in *" $$o "*) ;; *) keep="$$keep $$o";; esac; done; xobjs="$$keep"; \
   bigopt=""; \
-  if [ "$$(wc -l < "$$cfile")" -ge 2000 ]; then bigopt="-O0"; fi; \
+  if [ "$$large" = 1 ]; then bigopt="-O0"; fi; \
   if [ -f "$<.opt" ]; then bigopt=$$(cat "$<.opt"); fi; \
   if [ -n "$$bigopt" ] && [ "$$bigopt" != "$(TEST_PCH_OPT)" ]; then pchuse=""; fi; \
   mtdef=""; rtlib="$(SP_RT_LIB)"; natobjs="$(BUNDLED_NATIVE_OBJS)"; mtld=""; \
-  if grep -q SPINEL_USES_THREADS "$$cfile"; then \
+  if [ "$$threaded" = 1 ]; then \
     mtdef="$(MT_DEF)"; rtlib="$(SP_RT_MT_LIB)"; natobjs="$(BUNDLED_NATIVE_MT_OBJS)"; mtld="-lpthread"; pchuse=""; \
     mtobjs=""; for o in $$xobjs; do m="$${o%.a}_mt.a"; [ -f "$$m" ] && o="$$m"; mtobjs="$$mtobjs $$o"; done; xobjs="$$mtobjs"; \
   fi; \
   cextinc=""; \
-  if grep -q SPINEL_USES_CEXT "$$cfile"; then \
+  if [ "$$cext" = 1 ]; then \
     rtlib=$$(echo "$$rtlib" | sed 's|libspinel_rt|libspinel_cext_rt|'); pchuse=""; cextinc="-Iinclude"; \
-  elif grep -q SPINEL_GC_NONE "$$cfile"; then \
+  elif [ "$$nogc" = 1 ]; then \
     rtlib=$$(echo "$$rtlib" | sed 's|\.a$$|_nogc.a|'); pchuse=""; \
   fi; \
   xlibs="$$xobjs $$xlibs"; \

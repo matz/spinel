@@ -1,0 +1,24 @@
+nil
+["a/b/c", "a/b", "a"]
+nil
+["a", "a/b", "a/b/c"]
+nil
+["a", "b", "c"]
+Enumerator
+["a/b/c", "a/b", "a"]
+Enumerator
+["a", "a/b", "a/b/c"]
+Enumerator
+["a", "b", "c"]
+["/", "/x", "/x/y"]
+["/x/y", "/x", "/"]
+"a/b/c"
+["a", "a/b"]
+nil
+["x\n", "y\n"]
+Enumerator
+["x\n", "y\n"]
+["one.txt", "two.txt"]
+["one.txt", "two.txt"]
+Enumerator
+["one.txt", "two.txt"]

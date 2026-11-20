@@ -11,11 +11,8 @@
              name can see the String, but a box keeps it (SPN_NEW); or the
              object itself (SPN_OBJECT);
      supply  whether its producer can hand over the handle, or a box that
-             holds it (SPS_HANDLE, share_plan_supplies), or only its bytes
-             (SPS_BYTES);
-     form   what the two give (share_plan_form): the bytes (SPF_BYTES);
-             the producer's handle (SPF_HANDLE); or a copy when the
-             consumer needs the producer's object (SPF_COPY).
+             holds it (share_plan_supplies);
+     form   whether the emitter takes the existing handle (SPF_HANDLE).
 
    The emitter supplies its consuming role. A taker keeps or passes the
    value. A multiple assignment can store an Array literal's element
@@ -80,14 +77,6 @@
 #include "repr.h"
 #include "share.h"
 #include "value_pos.h"
-
-/* the form a need and a supply give */
-static int share_plan_form(int need, int supply) {
-  if (need == SPN_BYTES) return SPF_BYTES;
-  if (supply == SPS_HANDLE) return SPF_HANDLE;
-  return need == SPN_OBJECT ? SPF_COPY : SPF_BYTES;
-}
-
 
 /* The String receiver call v answers (a String method that answers self,
    or self or nil, and no program method of the name), or -1. itself, and
@@ -765,16 +754,12 @@ static int share_plan_store_renders(Compiler *c, int v) {
 }
 
 
-/* The plan of value v for a consumer in `role`, v's own need known. */
-SharePlan share_plan_with_need(Compiler *c, int v, int role, int need) {
-  need = share_plan_role_need(c, v, role, need);
-  SharePlan p = { .need = (unsigned char)need, .form = SPF_BYTES };
-  if (need == SPN_BYTES) return p;
-  int supply = share_plan_supplies(c, v) && (role != SPR_STORE || share_plan_store_renders(c, v)) ? SPS_HANDLE : SPS_BYTES;
-  p.form = (unsigned char)share_plan_form(p.need, supply);
-  return p;
+/* The form for a consumer whose need is given. */
+static SharePlan share_plan_with_need(Compiler *c, int v, int role, int need) {
+  int handle = share_plan_role_need(c, v, role, need) != SPN_BYTES &&
+               share_plan_supplies(c, v) && (role != SPR_STORE || share_plan_store_renders(c, v));
+  return (SharePlan){ .form = handle ? SPF_HANDLE : SPF_BYTES };
 }
-
 
 void share_plan_free(Compiler *c) {
   free(c->share_parent);

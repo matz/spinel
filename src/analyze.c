@@ -701,11 +701,21 @@ typedef struct {
   int *desc, *desc_seen, kid_n, desc_stamp;  /* cr_live_desc's answer and its visit stamps */
 } CrLive;
 
+/* A builtin exception class the runtime builds whether or not the program writes a `new` of it: the errors
+   it raises, the hook that runs a reopened initialize on them (sp_user_exc_reinit), a rescue's binding. Not
+   every one is a builtin class name (is_builtin_const): LoadError, NoMemoryError, SystemStackError,
+   SystemCallError and the Errno:: family are exceptions only, so a reopening of one was held back as a class
+   nothing builds, its initialize left unemitted while the hook named it (K-064: a C error). The Errno family
+   is named by its leaf in the class table, so the qualified Ruby name is asked. */
+static int cr_live_runtime_built(Compiler *c, int k) {
+  const char *rn = class_ruby_name(c, k);
+  return is_builtin_exception_name(rn ? rn : c->classes[k].name);
+}
 static int cr_live_gated(Compiler *c, int k) {
   const ClassInfo *ci = &c->classes[k];
   return k != c->toplevel_class && class_def_is_class(c->nt, ci->def_node) &&
          !ci->is_builtin_const && !ci->is_native_class && !ci->is_struct && !ci->is_data &&
-         !ci->is_anon_struct && !ci->cext_layout && !ci->cext_extension;
+         !ci->is_anon_struct && !ci->cext_layout && !ci->cext_extension && !cr_live_runtime_built(c, k);
 }
 
 /* is_descendant without its reading of a class an earlier pass left

@@ -20237,7 +20237,9 @@ int desugar_builtin_enum_calls(Compiler *c) {
        own rfind is an Array too, and must not take the builtin's walk */
     int wo_nd = wo_arm ? ndef : 0;
     if (wo_arm) ndef = 0;   /* the arm as written answers every other class */
-    if (wo_arm || range_arm) own_arm = 0;
+    /* (a Range arm keeps the owners' test for its other arm: an Array's own
+       minmax beside a reopening of Enumerable's answers before it) */
+    if (wo_arm) own_arm = 0;
     /* A boxed receiver an OpenStruct can reach reads the member of the name
        when the value is one (ostruct_member_read), as CRuby's OpenStruct,
        which has no Enumerable, answers it. The Range arm's shape:
@@ -20277,7 +20279,7 @@ int desugar_builtin_enum_calls(Compiler *c) {
         nt_node_set_ref(nt, nq, "receiver", nr);
         pred = nq;
       }
-      int own_only = own_arm && ndef == 0 && !safe_nav;   /* the own arm's test is the only one */
+      int own_only = own_arm && ndef == 0 && !safe_nav && !range_arm;   /* the own arm's test is the only one */
       if (own_only) pred = enum_owner_chain(c, rn, qn, blk >= 0);
       else if (!safe_nav) pred = range_arm ? enum_is_a_named(c, rn, "Range")
                           : wo_arm ? enum_array_not_own(c, rn, wo_cls, defcls, exact, wo_nd)

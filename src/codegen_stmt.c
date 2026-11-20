@@ -24218,6 +24218,30 @@ void emit_hash_store_key(Compiler *c, int key, TyKind rt, Buf *b) {
   }
   emit_hash_key(c, key, kt, b);
 }
+/* A String key is an object until insertion. Keep it rooted through the
+   value operand and let the store take the bytes it has then. */
+TyKind hold_hash_store_key(Compiler *c, int key, TyKind rt, int temp, Buf *b) {
+  TyKind kt = ty_hash_key(rt);
+  Repr kr = repr_of(c, key);
+  if (kt == TY_STRING && (kr.as_ty == TY_STRING || kr.as_ty == TY_STRBUF)) {
+    Buf held = {0}, *saved_pre = g_pre;
+    g_pre = b;
+    hold_string_handle_decl(c, key, temp, 1, &held);
+    g_pre = saved_pre;
+    buf_puts(b, held.p);
+    free(held.p);
+    buf_puts(b, " ");
+    return TY_STRBUF;
+  }
+  buf_printf(b, "%s _t%d = ", c_type_name(kt), temp);
+  emit_hash_store_key(c, key, rt, b);
+  buf_puts(b, "; ");
+  if (operand_may_allocate(c, key) && needs_root(kt)) {
+    emit_gc_root_tmp(c, kt, temp, b);
+    buf_puts(b, " ");
+  }
+  return kt;
+}
 /* A store into an Integer-valued typed Hash of a value that can be nil (a
    nil, an oint, a boxed value): it goes through `_oset`, which keeps the nil
    in the entry's bit (D3b-ii), with the value as its oint */
@@ -25248,18 +25272,24 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
          call: the key is held by its slot. */
       emit_indent(b, indent);
       if (subtree_may_allocate(c, recv) || subtree_may_allocate(c, argv[0])) {
-        TyKind kt = ty_hash_key(rt);
         int tr = ++g_tmp, tk = ++g_tmp, tv = ++g_tmp;
         buf_printf(b, "{ %s _t%d = ", c_type_name(rt), tr); emit_expr(c, recv, b); buf_puts(b, "; ");
         if (subtree_may_allocate(c, recv) || subtree_has_side_effect(c, argv[0]) || subtree_has_side_effect(c, argv[1])) { emit_gc_root_tmp(c, rt, tr, b); buf_puts(b, " "); }
-        buf_printf(b, "%s _t%d = ", c_type_name(kt), tk); emit_hash_store_key(c, argv[0], rt, b); buf_puts(b, "; ");
-        if (operand_may_allocate(c, argv[0]) && needs_root(kt)) { emit_gc_root_tmp(c, kt, tk, b); buf_puts(b, " "); }
+        TyKind kt = hold_hash_store_key(c, argv[0], rt, tk, b);
         int vo = hash_store_oset(c, argv[1], rt);
         const char *vct = vo ? "sp_oint" : c_type_name(typed_elem_held(rt));
-        buf_printf(b, "%s _t%d = ", vct ? vct : "sp_RbVal", tv); emit_hash_store_val(c, argv[1], rt, b);
+        Buf value = {0}, *saved_pre = g_pre;
+        if (kt == TY_STRBUF) g_pre = b;
+        emit_hash_store_val(c, argv[1], rt, &value);
+        g_pre = saved_pre;
+        buf_printf(b, "%s _t%d = ", vct ? vct : "sp_RbVal", tv);
+        if (value.p) buf_puts(b, value.p);
+        free(value.p);
         const char *hbc = hash_box_cls(rt);
         buf_printf(b, "; if (sp_gc_is_frozen(_t%d)) sp_raise_frozen_hash_at(_t%d, %s); ", tr, tr, hbc ? hbc : "0");
-        buf_printf(b, "sp_%sHash_%s%s(_t%d, _t%d, _t%d); }\n", hn, vo ? "oset" : "set", vo ? "" : typed_elem_store_sfx(rt), tr, tk, tv);
+        buf_printf(b, "sp_%sHash_%s%s(_t%d, ", hn, vo ? "oset" : "set", vo ? "" : typed_elem_store_sfx(rt), tr);
+        buf_printf(b, kt == TY_STRBUF ? "SP_STR_B(_t%d)" : "_t%d", tk);
+        buf_printf(b, ", _t%d); }\n", tv);
         return 1;
       }
       /* A key that is a shared String slot's read is a fresh copy, held by

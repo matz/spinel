@@ -3191,8 +3191,7 @@ void emit_case_match(Compiler *c, int id, Buf *b, int indent, int tail, int valu
 void emit_case(Compiler *c, int id, Buf *b, int indent);
 void emit_case_branch_value(Compiler *c, int stmts, TyKind rt, int cr, Buf *b);
 void emit_case_expr(Compiler *c, int id, Buf *b);
-void emit_while(Compiler *c, int id, Buf *b, int indent, int is_until);
-void emit_for(Compiler *c, int id, Buf *b, int indent);
+void emit_control_loop(Compiler *c, int id, Buf *b, int indent, const char *result);
 void emit_return(Compiler *c, int id, Buf *b, int indent);
 int rescue_is_catchall_name(const char *n);
 int rescue_chain_catches(Compiler *c, int rc, const char *const *above, int bare);

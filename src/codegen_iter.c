@@ -7659,6 +7659,17 @@ int iter_fwd_proc_to_driver(Compiler *c, int id) {
          recv >= 0 && repr_of(c, recv).kind == RK_BOXED;
 }
 
+/* The block attached to Kernel#loop breaks out of its own loop. */
+static void emit_kernel_loop_body(Compiler *c, int body, Buf *b, int indent) {
+  const char *saved_serial = g_brk_ser_var, *saved_result = g_loop_break_var;
+  g_brk_ser_var = NULL;
+  g_loop_break_var = NULL;
+  g_loop_uncounted = 1;
+  emit_loop_body(c, body, b, indent);
+  g_brk_ser_var = saved_serial;
+  g_loop_break_var = saved_result;
+}
+
 static int emit_iteration_stmt_body(Compiler *c, int id, Buf *b, int indent) {
   const NodeTable *nt = c->nt;
   int block = nt_ref(nt, id, "block");
@@ -7851,8 +7862,7 @@ static int emit_iteration_stmt_body(Compiler *c, int id, Buf *b, int indent) {
        handler to open, and its locals stay out of memory */
     if (!loop_may_stop(c, id)) {
       emit_indent(b, indent); buf_puts(b, "for (;;) {\n");
-      g_loop_uncounted = 1;
-      emit_loop_body(c, lbody, b, indent + 1);
+      emit_kernel_loop_body(c, lbody, b, indent + 1);
       emit_indent(b, indent); buf_puts(b, "}\n");
       return 1;
     }
@@ -7870,8 +7880,7 @@ static int emit_iteration_stmt_body(Compiler *c, int id, Buf *b, int indent) {
        accounting the handler stack grew by one per call and eventually wrote
        past its end (#3781). */
     g_exc_frame_depth++;
-    g_loop_uncounted = 1;
-    emit_loop_body(c, lbody, b, indent + 2);
+    emit_kernel_loop_body(c, lbody, b, indent + 2);
     g_exc_frame_depth--;
     emit_indent(b, indent + 1); buf_puts(b, "}\n");
     emit_indent(b, indent + 1); buf_puts(b, "sp_exc_top--;\n");

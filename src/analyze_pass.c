@@ -6050,6 +6050,22 @@ int infer_write_types(Compiler *c) {
       }
       continue;
     }
+    /* A sequence or a conditional that binds a local of its own and answers
+       it (`x = begin; c = args.shift; c; end`, a `case` arm doing the same)
+       has that write at a higher node id as well: the main loop read `c`
+       reset and left `x` UNKNOWN on every round, so a pass that decides on
+       the type of `x` as a receiver never saw it. */
+    NodeKind vk = nt_kind(nt, val_id);
+    if ((vk == NK_BeginNode || vk == NK_IfNode || vk == NK_UnlessNode || vk == NK_CaseNode) &&
+        subtree_writes_any_local(nt, val_id)) {
+      const char *snm = nt_str(nt, id, "name");
+      LocalVar *slv = snm ? scope_local(comp_scope_of(c, id), snm) : NULL;
+      if (slv && !slv->is_param && !slv->is_block_param) {
+        TyKind st = infer_type(c, val_id);
+        pin_shadow_take(c, &pins, slv, st == TY_NIL ? TY_POLY : st, val_id);
+      }
+      continue;
+    }
     if (nt_kind(nt, val_id) != NK_CallNode) continue;
     if (nt_ref(nt, val_id, "block") < 0) continue;
     const char *vnm = nt_str(nt, val_id, "name");

@@ -552,7 +552,19 @@ module Net
       @body
     end
 
+    def basic_auth(account, password)
+      self["Authorization"] = basic_encode(account, password)
+    end
+
+    def proxy_basic_auth(account, password)
+      self["Proxy-Authorization"] = basic_encode(account, password)
+    end
+
     private
+
+    def basic_encode(account, password)
+      "Basic " + ["#{account}:#{password}"].pack("m0")
+    end
 
     # A carriage return or a line feed in a header value would end the
     # header on the wire and make whatever follows it a header of its own.

@@ -947,9 +947,12 @@ int emit_hash_has_value(Compiler *c, int recv, int arg, TyKind rt, const char *h
     if (nil_needle)
       buf_printf(b, "const char *_t%d = ((void)(%s), (const char *)NULL); ",
                  ta, value.p && value.p[0] ? value.p : "0");
-    else
-      buf_printf(b, "%s _t%d = %s; ", poly ? "sp_RbVal" : c_type_name(ty_hash_val(rt)),
-                 ta, value.p ? value.p : poly ? "sp_box_nil()" : "0");
+    else {
+      /* The element conversion accepts either String form. Preserve the
+         form that the needle's emitter wrote across the receiver check. */
+      const char *type = poly ? "sp_RbVal" : string_values ? "__auto_type" : c_type_name(ty_hash_val(rt));
+      buf_printf(b, "%s _t%d = %s; ", type, ta, value.p ? value.p : poly ? "sp_box_nil()" : "0");
+    }
     free(pre.p); free(value.p);
     if (guard) nil_recv_check(name, t, b);
     char nd[24]; snprintf(nd, sizeof nd, "_t%d", ta);

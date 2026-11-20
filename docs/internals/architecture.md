@@ -106,6 +106,8 @@ read that a later operand can rebind. The temporary uses Repr's layout
 and retains references while the arguments run.
 
 A method inferred or declared to return String returns `sp_String *`.
+The String addition emitter boxes its result when Repr selects a boxed
+result for the call, even when both operands are known Strings.
 `repr_method_ret_storage` supplies the physical result type to signatures,
 return slots and callers. A nullable String uses the same pointer and returns
 `NULL` for nil. The caller can retain the handle, box it for a Ruby value,

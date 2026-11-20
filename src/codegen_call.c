@@ -30899,18 +30899,10 @@ static void refuse_string_copies(Compiler *c, int id) {
       nt_ref(nt, id, "block") >= 0)
     unsupported_feature(c, id, "String#scrub! with a block is not yet supported: the block would be ignored");
   int blk = nt_ref(nt, id, "block");
-  if (recv >= 0 && blk >= 0 && dyn_block_appends(c, blk, 0)) {
+  if (recv >= 0 && blk >= 0 && sp_streq(name, "tap") && dyn_block_appends(c, blk, 0)) {
     TyKind rt = comp_ntype(c, recv);
     NodeKind rk = nt_kind(nt, recv);
-    if ((sp_streq(name, "each") || sp_streq(name, "each_with_index") || sp_streq(name, "reverse_each") ||
-         sp_streq(name, "map") || sp_streq(name, "collect")) &&
-        (rt == TY_STR_ARRAY || rt == TY_POLY_ARRAY)) {
-      const char *pn = block_param_name(c, blk, 0);
-      LocalVar *pv = pn ? scope_local(comp_scope_of(c, blk), pn) : NULL;
-      if (rk == NK_ArrayNode && pv && (pv->type == TY_STRING || pv->type == TY_STRBUF) && !pv->str_shared)
-        unsupported_feature(c, id, "a String is not yet shared by reference through a fresh Array literal into an appending iterator block");
-    }
-    if (sp_streq(name, "tap") && (rt == TY_STRING || rt == TY_STRBUF) &&
+    if ((rt == TY_STRING || rt == TY_STRBUF) &&
         rk != NK_LocalVariableReadNode && rk != NK_StringNode && rk != NK_InterpolatedStringNode) {
       /* --share-strings: a block parameter the rule made the handle takes
          the receiver as one (emit_tap_then_expr) */

@@ -26988,29 +26988,3 @@ int strbuf_poly_user_base(Compiler *c, int v) {
   }
   return -1;
 }
-
-/* Is value v's String one no other name can see a copy of: a new String,
-   one of a class the rule does not share or that one holder alone names
-   (the rule shares it for a change through a transient), a new String by
-   where it comes from (share_value_fresh), an element of ARGV, whose Strings
-   CRuby freezes, or of ENV, which answers a new String each read, or a
-   conditional each of whose arms is one of these or nil
-   (strbuf_flow_unseen_arms)? */
-int strbuf_flow_unseen(Compiler *c, int v) {
-  const NodeTable *nt = c->nt;
-  if (share_value_fresh(c, v, 0)) return 1;
-  int recv = nt_kind(nt, v) == NK_CallNode ? nt_ref(nt, v, "receiver") : -1;
-  const char *rname = recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode ? nt_str(nt, recv, "name") : NULL;
-  return is_argv_const(rname) || (env_value_recv(c, recv, comp_ntype(c, recv)) &&
-         bop_share_named(BOP_ENV, nt_str(nt, v, "name")) == BSH_PURE) || strbuf_flow_unseen_arms(c, v);
-}
-static int strbuf_flow_seen_leaf(Compiler *c, int v) { return !strbuf_flow_unseen(c, v); }
-/* Is v a conditional (`||`, `&&`, `if`, `case`) whose every arm hands on a
-   String no other name can see a copy of (strbuf_flow_unseen), or nil:
-   `ARGV[0] || "c128"` is a frozen String or a new one, whichever arm runs? */
-int strbuf_flow_unseen_arms(Compiler *c, int v) {
-  NodeKind k = v >= 0 ? nt_kind(c->nt, v) : NK_NONE;
-  return (k == NK_IfNode || k == NK_UnlessNode || k == NK_OrNode || k == NK_AndNode || k == NK_CaseNode ||
-          k == NK_CaseMatchNode) &&
-         !strbuf_cond_arm_any(c, v, strbuf_flow_seen_leaf, 1);
-}

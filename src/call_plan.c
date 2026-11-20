@@ -5502,6 +5502,20 @@ static int pr_prep_body(Compiler *c, int cls, const char *name) {
   }
   return -1;
 }
+/* Behind a guard entry of name (a mixin in a reopening, whose copy answers
+   once its statement has run): does cls hold a body of its own under the
+   name, hidden as `__prep <n> name`? The stand-in a mixin makes where the
+   class had none (mixin_method_behind's `= super`, Scope.super_behind) is
+   no method of the class's: Module#instance_methods(false) lists the
+   name for the first and not for the second, as CRuby does (#12224). */
+static int pr_guarded_own(Compiler *c, int cls, const char *name) {
+  for (int si = 0; si < c->nscopes; si++) {
+    const Scope *s = &c->scopes[si];
+    if (s->class_id == cls && !s->is_cmethod && s->shadow == SHADOW_PREP && s->origin_module_ci <= 0 &&
+        !s->super_behind && s->shadow_user && sp_streq(s->shadow_user, name)) return 1;
+  }
+  return 0;
+}
 /* Whether cls's alias table holds name as an alias of its side (the
    alias entry has its own visibility; its original is the name's method):
    an instance alias, or on the class side a singleton alias or one of a
@@ -5791,6 +5805,10 @@ static int pr_in_table(Compiler *c, int cls, unsigned side, const char *name, in
   if (!(side & CT_OWN))
     return (mi >= 0 && !method_hidden_from_reflection(c, cls, name) && ((side & CT_REACH) || !scope_is_struct_synth(c, mi))) || comp_reader_in_chain(c, cls, name, NULL) ||
            (wr && comp_writer_in_chain(c, cls, base, NULL)) || pr_alias(c, cls, side, name);
+  /* (a guard entry the table answers by the name, ENTRY_TABLE, is the
+     compiler's: the class's own is the body it hides, pr_guarded_own) */
+  if (mi >= 0 && c->scopes[mi].entry == ENTRY_TABLE && c->scopes[mi].mixin_guarded)
+    return pr_guarded_own(c, cls, name) || pr_alias(c, cls, side, name);
   return (mi >= 0 && !scope_is_struct_synth(c, mi) && c->scopes[mi].origin_module_ci == 0) ||
          pr_prep_body(c, cls, name) >= 0 ||
          (comp_is_reader(k, name) && pr_accessor_own(c, cls, name, 0, 0)) ||

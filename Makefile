@@ -5011,7 +5011,8 @@ infer-test-1: $(SPINEL) $(SP_RT_LIB)
 	[ "$$(awk '/^static inline [^(]* sp_(rb_)?(w_store|t_reindex)\(.*\{$$/,/^\}/' "$$tmp/lcb.c" | grep -c '_hcvr')" = 0 ] || \
 	  { echo "infer-test: FAIL (a loop that stores an element or reassigns its index was emitted twice)"; ok=0; }; \
 	$(SPINEL) test/each_with_index_chain_walks_array.rb -c --no-line-map -o "$$tmp/ewc.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (each_with_index_chain_walks_array: -c)"; ok=0; }; \
-	[ "$$(awk '/^static [^(]* sp_(dot|ints|rng)\(.*\{$$/,/^\}/' "$$tmp/ewc.c" | grep -c 'sp_Enumerator')" = 0 ] || \
+	[ "$$(grep -cE '^static [^(]* sp_(rb_)?(dot|ints)\(.*\{$$' "$$tmp/ewc.c")" = 2 ] || { echo "infer-test: FAIL (each_with_index_chain_walks_array: dot or ints not found)"; ok=0; }; \
+	[ "$$(awk '/^static [^(]* sp_(rb_)?(dot|ints)\(.*\{$$/,/^\}/' "$$tmp/ewc.c" | grep -c 'sp_Enumerator')" = 0 ] || \
 	  { echo "infer-test: FAIL (a statement arr.each.with_index { } drained an Enumerator copy instead of walking the array)"; ok=0; }; \
 	$(SPINEL) test/loop_block_value_while_reads.rb -c --no-line-map -o "$$tmp/lbv.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (loop_block_value_while_reads: -c)"; ok=0; }; \
 	[ "$$(awk '/^static inline [^(]* sp_(rb_)?(dots|dots_int|dots_from_one)\(.*\{$$/,/^\}/' "$$tmp/lbv.c" | grep -c '_hcvr[0-9]*_[0-9]* >= ')" -ge 3 ] || \

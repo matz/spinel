@@ -1,7 +1,7 @@
 # spinel: gc-stress
-# A statement `arr.each.with_index(off) { |x, i| }` over an Array or an
-# Integer Range walks the receiver itself, as the expression form does: no
-# drained Enumerator copy. So a block that grows or shrinks the array sees
+# A statement `arr.each.with_index(off) { |x, i| }` over an Array walks the
+# receiver itself, as the expression form does: no drained Enumerator copy
+# (an Integer Range's chain still drains one). So a block that grows or shrinks the array sees
 # it as CRuby does, and break, next, return, offsets, destructuring and
 # every element kind answer as before. It keeps the arrays' headers as `each`
 # does, and polls as `each` does.
@@ -68,3 +68,85 @@ p grow_in([1, 2, 3]), strs(%w[ab c d]), objs([[1], [2, 3]])
 begin; p frozen_out([1.0], [0.0].freeze); rescue => e; p e.class; end
 nb = Array.new(3) { |i| i * 1.0 }; nb[1] = nil
 begin; p nested([[1.0, 1.0, 1.0]], nb); rescue => e; p e.class; end
+
+# a nil receiver held in a typed slot raises as each does; a next in the walk
+# inside a collecting block leaves the walk's pass, not the block's
+class H
+  def initialize(set) = (@a = [1.0, 2.0] if set)
+  def run = (s = 0.0; @a.each.with_index { |x, i| s += x * i }; s)
+end
+def loc(flag)
+  a = flag ? [1, 2, 3] : nil
+  s = 0
+  a.each.with_index { |x, i| s += x + i }
+  s
+end
+p H.new(true).run, loc(true)
+[-> { H.new(false).run }, -> { loc(false) }].each do |f|
+  p f.call
+rescue NoMethodError => e
+  p [:NoMethodError, e.message[0, 40]]
+end
+def o3(rows, arr)
+  rows.map do |k|
+    s = +""
+    arr.each.with_index { |x, i| next 5 if i == 0; s << x.to_s }
+    s
+  end
+end
+def o4(rows, arr)
+  rows.map do |k|
+    arr.each.with_index { |x, i| next :sym if i == 0; k + x }
+    k.to_s
+  end
+end
+def o5(rows, arr) = rows.select { |k| arr.each.with_index { |x, i| next if x > k }; k.odd? }
+p o3([1, 2], [7, 8]), o4([1, 2], [3, 4]), o5([1, 2, 3], [2, 5])
+
+# begin / rescue / ensure around a next in the walk, inside a method with a
+# rescue of its own; a Range walk at a method's tail (it builds and runs)
+def parse(lines)
+  out = []
+  lines.each.with_index(1) do |line, no|
+    begin
+      next if line.empty?
+      out << Integer(line)
+    rescue ArgumentError
+      out << -no
+    end
+  end
+  out
+rescue IOError
+  []
+end
+r = parse(Array.new(2000) { |i| i % 3 == 0 ? "" : (i % 5 == 0 ? "x" : i.to_s) })
+p r.size, r.sum
+begin; Integer("bad"); rescue ArgumentError => e; p e.class; end
+def f1(a)
+  r = []
+  a.each.with_index do |x, i|
+    begin
+      next if i == 1
+      r << x
+    ensure
+      r << :ens
+    end
+    r << :after
+  end
+  r
+end
+p f1([1, 2, 3])
+def tail_rng(n)
+  (1..n).each.with_index { |x, i| print x, i }
+end
+tail_rng(2)
+puts
+
+# a chain with a `&.` keeps the drained path, whose guard answers nil
+class SafeBox
+  def initialize(on) = (@a = [1.5, 2.5] if on)
+  def each_wi2 = (r = []; @a&.each&.with_index { |x, i| r << i }; r)
+end
+p SafeBox.new(true).each_wi2, SafeBox.new(false).each_wi2
+def chars_wi(s) = (r = []; s&.each_char&.with_index { |ch, i| r << ch * i }; r)
+p chars_wi("ab"), chars_wi(nil)

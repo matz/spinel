@@ -12324,7 +12324,7 @@ static int hc_block_loop(Compiler *c, int id) {
     TyKind at = repr_of(c, ewa).as_ty;
     int a = nt_ref(nt, id, "arguments"), an = 0;
     const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
-    return (at == TY_INT_ARRAY || at == TY_FLOAT_ARRAY || at == TY_STR_ARRAY || ty_is_ptr_array(at)) &&
+    return (at == TY_INT_ARRAY || at == TY_FLOAT_ARRAY || at == TY_STR_ARRAY) &&
            an <= 1 && (an < 1 || repr_of(c, av[0]).as_ty == TY_INT);
   }
   /* a typed array's zip with one typed array (emit_iteration_stmt_body's

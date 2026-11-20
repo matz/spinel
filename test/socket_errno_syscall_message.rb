@@ -16,7 +16,9 @@ p attempt { s.setsockopt(Socket::IPPROTO_IPV6, Socket::IPV6_V6ONLY, 1) }
 unconnected = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM)
 p attempt { unconnected.shutdown }
 udp = UDPSocket.new
-p attempt { Socket.for_fd(udp.fileno).listen(1) }
+udp_sock = Socket.for_fd(udp.fileno)
+udp_sock.autoclose = false
+p attempt { udp_sock.listen(1) }
 p attempt { udp.send("x", 0) }
 p attempt { unconnected.accept_nonblock }
 p attempt { Socket.new(99999, Socket::SOCK_STREAM) }

@@ -1831,12 +1831,6 @@ typedef struct {
   /* the operand-order record (order_plan.c): per operand list, where each
      operand is evaluated; built by the analysis phase operand_order */
   struct OrderFacts *order;
-  /* the String plan's supply along chains of self-answering calls, per
-     link, for the whole compile; an entry is reused only while the view
-     epoch, the node table's version and its deciding node's answer are
-     unchanged (share_plan_sup_valid) */
-  struct SharePlanSup *share_sup;
-  int share_sup_n;
   /* --share-strings: the walk deciding the methods' answers while
      an_mark_return_origins runs (analyze.c), else NULL: a method's answer
      asked meanwhile is decided where it is asked (scope_ret_fresh, scope_ret_param) */

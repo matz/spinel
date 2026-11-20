@@ -1,8 +1,8 @@
 /* analyze_share.c -- the questions the String rule asks of the program
    (#6765): whether a value is a new String no other name holds
    (share_value_fresh), which literal blocks a method can run
-   (share_method_blocks), whether a node hands on a String's handle
-   (share_node_carry_kind), and the plain questions of names, targets and
+   (sh_blocks_fresh), whether a node hands on a String's handle
+   (share_node_carries_handle), and the plain questions of names, targets and
    literals beside them. See share.h.
 
    The tables they keep (ShareFacts) are read from the calls when the
@@ -707,7 +707,7 @@ static unsigned char *sh_dead_nodes(Compiler *c) {
    hands its own block on to (fw), the methods a block the table does not
    list reaches (blk_unk), and those whose yields go where no literal shows
    (blk_dyn: 1 a block value, 2 a zsuper's or a dynamic call's). Read by
-   share_method_blocks and sh_blocks_fresh. */
+   sh_blocks_fresh. */
 static void sh_mb_add(ShareFacts *F, Compiler *c, int blk, int mi) {
   const Scope *m = &c->scopes[mi];
   if (!m->yields && !m->is_lowered_yield && !m->blk_param) return;
@@ -837,36 +837,6 @@ void share_facts_free(Compiler *c) {
   c->share = NULL;
 }
 
-int share_method_blocks(const Compiler *c, int mi, const int **blocks) {
-  const ShareFacts *F = c->share;
-  *blocks = NULL;
-  if (!F || !F->mb_start || mi < 0 || mi >= c->nscopes || F->blk_dyn[mi]) return -1;
-  *blocks = F->mb_blk + F->mb_start[mi];
-  return F->mb_start[mi + 1] - F->mb_start[mi];
-}
-int share_method_reaching_blocks(const Compiler *c, int mi, int *out, int cap) {
-  const ShareFacts *F = c->share;
-  if (!F || !F->mb_start || mi < 0 || mi >= c->nscopes) return -1;
-  int qcap = 64, qn = 0, n = 0, q[64];
-  q[qn++] = mi;
-  for (int h = 0; h < qn; h++) {
-    int m = q[h];
-    if (F->blk_dyn[m] & 2) return -1;
-    for (int i = F->mb_start[m]; i < F->mb_start[m + 1]; i++) {
-      if (n >= cap) return -1;
-      out[n++] = F->mb_blk[i];
-    }
-    for (int e = 0; e < F->nfw; e++) {
-      if (F->fw_to[e] != m) continue;
-      int seen = 0;
-      for (int k = 0; k < qn && !seen; k++) seen = q[k] == F->fw_from[e];
-      if (seen) continue;
-      if (qn >= qcap) return -1;
-      q[qn++] = F->fw_from[e];
-    }
-  }
-  return n;
-}
 /* Native classes can appear in comp_poly_candidates as placeholders even
    when they have no binding. Skip only those empty native rows; preserve
    every Ruby candidate and every real native binding conservatively. The
@@ -1675,27 +1645,6 @@ int share_value_fresh(Compiler *c, int n, int depth) {
   return !for_each_value_position(c->nt, n, VPS_IF | VPS_UNLESS, sh_fresh_arm_bad, &f);
 }
 
-/* Does the String (or a box that may hold one) node v evaluates to have to
-   be the String's handle where it is emitted -- stored, boxed, mutated --
-   and not its bytes? Under the one representation every String does, but
-   nil, a literal (a String literal is its own handle; a container, a Range
-   or a Symbol holds none), a value of a type that cannot hold a String, one
-   in a method no call reaches, and a frozen String, whose handle is the
-   literal's own. */
-int share_value_needs_handle(Compiler *c, int v) {
-  const NodeTable *nt = c->nt;
-  if (v < 0 || v >= nt->count) return SHN_NO;
-  NodeKind k = nt_kind(nt, v);
-  if (k == NK_NilNode || k == NK_StringNode || k == NK_ArrayNode || k == NK_HashNode ||
-      k == NK_RangeNode || k == NK_SymbolNode)
-    return SHN_NO;
-  TyKind t = comp_ntype_settled(c, v);
-  if (t != TY_STRING && t != TY_STRBUF && t != TY_POLY) return SHN_NO;
-  Scope *sc = comp_scope_of(c, v);
-  if (!sc || !sc->reachable || share_frozen_string(c, v)) return SHN_NO;
-  return SHN_YES;
-}
-
 static int sh_ivar_owner(Compiler *c, int node);
 /* A String method answering its receiver or nil (bop_share_self_answer:
    a bang method, an iterator given a block) called on a slot that holds
@@ -1755,15 +1704,9 @@ static int sh_def_reader_box(const Compiler *c, int u) {
   int ix = comp_ivar_index((ClassInfo *)ci, nt_str(nt, st[0], "name"));
   return ix >= 0 && ci->ivar_types[ix] == TY_POLY;
 }
-/* The kind (share.h's SPK_*) of the route by which node n hands over the
-   shared handle (or a box holding it), not a copy of its bytes, or
-   SPK_NONE: the carry share_node_carries_handle checks, arm by arm; *op as
-   share_plan_producer's. With by_repr 0, a value represented as the handle
-   (repr_of's RK_STRBUF, or any strbuf_src) is not taken as one by that
-   alone: the String plan reads the representation itself. With lift 0, a
-   String a store lifts into a handle (poly_strbuf_lift) is asked the
-   other routes, as the String it is before the store's lift. */
-static int sh_carry_kind(const Compiler *c, int n, int by_repr, int lift, int *op) {
+/* The route by which n supplies a handle or a box holding one.
+   SPK_NONE means it supplies only bytes. */
+static int sh_carry_kind(const Compiler *c, int n, int *op) {
   *op = -1;
   /* A native String result carries its handle through the call. */
   if (repr_call_returns_handle((Compiler *)c, n)) return SPK_NATIVE_CALL;
@@ -1854,13 +1797,13 @@ static int sh_carry_kind(const Compiler *c, int n, int by_repr, int lift, int *o
   }
   /* a bang method on a handle local: a write hands over the local's handle
      (emit_strbuf_value) */
-  if (by_repr && (r.kind == RK_STRBUF || r.strbuf_src != RS_NONE)) return SPK_SLOT;
+  if (r.kind == RK_STRBUF || r.strbuf_src != RS_NONE) return SPK_SLOT;
   if (sh_bang_self_slot(c, n)) {
     *op = nt_paren_single(c->nt, nt_ref(c->nt, n, "receiver"));
     return SPK_SELF;
   }
   /* a boxed variable's read lifted into the handle (poly_strbuf_lift) */
-  if (lift && r.poly_lift) return SPK_LIFT;
+  if (r.poly_lift) return SPK_LIFT;
   /* A yielding call's result and a receiver-returning expression
      use the same handle routes as their eventual store. */
   return strbuf_value_kind((Compiler *)c, n, op);
@@ -1869,7 +1812,5 @@ static int sh_carry_kind(const Compiler *c, int n, int by_repr, int lift, int *o
    not a copy of its bytes? */
 int share_node_carries_handle(const Compiler *c, int n) {
   int op;
-  return sh_carry_kind(c, n, 1, 1, &op) != SPK_NONE;
+  return sh_carry_kind(c, n, &op) != SPK_NONE;
 }
-int share_node_carry_kind(const Compiler *c, int n, int *op) { return sh_carry_kind(c, n, 0, 1, op); }
-int share_node_carry_kind_unlifted(const Compiler *c, int n, int *op) { return sh_carry_kind(c, n, 0, 0, op); }

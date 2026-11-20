@@ -1,0 +1,7 @@
+handler ran
+wait returned 0
+handler ran
+system returned 0
+handler ran
+wait2 returned true 0
+Interrupt in the wait

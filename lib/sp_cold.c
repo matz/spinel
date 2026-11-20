@@ -3671,7 +3671,11 @@ static int sp_enum_returns_source(sp_Enumerator *e) {
                strcmp(m, "each_value") == 0 ||
                /* a String's piece walks answer the String */
                strcmp(m, "each_char") == 0 || strcmp(m, "each_line") == 0 ||
-               strcmp(m, "each_byte") == 0 || strcmp(m, "each_codepoint") == 0);
+               strcmp(m, "each_byte") == 0 || strcmp(m, "each_codepoint") == 0 ||
+               /* and an Enumerable's slice / cons / reverse / entry walks its
+                  receiver (Ruby 3.1 on for each_slice and each_cons) */
+               strncmp(m, "each_slice(", 11) == 0 || strncmp(m, "each_cons(", 10) == 0 ||
+               strcmp(m, "reverse_each") == 0 || strcmp(m, "each_entry") == 0);
 }
 sp_RbVal sp_enum_with_index_value(sp_Enumerator *e) {SP_GC_ROOT(e);
   if (sp_enum_returns_source(e))

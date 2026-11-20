@@ -23292,6 +23292,16 @@ static int each_with_index_chain(Compiler *c, int id) {
   int rr = nt_ref(nt, r, "receiver");
   return rr >= 0 && ty_is_array(comp_ntype(c, rr));
 }
+/* `x.with_index(off) { }` on an Enumerator -- `a.map`, `a.each_slice(2)`, a
+   stored one -- answers what its method makes of the block: map's and
+   select's collection, each's or each_slice's receiver. Only the value form
+   (emit_enum_with_index_expr) gives that answer; the statement form walks
+   the same elements and drops it, so at a method's tail the method answered
+   nil. */
+static int with_index_on_enumerator(Compiler *c, int id) {
+  int r = nt_ref(c->nt, id, "receiver");
+  return r >= 0 && repr_of(c, r).as_ty == TY_ENUMERATOR;
+}
 
 int tail_iter_receiver(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
@@ -23832,7 +23842,8 @@ void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent) {
                         sp_streq(tv_name, "delete_if") ||
                         /* `a.each.with_index { }` answers a, which only the
                            value form reads back */
-                        (sp_streq(tv_name, "with_index") && each_with_index_chain(c, id)));
+                        (sp_streq(tv_name, "with_index") &&
+                         (each_with_index_chain(c, id) || with_index_on_enumerator(c, id))));
   /* An iterator whose value is its receiver, called on something that is NOT
      a plain read (`s.keys.each { }`, `s.dup.each { }`): the statement form
      below produces the tail value by RE-READING the receiver, which it cannot

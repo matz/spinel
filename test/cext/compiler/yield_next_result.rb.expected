@@ -6,3 +6,6 @@
 [true, "word!!"]
 [true, "word!!"]
 [true, [97, 0, 98, 33]]
+[true, true]
+["word!!!!", "word!!!!"]
+[nil, true]

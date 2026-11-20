@@ -16111,6 +16111,21 @@ static void array_new_fresh_runs(const char *k, int tr, int tn, int ti, int trun
   buf_printf(g_pre, "for (sp_int _t%d = _t%d; _t%d < _t%d; _t%d++) {\n", ti, trun, ti, tend, ti);
 }
 
+/* The block's result waits through ensure before the Array takes it. Its
+   carrier uses the element storage representation, including String handles. */
+static TyKind array_new_next_slot(Compiler *c, const char *k, TyKind at, TyKind elem, int nilable, int tmp) {
+  TyKind et = sp_streq(k, "Poly") ? TY_POLY : elem;
+  TyKind held = typed_elem_held(at);
+  if (held != TY_UNKNOWN) et = held;
+  emit_indent(g_pre, g_indent);
+  if (sp_streq(k, "Ptr")) { et = TY_UNKNOWN; buf_printf(g_pre, "void *_t%d = NULL; SP_GC_ROOT(_t%d);\n", tmp, tmp); }
+  else if (et == TY_POLY) buf_printf(g_pre, "sp_RbVal _t%d = sp_box_nil();\n", tmp);
+  else if (nilable) buf_printf(g_pre, "%s _t%d = %s;\n", oint_ctype(et), tmp, oint_nil(et));
+  else { emit_ctype(c, et, g_pre); buf_printf(g_pre, " _t%d = %s;\n", tmp, default_value_from_compiler(c, et)); }
+  if (ty_gc_rootable(c, et)) { emit_indent(g_pre, g_indent); emit_gc_root_tmp(c, et, tmp, g_pre); buf_puts(g_pre, "\n"); }
+  return et;
+}
+
 static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, int *out);
 
 /* A builtin exception whose own initialize reads more than the message (NameError's name, NoMethodError's
@@ -16884,6 +16899,8 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
          is a `void *`, which every element pointer and a nil converts to) */
       int an_next = bn > 0 && bb && subtree_has_own_next(nt, bbody);
       const char *sv_anx = g_ie_next_var; int sv_anp = g_ie_res_poly; TyKind sv_ant = g_ie_next_ty; int sv_ano = g_ie_next_oint;
+      int sv_acloop = g_c_loop_depth, sv_alexc = g_loop_exc_base;
+      int sv_alres = g_loop_rescue_base, sv_alens = g_loop_ensure_base;
       char anbuf[32]; int anv = 0;
       /* an Integer or Float tail that can be nil is pushed with its nil: the
          slot (and the `next` slot) is its oint */
@@ -16892,17 +16909,14 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       if (an_next) {
         anv = ++g_tmp;
         snprintf(anbuf, sizeof anbuf, "_t%d", anv);
-        TyKind et = sp_streq(k, "Poly") ? TY_POLY : ar.elem;
-        emit_indent(g_pre, g_indent);
-        if (sp_streq(k, "Ptr")) { et = TY_UNKNOWN; buf_printf(g_pre, "void *_t%d = NULL;\n", anv); }
-        else if (et == TY_POLY) buf_printf(g_pre, "sp_RbVal _t%d = sp_box_nil();\n", anv);
-        else if (tail_o) buf_printf(g_pre, "%s _t%d = %s;\n", oint_ctype(et), anv, oint_nil(et));
-        else { emit_ctype(c, et, g_pre); buf_printf(g_pre, " _t%d = %s;\n", anv, default_value_from_compiler(c, et)); }
+        TyKind et = array_new_next_slot(c, k, at, ar.elem, tail_o, anv);
         emit_indent(g_pre, g_indent); buf_puts(g_pre, "do {\n");
         g_indent++;
         g_ie_next_var = anbuf; g_ie_res_poly = et == TY_POLY;
-        g_ie_next_ty = (et == TY_INT || et == TY_FLOAT) ? et : TY_UNKNOWN;
+        g_ie_next_ty = et;
         g_ie_next_oint = tail_o && oint_kind(et);   /* the slot is the oint: `next` stores that form */
+        g_c_loop_depth++; g_loop_exc_base = g_exc_frame_depth; g_loop_rescue_base = g_rescue_save_depth;
+        g_loop_ensure_base = g_ensure_depth;
       }
       if (bn > 0 && bb) {
         TyKind elem_t = ty_array_elem(at);
@@ -16914,7 +16928,7 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
         int tail_strbuf = sp_streq(k, "Poly") && repr_of(c, bb[bn - 1]).as_ty == TY_STRBUF;
         /* (one representation: a String Array holds the String the tail
            answers, its handle, where its bytes became a new one) */
-        int tail_hdl = typed_elem_held(at) == TY_STRBUF && !tail_o && !an_next && !nil_store_sfx(c, k, bb[bn - 1])[0];
+        int tail_hdl = typed_elem_held(at) == TY_STRBUF && !tail_o && !nil_store_sfx(c, k, bb[bn - 1])[0];
         if (tail_strbuf) emit_boxed(c, bb[bn - 1], &vb);
         else if (tail_o) emit_oint_expr(c, bb[bn - 1], elem_t, &vb);
         else if (tail_hdl) emit_strbuf_handle_of(c, bb[bn - 1], &vb);
@@ -16933,6 +16947,7 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
           g_indent--;
           emit_indent(g_pre, g_indent); buf_puts(g_pre, "} while (0);\n");
           g_ie_next_var = sv_anx; g_ie_res_poly = sv_anp; g_ie_next_ty = sv_ant; g_ie_next_oint = sv_ano;
+          g_c_loop_depth = sv_acloop; g_loop_exc_base = sv_alexc; g_loop_rescue_base = sv_alres; g_loop_ensure_base = sv_alens;
         }
         emit_indent(g_pre, g_indent);
         if (sp_streq(k, "Poly")) {

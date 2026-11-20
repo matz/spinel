@@ -1,0 +1,9 @@
+["OPTIONS", "/o", true]
+[false, true]
+["TRACE", "/t", true]
+[false, true]
+[Net::HTTPOK, "GET, OPTIONS", "OPTIONS /o HTTP/1.1 "]
+"OPTIONS * HTTP/1.1 x-a=1"
+"TRACE /t HTTP/1.1 "
+"TRACE /t HTTP/1.1 x-a=2"
+"OPTIONS /q HTTP/1.1 x-a=3"

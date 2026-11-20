@@ -1,0 +1,20 @@
+"S[Permission denied - a]"
+"S[Permission denied]"
+"S[Permission denied @ fn - a]"
+"S[No such file or directory - x]"
+"No such file or directory - x"
+2
+true
+[Errno::EACCES, "S[Permission denied - b]", 13]
+"S[Permission denied]"
+"S[Permission denied - z]"
+"S[Broken pipe - pp]"
+"S[unknown error - x]"
+"S[No such file or directory - x]"
+Errno::ENOENT
+"S[unknown error - q]"
+[Errno::EACCES, "S[Permission denied - q]"]
+"S[Broken pipe - w]"
+"S[Resource temporarily unavailable - z]"
+Errno::ENOENT
+"S[No such file or directory @ rb_sysopen - /nonexistent-spinel-dir/q]"

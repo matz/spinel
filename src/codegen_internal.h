@@ -2597,6 +2597,10 @@ int emit_implied_entry_test(Compiler *c, int mi, int undefined, Buf *b);
 void emit_zero_arg_boxed_call(Compiler *c, int mi, const char *self, Buf *b);
 int emit_arm_args_text(Compiler *c, int mi, const char *armself, const char *const *argv, int argc,
                        Buf *pre, Buf *out, int *builds, char *raise, size_t rn);
+/* The statements that run reopened initialize im on the exception C expression self
+   with the C text msg_c (a const char *) as its one argument; 0: no arm for its
+   first parameter's type. (codegen.c) */
+int emit_reinit_init_text(Compiler *c, int im, const char *self, const char *msg_c, Buf *out);
 /* Can running the node `id` assign self's instance variable `iv`, self an
    instance of class `cls` (-1: none known) or of one below it? `depth`
    counts the self calls followed into their methods (0 at the call site);

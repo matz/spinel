@@ -23330,8 +23330,19 @@ static sp_Class sp_exc_class(sp_Class k) {
 static sp_RbVal sp_class_value_new_fallback(sp_RbVal cls, const char *cn, sp_int argc, const sp_RbVal *av) {
   if (cls.tag == SP_TAG_CLASS && sp_sclass_id_p(cls.v.i))
     sp_raise_cls("TypeError", "can't create instance of singleton class");
-  if (cn && sp_syserr_kind(cn, NULL) != SP_SYSERR_NONE)
-    return sp_box_obj(sp_syserr_build(cn, argc, av), SP_BUILTIN_EXCEPTION);
+  if (cn && sp_syserr_kind(cn, NULL) != SP_SYSERR_NONE) {
+    sp_Exception *se = sp_syserr_build(cn, argc, av);
+    /* CRuby's syserr_initialize builds the errno message and then calls super
+       with it: a program's reopening of StandardError#initialize (or one above
+       it) runs on that message (the hook the runtime's own raisers use) */
+    if (sp_user_exc_reinit_fn) {
+      SP_GC_ROOT(se);
+      const char *sm = sp_msg_heapify(sp_exc_message(se)); SP_GC_ROOT_STR(sm);
+      void *made = sp_user_exc_reinit_fn(se->cls_name, sm, se);
+      if (made) se = (sp_Exception *)made;
+    }
+    return sp_box_obj(se, SP_BUILTIN_EXCEPTION);
+  }
   if (cn && !strcmp(cn, "SystemExit")) {
     sp_Exception *e = sp_exc_new(cn, sp_str_empty);
     sp_sysexit_super(e, argc, av);

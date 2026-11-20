@@ -4116,7 +4116,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
        path, is built by emit_new_call_arms with its name, arguments and
        receiver) */
     if (cn && is_exc_name(cn) && !(ci < 0 && nt_ref(nt, recv, "parent") < 0)) {
-      if (emit_syserr_family_new(c, id, cn, argc, argv, b)) return 1;
+      if (emit_syserr_family_new_reopened(c, id, cn, argc, argv, b)) return 1;
       emit_exc_new_msg(c, cn, argc >= 1 ? argv[0] : -1, b);
       return 1;
     }

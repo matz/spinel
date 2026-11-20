@@ -23904,6 +23904,37 @@ static int exc_has_reopen_initialize(Compiler *c) {
   return any_exc_reopen(c) && exc_reopen_definers(c, "initialize", xr, 8) > 0;
 }
 
+/* The statements that run the reopened initialize im on the exception C
+   expression `self` (an sp_Exception *) with the C text msg_c (a const char *)
+   as its one argument: the message as the parameter that takes it holds it,
+   boxed for a poly one or a rest, the String itself for a String one. An
+   initialize whose first parameter has any other type has no arm: 0, and the
+   caller keeps the runtime's message. A reopening that cannot take one
+   argument raises ArgumentError, as the call would. */
+int emit_reinit_init_text(Compiler *c, int im, const char *self, const char *msg_c, Buf *out) {
+  Buf pre = {0}, args = {0}, mb = {0}, src = {0};
+  char raise[640];
+  int builds = 0;
+  int p0 = arm_arg_param(c, &c->scopes[im]);
+  LocalVar *p0v = p0 >= 0 && c->scopes[im].pnames ? scope_local(&c->scopes[im], c->scopes[im].pnames[p0]) : NULL;
+  TyKind p0t = p0v ? repr_of_slot(c, p0v).as_ty : TY_POLY;
+  buf_printf(&src, "sp_box_str_new(%s)", msg_c);
+  int ok = 1;
+  if (p0t == TY_POLY || p0t == TY_UNKNOWN) buf_puts(&mb, src.p);
+  else if (p0t == TY_STRING || p0t == TY_STRBUF) emit_unbox_text(c, p0t, src.p, &mb);
+  else ok = 0;
+  if (ok) {
+    const char *argv[1] = { mb.p };
+    if (emit_arm_args_text(c, im, self, argv, 1, &pre, &args, &builds, raise, sizeof raise)) {
+      if (pre.p) buf_puts(out, pre.p);
+      buf_printf(out, " %s(%s%s);", mc_method(c, &c->scopes[im]), self, args.p ? args.p : "");
+    }
+    else buf_printf(out, " %s", raise);
+  }
+  free(pre.p); free(args.p); free(mb.p); free(src.p);
+  return ok;
+}
+
 /* sp_user_exc_reinit, the hook sp_raise_cls asks for an error the runtime
    raises itself: CRuby builds it through the class's #initialize, so the
    nearest reopening up the class's ancestry that defines one runs on the
@@ -23932,29 +23963,10 @@ static void emit_exc_reinit_dispatch(Compiler *c, Buf *b) {
     int pf = c->scopes[im].yields ? scope_proc_form_of(c, im) : -1;
     if (pf >= 0) im = pf;
     else if (c->scopes[im].yields) continue;   /* (no clone: the runtime's message stands) */
-    Buf pre = {0}, args = {0};
-    char raise[640];
-    int builds = 0;
-    /* the message as the parameter that takes it holds it: boxed for a poly
-       one or a rest, the String itself for a String one; an initialize whose
-       first parameter has any other type has no arm (the call keeps the
-       runtime's message) */
-    int p0 = arm_arg_param(c, &c->scopes[im]);
-    LocalVar *p0v = p0 >= 0 && c->scopes[im].pnames ? scope_local(&c->scopes[im], c->scopes[im].pnames[p0]) : NULL;
-    TyKind p0t = p0v ? repr_of_slot(c, p0v).as_ty : TY_POLY;
-    Buf mb = {0};
-    if (p0t == TY_POLY || p0t == TY_UNKNOWN) buf_puts(&mb, "sp_box_str_new(msg)");
-    else if (p0t == TY_STRING || p0t == TY_STRBUF) emit_unbox_text(c, p0t, "sp_box_str_new(msg)", &mb);
-    else { free(pre.p); free(args.p); continue; }
-    const char *argv[1] = { mb.p };
-    buf_printf(b, "  if (_xi%d == %d) {", pk, q);
-    if (emit_arm_args_text(c, im, "e", argv, 1, &pre, &args, &builds, raise, sizeof raise)) {
-      if (pre.p) buf_puts(b, pre.p);
-      buf_printf(b, " %s(e%s); return e;", mc_method(c, &c->scopes[im]), args.p ? args.p : "");
-    }
-    else buf_printf(b, " %s return e;", raise);
-    buf_puts(b, " }\n");
-    free(pre.p); free(args.p); free(mb.p);
+    Buf arm = {0};
+    if (!emit_reinit_init_text(c, im, "e", "msg", &arm)) { free(arm.p); continue; }   /* (the runtime's message stands) */
+    buf_printf(b, "  if (_xi%d == %d) {%s return e; }\n", pk, q, arm.p ? arm.p : "");
+    free(arm.p);
   }
   buf_puts(b, "  return NULL;\n}\n");
   free(xr);

@@ -1,0 +1,9 @@
+[Net::HTTPOK, "GET /g HTTP/1.1  body="]
+"GET /g HTTP/1.1 x-a=1 body="
+[Net::HTTPOK, "GET /g HTTP/1.1  body="]
+[Net::HTTPOK, nil, "HEAD /h HTTP/1.1 x-a=2 body="]
+[Net::HTTPOK, "HEAD /h HTTP/1.1  body="]
+"POST /p HTTP/1.1 content-length=3 body=a=1"
+"POST /p HTTP/1.1 content-length=2 content-type=application/json body={}"
+"POST /p HTTP/1.1 content-length=0 body="
+[Net::HTTPOK, "POST /p HTTP/1.1 content-length=1 body=x"]

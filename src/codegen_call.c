@@ -18960,6 +18960,84 @@ static void emit_array_repeat_count(Compiler *c, int node, Buf *b) {
   buf_puts(b, "sp_poly_ary_offset("); emit_boxed(c, node, b); buf_puts(b, ", 1)");
 }
 
+static void emit_string_add_bytes(Compiler *c, int recv, int arg, Buf *b) {
+  const NodeTable *nt = c->nt;
+  /* `str + <non-string>` is a TypeError in CRuby (no implicit conversion);
+     a statically non-string, non-poly argument raises rather than emitting
+     an invalid sp_str_plus(str, int) C call (#2306) */
+  {
+    TyKind at9 = comp_ntype(c, arg);
+    const char *acn9 =
+      at9 == TY_INT || at9 == TY_BIGINT ? "Integer" :
+      at9 == TY_FLOAT ? "Float" : at9 == TY_SYMBOL ? "Symbol" :
+      at9 == TY_NIL ? "nil" :   /* CRuby names the value, not NilClass */
+      ty_is_array(at9) ? "Array" : ty_is_hash(at9) ? "Hash" :
+      at9 == TY_RANGE ? "Range" : NULL;
+    if (at9 == TY_BOOL) {
+      /* true/false name the value at run time */
+      buf_puts(b, "({ (void)("); emit_expr_for_effect(c, recv, b);
+      buf_puts(b, "); sp_raise_cls(\"TypeError\", sp_sprintf(\"no implicit conversion of %s into String\", (");
+      emit_expr(c, arg, b);
+      buf_puts(b, ") ? \"true\" : \"false\")); (&(\"\\xff\")[1]); })");
+      return;
+    }
+    if (acn9) {
+      buf_puts(b, "({ (void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "); (void)(");
+      emit_expr_for_effect(c, arg, b);
+      buf_printf(b, "); sp_raise_cls(\"TypeError\", \"no implicit conversion of %s into String\"); (&(\"\\xff\")[1]); })", acn9);
+      return;
+    }
+  }
+  /* Root both operands when either may allocate: `a + b` evaluates both,
+     and a fresh heap string from one can be swept while the other
+     allocates or forces a GC (chained `a + b + c` with side-effecting
+     operands -- concat_chain_operand_gc_root). Recurses naturally: a
+     chain's left operand is itself a `+` and gets its own rooted block.
+     Pure literal / bare-read operands need no rooting. */
+  /* A poly operand (statically typed string here, holds a string at
+     runtime) must be coerced to a C string for sp_str_concat. */
+  /* emit_str_expr coerces both a TY_POLY operand (sp_poly_to_s) and the
+     unresolved-call gate's sp_raise_nomethod(...) (which is sp_RbVal, not a
+     const char*) to a C string, so a raise-all operand type-checks (#2457). */
+  /* `str + "lit"`: the literal cannot allocate and its byte length is
+     known here, so only the receiver needs evaluating (sp_str_plus_lit
+     roots it across its own allocation). */
+  {
+    NodeKind lk = nt_kind(nt, arg);
+    if (lk == NK_StringNode) {
+      const char *sc = nt_str(nt, arg, "content");
+      buf_puts(b, "sp_str_plus_lit(");
+      emit_str_expr(c, recv, b); buf_puts(b, ", ");
+      emit_expr(c, arg, b);
+      buf_printf(b, ", %zu)", sc ? nt_str_len(nt, arg, "content") : (size_t)0);
+      return;
+    }
+  }
+  /* (one-String mode: an operand that changes the left String in place,
+     `(o.a = s) + (s << "3")`, runs before the left's bytes are read; the
+     left is held as its handle) */
+  if (operand_may_change_string(c, arg)) {
+    int ta = ++g_tmp, tb = ++g_tmp;
+    buf_printf(b, "({ sp_String *_t%d = SP_STR_HDL(", ta); emit_str_expr(c, recv, b);
+    buf_printf(b, "); SP_GC_ROOT(_t%d); const char *_t%d = ", ta, tb);
+    emit_str_expr(c, arg, b);
+    buf_printf(b, "; SP_GC_ROOT(_t%d); sp_str_plus(SP_STR_B(_t%d), _t%d); })", tb, ta, tb);
+  }
+  else if (subtree_may_allocate(c, recv) || subtree_may_allocate(c, arg)) {
+    int ta = ++g_tmp, tb = ++g_tmp;
+    buf_printf(b, "({ const char *_t%d = ", ta); emit_str_expr(c, recv, b);
+    buf_printf(b, "; SP_GC_ROOT(_t%d); const char *_t%d = ", ta, tb);
+    emit_str_expr(c, arg, b);
+    buf_printf(b, "; SP_GC_ROOT(_t%d); sp_str_plus(_t%d, _t%d); })", tb, ta, tb);
+  }
+  else {
+    buf_puts(b, "sp_str_plus(");
+    emit_str_expr(c, recv, b); buf_puts(b, ", ");
+    emit_str_expr(c, arg, b);
+    buf_puts(b, ")");
+  }
+}
+
 static int emit_array_arith_call(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
@@ -19190,80 +19268,10 @@ static int emit_array_arith_call(Compiler *c, int id, Buf *b) {
       if (num_arg_cannot_coerce(c, id, argv[0])) { emit_coerce_type_error(c, recv, argv[0], "Float", "sp_float", b); return 1; }
     }
     if (rt == TY_STRING && sp_streq(name, "+")) {
-      /* `str + <non-string>` is a TypeError in CRuby (no implicit conversion);
-         a statically non-string, non-poly argument raises rather than emitting
-         an invalid sp_str_plus(str, int) C call (#2306) */
-      {
-        TyKind at9 = comp_ntype(c, argv[0]);
-        const char *acn9 =
-          at9 == TY_INT || at9 == TY_BIGINT ? "Integer" :
-          at9 == TY_FLOAT ? "Float" : at9 == TY_SYMBOL ? "Symbol" :
-          at9 == TY_NIL ? "nil" :   /* CRuby names the value, not NilClass */
-          ty_is_array(at9) ? "Array" : ty_is_hash(at9) ? "Hash" :
-          at9 == TY_RANGE ? "Range" : NULL;
-        if (at9 == TY_BOOL) {
-          /* true/false name the value at run time */
-          buf_puts(b, "({ (void)("); emit_expr_for_effect(c, recv, b);
-          buf_puts(b, "); sp_raise_cls(\"TypeError\", sp_sprintf(\"no implicit conversion of %s into String\", (");
-          emit_expr(c, argv[0], b);
-          buf_puts(b, ") ? \"true\" : \"false\")); (&(\"\\xff\")[1]); })");
-          return 1;
-        }
-        if (acn9) {
-          buf_puts(b, "({ (void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "); (void)(");
-          emit_expr_for_effect(c, argv[0], b);
-          buf_printf(b, "); sp_raise_cls(\"TypeError\", \"no implicit conversion of %s into String\"); (&(\"\\xff\")[1]); })", acn9);
-          return 1;
-        }
-      }
-      /* Root both operands when either may allocate: `a + b` evaluates both,
-         and a fresh heap string from one can be swept while the other
-         allocates or forces a GC (chained `a + b + c` with side-effecting
-         operands -- concat_chain_operand_gc_root). Recurses naturally: a
-         chain's left operand is itself a `+` and gets its own rooted block.
-         Pure literal / bare-read operands need no rooting. */
-      /* A poly operand (statically typed string here, holds a string at
-         runtime) must be coerced to a C string for sp_str_concat. */
-      /* emit_str_expr coerces both a TY_POLY operand (sp_poly_to_s) and the
-         unresolved-call gate's sp_raise_nomethod(...) (which is sp_RbVal, not a
-         const char*) to a C string, so a raise-all operand type-checks (#2457). */
-      /* `str + "lit"`: the literal cannot allocate and its byte length is
-         known here, so only the receiver needs evaluating (sp_str_plus_lit
-         roots it across its own allocation). */
-      {
-        NodeKind lk = nt_kind(nt, argv[0]);
-        if (lk == NK_StringNode) {
-          const char *sc = nt_str(nt, argv[0], "content");
-          buf_puts(b, "sp_str_plus_lit(");
-          emit_str_expr(c, recv, b); buf_puts(b, ", ");
-          emit_expr(c, argv[0], b);
-          buf_printf(b, ", %zu)", sc ? nt_str_len(nt, argv[0], "content") : (size_t)0);
-          return 1;
-        }
-      }
-      /* (one-String mode: an operand that changes the left String in place,
-         `(o.a = s) + (s << "3")`, runs before the left's bytes are read; the
-         left is held as its handle) */
-      if (operand_may_change_string(c, argv[0])) {
-        int ta = ++g_tmp, tb = ++g_tmp;
-        buf_printf(b, "({ sp_String *_t%d = SP_STR_HDL(", ta); emit_str_expr(c, recv, b);
-        buf_printf(b, "); SP_GC_ROOT(_t%d); const char *_t%d = ", ta, tb);
-        emit_str_expr(c, argv[0], b);
-        buf_printf(b, "; SP_GC_ROOT(_t%d); sp_str_plus(SP_STR_B(_t%d), _t%d); })", tb, ta, tb);
-      }
-      else if (subtree_may_allocate(c, recv) || subtree_may_allocate(c, argv[0])) {
-        int ta = ++g_tmp, tb = ++g_tmp;
-        buf_printf(b, "({ const char *_t%d = ", ta); emit_str_expr(c, recv, b);
-        buf_printf(b, "; SP_GC_ROOT(_t%d); const char *_t%d = ", ta, tb);
-        emit_str_expr(c, argv[0], b);
-        buf_printf(b, "; SP_GC_ROOT(_t%d); sp_str_plus(_t%d, _t%d); })", tb, ta, tb);
-      }
-      else {
-        buf_puts(b, "sp_str_plus(");
-        emit_str_expr(c, recv, b); buf_puts(b, ", ");
-        emit_str_expr(c, argv[0], b);
-        buf_puts(b, ")");
-      }
+      int boxed = repr_of(c, id).kind == RK_BOXED;
+      if (boxed) str_box_open(b, 0);
+      emit_string_add_bytes(c, recv, argv[0], b);
+      if (boxed) str_box_close(b);
       return 1;
     }
     if (rt == TY_STRING && sp_streq(name, "*")) {

@@ -187,7 +187,7 @@ sp_Random *sp_random_default_get(void) {
    does. sp_str_set_len alone was not enough: #length counts UTF-8 units, and a
    short draw is valid UTF-8 by chance often enough that Random.bytes(8).length
    answered less than 8 about three times in a thousand. That is #3474, which
-   fixed urandom eight lines below and left this one. */
+   fixed sp_Random_urandom below and left this one. */
 const char *sp_Random_bytes(sp_Random *r, sp_int n) {SP_GC_ROOT(r);
   if (n < 0) sp_raise_cls("ArgumentError", "negative string size (or size too big)");
   char *b = sp_str_alloc((size_t)n);
@@ -209,8 +209,8 @@ sp_int sp_Random_new_seed(void) {
   sp_int s = (sp_int)(sp_random_next(sp_random_default_get()) >> 1);
   return s < 0 ? -s : s;
 }
-/* Random.urandom(n): n random bytes as a String (spinel has no real OS entropy
-   source wired up, so this draws from a freshly time-seeded stream). */
+/* Random.urandom(n): n bytes from the OS entropy source (sp_crypto_entropy) as
+   a String. Raises RuntimeError when sp_crypto_entropy has no secure source. */
 const char *sp_Random_urandom(sp_int n) {
   if (n < 0) sp_raise_cls("ArgumentError", "negative string size");
   /* CRuby's Random.urandom IS the OS entropy source, and this was a PCG seeded

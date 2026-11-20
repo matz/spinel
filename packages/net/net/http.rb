@@ -1008,21 +1008,6 @@ module Net
       request(req)
     end
 
-    # With a block, the response reaches it before its body is read.
-    def request_get(path, headers = nil, &blk)
-      request(Get.new(path, headers), &blk)
-    end
-
-    def request_head(path, headers = nil, &blk)
-      request(Head.new(path, headers), &blk)
-    end
-
-    def request_post(path, body, headers = nil, &blk)
-      req = Post.new(path, headers)
-      req.body = body
-      request(req, &blk)
-    end
-
     # Keep the connection alive through the block, then consume an unread body.
     # An explicit block parameter also keeps the no-block spelling callable.
     # A request with no session is the session's only one, and asks the

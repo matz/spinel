@@ -53,11 +53,12 @@ http.patch("/e", "more", nil, dest)
 puts "patch with dest: #{dest.inspect}"
 
 pieces = []
-res = http.request_get("/f") do |r|
-  pieces << r.code
+status = nil
+http.request_get("/f") do |r|
+  status = r.code
   r.read_body { |piece| pieces << piece }
 end
-puts "request_get: #{pieces.inspect}"
+puts "request_get: #{[status, pieces.join].inspect}"
 puts "request_get alone: #{http.request_get("/g").body.inspect}"
 
 res = http.request_head("/h") { |r| puts "request_head block: #{r.code}" }

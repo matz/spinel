@@ -10065,8 +10065,14 @@ void desugar_module_prepends(Compiler *c) {
   }
 }
 
+static void sn_begin(void);
+static void sn_end(void);
 void register_extends(Compiler *c) {
   mtab_enter(c);   /* (construction: the definers read the tables they put methods in) */
+  /* (each copy asks of a class method's body, cmethod_needs_specialization:
+     by its scope's chain of nodes, as specialize_inherited_cls_new's do,
+     where each step scanned the node table) */
+  sn_begin();
   int did_clone = 0;
   cell_writes_defer(c);
   int cls_mod = comp_core_class(c, CORE_CLASS_REOPEN);
@@ -10154,6 +10160,7 @@ void register_extends(Compiler *c) {
      it was never declared and every read of it answered nil (#4535). The
      include and inherited-class-method clones re-register the same way. */
   free(seen);
+  sn_end();
   cell_writes_flush(c);
   if (did_clone) register_locals(c);
   mtab_leave(c);

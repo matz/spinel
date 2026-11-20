@@ -34,4 +34,18 @@ rescue TypeError => error
   puts error.message
 end
 
+for rejected in [Encoding::UTF_8, String]
+  begin
+    ENV[key] = rejected
+  rescue TypeError => error
+    p [error.message, ENV[key]]
+  end
+end
+
+begin
+  ENV.store(Encoding::UTF_8, text)
+rescue TypeError => error
+  puts error.message
+end
+
 p ENV.store(key, nil)

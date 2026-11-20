@@ -4039,6 +4039,7 @@ static sp_RbVal sp_env_store_arg(sp_RbVal value) {
     }
     sp_raise_no_str_conversion(value);
   }
+  if (value.tag == SP_TAG_ENCODING || value.tag == SP_TAG_CLASS) sp_raise_no_str_conversion(value);
   (void)sp_poly_arg_str_chk_slow(value);
   return sp_box_nil();
 }

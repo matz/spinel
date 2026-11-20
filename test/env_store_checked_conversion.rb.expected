@@ -2,4 +2,7 @@
 [true, "value"]
 ["value!", "value"]
 can't convert EnvStoreArgument to String (EnvStoreArgument#to_str gives NilClass)
+["no implicit conversion of Encoding into String", "value"]
+["no implicit conversion of Class into String", "value"]
+no implicit conversion of Encoding into String
 nil

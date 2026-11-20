@@ -1126,8 +1126,10 @@ int repr_env_store_operand(Compiler *c, int v) {
   const char *name = nt_str(nt, v, "name");
   int recv = nt_ref(nt, v, "receiver"), argc;
   const int *argv = call_args(nt, v, &argc);
-  return recv >= 0 && name && is_store_alias(name) && argc == 2 &&
-         env_value_recv(c, recv, comp_ntype(c, recv)) ? argv[1] : -1;
+  if (recv < 0 || !name || !is_store_alias(name) || argc != 2 ||
+      !env_value_recv(c, recv, comp_ntype(c, recv))) return -1;
+  TyKind ty = comp_ntype_settled(c, argv[1]);
+  return ty == TY_STRING || ty == TY_STRBUF ? argv[1] : -1;
 }
 /* Does string conversion `node` hand on a handle: the operand it ends in,
    through further conversions, is a boxed value or a route that carries

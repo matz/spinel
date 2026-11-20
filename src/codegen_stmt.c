@@ -23411,7 +23411,7 @@ void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent) {
          method's result var is such a slot too: `return to_enum unless
          block_given?` types it Enumerator, and a begin around the loop
          answers nil boxed. */
-      else if (rt == TY_POLY && !target_poly && (!g_result_var || !slot_o) &&
+      else if (rt == TY_POLY && !target_poly &&
                slot_t != TY_POLY && slot_t != TY_VOID && slot_t != TY_UNKNOWN &&
                is_scalar_ret(slot_t)) {
         char ex[24]; snprintf(ex, sizeof ex, "_t%d", t);

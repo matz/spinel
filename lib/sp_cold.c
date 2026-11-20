@@ -3329,7 +3329,15 @@ const char *sp_file_dirname(const char *path) {SP_GC_ROOT_STR(path);
   while (len > 1 && path[len - 1] == '/') len--;
   const char *s = NULL;
   for (size_t i = len; i > 0; i--) if (path[i - 1] == '/') { s = path + i - 1; break; }
-  if (!s) { char *r = sp_str_alloc(1); r[0] = '.'; r[1] = 0; return r; }
+  if (!s) {
+#if defined(_WIN32)
+    /* a drive's root ("C:/", "C://") has only the separators the loop above
+       passed over: the dirname is the root itself */
+    size_t rn = sp_file_path_root_len(path);
+    if (rn > 1) { char *r = sp_str_alloc((sp_int)rn); memcpy(r, path, rn); r[rn] = 0; return r; }
+#endif
+    char *r = sp_str_alloc(1); r[0] = '.'; r[1] = 0; return r;
+  }
   while (s > path && s[-1] == '/') s--;
   if (s == path) { char *r = sp_str_alloc(1); r[0] = '/'; r[1] = 0; return r; }
 #if defined(_WIN32)

@@ -907,6 +907,12 @@ module Net
       request(Delete.new(path, headers))
     end
 
+    def send_request(name, path, body = nil, headers = nil)
+      req = HTTPGenericRequest.new(name, !body.nil?, name != "HEAD", path, headers)
+      req.body = body unless body.nil?
+      request(req)
+    end
+
     # With a block, the response reaches it before its body is read.
     def request_get(path, headers = nil, &blk)
       request(Get.new(path, headers), &blk)

@@ -5881,10 +5881,9 @@ static int emit_and_or_begin_expr(Compiler *c, int id, Buf *b, const NodeTable *
     /* begin/rescue as an rvalue: hoist the block into g_pre so the temp
        is assigned before the surrounding expression reads it. */
     TyKind rt = repr_of(c, id).as_ty;
-    /* a void/nil-typed begin (its tail is a writer call or another
-       value-less statement) has no C storage type; hold the result boxed
-       and let the value-less tail leave it nil. */
-    if (rt == TY_VOID || rt == TY_NIL || (c->n_cext_extensions && rt == TY_UNKNOWN)) rt = TY_POLY;
+    /* A nil or void begin also uses the boxed result slot. A tail that
+       leaves without a value keeps the slot's initial nil. */
+    if (rt == TY_NIL || rt == TY_VOID) rt = TY_POLY;
     int res_o = cond_res_oint(c, id, rt);
     int t = ++g_tmp;
     char rv[32]; snprintf(rv, sizeof rv, "_t%d", t);

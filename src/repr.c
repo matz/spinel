@@ -1326,6 +1326,15 @@ Repr repr_of(const Compiler *c, int node) {
   if (!comp_node_in(c, node)) return r;
   r.ty = comp_ntype_settled(c, node);
   r.as_ty = comp_ntype(c, node);
+  /* A begin with no inferred result still carries a boxed Ruby value.
+     An enclosing statement sequence exposes the same representation. */
+  if (r.as_ty == TY_UNKNOWN) {
+    int value = node;
+    NodeKind kind = nt_kind(c->nt, node);
+    if (kind == NK_ParenthesesNode || kind == NK_StatementsNode)
+      vp_one(c->nt, node, VPS_NONE | VP_PARENS_ONLY, &value);
+    if (nt_kind(c->nt, value) == NK_BeginNode) r.as_ty = TY_POLY;
+  }
   /* the layout first, from the type it is stored as, then the flags:
      GCC 13's store merging at -O2 drops the nil_cold store when
      repr_layout's bitfield stores come after it; setting the layout first

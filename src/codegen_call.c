@@ -25619,8 +25619,11 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
      that never runs it builds -- refused, it also cost a boxed receiver's
      arm around it (`n.times { send(:undo, nil) }` on an Integer n raised
      NoMethodError for times). */
+  /* (an attribute a class declares is the program's too: a send from a
+     base class's method reaches a subclass's attr_reader) */
+  int attr_named = name && comp_any_class_accessor(c, name);
   if ((recv < 0 || nt_kind(nt, recv) == NK_SelfNode) && g_gate_raise && !nt_vcall(nt, id) &&
-      nt_ref(nt, id, "block") < 0 && !an_user_defines_method(c, name) &&
+      nt_ref(nt, id, "block") < 0 && !an_user_defines_method(c, name) && !attr_named &&
       !builtin_object_method_known(name) &&
       (call_rescued_as_missing(nt, id) || nt_str(nt, id, "send_blind") || nt_str(nt, id, "vis_enforce"))) {
     int plain = !nt_argv_has(nt, argv, argc, NT_ARG_SPLAT | NT_ARG_KEYWORDS | NT_ARG_BLOCK);

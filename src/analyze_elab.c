@@ -150,7 +150,7 @@ struct LoadRecord {
      in while call_target asks its questions, with the parents it climbed and
      the run points made of it (lr_run_points) */
   struct LrPlan { LrStmt *st; int nst, cst, *at; unsigned char *bits; int n, ncap, runs_of, nrun, *rend, *rinst, *rentry; struct LrExt *ext; int *extix, next, cext, cextix; } plan;
-  int *up;                   /* [n] the parent each node's point was climbed from */
+  int *up, nup;              /* [nup] the parent each node's point was climbed from (lr_par) */
   int *plan_par, plan_depth;
   unsigned char plan_made;
   /* lr_call_point's last answer, under the state it was asked in */
@@ -924,10 +924,27 @@ static void elab_points_walk(Compiler *c, int reg) {
   }
   if (was) lr_check_map(c, was, wbits);
   free(was); free(wbits);
-  free(r->up); r->up = up;
+  free(r->up); r->up = up; r->nup = n;
   free(live); free(stack); free(w.entered);
   r->builds++;
   if (sp_timing_on()) r->ms += sp_timing_now() - t0;
+}
+
+/* The parents the record's points were climbed from: the call plan's
+   frame's inside it (elab_plan_enter), else the last build's, which covers
+   every node the record holds: one a pass or the registration's walk made
+   since that build has the tree's parent. With no build, the tree's where
+   tree is set, else none. */
+static const int *lr_par(Compiler *c, int tree) {
+  LoadRecord *r = c->lrec;
+  if (r->plan_depth) return r->plan_par;
+  if (r->up && r->nup < r->n) {
+    const int *par = comp_parent_map(c);
+    if (!(r->up = realloc(r->up, sizeof(int) * (size_t)r->n))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    for (int id = r->nup; id < r->n; id++) r->up[id] = par[id];
+    r->nup = r->n;
+  }
+  return r->up ? r->up : tree ? comp_parent_map(c) : NULL;
 }
 
 /* The record as of the table's current nodes: rebuilt when they changed,
@@ -1021,7 +1038,7 @@ int elab_plan_enter(Compiler *c, int id) {
     r->plan.at = lr_dup(r->at, sizeof(int) * (size_t)r->ncap);
     r->plan.bits = lr_dup(r->bits, (size_t)r->ncap);
     r->plan.n = r->n; r->plan.ncap = r->ncap; r->plan.runs_of = -1;
-    r->plan_par = lr_dup(r->up, sizeof(int) * (size_t)r->n);
+    r->plan_par = lr_dup(lr_par(c, 0), sizeof(int) * (size_t)r->n);
     r->plan_par = realloc(r->plan_par, sizeof(int) * (size_t)r->ncap);
     r->plan_made = 1;
   }
@@ -2005,7 +2022,7 @@ static void lr_method(ElabRec *x, int cls, int sg, const char *name, int node, L
      makes no entry of the call plan cannot answer next to it, the entries the plan answers as a body's versions
      (lr_body_def_version): any other a body makes stays unplaced, as lr_body_defs records it, its answer from the
      start) */
-  const int *par = x->body ? (x->r->plan_depth ? x->r->plan_par : x->r->up) : NULL;
+  const int *par = x->body ? lr_par(x->c, 0) : NULL;
   int body = (kind == LR_DEF || kind == LR_VIS) && x->body && lr_body_def_version(x->c, par, x->r->n, node, sg) ? x->body : 0;
   if (body && lr_chain_open(x->c, cls)) return;   /* (lr_body_versions) */
   int sc = kind == LR_DEF || kind == LR_DEFINE_METHOD ? lr_def_scope(x->r, node) : 0;
@@ -3341,7 +3358,7 @@ static int lr_body_name_free(Compiler *c, const int *par, int n, const char *nam
    (lr_check_held). */
 static int lr_body_holds(Compiler *c, int def) {
   LoadRecord *r = c->lrec;
-  const int *par = r->plan_depth ? r->plan_par : r->up ? r->up : comp_parent_map(c);   /* (the walk's: the tree's) */
+  const int *par = lr_par(c, 1);   /* (the walk's: the tree's) */
   int cls, sg;
   return def < r->n && r->at[def] >= 0 && (r->bits[def] & LR_LATE) && lr_body_around(c->nt, par, r->n, def) >= 0 &&
          lr_body_target(c, par, r->n, def, 1, &cls, &sg) && lr_body_def_version(c, par, r->n, def, sg);
@@ -3362,7 +3379,7 @@ static int lr_body_held(Compiler *c, int def) {
 int elab_body_word(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   LoadRecord *r = c->lrec;
-  const int *par = !r || !r->recorded ? NULL : r->plan_depth ? r->plan_par : r->up ? r->up : comp_parent_map(c);
+  const int *par = !r || !r->recorded ? NULL : lr_par(c, 1);
   int cls = LR_UNKNOWN_CLASS, sg, an = 0, ad = 0;
   if (!par || id >= r->n || !lr_body_word(nt, id) || lr_body_around(nt, par, r->n, id) < 0 ||
       !lr_body_target(c, par, r->n, id, 0, &cls, &sg) || cls < 0)
@@ -4227,7 +4244,7 @@ static void lr_block_cond_dms(Compiler *c);
 static void lr_body_defs(Compiler *c, int ci, int body, int fnode) {
   const NodeTable *nt = c->nt;
   LoadRecord *r = c->lrec;
-  const int *par = r->plan_depth ? r->plan_par : r->up;
+  const int *par = lr_par(c, 0);
   ElabRec x = { c, r, .unplaced = 1, .body = lr_body_around(nt, par, r->n, fnode) };
   if (x.body < 0) x.body = 0;
   unsigned char vs = BVIS_PUBLIC;
@@ -4349,7 +4366,7 @@ static void lr_body_hook(Compiler *c, const int *par, int def, int cls, int sg) 
 static void lr_body_versions(Compiler *c) {
   const NodeTable *nt = c->nt;
   LoadRecord *r = c->lrec;
-  const int *par = r->plan_depth ? r->plan_par : r->up;
+  const int *par = lr_par(c, 0);
   int nh = 0, *hooked = malloc(sizeof(int) * (size_t)(2 * nt->count + 1));
   if (!hooked) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   for (int id = 0; id < r->n; id++) {
@@ -4389,7 +4406,7 @@ static void lr_check_held(Compiler *c) {
     /* (the history it writes, by its receiver or its frame (lr_body_target): a def's name's, a word's first
        literal name's; a word with only defs writes none of its own) */
     int def = r->hist[i].b, found = 0, now, cls, sg;
-    const int *par = r->plan_depth ? r->plan_par : r->up ? r->up : comp_parent_map(c);
+    const int *par = lr_par(c, 1);
     const char *nm = nt_kind(nt, def) == NK_DefNode ? nt_str(nt, def, "name") : lr_word_name(nt, def, 0);
     const LrHist *h = nm && lr_body_target(c, par, r->n, def, 0, &cls, &sg) ? lr_hist(r, cls, sg, nm, 0) : NULL;
     for (int j = 0; h && j < h->n; j++) found |= h->v[j].node == def && h->v[j].body;
@@ -4439,7 +4456,7 @@ static int lr_hist_has_node(LoadRecord *r, int cls, const char *name, int node) 
 static void lr_unplaced_words(Compiler *c) {
   const NodeTable *nt = c->nt;
   LoadRecord *r = c->lrec;
-  const int *par = r->plan_depth ? r->plan_par : r->up;
+  const int *par = lr_par(c, 0);
   ElabRec x = { c, r, .unplaced = LR_UNPLACED_LATER };
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
     const char *nm = id < r->n ? nt_str(nt, id, "name") : NULL;
@@ -5266,7 +5283,7 @@ void elab_mark_versions(Compiler *c) {
 const int *elab_node_parents(Compiler *c, int *n) {
   LoadRecord *r = elab_fresh(c);
   *n = r->n;
-  return r->plan_depth ? r->plan_par : r->up;
+  return lr_par(c, 0);
 }
 
 /* The def node whose body holds node, with no class body or other def
@@ -11176,7 +11193,7 @@ static int lr_hook_body_def(Compiler *c, int cls, const char *hook) {
   int nd = 0;
   const LrSite *d = lr_name_range(r->defs, r->ndefs, sizeof *r->defs, hook, &nd);
   if (!nd) return 0;   /* (before the parents: the walk's map is built anew where the walk has none) */
-  const int *par = r->plan_depth ? r->plan_par : r->up ? r->up : comp_parent_map(c);
+  const int *par = lr_par(c, 1);
   for (int i = 0, tc, sg; i < nd; i++) {
     /* (the target first: a def whose class the walk has not reached yet is
        not asked, as its first answer, lr_body_held's, is kept) */

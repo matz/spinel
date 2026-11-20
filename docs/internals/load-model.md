@@ -662,6 +662,12 @@ each ask, which makes the pass quadratic in the program. Such a pass
 makes its asks before its first edit or, for the method a call reaches,
 asks `call_target`, which reads the call plan's frame.
 
+The parents a rebuild climbed each node from are the record's own, and
+its readers take them from `lr_par`. A node added since the build, by a
+pass such as the desugaring of an included Comparable or by the
+registration's walk, takes the tree's parent there, so a climb from any
+node the record holds stays within the map.
+
 The call plan's frame is the map `call_target` reads. The first time
 `call_target` binds a call to one of a method's versions, `elab_plan_enter`
 copies the map and its parent map, and every later ask reads that copy

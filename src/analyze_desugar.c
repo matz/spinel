@@ -10405,14 +10405,14 @@ int desugar_call_op_write(Compiler *c) {
       for (int k = 0; k < c->nclasses && !boxed_native; k++)
         if (c->classes[k].is_native_class && comp_native_method_find(c, k, attr, 0, 0) >= 0 &&
             comp_native_method_find(c, k, wname, 1, 0) >= 0) boxed_native = 1;
-    if (!has_def_writer && !boxed_native) {
+    if (!has_def_writer) {
       /* defined?(w.n += 1) is "assignment": as the writer call it read "method".
          desugar_defined_method_call has looked through any parentheses
          around it, so the defined? names it as its value. */
       int under_defined = 0;
       NT_FOREACH_KIND(nt, NK_DefinedNode, d) if (nt_ref(nt, d, "value") == id) under_defined = 1;
       if (under_defined) continue;
-      if (!is_pow_op(op)) {
+      if (!boxed_native && !is_pow_op(op)) {
         if (!parent) parent = an_parent_map(nt);
         if (!parent) continue;
         if (cow_statement_dropped(c, parent, id)) continue;

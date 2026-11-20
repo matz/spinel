@@ -133,6 +133,9 @@ The destination's boxed representation takes precedence over a native
 String source for both `next` and normal block completion. Byte comparisons
 and private conversion buffers can borrow its payload through
 `sp_rbval_string_bytes`.
+An inline Array or Hash block result supplies its declared kind to empty
+`next` literals. Its result slot stays rooted while `ensure` runs before
+the caller takes the value.
 Boxed Array pushes hold each argument across evaluation of the next.
 An Array constructor's block result uses its element storage representation.
 A String result stays in a rooted handle slot through `ensure`, then the

@@ -27222,6 +27222,19 @@ static int cb_body_defs(const NodeTable *nt, int body, const char *nm) {
    (activesupport's DeprecationProxy delegates instance_methods) is no
    answer of this class's. Without a class name (a Struct.new block), any
    class method or singleton-class def of the name counts. */
+/* Module's own methods: a class reaches them on Module (or Class) before
+   Object, Kernel and BasicObject, so a def of the name in a reopening of
+   those three (activesupport's Kernel#class_eval, which takes a block) is
+   not what a class body's bare call runs. Left bare for it, the call was
+   taken for a declaration and its block ran nothing: a `class_eval do @x =
+   1 end` in a class body set nothing. */
+static int cb_module_own_name(const char *nm) {
+  static const char *const own[] = { "class_eval", "class_exec", "module_eval", "module_exec",
+    "name", "ancestors", "superclass", "instance_methods", "public_instance_methods",
+    "private_instance_methods", "protected_instance_methods", "instance_method", "method_defined?",
+    "public_method_defined?", "private_method_defined?", "include?", "included_modules", NULL };
+  return nm && (str_in(nm, own) || is_method_defined_query(nm));
+}
 static int cb_program_defines(const NodeTable *nt, const char *nm, const char *cname) {
   if (!cname) {
     NT_FOREACH_KIND(nt, NK_DefNode, d) {
@@ -27234,13 +27247,14 @@ static int cb_program_defines(const NodeTable *nt, const char *nm, const char *c
       if (cb_body_defs(nt, nt_ref(nt, sc, "body"), nm)) return 1;
   }
   static const char *const roots[] = { "Module", "Class", "Object", "Kernel", "BasicObject", NULL };
+  int nroots = cb_module_own_name(nm) ? 2 : 5;   /* (Module's own: a def below Module is not reached) */
   int ndk = 0; const NodeKind *dk = class_def_kinds(&ndk);
   for (int dh = 0; dh < ndk; dh++) {
     NT_FOREACH_KIND(nt, dk[dh], cn) {
       const char *cnm = class_def_opens_frame(nt, cn) ? class_def_name(nt, cn) : NULL;
       if (!cnm) continue;
       int root = 0;
-      for (int r = 0; roots[r] && !root; r++) root = sp_streq(cnm, roots[r]);
+      for (int r = 0; r < nroots && !root; r++) root = sp_streq(cnm, roots[r]);
       if (root && cb_body_defs(nt, class_def_body(nt, cn), nm)) return 1;
     }
   }

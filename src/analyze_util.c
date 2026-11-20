@@ -7135,10 +7135,13 @@ int respond_to_cells_shape(const NodeTable *nt, int id) {
 /* See analyze_internal.h. */
 int list_cells_shape(const NodeTable *nt, int id) {
   int ac = 0, recv = nt_kind(nt, id) == NK_CallNode ? nt_ref(nt, id, "receiver") : -1;
-  if (recv < 0 || !is_singleton_method_list(nt_str(nt, id, "name")) || nt_ref(nt, id, "block") >= 0) return 0;
+  const char *nm = recv >= 0 ? nt_str(nt, id, "name") : NULL;
+  int side = !nm ? 0 : is_singleton_method_list(nm) ? 1 : is_instance_method_list(nm) ? 2 : 0;
+  if (!side || nt_ref(nt, id, "block") >= 0) return 0;
   const int *av = call_args(nt, id, &ac);
   NodeKind rk = nt_kind(nt, recv), ak = ac == 1 ? nt_kind(nt, av[0]) : NK_TrueNode;
-  return ac <= 1 && (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) && (ak == NK_TrueNode || ak == NK_FalseNode);
+  /* (an instance-method list folds only in its `(false)` form, emit_class_own_instance_methods) */
+  return ac <= 1 && (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) && (ak == NK_FalseNode || (side == 1 && ak == NK_TrueNode)) ? side : 0;
 }
 /* See analyze_internal.h. */
 int capture_cells_shape(const NodeTable *nt, int id) {
@@ -7151,7 +7154,18 @@ int capture_cells_shape(const NodeTable *nt, int id) {
          (rk == NK_SelfNode || rk == NK_ConstantReadNode || rk == NK_ConstantPathNode);
 }
 /* See analyze_internal.h. */
-int respond_to_missing_defined(Compiler *c) { return !an_name_binder_free(c, "respond_to_missing?"); }
+int respond_to_missing_defined(Compiler *c) {
+  /* (asked once for each state of the tree and the tables: a presence reader asks it for each class it may hold) */
+  const NodeTable *nt = c->nt;
+  unsigned tgen = comp_table_gen, shape = comp_class_shape_gen();
+  if (!c->rtm_memo.ans || c->rtm_memo.count != nt->count || c->rtm_memo.version != nt->version || c->rtm_memo.edits != nt->edits ||
+      c->rtm_memo.tgen != tgen || c->rtm_memo.shape != shape || c->rtm_memo.ncls != c->nclasses) {
+    int ans = 1 + !an_name_binder_free(c, "respond_to_missing?");
+    c->rtm_memo.ans = ans; c->rtm_memo.count = nt->count; c->rtm_memo.ncls = c->nclasses; c->rtm_memo.version = nt->version;
+    c->rtm_memo.tgen = tgen; c->rtm_memo.shape = shape; c->rtm_memo.edits = nt->edits;
+  }
+  return c->rtm_memo.ans == 2;
+}
 /* Do def's parameters hold `...` (a ForwardingParameterNode as keyword_rest)? */
 int def_takes_forwarding(const NodeTable *nt, int def) {
   int pn = def >= 0 && nt_kind(nt, def) == NK_DefNode ? nt_ref(nt, def, "parameters") : -1;

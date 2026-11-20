@@ -1180,6 +1180,8 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
         return 1;
       }
       if (recv >= 0) {
+        CplanPresList cvl;
+        int cv = -1;
         if (0) { }
         /* a public top-level def is Object's public method: every value a boxed receiver may hold
            answers it (no class of the program has one of the name) */
@@ -1193,7 +1195,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
           buf_puts(b, "), 1))");
           return 1;
         }
-        else if ((rt == TY_CLASS && class_value_responds(c, id, 0, qm, NULL)) ||
+        else if ((rt == TY_CLASS && class_value_arms(c, id, qm, &cvl, &cv)) ||
                  ((rt == TY_POLY || rt == TY_UNKNOWN) && !any_class_responds(c, qm))) {
           /* a nil the poly value holds answers by the program's NilClass
              (Object, Kernel) where it defines, undefines or hides the name */
@@ -1204,7 +1206,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
           int ia_once = rt != TY_CLASS && nil_prog && nil_ans == 2 && argc >= 2 &&
                         iak != NK_TrueNode && iak != NK_FalseNode;
           int nil_arm = rt != TY_CLASS && nil_prog && (nil_ans != 2 || ia_once);
-          int cls_arm = class_value_responds(c, id, 0, qm, NULL);
+          int cls_arm = class_value_arms(c, id, qm, &cvl, &cv);
           int tv = cls_arm || nil_arm ? ++g_tmp : 0;
           if (!tv && argc == 1 && (rt == TY_POLY || rt == TY_UNKNOWN) &&
               emit_boxed_responds_builtin_absent(c, recv, qm, b)) return 1;
@@ -1222,7 +1224,8 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
           buf_puts(b, ", \"");
           emit_c_escaped(b, qm);
           buf_puts(b, "\")");
-          if (tv) { if (cls_arm) class_value_responds(c, id, tv, qm, b); buf_puts(b, "; })"); }
+          if (tv) { if (cls_arm) class_value_responds(c, &cvl, tv, b); buf_puts(b, "; })"); }
+          if (cls_arm) cplan_presence_list_free(&cvl);
           return 1;
         }
         else if ((rt == TY_POLY || rt == TY_UNKNOWN) && any_class_responds(c, qm)) {
@@ -1364,7 +1367,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
           emit_c_escaped(b, qm);
           buf_puts(b, "\")");
           emit_io_reopen_responds(c, id, tv, qm, argc >= 2 && nt_kind(nt, argv[1]) == NK_TrueNode, b);
-          class_value_responds(c, id, tv, qm, b);
+          if (class_value_arms(c, id, qm, &cvl, &cv)) { class_value_responds(c, &cvl, tv, b); cplan_presence_list_free(&cvl); }
           buf_puts(b, "; })");
           cplan_presence_list_free(&pl);
           return 1;

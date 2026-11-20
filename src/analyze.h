@@ -555,8 +555,9 @@ int elab_method_late(Compiler *c, const char *name);
    method_defined?, defined?, a list of methods: not a Method's maker) name
    `name` among the methods of side sg (1 the class side), or one name any
    (lr_refl_take)? A reader of instance methods counts for the class side
-   too in a program with an extend (lr_singleton_mixed). A respond_to?
-   whose answer the version cells hold for a class method (sg) does not. */
+   too in a program with an extend (lr_singleton_mixed), but one the plan's
+   presence answers (refl_fixed). A respond_to? whose answer the version
+   cells hold for a class method (sg) does not. */
 int elab_method_reflected(Compiler *c, const char *name, int sg);
 /* ...the same for a method body's version of `name` on side sg, whose
    calls take the entry before the body runs (lr_late_make): a

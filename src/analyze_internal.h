@@ -618,8 +618,10 @@ int respond_to_cells_shape(const NodeTable *nt, int id);
    constant, self or no receiver: a Method's maker that takes the entry a
    call of the name takes (lr_refl_take)? */
 int capture_cells_shape(const NodeTable *nt, int id);
-/* Is call id a `C.singleton_methods` (or `(true)`, `(false)`) on a constant: a class's class-side
-   method list whose names the version cells may answer (cplan_list_cells; lr_refl_take asks it)? */
+/* Is call id a method list on a constant whose names the version cells may answer (cplan_list_cells;
+   lr_refl_take asks it): 1 for `C.singleton_methods` (or `(true)`, `(false)`), a class's class-side list;
+   2 for `C.instance_methods(false)` and its public_, private_ and protected_ forms, its own instance
+   methods'; 0 for any other */
 int list_cells_shape(const NodeTable *nt, int id);
 /* May a respond_to? answer for a name other than by the methods: the program
    defines respond_to_missing?. The cells answer no respond_to? then. */

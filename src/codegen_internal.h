@@ -512,7 +512,6 @@ int builtin_count_refused_boxed(Compiler *c, int id);
 int io_library_count_refused(Compiler *c, int id, const BuiltinOp *op, const char *name);
 int builtin_object_method_known(const char *m);
 int name_is_enumerable_module_method(const char *m);
-int class_object_answers_builtin(const char *qm, int is_module);
 int emit_poly_object_methods_reflection(Compiler *c, int id, const char *name, int recv, int argc,
                                         const int *argv, Buf *b);
 int emit_object_methods_reflection(Compiler *c, int id, int recv, int cid, const char *name, int all,

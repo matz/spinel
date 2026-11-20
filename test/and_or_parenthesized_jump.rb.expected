@@ -1,0 +1,18 @@
+"got 1"
+"none"
+6
+nil
+:early
+:late
+[10, :skip, 30]
+[2, "x"]
+:some
+:none
+true
+"nil"
+"false"
+:big
+1
+[false, 5]
+["false", :two, "false"]
+["one", "false"]

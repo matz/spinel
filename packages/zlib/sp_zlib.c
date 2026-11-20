@@ -16,9 +16,10 @@
    Inflate is complete: stored, fixed-Huffman and dynamic-Huffman blocks, with
    the zlib and gzip wrappers and their checksums. Deflate is LZ77 with a hash
    chain emitting fixed-Huffman blocks -- a valid stream any inflater reads,
-   at a ratio below zlib's own, which builds dynamic tables per block. Both
-   directions are one-shot: a whole input in, a whole output back. The Ruby
-   side accumulates for the incremental spellings.
+   at a ratio below zlib's own, which builds dynamic tables per block.
+   Inflate is one-shot: a whole input in, a whole output back. Deflate also
+   writes a stream in pieces, a block per flush, with no state kept here:
+   the Ruby side writes the wrapper and keeps the checksum.
 
    Binary safe throughout: input length comes from the string header
    (sp_str_byte_len), output is a length-set BINARY string on the GC heap.
@@ -1018,6 +1019,29 @@ static SP_INLINE void sp_zlib_deflate_body(sp_zlib_bw *w, const unsigned char *p
   free(prev);
 }
 
+/* `n` bytes at `p` as one fixed-Huffman block, BFINAL set when `final`.
+   The bits of the block's end wait in `w`. */
+static void sp_zlib_deflate_block_into(sp_zlib_bw *w, const unsigned char *p, size_t n, int level, int final) {
+  sp_zlib_bw_put(w, final ? 1 : 0, 1);   /* BFINAL */
+  sp_zlib_bw_put(w, 1, 2);               /* BTYPE 01: fixed Huffman */
+  /* two calls, two inlined bodies: the mask is a constant in each */
+  if (n <= SP_Z_RING) sp_zlib_deflate_body(w, p, n, level, ~(size_t)0);
+  else                sp_zlib_deflate_body(w, p, n, level, SP_Z_RING - 1);
+}
+
+/* The output as a length-set BINARY string on the GC heap, its buffer
+   freed; NULL, with the error message set, when it could not be grown. */
+static const char *sp_zlib_out_str(sp_zlib_out *o) {
+  if (o->err) { free(o->p); sp_zlib_err = "out of memory"; return NULL; }
+  char *r = sp_str_alloc_raw(o->len + 1);
+  if (o->len) memcpy(r, o->p, o->len);
+  r[o->len] = 0;
+  sp_str_set_len(r, o->len);
+  sp_str_mark_binary(r);
+  free(o->p);
+  return r;
+}
+
 /* The whole of `src` as one fixed-Huffman block, in the wrapper that
    `window_bits` names: a zlib stream, a gzip member, or raw deflate. NULL,
    with the error message set, when the output cannot be allocated. */
@@ -1043,11 +1067,7 @@ const char *sp_zlib_deflate(const char *src, sp_int level, sp_int window_bits) {
 
   sp_zlib_bw w;
   w.o = &o; w.buf = 0; w.cnt = 0;
-  sp_zlib_bw_put(&w, 1, 1);   /* BFINAL: one block for the whole input */
-  sp_zlib_bw_put(&w, 1, 2);   /* BTYPE 01: fixed Huffman */
-  /* two calls, two inlined bodies: the mask is a constant in each */
-  if (n <= SP_Z_RING) sp_zlib_deflate_body(&w, p, n, (int)level, ~(size_t)0);
-  else                sp_zlib_deflate_body(&w, p, n, (int)level, SP_Z_RING - 1);
+  sp_zlib_deflate_block_into(&w, p, n, (int)level, 1);   /* one block for the whole input */
   sp_zlib_bw_flush(&w);
 
   if (kind == SP_Z_ZLIB) {
@@ -1070,15 +1090,32 @@ const char *sp_zlib_deflate(const char *src, sp_int level, sp_int window_bits) {
     sp_zlib_out_byte(&o, (unsigned char)(sz >> 24));
   }
 
-  if (o.err) { free(o.p); sp_zlib_err = "out of memory"; return NULL; }
+  return sp_zlib_out_str(&o);
+}
 
-  char *r = sp_str_alloc_raw(o.len + 1);
-  if (o.len) memcpy(r, o.p, o.len);
-  r[o.len] = 0;
-  sp_str_set_len(r, o.len);
-  sp_str_mark_binary(r);
-  free(o.p);
-  return r;
+/* `src` as one raw fixed-Huffman block, for a stream written in pieces
+   (Zlib::Deflate#deflate with a flush): no wrapper, which the Ruby side
+   writes around the blocks with the checksum it keeps. The last block has
+   BFINAL set. Any other ends on a byte, after the empty stored block that
+   zlib's sync flush writes (00 00 ff ff), so an inflater has all of it at
+   once. A block's matches stay inside it: each starts with an empty
+   window, as zlib's full flush does. */
+const char *sp_zlib_deflate_block(const char *src, sp_int level, sp_int final) {SP_GC_ROOT_STR(src);
+  sp_zlib_err = NULL;
+  size_t n = src ? sp_str_byte_len(src) : 0;
+  sp_zlib_out o;
+  o.p = NULL; o.len = 0; o.cap = 0; o.err = 0;
+  sp_zlib_bw w;
+  w.o = &o; w.buf = 0; w.cnt = 0;
+  if (n > 0 || final) sp_zlib_deflate_block_into(&w, (const unsigned char *)src, n, (int)level, final != 0);
+  if (!final) {
+    sp_zlib_bw_put(&w, 0, 3);   /* BFINAL 0, BTYPE 00: stored */
+    sp_zlib_bw_flush(&w);       /* a stored block starts on a byte */
+    static const unsigned char sync[4] = { 0x00, 0x00, 0xff, 0xff };   /* LEN 0, NLEN */
+    sp_zlib_out_write(&o, sync, 4);
+  }
+  else sp_zlib_bw_flush(&w);
+  return sp_zlib_out_str(&o);
 }
 
 /* ------------------------------------------------------------- checksum API */

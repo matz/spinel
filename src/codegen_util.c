@@ -3863,16 +3863,14 @@ int sb_shim_args_first(Compiler *c, int id, Buf *pre, int indent) {
 int strbuf_marked_yields_handle(Compiler *c, int v) {
   const NodeTable *nt = c->nt;
   if (nt_kind(nt, v) != NK_CallNode) return 0;
+  if (repr_call_returns_handle(c, v)) return 1;
   int r = nt_ref(nt, v, "receiver");
   TyKind rt = r >= 0 ? comp_ntype(c, r) : TY_UNKNOWN;
-  /* A fresh object-method result is bytes to wrap, not a reader's handle. */
-  if (ty_is_object(rt) && share_value_fresh(c, v, 0)) return 0;
-  /* A yielding method is inlined into the demanded handle slot. Other
-     method calls keep their byte ABI and need a proved return pickup;
-     a field reader has its own handle arm. */
+  /* A yielding call can inline into the requested handle slot. A field
+     reader can take its handle from the slot it reads. */
   if (ty_is_object(rt)) {
     int mi = cplan_user(c, v).mi;
-    if (mi >= 0) return c->scopes[mi].yields || an_memo_reader_ivar(c, mi) || repr_call_returns_handle(c, v);
+    if (mi >= 0) return c->scopes[mi].yields || an_memo_reader_ivar(c, mi);
   }
   if (rt != TY_STRING && rt != TY_STRBUF) return 1;
   const char *nm = nt_str(nt, v, "name");

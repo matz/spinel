@@ -32,10 +32,6 @@ typedef struct {
 void share_facts_build(Compiler *c);
 void share_facts_free(Compiler *c);
 
-/* Is multiple write n a plain one (`a, b = x, y`): an Array literal value
-   with no splat, and no rest or post target -- each target takes its own
-   value? */
-int share_masgn_plain(const NodeTable *nt, int n);
 /* Does call n store its literal block's values into a container it
    answers or changes (an Array's or a Hash's map, map!, zip with a block,
    a fill with a block; an Array.new or Hash.new block), reaching no method

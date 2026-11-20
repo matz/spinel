@@ -576,8 +576,6 @@ static int sh_assign_call(const Compiler *c, int n) {
 
 static int sh_uplus_copies(Compiler *c, int n);
 
-/* `a, b = x, y`: a multiple write of an Array literal with no splat into
-   targets with no rest; each target takes its own value. */
 int share_call_stores_block(Compiler *c, int n) {
   const NodeTable *nt = c->nt;
   int blk = nt_ref(nt, n, "block");
@@ -597,14 +595,6 @@ int share_call_stores_block(Compiler *c, int n) {
     else if (s == BSH_ITER_MAP || s == BSH_MERGE) any = 1;
   }
   return any && (keep || !an_node_dropped(c, n));
-}
-int share_masgn_plain(const NodeTable *nt, int n) {
-  int value = nt_ref(nt, n, "value");
-  if (value < 0 || nt_kind(nt, value) != NK_ArrayNode || nt_ref(nt, n, "rest") >= 0) return 0;
-  int en = 0; const int *el = nt_arr(nt, value, "elements", &en);
-  for (int i = 0; i < en; i++) if (nt_kind(nt, el[i]) == NK_SplatNode) return 0;
-  int nr = 0; nt_arr(nt, n, "rights", &nr);
-  return nr == 0;
 }
 
 static void sh_free(ShareFacts *F) {

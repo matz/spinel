@@ -106,15 +106,6 @@ int share_frozen_string(Compiler *c, int n);
 /* Does n supply its handle or a box holding that handle? */
 int share_node_carries_handle(const Compiler *c, int n);
 
-/* Are the targets the plan lists for call u all it can reach: every value
-   its receiver can be answers the name by a method of the program's own,
-   and it is no exception's builtin message or to_s? */
-int share_plan_targets_cover(Compiler *c, int u);
-/* Is v a call every target of which answers a String literal on every
-   path, whose bytes are the literal's own: a handle made over them, or a
-   box of them, is the literal's handle, and
-   its identity is its bytes' pointer, as a frozen String's is? */
-int share_plan_call_answers_literal(Compiler *c, int v);
 
 
 

@@ -43,10 +43,12 @@ A boxed Proc call preserves the distinction between a positional trailing
 Hash and explicit keywords. An empty keyword splat still affects whether
 the Proc unpacks a positional Array.
 
-String slots hold object handles. The remaining String plan, sharing facts
-and byte routes serve builtin producers still being migrated under #11391.
+String slots hold object handles. Sharing facts and byte routes serve
+builtin producers still being migrated under #11391.
 Boxing a String preserves the object emitted by its producer. A dynamic
 send uses that same path for the String returned by its selected method.
+String unary plus checks the returned handle's frozen state at runtime
+and copies the String only when it is frozen.
 Hash transformation uses the block's ordinary result when storing
 a boxed value, including a result returned through `next`.
 A nullable Integer or Float result keeps its nil through boxing.

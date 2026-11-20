@@ -1503,9 +1503,6 @@ int share_frozen_literal_alone(Compiler *c, int n) {
 static int sh_uplus_copies(Compiler *c, int n) {
   const NodeTable *nt = c->nt;
   int u = nt_paren_single(nt, n);
-  /* (a call every target of which answers a String literal, frozen:
-     share_plan_call_answers_literal) */
-  if (share_plan_call_answers_literal(c, u)) return 1;
   if (u >= 0 && nt_kind(nt, u) == NK_CallNode && is_freeze_name(nt_str(nt, u, "name")) && call_plain_argc(c, u) == 0 &&
       nt_ref(nt, u, "receiver") >= 0 && nt_ref(nt, u, "block") < 0 && !sh_has_targets(c, u))
     return 1;

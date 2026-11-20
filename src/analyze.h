@@ -1221,10 +1221,6 @@ int an_value_top(Compiler *c, int n);
 int an_re_has_captures(const char *src);
 /* Whether every String result is fresh, or comes from one parameter. */
 int scope_ret_fresh(Compiler *c, int mi);
-/* Does method mi answer a String literal on every path (no `return`)? A
-   frozen literal keeps one identity, the handle its site has,
-   which a handle made over its bytes finds. */
-int scope_ret_str_literal(Compiler *c, int mi);
 int scope_ret_param(Compiler *c, int mi);
 /* A String `||` or `&&` over a String left operand: a tail whose operands
    are its arms (an_tail_is_shared_handle, emit_tail_value). */

@@ -1,0 +1,40 @@
+0
+true
+false
+true
+false
+true
+16
+true
+false
+0
+true
+0
+[:recorded, :TCP, :NODELAY, true]
+0
+[:recorded, "SOCKET", "KEEPALIVE", false]
+true
+false
+0
+[:recorded, "TCP", "NODELAY", false]
+false
+0
+[:recorded, :TCP, :NODELAY, "\x01\x00\x00\x00"]
+true
+0
+[:recorded, :TCP, :NODELAY, "\x00\x00\x00\x00"]
+false
+[SocketError, "unknown protocol level: FOO"]
+[SocketError, "unknown protocol level: tcp"]
+[SocketError, "unknown TCP level option name: FOO"]
+[SocketError, "unknown socket level option name: NODELAY"]
+[SocketError, "unknown UDP level option name: NODELAY"]
+[TypeError, "no implicit conversion of Symbol into Integer"]
+[SocketError, "unknown protocol level: TCP"]
+[SocketError, "unknown TCP level option name: NODELAY"]
+[SocketError, "unknown protocol level: SOCKET"]
+[SocketError, "unknown TCP level option name: NODELAY"]
+[TypeError, "no implicit conversion of true into Integer"]
+[TypeError, "no implicit conversion from nil to integer"]
+[TypeError, "no implicit conversion of true into Integer"]
+[:recorded, :TCP, true, 1]

@@ -11445,7 +11445,18 @@ void emit_case_branch_value(Compiler *c, int stmts, TyKind rt, int cr, Buf *b) {
      temp, which is an integer reinterpreted as a pointer */
   if (n > 0 && rt == TY_BIGINT && comp_ntype(c, bb[n - 1]) != TY_BIGINT)
     emit_bigint_operand_ext(c, bb[n - 1], &val);
-  else if (n > 0) { if (rt == TY_POLY) emit_boxed(c, bb[n - 1], &val); else if (res_o) emit_oint_expr(c, bb[n - 1], rt, &val); else emit_expr(c, bb[n - 1], &val); }
+  else if (n > 0) {
+    int tail = bb[n - 1];
+    if (rt == TY_POLY) emit_boxed(c, tail, &val);
+    else if (res_o) emit_oint_expr(c, tail, rt, &val);
+    else if (lt == TY_POLY) {
+      Buf boxed = {0};
+      emit_boxed(c, tail, &boxed);
+      emit_unbox_text(c, rt, boxed.p, &val);
+      free(boxed.p);
+    }
+    else emit_expr(c, tail, &val);
+  }
   else buf_puts(&val, rt == TY_POLY ? "sp_box_nil()" : res_zero(c, rt, res_o));
   g_pre = sv_pre;
   if (pre.p) buf_puts(b, pre.p);
@@ -22160,9 +22171,10 @@ static void emit_stmt_node(Compiler *c, int id, Buf *b, int indent);
    value with the body's handlers still live. Pop those handlers and frames
    before returning; an ensure still goes through the deferred return path. */
 static void emit_lambda_body_break(Compiler *c, int id, Buf *b, int indent) {
-  if (g_result_var && g_ensure_depth == 0) {
+  const char *slot = proc_ret_slot();
+  if (slot && g_ensure_depth == 0) {
     emit_indent(b, indent);
-    buf_printf(b, "{ %s = ", g_result_var);
+    buf_printf(b, "{ %s = ", slot);
     emit_break_value(c, id, b);
     buf_puts(b, "; ");
     emit_frame_unwind(b, 0, NULL);
@@ -22753,7 +22765,7 @@ static void emit_stmt_node(Compiler *c, int id, Buf *b, int indent) {
     }
     /* break inside a lambda body: a return from the lambda (CRuby). A break-
        capable lambda's ret is widened to poly, so the value returns through
-       the proc ABI's _sp_proc_poly_ret slot (g_result_var) with `return 0`;
+       the proc ABI's _sp_proc_poly_ret slot with `return 0`;
        ensure deferral still applies through emit_return otherwise. Inside a
        C loop within the lambda (`loop { break }`) the break exits THAT loop,
        not the lambda -- fall through to the plain C break below. */
@@ -23293,9 +23305,10 @@ void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent) {
   if (k == NK_ReturnNode) { emit_return(c, id, b, indent); return; }
   /* a tail `retry` diverges (goto back to its begin); the value is dead */
   if (k == NK_RetryNode) { emit_stmt_inner(c, id, b, indent); return; }
-  /* a tail `break` in a lambda/proc body diverges (return / brk-throw): emit
-     it as a statement, like `raise` below; the fall-through value is dead. */
-  if (k == NK_BreakNode && g_proc_body_kind != 0) {
+  /* A tail break leaves through its statement owner: a loop, a block, a
+     lambda/proc, or LocalJumpError at a Fiber/Thread boundary. It never
+     supplies the surrounding begin's fall-through result. */
+  if (k == NK_BreakNode) {
     emit_stmt_inner(c, id, b, indent);
     return;
   }

@@ -1,0 +1,12 @@
+ensure
+true
+"mutable!"
+prefix
+condition_ensure
+true
+prefix
+condition_ensure
+false
+:skip
+case_ensure
+true

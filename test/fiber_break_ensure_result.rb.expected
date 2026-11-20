@@ -1,0 +1,2 @@
+["break from proc-closure", true, "fiber!"]
+["break from proc-closure", true, "thread!"]

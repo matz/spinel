@@ -11190,7 +11190,10 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
       /* what runs after an argument temp is made, judged once per call:
          the last positional that is not inert, and the keyword hash */
       int pos_live = poly_last_live(c, argv, pos_argc);
-      int kw_runs = poly_kw_runs(c, kwh);
+      int block = nt_ref(nt, id, "block");
+      int block_pass = block >= 0 && nt_kind(nt, block) == NK_BlockArgumentNode &&
+                       nt_ref(nt, block, "expression") >= 0;
+      int later_runs = block_pass || poly_kw_runs(c, kwh);
       /* Root the receiver temp across the arms, as the zero-arg dispatch does:
          an arm's callee may allocate and collect the otherwise-unreferenced
          receiver out from under itself (#3476). */
@@ -11261,13 +11264,13 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
           NodeKind ak = nt_kind(nt, argv[a]);
           if ((at == TY_STRING || at == TY_STRBUF) &&
               (ak == NK_LocalVariableReadNode || ak == NK_InstanceVariableReadNode) &&
-              poly_other_arg_runs(c, argv, pos_argc, kwh, a) &&
+              (block_pass || poly_other_arg_runs(c, argv, pos_argc, kwh, a)) &&
               (takes_handle >= 0 ? takes_handle : (takes_handle = poly_name_takes_handle(c, name))) &&
               strbuf_slot_text(c, argv[a], &sref)) {
             htmp[a] = ++g_tmp;
             buf_printf(b, "sp_String *_t%d = SP_STR_HDL(%s); ", htmp[a], sref.p);
             free(sref.p);
-            if (at != TY_STRBUF || (held != 2 && (a < pos_live || kw_runs ||
+            if (at != TY_STRBUF || (held != 2 && (a < pos_live || later_runs ||
                 (arm_runs >= 0 ? arm_runs : (arm_runs = poly_arm_runs_code(c, name, pos_argc, has_splat_arg, kwh)))))) {
               emit_gc_root_tmp(c, TY_STRBUF, htmp[a], b); buf_puts(b, " ");
             }
@@ -11308,7 +11311,7 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
            runs before the callee binds it that could write the variable --
            an argument after it that is not inert (`o.m(s, (s = nil; f))`,
            or an interpolation's #to_s; pos_live), the keyword hash's values,
-           keys and `**` merges (kw_runs), or a default the arm fills in
+           keys and `**` merges, a block pass, or a default the arm fills in
            (poly_arm_runs_code).
            Unrooted, the arm handed the callee a freed object whose slot a
            later allocation had reused. An argument a hoist around the call
@@ -11321,7 +11324,7 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
            collector into freed memory. */
         if (held != 2 && ty_gc_holds_refs(c, atmp_ty[a]) && atmp[a] != htmp[a] && atmp[a] != head_held_temp(c, argv[a]) &&
             !(htmp[a] > 0 && atmp_ty[a] == TY_STRING) &&
-            (!held || a < pos_live || kw_runs ||
+            (!held || a < pos_live || later_runs ||
              (arm_runs >= 0 ? arm_runs : (arm_runs = poly_arm_runs_code(c, name, pos_argc, has_splat_arg, kwh))))) {
           emit_gc_root_tmp_refs(c, atmp_ty[a], atmp[a], b); buf_puts(b, " ");
         }

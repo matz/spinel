@@ -13977,7 +13977,9 @@ static int scope_ret_is_void(Compiler *c, int mi) {
    Hash itself and calls no #to_json for them, but calls it for any other
    value. Of those, a Time and a Range are boxed as one object id
    (SP_BUILTIN_TIME, SP_BUILTIN_RANGE) and a Symbol as its own tag, which
-   the hook keys on; the reopenings of the other builtins have no arm. */
+   the hook keys on; a Rational and a Complex are the guard form
+   (obj_to_json_guarded); the reopenings of the other builtins have no
+   arm. */
 static int obj_to_json_builtin(Compiler *c, int cid) {
   const char *n = c->classes[cid].name;
   return sp_streq(n, "Time") || sp_streq(n, "Range") || sp_streq(n, "Symbol");
@@ -14018,10 +14020,46 @@ static int obj_to_json_method(Compiler *c, int cid, int *defc) {
   return mi;
 }
 
+/* A reopened Rational or Complex is the guard form (mo_guard_class): its
+   defs move into Object's method of the name, each behind
+   `self.is_a?(<cn>)`, and the method takes self boxed. Object's #to_json
+   when its body guards for cn (its else arm raises, or is Object's own:
+   only a guarded class is dispatched to it), -1 for none. */
+static int obj_to_json_guarded(Compiler *c, const char *cn) {
+  int oc = comp_core_class(c, CORE_OBJECT);
+  if (oc < 0 || !c->native_obj_reflect) return -1;
+  MethodLookup jml = { .def_class = -1 };
+  int mi = call_target(c, -1, oc, "to_json", CT_METHODS | CT_SHARED, &jml);
+  if (mi < 0) return -1;
+  Scope *m = &c->scopes[mi];
+  if (m->is_cmethod || m->ret != TY_STRING || m->blk_param || !scope_has_callable_symbol(c, mi)) return -1;
+  if (m->nparams > 1 || (m->nparams == 1 && m->rest_idx != 0)) return -1;
+  if (m->nparams == 1) {
+    LocalVar *lv = scope_local(m, m->pnames[0]);
+    if (!lv || lv->type != TY_POLY_ARRAY) return -1;
+  }
+  const NodeTable *nt = c->nt;
+  for (int id = 0; id < nt->count && id < c->node_cap; id++) {
+    if (c->nscope[id] != mi || nt_kind(nt, id) != NK_CallNode) continue;
+    const char *nm = nt_str(nt, id, "name");
+    int r = nt_ref(nt, id, "receiver"), a = nt_ref(nt, id, "arguments");
+    if (!nm || !sp_streq(nm, "is_a?") || r < 0 || nt_kind(nt, r) != NK_SelfNode || a < 0) continue;
+    int an = 0;
+    const int *av = nt_arr(nt, a, "arguments", &an);
+    if (an == 1 && nt_kind(nt, av[0]) == NK_ConstantReadNode && nt_str(nt, av[0], "name") &&
+        sp_streq(nt_str(nt, av[0], "name"), cn)) return mi;
+  }
+  return -1;
+}
+static const char *const obj_to_json_guard_cls[][2] = {
+  { "Rational", "SP_BUILTIN_RATIONAL" }, { "Complex", "SP_BUILTIN_COMPLEX" } };
+
 static int obj_to_json_any(Compiler *c) {
   if (!c->native_obj_reflect) return 0;
   for (int i = 0; i < c->nclasses; i++)
     if (obj_to_json_method(c, i, NULL) >= 0) return 1;
+  for (int g = 0; g < 2; g++)
+    if (obj_to_json_guarded(c, obj_to_json_guard_cls[g][0]) >= 0) return 1;
   return 0;
 }
 
@@ -14034,7 +14072,17 @@ static void emit_obj_to_json_dispatch(Compiler *c, Buf *b) {
      builtin id (as emit_obj_cmp_dispatch keys them). Only an object is
      keyed by its class id below. */
   for (int pass = 0; pass < 2; pass++) {
-    if (pass == 1) buf_puts(b, "  if (v.tag != SP_TAG_OBJ) return NULL;\n  switch (v.cls_id) {\n");
+    if (pass == 1) {
+      buf_puts(b, "  if (v.tag != SP_TAG_OBJ) return NULL;\n");
+      /* (a guarded Rational or Complex: Object's method, on the boxed value) */
+      for (int g = 0; g < 2; g++) {
+        int gm = obj_to_json_guarded(c, obj_to_json_guard_cls[g][0]);
+        if (gm >= 0)
+          buf_printf(b, "  if (v.cls_id == %s) return sp_strbuf_read(%s(v%s));\n", obj_to_json_guard_cls[g][1],
+                     mc_method(c, &c->scopes[gm]), c->scopes[gm].nparams == 1 ? ", sp_PolyArray_new()" : "");
+      }
+      buf_puts(b, "  switch (v.cls_id) {\n");
+    }
     for (int i = 0; i < c->nclasses; i++) {
       if (comp_class_is_module(c, &c->classes[i])) continue;   /* no instances (#4654) */
       int bi = class_is_builtin_reopen(c, i);

@@ -624,7 +624,8 @@ the class has no such method; and `sp_ext_methods(cls_id)`, the table of a
 class (each row a name, its arity, the class that defines it, whether it
 is a singleton method, the thunk, and whether the row takes a block). The
 table holds the methods a `def`
-or a `def self.` defines, inherited ones included, and the `attr_*`
+or a `def self.` defines, inherited ones and the ones of a module the
+class includes among them, and the `attr_*`
 readers and writers. A method with optional or rest parameters has one row
 for each count of arguments it takes: `def m(a, b = 1)` has the rows `m`
 of arity 1 and of arity 2, and a rest parameter makes a row of a negative

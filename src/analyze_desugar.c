@@ -24121,7 +24121,9 @@ int desugar_ext_forwarders(Compiler *c) {
     if (!class_def_opens_cref(nt, m)) continue;
     const char *cls = class_def_key(c, m);
     int body = class_def_body(nt, m);
-    if (!cls || (body >= 0 && nt_kind(nt, body) != NK_StatementsNode) || !ext_class_def_wanted(c, cls)) continue;
+    if (!cls || (body >= 0 && nt_kind(nt, body) != NK_StatementsNode)) continue;
+    /* a class the list names, a class above one, or a module mixed into one */
+    if (!ext_class_def_wanted(c, cls) && !ext_mixin_def_wanted(c, m)) continue;
     /* the forwarders of `new`, last in the first body of the class, which
        an empty class gets here */
     char nkey[EXT_NEW_KEY];

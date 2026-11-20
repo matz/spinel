@@ -56,6 +56,20 @@ int main(void) {
   call(k, "pick", 2, a);
   try_call(k, "pick", 0, NULL);
   try_call(k, "pick", 3, a);
+  /* a method of a module the class includes, and of a module that module
+     includes: neither module is in the list */
+  call(r, "tag", 0, NULL);
+  call(r, "tag", 1, a);
+  call(r, "tag", 2, a);
+  try_call(r, "tag", 3, a);
+  call(r, "deep", 0, NULL);
+  call(r, "deep", 1, a);
+  /* a module the top level mixes in, with the class as the receiver */
+  call(r, "extra", 0, NULL);
+  call(r, "extra", 1, a);
+  /* a module of the leaf name of an included one, which the class does
+     not include */
+  call(r, "alt", 0, NULL);
   /* not in the table: private, a keyword parameter */
   call(r, "hid", 0, NULL);
   call(r, "kw", 0, NULL);

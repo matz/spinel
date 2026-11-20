@@ -200,6 +200,10 @@ Reads of the second kind are many today and go as the plan and the rows
 take over each emitter. A read stays only where the type is itself the
 data, such as a class name in a diagnostic.
 
+Native integer Range predicates hold the receiver as a value and use the
+runtime comparisons that also serve boxed Ranges. Constructing the boxed
+argument cannot collect the receiver.
+
 ## Views
 
 The analysis decides one answer per node: its type, its representation flags,

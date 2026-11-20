@@ -23166,36 +23166,18 @@ int emit_arg_type_guards(Compiler *c, int id, Buf *b) {
         buf_puts(b, "({ (void)("); emit_expr_for_effect(c, rr2, b); buf_puts(b, "); FALSE; })");
         return 1;
       }
-      /* A membership test against an integer Range answers for whatever it is
-         handed: an Integer or Float by comparison, anything else false. Only a
-         statically integral argument keeps the direct path; the rest go through
-         the boxed case-equality, which is the same rule the `when` arm uses and
-         needs no static class at all (#3838, #3917). */
+      /* A native integer Range can use the same numeric comparisons as
+         boxed case equality without allocating a box for the receiver. */
       if (pred) {
         Repr arg_repr = repr_of(c, rv2[0]);
         TyKind at3 = arg_repr.as_ty;
-        /* cover? of a boxed value that is a Range at run time: containment,
-           as for a typed one, where the case-equality read the Range as a
-           member and answered false */
-        if (is_cover_name(rn2) && arg_repr.kind == RK_BOXED) {
-          int tR = ++g_tmp, tA = ++g_tmp;
-          buf_printf(b, "({ sp_Range _t%d = ", tR); emit_expr(c, rr2, b);
-          buf_printf(b, "; sp_RbVal _t%d = ", tA); emit_boxed(c, rv2[0], b);
-          buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); "
-                        "(_t%d.tag == SP_TAG_OBJ && _t%d.v.p && _t%d.cls_id == SP_BUILTIN_RANGE)"
-                        " ? sp_range_cover_rng(_t%d, *(sp_Range *)_t%d.v.p)"
-                        " : (_t%d.tag == SP_TAG_OBJ && _t%d.v.p && _t%d.cls_id == SP_BUILTIN_FLOAT_RANGE)"
-                        " ? sp_range_cover_frange(_t%d, *(sp_FloatRange *)_t%d.v.p)"
-                        " : (_t%d.tag == SP_TAG_OBJ && _t%d.v.p && _t%d.cls_id == SP_BUILTIN_STR_RANGE)"
-                        " ? sp_range_cover_srange(_t%d, sp_srange_value(_t%d.v.p))"
-                        " : sp_poly_case_eq(sp_box_range(_t%d), _t%d); })",
-                     tA, tA, tA, tA, tR, tA, tA, tA, tA, tR, tA, tA, tA, tA, tR, tA, tR, tA);
-          return 1;
-        }
-        if (at3 != TY_INT && at3 != TY_FLOAT && at3 != TY_BIGINT) {
-          buf_puts(b, "sp_poly_case_eq(sp_box_range(");
-          emit_expr(c, rr2, b); buf_puts(b, "), ");
-          emit_boxed(c, rv2[0], b); buf_puts(b, ")");
+        int cover = is_cover_name(rn2) && arg_repr.kind == RK_BOXED;
+        if (cover || (at3 != TY_INT && at3 != TY_FLOAT && at3 != TY_BIGINT)) {
+          buf_puts(b, "({ ");
+          int tR = hold_operand(c, rr2, TY_RANGE, 0, ++g_tmp, 0, " ", b);
+          buf_printf(b, "%s(&_t%d, ", cover ? "sp_range_cover_val" : "sp_range_cover_poly", tR);
+          emit_boxed(c, rv2[0], b);
+          buf_puts(b, "); })");
           return 1;
         }
       }

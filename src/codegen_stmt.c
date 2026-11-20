@@ -17187,6 +17187,13 @@ static int masgn_rodata(Compiler *c, int id) {
   return node_is_pure_literal(c->nt, id) && !subtree_allocates(c, id) && comp_ntype(c, id) != TY_BIGINT &&
          decide_node(c->nt, id, "masgn-root", NULL);
 }
+/* Holding a String RHS can allocate its handle even when the Ruby
+   expression only reads a value, as a regexp capture does. */
+static int masgn_hold_allocates(Compiler *c, int id) {
+  TyKind type = repr_of(c, id).as_ty;
+  return masgn_part_allocates(c, id) ||
+         ((type == TY_STRING || type == TY_STRBUF) && ran_first_handle(id) < 0 && !masgn_rodata(c, id));
+}
 /* The root push for a temp, after the `;` of the statement that set it, when
    `emit_gc_root_tmp` has one for the type. */
 static void masgn_root(Compiler *c, TyKind t, int tmp, Buf *b) {
@@ -17578,7 +17585,10 @@ static int masgn_call_store(Compiler *c, int tgt, const char *val, TyKind vt, in
   int kv = an == 2 ? view_push(c, av[0], repr_of(c, av[0]).as_ty) : -1;
   int kb = an == 2 && key_tmp >= 0 ? view_bind_temp(av[0], key_tmp) : -1;
   int vv = view_push(c, vn, boxed ? TY_POLY : vt);
-  int vb = !boxed && val_t > 0 ? view_bind_temp(vn, val_t) : view_bind(vn, "%s", boxed ? "sp_box_nil()" : val);
+  int vb = g_n_argov;
+  if (!boxed && val_t > 0 && vt == TY_STRBUF) ran_first_bind(vn, val_t, val_t);
+  else if (!boxed && val_t > 0) view_bind_temp(vn, val_t);
+  else view_bind(vn, "%s", boxed ? "sp_box_nil()" : val);
   Buf out; memset(&out, 0, sizeof out);
   int handled = !vis_only || emit_vis_refusal(c, call, &out);
   if (!vis_only) emit_expr(c, call, &out);
@@ -19131,12 +19141,6 @@ static int masgn_fresh_stmt(Compiler *c, int id, const int *lefts, int ln, const
   return any && !masgn_program_may_own();
 }
 
-/* --share-strings: is element el of plain multiple write mw a value the
-   String plan gives as the handle that the write renders through the handle
-   face (emit_str_form_handle) into a temp, and holds there: any but a
-   read of a variable that emit_expr gives as the handle, which the write
-   stores as it reads (share_plan_multi_renders says which targets take
-   it)? */
 /* --share-strings: does index target t (of a multiple write) store into a
    container that holds boxes -- a general Array or Hash, or one typed at
    run time -- and is value e a parenthesized sequence or a conditional
@@ -19154,27 +19158,6 @@ int masgn_boxed_index_keeps(Compiler *c, int t, int e) {
   return (et == TY_STRING || et == TY_STRBUF) &&
          (ek == NK_ParenthesesNode || ek == NK_IfNode || ek == NK_UnlessNode) && strbuf_cond_has_handle_leaf(c, e);
 }
-int masgn_face_elem(Compiler *c, int mw, int el) {
-  const NodeTable *nt = c->nt;
-  if (!share_masgn_plain(nt, mw)) return 0;
-  /* only a String has the handle face: a value of any class (an Integer
-     under promote) is held as itself */
-  TyKind elt = repr_of(c, el).as_ty;
-  if (elt != TY_STRING && elt != TY_STRBUF) return 0;
-  int u = nt_paren_single(c->nt, el);
-  NodeKind k = u >= 0 ? nt_kind(nt, u) : NK_NONE;
-  if ((k == NK_LocalVariableReadNode || k == NK_InstanceVariableReadNode || repr_static_read_kind(k)) &&
-      share_plan_emits_handle(c, el))
-    return 0;
-  int en = 0;
-  const int *e = nt_arr(nt, nt_ref(nt, mw, "value"), "elements", &en);
-  /* (a value past the targets is stored nowhere, and the Array a write used
-     as a value answers holds it) */
-  for (int i = 0; i < en; i++)
-    if (e[i] == el) return share_plan_of(c, el, SPR_STORE).form == SPF_HANDLE;
-  return 0;
-}
-
 /* A multiple write's value's own prelude, put in the statement right
    before that value's hold (at), and the statement's prelude back. */
 static void masgn_el_pre_flush(Buf *b, size_t at, Buf *el_pre, Buf *sv_pre) {
@@ -19445,67 +19428,24 @@ static int emit_multi_write_stmt_body(Compiler *c, int id, Buf *b, int indent, c
     int poly_empty_arr = el_empty_arr && elt == TY_POLY;
     int poly_empty_hash = el_empty_hash && elt == TY_POLY;
     int nilish = (elt == TY_NIL || elt == TY_VOID);
-    /* A target that is the shared handle takes the element's own object
-       (`t, u = s, 1` names s as t): a local
-       that is the handle is held as the handle, so a swap (`a, b = b, a`)
-       reads both before either is rebound. */
-    Buf hsrc; memset(&hsrc, 0, sizeof hsrc);
-    LocalVar *htl = NULL;
-    if (i < ln && nt_kind(nt, lefts[i]) == NK_LocalVariableTargetNode && nt_str(nt, lefts[i], "name"))
-      htl = scope_local(comp_scope_of(c, id), nt_str(nt, lefts[i], "name"));
-    int hshared = repr_of_slot(c, htl).handle;
-    int hup = hshared ? strbuf_uplus_operand(c, els[i]) : -1;
-    int hread = hshared && elt != TY_STRBUF &&
-        ((nt_kind(nt, els[i]) == NK_LocalVariableReadNode && strbuf_slot_text(c, els[i], &hsrc)) ||
-         (hup >= 0 && nt_kind(nt, hup) == NK_LocalVariableReadNode && strbuf_slot_text(c, hup, &hsrc)));
-    /* The sharing rule gives other holders the same handle route. */
-    if (!hread && hshared && elt != TY_STRBUF)
-      hread = strbuf_slot_text(c, hup >= 0 ? hup : els[i], &hsrc);
-    /* a write whose slot holds the rule's handle (--share-strings): that
-       handle, as a local's read hands over its own */
-    Buf hw; memset(&hw, 0, sizeof hw);
-    /* --share-strings: a value the String plan gives as the handle that
-       emit_expr does not (share_plan_emits_handle), into a target the plan
-       says takes one (share_plan_multi_renders): the handle face renders it,
-       whatever its producer, and the handle it makes is rooted while a later
-       value is built (nothing else holds a new one) */
-    /* (one that ran ahead as the handle, in a multiple write used as a value
-       -- emit_expr -- is that handle) */
-    int hran = ran_first_handle(els[i]);
-    /* (a sequence or a conditional into an index of a container that holds
-       boxes is held as its box, which keeps its handle: masgn_boxed_index_keeps) */
-    int hbox = hran < 0 && !hread && i < ln && masgn_boxed_index_keeps(c, lefts[i], els[i]);
-    int hface = hran >= 0 || (!hread && !hbox && i < ln && masgn_face_elem(c, id, els[i]) && !share_plan_emits_handle(c, els[i]));
-    if (hran >= 0) buf_printf(&hw, "_t%d", hran);
-    else if (hface) emit_str_form_handle(c, els[i], &hw);
-    int hwrite = hface || (hshared && elt != TY_STRBUF && !hread && emit_strbuf_write_handle(c, els[i], &hw));
-    /* a route over such a handle (`t, u = s.then { |x| x }, 1`): the handle
-       it hands on */
-    hwrite = hwrite || (hshared && elt != TY_STRBUF && !hread && emit_strbuf_route(c, els[i], &hw));
-    if (hread || hwrite) {
-      /* `+s` is s itself unless s is frozen */
-      if (hwrite) buf_printf(b, "sp_String * _t%d = SP_STR_HDL(%s);", tmps[i], hw.p ? hw.p : "NULL");
-      else buf_printf(b, hup >= 0 ? "sp_String * _t%d = sp_String_uplus(SP_STR_HDL(%s));"
-                                  : "sp_String * _t%d = SP_STR_HDL(%s);", tmps[i], hsrc.p);
-      free(hw.p); free(hsrc.p);
-      if (tmpts) tmpts[i] = TY_STRBUF;
-      int later_alloc_h = store_alloc || fresh_stmt || (hface && i + 1 < en);
-      for (int j = i + 1; j < en && !later_alloc_h; j++) later_alloc_h = masgn_part_allocates(c, els[j]);
-      if (later_alloc_h) masgn_root(c, TY_STRBUF, tmps[i], b);
+    /* Save the String object before a later RHS or a target write can
+       rebind the local that supplied it. All targets read the same temp. */
+    int held = ran_first_handle(els[i]);
+    if (held >= 0 || elt == TY_STRING || elt == TY_STRBUF) {
+      buf_printf(b, "sp_String * _t%d = ", tmps[i]);
+      if (held >= 0) buf_printf(b, "_t%d", held);
+      else emit_str_form_handle(c, els[i], b);
+      buf_puts(b, ";");
+      tmpts[i] = TY_STRBUF;
+      int later_alloc = store_alloc || fresh_stmt;
+      for (int j = i + 1; j < en && !later_alloc; j++) later_alloc = masgn_hold_allocates(c, els[j]);
+      if (later_alloc) masgn_root(c, TY_STRBUF, tmps[i], b);
       buf_puts(b, "\n");
       masgn_el_pre_flush(b, el_at, &el_pre, el_sv_pre);
       continue;
     }
-    /* an element with no C type of its own (an unresolved call, which
-       raises) is held boxed: `void _tN` is no declaration */
-    int boxed_el = (!nilish && !c_type_name(elt) && !ty_is_object(elt)) || hbox;
-    int fresh_str = fresh_stmt && elt == TY_STRBUF && masgn_el_fresh_str(c, els[i]) &&
-                    masgn_plain_element_target(c, lefts[i]);
-    /* (a new String the plan holds as a handle, `(+"x") * 3`, is its bytes
-       to emit_expr: it is wrapped as the handle, as fresh_str is; held in
-       an sp_String * bare, the C did not build) */
-    if (!fresh_str && !boxed_el && !nilish && elt == TY_STRBUF && share_value_fresh(c, els[i], 0))
-      fresh_str = 1;
+    /* An unresolved call still needs a valid C declaration for its value. */
+    int boxed_el = !nilish && !c_type_name(elt) && !ty_is_object(elt);
     /* an Array literal into a local that holds an Array of any value, which
        the literal shares no alias group with (cf_alias_local_el leaves out
        a local that may hold an untracked container): built as one, as a
@@ -19568,15 +19508,6 @@ static int emit_multi_write_stmt_body(Compiler *c, int id, Buf *b, int indent, c
       free(vb.p);
       g_masgn_otmps[g_masgn_notmps++] = tmps[i];
     }
-    /* held as the handle its target wraps it in, as a store wraps one
-       (emit_boxed); handed over bare, the C did not build */
-    else if (fresh_str) {
-      int sv = view_push_repr(c, els[i], VR_STRBUF_BOX, 0);
-      buf_puts(b, "sp_String_new_shared(");
-      emit_str_expr(c, els[i], b);
-      buf_puts(b, ")");
-      view_pop(c, sv);
-    }
     else {
       /* (one representation: the value's text may be of either face; the
          temp is declared in the element's) */
@@ -19589,7 +19520,7 @@ static int emit_multi_write_stmt_body(Compiler *c, int id, Buf *b, int indent, c
        allocate after it can run user code that drops its other holder, so
        it is rooted while a later value or a store can collect. */
     int later_alloc = store_alloc || fresh_stmt;
-    for (int j = i + 1; j < en && !later_alloc; j++) later_alloc = masgn_part_allocates(c, els[j]);
+    for (int j = i + 1; j < en && !later_alloc; j++) later_alloc = masgn_hold_allocates(c, els[j]);
     if (!nilish && !masgn_rodata(c, els[i]) && later_alloc) masgn_root(c, boxed_el ? TY_POLY : elt, tmps[i], b);
     buf_puts(b, "\n");
     masgn_el_pre_flush(b, el_at, &el_pre, el_sv_pre);
@@ -20013,15 +19944,11 @@ static int emit_multi_write_stmt_body(Compiler *c, int id, Buf *b, int indent, c
       int rjo = rjlv && oint_kind(rjlv->type) && slot_is_oint(rjlv);
       buf_printf(b, "lv_%s = ", rename_local(rnm_j));
       if (ridx >= 0 && ridx < en) {
-        Repr valtr = repr_of(c, els[ridx]);
-        TyKind valt = valtr.as_ty;
+        TyKind value_type = tmpts[ridx];
         char rex[32]; snprintf(rex, sizeof rex, "_t%d", tmps[ridx]);
-        if (rjpoly && valtr.kind != RK_BOXED) emit_boxed_tmp(c, valt, tmps[ridx], b);
-        else if (rjo) masgn_conv_o(c, rjlv->type, tmpts ? tmpts[ridx] : valt, masgn_nil_el(c, els[ridx]) ? NULL : rex, b);
-        /* a mutable-String local holds an sp_String *: a String element is
-           wrapped, as the targets before the splat are */
-        else if (rjlv && rjlv->type == TY_STRBUF && valt == TY_STRING) buf_printf(b, "sp_String_new_shared(_t%d)", tmps[ridx]);
-        else buf_printf(b, "_t%d", tmps[ridx]);
+        const char *value = masgn_nil_el(c, els[ridx]) ? NULL : rex;
+        if (rjo) masgn_conv_o(c, rjlv->type, value_type, value, b);
+        else masgn_conv(c, rights[j], rjlv ? rjlv->type : value_type, value_type, value, b);
       }
       else {
         TyKind tt = repr_of(c, rights[j]).as_ty;

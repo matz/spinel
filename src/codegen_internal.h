@@ -195,8 +195,6 @@ void strbuf_new_of_text(Compiler *c, int v, const char *t, Buf *b);
    handed (`+s`, `String(s)`, `s.then { |x| x }`) hands on: 1, or 0 with
    nothing emitted */
 int emit_strbuf_route(Compiler *c, int v, Buf *b);
-/* --share-strings: is element el of plain multiple write mw rendered through the handle face into a held temp? */
-int masgn_face_elem(Compiler *c, int mw, int el);
 /* the leaf targets of multiple write (or nested target) node, in Ruby's order, a nested (a, b) where it stands: fills out (when given) and answers the count */
 int masgn_flat_targets(const NodeTable *nt, int node, int *out, int n);
 /* does the right side of multiple write mw rebind what `part` (a target's receiver or key) reads (read_rebound_by): a write of a local, a call of a proc that assigns it, user code beside an ivar, gvar or cvar read? */

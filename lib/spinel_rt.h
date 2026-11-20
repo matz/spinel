@@ -17906,8 +17906,16 @@ static SP_NOINLINE SP_COLD void *sp_exc_caught_obj_make(void) {
   return e;
 }
 static inline void *sp_exc_caught_obj(void) {
-  void *o = sp_exc_obj[sp_exc_top];
-  return o || !sp_pending_cause ? o : sp_exc_caught_obj_make();
+  sp_Exception *e = (sp_Exception *)sp_exc_obj[sp_exc_top];
+  if (!sp_pending_cause) return e;
+  if (!e) return sp_exc_caught_obj_make();
+  /* A raise carrying an object can still have its cause pending. An
+     ensure rethrows that object using the cause already attached to it. */
+  if (!e->cause) {
+    sp_gc_wb(e);
+    e->cause = (sp_Exception *)sp_pending_cause;
+  }
+  return e;
 }
 /* Each of the fixed-depth handler stacks below fails the same way when a
    program nests deeper than its array holds: CRuby's SystemStackError words,
@@ -18848,6 +18856,18 @@ SP_NORETURN SP_COLD static void sp_raise_u(const char *msg) {
 }
 SP_NORETURN SP_COLD static void sp_raise_u_cz(void *cz, const char *msg) {
   SP_CAUSE_STAGE(cz); sp_exc_user_raise = 1; sp_raise_cls("RuntimeError", msg);
+}
+/* A typed raise using a String message keeps its object for Exception#message.
+   The boxed dummy result lets this diverging call feed any expression slot. */
+SP_NORETURN SP_COLD static sp_RbVal sp_raise_cls_handle(const char *cls, sp_String *msg) {
+  SP_GC_ROOT(msg);
+  sp_Exception *e = sp_exc_new_for_catch(cls, sp_exc_msg_given(sp_strbuf_read(msg)));
+  sp_raise_exc((sp_Exception *)sp_exc_attach_msg(e, msg));
+  SP_UNREACHABLE();
+}
+SP_NORETURN SP_COLD static sp_RbVal sp_raise_cls_handle_cz(void *cz, const char *cls, sp_String *msg) {
+  SP_CAUSE_STAGE(cz);
+  sp_raise_cls_handle(cls, msg);
 }
 SP_NORETURN SP_COLD static void sp_raise_exc_cz(void *cz, volatile sp_Exception *e) {
   SP_CAUSE_STAGE(cz); sp_raise_exc(e); SP_UNREACHABLE();

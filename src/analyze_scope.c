@@ -13389,12 +13389,16 @@ static int infer_ivar_set_call(Compiler *c, int id, NilWrites *writes) {
       else if (san == 2 && sav && !(a0ty && (sp_streq(a0ty, "SymbolNode") || sp_streq(a0ty, "StringNode")))) {
         int ivrecv = nt_ref(nt, id, "receiver");
         TyKind rt = ivrecv >= 0 ? comp_ntype(c, ivrecv) : TY_UNKNOWN;
-        int self_recv = ivrecv < 0 || (nt_kind(nt, ivrecv) == NK_SelfNode && rt != TY_POLY);
-        /* (the receiver's side of the table: an object's fields, or a
-           class's (or main's) own ivars where self is the class) */
+        int explicit_self = ivrecv >= 0 && nt_kind(nt, ivrecv) == NK_SelfNode;
         int scid = -1, jside = IVS_INST;
-        /* (main: its ivars are the top-level statics, the rest its table) */
-        if (self_recv && !ie_pending_node(c, id)) jside = holder_ivar_side(c, id, &scid);
+        if ((ivrecv < 0 || explicit_self) && !ie_pending_node(c, id))
+          jside = holder_ivar_side(c, id, &scid);
+        /* A boxed self can reach main's static slots only when the call
+           plan identifies it as main, including in rebound blocks. */
+        int main_self = scid >= 0 && scid == c->toplevel_class &&
+                        jside == IVS_CLASS && cplan_runs_on_main(c, id);
+        int self_recv = ivrecv < 0 || (explicit_self && (rt != TY_POLY || main_self));
+        if (!self_recv) jside = IVS_INST;
         TyKind vt = infer_type(c, sav[1]);
         int any = 0;
         for (int k = 0; k < c->nclasses; k++) {

@@ -793,9 +793,9 @@ static SP_NOINLINE SP_COLD void sp_raise_frozen_array_v(sp_RbVal v) {
   sp_raise_frozen_array_rv(v);
 }
 
-/* Top-level self, the main object (#4926): a bare Object allocated on first
-   use, whose to_s / inspect answer "main". sp_main_obj is its pointer, a GC
-   root marked with the runtime globals; lib/sp_cold.c. */
+/* Top-level self (#4926): an Object allocated on first use whose to_s and
+   inspect answer "main". The runtime global roots mark sp_main_obj, and
+   the ordinary Object scan marks its instance variable table. */
 extern void *sp_main_obj;
 sp_RbVal sp_main_self(void);
 

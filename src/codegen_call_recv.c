@@ -12579,7 +12579,7 @@ static int emit_struct_recv_call(Compiler *c, int id, Buf *b, const NodeTable *n
     int tvraw = ++g_tmp;
     if (vr.kind != RK_BOXED && vt != TY_UNKNOWN && vt != TY_NIL) {
       buf_printf(b, " "); emit_ctype(c, vt, b);
-      buf_printf(b, " _t%d = ", tvraw); emit_expr(c, argv[1], b); buf_puts(b, ";");
+      buf_printf(b, " _t%d = ", tvraw); emit_expr_face(c, argv[1], vt, b); buf_puts(b, ";");
       char rawtxt[32]; snprintf(rawtxt, sizeof rawtxt, "_t%d", tvraw);
       /* a String a shared boxed member takes is its handle (emit_boxed's lift) */
       int lift = comp_poly_strbuf_lift_stored(c, argv[1]) && vt == TY_STRING;

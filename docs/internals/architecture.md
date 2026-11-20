@@ -126,8 +126,18 @@ The native String result passes its handle directly through C. Byte
 consumers project the contents and take a snapshot where the read is
 held across a block. UTF-8 character positions count each valid sequence
 once and each malformed byte separately. The length cache records only
-validated text, so validation and optimized character seeks can reuse it. When File.join walks boxed path components, it
-keeps the bytes of each selected segment through later conversions.
+validated text, so validation and optimized character seeks can reuse it.
+A named reflective write to an existing String instance variable uses
+the ordinary String slot writer. It holds the original receiver before
+running the assignment's right-hand side and checks whether that receiver
+is frozen before storing the value.
+Exception construction keeps the message's String object and projects
+bytes where the constructor reads them. A typed raise passes that handle
+to the runtime. Cleanup keeps the cause of an exception it will rethrow.
+Multiple assignment holds each
+String through later values and writes. A value-producing assignment
+returns those same objects. File.join keeps the bytes of each boxed path
+component through later conversions.
 Native package readers that declare a handle result return it through the
 same call view, including inherited bindings and calls through super.
 A native binding uses the producer's declared String

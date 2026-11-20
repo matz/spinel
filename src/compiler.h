@@ -2116,7 +2116,10 @@ typedef struct {
    is_prepend_copy, origin_module_ci). Kept apart from the type edits (comp_touch_scope alone), as the position memos
    (call_plan.c, pos_memos_sync) read these and not those. Every write to one of them on a scope that was made before the
    write calls it; a scope the writer has just made needs none, the memos' key counts the scopes made (posv_ns). */
-static inline void comp_touch_scope_shape(Compiler *c, int idx) { c->scope_edit_gen++; comp_touch_scope(idx); }
+void comp_scope_note_name(Compiler *c, int s);
+/* (a rename is a shape write: the lookups' index of scopes by name enters
+   the scope under its name, comp_scope_note_name) */
+static inline void comp_touch_scope_shape(Compiler *c, int idx) { c->scope_edit_gen++; comp_touch_scope(idx); comp_scope_note_name(c, idx); }
 enum { PRES_UNMARKED = 1, PRES_REMOVED = 2 };
 enum { IE_RB_IN = 1, IE_RB_OWN = 2, IE_RB_ROOT = 4, IE_RB_FWD = 8 };
 
@@ -2902,6 +2905,10 @@ void comp_shadow_name(Compiler *c, int ci, const char *name, char *out, size_t s
 void comp_scope_set_shadow(Compiler *c, int si, int kind, const char *user);
 void comp_scope_copy_shadow(Compiler *c, int dst, int src, const char *suffix);
 const char *comp_scope_user_name(const Scope *s);
+/* Scope s now carries a name it may not have carried (a rename, a shadow
+   user name): the unfrozen lookups' index of scopes by name enters it
+   under it (smx, compiler.c). Every write of a scope's name calls it. */
+void comp_scope_note_name(Compiler *c, int s);
 int scope_is_initialize(const Scope *s);   /* is s compiled as a void initialize (codegen.c) */
 int comp_scope_copied_away(Compiler *c, int s);
 int comp_scope_may_run(Compiler *c, int s);

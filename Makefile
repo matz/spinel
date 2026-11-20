@@ -6519,14 +6519,12 @@ CONST_COLLISIONS_LIMIT ?= 2.2
 # names before its own defs (`read`) keeps each extend's copy behind the own
 # def, and the record asks every call of the name whether it meets the
 # module's version (elab_version_met): it reads 2.29x to 2.33x, against
-# 2.26x before those questions, so it takes the same limit. Since sm_scan
-# counts each scope it reads (#12183) the pair reads 2.51x and the `read`
-# pair 2.63x: before the scope index is frozen, register_extends' copies
-# (specialize_cmethod_for, cmethod_needs_specialization) look the class
-# methods up by a scan of every scope, which the count did not see and the
-# compile's time does (3.0x at N=100 and N=200). The limit sits above that
-# until those lookups stop scanning.
-MODULE_FUNCTIONS_LIMIT ?= 2.9
+# 2.26x before those questions, so it takes the same limit. sm_scan counts
+# each scope it reads (#12183), which showed register_extends' copies
+# looking the class methods up by a scan of every scope, before the scope
+# index is frozen: 2.51x and 2.63x. Those lookups read the scopes of the
+# name now (smx, compiler.c), and the pairs read 2.20x and 2.24x.
+MODULE_FUNCTIONS_LIMIT ?= 2.4
 # N classes that each extend one module, read its method in the body and
 # then define it on their own singleton (test/scale/shadowed_extends.sh), at
 # N=400 and N=800: the work of that program less the work of the same

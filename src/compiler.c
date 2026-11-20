@@ -1885,6 +1885,78 @@ static int sm_scan(Compiler *c, int class_id, const char *name, int side) {
                   : sm_owns_side(c, s, class_id, side) && sm_name_matches(c, s, name)) return s;
   return -1;
 }
+/* The scopes by name for sm_scan's asks while the index is not frozen
+   (smx): each scope under every name it has carried, its name and its
+   shadow user name (comp_scope_user_name, which sm_name_matches reads for a
+   mixin-guarded copy), so an ask reads the scopes of its name's bucket and
+   not every scope of the program. A scope is entered when an ask first
+   finds the scope count grown past the ones entered, and again under a new
+   name where it is renamed (comp_scope_note_name; comp_scope_set_shadow
+   for the user name). An entry is a candidate only: the ask checks the
+   scope as sm_scan does (sm_owns_side, sm_name_matches), so a name the
+   scope no longer carries answers nothing. A copy's class, side, entry or
+   move changes no entry: they are read when asked. register_extends asked
+   every scope per lookup of each copy's class methods, which grew with the
+   square of the modules a program extends with (test/scale/module_functions.sh). */
+typedef struct { unsigned h; int s, next; } SmxEnt;
+static struct { const Compiler *c; int upto, nb, n, cap; int *head; SmxEnt *e; } smx;
+static void smx_reset(void) {
+  free(smx.head); free(smx.e);
+  memset(&smx, 0, sizeof smx);
+}
+static void smx_put(unsigned h, int s) {
+  if (smx.n >= smx.cap) {
+    smx.cap = smx.cap ? 2 * smx.cap : 1024;
+    smx.e = realloc(smx.e, sizeof(SmxEnt) * (size_t)smx.cap);
+    if (!smx.e) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  }
+  if (2 * (smx.n + 1) > smx.nb) {   /* (rehash over twice the entries) */
+    int nb = smx.nb ? 2 * smx.nb : 2048;
+    int *hd = malloc(sizeof(int) * (size_t)nb);
+    if (!hd) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    for (int k = 0; k < nb; k++) hd[k] = -1;
+    for (int k = 0; k < smx.n; k++) { int b = (int)(smx.e[k].h & (unsigned)(nb - 1)); smx.e[k].next = hd[b]; hd[b] = k; }
+    free(smx.head); smx.head = hd; smx.nb = nb;
+  }
+  int b = (int)(h & (unsigned)(smx.nb - 1));
+  smx.e[smx.n] = (SmxEnt){ h, s, smx.head[b] };
+  smx.head[b] = smx.n++;
+}
+/* s under the name of hash h, unless it is there already (a shape write
+   that kept the name enters nothing) */
+static void smx_put_new(unsigned h, int s) {
+  if (smx.nb)
+    for (int k = smx.head[h & (unsigned)(smx.nb - 1)]; k >= 0; k = smx.e[k].next)
+      if (smx.e[k].s == s && smx.e[k].h == h) return;
+  smx_put(h, s);
+}
+static void smx_enter(const Compiler *c, int s) {
+  const Scope *sc = &c->scopes[s];
+  if (sc->name) smx_put_new(sp_strhash(sc->name), s);
+  if (sc->shadow_user && (!sc->name || !sp_streq(sc->shadow_user, sc->name))) smx_put_new(sp_strhash(sc->shadow_user), s);
+}
+static void smx_sync(Compiler *c) {
+  if (smx.c != c || c->nscopes < smx.upto) { smx_reset(); smx.c = c; }
+  for (; smx.upto < c->nscopes; smx.upto++) smx_enter(c, smx.upto);
+}
+/* See compiler.h. */
+void comp_scope_note_name(Compiler *c, int s) {
+  if (smx.c == c && s >= 0 && s < smx.upto) smx_enter(c, s);   /* (a scope not entered yet is entered under its names then) */
+}
+/* sm_scan over the name's entries: the highest scope that answers */
+static int smx_scan(Compiler *c, int class_id, const char *name, int side) {
+  smx_sync(c);
+  if (!smx.nb) return -1;
+  unsigned h = sp_strhash(name);
+  int best = -1;
+  for (int k = smx.head[h & (unsigned)(smx.nb - 1)]; k >= 0; k = smx.e[k].next) {
+    NT_WORK();
+    int s = smx.e[k].s;
+    if (smx.e[k].h != h || s <= best) continue;
+    if (sm_owns_side(c, s, class_id, side) && sm_name_matches(c, s, name)) best = s;
+  }
+  return best;
+}
 /* The batch's scopes by name (nx_key: pairs of a name's hash and a scope,
    sorted): the scopes a name's walk below can match, its own name or, as
    sm_name_matches reads it, the user name of a mixin-guarded copy. A
@@ -2037,8 +2109,13 @@ static int sm_lookup(Compiler *c, int class_id, const char *name, int is_cm) {
 #endif
       return b;
     }
-    /* scope shape may still change: scan in reverse */
-    return sm_scan(c, class_id, name, is_cm);
+    /* scope shape may still change: the scopes of the name (smx) */
+    int r = smx_scan(c, class_id, name, is_cm);
+#ifdef SP_SMX_CHECK
+    int r2 = sm_scan(c, class_id, name, is_cm);
+    if (r != r2) { fprintf(stderr, "spinel: scope name index answered %d for %d/%s/%d, the scan %d\n", r, class_id, name, is_cm, r2); abort(); }
+#endif
+    return r;
   }
   if (sm_nscopes != c->nscopes) sm_build(c);
   if (!sm_buckets) return -1;
@@ -6209,6 +6286,7 @@ void comp_scope_set_shadow(Compiler *c, int si, int kind, const char *user) {
   s->shadow = (unsigned char)kind;
   comp_touch_scope_shape(c, si);
   s->shadow_user = strdup(user);
+  comp_scope_note_name(c, si);
   for (int i = 0; i < c->nshadow_copies; i++)
     if (c->shadow_copies[i] == si) return;
   if (c->nshadow_copies >= c->cshadow_copies) {

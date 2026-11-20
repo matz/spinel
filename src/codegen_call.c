@@ -19856,23 +19856,6 @@ void emit_brk_wrapped_call(Compiler *c, int id, Buf *b) {
   else if (inner.p && inner.p[0] && !stmt_form && !enum_walk && oint_kind(normal_ty) && node_is_oint(c, id))
     buf_printf(&boxed, "%s(%s)", oint_box(normal_ty), inner.p);
   else if (inner.p && inner.p[0]) emit_boxed_text(c, normal_ty, inner.p, &boxed);
-  /* --share-strings: a String method given a block that answers its
-     receiver (scan, each_char) answers, when no break is taken, the
-     receiver's own String: where the receiver holds the shared handle or a
-     box, the result is that box, not the bytes, so a change through the
-     result reaches every name of the receiver. The call's own text still
-     runs first (a boxed receiver's walk is inside it). */
-  if (!enum_walk && !stmt_form && spill < 0 && inner.p && inner.p[0] &&
-      brk_recv_is_pure(c, wrecv) && bop_share_self_answer(wname, 1) && wname[strlen(wname) - 1] != '!' &&
-      cplan_targets(c, id, NULL, 0) == 0 &&
-      (repr_of(c, wrecv).kind == RK_STRBUF ||
-       (repr_of(c, wrecv).kind == RK_BOXED && share_node_carries_handle(c, wrecv)))) {
-    Buf rb; memset(&rb, 0, sizeof rb);
-    emit_boxed(c, wrecv, &rb);
-    free(boxed.p); memset(&boxed, 0, sizeof boxed);
-    buf_printf(&boxed, "((void)(%s), %s)", inner.p, rb.p ? rb.p : "sp_box_nil()");
-    free(rb.p);
-  }
   if (!enum_walk) {
     emit_indent(g_pre, g_indent);
     buf_printf(g_pre, "_t%d = %s;\n", tR, boxed.p && boxed.p[0] ? boxed.p : "sp_box_nil()");

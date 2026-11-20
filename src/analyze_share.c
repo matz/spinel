@@ -1,9 +1,8 @@
 /* analyze_share.c -- the questions the String rule asks of the program
    (#6765): whether a value is a new String no other name holds
    (share_value_fresh), which literal blocks a method can run
-   (sh_blocks_fresh), whether a node hands on a String's handle
-   (share_node_carries_handle), and the plain questions of names, targets and
-   literals beside them. See share.h.
+   (sh_blocks_fresh), and the plain questions of names, targets and literals
+   beside them. See share.h.
 
    The tables they keep (ShareFacts) are read from the calls when the
    rule is applied (share_facts_build): the blocks each method can be
@@ -83,13 +82,6 @@ int sh_may_hold(const Compiler *c, TyKind t) {
   default:
     return 1;
   }
-}
-
-/* the class whose ivar slot an ivar node names, as the emitters store it */
-static int sh_ivar_owner(Compiler *c, int node) {
-  Scope *s = comp_scope_of(c, node);
-  if (s && s->class_id >= 0) return s->class_id;
-  return c->toplevel_class;
 }
 
 static int sh_method_index(Compiler *c, int node) {
@@ -1618,160 +1610,4 @@ int share_value_fresh(Compiler *c, int n, int depth) {
   if (n < 0 || depth > 8) return 0;
   ShFresh f = { c, depth };
   return !for_each_value_position(c->nt, n, VPS_IF | VPS_UNLESS, sh_fresh_arm_bad, &f);
-}
-
-static int sh_ivar_owner(Compiler *c, int node);
-/* A String method answering its receiver or nil (bop_share_self_answer:
-   a bang method, an iterator given a block) called on a slot that holds
-   the shared handle -- a local, a global, a constant, a class variable or
-   an ivar: its value is that slot's String, or nil. */
-static int sh_bang_self_slot(const Compiler *c, int v) {
-  const NodeTable *nt = c->nt;
-  if (v < 0 || nt_kind(nt, v) != NK_CallNode ||
-      !bop_share_self_answer(nt_str(nt, v, "name"), nt_ref(nt, v, "block") >= 0)) return 0;
-  int r = nt_ref(nt, v, "receiver");
-  if (r < 0) return 0;
-  if (nt_kind(nt, r) == NK_LocalVariableReadNode) return repr_of(c, r).kind == RK_STRBUF;
-  if (repr_static_share(c, r)) return 1;
-  if (nt_kind(nt, r) == NK_InstanceVariableReadNode) {
-    const char *nm = nt_str(nt, r, "name");
-    int cid = nm ? sh_ivar_owner((Compiler *)c, r) : -1;
-    int iv = cid >= 0 ? comp_ivar_index(&c->classes[cid], nm) : -1;
-    return iv >= 0 && repr_of_ivar(c, cid, iv).share;
-  }
-  return 0;
-}
-/* Is call u `x.to_s` on a box that the program's own to_s methods make a
-   dispatch answering a box, whose String arm is the builtin default
-   (PB_D_TO_S in the plan): under the rule it answers a String receiver's
-   box itself (emit_poly_defaults0), unless a reopening of String's to_s or
-   the String trial takes the String first? */
-static int sh_poly_to_s_self(const Compiler *c, int u) {
-  const NodeTable *nt = c->nt;
-  if (nt_kind(nt, u) != NK_CallNode || !is_to_s_name(nt_str(nt, u, "name")) ||
-      call_plain_argc((Compiler *)c, u) != 0 || nt_ref(nt, u, "block") >= 0)
-    return 0;
-  int recv = nt_ref(nt, u, "receiver");
-  int sci = comp_core_class(c, CORE_STRING);
-  if (recv < 0 || repr_of(c, recv).kind != RK_BOXED ||
-      (sci >= 0 && comp_method_in_chain((Compiler *)c, sci, "to_s", NULL) >= 0))
-    return 0;
-  const PolyPlan p = cplan_poly((Compiler *)c, u);
-  int dflt = 0;
-  for (int i = 0; i < p.n; i++) {
-    if (p.arm[i].kind == PA_TRIAL && p.arm[i].key == PA_KEY_TRIAL + PT_STR) return 0;
-    dflt |= p.arm[i].kind == PA_BUILTIN && p.arm[i].key == PA_KEY_BUILTIN + PB_D_TO_S;
-  }
-  return dflt && p.ret == TY_POLY;
-}
-/* Is call u's one target a `def m = @iv` reader of an instance method,
-   its whole body that read, of a slot its class keeps boxed? */
-static int sh_def_reader_box(const Compiler *c, int u) {
-  const NodeTable *nt = c->nt;
-  int tg[CPT_MAX];
-  if (cplan_targets((Compiler *)c, u, tg, CPT_MAX) != 1 || tg[0] <= 0) return 0;
-  const Scope *m = &c->scopes[tg[0]];
-  if (m->is_cmethod || m->class_id < 0 || m->class_id >= c->nclasses || m->nparams != 0) return 0;
-  int n = 0;
-  const int *st = m->body >= 0 && nt_kind(nt, m->body) == NK_StatementsNode ? nt_arr(nt, m->body, "body", &n) : NULL;
-  if (n != 1 || nt_kind(nt, st[0]) != NK_InstanceVariableReadNode) return 0;
-  const ClassInfo *ci = &c->classes[m->class_id];
-  int ix = comp_ivar_index((ClassInfo *)ci, nt_str(nt, st[0], "name"));
-  return ix >= 0 && ci->ivar_types[ix] == TY_POLY;
-}
-/* Does n supply a String handle or a box holding one? */
-int share_node_carries_handle(const Compiler *c, int n) {
-  /* A native String result carries its handle through the call. */
-  if (repr_call_returns_handle((Compiler *)c, n)) return 1;
-  /* freeze answers its receiver: it hands on the handle where its receiver
-     does, and a new String's freeze is a String no other name holds */
-  int u = nt_paren_single(c->nt, n);
-  if (u >= 0 && nt_kind(c->nt, u) == NK_CallNode && is_freeze_name(nt_str(c->nt, u, "name")) &&
-      call_plain_argc((Compiler *)c, u) == 0 && nt_ref(c->nt, u, "block") < 0 &&
-      cplan_user((Compiler *)c, u).dispatch == CP_NONE) {
-    int r = nt_ref(c->nt, u, "receiver");
-    if (r >= 0 && (share_value_fresh((Compiler *)c, r, 0) || share_node_carries_handle(c, r))) return 1;
-  }
-  /* A call on a boxed receiver each of whose arms publishes its String's
-     handle: an attr reader of a field that holds the handle (its arm reads
-     it through sp_strbuf_read), or a method that publishes its own. A
-     pickup around the call takes that handle, so the value is the field's
-     String itself: `{ host: req.host }` with two classes answering host. */
-  if (u >= 0 && nt_kind(c->nt, u) == NK_CallNode && nt_ref(c->nt, u, "receiver") >= 0 && repr_of(c, nt_ref(c->nt, u, "receiver")).kind == RK_BOXED &&
-      nt_ref(c->nt, u, "block") < 0) {
-    const PolyPlan pp = cplan_poly_arms((Compiler *)c, u);
-    int all = pp.n > 0;
-    for (int i = 0; i < pp.n && all; i++) {
-      const PolyArm *a = &pp.arm[i];
-      if (a->kind == PA_READER) all = a->vty == TY_STRBUF;
-      /* (a method whose return is the handle itself, `h[k] = v`'s value,
-         answers it as a reader's arm does) */
-      else if (a->kind == PA_USER) all = a->mi > 0 && a->vty == TY_STRBUF;
-      else all = 0;
-    }
-    if (all) return 1;
-    /* ...or one whose other arms answer a new String beside it: the
-       dispatch boxes each arm's own answer, the native handle or a new
-       handle around the fresh String (strbuf_poly_user_boxes), as the
-       String plan has it */
-    if (strbuf_poly_user_boxes((Compiler *)c, u)) return 1;
-  }
-  /* An attr reader of a boxed field on a receiver of one class: a field
-     whose class the rule shares stores its Strings as the handle
-     (share_lift_poly_ivar_stores), so the box the reader answers is the
-     handle's own; `{ host: req.host }` with `attr_accessor :host` */
-  if (u >= 0 && nt_kind(c->nt, u) == NK_CallNode && call_plain_argc((Compiler *)c, u) == 0 && nt_ref(c->nt, u, "block") < 0) {
-    int rv = nt_ref(c->nt, u, "receiver");
-    TyKind rt = rv >= 0 ? comp_ntype((Compiler *)c, rv) : TY_UNKNOWN;
-    const char *rn = nt_str(c->nt, u, "name");
-    MethodLookup rml = { .def_class = -1 };
-    if (rn && ty_is_object(rt) && call_attr_target((Compiler *)c, -1, ty_object_class(rt), rn, 0, &rml) &&
-        ({ int _tg[CPT_MAX]; cplan_targets((Compiler *)c, u, _tg, CPT_MAX) == 0; })) {
-      char ivn[260]; snprintf(ivn, sizeof ivn, "@%s", rn);
-      ClassInfo *ci = &c->classes[rml.def_class >= 0 ? rml.def_class : ty_object_class(rt)];
-      int ix = comp_ivar_index(ci, ivn);
-      if (ix >= 0 && ci->ivar_types[ix] == TY_POLY) return 1;
-    }
-    /* ...and so does a `def m = @iv` reader, the one method the call
-       reaches, whose whole body reads the slot: it returns the box */
-    if (rn && ty_is_object(rt) && sh_def_reader_box(c, u)) return 1;
-  }
-  Repr r = repr_of(c, n);
-  /* A boxed holder's read keeps what its incoming flows stored there. */
-  if (r.kind == RK_BOXED && strbuf_boxed_local((Compiler *)c, n)) return 1;
-  /* So does a boxed field's read through a receiverless attr reader,
-     `self->iv_x` (implicit_self_is_field_read), as the arm above takes one
-     with a receiver: a box allocates no copy. Its type can widen to the box
-     after the route was recorded on a String. */
-  if (r.kind == RK_BOXED && u >= 0 && nt_kind(c->nt, u) == NK_CallNode && nt_ref(c->nt, u, "receiver") < 0 &&
-      implicit_self_is_field_read((Compiler *)c, u))
-    return 1;
-  /* A boxed to_s answering a String receiver's own box carries what the
-     receiver's box does. */
-  if (r.kind == RK_BOXED && u >= 0 && sh_poly_to_s_self(c, u))
-    return share_node_carries_handle(c, nt_ref(c->nt, u, "receiver"));
-  /* The boxed unary-plus arm keeps a mutable String's handle and copies
-     a frozen one, exactly as the typed value route does. */
-  if (r.kind == RK_BOXED && nt_kind(c->nt, n) == NK_CallNode &&
-      is_unary_plus(nt_str(c->nt, n, "name")) &&
-      cplan_user((Compiler *)c, n).dispatch == CP_NONE) return 1;
-  /* A boxed append answers its receiver's box, appended in place: a chain
-     over a base that carries (`(+v) << x`) keeps that base's handle. */
-  if (r.kind == RK_BOXED && nt_kind(c->nt, n) == NK_CallNode) {
-    int cur = n, tg[CPT_MAX];
-    while (cur >= 0 && nt_kind(c->nt, cur) == NK_CallNode && nt_str(c->nt, cur, "name") &&
-           is_append_concat(nt_str(c->nt, cur, "name")) && call_plain_argc((Compiler *)c, cur) == 1 &&
-           nt_ref(c->nt, cur, "block") < 0 && cplan_targets((Compiler *)c, cur, tg, CPT_MAX) == 0)
-      cur = nt_paren_single(c->nt, nt_ref(c->nt, cur, "receiver"));
-    if (cur >= 0 && cur != n && repr_of(c, cur).kind == RK_BOXED && share_node_carries_handle(c, cur)) return 1;
-  }
-  /* a bang method on a handle local: a write hands over the local's handle
-     (emit_strbuf_value) */
-  if (r.kind == RK_STRBUF || r.strbuf_src != RS_NONE) return 1;
-  if (sh_bang_self_slot(c, n)) return 1;
-  /* a boxed variable's read lifted into the handle (poly_strbuf_lift) */
-  if (r.poly_lift) return 1;
-  /* A yielding call's result and a receiver-returning expression
-     use the same handle routes as their eventual store. */
-  return strbuf_value_carries((Compiler *)c, n);
 }

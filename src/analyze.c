@@ -25635,13 +25635,8 @@ static int strbuf_demand_store_leaf(Compiler *c, int sn, int depth) {
        compiled with the change lost; a container flowing in is left out,
        its own mutations reach it. */
     if (snv->type == TY_POLY && !snv->is_param && !snv->poly_ctr && poly_local_shows_string(c, snm, sns)) {
-      /* Under --share-strings the stored read is lifted into the handle
-         (lift_poly_read: it boxes the local's String as the handle and
-         writes that back into the local, and lift_poly_alias_reads carries
-         it to the names the local was copied from or to): the element is
-         the local's own String, which the route then carries where the
-         rule shares it (share_node_carries_handle), and a copy no other
-         name sees where it does not */
+      /* Lift the stored read so aliases and elements can keep the same
+         String handle when the local's type widens. */
       int ch = 0;
       {
         ch = lift_poly_read_store(c, sn);

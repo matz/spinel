@@ -97,6 +97,7 @@ src/codegen.c:obj_each_elems_text
 src/analyze.c:oa_copy_name
 src/codegen_stmt.c:exc_message_boxed_call
 src/codegen.c:obj_to_json_method
+src/codegen.c:obj_to_json_guarded
 src/codegen.c:array_user_inspect_mi
 src/codegen_call_class.c:emit_refl_im_params
 src/analyze_util.c:class_value_bind_call_target

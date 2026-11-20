@@ -51,3 +51,11 @@ end
 class S0 < R0; end
 S0.hide
 p((R0.new.rm rescue $!.class))
+# a barred word's value is its argument, whether or not it applies: a
+# class method's word on an inherited name a subclass's call runs it on
+class U0
+  def um = :um
+  def self.hide = private(:um, :um)
+end
+class V0 < U0; end
+p V0.hide

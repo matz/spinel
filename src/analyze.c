@@ -5680,7 +5680,7 @@ int vis_decl_call(Compiler *c, int id) {
      main, answers private and public alone: the other three are
      NoMethodError on main. In a top-level def self is the receiver, which
      self_is_main does not tell apart. A method body's word on the class
-     self is there, as the record holds it, answers as a class body's.) */
+     self is there, as the record reads it, answers as a class body's.) */
   if (self_class_body(c, id) < 0 && !elab_body_word(c, id)) {
     Scope *ms = comp_scope_of(c, id);
     if (!(ms && ms->def_node < 0 && self_is_main(c, id) && (vis == BVIS_PRIVATE || vis == BVIS_PUBLIC))) return 0;

@@ -3365,8 +3365,22 @@ static int lr_body_held(Compiler *c, int def) {
   return held;
 }
 
+/* (asked of the tree, as lr_body_holds asks its target: a word the record keeps unplaced runs on that class too,
+   and answers its names. One that takes a def answers only as the def's version, the record's kept answer,
+   which lr_unplaced_words asks of every body word a late body holds: unplaced, it keeps the form that refuses
+   it. Neither ask adds a history, so one a reader holds stays where it is) */
 int elab_body_word(Compiler *c, int id) {
-  return c->lrec && c->lrec->recorded && id < c->lrec->n && lr_body_word(c->nt, id) && lr_body_held(c, id);
+  const NodeTable *nt = c->nt;
+  LoadRecord *r = c->lrec;
+  const int *par = !r || !r->recorded ? NULL : r->plan_depth ? r->plan_par : r->up ? r->up : comp_parent_map(c);
+  int cls = LR_UNKNOWN_CLASS, sg, an = 0, ad = 0;
+  if (!par || id >= r->n || !lr_body_word(nt, id) || lr_body_around(nt, par, r->n, id) < 0 ||
+      !lr_body_target(c, par, r->n, id, 0, &cls, &sg) || cls < 0)
+    return 0;
+  const int *av = nt_arr(nt, nt_ref(nt, id, "arguments"), "arguments", &an);
+  for (int i = 0; i < an; i++) ad |= nt_kind(nt, av[i]) == NK_DefNode;
+  const LrHist *h = ad ? lr_hist(r, LR_KEY_HELD, id, "", 0) : NULL;
+  return !ad || (h && h->n && h->v[h->n - 1].vis);
 }
 
 /* The larger of two answers of what code may do (LR_OPAQUE_*) */
@@ -4443,7 +4457,9 @@ static void lr_unplaced_words(Compiler *c) {
     const char *sent = nm && is_send_family(nm) ? call_sent_name(nt, id, &skip) : NULL;
     int bvis = visibility_of_name(sent ? sent : nm), cls = bvis ? lr_word_table(c, par, r->n, id) : LR_UNKNOWN_CLASS;
     const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
-    if (cls < LR_MAIN || (!sent && (!(r->bits[id] & LR_LATE) || (lr_body_word(nt, id) && lr_body_held(c, id))))) continue;   /* (a body's version: lr_body_versions) */
+    /* (asked of each body word a late body holds, whatever its table, so the readers find it kept: elab_body_word) */
+    int held = !sent && id < r->n && (r->bits[id] & LR_LATE) && lr_body_word(nt, id) && lr_body_held(c, id);
+    if (cls < LR_MAIN || (!sent && (!(r->bits[id] & LR_LATE) || held))) continue;   /* (a body's version: lr_body_versions) */
     for (int i = skip; i < ac; i++) {
       int en = 1;
       const int *ev = nt_kind(nt, av[i]) == NK_ArrayNode ? nt_arr(nt, av[i], "elements", &en) : &av[i];

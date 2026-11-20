@@ -46493,9 +46493,9 @@ static int bo_hoist_init(BoHoist *h, Compiler *c, Scope *sc, int id, int seq, in
    e itself when nothing says it must be held: a sequence can reassign even a
    plain read, and so can an operand that rebinds `&s`'s s, under an operand
    that reads it (`[s]`; a literal with no read it cannot). */
-static int bo_hoist(BoHoist *h, int e) {
+static int bo_hoist(BoHoist *h, int e, int force) {
   NodeTable *nt = (NodeTable *)h->c->nt;
-  if (e < 0 || !(h->seq || bo_may_act(h->c, e) || (h->lread && bo_reads_local(nt, e)))) return e;
+  if (e < 0 || !(force || h->seq || bo_may_act(h->c, e) || (h->lread && bo_reads_local(nt, e)))) return e;
   char tn[64];
   snprintf(tn, sizeof tn, "__bo_%s_%d", comp_node_tag(h->c, h->id), h->serial++);
   h->stm[h->ns++] = an_temp_node(nt, h->sc, tn, e);
@@ -46505,7 +46505,7 @@ static int bo_hoist(BoHoist *h, int e) {
    when nothing was held. */
 static void bo_hold_ref(BoHoist *h, int node, const char *key) {
   NodeTable *nt = (NodeTable *)h->c->nt;
-  int from = nt_ref(nt, node, key), to = bo_hoist(h, from);
+  int from = nt_ref(nt, node, key), to = bo_hoist(h, from, 0);
   if (to != from) nt_node_set_ref(nt, node, key, to);
 }
 /* `recv.m(args, &expr)`: Ruby evaluates the receiver, then the arguments, then
@@ -46515,8 +46515,9 @@ static void bo_hold_ref(BoHoist *h, int node, const char *key) {
    printed the block's side effect first. When the block expression can act
    and something ahead of it can too, the call becomes
      (__bo_N_0 = recv; __bo_N_1 = arg; ...; __bo_N_b = expr; __bo_N_0.m(__bo_N_1, ..., &__bo_N_b))
-   so the order is the statements'. The node itself becomes the parentheses,
-   keeping its id, line and scope. */
+   so the order is the statements'. A safe navigation guards the argument
+   statements and call with a nil test on the held receiver. The original
+   node becomes the parentheses, keeping its id, line and scope. */
 static void desugar_block_arg_order(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count;
@@ -46541,6 +46542,7 @@ static void desugar_block_arg_order(Compiler *c) {
     if (!seq && !lread && !bo_may_act(c, be)) continue;
     if (is_super && (seq || !lread || bo_may_act(c, be))) continue;
     int recv = nt_ref(nt, id, "receiver");
+    int safe = recv >= 0 && nt_safe_nav(nt, id);
     int args = nt_ref(nt, id, "arguments");
     int an = 0; const int *av0 = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
     int ahead = bo_may_act(c, recv), plain = 1;
@@ -46580,7 +46582,8 @@ static void desugar_block_arg_order(Compiler *c) {
     if (!bo_hoist_init(&h, c, sc, id, seq, lread, nops)) { free(av); continue; }
     /* A sequence can reassign even a plain read: capture the receiver and
        arguments before it, inside the call's own evaluation site. */
-    int nrecv = bo_hoist(&h, recv);
+    int nrecv = bo_hoist(&h, recv, safe);
+    int nhead = h.ns;
     for (int k = 0; k < an; k++) {
       NodeKind ak = nt_kind(nt, av[k]);
       if (ak == NK_SplatNode) {
@@ -46596,7 +46599,7 @@ static void desugar_block_arg_order(Compiler *c) {
         }
         free(el);
       }
-      else av[k] = bo_hoist(&h, av[k]);
+      else av[k] = bo_hoist(&h, av[k], 0);
     }
     /* `&(log; proc { ... })`: the sequence's statements run here, in turn,
        and the proc literal they end in is the block itself -- hoisted whole,
@@ -46611,7 +46614,7 @@ static void desugar_block_arg_order(Compiler *c) {
         be = ps[pn - 1];
       }
     }
-    int nbe = bo_hoist(&h, be);
+    int nbe = bo_hoist(&h, be, 0);
     if (h.ns == 0) { free(h.stm); free(av); continue; }
     nt_node_set_ref(nt, blk, "expression", nbe);
     if (args >= 0) nt_node_set_arr(nt, args, "arguments", av, an);
@@ -46620,6 +46623,13 @@ static void desugar_block_arg_order(Compiler *c) {
     if (nc < 0) { free(h.stm); continue; }
     if (recv >= 0) nt_node_set_ref(nt, nc, "receiver", nrecv);
     h.stm[h.ns++] = nc;
+    if (safe) {
+      nt_set_safe_nav(nt, nc, 0);
+      int test = sd_bcall(nt, "nil?", nt_clone_subtree(nt, nrecv), NULL, 0);
+      int nil = nt_new_node(nt, "NilNode");
+      h.stm[nhead] = sd_if_n(nt, test, &nil, 1, h.stm + nhead, h.ns - nhead);
+      h.ns = nhead + 1;
+    }
     int stmts = nt_new_node(nt, "StatementsNode");
     nt_node_set_arr(nt, stmts, "body", h.stm, h.ns);
     free(h.stm);

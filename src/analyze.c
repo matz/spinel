@@ -42718,10 +42718,12 @@ static int mark_hash_nil_values(Compiler *c) {
       if (recv < 0 || nt_kind(nt, block) != NK_BlockNode) continue;
       const IterRow *row = iter_row_of(infer_type(c, recv), nm, call_plain_argc(c, id));
       if (!row || row->answer != IA_BLOCKVALS || cplan_user(c, id).dispatch != CP_NONE) continue;
-      /* A break answers for the call. Only next and the ordinary tail
-         answer for the entry the transform is collecting. */
-      if (hash_store_val_may_nil(c, nt_ref(nt, block, "body")) ||
-          block_jump_kind_nil(c, block, NK_NextNode)) {
+      /* A key transform copies the receiver's value. A value transform
+         collects the block's next or tail value. Break answers the call. */
+      int may_nil = row->yield[0] == YS_PAIR_KEY ? hash_vals_nullable(c, recv)
+                    : hash_store_val_may_nil(c, nt_ref(nt, block, "body")) ||
+                      block_jump_kind_nil(c, block, NK_NextNode);
+      if (may_nil) {
         *f = 1;
         changed = 1;
       }

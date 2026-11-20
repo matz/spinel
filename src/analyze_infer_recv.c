@@ -563,7 +563,23 @@ int infer_hash_call(Compiler *c, int id, TyKind rt, TyKind *out) {
       if (rt == TY_POLY_POLY_HASH) { *out = rt; return 1; }
       int body = nt_ref(nt, block, "body");
       int bn = 0; const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
-      TyKind nkt = bn > 0 ? infer_type(c, bb[bn - 1]) : TY_UNKNOWN;
+      int tail = bn > 0 ? bb[bn - 1] : -1;
+      TyKind nkt = tail >= 0 ? infer_type(c, tail) : TY_UNKNOWN;
+      int reopen = comp_builtin_kind_reopen_mi(c, id, rt, name);
+      int builtin = reopen < 0 || cplan_builtin_call(c, id) || cplan_reopen_runs_builtin(c, id, reopen);
+      if (builtin) {
+        TyKind nx = block_next_value_ty(c, body);
+        if (nx != TY_UNKNOWN) nkt = nkt == TY_UNKNOWN ? nx : ty_unify(nkt, nx);
+        /* A type join can hide a key a typed table cannot hold, such as
+           nil beside Integer. Check the actual block answers before
+           selecting a typed table. */
+        unsigned number_kinds;
+        if (block_store_value_ty(c, body, tail, nkt, nkt, &number_kinds) != nkt ||
+            (nkt == TY_INT && (nullable_int_value(c, tail) || block_next_value_nullable(c, block)))) {
+          *out = TY_POLY_POLY_HASH;
+          return 1;
+        }
+      }
       /* Symbol keys have no scalar-valued hash variant, so keys becoming
          symbols (e.g. transform_keys(&:to_sym)) yield a SymPolyHash regardless
          of the value type. */
@@ -571,7 +587,11 @@ int infer_hash_call(Compiler *c, int id, TyKind rt, TyKind *out) {
       /* a block a parameter hands on (`&block`) has no body here: its keys are of no kind the receiver's gives */
       if (nt_kind(nt, block) == NK_BlockArgumentNode && nkt == TY_UNKNOWN) { *out = TY_POLY_POLY_HASH; return 1; }
       TyKind r = ty_hash_of(nkt, ty_hash_val(rt));
-      { *out = r != TY_UNKNOWN ? r : rt; return 1; }
+      if (r != TY_UNKNOWN) { *out = r; return 1; }
+      /* A known new key may have no layout with the receiver's values.
+         Use the general Hash to keep that key and its original value. */
+      *out = builtin && nkt != TY_UNKNOWN ? TY_POLY_POLY_HASH : rt;
+      return 1;
     }
     if (block >= 0 && sp_streq(name, "transform_values")) {
       if (rt == TY_POLY_POLY_HASH) { *out = rt; return 1; }

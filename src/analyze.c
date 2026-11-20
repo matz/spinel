@@ -38015,9 +38015,12 @@ static int block_jump_kind_nil(Compiler *c, int blk, NodeKind k) {
   return r;
 }
 
+int block_next_value_nullable(Compiler *c, int blk) {
+  return block_jump_kind_nil(c, blk, NK_NextNode);
+}
+
 static int block_jumps_nil(Compiler *c, int blk) {
-  return block_jump_kind_nil(c, blk, NK_NextNode) ||
-         block_jump_kind_nil(c, blk, NK_BreakNode);
+  return block_next_value_nullable(c, blk) || block_jump_kind_nil(c, blk, NK_BreakNode);
 }
 /* Each value a jump of kind k out of block blk hands on is the array's */
 static int elem_slots_jumps(Compiler *c, int blk, NodeKind k, int depth, ElemSlotFn fn, void *ud) {

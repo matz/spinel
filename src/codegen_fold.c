@@ -6903,6 +6903,27 @@ int emit_with_index_expr(Compiler *c, int id, Buf *b) {
      collecting block around it. */
   if (is_each) emit_loop_body(c, body, g_pre, innerIndent);
   else {
+    /* an Integer or Float Array's kept element is read from the receiver,
+       its nil kept (oget) */
+    int num_keep = !range_src && k && rk && sp_streq(rk, k) && is_numeric_literal_tag(k);
+    /* reject keeps the element it yielded, as it was before the block ran
+       (CRuby's ary_reject); select reads it back afterwards, as rb_ary_elt
+       does. An Integer or Float Array's is held here with its nil, and so is
+       any element where the block names none (`reject.with_index { false }`
+       has no parameter to push), boxed and rooted */
+    int tkept = 0;
+    if (is_rej && num_keep) {
+      tkept = ++g_tmp;
+      emit_indent(g_pre, innerIndent);
+      buf_printf(g_pre, "%s _t%d = sp_%sArray_oget(_t%d, _t%d);\n", oint_ctype(elem_t), tkept, k, trecv, ti);
+    }
+    else if (is_rej && !p0) {
+      tkept = ++g_tmp;
+      char src[256]; typed_elem_getf(src, sizeof src, rt, k, "_t%d, _t%d", trecv, ti);
+      emit_indent(g_pre, innerIndent); buf_printf(g_pre, "sp_RbVal _t%d = ", tkept);
+      if (elem_t == TY_POLY) buf_puts(g_pre, src); else emit_boxed_elem_read(c, elem_t, src, g_pre);
+      buf_printf(g_pre, "; SP_GC_ROOT_RBVAL(_t%d);\n", tkept);
+    }
     IterStep st; emit_iter_step_open(c, block, !is_map, innerIndent, &st);
     int saveInd = g_indent; g_indent = innerIndent;
     Buf vb; memset(&vb, 0, sizeof vb);
@@ -6956,9 +6977,26 @@ int emit_with_index_expr(Compiler *c, int id, Buf *b) {
       emit_indent(g_pre, innerIndent);
       buf_printf(g_pre, "if (%s(", is_rej ? "!" : "");
       buf_puts(g_pre, vb.p ? vb.p : ""); buf_puts(g_pre, ")) ");
-      if (!range_src && k && rk && sp_streq(rk, k) && is_numeric_literal_tag(k))
-        buf_printf(g_pre, "sp_%sArray_push_o(_t%d, sp_%sArray_oget(_t%d, _t%d));\n", rk, tres, k, trecv, ti);
-      else { Buf pv = {0}; buf_printf(&pv, "lv_%s", p0 ? p0 : ""); emit_kind_push(c, g_pre, rk, tres, pv.p); buf_puts(g_pre, ";\n"); free(pv.p); }
+      if (num_keep) {
+        /* reject's element was held before the block; select's is read now */
+        char kept[96];
+        if (tkept) snprintf(kept, sizeof kept, "_t%d", tkept);
+        else snprintf(kept, sizeof kept, "sp_%sArray_oget(_t%d, _t%d)", k, trecv, ti);
+        buf_printf(g_pre, "sp_%sArray_push_o(_t%d, %s);\n", rk, tres, kept);
+      }
+      else if (!p0) {
+        Buf pv = {0};
+        if (tkept) {
+          char held[24]; snprintf(held, sizeof held, "_t%d", tkept);
+          if (res_poly) buf_puts(&pv, held); else emit_unbox_text(c, resr.elem, held, &pv);
+        } else {
+          char src[256]; typed_elem_getf(src, sizeof src, rt, k, "_t%d, _t%d", trecv, ti);
+          if (res_poly && elem_t != TY_POLY) emit_boxed_elem_read(c, elem_t, src, &pv);
+          else buf_puts(&pv, src);
+        }
+        emit_kind_push(c, g_pre, rk, tres, pv.p); buf_puts(g_pre, ";\n"); free(pv.p);
+      }
+      else { Buf pv = {0}; buf_printf(&pv, "lv_%s", p0); emit_kind_push(c, g_pre, rk, tres, pv.p); buf_puts(g_pre, ";\n"); free(pv.p); }
     }
     free(vb.p);
   }
@@ -6974,7 +7012,13 @@ int emit_with_index_expr(Compiler *c, int id, Buf *b) {
 
   if (is_mapbang) buf_printf(b, "_t%d", trecv);   /* map! returns the mutated receiver */
   else if (collecting) buf_printf(b, "_t%d", tres);
-  else if (range_src) buf_printf(b, "_t%d", trng);  /* each yields the Range itself */
+  else if (range_src) {
+    /* each yields the Range itself, boxed where the call's value is a boxed
+       one (a method's tail typed for any value, a boxed slot) */
+    char rv[32]; snprintf(rv, sizeof rv, "_t%d", trng);
+    if (repr_of(c, id).as_ty == TY_POLY) emit_boxed_text(c, TY_RANGE, rv, b);
+    else buf_puts(b, rv);
+  }
   else buf_printf(b, "_t%d", trecv);  /* each.with_index yields the receiver */
   return 1;
 }

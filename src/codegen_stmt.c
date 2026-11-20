@@ -23071,22 +23071,35 @@ static int tail_receiver_matches_slot(Repr value, TyKind slot) {
          (value.as_ty == slot || (value.ty == TY_STRING && slot == TY_STRBUF));
 }
 
+/* `x.<m>.with_index(off) { }`, its Enumerator made right there by a
+   blockless m, whose answer the value form gives (emit_with_index_expr,
+   emit_enum_with_index_expr): the collection of a map, collect, select,
+   filter or reject over any receiver, and the receiver of an each over an
+   Array or an Integer Range, which the value form answers itself. The
+   statement form walks the same elements and drops that answer, so at a
+   method's tail the method answered nil. A stored
+   Enumerator and the other walks stay with the statement form: the run time
+   labels several of them `each`, or holds a materialized copy as their
+   source, so the value form's answer would not always be CRuby's. */
+static int with_index_answer_known(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  int r = nt_ref(nt, id, "receiver");
+  if (r < 0 || nt_kind(nt, r) != NK_CallNode || nt_ref(nt, r, "block") >= 0 ||
+      nt_ref(nt, r, "arguments") >= 0) return 0;
+  const char *m = nt_str(nt, r, "name");
+  if (ty_iter_shape(m) != TY_ITER_NONE) return 1;
+  if (!m || !is_each_name(m)) return 0;
+  int x = nt_ref(nt, r, "receiver");
+  TyKind xt = x >= 0 ? repr_of(c, x).as_ty : TY_UNKNOWN;
+  return ty_is_array(xt) || xt == TY_RANGE;
+}
+
 /* Tail position: the value of this statement is the method's return value. */
 /* A block-taking call whose value is its receiver -- `each`, `each_pair`,
    `times`, `upto` and the rest -- emitted as a loop, so wherever that value is
    wanted the receiver has to be put back afterwards. Returns the receiver's
    node when this call is one AND the receiver is a plain read (it is re-read,
    not re-evaluated, so anything with a side effect is out), else -1. */
-/* `x.each.with_index { }` over an Array: the blockless each hop's receiver */
-static int each_with_index_chain(Compiler *c, int id) {
-  const NodeTable *nt = c->nt;
-  int r = nt_ref(nt, id, "receiver");
-  if (r < 0 || nt_kind(nt, r) != NK_CallNode || nt_ref(nt, r, "block") >= 0 ||
-      nt_ref(nt, r, "arguments") >= 0 || !nt_str(nt, r, "name") ||
-      !sp_streq(nt_str(nt, r, "name"), "each")) return 0;
-  int rr = nt_ref(nt, r, "receiver");
-  return rr >= 0 && ty_is_array(comp_ntype(c, rr));
-}
 
 int tail_iter_receiver(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
@@ -23625,9 +23638,10 @@ void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent) {
                         sp_streq(tv_name, "select!") || sp_streq(tv_name, "filter!") ||
                         sp_streq(tv_name, "reject!") || sp_streq(tv_name, "keep_if") ||
                         sp_streq(tv_name, "delete_if") ||
-                        /* `a.each.with_index { }` answers a, which only the
-                           value form reads back */
-                        (sp_streq(tv_name, "with_index") && each_with_index_chain(c, id)));
+                        /* `a.map.with_index { }` answers its collection,
+                           `a.each.with_index { }` a, which only the value
+                           form gives (with_index_answer_known) */
+                        (sp_streq(tv_name, "with_index") && with_index_answer_known(c, id)));
   /* An iterator whose value is its receiver, called on something that is NOT
      a plain read (`s.keys.each { }`, `s.dup.each { }`): the statement form
      below produces the tail value by RE-READING the receiver, which it cannot

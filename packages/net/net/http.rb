@@ -525,13 +525,6 @@ module Net
       @headers.key?(name.to_s.downcase)
     end
 
-    # Whether this kind of request carries a body, CRuby's REQUEST_HAS_BODY.
-    # Decided by the method rather than per class, since `Net::HTTP#post` and
-    # `Net::HTTP.post_form` build a plain HTTPRequest with the method name.
-    def request_body_permitted?
-      @method == "POST" || @method == "PUT" || @method == "PATCH"
-    end
-
     # Yields the spelling the caller wrote, not the downcased key: for a
     # request that is what goes out on the wire.
     def each_header

@@ -17652,23 +17652,6 @@ static void masgn_recv_guard(Compiler *c, int recv, int recv_tmp, const char *na
   emit_node_or_tmp(c, recv, recv_tmp, b);
   buf_printf(b, "))) sp_nil_recv_raise(\"%s\");\n", name);
 }
-/* Does a receiver typed as class `cid` store through a writer a descendant
-   answers differently? Typed so, it can hold an instance of the descendant
-   (`self` in an inherited method), and the single setter dispatches on the
-   instance's class then. A descendant's own `def x=` does; so does its
-   attr_writer where the typed class's writer is a method. */
-static int masgn_writer_overridden(Compiler *c, int tgt, int cid, const char *nm) {
-  if (c->classes[cid].is_native_class || c->classes[cid].c_struct) return 0;
-  if (cplan_overridden(c, cid, nm, 0)) return 1;
-  char base[256];
-  /* (the writer the target makes on its receiver: the implied call of its row) */
-  if (!setter_base_name(nm, base, sizeof base) || cplan_implied_target(c, tgt, nt_ref(c->nt, tgt, "receiver"), cid, nm, CIT_TABLE, NULL) < 0) return 0;
-  int nd = 0;
-  const int *ds = comp_descendants(c, cid, &nd);
-  for (int i = 0; i < nd; i++)
-    if (ds[i] != cid && comp_is_writer(&c->classes[ds[i]], base)) return 1;
-  return 0;
-}
 /* An index target with two keys (`a[i, n], x = ...`) stores as `a[i, n] = v`
    does. An Array receiver splices through emit_array_splice, which takes its
    receiver, keys and value as nodes: they are bound to the temps the statement
@@ -17909,7 +17892,7 @@ static int masgn_store(Compiler *c, int id, const MasgnTmps *mt, int tgt, const 
     TyKind crt = crtr.as_ty;
     /* a boxed receiver dispatches on its class, as the single setter does;
        so does one typed as a class a descendant overrides the writer of */
-    int vdisp = ty_is_object(crt) && masgn_writer_overridden(c, tgt, ty_object_class(crt), nm);
+    int vdisp = ty_is_object(crt) && cplan_target_writer_switch(c, tgt, ty_object_class(crt), nm);
     if (crtr.kind == RK_BOXED || vdisp) {
       char base[256]; snprintf(base, sizeof base, "%.*s", (int)(snl - 1), nm);
       TyKind at = val && vt != TY_NIL && vt != TY_VOID && vt != TY_UNKNOWN ? vt : TY_POLY;
@@ -19670,7 +19653,7 @@ static int emit_multi_write_stmt_body(Compiler *c, int id, Buf *b, int indent, c
       int rc2 = ty_object_class(rt2);
       MethodLookup wml2 = { .def_class = -1 };
       int wmi2 = call_target(c, lefts[i], rc2, base2, CT_WRITER, &wml2), wr2 = wmi2 < 0 && wml2.kind == ML_ATTR;
-      if (!wr2 || masgn_writer_overridden(c, lefts[i], rc2, setnm)) {
+      if (!wr2 || cplan_target_writer_switch(c, lefts[i], rc2, setnm)) {
         /* a writer defined with `def x=` (in the class, a module it includes
            or an ancestor, whichever the plan ranks first), or bound with
            `native_method :x=`, runs as a call, and so does an attr writer a

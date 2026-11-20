@@ -761,11 +761,14 @@ void cplan_to_ary_entries_free(Compiler *c);
    its method scope, with the class defining it in *cdef when cdef is
    given; -1 when the chain has none that takes a key and a value. */
 int cplan_index_writer(Compiler *c, int cls, int *cdef);
+/* Whether a directly typed attribute target dispatches to a descendant's writer. */
+int cplan_target_writer_switch(Compiler *c, int tgt, int cls, const char *name);
 /* What storing into attribute or index target tgt (`o.x`, `a[i]` of a
    multiple assignment) does besides the store: CPS_CODE when it may call
    a method of the program -- a store on a receiver typed at run time, a
-   writer that is a method of the program (a plain attr_writer is one
-   field store), the program's `[]=` (cplan_index_writer), or a builtin
+   writer that is a method of the program, including a descendant's
+   override of a plain attr_writer, the program's `[]=` (cplan_index_writer),
+   or a builtin
    `[]=` whose callbacks on the keys it is handed (the builtin-callback
    rows: a Hash's #hash and #eql?, an Array's #to_int) reach a method of
    the program; CPS_CHANGES_ARRAY when it is a builtin `[]=` on an Array,

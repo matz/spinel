@@ -2593,7 +2593,8 @@ int emit_call_store_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
            statement form roots them. */
         int tr = -1, tk = -1;
         TyKind held_key = TY_UNKNOWN;
-        if (subtree_may_allocate(c, recv) || subtree_may_allocate(c, argv[0])) {
+        if (subtree_may_allocate(c, recv) || subtree_may_allocate(c, argv[0]) ||
+            hash_store_hold_boxed_key(c, rt, argv[0], argv[1])) {
           tr = ++g_tmp; tk = ++g_tmp;
           buf_printf(b, "%s _t%d = ", c_type_name(rt), tr); emit_expr(c, recv, b); buf_puts(b, "; ");
           emit_index_recv_root(c, rt, id, recv, argv, 2, tr, 0, b);
@@ -2619,7 +2620,7 @@ int emit_call_store_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
         /* When the slot is poly but the rhs has no type yet (e.g. `{}`),
            emit a boxed value so the sp_RbVal temp initialises correctly. */
         Buf value = {0}, *saved_pre = g_pre;
-        if (held_key == TY_STRBUF) g_pre = b;
+        if (held_key == TY_STRBUF || (held_key == TY_POLY && ty_hash_key(rt) == TY_STRING)) g_pre = b;
         if (vpolyo) emit_oint_expr(c, argv[1], vpt, &value);
         else if (voset) emit_oint_expr(c, argv[1], TY_INT, &value);
         else if (vboxo) { buf_puts(&value, "sp_poly_hval_oi("); emit_expr(c, argv[1], &value); buf_puts(&value, ")"); }
@@ -2646,7 +2647,7 @@ int emit_call_store_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
         buf_puts(b, ")) sp_raise_frozen_hash_at("); emit_node_or_tmp(c, recv, tr, b); buf_printf(b, ", %s); ", hash_box_cls(rt));
         buf_printf(b, "sp_%sHash_%s%s(", hn, voset || vboxo ? "oset" : "set", voset || vboxo ? "" : typed_elem_store_sfx(rt));
         emit_node_or_tmp(c, recv, tr, b); buf_puts(b, ", ");
-        if (tk >= 0) buf_printf(b, held_key == TY_STRBUF ? "SP_STR_B(_t%d)" : "_t%d", tk);
+        if (tk >= 0) emit_held_hash_store_key(rt, held_key, tk, b);
         else emit_hash_store_key(c, argv[0], rt, b);  /* unbox a poly key to the hash's key type */
         buf_puts(b, ", ");
         char tvn[32]; snprintf(tvn, sizeof tvn, "_t%d", tv);

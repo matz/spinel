@@ -3227,7 +3227,9 @@ int emit_srange_hop_row(Compiler *c, int id, int r, const char *name, Buf *b);
 void emit_node_or_tmp(Compiler *c, int node, int tmp, Buf *b);
 /* the key of a hash store, as the kind's set takes it (codegen_stmt.c) */
 void emit_hash_store_key(Compiler *c, int key, TyKind rt, Buf *b);
+int hash_store_hold_boxed_key(Compiler *c, TyKind rt, int key, int value);
 TyKind hold_hash_store_key(Compiler *c, int key, TyKind rt, int temp, Buf *b);
+void emit_held_hash_store_key(TyKind rt, TyKind held, int temp, Buf *b);
 void emit_start_with_arg(Compiler *c, int arg, const char *subj, Buf *b);
 const char *hash_box_cls(TyKind t);
 const char *hash_order_key(TyKind t, int tr, int ti);

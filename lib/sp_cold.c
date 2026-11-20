@@ -3320,9 +3320,17 @@ sp_bool sp_file_zero(const char *path) {
   if (S_ISDIR(st.st_mode)) return 0;
   return st.st_size == 0;
 }
+/* File.dirname: the separators at the end of the path go first, as CRuby
+   drops them ("/usr/bin/" is in "/usr"), then the last part and the
+   separators before it ("a/b///c" is in "a/b"); a path of separators is
+   the root, one with no separator left is ".". */
 const char *sp_file_dirname(const char *path) {SP_GC_ROOT_STR(path);
-  const char *s = strrchr(path, '/');
+  size_t len = strlen(path);
+  while (len > 1 && path[len - 1] == '/') len--;
+  const char *s = NULL;
+  for (size_t i = len; i > 0; i--) if (path[i - 1] == '/') { s = path + i - 1; break; }
   if (!s) { char *r = sp_str_alloc(1); r[0] = '.'; r[1] = 0; return r; }
+  while (s > path && s[-1] == '/') s--;
   if (s == path) { char *r = sp_str_alloc(1); r[0] = '/'; r[1] = 0; return r; }
 #if defined(_WIN32)
   /* the separator of a drive's root ("C:/x") stays: the dirname is the root */

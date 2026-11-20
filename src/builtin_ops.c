@@ -388,6 +388,7 @@ static const BuiltinOp bop_rows[] = {
   { BOP_BOXED_FALLBACK, "to_s", 0, 0, BF_ANY, TY_POLY, BOPE_TEMPLATE, "sp_poly_to_s_box($r)", 0, 0, 0, 1 },
   { BOP_BOXED_FALLBACK, "inspect", 0, 0, BF_ANY, TY_POLY, BOPE_TEMPLATE, "sp_poly_inspect_box($r)", 0, 0, 0, 1 },
   { BOP_BOXED_FALLBACK, "id2name", 0, 0, BF_ANY, TY_STRBUF, BOPE_TEMPLATE, "sp_poly_sym_id2name($r)", 0, 0, 0, 1 },
+  { BOP_BOXED_FALLBACK, "append_as_bytes", 0, BOP_ARGC_ANY, BF_ANY, TY_POLY, BOPE_STRING_APPEND_AS_BYTES, NULL, 0, 0, BOPF_SELF | BOPF_ARGV },
   /* Boxed reads that answer a new Array. A zero-argument rotate uses one;
      shuffle has no count. Reached after the earlier routes: a call inference
      types by a rule of its own (a builtin's super from its reopening, the
@@ -2308,10 +2309,7 @@ static const BuiltinOp bop_rows[] = {
   { TY_STRING, "byteslice",       0, 127, BF_ANY,      TY_STRING,     BOPE_NONE },
   { TY_STRING, "bytesplice",      2,   5, BF_ANY,      TY_STRING,     BOPE_STRING_BYTESPLICE, NULL, 0, 0, BOPF_SELF, 7 },
   { TY_STRING, "bytesplice",      0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF },
-  /* append_as_bytes() appends nothing and answers its receiver, which it
-     checks is not frozen (emit_str_mutator_call's stage 6, as concat() does) */
-  { TY_STRING, "append_as_bytes", 0,   0, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "({ const char *_t$t = $r; sp_str_check_mutable(_t$t); _t$t; })", 0, 0, BOPF_SELF, 6 },
-  { TY_STRING, "append_as_bytes", 0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF },
+  { TY_STRING, "append_as_bytes", 0, BOP_ARGC_ANY, BF_ANY, TY_STRING, BOPE_STRING_APPEND_AS_BYTES, NULL, 0, 0, BOPF_SELF | BOPF_ARGV, 7 },
   { TY_STRING, "force_encoding",  0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF },
   { TY_STRING, "b",               0,   0, BF_ANY,      TY_STRBUF,     BOPE_TEMPLATE, "sp_String_binary_copy($r)", 0 },
   { TY_STRING, "b",               0, 127, BF_ANY,      TY_STRING,     BOPE_NONE },
@@ -3188,7 +3186,7 @@ static void bop_build_index(void) {
 }
 
 static int bop_row_fits(const BuiltinOp *r, int argc, int has_block) {
-  if (argc < r->argc_min || argc > r->argc_max) return 0;
+  if (argc < r->argc_min || (argc > r->argc_max && !(r->flags & BOPF_ARGV))) return 0;
   if (r->block == BF_NONE && has_block) return 0;
   if (r->block == BF_REQUIRED && !has_block) return 0;
   return !r->feature || sp_feature_enabled(r->feature);

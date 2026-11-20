@@ -8980,6 +8980,7 @@ static int arm_raises_nomethod_for(const char *text, const char *name) {
    bound to _t<tv> (emit_poly_builtin_default_at): the arm's text into nb,
    what it hoists into *arm_pre. 0 when the probe declined. */
 static int poly_default_obj_spreads(Compiler *c, int id, const char *name);
+
 /* Array#at, kept by name where a program class owns it (desugar_array_at:
    an instance method `at`, or a class method `at` a boxed receiver may be a
    Class of): for a receiver that is no Class, the index read that checks
@@ -9018,21 +9019,21 @@ static int kwh_values_held(const NodeTable *nt, int kwh) {
 }
 static int bi_default_probe(Compiler *c, int id, int recv, const char *name, int argc, const int *argv,
                             const int *atmp, const TyKind *atmp_ty, TyKind ret, TyKind bt, int slot_o,
-                            int omit_block, int tv, Buf *nb, char **arm_pre, int *box_o) {
+                            int omit_block, int gathered, int tv, Buf *nb, char **arm_pre, int *box_o) {
   const NodeTable *nt = c->nt;
-  int slot = view_bind_temp(recv, tv);
+  int mark = view_mark();
+  view_bind_temp(recv, tv);
   /* a splat into Object's own method (poly_default_obj_spreads) spreads the
      list the dispatch already flattened into its temp, a boxed Array: its
      operand is not read a second time */
-  int sviews[POLY_OBJ_SPREAD_MAX], nsv = 0;
-  int obj_spread = poly_default_obj_spreads(c, id, name);
-  int last_splat = obj_spread ? poly_last_splat(nt, argc, argv) : -1;
+  int spread = gathered || poly_default_obj_spreads(c, id, name);
+  int last_splat = spread ? poly_last_splat(nt, argc, argv) : -1;
   for (int a = 0; a < argc; a++) {
-    if (nt_kind(nt, argv[a]) == NK_SplatNode && obj_spread && nsv < POLY_OBJ_SPREAD_MAX) {
+    if (nt_kind(nt, argv[a]) == NK_SplatNode && spread) {
       int ex = nt_ref(nt, argv[a], "expression");
       if (ex >= 0) {
         view_bind_temp(ex, atmp[a]);
-        sviews[nsv++] = view_push(c, ex, TY_POLY_ARRAY);
+        view_push(c, ex, TY_POLY_ARRAY);
       }
       continue;
     }
@@ -9040,8 +9041,10 @@ static int bi_default_probe(Compiler *c, int id, int recv, const char *name, int
        before the splat's operand ran, held in its temp: a splat operand
        that writes what the argument reads (`w(@x, *side)`) does not
        change it (poly_default_arg_held) */
-    if (a < last_splat && nt_kind(nt, argv[a]) != NK_KeywordHashNode) {
-      bind_poly_arg_temp(c, argv[a], atmp_ty[a], atmp[a]);
+    if ((a < last_splat || gathered) && nt_kind(nt, argv[a]) != NK_KeywordHashNode) {
+      if (gathered && atmp_ty[a] == TY_STRBUF)
+        ran_first_bind_read(argv[a], atmp[a]);
+      else bind_poly_arg_temp(c, argv[a], atmp_ty[a], atmp[a]);
       continue;
     }
     /* (a held handle is the argument's value, which a writer arm takes:
@@ -9085,8 +9088,7 @@ static int bi_default_probe(Compiler *c, int id, int recv, const char *name, int
   *box_o = pr.box_o;
   view_pop(c, vw);
   view_pop(c, va);
-  while (nsv > 0) view_pop(c, sviews[--nsv]);
-  view_unbind(slot);
+  view_unwind(mark);
   return ok;
 }
 /* Does the re-entered emission of call id land on a method the program
@@ -9130,14 +9132,15 @@ static int emit_poly_builtin_default_at(Compiler *c, int id, int recv, const cha
      the builtin, and their arm did not build. Every value's methods that
      hand the block the receiver (iter_hands_recv: tap, then) answer it or
      the block's value, the type the analysis records, checked below. */
-  if (nt_ref(nt, id, "block") >= 0 && argc == 0 && !omit_block && !iter_hands_recv(name) &&
+  const BuiltinOp *row = cplan_builtin_op_row(c, id, BOP_BOXED_FALLBACK, name, 0, NULL);
+  int gathered = row && (row->flags & BOPF_ARGV);
+  if (nt_ref(nt, id, "block") >= 0 && argc == 0 && !omit_block && !gathered && !iter_hands_recv(name) &&
       !(poly_block_mutator_name(name) && (ret == TY_POLY || comp_value_dropped(c, id))) &&
       !(is_step_call(name) && ret == TY_POLY)) return 0;
   if (g_pd_skip == id || g_n_argov + argc + 1 > MAX_ARG_OVERRIDE) return 0;
   if (argc > 0 && (!atmp || !atmp_ty)) return 0;
-  /* a splat's temp is the flattened list, which no builtin emitter reads
-     as its arguments. The key-list readers below, and the line readers
-     (gets, readline: the boxed IO arm gathers their separator, limit and
+  /* A variadic operand row uses the splat's held list directly. The key-list
+     and line readers (gets, readline: the boxed IO arm gathers separator, limit and
      `chomp:` from the list at run time), spread a splatted operand
      themselves, so their arm spreads it again, as the ordinary call would
      (#7051); that is sound only where reading the operand twice reads the
@@ -9150,7 +9153,7 @@ static int emit_poly_builtin_default_at(Compiler *c, int id, int recv, const cha
     for (int a = 0; a < argc; a++) ns_obj += nt_kind(nt, argv[a]) == NK_SplatNode;
     if (ns_obj > POLY_OBJ_SPREAD_MAX) obj_spread = 0;
   }
-  int splat_ok = poly_splat_keyed(name) || obj_spread;
+  int splat_ok = poly_splat_keyed(name) || obj_spread || gathered;
   for (int a = 0; a < argc; a++) {
     int is_splat = nt_kind(nt, argv[a]) == NK_SplatNode;
     if (is_splat && !splat_ok) return 0;
@@ -9161,8 +9164,8 @@ static int emit_poly_builtin_default_at(Compiler *c, int id, int recv, const cha
     }
     /* (--share-strings: an assignment's right-hand side held as the handle
        its arms store, which the re-entry reads as that handle) */
-    int held_h = argc == 1 && call_is_setter_assign(nt, id) && atmp_ty[a] == TY_STRBUF &&
-                 repr_of(c, argv[a]).as_ty == TY_STRING;
+    int held_h = atmp_ty[a] == TY_STRBUF && (gathered || (argc == 1 && call_is_setter_assign(nt, id) &&
+                                                          repr_of(c, argv[a]).as_ty == TY_STRING));
     /* a line reader handed a splat walks the keywords beside it again
        (`**kw` would run twice), so they count as the splat does */
     int rereads = is_splat || (splat_ok && is_line_read(name) && nt_kind(nt, argv[a]) == NK_KeywordHashNode);
@@ -9171,7 +9174,7 @@ static int emit_poly_builtin_default_at(Compiler *c, int id, int recv, const cha
     /* (a splat into Object's own method reads the list its temp holds:
        bi_default_probe; another argument with a side effect beside it
        would be read again, and declines) */
-    if (is_splat && obj_spread) continue;
+    if (is_splat && (obj_spread || gathered)) continue;
     if (obj_spread && ns_obj > 0 && subtree_has_side_effect(c, argv[a])) return 0;
     /* (one ahead of the last splat is read from its temp, bi_default_probe:
        a temp of another type than the argument is no value it can read) */
@@ -9243,7 +9246,7 @@ static int emit_poly_builtin_default_at(Compiler *c, int id, int recv, const cha
   Buf *nb = calloc(1, sizeof *nb);
   char *arm_pre = NULL;
   int box_o = 0;
-  int ok = bi_default_probe(c, id, recv, name, argc, argv, atmp, atmp_ty, ret, bt, slot_o, omit_block, tv, nb, &arm_pre, &box_o);
+  int ok = bi_default_probe(c, id, recv, name, argc, argv, atmp, atmp_ty, ret, bt, slot_o, omit_block, gathered, tv, nb, &arm_pre, &box_o);
   Buf ib; memset(&ib, 0, sizeof ib);
   if (ok && nb->p) {
     /* a raise token is no value to box: the test below reads it bare */
@@ -9294,7 +9297,7 @@ static int emit_poly_builtin_default_at(Compiler *c, int id, int recv, const cha
       Buf *nb2 = calloc(1, sizeof *nb2);
       char *pre2 = NULL;
       int box2 = 0;
-      int ok2 = bi_default_probe(c, id, recv, name, argc, argv, atmp, atmp_ty, ret, bt, slot_o, omit_block, tv,
+      int ok2 = bi_default_probe(c, id, recv, name, argc, argv, atmp, atmp_ty, ret, bt, slot_o, omit_block, gathered, tv,
                                  nb2, &pre2, &box2);
       nt_node_set_ref((NodeTable *)nt, blk, "body", body);
       if (ok2 && nb2->p && !arm_raises_nomethod_for(nb2->p, name)) own_raise = 0;

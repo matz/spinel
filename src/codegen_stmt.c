@@ -24711,8 +24711,7 @@ static int strbuf_recv_hold(Compiler *c, int recv, const char *name, int argc, c
 /* emit_array_mutate_stmt_body's String appends (<< and concat) and its bang
    methods, with and without arguments (answers 1 emitted, 0 declined, -1 to
    go on) */
-/* See codegen_internal.h. */
-int str_append_arg_staged_own(Compiler *c, int argc, int arg) {
+static int str_append_arg_staged_own(Compiler *c, int argc, int arg) {
   return argc > 1 && !share_value_fresh(c, arg, 0);
 }
 /* concat(a, b, ...) onto the handle `sref`: every argument taken before

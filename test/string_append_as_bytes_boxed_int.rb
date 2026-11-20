@@ -76,7 +76,7 @@ rescue TypeError => e
 end
 p park
 begin
-  "Seongsu".append_as_bytes(:station)
+  (+"Seongsu").append_as_bytes(:station)
 rescue TypeError => e
   p e.message
 end

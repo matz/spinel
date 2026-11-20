@@ -93,7 +93,6 @@ sp_bool sp_str_valid_encoding(const char*s);
 const char*sp_str_field(const char*s,const char*sep,sp_int n);
 sp_int sp_str_field_count(const char*s,const char*sep);
 const char*sp_str_concat(const char*a,const char*b);
-const char*sp_str_append_bytes(const char*a,const char*b);
 const char*sp_str_concat3(const char*a,const char*b,const char*c);
 const char*sp_str_concat4(const char*a,const char*b,const char*c,const char*d);
 const char*sp_str_concat_arr(const char *const *parts,int n);

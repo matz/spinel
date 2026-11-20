@@ -1,0 +1,7 @@
+[[97, 120, 97, 120, 127, 97, 120], true, "UTF-8"]
+[TypeError, "wrong argument type PretendBytes (expected String or Integer)", "bx"]
+[[195, 169, 255, 7, 249], "UTF-8"]
+[FrozenError, "can't modify frozen String: \"frozen\""]
+[FrozenError, "can't modify frozen String: \"frozen\""]
+[115, 33, 0, 0, 255, 115]
+["can't modify frozen ByteSubclass: custom", true]

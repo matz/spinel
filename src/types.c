@@ -84,7 +84,7 @@ static const PolyFace ty_poly_face_tbl[] = {
   {"grep", PF_ENUM, 1, 1, -1}, {"minmax_by", PF_ENUM, 0, 0, 1},
   /* The String mutators String alone owns. */
   {"setbyte", PF_STRING | PF_MUT, 2, 2, 0}, {"scrub!", PF_STRING | PF_MUT | PF_VAL_SELF | PF_SAME_OK | PF_STR_TYPED | PF_STR_SELF, 0, 1, -1},
-  {"bytesplice", PF_STRING | PF_MUT | PF_VAL_SELF | PF_ENC, 2, 5, 0}, {"append_as_bytes", PF_STRING | PF_MUT | PF_VAL_SELF, 0, -1, 0},
+  {"bytesplice", PF_STRING | PF_MUT | PF_VAL_SELF | PF_ENC, 2, 5, 0},
   /* The names String and Array share: the receiver's run-time kind picks
      the arm. concat's arguments are of the receiver's own kind in CRuby
      (a String concatenates Strings, an Array Arrays), so an argument the

@@ -215,6 +215,7 @@ typedef enum {
   BOPE_STRING_CLEAR,
   BOPE_STRING_SLICE,
   BOPE_STRING_BYTESPLICE,
+  BOPE_STRING_APPEND_AS_BYTES,
   BOPE_STRING_DEDUP,     /* String#dedup: -@ under the name a nil receiver is raised with */
   BOPE_STRING_SCRUB_BLOCK, /* String#scrub with a block */
   BOPE_STRING_LINES,       /* String#lines without a block */
@@ -380,6 +381,9 @@ typedef struct BuiltinOp {
    build, so the row answers for its own class only and the lookup does not
    hand it down the singleton chain. */
 #define BOPF_OWN_CLASS 16384
+/* The emitter accepts the full Ruby operand list, including a spread or
+   a fixed count beyond BOP_ARGC_ANY. A boxed arm can reuse held operands. */
+#define BOPF_ARGV 32768
 
 /* A row's recv may name a family of kinds rather than one; a caller looks
    the family up with the family's value. Not a TyKind any value has. */

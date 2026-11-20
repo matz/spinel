@@ -36,6 +36,56 @@ sp_RbVal sp_main_self(void) {
 sp_int sp_poly_arg_int(sp_RbVal v) { return sp_poly_arg_int_chk(v); }
 sp_String *sp_poly_arg_string(sp_RbVal v) { return sp_poly_arg_str_handle(v); }
 
+/* Arguments are Ruby values evaluated before method entry. Validate the whole
+   list, then grow once. Publishing the new length only at the end also lets
+   each occurrence of the receiver read its original bytes after growth. */
+void sp_strbuf_append_as_bytes(sp_String *s, sp_int argc, const sp_RbVal *args) {
+  if (!s) sp_nil_recv("append_as_bytes");
+  if (s->temporarily_locked) sp_raise_locked_str();
+  if (sp_String_is_frozen(s)) {
+    sp_RbVal receiver = sp_box_obj(s, SP_BUILTIN_STRBUF);
+    SP_GC_ROOT_RBVAL(receiver);
+    const char *prefix = sp_sprintf("can't modify frozen %s: ", sp_poly_class_name(receiver));
+    SP_GC_ROOT_STR(prefix);
+    sp_RbVal inspected = sp_poly_inspect_box(receiver);
+    SP_GC_ROOT_RBVAL(inspected);
+    const char *message = sp_str_concat(prefix, sp_poly_to_s(inspected));
+    SP_GC_ROOT_STR(message);
+    sp_exc_stage_recv(receiver);
+    sp_raise_cls("FrozenError", message);
+  }
+  int64_t size = s->len;
+  for (sp_int i = 0; i < argc; i++) {
+    sp_RbVal arg = args[i];
+    int64_t n = 1;
+    if (arg.tag != SP_TAG_INT && arg.tag != SP_TAG_BIGINT) {
+      if (!sp_strface_b_box(arg))
+        sp_raise_cls("TypeError", sp_sprintf("wrong argument type %s (expected String or Integer)",
+                                             sp_poly_class_name(arg)));
+      n = ((sp_String *)arg.v.p)->len;
+    }
+    if (n > UINT32_MAX - size) sp_raise_cls("ArgumentError", "string size too big");
+    size += n;
+  }
+  if (size == s->len) return;
+  if ((uint64_t)size > (SIZE_MAX - SP_FD_OVH - 16) / 2 || !sp_fd_grow(s, size))
+    sp_raise_cls("NoMemoryError", "failed to allocate memory");
+  char *out = s->data + s->len;
+  for (sp_int i = 0; i < argc; i++) {
+    sp_RbVal arg = args[i];
+    if (arg.tag == SP_TAG_INT) *out++ = (unsigned char)arg.v.i;
+    else if (arg.tag == SP_TAG_BIGINT) *out++ = (unsigned char)sp_bigint_to_int(arg.v.p);
+    else {
+      sp_String *part = arg.v.p;
+      memcpy(out, part->data, (size_t)part->len);
+      out += part->len;
+    }
+  }
+  *out = 0;
+  s->len = size;
+  sp_fd_publish(s);
+}
+
 /* A sole chomp: arrives with its truth value. General keyword lists
    still have their original keys for argument checking at method entry. */
 static sp_bool sp_string_line_chomp(sp_RbVal keywords) {

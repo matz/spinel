@@ -17265,6 +17265,11 @@ static void masgn_conv_o(Compiler *c, TyKind st, TyKind vt, const char *val, Buf
   else buf_printf(b, "%s(%s)", oint_of(st), val);
   (void)c;
 }
+static int masgn_attr_field(Compiler *c, int cls, const char *name,
+                            const MethodLookup *lookup, int *owner) {
+  *owner = lookup->kind == ML_ATTR && lookup->def_class >= 0 ? lookup->def_class : cls;
+  return comp_ivar_index(&c->classes[*owner], name);
+}
 /* Can the writer a call target `o.x` runs take an element with its nil (a
    writer's parameter that holds one or is boxed, a field with a nil bit or a
    boxed one)? A native writer, or a plain Integer parameter or field, takes
@@ -17288,7 +17293,7 @@ static int masgn_writer_takes_nil(Compiler *c, int tgt) {
   snprintf(ivn, sizeof ivn, "@%s", base);
   MethodLookup wml = { .def_class = -1 };
   call_target(c, -1, crc, base, CT_WRITER, &wml);
-  int wcls = wml.kind == ML_ATTR && wml.def_class >= 0 ? wml.def_class : crc, ix = comp_ivar_index(&c->classes[wcls], ivn);
+  int wcls, ix = masgn_attr_field(c, crc, ivn, &wml, &wcls);
   TyKind ivt = ix >= 0 ? c->classes[wcls].ivar_types[ix] : TY_UNKNOWN;
   return ix < 0 || ivt == TY_POLY || (oint_kind(ivt) && ivar_has_nilbit(c, wcls, ix));
 }
@@ -17403,19 +17408,6 @@ static int masgn_index_writer(Compiler *c, TyKind rt, int *cdef, TyKind *kt) {
   }
   return wmi;
 }
-/* Whether storing into the target can allocate or run user code, and so
-   collect: that (the plan's cplan_target_store_effect), or an index store
-   on the general hash, on a String-keyed hash (which copies a mutable key,
-   #6410) or on a Struct. */
-static int masgn_store_allocates(Compiler *c, int tgt) {
-  if (cplan_target_store_effect(c, tgt) & CPS_CODE) return 1;
-  int r, k;
-  masgn_target_parts(c->nt, tgt, &r, &k);
-  if (r < 0 || k < 0 || nt_kind(c->nt, tgt) == NK_CallTargetNode) return 0;
-  TyKind rt = comp_ntype(c, r);
-  return rt == TY_POLY_POLY_HASH || (ty_is_hash(rt) && ty_hash_key(rt) == TY_STRING) ||
-         nt_int(c->nt, tgt, "struct_aset", 0);
-}
 /* Target i of a multiple assignment or a nested target, in the order the
    stores run: the lefts, the splat, the rights; -1 past the last. */
 static int masgn_target_at(const NodeTable *nt, int mw, int i) {
@@ -17468,6 +17460,87 @@ static int masgn_takes_elements_first(Compiler *c, int mw, int src) {
   }
   return 0;
 }
+/* The C slot type of a variable or constant target masgn_store writes, or
+   TY_UNKNOWN for a target reached through a receiver. */
+static TyKind masgn_slot_type(Compiler *c, int id, int tgt) {
+  const NodeTable *nt = c->nt;
+  const char *ty = nt_type(nt, tgt), *nm = nt_str(nt, tgt, "name");
+  NodeKind k = nt_kind(nt, tgt);
+  if (!ty || !nm) return TY_UNKNOWN;
+  if (k == NK_LocalVariableTargetNode) {
+    const LocalVar *lv = scope_local(comp_scope_of(c, tgt), nm);
+    return lv ? lv->type : TY_UNKNOWN;
+  }
+  if (k == NK_GlobalVariableTargetNode) {
+    const char *name = comp_resolve_gvar(c, nm + 1);
+    const LocalVar *gv = name ? comp_gvar(c, name) : NULL;
+    return gv ? gv->type : TY_UNKNOWN;
+  }
+  if (k == NK_InstanceVariableTargetNode) {
+    HolderRef h;
+    if (!masgn_ivar_home(c, tgt, &h)) return TY_UNKNOWN;
+    int ix = comp_ivar_index(&c->classes[h.cid], nm);
+    return ix >= 0 ? c->classes[h.cid].ivar_types[ix] : TY_UNKNOWN;
+  }
+  if (k == NK_ClassVariableTargetNode) {
+    int cid = masgn_cvar_class(c, id, nm);
+    int cx = cid >= 0 ? comp_cvar_index(&c->classes[cid], nm) : -1;
+    return cx >= 0 ? c->classes[cid].cvar_types[cx] : TY_UNKNOWN;
+  }
+  if (k == NK_ConstantTargetNode || k == NK_ConstantPathTargetNode) {
+    LocalVar *cv = comp_const(c, const_key_at(c, tgt));
+    return cv ? cv->type : TY_UNKNOWN;
+  }
+  return TY_UNKNOWN;
+}
+/* A synthesized attribute writer stores directly into this field. */
+static TyKind masgn_attr_slot_type(Compiler *c, int tgt) {
+  const NodeTable *nt = c->nt;
+  int recv = nt_ref(nt, tgt, "receiver");
+  TyKind rt = recv >= 0 ? repr_of(c, recv).as_ty : TY_UNKNOWN;
+  const char *name = nt_str(nt, tgt, "name");
+  char base[256], ivn[260];
+  if (!ty_is_object(rt) || !setter_base_name(name, base, sizeof base)) return TY_UNKNOWN;
+  int cls = ty_object_class(rt);
+  MethodLookup writer = { .def_class = -1 };
+  if (call_target(c, tgt, cls, base, CT_WRITER, &writer) >= 0 || writer.kind != ML_ATTR)
+    return TY_UNKNOWN;
+  snprintf(ivn, sizeof ivn, "@%s", base);
+  int owner, ix = masgn_attr_field(c, cls, ivn, &writer, &owner);
+  return ix >= 0 ? c->classes[owner].ivar_types[ix] : TY_UNKNOWN;
+}
+/* Unboxing into an Array slot can allocate a conversion of a typed Array. */
+static int masgn_slot_unbox_allocates(Compiler *c, int id, int tgt) {
+  TyKind ty = nt_kind(c->nt, tgt) == NK_CallTargetNode ?
+              masgn_attr_slot_type(c, tgt) : masgn_slot_type(c, id, tgt);
+  return ty_is_array(ty) || ty_is_obj_array(ty);
+}
+/* Whether a store can collect while tuple values are waiting. Destructuring
+   may run to_ary or snapshot its source, and a named splat builds an Array.
+   A leaf store can run the program's code or allocate in its container. */
+static int masgn_store_allocates(Compiler *c, int id, int tgt, int boxed) {
+  const NodeTable *nt = c->nt;
+  NodeKind kind = nt_kind(nt, tgt);
+  if (kind == NK_SplatNode) return nt_ref(nt, tgt, "expression") >= 0;
+  if (kind == NK_MultiWriteNode || kind == NK_MultiTargetNode) {
+    if (kind == NK_MultiTargetNode) {
+      int one;
+      if (cplan_boxed_to_ary_classes(c, tgt, NTI_YIELDED, &one, NULL, 1) > 0 ||
+          masgn_takes_elements_first(c, tgt, -1)) return 1;
+    }
+    for (int i = 0, t; (t = masgn_target_at(nt, tgt, i)) >= 0; i++)
+      if (masgn_store_allocates(c, id, t, kind == NK_MultiTargetNode)) return 1;
+    return 0;
+  }
+  if (boxed && masgn_slot_unbox_allocates(c, id, tgt)) return 1;
+  if (cplan_target_store_effect(c, tgt) & CPS_CODE) return 1;
+  int r, k;
+  masgn_target_parts(nt, tgt, &r, &k);
+  if (r < 0 || k < 0 || kind == NK_CallTargetNode) return 0;
+  TyKind rt = comp_ntype(c, r);
+  return rt == TY_POLY_POLY_HASH || (ty_is_hash(rt) && ty_hash_key(rt) == TY_STRING) ||
+         nt_int(nt, tgt, "struct_aset", 0);
+}
 /* The elements of the Array in `_t<src>`, of storage kind k, taken before
    any store (masgn_takes_elements_first): a copy the targets read from. */
 static int masgn_take_elements(const char *k, int src, Buf *b, int indent) {
@@ -17498,30 +17571,6 @@ static void masgn_index_key(Compiler *c, int key, TyKind kt, Buf *b) {
   else if (kt == TY_INT) emit_int_expr(c, key, b);
   else if (kt == TY_STRBUF) emit_strbuf_handle_of(c, key, b);
   else emit_expr(c, key, b);
-}
-/* The C slot type of a variable or constant target masgn_store writes, or
-   TY_UNKNOWN for a target that is not one. */
-static TyKind masgn_slot_type(Compiler *c, int id, int tgt) {
-  const NodeTable *nt = c->nt;
-  const char *ty = nt_type(nt, tgt), *nm = nt_str(nt, tgt, "name");
-  NodeKind k = nt_kind(nt, tgt);
-  if (!ty || !nm) return TY_UNKNOWN;
-  if (k == NK_InstanceVariableTargetNode) {
-    HolderRef h;
-    if (!masgn_ivar_home(c, tgt, &h)) return TY_UNKNOWN;
-    int ix = comp_ivar_index(&c->classes[h.cid], nm);
-    return ix >= 0 ? c->classes[h.cid].ivar_types[ix] : TY_UNKNOWN;
-  }
-  if (k == NK_ClassVariableTargetNode) {
-    int cid = masgn_cvar_class(c, id, nm);
-    int cx = cid >= 0 ? comp_cvar_index(&c->classes[cid], nm) : -1;
-    return cx >= 0 ? c->classes[cid].cvar_types[cx] : TY_UNKNOWN;
-  }
-  if (k == NK_ConstantTargetNode || k == NK_ConstantPathTargetNode) {
-    LocalVar *cv = comp_const(c, const_key_at(c, tgt));
-    return cv ? cv->type : TY_UNKNOWN;
-  }
-  return TY_UNKNOWN;
 }
 /* Store `val` (of type `vt`, NULL for nil) into a multiple-assignment target
    the arms destructuring a run-time value reach that is not a local: an
@@ -17602,23 +17651,6 @@ static void masgn_recv_guard(Compiler *c, int recv, int recv_tmp, const char *na
   buf_puts(b, "if (SP_UNLIKELY(!(");
   emit_node_or_tmp(c, recv, recv_tmp, b);
   buf_printf(b, "))) sp_nil_recv_raise(\"%s\");\n", name);
-}
-/* Does a receiver typed as class `cid` store through a writer a descendant
-   answers differently? Typed so, it can hold an instance of the descendant
-   (`self` in an inherited method), and the single setter dispatches on the
-   instance's class then. A descendant's own `def x=` does; so does its
-   attr_writer where the typed class's writer is a method. */
-static int masgn_writer_overridden(Compiler *c, int tgt, int cid, const char *nm) {
-  if (c->classes[cid].is_native_class || c->classes[cid].c_struct) return 0;
-  if (cplan_overridden(c, cid, nm, 0)) return 1;
-  char base[256];
-  /* (the writer the target makes on its receiver: the implied call of its row) */
-  if (!setter_base_name(nm, base, sizeof base) || cplan_implied_target(c, tgt, nt_ref(c->nt, tgt, "receiver"), cid, nm, CIT_TABLE, NULL) < 0) return 0;
-  int nd = 0;
-  const int *ds = comp_descendants(c, cid, &nd);
-  for (int i = 0; i < nd; i++)
-    if (ds[i] != cid && comp_is_writer(&c->classes[ds[i]], base)) return 1;
-  return 0;
 }
 /* An index target with two keys (`a[i, n], x = ...`) stores as `a[i, n] = v`
    does. An Array receiver splices through emit_array_splice, which takes its
@@ -17860,7 +17892,7 @@ static int masgn_store(Compiler *c, int id, const MasgnTmps *mt, int tgt, const 
     TyKind crt = crtr.as_ty;
     /* a boxed receiver dispatches on its class, as the single setter does;
        so does one typed as a class a descendant overrides the writer of */
-    int vdisp = ty_is_object(crt) && masgn_writer_overridden(c, tgt, ty_object_class(crt), nm);
+    int vdisp = ty_is_object(crt) && cplan_target_writer_switch(c, tgt, ty_object_class(crt), nm);
     if (crtr.kind == RK_BOXED || vdisp) {
       char base[256]; snprintf(base, sizeof base, "%.*s", (int)(snl - 1), nm);
       TyKind at = val && vt != TY_NIL && vt != TY_VOID && vt != TY_UNKNOWN ? vt : TY_POLY;
@@ -17925,8 +17957,7 @@ static int masgn_store(Compiler *c, int id, const MasgnTmps *mt, int tgt, const 
       char ivn[260]; snprintf(ivn, sizeof ivn, "@%s", base);
       MethodLookup wml = { .def_class = -1 };
       call_target(c, -1, crc, base, CT_WRITER, &wml);
-      int wcls = wml.kind == ML_ATTR && wml.def_class >= 0 ? wml.def_class : crc;
-      int ix = comp_ivar_index(&c->classes[wcls], ivn);
+      int wcls, ix = masgn_attr_field(c, crc, ivn, &wml, &wcls);
       TyKind ivt = ix >= 0 ? c->classes[wcls].ivar_types[ix] : vt;
       /* the receiver is held once for the assigned mark */
       int pk = comp_ivar_index(&c->classes[crc], ivn) >= 0 && ivar_set_kind(c, crc, ivn) == 3;
@@ -19328,15 +19359,15 @@ static int emit_multi_write_stmt_body(Compiler *c, int id, Buf *b, int indent, c
      value that is a by-value struct into a slot that boxes it -- comes
      after every value is built and after the targets before it have taken
      theirs, so it can collect what an earlier target dropped. */
-  int store_alloc = rest_var || rest_gvar || rest_tgt >= 0;
-  for (int i = 0; i < ln && !store_alloc; i++) store_alloc = masgn_store_allocates(c, lefts[i]);
+  int store_alloc = masgn_store_allocates(c, id, id, 0);
+  int right_start = en - rn > ln ? en - rn : ln;
   for (int i = 0; i < en && !store_alloc; i++) {
     Repr vr = repr_of(c, els[i]);
     store_alloc = (vr.kind == RK_STRUCT || vr.kind == RK_VOBJ) && masgn_slot_boxes(c, id, lefts, ln, i, vr.as_ty);
-    /* a box into a general Array ivar is converted at its store, and a box
-       holding a typed Array converts to a new one */
-    if (!store_alloc && i < ln && vr.kind == RK_BOXED && nt_kind(nt, lefts[i]) == NK_InstanceVariableTargetNode)
-      store_alloc = masgn_slot_type(c, id, lefts[i]) == TY_POLY_ARRAY;
+    if (!store_alloc && vr.kind == RK_BOXED) {
+      int tgt = i < ln ? lefts[i] : i >= right_start ? rights[i - right_start] : -1;
+      store_alloc = tgt >= 0 && masgn_slot_unbox_allocates(c, id, tgt);
+    }
   }
   /* evaluate all RHS values into temps first (so `a, b = b, a` swaps).
      Save each temp index separately: emit_expr may consume extra g_tmp
@@ -19622,7 +19653,7 @@ static int emit_multi_write_stmt_body(Compiler *c, int id, Buf *b, int indent, c
       int rc2 = ty_object_class(rt2);
       MethodLookup wml2 = { .def_class = -1 };
       int wmi2 = call_target(c, lefts[i], rc2, base2, CT_WRITER, &wml2), wr2 = wmi2 < 0 && wml2.kind == ML_ATTR;
-      if (!wr2 || masgn_writer_overridden(c, lefts[i], rc2, setnm)) {
+      if (!wr2 || cplan_target_writer_switch(c, lefts[i], rc2, setnm)) {
         /* a writer defined with `def x=` (in the class, a module it includes
            or an ancestor, whichever the plan ranks first), or bound with
            `native_method :x=`, runs as a call, and so does an attr writer a
@@ -19634,10 +19665,8 @@ static int emit_multi_write_stmt_body(Compiler *c, int id, Buf *b, int indent, c
         continue;
       }
       char ivn2[260]; snprintf(ivn2, sizeof ivn2, "@%s", base2);
-      int defc2 = wml2.def_class;
-      int iv2 = comp_ivar_index(&c->classes[defc2 < 0 ? rc2 : defc2], ivn2);
-      TyKind ivt2 = iv2 >= 0 ? c->classes[defc2 < 0 ? rc2 : defc2].ivar_types[iv2] : TY_UNKNOWN;
-      int wcls2 = defc2 < 0 ? rc2 : defc2;
+      int wcls2, iv2 = masgn_attr_field(c, rc2, ivn2, &wml2, &wcls2);
+      TyKind ivt2 = iv2 >= 0 ? c->classes[wcls2].ivar_types[iv2] : TY_UNKNOWN;
       /* a field with a nil bit takes the element with its nil, the bit kept in step */
       int nb2 = iv2 >= 0 && oint_kind(ivt2) && ivar_has_nilbit(c, wcls2, iv2);
       char expr2[32]; snprintf(expr2, sizeof expr2, "_t%d", tmps[i]);
@@ -19662,7 +19691,7 @@ static int emit_multi_write_stmt_body(Compiler *c, int id, Buf *b, int indent, c
       if (!nb2) masgn_conv(c, id, ivt2, tmpts[i], masgn_nil_el(c, els[i]) ? NULL : expr2, b);
       char ro[300], mk[300];
       snprintf(ro, sizeof ro, "(%s)", rb.p ? rb.p : "");
-      const char *m = iv2 >= 0 ? ivar_set_mark(c, defc2 < 0 ? rc2 : defc2, ivn2, ro, "->", mk, sizeof mk) : NULL;
+      const char *m = iv2 >= 0 ? ivar_set_mark(c, wcls2, ivn2, ro, "->", mk, sizeof mk) : NULL;
       if (m) buf_printf(b, "; %s\n", m);
       else buf_puts(b, ";\n");
       free(rb.p);
@@ -19901,9 +19930,8 @@ static int emit_multi_write_stmt_body(Compiler *c, int id, Buf *b, int indent, c
      just past the splat's actual length (max(0, en-ln-rn)); a target whose
      source index runs off the end lands nil (`a, *b, c, d = [1, 2]` ->
      c=2, d=nil) instead of reusing a leading element. */
-  int blen_r = en - ln - rn; if (blen_r < 0) blen_r = 0;
   for (int j = 0; j < rn; j++) {
-    int ridx = ln + blen_r + j;
+    int ridx = right_start + j;
     if (ridx >= en) ridx = -1;
     const char *lty = nt_type(nt, rights[j]);
     NodeKind lk = nt_kind(nt, rights[j]);

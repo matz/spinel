@@ -3710,6 +3710,23 @@ static int cps_key_callbacks_run_code(Compiler *c, int tgt, TyKind rt, const int
   }
   return 0;
 }
+/* Does a receiver typed as class `cid` store through a writer a descendant
+   answers differently? Typed so, it can hold an instance of the descendant
+   (`self` in an inherited method), and the single setter dispatches on the
+   instance's class then. A descendant's own `def x=` does; so does its
+   attr_writer where the typed class's writer is a method. */
+int cplan_target_writer_switch(Compiler *c, int tgt, int cid, const char *nm) {
+  if (c->classes[cid].is_native_class || c->classes[cid].c_struct) return 0;
+  if (cplan_overridden(c, cid, nm, 0)) return 1;
+  char base[256];
+  /* (the writer the target makes on its receiver: the implied call of its row) */
+  if (!setter_base_name(nm, base, sizeof base) || cplan_implied_target(c, tgt, nt_ref(c->nt, tgt, "receiver"), cid, nm, CIT_TABLE, NULL) < 0) return 0;
+  int nd = 0;
+  const int *ds = comp_descendants(c, cid, &nd);
+  for (int i = 0; i < nd; i++)
+    if (ds[i] != cid && comp_is_writer(&c->classes[ds[i]], base)) return 1;
+  return 0;
+}
 /* See call_plan.h. A target is the receiver and name of the call its
    store makes; an index target with no key stores nothing the program
    sees. */
@@ -3723,7 +3740,10 @@ unsigned cplan_target_store_effect(Compiler *c, int tgt) {
   if (k == NK_CallTargetNode) {
     const char *nm = nt_str(nt, tgt, "name");
     MethodLookup ml = { .def_class = -1 };
-    return open || (nm && cls >= 0 && call_target(c, tgt, cls, nm, 0, &ml) >= 0 && ml.def_class >= 0) ? CPS_CODE : 0;
+    if (open) return CPS_CODE;
+    if (!nm || cls < 0) return 0;
+    if (cplan_target_writer_switch(c, tgt, cls, nm)) return CPS_CODE;
+    return call_target(c, tgt, cls, nm, 0, &ml) >= 0 && ml.def_class >= 0 ? CPS_CODE : 0;
   }
   int args = nt_ref(nt, tgt, "arguments"), n = 0;
   const int *keys = args >= 0 ? nt_arr(nt, args, "arguments", &n) : NULL;

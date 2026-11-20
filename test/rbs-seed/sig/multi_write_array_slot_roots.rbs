@@ -1,0 +1,4 @@
+class TupleArraySlot
+  @array: Array[untyped]
+  def save: (Array[untyped], untyped) -> untyped
+end

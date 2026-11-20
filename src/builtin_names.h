@@ -456,6 +456,7 @@ const char *builtin_ancestor_at(const char *cls, int i);   /* the i-th ancestor 
 int builtin_owns_instance_method(const char *cls, const char *m);   /* cls's own instance method m, any visibility (CRuby's tables) */
 const char *builtin_next_class_answering(int *i, const char *m);   /* the next class of the tables, from table *i, that Spinel has as a value and that answers m ahead of Object */
 int builtin_id_below_object_answers(int id, const char *m);   /* the builtin class with run-time id `id` does */
+int builtin_id_has_instance_method(int id, const char *m);   /* ...or an ancestor of its has m, any visibility, no undefine ahead */
 int builtin_mixin_module_id(const char *n);   /* Comparable Enumerable Kernel Math: its builtin id */
 int is_include_name(const char *n);
 int is_prepend_name(const char *n);

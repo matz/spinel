@@ -2592,6 +2592,16 @@ int builtin_id_below_object_answers(int id, const char *m) {
   for (int i = 0; id && (r = builtin_class_at(i)) && r->id != id; i++) {}
   return r && builtin_answers_ahead_of(r->name, m, "Object");
 }
+/* does the lookup from the builtin class with run-time id `id` (-116 for Object) find instance method m, of any
+   visibility, in a library the program has: one a visibility word in a program class under it names
+   (`private :puts`, Kernel's)? An undefine on the way (Complex#floor) ends the lookup with none */
+int builtin_id_has_instance_method(int id, const char *m) {
+  const BuiltinClass *r = NULL;
+  for (int i = 0; id && (r = builtin_class_at(i)) && r->id != id; i++) {}
+  const BuiltinMethodTable *t = r && m ? bmt_find(r->name) : NULL;
+  unsigned must = bmt_loaded();
+  return t && (t->flags & must) && bmt_ancestors_have(t, m, 0, must, 0, NULL, NULL) > 0;
+}
 
 /* See builtin_names.h. The ancestors are the tables' (the class's own methods' owners ahead of Object and the
    modules it includes). A class with no table, or a slot with no name, is unknown: below anything. */

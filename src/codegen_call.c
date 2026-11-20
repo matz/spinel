@@ -20662,6 +20662,17 @@ int emit_cells_answer(Compiler *c, const CplanCells *cs, Buf *b) {
   while (open-- >= 0) buf_puts(b, ")");
   return 1;
 }
+/* Does an instance of class cid have m as a builtin method of any visibility: one the lookup from its builtin
+   root finds (Kernel's through Object), or one a builtin module it includes or prepends has, directly or through
+   a program module (class_mixes_in)? */
+static int class_builtin_has_method(Compiler *c, int cid, const char *m) {
+  if (builtin_id_has_instance_method(class_builtin_parent(c, cid), m)) return 1;
+  for (int i = 0, mod; builtin_class_at(i); i++)
+    if ((mod = builtin_mixin_module_id(builtin_class_at(i)->name)) && class_mixes_in(c, cid, mod, 0) &&
+        builtin_id_has_instance_method(mod, m))
+      return 1;
+  return 0;
+}
 /* See codegen_call_arms.h. Each cell holds an Integer as the entries' arms
    read it (emit_cells_test) */
 /* See codegen_call_arms.h. */
@@ -20682,13 +20693,21 @@ int emit_vis_word_absent(Compiler *c, int id, Buf *b) {
     setter_base_name(mn, wb, sizeof wb);
     /* the name is defined where the word runs: a def, or a reader or
        writer whose attr_* has run by this call, as the call plan
-       answers at it */
+       answers at it, or, in a class body, whose form applies a word on
+       one, a builtin method the class has (Kernel's puts, Comparable's
+       between?). A method body's word has no form that applies it to a
+       builtin method yet: it raises, as it did */
     int found = call_target(c, id, vcid, mn, CT_NOFACE, NULL) >= 0 ||
                 call_attr_target(c, id, vcid, mn, CT_ATTR, NULL) ||
-                (wb[0] && call_attr_target(c, id, vcid, wb, CT_ATTR | CT_WRITER, NULL));
+                (wb[0] && call_attr_target(c, id, vcid, wb, CT_ATTR | CT_WRITER, NULL)) ||
+                (g_class_body_id >= 0 && class_builtin_has_method(c, vcid, mn));
     if (!found) {
-      buf_printf(b, "sp_raise_cls(\"NameError\", \"undefined method '%s' for class '%s'\")",
-                 mn, class_ruby_name(c, vcid) ? class_ruby_name(c, vcid) : c->classes[vcid].name);
+      const char *cn = class_ruby_name(c, vcid) ? class_ruby_name(c, vcid) : c->classes[vcid].name;
+      buf_puts(b, "sp_raise_cls(\"NameError\", \"undefined method '");
+      emit_c_escaped(b, mn);
+      buf_puts(b, comp_class_is_module(c, &c->classes[vcid]) ? "' for module '" : "' for class '");
+      emit_c_escaped(b, cn);
+      buf_puts(b, "'\")");
       return 1;
     }
   }

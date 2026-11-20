@@ -10002,6 +10002,26 @@ static int poly_identity_operand(Compiler *c, const char *name, int pos_argc, in
          strbuf_arg_carries(c, v);
 }
 
+/* The kind the dispatch's temp holds positional argument v of a call of
+   `name` in: boxed where the value has no concrete C storage (nil, void,
+   unresolved), keeps a handle's identity only boxed (poly_identity_operand;
+   *ident), or is an Integer or a Float that can be nil, which the arm
+   converts; its storage kind otherwise. The argument loop of
+   emit_poly_method_dispatch and the writer gate on both sides
+   (poly_writer_attr_arms: the plan's cpoly_user_arms_n, the emitter) read
+   this one answer: asked the storage's kind on one side and the temp's on
+   the other, the gate took the attr-writer arms for the plan alone, and a
+   subclass whose attr_accessor overrides an inherited writer was left with
+   no arm for an Integer that can be nil. */
+TyKind poly_arg_temp_ty(Compiler *c, const char *name, int pos_argc, int v, int *ident) {
+  TyKind at = cplan_poly_arg_storage(c, v);
+  int id_op = poly_identity_operand(c, name, pos_argc, v, at);
+  if (ident) *ident = id_op;
+  if (at == TY_NIL || at == TY_VOID || at == TY_UNKNOWN || id_op || (oint_kind(at) && node_has_oint_form(c, v)))
+    return TY_POLY;
+  return at;
+}
+
 /* `sp_raise_cls("ArgumentError", msg);` with msg a C string literal: a
    keyword's #inspect in it (`unknown keyword: "s"`) carries quotes. */
 void emit_poly_arity_raise(Buf *b, const char *msg) {
@@ -11297,9 +11317,9 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
            identity only boxed (poly_identity_operand), and an Integer or a
            Float that can be nil: the arm converts it, a TypeError for nil,
            once the dispatch has found the receiver takes the method. */
-        int ident = poly_identity_operand(c, name, pos_argc, argv[a], at);
-        if (at == TY_NIL || at == TY_VOID || at == TY_UNKNOWN || ident ||
-            (oint_kind(at) && node_has_oint_form(c, argv[a]))) {
+        int ident;
+        TyKind tt = poly_arg_temp_ty(c, name, pos_argc, argv[a], &ident);
+        if (tt == TY_POLY && (at != TY_POLY || ident)) {
           atmp_ty[a] = TY_POLY;
           atmp[a] = emit_poly_arg_temp(c, argv[a], TY_POLY, ident ? 2 : 1, atmp[a], ran, b);
         }
@@ -11546,7 +11566,8 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
       /* (keywords alone, `o.send(:x=, **h)`, hand the writer their Hash) */
       int wr_kw = argc == 1 && pos_argc == 0 && kwh >= 0;
       int attr_wr = poly_writer_attr_arms(c, id, name, argc, pos_argc, kwh, splat_a, ret,
-                                          pos_argc == 1 ? atmp_ty[0] : TY_POLY, is_setter_val, wbase, sizeof wbase);
+                                          pos_argc == 1 ? poly_arg_temp_ty(c, name, pos_argc, argv[0], NULL) : TY_POLY,
+                                          is_setter_val, wbase, sizeof wbase);
       int wr_src = attr_wr ? (wr_kw ? ++g_tmp : atmp[0]) : -1;
       TyKind wr_ty = wr_kw ? TY_POLY : attr_wr ? atmp_ty[0] : TY_UNKNOWN;
       if (attr_wr && wr_kw) {
@@ -11554,11 +11575,14 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
         buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ", wr_src);
       }
       if (attr_wr) {
-        /* the result is the value: boxed into a boxed result, or the value
-           itself where the call is typed as the value's scalar kind */
+        /* the result is the value: boxed into a boxed result, the value
+           itself where the call is typed as the value's scalar kind, or the
+           boxed temp read into the oint result (an Integer that can be nil) */
         char an[32]; snprintf(an, sizeof an, "_t%d", wr_src);
         buf_printf(b, "_t%d = ", tr);
-        if (wr_ty == TY_POLY || ret != TY_POLY) buf_puts(b, an); else emit_boxed_text(c, wr_ty, an, b);
+        if (wr_ty == TY_POLY && ret != TY_POLY && oint_kind(ret)) buf_printf(b, "%s(%s)", oint_unbox(ret), an);
+        else if (wr_ty == TY_POLY || ret != TY_POLY) buf_puts(b, an);
+        else emit_boxed_text(c, wr_ty, an, b);
         buf_puts(b, "; ");
       }
       ptemps.kwh_tmp = emit_poly_callable_kwh_decl(c, name, &ps, &ptemps, &kw, b);
@@ -11594,14 +11618,15 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
            an ancestor has (`attr_accessor :logger` in a subclass of a class
            with `def logger=`), and the switch held its id twice. */
         unsigned char *skip = NULL;
+        const unsigned char *skip_outer = g_poly_user_arm_skip;   /* (an enclosing dispatch's, put back after) */
         if (attr_wr) {
           skip = calloc((size_t)(c->nclasses > 0 ? c->nclasses : 1), 1);
           if (!skip) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
           for (int k = 0; k < c->nclasses; k++) skip[k] = (unsigned char)boxed_writer_attr_wins(c, k, wbase);
-          g_poly_user_arm_skip = skip;
         }
+        g_poly_user_arm_skip = skip;
         emit_poly_user_arms_n(c, id, name, &U, b);
-        g_poly_user_arm_skip = NULL;
+        g_poly_user_arm_skip = skip_outer;
         free(skip);
       }
       if (attr_wr) {

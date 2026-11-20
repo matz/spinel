@@ -16797,8 +16797,12 @@ int poly_writer_attr_arms(Compiler *c, int id, const char *name, int argc, int p
   int wr_kw = argc == 1 && pos_argc == 0 && kwh >= 0;
   /* the result is the value: boxed, or the value's own scalar kind (a
      computed send of one known name with an Integer, `public_send("#{n}=",
-     1)`, is typed by its one arm's def, not boxed) */
-  int ret_fits = ret == TY_POLY || (pos_argc == 1 && ret != TY_UNKNOWN && ret == val_ty && is_scalar_ret(ret));
+     1)`, is typed by its one arm's def, not boxed), or an Integer or Float
+     that can be nil, held boxed in the temp (poly_arg_temp_ty) and read into
+     the call's oint result */
+  int ret_fits = ret == TY_POLY ||
+                 (pos_argc == 1 && ret != TY_UNKNOWN && is_scalar_ret(ret) &&
+                  (ret == val_ty || (val_ty == TY_POLY && oint_kind(ret) && node_is_oint(c, id))));
   if (is_setter_val || argc != 1 || !(pos_argc == 1 || wr_kw) || splat_a >= 0 || !(kwh < 0 || wr_kw) ||
       !ret_fits || nt_ref(c->nt, id, "block") >= 0 || !name_is_plain_setter(name) ||
       !setter_base_name(name, wbase, cap))

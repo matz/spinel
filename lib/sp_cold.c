@@ -3324,11 +3324,16 @@ sp_bool sp_file_zero(const char *path) {
    drops them ("/usr/bin/" is in "/usr"), then the last part and the
    separators before it ("a/b///c" is in "a/b"); a path of separators is
    the root, one with no separator left is ".". */
+#if defined(_WIN32)
+#define SP_DIRNAME_SEP(c) ((c) == '/' || (c) == '\\')   /* a backslash separates on Windows too */
+#else
+#define SP_DIRNAME_SEP(c) ((c) == '/')
+#endif
 const char *sp_file_dirname(const char *path) {SP_GC_ROOT_STR(path);
   size_t len = strlen(path);
-  while (len > 1 && path[len - 1] == '/') len--;
+  while (len > 1 && SP_DIRNAME_SEP(path[len - 1])) len--;
   const char *s = NULL;
-  for (size_t i = len; i > 0; i--) if (path[i - 1] == '/') { s = path + i - 1; break; }
+  for (size_t i = len; i > 0; i--) if (SP_DIRNAME_SEP(path[i - 1])) { s = path + i - 1; break; }
   if (!s) {
 #if defined(_WIN32)
     /* a drive's root ("C:/", "C://") has only the separators the loop above
@@ -3338,7 +3343,7 @@ const char *sp_file_dirname(const char *path) {SP_GC_ROOT_STR(path);
 #endif
     char *r = sp_str_alloc(1); r[0] = '.'; r[1] = 0; return r;
   }
-  while (s > path && s[-1] == '/') s--;
+  while (s > path && SP_DIRNAME_SEP(s[-1])) s--;
   if (s == path) { char *r = sp_str_alloc(1); r[0] = '/'; r[1] = 0; return r; }
 #if defined(_WIN32)
   /* the separator of a drive's root ("C:/x") stays: the dirname is the root */

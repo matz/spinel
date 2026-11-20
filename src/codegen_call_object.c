@@ -2250,12 +2250,13 @@ int emit_call_safe_nav_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
            including NULL when the call returns nil. */
         int sn_hold = rrt == TY_STRING && !sn_obj && !sn_scalar && !sn_cont &&
                       (strbuf_self_route(c, recv) || repr_call_returns_handle(c, recv));
-        /* arguments that run code, which a String receiver's change in
-           place must reach (sn_args_run_late) */
-        int sn_late = rrt == TY_STRING && !sn_obj && !sn_scalar && !sn_cont && !sn_hold ? sn_args_run_late(c, id, recv) : 0;
+        /* Evaluate effectful arguments inside the guard before reading the
+           selected String's current bytes, including for native results. */
+        int sn_late = rrt == TY_STRING && !sn_obj && !sn_scalar && !sn_cont
+                      ? sn_args_run_late(c, id, recv) : 0;
         int tsh = -1;
         Buf rsn; memset(&rsn, 0, sizeof rsn);
-        if (sn_late == 2) {
+        if (sn_late == 2 && !sn_hold) {
           /* the handle the receiver publishes, run once here and read
              after the arguments */
           Buf hb; memset(&hb, 0, sizeof hb);
@@ -2270,8 +2271,7 @@ int emit_call_safe_nav_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
           else sn_late = 0;
           free(hb.p);
         }
-        if (sn_late == 2) {}
-        else if (sn_hold) {
+        if (sn_hold) {
           tsh = ++g_tmp;
           emit_indent(g_pre, g_indent);
           buf_printf(g_pre, "sp_String *_t%d = ", tsh);
@@ -2279,7 +2279,10 @@ int emit_call_safe_nav_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
           buf_printf(g_pre, "; SP_GC_ROOT(_t%d);\n", tsh);
           buf_printf(&rsn, "_t%d ? sp_String_cstr(_t%d) : (const char *)NULL", tsh, tsh);
         }
-        else if (sn_scalar) emit_oint_expr(c, recv, rrt, &rsn); else rsn = expr_buf(c, recv);
+        else if (sn_late != 2) {
+          if (sn_scalar) emit_oint_expr(c, recv, rrt, &rsn);
+          else rsn = expr_buf(c, recv);
+        }
         emit_indent(g_pre, g_indent);
         if (sn_obj)
           buf_printf(g_pre, "sp_%s *_sn%d = %s; SP_GC_ROOT(_sn%d);\n",
@@ -2302,7 +2305,7 @@ int emit_call_safe_nav_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
         free(rsn.p);
         /* (the bytes the guard read, by the temp name ran_first_bind takes) */
         int tsb = -1;
-        if (sn_hold) {
+        if (sn_hold && !sn_late) {
           tsb = ++g_tmp;
           emit_indent(g_pre, g_indent);
           buf_printf(g_pre, "const char *_t%d = _sn%d; (void)_t%d;\n", tsb, tsn2, tsb);

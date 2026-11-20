@@ -73,7 +73,8 @@ An ordered operand keeps its saved handle until its argument binding is
 removed. For a call with a native String result, it holds the handle
 from the call's result. An abandoned emission also removes the binding.
 Safe navigation holds the call's native String result through its nil
-test. Mutators can use the same handle after the receiver is known.
+test and argument evaluation. The selected call can read the held
+String's current bytes after an argument mutates it.
 Boxed callable dispatch holds the receiver and arguments before it
 binds the block operand. Proc invocation carries the captured block and
 the keyword marker through the same call as the argument vector. A boxed

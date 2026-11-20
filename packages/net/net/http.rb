@@ -294,12 +294,36 @@ module Net
     # so is CRuby's main_type/sub_type split: a third `/` part is dropped and
     # an empty subtype leaves the main type alone (`text/` reads `text`).
     def content_type
+      main = main_type
+      return nil if main.nil?
+      sub = sub_type
+      sub.nil? ? main : main + "/" + sub
+    end
+
+    def main_type
       v = self["content-type"]
       return nil if v.nil?
-      parts = v.split(";", 2)[0].to_s.split("/")
-      main = parts[0].to_s.strip
-      return main if parts.length < 2
-      main + "/" + parts[1].to_s.strip
+      v.split(";", 2)[0].to_s.split("/")[0].to_s.strip
+    end
+
+    def sub_type
+      v = self["content-type"]
+      return nil if v.nil?
+      sub = v.split(";", 2)[0].to_s.split("/")[1]
+      sub.nil? ? nil : sub.strip
+    end
+
+    # The parameters after the media type, by name: `text/html;
+    # charset=utf-8` reads `{"charset" => "utf-8"}`.
+    def type_params
+      result = {}
+      list = self["content-type"].to_s.split(";")
+      list.shift
+      list.each do |param|
+        k, v = param.split("=", 2)
+        result[k.strip] = v.strip
+      end
+      result
     end
 
     # Raises unless the response is a 2xx, as CRuby's does. The message is the

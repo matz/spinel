@@ -5387,12 +5387,35 @@ static void mark_ie_rebindable_literals(Compiler *c) {
   if (any) ie_rself_mark_literals(c);
 }
 
+/* The nodes the program's trees reach, by id: a step that lifts statements
+   out of a container (the Kernel reopening's hoist, an included hook's
+   splice) can leave the container behind, detached but still naming them.
+   A walk of every node of a kind reaches it there; a walk of the tree does
+   not. */
+static unsigned char *ie_live_nodes(const NodeTable *nt) {
+  int nr = nt_nroots(nt), nlive = 0;
+  int *roots = malloc(sizeof(int) * (size_t)(nr > 0 ? nr : 1));
+  if (!roots) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int i = 0; i < nr; i++) roots[i] = nt_root(nt, i);
+  int *ids = nt_subtree_ids((NodeTable *)nt, roots, nr, &nlive);
+  unsigned char *live = calloc((size_t)nt->count + 1, 1);
+  if (!live) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int i = 0; i < nlive; i++) if (ids[i] >= 0 && ids[i] < nt->count) live[ids[i]] = 1;
+  free(roots); free(ids);
+  return live;
+}
+
 static void ie_rself_mark_literals(Compiler *c) {
   static int done;
   const NodeTable *nt = c->nt;
   if (done++) return;
-  NT_FOREACH_KIND(nt, NK_LambdaNode, l) ie_rself_literal(c, l);
+  /* the live tree's literals only: through a detached container's
+     `class_eval do ... end` (its statements now a class body's own) the
+     body's ivar write became another self's reflective set */
+  unsigned char *live = ie_live_nodes(nt);
+  NT_FOREACH_KIND(nt, NK_LambdaNode, l) if (live[l]) ie_rself_literal(c, l);
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
+    if (!live[id]) continue;
     int blk = nt_ref(nt, id, "block"), r = nt_ref(nt, id, "receiver");
     const char *nm = nt_str(nt, id, "name");
     if (blk < 0 || nt_kind(nt, blk) != NK_BlockNode || !nm) continue;
@@ -5404,6 +5427,7 @@ static void ie_rself_mark_literals(Compiler *c) {
       take = c->scopes[s].name && c->scopes[s].blk_param && sp_streq(c->scopes[s].name, sp_streq(nm, "new") ? "initialize" : nm);
     if (take) ie_rself_literal(c, blk);
   }
+  free(live);
 }
 
 /* Grow the instance_eval/exec self map to the node table's size, the new

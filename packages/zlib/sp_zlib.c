@@ -610,6 +610,7 @@ static SP_INLINE int sp_zlib_block_code(sp_zlib_in *s, sp_zlib_out *o,
   int dextra = sp_zlib_in_bits(s, SP_Z_DIST_EXTRA[dsym]);
   if (dextra < 0) return -1;
   size_t d = (size_t)SP_Z_DIST_BASE[dsym] + (size_t)dextra;
+  if (d > o->len) { s->err = 1; return -1; }      /* before the start of the output */
   sp_zlib_out_repeat(o, d, len);
   return o->err ? -1 : 0;
 }

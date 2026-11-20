@@ -4,6 +4,7 @@
 #include "call_plan.h"
 #include "codegen_call_arms.h"
 #include "share.h"
+#include "value_pos.h"
 #include <ctype.h>
 
 /* Is a Method's wrapper (`__bam_N`) one of an operator's (`__bam_r <op>
@@ -9464,16 +9465,17 @@ int ran_first_read_handle(int node) {
   return -1;
 }
 
-/* Does value v (of type at) that runs ahead of its binding (emit_arg_temp)
-   take the handle of the String it hands on there? A builtin to_s keeps the
-   receiver's String: its handle is captured before later arguments can
-   replace the receiver. So does a String Range's endpoint
-   (strbuf_route_srange_kept), also as the value of parentheses
-   (strbuf_srange_tail): the handle the Range keeps is taken where the
-   argument runs. */
+/* The native String result at the value position of an argument. */
+static int arg_native_string_tail(Compiler *c, int v) {
+  int tail;
+  return vp_one(c->nt, v, VPS_NONE | VP_PARENS_ONLY, &tail) == VP1_NODE &&
+         repr_native_call_handle(c, tail) ? tail : -1;
+}
+
+/* Does the argument hand on a String's handle when it runs ahead of binding? */
 static int arg_temp_conversion(Compiler *c, int v, TyKind at) {
   if (at != TY_STRING) return 0;
-  if (strbuf_poly_to_s(c, v) || strbuf_srange_tail(c, v) >= 0) return 1;
+  if (arg_native_string_tail(c, v) >= 0 || strbuf_poly_to_s(c, v)) return 1;
   /* --share-strings: so does a boxed receiver's call whose arms answer a
      String (or a sequence ending in one): the handle its box holds is
      taken where the call runs */
@@ -9508,6 +9510,22 @@ static void emit_arg_temp(Compiler *c, int v) {
   Repr r = repr_of(c, v);
   int fresh = repr_handle_apart(c, v, r);
   TyKind at = fresh ? TY_STRING : r.as_ty;
+  if (at == TY_STRING || at == TY_STRBUF) {
+    int tail = arg_native_string_tail(c, v);
+    if (tail >= 0) {
+      emit_paren_lead(c, v, tail, g_pre, g_indent);
+      Buf handle; memset(&handle, 0, sizeof handle);
+      emit_native_string_handle(c, tail, &handle);
+      int t = ++g_tmp;
+      emit_indent(g_pre, g_indent);
+      buf_printf(g_pre, "sp_String *_t%d = %s; SP_GC_ROOT(_t%d);\n",
+                 t, handle.p ? handle.p : "NULL", t);
+      free(handle.p);
+      if (at == TY_STRBUF) ran_first_bind_o(v, t, t, 0);
+      else ran_first_bind_read(v, t);
+      return;
+    }
+  }
   /* A shared String slot's read is the value form, a copy; a shared-handle
      parameter wants the OBJECT read here, not a fresh one of its bytes. So
      a variable's handle is taken too, just ahead, and recorded with the
@@ -9521,33 +9539,11 @@ static void emit_arg_temp(Compiler *c, int v) {
   int wshare = repr_write_share(c, nt_paren_single(c->nt, v));
   /* So does a value whose String's handle it hands on (arg_temp_conversion) */
   int conversion = arg_temp_conversion(c, v, at);
-  /* A String Range's endpoint the Range keeps no handle for reads as the
-     plain read answers it, the String the Range holds, not as a read of
-     the handle taken here: that is a new handle over a copy, and
-     `S.new(f.begin, f.begin)` bound two Strings. The Range is held,
-     rooted, where the argument runs, and its receiver reads that hold from
-     here on: the handle, the read and a box take
-     the one Range. Parentheses around the route (strbuf_srange_tail) run
-     their statements first, once, and their value is the route's. */
-  int stail = conversion ? strbuf_srange_tail(c, v) : -1, srange = stail >= 0, tr = -1;
-  if (srange) {
-    emit_paren_lead(c, v, stail, g_pre, g_indent);
-    int recv = nt_ref(c->nt, stail, "receiver");
-    tr = ++g_tmp;
-    Buf rb; memset(&rb, 0, sizeof rb);
-    emit_expr(c, recv, &rb);
-    emit_indent(g_pre, g_indent);
-    buf_printf(g_pre, "sp_StrRange _t%d = %s; ", tr, rb.p ? rb.p : default_value_from_compiler(c, TY_STR_RANGE));
-    emit_gc_root_tmp_refs(c, TY_STR_RANGE, tr, g_pre);
-    buf_puts(g_pre, "\n");
-    free(rb.p);
-    view_bind_temp(recv, tr);
-  }
   /* One representation: a String argument that is a handle (a slot's read,
      a container's element) is held AS the handle, one temp, and read where
      it is used (SP_STR_B); a bytes temp of it was a view the call's other
      operands could move (`s.concat(s, s)` grew the payload under it). */
-  if (!fresh && !srange && !wshare && !conversion && at == TY_STRING &&
+  if (!fresh && !wshare && !conversion && at == TY_STRING &&
       r.strbuf_src == RS_HANDLE) {
     Buf hh; memset(&hh, 0, sizeof hh);
     emit_strbuf_handle_of(c, v, &hh);
@@ -9560,7 +9556,7 @@ static void emit_arg_temp(Compiler *c, int v) {
   }
   Buf hw; memset(&hw, 0, sizeof hw);
   if (conversion && arg_bang_on_handle(c, v)) emit_bang_self_handle(c, nt_paren_single(c->nt, v), &hw);
-  else if (conversion) emit_strbuf_handle_of(c, srange ? stail : v, &hw);
+  else if (conversion) emit_strbuf_handle_of(c, v, &hw);
   else if (wshare) emit_strbuf_write_handle(c, v, &hw);
   wshare |= conversion;
   if (wshare || ((vk == NK_LocalVariableReadNode || vk == NK_InstanceVariableReadNode ||
@@ -9577,7 +9573,6 @@ static void emit_arg_temp(Compiler *c, int v) {
      in the temp (view_bind_o below): `a[i] = xs.max` stores the nil */
   int to = !wshare && oint_kind(at) && node_is_oint(c, v);
   if (wshare && at == TY_STRBUF) buf_printf(&hb, "_t%d", th);
-  else if (srange) buf_printf(&hb, "sp_strbuf_read(_t%d)", th);
   /* a bang (or a conditional with one on an arm) ran for its handle, which is
      the String's or nil: its bytes are the handle's read, where the node's
      Repr says handle */
@@ -9606,7 +9601,7 @@ static void emit_arg_temp(Compiler *c, int v) {
      argument that grows or replaces the String moved: `m((n += 1; s), *r,
      (s.replace(big); 0))` boxed the freed bytes. A fresh String's handle is
      the one it was born in, adopted, and a handle is itself; one_face below) */
-  int one_face = at == TY_STRING && !to && hb.p && !srange && !wshare && !conversion;
+  int one_face = at == TY_STRING && !to && hb.p && !wshare && !conversion;
   if (one_face) buf_printf(g_pre, "sp_String *_t%d = SP_STR_HDL(%s);", t, hb.p);
   else {
   if (at == TY_POLY) buf_puts(g_pre, "sp_RbVal");
@@ -12627,7 +12622,7 @@ void emit_args_filled_argv(Compiler *c, int callee_idx, const int *argv, int arg
          lifted (poly_strbuf_lift) is bound as its handle below. */
       if (!seq && at == TY_STRING && m->pnames[k] &&
           repr_of_slot(c, scope_local(m, m->pnames[k])).kind == RK_BOXED && !comp_poly_strbuf_lift_stored(c, argv[k]) &&
-          strbuf_srange_tail(c, argv[k]) < 0 &&
+          arg_native_string_tail(c, argv[k]) < 0 &&
           (strbuf_cond_has_handle_leaf(c, argv[k]) || strbuf_srange_arm(c, argv[k]))) root = 0;
       /* a bare read is already rooted where it lives */
       else if ((ak == NK_LocalVariableReadNode ||
@@ -12688,11 +12683,10 @@ void emit_args_filled_argv(Compiler *c, int callee_idx, const int *argv, int arg
         ran_first_bind(argv[k], ht, ht);
         continue;
       }
-      /* --share-strings: a String Range's endpoint, or parentheses that end
-         in one (strbuf_srange_tail), runs as emit_arg_temp runs it: the
-         Range held, the handle it keeps taken, and the String read off it,
-         which a box takes as the endpoint. */
-      if (at == TY_STRING && strbuf_srange_tail(c, argv[k]) >= 0) { emit_arg_temp(c, argv[k]); continue; }
+      if ((at == TY_STRING || at == TY_STRBUF) && arg_native_string_tail(c, argv[k]) >= 0) {
+        emit_arg_temp(c, argv[k]);
+        continue;
+      }
       /* an Integer / Float argument that can be nil is held with its nil
          (emit_arg_temp's oint): the plain temp unwrapped it here, ahead of
          the callee, with the wrong error */

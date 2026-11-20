@@ -599,6 +599,9 @@ static const char *sp_poly_to_s_impl(sp_RbVal v, size_t *length)
            renders it: a boxed one fell through to "" (`puts [f, d]`) */
         case SP_BUILTIN_IO: return sp_io_to_s((sp_File *)v.v.p);
         case SP_BUILTIN_DIR: return sp_Dir_to_s((sp_Dir *)v.v.p);
+        /* Process::Status#to_s, as the typed arm renders it ("pid N exit 3"):
+           a boxed one (an interpolation, String(), a join) fell through to "" */
+        case SP_BUILTIN_PROCESS_STATUS: return sp_process_status_str((sp_ProcessStatus *)v.v.p, 0);
         case SP_BUILTIN_TIME_RANGE: return sp_trange_to_s((sp_TimeRange *)v.v.p);
         case SP_BUILTIN_OBJ_RANGE: return sp_orange_to_s((sp_ObjRange *)v.v.p);
         case SP_BUILTIN_FIBER: return sp_Fiber_inspect((sp_Fiber *)v.v.p);
@@ -968,6 +971,9 @@ const char *sp_poly_inspect(sp_RbVal v)
         case SP_BUILTIN_ENV:    return sp_StrStrHash_inspect(sp_env_to_h());
         /* the typed form's rendering, which lists the ivars a program set */
         case SP_BUILTIN_RANDOM: if (v.v.p) return sp_Random_inspect((sp_Random *)v.v.p); return SPL("#<Object>");
+        /* Process::Status#inspect ("#<Process::Status: pid N exit 3>"): a boxed
+           one (an element of an Array) showed the address below */
+        case SP_BUILTIN_PROCESS_STATUS: return sp_process_status_str((sp_ProcessStatus *)v.v.p, 1);
         default:
           /* a user object: the generated per-class ivar walk renders
              #<Name:0x... @a=..., ...> like CRuby's default inspect */

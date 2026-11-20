@@ -6746,9 +6746,7 @@ void emit_opw_okey_read(const char *t, Buf *b) {
   buf_printf(b, "sp_poly_okey(%s)", t);
 }
 
-/* --share-strings: String Array value v as a PolyArray holding each
-   element boxed as a handle of its own (a slot whose elements the rule
-   shares, or a fresh Array an iterator consumes: share_node_fresh_elems) */
+/* Box a String Array's elements with their existing handles. */
 void emit_str_array_handles(Compiler *c, int v, Buf *b) {
   /* a String Range's minmax: its min and max as they answer them, the
      endpoints themselves (sp_srange_extreme_h), not copies */

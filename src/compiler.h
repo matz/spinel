@@ -1849,8 +1849,7 @@ typedef struct {
      (comp_class_may_be_value), built for the node and class counts kept */
   unsigned char *cls_value;
   int cls_value_n, cls_value_nodes;
-  /* --share-strings: each node's parent at seal, for where a new String is
-     boxed (share_plan_box_plain) */
+  /* Each node's parent at seal, for finding multiple-assignment targets. */
   int *share_parent;
   int share_parent_n;
   /* strbuf_bang_self_local's answers within one outermost query

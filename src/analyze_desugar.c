@@ -20216,8 +20216,11 @@ int desugar_builtin_enum_calls(Compiler *c) {
        The same dispatch shape, `__r.is_a?(Range) ? __r.minmax : generic`,
        its Range arm left to the poly dispatch (the face table's Range
        owners). In the definition itself the test cost every copy its
-       inlining, closures and all. */
-    int range_arm = rt == TY_POLY && nown == 0 && !safe_nav && blk < 0 && an == 0 && is_minmax_pair(name);
+       inlining, closures and all. A class with its own minmax joins the
+       Range arm (below), where the poly dispatch answers it by that method:
+       the Range test is not left out for it, or a Float Range beside such
+       a class took the walk and raised. */
+    int range_arm = rt == TY_POLY && !safe_nav && blk < 0 && an == 0 && is_minmax_pair(name);
     /* A boxed receiver of a method a reopening of Enumerable adds may be a
        String, an Integer, a Regexp or a program's plain object, which no
        Enumerable is: unlike a builtin's copy, whose walk checks the value is

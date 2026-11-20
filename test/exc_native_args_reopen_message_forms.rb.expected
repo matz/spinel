@@ -1,0 +1,14 @@
+"S[]"
+"S[nil]"
+"S[\"k\"]"
+"S[]"
+"S[nil]"
+"S[\"n\"]"
+"S[]"
+"S[nil]"
+"S[\"f\"]"
+:given
+:named
+:none
+7
+ArgumentError

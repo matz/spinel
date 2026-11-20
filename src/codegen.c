@@ -23925,22 +23925,41 @@ static int exc_has_reopen_initialize(Compiler *c) {
    boxed for a poly one or a rest, the String itself for a String one. An
    initialize whose first parameter has any other type has no arm: 0, and the
    caller keeps the runtime's message. A reopening that cannot take one
-   argument raises ArgumentError, as the call would. */
-int emit_reinit_init_text(Compiler *c, int im, const char *self, const char *msg_c, Buf *out) {
+   argument raises ArgumentError, as the call would.
+   msg_c NULL is a call that gave no message (`KeyError.new(key: 1)`): CRuby's
+   native initialize then calls super with no argument, so none is passed and an
+   initialize that needs one raises. nilable says msg_c may be a NULL pointer at
+   run time, a message given as nil, which the initialize holds as nil (an empty
+   String for a String parameter). call_id >= 0 hands the call's block to an
+   initialize that takes one. */
+int emit_reinit_init_text_ex(Compiler *c, int im, const char *self, const char *msg_c, int nilable, int call_id, Buf *out) {
   Buf pre = {0}, args = {0}, mb = {0}, src = {0};
   char raise[640];
   int builds = 0;
   int p0 = arm_arg_param(c, &c->scopes[im]);
   LocalVar *p0v = p0 >= 0 && c->scopes[im].pnames ? scope_local(&c->scopes[im], c->scopes[im].pnames[p0]) : NULL;
   TyKind p0t = p0v ? repr_of_slot(c, p0v).as_ty : TY_POLY;
-  buf_printf(&src, "sp_box_str_new(%s)", msg_c);
-  int ok = 1;
-  if (p0t == TY_POLY || p0t == TY_UNKNOWN) buf_puts(&mb, src.p);
-  else if (p0t == TY_STRING || p0t == TY_STRBUF) emit_unbox_text(c, p0t, src.p, &mb);
-  else ok = 0;
+  int ok = 1, nargs = msg_c ? 1 : 0;
+  if (msg_c) {
+    int poly = p0t == TY_POLY || p0t == TY_UNKNOWN;
+    if (nilable && poly) buf_printf(&src, "(%s ? sp_box_str_new(%s) : sp_box_nil())", msg_c, msg_c);
+    else if (nilable) buf_printf(&src, "sp_box_str_new(%s ? %s : \"\")", msg_c, msg_c);
+    else buf_printf(&src, "sp_box_str_new(%s)", msg_c);
+    if (poly) buf_puts(&mb, src.p);
+    else if (p0t == TY_STRING || p0t == TY_STRBUF) emit_unbox_text(c, p0t, src.p, &mb);
+    else ok = 0;
+  }
   if (ok) {
     const char *argv[1] = { mb.p };
-    if (emit_arm_args_text(c, im, self, argv, 1, &pre, &args, &builds, raise, sizeof raise)) {
+    if (emit_arm_args_text(c, im, self, argv, nargs, &pre, &args, &builds, raise, sizeof raise)) {
+      /* the arm's own block slot is NULL: the call's block replaces it */
+      if (call_id >= 0 && ctor_init_takes_block(c, im) && args.p) {
+        size_t n = strlen(args.p);
+        if (n >= 6 && !strcmp(args.p + n - 6, ", NULL")) {
+          args.p[n - 6] = 0; args.len = n - 6;
+          emit_ctor_block_slot(c, call_id, im, ", ", &args);
+        }
+      }
       if (pre.p) buf_puts(out, pre.p);
       buf_printf(out, " %s(%s%s);", mc_method(c, &c->scopes[im]), self, args.p ? args.p : "");
     }
@@ -23948,6 +23967,9 @@ int emit_reinit_init_text(Compiler *c, int im, const char *self, const char *msg
   }
   free(pre.p); free(args.p); free(mb.p); free(src.p);
   return ok;
+}
+int emit_reinit_init_text(Compiler *c, int im, const char *self, const char *msg_c, Buf *out) {
+  return emit_reinit_init_text_ex(c, im, self, msg_c, 0, -1, out);
 }
 
 /* sp_user_exc_reinit, the hook sp_raise_cls asks for an error the runtime

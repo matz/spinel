@@ -2595,6 +2595,9 @@ int emit_arm_args_text(Compiler *c, int mi, const char *armself, const char *con
    with the C text msg_c (a const char *) as its one argument; 0: no arm for its
    first parameter's type. (codegen.c) */
 int emit_reinit_init_text(Compiler *c, int im, const char *self, const char *msg_c, Buf *out);
+/* The same for a native construction (msg_c NULL: no message given; nilable: msg_c may be NULL, a nil given;
+   call_id >= 0: the call whose block the initialize takes). (codegen.c) */
+int emit_reinit_init_text_ex(Compiler *c, int im, const char *self, const char *msg_c, int nilable, int call_id, Buf *out);
 /* Can running the node `id` assign self's instance variable `iv`, self an
    instance of class `cls` (-1: none known) or of one below it? `depth`
    counts the self calls followed into their methods (0 at the call site);

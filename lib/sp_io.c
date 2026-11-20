@@ -2538,9 +2538,10 @@ const char *sp_sock_read_nb(sp_File *f, sp_int len, sp_bool exc, sp_bool is_recv
 }
 /* write_nonblock -> the byte count, or nil when it would block.
    Paired like sp_File_write: the _bin entry sizes with the header length and
-   is emitted only for a String value; this one stays strlen for bare
-   literals (a poly operand reaches it through sp_poly_to_s, which answers
-   static class/symbol names with no marker byte). */
+   is emitted only for a String value; this one stays strlen for a typed
+   operand that is not a String, converted with to_s (static class/symbol
+   names carry no marker byte). A poly operand takes the _poly entry, or
+   the _n entry once converted, which keep its bytes past a NUL. */
 static sp_oint sp_sock_write_nb_len(sp_File *f, const char *data, size_t len, sp_bool exc) {SP_GC_ROOT(f);SP_GC_ROOT_STR(data);
   ssize_t n;
   int saved = sp_io_nb_begin(f);
@@ -2558,6 +2559,16 @@ static sp_oint sp_sock_write_nb_len(sp_File *f, const char *data, size_t len, sp
 sp_oint sp_sock_write_nb(sp_File *f, const char *data, sp_bool exc) {SP_GC_ROOT(f);SP_GC_ROOT_STR(data);
   SP_IO_OPEN(f);
   return sp_sock_write_nb_len(f, data, data ? strlen(data) : 0, exc);
+}
+sp_oint sp_sock_write_nb_n(sp_File *f, const char *data, size_t len, sp_bool exc) {SP_GC_ROOT(f);SP_GC_ROOT_STR(data);
+  SP_IO_OPEN(f);
+  return sp_sock_write_nb_len(f, data, len, exc);
+}
+sp_oint sp_sock_write_nb_poly(sp_File *f, sp_RbVal v, sp_bool exc) {SP_GC_ROOT(f);SP_GC_ROOT_RBVAL(v);
+  size_t n;
+  const char *text = sp_poly_to_s_bytes(v, &n);
+  SP_IO_OPEN(f);
+  return sp_sock_write_nb_len(f, text, n, exc);
 }
 sp_oint sp_sock_write_nb_bin(sp_File *f, const char *data, sp_bool exc) {SP_GC_ROOT(f);SP_GC_ROOT_STR(data);
   SP_IO_OPEN(f);

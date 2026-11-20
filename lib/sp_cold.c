@@ -505,7 +505,7 @@ sp_Complex sp_str_to_c_strict(const char *s) { return sp_str_to_c_impl(s, 1); }
 /* FNM_DOTMATCH mode for the walk below: hidden entries (and ".") match a
    non-dot pattern; ".." never does, as CRuby's glob. Set by the _dot wrapper. */
 static int sp_glob_dotmatch = 0;
-static int sp_glob_flags = 0;   /* FNM_CASEFOLD and FNM_NOESCAPE of the running glob */
+static int sp_glob_flags = 0;   /* the FNM_NOESCAPE of the running glob */
 /* A glob walk holds open directories and brace buffers (as File.fnmatch's
    FNM_EXTGLOB holds the latter), so the matcher's ArgumentError waits until
    they are let go: under sp_glob_defer
@@ -691,13 +691,10 @@ static int sp_fnm_match(const char *p, const char *s, int flags) {
    leading dot is hidden unless the pattern asks for one or the glob runs
    under FNM_DOTMATCH, which is CRuby's rule. */
 static int sp_glob_comp_match(const char *comp, const char *name) {
-  return sp_fnm_match(comp, name, (sp_glob_dotmatch ? SP_FNM_DOTMATCH : 0) | (sp_glob_flags & (SP_FNM_CASEFOLD | SP_FNM_NOESCAPE)));
+  return sp_fnm_match(comp, name, (sp_glob_dotmatch ? SP_FNM_DOTMATCH : 0) | (sp_glob_flags & SP_FNM_NOESCAPE));
 }
 
-/* Under FNM_CASEFOLD a literal component matches a name by case too, so it
-   is read from the directory like a pattern. */
 static int sp_glob_has_meta(const char *comp) {
-  if (sp_glob_flags & SP_FNM_CASEFOLD) return 1;
   for (const char *p = comp; *p; p++)
     if (*p == '*' || *p == '?' || *p == '[') return 1;
   return 0;
@@ -1026,10 +1023,11 @@ sp_StrArray *sp_dir_glob_base(const char *pattern, const char *base) {
 }
 
 const char *sp_poly_inspect(sp_RbVal v);   /* lib/sp_poly_cold.c */
-/* Dir.glob's flags and keyword options reuse the walk: FNM_DOTMATCH,
-   FNM_CASEFOLD and FNM_NOESCAPE reach the matcher of each component (the
-   others change nothing in a glob, as in CRuby); sort: false keeps the
-   walk's order, which the filesystem gives. */
+/* Dir.glob's flags and keyword options reuse the walk: FNM_DOTMATCH and
+   FNM_NOESCAPE reach the matcher of each component; FNM_CASEFOLD and the
+   others change nothing in a glob, as CRuby ignores them there (the case
+   rule is the filesystem's); sort: false keeps the walk's order, which the
+   filesystem gives. */
 sp_StrArray *sp_dir_glob_flags(const char *pattern, const char *base, sp_int flags, sp_RbVal sort) {
   SP_GC_ROOT_STR(pattern); SP_GC_ROOT_STR(base); SP_GC_ROOT_RBVAL(sort);
   if (sort.tag != SP_TAG_BOOL)

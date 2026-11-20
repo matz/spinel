@@ -2181,6 +2181,28 @@ SP_NORETURN SP_COLD void sp_raise_cls(const char *cls, const char *msg) {
    a --debug backtrace names its frame Kernel#require, and the archive's
    -O2 build leaves no frame there. */
 #include "sp_proc.h"
+sp_unwind_state sp_unwind_pause(void) {
+  sp_unwind_state state = {
+    sp_unwind_kind, sp_unwind_target, sp_unwind_exc_top, sp_unwind_home,
+    { .tag = SP_TAG_NIL }
+  };
+  if (state.kind == SP_UNWIND_BREAK) state.value = sp_brk_val[state.target];
+  if (state.kind == SP_UNWIND_PROCRET) state.value = state.home->val;
+  sp_unwind_kind = SP_UNWIND_NONE;
+  return state;
+}
+
+void sp_unwind_restore(const sp_unwind_state *state) {
+  sp_unwind_kind = state->kind;
+  sp_unwind_target = state->target;
+  sp_unwind_exc_top = state->exc_top;
+  sp_unwind_home = state->home;
+  if (state->kind == SP_UNWIND_BREAK) sp_brk_val[state->target] = state->value;
+  if (state->kind == SP_UNWIND_PROCRET) state->home->val = state->value;
+  /* A throw delivers the most recent value written to its catch slot, even
+     if that later throw was canceled before reaching the catch. */
+}
+
 /* Continue a non-local unwind after a handler has run its ensure: if more ensure
    handlers lie between here and the target, longjmp to the next; otherwise
    deliver to the target (the proc-return home node, or the matched catch slot). */
@@ -2262,13 +2284,12 @@ void sp_trap_call(sp_Proc *p, int no) {
   const char *ecls = sp_exc_cls[sp_exc_top], *emsg = sp_exc_msg[sp_exc_top];
   void *eobj = sp_exc_obj[sp_exc_top];
   SP_GC_ROOT_STR(emsg); SP_GC_ROOT(eobj);
-  int uk = sp_unwind_kind, ut = sp_unwind_target, ue = sp_unwind_exc_top;
-  struct sp_proc_home *uh = sp_unwind_home;
-  sp_unwind_kind = SP_UNWIND_NONE;
+  sp_unwind_state state = sp_unwind_pause();
+  SP_GC_ROOT_RBVAL(state.value);
   /* out of line on purpose: glibc marks sigprocmask __leaf__, and GCC would
      keep the unwind state in registers across a direct call */
   sp_sig_unblock(no, 0);
-  sp_unwind_kind = uk; sp_unwind_target = ut; sp_unwind_exc_top = ue; sp_unwind_home = uh;
+  sp_unwind_restore(&state);
   if (sp_unwind_kind != SP_UNWIND_NONE) sp_unwind_resume();
   sp_pending_exc_obj = eobj; sp_raise_cls(ecls, emsg);
 }

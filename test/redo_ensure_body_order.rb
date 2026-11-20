@@ -85,3 +85,56 @@ result = catch(:outer) do
   end
 end
 p [attempts, result]
+
+# A transfer inside an ensure can reach the same destination as the
+# suspended transfer. If redo cancels it, a break or return still carries
+# its original object through any allocations in the ensure.
+def keep_break_value(&block)
+  attempts = 0
+  begin
+    block.call(String.new("original break"))
+  ensure
+    [1].each do |_item|
+      begin
+        attempts += 1
+        redo if attempts == 1
+      ensure
+        if attempts == 1
+          begin
+            block.call(String.new("interrupted break"))
+          ensure
+            GC.start
+            redo
+          end
+        end
+      end
+    end
+  end
+end
+
+def keep_return_value
+  leave = proc { |value| return value }
+  attempts = 0
+  begin
+    leave.call(String.new("original return"))
+  ensure
+    [1].each do |_item|
+      begin
+        attempts += 1
+        redo if attempts == 1
+      ensure
+        if attempts == 1
+          begin
+            leave.call(String.new("interrupted return"))
+          ensure
+            GC.start
+            redo
+          end
+        end
+      end
+    end
+  end
+end
+
+p keep_break_value { |value| break value }
+p keep_return_value

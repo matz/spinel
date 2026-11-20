@@ -46,6 +46,17 @@ typedef struct sp_proc_home {
   struct sp_proc_home *prev;  /* enclosing home, forming the per-fiber chain */
 } sp_proc_home;
 
+/* An ensure can run another transfer to the same destination. Keep the
+   suspended break or return value in the ensure's own rooted stack slot. */
+typedef struct {
+  int kind, target, exc_top;
+  sp_proc_home *home;
+  sp_RbVal value;
+} sp_unwind_state;
+
+sp_unwind_state sp_unwind_pause(void);
+void sp_unwind_restore(const sp_unwind_state *state);
+
 /* The live prefix of every handler array, saved into the outgoing fiber's
    context and loaded from the incoming one's at each switch. */
 typedef struct {

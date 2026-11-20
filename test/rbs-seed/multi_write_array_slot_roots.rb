@@ -1,4 +1,3 @@
-# spinel: rbs-seed-check
 class TupleArraySlot
   def save(target, value)
     *, target, first = value, +"first"

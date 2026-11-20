@@ -1,3 +1,4 @@
+# spinel: not-cruby -- a typed negative base to a fractional power raises Math::DomainError (docs/limitations.md); CRuby answers a Complex
 # Negative Float ** fractional exponent raises Math::DomainError loudly
 # (CRuby promotes to a Complex; documented divergence in
 # docs/limitations.md -- expected file pins the spinel behavior).

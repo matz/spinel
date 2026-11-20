@@ -1,0 +1,10 @@
+[Net::HTTPOK, "GET /g HTTP/1.1  body="]
+"GET /g HTTP/1.1 x-a=1 body="
+[nil, "HEAD /h HTTP/1.1  body="]
+"POST /p HTTP/1.1 content-length=3 body=a=1"
+"POST /p HTTP/1.1  body="
+"PUT /u HTTP/1.1 content-length=2 content-type=application/json body={}"
+"PATCH /p HTTP/1.1 content-length=0 body="
+"DELETE /d HTTP/1.1  body="
+"OPTIONS /o HTTP/1.1  body="
+"PROPFIND /w HTTP/1.1 content-length=4 content-type=text/xml body=<x/>"

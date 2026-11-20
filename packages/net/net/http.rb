@@ -70,12 +70,17 @@ module Net
   end
 
   # Raised when the peer accepts the connection and then says nothing for
-  # read_timeout seconds, and when a connection cannot be established within
-  # open_timeout. Same classes and same base as CRuby's: Timeout::Error, so
-  # `rescue Timeout::Error` catches either, which is what a caller with a
-  # deadline writes.
+  # read_timeout seconds, when it stops taking the request for
+  # write_timeout seconds, and when a connection cannot be established
+  # within open_timeout. Same classes and same base as CRuby's:
+  # Timeout::Error, so `rescue Timeout::Error` catches any of them, which is
+  # what a caller with a deadline writes.
   class ReadTimeout < Timeout::Error
     def message = "Net::ReadTimeout"
+  end
+
+  class WriteTimeout < Timeout::Error
+    def message = "Net::WriteTimeout"
   end
 
   class OpenTimeout < Timeout::Error
@@ -610,7 +615,7 @@ module Net
     end
 
     attr_reader :address, :port
-    attr_accessor :use_ssl, :open_timeout, :read_timeout
+    attr_accessor :use_ssl, :open_timeout, :read_timeout, :write_timeout
 
     # CRuby's, handed to the TLS context the connection is made with. nil,
     # the default, leaves the context's own, VERIFY_PEER.
@@ -668,6 +673,7 @@ module Net
       @use_ssl = false
       @open_timeout = 60
       @read_timeout = 60
+      @write_timeout = 60
       @ssl_timeout = nil
       @keep_alive_timeout = 2
       @max_retries = 1
@@ -709,12 +715,13 @@ module Net
     # `ipaddr:` is the connect target; `Host:` and the TLS hostname stay
     # `address`. `nil` reads as unset, which is what CRuby's default is.
     def self.start(address, port = 80, use_ssl: false, ipaddr: nil,
-                   open_timeout: 60, read_timeout: 60)
+                   open_timeout: 60, read_timeout: 60, write_timeout: 60)
       http = HTTP.new(address, port)
       http.use_ssl = use_ssl
       http.ipaddr = ipaddr.to_s
       http.open_timeout = open_timeout
       http.read_timeout = read_timeout
+      http.write_timeout = write_timeout
       http.start { |h| yield h }
     end
 
@@ -1022,11 +1029,25 @@ module Net
 
     # ---- the wire ----
 
+    # Each wait for the socket to take more bytes is bounded by
+    # write_timeout, as CRuby's is: a peer that stops reading raises
+    # WriteTimeout instead of holding the request forever. nil waits without
+    # a limit. The request goes out in slices of at most 64 KB, so a large
+    # body is not copied again after every partial write.
     def wire_write(s)
-      if @tls.nil?
-        @socket.write(s)
-      else
-        @tls.write(s)
+      offset = 0
+      size = s.bytesize
+      while offset < size
+        piece = s.byteslice(offset, 65536)
+        n = @tls.nil? ? @socket.write_nonblock(piece, exception: false) : @tls.syswrite_nonblock(piece, exception: false)
+        if n.is_a?(Integer)
+          offset += n
+        elsif n.nil?
+          raise EOFError, "end of file reached"
+        else
+          ready = n == :wait_readable ? IO.select([@socket], nil, nil, @write_timeout) : IO.select(nil, [@socket], nil, @write_timeout)
+          raise WriteTimeout if ready.nil?
+        end
       end
       nil
     end

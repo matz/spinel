@@ -49,9 +49,9 @@ rc_sha() {
 # Hash a sorted NUL-delimited file list without launching a hasher per path.
 rc_sha_paths() {
   if command -v sha256sum >/dev/null 2>&1; then
-    xargs -0 -r sha256sum
+    xargs -0 sha256sum
   else
-    xargs -0 -r shasum -a 256
+    xargs -0 shasum -a 256
   fi
 }
 
@@ -127,19 +127,31 @@ fp)
     if [ "$1" = "--" ]; then shift; strs="$*"; break; fi
     files="$files $1"; shift
   done
+  fp_dir=$(mktemp -d "${TMPDIR:-/tmp}/spinel-result-fp.XXXXXX") || exit 1
+  trap 'rm -rf "$fp_dir"' EXIT
+  # A partial manifest must not become a valid key when a tool fails.
+  find lib packages -type f \( -name '*.h' -o -name '*.inc' -o -name '*.def' \) -print0 > "$fp_dir/paths" 2>/dev/null || exit 1
+  perl -0e 'binmode STDIN; binmode STDOUT; print sort <STDIN>; close STDOUT or die $!' < "$fp_dir/paths" > "$fp_dir/sorted" || exit 1
+  if [ -s "$fp_dir/sorted" ]; then
+    rc_sha_paths < "$fp_dir/sorted" > "$fp_dir/headers" || exit 1
+  else
+    : > "$fp_dir/headers" || exit 1
+  fi
   {
-    echo "format $RC_FORMAT"
+    echo "format $RC_FORMAT" || exit 1
     for f in $files; do
-      if [ -f "$f" ]; then rc_sha "$f"; else echo "absent $f"; fi
+      if [ -f "$f" ]; then rc_sha "$f" || exit 1; else echo "absent $f" || exit 1; fi
     done
-    find lib packages -type f \( -name '*.h' -o -name '*.inc' -o -name '*.def' \) -print0 2>/dev/null | sort -z | rc_sha_paths
+    cat "$fp_dir/headers" || exit 1
     cc=${RC_CC:-cc}
-    $cc --version 2>&1
-    $cc -dumpmachine 2>&1
-    uname -sm
-    echo "LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-} LIBRARY_PATH=${LIBRARY_PATH:-}"
+    $cc --version 2>&1 || exit 1
+    $cc -dumpmachine 2>&1 || exit 1
+    uname -sm || exit 1
+    echo "LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-} LIBRARY_PATH=${LIBRARY_PATH:-}" || exit 1
     echo "$strs"
-  } | rc_sha | cut -c1-64
+  } > "$fp_dir/input" || exit 1
+  fp_sum=$(rc_sha < "$fp_dir/input") || exit 1
+  printf '%.64s\n' "$fp_sum"
   ;;
 key)
   [ "${GATE_CACHE:-1}" = 0 ] && exit 1

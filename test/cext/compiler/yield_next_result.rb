@@ -66,6 +66,22 @@ end
 p values.map { |value| value.equal?(YIELD_WORD) }
 p values
 
+# A fresh element remains live after its original local is cleared.
+def fresh_next_value
+  Array.new(1) do |index|
+    value = +"fresh\0#{index}"
+    YieldNextNative.append(value)
+    begin
+      next value if index == 0
+    ensure
+      value = nil
+      GC.start
+    end
+    +"fallback"
+  end.first
+end
+p fresh_next_value.bytes
+
 values = Array.new(2) do |index|
   next nil if index == 0
   YIELD_BINARY

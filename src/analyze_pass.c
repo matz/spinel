@@ -3641,7 +3641,14 @@ static int push_escape_widen(Compiler *c, int id, int recv, int is_push, TyKind 
   return widen_arg_array(c, recv);
 }
 
-static int container_literals(Compiler *c, int n, int *out, int nout, int cap, int depth);
+typedef struct {
+  int *items, count, capacity;
+  int small[32];
+} ContainerLiterals;
+static void container_literals(Compiler *c, int n, ContainerLiterals *out, int depth);
+static void free_container_literals(ContainerLiterals *list) {
+  if (list->items != list->small) free(list->items);
+}
 static int value_node_or_self(const NodeTable *nt, int n);
 /* Sets the Hash literals value `v` hands over to `want`. A chain of locals
    (`a = {...}; b = a; H = b`) is followed to its end, each write once, so
@@ -3657,10 +3664,12 @@ static void widen_value_hash_literals(Compiler *c, int v, TyKind want) {
     Scope *sc = x >= 0 && nt_kind(nt, x) == NK_LocalVariableReadNode ? comp_scope_of(c, x) : NULL;
     const char *nm = sc ? nt_str(nt, x, "name") : NULL;
     /* a local's own literals too: a parameter's are its callers' arguments */
-    int lits[32], nl = container_literals(c, x, lits, 0, 32, 0);
-    for (int q = 0; q < nl; q++)
-      if (nt_kind(nt, lits[q]) == NK_HashNode && lits[q] < c->node_cap && c->hash_want[lits[q]] != want)
-        comp_set_hash_want(c, lits[q], want);
+    ContainerLiterals lits = {0};
+    container_literals(c, x, &lits, 0);
+    for (int q = 0; q < lits.count; q++)
+      if (nt_kind(nt, lits.items[q]) == NK_HashNode && lits.items[q] < c->node_cap && c->hash_want[lits.items[q]] != want)
+        comp_set_hash_want(c, lits.items[q], want);
+    free_container_literals(&lits);
     if (!nm) continue;
     for (int r = lw_shared_first(c, nm, (int)(sc - c->scopes)); r >= 0; r = lw_shared_next(r)) {
       int w = lw_shared_node(r), wv = nt_ref(nt, w, "value"), seen = 0;
@@ -4351,8 +4360,11 @@ static int infer_write_container_usage(Compiler *c, const NodeTable *nt, int nfb
          arrays widen where they are built instead. A value whose kind is
          decided at run time widens them to the general Array too: a store
          the typed array took checked at run time raised for a foreign one,
-         where CRuby appends it. */
-      if (lv && (!lv->is_param || lv->is_block_param) && lv->type == TY_POLY && (is_push || (is_idx_write && (is_splice || kt == TY_INT))) &&
+         where CRuby appends it. A block parameter already inferred as a
+         typed row gets its storage from the same iterator elements. */
+      if (lv && (!lv->is_param || lv->is_block_param) &&
+          (lv->type == TY_POLY || (lv->is_block_param && ty_is_array(lv->type))) &&
+          (is_push || (is_idx_write && (is_splice || kt == TY_INT))) &&
           !concat_scalar && (!is_splice || is_fill || splice_arr)) {
         /* each pushed value is its own evidence (`z.push(1, [2])`): their
            join is poly, which says nothing about the arrays z holds */
@@ -7340,22 +7352,51 @@ static int clp_extend(Compiler *c, int si, Scope *sc, int pi, unsigned ep) {
   return 1;
 }
 
-/* Collects into out[] the container literals `n` can evaluate to, as far
+static void add_container_literal(ContainerLiterals *out, int n, int nodes) {
+  for (int q = 0; q < out->count; q++) if (out->items[q] == n) return;
+  if (!out->items) {
+    out->items = out->small;
+    out->capacity = (int)(sizeof out->small / sizeof *out->small);
+  } else if (out->count == out->capacity) {
+    int capacity = out->capacity <= nodes / 2 ? out->capacity * 2 : nodes;
+    int *larger = malloc(sizeof *larger * (size_t)capacity);
+    if (!larger) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    memcpy(larger, out->items, sizeof *larger * (size_t)out->count);
+    free_container_literals(out);
+    out->items = larger;
+    out->capacity = capacity;
+  }
+  out->items[out->count++] = n;
+}
+
+/* Collects into out the container literals `n` can evaluate to, as far
    as the program shows: a literal itself, the literals a variable is
    assigned, and, for an element read `x[k]` (`fetch`, `first`, `last`),
-   the container-literal elements of those `x` can be. Returns the count. */
-static int container_literals(Compiler *c, int n, int *out, int nout, int cap, int depth) {
+   the container-literal elements of those `x` can be. */
+static void container_literals(Compiler *c, int n, ContainerLiterals *out, int depth) {
   const NodeTable *nt = c->nt;
   n = value_node_or_self(nt, n);   /* `(a; [1])` is the literal */
-  if (n < 0 || depth > 4 || nout >= cap) return nout;
+  if (n < 0 || depth > 4) return;
   NodeKind k = nt_kind(nt, n);
   if (k == NK_ArrayNode || k == NK_HashNode) {
-    for (int q = 0; q < nout; q++) if (out[q] == n) return nout;
-    out[nout++] = n;
-    return nout;
+    add_container_literal(out, n, nt->count);
+    return;
   }
   const char *nm = nt_str(nt, n, "name");
-  if (!nm) return nout;
+  if (!nm) {
+    /* A conditional, a case arm or a rescue can supply the container.
+       Follow the values the expression returns, leaving its predicates alone. */
+    int small[8], *leaves = small;
+    int nl = value_leaves_ex(c, n, leaves, 0, 8, VL_NIL);
+    if (nl < 0) {
+      leaves = cext_walk_values(c);
+      nl = value_leaves_ex(c, n, leaves, 0, nt->count, VL_NIL);
+    }
+    for (int i = 0; i < nl; i++)
+      if (leaves[i] != n) container_literals(c, leaves[i], out, depth + 1);
+    if (leaves != small) free(leaves);
+    return;
+  }
   if (k == NK_CallNode) {
     int r = nt_ref(nt, n, "receiver"), a = nt_ref(nt, n, "arguments"), an = 0;
     if (a >= 0) nt_arr(nt, a, "arguments", &an);
@@ -7364,30 +7405,33 @@ static int container_literals(Compiler *c, int n, int *out, int nout, int cap, i
     /* a copy is built as the container it copies: the two widen together;
        a frozen one is the container itself (`@h = {}.freeze`) */
     if (r >= 0 && an == 0 && nt_ref(nt, n, "block") < 0 &&
-        (sp_streq(nm, "dup") || sp_streq(nm, "clone") || sp_streq(nm, "freeze")))
-      return container_literals(c, r, out, nout, cap, depth + 1);
-    if (r < 0 || !elem_read || nt_ref(nt, n, "block") >= 0) return nout;
-    int outer[32];
-    int no = container_literals(c, r, outer, 0, 32, depth + 1);
-    for (int q = 0; q < no; q++) {
-      int en = 0; const int *ev = nt_arr(nt, outer[q], "elements", &en);
+        (sp_streq(nm, "dup") || sp_streq(nm, "clone") || sp_streq(nm, "freeze"))) {
+      container_literals(c, r, out, depth + 1);
+      return;
+    }
+    if (r < 0 || !elem_read || nt_ref(nt, n, "block") >= 0) return;
+    ContainerLiterals outer = {0};
+    container_literals(c, r, &outer, depth + 1);
+    for (int q = 0; q < outer.count; q++) {
+      int en = 0; const int *ev = nt_arr(nt, outer.items[q], "elements", &en);
       for (int e = 0; e < en; e++) {
         int el = nt_kind(nt, ev[e]) == NK_AssocNode ? nt_ref(nt, ev[e], "value") : ev[e];
         NodeKind ek = nt_kind(nt, el);
-        if (ek == NK_ArrayNode || ek == NK_HashNode) nout = container_literals(c, el, out, nout, cap, depth + 1);
+        if (ek == NK_ArrayNode || ek == NK_HashNode) container_literals(c, el, out, depth + 1);
       }
     }
-    return nout;
+    free_container_literals(&outer);
+    return;
   }
   Scope *sc = comp_scope_of(c, n);
-  if (!sc) return nout;
+  if (!sc) return;
   if (k == NK_LocalVariableReadNode) {
     int si = (int)(sc - c->scopes);
     for (int r = lw_shared_first(c, nm, si); r >= 0; r = lw_shared_next(r)) {
       int w = lw_shared_node(r);
       if (nt_kind(nt, w) != NK_LocalVariableWriteNode || comp_scope_of(c, w) != sc ||
           !sp_streq(nt_str(nt, w, "name"), nm)) continue;
-      nout = container_literals(c, nt_ref(nt, w, "value"), out, nout, cap, depth + 1);
+      container_literals(c, nt_ref(nt, w, "value"), out, depth + 1);
     }
     /* a method's parameter: the containers its callers pass there
        (`def add(h) = h[:attrs]["y"] = v` with `add({attrs: {x: 1}})`) */
@@ -7401,7 +7445,7 @@ static int container_literals(Compiler *c, int n, int *out, int nout, int cap, i
       if (pi >= 0 && !imemo_dep_on) {
         ClpEntry *e = clp_entry(c, si, sc, pi);
         unsigned ep = clp_epoch;
-        for (int q = 0; nout < cap && resume == -2; q++) {
+        for (int q = 0; resume == -2; q++) {
           while (q == e->n && e->next >= 0) {
             int was = e->next;
             if (!clp_extend(c, si, sc, pi, ep)) { resume = was; break; }
@@ -7409,14 +7453,14 @@ static int container_literals(Compiler *c, int n, int *out, int nout, int cap, i
           }
           if (resume != -2 || q == e->n) break;
           int call = e->call[q];
-          nout = container_literals(c, e->arg[q], out, nout, cap, depth + 1);
+          container_literals(c, e->arg[q], out, depth + 1);
           if (clp_epoch != ep || !clp_holds(c)) resume = an_calls_named_next(call);
           else e = clp_find(si, pi);   /* (the walk may have grown the table) */
         }
-        if (resume == -2) return nout;
+        if (resume == -2) return;
       }
       for (int call = pi < 0 ? -1 : resume != -2 ? resume : an_calls_named_first(c, sc->name);
-           call >= 0 && nout < cap;
+           call >= 0;
            call = an_calls_named_next(call)) {
         int targets[CPT_MAX], nt_ = cplan_entries(c, call, targets, CPT_MAX), hit = 0;
         for (int t = 0; t < nt_ && !hit; t++) hit = targets[t] == si;
@@ -7424,16 +7468,16 @@ static int container_literals(Compiler *c, int n, int *out, int nout, int cap, i
         int a = nt_ref(nt, call, "arguments"), an = 0;
         const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
         int from = cla_layout_arg(c, call, si, sc, av, an, pi);
-        if (from >= 0 && from < an) nout = container_literals(c, av[from], out, nout, cap, depth + 1);
+        if (from >= 0 && from < an) container_literals(c, av[from], out, depth + 1);
       }
     }
-    return nout;
+    return;
   }
   NodeKind wk = k == NK_InstanceVariableReadNode ? NK_InstanceVariableWriteNode
               : k == NK_GlobalVariableReadNode ? NK_GlobalVariableWriteNode
               : k == NK_ClassVariableReadNode ? NK_ClassVariableWriteNode
               : k == NK_ConstantReadNode ? NK_ConstantWriteNode : NK_NONE;
-  if (wk == NK_NONE) return nout;
+  if (wk == NK_NONE) return;
   int cid = -1;
   if (k == NK_InstanceVariableReadNode) cid = sc->class_id >= 0 ? sc->class_id : c->toplevel_class;
   if (k == NK_ClassVariableReadNode) cid = holder_cvar_owner(c, n, nm, holder_cbody(c, n));
@@ -7447,9 +7491,8 @@ static int container_literals(Compiler *c, int n, int *out, int nout, int cap, i
       }
       if (wc != cid) continue;
     }
-    nout = container_literals(c, nt_ref(nt, w, "value"), out, nout, cap, depth + 1);
+    container_literals(c, nt_ref(nt, w, "value"), out, depth + 1);
   }
-  return nout;
 }
 
 /* An element write or push whose receiver is an element read (`y[k][j] = v`,
@@ -7467,7 +7510,7 @@ static int widen_nested_literals(Compiler *c, int recv, int is_push, int is_spli
     int leaf = -1;
     if (value_leaves(c, r, &leaf, 0, 1) == 1) { r = leaf; seq = 1; }
   }
-  int lits[32], nl = 0;
+  ContainerLiterals lits = {0};
   if (r >= 0 && nt_kind(nt, r) == NK_LocalVariableReadNode) {
     /* a local an element read or a copy of one wrote (`r = b[:attrs].dup;
        r["y"] = v`): the literals those calls reach, the nested one in a
@@ -7475,21 +7518,21 @@ static int widen_nested_literals(Compiler *c, int recv, int is_push, int is_spli
     const char *rn = nt_str(nt, r, "name");
     Scope *rs = rn ? comp_scope_of(c, r) : NULL;
     int si = rs ? (int)(rs - c->scopes) : -1;
-    for (int q = si >= 0 ? lw_shared_first(c, rn, si) : -1; q >= 0 && nl < 32; q = lw_shared_next(q)) {
+    for (int q = si >= 0 ? lw_shared_first(c, rn, si) : -1; q >= 0; q = lw_shared_next(q)) {
       int w = lw_shared_node(q);
       if (nt_kind(nt, w) != NK_LocalVariableWriteNode || comp_scope_of(c, w) != rs ||
           !sp_streq(nt_str(nt, w, "name"), rn)) continue;
       int wv = nt_paren_single(c->nt, nt_ref(nt, w, "value"));
-      if (wv >= 0 && nt_kind(nt, wv) == NK_CallNode) nl = container_literals(c, wv, lits, nl, 32, 0);
+      if (wv >= 0 && nt_kind(nt, wv) == NK_CallNode) container_literals(c, wv, &lits, 0);
     }
   }
   else {
     if (r < 0 || !(nt_kind(nt, r) == NK_CallNode || (seq && nt_kind(nt, r) == NK_ArrayNode))) return 0;
-    nl = container_literals(c, r, lits, 0, 32, 0);
+    container_literals(c, r, &lits, 0);
   }
   int changed = 0;
-  for (int q = 0; q < nl; q++) {
-    int l = lits[q];
+  for (int q = 0; q < lits.count; q++) {
+    int l = lits.items[q];
     TyKind lt = infer_type(c, l);
     if (nt_kind(nt, l) == NK_HashNode) {
       if (is_push || is_splice || lt == TY_POLY_POLY_HASH || kt == TY_UNKNOWN || vt == TY_UNKNOWN) continue;
@@ -7512,6 +7555,7 @@ static int widen_nested_literals(Compiler *c, int recv, int is_push, int is_spli
       changed = 1;
     }
   }
+  free_container_literals(&lits);
   return changed;
 }
 
@@ -8972,16 +9016,18 @@ static int widen_boxed_elem_sources(Compiler *c, int r, TyKind elem, int depth) 
 }
 static int widen_boxed_elem_sources_1(Compiler *c, int r, TyKind elem, int depth) {
   const NodeTable *nt = c->nt;
-  int lits[32], ch = 0;
-  int nl = container_literals(c, r, lits, 0, 32, 0);
-  for (int q = 0; q < nl; q++) {
-    int en = 0; const int *ev = nt_arr(nt, lits[q], "elements", &en);
+  int ch = 0;
+  ContainerLiterals lits = {0};
+  container_literals(c, r, &lits, 0);
+  for (int q = 0; q < lits.count; q++) {
+    int en = 0; const int *ev = nt_arr(nt, lits.items[q], "elements", &en);
     for (int e = 0; e < en; e++) {
       int el = nt_kind(nt, ev[e]) == NK_AssocNode ? nt_ref(nt, ev[e], "value") : ev[e];
       if (el >= 0 && nt_kind(nt, el) != NK_SplatNode && nt_kind(nt, el) != NK_AssocSplatNode)
         ch |= widen_boxed_array_sources(c, el, elem, depth + 1);
     }
   }
+  free_container_literals(&lits);
   return ch;
 }
 
@@ -8992,21 +9038,25 @@ static int widen_boxed_elem_sources_1(Compiler *c, int r, TyKind elem, int depth
 static int widen_boxed_sub_elem_sources(Compiler *c, int r, int k, TyKind elem, int depth) {
   if (depth > 6) return 0;
   const NodeTable *nt = c->nt;
-  int lits[32], ch = 0;
-  int nl = container_literals(c, r, lits, 0, 32, 0);
-  for (int q = 0; q < nl; q++) {
-    int en = 0; const int *ev = nt_arr(nt, lits[q], "elements", &en);
+  int ch = 0;
+  ContainerLiterals lits = {0};
+  container_literals(c, r, &lits, 0);
+  for (int q = 0; q < lits.count; q++) {
+    int en = 0; const int *ev = nt_arr(nt, lits.items[q], "elements", &en);
     for (int e = 0; e < en; e++) {
-      int subs[16];
-      int ns = nt_kind(nt, ev[e]) == NK_SplatNode ? 0 : container_literals(c, ev[e], subs, 0, 16, 0);
-      for (int u = 0; u < ns; u++) {
-        if (nt_kind(nt, subs[u]) != NK_ArrayNode) continue;
-        int sn = 0, splat = 0; const int *sv = nt_arr(nt, subs[u], "elements", &sn);
+      if (nt_kind(nt, ev[e]) == NK_SplatNode) continue;
+      ContainerLiterals subs = {0};
+      container_literals(c, ev[e], &subs, 0);
+      for (int u = 0; u < subs.count; u++) {
+        if (nt_kind(nt, subs.items[u]) != NK_ArrayNode) continue;
+        int sn = 0, splat = 0; const int *sv = nt_arr(nt, subs.items[u], "elements", &sn);
         for (int j = 0; j <= k && j < sn; j++) if (nt_kind(nt, sv[j]) == NK_SplatNode) splat = 1;
         if (!splat && k < sn) ch |= widen_boxed_array_sources(c, sv[k], elem, depth + 1);
       }
+      free_container_literals(&subs);
     }
   }
+  free_container_literals(&lits);
   return ch;
 }
 
@@ -9712,10 +9762,10 @@ static int cext_widen_containers(Compiler *c, int v, CextWalk *seen) {
     }
   } else if (kind == NK_GlobalVariableReadNode || kind == NK_ClassVariableReadNode ||
              kind == NK_ConstantReadNode || kind == NK_InstanceVariableReadNode) {
-    int *literals = cext_walk_values(c);
-    int count = container_literals(c, v, literals, 0, nt->count, 0);
-    for (int j = 0; j < count; j++) changed |= cext_widen_containers(c, literals[j], seen);
-    free(literals);
+    ContainerLiterals literals = {0};
+    container_literals(c, v, &literals, 0);
+    for (int j = 0; j < literals.count; j++) changed |= cext_widen_containers(c, literals.items[j], seen);
+    free_container_literals(&literals);
   } else if (kind == NK_StatementsNode || kind == NK_IfNode || kind == NK_UnlessNode ||
              kind == NK_BeginNode || kind == NK_LocalVariableWriteNode || kind == NK_ReturnNode) {
     int *leaves = cext_walk_values(c);

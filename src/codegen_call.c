@@ -4476,6 +4476,25 @@ int emit_srange_hop_row(Compiler *c, int id, int r, const char *name, Buf *b) {
   return emit_builtin_op(c, id, r, TY_STR_RANGE, name, b);
 }
 
+/* Bind the boxed element using the block's usual argument distribution. */
+static void emit_boxed_item_binds(Compiler *c, int block, const char *value, int indent) {
+  char yielded[256];
+  snprintf(yielded, sizeof yielded, "sp_yielded_args(0, %s)", value);
+  if (emit_boxed_step_binds(c, block, yielded, g_pre, indent, 0)) return;
+  if (emit_iter_autosplat(c, block, TY_POLY_ARRAY, value, indent)) return;
+  const char *name = block_param_name(c, block, 0);
+  Scope *scope = comp_scope_of(c, block);
+  LocalVar *local = scope && name ? scope_local(scope, name) : NULL;
+  if (!local) return;
+  Repr slot = repr_of_slot(c, local);
+  TyKind type = slot.handle ? TY_STRBUF : slot.as_ty;
+  emit_indent(g_pre, indent);
+  buf_printf(g_pre, "lv_%s = ", rename_local(name));
+  if (type == TY_UNKNOWN || type == TY_POLY) buf_puts(g_pre, value);
+  else emit_unbox_text(c, type, value, g_pre);
+  buf_puts(g_pre, ";\n");
+}
+
 static int emit_lazy_pipeline_expr_1(Compiler *c, int id, Buf *b);
 /* (a source the chain's local keeps is bound to its read for the
    emission, and unbound after it) */
@@ -4906,21 +4925,11 @@ static int emit_lazy_pipeline_expr_1(Compiler *c, int id, Buf *b) {
       continue;
     }
     int blk = ops[oi].block;
-    const char *bp0 = block_param_name(c, blk, 0);
-    const char *bp = (bp0 && bp0[0]) ? rename_local(bp0) : "_lx";
     if (ops[oi].kind == OP_DROPWHILE) {
-      /* while dropping, evaluate the predicate: true skips the element,
-         false clears the flag and lets everything through untouched */
+      /* Bind and run the predicate until it first accepts an item. */
       emit_indent(g_pre, g_indent + 1);
       buf_printf(g_pre, "if (_t%d) {\n", ops[oi].cnt);
-      Scope *dws = comp_scope_of(c, blk);
-      LocalVar *dwl = (dws && bp0) ? scope_local(dws, bp0) : NULL;
-      TyKind dwt = (dwl && dwl->type != TY_UNKNOWN) ? dwl->type : TY_POLY;
-      emit_indent(g_pre, g_indent + 2);
-      buf_printf(g_pre, "lv_%s = ", bp);
-      if (dwt == TY_POLY) buf_puts(g_pre, vbuf);
-      else { Buf ub; memset(&ub, 0, sizeof ub); emit_unbox_text(c, dwt, vbuf, &ub); buf_puts(g_pre, ub.p ? ub.p : vbuf); free(ub.p); }
-      buf_puts(g_pre, ";\n");
+      emit_boxed_item_binds(c, blk, vbuf, g_indent + 2);
       int dwb = nt_ref(nt, blk, "body");
       int dwn = 0; const int *dwv = dwb >= 0 ? nt_arr(nt, dwb, "body", &dwn) : NULL;
       for (int k = 0; k < dwn - 1; k++) emit_stmt(c, dwv[k], g_pre, g_indent + 2);
@@ -4936,28 +4945,7 @@ static int emit_lazy_pipeline_expr_1(Compiler *c, int id, Buf *b) {
       emit_indent(g_pre, g_indent + 1); buf_puts(g_pre, "}\n");
       continue;
     }
-    /* The running value is boxed (poly); the block param may infer a narrower
-       type, so unbox to match its C type. A |k, v| header destructures a
-       pair element (hash.lazy rides the pair array, #2845). */
-    /* a block of any other shape than plain requireds (a rest, an optional,
-       a post, a keyword) binds the value by the proc distribution: `|*r|`
-       was never bound and read nil */
-    char gvals[256]; snprintf(gvals, sizeof gvals, "sp_yielded_args(0, %s)", vbuf);
-    if (emit_boxed_step_binds(c, blk, gvals, g_pre, g_indent + 1, 0)) {}
-    else if (!emit_iter_autosplat(c, blk, TY_POLY_ARRAY, vbuf, g_indent + 1)) {
-      Scope *bs = comp_scope_of(c, blk);
-      LocalVar *plv = (bs && bp0) ? scope_local(bs, bp0) : NULL;
-      TyKind pt = (plv && plv->type != TY_UNKNOWN) ? plv->type : TY_POLY;
-      /* A param the body never reads has no local at all: binding it would
-         name an undeclared C variable, and there is nothing to bind (#3583) */
-      if (plv) {
-        emit_indent(g_pre, g_indent + 1);
-        buf_printf(g_pre, "lv_%s = ", bp);
-        if (pt == TY_POLY) buf_puts(g_pre, vbuf);
-        else { Buf ub; memset(&ub, 0, sizeof ub); emit_unbox_text(c, pt, vbuf, &ub); buf_puts(g_pre, ub.p ? ub.p : vbuf); free(ub.p); }
-        buf_puts(g_pre, ";\n");
-      }
-    }
+    emit_boxed_item_binds(c, blk, vbuf, g_indent + 1);
     int bbody = nt_ref(nt, blk, "body");
     int bn = 0; const int *bb = bbody >= 0 ? nt_arr(nt, bbody, "body", &bn) : NULL;
     for (int k = 0; k < bn - 1; k++) emit_stmt(c, bb[k], g_pre, g_indent + 1);

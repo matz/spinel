@@ -8758,6 +8758,10 @@ static int lr_call_meets(Compiler *c, int id, int copy, int cls, int sg, const c
   int np;
   const int *par = elab_node_parents(c, &np);
   int later = elab_runs_later(c, id), held = lr_in_body(c, par, np, id, LRW_ASSUMED, 0);
+  /* (a call in a block the record keeps is asked over its window by the call plan, elab_call_meet's
+     ELAB_MEET_RECORD, which leaves the version at its point where the window holds a def of its
+     statement: the point's version and the window's together hold every version it may be bound to) */
+  held |= !later && elab_in_record_kept_block(c, id);
   const LrDef *ds[16] = { NULL };
   ElabMeet m;
   elab_call_meet(c, id, cls, name, sg, later | (copy ? ELAB_MEET_COPY : 0), &m, ds, 16);

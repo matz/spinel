@@ -108,6 +108,8 @@ set to `TY_STRBUF`. Semantic inference reads the result as `TY_STRING`.
 The call plan gives the renderer and Repr the same selected producer. Boxed
 dispatch arms use the row they emitted to box the result. An override-capable
 display conversion still returns its actual boxed value.
+String `tap` retains its receiver across the block. The native result view
+returns that handle and a byte consumer reads its payload afterward.
 A boxed String carries the `sp_String *` handle in an `SP_TAG_OBJ` box
 with class ID `SP_BUILTIN_STRBUF`. This includes frozen literals and the
 objects retained by Hashes, Enumerators, and callbacks. Ordinary boxing

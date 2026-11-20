@@ -4646,9 +4646,12 @@ static int bp_method(Compiler *c, int mi, int *cut) {
   int memo = infer_memo_usable(), own = 0;
   unsigned long ed = infer_memo_edits(c);
   if (memo && m->bp_edits == ed + 1) return m->bp_bits;
-  for (int s = 0; m->is_proc_form && s < c->nscopes; s++)
-    if (!c->scopes[s].is_proc_form && c->scopes[s].def_node == m->def_node && c->scopes[s].class_id == m->class_id &&
-        c->scopes[s].is_cmethod == m->is_cmethod) return bp_method(c, s, cut);
+  /* A proc form takes its block as a proc its caller (a dispatch arm, a
+     Method) hands it, NULL where that call gave no block: either may come,
+     whatever the calls of the method it clones give. Answered from those
+     calls, a clone only ever called blockless there took its forwarded
+     block for absent, and its body's block arm was emitted into the
+     blockless arm's slot (an Array into an Enumerator). */
   if (!m->name || m->is_proc_form) return BP_ANY;
   for (int i = 0; i < g_yvt_depth; i++)
     if (g_yvt_mi[i] == mi) { if (cut) *cut = 1; return BP_ANY; }

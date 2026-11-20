@@ -361,7 +361,10 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
     if (g_block_id >= 0 && nt_int(nt, g_block_id, "fwd_yield", 0)) {
       /* the literal a forwarded `&b` became: ask about the enclosing
          method's block (see static_block_given_cond) */
-      if (g_yield_block_fallback >= 0 || g_yield_proc_ref_fallback) buf_puts(b, "1");
+      /* a proc form's own block, NULL where its caller gave none
+         (fwd_yield_proc_form_block) */
+      if (fwd_yield_proc_form_block(c)) buf_printf(b, "(%s != NULL)", g_yield_proc_ref_fallback);
+      else if (g_yield_block_fallback >= 0 || g_yield_proc_ref_fallback) buf_puts(b, "1");
       else if (g_yield_lowered_fallback) {
         const char *sv = g_lowered_blk_name; g_lowered_blk_name = g_yield_lowered_blk_fallback;
         buf_puts(b, "("); emit_yblk_ref(b); buf_puts(b, " != NULL)");

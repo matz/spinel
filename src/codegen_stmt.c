@@ -2105,11 +2105,11 @@ static int strbuf_leaf_is(Compiler *c, int v, int want) {
   int kind = SLK_HELD;
   if (strbuf_srange_tail(c, v) >= 0)
     kind = strbuf_value_held(c, v) ? SLK_HELD : SLK_UNHELD;
-  else if ((k == NK_StringNode || k == NK_InterpolatedStringNode) && share_value_fresh(c, v, 0))
+  else if (k == NK_StringNode || k == NK_InterpolatedStringNode)
     kind = SLK_FRESH;
-  else if (k == NK_LocalVariableReadNode || k == NK_InstanceVariableReadNode || repr_static_read_kind(k) ||
-           strbuf_route_reader(c, v) || strbuf_route_ivar_get(c, v) || strbuf_user_getter_call(c, v))
+  else if (strbuf_route_reader(c, v) || strbuf_route_ivar_get(c, v) || strbuf_user_getter_call(c, v))
     kind = strbuf_value_held(c, v) || strbuf_slot_has(c, v) || repr_call_returns_handle(c, v) ? SLK_HELD : SLK_UNHELD;
+  /* Variable and constant reads use the default held result. */
   return kind == want;
 }
 /* ...is the value v of a block's tail one the demand has a handle for? */

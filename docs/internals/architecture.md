@@ -171,6 +171,9 @@ value, and reads their bytes for the environment after the conversions.
 The setter method returns the converted String object. The assignment
 expression retains its original value operand.
 Fiber context switches carry the active GC roots and exception state.
+An untyped begin in value position uses a boxed result slot across rescue
+and ensure. A tail break uses the ordinary statement control-flow owner;
+it does not write a fall-through value into that result slot.
 A receiver-answering iterator at method tail keeps its receiver in the
 operand view across the block and returns it through the physical result
 slot, including a String handle slot. Builtin rows identify self answers;

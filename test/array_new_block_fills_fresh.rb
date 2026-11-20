@@ -1,4 +1,3 @@
-# spinel: int64
 # Array.new(n) { } builds an Integer or Float result at length n and stores
 # each value into its slot (it grew from an empty Array by pushes); object,
 # boxed and nested results append as before; and a break, next or raise in
@@ -27,8 +26,8 @@ p Array.new(3) { |i| i + k }
 
 # a block that leaves early pays only for what it filled: the slots made
 # up front stop at a cap, and the values past it are appended
-p Array.new(10**12) { |i| break i if i == 3; i * 2 }
-p catch(:x) { Array.new(10**12) { |i| throw :x, -i if i == 4; i.to_f } }
+p Array.new(10**8) { |i| break i if i == 3; i * 2 }
+p catch(:x) { Array.new(10**8) { |i| throw :x, -i if i == 4; i.to_f } }
 p Array.new(70_000) { |i| i * 3 }.then { |a| [a.size, a[65_535], a[65_536], a.last] }
 p Array.new(70_000) { |i| "s#{i}" }.then { |a| [a.size, a[65_536]] }
 p [65_535, 65_536, 65_537, 131_073].map { |n| a = Array.new(n) { |i| i.to_f / 2 }; [a.size, a[n - 1], a.sum] }

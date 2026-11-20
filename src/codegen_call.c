@@ -15576,6 +15576,9 @@ int exc_builtin_reopen_initialize(Compiler *c, int id, const char *cn, int argc,
   int rci = comp_builtin_class_named(c, cn);
   int rim = rci >= 0 ? exc_reopen_initialize(c, id, rci) : -1;
   if (rim >= 0) return rim;
+  /* the SystemCallError family builds its errno message first and runs the
+     reopening above on that (syserr_reinit_initialize) */
+  if (is_syserr_family_name(cn)) return -1;
   /* The reopening above gets the arguments as its own initialize takes them,
      which is the message alone. A class whose own initialize takes more
      (NameError's name, KeyError's key: and receiver:, SystemExit's status)
@@ -15594,6 +15597,57 @@ int exc_builtin_reopen_initialize(Compiler *c, int id, const char *cn, int argc,
      is not emitted: such a call keeps the native construction, as before the
      reopening was looked for */
   return mi >= 0 && (!c->scopes[mi].yields || scope_proc_form_of(c, mi) >= 0) ? mi : -1;
+}
+
+/* See codegen_call_arms.h. A reopening of the class itself or of a class of the
+   SystemCallError family (SystemCallError, Errno::*) reads the arguments as the
+   call wrote them, so those keep their construction as before (-1). */
+int syserr_reinit_initialize(Compiler *c, int id, const char *cn) {
+  if (!cn || !is_syserr_family_name(cn)) return -1;
+  int rci = comp_builtin_class_named(c, cn);
+  if (rci >= 0 && exc_reopen_initialize(c, id, rci) >= 0) return -1;
+  int mi = exc_reopen_initialize_above(c, cn, 0, -1);
+  if (mi < 0) return -1;
+  int oc = c->scopes[mi].class_id;
+  if (oc < 0 || is_syserr_family_name(c->classes[oc].name)) return -1;
+  /* the version this call runs, as a program's own `.new` does */
+  int sv = cplan_hook_target(c, id, oc, "initialize", NULL);
+  if (sv >= 0 && c->scopes[sv].class_id == oc && c->scopes[sv].reachable) mi = sv;
+  if (c->scopes[mi].yields) {
+    int pf = scope_proc_form_of(c, mi);
+    if (pf < 0) return -1;
+    mi = pf;
+  }
+  Buf probe = {0};
+  int ok = emit_reinit_init_text(c, mi, "_p", "_m", &probe);
+  free(probe.p);
+  return ok ? mi : -1;
+}
+void syserr_reinit_open(int *t, Buf *b) {
+  *t = ++g_tmp;
+  buf_printf(b, "({ sp_Exception *_t%d = (sp_Exception *)(", *t);
+}
+void syserr_reinit_close(Compiler *c, int initm, int t, Buf *b) {
+  char self[32], msg[32];
+  snprintf(self, sizeof self, "_t%d", t);
+  snprintf(msg, sizeof msg, "_m%d", t);
+  Buf arm = {0};
+  emit_reinit_init_text(c, initm, self, msg, &arm);
+  /* the runtime built the errno message: it is the one argument, and the
+     initialize's super sets the one the exception keeps */
+  buf_printf(b, "); SP_GC_ROOT(_t%d); const char *_m%d = sp_msg_heapify(sp_exc_message(_t%d)); SP_GC_ROOT_STR(_m%d); "
+                "_t%d->msg_h = NULL; _t%d->msg = NULL;%s _t%d; })",
+             t, t, t, t, t, t, arm.p ? arm.p : "", t);
+  free(arm.p);
+}
+
+/* emit_syserr_family_new, then a reopening above SystemCallError run on the message it built */
+int emit_syserr_family_new_reopened(Compiler *c, int id, const char *cn, int argc, const int *argv, Buf *b) {
+  int sri = syserr_reinit_initialize(c, id, cn), srt = 0;
+  if (sri >= 0) syserr_reinit_open(&srt, b);
+  if (!emit_syserr_family_new(c, id, cn, argc, argv, b)) return 0;
+  if (sri >= 0) syserr_reinit_close(c, sri, srt, b);
+  return 1;
 }
 
 /* Build the runtime's exception of the reopened class ci and run the
@@ -16162,7 +16216,7 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       /* SystemCallError#initialize builds the message from the errno:
          Errno::ENOENT.new("x") is "No such file or directory - x", and
          SystemCallError.new("x", 2) an Errno::ENOENT */
-      if (emit_syserr_family_new(c, id, cn, argc, argv, b)) { *out = 1; return 1; }
+      if (emit_syserr_family_new_reopened(c, id, cn, argc, argv, b)) { *out = 1; return 1; }
       /* `.new(*a)`: how many arguments the splat gives is the run time's,
          which reads them as initialize does. The classes whose initialize
          takes arguments of its own keep their arms below. */

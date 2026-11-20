@@ -248,6 +248,15 @@ void emit_exc_new_msg(Compiler *c, const char *cn, int arg, Buf *b);
 int emit_exc_sub_new_arm(Compiler *c, int id, int ci, int argc, const int *atmp, int rt2, Buf *b);
 int emit_exc_sub_new_arm_splat(Compiler *c, int id, int ci, int tsa, const char *pre, int rt2, Buf *b);
 int emit_syserr_family_new(Compiler *c, int id, const char *cn, int argc, const int *argv, Buf *b);
+/* A program's reopening of a builtin exception above SystemCallError (StandardError#initialize
+   and up): CRuby's syserr_initialize builds the errno message and then calls super with it, so
+   the reopening runs on the BUILT message whatever arguments the call gave. syserr_reinit_initialize
+   answers the initialize an exception built as the builtin cn at call id runs, or -1; the open/close
+   pair wraps the expression that builds the exception (an sp_Exception *). */
+int emit_syserr_family_new_reopened(Compiler *c, int id, const char *cn, int argc, const int *argv, Buf *b);
+int syserr_reinit_initialize(Compiler *c, int id, const char *cn);
+void syserr_reinit_open(int *t, Buf *b);
+void syserr_reinit_close(Compiler *c, int initm, int t, Buf *b);
 int emit_user_new_arm(Compiler *c, int id, int ci, int argc, const int *atmp, int hoisted, int rt2, Buf *b);
 extern int g_ctor_blk_tmp;
 int hoist_ctor_block(Compiler *c, int id, Buf *b);

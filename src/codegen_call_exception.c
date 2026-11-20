@@ -1070,7 +1070,17 @@ static int emit_call_raise_arms_in(Compiler *c, int id, Buf *b, const NodeTable 
            initialize builds the errno text (SystemCallError.new itself
            wants a message and raises ArgumentError) */
         if ((xc >= 0 && class_is_syserr(c, xc)) || (xc < 0 && is_syserr_family_name(effn))) {
-          if (sp_streq(effn, "SystemCallError"))
+          int sri = xc < 0 ? syserr_reinit_initialize(c, id, effn) : -1, srt = 0;
+          if (sri >= 0) {
+            /* a reopening above SystemCallError runs on the built message */
+            buf_puts(b, raise_fn("sp_raise_exc"));
+            syserr_reinit_open(&srt, b);
+            if (sp_streq(effn, "SystemCallError")) buf_puts(b, "sp_syserr_new_v(0, NULL)");
+            else buf_printf(b, "sp_exc_new(\"%s\", sp_syserr_msg_a(\"%s\", 0, NULL))", effn, effn);
+            syserr_reinit_close(c, sri, srt, b);
+            buf_puts(b, ")");
+          }
+          else if (sp_streq(effn, "SystemCallError"))
             buf_printf(b, "%ssp_syserr_new_v(0, NULL))", raise_fn("sp_raise_exc"));
           else
             buf_printf(b, "%s\"%s\", sp_syserr_msg_a(\"%s\", 0, NULL))", raise_fn("sp_raise_cls"), effn, effn);
@@ -1155,15 +1165,28 @@ static int emit_call_raise_arms_in(Compiler *c, int id, Buf *b, const NodeTable 
         /* `raise Errno::ENOENT, "x"` is Errno::ENOENT.new("x"): the errno
            text, " - x" (SystemCallError.new("x") an unknown error) */
         else if ((xc >= 0 && class_is_syserr(c, xc)) || (xc < 0 && is_syserr_family_name(effn))) {
+          int sri = xc < 0 ? syserr_reinit_initialize(c, id, effn) : -1, srt = 0;
           if (sp_streq(effn, "SystemCallError")) {
             buf_puts(b, raise_fn("sp_raise_exc"));
+            if (sri >= 0) syserr_reinit_open(&srt, b);
             emit_syserr_call(c, id, "sp_syserr_new_v", "", 1, &av[1], b);
+            if (sri >= 0) syserr_reinit_close(c, sri, srt, b);
             buf_puts(b, ")");
           }
           else {
             char lead[192]; snprintf(lead, sizeof lead, "\"%s\", ", effn);
-            buf_printf(b, "%s\"%s\", ", raise_fn("sp_raise_cls"), effn);
-            emit_syserr_call(c, id, "sp_syserr_msg_a", lead, 1, &av[1], b);
+            if (sri >= 0) {
+              buf_puts(b, raise_fn("sp_raise_exc"));
+              syserr_reinit_open(&srt, b);
+              buf_printf(b, "sp_exc_new(\"%s\", ", effn);
+              emit_syserr_call(c, id, "sp_syserr_msg_a", lead, 1, &av[1], b);
+              buf_puts(b, ")");
+              syserr_reinit_close(c, sri, srt, b);
+            }
+            else {
+              buf_printf(b, "%s\"%s\", ", raise_fn("sp_raise_cls"), effn);
+              emit_syserr_call(c, id, "sp_syserr_msg_a", lead, 1, &av[1], b);
+            }
             buf_puts(b, ")");
           }
         }

@@ -1,3 +1,8 @@
+# Requires the two distances itself, as CRuby's does: `require
+# "did_you_mean/spell_checker"` alone gives a working SpellChecker.
+require_relative "levenshtein"
+require_relative "jaro_winkler"
+
 module DidYouMean
   # The words of a dictionary close to a given word, the closest first.
   # Words may be Strings or Symbols; the given word itself is never one of

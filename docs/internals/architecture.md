@@ -91,6 +91,9 @@ parameters are handled before testing the predicate's result.
 A scoped String local stores an `sp_String *`. A byte reader projects
 the payload from that object at its use. Nil uses a null handle.
 Temporary emission bindings use the type of the C declaration they name.
+A direct call holds its receiver when the operand-order record marks a
+read that a later operand can rebind. The temporary uses Repr's layout
+and retains references while the arguments run.
 
 A method inferred or declared to return String returns `sp_String *`.
 `repr_method_ret_storage` supplies the physical result type to signatures,

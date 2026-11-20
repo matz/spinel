@@ -7210,8 +7210,8 @@ static int ext_param_ty_checked(TyKind t) {
 }
 
 /* Whether the list names a definition of that leaf name: as written
-   (`Sub`), or as the last name of a path (`ExtSub::Sub`); `all` names
-   every one. The loose test, for a definition the class table does not
+   (`Sub`), or as the last name of a path (`ExtSub::Sub`, `::Sub`); `all`
+   names every one. The loose test, for a definition the class table does not
    hold yet (ext_listed_descendant); a class of the table is asked by
    ext_class_listed. */
 static int ext_name_listed(const char *name) {
@@ -7222,7 +7222,7 @@ static int ext_name_listed(const char *name) {
     const char *e = strchr(p, ',');
     size_t len = e ? (size_t)(e - p) : strlen(p);
     if (len == n && !strncmp(p, name, n)) return 1;
-    if (len > n + 2 && !strncmp(p + len - n, name, n) && p[len - n - 1] == ':' && p[len - n - 2] == ':') return 1;
+    if (len >= n + 2 && !strncmp(p + len - n, name, n) && p[len - n - 1] == ':' && p[len - n - 2] == ':') return 1;
     if (!e) break;
     p = e + 1;
   }

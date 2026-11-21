@@ -38323,6 +38323,15 @@ static int nullable_int_elem_expr(Compiler *c, int v, int depth) {
       const int *av = ca >= 0 ? nt_arr(nt, ca, "arguments", &an) : NULL;
       if (an == 1 && an_unpack_lit_may_pad(nt, av[0])) return 1;
     }
+    /* `m.offset(i)` / `m.byteoffset(i)`: [nil, nil] for a group that did
+       not take part in the match (sp_MatchData_offset); group 0, the whole
+       match, always does */
+    if (nm && (sp_streq(nm, "offset") || sp_streq(nm, "byteoffset")) && rc >= 0 &&
+        infer_type(c, rc) == TY_MATCHDATA) {
+      int ca = nt_ref(nt, v, "arguments"); int an = 0;
+      const int *av = ca >= 0 ? nt_arr(nt, ca, "arguments", &an) : NULL;
+      return !(an == 1 && nt_kind(nt, av[0]) == NK_IntegerNode && nt_int(nt, av[0], "value", -1) == 0);
+    }
     /* `Array.new(n) { ... }` / `Array.new(n, v)` builds its elements here */
     if (nm && sp_streq(nm, "new") && rc >= 0 && nt_kind(nt, rc) == NK_ConstantReadNode) {
       const char *rn = nt_str(nt, rc, "name");

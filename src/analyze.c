@@ -53747,13 +53747,16 @@ static int an_block_arg_unnamed_method(Compiler *c, AnMethodHolders *mh, int x) 
 }
 
 /* Fold the arguments of one dynamic call of a Method value into the
-   per-position evidence: a splat, a block or keywords widen every position. */
-static void an_dyn_evidence_add(Compiler *c, const int *av, int an, TyKind *dyn_arg, int *dyn_seen) {
+   per-position evidence, ndyn positions (as many as any method's
+   parameters): a splat, a block or keywords widen every position. Cut at
+   16, a 17th parameter kept the int default, and a Float splatted into it
+   raised TypeError. */
+static void an_dyn_evidence_add(Compiler *c, const int *av, int an, TyKind *dyn_arg, int *dyn_seen, int ndyn) {
   if (nt_argv_has(c->nt, av, an, NT_ARG_SPLAT | NT_ARG_BLOCK | NT_ARG_KEYWORDS | NT_ARG_FORWARDING)) {
-    for (int k = 0; k < 16; k++) { dyn_arg[k] = TY_POLY; dyn_seen[k] = 1; }
+    for (int k = 0; k < ndyn; k++) { dyn_arg[k] = TY_POLY; dyn_seen[k] = 1; }
     return;
   }
-  for (int k = 0; k < an && k < 16; k++) {
+  for (int k = 0; k < an && k < ndyn; k++) {
     TyKind at = comp_ntype_settled(c, av[k]);
     if (at == TY_UNKNOWN || at == TY_VOID) at = TY_POLY;
     dyn_arg[k] = dyn_seen[k] ? ty_unify(dyn_arg[k], at) : at;
@@ -53763,12 +53766,12 @@ static void an_dyn_evidence_add(Compiler *c, const int *av, int an, TyKind *dyn_
 
 /* The per-position evidence an_dyn_evidence_add folds into, as the context
    of a method_obj_block_sites_each visit. */
-typedef struct { TyKind *arg; int *seen; } AnDynEvidence;
+typedef struct { TyKind *arg; int *seen; int n; } AnDynEvidence;
 
 static int an_dyn_evidence_site(Compiler *c, int site, const int *av, int an, void *ctx) {
   (void)site;
   AnDynEvidence *ev = ctx;
-  an_dyn_evidence_add(c, av, an, ev->arg, ev->seen);
+  an_dyn_evidence_add(c, av, an, ev->arg, ev->seen, ev->n);
   return 0;
 }
 
@@ -53804,9 +53807,12 @@ static void an_phase_method_backstops(Compiler *c) {
      handlers keep sp_int parameters, while `exports.fetch(name).call(*args)`
      splats a boxed array and widens every position. A position no dynamic
      site reaches keeps the int default it always had. */
-  TyKind dyn_arg[16];
-  int dyn_seen[16];
-  for (int k = 0; k < 16; k++) { dyn_arg[k] = TY_UNKNOWN; dyn_seen[k] = 0; }
+  int ndyn = 0;
+  for (int s = 0; msym_n > 0 && s < c->nscopes; s++)
+    if (c->scopes[s].nparams > ndyn) ndyn = c->scopes[s].nparams;
+  TyKind *dyn_arg = calloc((size_t)ndyn + 1, sizeof *dyn_arg);
+  int *dyn_seen = calloc((size_t)ndyn + 1, sizeof *dyn_seen);
+  if (!dyn_arg || !dyn_seen) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }   /* (zeroed: TY_UNKNOWN, unseen) */
   if (msym_n > 0) {
     AnMethodHolders mholders = {0};
     an_method_holders_build(c, &mholders);
@@ -53840,7 +53846,7 @@ static void an_phase_method_backstops(Compiler *c) {
         }
         if (!numeric && !an_poly_may_be_method(c, &mholders, r, 0)) continue;
       }
-      an_dyn_evidence_add(c, av, an, dyn_arg, dyn_seen);
+      an_dyn_evidence_add(c, av, an, dyn_arg, dyn_seen, ndyn);
     }
     /* `run(&m)` with a Method m the analysis does not name (an instance
        variable, a constant, a parameter): each place run calls its block
@@ -53849,7 +53855,7 @@ static void an_phase_method_backstops(Compiler *c) {
       int ba = nt_ref(c->nt, u, "block");
       int bx = ba >= 0 && nt_kind(c->nt, ba) == NK_BlockArgumentNode ? nt_ref(c->nt, ba, "expression") : -1;
       if (bx < 0 || !an_block_arg_unnamed_method(c, &mholders, bx)) continue;
-      AnDynEvidence ev = {dyn_arg, dyn_seen};
+      AnDynEvidence ev = {dyn_arg, dyn_seen, ndyn};
       method_obj_block_sites_each(c, cplan_user_fresh(c, u).mi, u, 0, an_dyn_evidence_site, &ev);
     }
     free(mholders.scope); free(mholders.name); free(mholders.memo[0]); free(mholders.memo[1]);
@@ -53896,7 +53902,7 @@ static void an_phase_method_backstops(Compiler *c) {
           /* the position's evidence (above): Integer-only keeps the int
              lane, anything else rides the boxed channel; a bam wrapper's
              signature is fixed by the adapter emission */
-          TyKind ev = (i < 16 && dyn_seen[i]) ? dyn_arg[i] : TY_INT;
+          TyKind ev = (i < ndyn && dyn_seen[i]) ? dyn_arg[i] : TY_INT;
           /* A bam wrapper's parameter takes the one kind the sites pass when
              the legacy signature carries it as itself (a String, a Symbol, a
              bool, a typed array): `method(:Integer).call("42")` stamped an
@@ -53916,7 +53922,7 @@ static void an_phase_method_backstops(Compiler *c) {
       if (sc->ret == TY_UNKNOWN) { scope_set_ret(sc, TY_INT); msym_pinned = 1; }
     }
   }
-  free(msym_names); anh_free(&msym_set);
+  free(msym_names); anh_free(&msym_set); free(dyn_arg); free(dyn_seen);
   /* A pin here is a type change after the fixpoint: what the body computes
      from that parameter -- an ivar it stores, the return it becomes -- and
      every direct caller of the method still carry the types they had before

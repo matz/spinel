@@ -148,6 +148,14 @@ int prog_load_cand(const NodeTable *nt, int load, int k) {
 int prog_load_open(const NodeTable *nt, int load) {
   return is_load_how_set(nt_str(nt, load, "how")) && nt_int(nt, load, "open", 0);
 }
+/* Is the set of files load may name one file for each word of the `each`
+   or `each_with_index` block over a literal Array of Strings it stands in
+   directly (`%w(a b).each { |f| ... }`), every
+   word naming one (the parse's per_word)? Not a set a path pattern names,
+   whose words are not known. */
+int prog_load_per_word(const NodeTable *nt, int load) {
+  return is_load_how_set(nt_str(nt, load, "how")) && nt_int(nt, load, "per_word", 0);
+}
 /* Does rescue clause `rescue` run, as prog_note_rescues found from the
    requires its begin's body runs: 1 whenever the begin completes, 0 never,
    -1 not known. Read as a constant condition is (nt_pred_const): the load

@@ -168,6 +168,7 @@ int prog_load_deferred(const Compiler *c, int f);
 int prog_ordered_load(const Compiler *c, int id);
 int prog_site_places(const Compiler *c, int id);
 int prog_load_ncand(const NodeTable *nt, int load);
+int prog_load_per_word(const NodeTable *nt, int load);
 int prog_load_cand(const NodeTable *nt, int load, int k);
 int prog_load_open(const NodeTable *nt, int load);
 int prog_rescue_runs(const NodeTable *nt, int rescue);

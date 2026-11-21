@@ -14667,7 +14667,9 @@ static int desugar_enum_named_call(Compiler *c, int id, NodeTable *nt, const cha
           /* an Array goes in as it is: CRuby's to_set walks it with each,
              and a program's own Array#to_a (`def to_a = map(&:to_s)`) is no
              step of it (the set package walks one so too) */
-          int arg = ty_is_array(rt) ? recv : toa;
+          /* (a program object too: the package walks its #each, which is
+             not what the class's own #to_a has to answer) */
+          int arg = ty_is_array(rt) || ty_is_object(rt) || rt == TY_POLY ? recv : toa;
           nt_node_set_arr(nt, one, "arguments", &arg, 1);
           nt_node_set_str(nt, id, "name", "new");
           nt_node_set_ref(nt, id, "receiver", cst);

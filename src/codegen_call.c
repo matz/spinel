@@ -25671,9 +25671,13 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
      that never runs it builds -- refused, it also cost a boxed receiver's
      arm around it (`n.times { send(:undo, nil) }` on an Integer n raised
      NoMethodError for times). */
-  /* (an attribute a class declares is the program's too: a send from a
-     base class's method reaches a subclass's attr_reader) */
-  int attr_named = name && comp_any_class_accessor(c, name);
+  /* (a reader a class below the one being emitted declares is the program's
+     too: a send from a base class's method reaches a subclass's attr_reader.
+     One an unrelated class declares, or a call with arguments, has no route
+     to it and keeps the raise) */
+  int attr_named = 0;
+  for (int k = 0; name && argc == 0 && g_emitting_class_id >= 0 && !attr_named && k < c->nclasses; k++)
+    attr_named = is_descendant(c, k, g_emitting_class_id) && comp_is_reader(&c->classes[k], name);
   if ((recv < 0 || nt_kind(nt, recv) == NK_SelfNode) && g_gate_raise && !nt_vcall(nt, id) &&
       nt_ref(nt, id, "block") < 0 && !an_user_defines_method(c, name) && !attr_named &&
       !builtin_object_method_known(name) &&

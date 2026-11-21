@@ -20,3 +20,5 @@ true
 :answered
 [NoMethodError, "undefined method 'missing' for an instance of Table", :missing, [2], Table]
 [NoMethodError, "undefined method 'missing' for an instance of WideRow", :missing, [], WideRow]
+"\"super\""
+"method name must be a Symbol but String is given"

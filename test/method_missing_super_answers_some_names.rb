@@ -56,6 +56,10 @@ end
 
 class WideRow < Row; end
 
+class Asks
+  def method_missing(n, *a) = n == :above ? defined?(super).inspect : super
+end
+
 def show
   yield
 rescue NoMethodError => e
@@ -82,3 +86,5 @@ begin; Blank.new.other(1); rescue NoMethodError => e; p [e.message, e.name, e.ar
 p Table.new.table, WideRow.new.row
 show { Table.new.missing(2) }
 show { WideRow.new.missing }
+p Asks.new.above
+begin; Finder.new.method_missing("named"); rescue ArgumentError => e; p e.message; end

@@ -29042,7 +29042,8 @@ static int mm_scope_has_super(Compiler *c, int mi) {
 static int mms_collect(const NodeTable *nt, int n, int depth, int *sup, int *dep, int max, int *ns) {
   if (n < 0) return 1;
   NodeKind k = nt_kind(nt, n);
-  if (k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode || k == NK_SingletonClassNode) return 1;
+  /* (a defined? operand is not run: `defined?(super)` asks for the method above) */
+  if (k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode || k == NK_SingletonClassNode || k == NK_DefinedNode) return 1;
   if (k == NK_SuperNode || k == NK_ForwardingSuperNode) {
     if (*ns >= max) return 0;
     sup[*ns] = n; dep[(*ns)++] = depth;
@@ -29067,6 +29068,49 @@ static int mms_local(NodeTable *nt, int like, const char *nm, int depth) {
 static int mms_plain_arg(const NodeTable *nt, int a) {
   NodeKind k = nt_kind(nt, a);
   return k != NK_KeywordHashNode && k != NK_BlockArgumentNode && k != NK_ForwardingArgumentsNode;
+}
+/* `::Symbol === <name> ? <raise> : raise(::ArgumentError, "method name
+   must be a Symbol but #{<name>.class} is given")`, BasicObject#method_missing's
+   check of the name it is handed (a local read, read again) */
+static int mms_symbol_guard(Compiler *c, NodeTable *nt, int like, int raise, int name, int depth) {
+  (void)depth;
+  int sym = fwd_new_node_like(nt, like, "ConstantPathNode");
+  nt_node_set_str(nt, sym, "name", "Symbol");
+  nt_node_set_ref(nt, sym, "parent", -1);
+  int q = fwd_new_node_like(nt, like, "CallNode"), qa = fwd_new_node_like(nt, like, "ArgumentsNode");
+  nt_node_set_arr(nt, qa, "arguments", &name, 1);
+  nt_node_set_str(nt, q, "name", "===");
+  nt_node_set_ref(nt, q, "receiver", sym);
+  nt_node_set_ref(nt, q, "arguments", qa);
+  int ae = fwd_new_node_like(nt, like, "ConstantPathNode");
+  nt_node_set_str(nt, ae, "name", "ArgumentError");
+  nt_node_set_ref(nt, ae, "parent", -1);
+  int em = fwd_new_node_like(nt, like, "InterpolatedStringNode");
+  int h1 = fwd_new_node_like(nt, like, "StringNode"), h2 = fwd_new_node_like(nt, like, "StringNode");
+  nt_node_set_str(nt, h1, "unescaped", "method name must be a Symbol but ");
+  nt_node_set_str(nt, h1, "content", "method name must be a Symbol but ");
+  nt_node_set_str(nt, h2, "unescaped", " is given");
+  nt_node_set_str(nt, h2, "content", " is given");
+  int e1 = fwd_new_node_like(nt, like, "EmbeddedStatementsNode");
+  int who = fwd_new_call(nt, nt_clone_subtree(nt, name), "class", -1);
+  nt_mark_builtin_call(nt, who);
+  nt_node_set_ref(nt, e1, "statements", cdef_stmts(nt, who));
+  int parts[3] = { h1, e1, h2 };
+  nt_node_set_arr(nt, em, "parts", parts, 3);
+  int ra = fwd_new_node_like(nt, like, "ArgumentsNode"), rargs[2] = { ae, em };
+  nt_node_set_arr(nt, ra, "arguments", rargs, 2);
+  int bad = fwd_new_call(nt, -1, "raise", -1);
+  nt_node_set_ref(nt, bad, "arguments", ra);
+  nt_node_set_int(nt, bad, "kernel_recv", 1);
+  int ts = fwd_new_node_like(nt, like, "StatementsNode"), es = fwd_new_node_like(nt, like, "StatementsNode");
+  int els = fwd_new_node_like(nt, like, "ElseNode"), ifn = fwd_new_node_like(nt, like, "IfNode");
+  nt_node_set_arr(nt, ts, "body", &raise, 1);
+  nt_node_set_arr(nt, es, "body", &bad, 1);
+  nt_node_set_ref(nt, els, "statements", es);
+  nt_node_set_ref(nt, ifn, "predicate", q);
+  nt_node_set_ref(nt, ifn, "statements", ts);
+  nt_node_set_ref(nt, ifn, "subsequent", els);
+  return ifn;
 }
 /* `super` in a method_missing of a class's instances that no method
    above it answers reaches BasicObject#method_missing, which raises the
@@ -29104,6 +29148,8 @@ static int mms_rewrite(Compiler *c, int def) {
     const char *sn = sc >= 0 && (nt_kind(nt, sc) == NK_ConstantReadNode || nt_kind(nt, sc) == NK_ConstantPathNode) ? nt_str(nt, sc, "name") : NULL;
     blank = sn && sp_streq(sn, "BasicObject");
   }
+  /* (a hook with keywords is left as it was, whichever super it writes) */
+  if (kn > 0 || kwrest >= 0) return 0;
   int sup[64], dep[64], ns = 0;
   if (!mms_collect(nt, nt_ref(nt, def, "body"), 0, sup, dep, 64, &ns) || ns == 0) return 0;
   /* every super is rewritten, or none */
@@ -29113,7 +29159,7 @@ static int mms_rewrite(Compiler *c, int def) {
     if (pl.mi >= 0 || !pl.bowner || !sp_streq(pl.bowner, "BasicObject")) return 0;
     if (nt_kind(nt, sup[i]) == NK_ForwardingSuperNode) {
       /* (the parameters by name: a required first, no keywords) */
-      if (rn < 1 || kn > 0 || kwrest >= 0) return 0;
+      if (rn < 1) return 0;
       for (int j = 0; j < rn; j++) if (nt_kind(nt, req[j]) != NK_RequiredParameterNode) return 0;
       for (int j = 0; j < qn; j++) if (nt_kind(nt, post[j]) != NK_RequiredParameterNode) return 0;
       if (rest >= 0 && (nt_kind(nt, rest) != NK_RestParameterNode || !nt_str(nt, rest, "name"))) return 0;
@@ -29124,6 +29170,8 @@ static int mms_rewrite(Compiler *c, int def) {
     /* (the name read twice, for the message and the error: a variable or a Symbol) */
     if (an < 1 || an > 65 || (nt_kind(nt, av[0]) != NK_LocalVariableReadNode && nt_kind(nt, av[0]) != NK_SymbolNode)) return 0;
     for (int j = 0; j < an; j++) if (!mms_plain_arg(nt, av[j]) || (j == 0 && nt_kind(nt, av[j]) == NK_SplatNode)) return 0;
+    /* (a super among the arguments: `super(:a, super(:b))`, whose inner raise comes first) */
+    if (mm_has_super(nt, a)) return 0;
   }
   int mark = nt->count;
   parent = an_parent_map(nt);
@@ -29169,6 +29217,7 @@ static int mms_rewrite(Compiler *c, int def) {
     int parts[4] = { h1, e1, h2, e2 };
     nt_node_set_arr(nt, em, "parts", parts, 4);
     int raise = disp_raise_parts_named(c, NULL, name, em, -1, list, 0, 0);
+    if (nt_kind(nt, name) != NK_SymbolNode) raise = mms_symbol_guard(c, nt, sp, raise, nt_clone_subtree(nt, name), dep[i]);
     nt_node_set_int(nt, raise, "mm_super_raise", 1);   /* (a hand-on to BasicObject's, as the super was: cplan_mm_answers) */
     int p = parent[sp];
     if (p < 0) continue;

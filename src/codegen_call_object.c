@@ -2363,7 +2363,8 @@ int emit_call_safe_nav_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
         else emit_expr(c, recv, &vbs);  /* override table full: degrade to unguarded */
         g_pre = sv_pre2;
         if (!preb2.p || !preb2.p[0])
-          buf_printf(b, "(%s ? %s : (%s))", nilt, nilv, vbs.p ? vbs.p : "");
+          buf_printf(b, ret2 == TY_STRBUF ? "(%s ? %s : SP_STR_HDL(%s))" : "(%s ? %s : (%s))",
+                     nilt, nilv, vbs.p ? vbs.p : "");
         else if (!ty_is_object(ret2) && !oint_kind(ret2) && !c_type_name(ret2)) {
           /* a method answering nothing has no C value to hold: the guarded
              call runs as a statement and the `&.` answers its nil arm */

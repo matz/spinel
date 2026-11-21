@@ -7096,8 +7096,16 @@ const BuiltinOp *cplan_builtin_op_row(Compiler *c, int id, TyKind rt, const char
   const int *argv = call_args(c->nt, id, &argc);
   CallPlanArgKinds args = { c, argv };
   if (argcp) *argcp = argc;
-  return bop_find_stage(fam, name, argc, nt_ref(c->nt, id, "block") >= 0,
-                        stage >= 0 ? cplan_bop_arg : NULL, &args, stage);
+  const BuiltinOp *op = bop_find_stage(fam, name, argc, nt_ref(c->nt, id, "block") >= 0,
+                                       stage >= 0 ? cplan_bop_arg : NULL, &args, stage);
+  /* A class-preserving handle result needs the original String. A subclass
+     call, including its re-entry on the embedded payload, has its own result. */
+  if (op && op->result == TY_STRBUF && (op->flags & BOPF_SELF_CLASS)) {
+    int recv = nt_ref(c->nt, id, "receiver");
+    TyKind receiver_type = comp_ntype(c, recv);
+    if ((receiver_type != TY_STRING && receiver_type != TY_STRBUF) || face_of(recv) != TY_UNKNOWN) return NULL;
+  }
+  return op;
 }
 
 const BuiltinOp *cplan_boxed_fallback_row(Compiler *c, int id, const char *name, TyKind slot, int *argc) {

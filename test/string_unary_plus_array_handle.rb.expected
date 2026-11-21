@@ -1,0 +1,4 @@
+[true, false]
+["a\u0000b!", "a\u0000b!"]
+[false, false]
+["a\u0000b", "a\u0000b!"]

@@ -12854,6 +12854,7 @@ void elab_dump(Compiler *c, FILE *out) {
   LoadRecord *r = elab_fresh(c);
   const NodeTable *nt = c->nt;
   fprintf(out, "load record: %d points, %d regions\n", r->nst, r->nregion);
+  if (g_require_unread) fputs("unread files: possible\n", out);
   for (int e = 0; e < r->nst; e++) {
     const LrStmt *s = &r->st[e];
     int cp = nt_ref(nt, s->node, "constant_path");

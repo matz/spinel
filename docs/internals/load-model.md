@@ -72,8 +72,9 @@ in a `begin` with a rescue clause, is partial as a whole, but whenever it
 runs its own statements run whole, so their definitions apply to the
 class (test/class_body_in_block_runs_whole.rb).
 
-`--dump-load-record` prints the record and stops the compile. For
-test/load_graph/record_main.rb, part of the points reads:
+`--dump-load-record` prints the record and stops the compile. It reports
+`unread files: possible` when the program may load a file the compiler
+did not read. For test/load_graph/record_main.rb, part of the points reads:
 
 ```
 r0 #9 f0 ClassNode Shape line 9

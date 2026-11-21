@@ -306,6 +306,12 @@ struct IcCall *call_node_implied_names(Compiler *c, int id, struct IcCall *buf, 
    literal first argument (a send of a send unwound); *used is the number
    of arguments the sends took. NULL when that name is computed or absent. */
 const char *call_sent_name(const NodeTable *nt, int id, int *used);
+/* The visibility word call node id runs (private, module_function, private_class_method, ...): its own name, or a
+   literal send's (`K.send(:private, :m)`, `public_send` only of the public class-method words), also once the
+   lowering retargeted it (send_blind, vis_enforce); *skip the
+   arguments the send took ahead of the names. NULL for none: one a receiver other than self cannot call
+   (`K.private :m`), or a send of a send. */
+const char *vis_word_call(const NodeTable *nt, int id, int *skip);
 /* What call_target answers besides the scope. kind: ML_METHOD, a method the
    record proves (a placed version, or a name with one version that no call
    runs ahead of); ML_ENTRY, the scope of an entry (or the copies' entry)

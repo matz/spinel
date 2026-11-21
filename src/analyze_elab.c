@@ -2562,17 +2562,20 @@ static int lr_body_self(Compiler *c, const int *par, int n, int node, int e) {
 /* A visibility word a method body runs on the methods it names
    (`private :m`, `protected :a, :b`, `public [:c]`, `private def m`), or
    on the class methods it names (`private_class_method :m`,
-   `public_class_method def self.m`): one with no receiver but self and
-   at least one argument, each a literal name or a def (with no receiver
+   `public_class_method def self.m`), itself or sent (`send(:private,
+   :m)`, vis_word_call): one with no receiver but self and at least one
+   argument, each a literal name or a def (with no receiver
    for an instance word, on self for a class-method word), or one array of
    names. Its visibility (BVIS_*), else 0; a bare word there changes
    nothing, and module_function's copies are left out. */
 static int lr_body_word(const NodeTable *nt, int node) {
-  const char *wn = nt_kind(nt, node) == NK_CallNode ? nt_str(nt, node, "name") : NULL;
+  int skip = 0;
+  const char *wn = vis_word_call(nt, node, &skip);
   int cside = class_method_vis_of_name(wn) != 0, bvis = cside ? class_method_vis_of_name(wn) : visibility_of_name(wn);
   int rv = bvis ? nt_ref(nt, node, "receiver") : -1, an = bvis ? nt_ref(nt, node, "arguments") : -1, ac = 0;
   const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
-  if (!ac || bvis == BVIS_MODULE_FUNCTION || (rv >= 0 && nt_kind(nt, rv) != NK_SelfNode)) return 0;
+  if (av) av += skip, ac -= skip;
+  if (ac <= 0 || bvis == BVIS_MODULE_FUNCTION || (rv >= 0 && nt_kind(nt, rv) != NK_SelfNode)) return 0;
   for (int i = 0; i < ac; i++) {
     int en = 1;
     const int *ev = nt_kind(nt, av[i]) == NK_ArrayNode ? nt_arr(nt, av[i], "elements", &en) : &av[i];
@@ -2592,14 +2595,15 @@ static int lr_body_word(const NodeTable *nt, int node) {
 }
 /* ...does such a word name class methods (private_class_method, public_class_method)? */
 static int lr_body_word_cside(const NodeTable *nt, int node) {
-  return class_method_vis_of_name(nt_str(nt, node, "name")) != 0;
+  return class_method_vis_of_name(vis_word_call(nt, node, NULL)) != 0;
 }
 /* ...the k-th literal name such a word takes (its arguments, an array's
    elements in their place), NULL past the last */
 static const char *lr_word_name(const NodeTable *nt, int word, int k) {
-  int an = nt_ref(nt, word, "arguments"), ac = 0;
+  int an = nt_ref(nt, word, "arguments"), ac = 0, skip = 0;
   const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
-  for (int i = 0; i < ac; i++) {
+  vis_word_call(nt, word, &skip);
+  for (int i = skip; i < ac; i++) {
     int en = 1;
     const int *ev = nt_kind(nt, av[i]) == NK_ArrayNode ? nt_arr(nt, av[i], "elements", &en) : &av[i];
     for (int j = 0; j < en; j++) {
@@ -3253,16 +3257,16 @@ static void lr_body_forms(Compiler *c, const int *par, int n) {
     NodeKind k = nt_kind(nt, id);
     /* (a literal send names the entry it makes, `send(:define_method, :m)`; used, the arguments the sends take.
        Spinel makes no method of one, so it bars the name: a body's version would hide the method CRuby has. A
-       send of a visibility word changes no entry Spinel makes, and is none) */
+       send of a visibility word is the word (vis_word_call); one that raises, `public_send(:private, :m)`, is none) */
     int used = 0;
     const char *nm = k == NK_CallNode ? call_sent_name(nt, id, &used) : NULL;
     int recv = k == NK_CallNode ? nt_ref(nt, id, "receiver") : -1, vis = nm && (visibility_of_name(nm) || class_method_vis_of_name(nm));
-    if (used && vis) continue;
+    if (used && vis && !vis_word_call(nt, id, NULL)) continue;
     if (k == NK_CallNode && (!nm || (recv >= 0 && nt_kind(nt, recv) != NK_SelfNode) || !(vis || is_method_naming_call(nm)))) continue;
     /* (a body's word is a version, lr_body_def_version, where the tree spells the class self is, lr_body_word_frame;
        a placed one still bars: its version's visibility the plan answers from where the word runs, ahead of the
        readers before it, lr_version_vis) */
-    if (k == NK_CallNode && !used && lr_body_word(nt, id) && lr_body_around(nt, par, n, id) >= 0 && lr_body_word_frame(c, par, n, id) &&
+    if (k == NK_CallNode && lr_body_word(nt, id) && lr_body_around(nt, par, n, id) >= 0 && lr_body_word_frame(c, par, n, id) &&
         !lr_body_word_barred(c, par, n, id, &x))
       continue;
     if (k != NK_DefNode && k != NK_AliasMethodNode && k != NK_UndefNode && k != NK_CallNode) continue;
@@ -3841,10 +3845,10 @@ static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int
   const char *nm = nt_str(nt, node, "name");
   int sg, recv = nt_ref(nt, node, "receiver"), cls = lr_receiver(x, recv, fc, fs, &sg, 0), an = nt_ref(nt, node, "arguments"), ac = 0;
   const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
-  /* `K.send(:include, M)`: the mixin `K.include(M)` */
+  /* `K.send(:include, M)`: the mixin `K.include(M)`; `K.send(:private, :m)`, the word (vis_word_call) */
   int sent_args = 0;
   const char *sent = nm && is_send_family(nm) ? call_sent_name(nt, node, &sent_args) : NULL;
-  if (sent && sent_args < ac && is_mixin_call(sent)) { nm = sent; av += sent_args; ac -= sent_args; }
+  if (sent && sent_args < ac && (is_mixin_call(sent) || vis_word_call(nt, node, NULL))) { nm = sent; av += sent_args; ac -= sent_args; }
   /* An unreachable mixin cannot hide a method's recorded history. */
   int mix = nm && is_mixin_call(nm);
   if (mix && nt_int(nt, node, "refusal_dead", 0)) return;
@@ -4490,7 +4494,8 @@ static int lr_hist_has_node(LoadRecord *r, int cls, const char *name, int node) 
 /* The visibility words of the program no walk records: one in a body
    that runs later than its statement (at_exit's, END's, a Proc's or a
    lambda's, a thread's, a trap's, a method's), and one sent
-   (`send(:public, :m)`), wherever it stands. CRuby runs such a word at a
+   (`send(:public, :m)`) that no walk records as the word (lr_call's
+   placed one, vis_word_call) wherever it stands. CRuby runs such a word at a
    time the record does not order (the program may exit before an
    at_exit body, or run it early at an `exit`), so the record holds it at
    no point a query sees, nor as the load ends (LR_UNPLACED_LATER), on the
@@ -4509,8 +4514,8 @@ static void lr_unplaced_words(Compiler *c) {
     int bvis = visibility_of_name(sent ? sent : nm), cls = bvis ? lr_word_table(c, par, r->n, id) : LR_UNKNOWN_CLASS;
     const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
     /* (asked of each body word a late body holds, whatever its table, so the readers find it kept: elab_body_word) */
-    int held = !sent && id < r->n && (r->bits[id] & LR_LATE) && lr_body_word(nt, id) && lr_body_held(c, id);
-    if (cls < LR_MAIN || (!sent && (!(r->bits[id] & LR_LATE) || held))) continue;   /* (a body's version: lr_body_versions) */
+    int held = id < r->n && (r->bits[id] & LR_LATE) && lr_body_word(nt, id) && lr_body_held(c, id);
+    if (cls < LR_MAIN || (!sent && !(r->bits[id] & LR_LATE)) || held) continue;   /* (a body's version: lr_body_versions) */
     for (int i = skip; i < ac; i++) {
       int en = 1;
       const int *ev = nt_kind(nt, av[i]) == NK_ArrayNode ? nt_arr(nt, av[i], "elements", &en) : &av[i];

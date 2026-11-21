@@ -1749,6 +1749,21 @@ const char *call_sent_name(const NodeTable *nt, int id, int *used) {
   if (used) *used = a;
   return nm;
 }
+/* See call_plan.h. */
+const char *vis_word_call(const NodeTable *nt, int id, int *skip) {
+  const char *nm = nt_kind(nt, id) == NK_CallNode ? nt_str(nt, id, "name") : NULL;
+  int used = 0, rv = nm ? nt_ref(nt, id, "receiver") : -1;
+  const char *w = nm ? call_sent_name(nt, id, &used) : NULL;
+  int cm = class_method_vis_of_name(w) != 0, blind = nm && nt_str(nt, id, "send_blind"), pub = nm && nt_str(nt, id, "vis_enforce");
+  if (skip) *skip = used;
+  /* (a word is private on Module but the class-method ones: public_send of another raises, and so does a direct
+     call on a receiver other than self; a send the lowering retargeted keeps which it was, send_blind or
+     vis_enforce) */
+  if (!w || used > 1 || !(cm || visibility_of_name(w)) ||
+      (!cm && (used ? is_public_send(nm) : pub || (rv >= 0 && nt_kind(nt, rv) != NK_SelfNode && !blind))))
+    return NULL;
+  return w;
+}
 int call_node_names(Compiler *c, int id, const char *out[2]) {
   const NodeTable *nt = c->nt;
   NodeKind k = nt_kind(nt, id);

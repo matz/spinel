@@ -5703,7 +5703,12 @@ int self_class_body(Compiler *c, int node) {
    Symbols or `def self.m`s answer the class itself (VIS_DECL_SELF). 0 when
    `id` is not one of these. A method body's word counts where the record
    reads the class self is there (elab_body_word): vis_decl_class, the
-   class a class body's or a body's word acts on, -1 for none. */
+   class a class body's or a body's word acts on, -1 for none. A sent
+   word, `send(:private, :m)`, is the word (vis_word_call); one on another
+   receiver, `K.send(:private, :m)` or `K.private_class_method :m`, is
+   none: the plan answers a word placed outside its class's body wrong
+   where a method body reads it before and after it (as it does a class
+   body's word: a gap of the placed words). */
 int vis_decl_class(Compiler *c, int id) {
   int cls = self_class_body(c, id);
   if (cls < 0 && !elab_body_word(c, id, &cls)) cls = -1;
@@ -5711,12 +5716,10 @@ int vis_decl_class(Compiler *c, int id) {
 }
 int vis_decl_call(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
-  if (id < 0 || nt_kind(nt, id) != NK_CallNode || nt_ref(nt, id, "receiver") >= 0) return 0;
-  if (nt_ref(nt, id, "block") >= 0) return 0;
-  const char *nm = nt_str(nt, id, "name");
-  if (!nm) return 0;
+  int skip = 0, rv = id >= 0 ? nt_ref(nt, id, "receiver") : -1;
+  const char *nm = id >= 0 ? vis_word_call(nt, id, &skip) : NULL;
+  if (!nm || (rv >= 0 && nt_kind(nt, rv) != NK_SelfNode) || nt_ref(nt, id, "block") >= 0) return 0;
   int cm = class_method_vis_of_name(nm) != 0, vis = visibility_of_name(nm);
-  if (!cm && !vis) return 0;
   /* (top-level code, and blocks outside any def, where self is lexically
      main, answers private and public alone: the other three are
      NoMethodError on main. In a top-level def self is the receiver, which
@@ -5728,7 +5731,8 @@ int vis_decl_call(Compiler *c, int id) {
   }
   int args = nt_ref(nt, id, "arguments");
   int an = 0; const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
-  if (an == 0) return cm ? 0 : VIS_DECL_NIL;
+  if (av) av += skip, an -= skip;
+  if (an == 0) return cm || skip ? 0 : VIS_DECL_NIL;
   if (an == 1 && nt_kind(nt, av[0]) == NK_ArrayNode) {
     int en = 0; const int *ev = nt_arr(nt, av[0], "elements", &en);
     for (int i = 0; i < en; i++)

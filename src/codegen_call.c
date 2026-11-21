@@ -20908,10 +20908,12 @@ static int class_builtin_has_method(Compiler *c, int cid, const char *m) {
 /* See codegen_call_arms.h. */
 int emit_vis_word_absent(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
-  if (visibility_of_name(nt_str(nt, id, "name")) <= BVIS_MODULE_FUNCTION) return 0;
+  int skip = 0;
+  if (visibility_of_name(vis_word_call(nt, id, &skip)) <= BVIS_MODULE_FUNCTION) return 0;
   int vcid = g_class_body_id >= 0 ? g_class_body_id : (comp_scope_of(c, id) ? comp_scope_of(c, id)->class_id : -1);
   int vargs = vcid >= 0 ? nt_ref(nt, id, "arguments") : -1, van = 0;
   const int *vav = vargs >= 0 ? nt_arr(nt, vargs, "arguments", &van) : NULL;
+  if (vav) vav += skip, van -= skip;
   /* (one Array's names in its place, `private [:a, :b]`) */
   int arr = van == 1 && nt_kind(nt, vav[0]) == NK_ArrayNode;
   if (arr) vav = nt_arr(nt, vav[0], "elements", &van);

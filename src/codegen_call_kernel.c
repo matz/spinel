@@ -239,8 +239,10 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
      visibility cell as it runs, cplan_vis_cell_after: ahead of its value,
      which reads nothing) */
   {
-    int vk = vis_decl_call(c, id), cw = 0;
+    int vk = vis_decl_call(c, id), cw = 0, vskip = 0;
     if (vk) {
+      vis_word_call(nt, id, &vskip);   /* (a sent word's names past the name it sends) */
+      argv += vskip, argc -= vskip;
       /* (one that names a method the class has none of raises NameError where it runs, as its statement does) */
       Buf wb; memset(&wb, 0, sizeof wb);
       if ((cw = emit_vis_word_absent(c, id, &wb)) || (cw = emit_vis_cell_write(c, id, &wb))) buf_printf(b, "(%s, ", wb.p);

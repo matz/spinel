@@ -1358,7 +1358,7 @@ enum { LR_FS_NONE, LR_FS_SCLASS, LR_FS_IEVAL, LR_FS_IEVAL_SCLASS };
 /* elab_program's state: each statement's frame class (fc) and singleton
    flag (fs), each frame's visibility state (vs) and each file's top
    level's (vmain) */
-typedef struct ElabRec { Compiler *c; LoadRecord *r; int *fc; unsigned char *fs, *vs, *vmain; int cap; unsigned char unplaced; int cur, cfc; unsigned char cfs; int body; } ElabRec;   /* cur: the statement being recorded, in the frame cfc / cfs; body: the def whose body makes the versions (LrDef.body) */
+typedef struct ElabRec { Compiler *c; LoadRecord *r; int *fc; unsigned char *fs, *vs, *vmain; int cap; unsigned char unplaced; int cur, cfc; unsigned char cfs; int body; int vkey; unsigned char vans; } ElabRec;   /* cur: the statement being recorded, in the frame cfc / cfs; body: the def whose body makes the versions (LrDef.body); vkey, vans: the last answer of lr_body_def_version (node * 2 + sg + 1), which a definer call asks once for each name it defines */
 
 /* The constant name a class or module header (or a read) names, as the
    program wrote it: a header keeps the name written beside the C name the
@@ -2026,7 +2026,11 @@ static void lr_method(ElabRec *x, int cls, int sg, const char *name, int node, L
      (lr_body_def_version): any other a body makes stays unplaced, as lr_body_defs records it, its answer from the
      start) */
   const int *par = x->body ? lr_par(x->c, 0) : NULL;
-  int body = (kind <= LR_WRITER || kind == LR_VIS) && x->body && lr_body_def_version(x->c, par, x->r->n, node, sg) ? x->body : 0;
+  int vkey = node * 2 + sg + 1, body = 0;
+  if ((kind <= LR_WRITER || kind == LR_VIS) && x->body) {
+    if (x->vkey != vkey) x->vkey = vkey, x->vans = (unsigned char)lr_body_def_version(x->c, par, x->r->n, node, sg);
+    body = x->vans ? x->body : 0;
+  }
   if (body && lr_chain_open(x->c, cls)) return;   /* (lr_body_versions) */
   int sc = kind == LR_DEF || kind == LR_DEFINE_METHOD ? lr_def_scope(x->r, node) : 0;
   lr_version(x->r, cls, sg, name, (LrDef){ node, (unsigned char)kind, (unsigned char)vis, (unsigned char)may, 0, target, .unplaced = body ? 0 : x->unplaced, .scope = sc, .body = body,
@@ -2663,7 +2667,7 @@ static int lr_in_method_body(Compiler *c, int node) {
    def does: define_method or define_singleton_method with a literal name and a literal block, an attr_* with
    literal names, each on no receiver or self. Its kind (LR_DEFINE_METHOD; LR_READER for an attr_*, whose writers
    it makes too), else -1. A Proc or Method value for a body, a computed name, a receiver of any other kind make
-   none. */
+   none, nor does a name whose writer's name would not fit ELAB_FORM_NAME_CAP. */
 static int lr_body_call(Compiler *c, int node) {
   const NodeTable *nt = c->nt;
   const char *nm = nt_kind(nt, node) == NK_CallNode ? nt_str(nt, node, "name") : NULL;
@@ -2675,7 +2679,8 @@ static int lr_body_call(Compiler *c, int node) {
     kind = ac == 1 && vis_arg_name(nt, av[0]) && bk >= 0 && nt_kind(nt, bk) == NK_BlockNode ? LR_DEFINE_METHOD : -1;
   else if (is_attr_name(nm) && bk < 0) {
     kind = LR_READER;
-    for (int i = 0; i < ac; i++) if (!vis_arg_name(nt, av[i])) kind = -1;
+    for (int i = 0; i < ac; i++)
+      if (!vis_arg_name(nt, av[i]) || strlen(vis_arg_name(nt, av[i])) + 2 > ELAB_FORM_NAME_CAP) kind = -1;   /* (`x=` in a buffer) */
   }
   return kind >= 0 && lr_in_method_body(c, node) ? kind : -1;
 }
@@ -2691,8 +2696,9 @@ static void lr_call_side(Compiler *c, const int *par, int n, int node, int e, in
     *sg = 1;
   }
 }
-/* ...the k-th name it defines (an attr_accessor's reader, then its writer, `x=`, in buf), NULL past the last */
-const char *elab_call_form_name(const NodeTable *nt, int node, int k, char *buf, size_t nb) {
+/* ...the k-th name it defines (an attr_accessor's reader, then its writer, `x=`, in buf; *writer, where set, says
+   which), NULL past the last */
+const char *elab_call_form_name(const NodeTable *nt, int node, int k, char *buf, size_t nb, int *writer) {
   const char *nm = nt_str(nt, node, "name");
   int an = nt_ref(nt, node, "arguments"), ac = 0, rd = !is_attr_name(nm) || !is_attr_writer_family(nm) || is_attr_reader_family(nm);
   int wr = is_attr_name(nm) && is_attr_writer_family(nm), per = rd + wr;
@@ -2700,6 +2706,7 @@ const char *elab_call_form_name(const NodeTable *nt, int node, int k, char *buf,
   if (!is_attr_name(nm)) ac = ac > 0;
   if (k >= ac * per) return NULL;
   const char *a = vis_arg_name(nt, av[k / per]);
+  if (writer) *writer = !rd || k % per == 1;
   if (rd && k % per == 0) return a;
   return a && snprintf(buf, nb, "%s=", a) < (int)nb ? buf : NULL;
 }
@@ -3329,14 +3336,14 @@ static int lr_body_word_barred(Compiler *c, const int *par, int n, int node, LrB
    (a section's word or a visibility word around it, lr_body_def_vis; initialize and its kin) */
 static int lr_body_call_barred(Compiler *c, const int *par, int n, int node, LrBodyNames *x) {
   int cls, sg;
-  char b[256];
+  char b[ELAB_FORM_NAME_CAP];
   lr_call_side(c, par, n, node, -1, &cls, &sg);
   if (cls < 0 || lr_chain_open(c, cls) || comp_class_is_module(c, &c->classes[cls]) ||
       (is_define_method_name(nt_str(c->nt, node, "name")) && an_user_define_method_reaches(c, 1)) ||
       lr_body_self_unsure(c, x, lr_body_cmethod(c->nt, par, n, node), cls) || lr_body_def_vis(c->nt, par, n, node, sg) != BVIS_PUBLIC)
     return 1;
-  for (int k = 0; !sg && elab_call_form_name(c->nt, node, k, b, sizeof b); k++)
-    if (is_implicitly_private_name(elab_call_form_name(c->nt, node, k, b, sizeof b))) return 1;
+  for (int k = 0; !sg && elab_call_form_name(c->nt, node, k, b, sizeof b, NULL); k++)
+    if (is_implicitly_private_name(elab_call_form_name(c->nt, node, k, b, sizeof b, NULL))) return 1;
   return 0;
 }
 /* ...does a body's non-public def at node d bar its name (lr_body_forms)? In a body that may reach code the record
@@ -3468,11 +3475,12 @@ static int lr_body_def_version(Compiler *c, const int *par, int n, int d, int sg
      record holds no body versions too, `private def m` as a definition the record cannot follow) */
   /* (a definer call, lr_body_call: a version where no name it defines is barred; its own bars, lr_body_call_barred,
      among them) */
-  char b[256];
+  char b[ELAB_FORM_NAME_CAP];
   const char *cn;
-  for (int k = 0; lr_body_call(c, d) >= 0 && (cn = elab_call_form_name(nt, d, k, b, sizeof b)); k++)
+  int definer = lr_body_call(c, d) >= 0;   /* (once: it reads every name the call takes) */
+  for (int k = 0; definer && (cn = elab_call_form_name(nt, d, k, b, sizeof b, NULL)); k++)
     if (!lr_body_name_free(c, par, n, cn, -1)) return 0;
-  if (lr_body_call(c, d) >= 0) return 1;
+  if (definer) return 1;
   if (nt_kind(nt, d) == NK_CallNode) {
     if (!lr_body_word(nt, d)) return 0;
     for (int k = 0; lr_word_name(nt, d, k, 1); k++) if (!lr_body_name_free(c, par, n, lr_word_name(nt, d, k, 1), -1)) return 0;
@@ -4562,17 +4570,17 @@ static void lr_body_versions(Compiler *c) {
   if (!hooked) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   for (int id = 0; id < r->n; id++) {
     int word = lr_body_word(nt, id), call = lr_body_call(c, id), body, cls, sg;
-    char b[256];
+    char b[ELAB_FORM_NAME_CAP];
     if ((nt_kind(nt, id) != NK_DefNode && !word && call < 0) || !lr_body_version_of(c, par, id, &body, &cls, &sg)) continue;
-    const char *nm = call >= 0 ? elab_call_form_name(nt, id, 0, b, sizeof b) : word ? lr_word_name(nt, id, 0, 1) : nt_str(nt, id, "name");
+    const char *nm = call >= 0 ? elab_call_form_name(nt, id, 0, b, sizeof b, NULL) : word ? lr_word_name(nt, id, 0, 1) : nt_str(nt, id, "name");
     const LrHist *h = lr_hist(r, cls, sg, nm, 0);
     int have = 0;
     for (int j = 0; h && j < h->n && !have; j++) have = h->v[j].node == id;
     ElabRec x = { c, r, .unplaced = 1, .body = body };
     /* (a definer call: each name it defines, public, as in a method body; a define_singleton_method's on the
        class side) */
-    for (int k = 0; call >= 0 && !have && (nm = elab_call_form_name(nt, id, k, b, sizeof b)); k++)
-      lr_method(&x, cls, sg, nm, id, call == LR_DEFINE_METHOD ? LR_DEFINE_METHOD : nm[strlen(nm) - 1] == '=' ? LR_WRITER : LR_READER,
+    for (int k = 0, wr = 0; call >= 0 && !have && (nm = elab_call_form_name(nt, id, k, b, sizeof b, &wr)); k++)
+      lr_method(&x, cls, sg, nm, id, call == LR_DEFINE_METHOD ? LR_DEFINE_METHOD : wr ? LR_WRITER : LR_READER,
                 BVIS_PUBLIC, !lr_runs_with_body(nt, par, r->n, id, body), NULL);
     if (call >= 0) continue;
     if (word) {   /* (have: a class body's own statement, lr_body_defs; the defs it takes, after their versions, below) */
@@ -4611,8 +4619,8 @@ static void lr_check_held(Compiler *c) {
        literal name's; a word with only defs writes none of its own) */
     int def = r->hist[i].b, found = 0, now, cls, sg;
     const int *par = lr_par(c, 1);
-    char b[256];
-    const char *nm = nt_kind(nt, def) == NK_DefNode ? nt_str(nt, def, "name") : lr_body_call(c, def) >= 0 ? elab_call_form_name(nt, def, 0, b, sizeof b) : lr_word_name(nt, def, 0, 1);
+    char b[ELAB_FORM_NAME_CAP];
+    const char *nm = nt_kind(nt, def) == NK_DefNode ? nt_str(nt, def, "name") : lr_body_call(c, def) >= 0 ? elab_call_form_name(nt, def, 0, b, sizeof b, NULL) : lr_word_name(nt, def, 0, 1);
     const LrHist *h = nm && lr_body_target(c, par, r->n, def, 0, &cls, &sg) ? lr_hist(r, cls, sg, nm, 0) : NULL;
     for (int j = 0; h && j < h->n; j++) found |= h->v[j].node == def && h->v[j].body;
     found |= !nm;
@@ -5019,8 +5027,8 @@ static void lr_unrolled_owners(Compiler *c) {
 int elab_body_call_version(Compiler *c, int call, int *cls, int *sg) {
   LoadRecord *r = elab_fresh(c);
   const int *par = r->recorded && call >= 0 && call < r->n && lr_body_call(c, call) >= 0 ? lr_par(c, 0) : NULL;
-  char b[256];
-  const char *nm = par ? elab_call_form_name(c->nt, call, 0, b, sizeof b) : NULL;
+  char b[ELAB_FORM_NAME_CAP];
+  const char *nm = par ? elab_call_form_name(c->nt, call, 0, b, sizeof b, NULL) : NULL;
   const LrHist *h = nm && lr_body_target(c, par, r->n, call, 0, cls, sg) ? lr_hist(r, *cls, *sg, nm, 0) : NULL;
   for (int j = 0; h && j < h->n; j++) if (h->v[j].node == call && h->v[j].body) return h->v[j].body;
   return -1;

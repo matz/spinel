@@ -635,8 +635,11 @@ int elab_body_def(Compiler *c, int node);
    as no version */
 int elab_body_call_version(Compiler *c, int call, int *cls, int *sg);
 /* the k-th name definer call node defines (an attr_accessor's reader, then
-   its writer, `x=`, in buf), NULL past the last */
-const char *elab_call_form_name(const NodeTable *nt, int node, int k, char *buf, size_t nb);
+   its writer, `x=`, in buf, which holds ELAB_FORM_NAME_CAP bytes: a call
+   with a longer name makes no versions, lr_body_call), NULL past the last;
+   *writer (where set) says whether it is a writer */
+enum { ELAB_FORM_NAME_CAP = 256 };
+const char *elab_call_form_name(const NodeTable *nt, int node, int k, char *buf, size_t nb, int *writer);
 /* Does a Method's maker that reads the method tables (method,
    instance_method and their kin, by a literal name, LR_REFL_MAKER) name
    `name`? */

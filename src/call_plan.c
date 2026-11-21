@@ -9929,9 +9929,9 @@ static const char *cplan_body_definer_gap(Compiler *c, int id, char *buf, size_t
     return buf;
   }
   int host = elab_body_call_version(c, id, &cls, &sg);
-  char b[256];
+  char b[ELAB_FORM_NAME_CAP];
   const char *vn, *why = NULL;
-  for (int k = 0; run && host >= 0 && !why && (vn = elab_call_form_name(nt, id, k, b, sizeof b)); k++)
+  for (int k = 0; run && host >= 0 && !why && (vn = elab_call_form_name(nt, id, k, b, sizeof b, NULL)); k++)
     why = cplan_call_version_unread(c, id, host, cls, sg, vn);
   if (why) {
     snprintf(buf, cap, "Module#%s in a method body is not supported where %s: the method it defines would be "

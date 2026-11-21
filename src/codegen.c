@@ -23943,7 +23943,8 @@ int emit_reinit_init_text_ex(Compiler *c, int im, const char *self, const char *
   if (msg_c) {
     int poly = p0t == TY_POLY || p0t == TY_UNKNOWN;
     if (nilable && poly) buf_printf(&src, "(%s ? sp_box_str_new(%s) : sp_box_nil())", msg_c, msg_c);
-    else if (nilable) buf_printf(&src, "sp_box_str_new(%s ? %s : \"\")", msg_c, msg_c);
+    /* (sp_str_empty, not a bare ""): sp_box_str_new reads the marker byte before its text */
+    else if (nilable) buf_printf(&src, "sp_box_str_new(%s ? %s : sp_str_empty)", msg_c, msg_c);
     else buf_printf(&src, "sp_box_str_new(%s)", msg_c);
     if (poly) buf_puts(&mb, src.p);
     else if (p0t == TY_STRING || p0t == TY_STRBUF) emit_unbox_text(c, p0t, src.p, &mb);

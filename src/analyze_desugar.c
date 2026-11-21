@@ -29199,6 +29199,19 @@ static int mms_rewrite(Compiler *c, int def) {
     }
     int list = fwd_new_node_like(nt, sp, "ArrayNode");
     nt_node_set_arr(nt, list, "elements", elems, ne);
+    /* (the arguments are evaluated before the name is checked: an explicit
+       super's are held in a local ahead of the check) */
+    int guarded = nt_kind(nt, name) != NK_SymbolNode, hold = -1;
+    if (guarded && ne > 0 && nt_kind(nt, sp) == NK_SuperNode) {
+      char held[32];
+      snprintf(held, sizeof held, "__mms_a%d", sp);
+      scope_local_intern(comp_scope_of(c, sp), held);
+      hold = fwd_new_node_like(nt, sp, "LocalVariableWriteNode");
+      nt_node_set_str(nt, hold, "name", held);
+      nt_node_set_int(nt, hold, "depth", 0);
+      nt_node_set_ref(nt, hold, "value", list);
+      list = mms_local(nt, sp, held, 0);
+    }
     /* "undefined method '#{name}' for an instance of #{self.class}" */
     int em = fwd_new_node_like(nt, sp, "InterpolatedStringNode");
     int h1 = fwd_new_node_like(nt, sp, "StringNode"), h2 = fwd_new_node_like(nt, sp, "StringNode");
@@ -29217,7 +29230,8 @@ static int mms_rewrite(Compiler *c, int def) {
     int parts[4] = { h1, e1, h2, e2 };
     nt_node_set_arr(nt, em, "parts", parts, 4);
     int raise = disp_raise_parts_named(c, NULL, name, em, -1, list, 0, 0);
-    if (nt_kind(nt, name) != NK_SymbolNode) raise = mms_symbol_guard(c, nt, sp, raise, nt_clone_subtree(nt, name), dep[i]);
+    if (guarded) raise = mms_symbol_guard(c, nt, sp, raise, nt_clone_subtree(nt, name), dep[i]);
+    if (hold >= 0) raise = disp_ahead(nt, &hold, 1, raise);
     nt_node_set_int(nt, raise, "mm_super_raise", 1);   /* (a hand-on to BasicObject's, as the super was: cplan_mm_answers) */
     int p = parent[sp];
     if (p < 0) continue;

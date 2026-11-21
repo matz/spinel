@@ -2040,6 +2040,15 @@ SP_NORETURN SP_COLD void sp_raise_cls(const char *cls, const char *msg) {
        strncmp(msg, "instance variable ", 18) == 0 ||   /* remove_instance_variable of an absent ivar */
        strncmp(msg, "uninitialized constant ", 23) == 0))   /* const_get / bad const (#3034) */
     sp_pending_exc_obj = sp_exc_recover_named(cls, msg);
+  /* `raise KeyError, msg` (NameError, FrozenError) the program wrote records
+     no key or receiver, where the runtime's raisers do: #key and #receiver
+     raise ArgumentError on it, as in CRuby */
+  if (user_raise && !sp_pending_exc_obj && msg && cls && (sp_exc_top > 0 || sp_at_exit_armed) &&
+      (sp_exc_cls_matches(cls, "KeyError") || sp_exc_cls_matches(cls, "NameError") || sp_exc_cls_matches(cls, "FrozenError"))) {
+    sp_Exception *ue = sp_exc_new_for_catch(cls, msg);
+    ue->has_key = 0; ue->has_recv = 0;
+    sp_pending_exc_obj = ue;
+  }
   /* the introspection staging (receiver/key/value) rides the carried object */
   if (sp_pending_exc_flags && msg && cls && (sp_exc_top > 0 || sp_at_exit_armed))
     sp_pending_exc_obj = sp_exc_apply_staged(cls, msg, sp_pending_exc_obj);

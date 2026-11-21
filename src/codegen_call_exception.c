@@ -1089,7 +1089,7 @@ static int emit_call_raise_arms_in(Compiler *c, int id, Buf *b, const NodeTable 
           else
             buf_printf(b, "%s\"%s\", sp_syserr_msg_a(\"%s\", 0, NULL))", raise_fn("sp_raise_cls"), effn, effn);
         }
-        else buf_printf(b, "%s\"%s\", (&(\"\\xff\")[1]))", raise_fn("sp_raise_cls"), effn);
+        else buf_printf(b, "%s\"%s\", (&(\"\\xff\")[1]))", raise_fn("sp_raise_cls_u"), effn);   /* (the program's raise: sp_raise_cls_u records no key or receiver on a KeyError or NameError) */
       }
     }
     else if (ac >= 2 && nt_type(nt, av[0]) &&
@@ -1203,7 +1203,7 @@ static int emit_call_raise_arms_in(Compiler *c, int id, Buf *b, const NodeTable 
             buf_puts(b, ")");
           }
           else if (comp_ntype(c, av[1]) == TY_STRING) {
-            buf_printf(b, "%s\"%s\", sp_exc_msg_given(%s", raise_fn("sp_raise_cls"), effn, "SP_STR_B(");
+            buf_printf(b, "%s\"%s\", sp_exc_msg_given(%s", raise_fn("sp_raise_cls_u"), effn, "SP_STR_B(");
             emit_expr(c, av[1], b);
             buf_puts(b, ")))");
           }
@@ -1212,7 +1212,7 @@ static int emit_call_raise_arms_in(Compiler *c, int id, Buf *b, const NodeTable 
             int rt2 = ++g_tmp;
             buf_printf(b, "({ sp_RbVal _t%d = ", rt2); emit_boxed(c, av[1], b);
             buf_printf(b, "; %s\"%s\", _t%d.tag == SP_TAG_NIL ? (&(\"\\xff\")[1])"
-                          " : sp_exc_msg_given(sp_poly_to_s(_t%d))); })", raise_fn("sp_raise_cls"), effn, rt2, rt2);
+                          " : sp_exc_msg_given(sp_poly_to_s(_t%d))); })", raise_fn("sp_raise_cls_u"), effn, rt2, rt2);
           }
         }
       }

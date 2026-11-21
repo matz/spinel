@@ -1,0 +1,17 @@
+["no key is available", "no receiver is available", "m"]
+["no key is available", "no receiver is available", "built at run time"]
+["no key is available", "no receiver is available", "KeyError"]
+["no receiver is available", nil]
+["no receiver is available", nil]
+"no receiver is available"
+["no key is available", "KeyError"]
+["no key is available", "sym"]
+["no key is available", "held message"]
+["no receiver is available", "7"]
+"no receiver is available"
+["no key is available", "no receiver is available"]
+[":k", "{}"]
+[":a", "{}"]
+["nil", :zork]
+"\"a\""
+":again"

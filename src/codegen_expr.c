@@ -6025,32 +6025,6 @@ static int emit_range_literal(Compiler *c, int id, Buf *b, const NodeTable *nt) 
   int left = nt_ref(nt, id, "left");
   int right = nt_ref(nt, id, "right");
   int excl = nt_range_excl(nt, id);
-  /* (:a..:e): a poly array of boxed symbols, walked by name succession
-     (interning through the generated TU's own table) */
-  if (left >= 0 && right >= 0 &&
-      nt_kind(nt, left) == NK_SymbolNode &&
-      nt_kind(nt, right) == NK_SymbolNode) {
-    int ta = ++g_tmp, ts = ++g_tmp, te = ++g_tmp;
-    buf_printf(b, "({ sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);"
-                  " const char *_t%d = sp_sym_to_s(", ta, ta, ts);
-    emit_expr(c, left, b);
-    buf_printf(b, "); const char *_t%d = sp_sym_to_s(", te);
-    emit_expr(c, right, b);
-    buf_printf(b, "); for (;;) {"
-                  " if (%d && sp_str_eq(_t%d, _t%d)) break;"
-                  " sp_PolyArray_push(_t%d, sp_box_sym(sp_sym_intern(_t%d)));"
-                  " if (!%d && sp_str_eq(_t%d, _t%d)) break;"
-                  " _t%d = sp_str_succ(_t%d);"
-                  " if (sp_str_length(_t%d) > sp_str_length(_t%d)) break; }"
-                  " _t%d; })",
-               excl, ts, te,
-               ta, ts,
-               excl, ts, te,
-               ts, ts,
-               ts, te,
-               ta);
-    return 1;
-  }
   /* (t1..t2): a Range of Times; the begin is rooted while the end is made */
   if (comp_ntype(c, id) == TY_TIME_RANGE) {
     int tl = ++g_tmp, tr = ++g_tmp;

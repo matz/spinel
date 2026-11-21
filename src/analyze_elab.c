@@ -9326,7 +9326,9 @@ unsigned elab_class_unsettled(Compiler *c, int cls, unsigned kinds, int id, int 
 typedef struct { int m, nh, any, *cp; } LrSpanAcc;
 /* history h's versions inside the window (p0, p1), when it is one of cls's ancestors' */
 static void lr_span_take(Compiler *c, const LrHist *h, int cls, int sg, LoadPoint p0, LoadPoint p1, int post, LrSpanAcc *s) {
-  if ((h->b != sg && !sg) || !lr_in_ancestry(c, cls, sg, h->a, p1)) return;
+  /* (a module's singleton is on its own singleton's chain alone: one that extends it takes its instance methods) */
+  int msg = h->b && h->a != cls && h->a >= 0 && h->a < c->nclasses && comp_class_is_module(c, &c->classes[h->a]);
+  if ((h->b != sg && !sg) || msg || !lr_in_ancestry(c, cls, sg, h->a, p1)) return;
   int had = s->m;
   for (int j = 0; j < h->n; j++) {
     const LrDef *v = &h->v[j];

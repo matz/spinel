@@ -10879,7 +10879,11 @@ static void lr_fire_inherited(Compiler *c, int node) {
   lr_fit(r, nt->count);
   lr_place_ref(r, nt, sc, r->at[node], 0);
   int sup = lr_class_ref_at(c, sc, NULL);
+  /* a superclass written as a path from a core constant (`Errno::EMFILE`) is
+     the core class the whole path names, not its last segment */
+  char path[256];
   const char *sn = lr_written_name(nt, sc);
+  if (nt_kind(nt, sc) == NK_ConstantPathNode && lr_core_path_text(c, sc, path, sizeof path)) sn = path;
   if (sup < 0 && sup != LR_LATER && (is_builtin_class_name(sn) || is_builtin_exception_name(sn)) && !lr_reopened(r, sn)) return;
   if (sup >= 0 && elab_method_at(c, sup, "inherited", 1, elab_point_of(c, node), NULL) == ELAB_NO && !lr_hook_body_def(c, sup, "inherited")) return;
   int body = class_def_body(nt, node), bn = 0;

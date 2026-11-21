@@ -8438,7 +8438,7 @@ void proc_collect_locals(Compiler *c, int id, NameSet *locals) {
 }
 
 /* Collect the parameter names declared by a block/lambda node (requireds,
-   optionals, posts, rest). Used to declare a nested block's params in the
+   optionals, posts, rest, keywords, keyword rest, block). Used to declare a nested block's params in the
    flat fiber-body C function it is inlined into. */
 /* The numbered or `it` parameter reads of a block's own body (a nested
    block's are its own): `_1`, `it`, and the per-block names the analysis
@@ -8482,6 +8482,14 @@ static void collect_block_param_names(Compiler *c, int blk, NameSet *out) {
   for (int i = 0; i < psn; i++) { const char *nm = nt_str(nt, posts[i], "name"); if (nm) nameset_add(out, nm); }
   int rest = nt_ref(nt, pn, "rest");
   if (rest >= 0) { const char *nm = nt_str(nt, rest, "name"); if (nm) nameset_add(out, nm); }
+  /* its keywords, `**rest` and `&blk` are its own too: a nested lambda's
+     keyword read was taken for an outer variable the proc had not captured */
+  int kn = 0; const int *kws = nt_arr(nt, pn, "keywords", &kn);
+  for (int i = 0; i < kn; i++) { const char *nm = nt_str(nt, kws[i], "name"); if (nm) nameset_add(out, nm); }
+  int kwrest = nt_ref(nt, pn, "keyword_rest");
+  if (kwrest >= 0 && nt_kind(nt, kwrest) == NK_KeywordRestParameterNode) { const char *nm = nt_str(nt, kwrest, "name"); if (nm) nameset_add(out, nm); }
+  int bprm = nt_ref(nt, pn, "block");
+  if (bprm >= 0 && nt_kind(nt, bprm) == NK_BlockParameterNode) { const char *nm = nt_str(nt, bprm, "name"); if (nm) nameset_add(out, nm); }
 }
 
 /* Collect every local name DEFINED inside a proc/fiber body INCLUDING nested

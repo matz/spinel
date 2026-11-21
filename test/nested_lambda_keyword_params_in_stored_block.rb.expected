@@ -1,0 +1,1 @@
+[{a: 1, app: :myapp, severity: :warning, handled: true, error: "x", source: "s"}, [:context, :handled, :severity, :source]]

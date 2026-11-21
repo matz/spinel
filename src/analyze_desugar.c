@@ -13801,9 +13801,9 @@ int desugar_block_implicit_rest_at(Compiler *c, LowerCtx *lc, int id) {
    ArrayNode so the array-literal builders splice the splat and every
    value consumer sees one argument. The per-jump builders pushed each
    argument boxed, a splat as one nested array, and `next` kept only the
-   first argument. A splat-free `return` / `break` keeps its own path.
-   Multiple `break` values also use the Array path: the loop's type and
-   its result slot must consume the whole value, not its first argument.
+   first argument. A splat-free `return` keeps its own path. Multiple
+   `break` values use the Array path so the loop slot receives the complete
+   result. A trailing keyword hash is a value in that Array.
    `yield a, *b` and `blk.call(a, *b)` become `yield(*[a, *b])`, which the
    block binder already spreads; it bound each argument to one parameter,
    the splat's whole array included. */
@@ -13822,7 +13822,7 @@ static int mvj_site(const NodeTable *nt, int id) {
     NodeKind ak = nt_kind(nt, a[j]);
     if (ak == NK_SplatNode && nt_ref(nt, a[j], "expression") < 0) other = 1;
     else if (ak == NK_SplatNode) splat = 1;
-    else if (ak == NK_KeywordHashNode || ak == NK_BlockArgumentNode) other = 1;
+    else if ((ak == NK_KeywordHashNode && k != NK_BreakNode) || ak == NK_BlockArgumentNode) other = 1;
   }
   return !(other || (!splat && k != NK_NextNode && k != NK_BreakNode));
 }

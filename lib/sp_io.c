@@ -24,6 +24,9 @@
 #include <sys/socket.h> /* the Socket:: constants */
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#ifdef __APPLE__
+#include <netinet/tcp_fsm.h> /* TCPS_CLOSED / TCPS_LISTEN for the socket read probe */
+#endif
 #include <sys/un.h>
 #include <netdb.h>  /* gai_strerror for Socket::ResolutionError */
 #include <sys/time.h> /* utimes() for File.utime */
@@ -880,7 +883,35 @@ size_t sp_io_rbuf_read_into(sp_File *f, char *buf, size_t n) {
 /* The descriptor form, for a pipe the runtime holds without a handle (a
    backtick's child): the same park, on the bare fd. */
 void sp_io_wait_fd_readable(int fd) { sp_io_park_fd_readable(fd, NULL); }
-void sp_io_wait_readable(sp_File *f) {SP_GC_ROOT(f);
+
+/* Does a read of this socket answer without waiting: bytes or the end of
+   the stream, or ENOTCONN from a stream socket that was never connected or
+   is listening? Darwin's poll never reports such a socket readable, so the
+   park waited forever where the read raises at once (Linux's reports it
+   hung up). A TCP socket whose connect is in progress has no peer either
+   and waits. The probe asks the socket's state, which takes nothing from
+   it: a peek takes a pending error on Linux. */
+static int sp_sock_read_answers_now(int fd) {
+#if defined(__APPLE__)
+  struct pollfd rp; rp.fd = fd; rp.events = POLLIN; rp.revents = 0;
+  if (SP_SIG_BLOCKING(poll(&rp, 1, 0)) > 0) return 1;
+  struct tcp_connection_info ti; socklen_t til = sizeof ti;
+  if (getsockopt(fd, IPPROTO_TCP, TCP_CONNECTION_INFO, &ti, &til) == 0)
+    return ti.tcpi_state == TCPS_CLOSED || ti.tcpi_state == TCPS_LISTEN;
+  /* a Unix stream socket connects at once: no peer is no connection */
+  int type = 0; socklen_t tl = sizeof type;
+  if (getsockopt(fd, SOL_SOCKET, SO_TYPE, &type, &tl) != 0 || type != SOCK_STREAM) return 0;
+  struct sockaddr_storage ss; socklen_t sl = sizeof ss;
+  return getpeername(fd, (struct sockaddr *)&ss, &sl) != 0 && errno == ENOTCONN;
+#else
+  (void)fd;
+  return 0;
+#endif
+}
+
+/* `probe`: a socket is asked whether its read answers now before the park.
+   A listening socket has no peer, so accept parks without it. */
+static void sp_io_wait_readable_probe(sp_File *f, int probe) {SP_GC_ROOT(f);
   if (!f || !SP_ATOMIC_LOAD(&f->fp, __ATOMIC_RELAXED)) return;
   /* a handle with own_buf parks in its reads (sp_io_rbuf_fill) */
   if (f->own_buf) return;
@@ -890,11 +921,13 @@ void sp_io_wait_readable(sp_File *f) {SP_GC_ROOT(f);
   int fd = fileno(fp);
   sp_io_unuse(f);
   if (buffered > 0) return;
+  if (probe && f->is_sock && sp_sock_read_answers_now(fd)) return;
   sp_io_park_fd_readable(fd, &f->closed);
   /* woken by a close from another thread: the handle is gone, and a read
      would touch a descriptor that is closed or already someone else's */
   if (SP_ATOMIC_LOAD(&f->closed, __ATOMIC_RELAXED)) sp_raise_cls("IOError", "stream closed in another thread");
 }
+void sp_io_wait_readable(sp_File *f) { sp_io_wait_readable_probe(f, 1); }
 
 void sp_io_child_fds_given(void) {
   SP_ATOMIC_FETCH_ADD(&sp_io_child_fds_gen, 1u, __ATOMIC_RELEASE);
@@ -2639,16 +2672,34 @@ sp_oint sp_sock_connect_nb_sa(sp_File *f, const char *sa, sp_int salen, sp_bool 
   return sp_oint_of(-1);
 }
 
-/* TCPServer#accept: park cooperatively for a pending connection first -- a
-   blocking accept would stall the whole green-thread scheduler -- then wrap the
-   new descriptor. Only a socket handle answers it. */
+/* TCPServer#accept: one accept(2) that does not wait first, as CRuby's does,
+   so a socket that is not listening raises at once (EINVAL, EOPNOTSUPP),
+   where the readable park never ends on it. Without a pending connection,
+   park cooperatively -- a blocking accept would stall the whole green-thread
+   scheduler -- then wrap the new descriptor. Only a socket handle answers
+   it. */
 sp_File *sp_sock_accept(sp_File *f) {SP_GC_ROOT(f);
   extern int sp_net_accept_unless(int sfd, const unsigned char *cancel);
+  extern int sp_net_accept_nb(int sfd);
+  extern int sp_net_set_nonblock(int fd);
   if (!f || !f->is_sock)
     sp_raise_cls("NoMethodError",
                  sp_sprintf("undefined method 'accept' for an instance of %s", sp_io_kind_name(f)));
   SP_IO_OPEN(f);
-  sp_io_wait_readable(f);
+  {
+    /* the listen fd stays non-blocking, as the threaded sp_net_accept_unless
+       leaves it: an O_NONBLOCK set and cleared around one try would race
+       another thread waiting in that accept */
+    int lfd = fileno(sp_io_use(f));
+    sp_net_set_nonblock(lfd);
+    int fd = sp_net_accept_nb(lfd);
+    int e = errno;
+    sp_io_unuse(f);
+    if (fd >= 0) return sp_io_fdopen_sock(fd, sp_sock_accepted_kind(f));
+    errno = e;
+    if (!sp_sock_would_block()) sp_sock_raise_errno("accept(2)");
+  }
+  sp_io_wait_readable_probe(f, 0);
   /* the one use that spans a park: another acceptor can take the pending
      connection first, and the accept then waits for the next one, a wait
      the close cancels */

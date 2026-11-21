@@ -1,0 +1,7 @@
+[Errno::EINVAL, " - accept(2)"]
+[Errno::ENOTCONN, " - recvfrom(2)"]
+[Errno::ENOTCONN, " - recvfrom(2)"]
+[Errno::ENOTCONN, " - recvfrom(2)"]
+[Errno::EINVAL, " - accept(2)"]
+[true, " - accept(2)"]
+"hi"

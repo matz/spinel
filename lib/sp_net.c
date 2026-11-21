@@ -411,6 +411,9 @@ int sp_net_accept_unless(int sfd, const unsigned char *cancel) {
             if (sp_net_term_flag) return -1;
             continue;   /* unrelated signal (SIGCHLD, ...) -- retry */
         }
+        /* the listen fd is non-blocking (sp_sock_accept): another acceptor
+           took the connection, so wait for the next one */
+        if (errno == EAGAIN || errno == EWOULDBLOCK) continue;
         return -1;
     }
 #endif

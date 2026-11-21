@@ -107,7 +107,7 @@ int fresh_array_builtin_name(const char *nm) {
   static const char *const fresh[] = {
     "map", "collect", "flat_map", "collect_concat", "filter_map", "select", "filter",
     "reject", "sort", "sort_by", "reverse", "uniq", "compact", "flatten", "zip",
-    "split", "chars", "bytes", "lines", "scan", "keys", "values", "dup",
+    "split", "chars", "bytes", "unpack", "lines", "scan", "keys", "values", "dup",
     "take", "drop", "take_while", "drop_while", "rotate", "shuffle", "divmod",
     "+", "-", "*", "&", "|", NULL };
   return nm && str_in(nm, fresh);

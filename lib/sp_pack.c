@@ -1151,6 +1151,48 @@ static SP_NORETURN void uk_unknown_directive(char type, const char *fmt, size_t 
     sp_raise_cls("ArgumentError", sp_sprintf("unknown unpack directive '%c' in '%s'", type, q));
   sp_raise_cls("ArgumentError", sp_sprintf("unknown unpack directive '\\x%02x' in '%s'", t, q));
 }
+/* One element of an integer directive, read from the bytes at u: the
+   directive's value as a signed 64-bit quantity (`Q` and `J`, which
+   need the unsigned range, are read by their caller). */
+static int64_t uk_get_int_spec(char spec, const unsigned char *u, int big) {
+  switch (spec) {
+    case 'C': return u[0];
+    case 'c': return (int8_t)u[0];
+    case 'n': return ((int64_t)u[0] << 8) | u[1];
+    case 'N': return ((int64_t)u[0] << 24) | ((int64_t)u[1] << 16) | ((int64_t)u[2] << 8) | u[3];
+    case 'v': return ((int64_t)u[1] << 8) | u[0];
+    case 'V': return ((int64_t)u[3] << 24) | ((int64_t)u[2] << 16) | ((int64_t)u[1] << 8) | u[0];
+    case 's': return (int16_t)pk_get_int(u, 2, big);
+    case 'S': return (uint16_t)pk_get_int(u, 2, big);
+    case 'l': return (int32_t)pk_get_int(u, 4, big);
+    case 'L': return (uint32_t)pk_get_int(u, 4, big);
+    case 'q': return (int64_t)pk_get_int(u, 8, big);
+    case 'i': return (int32_t)pk_get_int(u, 4, big);
+    case 'I': return (uint32_t)pk_get_int(u, 4, big);
+    case 'j': return (int64_t)(intptr_t)pk_get_int(u, (int)sizeof(intptr_t), big);
+    default: return 0;
+  }
+}
+
+/* The UTF-8 character at str[*off] for `U`: its codepoint, with *off moved
+   past it. */
+static int64_t uk_utf8_cp(const char *str, size_t slen, size_t *off) {
+  unsigned char b0 = (unsigned char)str[*off];
+  int len = b0 < 0x80 ? 1 : (b0 >> 5) == 0x6 ? 2 : (b0 >> 4) == 0xE ? 3 : (b0 >> 3) == 0x1E ? 4 : 0;
+  /* A lead byte with no valid length, or a truncated / mis-continued
+     sequence, is malformed UTF-8 -- ArgumentError, as in MRI. */
+  if (len == 0 || *off + (size_t)len > slen)
+    sp_raise_cls("ArgumentError", "malformed UTF-8 character");
+  int64_t cp = len == 1 ? b0 : (b0 & (0x7F >> len));
+  for (int j = 1; j < len; j++) {
+    unsigned char cb = (unsigned char)str[*off + j];
+    if ((cb & 0xC0) != 0x80) sp_raise_cls("ArgumentError", "malformed UTF-8 character");
+    cp = (cp << 6) | (cb & 0x3F);
+  }
+  *off += (size_t)len;
+  return cp;
+}
+
 sp_PolyArray *sp_str_unpack_off(const char *str, const char *fmt, sp_int byteoff);
 sp_PolyArray *sp_str_unpack(const char *str, const char *fmt) {SP_GC_ROOT_STR(str);SP_GC_ROOT_STR(fmt); return sp_str_unpack_off(str, fmt, 0); }
 
@@ -1337,20 +1379,8 @@ else if (spec == 'Z') {
     if (spec == 'U') {
       int64_t got = 0;
       while ((count < 0 || got < count) && off < slen) {
-        unsigned char b0 = (unsigned char)str[off];
-        int len = b0 < 0x80 ? 1 : (b0 >> 5) == 0x6 ? 2 : (b0 >> 4) == 0xE ? 3 : (b0 >> 3) == 0x1E ? 4 : 0;
-        /* A lead byte with no valid length, or a truncated / mis-continued
-           sequence, is malformed UTF-8 -- ArgumentError, as in MRI. */
-        if (len == 0 || off + (size_t)len > slen)
-          sp_raise_cls("ArgumentError", "malformed UTF-8 character");
-        int64_t cp = len == 1 ? b0 : (b0 & (0x7F >> len));
-        for (int j = 1; j < len; j++) {
-          unsigned char cb = (unsigned char)str[off + j];
-          if ((cb & 0xC0) != 0x80) sp_raise_cls("ArgumentError", "malformed UTF-8 character");
-          cp = (cp << 6) | (cb & 0x3F);
-        }
-        sp_PolyArray_push(out, sp_box_int((sp_int)cp));
-        off += len; got++;
+        sp_PolyArray_push(out, sp_box_int((sp_int)uk_utf8_cp(str, slen, &off)));
+        got++;
       }
       continue;
     }
@@ -1386,20 +1416,7 @@ else if (spec == 'Z') {
       }
       int64_t v = 0;
       switch (spec) {
-        case 'C': v = u[0]; break;
-        case 'c': v = (int8_t)u[0]; break;
-        case 'n': v = ((int64_t)u[0] << 8) | u[1]; break;
-        case 'N': v = ((int64_t)u[0] << 24) | ((int64_t)u[1] << 16) | ((int64_t)u[2] << 8) | u[3]; break;
-        case 'v': v = ((int64_t)u[1] << 8) | u[0]; break;
-        case 'V': v = ((int64_t)u[3] << 24) | ((int64_t)u[2] << 16) | ((int64_t)u[1] << 8) | u[0]; break;
-        case 's': v = (int16_t)pk_get_int(u, 2, big); break;
-        case 'S': v = (uint16_t)pk_get_int(u, 2, big); break;
-        case 'l': v = (int32_t)pk_get_int(u, 4, big); break;
-        case 'L': v = (uint32_t)pk_get_int(u, 4, big); break;
-        case 'q': v = (int64_t)pk_get_int(u, 8, big); break;
-        case 'i': v = (int32_t)pk_get_int(u, 4, big); break;
-        case 'I': v = (uint32_t)pk_get_int(u, 4, big); break;
-        case 'j': v = (int64_t)(intptr_t)pk_get_int(u, (int)sizeof(intptr_t), big); break;
+        default: v = uk_get_int_spec(spec, u, big); break;
         /* a pointer CRuby's own pack did not make: nil for NULL, else it has
            no object to answer */
         case 'p': case 'P':
@@ -1419,6 +1436,43 @@ else if (spec == 'Z') {
       }
       off += fsize;
       if (spec != 'x') sp_PolyArray_push(out, pk_box_i64(v));
+    }
+  }
+  return out;
+}
+
+/* String#unpack for a literal format of integer directives whose values
+   fit an Integer slot (an_unpack_lit_type): the same values as
+   sp_str_unpack_off, in an Integer Array, with a slot past the end nil. */
+sp_IntArray *sp_str_unpack_ints(const char *str, const char *fmt) {
+  if (!str) sp_nil_recv("unpack");
+  SP_GC_ROOT_STR(str);
+  SP_GC_ROOT_STR(fmt);
+  sp_IntArray *out = sp_IntArray_new();
+  SP_GC_ROOT(out);
+  size_t slen = sp_str_byte_len(str);
+  size_t off = 0;
+  const char *p = fmt;
+  const char *pend = fmt + sp_str_byte_len(fmt);
+  while (p < pend) {
+    char spec = *p++;
+    spec = pk_native_spec(spec, p);
+    int big = 0;
+    int64_t count = pk_parse_count_mods(&p, &big);
+    if (spec == 'U') {
+      for (int64_t got = 0; (count < 0 || got < count) && off < slen; got++)
+        sp_IntArray_push(out, (sp_int)uk_utf8_cp(str, slen, &off));
+      continue;
+    }
+    size_t fsize = spec == 'C' || spec == 'c' ? 1
+                 : spec == 'n' || spec == 'v' || spec == 's' || spec == 'S' ? 2
+                 : 4;
+    if (count < 0) count = (int64_t)((slen - off) / fsize);
+    for (int64_t k = 0; k < count; k++) {
+      if (off + fsize > slen) { sp_IntArray_push_nil(out); continue; }
+      int64_t v = uk_get_int_spec(spec, (const unsigned char *)(str + off), big);
+      sp_IntArray_push(out, (sp_int)v);
+      off += fsize;
     }
   }
   return out;

@@ -38304,6 +38304,13 @@ static int nullable_int_elem_expr(Compiler *c, int v, int depth) {
     if (nm && (sp_streq(nm, "values") || sp_streq(nm, "values_at") || sp_streq(nm, "fetch_values")) &&
         hash_vals_nullable(c, rc))
       return 1;
+    /* `str.unpack("CC")`: a slot past the end of the String is nil */
+    if (nm && sp_streq(nm, "unpack") && rc >= 0 && comp_ntype(c, v) == TY_INT_ARRAY &&
+        (infer_type(c, rc) == TY_STRING || infer_type(c, rc) == TY_STRBUF)) {
+      int ca = nt_ref(nt, v, "arguments"); int an = 0;
+      const int *av = ca >= 0 ? nt_arr(nt, ca, "arguments", &an) : NULL;
+      if (an == 1 && an_unpack_lit_may_pad(nt, av[0])) return 1;
+    }
     /* `Array.new(n) { ... }` / `Array.new(n, v)` builds its elements here */
     if (nm && sp_streq(nm, "new") && rc >= 0 && nt_kind(nt, rc) == NK_ConstantReadNode) {
       const char *rn = nt_str(nt, rc, "name");

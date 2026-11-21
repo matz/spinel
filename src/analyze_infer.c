@@ -1356,6 +1356,47 @@ static TyKind an_unpack1_lit_type(const NodeTable *nt, int arg) {
   return TY_POLY;
 }
 
+/* str.unpack(fmt) with a literal format of integer directives whose values
+   an Integer slot holds (32 bits or fewer, or UTF-8 codepoints), each with
+   its count or `*`: an Integer Array, a slot the String is too short for
+   nil (sp_str_unpack_ints). The modifiers are those CRuby takes after
+   sSiIlL, less `_` / `!` on l and L, which make them 64-bit. A 32-bit
+   target's sp_int tops out at 2**31-1, so a format with L, N, V or I stays
+   boxed there, where the runtime makes a larger value a Bignum.
+   Any other format keeps the boxed Array. */
+static TyKind an_unpack_lit_type(const NodeTable *nt, int arg) {
+  extern int sp_target_int_bits;
+  if (nt_kind(nt, arg) != NK_StringNode) return TY_POLY_ARRAY;
+  const char *p = nt_str(nt, arg, "content");
+  /* a NUL in the format is an unknown directive */
+  if (!p || !p[0] || strlen(p) != nt_str_len(nt, arg, "content")) return TY_POLY_ARRAY;
+  while (*p) {
+    char d = *p++;
+    if (!strchr("cCsSlLnNvViIU", d)) return TY_POLY_ARRAY;
+    if (sp_target_int_bits == 32 && strchr("LNVI", d)) return TY_POLY_ARRAY;
+    for (; *p == '<' || *p == '>' || *p == '!' || *p == '_'; p++)
+      if (!strchr("sSiIlL", d) || ((d == 'l' || d == 'L') && (*p == '!' || *p == '_'))) return TY_POLY_ARRAY;
+    if (*p == '*') p++;
+    else while (*p >= '0' && *p <= '9') p++;
+  }
+  return TY_INT_ARRAY;
+}
+
+/* Can the Integer Array an_unpack_lit_type types hold a nil? A directive
+   other than U with a count of its own pads with nil past the end of the
+   String; `*` and U stop there. */
+int an_unpack_lit_may_pad(const NodeTable *nt, int arg) {
+  if (an_unpack_lit_type(nt, arg) != TY_INT_ARRAY) return 0;
+  for (const char *p = nt_str(nt, arg, "content"); *p; ) {
+    char d = *p++;
+    while (*p == '<' || *p == '>' || *p == '!' || *p == '_') p++;
+    if (*p == '*') { p++; continue; }
+    if (d != 'U') return 1;
+    while (*p >= '0' && *p <= '9') p++;
+  }
+  return 0;
+}
+
 /* Whether every element written into the poly-array ivar `@<ivname>` of class
    `cid` is an int-returning kind: a bound method (a dispatch-table entry, called
    with an int arg returns int), an int array, an int, or nil filler. Mirrors
@@ -5826,6 +5867,8 @@ static int infer_string_recv_call(Compiler *c, int id, const NodeTable *nt, cons
       { *out = TY_NIL; return 1; }
     }
     if (sp_streq(name, "unpack1") && (argc == 1 || argc == 2)) { *out = an_unpack1_lit_type(nt, argv[0]); return 1; }
+    if (sp_streq(name, "unpack") && nt_ref(nt, id, "block") < 0 && (argc == 1 || argc == 2))
+      { *out = argc == 1 ? an_unpack_lit_type(nt, argv[0]) : TY_POLY_ARRAY; return 1; }
     /* byteindex/byterindex over a String or Regexp needle -> byte offset or
        nil. */
     if ((sp_streq(name, "byteindex") || sp_streq(name, "byterindex")) &&

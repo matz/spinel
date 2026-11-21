@@ -208,6 +208,7 @@ typedef enum {
   BOPE_IVAR_REFLECTION,   /* reflection on a builtin value without ivar slots */
   BOPE_FLOAT_RATIONALIZE,
   BOPE_STRING_SCAN_CHECKED,
+  BOPE_STRING_UNPACK,
   /* String#[]=, #insert, #clear and #slice!, which change the receiver's
      String in place through its handle (codegen_call_string.c, stage 7) */
   BOPE_STRING_ASET,

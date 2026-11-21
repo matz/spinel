@@ -203,6 +203,9 @@ int an_poly_raw_argc(const char *name);
    `want`: the poly dispatch accumulates its arm beside the builtin ones in one
    C temp, so the call must be typed for what both can hold. */
 int an_user_ret_disagrees(Compiler *c, const char *name, TyKind want);
+/* str.unpack(fmt): can the Integer Array its literal format answers hold a
+   nil (a counted directive past the end of the String)? */
+int an_unpack_lit_may_pad(const NodeTable *nt, int arg);
 TyKind an_class_concrete(Compiler *c, int id, const char *name, TyKind t);
 int an_ty_holds_nil(TyKind t);
 int gvar_seeded_before_read(Compiler *c, const char *gname);

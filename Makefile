@@ -4985,6 +4985,8 @@ infer-test-1: $(SPINEL) $(SP_RT_LIB)
 	[ "$$(awk '/^struct sp_Layer_s \{/,/^\}/' "$$tmp/oaz.c" | grep -c 'sp_PtrArray \* iv_')" = 2 ] || { echo "infer-test: FAIL (a zip over an Array of one class, as receiver or operand, kept it boxed)"; ok=0; }; \
 	$(SPINEL) test/object_method_ivar_receivers.rb -c --no-line-map -o "$$tmp/oir.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (object_method_ivar_receivers: -c)"; ok=0; }; \
 	grep -q 'static sp_PointValue sp_PointValue_new(' "$$tmp/oir.c" && ! grep -q 'iv_unused;' "$$tmp/oir.c" || { echo "infer-test: FAIL (an Object setter changes unrelated layouts)"; ok=0; }; \
+	$(SPINEL) test/string_unpack_int_array.rb -c --no-line-map -o "$$tmp/sui.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (string_unpack_int_array: -c)"; ok=0; }; \
+	grep -Fq 'static inline sp_int sp_rb_sum(' "$$tmp/sui.c" || { echo "infer-test: FAIL (a sum over unpack(\"V*\") kept the words boxed)"; ok=0; }; \
 	$(SPINEL) test/hash_store_boxed_unbounded.rb -c --no-line-map -o "$$tmp/hbu.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (hash_store_boxed_unbounded: -c)"; ok=0; }; \
 	! grep -q 'sp_PolyPolyHash_new' "$$tmp/hbu.c" || { echo "infer-test: FAIL (an unbounded boxed store widened a known Hash)"; ok=0; }; \
 	$(SPINEL) test/hash_key_walk_param_same_name.rb -c --no-line-map -o "$$tmp/hkw.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (hash_key_walk_param_same_name: -c)"; ok=0; }; \

@@ -1003,6 +1003,7 @@ int class_def_path(const NodeTable *nt, int def_node);   /* the constant node it
 int mixin_stmt_args(const NodeTable *nt, int st, int *prepend, const int **av);   /* a body's receiverless include/prepend: its argument count, -1 for another node */
 const char *class_def_name(const NodeTable *nt, int def_node);   /* the constant name it writes, NULL for none */
 const char *class_def_bare_name(const NodeTable *nt, int def_node);   /* ...written as a plain constant, NULL under a path */
+const char *vis_arg_name(const NodeTable *nt, int arg);   /* a Symbol or String argument's method name (analyze_scope.c) */
 /* ...asked of the compiler: where the readers move from the name the header
    was stamped with to the class it opened (#10793) */
 const char *class_def_key(const Compiler *c, int def_node);

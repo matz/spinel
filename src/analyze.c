@@ -5700,7 +5700,7 @@ int self_class_body(Compiler *c, int node) {
    one Array of Symbols. Its value is nil bare (VIS_DECL_NIL), the name for
    one Symbol or def (VIS_DECL_SYM), and the Array of names otherwise
    (VIS_DECL_ARRAY). private_class_method / public_class_method naming
-   Symbols or `def self.m`s answer the class itself (VIS_DECL_SELF). 0 when
+   Symbols, Strings or `def self.m`s answer the class itself (VIS_DECL_SELF). 0 when
    `id` is not one of these. A method body's word counts where the record
    reads the class self is there (elab_body_word): vis_decl_class, the
    class a class body's or a body's word acts on, -1 for none. A sent
@@ -5733,15 +5733,16 @@ int vis_decl_call(Compiler *c, int id) {
   int an = 0; const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
   if (av) av += skip, an -= skip;
   if (an == 0) return cm || skip ? 0 : VIS_DECL_NIL;
+  /* (a class-method word's names may be Strings too: its value is the class, whatever names it takes) */
   if (an == 1 && nt_kind(nt, av[0]) == NK_ArrayNode) {
     int en = 0; const int *ev = nt_arr(nt, av[0], "elements", &en);
     for (int i = 0; i < en; i++)
-      if (nt_kind(nt, ev[i]) != NK_SymbolNode) return 0;
+      if (nt_kind(nt, ev[i]) != NK_SymbolNode && !(cm && nt_kind(nt, ev[i]) == NK_StringNode)) return 0;
     return cm ? VIS_DECL_SELF : VIS_DECL_ARRAY;
   }
   for (int i = 0; i < an; i++) {
     NodeKind k = nt_kind(nt, av[i]);
-    if (k == NK_SymbolNode) continue;
+    if (k == NK_SymbolNode || (cm && k == NK_StringNode)) continue;
     if (k == NK_DefNode && (nt_ref(nt, av[i], "receiver") >= 0) == cm) continue;
     return 0;
   }

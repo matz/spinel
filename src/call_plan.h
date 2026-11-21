@@ -1746,6 +1746,11 @@ int cplan_class_responds(Compiler *c, int ci, const char *qm, int id);
 /* ...with none of its program's class methods: the builtin ones
    (class_object_builtin_responds, of the class's kind) */
 int cplan_class_builtin_responds(Compiler *c, int ci, const char *qm);
+/* ...or with a builtin method of any visibility of its class side: its builtin superclass's singleton methods,
+   Class's (a module's Module's) instance methods and those of their ancestors, Object's, Kernel's and
+   BasicObject's (`inspect`, `puts`, `private`), as CRuby's lookup on the class side finds them (cu_class_value_vis),
+   and the builtin ones it answers respond_to? with */
+int cplan_class_builtin_has(Compiler *c, int ci, const char *name);
 void cplan_presence_list_free(CplanPresList *l);
 /* What an instance of program class cid answers to Object#respond_to?(qm) where call id runs (-1: no call): 2
    true, 1 only to include_all (a private or protected match), 0 false; the method-table reading, without the

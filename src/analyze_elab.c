@@ -3429,6 +3429,18 @@ static int lr_body_held(Compiler *c, int def) {
   return held;
 }
 
+/* ...does class-method word id, which takes literal names only, name first one no method or accessor of the
+   program's has on either side and no class or module answers as a builtin's (the word on class cls)? It raises
+   NameError where it runs, ahead of every name (emit_vis_word_absent), and changes nothing */
+static int lr_cside_word_absent(Compiler *c, int id, int cls) {
+  const NodeTable *nt = c->nt;
+  const char *nm = lr_word_name(nt, id, 0, 0);
+  int nd = 0, nl = 0;
+  while (lr_word_name(nt, id, nd, 1)) nd++;
+  while (lr_word_name(nt, id, nl, 0)) nl++;
+  return nm && nd == nl && cls >= 0 && cls < c->nclasses && !an_user_defines_method(c, nm) &&
+         !comp_name_answered_any_side(c, nm) && !cplan_class_builtin_has(c, cls, nm);
+}
 /* (asked of the tree, as lr_body_holds asks its target: a word the record keeps unplaced runs on that class too,
    and answers its names. One that takes a def answers only as the def's version, the record's kept answer,
    which lr_unplaced_words asks of every body word a late body holds: unplaced, it keeps the form that refuses
@@ -3443,12 +3455,13 @@ int elab_body_word(Compiler *c, int id, int *cls) {
       !lr_body_target(c, par, r->n, id, 0, cls, &sg) || *cls < 0)
     return 0;
   /* (a class-method word is one only as its version: the record keeps no unplaced form of it, whose names a barred
-     one would leave as the table has them, where CRuby changes them) */
+     one would leave as the table has them, where CRuby changes them; or as one that raises NameError where it runs
+     and changes nothing, lr_cside_word_absent) */
   if (lr_body_word_cside(nt, id)) {
     const LrHist *wh = lr_word_name(nt, id, 0, 1) ? lr_hist(r, *cls, 1, lr_word_name(nt, id, 0, 1), 0) : NULL;
     int have = 0;
     for (int j = 0; wh && j < wh->n && !have; j++) have = wh->v[j].node == id && wh->v[j].body;
-    if (!have && lr_word_name(nt, id, 0, 1)) return 0;
+    if (!have && lr_word_name(nt, id, 0, 1) && !lr_cside_word_absent(c, id, *cls)) return 0;
   }
   const int *av = nt_arr(nt, nt_ref(nt, id, "arguments"), "arguments", &an);
   for (int i = 0; i < an; i++) ad |= nt_kind(nt, av[i]) == NK_DefNode;

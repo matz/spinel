@@ -20912,8 +20912,11 @@ static int class_builtin_has_method(Compiler *c, int cid, const char *m) {
 int emit_vis_word_absent(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
   int skip = 0;
-  if (visibility_of_name(vis_word_call(nt, id, &skip)) <= BVIS_MODULE_FUNCTION) return 0;
-  int vcid = g_class_body_id >= 0 ? g_class_body_id : (comp_scope_of(c, id) ? comp_scope_of(c, id)->class_id : -1);
+  const char *w = vis_word_call(nt, id, &skip);
+  /* (a class-method word's names are the class side's of the class it acts on, vis_decl_class) */
+  int cm = class_method_vis_of_name(w) != 0;
+  if (!cm && visibility_of_name(w) <= BVIS_MODULE_FUNCTION) return 0;
+  int vcid = cm ? vis_decl_class(c, id) : g_class_body_id >= 0 ? g_class_body_id : (comp_scope_of(c, id) ? comp_scope_of(c, id)->class_id : -1);
   int vargs = vcid >= 0 ? nt_ref(nt, id, "arguments") : -1, van = 0;
   const int *vav = vargs >= 0 ? nt_arr(nt, vargs, "arguments", &van) : NULL;
   if (vav) vav += skip, van -= skip;
@@ -20921,11 +20924,8 @@ int emit_vis_word_absent(Compiler *c, int id, Buf *b) {
   int arr = van == 1 && nt_kind(nt, vav[0]) == NK_ArrayNode;
   if (arr) vav = nt_arr(nt, vav[0], "elements", &van);
   for (int vi = 0; vi < van; vi++) {
-    NodeKind vak = nt_kind(nt, vav[vi]);
-    const char *mn = NULL;
-    if (vak == NK_SymbolNode) mn = nt_str(nt, vav[vi], "value");
-    else if (vak == NK_StringNode) mn = nt_str(nt, vav[vi], "unescaped");
-    else if (vak == NK_DefNode && nt_ref(nt, vav[vi], "receiver") >= 0) mn = nt_str(nt, vav[vi], "name");
+    const char *mn = vis_arg_name(nt, vav[vi]);
+    if (!mn && nt_kind(nt, vav[vi]) == NK_DefNode && nt_ref(nt, vav[vi], "receiver") >= 0) mn = nt_str(nt, vav[vi], "name");
     if (!mn) continue;
     char wb[256]; wb[0] = '\0';
     setter_base_name(mn, wb, sizeof wb);
@@ -20936,17 +20936,20 @@ int emit_vis_word_absent(Compiler *c, int id, Buf *b) {
        between?). A method body's word has no form that applies it to a
        builtin method yet: a name it takes raises, as it did, and an
        Array's, which it read none of, still does not */
-    int found = call_target(c, id, vcid, mn, CT_NOFACE, NULL) >= 0 ||
-                call_attr_target(c, id, vcid, mn, CT_ATTR, NULL) ||
-                (wb[0] && call_attr_target(c, id, vcid, wb, CT_ATTR | CT_WRITER, NULL)) ||
-                ((g_class_body_id >= 0 || arr) && class_builtin_has_method(c, vcid, mn));
+    int mod = comp_class_is_module(c, &c->classes[vcid]);
+    int found = cm ? call_target(c, id, vcid, mn, CT_CMETHOD | CT_NOFACE, NULL) >= 0 || cplan_class_builtin_has(c, vcid, mn)
+                   : call_target(c, id, vcid, mn, CT_NOFACE, NULL) >= 0 ||
+                         call_attr_target(c, id, vcid, mn, CT_ATTR, NULL) ||
+                         (wb[0] && call_attr_target(c, id, vcid, wb, CT_ATTR | CT_WRITER, NULL)) ||
+                         ((g_class_body_id >= 0 || arr) && class_builtin_has_method(c, vcid, mn));
     if (!found) {
+      /* (the class side's is its singleton class's: `#<Class:K>`, a module's too) */
       const char *cn = class_ruby_name(c, vcid) ? class_ruby_name(c, vcid) : c->classes[vcid].name;
       buf_puts(b, "sp_raise_cls(\"NameError\", \"undefined method '");
       emit_c_escaped(b, mn);
-      buf_puts(b, comp_class_is_module(c, &c->classes[vcid]) ? "' for module '" : "' for class '");
+      buf_puts(b, cm ? "' for class '#<Class:" : mod ? "' for module '" : "' for class '");
       emit_c_escaped(b, cn);
-      buf_puts(b, "'\")");
+      buf_puts(b, cm ? ">'\")" : "'\")");
       return 1;
     }
   }

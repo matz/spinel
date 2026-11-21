@@ -313,11 +313,16 @@ the tree spells the class self is there (a class method's body, self's
 eval blocks, and a `class << self` it opens, whose word names the class
 side: `lr_body_word_frame`). A class-method word in a class method's body
 (`private_class_method :m`, `public_class_method [:a, :b]`,
-`private_class_method def self.m`) is one too, of the class side's
+`private_class_method def self.m`, or with String names,
+`private_class_method "m"`) is one too, of the class side's
 history, and so is a literal send of either word or of an instance word
 on self (`send(:private, :m)`, `vis_word_call`); a class-method word's
 `def self.m` is the def's version followed by the word's, which runs once
-its argument has. Not `module_function`, which copies, nor a
+its argument has. A class-method word whose first name no method of the
+program's has, on either side, and no builtin class method answers
+(Object's, Kernel's, Module's, Class's: `cplan_class_builtin_has`) raises
+NameError where it runs and changes nothing (`lr_cside_word_absent`). Not
+`module_function`, which copies, nor a
 `def self.m` argument, which names a class method the word looks up
 among the instance methods: that word raises NameError where it runs, as
 any word naming a method the class has none of does, in a statement or

@@ -1,0 +1,4 @@
+[NameError, "undefined method 'missing' for class '#<Class:Registry>'"]
+[NameError, "undefined method 'gone' for class '#<Class:Tools>'"]
+[1, NameError, :entry]
+[:entry, :tool, true]

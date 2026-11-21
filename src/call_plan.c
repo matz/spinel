@@ -7393,6 +7393,12 @@ static int cu_class_value_vis(int mod, const char *root, const char *name, int a
   return v > 0 && !builtin_method_answers(root, name, 1, 0) ? 0 : v;
 }
 /* See call_plan.h. */
+int cplan_class_builtin_has(Compiler *c, int ci, const char *name) {
+  int mod = comp_class_is_module(c, &c->classes[ci]), sep = '#';
+  const char *own = NULL;
+  return cu_class_value_vis(mod, mod ? NULL : cu_class_root(c, ci), name, 1, &own, &sep) > 0 || cplan_class_builtin_responds(c, ci, name);
+}
+/* See call_plan.h. */
 CplanUnrouted cplan_unrouted(Compiler *c, int id, char *owner, size_t cap, int *nil_answers) {
   const NodeTable *nt = c->nt;
   const char *name = nt_kind(nt, id) == NK_CallNode ? nt_str(nt, id, "name") : NULL;

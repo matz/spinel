@@ -1,0 +1,11 @@
+[:start, 42, true]
+[:start, 42, -2, :total]
+[:start, 42, :audit]
+[:locked, [NameError, "method 'total' for class '#<Class:Ledger>' is private"], true]
+[:locked, [NameError, "method 'total' for class '#<Class:Ledger>' is private"], -2, [NameError, "method 'total' for class '#<Class:Ledger>' is private"]]
+[:locked, 42, :audit]
+[:opened, 42, true]
+[:opened, 42, -2, :total]
+[:opened, 42, :audit]
+:peek
+[[NameError, "method 'peek' for class '#<Class:Vault>' is protected"], :peek]

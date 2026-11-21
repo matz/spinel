@@ -7,6 +7,7 @@
 #include "codegen_internal.h"
 #include "builtin_ops.h"
 #include "call_plan.h"
+#include "codegen_call_arms.h"
 
 /* The receiver's C text, emitted once. A row names it as $r, possibly
    more than once; every $r prints the same text, as the arms the rows
@@ -626,13 +627,28 @@ static int (*const bop_emitters[BOPE__COUNT])(Compiler *, const BopCtx *, Buf *)
   [BOPE_IO_SET_WINSIZE] = emit_op_io_set_winsize,
 };
 
-/* A reader of a Method whose capture raises wherever it runs (CallPlan.absent): the capture, its NameError, and the
-   row's type's zero, which nothing reads. 0 for any other row */
+/* A reader of a Method whose capture raises wherever it runs (CallPlan.absent), or where its method is closed to it
+   (CallPlan.closed): the capture, its NameError, and the row's type's zero, which nothing reads; where the capture's
+   cells tell it at the run (CP_CLOSED_RUN), the capture ahead of the row's own answer. 0 for any other row */
 static int emit_absent_method_reader(Compiler *c, const BopCtx *x, Buf *b) {
-  if (bop_family_of(x->rt) != TY_METHOD || x->op->emit == BOPE_TEMPLATE || x->recv < 0 || !cplan_method_call(c, x->id).absent) return 0;
+  if (bop_family_of(x->rt) != TY_METHOD || x->op->emit == BOPE_TEMPLATE || x->recv < 0) return 0;
+  CallPlan p = cplan_method_call(c, x->id);
+  if (!p.absent && !p.closed) return 0;
+  size_t at = b->len;
   buf_puts(b, "((void)(");
   emit_expr_for_effect(c, x->recv, b);
-  buf_printf(b, "), %s)", default_value_from_compiler(c, repr_of(c, x->id).as_ty));
+  if (p.absent || p.closed != CP_CLOSED_RUN) {
+    buf_puts(b, "), ");
+    emit_unread_value(c, x->id, b);
+    buf_puts(b, ")");
+    return 1;
+  }
+  buf_puts(b, "), ");
+  if (!bop_emitters[x->op->emit](c, x, b)) {
+    buf_erase(b, at, b->len - at);
+    return 0;
+  }
+  buf_puts(b, ")");
   return 1;
 }
 

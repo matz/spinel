@@ -16892,9 +16892,10 @@ static int struct_super_handle_arg(Compiler *c, int v, Buf *b) {
 /* self, boxed, in a method of class `cls`: a builtin's reopening holds it
    as the builtin's own C value (emit_method_signature) -- a double for a
    Float, the sp_RbVal already for an Array or Object -- and an ordinary
-   class as its object pointer. What a super into Object's (boxed-self)
-   method hands on. */
+   class as its object pointer; a class method the class value. What a
+   super into Object's (boxed-self) method hands on. */
 void emit_reopen_self_boxed(Compiler *c, Scope *s, Buf *b) {
+  if (s->is_cmethod) { emit_boxed_text(c, TY_CLASS, g_self, b); return; }
   if (repr_self_handle(c, (int)(s - c->scopes))) { emit_boxed_text(c, TY_STRBUF, g_self, b); return; }
   int cls = s->class_id;
   const char *cn = cls >= 0 ? c->classes[cls].c_name : NULL;

@@ -311,7 +311,18 @@ runs with literal names (`private :m`, `protected :a, :b`, `public [:c]`,
 a version of each name it takes, where
 the tree spells the class self is there (a class method's body, self's
 eval blocks, and a `class << self` it opens, whose word names the class
-side: `lr_body_word_frame`). Not `module_function`, which copies, nor a
+side: `lr_body_word_frame`). A class-method word in a class method's body
+(`private_class_method :m`, `public_class_method [:a, :b]`,
+`private_class_method def self.m`, or with String names,
+`private_class_method "m"`) is one too, of the class side's
+history, and so is a literal send of either word or of an instance word
+on self (`send(:private, :m)`, `vis_word_call`); a class-method word's
+`def self.m` is the def's version followed by the word's, which runs once
+its argument has. A class-method word whose first name no method of the
+program's has, on either side, and no builtin class method answers
+(Object's, Kernel's, Module's, Class's: `cplan_class_builtin_has`) raises
+NameError where it runs and changes nothing (`lr_cside_word_absent`). Not
+`module_function`, which copies, nor a
 `def self.m` argument, which names a class method the word looks up
 among the instance methods: that word raises NameError where it runs, as
 any word naming a method the class has none of does, in a statement or
@@ -390,14 +401,41 @@ gathers (`lr_body_names_read`), so each ask is a lookup:
   name the tree does not spell anywhere bars the word. The word acts on
   the class the call runs on, and the record places the version on the
   class the method is written in;
-- a class-side word (in a `class << self` body a class method opens) or
-  a class method's non-public def, where a reader that reads no
-  class-side version names it (`lr_cside_unfollowed`): a list of an
-  object's methods, a `respond_to?` or a Method maker naming it, a
-  `defined?` of a call of it, or a call or a send of it on a receiver that
-  is no constant or self. Those readers answer from the table, so a
-  version there would let a guarded call raise; the class side has no
-  face entries or visibility cells yet;
+- a class-side word (`private_class_method :m`, `public_class_method`,
+  either sent, `send(:private_class_method, :m)`, or a word in a
+  `class << self` body a class method opens) or a class method's
+  non-public def, where a reader that reads no class-side version cell
+  names it (`lr_cside_unfollowed`): a list of an object's methods the
+  cells do not answer (one that is no class's own list on a constant,
+  `list_cells_shape`), a `respond_to?` they do not answer (on a
+  constant or self one of no `respond_to_cells_shape`; on another value
+  one with no literal Symbol and include_all, `respond_to_literal_shape`,
+  whose class value's arms read no cells), a `public_method` naming it
+  other than one with a Symbol on a constant, on self or with no receiver
+  (`capture_cells_shape`), a send of one of these readers
+  (`K.send(:respond_to?, :m)`, which reads no cell), or a call or a send
+  of it with a block, which binds no face entry. Those readers answer
+  from the table, so a version there would let a guarded call raise. The
+  others read the cells: a call or a send of it on a constant, on self or
+  on a boxed value takes the class side's face entry, whose arms raise
+  for the visibility the run gives the version (`ct_face_for`, and
+  `cplan_cmethod_arm` for a boxed value's arm), a `respond_to?`, a
+  `defined?` and a class's own list read the presence cells
+  (`cplan_cmethod_presence`; a class value's arm of a `respond_to?` on
+  any other value too, `cplan_class_value_presence`), and `method`,
+  `singleton_method` and `instance_method` find a method of any
+  visibility. Each reader asks the entry a public call takes, whatever
+  its receiver (`ver_cells_reader`), so the words write the cells for it,
+  and keeps the cells of the visibilities it counts (include_all or
+  public only), none where they fix its answer at its point
+  (`ver_cmethod_cells_keep`).
+  A `public_method` of a private or protected method raises NameError
+  where the record tells that visibility at the capture and no visibility
+  word the record does not place or holds no entry of may change it
+  (`cplan_capture_closed`, `elab_method_vis_unplaced`); where a body's
+  word may have, it tests the presence cells first (`CP_CLOSED_RUN`,
+  `emit_capture_closed_cells`), and is refused where they cannot tell
+  (`CP_CLOSED_UNTOLD`); elsewhere it keeps the method;
 - a protected word or a protected def in a method body, where a call on a
   receiver other than self (or a `public_send`) in a block whose self
   nothing tells names it (`cplan_block_self_untold`: a block handed to a

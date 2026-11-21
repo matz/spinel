@@ -1,0 +1,8 @@
+:open
+[NameError, "method 'audit' for class '#<Class:Account>' is private"]
+[NameError, "method 'audit' for class '#<Class:Savings>' is private"]
+10
+[NameError, "method 'secret' for class 'Account' is private"]
+[NameError, "method 'ledger' for class 'Account' is protected"]
+[NameError, "method 'secret' for class 'Savings' is private"]
+[:secret, :audit]

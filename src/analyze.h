@@ -544,11 +544,21 @@ int elab_method_vis_varies(Compiler *c, const char *name);
 /* is call id a visibility word with names a method body runs on the class
    self is there, as the record reads it from the tree, a version of that
    body or not, where it takes no def (its value is then the word's, as in a
-   class body)? One that takes a def: is it a version of that body? */
-int elab_body_word(Compiler *c, int id);
+   class body)? One that takes a def: is it a version of that body? A
+   class-method word (private_class_method) counts only as a version. *cls:
+   the class it acts on. */
+int elab_body_word(Compiler *c, int id, int *cls);
 /* does a history of `name` hold such a word (elab_body_word), whose change
-   the record orders only against the points its body's extent spans? */
-int elab_method_body_word(Compiler *c, const char *name);
+   the record orders only against the points its body's extent spans? On
+   side sg 0 a singleton's history does not count: no singleton's method is
+   an instance method; on side 1 every one does (an extended module's words
+   reach the class side) */
+int elab_method_body_word(Compiler *c, const char *name, int sg);
+/* ...or a visibility word that may change `name` the record does not
+   place (LrDef.unplaced) or holds no entry of (a word or a section in a
+   method body or a block that is no version of it), whose change no query
+   at a point sees? */
+int elab_method_vis_unplaced(Compiler *c, const char *name);
 /* may a method `name` the program gives be protected at some point of the
    load: does one of its histories hold a protected def, alias or visibility
    word of it? 1 where the load is not recorded. */
@@ -998,6 +1008,7 @@ int class_def_path(const NodeTable *nt, int def_node);   /* the constant node it
 int mixin_stmt_args(const NodeTable *nt, int st, int *prepend, const int **av);   /* a body's receiverless include/prepend: its argument count, -1 for another node */
 const char *class_def_name(const NodeTable *nt, int def_node);   /* the constant name it writes, NULL for none */
 const char *class_def_bare_name(const NodeTable *nt, int def_node);   /* ...written as a plain constant, NULL under a path */
+const char *vis_arg_name(const NodeTable *nt, int arg);   /* a Symbol or String argument's method name (analyze_scope.c) */
 /* ...asked of the compiler: where the readers move from the name the header
    was stamped with to the class it opened (#10793) */
 const char *class_def_key(const Compiler *c, int def_node);

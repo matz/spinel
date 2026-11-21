@@ -1,0 +1,4 @@
+[:show, true]
+[Panel, NoMethodError, NoMethodError, false]
+[Panel, :show, NoMethodError, [:lost, :loud, :quiet, :show]]
+[NameError, "undefined method 'gone' for class '#<Class:Panel>'"]

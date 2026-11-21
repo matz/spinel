@@ -573,6 +573,8 @@ int method_list_vis_mask(const char *n); /* the visibilities a method list shows
 int is_instance_method_table_read(const char *n); /* is_instance_method_list names, instance_method */
 int is_class_value_reflection(const char *n); /* a listing, const_defined?, class_variable_get/set/defined?: from the receiver's class */
 extern const char SINGLETON_METHODS_NAME[];   /* "singleton_methods", the name a lookup of the class-side lists goes by */
+extern const char PUBLIC_METHOD_NAME[];   /* "public_method", the name a lookup of the captures of public methods goes by until desugared */
+extern const char METHOD_NAME[];   /* "method", the name a lookup of the captures goes by, a public_method's too once desugared (public_capture) */
 int is_singleton_method_list(const char *n); /* singleton_methods */
 int builtin_every_object_answers(const char *m, int cmeth); /* Object's own, Kernel's, Object's; with cmeth Module's too */
 int builtin_class_id_answers(int id, const char *m, int cmeth); /* the builtin class of cls_id id, or one above it, has m (cmeth: a class method) */

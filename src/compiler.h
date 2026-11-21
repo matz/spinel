@@ -2875,6 +2875,7 @@ int        self_class_body(Compiler *c, int node);
 int        attr_decl_call(Compiler *c, int id);
 enum { VIS_DECL_NIL = 1, VIS_DECL_SYM, VIS_DECL_ARRAY, VIS_DECL_SELF };
 int        vis_decl_call(Compiler *c, int id);
+int        vis_decl_class(Compiler *c, int id);   /* the class such a word acts on (a class body's, or a method body's word's), -1 for none */
 int        setter_base_name(const char *name, char *out, size_t cap);
 char      *name_dup(const char *name);
 char      *setter_name_of(const char *attr);

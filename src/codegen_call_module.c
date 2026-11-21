@@ -1415,6 +1415,16 @@ int emit_call_module_fn_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, c
     if (sp_streq(name, "groups") && argc == 0) {  /* (#3046) */
       buf_puts(b, "sp_process_groups()"); return 1;
     }
+    if ((sp_streq(name, "getrlimit") && argc == 1) ||
+        (sp_streq(name, "setrlimit") && (argc == 2 || argc == 3))) {
+      if (nt_argv_has(nt, argv, argc, NT_ARG_SPLAT | NT_ARG_KEYWORDS | NT_ARG_BLOCK))
+        unsupported(c, id, "Process.getrlimit or Process.setrlimit with a splat, keyword or block argument");
+      buf_puts(b, "({ ");
+      int first = emit_rooted_arg_list(c, argv, argc, "sp_RbVal", "SP_GC_ROOT_RBVAL", emit_boxed, NULL, b);
+      if (argc == 1) buf_printf(b, "sp_process_getrlimit(_t%d); })", first);
+      else buf_printf(b, "sp_process_setrlimit(_t%d, _t%d, _t%d); })", first, first + 1, first + argc - 1);
+      return 1;
+    }
     /* Process.daemon(nochdir = nil, noclose = nil): every argument is
        evaluated first; then, as CRuby goes, a platform with no fork raises
        NotImplementedError, the count is checked, and the flags are checked

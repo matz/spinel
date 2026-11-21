@@ -97,6 +97,7 @@ const char*sp_str_concat3(const char*a,const char*b,const char*c);
 const char*sp_str_concat4(const char*a,const char*b,const char*c,const char*d);
 const char*sp_str_concat_arr(const char *const *parts,int n);
 const char*sp_str_inspect(const char*s);
+const char *sp_str_quote_unprintable(const char *s, size_t n, int bin);
 sp_bool sp_sym_plain_name_p(const char *p, sp_bool allow_suffix);
 sp_bool sp_sym_simple_p(const char *n);
 const char *sp_sym_inspect_name(const char *name);

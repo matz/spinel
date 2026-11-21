@@ -223,6 +223,47 @@ const char*sp_str_upcase_ascii(const char*s){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv
 const char*sp_str_downcase_ascii(const char*s){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("downcase");size_t l=sp_str_byte_len(s);char*r=sp_str_alloc_raw(l+1);for(size_t i=0;i<l;i++){unsigned char ch=(unsigned char)s[i];r[i]=(ch>='A'&&ch<='Z')?(char)(ch+32):(char)ch;}r[l]=0;sp_str_set_len(r,l);return sp_str_bin_like(s,r);}
 const char*sp_str_swapcase_ascii(const char*s){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("swapcase");size_t l=sp_str_byte_len(s);char*r=sp_str_alloc_raw(l+1);for(size_t i=0;i<l;i++){unsigned char ch=(unsigned char)s[i];if(ch>='a'&&ch<='z')r[i]=(char)(ch-32);else if(ch>='A'&&ch<='Z')r[i]=(char)(ch+32);else r[i]=(char)ch;}r[l]=0;sp_str_set_len(r,l);return sp_str_bin_like(s,r);}
 const char*sp_str_capitalize_ascii(const char*s){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("capitalize");size_t l=sp_str_byte_len(s);if(l==0)return s;char*r=sp_str_alloc_raw(l+1);for(size_t i=0;i<l;i++){unsigned char ch=(unsigned char)s[i];if(i==0)r[i]=(ch>='a'&&ch<='z')?(char)(ch-32):(char)ch;else r[i]=(ch>='A'&&ch<='Z')?(char)(ch+32):(char)ch;}r[l]=0;sp_str_set_len(r,l);return sp_str_bin_like(s,r);}
+/* rb_str_quote_unprintable in CRuby's string.c; bin is set for an
+   ASCII-8BIT String */
+const char *sp_str_quote_unprintable(const char *s, size_t n, int bin) {
+  int printable = 1;
+  for (size_t i = 0; i < n && printable; i++) {
+    unsigned char ch = (unsigned char)s[i];
+    if (ch < 0x20 || ch == 0x7f || (ch >= 0x80 && bin)) printable = 0;
+    else if (ch >= 0x80) {
+      int len = sp_utf8_valid_len((const unsigned char *)s + i, n - i);
+      if (!len) { printable = 0; break; }
+      uint32_t cp = len == 2 ? ch & 0x1F : len == 3 ? ch & 0x0F : ch & 0x07;
+      for (int j = 1; j < len; j++) cp = (cp << 6) | ((unsigned char)s[i + j] & 0x3F);
+      /* rb_enc_isprint, which takes U+0085 where String#inspect escapes it */
+      if (sp_cp_inspect_escapes(cp) && cp != 0x85) printable = 0;
+      i += (size_t)len - 1;
+    }
+  }
+  if (printable) return sp_str_from_bytes(s, n);
+  size_t cap = n * 10 + 1, o = 0;
+  char *buf = (char *)malloc(cap);
+  if (!buf) return sp_str_from_bytes(s, n);
+  for (size_t i = 0; i < n; i++) {
+    unsigned char ch = (unsigned char)s[i];
+    const char *esc = ch == '\n' ? "\\n" : ch == '\r' ? "\\r" : ch == '\t' ? "\\t" : ch == '\f' ? "\\f"
+                    : ch == '\v' ? "\\v" : ch == '\b' ? "\\b" : ch == '\a' ? "\\a" : ch == 033 ? "\\e"
+                    : ch == 0x7f ? "\\c?" : ch == 0 ? "\\0" : NULL;
+    if (esc) { o += (size_t)snprintf(buf + o, cap - o, "%s", esc); continue; }
+    if (ch >= 0x20 && ch < 0x7f) { buf[o++] = (char)ch; continue; }
+    if (ch < 0x20) { o += (size_t)snprintf(buf + o, cap - o, bin ? "\\x%02X" : "\\u%04X", ch); continue; }
+    int len = bin ? 0 : sp_utf8_valid_len((const unsigned char *)s + i, n - i);
+    uint32_t cp = len == 2 ? ch & 0x1F : len == 3 ? ch & 0x0F : ch & 0x07;
+    for (int j = 1; j < len; j++) cp = (cp << 6) | ((unsigned char)s[i + j] & 0x3F);
+    if (!len) { o += (size_t)snprintf(buf + o, cap - o, "\\x%02X", ch); continue; }
+    o += (size_t)snprintf(buf + o, cap - o, cp > 0xFFFF ? "\\u{%X}" : "\\u%04X", cp);
+    i += (size_t)len - 1;
+  }
+  const char *r = sp_str_from_bytes(buf, o);
+  free(buf);
+  return r;
+}
+
 /* String#dump: a double-quoted, escaped form that sp_str_undump reverses.
    UTF-8 high bytes pass through literally (undump copies them back), so a
    dump/undump round-trip is byte-identical. */

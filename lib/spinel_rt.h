@@ -19485,6 +19485,47 @@ sp_Time *sp_file_ctime(const char *path);
 sp_Time *sp_file_birthtime(const char *path);
 sp_int sp_process_getpriority(sp_int which, sp_int who);
 sp_IntArray *sp_process_groups(void);
+/* Process.getrlimit / setrlimit (lib/sp_cold.c). A Symbol or String names
+   the resource ("NOFILE") or the value ("INFINITY"). */
+sp_PolyArray *sp_process_getrlimit_at(sp_RbVal res, const char *name);
+sp_RbVal sp_process_rlim_const(int k);
+int sp_process_rlim_defined(int k);
+sp_int sp_process_rlimit_id(const char *name);
+int sp_process_rlimit_defined(const char *name);
+unsigned long long sp_process_rlimit_value(sp_RbVal v, const char *name);
+int sp_process_rlimit_resource(sp_RbVal v, const char *name);
+void sp_process_setrlimit_ids(int res, unsigned long long cur, unsigned long long max);
+static inline const char *sp_process_rlimit_name(sp_RbVal v) {
+  if (v.tag == SP_TAG_SYM) return sp_sym_to_s((sp_sym)v.v.i);
+  if (sp_rbval_is_string(v)) return sp_rbval_string_bytes(v);
+  return NULL;
+}
+/* rb_check_string_type: an object with #to_str is read as its String */
+static inline sp_RbVal sp_process_rlimit_str(sp_RbVal v) {
+  if (!sp_poly_is_user_obj(v)) return v;
+  SP_GC_ROOT_RBVAL(v);
+  const char *s = sp_poly_check_str(v);
+  return s ? sp_box_str_new(s) : v;
+}
+static inline sp_PolyArray *sp_process_getrlimit(sp_RbVal res) {
+  res = sp_process_rlimit_str(res);
+  SP_GC_ROOT_RBVAL(res);
+  return sp_process_getrlimit_at(res, sp_process_rlimit_name(res));
+}
+/* proc_setrlimit: a nil hard limit is the soft limit's value, and each
+   value converts in full before the next */
+static inline void sp_process_setrlimit(sp_RbVal res, sp_RbVal cur, sp_RbVal max) {
+  SP_GC_ROOT_RBVAL(res);
+  SP_GC_ROOT_RBVAL(cur);
+  SP_GC_ROOT_RBVAL(max);
+  if (max.tag == SP_TAG_NIL) max = cur;
+  cur = sp_process_rlimit_str(cur);
+  unsigned long long c = sp_process_rlimit_value(cur, sp_process_rlimit_name(cur));
+  max = sp_process_rlimit_str(max);
+  unsigned long long m = sp_process_rlimit_value(max, sp_process_rlimit_name(max));
+  res = sp_process_rlimit_str(res);
+  sp_process_setrlimit_ids(sp_process_rlimit_resource(res, sp_process_rlimit_name(res)), c, m);
+}
 /* Process.daemon (lib/sp_process.c). Its flags are true, false or nil, as
    CRuby's TO_BOOL takes them; anything else is the ArgumentError it raises. */
 sp_int sp_process_daemon(int nochdir, int noclose);

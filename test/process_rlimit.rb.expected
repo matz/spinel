@@ -1,0 +1,52 @@
+true
+true
+Integer
+true
+nil
+64
+48
+[0, 0]
+0
+true
+[ArgumentError, "invalid resource name: nofile"]
+[ArgumentError, "invalid resource name: FOO"]
+[ArgumentError, "string contains null byte"]
+[ArgumentError, "invalid resource name: NOFILE\\0x"]
+[ArgumentError, "invalid resource name: no\\nfile"]
+[ArgumentError, "invalid resource name: \\u00E9\\u0001"]
+[ArgumentError, "invalid resource name: \\x85"]
+[ArgumentError, "invalid resource name: \\xED\\xA0\\x80"]
+[ArgumentError, "invalid resource name: \\xED\\xA0\\x80\\u0001"]
+[ArgumentError, "invalid resource name: \\u0080"]
+[ArgumentError, "invalid resource name: \u0085"]
+[ArgumentError, "invalid resource name: \\u2028"]
+[ArgumentError, "invalid resource name: no\\x01file"]
+[ArgumentError, "invalid resource name: \\u00E9\\u0001"]
+6023
+[TypeError, "no implicit conversion from nil to integer"]
+[TypeError, "no implicit conversion of true into Integer"]
+[RangeError, "integer 1099511627776 too big to convert to 'int'"]
+[ArgumentError, "invalid resource value: FOO"]
+[ArgumentError, "string contains null byte"]
+[ArgumentError, "invalid resource value: SAVED"]
+[ArgumentError, "string contains null byte"]
+[TypeError, "no implicit conversion of nil into Integer"]
+[TypeError, "no implicit conversion of true into Integer"]
+RangeError
+RangeError
+RangeError
+RangeError
+RangeError
+[Errno::EINVAL, "Invalid argument - getrlimit"]
+[ArgumentError, "wrong number of arguments (given 1, expected 2..3)"]
+true
+true
+44
+[ArgumentError, "invalid resource name: nofile"]
+[ArgumentError, "string contains null byte"]
+[ArgumentError, "invalid resource value: NOFILE"]
+to_str cur
+[ArgumentError, "invalid resource value: cur"]
+[40, 40]
+"constant"
+true

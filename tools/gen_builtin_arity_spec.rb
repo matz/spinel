@@ -185,7 +185,7 @@ CLASS_TARGETS = {
   "Integer" => %w[sqrt try_convert],
   "Math"    => %w[sqrt cbrt sin cos tan asin acos atan atan2 sinh cosh tanh asinh acosh
                   atanh log log2 log10 exp hypot ldexp frexp erf erfc gamma lgamma],
-  "Process" => %w[getpriority setpriority getsid kill clock_gettime clock_getres pid ppid
+  "Process" => %w[getpriority setpriority getrlimit setrlimit getsid kill clock_gettime clock_getres pid ppid
                   uid gid euid egid setproctitle times spawn waitpid2 wait2 wait waitpid
                   exec last_status],
   "Regexp"  => %w[new escape quote try_convert last_match union],

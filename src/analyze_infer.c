@@ -5068,6 +5068,9 @@ static int infer_builtin_cmethod_call(Compiler *c, int id, const NodeTable *nt, 
           sp_streq(name, "daemon") ||
           (sp_streq(name, "getpriority") && argc == 2)) { *out = TY_INT; return 1; }
       if (sp_streq(name, "groups") && argc == 0) { *out = TY_INT_ARRAY; return 1; }
+      /* an RLIM_INFINITY above the Integer range is a Bignum */
+      if (sp_streq(name, "getrlimit") && argc == 1) { *out = TY_POLY_ARRAY; return 1; }
+      if (sp_streq(name, "setrlimit") && (argc == 2 || argc == 3)) { *out = TY_NIL; return 1; }
       if (sp_streq(name, "clock_gettime") || sp_streq(name, "clock_getres")) {
         /* an integer unit (:nanosecond/:microsecond/:millisecond/:second) makes
            the result an Integer; the default and float units keep it Float. */
@@ -11132,8 +11135,12 @@ static int infer_constant_path(Compiler *c, int id, const NodeTable *nt, NodeKin
     if (nm && (sp_streq(nm, "CLOCK_MONOTONIC") || sp_streq(nm, "CLOCK_REALTIME") ||
                sp_streq(nm, "CLOCK_PROCESS_CPUTIME_ID") || sp_streq(nm, "CLOCK_THREAD_CPUTIME_ID") ||
                sp_streq(nm, "PRIO_PROCESS") || sp_streq(nm, "PRIO_PGRP") || sp_streq(nm, "PRIO_USER") ||
-               sp_streq(nm, "WNOHANG") || sp_streq(nm, "WUNTRACED")))
+               sp_streq(nm, "WNOHANG") || sp_streq(nm, "WUNTRACED") ||
+               process_rlimit_const(nm)))
       { *out = TY_INT; return 1; }
+    /* RLIM_INFINITY is a Bignum where rlim_t's maximum passes the Integer range */
+    if (nm && (sp_streq(nm, "RLIM_INFINITY") || sp_streq(nm, "RLIM_SAVED_MAX") ||
+               sp_streq(nm, "RLIM_SAVED_CUR"))) { *out = TY_POLY; return 1; }
   }
   if (par_nm && sp_streq(par_nm, "Integer")) {
     if (nm && (sp_streq(nm, "MAX") || sp_streq(nm, "MIN"))) { *out = TY_UNKNOWN; return 1; } /* raises NameError */

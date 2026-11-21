@@ -34,3 +34,6 @@ nil
 [ArgumentError, "unknown unpack directive '\\x1b' in 'C\\eC\\ty'"]
 [ArgumentError, "unknown unpack directive '\\xc3' in 'Cé'"]
 [ArgumentError, "unknown unpack directive '\\xff' in 'C\\xFFC'"]
+[ArgumentError, "unknown unpack directive '\\xc2' in 'C\\u0080y'"]
+[ArgumentError, "unknown unpack directive '\\xe2' in 'C\\u2028y'"]
+[ArgumentError, "unknown unpack directive '\\xc2' in 'C\u0085y'"]

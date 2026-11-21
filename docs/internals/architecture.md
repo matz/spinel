@@ -194,7 +194,9 @@ A catch remembers the active Proc return homes at entry. A throw
 restores that chain when it lands, retiring the homes of exited methods
 while keeping homes in the enclosing calls.
 An untyped begin in value position uses a boxed result slot across rescue
-and ensure. A tail break transfers control to its statement owner before
+and ensure. When the enclosing slot holds an optional number, it receives
+the boxed result through the same nil-preserving conversion as a return.
+A tail break transfers control to its statement owner before
 the enclosing expression can store a fall-through value.
 A receiver-answering iterator at method tail keeps its receiver in the
 operand view across the block and returns it through the physical result

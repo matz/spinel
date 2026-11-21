@@ -361,15 +361,27 @@ versions, until the readers it needs read the version cells; each says
 in the source what drops it. They ask what one walk over the tree
 gathers (`lr_body_names_read`), so each ask is a lookup:
 
-- a word on a module's method, on a name a module body defines (a def,
-  an attribute, a `define_method`, an `alias_method` or an `alias`), or
-  on a name the class does not define itself on the word's side
-  (`lr_body_word_barred`): an include, extend or prepend copy carries
-  the module's def versions only, not a word's, and an inherited method
-  keeps its own visibility until the word runs, where a version would be
-  the word's from the start. A name nothing defines has no method a
-  reader may count: the word raises NameError where it runs, and a
-  version would make the readers count it;
+- a word on a name the class does not define itself on the word's side
+  (`lr_body_word_barred`): an inherited method keeps its own visibility
+  until the word runs, where a version would be the word's from the
+  start. A name nothing defines has no method a reader may count: the
+  word raises NameError where it runs, and a version would make the
+  readers count it. A word in a module's body on the module's own method
+  is no bar: it is a version of the module's history as a class's is, and
+  every copy reads it. An include, extend or prepend copy holds the
+  module's def versions, whose arms ask the module's visibility cell the
+  word writes: a chain's face entry (`ct_face_for`), a late layer's face
+  entry and a guard entry's arm ("Late layers of a class's chain" below),
+  and a protected version, closed to a caller whose class does not
+  include the module (`ver_protected_closed`). A module's own presence
+  readers (`M.private_method_defined?` and its kin) read the cells of the
+  histories on the module's chain, which a call guard over them writes
+  (`VerGuard.vis`, `pres_module_cells`): no entry stands over them, as no
+  call runs on a module's instance side. Its own lists
+  (`M.private_instance_methods(false)`) test the visibilities they show.
+  At a load point that surely follows the word, a class's or a module's
+  presence readers and own lists take the record's visibility
+  (`cplan_program_method_vis`, `cplan_own_list_vis`);
 - any body word in a program that defines `method_missing` or
   `respond_to_missing?`: the entry's else arm and the presence readers
   answer from the table there;
@@ -679,6 +691,18 @@ layer is made once, whatever reaches it:
   entry's;
 - `Method#super_method` writes one Method for each of the entry's arms, as a
   capture of an entry does (`cplan_super_method_target`).
+
+A call that enforces visibility, where a version on the chain takes a
+visibility only the run tells (a word in a method body), takes the layer's
+face entry (`ct_layer_face`, kept beside the plain one by its face): the arm
+of a version closed to the call raises, and the arm of a version whose
+visibility only the run tells asks the version's visibility cell first
+(`ver_vis_arm`), as the chain's face entry does; its else arm is the face's
+entry of what lies behind. A guard entry's arms do the same for the module
+version each guarded copy runs (`guard_version_vis`), and the layer a
+guarded arm calls takes the arm's face (`guard_arm_face`), so it tests its
+own versions; the presence readers read the guard's cells
+(`cplan_guarded_presence`), each copy's visibility from its version's cell.
 
 The pin of an entry's arm, and of its else arm, is static: it binds the
 method of a class the receiver's class is at or below, whatever the

@@ -2782,13 +2782,12 @@ static int lr_body_word_frame(Compiler *c, const int *par, int n, int node) {
   lr_word_side(c, par, n, node, -1, &cls, &sg);
   return cls >= 0 && !lr_chain_open(c, cls);
 }
-/* ...or does a bar keep the word's names in the form they have where the record holds no body versions? Two:
-   - the word changes a module's method, or a name a module body defines: an include, extend or prepend copy
-     carries the module's def versions only, not the word's, so the class would keep the copy's public answer
-     after the word ran (dropped once the copies carry the word's versions);
-   - the program defines method_missing or respond_to_missing? (mm): the entry's else arm and the presence
-     readers answer from the table there, and a word's version leaves the name out of it, so a call after the
-     word would reach the method, not method_missing (dropped once those read the cells) */
+/* ...or does a bar keep the word's names in the form they have where the record holds no body versions? One:
+   the program defines method_missing or respond_to_missing? (mm): the entry's else arm and the presence
+   readers answer from the table there, and a word's version leaves the name out of it, so a call after the
+   word would reach the method, not method_missing (dropped once those read the cells). A word on a module's
+   method is a version as any other: the copies an include, extend or prepend makes are the module's def
+   versions, whose arms read the module's visibility cell the word writes. */
 static int lr_call_defines(Compiler *c, const char *nm, int direct, int depth);
 /* ...does the method body around node (lr_body_around; none: yes) call only
    code the record can follow? Each call it makes itself (in no def nested
@@ -2863,7 +2862,7 @@ static int lr_body_followed(Compiler *c, const int *par, int n, int node) {
      wherever it is */
 typedef struct LrBodyNames {
   ANameIndex own, sites, hkey;
-  ANameHash mod, cread, unsure, cw, subs, prot, untold, defd;
+  ANameHash cread, unsure, cw, subs, prot, untold, defd;
   const int *par;
   char **keys;
   unsigned char *kdone;
@@ -2888,18 +2887,12 @@ static int lr_body_header(const NodeTable *nt, const int *par, int n, int node) 
 }
 /* ...a definition of name nm at node, on the class lr_body_frame places it
    on (self: as where self is, a call's or a `def self.m`'s; -1, none the
-   tree spells: only a module body's is read), on its class side for a
+   tree spells: only the name is read), on its class side for a
    `def self.m` (sg) or in a `class << self` */
 static void lr_body_names_own(Compiler *c, const int *par, int n, int node, int self, int sg, const char *nm, int w, LrBodyNames *x) {
-  const NodeTable *nt = c->nt;
   int fs = LR_FS_NONE, cls = nm && self >= 0 ? lr_body_frame(c, par, n, node, -1, self, &fs) : -1;
   if (nm) anh_add(&x->defd, nm);
   if (cls >= 0 && cls < c->nclasses) ani_add(&x->own, nm, 4 * cls + 2 * (sg || fs == LR_FS_SCLASS || fs == LR_FS_IEVAL_SCLASS) + w);
-  for (int v = node, p; nm && v >= 0 && v < n && (p = par[v]) >= 0 && p < n; v = p)
-    if (nt_kind(nt, p) == NK_ClassNode || nt_kind(nt, p) == NK_ModuleNode) {
-      if (nt_kind(nt, p) == NK_ModuleNode) anh_add(&x->mod, nm);
-      break;
-    }
 }
 static int lr_defines_const_missing(const NodeTable *nt, int id);
 static const char *lr_body_ref_key(Compiler *c, LrBodyNames *x, const char *leaf, int depth);
@@ -3107,7 +3100,7 @@ static void lr_body_names_read(Compiler *c, const int *par, int n, LrBodyNames *
 }
 static void lr_body_names_free(LrBodyNames *x) {
   ani_free(&x->own); ani_free(&x->sites);
-  anh_free(&x->mod); anh_free(&x->cread); anh_free(&x->unsure); anh_free(&x->cw); anh_free(&x->subs);
+  anh_free(&x->cread); anh_free(&x->unsure); anh_free(&x->cw); anh_free(&x->subs);
   anh_free(&x->prot); anh_free(&x->untold); anh_free(&x->defd);
   for (int i = 0; x->keys && i < x->hkey.n; i++) free(x->keys[i]);
   ani_free(&x->hkey);
@@ -3132,13 +3125,6 @@ static int lr_body_names_owns(const LrBodyNames *x, int cls, int sg, const char 
   for (int i = base ? ani_first(&x->own, base) : x->own.n; i < x->own.n && sp_streq(x->own.e[i].name, base); i++)
     if (x->own.e[i].v == 4 * cls + 2 * sg + 1) return 1;
   return 0;
-}
-/* ...does a module body define nm (a writer `nm=` through its attribute's
-   name, which mod holds for both)? */
-static int lr_body_names_mod(const LrBodyNames *x, const char *nm) {
-  char buf[256];
-  const char *base = lr_writer_base(nm, buf, sizeof buf);
-  return anh_has(&x->mod, nm) || (base && anh_has(&x->mod, base));
 }
 /* ...is class-side name nm (a class method's) read by a reader that reads
    no class-side version's visibility cell: a list of an object's methods
@@ -3216,16 +3202,14 @@ static int lr_body_self_unsure(Compiler *c, LrBodyNames *x, int d, int cls) {
   return 0;
 }
 /* ...does a body's word at node bar its names (lr_body_forms), keeping the
-   unplaced form? In a program that defines method_missing, on a module
-   (an include, extend or prepend copy carries the module's def versions
-   only), in a body that may reach code the record cannot follow
-   (lr_body_followed), in a class method a call may run on a subclass
-   (lr_body_self_unsure); and for a name the class does not define itself
-   on that side (a version would be the word's from the start, where an
-   inherited method's visibility holds until the word runs, and a name
-   nothing defines has no method a reader may count: the word raises
-   NameError where it runs, emit_vis_word_absent), one a module
-   body defines, or, on the class side, one a reader that reads no
+   unplaced form? In a program that defines method_missing, in a body that
+   may reach code the record cannot follow (lr_body_followed), in a class
+   method a call may run on a subclass (lr_body_self_unsure); and for a
+   name the class does not define itself on that side (a version would be
+   the word's from the start, where an inherited method's visibility holds
+   until the word runs, and a name nothing defines has no method a reader
+   may count: the word raises NameError where it runs,
+   emit_vis_word_absent), or, on the class side, one a reader that reads no
    class-side version names (lr_cside_unfollowed); and for a method body's
    protected word, a name a call in a block whose self nothing tells calls
    (untold): the call plan takes the scope's self there, which a protected
@@ -3234,13 +3218,13 @@ static int lr_body_word_barred(Compiler *c, const int *par, int n, int node, LrB
   const NodeTable *nt = c->nt;
   int cls, sg;
   lr_word_side(c, par, n, node, -1, &cls, &sg);
-  if (x->mm || (cls >= 0 && cls < c->nclasses && comp_class_is_module(c, &c->classes[cls])) || !lr_body_followed(c, par, n, node) ||
+  if (x->mm || !lr_body_followed(c, par, n, node) ||
       lr_body_self_unsure(c, x, lr_body_cmethod(nt, par, n, node), cls))
     return 1;
   int untold = lr_body_word(nt, node) == BVIS_PROTECTED && lr_body_def(nt, par, n, node) >= 0;
   for (int k = 0; lr_word_name(nt, node, k, 1); k++) {
     const char *nm = lr_word_name(nt, node, k, 1);
-    if (!lr_body_names_owns(x, cls, sg, nm) || lr_body_names_mod(x, nm) || (sg && lr_cside_unfollowed(x, nm)) ||
+    if (!lr_body_names_owns(x, cls, sg, nm) || (sg && lr_cside_unfollowed(x, nm)) ||
         (untold && anh_has(&x->untold, nm)))
       return 1;
   }

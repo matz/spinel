@@ -1,0 +1,5 @@
+[:before, false, true, true, true, true, false]
+[:before, false, true]
+[:after, true, false, false, false, true, false]
+[:after, true, false]
+[[:m], [:n, :q], [:a], [:b]]

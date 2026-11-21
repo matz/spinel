@@ -1,9 +1,8 @@
 # A body's word or non-public def that no reader can follow yet keeps the
-# form it has where the record holds no body versions: a word on a
-# module's method (its include copies carry no word versions), any word
-# in a program that defines method_missing, and a non-public def in a
-# body whose calls reach a send. Each still answers once its body ran,
-# where that form gives CRuby's answer.
+# form it has where the record holds no body versions: any word in a
+# program that defines method_missing (also one on a module's method),
+# and a non-public def in a body whose calls reach a send. Each still
+# answers once its body ran, where that form gives CRuby's answer.
 module M
   def q = :q
 end

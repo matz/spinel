@@ -2560,20 +2560,28 @@ static int lr_body_self(Compiler *c, const int *par, int n, int node, int e) {
 }
 
 /* A visibility word a method body runs on the methods it names
-   (`private :m`, `protected :a, :b`, `public [:c]`, `private def m`): one
-   with no receiver but self and at least one argument, each a literal name
-   or a def with no receiver, or one array of names. Its visibility (BVIS_*), else 0; a bare word
-   there changes nothing, and module_function's copies are left out. */
+   (`private :m`, `protected :a, :b`, `public [:c]`, `private def m`), or
+   on the class methods it names (`private_class_method :m`,
+   `public_class_method def self.m`): one with no receiver but self and
+   at least one argument, each a literal name or a def (with no receiver
+   for an instance word, on self for a class-method word), or one array of
+   names. Its visibility (BVIS_*), else 0; a bare word there changes
+   nothing, and module_function's copies are left out. */
 static int lr_body_word(const NodeTable *nt, int node) {
-  int bvis = nt_kind(nt, node) == NK_CallNode ? visibility_of_name(nt_str(nt, node, "name")) : 0;
+  const char *wn = nt_kind(nt, node) == NK_CallNode ? nt_str(nt, node, "name") : NULL;
+  int cside = class_method_vis_of_name(wn) != 0, bvis = cside ? class_method_vis_of_name(wn) : visibility_of_name(wn);
   int rv = bvis ? nt_ref(nt, node, "receiver") : -1, an = bvis ? nt_ref(nt, node, "arguments") : -1, ac = 0;
   const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
   if (!ac || bvis == BVIS_MODULE_FUNCTION || (rv >= 0 && nt_kind(nt, rv) != NK_SelfNode)) return 0;
   for (int i = 0; i < ac; i++) {
     int en = 1;
     const int *ev = nt_kind(nt, av[i]) == NK_ArrayNode ? nt_arr(nt, av[i], "elements", &en) : &av[i];
-    /* (a `def self.m` makes a class method, whose name the word looks up among the instance methods: NameError) */
-    if (nt_kind(nt, av[i]) == NK_DefNode && nt_ref(nt, av[i], "receiver") >= 0) return 0;
+    /* (an instance word's `def self.m` makes a class method, whose name the word looks up among the instance
+       methods: NameError; a class-method word's `def m` the other way round, and one on another object) */
+    if (nt_kind(nt, av[i]) == NK_DefNode) {
+      int dr = nt_ref(nt, av[i], "receiver");
+      if (cside ? dr < 0 || nt_kind(nt, dr) != NK_SelfNode : dr >= 0) return 0;
+    }
     /* (an Array only as the one argument: CRuby raises TypeError at a mixed word, `private :m, [:n]`, past the
        names ahead of the Array) */
     if (nt_kind(nt, av[i]) == NK_ArrayNode && ac > 1) return 0;
@@ -2581,6 +2589,10 @@ static int lr_body_word(const NodeTable *nt, int node) {
       if (!vis_arg_name(nt, ev[k]) && (ev != &av[i] || nt_kind(nt, av[i]) != NK_DefNode)) return 0;
   }
   return bvis;
+}
+/* ...does such a word name class methods (private_class_method, public_class_method)? */
+static int lr_body_word_cside(const NodeTable *nt, int node) {
+  return class_method_vis_of_name(nt_str(nt, node, "name")) != 0;
 }
 /* ...the k-th literal name such a word takes (its arguments, an array's
    elements in their place), NULL past the last */
@@ -2596,6 +2608,21 @@ static const char *lr_word_name(const NodeTable *nt, int word, int k) {
     }
   }
   return NULL;
+}
+/* ...the class and side such a word at node acts on, as lr_body_frame
+   reads self there (e: the statement the receivers are read at, -1 for
+   none): an instance word the instance side of the class self is (in a
+   `class << x` body, x's singleton: the class side), a class-method word
+   the class side of the class self is (none in a `class << x` body, whose
+   self is a singleton class). *cls below LR_MAIN for none. */
+static void lr_word_side(Compiler *c, const int *par, int n, int node, int e, int *cls, int *sg) {
+  int fs;
+  *cls = lr_body_frame(c, par, n, node, e, 1, &fs);
+  *sg = fs == LR_FS_SCLASS || fs == LR_FS_IEVAL_SCLASS;
+  if (lr_body_word_cside(c->nt, node)) {
+    if (fs != LR_FS_NONE) *cls = LR_UNKNOWN_CLASS;
+    *sg = 1;
+  }
 }
 
 /* The history a definer at node (no point) writes: def node d's, by its
@@ -2616,7 +2643,7 @@ static int lr_body_target(Compiler *c, const int *par, int n, int d, int walk, i
   LoadRecord *r = c->lrec;
   int e = d >= 0 && d < r->n ? r->at[d] : -1, rv = nt_ref(nt, d, "receiver"), rk = rv >= 0 ? nt_def_receiver(nt, rv) : -1, fs;
   if (e < 0) return 0;
-  if (nt_kind(nt, d) == NK_CallNode) *cls = lr_body_frame(c, par, n, d, e, 1, &fs), *sg = fs == LR_FS_SCLASS;
+  if (nt_kind(nt, d) == NK_CallNode) lr_word_side(c, par, n, d, e, cls, sg);
   else if (rk >= 0) *cls = nt_kind(nt, rk) == NK_SelfNode ? lr_body_self(c, par, n, d, e) : lr_body_const(c, rk, e, walk), *sg = 1;
   else *cls = lr_body_frame(c, par, n, d, e, 0, &fs), *sg = fs != LR_FS_NONE;
   if (*cls < LR_MAIN || lr_chain_open(c, *cls)) return 0;
@@ -2629,7 +2656,7 @@ static int lr_body_target(Compiler *c, const int *par, int n, int d, int walk, i
 
 /* The visibility def node d, which a body around it makes (lr_body_around),
    has where it runs (BVIS_*): a visibility word's that takes it (`private
-   def m`), else for a def with no receiver the last bare word before it in
+   def m`, `private_class_method def self.m`), else for a def with no receiver the last bare word before it in
    its statement list (`private` then `def m`) unless a method's body holds
    the list (blocks and lambdas between count as the frame around them:
    in a method a bare word only warns), else private for an instance
@@ -2638,6 +2665,8 @@ static int lr_body_def_vis(const NodeTable *nt, const int *par, int n, int d, in
   int a = d < n ? par[d] : -1, w = a >= 0 && nt_kind(nt, a) == NK_ArgumentsNode ? par[a] : -1;
   if (w >= 0 && nt_kind(nt, w) == NK_CallNode && nt_ref(nt, w, "receiver") < 0) {
     int v = visibility_of_name(nt_str(nt, w, "name"));
+    /* (`private_class_method def self.m`: the class method's) */
+    if (!v && nt_ref(nt, d, "receiver") >= 0) v = class_method_vis_of_name(nt_str(nt, w, "name"));
     if (v && v != BVIS_PUBLIC) return v;
   }
   if (!sg && is_implicitly_private_name(nt_str(nt, d, "name"))) return BVIS_PRIVATE;
@@ -2744,7 +2773,8 @@ static int lr_frame_main(const NodeTable *nt, const int *par, int n, int node) {
    (lr_body_target)? Such a word's target is known where it runs, so it is a version; any other word bars its names:
    it would be neither, and run from the start where the record holds no versions (lr_unplaced_words). */
 static int lr_body_word_frame(Compiler *c, const int *par, int n, int node) {
-  int fs, cls = lr_body_frame(c, par, n, node, -1, 1, &fs);
+  int cls, sg;
+  lr_word_side(c, par, n, node, -1, &cls, &sg);
   return cls >= 0 && !lr_chain_open(c, cls);
 }
 /* ...or does a bar keep the word's names in the form they have where the record holds no body versions? Two:
@@ -3182,7 +3212,8 @@ static int lr_body_self_unsure(Compiler *c, LrBodyNames *x, int d, int cls) {
    version would close where the block runs with an instance of the class */
 static int lr_body_word_barred(Compiler *c, const int *par, int n, int node, LrBodyNames *x) {
   const NodeTable *nt = c->nt;
-  int fs, cls = lr_body_frame(c, par, n, node, -1, 1, &fs), sg = fs == LR_FS_SCLASS || fs == LR_FS_IEVAL_SCLASS;
+  int cls, sg;
+  lr_word_side(c, par, n, node, -1, &cls, &sg);
   if (x->mm || (cls >= 0 && cls < c->nclasses && comp_class_is_module(c, &c->classes[cls])) || !lr_body_followed(c, par, n, node) ||
       lr_body_self_unsure(c, x, lr_body_cmethod(nt, par, n, node), cls))
     return 1;
@@ -3377,14 +3408,23 @@ static int lr_body_held(Compiler *c, int def) {
    and answers its names. One that takes a def answers only as the def's version, the record's kept answer,
    which lr_unplaced_words asks of every body word a late body holds: unplaced, it keeps the form that refuses
    it. Neither ask adds a history, so one a reader holds stays where it is) */
-int elab_body_word(Compiler *c, int id) {
+int elab_body_word(Compiler *c, int id, int *cls) {
   const NodeTable *nt = c->nt;
   LoadRecord *r = c->lrec;
   const int *par = !r || !r->recorded ? NULL : lr_par(c, 1);
-  int cls = LR_UNKNOWN_CLASS, sg, an = 0, ad = 0;
+  int sg, an = 0, ad = 0;
+  *cls = LR_UNKNOWN_CLASS;
   if (!par || id >= r->n || !lr_body_word(nt, id) || lr_body_around(nt, par, r->n, id) < 0 ||
-      !lr_body_target(c, par, r->n, id, 0, &cls, &sg) || cls < 0)
+      !lr_body_target(c, par, r->n, id, 0, cls, &sg) || *cls < 0)
     return 0;
+  /* (a class-method word is one only as its version: the record keeps no unplaced form of it, whose names a barred
+     one would leave as the table has them, where CRuby changes them) */
+  if (lr_body_word_cside(nt, id)) {
+    const LrHist *wh = lr_word_name(nt, id, 0) ? lr_hist(r, *cls, 1, lr_word_name(nt, id, 0), 0) : NULL;
+    int have = 0;
+    for (int j = 0; wh && j < wh->n && !have; j++) have = wh->v[j].node == id && wh->v[j].body;
+    if (!have && lr_word_name(nt, id, 0)) return 0;
+  }
   const int *av = nt_arr(nt, nt_ref(nt, id, "arguments"), "arguments", &an);
   for (int i = 0; i < an; i++) ad |= nt_kind(nt, av[i]) == NK_DefNode;
   const LrHist *h = ad ? lr_hist(r, LR_KEY_HELD, id, "", 0) : NULL;
@@ -4263,7 +4303,8 @@ static void lr_body_defs(Compiler *c, int ci, int body, int fnode) {
 
 /* Does def node d run whenever the body around it does (lr_body_around),
    once the body gets past its start: a statement of the body's own list (in
-   parentheses, or the argument of a call: `private def m`), after no
+   parentheses, the argument of a call, `private def m`, or a statement of
+   a `class << self` body there), after no
    statement of it, argument before it or receiver of its call that may
    leave the body early (a return, a break, a next, a throw)? A def under a
    condition, in a rescued begin, in a block of its own or after an early
@@ -4287,6 +4328,8 @@ static int lr_runs_with_body(const NodeTable *nt, const int *par, int n, int d, 
     }
     /* (the receiver runs before the arguments) */
     else if (k == NK_CallNode && nt_ref(nt, p, "arguments") == v) { if (lr_jumps(nt, nt_ref(nt, p, "receiver"))) return 0; }
+    /* (a `class << self` body runs whenever its statement does) */
+    else if (k == NK_SingletonClassNode) { if (nt_ref(nt, p, "body") != v || nt_kind(nt, nt_ref(nt, p, "expression")) != NK_SelfNode) return 0; }
     else if (k != NK_ParenthesesNode) return 0;
   }
   return 0;

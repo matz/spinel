@@ -247,7 +247,7 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
       free(wb.p);
     }
     if (vk == VIS_DECL_NIL) buf_puts(b, "0");
-    else if (vk == VIS_DECL_SELF) buf_printf(b, "((sp_Class){%d})", self_class_body(c, id));
+    else if (vk == VIS_DECL_SELF) buf_printf(b, "((sp_Class){%d})", vis_decl_class(c, id));
     else if (vk == VIS_DECL_SYM) {
       const char *vn = nt_kind(nt, argv[0]) == NK_DefNode ? nt_str(nt, argv[0], "name")
                                                           : nt_str(nt, argv[0], "value");

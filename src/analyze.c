@@ -5701,7 +5701,14 @@ int self_class_body(Compiler *c, int node) {
    one Symbol or def (VIS_DECL_SYM), and the Array of names otherwise
    (VIS_DECL_ARRAY). private_class_method / public_class_method naming
    Symbols or `def self.m`s answer the class itself (VIS_DECL_SELF). 0 when
-   `id` is not one of these. */
+   `id` is not one of these. A method body's word counts where the record
+   reads the class self is there (elab_body_word): vis_decl_class, the
+   class a class body's or a body's word acts on, -1 for none. */
+int vis_decl_class(Compiler *c, int id) {
+  int cls = self_class_body(c, id);
+  if (cls < 0 && !elab_body_word(c, id, &cls)) cls = -1;
+  return cls;
+}
 int vis_decl_call(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   if (id < 0 || nt_kind(nt, id) != NK_CallNode || nt_ref(nt, id, "receiver") >= 0) return 0;
@@ -5715,7 +5722,7 @@ int vis_decl_call(Compiler *c, int id) {
      NoMethodError on main. In a top-level def self is the receiver, which
      self_is_main does not tell apart. A method body's word on the class
      self is there, as the record reads it, answers as a class body's.) */
-  if (self_class_body(c, id) < 0 && !elab_body_word(c, id)) {
+  if (vis_decl_class(c, id) < 0) {
     Scope *ms = comp_scope_of(c, id);
     if (!(ms && ms->def_node < 0 && self_is_main(c, id) && (vis == BVIS_PRIVATE || vis == BVIS_PUBLIC))) return 0;
   }

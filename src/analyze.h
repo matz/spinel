@@ -544,8 +544,10 @@ int elab_method_vis_varies(Compiler *c, const char *name);
 /* is call id a visibility word with names a method body runs on the class
    self is there, as the record reads it from the tree, a version of that
    body or not, where it takes no def (its value is then the word's, as in a
-   class body)? One that takes a def: is it a version of that body? */
-int elab_body_word(Compiler *c, int id);
+   class body)? One that takes a def: is it a version of that body? A
+   class-method word (private_class_method) counts only as a version. *cls:
+   the class it acts on. */
+int elab_body_word(Compiler *c, int id, int *cls);
 /* does a history of `name` hold such a word (elab_body_word), whose change
    the record orders only against the points its body's extent spans? */
 int elab_method_body_word(Compiler *c, const char *name);

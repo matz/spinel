@@ -1,0 +1,6 @@
+file with content-length: length 40000, 40000 bytes, sum 636043 (sent sum 636043)
+chunked, the sizes of its chunks: 4000 4000 1c40 0 
+chunked and empty: 0 
+neither: Content-Length not given and Transfer-Encoding is not `chunked'
+["", StringIO]
+["a body again", nil]

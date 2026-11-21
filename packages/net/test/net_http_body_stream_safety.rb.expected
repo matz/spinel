@@ -1,0 +1,6 @@
+content-length 5, stream of 10: ArgumentError: body_stream gave more than the 5 bytes of Content-Length
+  the server got ""
+content-length 10, stream of 4: ArgumentError: body_stream gave 4 bytes, Content-Length is 10
+  the server got "0123"
+PUT, no answer: EOFError: end of file reached
+  the server got "abcd", then no second connection

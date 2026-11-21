@@ -1254,6 +1254,9 @@ int cplan_method_vis(Compiler *c, int id, int ci, const char *name, int flags, i
    the list's point (a class-method word a method body runs may have set it); vis otherwise. */
 int cplan_cmethod_list_vis(Compiler *c, int id, int cls, const char *name, int vis);
 int cplan_guarded_call_visibility(Compiler *c, int id, int cls, const char *name);
+/* Is an instance of class caller kind_of? module: does the class or a superclass include it (also through another
+   module's include), or prepend it in its first body unconditionally? A conditional prepend or a later reopening's
+   cannot prove it for every call, which may run before it. */
 int cplan_caller_includes_module(Compiler *c, int caller, int module);
 int cplan_protected_owner_open(Compiler *c, int caller, int singleton, int owner);
 /* The class of the self call id runs with, for a protected method's caller

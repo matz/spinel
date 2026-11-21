@@ -2496,11 +2496,32 @@ static int guard_chain(Compiler *c, int mi, int *to, DispArm *arm, char sel[][32
 }
 static int mixin_copy_versions(Compiler *c, int mi, int from, int *to, ElabVersion *vs, int one);
 static int ver_closed_to(int vis, int face);
-int cplan_caller_includes_module(Compiler *c, int caller, int module) {
-  for (int d = 0; caller >= 0 && caller < c->nclasses && d <= c->nclasses; caller = c->classes[caller].parent, d++)
-    for (int i = 0; i < c->classes[caller].nincluded_mods; i++)
-      if (comp_module_includes(c, c->classes[caller].included_mods[i], module, 0)) return 1;
+/* Has class k prepended module (also through another module's include) for every call: in its first body,
+   unconditionally? A conditional prepend or a later reopening's may run after a call */
+static int class_prepends_first(Compiler *c, int k, int module) {
+  int nm = 0, nb = 0;
+  const LrMixin *mix = elab_class_mixins(c, k, &nm);
+  const LrOpen *bodies = nm ? elab_class_bodies(c, k, &nb) : NULL;
+  for (int i = 0; nb && i < nm; i++)
+    if (mix[i].kind == LR_PREPEND && mix[i].open == bodies[0].node && mix[i].applied && !mix[i].cond &&
+        !elab_point_may(c, mix[i].node) && comp_module_includes(c, elab_mixin_module(c, &mix[i]), module, 0)) return 1;
   return 0;
+}
+/* Does class k or a superclass mix in module (also through another module's include): an include, and a prepend
+   that some call may follow (every 0: any of the class's) or one every call follows (every 1: class_prepends_first) */
+static int chain_mixes_in(Compiler *c, int k, int module, int every) {
+  for (int d = 0; k >= 0 && k < c->nclasses && d <= c->nclasses; k = c->classes[k].parent, d++) {
+    const ClassInfo *ki = &c->classes[k];
+    for (int i = 0; i < ki->nincluded_mods; i++)
+      if (comp_module_includes(c, ki->included_mods[i], module, 0)) return 1;
+    for (int i = 0; !every && i < ki->nprepended_mods; i++)
+      if (comp_module_includes(c, ki->prepended_mods[i], module, 0)) return 1;
+    if (every && class_prepends_first(c, k, module)) return 1;
+  }
+  return 0;
+}
+int cplan_caller_includes_module(Compiler *c, int caller, int module) {
+  return chain_mixes_in(c, caller, module, 1);
 }
 int cplan_protected_owner_open(Compiler *c, int caller, int singleton, int owner) {
   if (caller < 0 || owner < 0) return 0;
@@ -2584,19 +2605,6 @@ static int guard_call_face(Compiler *c, int id, const int *to, int n) {
   }
   return VF_PUBLIC;
 }
-/* Initial, unconditional prepends also make the caller a member of the
-   owner module. A conditional or later reopening cannot prove membership. */
-static int caller_prepends_owner(Compiler *c, int caller, int owner) {
-  for (int d = 0; caller >= 0 && d <= c->nclasses; caller = c->classes[caller].parent, d++) {
-    int nm = 0, nb = 0;
-    const LrMixin *mix = elab_class_mixins(c, caller, &nm);
-    const LrOpen *bodies = nm ? elab_class_bodies(c, caller, &nb) : NULL;
-    for (int i = 0; nb && i < nm; i++)
-      if (mix[i].kind == LR_PREPEND && mix[i].open == bodies[0].node && mix[i].applied && !mix[i].cond &&
-          !elab_point_may(c, mix[i].node) && comp_module_includes(c, elab_mixin_module(c, &mix[i]), owner, 0)) return 1;
-  }
-  return 0;
-}
 static int guard_arm_face(Compiler *c, int scope, int face) {
   if (face < VF_GUARD_CALLER) return face;
   int caller = (face - VF_GUARD_CALLER) / 2, singleton = (face - VF_GUARD_CALLER) % 2;
@@ -2604,9 +2612,10 @@ static int guard_arm_face(Compiler *c, int scope, int face) {
   int module = method->origin_module_ci - 1;
   int owner = module >= 0 ? module : method->class_id;
   /* If a protected prepend on this class is live, self of that class
-     or one of its subclasses also has the module. */
+     or one of its subclasses also has the module (and a class that
+     includes or prepends it: cplan_protected_owner_open). */
   return cplan_protected_owner_open(c, caller, singleton, owner) ||
-         (!singleton && module >= 0 && (is_descendant(c, caller, method->class_id) || caller_prepends_owner(c, caller, module)))
+         (!singleton && module >= 0 && is_descendant(c, caller, method->class_id))
          ? VF_PRIVATE : VF_PUBLIC;
 }
 
@@ -4055,12 +4064,25 @@ int cplan_block_self_untold(Compiler *c, const int *par, int n, int node, const 
   int bsc = block_self_call_in(c, par, n, node, tf);
   return bsc >= 0 && ct_block_self_caller(c, par, n, bsc, -1, tf) == CPLAN_SELF_UNKNOWN;
 }
+/* May the self of a method of class caller be kind_of? module owner at some call: is caller, or a class below it (a
+   subclass, or the singleton class an object's `extend` makes, whose parent is the object's class), owner's
+   descendant, or does it or a superclass include or prepend owner at any time (chain_mixes_in)? A self of any of
+   them runs caller's method, and a later or conditional mixin may have run where the call does
+   (cplan_caller_includes_module is the test that proves it for every call) */
+static int caller_may_be_kind_of(Compiler *c, int caller, int owner) {
+  for (int d = 0; caller >= 0 && d < c->nclasses; d++) {
+    if (!is_descendant(c, d, caller)) continue;
+    if (is_descendant(c, d, owner) || chain_mixes_in(c, d, owner, 0)) return 1;
+  }
+  return 0;
+}
 /* Is a protected version of name on program class rcls's instance chain
    closed to call id: is its caller's self (an instance of the class its
    scope is in; a class in a class method; main at the top level; in a
    block that may run with another self, that self, cplan_protected_caller)
    no instance of a class on the chain that holds a version of the name,
-   the owner a protected method is open to (cplan_protected_owner_open)?
+   or of one that includes a module whose version the chain holds, the
+   owner a protected method is open to (cplan_protected_owner_open)?
    Where nothing tells the caller's class, the scope's self is the caller,
    as where the record holds no body versions (method_vis_for_caller): the
    versions such a call meets are the ones that form has too, since the
@@ -4071,9 +4093,15 @@ static int ver_protected_closed(Compiler *c, int id, int rcls, const char *name)
   const Scope *cs = comp_scope_of(c, id);
   int scope = cs && !cs->is_cmethod ? cs->class_id : -1, caller = cplan_protected_caller(c, id, scope);
   if (caller == CPLAN_SELF_UNKNOWN) caller = scope;
-  ElabVersion vs[1];
+  ElabVersion vs[VER_MAX_ARMS];
   for (int a = rcls, k = 0; a >= 0 && a < c->nclasses && k <= c->nclasses; a = c->classes[a].parent, k++)
     if (elab_history_versions(c, a, 0, name, vs, 1) > 0 && !cplan_protected_owner_open(c, caller, 0, a)) return 1;
+  /* (and a module's history on the chain: an include's or a prepend's copy is the module's method, whose owner a
+     protected one is open to is the module, open to a caller whose self may be kind_of? it: caller_may_be_kind_of) */
+  for (int i = 0, nv = elab_chain_versions(c, rcls, 0, name, vs, VER_MAX_ARMS); i < nv; i++) {
+    int sc = vs[i].v->scope, own = sc > 0 && sc < c->nscopes ? c->scopes[sc].class_id : -1;
+    if (own >= 0 && own < c->nclasses && comp_class_is_module(c, &c->classes[own]) && !caller_may_be_kind_of(c, caller, own)) return 1;
+  }
   return 0;
 }
 /* The face of the entry call id binds on rcls's chain (side sg): a

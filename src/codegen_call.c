@@ -24457,12 +24457,6 @@ int method_vis_for_caller(Compiler *c, int id, int vcid, const char *vnm) {
     int singleton = caller == scope && cs && cs->is_cmethod;
     if (cplan_protected_owner_open(c, singleton ? cs->class_id : caller, singleton, owner))
       vis = SP_VIS_PUBLIC;
-    /* A prepend can supply the caller's copy without an include edge. */
-    if (vis == SP_VIS_PROTECTED && caller >= 0 && owner >= 0) {
-      int cmi = call_target(c, id, caller, vnm, 0, NULL);
-      if (cmi >= 0 && cmi < c->nscopes && c->scopes[cmi].origin_module_ci == owner + 1)
-        vis = SP_VIS_PUBLIC;
-    }
     /* a call in a module's own method (or a block in it): self there is an
        instance of a class that includes the module, so the module's
        protected method is callable on a receiver whose class includes it

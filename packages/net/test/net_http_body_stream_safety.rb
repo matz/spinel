@@ -1,3 +1,4 @@
+# spinel: not-cruby -- on purpose (docs/limitations.md, net/http): CRuby writes whatever a body_stream gives and sends an idempotent request again with what is left of it
 # A body_stream that does not match the Content-Length the request states
 # is an ArgumentError, and the connection closes: with more, the extra
 # bytes stay unsent (the server would take them for the start of the next

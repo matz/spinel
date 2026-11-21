@@ -126,7 +126,18 @@ before inflating it with the bundled one-shot zlib codec; it is not streaming.
 The codec can reject incomplete streams or trailing bytes with `Zlib::DataError`
 where CRuby's streaming inflater returns a body. An explicit Accept-Encoding
 disables automatic decoding, and Content-Range responses retain their wire
-bytes. `URI` parses into URI::HTTP, HTTPS, FTP, File, WS, WSS, MailTo or Generic
+bytes. A request's `body_stream` is sent as it is read, and where the stream
+and the `Content-Length` the request states disagree it does not do as
+CRuby does, on purpose: CRuby writes whatever the stream gives. A stream
+longer than the `Content-Length` stops at that length, raises
+`ArgumentError` and closes the connection, where CRuby sends the extra
+bytes, which a server reads as the start of the next request on a
+kept-alive connection. A stream shorter than it raises `ArgumentError` and
+closes the connection, where CRuby raises `EOFError` and leaves the server
+waiting for the rest. And a request with a `body_stream` is not sent again
+after its connection fails, where CRuby sends an idempotent one again
+with what is left of the stream. Go's `Transport` and Crystal do the same.
+A program whose stream and `Content-Length` agree sees no difference. `URI` parses into URI::HTTP, HTTPS, FTP, File, WS, WSS, MailTo or Generic
 by scheme, but there is no URI::LDAP and no scheme registry to add a class
 to (`URI.register_scheme`, `URI.scheme_list`). `#route_to`/`#route_from`,
 `URI.extract`, `URI.regexp` and `#find_proxy` are absent, and the component

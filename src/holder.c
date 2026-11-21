@@ -202,7 +202,7 @@ int holder_of_node_in(const Compiler *c, int node, int body, HolderRef *out) {
        alone defines, is no slot of a program constant of the leaf's name
        (emit_constant_expr reads it so) */
     if (nt_kind(c->nt, node) == NK_ConstantPathNode &&
-        (const_path_in_closed_builtin(mc, node) || const_path_misses_toplevel(mc, node)))
+        (const_path_in_closed_builtin(mc, node) || const_path_misses_toplevel(mc, node) || const_path_is_private(mc, node)))
       return 0;
     /* `k::BUF` off a Class value: the class the value carries owns the
        constant, so there is no one slot (emit_constant_value switches) */

@@ -1,0 +1,21 @@
+P::A: NameError: private constant P::A referenced (:A)
+::P::A: NameError: private constant P::A referenced (:A)
+P::B: 2
+P::C: 3
+P::Inner: NameError: private constant P::Inner referenced (:Inner)
+P::Inner.new: NameError: private constant P::Inner referenced (:Inner)
+P::Mod: NameError: private constant P::Mod referenced (:Mod)
+P.scoped: NameError: private constant P::A referenced (:A)
+P.lexical: 1
+P.inner: P::Inner
+Sub::A: NameError: private constant P::A referenced (:A)
+Sub.own: NameError: private constant P::A referenced (:A)
+Own::A: 5
+Ns::K::X: NameError: private constant Ns::K::X referenced (:X)
+Ns.inner: NameError: private constant Ns::K::X referenced (:X)
+P.const_get(:A): 1
+Object.const_get: 1
+defined?(P::A): nil
+defined?(P::B): "constant"
+7
+[2, :priv, 3]

@@ -2120,7 +2120,7 @@ static TyRef named_array_slot(Compiler *c, int recv) {
     }
     /* `H::L` names the constant its read resolves to (infer_constant_path) */
     case NK_ConstantPathNode: {
-      if (const_path_in_closed_builtin(c, recv) || const_path_misses_toplevel(c, recv)) return NULL;
+      if (const_path_in_closed_builtin(c, recv) || const_path_misses_toplevel(c, recv) || const_path_is_private(c, recv)) return NULL;
       LocalVar *lv = comp_const_at(c, recv);
       return lv ? &lv->type : NULL;
     }

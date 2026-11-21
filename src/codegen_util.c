@@ -4903,6 +4903,23 @@ static int const_recv_hold(Compiler *c, int id, Buf *b, int *holds_slot, int stm
 int emit_const_class_call_wrap(Compiler *c, int id, Buf *b, void (*emit)(Compiler *, int, Buf *)) {
   if (nt_kind(c->nt, id) != NK_CallNode) return 0;
   int r = nt_ref(c->nt, id, "receiver");
+  /* a private constant read through its scope, as a call's receiver: the
+     read's NameError runs ahead of the call, which is emitted behind it for
+     its type alone */
+  {
+    static int in_private;
+    char pmsg[512];
+    if (r >= 0 && !in_private && const_path_private(c, r, pmsg, sizeof pmsg)) {
+      buf_puts(b, "({ sp_raise_cls(\"NameError\", \"");
+      emit_c_escaped_n(b, pmsg, strlen(pmsg));
+      buf_puts(b, "\"); ");
+      in_private = 1;
+      emit(c, id, b);
+      in_private = 0;
+      buf_puts(b, "; })");
+      return 1;
+    }
+  }
   if (r < 0 || !an_const_read_keeps_class(c, r) || const_value_recv(c, r) >= 0 || view_const_read_done(c, r)) return 0;
   for (int i = g_n_argov - 1; i >= 0; i--)
     if (g_argov_node[i] == id || g_argov_node[i] == r) return 0;

@@ -19318,7 +19318,7 @@ static int oa_const_slot(Compiler *c, OAS *sl, int n, int id, int *dyn) {
   *dyn = 0;
   if (!nm || const_node_class_index(c, id) >= 0) return -1;
   if (nt_kind(nt, id) == NK_ConstantPathNode) {
-    if (const_path_in_closed_builtin(c, id) || const_path_misses_toplevel(c, id)) return -1;
+    if (const_path_in_closed_builtin(c, id) || const_path_misses_toplevel(c, id) || const_path_is_private(c, id)) return -1;
     int p = nt_ref(nt, id, "parent");
     NodeKind pk = p >= 0 ? nt_kind(nt, p) : NK_NONE;
     const char *pn = p >= 0 ? nt_str(nt, p, "name") : NULL;
@@ -50340,6 +50340,7 @@ static void desugar_literal_const_get(Compiler *c) {
       if (nn < 0) { ok = 0; break; }
       nt_node_set_str(nt, nn, "name", segs[i]);
       if (i > 0) nt_node_set_ref(nt, nn, "parent", par);
+      nt_node_set_int(nt, nn, "const_get_read", 1);   /* (const_get reads a private constant: const_path_private) */
       nt_node_set_int(nt, nn, "node_line", line);
       nt_node_set_int(nt, nn, "node_file", file);
       comp_grow_node_arrays(c);
@@ -50350,6 +50351,7 @@ static void desugar_literal_const_get(Compiler *c) {
     nt_node_reset(nt, id, ns == 1 ? "ConstantReadNode" : "ConstantPathNode");
     nt_node_set_str(nt, id, "name", segs[ns - 1]);
     if (ns > 1) nt_node_set_ref(nt, id, "parent", par);
+    nt_node_set_int(nt, id, "const_get_read", 1);
     nt_node_set_int(nt, id, "node_line", line);
     nt_node_set_int(nt, id, "node_file", file);
   }

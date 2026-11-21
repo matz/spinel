@@ -1832,9 +1832,12 @@ static void *sp_exc_recover_named(const char *cls, const char *msg) {
   else {
     /* "uninitialized constant NAME": the name is the unquoted trailing token,
        the constant the message reports as missing (#3034) */
+    /* ("private constant K::NAME referenced" names it the same way) */
     const char *pfx = "uninitialized constant ";
-    if (strncmp(msg, pfx, 23) != 0) return NULL;
-    const char *p = msg + 23;
+    const char *p;
+    if (strncmp(msg, pfx, 23) == 0) p = msg + 23;
+    else if (strncmp(msg, "private constant ", 17) == 0) p = msg + 17;
+    else return NULL;
     size_t n = 0;
     while (p[n] && (isalnum((unsigned char)p[n]) || p[n] == '_' || p[n] == ':')) n++;
     /* (of `Q::NAME` the last segment: the message names the scope too) */
@@ -2038,7 +2041,8 @@ SP_NORETURN SP_COLD void sp_raise_cls(const char *cls, const char *msg) {
        strncmp(msg, "private method '", 16) == 0 ||      /* visibility refusals carry the name too */
        strncmp(msg, "protected method '", 18) == 0 ||
        strncmp(msg, "instance variable ", 18) == 0 ||   /* remove_instance_variable of an absent ivar */
-       strncmp(msg, "uninitialized constant ", 23) == 0))   /* const_get / bad const (#3034) */
+       strncmp(msg, "uninitialized constant ", 23) == 0 ||   /* const_get / bad const (#3034) */
+       strncmp(msg, "private constant ", 17) == 0))          /* a private constant read through its scope */
     sp_pending_exc_obj = sp_exc_recover_named(cls, msg);
   /* `raise KeyError, msg` (NameError, FrozenError) the program wrote records
      no key or receiver, where the runtime's raisers do: #key and #receiver

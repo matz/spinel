@@ -381,7 +381,7 @@ int const_path_misses_member(Compiler *c, int id) {
    the inference of a builtin's constant, which asks this: once at a time.) */
 int const_path_reaches_leaf_const(Compiler *c, int id) {
   if (nt_kind(c->nt, id) != NK_ConstantPathNode) return 1;
-  if (const_path_in_closed_builtin(c, id) || const_path_misses_toplevel(c, id)) return 0;
+  if (const_path_in_closed_builtin(c, id) || const_path_misses_toplevel(c, id) || const_path_is_private(c, id)) return 0;
   /* a read the record bound to one member's slot is that member's, though
      its scope be one only the run makes (a C extension's module) */
   if (const_leaf_bound(c, id)) return 1;
@@ -1038,6 +1038,84 @@ static int builtin_scope_lacks_member(Compiler *c, int seg) {
    constant, which a path through another class or module does not reach
    (CRuby's NameError since 2.5), where the leaf-keyed table answered it.
    A NAME written in any body, or through a path, is left to the table. */
+/* `P::NAME` where P is a class or module of the program and NAME is a
+   constant the nearest class of P's superclass chain that holds it makes
+   private (`private_constant :NAME` in its body, and no `public_constant`
+   of the name beside it): CRuby's NameError, "private constant K::NAME
+   referenced", K the class that holds it. The message is written to `msg`.
+   A lexical read (`NAME` in K's body) and const_get read such a constant;
+   only a read through a scope raises. The declaration is taken as made
+   wherever the read stands: a path read ahead of it in the program's run
+   raises too. */
+static int const_visibility_names(const NodeTable *nt, int call, const char *nm) {
+  int an = 0;
+  const int *av = call_args(nt, call, &an);
+  for (int i = 0; av && i < an; i++) {
+    NodeKind ak = nt_kind(nt, av[i]);
+    const char *s = ak == NK_SymbolNode ? nt_str(nt, av[i], "value") : ak == NK_StringNode ? nt_str(nt, av[i], "content") : NULL;
+    if (s && sp_streq(s, nm)) return 1;
+  }
+  return 0;
+}
+int const_path_private(Compiler *c, int id, char *msg, size_t msg_n) {
+  const NodeTable *nt = c->nt;
+  if (nt_kind(nt, id) != NK_ConstantPathNode || !c->node_cbody) return 0;
+  /* (a path that is `Object.const_get("P::A")` rewritten reads it) */
+  if (nt_int(nt, id, "const_get_read", 0)) return 0;
+  int par = nt_ref(nt, id, "parent");
+  NodeKind pk = par >= 0 ? nt_kind(nt, par) : NK_NilNode;
+  if (pk != NK_ConstantReadNode && pk != NK_ConstantPathNode) return 0;
+  const char *nm = nt_str(nt, id, "name");
+  if (!nm) return 0;
+  /* the program's private_constant calls, read once for a node table: most
+     programs have none, and a path read asks this each time it is emitted */
+  static const NodeTable *seen_nt;
+  static int ncalls, calls[256];
+  if (seen_nt != nt) {
+    seen_nt = nt; ncalls = 0;
+    NT_FOREACH_KIND(nt, NK_CallNode, cid) {
+      const char *cn = nt_str(nt, cid, "name");
+      if (cn && sp_streq(cn, "private_constant") && nt_ref(nt, cid, "receiver") < 0 && ncalls < 256) calls[ncalls++] = cid;
+    }
+  }
+  int named = 0;
+  for (int i = 0; i < ncalls && !named; i++) named = const_visibility_names(nt, calls[i], nm);
+  if (!named) return 0;
+  int ci = const_node_class_index(c, par);
+  for (int k = ci, d = 0; k >= 0 && k < c->nclasses && d < 64; k = c->classes[k].parent, d++) {
+    int priv = 0, pub = 0, holds = 0;
+    for (int i = 0; i < ncalls; i++)
+      if (calls[i] < c->node_cap && c->node_cbody[calls[i]] == k && const_visibility_names(nt, calls[i], nm)) priv = 1;
+    if (priv) {
+      NT_FOREACH_KIND(nt, NK_CallNode, cid) {
+        const char *cn = nt_str(nt, cid, "name");
+        if (cn && sp_streq(cn, "public_constant") && nt_ref(nt, cid, "receiver") < 0 && cid < c->node_cap &&
+            c->node_cbody[cid] == k && const_visibility_names(nt, cid, nm)) pub = 1;
+      }
+      if (!pub) {
+        snprintf(msg, msg_n, "private constant %s::%s referenced", class_ruby_name(c, k), nm);
+        return 1;
+      }
+      return 0;
+    }
+    /* a nearer class that holds the name answers the read with its own */
+    NT_FOREACH_KIND(nt, NK_ConstantWriteNode, wid) {
+      const char *wn = nt_str(nt, wid, "name");
+      if (wn && sp_streq(wn, nm) && wid < c->node_cap && c->node_cbody[wid] == k) holds = 1;
+    }
+    for (int x = 0; x < c->nclasses && !holds; x++) {
+      int dn = c->classes[x].def_node;
+      const char *xn = dn >= 0 ? nt_str(nt, nt_ref(nt, dn, "constant_path"), "name") : NULL;
+      if (xn && sp_streq(xn, nm) && dn < c->node_cap && c->node_cbody[dn] == k) holds = 1;
+    }
+    if (holds) return 0;
+  }
+  return 0;
+}
+int const_path_is_private(Compiler *c, int id) {
+  char msg[512];
+  return const_path_private(c, id, msg, sizeof msg);
+}
 int const_path_misses_toplevel(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   if (nt_kind(nt, id) != NK_ConstantPathNode || !c->node_cbody) return 0;

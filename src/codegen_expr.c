@@ -3536,6 +3536,18 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
     return 1;
   }
   if (sp_streq(ty, "ConstantPathNode")) {
+    /* a private constant read through its scope: CRuby's NameError */
+    {
+      char pmsg[512];
+      if (const_path_private(c, id, pmsg, sizeof pmsg)) {
+        const_raise_open(b);
+        buf_puts(b, "\"");
+        emit_c_escaped_n(b, pmsg, strlen(pmsg));
+        buf_puts(b, "\"");
+        const_raise_close(b);
+        return 1;
+      }
+    }
     /* M::CONST -> the flat constant named by the final path component */
     const char *nm = const_key_at(c, id);
     int par_idc = nt_ref(nt, id, "parent");
@@ -4344,6 +4356,9 @@ static int emit_defined_value(Compiler *c, int id, Buf *b, const NodeTable *nt, 
         if (!res && (is_builtin_exception_name(cn) || is_builtin_class_name(cn)))
           res = "constant";
       }
+    }
+    else if (vk == NK_ConstantPathNode && const_path_is_private(c, v)) {
+      /* a private constant is not defined to a read through its scope: nil */
     }
     else if (vk == NK_ConstantPathNode && nt_kind(nt, nt_ref(nt, v, "parent")) == NK_ConstantReadNode &&
              sp_streq(nt_str(nt, nt_ref(nt, v, "parent"), "name"), "Socket") && sp_feature_required("socket")) {

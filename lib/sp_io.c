@@ -2516,6 +2516,13 @@ const char *sp_File_sysread_checked(sp_File *f, sp_int n) {SP_GC_ROOT(f);
   return sp_File_readpartial(f, n);
 }
 
+/* rb_syserr_fail_path in CRuby's io.c: "<strerror> @ <func> - <path>" for
+   a File, the bare strerror for a socket or a pipe */
+SP_NORETURN void sp_io_raise_path_errno(sp_File *f, const char *func) {
+  if (f->path && f->path[0]) sp_file_raise_errno(func, f->path);
+  int e = errno;
+  sp_raise_cls(sp_errno_class_name(e), strerror(e));
+}
 const char *sp_sock_read_nb(sp_File *f, sp_int len, sp_bool exc, sp_bool is_recv, sp_bool *eof) {SP_GC_ROOT(f);
   /* a negative count is an ArgumentError ahead of the stream, with or
      without `exception: false`, as CRuby's; it answered "" */
@@ -2567,7 +2574,7 @@ const char *sp_sock_read_nb(sp_File *f, sp_int len, sp_bool exc, sp_bool is_recv
     sp_sock_raise_wait(0, is_recv ? "recvfrom(2)" : "read");
   }
   if (is_recv) sp_sock_raise_errno("recvfrom(2)");
-  sp_file_raise_errno("read", "");
+  sp_io_raise_path_errno(f, "io_read_nonblock");
 }
 /* write_nonblock -> the byte count, or nil when it would block.
    Paired like sp_File_write: the _bin entry sizes with the header length and
@@ -2587,7 +2594,7 @@ static sp_oint sp_sock_write_nb_len(sp_File *f, const char *data, size_t len, sp
     if (!exc) return sp_oint_nil();
     sp_sock_raise_wait(1, "write");
   }
-  sp_file_raise_errno("write", "");
+  sp_io_raise_path_errno(f, "io_write_nonblock");
 }
 sp_oint sp_sock_write_nb(sp_File *f, const char *data, sp_bool exc) {SP_GC_ROOT(f);SP_GC_ROOT_STR(data);
   SP_IO_OPEN(f);
@@ -2835,12 +2842,6 @@ SP_NORETURN void sp_file_raise_errno(const char *op, const char *path) {SP_GC_RO
 void sp_pread_check(sp_File *f, sp_int len, sp_bool outbuf) {
   if (len == 0 && f && !outbuf) return;
   sp_io_check_readable(f);
-}
-
-SP_NORETURN void sp_pread_raise_errno(sp_File *f) {
-  int e = errno;
-  if (f->path) sp_file_raise_errno("rb_io_pread", f->path);
-  sp_raise_cls(sp_errno_class_name(e), strerror(e));
 }
 
 sp_bool sp_file_owned(const char *path) {

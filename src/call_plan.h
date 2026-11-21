@@ -1475,8 +1475,11 @@ int cplan_block_arg(Compiler *c, int id, const char **cn);
    NameError for a bare name, NoMethodError otherwise; self_text how the
    message names the receiver ("class U", "module M", "main"), or, for an
    anonymous class, which names itself at run time, *anon its index (-1
-   otherwise; anon may be NULL). Pure. */
-typedef enum { CM_NONE, CM_NAMEERROR, CM_NOMETHOD } CplanMissing;
+   otherwise; anon may be NULL). CM_NOMETHOD_SELF for a define_method or
+   attr_* whose self is an object (an_object_definer_missing): the
+   NoMethodError names that object, as the run time describes it (self_text
+   empty). Pure. */
+typedef enum { CM_NONE, CM_NAMEERROR, CM_NOMETHOD, CM_NOMETHOD_SELF } CplanMissing;
 int cplan_missing(Compiler *c, int id, char *self_text, size_t cap, int *anon);
 /* Does an undef of `name` on class cls's chain stop call id, an instance
    call on a cls receiver (comp_is_undeffed_in_chain), with no version entry

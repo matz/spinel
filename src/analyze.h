@@ -634,8 +634,11 @@ int elab_body_def(Compiler *c, int node);
    class and side it defines on in *cls and *sg; -1 where the record holds it
    as no version */
 int elab_body_call_version(Compiler *c, int call, int *cls, int *sg);
-/* is self an object where node stands: in a define_method's block, with no
-   class body or eval block between (lr_body_frame)? */
+/* The define_method call whose block makes self an object where node
+   stands, with no class body, eval block, def or define_singleton_method's
+   block between (lr_body_frame), or -1. Read from the tree alone (the
+   record's parents once it is made), so the registration's walk asks it
+   too. */
 int elab_body_self_object(Compiler *c, int node);
 /* the k-th name definer call node defines (an attr_accessor's reader, then
    its writer, `x=`, in buf, which holds ELAB_FORM_NAME_CAP bytes: a call

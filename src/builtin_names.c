@@ -2854,8 +2854,9 @@ int is_class_name_name(const char *n) { return n && sp_streq(n, "name"); }
 
 int is_alias_method_name(const char *n) { return n && sp_streq(n, "alias_method"); }
 
+const char DEFINE_METHOD_NAME[] = "define_method";
 int is_define_method_name(const char *n) {
-  return n && sp_streq(n, "define_method");
+  return n && sp_streq(n, DEFINE_METHOD_NAME);
 }
 int is_define_singleton_method_name(const char *n) { return n && sp_streq(n, "define_singleton_method"); }
 /* Kernel#singleton_class */

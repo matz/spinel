@@ -3323,6 +3323,28 @@ static int lr_body_self_unsure(Compiler *c, LrBodyNames *x, int d, int cls) {
   }
   return 0;
 }
+/* ...is the definer call at node in the block of a define_singleton_method (the nearest block that is a definer's,
+   with no def, class or module body between) whose class may have a subclass among the program's? The block runs
+   with the class its method is called on as self, so a call on a subclass defines there: the same ask as for a
+   class method's body (lr_body_self_unsure), which lr_body_cmethod does not find, the block being no def. The class
+   is the receiver's (a constant's key, else the class body around the call); one the tree does not fix is unsure */
+static int lr_body_dsm_unsure(Compiler *c, LrBodyNames *x, int node) {
+  const NodeTable *nt = c->nt;
+  for (int v = node, p; v >= 0 && v < x->n && (p = x->par[v]) >= 0 && p < x->n; v = p) {
+    NodeKind k = nt_kind(nt, p);
+    if (k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode) return 0;
+    int call = k == NK_BlockNode ? x->par[p] : -1;
+    if (call < 0 || call >= x->n || nt_kind(nt, call) != NK_CallNode || nt_ref(nt, call, "block") != p) continue;
+    const char *bn = nt_str(nt, call, "name");
+    if (is_define_method_name(bn)) return 0;   /* (self there is an object) */
+    if (!is_define_singleton_method_name(bn)) continue;
+    int rv = nt_ref(nt, call, "receiver"), h = call;
+    while (h >= 0 && h < x->n && nt_kind(nt, h) != NK_ClassNode && nt_kind(nt, h) != NK_ModuleNode) h = x->par[h];
+    const char *key = rv >= 0 && nt_kind(nt, rv) != NK_SelfNode ? lr_body_ref_key(c, x, lr_leaf(nt, rv), 0) : lr_body_key(c, x, h, 0);
+    return x->anon || x->subany || (key ? anh_has(&x->subs, key) : x->subs.n > 0);
+  }
+  return 0;
+}
 /* ...does a body's word at node bar its names (lr_body_forms), keeping the
    unplaced form? In a program that defines method_missing, on a module
    (an include, extend or prepend copy carries the module's def versions
@@ -3358,9 +3380,10 @@ static int lr_body_word_barred(Compiler *c, const int *par, int n, int node, LrB
    holds no body versions? Where the tree does not spell the class self is (lr_call_side reading no receiver: an
    instance method's self is an object), on a chain the record does not hold (lr_chain_open), on a module (an
    include, extend or prepend copy carries the module's def versions only), in a class method a call may run on a
-   subclass (lr_body_self_unsure: the call defines on the class it runs on), for a define_method the program's own
-   may answer (an_user_define_method_reaches: Module's may never run), for a name that is not public where it runs
-   (a section's word or a visibility word around it, lr_body_def_vis; initialize and its kin), and on the instance
+   subclass (lr_body_self_unsure: the call defines on the class it runs on; so in a define_singleton_method's block,
+   lr_body_dsm_unsure), for a definer the program's own method
+   of its name may answer (an_user_method_reaches: Module's may never run), for a name that is not public where it
+   runs (a section's word or a visibility word around it, lr_body_def_vis; initialize and its kin), and on the instance
    side where the program gives an object a singleton method or module (LrBodyNames.osg: the class the analysis
    makes of that object reads its class's methods from the start) */
 static int lr_body_call_barred(Compiler *c, const int *par, int n, int node, LrBodyNames *x) {
@@ -3368,8 +3391,9 @@ static int lr_body_call_barred(Compiler *c, const int *par, int n, int node, LrB
   char b[ELAB_FORM_NAME_CAP];
   lr_call_side(c, par, n, node, -1, &cls, &sg);
   if (cls < 0 || lr_chain_open(c, cls) || comp_class_is_module(c, &c->classes[cls]) ||
-      (is_define_method_name(nt_str(c->nt, node, "name")) && an_user_define_method_reaches(c, 1)) ||
-      lr_body_self_unsure(c, x, lr_body_cmethod(c->nt, par, n, node), cls) || lr_body_def_vis(c->nt, par, n, node, sg) != BVIS_PUBLIC ||
+      an_user_method_reaches(c, nt_str(c->nt, node, "name"), 1) ||
+      lr_body_self_unsure(c, x, lr_body_cmethod(c->nt, par, n, node), cls) || lr_body_dsm_unsure(c, x, node) ||
+      lr_body_def_vis(c->nt, par, n, node, sg) != BVIS_PUBLIC ||
       (!sg && x->osg))
     return 1;
   for (int k = 0; !sg && elab_call_form_name(c->nt, node, k, b, sizeof b, NULL); k++)
@@ -5055,11 +5079,18 @@ static void lr_unrolled_owners(Compiler *c) {
 
 /* See analyze.h */
 int elab_body_self_object(Compiler *c, int node) {
-  LoadRecord *r = elab_fresh(c);
-  const int *par = r->recorded && node >= 0 && node < r->n ? lr_par(c, 0) : NULL;
-  int fs = LR_FS_NONE;
-  if (par) lr_body_frame(c, par, r->n, node, -1, 1, &fs);
-  return fs == LR_FS_OBJECT;
+  LoadRecord *r = c->lrec && c->lrec->walk ? c->lrec : elab_fresh(c);
+  int rec = r->recorded && !r->walk;   /* (the registration's walk: the tree's parents) */
+  const int *par = rec ? lr_par(c, 0) : comp_parent_map(c);
+  int n = rec ? r->n : c->nt->count, fs = LR_FS_NONE;
+  if (!par || node < 0 || node >= n) return -1;
+  lr_body_frame(c, par, n, node, -1, 1, &fs);
+  /* (the first define_method's block up from node is the one lr_body_frame stopped at) */
+  for (int v = node, p; fs == LR_FS_OBJECT && v >= 0 && v < n && (p = par[v]) >= 0 && p < n; v = p)
+    if (nt_kind(c->nt, p) == NK_BlockNode && par[p] >= 0 && nt_ref(c->nt, par[p], "block") == p &&
+        is_define_method_name(nt_str(c->nt, par[p], "name")))
+      return par[p];
+  return -1;
 }
 /* See analyze.h */
 int elab_body_call_version(Compiler *c, int call, int *cls, int *sg) {

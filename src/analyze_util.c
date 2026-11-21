@@ -1408,6 +1408,11 @@ int an_calls_named_first(Compiler *c, const char *name) {
   return k >= 0 ? g_cn_first[k] : -1;
 }
 int an_calls_named_next(int id) { return (id >= 0 && id < g_cn_cnt) ? g_cn_next[id] : -1; }
+int an_written_call_named(Compiler *c, const char *name) {
+  for (int id = an_calls_named_first(c, name); id >= 0; id = an_calls_named_next(id))
+    if (an_written_call(id)) return 1;
+  return 0;
+}
 
 /* Interposes a call named `name` (with arguments args, -1 for none) between
    call id and its receiver (`r.m` becomes `r.name.m`): a desugar's

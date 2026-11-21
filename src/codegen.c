@@ -10127,6 +10127,9 @@ static int proc_body_uses_self(Compiler *c, int id, int class_id) {
     if (imi >= 0 && repr_self_boxed(c, imi)) return 1;
     /* a bare instance_exec / instance_eval runs its block on self */
     if (nm && (sp_streq(nm, "instance_exec") || sp_streq(nm, "instance_eval"))) return 1;
+    /* a definer whose NoMethodError names self (cplan_missing's CM_NOMETHOD_SELF) */
+    char st[160];
+    if (cplan_missing(c, id, st, sizeof st, NULL) == CM_NOMETHOD_SELF) return 1;
     /* an attr_reader is not a method in the chain -- it reads the ivar
        directly off self, which the body needs captured all the same (#3750) */
     if (nm && call_attr_target(c, id, class_id, nm, CT_ATTR, NULL)) return 1;

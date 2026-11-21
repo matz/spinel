@@ -229,6 +229,10 @@ int blk_locals_have(const char *locals, const char *nm);
    id >= 0; id = an_calls_named_next(id)). Check each node as before. */
 int an_calls_named_first(Compiler *c, const char *name);
 int an_calls_named_next(int id);
+/* is a call of that name one the program wrote (an_written_call: not a call a rewrite made, such as a version
+   entry's of its versions)? */
+int an_written_call(int id);
+int an_written_call_named(Compiler *c, const char *name);
 /* Puts a call `name` (args, -1 for none) between call id and its receiver,
    carrying id's `&.` and receiver visibility; the new call, or -1. */
 int an_interpose_recv_call(Compiler *c, int id, const char *name, int args);
@@ -355,11 +359,14 @@ int an_enum_prog_method(Compiler *c, const char *nm);
 int an_name_binder_free(Compiler *c, const char *name);
 int an_native_defines_method(Compiler *c, const char *name);
 int an_user_recv_defines_method(Compiler *c, const char *name);
-/* where the program's own define_method sits (an_user_define_method_kinds):
-   the self a receiverless define_method could reach it from */
+/* where the program's own method of a definer's name sits (an_user_method_kinds):
+   the self a receiverless call of the name could reach it from */
 enum { UDM_CLASS_SELF = 1, UDM_INSTANCE_SELF = 2, UDM_ANY_SELF = 4 };
-int an_user_define_method_kinds(Compiler *c);
-int an_user_define_method_reaches(Compiler *c, int class_self);
+int an_user_method_kinds(Compiler *c, const char *name);
+int an_user_method_reaches(Compiler *c, const char *name, int class_self);
+/* a define_method or attr_* on self in scope s whose self is an object no method of the program's answers it on:
+   CRuby's NoMethodError, defining nothing */
+int an_object_definer_missing(Compiler *c, int call, const Scope *s);
 int an_block_captures(const NodeTable *nt, int node, int level);
 extern int g_yvt_unify_all;
 /* The return type of a call to method `mi`. A method whose body is just a

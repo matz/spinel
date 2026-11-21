@@ -630,6 +630,7 @@ int is_builtin_module_const_name(const char *n);
 int is_untabled_native_class_name(const char *n);
 
 int is_define_method_name(const char *n); /* define_method */
+extern const char DEFINE_METHOD_NAME[];   /* "define_method", the name a lookup of Module's definer asks */
 int is_define_singleton_method_name(const char *n); /* define_singleton_method */
 int is_singleton_class_name(const char *n); /* singleton_class */
 int is_reopen_self_name(const char *n);       /* __self: the receiver of a method a builtin's reopening defines */

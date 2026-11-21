@@ -354,14 +354,20 @@ not spell the class self is (an instance method's self is an object, and
 so is a `define_method` block's, `LR_FS_OBJECT`; a
 `define_singleton_method` block's self is its receiver), on a module, in
 a class method a call may run on a subclass (`lr_body_self_unsure`), for
-a define_method the program's own `define_method` may answer, for a name
-not public where it runs, and on the instance side where the program
+a definer the program's own method of its name may answer
+(`an_user_method_reaches`), for a name not public where it runs, and on the instance side where the program
 gives an object a singleton method or module (`LrBodyNames.osg`: the
 class `register_singleton_defs` makes of it, after the record, reads the
-class's methods from the start) (`lr_body_call_barred`). The call plan
+class's methods from the start) (`lr_body_call_barred`). A
+`define_method` or `attr_*` on self in a `define_method` block of an
+ordinary class's instance method (`elab_body_self_object`), which no
+method of the program's of its name nor a `method_missing` answers, is
+the plan's NoMethodError (`an_object_definer_missing`, `cplan_missing`'s
+`CM_NOMETHOD_SELF`, the object described at run time), and the walk
+registers no method for it. The call plan
 refuses a block that reads or writes the locals of the code around it or
-yields to its block, a barred definer on self in a `define_method` block
-(`elab_body_self_object`), and a barred
+yields to its block, where a call of the name it defines is written
+(`an_written_call_named`), and a barred
 define_method in a def's body whose method the walk registers from the
 start where the class or its chain answers the name, or a Symbol or a
 String spells it (`cplan_define_method_early`), or one with a Proc or a

@@ -1739,8 +1739,9 @@ int cplan_list_class(Compiler *c, int id, int *own);
 /* The cells that answer whether list id lists method `name` of cls on side (CT_CMETHOD for a class-side list,
    CT_OWN for its own versions), or a method_defined? kin there finds it: the cells cplan_cmethod_presence
    (cplan_presence_cells) gives for the visibilities mask counts (a list shows public and protected methods, 3;
-   a method_defined? kin, its own); 0 where the table answers it, and for an instance-method list of another
-   shape than list_cells_shape's, whose names the survey does not ask. */
+   a method_defined? kin, its own), whose els for a list is 0 (where no version has run it does not list the
+   name) and for a method_defined? kin what a call there finds; 0 where the table answers it, and for an
+   instance-method list of another shape than list_cells_shape's, whose names the survey does not ask. */
 int cplan_list_cells(Compiler *c, int id, int cls, unsigned side, const char *name, int mask, CplanCells *out);
 /* Whether name answers on cls's chain where presence site id runs, as a
    call of the name there finds it, from call_target with CT_REACH (side: 0

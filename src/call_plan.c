@@ -9906,7 +9906,11 @@ static const char *cplan_call_version_unread(Compiler *c, int id, int host, int 
    (cplan_call_version_unread); and a define_method the record holds as no version of the method, which walk_scope
    registers from the start, where a call, a reflection reader (elab_method_asked) or a Symbol or a String besides
    its own (an alias, an attr, a Struct member: elab_name_spelled) names the method, for a method every object has or
-   Ruby calls by itself, or whose body is a Proc or a Method value, which no method is made of. A method nothing names (Scope.reachable) never runs it. */
+   Ruby calls by itself, or whose body is a Proc or a Method value, which no method is made of. A method nothing
+   reaches (Scope.reachable) never runs its versions, so no reader can find one early; but where walk_scope
+   registered a method of a define_method of no version (elab_def_scope_of), it answers from the start there too
+   (one a class-body macro's expansion leaves behind in its module's method, which an extend copies). A file no
+   live require reaches (prog_node_in_dropped_file) defines nothing. */
 static const char *cplan_body_definer_gap(Compiler *c, int id, char *buf, size_t cap) {
   const NodeTable *nt = c->nt;
   const char *nm = nt_str(nt, id, "name");
@@ -9915,10 +9919,11 @@ static const char *cplan_body_definer_gap(Compiler *c, int id, char *buf, size_t
   int blk = nt_ref(nt, id, "block"), an = nt_ref(nt, id, "arguments"), ac = 0, cls = -1, sg = 0;
   const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
   const char *mn = ac > 0 ? vis_arg_name(nt, av[0]) : NULL;
-  if ((!dm && !dsm && !is_attr_name(nm)) || (rv >= 0 && nt_kind(nt, rv) != NK_SelfNode) || !mn || !hs || !hs->reachable)
+  if ((!dm && !dsm && !is_attr_name(nm)) || (rv >= 0 && nt_kind(nt, rv) != NK_SelfNode) || !mn || !hs ||
+      prog_node_in_dropped_file(c, id))
     return NULL;
-  int lit = blk >= 0 && nt_kind(nt, blk) == NK_BlockNode, def = elab_body_def(c, id) >= 0;
-  if (def && lit && (dm || dsm) && an_block_captures(nt, blk, 0)) {
+  int lit = blk >= 0 && nt_kind(nt, blk) == NK_BlockNode, def = elab_body_def(c, id) >= 0, run = hs->reachable;
+  if (run && def && lit && (dm || dsm) && an_block_captures(nt, blk, 0)) {
     snprintf(buf, cap, "Module#%s in a method body with a block that reads or writes that method's locals, or yields "
              "to its block, is not supported: the method it defines does not close over them", nm);
     return buf;
@@ -9926,14 +9931,14 @@ static const char *cplan_body_definer_gap(Compiler *c, int id, char *buf, size_t
   int host = elab_body_call_version(c, id, &cls, &sg);
   char b[256];
   const char *vn, *why = NULL;
-  for (int k = 0; host >= 0 && !why && (vn = elab_call_form_name(nt, id, k, b, sizeof b)); k++)
+  for (int k = 0; run && host >= 0 && !why && (vn = elab_call_form_name(nt, id, k, b, sizeof b)); k++)
     why = cplan_call_version_unread(c, id, host, cls, sg, vn);
   if (why) {
     snprintf(buf, cap, "Module#%s in a method body is not supported where %s: the method it defines would be "
              "found before that body runs (see docs/limitations.md)", nm, why);
     return buf;
   }
-  if (!dm || !def || host >= 0) return NULL;
+  if (!dm || !def || host >= 0 || (!run && !elab_def_scope_of(c, id))) return NULL;
   if (!lit)
     snprintf(buf, cap, "Module#define_method in a method body with a Proc or a Method for its body is not supported (see "
              "docs/limitations.md)");

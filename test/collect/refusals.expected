@@ -1292,8 +1292,10 @@ spinel: 1 refusal, nothing written
 == test/reject/macro_receiver_write.rb [promote] rc=0
 == test/reject/macro_refused_inner_write.rb [default] rc=0
 == test/reject/macro_refused_inner_write.rb [promote] rc=0
-== test/reject/macro_residual_call_keeps_macro.rb [default] rc=0
-== test/reject/macro_residual_call_keeps_macro.rb [promote] rc=0
+== test/reject/macro_residual_call_keeps_macro.rb [default] rc=1
+spinel: test/reject/macro_residual_call_keeps_macro.rb:12: Module#define_method in a method body is supported only where the load record orders it against the calls (on self in a class method of a class no subclass may run it on, with a literal block): this one would be defined from the start, not when that method runs (see docs/limitations.md)
+== test/reject/macro_residual_call_keeps_macro.rb [promote] rc=1
+spinel: test/reject/macro_residual_call_keeps_macro.rb:12: Module#define_method in a method body is supported only where the load record orders it against the calls (on self in a class method of a class no subclass may run it on, with a literal block): this one would be defined from the start, not when that method runs (see docs/limitations.md)
 == test/reject/macro_residual_value.rb [default] rc=0
 == test/reject/macro_residual_value.rb [promote] rc=0
 == test/reject/macro_runtime_name_send.rb [default] rc=1

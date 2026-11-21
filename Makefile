@@ -3970,6 +3970,7 @@ INLINE_RBS_CHECKS := false_positives ignored_symlink ignored_errors warnings syn
 INLINE_RBS_PARITY += flag_types self_types optional_on_rest
 INLINE_RBS_PARITY += type_variables
 INLINE_RBS_PARITY += singleton_class_defs
+INLINE_RBS_PARITY += block_types
 INLINE_RBS_RESULTS := $(patsubst %,build/inline-rbs-results/%.par,$(INLINE_RBS_PARITY)) \
                       $(patsubst %,build/inline-rbs-results/%.res,$(INLINE_RBS_CHECKS))
 inline-rbs-test: $(INLINE_RBS_RESULTS)

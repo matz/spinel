@@ -1,0 +1,5 @@
+class Walker
+  def each_upto: (untyped) { (Integer) -> void } -> untyped
+  def pick: (untyped) { (String) -> bool } -> untyped
+  def fold: (untyped, Integer) { (String, Integer) -> Integer } -> untyped
+end

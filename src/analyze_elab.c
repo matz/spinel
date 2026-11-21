@@ -4536,6 +4536,12 @@ static int lr_runs_with_body(const NodeTable *nt, const int *par, int n, int d, 
   }
   return 0;
 }
+/* See analyze.h */
+int elab_runs_with_body(Compiler *c, int node, int body) {
+  LoadRecord *r = elab_fresh(c);
+  const int *par = r->recorded ? lr_par(c, 0) : NULL;
+  return par && node >= 0 && node < r->n && body >= 0 && lr_runs_with_body(c->nt, par, r->n, node, body);
+}
 /* May node leave the body it is in early: does it hold a return, break,
    next, redo, retry or a throw outside any def or lambda of its own? */
 static int lr_jumps(const NodeTable *nt, int node) {

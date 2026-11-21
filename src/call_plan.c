@@ -9963,7 +9963,9 @@ static int cplan_define_method_early(Compiler *c, int host, int dm, int own) {
    laid out as a method of its own, which has none of them), where a call of the name it defines is written (one
    nothing calls is never run in place of the block); a version a reader of its name cannot read
    (cplan_call_version_unread); a define_method version that replaces an attr_* version (elab_attr_replaced) in a
-   class with a subclass, whose calls keep the accessor; and a define_method in a def's body the
+   class with a subclass, whose calls keep the accessor; a define_singleton_method on the object a define_method's block runs on
+   (elab_body_self_object) that runs whenever the block does, where a call of its name is written; and a
+   define_method in a def's body the
    record holds as no version, whose body is a Proc or a Method value, which no method is made of, or where the
    method walk_scope registers from the start (elab_def_scope_of) answers a call CRuby answers otherwise
    (cplan_define_method_early), whether the def is reached or not (one a class-body macro's expansion leaves behind
@@ -9983,6 +9985,14 @@ static const char *cplan_body_definer_gap(Compiler *c, int id, char *buf, size_t
       prog_node_in_dropped_file(c, id) || an_object_definer_missing(c, id, hs))
     return NULL;
   int lit = blk >= 0 && nt_kind(nt, blk) == NK_BlockNode, def = elab_body_def(c, id) >= 0, run = hs->reachable;
+  /* (no `.new` traces that object, so its singleton method is not made) */
+  int sdm = dsm && run ? elab_body_self_object(c, id) : -1;
+  if (sdm >= 0 && elab_runs_with_body(c, id, nt_ref(nt, sdm, "block")) && an_written_call_named(c, mn)) {
+    snprintf(buf, cap, "Module#define_singleton_method in a define_method's block is not supported where a call of the "
+             "name it defines is written: its self is an object, whose singleton methods are not made (see "
+             "docs/limitations.md)");
+    return buf;
+  }
   int host = elab_body_call_version(c, id, &cls, &sg);
   if (run && (def || host >= 0) && lit && (dm || dsm) && an_block_captures(nt, blk, 0) && an_written_call_named(c, mn)) {
     snprintf(buf, cap, "Module#%s in a method body with a block that reads or writes that method's locals, or yields "

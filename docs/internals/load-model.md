@@ -364,7 +364,10 @@ ordinary class's instance method (`elab_body_self_object`), which no
 method of the program's of its name nor a `method_missing` answers, is
 the plan's NoMethodError (`an_object_definer_missing`, `cplan_missing`'s
 `CM_NOMETHOD_SELF`, the object described at run time), and the walk
-registers no method for it. The call plan
+registers no method for it. A `define_singleton_method` there, whose
+object no `.new` traces, makes no method; the call plan refuses one that
+runs whenever the block does (`elab_runs_with_body`) where a call of its
+name is written. The call plan
 refuses a block that reads or writes the locals of the code around it or
 yields to its block, where a call of the name it defines is written
 (`an_written_call_named`), and a barred

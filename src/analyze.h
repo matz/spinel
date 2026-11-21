@@ -640,6 +640,10 @@ int elab_body_call_version(Compiler *c, int call, int *cls, int *sg);
    record's parents once it is made), so the registration's walk asks it
    too. */
 int elab_body_self_object(Compiler *c, int node);
+/* Does node run whenever body (a def's, a lambda's or a call's block node)
+   runs, once it gets past its start (lr_runs_with_body): no condition, rescued
+   begin, block of its own or early exit between them? */
+int elab_runs_with_body(Compiler *c, int node, int body);
 /* the k-th name definer call node defines (an attr_accessor's reader, then
    its writer, `x=`, in buf, which holds ELAB_FORM_NAME_CAP bytes: a call
    with a longer name makes no versions, lr_body_call), NULL past the last;

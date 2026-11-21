@@ -2636,20 +2636,48 @@ static void lr_word_side(Compiler *c, const int *par, int n, int node, int e, in
   }
 }
 
-/* A definer call a body runs that makes versions of its own (lr_body_versions), as a def does: define_method or
-   define_singleton_method with a literal name and a literal block, an attr_* with literal names, each on no
-   receiver or self. Its kind (LR_DEFINE_METHOD; LR_READER for an attr_*, whose writers it makes too), else -1. A
-   Proc or Method value for a body, a computed name, a receiver of any other kind make none. */
-static int lr_body_call(const NodeTable *nt, int node) {
+/* Does node stand in a method's body: a def's, or a define_method's or define_singleton_method's block's, with no
+   class or module body between (a block a class body hands a method that yields is none: the class body's
+   statement it splices into stays its form)? A copy no file's root reaches is in the body of the node it copies,
+   as for lr_body_def. */
+static int lr_in_method_body(Compiler *c, int node) {
+  const NodeTable *nt = c->nt;
+  const int *par = lr_par(c, 1);
+  int n = c->lrec->n;
+  for (int depth = 0; node >= 0 && node < n && depth < 64; depth++) {
+    int a = node;
+    for (int p = par[a]; p >= 0 && p < n; a = p, p = par[p]) {
+      NodeKind k = nt_kind(nt, p);
+      if (k == NK_DefNode) return 1;
+      if (k == NK_ClassNode || k == NK_ModuleNode) return 0;
+      if (k == NK_BlockNode && par[p] >= 0 && nt_ref(nt, par[p], "block") == p &&
+          (is_define_method_name(nt_str(nt, par[p], "name")) || is_define_singleton_method_name(nt_str(nt, par[p], "name"))))
+        return 1;
+    }
+    int o = par[a] < 0 ? nt_clone_source(nt, a) : -1;
+    node = o < a ? o : -1;
+  }
+  return 0;
+}
+/* A definer call a method's body runs (lr_in_method_body) that makes versions of its own (lr_body_versions), as a
+   def does: define_method or define_singleton_method with a literal name and a literal block, an attr_* with
+   literal names, each on no receiver or self. Its kind (LR_DEFINE_METHOD; LR_READER for an attr_*, whose writers
+   it makes too), else -1. A Proc or Method value for a body, a computed name, a receiver of any other kind make
+   none. */
+static int lr_body_call(Compiler *c, int node) {
+  const NodeTable *nt = c->nt;
   const char *nm = nt_kind(nt, node) == NK_CallNode ? nt_str(nt, node, "name") : NULL;
   int rv = nm ? nt_ref(nt, node, "receiver") : -1, an = nm ? nt_ref(nt, node, "arguments") : -1, ac = 0, bk = nm ? nt_ref(nt, node, "block") : -1;
   const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
   if (ac < 1 || (rv >= 0 && nt_kind(nt, rv) != NK_SelfNode)) return -1;
+  int kind = -1;
   if (is_define_method_name(nm) || is_define_singleton_method_name(nm))
-    return ac == 1 && vis_arg_name(nt, av[0]) && bk >= 0 && nt_kind(nt, bk) == NK_BlockNode ? LR_DEFINE_METHOD : -1;
-  if (!is_attr_name(nm) || bk >= 0) return -1;
-  for (int i = 0; i < ac; i++) if (!vis_arg_name(nt, av[i])) return -1;
-  return LR_READER;
+    kind = ac == 1 && vis_arg_name(nt, av[0]) && bk >= 0 && nt_kind(nt, bk) == NK_BlockNode ? LR_DEFINE_METHOD : -1;
+  else if (is_attr_name(nm) && bk < 0) {
+    kind = LR_READER;
+    for (int i = 0; i < ac; i++) if (!vis_arg_name(nt, av[i])) kind = -1;
+  }
+  return kind >= 0 && lr_in_method_body(c, node) ? kind : -1;
 }
 /* ...the class and side it defines on, as lr_body_frame reads self there (e as for lr_word_side): the instance
    side of the class self is, for a define_singleton_method that class's singleton (none in a `class << x` body,
@@ -2695,7 +2723,7 @@ static int lr_body_target(Compiler *c, const int *par, int n, int d, int walk, i
   LoadRecord *r = c->lrec;
   int e = d >= 0 && d < r->n ? r->at[d] : -1, rv = nt_ref(nt, d, "receiver"), rk = rv >= 0 ? nt_def_receiver(nt, rv) : -1, fs;
   if (e < 0) return 0;
-  if (nt_kind(nt, d) == NK_CallNode && lr_body_call(nt, d) >= 0) lr_call_side(c, par, n, d, e, cls, sg);
+  if (nt_kind(nt, d) == NK_CallNode && lr_body_call(c, d) >= 0) lr_call_side(c, par, n, d, e, cls, sg);
   else if (nt_kind(nt, d) == NK_CallNode) lr_word_side(c, par, n, d, e, cls, sg);
   else if (rk >= 0) *cls = nt_kind(nt, rk) == NK_SelfNode ? lr_body_self(c, par, n, d, e) : lr_body_const(c, rk, e, walk), *sg = 1;
   else *cls = lr_body_frame(c, par, n, d, e, 0, &fs), *sg = fs != LR_FS_NONE;
@@ -3351,7 +3379,7 @@ static void lr_body_forms(Compiler *c, const int *par, int n) {
         !lr_body_word_barred(c, par, n, id, &x))
       continue;
     /* (so is a body's definer call, lr_body_call, but a barred one) */
-    if (lr_body_call(nt, id) >= 0 && lr_body_around(nt, par, n, id) >= 0 && !lr_body_call_barred(c, par, n, id, &x)) continue;
+    if (lr_body_call(c, id) >= 0 && lr_body_around(nt, par, n, id) >= 0 && !lr_body_call_barred(c, par, n, id, &x)) continue;
     if (k != NK_DefNode && k != NK_AliasMethodNode && k != NK_UndefNode && k != NK_CallNode) continue;
     if (k == NK_DefNode) {
       int dr = nt_ref(nt, id, "receiver");
@@ -3442,9 +3470,9 @@ static int lr_body_def_version(Compiler *c, const int *par, int n, int d, int sg
      among them) */
   char b[256];
   const char *cn;
-  for (int k = 0; lr_body_call(nt, d) >= 0 && (cn = elab_call_form_name(nt, d, k, b, sizeof b)); k++)
+  for (int k = 0; lr_body_call(c, d) >= 0 && (cn = elab_call_form_name(nt, d, k, b, sizeof b)); k++)
     if (!lr_body_name_free(c, par, n, cn, -1)) return 0;
-  if (lr_body_call(nt, d) >= 0) return 1;
+  if (lr_body_call(c, d) >= 0) return 1;
   if (nt_kind(nt, d) == NK_CallNode) {
     if (!lr_body_word(nt, d)) return 0;
     for (int k = 0; lr_word_name(nt, d, k, 1); k++) if (!lr_body_name_free(c, par, n, lr_word_name(nt, d, k, 1), -1)) return 0;
@@ -3654,7 +3682,7 @@ static int lr_node_defines(Compiler *c, int n, int direct, int depth) {
   int nc = 0, o = lr_variable_write(k) ? LR_OPAQUE_WRITES : 0;
   const NodeKind *ck = elab_const_write_kinds(&nc);
   int tree = direct == LR_DEFINES_TREE;
-  if ((k == NK_DefNode || lr_body_call(nt, n) >= 0) && (tree || lr_body_held(c, n))) return 0;   /* (the record follows it) */
+  if ((k == NK_DefNode || lr_body_call(c, n) >= 0) && (tree || lr_body_held(c, n))) return 0;   /* (the record follows it) */
   int word = k == NK_CallNode && lr_body_word(nt, n) && (tree || lr_body_held(c, n));   /* (it follows the word, and asks its defs) */
   for (int i = 0; i < (int)(sizeof kinds / sizeof *kinds); i++) if (k == kinds[i]) return LR_OPAQUE_DEFINES;
   for (int i = 0; i < nc; i++) if (k == ck[i]) return LR_OPAQUE_DEFINES;
@@ -4533,7 +4561,7 @@ static void lr_body_versions(Compiler *c) {
   int nh = 0, *hooked = malloc(sizeof(int) * (size_t)(2 * nt->count + 1));
   if (!hooked) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   for (int id = 0; id < r->n; id++) {
-    int word = lr_body_word(nt, id), call = lr_body_call(nt, id), body, cls, sg;
+    int word = lr_body_word(nt, id), call = lr_body_call(c, id), body, cls, sg;
     char b[256];
     if ((nt_kind(nt, id) != NK_DefNode && !word && call < 0) || !lr_body_version_of(c, par, id, &body, &cls, &sg)) continue;
     const char *nm = call >= 0 ? elab_call_form_name(nt, id, 0, b, sizeof b) : word ? lr_word_name(nt, id, 0, 1) : nt_str(nt, id, "name");
@@ -4584,7 +4612,7 @@ static void lr_check_held(Compiler *c) {
     int def = r->hist[i].b, found = 0, now, cls, sg;
     const int *par = lr_par(c, 1);
     char b[256];
-    const char *nm = nt_kind(nt, def) == NK_DefNode ? nt_str(nt, def, "name") : lr_body_call(nt, def) >= 0 ? elab_call_form_name(nt, def, 0, b, sizeof b) : lr_word_name(nt, def, 0, 1);
+    const char *nm = nt_kind(nt, def) == NK_DefNode ? nt_str(nt, def, "name") : lr_body_call(c, def) >= 0 ? elab_call_form_name(nt, def, 0, b, sizeof b) : lr_word_name(nt, def, 0, 1);
     const LrHist *h = nm && lr_body_target(c, par, r->n, def, 0, &cls, &sg) ? lr_hist(r, cls, sg, nm, 0) : NULL;
     for (int j = 0; h && j < h->n; j++) found |= h->v[j].node == def && h->v[j].body;
     found |= !nm;
@@ -4990,7 +5018,7 @@ static void lr_unrolled_owners(Compiler *c) {
 /* See analyze.h */
 int elab_body_call_version(Compiler *c, int call, int *cls, int *sg) {
   LoadRecord *r = elab_fresh(c);
-  const int *par = r->recorded && call >= 0 && call < r->n && lr_body_call(c->nt, call) >= 0 ? lr_par(c, 0) : NULL;
+  const int *par = r->recorded && call >= 0 && call < r->n && lr_body_call(c, call) >= 0 ? lr_par(c, 0) : NULL;
   char b[256];
   const char *nm = par ? elab_call_form_name(c->nt, call, 0, b, sizeof b) : NULL;
   const LrHist *h = nm && lr_body_target(c, par, r->n, call, 0, cls, sg) ? lr_hist(r, *cls, *sg, nm, 0) : NULL;

@@ -232,7 +232,16 @@ int an_calls_named_next(int id);
 /* is a call of that name one the program wrote (an_written_call: not a call a rewrite made, such as a version
    entry's of its versions)? */
 int an_written_call(int id);
-int an_written_call_named(Compiler *c, const char *name);
+/* Does the program reach the method `name`: a call of it the program wrote, or a Symbol or String spelling it
+   besides node except that may run it (elab_name_spelled: a send, an alias or alias_method, a method object, an
+   instance_method copy; not respond_to? or method_defined?)? */
+int an_name_reached(Compiler *c, const char *name, int except);
+/* May call `call` reach an instance of class or module k, or of a class under it, by its receiver's class facts
+   (cls_fact_excludes, as a dynamic call's kill asks them: a module's by the classes that mix it in, a class's under
+   a builtin superclass by that builtin's values), or by self's class (a define_method's block's object is its class's
+   instance, elab_body_self_object; main, a class body's and a class method's self are none)? A call in a method
+   nothing reaches (Scope.reachable) reaches none. */
+int an_call_may_reach_instance(Compiler *c, int call, int k);
 /* Puts a call `name` (args, -1 for none) between call id and its receiver,
    carrying id's `&.` and receiver visibility; the new call, or -1. */
 int an_interpose_recv_call(Compiler *c, int id, const char *name, int args);

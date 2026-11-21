@@ -635,8 +635,8 @@ int elab_body_def(Compiler *c, int node);
    as no version */
 int elab_body_call_version(Compiler *c, int call, int *cls, int *sg);
 /* The define_method call whose block makes self an object where node
-   stands, with no class body, eval block, def or define_singleton_method's
-   block between (lr_body_frame), or -1. Read from the tree alone (the
+   stands, with no class body, eval block (or the spliced value of one),
+   def or define_singleton_method's block between (lr_body_frame), or -1. Read from the tree alone (the
    record's parents once it is made), so the registration's walk asks it
    too. */
 int elab_body_self_object(Compiler *c, int node);
@@ -911,8 +911,10 @@ int elab_autoload_file_defines(Compiler *c, int slot, int file);
    the method by a Symbol or a String, name or make methods by computed
    names, or run code the record has not seen? */
 int elab_version_captured(Compiler *c, const char *name);
-/* does a Symbol or a String literal of the program spell `name`, but node except? */
-int elab_name_spelled(Compiler *c, const char *name, int except);
+/* does a Symbol or a String literal of the program spell `name`, but node except? With runs, only one that may
+   run the method, in the program's own code (an_written_call): an argument of a presence query (respond_to?,
+   method_defined? and its kin, is_method_presence_name_query), which answers without running it, is none */
+int elab_name_spelled(Compiler *c, const char *name, int except, int runs);
 /* is module mod in the ancestors of cls (of its singleton when sg) at p? */
 int elab_mixed_at(Compiler *c, int cls, int sg, int mod, LoadPoint p);
 /* was a non-nil value written to the variable before p: a write that

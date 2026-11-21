@@ -24210,8 +24210,8 @@ static int class_or_module_reopen_mixes(Compiler *c, int m, int only_module) {
     if (k < 0 || k >= c->nclasses) continue;
     if (k == m) return 1;   /* (the reopening's own method) */
     const ClassInfo *ki = &c->classes[k];
-    for (int j = 0; j < ki->nincluded_mods; j++) if (comp_module_includes(c, ki->included_mods[j], m, 0)) return 1;
-    for (int j = 0; j < ki->nprepended_mods; j++) if (comp_module_includes(c, ki->prepended_mods[j], m, 0)) return 1;
+    for (int j = 0; j < ki->nincluded_mods; j++) if (comp_mixes_in(c, ki->included_mods[j], m, 0)) return 1;
+    for (int j = 0; j < ki->nprepended_mods; j++) if (comp_mixes_in(c, ki->prepended_mods[j], m, 0)) return 1;
   }
   return 0;
 }

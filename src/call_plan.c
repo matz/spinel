@@ -2495,7 +2495,7 @@ static int ver_closed_to(int vis, int face);
 int cplan_caller_includes_module(Compiler *c, int caller, int module) {
   for (int d = 0; caller >= 0 && caller < c->nclasses && d <= c->nclasses; caller = c->classes[caller].parent, d++)
     for (int i = 0; i < c->classes[caller].nincluded_mods; i++)
-      if (comp_module_includes(c, c->classes[caller].included_mods[i], module, 0)) return 1;
+      if (comp_mixes_in(c, c->classes[caller].included_mods[i], module, 0)) return 1;
   return 0;
 }
 int cplan_protected_owner_open(Compiler *c, int caller, int singleton, int owner) {
@@ -2589,7 +2589,7 @@ static int caller_prepends_owner(Compiler *c, int caller, int owner) {
     const LrOpen *bodies = nm ? elab_class_bodies(c, caller, &nb) : NULL;
     for (int i = 0; nb && i < nm; i++)
       if (mix[i].kind == LR_PREPEND && mix[i].open == bodies[0].node && mix[i].applied && !mix[i].cond &&
-          !elab_point_may(c, mix[i].node) && comp_module_includes(c, elab_mixin_module(c, &mix[i]), owner, 0)) return 1;
+          !elab_point_may(c, mix[i].node) && comp_mixes_in(c, elab_mixin_module(c, &mix[i]), owner, 0)) return 1;
   }
   return 0;
 }
@@ -6426,7 +6426,7 @@ static int module_defines(Compiler *c, int m, const char *nm, int *vis) {
   }
   if (!module_carries(c, m, nm)) return 0;
   for (int k = 0; k < c->nclasses; k++)
-    if (k != m && comp_module_includes(c, m, k, 0) && module_carries(c, k, nm)) return 0;
+    if (k != m && comp_mixes_in(c, m, k, 0) && module_carries(c, k, nm)) return 0;
   *vis = comp_method_vis(&c->classes[m], nm);
   return 1;
 }
@@ -6533,7 +6533,7 @@ static int module_listable(Compiler *c, int m, const char *name) {
       if (ua && module_defines(c, mods[j], names[q], &va)) return 0;
       for (int j2 = j + 1; j2 < n; j2++)
         if (module_answers(c, mods[j2], names[q], &ub) &&
-            !comp_module_includes(c, mods[j], mods[j2], 0) && !comp_module_includes(c, mods[j2], mods[j], 0))
+            !comp_mixes_in(c, mods[j], mods[j2], 0) && !comp_mixes_in(c, mods[j2], mods[j], 0))
           return 0;
     }
     /* a writer's name is its reader's plus `=` */
@@ -6543,7 +6543,7 @@ static int module_listable(Compiler *c, int m, const char *name) {
       if (!module_answers(c, mods[j], wn, &ua)) continue;
       for (int j2 = j + 1; j2 < n; j2++)
         if (module_answers(c, mods[j2], wn, &ub) &&
-            !comp_module_includes(c, mods[j], mods[j2], 0) && !comp_module_includes(c, mods[j2], mods[j], 0))
+            !comp_mixes_in(c, mods[j], mods[j2], 0) && !comp_mixes_in(c, mods[j2], mods[j], 0))
           return 0;
     }
   }
@@ -6581,7 +6581,7 @@ static int module_own(Compiler *c, int m, const int *order, int norder, int at,
     if (!sp_streq(kc->vis_names[i], nm)) continue;
     for (int j = at + 1; j < norder; j++) {
       int v2 = 0;
-      if (comp_module_includes(c, m, order[j], 0) && module_defines(c, order[j], nm, &v2))
+      if (comp_mixes_in(c, m, order[j], 0) && module_defines(c, order[j], nm, &v2))
         { *vis = kc->vis_kinds[i]; return 1; }
     }
     break;
@@ -9866,7 +9866,7 @@ static int cplan_definer_value_used(Compiler *c, int id) {
   const int *av = dc >= 0 && (is_define_method_name(nt_str(nt, dc, "name")) || is_define_singleton_method_name(nt_str(nt, dc, "name"))) &&
                   (an = nt_ref(nt, dc, "arguments")) >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
   const char *hn = d >= 0 ? nt_str(nt, d, "name") : ac > 0 ? vis_arg_name(nt, av[0]) : NULL;
-  if (!hn || elab_name_spelled(c, hn, ac > 0 ? av[0] : -1)) return 1;
+  if (!hn || elab_name_spelled(c, hn, ac > 0 ? av[0] : -1, 0)) return 1;
   for (int k = an_calls_named_first(c, hn); k >= 0; k = an_calls_named_next(k))
     if (cplan_value_read(c, par, k)) return 1;
   return 0;
@@ -9951,20 +9951,30 @@ static int cplan_define_method_early(Compiler *c, int host, int dm, int own) {
     for (int k = ts->class_id, h = 0; k >= 0 && k < c->nclasses && h < 64; k = c->classes[k].parent, h++)
       if (k == ds->class_id) return 1;
   }
-  return elab_name_spelled(c, ds->name, own) ||
+  return elab_name_spelled(c, ds->name, own, 0) ||
          (an_user_method_kinds(c, DEFINE_METHOD_NAME) && cplan_own_define_method_answers(c, host) &&
           an_calls_named_first(c, ds->name) >= 0);
 }
 
+/* May a written call of `name` (an_written_call) reach an instance of class k (an_call_may_reach_instance)? A
+   singleton method of an object of class k that a define_method's block makes is reached only by a call on that
+   object. */
+static int cplan_instance_call_named(Compiler *c, const char *name, int k) {
+  for (int id = an_calls_named_first(c, name); id >= 0; id = an_calls_named_next(id))
+    if (an_written_call(id) && an_call_may_reach_instance(c, id, k)) return 1;
+  return 0;
+}
 /* A definer call on self in a method's body that the plan cannot answer as a version (CRF_DEFINER), its words in buf,
    or NULL: a define_method or define_singleton_method in a def's body, or one that is a version
    (elab_body_call_version: in a define_method's or define_singleton_method's block too), whose block reads or writes
    the locals of the code it runs in, or yields to that method's block (an_block_captures: the method it defines is
-   laid out as a method of its own, which has none of them), where a call of the name it defines is written (one
-   nothing calls is never run in place of the block); a version a reader of its name cannot read
+   laid out as a method of its own, which has none of them), where the program reaches the name it defines
+   (an_name_reached: a call, or a Symbol or String that may run it; one nothing reaches is never run in place
+   of the block); a version a reader of its name cannot read
    (cplan_call_version_unread); a define_method version that replaces an attr_* version (elab_attr_replaced) in a
    class with a subclass, whose calls keep the accessor; a define_singleton_method on the object a define_method's block runs on
-   (elab_body_self_object) that runs whenever the block does, where a call of its name is written; and a
+   (elab_body_self_object) that runs whenever the block does, where a call of its name may reach that object
+   (cplan_instance_call_named) and the program defines no define_singleton_method of its own; and a
    define_method in a def's body the
    record holds as no version, whose body is a Proc or a Method value, which no method is made of, or where the
    method walk_scope registers from the start (elab_def_scope_of) answers a call CRuby answers otherwise
@@ -9986,15 +9996,15 @@ static const char *cplan_body_definer_gap(Compiler *c, int id, char *buf, size_t
     return NULL;
   int lit = blk >= 0 && nt_kind(nt, blk) == NK_BlockNode, def = elab_body_def(c, id) >= 0, run = hs->reachable;
   /* (no `.new` traces that object, so its singleton method is not made) */
-  int sdm = dsm && run ? elab_body_self_object(c, id) : -1;
-  if (sdm >= 0 && elab_runs_with_body(c, id, nt_ref(nt, sdm, "block")) && an_written_call_named(c, mn)) {
+  int sdm = dsm && run && !an_user_method_reaches(c, nm, 0) ? elab_body_self_object(c, id) : -1;
+  if (sdm >= 0 && elab_runs_with_body(c, id, nt_ref(nt, sdm, "block")) && cplan_instance_call_named(c, mn, hs->class_id)) {
     snprintf(buf, cap, "Module#define_singleton_method in a define_method's block is not supported where a call of the "
-             "name it defines is written: its self is an object, whose singleton methods are not made (see "
+             "name it defines may reach that object: its self is an object, whose singleton methods are not made (see "
              "docs/limitations.md)");
     return buf;
   }
   int host = elab_body_call_version(c, id, &cls, &sg);
-  if (run && (def || host >= 0) && lit && (dm || dsm) && an_block_captures(nt, blk, 0) && an_written_call_named(c, mn)) {
+  if (run && (def || host >= 0) && lit && (dm || dsm) && an_block_captures(nt, blk, 0) && an_name_reached(c, mn, av[0])) {
     snprintf(buf, cap, "Module#%s in a method body with a block that reads or writes that method's locals, or yields "
              "to its block, is not supported: the method it defines does not close over them", nm);
     return buf;
@@ -13014,7 +13024,7 @@ static int guard_behind_finds_none(Compiler *c, int behind, int cls, int sg, con
     const Scope *m = &c->scopes[s];
     if (!m->is_module_function || m->class_id < 0 || !m->name || !sp_streq(m->name, name)) continue;
     for (int k = cls; k >= 0; k = c->classes[k].parent)
-      if (k != m->class_id && comp_module_includes(c, k, m->class_id, 0)) return 0;
+      if (k != m->class_id && comp_mixes_in(c, k, m->class_id, 0)) return 0;
   }
   return 1;
 }

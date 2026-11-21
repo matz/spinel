@@ -2185,7 +2185,7 @@ typedef int (*IvarWriteFn)(void *ctx, const char *iv);
 int node_ivar_writes(Compiler *c, int id, int cls, int depth, IvarWriteFn add, void *ctx);
 int subtree_ivar_writes(Compiler *c, int id, int cls, int depth, IvarWriteFn add, void *ctx);
 int comp_lvw_first(Compiler *c, const char *name);
-int comp_module_includes(Compiler *c, int m, int mod, int depth);
+int comp_mixes_in(Compiler *c, int m, int k, int prepends);   /* is module k m, or does m include it (prepends: or prepend it), through m's own mixins? */
 int comp_class_singleton_has_module(Compiler *c, int ci, int mod);
 int comp_class_extends_any(Compiler *c, int ci);
 int comp_lvw_next(const Compiler *c, int w);

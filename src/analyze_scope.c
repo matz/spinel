@@ -14898,7 +14898,7 @@ void refuse_unreachable_bare_constants(Compiler *c) {
    module one of them includes? */
 static int ssc_in_chain(Compiler *c, int k, int cls) {
   for (int d = 0; k >= 0 && k < c->nclasses && d < 64; k = c->classes[k].parent, d++)
-    if (comp_module_includes(c, k, cls, 0)) return 1;
+    if (comp_mixes_in(c, k, cls, 0)) return 1;
   return 0;
 }
 /* Can the receiver of a call on class k run a `def self.nm` that an

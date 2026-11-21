@@ -2556,6 +2556,9 @@ static int lr_body_frame(Compiler *c, const int *par, int n, int node, int e, in
       if (!self && is_instance_eval_family(nm)) *fs = LR_FS_IEVAL;
       return cls;
     }
+    /* (a constant's class_eval block whose value is read, spliced in place, desugar_class_eval_value: self there is
+       that class, which the tree no longer names) */
+    if (k == NK_ParenthesesNode && nt_int(nt, p, "self_rebound", 0)) return LR_UNKNOWN_CLASS;
     if (self && k == NK_BlockNode && par[p] >= 0 && nt_ref(nt, par[p], "block") == p) {
       const char *nm = nt_str(nt, par[p], "name");
       int rv = nt_ref(nt, par[p], "receiver");
@@ -10055,19 +10058,30 @@ int elab_runs_unseen(Compiler *c) {
 int elab_version_captured(Compiler *c, const char *name) {
   LrVers *x = c->lrec && c->lrec->recorded ? lr_vers(c->lrec, name) : NULL;
   if (!x) return 1;
-  if (!x->captured) x->captured = c->names_by_value || elab_runs_unseen(c) || elab_name_spelled(c, name, -1) ? 2 : 1;
+  if (!x->captured) x->captured = c->names_by_value || elab_runs_unseen(c) || elab_name_spelled(c, name, -1, 0) ? 2 : 1;
   return x->captured == 2;
 }
 /* See analyze.h */
-int elab_name_spelled(Compiler *c, const char *name, int except) {
+/* Is Symbol or String node one that runs no method it names: a node a rewrite made, or a presence query's
+   argument (elab_name_spelled's runs)? */
+static int elab_spelling_inert(Compiler *c, int node) {
+  if (!an_written_call(node)) return 1;
+  const int *par = comp_parent_map(c);
+  int a = par[node], q = a >= 0 && nt_kind(c->nt, a) == NK_ArgumentsNode ? par[a] : -1;
+  return q >= 0 && nt_kind(c->nt, q) == NK_CallNode && is_method_presence_name_query(nt_str(c->nt, q, "name"));
+}
+int elab_name_spelled(Compiler *c, const char *name, int except, int runs) {
   const NodeTable *nt = c->nt;
   int hit = 0, n = 0;
   const int *v = nt_nodes_of_kind(nt, NK_SymbolNode, &n);
-  for (int i = 0; !hit && i < n; i++) { const char *sv = nt_str(nt, v[i], "value"); hit = v[i] != except && sv && sp_streq(sv, name); }
+  for (int i = 0; !hit && i < n; i++) {
+    const char *sv = nt_str(nt, v[i], "value");
+    hit = v[i] != except && sv && sp_streq(sv, name) && !(runs && elab_spelling_inert(c, v[i]));
+  }
   v = nt_nodes_of_kind(nt, NK_StringNode, &n);
   for (int i = 0; !hit && i < n; i++) {
     const char *s = nt_str(nt, v[i], "content");   /* a StringNode's text */
-    hit = v[i] != except && s && sp_streq(s, name);
+    hit = v[i] != except && s && sp_streq(s, name) && !(runs && elab_spelling_inert(c, v[i]));
   }
   return hit;
 }

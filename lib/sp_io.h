@@ -404,10 +404,10 @@ void sp_file_rename(const char *from, const char *to);
    the older File sites (readlink, symlink, mkfifo ...) pass the syscall's
    name. An errno with no class here raises SystemCallError. */
 SP_NORETURN void sp_file_raise_errno(const char *op, const char *path);
-/* A failed IO#pread raises the errno's class: "<strerror> @ rb_io_pread -
-   <path>" for a handle with a path, the bare strerror for one without (a
-   pipe, an IO.new descriptor), as CRuby words it. */
-SP_NORETURN void sp_pread_raise_errno(sp_File *f);
+/* rb_syserr_fail_path: the errno's class with "<strerror> @ <func> -
+   <path>" for a File, the bare strerror for a pipe, a socket or an IO.new
+   descriptor, as CRuby words it (IO#pread, read_nonblock, write_nonblock) */
+SP_NORETURN void sp_io_raise_path_errno(sp_File *f, const char *func);
 /* What IO#pread checks before its pread(2), in CRuby's order: a length of 0
    answers "" before anything else, even on a closed handle; then a closed
    handle is IOError "closed stream", and one whose mode does not read (a

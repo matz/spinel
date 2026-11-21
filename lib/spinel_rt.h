@@ -1357,7 +1357,7 @@ static inline const char *sp_File_pread(sp_File *f, sp_int len, sp_int off) {
   if (len < 0) len = 0;
   char *buf = (char *)sp_str_alloc((size_t)len);
   ssize_t got = len ? pread(fileno(f->fp), buf, (size_t)len, (off_t)off) : 0;
-  if (got < 0) sp_pread_raise_errno(f);
+  if (got < 0) sp_io_raise_path_errno(f, "rb_io_pread");
   if (got == 0 && len > 0) sp_raise_cls("EOFError", "end of file reached");
   buf[got] = '\0';
   sp_str_set_len(buf, (size_t)got);
@@ -1379,7 +1379,7 @@ static inline const char *sp_File_pread_or_nil(sp_File *f, sp_int len, sp_int of
   if (len < 0) len = 0;
   char *buf = (char *)sp_str_alloc((size_t)len);
   ssize_t got = pread(fileno(f->fp), buf, (size_t)len, (off_t)off);
-  if (got < 0) sp_pread_raise_errno(f);
+  if (got < 0) sp_io_raise_path_errno(f, "rb_io_pread");
   if (got == 0 && len > 0) return NULL;
   buf[got] = '\0';
   sp_str_set_len(buf, (size_t)got);

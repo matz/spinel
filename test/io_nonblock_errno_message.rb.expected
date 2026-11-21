@@ -1,0 +1,4 @@
+Errno::ENOTCONN
+true
+"Errno::EPIPE: Broken pipe"
+"Errno::EISDIR: Is a directory @ io_read_nonblock - DIR"

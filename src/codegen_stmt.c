@@ -10968,7 +10968,17 @@ void emit_poly_unboxed(Compiler *c, int node, TyKind t, const char *conv, Buf *b
   else emit_expr(c, node, b);
 }
 
+/* A statement `case`. The subject's nil flag (g_case_scrut_oint) is put back
+   on the way out, as emit_case_expr does: temps are numbered again from the
+   start in the next method, so a flag left set would claim that method's
+   `_tN` has an `_oN` beside it. */
+static void emit_case_in(Compiler *c, int id, Buf *b, int indent);
 void emit_case(Compiler *c, int id, Buf *b, int indent) {
+  int sso = g_case_scrut_oint;
+  emit_case_in(c, id, b, indent);
+  g_case_scrut_oint = sso;
+}
+static void emit_case_in(Compiler *c, int id, Buf *b, int indent) {
   const NodeTable *nt = c->nt;
   int pred = nt_ref(nt, id, "predicate");
   int nw = 0;

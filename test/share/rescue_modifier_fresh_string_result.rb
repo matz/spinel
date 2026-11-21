@@ -15,3 +15,18 @@ end
   p result.equal?(other)
   p result.frozen?
 end
+
+def retain_fragment(fragment, fail)
+  raise "missing" if fail
+  fragment
+end
+
+[false, true].each do |fail|
+  body = +"kept\0body"
+  fallback = +"kept\0fallback"
+  result = (retain_fragment(body, fail) rescue fallback)
+  retained = fail ? fallback : body
+  p result.equal?(retained)
+  retained << "!"
+  p result.bytes
+end

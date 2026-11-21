@@ -4747,11 +4747,16 @@ int cplan_presence_cells(Compiler *c, int id, int cls, unsigned side, const char
 /* See call_plan.h. */
 int cplan_list_cells(Compiler *c, int id, int cls, unsigned side, const char *name, int mask, CplanCells *out) {
   int own = (side & CT_OWN) != 0, cm = (side & CT_CMETHOD) != 0;
+  int list = cm || (id >= 0 && is_instance_method_list(nt_str(c->nt, id, "name")));
   /* (an instance-method list reads them in the shape its asks were made for, presence_asks) */
-  if (!cm && id >= 0 && is_instance_method_list(nt_str(c->nt, id, "name")) && !list_own_reads_cells(c, id, cls)) return 0;
+  if (!cm && list && !list_own_reads_cells(c, id, cls)) return 0;
   /* (some version has cells, each answering for the visibilities mask counts: a run-time one from its cell) */
-  return (cm ? cplan_cmethod_presence(c, id, cls, name, mask, own, out) : cplan_presence_cells(c, id, cls, side, name, mask, out)) &&
-         out->n > 0;
+  if (!(cm ? cplan_cmethod_presence(c, id, cls, name, mask, own, out) : cplan_presence_cells(c, id, cls, side, name, mask, out)) ||
+      out->n <= 0) return 0;
+  /* (where no version has run a list leaves the name out, whatever a call there finds: its else; the keep,
+     ver_obj_presence_keep, and the list's read ask the same cells) */
+  if (list) out->els = 0;
+  return 1;
 }
 /* What class cls holds of qm on its instance side where call id runs, as the call plan answers it (side: CT_REACH to
    count the generated iterators of a Struct, CT_OWN for the class's own entries): pr is the table's entry, visibility

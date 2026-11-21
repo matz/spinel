@@ -20292,9 +20292,8 @@ void refl_emit_sym_array(Compiler *c, int cid, ReflNames *r, Buf *b) {
       if (cplan_undefined(c, cid, 0, r->v[i])) continue;
     }
     if (cells) {
-      /* (where no version has run the list leaves the name out, its else: where no version answers for the
-         visibilities the list shows, the plan fixes that answer and the name is not listed) */
-      cs.els = 0;
+      /* (where no version answers for the visibilities the list shows, the plan fixes that answer, its else that
+         no version has run, and the name is not listed) */
       if (cplan_cells_fixed(&cs)) continue;
       buf_puts(b, "if (");
       int open = emit_cells_test(c, &cs, 0, b);

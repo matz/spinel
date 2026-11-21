@@ -20138,9 +20138,12 @@ int refl_member_of_struct_superclass(Compiler *c, int ci, const char *m) {
    its visibility is one the form asks. A list leaves out the helpers the
    compiler synthesizes (name_is_synth_method), whatever the tables hold. */
 typedef struct { Compiler *c; ReflNames *r; int pub, prot, priv; } ReflCand;
+/* (the visibilities a list shows, as ReflNames.vis_mask holds them) */
+static int refl_vis_mask(int pub, int prot, int priv) { return (!!pub) | ((!!prot) << 1) | ((!!priv) << 2); }
 static void refl_cand_note(void *ud, const char *nm, int vis) {
   ReflCand *n = ud;
   if (name_is_synth_method(n->c, nm)) return;
+  if (n->r->at && n->r->at_side == CT_OWN) vis = cplan_own_list_vis(n->c, n->r->at - 1, n->r->at_cls, nm, vis);
   refl_note(n->r, nm, refl_vis_wanted(vis, n->pub, n->prot, n->priv));
 }
 /* The instance methods class `ci` itself defines, as
@@ -20151,7 +20154,7 @@ static void refl_cand_note(void *ud, const char *nm, int vis) {
 void refl_own_instance_methods(Compiler *c, int ci, int pub, int prot, int priv,
                                       int with_modules, ReflNames *r) {
   ReflCand n = { c, r, pub, prot, priv };
-  r->vis_mask = (!!pub) | ((!!prot) << 1) | ((!!priv) << 2);
+  r->vis_mask = refl_vis_mask(pub, prot, priv);
   mtab_build_enter(c);
   cplan_list_candidates(c, ci, with_modules ? 0 : CT_OWN, refl_cand_note, &n);
   mtab_build_leave(c);
@@ -20228,6 +20231,7 @@ void refl_class_instance_methods(Compiler *c, int ci, int pub, int prot, ReflNam
    compiler's helpers). */
 static void refl_module_note(void *ud, const char *nm, int vis) {
   ReflCand *n = ud;
+  if (n->r->at && n->r->at_side == CT_OWN) vis = cplan_own_list_vis(n->c, n->r->at - 1, n->r->at_cls, nm, vis);
   refl_note(n->r, nm, refl_vis_wanted(vis, n->pub, n->prot, n->priv));
 }
 /* Mod.instance_methods / public_instance_methods with the inherited ones (no argument, or `true`): what the module
@@ -20242,6 +20246,7 @@ void refl_module_instance_methods(Compiler *c, int m, int prot, ReflNames *r) {
 /* Mod.{,public_,private_,protected_}instance_methods(false): the names the module itself answers for. */
 void refl_module_own_methods(Compiler *c, int m, int pub, int prot, int priv, ReflNames *r) {
   ReflCand n = { c, r, pub, prot, priv };
+  r->vis_mask = refl_vis_mask(pub, prot, priv);
   mtab_build_enter(c);
   cplan_module_methods(c, m, 1, refl_module_note, &n);
   mtab_build_leave(c);

@@ -4835,17 +4835,41 @@ int cplan_cells_fixed(const CplanCells *cs) {
     if (cs->vis[k][0] || cs->ans[k] != cs->els) return 0;
   return 1;
 }
+/* The call guard of a module's own history whose visibility cells a presence reader reads (VerGuard.vis), -1 for none */
+static int ver_history_vis_guard(const Compiler *c, int cls, const char *name) {
+  for (int k = 0; k < c->nver_guards; k++)
+    if (c->ver_guards[k].cls == cls && c->ver_guards[k].vis && sp_streq(c->ver_guards[k].name, name)) return k;
+  return -1;
+}
 /* ...the cells a presence reader id reads of cls's name on side sg, where call_target answered it e (ml): an
    entry's; else, for a method live where the reader runs whose visibility a body's word sets where it runs
    (elab_method_vis_at answers none), the words' versions' cells, which the words write, and the method's own where
    none has run */
+static int pres_module_cells(Compiler *c, int id, int e, const MethodLookup *ml, int cls, const char *name);
 static int presence_target_cells(Compiler *c, int id, int e, const MethodLookup *ml, int cls, int sg, const char *name, int mask, int own, CplanCells *out) {
   if (ml->kind == ML_ENTRY) return presence_cells(c, e, cls, sg, name, mask, own, out);
-  if (ml->kind != ML_METHOD || e < 0 || !elab_method_body_word(c, name, sg) || elab_method_vis_at(c, cls, name, sg, elab_point_of(c, id)) >= 0)
+  /* (a module's own where the table answers, its versions more than one: their cells all the same, pres_module_cells) */
+  if ((ml->kind != ML_METHOD && !(ml->kind == ML_TABLE && !sg && pres_module_cells(c, id, e, ml, cls, name))) || e < 0 ||
+      !elab_method_body_word(c, name, sg) || elab_method_vis_at(c, cls, name, sg, elab_point_of(c, id)) >= 0)
     return 0;
   int v = guard_visibility(c, e);
+  /* (a module's own instance side: its chain's cells where a guard writes them, VerGuard.vis) */
+  int kept = sg || !comp_class_is_module(c, &c->classes[cls]) || ver_history_vis_guard(c, cls, name) >= 0;
   return presence_cells_of(c, cls, sg, name, mask, own,
-                           v == SP_VIS_PUBLIC ? VER_FINDS_PUBLIC : v == SP_VIS_PROTECTED ? VER_FINDS_PROTECTED : VER_FINDS_PRIVATE, 1, out);
+                           v == SP_VIS_PUBLIC ? VER_FINDS_PUBLIC : v == SP_VIS_PROTECTED ? VER_FINDS_PROTECTED : VER_FINDS_PRIVATE, kept, out);
+}
+/* Does a presence reader id of module cls's own instance method `name` (call_target answered it e, ml) read the
+   cells of the histories on cls's chain? No call runs on a module's instance side, so no entry stands over its
+   versions (its method is the copies' source); where a body's word sets a version's visibility only the run tells
+   it (elab_version_vis -1), which the version's visibility cell holds: presence_target_cells reads them */
+static int pres_module_cells(Compiler *c, int id, int e, const MethodLookup *ml, int cls, const char *name) {
+  if ((ml->kind != ML_METHOD && ml->kind != ML_TABLE) || e < 0 || cls < 0 || cls >= c->nclasses || !comp_class_is_module(c, &c->classes[cls]) ||
+      !elab_method_body_word(c, name, 0) || respond_to_missing_defined(c) || elab_method_vis_at(c, cls, name, 0, elab_point_of(c, id)) >= 0)
+    return 0;
+  ElabVersion vs[VER_MAX_ARMS];
+  int nv = elab_chain_versions(c, cls, 0, name, vs, VER_MAX_ARMS), runs = 0;
+  for (int i = 0; i < nv && !runs; i++) runs = vs[i].v->kind == LR_DEF && elab_version_vis(c, &vs[i]) < 0;
+  return runs;
 }
 /* See call_plan.h. */
 int cplan_cmethod_presence(Compiler *c, int id, int cls, const char *name, int mask, int own, CplanCells *out) {
@@ -6246,9 +6270,11 @@ PresenceKind cplan_presence(Compiler *c, int id, int cls, unsigned side, const c
       name_list_has(c->classes[cls].undefs, c->classes[cls].nundefs, name))
     out->undef = cplan_undef_at(c, id, cls, name) != 0;   /* (where the record cannot tell, the table's) */
   if (pr_in_untyped_block(c, id)) return PR_TABLE;
-  call_target(c, id, cls, name, side | CT_REACH, &ml);
+  int e = call_target(c, id, cls, name, side | CT_REACH, &ml);
   /* (an instance's entry the call takes there: its cells tell, cplan_presence_cells) */
   if (ml.kind == ML_ENTRY && !(side & (CT_CMETHOD | CT_TOP)) && !respond_to_missing_defined(c)) return PR_CELLS;
+  /* (and a module's own, whose chain's cells a guard writes: pres_module_cells) */
+  if (!(side & (CT_CMETHOD | CT_TOP)) && pres_module_cells(c, id, e, &ml, cls, name) && ver_history_vis_guard(c, cls, name) >= 0) return PR_CELLS;
   if (ml.kind == ML_TABLE || ml.kind == ML_ENTRY) return PR_TABLE;
   if (ml.kind == ML_NONE && ml.why == MLW_RECORD) return PR_ABSENT;   /* (the record's none) */
   /* (a visibility word a method body runs gives the table no visibility: the one the record has where id runs,
@@ -7858,10 +7884,17 @@ int cplan_builtin_method_vis(Compiler *c, int node, int ci, const char *cls, con
   int mv = bv >= 0 && on && is_object_class_name(on) ? elab_main_method_vis_at(c, node, m) : -1;
   return mv > 0 ? mv : bv;
 }
+/* (a visibility word a method body runs gives the table no visibility: the one the record has for m on ci where
+   reflection call node runs, as presence_at asks it, elab_method_body_word; -1 where no body word names m or the
+   record cannot tell there) */
+static int cplan_body_word_vis(Compiler *c, int node, int ci, const char *m) {
+  return node >= 0 && ci >= 0 && elab_method_body_word(c, m, 0) ? elab_method_vis_at(c, ci, m, 0, elab_point_of(c, node)) : -1;
+}
 /* See call_plan.h. */
 int cplan_program_method_vis(Compiler *c, int node, int ci, const char *m, int inherit) {
   int v = cplan_object_entry_vis(c, node, ci, m);
   if (v >= 0) return v;
+  if (inherit && (v = cplan_body_word_vis(c, node, ci, m)) >= 0) return v;
   mtab_enter(c);
   v = inherit ? comp_method_vis_in_chain(c, ci, m) : comp_method_vis(&c->classes[ci], m);
   mtab_leave(c);
@@ -11357,6 +11390,11 @@ int cplan_method_vis(Compiler *c, int id, int ci, const char *name, int flags, i
 }
 
 /* See call_plan.h. */
+int cplan_own_list_vis(Compiler *c, int id, int cls, const char *name, int vis) {
+  int v = cplan_body_word_vis(c, id, cls, name);
+  return v >= 0 ? v : vis;
+}
+/* See call_plan.h. */
 int cplan_cmethod_list_vis(Compiler *c, int id, int cls, const char *name, int vis) {
   mtab_enter(c);
   int own = id >= 0 && cls >= 0 && vis == comp_cmethod_vis_declared(c, cls, name, NULL);
@@ -14283,9 +14321,13 @@ static int guard_else_bare(Compiler *c, int behind, int cls, int sg, const char 
   return !*hooks;
 }
 static void list_ver_need(Compiler *c, int id, const char *name, int cls, void *arg) { ver_need(c, id, name, cls, CT_CMETHOD, arg); }
+static void ver_need_history_vis(Compiler *c, int cls, const char *name);
 static void pres_target(Compiler *c, int id, const char *nm, int k, unsigned flags, void *arg) {
+  MethodLookup ml = { .def_class = -1 };
   (void)arg;
-  call_target(c, id, k, nm, flags & CT_CMETHOD ? CT_CMETHOD | CT_CAPTURE : flags | CT_REACH, NULL);   /* (a class arm's: cplan_cmethod_presence) */
+  int e = call_target(c, id, k, nm, flags & CT_CMETHOD ? CT_CMETHOD | CT_CAPTURE : flags | CT_REACH, &ml);   /* (a class arm's: cplan_cmethod_presence) */
+  /* (a module's own method whose visibility a body's word sets: its chain's cells, pres_module_cells) */
+  if (!(flags & (CT_CMETHOD | CT_TOP)) && pres_module_cells(c, id, e, &ml, k, nm)) ver_need_history_vis(c, k, nm);
 }
 static void list_ver_target(Compiler *c, int id, const char *name, int cls, void *arg) {
   (void)arg;
@@ -14364,7 +14406,13 @@ static void ver_need_history_guard(Compiler *c, int cls, const char *name) {
   if (!(k & (k - 1)) && !(c->ver_guards = realloc(c->ver_guards, sizeof *c->ver_guards * (size_t)(k ? 2 * k : 1)))) {
     fprintf(stderr, "spinel: out of memory\n"); exit(1);
   }
-  c->ver_guards[c->nver_guards++] = (struct VerGuard){ name, cls, 0 };
+  c->ver_guards[c->nver_guards++] = (struct VerGuard){ name, cls, 0, 0 };
+}
+/* ...and one whose versions' visibility cells a module's own presence reader reads too (VerGuard.vis) */
+static void ver_need_history_vis(Compiler *c, int cls, const char *name) {
+  ver_need_history_guard(c, cls, name);
+  for (int k = 0; k < c->nver_guards; k++)
+    if (c->ver_guards[k].cls == cls && sp_streq(c->ver_guards[k].name, name)) c->ver_guards[k].vis = 1;
 }
 /* See call_plan.h. An undef in this class's own history stops lookup
    only when no prepend answers ahead of it. A non-undef in the same
@@ -15176,10 +15224,13 @@ static int ver_cells_put(Compiler *c) {
     struct VerGuard *g = &c->ver_guards[i];
     if (g->cells == pass) continue;
     g->cells = 1;
+    /* (a module's own presence reader's, VerGuard.vis: the versions on its chain, and their words') */
     int nv = g->cls < 0 ? elab_chain_versions(c, -1, 1, g->name, vs, VER_MAX_ARMS)
-                        : elab_history_versions(c, g->cls, 0, g->name, vs, VER_MAX_ARMS);
+           : g->vis ? elab_chain_versions(c, g->cls, 0, g->name, vs, VER_MAX_ARMS)
+                    : elab_history_versions(c, g->cls, 0, g->name, vs, VER_MAX_ARMS);
+    if (g->vis) ver_word_writes(c, par, &cells, &w, &nw, &nh, vs, nv, pass);
     for (int j = 0; j < nv; j++)
-      ver_write_version(c, nt, par, &cells, &vs[j], 0, pass, &w, &nw, &nh);
+      ver_write_version(c, nt, par, &cells, &vs[j], g->vis, pass, &w, &nw, &nh);
   }
   if (c->nver_vis_reads) ver_guard_writes(c, par, &cells, &w, &nw, &nh, pass);   /* (and a guarded call's, CallPlan.vis_cell) */
   }

@@ -2015,8 +2015,10 @@ typedef struct {
   struct VerPin { int node, scope, vis; } *ver_pins;
   int nver_pins;
   /* Call guards read main's singleton chain (cls -1) or a class's own
-     instance history. Their version cells are written once, as an entry's. */
-  struct VerGuard { const char *name; int cls, cells; } *ver_guards;
+     instance history. Their version cells are written once, as an entry's;
+     vis: a module's own presence reader reads its versions' visibility cells
+     too (pres_module_cells), written as a face entry's are */
+  struct VerGuard { const char *name; int cls, cells, vis; } *ver_guards;
   int nver_guards;
   /* the entries are made (ver_entries_build): the versions the calls get
      are kept, and a call that reaches a later prepend's copy binds its

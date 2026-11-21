@@ -149,7 +149,7 @@ struct LoadRecord {
   /* the call plan's frame (elab_plan_enter): the map one build made, swapped
      in while call_target asks its questions, with the parents it climbed and
      the run points made of it (lr_run_points) */
-  struct LrPlan { LrStmt *st; int nst, cst, *at; unsigned char *bits; int n, ncap, runs_of, nrun, *rend, *rinst, *rentry; struct LrExt *ext; int *extix, next, cext, cextix; } plan;
+  struct LrPlan { LrStmt *st; int nst, cst, *at; unsigned char *bits; int n, ncap, runs_of, nrun, *rend, *rinst, *rentry, *rmade; struct LrExt *ext; int *extix, next, cext, cextix; } plan;
   int *up, nup;              /* [nup] the parent each node's point was climbed from (lr_par) */
   int *plan_par, plan_depth;
   unsigned char plan_made;
@@ -229,6 +229,7 @@ struct LoadRecord {
   signed char creach;                                  /* ...whether the program reaches a constant past them (lr_const_reached, -1 not asked) */
   unsigned char ext_building;                          /* ...while lr_rta and lr_extents build them: a method body's version is not ordered yet (lr_version_order), and nothing reads a run point or an extent until they are done (lr_run_points) */
   int *rentry;               /* ...and each region's load (all three statements of region 0) */
+  int *rmade;                /* ...by class + 1, the region that makes the class, 0 for none (lr_region_classes; NULL with one region) */
   unsigned char post;        /* ...whether anything may run after the load: the program has an exit handler (an at_exit call or an END, anywhere) or --ext-entry (lr_rta) */
   unsigned char defs_computed;          /* ...and whether the program makes or copies a method by a computed name */
   struct LrVers *vers; int nvers, cvers, *vers_head;
@@ -989,11 +990,11 @@ void elab_hold(Compiler *c, int on) {
    lr_rta's first statements) are facts of one map's statement numbers, so
    they swap with it: the frame and the live map each make their own. */
 static void lr_plan_swap(LoadRecord *r) {
-  struct LrPlan live = { r->st, r->nst, r->cst, r->at, r->bits, r->n, r->ncap, r->runs_of, r->nrun, r->rend, r->rinst, r->rentry, r->ext, r->extix, r->next, r->cext, r->cextix };
+  struct LrPlan live = { r->st, r->nst, r->cst, r->at, r->bits, r->n, r->ncap, r->runs_of, r->nrun, r->rend, r->rinst, r->rentry, r->rmade, r->ext, r->extix, r->next, r->cext, r->cextix };
   r->st = r->plan.st; r->nst = r->plan.nst; r->cst = r->plan.cst; r->at = r->plan.at;
   r->bits = r->plan.bits; r->n = r->plan.n; r->ncap = r->plan.ncap;
   r->runs_of = r->plan.runs_of; r->nrun = r->plan.nrun; r->rend = r->plan.rend; r->rinst = r->plan.rinst;
-  r->rentry = r->plan.rentry; r->ext = r->plan.ext; r->extix = r->plan.extix; r->next = r->plan.next; r->cext = r->plan.cext;
+  r->rentry = r->plan.rentry; r->rmade = r->plan.rmade; r->ext = r->plan.ext; r->extix = r->plan.extix; r->next = r->plan.next; r->cext = r->plan.cext;
   r->cextix = r->plan.cextix;
   r->plan = live;
 }
@@ -4986,6 +4987,7 @@ int elab_version_held_row(const LrDef *v, const char *name, int cside) {
   return !cside && v->may && bop_kernel_answers(name, -1, 0);
 }
 static int lr_body_word_of(const LrHist *h);
+static int lr_version_extent(Compiler *c, const LrHist *h, const LrDef *v);
 /* Is the late bit asked of history h of x's name, one of nh histories
    that hold a version (lr_late_make)? */
 static int lr_late_asked(Compiler *c, const LrVers *x, const LrHist *h, int nh) {
@@ -4994,7 +4996,7 @@ static int lr_late_asked(Compiler *c, const LrVers *x, const LrHist *h, int nh) 
   int str_reader = !cside && h->a >= 0 && h->a == comp_core_class(c, CORE_STRING) && is_string_boxed_reader(x->name);
   const LrDef *fv = lr_first_version(h);
   if (!fv) return 0;
-  if (fv->body || lr_body_word_of(h) ? elab_body_reflected(c, x->name, cside) :
+  if (lr_version_extent(c, h, fv) || lr_body_word_of(h) ? elab_body_reflected(c, x->name, cside) :
       r->refl_any || (!cside && r->refl_cell_list) || lr_refl_has(r->refl, r->nrefl, x->name) || lr_refl_cell_table(c, x->name, cside) ||
       (!cside && lr_refl_has(r->refl_capt, r->nrefl_capt, x->name)) || (nh > 1 && !cside && !str_reader)) return 0;
   if (str_reader || lr_body_word_of(h)) return 1;
@@ -5079,7 +5081,7 @@ static void lr_late_make(Compiler *c) {
       /* (a held Kernel-row name's: its condition may not have run, and its entry's else arm is the row, whichever builtin answers the name) */
       if (lr_first_version(y) && elab_version_held_row(lr_first_version(y), x->name, y->b)) { y->late = x->late = 2; continue; }
       if (y->late == 3) continue;
-      if (lr_first_version(y)->body || lr_body_word_of(y)) y->late = x->late = 2;   /* (a method body's: before its extent opens, lr_version_order; a body's word: lr_body_word_of) */
+      if (lr_version_extent(c, y, lr_first_version(y)) || lr_body_word_of(y)) y->late = x->late = 2;   /* (a method body's, or a region's: before its extent opens, lr_version_order; a body's word: lr_body_word_of) */
       else { x->pend++; if (x->late == 3) x->late = 1; }
     }
   }
@@ -7496,6 +7498,32 @@ static int lr_body_runs_after(Compiler *c, int body, LoadPoint p, int late) {
   int from = lr_def_from(r, body);
   return from >= LR_POST || (late != 1 && p.region >= 0 && p.seq < from && !lr_runs_again(c, r->st[from].node, p));
 }
+/* The body whose extent version v of history h takes in place of its
+   point: a method body's (LrDef.body); for one at a point of a region other
+   than region 0, that region's file root, whose extent the requires that
+   load the file give (lr_region_time), asked once the walk is over (the run
+   points are made of the record); 0 for one at a point of region 0, which
+   is ordered by that point, and for one on a class the region makes, or on
+   one nested in it (LoadRecord.rmade), which has run before a call of
+   another region reaches it */
+static int lr_version_extent(Compiler *c, const LrHist *h, const LrDef *v) {
+  LoadRecord *r = c->lrec;
+  if (v->body || r->ext_building || !r->recorded || r->walk) return v->body;
+  if (elab_point_of(c, v->node).region <= 0) return 0;
+  lr_run_points(c);
+  r = c->lrec;
+  LoadPoint q = elab_point_of(c, v->node);   /* (of the map the run points are made of) */
+  if (q.region <= 0 || q.seq < 0) return 0;
+  for (int a = h ? h->a : LR_MAIN, k = 0; r->rmade && a >= 0 && a < c->nclasses && k < c->nclasses; a = c->classes[a].enclosing_class, k++)
+    if (r->rmade[a + 1] == q.region) return 0;
+  int f = r->st[q.seq].file, root = f > 0 && f < nt_nroots(c->nt) ? nt_root(c->nt, f) : -1;
+  return root > 0 && root < r->cextix && r->extix[root] ? root : 0;
+}
+/* See analyze.h. */
+int elab_version_extent(Compiler *c, const ElabVersion *ev) {
+  LoadRecord *r = c->lrec;
+  return r && ev->hist >= 0 && ev->hist < r->nhist ? lr_version_extent(c, &r->hist[ev->hist], ev->v) : ev->v->body;
+}
 /* Does nothing of history h but v (a version a body makes) run after
    statement sure of region 0 and by point p (late as lr_version_order's):
    every other entry at a point of region 0 no later than sure, and one in
@@ -7505,10 +7533,12 @@ static int lr_body_runs_after(Compiler *c, int body, LoadPoint p, int late) {
    runs after p (lr_body_runs_after)? Another body's version may run any
    time otherwise, and so does an entry with no point (unplaced, absent) */
 static int lr_alone_after(Compiler *c, const LrHist *h, const LrDef *v, int sure, int bind, LoadPoint p, int late) {
+  int vb = lr_version_extent(c, h, v);
   for (int i = 0; h && i < h->n; i++) {
     const LrDef *w = &h->v[i];
-    if (w == v || w->body == v->body || (w->body && lr_body_runs_after(c, w->body, p, late))) continue;
-    if (w->body || w->unplaced || w->absent) return 0;
+    int wb = w == v ? vb : lr_version_extent(c, h, w);
+    if (w == v || wb == vb || (wb && lr_body_runs_after(c, wb, p, late))) continue;
+    if (wb || w->unplaced || w->absent) return 0;
     LoadPoint q = elab_point_of(c, w->node);
     if (q.region != 0 || q.seq < 0 || q.seq > sure) return 0;
     if (q.seq == sure && (bind < 0 || lr_run_order(c, w->node, bind) != PROG_BEFORE)) return 0;
@@ -7517,7 +7547,10 @@ static int lr_alone_after(Compiler *c, const LrHist *h, const LrDef *v, int sure
 }
 /* The order of version v of history h against point p (late == 1: as of
    the load phase's end): a version at a point, its point's; one a method
-   body makes (LrDef.body), the span of statements that body may run on: after p
+   body makes (LrDef.body), and one at a point of a region other than
+   region 0 against a point of another region or at the load's end (its
+   region's extent, lr_version_extent), the span of statements that body
+   may run on: after p
    where p comes before the first statement that body may run on (lr_rta's
    LrExt.from) and that statement does not run again before p
    (lr_runs_again), and after every point for a body that never runs;
@@ -7528,13 +7561,14 @@ static int lr_alone_after(Compiler *c, const LrHist *h, const LrDef *v, int sure
    that runs it; not known otherwise, since the body may
    run any number of times. h NULL: the first two only. */
 static int lr_version_order(Compiler *c, const LrHist *h, const LrDef *v, LoadPoint p, int late) {
-  if (!v->body)
-    return late == 1 ? (elab_point_of(c, v->node).region == 0 ? PROG_BEFORE : PROG_UNKNOWN) : elab_cmp(elab_point_of(c, v->node), p);
+  LoadPoint q = v->body ? (LoadPoint){ -1, -1, -1 } : elab_point_of(c, v->node);
+  int body = v->body || (q.region > 0 && (late == 1 || p.region != q.region)) ? lr_version_extent(c, h, v) : 0;
+  if (!body) return late == 1 ? (q.region == 0 ? PROG_BEFORE : PROG_UNKNOWN) : elab_cmp(q, p);
   LoadRecord *r = c->lrec;
   if (r->ext_building) return PROG_UNKNOWN;   /* (asked by a call's binding while the extents are built: not ordered yet) */
   lr_run_points(c);
-  if (lr_body_runs_after(c, v->body, p, late)) return PROG_AFTER;
-  const LrExt *e = v->body < r->cextix && r->extix[v->body] ? &r->ext[r->extix[v->body] - 1] : NULL;
+  if (lr_body_runs_after(c, body, p, late)) return PROG_AFTER;
+  const LrExt *e = body < r->cextix && r->extix[body] ? &r->ext[r->extix[body] - 1] : NULL;
   int sure = e ? e->sure : LR_NEVER;
   /* (at the sure statement itself, a point its one run (LrExt.bind) comes
      before: `p K.setup, K.made`) */
@@ -7899,11 +7933,22 @@ static int lr_rta_raised(const VpLeaf *leaf, void *ud) {
    (LrExt.sure), and the call itself runs whenever the statement does
    (lr_runs_with_stmt). The call that is the only one to reach it, at a
    statement that does not repeat, is the def's one run (LrExt.bind, kept by
-   lr_rta_extents). */
+   lr_rta_extents). So too a call with no receiver at main's top level (rc
+   LR_UNKNOWN_CLASS) of main's def, where it is the name's one version and
+   no builtin answers the name ahead of it (lr_hand_on's callee), whatever
+   its visibility, and the call runs whenever its statement does. */
 static void lr_rta_bind(LrRta *t, int id, const char *by, int rc) {
   LoadRecord *r = t->r;
   const LrDef *d = NULL;
-  int hi = -1, nv = 0;
+  const LrStmt *st = t->s < r->nst ? &r->st[t->s] : NULL;
+  int hi = -1, nv = 0, top = rc == LR_UNKNOWN_CLASS;
+  if (top) {
+    const LrHist *h = lr_hist(r, LR_MAIN, 0, by, 0);
+    if (!h || !h->n || !st || st->frame >= 0 || nt_ref(t->c->nt, id, "receiver") >= 0 || r->defs_computed || builtin_instance_name_known(by) ||
+        elab_method_versions(t->c, by) != 1 || !lr_runs_with_stmt(t->c, id))
+      return;
+    d = &h->v[0], hi = (int)(h - r->hist), nv = h->n;
+  }
   for (int a = rc, k = 0; a >= LR_MAIN && a < t->c->nclasses && k < lr_chain_bound(t->c); a = lr_super(t->c, a), k++) {
     const LrClass *kc = lr_class(r, a);
     for (int j = 0; kc && j < kc->nmix; j++) if (elab_mix_on_singleton(kc->mix[j].kind)) return;
@@ -7911,8 +7956,8 @@ static void lr_rta_bind(LrRta *t, int id, const char *by, int rc) {
     if (h && h->n) { d = &h->v[0]; hi = (int)(h - r->hist); }
     nv += h ? h->n : 0;
   }
-  const LrStmt *dst = d ? lr_stmt_of(r, d->node) : NULL, *st = t->s < r->nst ? &r->st[t->s] : NULL;
-  if (nv != 1 || d->kind != LR_DEF || d->vis != SP_VIS_PUBLIC || d->body || !st || st->region != 0 || !dst || dst->region != 0 ||
+  const LrStmt *dst = d ? lr_stmt_of(r, d->node) : NULL;
+  if (nv != 1 || d->kind != LR_DEF || (!top && d->vis != SP_VIS_PUBLIC) || d->body || !st || st->region != 0 || !dst || dst->region != 0 ||
       !lr_rta_inplace(t, id) || lr_stmt_applied(dst, 0, d->may) != 1 || r->at[d->node] >= t->s)
     return;
   LrExt *e = lr_ext_make(t->c, d->node, LR_B_DEF);
@@ -8001,7 +8046,7 @@ static void lr_rta_node(LrRta *t, int id) {
     if ((m = m >= 0 ? elab_header_class(t->c, m, NULL, NULL) : LR_UNKNOWN_CLASS) >= 0) lr_rta_add(t, m);
     else lr_rta_any(t);
   }
-  if (rc >= LR_MAIN && by == nm) lr_rta_bind(t, id, by, rc);
+  if ((rc >= LR_MAIN || rk == NK_SelfNode) && by == nm) lr_rta_bind(t, id, by, rc);
   if (rc >= LR_MAIN) lr_rta_call_on(t, by, rc, by == nm && lr_rta_once(t, id));   /* a method called, sent or made a callable by its name */
   else lr_rta_call(t, by, RQ_INST | RQ_CLASS);
   if (lr_rta_ctor(t, by)) {
@@ -8266,6 +8311,51 @@ static void lr_region_runs(Compiler *c) {
    singleton's or a builtin class's, or one with a module mixed into one
    of those (global). */
 static void lr_extents(Compiler *c);
+/* The classes a region makes (LoadRecord.rmade): a program class or module
+   made (its def_node: a header, a builder's write) in a region other than
+   region 0, every body of which (LrClass.open) stands there too. Nothing
+   reaches it before the statement that makes it runs: a call on it, `new`,
+   a subclass, a reopening, const_get and an autoload's reach all name its
+   constant, which only that statement writes. So too a class an autoload's
+   region opens, whose constant the autoload registers (lr_autoload_region).
+   What the region makes on the class, or on one nested in it, keeps its
+   point. That orders it right against a call from another region where the
+   region runs to its end once entered; a region that raises before its
+   later defs (with the raise rescued), that calls back into another
+   region's code before them, or an autoload of a constant already defined,
+   which never loads the file, are not told apart from it (master answers
+   them the same way). */
+static int lr_autoload_region(Compiler *c, int header, int g);
+static void lr_region_classes(Compiler *c) {
+  LoadRecord *r = c->lrec;
+  for (int k = 0; k < c->nclasses && k + 1 < r->ncls; k++) {
+    const LrClass *kc = lr_class(r, k);
+    int d = c->classes[k].def_node, e = d >= 0 && d < r->n ? r->at[d] : -1, g = e >= 0 ? r->st[e].region : 0, auto_g = 0;
+    if (!kc || !kc->nopen || kc->vconst || c->classes[k].is_builtin_const) continue;
+    for (int i = 0; i < kc->nopen; i++) {
+      int o = kc->open[i].node, oe = o >= 0 && o < r->n ? r->at[o] : -1, og = oe >= 0 ? r->st[oe].region : 0;
+      if (og != g) g = 0;
+      if (og > 0 && !auto_g && lr_autoload_region(c, o, og)) auto_g = og;
+    }
+    r->rmade[k + 1] = g > 0 ? g : auto_g;
+  }
+}
+/* Does an autoload register the constant header node `header` (of region g)
+   opens, naming g's file: every reach of the constant, another header of
+   it too, loads that file first, so the class's methods g makes have run
+   before any call of another region reaches them */
+static int lr_autoload_region(Compiler *c, int header, int g) {
+  LoadRecord *r = c->lrec;
+  const char *leaf;
+  int owner;
+  elab_header_class(c, header, &owner, &leaf);
+  const LrHist *h = owner >= LR_MAIN && leaf ? lr_hist(r, LR_KEY_AUTO, lr_const_owner(owner), leaf, 0) : NULL;
+  for (int k = 0; h && k < c->nautoloads; k++) {
+    int f = c->autoloads[k].file, root = f > 0 && f < nt_nroots(c->nt) ? nt_root(c->nt, f) : -1;
+    if (c->autoloads[k].slot == (int)(h - r->hist) + 1 && root >= 0 && root < r->n && r->at[root] >= 0 && r->st[r->at[root]].region == g) return 1;
+  }
+  return 0;
+}
 static void lr_run_points(Compiler *c) {
   LoadRecord *r = elab_fresh(c);
   if (r->rend && r->runs_of == r->builds) return;
@@ -8309,10 +8399,12 @@ static void lr_run_points(Compiler *c) {
     r->rend[e->region] = s + 1;
   }
   r->nrun = n;
-  free(r->rinst); free(r->rentry);
+  free(r->rinst); free(r->rentry); free(r->rmade);
   r->rinst = calloc((size_t)(r->ncls > c->nclasses ? r->ncls : c->nclasses + 1) + 1, sizeof(int));
+  r->rmade = r->nregion > 1 ? calloc((size_t)c->nclasses + 1, sizeof(int)) : NULL;   /* (one region: no version takes a region's extent) */
   r->rentry = calloc((size_t)r->nregion, sizeof(int));
-  if (!r->rinst || !r->rentry) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  if (!r->rinst || !r->rentry || (r->nregion > 1 && !r->rmade)) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  if (r->rmade) lr_region_classes(c);
   r->ext_building = 1;
   lr_rta(c);
   lr_extents(c);
@@ -8565,13 +8657,85 @@ static void lr_ext_time(Compiler *c, const int *par, int n, int i) {
     if (e->count == LR_CNT_ZERO) e->from = LR_NEVER;
     if (sure && o < 0 && st && st->region == 0 && !st->may && !st->partial && !st->kept && !nt_safe_nav(nt, call) && lr_runs_with_stmt(c, call)) e->sure = stmt;
   }
-  else if (body == LR_B_REGION) {   /* a load at no point: its require, where one names it alone and is sure */
-    e->count = e->from == LR_NEVER ? LR_CNT_ZERO : LR_CNT_ONCE;
-    const LrStmt *q = e->from < r->nst ? &r->st[e->from] : NULL;
-    int tf = q && nt_kind(nt, q->node) == NK_LoadNode && !prog_load_open(nt, q->node) && !prog_load_ncand(nt, q->node) ? (int)nt_int(nt, q->node, "target_file", -1) : -1;
-    int root = tf > 0 && tf < nt_nroots(nt) ? nt_root(nt, tf) : -1;
-    if (root == node && lr_stmt_applied(q, 0, q->may) == 1 && !q->partial && !q->kept) e->sure = e->from;
+  else if (body == LR_B_REGION) e->count = e->from == LR_NEVER ? LR_CNT_ZERO : LR_CNT_ONCE;   /* (a load at no point: from its entry, lr_region_time) */
+}
+/* The first statement require `load` surely runs on (LrExt.sure), with the
+   call that runs it there in *bind: its own, where it runs whenever that
+   statement does (lr_runs_with_stmt) and the statement surely runs; that of
+   the def or the block around it (o, its extent entry), where it runs
+   whenever that body does (lr_runs_with_body) and the body surely runs
+   (lr_rta_bind; an in-place block's row, lr_ext_time); LR_NEVER otherwise.
+   A block is sure at its call's statement, and the code nested in that
+   statement may run before the require does: the file is sure only past
+   the statement's last point, with no one run. A require of a set of files
+   (set) is sure for each only where the set is one file per word of the
+   `each` or `each_with_index` block over a literal Array of Strings it
+   stands in directly (prog_load_per_word: not a
+   set a path pattern names), so it runs every one of them where that
+   block, sure and the outermost body (a block with a body around it is
+   never sure), runs for every word: one with no break, next, throw or
+   other early exit anywhere in it (lr_jumps) */
+static int lr_load_sure(Compiler *c, const int *par, int n, int load, int o, int set, int *bind) {
+  LoadRecord *r = c->lrec;
+  const LrStmt *q = lr_stmt_of(r, load);
+  *bind = set ? -1 : load;
+  if (o < 0)
+    return !set && q && q->region == 0 && lr_stmt_applied(q, 0, q->may) == 1 && !q->partial && !q->kept && lr_runs_with_stmt(c, load) ? (int)(q - r->st) : LR_NEVER;
+  if (set && !prog_load_per_word(c->nt, load)) return LR_NEVER;
+  const LrExt *e = &r->ext[o];
+  *bind = e->body == LR_B_DEF && !set ? e->bind : -1;
+  if ((e->body != LR_B_DEF || set) && (e->body != LR_B_BLOCK || (set && lr_jumps(c->nt, e->node)))) return LR_NEVER;
+  if (!lr_runs_with_body(c->nt, par, n, load, e->node)) return LR_NEVER;
+  return e->body == LR_B_DEF ? e->sure : e->sure >= 0 && e->sure < r->nst ? r->st[e->sure].last : LR_NEVER;
+}
+/* Each region's extent from the loads that may run its file, after every
+   other body's (lr_ext_time): from the first statement one of them may run
+   on, past the body around it, and no earlier than the region's entry
+   (lr_rta's rentry); never, where none may run. A require of a set of files
+   (open, or of candidates) may load any of them, and a file an autoload
+   names is loaded where the constant is first reached: such a file keeps
+   its entry. sure from the first statement a require of the file, alone or
+   in a set it runs every file of, surely runs on (lr_load_sure), and its bind where no other load (nor
+   an autoload) may run the file: a require runs a file once, whatever other requires of it run
+   before or after; not for a file a `load` may run again. One pass over the
+   loads. */
+typedef struct LrRegionAcc { int from, sure, bind, n; unsigned char loose, again; } LrRegionAcc;
+static void lr_region_load(LrRegionAcc *a, int from, int sure, int bind, int again) {
+  a->n++;
+  a->again |= (unsigned char)again;
+  if (from < a->from) a->from = from;
+  if (sure < a->sure) a->sure = sure, a->bind = bind;
+}
+static void lr_region_time(Compiler *c, const int *par, int n) {
+  LoadRecord *r = c->lrec;
+  const NodeTable *nt = c->nt;
+  int nr = nt_nroots(nt);
+  LrRegionAcc *a = malloc(sizeof *a * (size_t)(nr + 1)), *any = &a[nr];   /* (any: an open require's, of every file) */
+  if (!a) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int f = 0; f <= nr; f++) a[f] = (LrRegionAcc){ LR_NEVER, LR_NEVER, -1, 0, 0, 0 };
+  for (int k = 0; k < c->nautoloads; k++) if (c->autoloads[k].file > 0 && c->autoloads[k].file < nr) a[c->autoloads[k].file].loose = 1;
+  NT_FOREACH_KIND(nt, NK_LoadNode, l) {
+    int tf = (int)nt_int(nt, l, "target_file", -1), nc = prog_load_ncand(nt, l), open = prog_load_open(nt, l);
+    if (l >= n || (!open && !nc && (tf <= 0 || tf >= nr))) continue;
+    int o = lr_ext_around(r, nt, par, n, l), ofrom = o >= 0 ? r->ext[o].from : 0, ocount = o >= 0 ? r->ext[o].count : LR_CNT_ONCE;
+    int stmt = l < r->n && r->at[l] >= 0 ? lr_ext_stmt(r, r->at[l]) : 0, bind = -1, again = is_load_name(nt_str(nt, l, "method"));
+    if (ocount == LR_CNT_ZERO || ofrom == LR_NEVER || stmt == LR_NEVER) continue;   /* (a load no run reaches) */
+    int from = stmt > ofrom ? stmt : ofrom, sure = open ? LR_NEVER : lr_load_sure(c, par, n, l, o, nc > 1, &bind);
+    if (open) lr_region_load(any, from, LR_NEVER, -1, again);
+    for (int k = 0; !open && k < (nc ? nc : 1); k++) {
+      int f = nc ? prog_load_cand(nt, l, k) : tf;
+      if (f > 0 && f < nr) lr_region_load(&a[f], from, sure, bind, again);
+    }
   }
+  for (int f = 1; f < nr; f++) {
+    int root = nt_root(nt, f), from = a[f].from < any->from ? a[f].from : any->from;
+    LrExt *e = root >= 0 && root < r->cextix && r->extix[root] ? &r->ext[r->extix[root] - 1] : NULL;
+    if (!e || e->body != LR_B_REGION || e->from == LR_NEVER) continue;
+    if (!a[f].loose) e->from = from == LR_NEVER ? LR_NEVER : from > e->from ? from : e->from;
+    e->count = e->from == LR_NEVER ? LR_CNT_ZERO : a[f].again || any->again ? LR_CNT_MANY : LR_CNT_ONCE;
+    if (e->count == LR_CNT_ONCE && a[f].sure != LR_NEVER && a[f].sure >= e->from) e->sure = a[f].sure, e->bind = a[f].n + any->n == 1 && !a[f].loose ? a[f].bind : -1;
+  }
+  free(a);
 }
 /* Every body's extent, made after lr_rta, one pass over the nodes: an entry for
    each body (a def's came with lr_rta) and the file root of each region, then
@@ -8593,6 +8757,7 @@ static void lr_extents(Compiler *c) {
     if (root >= 0 && root < n && r->at[root] >= 0 && r->st[r->at[root]].region > 0 && !(root < r->cextix && r->extix[root])) lr_ext_make(c, root, LR_B_REGION);
   }
   for (int i = 0; i < r->next; i++) lr_ext_time(c, par, n, i);
+  if (r->nregion > 1) lr_region_time(c, par, n);
 }
 
 /* How many statements in seq [a, b) may run code of the program's */
@@ -13141,7 +13306,7 @@ void elab_free(Compiler *c) {
   for (int i = 0; i < r->cfirst.n; i++) free(r->cfirst_cs[i].st);
   anh_free(&r->cfirst); free(r->cfirst_cs);
   free(r->plan.st); free(r->plan.at); free(r->plan.bits); free(r->plan_par); free(r->up);
-  free(r->plan.rend); free(r->plan.rinst); free(r->plan.ext); free(r->plan.extix); free(r->plan.rentry);
+  free(r->plan.rend); free(r->plan.rinst); free(r->plan.ext); free(r->plan.extix); free(r->plan.rentry); free(r->plan.rmade);
   for (int i = 0; i < r->nnames; i++) free(r->names[i]);
   for (int i = 0; i < r->nreopens; i++) free(r->reopens[i]);
   for (int i = 0; i < r->nrefl; i++) free(r->refl[i]);
@@ -13161,7 +13326,7 @@ void elab_free(Compiler *c) {
   free(r->brings); free(r->hist); free(r->mixed); free(r->mby); free(r->mby_at); free(r->rclass); free(r->cref); free(r->sgm); free(r->sgchain); free(r->unset.key); free(r->unset.un); free(r->anc.at); free(r->anc.list); free(r->anc.seen); free(r->anc.walked); free(r->anc.depth); free(r->anc.up); free(r->clsmod); free(r->hhead); free(r->cls); free(r->vers); free(r->vers_head); free(r->valias); free(r->rdr); free(r->rdr_head); free(r->bform); free(r->set);
   for (int i = 0; i < r->nhdr; i++) free(r->hdr[i].leaf);
   free(r->hdr); free(r->hdr_head);
-  free(r->st); free(r->at); free(r->bits); free(r->dscope); free(r->ddef); free(r->rend); free(r->rinst); free(r->rentry); free(r->ext); free(r->extix); free(r->cread); free(r->once); free(r);
+  free(r->st); free(r->at); free(r->bits); free(r->dscope); free(r->ddef); free(r->rend); free(r->rinst); free(r->rentry); free(r->rmade); free(r->ext); free(r->extix); free(r->cread); free(r->once); free(r);
   c->lrec = NULL;
 }
 

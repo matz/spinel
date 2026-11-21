@@ -5361,6 +5361,10 @@ typedef struct {
                              only the run time knows (`"x/#{v}/n"`): open narrows to the
                              program's files a path of that shape can name */
   char **autoload, **auto_path; int *auto_file, nauto;
+  int per_word;           /* SP_LOAD_SET: the set is one file for each word of the
+                             `each` or `each_with_index` block over a literal Array of
+                             Strings the call stands in directly, every word naming one
+                             (SpPaths.per_word) */
 } SpLoadEdge;
 
 /* --load-model=graph: a require of a file's tree: its edge, the call node it
@@ -7745,14 +7749,14 @@ static SpGraphFile *sp_graph_rec(SpLoadGraph *g, int f) {
 /* unsure: a local the path reads may not hold its one value where the path
    is read: it escapes or is changed (sp_local_scan), or its write is not a
    plain statement of its scope */
-typedef struct { char *v[SP_REQ_MAX]; int n, open, unsure; } SpPaths;
+typedef struct { char *v[SP_REQ_MAX]; int n, open, unsure, per_word; } SpPaths;   /* per_word: a path for each word of the loop the innermost scope is (sp_req_paths, sp_req_beside) */
 typedef struct { const pm_parser_t *pp; const pm_node_t *const *stack; int depth; const char *dir; } SpReqCtx;
 
 static void sp_paths_free(SpPaths *k) {
   for (int i = 0; i < k->n; i++) free(k->v[i]);
   k->n = 0;
 }
-static void sp_paths_open(SpPaths *k) { sp_paths_free(k); k->open = 1; }
+static void sp_paths_open(SpPaths *k) { sp_paths_free(k); k->open = 1; k->per_word = 0; }
 static void sp_paths_add(SpPaths *k, const char *s, size_t len) {
   if (k->n == SP_REQ_MAX) { sp_paths_open(k); return; }
   if (!(k->v[k->n] = strndup(s, len))) { fprintf(stderr, "spinel_parse: out of memory\n"); exit(1); }
@@ -7973,12 +7977,12 @@ static void sp_req_paths(const SpReqCtx *x, const pm_node_t *arg, SpPaths *out) 
   pm_visit_node(arg, sp_reads_visit, &rs);
   const pm_node_list_t *words = NULL;
   pm_constant_id_t wid = 0;
-  int ok = !rs.bad;
+  int ok = !rs.bad, inner = 0;
   for (int i = 0; ok && i < rs.n; i++) {
     const pm_node_list_t *w = NULL;
     pm_constant_id_t id = 0;
     ok = sp_req_bind(x, &ev, rs.rd[i], &w, &id, &out->unsure);
-    if (ok && w) { ok = !words; words = w; wid = id; }
+    if (ok && w) { ok = !words; words = w; wid = id; inner = rs.rd[i]->depth == 0; }   /* (depth 0: the loop is the innermost scope) */
   }
   char *wname = words ? cstr(wid) : NULL;
   for (size_t k = 0; ok && k < (words ? words->size : 1); k++) {
@@ -7991,6 +7995,7 @@ static void sp_req_paths(const SpReqCtx *x, const pm_node_t *arg, SpPaths *out) 
     else ok = 0;
   }
   if (!ok) sp_paths_open(out);
+  else out->per_word = words && inner;
   free(wname);
   for (int i = 0; i < ev.nloc; i++) free(ev.loc[i].name);
 }
@@ -8005,8 +8010,11 @@ static void sp_req_beside(const SpReqCtx *x, const pm_node_t *arg, SpPaths *out)
   pm_visit_node(arg, sp_shape_visit, &shape);
   if (shape.bad || !shape.constants) { sp_paths_open(out); return; }
   pm_constant_id_t pid = 0;
+  int scope = x->depth - 1, wi = -1;   /* (the innermost scope, and the loop's) */
+  while (scope >= 0 && !sp_scope_node(PM_NODE_TYPE(x->stack[scope]))) scope--;
   for (int i = x->depth - 1; i >= 0 && !words; i--)
     if (PM_NODE_TYPE(x->stack[i]) == PM_BLOCK_NODE && sp_each_words(x, i, 0, &words, &pid)) {
+      wi = i;
       SpLocalScan sc = { pid, 0, 0, 0, 0, NULL };   /* (a word the block assigns anew is not the loop's) */
       pm_visit_node(sp_scope_body(x->stack[i]), sp_local_scan, &sc);
       if (sc.nwrite || sc.other) { sp_paths_open(out); return; }
@@ -8032,6 +8040,7 @@ static void sp_req_beside(const SpReqCtx *x, const pm_node_t *arg, SpPaths *out)
     }
     free(val);
   }
+  out->per_word = !out->open && words && wi == scope;
   free(var);
 }
 
@@ -8215,6 +8224,7 @@ static int sp_graph_computed(SpSiteWalk *w, const pm_call_node_t *n, const char 
      that does not parse is no file of the graph, and the call makes no
      registration (the program layer decides what it is) */
   int nfile = 0, to[SP_REQ_MAX], rel = 0, bad = kv.open || (auto_load && !beside && kv.n == 1 && !sp_load_parses(g, w->f, kv.v[0]));
+  int every = 1;   /* (each path names a file of the program) */
   const char *one = NULL;
   for (int i = 0; i < kv.n && !bad; i++) {
     const char *p = kv.v[i];
@@ -8224,7 +8234,7 @@ static int sp_graph_computed(SpSiteWalk *w, const pm_call_node_t *n, const char 
        features a require names are noted as it resolves) */
     if (!rel || sp_beside_file(g, w->f, p)) how = sp_load_target(g, w->f, rel, p, &f);
     one = p;
-    if (how != SP_LOAD_FILE) continue;
+    if (how != SP_LOAD_FILE) { every = 0; continue; }
     int dup = 0;
     for (int k = 0; k < nfile; k++) dup |= to[k] == f;
     if (!dup) to[nfile++] = f;
@@ -8240,6 +8250,7 @@ static int sp_graph_computed(SpSiteWalk *w, const pm_call_node_t *n, const char 
     g->edge[e].ncand = g->edge[e].open ? 0 : nfile;
     g->edge[e].cand = g->edge[e].ncand ? malloc(sizeof(int) * (size_t)nfile) : NULL;
     for (int k = 0; k < g->edge[e].ncand; k++) g->edge[e].cand[k] = to[k];
+    g->edge[e].per_word = !g->edge[e].open && !auto_load && kv.per_word && every;
     sp_load_resolved(g, w->f);
   }
   if (auto_load) {
@@ -8489,6 +8500,7 @@ static int sp_graph_site_take(int id, const pm_node_t *call) {
     if (e->how == SP_LOAD_SET) {
       emit_int(id, "ncand", e->ncand);
       if (e->open) emit_int(id, "open", 1);
+      if (e->per_word) emit_int(id, "per_word", 1);
       char *dir = strdup(g_flat_sites.g->file[e->from]), *sl = dir ? strrchr(dir, '/') : NULL;   /* the requiring file's directory */
       if (!dir) { fprintf(stderr, "spinel_parse: out of memory\n"); exit(1); }
       if (sl) *sl = 0;

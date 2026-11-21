@@ -1,0 +1,12 @@
+"foo"
+:m
+:i
+:k
+"LOUD foo"
+:j
+[NoMethodError, :more]
+:v
+:d
+:more_k
+:more
+[:v, nil]

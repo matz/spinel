@@ -169,9 +169,9 @@ DM.later: define_method#89 end=yes
 DM.unused: define_method#90 end=yes
 DM#inst: define_method#91 end=yes
 main#__enum_each_with_index__0: def#94 private end=yes
-main#lib_m: def#96 private end=unknown
+main#lib_m: def#96 private end=yes
 post: after #94
-extent def load_it line 19: from=#11 sure=never count=many kept=no
+extent def load_it line 19: from=#11 sure=#11 count=once kept=no
 extent def never line 21: from=never sure=never count=zero kept=no
 extent def once line 22: from=#10 sure=#10 count=once kept=no
 extent def loop_run line 23: from=#13 sure=#25 count=many kept=no
@@ -213,7 +213,7 @@ extent lambda line 105: from=#87 sure=never count=once kept=yes
 extent block define_singleton_method line 110: from=#93 sure=never count=many kept=yes
 extent block define_singleton_method line 111: from=never sure=never count=zero kept=yes
 extent block define_method line 112: from=#93 sure=never count=many kept=yes
-extent region line 1: from=#11 sure=never count=once kept=no
+extent region line 1: from=#11 sure=#11 count=once kept=no
 extent def lib_m line 1: from=never sure=never count=zero kept=no
 extent def __enum_each_with_index__0 line 506: from=never sure=never count=zero kept=no
 extent block each line 509: from=never sure=never count=zero kept=no

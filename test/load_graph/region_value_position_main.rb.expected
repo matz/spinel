@@ -1,0 +1,7 @@
+[NoMethodError, :t]
+true
+:t
+[[NoMethodError, :u], true, :u]
+[NoMethodError, :w]
+true
+:w

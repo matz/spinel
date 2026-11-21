@@ -3,12 +3,12 @@
 # start (from), the statement after which it has certainly run (sure), the
 # most runs it has (count) and whether it runs at a time the syntax does not
 # tell (kept). A method nothing calls never runs; one called once at the top
-# level starts and is sure at that call; one called in a loop or under a
-# rescue runs many times and is sure only where the call is. A block of
-# 0.times runs no time, of 1.times and of a one-element literal's each once,
-# of 3.times many; a stored lambda runs when the program calls it, an at_exit
-# body after the load phase, and a file required in a method, which no load
-# point places, from the statement that calls the method.
+# level (also main's) starts and is sure at that call; one called in a loop or
+# under a rescue runs many times and is sure only where the call is. A block
+# of 0.times runs no time, of 1.times and of a one-element literal's each
+# once, of 3.times many; a stored lambda runs when the program calls it, an
+# at_exit body after the load phase, and a file required in a method, which
+# no load point places, from (and sure at) the statement that calls it.
 # A call that runs only under a condition inside its statement (`c && K.a`, a
 # ternary, a modifier if, a case arm) is not sure at it, nor is a block of one
 # (`c && 1.times {}`); an iterator that may skip its block (uniq, sort_by!,

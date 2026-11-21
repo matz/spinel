@@ -168,6 +168,7 @@ int prog_load_deferred(const Compiler *c, int f);
 int prog_ordered_load(const Compiler *c, int id);
 int prog_site_places(const Compiler *c, int id);
 int prog_load_ncand(const NodeTable *nt, int load);
+int prog_load_per_word(const NodeTable *nt, int load);
 int prog_load_cand(const NodeTable *nt, int load, int k);
 int prog_load_open(const NodeTable *nt, int load);
 int prog_rescue_runs(const NodeTable *nt, int rescue);
@@ -809,6 +810,11 @@ int elab_chain_settled(Compiler *c, int cls, int sg, const char *name, LoadPoint
    cap. */
 typedef struct { const LrDef *v; int hist, cell, n; } ElabVersion;
 int elab_chain_versions(Compiler *c, int cls, int sg, const char *name, ElabVersion *out, int cap);
+/* the body whose extent version ev takes (a call may run before that body
+   does): the method body that makes it (LrDef.body), or the file root of
+   the load region it stands in, where its region's requires order it
+   (analyze_elab.c's lr_version_extent); 0 for a version at a point */
+int elab_version_extent(Compiler *c, const ElabVersion *ev);
 /* the late bit of the histories of `name` that versions vs[0..n) are in
    (elab_chain_versions): 2 where a call may run ahead of the first version
    of one of them, 3 where none is but one was not asked (a name a

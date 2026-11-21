@@ -41,5 +41,5 @@ post: after #19
 extent def who line 8: from=#14 sure=never count=many kept=no
 extent def who line 13: from=#15 sure=never count=many kept=no
 extent def more line 18: from=#16 sure=never count=many kept=no
-extent def entry_helper line 20: from=#18 sure=never count=many kept=no
-extent def lib_helper line 2: from=#17 sure=never count=many kept=no
+extent def entry_helper line 20: from=#18 sure=#18 count=once kept=no
+extent def lib_helper line 2: from=#17 sure=#17 count=once kept=no

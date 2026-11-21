@@ -1,0 +1,3 @@
+[NoMethodError, :pa]
+:pb
+[[NoMethodError, :pa], nil]

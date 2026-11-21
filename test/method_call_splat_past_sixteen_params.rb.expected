@@ -1,0 +1,5 @@
+[2.0, 1]
+[16.0, 15, 2.0, 0]
+[16, 15, 2, 0]
+[Integer, Float, String, Symbol, NilClass]
+[16.5, 15, 2, 0]

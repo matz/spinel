@@ -316,8 +316,9 @@ static const uint8_t *g_owner;
 static int sp_line_map_n = 0;
 static char **sp_file_table;   /* id -> path; defined with the map builder below */
 
-/* --load-model=graph: a require is a LoadNode (sp_flatten_call_as, below) */
-int g_load_model_graph = 0;
+/* --load-model=graph, the default: a require is a LoadNode
+   (sp_flatten_call_as, below). --load-model=inline clears it. */
+int g_load_model_graph = 1;
 /* --load-model=graph: the file being flattened, as the table's file list
    has it (0 is the entry); set with g_parser for each file */
 static int g_flat_file = 0;

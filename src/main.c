@@ -572,9 +572,8 @@ static void usage(void) {
     "  --dump-ast  Print the text AST and exit (debug)\n"
     "  --dump-load-graph  Print the files the program loads and what each require\n"
     "              resolves to, and exit (debug)\n"
-    "  --load-model=MODEL  inline (default): required files are spliced in;\n"
-    "              graph: each file is its own root and a require a load node\n"
-    "              (a require that is a top-level statement, for now)\n"
+    "  --load-model=MODEL  graph (default): each file is its own root and a\n"
+    "              require a load node; inline: required files are spliced in\n"
     "  --dump-value-positions  Print the value positions of each method body and of\n"
     "              the program, and exit (debug)\n"
     "  --check-value-pos  Check the value-position iterator's limits and exit (debug)\n"
@@ -604,8 +603,8 @@ static int table_mode_of(const char *a) {
    build` has always compiled this way through SPINEL_STRICT_REQUIRE, and `spin
    flags` needs to hand the same gate to a caller driving the compiler itself
    (#4105). `--load-model=inline|graph` picks how required files are loaded:
-   spliced into one program (the default), or each kept as its own root with
-   a load node per require (#9898; requires that are top-level statements, for now). 1 when `a`
+   each kept as its own root with a load node per require (the default), or
+   spliced into one program. 1 when `a`
    is one of them. */
 static int parse_flag(const char *a) {
   if (sp_streq(a, "--strict-require")) return g_strict_require_cli = 1;

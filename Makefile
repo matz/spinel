@@ -1466,6 +1466,14 @@ endif
 ifneq ($(shell uname -s),Linux)
 TESTS := $(filter-out $(shell grep -l '^\# spinel: linux' test/*.rb),$(TESTS))
 endif
+# A test only --load-model=inline answers yet: the default model refuses a
+# define_method a class method's body makes under a computed name, or one
+# nested in a method body's statement, until such a definition is placed
+# where it runs. load-model-inline-test runs these under the inline model
+# and asks that the default one still refuses them, so a program leaves the
+# list when it compiles.
+LOAD_MODEL_INLINE_ONLY := test/class_macro_guard_after.rb test/define_method_nested_block_params.rb
+TESTS := $(filter-out $(LOAD_MODEL_INLINE_ONLY),$(TESTS))
 # A platform that cannot give some tests their subject lists them in
 # TEST_SKIP -- native Windows (win32.mk), for tests of what only a POSIX
 # system answers -- and they are not run there.
@@ -2440,6 +2448,13 @@ string-minus-reject-test: $(SPINEL)
 	done; rm -rf "$$tmp"; \
 	[ $$ok = 1 ] && echo "string-minus-reject-test: pass" || exit 1
 
+# Two of its groups are refusals of the inline load model alone, and are
+# compiled under --load-model=inline: a test/reject/macro_*.rb that
+# test/analysis-forms/ holds as class_<name> (the text pass refuses the call;
+# the analysis runs the macro where the call stands, and analysis-forms-test
+# runs that program), and system_env_options_hash (the text scan sees no
+# keyword in `**opts`; the tree does, and test/system_options_spread.rb runs
+# it).
 reject-test: string-minus-reject-test $(SPINEL)
 	@ok=1; tmp=$$(mktemp -d /tmp/spinel-reject.XXXXXX); \
 	t=test/reject/string_split_local_each_rescue_modifier_retry.rb; \
@@ -2621,7 +2636,7 @@ reject-test: string-minus-reject-test $(SPINEL)
 	    { echo "reject-test: FAIL (#4318: $$t rejected without saying why)"; sed -n 1,3p "$$tmp/$$t.out"; ok=0; }; fi; \
 	done; \
 	t=test/reject/system_env_options_hash.rb; \
-	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/se.c" >"$$tmp/se.out" 2>&1; then \
+	if $(SPINEL) --load-model=inline "$$t" -c --no-line-map -o "$$tmp/se.c" >"$$tmp/se.out" 2>&1; then \
 	  echo "reject-test: FAIL (system with an environment Hash and an options Hash compiled)"; ok=0; \
 	else grep -q "system with an options Hash" "$$tmp/se.out" || \
 	  { echo "reject-test: FAIL (system with an environment and an options Hash refused without saying why)"; sed -n 1,5p "$$tmp/se.out"; ok=0; }; fi; \
@@ -2647,10 +2662,11 @@ reject-test: string-minus-reject-test $(SPINEL)
 	  { echo "reject-test: FAIL ($$t: an alias of \$$LOAD_PATH refused without saying why)"; sed -n 1,5p "$$tmp/la.out"; ok=0; }; fi; \
 	done; \
 	for t in test/reject/macro_*.rb; do \
-	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/mc.c" >"$$tmp/mc.out" 2>&1; then \
+	fl=; [ -f "test/analysis-forms/class_$$(basename "$$t")" ] && fl=--load-model=inline; \
+	if $(SPINEL) $$fl "$$t" -c --no-line-map -o "$$tmp/mc.c" >"$$tmp/mc.out" 2>&1; then \
 	  echo "reject-test: FAIL ($$t: a macro over state or a name it cannot compute was expanded)"; ok=0; \
 	else pat="unsupported send with a runtime method name|unsupported .*CallNode .(module_eval|class_eval|const_set).|no class in the program defines"; \
-	  grep -q '^# spinel: reject-define-method-name$$' "$$t" && pat="define_method with a non-literal name"; \
+	  grep -q '^# spinel: reject-define-method-name$$' "$$t" && pat="define_method with a non-literal name|define_method in a method body is supported only"; \
 	  grep -qE "$$pat" "$$tmp/mc.out" || \
 	  { echo "reject-test: FAIL ($$t: refused without saying why)"; sed -n 1,5p "$$tmp/mc.out"; ok=0; }; fi; \
 	done; \
@@ -3926,7 +3942,7 @@ inline-rbs-test: inline-rbs-no-parser-test
 inline-rbs-no-parser-test: $(SPINEL_NO_RBS)
 	@tmp=$$(mktemp -d); ok=1; \
 	trap 'rm -rf "$$tmp"' 0; \
-	for tp in methods=methods.rb:8 warnings=warnings_part.rb:2 syntax_error=syntax_error.rb:3 false_positives=none; do \
+	for tp in methods=methods.rb:8 warnings=warnings.rb:7 syntax_error=syntax_error.rb:3 false_positives=none; do \
 	  t=$${tp%%=*}; at=$${tp#*=}; \
 	  $(SPINEL_NO_RBS) test/inline-rbs/$$t.rb -c --no-line-map -o "$$tmp/i.c" 2>"$$tmp/i.err" || { echo "inline-rbs-no-parser-test: FAIL ($$t: compile failed)"; ok=0; }; \
 	  $(SPINEL_NO_RBS) test/inline-rbs/$$t.rb --no-inline-rbs -c --no-line-map -o "$$tmp/n.c" 2>"$$tmp/n.err" || { echo "inline-rbs-no-parser-test: FAIL ($$t: disabled compile failed)"; ok=0; }; \
@@ -5851,7 +5867,21 @@ magic-comment-test: $(SPINEL)
 # each required file's top level runs at its require, once; what graph mode
 # does not compile yet it refuses by name (#9898). make test runs it.
 .PHONY: load-graph-test
-test-run: load-graph-test
+test-run: load-graph-test load-model-inline-test
+.PHONY: load-model-inline-test
+load-model-inline-test: $(SPINEL)
+	@ok=1; tmp=$$(mktemp -d /tmp/spinel-lmi.XXXXXX); \
+	for t in $(LOAD_MODEL_INLINE_ONLY); do \
+	  b=$$(basename "$$t" .rb); \
+	  if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/$$b.c" >"$$tmp/$$b.out" 2>&1; then \
+	    echo "load-model-inline-test: FAIL ($$t compiles under the default model: take it off LOAD_MODEL_INLINE_ONLY)"; ok=0; fi; \
+	  if ! $(SPINEL) --load-model=inline "$$t" -o "$$tmp/$$b" >"$$tmp/$$b.out" 2>&1; then \
+	    echo "load-model-inline-test: FAIL ($$t: compile under --load-model=inline)"; sed -n 1,5p "$$tmp/$$b.out"; ok=0; continue; fi; \
+	  "$$tmp/$$b" >"$$tmp/$$b.run" 2>&1; \
+	  cmp -s "$$tmp/$$b.run" "$$t.expected" || \
+	    { echo "load-model-inline-test: FAIL ($$t: output)"; diff -u "$$t.expected" "$$tmp/$$b.run" | head -10; ok=0; }; \
+	done; \
+	[ $$ok = 1 ] && echo "load-model-inline-test: pass" || exit 1
 load-graph-test: $(SPINEL)
 	@tools/load_graph_check.sh
 
@@ -6180,16 +6210,17 @@ builtin-method-tables-regen:
 #   spinel --dump-value-positions test/value-pos/shapes.rb > test/value-pos/shapes.expected
 # --check-value-pos walks tables built by hand for the limits no program
 # reaches: the visit budget and a stack past its 32 entries. A program that is
-# an explicit `require "builtins/..."` has the builtin's last definition as
-# its final statement, a node of a builtin that the dump numbers "#p<n>": the
-# check asks for that form without pinning the builtin's line.
+# an explicit `require "builtins/..."` has that require's load node as its
+# final statement (the builtin is a file of its own, not spliced into the
+# program): the check asks for that node, a program node the dump numbers
+# plainly.
 value-pos-test: $(SPINEL)
 	@tmp=$$(mktemp -d /tmp/spinel-value-pos.XXXXXX); \
 	printf '%s\n' 'require "builtins/enumerator"' > "$$tmp/builtin.rb"; \
 	$(SPINEL) --dump-value-positions "$$tmp/builtin.rb" > "$$tmp/builtin.out" 2>&1; \
 	$(SPINEL) --dump-value-positions test/value-pos/shapes.rb > "$$tmp/out" 2>&1; \
 	if diff -u test/value-pos/shapes.expected "$$tmp/out" && $(SPINEL) --check-value-pos test/value-pos/shapes.rb && \
-	   grep -Eq '^  EXPR #p[0-9]+ DefNode ' "$$tmp/builtin.out"; \
+	   grep -Eq '^  EXPR #[0-9]+ LoadNode ' "$$tmp/builtin.out"; \
 	then echo "value-pos-test: ok"; rm -rf "$$tmp"; \
 	else echo "value-pos-test: FAIL"; rm -rf "$$tmp"; exit 1; fi
 

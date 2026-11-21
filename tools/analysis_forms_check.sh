@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# analysis_forms_check.sh -- the analysis' compile-time forms, run as the
-# graph load model will run them.
+# analysis_forms_check.sh -- the analysis' compile-time forms, as the graph
+# load model (the default) runs them, on the inline model's tables too.
 #
 #   tools/analysis_forms_check.sh [SPINEL]
 #
@@ -8,7 +8,8 @@
 # with its text pass (sp_const_loop.c) before the parse; the analysis runs
 # the same code with its compile-time evaluator (analyze_ct.c), on graph
 # tables or under the test-only switch SPINEL_TABLE_LOOPS=analysis. The
-# corpus runs the inline model, so this checks the analysis' side:
+# corpus runs the graph model; this checks the analysis' side under the
+# switch as well, where the text pass would otherwise answer first:
 #
 # - test/analysis-forms/*.rb but the class macros (below), the programs the
 #   analysis answers (some the text pass refuses), and

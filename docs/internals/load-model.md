@@ -690,12 +690,12 @@ plan's versions").
 [require.md](../require.md) describes `require` as a program sees it.
 The record is made under both load models.
 
-Under `--load-model=inline`, the default, required files are spliced into
+Under `--load-model=inline` required files are spliced into
 the one program text, which has one root. The walk is the same over that
 text: one region, and a statement a desugaring placed in a body has its
 point where it stands, whatever its id.
 
-Under `--load-model=graph` each file is a root of the node table
+Under `--load-model=graph`, the default, each file is a root of the node table
 (`nt_root`), and each require a `LoadNode` naming the file it loads
 (`target_file`). The parse's load graph places each file at the
 statement that first loads it (#10305): `prog_ordered_load` answers the

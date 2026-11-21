@@ -1905,18 +1905,16 @@ static int strbuf_stmts_tail_plain(Compiler *c, int st) {
   const int *b = st >= 0 && nt_kind(c->nt, st) == NK_StatementsNode ? nt_arr(c->nt, st, "body", &n) : NULL;
   return n > 0 && strbuf_tail_plain(c, b[n - 1]);
 }
-/* --share-strings: a begin whose value is a variable's String or nil in
+/* A begin whose value is a variable's String or nil in
    each of its arms (its body's, each rescue's, its else's; an ensure's is
    dropped): the arms keep the handle in its result slot
-   (emit_stmt_tail_inner). So does a rescue modifier (`s.upcase! rescue
-   nil`) whose expression and fallback are such values, not both new
-   Strings (a new String's copy is unseen): the rvalue form takes each as
-   the handle into its result slot. */
+   (emit_stmt_tail_inner). A rescue modifier takes its expression and
+   fallback as handles into that same destination, including new Strings. */
 static int strbuf_route_begin(Compiler *c, int v) {
   const NodeTable *nt = c->nt;
   v = nt_paren_single(c->nt, v);
   if (v >= 0 && nt_kind(nt, v) == NK_RescueModifierNode)
-    return !share_value_fresh(c, v, 0) && strbuf_tail_plain(c, nt_ref(nt, v, "expression")) &&
+    return strbuf_tail_plain(c, nt_ref(nt, v, "expression")) &&
            strbuf_tail_plain(c, nt_ref(nt, v, "rescue_expression"));
   if (v < 0 || nt_kind(nt, v) != NK_BeginNode) return 0;
   /* the body's value is the begin's only when no else follows it */

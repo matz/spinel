@@ -184,6 +184,12 @@ int oplist_of(const Compiler *c, int owner, OpList *l) {
       oplist_args(nt, nt_ref(nt, owner, "arguments"), l);
       oplist_block_pass(nt, owner, l);
       return 1;
+    case NK_IndexOperatorWriteNode:
+      l->kind = OPL_INDEX_OP_WRITE;
+      oplist_push(l, nt_ref(nt, owner, "receiver"));
+      oplist_args(nt, nt_ref(nt, owner, "arguments"), l);
+      oplist_push(l, nt_ref(nt, owner, "value"));
+      return 1;
     case NK_SuperNode:
       l->kind = OPL_SUPER;
       oplist_args(nt, nt_ref(nt, owner, "arguments"), l);
@@ -962,6 +968,7 @@ static const char *order_kind_name(int k) {
     case OPL_YIELD: return "yield";
     case OPL_INTERP: return "interp";
     case OPL_ARRAY: return "array";
+    case OPL_INDEX_OP_WRITE: return "index-op-write";
     default: return "hash";
   }
 }

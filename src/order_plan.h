@@ -53,9 +53,10 @@ int order_call_runs_no_code(Compiler *c, int id);
    then each argument, a keyword hash's keys and values one by one, a splat
    in place, the block-pass expression last; an interpolation's embedded
    parts; an Array literal's elements; a Hash literal's keys and values.
-   Index op-writes, `||=` / `&&=` and multiple assignment are not listed
-   yet. */
-typedef enum { OPL_CALL, OPL_SUPER, OPL_YIELD, OPL_INTERP, OPL_ARRAY, OPL_HASH } OpListKind;
+   An index op-write's receiver and keys, then its right-hand side (the slot
+   read precedes that operand). Logical index writes and multiple assignment
+   are not listed yet. */
+typedef enum { OPL_CALL, OPL_SUPER, OPL_YIELD, OPL_INTERP, OPL_ARRAY, OPL_HASH, OPL_INDEX_OP_WRITE } OpListKind;
 typedef enum { OPG_AT_CALL,      /* the guards run after every operand */
                OPG_AFTER_RECV    /* `&.`: the nil test runs after the receiver */
 } OpGuard;

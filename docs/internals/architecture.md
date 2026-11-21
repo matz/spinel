@@ -183,6 +183,8 @@ same call view, including inherited bindings and calls through super.
 A native binding uses the producer's declared String
 result, the handle of a held operand or slot, or a checked projection from
 the boxed Ruby value. The read of an existing String keeps its object.
+When Repr says a builtin result needs a handle formed from its bytes,
+the String slot renderer wraps the result where the slot takes it.
 Boxing a reflective String read uses the handle from the selected slot.
 An ENV write holds both Ruby operands, converts the key and then the
 value, and reads their bytes for the environment after the conversions.

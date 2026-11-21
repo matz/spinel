@@ -4763,11 +4763,6 @@ void emit_strbuf_value(Compiler *c, int v, Buf *b) {
   LocalVar *vlv = NULL;
   int vplus = strbuf_uplus_operand(c, v);
   Repr rpv = repr_of(c, v);
-  /* A demanded fresh String arm still emits bytes (for example 123.to_s),
-     which need their own handle; the demand alone is no reader slot. */
-  int fresh = rpv.strbuf_src == RS_FRESH &&
-              nt_kind(c->nt, v) == NK_CallNode && cplan_user(c, v).dispatch == CP_NONE &&
-              share_value_fresh(c, v, 0);
   /* a String's dup or clone where the program keeps instance variables on
      Strings (Compiler.bivar_table): the new String is made as a handle so
      that it takes a copy of the receiver's variables, as CRuby's does
@@ -4781,7 +4776,7 @@ void emit_strbuf_value(Compiler *c, int v, Buf *b) {
   }
   /* (a bang on a boxed receiver is no reader of a slot, whatever demand marks
      it: its handle is its receiver's box's, below) */
-  else if (!fresh && !(face_str_bang_call(c, v)) && strbuf_slot_text(c, v, &srefV))
+  else if (!face_str_bang_call(c, v) && strbuf_slot_text(c, v, &srefV))
     buf_puts(b, srefV.p);
   /* an element a String Array of handles reads or
      removes is the String itself (#8328 step 5) */
@@ -4869,11 +4864,19 @@ void emit_strbuf_value(Compiler *c, int v, Buf *b) {
      typed the handle where an extension's demand reached the slot it fills
      (`opaque = "#{opaque}?#{query}"` in URI's parser, beside a package
      with a C extension), the slot took a `const char *`) */
-  else if (rpv.as_ty == TY_STRBUF && !fresh &&
+  else if (rpv.as_ty == TY_STRBUF &&
            nt_kind(c->nt, v) != NK_BackReferenceReadNode && nt_kind(c->nt, v) != NK_NumberedReferenceReadNode &&
            nt_kind(c->nt, v) != NK_StringNode && nt_kind(c->nt, v) != NK_InterpolatedStringNode &&
            (nt_kind(c->nt, v) != NK_CallNode || strbuf_marked_yields_handle(c, v))) {
-    emit_expr(c, v, b);
+    /* A demanded builtin can still emit bytes. Take its handle without
+       changing how the call is emitted under the demand. */
+    if (repr_handle_apart(rpv) && nt_kind(c->nt, v) == NK_CallNode &&
+        cplan_user(c, v).dispatch == CP_NONE) {
+      str_new_handle_open(b);
+      emit_expr(c, v, b);
+      str_new_handle_close(b);
+    }
+    else emit_expr(c, v, b);
   }
   /* a box written to the slot: its nil is the slot's NULL (a String? slot
      takes nil), and only another value takes the String argument's strict

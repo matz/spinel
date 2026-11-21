@@ -2742,9 +2742,10 @@ static unsigned ver_mix(unsigned h) {
   return h;
 }
 /* How many versions rcls's chain holds of name (-1 past VER_MAX_ARMS),
-   whether the first is a plain def, whether a method body makes one
-   (LrDef.body: a call may run before that body does, where the chain may
-   hold none of them), and the late bit of the chain's histories
+   whether the first is a plain def, whether one has an extent (a method
+   body makes it, or a load region holds it: elab_version_extent; a call
+   may run before that body does, where the chain may hold none of them),
+   and the late bit of the chain's histories
    (elab_versions_late), kept by (class, side, name) for the record as it
    stands (elab_stamp): every call asked of every class of a name asks it,
    and the answer is the chain's. The names are its own copies, as in the
@@ -2790,7 +2791,7 @@ static int ver_chain_count(Compiler *c, int rcls, int sg, const char *name, int 
     }
   ElabVersion vs[VER_MAX_ARMS];
   int n = elab_chain_versions(c, rcls, sg, name, vs, VER_MAX_ARMS), def = n >= 1 && vs[0].v->kind == LR_DEF, any = 0;
-  for (int k = 0; k < n; k++) any |= (vs[k].v->body != 0 && !elab_body_reflected(c, name, sg)) || elab_version_held_row(vs[k].v, name, sg);
+  for (int k = 0; k < n; k++) any |= (elab_version_extent(c, &vs[k]) != 0 && !elab_body_reflected(c, name, sg)) || elab_version_held_row(vs[k].v, name, sg);
   m->slot[j] = (struct VerChainSlot){ name_dup(name), rcls, sg, n, def, any, elab_versions_late(c, name, vs, n) };
   m->used++;
   *first_def = def;

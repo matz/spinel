@@ -7519,6 +7519,11 @@ static int lr_version_extent(Compiler *c, const LrHist *h, const LrDef *v) {
   int f = r->st[q.seq].file, root = f > 0 && f < nt_nroots(c->nt) ? nt_root(c->nt, f) : -1;
   return root > 0 && root < r->cextix && r->extix[root] ? root : 0;
 }
+/* See analyze.h. */
+int elab_version_extent(Compiler *c, const ElabVersion *ev) {
+  LoadRecord *r = c->lrec;
+  return r && ev->hist >= 0 && ev->hist < r->nhist ? lr_version_extent(c, &r->hist[ev->hist], ev->v) : ev->v->body;
+}
 /* Does nothing of history h but v (a version a body makes) run after
    statement sure of region 0 and by point p (late as lr_version_order's):
    every other entry at a point of region 0 no later than sure, and one in
@@ -7928,11 +7933,22 @@ static int lr_rta_raised(const VpLeaf *leaf, void *ud) {
    (LrExt.sure), and the call itself runs whenever the statement does
    (lr_runs_with_stmt). The call that is the only one to reach it, at a
    statement that does not repeat, is the def's one run (LrExt.bind, kept by
-   lr_rta_extents). */
+   lr_rta_extents). So too a call with no receiver at main's top level (rc
+   LR_UNKNOWN_CLASS) of main's def, where it is the name's one version and
+   no builtin answers the name ahead of it (lr_hand_on's callee), whatever
+   its visibility, and the call runs whenever its statement does. */
 static void lr_rta_bind(LrRta *t, int id, const char *by, int rc) {
   LoadRecord *r = t->r;
   const LrDef *d = NULL;
-  int hi = -1, nv = 0;
+  const LrStmt *st = t->s < r->nst ? &r->st[t->s] : NULL;
+  int hi = -1, nv = 0, top = rc == LR_UNKNOWN_CLASS;
+  if (top) {
+    const LrHist *h = lr_hist(r, LR_MAIN, 0, by, 0);
+    if (!h || !h->n || !st || st->frame >= 0 || nt_ref(t->c->nt, id, "receiver") >= 0 || r->defs_computed || builtin_instance_name_known(by) ||
+        elab_method_versions(t->c, by) != 1 || !lr_runs_with_stmt(t->c, id))
+      return;
+    d = &h->v[0], hi = (int)(h - r->hist), nv = h->n;
+  }
   for (int a = rc, k = 0; a >= LR_MAIN && a < t->c->nclasses && k < lr_chain_bound(t->c); a = lr_super(t->c, a), k++) {
     const LrClass *kc = lr_class(r, a);
     for (int j = 0; kc && j < kc->nmix; j++) if (elab_mix_on_singleton(kc->mix[j].kind)) return;
@@ -7940,8 +7956,8 @@ static void lr_rta_bind(LrRta *t, int id, const char *by, int rc) {
     if (h && h->n) { d = &h->v[0]; hi = (int)(h - r->hist); }
     nv += h ? h->n : 0;
   }
-  const LrStmt *dst = d ? lr_stmt_of(r, d->node) : NULL, *st = t->s < r->nst ? &r->st[t->s] : NULL;
-  if (nv != 1 || d->kind != LR_DEF || d->vis != SP_VIS_PUBLIC || d->body || !st || st->region != 0 || !dst || dst->region != 0 ||
+  const LrStmt *dst = d ? lr_stmt_of(r, d->node) : NULL;
+  if (nv != 1 || d->kind != LR_DEF || (!top && d->vis != SP_VIS_PUBLIC) || d->body || !st || st->region != 0 || !dst || dst->region != 0 ||
       !lr_rta_inplace(t, id) || lr_stmt_applied(dst, 0, d->may) != 1 || r->at[d->node] >= t->s)
     return;
   LrExt *e = lr_ext_make(t->c, d->node, LR_B_DEF);
@@ -8030,7 +8046,7 @@ static void lr_rta_node(LrRta *t, int id) {
     if ((m = m >= 0 ? elab_header_class(t->c, m, NULL, NULL) : LR_UNKNOWN_CLASS) >= 0) lr_rta_add(t, m);
     else lr_rta_any(t);
   }
-  if (rc >= LR_MAIN && by == nm) lr_rta_bind(t, id, by, rc);
+  if ((rc >= LR_MAIN || rk == NK_SelfNode) && by == nm) lr_rta_bind(t, id, by, rc);
   if (rc >= LR_MAIN) lr_rta_call_on(t, by, rc, by == nm && lr_rta_once(t, id));   /* a method called, sent or made a callable by its name */
   else lr_rta_call(t, by, RQ_INST | RQ_CLASS);
   if (lr_rta_ctor(t, by)) {

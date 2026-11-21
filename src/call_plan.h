@@ -53,7 +53,7 @@ typedef enum {
   CRF_IO_REOPEN,   /* an IO reopening that yields (emit_io_reopen_call) */
   CRF_BIND_CALL,   /* a bind_call on a Class value with an armless class */
   CRF_TOP_SELF,    /* a receiverless call in a top-level def to a name main has a singleton method for (diagnose_unsupported_call) */
-  CRF_CAPTURE,     /* a record class's class method captured where its def may not have run, or a module's absent one where its NameError's class is not told (emit_call_method_obj_arms) */
+  CRF_CAPTURE,     /* a record class's class method captured where its def may not have run, or a module's absent one where its NameError's class is not told, or a public_method's whose visibility is not told (emit_call_method_obj_arms) */
   CRF_RECORD_NEW,  /* a record class's own `new` or `[]` called where its def may not have run (emit_new_call_arms, the bare new) */
   CRF_MAIN_CHAIN   /* a bare call of a name a conditional or may-not-have-run mixin of main or Object defines (reject_main_chain) */
 } CplanRefuseFrom;
@@ -65,6 +65,9 @@ typedef enum {
    untold: a module's, where the record cannot tell which of the last two,
    whose capture the plan refuses (cplan_refuse_resolve) */
 enum { CP_ABSENT_NONE, CP_ABSENT_INST, CP_ABSENT_SG, CP_ABSENT_MODULE, CP_ABSENT_UNTOLD, CP_ABSENT_MAIN };
+/* CallPlan.closed past the visibilities (SP_VIS_PRIVATE, SP_VIS_PROTECTED): a class method's visibility a body's word
+   sets, which the capture reads from the cells (CP_CLOSED_RUN), or which nothing there tells (CP_CLOSED_UNTOLD) */
+enum { CP_CLOSED_RUN = 3, CP_CLOSED_UNTOLD };
 
 typedef struct {
   int mi;                  /* the method scope, or -1 */
@@ -81,6 +84,14 @@ typedef struct {
                               stand-in, a subclass's override of a reader, a
                               reopen) */
   unsigned char method_call; /* a Method invocation, even with no source node */
+  unsigned char closed;    /* a public_method's capture of a private or
+                              protected method (SP_VIS_*) of the class its
+                              receiver names, closed_cls, where it runs
+                              (cplan_capture_closed): CRuby's NameError;
+                              CP_CLOSED_RUN where the cells of the call
+                              there tell it at the run, CP_CLOSED_UNTOLD
+                              where nothing tells it (refused) */
+  short closed_cls;
   unsigned char absent;    /* a `method(:sym)` that finds no method of
                               owner_ci's side (CP_ABSENT_*): CRuby's
                               NameError, where it runs (mi -1) or while no

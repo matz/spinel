@@ -21001,6 +21001,26 @@ static void emit_class_cells_answer(Compiler *c, const CplanCells *cs, int els, 
   buf_printf(b, "%d", els);
   while (open-- >= 0) buf_puts(b, ")");
 }
+/* See codegen_call_arms.h. */
+void emit_capture_closed_cells(Compiler *c, int id, const char *mn, int ci, const char *cn, Buf *b) {
+  const int masks[3] = { 1, 7, 2 };   /* (public, any, protected: core_bit_of_vis) */
+  const char *const pre[3] = { "if (!", "; sp_raise_cls(\"NameError\", sp_sprintf(", " ? (" };
+  CplanCells cs[3];
+  for (int k = 0; k < 3; k++)
+    if (!cplan_cmethod_presence(c, id, ci, mn, masks[k], 0, &cs[k])) return;
+  for (int k = 0; k < 3; k++) {
+    buf_puts(b, pre[k]);
+    emit_class_cells_answer(c, &cs[k], cs[k].els, b);
+    if (k) continue;
+    buf_puts(b, ") { sp_exc_stage_name(");
+    emit_str_literal(b, mn);
+    buf_puts(b, ")");
+  }
+  buf_printf(b, " ? \"method '%%s' for class '#<Class:%s>' is protected\" : \"method '%%s' for class '#<Class:%s>' is private\") : "
+                "\"undefined method '%%s' for class '#<Class:%s>'\", \"", cn, cn, cn);
+  emit_c_escaped(b, mn);
+  buf_puts(b, "\")); } ");
+}
 int emit_respond_to_cells(Compiler *c, int id, int recv, TyKind rt, const char *qm, int argc, const int *argv, Buf *b) {
   int all = argc >= 2 && nt_kind(c->nt, argv[1]) == NK_TrueNode, ci = cplan_presence_class(c, id);
   CplanCells cs;

@@ -3051,7 +3051,7 @@ static void lr_body_names_read(Compiler *c, const int *par, int n, LrBodyNames *
     int q = is_method_presence_query(cn);
     if (q >= 2 && !is_instance_method_list(cn) && list_cells_shape(nt, id) != 1) x->lists = 1;
     /* (a Method maker that finds only public methods: method and its kin find one of any visibility) */
-    if (is_public_method_lookup(cn) && a0) anh_add(&x->cread, a0);
+    if (is_public_method_lookup(cn) && a0 && !capture_cells_shape(nt, id)) anh_add(&x->cread, a0);
     /* (a respond_to? the cells do not answer, which answers from the table: on a constant or self, one of no cells
        shape, respond_to_cells_shape; on another value, one with no literal Symbol and include_all, whose class
        value's arms read no cells, respond_to_literal_shape) */
@@ -5274,6 +5274,48 @@ int elab_method_body_word(Compiler *c, const char *name, int sg) {
   for (int i = x ? x->first : -1; i >= 0; i = r->hist[i].nlink)
     if ((sg || !r->hist[i].b) && lr_body_word_of(&r->hist[i])) return 1;
   return 0;
+}
+/* (a visibility word's name, or a send's that may be one: vis_word_call) */
+static int lr_vis_word_call_name(const char *n) { return visibility_of_name(n) || class_method_vis_of_name(n) || is_send_family(n); }
+/* ...may visibility word id change `name`: it names it (`private def name` too), or takes no name (a section) or
+   one only the run knows? */
+static int lr_word_may_name(const NodeTable *nt, int id, const char *name) {
+  int an = nt_ref(nt, id, "arguments"), ac = 0, skip = 0;
+  const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
+  (void)vis_word_call(nt, id, &skip);
+  if (ac <= skip) return 1;
+  for (int i = skip; i < ac; i++) {
+    int en = 1;
+    const int *ev = nt_kind(nt, av[i]) == NK_ArrayNode ? nt_arr(nt, av[i], "elements", &en) : &av[i];
+    for (int j = 0; j < en; j++) {
+      const char *nm = nt_kind(nt, ev[j]) == NK_DefNode ? nt_str(nt, ev[j], "name") : vis_arg_name(nt, ev[j]);
+      if (!nm || sp_streq(nm, name)) return 1;
+    }
+  }
+  return 0;
+}
+/* See analyze.h. */
+int elab_method_vis_unplaced(Compiler *c, const char *name) {
+  LoadRecord *r = c->lrec;
+  const LrVers *x = r && r->recorded && name ? lr_vers(r, name) : NULL;
+  if (!r || !r->recorded || !name) return 1;
+  for (int i = x ? x->first : -1; i >= 0; i = r->hist[i].nlink)
+    for (int j = 0; j < r->hist[i].n; j++)
+      if (r->hist[i].v[j].kind == LR_VIS && r->hist[i].v[j].unplaced) return 1;
+  /* (or one the record holds no entry of: a word in a method body or a block it does not place that is no version,
+     `class << self; public :m; end` in a body, a section there) */
+  int *ids = NULL, n = an_calls_named_if(c, lr_vis_word_call_name, c->nt->count, &ids), seen = 0;
+  for (int k = 0; k < n && !seen; k++) {
+    int id = ids[k], held = 0;
+    if (!vis_word_call(c->nt, id, NULL) || (elab_point_of(c, id).region >= 0 && !elab_in_method_body(c, id) && !elab_in_unplaced_block(c, id)) ||
+        !lr_word_may_name(c->nt, id, name))
+      continue;
+    for (int i = x ? x->first : -1; i >= 0 && !held; i = r->hist[i].nlink)
+      for (int j = 0; j < r->hist[i].n && !held; j++) held = r->hist[i].v[j].node == id;
+    seen = !held;
+  }
+  free(ids);
+  return seen;
 }
 /* See analyze.h. */
 int elab_method_vis_varies(Compiler *c, const char *name) {

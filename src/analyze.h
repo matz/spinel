@@ -554,6 +554,11 @@ int elab_body_word(Compiler *c, int id, int *cls);
    an instance method; on side 1 every one does (an extended module's words
    reach the class side) */
 int elab_method_body_word(Compiler *c, const char *name, int sg);
+/* ...or a visibility word that may change `name` the record does not
+   place (LrDef.unplaced) or holds no entry of (a word or a section in a
+   method body or a block that is no version of it), whose change no query
+   at a point sees? */
+int elab_method_vis_unplaced(Compiler *c, const char *name);
 /* may a method `name` the program gives be protected at some point of the
    load: does one of its histories hold a protected def, alias or visibility
    word of it? 1 where the load is not recorded. */

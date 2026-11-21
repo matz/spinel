@@ -60,6 +60,8 @@ int emit_call_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const ch
 int emit_call_handle_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv);
 int emit_call_callable_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv);
 int emit_call_method_obj_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv);
+/* The value node id takes where a raise ahead of it runs, which nothing reads: its C type's zero */
+void emit_unread_value(Compiler *c, int id, Buf *b);
 int emit_call_poly_callable_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv);
 int emit_call_poly_builtin_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt);
 int emit_call_openstruct_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv);
@@ -155,6 +157,10 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
 int respond_to_guard_reaches(Compiler *c, TyKind rt, const char *name);
 struct CplanCells;
 void emit_guarded_presence(Compiler *c, const struct CplanCells *cells, Buf *b);
+/* The test ahead of public_method capture id (CallPlan.closed CP_CLOSED_RUN) of ci's class method mn: CRuby's NameError,
+   naming the class cn's singleton class, where the cells there say no version is public, of the visibility they say,
+   or none live (a statement) */
+void emit_capture_closed_cells(Compiler *c, int id, const char *mn, int ci, const char *cn, Buf *b);
 int is_enum_cursor_name(const char *n);
 /* nil's static answer to respond_to?(qm, ...); *prog: by a method of the program's */
 int nil_responds_static(Compiler *c, int id, const char *qm, int argc, const int *argv, int *prog);

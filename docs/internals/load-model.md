@@ -410,8 +410,11 @@ gathers (`lr_body_names_read`), so each ask is a lookup:
   `list_cells_shape`), a `respond_to?` they do not answer (on a
   constant or self one of no `respond_to_cells_shape`; on another value
   one with no literal Symbol and include_all, `respond_to_literal_shape`,
-  whose class value's arms read no cells), a `public_method` naming it, or a call or a
-  send of it with a block, which binds no face entry. Those readers answer
+  whose class value's arms read no cells), a `public_method` naming it
+  other than one with a Symbol on a constant, on self or with no receiver
+  (`capture_cells_shape`), a send of one of these readers
+  (`K.send(:respond_to?, :m)`, which reads no cell), or a call or a send
+  of it with a block, which binds no face entry. Those readers answer
   from the table, so a version there would let a guarded call raise. The
   others read the cells: a call or a send of it on a constant, on self or
   on a boxed value takes the class side's face entry, whose arms raise
@@ -421,8 +424,15 @@ gathers (`lr_body_names_read`), so each ask is a lookup:
   (`cplan_cmethod_presence`; a class value's arm of a `respond_to?` on
   any other value too, `cplan_class_value_presence`), and `method`,
   `singleton_method` and `instance_method` find a method of any
-  visibility. A `respond_to?` asks the entry a public call takes,
-  whatever its receiver, so the words write the cells for it;
+  visibility. Each reader asks the entry a public call takes, whatever
+  its receiver (`ver_cells_reader`), so the words write the cells for it.
+  A `public_method` of a private or protected method raises NameError
+  where the record tells that visibility at the capture and no visibility
+  word the record does not place or holds no entry of may change it
+  (`cplan_capture_closed`, `elab_method_vis_unplaced`); where a body's
+  word may have, it tests the presence cells first (`CP_CLOSED_RUN`,
+  `emit_capture_closed_cells`), and is refused where they cannot tell
+  (`CP_CLOSED_UNTOLD`); elsewhere it keeps the method;
 - a protected word or a protected def in a method body, where a call on a
   receiver other than self (or a `public_send`) in a block whose self
   nothing tells names it (`cplan_block_self_untold`: a block handed to a

@@ -48,7 +48,7 @@ class Set
       # Enumerable), whose #each is not reachable through a poly slot (#3625)
       # (an Array as it is, as CRuby's each walks it: a program's own
       # Array#to_a is no step of a Set's there)
-      src = Array === enum ? enum : enum.to_a
+      src = Set.elements(enum)
       if block_given?
         src.each { |x| add(yield(x)) }
       else
@@ -355,7 +355,7 @@ class Set
     Set.check_enum(enum)
     # materialize first: a Range (or any other Enumerable) reaching this poly
     # slot does not dispatch #each through it (#3619)
-    (Array === enum ? enum : enum.to_a).each { |x| add(x) }
+    Set.elements(enum).each { |x| add(x) }
     self
   end
 
@@ -370,7 +370,7 @@ class Set
     end
     @data = []
     @index = nil
-    (Array === enum ? enum : enum.to_a).each { |x| add(x) }
+    Set.elements(enum).each { |x| add(x) }
     self
   end
 
@@ -395,7 +395,7 @@ class Set
   def subtract(enum)
     check_frozen
     Set.check_enum(enum)
-    (Array === enum ? enum : enum.to_a).each { |x| remove_member(x) }
+    Set.elements(enum).each { |x| remove_member(x) }
     self
   end
 
@@ -406,6 +406,19 @@ class Set
     # though its members are exactly what every caller here iterates (#3619)
     raise ArgumentError, "value must be enumerable" unless x.respond_to?(:each) || x.is_a?(Range)
     x
+  end
+
+  # The members an operand's #each yields, as an Array. Materialized first:
+  # a Range, an Enumerator or any other Enumerable reaching this poly slot
+  # does not dispatch #each through it (#3619, #3625). An Array is walked as
+  # it is and a Set hands over its own members. A program's Enumerable is
+  # walked by #each, so a class whose own #to_a answers something else is not
+  # asked it; a Struct, and a class with an #each but no Enumerable, have only
+  # #to_a to answer with.
+  def self.elements(enum)
+    return enum if Array === enum
+    return enum.to_a if Set === enum || Struct === enum || !enum.is_a?(Enumerable)
+    enum.map { |x| x }
   end
 
   # Set operators build fresh sets; the operand only needs #include? /#each.
@@ -422,7 +435,7 @@ class Set
       @data.each { |x| r.add(x) if other.include?(x) }
       return r
     end
-    (Array === other ? other : other.to_a).each { |x| r.add(x) if include?(x) }
+    Set.elements(other).each { |x| r.add(x) if include?(x) }
     r
   end
   alias intersection &
@@ -432,7 +445,7 @@ class Set
   def |(other)
     Set.check_enum(other)
     r = same_kind_copy
-    (Array === other ? other : other.to_a).each { |x| r.add(x) }
+    Set.elements(other).each { |x| r.add(x) }
     r
   end
   alias union |
@@ -442,7 +455,7 @@ class Set
   def -(other)
     Set.check_enum(other)
     r = same_kind_copy
-    (Array === other ? other : other.to_a).each { |x| r.delete(x) }
+    Set.elements(other).each { |x| r.delete(x) }
     r
   end
   alias difference -

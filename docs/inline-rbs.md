@@ -127,7 +127,10 @@ takes the signature's return type, and each named positional ahead of the
 `...` takes the signature's leading positional in its place, required ones
 first. The rest of the signature describes the arguments passed on, which
 the called method types, so they pin nothing, as with `--rbs`.
-A Ruby block parameter without an RBS block declaration remains inferred.
+A block type in the signature (`#: (Integer) { (String) -> bool } -> Integer`) is
+accepted and not seeded, as with `--rbs`: the block's parameters and result
+stay inferred from the yields and calls, and the positional, keyword and
+return types apply. A Ruby block parameter is inferred in the same way.
 
 ## Where an annotation attaches
 
@@ -178,7 +181,7 @@ overridden return can remain inferred while supported parameter types apply.
 | Conflicting applied inline or external declarations | Error naming both locations |
 | Unseedable types: literals other than `true` and `false`, interfaces, tuples, records, procs, `class`, `self`/`instance` outside a class's instance method, type variables (but a builtin generic's own, above) | Warning; ignore the whole annotation |
 | Unknown program class, such as `Regexp` or `Array[Time]` (a builtin class with values of its own, such as `Time` or `File`, applies, and so do `Range` and an exception class: see [Type vocabulary](rbs-extract.md#type-vocabulary)) | Warning naming the type as written; ignore the whole annotation |
-| Positional kinds that differ from the method's (`(?Integer)` for `def m(x)`), a destructuring parameter, or RBS block parameters | Warning; ignore the whole signature |
+| Positional kinds that differ from the method's (`(?Integer)` for `def m(x)`), or a destructuring parameter | Warning; ignore the whole signature |
 | Overloads, `...`, generic method signatures, and superclass/mixin type arguments | Warning; ignore the annotation |
 | Constants and type/module declarations that have no analyzer pin | Warning; ignore the annotation |
 | Unattached annotations and unsupported placements | Warning with the reason; no pin |

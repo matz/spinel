@@ -846,7 +846,12 @@ static const char *ir_method_type(rbs_parser_t *p, rbs_node_t *mtn, const ir_tar
     rbs_method_type_t *mt = (rbs_method_type_t *) mtn;
     if (mt->type_params != NULL && mt->type_params->length > 0)
         return "generic methods (type parameters) have no Spinel equivalent";
-    if (mt->block != NULL) return "block types are not seeded";
+    /* A block type (`{ (String) -> void }`) is not seeded: the block's
+       parameters and result stay inferred from the yields and calls, as
+       --rbs leaves them, and the positional, keyword and return types
+       still apply. Rejecting the whole signature for it would leave the
+       method's other parameters to inference that a caller-free method
+       (an --ext-entry one) cannot give them. */
     if (mt->type == NULL || mt->type->type != RBS_TYPES_FUNCTION)
         return "an untyped parameter list (`(?)`) has no Spinel equivalent";
     rbs_types_function_t *fn = (rbs_types_function_t *) mt->type;

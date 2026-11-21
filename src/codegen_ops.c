@@ -491,6 +491,16 @@ static void plan_check_observe(Compiler *c, int id, TyKind rt, const BuiltinOp *
             id, ty_name(rt), op->name, op->argc_min, op->argc_max, ty_name(bop_result_args(op, rt, argc, arg_of, &ba, facts)));
 }
 
+/* String#unpack(fmt): an Integer Array for a literal format of integer
+   directives (an_unpack_lit_type), the boxed values otherwise */
+static int emit_op_string_unpack(Compiler *c, const BopCtx *x, Buf *b) {
+  BuiltinOp op = *x->op;
+  BopCtx y = *x;
+  op.arg = repr_of(c, x->id).as_ty == TY_INT_ARRAY ? "sp_str_unpack_ints($r, $s0)" : "sp_str_unpack($r, $s0)";
+  y.op = &op;
+  return emit_op_template(c, &y, b);
+}
+
 static int (*const bop_emitters[BOPE__COUNT])(Compiler *, const BopCtx *, Buf *) = {
   [BOPE_NONE] = NULL,
   [BOPE_RANGE_CLONE] = emit_op_range_clone,
@@ -502,6 +512,7 @@ static int (*const bop_emitters[BOPE__COUNT])(Compiler *, const BopCtx *, Buf *)
   [BOPE_THREAD_SET_REPORT] = emit_op_thread_set_report,
   [BOPE_FLOAT_RATIONALIZE] = emit_op_float_rationalize,
   [BOPE_STRING_SCAN_CHECKED] = emit_op_string_scan_checked,
+  [BOPE_STRING_UNPACK] = emit_op_string_unpack,
   [BOPE_STRING_ASET] = emit_op_string_aset,
   [BOPE_STRING_INSERT] = emit_op_string_insert,
   [BOPE_STRING_CLEAR] = emit_op_string_clear,

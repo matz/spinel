@@ -18907,6 +18907,8 @@ SP_NORETURN SP_COLD static void sp_raise_u_cz(void *cz, const char *msg) {
 SP_NORETURN SP_COLD static sp_RbVal sp_raise_cls_handle(const char *cls, sp_String *msg) {
   SP_GC_ROOT(msg);
   sp_Exception *e = sp_exc_new_for_catch(cls, sp_exc_msg_given(sp_strbuf_read(msg)));
+  /* (the program's `raise KeyError, msg` records no key or receiver: #key raises, as in CRuby) */
+  e->has_key = 0; e->has_recv = 0;
   sp_raise_exc((sp_Exception *)sp_exc_attach_msg(e, msg));
   SP_UNREACHABLE();
 }

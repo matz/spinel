@@ -111,6 +111,8 @@ TEST_SKIP += test/gem_rbconfig_stub.rb test/gem_toplevel_path.rb
 TEST_SKIP += test/sp_net_write_partial.rb
 # tools/cident.sh, a POSIX shell tool: its forks run past the 10 s limit under MSYS2
 TEST_SKIP += test/tools_cident_abandoned.rb test/tools_cident_cache.rb test/tools_cident_concurrent.rb
+# no SIGCHLD when a child exits
+TEST_SKIP += packages/open3/test/open3_capture_trap_reaped.rb
 
 # `make install`: the shim's headers and stub archives, which an installed
 # compiler puts on every program's command line, and the overlays it reads

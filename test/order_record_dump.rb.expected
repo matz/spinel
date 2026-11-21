@@ -60,6 +60,7 @@ g5_user_recv.rb:6 call new: none (pure)
 == g6_opasgn_answer.rb
 g6_opasgn_answer.rb:1 array: none (pure)
 g6_opasgn_answer.rb:2 call p: none (tail)
+g6_opasgn_answer.rb:2 index-op-write: 0 a HOLD(by 2) across | 1 2 INLINE across | 2 Parentheses AHEAD code | guard=call steps=0
 g6_opasgn_answer.rb:2 array: none (pure)
 == g7_blockpass_nil.rb
 g7_blockpass_nil.rb:1 array: none (tail)

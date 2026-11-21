@@ -111,6 +111,13 @@ A direct call holds its receiver when the operand-order record marks a
 read that a later operand can rebind. The temporary uses Repr's layout
 and retains references while the arguments run.
 
+The operand-order record lists an indexed operator write's receiver,
+keys and right-hand side in Ruby order. The native indexed writer takes
+the receiver before emitting an AHEAD key's statements. Both statement
+and value forms consult the receiver's HOLD slot and its holder's Repr
+when deciding whether its temporary needs a GC root. The getter runs
+before the right-hand side.
+
 A method inferred or declared to return String returns `sp_String *`.
 The String addition emitter boxes its result when Repr selects a boxed
 result for the call, even when both operands are known Strings.

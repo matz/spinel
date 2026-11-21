@@ -3010,7 +3010,7 @@ int cls_value_owns_name(Compiler *c, int id, const char *name) {
      whose class method answers, and the builtin keeps the call */
   if (!cplan_boxed_cmethod(c, id, name)) return 0;
   for (int k = 0; k < c->nclasses; k++)
-    if (cplan_cmethod_arm(c, id, k, name, NULL, NULL) >= 0) return 1;
+    if (cplan_cmethod_arm(c, id, k, name, NULL, NULL, NULL) >= 0) return 1;
   return 0;
 }
 
@@ -20248,8 +20248,11 @@ void refl_module_own_methods(Compiler *c, int m, int pub, int prot, int priv, Re
 }
 
 /* A class-side candidate: singleton_methods lists the public and protected
-   ones. */
+   ones, of the visibility they have where the list runs
+   (cplan_cmethod_list_vis). */
 static void refl_cmethod_cand_note(void *ud, const char *nm, int vis) {
+  const ReflCand *n = ud;
+  if (n->r->at) vis = cplan_cmethod_list_vis(n->c, n->r->at - 1, n->r->at_cls, nm, vis);
   if (vis != SP_VIS_PRIVATE) refl_cand_note(ud, nm, vis);
 }
 /* The names Klass.singleton_methods lists: the class methods `ci` defines
@@ -21022,9 +21025,16 @@ int class_value_arms(Compiler *c, int id, const char *qm, CplanPresList *l, int 
   if (*asked < 0) *asked = cplan_class_value_presence(c, id, qm, l);
   return *asked;
 }
+/* (does a class of arms l answer yes, or may one: where none does, the builtin's answer is the whole) */
+int class_value_arms_yes(const CplanPresList *l) {
+  int yes = l->other;
+  for (int i = 0; i < l->n && !yes; i++) yes = l->arm[i].ans != PRA_NO;
+  return yes;
+}
 /* A class value's respond_to? held in _t<tv>, after the builtin's answer: the arms l (class_value_arms), each
    class's own answer */
 void class_value_responds(Compiler *c, const CplanPresList *l, int tv, Buf *b) {
+  if (!class_value_arms_yes(l)) return;
   buf_printf(b, " || (_t%d.tag == SP_TAG_CLASS && (_t%d.cls_id < 0 || _t%d.cls_id == SP_CLASS_BY_NAME ? %d : (0", tv, tv, tv, l->other);
   for (int i = 0; i < l->n; i++) {
     const CplanPresArm *a = &l->arm[i];
@@ -26007,8 +26017,9 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
         /* one arm per candidate class, however many (a binding with hundreds
            of FFI::Struct subclasses reads `klass.layout` on any of them) */
         int ncap = c->nclasses > 0 ? c->nclasses : 1;
-        int *ccls = malloc(sizeof(int) * 4 * (size_t)ncap);
-        int *cmi = ccls + ncap, *cdef = cmi + ncap, *cpf = cdef + ncap, nc = 0;
+        int *ccls = malloc(sizeof(int) * 5 * (size_t)ncap);
+        if (!ccls) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+        int *cmi = ccls + ncap, *cdef = cmi + ncap, *cpf = cdef + ncap, *cvis = cpf + ncap, nc = 0;
         /* the classes whose `class << self` accessor answers the call ahead
            of any class method, an inherited one included: an arm each, after
            the methods' (emit_boxed_cls_sg_first_arms) */
@@ -26016,8 +26027,8 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
         for (int k = 0; k < c->nclasses; k++) {
           if (cls_sg_accessor_first(c, id, k, nm, argc)) { nsg++; continue; }
           MethodLookup ml = { .def_class = -1 };
-          int pfk = -1;
-          int mi = cplan_cmethod_arm(c, id, k, nm, &ml, &pfk);
+          int pfk = -1, vis = SP_VIS_PUBLIC;
+          int mi = cplan_cmethod_arm(c, id, k, nm, &ml, &pfk, &vis);
           if (mi < 0) continue;
           /* A class method that cannot take this call's arguments is still
              the one a value of its class calls: CRuby raises its
@@ -26026,7 +26037,7 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
              prelude and fired before the tag was tested) sent that class to
              the default's NoMethodError; each arm now keeps its prelude to
              itself (below). */
-          ccls[nc] = k; cmi[nc] = mi; cdef[nc] = ml.def_class; cpf[nc] = pfk; nc++;
+          ccls[nc] = k; cmi[nc] = mi; cdef[nc] = ml.def_class; cpf[nc] = pfk; cvis[nc] = vis; nc++;
         }
         if (nc > 0) {
           /* The receiver first, into a rooted temp of its own: Ruby evaluates
@@ -26062,18 +26073,17 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
             if (!rarm) emit_cls_value_test(c, ccls[k], tv, b);
             /* a class whose method is private (private_class_method, or
                `class << self; private`) refuses it here as a direct `C.foo`
-               does: the value only names the class at run time (#8202) */
-            {
-              /* ...but self may call its own private methods: a boxed self
-                 (a kept block's, which instance_exec may rebind) as well */
-              if (!cplan_cmethod_visible(c, id, ccls[k], nm)) {
-                int vis = cplan_method_vis(c, id, ccls[k], nm, CPV_CMETHOD, NULL);
-                const char *vrn = class_ruby_name(c, ccls[k]) ? class_ruby_name(c, ccls[k]) : c->classes[ccls[k]].name;
-                int is_mod = comp_class_is_module(c, &c->classes[ccls[k]]);
-                buf_printf(b, "(sp_raise_cls(\"NoMethodError\", (&(\"\\xff\" \"%s method '%s' called for %s %s\")[1])), sp_box_nil()) : ",
-                           vis == SP_VIS_PRIVATE ? "private" : "protected", nm, is_mod ? "module" : "class", vrn);
-                continue;
-              }
+               does: the value only names the class at run time (#8202);
+               self may call its own private methods, a boxed self (a kept
+               block's, which instance_exec may rebind) as well, and an
+               entry's face arms raise for the visibility the run gives
+               (the plan's arm, cplan_cmethod_arm) */
+            if (cvis[k] != SP_VIS_PUBLIC) {
+              const char *vrn = class_ruby_name(c, ccls[k]) ? class_ruby_name(c, ccls[k]) : c->classes[ccls[k]].name;
+              int is_mod = comp_class_is_module(c, &c->classes[ccls[k]]);
+              buf_printf(b, "(sp_raise_cls(\"NoMethodError\", (&(\"\\xff\" \"%s method '%s' called for %s %s\")[1])), sp_box_nil()) : ",
+                         cvis[k] == SP_VIS_PRIVATE ? "private" : "protected", nm, is_mod ? "module" : "class", vrn);
+              continue;
             }
             Buf cb; memset(&cb, 0, sizeof cb);
             int ksym = cpf[k] >= 0 ? cpf[k] : cmi[k];
@@ -35604,7 +35614,7 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
             !(comp_class_is_module(c, &c->classes[ci]) && class_only_method(qm)))
           rt_probe_answer(c, id, &yes);
         /* a private/protected class method answers only to include_all */
-        if (yes && foldable && cplan_method_vis(c, -1, ci, qm, CPV_CMETHOD, NULL) != SP_VIS_PUBLIC)
+        if (yes && foldable && cplan_method_vis(c, id, ci, qm, CPV_CMETHOD, NULL) != SP_VIS_PUBLIC)
           yes = include_all;
         /* as do Class's and Module's private ones (private, inherited, ...) */
         if (!yes && foldable && include_all && class_object_private_method(qm, comp_class_is_module(c, &c->classes[ci])))
@@ -35638,7 +35648,7 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
       yes = cplan_class_responds(c, ci, qm, id);
       if (!yes && (is_builtin_class_name(rcn) || is_builtin_module_const_name(rcn)) && !(mod && class_only_method(qm)))
         rt_probe_answer(c, id, &yes);
-      if (yes && foldable && cplan_method_vis(c, -1, ci, qm, CPV_CMETHOD, NULL) != SP_VIS_PUBLIC) yes = include_all;
+      if (yes && foldable && cplan_method_vis(c, id, ci, qm, CPV_CMETHOD, NULL) != SP_VIS_PUBLIC) yes = include_all;
       if (!yes && foldable && include_all && class_object_private_method(qm, mod)) yes = 1;
     }
     else if (recv >= 0 && ty_is_object(rt)) {
@@ -35678,7 +35688,7 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
              builtin Class/Module capabilities (:new, :name, ...). */
           resolved = 1;
           yes = cplan_class_responds(c, cid, qm, id);
-          if (yes && foldable && cplan_method_vis(c, -1, cid, qm, CPV_CMETHOD, NULL) != SP_VIS_PUBLIC)
+          if (yes && foldable && cplan_method_vis(c, id, cid, qm, CPV_CMETHOD, NULL) != SP_VIS_PUBLIC)
             yes = include_all;
           if (!yes && foldable && include_all && class_object_private_method(qm, comp_class_is_module(c, &c->classes[cid])))
             yes = 1;
@@ -35703,7 +35713,7 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
         int cid = c->node_cbody[id];
         resolved = 1;
         yes = cplan_class_responds(c, cid, qm, id);
-        if (yes && foldable && cplan_method_vis(c, -1, cid, qm, CPV_CMETHOD, NULL) != SP_VIS_PUBLIC)
+        if (yes && foldable && cplan_method_vis(c, id, cid, qm, CPV_CMETHOD, NULL) != SP_VIS_PUBLIC)
           yes = include_all;
         if (!yes && foldable && include_all && class_object_private_method(qm, comp_class_is_module(c, &c->classes[cid])))
           yes = 1;

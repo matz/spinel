@@ -125,6 +125,7 @@ int any_class_defines(Compiler *c, const char *qm);
 int any_class_responds(Compiler *c, const char *qm);
 int class_struct_kind(Compiler *c, int cid);
 int class_value_arms(Compiler *c, int id, const char *qm, CplanPresList *l, int *asked);
+int class_value_arms_yes(const CplanPresList *l);
 void class_value_responds(Compiler *c, const CplanPresList *l, int tv, Buf *b);
 void class_value_responds_runtime(int tv, Buf *b);
 void emit_class_value_responds_helper(Compiler *c, const char *const *texts, int ntexts, Buf *protos, Buf *defs);

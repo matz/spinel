@@ -7217,14 +7217,18 @@ int loop_may_stop(Compiler *c, int loop_call) {
 }
 
 /* See analyze_internal.h. */
-int respond_to_cells_shape(const NodeTable *nt, int id) {
+int respond_to_literal_shape(const NodeTable *nt, int id) {
   int ac = 0;
   const int *av = nt_kind(nt, id) == NK_CallNode && is_respond_to_name(nt_str(nt, id, "name")) &&
                   nt_ref(nt, id, "block") < 0 ? call_args(nt, id, &ac) : NULL;
-  int recv = av ? nt_ref(nt, id, "receiver") : -1;
-  NodeKind rk = recv >= 0 ? nt_kind(nt, recv) : NK_SelfNode, ak = ac == 2 ? nt_kind(nt, av[1]) : NK_FalseNode;
-  return av && (ac == 1 || ac == 2) && nt_kind(nt, av[0]) == NK_SymbolNode && (ak == NK_TrueNode || ak == NK_FalseNode) &&
-         (rk == NK_SelfNode || rk == NK_ConstantReadNode || rk == NK_ConstantPathNode);
+  NodeKind ak = ac == 2 ? nt_kind(nt, av[1]) : NK_FalseNode;
+  return av && (ac == 1 || ac == 2) && nt_kind(nt, av[0]) == NK_SymbolNode && (ak == NK_TrueNode || ak == NK_FalseNode);
+}
+/* See analyze_internal.h. */
+int respond_to_cells_shape(const NodeTable *nt, int id) {
+  int recv = respond_to_literal_shape(nt, id) ? nt_ref(nt, id, "receiver") : -2;
+  NodeKind rk = recv >= 0 ? nt_kind(nt, recv) : recv == -1 ? NK_SelfNode : NK_NONE;
+  return rk == NK_SelfNode || rk == NK_ConstantReadNode || rk == NK_ConstantPathNode;
 }
 /* See analyze_internal.h. */
 int list_cells_shape(const NodeTable *nt, int id) {

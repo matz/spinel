@@ -3150,7 +3150,7 @@ int emit_call_poly_callable_arms(Compiler *c, int id, Buf *b, const NodeTable *n
     int has_user_call = 0;
     for (int _k = 0; _k < c->nclasses && !has_user_call; _k++) {
       int umi = call_target(c, id, _k, name, CT_OWN, NULL);
-      int cmi = g_cls_tag_skip != id ? cplan_cmethod_arm(c, id, _k, name, NULL, NULL) : -1;
+      int cmi = g_cls_tag_skip != id ? cplan_cmethod_arm(c, id, _k, name, NULL, NULL, NULL) : -1;
       if ((umi >= 0 && (is_aref0 || argc >= c->scopes[umi].nrequired)) ||
           (cmi >= 0 && (is_aref0 || argc >= c->scopes[cmi].nrequired)) ||
           (argc == 0 && call_attr_target(c, id, _k, name, CT_ATTR, NULL)))

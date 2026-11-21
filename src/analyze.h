@@ -549,8 +549,11 @@ int elab_method_vis_varies(Compiler *c, const char *name);
    the class it acts on. */
 int elab_body_word(Compiler *c, int id, int *cls);
 /* does a history of `name` hold such a word (elab_body_word), whose change
-   the record orders only against the points its body's extent spans? */
-int elab_method_body_word(Compiler *c, const char *name);
+   the record orders only against the points its body's extent spans? On
+   side sg 0 a singleton's history does not count: no singleton's method is
+   an instance method; on side 1 every one does (an extended module's words
+   reach the class side) */
+int elab_method_body_word(Compiler *c, const char *name, int sg);
 /* may a method `name` the program gives be protected at some point of the
    load: does one of its histories hold a protected def, alias or visibility
    word of it? 1 where the load is not recorded. */

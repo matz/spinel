@@ -1187,8 +1187,17 @@ PolyPlan cplan_poly_block(Compiler *c, int id);
 PolyPlan cplan_each_split(Compiler *c, int id);
 /* The arms of the class-method tag switch of a call on a poly receiver
    that may hold a Class (emit_unresolved_call): each class's class method
-   of the name, or its proc form. Computed afresh. */
-int cplan_cmethod_arm(Compiler *c, int call, int k, const char *nm, MethodLookup *ml, int *pfk);
+   of the name, or its proc form. Computed afresh.
+   cplan_cmethod_arm: the class method a value of class k answers `nm` with
+   in a boxed class-method dispatch of call `call` (cplan_poly_cmeth, and
+   emit_unresolved_call's), or -1 when it has no arm there. A yielding class
+   method has no symbol of its own; its proc-form clone is the arm, taking
+   the block as a proc (#3399), through *pfk. *vis (where given): the
+   visibility the arm raises NoMethodError for, a private or protected
+   method the call may not call (cplan_cmethod_visible, cplan_method_vis);
+   SP_VIS_PUBLIC where it calls the method, an entry whose face arms raise
+   for the visibility the run gives the version (ct_face_for) included. */
+int cplan_cmethod_arm(Compiler *c, int call, int k, const char *nm, MethodLookup *ml, int *pfk, int *vis);
 PolyPlan cplan_poly_cmeth(Compiler *c, int id);
 /* cplan_poly_cmeth's class-value trial arms alone (pa_class_value_trial),
    without the cost of asking every class for a class method of the name.
@@ -1229,6 +1238,10 @@ int cplan_cmethod_visible(Compiler *c, int id, int ci, const char *name);
    visibility (cplan_pinned_vis), an arm's fact rather than a call's. */
 enum { CPV_CMETHOD = 1, CPV_ROOT = 2 };
 int cplan_method_vis(Compiler *c, int id, int ci, const char *name, int flags, int *at);
+/* ...and the visibility a class-side list (singleton_methods) at call id on class cls shows its candidate `name`
+   by, which cplan_list_candidates gave with vis: where cls's side declares it so, the one cplan_method_vis has at
+   the list's point (a class-method word a method body runs may have set it); vis otherwise. */
+int cplan_cmethod_list_vis(Compiler *c, int id, int cls, const char *name, int vis);
 int cplan_guarded_call_visibility(Compiler *c, int id, int cls, const char *name);
 int cplan_caller_includes_module(Compiler *c, int caller, int module);
 int cplan_protected_owner_open(Compiler *c, int caller, int singleton, int owner);

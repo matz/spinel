@@ -1207,6 +1207,8 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
                         iak != NK_TrueNode && iak != NK_FalseNode;
           int nil_arm = rt != TY_CLASS && nil_prog && (nil_ans != 2 || ia_once);
           int cls_arm = class_value_arms(c, id, qm, &cvl, &cv);
+          /* (a boxed value's classes that all answer no leave it the builtin's answer, as with none) */
+          if (cls_arm && rt != TY_CLASS && !class_value_arms_yes(&cvl)) cplan_presence_list_free(&cvl), cls_arm = 0;
           int tv = cls_arm || nil_arm ? ++g_tmp : 0;
           if (!tv && argc == 1 && (rt == TY_POLY || rt == TY_UNKNOWN) &&
               emit_boxed_responds_builtin_absent(c, recv, qm, b)) return 1;

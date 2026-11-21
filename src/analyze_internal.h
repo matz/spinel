@@ -621,10 +621,13 @@ int bare_call_class_owned(Compiler *c, int id);                  /* codegen_call
 const int *call_args(const NodeTable *nt, int id, int *argc);    /* codegen_call.c */
 int recv_is_const(const Compiler *c, const NodeTable *nt, int recv, const char *name);  /* codegen_fold.c */
 int is_exc_name(const char *n);                                  /* codegen.c */
-/* Is call id a respond_to? the version cells may answer (cplan_cmethod_presence):
-   by a literal Symbol, with a literal include_all if any, on a constant, self
-   or no receiver? The load record asks it of the source's readers
-   (lr_refl_take) before any class is known (analyze_util.c). */
+/* Is call id a respond_to? by a literal Symbol, with a literal include_all if
+   any (on any receiver: a class value's arms read the cells of each class it
+   may hold, cplan_class_value_presence)? */
+int respond_to_literal_shape(const NodeTable *nt, int id);
+/* ...one the version cells may answer (cplan_cmethod_presence), on a
+   constant, self or no receiver? The load record asks it of the source's
+   readers (lr_refl_take) before any class is known (analyze_util.c). */
 int respond_to_cells_shape(const NodeTable *nt, int id);
 /* ...and is it `method(:k)` / `public_method(:k)` by a literal Symbol on a
    constant, self or no receiver: a Method's maker that takes the entry a

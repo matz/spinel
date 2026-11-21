@@ -4314,7 +4314,7 @@ static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigne
      name, respond_to?'s, is the reader's: it folds the record's) */
   int face = !(flags & CT_TOP) && !c->scopes[vi].entry ? ct_call_face(c, id, rcls, sg, name, ff, 0) : VF_NONE;
   const char *own_nm = face && sg && id >= 0 && nt_kind(c->nt, id) == NK_CallNode ? nt_str(c->nt, id, "name") : NULL;
-  int rv = own_nm && sp_streq(own_nm, name) && elab_method_body_word(c, name) ? nt_ref(c->nt, id, "receiver") : -1;
+  int rv = own_nm && sp_streq(own_nm, name) && elab_method_body_word(c, name, sg) ? nt_ref(c->nt, id, "receiver") : -1;
   if (face && (kept || (rv >= 0 && class_recv_static_ci(c, rv) < 0 && self_class_static_ci(c, rv) < 0) ||
                elab_method_vis_at(c, rcls, name, sg, p) < 0)) {
     int ar = ver_call_arity(c, id, rcls, sg, name, mi), ix = ver_entry_ix(c, VER_ENTRY_CHAIN, 0, rcls, sg, name, ar, face);
@@ -4532,10 +4532,9 @@ int cplan_cmethod_later(Compiler *c, int id, int cls, const char *name) {
   if (asked) id = asked - 1;   /* defined?'s respond_to?: at the call it asks of */
   return id >= 0 && cls >= 0 && ct_before_versions(c, id, cls, name, CT_CMETHOD, -1);
 }
-/* See call_plan.h. */
-int cplan_presence_class(Compiler *c, int id) {
+/* (the class whose class side class-side reader id, on a constant or self, asks of) */
+static int cells_reader_class(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
-  if (!respond_to_cells_shape(nt, id)) return -1;
   int recv = nt_ref(nt, id, "receiver");
   NodeKind rk = recv >= 0 ? nt_kind(nt, recv) : NK_SelfNode;
   if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) return class_recv_static_ci(c, recv);
@@ -4543,6 +4542,10 @@ int cplan_presence_class(Compiler *c, int id) {
   const Scope *s = comp_scope_of(c, id);
   if (s && s->class_id >= 0) return s->is_cmethod ? s->class_id : -1;
   return s && c->node_cbody && id < c->node_cap ? c->node_cbody[id] : -1;
+}
+/* See call_plan.h. */
+int cplan_presence_class(Compiler *c, int id) {
+  return respond_to_cells_shape(c->nt, id) ? cells_reader_class(c, id) : -1;
 }
 static int cplan_presence_asks(Compiler *c, int id, int cls, const char *name);
 /* See call_plan.h. */
@@ -4754,24 +4757,31 @@ int cplan_cells_fixed(const CplanCells *cs) {
     if (cs->vis[k][0] || cs->ans[k] != cs->els) return 0;
   return 1;
 }
+/* ...the cells a presence reader id reads of cls's name on side sg, where call_target answered it e (ml): an
+   entry's; else, for a method live where the reader runs whose visibility a body's word sets where it runs
+   (elab_method_vis_at answers none), the words' versions' cells, which the words write, and the method's own where
+   none has run */
+static int presence_target_cells(Compiler *c, int id, int e, const MethodLookup *ml, int cls, int sg, const char *name, int mask, int own, CplanCells *out) {
+  if (ml->kind == ML_ENTRY) return presence_cells(c, e, cls, sg, name, mask, own, out);
+  if (ml->kind != ML_METHOD || e < 0 || !elab_method_body_word(c, name, sg) || elab_method_vis_at(c, cls, name, sg, elab_point_of(c, id)) >= 0)
+    return 0;
+  int v = guard_visibility(c, e);
+  return presence_cells_of(c, cls, sg, name, mask, own,
+                           v == SP_VIS_PUBLIC ? VER_FINDS_PUBLIC : v == SP_VIS_PROTECTED ? VER_FINDS_PROTECTED : VER_FINDS_PRIVATE, 1, out);
+}
 /* See call_plan.h. */
 int cplan_cmethod_presence(Compiler *c, int id, int cls, const char *name, int mask, int own, CplanCells *out) {
+  MethodLookup ml = { .def_class = -1 };
   if (!cplan_presence_asks(c, id, cls, name)) return 0;
-  return presence_cells(c, call_target(c, id, cls, name, CT_CMETHOD | CT_CAPTURE, NULL), cls, 1, name, mask, own, out);
+  int e = call_target(c, id, cls, name, CT_CMETHOD | CT_CAPTURE, &ml);
+  return presence_target_cells(c, id, e, &ml, cls, 1, name, mask, own, out);
 }
 /* See call_plan.h. */
 int cplan_presence_cells(Compiler *c, int id, int cls, unsigned side, const char *name, int mask, CplanCells *out) {
   MethodLookup ml = { .def_class = -1 };
   if (id < 0 || cls < 0 || (side & (CT_CMETHOD | CT_TOP)) || respond_to_missing_defined(c)) return 0;
   int e = call_target(c, id, cls, name, side | CT_REACH, &ml);
-  if (ml.kind == ML_ENTRY) return presence_cells(c, e, cls, 0, name, mask, (side & CT_OWN) != 0, out);
-  /* (a method live where the reader runs, whose visibility a body's word sets where it runs (elab_method_vis_at
-     answers none): the words' versions' cells, which the words write, and the method's own where none has run) */
-  if (ml.kind != ML_METHOD || e < 0 || !elab_method_body_word(c, name) || elab_method_vis_at(c, cls, name, 0, elab_point_of(c, id)) >= 0)
-    return 0;
-  int v = guard_visibility(c, e);
-  return presence_cells_of(c, cls, 0, name, mask, (side & CT_OWN) != 0,
-                           v == SP_VIS_PUBLIC ? VER_FINDS_PUBLIC : v == SP_VIS_PROTECTED ? VER_FINDS_PROTECTED : VER_FINDS_PRIVATE, 1, out);
+  return presence_target_cells(c, id, e, &ml, cls, 0, name, mask, (side & CT_OWN) != 0, out);
 }
 /* See call_plan.h. */
 int cplan_list_cells(Compiler *c, int id, int cls, unsigned side, const char *name, int mask, CplanCells *out) {
@@ -5084,7 +5094,7 @@ int cplan_class_value_presence(Compiler *c, int id, const char *qm, CplanPresLis
              ((pk = cplan_presence(c, id, k, CT_CMETHOD, qm, &pr)) != PR_ABSENT || cplan_class_builtin_responds(c, k, qm)))
       presence_arm(c, out, k, NULL, !mask || pk == PR_ABSENT || !pr.table || class_value_vis_counts(c, id, k, qm, &pr, mask) ? PRA_YES : PRA_NO);
     else continue;
-    any |= !uni && out->arm[out->n - 1].ans != PRA_NO;
+    any |= !uni;   /* (a class's no is an answer too: its method is closed to the reader there) */
   }
   if (!any) cplan_presence_list_free(out);
   return any;
@@ -6165,7 +6175,7 @@ PresenceKind cplan_presence(Compiler *c, int id, int cls, unsigned side, const c
   if (ml.kind == ML_NONE && ml.why == MLW_RECORD) return PR_ABSENT;   /* (the record's none) */
   /* (a visibility word a method body runs gives the table no visibility: the one the record has where id runs,
      elab_method_body_word) */
-  LoadPoint p = out->table && id >= 0 && !(side & CT_TOP) && elab_method_body_word(c, name) ? elab_point_of(c, id) : (LoadPoint){ -1, -1, -1 };
+  LoadPoint p = out->table && id >= 0 && !(side & CT_TOP) && elab_method_body_word(c, name, (side & CT_CMETHOD) != 0) ? elab_point_of(c, id) : (LoadPoint){ -1, -1, -1 };
   int vis = p.region >= 0 ? elab_method_vis_at(c, cls, name, (side & CT_CMETHOD) != 0, p) : -1;
   if (vis >= 0) out->vis = vis;
   return out->table ? PR_PRESENT : PR_ABSENT;
@@ -11225,6 +11235,14 @@ int cplan_method_vis(Compiler *c, int id, int ci, const char *name, int flags, i
   return vis;
 }
 
+/* See call_plan.h. */
+int cplan_cmethod_list_vis(Compiler *c, int id, int cls, const char *name, int vis) {
+  mtab_enter(c);
+  int own = id >= 0 && cls >= 0 && vis == comp_cmethod_vis_declared(c, cls, name, NULL);
+  mtab_leave(c);
+  return own ? cplan_method_vis(c, id, cls, name, CPV_CMETHOD, NULL) : vis;
+}
+
 /* Whether the boxed class arm calls the method rather than raising for
    its visibility. Explicit self may call private methods too.
    The class-body self stamp identifies the caller of a protected call. */
@@ -11245,18 +11263,25 @@ int cplan_cmethod_visible(Compiler *c, int id, int ci, const char *name) {
   return vis == SP_VIS_PUBLIC;
 }
 
-/* The class method a value of class k answers `nm` with in a boxed
-   class-method dispatch of call `call` (cplan_poly_cmeth, and
-   emit_unresolved_call's), or -1 when it has no arm there. A yielding class
-   method has no symbol of its own; its proc-form clone is the arm, taking
-   the block as a proc (#3399), through *pfk. */
-int cplan_cmethod_arm(Compiler *c, int call, int k, const char *nm, MethodLookup *ml, int *pfk) {
+/* (the face of the entry whose scope is e: VF_NONE for none) */
+static int ver_entry_face(const Compiler *c, int e) {
+  for (int i = 0; e >= 0 && i < c->nver_entries; i++)
+    if (c->ver_entries[i].scope == e) return c->ver_entries[i].face;
+  return VF_NONE;
+}
+/* See call_plan.h. */
+int cplan_cmethod_arm(Compiler *c, int call, int k, const char *nm, MethodLookup *ml, int *pfk, int *vis) {
+  MethodLookup own = { .def_class = -1 };
+  if (!ml) ml = &own;
   int mi = call_target(c, call, k, nm, CT_CMETHOD, ml);
   if (mi < 0) return -1;
   int pf = scope_proc_form_of(c, mi);
   if (pf >= 0 && !proc_form_live(c, pf)) pf = -1;
   if (!scope_has_callable_symbol(c, mi) && pf < 0) return -1;
   if (pfk) *pfk = pf;
+  /* (an entry whose face closes tells the version's visibility as it runs: its arms raise) */
+  if (vis) *vis = (ml->kind == ML_ENTRY && ver_face_closes(ver_entry_face(c, mi))) || cplan_cmethod_visible(c, call, k, nm)
+                      ? SP_VIS_PUBLIC : cplan_method_vis(c, call, k, nm, CPV_CMETHOD, NULL);
   return mi;
 }
 
@@ -11271,7 +11296,7 @@ static void cpoly_cls_value_trials(Compiler *c, int id, const char *name, int ar
   const char *cvals = nt_ref(c->nt, id, "receiver") >= 0 && is_class_value_reflection(name) ? poly_recv_class_values(c, id) : NULL;
   const unsigned all = ELAB_GAIN_METHODS | ELAB_GAIN_INHERITED | ELAB_GAIN_CONSTS | ELAB_GAIN_CVARS;
   for (int k = 0; cvals && k < c->nclasses; k++) {
-    if (!cvals[k] || cls_sg_accessor_first(c, id, k, name, argc) || cplan_cmethod_arm(c, id, k, name, NULL, NULL) >= 0)
+    if (!cvals[k] || cls_sg_accessor_first(c, id, k, name, argc) || cplan_cmethod_arm(c, id, k, name, NULL, NULL, NULL) >= 0)
       continue;
     int framed = elab_plan_enter(c, id);
     unsigned unsettled = elab_class_unsettled(c, k, all, id, cplan_plain_ctx());
@@ -11291,10 +11316,10 @@ PolyPlan cplan_poly_cmeth(Compiler *c, int id) {
   int argc = 0;
   call_args(c->nt, id, &argc);
   for (int k = 0; k < c->nclasses; k++) {
-    if (cls_sg_accessor_first(c, id, k, name, argc) || !cplan_cmethod_visible(c, id, k, name)) continue;
-    int pf = -1;
-    int mi = cplan_cmethod_arm(c, id, k, name, NULL, &pf);
-    if (mi < 0) continue;
+    if (cls_sg_accessor_first(c, id, k, name, argc)) continue;
+    int pf = -1, vis = SP_VIS_PUBLIC;
+    int mi = cplan_cmethod_arm(c, id, k, name, NULL, &pf, &vis);
+    if (mi < 0 || vis != SP_VIS_PUBLIC) continue;
     TyKind mret = c->scopes[pf >= 0 ? pf : mi].ret;
     cpoly_add(&cp, &cap, pf >= 0 ? PA_PROC_FORM : PA_USER, k, mi, mret, mret == TY_POLY ? PC_SAME : PC_BOX);
   }
@@ -14334,10 +14359,11 @@ void ver_entries_build(Compiler *c) {
   /* (the asks below make and rename no scope: Compiler.ver_asking) */
   comp_ver_asking(c, 1);
   for (int id = 0, n0 = nt->count; id < n0; id++) {
-    /* a respond_to? of a class's own class method reads the cells of the
-       entry a call of the name would take there (cplan_cmethod_presence) */
+    /* a respond_to? of a class's own class method reads the cells of the entry a call of the name would take there
+       (cplan_cmethod_presence), one that sees public methods alone, whatever its receiver */
     int pc = cplan_presence_class(c, id);
-    if (pc >= 0 && cplan_presence_asks(c, id, pc, method_sym_arg(c, id))) ver_need(c, id, method_sym_arg(c, id), pc, CT_CMETHOD, &o);
+    if (pc >= 0 && cplan_presence_asks(c, id, pc, method_sym_arg(c, id)))
+      ver_need(c, id, method_sym_arg(c, id), pc, CT_CMETHOD | CT_PUBLIC | CT_PROTECTED, &o);
     list_asks(c, id, list_ver_need, &o);   /* (a class-side list asks the same of each name it may list) */
     ct_implied_classes(c, id, ct_version_named, ver_need, &o);
     for (int i = 0, nn = call_node_names(c, id, names); i < nn; i++) {
@@ -14460,7 +14486,7 @@ int ver_cell_put_first(Compiler *c, const char *cell, int list, int at, int v) {
    own history's versions. The writes are placed list by list, one rebuild
    of each list's statements: ahead of a statement in the order made, after
    it in the reverse order, as one insertion at a time placed them. */
-typedef struct { int list, stmt, node, n, cell, after, k, g, body, vis; } VerWrite;   /* body: a method body's version (LrDef.body); vis: of the cell's visibility cell */
+typedef struct { int list, stmt, node, n, cell, after, k, g, body, vis, word; } VerWrite;   /* body: a method body's version (LrDef.body); vis: of the cell's visibility cell; word: a visibility word's write (ver_word_writes) */
 static void ver_write_add(VerWrite **w, int *nw, VerWrite x) {
   if (!(*nw & (*nw - 1)) && !(*w = realloc(*w, sizeof **w * (size_t)(*nw ? 2 * *nw : 1)))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   (*w)[(*nw)++] = x;
@@ -14487,6 +14513,9 @@ static int ver_write_cmp(const void *a, const void *b) {
   if (x->list != y->list) return x->list < y->list ? -1 : 1;
   if (x->stmt != y->stmt) return x->stmt < y->stmt ? -1 : 1;
   if (x->after != y->after) return x->after - y->after;
+  /* (a word's write after the writes of the defs it takes, `private_class_method def self.m`, ahead of a statement
+     whose value is read too) */
+  if (x->word != y->word) return x->word - y->word;
   return x->after ? y->k - x->k : x->k - y->k;
 }
 /* The cells each node writes, as they are placed: a cell is written once
@@ -14701,8 +14730,10 @@ int cplan_cell_write_dropped(Compiler *c, int id) {
 }
 /* ...the write of version v's cell at its statement, and with rt that of
    its visibility cell (with pass 0 only their places taken: written
-   before), into *w; *nh past the cells written */
-static void ver_write_version(NodeTable *nt, const int *par, VerCellsAt *cells, const ElabVersion *v, int rt, int pass, VerWrite **wp, int *nwp, int *nh) {
+   before), into *w; *nh past the cells written. After the statement, but
+   ahead of one that runs no code (ver_stmt_runs_no_code) or whose value is
+   read, `r = def self.m = 1` ending a body, which the write would answer */
+static void ver_write_version(Compiler *c, NodeTable *nt, const int *par, VerCellsAt *cells, const ElabVersion *v, int rt, int pass, VerWrite **wp, int *nwp, int *nh) {
   int node = v->v->node, st = ver_write_stmt(nt, par, node);
   if (st < 0 || par[st] < 0) return;
   /* (each cell once: an entry without a face may have written the
@@ -14711,7 +14742,7 @@ static void ver_write_version(NodeTable *nt, const int *par, VerCellsAt *cells, 
   int cw = ver_cell_once(cells, node, v->cell);
   if ((!cw && !vw) || !pass) return;
   /* (ahead of a statement that runs no program code: after one that ends a branch, the write would be the branch's value) */
-  VerWrite x = { par[st], st, node, v->v->kind == LR_REMOVE ? 0 : v->n, v->cell, !ver_stmt_runs_no_code(nt, st), 0, -1, v->v->body != 0 };
+  VerWrite x = { par[st], st, node, v->v->kind == LR_REMOVE ? 0 : v->n, v->cell, !ver_stmt_runs_no_code(nt, st) && an_value_dropped(c, par, st), 0, -1, v->v->body != 0 };
   if (cw) ver_write_add(wp, nwp, x);
   if (vw) x.n = v->v->vis, x.vis = 1, ver_write_add(wp, nwp, x);
   if (v->cell >= *nh) *nh = v->cell + 1;
@@ -14761,16 +14792,24 @@ static void ver_obj_presence_mark(Compiler *c, int id, const char *name, int cls
   int e = call_target(c, id, cls, name, flags & CT_CMETHOD ? CT_CMETHOD | CT_CAPTURE : CT_REACH, &ml);
   if (ml.kind == ML_ENTRY) ver_entry_vis_mark(c, e);
 }
-/* (mark the entry each written respond_to? of a class method reads the cells of, cplan_cmethod_presence, and of
-   an instance's method (ver_obj_presence_mark): its versions' visibility cells are written, as a face that closes
-   would have them, so the test of a version whose visibility only the run knows reads one. The entries all
-   exist: asked here as the emission asks) */
+/* (a class-side list's, of each name it may list: list_ver_target) */
+static void ver_list_presence_mark(Compiler *c, int id, const char *name, int cls, void *arg) {
+  (void)arg;
+  ver_entry_vis_mark(c, call_target(c, id, cls, name, CT_CMETHOD | CT_CAPTURE, NULL));
+}
+/* (mark the entry each written respond_to? of a class method reads the cells of, cplan_cmethod_presence, of
+   each name a class-side list reads (ver_list_presence_mark), and of an instance's method
+   (ver_obj_presence_mark): its versions' visibility cells are written, as a face that closes would have them, so
+   the test of a version whose visibility only the run knows reads one. The entries all exist: asked here as the
+   emission asks) */
 static void ver_presence_mark(Compiler *c) {
   for (int id = an_calls_named_first(c, RESPOND_TO_NAME); id >= 0; id = an_calls_named_next(id)) {
     int pc = cplan_presence_class(c, id);
     const char *qm = pc >= 0 && ver_scope_written(comp_scope_of(c, id)) ? method_sym_arg(c, id) : NULL;
     ver_entry_vis_mark(c, qm && cplan_presence_asks(c, id, pc, qm) ? call_target(c, id, pc, qm, CT_CMETHOD | CT_CAPTURE, NULL) : -1);
   }
+  for (int id = an_calls_named_first(c, SINGLETON_METHODS_NAME); id >= 0; id = an_calls_named_next(id))
+    if (ver_scope_written(comp_scope_of(c, id))) list_asks(c, id, ver_list_presence_mark, NULL);
   presence_readers(c, 1, ver_obj_presence_mark, NULL);
 }
 /* A guard's cell: the visibility cell of history cell `cell` (of the top-level def
@@ -14858,8 +14897,10 @@ const LocalVar *cplan_vis_cell_var(Compiler *c, const CallPlan *p) {
 }
 /* The writes of the visibility cells of versions vs[0..nv) after each visibility word of
    their names, with the word's visibility (elab_version_word): beside the word's statement,
-   or, for a word inside an expression, the word's own call (cplan_vis_cell_after). Each
-   once (pass 1 places them; pass 0 only claims the ones already placed) */
+   or, for a word inside an expression, the word's own call (cplan_vis_cell_after), and its
+   statement's too where the word takes a def of the name (`x = private_class_method def
+   self.m`), whose own writes go beside the statement. Each once (pass 1 places them; pass 0
+   only claims the ones already placed) */
 static void ver_word_writes(Compiler *c, const int *par, VerCellsAt *cells, VerWrite **w, int *nw, int *nh,
                             const ElabVersion *vs, int nv, int pass) {
   const NodeTable *nt = c->nt;
@@ -14867,8 +14908,12 @@ static void ver_word_writes(Compiler *c, const int *par, VerCellsAt *cells, VerW
     for (int k = 0, wn, wv, o; (o = elab_version_word(c, &vs[j], k, &wn, &wv)) >= 0; k++) {
       int st = o ? ver_write_stmt(nt, par, wn) : -1;
       if (st < 0 || par[st] < 0 || !ver_cell_once(cells, wn, -2 - vs[j].cell) || !pass) continue;
-      if (nt_kind(nt, par[wn]) != NK_StatementsNode) { ver_vis_after_add(c, wn, vs[j].cell, wv); continue; }
-      ver_write_add(w, nw, (VerWrite){ par[st], st, wn, wv, vs[j].cell, an_value_dropped(c, par, st), 0, -1, 0, 1 });
+      int d = vs[j].v->node, takes = d >= 0 && par[d] >= 0 && nt_kind(nt, par[d]) == NK_ArgumentsNode && par[par[d]] == wn;
+      if (nt_kind(nt, par[wn]) != NK_StatementsNode) {
+        ver_vis_after_add(c, wn, vs[j].cell, wv);
+        if (!takes) continue;
+      }
+      ver_write_add(w, nw, (VerWrite){ par[st], st, wn, wv, vs[j].cell, an_value_dropped(c, par, st), 0, -1, 0, 1, 1 });
       if (vs[j].cell >= *nh) *nh = vs[j].cell + 1;
     }
 }
@@ -14944,7 +14989,7 @@ static int ver_cells_put(Compiler *c) {
           reads |= nt_int(nt, tests[k], "ver_hist", 0) == vs[j].cell + 1;
         if (!reads) continue;   /* prepend cells are written at their statements */
       }
-      ver_write_version(nt, par, &cells, &vs[j], rt, pass, &w, &nw, &nh);
+      ver_write_version(c, nt, par, &cells, &vs[j], rt, pass, &w, &nw, &nh);
     }
   }
   for (int i = 0; i < c->nver_guards; i++) {
@@ -14954,7 +14999,7 @@ static int ver_cells_put(Compiler *c) {
     int nv = g->cls < 0 ? elab_chain_versions(c, -1, 1, g->name, vs, VER_MAX_ARMS)
                         : elab_history_versions(c, g->cls, 0, g->name, vs, VER_MAX_ARMS);
     for (int j = 0; j < nv; j++)
-      ver_write_version(nt, par, &cells, &vs[j], 0, pass, &w, &nw, &nh);
+      ver_write_version(c, nt, par, &cells, &vs[j], 0, pass, &w, &nw, &nh);
   }
   if (c->nver_vis_reads) ver_guard_writes(c, par, &cells, &w, &nw, &nh, pass);   /* (and a guarded call's, CallPlan.vis_cell) */
   }

@@ -4121,6 +4121,14 @@ static int ct_call_face(Compiler *c, int id, int rcls, int sg, const char *name,
   if (face == VF_PRIVATE && !sg && rcls != comp_core_class(c, CORE_OBJECT) && ver_protected_closed(c, id, rcls, name)) face = VF_PUBLIC;
   return face;
 }
+/* The face of the entry of a late layer in front of cls's chain (pos_entry) call id binds: ct_call_face's, for a call
+   that enforces visibility (ct_vis_flags) where a version on the chain takes a visibility only the run tells, or
+   where its versions differ for the face; VF_NONE otherwise, and for a variable-like call's, which a layer's else arm
+   does not raise for */
+static int ct_layer_face(Compiler *c, int id, int cls, int sg, const char *name, unsigned flags) {
+  int face = id >= 0 ? ct_call_face(c, id, cls, sg, name, ct_vis_flags(c, id, name, flags), 0) : VF_NONE;
+  return ver_face_closes(face) ? face : VF_NONE;
+}
 /* The version of `name` call id runs, when the method has more than one
    (#9898), or one the call may run before (elab_versions_late): a call at
    a load point gets the version live there; any other (a load point in a
@@ -4149,11 +4157,16 @@ static int pos_front(Compiler *c, int mi);
 static int pos_runs(Compiler *c, const Scope *s, int t, int *to, int *layer);
 static int pos_runs_front(Compiler *c, int mi, int *to);
 /* The entry a call that reaches mi, a late layer the class's table answers (pos_front), runs: over mi's versions,
-   its else arm what lies behind it (pos_entry); mi, with ML_TABLE, when asked before the entries are made */
+   its else arm what lies behind it (pos_entry), of the face the call binds where a version's visibility only the run
+   tells (ct_call_face: its arms raise for the visibility the run gives); mi, with ML_TABLE, when asked before the
+   entries are made */
 static int ct_front_layer(Compiler *c, int id, int rcls, int mi, unsigned flags, MethodLookup *ml) {
   int to[VER_MAX_ARMS], n = pos_runs_front(c, mi, to);
   const Scope *m = &c->scopes[mi];
-  int ix = c->ver_built ? ver_entry_ix(c, VER_ENTRY_LAYER, mi + 1, m->class_id, m->is_cmethod, comp_scope_user_name(m), ver_arity(c, id, to, n), VF_NONE) : -1;
+  const char *name = comp_scope_user_name(m);
+  int ar = ver_arity(c, id, to, n), face = c->ver_built ? ct_layer_face(c, id, m->class_id, m->is_cmethod, name, flags) : VF_NONE;
+  int ix = c->ver_built ? ver_entry_ix(c, VER_ENTRY_LAYER, mi + 1, m->class_id, m->is_cmethod, name, ar, face) : -1;
+  if (ix < 0 && face) ix = ver_entry_ix(c, VER_ENTRY_LAYER, mi + 1, m->class_id, m->is_cmethod, name, ar, VF_NONE);
   ml->n = 2;
   if (ix < 0) {
     ml->kind = ML_TABLE;
@@ -12729,10 +12742,10 @@ static int pos_end_arm(const Compiler *c, int e) {
     if (c->ver_entries[i].guard == VER_ENTRY_LAYER && c->ver_entries[i].scope == e) return c->ver_entries[i].end_arm;
   return 0;
 }
-static int pos_made(const Compiler *c, int t, int ar) {
+static int pos_made(const Compiler *c, int t, int ar, int face) {
   for (int i = 0; i < c->nver_entries; i++) {
     const struct VerEntry *e = &c->ver_entries[i];
-    if (e->guard == VER_ENTRY_LAYER && e->from == t + 1 && e->ar == ar) return e->scope;
+    if (e->guard == VER_ENTRY_LAYER && e->from == t + 1 && e->ar == ar && e->face == face) return e->scope;
   }
   return -1;
 }
@@ -12743,25 +12756,25 @@ static int guard_else_bare(Compiler *c, int behind, int cls, int sg, const char 
 /* The guard entry of the class behind a late layer (kept in ver_entries as VER_ENTRY_GUARD, as the entries' build
    keeps it), where a later prepend guards that class's method g: a lookup that passes the layer finds the guard's
    arms first, not the copy g stands in front of. The memo of the build. */
-static int pos_guard_made(const Compiler *c, int g, int ar) {
+static int pos_guard_made(const Compiler *c, int g, int ar, int face) {
   const Scope *m = &c->scopes[g];
   const char *name = comp_scope_user_name(m);
   for (int i = 0; i < c->nver_entries; i++) {
     const struct VerEntry *e = &c->ver_entries[i];
-    if (e->guard == VER_ENTRY_GUARD && !e->from && e->cls == m->class_id && e->sg == m->is_cmethod && e->ar == ar && e->face == VF_NONE && sp_streq(e->name, name)) return e->scope;
+    if (e->guard == VER_ENTRY_GUARD && !e->from && e->cls == m->class_id && e->sg == m->is_cmethod && e->ar == ar && e->face == face && sp_streq(e->name, name)) return e->scope;
   }
   return -1;
 }
-static int pos_guard(Compiler *c, int g, int ar) {
-  int e = pos_guard_made(c, g, ar), behind = -1, hooks = -1, to[VER_MAX_ARMS + 1];
+static int pos_guard(Compiler *c, int g, int ar, int face) {
+  int e = pos_guard_made(c, g, ar, face), behind = -1, hooks = -1, to[VER_MAX_ARMS + 1];
   if (e >= 0) return e;
-  e = guard_entry_make(c, g, ar, VF_NONE, &behind);
+  e = guard_entry_make(c, g, ar, face, &behind);
   if (e < 0) return g;
   const Scope *m = &c->scopes[g];
   int n = guard_chain(c, g, to, NULL, NULL);
   int finds = n && guard_else_bare(c, to[n - 1], m->class_id, m->is_cmethod, comp_scope_user_name(m), &hooks) ? VER_FINDS_NONE
             : ver_else_finds(c, VK_KEEP, m->class_id, m->is_cmethod, comp_scope_user_name(m), SP_VIS_PUBLIC, -1);
-  ver_entry_add(c, c->scopes[e].name, (struct VerEntry){ NULL, VER_ENTRY_GUARD, m->class_id, m->is_cmethod, ar, e, .finds = finds, .behind = behind + 1 });
+  ver_entry_add(c, c->scopes[e].name, (struct VerEntry){ NULL, VER_ENTRY_GUARD, m->class_id, m->is_cmethod, ar, e, .finds = finds, .behind = behind + 1, .face = face });
   return e;
 }
 /* The entry over the versions of position t (pos_versions), a layer of a
@@ -12773,14 +12786,20 @@ static int pos_guard(Compiler *c, int g, int ar) {
    layer too. Each position's entry is made once and kept, whatever asks
    it: the guard entry's arm for t, the method behind a guard's arms, a
    super that reaches t, a call that takes t as the class's first. t itself
-   where it is no layer. */
-static int pos_entry(Compiler *c, const Scope *s, int t, int ar) {
+   where it is no layer. With a face (a call that enforces visibility, where
+   a version's visibility only the run tells: ct_layer_face), the arm of a
+   version closed to it raises, and that of a version whose visibility the
+   run tells asks its visibility cell first (ver_vis_arm), as the chain's
+   face entry does (ver_entry_make); its else arm is the face's entry of
+   what lies behind. */
+static int pos_entry(Compiler *c, const Scope *s, int t, int ar, int face) {
   ElabVersion vs[VER_MAX_ARMS];
   DispArm arm[VER_MAX_ARMS];
+  VerArmVis avis[VER_MAX_ARMS];
   char sel[VER_MAX_ARMS][32];
   int to[VER_MAX_ARMS], late, nv = pos_versions(c, s, t, to, NULL, &late), blk = 0, spliced = 1;
   if (!nv) return t;
-  int made = pos_made(c, t, ar);
+  int made = pos_made(c, t, ar, face);
   if (made >= 0) return made;
   nv = pos_versions(c, s, t, to, vs, &late);
   for (int k = 0; k < nv; k++) {
@@ -12788,12 +12807,14 @@ static int pos_entry(Compiler *c, const Scope *s, int t, int ar) {
     spliced &= c->scopes[to[k]].yields;
     ver_cell_name(vs[k].cell, sel[k]);
     arm[k] = (DispArm){ sel[k], vs[k].n, c->scopes[to[k]].name, vs[k].cell + 1 };
+    int fv = ver_face_closes(face) ? elab_version_vis(c, &vs[k]) : SP_VIS_PUBLIC;
+    avis[k] = (VerArmVis){ fv >= 0 && ver_closed_to(fv, face) ? fv : 0, fv < 0 ? face : 0 };
   }
   int past = late ? pos_next(c, t) : -1, els_to = to[nv - 1], els = -1, kind = VK_KEEP;
   int cls = c->scopes[t].class_id, sg = c->scopes[t].is_cmethod;
   const char *name = comp_scope_user_name(&c->scopes[t]);
   if (past >= 0) {
-    els_to = c->scopes[past].mixin_guarded && c->scopes[past].class_id != cls ? pos_guard(c, past, ar) : pos_entry(c, NULL, past, ar);
+    els_to = c->scopes[past].mixin_guarded && c->scopes[past].class_id != cls ? pos_guard(c, past, ar, face) : pos_entry(c, NULL, past, ar, face);
     blk |= c->scopes[els_to].blk_param || c->scopes[els_to].yields;
     spliced &= c->scopes[els_to].yields;
   }
@@ -12838,8 +12859,8 @@ static int pos_entry(Compiler *c, const Scope *s, int t, int ar) {
       els = disp_choose((NodeTable *)c->nt, test, call, els);
     }
   }
-  int e = ver_entry_emit(c, cls, sg, name, ar, blk, spliced, arm, to, NULL, nv, els_to, els, 0);
-  ver_entry_add(c, name, (struct VerEntry){ NULL, VER_ENTRY_LAYER, cls, sg, ar, e, .finds = ver_else_finds(c, kind, cls, sg, name, SP_VIS_PUBLIC, -1), .from = t + 1, .end_arm = end_arm });
+  int e = ver_entry_emit(c, cls, sg, name, ar, blk, spliced, arm, to, ver_face_closes(face) ? avis : NULL, nv, els_to, els, 0);
+  ver_entry_add(c, name, (struct VerEntry){ NULL, VER_ENTRY_LAYER, cls, sg, ar, e, .finds = ver_else_finds(c, kind, cls, sg, name, SP_VIS_PUBLIC, -1), .from = t + 1, .end_arm = end_arm, .face = face });
   return e;
 }
 /* The methods a super in s may run, for the readers that ask before the
@@ -12869,7 +12890,7 @@ int cplan_super_method_target(Compiler *c, int mi) {
   t = from != mi ? pos_next(c, from) : cplan_super_target(c, -1, &c->scopes[mi], NULL);
   if (t < 0 || !c->ver_built || !pos_versions(c, comp_super_site(c, &c->scopes[from]), t, to, vs, &late)) return t;
   for (int i = 0; i < c->nver_entries; i++)
-    if (c->ver_entries[i].guard == VER_ENTRY_LAYER && c->ver_entries[i].from == t + 1) return c->ver_entries[i].scope;
+    if (c->ver_entries[i].guard == VER_ENTRY_LAYER && c->ver_entries[i].from == t + 1 && c->ver_entries[i].face == VF_NONE) return c->ver_entries[i].scope;
   return t;
 }
 /* The Methods a super_method of the Method of scope mi holds. Of the Method of an entry (a guard's or a late layer's),
@@ -13038,12 +13059,12 @@ static int guard_entry_make(Compiler *c, int mi, int ar, int face, int *behind) 
   /* Cloned forwarding bodies retain the hidden name even when the clone
      has no pin in the original entry's node index. */
   for (int k = 0; k < n - 1; k++) {
-    int e = c->scopes[to[k]].mixin_guarded ? pos_entry(c, NULL, to[k], ar) : to[k];
+    int e = c->scopes[to[k]].mixin_guarded ? pos_entry(c, NULL, to[k], ar, face) : to[k];
     arm[k].callee = e == to[k] ? c->scopes[to[k]].name : comp_scope_user_name(&c->scopes[mi]);
     to[k] = e;
   }
   /* (the method behind them all a layer too: its entry, pos_entry) */
-  to[n - 1] = pos_entry(c, NULL, to[n - 1], ar);
+  to[n - 1] = pos_entry(c, NULL, to[n - 1], ar, face);
   for (int k = 0; k < n; k++) {
     blk |= c->scopes[to[k]].blk_param || c->scopes[to[k]].yields;
     spliced &= c->scopes[to[k]].yields;
@@ -13982,6 +14003,8 @@ static void ver_need_front(Compiler *c, VerNeeds *o, int id, int mi) {
   const Scope *m = &c->scopes[mi];
   VerNeed w = { VER_ENTRY_LAYER, m->class_id, m->is_cmethod, mi, ver_arity(c, id, to, n), comp_scope_user_name(m), mi + 1 };
   if (!ver_need_has(c, o, w)) ver_need_add(o, w);
+  /* (and its face entry, for a call that enforces visibility where a version's visibility the run tells: ct_front_layer) */
+  if ((w.face = ct_layer_face(c, id, m->class_id, m->is_cmethod, w.name, 0)) && !ver_need_has(c, o, w)) ver_need_add(o, w);
 }
 static void ver_need_guard(Compiler *c, VerNeeds *o, int id, int mi) {
   const Scope *m = &c->scopes[mi];
@@ -14125,7 +14148,7 @@ static void ver_entries_index(Compiler *c) {
     /* (an open history's entry is the table's answer; so is the entry of a late layer in front of a chain: pos_front. The
        entry of a layer behind others, which a guard's arm or a super reaches, none) */
     int front = e->guard == VER_ENTRY_LAYER && !c->scopes[e->from - 1].mixin_guarded && !c->scopes[e->from - 1].shadow;
-    if (e->scope < 0 || e->guard == VER_ENTRY_HISTORY || (e->guard == VER_ENTRY_LAYER && !front) ||
+    if (e->scope < 0 || e->guard == VER_ENTRY_HISTORY || (e->guard == VER_ENTRY_LAYER && (!front || e->face != VF_NONE)) ||
         (e->guard == VER_ENTRY_GUARD && e->from)) continue;
     int dup = 0;
     for (int j = c->ver_names[m]; j >= 0 && !dup; j = c->ver_names_next[j]) {
@@ -14489,10 +14512,10 @@ void ver_entries_build(Compiler *c) {
   for (int i = 0; i < o.n; i++) {
     /* (a layer's entry registers itself, once: pos_entry) */
     if (o.v[i].guard == VER_ENTRY_LAYER) {
-      pos_entry(c, NULL, o.v[i].mi, o.v[i].ar);
+      pos_entry(c, NULL, o.v[i].mi, o.v[i].ar, o.v[i].face);
       continue;
     }
-    if (o.v[i].guard == VER_ENTRY_GUARD && !o.v[i].from && o.v[i].face == VF_NONE && pos_guard_made(c, o.v[i].mi, o.v[i].ar) >= 0) continue;
+    if (o.v[i].guard == VER_ENTRY_GUARD && !o.v[i].from && pos_guard_made(c, o.v[i].mi, o.v[i].ar, o.v[i].face) >= 0) continue;
     /* (a guard entry's else arm runs the method behind the mixins: for a
        later include's behind, what its super reaches, if anything) */
     int to[VER_MAX_ARMS + 1], n = o.v[i].guard != VER_ENTRY_CHAIN ? guard_chain(c, o.v[i].mi, to, NULL, NULL) : 0;

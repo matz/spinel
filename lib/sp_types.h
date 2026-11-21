@@ -402,7 +402,15 @@ typedef struct{sp_int*keys;sp_int*vals;sp_int*order;sp_bool*used;sp_int len;sp_i
    otherwise wait on). Anywhere else the handler records the signal, and the
    compiler's safe points and the runtime's waits raise it. */
 extern volatile int sp_sig_async_ok;
+/* Nonzero while sp_process_spawn is between fork() and its return. A signal
+   that arrives then is recorded for the next safe point (lib/sp_cold.c). */
+extern volatile int sp_sig_hold;
+/* A default signal recorded before the call, as during a Process.spawn, is
+   raised as the call begins (sp_sig_blocking_raise, lib/sp_cold.c). */
+extern volatile int sp_sig_default_pending;
+void sp_sig_blocking_raise(void);
 #define SP_SIG_BLOCKING(expr) \
-  __extension__ ({ sp_sig_async_ok++; __typeof__(expr) _sp_sb_r = (expr); sp_sig_async_ok--; _sp_sb_r; })
+  __extension__ ({ sp_sig_async_ok++; if (sp_sig_default_pending) sp_sig_blocking_raise(); \
+                   __typeof__(expr) _sp_sb_r = (expr); sp_sig_async_ok--; _sp_sb_r; })
 
 #endif

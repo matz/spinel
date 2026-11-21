@@ -927,6 +927,7 @@ void sp_fiber_inject_release(sp_Fiber*f,int kind){sp_fiber_inject_unlock(f,kind)
 void sp_fiber_set_kill_inject(sp_Fiber*f){SP_GC_ROOT(f);sp_fiber_inject_publish(f,2,NULL,NULL,NULL);}
 void sp_fiber_defer_inject(void){sp_Fiber*f=sp_fiber_current;if(f)f->inject_defer++;}
 void sp_fiber_undefer_inject(void){sp_Fiber*f=sp_fiber_current;if(f&&f->inject_defer)f->inject_defer--;}
+int sp_fiber_inject_deferred(void){sp_Fiber*f=sp_fiber_current;return f&&f->inject_defer;}
 void sp_fiber_fire_inject_if_pending(void){sp_Fiber*f=sp_fiber_current;if(!f||f->inject_defer)return;if(SP_INJECT_PEEK(f)){sp_fiber_consume_inject(f);return;}
   /* A #kill/#raise of a thread that is inside a Fiber it resumed: it is
      delivered in that fiber, and a kill goes on up to the thread's own. */

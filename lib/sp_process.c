@@ -64,6 +64,8 @@
 #if defined(_WIN32)
 #include <spawn.h>
 #include <sys/stat.h>
+#else
+#include <poll.h>
 #endif
 
 #include "sp_alloc.h"   /* sp_PolyArray, sp_RbVal, sp_box_*, sp_raise_cls */
@@ -608,10 +610,19 @@ sp_int sp_process_spawn(sp_RbVal cmd, sp_RbVal args_box,
      child can write to the same descriptors, as CRuby flushes them */
   fflush(NULL);
   give_blocking(in_fd, out_fd, err_fd);
+  /* (test/process_spawn_raise_in_exec_wait.rb: the child reads a byte from
+     this fd before it execs, so a test can act while the parent waits) */
+  int hold_fd = -1;
+  { const char *h = getenv("SPINEL_TEST_SPAWN_HOLD_FD"); char *end;
+    long v = h && *h >= '0' && *h <= '9' ? strtol(h, &end, 10) : -1;
+    if (v > 2 && v < INT_MAX && *end == '\0') hold_fd = (int)v; }
+  extern void sp_sig_hold_begin(void), sp_sig_hold_end(void);   /* lib/sp_cold.c */
+  sp_sig_hold_begin();
   sp_fork_exec_lock();
   pid_t pid = fork();
   if (pid != 0) { sp_fork_exec_unlock(); free(envp); }
   if (pid < 0) {
+    sp_sig_hold_end();
     free(argv);
     sp_process_spawn_fail(owned, "SystemCallError", sp_errf_errno("fork failed", errno));
   }
@@ -624,6 +635,14 @@ sp_int sp_process_spawn(sp_RbVal cmd, sp_RbVal args_box,
        because the exit code is the same regardless of exec failure
        reason. */
     close(err_pipe[0]);
+    /* (IO.pipe's read end is O_NONBLOCK: on EAGAIN, poll and read again) */
+    if (hold_fd >= 0) for (char c;;) {
+      if (read(hold_fd, &c, 1) >= 0) break;
+      if (errno == EINTR) continue;
+      if (errno != EAGAIN && errno != EWOULDBLOCK) break;
+      struct pollfd hp; hp.fd = hold_fd; hp.events = POLLIN; hp.revents = 0;
+      (void)poll(&hp, 1, -1);
+    }
     { int which = 0;
       if (spawn_opts_apply(&o, 0, &which) != 0) {
         int fail[2] = { errno, which };
@@ -642,10 +661,24 @@ sp_int sp_process_spawn(sp_RbVal cmd, sp_RbVal args_box,
      then close the child's write end and read the errno if any. */
   close(err_pipe[1]);
   close_owned(owned);
+  /* (parked until the child execs or fails, as sp_system_start's read). A
+     Thread#raise or #kill is held until the spawn returns, so the caller
+     has the pid. */
+  extern void sp_fiber_defer_inject(void), sp_fiber_undefer_inject(void);   /* lib/sp_fiber.c */
   int fail[2] = { 0, 0 };
-  /* (parked until the child execs or fails, as sp_system_start's read) */
-  sp_io_wait_fd_readable(err_pipe[0]);
-  ssize_t got = SP_SIG_BLOCKING(read(err_pipe[0], fail, sizeof fail));
+  ssize_t got;
+  sp_fiber_defer_inject();
+  /* (a Thread#raise wakes the park: it goes on until the pipe is readable,
+     so the read below does not block a worker) */
+  for (;;) {
+    sp_io_wait_fd_readable(err_pipe[0]);
+    struct pollfd rp; rp.fd = err_pipe[0]; rp.events = POLLIN; rp.revents = 0;
+    int pr = poll(&rp, 1, 0);
+    if (pr > 0 || (pr < 0 && errno != EINTR)) break;
+  }
+  /* (with sp_sig_hold set the signal handler returns, so read can fail with EINTR) */
+  do { got = SP_SIG_BLOCKING(read(err_pipe[0], fail, sizeof fail)); } while (got < 0 && errno == EINTR);
+  sp_fiber_undefer_inject();
   close(err_pipe[0]);
   free(argv);
   if (got > 0) {
@@ -664,12 +697,14 @@ sp_int sp_process_spawn(sp_RbVal cmd, sp_RbVal args_box,
       /* the reaped child is the last one waited for, so $? reads its
          exit 127, as it does under CRuby */
       if (r == pid) { sp_last_status = st; sp_last_pid = (int)pid; } }
+    sp_sig_hold_end();
     errno = fail[0];
     sp_raise_cls(errno == ENOENT ? "Errno::ENOENT" :
                  errno == EACCES ? "Errno::EACCES" :
                  "SystemCallError",
                  sp_errf_path(errno, fail[1] == 1 && chdir_to ? chdir_to : prog));
   }
+  sp_sig_hold_end();
   return (sp_int)pid;
 #endif
 }
@@ -856,6 +891,8 @@ sp_int sp_process_daemon(int nochdir, int noclose) {
   pid_t pid = fork();
   if (pid > 0) _exit(0);
   if (pid == 0) {
+    extern void sp_sig_fork_child(void);   /* lib/sp_cold.c */
+    sp_sig_fork_child();
     /* as CRuby's own daemon path goes: a setsid failure only means the
        process already leads its group, the redirect is skipped when
        /dev/null will not open, and a failed chdir raises after it */

@@ -141,6 +141,7 @@ void sp_fiber_set_kill_inject(sp_Fiber *f);
 /* ConditionVariable waits defer async delivery until their mutex is reacquired. */
 void sp_fiber_defer_inject(void);
 void sp_fiber_undefer_inject(void);
+int sp_fiber_inject_deferred(void);
 void sp_fiber_fire_inject_if_pending(void);
 int  sp_fiber_inject_pending(sp_Fiber *f);   /* lock-free acquire peek */
 /* The slot held across a park's publication or a delivery's look at its

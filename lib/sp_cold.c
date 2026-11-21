@@ -4596,6 +4596,14 @@ extern volatile int sp_sig_pending_flag;   /* (lib/sp_alloc.c: sp_gc_alloc_nogc 
    sp_sig_default_pending, and the raise it makes is the generated program's
    (sp_sig_default_raiser, set by sp_sig_install_defaults) */
 volatile int sp_sig_async_ok;
+/* Nonzero while sp_process_spawn is between fork() and its return. A signal
+   that arrives then is recorded and runs at the next safe point, after the
+   caller has the child pid, so the ensure in Open3.__capture can wait for
+   the child. Raised inside sp_process_spawn, the exception would leave
+   before the caller had the pid. The counter is process-wide, so a spawn on
+   one thread also delays signals for the other threads until the spawn
+   returns. */
+volatile int sp_sig_hold;
 volatile int sp_sig_default_pending;
 void (*sp_sig_default_raiser)(int);
 /* A safe point of a program that sets no trap: the recorded default signal
@@ -4611,16 +4619,16 @@ static void sp_gc_poll_run(void) {
   sp_gc_poll_collect();
 }
 /* A safe point of a program that sets no trap: a collection asked of it
-   runs, and the recorded default signal is raised. Returns only when it
-   had a collection and no signal to run. */
+   runs, and the recorded default signal is raised. Returns while
+   sp_sig_default_pending is 0: after a collection, or after
+   sp_sig_blocking_raise has raised the signal the flag was set for. */
 void sp_sig_poll_raise(void) {
   SP_ATOMIC_STORE(&sp_sig_pending_flag, 0, __ATOMIC_RELAXED);
-  int gc = sp_gc_poll_due;
   sp_gc_poll_run();
   int no = sp_sig_default_pending;
-  if (gc && !no) return;
+  if (!no) return;
   sp_sig_default_pending = 0;
-  if (no && sp_sig_default_raiser) sp_sig_default_raiser(no);
+  if (sp_sig_default_raiser) sp_sig_default_raiser(no);
   abort();
 }
 #ifdef SP_THREADS
@@ -4639,6 +4647,33 @@ void sp_sig_c_handler(int no) {
 #endif
   errno = e;
 }
+/* The count of sp_sig_run_pending calls between their read of sp_sig_hold
+   and their take of a recorded signal. A take adds to the count and then
+   reads sp_sig_hold; sp_sig_hold_begin adds to sp_sig_hold and then waits
+   for the count to reach zero. Both are sequentially consistent, so a take
+   that read zero is over before the spawn forks, and a signal recorded
+   after sp_sig_hold_begin returns is not taken until sp_sig_hold_end. The
+   trap proc runs after the count is given back. sp_sig_run_pending runs
+   with sp_sig_async_ok at 0, so the default handler records a signal that
+   arrives during its take; sp_sig_blocking_raise, with sp_sig_async_ok
+   raised, blocks SIGINT and SIGTERM for its take. */
+static volatile int sp_sig_taking;
+static int sp_sig_take_begin(void) {
+  SP_ATOMIC_FETCH_ADD(&sp_sig_taking, 1, __ATOMIC_SEQ_CST);
+  if (!SP_ATOMIC_LOAD(&sp_sig_hold, __ATOMIC_SEQ_CST)) return 1;
+  SP_ATOMIC_FETCH_SUB(&sp_sig_taking, 1, __ATOMIC_SEQ_CST);
+  return 0;
+}
+static void sp_sig_take_end(void) { SP_ATOMIC_FETCH_SUB(&sp_sig_taking, 1, __ATOMIC_SEQ_CST); }
+/* sp_sig_run_pending stopped with signals still recorded. The trap thread
+   is woken by sp_sig_hold_end; with no trap thread the safe points' flag is
+   set again. */
+static void sp_sig_left_pending(void) {
+#ifdef SP_THREADS
+  if (SP_ATOMIC_LOAD(&sp_sig_wake[1], __ATOMIC_ACQUIRE) >= 0) return;
+#endif
+  SP_ATOMIC_STORE(&sp_sig_pending_flag, 1, __ATOMIC_RELEASE);
+}
 /* Run the procs of the signals delivered since the last call. Deliveries of
    one signal that arrive before its proc runs are one run, as the kernel
    merges them while the signal is pending. The signal is blocked while its
@@ -4646,17 +4681,21 @@ void sp_sig_c_handler(int no) {
    proc instead of nesting on it; sp_trap_call unblocks it when the proc
    leaves by a raise or a throw. */
 void sp_sig_run_pending(void) {
+  if (!sp_sig_take_begin()) { sp_gc_poll_run(); return; }
   SP_ATOMIC_STORE(&sp_sig_pending_flag, 0, __ATOMIC_RELAXED);
+  int dno = 0;
+  if (sp_sig_default_pending && sp_sig_default_raiser) { dno = sp_sig_default_pending; sp_sig_default_pending = 0; }
+  sp_sig_take_end();
   sp_gc_poll_run();   /* (a collection sp_gc_alloc_nogc asked of this safe point) */
   /* a recorded default SIGINT / SIGTERM first: its raise leaves */
-  if (sp_sig_default_pending && sp_sig_default_raiser) {
-    int no = sp_sig_default_pending;
-    sp_sig_default_pending = 0;
-    sp_sig_default_raiser(no);
-  }
+  if (dno) sp_sig_default_raiser(dno);
   for (int no = 1; no < SP_SIG_MAX; no++) {
     if (!SP_ATOMIC_LOAD(&sp_sig_pending[no], __ATOMIC_RELAXED)) continue;
-    if (!SP_ATOMIC_EXCHANGE(&sp_sig_pending[no], 0, __ATOMIC_ACQUIRE)) continue;
+    /* (a Process.spawn began on another thread: the signals left wait for it) */
+    if (!sp_sig_take_begin()) { sp_sig_left_pending(); return; }
+    int n = SP_ATOMIC_EXCHANGE(&sp_sig_pending[no], 0, __ATOMIC_ACQUIRE);
+    sp_sig_take_end();
+    if (!n) continue;
     sp_Proc *p = (sp_Proc *)sp_trap_proc[no];
     if (!p) continue;
     sigset_t m; sigemptyset(&m); sigaddset(&m, no);
@@ -4669,12 +4708,54 @@ void sp_sig_run_pending(void) {
     sp_sig_unblock(no, 0);
   }
 }
+/* SP_SIG_BLOCKING, with sp_sig_async_ok raised: a default signal recorded
+   before the call is raised here, so a SIGTERM held by a Process.spawn is
+   raised when the Process.wait after the spawn begins. While a spawn holds
+   signals it stays recorded. SIGINT and SIGTERM are blocked while the take
+   is held: the handler would raise out of it and leave sp_sig_taking at 1,
+   and the next sp_sig_hold_begin would wait on it. */
+void sp_sig_blocking_raise(void) {
+  if (!sp_sig_default_raiser) return;
+  sigset_t m, old; sigemptyset(&m); sigaddset(&m, SIGINT); sigaddset(&m, SIGTERM);
+#ifdef SP_THREADS
+  pthread_sigmask(SIG_BLOCK, &m, &old);
+#else
+  sigprocmask(SIG_BLOCK, &m, &old);
+#endif
+  int no = 0;
+  if (sp_sig_take_begin()) { no = sp_sig_default_pending; sp_sig_default_pending = 0; sp_sig_take_end(); }
+#ifdef SP_THREADS
+  pthread_sigmask(SIG_SETMASK, &old, NULL);
+#else
+  sigprocmask(SIG_SETMASK, &old, NULL);
+#endif
+  if (no) sp_sig_default_raiser(no);
+}
 /* A wait for a child has answered and its caller has stored $?: the signals
    recorded while it went on run now, as CRuby runs them on the way out of
    its wait (a trap for CHLD, which the child's own end records; a default
    SIGINT, whose raise then leaves $? set). */
 void sp_sig_after_wait(void) {
   if (SP_ATOMIC_LOAD(&sp_sig_pending_flag, __ATOMIC_ACQUIRE)) sp_sig_run_pending();
+}
+void sp_sig_hold_begin(void) {
+  SP_ATOMIC_FETCH_ADD(&sp_sig_hold, 1, __ATOMIC_SEQ_CST);
+  while (SP_ATOMIC_LOAD(&sp_sig_taking, __ATOMIC_SEQ_CST)) SP_CPU_RELAX();
+}
+/* Wakes the trap thread, which skipped signals recorded while sp_sig_hold
+   was nonzero. */
+void sp_sig_hold_end(void) {
+  SP_ATOMIC_FETCH_ADD(&sp_sig_hold, -1, __ATOMIC_RELEASE);
+#ifdef SP_THREADS
+  int wfd = SP_ATOMIC_LOAD(&sp_sig_wake[1], __ATOMIC_ACQUIRE);
+  if (wfd >= 0) { char b = 0; ssize_t w = write(wfd, &b, 1); (void)w; }
+#endif
+}
+/* The child of a fork made while another thread was in sp_process_spawn:
+   that spawn is the parent's, and nothing in the child would end its hold. */
+void sp_sig_fork_child(void) {
+  SP_ATOMIC_STORE(&sp_sig_hold, 0, __ATOMIC_SEQ_CST);
+  SP_ATOMIC_STORE(&sp_sig_taking, 0, __ATOMIC_SEQ_CST);
 }
 /* Is a proc set for a signal (EXIT aside)? A child wait of a program with
    one thread polls while one is, so the proc runs in the wait

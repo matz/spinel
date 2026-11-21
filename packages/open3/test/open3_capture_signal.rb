@@ -1,8 +1,7 @@
 # A signal that interrupts Open3.capture2e waits for the child before the
 # SignalException reaches the caller, and the child is reaped. The child
-# sleeps before it signals: a signal that lands while the parent is still in
-# Process.spawn raises there, before capture2e holds the child's pid, and
-# nothing waits (on a loaded machine the child ran that far ahead).
+# sleeps before it signals, so the parent is in its wait by then
+# (open3_capture_signal_in_spawn.rb has the signal that arrives sooner).
 require "open3"
 require "tmpdir"
 

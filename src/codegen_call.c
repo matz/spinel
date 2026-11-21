@@ -25228,11 +25228,14 @@ static int emit_pinned_vis_raise(Compiler *c, int id, Buf *b) {
   emit_reopen_self_boxed(c, entry, b);
   buf_puts(b, "; ");
   if (ops.p) buf_puts(b, ops.p);
-  if (spread)
+  /* (by the names the entry's inlined copy gives them, rename_local) */
+  if (spread) {
+    const char *rn = rename_local("__condr"), *kn = rename_local("__condk");
     buf_printf(b, "sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d); "
-                  "for (sp_int _i = 0; _i < sp_PolyArray_length(lv___condr); _i++) sp_PolyArray_push(_t%d, sp_PolyArray_get(lv___condr, _i)); "
-                  "if (lv___condk && sp_SymPolyHash_length(lv___condk)) sp_PolyArray_push(_t%d, sp_box_obj(lv___condk, SP_BUILTIN_SYM_POLY_HASH)); "
-                  "sp_exc_stage_key(sp_box_poly_array(_t%d)); ", ta, ta, ta, ta, ta);
+                  "for (sp_int _i = 0; _i < sp_PolyArray_length(lv_%s); _i++) sp_PolyArray_push(_t%d, sp_PolyArray_get(lv_%s, _i)); "
+                  "if (lv_%s && sp_SymPolyHash_length(lv_%s)) sp_PolyArray_push(_t%d, sp_box_obj(lv_%s, SP_BUILTIN_SYM_POLY_HASH)); "
+                  "sp_exc_stage_key(sp_box_poly_array(_t%d)); ", ta, ta, rn, ta, rn, kn, kn, ta, kn, ta);
+  }
   emit_vis_msg_boxed(vis, vnm, tv, args.p, b);
   buf_puts(b, "; }))");
   free(args.p); free(ops.p);

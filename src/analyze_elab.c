@@ -2598,16 +2598,18 @@ static int lr_body_word_cside(const NodeTable *nt, int node) {
   return class_method_vis_of_name(vis_word_call(nt, node, NULL)) != 0;
 }
 /* ...the k-th literal name such a word takes (its arguments, an array's
-   elements in their place), NULL past the last */
-static const char *lr_word_name(const NodeTable *nt, int word, int k) {
+   elements in their place; with defs a class-method word's defs too, whose
+   versions are public, as lr_call records the word placed), NULL past the
+   last */
+static const char *lr_word_name(const NodeTable *nt, int word, int k, int defs) {
   int an = nt_ref(nt, word, "arguments"), ac = 0, skip = 0;
   const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
-  vis_word_call(nt, word, &skip);
+  int cside = class_method_vis_of_name(vis_word_call(nt, word, &skip)) != 0;
   for (int i = skip; i < ac; i++) {
     int en = 1;
     const int *ev = nt_kind(nt, av[i]) == NK_ArrayNode ? nt_arr(nt, av[i], "elements", &en) : &av[i];
     for (int j = 0; j < en; j++) {
-      const char *nm = vis_arg_name(nt, ev[j]);
+      const char *nm = defs && cside && nt_kind(nt, ev[j]) == NK_DefNode ? nt_str(nt, ev[j], "name") : vis_arg_name(nt, ev[j]);
       if (nm && !k--) return nm;
     }
   }
@@ -2660,7 +2662,7 @@ static int lr_body_target(Compiler *c, const int *par, int n, int d, int walk, i
 
 /* The visibility def node d, which a body around it makes (lr_body_around),
    has where it runs (BVIS_*): a visibility word's that takes it (`private
-   def m`, `private_class_method def self.m`), else for a def with no receiver the last bare word before it in
+   def m`), else for a def with no receiver the last bare word before it in
    its statement list (`private` then `def m`) unless a method's body holds
    the list (blocks and lambdas between count as the frame around them:
    in a method a bare word only warns), else private for an instance
@@ -2669,8 +2671,6 @@ static int lr_body_def_vis(const NodeTable *nt, const int *par, int n, int d, in
   int a = d < n ? par[d] : -1, w = a >= 0 && nt_kind(nt, a) == NK_ArgumentsNode ? par[a] : -1;
   if (w >= 0 && nt_kind(nt, w) == NK_CallNode && nt_ref(nt, w, "receiver") < 0) {
     int v = visibility_of_name(nt_str(nt, w, "name"));
-    /* (`private_class_method def self.m`: the class method's) */
-    if (!v && nt_ref(nt, d, "receiver") >= 0) v = class_method_vis_of_name(nt_str(nt, w, "name"));
     if (v && v != BVIS_PUBLIC) return v;
   }
   if (!sg && is_implicitly_private_name(nt_str(nt, d, "name"))) return BVIS_PRIVATE;
@@ -3020,7 +3020,7 @@ static void lr_body_names_read(Compiler *c, const int *par, int n, LrBodyNames *
     const char *a0 = ac >= 1 ? vis_arg_name(nt, av[0]) : NULL, *rl = lr_leaf(nt, rv);
     if (!cn) continue;
     if (lr_body_word(nt, id) == BVIS_PROTECTED && lr_body_def(nt, par, n, id) >= 0)
-      for (int i = 0; lr_word_name(nt, id, i); i++) anh_add(&x->prot, lr_word_name(nt, id, i));
+      for (int i = 0; lr_word_name(nt, id, i, 1); i++) anh_add(&x->prot, lr_word_name(nt, id, i, 1));
     /* (the definitions: attributes, define_method, alias_method) */
     if (rself && is_attr_name(cn))
       for (int i = 0; i < ac; i++) {
@@ -3051,6 +3051,8 @@ static void lr_body_names_read(Compiler *c, const int *par, int n, LrBodyNames *
     if (q >= 2 && !is_instance_method_list(cn)) x->lists = 1;
     if ((is_respond_to_name(cn) || is_method_object_maker(cn)) && a0) anh_add(&x->cread, a0);
     if (rv >= 0 && !rl && nt_kind(nt, rv) != NK_SelfNode) anh_add(&x->cread, is_send_family(cn) && a0 ? a0 : cn);
+    /* (a call with a block binds no face entry: ct_vis_flags) */
+    if (nt_ref(nt, id, "block") >= 0) anh_add(&x->cread, is_send_family(cn) && a0 ? a0 : cn);
     for (int v = id; v >= 0 && v < n; v = par[v])
       if (nt_kind(nt, v) == NK_DefinedNode) { anh_add(&x->cread, cn); break; }
   }
@@ -3130,14 +3132,15 @@ static int lr_body_names_mod(const LrBodyNames *x, const char *nm) {
   return anh_has(&x->mod, nm) || (base && anh_has(&x->mod, base));
 }
 /* ...is class-side name nm (a class method's) read by a reader that reads
-   no class-side version: a list of an object's methods, a respond_to? or a
-   Method maker naming it, a defined? of a call of it, or a call or a send
-   of it on a receiver that is no constant or self (a boxed or poly
-   value's)? Such a reader answers from the table, whose visibility a
-   class-side word's version does not change; so a word a body runs on the
-   class side bars nm, which keeps the form it has where the record holds
-   no body versions (dropped once the class side has face entries and
-   visibility cells, as the instance side does) */
+   no class-side version's visibility cell: a list of an object's methods,
+   a respond_to? or a Method maker naming it, a defined? of a call of it, a
+   call or a send of it on a receiver that is no constant or self (a boxed
+   or poly value's), or one with a block, which binds no face entry? Such a
+   reader answers from the table, whose visibility a class-side word's
+   version does not change; so a word a body runs on the class side bars
+   nm, which keeps the form it has where the record holds no body versions
+   (a call on a constant or self takes the face entry, whose arm reads the
+   cell, ct_face_for) */
 static int lr_cside_unfollowed(const LrBodyNames *x, const char *nm) {
   return nm && (x->lists || anh_has(&x->cread, nm));
 }
@@ -3222,8 +3225,8 @@ static int lr_body_word_barred(Compiler *c, const int *par, int n, int node, LrB
       lr_body_self_unsure(c, x, lr_body_cmethod(nt, par, n, node), cls))
     return 1;
   int untold = lr_body_word(nt, node) == BVIS_PROTECTED && lr_body_def(nt, par, n, node) >= 0;
-  for (int k = 0; lr_word_name(nt, node, k); k++) {
-    const char *nm = lr_word_name(nt, node, k);
+  for (int k = 0; lr_word_name(nt, node, k, 1); k++) {
+    const char *nm = lr_word_name(nt, node, k, 1);
     if (!lr_body_names_owns(x, cls, sg, nm) || lr_body_names_mod(x, nm) || (sg && lr_cside_unfollowed(x, nm)) ||
         (untold && anh_has(&x->untold, nm)))
       return 1;
@@ -3302,7 +3305,8 @@ static void lr_body_forms(Compiler *c, const int *par, int n) {
     /* (alias_method, define_method: the first names the method) */
     if (nm && !is_method_list_call(nm) && !vis && m > 1) m = 1;
     /* (a visibility word's names, an Array's elements among them, as the bars read them: lr_word_name) */
-    for (int a = 0; vis && lr_word_name(nt, id, a); a++) lr_bform_add(r, &cap, lr_word_name(nt, id, a), id, 0);
+    int wd = k == NK_CallNode && lr_body_word(nt, id) && lr_body_around(nt, par, n, id) >= 0;   /* (a barred body word: its defs' names too) */
+    for (int a = 0; vis && lr_word_name(nt, id, a, wd); a++) lr_bform_add(r, &cap, lr_word_name(nt, id, a, wd), id, 0);
     for (int a = 0; !vis && v && a < m; a++) lr_bform_add(r, &cap, vis_arg_name(nt, v[a]), id, nm && is_attr_name(nm));
   }
   if (r->nbform) qsort(r->bform, (size_t)r->nbform, sizeof *r->bform, lr_bform_cmp);
@@ -3348,7 +3352,7 @@ static void lr_body_forms(Compiler *c, const int *par, int n) {
    level. Otherwise every entry bodies make of the name keeps the form it
    has where the record holds no body versions: unplaced in a class body,
    a definition the record cannot follow in a method body. */
-static int lr_body_name_free(Compiler *c, const int *par, int n, const char *name);
+static int lr_body_name_free(Compiler *c, const int *par, int n, const char *name, int own);
 static int lr_body_def_version(Compiler *c, const int *par, int n, int d, int sg) {
   const NodeTable *nt = c->nt;
   /* (a visibility word, lr_body_word: a version where no name it takes is barred, and where each def it takes,
@@ -3356,22 +3360,26 @@ static int lr_body_def_version(Compiler *c, const int *par, int n, int d, int sg
      record holds no body versions too, `private def m` as a definition the record cannot follow) */
   if (nt_kind(nt, d) == NK_CallNode) {
     if (!lr_body_word(nt, d)) return 0;
-    for (int k = 0; lr_word_name(nt, d, k); k++) if (!lr_body_name_free(c, par, n, lr_word_name(nt, d, k))) return 0;
+    for (int k = 0; lr_word_name(nt, d, k, 1); k++) if (!lr_body_name_free(c, par, n, lr_word_name(nt, d, k, 1), -1)) return 0;
     int an = nt_ref(nt, d, "arguments"), ac = 0;
     const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
     for (int i = 0; i < ac; i++) if (nt_kind(nt, av[i]) == NK_DefNode && !lr_body_def_version(c, par, n, av[i], sg)) return 0;
     return 1;
   }
   const char *name = nt_str(nt, d, "name");
-  return name && !lr_body_def_kin(nt, d, sg) && lr_body_name_free(c, par, n, name);
+  int a = d < n ? par[d] : -1, w = a >= 0 && nt_kind(nt, a) == NK_ArgumentsNode ? par[a] : -1;
+  return name && !lr_body_def_kin(nt, d, sg) && lr_body_name_free(c, par, n, name, w);
 }
 /* ...is name one the program makes no entry of that bars a body's version
-   of it (lr_body_forms)? */
-static int lr_body_name_free(Compiler *c, const int *par, int n, const char *name) {
+   of it (lr_body_forms), but node own's (a def's word: a barred
+   class-method word bars the defs it takes as its own names, not their
+   versions)? */
+static int lr_body_name_free(Compiler *c, const int *par, int n, const char *name, int own) {
   LoadRecord *r = c->lrec;
   lr_body_forms(c, par, n);
   size_t ln = strlen(name);
-  if (lr_bform_first(r, name, ln)) return 0;
+  for (const struct LrBodyForm *f = lr_bform_first(r, name, ln); f && f < r->bform + r->nbform && sp_streq(f->name, name); f++)
+    if (f->node != own || own < 0) return 0;
   /* (an accessor's writer: its reader's name with =) */
   for (const struct LrBodyForm *f = ln > 1 && name[ln - 1] == '=' ? lr_bform_first(r, name, ln - 1) : NULL;
        f && f < r->bform + r->nbform && !strncmp(f->name, name, ln - 1) && !f->name[ln - 1]; f++)
@@ -3424,10 +3432,10 @@ int elab_body_word(Compiler *c, int id, int *cls) {
   /* (a class-method word is one only as its version: the record keeps no unplaced form of it, whose names a barred
      one would leave as the table has them, where CRuby changes them) */
   if (lr_body_word_cside(nt, id)) {
-    const LrHist *wh = lr_word_name(nt, id, 0) ? lr_hist(r, *cls, 1, lr_word_name(nt, id, 0), 0) : NULL;
+    const LrHist *wh = lr_word_name(nt, id, 0, 1) ? lr_hist(r, *cls, 1, lr_word_name(nt, id, 0, 1), 0) : NULL;
     int have = 0;
     for (int j = 0; wh && j < wh->n && !have; j++) have = wh->v[j].node == id && wh->v[j].body;
-    if (!have && lr_word_name(nt, id, 0)) return 0;
+    if (!have && lr_word_name(nt, id, 0, 1)) return 0;
   }
   const int *av = nt_arr(nt, nt_ref(nt, id, "arguments"), "arguments", &an);
   for (int i = 0; i < an; i++) ad |= nt_kind(nt, av[i]) == NK_DefNode;
@@ -4422,13 +4430,13 @@ static void lr_body_versions(Compiler *c) {
     if (nt_kind(nt, id) != NK_DefNode && !word) continue;
     int body = r->at[id] >= 0 && (r->bits[id] & LR_LATE) ? lr_body_around(nt, par, r->n, id) : -1, cls, sg;
     if (body < 0 || !lr_body_target(c, par, r->n, id, 0, &cls, &sg) || !lr_body_def_version(c, par, r->n, id, sg)) continue;
-    const LrHist *h = lr_hist(r, cls, sg, word ? lr_word_name(nt, id, 0) : nt_str(nt, id, "name"), 0);
+    const LrHist *h = lr_hist(r, cls, sg, word ? lr_word_name(nt, id, 0, 1) : nt_str(nt, id, "name"), 0);
     int have = 0;
     for (int j = 0; h && j < h->n && !have; j++) have = h->v[j].node == id;
     ElabRec x = { c, r, .unplaced = 1, .body = body };
     if (word) {   /* (have: a class body's own statement, lr_body_defs) */
-      for (int k = 0; !have && lr_word_name(nt, id, k); k++)
-        lr_method(&x, cls, sg, lr_word_name(nt, id, k), id, LR_VIS, word, !lr_runs_with_body(nt, par, r->n, id, body), NULL);
+      for (int k = 0; !have && lr_word_name(nt, id, k, 1); k++)
+        lr_method(&x, cls, sg, lr_word_name(nt, id, k, 1), id, LR_VIS, word, !lr_runs_with_body(nt, par, r->n, id, body), NULL);
       continue;
     }
     if (!have)   /* (else a class body's own statement: lr_body_defs, whose hook the body still owes) */
@@ -4455,7 +4463,7 @@ static void lr_check_held(Compiler *c) {
        literal name's; a word with only defs writes none of its own) */
     int def = r->hist[i].b, found = 0, now, cls, sg;
     const int *par = lr_par(c, 1);
-    const char *nm = nt_kind(nt, def) == NK_DefNode ? nt_str(nt, def, "name") : lr_word_name(nt, def, 0);
+    const char *nm = nt_kind(nt, def) == NK_DefNode ? nt_str(nt, def, "name") : lr_word_name(nt, def, 0, 1);
     const LrHist *h = nm && lr_body_target(c, par, r->n, def, 0, &cls, &sg) ? lr_hist(r, cls, sg, nm, 0) : NULL;
     for (int j = 0; h && j < h->n; j++) found |= h->v[j].node == def && h->v[j].body;
     found |= !nm;

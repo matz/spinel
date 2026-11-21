@@ -271,8 +271,9 @@ enum { CT_CMETHOD = 1, CT_OWN = 2, CT_TOP = 4, CT_REACH = 8, CT_CAPTURE = 16, CT
 /* CT_NOFACE asks the instance lookup with no visibility face, as a call
    that enforces nothing does: a private def is found. It is the one flag
    that says so by itself; every other flag but CT_WRITER (which asks the
-   writer of a call that enforces what the call does) also leaves the face
-   off, by being a flag (ct_vis_flags). */
+   writer of a call that enforces what the call does) and CT_CMETHOD (a
+   class method's call's) also leaves the face off, by being a flag
+   (ct_vis_flags). */
 /* The face of a version entry (VerEntry.face): 0 the entry every arm of
    which runs its version, VF_PRIVATE one whose arms of a private version
    raise, VF_PUBLIC one whose arms of a private or a protected version do;
@@ -575,13 +576,15 @@ int cplan_pin_scope(const Compiler *c, int id);
    entry's arm for that version raises with, instead of running it; 0 for
    an arm that runs, and for any other node */
 int cplan_pinned_vis(const Compiler *c, int id);
-/* flags = 0 or CT_WRITER (a call's instance-chain ask) with CT_PUBLIC (and
-   CT_PROTECTED) added where call id enforces visibility (an explicit receiver
-   that is not self, public_send) and has no block; any other flags as they
-   are. call_target asks with them, so that every reader that asks which
-   method such a call runs gets the entry the plan made for it (ct_face_for),
-   and the survey of the entries (ver_need) asks the same. */
-unsigned ct_vis_flags(Compiler *c, int id, unsigned flags);
+/* flags = 0 or CT_WRITER (a call's instance-chain ask), or CT_CMETHOD (a
+   class side's, of a name whose visibility varies:
+   elab_method_vis_varies), with CT_PUBLIC (and CT_PROTECTED) added where
+   call id enforces visibility (an explicit receiver that is not self,
+   public_send) and has no block; any other flags as they are. call_target
+   asks with them, so that every reader that asks which method such a call
+   of name runs gets the entry the plan made for it (ct_face_for), and the
+   survey of the entries (ver_need) asks the same. */
+unsigned ct_vis_flags(Compiler *c, int id, const char *name, unsigned flags);
 /* the methods entry scope e's arms call, its else arm's last: at most
    VER_MAX_ARMS + 1; an open history's else arm, which calls none, as its
    last version (the method a Method object of it captured before) */

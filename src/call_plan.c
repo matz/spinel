@@ -363,13 +363,18 @@ static unsigned ct_enforce_flags(Compiler *c, int id) {
 }
 /* See call_plan.h. A call with a block binds no entry (a yielding method is
    called through the proc form of one version), so it asks with none. */
-unsigned ct_vis_flags(Compiler *c, int id, unsigned flags) {
+unsigned ct_vis_flags(Compiler *c, int id, const char *name, unsigned flags) {
   /* (what each flag does to the face: CT_PUBLIC and CT_PROTECTED are the
-     face itself; CT_NOFACE says the ask has none; CT_OWN, CT_CMETHOD,
-     CT_TOP, CT_REACH, CT_CAPTURE, CT_IMPLIED and CT_INCLUDED are asks of a
-     name that take it as it is, whatever the call enforces) */
+     face itself; CT_NOFACE says the ask has none; CT_OWN, CT_TOP,
+     CT_REACH, CT_CAPTURE, CT_IMPLIED and CT_INCLUDED are asks of a name
+     that take it as it is, whatever the call enforces; a class method's
+     call, CT_CMETHOD, enforces as an instance's does, where a class
+     side's face can turn on it: a name whose visibility varies
+     (ct_face_for). Readers ask a class side once per class of the
+     program for a call, so the others ask with none.) */
   if (flags & CT_NOFACE) return flags;
-  if ((flags & ~CT_WRITER) || id < 0 || nt_ref(c->nt, id, "block") >= 0) return flags;
+  if ((flags & ~(CT_WRITER | CT_CMETHOD)) || id < 0 || nt_ref(c->nt, id, "block") >= 0) return flags;
+  if ((flags & CT_CMETHOD) && !elab_method_vis_varies(c, name)) return flags;
   return flags | ct_enforce_flags(c, id);
 }
 
@@ -3932,26 +3937,26 @@ static int ver_def_vis(Compiler *c, int rcls, const char *name, int def) {
     }
   return -1;
 }
-/* Does a version of name on program class rcls's instance chain take a
+/* Does a version of name on program class rcls's chain (side sg) take a
    visibility only the run tells (elab_version_vis -1: a word under a
    condition, or one a method body runs), which its face entry's arm reads
    from the visibility cell (ver_vis_arm)? Asked of a name whose
    visibility varies (elab_method_vis_varies) only. */
-static int ver_vis_runs(Compiler *c, int rcls, const char *name) {
+static int ver_vis_runs(Compiler *c, int rcls, int sg, const char *name) {
   ElabVersion vs[VER_MAX_ARMS];
   if (rcls < 0 || rcls >= c->nclasses || c->classes[rcls].is_builtin_const || !elab_method_vis_varies(c, name)) return 0;
-  for (int i = 0, nv = elab_chain_versions(c, rcls, 0, name, vs, VER_MAX_ARMS); i < nv; i++)
+  for (int i = 0, nv = elab_chain_versions(c, rcls, sg, name, vs, VER_MAX_ARMS); i < nv; i++)
     if (vs[i].v->kind != LR_UNDEF && vs[i].v->kind != LR_REMOVE && elab_version_vis(c, &vs[i]) < 0) return 1;
   return 0;
 }
 /* ...or are its versions some closed to a call of face, some open, each
    with the visibility its arm takes (`private def m` and a body's public
    `def m`)? */
-static int ver_faces_split(Compiler *c, int rcls, const char *name, int face) {
+static int ver_faces_split(Compiler *c, int rcls, int sg, const char *name, int face) {
   ElabVersion vs[VER_MAX_ARMS];
   int closed = 0, open = 0;
   if (rcls < 0 || rcls >= c->nclasses || c->classes[rcls].is_builtin_const || !elab_method_vis_varies(c, name)) return 0;
-  for (int i = 0, nv = elab_chain_versions(c, rcls, 0, name, vs, VER_MAX_ARMS); i < nv; i++) {
+  for (int i = 0, nv = elab_chain_versions(c, rcls, sg, name, vs, VER_MAX_ARMS); i < nv; i++) {
     if (vs[i].v->kind == LR_UNDEF || vs[i].v->kind == LR_REMOVE) continue;
     int v = elab_version_vis(c, &vs[i]);
     if (ver_closed_to(v < 0 ? vs[i].v->vis : v, face)) closed = 1;
@@ -3959,9 +3964,9 @@ static int ver_faces_split(Compiler *c, int rcls, const char *name, int face) {
   }
   return closed && open;
 }
-/* The face of the entry a call asked with flags binds on rcls's instance
-   side, for a call that enforces visibility (CT_PUBLIC) on a root class's
-   chain; VF_NONE where the call does not, or where its versions are all
+/* The face of the entry a call asked with flags binds on rcls's side sg,
+   for a call that enforces visibility (CT_PUBLIC) on a root class's
+   chain or on a class side; VF_NONE where the call does not, or where its versions are all
    closed to it or all open (the plan then answers the call as it does
    without versions of its own: it raises, or runs the entry). */
 static int ct_face_for(Compiler *c, int rcls, int sg, const char *name, unsigned flags) {
@@ -3970,10 +3975,10 @@ static int ct_face_for(Compiler *c, int rcls, int sg, const char *name, unsigned
      answers none without a lookup, which every class a call may land on
      asked once per call; but where a version's visibility only the run
      tells, ver_vis_runs, or where its versions differ for the face,
-     ver_faces_split) */
-  if (!face || sg) return VF_NONE;
-  if (rcls != oc)
-    return (ver_vis_runs(c, rcls, name) || ver_faces_split(c, rcls, name, face)) && cplan_mm_method(c, -1, rcls, 0) < 0 ? face : VF_NONE;
+     ver_faces_split; a class side's alike) */
+  if (!face) return VF_NONE;
+  if (rcls != oc || sg)
+    return (ver_vis_runs(c, rcls, sg, name) || ver_faces_split(c, rcls, sg, name, face)) && cplan_mm_method(c, -1, rcls, sg) < 0 ? face : VF_NONE;
   /* (a method_missing every object reaches answers the call instead) */
   if (cplan_mm_method(c, -1, oc, 0) >= 0) return VF_NONE;
   return ver_arms_closed(c, rcls, name, face, NULL) == -1 ? face : VF_NONE;
@@ -4080,7 +4085,7 @@ static int ct_call_face(Compiler *c, int id, int rcls, int sg, const char *name,
      raises for it, where a send's runs it, ct_core_hook) */
   if (none && sg && id >= 0 && cplan_call_enforces_vis(c, id) && is_definition_hook_name(name)) return VF_PRIVATE;
   int face = ct_face_for(c, rcls, sg, name, flags);
-  if (face == VF_PRIVATE && rcls != comp_core_class(c, CORE_OBJECT) && ver_protected_closed(c, id, rcls, name)) face = VF_PUBLIC;
+  if (face == VF_PRIVATE && !sg && rcls != comp_core_class(c, CORE_OBJECT) && ver_protected_closed(c, id, rcls, name)) face = VF_PUBLIC;
   return face;
 }
 /* The version of `name` call id runs, when the method has more than one
@@ -4261,7 +4266,7 @@ static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigne
        build makes for such a call, of the face the call binds
        (ct_vis_flags: also where this ask only reads the tables) */
     else if (many && own < 0 && !(flags & CT_IMPLIED) && settled && in && comp_scope_may_run(c, (int)(in - c->scopes)) && c->ver_built && !ml->survey)
-      ver_absent_note(c, rcls, sg, name, mi, ar, 0, 1, ct_face_for(c, rcls, sg, name, ct_vis_flags(c, id, 0)));
+      ver_absent_note(c, rcls, sg, name, mi, ar, 0, 1, ct_face_for(c, rcls, sg, name, ct_vis_flags(c, id, name, 0)));
     vi = ix >= 0 && (many || c->ver_entries[ix].absent == 2) ? c->ver_entries[ix].scope : -1;
     n = ((ml->survey && many) || vi >= 0) && settled ? 2 : 0;
     if (!n) vi = -1;
@@ -4301,12 +4306,20 @@ static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigne
      call that meets versions after its point, kept, has no visibility at
      its point: one in a block the record keeps runs at a time the syntax
      does not tell, which the fixpoint may find after the build, blk_kept:
-     ver_entries_demand then makes the entry) */
-  int face = !sg && !(flags & CT_TOP) && !c->scopes[vi].entry ? ct_call_face(c, id, rcls, 0, name, ff, 0) : VF_NONE;
-  if (face && (kept || elab_method_vis_at(c, rcls, name, 0, p) < 0)) {
-    int ar = ver_call_arity(c, id, rcls, 0, name, mi), ix = ver_entry_ix(c, VER_ENTRY_CHAIN, 0, rcls, 0, name, ar, face);
+     ver_entries_demand then makes the entry. Nor does a class method's
+     call on a receiver that names no one class where it is emitted (a
+     block's parameter, `self.class` in an instance_eval block): its arms
+     switch on the value's class, and fold no visibility as one on a
+     constant or self does, emit_cmethod_vis_refusal. A reader's ask of the
+     name, respond_to?'s, is the reader's: it folds the record's) */
+  int face = !(flags & CT_TOP) && !c->scopes[vi].entry ? ct_call_face(c, id, rcls, sg, name, ff, 0) : VF_NONE;
+  const char *own_nm = face && sg && id >= 0 && nt_kind(c->nt, id) == NK_CallNode ? nt_str(c->nt, id, "name") : NULL;
+  int rv = own_nm && sp_streq(own_nm, name) && elab_method_body_word(c, name) ? nt_ref(c->nt, id, "receiver") : -1;
+  if (face && (kept || (rv >= 0 && class_recv_static_ci(c, rv) < 0 && self_class_static_ci(c, rv) < 0) ||
+               elab_method_vis_at(c, rcls, name, sg, p) < 0)) {
+    int ar = ver_call_arity(c, id, rcls, sg, name, mi), ix = ver_entry_ix(c, VER_ENTRY_CHAIN, 0, rcls, sg, name, ar, face);
     if (ix < 0 && !(flags & CT_IMPLIED) && c->ver_built && !ml->survey && own && comp_scope_may_run(c, (int)(own - c->scopes)))
-      ver_absent_note(c, rcls, 0, name, mi, ar, 0, 1, face);
+      ver_absent_note(c, rcls, sg, name, mi, ar, 0, 1, face);
     /* (an entry the build asked for but made no method of keeps scope -1,
        ver_entry_make: as with none asked, the version stays) */
     int ex = ix >= 0 ? c->ver_entries[ix].scope : -1;
@@ -5917,7 +5930,7 @@ int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, 
   /* (a no-site ask of a reader the call sites share, made while a node's frame is open: its read stays that node's) */
   int open = !((flags & CT_SHARED) && id < 0 && mtab_framed(c));
   if (open) mtab_enter(c);
-  flags = ct_vis_flags(c, id, flags);
+  flags = ct_vis_flags(c, id, name, flags);
   *ml = (MethodLookup){ .def_class = dc0 };
   if (ct_send_shadow(c, id, name)) {
     ml->kind = ML_NONE;
@@ -6848,7 +6861,7 @@ static const int *ver_holders(Compiler *c, const char *nm, int *n) {
     for (int h = -1; (h = elab_method_holder(c, nm, h, &k, &sg)) >= 0;) {
       int nv = k >= 0 ? elab_chain_versions(c, k, sg, nm, vs, VER_MAX_ARMS) : 0;
       /* (or one whose visibility only the run tells, for its face entry: ver_vis_runs) */
-      if (k < 0 || (nv < 2 && !(nv == 1 && !sg && ver_vis_runs(c, k, nm)))) continue;
+      if (k < 0 || (nv < 2 && !(nv == 1 && ver_vis_runs(c, k, sg, nm)))) continue;
       ver_hold_add(m, k, sg);
       if (!sg && comp_class_is_module(c, &c->classes[k])) ver_hold_mixers(c, m, k, nm);
       if (!sg && k == comp_core_class(c, CORE_CLASS_REOPEN)) ver_hold_class_reopen(c, m, nm);
@@ -13898,7 +13911,7 @@ static VerPre *ver_pre(Compiler *c, VerNeeds *o, int id, const char *nm, int k, 
   unsigned fl = flags;
   int nv = elab_chain_versions(c, k, (flags & CT_CMETHOD) != 0, nm, vs, VER_MAX_ARMS);
   /* (or one, for a call its face entry may close: ct_face_for) */
-  if ((nv >= 2 || (nv == 1 && (flags & CT_PUBLIC) && ver_vis_runs(c, k, nm))) &&
+  if ((nv >= 2 || (nv == 1 && (flags & CT_PUBLIC) && ver_vis_runs(c, k, (flags & CT_CMETHOD) != 0, nm))) &&
       (p.mi = ct_lookup(c, id, k, nm, &fl, NULL)) >= 0 && !c->scopes[p.mi].mixin_guarded && ct_versioned(c, p.mi, nm)) {
     p.ok = 1;
     p.sg = (fl & CT_CMETHOD) != 0;
@@ -13932,7 +13945,7 @@ static void ver_need(Compiler *c, int id, const char *nm, int k, unsigned flags,
   int asked = 1;
   /* (a call that enforces visibility binds the face entry where the
      versions differ in it: call_target asks with the same flags) */
-  flags = ct_vis_flags(c, id, flags);
+  flags = ct_vis_flags(c, id, nm, flags);
   mtab_enter(c);
   /* (an implied call takes no entry where an undef of the name is on the
      chain: cplan_implied_target; the plan's own read, in its bracket) */
@@ -15142,6 +15155,8 @@ int ver_entries_demand(Compiler *c) {
   any = c->nver_entries > e0;
   if (late) late = ver_late_make(c);
   ver_entries_index(c);
+  /* (the presence readers' marks, ver_presence_mark, ask the entries just made) */
+  if (any || late) ver_memo_drop(c);
   if (ver_cells_put(c) || taken || any || late || sum0 != ver_entries_sum(c) || scopes0 != c->nscopes ||
       nodes0 != nt->count || ver0 != nt->version || edits0 != nt->edits)
     ver_memo_drop(c);   /* (the versions kept before the entries and the writes are asked again) */

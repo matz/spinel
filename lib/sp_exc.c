@@ -2033,8 +2033,10 @@ SP_NORETURN SP_COLD void sp_raise_cls(const char *cls, const char *msg) {
   /* NameError/NoMethodError#name: the runtime raisers' messages carry the
      offending name as the first quoted token ("undefined method 'foo' for
      ..."); materialize the carried object with #name set so a rescue binding
-     reads it (#2758). Keyed on the exact runtime message shapes. */
-  if (!sp_pending_exc_obj && msg && cls && (sp_exc_top > 0 || sp_at_exit_armed) &&
+     reads it (#2758). Keyed on the exact runtime message shapes. A raise the
+     program wrote (`raise NameError, :"undefined method 'x'"`, a message
+     whose to_s gives that text) records no name or receiver, as in CRuby. */
+  if (!user_raise && !sp_pending_exc_obj && msg && cls && (sp_exc_top > 0 || sp_at_exit_armed) &&
       (strcmp(cls, "NoMethodError") == 0 || strcmp(cls, "NameError") == 0) &&
       (strncmp(msg, "undefined method '", 18) == 0 ||
        strncmp(msg, "undefined local variable or method '", 36) == 0 ||   /* 36 = prefix len; 37 compared the NUL too (#3121) */
@@ -2155,6 +2157,11 @@ SP_NORETURN SP_COLD void sp_raise_cls(const char *cls, const char *msg) {
     SP_GC_ROOT(pending);
     sp_Exception *e = pending ? pending : sp_exc_new(cls, msg);
     SP_GC_ROOT(e);
+    /* (an uncaught raise the program wrote records no key or receiver either, for a reopened #message) */
+    if (!pending && user_raise && cls &&
+        (sp_exc_cls_matches(cls, "KeyError") || sp_exc_cls_matches(cls, "NameError") || sp_exc_cls_matches(cls, "FrozenError"))) {
+      e->has_key = 0; e->has_recv = 0;
+    }
     sp_ExcReport report = { e, NULL };
     sp_pending_exc_obj = NULL;
 #ifdef SP_EXC_ABORT

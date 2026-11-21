@@ -22,6 +22,17 @@ static const BuiltinClass *builtin_row(const char *n) {
   return r;
 }
 
+/* a Process::RLIMIT_* constant of some platform's CRuby; its value, or the
+   NameError where this platform has none, comes from the run time */
+int process_rlimit_const(const char *n) {
+  static const char *const names[] = {
+    "RLIMIT_AS", "RLIMIT_CORE", "RLIMIT_CPU", "RLIMIT_DATA", "RLIMIT_FSIZE",
+    "RLIMIT_MEMLOCK", "RLIMIT_MSGQUEUE", "RLIMIT_NICE", "RLIMIT_NOFILE",
+    "RLIMIT_NPROC", "RLIMIT_NPTS", "RLIMIT_RSS", "RLIMIT_RTPRIO", "RLIMIT_RTTIME",
+    "RLIMIT_SBSIZE", "RLIMIT_SIGPENDING", "RLIMIT_STACK", NULL };
+  return n && str_in(n, names);
+}
+
 int is_builtin_class_name(const char *n) {
   const BuiltinClass *r = builtin_row(n);
   return r && (r->flags & BC_CLASS);

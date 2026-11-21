@@ -3860,6 +3860,10 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
          comes with spinel_rt.h */
       if (sp_streq(nm, "WNOHANG"))   { buf_puts(b, "((sp_int)WNOHANG)"); return 1; }
       if (sp_streq(nm, "WUNTRACED")) { buf_puts(b, "((sp_int)WUNTRACED)"); return 1; }
+      if (process_rlimit_const(nm)) { buf_printf(b, "sp_process_rlimit_id(\"%s\")", nm + 7); return 1; }
+      if (sp_streq(nm, "RLIM_INFINITY"))  { buf_puts(b, "sp_process_rlim_const(0)"); return 1; }
+      if (sp_streq(nm, "RLIM_SAVED_MAX")) { buf_puts(b, "sp_process_rlim_const(1)"); return 1; }
+      if (sp_streq(nm, "RLIM_SAVED_CUR")) { buf_puts(b, "sp_process_rlim_const(2)"); return 1; }
     }
     if (par_nmc && sp_streq(par_nmc, "Integer") && nm &&
         (sp_streq(nm, "MAX") || sp_streq(nm, "MIN"))) {
@@ -4345,6 +4349,23 @@ static int emit_defined_value(Compiler *c, int id, Buf *b, const NodeTable *nt, 
              sp_streq(nt_str(nt, nt_ref(nt, v, "parent"), "name"), "Socket") && sp_feature_required("socket")) {
       /* Socket's constants are the system's: the run time asks its table */
       buf_printf(b, "(sp_sock_const(\"%s\") >= 0 ? SPL(\"constant\") : NULL)", nt_str(nt, v, "name"));
+      return 1;
+    }
+    else if (vk == NK_ConstantPathNode && nt_kind(nt, nt_ref(nt, v, "parent")) == NK_ConstantReadNode &&
+             sp_streq(nt_str(nt, nt_ref(nt, v, "parent"), "name"), "Process") &&
+             process_rlimit_const(nt_str(nt, v, "name")) &&
+             !(comp_const(c, const_key_at(c, v)) && const_path_reaches_leaf_const(c, v))) {
+      /* the platform's sys/resource.h decides which RLIMIT_* exist, where
+         the program defines no constant of that name in Process */
+      buf_printf(b, "(sp_process_rlimit_defined(\"%s\") ? SPL(\"constant\") : NULL)", nt_str(nt, v, "name") + 7);
+      return 1;
+    }
+    else if (vk == NK_ConstantPathNode && nt_kind(nt, nt_ref(nt, v, "parent")) == NK_ConstantReadNode &&
+             sp_streq(nt_str(nt, nt_ref(nt, v, "parent"), "name"), "Process") &&
+             (sp_streq(nt_str(nt, v, "name"), "RLIM_SAVED_MAX") || sp_streq(nt_str(nt, v, "name"), "RLIM_SAVED_CUR")) &&
+             !(comp_const(c, const_key_at(c, v)) && const_path_reaches_leaf_const(c, v))) {
+      buf_printf(b, "(sp_process_rlim_defined(%d) ? SPL(\"constant\") : NULL)",
+                 sp_streq(nt_str(nt, v, "name"), "RLIM_SAVED_MAX") ? 1 : 2);
       return 1;
     }
     /* `defined?(m::Foo)` with m a class value: "constant" when m's own

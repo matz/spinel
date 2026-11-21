@@ -44,3 +44,6 @@ t { "abc".unpack("C\x7fC") }
 t { "abc".unpack("C\x1bC\ty") }
 t { "abc".unpack("Cé") }
 t { "abc".unpack("C\xffC".b) }
+t { "abc".unpack("C\u0080y") }
+t { "abc".unpack("C y") }
+t { "abc".unpack("C\u0085y") }

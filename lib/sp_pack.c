@@ -1142,81 +1142,14 @@ static char *uk_qp_decode(const char *src, size_t n) {
   return out;
 }
 
-/* An unpack format byte that is no directive: ArgumentError, as CRuby's
-   unknown_directive words it. The directive shows as itself when printable,
-   else as \xNN; the format as an escaped string (\0, \e, \n, ..., \xNN for
-   a byte, \uNNNN for a UTF-8 character or, in a String that is not binary,
-   another control character). It was skipped, so a typo read on with the
-   directives after it, and a NUL byte ended the format. */
+/* unknown_directive in CRuby's pack.c */
 static SP_NORETURN void uk_unknown_directive(char type, const char *fmt, size_t flen) {
-  size_t cap = flen * 10 + 64, o = 0;
-  char *msg = (char *)malloc(cap);
-  if (!msg) sp_raise_cls("ArgumentError", "unknown unpack directive");
   unsigned char t = (unsigned char)type;
-  int bin = sp_str_is_binary(fmt);
-  if (t >= 0x20 && t < 0x7f) o += (size_t)snprintf(msg + o, cap - o, "unknown unpack directive '%c' in '", type);
-  else o += (size_t)snprintf(msg + o, cap - o, "unknown unpack directive '\\x%02x' in '", t);
-  /* A format every character of which is printable is shown as it is, as
-     CRuby's rb_str_quote_unprintable leaves it ('Cé'); only one holding an
-     unprintable character is escaped as a whole. */
-  int printable = 1;
-  for (size_t i = 0; i < flen && printable; i++) {
-    unsigned char ch = (unsigned char)fmt[i];
-    if (ch < 0x20 || ch == 0x7f) printable = 0;
-    else if (ch >= 0x80) {
-      int len = bin ? 0 : ch >= 0xC2 && ch < 0xE0 ? 2 : ch >= 0xE0 && ch < 0xF0 ? 3 : ch >= 0xF0 && ch < 0xF5 ? 4 : 0;
-      if (!len || i + (size_t)len > flen) { printable = 0; break; }
-      for (int j = 1; j < len; j++)
-        if (((unsigned char)fmt[i + j] & 0xC0) != 0x80) { printable = 0; break; }
-      i += (size_t)len - 1;
-    }
-  }
-  if (printable) { memcpy(msg + o, fmt, flen); o += flen; }
-  for (size_t i = 0; i < flen && !printable; i++) {
-    unsigned char ch = (unsigned char)fmt[i];
-    const char *esc = NULL;
-    switch (ch) {
-      case 0: esc = "\\0"; break;
-      case '\n': esc = "\\n"; break;
-      case '\t': esc = "\\t"; break;
-      case '\r': esc = "\\r"; break;
-      case '\f': esc = "\\f"; break;
-      case '\v': esc = "\\v"; break;
-      case '\b': esc = "\\b"; break;
-      case '\a': esc = "\\a"; break;
-      case 0x1b: esc = "\\e"; break;
-      case 0x7f: esc = "\\c?"; break;
-      default: break;
-    }
-    if (esc) { o += (size_t)snprintf(msg + o, cap - o, "%s", esc); continue; }
-    if (ch >= 0x20 && ch < 0x7f) { msg[o++] = (char)ch; continue; }
-    /* another control character is a codepoint in a UTF-8 String */
-    if (ch < 0x20 && !bin) { o += (size_t)snprintf(msg + o, cap - o, "\\u%04X", ch); continue; }
-    /* a whole UTF-8 character: \uNNNN (\u{N} past the BMP) */
-    int len = bin ? 0 : ch >= 0xC2 && ch < 0xE0 ? 2 : ch >= 0xE0 && ch < 0xF0 ? 3 : ch >= 0xF0 && ch < 0xF5 ? 4 : 0;
-    if (len && i + (size_t)len <= flen) {
-      uint32_t cp = ch & (0x7F >> len);
-      int ok = 1;
-      for (int j = 1; j < len && ok; j++) {
-        unsigned char cb = (unsigned char)fmt[i + j];
-        if ((cb & 0xC0) != 0x80) ok = 0;
-        else cp = (cp << 6) | (cb & 0x3F);
-      }
-      if (ok) {
-        o += (size_t)snprintf(msg + o, cap - o, cp > 0xFFFF ? "\\u{%X}" : "\\u%04X", (unsigned)cp);
-        i += (size_t)len - 1;
-        continue;
-      }
-    }
-    o += (size_t)snprintf(msg + o, cap - o, "\\x%02X", ch);
-  }
-  msg[o++] = '\'';
-  msg[o] = 0;
-  char *m = sp_str_alloc(o);
-  memcpy(m, msg, o + 1);
-  sp_str_set_len(m, o);
-  free(msg);
-  sp_raise_cls("ArgumentError", m);
+  const char *q = sp_str_quote_unprintable(fmt, flen, sp_str_is_binary(fmt));
+  SP_GC_ROOT_STR(q);
+  if (t >= 0x20 && t < 0x7f)
+    sp_raise_cls("ArgumentError", sp_sprintf("unknown unpack directive '%c' in '%s'", type, q));
+  sp_raise_cls("ArgumentError", sp_sprintf("unknown unpack directive '\\x%02x' in '%s'", t, q));
 }
 sp_PolyArray *sp_str_unpack_off(const char *str, const char *fmt, sp_int byteoff);
 sp_PolyArray *sp_str_unpack(const char *str, const char *fmt) {SP_GC_ROOT_STR(str);SP_GC_ROOT_STR(fmt); return sp_str_unpack_off(str, fmt, 0); }

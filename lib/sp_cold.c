@@ -13,6 +13,7 @@
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE   /* statx / STATX_BTIME for File.birthtime on Linux */
 #endif
+#include <limits.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
@@ -1431,6 +1432,240 @@ sp_IntArray *sp_process_groups(void) {  /* (#3046) */
   for (int i = 0; i < n; i++) sp_IntArray_push(a, (sp_int)buf[i]);
   free(buf);
   return a;
+}
+
+/* Process.getrlimit / Process.setrlimit. `name` is the Symbol's or
+   String's text, NULL for another value (spinel_rt.h reads it). */
+static const struct { const char *name; int id; } sp_rlimit_names[] = {
+#ifdef RLIMIT_AS
+  { "AS", RLIMIT_AS },
+#endif
+#ifdef RLIMIT_CORE
+  { "CORE", RLIMIT_CORE },
+#endif
+#ifdef RLIMIT_CPU
+  { "CPU", RLIMIT_CPU },
+#endif
+#ifdef RLIMIT_DATA
+  { "DATA", RLIMIT_DATA },
+#endif
+#ifdef RLIMIT_FSIZE
+  { "FSIZE", RLIMIT_FSIZE },
+#endif
+#ifdef RLIMIT_MEMLOCK
+  { "MEMLOCK", RLIMIT_MEMLOCK },
+#endif
+#ifdef RLIMIT_MSGQUEUE
+  { "MSGQUEUE", RLIMIT_MSGQUEUE },
+#endif
+#ifdef RLIMIT_NICE
+  { "NICE", RLIMIT_NICE },
+#endif
+#ifdef RLIMIT_NOFILE
+  { "NOFILE", RLIMIT_NOFILE },
+#endif
+#ifdef RLIMIT_NPROC
+  { "NPROC", RLIMIT_NPROC },
+#endif
+#ifdef RLIMIT_NPTS
+  { "NPTS", RLIMIT_NPTS },
+#endif
+#ifdef RLIMIT_RSS
+  { "RSS", RLIMIT_RSS },
+#endif
+#ifdef RLIMIT_RTPRIO
+  { "RTPRIO", RLIMIT_RTPRIO },
+#endif
+#ifdef RLIMIT_RTTIME
+  { "RTTIME", RLIMIT_RTTIME },
+#endif
+#ifdef RLIMIT_SBSIZE
+  { "SBSIZE", RLIMIT_SBSIZE },
+#endif
+#ifdef RLIMIT_SIGPENDING
+  { "SIGPENDING", RLIMIT_SIGPENDING },
+#endif
+#ifdef RLIMIT_STACK
+  { "STACK", RLIMIT_STACK },
+#endif
+};
+
+extern sp_Bigint *sp_bigint_new_u64(uint64_t v);
+extern int sp_bigint_mag_u64(sp_Bigint *b, uint64_t *out);
+extern const char *sp_errno_class_name(int e);
+static int sp_rlimit_lookup(const char *name, int *id);
+static void sp_rlimit_name_nul(sp_RbVal v, const char *name);
+
+/* rlimit_resource_type in CRuby's process.c */
+static int sp_rlimit_resource(sp_RbVal v, const char *name) {
+  if (name) {
+    int id;
+    sp_rlimit_name_nul(v, name);
+    size_t n = sp_str_byte_len(name);
+    if (strlen(name) == n && sp_rlimit_lookup(name, &id)) return id;
+    /* a Symbol with an ASCII name is US-ASCII, escaped as bytes like a
+       binary String */
+    int bin = 1;
+    if (sp_rbval_is_string(v)) bin = sp_str_is_binary(name);
+    else for (size_t i = 0; i < n && bin; i++) bin = (unsigned char)name[i] < 0x80;
+    const char *q = sp_str_quote_unprintable(name, n, bin);
+    SP_GC_ROOT_STR(q);
+    sp_raise_cls("ArgumentError", sp_sprintf("invalid resource name: %s", q));
+  }
+  sp_int r = sp_poly_arg_int(v);
+  if ((int64_t)r > INT_MAX || (int64_t)r < INT_MIN)
+    sp_raise_cls("RangeError", sp_sprintf("integer %lld too %s to convert to 'int'",
+                                          (long long)r, r < 0 ? "small" : "big"));
+  return (int)r;
+}
+
+static int sp_rlimit_lookup(const char *name, int *id) {
+  for (size_t i = 0; i < sizeof sp_rlimit_names / sizeof sp_rlimit_names[0]; i++)
+    if (strcmp(name, sp_rlimit_names[i].name) == 0) { *id = sp_rlimit_names[i].id; return 1; }
+  return 0;
+}
+
+/* Process::RLIMIT_<name>, and defined?(Process::RLIMIT_<name>) */
+sp_int sp_process_rlimit_id(const char *name) {
+  int id;
+  if (!sp_rlimit_lookup(name, &id))
+    sp_raise_cls("NameError", sp_sprintf("uninitialized constant Process::RLIMIT_%s", name));
+  return id;
+}
+int sp_process_rlimit_defined(const char *name) {
+  int id;
+  return sp_rlimit_lookup(name, &id);
+}
+
+/* StringValueCStr's check on a String name */
+static void sp_rlimit_name_nul(sp_RbVal v, const char *name) {
+  if (sp_rbval_is_string(v) && memchr(name, 0, sp_str_byte_len(name)))
+    sp_raise_cls("ArgumentError", "string contains null byte");
+}
+
+/* rlimit_resource_value in CRuby's process.c */
+static rlim_t sp_rlimit_value(sp_RbVal v, const char *name) {
+  if (name) {
+    sp_rlimit_name_nul(v, name);
+    if (strcmp(name, "INFINITY") == 0) return RLIM_INFINITY;
+#ifdef RLIM_SAVED_MAX
+    if (strcmp(name, "SAVED_MAX") == 0) return RLIM_SAVED_MAX;
+    if (strcmp(name, "SAVED_CUR") == 0) return RLIM_SAVED_CUR;
+#endif
+    /* CRuby's rb_raise refuses the NUL when it formats the message */
+    if (memchr(name, 0, sp_str_byte_len(name))) sp_raise_cls("ArgumentError", "string contains null byte");
+    sp_raise_cls("ArgumentError", sp_sprintf("invalid resource value: %s", name));
+  }
+  if (v.tag == SP_TAG_INT) return (rlim_t)(uint64_t)(int64_t)v.v.i;
+  if (v.tag == SP_TAG_NIL) sp_raise_nil_to_int(1);
+  /* CRuby's NUM2RLIM: NUM2ULONG for an unsigned long rlim_t (glibc),
+     NUM2ULL for an unsigned long long one (macOS), NUM2LONG or NUM2LL for
+     a signed one (FreeBSD) */
+  int ul = _Generic((rlim_t)0, unsigned long: 1, long: 1, default: 0);
+  if ((rlim_t)-1 < 0) {
+    if (v.tag == SP_TAG_FLT) {
+      double d = v.v.f;
+      if (d < 9223372036854775808.0 && d >= -9223372036854775808.0) return (rlim_t)(long long)d;
+      const char *of = ul ? "integer" : "long long";
+      if (!isfinite(d))
+        sp_raise_cls("RangeError", sp_sprintf("float %s out of range of %s",
+                                              isnan(d) ? "NaN" : d > 0 ? "Inf" : "-Inf", of));
+      sp_raise_cls("RangeError", sp_sprintf("float %-.10g out of range of %s", d, of));
+    }
+    if (v.tag == SP_TAG_BIGINT) {
+      uint64_t u;
+      int neg = sp_bigint_sign((sp_Bigint *)v.v.p) < 0;
+      if (!sp_bigint_mag_u64((sp_Bigint *)v.v.p, &u) || u > (uint64_t)INT64_MAX + (neg ? 1 : 0))
+        sp_raise_cls("RangeError", sp_sprintf("bignum too big to convert into '%s'", ul ? "long" : "long long"));
+      return neg ? (rlim_t)(-(long long)(u - 1) - 1) : (rlim_t)u;
+    }
+    return (rlim_t)(int64_t)sp_poly_arg_int(v);
+  }
+  if (v.tag == SP_TAG_FLT) {
+    double d = v.v.f;
+    double hi = ul ? (double)ULONG_MAX + 1.0 : 18446744073709551616.0;
+    double lo = ul ? (double)LONG_MIN : (double)LLONG_MIN;
+    if (d < hi && (d > lo - 1.0 || (lo - 1.0 == lo && d >= lo)))
+      return d >= 0 ? (rlim_t)d : (rlim_t)(long long)d;
+    const char *of = ul ? "integer" : "unsigned long long";
+    if (!isfinite(d))
+      sp_raise_cls("RangeError", sp_sprintf("float %s out of range of %s",
+                                            isnan(d) ? "NaN" : d > 0 ? "Inf" : "-Inf", of));
+    sp_raise_cls("RangeError", sp_sprintf("float %-.10g out of range of %s", d, of));
+  }
+  if (v.tag == SP_TAG_BIGINT) {
+    const char *tn = ul ? "unsigned long" : "unsigned long long";
+    uint64_t max = ul ? (uint64_t)ULONG_MAX : UINT64_MAX;
+    uint64_t neg_max = (ul ? (uint64_t)LONG_MAX : (uint64_t)INT64_MAX) + 1;
+    uint64_t u;
+    if (!sp_bigint_mag_u64((sp_Bigint *)v.v.p, &u) || u > max)
+      sp_raise_cls("RangeError", sp_sprintf("bignum too big to convert into '%s'", tn));
+    if (sp_bigint_sign((sp_Bigint *)v.v.p) >= 0) return (rlim_t)u;
+    if (u > neg_max)
+      sp_raise_cls("RangeError", sp_sprintf("bignum out of range of %s", tn));
+    return (rlim_t)(0 - u);
+  }
+  return (rlim_t)(uint64_t)(int64_t)sp_poly_arg_int(v);
+}
+
+static sp_RbVal sp_rlimit_box(rlim_t v) {
+  if ((uint64_t)v > (uint64_t)INTPTR_MAX) return sp_box_bigint(sp_bigint_new_u64((uint64_t)v));
+  return sp_box_int((sp_int)v);
+}
+
+/* Process::RLIM_INFINITY (0), RLIM_SAVED_MAX (1), RLIM_SAVED_CUR (2) */
+sp_RbVal sp_process_rlim_const(int k) {
+#ifdef RLIM_SAVED_MAX
+  if (k == 1) return sp_rlimit_box(RLIM_SAVED_MAX);
+  if (k == 2) return sp_rlimit_box(RLIM_SAVED_CUR);
+#else
+  if (k)
+    sp_raise_cls("NameError", k == 1 ? "uninitialized constant Process::RLIM_SAVED_MAX"
+                                     : "uninitialized constant Process::RLIM_SAVED_CUR");
+#endif
+  return sp_rlimit_box(RLIM_INFINITY);
+}
+int sp_process_rlim_defined(int k) {
+#ifdef RLIM_SAVED_MAX
+  (void)k;
+  return 1;
+#else
+  return k == 0;
+#endif
+}
+
+sp_PolyArray *sp_process_getrlimit_at(sp_RbVal res, const char *name) {
+  SP_GC_ROOT_RBVAL(res);
+  struct rlimit rl;
+  if (getrlimit(sp_rlimit_resource(res, name), &rl) < 0) {
+    int e = errno;
+    sp_raise_cls(sp_errno_class_name(e), sp_sprintf("%s - getrlimit", strerror(e)));
+  }
+  sp_PolyArray *a = sp_PolyArray_new_cap(2);
+  SP_GC_ROOT(a);
+  sp_PolyArray_push(a, sp_rlimit_box(rl.rlim_cur));
+  sp_PolyArray_push(a, sp_rlimit_box(rl.rlim_max));
+  return a;
+}
+
+/* proc_setrlimit in CRuby's process.c: spinel_rt.h converts the soft
+   limit, then the hard limit, then the resource */
+unsigned long long sp_process_rlimit_value(sp_RbVal v, const char *name) {
+  SP_GC_ROOT_RBVAL(v);
+  return (unsigned long long)sp_rlimit_value(v, name);
+}
+int sp_process_rlimit_resource(sp_RbVal v, const char *name) {
+  SP_GC_ROOT_RBVAL(v);
+  return sp_rlimit_resource(v, name);
+}
+void sp_process_setrlimit_ids(int res, unsigned long long cur, unsigned long long max) {
+  struct rlimit rl;
+  rl.rlim_cur = (rlim_t)cur;
+  rl.rlim_max = (rlim_t)max;
+  if (setrlimit(res, &rl) < 0) {
+    int e = errno;
+    sp_raise_cls(sp_errno_class_name(e), sp_sprintf("%s - setrlimit", strerror(e)));
+  }
 }
 
 sp_int sp_file_size(const char *path) {SP_GC_ROOT_STR(path);

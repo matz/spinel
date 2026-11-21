@@ -11063,6 +11063,16 @@ static int cplan_body_super(Compiler *c, int mi) {
   NodeKind k = b >= 0 ? nt_kind(c->nt, b) : NK_NONE;
   return k == NK_SuperNode || k == NK_ForwardingSuperNode ? b : -1;
 }
+/* Is scope mi's body only the raise desugar_method_missing_super wrote for
+   a super that reached BasicObject#method_missing? */
+static int cplan_body_mm_raise(Compiler *c, int mi) {
+  int b = c->scopes[mi].body, n = 0;
+  if (b >= 0 && nt_kind(c->nt, b) == NK_StatementsNode) {
+    const int *st = nt_arr(c->nt, b, "body", &n);
+    b = st && n == 1 ? st[0] : -1;
+  }
+  return b >= 0 && nt_int(c->nt, b, "mm_super_raise", 0);
+}
 
 enum { SSF_DEAD_ASKED = 1, SSF_DEAD_SUPER = 2, SSF_MM_ASKED = 4, SSF_MM_ANSWERS = 8 };
 /* Method scope mi's super facts (Compiler.scope_super_facts), each filled
@@ -11123,7 +11133,7 @@ static int cplan_mm_answers(Compiler *c, int mm) {
   if (!(*f & SSF_MM_ASKED)) {
     *f |= SSF_MM_ASKED;   /* (a cycle of hand-ons answers nothing) */
     int sup = cplan_body_super(c, mm), up = sup >= 0 ? cplan_user(c, sup).mi : -1;
-    if (sup < 0 || (up >= 0 && cplan_mm_answers(c, up))) *f |= SSF_MM_ANSWERS;
+    if ((sup < 0 && !cplan_body_mm_raise(c, mm)) || (up >= 0 && cplan_mm_answers(c, up))) *f |= SSF_MM_ANSWERS;
   }
   return (*f & SSF_MM_ANSWERS) != 0;
 }

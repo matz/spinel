@@ -1,0 +1,24 @@
+"name=\"x\""
+"id=3"
+true
+[NoMethodError, "undefined method 'zork' for an instance of Finder", :zork, [1, :a], Finder]
+[NoMethodError, "undefined method 'zork' for an instance of Special", :zork, [], Special]
+[NoMethodError, "undefined method 'other' for an instance of Special", :other, [2], Special]
+42
+[NoMethodError, "undefined method 'column' for an instance of Short", :column, [], Short]
+8
+[NoMethodError, "undefined method 'thrice' for an instance of Explicit", :thrice, [5, :extra], Explicit]
+11
+[NoMethodError, "undefined method 'twelve' for an instance of InBlock", :twelve, [1], InBlock]
+[NoMethodError, "undefined method 'direct' for an instance of Finder", :direct, [7], Finder]
+:from_inner
+:from_outer
+[NoMethodError, "undefined method 'neither' for an instance of Inner", :neither, [3], Inner]
+:answered
+["undefined method 'other' for an instance of Blank", :other, [1]]
+:answered
+:answered
+[NoMethodError, "undefined method 'missing' for an instance of Table", :missing, [2], Table]
+[NoMethodError, "undefined method 'missing' for an instance of WideRow", :missing, [], WideRow]
+"\"super\""
+"method name must be a Symbol but String is given"

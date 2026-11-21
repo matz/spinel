@@ -825,6 +825,7 @@ int desugar_toplevel_hooked_mixins(Compiler *c);
 int desugar_socket_constants(Compiler *c);
 int desugar_instance_eval_defs(Compiler *c);
 int desugar_user_send_others(Compiler *c);
+int desugar_method_missing_super(Compiler *c);
 int desugar_missing_method_calls(Compiler *c);
 int ie_receiverless_self_class_of(Compiler *c, int id);
 int ie_block_self_class_of(Compiler *c, int id);

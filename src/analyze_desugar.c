@@ -16978,13 +16978,14 @@ static int cdef_name_inherited(const NodeTable *nt, const char *nm, int own) {
    the object it runs on */
 /* (vcall: `raise NameError.new(msg, :name, receiver: self)`, which takes
    no arguments: a variable-like call has none) */
-static int disp_raise_parts(Compiler *c, const char *name, int em, int recv, int args, int ar, int vcall) {
+/* (name_node, when name is NULL: the node that answers the name at run time) */
+static int disp_raise_parts_named(Compiler *c, const char *name, int name_node, int em, int recv, int args, int ar, int vcall) {
   NodeTable *nt = (NodeTable *)c->nt;
   const char *cls = vcall ? "NameError" : "NoMethodError";
   /* ::NoMethodError, spelled as desugar_root_scoped_constants left it for the
      program's own: a path where a class or module body defines the name */
   int shadowed = rsc_shadowed(c->rsc_names, c->n_rsc_names, cls);
-  int ec = nt_new_node(nt, shadowed ? "ConstantPathNode" : "ConstantReadNode"), sym = nt_new_node(nt, "SymbolNode");
+  int ec = nt_new_node(nt, shadowed ? "ConstantPathNode" : "ConstantReadNode"), sym = name ? nt_new_node(nt, "SymbolNode") : name_node;
   int forwarded = args < 0;
   if (forwarded) args = nt_new_node(nt, "ArrayNode");
   int key = nt_new_node(nt, "SymbolNode"), as = nt_new_node(nt, "AssocNode"), kh = nt_new_node(nt, "KeywordHashNode");
@@ -17004,7 +17005,7 @@ static int disp_raise_parts(Compiler *c, const char *name, int em, int recv, int
   }
   nt_node_set_str(nt, ec, "name", cls);
   if (shadowed) nt_node_set_ref(nt, ec, "parent", -1);   /* ::NoMethodError, which a nested definition of the name must not capture */
-  nt_node_set_str(nt, sym, "value", name);
+  if (name) nt_node_set_str(nt, sym, "value", name);
   nt_node_set_str(nt, key, "value", "receiver");
   nt_node_set_int(nt, key, "key_only", 1);   /* never a value of the program: not interned for the Symbol table */
   nt_node_set_ref(nt, as, "key", key);
@@ -17028,6 +17029,9 @@ static int disp_raise_parts(Compiler *c, const char *name, int em, int recv, int
   int raise = fwd_new_call(nt, -1, "raise", made);
   nt_node_set_int(nt, raise, "kernel_recv", 1);
   return raise;
+}
+static int disp_raise_parts(Compiler *c, const char *name, int em, int recv, int args, int ar, int vcall) {
+  return disp_raise_parts_named(c, name, -1, em, recv, args, ar, vcall);
 }
 static int disp_raise_with(Compiler *c, const char *name, int em, int ar, int vcall) {
   return disp_raise_parts(c, name, em, -1, -1, ar, vcall);
@@ -29033,15 +29037,239 @@ static int mm_scope_has_super(Compiler *c, int mi) {
   if (!mm_super_memo[mi]) mm_super_memo[mi] = mm_has_super(nt, c->scopes[mi].body) ? 2 : 1;
   return mm_super_memo[mi] == 2;
 }
-/* the program's method_missing class k answers with, or -1; not one that
-   calls super, whose BasicObject#method_missing (the NoMethodError naming
-   the call) a spliced super does not reach */
+/* The supers of method_missing def d (its own: not a nested def's or a
+   class body's), with how many blocks stand between each and d */
+static int mms_collect(const NodeTable *nt, int n, int depth, int *sup, int *dep, int max, int *ns) {
+  if (n < 0) return 1;
+  NodeKind k = nt_kind(nt, n);
+  /* (a defined? operand is not run: `defined?(super)` asks for the method above) */
+  if (k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode || k == NK_SingletonClassNode || k == NK_DefinedNode) return 1;
+  if (k == NK_SuperNode || k == NK_ForwardingSuperNode) {
+    if (*ns >= max) return 0;
+    sup[*ns] = n; dep[(*ns)++] = depth;
+    /* (super's own arguments and block are the method's too) */
+  }
+  int d = depth + (k == NK_BlockNode || k == NK_LambdaNode);
+  for (int i = 0, nr = nt_num_refs(nt, n); i < nr; i++)
+    if (!mms_collect(nt, nt_ref_at(nt, n, i), d, sup, dep, max, ns)) return 0;
+  for (int i = 0, na = nt_num_arrs(nt, n); i < na; i++) {
+    int m = 0; const int *ids = nt_arr_at(nt, n, i, &m);
+    for (int j = 0; j < m; j++) if (!mms_collect(nt, ids[j], d, sup, dep, max, ns)) return 0;
+  }
+  return 1;
+}
+static int mms_local(NodeTable *nt, int like, const char *nm, int depth) {
+  int r = fwd_new_node_like(nt, like, "LocalVariableReadNode");
+  nt_node_set_str(nt, r, "name", nm);
+  nt_node_set_int(nt, r, "depth", depth);
+  return r;
+}
+/* An argument a super may hand on as the error's: not a splat's keywords or a block */
+static int mms_plain_arg(const NodeTable *nt, int a) {
+  NodeKind k = nt_kind(nt, a);
+  return k != NK_KeywordHashNode && k != NK_BlockArgumentNode && k != NK_ForwardingArgumentsNode;
+}
+/* `::Symbol === <name> ? <raise> : raise(::ArgumentError, "method name
+   must be a Symbol but #{<name>.class} is given")`, BasicObject#method_missing's
+   check of the name it is handed (a local read, read again) */
+static int mms_symbol_guard(Compiler *c, NodeTable *nt, int like, int raise, int name, int depth) {
+  (void)depth;
+  int sym = fwd_new_node_like(nt, like, "ConstantPathNode");
+  nt_node_set_str(nt, sym, "name", "Symbol");
+  nt_node_set_ref(nt, sym, "parent", -1);
+  int q = fwd_new_node_like(nt, like, "CallNode"), qa = fwd_new_node_like(nt, like, "ArgumentsNode");
+  nt_node_set_arr(nt, qa, "arguments", &name, 1);
+  nt_node_set_str(nt, q, "name", "===");
+  nt_node_set_ref(nt, q, "receiver", sym);
+  nt_node_set_ref(nt, q, "arguments", qa);
+  int ae = fwd_new_node_like(nt, like, "ConstantPathNode");
+  nt_node_set_str(nt, ae, "name", "ArgumentError");
+  nt_node_set_ref(nt, ae, "parent", -1);
+  int em = fwd_new_node_like(nt, like, "InterpolatedStringNode");
+  int h1 = fwd_new_node_like(nt, like, "StringNode"), h2 = fwd_new_node_like(nt, like, "StringNode");
+  nt_node_set_str(nt, h1, "unescaped", "method name must be a Symbol but ");
+  nt_node_set_str(nt, h1, "content", "method name must be a Symbol but ");
+  nt_node_set_str(nt, h2, "unescaped", " is given");
+  nt_node_set_str(nt, h2, "content", " is given");
+  int e1 = fwd_new_node_like(nt, like, "EmbeddedStatementsNode");
+  int who = fwd_new_call(nt, nt_clone_subtree(nt, name), "class", -1);
+  nt_mark_builtin_call(nt, who);
+  nt_node_set_ref(nt, e1, "statements", cdef_stmts(nt, who));
+  int parts[3] = { h1, e1, h2 };
+  nt_node_set_arr(nt, em, "parts", parts, 3);
+  int ra = fwd_new_node_like(nt, like, "ArgumentsNode"), rargs[2] = { ae, em };
+  nt_node_set_arr(nt, ra, "arguments", rargs, 2);
+  int bad = fwd_new_call(nt, -1, "raise", -1);
+  nt_node_set_ref(nt, bad, "arguments", ra);
+  nt_node_set_int(nt, bad, "kernel_recv", 1);
+  int ts = fwd_new_node_like(nt, like, "StatementsNode"), es = fwd_new_node_like(nt, like, "StatementsNode");
+  int els = fwd_new_node_like(nt, like, "ElseNode"), ifn = fwd_new_node_like(nt, like, "IfNode");
+  nt_node_set_arr(nt, ts, "body", &raise, 1);
+  nt_node_set_arr(nt, es, "body", &bad, 1);
+  nt_node_set_ref(nt, els, "statements", es);
+  nt_node_set_ref(nt, ifn, "predicate", q);
+  nt_node_set_ref(nt, ifn, "statements", ts);
+  nt_node_set_ref(nt, ifn, "subsequent", els);
+  return ifn;
+}
+/* `super` in a method_missing of a class's instances that no method
+   above it answers reaches BasicObject#method_missing, which raises the
+   NoMethodError naming the call: `raise ::NoMethodError.new("undefined
+   method '#{name}' for an instance of #{self.class}", name, [<rest>],
+   receiver: self)`, with the name and the rest the super hands on (a bare
+   super's are the parameters). The code generator had no method there
+   ("super: no superclass method 'method_missing'"), so
+   desugar_missing_method_calls left every call such a method_missing
+   answers to NoMethodError (`def method_missing(n, *a) = n == :x ? 1 :
+   super`). The def is marked (mm_super_raise): the message is a method
+   call's, so a variable-like call, whose error is NameError's, is not
+   split to it. */
+static int mms_rewrite(Compiler *c, int def) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int changed = 0, *parent = NULL;
+  Scope *s = NULL;
+  for (int i = 0; i < c->nscopes && !s; i++) if (c->scopes[i].def_node == def) s = &c->scopes[i];
+  if (!s || s->is_cmethod || s->class_id < 0 || s->class_id >= c->nclasses) return 0;
+  ClassInfo *k = &c->classes[s->class_id];
+  /* (an instance of a class: Object's, Kernel's or a module's has another message for main or a class) */
+  if (comp_class_is_module(c, k) || !k->name || sp_streq(k->name, "Object") || sp_streq(k->name, "BasicObject")) return 0;
+  int pn = nt_ref(nt, def, "parameters"), rn = 0, on = 0, qn = 0, kn = 0;
+  const int *req = pn >= 0 ? nt_arr(nt, pn, "requireds", &rn) : NULL;
+  const int *opt = pn >= 0 ? nt_arr(nt, pn, "optionals", &on) : NULL;
+  const int *post = pn >= 0 ? nt_arr(nt, pn, "posts", &qn) : NULL;
+  if (pn >= 0) nt_arr(nt, pn, "keywords", &kn);
+  int rest = pn >= 0 ? nt_ref(nt, pn, "rest") : -1, kwrest = pn >= 0 ? nt_ref(nt, pn, "keyword_rest") : -1;
+  /* (a bare super hands on every parameter, which the error's list holds) */
+  if (rn + on + qn + (rest >= 0) > 64) return 0;
+  int blank = 0, own_class = program_defines_name(nt, nt->count, "class");
+  /* (a class whose superclass is written BasicObject, or under one) */
+  for (int a = s->class_id, hops = 0; a >= 0 && a < c->nclasses && hops < 64 && !blank; a = c->classes[a].parent, hops++) {
+    int cd = c->classes[a].def_node, sc = cd >= 0 && nt_kind(nt, cd) == NK_ClassNode ? nt_ref(nt, cd, "superclass") : -1;
+    const char *sn = sc >= 0 && (nt_kind(nt, sc) == NK_ConstantReadNode || nt_kind(nt, sc) == NK_ConstantPathNode) ? nt_str(nt, sc, "name") : NULL;
+    blank = sn && sp_streq(sn, "BasicObject");
+  }
+  /* (a hook with keywords is left as it was, whichever super it writes) */
+  if (kn > 0 || kwrest >= 0) return 0;
+  int sup[64], dep[64], ns = 0;
+  if (!mms_collect(nt, nt_ref(nt, def, "body"), 0, sup, dep, 64, &ns) || ns == 0) return 0;
+  /* every super is rewritten, or none */
+  for (int i = 0; i < ns; i++) {
+    /* (one no method of the program's answers: BasicObject's, a builtin's no other answers before it) */
+    CallPlan pl = cplan_user(c, sup[i]);
+    if (pl.mi >= 0 || !pl.bowner || !sp_streq(pl.bowner, "BasicObject")) return 0;
+    if (nt_kind(nt, sup[i]) == NK_ForwardingSuperNode) {
+      /* (the parameters by name: a required first, no keywords) */
+      if (rn < 1) return 0;
+      for (int j = 0; j < rn; j++) if (nt_kind(nt, req[j]) != NK_RequiredParameterNode) return 0;
+      for (int j = 0; j < qn; j++) if (nt_kind(nt, post[j]) != NK_RequiredParameterNode) return 0;
+      if (rest >= 0 && (nt_kind(nt, rest) != NK_RestParameterNode || !nt_str(nt, rest, "name"))) return 0;
+      continue;
+    }
+    int a = nt_ref(nt, sup[i], "arguments"), an = 0;
+    const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+    /* (the name read twice, for the message and the error: a variable or a Symbol) */
+    if (an < 1 || an > 65 || (nt_kind(nt, av[0]) != NK_LocalVariableReadNode && nt_kind(nt, av[0]) != NK_SymbolNode)) return 0;
+    for (int j = 0; j < an; j++) if (!mms_plain_arg(nt, av[j]) || (j == 0 && nt_kind(nt, av[j]) == NK_SplatNode)) return 0;
+    /* (a super among the arguments: `super(:a, super(:b))`, whose inner raise comes first) */
+    if (mm_has_super(nt, a)) return 0;
+  }
+  int mark = nt->count;
+  parent = an_parent_map(nt);
+  if (!parent) return 0;
+  for (int i = 0; i < ns; i++) {
+    int sp = sup[i], name = -1, nmsg = -1, elems[64], ne = 0;
+    if (nt_kind(nt, sp) == NK_ForwardingSuperNode) {
+      const char *first = nt_str(nt, req[0], "name");
+      name = mms_local(nt, sp, first, dep[i]);
+      nmsg = mms_local(nt, sp, first, dep[i]);
+      for (int j = 1; j < rn; j++) elems[ne++] = mms_local(nt, sp, nt_str(nt, req[j], "name"), dep[i]);
+      for (int j = 0; j < on; j++) elems[ne++] = mms_local(nt, sp, nt_str(nt, opt[j], "name"), dep[i]);
+      if (rest >= 0) {
+        int sn = fwd_new_node_like(nt, sp, "SplatNode");
+        nt_node_set_ref(nt, sn, "expression", mms_local(nt, sp, nt_str(nt, rest, "name"), dep[i]));
+        elems[ne++] = sn;
+      }
+      for (int j = 0; j < qn; j++) elems[ne++] = mms_local(nt, sp, nt_str(nt, post[j], "name"), dep[i]);
+    } else {
+      int an = 0;
+      const int *av = nt_arr(nt, nt_ref(nt, sp, "arguments"), "arguments", &an);
+      name = av[0];
+      nmsg = nt_clone_subtree(nt, av[0]);
+      for (int j = 1; j < an; j++) elems[ne++] = av[j];
+    }
+    int list = fwd_new_node_like(nt, sp, "ArrayNode");
+    nt_node_set_arr(nt, list, "elements", elems, ne);
+    /* "undefined method '#{name}' for an instance of #{self.class}" */
+    int em = fwd_new_node_like(nt, sp, "InterpolatedStringNode");
+    int h1 = fwd_new_node_like(nt, sp, "StringNode"), h2 = fwd_new_node_like(nt, sp, "StringNode");
+    nt_node_set_str(nt, h1, "unescaped", "undefined method '");
+    nt_node_set_str(nt, h1, "content", "undefined method '");
+    nt_node_set_str(nt, h2, "unescaped", "' for an instance of ");
+    nt_node_set_str(nt, h2, "content", "' for an instance of ");
+    int e1 = fwd_new_node_like(nt, sp, "EmbeddedStatementsNode"), e2 = fwd_new_node_like(nt, sp, "EmbeddedStatementsNode");
+    nt_node_set_ref(nt, e1, "statements", cdef_stmts(nt, nmsg));
+    int who = fwd_new_call(nt, fwd_new_node_like(nt, sp, "SelfNode"), "class", -1);
+    /* (Kernel#class, the class the object is: for a blank slate, which has
+       none, or past a program's own `class`; not for a subclass of a builtin
+       such as Hash, whose builtin `class` would name Hash) */
+    if (blank || own_class) nt_mark_builtin_call(nt, who);
+    nt_node_set_ref(nt, e2, "statements", cdef_stmts(nt, who));
+    int parts[4] = { h1, e1, h2, e2 };
+    nt_node_set_arr(nt, em, "parts", parts, 4);
+    int raise = disp_raise_parts_named(c, NULL, name, em, -1, list, 0, 0);
+    if (nt_kind(nt, name) != NK_SymbolNode) raise = mms_symbol_guard(c, nt, sp, raise, nt_clone_subtree(nt, name), dep[i]);
+    nt_node_set_int(nt, raise, "mm_super_raise", 1);   /* (a hand-on to BasicObject's, as the super was: cplan_mm_answers) */
+    int p = parent[sp];
+    if (p < 0) continue;
+    nt_replace_child(nt, p, sp, raise);
+    changed = 1;
+  }
+  free(parent);
+  if (!changed) return 0;
+  nt_node_set_int(nt, def, "mm_super_raise", 1);
+  comp_grow_node_arrays(c);
+  for (int j = mark; j < nt->count; j++) {
+    c->nscope[j] = c->nscope[sup[0]];
+    if (c->node_cbody && j < c->node_cap && sup[0] < c->node_cap) c->node_cbody[j] = c->node_cbody[sup[0]];
+  }
+  return 1;
+}
+int desugar_method_missing_super(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int n0 = nt->count, changed = 0;
+  for (int id = 0; id < n0; id++) {
+    if (nt_kind(nt, id) != NK_DefNode || nt_int(nt, id, "mm_super_raise", 0) || nt_ref(nt, id, "receiver") >= 0) continue;
+    const char *nm = nt_str(nt, id, "name");
+    if (nm && sp_streq(nm, "method_missing")) changed |= mms_rewrite(c, id);
+  }
+  return changed;
+}
+/* Can a call be split to method_missing scope mi: 0 when a super of its
+   reaches BasicObject#method_missing as written (the NoMethodError naming
+   the call, which a spliced super does not raise) or anything but another
+   method_missing that can; 2 when it, or one its supers reach, raises that
+   error itself (desugar_method_missing_super's mm_super_raise); 1 else */
+static int mm_chain(Compiler *c, int mi, int hops) {
+  int d = c->scopes[mi].def_node;
+  if (d < 0 || nt_int(c->nt, d, "node_bi", 0)) return 0;
+  int own = nt_int(c->nt, d, "mm_super_raise", 0) ? 2 : 1;
+  if (!mm_scope_has_super(c, mi)) return own;
+  int sup[64], dep[64], ns = 0;
+  if (hops >= 8 || !mms_collect(c->nt, c->scopes[mi].body, 0, sup, dep, 64, &ns)) return 0;
+  for (int i = 0; i < ns; i++) {
+    int t = cplan_user(c, sup[i]).mi;
+    if (t < 0 || t >= c->nscopes || t == mi || !c->scopes[t].name || !sp_streq(c->scopes[t].name, "method_missing")) return 0;
+    int r = mm_chain(c, t, hops + 1);
+    if (!r) return 0;
+    if (r > own) own = r;
+  }
+  return own;
+}
+/* the program's method_missing class k answers with, or -1 (mm_chain) */
 static int mm_user(Compiler *c, int id, int k) {
   int mi = call_target(c, id, k, "method_missing", 0, NULL);
   if (mi < 0 || mi >= c->nscopes) return -1;
-  int d = c->scopes[mi].def_node;
-  if (d < 0 || nt_int(c->nt, d, "node_bi", 0)) return -1;
-  return mm_scope_has_super(c, mi) ? -1 : mi;
+  return mm_chain(c, mi, 0) ? mi : -1;
 }
 /* `r.method_missing(:nm, <args>, &blk)` on a copy of r, with id's facts */
 static int mm_call(Compiler *c, NodeTable *nt, int id, int r, const char *nm, int args, int blk) {
@@ -29147,7 +29375,8 @@ int desugar_missing_method_calls(Compiler *c) {
       if (object_answers) continue;
       /* a receiverless call: self is the method's class or a subclass, or
          an instance_eval block's receiver (ie_receiverless_self_class) */
-      if (r < 0 && nt_ref(nt, id, "arguments") < 0 && nt_vcall(nt, id)) {
+      int vcall_site = r < 0 && nt_ref(nt, id, "arguments") < 0 && nt_vcall(nt, id);
+      if (vcall_site) {
         Scope *sc = comp_scope_of(c, id);
         int is_local = 0;
         for (int i = 0; sc && i < sc->nlocals; i++) if (sc->locals[i].name && sp_streq(sc->locals[i].name, nm)) is_local = 1;
@@ -29163,6 +29392,8 @@ int desugar_missing_method_calls(Compiler *c) {
         if (k != base && !is_descendant(c, k, base)) continue;
         if (comp_class_is_module(c, &c->classes[k])) continue;
         if (mm_answers(c, id, k, nm) || mm_user(c, id, k) < 0) { others = 1; continue; }
+        /* (a variable-like call's error is NameError's, not the NoMethodError such a method_missing's super raises) */
+        if (vcall_site && mm_chain(c, mm_user(c, id, k), 0) == 2) { others = 1; continue; }
         if (nmiss >= 16) { nmiss = -1; break; }
         miss[nmiss++] = k;
       }

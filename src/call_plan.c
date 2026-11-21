@@ -9835,35 +9835,116 @@ static int cplan_builtin_initialize_gap(Compiler *c, int id) {
          (f == BNF_EMPTY && (nt_ref(c->nt, id, "arguments") >= 0 || nt_ref(c->nt, id, "block") >= 0 || fl.n || fl.nk));
 }
 
-/* A define_method or define_singleton_method on self in a method's body that the plan cannot answer as a version
-   (CRF_DEFINER), or NULL: one whose block reads or writes the locals of the method it runs in, or yields to that
-   method's block (an_block_captures: the method it defines is laid out as a method of its own, which has none of
-   them), and a define_method the record holds as no version of the method (elab_body_call_version), which walk_scope
-   registers from the start, where a call or a reflection reader asks its name (elab_method_asked), or whose body is
-   a Proc or a Method value, which no method is made of. A method nothing names (Scope.reachable) never runs it. */
-static const char *cplan_body_definer_gap(Compiler *c, int id) {
+/* Why the readers of name nm cannot read the version definer call id makes (host: the body whose runs make it, on
+   cls's side sg), or NULL: a reader that answers from the method tables, which hold the method from the start
+   (walk_scope registers its scope there), or one that does not read a definer call's versions yet. They are the
+   program's lists and readers of a name only the run tells (elab_body_reflected, which keeps a body def's version off
+   the late bit too), a method_missing or respond_to_missing? its entry's else arm and presence readers do not call, a
+   Method's maker of the name, the calls Ruby makes by itself (to_s, <=>, coerce), keyword parameters, which the
+   method's scope does not bind (ver_dm_keywords), the call's own value, which it does not answer
+   (cplan_definer_value_used), a class method's call from the class's other methods where a define_singleton_method's block makes it, a
+   synthesized singleton class (an object's singleton method) under cls, whose presence arms do not read the
+   version, and a super into it from a subclass's method */
+/* Is node n's value read: neither dropped where it stands (an_value_dropped) nor thrown away by the class bodies and
+   the top level it is the value of (an_def_value_used, as for a def's)? */
+static int cplan_value_read(Compiler *c, const int *par, int n) {
+  return !an_value_dropped(c, par, n) && an_def_value_used(c->nt, par, n);
+}
+/* Is the value of definer call id read (its name's Symbol, or an attr's Array of them): where it stands, or, where
+   it is the answer of the method its body is, through the class bodies it ends (a def's, or a define_method's or
+   define_singleton_method's block), by
+   a call of that method that reads it, or by any reader where a Symbol or a String names the method (elab_name_spelled,
+   past the name the definer of a block gives it: a send of a name only the run tells is refused, reject_runtime_send)? */
+static int cplan_definer_value_used(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  const int *par = comp_parent_map(c);
+  if (!cplan_value_read(c, par, id)) return 0;
+  VpUp up;
+  NodeKind k;
+  for (int at = id; vp_climb(nt, par, at, VPS_ALL, &up) == VPU_ENDED && nt_ref(nt, up.parent, "body") == up.node &&
+                    ((k = nt_kind(nt, up.parent)) == NK_ClassNode || k == NK_ModuleNode || k == NK_SingletonClassNode);)
+    at = up.parent;   /* (a class body's value is its class's) */
+  int d = vp_up_def(nt, &up), an = 0, ac = 0;
+  int dc = d < 0 && up.kind == VPU_ENDED && nt_kind(nt, up.parent) == NK_BlockNode ? par[up.parent] : -1;
+  const int *av = dc >= 0 && (is_define_method_name(nt_str(nt, dc, "name")) || is_define_singleton_method_name(nt_str(nt, dc, "name"))) &&
+                  (an = nt_ref(nt, dc, "arguments")) >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
+  const char *hn = d >= 0 ? nt_str(nt, d, "name") : ac > 0 ? vis_arg_name(nt, av[0]) : NULL;
+  if (!hn || elab_name_spelled(c, hn, ac > 0 ? av[0] : -1)) return 1;
+  for (int k = an_calls_named_first(c, hn); k >= 0; k = an_calls_named_next(k))
+    if (cplan_value_read(c, par, k)) return 1;
+  return 0;
+}
+static int ver_dm_keywords(const NodeTable *nt, int dm);
+static const char *cplan_call_version_unread(Compiler *c, int id, int host, int cls, int sg, const char *nm) {
+  const NodeTable *nt = c->nt;
+  if (elab_body_reflected(c, nm, sg)) return "a method list, or a reflection reader of a name only the run tells, reads it";
+  if (cplan_has_method_missing(c, id, cls, sg) || comp_name_answered_any_side(c, RESPOND_TO_MISSING_NAME))
+    return "the program defines method_missing or respond_to_missing?";
+  if (elab_method_captured(c, nm)) return "a Method or UnboundMethod of it is made";
+  if (elab_definer_hook_live(c, cls, sg, nt_str(nt, id, "name"))) return "a method_added or singleton_method_added hook of the program may observe it";
+  if (method_name_implicitly_invoked(nm)) return "Ruby calls it by itself (to_s, <=>, coerce and their kin)";
+  if (ver_dm_keywords(nt, id)) return "its block takes keyword parameters";
+  if (cplan_definer_value_used(c, id)) return "the call's value is read";
+  const char *hc = nt_kind(nt, host) == NK_BlockNode ? nt_str(nt, comp_parent_map(c)[host], "name") : NULL;
+  if (sg && (is_define_method_name(hc) || is_define_singleton_method_name(hc))) return "a define_singleton_method's block makes it";
+  for (int k = 0; !sg && k < c->nclasses; k++)
+    for (int a = c->classes[k].is_singleton_of ? c->classes[k].parent : -1; a >= 0; a = c->classes[a].parent)
+      if (a == cls) return "an object of the class has a singleton method";
+  for (int s = 0; s < c->nscopes; s++) {
+    const Scope *m = &c->scopes[s];
+    if (!m->name || m->class_id < 0 || !m->is_cmethod != !sg || !sp_streq(m->name, nm) || !scope_calls_super(c, s)) continue;
+    for (int a = c->classes[m->class_id].parent; a >= 0; a = c->classes[a].parent)
+      if (a == cls) return "a subclass's method of the name calls super";
+  }
+  return NULL;
+}
+
+/* A definer call on self in a method's body that the plan cannot answer as a version (CRF_DEFINER), its words in buf,
+   or NULL: a define_method or define_singleton_method whose block reads or writes the locals of the method it runs
+   in, or yields to that method's block (an_block_captures: the method it defines is laid out as a method of its own,
+   which has none of them); a version (elab_body_call_version) a reader of its name cannot read
+   (cplan_call_version_unread); and a define_method the record holds as no version of the method, which walk_scope
+   registers from the start, where a call, a reflection reader (elab_method_asked) or a Symbol or a String besides
+   its own (an alias, an attr, a Struct member: elab_name_spelled) names the method, for a method every object has or
+   Ruby calls by itself, or whose body is a Proc or a Method value, which no method is made of. A method nothing names (Scope.reachable) never runs it. */
+static const char *cplan_body_definer_gap(Compiler *c, int id, char *buf, size_t cap) {
   const NodeTable *nt = c->nt;
   const char *nm = nt_str(nt, id, "name");
   const Scope *hs = comp_scope_of(c, id);
-  int dm = is_define_method_name(nm), rv = nt_ref(nt, id, "receiver"), blk = nt_ref(nt, id, "block"), an = nt_ref(nt, id, "arguments"), ac = 0;
+  int dm = is_define_method_name(nm), dsm = is_define_singleton_method_name(nm), rv = nt_ref(nt, id, "receiver");
+  int blk = nt_ref(nt, id, "block"), an = nt_ref(nt, id, "arguments"), ac = 0, cls = -1, sg = 0;
   const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
   const char *mn = ac > 0 ? vis_arg_name(nt, av[0]) : NULL;
-  if ((!dm && !is_define_singleton_method_name(nm)) || (rv >= 0 && nt_kind(nt, rv) != NK_SelfNode) || !mn || elab_body_def(c, id) < 0 ||
-      !hs || !hs->reachable)
+  if ((!dm && !dsm && !is_attr_name(nm)) || (rv >= 0 && nt_kind(nt, rv) != NK_SelfNode) || !mn || !hs || !hs->reachable)
     return NULL;
-  int lit = blk >= 0 && nt_kind(nt, blk) == NK_BlockNode;
-  if (lit && an_block_captures(nt, blk, 0))
-    return "Module#define_method in a method body with a block that reads or writes that method's locals, or yields to "
-           "its block, is not supported: the method it defines does not close over them";
-  if (!dm || elab_body_call_version(c, id)) return NULL;
+  int lit = blk >= 0 && nt_kind(nt, blk) == NK_BlockNode, def = elab_body_def(c, id) >= 0;
+  if (def && lit && (dm || dsm) && an_block_captures(nt, blk, 0)) {
+    snprintf(buf, cap, "Module#%s in a method body with a block that reads or writes that method's locals, or yields "
+             "to its block, is not supported: the method it defines does not close over them", nm);
+    return buf;
+  }
+  int host = elab_body_call_version(c, id, &cls, &sg);
+  char b[256];
+  const char *vn, *why = NULL;
+  for (int k = 0; host >= 0 && !why && (vn = elab_call_form_name(nt, id, k, b, sizeof b)); k++)
+    why = cplan_call_version_unread(c, id, host, cls, sg, vn);
+  if (why) {
+    snprintf(buf, cap, "Module#%s in a method body is not supported where %s: the method it defines would be "
+             "found before that body runs (see docs/limitations.md)", nm, why);
+    return buf;
+  }
+  if (!dm || !def || host >= 0) return NULL;
   if (!lit)
-    return "Module#define_method in a method body with a Proc or a Method for its body is not supported (see "
-           "docs/limitations.md)";
-  return an_calls_named_first(c, mn) >= 0 || elab_method_asked(c, mn)
-             ? "Module#define_method in a method body is supported only where the load record orders it against the "
-               "calls (on self in a class method of a class no subclass may run it on, with a literal block): this one "
-               "would be defined from the start, not when that method runs (see docs/limitations.md)"
-             : NULL;
+    snprintf(buf, cap, "Module#define_method in a method body with a Proc or a Method for its body is not supported (see "
+             "docs/limitations.md)");
+  else if (an_calls_named_first(c, mn) >= 0 || elab_method_asked(c, mn) || elab_name_spelled(c, mn, av[0]) ||
+           builtin_object_method_known(mn) || method_name_implicitly_invoked(mn))
+    snprintf(buf, cap, "Module#define_method in a method body is supported only where the load record orders it against "
+             "the calls (on self in a class method of a class no subclass may run it on, with a literal block): this one "
+             "would be defined from the start, not when that method runs (see docs/limitations.md)");
+  else
+    return NULL;
+  return buf;
 }
 
 /* in the order codegen meets them: the prepasses, then the emitters */
@@ -9904,7 +9985,8 @@ static void cplan_refuse_resolve(Compiler *c, int id, CallPlan *p, char *buf, si
                      "from a method that may not have run: CRuby finds its method only once the mixin has run", buf, cap);
     return;
   }
-  const char *dw = what ? NULL : cplan_body_definer_gap(c, id);
+  char dwb[640];
+  const char *dw = what ? NULL : cplan_body_definer_gap(c, id, dwb, sizeof dwb);
   if (dw) {
     cplan_refuse_set(p, CRF_DEFINER, CR_FEATURE, dw, buf, cap);
     return;

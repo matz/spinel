@@ -177,6 +177,7 @@ struct LoadRecord {
   char **refl_table[2]; int nrefl_table[2], crefl_table[2];   /* ...those a reader that answers from the table names, by the side it reports (lr_refl_sides) */
   char **refl_cell; int nrefl_cell, crefl_cell;      /* ...a respond_to? the version cells may answer */
   char **refl_capt; int nrefl_capt, crefl_capt;      /* ...a Method's maker that takes the entry, as a call */
+  char **refl_maker; int nrefl_maker, crefl_maker;   /* ...a Method's maker that does not (LR_REFL_MAKER, elab_method_captured) */
   char **refl_fixed[2]; int nrefl_fixed[2], crefl_fixed[2];   /* ...the table's readers but a respond_to? or method_defined? of an instance's (elab_body_reflected) */
   unsigned char refl_any;               /* ...and one names a name the record cannot read */
   unsigned char refl_cell_list;         /* ...a method list the version cells may answer, of any name (list_cells_shape's sides: 1 a class's class-side list, 2 its own instance methods') */
@@ -2382,6 +2383,7 @@ static void lr_refl_add(LoadRecord *r, const char *name, int kind, int sides, in
   if (!name) { r->refl_any = 1; return; }
   if (kind == LR_REFL_CELL) { lr_refl_list(r, &r->refl_cell, &r->nrefl_cell, &r->crefl_cell, name); return; }
   if (kind == LR_REFL_CAPT) { lr_refl_list(r, &r->refl_capt, &r->nrefl_capt, &r->crefl_capt, name); return; }
+  if (kind == LR_REFL_MAKER) lr_refl_list(r, &r->refl_maker, &r->nrefl_maker, &r->crefl_maker, name);
   lr_refl_list(r, &r->refl, &r->nrefl, &r->crefl, name);
   if (kind != LR_REFL_TABLE) return;
   for (int sg = 0; sg < 2; sg++) {
@@ -2438,6 +2440,7 @@ static void lr_refl_take(Compiler *c) {
   }
   if (r->nrefl_cell > 1) qsort(r->refl_cell, (size_t)r->nrefl_cell, sizeof *r->refl_cell, lr_name_cmp);
   if (r->nrefl_capt > 1) qsort(r->refl_capt, (size_t)r->nrefl_capt, sizeof *r->refl_capt, lr_name_cmp);
+  if (r->nrefl_maker > 1) qsort(r->refl_maker, (size_t)r->nrefl_maker, sizeof *r->refl_maker, lr_name_cmp);
 }
 
 /* What code the record cannot follow may do, kept in its opaque entry's
@@ -2661,7 +2664,7 @@ static void lr_call_side(Compiler *c, const int *par, int n, int node, int e, in
   }
 }
 /* ...the k-th name it defines (an attr_accessor's reader, then its writer, `x=`, in buf), NULL past the last */
-static const char *lr_call_name(const NodeTable *nt, int node, int k, char *buf, size_t nb) {
+const char *elab_call_form_name(const NodeTable *nt, int node, int k, char *buf, size_t nb) {
   const char *nm = nt_str(nt, node, "name");
   int an = nt_ref(nt, node, "arguments"), ac = 0, rd = !is_attr_name(nm) || !is_attr_writer_family(nm) || is_attr_reader_family(nm);
   int wr = is_attr_name(nm) && is_attr_writer_family(nm), per = rd + wr;
@@ -3304,8 +3307,8 @@ static int lr_body_call_barred(Compiler *c, const int *par, int n, int node, LrB
       (is_define_method_name(nt_str(c->nt, node, "name")) && an_user_define_method_reaches(c, 1)) ||
       lr_body_self_unsure(c, x, lr_body_cmethod(c->nt, par, n, node), cls) || lr_body_def_vis(c->nt, par, n, node, sg) != BVIS_PUBLIC)
     return 1;
-  for (int k = 0; !sg && lr_call_name(c->nt, node, k, b, sizeof b); k++)
-    if (is_implicitly_private_name(lr_call_name(c->nt, node, k, b, sizeof b))) return 1;
+  for (int k = 0; !sg && elab_call_form_name(c->nt, node, k, b, sizeof b); k++)
+    if (is_implicitly_private_name(elab_call_form_name(c->nt, node, k, b, sizeof b))) return 1;
   return 0;
 }
 /* ...does a body's non-public def at node d bar its name (lr_body_forms)? In a body that may reach code the record
@@ -3439,7 +3442,7 @@ static int lr_body_def_version(Compiler *c, const int *par, int n, int d, int sg
      among them) */
   char b[256];
   const char *cn;
-  for (int k = 0; lr_body_call(nt, d) >= 0 && (cn = lr_call_name(nt, d, k, b, sizeof b)); k++)
+  for (int k = 0; lr_body_call(nt, d) >= 0 && (cn = elab_call_form_name(nt, d, k, b, sizeof b)); k++)
     if (!lr_body_name_free(c, par, n, cn, -1)) return 0;
   if (lr_body_call(nt, d) >= 0) return 1;
   if (nt_kind(nt, d) == NK_CallNode) {
@@ -4533,14 +4536,14 @@ static void lr_body_versions(Compiler *c) {
     int word = lr_body_word(nt, id), call = lr_body_call(nt, id), body, cls, sg;
     char b[256];
     if ((nt_kind(nt, id) != NK_DefNode && !word && call < 0) || !lr_body_version_of(c, par, id, &body, &cls, &sg)) continue;
-    const char *nm = call >= 0 ? lr_call_name(nt, id, 0, b, sizeof b) : word ? lr_word_name(nt, id, 0, 1) : nt_str(nt, id, "name");
+    const char *nm = call >= 0 ? elab_call_form_name(nt, id, 0, b, sizeof b) : word ? lr_word_name(nt, id, 0, 1) : nt_str(nt, id, "name");
     const LrHist *h = lr_hist(r, cls, sg, nm, 0);
     int have = 0;
     for (int j = 0; h && j < h->n && !have; j++) have = h->v[j].node == id;
     ElabRec x = { c, r, .unplaced = 1, .body = body };
     /* (a definer call: each name it defines, public, as in a method body; a define_singleton_method's on the
        class side) */
-    for (int k = 0; call >= 0 && !have && (nm = lr_call_name(nt, id, k, b, sizeof b)); k++)
+    for (int k = 0; call >= 0 && !have && (nm = elab_call_form_name(nt, id, k, b, sizeof b)); k++)
       lr_method(&x, cls, sg, nm, id, call == LR_DEFINE_METHOD ? LR_DEFINE_METHOD : nm[strlen(nm) - 1] == '=' ? LR_WRITER : LR_READER,
                 BVIS_PUBLIC, !lr_runs_with_body(nt, par, r->n, id, body), NULL);
     if (call >= 0) continue;
@@ -4581,7 +4584,7 @@ static void lr_check_held(Compiler *c) {
     int def = r->hist[i].b, found = 0, now, cls, sg;
     const int *par = lr_par(c, 1);
     char b[256];
-    const char *nm = nt_kind(nt, def) == NK_DefNode ? nt_str(nt, def, "name") : lr_body_call(nt, def) >= 0 ? lr_call_name(nt, def, 0, b, sizeof b) : lr_word_name(nt, def, 0, 1);
+    const char *nm = nt_kind(nt, def) == NK_DefNode ? nt_str(nt, def, "name") : lr_body_call(nt, def) >= 0 ? elab_call_form_name(nt, def, 0, b, sizeof b) : lr_word_name(nt, def, 0, 1);
     const LrHist *h = nm && lr_body_target(c, par, r->n, def, 0, &cls, &sg) ? lr_hist(r, cls, sg, nm, 0) : NULL;
     for (int j = 0; h && j < h->n; j++) found |= h->v[j].node == def && h->v[j].body;
     found |= !nm;
@@ -4985,14 +4988,30 @@ static void lr_unrolled_owners(Compiler *c) {
 }
 
 /* See analyze.h */
-int elab_body_call_version(Compiler *c, int call) {
+int elab_body_call_version(Compiler *c, int call, int *cls, int *sg) {
   LoadRecord *r = elab_fresh(c);
   const int *par = r->recorded && call >= 0 && call < r->n && lr_body_call(c->nt, call) >= 0 ? lr_par(c, 0) : NULL;
-  int cls, sg;
   char b[256];
-  const char *nm = par ? lr_call_name(c->nt, call, 0, b, sizeof b) : NULL;
-  const LrHist *h = nm && lr_body_target(c, par, r->n, call, 0, &cls, &sg) ? lr_hist(r, cls, sg, nm, 0) : NULL;
-  for (int j = 0; h && j < h->n; j++) if (h->v[j].node == call && h->v[j].body) return 1;
+  const char *nm = par ? elab_call_form_name(c->nt, call, 0, b, sizeof b) : NULL;
+  const LrHist *h = nm && lr_body_target(c, par, r->n, call, 0, cls, sg) ? lr_hist(r, *cls, *sg, nm, 0) : NULL;
+  for (int j = 0; h && j < h->n; j++) if (h->v[j].node == call && h->v[j].body) return h->v[j].body;
+  return -1;
+}
+
+static int lr_refl_has(char *const *l, int n, const char *name);
+/* See analyze.h */
+int elab_method_captured(Compiler *c, const char *name) {
+  const LoadRecord *r = c->lrec;
+  return r && r->recorded && name && lr_refl_has(r->refl_maker, r->nrefl_maker, name);
+}
+
+/* See analyze.h */
+int elab_definer_hook_live(Compiler *c, int cls, int sg, const char *form) {
+  const char *hook[2];
+  ElabVersion hv[1];
+  int nh = cls >= 0 && c->lrec && c->lrec->recorded ? definition_form_hooks(form, sg, hook) : 0;
+  for (int i = 0; i < nh; i++)
+    if (lr_named(c, hook[i]) && lr_chain_versions(c, cls, 1, hook[i], hv, 1) != 0) return 1;
   return 0;
 }
 
@@ -9925,19 +9944,21 @@ int elab_runs_unseen(Compiler *c) {
 int elab_version_captured(Compiler *c, const char *name) {
   LrVers *x = c->lrec && c->lrec->recorded ? lr_vers(c->lrec, name) : NULL;
   if (!x) return 1;
-  if (!x->captured) {
-    const NodeTable *nt = c->nt;
-    int hit = c->names_by_value || elab_runs_unseen(c), n = 0;
-    const int *v = nt_nodes_of_kind(nt, NK_SymbolNode, &n);
-    for (int i = 0; !hit && i < n; i++) { const char *sv = nt_str(nt, v[i], "value"); hit = sv && sp_streq(sv, name); }
-    v = nt_nodes_of_kind(nt, NK_StringNode, &n);
-    for (int i = 0; !hit && i < n; i++) {
-      const char *s = nt_str(nt, v[i], "content");   /* a StringNode's text */
-      hit = s && sp_streq(s, name);
-    }
-    x->captured = hit ? 2 : 1;
-  }
+  if (!x->captured) x->captured = c->names_by_value || elab_runs_unseen(c) || elab_name_spelled(c, name, -1) ? 2 : 1;
   return x->captured == 2;
+}
+/* See analyze.h */
+int elab_name_spelled(Compiler *c, const char *name, int except) {
+  const NodeTable *nt = c->nt;
+  int hit = 0, n = 0;
+  const int *v = nt_nodes_of_kind(nt, NK_SymbolNode, &n);
+  for (int i = 0; !hit && i < n; i++) { const char *sv = nt_str(nt, v[i], "value"); hit = v[i] != except && sv && sp_streq(sv, name); }
+  v = nt_nodes_of_kind(nt, NK_StringNode, &n);
+  for (int i = 0; !hit && i < n; i++) {
+    const char *s = nt_str(nt, v[i], "content");   /* a StringNode's text */
+    hit = v[i] != except && s && sp_streq(s, name);
+  }
+  return hit;
 }
 
 /* Did a pass make node, a copy included (nt_origin), or does it come from
@@ -13553,7 +13574,8 @@ void elab_free(Compiler *c) {
   }
   for (int i = 0; i < r->nrefl_cell; i++) free(r->refl_cell[i]);
   for (int i = 0; i < r->nrefl_capt; i++) free(r->refl_capt[i]);
-  free(r->refl_cell); free(r->refl_capt);
+  for (int i = 0; i < r->nrefl_maker; i++) free(r->refl_maker[i]);
+  free(r->refl_cell); free(r->refl_capt); free(r->refl_maker);
   free(r->names); free(r->defs); free(r->reopens); free(r->refl);
   for (int i = 0; i < r->nsrcw; i++) free(r->srcw[i].name);
   free(r->srcw);

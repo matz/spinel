@@ -336,8 +336,12 @@ which the plan reads where the word runs (`lr_version_vis`, from the
 version's visibility cell where only the run decides). Only a def or a
 word of a name the program makes no entry of that the call plan cannot
 answer next to it is such a version (`lr_body_def_version`, over
-`lr_body_forms`). So is a definer call such a body runs on self
-(`lr_body_call`): a `define_method` or `define_singleton_method` with a
+`lr_body_forms`). So is a definer call on self that stands in a
+method's body, a def's or a `define_method`'s or
+`define_singleton_method`'s block's, with no class body between
+(`lr_body_call`, `lr_in_method_body`; one in a block a class body hands a
+method that yields keeps its form, since that block is spliced into the
+class body's statement): a `define_method` or `define_singleton_method` with a
 literal name and a literal block, a version of the history of the class
 self is (the class side's for `define_singleton_method`; `lr_call_side`),
 whose scope is the block's (`ct_def_version` maps it as a def's), and an
@@ -354,6 +358,18 @@ a module, in a class method a call may run on a subclass
 no version of where a call or a reflection reader names its method, one
 with a Proc or a Method for its body, and a block that reads or writes
 the method's locals or yields to its block (`cplan_body_definer_gap`).
+It refuses a definer call's version too where a reader of its name does
+not read it (`cplan_call_version_unread`): a method list or a reader of a
+name only the run tells (the `elab_body_reflected` exception, which keeps
+a body def's version off the late bit), a `method_missing` on the chain
+or a `respond_to_missing?` the program defines, a Method's maker of the name
+(`elab_method_captured`), a name Ruby calls by itself (`to_s`, `<=>`,
+`coerce`), keyword parameters, a read of the call's own value, a class
+method a `define_singleton_method`'s block makes, an object of the class
+with a singleton method (the synthesized class's presence arms), and a
+subclass's method that supers into it. Each answers from the method
+tables, which hold the block's scope from the start; a body def's
+version meets the same readers and keeps master's answer there.
 The scope
 is the name, program-wide: the plan answers no other entry as a body's
 version yet, and once a name has versions its readers (the entries' arms,

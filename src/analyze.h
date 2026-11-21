@@ -628,10 +628,23 @@ int elab_def_scope_of(Compiler *c, int node);   /* the scope elab_def_scope file
 /* the def node whose body holds node, with no class body or other def
    between; -1 for none */
 int elab_body_def(Compiler *c, int node);
-/* Does the record hold definer call `call` (define_method or the like in a
-   body, lr_body_call) as a body's version, ordered against the calls by its
-   extent? */
-int elab_body_call_version(Compiler *c, int call);
+/* The body whose runs make definer call `call` (define_method or the like in
+   a body, lr_body_call) a version, ordered against the calls by its extent
+   (LrDef.body: a def, or the define_method call whose block it is), with the
+   class and side it defines on in *cls and *sg; -1 where the record holds it
+   as no version */
+int elab_body_call_version(Compiler *c, int call, int *cls, int *sg);
+/* the k-th name definer call node defines (an attr_accessor's reader, then
+   its writer, `x=`, in buf), NULL past the last */
+const char *elab_call_form_name(const NodeTable *nt, int node, int k, char *buf, size_t nb);
+/* Does a Method's maker that reads the method tables (method,
+   instance_method and their kin, by a literal name, LR_REFL_MAKER) name
+   `name`? */
+int elab_method_captured(Compiler *c, const char *name);
+/* Does the program define a hook that definition form `form` (a definer call's name) fires on class cls's side sg, on
+   the class's chain, or one the record cannot tell (method_added, singleton_method_added)? A version a body's definer makes
+   would not call it where the body runs. */
+int elab_definer_hook_live(Compiler *c, int cls, int sg, const char *form);
 /* does the load phase apply def or define_method node `def` whenever the
    body it stands in runs (lr_stmt_applied): not under a run-time
    condition there, nor in an iterator's block, except a define_method an
@@ -885,6 +898,8 @@ int elab_autoload_file_defines(Compiler *c, int slot, int file);
    the method by a Symbol or a String, name or make methods by computed
    names, or run code the record has not seen? */
 int elab_version_captured(Compiler *c, const char *name);
+/* does a Symbol or a String literal of the program spell `name`, but node except? */
+int elab_name_spelled(Compiler *c, const char *name, int except);
 /* is module mod in the ancestors of cls (of its singleton when sg) at p? */
 int elab_mixed_at(Compiler *c, int cls, int sg, int mod, LoadPoint p);
 /* was a non-nil value written to the variable before p: a write that

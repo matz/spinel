@@ -2,8 +2,9 @@
 # Array#fill(value, range) at the edges of the span, with the Range typed
 # and boxed (its ends only known at run time, on a receiver that may not be
 # an Array): a begin before the start is a RangeError, the length itself is
-# not; an end past the largest Array is an ArgumentError, and an inclusive
-# end of the largest Integer fills nothing, as CRuby's end + 1 wraps.
+# not; an end past the largest Array is an ArgumentError, an inclusive end
+# of the largest Integer among them (since CRuby 4.0.10: its end + 1
+# wrapped before, and filled nothing).
 class Tape
   def fill(*) = :tape
 end

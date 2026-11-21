@@ -33,7 +33,7 @@ true
 :nme
 :nme
 :nme
-Class
+true
 [M]
 [K, Object, Kernel, BasicObject]
 Class

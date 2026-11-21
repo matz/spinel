@@ -3,8 +3,8 @@
 # pos=, truncate, the offset of pread and pwrite) says "from nil" where off_t
 # is wider than a long (macOS, a 32-bit build) and "from nil to integer" where
 # it is a long (Linux x86-64), so the offset lines drop a trailing " to integer";
-# pread's length (NUM2SIZET) and Random#bytes' size "of nil into Integer",
-# and readpartial's length (NUM2LONG) "from nil to integer". The nil may be
+# Random#bytes' size "of nil into Integer", and pread's and readpartial's
+# length (NUM2LONG) "from nil to integer" (pread's since CRuby 4.0.10). The nil may be
 # written, held in a mixed Array, an Integer slot's nil (a String#index
 # miss), or the receiver itself held in a mixed Array.
 

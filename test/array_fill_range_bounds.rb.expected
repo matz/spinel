@@ -3,7 +3,7 @@ RangeError: -4.. out of range
 RangeError: -4..1 out of range
 [0, 0, 3]
 ArgumentError: argument too big
-[1, 2, 3]
+ArgumentError: argument too big
 ArgumentError: argument too big
 [1, 2, 3]
 [1, 2, 3]
@@ -12,7 +12,7 @@ RangeError: -4.. out of range
 RangeError: -4..1 out of range
 [0, 0, 3]
 ArgumentError: argument too big
-[1, 2, 3]
+ArgumentError: argument too big
 ArgumentError: argument too big
 [1, 2, 3]
 [1, 2, 3, nil, nil, 0, 0]

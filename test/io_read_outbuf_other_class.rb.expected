@@ -21,8 +21,8 @@
 [ArgumentError, "negative length -1 given"]
 [ArgumentError, "negative length -1 given"]
 [ArgumentError, "negative length -1 given"]
-[TypeError, "no implicit conversion of Integer into String"]
-[TypeError, "no implicit conversion of Array into String"]
+[ArgumentError, "negative string size (or size too big)"]
+[ArgumentError, "negative string size (or size too big)"]
 [ArgumentError, "negative length -1 given"]
 "ab"
 ["ab", "ab", true]

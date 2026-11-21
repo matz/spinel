@@ -3,8 +3,8 @@
 # StringValue, a TypeError raised after the length converts; a boxed String
 # is filled. A longer argument list is ArgumentError. Each of these did not
 # build: the arms took every buffer for a String local.
-# The length runs, and converts, before the buffer; read and readpartial
-# refuse a negative one there, sysread and pread only after it. A boxed
+# The length runs, and converts, before the buffer, and a negative one is
+# refused there (sysread's and pread's too, since CRuby 4.0.10). A boxed
 # String that is shared with another name is filled in place, a frozen one
 # raises before the read, and read's at the end of the stream is emptied.
 require "tmpdir"

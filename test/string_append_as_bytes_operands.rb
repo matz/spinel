@@ -2,7 +2,6 @@
 # spinel: gc-stress
 # spinel: gc-minor
 # spinel: int64
-# spinel: not-cruby -- the .expected is CRuby 4.0.10's: a frozen receiver raises FrozenError before a bad operand's TypeError; 4.0.9, the baseline of this tree's checks, raises the TypeError first
 class ByteSubclass < String
   def inspect = "custom"
   def to_str

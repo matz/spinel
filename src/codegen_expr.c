@@ -3487,8 +3487,8 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
     if (nm && sp_streq(nm, "RUBY_ENGINE"))      { emit_engine_const_str(c, "sp_str_ruby_engine", "\"spinel\"", b); return 1; }
     if (nm && sp_streq(nm, "RUBY_ENGINE_VERSION")) { emit_engine_const_str(c, "sp_str_ruby_engine_version", "\"" SP_RUBY_VERSION "\"", b); return 1; }
     if (nm && sp_streq(nm, "RUBY_PLATFORM"))    { emit_engine_const_str(c, "sp_str_ruby_platform", "SP_RUBY_ARCH \"-\" SP_RUBY_OS", b); return 1; }
-    if (nm && sp_streq(nm, "RUBY_RELEASE_DATE")) { emit_engine_const_str(c, "sp_str_ruby_release_date", "\"2026-09-15\"", b); return 1; }
-    if (nm && sp_streq(nm, "RUBY_REVISION"))    { emit_engine_const_str(c, "sp_str_ruby_revision", "\"229531a6cfbf07e3caef30dbac24a2a3f3fed482\"", b); return 1; }
+    if (nm && sp_streq(nm, "RUBY_RELEASE_DATE")) { emit_engine_const_str(c, "sp_str_ruby_release_date", "\"2026-11-19\"", b); return 1; }
+    if (nm && sp_streq(nm, "RUBY_REVISION"))    { emit_engine_const_str(c, "sp_str_ruby_revision", "\"a704b7cd95a42cc0cf5f307137bf3aac0285b915\"", b); return 1; }
     if (nm && sp_streq(nm, "RUBY_PATCHLEVEL"))  { buf_puts(b, "((sp_int)0)"); return 1; }
     if (nm && sp_streq(nm, "RUBY_COPYRIGHT"))   { emit_engine_const_str(c, "sp_str_ruby_copyright", "\"ruby - Copyright (C) 1993-2026 Yukihiro Matsumoto\"", b); return 1; }
     if (nm && sp_streq(nm, "ARGV")) { buf_puts(b, "sp_get_ARGV()"); return 1; }

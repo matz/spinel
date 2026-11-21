@@ -120,7 +120,7 @@ static void emit_io_read_buffer(Compiler *c, const char *name, const char *r, co
   if (rest) buf_printf(b, "sp_poly_nil_p(_t%d) ? 0 : ", args[0]);
   if (nint == 2) {
     int offset = ++g_tmp;
-    buf_printf(b, "sp_poly_arg_int_chk_w(_t%d, 1); sp_int _t%d = sp_poly_arg_int_chk_w(_t%d, 2); ",
+    buf_printf(b, "sp_poly_arg_int_chk_w(_t%d, 0); sp_int _t%d = sp_poly_arg_int_chk_w(_t%d, 2); ",
                args[0], offset, args[1]);
     emit_pread_buffer_result(file, length, offset, args[2], handle, b);
     return;
@@ -1401,7 +1401,9 @@ int emit_call_poly_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
         buf_printf(b, "sp_File_tell(_t%d); })", tio2);
       else if (sp_streq(name, "pread") && argc >= 1) {
         buf_printf(b, "%s(_t%d, ", io_pread_entry(argc), tio2);
-        emit_int_expr_conv(c, argv[0], b); buf_puts(b, ", ");
+        /* (the length's nil is worded as NUM2LONG words it, "from nil to
+           integer", since CRuby 4.0.10; rb_convert_type's wording before) */
+        emit_int_expr(c, argv[0], b); buf_puts(b, ", ");
         if (argc >= 2) emit_int_expr_offt(c, argv[1], b); else buf_puts(b, "0");
         buf_puts(b, "); })");
       }
@@ -1570,7 +1572,7 @@ static void emit_io_read_overcount(Compiler *c, const char *name, const char *r,
    The held arguments convert once the handle is known, the first operand
    ahead of the offset as rb_io_pread and rb_io_pwrite do (pread's length
    with to_int, pwrite's operand with to_s; a nil length is worded as
-   NUM2SIZET words it, a nil offset as NUM2OFFT does); without an offset
+   NUM2LONG words it, a nil offset as NUM2OFFT does); without an offset
    the handle raises CRuby's ArgumentError. A pread buffer that is a plain local is
    checked mutable and rebound to the read result, as the typed arm does
    (#3131, #3335). Through the general arm, pwrite's string ran ahead of
@@ -1612,7 +1614,7 @@ static int emit_boxed_positional_io(Compiler *c, int recv, const char *name, int
     buf_puts(b, "); })");
     return 1;
   }
-  buf_printf(b, "sp_int _t%d = sp_poly_arg_int_chk_w(_t%d, 1); ", tfirst, th[0]);
+  buf_printf(b, "sp_int _t%d = sp_poly_arg_int_chk_w(_t%d, 0); ", tfirst, th[0]);
   if (argc >= 2) buf_printf(b, "sp_int _t%d = sp_poly_arg_int_chk_w(_t%d, 2); ", toff, th[1]);
   else buf_printf(b, "sp_int _t%d = 0; ", toff);
   if (argc == 3) emit_pread_buffer_result(tio, tfirst, toff, th[2], 0, b);
@@ -1830,7 +1832,7 @@ int emit_call_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const ch
         emit_io_read_buffer(c, name, r, argv, 2, argv[2], 0, 0, b);
         free(rb.p); return 1;
       }
-      buf_printf(b, "%s(%s, ", io_pread_entry(argc), r); emit_int_expr_conv(c, argv[0], b); buf_puts(b, ", ");
+      buf_printf(b, "%s(%s, ", io_pread_entry(argc), r); emit_int_expr(c, argv[0], b); buf_puts(b, ", ");   /* (NUM2LONG's wording, as above) */
       if (argc >= 2) emit_int_expr_offt(c, argv[1], b); else buf_puts(b, "0");
       buf_puts(b, ")");
       free(rb.p); return 1;

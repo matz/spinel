@@ -43,5 +43,6 @@ p M.inspect, M.to_s, x.name
 p((x.superclass rescue :nme))
 p((x.allocate rescue :nme))
 p((x.new rescue :nme))
-p((y.superclass rescue :nme).class)
+# (y is M or K by chance: Object's class for the class, the rescue's Symbol for the module)
+p [Class, Symbol].include?((y.superclass rescue :nme).class)
 p M.ancestors, K.ancestors, M.singleton_class.class

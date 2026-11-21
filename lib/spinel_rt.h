@@ -12900,10 +12900,13 @@ static sp_String *sp_io_read_buffer(sp_File *f, sp_int n, sp_RbVal buffer,
   SP_GC_ROOT_RBVAL(buffer);
   if (!sysread && n < 0)
     sp_raise_cls("ArgumentError", sp_sprintf("negative length %lld given", (long long)n));
+  /* (sysread's negative length too is refused before the buffer is looked
+     at, since CRuby 4.0.10: before, a buffer of another class or a frozen
+     one raised first, and a good one reached the read with that length) */
+  if (sysread && n < 0) sp_raise_cls("ArgumentError", "negative string size (or size too big)");
   sp_String *out = sp_poly_nil_p(buffer) ? NULL : sp_poly_arg_str_handle(buffer);
   SP_GC_ROOT(out);
   if (out && sp_String_is_immutable(out)) sp_raise_frozen_str(out->data);
-  if (sysread && n < 0) sp_raise_cls("ArgumentError", "negative string size (or size too big)");
   if (sysread && !n) return out ? out : sp_String_new_shared(sp_str_empty_binary());
   const char *bytes;
   if (read) {
@@ -12943,16 +12946,14 @@ static sp_String *sp_io_pread_buffer(sp_File *f, sp_int length, sp_int offset,
   SP_GC_ROOT(f);
   SP_GC_ROOT_RBVAL(buffer);
   *eof = FALSE;
+  /* (a negative length is refused before the buffer is looked at, as
+     sysread's is, since CRuby 4.0.10) */
+  if (length < 0) sp_raise_cls("ArgumentError", "negative string size (or size too big)");
   if (sp_poly_nil_p(buffer))
     return sp_String_new_fresh(sp_File_pread_checked(f, length, offset));
   sp_String *result = sp_poly_arg_str_handle(buffer);
   SP_GC_ROOT(result);
   if (sp_String_is_immutable(result)) sp_raise_frozen_str(result->data);
-  if (length < 0) {
-    sp_pread_check(f, length, 1);
-    errno = EINVAL;
-    sp_pread_raise_errno(f);
-  }
   const char *bytes = sp_File_pread_or_nil(f, length, offset);
   *eof = bytes == NULL;
   if (length) sp_String_set_bin(result, bytes ? bytes : sp_str_empty);
@@ -13737,10 +13738,10 @@ static SP_UNUSED sp_oint sp_array_fill_offset_arg(sp_RbVal v, int range_alone) {
 }
 /* fill(value, range): the span as CRuby's rb_range_beg_len reads it for
    fill. Each end goes through to_int (sp_range_ix); a begin before the
-   start is a RangeError, an end past the length grows the Array, and an
-   inclusive end of the largest Integer wraps to an empty span, as CRuby's
-   end + 1 does. A span reaching past the largest Array is CRuby's
-   ArgumentError. *n, the Array's length on entry, becomes the exclusive
+   start is a RangeError, an end past the length grows the Array, and a
+   span reaching past the largest Array is CRuby's ArgumentError: an
+   inclusive end of the largest Integer too, since CRuby 4.0.10 (its
+   end + 1 wrapped to an empty span before). *n, the Array's length on entry, becomes the exclusive
    end, and the start is returned. */
 static SP_UNUSED sp_int sp_array_fill_range(sp_Range r0, sp_int *n) {
   sp_Range r = sp_range_ix(r0);
@@ -13753,7 +13754,10 @@ static SP_UNUSED sp_int sp_array_fill_range(sp_Range r0, sp_int *n) {
   else {
     e = r.last;
     if (e < 0) e += len;
-    if (!r.excl) e = e == INTPTR_MAX ? s : e + 1;
+    if (!r.excl) {
+      if (e == INTPTR_MAX) sp_raise_cls("ArgumentError", "argument too big");
+      e = e + 1;
+    }
   }
   if (e < s) e = s;
   sp_int max = INTPTR_MAX / (sp_int)sizeof(void *);

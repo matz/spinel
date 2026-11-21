@@ -1,8 +1,8 @@
-pread len TypeError: no implicit conversion of nil into Integer
+pread len TypeError: no implicit conversion from nil to integer
 pread off TypeError: no implicit conversion from nil
-pread boxed len TypeError: no implicit conversion of nil into Integer
+pread boxed len TypeError: no implicit conversion from nil to integer
 pread boxed off TypeError: no implicit conversion from nil
-pread nil len TypeError: no implicit conversion of nil into Integer
+pread nil len TypeError: no implicit conversion from nil to integer
 pread nil off TypeError: no implicit conversion from nil
 "el"
 pwrite off TypeError: no implicit conversion from nil

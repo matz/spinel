@@ -2597,21 +2597,21 @@ static sp_oint sp_sock_write_nb_len(sp_File *f, const char *data, size_t len, sp
   sp_io_raise_path_errno(f, "io_write_nonblock");
 }
 sp_oint sp_sock_write_nb(sp_File *f, const char *data, sp_bool exc) {SP_GC_ROOT(f);SP_GC_ROOT_STR(data);
-  SP_IO_OPEN(f);
+  sp_io_check_writable(f);
   return sp_sock_write_nb_len(f, data, data ? strlen(data) : 0, exc);
 }
 sp_oint sp_sock_write_nb_n(sp_File *f, const char *data, size_t len, sp_bool exc) {SP_GC_ROOT(f);SP_GC_ROOT_STR(data);
-  SP_IO_OPEN(f);
+  sp_io_check_writable(f);
   return sp_sock_write_nb_len(f, data, len, exc);
 }
 sp_oint sp_sock_write_nb_poly(sp_File *f, sp_RbVal v, sp_bool exc) {SP_GC_ROOT(f);SP_GC_ROOT_RBVAL(v);
   size_t n;
   const char *text = sp_poly_to_s_bytes(v, &n);
-  SP_IO_OPEN(f);
+  sp_io_check_writable(f);
   return sp_sock_write_nb_len(f, text, n, exc);
 }
 sp_oint sp_sock_write_nb_bin(sp_File *f, const char *data, sp_bool exc) {SP_GC_ROOT(f);SP_GC_ROOT_STR(data);
-  SP_IO_OPEN(f);
+  sp_io_check_writable(f);
   return sp_sock_write_nb_len(f, data, data ? sp_str_byte_len(data) : 0, exc);
 }
 /* connect_nonblock: an in-flight connect is IO::EINPROGRESSWaitWritable. */

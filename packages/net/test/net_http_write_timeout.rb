@@ -42,7 +42,10 @@ end
 stalled("POST")
 stalled("PUT")
 
-# This peer reads 64 KB at a time and pauses between reads.
+# This peer reads 64 KB at a time and pauses between reads. Its pauses add
+# up to more than write_timeout (some sixty of them), so the request gets
+# through only because each wait has the timeout to itself; one wait has
+# fifty times its pause, room for a loaded machine to be late in.
 server = TCPServer.new("127.0.0.1", 0)
 t = Thread.new do
   c = server.accept
@@ -56,13 +59,13 @@ t = Thread.new do
   while got < length
     piece = c.readpartial(65536)
     got += piece.bytesize
-    sleep 0.01
+    sleep 0.03
   end
   c.write("HTTP/1.1 200 OK\r\nContent-Length: #{got.to_s.bytesize}\r\nConnection: close\r\n\r\n#{got}")
   c.close
 end
 http = Net::HTTP.new("127.0.0.1", server.addr[1])
-http.write_timeout = 0.5
+http.write_timeout = 1.5
 puts "the slow reader got #{http.post("/", "y" * 4_000_000).body} bytes"
 t.value
 server.close

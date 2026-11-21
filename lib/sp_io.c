@@ -3278,10 +3278,6 @@ sp_File *sp_File_reopen(sp_File *f, const char *path, const char *mode) {SP_GC_R
     if (reserved) SP_ATOMIC_STORE(&f->uses, SP_IO_CLOSING | SP_IO_RETIRED, __ATOMIC_RELEASE);
     sp_file_raise_errno("reopen", path ? path : "");
   }
-  /* a byte the open took from a FIFO (sp_fifo_open_read) goes to the stream
-     the descriptor becomes, under whichever number it ends up */
-  unsigned char pb;
-  int has_pb = sp_fifo_pushback_take(fd, &pb);
   const char *sm = sp_io_fdopen_mode(fl);
   FILE *nf;
   int ofl = open_stream && f->mode ? sp_io_mode_open_flags(f->mode) : -1;
@@ -3327,7 +3323,6 @@ sp_File *sp_File_reopen(sp_File *f, const char *path, const char *mode) {SP_GC_R
     if (n > 2) fcntl(n, F_SETFD, FD_CLOEXEC);   /* as the open gave it; a standard stream stays inherited */
     sp_sched_ev_forget(n);
   }
-  if (has_pb) ungetc(pb, nf);
   SP_ATOMIC_STORE(&f->fp, nf, __ATOMIC_RELAXED);
   SP_ATOMIC_STORE(&f->closed, 0, __ATOMIC_RELAXED);
   if (reserved) SP_ATOMIC_STORE(&f->uses, 0, __ATOMIC_RELEASE);

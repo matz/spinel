@@ -46,7 +46,6 @@
 #include "sp_system.h" /* sp_last_status for backtick */
 #include "sp_format.h" /* sp_float_to_rational for sp_float_denominator/numerator */
 #include <sys/select.h>  /* IO.select and the IO#wait_* readiness family */
-#include <sys/ioctl.h>   /* FIONREAD: a read-only FIFO open asking for a writer */
 #include <poll.h>        /* POLLIN/POLLOUT for the scheduler park behind them */
 #include <sys/socket.h> /* SOCK_STREAM / SOCK_DGRAM for Addrinfo */
 
@@ -3156,22 +3155,6 @@ static void sp_file_open_raise(const char *path) {
   int e = errno;
   sp_raise_cls(sp_errno_class_name(e), sp_sprintf("%s @ rb_sysopen - %s", strerror(e), path ? path : ""));
 }
-/* A byte a read-only FIFO open took while asking for a writer (below): the
-   handle made of the descriptor gets it back (sp_fifo_pushback_apply). */
-static SP_TLS int sp_fifo_pushback_fd = -1;
-static SP_TLS unsigned char sp_fifo_pushback_byte;
-int sp_fifo_pushback_take(int fd, unsigned char *c) {
-  int has = sp_fifo_pushback_fd >= 0 && fd == sp_fifo_pushback_fd;
-  if (has) *c = sp_fifo_pushback_byte;
-  sp_fifo_pushback_fd = -1;
-  return has;
-}
-void sp_fifo_pushback_apply(sp_File *f) {
-  unsigned char c;
-  if (f && f->fp && sp_fifo_pushback_take(fileno(f->fp), &c)) ungetc(c, f->fp);
-  sp_fifo_pushback_fd = -1;
-}
-
 /* The descriptor of a FIFO open, blocking again: the O_NONBLOCK of the ask
    goes, so every read and write after this behaves as it did. */
 static int sp_fifo_opened(int fd) {
@@ -3185,13 +3168,9 @@ static int sp_fifo_opened(int fd) {
    meets the end of the file where CRuby's reader gets the writer's bytes.
    With no other green thread alive the blocking open waits, in a native
    section so a collection does not wait for it; nothing else runs here
-   anyway. With one alive the descriptor is asked until a writer is there, which
-   the kernel tells only through a read: bytes waiting (FIONREAD), or EAGAIN
-   for a writer that has sent none, where no writer answers the end of the
-   file. A byte that arrives between the two asks is read here and kept for
-   the handle (sp_fifo_pushback_apply). */
+   anyway. With one alive the thread sleeps until the descriptor turns
+   readable (below). */
 static int sp_fifo_open_read(const char *path, int fl, int perm) {
-  sp_fifo_pushback_fd = -1;
   if (!sp_sched_other_threads_live()) {
     int fd;
     sp_native_enter();
@@ -3207,16 +3186,16 @@ static int sp_fifo_open_read(const char *path, int fl, int perm) {
      waiting, and the thread died of it at the program's end) */
   int fd = open(path, fl | O_NONBLOCK, (mode_t)perm);
   if (fd < 0) return -1;
-#ifdef __linux__
-  /* On Linux the descriptor itself says when to go on, and the thread
-     sleeps in the scheduler until it does: readable once a writer has
-     sent bytes, and hung up (POLLHUP) once a writer has come and gone,
-     which a FIFO no writer ever opened is not. Nothing is read here, so
-     no byte is taken from a child handed the descriptor, and the thread
-     is asleep the whole wait (Thread#status), where an ask every
-     millisecond ran between two asks. The open answers at the writer's
-     first byte or its close, not at its open: a writer that opens and
-     waits for the reader before it writes is not met. */
+  /* The descriptor itself says when to go on, and the thread sleeps in
+     the scheduler until it does: readable once a writer has sent bytes,
+     and on Linux hung up (POLLHUP) once a writer has come and gone, which
+     a FIFO no writer ever opened is not. macOS reports no hangup, so there
+     the open waits on past a writer that closes without sending a byte.
+     Nothing is read here, so no byte is taken from a child handed the
+     descriptor, and the thread is asleep the whole wait (Thread#status).
+     The open answers at the writer's first byte or (on Linux) its close,
+     not at its open: a writer that opens and waits for the reader before
+     it writes is not met. */
   for (;;) {
     struct pollfd pf = { fd, POLLIN, 0 };
     int pr = poll(&pf, 1, 0);
@@ -3226,20 +3205,6 @@ static int sp_fifo_open_read(const char *path, int fl, int perm) {
        no scheduler wait to link, and never comes here) */
     sp_io_wait_fd_readable(fd);
   }
-#else
-  for (;;) {
-#ifdef FIONREAD
-    int avail = 0;
-    if (ioctl(fd, FIONREAD, &avail) == 0 && avail > 0) return sp_fifo_opened(fd);
-#endif
-    unsigned char c;
-    ssize_t n = read(fd, &c, 1);
-    if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return sp_fifo_opened(fd);
-    if (n > 0) { sp_fifo_pushback_fd = fd; sp_fifo_pushback_byte = c; return sp_fifo_opened(fd); }
-    if (n < 0 && errno != EINTR) { int e = errno; close(fd); errno = e; return -1; }
-    sp_sleep(0.001);
-  }
-#endif
 }
 
 /* open(2) on a FIFO waits for the other end, and it waits in the kernel with
@@ -3292,7 +3257,6 @@ sp_File *sp_File_open_flags_perm(const char *path, sp_int fl, sp_oint perm) {SP_
                 : (acc == O_WRONLY) ? (((int)fl & O_APPEND) ? "a" : "w")
                 : (((int)fl & O_APPEND) ? "a+" : "r+");
   sp_File *f = sp_io_fdopen(fd, m);
-  sp_fifo_pushback_apply(f);
   f->path = path;
   f->is_file = 1;
   return f;
@@ -3316,7 +3280,6 @@ sp_File *sp_File_open_perm(const char *path, const char *mode, sp_oint perm) {SP
   /* fdopen reads its own mode grammar ("wx+" is write-only to it): hand it
      the access mode the flag word says, as the flags form does */
   sp_File *f = sp_io_fdopen(fd, sp_io_fdopen_mode(fl));
-  sp_fifo_pushback_apply(f);
   f->path = sp_str_retained(path);
   f->mode = m;
   f->is_file = 1;

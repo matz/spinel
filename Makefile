@@ -1457,15 +1457,6 @@ endif
 ifeq ($(shell uname -s),Darwin)
 TESTS := $(filter-out test/io_winsize_set.rb,$(TESTS))
 endif
-# Not run on macOS for now: fifo_open_does_not_pin_worker asks that a reader
-# waiting in File.open of a FIFO shows as sleeping. Linux waits on poll for
-# the writer; macOS's poll does not report a writer that opens and closes
-# without writing, so the reader there still asks every millisecond and now
-# and then is seen running (the macos-latest job, a few runs in ten). It
-# comes back with the macOS wait.
-ifeq ($(shell uname -s),Darwin)
-TESTS := $(filter-out test/fifo_open_does_not_pin_worker.rb,$(TESTS))
-endif
 # A test whose subject only Linux gives (`# spinel: linux`): a connect to a
 # listener whose accept queue is full hangs there, as one to a dead host
 # does, where macOS refuses it at once; and only Linux holds a process to

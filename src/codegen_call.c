@@ -15659,19 +15659,35 @@ void syserr_reinit_open(int *t, Buf *b) {
   *t = ++g_tmp;
   buf_printf(b, "({ sp_Exception *_t%d = (sp_Exception *)(", *t);
 }
-void syserr_reinit_close(Compiler *c, int initm, int t, Buf *b) {
+/* The close of a construction a reopened initialize runs on: the native construction (opened by
+   syserr_reinit_open) is held in _t<t>, and the initialize runs on it. A SystemCallError family's message is
+   the one the runtime built from the errno, the argument of the initialize (given_msg < 0). A native
+   construction of a class whose own initialize reads the arguments (KeyError, NameError ...) hands its
+   super the message the call gave, as given_msg says: 0, none (the initialize takes no argument), 1, the
+   message the construction kept, NULL being a nil given. call_id >= 0 hands the call's block on. */
+static void reinit_close(Compiler *c, int initm, int t, int given_msg, int call_id, Buf *b) {
   char self[32], msg[32];
   snprintf(self, sizeof self, "_t%d", t);
   snprintf(msg, sizeof msg, "_m%d", t);
   Buf arm = {0};
-  emit_reinit_init_text(c, initm, self, msg, &arm);
-  /* the runtime built the errno message: it is the one argument, and the
-     initialize's super sets the one the exception keeps */
-  buf_printf(b, "); SP_GC_ROOT(_t%d); const char *_m%d = sp_msg_heapify(sp_exc_message(_t%d)); SP_GC_ROOT_STR(_m%d); "
-                "_t%d->msg_h = NULL; _t%d->msg = NULL;%s _t%d; })",
-             t, t, t, t, t, t, arm.p ? arm.p : "", t);
+  emit_reinit_init_text_ex(c, initm, self, given_msg == 0 ? NULL : msg, given_msg > 0, call_id, &arm);
+  if (given_msg < 0)
+    /* the runtime built the errno message: it is the one argument, and the
+       initialize's super sets the one the exception keeps */
+    buf_printf(b, "); SP_GC_ROOT(_t%d); const char *_m%d = sp_msg_heapify(sp_exc_message(_t%d)); SP_GC_ROOT_STR(_m%d); "
+                  "_t%d->msg_h = NULL; _t%d->msg = NULL;%s _t%d; })",
+               t, t, t, t, t, t, arm.p ? arm.p : "", t);
+  else if (given_msg == 0)
+    buf_printf(b, "); SP_GC_ROOT(_t%d); _t%d->msg_h = NULL; _t%d->msg = NULL;%s _t%d; })",
+               t, t, t, arm.p ? arm.p : "", t);
+  else
+    /* the message as the call gave it, not as it reads (an unset one reads as the class name) */
+    buf_printf(b, "); SP_GC_ROOT(_t%d); const char *_m%d = sp_msg_heapify(sp_exc_msg_text(_t%d)); SP_GC_ROOT_STR(_m%d); "
+                  "_t%d->msg_h = NULL; _t%d->msg = NULL;%s _t%d; })",
+               t, t, t, t, t, t, arm.p ? arm.p : "", t);
   free(arm.p);
 }
+void syserr_reinit_close(Compiler *c, int initm, int t, Buf *b) { reinit_close(c, initm, t, -1, -1, b); }
 
 /* emit_syserr_family_new, then a reopening above SystemCallError run on the message it built */
 int emit_syserr_family_new_reopened(Compiler *c, int id, const char *cn, int argc, const int *argv, Buf *b) {
@@ -16158,6 +16174,20 @@ static int native_exc_reinit_initialize(Compiler *c, int id, const char *cn) {
   free(probe.p);
   return ok ? mi : -1;
 }
+/* Whether `Cls.new(...)` on the native-armed exception cn gives a message: CRuby's initialize of those
+   classes takes the keywords, the name, the args and a status off the arguments and calls super with what is
+   left, so none left is a super without an argument. A first argument that is a status (an Integer or
+   true/false) is SystemExit's, not its message. */
+static int native_exc_msg_given(Compiler *c, const char *cn, int argc, const int *argv) {
+  const NodeTable *nt = c->nt;
+  int kwh = nt_argv_kwh(nt, argv, argc);
+  int pos = argc - (kwh >= 0 ? 1 : 0);
+  if (pos >= 1 && sp_streq(cn, "SystemExit")) {
+    TyKind t = comp_ntype(c, argv[0]);
+    if (t == TY_INT || t == TY_BOOL) pos--;
+  }
+  return pos >= 1;
+}
 /* the call whose native construction the reopening wraps (its arms are asked again inside) */
 static int g_native_reinit_id = -1;
 
@@ -16182,7 +16212,7 @@ static int emit_builtin_exc_new_reopened(Compiler *c, int id, Buf *b, const Node
     int t = 0;
     syserr_reinit_open(&t, b);
     buf_puts(b, in.p);
-    syserr_reinit_close(c, sri, t, b);
+    reinit_close(c, sri, t, native_exc_msg_given(c, cn, argc, argv), id, b);
   }
   free(in.p);
   return r;

@@ -27,10 +27,12 @@ Foo.ping: def#5 end=yes
 Foo.pong: def#6 end=yes
 Foo.sets: def#7 end=yes
 Foo.calls_later: def#8 end=yes
-Foo#z: reader#10 end=yes
-Foo#z=: writer#10 end=yes
+Foo#z: reader#10 reader#-1 in def#4 from=never end=yes
+Foo#z=: writer#10 writer#-1 in def#4 from=never end=yes
 opaque Foo: opaque#12 may opaque#13 opaque#15 may
 Foo.later: def#16 end=yes
+versions Foo#z: reader#10..?, reader#-1..?; 2 of the name, named
+versions Foo#z=: writer#10..?, writer#-1..?; 2 of the name
 post: after #17
 extent def label line 6: from=#9 sure=never count=many kept=no
 extent def twice line 7: from=#9 sure=#9 count=many kept=no

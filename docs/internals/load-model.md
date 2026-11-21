@@ -336,7 +336,25 @@ which the plan reads where the word runs (`lr_version_vis`, from the
 version's visibility cell where only the run decides). Only a def or a
 word of a name the program makes no entry of that the call plan cannot
 answer next to it is such a version (`lr_body_def_version`, over
-`lr_body_forms`). The scope
+`lr_body_forms`). So is a definer call such a body runs on self
+(`lr_body_call`): a `define_method` or `define_singleton_method` with a
+literal name and a literal block, a version of the history of the class
+self is (the class side's for `define_singleton_method`; `lr_call_side`),
+whose scope is the block's (`ct_def_version` maps it as a def's), and an
+`attr_reader`, `attr_writer`, `attr_accessor` or `attr` with literal
+names, a version of each reader and writer it makes, whose method
+`register_attr_versions` makes of it (`def x = @x`): no slot of the class
+answers it from the start. A definer call bars its names (keeping the
+form it has where the record holds no body versions) where the tree does
+not spell the class self is (an instance method's self is an object), on
+a module, in a class method a call may run on a subclass
+(`lr_body_self_unsure`), for a define_method the program's own
+`define_method` may answer, and for a name not public where it runs
+(`lr_body_call_barred`). The call plan refuses a define_method it answers
+no version of where a call or a reflection reader names its method, one
+with a Proc or a Method for its body, and a block that reads or writes
+the method's locals or yields to its block (`cplan_body_definer_gap`).
+The scope
 is the name, program-wide: the plan answers no other entry as a body's
 version yet, and once a name has versions its readers (the entries' arms,
 the poly arms, the presence readers, `respond_to?`, `method_defined?` and
@@ -353,8 +371,8 @@ one whose frame the tree does not spell), an entry a literal send makes
 (`send(:define_method, :m)`: Spinel makes no method of it, so a version
 would hide the method CRuby has; a send of a visibility word is none);
 in a body, also every other
-entry it makes (an alias, an undef, an accessor, a `define_method`, a
-`define_singleton_method`, a `module_function` copy); at the top level, an
+entry it makes that is no version (an alias, an undef, a barred definer
+call, a `module_function` copy); at the top level, an
 alias of a name barred so. Six more bars keep a body's word, or its
 non-public def, in the form it has where the record holds no body
 versions, until the readers it needs read the version cells; each says

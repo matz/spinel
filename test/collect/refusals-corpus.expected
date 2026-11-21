@@ -4,10 +4,6 @@ spinel: 1 refusal, nothing written
 == test/class_macro_guard_after.rb [promote] rc=1
 spinel: test/class_macro_guard_after.rb:5: Module#define_method with a non-literal name is not supported; use a literal Symbol or String (see docs/limitations.md)
 spinel: 1 refusal, nothing written
-== test/define_method_nested_block_params.rb [default] rc=1
-spinel: test/define_method_nested_block_params.rb:22: Module#define_method in a method body is supported only for a method the class does not answer yet: it is defined from the start, not when that method runs (see docs/limitations.md)
-== test/define_method_nested_block_params.rb [promote] rc=1
-spinel: test/define_method_nested_block_params.rb:22: Module#define_method in a method body is supported only for a method the class does not answer yet: it is defined from the start, not when that method runs (see docs/limitations.md)
 == test/promote_rational_bignum.rb [default] rc=1
 spinel: test/promote_rational_bignum.rb:21: unsupported arithmetic: node N (CallNode `*`) recv=CallNode/ty15 argc=1 arg0ty4
 spinel: 1 refusal, nothing written

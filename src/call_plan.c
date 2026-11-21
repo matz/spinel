@@ -1862,12 +1862,13 @@ static int ct_calls(Compiler *c, int id, const char *name) {
 }
 /* The method scope of version d of `name` for a call on class rcls (class
    side when sg; main when rcls < 0), as the record answered it: a def's
-   scope (rcls's copy of it, when a mixin copied it); for a module_function
+   or a define_method's scope (rcls's copy of it, when a mixin copied it); for a module_function
    copy, the scope of the def it copies; for an alias, the version of its
    target (a def, an alias or a copy) live where the alias was made, in the
    class whose body made it; for a class-side accessor a later def
    replaces, the method made of it (elab_attr_scope). -1 for any other
-   version (a define_method's or its copy, any other attribute's) or an
+   version (a define_method's of a Method or a Proc, which has no scope,
+   or its copy, any other attribute's) or an
    alias made where the record has no point. A chain of aliases ends: each
    step asks for the version live at an alias's point, one recorded ahead
    of that point, so the points only go back. */
@@ -1878,12 +1879,7 @@ static int ct_versioned_string_reader(Compiler *c, int cls, int sg, const char *
 static int ct_def_version(Compiler *c, int rcls, const char *name, int sg, const LrDef *d, int *dc) {
   int cls = rcls;
   while (d) {
-    if (d->kind == LR_DEF) return comp_method_version(c, rcls, name, sg, d->node, dc);
-    if (d->kind == LR_DEFINE_METHOD && ct_versioned_string_reader(c, rcls, sg, name) &&
-        d->scope > 0 && d->scope < c->nscopes && c->scopes[d->scope].class_id == rcls) {
-      if (dc) *dc = rcls;
-      return d->scope;
-    }
+    if (d->kind == LR_DEF || (d->kind == LR_DEFINE_METHOD && d->scope > 0)) return comp_method_version(c, rcls, name, sg, d->node, dc);
     if ((d->kind == LR_READER || d->kind == LR_WRITER || d->kind == LR_ALIAS) && d->scope > 0)
       return comp_method_version(c, rcls, name, sg, c->scopes[d->scope].def_node, dc);
     /* a module_function copy: the module's singleton method made of the def
@@ -8814,104 +8810,6 @@ static int limit_exempt(Compiler *c, int id, int lx) {
   return 0;
 }
 
-/* Object's public and private instance methods, Kernel's private ones
-   aside (kernel_private_method): with those, every method an object answers
-   before a define_method replaces it */
-static int object_method_name(const char *nm) {
-  static const char *const names[] = {
-    "!", "!=", "!~", "<=>", "==", "===", "__callee__", "__dir__", "__id__", "__method__",
-    "__send__", "`", "class", "clone", "define_singleton_method", "display", "dup", "enum_for",
-    "eql?", "equal?", "extend", "freeze", "frozen?", "hash", "initialize", "initialize_clone",
-    "initialize_copy", "initialize_dup", "inspect", "instance_eval", "instance_exec",
-    "instance_of?", "instance_variable_defined?", "instance_variable_get",
-    "instance_variable_set", "instance_variables", "is_a?", "itself", "kind_of?", "method",
-    "method_missing", "methods", "nil?", "object_id", "private_methods", "protected_methods",
-    "public_method", "public_methods", "public_send", "remove_instance_variable", "respond_to?",
-    "respond_to_missing?", "send", "singleton_class", "singleton_method",
-    "singleton_method_added", "singleton_method_removed", "singleton_method_undefined",
-    "singleton_methods", "tap", "then", "to_enum", "to_s", "yield_self", NULL };
-  for (int i = 0; nm && names[i]; i++) if (sp_streq(nm, names[i])) return 1;
-  return kernel_private_method(nm);
-}
-
-/* A define_method in a method's body defines its method when that method
-   runs, but analysis registers it from the start (walk_scope marks the call
-   dm_host, and dm_scope for the method it registers). A method nothing names
-   is not registered at all (method_never_named). Otherwise the early
-   registration is right only for a method that is new: one the class does
-   not answer before then. Anything else is refused: its own def or one up
-   its chain, a module's, a subclass's, an alias, attr or Struct member
-   (spelled as a Symbol), or a method every object has. A call in a branch
-   that never runs registers nothing (walk_scope). */
-/* Could the program's own define_method (an_user_define_method_kinds) answer
-   the receiverless define_method in host's body? One a module, a reopened
-   Object or a top level defines, or an alias, could reach any self. In a
-   class method self is the class object: a `def self.define_method` up its
-   chain (comp_cmethod_in_chain) or a reopened Module's or Class's answers;
-   in an instance method self is an instance, answered by its chain. One
-   defined elsewhere -- an options object's accessor named define_method,
-   where a config's method_missing names are written out -- answers neither:
-   the call reaches Module#define_method, and the method registered is the
-   one it defines. */
-static int cplan_own_define_method_answers(Compiler *c, int host) {
-  const Scope *hs = &c->scopes[host];
-  int k = hs->class_id, kinds = an_user_define_method_kinds(c);
-  if (k < 0 || k >= c->nclasses || k == c->toplevel_class || (kinds & UDM_ANY_SELF)) return 1;
-  if (!(kinds & (hs->is_cmethod ? UDM_CLASS_SELF : UDM_INSTANCE_SELF))) return 0;
-  if (call_target(c, -1, k, "define_method", (hs->is_cmethod ? CT_CMETHOD : CT_METHODS) | CT_SHARED, NULL) >= 0) return 1;
-  for (int j = 0; hs->is_cmethod && j < c->nclasses; j++) {
-    const char *n = c->classes[j].name;
-    if (n && (is_module_const_name(n) || is_class_const_name(n)) && is_builtin_reopen(n) &&
-        call_target(c, -1, j, "define_method", CT_OWN | CT_SHARED, NULL) >= 0) return 1;
-  }
-  return 0;
-}
-int cplan_define_method_early(Compiler *c, int id) {
-  const NodeTable *nt = c->nt;
-  int host = (int)nt_int(nt, id, "dm_host", 0) - 1, dm = (int)nt_int(nt, id, "dm_scope", 0) - 1;
-  if (host < 0 || host >= c->nscopes) return 0;
-  int an = nt_ref(nt, id, "arguments"), ac = 0;
-  const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
-  int own = ac > 0 ? av[0] : -1;
-  if (own < 0 || (nt_kind(nt, own) != NK_SymbolNode && nt_kind(nt, own) != NK_StringNode)) return 0;
-  /* a method object (`define_method(:m, instance_method(:x))`) registers nothing */
-  if (dm < 0 || dm >= c->nscopes) return 1;
-  const Scope *ds = &c->scopes[dm];
-  if (!ds->name || ds->class_id < 0 || object_method_name(ds->name)) return 1;
-  int mi = call_target(c, -1, ds->class_id, ds->name, CT_METHODS | CT_SHARED, NULL);
-  if (mi >= 0 && mi != dm) return 1;
-  for (int t = 0; t < c->nscopes; t++) {
-    const Scope *ts = &c->scopes[t];
-    if (t == dm || ts->is_cmethod || ts->class_id < 0 || !ts->name || !sp_streq(ts->name, ds->name)) continue;
-    for (int k = ds->class_id, h = 0; k >= 0 && k < c->nclasses && h < 64; k = c->classes[k].parent, h++) {
-      if (ts->class_id == k) return 1;
-      for (int m = 0; m < c->classes[k].nincluded_mods; m++)
-        if (c->classes[k].included_mods[m] == ts->class_id) return 1;
-    }
-    /* a subclass's: a class method run on the subclass defines it there */
-    for (int k = ts->class_id, h = 0; k >= 0 && k < c->nclasses && h < 64; k = c->classes[k].parent, h++)
-      if (k == ds->class_id) return 1;
-  }
-  for (int k = comp_kind_first(c, NK_SymbolNode); k >= 0; k = comp_kind_next(c, k)) {
-    const char *v = nt_kind(nt, k) == NK_SymbolNode && k != own ? nt_str(nt, k, "value") : NULL;
-    if (v && sp_streq(v, ds->name)) return 1;
-  }
-  for (int k = comp_kind_first(c, NK_StringNode); k >= 0; k = comp_kind_next(c, k)) {
-    const char *v = nt_kind(nt, k) == NK_StringNode && k != own ? nt_str(nt, k, "content") : NULL;
-    if (v && sp_streq(v, ds->name)) return 1;
-  }
-  /* the block is registered whichever define_method the call reaches, and a
-     program's own may answer it without defining anything: then a call of
-     the name would find a method CRuby never defines (not one of the
-     program's that cannot answer this call, cplan_own_define_method_answers) */
-  if (an_user_define_method(c) && cplan_own_define_method_answers(c, host))
-    for (int k = comp_kind_first(c, NK_CallNode); k >= 0; k = comp_kind_next(c, k)) {
-      const char *v = nt_kind(nt, k) == NK_CallNode ? nt_str(nt, k, "name") : NULL;
-      if (v && sp_streq(v, ds->name)) return 1;
-    }
-  return 0;
-}
-
 /* A `class << x` in a method's body on a class a Struct.new or Data.define
    makes at its write: x a constant the record resolves to that class, or
    self in a class method of it. CRuby defines the body's methods each time
@@ -9937,6 +9835,37 @@ static int cplan_builtin_initialize_gap(Compiler *c, int id) {
          (f == BNF_EMPTY && (nt_ref(c->nt, id, "arguments") >= 0 || nt_ref(c->nt, id, "block") >= 0 || fl.n || fl.nk));
 }
 
+/* A define_method or define_singleton_method on self in a method's body that the plan cannot answer as a version
+   (CRF_DEFINER), or NULL: one whose block reads or writes the locals of the method it runs in, or yields to that
+   method's block (an_block_captures: the method it defines is laid out as a method of its own, which has none of
+   them), and a define_method the record holds as no version of the method (elab_body_call_version), which walk_scope
+   registers from the start, where a call or a reflection reader asks its name (elab_method_asked), or whose body is
+   a Proc or a Method value, which no method is made of. A method nothing names (Scope.reachable) never runs it. */
+static const char *cplan_body_definer_gap(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  const char *nm = nt_str(nt, id, "name");
+  const Scope *hs = comp_scope_of(c, id);
+  int dm = is_define_method_name(nm), rv = nt_ref(nt, id, "receiver"), blk = nt_ref(nt, id, "block"), an = nt_ref(nt, id, "arguments"), ac = 0;
+  const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
+  const char *mn = ac > 0 ? vis_arg_name(nt, av[0]) : NULL;
+  if ((!dm && !is_define_singleton_method_name(nm)) || (rv >= 0 && nt_kind(nt, rv) != NK_SelfNode) || !mn || elab_body_def(c, id) < 0 ||
+      !hs || !hs->reachable)
+    return NULL;
+  int lit = blk >= 0 && nt_kind(nt, blk) == NK_BlockNode;
+  if (lit && an_block_captures(nt, blk, 0))
+    return "Module#define_method in a method body with a block that reads or writes that method's locals, or yields to "
+           "its block, is not supported: the method it defines does not close over them";
+  if (!dm || elab_body_call_version(c, id)) return NULL;
+  if (!lit)
+    return "Module#define_method in a method body with a Proc or a Method for its body is not supported (see "
+           "docs/limitations.md)";
+  return an_calls_named_first(c, mn) >= 0 || elab_method_asked(c, mn)
+             ? "Module#define_method in a method body is supported only where the load record orders it against the "
+               "calls (on self in a class method of a class no subclass may run it on, with a literal block): this one "
+               "would be defined from the start, not when that method runs (see docs/limitations.md)"
+             : NULL;
+}
+
 /* in the order codegen meets them: the prepasses, then the emitters */
 static void cplan_refuse_resolve(Compiler *c, int id, CallPlan *p, char *buf, size_t cap) {
   cplan_set(p, -1, -1, UC_NONE, CP_NONE);
@@ -9973,6 +9902,11 @@ static void cplan_refuse_resolve(Compiler *c, int id, CallPlan *p, char *buf, si
     cplan_refuse_set(p, CRF_MAIN_CHAIN, CR_FEATURE,
                      "a call of a name that a mixin of main or Object defines, where that mixin runs under a condition or "
                      "from a method that may not have run: CRuby finds its method only once the mixin has run", buf, cap);
+    return;
+  }
+  const char *dw = what ? NULL : cplan_body_definer_gap(c, id);
+  if (dw) {
+    cplan_refuse_set(p, CRF_DEFINER, CR_FEATURE, dw, buf, cap);
     return;
   }
   if (!what && cplan_record_new_gap(c, id)) {

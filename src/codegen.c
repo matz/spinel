@@ -21159,16 +21159,11 @@ static void reject_runtime_const_get(Compiler *c) {
   NT_FOREACH_KIND(c->nt, NK_CallNode, id) if (!defer_refusals_at(c, id)) refuse_from_plan(c, id, CRF_CONST_GET, "refuse-const-get");
 }
 
-/* A define_method in a method's body that would answer calls before that
-   method runs (cplan_define_method_early) is refused before any emission,
-   with or without --defer-refusals: a deferred refusal raises only when the
-   method runs, after the earlier calls have already gone wrong. */
-static void reject_define_method_early(Compiler *c) {
-  NT_FOREACH_KIND(c->nt, NK_CallNode, id)
-    if (cplan_define_method_early(c, id))
-      unsupported_feature(c, id, "Module#define_method in a method body is supported only for a method "
-                                 "the class does not answer yet: it is defined from the start, not when "
-                                 "that method runs (see docs/limitations.md)");
+/* A define_method in a method's body the call plan answers no version of (cplan_body_definer_gap, CRF_DEFINER) is
+   refused before any emission, with or without --defer-refusals and whether the method is reached or not: a
+   deferred refusal raises only when the method runs, after the earlier calls have already gone wrong. */
+static void reject_body_definers(Compiler *c) {
+  NT_FOREACH_KIND(c->nt, NK_CallNode, id) refuse_from_plan(c, id, CRF_DEFINER, "refuse-body-definer");
 }
 
 /* A `class << K` in a method's body on a Struct or Data class
@@ -24694,7 +24689,7 @@ char *codegen_program(const NodeTable *nt) {
   reject_top_self(c);
   reject_main_chain(c);
   reject_time_parse(c);
-  reject_define_method_early(c);
+  reject_body_definers(c);
   reject_record_sclass_early(c);
   reject_define_method_runtime_block(c);
   reject_range_reopen_nonint(c);

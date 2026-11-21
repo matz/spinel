@@ -1457,7 +1457,6 @@ int an_user_define_method_kinds(Compiler *c) {
   c->user_define_method = kinds + 1;
   return kinds;
 }
-int an_user_define_method(Compiler *c) { return an_user_define_method_kinds(c) != 0; }
 /* ...one that a receiverless define_method whose self is a class (class_self:
    a class body's or a class method's) or an instance could reach */
 int an_user_define_method_reaches(Compiler *c, int class_self) {
@@ -2049,11 +2048,6 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
        --ext-entry's does (method_never_named). */
     if (dm_in_def && !ext_scope_host_callable(c, scope_idx) && method_never_named(c, c->scopes[scope_idx].name))
       dm_ok = 0;
-    /* Otherwise it is registered from the start, which is right only for a
-       method the class does not answer yet: the codegen prepass refuses the
-       rest (cplan_define_method_early) once the class chains are known. */
-    else if (dm_in_def)
-      nt_node_set_int((NodeTable *)c->nt, id, "dm_host", scope_idx + 1);
     if (dm_ok) {
       int dm_args = nt_ref(c->nt, id, "arguments");
       int dm_na = 0;
@@ -2099,8 +2093,6 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
           if (dm_kn == 0) collect_def_params(c, dm_pn, dm_s);
           else collect_positional_params(c, dm_ps, dm_s);
           dm_s->nrequired = dm_rn;
-          if (nt_int(c->nt, id, "dm_host", 0))
-            nt_node_set_int((NodeTable *)c->nt, id, "dm_scope", dm_new_idx + 1);
           child = dm_new_idx;
         }
       }
@@ -3932,10 +3924,11 @@ static int sg_object_standin(Compiler *c, int wnode) {
   return c->object_standin - 1;
 }
 
-/* Does the subtree at `node`, `level` blocks inside a define_singleton_method
-   block, read or write a local of the code around that block, or yield to
-   its block? A local's depth counts the blocks between it and its scope. */
-static int sg_block_captures(const NodeTable *nt, int node, int level) {
+/* Does the subtree at `node`, `level` blocks inside a define_method or
+   define_singleton_method block, read or write a local of the code around
+   that block, or yield to its block? A local's depth counts the blocks
+   between it and its scope. */
+int an_block_captures(const NodeTable *nt, int node, int level) {
   if (node < 0) return 0;
   NodeKind k = nt_kind(nt, node);
   if (k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode) return 0;
@@ -3947,11 +3940,11 @@ static int sg_block_captures(const NodeTable *nt, int node, int level) {
     return 1;
   int inner = (k == NK_BlockNode || k == NK_LambdaNode) ? level + 1 : level;
   int nr = nt_num_refs(nt, node);
-  for (int i = 0; i < nr; i++) if (sg_block_captures(nt, nt_ref_at(nt, node, i), inner)) return 1;
+  for (int i = 0; i < nr; i++) if (an_block_captures(nt, nt_ref_at(nt, node, i), inner)) return 1;
   int na = nt_num_arrs(nt, node);
   for (int i = 0; i < na; i++) {
     int cnt = 0; const int *ids = nt_arr_at(nt, node, i, &cnt);
-    for (int j = 0; j < cnt; j++) if (sg_block_captures(nt, ids[j], inner)) return 1;
+    for (int j = 0; j < cnt; j++) if (an_block_captures(nt, ids[j], inner)) return 1;
   }
   return 0;
 }
@@ -3965,7 +3958,7 @@ static int sg_dsm_transplantable(const NodeTable *nt, int id) {
   const int *av = anode >= 0 ? nt_arr(nt, anode, "arguments", &an) : NULL;
   if (an != 1 || (nt_kind(nt, av[0]) != NK_SymbolNode && nt_kind(nt, av[0]) != NK_StringNode))
     return 0;
-  return !sg_block_captures(nt, nt_ref(nt, id, "block"), 0);
+  return !an_block_captures(nt, nt_ref(nt, id, "block"), 0);
 }
 
 /* Is `v` an expression whose value is a class: a class's own constant, or a
@@ -4548,7 +4541,7 @@ void register_attr_versions(Compiler *c) {
     comp_grow_node_arrays(c);
     walk_scope(c, def, c->nscope[a[i].node], a[i].cls);
     if (e >= c->nscopes || c->scopes[e].def_node != def) continue;
-    { c->scopes[e].attr_version = 1; comp_touch_scope(c->scopes[e].idx); }
+    if (elab_attr_mixed(c, &a[i])) { c->scopes[e].attr_version = 1; comp_touch_scope(c->scopes[e].idx); }
     comp_ivar_intern(&c->classes[a[i].cls], ivname, a[i].sg ? IVS_CLASS : IVS_INST);
     elab_attr_scope(c, &a[i], e);
   }

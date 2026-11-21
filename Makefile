@@ -1467,12 +1467,11 @@ ifneq ($(shell uname -s),Linux)
 TESTS := $(filter-out $(shell grep -l '^\# spinel: linux' test/*.rb),$(TESTS))
 endif
 # A test only --load-model=inline answers yet: the default model refuses a
-# define_method a class method's body makes under a computed name, or one
-# nested in a method body's statement, until such a definition is placed
-# where it runs. load-model-inline-test runs these under the inline model
-# and asks that the default one still refuses them, so a program leaves the
-# list when it compiles.
-LOAD_MODEL_INLINE_ONLY := test/class_macro_guard_after.rb test/define_method_nested_block_params.rb
+# define_method a class method's body makes under a computed name, until
+# such a definition is placed where it runs. load-model-inline-test runs
+# these under the inline model and asks that the default one still refuses
+# them, so a program leaves the list when it compiles.
+LOAD_MODEL_INLINE_ONLY := test/class_macro_guard_after.rb
 TESTS := $(filter-out $(LOAD_MODEL_INLINE_ONLY),$(TESTS))
 # A platform that cannot give some tests their subject lists them in
 # TEST_SKIP -- native Windows (win32.mk), for tests of what only a POSIX

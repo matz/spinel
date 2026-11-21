@@ -628,6 +628,10 @@ int elab_def_scope_of(Compiler *c, int node);   /* the scope elab_def_scope file
 /* the def node whose body holds node, with no class body or other def
    between; -1 for none */
 int elab_body_def(Compiler *c, int node);
+/* Does the record hold definer call `call` (define_method or the like in a
+   body, lr_body_call) as a body's version, ordered against the calls by its
+   extent? */
+int elab_body_call_version(Compiler *c, int call);
 /* does the load phase apply def or define_method node `def` whenever the
    body it stands in runs (lr_stmt_applied): not under a run-time
    condition there, nor in an iterator's block, except a define_method an
@@ -1116,10 +1120,16 @@ void elab_absent_aliases(Compiler *c);
    end`, then `def self.cfg=`; `def x`, then `attr_reader :x`): a call that
    runs while one is live runs the accessor, any other the def, so each is
    a version of its own, a method register_attr_versions makes and
-   elab_attr_scope links to it (LrDef.scope); *n of them, the caller frees
-   the array. An accessor of a history no def is in stays its class's slot
-   or field alone. */
+   elab_attr_scope links to it (LrDef.scope); so is the version of an
+   accessor a body declares (LrDef.body), which is no slot of its class's
+   from the start; *n of them, the caller frees the array. Any other
+   accessor of a history no def is in stays its class's slot or field
+   alone. */
 ElabEntry *elab_replaced_attrs(Compiler *c, int *n);
+/* ...is entry e of them one of a history that mixes accessors and defs (a
+   def replaces it: Scope.attr_version), not a body's accessor alone, whose
+   method is the name's own? */
+int elab_attr_mixed(Compiler *c, const ElabEntry *e);
 void elab_attr_scope(Compiler *c, const ElabEntry *e, int scope);
 /* does class cls's own side hold such an accessor version of name? */
 int elab_attr_replaced(Compiler *c, int cls, const char *name);

@@ -98,14 +98,24 @@ int prog_load_deferred(const Compiler *c, int f) {
    that LoadNode (state: 0 unknown, 1 being decided, 2 not deferred, 3
    deferred). A file in a cycle of requires, or run by no require, has no
    proof that it runs: deferred. */
+/* The graph file whose tree holds node, or -1. Not the node's node_file
+   itself: that is the #line table's id (879be11b4), which runs past the
+   graph's files once the table holds more names than the graph has files. */
+static int prog_graph_file_of(const NodeTable *nt, int node) {
+  long long fid = nt_int(nt, node, "node_file", -1);
+  for (int f = 0; fid >= 0 && f < nt_nroots(nt); f++)
+    if (nt_int(nt, nt_root(nt, f), "node_file", -2) == fid) return f;
+  return -1;
+}
 static int prog_stamp_deferred(Compiler *c, int f, unsigned char *state) {
   NodeTable *nt = (NodeTable *)c->nt;
-  if (f <= 0) return 0;
+  if (f < 0) return 1;   /* a LoadNode no graph file holds: no proof it runs */
+  if (f == 0) return 0;
   if (state[f] == 1) return 1;
   if (state[f]) return state[f] == 3;
   state[f] = 1;
   int by = prog_load_by(c, f), d = 1;
-  if (by >= 0) d = nt_int(nt, by, "req_deferred", 0) || prog_stamp_deferred(c, (int)nt_int(nt, by, "node_file", 0), state);
+  if (by >= 0) d = nt_int(nt, by, "req_deferred", 0) || prog_stamp_deferred(c, prog_graph_file_of(nt, by), state);
   state[f] = d ? 3 : 2;
   if (d) nt_node_set_int(nt, nt_root(nt, f), "load_deferred", 1);
   return d;

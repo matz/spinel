@@ -151,7 +151,13 @@ The record holds, for each:
   of the program's may take the name, `lr_named`, as one may run the block
   at once) and where `lr_rta` seeds the
   `--ext-entry` methods (see "The post-load phase" below). A region's `from` is the statement its load may
-  first run on (`rentry`); a node of a body that has no point of its own
+  first run on (`rentry`), and no earlier than the first statement one of
+  the loads that may run its file may run on, past the body around the
+  load (`lr_region_time`, after every other body's extent): a require in a
+  method starts where the method does, one no run reaches leaves the
+  region `never`. A require of a set of files (an open one, or one of
+  candidates) may load any of them, and a file an autoload names keeps its
+  entry, as the constant's first read loads it; a node of a body that has no point of its own
   starts no earlier than the body around it. A lambda or proc starts at the
   first statement one of the calls that invoke it may run on, where the
   record knows them all (`lr_closure_sites`): its value goes to a local
@@ -184,7 +190,24 @@ The record holds, for each:
   `&&`, ternary, modifier `if`, `case` arm, `defined?`, op-write or `begin`
   around it inside the statement) and that statement is not conditional
   (`may`: also a class body under a condition), in a block that may not run
-  or under a rescue. An in-place block on a literal
+  or under a rescue. A region is sure where a require of its file alone
+  surely runs (`lr_load_sure`): a top-level statement of region 0 by the
+  tests above, or a statement that runs whenever the method body or the
+  in-place block it stands in does, from that body's `sure` (a block's: past
+  the last point of its call's statement, since the code nested there may
+  run before the require). A require of a set of files runs every one of
+  them only where the set is one file per word of the `each` or
+  `each_with_index` block over a literal Array of Strings it stands in
+  directly (`%w(a b).each { |f| require_relative f }`, the parse's
+  `per_word`, `prog_load_per_word`), that block is sure and it has no early
+  exit (`break`, `next`, `throw`, ...). A set a path pattern names
+  (`"lib_#{name}"`, every file of the program its literal head and tail
+  match) loads one of them, so it is never sure. A require runs its file once whatever
+  other requires of it run, so a `load` of the file, which may run it
+  again, leaves it unsure and `many`. A method of main's is sure, as one of
+  a constant receiver, at a receiverless call of a top-level statement of
+  main's when the program has one def of the name and no builtin method
+  takes it (`lr_rta_bind`). An in-place block on a literal
   is sure at its call under the same tests, when its row runs it for
   certain (`IR_EACH` on a literal of some elements, `times` of one or
   more, `tap`); `0.times` and an iterator that may skip its block, such as
@@ -707,7 +730,19 @@ rank of the top-level statement holding the require, and run as the
 require does, `may` or `partial` with it. A file neither places (for
 example one loaded only in a method or in a block kept to run later) is
 walked after them as a region of its own, whose points are
-`PROG_UNKNOWN` against any other region's. `--dump-load-graph` prints the
+`PROG_UNKNOWN` against any other region's. A version a region's statement
+makes takes the region's extent instead (`lr_version_extent`, read by the
+call plan through `elab_version_extent`), so a call of region 0 before the
+region's `from` does not meet it and one after its `sure` does. A version
+of a class the region makes, or nested in one, keeps its point (no call
+reaches the class before the statement that makes it): a class whose every
+open is in the region, or one an autoload registers whose file is the
+region's (`LoadRecord.rmade`, `lr_region_classes`). That point orders the
+version right against a call of another region where the region runs to
+its end once entered. It does not tell apart a region that raises before
+its later definitions (the raise rescued), one that calls back into code of
+another region before them, or an autoload of a constant already defined,
+which never loads its file. `--dump-load-graph` prints the
 files and what each require resolves to. What the graph model does not
 compile it refuses by name (`prog_refuse_loads`, `prog_refuse_order`).
 

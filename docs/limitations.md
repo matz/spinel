@@ -845,15 +845,26 @@ as on CRuby. In a few cases CRuby's behavior depends on a feature Spinel does
 not implement, and silently returning a wrong value would be worse than a
 visible error. Those deliberate divergences are listed here.
 
-#### A required file's classes and methods exist from the start of the program
+#### A required file's classes, and some of its methods, exist from the start of the program
 
-Spinel compiles every file the program requires, and the classes, modules and
-methods a file defines are defined from the start of the program, whether the
+Spinel compiles every file the program requires, and the classes and modules
+a file defines are defined from the start of the program, whether the
 `require` that loads the file has run yet or not, and whether it ever runs.
 CRuby defines them when the file loads. So `defined?(Foo)` before the require
-that defines `Foo` answers `"constant"` where CRuby answers `nil`, and a
-method a later-required file defines can be called before that require runs.
-A file's other top-level statements run when it is loaded.
+that defines `Foo` answers `"constant"` where CRuby answers `nil`. A file's
+other top-level statements run when it is loaded. Its methods are there from
+the require on where the require stands in a top-level statement that runs
+unconditionally, in a method or in a block: a call made before that require
+runs raises NoMethodError, as in CRuby. They are there from the start of the
+program, whether the require has run or not, where the require stands under
+a condition the program decides as it runs (`if`, `unless`, a `case` arm, a
+modifier, also inside a block) or in a loop's body, and where the method or
+the block it stands in may leave before it through a raise or a `throw` in
+a method it calls (`1.times { check; require_relative "x" }` with the raise
+rescued around it); and a file that raises part way, with the raise
+rescued, has the methods it would have defined after the raise too.
+Under `--load-model=inline` a file that only a method or a block loads has
+its methods from the start of the program as well.
 
 #### A core class's reopened method answers from the start of the program
 

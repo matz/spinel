@@ -242,7 +242,7 @@ extent block each line 129: from=never sure=never count=zero kept=no
 extent def __enumw_each_entry line 137: from=never sure=never count=zero kept=no
 extent block each line 138: from=never sure=never count=zero kept=no
 extent def lib_m line 1: from=never sure=never count=zero kept=no
-extent def load_it line 19: from=#24 sure=never count=many kept=no
+extent def load_it line 19: from=#24 sure=#24 count=once kept=no
 extent def never line 21: from=never sure=never count=zero kept=no
 extent def once line 22: from=#23 sure=#23 count=once kept=no
 extent def loop_run line 23: from=#26 sure=#38 count=many kept=no

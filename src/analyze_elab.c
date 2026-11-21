@@ -1352,8 +1352,10 @@ int elab_header_class(const Compiler *c, int node, int *owner, const char **leaf
    define_method, alias_method) is the class's own, as in CRuby. In such a
    block on a singleton class (LR_FS_IEVAL_SCLASS, `class << C;
    instance_eval { ... }`) self is that singleton class, and a def goes on
-   the singleton class's own singleton, which the record does not hold. */
-enum { LR_FS_NONE, LR_FS_SCLASS, LR_FS_IEVAL, LR_FS_IEVAL_SCLASS };
+   the singleton class's own singleton, which the record does not hold.
+   Self in a define_method's block is an object, of no class the record
+   tells (LR_FS_OBJECT, which lr_body_frame alone answers). */
+enum { LR_FS_NONE, LR_FS_SCLASS, LR_FS_IEVAL, LR_FS_IEVAL_SCLASS, LR_FS_OBJECT };
 
 /* elab_program's state: each statement's frame class (fc) and singleton
    flag (fs), each frame's visibility state (vs) and each file's top
@@ -2529,9 +2531,12 @@ static int lr_body_self(Compiler *c, const int *par, int n, int node, int e);
    no class: main, an object): a class body's class, an eval block's
    receiver, in a method body the class whose singleton method the method
    is, and in a `class << x` body x's singleton, as x's class with
-   LR_FS_SCLASS. LR_UNKNOWN_CLASS where the record cannot tell (a receiver
-   it does not resolve, e statement the receivers are read at; e < 0 reads
-   none, so only the frames the tree spells resolve). */
+   LR_FS_SCLASS; in a define_singleton_method's block its receiver, which
+   the method it defines runs on, and in a define_method's block an
+   object (LR_UNKNOWN_CLASS, LR_FS_OBJECT). LR_UNKNOWN_CLASS where the
+   record cannot tell (a receiver it does not resolve, e statement the
+   receivers are read at; e < 0 reads none, so only the frames the tree
+   spells resolve). */
 static int lr_body_frame(Compiler *c, const int *par, int n, int node, int e, int self, int *fs) {
   const NodeTable *nt = c->nt;
   *fs = LR_FS_NONE;
@@ -2550,6 +2555,13 @@ static int lr_body_frame(Compiler *c, const int *par, int n, int node, int e, in
       int cls = rv < 0 || nt_kind(nt, rv) == NK_SelfNode ? lr_body_self(c, par, n, par[p], e) : lr_body_const(c, rv, e, 1);
       if (!self && is_instance_eval_family(nm)) *fs = LR_FS_IEVAL;
       return cls;
+    }
+    if (self && k == NK_BlockNode && par[p] >= 0 && nt_ref(nt, par[p], "block") == p) {
+      const char *nm = nt_str(nt, par[p], "name");
+      int rv = nt_ref(nt, par[p], "receiver");
+      if (is_define_method_name(nm)) { *fs = LR_FS_OBJECT; return LR_UNKNOWN_CLASS; }
+      if (is_define_singleton_method_name(nm))
+        return rv < 0 || nt_kind(nt, rv) == NK_SelfNode ? lr_body_self(c, par, n, par[p], e) : lr_body_const(c, rv, e, 1);
     }
     if (k == NK_DefNode && self) {   /* self in a method's body: the class whose singleton method it is */
       int rv = nt_ref(nt, p, "receiver"), rk = rv >= 0 ? nt_def_receiver(nt, rv) : -1, xfs;
@@ -2948,7 +2960,7 @@ typedef struct LrBodyNames {
   const int *par;
   char **keys;
   unsigned char *kdone;
-  int n, *hid, mm, lists, dyn, anon, copen, subany;
+  int n, *hid, mm, lists, dyn, anon, copen, subany, osg;
 } LrBodyNames;
 /* ...the last segment of the constant cp spells (NULL for no constant) */
 static const char *lr_leaf(const NodeTable *nt, int cp) {
@@ -3057,6 +3069,13 @@ static int lr_body_names_subclassed(const void *ctx, int node) {
 static void lr_body_untold_call(Compiler *c, const int *par, int n, int id, const char *nm, LrBodyNames *x, const CplanTreeFacts *tf) {
   if (nm && anh_has(&x->prot, nm) && !anh_has(&x->untold, nm) && cplan_block_self_untold(c, par, n, id, tf)) anh_add(&x->untold, nm);
 }
+/* ...may recv, the receiver of a singleton definer (`def x.m`, `class << x`, `x.define_singleton_method`, `x.extend`
+   and the other calls that reach its singleton, is_singleton_reach_call), hold an object: neither self nor a
+   constant the program never writes (a class's or a module's)? */
+static int lr_body_object_recv(const NodeTable *nt, const LrBodyNames *x, int recv) {
+  NodeKind k = recv >= 0 ? nt_kind(nt, recv) : NK_SelfNode;
+  return k != NK_SelfNode && ((k != NK_ConstantReadNode && k != NK_ConstantPathNode) || anh_has(&x->cw, lr_leaf(nt, recv)));
+}
 static void lr_body_names_read(Compiler *c, const int *par, int n, LrBodyNames *x) {
   const NodeTable *nt = c->nt;
   *x = (LrBodyNames){ 0 };
@@ -3145,6 +3164,14 @@ static void lr_body_names_read(Compiler *c, const int *par, int n, LrBodyNames *
       anh_add(&x->cread, vis_arg_name(nt, av[1]));
     /* (a call with a block binds no face entry: ct_vis_flags) */
     if (nt_ref(nt, id, "block") >= 0) anh_add(&x->cread, rn ? rn : cn);
+  }
+  /* (an object's singleton method or module: register_singleton_defs makes a class of it under the object's class
+     once the record is made, whose arms do not read that class's body versions) */
+  for (int id = 0; id < n && !x->osg; id++) {
+    NodeKind k = nt_kind(nt, id);
+    int rv = k == NK_DefNode ? nt_ref(nt, id, "receiver") : k == NK_SingletonClassNode ? nt_ref(nt, id, "expression") :
+             k == NK_CallNode && is_singleton_reach_call(nt_str(nt, id, "name")) ? nt_ref(nt, id, "receiver") : -1;
+    if (rv >= 0) x->osg = lr_body_object_recv(nt, x, k == NK_DefNode ? nt_def_receiver(nt, rv) : rv);
   }
   ani_sort(&x->own);
   ani_sort(&x->sites);
@@ -3332,15 +3359,18 @@ static int lr_body_word_barred(Compiler *c, const int *par, int n, int node, LrB
    instance method's self is an object), on a chain the record does not hold (lr_chain_open), on a module (an
    include, extend or prepend copy carries the module's def versions only), in a class method a call may run on a
    subclass (lr_body_self_unsure: the call defines on the class it runs on), for a define_method the program's own
-   may answer (an_user_define_method_reaches: Module's may never run), and for a name that is not public where it runs
-   (a section's word or a visibility word around it, lr_body_def_vis; initialize and its kin) */
+   may answer (an_user_define_method_reaches: Module's may never run), for a name that is not public where it runs
+   (a section's word or a visibility word around it, lr_body_def_vis; initialize and its kin), and on the instance
+   side where the program gives an object a singleton method or module (LrBodyNames.osg: the class the analysis
+   makes of that object reads its class's methods from the start) */
 static int lr_body_call_barred(Compiler *c, const int *par, int n, int node, LrBodyNames *x) {
   int cls, sg;
   char b[ELAB_FORM_NAME_CAP];
   lr_call_side(c, par, n, node, -1, &cls, &sg);
   if (cls < 0 || lr_chain_open(c, cls) || comp_class_is_module(c, &c->classes[cls]) ||
       (is_define_method_name(nt_str(c->nt, node, "name")) && an_user_define_method_reaches(c, 1)) ||
-      lr_body_self_unsure(c, x, lr_body_cmethod(c->nt, par, n, node), cls) || lr_body_def_vis(c->nt, par, n, node, sg) != BVIS_PUBLIC)
+      lr_body_self_unsure(c, x, lr_body_cmethod(c->nt, par, n, node), cls) || lr_body_def_vis(c->nt, par, n, node, sg) != BVIS_PUBLIC ||
+      (!sg && x->osg))
     return 1;
   for (int k = 0; !sg && elab_call_form_name(c->nt, node, k, b, sizeof b, NULL); k++)
     if (is_implicitly_private_name(elab_call_form_name(c->nt, node, k, b, sizeof b, NULL))) return 1;
@@ -5023,6 +5053,14 @@ static void lr_unrolled_owners(Compiler *c) {
   free(fc);
 }
 
+/* See analyze.h */
+int elab_body_self_object(Compiler *c, int node) {
+  LoadRecord *r = elab_fresh(c);
+  const int *par = r->recorded && node >= 0 && node < r->n ? lr_par(c, 0) : NULL;
+  int fs = LR_FS_NONE;
+  if (par) lr_body_frame(c, par, r->n, node, -1, 1, &fs);
+  return fs == LR_FS_OBJECT;
+}
 /* See analyze.h */
 int elab_body_call_version(Compiler *c, int call, int *cls, int *sg) {
   LoadRecord *r = elab_fresh(c);
@@ -12982,9 +13020,9 @@ void elab_attr_scope(Compiler *c, const ElabEntry *e, int scope) {
 }
 
 /* See analyze.h. */
-int elab_attr_replaced(Compiler *c, int cls, const char *name) {
+int elab_attr_replaced(Compiler *c, int cls, int sg, const char *name) {
   LoadRecord *r = c->lrec;
-  const LrHist *h = r && r->recorded && cls >= 0 ? lr_hist(r, cls, 1, name, 0) : NULL;
+  const LrHist *h = r && r->recorded && cls >= 0 ? lr_hist(r, cls, sg, name, 0) : NULL;
   for (int j = 0; h && j < h->n; j++)
     if ((h->v[j].kind == LR_READER || h->v[j].kind == LR_WRITER) && h->v[j].scope) return 1;
   return 0;

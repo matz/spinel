@@ -2158,6 +2158,26 @@ int builtin_object_method_known(const char *m) {
   return builtin_object_method_owner(m) != NULL;
 }
 
+/* Is nm one of Object's public or private instance methods (Kernel's
+   private ones too, kernel_private_method): one an object answers before a
+   define_method replaces it? builtin_object_method_known asks only the
+   public ones the owner facts list. */
+int is_object_method_name(const char *nm) {
+  static const char *const names[] = {
+    "!", "!=", "!~", "<=>", "==", "===", "__callee__", "__dir__", "__id__", "__method__",
+    "__send__", "`", "class", "clone", "define_singleton_method", "display", "dup", "enum_for",
+    "eql?", "equal?", "extend", "freeze", "frozen?", "hash", "initialize", "initialize_clone",
+    "initialize_copy", "initialize_dup", "inspect", "instance_eval", "instance_exec",
+    "instance_of?", "instance_variable_defined?", "instance_variable_get",
+    "instance_variable_set", "instance_variables", "is_a?", "itself", "kind_of?", "method",
+    "method_missing", "methods", "nil?", "object_id", "private_methods", "protected_methods",
+    "public_method", "public_methods", "public_send", "remove_instance_variable", "respond_to?",
+    "respond_to_missing?", "send", "singleton_class", "singleton_method",
+    "singleton_method_added", "singleton_method_removed", "singleton_method_undefined",
+    "singleton_methods", "tap", "then", "to_enum", "to_s", "yield_self", NULL };
+  return nm && (builtin_name_in(nm, names) || kernel_private_method(nm));
+}
+
 /* The builtin class or module that defines instance method m of cls (one
    of the classes the arity facts list their own methods for), as
    Method#owner names it: cls for one of its own (CRuby's

@@ -634,6 +634,9 @@ int elab_body_def(Compiler *c, int node);
    class and side it defines on in *cls and *sg; -1 where the record holds it
    as no version */
 int elab_body_call_version(Compiler *c, int call, int *cls, int *sg);
+/* is self an object where node stands: in a define_method's block, with no
+   class body or eval block between (lr_body_frame)? */
+int elab_body_self_object(Compiler *c, int node);
 /* the k-th name definer call node defines (an attr_accessor's reader, then
    its writer, `x=`, in buf, which holds ELAB_FORM_NAME_CAP bytes: a call
    with a longer name makes no versions, lr_body_call), NULL past the last;
@@ -1149,8 +1152,8 @@ ElabEntry *elab_replaced_attrs(Compiler *c, int *n);
    method is the name's own? */
 int elab_attr_mixed(Compiler *c, const ElabEntry *e);
 void elab_attr_scope(Compiler *c, const ElabEntry *e, int scope);
-/* does class cls's own side hold such an accessor version of name? */
-int elab_attr_replaced(Compiler *c, int cls, const char *name);
+/* does class cls's side sg (0: the instance side, 1: the singleton side) hold such an accessor version of name? */
+int elab_attr_replaced(Compiler *c, int cls, int sg, const char *name);
 /* Does a later method of class cls's own instance side replace its
    attr_* accessor `name` (a writer's as `x=`) as the load phase ends: the
    class's last version of the name the registration applies is a def, an

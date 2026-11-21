@@ -851,9 +851,9 @@ spinel: 1 refusal, nothing written
 spinel: test/reject/define_method_each_integer_name.rb:3: Module#define_method with a non-literal name is not supported; use a literal Symbol or String (see docs/limitations.md)
 spinel: 1 refusal, nothing written
 == test/reject/define_method_early_own_define_method_answers.rb [default] rc=1
-spinel: test/reject/define_method_early_own_define_method_answers.rb:9: Module#define_method in a method body is supported only where the load record orders it against the calls (on self in a class method of a class no subclass may run it on, with a literal block): this one would be defined from the start, not when that method runs (see docs/limitations.md)
+spinel: test/reject/define_method_early_own_define_method_answers.rb:9: Module#define_method in a method body is supported only for a method the class does not answer yet, where the load record does not order it against the calls: it is defined from the start, not when that method runs (see docs/limitations.md)
 == test/reject/define_method_early_own_define_method_answers.rb [promote] rc=1
-spinel: test/reject/define_method_early_own_define_method_answers.rb:9: Module#define_method in a method body is supported only where the load record orders it against the calls (on self in a class method of a class no subclass may run it on, with a literal block): this one would be defined from the start, not when that method runs (see docs/limitations.md)
+spinel: test/reject/define_method_early_own_define_method_answers.rb:9: Module#define_method in a method body is supported only for a method the class does not answer yet, where the load record does not order it against the calls: it is defined from the start, not when that method runs (see docs/limitations.md)
 == test/reject/define_method_handed_block.rb [default] rc=1
 spinel: test/reject/define_method_handed_block.rb:7: Module#define_method with `&` of a block or Proc that is not a literal (`&block`, a parameter, a constant, a call's result), or with a Proc or Method passed as its body, is not supported: the defined method's body is known only at run time. Pass a block literal to define_method instead
 spinel: 1 refusal, nothing written
@@ -881,15 +881,21 @@ spinel: test/reject/define_method_implicit_rescue_scope_queries.rb:9: Module#def
 spinel: test/reject/define_method_implicit_rescue_scope_queries.rb:17: Module#define_method with a non-literal name is not supported; use a literal Symbol or String (see docs/limitations.md)
 spinel: 2 refusals, nothing written
 == test/reject/define_method_late_own_define_method.rb [default] rc=1
-spinel: test/reject/define_method_late_own_define_method.rb:6: Module#define_method in a method body is supported only where the load record orders it against the calls (on self in a class method of a class no subclass may run it on, with a literal block): this one would be defined from the start, not when that method runs (see docs/limitations.md)
+spinel: test/reject/define_method_late_own_define_method.rb:6: Module#define_method in a method body is supported only for a method the class does not answer yet, where the load record does not order it against the calls: it is defined from the start, not when that method runs (see docs/limitations.md)
 == test/reject/define_method_late_own_define_method.rb [promote] rc=1
-spinel: test/reject/define_method_late_own_define_method.rb:6: Module#define_method in a method body is supported only where the load record orders it against the calls (on self in a class method of a class no subclass may run it on, with a literal block): this one would be defined from the start, not when that method runs (see docs/limitations.md)
-== test/reject/define_method_late_replaces_builtin.rb [default] rc=0
-== test/reject/define_method_late_replaces_builtin.rb [promote] rc=0
+spinel: test/reject/define_method_late_own_define_method.rb:6: Module#define_method in a method body is supported only for a method the class does not answer yet, where the load record does not order it against the calls: it is defined from the start, not when that method runs (see docs/limitations.md)
+== test/reject/define_method_late_replaces_attr_subclass.rb [default] rc=1
+spinel: test/reject/define_method_late_replaces_attr_subclass.rb:8: Module#define_method in a method body that replaces an attr_* method is not supported where the class has a subclass: a call on the subclass would keep the accessor after that body runs (see docs/limitations.md)
+== test/reject/define_method_late_replaces_attr_subclass.rb [promote] rc=1
+spinel: test/reject/define_method_late_replaces_attr_subclass.rb:8: Module#define_method in a method body that replaces an attr_* method is not supported where the class has a subclass: a call on the subclass would keep the accessor after that body runs (see docs/limitations.md)
+== test/reject/define_method_late_replaces_builtin.rb [default] rc=1
+spinel: test/reject/define_method_late_replaces_builtin.rb:4: Module#define_method in a method body is not supported where every object has a method of the name (tap, then, dup and their kin): the method it defines would be found before that body runs (see docs/limitations.md)
+== test/reject/define_method_late_replaces_builtin.rb [promote] rc=1
+spinel: test/reject/define_method_late_replaces_builtin.rb:4: Module#define_method in a method body is not supported where every object has a method of the name (tap, then, dup and their kin): the method it defines would be found before that body runs (see docs/limitations.md)
 == test/reject/define_method_late_replaces_subclass.rb [default] rc=1
-spinel: test/reject/define_method_late_replaces_subclass.rb:4: Module#define_method in a method body is supported only where the load record orders it against the calls (on self in a class method of a class no subclass may run it on, with a literal block): this one would be defined from the start, not when that method runs (see docs/limitations.md)
+spinel: test/reject/define_method_late_replaces_subclass.rb:4: Module#define_method in a method body is supported only for a method the class does not answer yet, where the load record does not order it against the calls: it is defined from the start, not when that method runs (see docs/limitations.md)
 == test/reject/define_method_late_replaces_subclass.rb [promote] rc=1
-spinel: test/reject/define_method_late_replaces_subclass.rb:4: Module#define_method in a method body is supported only where the load record orders it against the calls (on self in a class method of a class no subclass may run it on, with a literal block): this one would be defined from the start, not when that method runs (see docs/limitations.md)
+spinel: test/reject/define_method_late_replaces_subclass.rb:4: Module#define_method in a method body is supported only for a method the class does not answer yet, where the load record does not order it against the calls: it is defined from the start, not when that method runs (see docs/limitations.md)
 == test/reject/define_method_name_class_method.rb [default] rc=1
 spinel: test/reject/define_method_name_class_method.rb:4: Module#define_method with a non-literal name is not supported; use a literal Symbol or String (see docs/limitations.md)
 spinel: 1 refusal, nothing written
@@ -1293,9 +1299,9 @@ spinel: 1 refusal, nothing written
 == test/reject/macro_refused_inner_write.rb [default] rc=0
 == test/reject/macro_refused_inner_write.rb [promote] rc=0
 == test/reject/macro_residual_call_keeps_macro.rb [default] rc=1
-spinel: test/reject/macro_residual_call_keeps_macro.rb:12: Module#define_method in a method body is supported only where the load record orders it against the calls (on self in a class method of a class no subclass may run it on, with a literal block): this one would be defined from the start, not when that method runs (see docs/limitations.md)
+spinel: test/reject/macro_residual_call_keeps_macro.rb:12: Module#define_method in a method body is supported only for a method the class does not answer yet, where the load record does not order it against the calls: it is defined from the start, not when that method runs (see docs/limitations.md)
 == test/reject/macro_residual_call_keeps_macro.rb [promote] rc=1
-spinel: test/reject/macro_residual_call_keeps_macro.rb:12: Module#define_method in a method body is supported only where the load record orders it against the calls (on self in a class method of a class no subclass may run it on, with a literal block): this one would be defined from the start, not when that method runs (see docs/limitations.md)
+spinel: test/reject/macro_residual_call_keeps_macro.rb:12: Module#define_method in a method body is supported only for a method the class does not answer yet, where the load record does not order it against the calls: it is defined from the start, not when that method runs (see docs/limitations.md)
 == test/reject/macro_residual_value.rb [default] rc=0
 == test/reject/macro_residual_value.rb [promote] rc=0
 == test/reject/macro_runtime_name_send.rb [default] rc=1

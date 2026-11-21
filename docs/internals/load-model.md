@@ -350,24 +350,32 @@ names, a version of each reader and writer it makes, whose method
 `register_attr_versions` makes of it (`def x = @x`): no slot of the class
 answers it from the start. A definer call bars its names (keeping the
 form it has where the record holds no body versions) where the tree does
-not spell the class self is (an instance method's self is an object), on
-a module, in a class method a call may run on a subclass
-(`lr_body_self_unsure`), for a define_method the program's own
-`define_method` may answer, and for a name not public where it runs
-(`lr_body_call_barred`). The call plan refuses a define_method it answers
-no version of where a call or a reflection reader names its method, one
-with a Proc or a Method for its body, and a block that reads or writes
-the method's locals or yields to its block (`cplan_body_definer_gap`).
-It refuses a definer call's version too where a reader of its name does
-not read it (`cplan_call_version_unread`): a method list or a reader of a
-name only the run tells (the `elab_body_reflected` exception, which keeps
-a body def's version off the late bit), a `method_missing` on the chain
-or a `respond_to_missing?` the program defines, a Method's maker of the name
-(`elab_method_captured`), a name Ruby calls by itself (`to_s`, `<=>`,
-`coerce`), keyword parameters, a read of the call's own value, a class
-method a `define_singleton_method`'s block makes, an object of the class
-with a singleton method (the synthesized class's presence arms), and a
-subclass's method that supers into it. Each answers from the method
+not spell the class self is (an instance method's self is an object, and
+so is a `define_method` block's, `LR_FS_OBJECT`; a
+`define_singleton_method` block's self is its receiver), on a module, in
+a class method a call may run on a subclass (`lr_body_self_unsure`), for
+a define_method the program's own `define_method` may answer, for a name
+not public where it runs, and on the instance side where the program
+gives an object a singleton method or module (`LrBodyNames.osg`: the
+class `register_singleton_defs` makes of it, after the record, reads the
+class's methods from the start) (`lr_body_call_barred`). The call plan
+refuses a block that reads or writes the locals of the code around it or
+yields to its block, a barred definer on self in a `define_method` block
+(`elab_body_self_object`), and a barred
+define_method in a def's body whose method the walk registers from the
+start where the class or its chain answers the name, or a Symbol or a
+String spells it (`cplan_define_method_early`), or one with a Proc or a
+Method for its body (`cplan_body_definer_gap`). It refuses a definer
+call's version too where a reader of its name does not read it
+(`cplan_call_version_unread`): a method list or a reader of a name only
+the run tells (the `elab_body_reflected` exception, which keeps a body
+def's version off the late bit, and takes in every presence reader of
+the name where a `respond_to_missing?` is defined), a `method_missing`
+on the chain, a Method's maker of the name (`elab_method_captured`), a
+name Ruby calls by itself (`to_s`, `<=>`, `coerce`), keyword parameters,
+a read of the call's own value, a class method a `define_method`'s or
+`define_singleton_method`'s block makes, and a subclass's method that
+supers into it. Each answers from the method
 tables, which hold the block's scope from the start; a body def's
 version meets the same readers and keeps master's answer there.
 The scope

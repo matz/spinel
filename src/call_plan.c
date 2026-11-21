@@ -4508,7 +4508,7 @@ int cplan_sg_accessor(Compiler *c, int id, int ci, const char *name, char *slot,
 }
 /* See call_plan.h. */
 int cplan_sg_version(Compiler *c, int id, int ci, const char *name) {
-  if (id < 0 || !elab_attr_replaced(c, ci, name)) return CP_SG_NONE;
+  if (id < 0 || !elab_attr_replaced(c, ci, 1, name)) return CP_SG_NONE;
   mtab_enter(c);
   int m = call_target(c, id, ci, name, CT_CMETHOD, NULL), r;
   MethodLookup told = { .survey = 1, .def_class = -1 };
@@ -9835,16 +9835,6 @@ static int cplan_builtin_initialize_gap(Compiler *c, int id) {
          (f == BNF_EMPTY && (nt_ref(c->nt, id, "arguments") >= 0 || nt_ref(c->nt, id, "block") >= 0 || fl.n || fl.nk));
 }
 
-/* Why the readers of name nm cannot read the version definer call id makes (host: the body whose runs make it, on
-   cls's side sg), or NULL: a reader that answers from the method tables, which hold the method from the start
-   (walk_scope registers its scope there), or one that does not read a definer call's versions yet. They are the
-   program's lists and readers of a name only the run tells (elab_body_reflected, which keeps a body def's version off
-   the late bit too), a method_missing or respond_to_missing? its entry's else arm and presence readers do not call, a
-   Method's maker of the name, the calls Ruby makes by itself (to_s, <=>, coerce), keyword parameters, which the
-   method's scope does not bind (ver_dm_keywords), the call's own value, which it does not answer
-   (cplan_definer_value_used), a class method's call from the class's other methods where a define_singleton_method's block makes it, a
-   synthesized singleton class (an object's singleton method) under cls, whose presence arms do not read the
-   version, and a super into it from a subclass's method */
 /* Is node n's value read: neither dropped where it stands (an_value_dropped) nor thrown away by the class bodies and
    the top level it is the value of (an_def_value_used, as for a def's)? */
 static int cplan_value_read(Compiler *c, const int *par, int n) {
@@ -9875,21 +9865,31 @@ static int cplan_definer_value_used(Compiler *c, int id) {
   return 0;
 }
 static int ver_dm_keywords(const NodeTable *nt, int dm);
+/* Why the readers of name nm cannot read the version definer call id makes (host: the body whose runs make it, on
+   cls's side sg), or NULL: a reader that answers from the method tables, which hold the method from the start
+   (walk_scope registers its scope there), or one that does not read a definer call's versions yet. They are the
+   program's lists and readers of a name only the run tells (elab_body_reflected, which keeps a body def's version off
+   the late bit too, and takes in every presence reader of the name where a respond_to_missing? is defined), a
+   method_missing on the chain, which the entry's else arm does not call, a Method's maker of the name, the calls
+   Ruby makes by itself (to_s, <=>, coerce), a hook of the program that would observe the definition
+   (elab_definer_hook_live), a name every object has (is_object_method_name: the version would
+   replace the builtin's only once the body runs), keyword parameters, which the method's scope does not bind
+   (ver_dm_keywords), the call's own value, which it does not answer (cplan_definer_value_used), a class method's
+   call from the class's other methods where a define_method's or a define_singleton_method's block makes it, and a
+   super into it from a subclass's method. (An object's singleton method under cls bars the call in the record,
+   lr_body_call_barred.) */
 static const char *cplan_call_version_unread(Compiler *c, int id, int host, int cls, int sg, const char *nm) {
   const NodeTable *nt = c->nt;
   if (elab_body_reflected(c, nm, sg)) return "a method list, or a reflection reader of a name only the run tells, reads it";
-  if (cplan_has_method_missing(c, id, cls, sg) || comp_name_answered_any_side(c, RESPOND_TO_MISSING_NAME))
-    return "the program defines method_missing or respond_to_missing?";
+  if (cplan_has_method_missing(c, id, cls, sg)) return "the class's chain has a method_missing";
   if (elab_method_captured(c, nm)) return "a Method or UnboundMethod of it is made";
   if (elab_definer_hook_live(c, cls, sg, nt_str(nt, id, "name"))) return "a method_added or singleton_method_added hook of the program may observe it";
   if (method_name_implicitly_invoked(nm)) return "Ruby calls it by itself (to_s, <=>, coerce and their kin)";
+  if (is_object_method_name(nm)) return "every object has a method of the name (tap, then, dup and their kin)";
   if (ver_dm_keywords(nt, id)) return "its block takes keyword parameters";
   if (cplan_definer_value_used(c, id)) return "the call's value is read";
   const char *hc = nt_kind(nt, host) == NK_BlockNode ? nt_str(nt, comp_parent_map(c)[host], "name") : NULL;
-  if (sg && (is_define_method_name(hc) || is_define_singleton_method_name(hc))) return "a define_singleton_method's block makes it";
-  for (int k = 0; !sg && k < c->nclasses; k++)
-    for (int a = c->classes[k].is_singleton_of ? c->classes[k].parent : -1; a >= 0; a = c->classes[a].parent)
-      if (a == cls) return "an object of the class has a singleton method";
+  if (sg && (is_define_method_name(hc) || is_define_singleton_method_name(hc))) return "a define_method's or a define_singleton_method's block makes it";
   for (int s = 0; s < c->nscopes; s++) {
     const Scope *m = &c->scopes[s];
     if (!m->name || m->class_id < 0 || !m->is_cmethod != !sg || !sp_streq(m->name, nm) || !scope_calls_super(c, s)) continue;
@@ -9899,18 +9899,70 @@ static const char *cplan_call_version_unread(Compiler *c, int id, int host, int 
   return NULL;
 }
 
+/* Could the program's own define_method (an_user_define_method_kinds) answer the receiverless define_method in
+   host's body? One a module, a reopened Object or a top level defines, or an alias, could reach any self. In a class
+   method self is the class object: a `def self.define_method` up its chain or a reopened Module's or Class's answers;
+   in an instance method self is an instance, answered by its chain. One defined elsewhere -- an options object's
+   accessor named define_method, where a config's method_missing names are written out -- answers neither: the call
+   reaches Module#define_method, and the method registered is the one it defines. */
+static int cplan_own_define_method_answers(Compiler *c, int host) {
+  const Scope *hs = &c->scopes[host];
+  int k = hs->class_id, kinds = an_user_define_method_kinds(c);
+  if (k < 0 || k >= c->nclasses || k == c->toplevel_class || (kinds & UDM_ANY_SELF)) return 1;
+  if (!(kinds & (hs->is_cmethod ? UDM_CLASS_SELF : UDM_INSTANCE_SELF))) return 0;
+  if (call_target(c, -1, k, "define_method", hs->is_cmethod ? CT_CMETHOD : CT_METHODS, NULL) >= 0) return 1;
+  for (int j = 0; hs->is_cmethod && j < c->nclasses; j++) {
+    const char *n = c->classes[j].name;
+    if (n && (is_module_const_name(n) || is_class_const_name(n)) && is_builtin_reopen(n) &&
+        call_target(c, -1, j, "define_method", CT_OWN, NULL) >= 0) return 1;
+  }
+  return 0;
+}
+/* Would the method scope dm that walk_scope registers from the start for a define_method in host's body (the record
+   holds the call as no version; own: its name's node) answer a call CRuby answers otherwise? The early registration
+   is right only for a method that is new: one the class does not answer before then. Anything else is: its own def
+   or one up its chain, a module's, a subclass's, an alias, attr or Struct member (a Symbol or a String besides its
+   own spells it), a method every object has, and, where the program's own define_method may answer the call
+   (cplan_own_define_method_answers), any call of the name, which would find a method CRuby never defines. 0 where
+   nothing is registered (a method nothing names, a branch that never runs). Its asks are the plan's own survey of
+   the classes, made with no site and no CT_SHARED: the call's frame is open, and none of them is the call's question. */
+static int cplan_define_method_early(Compiler *c, int host, int dm, int own) {
+  if (dm <= 0 || dm >= c->nscopes) return 0;
+  const Scope *ds = &c->scopes[dm];
+  if (!ds->name || ds->class_id < 0 || is_object_method_name(ds->name)) return 1;
+  int mi = call_target(c, -1, ds->class_id, ds->name, CT_METHODS, NULL);
+  if (mi >= 0 && mi != dm) return 1;
+  for (int t = an_scopes_named_first(c, ds->name); t >= 0; t = an_scopes_named_next(c, ds->name, t)) {
+    const Scope *ts = &c->scopes[t];
+    if (t == dm || ts->is_cmethod || ts->class_id < 0) continue;
+    for (int k = ds->class_id, h = 0; k >= 0 && k < c->nclasses && h < 64; k = c->classes[k].parent, h++) {
+      if (ts->class_id == k) return 1;
+      for (int m = 0; m < c->classes[k].nincluded_mods; m++)
+        if (c->classes[k].included_mods[m] == ts->class_id) return 1;
+    }
+    /* (a subclass's: a class method run on the subclass defines it there) */
+    for (int k = ts->class_id, h = 0; k >= 0 && k < c->nclasses && h < 64; k = c->classes[k].parent, h++)
+      if (k == ds->class_id) return 1;
+  }
+  return elab_name_spelled(c, ds->name, own) ||
+         (an_user_define_method_kinds(c) && cplan_own_define_method_answers(c, host) && an_calls_named_first(c, ds->name) >= 0);
+}
+
 /* A definer call on self in a method's body that the plan cannot answer as a version (CRF_DEFINER), its words in buf,
-   or NULL: a define_method or define_singleton_method whose block reads or writes the locals of the method it runs
-   in, or yields to that method's block (an_block_captures: the method it defines is laid out as a method of its own,
-   which has none of them); a version (elab_body_call_version) a reader of its name cannot read
-   (cplan_call_version_unread); and a define_method the record holds as no version of the method, which walk_scope
-   registers from the start, where a call, a reflection reader (elab_method_asked) or a Symbol or a String besides
-   its own (an alias, an attr, a Struct member: elab_name_spelled) names the method, for a method every object has or
-   Ruby calls by itself, or whose body is a Proc or a Method value, which no method is made of. A method nothing
-   reaches (Scope.reachable) never runs its versions, so no reader can find one early; but where walk_scope
-   registered a method of a define_method of no version (elab_def_scope_of), it answers from the start there too
-   (one a class-body macro's expansion leaves behind in its module's method, which an extend copies). A file no
-   live require reaches (prog_node_in_dropped_file) defines nothing. */
+   or NULL: a define_method or define_singleton_method in a def's body, or one that is a version
+   (elab_body_call_version: in a define_method's or define_singleton_method's block too), whose block reads or writes
+   the locals of the code it runs in, or yields to that method's block (an_block_captures: the method it defines is
+   laid out as a method of its own, which has none of them); a version a reader of its name cannot read
+   (cplan_call_version_unread); a define_method version that replaces an attr_* version (elab_attr_replaced) in a
+   class with a subclass, whose calls keep the accessor; a definer of no version in a define_method's block, whose self is an object
+   (elab_body_self_object: CRuby has no define_method or attr_* there, and define_singleton_method defines on that
+   object alone), which walk_scope registers on the class from the start; and a define_method in a def's body the
+   record holds as no version, whose body is a Proc or a Method value, which no method is made of, or where the
+   method walk_scope registers from the start (elab_def_scope_of) answers a call CRuby answers otherwise
+   (cplan_define_method_early), whether the def is reached or not (one a class-body macro's expansion leaves behind
+   in its module's method, which an extend copies, answers from the start too). A method nothing reaches
+   (Scope.reachable) never runs its versions, so no reader can find one early. A file no live require reaches
+   (prog_node_in_dropped_file) defines nothing. */
 static const char *cplan_body_definer_gap(Compiler *c, int id, char *buf, size_t cap) {
   const NodeTable *nt = c->nt;
   const char *nm = nt_str(nt, id, "name");
@@ -9923,12 +9975,12 @@ static const char *cplan_body_definer_gap(Compiler *c, int id, char *buf, size_t
       prog_node_in_dropped_file(c, id))
     return NULL;
   int lit = blk >= 0 && nt_kind(nt, blk) == NK_BlockNode, def = elab_body_def(c, id) >= 0, run = hs->reachable;
-  if (run && def && lit && (dm || dsm) && an_block_captures(nt, blk, 0)) {
+  int host = elab_body_call_version(c, id, &cls, &sg);
+  if (run && (def || host >= 0) && lit && (dm || dsm) && an_block_captures(nt, blk, 0)) {
     snprintf(buf, cap, "Module#%s in a method body with a block that reads or writes that method's locals, or yields "
              "to its block, is not supported: the method it defines does not close over them", nm);
     return buf;
   }
-  int host = elab_body_call_version(c, id, &cls, &sg);
   char b[ELAB_FORM_NAME_CAP];
   const char *vn, *why = NULL;
   for (int k = 0; run && host >= 0 && !why && (vn = elab_call_form_name(nt, id, k, b, sizeof b, NULL)); k++)
@@ -9938,15 +9990,26 @@ static const char *cplan_body_definer_gap(Compiler *c, int id, char *buf, size_t
              "found before that body runs (see docs/limitations.md)", nm, why);
     return buf;
   }
-  if (!dm || !def || host >= 0 || (!run && !elab_def_scope_of(c, id))) return NULL;
-  if (!lit)
+  int nd = 0;
+  if (run && host >= 0 && dm && !sg && elab_attr_replaced(c, cls, 0, mn) && (comp_descendants(c, cls, &nd), nd > 0)) {
+    snprintf(buf, cap, "Module#define_method in a method body that replaces an attr_* method is not supported where "
+             "the class has a subclass: a call on the subclass would keep the accessor after that body runs (see "
+             "docs/limitations.md)");
+    return buf;
+  }
+  if (run && host < 0 && elab_body_self_object(c, id) && (!dm || !an_user_define_method_reaches(c, 0))) {
+    snprintf(buf, cap, "%s on self in a define_method's block is not supported: self there is an object, and the "
+             "method would be defined on its class from the start (see docs/limitations.md)", nm);
+    return buf;
+  }
+  if (!dm || host >= 0 || hs->def_node < 0 || nt_kind(nt, hs->def_node) != NK_DefNode) return NULL;
+  if (!lit && run)
     snprintf(buf, cap, "Module#define_method in a method body with a Proc or a Method for its body is not supported (see "
              "docs/limitations.md)");
-  else if (an_calls_named_first(c, mn) >= 0 || elab_method_asked(c, mn) || elab_name_spelled(c, mn, av[0]) ||
-           builtin_object_method_known(mn) || method_name_implicitly_invoked(mn))
-    snprintf(buf, cap, "Module#define_method in a method body is supported only where the load record orders it against "
-             "the calls (on self in a class method of a class no subclass may run it on, with a literal block): this one "
-             "would be defined from the start, not when that method runs (see docs/limitations.md)");
+  else if (lit && cplan_define_method_early(c, (int)(hs - c->scopes), elab_def_scope_of(c, id), av[0]))
+    snprintf(buf, cap, "Module#define_method in a method body is supported only for a method the class does not answer "
+             "yet, where the load record does not order it against the calls: it is defined from the start, not when "
+             "that method runs (see docs/limitations.md)");
   else
     return NULL;
   return buf;

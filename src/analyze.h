@@ -483,15 +483,19 @@ int elab_self_value_at(Compiler *c, int node);
    that is not sure: a name the walk reads by itself (elab_block_when), one
    the program takes away somewhere, a statement that may run again. */
 int elab_block_never_runs(Compiler *c, int call, int cls);
-/* Has module cls's singleton class been made at p, which CRuby makes on
-   the first of its makers (is_singleton_class_maker, a def on the
-   singleton, `class << m`, an instance or class variable write), or at
-   boot for a builtin module (builtin_singleton_at_boot): ELAB_YES it is
-   or a maker surely ran before p; ELAB_NO no form of the program can make
-   it before p; ELAB_UNKNOWN otherwise, and for a p with no point.
-   A Method's NameError names the class `#<Class:M>` once it is made,
-   `Module` before. */
-int elab_singleton_made(Compiler *c, int cls, LoadPoint p);
+/* Has module cls's singleton class been made where node at runs, which
+   CRuby makes on the first of its makers (is_singleton_class_maker, a def
+   on the singleton, `class << m`, an instance or class variable write), or
+   at boot for a builtin module (builtin_singleton_at_boot): ELAB_YES it is
+   or a maker surely ran before at; ELAB_NO no form of the program can make
+   it before at; ELAB_UNKNOWN otherwise. A node in a body with no point of
+   its own is asked from the first statement the body may run on
+   (elab_call_window): a maker surely run before it makes it for every run.
+   own (or NULL): a name where none of its singleton's versions is live,
+   whose forms (a def of it, its module_function copy) have not run there
+   unless a removal follows them: they are not asked. A Method's NameError
+   names the class `#<Class:M>` once it is made, `Module` before. */
+int elab_singleton_made(Compiler *c, int cls, int at, const char *own);
 /* May module cls be on a singleton class's chain, so that a Method of
    that class side finds its instance methods: an extend of it (or of a
    module the record cannot name), a prepend to a singleton, an include
@@ -1097,8 +1101,9 @@ const ElabSurface *elab_class_surface(Compiler *c, int cls, int sg, int *n);
 /* An entry the registration applies, as the load phase ends (lr_applied):
    on class side (cls, LR_MAIN for main's; sg), of kind LrKind, by node, of
    name (an alias's original in target), with its version's scope
-   (LrDef.scope); names point into the record */
-typedef struct { int cls, sg, kind, node; const char *name, *target; int scope; } ElabEntry;
+   (LrDef.scope), and whether a method body makes it (LrDef.body); names
+   point into the record */
+typedef struct { int cls, sg, kind, node; const char *name, *target; int scope, body; } ElabEntry;
 /* every class side's entries of the kinds in mask (1 << LrKind), in the
    order the load phase makes them: by class and side, then statement, then
    the argument that names them (a reader before its writer); *n of them,

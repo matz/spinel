@@ -7647,7 +7647,8 @@ static int cm_capture_class(Compiler *c, int id, const char **name) {
    (entry) instance side a class nothing inherits from. Not main's, nor a
    module's instance side, which is an includer's. A module's class side
    is named 'Module' until CRuby makes its singleton class, `#<Class:M>`
-   from then on (elab_singleton_made): CP_ABSENT_UNTOLD where the record
+   from then on (elab_singleton_made, asked where the NameError is raised,
+   where no version of the name is live): CP_ABSENT_UNTOLD where the record
    cannot tell which (cplan_refuse_resolve refuses it). method() also
    finds private methods, which the call does not reach: not for a name a
    top-level function has (Object's), nor for the class side one a builtin
@@ -7674,7 +7675,7 @@ static int cplan_capture_names(Compiler *c, int id, int cls, int sg, const char 
       return 0;
   }
   if (!mod) return sg ? CP_ABSENT_SG : CP_ABSENT_INST;
-  int made = elab_singleton_made(c, cls, elab_point_of(c, id));
+  int made = elab_singleton_made(c, cls, id, name);
   return made == ELAB_YES ? CP_ABSENT_SG : made == ELAB_NO ? CP_ABSENT_MODULE : CP_ABSENT_UNTOLD;
 }
 /* Is a class method `name` of cls one that no def, alias or define_method

@@ -2031,7 +2031,9 @@ static void lr_method(ElabRec *x, int cls, int sg, const char *name, int node, L
                                                        .arm1 = kind == LR_DEF ? nt_int(x->c->nt, node, "cond_first_arm", 0) : 0 });
   lr_event(x, cls, sg, name, kind, node, vis);
   if (!sg && bvis == BVIS_MODULE_FUNCTION && lr_mf_copies(kind, target)) {
-    lr_version(x->r, cls, 1, name, (LrDef){ node, LR_COPY, SP_VIS_PUBLIC, (unsigned char)may, 0, name, .unplaced = x->unplaced, .scope = sc });
+    /* (a body's copy is a version of the singleton's as the word's is of the instance side's: its scope the def
+       live at the word, lr_body_copy_scope) */
+    lr_version(x->r, cls, 1, name, (LrDef){ node, LR_COPY, SP_VIS_PUBLIC, (unsigned char)may, 0, name, .unplaced = body ? 0 : x->unplaced, .scope = sc, .body = body });
     lr_event(x, cls, 1, name, LR_COPY, node, SP_VIS_PUBLIC);
   }
 }
@@ -2568,7 +2570,9 @@ static int lr_body_self(Compiler *c, const int *par, int n, int node, int e) {
    argument, each a literal name or a def (with no receiver
    for an instance word, on self for a class-method word), or one array of
    names. Its visibility (BVIS_*), else 0; a bare word there changes
-   nothing, and module_function's copies are left out. */
+   nothing. module_function's names are no Array (CRuby raises TypeError
+   for one): it makes the method private and copies it to the module's
+   singleton (lr_method, lr_body_copy_scope). */
 static int lr_body_word(const NodeTable *nt, int node) {
   int skip = 0;
   const char *wn = vis_word_call(nt, node, &skip);
@@ -2576,7 +2580,7 @@ static int lr_body_word(const NodeTable *nt, int node) {
   int rv = bvis ? nt_ref(nt, node, "receiver") : -1, an = bvis ? nt_ref(nt, node, "arguments") : -1, ac = 0;
   const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
   if (av) av += skip, ac -= skip;
-  if (ac <= 0 || bvis == BVIS_MODULE_FUNCTION || (rv >= 0 && nt_kind(nt, rv) != NK_SelfNode)) return 0;
+  if (ac <= 0 || (rv >= 0 && nt_kind(nt, rv) != NK_SelfNode)) return 0;
   for (int i = 0; i < ac; i++) {
     int en = 1;
     const int *ev = nt_kind(nt, av[i]) == NK_ArrayNode ? nt_arr(nt, av[i], "elements", &en) : &av[i];
@@ -2588,7 +2592,7 @@ static int lr_body_word(const NodeTable *nt, int node) {
     }
     /* (an Array only as the one argument: CRuby raises TypeError at a mixed word, `private :m, [:n]`, past the
        names ahead of the Array) */
-    if (nt_kind(nt, av[i]) == NK_ArrayNode && ac > 1) return 0;
+    if (nt_kind(nt, av[i]) == NK_ArrayNode && (ac > 1 || bvis == BVIS_MODULE_FUNCTION)) return 0;
     for (int k = 0; k < en; k++)
       if (!vis_arg_name(nt, ev[k]) && (ev != &av[i] || nt_kind(nt, av[i]) != NK_DefNode)) return 0;
   }
@@ -3213,7 +3217,10 @@ static int lr_body_self_unsure(Compiler *c, LrBodyNames *x, int d, int cls) {
    class-side version names (lr_cside_unfollowed); and for a method body's
    protected word, a name a call in a block whose self nothing tells calls
    (untold): the call plan takes the scope's self there, which a protected
-   version would close where the block runs with an instance of the class */
+   version would close where the block runs with an instance of the class;
+   and for module_function, a name the module object has a builtin method of
+   (Kernel's private puts): its copy's version would stand over a builtin's,
+   as a class-method word's on one would */
 static int lr_body_word_barred(Compiler *c, const int *par, int n, int node, LrBodyNames *x) {
   const NodeTable *nt = c->nt;
   int cls, sg;
@@ -3222,10 +3229,12 @@ static int lr_body_word_barred(Compiler *c, const int *par, int n, int node, LrB
       lr_body_self_unsure(c, x, lr_body_cmethod(nt, par, n, node), cls))
     return 1;
   int untold = lr_body_word(nt, node) == BVIS_PROTECTED && lr_body_def(nt, par, n, node) >= 0;
+  int mf = lr_body_word(nt, node) == BVIS_MODULE_FUNCTION && cls >= 0 && cls < c->nclasses;
   for (int k = 0; lr_word_name(nt, node, k, 1); k++) {
     const char *nm = lr_word_name(nt, node, k, 1);
     if (!lr_body_names_owns(x, cls, sg, nm) || (sg && lr_cside_unfollowed(x, nm)) ||
-        (untold && anh_has(&x->untold, nm)))
+        (untold && anh_has(&x->untold, nm)) ||
+        (mf && cplan_class_builtin_has(c, cls, nm)))
       return 1;
   }
   return 0;
@@ -4645,6 +4654,10 @@ static void lr_record_again(ElabRec *x) {
    it; a copy of a method with no scope (an attribute, a method a mixin
    brought) keeps none. */
 static const LrDef *lr_alias_origin(Compiler *c, int cls, const LrDef *v);
+static int lr_body_copy_scope(Compiler *c, int cls, const LrDef *v);
+static int lr_ext_around(const LoadRecord *r, const NodeTable *nt, const int *par, int n, int node);
+static void lr_run_points(Compiler *c);
+static int lr_span(Compiler *c, int cls, const char *name, int sg, const ElabWindow *w, const LrDef **out, int cap, int *idle, int every);
 static void lr_copy_scopes(Compiler *c) {
   LoadRecord *r = c->lrec;
   for (int i = 0; i < r->nhist; i++) {
@@ -4653,10 +4666,38 @@ static void lr_copy_scopes(Compiler *c) {
     for (int j = 0; j < h->n; j++) {
       LrDef *v = &h->v[j];
       if (v->kind != LR_COPY || v->scope > 0 || !v->target) continue;
+      if (v->body) { v->scope = lr_body_copy_scope(c, h->a, v); continue; }
       const LrDef *d = lr_alias_origin(c, h->a, v);
       if (d) v->scope = d->scope;
     }
   }
+}
+/* ...a body's copy's (LrDef.body): the def CRuby's module_function finds where the word runs, the last def of the
+   name ahead of the word in the statement list that holds it, else the one def of cls's instance history live at
+   the word's run points: at the one statement a body that runs once runs on (LrExt.from), else over each stretch of
+   the body's window (elab_call_window, lr_span's every); none where they may meet two or more, or no def: the copy
+   then has no one body, which mf_copy_entries refuses */
+static int lr_body_copy_scope(Compiler *c, int cls, const LrDef *v) {
+  const NodeTable *nt = c->nt;
+  LoadRecord *r = c->lrec;
+  const int *par = lr_par(c, 0);
+  int st = v->node, bn = 0, sc = 0, nd = 0;
+  while (st >= 0 && st < c->lrec->n && par[st] >= 0 && nt_kind(nt, par[st]) != NK_StatementsNode) st = par[st];
+  const int *bb = st >= 0 && par[st] >= 0 ? nt_arr(nt, par[st], "body", &bn) : NULL;
+  for (int j = 0; j < bn && bb[j] != st; j++)
+    if (nt_kind(nt, bb[j]) == NK_DefNode && nt_ref(nt, bb[j], "receiver") < 0 && sp_streq(nt_str(nt, bb[j], "name"), v->target))
+      sc = lr_def_scope(c->lrec, bb[j]);
+  if (sc) return sc;
+  ElabWindow w;
+  const LrDef *d[2] = { NULL, NULL };
+  lr_run_points(c);
+  int o = lr_ext_around(r, nt, par, r->n, v->node);
+  const LrExt *e = o >= 0 ? &r->ext[o] : NULL;
+  if (e && e->count == LR_CNT_ONCE && e->from >= 0 && e->from < LR_POST && e->from < r->nst)
+    nd = elab_method_at(c, cls, v->target, 0, (LoadPoint){ r->st[e->from].region, e->from, -1 }, &d[0]) == ELAB_YES;
+  else if (elab_call_window(c, v->node, &w) == ELAB_YES && !w.never)
+    nd = lr_span(c, cls, v->target, 0, &w, d, 2, NULL, 1);
+  return nd == 1 && d[0] && d[0]->kind == LR_DEF ? d[0]->scope : 0;
 }
 /* The def or define_method the original name of copy or alias v of class cls's (its instance side) names where v
    runs, followed through the aliases it reaches, each asked at its own point; NULL for none (an attribute, a method a
@@ -9379,8 +9420,10 @@ int elab_class_live_at(Compiler *c, int cls, int sg, LoadPoint p) {
   return !r->recorded || p.region < 0 || p.seq >= lr_live_from(c, cls, sg, p.region);
 }
 /* elab_method_span; *idle when no statement of w that may run code of the
-   program's sees a version (the one version counts all the same) */
-static int lr_span(Compiler *c, int cls, const char *name, int sg, const ElabWindow *w, const LrDef **out, int cap, int *idle) {
+   program's sees a version (the one version counts all the same); every:
+   the version over each stretch of w, whatever runs there (a body's own
+   statement, which runs wherever the body is called: lr_body_copy_scope) */
+static int lr_span(Compiler *c, int cls, const char *name, int sg, const ElabWindow *w, const LrDef **out, int cap, int *idle, int every) {
   LoadRecord *r = c->lrec;
   LoadPoint p0 = w->from, p1 = w->to;
   if (!r || !r->recorded || !name || cls < LR_MAIN || p0.region < 0 || elab_cmp(p0, p1) != PROG_BEFORE) return -1;
@@ -9390,7 +9433,7 @@ static int lr_span(Compiler *c, int cls, const char *name, int sg, const ElabWin
      region other than 0, from w's start: more versions, never fewer */
   int bl = lr_live_from(c, cls, sg, p0.region);
   if (bl >= p1.seq) bl = p1.seq - 1;
-  if (p0.seq < bl && bl < p1.seq) p0.seq = bl;
+  if (!every && p0.seq < bl && bl < p1.seq) p0.seq = bl;
   int n = 0, obs0 = 0, owners[64], no = lr_ancestry_owners(c, cls, owners, 64, 0);
   LrSpanAcc acc = { 0, 0, 0, NULL };
   const LrVers *x = lr_vers(r, name);
@@ -9421,7 +9464,7 @@ static int lr_span(Compiler *c, int cls, const char *name, int sg, const ElabWin
     int obs = lr_runs_in(r, lo, i < m ? hi + 1 : hi) > 0;
     if (idle && obs) *idle = 0;
     if (!i) obs0 = obs;
-    if (!(obs || !m || (i == m && (!w->closed || (w->wraps && obs0))))) continue;
+    if (!every && !(obs || !m || (i == m && (!w->closed || (w->wraps && obs0))))) continue;
     const LrDef *d = NULL;
     int o = lr_search(c, cls, sg, name, -1, (LoadPoint){ p0.region, hi }, w->wraps ? LR_ONCE : 0, 0, &d, 0);
     if (o == ELAB_UNKNOWN) { free(cp); free(got); return ELAB_SPAN_ANY; }
@@ -9436,14 +9479,14 @@ static int lr_span(Compiler *c, int cls, const char *name, int sg, const ElabWin
 }
 
 int elab_method_span(Compiler *c, int cls, const char *name, int sg, const ElabWindow *w, const LrDef **out, int cap) {
-  return lr_span(c, cls, name, sg, w, out, cap, NULL);
+  return lr_span(c, cls, name, sg, w, out, cap, NULL, 0);
 }
 int elab_instance_span(Compiler *c, int cls, const char *name, const LrDef **out, int cap) {
   LoadRecord *r = elab_fresh(c);
   if (!r->recorded || r->nregion > 1) return -1;
   lr_run_points(c);
   ElabWindow w = { { 0, 0, -1 }, { 0, r->rend[0], -1 }, 0, 0, 0 };
-  return lr_span(c, cls, name, 0, &w, out, cap, NULL);
+  return lr_span(c, cls, name, 0, &w, out, cap, NULL, 0);
 }
 void elab_call_meet(Compiler *c, int id, int cls, const char *name, int sg, int how, ElabMeet *m, const LrDef **out, int cap) {
   LoadPoint p = elab_point_of(c, id);
@@ -9478,7 +9521,7 @@ int elab_call_span(Compiler *c, int id, int cls, const char *name, int sg, int o
   if (!w) w = &own;
   if (elab_call_window(c, id, w) != ELAB_YES) return ELAB_SPAN_NO_WINDOW;
   if (open) elab_window_open(c, w);
-  return lr_span(c, cls, name, sg, w, out, cap, NULL);
+  return lr_span(c, cls, name, sg, w, out, cap, NULL, 0);
 }
 
 /* ---- the readers of a version (elab_version_met) ----
@@ -10435,34 +10478,51 @@ int elab_module_on_singleton_chain(Compiler *c, int cls) {
   lr_sg_makers(c);
   return r->sgchain_any || r->sgchain[cls];
 }
-int elab_singleton_made(Compiler *c, int cls, LoadPoint p) {
+/* (does history h hold a version made at node, or one that removes the method: an undef, a remove_method?) */
+static int lr_hist_holds(const LrHist *h, int node) {
+  for (int j = 0; j < h->n; j++)
+    if (h->v[j].node == node || (node < 0 && (h->v[j].kind == LR_UNDEF || h->v[j].kind == LR_REMOVE))) return 1;
+  return 0;
+}
+int elab_singleton_made(Compiler *c, int cls, int at, const char *own) {
   LoadRecord *r = elab_fresh(c);
   if (cls < 0 || cls >= c->nclasses) return ELAB_UNKNOWN;
   /* a builtin module CRuby boots with its singleton class made (Math's,
      Process's: their module functions) */
   int slot = builtin_core_class_slot(c->classes[cls].name);
   if (slot >= 0 && comp_core_class(c, slot) == cls && builtin_singleton_at_boot(slot)) return ELAB_YES;
+  /* (a node with no point of its own, in a body: from the first statement it may run on, where a form surely run
+     before makes it for every run, and a later one may run before a later run) */
+  LoadPoint p = elab_point_of(c, at);
+  ElabWindow win;
+  int late = r->recorded && p.region < 0 && elab_call_window(c, at, &win) == ELAB_YES && !win.never;
+  if (late) p = win.from;
   if (!r->recorded || p.region < 0 || elab_runs_unseen(c)) return ELAB_UNKNOWN;
   int o = ELAB_NO;
+  /* (own's history, where none of its versions removes the method: its forms, and another name's made at one of
+     them, `module_function :m, :n`, have not run where none of own's versions is live) */
+  const LrHist *oh = NULL;
+  for (int i = 0; own && !oh && i < r->nhist; i++)
+    if (r->hist[i].a == cls && r->hist[i].b && sp_streq(r->hist[i].name, own) && !lr_hist_holds(&r->hist[i], -1)) oh = &r->hist[i];
   /* the singleton's own entries: its defs and accessors, a
      module_function's copies, define_singleton_method's */
   for (int i = 0; i < r->nhist && o != ELAB_YES; i++) {
     const LrHist *h = &r->hist[i];
-    if (h->a != cls || !h->b) continue;
+    if (h->a != cls || !h->b || h == oh) continue;
     for (int j = 0; j < h->n && o != ELAB_YES; j++) {
       const LrDef *v = &h->v[j];
-      if (v->node >= 0 && nt_int(c->nt, v->node, "civ_accessor", 0)) continue;   /* a class-level ivar's accessor: its calls are the forms */
+      if ((v->node >= 0 && nt_int(c->nt, v->node, "civ_accessor", 0)) || (oh && lr_hist_holds(oh, v->node))) continue;   /* a class-level ivar's accessor: its calls are the forms; a form of own's */
       int w = v->unplaced || v->body ? ELAB_UNKNOWN : lr_sg_when(c, v->node, v->may, 1, p);
-      if (w != ELAB_NO) o = w;
+      if (w != ELAB_NO || late) o = w == ELAB_NO ? ELAB_UNKNOWN : w;
     }
   }
   lr_sg_makers(c);
   for (int i = 0; i < r->nsgm && o != ELAB_YES; i++) {
     const struct LrSgMaker *m = &r->sgm[i];
-    if (m->cls != cls && m->cls != LR_SG_ANY) continue;
+    if ((m->cls != cls && m->cls != LR_SG_ANY) || (oh && lr_hist_holds(oh, m->node))) continue;
     int w = lr_sg_when(c, m->node, 0, m->sure, p);
     if (w == ELAB_YES && m->cls == LR_SG_ANY) w = ELAB_UNKNOWN;
-    if (w != ELAB_NO) o = w;
+    if (w != ELAB_NO || late) o = w == ELAB_NO ? ELAB_UNKNOWN : w;
   }
   return o;
 }
@@ -12705,10 +12765,12 @@ ElabEntry *elab_entries(Compiler *c, unsigned mask, int *n) {
     for (int j = 0; j < h->n; j++) {
       const LrDef *d = &h->v[j];
       if (!(mask >> d->kind & 1)) continue;
-      int ap = lr_applied(c, d);
+      /* (a body's module_function copy: the method it makes, whose version cell tells whether it is there yet; none
+         where the body never runs) */
+      int ap = d->body && d->kind == LR_COPY ? (lr_run_points(c), lr_def_from(c->lrec, d->body) != LR_NEVER) : lr_applied(c, d);
       if (ap != 1 && !(ap == 2 && (mask & ELAB_ENTRY_MAY))) continue;
       v = lr_grow(v, &cap, k, sizeof *v);
-      v[k++] = (LrEntryKey){ { h->a, h->b, d->kind, d->node, h->name, d->target, d->scope }, elab_sort_key(c, d->node),
+      v[k++] = (LrEntryKey){ { h->a, h->b, d->kind, d->node, h->name, d->target, d->scope, d->body != 0 }, elab_sort_key(c, d->node),
                              lr_entry_arg(c->nt, d->node, h->name, d->kind == LR_WRITER) };
     }
   }
@@ -13249,7 +13311,7 @@ void elab_dump(Compiler *c, FILE *out) {
       if (e == ELAB_YES) fprintf(out, "..#%d", end.seq);
       else fputs("..end", out);
       const LrDef *d[4];
-      int idle = 0, nd = lr_span(c, h->a, h->name, h->b, &w, d, 4, &idle);
+      int idle = 0, nd = lr_span(c, h->a, h->name, h->b, &w, d, 4, &idle, 0);
       fputs(" seen=", out);
       for (int q = 0; q < nd && q < 4; q++)
         if (d[q]) fprintf(out, "%s%s#%d", q ? "|" : "", kinds[d[q]->kind], elab_point_of(c, d[q]->node).seq);

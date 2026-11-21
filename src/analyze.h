@@ -174,6 +174,7 @@ int prog_load_open(const NodeTable *nt, int load);
 int prog_rescue_runs(const NodeTable *nt, int rescue);
 enum { PROG_RS_MAY, PROG_RS_STARTS, PROG_RS_SURE };
 int prog_rescue_sure(const NodeTable *nt, int st);
+int prog_stmt_quiet(const NodeTable *nt, int st);
 int prog_load_path_seeded(const NodeTable *nt);
 void prog_top_stmts(const Compiler *c, void (*fn)(void *ud, int stmt), void *ud);
 int *prog_top_seq(const Compiler *c, int *n, int **file);
@@ -563,6 +564,16 @@ int elab_method_body_word(Compiler *c, const char *name, int sg);
    method body or a block that is no version of it), whose change no query
    at a point sees? */
 int elab_method_vis_unplaced(Compiler *c, const char *name);
+/* Does module mod have instance method nm where its module_function looks the name up, as rb_mod_modfunc does: an
+   entry the record holds of the name (a def, an alias, an attribute, a define_method) on the module or a module it
+   includes, or on Object, Kernel or a module Object includes, where CRuby's lookup falls back to; or a builtin
+   instance method of a builtin module among those, or of Object's (Kernel's) table? Not a def only another class
+   has, nor the module object's own methods (`name`, `instance_methods`), which the word does not find */
+int elab_module_has_method(Compiler *c, int mod, const char *nm);
+/* The class whose singleton class a visibility word at id acts on (a `class << self` body's, in a class or a
+   module, as lr_word_side reads its self), and in *levels how many singleton classes deep (2 in a `class << self`
+   body inside another); -1 where its self is no singleton class or the record cannot tell */
+int elab_word_singleton(Compiler *c, int id, int *levels);
 /* may a method `name` the program gives be protected at some point of the
    load: does one of its histories hold a protected def, alias or visibility
    word of it? 1 where the load is not recorded. */

@@ -321,8 +321,56 @@ on self (`send(:private, :m)`, `vis_word_call`); a class-method word's
 its argument has. A class-method word whose first name no method of the
 program's has, on either side, and no builtin class method answers
 (Object's, Kernel's, Module's, Class's: `cplan_class_builtin_has`) raises
-NameError where it runs and changes nothing (`lr_cside_word_absent`). Not
-`module_function`, which copies, nor a
+NameError where it runs and changes nothing (`lr_cside_word_absent`). A body's `module_function :m`
+is two versions: the instance side's private one, as `private :m`'s, and a
+copy on the module's singleton (LR_COPY, `LrDef.body`) whose scope is the
+def live where the word runs, the last def of the name ahead of it in the
+same statements, else the one version the body's window meets
+(`lr_body_copy_scope`); where the window meets two or more the copy has no
+one body and `mf_copy_entries` refuses it, and where the program defines
+no method of the name it makes none. A name the module object has a
+builtin method of (Kernel's private `puts`) bars the word, as a class-method
+word's on one does. CRuby's word makes each name private in turn and
+then copies them: a name no method has raises NameError there, with the
+names ahead of it private and no copy made, and `module_function [:a]`
+makes the Array's names private, as `private [:a]` does, then raises
+TypeError (`[:a] is not a symbol nor a string`) and makes no copy; an
+element that is no name raises TypeError for itself where private's
+would. A method the module has is one CRuby's lookup finds from the
+module's origin, past its own prepends, and then from Object: an entry
+the record holds of the name on the module, a module it includes
+(through another's include, or that one's prepend, too), Object, Kernel
+or main, or a builtin method of a builtin module among those (an
+included Comparable or Enumerable, by its builtin id) or of Object's
+table (`elab_module_has_method`, which the record's reach and the
+emitter both ask), not a def only another class has, nor the module
+object's own methods (`name`). So a word is a private version of the
+names ahead of the first one no method has, with a copy only where it
+reaches the end of names that are no Array (`lr_word_reach`); the word
+writes their visibility cells before it raises (`emit_vis_word_absent`),
+in a module body too. In an iterator's block or a begin body with rescue
+clauses, where no statement ahead of the word in its frame may raise and
+skip it and no condition holds it, the record, with no run-time cell for
+the word's visibility, takes the word either to have run or not
+(`lr_word_runs`). The position walker marks each statement in iterators'
+blocks (`ElabPos` and `LrStmt` `skip`, `unsure`): skipped where a block
+around it surely runs no time by the run count the record's iterator
+rows give (`[].each` on a literal, `0.times`) or a statement ahead of it
+in a block surely leaves it (a `break`, `next`, `return` or `raise`,
+`lr_stmt_leaves`); unsure where a block around it is not known to run at
+least once (`n.times`, `loop`, `each_slice`, a `&.` call) or a statement
+ahead of it in a block may raise or leave it. A word in a block that
+surely runs (`[1].each`, `tap`, `2.times`) has run, and those names are
+its applied versions though the statement is partial; a skipped one has
+not, as any partial statement's; an unsure one keeps every name's
+versions and copies (`lr_word_reach`), with its statement as any partial
+statement. In
+a class, or in a `class << self` body, a module's too, whose self is a
+singleton class (`elab_word_singleton`, which gives the depth of a
+`class << self` body inside another, one `#<Class:` each in the
+message), which has no `module_function`, the word raises NoMethodError,
+a bare one NameError as any vcall that finds no method does
+(`emit_missing_raise`), and changes nothing. Not a
 `def self.m` argument, which names a class method the word looks up
 among the instance methods: that word raises NameError where it runs, as
 any word naming a method the class has none of does, in a statement or
@@ -354,7 +402,7 @@ one whose frame the tree does not spell), an entry a literal send makes
 would hide the method CRuby has; a send of a visibility word is none);
 in a body, also every other
 entry it makes (an alias, an undef, an accessor, a `define_method`, a
-`define_singleton_method`, a `module_function` copy); at the top level, an
+`define_singleton_method`); at the top level, an
 alias of a name barred so. Six more bars keep a body's word, or its
 non-public def, in the form it has where the record holds no body
 versions, until the readers it needs read the version cells; each says

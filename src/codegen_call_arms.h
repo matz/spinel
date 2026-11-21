@@ -191,11 +191,13 @@ void emit_presence_object(Compiler *c, const CplanPresList *l, int recv, Buf *b)
    `_sp_cls.cls_id == <class> ? (void)(gv_<cell> = 1) : (void)0`), written to
    b. 0, writing nothing, for a call that writes none. */
 int emit_vis_cell_write(Compiler *c, int id, Buf *b);
-/* The NameError visibility word `id` (private, protected, public) raises
-   where it runs, written to b as `sp_raise_cls(...)`: for the first name it
-   takes that the class self is has no instance method of there (a Symbol's,
-   a String's, a `def self.m`'s: the word looks the class method's name up
-   among the instance methods). 0, writing nothing, where each is found. */
+/* The error visibility word `id` (private, protected, public,
+   module_function) raises where it runs, written to b as
+   `sp_raise_cls(...)`: a NameError for the first name it takes that the
+   class self is has no instance method of there (a Symbol's, a String's, a
+   `def self.m`'s: the word looks the class method's name up among the
+   instance methods), a TypeError for module_function given an Array, whose
+   names it does not read. 0, writing nothing, where each is found. */
 int emit_vis_word_absent(Compiler *c, int id, Buf *b);
 int respond_to_user_defined(Compiler *c, int id, int recv);
 extern const char *const respond_universal[];

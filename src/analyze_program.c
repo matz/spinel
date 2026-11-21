@@ -969,7 +969,7 @@ static int prog_may_give_hook(const Compiler *c) {
    x.foo` with x an Integer) raises a TypeError, which is not told apart.
    A write of a global CRuby checks or refuses (is_checked_gvar_name) may
    raise, so it is not quiet. */
-static int prog_stmt_quiet(const NodeTable *nt, int st) {
+int prog_stmt_quiet(const NodeTable *nt, int st) {
   switch (nt_kind(nt, st)) {
     case NK_DefNode: case NK_IntegerNode: case NK_FloatNode: case NK_StringNode: case NK_SymbolNode:
     case NK_NilNode: case NK_TrueNode: case NK_FalseNode: case NK_SelfNode: return 1;

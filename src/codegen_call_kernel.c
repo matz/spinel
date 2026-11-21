@@ -250,6 +250,7 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
     }
     if (vk == VIS_DECL_NIL) buf_puts(b, "0");
     else if (vk == VIS_DECL_SELF) buf_printf(b, "((sp_Class){%d})", vis_decl_class(c, id));
+    else if (vk == VIS_DECL_STR) emit_expr(c, argv[0], b);
     else if (vk == VIS_DECL_SYM) {
       const char *vn = nt_kind(nt, argv[0]) == NK_DefNode ? nt_str(nt, argv[0], "name")
                                                           : nt_str(nt, argv[0], "value");
@@ -263,7 +264,13 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
       for (int i = 0; i < en; i++) {
         const char *vn = nt_kind(nt, ev[i]) == NK_DefNode ? nt_str(nt, ev[i], "name")
                                                           : nt_str(nt, ev[i], "value");
-        buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_sym((sp_sym)%d));", ta, comp_sym_intern(c, vn ? vn : ""));
+        if (nt_kind(nt, ev[i]) == NK_StringNode) {
+          buf_printf(b, " sp_PolyArray_push(_t%d, ", ta);
+          emit_boxed(c, ev[i], b);
+          buf_puts(b, ");");
+        }
+        else
+          buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_sym((sp_sym)%d));", ta, comp_sym_intern(c, vn ? vn : ""));
       }
       buf_printf(b, " _t%d; })", ta);
     }

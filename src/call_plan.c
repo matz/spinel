@@ -12291,6 +12291,15 @@ static int ver_always_shadowed(Compiler *c, const ElabVersion *vs, int nv, int i
   }
   return 0;
 }
+/* ...or a module's version that into holds no copy of because no call on
+   into's chain meets it (the include copies a module's method behind the
+   class's own def only where a call or a super reaches it there,
+   mixin_reached_behind_own: elab_version_met is the record's answer)? */
+static int ver_copy_unmet(Compiler *c, const ElabVersion *v, int into, int sg, const char *name) {
+  int sc = v->v->scope, mod = sc > 0 && sc < c->nscopes ? c->scopes[sc].class_id : -1;
+  return into >= 0 && mod >= 0 && mod != into && comp_class_is_module(c, &c->classes[mod]) &&
+         !elab_version_met(c, into, sg, name, v->v->node);
+}
 static int ver_entry_make(Compiler *c, const struct VerNamedAsks *q, int rcls, int into, int sg, const char *name, int mi, int ar, int mm,
                           int face, int *absent, int *finds, int *anyform) {
   ElabVersion vs[VER_MAX_ARMS];
@@ -12320,9 +12329,10 @@ static int ver_entry_make(Compiler *c, const struct VerNamedAsks *q, int rcls, i
        further along, made after a def of a nearer one that always runs and
        that nothing removes, which answers ahead of it from then on. A
        top-level def is such a version of every class's singleton chain,
-       which ends in Object's methods.) */
+       which ends in Object's methods. So is a module's version the class's
+       own def stands in front of where nothing reaches it behind that def.) */
     if (s < 0 || c->scopes[s].is_transplanted_source || (!c->scopes[s].replaced && scope_is_shadowed(c, s))) {
-      if (ver_always_shadowed(c, vs, nv, i)) continue;
+      if (ver_always_shadowed(c, vs, nv, i) || (s < 0 && ver_copy_unmet(c, &vs[i], into, sg, name))) continue;
       return -1;
     }
     vs[nd] = vs[i];   /* (the defs, for the else arm's facts) */

@@ -176,7 +176,7 @@ def hidden?(name) = name.start_with?("__") || name.include?("#") || name.include
 # The record's events: [path, line, kind, owner, name, seq, may]; or nil,
 # what spinel said, and whether that is a refusal of the graph model
 def spinel_events(spinel, prog, inline)
-  mode = inline ? [] : ["--load-model=graph"]
+  mode = [inline ? "--load-model=inline" : "--load-model=graph"]
   ok, rec = run(spinel, *mode, "--dump-load-record", prog)
   unless ok
     refusal = rec.lines.map(&:strip).find { |l| l.match?(/:\d+: --load-model=graph\b/) }

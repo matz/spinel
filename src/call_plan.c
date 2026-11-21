@@ -2541,8 +2541,29 @@ static int guard_visibility(Compiler *c, int scope) {
   if (owner >= 0) return comp_method_vis(&c->classes[owner], comp_scope_user_name(s));
   return s->class_id >= 0 ? comp_method_vis(&c->classes[s->class_id], s->name) : SP_VIS_PUBLIC;
 }
+/* ...and that of a module's version a guarded copy runs (guard_body): -1 where only the run tells it (elab_version_vis:
+   a word in a body), the cell of the version's history in *cell, whose visibility cell the word writes; else the
+   table's (guard_visibility) */
+static int guard_version_vis(Compiler *c, int scope, int *cell) {
+  const Scope *s = guard_body(c, scope);
+  ElabVersion vs[VER_MAX_ARMS];
+  int nv = s->origin_module_ci > 0 && s->def_node >= 0
+         ? elab_history_versions(c, s->origin_module_ci - 1, s->is_extend_copy ? 0 : s->is_cmethod, comp_scope_user_name(s), vs, VER_MAX_ARMS) : 0;
+  for (int i = 0; i < nv; i++)
+    if (vs[i].v->kind == LR_DEF && vs[i].v->node == s->def_node) {
+      if (elab_version_vis(c, &vs[i]) >= 0) break;
+      *cell = vs[i].cell;
+      return -1;
+    }
+  return guard_visibility(c, scope);
+}
 static int guard_is_conditional(Compiler *c, const int *to, int n) {
   for (int k = 0; k < n; k++) if (c->scopes[to[k]].mixin_conditional) return 1;
+  return 0;
+}
+/* ...whether an arm of to[] takes a visibility only the run tells (guard_version_vis) */
+static int guard_vis_runs(Compiler *c, const int *to, int n) {
+  for (int k = 0, cell; k < n - 1; k++) if (guard_version_vis(c, to[k], &cell) < 0) return 1;
   return 0;
 }
 static int guard_arity(Compiler *c, int id, const int *to, int n) {
@@ -2579,6 +2600,7 @@ static int guard_history_arms(Compiler *c, const struct VerEntry *e, ElabVersion
   return n;
 }
 static int guard_needs_face(Compiler *c, const int *to, int n) {
+  if (guard_vis_runs(c, to, n)) return 1;
   if (!guard_is_conditional(c, to, n)) return 0;
   const struct VerEntry *history = guard_history_of(c, to[n - 1]);
   for (int k = 0; k < n - (history != NULL); k++) if (guard_visibility(c, to[k]) != SP_VIS_PUBLIC) return 1;
@@ -2599,8 +2621,8 @@ static int guard_call_face(Compiler *c, int id, const int *to, int n) {
   if (id < 0 || nt_str(c->nt, id, "vis_enforce") || (name && is_public_send(name))) return VF_PUBLIC;
   const Scope *caller = comp_scope_of(c, id);
   if (caller && caller->class_id >= 0) {
-    for (int k = 0; k < n; k++)
-      if (guard_visibility(c, to[k]) == SP_VIS_PROTECTED || guard_history_of(c, to[k]))
+    for (int k = 0, cell, v; k < n; k++)
+      if ((v = guard_version_vis(c, to[k], &cell)) == SP_VIS_PROTECTED || (v < 0 && elab_method_may_be_protected(c, name)) || guard_history_of(c, to[k]))
         return VF_GUARD_CALLER + 2 * caller->class_id + (caller->is_cmethod != 0);
   }
   return VF_PUBLIC;
@@ -4749,8 +4771,18 @@ static int presence_cells_of(Compiler *c, int cls, int sg, const char *name, int
 /* ...those of entry e: with none live, what the call runs is the entry's
    else arm, the visibility of the method it finds; a visibility only the
    run knows is read from its cell, which the entry writes for a reader
-   (ver_presence_mark) */
+   (ver_presence_mark); a guard entry's (ct_guard), the prepends' cells its arms test, as cplan_guarded_presence
+   gives them, each answer counted against mask */
 static int presence_cells(Compiler *c, int e, int cls, int sg, const char *name, int mask, int own, CplanCells *out) {
+  for (int i = 0; e >= 0 && !sg && i < c->nver_entries; i++)
+    if (c->ver_entries[i].scope == e && c->ver_entries[i].guard == VER_ENTRY_GUARD) {
+      if (!cplan_guarded_presence(c, cls, name, own, out)) return 0;
+      for (int k = 0; k < out->n; k++)   /* (a visibility cell counts for a mask short of all three: presence_cells_of) */
+        if (out->vis[k][0] && mask == 7) out->vis[k][0] = 0, out->ans[k] = 1;
+        else out->ans[k] = (out->ans[k] & mask) != 0;
+      out->els = (out->els & mask) != 0, out->mask = mask;
+      return 1;
+    }
   if (e < 0 || c->scopes[e].entry != ENTRY_DISPATCH) return 0;
   return presence_cells_of(c, cls, sg, name, mask, own, cplan_entry_finds(c, e), ver_entry_vis(c, e), out);
 }
@@ -12986,7 +13018,7 @@ int cplan_guarded_presence(Compiler *c, int cls, const char *name, int own, Cpla
   int mi = conditional_guard_method(c, cls, name);
   if (mi < 0) return 0;
   int to[VER_MAX_ARMS + 1], n = guard_chain(c, mi, to, NULL, NULL);
-  if (!guard_is_conditional(c, to, n)) return 0;
+  if (!guard_is_conditional(c, to, n) && !guard_vis_runs(c, to, n)) return 0;
   if (!out) return 1;
   DispArm arms[VER_MAX_ARMS];
   memset(out, 0, sizeof *out);
@@ -12998,7 +13030,10 @@ int cplan_guarded_presence(Compiler *c, int cls, const char *name, int own, Cpla
     int k = out->n++;
     memcpy(out->cell[k], sel[i], sizeof out->cell[k]);
     out->val[k] = arms[i].val;
-    out->ans[k] = (unsigned char)core_bit_of_vis(guard_visibility(c, to[i]));
+    /* (a visibility only the run tells is read from its visibility cell, which the entry writes: guard_entry_make) */
+    int cell = -1, v = guard_version_vis(c, to[i], &cell);
+    if (v < 0) ver_vis_cell_name(cell, out->vis[k]);
+    else out->ans[k] = (unsigned char)core_bit_of_vis(v);
   }
   int last = to[n - 1];
   const struct VerEntry *history = guard_history_of(c, last);
@@ -13041,30 +13076,39 @@ static int guard_entry_make(Compiler *c, int mi, int ar, int face, int *behind) 
   int to[VER_MAX_ARMS + 1], n = guard_chain(c, mi, to, arm, sel), blk = 0, spliced = 1;
   *behind = -1;
   if (n < 2) return -1;
-  int else_vis = 0;
+  int else_vis = 0, af[VER_MAX_ARMS + 1], av[VER_MAX_ARMS + 1];
+  /* (an arm whose visibility the run tells reads the visibility cell of its version's history: a face's arm asks it,
+     ver_vis_arm, and a presence reader's, cplan_guarded_presence; the arm's history has the cells written) */
+  for (int k = 0, cell = -1; k < n; k++) {
+    af[k] = guard_arm_face(c, to[k], face);
+    av[k] = k < n - 1 ? guard_version_vis(c, to[k], &cell) : 0;
+    if (av[k] < 0) arm[k].hist = cell + 1;
+  }
   if (face) {
-    for (int k = 0; k < n - 1; k++) {
-      int v = guard_visibility(c, to[k]);
-      vis[k] = (VerArmVis){ ver_closed_to(v, guard_arm_face(c, to[k], face)) ? v : 0, 0 };
-    }
+    for (int k = 0; k < n - 1; k++)
+      vis[k] = (VerArmVis){ av[k] >= 0 && ver_closed_to(av[k], af[k]) ? av[k] : 0, av[k] < 0 && ver_face_closes(af[k]) ? af[k] : 0 };
     const struct VerEntry *history = guard_history_of(c, to[n - 1]);
     if (history) {
       int e = guard_history_entry(c, history, face, ar);
       if (e >= 0) to[n - 1] = e;
     } else {
       int v = guard_visibility(c, to[n - 1]);
-      else_vis = ver_closed_to(v, guard_arm_face(c, to[n - 1], face)) ? v : 0;
+      else_vis = ver_closed_to(v, af[n - 1]) ? v : 0;
     }
   }
   /* Cloned forwarding bodies retain the hidden name even when the clone
-     has no pin in the original entry's node index. */
+     has no pin in the original entry's node index. (A layer's entry, for
+     the arm's face, tests its versions' visibility itself: pos_entry.) */
   for (int k = 0; k < n - 1; k++) {
-    int e = c->scopes[to[k]].mixin_guarded ? pos_entry(c, NULL, to[k], ar, face) : to[k];
+    int e = c->scopes[to[k]].mixin_guarded ? pos_entry(c, NULL, to[k], ar, af[k]) : to[k];
     arm[k].callee = e == to[k] ? c->scopes[to[k]].name : comp_scope_user_name(&c->scopes[mi]);
+    if (e != to[k] && face && ver_face_closes(af[k])) vis[k] = (VerArmVis){ 0, 0 };
     to[k] = e;
   }
   /* (the method behind them all a layer too: its entry, pos_entry) */
-  to[n - 1] = pos_entry(c, NULL, to[n - 1], ar, face);
+  int behind_e = pos_entry(c, NULL, to[n - 1], ar, af[n - 1]);
+  if (behind_e != to[n - 1] && ver_face_closes(af[n - 1])) else_vis = 0;
+  to[n - 1] = behind_e;
   for (int k = 0; k < n; k++) {
     blk |= c->scopes[to[k]].blk_param || c->scopes[to[k]].yields;
     spliced &= c->scopes[to[k]].yields;

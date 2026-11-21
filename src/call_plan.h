@@ -1694,9 +1694,11 @@ int cplan_presence_class(Compiler *c, int id);
    in a program that defines respond_to_missing?
    (respond_to_missing_defined). */
 typedef struct CplanCells { int n; char cell[VER_MAX_ARMS][32]; char vis[VER_MAX_ARMS][32]; int val[VER_MAX_ARMS]; unsigned char ans[VER_MAX_ARMS]; int els, mask; } CplanCells;
-/* Physical presence for a conditional prepend. Answers are visibility
-   masks (public 1, protected 2, private 4), or 0 for an absent method.
-   A null output asks only whether the selector decides the answer. */
+/* Physical presence for a conditional prepend, or for a later prepend
+   whose module's version takes a visibility only the run tells (a word in
+   a body: its visibility cell). Answers are visibility masks (public 1,
+   protected 2, private 4), or 0 for an absent method. A null output asks
+   only whether the selector decides the answer. */
 int cplan_guarded_presence(Compiler *c, int cls, const char *name, int own, CplanCells *out);
 /* Whether an implied callback has a live definition in its version entry.
    The caller supplies its own fallback when there is no definition. */

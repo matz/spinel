@@ -60,6 +60,10 @@ class Asks
   def method_missing(n, *a) = n == :above ? defined?(super).inspect : super
 end
 
+class Checked
+  def method_missing(n, *a) = n == :ok ? 1 : super(n, 1 / 0)
+end
+
 def show
   yield
 rescue NoMethodError => e
@@ -88,3 +92,4 @@ show { Table.new.missing(2) }
 show { WideRow.new.missing }
 p Asks.new.above
 begin; Finder.new.method_missing("named"); rescue ArgumentError => e; p e.message; end
+begin; Checked.new.method_missing("first"); rescue ZeroDivisionError, ArgumentError => e; p e.class; end

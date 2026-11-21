@@ -425,7 +425,10 @@ gathers (`lr_body_names_read`), so each ask is a lookup:
   any other value too, `cplan_class_value_presence`), and `method`,
   `singleton_method` and `instance_method` find a method of any
   visibility. Each reader asks the entry a public call takes, whatever
-  its receiver (`ver_cells_reader`), so the words write the cells for it.
+  its receiver (`ver_cells_reader`), so the words write the cells for it,
+  and keeps the cells of the visibilities it counts (include_all or
+  public only), none where they fix its answer at its point
+  (`ver_cmethod_cells_keep`).
   A `public_method` of a private or protected method raises NameError
   where the record tells that visibility at the capture and no visibility
   word the record does not place or holds no entry of may change it

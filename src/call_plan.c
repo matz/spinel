@@ -14362,7 +14362,7 @@ static void ver_main_undef_guards(Compiler *c) {
   free(at);
   free(par);
 }
-static int ver_cells_reader(Compiler *c, int id, int written, const char **qm);
+static int ver_cells_reader(Compiler *c, int id, int written, const char **qm, int *mask);
 void ver_entries_build(Compiler *c) {
   const NodeTable *nt = c->nt;
   const char *names[2];
@@ -14411,7 +14411,7 @@ void ver_entries_build(Compiler *c) {
     /* a respond_to? of a class's own class method, or a public_method, reads the cells of the entry a call of the
        name would take there (cplan_cmethod_presence), one that sees public methods alone, whatever its receiver */
     const char *qm;
-    int pc = ver_cells_reader(c, id, 0, &qm);
+    int pc = ver_cells_reader(c, id, 0, &qm, NULL);
     if (pc >= 0 && cplan_presence_asks(c, id, pc, qm)) ver_need(c, id, qm, pc, CT_CMETHOD | CT_PUBLIC | CT_PROTECTED, &o);
     list_asks(c, id, list_ver_need, &o);   /* (a class-side list asks the same of each name it may list) */
     ct_implied_classes(c, id, ct_version_named, ver_need, &o);
@@ -14644,30 +14644,40 @@ static void ver_cell_keep(Compiler *c, const char *name) {
 }
 /* (the class whose class method *qm reader id asks the cells of: a respond_to?'s, cplan_presence_class, or a
    public_method capture's of a name a body's word sets the visibility of, cplan_capture_closed; -1 for none, and with
-   written for one in a scope the C does not write, ver_scope_written); the names they go by, r 0 to 2 (a public_method's
-   until desugar_public_method names it `method`) */
+   written for one in a scope the C does not write, ver_scope_written); in *mask the visibilities it counts, a
+   respond_to?'s (respond_to_vis_mask), or 0 for a capture, whose NameError names the visibility; the names they go
+   by, r 0 to 2 (a public_method's until desugar_public_method names it `method`) */
 static const char *ver_cells_reader_name(int r) { return r == 2 ? PUBLIC_METHOD_NAME : r ? METHOD_NAME : RESPOND_TO_NAME; }
-static int ver_cells_reader(Compiler *c, int id, int written, const char **qm) {
+static int ver_cells_reader(Compiler *c, int id, int written, const char **qm, int *mask) {
   const char *nm = nt_kind(c->nt, id) == NK_CallNode ? nt_str(c->nt, id, "name") : NULL;
   int cap = nm && (nt_int(c->nt, id, "public_capture", 0) || is_public_method_lookup(nm)) && capture_cells_shape(c->nt, id);
   int pc = cap ? cells_reader_class(c, id) : is_respond_to_name(nm) ? cplan_presence_class(c, id) : -1;
+  if (mask) *mask = pc >= 0 && !cap ? respond_to_vis_mask(c->nt, id) : 0;
   *qm = pc >= 0 && (!written || ver_scope_written(comp_scope_of(c, id))) ? method_sym_arg(c, id) : NULL;
   if (*qm && cap && !elab_method_body_word(c, *qm, 1)) *qm = NULL;
   return *qm ? pc : -1;
 }
-/* (keep the cells call id reads to answer whether cls has class method name, every visibility: a respond_to?'s,
-   cplan_cmethod_presence, a public_method's, ver_cells_reader, or a class-side list's, cplan_list_cells; own versions or the chain's as the list
-   asks, cplan_list_class) */
-static void ver_presence_keep(Compiler *c, int id, const char *name, int cls, void *arg) {
+/* (keep the cells call id reads to answer whether cls has class method name: a respond_to?'s, cplan_cmethod_presence,
+   for the visibilities mask counts, none where they fix its answer, which it folds; a public_method's, ver_cells_reader,
+   or a class-side list's, cplan_list_cells, every visibility's (mask 0); own versions or the chain's as the list asks,
+   cplan_list_class) */
+static void ver_cmethod_cells_keep(Compiler *c, int id, const char *name, int cls, int mask) {
   CplanCells cs;
   int own = 0;
-  (void)arg;
   if (cplan_list_class(c, id, &own) < 0) own = 0;
   for (int all = 1; all >= 0; all--) {
-    if (!cplan_cmethod_presence(c, id, cls, name, all ? 7 : 1, own, &cs)) return;
-    /* (and a respond_to?'s visibility cells, which it reads where a version's visibility is the run's) */
-    for (int i = 0; i < cs.n; i++) if (all || cs.vis[i][0]) ver_cell_keep(c, all ? cs.cell[i] : cs.vis[i]);
+    if (mask && mask != (all ? 7 : 1)) continue;
+    if (!cplan_cmethod_presence(c, id, cls, name, all ? 7 : 1, own, &cs) || (mask && cplan_cells_fixed(&cs))) return;
+    /* (and the visibility cells, which it reads where a version's visibility is the run's) */
+    for (int i = 0; i < cs.n; i++) {
+      if (all || mask) ver_cell_keep(c, cs.cell[i]);
+      if (!all && cs.vis[i][0]) ver_cell_keep(c, cs.vis[i]);
+    }
   }
+}
+static void ver_presence_keep(Compiler *c, int id, const char *name, int cls, void *arg) {
+  (void)arg;
+  ver_cmethod_cells_keep(c, id, name, cls, 0);
 }
 /* (...and an instance's presence reader's, presence_asks: the cells it reads, in the form it asks them
    (presence_reader_side), where they do not fix its answer) */
@@ -14676,7 +14686,7 @@ static void ver_obj_presence_keep(Compiler *c, int id, const char *name, int cls
   int mask, list;
   unsigned side = presence_reader_side(c->nt, id, &mask, &list);
   if (flags & CT_CMETHOD) {   /* (a respond_to?'s class arm: a class's own respond_to?'s cells) */
-    ver_presence_keep(c, id, name, cls, arg);
+    ver_cmethod_cells_keep(c, id, name, cls, list ? 0 : mask);
     return;
   }
   if (!(list ? cplan_list_cells(c, id, cls, side, name, mask, &cs) : cplan_presence_cells(c, id, cls, side, name, mask, &cs)) ||
@@ -14744,8 +14754,8 @@ void ver_cells_settle(Compiler *c) {
   for (int r = 0; any && r < 3; r++)
     for (int id = an_calls_named_first(c, ver_cells_reader_name(r)); id >= 0; id = an_calls_named_next(id)) {
       const char *qm;
-      int pc = ver_cells_reader(c, id, 1, &qm);
-      if (pc >= 0) ver_presence_keep(c, id, qm, pc, NULL);
+      int mask, pc = ver_cells_reader(c, id, 1, &qm, &mask);
+      if (pc >= 0) ver_cmethod_cells_keep(c, id, qm, pc, mask);
     }
   for (int id = any ? an_calls_named_first(c, SINGLETON_METHODS_NAME) : -1; id >= 0; id = an_calls_named_next(id))
     if (ver_scope_written(comp_scope_of(c, id))) list_asks(c, id, ver_presence_keep, NULL);
@@ -14869,8 +14879,9 @@ static void ver_presence_mark(Compiler *c) {
   for (int r = 0; r < 3; r++)
     for (int id = an_calls_named_first(c, ver_cells_reader_name(r)); id >= 0; id = an_calls_named_next(id)) {
       const char *qm;
-      int pc = ver_cells_reader(c, id, 1, &qm);
-      ver_entry_vis_mark(c, pc >= 0 && cplan_presence_asks(c, id, pc, qm) ? call_target(c, id, pc, qm, CT_CMETHOD | CT_CAPTURE, NULL) : -1);
+      int mask, pc = ver_cells_reader(c, id, 1, &qm, &mask);
+      /* (an include_all reader counts every visibility: it reads no visibility cell) */
+      ver_entry_vis_mark(c, pc >= 0 && mask != 7 && cplan_presence_asks(c, id, pc, qm) ? call_target(c, id, pc, qm, CT_CMETHOD | CT_CAPTURE, NULL) : -1);
     }
   for (int id = an_calls_named_first(c, SINGLETON_METHODS_NAME); id >= 0; id = an_calls_named_next(id))
     if (ver_scope_written(comp_scope_of(c, id))) list_asks(c, id, ver_list_presence_mark, NULL);
@@ -15237,7 +15248,7 @@ int ver_entries_demand(Compiler *c) {
   for (int r = 0; r < 3; r++)
     for (int id = an_calls_named_first(c, ver_cells_reader_name(r)); id >= 0; id = an_calls_named_next(id)) {
       const char *nm;
-      int pc = ver_cells_reader(c, id, 0, &nm);
+      int pc = ver_cells_reader(c, id, 0, &nm, NULL);
       if (pc >= 0 && cplan_presence_asks(c, id, pc, nm)) call_target(c, id, pc, nm, CT_CMETHOD | CT_CAPTURE, NULL);
     }
   for (int id = an_calls_named_first(c, SINGLETON_METHODS_NAME); id >= 0; id = an_calls_named_next(id))

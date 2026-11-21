@@ -5543,6 +5543,29 @@ int emit_array_op_assign(Compiler *c, const char *lval, TyKind t,
   TyKind vt = vr.as_ty;
   if (is_bit_set_operator(op)) {
     const char *conv = (t == TY_POLY_ARRAY && vt != t) ? poly_array_rhs_conv(vt) : NULL;
+    if (vt != t && vt != TY_UNKNOWN && !conv && vr.kind == RK_BOXED) {
+      /* a typed slot and a boxed rhs (a nullable ivar: `files -= @exclude
+         if @exclude`): the set operation on the boxed pair, as the binary
+         `a - b` on poly values runs it, and the result converted back to
+         the slot's kind, which checks each element */
+      size_t pre_mark = g_pre ? g_pre->len : 0;
+      Buf rb; memset(&rb, 0, sizeof rb);
+      emit_boxed(c, v, &rb);
+      char tn[32];
+      const char *src = array_op_assign_src(c, lval, k, v, pre_mark, tn, sizeof tn, b);
+      Buf ab; memset(&ab, 0, sizeof ab);
+      buf_puts(&ab, sp_streq(op, "-") ? "sp_poly_sub(" : "sp_poly_bitop(");
+      emit_boxed_text(c, t, src, &ab);
+      buf_printf(&ab, ", %s", rb.p ? rb.p : "sp_box_nil()");
+      if (!sp_streq(op, "-")) buf_printf(&ab, ", %d", sp_streq(op, "&") ? 0 : 1);
+      buf_puts(&ab, ")");
+      buf_printf(b, "%s = ", lval);
+      emit_unbox_text(c, t, ab.p, b);
+      buf_puts(b, ";");
+      op_assign_slot_end(src, lval, b);
+      free(rb.p); free(ab.p);
+      return 1;
+    }
     if (vt != t && vt != TY_UNKNOWN && !conv) return 0;
     const char *fn = sp_streq(op, "&") ? "intersect" : (sp_streq(op, "|") ? "union" : "difference");
     size_t pre_mark = g_pre ? g_pre->len : 0;

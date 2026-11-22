@@ -164,7 +164,7 @@ Prism documents, with a few Spinel-specific aliases for clarity.
 | `BlockNode`         | `locals` (S), `parameters` (R), `body` (R) | `do ... end` / `{ ... }` attached to a call. `parameters` is a BlockParametersNode (or a NumberedParametersNode or ItParametersNode). |
 | `BlockParametersNode` | `parameters` (R), `locals` (A)         | The `|a, b; x, y|` list of a block. `locals` holds one BlockLocalVariableNode per `; x` declaration, `[]` when there is none. |
 | `BlockLocalVariableNode` | `name` (S)                          | One `; x` declaration: the name is fresh to the block, whatever the enclosing scope calls it. |
-| `ParametersNode`    | `requireds` (A), `optionals` (A), `keywords` (A), `posts` (A), `rest` (R), `block` (R) | Per-method or per-block parameter list. |
+| `ParametersNode`    | `requireds` (A), `optionals` (A), `keywords` (A), `posts` (A), `rest` (R), `block` (R) | Per-method or per-block parameter list. Each parameter node (`RequiredParameterNode`, `OptionalParameterNode`, `RestParameterNode`, the keyword, keyword-rest and `BlockParameterNode` kinds) carries `name` (S), and `wname` (S) where a rename gave it another (see "References & assignment"). |
 | `NumberedParametersNode` | `value` (I) (max param `_1` .. `_N`) | `{ _1 + _2 }` shorthand.                              |
 
 ### Control flow
@@ -228,11 +228,11 @@ disambiguating field is `name`, plus the recv / args / block triple.
 
 | Node                              | Fields used                                |
 |-----------------------------------|--------------------------------------------|
-| `LocalVariableReadNode`           | `name` (S)                                 |
-| `LocalVariableWriteNode`          | `name` (S), `value` (R)                    |
-| `LocalVariableTargetNode`         | `name` (S) -- LHS of `MultiWriteNode`      |
-| `LocalVariableOperatorWriteNode`  | `name` (S), `value` (R), `operator` (S)    |
-| `LocalVariableOrWriteNode` / `LocalVariableAndWriteNode` | `name` (S), `value` (R) |
+| `LocalVariableReadNode`           | `name` (S), `depth` (I)                    |
+| `LocalVariableWriteNode`          | `name` (S), `depth` (I), `value` (R)       |
+| `LocalVariableTargetNode`         | `name` (S), `depth` (I) -- LHS of `MultiWriteNode` |
+| `LocalVariableOperatorWriteNode`  | `name` (S), `depth` (I), `value` (R), `operator` (S) |
+| `LocalVariableOrWriteNode` / `LocalVariableAndWriteNode` | `name` (S), `depth` (I), `value` (R) |
 | `InstanceVariableReadNode`        | `name` (S)                                 |
 | `InstanceVariableWriteNode`       | `name` (S), `value` (R)                    |
 | `InstanceVariableOperatorWriteNode` | (same triple, plus `operator` S)         |
@@ -243,6 +243,18 @@ disambiguating field is `name`, plus the recv / args / block triple.
 | `ConstantWriteNode`               | `name` (S), `value` (R)                    |
 | `MultiWriteNode`                  | `targets` (A), `expression` (R), `rest` (R) |
 | `MultiTargetNode`                 | `lefts` (A), `rest` (R), `rights` (A)      |
+
+`depth` (I) is Prism's: how many scopes up the local is bound (0: the scope the
+node is in). `wname` (S) is the name the program wrote, on a local-binding or
+local-reference node (the nodes above, a block-local, and the parameter nodes
+below) that a pass renamed to give it a slot of its own: `name` is then the
+slot, and `nt_wname` answers the written one, falling back to `name` for a
+node nothing renamed or a desugar made. `nt_rename_local` renames a local
+that way and keeps the first name in `wname`: the shadow rename of block
+parameters and block-locals, and the keyword slots of a block handed to a
+builtin. Three renames do not go through it yet and leave no `wname`: the
+slot of a reassigned block parameter (`__bpin`), a class-body capture
+(`__cb`) and the colliding numbered parameters (`_1__b…`).
 
 ### Index access
 

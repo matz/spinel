@@ -46,7 +46,7 @@ static void add_kwhash_key_params(const NodeTable *nt, Scope *s, int kwh) {
     if (!kn) continue;
     int dup = 0;
     for (int p = 0; p < s->nparams; p++) if (s->pnames[p] && sp_streq(s->pnames[p], kn)) { dup = 1; break; }
-    if (!dup) scope_add_param(s, kn, -1);
+    if (!dup) scope_add_param(s, kn, NULL, -1);
   }
 }
 
@@ -58,14 +58,14 @@ static void collect_positional_params(Compiler *c, int pn, Scope *s) {
   const int *reqs = nt_arr(c->nt, pn, "requireds", &rn);
   for (int i = 0; i < rn; i++) {
     const char *pname = nt_str(c->nt, reqs[i], "name");
-    if (pname) scope_add_param(s, pname, -1);
+    if (pname) scope_add_param(s, pname, nt_wname(c->nt, reqs[i]), -1);
   }
   int on = 0;
   const int *opts = nt_arr(c->nt, pn, "optionals", &on);
   for (int i = 0; i < on; i++) {
     const char *pname = nt_str(c->nt, opts[i], "name");
     int dv = nt_ref(c->nt, opts[i], "value");
-    if (pname) scope_add_param(s, pname, dv);
+    if (pname) scope_add_param(s, pname, nt_wname(c->nt, opts[i]), dv);
   }
 }
 
@@ -103,6 +103,7 @@ void collect_def_params(Compiler *c, int def_id, Scope *s) {
         s->pnames[s->nparams++] = strdup(rname);
         LocalVar *lv = scope_local_intern(s, rname);
         lv->is_param = 1;
+        lv_set_wname(lv, nt_wname(c->nt, rp));
         slot_rule(c, lv, TY_POLY_ARRAY, -1, "by construction: a splat parameter holds the extra arguments of every call, untyped");
         s->rest_idx = s->nparams - 1;
       }
@@ -113,7 +114,7 @@ void collect_def_params(Compiler *c, int def_id, Scope *s) {
   const int *posts = nt_arr(c->nt, pn, "posts", &postn);
   for (int i = 0; i < postn; i++) {
     const char *pname = nt_str(c->nt, posts[i], "name");
-    if (pname) scope_add_param(s, pname, -1);
+    if (pname) scope_add_param(s, pname, nt_wname(c->nt, posts[i]), -1);
   }
   if (postn > 0) s->npost_rest = postn;
   int kn = 0;
@@ -124,7 +125,7 @@ void collect_def_params(Compiler *c, int def_id, Scope *s) {
     if (!pty) continue;
     const char *pname = nt_str(c->nt, kws[i], "name");
     int dv = pk == NK_OptionalKeywordParameterNode ? nt_ref(c->nt, kws[i], "value") : -1;
-    if (pname) scope_add_param(s, pname, dv);
+    if (pname) scope_add_param(s, pname, nt_wname(c->nt, kws[i]), dv);
   }
   int kwrp = nt_ref(c->nt, pn, "keyword_rest");
   if (kwrp >= 0) {
@@ -138,6 +139,7 @@ void collect_def_params(Compiler *c, int def_id, Scope *s) {
       if (kwrname) {
         LocalVar *lv = scope_local_intern(s, kwrname);
         lv->is_param = 1;
+        lv_set_wname(lv, nt_wname(c->nt, kwrp));
         lv_set_type(lv, TY_SYM_POLY_HASH);
         scope_reserve_param(s);
         s->pdefault[s->nparams] = -1;
@@ -173,7 +175,7 @@ void collect_def_params(Compiler *c, int def_id, Scope *s) {
       int nfwd = arity - fwd_base; if (nfwd < 0) nfwd = 0;
       for (int i = 0; i < nfwd; i++) {
         char nm[24]; snprintf(nm, sizeof nm, "__fwd_%d", i);
-        scope_add_param(s, nm, -1);
+        scope_add_param(s, nm, NULL, -1);
       }
       /* Keyword args ride the same model: spinel compiles keyword params as
          positional C params mapped at the call site by name, so synthesizing a
@@ -297,7 +299,7 @@ static void initialize_forwarding_params(Compiler *c, int init) {
                                  "expects its default");
     while (nfwd < pos - lead) {
       char nm[24]; snprintf(nm, sizeof nm, "__fwd_%d", nfwd++);
-      scope_add_param(s, nm, -1);
+      scope_add_param(s, nm, NULL, -1);
     }
     if (kwh >= 0) add_kwhash_key_params(nt, s, kwh);
   }
@@ -339,7 +341,7 @@ void topup_forwarding_arity(Compiler *c) {
       int want = c->scopes[tgt].nparams;
       while (sc->nparams < want) {
         char nm[24]; snprintf(nm, sizeof nm, "__fwd_%d", sc->nparams);
-        scope_add_param(sc, nm, -1);
+        scope_add_param(sc, nm, NULL, -1);
         changed = 1;
       }
     }
@@ -986,7 +988,7 @@ static void cs_synth_method(Compiler *c, int class_id, int def_node, const char 
   scope_set_ret(s, ret);
   { s->body = -1; comp_touch_scope(s->idx); }
   for (int i = 0; i < nparams; i++) {
-    scope_add_param(s, pnames[i], -1);
+    scope_add_param(s, pnames[i], NULL, -1);
     LocalVar *lv = scope_local(s, pnames[i]);
     if (lv) lv_set_type(lv, ptypes[i]);
   }
@@ -3842,6 +3844,19 @@ static void class_note_prepended_mod(Compiler *c, int ci, int mod_ci) {
   c->mixin_gen++;
 }
 
+/* The name the program wrote for slot lv of scope scope_idx: a parameter's
+   (scope_add_param), else the written name of the first local write of the
+   slot the program has, else the slot's own. A local is interned by name, so
+   no one place gives its LocalVar the name; the write nodes carry it. */
+const char *scope_local_wname(Compiler *c, int scope_idx, const LocalVar *lv) {
+  if (lv->wname) return lv->wname;
+  for (int id = comp_lvw_first_sc(c, scope_idx, lv->name); id >= 0; id = comp_lvw_next_sc(c, id)) {
+    const char *nm = nt_str(c->nt, id, "name");
+    if (c->nscope[id] == scope_idx && nm && sp_streq(nm, lv->name)) return nt_wname(c->nt, id);
+  }
+  return lv->name;
+}
+
 /* Copy the method shape of src into the clone dst: its yield flag, its
    parameter layout (names, defaults, required count, rest/post/kwrest slots),
    its &block, and the define_method loop substitution. Runs once the clone
@@ -3878,7 +3893,9 @@ void scope_copy_method_shape(Scope *dst, Scope *src) {
     dst->blk_param = strdup(src->blk_param);
     if (dst->blk_param[0]) {
       LocalVar *lv = scope_local_intern(dst, dst->blk_param);
+      const LocalVar *sb = scope_local(src, src->blk_param);
       lv->is_param = 1;
+      lv_set_wname(lv, sb ? sb->wname : NULL);
       lv_set_type(lv, TY_PROC);
     }
   }
@@ -3911,7 +3928,9 @@ void scope_copy_method_shape(Scope *dst, Scope *src) {
   for (int p = 0; p < src->nparams; p++) {
     if (dst->pnames[p]) {
       LocalVar *lv = scope_local_intern(dst, dst->pnames[p]);
+      const LocalVar *sp = scope_local(src, dst->pnames[p]);
       lv->is_param = 1;
+      lv_set_wname(lv, sp ? sp->wname : NULL);
       /* A splat / double-splat parameter is typed by construction when the
          source scope is built (a poly array / a hash), not by any call site,
          so nothing re-derives it for the clone: carry it over. Left UNKNOWN,

@@ -599,10 +599,10 @@ void comp_free(Compiler *c) {
   free(c->ver_vis_call_cell); c->ver_vis_call_cell = NULL; c->ver_vis_call_cap = 0;
   free(c->ver_vis_scope_mark); c->ver_vis_scope_mark = NULL; c->ver_vis_scope_cap = 0;
   free(c->ver_vis_hist_seen); c->ver_vis_hist_seen = NULL; c->ver_vis_hist_cap = 0; c->ver_vis_guard_stamp = 0;
-  for (int i = 0; i < c->nrbp_slots; i++) free(c->rbp_slot_names[i]);
-  free(c->rbp_slot_names); free(c->rbp_slot_lens); c->rbp_slot_names = NULL; c->rbp_slot_lens = NULL; c->nrbp_slots = 0;
+  for (int i = 0; i < c->nrbp_slots; i++) { free(c->rbp_slot_names[i]); free(c->rbp_slot_written[i]); }
+  free(c->rbp_slot_names); free(c->rbp_slot_written); c->rbp_slot_names = NULL; c->rbp_slot_written = NULL; c->nrbp_slots = 0;
   if (c->bp_name) for (unsigned i = 0; i <= c->bp_mask; i++) free(c->bp_name[i]);
-  free(c->bp_name); free(c->bp_len); free(c->bp_blk); c->bp_name = NULL; c->bp_len = NULL; c->bp_blk = NULL; c->bp_mask = 0; c->nbp = 0;
+  free(c->bp_name); free(c->bp_blk); c->bp_name = NULL; c->bp_blk = NULL; c->bp_mask = 0; c->nbp = 0;
   for (int i = 0; i < c->nbp_user; i++) free(c->bp_user[i]);
   free(c->bp_user); c->bp_user = NULL; c->nbp_user = 0; c->bp_user_built = 0;
   for (int i = 0; i < c->ndef_asked; i++) free(c->def_asked[i]);
@@ -625,7 +625,7 @@ void comp_free(Compiler *c) {
     free(sc->name);
     free(sc->shadow_user);
     free(sc->env_names);
-    for (int i = 0; i < sc->nlocals; i++) free(sc->locals[i].name);
+    for (int i = 0; i < sc->nlocals; i++) { free(sc->locals[i].name); free(sc->locals[i].wname); }
     free(sc->locals);
     free(sc->lidx);
     for (int i = 0; i < sc->nparams; i++) free(sc->pnames[i]);
@@ -5925,6 +5925,13 @@ void scope_locals_appended(Scope *s) {
 }
 void scope_locals_removed(Scope *s) {
   free(s->lidx); s->lidx = NULL; s->lidx_cap = 0;
+}
+
+/* Record the name the program wrote for slot lv: none when it is the slot's own */
+void lv_set_wname(LocalVar *lv, const char *wname) {
+  if (wname == lv->wname) return;
+  free(lv->wname);
+  lv->wname = wname && !sp_streq(wname, lv->name) ? strdup(wname) : NULL;
 }
 
 LocalVar *scope_local_intern(Scope *s, const char *name) {

@@ -1565,6 +1565,8 @@ int splat_local_sure_lit(Compiler *c, int x);
 const char *block_kwrest_name(Compiler *c, int block);
 int block_opt_default(Compiler *c, int block, int idx);
 const char *block_keyword_name(Compiler *c, int block, int idx);
+int block_keyword_node(Compiler *c, int block, int idx);
+int block_rest_node(Compiler *c, int block);
 int block_keyword_default(Compiler *c, int block, int idx);
 
 /* True if `id` is a `proc {}` / `lambda {}` / `Proc.new {}` literal (a CallNode
@@ -1625,9 +1627,8 @@ void ie_body_restore(Compiler *c, int *snap);
 /* instance_exec keyword-arg helpers: the call's trailing KeywordHashNode (or
    -1), and the value node bound to a keyword name within it (or -1). */
 int ie_call_kwhash(Compiler *c, int id);
-size_t block_param_written_len(const Compiler *c, const char *name);
-size_t reassigned_param_written_len(const Compiler *c, const char *name);
-size_t param_written_len(const Compiler *c, const char *n);
+const char *rbp_slot_written(const Compiler *c, const char *w);
+const char *param_written_name(const Compiler *c, const char *w);
 /* What a parameter node the desugar made or named stands for, as its
    "desugared_param" mark says (desugared_param_name) */
 enum { DPN_OWN, DPN_WRITTEN, DPN_NAMELESS, DPN_NONE };

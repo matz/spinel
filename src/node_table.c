@@ -1268,6 +1268,13 @@ int nt_set_str(NodeTable *nt, int id, const char *key, const char *val) {
 
 
 
+void nt_rename_local(NodeTable *nt, int id, const char *newname) {
+  const char *was = nt_str(nt, id, "name");
+  if (!was) return;
+  if (!nt_str(nt, id, "wname")) nt_node_set_str(nt, id, "wname", was);
+  nt_set_str(nt, id, "name", newname);
+}
+
 /* A condition's predicate as a constant: 1 always truthy, 0 always falsy,
    -1 a value known only when it runs. Only a literal folds: true and the
    other non-nil literals, false and nil; parentheses around one statement

@@ -1,0 +1,17 @@
+["Digest::MD5", true, true, true, true, true, 16, 64]
+["Digest::SHA1", true, true, true, true, true, 20, 64]
+["Digest::SHA256", true, true, true, true, true, 32, 64]
+["Digest::SHA384", true, true, true, true, true, 48, 128]
+["Digest::SHA512", true, true, true, true, true, 64, 128]
+NotImplementedError: Digest::Base is an abstract class
+RuntimeError: Digest::Base cannot be directly inherited in Ruby
+[TaggedSHA512, "tagged", true, true, true, true, true, true]
+["07456c6c", "75297f03", "07456c6c", "#<XorDigest: 07456c6c>"]
+[[7, 69, 108, 108], "B0VsbA==", 4, 4, 4, 4]
+[true, true, false, false]
+[true, true]
+[true]
+[true, true]
+[true, true]
+XorDigest
+[XorDigest, true]

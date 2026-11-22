@@ -161,16 +161,16 @@ what it gets against its `cert_store`, which is empty unless one is given
 `VERIFY_PEER` before it is set, where CRuby's reads nil. `set_params` reads
 `verify_mode` and `verify_hostname` from its params and no other key, and
 answers the context, where CRuby's answers the params.
-`OpenSSL::Digest` (`SHA256` / `SHA1` / `MD5`, the class-method forms, also
+`OpenSSL::Digest` (`SHA256` / `SHA384` / `SHA512` / `SHA1` / `MD5`, the class-method forms, also
 with the algorithm named, and the object: `OpenSSL::Digest.new("SHA256")`,
 `update` / `<<`, `digest` / `hexdigest` / `base64digest` and their `!` forms,
-`digest_length` / `length` / `size`, `new`, `to_s` / `inspect` / `==`, and
+`digest_length` / `length` / `size` / `block_length`, `new`, `to_s` / `inspect` / `==`, and
 `file` from a path, a File or a Tempfile; not `OpenSSL::Digest.digests`, the
 list of libssl's algorithms), `OpenSSL::HMAC` (the algorithm by name or as
 a Digest), `OpenSSL::KDF.hkdf` /
 `pbkdf2_hmac` and `OpenSSL::PKCS5.pbkdf2_hmac` are there, over the runtime's
-own crypto rather than libssl, and no HMAC-MD5; the digest object keeps the
-hash state between updates, not its input. `Cipher` (aes-gcm) and `PKey::EC` are subsets,
+own crypto rather than libssl, and no HMAC-MD5; the digest and HMAC objects keep
+the running hash state between updates, not their input. `Cipher` (aes-gcm) and `PKey::EC` are subsets,
 each described in its file under `packages/openssl/openssl/`. Cipher updates
 return each call's bytes, and final verifies the authentication tag. The
 optional output-buffer argument is not supported. Cipher still retains all

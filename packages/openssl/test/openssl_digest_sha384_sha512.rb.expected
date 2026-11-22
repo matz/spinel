@@ -1,0 +1,45 @@
+SHA384 0: 38b060a751ac96384cd9327eb1b1e36a21fdb71114be07434c0cc7bf63f6e1da274edebfe76f65fbd51ad2f14898b95b
+[48, true, true, true, true]
+SHA384 3: cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7
+[48, true, true, true, true]
+SHA384 112: 09330c33f71147e83d192fc782cd1b4753111b173b3b05d22fa08086e3b0f712fcc7c71a557e2db966c3e9fa91746039
+[48, true, true, true, true]
+SHA384 5: 2a094372c2f34170609cca978947a749936025800eb17361cb9e164eb0dea36899fb70b9feac6db0712705ae279c6c1d
+[48, true, true, true, true]
+SHA384 splits: true bbdbce133ed69c99426fffa345fe13ae8b956e91b9143d698d920c12596beed0876daafc3a3953e8a1fd77fcbf2543ec
+["SHA384", 48, 48, 48, 128]
+[true, true, true, true, true, false, true, "#<OpenSSL::Digest::SHA384: 4452ff0a4e12a4b07fd7aaaca3837fc1079a5284cccef2fa3b01184aea7b02964eb9a5da4e43118a119c74ded5d4d414>"]
+[true, true]
+[true, true]
+[true, true]
+[true, true]
+[true, true]
+[true, true, true]
+[true, true, true]
+[true, true, true]
+[true, true, true]
+SHA512 0: cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e
+[64, true, true, true, true]
+SHA512 3: ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f
+[64, true, true, true, true]
+SHA512 112: 8e959b75dae313da8cf4f72814fc143f8f7779c6eb9f7fa17299aeadb6889018501d289e4900f7e4331b99dec4b5433ac7d329eeb6dd26545e96e55b874be909
+[64, true, true, true, true]
+SHA512 5: 18ff3fb77ba887118666d947a1ae32a898b538d1d71b65471ce5b7f55cfa435e4478a9a5cf891e42974bde89be3e937a7b4a8b141c34e6f80eb716abfd9a07cf
+[64, true, true, true, true]
+SHA512 splits: true 99c160143ec710ef7f36badafc0523a42442f22e3b4fe580d729e7a3814fd5941b7c0757ed52e66b1d38f36b342be3708b5a72e69ae002be1b99eed780899696
+["SHA512", 64, 64, 64, 128]
+[true, true, true, true, true, false, true, "#<OpenSSL::Digest::SHA512: d4cd95f02804efac59b01abd1929df7849292dc0972b5b1b9a014f93f8fd007d4e5891803f641ff4c1f23ed95c117f50d43a6fa853b23a56c431328fe7f39680>"]
+[true, true]
+[true, true]
+[true, true]
+[true, true]
+[true, true]
+[true, true, true]
+[true, true, true]
+[true, true, true]
+[true, true, true]
+true
+true
+true
+true
+true

@@ -683,6 +683,328 @@ const char *sp_crypto_md5_final(const char *state) {SP_GC_ROOT_STR(state);
     return sp_crypto_md5_final_buf;
 }
 
+/* ---------- SHA-512 / SHA-384 (FIPS 180-4) ----------
+ * Shared 64-bit compression core parameterized by initial chaining value and
+ * output truncation (48 bytes for SHA-384, 64 bytes for SHA-512). Streaming
+ * state is H[8] (64B) + 128-bit byte count (16B) + partial block (128B) = 208B.
+ */
+
+static const uint64_t sp_crypto_sha512_k[80] = {
+    0x428a2f98d728ae22ULL, 0x7137449123ef65cdULL, 0xb5c0fbcfec4d3b2fULL, 0xe9b5dba58189dbbcULL,
+    0x3956c25bf348b538ULL, 0x59f111f1b605d019ULL, 0x923f82a4af194f9bULL, 0xab1c5ed5da6d8118ULL,
+    0xd807aa98a3030242ULL, 0x12835b0145706fbeULL, 0x243185be4ee4b28cULL, 0x550c7dc3d5ffb4e2ULL,
+    0x72be5d74f27b896fULL, 0x80deb1fe3b1696b1ULL, 0x9bdc06a725c71235ULL, 0xc19bf174cf692694ULL,
+    0xe49b69c19ef14ad2ULL, 0xefbe4786384f25e3ULL, 0x0fc19dc68b8cd5b5ULL, 0x240ca1cc77ac9c65ULL,
+    0x2de92c6f592b0275ULL, 0x4a7484aa6ea6e483ULL, 0x5cb0a9dcbd41fbd4ULL, 0x76f988da831153b5ULL,
+    0x983e5152ee66dfabULL, 0xa831c66d2db43210ULL, 0xb00327c898fb213fULL, 0xbf597fc7beef0ee4ULL,
+    0xc6e00bf33da88fc2ULL, 0xd5a79147930aa725ULL, 0x06ca6351e003826fULL, 0x142929670a0e6e70ULL,
+    0x27b70a8546d22ffcULL, 0x2e1b21385c26c926ULL, 0x4d2c6dfc5ac42aedULL, 0x53380d139d95b3dfULL,
+    0x650a73548baf63deULL, 0x766a0abb3c77b2a8ULL, 0x81c2c92e47edaee6ULL, 0x92722c851482353bULL,
+    0xa2bfe8a14cf10364ULL, 0xa81a664bbc423001ULL, 0xc24b8b70d0f89791ULL, 0xc76c51a30654be30ULL,
+    0xd192e819d6ef5218ULL, 0xd69906245565a910ULL, 0xf40e35855771202aULL, 0x106aa07032bbd1b8ULL,
+    0x19a4c116b8d2d0c8ULL, 0x1e376c085141ab53ULL, 0x2748774cdf8eeb99ULL, 0x34b0bcb5e19b48a8ULL,
+    0x391c0cb3c5c95a63ULL, 0x4ed8aa4ae3418acbULL, 0x5b9cca4f7763e373ULL, 0x682e6ff3d6b2b8a3ULL,
+    0x748f82ee5defb2fcULL, 0x78a5636f43172f60ULL, 0x84c87814a1f0ab72ULL, 0x8cc702081a6439ecULL,
+    0x90befffa23631e28ULL, 0xa4506cebde82bde9ULL, 0xbef9a3f7b2c67915ULL, 0xc67178f2e372532bULL,
+    0xca273eceea26619cULL, 0xd186b8c721c0c207ULL, 0xeada7dd6cde0eb1eULL, 0xf57d4f7fee6ed178ULL,
+    0x06f067aa72176fbaULL, 0x0a637dc5a2c898a6ULL, 0x113f9804bef90daeULL, 0x1b710b35131c471bULL,
+    0x28db77f523047d84ULL, 0x32caab7b40c72493ULL, 0x3c9ebe0a15c9bebcULL, 0x431d67c49c100d4cULL,
+    0x4cc5d4becb3e42b6ULL, 0x597f299cfc657e2aULL, 0x5fcb6fab3ad6faecULL, 0x6c44198c4a475817ULL
+};
+
+typedef struct {
+    int out_words;          /* 6 for SHA-384 (48 bytes), 8 for SHA-512 (64 bytes) */
+    uint64_t iv[8];
+} sp_crypto_sha512_alg;
+
+static const sp_crypto_sha512_alg sp_crypto_alg_sha384 = {
+    6, {
+        0xcbbb9d5dc1059ed8ULL, 0x629a292a367cd507ULL,
+        0x9159015a3070dd17ULL, 0x152fecd8f70e5939ULL,
+        0x67332667ffc00b31ULL, 0x8eb44a8768581511ULL,
+        0xdb0c2e0d64f98fa7ULL, 0x47b5481dbefa4fa4ULL
+    }
+};
+
+static const sp_crypto_sha512_alg sp_crypto_alg_sha512 = {
+    8, {
+        0x6a09e667f3bcc908ULL, 0xbb67ae8584caa73bULL,
+        0x3c6ef372fe94f82bULL, 0xa54ff53a5f1d36f1ULL,
+        0x510e527fade682d1ULL, 0x9b05688c2b3e6c1fULL,
+        0x1f83d9abfb41bd6bULL, 0x5be0cd19137e2179ULL
+    }
+};
+
+static SP_INLINE uint64_t sp_crypto_rotr64(uint64_t x, int n) {
+    return (x >> n) | (x << (64 - n));
+}
+
+static SP_INLINE uint64_t sp_crypto_sha512_S0(uint64_t x) {
+    return sp_crypto_rotr64(x, 28) ^ sp_crypto_rotr64(x, 34) ^ sp_crypto_rotr64(x, 39);
+}
+
+static SP_INLINE uint64_t sp_crypto_sha512_S1(uint64_t x) {
+    return sp_crypto_rotr64(x, 14) ^ sp_crypto_rotr64(x, 18) ^ sp_crypto_rotr64(x, 41);
+}
+
+static SP_INLINE uint64_t sp_crypto_sha512_s0(uint64_t x) {
+    return sp_crypto_rotr64(x, 1) ^ sp_crypto_rotr64(x, 8) ^ (x >> 7);
+}
+
+static SP_INLINE uint64_t sp_crypto_sha512_s1(uint64_t x) {
+    return sp_crypto_rotr64(x, 19) ^ sp_crypto_rotr64(x, 61) ^ (x >> 6);
+}
+
+static SP_INLINE uint64_t sp_crypto_sha512_ch(uint64_t x, uint64_t y, uint64_t z) {
+    return (x & y) ^ (~x & z);
+}
+
+static SP_INLINE uint64_t sp_crypto_sha512_maj(uint64_t x, uint64_t y, uint64_t z) {
+    return (x & y) ^ (x & z) ^ (y & z);
+}
+
+static SP_INLINE void sp_crypto_sha512_round(uint64_t a, uint64_t b, uint64_t c, uint64_t *d,
+                                             uint64_t e, uint64_t f, uint64_t g, uint64_t *h,
+                                             uint64_t kw) {
+    uint64_t t1 = *h + sp_crypto_sha512_S1(e) + sp_crypto_sha512_ch(e, f, g) + kw;
+    *d += t1;
+    *h = t1 + sp_crypto_sha512_S0(a) + sp_crypto_sha512_maj(a, b, c);
+}
+
+static SP_INLINE uint64_t sp_crypto_sha512_word(uint64_t w[16], int j, int i) {
+    if (j)
+        w[i] += sp_crypto_sha512_s1(w[(i + 14) & 15]) + w[(i + 9) & 15] +
+                sp_crypto_sha512_s0(w[(i + 1) & 15]);
+    return w[i];
+}
+
+static SP_NOINLINE void sp_crypto_sha512_block(uint64_t H[8], const uint8_t p[128]) {
+    uint64_t w[16];
+    uint64_t a = H[0], b = H[1], c = H[2], d = H[3], e = H[4], f = H[5], g = H[6], h = H[7];
+    int i, j;
+    for (i = 0; i < 16; i++) {
+        const uint8_t *q = p + i * 8;
+        w[i] = ((uint64_t)q[0] << 56) | ((uint64_t)q[1] << 48) |
+               ((uint64_t)q[2] << 40) | ((uint64_t)q[3] << 32) |
+               ((uint64_t)q[4] << 24) | ((uint64_t)q[5] << 16) |
+               ((uint64_t)q[6] << 8)  |  (uint64_t)q[7];
+    }
+    for (j = 0; j < 5; j++) {
+        const uint64_t *k = sp_crypto_sha512_k + 16 * j;
+        sp_crypto_sha512_round(a, b, c, &d, e, f, g, &h, k[0]  + sp_crypto_sha512_word(w, j, 0));
+        sp_crypto_sha512_round(h, a, b, &c, d, e, f, &g, k[1]  + sp_crypto_sha512_word(w, j, 1));
+        sp_crypto_sha512_round(g, h, a, &b, c, d, e, &f, k[2]  + sp_crypto_sha512_word(w, j, 2));
+        sp_crypto_sha512_round(f, g, h, &a, b, c, d, &e, k[3]  + sp_crypto_sha512_word(w, j, 3));
+        sp_crypto_sha512_round(e, f, g, &h, a, b, c, &d, k[4]  + sp_crypto_sha512_word(w, j, 4));
+        sp_crypto_sha512_round(d, e, f, &g, h, a, b, &c, k[5]  + sp_crypto_sha512_word(w, j, 5));
+        sp_crypto_sha512_round(c, d, e, &f, g, h, a, &b, k[6]  + sp_crypto_sha512_word(w, j, 6));
+        sp_crypto_sha512_round(b, c, d, &e, f, g, h, &a, k[7]  + sp_crypto_sha512_word(w, j, 7));
+        sp_crypto_sha512_round(a, b, c, &d, e, f, g, &h, k[8]  + sp_crypto_sha512_word(w, j, 8));
+        sp_crypto_sha512_round(h, a, b, &c, d, e, f, &g, k[9]  + sp_crypto_sha512_word(w, j, 9));
+        sp_crypto_sha512_round(g, h, a, &b, c, d, e, &f, k[10] + sp_crypto_sha512_word(w, j, 10));
+        sp_crypto_sha512_round(f, g, h, &a, b, c, d, &e, k[11] + sp_crypto_sha512_word(w, j, 11));
+        sp_crypto_sha512_round(e, f, g, &h, a, b, c, &d, k[12] + sp_crypto_sha512_word(w, j, 12));
+        sp_crypto_sha512_round(d, e, f, &g, h, a, b, &c, k[13] + sp_crypto_sha512_word(w, j, 13));
+        sp_crypto_sha512_round(c, d, e, &f, g, h, a, &b, k[14] + sp_crypto_sha512_word(w, j, 14));
+        sp_crypto_sha512_round(b, c, d, &e, f, g, h, &a, k[15] + sp_crypto_sha512_word(w, j, 15));
+    }
+    H[0] += a; H[1] += b; H[2] += c; H[3] += d;
+    H[4] += e; H[5] += f; H[6] += g; H[7] += h;
+}
+
+static void sp_crypto_sha512_blocks(uint64_t H[8], const uint8_t *p, size_t n) {
+    for (; n > 0; n--, p += 128) sp_crypto_sha512_block(H, p);
+}
+
+static void sp_crypto_store_be64(uint8_t *out, const uint64_t *H, int n) {
+    for (int i = 0; i < n; i++) {
+        out[i*8]     = (uint8_t)(H[i] >> 56);
+        out[i*8 + 1] = (uint8_t)(H[i] >> 48);
+        out[i*8 + 2] = (uint8_t)(H[i] >> 40);
+        out[i*8 + 3] = (uint8_t)(H[i] >> 32);
+        out[i*8 + 4] = (uint8_t)(H[i] >> 24);
+        out[i*8 + 5] = (uint8_t)(H[i] >> 16);
+        out[i*8 + 6] = (uint8_t)(H[i] >> 8);
+        out[i*8 + 7] = (uint8_t)(H[i]);
+    }
+}
+
+/* Pad the partial tail block `buf[0..rem-1]`, append the 128-bit big-endian
+ * bit count derived from the 128-bit byte count (count_lo, count_hi), compress,
+ * and write out `out_words * 8` digest bytes. */
+static void sp_crypto_sha512_finish(uint64_t H[8], uint8_t buf[128],
+                                    uint64_t count_lo, uint64_t count_hi,
+                                    uint8_t *out, int out_words) {
+    size_t i, rem = (size_t)(count_lo & 127);
+    buf[rem] = 0x80;
+    if (rem >= 112) {
+        for (i = rem + 1; i < 128; i++) buf[i] = 0;
+        sp_crypto_sha512_block(H, buf);
+        for (i = 0; i < 112; i++) buf[i] = 0;
+    }
+    else {
+        for (i = rem + 1; i < 112; i++) buf[i] = 0;
+    }
+    uint64_t bits_lo = count_lo << 3;
+    uint64_t bits_hi = (count_hi << 3) | (count_lo >> 61);
+    for (i = 0; i < 8; i++) {
+        buf[112 + i] = (uint8_t)(bits_hi >> (56 - 8 * i));
+        buf[120 + i] = (uint8_t)(bits_lo >> (56 - 8 * i));
+    }
+    sp_crypto_sha512_block(H, buf);
+    sp_crypto_store_be64(out, H, out_words);
+}
+
+static void sp_crypto_sha512_oneshot(const sp_crypto_sha512_alg *alg,
+                                     const uint8_t *msg, size_t len, uint8_t *out) {
+    uint64_t H[8];
+    uint8_t buf[128];
+    memcpy(H, alg->iv, sizeof(H));
+    size_t full = len & ~((size_t)127);
+    if (full) sp_crypto_sha512_blocks(H, msg, full / 128);
+    size_t rem = len - full;
+    if (rem) memcpy(buf, msg + full, rem);
+    sp_crypto_sha512_finish(H, buf, (uint64_t)len, 0, out, alg->out_words);
+}
+
+#define SP_CRYPTO_SHA512_STATE_SIZE (8 * 8 + 16 + 128)
+
+static void sp_crypto_sha512_stream_load(const sp_crypto_sha512_alg *alg, const char *state,
+                                         uint64_t H[8], uint64_t *count_lo, uint64_t *count_hi,
+                                         uint8_t pend[128]) {
+    if (sp_str_byte_len(state) == SP_CRYPTO_SHA512_STATE_SIZE) {
+        memcpy(H, state, 64);
+        memcpy(count_lo, state + 64, 8);
+        memcpy(count_hi, state + 72, 8);
+        memcpy(pend, state + 80, 128);
+    }
+    else {
+        memcpy(H, alg->iv, 64);
+        *count_lo = 0;
+        *count_hi = 0;
+        memset(pend, 0, 128);
+    }
+}
+
+static void sp_crypto_sha512_stream_store(char *out, const uint64_t H[8],
+                                          uint64_t count_lo, uint64_t count_hi,
+                                          const uint8_t pend[128]) {
+    memcpy(out, H, 64);
+    memcpy(out + 64, &count_lo, 8);
+    memcpy(out + 72, &count_hi, 8);
+    memcpy(out + 80, pend, 128);
+    sp_ffi_bin_len = SP_CRYPTO_SHA512_STATE_SIZE;
+}
+
+static void sp_crypto_sha512_stream_update(const sp_crypto_sha512_alg *alg, const char *state,
+                                           const char *chunk, char *out) {
+    uint64_t H[8], count_lo, count_hi;
+    uint8_t pend[128];
+    sp_crypto_sha512_stream_load(alg, state, H, &count_lo, &count_hi, pend);
+    const uint8_t *p = (const uint8_t *)chunk;
+    size_t len = sp_str_byte_len(chunk);
+    size_t have = (size_t)(count_lo & 127);
+    uint64_t add = (uint64_t)len;
+    count_lo += add;
+    if (count_lo < add) count_hi++;
+    if (have) {
+        size_t take = 128 - have < len ? 128 - have : len;
+        memcpy(pend + have, p, take);
+        p += take;
+        len -= take;
+        if (have + take < 128) {
+            sp_crypto_sha512_stream_store(out, H, count_lo, count_hi, pend);
+            return;
+        }
+        sp_crypto_sha512_block(H, pend);
+    }
+    size_t full = len & ~((size_t)127);
+    if (full) sp_crypto_sha512_blocks(H, p, full / 128);
+    size_t tail = len - full;
+    if (tail) memcpy(pend, p + full, tail);
+    if (tail < 128) memset(pend + tail, 0, 128 - tail);
+    sp_crypto_sha512_stream_store(out, H, count_lo, count_hi, pend);
+}
+
+static void sp_crypto_sha512_stream_final(const sp_crypto_sha512_alg *alg, const char *state,
+                                          uint8_t *out) {
+    uint64_t H[8], count_lo, count_hi;
+    uint8_t buf[128];
+    sp_crypto_sha512_stream_load(alg, state, H, &count_lo, &count_hi, buf);
+    sp_crypto_sha512_finish(H, buf, count_lo, count_hi, out, alg->out_words);
+}
+
+static void sp_crypto_hex_encode(const uint8_t *raw, size_t n, char *out) {
+    static const char H[] = "0123456789abcdef";
+    for (size_t i = 0; i < n; i++) {
+        out[i * 2]     = H[(raw[i] >> 4) & 0xf];
+        out[i * 2 + 1] = H[raw[i] & 0xf];
+    }
+    out[n * 2] = '\0';
+}
+
+static SP_TLS char sp_crypto_sha384_hex_buf[97];
+static SP_TLS char sp_crypto_sha384_bin_buf[48];
+static SP_TLS char sp_crypto_sha384_state_buf[SP_CRYPTO_SHA512_STATE_SIZE];
+static SP_TLS char sp_crypto_sha384_final_buf[48];
+
+const char *sp_crypto_sha384_hex(const char *msg) {SP_GC_ROOT_STR(msg);
+    uint8_t out[48];
+    sp_crypto_sha512_oneshot(&sp_crypto_alg_sha384, (const uint8_t *)msg,
+                             sp_str_byte_len(msg), out);
+    sp_crypto_hex_encode(out, 48, sp_crypto_sha384_hex_buf);
+    return sp_crypto_sha384_hex_buf;
+}
+
+const char *sp_crypto_sha384_bin(const char *msg) {SP_GC_ROOT_STR(msg);
+    sp_crypto_sha512_oneshot(&sp_crypto_alg_sha384, (const uint8_t *)msg,
+                             sp_str_byte_len(msg), (uint8_t *)sp_crypto_sha384_bin_buf);
+    sp_ffi_bin_len = 48;
+    return sp_crypto_sha384_bin_buf;
+}
+
+const char *sp_crypto_sha384_update(const char *state, const char *chunk) {SP_GC_ROOT_STR(state);SP_GC_ROOT_STR(chunk);
+    sp_crypto_sha512_stream_update(&sp_crypto_alg_sha384, state, chunk, sp_crypto_sha384_state_buf);
+    return sp_crypto_sha384_state_buf;
+}
+
+const char *sp_crypto_sha384_final(const char *state) {SP_GC_ROOT_STR(state);
+    sp_crypto_sha512_stream_final(&sp_crypto_alg_sha384, state, (uint8_t *)sp_crypto_sha384_final_buf);
+    sp_ffi_bin_len = 48;
+    return sp_crypto_sha384_final_buf;
+}
+
+static SP_TLS char sp_crypto_sha512_hex_buf[129];
+static SP_TLS char sp_crypto_sha512_bin_buf[64];
+static SP_TLS char sp_crypto_sha512_state_buf[SP_CRYPTO_SHA512_STATE_SIZE];
+static SP_TLS char sp_crypto_sha512_final_buf[64];
+
+const char *sp_crypto_sha512_hex(const char *msg) {SP_GC_ROOT_STR(msg);
+    uint8_t out[64];
+    sp_crypto_sha512_oneshot(&sp_crypto_alg_sha512, (const uint8_t *)msg,
+                             sp_str_byte_len(msg), out);
+    sp_crypto_hex_encode(out, 64, sp_crypto_sha512_hex_buf);
+    return sp_crypto_sha512_hex_buf;
+}
+
+const char *sp_crypto_sha512_bin(const char *msg) {SP_GC_ROOT_STR(msg);
+    sp_crypto_sha512_oneshot(&sp_crypto_alg_sha512, (const uint8_t *)msg,
+                             sp_str_byte_len(msg), (uint8_t *)sp_crypto_sha512_bin_buf);
+    sp_ffi_bin_len = 64;
+    return sp_crypto_sha512_bin_buf;
+}
+
+const char *sp_crypto_sha512_update(const char *state, const char *chunk) {SP_GC_ROOT_STR(state);SP_GC_ROOT_STR(chunk);
+    sp_crypto_sha512_stream_update(&sp_crypto_alg_sha512, state, chunk, sp_crypto_sha512_state_buf);
+    return sp_crypto_sha512_state_buf;
+}
+
+const char *sp_crypto_sha512_final(const char *state) {SP_GC_ROOT_STR(state);
+    sp_crypto_sha512_stream_final(&sp_crypto_alg_sha512, state, (uint8_t *)sp_crypto_sha512_final_buf);
+    sp_ffi_bin_len = 64;
+    return sp_crypto_sha512_final_buf;
+}
+
 /* RFC 6455 §1.3 Sec-WebSocket-Accept:
  *     base64(SHA-1(client_key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
  * Standard Base64 (RFC 4648 §4, `+/` alphabet, `=` padding) -- NOT
@@ -745,6 +1067,8 @@ static void sp_crypto_b64_strict(const uint8_t *d, size_t n, char *out) {
 static SP_TLS char sp_crypto_md5_b64_buf[25];
 static SP_TLS char sp_crypto_sha1_b64_buf[29];
 static SP_TLS char sp_crypto_sha256_b64_buf[45];
+static SP_TLS char sp_crypto_sha384_b64_buf[65];
+static SP_TLS char sp_crypto_sha512_b64_buf[89];
 
 const char *sp_crypto_md5_b64(const char *msg) {SP_GC_ROOT_STR(msg);
     uint8_t out[16];
@@ -763,6 +1087,20 @@ const char *sp_crypto_sha256_b64(const char *msg) {SP_GC_ROOT_STR(msg);
     sp_crypto_sha256((const uint8_t *)msg, sp_str_byte_len(msg), out);
     sp_crypto_b64_strict(out, 32, sp_crypto_sha256_b64_buf);
     return sp_crypto_sha256_b64_buf;
+}
+const char *sp_crypto_sha384_b64(const char *msg) {SP_GC_ROOT_STR(msg);
+    uint8_t out[48];
+    sp_crypto_sha512_oneshot(&sp_crypto_alg_sha384, (const uint8_t *)msg,
+                             sp_str_byte_len(msg), out);
+    sp_crypto_b64_strict(out, 48, sp_crypto_sha384_b64_buf);
+    return sp_crypto_sha384_b64_buf;
+}
+const char *sp_crypto_sha512_b64(const char *msg) {SP_GC_ROOT_STR(msg);
+    uint8_t out[64];
+    sp_crypto_sha512_oneshot(&sp_crypto_alg_sha512, (const uint8_t *)msg,
+                             sp_str_byte_len(msg), out);
+    sp_crypto_b64_strict(out, 64, sp_crypto_sha512_b64_buf);
+    return sp_crypto_sha512_b64_buf;
 }
 
 /* ---------- HMAC-SHA256 (RFC 2104) ---------- */

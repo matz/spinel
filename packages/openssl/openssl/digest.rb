@@ -1,14 +1,14 @@
 # OpenSSL::Digest and OpenSSL::HMAC -- the names a CRuby program writes for a
-# hash or signature. SHA1/SHA256 and MD5 digests use the runtime functions
-# (lib/sp_crypto.c); SHA384/SHA512 use platform libcrypto functions.
+# hash or signature. SHA1/SHA256/SHA384/SHA512 and MD5 digests use the runtime
+# streaming functions (lib/sp_crypto.c).
 #
 # The class-method forms (`OpenSSL::Digest::SHA256.hexdigest(data)`) and the
 # object (`OpenSSL::Digest.new("SHA256")`, `OpenSSL::Digest::SHA256.new`)
 # with update / << / digest / hexdigest / base64digest and their `!` forms /
 # reset / digest_length / length / size / name / new / file / to_s / inspect /
 # ==, and the class methods with the algorithm first
-# (`OpenSSL::Digest.hexdigest("SHA256", data)`). Runtime hashes keep incremental
-# state; SHA384/SHA512 retain input for one-shot finalization.
+# (`OpenSSL::Digest.hexdigest("SHA256", data)`). All runtime hashes keep
+# fixed-size incremental state rather than buffering input.
 module OpenSSL
   # CRuby's base for everything in this namespace; SSLError and DigestError
   # both descend from it, so `rescue OpenSSL::OpenSSLError` catches either.
@@ -22,15 +22,25 @@ module OpenSSL
     native_lib "openssl"
     native_func :sha256_hex,      [:string],          :cstring, "sp_crypto_sha256_hex"
     native_func :sha256_bin,      [:string],          :cbinstr, "sp_crypto_sha256_bin"
+    native_func :sha384_hex,      [:string],          :cstring, "sp_crypto_sha384_hex"
+    native_func :sha384_bin,      [:string],          :cbinstr, "sp_crypto_sha384_bin"
+    native_func :sha512_hex,      [:string],          :cstring, "sp_crypto_sha512_hex"
+    native_func :sha512_bin,      [:string],          :cbinstr, "sp_crypto_sha512_bin"
     native_func :sha1_hex,        [:string],          :cstring, "sp_crypto_sha1_hex"
     native_func :sha1_bin,        [:string],          :cbinstr, "sp_crypto_sha1_bin"
     native_func :md5_hex,         [:string],          :cstring, "sp_crypto_md5_hex"
     native_func :md5_bin,         [:string],          :cbinstr, "sp_crypto_md5_bin"
     native_func :sha256_b64,      [:string],          :cstring, "sp_crypto_sha256_b64"
+    native_func :sha384_b64,      [:string],          :cstring, "sp_crypto_sha384_b64"
+    native_func :sha512_b64,      [:string],          :cstring, "sp_crypto_sha512_b64"
     native_func :sha1_b64,        [:string],          :cstring, "sp_crypto_sha1_b64"
     native_func :md5_b64,         [:string],          :cstring, "sp_crypto_md5_b64"
     native_func :sha256_update,   [:string, :string], :cbinstr, "sp_crypto_sha256_update"
     native_func :sha256_final,    [:string],          :cbinstr, "sp_crypto_sha256_final"
+    native_func :sha384_update,   [:string, :string], :cbinstr, "sp_crypto_sha384_update"
+    native_func :sha384_final,    [:string],          :cbinstr, "sp_crypto_sha384_final"
+    native_func :sha512_update,   [:string, :string], :cbinstr, "sp_crypto_sha512_update"
+    native_func :sha512_final,    [:string],          :cbinstr, "sp_crypto_sha512_final"
     native_func :sha1_update,     [:string, :string], :cbinstr, "sp_crypto_sha1_update"
     native_func :sha1_final,      [:string],          :cbinstr, "sp_crypto_sha1_final"
     native_func :md5_update,      [:string, :string], :cbinstr, "sp_crypto_md5_update"
@@ -53,11 +63,13 @@ module OpenSSL
     # any case), raw; the hashes the runtime carries, and DigestError for the
     # rest, the class CRuby raises for an unknown algorithm.
     def self.raw(name, data)
+      bytes = OpenSSL.send(:comparison_string, data)
       case name.to_s.upcase
-      when "SHA256" then Crypto.sha256_bin(data)
-      when "SHA1"   then Crypto.sha1_bin(data)
-      when "MD5"    then Crypto.md5_bin(data)
-      when "SHA384", "SHA512" then Native.digest_bytes(name, data)
+      when "SHA256" then Crypto.sha256_bin(bytes)
+      when "SHA384" then Crypto.sha384_bin(bytes)
+      when "SHA512" then Crypto.sha512_bin(bytes)
+      when "SHA1"   then Crypto.sha1_bin(bytes)
+      when "MD5"    then Crypto.md5_bin(bytes)
       else raise DigestError, "Unsupported digest algorithm (#{name}).: unknown object name"
       end
     end
@@ -83,24 +95,26 @@ module OpenSSL
     def self.base64digest(name, data) = new(name).base64digest(data)
     def self.file(path, name)         = new(name).file(path)
 
-    # SHA384/SHA512 append to an owned buffer and hash it once at finish.
-    # Storage remains proportional to input size; copies own their buffers.
+    # All supported algorithms stream through fixed-size runtime C state.
+    # Each update answers a new state String rather than mutating in place,
+    # so dup/clone keep independent state at O(1) cost.
     def self.step(name, state, data)
+      bytes = OpenSSL.send(:comparison_string, data)
       case name
-      when "SHA256" then Crypto.sha256_update(state, data)
-      when "SHA1"   then Crypto.sha1_update(state, data)
-      when "SHA384", "SHA512"
-        # StringValue bytes avoid Integer codepoints and encoding conflicts.
-        state << String.new(OpenSSL.send(:comparison_string, data), encoding: Encoding::BINARY)
-      else Crypto.md5_update(state, data)
+      when "SHA256" then Crypto.sha256_update(state, bytes)
+      when "SHA384" then Crypto.sha384_update(state, bytes)
+      when "SHA512" then Crypto.sha512_update(state, bytes)
+      when "SHA1"   then Crypto.sha1_update(state, bytes)
+      else Crypto.md5_update(state, bytes)
       end
     end
 
     def self.finish(name, state)
       case name
       when "SHA256" then Crypto.sha256_final(state)
+      when "SHA384" then Crypto.sha384_final(state)
+      when "SHA512" then Crypto.sha512_final(state)
       when "SHA1"   then Crypto.sha1_final(state)
-      when "SHA384", "SHA512" then Native.digest_bytes(name, state)
       else Crypto.md5_final(state)
       end
     end
@@ -109,12 +123,7 @@ module OpenSSL
       @name = name.to_s.upcase
       Digest.length_of(@name)
       @state = String.new(encoding: Encoding::BINARY)
-      update(data) if data
-    end
-
-    def initialize_copy(other)
-      super
-      @state = @state.dup if @name == "SHA384" || @name == "SHA512"
+      update(data) unless data.nil?
     end
 
     def name = @name
@@ -134,7 +143,7 @@ module OpenSSL
 
     # With `data`, the digest of `data` alone, and the object is reset.
     def digest(data = nil)
-      return Digest.finish(@name, @state) unless data
+      return Digest.finish(@name, @state) if data.nil?
       reset
       Digest.raw(@name, data)
     end
@@ -172,7 +181,7 @@ module OpenSSL
       other.respond_to?(:to_str) && hexdigest == other.to_str
     end
 
-    # Read 16 KiB at a time; SHA384/SHA512 retain the input until reset.
+    # Read 16 KiB at a time and feed into the incremental hash state.
     def file(name)
       File.open(name.respond_to?(:to_path) ? name.to_path : name, "rb") do |f|
         while (chunk = f.read(16_384))
@@ -184,33 +193,33 @@ module OpenSSL
 
     class SHA256 < Digest
       def initialize(data = nil) = super("SHA256", data)
-      def self.hexdigest(data)    = Crypto.sha256_hex(data)
-      def self.digest(data)       = Crypto.sha256_bin(data)
-      def self.base64digest(data) = Crypto.sha256_b64(data)
+      def self.hexdigest(data)    = Crypto.sha256_hex(OpenSSL.send(:comparison_string, data))
+      def self.digest(data)       = Crypto.sha256_bin(OpenSSL.send(:comparison_string, data))
+      def self.base64digest(data) = Crypto.sha256_b64(OpenSSL.send(:comparison_string, data))
       def self.file(name)         = new.file(name)
     end
 
     class SHA1 < Digest
       def initialize(data = nil) = super("SHA1", data)
-      def self.hexdigest(data)    = Crypto.sha1_hex(data)
-      def self.digest(data)       = Crypto.sha1_bin(data)
-      def self.base64digest(data) = Crypto.sha1_b64(data)
+      def self.hexdigest(data)    = Crypto.sha1_hex(OpenSSL.send(:comparison_string, data))
+      def self.digest(data)       = Crypto.sha1_bin(OpenSSL.send(:comparison_string, data))
+      def self.base64digest(data) = Crypto.sha1_b64(OpenSSL.send(:comparison_string, data))
       def self.file(name)         = new.file(name)
     end
 
     class SHA384 < Digest
       def initialize(data = nil) = super("SHA384", data)
-      def self.hexdigest(data)    = new.hexdigest(data)
-      def self.digest(data)       = new.digest(data)
-      def self.base64digest(data) = new.base64digest(data)
+      def self.hexdigest(data)    = Crypto.sha384_hex(OpenSSL.send(:comparison_string, data))
+      def self.digest(data)       = Crypto.sha384_bin(OpenSSL.send(:comparison_string, data))
+      def self.base64digest(data) = Crypto.sha384_b64(OpenSSL.send(:comparison_string, data))
       def self.file(name)         = new.file(name)
     end
 
     class SHA512 < Digest
       def initialize(data = nil) = super("SHA512", data)
-      def self.hexdigest(data)    = new.hexdigest(data)
-      def self.digest(data)       = new.digest(data)
-      def self.base64digest(data) = new.base64digest(data)
+      def self.hexdigest(data)    = Crypto.sha512_hex(OpenSSL.send(:comparison_string, data))
+      def self.digest(data)       = Crypto.sha512_bin(OpenSSL.send(:comparison_string, data))
+      def self.base64digest(data) = Crypto.sha512_b64(OpenSSL.send(:comparison_string, data))
       def self.file(name)         = new.file(name)
     end
 
@@ -218,9 +227,9 @@ module OpenSSL
     # blob by its MD5 (#4631). Not for new designs.
     class MD5 < Digest
       def initialize(data = nil) = super("MD5", data)
-      def self.hexdigest(data)    = Crypto.md5_hex(data)
-      def self.digest(data)       = Crypto.md5_bin(data)
-      def self.base64digest(data) = Crypto.md5_b64(data)
+      def self.hexdigest(data)    = Crypto.md5_hex(OpenSSL.send(:comparison_string, data))
+      def self.digest(data)       = Crypto.md5_bin(OpenSSL.send(:comparison_string, data))
+      def self.base64digest(data) = Crypto.md5_b64(OpenSSL.send(:comparison_string, data))
       def self.file(name)         = new.file(name)
     end
   end
@@ -232,48 +241,38 @@ module OpenSSL
   # Controller's CSRF token use, keying once and `dup`-ing per message.
   class HMAC
     # The algorithm is checked where the key is set, as CRuby checks it.
-    # For SHA256 and SHA1, which the runtime hashes a piece at a time, the
-    # padded key is hashed here, once: the inner hash's state after the
-    # key's block, and the outer one's. #update carries the inner state on
-    # over the data, and #digest finishes it and runs the outer hash over
+    # For every supported algorithm (SHA1, SHA256, SHA384, SHA512), the
+    # padded key block is hashed here, once: the inner hash's state after
+    # the key's block, and the outer one's. #update carries the inner state
+    # on over the data, and #digest finishes it and runs the outer hash over
     # it from its own state -- two blocks for a short message instead of
-    # four, as CRuby's HMAC context keeps them. SHA384 and SHA512 keep the
-    # data and compute the MAC over all of it when asked. #update answers a
-    # new String rather than appending, so a `dup` (whose ivars are the
-    # original's) never shares the data it goes on to add to: a `dup` of a
-    # keyed object costs no rehash of the key.
+    # four, as CRuby's HMAC context keeps them. #update answers a new state
+    # String rather than mutating in place, so a `dup` never shares what it
+    # goes on to add, and costs no rehash of the key.
     def initialize(key, digest)
       @algo = HMAC.algorithm(digest)
       unless @algo == "SHA256" || @algo == "SHA1" || @algo == "SHA384" || @algo == "SHA512"
         raise Digest::DigestError, "unsupported digest algorithm: #{digest}"
       end
       @key = OpenSSL.send(:comparison_string, key)
-      @data = ""
-      @keyed = @algo == "SHA256" || @algo == "SHA1"
-      @inner_key = String.new(encoding: Encoding::BINARY)
-      @outer_key = String.new(encoding: Encoding::BINARY)
-      if @keyed
-        block = @key.b
-        block = Digest.raw(@algo, block) if block.bytesize > 64
-        block = block + ("\0" * (64 - block.bytesize))
-        @inner_key = Digest.step(@algo, String.new(encoding: Encoding::BINARY), pad(block, 0x36))
-        @outer_key = Digest.step(@algo, String.new(encoding: Encoding::BINARY), pad(block, 0x5c))
-      end
+      block_size = (@algo == "SHA384" || @algo == "SHA512") ? 128 : 64
+      block = @key.b
+      block = Digest.raw(@algo, block) if block.bytesize > block_size
+      block = block + ("\0" * (block_size - block.bytesize))
+      empty = String.new(encoding: Encoding::BINARY)
+      @inner_key = Digest.step(@algo, empty, pad(block, 0x36))
+      @outer_key = Digest.step(@algo, empty, pad(block, 0x5c))
       @inner = @inner_key
     end
 
-    # The 64-byte key block XORed with ipad (0x36) or opad (0x5c).
+    # The key block XORed with ipad (0x36) or opad (0x5c).
     private def pad(block, byte)
       block.bytes.map { |b| b ^ byte }.pack("C*")
     end
 
     def update(data)
       data = OpenSSL.send(:comparison_string, data)
-      if @keyed
-        @inner = Digest.step(@algo, @inner, data)
-      else
-        @data = @data + data
-      end
+      @inner = Digest.step(@algo, @inner, data)
       self
     end
 
@@ -301,7 +300,6 @@ module OpenSSL
     end
 
     def reset
-      @data = ""
       @inner = @inner_key
       self
     end
@@ -310,7 +308,6 @@ module OpenSSL
     # #inspect all read it, so a subclass's own #digest changes none of the
     # others, as in CRuby.
     private def mac
-      return HMAC.digest(@algo, @key, @data) unless @keyed
       Digest.finish(@algo, Digest.step(@algo, @outer_key, Digest.finish(@algo, @inner)))
     end
 

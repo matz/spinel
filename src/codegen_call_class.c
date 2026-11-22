@@ -1779,19 +1779,19 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
         NodeKind rvk = nt_kind(nt, recv);
         const char *rnm = ((rvk == NK_ConstantReadNode ||
                                    rvk == NK_ConstantPathNode)) ? nt_str(nt, recv, "name") : NULL;
-        if (rnm && sp_streq(rnm, "Float")) {
-          if (sp_streq(cg_qm, "INFINITY")) { buf_puts(b, "sp_box_float(1.0/0.0)"); return 1; }
-          if (sp_streq(cg_qm, "NAN"))      { buf_puts(b, "sp_box_float(0.0/0.0)"); return 1; }
-          if (sp_streq(cg_qm, "MAX"))      { buf_puts(b, "sp_box_float(DBL_MAX)"); return 1; }
-          if (sp_streq(cg_qm, "MIN"))      { buf_puts(b, "sp_box_float(DBL_MIN)"); return 1; }
-          if (sp_streq(cg_qm, "EPSILON"))  { buf_puts(b, "sp_box_float(DBL_EPSILON)"); return 1; }
-          if (sp_streq(cg_qm, "DIG"))      { buf_puts(b, "sp_box_int(DBL_DIG)"); return 1; }
-          if (sp_streq(cg_qm, "MANT_DIG")) { buf_puts(b, "sp_box_int(DBL_MANT_DIG)"); return 1; }
-          if (sp_streq(cg_qm, "RADIX"))    { buf_puts(b, "sp_box_int(FLT_RADIX)"); return 1; }
-        }
-        if (rnm && sp_streq(rnm, "Math")) {
-          if (sp_streq(cg_qm, "PI")) { buf_puts(b, "sp_box_float(M_PI)"); return 1; }
-          if (sp_streq(cg_qm, "E"))  { buf_puts(b, "sp_box_float(M_E)"); return 1; }
+        TyKind bt = rnm ? builtin_scoped_const_type(c, recv, rnm, cg_qm) : TY_UNKNOWN;
+        char bq[256];
+        if (rnm) snprintf(bq, sizeof bq, "%s::%s", rnm, cg_qm);
+        /* (a builtin class nested in the receiver: Process::Status) */
+        if (bt == TY_UNKNOWN && rnm && (builtin_class_id(bq) != 0 || is_builtin_class_name(bq) || is_builtin_module_name(bq)))
+          bt = TY_CLASS;
+        if (bt != TY_UNKNOWN) {
+          Buf vb = {0};
+          if (bt == TY_CLASS) emit_builtin_class_value(c, bq, &vb);
+          else emit_builtin_scoped_const(c, recv, rnm, cg_qm, &vb);
+          emit_boxed_text(c, bt, vb.p, b);
+          free(vb.p);
+          return 1;
         }
       }
       /* literal but unresolved: evaluate the receiver for side effects, then raise.

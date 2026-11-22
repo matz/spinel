@@ -2647,6 +2647,7 @@ void emit_call(Compiler *c, int id, Buf *b);
 /* The class value of builtin class `name` (codegen_call_class.c): its
    reopening's index when the program reopens it, else its id and name */
 void emit_builtin_class_value(Compiler *c, const char *name, Buf *b);
+int  emit_builtin_scoped_const(Compiler *c, int par_id, const char *par_nm, const char *nm, Buf *b);   /* codegen_expr.c: Float::INFINITY, Process::WNOHANG */
 void emit_cv_canon(Compiler *c, Buf *b, const char *fmt, ...) __attribute__((format(printf, 3, 4)));
 /* A builtin call the builtin-op table covers (codegen_ops.c): 1 when it
    emitted the call, 0 to keep falling through the chain. */

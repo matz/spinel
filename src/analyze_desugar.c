@@ -26884,6 +26884,31 @@ static int incl_declined_node(const NodeTable *nt, int node, const char *param) 
   return 0;
 }
 
+/* Does every argument of mixin call s name a module the program itself
+   defines (`module M` somewhere in it)? Only such a mixin is the walk's to
+   record where a hook's statement lands. A builtin module's (Enumerable,
+   Comparable, Kernel) is read by the steps ahead of the walk
+   (desugar_extend_enumerable among them), which never see a statement the
+   walk splices: `base.extend(Enumerable)` in a hook left the includer
+   with no class-side sort or map. */
+static int incl_mixes_own_modules(const NodeTable *nt, int s) {
+  int an = nt_ref(nt, s, "arguments"), ac = 0;
+  const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
+  if (ac == 0) return 0;
+  for (int i = 0; i < ac; i++) {
+    NodeKind k = nt_kind(nt, av[i]);
+    const char *mn = k == NK_ConstantReadNode || k == NK_ConstantPathNode ? nt_str(nt, av[i], "name") : NULL;
+    int own = 0;
+    if (!mn) return 0;
+    NT_FOREACH_KIND(nt, NK_ModuleNode, m) {
+      const char *dn = class_def_name(nt, m);
+      if (dn && sp_streq(dn, mn)) { own = 1; break; }
+    }
+    if (!own) return 0;
+  }
+  return 1;
+}
+
 /* The statements of a hook body as the splice leaves them at the class
    body's level: a class_eval-family block on the includer (bare once
    spliced) is its body's statements (incl_emit_stmt), anything else
@@ -26928,11 +26953,11 @@ static int incl_declined_stmts(NodeTable *nt, int body, const char *param) {
     const char *nm = call ? nt_str(nt, s, "name") : NULL;
     int on_base = r >= 0 && nt_kind(nt, r) == NK_LocalVariableReadNode && param && nt_str(nt, r, "name") &&
                   sp_streq(nt_str(nt, r, "name"), param);
-    if (spliced && on_base && is_mixin_call(nm) && blk < 0) continue;
+    if (spliced && on_base && is_mixin_call(nm) && blk < 0 && incl_mixes_own_modules(nt, s)) continue;
     /* (a receiverless one in a class_eval block on the includer is the
        includer's own too, a statement of its body once the block's
        statements are spliced there) */
-    if (spliced && g_incl_on_base && call && r < 0 && is_mixin_call(nm) && blk < 0) continue;
+    if (spliced && g_incl_on_base && call && r < 0 && is_mixin_call(nm) && blk < 0 && incl_mixes_own_modules(nt, s)) continue;
     /* (a class_eval block on the includer was asked above, statement by
        statement: its own statements are the ones that land in the body) */
     if (nm && on_base && nt_ref(nt, s, "arguments") < 0 && blk >= 0 && nt_kind(nt, blk) == NK_BlockNode &&

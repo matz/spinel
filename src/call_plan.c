@@ -11382,9 +11382,13 @@ int cplan_super_needs_method_missing(Compiler *c, int id) {
    there, not a builtin's ahead of it? */
 static int cplan_bound_at_point(Compiler *c, int id, int ci, const char *name, int sg, LoadPoint p) {
   if (p.region < 0 || elab_runs_later(c, id) || elab_in_kept_block(c, id)) return 0;
-  int mi = call_target(c, id, ci, name, sg ? CT_CMETHOD : 0, NULL);
+  /* (a reader that names the method, a respond_to?, binds the version live at its point, as a capture does; the
+     version is the bound method where the plan maps it there, ct_def_version: an accessor's or an alias's made
+     method has a def of its own) */
+  int mi = call_target(c, id, ci, name, (sg ? CT_CMETHOD : 0) | (ct_calls(c, id, name) ? 0 : CT_CAPTURE), NULL);
   const LrDef *d = NULL;
-  return mi >= 0 && elab_method_at(c, ci, name, sg, p, &d) == ELAB_YES && d && d->node == c->scopes[mi].def_node;
+  return mi >= 0 && elab_method_at(c, ci, name, sg, p, &d) == ELAB_YES && d &&
+         (d->node == c->scopes[mi].def_node || ct_def_version(c, ci, name, sg, d, NULL) == mi);
 }
 /* See call_plan.h. */
 int cplan_module_call_on_class(Compiler *c, int id) {

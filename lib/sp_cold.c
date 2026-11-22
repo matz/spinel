@@ -874,7 +874,10 @@ static void sp_glob_walk_at(const char *fsdir, const char *outprefix,
     snprintf(fspath, sizeof fspath, "%s%s%s", fsdir, SP_GLOB_SEP(fsdir), comp);
     char disk[NAME_MAX + 1];
     const char *name = comp;
-    if (sp_glob_exists(fspath) && sp_glob_disk_name(fspath, disk, sizeof disk) && strcmp(disk, comp)) {
+    /* ("." and ".." name a directory by another path: the disk's name for
+       them is that directory's own, which is no name under this one) */
+    int dots = comp[0] == '.' && (comp[1] == 0 || (comp[1] == '.' && comp[2] == 0));
+    if (!dots && sp_glob_exists(fspath) && sp_glob_disk_name(fspath, disk, sizeof disk) && strcmp(disk, comp)) {
       name = disk;
       snprintf(fspath, sizeof fspath, "%s%s%s", fsdir, SP_GLOB_SEP(fsdir), name);
     }

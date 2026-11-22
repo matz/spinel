@@ -680,8 +680,9 @@ static SP_INLINE void sp_slab_zero_small(void *p, unsigned csize) {
 }
 /* The slow half of an allocation: the cached word is empty, so search the
    current chunk, else refill; past the largest class, or with the slab
-   off, malloc. */
-static SP_NOINLINE void *sp_slab_alloc_slow(size_t need, int payload, int zero) {
+   off, malloc. A failed malloc ends the program, or answers NULL when the
+   caller can collect and try again (may_fail). */
+static SP_NOINLINE void *sp_slab_alloc_slow(size_t need, int payload, int zero, int may_fail) {
   if (SP_EXPECT(sp_slab_on < 0, 0)) sp_slab_init();
   if (sp_slab_on && need <= SP_SLAB_MAX) {
     int cls = sp_slab_cls_of[(need + 15) >> 4];
@@ -702,14 +703,17 @@ static SP_NOINLINE void *sp_slab_alloc_slow(size_t need, int payload, int zero) 
     }
   }
   void *p = zero ? calloc(1, need) : malloc(need);
-  if (!p) sp_oom_die();
+  if (!p && !may_fail) sp_oom_die();
   return p;
 }
 /* The fast half, inlined into the entry points: the next slot of the
    claimed run, a bump. The claim was made for the whole run when it was
    cut (sp_slab_run), so the bitmap is not touched here; an object with a
-   finalizer sets its fin bit, in the word cached beside the claim word. */
-static SP_INLINE void *sp_slab_alloc_in(size_t need, int payload, int fin, int zero) {
+   finalizer sets its fin bit, in the word cached beside the claim word.
+   A failed malloc answers NULL when may_fail is set (the caller can
+   collect and try again); the entry points below take sp_slab_alloc_in,
+   which ends the program instead. */
+static SP_INLINE void *sp_slab_alloc_body(size_t need, int payload, int fin, int zero, int may_fail) {
   if (SP_EXPECT(sp_slab_on > 0 && need <= SP_SLAB_MAX, 1)) {
     int cls = sp_slab_cls_of[(need + 15) >> 4];
     sp_slab_worker *wk = &sp_slab_wk[SP_SLAB_WID()];
@@ -731,12 +735,15 @@ static SP_INLINE void *sp_slab_alloc_in(size_t need, int payload, int fin, int z
       return p;
     }
   }
-  void *p = sp_slab_alloc_slow(need, payload, zero);
-  if (fin && sp_slab_on > 0 && sp_slab_owns(p)) {
+  void *p = sp_slab_alloc_slow(need, payload, zero, may_fail);
+  if (fin && p && sp_slab_on > 0 && sp_slab_owns(p)) {
     sp_slab_loc l; sp_slab_locate(p, &l);
     bm_or(&l.bm->fin[l.w], l.bit);
   }
   return p;
+}
+static SP_INLINE void *sp_slab_alloc_in(size_t need, int payload, int fin, int zero) {
+  return sp_slab_alloc_body(need, payload, fin, zero, 0);
 }
 /* An object with its header written, in one call: the fast path above, the
    zeroing, and the three header fields the collector reads (the flags are
@@ -841,6 +848,25 @@ void *sp_gc_alloc_208(size_t need, void (*scn)(void *)) { return sp_gc_alloc_lea
 void *sp_gc_alloc_224(size_t need, void (*scn)(void *)) { return sp_gc_alloc_lean(need, scn, 224); }
 void *sp_gc_alloc_240(size_t need, void (*scn)(void *)) { return sp_gc_alloc_lean(need, scn, 240); }
 void *sp_gc_alloc_256(size_t need, void (*scn)(void *)) { return sp_gc_alloc_lean(need, scn, 256); }
+/* An object's memory, at a point where a collection may run. When the
+   heap has no room, the garbage of every generation may hold it: the
+   allocation collects in full and tries once more before it ends the
+   program. Where memory is short (a fixed heap, no overcommit, a
+   ulimit), a collection that only the threshold would have run came too
+   late. */
+static void *sp_gc_alloc_or_collect(size_t need, void (*fin)(void *)) {
+  void *p = sp_slab_alloc_body(need, 0, fin != NULL, 1, 1);
+  if (SP_EXPECT(p != NULL, 1)) return p;
+#ifndef SP_GC_NONE
+  sp_gc_full_next = 1;
+#ifdef SP_THREADS
+  sp_gc_collect_request();
+#else
+  sp_gc_collect_retune();
+#endif
+#endif
+  return sp_slab_alloc_in(need, 0, fin != NULL, 1);
+}
 static SP_NOINLINE void *sp_gc_alloc_full(size_t sz, void (*fin)(void *), void (*scn)(void *)) {
 #ifdef SP_THREADS
   /* Lock-free fast path: the list push is a CAS (SP_GC_HEAP_PUSH) and the live-
@@ -855,7 +881,7 @@ static SP_NOINLINE void *sp_gc_alloc_full(size_t sz, void (*fin)(void *), void (
   if (SP_GC_CTR_GET(sp_gc_bytes) > SP_GC_CTR_GET(sp_gc_threshold)) sp_stw_collect();
 #endif
   size_t need = sizeof(sp_gc_hdr) + sz;
-  sp_gc_hdr *h = (sp_gc_hdr *)sp_slab_alloc_in(need, 0, fin != NULL, 1);
+  sp_gc_hdr *h = sp_gc_alloc_or_collect(need, fin);
   h->finalize = fin; h->scan = scn; h->size = need;
   if (SP_EXPECT(sp_alloc_report_on, 0)) sp_alloc_report_count((void *)scn, sz);
   SP_GC_HEAP_PUSH(h); sp_gc_bytes_add(need);
@@ -882,7 +908,7 @@ static SP_NOINLINE void *sp_gc_alloc_full(size_t sz, void (*fin)(void *), void (
   }
 #endif
   size_t need = sizeof(sp_gc_hdr) + sz;
-  sp_gc_hdr *h = (sp_gc_hdr *)sp_slab_alloc_in(need, 0, fin != NULL, 1);
+  sp_gc_hdr *h = sp_gc_alloc_or_collect(need, fin);
   h->finalize = fin; h->scan = scn; h->size = need;
   if (SP_EXPECT(sp_alloc_report_on, 0)) sp_alloc_report_count((void *)scn, sz);
   SP_GC_HEAP_PUSH(h); sp_gc_bytes_add(need);

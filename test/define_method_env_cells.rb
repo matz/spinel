@@ -91,15 +91,15 @@ p n.m([1, 2]), n.each_m, n.times_m, n.while_m
 
 # define_singleton_method on the class, in two runs, and a subclass
 class Single
-  def self.mk(n)
+  def self.mk_single(n)
     define_singleton_method(:g) { n }
     define_singleton_method(:h) { |a| a + n }
     :ok
   end
 end
-Single.mk(1)
+Single.mk_single(1)
 p Single.g, Single.h(10)
-Single.mk(2)
+Single.mk_single(2)
 p Single.g, Single.h(10)
 class SubSingle < Single; end
 p SubSingle.g

@@ -449,8 +449,10 @@ definer that comes while a call is in progress leaves that call its own
 environment. A call that reaches the method before its definer has run, by a
 dispatch that reads no version cell, finds no environment and raises
 NoMethodError. The call plan refuses a block that yields to the method's
-block, reads or writes a local of the `define_method` block it is in, or
-closes over the method's locals where the program aliases its name
+block, reads or writes a local of the `define_method` block it is in, closes over the method's locals where a run may define the method on
+another class or object than the one it is registered on
+(`elab_body_call_owner`, set with the bars in `lr_body_forms`:
+`lr_body_owner_fixed`), or closes over the method's locals where the program aliases its name
 (`an_aliases_name`: the alias keeps the closure of one run), or a local no closure cell can hold (`env_cells_supported`), where the
 program reaches the name it
 defines (`an_name_reached`: a written call, or a Symbol or String

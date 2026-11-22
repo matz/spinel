@@ -854,6 +854,10 @@ spinel: test/reject/def_delegators_splat.rb:10: def_delegators with arguments ot
 spinel: test/reject/define_method_body_alias_of_capturing.rb:7: Module#define_method in a method body with a block that reads or writes that method's locals where the program aliases the name it defines (the alias would keep the environment of one run) is not supported (see docs/limitations.md)
 == test/reject/define_method_body_alias_of_capturing.rb [promote] rc=1
 spinel: test/reject/define_method_body_alias_of_capturing.rb:7: Module#define_method in a method body with a block that reads or writes that method's locals where the program aliases the name it defines (the alias would keep the environment of one run) is not supported (see docs/limitations.md)
+== test/reject/define_method_body_owner_not_fixed.rb [default] rc=1
+spinel: test/reject/define_method_body_owner_not_fixed.rb:8: Module#define_singleton_method in a method body with a block that reads or writes that method's locals where a run may define it on another class or object than the one it is registered on is not supported (see docs/limitations.md)
+== test/reject/define_method_body_owner_not_fixed.rb [promote] rc=1
+spinel: test/reject/define_method_body_owner_not_fixed.rb:8: Module#define_singleton_method in a method body with a block that reads or writes that method's locals where a run may define it on another class or object than the one it is registered on is not supported (see docs/limitations.md)
 == test/reject/define_method_body_yields.rb [default] rc=1
 spinel: test/reject/define_method_body_yields.rb:6: Module#define_method in a method body with a block that yields to that method's block is not supported (see docs/limitations.md)
 == test/reject/define_method_body_yields.rb [promote] rc=1

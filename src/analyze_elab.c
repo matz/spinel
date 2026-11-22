@@ -250,6 +250,7 @@ struct LoadRecord {
      while the walk records and again once it is done, of the nodes there are then (bform_n: their count + 1,
      negated while the walk records, 0 for none yet) */
   struct LrBodyForm { const char *name; int node; unsigned char attr; } *bform; int nbform, bform_n;
+  unsigned char *bown; int nbown;   /* [nbown] by node: a body's definer call every run of which defines on one class and side (lr_body_owner_fixed, set with the forms) */
   struct LrHeader *hdr; int nhdr, chdr, *hdr_head;   /* the class and module headers, in the order the walk reaches them (elab_header_class), and the class builders' calls and writes noted ahead of the walk (elab_builder_note) */
   ElabSurface *surf; int *surf_at;   /* elab_class_surface's, by class side: [2 * (cls + 1) + sg] .. [+ 1] */
   int *dscope, ndscope;      /* [ndscope] by node: the method scope the scope walk made of a def or define_method (elab_def_scope), 0 for none */
@@ -3537,6 +3538,16 @@ static int lr_body_call_barred(Compiler *c, const int *par, int n, int node, LrB
     if (is_implicitly_private_name(elab_call_form_name(c->nt, node, k, b, sizeof b, NULL))) return 1;
   return 0;
 }
+/* ...does every run of a body's definer call at node define on one class and side (the owner an environment of
+   the definer's blocks belongs to)? Not where the tree spells no class self is (lr_call_side: an instance method's
+   self is an object), on a chain the record does not hold, or in a class method or a define_singleton_method's block
+   a call may run on a subclass (lr_body_self_unsure, lr_body_dsm_unsure: the call defines on the class it runs on) */
+static int lr_body_owner_fixed(Compiler *c, const int *par, int n, int node, LrBodyNames *x) {
+  int cls, sg;
+  lr_call_side(c, par, n, node, -1, &cls, &sg);
+  return cls >= 0 && !lr_chain_open(c, cls) && !lr_body_self_unsure(c, x, lr_body_cmethod(c->nt, par, n, node), cls) &&
+         !lr_body_dsm_unsure(c, x, node);
+}
 /* ...does a body's non-public def at node d bar its name (lr_body_forms)? In a body that may reach code the record
    cannot follow (lr_body_followed), in a class method a call may run on a subclass, which the word the def's value is
    given to acts on (lr_body_self_unsure), for a class method's def a reader that reads no class-side version
@@ -3558,6 +3569,9 @@ static void lr_body_forms(Compiler *c, const int *par, int n) {
   struct LrBodyForm *old = nold ? r->bform : NULL;
   if (!old) free(r->bform);
   r->bform = NULL; r->nbform = 0;
+  free(r->bown);
+  r->bown = calloc((size_t)n + 1, 1);
+  r->nbown = r->bown ? n : 0;
   LrBodyNames x;   /* (the tree's names the bars ask, lr_body_word_barred) */
   lr_body_names_read(c, par, n, &x);
   for (int id = 0; id < n; id++) {
@@ -3576,6 +3590,8 @@ static void lr_body_forms(Compiler *c, const int *par, int n) {
     if (k == NK_CallNode && lr_body_word(nt, id) && lr_body_around(nt, par, n, id) >= 0 && lr_body_word_frame(c, par, n, id) &&
         !lr_body_word_barred(c, par, n, id, &x))
       continue;
+    if (k == NK_CallNode && r->bown && lr_body_call(c, id) >= 0 && lr_body_around(nt, par, n, id) >= 0)
+      r->bown[id] = lr_body_owner_fixed(c, par, n, id, &x);
     /* (so is a body's definer call, lr_body_call, but a barred one) */
     if (lr_body_call(c, id) >= 0 && lr_body_around(nt, par, n, id) >= 0 && !lr_body_call_barred(c, par, n, id, &x)) continue;
     if (k != NK_DefNode && k != NK_AliasMethodNode && k != NK_UndefNode && k != NK_CallNode) continue;
@@ -5355,6 +5371,14 @@ int elab_body_self_object(Compiler *c, int node) {
         is_define_method_name(nt_str(c->nt, par[p], "name")))
       return par[p];
   return -1;
+}
+/* See analyze.h */
+int elab_body_call_owner(Compiler *c, int call) {
+  LoadRecord *r = elab_fresh(c);
+  const int *par = r->recorded && call >= 0 && call < r->n && lr_body_call(c, call) >= 0 ? lr_par(c, 0) : NULL;
+  if (!par) return 0;
+  lr_body_forms(c, par, r->n);
+  return call < r->nbown && r->bown[call];
 }
 /* See analyze.h */
 int elab_body_call_version(Compiler *c, int call, int *cls, int *sg) {
@@ -14024,7 +14048,7 @@ void elab_free(Compiler *c) {
   free(r->brings); free(r->hist); free(r->mixed); free(r->mby); free(r->mby_at); free(r->rclass); free(r->cref); free(r->sgm); free(r->sgchain); free(r->unset.key); free(r->unset.un); free(r->anc.at); free(r->anc.list); free(r->anc.seen); free(r->anc.walked); free(r->anc.depth); free(r->anc.up); free(r->clsmod); free(r->hhead); free(r->cls); free(r->vers); free(r->vers_head); free(r->valias); free(r->rdr); free(r->rdr_head); free(r->bform); free(r->set);
   for (int i = 0; i < r->nhdr; i++) free(r->hdr[i].leaf);
   free(r->hdr); free(r->hdr_head);
-  free(r->st); free(r->at); free(r->bits); free(r->dscope); free(r->ddef); free(r->rend); free(r->rinst); free(r->rentry); free(r->rmade); free(r->ext); free(r->extix); free(r->cread); free(r->once); free(r);
+  free(r->st); free(r->at); free(r->bits); free(r->dscope); free(r->bown); free(r->ddef); free(r->rend); free(r->rinst); free(r->rentry); free(r->rmade); free(r->ext); free(r->extix); free(r->cread); free(r->once); free(r);
   c->lrec = NULL;
 }
 

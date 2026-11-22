@@ -10096,8 +10096,8 @@ static int cplan_instance_call_named(Compiler *c, const char *name, int k) {
    (elab_body_call_version: in a define_method's or define_singleton_method's block too), whose block yields to that
    method's block (the method it defines is laid out as a method of its own, which has none; the locals it reads or
    writes it closes over, Scope.env_host), that reads or writes a local of the define_method block it is in, or
-   that closes over the method's locals where the program aliases its name (an alias keeps the environment of one
-   run), where the program reaches the name it defines
+   that closes over the method's locals where a run may define it on another class or object than the one it is
+   registered on, or where the program aliases its name (an alias keeps the environment of one run), where the program reaches the name it defines
    (an_name_reached: a call, or a Symbol or String that may run it; one nothing reaches is never run in place
    of the block); a version a reader of its name cannot read
    (cplan_call_version_unread); a define_method version that replaces an attr_* version (elab_attr_replaced) in a
@@ -10136,6 +10136,8 @@ static const char *cplan_body_definer_gap(Compiler *c, int id, char *buf, size_t
   const char *envgap = !lit ? NULL : an_block_yields(nt, blk) ? "yields to that method's block" :
     /* (a definer in a define_method's block: the locals it closes over are that block's own, which have no cells yet) */
     !def && an_block_captures(nt, blk, 0) ? "reads or writes a local of the define_method block around it" :
+    /* (the environment is the definer's one, so every run must define on the class and side the method is registered on) */
+    an_block_captures(nt, blk, 0) && !elab_body_call_owner(c, id) ? "reads or writes that method's locals where a run may define it on another class or object than the one it is registered on" :
     /* (an alias keeps the method it found: the environment of one run of the definer) */
     an_block_captures(nt, blk, 0) && an_aliases_name(c, mn, NULL) ? "reads or writes that method's locals where the program aliases the name it defines (the alias would keep the environment of one run)" :
     /* (a local of a type no closure cell holds, as a proc's capture is refused) */

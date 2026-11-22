@@ -2455,7 +2455,11 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
          (bam_may_lack, desugar_builtin_method_obj) */
       int bdn = c->scopes[mi].def_node;
       if (bsym && nt_int(nt, bdn, "bam_may_lack", 0) && repr_of(c, recv).kind == RK_BOXED) {
-        buf_printf(b, "if (sp_poly_lacks_builtin_method(_t%d, ", tbr);
+        /* (a name no object has, bam_never_made: a plain Object lacks it too) */
+        if (nt_int(nt, bdn, "bam_never_made", 0))
+          buf_printf(b, "if (sp_poly_lacks_never_made(_t%d, ", tbr);
+        else
+          buf_printf(b, "if (sp_poly_lacks_builtin_method(_t%d, ", tbr);
         emit_str_literal(b, bsym);
         buf_puts(b, ")) sp_raise_cls(\"NameError\", sp_nomethod_class_msg(");
         emit_str_literal(b, bsym);

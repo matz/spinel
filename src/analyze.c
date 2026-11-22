@@ -51666,7 +51666,8 @@ static void an_phase_block_inline(Compiler *c) {
   int *fwd_to = (int *)malloc(sizeof(int) * (size_t)cfwd);
   for (int mi = 0; mi < c->nscopes; mi++) {
     Scope *m = &c->scopes[mi];
-    if (!m->blk_param) continue;
+    /* (a define_method block's method with an environment runs its prologue, which loads it: never spliced) */
+    if (!m->blk_param || m->env_host) continue;
     /* instance_eval/exec trampolines are inlined at call sites by their own
        dedicated splice; don't treat the &block forward as a yield here. */
     /* The method asked about is the class's answer of the name, not this

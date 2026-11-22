@@ -1,0 +1,8 @@
+class Bus
+  def initialize: () -> void
+  def on: (untyped, ^(Integer) -> void) -> untyped
+  def fire: (untyped) -> untyped
+  def shout: (untyped, (^(String) -> String)?) -> untyped
+  def adder: (untyped) -> ^(Integer) -> Integer
+  def each_tag: (untyped, ^(String) -> void) -> untyped
+end

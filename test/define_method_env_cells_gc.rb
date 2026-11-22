@@ -33,3 +33,14 @@ p k.count
 p k.m(2), Held.peek
 junk = Array.new(2000) { |i| "junk#{i}" * 3 }
 p k.m(3), junk.size, Held.peek
+
+# a default that runs the definer again, and collects, keeps the environment it was bound to
+class Rerun
+  def self.mk(n)
+    define_method(:m) { |a = (Rerun.mk(n); GC.start; n)| [a, n] }
+    :ok
+  end
+end
+Rerun.mk(1)
+p Rerun.new.m
+p Rerun.new.m

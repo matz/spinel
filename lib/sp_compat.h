@@ -183,6 +183,16 @@
 # define SP_HAVE_X86_SHA 0
 #endif
 
+/* This path uses only features guaranteed by the compilation target. */
+#if !defined(SP_PORTABLE) && defined(__AARCH64EL__) && defined(__ARM_FEATURE_SHA2) && defined(__ARM_NEON) && defined(__has_include)
+# if __has_include(<arm_neon.h>)
+#  define SP_HAVE_ARM_SHA2 1
+# endif
+#endif
+#ifndef SP_HAVE_ARM_SHA2
+# define SP_HAVE_ARM_SHA2 0
+#endif
+
 /* ---- attributes with a meaning: no silent fallback ---- */
 
 /* Run before main. There is no standard spelling; a compiler without it

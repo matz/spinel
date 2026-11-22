@@ -1,0 +1,23 @@
+97
+"a"
+97
+97
+97
+97
+97
+98
+97
+1
+[nil, 1]
+nil
+""
+ArgumentError: unknown unpack directive 'y' in 'yC'
+ArgumentError: unknown unpack directive '\x00' in '\0C'
+ArgumentError: unknown unpack directive '\x00' in 'C\0C'
+97
+97
+99
+97
+97
+"rec Cy"
+97

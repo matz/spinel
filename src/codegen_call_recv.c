@@ -8546,12 +8546,10 @@ static int str_arms_convert(Compiler *c, int id, Buf *b, const NodeTable *nt, co
     int offv = struct_kwarg_value(c, argv[1], "offset");
     int one = sp_streq(name, "unpack1");
     TyKind u1t = one ? repr_of(c, id).as_ty : TY_POLY;
-    if (one && oint_kind(u1t)) { oint_open(c, id, u1t, b); buf_printf(b, "%s(sp_PolyArray_get(", oint_unbox(u1t)); }
-    else if (one)                    buf_puts(b, "sp_PolyArray_get(");
-    buf_printf(b, "sp_str_unpack_off(%s, ", r); emit_str_expr(c, argv[0], b);
+    if (one && oint_kind(u1t)) { oint_open(c, id, u1t, b); buf_printf(b, "%s(", oint_unbox(u1t)); }
+    buf_printf(b, "sp_str_unpack%s_off(%s, ", one ? "1" : "", r); emit_str_expr(c, argv[0], b);
     buf_puts(b, ", "); emit_int_expr(c, offv, b); buf_puts(b, ")");
-    if (one) buf_puts(b, oint_kind(u1t) ? ", 0))" : ", 0)");
-    if (one && oint_kind(u1t)) oint_close(c, id, b);
+    if (one && oint_kind(u1t)) { buf_puts(b, ")"); oint_close(c, id, b); }
   }
   else if (sp_streq(name, "unpack1") && argc == 1) {
     /* A literal single-directive numeric format fixes the value's type
@@ -8559,10 +8557,10 @@ static int str_arms_convert(Compiler *c, int id, Buf *b, const NodeTable *nt, co
        (int, or float? -- the _opt keeps a padded nil from short input
        as float-nil instead of 0.0). */
     TyKind u1t = repr_of(c, id).as_ty;
-    if (oint_kind(u1t)) { oint_open(c, id, u1t, b); buf_printf(b, "%s(sp_PolyArray_get(sp_str_unpack(%s, ", oint_unbox(u1t), r); }
-    else                buf_printf(b, "sp_PolyArray_get(sp_str_unpack(%s, ", r);
+    if (oint_kind(u1t)) { oint_open(c, id, u1t, b); buf_printf(b, "%s(sp_str_unpack1(%s, ", oint_unbox(u1t), r); }
+    else                buf_printf(b, "sp_str_unpack1(%s, ", r);
     emit_str_expr(c, argv[0], b);
-    buf_puts(b, oint_kind(u1t) ? "), 0))" : "), 0)");
+    buf_puts(b, oint_kind(u1t) ? "))" : ")");
     if (oint_kind(u1t)) oint_close(c, id, b);
   }
   else if (sp_streq(name, "chars") && argc == 0)   buf_printf(b, "sp_str_chars(%s)", r);
@@ -19193,9 +19191,9 @@ static int emit_poly_unpack_off(Compiler *c, int id, Buf *b, const NodeTable *nt
   const int args[2] = { argv[0], struct_kwarg_value(c, argv[1], "offset") };
   TyKind u1t = one ? repr_of(c, id).as_ty : TY_POLY;
   if (oint_kind(u1t)) { oint_open(c, id, u1t, b); buf_printf(b, "%s(", oint_unbox(u1t)); }
-  buf_puts(b, one ? "sp_PolyArray_get(" : "sp_box_poly_array(");
-  emit_poly_str_transform(c, recv, 2, args, name, "unpack_off", 2, b);
-  buf_puts(b, one ? ", 0)" : ")");
+  if (!one) buf_puts(b, "sp_box_poly_array(");
+  emit_poly_str_transform(c, recv, 2, args, name, one ? "unpack1_off" : "unpack_off", 2, b);
+  if (!one) buf_puts(b, ")");
   if (oint_kind(u1t)) { buf_puts(b, ")"); oint_close(c, id, b); }
   return 1;
 }
@@ -20117,7 +20115,7 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
     buf_printf(b, "if (SP_UNLIKELY(!(sp_rbval_is_string(_t%d) || sp_poly_is_strbuf(_t%d))))"
                   " sp_raise_nomethod(sp_nomethod_msg_args(\"unpack1\", _t%d, 1, &_t%d));"
                   " const char *_t%d = sp_poly_arg_str_chk(_t%d); SP_GC_ROOT_STR(_t%d);"
-                  " sp_PolyArray_get(sp_str_unpack(sp_rbval_string_bytes(_t%d), _t%d), 0); })", tu, tu, tu, tf, fmt, tf, fmt, tu, fmt);
+                  " sp_str_unpack1(sp_rbval_string_bytes(_t%d), _t%d); })", tu, tu, tu, tf, fmt, tf, fmt, tu, fmt);
     if (oint_kind(u1t)) { buf_puts(b, ")"); oint_close(c, id, b); }
     return 1;
   }

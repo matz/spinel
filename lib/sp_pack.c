@@ -1273,9 +1273,12 @@ sp_PolyArray *sp_str_unpack_off(const char *str, const char *fmt, sp_int byteoff
 sp_PolyArray *sp_str_unpack(const char *str, const char *fmt) {SP_GC_ROOT_STR(str);SP_GC_ROOT_STR(fmt); return sp_str_unpack_off(str, fmt, 0); }
 
 /* String#unpack(fmt, offset: n): decode starting at byte offset n. A negative
-   offset or one past the end raises ArgumentError, matching MRI. */
-sp_PolyArray *sp_str_unpack_off(const char *str, const char *fmt, sp_int byteoff) {
-  if (!str) sp_nil_recv("unpack");
+   offset or one past the end raises ArgumentError, matching MRI. With `one`
+   (unpack1) the walk stops at the first value, as CRuby's UNPACK_PUSH does;
+   a nil for short input is no value there. */
+#define UK_PUSH(v) do { sp_PolyArray_push(out, (v)); if (one) return out; } while (0)
+static sp_PolyArray *uk_unpack(const char *str, const char *fmt, sp_int byteoff, int one) {
+  if (!str) sp_nil_recv(one ? "unpack1" : "unpack");
   /* Root the source string across every allocation below: `str` is very often a
      fresh, otherwise-unrooted substring (`data[4, 4].unpack1('V')` in doom's
      binary WAD parsing). sp_PolyArray_new and the per-element boxes/pushes can
@@ -1354,7 +1357,7 @@ else {
         char *s = sp_str_alloc(z);
         memcpy(s, src, z); s[z] = 0; sp_str_set_len(s, z);
         sp_str_mark_binary(s);   /* unpack answers BYTES here: ASCII-8BIT, as CRuby (the b/B/h/H arms build ASCII TEXT and stay on the text side) */
-        sp_PolyArray_push(out, sp_box_str_new(s));
+        UK_PUSH(sp_box_str_new(s));
         off += z;
         if (off < slen && str[off] == 0) off++;
       }
@@ -1374,7 +1377,7 @@ else if (spec == 'Z') {
         }
         sp_str_set_len(s, real);
         sp_str_mark_binary(s);   /* unpack answers BYTES here: ASCII-8BIT, as CRuby (the b/B/h/H arms build ASCII TEXT and stay on the text side) */
-        sp_PolyArray_push(out, sp_box_str_new(s));
+        UK_PUSH(sp_box_str_new(s));
         off += take;
       }
       continue;
@@ -1393,7 +1396,7 @@ else if (spec == 'Z') {
         s[i] = "0123456789abcdef"[nib];
       }
       s[n] = 0; sp_str_set_len(s, n);
-      sp_PolyArray_push(out, sp_box_str_new(s));
+      UK_PUSH(sp_box_str_new(s));
       off += (n + 1) / 2;
       continue;
     }
@@ -1409,7 +1412,7 @@ else if (spec == 'Z') {
         s[i] = (char)('0' + bit);
       }
       s[n] = 0; sp_str_set_len(s, n);
-      sp_PolyArray_push(out, sp_box_str_new(s));
+      UK_PUSH(sp_box_str_new(s));
       off += (n + 7) / 8;
       continue;
     }
@@ -1421,7 +1424,7 @@ else if (spec == 'Z') {
               : (count == 0) ? uk_b64_decode_rfc4648(str + off, avail)
                              : uk_b64_decode(str + off, avail);
       sp_str_mark_binary(s);   /* unpack answers BYTES here: ASCII-8BIT, as CRuby (the b/B/h/H arms build ASCII TEXT and stay on the text side) */
-      sp_PolyArray_push(out, sp_box_str_new(s));
+      UK_PUSH(sp_box_str_new(s));
       off = slen;
       continue;
     }
@@ -1447,7 +1450,7 @@ else if (spec == 'Z') {
       }
       s[o] = 0; sp_str_set_len(s, o);
       sp_str_mark_binary(s);   /* unpack answers BYTES here: ASCII-8BIT, as CRuby (the b/B/h/H arms build ASCII TEXT and stay on the text side) */
-      sp_PolyArray_push(out, sp_box_str_new(s));
+      UK_PUSH(sp_box_str_new(s));
       off = slen;
       continue;
     }
@@ -1455,7 +1458,7 @@ else if (spec == 'Z') {
     if (spec == 'U') {
       int64_t got = 0;
       while ((count < 0 || got < count) && off < slen) {
-        sp_PolyArray_push(out, sp_box_int((sp_int)uk_utf8_cp(str, slen, &off)));
+        UK_PUSH(sp_box_int((sp_int)uk_utf8_cp(str, slen, &off)));
         got++;
       }
       continue;
@@ -1468,7 +1471,7 @@ else if (spec == 'Z') {
         while (off < slen && ((unsigned char)str[off++] & 0x80)) {}
         /* A trailing continuation has no value until its final byte arrives. */
         if ((unsigned char)str[off - 1] & 0x80) break;
-        sp_PolyArray_push(out, uk_ber_value((const unsigned char *)str + start, off - start));
+        UK_PUSH(uk_ber_value((const unsigned char *)str + start, off - start));
         got++;
       }
       continue;
@@ -1481,12 +1484,12 @@ else if (spec == 'Z') {
     for (int64_t k = 0; k < count; k++) {
       if (off + fsize > slen) {
         if (spec == 'x') sp_raise_cls("ArgumentError", "x outside of string");
-        sp_PolyArray_push(out, sp_box_nil());
+        if (!one) sp_PolyArray_push(out, sp_box_nil());
         continue;
       }
       const unsigned char *u = (const unsigned char *)(str + off);
       if (pk_is_flt_spec(spec)) {
-        sp_PolyArray_push(out, sp_box_float((sp_float)uk_get_flt(spec, u)));
+        UK_PUSH(sp_box_float((sp_float)uk_get_flt(spec, u)));
         off += fsize;
         continue;
       }
@@ -1498,24 +1501,33 @@ else if (spec == 'Z') {
         case 'p': case 'P':
           if (pk_get_int(u, (int)sizeof(intptr_t), pk_host_big())) sp_raise_cls("ArgumentError", "no associated pointer");
           off += fsize;
-          sp_PolyArray_push(out, sp_box_nil());
+          UK_PUSH(sp_box_nil());
           continue;
         /* unsigned, so it does not share the signed boxing below */
         case 'J':
         case 'Q': {
           uint64_t uv = pk_get_int(u, spec == 'J' ? (int)sizeof(intptr_t) : 8, big);
           off += fsize;
-          sp_PolyArray_push(out, pk_box_u64(uv));
+          UK_PUSH(pk_box_u64(uv));
           continue;
         }
         case 'x': break;
       }
       off += fsize;
-      if (spec != 'x') sp_PolyArray_push(out, pk_box_i64(v));
+      if (spec != 'x') UK_PUSH(pk_box_i64(v));
     }
   }
   return out;
 }
+#undef UK_PUSH
+sp_PolyArray *sp_str_unpack_off(const char *str, const char *fmt, sp_int byteoff) {
+  return uk_unpack(str, fmt, byteoff, 0);
+}
+/* String#unpack1(fmt, offset: n): the first value, or nil */
+sp_RbVal sp_str_unpack1_off(const char *str, const char *fmt, sp_int byteoff) {
+  return sp_PolyArray_get(uk_unpack(str, fmt, byteoff, 1), 0);
+}
+sp_RbVal sp_str_unpack1(const char *str, const char *fmt) { return sp_str_unpack1_off(str, fmt, 0); }
 
 /* String#unpack for a literal format of integer directives whose values
    fit an Integer slot (an_unpack_lit_type): the same values as

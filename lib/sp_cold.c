@@ -4608,10 +4608,19 @@ volatile int sp_sig_async_ok;
    one thread also delays signals for the other threads until the spawn
    returns. */
 volatile int sp_sig_hold;
-volatile int sp_sig_default_pending;
+volatile int sp_sig_default_pending[2];   /* [0] SIGINT, [1] SIGTERM */
 void (*sp_sig_default_raiser)(int);
-/* A safe point of a program that sets no trap: the recorded default signal
-   is raised. Never returns. */
+/* Clears and returns one recorded default signal, SIGINT before SIGTERM as
+   in CRuby's rb_get_next_signal. While the other slot is 1,
+   sp_sig_pending_flag is set again, so the next safe point raises that
+   signal. */
+static int sp_sig_default_take(void) {
+  int no = SP_ATOMIC_EXCHANGE(&sp_sig_default_pending[0], 0, __ATOMIC_ACQUIRE) ? SIGINT
+         : SP_ATOMIC_EXCHANGE(&sp_sig_default_pending[1], 0, __ATOMIC_ACQUIRE) ? SIGTERM : 0;
+  if (no && (sp_sig_default_pending[0] | sp_sig_default_pending[1]))
+    SP_ATOMIC_STORE(&sp_sig_pending_flag, 1, __ATOMIC_RELEASE);
+  return no;
+}
 /* A collection sp_gc_alloc_nogc could not run, asked of the next safe
    point: the safe points' flag is set, and the safe point collects
    (sp_gc_poll_collect) before it looks for a signal */
@@ -4623,15 +4632,15 @@ static void sp_gc_poll_run(void) {
   sp_gc_poll_collect();
 }
 /* A safe point of a program that sets no trap: a collection asked of it
-   runs, and the recorded default signal is raised. Returns while
-   sp_sig_default_pending is 0: after a collection, or after
-   sp_sig_blocking_raise has raised the signal the flag was set for. */
+   runs, and a recorded default signal is raised. Returns while
+   sp_sig_default_pending[0] and sp_sig_default_pending[1] are 0: after a
+   collection, or after sp_sig_blocking_raise has raised the signal the
+   flag was set for. */
 void sp_sig_poll_raise(void) {
   SP_ATOMIC_STORE(&sp_sig_pending_flag, 0, __ATOMIC_RELAXED);
   sp_gc_poll_run();
-  int no = sp_sig_default_pending;
+  int no = sp_sig_default_take();
   if (!no) return;
-  sp_sig_default_pending = 0;
   if (sp_sig_default_raiser) sp_sig_default_raiser(no);
   abort();
 }
@@ -4688,7 +4697,7 @@ void sp_sig_run_pending(void) {
   if (!sp_sig_take_begin()) { sp_gc_poll_run(); return; }
   SP_ATOMIC_STORE(&sp_sig_pending_flag, 0, __ATOMIC_RELAXED);
   int dno = 0;
-  if (sp_sig_default_pending && sp_sig_default_raiser) { dno = sp_sig_default_pending; sp_sig_default_pending = 0; }
+  if (sp_sig_default_raiser) dno = sp_sig_default_take();
   sp_sig_take_end();
   sp_gc_poll_run();   /* (a collection sp_gc_alloc_nogc asked of this safe point) */
   /* a recorded default SIGINT / SIGTERM first: its raise leaves */
@@ -4727,7 +4736,7 @@ void sp_sig_blocking_raise(void) {
   sigprocmask(SIG_BLOCK, &m, &old);
 #endif
   int no = 0;
-  if (sp_sig_take_begin()) { no = sp_sig_default_pending; sp_sig_default_pending = 0; sp_sig_take_end(); }
+  if (sp_sig_take_begin()) { no = sp_sig_default_take(); sp_sig_take_end(); }
 #ifdef SP_THREADS
   pthread_sigmask(SIG_SETMASK, &old, NULL);
 #else

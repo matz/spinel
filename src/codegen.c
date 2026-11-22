@@ -8067,6 +8067,8 @@ static void wrap_root_context(Compiler *c, Scope *s, Buf *b, size_t sig_off, siz
   free(args.p); free(inner.p);
 }
 
+static void emit_env_load(Compiler *c, Scope *dm, Buf *b, NameSet *caps, char *capst, size_t cap);
+static void emit_env_decl(Compiler *c, const Scope *dm);
 static void emit_method(Compiler *c, Scope *s, Buf *b, int loop_callee) {
   { char grp[UNIT_TAG_MAX];
     /* the unit is named after the function, past its sp_ */
@@ -8232,6 +8234,14 @@ static void emit_method(Compiler *c, Scope *s, Buf *b, int loop_callee) {
   size_t gc_save_len = b->len - gc_save_off;
   if (repr_self_handle(c, (int)(s - c->scopes))) buf_puts(b, "    SP_GC_ROOT(self);\n");
   else if (method_self_root(c, s)) buf_printf(b, "    %s(self);\n", method_self_root(c, s));
+  /* a define_method block's locals of its definer are cells it reads through the environment loaded here */
+  const char *sv_envst = g_cap_struct; NameSet *sv_envn = g_cap_names;
+  NameSet env_names = {0};
+  char env_st[32];
+  if (s->env_host) {
+    emit_env_load(c, s, b, &env_names, env_st, sizeof env_st);
+    g_cap_struct = env_st; g_cap_names = &env_names;
+  }
   /* a body that opens with guards makes its closure cells past them */
   int cdefer_at = cdefer_guard_count(c, s);
   Scope *sv_cdscope = g_cdefer_scope; int sv_cdstmts = g_cdefer_stmts, sv_cdat = g_cdefer_at;
@@ -8383,6 +8393,7 @@ static void emit_method(Compiler *c, Scope *s, Buf *b, int loop_callee) {
   g_lowered_blk_name = saved_lbn;
   g_brk_ser_var = saved_bser; g_brk_skip_id = saved_bskip;
   g_yield_proc_ref = sv_ypr9; g_yield_slot_ty = sv_yst9; free(ypr9.p);
+  g_cap_struct = sv_envst; g_cap_names = sv_envn; free(env_names.v);
   buf_puts(b, "}\n");
   if (!g_no_root_elision) gc_roots_take_back(c, s, b, gc_save_off);
   const char *site = decide_method_site(c, s);
@@ -10537,17 +10548,10 @@ static void emit_proc_param_cell(Compiler *c, Scope *bs, const char *p, Buf *pb)
   }
 }
 
-
-/* Does the method pass emit scope s (the one that decides which scopes the loop below skips)? */
-static int scope_is_emitted(Compiler *c, int s) {
-  const Scope *sc = &c->scopes[s];
-  return !(prog_is_top_scope(c, sc) || sc->yields || (!sc->reachable && (!sc->is_proc_form || !proc_form_live(c, s))) ||
-           scope_is_shadowed(c, s) || comp_scope_copied_away(c, s));
-}
-
-/* The capture struct of a proc: a pointer to the cell of each local `caps` names, a float capture riding a native
-   sp_float cell, a poly capture an sp_RbVal cell, a heap object its typed pointer (see emit_scope_decls); and the
-   scan that marks the struct and then each cell, as sp_Proc_scan does not mark the struct. */
+/* The capture struct of a proc or of a define_method block's environment (emit_env_decl): a pointer to the cell of
+   each local `caps` names, a float capture riding a native sp_float cell, a poly capture an sp_RbVal cell, a heap
+   object its typed pointer (see emit_scope_decls); and the scan that marks the struct and then each cell, as
+   sp_Proc_scan does not mark the struct. */
 static void emit_cap_fields(Compiler *c, const Scope *bs, const NameSet *caps, Buf *b) {
   for (int i = 0; i < caps->n; i++) {
     LocalVar *clv = scope_local((Scope *)bs, caps->v[i]);
@@ -10579,9 +10583,101 @@ static void emit_cap_fill(Buf *out, int indent, const char *pid, const NameSet *
    boxed side-channel); a by-value struct rides its own cell (#3995 for the class; the Range / Rational / Complex
    siblings were left on the reject, and Time / Tms / a String range after them). */
 static int cap_cell_supported(Compiler *c, const LocalVar *lv) {
+  (void)c;
   return lv->type == TY_INT || lv->type == TY_BOOL || lv->type == TY_SYMBOL || lv->type == TY_UNKNOWN ||
          lv->type == TY_PROC || lv->type == TY_FLOAT || lv->type == TY_POLY || cell_value_struct(lv->type) != NULL ||
          (proc_slot_is_ptr(lv->type) && !comp_ty_value_obj(c, lv->type));
+}
+
+/* ---- the environment of a define_method block ----
+   A define_method or define_singleton_method block in a def's body closes over that def's locals (Scope.env_host): the
+   locals are heap cells, as a proc's captures are, and the capture struct that holds the cells (the environment) is
+   built where the definer runs and stored in one global per definer scope. The method it defines loads that global
+   into a rooted local of its own as it starts, so a call already running keeps the environment it began with when
+   its body runs the definer again, and reads and writes the cells through it as a proc body does (g_cap_struct). */
+/* Does the method pass emit scope s (the one that decides which scopes the loop below skips)? */
+static int scope_is_emitted(Compiler *c, int s) {
+  const Scope *sc = &c->scopes[s];
+  return !(prog_is_top_scope(c, sc) || sc->yields || (!sc->reachable && (!sc->is_proc_form || !proc_form_live(c, s))) ||
+           scope_is_shadowed(c, s) || comp_scope_copied_away(c, s));
+}
+static NameSet env_caps(const Scope *dm, Scope *host) {
+  NameSet caps = {0};
+  for (int i = 0; i < dm->nenv_names; i++) {
+    LocalVar *lv = scope_local(host, dm->env_names[i]);
+    if (lv && lv->is_cell) nameset_add(&caps, dm->env_names[i]);
+  }
+  return caps;
+}
+static void env_tag(const Scope *dm, char *out, size_t cap) { snprintf(out, cap, "env%d", dm->idx); }
+/* The capture struct and its scan, where the proc ones go: ahead of the bodies that name them */
+static void emit_env_decl(Compiler *c, const Scope *dm) {
+  char pid[24];
+  NameSet caps = env_caps(dm, &c->scopes[dm->env_host - 1]);
+  env_tag(dm, pid, sizeof pid);
+  buf_puts(&g_procs, "typedef struct {");
+  emit_cap_fields(c, &c->scopes[dm->env_host - 1], &caps, &g_procs);
+  buf_printf(&g_procs, " } _proc_cap_%s;\nstatic void _proc_cap_scan_%s(void *p) {\n", pid, pid);
+  buf_puts(&g_procs, "  sp_gc_mark(p);\n");
+  buf_printf(&g_procs, "  _proc_cap_%s *_c = (_proc_cap_%s *)p;\n", pid, pid);
+  emit_cap_marks(&caps, &g_procs);
+  buf_puts(&g_procs, "}\n");
+  free(caps.v);
+}
+/* The environment's global, and its line of sp_mark_user_globals */
+static void emit_env_globals(Compiler *c, Buf *decl, Buf *mark) {
+  for (int si = 1; si < c->nscopes; si++) {
+    const Scope *dm = &c->scopes[si];
+    if (!dm->env_host || !scope_is_emitted(c, si)) continue;
+    buf_printf(decl, "static void *gv___spinel_env_%d;\n", si);
+    buf_printf(mark, "  if (gv___spinel_env_%d) sp_gc_mark(gv___spinel_env_%d);\n", si, si);
+  }
+}
+/* Load the environment as the method starts, and read the cells through it */
+static void emit_env_load(Compiler *c, Scope *dm, Buf *b, NameSet *caps, char *capst, size_t cap) {
+  char pid[24];
+  env_tag(dm, pid, sizeof pid);
+  *caps = env_caps(dm, &c->scopes[dm->env_host - 1]);
+  snprintf(capst, cap, "_proc_cap_%s", pid);
+  buf_printf(b, "    %s *_cap = (%s *)gv___spinel_env_%d;\n    SP_GC_ROOT(_cap);\n", capst, capst, dm->idx);
+  /* A call that reaches the method before its definer ran (a poly dispatch that has no version to read) finds no
+     environment: CRuby has no such method yet */
+  buf_puts(b, "    if (SP_UNLIKELY(!_cap)) { sp_raise_nomethod(sp_nomethod_msg(");
+  emit_str_literal(b, dm->name);
+  if (dm->is_cmethod) buf_printf(b, ", sp_box_class((sp_Class){%d, NULL})));", dm->class_id);
+  else if (dm->class_id >= 0 && !c->classes[dm->class_id].is_value_type) buf_printf(b, ", sp_box_obj((void *)self, %d)));", dm->class_id);
+  else buf_puts(b, ", sp_box_nil()));");
+  if (method_is_void(dm)) buf_puts(b, " return; }\n");
+  else buf_printf(b, " return %s; }\n", method_ret_zero(c, dm) ? method_ret_zero(c, dm) : "0");
+}
+/* The definer's statement stores the environment, ahead of the cells' version being written */
+void emit_env_store(Compiler *c, int id, Buf *b, int indent) {
+  int di = elab_def_scope_of(c, id);
+  const Scope *dm = di > 0 ? &c->scopes[di] : NULL;
+  char pid[24];
+  if (!dm || !dm->env_host || !scope_is_emitted(c, di)) return;
+  NameSet caps = env_caps(dm, &c->scopes[dm->env_host - 1]);
+  for (int i = 0; i < caps.n; i++) {
+    LocalVar *lv = scope_local(&c->scopes[dm->env_host - 1], caps.v[i]);
+    if (!cap_cell_supported(c, lv)) {
+      free(caps.v);
+      unsupported(c, id, "define_method capturing a non-integer variable (later slice)");
+      return;
+    }
+  }
+  env_tag(dm, pid, sizeof pid);
+  emit_indent(b, indent);
+  buf_puts(b, "{\n");
+  emit_indent(b, indent + 1);
+  buf_printf(b, "_proc_cap_%s *_capv_%s = (_proc_cap_%s *)sp_gc_alloc(sizeof(_proc_cap_%s), NULL, _proc_cap_scan_%s);\n", pid, pid, pid, pid, pid);
+  emit_indent(b, indent + 1);
+  buf_printf(b, "SP_GC_ROOT(_capv_%s);\n", pid);
+  emit_cap_fill(b, indent + 1, pid, &caps);
+  emit_indent(b, indent + 1);
+  buf_printf(b, "gv___spinel_env_%d = _capv_%s;\n", dm->idx, pid);
+  emit_indent(b, indent);
+  buf_puts(b, "}\n");
+  free(caps.v);
 }
 
 void emit_proc_literal(Compiler *c, int create, Buf *b) {
@@ -25080,6 +25176,7 @@ char *codegen_program(const NodeTable *nt) {
     if (g_bigl_n)
       buf_printf(&mk, "  for (int _i = 0; _i < %d; _i++) if (sp_bigl[_i]) sp_gc_mark((void *)sp_bigl[_i]);\n",
                  g_bigl_n);
+    emit_env_globals(c, &b, &mk);
     g_has_user_global_marks = (mk.p && mk.len > 0);
     if (g_has_user_global_marks) {
       buf_puts(&b, "static void sp_mark_user_globals(void) {\n");
@@ -25178,6 +25275,7 @@ char *codegen_program(const NodeTable *nt) {
     if (orphan) g_unsup_quiet = 1;
     size_t pm_at = body->len;
     int loop_callee = loop_callees && loop_callees[s];
+    if (c->scopes[s].env_host) emit_env_decl(c, &c->scopes[s]);
     EMIT_COLLECT_UNIT(emit_method(c, &c->scopes[s], body, loop_callee));
     g_unsup_quiet = 0;
     if (g_ndiags == ndiag0 && poll_pure_wrapped(c, s)) poll_pure_split(c, s, body, pm_at);

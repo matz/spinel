@@ -22319,7 +22319,10 @@ static void emit_stmt_node(Compiler *c, int id, Buf *b, int indent) {
      resolved at analyze time into real method scopes; emit nothing here. */
   if (ty_k == NK_CallNode) {
     const char *cnm = nt_str(nt, id, "name");
-    if (cnm && sp_streq(cnm, "define_method") && nt_ref(nt, id, "receiver") < 0) return;
+    if (cnm && sp_streq(cnm, "define_method") && nt_ref(nt, id, "receiver") < 0) {
+      emit_env_store(c, id, b, indent);
+      return;
+    }
     /* define_singleton_method on a supported target (no receiver, `self`, or a
        class-constant / namespaced-class receiver) is resolved into a class-method
        scope at analyze time, so the call emits no runtime code. Mirror exactly the
@@ -22327,7 +22330,7 @@ static void emit_stmt_node(Compiler *c, int id, Buf *b, int indent) {
        here -- it falls through to the normal unresolved-call reject at this site. */
     if (cnm && sp_streq(cnm, "define_singleton_method")) {
       int dsm_recv = nt_ref(nt, id, "receiver");
-      if (dsm_recv < 0) return;
+      if (dsm_recv < 0) { emit_env_store(c, id, b, indent); return; }
       NodeKind dsm_rk = nt_kind(nt, dsm_recv);
       if ((dsm_rk == NK_SelfNode || dsm_rk == NK_ConstantReadNode ||
                       dsm_rk == NK_ConstantPathNode)) {
@@ -22335,6 +22338,7 @@ static void emit_stmt_node(Compiler *c, int id, Buf *b, int indent) {
            An INSTANCE constant (`B = Box.new`) matches the same node type but
            is a singleton binding, and the statement is where its override
            starts (#4084) -- a no-op for anything analyze did not mark. */
+        emit_env_store(c, id, b, indent);
         emit_sg_activate(c, id, dsm_recv, b, indent);
         return;
       }

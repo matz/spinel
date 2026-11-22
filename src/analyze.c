@@ -3167,6 +3167,28 @@ const char *a_type_proc_block_param(Compiler *c, int create, int pn) {
   return bpn;
 }
 
+/* The def locals a define_method or define_singleton_method block closes over (Scope.env_host) live in heap cells,
+   as a proc's captures do: the definer's statement stores the cells in an environment (emit_env_store) and the method
+   it defines reads and writes them there. The environment outlives the def's run, and a write through it is one the
+   def's own code cannot see where it falls, as for a proc's (proc_rebinds). */
+static void mark_env_captures(Compiler *c) {
+  for (int si = 1; si < c->nscopes; si++) {
+    const Scope *dm = &c->scopes[si];
+    if (!dm->env_host) continue;
+    Scope *host = &c->scopes[dm->env_host - 1];
+    for (int i = 0; i < dm->nenv_names; i++) {
+      LocalVar *lv = scope_local(host, dm->env_names[i]);
+      if (!lv) continue;
+      { lv->is_cell = 1; comp_touch_scope(lv->owner); }
+      lv->cell_outlives = 1;
+      lv->proc_rebinds = 1;
+      /* an iteration block's parameter is bound by the loop writing the plain C slot (cell_shadow): the slot stays,
+         and the loop publishes it to the cell */
+      if (lv->is_block_param && !lv->is_param) lv->cell_shadow = 1;
+    }
+  }
+}
+
 void mark_proc_captures(Compiler *c) {
   const NodeTable *nt = c->nt;
   char *inproc = (char *)calloc((size_t)nt->count, 1);
@@ -3440,6 +3462,7 @@ void mark_proc_captures(Compiler *c) {
   free(procof);
   free(inproc); free(wl); free(ql); free(qproc);
   mp_free(&wix); mp_free(&qix);
+  mark_env_captures(c);
 }
 
 /* ---- bigint loop-variable detection ---- */

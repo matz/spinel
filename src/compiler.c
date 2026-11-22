@@ -624,6 +624,7 @@ void comp_free(Compiler *c) {
     Scope *sc = &c->scopes[s];
     free(sc->name);
     free(sc->shadow_user);
+    free(sc->env_names);
     for (int i = 0; i < sc->nlocals; i++) free(sc->locals[i].name);
     free(sc->locals);
     free(sc->lidx);

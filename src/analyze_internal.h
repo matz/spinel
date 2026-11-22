@@ -379,6 +379,10 @@ int an_user_method_reaches(Compiler *c, const char *name, int class_self);
    CRuby's NoMethodError, defining nothing */
 int an_object_definer_missing(Compiler *c, int call, const Scope *s);
 int an_block_captures(const NodeTable *nt, int node, int level);
+void an_block_env(const NodeTable *nt, int block, ANameSet *names, int *yields);
+int an_block_yields(const NodeTable *nt, int block);   /* does a define_method block yield to the method around it */
+int an_name_aliased(Compiler *c, const char *name);   /* does the program alias the method name (alias, alias_method) */
+int an_block_yields(const NodeTable *nt, int block);   /* does a define_method block yield to the method around it */
 extern int g_yvt_unify_all;
 /* The return type of a call to method `mi`. A method whose body is just a
    bare `yield` returns the block's value -- and since it inlines per call

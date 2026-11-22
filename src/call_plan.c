@@ -10142,8 +10142,8 @@ static const char *cplan_body_definer_gap(Compiler *c, int id, char *buf, size_t
   }
   int host = elab_body_call_version(c, id, &cls, &sg);
   const char *envgap = !lit ? NULL : an_block_env_gap(nt, blk) ? an_block_env_gap(nt, blk) :
-    /* (a definer in a define_method's block: the locals it closes over are that block's own, which have no cells yet) */
-    !def && an_block_captures(nt, blk, 0) ? "reads or writes a local of the define_method block around it" :
+    /* (a definer in a define_method's block, a def around that block or not: the locals it closes over are that block's own, which have no cells yet, or reach the def's through that block's environment) */
+    (!def || (hs->def_node >= 0 && nt_kind(nt, hs->def_node) != NK_DefNode)) && an_block_captures(nt, blk, 0) ? "reads or writes a local of the define_method block around it" :
     /* (the environment is the definer's one, so every run must define on the class and side the method is registered on) */
     an_block_captures(nt, blk, 0) && !elab_body_call_owner(c, id) ? "reads or writes that method's locals where a run may define it on another class or object than the one it is registered on" :
     /* (an alias keeps the method it found: the environment of one run of the definer) */

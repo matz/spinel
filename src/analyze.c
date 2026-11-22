@@ -5879,23 +5879,10 @@ static int blkp_param_binds(const NodeTable *nt, int p, const char *name) {
 
 int blkp_binds_param(Compiler *c, int create, const char *name) {
   const NodeTable *nt = c->nt;
-  int bp = nt_ref(nt, create, "parameters");
-  if (bp >= 0 && nt_kind(nt, bp) == NK_BlockParametersNode) {
-    int ln = 0; const int *locs = nt_arr(nt, bp, "locals", &ln);
-    for (int i = 0; i < ln; i++) if (blkp_param_binds(nt, locs[i], name)) return 1;
-  }
-  /* A block-local (`|b; q|`) is only in the block's comma-joined `locals`
-     string, which lists every name new to the block; an outer name the
-     block merely reads or writes is not in it. */
-  const char *ls = nt_str(nt, create, "locals");
-  size_t nl = strlen(name);
-  for (const char *p = ls; p && *p; ) {
-    const char *e = strchr(p, ',');
-    size_t seg = e ? (size_t)(e - p) : strlen(p);
-    if (seg == nl && !strncmp(p, name, nl)) return 1;
-    if (!e) break;
-    p = e + 1;
-  }
+  /* The block's `locals` lists every name new to it: its parameters, its
+     block-locals (`|b; q|`) and the names its body first assigns. An outer
+     name the block merely reads or writes is not in it. */
+  if (nt_scope_has_local(nt, create, name)) return 1;
   int pn = blkp_params_node(c, create);
   if (pn < 0) return 0;
   NodeKind pk = nt_kind(nt, pn);
@@ -7626,83 +7613,39 @@ static int name_written_outside(const NodeTable *nt, const char *name,
   return 0;
 }
 
-/* True if `name` is bound as a parameter anywhere in the params subtree
-   (leading / optional / rest / keyword / post / destructured), as opposed to a
-   block-local (`; x`) shadow declaration. Block-locals share the BlockNode's
-   comma-joined `locals` string with the real params, so the two must be told
-   apart before a locals entry is treated as a shadow. */
-static int params_bind_name(const NodeTable *nt, int id, const char *name) {
-  if (id < 0) return 0;
-  const char *ty = nt_type(nt, id);
-  NodeKind k = nt_kind(nt, id);
-  if (ty && (strstr(ty, "ParameterNode") || k == NK_LocalVariableTargetNode)) {
-    const char *pn = nt_str(nt, id, "name");
-    if (pn && sp_streq(pn, name)) return 1;
-  }
-  int nr = nt_num_refs(nt, id);
-  for (int i = 0; i < nr; i++)
-    if (params_bind_name(nt, nt_ref_at(nt, id, i), name)) return 1;
-  int na = nt_num_arrs(nt, id);
-  for (int i = 0; i < na; i++) {
-    int n = 0; const int *ids = nt_arr_at(nt, id, i, &n);
-    for (int j = 0; j < n; j++) if (params_bind_name(nt, ids[j], name)) return 1;
-  }
-  return 0;
-}
-
 /* Rename any block-local (`; x`) whose name collides with a local used outside
    the block body so the shadow becomes a distinct slot, mirroring the block
-   parameter rename below. The declaration lives only in the BlockNode's
-   comma-joined `locals` string (spinel's parser carries no BlockLocalVariableNode
-   array), which is rewritten in lock-step so emit_block_locals_reset nils the
-   renamed slot rather than the enclosing one. */
+   parameter rename below. The declaration is in the block's `locals`, where
+   the rename is written in lock-step with the declaration's own node, so
+   emit_block_locals_reset nils the renamed slot rather than the enclosing
+   one. */
 static void rename_shadowing_block_locals(Compiler *c, int L, int pn, int body,
                                           const int *inbody, int gen,
                                           BlkpIdx *ix) {
-  const NodeTable *nt = c->nt;
-  const char *locs0 = nt_str(nt, L, "locals");
-  if (!locs0 || !*locs0) return;
-  /* copy: nt_set_str below frees locs0's storage while we still read it */
-  size_t llen = strlen(locs0);
-  char *locs = malloc(llen + 1);
-  if (!locs) return;
-  memcpy(locs, locs0, llen + 1);
-  size_t ocap = llen + 32;
-  char *out = malloc(ocap);
-  if (!out) { free(locs); return; }
-  out[0] = 0;
-  size_t out_len = 0;
+  NodeTable *nt = (NodeTable *)c->nt;
+  int n = 0;
+  const char *const *ls = nt_scope_locals(nt, L, &n);
+  if (n == 0) return;
+  const char **out = malloc((size_t)n * sizeof *out);
+  char **made = calloc((size_t)n, sizeof *made);
+  if (!out || !made) { free(out); free(made); return; }
   int changed = 0;
-  char *save = NULL;
-  for (char *tok = strtok_r(locs, ",", &save); tok; tok = strtok_r(NULL, ",", &save)) {
-    char *newn = NULL;
-    const char *emit = tok;
-    if (!params_bind_name(nt, pn, tok) && !block_param_made_for(c, tok, L) &&
-        name_written_outside(nt, tok, ix, inbody, gen)) {
-      newn = block_param_invent_name(c, tok, L);
-      blkp_rewrite_refs(c, body, tok, newn);
-      emit = newn;
+  for (int i = 0; i < n; i++) {
+    out[i] = ls[i];
+    if (!nt_param_binds(nt, pn, ls[i]) && !block_param_made_for(c, ls[i], L) &&
+        name_written_outside(nt, ls[i], ix, inbody, gen)) {
+      made[i] = block_param_invent_name(c, ls[i], L);
+      blkp_rewrite_refs(c, body, ls[i], made[i]);
+      int decl = nt_block_local_node(nt, L, ls[i]);
+      if (decl >= 0) nt_node_set_str(nt, decl, "name", made[i]);
+      out[i] = made[i];
       changed = 1;
     }
-    /* track out_len + memcpy so the append is O(1), keeping the whole rebuild
-       O(N) rather than rescanning `out` with strlen/strcat each iteration. */
-    size_t emit_len = strlen(emit);
-    size_t need = out_len + emit_len + 2;
-    if (need > ocap) {
-      ocap = need * 2;
-      char *t = realloc(out, ocap);
-      if (!t) { free(newn); free(out); free(locs); return; }
-      out = t;
-    }
-    if (out_len > 0) out[out_len++] = ',';
-    memcpy(out + out_len, emit, emit_len);
-    out_len += emit_len;
-    out[out_len] = '\0';
-    free(newn);
   }
-  if (changed) nt_set_str((NodeTable *)nt, L, "locals", out);
+  if (changed) nt_scope_locals_set(nt, L, out, n);
+  for (int i = 0; i < n; i++) free(made[i]);
+  free(made);
   free(out);
-  free(locs);
 }
 
 /* A native class's own methods, called on an implicit self from a method the
@@ -7991,28 +7934,18 @@ static void numbered_rename_reads(NodeTable *nt, int id, const char *from,
       numbered_rename_reads(nt, nd->a[i].ids[j], from, to, depth + 1);
 }
 
-/* Replace `from` with `to` in a block's comma-joined `locals` string.
+/* Replace `from` with `to` in a block's `locals`.
    emit_block_locals_reset nils every name in it that is not a parameter, so a
    stale entry there nils the renamed slot right after the bind, once per
    iteration, and the body reads nil. */
 void numbered_rename_locals_str(NodeTable *nt, int L, const char *from, const char *to) {
-  const char *locs = nt_str(nt, L, "locals");
-  if (!locs || !*locs) return;
-  size_t flen = strlen(from), cap = strlen(locs) + strlen(to) + 8, w = 0;
-  char *out = (char *)malloc(cap);
+  int n = 0;
+  const char *const *ls = nt_scope_locals(nt, L, &n);
+  if (n == 0) return;
+  const char **out = malloc((size_t)n * sizeof *out);
   if (!out) return;
-  out[0] = 0;
-  for (const char *p = locs; ; ) {
-    const char *e = strchr(p, ',');
-    size_t seg = e ? (size_t)(e - p) : strlen(p);
-    const char *put = p; size_t putn = seg;
-    if (seg == flen && !strncmp(p, from, seg)) { put = to; putn = strlen(to); }
-    if (w) out[w++] = ',';
-    memcpy(out + w, put, putn); w += putn; out[w] = 0;
-    if (!e) break;
-    p = e + 1;
-  }
-  nt_set_str(nt, L, "locals", out);
+  for (int i = 0; i < n; i++) out[i] = sp_streq(ls[i], from) ? to : ls[i];
+  nt_scope_locals_set(nt, L, out, n);
   free(out);
 }
 
@@ -8257,16 +8190,17 @@ static void blkp_rename_blocks(Compiler *c, BlkpStep *st, const int *ids, int ni
       int bpr = nt_ref(nt, pn, "block");
       if (bpr >= 0 && ne < 128 && nt_str(nt, bpr, "name")) extras[ne++] = bpr;
     }
-    /* block-locals (`; a, b`) live only in the BlockNode's comma-joined `locals`
-       string; a block may carry them with no required params (`{ |; x| ... }`),
-       and the parser lists a body's own locals there too: a name first
-       assigned inside the block, which Ruby scopes to the block even when the
+    /* block-locals (`; a, b`) are in the BlockNode's `locals` with its
+       parameters; a block may carry them with no required params
+       (`{ |; x| ... }`), and the parser lists a body's own locals there
+       too: a name first assigned inside the block, which Ruby scopes to the block even when the
        enclosing scope assigns the same name further down. A paramless block
        (`Thread.new do ... end`) was skipped here, so its local shared the
        enclosing slot with that later assignment -- one cell for every thread
        (found under #4528). */
-    const char *locs = nt_str(nt, L, "locals");
-    int have_locals = locs && *locs;
+    int nlocs = 0;
+    nt_scope_locals(nt, L, &nlocs);
+    int have_locals = nlocs > 0;
     if (rn == 0 && ne == 0 && !have_locals) continue;
     /* An EMPTY body (`tap do |a| end`) still binds the parameter, so it still
        collides: skipping it left the two names sharing one C slot, and the
@@ -13260,12 +13194,13 @@ static void sv_block_local(NodeTable *nt, const int *parent, int id, const char 
     NodeKind k = nt_kind(nt, p);
     if (k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode || k == NK_SingletonClassNode) return;
     if (k != NK_BlockNode && k != NK_LambdaNode) continue;
-    const char *locs = nt_str(nt, p, "locals");
-    size_t ln = locs ? strlen(locs) : 0;
-    char *nl = malloc(ln + strlen(vn) + 2);
+    int ln = 0;
+    const char *const *ls = nt_scope_locals(nt, p, &ln);
+    const char **nl = malloc(((size_t)ln + 1) * sizeof *nl);
     if (!nl) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-    snprintf(nl, ln + strlen(vn) + 2, "%s%s%s", ln ? locs : "", ln ? "," : "", vn);
-    nt_node_set_str(nt, p, "locals", nl);
+    for (int i = 0; i < ln; i++) nl[i] = ls[i];
+    nl[ln] = vn;
+    nt_scope_locals_set(nt, p, nl, ln + 1);
     free(nl);
     return;
   }
@@ -37335,10 +37270,7 @@ static int new_recv_block_param_classes(Compiler *c, int recv, int *out, int cap
       }
     }
     /* a block that declares the name among its locals otherwise shadows it */
-    if (blk < 0 && bp >= 0) {
-      int ln = 0; const int *ls = nt_arr(nt, bp, "locals", &ln);
-      for (int i = 0; i < ln; i++) if (sp_streq(nt_str(nt, ls[i], "name"), vn)) return 0;
-    }
+    if (blk < 0 && nt_block_local_node(nt, p, vn) >= 0) return 0;
   }
   if (blk < 0) return 0;
   int call = par[blk];

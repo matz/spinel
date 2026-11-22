@@ -160,8 +160,10 @@ Prism documents, with a few Spinel-specific aliases for clarity.
 | `ModuleNode`        | `constant_path` (R), `body` (R)          | Module definition.                                    |
 | `SingletonClassNode`| `expression` (R), `body` (R)             | `class << recv; ... end`.                             |
 | `DefNode`           | `name` (S), `parameters` (R), `body` (R), `receiver` (R) | Method definition. `receiver` is non-`-1` for `def self.x` / `def obj.x`. |
-| `LambdaNode`        | `parameters` (R), `body` (R)             | `-> { ... }` / `lambda { ... }`.                      |
-| `BlockNode`         | `parameters` (R), `body` (R)             | `do ... end` / `{ ... }` attached to a call.          |
+| `LambdaNode`        | `locals` (S), `parameters` (R), `block_locals` (A), `body` (R) | `-> { ... }` / `lambda { ... }`. `parameters` is the ParametersNode itself; `block_locals` are the `; x` declarations of `->(a; x) {}`. |
+| `BlockNode`         | `locals` (S), `parameters` (R), `body` (R) | `do ... end` / `{ ... }` attached to a call. `parameters` is a BlockParametersNode (or a NumberedParametersNode or ItParametersNode). |
+| `BlockParametersNode` | `parameters` (R), `locals` (A)         | The `|a, b; x, y|` list of a block. `locals` holds one BlockLocalVariableNode per `; x` declaration, `[]` when there is none. |
+| `BlockLocalVariableNode` | `name` (S)                          | One `; x` declaration: the name is fresh to the block, whatever the enclosing scope calls it. |
 | `ParametersNode`    | `requireds` (A), `optionals` (A), `keywords` (A), `posts` (A), `rest` (R), `block` (R) | Per-method or per-block parameter list. |
 | `NumberedParametersNode` | `value` (I) (max param `_1` .. `_N`) | `{ _1 + _2 }` shorthand.                              |
 
@@ -288,6 +290,13 @@ across node types with a consistent meaning:
 - `value` / `expression` -- the RHS of an assignment / write.
 - `statements` -- the body of a control-flow construct.
 - `parameters` -- a ParametersNode attached to a method / lambda / block.
+
+A scope's `locals` (S) -- a block's, lambda's, def's, class body's -- is its
+names comma-joined, in the order Prism lists them: parameters first, then the
+block-locals, then the names its body first assigns. `nt_scope_locals` answers
+them as names, split once per string; `nt_scope_has_local`,
+`nt_scope_locals_set` and `nt_block_local_node` (the declaration of a
+block-local) sit beside it in `node_table.c`.
 
 ### `A <id> <field> <id,id,…>`
 

@@ -7559,21 +7559,6 @@ static int const_value_is_class_like(Compiler *c, int v) {
    names it the search stops. A nested def is a scope of its own and is not
    searched at all. (The node table does not carry prism's `depth`, which
    would say this directly.) */
-/* Does a block's `locals` list (comma-separated) name `nm`? */
-int blk_locals_have(const char *locals, const char *nm) {
-  if (!locals || !nm) return 0;
-  size_t n = strlen(nm);
-  const char *p = locals;
-  while (*p) {
-    const char *e = strchr(p, ',');
-    size_t len = e ? (size_t)(e - p) : strlen(p);
-    if (len == n && strncmp(p, nm, n) == 0) return 1;
-    if (!e) break;
-    p = e + 1;
-  }
-  return 0;
-}
-
 static void check_blk_param_writes_in(Compiler *c, int node, const char *bp,
                                       const char *meth) {
   const NodeTable *nt = c->nt;
@@ -7583,7 +7568,7 @@ static void check_blk_param_writes_in(Compiler *c, int node, const char *bp,
   /* a block that declares its own `bp` shadows the parameter for everything
      inside it */
   if ((k == NK_BlockNode || k == NK_LambdaNode) &&
-      blk_locals_have(nt_str(nt, node, "locals"), bp)) return;
+      nt_scope_has_local(nt, node, bp)) return;
   if (k == NK_LocalVariableWriteNode || k == NK_LocalVariableOperatorWriteNode ||
       k == NK_LocalVariableOrWriteNode || k == NK_LocalVariableAndWriteNode) {
     const char *wn = nt_str(nt, node, "name");

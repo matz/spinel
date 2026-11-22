@@ -784,7 +784,7 @@ static int bpw_walk(NodeTable *nt, int node, const char *bp, const char *rename)
   if (node < 0) return 0;
   NodeKind k = nt_kind(nt, node);
   if (k == NK_DefNode) return 0;
-  if ((k == NK_BlockNode || k == NK_LambdaNode) && blk_locals_have(nt_str(nt, node, "locals"), bp)) return 0;
+  if ((k == NK_BlockNode || k == NK_LambdaNode) && nt_scope_has_local(nt, node, bp)) return 0;
   int hits = 0;
   if (bpw_kind_is_lvar(k)) {
     const char *nm = nt_str(nt, node, "name");
@@ -8052,10 +8052,8 @@ static int dsend_local_names(Compiler *c, int arg, char ***names, int *n) {
     const char *wn = key_name(c, id);
     if (!wn || !sp_streq(wn, vn)) continue;
     const char *ty = nt_type(nt, id);
-    NodeKind ty_k = nt_kind(nt, id);
     size_t tl = ty ? strlen(ty) : 0;
     if (tl > 13 && sp_streq(ty + tl - 13, "ParameterNode")) ok = 0;
-    else if (ty_k == NK_BlockLocalVariableNode) ok = 0;
     else if (!comp_is_local_write(k)) continue;
     else if (k != NK_LocalVariableWriteNode) ok = 0;
     else { nw++; ok = dsend_literal_names(c, nt_ref(nt, id, "value"), names, n, &cap, &seen); }
@@ -18714,7 +18712,7 @@ int desugar_builtins(Compiler *c) {
   return 1;
 }
 
-/* Is vn the name of a parameter (or a block-local) among the first n0
+/* Is vn the name of a parameter among the first n0
    nodes? The names are kept as a set for the table's version and n0: a
    walk over the nodes for each stored-enum each grew with the program
    squared. */
@@ -18727,7 +18725,7 @@ static int sew_param_named(const NodeTable *nt, int n0, const char *vn) {
     anh_free(&g_sew_params); memset(&g_sew_params, 0, sizeof g_sew_params);
     for (int p = 0; p < n0; p++) {
       const char *pt = nt_type(nt, p), *pn = nt_str(nt, p, "name");
-      if (pt && pn && (strstr(pt, "ParameterNode") || nt_kind(nt, p) == NK_BlockLocalVariableNode) &&
+      if (pt && pn && strstr(pt, "ParameterNode") &&
           !anh_has(&g_sew_params, pn))
         anh_add(&g_sew_params, pn);
     }
@@ -22876,27 +22874,18 @@ static int user_block_method(Compiler *c, int id, const char *nm) {
    class-id dispatch may serve: it lifts the block, so a user method
    yielding two values reaches it without sym_proc_pair.
    { |*__spr_N| __spr_N.length > 1 ? __spr_N[0].m(__spr_N[1]) : __spr_N[0].m } */
-/* Drop `name` from block `blk`'s comma-joined `locals`: emit_block_locals_reset
+/* Drop `name` from block `blk`'s `locals`: emit_block_locals_reset
    nils every name there that is no parameter, and a block lifted to a proc
    function declares only the names its body still binds. */
 static void blk_locals_drop(NodeTable *nt, int blk, const char *name) {
-  const char *locs = nt_str(nt, blk, "locals");
-  if (!locs || !*locs || !name) return;
-  size_t nlen = strlen(name), w = 0;
-  char *out = (char *)malloc(strlen(locs) + 1);
+  int n = 0;
+  const char *const *ls = nt_scope_locals(nt, blk, &n);
+  if (n == 0 || !name) return;
+  const char **out = malloc((size_t)n * sizeof *out);
   if (!out) return;
-  out[0] = 0;
-  for (const char *p = locs; ; ) {
-    const char *e = strchr(p, ',');
-    size_t seg = e ? (size_t)(e - p) : strlen(p);
-    if (seg && !(seg == nlen && !strncmp(p, name, seg))) {
-      if (w) out[w++] = ',';
-      memcpy(out + w, p, seg); w += seg; out[w] = 0;
-    }
-    if (!e) break;
-    p = e + 1;
-  }
-  nt_set_str(nt, blk, "locals", out);
+  int k = 0;
+  for (int i = 0; i < n; i++) if (!sp_streq(ls[i], name)) out[k++] = ls[i];
+  nt_scope_locals_set(nt, blk, out, k);
   free(out);
 }
 

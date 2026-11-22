@@ -10266,41 +10266,8 @@ static int proc_param_sym(Compiler *c, int p, const char *anon) {
    in the node's `locals`, params included, so params are asked separately. A
    name the block only READS from the enclosing scope is not there. */
 static int proc_owns_local(Compiler *c, int create, const char *nm) {
-  const char *locs = nt_str(c->nt, create, "locals");
-  if (!locs || !*locs || !nm) return 0;
-  size_t nl = strlen(nm);
-  for (const char *p = locs; *p; ) {
-    const char *e = strchr(p, ',');
-    size_t l = e ? (size_t)(e - p) : strlen(p);
-    if (l == nl && memcmp(p, nm, nl) == 0)
-      return !subtree_has_param_named_pub(c, nt_ref(c->nt, create, "parameters"), nm);
-    if (!e) break;
-    p = e + 1;
-  }
-  return 0;
-}
-
-/* 1 when a parameter in this subtree is spelled exactly `nm`. The shadow
-   rename leaves a renamed parameter's node spelled NAME__bpNN, so this tells
-   it from an unrenamed name the enclosing scope also uses, which
-   subtree_has_param_named_pub matches under either spelling. */
-static int param_spelled(const NodeTable *nt, int id, const char *nm) {
-  if (id < 0) return 0;
-  const char *ty = nt_type(nt, id);
-  NodeKind ty_k = nt_kind(nt, id);
-  if (ty && (strstr(ty, "ParameterNode") || ty_k == NK_LocalVariableTargetNode)) {
-    const char *pn = nt_str(nt, id, "name");
-    if (pn && sp_streq(pn, nm)) return 1;
-  }
-  int nr = nt_num_refs(nt, id);
-  for (int i = 0; i < nr; i++)
-    if (param_spelled(nt, nt_ref_at(nt, id, i), nm)) return 1;
-  int na = nt_num_arrs(nt, id);
-  for (int i = 0; i < na; i++) {
-    int n = 0; const int *ids = nt_arr_at(nt, id, i, &n);
-    for (int k = 0; k < n; k++) if (param_spelled(nt, ids[k], nm)) return 1;
-  }
-  return 0;
+  return nt_scope_has_local(c->nt, create, nm) &&
+         !subtree_has_param_named_pub(c, nt_ref(c->nt, create, "parameters"), nm);
 }
 
 /* 1 when `nm` is declared by a block nested in the proc body -- one of its
@@ -10321,24 +10288,15 @@ static int nested_block_declares(Compiler *c, int id, const char *nm) {
   if (!ty || ty_k == NK_LambdaNode) return 0;
   if (ty_k == NK_BlockNode) {
     int pn = nt_ref(nt, id, "parameters");
-    if (param_spelled(nt, pn, nm)) return 1;
-    const char *locs = nt_str(nt, id, "locals");
-    size_t nl = strlen(nm);
-    for (const char *p = locs ? locs : ""; *p; ) {
-      const char *e = strchr(p, ',');
-      size_t l = e ? (size_t)(e - p) : strlen(p);
-      if (l == nl && memcmp(p, nm, nl) == 0) {
-        /* The list keeps a renamed parameter's raw NAME: that entry is the
-           parameter, not the enclosing scope's `nm`. Numbered and `it`
-           parameters have no node of their own, and the list carries their
-           renamed spelling. */
-        NodeKind pk = nt_kind(nt, pn);
-        if (pk == NK_NumberedParametersNode || pk == NK_ItParametersNode) return 1;
-        if (!subtree_has_param_named_pub(c, pn, nm)) return 1;
-        break;
-      }
-      if (!e) break;
-      p = e + 1;
+    if (nt_param_binds(nt, pn, nm)) return 1;
+    if (nt_scope_has_local(nt, id, nm)) {
+      /* The list keeps a renamed parameter's raw NAME: that entry is the
+         parameter, not the enclosing scope's `nm`. Numbered and `it`
+         parameters have no node of their own, and the list carries their
+         renamed spelling. */
+      NodeKind pk = nt_kind(nt, pn);
+      if (pk == NK_NumberedParametersNode || pk == NK_ItParametersNode) return 1;
+      if (!subtree_has_param_named_pub(c, pn, nm)) return 1;
     }
   }
   int nr = nt_num_refs(nt, id);
@@ -11733,28 +11691,22 @@ else if (orecv >= 0 && onm) {
      invocation -- that reset assigns `_cell_x`, and with the declaration in
      the CALLER (the capture path this local no longer takes) there was
      nothing here to assign to (#4087). */
-  { const char *blocs = nt_str(nt, create, "locals");
-    char nbuf[128];
-    for (const char *q = blocs ? blocs : ""; *q; ) {
-      const char *e = strchr(q, ',');
-      size_t l = e ? (size_t)(e - q) : strlen(q);
-      if (l && l < sizeof nbuf) {
-        memcpy(nbuf, q, l); nbuf[l] = 0;
-        LocalVar *lv = scope_local(bs, nbuf);
-        if (lv && lv->is_cell && !subtree_has_param_named_pub(c, nt_ref(nt, create, "parameters"), nbuf)) {
-          /* Allocate here, not just declare: the block-local reset that would
-             otherwise fill it runs only where emit_stmts sees this body as a
-             BlockNode, and a proc reached through the poly enumerator never
-             gets there -- the body then dereferenced a NULL cell. Each proc
-             invocation is a fresh frame, so allocating in the prologue IS the
-             per-invocation freshness; a reset that does run re-allocates on
-             top, which stays correct. */
-          emit_proc_owned_cell(c, pb, lv, nbuf);
-        }
-      }
-      if (!e) break;
-      q = e + 1;
-    } }
+  int nbl = 0;
+  const char *const *blocs = nt_scope_locals(nt, create, &nbl);
+  for (int li = 0; li < nbl; li++) {
+    const char *nbuf = blocs[li];
+    LocalVar *lv = scope_local(bs, nbuf);
+    if (lv && lv->is_cell && !subtree_has_param_named_pub(c, nt_ref(nt, create, "parameters"), nbuf)) {
+      /* Allocate here, not just declare: the block-local reset that would
+         otherwise fill it runs only where emit_stmts sees this body as a
+         BlockNode, and a proc reached through the poly enumerator never
+         gets there -- the body then dereferenced a NULL cell. Each proc
+         invocation is a fresh frame, so allocating in the prologue IS the
+         per-invocation freshness; a reset that does run re-allocates on
+         top, which stays correct. */
+      emit_proc_owned_cell(c, pb, lv, nbuf);
+    }
+  }
   /* A celled local a block nested in the body declares: this frame owns it
      too (nested_block_declares), and the block-local reset at the top of
      each run of that block gives it a fresh cell. */

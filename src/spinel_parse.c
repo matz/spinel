@@ -2040,9 +2040,8 @@ static int flatten_node(pm_node_t *node) {
         int bpid = node_counter++;
         nt_put_type(out_nt, bpid, "BlockParametersNode");
         if (in_bi) emit_int(bpid, "node_bi", g_bi_base + 1);
-        if (bp->parameters) {
-          emit_ref(bpid, "parameters", (pm_node_t *)bp->parameters);
-        }
+        if (bp->parameters) emit_ref(bpid, "parameters", (pm_node_t *)bp->parameters);
+        emit_node_array(bpid, "locals", &bp->locals);   /* (the `; x` declarations, apart from the scope's names above) */
         nt_put_ref(out_nt, id, "parameters", bpid);
       }
 else if (PM_NODE_TYPE(n->parameters) == PM_NUMBERED_PARAMETERS_NODE) {
@@ -2244,9 +2243,8 @@ else {
     if (n->parameters) {
       if (PM_NODE_TYPE(n->parameters) == PM_BLOCK_PARAMETERS_NODE) {
         pm_block_parameters_node_t *bp = (pm_block_parameters_node_t *)n->parameters;
-        if (bp->parameters) {
-          R("parameters", bp->parameters);
-        }
+        if (bp->parameters) R("parameters", bp->parameters);
+        A("block_locals", &bp->locals);   /* (a lambda holds no BlockParametersNode to carry them) */
       }
 else if (PM_NODE_TYPE(n->parameters) != PM_NUMBERED_PARAMETERS_NODE) {
         R("parameters", n->parameters);

@@ -37342,6 +37342,12 @@ int prune_unnamed_methods(Compiler *c) {
           break;
         }
     }
+  /* an inline RBS signature is read and checked against --rbs, and a
+     later def of its name may replace it (inline_replacing_def) */
+  NT_FOREACH_KIND(nt, NK_DefNode, d) {
+    const char *dn = nt_str(nt, d, "name");
+    if (dn && nt_int(nt, d, "rbs_line", 0) && !anh_has(&named, dn)) anh_add(&named, dn);
+  }
   PumBody pb = { nt, &defined, arg_cb };
   int blanked = 0, *drop = NULL, ndrop = 0, cdrop = 0;
   NT_FOREACH_KIND(nt, NK_DefNode, d) {

@@ -1386,15 +1386,14 @@ int elab_header_class(const Compiler *c, int node, int *owner, const char **leaf
    block on a singleton class (LR_FS_IEVAL_SCLASS, `class << C;
    instance_eval { ... }`) self is that singleton class, and a def goes on
    the singleton class's own singleton, which the record does not hold.
-   Where self is taken for an object (LR_FS_INST, asked with self: an instance
-   method's body, an instance_eval or instance_exec block on a value that is
-   no constant or self) there is no class: that last one is a guess (the
-   value may be a class: a local, `self.class`), and the frame reads as "no
-   class", as an unresolved receiver does.
-   Self in a define_method's block is an object too, of no class the record
-   tells: LR_FS_OBJECT, which lr_body_frame alone answers, and which a
-   reader of LR_FS_INST takes as one. */
-enum { LR_FS_NONE, LR_FS_SCLASS, LR_FS_IEVAL, LR_FS_IEVAL_SCLASS, LR_FS_INST, LR_FS_OBJECT };
+   Where self is taken for an object (LR_FS_OBJECT, asked with self: an
+   instance method's body, a define_method's block, an instance_eval or
+   instance_exec block on a value that is no constant or self) there is no
+   class: that last one is a guess (the value may be a class: a local,
+   `self.class`), and the frame reads as "no class", as an unresolved
+   receiver does. Which frame it stopped at, lr_body_frame's `at`, tells a
+   define_method's block from the others. */
+enum { LR_FS_NONE, LR_FS_SCLASS, LR_FS_IEVAL, LR_FS_IEVAL_SCLASS, LR_FS_OBJECT };
 
 /* elab_program's state: each statement's frame class (fc) and singleton
    flag (fs), each frame's visibility state (vs) and each file's top
@@ -2579,10 +2578,12 @@ static int lr_bform_pending(const LoadRecord *r);
    object (LR_UNKNOWN_CLASS, LR_FS_OBJECT). LR_UNKNOWN_CLASS where the
    record cannot tell (a receiver it does not resolve, e statement the
    receivers are read at; e < 0 reads none, so only the frames the tree
-   spells resolve). */
-static int lr_body_frame(Compiler *c, const int *par, int n, int node, int e, int self, int *fs) {
+   spells resolve). *at, where asked for (NULL: not), is the node of the
+   frame an object's self was taken from: the block or the def. */
+static int lr_body_frame(Compiler *c, const int *par, int n, int node, int e, int self, int *fs, int *at) {
   const NodeTable *nt = c->nt;
   *fs = LR_FS_NONE;
+  if (at) *at = -1;
   for (int v = node, p; v >= 0 && v < n && (p = par[v]) >= 0 && p < n; v = p) {
     NodeKind k = nt_kind(nt, p);
     if ((k == NK_ClassNode || k == NK_ModuleNode) && nt_ref(nt, p, "body") == v) {
@@ -2596,7 +2597,8 @@ static int lr_body_frame(Compiler *c, const int *par, int n, int node, int e, in
       return nt_kind(nt, ex) == NK_SelfNode ? lr_body_self(c, par, n, p, e) : lr_body_const(c, ex, e, 1);
     }
     if (self && k == NK_BlockNode && par[p] >= 0 && nt_ref(nt, par[p], "block") == p && is_define_method_name(nt_str(nt, par[p], "name"))) {
-      *fs = LR_FS_OBJECT;   /* (an object as LR_FS_INST is, and the one frame that says which block made it so) */
+      *fs = LR_FS_OBJECT;
+      if (at) *at = p;
       return LR_UNKNOWN_CLASS;
     }
     if (k == NK_BlockNode && par[p] >= 0 && nt_ref(nt, par[p], "block") == p && elab_opens_frame(nt, par[p])) {
@@ -2604,7 +2606,8 @@ static int lr_body_frame(Compiler *c, const int *par, int n, int node, int e, in
       int rv = nt_ref(nt, par[p], "receiver");
       if (self && is_instance_eval_family(nm) && rv >= 0 && nt_kind(nt, rv) != NK_ConstantReadNode && nt_kind(nt, rv) != NK_ConstantPathNode &&
           nt_kind(nt, rv) != NK_SelfNode) {
-        *fs = LR_FS_INST;
+        *fs = LR_FS_OBJECT;
+        if (at) *at = p;
         return LR_UNKNOWN_CLASS;
       }
       if (!is_class_eval_family(nm) && !is_instance_eval_family(nm)) return LR_UNKNOWN_CLASS;   /* (a class builder's block: lr_body_defs) */
@@ -2618,16 +2621,17 @@ static int lr_body_frame(Compiler *c, const int *par, int n, int node, int e, in
     if (self && k == NK_BlockNode && par[p] >= 0 && nt_ref(nt, par[p], "block") == p) {
       const char *nm = nt_str(nt, par[p], "name");
       int rv = nt_ref(nt, par[p], "receiver");
-      if (is_define_method_name(nm)) { *fs = LR_FS_OBJECT; return LR_UNKNOWN_CLASS; }
+      if (is_define_method_name(nm)) { *fs = LR_FS_OBJECT; if (at) *at = p; return LR_UNKNOWN_CLASS; }
       if (is_define_singleton_method_name(nm))
         return rv < 0 || nt_kind(nt, rv) == NK_SelfNode ? lr_body_self(c, par, n, par[p], e) : lr_body_const(c, rv, e, 1);
     }
     if (k == NK_DefNode && self) {   /* self in a method's body: the class whose singleton method it is */
       int rv = nt_ref(nt, p, "receiver"), rk = rv >= 0 ? nt_def_receiver(nt, rv) : -1, xfs;
       if (rk >= 0) return nt_kind(nt, rk) == NK_SelfNode ? lr_body_self(c, par, n, p, e) : lr_body_const(c, rk, e, 1);
-      int pend = lr_bform_pending(c->lrec), cls = lr_body_frame(c, par, n, p, e, 0, &xfs);
+      int pend = lr_bform_pending(c->lrec), cls = lr_body_frame(c, par, n, p, e, 0, &xfs, NULL);
       if (xfs != LR_FS_SCLASS && xfs != LR_FS_IEVAL) {
-        *fs = LR_FS_INST;
+        *fs = LR_FS_OBJECT;
+        if (at) *at = p;
         lr_bform_miss(c->lrec, pend);   /* (the answer is an object, not the class the walk read) */
       }
       return xfs == LR_FS_SCLASS || xfs == LR_FS_IEVAL ? cls : LR_UNKNOWN_CLASS;
@@ -2639,7 +2643,7 @@ static int lr_body_frame(Compiler *c, const int *par, int n, int node, int e, in
    LR_UNKNOWN_CLASS for a singleton class (self in a `class << x` body),
    whose singleton the record holds no history of */
 static int lr_body_self(Compiler *c, const int *par, int n, int node, int e) {
-  int fs, pend = lr_bform_pending(c->lrec), cls = lr_body_frame(c, par, n, node, e, 1, &fs);
+  int fs, pend = lr_bform_pending(c->lrec), cls = lr_body_frame(c, par, n, node, e, 1, &fs, NULL);
   if (fs != LR_FS_NONE) lr_bform_miss(c->lrec, pend);   /* (a singleton class: not the class the walk read) */
   return fs == LR_FS_NONE ? cls : LR_UNKNOWN_CLASS;
 }
@@ -2791,7 +2795,7 @@ static const char *lr_word_name(const NodeTable *nt, int word, int k, int defs) 
    self is a singleton class). *cls below LR_MAIN for none. */
 static void lr_word_side(Compiler *c, const int *par, int n, int node, int e, int *cls, int *sg) {
   int fs, pend = lr_bform_pending(c->lrec);
-  *cls = lr_body_frame(c, par, n, node, e, 1, &fs);
+  *cls = lr_body_frame(c, par, n, node, e, 1, &fs, NULL);
   *sg = fs == LR_FS_SCLASS || fs == LR_FS_IEVAL_SCLASS;
   if (lr_body_word_cside(c->nt, node)) {
     if (fs != LR_FS_NONE) *cls = LR_UNKNOWN_CLASS, lr_bform_miss(c->lrec, pend);
@@ -2848,7 +2852,7 @@ static int lr_body_call(Compiler *c, int node) {
    whose self is a singleton class) */
 static void lr_call_side(Compiler *c, const int *par, int n, int node, int e, int *cls, int *sg) {
   int fs, pend = lr_bform_pending(c->lrec);
-  *cls = lr_body_frame(c, par, n, node, e, 1, &fs);
+  *cls = lr_body_frame(c, par, n, node, e, 1, &fs, NULL);
   *sg = fs == LR_FS_SCLASS || fs == LR_FS_IEVAL_SCLASS;
   if (is_define_singleton_method_name(nt_str(c->nt, node, "name"))) {
     if (fs != LR_FS_NONE) *cls = LR_UNKNOWN_CLASS, lr_bform_miss(c->lrec, pend);
@@ -2892,7 +2896,7 @@ static int lr_body_target(Compiler *c, const int *par, int n, int d, int walk, i
   if (nt_kind(nt, d) == NK_CallNode && lr_body_call(c, d) >= 0) lr_call_side(c, par, n, d, e, cls, sg);
   else if (nt_kind(nt, d) == NK_CallNode) lr_word_side(c, par, n, d, e, cls, sg);
   else if (rk >= 0) *cls = nt_kind(nt, rk) == NK_SelfNode ? lr_body_self(c, par, n, d, e) : lr_body_const(c, rk, e, walk), *sg = 1;
-  else *cls = lr_body_frame(c, par, n, d, e, 0, &fs), *sg = fs != LR_FS_NONE;
+  else *cls = lr_body_frame(c, par, n, d, e, 0, &fs, NULL), *sg = fs != LR_FS_NONE;
   if (*cls < LR_MAIN || lr_chain_open(c, *cls)) return 0;
   for (int a = *cls, k = 0; walk && a >= 0 && a < c->nclasses && k < lr_chain_bound(c); a = lr_super(c, a), k++) {
     const LrClass *kc = lr_class(r, a);
@@ -2910,8 +2914,8 @@ static int lr_body_def_word(Compiler *c, const int *par, int n, int d) {
   int a = d < n ? par[d] : -1, w = a >= 0 && nt_kind(nt, a) == NK_ArgumentsNode ? par[a] : -1, fs;
   int rv = w >= 0 && nt_kind(nt, w) == NK_CallNode ? nt_ref(nt, w, "receiver") : -1;
   if (w < 0 || nt_kind(nt, w) != NK_CallNode || (rv >= 0 && nt_kind(nt, rv) != NK_SelfNode)) return 0;
-  lr_body_frame(c, par, n, w, -1, 1, &fs);
-  if (fs == LR_FS_INST || fs == LR_FS_OBJECT) return 0;
+  lr_body_frame(c, par, n, w, -1, 1, &fs, NULL);
+  if (fs == LR_FS_OBJECT) return 0;
   const char *wn = vis_word_call(nt, w, NULL);
   int v = wn ? visibility_of_name(wn) : 0;
   return v != BVIS_PUBLIC ? v : 0;
@@ -3159,7 +3163,7 @@ static int lr_body_header(const NodeTable *nt, const int *par, int n, int node) 
    `def self.m` (sg) or in a `class << self` */
 static void lr_body_names_own(Compiler *c, const int *par, int n, int node, int self, int sg, const char *nm, int w, LrBodyNames *x) {
   c->lrec->bform_pend = -1;
-  int fs = LR_FS_NONE, cls = nm && self >= 0 ? lr_body_frame(c, par, n, node, -1, self, &fs) : -1, h = c->lrec->bform_pend;
+  int fs = LR_FS_NONE, cls = nm && self >= 0 ? lr_body_frame(c, par, n, node, -1, self, &fs, NULL) : -1, h = c->lrec->bform_pend;
   int side = 2 * (sg || fs == LR_FS_SCLASS || fs == LR_FS_IEVAL_SCLASS) + w;
   if (nm) anh_add(&x->defd, nm);
   if (cls >= 0 && cls < c->nclasses) ani_add(&x->own, nm, 4 * cls + side);
@@ -3587,7 +3591,7 @@ static int lr_body_owner_fixed(Compiler *c, const int *par, int n, int node, LrB
    (untold, as for a protected word) */
 static int lr_body_def_barred(Compiler *c, const int *par, int n, int d, LrBodyNames *x) {
   const NodeTable *nt = c->nt;
-  int fs, dr = nt_ref(nt, d, "receiver"), cls = lr_body_frame(c, par, n, d, -1, 1, &fs);
+  int fs, dr = nt_ref(nt, d, "receiver"), cls = lr_body_frame(c, par, n, d, -1, 1, &fs, NULL);
   int cside = (dr >= 0 && nt_kind(nt, dr) == NK_SelfNode) || fs == LR_FS_SCLASS || fs == LR_FS_IEVAL_SCLASS;
   return !lr_body_followed(c, par, n, d) || (cside && lr_cside_unfollowed(x, nt_str(nt, d, "name"))) ||
          lr_body_self_unsure(c, x, lr_body_cmethod(nt, par, n, d), cls) ||
@@ -5426,13 +5430,11 @@ int elab_body_self_object(Compiler *c, int node) {
   const int *par = rec ? lr_par(c, 0) : comp_parent_map(c);
   int n = rec ? r->n : c->nt->count, fs = LR_FS_NONE;
   if (!par || node < 0 || node >= n) return -1;
-  lr_body_frame(c, par, n, node, -1, 1, &fs);
-  /* (the first define_method's block up from node is the one lr_body_frame stopped at) */
-  for (int v = node, p; fs == LR_FS_OBJECT && v >= 0 && v < n && (p = par[v]) >= 0 && p < n; v = p)
-    if (nt_kind(c->nt, p) == NK_BlockNode && par[p] >= 0 && nt_ref(c->nt, par[p], "block") == p &&
-        is_define_method_name(nt_str(c->nt, par[p], "name")))
-      return par[p];
-  return -1;
+  int at;
+  lr_body_frame(c, par, n, node, -1, 1, &fs, &at);
+  /* (the frame it stopped at is a define_method's block, or else a method's body or an instance_eval's block) */
+  return fs == LR_FS_OBJECT && at >= 0 && nt_kind(c->nt, at) == NK_BlockNode && par[at] >= 0 && nt_ref(c->nt, par[at], "block") == at &&
+         is_define_method_name(nt_str(c->nt, par[at], "name")) ? par[at] : -1;
 }
 /* See analyze.h */
 int elab_body_call_owner(Compiler *c, int call) {

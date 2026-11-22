@@ -321,7 +321,7 @@ on self (`send(:private, :m)`, `vis_word_call`); a class-method word's
 its argument has. An instance word takes its def only where self at the
 word is a class or module: in an instance method's body or a
 `define_method` block the word raises NoMethodError and the def stays
-public (`lr_body_def_word`, asking `lr_body_frame` for `LR_FS_INST`). A
+public (`lr_body_def_word`, asking `lr_body_frame` for `LR_FS_OBJECT`). A
 call before the body runs of a private def it makes finds no method: the
 plan binds it to the version's face entry (`ver_lone_closed_late`). A
 class-method word whose first name no method of the

@@ -723,8 +723,10 @@ static int sp_fnm_match(const char *p, const char *s, int flags) {
    FNM_PATHNAME: the component holds no separator by construction. A
    leading dot is hidden unless the pattern asks for one or the glob runs
    under FNM_DOTMATCH, which is CRuby's rule. */
+static int sp_glob_fold = 0;   /* the directory the walk reads does not tell letter cases apart */
 static int sp_glob_comp_match(const char *comp, const char *name) {
-  return sp_fnm_match(comp, name, (sp_glob_dotmatch ? SP_FNM_DOTMATCH : 0) | (sp_glob_flags & SP_FNM_NOESCAPE));
+  return sp_fnm_match(comp, name, (sp_glob_dotmatch ? SP_FNM_DOTMATCH : 0) | (sp_glob_flags & SP_FNM_NOESCAPE) |
+                                  (sp_glob_fold ? SP_FNM_CASEFOLD : 0));
 }
 
 /* Whether a component is read from its directory by the matcher: a wildcard,
@@ -733,6 +735,28 @@ static int sp_glob_comp_match(const char *comp, const char *name) {
 static int sp_glob_has_meta(const char *comp) {
   for (const char *p = comp; *p; p++)
     if (*p == '*' || *p == '?' || *p == '[' || *p == '\\') return 1;
+  return 0;
+}
+
+/* Whether the directory's volume tells letter cases apart, which decides
+   how a glob matches the names under it, as CRuby's glob asks each
+   directory it opens (dir.c, is_case_sensitive). On macOS the volume says
+   (pathconf's _PC_CASE_SENSITIVE: APFS and HFS+ as the system makes them
+   fold, a volume made case-sensitive does not); on Windows every volume
+   folds, CRuby's FNM_SYSCASE; elsewhere none does. Under a folding
+   directory a letter makes a component one the matcher reads from the
+   directory, so "A.txt" finds "a.txt" and answers the name as the disk
+   spells it, as CRuby's does; a pathconf that fails keeps the cases. */
+#if defined(_WIN32)
+static int sp_glob_dir_folds(const char *fsdir) { (void)fsdir; return 1; }
+#elif defined(__APPLE__) && defined(_PC_CASE_SENSITIVE)
+static int sp_glob_dir_folds(const char *fsdir) { return pathconf(fsdir[0] ? fsdir : ".", _PC_CASE_SENSITIVE) == 0; }
+#else
+static int sp_glob_dir_folds(const char *fsdir) { (void)fsdir; return 0; }
+#endif
+static int sp_glob_has_alpha(const char *comp) {
+  for (const char *p = comp; *p; p++)
+    if ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z')) return 1;
   return 0;
 }
 
@@ -823,7 +847,8 @@ static void sp_glob_walk_at(const char *fsdir, const char *outprefix,
     return;
   }
 
-  if (!sp_glob_has_meta(comp)) {
+  int fold = sp_glob_dir_folds(fsdir);
+  if (!sp_glob_has_meta(comp) && !(fold && sp_glob_has_alpha(comp))) {
     /* A literal component needs no readdir: ask the filesystem directly. */
     snprintf(fspath, sizeof fspath, "%s%s%s", fsdir, SP_GLOB_SEP(fsdir), comp);
     snprintf(outpath, sizeof outpath, "%s%s", outprefix, comp);
@@ -845,6 +870,9 @@ static void sp_glob_walk_at(const char *fsdir, const char *outprefix,
        while ".." never is. Both stay hidden without the flag. */
     if (name[0] == '.' && name[1] == '.' && name[2] == 0) continue;
     if (name[0] == '.' && name[1] == 0 && (!sp_glob_dotmatch || descended)) continue;
+    /* the walk below sets the fold of its own directory: this one's again
+       for the next name here */
+    sp_glob_fold = fold;
     if (!sp_glob_comp_match(comp, name)) continue;
     if (sp_glob_bad) break;
     snprintf(fspath, sizeof fspath, "%s%s%s", fsdir, SP_GLOB_SEP(fsdir), name);
@@ -1062,8 +1090,8 @@ const char *sp_poly_inspect(sp_RbVal v);   /* lib/sp_poly_cold.c */
 /* Dir.glob's flags and keyword options reuse the walk: FNM_DOTMATCH and
    FNM_NOESCAPE reach the matcher of each component; FNM_CASEFOLD and the
    others change nothing in a glob, as CRuby ignores them there (the case
-   rule is the filesystem's); sort: false keeps the walk's order, which the
-   filesystem gives. */
+   rule is the directory's volume's, sp_glob_dir_folds); sort: false keeps
+   the walk's order, which the filesystem gives. */
 sp_StrArray *sp_dir_glob_flags(const char *pattern, const char *base, sp_int flags, sp_RbVal sort) {
   SP_GC_ROOT_STR(pattern); SP_GC_ROOT_STR(base); SP_GC_ROOT_RBVAL(sort);
   if (sort.tag != SP_TAG_BOOL)

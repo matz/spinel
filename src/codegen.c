@@ -10578,17 +10578,6 @@ static void emit_cap_fill(Buf *out, int indent, const char *pid, const NameSet *
       buf_printf(out, "_capv_%s->c_%s = _cell_%s;\n", pid, caps->v[i], rename_local(caps->v[i]));
   }
 }
-/* Can the cell of `lv` ride a capture struct? A Float capture is a real sp_float field, not the proc's argument
-   slot, so it is safe even alongside a float parameter (a first-class proc's `.call` passes float args through the
-   boxed side-channel); a by-value struct rides its own cell (#3995 for the class; the Range / Rational / Complex
-   siblings were left on the reject, and Time / Tms / a String range after them). */
-static int cap_cell_supported(Compiler *c, const LocalVar *lv) {
-  (void)c;
-  return lv->type == TY_INT || lv->type == TY_BOOL || lv->type == TY_SYMBOL || lv->type == TY_UNKNOWN ||
-         lv->type == TY_PROC || lv->type == TY_FLOAT || lv->type == TY_POLY || cell_value_struct(lv->type) != NULL ||
-         (proc_slot_is_ptr(lv->type) && !comp_ty_value_obj(c, lv->type));
-}
-
 /* ---- the environment of a define_method block ----
    A define_method or define_singleton_method block in a def's body closes over that def's locals (Scope.env_host): the
    locals are heap cells, as a proc's captures are, and the capture struct that holds the cells (the environment) is
@@ -10643,6 +10632,7 @@ static void emit_env_globals(Compiler *c, Buf *decl, Buf *mark) {
   }
 }
 /* Load the environment as the method starts, and read the cells through it */
+static void emit_env_missing(Compiler *c, const Scope *dm, Buf *b, const char *self);
 static void emit_env_load(Compiler *c, Scope *dm, Buf *b, NameSet *caps, char *capst, size_t cap) {
   char pid[24];
   env_tag(dm, pid, sizeof pid);
@@ -10651,20 +10641,27 @@ static void emit_env_load(Compiler *c, Scope *dm, Buf *b, NameSet *caps, char *c
   buf_printf(b, "    %s *_cap = (%s *)gv___spinel_env_%d;\n    SP_GC_ROOT(_cap);\n", capst, capst, dm->def_node);
   /* A call that reaches the method before its definer ran (a poly dispatch that has no version to read) finds no
      environment: CRuby has no such method yet */
-  buf_puts(b, "    if (SP_UNLIKELY(!_cap)) { sp_raise_nomethod(sp_nomethod_msg(");
-  emit_str_literal(b, dm->name);
-  if (dm->is_cmethod) buf_printf(b, ", sp_box_class((sp_Class){%d, NULL})));", dm->class_id);
-  else if (dm->class_id >= 0 && !c->classes[dm->class_id].is_value_type) buf_printf(b, ", sp_box_obj((void *)self, %d)));", dm->class_id);
-  else buf_puts(b, ", sp_box_nil()));");
+  buf_puts(b, "    if (SP_UNLIKELY(!_cap)) { ");
+  emit_env_missing(c, dm, b, "self");
   if (method_is_void(dm)) buf_puts(b, " return; }\n");
   else buf_printf(b, " return %s; }\n", method_ret_zero(c, dm) ? method_ret_zero(c, dm) : "0");
 }
+/* The NoMethodError for a call that reaches a method before its definer ran, naming the receiver as CRuby does: the
+   method's own `self`, or none (NULL) where a call site spells a default, which names the class alone. */
+static void emit_env_missing(Compiler *c, const Scope *dm, Buf *b, const char *self) {
+  buf_puts(b, "sp_raise_nomethod(sp_nomethod_msg(");
+  emit_str_literal(b, dm->name);
+  if (dm->is_cmethod) buf_printf(b, ", sp_box_class((sp_Class){%d, NULL})));", dm->class_id);
+  else if (dm->class_id >= 0 && !c->classes[dm->class_id].is_value_type) buf_printf(b, ", sp_box_obj((void *)%s, %d)));", self, dm->class_id);
+  else buf_puts(b, ", sp_box_nil()));");
+}
 /* A default that a call site spells for a callee with an environment (a define_method block's parameter that reads
-   a local it closes over) runs in the callee's context, as its self does (dflt_self_enter): a statement expression
-   that binds the environment, `_cap`, around the default, with the environment's struct and names as the cap context
-   for the reads in it. env_bind_begin writes the opening and saves the context; env_bind_end the closing. A call
-   before the definer ran finds no environment: the default is then no value read (a zero of its type), and the
-   method's own prologue raises the NoMethodError, naming its receiver, which a call site's default cannot name. */
+   a local it closes over) runs in the callee's context, as its self does (dflt_self_enter): one statement
+   expression binds the definer's environment, `_cap`, ahead of the default's own code, the statements it hoists
+   included, and gives the environment's struct and names as the cap context for the reads in it. A call before the
+   definer ran finds no environment: it raises the NoMethodError there, as the method's prologue does, before
+   anything reads a cell. env_bind_begin opens it and saves the context; env_bind_end writes the hoisted code and
+   closes. */
 void env_bind_begin(Compiler *c, Scope *dm, Buf *out, EnvBind *sv) {
   char pid[24];
   env_tag(dm, pid, sizeof pid);
@@ -10672,24 +10669,24 @@ void env_bind_begin(Compiler *c, Scope *dm, Buf *out, EnvBind *sv) {
   sv->caps = env_caps(dm, &c->scopes[dm->env_host - 1]);
   snprintf(sv->capst, sizeof sv->capst, "_proc_cap_%s", pid);
   g_cap_struct = sv->capst; g_cap_names = &sv->caps;
-  buf_printf(out, "({ %s *_cap = (%s *)gv___spinel_env_%d; ", sv->capst, sv->capst, dm->def_node);
+  buf_printf(out, "({ %s *_cap = (%s *)gv___spinel_env_%d; if (SP_UNLIKELY(!_cap)) { ", sv->capst, sv->capst, dm->def_node);
+  emit_env_missing(c, dm, out, "NULL");
+  buf_puts(out, " } ");
   sv->at = out->len;
+  sv->pre = g_pre; sv->indent = g_indent;
+  memset(&sv->hoist, 0, sizeof sv->hoist);
+  g_pre = &sv->hoist; g_indent = 0;
 }
 void env_bind_end(Buf *out, EnvBind *sv) {
+  g_pre = sv->pre; g_indent = sv->indent;
   char *dflt = strndup(out->p + sv->at, out->len - sv->at);
+  if (!dflt) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   out->len = sv->at;
-  buf_printf(out, "__typeof__(%s) _dv; if (!_cap) memset(&_dv, 0, sizeof _dv); else _dv = %s; _dv; })", dflt, dflt);
-  free(dflt);
+  if (sv->hoist.p) buf_puts(out, sv->hoist.p);
+  buf_printf(out, "%s; })", dflt);
+  free(dflt); free(sv->hoist.p);
   g_cap_struct = sv->st; g_cap_names = sv->names;
   free(sv->caps.v);
-}
-/* Can every local that definer scope dm closes over ride a cell? (the call plan refuses a block over one that cannot) */
-int env_cells_supported(Compiler *c, const Scope *dm) {
-  for (int i = 0; dm->env_host && i < dm->nenv_names; i++) {
-    LocalVar *lv = scope_local(&c->scopes[dm->env_host - 1], dm->env_names[i]);
-    if (lv && !cap_cell_supported(c, lv)) return 0;
-  }
-  return 1;
 }
 /* The definer's statement stores the environment, ahead of the cells' version being written */
 void emit_env_store(Compiler *c, int id, Buf *b, int indent) {
@@ -11046,7 +11043,7 @@ static void emit_proc_literal_here(Compiler *c, int create, Buf *b) {
       continue;
     }
     if (lv && lv->is_cell) {
-      if (!cap_cell_supported(c, lv)) {
+      if (!repr_cell_capturable(c, lv)) {
         free(params.v); free(used.v); free(locals.v); free(caps.v);
         unsupported(c, create, "proc capturing a non-integer variable (later slice)");
         return;

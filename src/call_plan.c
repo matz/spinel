@@ -10091,6 +10091,14 @@ static int cplan_instance_call_named(Compiler *c, const char *name, int k) {
     if (an_written_call(id) && an_call_may_reach_instance(c, id, k)) return 1;
   return 0;
 }
+/* Can every local that a definer's scope closes over ride a closure cell (repr_cell_capturable)? */
+static int cplan_env_cells_ok(Compiler *c, const Scope *dm) {
+  for (int i = 0; dm->env_host && i < dm->nenv_names; i++) {
+    LocalVar *lv = scope_local(&c->scopes[dm->env_host - 1], dm->env_names[i]);
+    if (lv && !repr_cell_capturable(c, lv)) return 0;
+  }
+  return 1;
+}
 /* A definer call on self in a method's body that the plan cannot answer as a version (CRF_DEFINER), its words in buf,
    or NULL: a define_method or define_singleton_method in a def's body, or one that is a version
    (elab_body_call_version: in a define_method's or define_singleton_method's block too), whose block yields to that
@@ -10141,7 +10149,7 @@ static const char *cplan_body_definer_gap(Compiler *c, int id, char *buf, size_t
     /* (an alias keeps the method it found: the environment of one run of the definer) */
     an_block_captures(nt, blk, 0) && an_aliases_name(c, mn, NULL) ? "reads or writes that method's locals where the program aliases the name it defines (the alias would keep the environment of one run)" :
     /* (a local of a type no closure cell holds, as a proc's capture is refused) */
-    elab_def_scope_of(c, id) > 0 && !env_cells_supported(c, &c->scopes[elab_def_scope_of(c, id)]) ? "reads or writes a local of a type that a closure cell cannot hold" : NULL;
+    elab_def_scope_of(c, id) > 0 && !cplan_env_cells_ok(c, &c->scopes[elab_def_scope_of(c, id)]) ? "reads or writes a local of a type that a closure cell cannot hold" : NULL;
   if (run && (def || host >= 0) && envgap && (dm || dsm) && an_name_reached(c, mn, av[0])) {
     snprintf(buf, cap, "Module#%s in a method body with a block that %s is not supported (see docs/limitations.md)", nm, envgap);
     return buf;

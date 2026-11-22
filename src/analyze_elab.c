@@ -3571,7 +3571,8 @@ static void lr_body_forms(Compiler *c, const int *par, int n) {
   r->bform = NULL; r->nbform = 0;
   free(r->bown);
   r->bown = calloc((size_t)n + 1, 1);
-  r->nbown = r->bown ? n : 0;
+  if (!r->bown) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  r->nbown = n;
   LrBodyNames x;   /* (the tree's names the bars ask, lr_body_word_barred) */
   lr_body_names_read(c, par, n, &x);
   for (int id = 0; id < n; id++) {
@@ -3590,7 +3591,7 @@ static void lr_body_forms(Compiler *c, const int *par, int n) {
     if (k == NK_CallNode && lr_body_word(nt, id) && lr_body_around(nt, par, n, id) >= 0 && lr_body_word_frame(c, par, n, id) &&
         !lr_body_word_barred(c, par, n, id, &x))
       continue;
-    if (k == NK_CallNode && r->bown && lr_body_call(c, id) >= 0 && lr_body_around(nt, par, n, id) >= 0)
+    if (k == NK_CallNode && lr_body_call(c, id) >= 0 && lr_body_around(nt, par, n, id) >= 0)
       r->bown[id] = lr_body_owner_fixed(c, par, n, id, &x);
     /* (so is a body's definer call, lr_body_call, but a barred one) */
     if (lr_body_call(c, id) >= 0 && lr_body_around(nt, par, n, id) >= 0 && !lr_body_call_barred(c, par, n, id, &x)) continue;

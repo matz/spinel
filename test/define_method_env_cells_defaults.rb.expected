@@ -1,0 +1,18 @@
+undefined method 'sing' for class Dflt
+[0, [3]]
+[0, 1]
+[0, {k: 3}]
+[0, [4]]
+[0, 3]
+[3]
+1
+[5, :lit]
+[5, :pr]
+[5, :lit]
+[1, :pr]
+[7, :made]
+[7, :again]
+5
+12
+5
+6

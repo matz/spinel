@@ -1649,10 +1649,9 @@ const char *cell_value_struct(TyKind t);
 const char *cell_value_struct_empty(TyKind t);
 const char *cell_value_struct_scan(TyKind t);
 void emit_cell_elem_type(Compiler *c, LocalVar *lv, Buf *b);
-typedef struct { const char *st; NameSet *names; NameSet caps; char capst[32]; size_t at; } EnvBind;
+typedef struct { const char *st; NameSet *names; NameSet caps; char capst[32]; size_t at; Buf *pre; int indent; Buf hoist; } EnvBind;
 void env_bind_begin(Compiler *c, Scope *dm, Buf *out, EnvBind *sv);   /* the opening of a default spelled in a define_method method's environment */
 void env_bind_end(Buf *out, EnvBind *sv);
-int env_cells_supported(Compiler *c, const Scope *dm);   /* can every local a define_method block closes over ride a cell */
 void emit_env_store(Compiler *c, int id, Buf *b, int indent);   /* a define_method block's environment, stored where its definer runs */
 void emit_cell_defer_switch(Compiler *c, int id, int k, Buf *b, int indent);
 int splat_string_var(Compiler *c, const int *av, int ac, int *fs);

@@ -13,3 +13,18 @@ p Versions.new.m
 Versions.one(30)
 p Versions.new.m
 
+
+# a module's method made by a module-level definer, read through two includers: the environment is the definer's,
+# not a copy's
+module Shared
+  def self.setup(n)
+    define_method(:shared) { n }
+    :ok
+  end
+end
+class IncA; include Shared; end
+class IncB; include Shared; end
+Shared.setup(3)
+p IncA.new.shared, IncB.new.shared
+Shared.setup(4)
+p IncA.new.shared, IncB.new.shared

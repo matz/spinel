@@ -10609,7 +10609,16 @@ static NameSet env_caps(const Scope *dm, Scope *host) {
   }
   return caps;
 }
-static void env_tag(const Scope *dm, char *out, size_t cap) { snprintf(out, cap, "env%d", dm->idx); }
+/* The environment is the definer's, not a scope's: the scope of a module's method an include copies (and every other
+   copy) reads the one its definer stores, whichever of the copies is emitted. Keyed by the definer call. */
+static void env_tag(const Scope *dm, char *out, size_t cap) { snprintf(out, cap, "env%d", dm->def_node); }
+/* Is scope si the first emitted scope of its definer's environment (the one that declares it), and does any scope of
+   definer call `node` get emitted (first = 0)? */
+static int env_emitted_scope(Compiler *c, int node, int si) {
+  for (int k = 1; k < c->nscopes; k++)
+    if (c->scopes[k].env_host && c->scopes[k].def_node == node && scope_is_emitted(c, k)) return si < 0 || k == si;
+  return 0;
+}
 /* The capture struct and its scan, where the proc ones go: ahead of the bodies that name them */
 static void emit_env_decl(Compiler *c, const Scope *dm) {
   char pid[24];
@@ -10628,9 +10637,9 @@ static void emit_env_decl(Compiler *c, const Scope *dm) {
 static void emit_env_globals(Compiler *c, Buf *decl, Buf *mark) {
   for (int si = 1; si < c->nscopes; si++) {
     const Scope *dm = &c->scopes[si];
-    if (!dm->env_host || !scope_is_emitted(c, si)) continue;
-    buf_printf(decl, "static void *gv___spinel_env_%d;\n", si);
-    buf_printf(mark, "  if (gv___spinel_env_%d) sp_gc_mark(gv___spinel_env_%d);\n", si, si);
+    if (!dm->env_host || !env_emitted_scope(c, dm->def_node, si)) continue;
+    buf_printf(decl, "static void *gv___spinel_env_%d;\n", dm->def_node);
+    buf_printf(mark, "  if (gv___spinel_env_%d) sp_gc_mark(gv___spinel_env_%d);\n", dm->def_node, dm->def_node);
   }
 }
 /* Load the environment as the method starts, and read the cells through it */
@@ -10639,7 +10648,7 @@ static void emit_env_load(Compiler *c, Scope *dm, Buf *b, NameSet *caps, char *c
   env_tag(dm, pid, sizeof pid);
   *caps = env_caps(dm, &c->scopes[dm->env_host - 1]);
   snprintf(capst, cap, "_proc_cap_%s", pid);
-  buf_printf(b, "    %s *_cap = (%s *)gv___spinel_env_%d;\n    SP_GC_ROOT(_cap);\n", capst, capst, dm->idx);
+  buf_printf(b, "    %s *_cap = (%s *)gv___spinel_env_%d;\n    SP_GC_ROOT(_cap);\n", capst, capst, dm->def_node);
   /* A call that reaches the method before its definer ran (a poly dispatch that has no version to read) finds no
      environment: CRuby has no such method yet */
   buf_puts(b, "    if (SP_UNLIKELY(!_cap)) { sp_raise_nomethod(sp_nomethod_msg(");
@@ -10663,7 +10672,7 @@ void emit_env_store(Compiler *c, int id, Buf *b, int indent) {
   int di = elab_def_scope_of(c, id);
   const Scope *dm = di > 0 ? &c->scopes[di] : NULL;
   char pid[24];
-  if (!dm || !dm->env_host || !scope_is_emitted(c, di)) return;
+  if (!dm || !dm->env_host || !env_emitted_scope(c, id, -1)) return;
   NameSet caps = env_caps(dm, &c->scopes[dm->env_host - 1]);
   env_tag(dm, pid, sizeof pid);
   emit_indent(b, indent);
@@ -10674,7 +10683,7 @@ void emit_env_store(Compiler *c, int id, Buf *b, int indent) {
   buf_printf(b, "SP_GC_ROOT(_capv_%s);\n", pid);
   emit_cap_fill(b, indent + 1, pid, &caps);
   emit_indent(b, indent + 1);
-  buf_printf(b, "gv___spinel_env_%d = _capv_%s;\n", dm->idx, pid);
+  buf_printf(b, "gv___spinel_env_%d = _capv_%s;\n", dm->def_node, pid);
   emit_indent(b, indent);
   buf_puts(b, "}\n");
   free(caps.v);
@@ -25275,7 +25284,7 @@ char *codegen_program(const NodeTable *nt) {
     if (orphan) g_unsup_quiet = 1;
     size_t pm_at = body->len;
     int loop_callee = loop_callees && loop_callees[s];
-    if (c->scopes[s].env_host) emit_env_decl(c, &c->scopes[s]);
+    if (c->scopes[s].env_host && env_emitted_scope(c, c->scopes[s].def_node, s)) emit_env_decl(c, &c->scopes[s]);
     EMIT_COLLECT_UNIT(emit_method(c, &c->scopes[s], body, loop_callee));
     g_unsup_quiet = 0;
     if (g_ndiags == ndiag0 && poll_pure_wrapped(c, s)) poll_pure_split(c, s, body, pm_at);

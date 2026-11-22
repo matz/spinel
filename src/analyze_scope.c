@@ -3858,6 +3858,14 @@ void scope_copy_method_shape(Scope *dst, Scope *src) {
   dst->nrequired = src->nrequired;
   dst->rest_idx = src->rest_idx;
   dst->kwrest_idx = src->kwrest_idx;
+  /* a block's closure over its definer's def's locals is part of its shape (scope_env_link) */
+  if (src->env_host && !dst->env_host) {
+    dst->env_host = src->env_host;
+    dst->nenv_names = src->nenv_names;
+    dst->env_names = malloc(sizeof *dst->env_names * (size_t)src->nenv_names);
+    if (!dst->env_names) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    memcpy(dst->env_names, src->env_names, sizeof *dst->env_names * (size_t)src->nenv_names);
+  }
   dst->accessor_of = src->accessor_of;
   dst->super_of = src->super_of;
   dst->alias_of = src->alias_of ? strdup(src->alias_of) : NULL;

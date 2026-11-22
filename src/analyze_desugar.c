@@ -26969,7 +26969,8 @@ static int incl_declined_node(const NodeTable *nt, int node, const char *param) 
        the row that reads those rewrites where the walk puts it
        (desugar_body_self_ivar_access_at) */
     else if (g_incl_body_spliced && (on_param || (g_incl_on_base && r < 0)) && blk < 0 &&
-             (sp_streq(nm, "instance_variable_get") || sp_streq(nm, "instance_variable_set"))) {
+             (sp_streq(nm, "instance_variable_get") || sp_streq(nm, "instance_variable_set") ||
+              sp_streq(nm, "instance_variable_defined?"))) {
       /* (...or receiverless in a class_eval block on the includer: self is the includer there) */
     }
     /* a declaration told to self's singleton class in a class_eval block
@@ -31355,10 +31356,11 @@ static int civ_self_body_access(NodeTable *nt, int node, int stmt) {
     const char *nm = nt_str(nt, node, "name");
     int setter = nm && sp_streq(nm, "instance_variable_set");
     int getter = nm && sp_streq(nm, "instance_variable_get");
+    int has = nm && sp_streq(nm, "instance_variable_defined?");
     int r = nt_ref(nt, node, "receiver");
     int args = nt_ref(nt, node, "arguments"), an = 0;
     const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
-    const char *iv0 = ((setter && stmt) || getter) &&
+    const char *iv0 = ((setter && stmt) || getter || has) &&
                       (r < 0 || nt_kind(nt, r) == NK_SelfNode) && an == (setter ? 2 : 1)
                         ? sym_or_str_literal(nt, av[0]) : NULL;
     if (civ_name_ok(iv0)) {
@@ -31366,9 +31368,24 @@ static int civ_self_body_access(NodeTable *nt, int node, int stmt) {
       int v = setter ? av[1] : -1;
       int line = (int)nt_int(nt, node, "node_line", 0);
       int file = (int)nt_int(nt, node, "node_file", 0);
-      nt_node_reset(nt, node, setter ? "InstanceVariableWriteNode" : "InstanceVariableReadNode");
-      nt_node_set_str(nt, node, "name", iv);
-      if (setter) nt_node_set_ref(nt, node, "value", v);
+      if (has) {
+        /* `instance_variable_defined?(:@x)`: `!defined?(@x).nil?`, true or
+           false as the call answers (the accessor's form, kind 3) */
+        int e = fwd_new_node_like(nt, node, "InstanceVariableReadNode"), q = fwd_new_node_like(nt, node, "DefinedNode");
+        nt_node_set_str(nt, e, "name", iv);
+        nt_node_set_ref(nt, q, "value", e);
+        int isnil = fwd_new_call(nt, q, "nil?", -1);
+        nt_node_reset(nt, node, "CallNode");
+        nt_node_set_str(nt, node, "name", "!");
+        nt_node_set_ref(nt, node, "receiver", isnil);
+        nt_node_set_ref(nt, node, "arguments", -1);
+        nt_node_set_ref(nt, node, "block", -1);
+      }
+      else {
+        nt_node_reset(nt, node, setter ? "InstanceVariableWriteNode" : "InstanceVariableReadNode");
+        nt_node_set_str(nt, node, "name", iv);
+        if (setter) nt_node_set_ref(nt, node, "value", v);
+      }
       if (line) nt_node_set_int(nt, node, "node_line", line);
       if (file) nt_node_set_int(nt, node, "node_file", file);
       changed = 1;

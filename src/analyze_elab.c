@@ -3782,6 +3782,11 @@ static int lr_frame_body(const NodeTable *nt, int fnode) {
   if (k == NK_ProgramNode) return nt_ref(nt, fnode, "statements");
   if (k == NK_ClassNode || k == NK_ModuleNode) return class_def_body(nt, fnode);
   if (k == NK_SingletonClassNode) return nt_ref(nt, fnode, "body");
+  /* a class_eval frame: its block's statements (#10785) */
+  if (k == NK_CallNode && is_class_eval_family(nt_str(nt, fnode, "name"))) {
+    int blk = nt_ref(nt, fnode, "block");
+    return blk >= 0 && nt_kind(nt, blk) == NK_BlockNode ? nt_ref(nt, blk, "body") : -1;
+  }
   return -1;
 }
 /* Is mixin m, of call node on class cls, one an explicit receiver names
@@ -3803,8 +3808,14 @@ static int lr_foreign_mixin(ElabRec *x, int node, const LrMixin *m, int cls, int
     if (sbody ? !(recv < 0 || nt_kind(nt, recv) == NK_SelfNode) : !nt_self_singleton_class(nt, recv) &&
         !(recv >= 0 && nt_kind(nt, recv) == NK_CallNode && is_singleton_class_name(nt_str(nt, recv, "name")))) return 0;
   }
+  else if (recv < 0 || nt_kind(nt, recv) == NK_SelfNode) {
+    /* `include M` in a class_eval block of the class's own, in its body:
+       the block's statement is the class's, as a body's is, but stands in
+       no body the passes walk (#10785) */
+    if (cls != fc || m->open < 0 || nt_kind(nt, m->open) != NK_CallNode) return 0;
+    if (m->kind != LR_INCLUDE && m->kind != LR_PREPEND && m->kind != LR_EXTEND) return 0;
+  }
   else {
-    if (recv < 0 || nt_kind(nt, recv) == NK_SelfNode) return 0;
     if (nt_kind(nt, recv) != NK_ConstantReadNode && nt_kind(nt, recv) != NK_ConstantPathNode) return 0;
     if (m->kind != LR_INCLUDE && m->kind != LR_PREPEND && m->kind != LR_EXTEND) return 0;
   }
@@ -11651,6 +11662,15 @@ int elab_fire_after(Compiler *c, int list, int j) {
   /* in a class or module body, or a class builder's block: a class_eval
      block run in a frame of its own (a top-level one) has the caller's self */
   int body = frame >= 0 && (class_def_opens_frame(nt, frame) || nt_kind(nt, frame) == NK_SingletonClassNode);
+  /* (...and a class_eval block on the body's own class, written in that
+     body: its statements are the body's, and self is the class, #10785) */
+  int host = frame;
+  if (!body && frame >= 0 && nt_kind(nt, frame) == NK_CallNode && is_class_eval_family(nt_str(nt, frame, "name"))) {
+    int fr = nt_ref(nt, frame, "receiver");
+    const LrStmt *fs = fr < 0 || nt_kind(nt, fr) == NK_SelfNode ? lr_stmt_of(r, frame) : NULL;
+    int up = fs && fs->frame >= 0 ? r->st[fs->frame].node : -1;
+    if (up >= 0 && class_def_opens_frame(nt, up)) { body = 1; host = up; }
+  }
   int first = r->nev;
   while (first > 0 && r->ev[first - 1].stmt >= e) first--;
   int *calls = malloc(sizeof(int) * (size_t)(r->nev - first + 1)), n = 0;
@@ -11694,7 +11714,7 @@ int elab_fire_after(Compiler *c, int list, int j) {
       live = !dead && !lr_event_repeats(r, first, i, e) && (own == ELAB_YES || own == ELAB_UNKNOWN);
       dead |= !live;
     }
-    int recv = live ? lr_hook_recv(c, frame) : -2;
+    int recv = live ? lr_hook_recv(c, host) : -2;
     if (recv > -2) {
       int mod = recv >= 0 && is_module_hook_name(hook);
       calls[n] = lr_hook_call(c, node, mod ? -1 : recv, hook, 0, v->name);

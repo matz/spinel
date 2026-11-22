@@ -14560,6 +14560,15 @@ static int ver_write_stmt(const NodeTable *nt, const int *par, int node) {
                      nt_ref(nt, call, "block") == blk ? nt_str(nt, call, "name") : NULL;
     /* (a defs-only `K.instance_eval { }` is the same reopening, #10785) */
     if (!nm || !(is_class_eval_family(nm) || (is_instance_eval_family(nm) && nt_ref(nt, call, "arguments") < 0))) return st;
+    /* (a block on the body's own class that holds other statements runs
+       them where it stands, as the body's: the write goes beside the def
+       in the block's own list, between the statements around it, #10785) */
+    if (is_class_eval_family(nm)) {
+      int cr = nt_ref(nt, call, "receiver"), bb = nt_ref(nt, blk, "body"), bn = 0, mixed = 0;
+      const int *bs = bb >= 0 && nt_kind(nt, bb) == NK_StatementsNode ? nt_arr(nt, bb, "body", &bn) : NULL;
+      for (int i = 0; i < bn; i++) mixed |= nt_kind(nt, bs[i]) != NK_DefNode;
+      if (mixed && (cr < 0 || nt_kind(nt, cr) == NK_SelfNode) && nt_ref(nt, blk, "parameters") < 0) return st;
+    }
     st = call;
   }
 }

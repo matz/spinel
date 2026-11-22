@@ -22336,7 +22336,18 @@ static void emit_stmt_node(Compiler *c, int id, Buf *b, int indent) {
        separately; the call itself is a no-op at runtime. g_class_body_id resolves
        a `self.` receiver in a class body (a bare receiver is already filtered out
        upstream by the class-body statement loop). */
-    if (class_eval_reopen_class(c, id, g_class_body_id) >= 0) return;
+    {
+      int rci = class_eval_reopen_class(c, id, g_class_body_id);
+      if (rci >= 0) {
+        /* a block on the body's own class runs its statements here, as the
+           body's own: the body's rule for each (a def and a declaration emit
+           nothing, a call that runs is a statement) */
+        int rblk = nt_ref(nt, id, "block");
+        int rbody = rci == g_class_body_id && rblk >= 0 ? nt_ref(nt, rblk, "body") : -1;
+        if (rbody >= 0 && nt_kind(nt, rbody) == NK_StatementsNode) emit_class_body_stmts(c, rci, rbody, b, indent);
+        return;
+      }
+    }
     if (cnm && sp_streq(cnm, "each") && nt_ref(nt, id, "block") >= 0) {
       int rcv = nt_ref(nt, id, "receiver");
       if (rcv >= 0 && nt_kind(nt, rcv) == NK_ArrayNode) {

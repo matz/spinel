@@ -1109,6 +1109,11 @@ int class_eval_reopen_class(Compiler *c, int id, int enclosing_class) {
     NodeKind sk = nt_kind(nt, stmts[k]);
     if (sk == NK_DefNode) continue;
     if (dm_registerable_name(nt, stmts[k])) continue;
+    /* (a block on the body's own class, in that body, runs its other
+       statements as the body's own: codegen emits them where the call
+       stands, #10785) */
+    if (ci == enclosing_class && is_class_eval_family(nm) && nt_ref(nt, blk, "parameters") < 0 &&
+        nt_ref(nt, id, "arguments") < 0) continue;
     return -1;  /* a non-definition statement: not a pure reopen */
   }
   return ci;
@@ -4486,6 +4491,14 @@ static int body_stmt_assigns_civ(const NodeTable *nt, int n, const char *ivname)
     return body_stmt_assigns_civ(nt, nt_ref(nt, n, "statements"), ivname) ||
            body_stmt_assigns_civ(nt, nt_ref(nt, n, "else_clause"), ivname);
   if (k == NK_ElseNode) return body_stmt_assigns_civ(nt, nt_ref(nt, n, "statements"), ivname);
+  /* a class_eval block on the body's own class: its statements are the
+     body's (#10785) */
+  if (k == NK_CallNode && is_class_eval_family(nt_str(nt, n, "name")) && nt_ref(nt, n, "arguments") < 0) {
+    int recv = nt_ref(nt, n, "receiver"), blk = nt_ref(nt, n, "block");
+    if ((recv < 0 || nt_kind(nt, recv) == NK_SelfNode) && blk >= 0 && nt_kind(nt, blk) == NK_BlockNode &&
+        nt_ref(nt, blk, "parameters") < 0)
+      return body_stmt_assigns_civ(nt, nt_ref(nt, blk, "body"), ivname);
+  }
   return 0;
 }
 

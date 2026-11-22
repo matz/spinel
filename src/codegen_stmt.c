@@ -23694,8 +23694,7 @@ void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent) {
       /* Inside a proc/lambda body the cell op-write must still return the
          POST-assignment value (`->{ n += 1 }.call` is `n+1`, not the stale
          slot). Emit the mutation as a statement, then read the cell back and
-         publish it into the proc's result slot. Outside a proc body keep the
-         plain-statement form (the method's default return covers the value). */
+         publish it into the proc's result slot. */
       if (g_in_proc_body && g_result_var) {
         emit_stmt(c, id, b, indent);
         TyKind ct = lv ? lv->type : TY_INT;
@@ -23715,6 +23714,16 @@ void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent) {
           else if (!co && oint_kind(ct) && g_result_oint) buf_printf(b, "%s(%s);\n", oint_of(ct), rb.p ? rb.p : "0");
           else buf_printf(b, "%s;\n", rb.p ? rb.p : "0");
         }
+        free(rb.p);
+        return;
+      }
+      /* In a method body (a define_method's, or the def whose locals a proc closes over) the value is the cell's
+         after the write, as in a proc's */
+      if (lv && !slot_is_oint(lv) && tail_slot_reaches_ret(c, lv->type)) {
+        emit_stmt(c, id, b, indent);
+        Buf rb; memset(&rb, 0, sizeof rb); emit_local_ref(c, id, nm, &rb);
+        emit_indent(b, indent); emit_tail_lead(b);
+        emit_tail_slot(c, lv->type, rb.p ? rb.p : "0", b, id);
         free(rb.p);
         return;
       }

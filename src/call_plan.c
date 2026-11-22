@@ -4585,11 +4585,15 @@ int cplan_sg_accessor(Compiler *c, int id, int ci, const char *name, char *slot,
 }
 /* See call_plan.h. */
 int cplan_sg_version(Compiler *c, int id, int ci, const char *name) {
-  if (id < 0 || !elab_attr_replaced(c, ci, name)) return CP_SG_NONE;
+  /* (a name whose class-side visibility a method body's word sets: the method made of the accessor, its alias's,
+     the def or the entry, whose faces read the word's cells; the slot reads none) */
+  int word = id >= 0 && elab_method_body_word(c, name, 1);
+  if (id < 0 || (!word && !elab_attr_replaced(c, ci, name))) return CP_SG_NONE;
   mtab_enter(c);
   int m = call_target(c, id, ci, name, CT_CMETHOD, NULL), r;
   MethodLookup told = { .survey = 1, .def_class = -1 };
-  if (m < 0 || c->scopes[m].attr_version) r = CP_SG_SLOT;
+  if (m < 0 || (c->scopes[m].attr_version && !word)) r = CP_SG_SLOT;
+  else if (word && scope_of_accessor(&c->scopes[m])) r = CP_SG_METHOD;
   else {
     if (!c->scopes[m].entry) ct_version(c, id, ci, name, CT_CMETHOD, m, &told);
     r = told.n < 0 ? CP_SG_UNTOLD : CP_SG_METHOD;

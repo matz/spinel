@@ -4561,7 +4561,9 @@ void register_attr_versions(Compiler *c) {
     comp_grow_node_arrays(c);
     walk_scope(c, def, c->nscope[a[i].node], a[i].cls);
     if (e >= c->nscopes || c->scopes[e].def_node != def) continue;
-    { c->scopes[e].attr_version = 1; comp_touch_scope(c->scopes[e].idx); }
+    /* (one no def replaces is the name's method, found by name, as an alias's of an accessor is: Scope.accessor_of) */
+    if (elab_attr_lone(c, &a[i])) { c->scopes[e].accessor_of = a[i].node + 1; comp_touch_scope_shape(c, c->scopes[e].idx); }
+    else { c->scopes[e].attr_version = 1; comp_touch_scope(c->scopes[e].idx); }
     comp_ivar_intern(&c->classes[a[i].cls], ivname, a[i].sg ? IVS_CLASS : IVS_INST);
     elab_attr_scope(c, &a[i], e);
   }

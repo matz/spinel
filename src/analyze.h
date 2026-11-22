@@ -1137,6 +1137,9 @@ void elab_absent_aliases(Compiler *c);
    or field alone. */
 ElabEntry *elab_replaced_attrs(Compiler *c, int *n);
 void elab_attr_scope(Compiler *c, const ElabEntry *e, int scope);
+/* is accessor entry e (elab_replaced_attrs) the only kind of version its history holds: no def replaces it, and it is
+   a method of its own because a method body's word sets its class side's visibility? */
+int elab_attr_lone(Compiler *c, const ElabEntry *e);
 /* does class cls's own side hold such an accessor version of name? */
 int elab_attr_replaced(Compiler *c, int cls, const char *name);
 /* Does a later method of class cls's own instance side replace its

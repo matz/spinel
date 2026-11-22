@@ -353,6 +353,8 @@ int an_enum_own_find_index(Compiler *c, int id);
 int an_enum_prog_method(Compiler *c, const char *nm);
 /* Can no method of the program take `name`: no def of it or of method_missing, and no alias, define_method, attr_* or Struct / Data member that names it (or names a method only the run time knows)? */
 int an_name_binder_free(Compiler *c, const char *name);
+/* Does no object have a method `name`: no core class has it, and the program can make it nowhere? (analyze.c) */
+int an_name_never_made(Compiler *c, const char *name);
 int an_native_defines_method(Compiler *c, const char *name);
 int an_user_recv_defines_method(Compiler *c, const char *name);
 int an_user_define_method(Compiler *c);

@@ -1,0 +1,9 @@
+Object.new: NameError: undefined method 'missing' for class 'Object' (name: :missing)
+Foo in a block: NameError: undefined method 'nope' for class '#<Class:Foo>' (name: :nope)
+boxed Object: NameError: undefined method 'zork' for class 'Object' (name: :zork)
+boxed String: NameError: undefined method 'zork' for class 'String' (name: :zork)
+boxed Integer: NameError: undefined method 'zork' for class 'Integer' (name: :zork)
+boxed NilClass: NameError: undefined method 'zork' for class 'NilClass' (name: :zork)
+main: NameError (name: :missing)
+1
+[false, false]

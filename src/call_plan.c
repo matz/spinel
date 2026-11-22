@@ -7593,6 +7593,10 @@ static int cm_capture_never_made(Compiler *c, int id, int cls, const char *name)
   int ac = 0;
   const int *av = call_args(c->nt, id, &ac);
   if (ac < 1 || nt_kind(c->nt, av[0]) != NK_SymbolNode) return 0;
+  /* (a name the program can make nowhere is made nowhere, whenever the capture runs: a block's, which the record
+     cannot place, too. Not a module's, whose NameError names its singleton class only once the record tells it is
+     made: cplan_capture_names) */
+  if (!comp_class_is_module(c, &c->classes[cls]) && an_name_never_made(c, name)) return 1;
   int framed = elab_plan_enter(c, id);
   int none = elab_call_method(c, id, cls, name, 1, 1) == ELAB_NO;
   if (framed) elab_plan_leave(c);
@@ -7667,7 +7671,9 @@ static int cplan_main_capture_absent(Compiler *c, int id) {
   /* (nothing of the name, or an undef that stops the lookup, which no core method answers behind either) */
   int st = cplan_main_chain_step(c, id, name);
   if (st != EMC_NONE && st != EMC_STOP) return 0;
-  if (st != EMC_STOP && (core_method_name_any(name) || bop_core_name(name) || !elab_method_versions(c, name))) return 0;
+  /* (a name the program never defines is main's NameError where nothing can make it, an_name_never_made) */
+  if (st != EMC_STOP && (core_method_name_any(name) || bop_core_name(name) ||
+                         (!elab_method_versions(c, name) && !an_name_never_made(c, name)))) return 0;
   return an_name_binder_free(c, METHOD_MISSING_NAME) && an_name_binder_free(c, RESPOND_TO_MISSING_NAME);
 }
 /* Is ci's class method `name` defined wherever node at runs? */

@@ -11853,6 +11853,24 @@ static int bam_poly_may_lack(Compiler *c, const char *sym) {
   if (sp_requires_non_boot_feature() || g_require_unread) return 0;
   return 1;
 }
+/* Does no object have a method `name`, wherever and whenever it is asked:
+   no core class or module has it (an instance method of any, or a class's
+   singleton method), and the program can make it nowhere
+   (bam_poly_may_lack)? Then `recv.method(:name)` is CRuby's NameError on
+   any receiver. A writer's name is also made by an accessor or a Struct /
+   Data member of its base name (`attr_accessor :state` makes `state=`). */
+int an_name_never_made(Compiler *c, const char *name) {
+  if (!name || !name[0] || core_method_name_any(name) || bop_core_name(name) || !bam_poly_may_lack(c, name)) return 0;
+  size_t n = strlen(name);
+  if (n > 1 && name[n - 1] == '=') {
+    char base[256];
+    if (n - 1 >= sizeof base) return 0;
+    memcpy(base, name, n - 1);
+    base[n - 1] = 0;
+    if (!an_name_binder_free(c, base)) return 0;
+  }
+  return 1;
+}
 
 /* `recv.method(:sym)` over a BUILTIN receiver (string/int/array/...) has no
    compiled function to bind, so calling the Method crashed. Synthesize a
@@ -12190,6 +12208,9 @@ static int desugar_builtin_method_obj(Compiler *c) {
     if (main_sg) nt_node_set_int(nt, def, "bam_main_sg", 1);   /* (bam_main_singleton) */
     /* a boxed value's class may lack sym: the bind asks it (codegen) */
     if (poly_self && rt == TY_POLY && bam_poly_may_lack(c, sym)) nt_node_set_int(nt, def, "bam_may_lack", 1);
+    /* ...and where no object has it (an_name_never_made), a plain Object
+       lacks it too: the bind's test takes it in (sp_poly_lacks_never_made) */
+    if (poly_self && rt == TY_POLY && an_name_never_made(c, sym)) nt_node_set_int(nt, def, "bam_never_made", 1);
     /* the builtin's own name, for Method#name, #arity and #inspect: the body
        call is renamed ([] for slice) or rewritten (a splat dispatched on its
        length) */

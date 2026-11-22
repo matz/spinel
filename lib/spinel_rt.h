@@ -2618,6 +2618,14 @@ static sp_bool sp_poly_lacks_builtin_method(sp_RbVal v, const char *m) {
   if (!m || !cn || !sp_str_in_list(cn, known)) return 0;
   return !sp_poly_responds_builtin(v, m);
 }
+/* ...for a name no object has (no core class's, made nowhere by the
+   program): a plain Object (Object.new) lacks it too. Any other value (a
+   program object, a Queue, a Class) is asked as
+   sp_poly_lacks_builtin_method asks it. */
+static sp_bool sp_poly_lacks_never_made(sp_RbVal v, const char *m) {
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_OBJECT) return 1;
+  return sp_poly_lacks_builtin_method(v, m);
+}
 /* respond_to? on a typed IO handle: the names its typed emitters call, and
    the universal ones; a name only a boxed handle calls answers false */
 static sp_bool sp_io_typed_responds(sp_RbVal v, const char *m) {

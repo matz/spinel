@@ -26831,7 +26831,25 @@ static int incl_declined_stmts(NodeTable *nt, int body, const char *param) {
     }
     if (incl_declined_node(nt, s, param)) return 1;
   }
-  return bn > 0 && host_prewalk_shape(nt, bv, bn) >= 0;
+  /* A mixin on the includer (`base.extend(M)`, `base.include(M)`) as a
+     statement of a body the walk splices (one with no `super` and no
+     `return`: incl_hook_supers, incl_hook_returns) is the includer's own
+     mixin once spliced, which the walk records where the hook fires: it is
+     not asked of host_prewalk_shape. In a body the walk calls instead, the
+     mixin stays a call on a value, so the pre-walk splice keeps it. */
+  int *rest = malloc(sizeof(int) * (size_t)(bn > 0 ? bn : 1)), rn = 0;
+  if (!rest) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  int spliced = body >= 0 && !incl_hook_returns(nt, body) && !incl_hook_supers(nt, body);
+  for (int i = 0; i < bn; i++) {
+    int s = bv[i], r = nt_kind(nt, s) == NK_CallNode ? nt_ref(nt, s, "receiver") : -1;
+    int on_base = r >= 0 && nt_kind(nt, r) == NK_LocalVariableReadNode && param && nt_str(nt, r, "name") &&
+                  sp_streq(nt_str(nt, r, "name"), param);
+    if (spliced && on_base && is_mixin_call(nt_str(nt, s, "name")) && nt_ref(nt, s, "block") < 0) continue;
+    rest[rn++] = s;
+  }
+  int hit = rn > 0 ? host_prewalk_shape(nt, rest, rn) : -1;
+  free(rest);
+  return hit >= 0;
 }
 
 /* Does hook body `body` (of a `def self.<hook>(param)`, param read off the

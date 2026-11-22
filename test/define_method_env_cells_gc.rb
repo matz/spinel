@@ -44,3 +44,40 @@ end
 Rerun.mk(1)
 p Rerun.new.m
 p Rerun.new.m
+
+# a default that runs program code with no call in its tree (a case's `===`, an or-write through a reader) can run
+# the definer again too: the environment stays rooted
+class Trig
+  def self.===(o)
+    Whn.mk(o)
+    GC.start
+    true
+  end
+end
+class Whn
+  def self.mk(n)
+    s = "s#{n}"
+    define_method(:m) { |a = (case n when Trig then s end)| a }
+    :ok
+  end
+end
+Whn.mk(1)
+p Whn.new.m
+class Box
+  def v
+    Orw.mk(2)
+    GC.start
+    nil
+  end
+  attr_writer :v
+end
+class Orw
+  def self.mk(n)
+    s = "s#{n}"
+    o = Box.new
+    define_method(:m) { |a = ((o.v ||= 9); s)| a }
+    :ok
+  end
+end
+Orw.mk(2)
+p Orw.new.m

@@ -10693,9 +10693,10 @@ void env_bind_begin(Compiler *c, Scope *dm, int dflt, Buf *out, EnvBind *sv) {
   int vc = g_nd_call_id >= 0 && g_nd_call_id < c->nt->count && nt_kind(c->nt, g_nd_call_id) == NK_CallNode && nt_vcall(c->nt, g_nd_call_id) &&
            nt_str(c->nt, g_nd_call_id, "name") && dm->name && sp_streq(nt_str(c->nt, g_nd_call_id, "name"), dm->name);
   emit_env_missing(c, dm, out, "NULL", vc);
-  /* (a default that may run code or allocate may run the definer again, which replaces the global: this one is then the
-     default's only root; one that reads cells and literals cannot collect before its reads) */
-  buf_puts(out, subtree_may_allocate(c, dflt) ? " } SP_GC_ROOT(_cap); " : " } ");
+  /* (a default that may run program code may run the definer again, which replaces the global, and collect: this one
+     is then the default's only root. Only one that provably runs none, reads of cells and locals, literals and scalar
+     operators, is left unrooted; anything else is rooted) */
+  buf_puts(out, subtree_code_is_pure_read(c, dflt) ? " } " : " } SP_GC_ROOT(_cap); ");
   sv->at = out->len;
   sv->pre = g_pre; sv->indent = g_indent;
   memset(&sv->hoist, 0, sizeof sv->hoist);

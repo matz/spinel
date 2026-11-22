@@ -26748,6 +26748,8 @@ static int incl_declined_node(const NodeTable *nt, int node, const char *param) 
     int on_self = r < 0 || nt_kind(nt, r) == NK_SelfNode ||
                   (nt_kind(nt, r) == NK_LocalVariableReadNode && param && nt_str(nt, r, "name") &&
                    sp_streq(nt_str(nt, r, "name"), param));
+    /* (...the hook's parameter itself: `base.name`) */
+    int on_param = r >= 0 && nt_kind(nt, r) == NK_LocalVariableReadNode;
     if (!nm) return 1;
     if (sp_streq(nm, "define_method") || sp_streq(nm, "define_singleton_method")) skip = blk;
     /* an ivar or a constant by name (desugar_const_ivar_access, the
@@ -26765,14 +26767,18 @@ static int incl_declined_node(const NodeTable *nt, int node, const char *param) 
        desugar_eval_method_block). A bare Object or Module method run on
        the class is a reason only in a body the walk calls (one with a
        `return`): the statements the walk splices it gives
-       the class for self itself (incl_give_self). */
+       the class for self itself (incl_give_self). One the body calls on
+       the hook's parameter (`return if base.name == "X"`) is a call on the
+       value the hook is called with, which the called method makes as any
+       method does: no reason. */
     /* a class_eval or module_eval of a String written there, in a body the
        walk splices: the text is grafted where the walk's splice puts the
        statement (host_splice, sce_span), as the pre-walk splice's is */
     else if (on_self && g_incl_body_spliced && is_class_eval_text_name(nm) && blk < 0 && incl_text_arg(nt, node)) {
     }
     else if (on_self && (is_eval_exec_family(nm) ||
-                         (!g_incl_body_spliced && cb_self_act_name(nm, blk >= 0 && nt_kind(nt, blk) == NK_BlockNode))))
+                         (!g_incl_body_spliced && !on_param &&
+                          cb_self_act_name(nm, blk >= 0 && nt_kind(nt, blk) == NK_BlockNode))))
       return 1;
     /* attr_accessor(*FLAGS) (desugar_attr_const_splat) */
     else if (is_attr_decl_reader(nm) || is_attr_decl_writer(nm)) {

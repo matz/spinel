@@ -23852,6 +23852,9 @@ static const struct { const char *name; int no; } sp_sig_table[] = {
 #ifdef SIGPOLL
   {SP_SIGN("POLL"), SIGPOLL},
 #endif
+#ifdef SIGINFO
+  {SP_SIGN("INFO"), SIGINFO},   /* BSD and macOS: the status request of the terminal (Ctrl-T) */
+#endif
   {NULL, 0}
 };
 static sp_StrIntHash *sp_signal_list(void) {

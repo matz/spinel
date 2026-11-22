@@ -21,6 +21,12 @@ struct dirent {
   unsigned char d_type;
   char d_name[260 * 3];
 };
+
+/* MinGW's <limits.h> defines NAME_MAX only under _POSIX_. A file name's
+   longest UTF-8 spelling is what d_name holds, less its terminator. */
+#ifndef NAME_MAX
+#define NAME_MAX (260 * 3 - 1)
+#endif
 typedef struct sp_w32_dir DIR;
 
 #ifdef __cplusplus

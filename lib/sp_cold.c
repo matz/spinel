@@ -739,26 +739,46 @@ static int sp_glob_has_meta(const char *comp) {
 }
 
 /* Whether the directory's volume tells letter cases apart, which decides
-   how a glob matches the names under it, as CRuby's glob asks each
-   directory it opens (dir.c, is_case_sensitive). On macOS the volume says
-   (pathconf's _PC_CASE_SENSITIVE: APFS and HFS+ as the system makes them
-   fold, a volume made case-sensitive does not); on Windows every volume
-   folds, CRuby's FNM_SYSCASE; elsewhere none does. Under a folding
-   directory a letter makes a component one the matcher reads from the
-   directory, so "A.txt" finds "a.txt" and answers the name as the disk
-   spells it, as CRuby's does; a pathconf that fails keeps the cases. */
-#if defined(_WIN32)
-static int sp_glob_dir_folds(const char *fsdir) { (void)fsdir; return 1; }
-#elif defined(__APPLE__) && defined(_PC_CASE_SENSITIVE)
+   how a glob matches the names under it with a wildcard, as CRuby's glob
+   asks each directory it opens (dir.c, is_case_sensitive): under a folding
+   one the matcher takes FNM_CASEFOLD, which folds the ASCII letters, as
+   CRuby's does. On macOS the volume says (pathconf's _PC_CASE_SENSITIVE:
+   APFS and HFS+ as the system makes them fold, a volume made
+   case-sensitive does not); a pathconf that fails keeps the cases.
+   Elsewhere every volume keeps them: Windows folds under CRuby
+   (FNM_SYSCASE), which this does not follow, untried. */
+#if defined(__APPLE__) && defined(_PC_CASE_SENSITIVE)
 static int sp_glob_dir_folds(const char *fsdir) { return pathconf(fsdir[0] ? fsdir : ".", _PC_CASE_SENSITIVE) == 0; }
 #else
 static int sp_glob_dir_folds(const char *fsdir) { (void)fsdir; return 0; }
 #endif
-static int sp_glob_has_alpha(const char *comp) {
-  for (const char *p = comp; *p; p++)
-    if ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z')) return 1;
-  return 0;
+
+/* The name of a path as the disk spells it, for a literal component: a
+   folding volume finds "A.txt" for a.txt and "\xC3\xA9.txt" for
+   "\xC3\x89.txt", by its own rule (APFS folds Unicode letters, the
+   matcher the ASCII ones), and CRuby answers the name the disk holds
+   (dir.c, replace_real_basename). On macOS the volume tells it
+   (getattrlist, ATTR_CMN_NAME); elsewhere, and when the ask fails, the
+   component is its own name. Answers 0 for the latter. */
+#if defined(__APPLE__)
+#include <sys/attr.h>
+static int sp_glob_disk_name(const char *path, char *out, size_t cap) {
+  struct attrlist al;
+  struct { uint32_t len; attrreference_t ref; char name[NAME_MAX + 1]; } __attribute__((aligned(4), packed)) buf;
+  memset(&al, 0, sizeof al);
+  al.bitmapcount = ATTR_BIT_MAP_COUNT;
+  al.commonattr = ATTR_CMN_NAME;
+  if (getattrlist(path, &al, &buf, sizeof buf, FSOPT_NOFOLLOW) != 0) return 0;
+  size_t n = buf.ref.attr_length;   /* the name and its NUL */
+  const char *name = (const char *)&buf.ref + buf.ref.attr_dataoffset;
+  if (n == 0 || n > cap || name + n > (const char *)&buf + sizeof buf) return 0;
+  memcpy(out, name, n);
+  out[n - 1] = 0;
+  return 1;
 }
+#else
+static int sp_glob_disk_name(const char *path, char *out, size_t cap) { (void)path; (void)out; (void)cap; return 0; }
+#endif
 
 static void sp_glob_push(sp_StrArray *a, const char *path) {
   char *copy = sp_str_alloc(strlen(path));
@@ -847,11 +867,18 @@ static void sp_glob_walk_at(const char *fsdir, const char *outprefix,
     return;
   }
 
-  int fold = sp_glob_dir_folds(fsdir);
-  if (!sp_glob_has_meta(comp) && !(fold && sp_glob_has_alpha(comp))) {
-    /* A literal component needs no readdir: ask the filesystem directly. */
+  if (!sp_glob_has_meta(comp)) {
+    /* A literal component needs no readdir: ask the filesystem directly,
+       and spell the answer as the disk does (a folding volume finds the
+       name in another case). */
     snprintf(fspath, sizeof fspath, "%s%s%s", fsdir, SP_GLOB_SEP(fsdir), comp);
-    snprintf(outpath, sizeof outpath, "%s%s", outprefix, comp);
+    char disk[NAME_MAX + 1];
+    const char *name = comp;
+    if (sp_glob_exists(fspath) && sp_glob_disk_name(fspath, disk, sizeof disk) && strcmp(disk, comp)) {
+      name = disk;
+      snprintf(fspath, sizeof fspath, "%s%s%s", fsdir, SP_GLOB_SEP(fsdir), name);
+    }
+    snprintf(outpath, sizeof outpath, "%s%s", outprefix, name);
     if (last) { if (sp_glob_exists(fspath)) sp_glob_push(a, outpath); return; }
     if (sp_glob_is_dir(fspath)) {
       char sub[sizeof outpath + 1];   /* outpath and its trailing slash, whatever outpath holds */
@@ -861,6 +888,7 @@ static void sp_glob_walk_at(const char *fsdir, const char *outprefix,
     return;
   }
 
+  int fold = sp_glob_dir_folds(fsdir);
   DIR *d = opendir(fsdir[0] ? fsdir : ".");
   if (!d) return;
   struct dirent *e;

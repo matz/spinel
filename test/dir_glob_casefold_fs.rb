@@ -34,6 +34,18 @@ Dir.mktmpdir("sp_glob_case") do |d|
     p Dir["A.TXT", "sub/d.TXT"] == (folds ? ["a.txt", "sub/D.txt"] : [])
     # a name that is in no case
     p Dir.glob("Z.txt"), Dir.glob("*.rb")
+    # a letter past ASCII: the volume folds it for a literal name (the disk's
+    # spelling comes back), the matcher of a wildcard folds the ASCII letters
+    # alone, as CRuby's does
+    Dir.mkdir("u")
+    File.write("u/\u00C9.txt", "")
+    p Dir.glob("u/\u00E9.txt") == (folds ? ["u/\u00C9.txt"] : []), Dir.glob("u/\u00C9.txt"), Dir.glob("u/\u00E9*"), Dir.glob("u/*.TXT") == (folds ? ["u/\u00C9.txt"] : [])
+    # a bracket of one member under the fold takes the character after the
+    # member, as CRuby's matcher does: "[a]" takes "]" and not "A"
+    Dir.mkdir("br")
+    File.write("br/a.txt", "")
+    File.write("br/].txt", "")
+    p Dir.glob("br/[a].txt").sort == (folds ? ["br/].txt", "br/a.txt"] : ["br/a.txt"]), Dir.glob("br/[A].txt") == (folds ? ["br/].txt"] : [])
     # File.fnmatch keeps its own rule: the cases of the pattern, unless asked
     p File.fnmatch("A.txt", "a.txt"), File.fnmatch("A.txt", "a.txt", File::FNM_CASEFOLD)
   end

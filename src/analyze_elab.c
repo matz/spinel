@@ -2621,7 +2621,6 @@ static int lr_body_frame(Compiler *c, const int *par, int n, int node, int e, in
     if (self && k == NK_BlockNode && par[p] >= 0 && nt_ref(nt, par[p], "block") == p) {
       const char *nm = nt_str(nt, par[p], "name");
       int rv = nt_ref(nt, par[p], "receiver");
-      if (is_define_method_name(nm)) { *fs = LR_FS_OBJECT; if (at) *at = p; return LR_UNKNOWN_CLASS; }
       if (is_define_singleton_method_name(nm))
         return rv < 0 || nt_kind(nt, rv) == NK_SelfNode ? lr_body_self(c, par, n, par[p], e) : lr_body_const(c, rv, e, 1);
     }

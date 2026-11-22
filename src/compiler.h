@@ -667,8 +667,8 @@ typedef struct {
 
   /* A define_method or define_singleton_method block in a def's body that reads or writes that def's locals
      (scope_env_link): the def's scope index + 1 (0 for none), and the names of those locals (the strings are the
-     nodes'). The block's reads and writes of them are the def's own (walk_scope_in files them under the def's
-     scope), which are heap cells, and the method the block defines reads them through the environment the definer
+     nodes'). A lookup of one of them in this scope answers the def's own LocalVar (scope_local), which is a heap
+     cell, and the method the block defines reads them through the environment the definer
      stored (emit_env_store). */
   int env_host;
   const char **env_names;

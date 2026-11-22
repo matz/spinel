@@ -433,8 +433,10 @@ classes that mix a module in and a builtin superclass's values, or by
 self's class; a call in a method nothing reaches reaches none) and the
 program has no `define_singleton_method` of its own. A block that reads
 or writes the locals of the def around it closes over them (`Scope.env_host`,
-`scope_env_link`): the walk files its reads and writes of those names under
-the def's scope, so they are the def's own slots, `mark_env_captures` makes
+`scope_env_link`): a lookup of one of those names in the block's scope
+answers the def's own `LocalVar` (`scope_local`, whichever node asks, so a
+desugar's clone or a pattern's binding needs no filing, and a reader that
+indexes a scope's locals takes the local's own scope), `mark_env_captures` makes
 them heap cells as a proc's captures are (the locals of a def, and the
 parameter of an iteration block around the definer, with its loop slot kept:
 `LocalVar.cell_shadow`), the definer's statement builds the capture struct

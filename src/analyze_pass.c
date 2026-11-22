@@ -5610,6 +5610,8 @@ static void infer_write_reads_widened(Compiler *c, const NodeTable *nt, PinShado
     LocalVar *lv = rl && wn ? scope_local(wsc, wn) : NULL;
     if (!lv || lv == rl || lv->is_param || lv->is_block_param || lv->rbs_seeded || ty_degraded(lv->type))
       continue;
+    if (lv->owner != wsc->idx) wsc = &c->scopes[lv->owner];
+    if (rl->owner != rs->idx) rs = &c->scopes[rl->owner];
     ReadWrite *w = &rw[nrw];
     w->val = v; w->dst = lv; w->dst_ix = base[wsc - c->scopes] + (int)(lv - wsc->locals);
     w->next = -1;
@@ -6171,6 +6173,7 @@ int infer_write_types(Compiler *c) {
       NT_FOREACH_KIND(nt, NK_MultiWriteNode, mw) {
         Scope *rs = NULL;
         LocalVar *rl = value_read_root(c, nt, nt_ref(nt, mw, "value"), &rs);
+        if (rl && rl->owner != rs->idx) rs = &c->scopes[rl->owner];
         if (rl && seed[fold_base[rs - c->scopes] + (int)(rl - rs->locals)]) { mw_sel[mw] = 1; nsel++; }
       }
       PinShadow fold_pins = {0};

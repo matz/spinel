@@ -1787,8 +1787,8 @@ static int record_write_class(Compiler *c, int id, int hdr) {
   return cls->idx;
 }
 
-/* A define_method or define_singleton_method block in a def's body closes over that def's locals: its reads and
-   writes of them are filed under the def's scope (Scope.env_host, walk_scope_in), whose slots they are, and the
+/* A define_method or define_singleton_method block in a def's body closes over that def's locals: a lookup of one of
+   them in the block's scope answers the def's own LocalVar (Scope.env_host, scope_local), whatever node asks, and the
    capture marking makes those heap cells (mark_env_captures). The block's own parameters and locals are not the
    def's (a local's depth tells them apart). */
 static void scope_env_link(Compiler *c, Scope *dm, int host, int blk) {
@@ -1803,23 +1803,10 @@ static void scope_env_link(Compiler *c, Scope *dm, int host, int blk) {
   dm->nenv_names = names.n;
 }
 
-/* Is node id a read or write of one of the def's locals that the block of scope dm closes over? */
-static int scope_env_names(const NodeTable *nt, const Scope *dm, int id) {
-  NodeKind k = nt_kind(nt, id);
-  if (k != NK_LocalVariableReadNode && k != NK_LocalVariableWriteNode && k != NK_LocalVariableOperatorWriteNode &&
-      k != NK_LocalVariableOrWriteNode && k != NK_LocalVariableAndWriteNode && k != NK_LocalVariableTargetNode)
-    return 0;
-  const char *nm = nt_str(nt, id, "name");
-  for (int i = 0; i < dm->nenv_names; i++)
-    if (sp_streq(dm->env_names[i], nm)) return 1;
-  return 0;
-}
-
 static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
   if (id < 0 || id >= c->nt->count) return;
   int scope_idx = w.scope, class_id = w.cls, proc = w.proc, dead = w.dead;
   c->nscope[id] = scope_idx;
-  if (scope_idx >= 0 && c->scopes[scope_idx].env_host && scope_env_names(c->nt, &c->scopes[scope_idx], id)) c->nscope[id] = c->scopes[scope_idx].env_host - 1;
   c->node_cbody[id] = w.cbody;
   int refused_builder = nt_int(c->nt, id, "class_new_capture", 0) || elab_builder_kind(c, id) != EB_NONE;
   if (proc >= 0 && nt_kind(c->nt, id) == NK_CallNode &&

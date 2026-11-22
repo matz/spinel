@@ -5889,8 +5889,20 @@ static void scope_lidx_build(Scope *s) {
   memset(s->lidx, 0, sizeof(int) * (size_t)cap);
   for (int i = 0; i < s->nlocals; i++) scope_lidx_add(s, i);
 }
+/* A define_method block's scope reads and writes the locals of its definer's def as that def's own (Scope.env_host):
+   the host's Scope, for a name the block closes over, else NULL. Every Scope handed to scope_local is the one
+   c->scopes holds at its idx (the scratch Scope of a desugar is zeroed, with no env_host), so the host sits at the
+   difference of their indexes from it. */
+static Scope *scope_env_owner(Scope *s, const char *name) {
+  if (!s->env_host || !name) return NULL;
+  for (int i = 0; i < s->nenv_names; i++)
+    if (sp_streq(s->env_names[i], name)) return s + (s->env_host - 1 - s->idx);
+  return NULL;
+}
 LocalVar *scope_local(Scope *s, const char *name) {
   IMEMO_DEP_SCOPE(s->idx);
+  Scope *host = scope_env_owner(s, name);
+  if (host) return scope_local(host, name);
   if (s->nlocals >= SCOPE_LIDX_MIN) {
     if (!s->lidx || s->nlocals * 2 > s->lidx_cap) scope_lidx_build(s);
     if (s->lidx) {
@@ -5916,6 +5928,8 @@ void scope_locals_removed(Scope *s) {
 }
 
 LocalVar *scope_local_intern(Scope *s, const char *name) {
+  Scope *host = scope_env_owner(s, name);
+  if (host) return scope_local_intern(host, name);
   LocalVar *lv = scope_local(s, name);
   if (lv) return lv;
   if (s->nlocals >= s->clocals) {

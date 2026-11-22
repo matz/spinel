@@ -18170,7 +18170,7 @@ static int narrow_walk_block_params(Compiler *c) {
     for (int pi = 0; pi < np; pi++) {
       const char *nm = block_param_name(c, blk, pi);
       LocalVar *lv = nm ? scope_local(bs, nm) : NULL;
-      if (!lv) continue;
+      if (!lv || lv->owner != bs->idx) continue;
       int gi = off[s] + (int)(lv - bs->locals);
       if (gi < off[s] || gi >= off[s + 1]) continue;
       TyKind side = zip ? (pi == 0 ? rt : zt) : rt;
@@ -26372,6 +26372,7 @@ static void refuse_callee_container_stores(Compiler *c, const char *vn, Scope *v
 static int strbuf_demand_local_container(Compiler *c, const char *vn, Scope *vs, int depth, int mode) {
   LocalVar *lv = scope_local(vs, vn);
   if (!lv || depth > 8) return 0;
+  if (lv->owner != vs->idx) vs = &c->scopes[lv->owner];
   int si = (int)(vs - c->scopes), li = (int)(lv - vs->locals), res;
   if (sb_memo_enter(SBM_LOCAL, si, li, mode, depth, &res)) return res;
   int changed = strbuf_demand_container_stores_here(c, vn, vs, depth, mode);
@@ -30697,7 +30698,7 @@ static int mark_param_read_only_operands(Compiler *c) {
         for (int i = 0; i < argc; i++) {
           if (nt_kind(nt, argv[i]) != NK_LocalVariableReadNode) continue;
           LocalVar *a = scope_local(&c->scopes[si], nt_str(nt, argv[i], "name"));
-          if (!a || !a->is_param) continue;
+          if (!a || !a->is_param || a->owner != si) continue;
           if (nh == chh) {
             chh = chh ? chh * 2 : 64;
             hs = realloc(hs, (size_t)chh * sizeof(int)); hl = realloc(hl, (size_t)chh * sizeof(int));
@@ -30710,7 +30711,8 @@ static int mark_param_read_only_operands(Compiler *c) {
       }
     }
     LocalVar *lv = ln ? scope_local(&c->scopes[si], ln) : NULL;
-    if (lv) other[si][lv - c->scopes[si].locals] += weight;
+    if (lv && lv->owner == si) other[si][lv - c->scopes[si].locals] += weight;
+    else if (lv) other[lv->owner][lv - c->scopes[lv->owner].locals] += weight;
   }
   for (int changed = 1; changed; ) {
     changed = 0;
@@ -30731,7 +30733,7 @@ static int mark_param_read_only_operands(Compiler *c) {
       for (int t = 0; t < ntg && ok; t++) {
         Scope *m = &c->scopes[tg[t]];
         LocalVar *p = safe[tg[t]] ? param_borrow_bound(c, m, hn[h], ha[h]) : NULL;
-        ok = p && safe[tg[t]][p - m->locals];
+        ok = p && p->owner == m->idx && safe[tg[t]][p - m->locals];
       }
       if (!ok) { safe[hs[h]][hl[h]] = 0; changed = 1; }
     }
@@ -30750,7 +30752,7 @@ static int mark_param_read_only_operands(Compiler *c) {
       for (int t = 0; t < ntg && ok; t++) {
         Scope *m = &c->scopes[tg[t]];
         LocalVar *p = safe[tg[t]] ? param_borrow_bound(c, m, n, argv[i]) : NULL;
-        ok = p && safe[tg[t]][p - m->locals];
+        ok = p && p->owner == m->idx && safe[tg[t]][p - m->locals];
       }
       if (ok) { c->strbuf_read_raw[argv[i]] = 1; marked++; }
     }

@@ -2030,13 +2030,18 @@ SP_NORETURN SP_COLD void sp_raise_cls(const char *cls, const char *msg) {
   /* an object pending here belongs to a raise already made (a re-raise); one
      the steps below make for this raise is this raise's */
   int reinit_fresh = !sp_pending_exc_obj;
+  /* the steps below build the object a rescue, an at_exit hook or the report
+     reads; with none of them to read it the raise skips them. The report reads
+     it only through a #message or #to_s the program defines: one reading #key
+     on an uncaught `{}.fetch(:a)` gets :a, as in CRuby */
+  int carried = sp_exc_top > 0 || sp_at_exit_armed || sp_user_exc_message_fn != NULL;
   /* NameError/NoMethodError#name: the runtime raisers' messages carry the
      offending name as the first quoted token ("undefined method 'foo' for
      ..."); materialize the carried object with #name set so a rescue binding
      reads it (#2758). Keyed on the exact runtime message shapes. A raise the
      program wrote (`raise NameError, :"undefined method 'x'"`, a message
      whose to_s gives that text) records no name or receiver, as in CRuby. */
-  if (!user_raise && !sp_pending_exc_obj && msg && cls && (sp_exc_top > 0 || sp_at_exit_armed) &&
+  if (!user_raise && !sp_pending_exc_obj && msg && cls && carried &&
       (strcmp(cls, "NoMethodError") == 0 || strcmp(cls, "NameError") == 0) &&
       (strncmp(msg, "undefined method '", 18) == 0 ||
        strncmp(msg, "undefined local variable or method '", 36) == 0 ||   /* 36 = prefix len; 37 compared the NUL too (#3121) */
@@ -2049,14 +2054,14 @@ SP_NORETURN SP_COLD void sp_raise_cls(const char *cls, const char *msg) {
   /* `raise KeyError, msg` (NameError, FrozenError) the program wrote records
      no key or receiver, where the runtime's raisers do: #key and #receiver
      raise ArgumentError on it, as in CRuby */
-  if (user_raise && !sp_pending_exc_obj && msg && cls && (sp_exc_top > 0 || sp_at_exit_armed) &&
+  if (user_raise && !sp_pending_exc_obj && msg && cls && carried &&
       (sp_exc_cls_matches(cls, "KeyError") || sp_exc_cls_matches(cls, "NameError") || sp_exc_cls_matches(cls, "FrozenError"))) {
     sp_Exception *ue = sp_exc_new_for_catch(cls, msg);
     ue->has_key = 0; ue->has_recv = 0;
     sp_pending_exc_obj = ue;
   }
   /* the introspection staging (receiver/key/value) rides the carried object */
-  if (sp_pending_exc_flags && msg && cls && (sp_exc_top > 0 || sp_at_exit_armed))
+  if (sp_pending_exc_flags && msg && cls && carried)
     sp_pending_exc_obj = sp_exc_apply_staged(cls, msg, sp_pending_exc_obj);
   sp_pending_exc_flags = 0;
   /* An error the runtime raises is built in CRuby by the class's #initialize,
@@ -2093,7 +2098,7 @@ SP_NORETURN SP_COLD void sp_raise_cls(const char *cls, const char *msg) {
      takes the cause, as in CRuby. A cause whose chain leads back to the
      object would close a cycle: CRuby raises ArgumentError instead. The
      object named as its own cause leaves its cause as it is. */
-  if ((sp_exc_top > 0 || sp_at_exit_armed) && sp_explicit_cause_set && sp_explicit_cause && sp_pending_exc_obj) {
+  if (carried && sp_explicit_cause_set && sp_explicit_cause && sp_pending_exc_obj) {
     if (sp_explicit_cause == sp_pending_exc_obj) {
       sp_explicit_cause = ((sp_Exception *)sp_pending_exc_obj)->cause;
     }

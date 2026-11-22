@@ -1,0 +1,11 @@
+tracker on BwA
+helpers in BwA
+tracker on BwB
+helpers in BwB
+true
+"tracked"
+"help from BwA"
+"first"
+"first"
+[BwFirst, BwA, BwHelpers, BwConcern]
+[BwFirst, BwB, BwHelpers, BwConcern]

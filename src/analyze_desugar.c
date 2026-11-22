@@ -26934,10 +26934,21 @@ static int incl_declined_stmts(NodeTable *nt, int body, const char *param) {
   if (!rest) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   int spliced = body >= 0 && !incl_hook_called(nt, body, param);
   for (int i = 0; i < bn; i++) {
-    int s = bv[i], r = nt_kind(nt, s) == NK_CallNode ? nt_ref(nt, s, "receiver") : -1;
+    int s = bv[i], call = nt_kind(nt, s) == NK_CallNode, r = call ? nt_ref(nt, s, "receiver") : -1;
+    int blk = call ? nt_ref(nt, s, "block") : -1;
+    const char *nm = call ? nt_str(nt, s, "name") : NULL;
     int on_base = r >= 0 && nt_kind(nt, r) == NK_LocalVariableReadNode && param && nt_str(nt, r, "name") &&
                   sp_streq(nt_str(nt, r, "name"), param);
-    if (spliced && on_base && is_mixin_call(nt_str(nt, s, "name")) && nt_ref(nt, s, "block") < 0) continue;
+    if (spliced && on_base && is_mixin_call(nm) && blk < 0) continue;
+    /* (a receiverless one in a class_eval block on the includer is the
+       includer's own too, a statement of its body once the block's
+       statements are spliced there) */
+    if (spliced && g_incl_on_base && call && r < 0 && is_mixin_call(nm) && blk < 0) continue;
+    /* (a class_eval block on the includer was asked above, statement by
+       statement: its own statements are the ones that land in the body) */
+    if (nm && on_base && nt_ref(nt, s, "arguments") < 0 && blk >= 0 && nt_kind(nt, blk) == NK_BlockNode &&
+        is_class_eval_family(nm) && nt_ref(nt, blk, "parameters") < 0)
+      continue;
     rest[rn++] = s;
   }
   int hit = rn > 0 ? host_prewalk_shape(nt, rest, rn) : -1;

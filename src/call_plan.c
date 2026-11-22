@@ -10026,7 +10026,9 @@ static const char *cplan_body_definer_gap(Compiler *c, int id, char *buf, size_t
     return buf;
   }
   if (!dm || host >= 0 || hs->def_node < 0 || nt_kind(nt, hs->def_node) != NK_DefNode) return NULL;
-  if (!lit && run)
+  /* (a body the method is handed, `&block` or a parameter, has its own refusal, which --defer-refusals defers:
+     define_method_param_body_refusal) */
+  if (!lit && run && !define_method_param_body_refusal(c, id))
     snprintf(buf, cap, "Module#define_method in a method body with a Proc or a Method for its body is not supported (see "
              "docs/limitations.md)");
   else if (lit && cplan_define_method_early(c, (int)(hs - c->scopes), elab_def_scope_of(c, id), av[0]))

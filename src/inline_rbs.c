@@ -795,9 +795,21 @@ static int ir_def_params(const ir_file *f, const pm_def_node_t *d, ir_param **ou
         IR_PUSH(ir_strdup(s.buf ? s.buf : ""), PM_NODE_TYPE_P(r, PM_REQUIRED_PARAMETER_NODE) ? 'r' : 'x');
         sbuf_free(&s);
     }
-    for (size_t i = 0; i < pn->optionals.size; i++) IR_PUSH(ir_strdup(""), 'o');
+    for (size_t i = 0; i < pn->optionals.size; i++) {
+        sbuf_t s; sbuf_init(&s);
+        ir_name_into(f, ((const pm_optional_parameter_node_t *) pn->optionals.nodes[i])->name, &s);
+        IR_PUSH(ir_strdup(s.buf ? s.buf : ""), 'o');
+        sbuf_free(&s);
+    }
     if (pn->rest) IR_PUSH(ir_strdup(""), '*');
-    for (size_t i = 0; i < pn->posts.size; i++) IR_PUSH(ir_strdup(""), 'p');
+    for (size_t i = 0; i < pn->posts.size; i++) {
+        const pm_node_t *r = pn->posts.nodes[i];
+        sbuf_t s; sbuf_init(&s);
+        if (PM_NODE_TYPE_P(r, PM_REQUIRED_PARAMETER_NODE))
+            ir_name_into(f, ((const pm_required_parameter_node_t *) r)->name, &s);
+        IR_PUSH(ir_strdup(s.buf ? s.buf : ""), 'p');
+        sbuf_free(&s);
+    }
     for (size_t i = 0; i < pn->keywords.size; i++) {
         const pm_node_t *k = pn->keywords.nodes[i];
         sbuf_t s; sbuf_init(&s);
@@ -1128,11 +1140,11 @@ static void ir_apply_def(const ir_file *f, ir_target *t) {
                                              (size_t) (pa->name_location.end_byte - pa->name_location.start_byte));
                     int idx = -1;
                     for (int k = 0; k < np; k++)
-                        if ((ps[k].kind == 'r' || ps[k].kind == 'k') && strcmp(ps[k].name, pname) == 0) idx = k;
+                        if (strchr("rokp", ps[k].kind) && strcmp(ps[k].name, pname) == 0) idx = k;
                     if (idx < 0) {
                         char what[300];
                         snprintf(what, sizeof what, "the annotation of parameter `%s`", pname);
-                        ir_warn(f, a, what, "the method has no required or keyword parameter of that name, so none of its annotations are applied");
+                        ir_warn(f, a, what, "the method has no required, optional, trailing or keyword parameter of that name, so none of its annotations are applied");
                         skip = 1;
                     }
                     else if (param_by[idx]) {

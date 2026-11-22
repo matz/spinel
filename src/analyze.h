@@ -309,6 +309,8 @@ typedef struct {
                            node, which runs where its branch does and makes
                            the method as the dispatcher stands after the
                            last (lr_cond_first_arm); 0 for any other version */
+  unsigned char cut;    /* a visibility word's entry of a name past the names the word reaches (lr_word_reach), where its
+                           statement is partial: the word has not changed it, so it is no run version (lr_word_runs) */
 } LrDef;
 enum { LR_UNPLACED_LATER = 2 };   /* LrDef.unplaced */
 typedef struct { int node, body; } LrOpen;

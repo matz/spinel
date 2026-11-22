@@ -4244,8 +4244,9 @@ static int sp_sched_wait_io_impl(int fd, short events, struct pollfd *set, int n
     int timed = timeout_s >= 0.0;
     sp_wlock *wl = &g_wslot[home].io_wl;
     wl_lock(wl);
-    /* Same pending-inject check as sp_sched_block. */
-    if (sp_thread_inject_pending(self)) {
+    /* Same pending-inject check as sp_sched_block. A deferred one is left
+       pending, and the park goes on (sp_fiber_defer_inject). */
+    if (sp_thread_inject_pending(self) && !sp_fiber_inject_deferred()) {
       wl_unlock(wl);
       sp_fiber_fire_inject_if_pending();   /* raises; does not return */
     }
@@ -4272,8 +4273,11 @@ static int sp_sched_wait_io_impl(int fd, short events, struct pollfd *set, int n
     int ik = inj ? sp_fiber_inject_hold(inj) : 0;
     if (ik) {
       sp_fiber_inject_release(inj, ik);
-      free(es); wl_unlock(wl);
-      sp_fiber_fire_inject_if_pending();   /* raises; does not return */
+      if (!sp_fiber_inject_deferred()) {
+        free(es); wl_unlock(wl);
+        sp_fiber_fire_inject_if_pending();   /* raises; does not return */
+      }
+      inj = NULL;
     }
     if (set) { self->io_fd = -1; self->io_events = 0; self->io_set = set; self->io_nset = n; self->ev_set = es; }
     else { self->io_fd = fd; self->io_events = events; }
@@ -4340,7 +4344,7 @@ static int sp_sched_wait_io_impl(int fd, short events, struct pollfd *set, int n
   /* Same pending-inject check as sp_sched_block. */
   if (sp_thread_inject_pending(self)) {
     SCHED_UNLOCK();
-    sp_fiber_fire_inject_if_pending();   /* raises; does not return */
+    sp_fiber_fire_inject_if_pending();   /* raises; does not return (a deferred one is left pending) */
     SCHED_LOCK();
   }
   /* A close from another thread that landed between the caller's readiness
@@ -6033,12 +6037,20 @@ static void sp_sched_fork_child(void) {
 }
 #endif
 
+void sp_sig_fork_child(void);   /* lib/sp_cold.c */
+#if !defined(_WIN32) && !defined(__wasi__)
+static int sp_fork_plain(void) {
+  pid_t pid = fork();
+  if (pid == 0) sp_sig_fork_child();
+  return (int)pid;
+}
+#endif
 int sp_sched_fork(void) {
 #if defined(_WIN32) || defined(__wasi__)
   sp_raise_cls("NotImplementedError", "fork() function is unimplemented on this machine");
   return -1;
 #elif defined(SP_THREADS)
-  if (!g_workers_started && !g_sysmon_started) return (int)fork();
+  if (!g_workers_started && !g_sysmon_started) return sp_fork_plain();
   /* the main thread goes on in the child; another thread has no worker 0
      under it there to run on */
   if (g_current != &g_main_thread || sp_worker_id != 0)
@@ -6062,6 +6074,7 @@ int sp_sched_fork(void) {
   g_collector_active = 0;
   pid_t pid = fork();
   if (pid == 0) {
+    sp_sig_fork_child();
     sp_sched_fork_child();
 #ifdef SP_CEXT
     sp_cext_unlock();
@@ -6079,7 +6092,7 @@ int sp_sched_fork(void) {
 #endif
   return (int)pid;
 #else
-  return (int)fork();
+  return sp_fork_plain();
 #endif
 }
 

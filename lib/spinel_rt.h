@@ -22983,7 +22983,7 @@ void sp_sig_thread_dispatch(void) {
 extern volatile int sp_sig_pending_flag;
 extern volatile int sp_sig_default_pending;
 extern void (*sp_sig_default_raiser)(int);
-void sp_sig_poll_raise(void);   /* returns after a collection a safe point was asked to run (sp_gc_poll_due) */
+void sp_sig_poll_raise(void);   /* returns while sp_sig_default_pending is 0, as after a collection a safe point was asked to run (sp_gc_poll_due) */
 static SP_UNUSED SP_NORETURN void sp_sig_default_raise(int no) {
   sp_sig_async_ok = 0;
   if (no == SIGINT) sp_raise_cls("Interrupt", sp_exc_no_msg);   /* the message is empty, as the interrupt CRuby raises for the signal */
@@ -22995,7 +22995,7 @@ static SP_UNUSED SP_NORETURN void sp_sig_default_raise(int no) {
    a raise would leave half-updated (#9222), so the signal is recorded for
    the next safe point (sp_sig_poll_raise, sp_sig_run_pending). */
 static SP_UNUSED void sp_sig_default_handler(int no) {
-  if (!sp_sig_async_ok) {
+  if (!sp_sig_async_ok || SP_ATOMIC_LOAD(&sp_sig_hold, __ATOMIC_SEQ_CST)) {
     sp_sig_default_pending = no;
     SP_ATOMIC_STORE(&sp_sig_pending_flag, 1, __ATOMIC_RELEASE);
     return;

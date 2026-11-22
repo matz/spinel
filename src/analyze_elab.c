@@ -253,6 +253,10 @@ struct LoadRecord {
      once, at the first read after it opens (lr_bform_live), against the names the walk's index read (bnames) */
   struct LrBodyForm { const char *name, *via; int node, hdr; unsigned char attr, gone; } *bform; int nbform, bform_n;
   struct LrBodyNames *bnames; int bform_pend;
+  /* the definer call lr_body_call_barred last read the names of (node + 1; 0: none), and whether one of them is
+     implicitly private: a call's entries are asked one name at a time (lr_bform_live), and each ask read every
+     name the call takes */
+  int ipn_node, ipn_any;
   unsigned char *bown; int nbown;   /* [nbown] by node: a body's definer call every run of which defines on one class and side (lr_body_owner_fixed, set with the forms) */
   struct LrHeader *hdr; int nhdr, chdr, *hdr_head;   /* the class and module headers, in the order the walk reaches them (elab_header_class), and the class builders' calls and writes noted ahead of the walk (elab_builder_note) */
   ElabSurface *surf; int *surf_at;   /* elab_class_surface's, by class side: [2 * (cls + 1) + sg] .. [+ 1] */
@@ -3569,9 +3573,16 @@ static int lr_body_call_barred(Compiler *c, const int *par, int n, int node, LrB
       lr_body_def_vis(c, par, n, node, sg) != BVIS_PUBLIC ||
       (!sg && x->osg))
     return 1;
-  for (int k = 0; !sg && elab_call_form_name(c->nt, node, k, b, sizeof b, NULL); k++)
-    if (is_implicitly_private_name(elab_call_form_name(c->nt, node, k, b, sizeof b, NULL))) return 1;
-  return 0;
+  if (sg) return 0;
+  LoadRecord *r = c->lrec;
+  if (r->ipn_node != node + 1) {
+    const char *cn;
+    r->ipn_any = 0;
+    for (int k = 0; !r->ipn_any && (cn = elab_call_form_name(c->nt, node, k, b, sizeof b, NULL)); k++)
+      r->ipn_any = is_implicitly_private_name(cn);
+    r->ipn_node = node + 1;
+  }
+  return r->ipn_any;
 }
 /* ...does every run of a body's definer call at node define on one class and side (the owner an environment of
    the definer's blocks belongs to)? Not where the tree spells no class self is (lr_call_side: an instance method's

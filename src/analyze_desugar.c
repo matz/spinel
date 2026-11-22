@@ -1668,6 +1668,83 @@ int desugar_socket_constants(Compiler *c) {
   return changed;
 }
 
+/* `File::Constants::RDONLY` and `IO::RDONLY`: CRuby's File::Constants module, which IO includes, holds File's
+   open, flock and fnmatch constants, so the read is `File::RDONLY`, which the constant arms resolve. */
+static int file_constants_index(const char *n) {
+  static const char *const names[] = {
+    "RDONLY", "WRONLY", "RDWR", "APPEND", "CREAT", "EXCL", "NONBLOCK", "TRUNC", "NOCTTY", "BINARY",
+    "SYNC", "DSYNC", "NOFOLLOW", "LOCK_SH", "LOCK_EX", "LOCK_UN", "LOCK_NB", "NULL",
+    "FNM_SYSCASE", "FNM_NOESCAPE", "FNM_PATHNAME", "FNM_DOTMATCH", "FNM_CASEFOLD", "FNM_EXTGLOB", "FNM_SHORTNAME",
+  };
+  for (int i = 0; n && i < (int)(sizeof names / sizeof names[0]); i++) if (sp_streq(n, names[i])) return i;
+  return -1;
+}
+/* (`IO` or `::IO`) */
+static int const_read_is(NodeTable *nt, int id, const char *name) {
+  if (id < 0 || !sp_streq(nt_str(nt, id, "name"), name)) return 0;
+  return nt_kind(nt, id) == NK_ConstantReadNode || (nt_kind(nt, id) == NK_ConstantPathNode && nt_ref(nt, id, "parent") < 0);
+}
+int desugar_file_constants(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int n0 = nt->count, changed = 0, own_io = 0, own_file = 0;
+  if (n0 <= 0) return 0;
+  char written[32] = {0};   /* per name index: 1 when the program writes IO::X, 2 when File::X */
+  char *is_target = calloc((size_t)n0, 1);   /* the path of `IO::RDONLY = 7` is written, not read */
+  if (!is_target) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  /* (none where the program declares or assigns a Constants itself, or a File other than a top-level
+     `class File` reopening, whose constants a `File::X` read would return; no IO::X where it declares or assigns
+     an IO; no rewrite of X where the program writes IO::X or File::X) */
+  char *is_top = calloc((size_t)n0, 1);
+  int ntop = 0;
+  int *top = prog_top_seq(c, &ntop, NULL);
+  if (!is_top) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int i = 0; i < ntop; i++) if (top[i] >= 0 && top[i] < n0) is_top[top[i]] = 1;
+  free(top);
+  for (int id = 0; id < n0; id++) {
+    const char *dn = class_def_name(nt, id);
+    NodeKind k = nt_kind(nt, id);
+    int w = -1;
+    if (k == NK_ConstantPathWriteNode || k == NK_ConstantPathOrWriteNode ||
+        k == NK_ConstantPathAndWriteNode || k == NK_ConstantPathOperatorWriteNode) w = nt_ref(nt, id, "target");
+    else if (k == NK_ConstantPathTargetNode) w = id;
+    if (w >= 0 && w < n0) {
+      is_target[w] = 1;
+      int wp = nt_ref(nt, w, "parent"), x = file_constants_index(nt_str(nt, w, "name"));
+      if (x >= 0 && const_read_is(nt, wp, "IO")) written[x] |= 1;
+      if (x >= 0 && const_read_is(nt, wp, "File")) written[x] |= 2;
+      if (!dn) dn = nt_str(nt, w, "name");
+    }
+    if (!dn && (k == NK_ConstantWriteNode || k == NK_ConstantOrWriteNode || k == NK_ConstantAndWriteNode ||
+                k == NK_ConstantOperatorWriteNode || k == NK_ConstantTargetNode)) dn = nt_str(nt, id, "name");
+    if (dn && sp_streq(dn, "Constants")) own_file = 1;
+    if (dn && sp_streq(dn, "File") &&
+        !(is_top[id] && k == NK_ClassNode && const_read_is(nt, nt_ref(nt, id, "constant_path"), "File"))) own_file = 1;
+    if (dn && sp_streq(dn, "IO")) own_io = 1;
+  }
+  free(is_top);
+  if (own_file) { free(is_target); return 0; }
+  for (int id = 0; id < n0; id++) {
+    if (is_target[id] || nt_kind(nt, id) != NK_ConstantPathNode) continue;
+    int x = file_constants_index(nt_str(nt, id, "name"));
+    if (x < 0) continue;
+    int mid = nt_ref(nt, id, "parent");
+    if (mid < 0) continue;
+    if (const_read_is(nt, mid, "IO")) {
+      if (own_io || written[x]) continue;
+      nt_node_set_str(nt, mid, "name", "File");
+      changed = 1;
+      continue;
+    }
+    if (nt_kind(nt, mid) != NK_ConstantPathNode || !sp_streq(nt_str(nt, mid, "name"), "Constants")) continue;
+    int root = nt_ref(nt, mid, "parent");
+    if (!const_read_is(nt, root, "File") || (written[x] & 2)) continue;
+    nt_node_set_ref(nt, id, "parent", root);
+    changed = 1;
+  }
+  free(is_target);
+  return changed;
+}
+
 int desugar_instance_eval_defs(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count, changed = 0;

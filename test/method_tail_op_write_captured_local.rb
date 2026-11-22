@@ -41,3 +41,20 @@ def written_in_proc
   v += 1
 end
 p written_in_proc
+
+def nilable_cell(c)
+  v = c ? 5 : nil
+  pr = proc { v }
+  v = v.to_i
+  v += 1
+end
+p nilable_cell(true)
+
+def nilled_in_proc(c)
+  v = 5
+  pr = proc { v = nil }
+  pr.call if c
+  v = 1
+  v += 1
+end
+p nilled_in_proc(true)

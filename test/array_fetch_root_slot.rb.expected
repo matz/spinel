@@ -10,3 +10,5 @@ replaced
 60
 60
 99
+33
+no implicit conversion from nil to integer

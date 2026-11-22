@@ -2158,6 +2158,15 @@ int builtin_object_method_known(const char *m) {
   return builtin_object_method_owner(m) != NULL;
 }
 
+/* Is m a method a Class instance answers from Module or Class (private, attr_accessor, define_method,
+   instance_methods...), and no object's? Class undefines some of Module's (module_function, refine,
+   append_features, prepend_features, extend_object), which a class does not answer. */
+int builtin_module_method_known(const char *m) {
+  const char *own = NULL;
+  return m && core_method_vis("Class", m, 1, &own) > 0 && own && (sp_streq(own, "Module") || sp_streq(own, "Class")) &&
+         !builtin_object_method_known(m);
+}
+
 /* The builtin class or module that defines instance method m of cls (one
    of the classes the arity facts list their own methods for), as
    Method#owner names it: cls for one of its own (CRuby's

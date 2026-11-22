@@ -318,7 +318,13 @@ side: `lr_body_word_frame`). A class-method word in a class method's body
 history, and so is a literal send of either word or of an instance word
 on self (`send(:private, :m)`, `vis_word_call`); a class-method word's
 `def self.m` is the def's version followed by the word's, which runs once
-its argument has. A class-method word whose first name no method of the
+its argument has. An instance word takes its def only where self at the
+word is a class or module: in an instance method's body or a
+`define_method` block the word raises NoMethodError and the def stays
+public (`lr_body_def_word`, asking `lr_body_frame` for `LR_FS_INST`). A
+call before the body runs of a private def it makes finds no method: the
+plan binds it to the version's face entry (`ver_lone_closed_late`). A
+class-method word whose first name no method of the
 program's has, on either side, and no builtin class method answers
 (Object's, Kernel's, Module's, Class's: `cplan_class_builtin_has`) raises
 NameError where it runs and changes nothing (`lr_cside_word_absent`). Not

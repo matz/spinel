@@ -25718,7 +25718,7 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
     attr_named = is_descendant(c, k, g_emitting_class_id) && comp_is_reader(&c->classes[k], name);
   if ((recv < 0 || nt_kind(nt, recv) == NK_SelfNode) && g_gate_raise && !nt_vcall(nt, id) &&
       nt_ref(nt, id, "block") < 0 && !an_user_defines_method(c, name) && !attr_named &&
-      !builtin_object_method_known(name) &&
+      !builtin_object_method_known(name) && !cplan_module_call_on_class(c, id) &&
       (call_rescued_as_missing(nt, id) || nt_str(nt, id, "send_blind") || nt_str(nt, id, "vis_enforce"))) {
     int plain = !nt_argv_has(nt, argv, argc, NT_ARG_SPLAT | NT_ARG_KEYWORDS | NT_ARG_BLOCK);
     if (plain) {

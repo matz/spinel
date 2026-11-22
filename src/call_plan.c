@@ -3954,6 +3954,16 @@ static int ver_vis_runs(Compiler *c, int rcls, int sg, const char *name) {
     if (vs[i].v->kind != LR_UNDEF && vs[i].v->kind != LR_REMOVE && elab_version_vis(c, &vs[i]) < 0) return 1;
   return 0;
 }
+/* ...or is its one version a body's def closed to a call of face (a protected one for any, ct_call_face closes it
+   to the callers it is closed to) that a call may run ahead of (elab_method_late)?
+   Its face entry's arm refuses it once the body has run, and finds no method before, as CRuby does: a refusal
+   made at the call would say the method is private where it is not there yet. */
+static int ver_lone_closed_late(Compiler *c, int rcls, int sg, const char *name, int face) {
+  ElabVersion vs[VER_MAX_ARMS];
+  if (rcls < 0 || rcls >= c->nclasses || c->classes[rcls].is_builtin_const || elab_chain_versions(c, rcls, sg, name, vs, VER_MAX_ARMS) != 1) return 0;
+  int vis = elab_version_vis(c, &vs[0]);
+  return vs[0].v->kind == LR_DEF && vs[0].v->body && (ver_closed_to(vis, face) || vis == SP_VIS_PROTECTED) && elab_method_late(c, name);
+}
 /* ...or are its versions some closed to a call of face, some open, each
    with the visibility its arm takes (`private def m` and a body's public
    `def m`)? */
@@ -3983,7 +3993,7 @@ static int ct_face_for(Compiler *c, int rcls, int sg, const char *name, unsigned
      ver_faces_split; a class side's alike) */
   if (!face) return VF_NONE;
   if (rcls != oc || sg)
-    return (ver_vis_runs(c, rcls, sg, name) || ver_faces_split(c, rcls, sg, name, face)) && cplan_mm_method(c, -1, rcls, sg) < 0 ? face : VF_NONE;
+    return (ver_vis_runs(c, rcls, sg, name) || ver_faces_split(c, rcls, sg, name, face) || ver_lone_closed_late(c, rcls, sg, name, face)) && cplan_mm_method(c, -1, rcls, sg) < 0 ? face : VF_NONE;
   /* (a method_missing every object reaches answers the call instead) */
   if (cplan_mm_method(c, -1, oc, 0) >= 0) return VF_NONE;
   return ver_arms_closed(c, rcls, name, face, NULL) == -1 ? face : VF_NONE;
@@ -6876,7 +6886,7 @@ static const int *ver_holders(Compiler *c, const char *nm, int *n) {
     for (int h = -1; (h = elab_method_holder(c, nm, h, &k, &sg)) >= 0;) {
       int nv = k >= 0 ? elab_chain_versions(c, k, sg, nm, vs, VER_MAX_ARMS) : 0;
       /* (or one whose visibility only the run tells, for its face entry: ver_vis_runs) */
-      if (k < 0 || (nv < 2 && !(nv == 1 && ver_vis_runs(c, k, sg, nm)))) continue;
+      if (k < 0 || (nv < 2 && !(nv == 1 && (ver_vis_runs(c, k, sg, nm) || ver_lone_closed_late(c, k, sg, nm, VF_PUBLIC))))) continue;
       ver_hold_add(m, k, sg);
       if (!sg && comp_class_is_module(c, &c->classes[k])) ver_hold_mixers(c, m, k, nm);
       if (!sg && k == comp_core_class(c, CORE_CLASS_REOPEN)) ver_hold_class_reopen(c, m, nm);
@@ -11264,6 +11274,15 @@ static int cplan_bound_at_point(Compiler *c, int id, int ci, const char *name, i
   return mi >= 0 && elab_method_at(c, ci, name, sg, p, &d) == ELAB_YES && d && d->node == c->scopes[mi].def_node;
 }
 /* See call_plan.h. */
+int cplan_module_call_on_class(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  const char *nm = nt_kind(nt, id) == NK_CallNode ? nt_str(nt, id, "name") : NULL;
+  int rv = nm ? nt_ref(nt, id, "receiver") : -1;
+  const Scope *s = nm ? comp_scope_of(c, id) : NULL;
+  return s && s->is_cmethod && (rv < 0 || nt_kind(nt, rv) == NK_SelfNode) && nt_ref(nt, id, "block") < 0 &&
+         builtin_module_method_known(nm) && !an_user_defines_method(c, nm) && !vis_decl_call(c, id);
+}
+/* See call_plan.h. */
 int cplan_method_vis(Compiler *c, int id, int ci, const char *name, int flags, int *at) {
   int sg = (flags & CPV_CMETHOD) != 0, root = (flags & CPV_ROOT) != 0, here = -1, asked = 0;
   mtab_enter(c);   /* (the question's own reads: the tables', the record's and the binding's) */
@@ -13984,7 +14003,8 @@ static VerPre *ver_pre(Compiler *c, VerNeeds *o, int id, const char *nm, int k, 
   unsigned fl = flags;
   int nv = elab_chain_versions(c, k, (flags & CT_CMETHOD) != 0, nm, vs, VER_MAX_ARMS);
   /* (or one, for a call its face entry may close: ct_face_for) */
-  if ((nv >= 2 || (nv == 1 && (flags & CT_PUBLIC) && ver_vis_runs(c, k, (flags & CT_CMETHOD) != 0, nm))) &&
+  if ((nv >= 2 || (nv == 1 && (flags & CT_PUBLIC) && (ver_vis_runs(c, k, (flags & CT_CMETHOD) != 0, nm) ||
+                                                          ver_lone_closed_late(c, k, (flags & CT_CMETHOD) != 0, nm, ct_flags_face(flags))))) &&
       (p.mi = ct_lookup(c, id, k, nm, &fl, NULL)) >= 0 && !c->scopes[p.mi].mixin_guarded && ct_versioned(c, p.mi, nm)) {
     p.ok = 1;
     p.sg = (fl & CT_CMETHOD) != 0;

@@ -1379,8 +1379,13 @@ int elab_header_class(const Compiler *c, int node, int *owner, const char **leaf
    define_method, alias_method) is the class's own, as in CRuby. In such a
    block on a singleton class (LR_FS_IEVAL_SCLASS, `class << C;
    instance_eval { ... }`) self is that singleton class, and a def goes on
-   the singleton class's own singleton, which the record does not hold. */
-enum { LR_FS_NONE, LR_FS_SCLASS, LR_FS_IEVAL, LR_FS_IEVAL_SCLASS };
+   the singleton class's own singleton, which the record does not hold.
+   Where self is taken for an object (LR_FS_INST, asked with self: an instance
+   method's body, a define_method's block, an instance_eval or instance_exec
+   block on a value that is no constant or self) there is no class: that last
+   one is a guess (the value may be a class: a local, `self.class`), and the
+   frame reads as "no class", as an unresolved receiver does. */
+enum { LR_FS_NONE, LR_FS_SCLASS, LR_FS_IEVAL, LR_FS_IEVAL_SCLASS, LR_FS_INST };
 
 /* elab_program's state: each statement's frame class (fc) and singleton
    flag (fs), each frame's visibility state (vs) and each file's top
@@ -2565,9 +2570,18 @@ static int lr_body_frame(Compiler *c, const int *par, int n, int node, int e, in
       *fs = LR_FS_SCLASS;
       return nt_kind(nt, ex) == NK_SelfNode ? lr_body_self(c, par, n, p, e) : lr_body_const(c, ex, e, 1);
     }
+    if (self && k == NK_BlockNode && par[p] >= 0 && nt_ref(nt, par[p], "block") == p && is_define_method_name(nt_str(nt, par[p], "name"))) {
+      *fs = LR_FS_INST;
+      return LR_UNKNOWN_CLASS;
+    }
     if (k == NK_BlockNode && par[p] >= 0 && nt_ref(nt, par[p], "block") == p && elab_opens_frame(nt, par[p])) {
       const char *nm = nt_str(nt, par[p], "name");
       int rv = nt_ref(nt, par[p], "receiver");
+      if (self && is_instance_eval_family(nm) && rv >= 0 && nt_kind(nt, rv) != NK_ConstantReadNode && nt_kind(nt, rv) != NK_ConstantPathNode &&
+          nt_kind(nt, rv) != NK_SelfNode) {
+        *fs = LR_FS_INST;
+        return LR_UNKNOWN_CLASS;
+      }
       if (!is_class_eval_family(nm) && !is_instance_eval_family(nm)) return LR_UNKNOWN_CLASS;   /* (a class builder's block: lr_body_defs) */
       int cls = rv < 0 || nt_kind(nt, rv) == NK_SelfNode ? lr_body_self(c, par, n, par[p], e) : lr_body_const(c, rv, e, 1);
       if (!self && is_instance_eval_family(nm)) *fs = LR_FS_IEVAL;
@@ -2577,6 +2591,7 @@ static int lr_body_frame(Compiler *c, const int *par, int n, int node, int e, in
       int rv = nt_ref(nt, p, "receiver"), rk = rv >= 0 ? nt_def_receiver(nt, rv) : -1, xfs;
       if (rk >= 0) return nt_kind(nt, rk) == NK_SelfNode ? lr_body_self(c, par, n, p, e) : lr_body_const(c, rk, e, 1);
       int cls = lr_body_frame(c, par, n, p, e, 0, &xfs);
+      if (xfs != LR_FS_SCLASS && xfs != LR_FS_IEVAL) *fs = LR_FS_INST;
       return xfs == LR_FS_SCLASS || xfs == LR_FS_IEVAL ? cls : LR_UNKNOWN_CLASS;
     }
   }
@@ -2774,19 +2789,34 @@ static int lr_body_target(Compiler *c, const int *par, int n, int d, int walk, i
   return 1;
 }
 
+/* The visibility (BVIS_*, not public) the word that takes def node d gives it (`private def m`, or a literal send
+   of one, `send(:private, def m)`: vis_word_call, on self), else 0: none where self at the word is an object (an
+   instance method's body, a define_method's block: the word is Module's and raises there, and the def stays
+   public) */
+static int lr_body_def_word(Compiler *c, const int *par, int n, int d) {
+  const NodeTable *nt = c->nt;
+  int a = d < n ? par[d] : -1, w = a >= 0 && nt_kind(nt, a) == NK_ArgumentsNode ? par[a] : -1, fs;
+  int rv = w >= 0 && nt_kind(nt, w) == NK_CallNode ? nt_ref(nt, w, "receiver") : -1;
+  if (w < 0 || nt_kind(nt, w) != NK_CallNode || (rv >= 0 && nt_kind(nt, rv) != NK_SelfNode)) return 0;
+  lr_body_frame(c, par, n, w, -1, 1, &fs);
+  if (fs == LR_FS_INST) return 0;
+  const char *wn = vis_word_call(nt, w, NULL);
+  int v = wn ? visibility_of_name(wn) : 0;
+  return v != BVIS_PUBLIC ? v : 0;
+}
 /* The visibility def node d, which a body around it makes (lr_body_around),
-   has where it runs (BVIS_*): a visibility word's that takes it (`private
-   def m`), else for a def with no receiver the last bare word before it in
-   its statement list (`private` then `def m`) unless a method's body holds
-   the list (blocks and lambdas between count as the frame around them:
-   in a method a bare word only warns), else private for an instance
-   method CRuby makes private (initialize and its kin), else public. */
-static int lr_body_def_vis(const NodeTable *nt, const int *par, int n, int d, int sg) {
+   has where it runs (BVIS_*): a visibility word's that takes it
+   (lr_body_def_word), else for a def with no receiver the last bare word
+   before it in its statement list (`private` then `def m`) unless a
+   method's body holds the list (blocks and lambdas between count as the
+   frame around them: in a method a bare word only warns), else private for
+   an instance method CRuby makes private (initialize and its kin), else
+   public. */
+static int lr_body_def_vis(Compiler *c, const int *par, int n, int d, int sg) {
+  const NodeTable *nt = c->nt;
+  int v = lr_body_def_word(c, par, n, d);
+  if (v) return v;
   int a = d < n ? par[d] : -1, w = a >= 0 && nt_kind(nt, a) == NK_ArgumentsNode ? par[a] : -1;
-  if (w >= 0 && nt_kind(nt, w) == NK_CallNode && nt_ref(nt, w, "receiver") < 0) {
-    int v = visibility_of_name(nt_str(nt, w, "name"));
-    if (v && v != BVIS_PUBLIC) return v;
-  }
   if (!sg && is_implicitly_private_name(nt_str(nt, d, "name"))) return BVIS_PRIVATE;
   int s = w >= 0 ? w : d, l = s < n ? par[s] : -1, f = l, m = 0, sec = BVIS_PUBLIC;
   while (f >= 0 && f < n && nt_kind(nt, f) != NK_DefNode && nt_kind(nt, f) != NK_ClassNode && nt_kind(nt, f) != NK_ModuleNode &&
@@ -2803,8 +2833,8 @@ static int lr_body_def_vis(const NodeTable *nt, const int *par, int n, int d, in
 /* ...is it public, as a body's version must be (lr_method)? The call plan
    answers no other visibility of a body's version yet, so such a def keeps
    the form it has where the record holds no body versions. */
-static int lr_body_def_public(const NodeTable *nt, const int *par, int n, int d, int sg) {
-  return lr_body_def_vis(nt, par, n, d, sg) == BVIS_PUBLIC;
+static int lr_body_def_public(Compiler *c, const int *par, int n, int d, int sg) {
+  return lr_body_def_vis(c, par, n, d, sg) == BVIS_PUBLIC;
 }
 /* ...is def node d an instance method CRuby makes private whatever word is
    around it (initialize and its kin)? */
@@ -3091,7 +3121,7 @@ static void lr_body_names_read(Compiler *c, const int *par, int n, LrBodyNames *
       const char *dn = nt_str(nt, id, "name");
       int dr = nt_ref(nt, id, "receiver");
       x->mm |= is_method_missing_name(dn);
-      if (dr < 0 && lr_body_def(nt, par, n, id) >= 0 && lr_body_def_vis(nt, par, n, id, 0) == BVIS_PROTECTED) anh_add(&x->prot, dn);
+      if (dr < 0 && lr_body_def(nt, par, n, id) >= 0 && lr_body_def_vis(c, par, n, id, 0) == BVIS_PROTECTED) anh_add(&x->prot, dn);
       lr_body_names_own(c, par, n, id, dr < 0 ? 0 : nt_kind(nt, dr) == NK_SelfNode ? 1 : -1, dr >= 0, dn, 0, x);
     }
     else if (k == NK_AliasMethodNode) {
@@ -3359,7 +3389,7 @@ static int lr_body_def_barred(Compiler *c, const int *par, int n, int d, LrBodyN
   int cside = (dr >= 0 && nt_kind(nt, dr) == NK_SelfNode) || fs == LR_FS_SCLASS || fs == LR_FS_IEVAL_SCLASS;
   return !lr_body_followed(c, par, n, d) || (cside && lr_cside_unfollowed(x, nt_str(nt, d, "name"))) ||
          lr_body_self_unsure(c, x, lr_body_cmethod(nt, par, n, d), cls) ||
-         (dr < 0 && lr_body_def(nt, par, n, d) >= 0 && lr_body_def_vis(nt, par, n, d, 0) == BVIS_PROTECTED && anh_has(&x->untold, nt_str(nt, d, "name")));
+         (dr < 0 && lr_body_def(nt, par, n, d) >= 0 && lr_body_def_vis(c, par, n, d, 0) == BVIS_PROTECTED && anh_has(&x->untold, nt_str(nt, d, "name")));
 }
 static void lr_body_forms(Compiler *c, const int *par, int n) {
   const NodeTable *nt = c->nt;
@@ -3392,13 +3422,13 @@ static void lr_body_forms(Compiler *c, const int *par, int n) {
       int dr = nt_ref(nt, id, "receiver");
       if (lr_body_def_kin(nt, id, dr >= 0) ||
           ((dr < 0 || nt_kind(nt, dr) == NK_SelfNode) && !nt_int(nt, id, "kernel_def", 0) && lr_frame_main(nt, par, n, id)) ||
-          (lr_body_around(nt, par, n, id) >= 0 && !lr_body_def_public(nt, par, n, id, dr >= 0) && lr_body_def_barred(c, par, n, id, &x)))
+          (lr_body_around(nt, par, n, id) >= 0 && !lr_body_def_public(c, par, n, id, dr >= 0) && lr_body_def_barred(c, par, n, id, &x)))
         lr_bform_add(r, &cap, nt_str(nt, id, "name"), id, 0);
       continue;
     }
     int main = (k == NK_AliasMethodNode || k == NK_UndefNode) && lr_frame_main(nt, par, n, id);
     /* (the top level's other entries are versions at their points, where public; not a send's) */
-    if (!vis && !main && !used && lr_body_around(nt, par, n, id) < 0 && lr_body_def_public(nt, par, n, id, 1)) {
+    if (!vis && !main && !used && lr_body_around(nt, par, n, id) < 0 && lr_body_def_public(c, par, n, id, 1)) {
       if (k == NK_AliasMethodNode || (nm && is_alias_method_name(nm))) {
         if (nal == cal && !(al = realloc(al, sizeof *al * (size_t)(cal = cal ? 2 * cal : 16)))) {
           fprintf(stderr, "spinel: out of memory\n");
@@ -4624,7 +4654,7 @@ static void lr_body_versions(Compiler *c) {
       continue;
     }
     if (!have) {   /* (else a class body's own statement: lr_body_defs, whose hook the body still owes) */
-      lr_method(&x, cls, sg, nt_str(nt, id, "name"), id, LR_DEF, lr_body_def_vis(nt, par, r->n, id, sg), !lr_runs_with_body(nt, par, r->n, id, body), NULL);
+      lr_method(&x, cls, sg, nt_str(nt, id, "name"), id, LR_DEF, lr_body_def_vis(c, par, r->n, id, sg), !lr_runs_with_body(nt, par, r->n, id, body), NULL);
       /* (a class-method word that takes the def, `private_class_method def self.m`, runs once its argument has:
          its visibility after the def's version) */
       int a = par[id], w = a >= 0 && nt_kind(nt, a) == NK_ArgumentsNode ? par[a] : -1, wb, wc, ws;

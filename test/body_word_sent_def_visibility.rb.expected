@@ -1,0 +1,11 @@
+[NoMethodError, false, NoMethodError]
+[NoMethodError, false, true, :m]
+[NoMethodError, false, :pr]
+[[:m], [:pr]]
+[NoMethodError, false, NoMethodError]
+"undefined method 'private' for an instance of J"
+[:m, true]
+["undefined method 'a' for an instance of J", "undefined method 'b' for an instance of J"]
+["private method 'a' called for an instance of J", "undefined method 'b' for an instance of J", false, [:a, :bb]]
+NoMethodError
+[:m, true]

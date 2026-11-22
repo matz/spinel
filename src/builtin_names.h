@@ -559,6 +559,7 @@ int is_kernel_module_function(const char *n);
 /* ...and one that never consults self (not `binding`). */
 int kernel_function_ignores_self(const char *n);
 int builtin_object_method_known(const char *m);   /* one of Object's own methods every object answers */
+int builtin_module_method_known(const char *m);   /* one of Module's own methods a class answers, and no object's */
 const char *builtin_method_owner(const char *cls, const char *m);   /* the class or module defining builtin cls's m */
 const char *builtin_bool_method_owner(const char *cls, const char *m);   /* ...a true's or false's m, of class cls when known; NULL where it is not known */
 const char *builtin_function_owner(const char *m);   /* the module defining the function a receiverless method(:m) binds */

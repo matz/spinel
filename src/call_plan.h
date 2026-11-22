@@ -1773,6 +1773,11 @@ int cplan_class_builtin_responds(Compiler *c, int ci, const char *qm);
    BasicObject's (`inspect`, `puts`, `private`), as CRuby's lookup on the class side finds them (cu_class_value_vis),
    and the builtin ones it answers respond_to? with */
 int cplan_class_builtin_has(Compiler *c, int ci, const char *name);
+/* Is call id (receiverless or on self, no block) of a Module method that no route took (no class method of the
+   program's, no word the record reads) in a class method, where self is a class? The raise codegen makes of an
+   unrouted self call names an instance of the class, which a class method's self is not: the call is refused, not
+   raised as a NoMethodError CRuby does not give. */
+int cplan_module_call_on_class(Compiler *c, int id);
 void cplan_presence_list_free(CplanPresList *l);
 /* What an instance of program class cid answers to Object#respond_to?(qm) where call id runs (-1: no call): 2
    true, 1 only to include_all (a private or protected match), 0 false; the method-table reading, without the

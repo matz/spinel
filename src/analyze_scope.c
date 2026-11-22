@@ -4046,7 +4046,14 @@ static int an_block_env_walk(const NodeTable *nt, int node, int level, ANameSet 
   if (k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode) return 0;
   if (k == NK_YieldNode) {
     if (!yields) return 1;
-    *yields = 1;
+    *yields |= 1;
+  }
+  /* a regex's named captures write the locals they name through a writer of their own, which does not know a cell */
+  if (k == NK_MatchWriteNode && yields) {
+    int tn = 0;
+    const int *tv = nt_arr(nt, node, "targets", &tn);
+    for (int i = 0; i < tn; i++)
+      if (nt_int(nt, tv[i], "depth", 0) >= level) *yields |= 2;
   }
   if ((k == NK_LocalVariableReadNode || k == NK_LocalVariableWriteNode || k == NK_LocalVariableOperatorWriteNode ||
        k == NK_LocalVariableOrWriteNode || k == NK_LocalVariableAndWriteNode || k == NK_LocalVariableTargetNode) &&
@@ -4067,19 +4074,21 @@ static int an_block_env_walk(const NodeTable *nt, int node, int level, ANameSet 
 int an_block_captures(const NodeTable *nt, int node, int level) {
   return an_block_env_walk(nt, node, level, NULL, NULL);
 }
-/* ...the names of those locals into `names`, and whether the subtree yields in *yields (the environment a
+/* ...the names of those locals into `names`, and in *yields (a bit mask) whether the subtree yields (1) or writes
+   one of them through a regex's named capture (2) (the environment a
    define_method block closes over: scope_env_link). The names one block binds are renamed apart from the
    method's (block_param_invent_name), so a name the block reads from the method is never one it binds too. */
 void an_block_env(const NodeTable *nt, int block, ANameSet *names, int *yields) {
   *yields = 0;
   (void)an_block_env_walk(nt, block, 0, names, yields);
 }
-int an_block_yields(const NodeTable *nt, int block) {
+const char *an_block_env_gap(const NodeTable *nt, int block) {
   ANameSet none = {0};
-  int yields;
-  an_block_env(nt, block, &none, &yields);
+  int gaps;
+  an_block_env(nt, block, &none, &gaps);
   free(none.v);
-  return yields;
+  return gaps & 1 ? "yields to that method's block" :
+         gaps & 2 ? "writes a local of that method through a regex's named capture" : NULL;
 }
 
 /* Can `obj.define_singleton_method(name) { ... }` become a method of the

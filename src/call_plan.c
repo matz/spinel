@@ -10133,7 +10133,7 @@ static const char *cplan_body_definer_gap(Compiler *c, int id, char *buf, size_t
     return buf;
   }
   int host = elab_body_call_version(c, id, &cls, &sg);
-  const char *envgap = !lit ? NULL : an_block_yields(nt, blk) ? "yields to that method's block" :
+  const char *envgap = !lit ? NULL : an_block_env_gap(nt, blk) ? an_block_env_gap(nt, blk) :
     /* (a definer in a define_method's block: the locals it closes over are that block's own, which have no cells yet) */
     !def && an_block_captures(nt, blk, 0) ? "reads or writes a local of the define_method block around it" :
     /* (the environment is the definer's one, so every run must define on the class and side the method is registered on) */

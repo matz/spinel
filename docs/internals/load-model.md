@@ -448,8 +448,9 @@ through it as a proc body does (`emit_env_load`, `g_cap_struct`): a run of the
 definer that comes while a call is in progress leaves that call its own
 environment. A call that reaches the method before its definer has run, by a
 dispatch that reads no version cell, finds no environment and raises
-NoMethodError. The call plan refuses a block that yields to the method's
-block, reads or writes a local of the `define_method` block it is in, closes over the method's locals where a run may define the method on
+NoMethodError. A default of the block's parameters that reads one of those locals is spelled at the call site in the method's
+environment (`env_bind_begin`, as the default's self is the callee's). The call plan refuses a block that yields to the method's
+block, writes one of them through a regex's named capture, reads or writes a local of the `define_method` block it is in, closes over the method's locals where a run may define the method on
 another class or object than the one it is registered on
 (`elab_body_call_owner`, set with the bars in `lr_body_forms`:
 `lr_body_owner_fixed`), or closes over the method's locals where the program aliases its name

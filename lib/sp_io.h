@@ -9,6 +9,7 @@
 #ifndef SP_IO_H
 #define SP_IO_H
 
+#include <errno.h>
 #include <stdio.h>
 #if !defined(__APPLE__) && !defined(__GLIBC__)
 #include <stdio_ext.h>  /* musl __freadahead: pending stdio read-buffer bytes */
@@ -171,6 +172,18 @@ ssize_t sp_io_rbuf_getline(sp_File *f, char **buf, size_t *cap);
 char *sp_io_rbuf_fgets(sp_File *f, char *buf, int size);
 size_t sp_io_rbuf_read_into(sp_File *f, char *buf, size_t n);
 size_t sp_io_rbuf_take(sp_File *f, void *buf, size_t n);
+/* A stdio read that came back short raises the stream's read error, as
+   CRuby's io_fillbuf does (fillbuf 1) or its io_fread (fillbuf 0); EAGAIN
+   and EINTR stay the end of the stream. sp_io_read_errno clears the error
+   and returns its errno, 0 for none or a transient one. */
+int sp_io_read_errno(sp_File *f);
+SP_NORETURN void sp_io_raise_read_error(sp_File *f, int e, int fillbuf);
+void sp_io_check_ferror(sp_File *f, int fillbuf);
+/* An error flag a write or an earlier read left on the stream is cleared
+   before a stdio read, so the flag after the read is that read's own. */
+static inline void sp_io_clear_stale(FILE *fp) {
+  if (ferror(fp)) clearerr(fp);
+}
 /* Readers of an IO handle's stream call these instead of stdio: each is the
    stdio call of the same name on the handle's FILE, or, for a handle with
    own_buf, the same answer from rbuf. A read of more bytes than
@@ -178,19 +191,42 @@ size_t sp_io_rbuf_take(sp_File *f, void *buf, size_t n);
    into a String holds it rooted (SP_GC_ROOT_STR) across the read. */
 static inline int sp_io_getc(sp_File *f) {
   if (f->own_buf) return sp_io_rbuf_getc(f);
-  return SP_SIG_BLOCKING(fgetc(f->fp));
+  sp_io_clear_stale(f->fp);
+  int c = SP_SIG_BLOCKING(fgetc(f->fp));
+  if (c == EOF) sp_io_check_ferror(f, 1);
+  return c;
 }
 static inline void sp_io_ungetc(sp_File *f, int c) {
   if (f->own_buf) sp_io_rbuf_ungetc(f, c);
   else ungetc(c, f->fp);
 }
-static inline size_t sp_io_fread(sp_File *f, void *buf, size_t n) {
+/* sp_io_fread's read with its error in *err, for a caller that holds a use
+   of the handle (sp_io_use) and releases it before the raise */
+static inline size_t sp_io_fread_err(sp_File *f, void *buf, size_t n, int *err) {
+  *err = 0;
   if (f->own_buf) return sp_io_rbuf_read(f, buf, n);
-  return SP_SIG_BLOCKING(fread(buf, 1, n, f->fp));
+  sp_io_clear_stale(f->fp);
+  size_t got = SP_SIG_BLOCKING(fread(buf, 1, n, f->fp));
+  if (got < n) *err = sp_io_read_errno(f);
+  return got;
+}
+static inline size_t sp_io_fread(sp_File *f, void *buf, size_t n) {
+  int e;
+  size_t got = sp_io_fread_err(f, buf, n, &e);
+  if (e) sp_io_raise_read_error(f, e, 0);
+  return got;
 }
 static inline ssize_t sp_io_getline(sp_File *f, char **buf, size_t *cap) {
   if (f->own_buf) return sp_io_rbuf_getline(f, buf, cap);
-  return SP_SIG_BLOCKING(getline(buf, cap, f->fp));
+  sp_io_clear_stale(f->fp);
+  ssize_t got = SP_SIG_BLOCKING(getline(buf, cap, f->fp));
+  /* glibc returns a partial line with the error set */
+  int e = sp_io_read_errno(f);
+  if (e) {   /* the raise does not come back to free the caller's buffer */
+    free(*buf); *buf = NULL; *cap = 0;
+    sp_io_raise_read_error(f, e, 1);
+  }
+  return got;
 }
 /* Up to n of the bytes the handle already holds (sp_io_pending), never a
    read: another thread may have taken some of them since they were
@@ -201,7 +237,10 @@ static inline size_t sp_io_take(sp_File *f, void *buf, size_t n) {
 }
 static inline char *sp_io_fgets(sp_File *f, char *buf, int size) {
   if (f->own_buf) return sp_io_rbuf_fgets(f, buf, size);
-  return SP_SIG_BLOCKING(fgets(buf, size, f->fp));
+  sp_io_clear_stale(f->fp);
+  char *r = SP_SIG_BLOCKING(fgets(buf, size, f->fp));
+  if (!r) sp_io_check_ferror(f, 1);
+  return r;
 }
 /* Bytes stdio has already buffered for this stream. They are readable without
    a read(2), so a drain of exactly this many cannot block -- which is what

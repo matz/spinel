@@ -12,7 +12,9 @@
 #include "sp_fiber.h"
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 /* OpenBSD requires the stack a coroutine runs on to be MAP_STACK, else the
@@ -602,6 +604,16 @@ void sp_main_stack_run(void (*body)(void)) {
      is what is set, once, before the program's first write and its first
      thread. A file or a pipe keeps the buffer stdio gives it. */
   if (isatty(1)) setvbuf(stdout, NULL, _IONBF, 0);
+  /* a closed fd 0 reads as the end of an empty pipe, as CRuby's
+     fill_standard_fds makes it, and the program's first open does not take it */
+  {
+    struct stat st;
+    int p[2];
+    if (fstat(0, &st) == -1 && errno == EBADF && pipe(p) == 0) {
+      close(p[1]);
+      if (p[0] != 0) { dup2(p[0], 0); close(p[0]); }
+    }
+  }
   size_t guard = sp_fiber_guard();
   size_t want = sp_main_stack_bytes();
   char *base = MAP_FAILED;

@@ -22,3 +22,6 @@ nil
 [false, :y, true]
 [NoMethodError, NoMethodError, false, false]
 [["a", "b"], ["c", "d"]]
+[1, false]
+1
+[3, D2]

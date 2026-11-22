@@ -331,7 +331,9 @@ NameError where it runs and changes nothing (`lr_cside_word_absent`). A body's `
 is two versions: the instance side's private one, as `private :m`'s, and a
 copy on the module's singleton (LR_COPY, `LrDef.body`) whose scope is the
 def live where the word runs, the last def of the name ahead of it in the
-same statements, else the one version the body's window meets
+same statements unless a statement between may define the name again
+(`lr_between_redefines`, asking `lr_node_defines` with the name watched),
+else the one version the body's window meets
 (`lr_body_copy_scope`); where the window meets two or more the copy has no
 one body and `mf_copy_entries` refuses it, and where the program defines
 no method of the name it makes none. A name the module object has a

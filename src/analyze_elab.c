@@ -185,6 +185,7 @@ struct LoadRecord {
   unsigned char refl_any;               /* ...and one names a name the record cannot read */
   unsigned char refl_cell_list;         /* ...a method list the version cells may answer, of any name (list_cells_shape's sides: 1 a class's class-side list, 2 its own instance methods') */
   unsigned char names_any;              /* ...and one it defines by a name the record cannot read */
+  const char *watch; char *watch_key[2];   /* ...the name a def-watching ask looks for (lr_between_redefines: lr_node_defines counts a def of it as one that defines) and its two memo keys (lr_body_defines: plain, direct), so the answers it keeps are its own */
   /* the method histories by name (lr_vers_index), as of nentries entries */
   long nentries, indexed;
   unsigned char *clsmod; int clsmod_all; struct { int nhist, ncls, recorded; unsigned ver; } clsmod_of;   /* lr_class_object_modules, and the record state it is of */
@@ -3732,7 +3733,9 @@ static int lr_variable_op_write(NodeKind k) {
    program are left out; with LR_DEFINES_TREE too, and every def and body
    word counts as one the record follows (where it may not), so the answer
    reads the tree and the program's names alone, never what the record holds
-   or has reached (lr_body_followed) */
+   or has reached (lr_body_followed). While the record watches a name
+   (LoadRecord.watch, lr_between_redefines), a def of it, or an alias that
+   makes it, defines where the record otherwise follows the def */
 static int lr_node_defines(Compiler *c, int n, int direct, int depth) {
   static const NodeKind kinds[] = {
     NK_DefNode, NK_AliasMethodNode, NK_AliasGlobalVariableNode, NK_UndefNode, NK_YieldNode,
@@ -3745,6 +3748,12 @@ static int lr_node_defines(Compiler *c, int n, int direct, int depth) {
   int nc = 0, o = lr_variable_write(k) ? LR_OPAQUE_WRITES : 0;
   const NodeKind *ck = elab_const_write_kinds(&nc);
   int tree = direct == LR_DEFINES_TREE;
+  if (k == NK_DefNode && !tree && c->lrec->watch && nt_ref(nt, n, "receiver") < 0 && sp_streq(nt_str(nt, n, "name"), c->lrec->watch))
+    return LR_OPAQUE_DEFINES;   /* (the def the ask watches for) */
+  if (k == NK_AliasMethodNode && !tree && c->lrec->watch) {   /* (an alias defines the name it makes only) */
+    const char *an = nt_str(nt, nt_ref(nt, n, "new_name"), "value");
+    return !an || sp_streq(an, c->lrec->watch) ? LR_OPAQUE_DEFINES : 0;
+  }
   if (k == NK_DefNode && (tree || lr_body_held(c, n))) return 0;   /* (the record follows it) */
   int word = k == NK_CallNode && lr_body_word(nt, n) && (tree || lr_body_held(c, n));   /* (it follows the word, and asks its defs) */
   for (int i = 0; i < (int)(sizeof kinds / sizeof *kinds); i++) if (k == kinds[i]) return LR_OPAQUE_DEFINES;
@@ -3780,7 +3789,7 @@ static int lr_node_defines(Compiler *c, int n, int direct, int depth) {
    Memoized by the def (LR_KEY_DEFINES; "direct" for the direct answer). */
 static int lr_body_defines(Compiler *c, int def, int direct, int depth) {
   LoadRecord *r = c->lrec;
-  const char *key = direct == LR_DEFINES_TREE ? "tree" : direct ? "direct" : "";
+  const char *key = r->watch ? r->watch_key[direct != 0] : direct == LR_DEFINES_TREE ? "tree" : direct ? "direct" : "";
   const LrHist *h = lr_hist(r, LR_KEY_DEFINES, def, key, 0);
   if (h && h->n) return h->v[h->n - 1].vis;
   if (depth > 64) return LR_OPAQUE_DEFINES;
@@ -3800,13 +3809,13 @@ static int lr_body_defines(Compiler *c, int def, int direct, int depth) {
    record is made. */
 static int lr_callbacks_define(Compiler *c, int depth) {
   LoadRecord *r = c->lrec;
-  if (r->callbacks) return r->callbacks - 1;
+  if (r->callbacks && !r->watch) return r->callbacks - 1;
   int o = 0;
   for (int i = 0; i < r->nnames && o != LR_OPAQUE_DEFINES; i++)
     if ((i == 0 || strcmp(r->names[i - 1], r->names[i]) != 0) &&
         (method_name_implicitly_invoked(r->names[i]) || ic_core_callback(r->names[i], 0)))
       o = lr_most(o, lr_callee_defines(c, r->names[i], 1, depth));
-  if (!o || r->recorded) r->callbacks = (unsigned char)(o + 1);
+  if (!r->watch && (!o || r->recorded)) r->callbacks = (unsigned char)(o + 1);
   return o;
 }
 
@@ -4855,20 +4864,42 @@ static void lr_run_points(Compiler *c);
 static int lr_span(Compiler *c, int cls, const char *name, int sg, const ElabWindow *w, const LrDef **out, int cap, int *idle, int every);
 static void lr_copy_scopes(Compiler *c) {
   LoadRecord *r = c->lrec;
+  /* (a history is read by its index i, not held: an ask below may make a history, growing r->hist; the entries of
+     history i, which no ask here appends to, stay where they are) */
   for (int i = 0; i < r->nhist; i++) {
-    LrHist *h = &r->hist[i];
-    if (h->a < LR_MAIN || !h->b) continue;
-    for (int j = 0; j < h->n; j++) {
-      LrDef *v = &h->v[j];
+    if (r->hist[i].a < LR_MAIN || !r->hist[i].b) continue;
+    for (int j = 0; j < r->hist[i].n; j++) {
+      LrDef *v = &r->hist[i].v[j];
       if (v->kind != LR_COPY || v->scope > 0 || !v->target) continue;
-      if (v->body) { v->scope = lr_body_copy_scope(c, h->a, v); continue; }
-      const LrDef *d = lr_alias_origin(c, h->a, v);
+      if (v->body) { v->scope = lr_body_copy_scope(c, r->hist[i].a, v); continue; }
+      const LrDef *d = lr_alias_origin(c, r->hist[i].a, v);
       if (d) v->scope = d->scope;
     }
   }
 }
+/* ...may one of the statements stmts[from..to) of a body, run, make a def of name (lr_node_defines, which counts a def of
+   the watched name as defining): one a call there reaches, or a call it cannot follow? A def made at a point of the
+   load cannot run again between a body's def and its word, so only these may. The ask keeps its answers under its own
+   memo keys (lr_body_defines), which a plain ask neither reads nor writes */
+static int lr_between_redefines(Compiler *c, const char *name, const int *stmts, int from, int to) {
+  LoadRecord *r = c->lrec;
+  size_t n = strlen(name) + 3;
+  int may = 0;
+  for (int k = 0; k < 2; k++) {
+    if (!(r->watch_key[k] = malloc(n))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    snprintf(r->watch_key[k], n, "%s%s", k ? "d:" : "w:", name);
+  }
+  r->watch = name;
+  for (int i = from; i < to && !may; i++)   /* (a def of another name runs nothing where it stands) */
+    may = nt_kind(c->nt, stmts[i]) != NK_DefNode && lr_node_defines(c, stmts[i], 0, 0) == LR_OPAQUE_DEFINES;
+  r->watch = NULL;
+  free(r->watch_key[0]); free(r->watch_key[1]);
+  r->watch_key[0] = r->watch_key[1] = NULL;
+  return may;
+}
 /* ...a body's copy's (LrDef.body): the def CRuby's module_function finds where the word runs, the last def of the
-   name ahead of the word in the statement list that holds it, else the one def of cls's instance history live at
+   name ahead of the word in the statement list that holds it, unless a statement between them may run another body's def
+   of the name (lr_between_redefines: then the live one, as below), else the one def of cls's instance history live at
    the word's run points: at the one statement a body that runs once runs on (LrExt.from), else over each stretch of
    the body's window (elab_call_window, lr_span's every); none where they may meet two or more, or no def: the copy
    then has no one body, which mf_copy_entries refuses */
@@ -4879,10 +4910,13 @@ static int lr_body_copy_scope(Compiler *c, int cls, const LrDef *v) {
   int st = v->node, bn = 0, sc = 0, nd = 0;
   while (st >= 0 && st < c->lrec->n && par[st] >= 0 && nt_kind(nt, par[st]) != NK_StatementsNode) st = par[st];
   const int *bb = st >= 0 && par[st] >= 0 ? nt_arr(nt, par[st], "body", &bn) : NULL;
-  for (int j = 0; j < bn && bb[j] != st; j++)
+  int from = 0, upto = 0;
+  while (upto < bn && bb[upto] != st) upto++;
+  for (int j = 0; j < upto; j++)
     if (nt_kind(nt, bb[j]) == NK_DefNode && nt_ref(nt, bb[j], "receiver") < 0 && sp_streq(nt_str(nt, bb[j], "name"), v->target))
-      sc = lr_def_scope(c->lrec, bb[j]);
-  if (sc) return sc;
+      sc = lr_def_scope(c->lrec, bb[j]), from = j + 1;
+  if (sc && !lr_between_redefines(c, v->target, bb, from, upto)) return sc;
+  sc = 0;
   ElabWindow w;
   const LrDef *d[2] = { NULL, NULL };
   lr_run_points(c);

@@ -117,3 +117,29 @@ module W
   end
 end
 p [W.split("a b"), W.wa("c d")]
+# defs of other names between a body's def and its word leave that def the live
+# one; so does any other statement that runs no other body's def of the name, though
+# one that does is called later (a statement that may run it is refused,
+# test/reject/module_function_body_call_between.rb)
+module D
+  def self.setup
+    def d1 = 1
+    def d2 = 2
+    module_function :d1
+    nil
+  end
+end
+D.setup
+p [D.d1, D.respond_to?(:d2)]
+module D2
+  def self.change = (def d3 = 9)
+  def self.setup
+    def d3 = 3
+    p 1
+    module_function :d3
+    nil
+  end
+end
+D2.setup
+D2.change
+p [D2.d3, D2.instance_method(:d3).owner]

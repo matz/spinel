@@ -515,7 +515,7 @@ static __attribute__((noreturn)) void unsup_leave(const char *file, int line, co
   exit(1);
 }
 /* The .rb position the parser stamped on `id`, or line 0. */
-static const char *unsup_pos(Compiler *c, int id, int *line) {
+const char *unsup_pos(Compiler *c, int id, int *line) {
   *line = (int)nt_int(c->nt, id, "node_line", 0);
   int fid = (int)nt_int(c->nt, id, "node_file", 0);
   const char *file = nt_file_path(c->nt, fid);

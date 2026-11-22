@@ -19545,10 +19545,10 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
     for (int k = 0; k < c->nclasses && !has_user; k++)
       if (comp_poly_arm_defines_n(c, k, name, argc) && !cls_fact_excludes(c, recv, k)) has_user = 1;
     if (!has_user) {
-      /* (--int-overflow=promote holds the Rational boxed, a big one too:
-         the box is the answer, unopened) */
-      /* (--int-overflow=promote holds it boxed, as does a call typed by a
-         program's own to_r the class facts rule out here) */
+      /* (a call typed poly holds the Rational boxed, a big one too: the box
+         is the result, unopened. to_r and rationalize are typed poly in each
+         mode; the sp_Rational arms below serve a call that settled on a
+         small Rational on an earlier pass) */
       int boxed_ans = g_promote_mode || comp_ntype(c, id) == TY_POLY;
       if (sp_streq(name, "to_r") && boxed_ans) {
         buf_puts(b, "sp_poly_to_r_m("); emit_expr(c, recv, b); buf_puts(b, ")");

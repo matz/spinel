@@ -102,7 +102,7 @@ const struct an_poly_raw_row AN_POLY_RAW[] = {
       { "numerator", 0, TY_POLY }, { "denominator", 0, TY_POLY },
       { "to_i", 0, TY_INT }, { "hash", 0, TY_INT }, { "object_id", 0, TY_INT },
       { "begin", 0, TY_POLY }, { "end", 0, TY_POLY }, { "count", 0, TY_INT },   /* a Range's bound: Integer, Float or nil */
-      { "to_f", 0, TY_FLOAT }, { "to_r", 0, TY_RATIONAL }, { "to_c", 0, TY_COMPLEX },
+      { "to_f", 0, TY_FLOAT }, { "to_r", 0, TY_POLY }, { "to_c", 0, TY_COMPLEX },   /* to_r: a big Rational too */
       { "class", 0, TY_CLASS }, { "bytes", 0, TY_INT_ARRAY },
       { NULL, 0, TY_UNKNOWN } };
 
@@ -3970,15 +3970,17 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
                           sp_streq(name, "to_r"))) ||
            (argc <= 1 && sp_streq(name, "rationalize")))) {   /* an optional epsilon */
         if (!an_user_poly_arm(c, name, argc)) {
-          /* concrete result types, matching the TY_NIL receiver arm so a
-             local settled on an early (pre-widening) pass stays consistent */
+          /* to_a matches the TY_NIL receiver arm, so a local settled on an
+             early (pre-widening) pass stays consistent */
           if (sp_streq(name, "to_a")) { *out = an_poly_concrete(c, id, name, TY_POLY_ARRAY); return 1; }
           /* Hash#to_h is the identity, so a boxed receiver keeps whatever
              variant it really holds: narrowing to the symbol-keyed one made
              `opts.to_h` on a String-keyed hash raise (#3972). nil.to_h is the
              empty hash, which the boxed answer covers too. */
           if (sp_streq(name, "to_h")) { *out = an_poly_concrete(c, id, name, TY_POLY); return 1; }
-          { *out = an_poly_concrete(c, id, name, TY_RATIONAL); return 1; }   /* to_r, rationalize */
+          /* to_r, rationalize: boxed, since the receiver may hold a big
+             Rational, which an sp_Rational slot cannot carry */
+          { *out = an_poly_concrete(c, id, name, TY_POLY); return 1; }
         }
       }
       /* to_h with a block (a proc argument too): the pairs it answers, boxed */
@@ -13277,20 +13279,25 @@ static int an_rat_arith(Compiler *c, int n, int depth) {
   if (!nm || recv < 0 || nt_ref(nt, n, "block") >= 0) return 0;
   int args = nt_ref(nt, n, "arguments");
   int ac = 0; const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &ac) : NULL;
+  /* (the operands are asked first: the program's own operator is looked
+     up only for arithmetic that would otherwise be a Rational's) */
   if (sp_streq(nm, "-@") || sp_streq(nm, "+@"))
-    return ac == 0 && !an_rat_op_own(c, "Rational", nm) && an_rat_value_d(c, recv, depth + 1);
+    return ac == 0 && an_rat_value_d(c, recv, depth + 1) && !an_rat_op_own(c, "Rational", nm);
   if (ac != 1) return 0;
   int bin = sp_streq(nm, "+") || sp_streq(nm, "-") || sp_streq(nm, "*") || sp_streq(nm, "/") || sp_streq(nm, "quo");
   int pw = sp_streq(nm, "**");
   if (!bin && !pw) return 0;
-  if (an_rat_op_own(c, "Rational", nm) || an_rat_op_own(c, "Integer", nm)) return 0;
   int rr = an_rat_value_d(c, recv, depth + 1);
   int ai = an_int_literal(nt, av[0]);
+  int rat;
   /* Rational ** Integer is a Rational; ** a Rational may be a Float */
-  if (pw) return rr && ai;
-  int ar = !ai && an_rat_value_d(c, av[0], depth + 1);
-  int ri = !rr && an_int_literal(nt, recv);
-  return (rr && (ai || ar)) || (ar && ri);
+  if (pw) rat = rr && ai;
+  else {
+    int ar = !ai && an_rat_value_d(c, av[0], depth + 1);
+    int ri = !rr && an_int_literal(nt, recv);
+    rat = (rr && (ai || ar)) || (ar && ri);
+  }
+  return rat && !an_rat_op_own(c, "Rational", nm) && !an_rat_op_own(c, "Integer", nm);
 }
 /* The slot key of a local's holder lv read or written at node n: the scope
    whose locals hold it (the node's own first; a block's read of an outer
@@ -13352,14 +13359,28 @@ static int an_rat_op_own(Compiler *c, const char *cls, const char *op) {
   return an_rat_op_own1(c, cls, op) || an_rat_op_own1(c, "Object", op);
 }
 int an_rat_value(Compiler *c, int n) { return an_rat_value_d(c, n, 0); }
+/* `x.to_r` / `x.rationalize`: a Rational in each mode, boxed because x may
+   hold a big one (unless the program defines the conversion itself) */
+static int an_rat_conversion(Compiler *c, int n) {
+  const NodeTable *nt = c->nt;
+  if (nt_kind(nt, n) != NK_CallNode || nt_ref(nt, n, "receiver") < 0 || nt_ref(nt, n, "block") >= 0) return 0;
+  const char *nm = nt_str(nt, n, "name");
+  int args = nt_ref(nt, n, "arguments");
+  int ac = 0; if (args >= 0) nt_arr(nt, args, "arguments", &ac);
+  if (!nm || !((sp_streq(nm, "to_r") && ac == 0) || (sp_streq(nm, "rationalize") && ac <= 1))) return 0;
+  return infer_type(c, n) == TY_POLY && !an_user_poly_arm(c, nm, ac);
+}
 static int an_rat_value_d(Compiler *c, int n, int depth) {
-  if (!g_promote_mode || n < 0 || depth > 8) return 0;
+  if (n < 0 || depth > 8) return 0;
   switch (vp_one(c->nt, n, VPS_NONE | VP_PARENS_ONLY, &n)) {
   case VP1_NODE: break;
   case VP1_NIL: return 0;
   case VP1_MANY: return 0;
   }
-  if (an_rat_boxed(n)) return 1;
+  if (an_rat_conversion(c, n)) return 1;
+  /* (outside --int-overflow=promote a boxed value is a Rational only as a
+     conversion's result, or a slot each write of which is one) */
+  if (g_promote_mode && an_rat_boxed(n)) return 1;
   if (an_rat_arith(c, n, depth)) return 1;
   NodeKind k = nt_kind(c->nt, n);
   if (k != NK_LocalVariableReadNode && k != NK_InstanceVariableReadNode) return 0;
@@ -13388,7 +13409,9 @@ static int an_rat_value_d(Compiler *c, int n, int depth) {
     if (!an_rat_boxed(w)) {
       int value;
       switch (vp_one(c->nt, nt_ref(c->nt, w, "value"), VPS_NONE | VP_PARENS_ONLY, &value)) {
-      case VP1_NODE: if (!an_rat_boxed(value) && !an_rat_arith(c, value, depth + 1)) return 0; break;
+      case VP1_NODE:
+        if (!an_rat_boxed(value) && !an_rat_conversion(c, value) && !an_rat_arith(c, value, depth + 1)) return 0;
+        break;
       case VP1_NIL: return 0;
       case VP1_MANY: return 0;
       }

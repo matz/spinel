@@ -58,3 +58,19 @@ def nilled_in_proc(c)
   v += 1
 end
 p nilled_in_proc(true)
+
+# a plain Integer or Float cell in a method that answers nil on another path
+def plain_cell_nil_path(c)
+  v = 1
+  pr = proc { v }
+  return nil unless c
+  v += 1
+end
+p plain_cell_nil_path(true), plain_cell_nil_path(false)
+def float_cell_nil_path(c)
+  f = 1.5
+  pr = proc { f }
+  return nil unless c
+  f += 1
+end
+p float_cell_nil_path(true), float_cell_nil_path(false)

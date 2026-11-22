@@ -31220,6 +31220,24 @@ static int civ_target_body(NodeTable *nt, const char *cn) {
   }
   return found;
 }
+/* how many distinct classes or modules of the program have the plain name
+   cn: the nodes that open a frame under it, told apart by their own keys
+   (ee_own_key: a reopening has its first opening's) */
+static int civ_target_bodies(NodeTable *nt, const char *cn) {
+  int ndk = 0; const NodeKind *dk = class_def_kinds(&ndk);
+  char first[512] = "", key[512];
+  int n = 0;
+  for (int dh = 0; dh < ndk; dh++) {
+    NT_FOREACH_KIND(nt, dk[dh], m) {
+      const char *mn = class_def_opens_frame(nt, m) ? class_def_bare_name(nt, m) : NULL;
+      if (!mn || !sp_streq(mn, cn)) continue;
+      ee_own_key(nt, m, key, sizeof key);
+      if (!n) { snprintf(first, sizeof first, "%s", key); n = 1; }
+      else if (!sp_streq(first, key)) n = 2;
+    }
+  }
+  return n;
+}
 static int civ_name_ok(const char *iv) {
   if (!iv || iv[0] != '@' || iv[1] == '@' || !iv[1]) return 0;
   for (const char *q = iv + 1; *q; q++)
@@ -31470,6 +31488,15 @@ static int civ_const_access_at(NodeTable *nt, int id, const int *parent, int *ne
   if (nt_kind(nt, r) == NK_ConstantReadNode) {
     const char *cn = nt_str(nt, r, "name");
     m = cn ? civ_target_body(nt, cn) : -1;
+  }
+  else if (nt_kind(nt, r) == NK_ConstantPathNode) {
+    /* `Outer::Reg`: the class or module its last name is, where the program
+       has one definition of that name only (a path the plain name cannot
+       tell apart from another is left as it is) */
+    const char *cn = nt_str(nt, r, "name");
+    int p = nt_ref(nt, r, "parent");
+    for (; p >= 0 && nt_kind(nt, p) == NK_ConstantPathNode; p = nt_ref(nt, p, "parent")) {}
+    m = cn && (p < 0 || nt_kind(nt, p) == NK_ConstantReadNode) && civ_target_bodies(nt, cn) == 1 ? civ_target_body(nt, cn) : -1;
   }
   else {
     /* a class value only the run time knows: the accessor goes on the

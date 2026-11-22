@@ -155,6 +155,7 @@ void sp_File_put_byte(sp_File *f, int c);
 /* Access-mode checks retain closed-stream error precedence. */
 void sp_io_check_readable(sp_File *f);
 void sp_io_check_writable(sp_File *f);
+void sp_io_stdout_check_frozen(void);
 void sp_io_wait_readable(sp_File *f);
 void sp_io_wait_fd_readable(int fd);
 /* Held around a fork that execs, and around a pipe whose close-on-exec flag

@@ -2131,6 +2131,8 @@ typedef struct {
      the shallowest method still being asked that an answer rested on */
   int bvi_epoch, bvi_calls, bvi_mdepth, bvi_low;
   struct { unsigned long ty, edits; unsigned version, scope_gen; int nscopes; } bvi_stamp;
+  /* std_stream_io_frozen at emit: 0 before the first ask, 1 for no, 2 for yes */
+  unsigned char io_frozen_emit;
 } Compiler;
 /* A scope's shape moved: its name, its class, is_cmethod, its entry kind or the flags that say what copy it is and what it
    guards (mixin_guarded, guard_behind, mixin_unversioned, mixin_conditional, shadow, is_include_copy, is_extend_copy,

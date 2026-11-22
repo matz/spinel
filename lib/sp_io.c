@@ -1103,7 +1103,19 @@ static int sp_io_mode_allows(sp_File *f, int writing) {
     if (*p == '+') return 1;
   return writing ? (m[0] == 'w' || m[0] == 'a') : m[0] == 'r';
 }
+/* "can't modify frozen IO: #<IO:<STDOUT>>", raised before the closed check
+   as CRuby's is */
+static SP_NOINLINE SP_COLD void sp_io_raise_frozen(sp_File *f) {
+  const char *msg = sp_sprintf("can't modify frozen %s: %s", sp_io_kind_name(f), sp_File_inspect(f));
+  SP_GC_ROOT_STR(msg);
+  sp_exc_stage_recv(sp_box_obj(f, SP_BUILTIN_IO));
+  sp_raise_cls("FrozenError", msg);
+}
+static inline void sp_io_check_frozen(sp_File *f) {
+  if (SP_UNLIKELY(f && f->frozen)) sp_io_raise_frozen(f);
+}
 void sp_io_check_writable(sp_File *f) {
+  sp_io_check_frozen(f);
   SP_IO_OPEN(f);
   if (!sp_io_mode_allows(f, 1))
     sp_raise_cls("IOError", (&("\xff" "not opened for writing")[1]));
@@ -1124,6 +1136,7 @@ static sp_int sp_File_write_len(sp_File *f, const char *s, size_t n) {SP_GC_ROOT
 }
 
 sp_int sp_File_write(sp_File *f, const char *s) {SP_GC_ROOT(f);SP_GC_ROOT_STR(s);
+  if (s && s[0]) sp_io_check_frozen(f);
   SP_IO_OPEN(f);
   if (!s || !s[0]) return 0;
   sp_io_check_writable(f);
@@ -1138,6 +1151,7 @@ sp_int sp_File_write(sp_File *f, const char *s) {SP_GC_ROOT(f);SP_GC_ROOT_STR(s)
    callers and codegen's synthesized "" / "\n" literals are bare C literals
    with no marker byte and must use the plain entry above. */
 sp_int sp_File_write_bin(sp_File *f, const char *s) {SP_GC_ROOT(f);SP_GC_ROOT_STR(s);
+  if (s && sp_str_byte_len(s)) sp_io_check_frozen(f);
   SP_IO_OPEN(f);
   if (!s) return 0;
   size_t n = sp_str_byte_len(s);
@@ -1153,6 +1167,7 @@ sp_int sp_File_write_poly(sp_File *f, sp_RbVal v) {
   SP_GC_ROOT_RBVAL(v);
   size_t n;
   const char *text = sp_poly_to_s_bytes(v, &n);
+  if (n) sp_io_check_frozen(f);
   SP_IO_OPEN(f);
   if (!n) return 0;
   sp_io_check_writable(f);
@@ -1165,6 +1180,7 @@ sp_int sp_File_write_poly(sp_File *f, sp_RbVal v) {
    call returns and a read back through the same or another handle sees
    them without a flush. */
 sp_int sp_File_syswrite(sp_File *f, const char *s, size_t n) {SP_GC_ROOT(f);SP_GC_ROOT_STR(s);
+  sp_io_check_frozen(f);
   SP_IO_OPEN(f);
   sp_io_check_writable(f);
   if (!s) return 0;
@@ -1322,6 +1338,10 @@ sp_File *sp_io_stdout(void) {
   if (!s.f.fp) s.f.fp = stdout;
   return &s.f;
 }
+
+/* a bare puts or print that writes to the C stdout, in a program that
+   freezes an IO */
+void sp_io_stdout_check_frozen(void) { sp_io_check_frozen(sp_io_stdout()); }
 
 sp_File *sp_io_stderr(void) {
   static sp_StaticFile s = { SP_STATIC_FILE_LEAD, { NULL, SPL("<STDERR>"), SPL("w") } };
@@ -2916,6 +2936,7 @@ void sp_File_put_byte(sp_File *f, int c) {SP_GC_ROOT(f);
   fputc(c, f->fp);
 }
 void sp_File_print(sp_File *f, const char *s) {SP_GC_ROOT(f);SP_GC_ROOT_STR(s);
+  if (s && s[0]) sp_io_check_frozen(f);
   SP_IO_OPEN(f);
   if (!s || !s[0]) return;
   sp_io_check_writable(f);

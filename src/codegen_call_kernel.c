@@ -80,10 +80,17 @@ static int emit_p_splat_value(Compiler *c, const char *name, int argc, const int
       buf_puts(b, "); ");
     }
   }
-  buf_printf(b, "for (sp_int _i%d = 0; _i%d < _t%d->len; _i%d++) { "
-                "sp_puts_line(%s(_t%d->data[_i%d])); } "
-                "_t%d->len == 0 ? sp_box_nil() : _t%d->len == 1 ? _t%d->data[0] : sp_box_poly_array(_t%d); })",
-             t, t, t, t, p_inspect_fn(c, name), t, t, t, t, t, t);
+  /* (in a program that freezes an IO: the inspect, then the check, then
+     the write, and p checks once more, since p flushes) */
+  if (emit_io_frozen(c))
+    buf_printf(b, "for (sp_int _i%d = 0; _i%d < _t%d->len; _i%d++) { "
+                  "const char *_s%d = %s(_t%d->data[_i%d]); sp_io_stdout_check_frozen(); sp_puts_line(_s%d); } %s",
+               t, t, t, t, t, p_inspect_fn(c, name), t, t, t, sp_streq(name, "p") ? "sp_io_stdout_check_frozen(); " : "");
+  else
+    buf_printf(b, "for (sp_int _i%d = 0; _i%d < _t%d->len; _i%d++) { "
+                  "sp_puts_line(%s(_t%d->data[_i%d])); } ", t, t, t, t, p_inspect_fn(c, name), t, t);
+  buf_printf(b, "_t%d->len == 0 ? sp_box_nil() : _t%d->len == 1 ? _t%d->data[0] : sp_box_poly_array(_t%d); })",
+             t, t, t, t);
   return 1;
 }
 

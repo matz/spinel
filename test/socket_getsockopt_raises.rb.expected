@@ -1,0 +1,4 @@
+Errno::ENOPROTOOPT
+"Protocol not available - getsockopt(2)"
+true
+0

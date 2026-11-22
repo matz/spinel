@@ -2288,7 +2288,10 @@ sp_SockOpt *sp_sock_getsockopt(sp_File *f, sp_int level, sp_int opt) {SP_GC_ROOT
   extern sp_SockOpt *sp_sockopt_new(sp_int family, sp_int level, sp_int optname, sp_int value);
   extern int sp_net_fd_family(int fd);
   sp_sock_require(f, "getsockopt");
+  errno = 0;
   int v = sp_net_getsockopt_int(fileno(f->fp), (int)level, (int)opt);
+  /* (an option can hold -1; a failure sets errno) */
+  if (v == -1 && errno != 0) sp_sock_raise_errno("getsockopt(2)");
   return sp_sockopt_new((sp_int)sp_net_fd_family(fileno(f->fp)), level, opt, (sp_int)v);
 }
 sp_int sp_sock_listen(sp_File *f, sp_int backlog) {SP_GC_ROOT(f);

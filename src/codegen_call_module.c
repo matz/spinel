@@ -1759,8 +1759,8 @@ static void emit_sock_pair(Compiler *c, int dom, int type, int proto, int is_uni
   if (type >= 0) emit_sock_family_arg(c, type, 0, b); else buf_puts(b, "sp_sock_const(\"SOCK_STREAM\")");
   buf_puts(b, ", ");
   if (proto >= 0) emit_int_expr(c, proto, b); else buf_puts(b, "0");
-  buf_printf(b, ", _t%d); sp_File *_t%d = sp_sock_pair_handle(_t%d[0], %d); SP_GC_ROOT(_t%d);"
-                " sp_File *_t%d = sp_sock_pair_handle(_t%d[1], %d); SP_GC_ROOT(_t%d);"
+  buf_printf(b, ", _t%d); sp_File *_t%d = sp_sock_pair_handle(_t%d, 0, %d); SP_GC_ROOT(_t%d);"
+                " sp_File *_t%d = sp_sock_pair_handle(_t%d, 1, %d); SP_GC_ROOT(_t%d);"
                 " sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);"
                 " sp_PolyArray_push(_t%d, sp_box_obj(_t%d, SP_BUILTIN_IO));"
                 " sp_PolyArray_push(_t%d, sp_box_obj(_t%d, SP_BUILTIN_IO)); _t%d; })",

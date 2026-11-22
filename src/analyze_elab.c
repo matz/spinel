@@ -3760,6 +3760,17 @@ static int lr_body_name_free_at(Compiler *c, const int *par, int n, const char *
 /* ...does entry f still bar: asked again, and kept, once the header whose class its bar read as not recorded
    (f->hdr) has opened, as that class's own entries are asked only then (lr_body_target); a top-level alias's (via)
    while its old name has one */
+/* ...is node a module_function whose reach (lr_word_reach) stops short of the names it takes, at a method no module
+   the record holds yet has (elab_module_has_method)? */
+static int lr_word_reach_short(Compiler *c, const int *par, int n, int node) {
+  const NodeTable *nt = c->nt;
+  int cls, sg, copies, names = 0;
+  if (nt_kind(nt, node) != NK_CallNode || !lr_body_word(nt, node) || !lr_word_reach_limits(nt, node)) return 0;
+  lr_word_side(c, par, n, node, -1, &cls, &sg);
+  int reach = lr_word_reach(c, node, cls, sg, &copies);
+  while (lr_word_name(nt, node, names, 1)) names++;
+  return reach >= 0 && reach < names;
+}
 static int lr_bform_live(Compiler *c, const int *par, int n, struct LrBodyForm *f, int depth) {
   LoadRecord *r = c->lrec;
   if (f->gone) return 0;
@@ -3768,6 +3779,12 @@ static int lr_bform_live(Compiler *c, const int *par, int n, struct LrBodyForm *
   r->bnames->par = par;   /* (the map the names were read with may have been replaced since: nt_parents frees it) */
   r->bform_pend = -1;
   int bars = lr_bform_bars(c, par, n, f->node, r->bnames);
+  /* (a module_function whose reach stops short of its names stops at one no method the record holds yet has: an
+     include it has not recorded yet may give it one, so the word stays barred, as at the finished record) */
+  if (!bars && lr_word_reach_short(c, par, n, f->node)) {
+    f->hdr = -1;
+    return 1;
+  }
   f->gone = !bars;
   f->hdr = f->gone ? -1 : r->bform_pend;
   return !f->gone;

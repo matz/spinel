@@ -380,8 +380,8 @@ int an_user_method_reaches(Compiler *c, const char *name, int class_self);
 int an_object_definer_missing(Compiler *c, int call, const Scope *s);
 int an_block_captures(const NodeTable *nt, int node, int level);
 void an_block_env(const NodeTable *nt, int block, ANameSet *names, int *yields);
-int an_block_yields(const NodeTable *nt, int block);   /* does a define_method block yield to the method around it */
-int an_name_aliased(Compiler *c, const char *name);   /* does the program alias the method name (alias, alias_method) */
+const char *an_literal_name(const NodeTable *nt, int node);   /* a Symbol or String node's text, or NULL */
+int an_aliases_name(Compiler *c, const char *a, const char *b);   /* does the program alias method a or b (b may be NULL), or an alias it cannot read */
 int an_block_yields(const NodeTable *nt, int block);   /* does a define_method block yield to the method around it */
 extern int g_yvt_unify_all;
 /* The return type of a call to method `mi`. A method whose body is just a

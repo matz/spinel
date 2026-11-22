@@ -4086,25 +4086,6 @@ int an_block_yields(const NodeTable *nt, int block) {
   free(none.v);
   return yields;
 }
-/* Does the program alias `name` (an `alias` or an `alias_method` whose old name is the Symbol or String)? The copy
-   an alias makes keeps the method it found, and a definer's environment is one of its run. */
-int an_name_aliased(Compiler *c, const char *name) {
-  const NodeTable *nt = c->nt;
-  int n = 0;
-  const int *al = nt_nodes_of_kind(nt, NK_AliasMethodNode, &n);
-  for (int i = 0; i < n; i++) {
-    int old = nt_ref(nt, al[i], "old_name");
-    const char *v = old >= 0 ? nt_str(nt, old, "value") : NULL;
-    if (v && sp_streq(v, name)) return 1;
-  }
-  for (int id = an_calls_named_first(c, "alias_method"); id >= 0; id = an_calls_named_next(id)) {
-    int an = nt_ref(nt, id, "arguments"), ac = 0;
-    const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
-    const char *v = ac > 1 ? vis_arg_name(nt, av[1]) : NULL;
-    if (v && sp_streq(v, name)) return 1;
-  }
-  return 0;
-}
 
 /* Can `obj.define_singleton_method(name) { ... }` become a method of the
    object's synthesized class? Its name has to be written out (a Symbol or a

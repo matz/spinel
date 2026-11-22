@@ -10621,27 +10621,6 @@ static int param_supplied_memo(Compiler *c, int s, int i) {
    of this name, or in a body with no def of its own, supplies it, and so
    does one in a `self.new` for an initialize. A method the runtime calls
    (method_name_implicitly_invoked) may be passed anything. */
-/* A Symbol or String argument's text, or NULL. */
-static const char *nil_param_lit(const NodeTable *nt, int node) {
-  NodeKind k = node >= 0 ? nt_kind(nt, node) : NK_NONE;
-  if (k != NK_SymbolNode && k != NK_StringNode) return NULL;
-  const char *v = nt_str(nt, node, "value");
-  return v ? v : nt_str(nt, node, "unescaped");
-}
-static int nil_param_alias_names(Compiler *c, const char *a, const char *b) {
-  const NodeTable *nt = c->nt;
-  NT_FOREACH_KIND(nt, NK_AliasMethodNode, id) {
-    const char *o = nil_param_lit(nt, nt_ref(nt, id, "old_name"));
-    if (!o || sp_streq(o, a) || (b && sp_streq(o, b))) return 1;
-  }
-  for (int id = an_calls_named_first(c, "alias_method"); id >= 0; id = an_calls_named_next(id)) {
-    int args = nt_ref(nt, id, "arguments"), n = 0;
-    const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &n) : NULL;
-    const char *o = n >= 2 ? nil_param_lit(nt, av[1]) : NULL;
-    if (!o || sp_streq(o, a) || (b && sp_streq(o, b))) return 1;
-  }
-  return 0;
-}
 /* Whether a call made from class `from` (a `super` there, or `K.new` /
    `K.send(:new)` with K = from) can reach a method of class `to`: unless
    `to` is `from` or one of its ancestors it cannot. A module, or a class
@@ -10679,7 +10658,7 @@ static int nil_param_never_supplied(Compiler *c, int s, int i) {
       if (k >= 2 && !an_user_defines_method(c, names[k])) {
         int dargs = nt_ref(nt, id, "arguments"), dn = 0;
         const int *dav = dargs >= 0 ? nt_arr(nt, dargs, "arguments", &dn) : NULL;
-        const char *lit = dn > 0 ? nil_param_lit(nt, dav[0]) : NULL;
+        const char *lit = dn > 0 ? an_literal_name(nt, dav[0]) : NULL;
         if (!lit || sp_streq(lit, sc->name)) return 0;
         if (is_init && sp_streq(lit, "new") && nil_param_reaches(c, nil_param_recv_class(c, id), sc->class_id)) return 0;
         continue;
@@ -10687,7 +10666,7 @@ static int nil_param_never_supplied(Compiler *c, int s, int i) {
       if (psa_call_supplies(c, sc, i, is_init, is_kw, id, names[k])) return 0;
     }
   }
-  if (nil_param_alias_names(c, sc->name, is_init ? "new" : NULL)) return 0;
+  if (an_aliases_name(c, sc->name, is_init ? "new" : NULL)) return 0;
   const NodeKind sk[2] = { NK_SuperNode, NK_ForwardingSuperNode };
   for (int k = 0; k < 2; k++) {
     NT_FOREACH_KIND(nt, sk[k], id) {

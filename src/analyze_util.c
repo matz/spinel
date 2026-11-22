@@ -1408,6 +1408,29 @@ int an_calls_named_first(Compiler *c, const char *name) {
   return k >= 0 ? g_cn_first[k] : -1;
 }
 int an_calls_named_next(int id) { return (id >= 0 && id < g_cn_cnt) ? g_cn_next[id] : -1; }
+/* A Symbol or String argument's text, or NULL. */
+const char *an_literal_name(const NodeTable *nt, int node) {
+  NodeKind k = node >= 0 ? nt_kind(nt, node) : NK_NONE;
+  if (k != NK_SymbolNode && k != NK_StringNode) return NULL;
+  const char *v = nt_str(nt, node, "value");
+  return v ? v : nt_str(nt, node, "unescaped");
+}
+/* Does the program alias method `a` or `b` (NULL for none): an `alias` or an `alias_method` whose old name is one of
+   them, or is no literal name (it may be)? The copy an alias makes keeps the method it found. */
+int an_aliases_name(Compiler *c, const char *a, const char *b) {
+  const NodeTable *nt = c->nt;
+  NT_FOREACH_KIND(nt, NK_AliasMethodNode, id) {
+    const char *o = an_literal_name(nt, nt_ref(nt, id, "old_name"));
+    if (!o || sp_streq(o, a) || (b && sp_streq(o, b))) return 1;
+  }
+  for (int id = an_calls_named_first(c, "alias_method"); id >= 0; id = an_calls_named_next(id)) {
+    int args = nt_ref(nt, id, "arguments"), n = 0;
+    const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &n) : NULL;
+    const char *o = n >= 2 ? an_literal_name(nt, av[1]) : NULL;
+    if (!o || sp_streq(o, a) || (b && sp_streq(o, b))) return 1;
+  }
+  return 0;
+}
 int an_name_reached(Compiler *c, const char *name, int except) {
   for (int id = an_calls_named_first(c, name); id >= 0; id = an_calls_named_next(id))
     if (an_written_call(id)) return 1;

@@ -449,7 +449,7 @@ dispatch that reads no version cell, finds no environment and raises
 NoMethodError. The call plan refuses a block that yields to the method's
 block, reads or writes a local of the `define_method` block it is in, or
 closes over the method's locals where the program aliases its name
-(`an_name_aliased`: the alias keeps the closure of one run), where the
+(`an_aliases_name`: the alias keeps the closure of one run), or a local no closure cell can hold (`env_cells_supported`), where the
 program reaches the name it
 defines (`an_name_reached`: a written call, or a Symbol or String
 that may run it, `elab_name_spelled` without presence queries), and a barred

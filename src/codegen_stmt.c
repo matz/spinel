@@ -22319,7 +22319,7 @@ static void emit_stmt_node(Compiler *c, int id, Buf *b, int indent) {
      resolved at analyze time into real method scopes; emit nothing here. */
   if (ty_k == NK_CallNode) {
     const char *cnm = nt_str(nt, id, "name");
-    if (cnm && sp_streq(cnm, "define_method") && nt_ref(nt, id, "receiver") < 0) {
+    if (cnm && is_define_method_name(cnm) && nt_ref(nt, id, "receiver") < 0) {
       emit_env_store(c, id, b, indent);
       return;
     }
@@ -22328,7 +22328,7 @@ static void emit_stmt_node(Compiler *c, int id, Buf *b, int indent) {
        scope at analyze time, so the call emits no runtime code. Mirror exactly the
        receivers analyze registers; an arbitrary-instance receiver is NOT no-op'd
        here -- it falls through to the normal unresolved-call reject at this site. */
-    if (cnm && sp_streq(cnm, "define_singleton_method")) {
+    if (cnm && is_define_singleton_method_name(cnm)) {
       int dsm_recv = nt_ref(nt, id, "receiver");
       if (dsm_recv < 0) { emit_env_store(c, id, b, indent); return; }
       NodeKind dsm_rk = nt_kind(nt, dsm_recv);

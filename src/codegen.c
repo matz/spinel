@@ -10650,6 +10650,14 @@ static void emit_env_load(Compiler *c, Scope *dm, Buf *b, NameSet *caps, char *c
   if (method_is_void(dm)) buf_puts(b, " return; }\n");
   else buf_printf(b, " return %s; }\n", method_ret_zero(c, dm) ? method_ret_zero(c, dm) : "0");
 }
+/* Can every local that definer scope dm closes over ride a cell? (the call plan refuses a block over one that cannot) */
+int env_cells_supported(Compiler *c, const Scope *dm) {
+  for (int i = 0; dm->env_host && i < dm->nenv_names; i++) {
+    LocalVar *lv = scope_local(&c->scopes[dm->env_host - 1], dm->env_names[i]);
+    if (lv && !cap_cell_supported(c, lv)) return 0;
+  }
+  return 1;
+}
 /* The definer's statement stores the environment, ahead of the cells' version being written */
 void emit_env_store(Compiler *c, int id, Buf *b, int indent) {
   int di = elab_def_scope_of(c, id);
@@ -10657,14 +10665,6 @@ void emit_env_store(Compiler *c, int id, Buf *b, int indent) {
   char pid[24];
   if (!dm || !dm->env_host || !scope_is_emitted(c, di)) return;
   NameSet caps = env_caps(dm, &c->scopes[dm->env_host - 1]);
-  for (int i = 0; i < caps.n; i++) {
-    LocalVar *lv = scope_local(&c->scopes[dm->env_host - 1], caps.v[i]);
-    if (!cap_cell_supported(c, lv)) {
-      free(caps.v);
-      unsupported(c, id, "define_method capturing a non-integer variable (later slice)");
-      return;
-    }
-  }
   env_tag(dm, pid, sizeof pid);
   emit_indent(b, indent);
   buf_puts(b, "{\n");

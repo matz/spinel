@@ -10137,7 +10137,9 @@ static const char *cplan_body_definer_gap(Compiler *c, int id, char *buf, size_t
     /* (a definer in a define_method's block: the locals it closes over are that block's own, which have no cells yet) */
     !def && an_block_captures(nt, blk, 0) ? "reads or writes a local of the define_method block around it" :
     /* (an alias keeps the method it found: the environment of one run of the definer) */
-    an_block_captures(nt, blk, 0) && an_name_aliased(c, mn) ? "reads or writes that method's locals where the program aliases the name it defines (the alias would keep the environment of one run)" : NULL;
+    an_block_captures(nt, blk, 0) && an_aliases_name(c, mn, NULL) ? "reads or writes that method's locals where the program aliases the name it defines (the alias would keep the environment of one run)" :
+    /* (a local of a type no closure cell holds, as a proc's capture is refused) */
+    elab_def_scope_of(c, id) > 0 && !env_cells_supported(c, &c->scopes[elab_def_scope_of(c, id)]) ? "reads or writes a local of a type that a closure cell cannot hold" : NULL;
   if (run && (def || host >= 0) && envgap && (dm || dsm) && an_name_reached(c, mn, av[0])) {
     snprintf(buf, cap, "Module#%s in a method body with a block that %s is not supported (see docs/limitations.md)", nm, envgap);
     return buf;

@@ -14193,10 +14193,10 @@ int host_prewalk_shape(NodeTable *nt, const int *ids, int n) {
    step ahead of the walk that reads a mixin a hook makes reads the hook
    where it is written (desugar_extend_enumerable,
    ee_hook_extends_enumerable).
-   HPS_NO_ALIAS: an alias is no such shape, where the one step that reads
-   it ahead of the walk (desugar_inherited_aliases) has nothing to rewrite:
-   it takes only an alias in a class whose chain is rooted at Hash, Array or
-   String (alias_builtin_root_possible). */
+   HPS_NO_ALIAS: an alias is no such shape, where the statements land in a
+   body the rows run over: the step that reads one ahead of the walk
+   (desugar_inherited_aliases) is a row too
+   (desugar_body_inherited_alias_at). */
 int host_prewalk_shape_at(NodeTable *nt, const int *ids, int n, int flags) {
   int in_walk = flags & HPS_WALK, no_alias = flags & HPS_NO_ALIAS;
   int nn = 0, nb = 0, ns = 0, hit = -1;
@@ -14244,7 +14244,7 @@ int host_splice(Compiler *c, HostStep *h, int owner, int body, int at, int n, co
   n = sce_span(c, h, owner, body, at, n, locals, gone);
   int bn = 0;
   const int *st = nt_arr(c->nt, body, "body", &bn);
-  if (h->now && h->lc->check && at + n <= bn && host_prewalk_shape_at((NodeTable *)c->nt, st + at, n, HPS_WALK | (alias_builtin_root_possible(c->nt) ? 0 : HPS_NO_ALIAS)) >= 0)
+  if (h->now && h->lc->check && at + n <= bn && host_prewalk_shape_at((NodeTable *)c->nt, st + at, n, HPS_WALK | HPS_NO_ALIAS) >= 0)
     lower_say(h->lc, "host_splice", "a statement spliced in the walk carries a shape a step before the walk reads");
   if (h->now && at + n <= bn) {   /* the walk reaches them next: lowered now, as one span */
     int *sp = malloc(sizeof(int) * (size_t)(2 * n + 1));   /* a row may replace the body's array */

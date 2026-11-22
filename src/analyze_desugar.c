@@ -24301,6 +24301,100 @@ static int alias_called_with_block(const NodeTable *nt, const char *name, int n0
   return 0;
 }
 
+/* The rewrite of statement s, the k-th of class cls's body `body`, where it
+   is an alias of a builtin's method on a chain rooted at Hash, Array or
+   String (desugar_inherited_aliases). 0: left as it is. 1: the forwarder
+   def *repl stands in its place. 2: s is the alias of a hidden name now,
+   and the forwarder def *add follows it. An alias this has made (its
+   hidden name carries a `#`) is not taken again. */
+static int alias_rewrite_stmt(NodeTable *nt, const char *cls, int body, int k, int s, int n0, int *repl, int *add) {
+  const char *nw = NULL, *od = NULL;
+  alias_pair_names(nt, s, &nw, &od);
+  if (nw && strchr(nw, '#')) return 0;
+  /* (an alias of a def of the program is bound at registration, register_alias_methods: only a chain rooted at a builtin keeps its forwarder) */
+  if (!nw || !od || !alias_builtin_rooted(nt, cls, od, n0)) return 0;
+  /* An alias of the builtin's method in a class that defines the name
+     itself after it (Hashie::Mash's `alias regular_writer []=` ahead of its
+     own `[]=`): the alias is the builtin's, and a method of its own, which
+     a subclass overrides and reaches with `super` (OmniAuth's AuthHash).
+     It becomes `def nw(*a, &b) = self.od(*a, &b)`, the call the builtin's
+     alone. One defined before the alias is the class's own, as before. */
+  if (alias_class_defines(nt, cls, od, n0)) {
+    if (alias_class_defines_upto(nt, cls, od, n0, body, k)) return 0;
+    /* (a fixed count only: the builtin's call with a splat would reach the
+       class's own method of the name) */
+    const char *root = alias_builtin_root(nt, cls, od, n0);
+    int ar = -1;
+    if (!root || !builtin_method_arity(root, od, &ar) || ar < 0 || ar > 8) return 0;
+    char nwb[256], odb[256];
+    snprintf(nwb, sizeof nwb, "%s", nw); snprintf(odb, sizeof odb, "%s", od);
+    int fd = fwd_new_node_like(nt, s, "DefNode"), ps = fwd_new_node_like(nt, s, "ParametersNode");
+    int call = fwd_new_node_like(nt, s, "CallNode"), self = fwd_new_node_like(nt, s, "SelfNode");
+    int req[8], rd[8];
+    for (int a = 0; a < ar; a++) {
+      char pn[32]; snprintf(pn, sizeof pn, "spinel_alias_p%d__", a);
+      req[a] = fwd_new_node_like(nt, s, "RequiredParameterNode");
+      nt_node_set_str(nt, req[a], "name", pn);
+      rd[a] = local_read_like(nt, s, pn);
+    }
+    nt_node_set_arr(nt, ps, "requireds", req, ar);
+    if (ar > 0) {
+      int args = fwd_new_node_like(nt, s, "ArgumentsNode");
+      nt_node_set_arr(nt, args, "arguments", rd, ar);
+      nt_node_set_ref(nt, call, "arguments", args);
+    }
+    /* the caller's block reaches the builtin, as through the alias (`raw_each { ... }` of Hash#each):
+       only where the program calls the alias with one, as a builtin that takes no block
+       (Array#size) is no call of the builtin with a block argument */
+    if (alias_called_with_block(nt, nwb, n0)) {
+      int bp = fwd_new_node_like(nt, s, "BlockParameterNode"), ba = fwd_new_node_like(nt, s, "BlockArgumentNode");
+      nt_node_set_str(nt, bp, "name", "spinel_alias_b__");
+      nt_node_set_ref(nt, ps, "block", bp);
+      nt_node_set_ref(nt, ba, "expression", local_read_like(nt, s, "spinel_alias_b__"));
+      nt_node_set_ref(nt, call, "block", ba);
+    }
+    nt_node_set_str(nt, call, "name", odb);
+    nt_node_set_ref(nt, call, "receiver", self);
+    nt_mark_builtin_call(nt, call);
+    int bd = fwd_new_node_like(nt, s, "StatementsNode");
+    nt_node_set_arr(nt, bd, "body", &call, 1);
+    nt_node_set_str(nt, fd, "name", nwb);
+    nt_node_set_ref(nt, fd, "parameters", ps);
+    nt_node_set_ref(nt, fd, "body", bd);
+    nt_node_set_ref(nt, fd, "receiver", -1);
+    /* an alias, not a def: a `private` section ahead of it leaves it the builtin's visibility (lr_def) */
+    nt_node_set_int(nt, fd, "alias_forwarder", 1);
+    *repl = fd;
+    return 1;
+  }
+  char nwc[256], odc[256], hid[300];
+  snprintf(nwc, sizeof nwc, "%s", nw); snprintf(odc, sizeof odc, "%s", od);
+  snprintf(hid, sizeof hid, "%s#inherited", nwc);
+  long long line = nt_int(nt, s, "node_line", 0), file = nt_int(nt, s, "node_file", 0),
+            col = nt_int(nt, s, "node_col", 0);
+  nt_node_reset(nt, s, "AliasMethodNode");
+  nt_node_set_int(nt, s, "node_line", line);
+  nt_node_set_int(nt, s, "node_file", file);
+  nt_node_set_int(nt, s, "node_col", col);
+  int ns = fwd_new_node_like(nt, s, "SymbolNode"), os = fwd_new_node_like(nt, s, "SymbolNode");
+  nt_node_set_str(nt, ns, "value", hid);
+  nt_node_set_str(nt, os, "value", odc);
+  nt_node_set_ref(nt, s, "new_name", ns);
+  nt_node_set_ref(nt, s, "old_name", os);
+  *add = alias_forwarder_like(nt, s, nwc, hid);
+  /* the builtin's own method, in a class deriving from Hash, Array or
+     String: a call whose receiver is known to be of such a class names
+     it directly (desugar_builtin_alias_calls), and the forwarder keeps
+     its splat as written for one known only at run time */
+  if (alias_builtin_rooted(nt, cls, odc, n0)) {
+    int fd = *add, fb = nt_ref(nt, fd, "body"), fbn = 0;
+    const int *fbb = fb >= 0 ? nt_arr(nt, fb, "body", &fbn) : NULL;
+    nt_node_set_str(nt, fd, "alias_of_builtin", odc);
+    if (fbn == 1) nt_node_set_int(nt, fbb[0], "alias_fwd", 1);
+  }
+  return 2;
+}
+
 int desugar_inherited_aliases(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count, changed = 0;
@@ -24316,99 +24410,42 @@ int desugar_inherited_aliases(Compiler *c) {
     memcpy(st, st0, sizeof(int) * (size_t)n);
     int no = 0, grew = 0;
     for (int k = 0; k < n; k++) {
-      int s = st[k];
-      out[no++] = s;
-      const char *nw = NULL, *od = NULL;
-      alias_pair_names(nt, s, &nw, &od);
-      /* (an alias of a def of the program is bound at registration, register_alias_methods: only a chain rooted at a builtin keeps its forwarder) */
-      if (!nw || !od || !alias_builtin_rooted(nt, cls, od, n0)) continue;
-      /* An alias of the builtin's method in a class that defines the name
-         itself after it (Hashie::Mash's `alias regular_writer []=` ahead of its
-         own `[]=`): the alias is the builtin's, and a method of its own, which
-         a subclass overrides and reaches with `super` (OmniAuth's AuthHash).
-         It becomes `def nw(*a, &b) = self.od(*a, &b)`, the call the builtin's
-         alone. One defined before the alias is the class's own, as before. */
-      if (alias_class_defines(nt, cls, od, n0)) {
-        if (alias_class_defines_upto(nt, cls, od, n0, body, k)) continue;
-        /* (a fixed count only: the builtin's call with a splat would reach the
-           class's own method of the name) */
-        const char *root = alias_builtin_root(nt, cls, od, n0);
-        int ar = -1;
-        if (!root || !builtin_method_arity(root, od, &ar) || ar < 0 || ar > 8) continue;
-        char nwb[256], odb[256];
-        snprintf(nwb, sizeof nwb, "%s", nw); snprintf(odb, sizeof odb, "%s", od);
-        int fd = fwd_new_node_like(nt, s, "DefNode"), ps = fwd_new_node_like(nt, s, "ParametersNode");
-        int call = fwd_new_node_like(nt, s, "CallNode"), self = fwd_new_node_like(nt, s, "SelfNode");
-        int req[8], rd[8];
-        for (int a = 0; a < ar; a++) {
-          char pn[32]; snprintf(pn, sizeof pn, "spinel_alias_p%d__", a);
-          req[a] = fwd_new_node_like(nt, s, "RequiredParameterNode");
-          nt_node_set_str(nt, req[a], "name", pn);
-          rd[a] = local_read_like(nt, s, pn);
-        }
-        nt_node_set_arr(nt, ps, "requireds", req, ar);
-        if (ar > 0) {
-          int args = fwd_new_node_like(nt, s, "ArgumentsNode");
-          nt_node_set_arr(nt, args, "arguments", rd, ar);
-          nt_node_set_ref(nt, call, "arguments", args);
-        }
-        /* the caller's block reaches the builtin, as through the alias (`raw_each { ... }` of Hash#each):
-           only where the program calls the alias with one, as a builtin that takes no block
-           (Array#size) is no call of the builtin with a block argument */
-        if (alias_called_with_block(nt, nwb, n0)) {
-          int bp = fwd_new_node_like(nt, s, "BlockParameterNode"), ba = fwd_new_node_like(nt, s, "BlockArgumentNode");
-          nt_node_set_str(nt, bp, "name", "spinel_alias_b__");
-          nt_node_set_ref(nt, ps, "block", bp);
-          nt_node_set_ref(nt, ba, "expression", local_read_like(nt, s, "spinel_alias_b__"));
-          nt_node_set_ref(nt, call, "block", ba);
-        }
-        nt_node_set_str(nt, call, "name", odb);
-        nt_node_set_ref(nt, call, "receiver", self);
-        nt_mark_builtin_call(nt, call);
-        int bd = fwd_new_node_like(nt, s, "StatementsNode");
-        nt_node_set_arr(nt, bd, "body", &call, 1);
-        nt_node_set_str(nt, fd, "name", nwb);
-        nt_node_set_ref(nt, fd, "parameters", ps);
-        nt_node_set_ref(nt, fd, "body", bd);
-        nt_node_set_ref(nt, fd, "receiver", -1);
-        /* an alias, not a def: a `private` section ahead of it leaves it the builtin's visibility (lr_def) */
-        nt_node_set_int(nt, fd, "alias_forwarder", 1);
-        out[no - 1] = fd;
-        grew = changed = 1;
-        continue;
-      }
-      char nwc[256], odc[256], hid[300];
-      snprintf(nwc, sizeof nwc, "%s", nw); snprintf(odc, sizeof odc, "%s", od);
-      snprintf(hid, sizeof hid, "%s#inherited", nwc);
-      long long line = nt_int(nt, s, "node_line", 0), file = nt_int(nt, s, "node_file", 0),
-                col = nt_int(nt, s, "node_col", 0);
-      nt_node_reset(nt, s, "AliasMethodNode");
-      nt_node_set_int(nt, s, "node_line", line);
-      nt_node_set_int(nt, s, "node_file", file);
-      nt_node_set_int(nt, s, "node_col", col);
-      int ns = fwd_new_node_like(nt, s, "SymbolNode"), os = fwd_new_node_like(nt, s, "SymbolNode");
-      nt_node_set_str(nt, ns, "value", hid);
-      nt_node_set_str(nt, os, "value", odc);
-      nt_node_set_ref(nt, s, "new_name", ns);
-      nt_node_set_ref(nt, s, "old_name", os);
-      out[no++] = alias_forwarder_like(nt, s, nwc, hid);
-      /* the builtin's own method, in a class deriving from Hash, Array or
-         String: a call whose receiver is known to be of such a class names
-         it directly (desugar_builtin_alias_calls), and the forwarder keeps
-         its splat as written for one known only at run time */
-      if (alias_builtin_rooted(nt, cls, odc, n0)) {
-        int fd = out[no - 1], fb = nt_ref(nt, fd, "body"), fbn = 0;
-        const int *fbb = fb >= 0 ? nt_arr(nt, fb, "body", &fbn) : NULL;
-        nt_node_set_str(nt, fd, "alias_of_builtin", odc);
-        if (fbn == 1) nt_node_set_int(nt, fbb[0], "alias_fwd", 1);
-      }
-      grew = changed = 1;
+      int s = st[k], repl = -1, add = -1;
+      int did = alias_rewrite_stmt(nt, cls, body, k, s, n0, &repl, &add);
+      out[no++] = did == 1 ? repl : s;
+      if (did == 2) out[no++] = add;
+      if (did) grew = changed = 1;
     }
     if (grew) nt_node_set_arr(nt, body, "body", out, no);
     free(st); free(out);
   }
   if (changed) comp_grow_node_arrays(c);
   return changed;
+}
+
+/* The row: alias_rewrite_stmt at one statement of a subclass's body. A row
+   so that an alias the walk splices into a body later (a hook's
+   `base.class_eval do alias_method :regular_writer, :[]= end`) is
+   rewritten as one written in the body is. */
+int desugar_body_inherited_alias_at(Compiler *c, LowerCtx *lc, int id) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int m = lc->owner;
+  if (m < 0 || !class_def_is_class(nt, m) || class_def_super(nt, m) < 0 || class_def_body(nt, m) != lc->body) return 0;
+  const char *cls = class_def_key(c, m);
+  int k = lower_stmt_at(nt, lc, id), repl = -1, add = -1;
+  if (!cls || k < 0) return 0;
+  int did = alias_rewrite_stmt(nt, cls, lc->body, k, id, nt->count, &repl, &add);
+  if (!did) return 0;
+  int n = 0; const int *st = nt_arr(nt, lc->body, "body", &n);
+  int *out = malloc(sizeof(int) * (size_t)(n + 1)), no = 0;
+  if (!out) { fprintf(stderr, "out of memory\n"); exit(1); }
+  for (int i = 0; i < n; i++) {
+    out[no++] = i == k && did == 1 ? repl : st[i];
+    if (i == k && did == 2) out[no++] = add;
+  }
+  nt_node_set_arr(nt, lc->body, "body", out, no);
+  free(out);
+  return 1;
 }
 
 /* A call of an alias of a builtin's method (desugar_inherited_aliases'
@@ -26984,23 +27021,6 @@ static int incl_declined_node(const NodeTable *nt, int node, const char *param) 
   return 0;
 }
 
-/* Can an alias of the program be one desugar_inherited_aliases rewrites: is
-   there a class whose superclass is written Hash, Array or String, the
-   root alias_builtin_root asks for? Asked once for a node table of a size. */
-int alias_builtin_root_possible(const NodeTable *nt) {
-  static const NodeTable *seen;
-  static int seen_n, any;
-  if (seen == nt && seen_n == nt->count) return any;
-  seen = nt; seen_n = nt->count; any = 0;
-  for (int m = 0; m < nt->count && !any; m++) {
-    if (!class_def_is_class(nt, m)) continue;
-    int sc = class_def_super(nt, m);
-    const char *sn = sc >= 0 && nt_kind(nt, sc) == NK_ConstantReadNode ? nt_str(nt, sc, "name") : NULL;
-    any = sn && (sp_streq(sn, "Hash") || sp_streq(sn, "Array") || sp_streq(sn, "String"));
-  }
-  return any;
-}
-
 /* The statements of a hook body as the splice leaves them at the class
    body's level: a class_eval-family block on the includer (bare once
    spliced) is its body's statements (incl_emit_stmt), anything else
@@ -27057,9 +27077,9 @@ static int incl_declined_stmts(NodeTable *nt, int body, const char *param) {
       continue;
     rest[rn++] = s;
   }
-  /* (an alias is a shape of desugar_inherited_aliases only in a program
-     where a chain can be rooted at Hash, Array or String) */
-  int hit = rn > 0 ? host_prewalk_shape_at(nt, rest, rn, spliced && !alias_builtin_root_possible(nt) ? HPS_NO_ALIAS : 0) : -1;
+  /* (an alias in a body the walk splices is rewritten where it lands, by
+     the row of the step that reads one: desugar_body_inherited_alias_at) */
+  int hit = rn > 0 ? host_prewalk_shape_at(nt, rest, rn, spliced ? HPS_NO_ALIAS : 0) : -1;
   free(rest);
   return hit >= 0;
 }

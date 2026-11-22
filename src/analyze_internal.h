@@ -901,7 +901,7 @@ enum {
   LW_REFUSE_SUPERCLASS_EXPRS, LW_RESCUE_BLOCK_BODIES, LW_BIND_MEMBER_HELPERS,
   LW_MARK_SYM_PROC_BLOCKS, LW_BUILDER_BLOCK_PARAM, LW_BODY_LOCAL_SCOPES, LW_ERRNO_ALIASES, LW_PAREN_DEF_BODY, LW_MARK_MATCH_RANGES,
   LW_MARK_RANGE_LOCALS, LW_DUPLICATE_UNDERSCORE_PARAMS, LW_ENCODING_QUERIES, LW_ALIAS_METHOD_STRING_NAMES,
-  LW_ALIAS_METHOD_VALUES, LW_REASSIGNED_BLOCK_PARAMS, LW_BODY_SINGLETON_CLASS_META, LW_CLASS_BODY_VALUES,
+  LW_ALIAS_METHOD_VALUES, LW_BODY_INHERITED_ALIAS, LW_REASSIGNED_BLOCK_PARAMS, LW_BODY_SINGLETON_CLASS_META, LW_CLASS_BODY_VALUES,
   LW_ITSELF_RECEIVER, LW_TAP_VALUE_WRITE, LW_BODY_SELF_IVAR_ACCESS, LW_BLK_PARAM_WRITES, LW_REST_PARAM_WRITES, LW_YIELD_IN_CLOSURE,
   LW_SAFE_NAV_ATTR_WRITE, LW_CONST_ATTR_OP_ASSIGN, LW_STORED_ENUM_EACH, LW_SCOPE_NUMBERED_BLOCK_PARAMS,
   LW_SINGLETON_CLASS_DEFINE_METHOD, LW_EMPTY_HASH_COMPARE_BY_IDENTITY, LW_DEFINE_METHOD_PROC_ARG,
@@ -1008,7 +1008,6 @@ int bo_may_act(Compiler *c, int e);   /* analyze.c: can evaluating e do anything
 int host_prewalk_shape(NodeTable *nt, const int *ids, int n);   /* a node of the span a pre-walk step reads, or -1 */
 enum { HPS_WALK = 1, HPS_NO_ALIAS = 2 };
 int host_prewalk_shape_at(NodeTable *nt, const int *ids, int n, int flags);
-int alias_builtin_root_possible(const NodeTable *nt);   /* analyze_desugar.c: can an alias be one desugar_inherited_aliases rewrites */
 void lower_finish(Compiler *c, LowerCtx *lc);   /* frees; under the check, reports and exits */
 
 /* the rows' functions, in the files that own the rewrites */
@@ -1023,7 +1022,7 @@ LowerFn desugar_io_popen_block_at, desugar_io_popen_block_left;
 LowerGate desugar_itself_receiver_gate, desugar_builtin_kwsplat_gate;
 LowerFn desugar_itself_receiver_at, desugar_itself_receiver_left;
 LowerGate desugar_const_set_write_gate;
-LowerFn desugar_body_self_ivar_access_at, desugar_body_singleton_class_meta_at;
+LowerFn desugar_body_self_ivar_access_at, desugar_body_singleton_class_meta_at, desugar_body_inherited_alias_at;
 LowerFn desugar_const_set_write_at, desugar_const_set_write_left;
 LowerFn desugar_struct_subclass_new_write_at, desugar_struct_subclass_new_write_left;
 LowerFn refuse_superclass_exprs_at, desugar_sym_to_proc_call_at, desugar_builtin_kwsplat_at;

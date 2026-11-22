@@ -142,6 +142,8 @@ static const Lowering lowerings[LW__COUNT] = {
     desugar_alias_method_string_names_at, desugar_alias_method_string_names_left, "`alias_method \"a\", \"b\"`" },
   [LW_ALIAS_METHOD_VALUES] = { "desugar_alias_method_values", LF_STMT | LF_FRAMES, { NK_SingletonClassNode },
     desugar_alias_method_values_at, desugar_alias_method_values_left, "a value-used `alias_method` in a body" },
+  [LW_BODY_INHERITED_ALIAS] = { "desugar_body_inherited_alias", LF_STMT | LF_FRAMES, { NK_NONE },
+    desugar_body_inherited_alias_at, NULL, "an alias of a builtin's method in a class whose chain is rooted at Hash, Array or String" },
   [LW_REASSIGNED_BLOCK_PARAMS] = { "desugar_reassigned_block_params", 0, { NK_BlockNode },
     desugar_reassigned_block_params_at, desugar_reassigned_block_params_left, "a block parameter the body assigns" },
   [LW_BODY_SINGLETON_CLASS_META] = { "desugar_body_singleton_class_meta", LF_STMT | LF_FRAMES, { NK_NONE },

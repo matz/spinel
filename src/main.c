@@ -44,6 +44,7 @@
 #include <sys/wait.h>
 #include <sys/stat.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <dirent.h>
 #include <spawn.h>
 #include "timing.h"
@@ -1363,16 +1364,29 @@ int main(int argc, char **argv) {
     }
     if (file_exists(extractor)) {
       make_temp_path(seed_path, sizeof seed_path, "seed", 0, ".txt");
-      Str cmd = {0};
-      s_add_arg(&cmd, extractor);
+      /* DIR goes to the extractor as an argument, so a `$`, backtick or
+         `"` in it is part of the path */
+      extern char **environ;
+      char *args[4];
+      int na = 0;
+      args[na++] = extractor;
       /* each seed preceded by its .rbs position, which a disagreement with
          an inline RBS annotation names */
-      if (sp_inline_rbs_enabled) s_add_arg(&cmd, "--positions");
-      s_add_arg(&cmd, rbs_dir);
-      s_add(&cmd, "> ");
-      s_add_arg(&cmd, seed_path);
-      int rc = system(cmd.p);
-      free(cmd.p);
+      if (sp_inline_rbs_enabled) args[na++] = "--positions";
+      args[na++] = (char *)rbs_dir;
+      args[na] = NULL;
+      posix_spawn_file_actions_t fa;
+      posix_spawn_file_actions_init(&fa);
+      posix_spawn_file_actions_addopen(&fa, 1, seed_path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+      pid_t pid;
+      int rc = 1;
+      if (posix_spawn(&pid, extractor, &fa, NULL, args, environ) == 0) {
+        int status = 0;
+        pid_t w;
+        while ((w = waitpid(pid, &status, 0)) < 0 && errno == EINTR) { }
+        if (w == pid && WIFEXITED(status)) rc = WEXITSTATUS(status);
+      }
+      posix_spawn_file_actions_destroy(&fa);
       /* a signature file that did not parse (or could not be read) loses
          every signature in it, the ones that would stop the build among
          them: the build stops instead of going on without them (#11323) */

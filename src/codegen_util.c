@@ -2469,11 +2469,7 @@ static int subtree_has_param_named(const Compiler *c, int id, const char *nm) {
     const char *pn = nt_str(nt, id, "name");
     /* shadow-renaming rewrites a param's node-table name to NAME__bpNN;
        the parser's locals list keeps the raw NAME -- match both. */
-    if (pn) {
-      size_t nl = strlen(nm);
-      if (sp_streq(pn, nm)) return 1;
-      if (block_param_written_len(c, pn) == nl && !strncmp(pn, nm, nl)) return 1;
-    }
+    if (pn && (sp_streq(pn, nm) || sp_streq(nt_wname(nt, id), nm))) return 1;
   }
   int nr = nt_num_refs(nt, id);
   for (int i = 0; i < nr; i++)
@@ -8295,10 +8291,8 @@ void arity_kw_suffix(const Compiler *c, int params, char *out, size_t n) {
   for (int i = 0, first = 1; i < nk && off < n; i++) {
     if (!param_is_required_kw(nt, kws[i])) continue;
     /* a block parameter's rename suffix (`k__bp3`) is ours, not the name */
-    const char *kn = nt_str(nt, kws[i], "name");
-    if (!kn) kn = "?";
-    int kl = block_param_is_renamed(c, kn) ? (int)block_param_written_len(c, kn) : (int)strlen(kn);
-    off += (size_t)snprintf(out + off, n - off, "%s%.*s", first ? "" : ", ", kl, kn);
+    const char *kn = nt_str(nt, kws[i], "name") ? nt_wname(nt, kws[i]) : "?";
+    off += (size_t)snprintf(out + off, n - off, "%s%s", first ? "" : ", ", kn);
     first = 0;
   }
 }

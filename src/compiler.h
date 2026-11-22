@@ -175,6 +175,8 @@ typedef struct {
 enum { NIE_MARKED = 1, NIE_STORED = 2, NIE_REACH = 4 };
 typedef struct {
   char *name;       /* Ruby local name (without sigil) */
+  char *wname;      /* (a parameter) the name the program wrote where a pass renamed it
+                       (nt_wname of its node), NULL when that is `name`; lv_wname */
   SP_TY_FIELD TyKind type; /* written by the local slot setters */
   SlotWhy why;      /* how `type` came to be untyped, if it is */
   int last_src;     /* the node whose value last set `type` while it was concrete; -1 = none */
@@ -2070,15 +2072,14 @@ typedef struct {
   int *splat_views;
   int nsplat_views;
   /* the slot names desugar_reassigned_block_params invents, each with the
-     length of the name it stands for (reassigned_param_written_len) */
+     name it stands for (param_written_name) */
   char **rbp_slot_names;
-  size_t *rbp_slot_lens;
+  char **rbp_slot_written;
   int nrbp_slots;
   /* the names the shadow rename invents for block parameters, each with the
-     length of the name the program wrote (block_param_written_len) and the
-     block it was invented for: an open table of mask+1 slots, nbp used */
+     block it was invented for: an open table of mask+1 slots, nbp used. The
+     name the program wrote is on the renamed nodes (nt_wname) */
   char **bp_name;
-  size_t *bp_len;
   int *bp_blk;    /* the block each was invented for (block_param_made_for) */
   unsigned bp_mask;
   int nbp;
@@ -2318,6 +2319,10 @@ void why_reset(SlotWhy *w);
 int ty_degraded(TyKind t);   /* poly, or a container of poly */
 extern int g_infer_round;    /* the fixpoint round in progress, for SlotWhy.round */
 LocalVar *scope_local_intern(Scope *s, const char *name);
+/* The name the program wrote for the slot lv, a parameter's (scope_add_param) */
+static inline const char *lv_wname(const LocalVar *lv) { return lv->wname ? lv->wname : lv->name; }
+void lv_set_wname(LocalVar *lv, const char *wname);
+const char *scope_local_wname(Compiler *c, int scope_idx, const LocalVar *lv);
 void scope_locals_appended(Scope *s);  /* scope_local's index, after an append */
 void scope_locals_removed(Scope *s);   /* ... after a local is taken out of `locals` */
 

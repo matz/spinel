@@ -13396,18 +13396,20 @@ int block_takes_no_values(Compiler *c, int block) {
   return nt_ref(nt, pn, "rest") < 0 && nt_ref(nt, pn, "keyword_rest") < 0 && nt_ref(nt, pn, "block") < 0;
 }
 
-static const char *block_rest_kind_name(Compiler *c, int block, const char *field, const char *kind) {
+static int block_rest_kind_node(Compiler *c, int block, const char *field, const char *kind) {
   int bp = nt_ref(c->nt, block, "parameters");      /* BlockParametersNode */
-  if (bp < 0) return NULL;
+  if (bp < 0) return -1;
   NodeKind bpk = nt_kind(c->nt, bp);
-  if (bpk == NK_NumberedParametersNode) return NULL;
+  if (bpk == NK_NumberedParametersNode) return -1;
   int pn = nt_ref(c->nt, bp, "parameters");          /* ParametersNode */
-  if (pn < 0) return NULL;
+  if (pn < 0) return -1;
   int rest = nt_ref(c->nt, pn, field);
-  if (rest < 0) return NULL;
+  if (rest < 0) return -1;
   const char *rty = nt_type(c->nt, rest);
-  if (!rty || !sp_streq(rty, kind)) return NULL;
-  return nt_str(c->nt, rest, "name");
+  return rty && sp_streq(rty, kind) ? rest : -1;
+}
+static const char *block_rest_kind_name(Compiler *c, int block, const char *field, const char *kind) {
+  return nt_str(c->nt, block_rest_kind_node(c, block, field, kind), "name");
 }
 
 /* The name of a block's trailing rest parameter (`|*a|`), or NULL if the block
@@ -13416,18 +13418,23 @@ static const char *block_rest_kind_name(Compiler *c, int block, const char *fiel
 const char *block_rest_name(Compiler *c, int block) {
   return block_rest_kind_name(c, block, "rest", "RestParameterNode");  /* must be `*name` */
 }
+int block_rest_node(Compiler *c, int block) {
+  return block_rest_kind_node(c, block, "rest", "RestParameterNode");
+}
 
-static const char *block_list_name(Compiler *c, int block, const char *list, int idx) {
+static int block_list_node(Compiler *c, int block, const char *list, int idx) {
   int bp = nt_ref(c->nt, block, "parameters");
-  if (bp < 0) return NULL;
+  if (bp < 0) return -1;
   NodeKind bpk = nt_kind(c->nt, bp);
-  if (bpk == NK_NumberedParametersNode) return NULL;
+  if (bpk == NK_NumberedParametersNode) return -1;
   int pn = nt_ref(c->nt, bp, "parameters");
-  if (pn < 0) return NULL;
+  if (pn < 0) return -1;
   int n = 0;
   const int *ps = nt_arr(c->nt, pn, list, &n);
-  if (idx < n) return nt_str(c->nt, ps[idx], "name");
-  return NULL;
+  return idx < n ? ps[idx] : -1;
+}
+static const char *block_list_name(Compiler *c, int block, const char *list, int idx) {
+  return nt_str(c->nt, block_list_node(c, block, list, idx), "name");
 }
 
 /* Name of a block's idx-th optional parameter (`|a, b=10|`), or NULL. */
@@ -13582,6 +13589,11 @@ const char *block_kwrest_name(Compiler *c, int block) {
 /* Name of a block's idx-th keyword parameter (`|a:, b: 5|`), or NULL. */
 const char *block_keyword_name(Compiler *c, int block, int idx) {
   return block_list_name(c, block, "keywords", idx);
+}
+/* The node of a block's idx-th keyword parameter, or -1: the keyword as
+   written is nt_wname of it. */
+int block_keyword_node(Compiler *c, int block, int idx) {
+  return block_list_node(c, block, "keywords", idx);
 }
 
 /* Default-value node of a block's idx-th keyword parameter (only present for an
@@ -14109,7 +14121,7 @@ void block_site_types(Compiler *c, const BlockSig *s, const int *av, int ac,
   if (s->kw && nt_argv_kwh(nt, av, ac) >= 0) kwh = av[--ac];
   for (int k = 0; k < s->nk; k++) {
     int kp = block_sig_kw(c, s, k);
-    int vn = kwh >= 0 ? ie_kwhash_value(c, kwh, nt_str(nt, kp, "name")) : -1;
+    int vn = kwh >= 0 ? ie_kwhash_value(c, kwh, nt_wname(nt, kp)) : -1;
     TyKind t = vn >= 0 ? bs_value(c, vn) : TY_UNKNOWN;
     int en = 0; const int *els = kwh >= 0 ? nt_arr(nt, kwh, "elements", &en) : NULL;
     for (int e = 0; e < en; e++) {
@@ -14406,7 +14418,7 @@ void check_block_rest_support(Compiler *c) {
           rt == TY_ENUMERATOR || rt == TY_STRING)) continue;
     {
       /* report the param as written, not the shadow rename's slot name */
-      char disp[128]; snprintf(disp, sizeof disp, "%.*s", (int)block_param_written_len(c, rn), rn);
+      const char *disp = nt_wname(nt, block_rest_node(c, blk));
       long long fid = nt_int(nt, id, "node_file", -1);
       const char *file = fid >= 0 ? nt_file_path(nt, (int)fid) : NULL;
       if (!file) file = nt->source_file ? nt->source_file : "source.rb";
@@ -15167,7 +15179,7 @@ int desugar_instance_eval_builtin(Compiler *c) {
       int ken = 0; const int *kels = kwh >= 0 ? nt_arr(nt, kwh, "elements", &ken) : NULL;
       for (int k = 0; k < kn && ok; k++) {
         if (!(pnames[np] = nt_str(nt, kws[k], "name"))) { ok = 0; break; }
-        int v = ie_kwhash_value(c, kwh, pnames[np]);
+        int v = ie_kwhash_value(c, kwh, nt_wname(nt, kws[k]));
         if (v >= 0) {
           if (defaulted || kmatched >= ken || nt_ref(nt, kels[kmatched], "value") != v) ok = 0;
           kmatched++;

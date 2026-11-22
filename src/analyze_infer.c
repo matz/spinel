@@ -13681,13 +13681,16 @@ void scope_reserve_param(Scope *s) {
   if (!s->pnames || !s->pdefault) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
 }
 
-void scope_add_param(Scope *s, const char *name, int defnode) {
+/* Add parameter `name` to s; wname is the name the program wrote for it
+   (nt_wname of its node), NULL for one it did not write */
+void scope_add_param(Scope *s, const char *name, const char *wname, int defnode) {
   scope_reserve_param(s);
   s->pdefault[s->nparams] = defnode;
   s->pnames[s->nparams++] = strdup(name);
   if (defnode < 0) s->nrequired = s->nparams;
   LocalVar *lv = scope_local_intern(s, name);
   lv->is_param = 1;
+  if (wname) lv_set_wname(lv, wname);
 }
 
 /* Collect parameters from a DefNode into scope s. */

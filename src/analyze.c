@@ -4579,8 +4579,8 @@ static int ie_poly_mark(Compiler *c, int id, TyKind rt) {
 }
 
 /* The names the shadow rename invents (`k__bp12` for a keyword `k`), each with
-   the length of the name the program wrote, in the Compiler's open-addressed
-   table (bp_name, bp_len, bp_mask, nbp). Only a name recorded there is an
+   the block it was invented for, in the Compiler's open-addressed table
+   (bp_name, bp_blk, bp_mask, nbp). Only a name recorded there is an
    invented one: a program can write `k__bp12` itself, and that name is its
    own. */
 static int bp_rename_slot(const Compiler *c, const char *name) {
@@ -4593,45 +4593,34 @@ static int bp_rename_slot(const Compiler *c, const char *name) {
   return -1;
 }
 
-static void bp_rename_insert(Compiler *c, char *name, size_t len, int blk) {
+static void bp_rename_insert(Compiler *c, char *name, int blk) {
   unsigned i = sp_strhash(name) & c->bp_mask;
   while (c->bp_name[i]) i = (i + 1) & c->bp_mask;
   c->bp_name[i] = name;
-  c->bp_len[i] = len;
   c->bp_blk[i] = blk;
 }
 
-static void bp_rename_record(Compiler *c, const char *name, size_t len, int blk) {
+static void bp_rename_record(Compiler *c, const char *name, int blk) {
   int s = bp_rename_slot(c, name);
-  if (s >= 0) { c->bp_len[s] = len; c->bp_blk[s] = blk; return; }
+  if (s >= 0) { c->bp_blk[s] = blk; return; }
   unsigned ocap = c->bp_name ? c->bp_mask + 1 : 0;
   if ((unsigned)(c->nbp + 1) * 2 > ocap) {
     char **on = c->bp_name;
-    size_t *ol = c->bp_len;
     int *ob = c->bp_blk;
     unsigned cap = ocap ? ocap * 2 : 64;
     c->bp_name = calloc(cap, sizeof(char *));
-    c->bp_len = calloc(cap, sizeof(size_t));
     c->bp_blk = calloc(cap, sizeof(int));
     c->bp_mask = cap - 1;
-    for (unsigned i = 0; i < ocap; i++) if (on[i]) bp_rename_insert(c, on[i], ol[i], ob[i]);
+    for (unsigned i = 0; i < ocap; i++) if (on[i]) bp_rename_insert(c, on[i], ob[i]);
     free(on);
-    free(ol);
     free(ob);
   }
-  bp_rename_insert(c, strdup(name), len, blk);
+  bp_rename_insert(c, strdup(name), blk);
   c->nbp++;
 }
 
 int block_param_is_renamed(const Compiler *c, const char *name) {
   return bp_rename_slot(c, name) >= 0;
-}
-
-/* The length of the name a block parameter was written with: an invented
-   `k__bp12` is still the keyword `k`; any other name is its whole self. */
-size_t block_param_written_len(const Compiler *c, const char *name) {
-  int s = bp_rename_slot(c, name);
-  return s >= 0 ? c->bp_len[s] : strlen(name);
 }
 
 /* True when the program itself uses `name`. Only a name with `__bp` or `__bq`
@@ -4674,17 +4663,16 @@ char *block_param_invent_name(Compiler *c, const char *written, int blk) {
   snprintf(buf, n, "%s__b%s%s", written, p, tag);
   for (int k = 1; bp_user_uses(c, buf); k++)
     snprintf(buf, n, "%s__b%s%s_%d", written, p, tag, k);
-  bp_rename_record(c, buf, strlen(written), blk);
+  bp_rename_record(c, buf, blk);
   return buf;
 }
 
 /* In a call-site KeywordHashNode (`k: 9, j: 2`), the value node bound to the
-   keyword `name` -- the last when the key is written twice, as CRuby binds
-   it -- or -1. Used to match keyword block params. */
+   keyword `name`, as the program wrote it -- the last when the key is written
+   twice, as CRuby binds it -- or -1. Used to match keyword block params. */
 int ie_kwhash_value(Compiler *c, int kwhash, const char *name) {
   const NodeTable *nt = c->nt;
   if (kwhash < 0 || !name) return -1;
-  size_t nlen = block_param_written_len(c, name);
   int en = 0, v = -1; const int *els = nt_arr(nt, kwhash, "elements", &en);
   for (int i = 0; i < en; i++) {
     NodeKind ek = nt_kind(nt, els[i]);
@@ -4693,7 +4681,7 @@ int ie_kwhash_value(Compiler *c, int kwhash, const char *name) {
     NodeKind kk = nt_kind(nt, key);
     if (kk != NK_SymbolNode) continue;
     const char *kn = nt_str(nt, key, "value");
-    if (kn && strlen(kn) == nlen && !strncmp(kn, name, nlen)) v = nt_ref(nt, els[i], "value");
+    if (kn && sp_streq(kn, name)) v = nt_ref(nt, els[i], "value");
   }
   return v;
 }
@@ -5913,7 +5901,7 @@ void blkp_rewrite_refs(Compiler *c, int node, const char *oldn, const char *newn
   if ((ty_k == NK_BlockNode || ty_k == NK_LambdaNode) && blkp_binds_param(c, node, oldn)) return;
   if (a_is_local_node(ty)) {
     const char *nm = nt_str(nt, node, "name");
-    if (nm && sp_streq(nm, oldn)) nt_set_str((NodeTable *)nt, node, "name", newn);
+    if (nm && sp_streq(nm, oldn)) nt_rename_local((NodeTable *)nt, node, newn);
   }
   int nr = nt_num_refs(nt, node);
   for (int i = 0; i < nr; i++) blkp_rewrite_refs(c, nt_ref_at(nt, node, i), oldn, newn);
@@ -7637,7 +7625,7 @@ static void rename_shadowing_block_locals(Compiler *c, int L, int pn, int body,
       made[i] = block_param_invent_name(c, ls[i], L);
       blkp_rewrite_refs(c, body, ls[i], made[i]);
       int decl = nt_block_local_node(nt, L, ls[i]);
-      if (decl >= 0) nt_node_set_str(nt, decl, "name", made[i]);
+      if (decl >= 0) nt_rename_local(nt, decl, made[i]);
       out[i] = made[i];
       changed = 1;
     }
@@ -8238,17 +8226,18 @@ static void blkp_rename_blocks(Compiler *c, BlkpStep *st, const int *ids, int ni
         if (wn && sp_streq(wn, p)) collide = 1;
       }
       if (!collide) continue;
-      char *oldn = strdup(p);   /* copy: nt_set_str frees p's storage */
+      char *oldn = strdup(p);   /* copy: the rename frees p's storage */
       if (!oldn) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
       char *newn = block_param_invent_name(c, oldn, L);
-      /* `Proc#parameters` reports the name the program wrote, and the emitter
-         recovers it by stripping this suffix -- but a stripped name that
-         appears nowhere else is not in the generated symbol table, so interning
-         it at emit time came too late and it rendered as the empty symbol
-         (#4045). Put it in the table here, while the table is still open: the
-         name written, when `oldn` is the slot of a parameter the body assigns. */
-      comp_sym_intern_n(c, oldn, reassigned_param_written_len(c, oldn));
-      nt_set_str((NodeTable *)nt, pnode, "name", newn);
+      /* `Proc#parameters` reports the name the program wrote. A name that
+         appears nowhere else is not in the generated symbol table, so
+         interning it at emit time came too late and it rendered as the empty
+         symbol (#4045). Put it in the table here, while the table is still
+         open: the name written, when `oldn` is the slot of a parameter the
+         body assigns. */
+      { const char *rw = rbp_slot_written(c, nt_wname(nt, pnode));
+        comp_sym_intern(c, rw ? rw : oldn); }
+      nt_rename_local((NodeTable *)nt, pnode, newn);
       blkp_rewrite_refs(c, body, oldn, newn);
       /* an optional's default expression can reference a renamed sibling
          param (`|a, b=a|`); those reads live under the ParametersNode, not
@@ -23867,12 +23856,11 @@ static int an_yield_like(Compiler *c, int node, Scope *m) {
          nt_str(nt, r, "name") && sp_streq(nt_str(nt, r, "name"), m->blk_param);
 }
 /* The keyword parameter of `blk` that keyword `key` binds. */
-static int dyn_kw_name_is(const Compiler *c, const char *pn, const char *key);
 static const char *an_block_kw_param(Compiler *c, int blk, const char *key) {
   for (int i = 0; blk >= 0 && key; i++) {
-    const char *kp = block_keyword_name(c, blk, i);
-    if (!kp) break;
-    if (dyn_kw_name_is(c, kp, key)) return kp;
+    int kn = block_keyword_node(c, blk, i);
+    if (kn < 0) break;
+    if (sp_streq(nt_wname(c->nt, kn), key)) return nt_str(c->nt, kn, "name");
   }
   return NULL;
 }
@@ -32202,20 +32190,15 @@ static unsigned dyn_meth_bits(Compiler *c, int mi) {
 /* Keyword arguments (`f.call(k1: s)`): the keyword parameter `key` names.
    A keyword matches by name, so a target's answer is the parameter of that
    name: appended (bit 0) and read for more than its bytes (bit 1), 0 when
-   the target has no such keyword. A block's keyword may carry the shadow
-   rename's suffix (#3679); the key is the name the program wrote. */
-static int dyn_kw_name_is(const Compiler *c, const char *pn, const char *key) {
-  if (!pn || !key) return 0;
-  size_t n = block_param_is_renamed(c, pn) ? block_param_written_len(c, pn) : strlen(pn);
-  return strlen(key) == n && !strncmp(pn, key, n);
-}
+   the target has no such keyword. A block's keyword may be a slot the shadow
+   rename made (#3679); the key is the name the program wrote. */
 static unsigned dyn_lit_kw_bits(Compiler *c, int lit, const char *key) {
   const NodeTable *nt = c->nt;
   int pnode = dyn_lit_params(c, lit);
   int kn = 0; const int *kv = pnode >= 0 ? nt_arr(nt, pnode, "keywords", &kn) : NULL;
   for (int i = 0; i < kn; i++) {
     const char *pn[1] = { nt_str(nt, kv[i], "name") };
-    if (!dyn_kw_name_is(c, pn[0], key)) continue;
+    if (!pn[0] || !key || !sp_streq(nt_wname(nt, kv[i]), key)) continue;
     unsigned app = 0, kept = 0;
     int body = nt_kind(nt, lit) == NK_BlockNode ? nt_ref(nt, lit, "body") : a_proc_body(c, lit);
     dyn_body_scan(c, body, pn, 1, &app, &kept);
@@ -32250,12 +32233,7 @@ static int dyn_lit_kw_any(Compiler *c, int lit) {
   int pnode = dyn_lit_params(c, lit);
   int kn = 0; const int *kv = pnode >= 0 ? nt_arr(nt, pnode, "keywords", &kn) : NULL;
   for (int i = 0; i < kn; i++) {
-    const char *pn = nt_str(nt, kv[i], "name");
-    char key[128];
-    size_t len = pn ? (block_param_is_renamed(c, pn) ? block_param_written_len(c, pn) : strlen(pn)) : 0;
-    if (!pn || len >= sizeof key) continue;
-    memcpy(key, pn, len); key[len] = 0;
-    if (dyn_lit_kw_bits(c, lit, key) & 1u) return 1;
+    if (nt_str(nt, kv[i], "name") && dyn_lit_kw_bits(c, lit, nt_wname(nt, kv[i])) & 1u) return 1;
   }
   return 0;
 }
@@ -38972,12 +38950,10 @@ static int nn_fresh(void) {
 static int nn_marked(int id, unsigned char bit) {
   return id >= 0 && nn_fresh() && id < nn_cap && (nn_flags[id] & bit);
 }
-static int nn_read_nonnil(Compiler *c, int id, const char *name) {
+static int nn_read_nonnil(Compiler *c, int id) {
   if (!nn_marked(id, NNB_NONNIL)) return 0;
   if (!g_decide_on) return 1;
-  char written[300];
-  snprintf(written, sizeof written, "%.*s", (int)block_param_written_len(c, name), name);
-  return decide_node(c->nt, id, "nn-read", written);
+  return decide_node(c->nt, id, "nn-read", nt_wname(c->nt, id));
 }
 static int nn_index_inbounds(Compiler *c, int id) {
   return nn_marked(id, NNB_INB) && decide_node(c->nt, id, "nn-inb", NULL);
@@ -40959,7 +40935,7 @@ int nullable_int_value(Compiler *c, int v) {
     LocalVar *rv = rs ? scope_local(rs, rn) : NULL;
     /* a local that only ever holds nil is nil wherever it is read */
     if (rv && rv->nil_only) return 1;
-    return rv && rv->nullable_int && !nn_read_nonnil(c, v, rn);
+    return rv && rv->nullable_int && !nn_read_nonnil(c, v);
   }
   /* `x &&= v` answers x's nil when x is nil, and `x ||= v` answers v when
      x is nil, so the value can be nil as the local or v can */
@@ -41625,11 +41601,11 @@ static int mark_nullable_params_of_call(Compiler *c, int id, int mi) {
     LocalVar *p = pk ? scope_local(m, pk) : NULL;
     if (!p || !callee_param_is_declared_kwarg(c, m, pk)) continue;
     if (ty_is_object(p->type)) {
-      if (!p->obj_nilable && obj_nil_arg(c, ie_kwhash_value(c, kwh, pk))) { p->obj_nilable = 1; changed = 1; }
+      if (!p->obj_nilable && obj_nil_arg(c, ie_kwhash_value(c, kwh, lv_wname(p)))) { p->obj_nilable = 1; changed = 1; }
       continue;
     }
     if ((p->type != TY_INT && p->type != TY_FLOAT) || p->nullable_int) continue;
-    if (nullable_int_value(c, ie_kwhash_value(c, kwh, pk))) { p->nullable_int = 1; changed = 1; }
+    if (nullable_int_value(c, ie_kwhash_value(c, kwh, lv_wname(p)))) { p->nullable_int = 1; changed = 1; }
   }
   arg_layout_free(&L);
   return changed;
@@ -51835,7 +51811,7 @@ static void an_phase_pre_fixpoint(Compiler *c) {
       continue;
     }
     int rn = 0; const int *reqs = nt_arr(c->nt, pn, "requireds", &rn);
-    for (int k = 0; k < rn; k++) { const char *nm = nt_str(c->nt, reqs[k], "name"); if (nm) comp_sym_intern_n(c, nm, reassigned_param_written_len(c, nm)); }
+    for (int k = 0; k < rn; k++) { const char *nm = nt_str(c->nt, reqs[k], "name"); if (nm) { const char *rw = rbp_slot_written(c, nt_wname(c->nt, reqs[k])); comp_sym_intern(c, rw ? rw : nm); } }
     int on = 0; const int *opts = nt_arr(c->nt, pn, "optionals", &on);
     for (int k = 0; k < on; k++) { const char *nm = nt_str(c->nt, opts[k], "name"); if (nm) comp_sym_intern(c, nm); }
     int psn = 0; const int *posts = nt_arr(c->nt, pn, "posts", &psn);

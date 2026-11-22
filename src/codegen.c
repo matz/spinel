@@ -6442,11 +6442,7 @@ static void gc_roots_take_back(Compiler *c, Scope *s, Buf *b, size_t fn_off) {
     const char *last = NULL;
     for (const char *q = strstr(body, lvname); q; q = strstr(q + 1, lvname)) last = q;
     if (last && !gc_region_inert(body, last, lvname)) continue;
-    if (g_decide_on) {
-      char written[300];
-      snprintf(written, sizeof written, "%.*s", (int)block_param_written_len(c, lv->name), lv->name);
-      if (!decide_fn("root-elide", decide_method_site(c, s), written)) continue;
-    }
+    if (g_decide_on && !decide_fn("root-elide", decide_method_site(c, s), scope_local_wname(c, s->idx, lv))) continue;
     buf_erase(b, (size_t)(at - b->p), rl);
   }
   /* temps, by the same rule */
@@ -9361,16 +9357,10 @@ static void emit_fiber_full_bind(Compiler *c, FiberParams *f, Scope *encl, NameS
     buf_puts(pb, "    sp_RbVal _fkh = _fb->pass_kw ? sp_PolyArray_get(_fa, _fn) : sp_box_nil();\n");
     int chk = ++g_tmp;
     buf_printf(pb, "    static const char *const _kw%d[] = {", chk);
-    for (int k = 0; k < K; k++) {
-      const char *nm = nt_str(nt, kws[k], "name");
-      buf_printf(pb, "\"%.*s\", ", (int)block_param_written_len(c, nm), nm);
-    }
+    for (int k = 0; k < K; k++) buf_printf(pb, "\"%s\", ", nt_wname(nt, kws[k]));
     buf_printf(pb, "0}, *const _kr%d[] = {", chk);
-    for (int k = 0; k < K; k++) {
-      const char *nm = nt_str(nt, kws[k], "name");
-      if (nt_kind(nt, kws[k]) == NK_RequiredKeywordParameterNode)
-        buf_printf(pb, "\"%.*s\", ", (int)block_param_written_len(c, nm), nm);
-    }
+    for (int k = 0; k < K; k++)
+      if (nt_kind(nt, kws[k]) == NK_RequiredKeywordParameterNode) buf_printf(pb, "\"%s\", ", nt_wname(nt, kws[k]));
     buf_printf(pb, "0}, *const _kl%d[] = {0};\n", chk);
     buf_printf(pb, "    sp_kwargs_verify(_fkh, _kw%d, _kr%d, _kl%d, %d);\n", chk, chk, chk, krs < 0);
   }
@@ -9399,8 +9389,8 @@ static void emit_fiber_full_bind(Compiler *c, FiberParams *f, Scope *encl, NameS
   for (int k = 0; k < K; k++) {
     const char *nm = nt_str(nt, kws[k], "name");
     int t = ++g_tmp;
-    buf_printf(pb, "    sp_bool _ff%d = 0;\n    sp_RbVal _fv%d = sp_poly_hash_get_pair_val(_fkh, sp_box_sym(sp_sym_intern(\"%.*s\")), &_ff%d);\n",
-               t, t, (int)block_param_written_len(c, nm), nm, t);
+    buf_printf(pb, "    sp_bool _ff%d = 0;\n    sp_RbVal _fv%d = sp_poly_hash_get_pair_val(_fkh, sp_box_sym(sp_sym_intern(\"%s\")), &_ff%d);\n",
+               t, t, nt_wname(nt, kws[k]), t);
     char have[32], val[32];
     snprintf(have, sizeof have, "_ff%d", t);
     snprintf(val, sizeof val, "_fv%d", t);
@@ -9413,11 +9403,8 @@ static void emit_fiber_full_bind(Compiler *c, FiberParams *f, Scope *encl, NameS
     int t = ++g_tmp;
     buf_printf(pb, "    sp_PolyPolyHash *_t%d = _fb->pass_kw ? sp_PolyPolyHash_from_poly(_fkh) : sp_PolyPolyHash_new();\n"
                    "    SP_GC_ROOT(_t%d);\n", t, t);
-    for (int k = 0; k < K; k++) {
-      const char *nm = nt_str(nt, kws[k], "name");
-      buf_printf(pb, "    sp_PolyPolyHash_delete(_t%d, sp_box_sym(sp_sym_intern(\"%.*s\")));\n",
-                 t, (int)block_param_written_len(c, nm), nm);
-    }
+    for (int k = 0; k < K; k++)
+      buf_printf(pb, "    sp_PolyPolyHash_delete(_t%d, sp_box_sym(sp_sym_intern(\"%s\")));\n", t, nt_wname(nt, kws[k]));
     char kv[64]; snprintf(kv, sizeof kv, "sp_box_obj(_t%d, SP_BUILTIN_POLY_POLY_HASH)", t);
     emit_fiber_param_slot(c, encl, knm, kv, caps, pb);
   }
@@ -10226,24 +10213,8 @@ static TyKind lambda_nonlocal_return_ty(Compiler *c, int id) {
   }
   return r;
 }
-/* The name a parameter shows in #parameters: a block parameter renamed to
-   avoid a scope collision carries a `__bp<N>` suffix that is ours, not the
-   program's (#3679). */
-/* Drop the suffix the shadow rename recorded: `Proc#parameters` reports the
-   name the program wrote, not the slot the rename invented. EVERY parameter
-   kind has to go through this -- rest, keyword, keyword-rest and block leaked
-   the suffix while the positional ones were stripped (#4045). */
-static const char *param_public_name(const Compiler *c, const char *n) {
-  if (!n) return n;
-  size_t len = param_written_len(c, n);
-  if (!n[len]) return n;
-  { static char *buf; static size_t cap;   /* a name of any length: nothing is cut */
-    if (len + 1 > cap) { cap = len + 1; buf = (char *)realloc(buf, cap); }
-    memcpy(buf, n, len); buf[len] = 0;
-    return buf; }
-}
 /* The symbol Proc#parameters reports for parameter node p: the name the
-   program wrote (param_public_name), `anon` for one with no name, CRuby's
+   program wrote (param_written_name), `anon` for one with no name, CRuby's
    text for an anonymous one the desugar named; -1 for a destructuring
    group's slot, which has no name, and -2 for a parameter the desugar made
    that is none, the implicit rest of a trailing comma (`|a,|`, #4045)
@@ -10254,7 +10225,7 @@ static int proc_param_sym(Compiler *c, int p, const char *anon) {
   case DPN_NONE: return -2;
   case DPN_NAMELESS: return -1;
   case DPN_WRITTEN: return comp_sym_intern(c, w);
-  default: nm = param_public_name(c, nm); return comp_sym_intern(c, nm ? nm : anon);
+  default: return comp_sym_intern(c, nm ? param_written_name(c, nt_wname(c->nt, p)) : anon);
   }
 }
 
@@ -11824,13 +11795,13 @@ else if (orecv >= 0 && onm) {
         buf_puts(pb, "    { static const char *const _pkw[] = {");
         for (int j = 0; j < nkw2; j++) {
           const char *kn = nt_str(nt, kwn[j], "name");
-          if (kn) buf_printf(pb, "\"%s\", ", param_public_name(c, kn));
+          if (kn) buf_printf(pb, "\"%s\", ", param_written_name(c, nt_wname(nt, kwn[j])));
         }
         buf_puts(pb, "0}, *const _pkr[] = {");
         for (int j = 0; j < nkw2; j++) {
           const char *kn = nt_str(nt, kwn[j], "name");
           if (kn && nt_kind(nt, kwn[j]) == NK_RequiredKeywordParameterNode)
-            buf_printf(pb, "\"%s\", ", param_public_name(c, kn));
+            buf_printf(pb, "\"%s\", ", param_written_name(c, nt_wname(nt, kwn[j])));
         }
         buf_printf(pb, "0}, *const _pkn[] = {0};%c", 10);
         /* judged without building anything on the path that binds: the
@@ -11843,7 +11814,7 @@ else if (orecv >= 0 && onm) {
             const char *kn = nt_str(nt, kwn[j], "name");
             if (kn && nt_kind(nt, kwn[j]) == NK_RequiredKeywordParameterNode)
               buf_printf(pb, " || !sp_poly_has_key(_sp_kwh, sp_box_sym((sp_sym)%d))",
-                         comp_sym_intern(c, param_public_name(c, kn)));
+                         comp_sym_intern(c, param_written_name(c, nt_wname(nt, kwn[j]))));
           }
           buf_puts(pb, ")");
         }
@@ -11853,7 +11824,7 @@ else if (orecv >= 0 && onm) {
           for (int j = 0; j < nkw2; j++) {
             const char *kn = nt_str(nt, kwn[j], "name");
             if (!kn || nt_kind(nt, kwn[j]) != NK_RequiredKeywordParameterNode) continue;
-            char iv[300]; snprintf(iv, sizeof iv, ":%s", param_public_name(c, kn));
+            char iv[300]; snprintf(iv, sizeof iv, ":%s", param_written_name(c, nt_wname(nt, kwn[j])));
             kw_names_add(miss, sizeof miss, &nm, iv);
           }
           kw_error_message(km, sizeof km, "missing", nm, miss);
@@ -11868,7 +11839,7 @@ else if (orecv >= 0 && onm) {
       int dv = (kpk == NK_OptionalKeywordParameterNode)
                  ? nt_ref(nt, kwn[j], "value") : -1;
       char key[128];
-      snprintf(key, sizeof key, "%s", param_public_name(c, kn));
+      snprintf(key, sizeof key, "%s", param_written_name(c, nt_wname(nt, kwn[j])));
       int sym_id = comp_sym_intern(c, key);
       char cond[160], arg[128], missing[160];
       snprintf(cond, sizeof cond, "_sp_haskw && sp_poly_has_key(_sp_kwh, sp_box_sym((sp_sym)%d))", sym_id);
@@ -11900,7 +11871,7 @@ else if (orecv >= 0 && onm) {
         for (int j = 0; j < nkw3; j++) {
           const char *kn = nt_str(nt, kwn3[j], "name");
           if (kn) buf_printf(pb, "    sp_PolyPolyHash_delete((sp_PolyPolyHash *)_kwr_%s.v.p, sp_box_sym((sp_sym)%d));%c",
-                             krn, comp_sym_intern(c, param_public_name(c, kn)), 10);
+                             krn, comp_sym_intern(c, param_written_name(c, nt_wname(nt, kwn3[j]))), 10);
         }
       }
       else

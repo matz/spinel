@@ -1498,7 +1498,7 @@ static void nf_bind_params(NF *f, int id, int mi, const int *av, int an) {
        argument's Array */
     if (nf_elem_tracked(p->type) || p->type == TY_POLY) {
       int a = from == ARG_NODE ? layout_plain_arg(c, m, av, &L, k) : from == ARG_DEFAULT ? dflt
-              : from == ARG_BY_NAME ? ie_kwhash_value(c, kwh, m->pnames[k]) : -1;
+              : from == ARG_BY_NAME ? ie_kwhash_value(c, kwh, lv_wname(p)) : -1;
       if (a >= 0 && p->type != TY_POLY && !(p->obj_elem_may_nil & NF_EL_HOLDS) && nf_elem(f, a, 0))
         nf_elem_add(f, &p->obj_elem_may_nil, NF_EL_HOLDS);
       if (a >= 0 && (p->obj_elem_may_nil & NF_EL_STORED)) nf_elem_mark_back(f, a, 0);
@@ -1511,7 +1511,7 @@ static void nf_bind_params(NF *f, int id, int mi, const int *av, int an) {
     }
     else if (from == ARG_DEFAULT) why = dflt >= 0 ? nf_expr(f, dflt) : NFW_OPAQUE;
     else if (from == ARG_BY_NAME) {
-      int a = ie_kwhash_value(c, kwh, m->pnames[k]);
+      int a = ie_kwhash_value(c, kwh, lv_wname(p));
       why = a >= 0 ? nf_expr(f, a) : dflt >= 0 ? nf_expr(f, dflt) : NFW_OPAQUE;
     }
     else if (from == ARG_REST) continue;   /* the rest Array the layout gathers is never nil */

@@ -845,6 +845,18 @@ int nt_param_binds(const NodeTable *nt, int id, const char *name);
    a block-local (`|a; name|`), -1 if it declares none. */
 int nt_block_local_node(const NodeTable *nt, int blk, const char *name);
 
+/* The name a local-binding or local-reference node was written with: its
+   `wname`, which a pass that renamed the node (nt_rename_local) kept, else
+   its `name`. A node a desugar made has no Prism origin, so its name is what
+   it wrote. */
+static inline const char *nt_wname(const NodeTable *nt, int id) {
+  const char *w = nt_str(nt, id, "wname");
+  return w ? w : nt_str(nt, id, "name");
+}
+/* Rename local node id to newname, keeping the name it was first written
+   with in `wname`. A node without a `name` is left as it is. */
+void nt_rename_local(NodeTable *nt, int id, const char *newname);
+
 /* The name a class or module header's constant path is keyed by: the one
    qualify_colliding_classes gave a colliding header ("qc_name"), else the
    one the program wrote. (Interim, #10793: the readers move to the class

@@ -22097,8 +22097,7 @@ static int bs_strip_keywords(Compiler *c, int blk, int bp, int pn) {
     if (!fwd_node_is(nt, kws[i], "RequiredKeywordParameterNode")) continue;
     const char *kname = nt_str(nt, kws[i], "name");
     if (!kname) return 0;
-    mo += snprintf(names + mo, sizeof names - (size_t)mo, "%s:%.*s", missing ? ", " : "",
-                   (int)block_param_written_len(c, kname), kname);
+    mo += snprintf(names + mo, sizeof names - (size_t)mo, "%s:%s", missing ? ", " : "", nt_wname(nt, kws[i]));
     if (mo >= (int)sizeof names) return 0;
     missing++;
   }
@@ -23362,7 +23361,7 @@ static int rename_repeated_param(Compiler *c, NodeTable *nt, int owner, int p, c
       comp_grow_node_arrays(c);
     }
   }
-  nt_set_str(nt, p, "name", nn);
+  nt_rename_local(nt, p, nn);   /* (the written name stays, for #parameters) */
   /* the repeat is renamed: a second run finds no repeat */
   nt_node_set_int(nt, p, "flags", nt_int(nt, p, "flags", 0) & ~NT_PARAM_REPEATED);
   return 1;
@@ -24863,26 +24862,30 @@ static int rbp_captured(const NodeTable *nt, int node, const char *name, int lev
   return 0;
 }
 
-/* The slot names this pass invents, each with the length of the name it
-   stands for: what a program prints (`Proc#parameters`, `Method#inspect`) is
-   the name it wrote. A slot name steps past one the program itself uses, so
-   no name the program wrote is taken for a slot. The shadow rename runs
-   later, so a slot may carry its suffix too; any other name is its whole
-   self. */
-size_t reassigned_param_written_len(const Compiler *c, const char *name) {
-  if (!name) return 0;
-  size_t n = block_param_written_len(c, name);
+/* The slot names this pass invents, each with the name it stands for: what a
+   program prints (`Proc#parameters`, `Method#inspect`) is the name it wrote.
+   A slot name steps past one the program itself uses, so no name the program
+   wrote is taken for a slot. */
+static int rbp_slot_of(const Compiler *c, const char *name) {
   for (int i = 0; i < c->nrbp_slots; i++)
-    if (strlen(c->rbp_slot_names[i]) == n && !memcmp(c->rbp_slot_names[i], name, n)) return c->rbp_slot_lens[i];
-  return strlen(name);
+    if (sp_streq(c->rbp_slot_names[i], name)) return i;
+  return -1;
 }
 
-/* The length of the name parameter slot n stands for: the slot of a
-   parameter the body assigns (desugar_reassigned_block_params) stands for
-   the name written, with or without the shadow rename's suffix */
-size_t param_written_len(const Compiler *c, const char *n) {
-  size_t len = reassigned_param_written_len(c, n);
-  return n[len] ? len : block_param_written_len(c, n);
+/* The name slot w (nt_wname of a parameter, or a LocalVar's wname) stands
+   for, when this pass made it for a parameter the body assigns; NULL for any
+   other name. */
+const char *rbp_slot_written(const Compiler *c, const char *w) {
+  int i = w ? rbp_slot_of(c, w) : -1;
+  return i >= 0 ? c->rbp_slot_written[i] : NULL;
+}
+
+/* The name the program wrote for a parameter whose written name (nt_wname,
+   or a LocalVar's wname) is w: the name a reassigned parameter's slot stands
+   for, else w itself. */
+const char *param_written_name(const Compiler *c, const char *w) {
+  const char *r = rbp_slot_written(c, w);
+  return r ? r : w;
 }
 
 /* True when the program itself uses `name`. Only a name with `__bpin` in it
@@ -24891,8 +24894,8 @@ static int rbp_program_uses(Compiler *c, LowerCtx *lc, const char *name) {
   if (!lc->used_built) {
     lc->used_built = 1;
     for (int id = 0; id < lc->n0; id++) {
-      const char *nm = nt_str(c->nt, id, "name");
-      if (!nm || !strstr(nm, "__bpin") || reassigned_param_written_len(c, nm) != strlen(nm)) continue;
+      const char *nm = nt_wname(c->nt, id);
+      if (!nm || !strstr(nm, "__bpin") || rbp_slot_of(c, nm) >= 0) continue;
       lc->used = realloc(lc->used, sizeof(char *) * (size_t)(lc->nused + 1));
       lc->used[lc->nused++] = strdup(nm);
     }
@@ -24907,11 +24910,11 @@ static char *rbp_slot_name(Compiler *c, LowerCtx *lc, const char *orig) {
   if (!buf) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   snprintf(buf, n, "%s__bpin", orig);
   for (int k = 1; rbp_program_uses(c, lc, buf); k++) snprintf(buf, n, "%s__bpin_%d", orig, k);
-  if (reassigned_param_written_len(c, buf) != strlen(buf)) return buf;
+  if (rbp_slot_of(c, buf) >= 0) return buf;
   c->rbp_slot_names = realloc(c->rbp_slot_names, sizeof(char *) * (size_t)(c->nrbp_slots + 1));
-  c->rbp_slot_lens = realloc(c->rbp_slot_lens, sizeof(size_t) * (size_t)(c->nrbp_slots + 1));
+  c->rbp_slot_written = realloc(c->rbp_slot_written, sizeof(char *) * (size_t)(c->nrbp_slots + 1));
   c->rbp_slot_names[c->nrbp_slots] = strdup(buf);
-  c->rbp_slot_lens[c->nrbp_slots++] = strlen(orig);
+  c->rbp_slot_written[c->nrbp_slots++] = strdup(orig);
   return buf;
 }
 
@@ -36716,7 +36719,8 @@ int prune_unnamed_methods(Compiler *c) {
     }
     for (int j = 0; j < nd->ns; j++) {
       const char *v = nd->s[j].val;
-      if (!v || (k == NK_DefNode && sp_streq(nd->s[j].key, "name"))) continue;
+      /* (a def's own name, and the name a rename kept for a local: it binds one) */
+      if (!v || (k == NK_DefNode && sp_streq(nd->s[j].key, "name")) || sp_streq(nd->s[j].key, "wname")) continue;
       if (!anh_has(&named, v)) anh_add(&named, v);
       if ((k == NK_SymbolNode || k == NK_StringNode) && !anh_has(&defined, v)) {
         anh_add(&defined, v);

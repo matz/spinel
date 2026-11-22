@@ -445,7 +445,7 @@ TyKind proc_call_ret(Compiler *c, int recv);
 TyKind infer_call(Compiler *c, int id);
 TyKind infer_uncached(Compiler *c, int id);
 void scope_reserve_param(Scope *s);
-void scope_add_param(Scope *s, const char *name, int defnode);
+void scope_add_param(Scope *s, const char *name, const char *wname, int defnode);
 void collect_def_params(Compiler *c, int def_id, Scope *s);
 /* Class k's instance method `name` that def (disp_def_build, at no line of
    the program) declares, a helper no call of the program names (the space

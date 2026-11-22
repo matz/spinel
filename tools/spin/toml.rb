@@ -9,6 +9,7 @@ class TomlDoc
     @inline = { "" => "" }  # "table\x01key\x01ik" => inline-table member
     @keys = { "" => "" }    # "table" => newline-joined key list
     @counts = { "" => 0 }   # "[[base]]" occurrence count; entries live at "base.<i>"
+    @arrays = { "" => "" }  # "table\x01key" => "1" for a value written as an array
   end
 
   def self.parse(text)
@@ -44,8 +45,15 @@ class TomlDoc
   def strip_comment(line)
     out = ""
     in_str = false
+    esc = false
     line.each_char do |ch|
-      in_str = !in_str if ch == "\""
+      if esc
+        esc = false
+      elsif ch == "\\" && in_str
+        esc = true
+      elsif ch == "\""
+        in_str = !in_str
+      end
       break if ch == "#" && !in_str
       out += ch
     end
@@ -69,6 +77,8 @@ class TomlDoc
       end
       @vals[table + "\x01" + key] = ""
     else
+      # (a quoted "[...]" is a string: only bracket text is an array)
+      @arrays[table + "\x01" + key] = "1" if val.start_with?("[")
       @vals[table + "\x01" + key] = unquote(val)
     end
   end
@@ -81,8 +91,16 @@ class TomlDoc
     depth = 0
     in_str = false
     piece = ""
+    esc = false
     inner.each_char do |ch|
-      in_str = !in_str if ch == "\""
+      # (a \" inside a string is part of it, not its end)
+      if esc
+        esc = false
+      elsif ch == "\\" && in_str
+        esc = true
+      elsif ch == "\""
+        in_str = !in_str
+      end
       depth += 1 if ch == "[" && !in_str
       depth -= 1 if ch == "]" && !in_str
       if ch == "," && depth == 0 && !in_str
@@ -97,9 +115,30 @@ class TomlDoc
     out + piece
   end
 
+  # a basic string's text, with \" and \\ read as " and \
   def unquote(s)
-    return s[1..-2] if s.length >= 2 && s.start_with?("\"") && s.end_with?("\"")
-    s
+    return s unless s.length >= 2 && s.start_with?("\"") && s.end_with?("\"")
+    out = ""
+    esc = false
+    s[1..-2].each_char do |ch|
+      if esc
+        out += "\\" unless ch == "\"" || ch == "\\"
+        out += ch
+        esc = false
+      elsif ch == "\\"
+        esc = true
+      else
+        out += ch
+      end
+    end
+    out += "\\" if esc
+    out
+  end
+
+  # whether `key` is set in `table`: true for a string, an array or an inline
+  # table
+  def key?(table, key)
+    @vals.key?(table + "\x01" + key)
   end
 
   # plain value, "" when absent (or when the value is an inline table)
@@ -115,7 +154,13 @@ class TomlDoc
   # the bracket text is intact here. Newline packing over a String[] return
   # keeps the value monomorphic for spinel (house style, cf. dep_srcs).
   def get_array(table, key)
+    return "" unless array?(table, key)
     array_text(get(table, key))
+  end
+
+  # whether `key` in `table` was written as an array (not a quoted string)
+  def array?(table, key)
+    @arrays.key?(table + "\x01" + key)
   end
 
   # inline-table member holding an array (`dep = { features = ["a"] }`),
@@ -127,7 +172,8 @@ class TomlDoc
   def array_text(raw)
     return "" unless raw.start_with?("[") && raw.end_with?("]")
     out = ""
-    raw[1..-2].split(",").each do |part|
+    # ["a,b"] is one element: split_top splits on a comma outside quotes
+    split_top(raw[1..-2]).split("\x02").each do |part|
       v = unquote(part.strip)
       next if v == ""
       out += "\n" unless out == ""

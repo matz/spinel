@@ -318,6 +318,49 @@ compiles it unless something requires it, and an excluded `.h` is still on the
 include path for the C that is compiled. An application scaffolded by
 `spin new` has no `[package]` table; add one to use either field.
 
+## Compiler flags for each build
+
+A program that needs a compiler flag in each build, such as an overflow mode,
+names it in the manifest:
+
+```toml
+[package]
+spinel-flags = ["--int-overflow=wrap"]
+```
+
+`spin build`, `run`, `test`, `flags` and `pack` pass the flags to each
+compile, so the test suite runs in the mode the program is built in. Write the
+array on one line, one flag per element. The compiler copies some flag values
+into a shell command, so the manifest accepts these flags:
+
+- `--int-overflow=raise`, `wrap` or `promote`, and `--no-bigint`
+- `--gc=on`, `--gc=none`, `--no-gc`, `--exceptions=unwind`
+- `--enable=frozen-string-literal` and `--enable-frozen-string-literal`
+- `--rbs=DIR`, where DIR exists and has no `"`, `` ` ``, `$` or `\`, and
+  `--no-inline-rbs`
+- `-O0`, `-O1`, `-O2`, `-O3`, `-Os`, `-g`, `--debug`, `--profile`,
+  `--line-map`, `--no-line-map`, `--inline-hot`, `--no-inline-hot`
+- `--check-stores`, `--warn-widen`, `--defer-refusals`
+- `--jobs=N` and `--incremental`, and `--cache-stats` and `--unit-bytes=SIZE`
+  (1 to 2^40 bytes, such as `65536`, `256K` or `1M`) together with
+  `--incremental`
+
+Another flag, such as `--cc=`, stays a command-line choice
+(`spin build -- --cc=clang`). A value that is not a one-line array is refused.
+
+With an `--rbs=DIR` in `spinel-flags`, spin does not add `--rbs` for the
+project root. A relative DIR, `~/sigs` included, is read from the directory of
+`spin.toml`, and `spin flags` prints it absolute. DIR can also be a single
+`.rbs` file. A change to a `.rbs` file in DIR rebuilds the binaries as a change
+in the project does, and spin skips a directory under DIR that it cannot read,
+as the compiler does.
+`spin build`, `run` and `test` pass `--incremental`, `--cache-stats` and
+`--unit-bytes=SIZE` to the compiler; `spin pack` omits them, because the compiler
+refuses `--incremental` with `--print-build`.
+
+As with `allocator`, only the manifest of the package being
+built applies; a dependency's `spinel-flags` does not reach its dependents.
+
 ## Choosing an allocator
 
 A program that runs for a second and exits spends no meaningful time in

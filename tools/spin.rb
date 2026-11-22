@@ -1197,7 +1197,7 @@ end
 # --- manifest ----------------------------------------------------------------
 
 class Project
-  attr_reader :root, :name, :dep_paths, :allocator
+  attr_reader :root, :name, :dep_paths, :allocator, :spinel_rbs
 
   def initialize(root)
     @root = root
@@ -1222,6 +1222,67 @@ class Project
     # argument, both through the shell, so it has to be a library name.
     if @allocator != "" && @allocator != "system" && !library_name?(@allocator)
       $stderr.puts "spin: [package] allocator \"#{@allocator}\" is not a library name (letters, digits and _ . + -)"
+      exit 1
+    end
+    # `[package] spinel-flags`: compiler flags the program needs in each build,
+    # run and test (`--int-overflow=wrap`), read from THIS manifest only, as
+    # allocator is. One flag per element, from SPINEL_MANIFEST_FLAGS: the
+    # compiler puts a flag's value into a shell command, so the manifest takes
+    # the spellings listed there.
+    @spinel_flags = ""
+    @spinel_incr_flags = ""
+    @spinel_rbs = ""
+    raw = toml.get("package", "spinel-flags")
+    if toml.key?("package", "spinel-flags") &&
+       !(toml.array?("package", "spinel-flags") && raw.start_with?("[") && raw.end_with?("]"))
+      $stderr.puts "spin: [package] spinel-flags is not a one-line array: write spinel-flags = [\"--int-overflow=wrap\"]"
+      exit 1
+    end
+    incremental = false
+    needs_incremental = ""
+    toml.get_array("package", "spinel-flags").split("\n").each do |a|
+      next if a == ""
+      why = ""
+      if a == "--int-overflow" || a == "--rbs" || a == "--rbs="
+        why = a == "--int-overflow" ? "takes a value: write --int-overflow=VALUE" : "takes a value: write --rbs=DIR"
+      elsif a.start_with?("--rbs=")
+        why = "has a \", `, $ or \\ in its path, which the compiler would pass to the shell" unless rbs_path_ok?(a[6..-1])
+      elsif !manifest_flag?(a)
+        why = "is not a flag spin.toml can set (see `Compiler flags for each build` in docs/spin.md)"
+      end
+      if why != ""
+        $stderr.puts "spin: [package] spinel-flags: `#{a}` #{why}"
+        exit 1
+      end
+      # with an --rbs=DIR here, compile_flags does not add --rbs for the root.
+      # A relative DIR is read from the manifest directory, and spin flags
+      # prints it absolute.
+      w = a
+      if a.start_with?("--rbs=")
+        # File.expand_path reads a leading ~ as the home directory; with "./"
+        # in front, ~x is a name in the manifest directory
+        rel = a[6..-1]
+        rel = "./" + rel if rel.start_with?("~")
+        @spinel_rbs = File.expand_path(rel, root)
+        unless File.exist?(@spinel_rbs)
+          $stderr.puts "spin: [package] spinel-flags: `#{a}`: #{@spinel_rbs} does not exist"
+          exit 1
+        end
+        w = "--rbs=" + @spinel_rbs
+      end
+      # `spin pack` omits these three: the compiler refuses --incremental with
+      # --print-build
+      if a == "--incremental" || a == "--cache-stats" || a.start_with?("--unit-bytes=")
+        @spinel_incr_flags += " " + sh_word(w)
+        incremental = true if a == "--incremental"
+        needs_incremental = a if a != "--incremental" && needs_incremental == ""
+      else
+        @spinel_flags += " " + sh_word(w)
+      end
+    end
+    # the compiler refuses --cache-stats and --unit-bytes=SIZE without --incremental
+    if needs_incremental != "" && !incremental
+      $stderr.puts "spin: [package] spinel-flags: `#{needs_incremental}` needs --incremental in spinel-flags"
       exit 1
     end
     # per-dependency feature enablement from THIS manifest's [dependencies]
@@ -1364,13 +1425,25 @@ class Project
   # The compiler inputs are shared by every target in one project invocation.
   # Resolve them lazily so a cached build need not scan or build carried C.
   def compile_flags
-    return @compile_flags if @compile_flags != nil
     # Inside a spin project the dependency universe is fully known (manifest +
     # lock), so an unresolvable require is a bug, not a maybe: flip the
     # compiler's strict require from warning to hard error. This also makes
     # stdlib features require-only, i.e. CRuby-style `require "stringio"`
     # before use.
-    f = "--strict-require"
+    "--strict-require" + @spinel_flags + @spinel_incr_flags + flags_tail
+  end
+
+  # compile_flags for `spin pack`, which writes C: without the incremental
+  # build's controls
+  def export_flags
+    "--strict-require" + @spinel_flags + flags_tail
+  end
+
+  # The flags after the manifest's spinel-flags, shared by compile_flags and
+  # export_flags
+  def flags_tail
+    return @flags_tail if @flags_tail != nil
+    f = ""
     @dep_paths.each { |d| f += " -I #{d}" }
     f += " -I #{@root}"
     # Feed .rbs sidecars to the compiler's --rbs seed machinery when the project
@@ -1378,7 +1451,7 @@ class Project
     # type sidecars pin its public surfaces (e.g. a Router#match that would
     # otherwise infer poly) under `spin build`/`test`. --rbs takes one dir and its
     # extractor scans recursively, so the project root covers every sidecar.
-    if Dir.glob(File.join(@root, "**", "*.rbs")).any?
+    if @spinel_rbs == "" && Dir.glob(File.join(@root, "**", "*.rbs")).any?
       f += " --rbs #{@root}"
     end
     # Reading these compiles any carried C and runs any declared native build
@@ -1398,7 +1471,7 @@ class Project
     # `spin build` links. A directory of plain path characters is printed bare,
     # which a `$(spin flags)` splits correctly; any other is one quoted word.
     allocator_library_dirs(self).each { |d| f += " --link " + sh_word("-L" + d) }
-    @compile_flags = f
+    @flags_tail = f
     f
   end
 
@@ -1446,6 +1519,29 @@ def newest_mtime(dir, newest)
   newest
 end
 
+# Return the newest .rbs mtime under dir, walked as spinel_rbs_extract walks
+# it: each entry but dot entries, build/ and vendor/ included, and a symlink
+# followed unless it leads back to a directory on the way down (`up` holds the
+# real paths of those directories).
+def rbs_newest_mtime(dir, newest, up)
+  real = File.realpath(dir)
+  return newest if up.include?("\n" + real + "\n")
+  up += real + "\n"
+  # spinel_rbs_extract skips a directory that opendir cannot open
+  return newest unless File.readable?(dir) && File.executable?(dir)
+  Dir.children(dir).each do |e|
+    next if e.start_with?(".")
+    p2 = File.join(dir, e)
+    if File.directory?(p2)
+      newest = rbs_newest_mtime(p2, newest, up)
+    elsif e.end_with?(".rbs") && File.file?(p2)
+      m = File.mtime(p2).to_i
+      newest = m if m > newest
+    end
+  end
+  newest
+end
+
 # Resolve the compiler and available runtime archives in driver search order.
 # These are shared prerequisites for cached outputs and external build systems.
 def toolchain_deps
@@ -1471,6 +1567,13 @@ end
 def inputs_mtime(prj)
   newest = newest_mtime(prj.root, 0)
   prj.dep_paths.each { |d| newest = newest_mtime(d, newest) }
+  # a spinel-flags --rbs=DIR, or a single .rbs file in its place
+  if File.directory?(prj.spinel_rbs)
+    newest = rbs_newest_mtime(prj.spinel_rbs, newest, "\n")
+  elsif prj.spinel_rbs.end_with?(".rbs") && File.file?(prj.spinel_rbs)
+    m = File.mtime(prj.spinel_rbs).to_i
+    newest = m if m > newest
+  end
   # Runtime-only changes relink the archives without changing the compiler.
   # Use the same prerequisites we hand external builds through flags --deps.
   toolchain_deps.each do |path|
@@ -1638,6 +1741,50 @@ end
 # while the build reports success (#4098).
 EMIT_ONLY_FLAGS = ["-c", "-S", "--emit-rbs", "--emit-types",
                    "--emit-symbol-map", "--dump-ast"]
+# The flags `[package] spinel-flags` accepts, besides --rbs=PATH, --jobs=N
+# and --unit-bytes=SIZE. The compiler copies the value of --cc= or -O into a
+# shell command, so a manifest gets these fixed spellings only.
+SPINEL_MANIFEST_FLAGS = ["--int-overflow=raise", "--int-overflow=wrap", "--int-overflow=promote",
+                         "--no-bigint", "--gc=on", "--gc=none", "--no-gc",
+                         "--exceptions=unwind", "--no-inline-rbs",
+                         "--enable=frozen-string-literal", "--enable-frozen-string-literal",
+                         "-O0", "-O1", "-O2", "-O3", "-Os", "-g", "--debug", "--profile",
+                         "--line-map", "--no-line-map", "--inline-hot", "--no-inline-hot",
+                         "--check-stores", "--warn-widen", "--defer-refusals",
+                         "--incremental", "--cache-stats"]
+
+def manifest_flag?(a)
+  return true if SPINEL_MANIFEST_FLAGS.include?(a)
+  return unit_bytes_ok?(a[13..-1]) if a.start_with?("--unit-bytes=")
+  return false unless a.start_with?("--jobs=")
+  n = a[7..-1]
+  return false if n == ""
+  n.each_char { |c| return false unless c >= "0" && c <= "9" }
+  true
+end
+
+# The sizes incremental_opt in src/main.c takes: 1 to 2^40 bytes, written as
+# digits with an optional K or M.
+def unit_bytes_ok?(v)
+  sh = 0
+  if v.end_with?("K") || v.end_with?("k")
+    sh = 10
+    v = v[0..-2]
+  elsif v.end_with?("M") || v.end_with?("m")
+    sh = 20
+    v = v[0..-2]
+  end
+  return false if v == "" || v.length > 13
+  v.each_char { |c| return false unless c >= "0" && c <= "9" }
+  n = v.to_i
+  n > 0 && n <= (1 << 40) >> sh
+end
+
+# The compiler passes the --rbs path to the shell inside double quotes.
+def rbs_path_ok?(p)
+  p.each_char { |c| return false if c == "\"" || c == "`" || c == "$" || c == "\\" }
+  true
+end
 
 def pack_copy(src, dst)
   File.write(dst, File.read(src))
@@ -1723,7 +1870,7 @@ def cmd_pack(prj, targets, outdir)
   # One compiler run writes the C and reports the build ingredients: `-c` and
   # `--print-build` compose. Two runs (the C, then the report) repeated the
   # whole front end for a few lines the first run already knew (#4456).
-  flags = prj.compile_flags
+  flags = prj.export_flags
   cfile = File.join(outdir, "src", name + ".c")
   tmp = ENV["TMPDIR"].to_s
   tmp = "/tmp" if tmp == ""
@@ -2032,14 +2179,14 @@ def cmd_test(prj, files, regen)
     nproc = `nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null`.to_i
     nproc = 1 if nproc < 1
     cf = File.join(tdir, ".compile-cmds")
-    File.write(cf, cmds.join("\n") + "\n")
-    # One compile command per input line. GNU xargs takes the delimiter
-    # explicitly (-d); BSD xargs has no -d, but -I already reads one
-    # line per command -- it just caps the substituted command at 255
-    # bytes unless -S raises the limit (65522 is the documented max),
-    # and GNU rejects -S. Pick the flag set by flavor.
-    flavor = `xargs --version 2>/dev/null`.include?("GNU") ? "-d '\\n'" : "-S 65522"
-    system("xargs -P #{nproc} #{flavor} -I CMD sh -c CMD < #{cf}")
+    File.write(cf, cmds.join("\0") + "\0")
+    # One compile command per NUL-terminated record. Without -0, BSD xargs
+    # removes the quotes sh_word put around a flag such as
+    # '--rbs=/tmp/type defs', and sh -c splits the path. BSD xargs caps the
+    # substituted command at 255 bytes unless -S raises the limit (65522 is
+    # the documented max), and GNU rejects -S. Pick the flag set by flavor.
+    flavor = `xargs --version 2>/dev/null`.include?("GNU") ? "" : " -S 65522"
+    system("xargs -0 -P #{nproc}#{flavor} -I CMD sh -c CMD < #{cf}")
     File.delete(cf) if File.exist?(cf)
   end
   # Phase 2: run each binary and compare, serial and in order (execution is

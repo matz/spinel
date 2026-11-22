@@ -115,6 +115,128 @@ after=$(head -c 4 build/bin/app | od -An -c | tr -d ' \n')
 expect "build -- -c leaves the binary" "$before" "$after"
 "$SPIN" clean >/dev/null
 
+# --- [package] spinel-flags reaches each build, run and test --------------------
+# A program that needs --int-overflow=wrap could not run its suite in that mode
+# through `spin test`. The manifest's flags join the compile command of build,
+# run, test and flags. A flag outside the accepted list, a flag without its
+# value, a non-flag and a value that is not a one-line array are refused.
+cp spin.toml spin.toml.orig
+printf 'x = [2**62, "s"][0]\np((x * 4 rescue $!.class))\n' > test/wrap_test.rb
+printf '0\n' > test/wrap_test.rb.expected
+if "$SPIN" test >"$WORK/flags.out" 2>&1; then fail "spinel-flags: the wrap test passed without the flag"; fi
+grep -q RangeError "$WORK/flags.out" || fail "spinel-flags: the wrap test failed for another reason: $(tail -3 "$WORK/flags.out")"
+printf '\n[package]\nspinel-flags = ["--int-overflow=wrap"]\n' >> spin.toml
+"$SPIN" test >"$WORK/flags.out" 2>&1 || fail "spinel-flags: spin test did not build in wrap mode: $(tail -3 "$WORK/flags.out")"
+"$SPIN" flags | grep -q -- '--int-overflow=wrap' || fail "spinel-flags: spin flags does not print the flag"
+mv spin.toml.orig spin.toml
+for bad in '["-c"]' '["--version"]' '["--dump-load-graph"]' '["--check-value-pos"]' '["--int-overflow"]' '["--int-overflow=other"]' '["--"]' '["--rbs="]' '["--source=bin/other.rb"]' '["--output=out"]' '["--cc=cc"]' '["-O0;true"]' '["-Ifoo"]' '["--decisions-log=log"]' '["--force"]' '["--jobs="]' '["--jobs=2x"]' '["--disable=frozen-string-literal"]' '["--disable-frozen-string-literal"]' '["--exceptions=abort"]' '["--cache-stats"]' '["--unit-bytes=4096"]' '["--cache-stats", "--int-overflow=wrap"]' '["--incremental", "--unit-bytes=0"]' '["--incremental", "--unit-bytes=99999999999999"]' '["--incremental", "--unit-bytes=2G"]' '["--rbs=nope"]' '["wrap"]' '"--int-overflow=wrap"' '{ mode = "--int-overflow=wrap" }' '""' '"[]"' '"[\"--int-overflow=wrap\"]"'; do
+  cp spin.toml spin.toml.orig
+  printf '\n[package]\nspinel-flags = %s\n' "$bad" >> spin.toml
+  if "$SPIN" build >"$WORK/flags.bad" 2>&1; then fail "spinel-flags: built with spinel-flags = $bad"; fi
+  grep -q 'spinel-flags' "$WORK/flags.bad" || fail "spinel-flags: no message for spinel-flags = $bad"
+  mv spin.toml.orig spin.toml
+done
+# ["--rbs=../types/a,b"] is one flag. A relative --rbs=DIR is read from the
+# manifest directory and printed absolute, from the project root and from a
+# subdirectory. With an --rbs=DIR in the manifest, spin does not add --rbs for
+# the project root. spin passes --incremental to build,
+# run and test; spin pack omits it, because the compiler refuses --incremental
+# with --print-build.
+cp spin.toml spin.toml.orig
+mkdir -p "../types/a,b"
+printf '\n[package]\nspinel-flags = ["--rbs=../types/a,b"]\n' >> spin.toml
+"$SPIN" flags | grep -q -- "--rbs=$(cd .. && pwd -P)/types/a,b" || fail "spinel-flags: a comma split a quoted flag: $("$SPIN" flags)"
+mv spin.toml.orig spin.toml
+rm -rf ../types
+# --rbs=~/sigs is a directory named ~ in the manifest directory
+cp spin.toml spin.toml.orig
+mkdir -p '~/sigs'
+printf '\n[package]\nspinel-flags = ["--rbs=~/sigs"]\n' >> spin.toml
+"$SPIN" flags | grep -q -- "--rbs=$(pwd -P)/~/sigs" || fail "spinel-flags: --rbs=~/sigs was read from the home directory: $("$SPIN" flags 2>&1)"
+mv spin.toml.orig spin.toml
+rm -rf '~'
+cp spin.toml spin.toml.orig
+printf '\n[package]\nspinel-flags = ["--rbs=t\\"q", "--int-overflow=wrap"]\n' >> spin.toml
+if "$SPIN" flags >"$WORK/flags.bad" 2>&1; then fail "spinel-flags: accepted a \" in an --rbs path"; fi
+grep -q -- '`--rbs=t"q`' "$WORK/flags.bad" || fail "spinel-flags: an escaped quote merged two flags: $(cat "$WORK/flags.bad")"
+mv spin.toml.orig spin.toml
+# The compiler puts the --cc= value, the -O level and the --rbs path into a
+# shell command, so a manifest that sets them runs nothing.
+for bad in "--cc=touch $WORK/flags.ran; cc" "--rbs=\$(touch $WORK/flags.ran)" "--rbs=\`touch $WORK/flags.ran\`" "-O0;touch $WORK/flags.ran;"; do
+  cp spin.toml spin.toml.orig
+  printf '\n[package]\nspinel-flags = ["%s"]\n' "$bad" >> spin.toml
+  if "$SPIN" build >"$WORK/flags.bad" 2>&1; then fail "spinel-flags: built with spinel-flags = [\"$bad\"]"; fi
+  [ ! -e "$WORK/flags.ran" ] || fail "spinel-flags: spinel-flags = [\"$bad\"] ran a command"
+  mv spin.toml.orig spin.toml
+done
+cp spin.toml spin.toml.orig
+printf '\n[package]\nspinel-flags = ["-O3", "--jobs=2", "--check-stores", "--enable=frozen-string-literal"]\n' >> spin.toml
+"$SPIN" flags | grep -q -- ' -O3 --jobs=2 --check-stores --enable=frozen-string-literal' || fail "spinel-flags: an accepted flag was refused: $("$SPIN" flags 2>&1)"
+mv spin.toml.orig spin.toml
+cp spin.toml spin.toml.orig
+mkdir -p sigs
+printf 'class SpinE2eSig\nend\n' > sigs/s.rbs
+printf '\n[package]\nspinel-flags = ["--rbs=sigs"]\n' >> spin.toml
+"$SPIN" flags | grep -q -- " --rbs=$(pwd -P)/sigs" || fail "spinel-flags: spin flags did not print --rbs=sigs absolute: $("$SPIN" flags)"
+(cd bin && "$SPIN" flags) | grep -q -- " --rbs=$(pwd -P)/sigs" || fail "spinel-flags: --rbs=sigs read from a subdirectory: $(cd bin && "$SPIN" flags)"
+[ "$("$SPIN" flags | grep -o -- '--rbs' | wc -l | tr -d ' ')" = 1 ] || fail "spinel-flags: the root's --rbs was added beside the manifest's"
+mv spin.toml.orig spin.toml
+rm -rf sigs
+# A sidecar in an --rbs=DIR is a build input wherever spinel_rbs_extract reads
+# it, vendor/ included: a change to it rebuilds the binary and the test binary.
+cp spin.toml spin.toml.orig
+mkdir -p "$WORK/types/vendor"
+printf 'class SpinE2eSig\nend\n' > "$WORK/types/vendor/api.rbs"
+printf '\n[package]\nspinel-flags = ["--rbs=%s/types"]\n' "$WORK" >> spin.toml
+# spinel_rbs_extract skips a directory it cannot open, and so does spin
+mkdir -p "$WORK/types/priv"
+chmod 000 "$WORK/types/priv"
+printf 'puts "rbs"\n' > test/rbs_test.rb
+printf 'rbs\n' > test/rbs_test.rb.expected
+OUT=$("$SPIN" build 2>&1) || fail "spinel-flags: build with an outside --rbs failed: $OUT"
+OUT=$("$SPIN" test rbs_test.rb 2>&1) || fail "spinel-flags: test with an outside --rbs failed: $OUT"
+touch -t 203001010000 build/bin/app build/test/rbs_test
+OUT=$("$SPIN" build 2>&1) || fail "spinel-flags: build with an unchanged outside --rbs failed: $OUT"
+case "$OUT" in *"up to date"*) ;; *) fail "spinel-flags: an unchanged outside --rbs rebuilt the binary: $OUT" ;; esac
+OUT=$("$SPIN" test rbs_test.rb 2>&1) || fail "spinel-flags: test with an unchanged outside --rbs failed: $OUT"
+case "$OUT" in *"(cached)"*) ;; *) fail "spinel-flags: an unchanged outside --rbs recompiled the test: $OUT" ;; esac
+touch -t 203101010000 "$WORK/types/vendor/api.rbs"
+OUT=$("$SPIN" build 2>&1) || fail "spinel-flags: the rebuild after a changed vendor/api.rbs failed: $OUT"
+case "$OUT" in *"up to date"*) fail "spinel-flags: a changed vendor/api.rbs in an outside --rbs kept the old binary" ;; esac
+OUT=$("$SPIN" test rbs_test.rb 2>&1) || fail "spinel-flags: the test after a changed vendor/api.rbs failed: $OUT"
+case "$OUT" in *"(cached)"*) fail "spinel-flags: a changed vendor/api.rbs in an outside --rbs kept the old test binary" ;; esac
+# --rbs=FILE: the extractor reads a single .rbs file too
+cp spin.toml.orig spin.toml
+printf '\n[package]\nspinel-flags = ["--rbs=%s/types/vendor/api.rbs"]\n' "$WORK" >> spin.toml
+OUT=$("$SPIN" build 2>&1) || fail "spinel-flags: build with --rbs=FILE failed: $OUT"
+touch -t 203201010000 build/bin/app
+OUT=$("$SPIN" build 2>&1) || fail "spinel-flags: build with an unchanged --rbs=FILE failed: $OUT"
+case "$OUT" in *"up to date"*) ;; *) fail "spinel-flags: an unchanged --rbs=FILE rebuilt the binary: $OUT" ;; esac
+touch -t 203301010000 "$WORK/types/vendor/api.rbs"
+OUT=$("$SPIN" build 2>&1) || fail "spinel-flags: the rebuild after a changed --rbs=FILE failed: $OUT"
+case "$OUT" in *"up to date"*) fail "spinel-flags: a changed --rbs=FILE kept the old binary" ;; esac
+# spin test runs its compile commands through `xargs -P`. BSD xargs removes
+# the quotes around '--rbs=<WORK>/type defs' unless it reads NUL-delimited
+# records with -0.
+cp spin.toml.orig spin.toml
+mkdir -p "$WORK/type defs"
+printf 'class SpinE2eSig\nend\n' > "$WORK/type defs/a.rbs"
+printf '\n[package]\nspinel-flags = ["--rbs=%s/type defs"]\n' "$WORK" >> spin.toml
+rm -f build/test/rbs_test
+OUT=$("$SPIN" test rbs_test.rb 2>&1) || fail "spinel-flags: test with an --rbs path holding a space failed: $OUT"
+case "$OUT" in *spinel_rbs_extract:*) fail "spinel-flags: spin test split an --rbs path at its space: $OUT" ;; esac
+mv spin.toml.orig spin.toml
+chmod 755 "$WORK/types/priv"
+rm -rf "$WORK/types" "$WORK/type defs"; rm -f test/rbs_test.rb test/rbs_test.rb.expected
+cp spin.toml spin.toml.orig
+printf '\n[package]\nspinel-flags = ["--incremental", "--cache-stats", "--unit-bytes=4096", "--int-overflow=wrap"]\n' >> spin.toml
+"$SPIN" build >/dev/null 2>&1 || fail "spinel-flags: build with --incremental failed"
+"$SPIN" pack >"$WORK/flags.pack" 2>&1 || fail "spinel-flags: pack with --incremental in the manifest failed: $(tail -2 "$WORK/flags.pack")"
+grep -q SP_INT_OVERFLOW_MODE_WRAP build/pack/app/Makefile || fail "spinel-flags: the pack lost the overflow mode"
+mv spin.toml.orig spin.toml
+rm -f test/wrap_test.rb test/wrap_test.rb.expected
+"$SPIN" clean >/dev/null
+
 # --- library package (path dependency) --------------------------------------------
 cd "$WORK"
 "$SPIN" new spinel-ansi >/dev/null

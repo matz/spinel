@@ -14185,12 +14185,18 @@ static int host_id_cmp(const void *a, const void *b) {
 int host_prewalk_shape(NodeTable *nt, const int *ids, int n) {
   return host_prewalk_shape_at(nt, ids, n, 0);
 }
-/* ...in_walk: asked of statements the walk itself splices (host_splice's
+/* flags: HPS_WALK, HPS_NO_ALIAS. */
+/* ...HPS_WALK: asked of statements the walk itself splices (host_splice's
    check). There a mixin of modules the program defines is no such shape:
    the walk records it where the statement lands (lr_fire_mixin's splice of
    a hook's `base.extend(M)`, incl_mixes_own_modules), which is what took
-   those hooks from the pre-walk splice. A builtin module's still is. */
-int host_prewalk_shape_at(NodeTable *nt, const int *ids, int n, int in_walk) {
+   those hooks from the pre-walk splice. A builtin module's still is.
+   HPS_NO_ALIAS: an alias is no such shape, where the one step that reads
+   it ahead of the walk (desugar_inherited_aliases) has nothing to rewrite:
+   it takes only an alias in a class whose chain is rooted at Hash, Array or
+   String (alias_builtin_root_possible). */
+int host_prewalk_shape_at(NodeTable *nt, const int *ids, int n, int flags) {
+  int in_walk = flags & HPS_WALK, no_alias = flags & HPS_NO_ALIAS;
   int nn = 0, nb = 0, ns = 0, hit = -1;
   int *all = nt_subtree_ids(nt, ids, n, &nn), *blk = malloc(sizeof(int) * (size_t)(nn + 1));
   if (!blk) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
@@ -14210,12 +14216,15 @@ int host_prewalk_shape_at(NodeTable *nt, const int *ids, int n, int in_walk) {
     case NK_CallNode:
       if (is_ffi_decl_name(nm) || (is_mixin_call(nm) && !(in_walk && incl_mixes_own_modules(nt, id))) ||
           is_const_query_name(nm) || is_instance_eval_family(nm) ||
-          is_alias_method_name(nm) || is_method_defined_query(nm) ||
+          (!no_alias && is_alias_method_name(nm)) || is_method_defined_query(nm) ||
           ((nt_kind(nt, rv) == NK_ConstantReadNode || nt_kind(nt, rv) == NK_ConstantPathNode) &&
            is_class_builder(nt_str(nt, rv, "name"), nm)))
         hit = id;
       break;
-    case NK_AliasMethodNode: case NK_ConstantPathWriteNode: case NK_ConstantPathOperatorWriteNode:
+    case NK_AliasMethodNode:
+      if (!no_alias) hit = id;
+      break;
+    case NK_ConstantPathWriteNode: case NK_ConstantPathOperatorWriteNode:
     case NK_ConstantPathOrWriteNode: case NK_ConstantPathAndWriteNode: case NK_ConstantPathTargetNode:
       hit = id;
       break;
@@ -14233,7 +14242,7 @@ int host_splice(Compiler *c, HostStep *h, int owner, int body, int at, int n, co
   n = sce_span(c, h, owner, body, at, n, locals, gone);
   int bn = 0;
   const int *st = nt_arr(c->nt, body, "body", &bn);
-  if (h->now && h->lc->check && at + n <= bn && host_prewalk_shape_at((NodeTable *)c->nt, st + at, n, 1) >= 0)
+  if (h->now && h->lc->check && at + n <= bn && host_prewalk_shape_at((NodeTable *)c->nt, st + at, n, HPS_WALK | (alias_builtin_root_possible(c->nt) ? 0 : HPS_NO_ALIAS)) >= 0)
     lower_say(h->lc, "host_splice", "a statement spliced in the walk carries a shape a step before the walk reads");
   if (h->now && at + n <= bn) {   /* the walk reaches them next: lowered now, as one span */
     int *sp = malloc(sizeof(int) * (size_t)(2 * n + 1));   /* a row may replace the body's array */

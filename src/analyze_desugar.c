@@ -25992,6 +25992,47 @@ static int scm_body_eval_block(const NodeTable *nt, const int *parent, int b) {
   return pn && sp_streq(pn, nt_str(nt, rv, "name")) && mod >= 0 && nt_kind(nt, mod) == NK_ModuleNode;
 }
 
+/* `x.singleton_class.<m>(...)` as statement id of the statements st (the
+   program's, or a class or module body's: in_body): the statement's
+   rewrite. 0: left as it is; 1: rewritten in place, as `class << x`; 2: st's
+   statements changed (self's: the statements told to self's class side). */
+static int scm_rewrite_stmt(NodeTable *nt, int id, int st, int in_body) {
+  int r = nt_ref(nt, id, "receiver");
+  int x = scm_class_receiver(nt, r, in_body);
+  if (x == -2) return 0;
+  /* self's direct attr_* / define_method is the later passes' already */
+  const char *nm = nt_str(nt, id, "name");
+  if (x == -1 && nm && scm_declarer(nm) && !sp_streq(nm, "alias_method")) return 0;
+  int stmts[64], self_stmts[64];
+  int n = scm_body_stmts(nt, id, stmts, 64);
+  if (n < 0) return 0;
+  if (x == -1) {
+    int m = scm_self_stmts(nt, id, stmts, n, self_stmts, 64);
+    if (m < 0) return 0;
+    int bn = 0; const int *bb = nt_arr(nt, st, "body", &bn);
+    int *nb = malloc(sizeof(int) * (size_t)(bn + m));
+    if (!nb) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    int o = 0;
+    for (int i = 0; i < bn; i++) {
+      if (bb[i] != id) { nb[o++] = bb[i]; continue; }
+      for (int j = 0; j < m; j++) nb[o++] = self_stmts[j];
+    }
+    nt_node_set_arr(nt, st, "body", nb, o);
+    free(nb);
+    nt_node_reset(nt, id, "NilNode");   /* out of the tree now */
+    return 2;
+  }
+  int body = fwd_new_node_like(nt, id, "StatementsNode");
+  nt_node_set_arr(nt, body, "body", stmts, n);
+  long long line = nt_int(nt, id, "node_line", 0), file = nt_int(nt, id, "node_file", 0);
+  nt_node_reset(nt, id, "SingletonClassNode");
+  nt_node_set_int(nt, id, "node_line", line);
+  nt_node_set_int(nt, id, "node_file", file);
+  nt_node_set_ref(nt, id, "expression", x);
+  nt_node_set_ref(nt, id, "body", body);
+  return 1;
+}
+
 int desugar_singleton_class_meta(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int *parent = NULL, changed = 0, n0 = nt->count;
@@ -26013,45 +26054,29 @@ int desugar_singleton_class_meta(Compiler *c) {
     int in_body = owner >= 0 && (nt_kind(nt, owner) == NK_ClassNode || nt_kind(nt, owner) == NK_ModuleNode);
     if (!top && !in_body) in_body = scm_body_eval_block(nt, parent, owner);
     if (!top && !in_body) continue;
-    int x = scm_class_receiver(nt, r, in_body);
-    if (x == -2) continue;
-    /* self's direct attr_* / define_method is the later passes' already */
-    const char *nm = nt_str(nt, id, "name");
-    if (x == -1 && nm && scm_declarer(nm) && !sp_streq(nm, "alias_method")) continue;
-    int stmts[64], self_stmts[64];
-    int n = scm_body_stmts(nt, id, stmts, 64);
-    if (n < 0) continue;
-    if (x == -1) {
-      int m = scm_self_stmts(nt, id, stmts, n, self_stmts, 64);
-      if (m < 0) continue;
-      int bn = 0; const int *bb = nt_arr(nt, st, "body", &bn);
-      int *nb = malloc(sizeof(int) * (size_t)(bn + m));
-      if (!nb) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-      int o = 0;
-      for (int i = 0; i < bn; i++) {
-        if (bb[i] != id) { nb[o++] = bb[i]; continue; }
-        for (int j = 0; j < m; j++) nb[o++] = self_stmts[j];
-      }
-      nt_node_set_arr(nt, st, "body", nb, o);
-      free(nb);
-      nt_node_reset(nt, id, "NilNode");   /* out of the tree now */
-      free(parent); parent = NULL;   /* the body changed */
-      changed = 1;
-      continue;
-    }
-    int body = fwd_new_node_like(nt, id, "StatementsNode");
-    nt_node_set_arr(nt, body, "body", stmts, n);
-    long long line = nt_int(nt, id, "node_line", 0), file = nt_int(nt, id, "node_file", 0);
-    nt_node_reset(nt, id, "SingletonClassNode");
-    nt_node_set_int(nt, id, "node_line", line);
-    nt_node_set_int(nt, id, "node_file", file);
-    nt_node_set_ref(nt, id, "expression", x);
-    nt_node_set_ref(nt, id, "body", body);
-    changed = 1;
+    int did = scm_rewrite_stmt(nt, id, st, in_body);
+    if (did == 2) { free(parent); parent = NULL; }   /* the body changed */
+    changed |= did != 0;
   }
   free(parent);
   if (changed) comp_grow_node_arrays(c);
   return changed;
+}
+
+/* The row: scm_rewrite_stmt at one statement of a class or module body. A
+   row so that a statement the walk splices into a body later (a hook's
+   `base.class_eval do singleton_class.alias_method :a, :b end`, the
+   block's statements the includer's own where they land) is rewritten as
+   one written in the body is. */
+int desugar_body_singleton_class_meta_at(Compiler *c, LowerCtx *lc, int id) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  if (nt_kind(nt, id) != NK_CallNode) return 0;
+  int r = nt_ref(nt, id, "receiver");
+  if (r < 0 || nt_kind(nt, r) != NK_CallNode || !nt_str(nt, r, "name") ||
+      !sp_streq(nt_str(nt, r, "name"), "singleton_class")) return 0;
+  NodeKind ok = lc->owner >= 0 ? nt_kind(nt, lc->owner) : NK_NilNode;
+  if (ok != NK_ClassNode && ok != NK_ModuleNode) return 0;
+  return scm_rewrite_stmt(nt, id, lc->body, 1) != 0;
 }
 
 /* What a class builder (Class.new, Module.new) call makes that the program
@@ -26838,6 +26863,12 @@ static int incl_declined_node(const NodeTable *nt, int node, const char *param) 
     else if (g_incl_body_spliced && on_param && blk < 0 &&
              (sp_streq(nm, "instance_variable_get") || sp_streq(nm, "instance_variable_set"))) {
     }
+    /* a declaration told to self's singleton class in a class_eval block
+       on the includer, in a body the walk splices: a statement of the
+       includer's body where it lands, which the row that reads those
+       rewrites (desugar_body_singleton_class_meta_at) */
+    else if (g_incl_body_spliced && g_incl_on_base && r < 0 && sp_streq(nm, "singleton_class")) {
+    }
     else if (sp_streq(nm, "instance_variable_get") || sp_streq(nm, "instance_variable_set") ||
              sp_streq(nm, "instance_variable_defined?") || sp_streq(nm, "class_variable_get") ||
              sp_streq(nm, "class_variable_set") || is_const_set_name(nm) || is_send_family(nm) ||
@@ -26882,6 +26913,23 @@ static int incl_declined_node(const NodeTable *nt, int node, const char *param) 
       if (incl_declined_node(nt, ids[j], param)) return 1;
   }
   return 0;
+}
+
+/* Can an alias of the program be one desugar_inherited_aliases rewrites: is
+   there a class whose superclass is written Hash, Array or String, the
+   root alias_builtin_root asks for? Asked once for a node table of a size. */
+int alias_builtin_root_possible(const NodeTable *nt) {
+  static const NodeTable *seen;
+  static int seen_n, any;
+  if (seen == nt && seen_n == nt->count) return any;
+  seen = nt; seen_n = nt->count; any = 0;
+  for (int m = 0; m < nt->count && !any; m++) {
+    if (!class_def_is_class(nt, m)) continue;
+    int sc = class_def_super(nt, m);
+    const char *sn = sc >= 0 && nt_kind(nt, sc) == NK_ConstantReadNode ? nt_str(nt, sc, "name") : NULL;
+    any = sn && (sp_streq(sn, "Hash") || sp_streq(sn, "Array") || sp_streq(sn, "String"));
+  }
+  return any;
 }
 
 /* Does every argument of mixin call s name a module the program itself
@@ -26965,7 +27013,9 @@ static int incl_declined_stmts(NodeTable *nt, int body, const char *param) {
       continue;
     rest[rn++] = s;
   }
-  int hit = rn > 0 ? host_prewalk_shape(nt, rest, rn) : -1;
+  /* (an alias is a shape of desugar_inherited_aliases only in a program
+     where a chain can be rooted at Hash, Array or String) */
+  int hit = rn > 0 ? host_prewalk_shape_at(nt, rest, rn, spliced && !alias_builtin_root_possible(nt) ? HPS_NO_ALIAS : 0) : -1;
   free(rest);
   return hit >= 0;
 }

@@ -26726,6 +26726,34 @@ char *incl_frame_add(char *fr, const char *locals) {
    with a block is its block's body; anything else is itself. *frame, when
    asked for, gains the locals of each block unwrapped (sce_span), or
    becomes NULL, not known, at a block that takes parameters. */
+/* The statements of a block being unwrapped move out by one scope: a local
+   of the scope around the block (the hook's own, `opts = ...` ahead of its
+   `base.class_eval do`) was read from inside it one scope up (depth 1 at
+   the block's level, 2 in a block inside it), and stands in that scope
+   now. Left as it was, the read named a local of a scope that no longer
+   exists and answered nil. `level` is the count of blocks between node and
+   the unwrapped block; a local of the unwrapped block itself (depth ==
+   level) keeps its depth, being one of the scope it lands in. */
+static void incl_unwrap_depths(NodeTable *nt, int node, int level) {
+  if (node < 0) return;
+  NodeKind k = nt_kind(nt, node);
+  if (k == NK_DefNode || class_def_opens_frame(nt, node) || k == NK_SingletonClassNode) return;
+  const char *ty = nt_type(nt, node);
+  if (ty && !strncmp(ty, "LocalVariable", 13)) {
+    long long d = nt_int(nt, node, "depth", -1);
+    if (d > level) nt_node_set_int(nt, node, "depth", d - 1);
+  }
+  int inner = level + (k == NK_BlockNode || k == NK_LambdaNode);
+  int nr = nt_num_refs(nt, node);
+  for (int i = 0; i < nr; i++) incl_unwrap_depths(nt, nt_ref_at(nt, node, i), inner);
+  int na = nt_num_arrs(nt, node);
+  for (int i = 0; i < na; i++) {
+    int cnt = 0;
+    const int *ids = nt_arr_at(nt, node, i, &cnt);
+    for (int j = 0; j < cnt; j++) incl_unwrap_depths(nt, ids[j], inner);
+  }
+}
+
 void incl_emit_stmt(const NodeTable *nt, int s, int **out, int *no, int *cap, char **frame) {
   if (nt_kind(nt, s) == NK_CallNode && nt_ref(nt, s, "receiver") < 0) {
     const char *nm = nt_str(nt, s, "name");
@@ -26737,6 +26765,7 @@ void incl_emit_stmt(const NodeTable *nt, int s, int **out, int *no, int *cap, ch
       else if (frame && *frame && bl && *bl) *frame = incl_frame_add(*frame, bl);
       int bb = nt_ref(nt, blk, "body");
       int bn = 0; const int *bs = bb >= 0 && nt_kind(nt, bb) == NK_StatementsNode ? nt_arr(nt, bb, "body", &bn) : NULL;
+      for (int j = 0; j < bn; j++) incl_unwrap_depths((NodeTable *)nt, bs[j], 0);
       for (int j = 0; j < bn; j++) incl_emit_stmt(nt, bs[j], out, no, cap, frame);
       return;
     }

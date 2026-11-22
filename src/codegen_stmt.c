@@ -1620,13 +1620,10 @@ int strbuf_self_chain_base(Compiler *c, int v) {
     size_t bl = strlen(bn);
     for (int w = start; w >= 0 && nt_kind(nt, w) == NK_CallNode; w = nt_paren_single(c->nt, nt_ref(nt, w, "receiver"))) {
       int wb = nt_ref(nt, w, "block");
-      const char *ls = wb >= 0 ? nt_str(nt, wb, "locals") : NULL;
-      for (const char *q = ls; q && *q; ) {
-        const char *e = strchr(q, ',');
-        size_t n = e ? (size_t)(e - q) : strlen(q);
-        if (n >= bl && !strncmp(q, bn, bl) && (n == bl || !strncmp(q + bl, "__bp", 4))) return -1;   /* (renamed apart: s__bp30) */
-        q = e ? e + 1 : q + n;
-      }
+      int nls = 0;
+      const char *const *ls = nt_scope_locals(nt, wb, &nls);
+      for (int li = 0; li < nls; li++)
+        if (!strncmp(ls[li], bn, bl) && (!ls[li][bl] || !strncmp(ls[li] + bl, "__bp", 4))) return -1;   /* (renamed apart: s__bp30) */
     }
   }
   /* a chain with a block runs over the handle held ahead of the block,

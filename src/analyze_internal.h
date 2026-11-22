@@ -224,7 +224,6 @@ int mutated_array(Compiler *c, int recv);
 int array_mutation_stores(Compiler *c, int call, int strict, int *from, int *to, int *elems);
 int elem_block_params(Compiler *c, int call, int *recv_out);
 int nullable_elem_ivar_in(Compiler *c, int cid, const char *nm, ClassInfo **out);
-int blk_locals_have(const char *locals, const char *nm);
 /* The calls named `name`, ascending: for (id = an_calls_named_first(c, nm);
    id >= 0; id = an_calls_named_next(id)). Check each node as before. */
 int an_calls_named_first(Compiler *c, const char *name);

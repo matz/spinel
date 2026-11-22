@@ -930,6 +930,8 @@ void nt_free(NodeTable *nt) {
   for (int i = 0; i < nt->npar_old; i++) free(nt->par_old[i]);
   free(nt->par_old);
   if (nt->holders) { free(nt->holders->par); free(nt->holders->stamp); free(nt->holders); }
+  for (int i = 0; i < nt->nsplits; i++) { free(nt->splits[i].buf); free(nt->splits[i].names); }
+  free(nt->splits);
   if (nt->builders) { free(nt->builders->call); free(nt->builders->module); free(nt->builders->stamp); free(nt->builders); }
   free(nt);
 }
@@ -1353,4 +1355,110 @@ int nt_import_subtree(NodeTable *dst, const NodeTable *src, int root) {
     free(ids);
   }
   return id;
+}
+
+/* ---- a scope's local names ---- */
+
+const char *const *nt_scope_locals(const NodeTable *nt, int id, int *out_n) {
+  NodeTable *t = (NodeTable *)nt;   /* (the split is a memo, not the tree) */
+  const char *s = nt_str(nt, id, "locals");
+  if (out_n) *out_n = 0;
+  if (!s || !*s) return NULL;
+  if (id >= t->nsplits) {
+    int nc = id + 1 > 2 * t->nsplits ? id + 1 : 2 * t->nsplits;
+    struct NtScopeSplit *np = realloc(t->splits, (size_t)nc * sizeof *np);
+    if (!np) nt_oom();
+    memset(np + t->nsplits, 0, (size_t)(nc - t->nsplits) * sizeof *np);
+    t->splits = np; t->nsplits = nc;
+  }
+  struct NtScopeSplit *e = &t->splits[id];
+  if (e->src != s) {
+    int n = 1;
+    for (const char *p = s; *p; p++) if (*p == ',') n++;
+    free(e->buf); free(e->names);
+    e->buf = dup_n(s, strlen(s));
+    e->names = malloc((size_t)n * sizeof *e->names);
+    if (!e->names) nt_oom();
+    int k = 0;
+    for (char *p = e->buf; ; ) {
+      char *c = strchr(p, ',');
+      if (c) *c = '\0';
+      if (*p) e->names[k++] = p;
+      if (!c) break;
+      p = c + 1;
+    }
+    e->n = k;
+    e->src = s;
+  }
+  if (out_n) *out_n = e->n;
+  return e->names;
+}
+
+int nt_scope_has_local(const NodeTable *nt, int id, const char *name) {
+  int n = 0;
+  const char *const *ls = nt_scope_locals(nt, id, &n);
+  for (int i = 0; name && i < n; i++) if (sp_streq(ls[i], name)) return 1;
+  return 0;
+}
+
+void nt_scope_locals_set(NodeTable *nt, int id, const char *const *names, int n) {
+  size_t len = 1;
+  for (int i = 0; i < n; i++) len += strlen(names[i]) + 1;
+  char *joined = nt_alloc(len);
+  char *w = joined;
+  for (int i = 0; i < n; i++) {
+    size_t l = strlen(names[i]);
+    if (i) *w++ = ',';
+    memcpy(w, names[i], l); w += l;
+  }
+  *w = '\0';
+  nt_node_set_str(nt, id, "locals", joined);
+  free(joined);
+}
+
+int nt_block_local_node(const NodeTable *nt, int blk, const char *name) {
+  int n = 0;
+  const int *ids;
+  if (blk < 0 || !name) return -1;
+  if (nt_kind(nt, blk) == NK_LambdaNode) ids = nt_arr(nt, blk, "block_locals", &n);
+  else {
+    int bp = nt_ref(nt, blk, "parameters");
+    ids = bp >= 0 && nt_kind(nt, bp) == NK_BlockParametersNode ? nt_arr(nt, bp, "locals", &n) : NULL;
+  }
+  for (int i = 0; i < n; i++) {
+    const char *bn = nt_str(nt, ids[i], "name");
+    if (bn && sp_streq(bn, name)) return ids[i];
+  }
+  return -1;
+}
+
+/* Does a node of kind k bind a name as a parameter, or as a destructured
+   target of one? (A block-local does not.) */
+static int nt_names_a_binding(NodeKind k) {
+  switch (k) {
+  case NK_RequiredParameterNode: case NK_OptionalParameterNode: case NK_RestParameterNode:
+  case NK_KeywordRestParameterNode: case NK_RequiredKeywordParameterNode:
+  case NK_OptionalKeywordParameterNode: case NK_BlockParameterNode:
+  case NK_LocalVariableTargetNode:
+    return 1;
+  default:
+    return 0;
+  }
+}
+
+int nt_param_binds(const NodeTable *nt, int id, const char *name) {
+  if (id < 0) return 0;
+  if (nt_names_a_binding(nt_kind(nt, id))) {
+    const char *pn = nt_str(nt, id, "name");
+    if (pn && sp_streq(pn, name)) return 1;
+  }
+  int nr = nt_num_refs(nt, id);
+  for (int i = 0; i < nr; i++)
+    if (nt_param_binds(nt, nt_ref_at(nt, id, i), name)) return 1;
+  int na = nt_num_arrs(nt, id);
+  for (int i = 0; i < na; i++) {
+    int n = 0; const int *ids = nt_arr_at(nt, id, i, &n);
+    for (int j = 0; j < n; j++) if (nt_param_binds(nt, ids[j], name)) return 1;
+  }
+  return 0;
 }

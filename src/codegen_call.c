@@ -15561,33 +15561,26 @@ static int subtree_reads_local_nm(const NodeTable *nt, int id, const char *nm) {
    store. */
 static int array_new_block_needs_fresh_locals(Compiler *c, int blk) {
   const NodeTable *nt = c->nt;
-  const char *locs = nt_str(nt, blk, "locals");
-  if (!locs || !*locs) return 0;
+  int nloc = 0;
+  const char *const *locs = nt_scope_locals(nt, blk, &nloc);
+  if (nloc == 0) return 0;
   Scope *sc = comp_scope_of(c, blk);
   int body = nt_ref(nt, blk, "body");
   int bn = 0; const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
   int params = nt_ref(nt, blk, "parameters");
-  char nm[128];
-  for (const char *p = locs; *p; ) {
-    const char *e = strchr(p, ',');
-    size_t l = e ? (size_t)(e - p) : strlen(p);
-    if (l >= sizeof nm) return 1;   /* too long to test here: reset, as other iterators do */
-    if (l) {
-      memcpy(nm, p, l); nm[l] = 0;
-      LocalVar *lv = sc ? scope_local(sc, nm) : NULL;
-      if (lv && lv->is_cell) return 1;
-      if (lv && lv->type != TY_UNKNOWN && !subtree_has_param_named_pub(c, params, nm)) {
-        for (int j = 0; j < bn; j++) {
-          if (nt_kind(nt, bb[j]) == NK_LocalVariableWriteNode && nt_str(nt, bb[j], "name") &&
-              sp_streq(nt_str(nt, bb[j], "name"), nm) &&
-              !subtree_reads_local_nm(nt, nt_ref(nt, bb[j], "value"), nm))
-            break;
-          if (subtree_reads_local_nm(nt, bb[j], nm)) return 1;
-        }
+  for (int li = 0; li < nloc; li++) {
+    const char *nm = locs[li];
+    LocalVar *lv = sc ? scope_local(sc, nm) : NULL;
+    if (lv && lv->is_cell) return 1;
+    if (lv && lv->type != TY_UNKNOWN && !subtree_has_param_named_pub(c, params, nm)) {
+      for (int j = 0; j < bn; j++) {
+        if (nt_kind(nt, bb[j]) == NK_LocalVariableWriteNode && nt_str(nt, bb[j], "name") &&
+            sp_streq(nt_str(nt, bb[j], "name"), nm) &&
+            !subtree_reads_local_nm(nt, nt_ref(nt, bb[j], "value"), nm))
+          break;
+        if (subtree_reads_local_nm(nt, bb[j], nm)) return 1;
       }
     }
-    if (!e) break;
-    p = e + 1;
   }
   return 0;
 }

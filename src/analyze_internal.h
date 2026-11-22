@@ -1009,7 +1009,6 @@ int host_prewalk_shape(NodeTable *nt, const int *ids, int n);   /* a node of the
 enum { HPS_WALK = 1, HPS_NO_ALIAS = 2 };
 int host_prewalk_shape_at(NodeTable *nt, const int *ids, int n, int flags);
 int alias_builtin_root_possible(const NodeTable *nt);   /* analyze_desugar.c: can an alias be one desugar_inherited_aliases rewrites */
-int incl_mixes_own_modules(const NodeTable *nt, int s);   /* analyze_desugar.c: every module a mixin call names is the program's */
 void lower_finish(Compiler *c, LowerCtx *lc);   /* frees; under the check, reports and exits */
 
 /* the rows' functions, in the files that own the rewrites */

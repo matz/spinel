@@ -14187,10 +14187,12 @@ int host_prewalk_shape(NodeTable *nt, const int *ids, int n) {
 }
 /* flags: HPS_WALK, HPS_NO_ALIAS. */
 /* ...HPS_WALK: asked of statements the walk itself splices (host_splice's
-   check). There a mixin of modules the program defines is no such shape:
-   the walk records it where the statement lands (lr_fire_mixin's splice of
-   a hook's `base.extend(M)`, incl_mixes_own_modules), which is what took
-   those hooks from the pre-walk splice. A builtin module's still is.
+   check). There a mixin is no such shape: the walk records it where the
+   statement lands (lr_fire_mixin's splice of a hook's `base.extend(M)`),
+   which is what took those hooks from the pre-walk splice, and the one
+   step ahead of the walk that reads a mixin a hook makes reads the hook
+   where it is written (desugar_extend_enumerable,
+   ee_hook_extends_enumerable).
    HPS_NO_ALIAS: an alias is no such shape, where the one step that reads
    it ahead of the walk (desugar_inherited_aliases) has nothing to rewrite:
    it takes only an alias in a class whose chain is rooted at Hash, Array or
@@ -14214,7 +14216,7 @@ int host_prewalk_shape_at(NodeTable *nt, const int *ids, int n, int flags) {
     if (own && bsearch(&id, own, (size_t)ns, sizeof(int), host_id_cmp)) continue;
     switch (nt_kind(nt, id)) {
     case NK_CallNode:
-      if (is_ffi_decl_name(nm) || (is_mixin_call(nm) && !(in_walk && incl_mixes_own_modules(nt, id))) ||
+      if (is_ffi_decl_name(nm) || (is_mixin_call(nm) && !in_walk) ||
           is_const_query_name(nm) || is_instance_eval_family(nm) ||
           (!no_alias && is_alias_method_name(nm)) || is_method_defined_query(nm) ||
           ((nt_kind(nt, rv) == NK_ConstantReadNode || nt_kind(nt, rv) == NK_ConstantPathNode) &&

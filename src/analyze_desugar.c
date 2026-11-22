@@ -14893,6 +14893,65 @@ static int ee_body_stmts(NodeTable *nt, int cls) {
   else if (ns >= 0) class_def_set_body(nt, holder, ns);
   return ns;
 }
+/* Does mixin statement st (`include M` or `extend M` with self for the
+   receiver, or `K.include(M)` / `K.extend(M)` where explicit) run a hook of
+   M that extends the includer with Enumerable: M's own
+   `def self.included(base)` (an include's) or `def self.extended(base)` (an
+   extend's) holding `base.extend(Enumerable)` as a statement, or `extend
+   Enumerable` as a statement of its `base.class_eval do ... end` block?
+   The includer then extends Enumerable where st stands, as it does where
+   the body writes the extend itself. The walk fires the hook and places
+   those statements, which is after this step has run, so the hook is read
+   here where it is written; a hook the walk calls rather than splices (one
+   with a `return`) extends a value, which is refused, as before. */
+static int ee_hook_extends_enumerable(const NodeTable *nt, const int *parent, int st, int explicit) {
+  if (nt_kind(nt, st) != NK_CallNode || nt_ref(nt, st, "block") >= 0) return 0;
+  const char *nm = nt_str(nt, st, "name");
+  int r = nt_ref(nt, st, "receiver");
+  if (!nm || (!sp_streq(nm, "include") && !sp_streq(nm, "extend"))) return 0;
+  if (explicit ? !(r >= 0 && (nt_kind(nt, r) == NK_ConstantReadNode || nt_kind(nt, r) == NK_ConstantPathNode))
+               : !(r < 0 || nt_kind(nt, r) == NK_SelfNode)) return 0;
+  const char *hook = sp_streq(nm, "include") ? "included" : "extended";
+  char ctx[512];
+  ee_ctx_of(nt, parent, st, ctx, sizeof ctx);
+  int an = 0; const int *av = nt_arr(nt, nt_ref(nt, st, "arguments"), "arguments", &an);
+  for (int a = 0; a < an; a++) {
+    char mk[512], own[512];
+    NodeKind ak = nt_kind(nt, av[a]);
+    if ((ak != NK_ConstantReadNode && ak != NK_ConstantPathNode) || !ee_ref_key(nt, ctx, av[a], mk, sizeof mk)) continue;
+    NT_FOREACH_KIND(nt, NK_ModuleNode, m) {
+      ee_own_key(nt, m, own, sizeof own);
+      if (!sp_streq(own, mk)) continue;
+      int bn = 0; const int *bb = ee_body_list(nt, m, &bn);
+      for (int j = 0; j < bn; j++) {
+        int d = bb[j], dr = nt_kind(nt, d) == NK_DefNode ? nt_ref(nt, d, "receiver") : -1;
+        if (dr < 0 || nt_kind(nt, dr) != NK_SelfNode || !nt_str(nt, d, "name") || !sp_streq(nt_str(nt, d, "name"), hook)) continue;
+        int ps = nt_ref(nt, d, "parameters"), rn = 0;
+        const int *rq = ps >= 0 ? nt_arr(nt, ps, "requireds", &rn) : NULL;
+        const char *pn = rn == 1 ? nt_str(nt, rq[0], "name") : NULL;
+        int hb = nt_ref(nt, d, "body"), hn = 0;
+        const int *hs = hb >= 0 && nt_kind(nt, hb) == NK_StatementsNode ? nt_arr(nt, hb, "body", &hn) : NULL;
+        if (!pn) continue;
+        for (int q = 0; q < hn; q++) {
+          int s = hs[q], sr = nt_kind(nt, s) == NK_CallNode ? nt_ref(nt, s, "receiver") : -1;
+          const char *sn = nt_kind(nt, s) == NK_CallNode ? nt_str(nt, s, "name") : NULL;
+          int blk = sn ? nt_ref(nt, s, "block") : -1;
+          if (!sn || sr < 0 || nt_kind(nt, sr) != NK_LocalVariableReadNode || !nt_str(nt, sr, "name") ||
+              !sp_streq(nt_str(nt, sr, "name"), pn)) continue;
+          if (sp_streq(sn, "extend") && blk < 0 && ee_args_enumerable(nt, s)) return 1;
+          if (is_class_eval_family(sn) && nt_ref(nt, s, "arguments") < 0 && blk >= 0 && nt_kind(nt, blk) == NK_BlockNode &&
+              nt_ref(nt, blk, "parameters") < 0) {
+            int kb = nt_ref(nt, blk, "body"), kn = 0;
+            const int *ks = kb >= 0 && nt_kind(nt, kb) == NK_StatementsNode ? nt_arr(nt, kb, "body", &kn) : NULL;
+            for (int z = 0; z < kn; z++) if (ee_extends_enumerable(nt, ks[z], 0)) return 1;
+          }
+        }
+      }
+    }
+  }
+  return 0;
+}
+
 int desugar_extend_enumerable(Compiler *c, HostStep *h) {
   NodeTable *nt = (NodeTable *)c->nt;
   int any = 0;
@@ -14900,7 +14959,10 @@ int desugar_extend_enumerable(Compiler *c, HostStep *h) {
     int r = nt_ref(nt, id, "receiver");
     int xr = r >= 0 && (nt_kind(nt, r) == NK_ConstantReadNode || nt_kind(nt, r) == NK_ConstantPathNode) &&
              nt_str(nt, id, "name") && sp_streq(nt_str(nt, id, "name"), "extend") && nt_ref(nt, id, "block") < 0;
-    if (ee_extends_enumerable(nt, id, 0) || (xr && ee_args_enumerable(nt, id))) { any = 1; break; }
+    /* (...or a hook's `base.extend(Enumerable)`, ee_hook_extends_enumerable) */
+    int hx = r >= 0 && nt_kind(nt, r) == NK_LocalVariableReadNode && nt_str(nt, id, "name") &&
+             sp_streq(nt_str(nt, id, "name"), "extend") && nt_ref(nt, id, "block") < 0;
+    if (ee_extends_enumerable(nt, id, 0) || ((xr || hx) && ee_args_enumerable(nt, id))) { any = 1; break; }
   }
   if (!any) NT_FOREACH_KIND(nt, NK_SingletonClassNode, sc) {
     if (nt_kind(nt, nt_ref(nt, sc, "expression")) != NK_SelfNode) continue;
@@ -14929,7 +14991,7 @@ int desugar_extend_enumerable(Compiler *c, HostStep *h) {
     }
     int bn = 0; const int *bb = ee_body_list(nt, id, &bn);
     for (int j = 0; j < bn; j++) {
-      if (ee_extends_enumerable(nt, bb[j], 0)) v[i].extends = v[i].in_set = 1;
+      if (ee_extends_enumerable(nt, bb[j], 0) || ee_hook_extends_enumerable(nt, parent, bb[j], 0)) v[i].extends = v[i].in_set = 1;
       if (ee_sclass_owner(nt, parent, bb[j]) < 0) continue;
       int sn = 0; const int *ss = nt_arr(nt, nt_ref(nt, bb[j], "body"), "body", &sn);
       for (int q = 0; q < sn; q++) if (ee_extends_enumerable(nt, ss[q], 1)) v[i].extends = v[i].in_set = 1;
@@ -14939,6 +15001,13 @@ int desugar_extend_enumerable(Compiler *c, HostStep *h) {
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
     int i = ee_explicit_extend(nt, parent, v, nv, id);
     if (i >= 0 && ee_args_enumerable(nt, id)) v[i].extends = v[i].in_set = 1;
+    /* (`K.include(M)` / `K.extend(M)` whose hook extends K) */
+    if (ee_hook_extends_enumerable(nt, parent, id, 1)) {
+      char ctx[512], key[512];
+      ee_ctx_of(nt, parent, id, ctx, sizeof ctx);
+      int k = ee_ref_key(nt, ctx, nt_ref(nt, id, "receiver"), key, sizeof key) ? ee_find(v, nv, key) : -1;
+      if (k >= 0) v[k].extends = v[k].in_set = 1;
+    }
   }
   for (int grew = 1; grew;) {
     grew = 0;
@@ -14976,7 +15045,7 @@ int desugar_extend_enumerable(Compiler *c, HostStep *h) {
       ee_mark_stmt(nt, parent, v, i, id, bb[j], 0,
                    !v[i].extends || v[i].en_seen || ee_extend_form(nt, bb[j], 0) == 2 ||
                    nt_int(nt, bb[j], "sclass_prepend", 0));
-      if (ee_extends_enumerable(nt, bb[j], 0)) v[i].en_seen = 1;
+      if (ee_extends_enumerable(nt, bb[j], 0) || ee_hook_extends_enumerable(nt, parent, bb[j], 0)) v[i].en_seen = 1;
       if (ee_sclass_owner(nt, parent, bb[j]) < 0) continue;
       int sn = 0; const int *ss = nt_arr(nt, nt_ref(nt, bb[j], "body"), "body", &sn);
       /* (an include in the singleton's body is an extend at its point) */
@@ -26932,31 +27001,6 @@ int alias_builtin_root_possible(const NodeTable *nt) {
   return any;
 }
 
-/* Does every argument of mixin call s name a module the program itself
-   defines (`module M` somewhere in it)? Only such a mixin is the walk's to
-   record where a hook's statement lands. A builtin module's (Enumerable,
-   Comparable, Kernel) is read by the steps ahead of the walk
-   (desugar_extend_enumerable among them), which never see a statement the
-   walk splices: `base.extend(Enumerable)` in a hook left the includer
-   with no class-side sort or map. */
-int incl_mixes_own_modules(const NodeTable *nt, int s) {
-  int an = nt_ref(nt, s, "arguments"), ac = 0;
-  const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
-  if (ac == 0) return 0;
-  for (int i = 0; i < ac; i++) {
-    NodeKind k = nt_kind(nt, av[i]);
-    const char *mn = k == NK_ConstantReadNode || k == NK_ConstantPathNode ? nt_str(nt, av[i], "name") : NULL;
-    int own = 0;
-    if (!mn) return 0;
-    NT_FOREACH_KIND(nt, NK_ModuleNode, m) {
-      const char *dn = class_def_name(nt, m);
-      if (dn && sp_streq(dn, mn)) { own = 1; break; }
-    }
-    if (!own) return 0;
-  }
-  return 1;
-}
-
 /* The statements of a hook body as the splice leaves them at the class
    body's level: a class_eval-family block on the includer (bare once
    spliced) is its body's statements (incl_emit_stmt), anything else
@@ -27001,11 +27045,11 @@ static int incl_declined_stmts(NodeTable *nt, int body, const char *param) {
     const char *nm = call ? nt_str(nt, s, "name") : NULL;
     int on_base = r >= 0 && nt_kind(nt, r) == NK_LocalVariableReadNode && param && nt_str(nt, r, "name") &&
                   sp_streq(nt_str(nt, r, "name"), param);
-    if (spliced && on_base && is_mixin_call(nm) && blk < 0 && incl_mixes_own_modules(nt, s)) continue;
+    if (spliced && on_base && is_mixin_call(nm) && blk < 0) continue;
     /* (a receiverless one in a class_eval block on the includer is the
        includer's own too, a statement of its body once the block's
        statements are spliced there) */
-    if (spliced && g_incl_on_base && call && r < 0 && is_mixin_call(nm) && blk < 0 && incl_mixes_own_modules(nt, s)) continue;
+    if (spliced && g_incl_on_base && call && r < 0 && is_mixin_call(nm) && blk < 0) continue;
     /* (a class_eval block on the includer was asked above, statement by
        statement: its own statements are the ones that land in the body) */
     if (nm && on_base && nt_ref(nt, s, "arguments") < 0 && blk >= 0 && nt_kind(nt, blk) == NK_BlockNode &&

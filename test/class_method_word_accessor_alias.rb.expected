@@ -1,0 +1,7 @@
+[1, NoMethodError, false, 1]
+[:d, 1]
+[:d, NoMethodError]
+[NoMethodError, 1, 3, 3, 3, 4, 4]
+[3, NoMethodError, 3, true]
+[:d, nil]
+[NoMethodError, NoMethodError]

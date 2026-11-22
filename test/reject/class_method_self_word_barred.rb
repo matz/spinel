@@ -1,18 +1,13 @@
-# An explicit `self.` visibility word (written `self.private def a`, or sent
-# to self) in a class method where the record applies a word from the start
-# (here a body that yields, whose block it cannot follow) is refused at
-# compile time, as it is for the form with a receiver other than self; a
-# Module's word would otherwise be sent to an instance.
+# A visibility word sent to an explicit `self.` (`self.send(:private, def a)`)
+# in a class method where the record applies a word from the start (here a
+# body that yields, whose block it cannot follow) is refused at compile time,
+# as it is for the form with a receiver other than self; a Module's word would
+# otherwise be sent to an instance.
 class J
   def self.setup
     self.send(:private, def a = :a)
     yield
   end
-  def self.setup2
-    self.private def b = :b
-    yield
-  end
 end
 J.setup { 1 }
-J.setup2 { 2 }
-p [(J.new.a rescue $!.class), (J.new.b rescue $!.class)]
+p((J.new.a rescue $!.class))

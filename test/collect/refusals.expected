@@ -448,6 +448,12 @@ spinel: 1 refusal, nothing written
 == test/reject/class_method_def_in_block_never_run_call.rb [promote] rc=1
 spinel: test/reject/class_method_def_in_block_never_run_call.rb:11: undefined method 'cm' for a Class: no class in the program defines a class method 'cm' (NoMethodError)
 spinel: 1 refusal, nothing written
+== test/reject/class_method_self_direct_word_barred.rb [default] rc=1
+spinel: test/reject/class_method_self_direct_word_barred.rb:8: undefined method 'private' for a Class: no class in the program defines a class method 'private' (NoMethodError)
+spinel: 1 refusal, nothing written
+== test/reject/class_method_self_direct_word_barred.rb [promote] rc=1
+spinel: test/reject/class_method_self_direct_word_barred.rb:8: undefined method 'private' for a Class: no class in the program defines a class method 'private' (NoMethodError)
+spinel: 1 refusal, nothing written
 == test/reject/class_method_self_word_barred.rb [default] rc=1
 spinel: test/reject/class_method_self_word_barred.rb:8: undefined method 'private' for a Class: no class in the program defines a class method 'private' (NoMethodError)
 spinel: 1 refusal, nothing written

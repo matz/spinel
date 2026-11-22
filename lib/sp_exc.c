@@ -2162,6 +2162,13 @@ SP_NORETURN SP_COLD void sp_raise_cls(const char *cls, const char *msg) {
     SP_GC_ROOT(pending);
     sp_Exception *e = pending ? pending : sp_exc_new(cls, msg);
     SP_GC_ROOT(e);
+    /* the cause it was raised with (an explicit `cause:`, the exception a
+       rescue was handling, or the one in flight through an ensure), as a
+       rescue arm that took it would see it */
+    if (!e->cause) {
+      void *c = sp_exc_raise_cause(cont, e);
+      if (c && c != (void *)e) { sp_gc_wb((void *)e); e->cause = (sp_Exception *)c; }
+    }
     /* (an uncaught raise the program wrote records no key or receiver either, for a reopened #message) */
     if (!pending && user_raise && cls &&
         (sp_exc_cls_matches(cls, "KeyError") || sp_exc_cls_matches(cls, "NameError") || sp_exc_cls_matches(cls, "FrozenError"))) {

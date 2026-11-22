@@ -1,0 +1,15 @@
+raised Zlib::Error
+false
+11
+true
+11
+"hello world"
+""
+raised Zlib::Error
+3
+raised Zlib::Error
+false
+6
+true
+6
+"abcdef"

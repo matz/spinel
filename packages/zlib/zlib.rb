@@ -354,22 +354,28 @@ module Zlib
       return String.new if mode == Zlib::NO_FLUSH
       raise StreamError, "stream error" if @finished
       raise BufError, "buffer error" if mode == Zlib::SYNC_FLUSH && @started && @buf.empty?
+      body = block(0)
       out = @started ? String.new : header
       @started = true
-      out << block(0)
+      out << body
       out
     end
 
+    # A deflation that fails (Zlib::Error) leaves the stream as it was, not
+    # finished and its input still buffered: nothing is written down before
+    # the native call answers.
     def finish
       return String.new if @finished
-      @finished = true
       unless @started
         data = @buf
+        out = Zlib.raw_deflate(data, @level, @window_bits)
+        @finished = true
         @buf = String.new
         @total_in = data.bytesize
-        return Zlib.raw_deflate(data, @level, @window_bits)
+        return out
       end
       out = block(1)
+      @finished = true
       out << trailer
       out
     end
@@ -408,6 +414,8 @@ module Zlib
     # is 1; the checksum moves on over it.
     def block(final)
       data = @buf
+      out = Native.deflate_block(data, @level, final)
+      raise Error, Native.last_error if out.nil?
       @buf = String.new
       @total_in += data.bytesize
       if gzip?
@@ -415,8 +423,6 @@ module Zlib
       elsif !raw?
         @adler = Zlib.adler32(data, @adler)
       end
-      out = Native.deflate_block(data, @level, final)
-      raise Error, Native.last_error if out.nil?
       out
     end
 

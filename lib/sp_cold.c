@@ -963,6 +963,9 @@ sp_StrArray *sp_dir_glob_dot(const char *pattern) {SP_GC_ROOT_STR(pattern);
    spelled relative to it, as Dir.glob(pattern, base:) answers. */
 static void sp_dir_glob_one(const char *pattern, const char *base, sp_StrArray *a) {
   char buf[2048];
+  /* a pattern that does not fit in buf matches nothing; snprintf would
+     truncate it */
+  if (strlen(pattern) >= sizeof buf) return;
   snprintf(buf, sizeof buf, "%s", pattern);
   char *comps[64];
   int ncomp = 0;
@@ -992,7 +995,8 @@ static void sp_dir_glob_one(const char *pattern, const char *base, sp_StrArray *
     if (!sl) break;
     tok = sl + 1;
   }
-  if (ncomp == 0) return;
+  /* a pattern of only separators names the root, spelled as given */
+  if (ncomp == 0) { if (absolute && sp_glob_exists(SP_GLOB_ROOT)) sp_glob_push(a, pattern); return; }
   /* Stripping the separator turned a trailing recursive component into the
      one-level form; it is the SEPARATOR that makes it descend, so put the
      level back by asking for everything under it. */

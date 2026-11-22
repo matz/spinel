@@ -499,7 +499,10 @@ call, a `module_function` copy); at the top level, an
 alias of a name barred so. Six more bars keep a body's word, or its
 non-public def, in the form it has where the record holds no body
 versions, until the readers it needs read the version cells; each says
-in the source what drops it. They ask what one walk over the tree
+in the source what drops it. While the walk has not opened a class, an entry
+in it bars, because the bars read its class as not recorded; once the class
+opens, the entry is asked again, once, at the first read after it
+(`lr_bform_live`). They ask what one walk over the tree
 gathers (`lr_body_names_read`), so each ask is a lookup:
 
 - a word on a name the class does not define itself on the word's side

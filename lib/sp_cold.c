@@ -6743,14 +6743,9 @@ void sp_sleep(sp_float s) {
      monitor thread wakes it after the duration (see lib/sp_sched.c). */
   sp_sched_sleep((double)s);
 #else
-  struct timespec req;
-  req.tv_sec = (time_t)s;
-  req.tv_nsec = (long)((s - (double)req.tv_sec) * 1e9);
-  if (req.tv_nsec < 0) req.tv_nsec = 0;
-  if (req.tv_nsec >= 1000000000L) req.tv_nsec = 999999999L;
   /* a trap delivered meanwhile runs, and the sleep goes on, as CRuby's does */
-  while (SP_SIG_BLOCKING(nanosleep(&req, &req)) == -1 && errno == EINTR)
-    if (SP_ATOMIC_LOAD(&sp_sig_pending_flag, __ATOMIC_ACQUIRE)) sp_sig_run_pending();
+  extern void sp_sleep_plain(double seconds, int raise_in_sleep, void (*on_eintr)(void));   /* lib/sp_sched.c */
+  sp_sleep_plain((double)s, 1, sp_sig_after_wait);
 #endif
 }
 

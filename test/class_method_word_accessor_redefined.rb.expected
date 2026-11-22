@@ -1,0 +1,8 @@
+[:defd, :redef, 1, :blk]
+[NoMethodError, false, :defd]
+[NoMethodError, false, :redef]
+[NoMethodError, false, :new]
+[NoMethodError, false, :blk]
+[:defd]
+[NoMethodError, false]
+[:attr, true, :attr]

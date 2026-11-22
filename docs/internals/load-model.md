@@ -518,6 +518,22 @@ gathers (`lr_body_names_read`), so each ask is a lookup:
   a bare `new` in a class method of a class nothing subclasses, a block of
   a builtin that keeps self) is no bar.
 
+A class side's accessor (an `attr_reader`, `attr_writer` or `attr_accessor` in
+a `class << self`, or on `singleton_class`) whose visibility a method body's
+word sets is a method, as it is in CRuby: its history holds a version of the
+word, so `elab_replaced_attrs` lists the accessor's version beside the ones a
+def replaces, and `register_attr_versions` makes the method the accessor is
+(`Scope.accessor_of`, found by name) where no def replaces it, as an
+instance-side alias of an accessor already is. A class-side alias of an
+accessor whose visibility such a word sets is the method made of the accessor
+(`alias_accessor_method`, with the class-level ivar it reads and a writer
+writes). The call plan binds a call of such a name to that method
+(`cplan_sg_version`: the slot stands in only where no word sets the name, or
+where the bound scope is a subclass's own accessor, not a method made of one),
+so every reader of a class method's version cells reads it: the static raise
+at a placed point, the entry where only the run tells, the boxed class arms,
+`respond_to?`, `defined?`, `send`, `public_send` and `method`.
+
 A public def, a body's version as above, and a public version at the top
 level (an alias, an accessor, a `define_method`, an undef), are versions
 the plan answers. So the rest a body makes stay unplaced, applied from the

@@ -13111,7 +13111,8 @@ ElabEntry *elab_replaced_attrs(Compiler *c, int *n) {
   int k = 0, cap = 0;
   for (int i = 0; r && r->recorded && i < r->nhist; i++) {
     const LrHist *h = &r->hist[i];
-    if (h->a < 0 || !lr_attr_mixed(h)) continue;
+    /* (or, on a class side, one whose visibility a method body's word sets: lr_body_word_of) */
+    if (h->a < 0 || !(lr_attr_mixed(h) || (h->b && lr_body_word_of(h)))) continue;
     for (int j = 0; j < h->n; j++) {
       const LrDef *d = &h->v[j];
       if ((d->kind != LR_READER && d->kind != LR_WRITER) || !lr_is_version(d)) continue;
@@ -13128,6 +13129,12 @@ void elab_attr_scope(Compiler *c, const ElabEntry *e, int scope) {
   LrHist *h = c->lrec ? lr_hist(c->lrec, e->cls, e->sg, e->name, 0) : NULL;
   for (int j = 0; h && j < h->n; j++)
     if (h->v[j].node == e->node && h->v[j].kind == e->kind) h->v[j].scope = scope;
+}
+
+/* See analyze.h. */
+int elab_attr_lone(Compiler *c, const ElabEntry *e) {
+  const LrHist *h = c->lrec ? lr_hist(c->lrec, e->cls, e->sg, e->name, 0) : NULL;
+  return h && !lr_attr_mixed(h);
 }
 
 /* See analyze.h. */

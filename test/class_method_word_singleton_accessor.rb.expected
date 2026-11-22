@@ -1,0 +1,8 @@
+[7, true, 1, 1, 1, nil, nil]
+[NoMethodError, false, 7]
+[NoMethodError, false]
+[NoMethodError, false, 1, 1]
+[NoMethodError, false, 1]
+[NoMethodError, false, 1]
+[NoMethodError, false, nil]
+[:defd, true, :defd]

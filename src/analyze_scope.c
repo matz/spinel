@@ -4561,7 +4561,9 @@ void register_attr_versions(Compiler *c) {
     comp_grow_node_arrays(c);
     walk_scope(c, def, c->nscope[a[i].node], a[i].cls);
     if (e >= c->nscopes || c->scopes[e].def_node != def) continue;
-    { c->scopes[e].attr_version = 1; comp_touch_scope(c->scopes[e].idx); }
+    /* (one no def replaces is the name's method, found by name, as an alias's of an accessor is: Scope.accessor_of) */
+    if (elab_attr_lone(c, &a[i])) { c->scopes[e].accessor_of = a[i].node + 1; comp_touch_scope_shape(c, c->scopes[e].idx); }
+    else { c->scopes[e].attr_version = 1; comp_touch_scope(c->scopes[e].idx); }
     comp_ivar_intern(&c->classes[a[i].cls], ivname, a[i].sg ? IVS_CLASS : IVS_INST);
     elab_attr_scope(c, &a[i], e);
   }
@@ -5277,7 +5279,10 @@ void settle_mixin_aliases(Compiler *c) {
 static const LrDef *alias_accessor_version(Compiler *c, const ElabEntry *e) {
   LoadPoint p = elab_point_of(c, e->node);
   const LrDef *d = NULL;
-  if (e->sg || p.region < 0 || elab_method_at(c, e->cls, e->target, 0, p, &d) != ELAB_YES || !d ||
+  /* (on a class side only an alias whose visibility a method body's word sets: the slot the alias table renames
+     answers any other) */
+  if ((e->sg && !elab_method_body_word(c, e->name, 1)) || p.region < 0 ||
+      elab_method_at(c, e->cls, e->target, e->sg, p, &d) != ELAB_YES || !d ||
       (d->kind != LR_READER && d->kind != LR_WRITER) || d->may || d->unplaced) return NULL;
   return d;
 }
@@ -5302,13 +5307,16 @@ static int alias_accessor_method(Compiler *c, const ElabEntry *e, int w, int at,
   if (w ? !setter_base_name(e->target, base, sizeof base) : snprintf(base, sizeof base, "%s", e->target) >= (int)sizeof base) return 0;
   int def = attr_as_def(nt, at, base, w);
   if (def < 0) return 0;
+  if (e->sg) nt_node_set_ref(nt, def, "receiver", nt_new_node(nt, "SelfNode"));
   comp_grow_node_arrays(c);
   walk_scope(c, def, c->nscope[e->node], e->cls);
   if (s >= c->nscopes || c->scopes[s].def_node != def) return 0;
   free(c->scopes[s].name);
   { c->scopes[s].name = strdup(e->name); c->scopes[s].accessor_of = accessor; comp_touch_scope_shape(c, c->scopes[s].idx); }
   snprintf(ivname, sizeof ivname, "@%s", base);
-  comp_ivar_intern(&c->classes[e->cls], ivname, IVS_INST);
+  comp_ivar_intern(&c->classes[e->cls], ivname, e->sg ? IVS_CLASS : IVS_INST);
+  /* (a class side's: the method's `@x` is the class-level ivar, which the reader then reads too, register_attrs) */
+  if (e->sg && !comp_is_sg_civ(&c->classes[e->cls], base)) comp_add_sg_civ(&c->classes[e->cls], base);
   elab_attr_scope(c, e, s);
   return 1;
 }

@@ -12,7 +12,8 @@
  *   FIPS-180-4 reference (Wikipedia pseudocode + Go's crypto/sha256
  *   match this byte-for-byte on the standard test vectors). An x86-64
  *   CPU with the SHA extensions runs the same compression on them, asked
- *   at run time; every other CPU and build runs the C.
+ *   at run time. A little-endian AArch64 SHA2 target uses its SHA-256
+ *   instructions directly. Other targets use the C implementation.
  * - HMAC-SHA256: RFC 2104 / RFC 4231 on top of the SHA-256 above.
  * - PBKDF2-HMAC-SHA256: RFC 8018, dkLen fixed at 32 (one block).
  * - Base64URL: RFC 4648 §5 (URL/filename-safe alphabet), no padding.
@@ -47,7 +48,9 @@
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
 #  include <stdlib.h>  /* arc4random_buf */
 #endif
-#if SP_HAVE_X86_SHA
+#if SP_HAVE_ARM_SHA2
+#include <arm_neon.h>
+#elif SP_HAVE_X86_SHA
 #include <immintrin.h>    /* SHA-256 on the x86 SHA extensions */
 #include <cpuid.h>        /* ... where the CPU says it has them */
 #endif
@@ -67,6 +70,40 @@ static const uint32_t sp_crypto_sha256_k[64] = {
   0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2
 };
 
+#if SP_HAVE_ARM_SHA2
+static SP_INLINE uint32x4_t sp_crypto_sha256_load_be(const uint8_t *p) {
+    return vreinterpretq_u32_u8(vrev32q_u8(vld1q_u8(p)));
+}
+
+static void sp_crypto_sha256_blocks(uint32_t H[8], const uint8_t *p, size_t n) {
+    uint32x4_t abcd = vld1q_u32(H), efgh = vld1q_u32(H + 4);
+    for (; n > 0; n--, p += 64) {
+        uint32x4_t initial_abcd = abcd, initial_efgh = efgh;
+        uint32x4_t w0 = sp_crypto_sha256_load_be(p);
+        uint32x4_t w1 = sp_crypto_sha256_load_be(p + 16);
+        uint32x4_t w2 = sp_crypto_sha256_load_be(p + 32);
+        uint32x4_t w3 = sp_crypto_sha256_load_be(p + 48);
+        for (int i = 0; i < 64; i += 4) {
+            uint32x4_t wk = vaddq_u32(w0, vld1q_u32(sp_crypto_sha256_k + i));
+            uint32x4_t old_abcd = abcd;
+            abcd = vsha256hq_u32(abcd, efgh, wk);
+            efgh = vsha256h2q_u32(efgh, old_abcd, wk);
+            /* Advance the 16-word schedule by the four rounds just consumed. */
+            if (i < 48)
+                w0 = vsha256su1q_u32(vsha256su0q_u32(w0, w1), w2, w3);
+            uint32x4_t next = w0;
+            w0 = w1;
+            w1 = w2;
+            w2 = w3;
+            w3 = next;
+        }
+        abcd = vaddq_u32(initial_abcd, abcd);
+        efgh = vaddq_u32(initial_efgh, efgh);
+    }
+    vst1q_u32(H, abcd);
+    vst1q_u32(H + 4, efgh);
+}
+#else
 #define SPC_ROTR(x,n)    (((x) >> (n)) | ((x) << (32 - (n))))
 #define SPC_S0(x)  (SPC_ROTR(x, 2) ^ SPC_ROTR(x,13) ^ SPC_ROTR(x,22))
 #define SPC_S1(x)  (SPC_ROTR(x, 6) ^ SPC_ROTR(x,11) ^ SPC_ROTR(x,25))
@@ -226,6 +263,8 @@ static void sp_crypto_sha256_blocks(uint32_t H[8], const uint8_t *p, size_t n) {
 #endif
     for (; n > 0; n--, p += 64) sp_crypto_sha256_block(H, p);
 }
+
+#endif /* SP_HAVE_ARM_SHA2 */
 
 static void sp_crypto_store_be32(uint8_t *out, const uint32_t *H, int n) {
     for (int i = 0; i < n; i++) {

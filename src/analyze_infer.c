@@ -5500,6 +5500,9 @@ static int infer_handle_call(Compiler *c, int id, const NodeTable *nt, const cha
       }
       { *out = TY_IO; return 1; }
     }
+    /* tap runs its block and returns the handle, which codegen emits as the
+       typed handle */
+    if (sp_streq(name, "tap") && nt_ref(nt, id, "block") >= 0) { *out = TY_IO; return 1; }
     { *out = TY_POLY; return 1; }
   }
 

@@ -26817,8 +26817,13 @@ static int incl_declined_node(const NodeTable *nt, int node, const char *param) 
   /* a constant write (desugar_constant_path_self_alias, qualify_colliding_classes) */
   case NK_ConstantWriteNode: case NK_ConstantOperatorWriteNode: case NK_ConstantOrWriteNode:
   case NK_ConstantAndWriteNode: case NK_ConstantTargetNode:
-  /* `v op= x` where the program may reopen the operator (desugar_reopened_op_write) */
+  /* `v op= x` where the program may reopen the operator
+     (desugar_reopened_op_write): a reason in a body the walk calls. In
+     one the walk splices, the statement calls the reopened operator
+     where it lands, as it does written in the class body
+     (test/included_hook_op_assign_reopened_operator.rb) */
   case NK_LocalVariableOperatorWriteNode: case NK_IndexOperatorWriteNode: case NK_CallOperatorWriteNode:
+    if (g_incl_body_spliced) break;
     return 1;
   default: break;
   }

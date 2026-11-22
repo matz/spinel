@@ -6594,6 +6594,12 @@ int emit_call_reopen_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
       if (oc_ci3 >= 0) {
         const CallPlan pl = cplan_user(c, id);
         int planned = pl.via == UC_REOPEN && pl.owner_ci == oc_ci3 && pl.dispatch == CP_DIRECT;
+        /* a class value answers a public method of Class's or Module's
+           (class_eval, name) ahead of Object's, as the plan reads it
+           (cplan_resolve_call's root fallback): a program's Kernel#class_eval
+           is not what `klass.class_eval { ... }` runs, so the call is left
+           to the class-value paths, and refused where none has it */
+        if (!planned && rt == TY_CLASS && cplan_class_value_answers(c, id, recv, name)) return 0;
         int oc_mi3 = planned ? pl.mi : call_target(c, id, oc_ci3, name, 0, NULL);
         if (g_plan_check && planned) {
           cplan_served("object-fallback");

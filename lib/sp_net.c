@@ -167,10 +167,10 @@ static int sp_net_backlog(int backlog) {
 
 /* TCPServer.new(host, port): like sp_net_listen but bound to a specific
    address, resolved through getaddrinfo (so "localhost" works). A NULL/empty
-   host binds INADDR_ANY. A backlog of 0 is SOMAXCONN. Returns the listening
-   fd, or -1. (#2922) */
+   host binds INADDR_ANY. A backlog of 0 is SOMAXCONN. The port goes to the
+   resolver as given, as CRuby passes it. Returns the listening fd, or -1.
+   (#2922) */
 int sp_net_listen_host(const char *host, int port, int backlog) {
-    if (port < 0 || port > 65535) return -1;
     signal(SIGPIPE, SIG_IGN);
     struct addrinfo hints, *res = NULL;
     memset(&hints, 0, sizeof(hints));
@@ -693,8 +693,13 @@ static int sp_net_connect_wait(int fd, const struct sockaddr *sa, socklen_t len)
     return 0;
 }
 
+/* The address of the last connect sp_net_connect tried and failed, which
+   Socket.tcp's error message shows (sp_net_connect_failed_addr). */
+static SP_TLS struct sockaddr_storage sp_net_connect_failed_sa;
+static SP_TLS socklen_t sp_net_connect_failed_len;
+
 int sp_net_connect(const char *host, int port) {
-    if (port < 0 || port > 65535) return -1;
+    sp_net_connect_failed_len = 0;
     /* A client that never listens still needs SIGPIPE ignored: a write
      * to an upstream that closed would otherwise kill the process. */
     signal(SIGPIPE, SIG_IGN);
@@ -711,12 +716,17 @@ int sp_net_connect(const char *host, int port) {
     /* A Thread#raise or #kill wakes a parked connect, but is held back
        until the socket and the address list are freed. */
     sp_fiber_defer_inject();
-    int fd = -1;
+    int fd = -1, err = 0;
     for (struct addrinfo *ai = res; ai != NULL; ai = ai->ai_next) {
         if (sp_fiber_current && sp_fiber_inject_pending(sp_fiber_current)) break;
         fd = sp_net_socket_cloexec(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
-        if (fd < 0) continue;
+        if (fd < 0) { err = errno; sp_net_connect_failed_len = 0; continue; }
         if (sp_net_connect_wait(fd, ai->ai_addr, ai->ai_addrlen) == 0) break;
+        err = errno;
+        if (ai->ai_addrlen <= sizeof sp_net_connect_failed_sa) {
+            memcpy(&sp_net_connect_failed_sa, ai->ai_addr, ai->ai_addrlen);
+            sp_net_connect_failed_len = ai->ai_addrlen;
+        }
         close(fd);
         fd = -1;
     }
@@ -726,11 +736,21 @@ int sp_net_connect(const char *host, int port) {
         if (fd >= 0) { close(fd); fd = -1; }   /* even if it connected */
         sp_fiber_fire_inject_if_pending();
     }
-    if (fd < 0) return -1;
+    /* errno is what the last socket or connect failed with, which the
+       caller raises */
+    if (fd < 0) { if (err) errno = err; return -1; }
 
     int one = 1;
     setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
     return fd;
+}
+
+/* The address of sp_net_connect's last failed connect, packed into out;
+   returns its length, 0 when there is none. */
+int sp_net_connect_failed_addr(void *out, int cap) {
+    if ((int)sp_net_connect_failed_len > cap) return 0;
+    memcpy(out, &sp_net_connect_failed_sa, sp_net_connect_failed_len);
+    return (int)sp_net_connect_failed_len;
 }
 
 /* Socket#connect(sockaddr): an address already packed, connected as
@@ -785,7 +805,6 @@ static void sp_net_connect_gave_up(const struct addrinfo *ai) {
 int sp_net_connect_timeout(const char *host, int port, double timeout_s) {
     sp_net_connect_timed_out = 0;
     if (timeout_s < 0) return sp_net_connect(host, port);
-    if (port < 0 || port > 65535) return -1;
     signal(SIGPIPE, SIG_IGN);
 
     struct addrinfo hints, *res = NULL;
@@ -801,14 +820,15 @@ int sp_net_connect_timeout(const char *host, int port, double timeout_s) {
        the lookup, so a host with several addresses still answers in time. */
     double deadline = sp_net_now() + timeout_s;
     sp_fiber_defer_inject();
-    int fd = -1;
+    int fd = -1, err = 0;
     for (struct addrinfo *ai = res; ai != NULL; ai = ai->ai_next) {
         if (sp_fiber_current && sp_fiber_inject_pending(sp_fiber_current)) break;
         if (sp_net_now() >= deadline) { sp_net_connect_gave_up(ai); break; }
         fd = sp_net_socket_cloexec(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
-        if (fd < 0) continue;
+        if (fd < 0) { err = errno; continue; }
         int rc = sp_net_connect_until(fd, ai->ai_addr, ai->ai_addrlen, deadline);
         if (rc == 0) break;
+        err = errno;
         close(fd);
         fd = -1;
         if (rc == -2) { sp_net_connect_gave_up(ai); break; }
@@ -819,7 +839,7 @@ int sp_net_connect_timeout(const char *host, int port, double timeout_s) {
         if (fd >= 0) { close(fd); fd = -1; }
         sp_fiber_fire_inject_if_pending();
     }
-    if (fd < 0) return -1;
+    if (fd < 0) { if (err) errno = err; return -1; }
     sp_net_connect_timed_out = 0;
 
     int one = 1;

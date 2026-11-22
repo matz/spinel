@@ -1138,6 +1138,12 @@ spinel: 1 refusal, nothing written
 == test/reject/io_reopen_yielding_call.rb [promote] rc=1
 spinel: test/reject/io_reopen_yielding_call.rb:10: unsupported call: node N (CallNode `twice`) recv=GlobalVariableReadNode/ty46 argc=0
 spinel: 1 refusal, nothing written
+== test/reject/kernel_class_eval_def_class_value_receiver.rb [default] rc=1
+spinel: test/reject/kernel_class_eval_def_class_value_receiver.rb:16: unsupported call: node N (CallNode `class_eval`) recv=LocalVariableReadNode/ty49 argc=0
+spinel: 1 refusal, nothing written
+== test/reject/kernel_class_eval_def_class_value_receiver.rb [promote] rc=1
+spinel: test/reject/kernel_class_eval_def_class_value_receiver.rb:16: unsupported call: node N (CallNode `class_eval`) recv=LocalVariableReadNode/ty49 argc=0
+spinel: 1 refusal, nothing written
 == test/reject/lazy_chain_in_global.rb [default] rc=1
 spinel: test/reject/lazy_chain_in_global.rb:3: unsupported a lazy chain held in an instance, class or global variable or a constant (an Enumerator::Lazy is fused into the call that forces it; keep the chain in a local or force it where it is built): node N (CallNode `lazy`) recv=ArrayNode/ty19 argc=0
 spinel: 1 refusal, nothing written

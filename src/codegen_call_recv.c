@@ -19590,9 +19590,9 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
       ((argc == 0 && (sp_streq(name, "to_h") || sp_streq(name, "to_r") || sp_streq(name, "to_c"))) ||
        (argc <= 1 && sp_streq(name, "rationalize")))) {
     /* a class of the program that defines the name answers it, unless the
-       class facts rule its objects out of the receiver (#11094) */
+       class facts rule its objects out (#11094) or this is its builtin arm */
     int has_user = 0;
-    for (int k = 0; k < c->nclasses && !has_user; k++)
+    for (int k = 0; k < c->nclasses && !has_user && !g_poly_builtin_arm; k++)
       if (comp_poly_arm_defines_n(c, k, name, argc) && !cls_fact_excludes(c, recv, k)) has_user = 1;
     if (!has_user) {
       /* (a call typed poly holds the Rational boxed, a big one too: the box

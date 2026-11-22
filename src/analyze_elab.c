@@ -11893,6 +11893,9 @@ static void lr_fire_mixin(Compiler *c, const LrEvent *v, int node, int frame, Lo
     free(cp);
   }
   incl_detach_shell(nt, clone, ids, n);   /* (the clone's shell, once its statements are the span's) */
+  /* a bare Object or Module method among them has the class for self, as
+     one written in the body has: the step that gives it ran before the walk */
+  for (int q = 0; q < n; q++) incl_give_self(nt, ids[q], class_def_key(c, frame));
   lr_span_add(out, ids, n, fr, param);
 }
 

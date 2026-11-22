@@ -837,6 +837,7 @@ int desugar_index_assign_value(Compiler *c);
 int desugar_io_console_modes(Compiler *c);
 int desugar_reader_index_write(Compiler *c);
 int desugar_body_module_eval(Compiler *c);
+int incl_give_self(NodeTable *nt, int node, const char *cname);
 int desugar_sclass_hooks(Compiler *c);
 int desugar_toplevel_hooked_mixins(Compiler *c);
 int desugar_socket_constants(Compiler *c);

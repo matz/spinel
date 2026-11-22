@@ -26730,6 +26730,8 @@ int incl_hook_supers(const NodeTable *nt, int node) {
 }
 
 static int cb_self_act_name(const char *nm, int block);
+/* (incl_hook_declined's: does the walk splice the body being asked about?) */
+static int g_incl_body_spliced;
 
 /* The rows incl_hook_declined adds to host_prewalk_shape, over the subtree
    of node: the shapes of the steps between desugar_included_hooks and the
@@ -26780,9 +26782,12 @@ static int incl_declined_node(const NodeTable *nt, int node, const char *param) 
       return 1;
     /* an eval-family call the splice does not unwrap, or one given a
        string or a block argument (desugar_body_module_eval,
-       desugar_eval_method_block), a bare Object or Module method run on
-       the class (desugar_class_body_object_acts) */
-    else if (on_self && (is_eval_exec_family(nm) || cb_self_act_name(nm, blk >= 0 && nt_kind(nt, blk) == NK_BlockNode)))
+       desugar_eval_method_block). A bare Object or Module method run on
+       the class is a reason only in a body the walk calls (one with a
+       `return` or a `super`): the statements the walk splices it gives
+       the class for self itself (incl_give_self). */
+    else if (on_self && (is_eval_exec_family(nm) ||
+                         (!g_incl_body_spliced && cb_self_act_name(nm, blk >= 0 && nt_kind(nt, blk) == NK_BlockNode))))
       return 1;
     /* attr_accessor(*FLAGS) (desugar_attr_const_splat) */
     else if (is_attr_decl_reader(nm) || is_attr_decl_writer(nm)) {
@@ -26860,7 +26865,11 @@ int incl_hook_declined(NodeTable *nt, int def) {
   int ps = nt_ref(nt, def, "parameters"), rn = 0;
   const int *rq = ps >= 0 ? nt_arr(nt, ps, "requireds", &rn) : NULL;
   const char *param = rn == 1 ? nt_str(nt, rq[0], "name") : NULL;
-  return incl_declined_stmts(nt, nt_ref(nt, def, "body"), param);
+  int hb = nt_ref(nt, def, "body");
+  g_incl_body_spliced = hb >= 0 && !incl_hook_returns(nt, hb) && !incl_hook_supers(nt, hb);
+  int r = incl_declined_stmts(nt, hb, param);
+  g_incl_body_spliced = 0;
+  return r;
 }
 
 /* `M.__send__(:included, self)`: the hook run as the method it is, for a body
@@ -27388,6 +27397,14 @@ static int cb_give_self(NodeTable *nt, int node, const char *builtin, int strct,
     for (int j = 0; j < cnt; j++) changed |= cb_give_self(nt, ids[j], builtin, strct, cname, inblk);
   }
   return changed;
+}
+
+/* The statements the walk splices of a hook's body, at the includer's
+   body: a bare Object or Module method among them has the class for self,
+   as one written in the body has (desugar_class_body_object_acts ran before
+   the walk made them). */
+int incl_give_self(NodeTable *nt, int node, const char *cname) {
+  return cb_give_self(nt, node, NULL, 0, cname, 0);
 }
 
 /* Does id define or remove a method (a def, an alias, an undef) anywhere

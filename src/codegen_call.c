@@ -20138,9 +20138,12 @@ int refl_member_of_struct_superclass(Compiler *c, int ci, const char *m) {
    its visibility is one the form asks. A list leaves out the helpers the
    compiler synthesizes (name_is_synth_method), whatever the tables hold. */
 typedef struct { Compiler *c; ReflNames *r; int pub, prot, priv; } ReflCand;
+/* (the visibilities a list shows, as ReflNames.vis_mask holds them) */
+static int refl_vis_mask(int pub, int prot, int priv) { return (!!pub) | ((!!prot) << 1) | ((!!priv) << 2); }
 static void refl_cand_note(void *ud, const char *nm, int vis) {
   ReflCand *n = ud;
   if (name_is_synth_method(n->c, nm)) return;
+  if (n->r->at && n->r->at_side == CT_OWN) vis = cplan_own_list_vis(n->c, n->r->at - 1, n->r->at_cls, nm, vis);
   refl_note(n->r, nm, refl_vis_wanted(vis, n->pub, n->prot, n->priv));
 }
 /* The instance methods class `ci` itself defines, as
@@ -20151,7 +20154,7 @@ static void refl_cand_note(void *ud, const char *nm, int vis) {
 void refl_own_instance_methods(Compiler *c, int ci, int pub, int prot, int priv,
                                       int with_modules, ReflNames *r) {
   ReflCand n = { c, r, pub, prot, priv };
-  r->vis_mask = (!!pub) | ((!!prot) << 1) | ((!!priv) << 2);
+  r->vis_mask = refl_vis_mask(pub, prot, priv);
   mtab_build_enter(c);
   cplan_list_candidates(c, ci, with_modules ? 0 : CT_OWN, refl_cand_note, &n);
   mtab_build_leave(c);
@@ -20228,6 +20231,7 @@ void refl_class_instance_methods(Compiler *c, int ci, int pub, int prot, ReflNam
    compiler's helpers). */
 static void refl_module_note(void *ud, const char *nm, int vis) {
   ReflCand *n = ud;
+  if (n->r->at && n->r->at_side == CT_OWN) vis = cplan_own_list_vis(n->c, n->r->at - 1, n->r->at_cls, nm, vis);
   refl_note(n->r, nm, refl_vis_wanted(vis, n->pub, n->prot, n->priv));
 }
 /* Mod.instance_methods / public_instance_methods with the inherited ones (no argument, or `true`): what the module
@@ -20242,6 +20246,7 @@ void refl_module_instance_methods(Compiler *c, int m, int prot, ReflNames *r) {
 /* Mod.{,public_,private_,protected_}instance_methods(false): the names the module itself answers for. */
 void refl_module_own_methods(Compiler *c, int m, int pub, int prot, int priv, ReflNames *r) {
   ReflCand n = { c, r, pub, prot, priv };
+  r->vis_mask = refl_vis_mask(pub, prot, priv);
   mtab_build_enter(c);
   cplan_module_methods(c, m, 1, refl_module_note, &n);
   mtab_build_leave(c);
@@ -20909,13 +20914,26 @@ static int class_builtin_has_method(Compiler *c, int cid, const char *m) {
 /* See codegen_call_arms.h. Each cell holds an Integer as the entries' arms
    read it (emit_cells_test) */
 /* See codegen_call_arms.h. */
+/* emit_vis_word_absent, with cw the writes of the word's visibility cells (emit_vis_cell_write, "" for none): the
+   names ahead of the one that raises have their visibility once it raises, as CRuby's word changes each name in turn
+   (the record places a version only for those, lr_word_reach) */
+static int emit_vis_word_absent_x(Compiler *c, int id, const char *cw, Buf *b);
+static void emit_missing_raise(Compiler *c, int m, int kind, const char *self, int anon, const OrderRun *run,
+                               int holder, Buf *b);
 int emit_vis_word_absent(Compiler *c, int id, Buf *b) {
+  Buf wb; memset(&wb, 0, sizeof wb);
+  int n = emit_vis_cell_write(c, id, &wb), r = emit_vis_word_absent_x(c, id, n ? wb.p : "", b);
+  free(wb.p);
+  return r;
+}
+static int emit_vis_word_absent_x(Compiler *c, int id, const char *cw, Buf *b) {
   const NodeTable *nt = c->nt;
+  const char *cs = *cw ? ", " : "", *ct = *cw ? "; " : "";
   int skip = 0;
   const char *w = vis_word_call(nt, id, &skip);
   /* (a class-method word's names are the class side's of the class it acts on, vis_decl_class) */
   int cm = class_method_vis_of_name(w) != 0;
-  if (!cm && visibility_of_name(w) <= BVIS_MODULE_FUNCTION) return 0;
+  if (!cm && !visibility_of_name(w)) return 0;
   int vcid = cm ? vis_decl_class(c, id) : g_class_body_id >= 0 ? g_class_body_id : (comp_scope_of(c, id) ? comp_scope_of(c, id)->class_id : -1);
   int vargs = vcid >= 0 ? nt_ref(nt, id, "arguments") : -1, van = 0;
   const int *vav = vargs >= 0 ? nt_arr(nt, vargs, "arguments", &van) : NULL;
@@ -20923,9 +20941,49 @@ int emit_vis_word_absent(Compiler *c, int id, Buf *b) {
   /* (one Array's names in its place, `private [:a, :b]`) */
   int arr = van == 1 && nt_kind(nt, vav[0]) == NK_ArrayNode;
   if (arr) vav = nt_arr(nt, vav[0], "elements", &van);
+  int mfw = !cm && visibility_of_name(w) == BVIS_MODULE_FUNCTION, mod = vcid >= 0 && comp_class_is_module(c, &c->classes[vcid]);
+  /* (a class has no module_function, a Module's method: NoMethodError, and nothing changes, lr_word_reach; nor has a
+     singleton class, a module's `class << self` body's self too: elab_word_singleton) */
+  int lv = 0, wsc = mfw ? elab_word_singleton(c, id, &lv) : -1;
+  if (mfw && vcid >= 0 && (!mod || wsc >= 0)) {
+    int nc = wsc >= 0 ? wsc : vcid;
+    Buf cn; memset(&cn, 0, sizeof cn);   /* ("class #<Class:M>": one `#<Class:` a level, elab_word_singleton) */
+    buf_puts(&cn, "class ");
+    for (int l = 0; l < lv; l++) buf_puts(&cn, "#<Class:");
+    buf_puts(&cn, class_ruby_name(c, nc) ? class_ruby_name(c, nc) : c->classes[nc].name);
+    for (int l = 0; l < lv; l++) buf_puts(&cn, ">");
+    /* (a bare word, a vcall, raises NameError, as any vcall that finds no method does: emit_missing_raise) */
+    if (nt_vcall(nt, id)) emit_missing_raise(c, id, CM_NAMEERROR, cn.p, -1, NULL, id, b);
+    else {
+      buf_puts(b, "sp_raise_cls(\"NoMethodError\", \"undefined method 'module_function' for ");
+      emit_c_escaped(b, cn.p);
+      buf_puts(b, "\")");
+    }
+    free(cn.p);
+    return 1;
+  }
+  /* (module_function given an Array checks each element as private's does, in order: an element that is no name
+     raises TypeError for itself, as a name with no method raises NameError; then its copy loop raises TypeError for
+     the Array, `[:a] is not a symbol nor a string`, having made the names private, lr_word_reach. The Array is built
+     first, once, as the call's argument is) */
+  int ta = arr && mfw ? ++g_tmp : 0;
+  if (ta) {
+    buf_printf(b, "({ sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", ta, ta);
+    for (int vi = 0; vi < van; vi++) {
+      buf_printf(b, " sp_PolyArray_push(_t%d, ", ta);
+      emit_boxed(c, vav[vi], b);
+      buf_puts(b, ");");
+    }
+  }
   for (int vi = 0; vi < van; vi++) {
     const char *mn = vis_arg_name(nt, vav[vi]);
     if (!mn && nt_kind(nt, vav[vi]) == NK_DefNode && nt_ref(nt, vav[vi], "receiver") >= 0) mn = nt_str(nt, vav[vi], "name");
+    if (!mn && ta) {
+      int te = ++g_tmp;
+      buf_printf(b, " { sp_RbVal _t%d = sp_PolyArray_get(_t%d, %d); if (_t%d.tag != SP_TAG_SYM && !sp_rbval_is_string(_t%d))"
+                 " { %s%ssp_raise_cls(\"TypeError\", sp_sprintf(\"%%s is not a symbol nor a string\", sp_poly_inspect(_t%d))); } }",
+                 te, ta, vi, te, te, cw, ct, te);
+    }
     if (!mn) continue;
     char wb[256]; wb[0] = '\0';
     setter_base_name(mn, wb, sizeof wb);
@@ -20936,22 +20994,35 @@ int emit_vis_word_absent(Compiler *c, int id, Buf *b) {
        between?). A method body's word has no form that applies it to a
        builtin method yet: a name it takes raises, as it did, and an
        Array's, which it read none of, still does not */
-    int mod = comp_class_is_module(c, &c->classes[vcid]);
-    int found = cm ? call_target(c, id, vcid, mn, CT_CMETHOD | CT_NOFACE, NULL) >= 0 || cplan_class_builtin_has(c, vcid, mn)
-                   : call_target(c, id, vcid, mn, CT_NOFACE, NULL) >= 0 ||
-                         call_attr_target(c, id, vcid, mn, CT_ATTR, NULL) ||
-                         (wb[0] && call_attr_target(c, id, vcid, wb, CT_ATTR | CT_WRITER, NULL)) ||
-                         ((g_class_body_id >= 0 || arr) && class_builtin_has_method(c, vcid, mn));
+    int mf = -1;
+    /* (a module function a class body's word made is one method that serves both sides, the class method's:
+       mf_mark) */
+    if (!cm && mod && !mfw) mf = call_target(c, id, vcid, mn, CT_CMETHOD | CT_NOFACE, NULL);
+    /* (module_function's name, the one the record's reach tests, lr_word_reach: elab_module_has_method) */
+    int found = mfw ? elab_module_has_method(c, vcid, mn) : (mf >= 0 && c->scopes[mf].is_module_function) ||
+                (cm ? call_target(c, id, vcid, mn, CT_CMETHOD | CT_NOFACE, NULL) >= 0 || cplan_class_builtin_has(c, vcid, mn)
+                    : call_target(c, id, vcid, mn, CT_NOFACE, NULL) >= 0 ||
+                          call_attr_target(c, id, vcid, mn, CT_ATTR, NULL) ||
+                          (wb[0] && call_attr_target(c, id, vcid, wb, CT_ATTR | CT_WRITER, NULL)) ||
+                          ((g_class_body_id >= 0 || arr) && class_builtin_has_method(c, vcid, mn)));
     if (!found) {
       /* (the class side's is its singleton class's: `#<Class:K>`, a module's too) */
       const char *cn = class_ruby_name(c, vcid) ? class_ruby_name(c, vcid) : c->classes[vcid].name;
+      if (ta || *cw) buf_printf(b, ta ? " %s%s" : "(%s%s", cw, ta ? ct : cs);
       buf_puts(b, "sp_raise_cls(\"NameError\", \"undefined method '");
       emit_c_escaped(b, mn);
       buf_puts(b, cm ? "' for class '#<Class:" : mod ? "' for module '" : "' for class '");
       emit_c_escaped(b, cn);
       buf_puts(b, cm ? ">'\")" : "'\")");
+      buf_puts(b, ta ? "; })" : *cw ? ")" : "");
       return 1;
     }
+  }
+  if (ta) {
+    int ts = ++g_tmp;
+    buf_printf(b, " %s%sconst char *_t%d = sp_PolyArray_inspect(_t%d); SP_GC_ROOT_STR(_t%d);"
+               " sp_raise_cls(\"TypeError\", sp_sprintf(\"%%s is not a symbol nor a string\", _t%d)); })", cw, ct, ts, ta, ts, ts);
+    return 1;
   }
   return 0;
 }
@@ -24457,12 +24528,6 @@ int method_vis_for_caller(Compiler *c, int id, int vcid, const char *vnm) {
     int singleton = caller == scope && cs && cs->is_cmethod;
     if (cplan_protected_owner_open(c, singleton ? cs->class_id : caller, singleton, owner))
       vis = SP_VIS_PUBLIC;
-    /* A prepend can supply the caller's copy without an include edge. */
-    if (vis == SP_VIS_PROTECTED && caller >= 0 && owner >= 0) {
-      int cmi = call_target(c, id, caller, vnm, 0, NULL);
-      if (cmi >= 0 && cmi < c->nscopes && c->scopes[cmi].origin_module_ci == owner + 1)
-        vis = SP_VIS_PUBLIC;
-    }
     /* a call in a module's own method (or a block in it): self there is an
        instance of a class that includes the module, so the module's
        protected method is callable on a receiver whose class includes it

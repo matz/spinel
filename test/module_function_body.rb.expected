@@ -1,0 +1,24 @@
+[[:arr, :missing, :one, :part, :str, :two], [], true]
+[NoMethodError, false, :a]
+nil
+[:a, false, NoMethodError, :b, true]
+[[:b, :c], :b, 4, NoMethodError, NoMethodError]
+[TypeError, "[:a, :b] is not a symbol nor a string"]
+["c", [NameError, "undefined method 'zz' for module 'M'"]]
+[[:a, :arr, :b, :c, :missing, :one, :part, :str, :two], [:a, :b, :c], false]
+[NameError, NoMethodError, false]
+[NoMethodError, :x, false]
+[:v1, :v2]
+[:m2, true]
+[:before, NoMethodError, :e, true, true]
+[:after, :e, NoMethodError, false, true]
+[[NameError, "undefined method 'c' for class '#<Class:C>'"], [NameError, "undefined method 'l' for class 'Module'"]]
+[:c, :l]
+[TypeError, "[:x] is not a symbol nor a string"]
+"y"
+[NameError, "undefined method 'zz' for module 'B'"]
+"1 is not a symbol nor a string"
+"[:h, \"g\"] is not a symbol nor a string"
+[false, :y, true]
+[NoMethodError, NoMethodError, false, false]
+[["a", "b"], ["c", "d"]]

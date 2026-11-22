@@ -5125,6 +5125,19 @@ static void mf_copy_entries(Compiler *c) {
     if (!a[i].sg || a[i].cls < 0 || !comp_class_is_module(c, &c->classes[a[i].cls])) continue;
     if (a[i].node >= 0 && nt_int(c->nt, a[i].node, "cond_arm", 0)) continue;
     src[i] = a[i].scope > 0 ? a[i].scope : -1;
+    /* (a method body's copy is a method of the module's singleton of its own, there once the word ran, and the
+       instance method keeps its def: no def it copies is the one the record tells, lr_body_copy_scope, where two
+       or more may be live at the word; none where the program defines no method of the name, whose word raises
+       NameError where it runs, emit_vis_word_absent) */
+    if (a[i].body) {
+      if (src[i] < 0 && an_user_defines_method(c, a[i].name)) {
+        char msg[512];
+        snprintf(msg, sizeof msg, "%s.%s: a module_function that runs after the load (in a method, a block or a lambda), where more than one def of the method may be live, is not supported",
+                 c->classes[a[i].cls].name, a[i].name);
+        unsupported_feature(c, a[i].node, msg);
+      }
+      continue;
+    }
     int dm = a[i].scope > 0 && a[i].node == c->scopes[a[i].scope].def_node && nt_kind(c->nt, a[i].node) != NK_DefNode;
     if (src[i] >= 0 && !dm && c->scopes[src[i]].class_id == a[i].cls && c->scopes[src[i]].name &&
         sp_streq(c->scopes[src[i]].name, a[i].name)) {
@@ -5150,6 +5163,12 @@ static void mf_copy_entries(Compiler *c) {
                c->classes[a[i].cls].name, a[i].name, s->name);
       unsupported_feature(c, a[i].node, msg);
     }
+    /* (two body words that copy one def make one method: a version of it each) */
+    int had = 0;
+    for (int k = 0; a[i].body && k < c->nscopes && !had; k++)
+      had = c->scopes[k].class_id == a[i].cls && c->scopes[k].is_cmethod && c->scopes[k].def_node == s->def_node &&
+            c->scopes[k].name && sp_streq(c->scopes[k].name, a[i].name);
+    if (had) continue;
     mf_copy_arms(c, a[i].cls, src[i], a[i].node, 0);
     mf_copy_scope(c, a[i].cls, src[i], a[i].name);
   }

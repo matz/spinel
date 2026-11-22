@@ -321,8 +321,56 @@ on self (`send(:private, :m)`, `vis_word_call`); a class-method word's
 its argument has. A class-method word whose first name no method of the
 program's has, on either side, and no builtin class method answers
 (Object's, Kernel's, Module's, Class's: `cplan_class_builtin_has`) raises
-NameError where it runs and changes nothing (`lr_cside_word_absent`). Not
-`module_function`, which copies, nor a
+NameError where it runs and changes nothing (`lr_cside_word_absent`). A body's `module_function :m`
+is two versions: the instance side's private one, as `private :m`'s, and a
+copy on the module's singleton (LR_COPY, `LrDef.body`) whose scope is the
+def live where the word runs, the last def of the name ahead of it in the
+same statements, else the one version the body's window meets
+(`lr_body_copy_scope`); where the window meets two or more the copy has no
+one body and `mf_copy_entries` refuses it, and where the program defines
+no method of the name it makes none. A name the module object has a
+builtin method of (Kernel's private `puts`) bars the word, as a class-method
+word's on one does. CRuby's word makes each name private in turn and
+then copies them: a name no method has raises NameError there, with the
+names ahead of it private and no copy made, and `module_function [:a]`
+makes the Array's names private, as `private [:a]` does, then raises
+TypeError (`[:a] is not a symbol nor a string`) and makes no copy; an
+element that is no name raises TypeError for itself where private's
+would. A method the module has is one CRuby's lookup finds from the
+module's origin, past its own prepends, and then from Object: an entry
+the record holds of the name on the module, a module it includes
+(through another's include, or that one's prepend, too), Object, Kernel
+or main, or a builtin method of a builtin module among those (an
+included Comparable or Enumerable, by its builtin id) or of Object's
+table (`elab_module_has_method`, which the record's reach and the
+emitter both ask), not a def only another class has, nor the module
+object's own methods (`name`). So a word is a private version of the
+names ahead of the first one no method has, with a copy only where it
+reaches the end of names that are no Array (`lr_word_reach`); the word
+writes their visibility cells before it raises (`emit_vis_word_absent`),
+in a module body too. In an iterator's block or a begin body with rescue
+clauses, where no statement ahead of the word in its frame may raise and
+skip it and no condition holds it, the record, with no run-time cell for
+the word's visibility, takes the word either to have run or not
+(`lr_word_runs`). The position walker marks each statement in iterators'
+blocks (`ElabPos` and `LrStmt` `skip`, `unsure`): skipped where a block
+around it surely runs no time by the run count the record's iterator
+rows give (`[].each` on a literal, `0.times`) or a statement ahead of it
+in a block surely leaves it (a `break`, `next`, `return` or `raise`,
+`lr_stmt_leaves`); unsure where a block around it is not known to run at
+least once (`n.times`, `loop`, `each_slice`, a `&.` call) or a statement
+ahead of it in a block may raise or leave it. A word in a block that
+surely runs (`[1].each`, `tap`, `2.times`) has run, and those names are
+its applied versions though the statement is partial; a skipped one has
+not, as any partial statement's; an unsure one keeps every name's
+versions and copies (`lr_word_reach`), with its statement as any partial
+statement. In
+a class, or in a `class << self` body, a module's too, whose self is a
+singleton class (`elab_word_singleton`, which gives the depth of a
+`class << self` body inside another, one `#<Class:` each in the
+message), which has no `module_function`, the word raises NoMethodError,
+a bare one NameError as any vcall that finds no method does
+(`emit_missing_raise`), and changes nothing. Not a
 `def self.m` argument, which names a class method the word looks up
 among the instance methods: that word raises NameError where it runs, as
 any word naming a method the class has none of does, in a statement or
@@ -354,22 +402,34 @@ one whose frame the tree does not spell), an entry a literal send makes
 would hide the method CRuby has; a send of a visibility word is none);
 in a body, also every other
 entry it makes (an alias, an undef, an accessor, a `define_method`, a
-`define_singleton_method`, a `module_function` copy); at the top level, an
+`define_singleton_method`); at the top level, an
 alias of a name barred so. Six more bars keep a body's word, or its
 non-public def, in the form it has where the record holds no body
 versions, until the readers it needs read the version cells; each says
 in the source what drops it. They ask what one walk over the tree
 gathers (`lr_body_names_read`), so each ask is a lookup:
 
-- a word on a module's method, on a name a module body defines (a def,
-  an attribute, a `define_method`, an `alias_method` or an `alias`), or
-  on a name the class does not define itself on the word's side
-  (`lr_body_word_barred`): an include, extend or prepend copy carries
-  the module's def versions only, not a word's, and an inherited method
-  keeps its own visibility until the word runs, where a version would be
-  the word's from the start. A name nothing defines has no method a
-  reader may count: the word raises NameError where it runs, and a
-  version would make the readers count it;
+- a word on a name the class does not define itself on the word's side
+  (`lr_body_word_barred`): an inherited method keeps its own visibility
+  until the word runs, where a version would be the word's from the
+  start. A name nothing defines has no method a reader may count: the
+  word raises NameError where it runs, and a version would make the
+  readers count it. A word in a module's body on the module's own method
+  is no bar: it is a version of the module's history as a class's is, and
+  every copy reads it. An include, extend or prepend copy holds the
+  module's def versions, whose arms ask the module's visibility cell the
+  word writes: a chain's face entry (`ct_face_for`), a late layer's face
+  entry and a guard entry's arm ("Late layers of a class's chain" below),
+  and a protected version, closed to a caller whose class does not
+  include the module (`ver_protected_closed`). A module's own presence
+  readers (`M.private_method_defined?` and its kin) read the cells of the
+  histories on the module's chain, which a call guard over them writes
+  (`VerGuard.vis`, `pres_module_cells`): no entry stands over them, as no
+  call runs on a module's instance side. Its own lists
+  (`M.private_instance_methods(false)`) test the visibilities they show.
+  At a load point that surely follows the word, a class's or a module's
+  presence readers and own lists take the record's visibility
+  (`cplan_program_method_vis`, `cplan_own_list_vis`);
 - any body word in a program that defines `method_missing` or
   `respond_to_missing?`: the entry's else arm and the presence readers
   answer from the table there;
@@ -679,6 +739,18 @@ layer is made once, whatever reaches it:
   entry's;
 - `Method#super_method` writes one Method for each of the entry's arms, as a
   capture of an entry does (`cplan_super_method_target`).
+
+A call that enforces visibility, where a version on the chain takes a
+visibility only the run tells (a word in a method body), takes the layer's
+face entry (`ct_layer_face`, kept beside the plain one by its face): the arm
+of a version closed to the call raises, and the arm of a version whose
+visibility only the run tells asks the version's visibility cell first
+(`ver_vis_arm`), as the chain's face entry does; its else arm is the face's
+entry of what lies behind. A guard entry's arms do the same for the module
+version each guarded copy runs (`guard_version_vis`), and the layer a
+guarded arm calls takes the arm's face (`guard_arm_face`), so it tests its
+own versions; the presence readers read the guard's cells
+(`cplan_guarded_presence`), each copy's visibility from its version's cell.
 
 The pin of an entry's arm, and of its else arm, is static: it binds the
 method of a class the receiver's class is at or below, whatever the

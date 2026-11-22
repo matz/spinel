@@ -1,0 +1,7 @@
+[:before, [:p, :kq], true, true, [:p, :kq]]
+[:after, NoMethodError, false, true, [:p, :kq]]
+[:before, :r, true, true, :r]
+[:after, NoMethodError, false, true, :r]
+[:before, [:pm, :m], true, false, [true, false]]
+[:after, NoMethodError, false, true, [false, false]]
+[NoMethodError, false, true, :s]

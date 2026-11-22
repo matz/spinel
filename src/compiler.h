@@ -2015,8 +2015,10 @@ typedef struct {
   struct VerPin { int node, scope, vis; } *ver_pins;
   int nver_pins;
   /* Call guards read main's singleton chain (cls -1) or a class's own
-     instance history. Their version cells are written once, as an entry's. */
-  struct VerGuard { const char *name; int cls, cells; } *ver_guards;
+     instance history. Their version cells are written once, as an entry's;
+     vis: a module's own presence reader reads its versions' visibility cells
+     too (pres_module_cells), written as a face entry's are */
+  struct VerGuard { const char *name; int cls, cells, vis; } *ver_guards;
   int nver_guards;
   /* the entries are made (ver_entries_build): the versions the calls get
      are kept, and a call that reaches a later prepend's copy binds its
@@ -2873,7 +2875,7 @@ int        self_is_main(Compiler *c, int node);
 int        self_is_main_raw(Compiler *c, int node);
 int        self_class_body(Compiler *c, int node);
 int        attr_decl_call(Compiler *c, int id);
-enum { VIS_DECL_NIL = 1, VIS_DECL_SYM, VIS_DECL_ARRAY, VIS_DECL_SELF };
+enum { VIS_DECL_NIL = 1, VIS_DECL_SYM, VIS_DECL_STR, VIS_DECL_ARRAY, VIS_DECL_SELF };
 int        vis_decl_call(Compiler *c, int id);
 int        vis_decl_class(Compiler *c, int id);   /* the class such a word acts on (a class body's, or a method body's word's), -1 for none */
 int        setter_base_name(const char *name, char *out, size_t cap);

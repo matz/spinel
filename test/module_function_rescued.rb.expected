@@ -1,0 +1,7 @@
+"undefined method 'zz' for module 'M'"
+"1 is not a symbol nor a string"
+[NoMethodError, NoMethodError, NoMethodError]
+[false, false, false]
+NameError
+[NoMethodError, false]
+[:x, :y, false, false]

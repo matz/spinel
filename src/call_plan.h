@@ -1253,7 +1253,14 @@ int cplan_method_vis(Compiler *c, int id, int ci, const char *name, int flags, i
    by, which cplan_list_candidates gave with vis: where cls's side declares it so, the one cplan_method_vis has at
    the list's point (a class-method word a method body runs may have set it); vis otherwise. */
 int cplan_cmethod_list_vis(Compiler *c, int id, int cls, const char *name, int vis);
+/* ...and of an instance method a list of cls's own instance methods (`K.private_instance_methods(false)`) at call id
+   shows by vis: the one a method body's word gives it where the list runs, where the record tells it there
+   (cplan_program_method_vis asks the same), else vis */
+int cplan_own_list_vis(Compiler *c, int id, int cls, const char *name, int vis);
 int cplan_guarded_call_visibility(Compiler *c, int id, int cls, const char *name);
+/* Is an instance of class caller kind_of? module: does the class or a superclass include it (also through another
+   module's include), or prepend it in its first body unconditionally? A conditional prepend or a later reopening's
+   cannot prove it for every call, which may run before it. */
 int cplan_caller_includes_module(Compiler *c, int caller, int module);
 int cplan_protected_owner_open(Compiler *c, int caller, int singleton, int owner);
 /* The class of the self call id runs with, for a protected method's caller
@@ -1553,7 +1560,9 @@ int cplan_undef_at(Compiler *c, int id, int cls, const char *name);
    method m of class ci (its own, or along its chain with inherit) reads:
    for Object's reopening, where main's history of m and Object's are one
    entry (elab_main_object_one_entry), the later version of either, as the
-   load record orders them; else the class's table's. */
+   load record orders them; with inherit, where a method body's word sets
+   the visibility (elab_method_body_word), the record's answer where node
+   runs; else the class's table's. */
 int cplan_program_method_vis(Compiler *c, int node, int ci, const char *m, int inherit);
 /* The raise of call id's dispatch on self from class cid when cid's chain
    holds no method of its name and only descendants do: the switch's arms
@@ -1691,9 +1700,11 @@ int cplan_presence_class(Compiler *c, int id);
    in a program that defines respond_to_missing?
    (respond_to_missing_defined). */
 typedef struct CplanCells { int n; char cell[VER_MAX_ARMS][32]; char vis[VER_MAX_ARMS][32]; int val[VER_MAX_ARMS]; unsigned char ans[VER_MAX_ARMS]; int els, mask; } CplanCells;
-/* Physical presence for a conditional prepend. Answers are visibility
-   masks (public 1, protected 2, private 4), or 0 for an absent method.
-   A null output asks only whether the selector decides the answer. */
+/* Physical presence for a conditional prepend, or for a later prepend
+   whose module's version takes a visibility only the run tells (a word in
+   a body: its visibility cell). Answers are visibility masks (public 1,
+   protected 2, private 4), or 0 for an absent method. A null output asks
+   only whether the selector decides the answer. */
 int cplan_guarded_presence(Compiler *c, int cls, const char *name, int own, CplanCells *out);
 /* Whether an implied callback has a live definition in its version entry.
    The caller supplies its own fallback when there is no definition. */

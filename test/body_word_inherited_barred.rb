@@ -2,7 +2,7 @@
 # on, and a word naming a method the class only inherits leaves the
 # inherited method's visibility in place until it runs. Where the record
 # cannot place either (a class method a subclass may call, a name the
-# class does not define itself, one a module's attribute defines), the
+# class does not define itself, such as a module's attribute), the
 # word keeps the form it has where the record holds no body versions, and
 # the class it does not run on keeps its method.
 class K

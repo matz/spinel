@@ -1,0 +1,10 @@
+[:nb, :nc]
+:ok
+"undefined method 'module_function' for class #<Class:NS>"
+:s
+"undefined method 'module_function' for class #<Class:KS>"
+:ok
+"undefined method 'module_function' for class #<Class:#<Class:ND>>"
+:s
+NameError
+[NameError, "undefined local variable or method 'module_function' for class KP"]

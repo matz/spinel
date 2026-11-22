@@ -5696,10 +5696,11 @@ int self_class_body(Compiler *c, int node) {
 }
 
 /* A receiver-less private / protected / public / module_function in a class
-   or module body (private and public also at top level), bare or naming its methods by Symbol literals, `def`s or
-   one Array of Symbols. Its value is nil bare (VIS_DECL_NIL), the name for
-   one Symbol or def (VIS_DECL_SYM), and the Array of names otherwise
-   (VIS_DECL_ARRAY). private_class_method / public_class_method naming
+   or module body (private and public also at top level), bare or naming its methods by Symbol or String literals,
+   `def`s or one Array of Symbols. Its value is nil bare (VIS_DECL_NIL), the
+   argument for one Symbol or the name for one def (VIS_DECL_SYM), the
+   argument for one String as given (VIS_DECL_STR: `private "m"` answers
+   "m"), and the Array of those otherwise (VIS_DECL_ARRAY). private_class_method / public_class_method naming
    Symbols, Strings or `def self.m`s answer the class itself (VIS_DECL_SELF). 0 when
    `id` is not one of these. A method body's word counts where the record
    reads the class self is there (elab_body_word): vis_decl_class, the
@@ -5742,11 +5743,11 @@ int vis_decl_call(Compiler *c, int id) {
   }
   for (int i = 0; i < an; i++) {
     NodeKind k = nt_kind(nt, av[i]);
-    if (k == NK_SymbolNode || (cm && k == NK_StringNode)) continue;
+    if (k == NK_SymbolNode || k == NK_StringNode) continue;
     if (k == NK_DefNode && (nt_ref(nt, av[i], "receiver") >= 0) == cm) continue;
     return 0;
   }
-  return cm ? VIS_DECL_SELF : an == 1 ? VIS_DECL_SYM : VIS_DECL_ARRAY;
+  return cm ? VIS_DECL_SELF : an == 1 ? (nt_kind(nt, av[0]) == NK_StringNode ? VIS_DECL_STR : VIS_DECL_SYM) : VIS_DECL_ARRAY;
 }
 
 /* A receiver-less attr_reader / attr_writer / attr_accessor / attr in a class

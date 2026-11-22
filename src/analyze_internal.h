@@ -469,11 +469,19 @@ void walk_scope(Compiler *c, int id, int scope_idx, int class_id);
    which runs: 1 in the begin's own frame, 2 in a frame opened under it (a
    class body), whose statements may not run only from outside it. bmay:
    in the body of a top-level reopening of a builtin class that a
-   condition holds (LrStmt.bmay). */
+   condition holds (LrStmt.bmay). blk: in an iterator's block, counted from
+   the frame; skip: surely not reached when the frame's body runs (a block
+   around it that surely runs no time, a statement ahead of it in a block
+   that surely leaves it); unsure: neither that nor surely reached (a block
+   not known to run at least once, a statement ahead of it in a block that
+   may raise or leave it): LrStmt.blk, skip, unsure. A block whose call
+   keeps it to run later (defer: a define_method's, a proc's, at_exit's, a
+   Thread's) keeps the three of the block around it: one in a block that
+   never runs is never made. */
 typedef struct {
   int e, file, top, frame, depth, rep;
   int list;   /* the statement list the node is an element of (a StatementsNode), -1 for a lone expression */
-  unsigned char may, partial, kind, bits, defer, fmay, fpartial, sure, kept, rescued, bmay;
+  unsigned char may, partial, kind, bits, defer, fmay, fpartial, sure, kept, rescued, bmay, blk, skip, unsure;
 } ElabPos;
 enum { EP_NODE, EP_SPINE, EP_LIST, EP_NEW };
 ElabPos elab_child(Compiler *c, int p, int ch, const ElabPos *pp);

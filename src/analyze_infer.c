@@ -6677,6 +6677,7 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
   switch (vis_decl_call(c, id)) {
     case VIS_DECL_NIL: { *out = TY_NIL; return 1; }
     case VIS_DECL_SYM: { *out = TY_SYMBOL; return 1; }
+    case VIS_DECL_STR: { *out = TY_STRING; return 1; }
     case VIS_DECL_ARRAY: { *out = TY_POLY_ARRAY; return 1; }
     case VIS_DECL_SELF: { *out = TY_CLASS; return 1; }
   }

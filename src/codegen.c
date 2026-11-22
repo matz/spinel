@@ -10537,6 +10537,53 @@ static void emit_proc_param_cell(Compiler *c, Scope *bs, const char *p, Buf *pb)
   }
 }
 
+
+/* Does the method pass emit scope s (the one that decides which scopes the loop below skips)? */
+static int scope_is_emitted(Compiler *c, int s) {
+  const Scope *sc = &c->scopes[s];
+  return !(prog_is_top_scope(c, sc) || sc->yields || (!sc->reachable && (!sc->is_proc_form || !proc_form_live(c, s))) ||
+           scope_is_shadowed(c, s) || comp_scope_copied_away(c, s));
+}
+
+/* The capture struct of a proc: a pointer to the cell of each local `caps` names, a float capture riding a native
+   sp_float cell, a poly capture an sp_RbVal cell, a heap object its typed pointer (see emit_scope_decls); and the
+   scan that marks the struct and then each cell, as sp_Proc_scan does not mark the struct. */
+static void emit_cap_fields(Compiler *c, const Scope *bs, const NameSet *caps, Buf *b) {
+  for (int i = 0; i < caps->n; i++) {
+    LocalVar *clv = scope_local((Scope *)bs, caps->v[i]);
+    buf_puts(b, " ");
+    emit_cell_elem_type(c, clv, b);
+    buf_printf(b, " *c_%s;", caps->v[i]);
+  }
+}
+static void emit_cap_marks(const NameSet *caps, Buf *b) {
+  for (int i = 0; i < caps->n; i++)
+    buf_printf(b, "  if (_c->c_%s) sp_gc_mark((void *)_c->c_%s);\n", caps->v[i], caps->v[i]);
+}
+/* Fill the struct `_capv_<pid>` in the statement's prelude with the cells `caps` names, as named where it is BUILT.
+   Inside another proc that captures the same name, no `_cell_<n>` is in scope: the cell arrived through that proc's
+   own capture struct, and the new one forwards it from there (#3416). A name renamed here is an INLINED callee's
+   local that only shares the spelling with the enclosing capture's. */
+static void emit_cap_fill(Buf *out, int indent, const char *pid, const NameSet *caps) {
+  for (int i = 0; i < caps->n; i++) {
+    emit_indent(out, indent);
+    if (g_cap_struct && g_cap_names && nameset_has(g_cap_names, caps->v[i]) &&
+        sp_streq(rename_local(caps->v[i]), caps->v[i]))
+      buf_printf(out, "_capv_%s->c_%s = ((%s *)_cap)->c_%s;\n", pid, caps->v[i], g_cap_struct, caps->v[i]);
+    else
+      buf_printf(out, "_capv_%s->c_%s = _cell_%s;\n", pid, caps->v[i], rename_local(caps->v[i]));
+  }
+}
+/* Can the cell of `lv` ride a capture struct? A Float capture is a real sp_float field, not the proc's argument
+   slot, so it is safe even alongside a float parameter (a first-class proc's `.call` passes float args through the
+   boxed side-channel); a by-value struct rides its own cell (#3995 for the class; the Range / Rational / Complex
+   siblings were left on the reject, and Time / Tms / a String range after them). */
+static int cap_cell_supported(Compiler *c, const LocalVar *lv) {
+  return lv->type == TY_INT || lv->type == TY_BOOL || lv->type == TY_SYMBOL || lv->type == TY_UNKNOWN ||
+         lv->type == TY_PROC || lv->type == TY_FLOAT || lv->type == TY_POLY || cell_value_struct(lv->type) != NULL ||
+         (proc_slot_is_ptr(lv->type) && !comp_ty_value_obj(c, lv->type));
+}
+
 void emit_proc_literal(Compiler *c, int create, Buf *b) {
   if (create < 0 || create != g_block_id || !g_yield_self_fallback) {
     emit_proc_literal_here(c, create, b);
@@ -10870,20 +10917,7 @@ static void emit_proc_literal_here(Compiler *c, int create, Buf *b) {
       continue;
     }
     if (lv && lv->is_cell) {
-      int ptr_cell = proc_slot_is_ptr(lv->type) && !comp_ty_value_obj(c, lv->type);
-      /* Float captures ride the capture struct (a real sp_float field), not the
-         proc's argument slot, so they are safe even alongside a float parameter
-         -- a first-class proc's `.call` passes float args through the boxed
-         side-channel (sp_box_float / sp_poly_to_f), not the truncating slot. */
-      int float_cell = lv->type == TY_FLOAT;
-      int poly_cell = lv->type == TY_POLY;
-      /* a by-value struct rides its own cell, like a float (#3995 for the
-         class; the Range / Rational / Complex siblings were left on the
-         reject, and Time / Tms / a String range after them) */
-      int class_cell = cell_value_struct(lv->type) != NULL;
-      if (lv->type != TY_INT && lv->type != TY_BOOL && lv->type != TY_SYMBOL &&
-          lv->type != TY_UNKNOWN &&
-          lv->type != TY_PROC && !float_cell && !ptr_cell && !poly_cell && !class_cell) {
+      if (!cap_cell_supported(c, lv)) {
         free(params.v); free(used.v); free(locals.v); free(caps.v);
         unsupported(c, create, "proc capturing a non-integer variable (later slice)");
         return;
@@ -11262,14 +11296,7 @@ else if (orecv >= 0 && onm) {
      the cap struct unreachable and free it out from under the proc. */
   if (ncap > 0 || cap_self || rself_boxed || ie_fb || cap_cls || ret_proc || brk_blk) {
     buf_printf(&g_procs, "typedef struct {");
-    for (int i = 0; i < ncap; i++) {
-      LocalVar *clv = scope_local(bs, caps.v[i]);
-      /* a float capture rides a native sp_float cell, a poly capture an
-         sp_RbVal cell, a heap object its typed pointer (see emit_scope_decls). */
-      buf_puts(&g_procs, " ");
-      emit_cell_elem_type(c, clv, &g_procs);
-      buf_printf(&g_procs, " *c_%s;", caps.v[i]);
-    }
+    emit_cap_fields(c, bs, &caps, &g_procs);
     if (cap_self && self_is_value) buf_printf(&g_procs, " sp_%s __self_val;", self_cls);
     else if (self_boxed) buf_puts(&g_procs, " sp_RbVal __self_rb;");
     else if (cap_self || ie_fb) buf_puts(&g_procs, " void *__self;");
@@ -11281,9 +11308,7 @@ else if (orecv >= 0 && onm) {
     buf_printf(&g_procs, "static void _proc_cap_scan_%s(void *p) {\n", pid);
     buf_printf(&g_procs, "  sp_gc_mark(p);\n");
     buf_printf(&g_procs, "  _proc_cap_%s *_c = (_proc_cap_%s *)p;\n", pid, pid);
-    for (int i = 0; i < ncap; i++) {
-      buf_printf(&g_procs, "  if (_c->c_%s) sp_gc_mark((void *)_c->c_%s);\n", caps.v[i], caps.v[i]);
-    }
+    emit_cap_marks(&caps, &g_procs);
     if (cap_self && self_is_value) {
       if (class_needs_scan(&c->classes[scls]))
         buf_printf(&g_procs, "  sp_%s__gc_scan(&_c->__self_val);\n", self_cls);
@@ -11936,18 +11961,7 @@ else if (orecv >= 0 && onm) {
          proc that captures the same name, no `_cell_<n>` is in scope -- the
          cell arrived through that proc's own capture struct, and the nested
          proc has to forward it from there (#3416). */
-      for (int i = 0; i < ncap; i++) {
-        /* no shadow publish here either: see the fiber/thread fill above */
-        emit_indent(g_pre, g_indent);
-        /* (a name renamed here is an INLINED callee's local that only shares
-           the spelling with the enclosing capture's: see the fill above) */
-        if (g_cap_struct && g_cap_names && nameset_has(g_cap_names, caps.v[i]) &&
-            sp_streq(rename_local(caps.v[i]), caps.v[i]))
-          buf_printf(g_pre, "_capv_%s->c_%s = ((%s *)_cap)->c_%s;\n", pid, caps.v[i], g_cap_struct, caps.v[i]);
-        else
-          /* as the sibling site above */
-          buf_printf(g_pre, "_capv_%s->c_%s = _cell_%s;\n", pid, caps.v[i], rename_local(caps.v[i]));
-      }
+      emit_cap_fill(g_pre, g_indent, pid, &caps);
       /* Capture the enclosing instance self: by value for a value-type class
          (deref if the enclosing method holds self as a pointer, e.g. an
          initialize body), else by pointer (#1436). */
@@ -25158,7 +25172,7 @@ char *codegen_program(const NodeTable *nt) {
       if (cg_prev_s >= 0) cg_slow_note(cg_prev_s, now - cg_prev_t);
       cg_prev_s = s; cg_prev_t = now;
     }
-    if (prog_is_top_scope(c, &c->scopes[s]) || c->scopes[s].yields || (!c->scopes[s].reachable && (!c->scopes[s].is_proc_form || !proc_form_live(c, s))) || scope_is_shadowed(c, s) || comp_scope_copied_away(c, s)) continue;
+    if (!scope_is_emitted(c, s)) continue;
     int ndiag0 = g_ndiags, ndefer0 = g_stmt_deferrals;
     int orphan = scope_is_orphan_method(c, s);
     if (orphan) g_unsup_quiet = 1;

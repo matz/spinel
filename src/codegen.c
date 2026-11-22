@@ -10643,6 +10643,7 @@ static void emit_env_globals(Compiler *c, Buf *decl, Buf *mark) {
   }
 }
 /* Load the environment as the method starts, and read the cells through it */
+static void emit_env_missing(Compiler *c, const Scope *dm, Buf *b, int in_method);
 static void emit_env_load(Compiler *c, Scope *dm, Buf *b, NameSet *caps, char *capst, size_t cap) {
   char pid[24];
   env_tag(dm, pid, sizeof pid);
@@ -10651,13 +10652,39 @@ static void emit_env_load(Compiler *c, Scope *dm, Buf *b, NameSet *caps, char *c
   buf_printf(b, "    %s *_cap = (%s *)gv___spinel_env_%d;\n    SP_GC_ROOT(_cap);\n", capst, capst, dm->def_node);
   /* A call that reaches the method before its definer ran (a poly dispatch that has no version to read) finds no
      environment: CRuby has no such method yet */
-  buf_puts(b, "    if (SP_UNLIKELY(!_cap)) { sp_raise_nomethod(sp_nomethod_msg(");
+  emit_env_missing(c, dm, b, 1);
+}
+/* ...the NoMethodError for it. In the method, `self` is the receiver and the function returns; where a call site
+   spells a default in the callee's environment (env_bind_begin) it has no receiver to name but a class's */
+static void emit_env_missing(Compiler *c, const Scope *dm, Buf *b, int in_method) {
+  buf_puts(b, "if (SP_UNLIKELY(!_cap)) { sp_raise_nomethod(sp_nomethod_msg(");
   emit_str_literal(b, dm->name);
   if (dm->is_cmethod) buf_printf(b, ", sp_box_class((sp_Class){%d, NULL})));", dm->class_id);
-  else if (dm->class_id >= 0 && !c->classes[dm->class_id].is_value_type) buf_printf(b, ", sp_box_obj((void *)self, %d)));", dm->class_id);
+  else if (in_method && dm->class_id >= 0 && !c->classes[dm->class_id].is_value_type) buf_printf(b, ", sp_box_obj((void *)self, %d)));", dm->class_id);
   else buf_puts(b, ", sp_box_nil()));");
-  if (method_is_void(dm)) buf_puts(b, " return; }\n");
-  else buf_printf(b, " return %s; }\n", method_ret_zero(c, dm) ? method_ret_zero(c, dm) : "0");
+  if (!in_method) buf_puts(b, " }");
+  else if (method_is_void((Scope *)dm)) buf_puts(b, " return; }\n");
+  else buf_printf(b, " return %s; }\n", method_ret_zero((Compiler *)c, (Scope *)dm) ? method_ret_zero((Compiler *)c, (Scope *)dm) : "0");
+}
+/* A default that a call site spells for a callee with an environment (a define_method block's parameter that reads
+   a local it closes over) runs in the callee's context, as its self does (dflt_self_enter): a statement expression
+   that binds the environment, `_cap`, around the default, with the environment's struct and names as the cap context
+   for the reads in it. env_bind_begin writes the opening and saves the context; env_bind_end the closing. */
+void env_bind_begin(Compiler *c, Scope *dm, Buf *out, EnvBind *sv) {
+  char pid[24];
+  env_tag(dm, pid, sizeof pid);
+  sv->st = g_cap_struct; sv->names = g_cap_names;
+  sv->caps = env_caps(dm, &c->scopes[dm->env_host - 1]);
+  snprintf(sv->capst, sizeof sv->capst, "_proc_cap_%s", pid);
+  g_cap_struct = sv->capst; g_cap_names = &sv->caps;
+  buf_printf(out, "({ %s *_cap = (%s *)gv___spinel_env_%d; ", sv->capst, sv->capst, dm->def_node);
+  emit_env_missing(c, dm, out, 0);
+  buf_puts(out, " ");
+}
+void env_bind_end(Buf *out, EnvBind *sv) {
+  buf_puts(out, "; })");
+  g_cap_struct = sv->st; g_cap_names = sv->names;
+  free(sv->caps.v);
 }
 /* Can every local that definer scope dm closes over ride a cell? (the call plan refuses a block over one that cannot) */
 int env_cells_supported(Compiler *c, const Scope *dm) {

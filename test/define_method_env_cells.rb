@@ -191,3 +191,16 @@ def tail_write
   v += 1
 end
 p tail_write
+
+# a block parameter's default that reads a local the block closes over is evaluated in the method's environment
+class Dflt
+  def self.mk(n)
+    define_method(:m) { |a, b = n, *r, &blk| [a, b, r, blk ? blk.call(n) : nil] }
+    :ok
+  end
+end
+Dflt.mk(3)
+p Dflt.new.m(1)
+p Dflt.new.m(1, 2, 3) { |x| x * 2 }
+Dflt.mk(8)
+p Dflt.new.m(1)

@@ -12126,7 +12126,7 @@ static void lr_fire_mixin(Compiler *c, const LrEvent *v, int node, int frame, Lo
   int splice = param && dr >= 0 && nt_kind(nt, dr) == NK_SelfNode && hdr >= 0 && class_def_is_module(nt, hdr) &&
                nt_ref(nt, node, "receiver") < 0 && !nt_int(nt, dn, "cond_lone_disp", 0) &&
                (nt_kind(nt, frame) == NK_ClassNode || nt_kind(nt, frame) == NK_ModuleNode) &&
-               !incl_hook_returns(nt, hb);
+               !incl_hook_called(nt, hb, param);
   if (!splice) {
     int call = lr_hook_call(c, node, nt_clone_subtree(nt, v->arg), v->name, base, NULL);
     nt_node_set_int(nt, call, "class_recv", 1);   /* (a module is a class value: the receiver is proven one) */

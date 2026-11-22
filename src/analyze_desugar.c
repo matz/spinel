@@ -26689,6 +26689,82 @@ int incl_hook_returns(const NodeTable *nt, int node) {
   return 0;
 }
 
+/* Does the hook body name an instance variable of its own: one outside a
+   class_eval-family block, where self is the module? It is the module's,
+   so the body is called as the method it is (self the module) rather than
+   spliced into the includer's body, where it would read as the includer's.
+   A `def`, a lambda and a class body are code of their own. */
+static int incl_hook_own_ivar(const NodeTable *nt, int node) {
+  if (node < 0) return 0;
+  NodeKind k = nt_kind(nt, node);
+  switch (k) {
+  case NK_InstanceVariableReadNode: case NK_InstanceVariableWriteNode: case NK_InstanceVariableOperatorWriteNode:
+  case NK_InstanceVariableOrWriteNode: case NK_InstanceVariableAndWriteNode: case NK_InstanceVariableTargetNode:
+    return 1;
+  case NK_DefNode: case NK_LambdaNode: case NK_ClassNode: case NK_ModuleNode: case NK_SingletonClassNode:
+    return 0;
+  default: break;
+  }
+  int skip = -1;
+  if (k == NK_CallNode) {
+    const char *cn = nt_str(nt, node, "name");
+    int blk = nt_ref(nt, node, "block");
+    if (cn && blk >= 0 && nt_kind(nt, blk) == NK_BlockNode &&
+        (is_class_eval_family(cn) || sp_streq(cn, "define_method") || sp_streq(cn, "define_singleton_method")))
+      skip = blk;
+  }
+  int nr = nt_num_refs(nt, node);
+  for (int i = 0; i < nr; i++) {
+    int ch = nt_ref_at(nt, node, i);
+    if (ch != skip && incl_hook_own_ivar(nt, ch)) return 1;
+  }
+  int na = nt_num_arrs(nt, node);
+  for (int i = 0; i < na; i++) {
+    int cnt = 0;
+    const int *ids = nt_arr_at(nt, node, i, &cnt);
+    for (int j = 0; j < cnt; j++)
+      if (incl_hook_own_ivar(nt, ids[j])) return 1;
+  }
+  return 0;
+}
+
+/* Does the hook body run something on its parameter that makes the includer
+   (`base.extend(M)`, `base.class_eval do`, `base.attr_accessor :v`, a send)?
+   Anything called on the parameter but the few methods that only ask the
+   class who it is counts; the parameter read as a value (`@last = base`)
+   does not. */
+static int incl_hook_acts_on_param(const NodeTable *nt, int node, const char *param) {
+  if (node < 0) return 0;
+  NodeKind k = nt_kind(nt, node);
+  if (k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode) return 0;
+  if (k == NK_CallNode) {
+    int r = nt_ref(nt, node, "receiver");
+    const char *cn = nt_str(nt, node, "name"), *rn = r >= 0 && nt_kind(nt, r) == NK_LocalVariableReadNode ? nt_str(nt, r, "name") : NULL;
+    if (rn && param && sp_streq(rn, param) &&
+        !(cn && (sp_streq(cn, "name") || sp_streq(cn, "to_s") || sp_streq(cn, "inspect") || sp_streq(cn, "==") ||
+                 sp_streq(cn, "!=") || sp_streq(cn, "equal?") || sp_streq(cn, "hash"))))
+      return 1;
+  }
+  int nr = nt_num_refs(nt, node);
+  for (int i = 0; i < nr; i++)
+    if (incl_hook_acts_on_param(nt, nt_ref_at(nt, node, i), param)) return 1;
+  int na = nt_num_arrs(nt, node);
+  for (int i = 0; i < na; i++) {
+    int cnt = 0;
+    const int *ids = nt_arr_at(nt, node, i, &cnt);
+    for (int j = 0; j < cnt; j++)
+      if (incl_hook_acts_on_param(nt, ids[j], param)) return 1;
+  }
+  return 0;
+}
+
+/* Is the hook body called as the method it is, rather than spliced? One
+   with a `return`; and one that names the module's own ivar and makes
+   nothing of the includer, which a called method could not make. */
+int incl_hook_called(const NodeTable *nt, int body, const char *param) {
+  return incl_hook_returns(nt, body) || (incl_hook_own_ivar(nt, body) && !incl_hook_acts_on_param(nt, body, param));
+}
+
 
 static int cb_self_act_name(const char *nm, int block);
 /* Is call's first argument a String written there (the text of a class_eval)? */
@@ -26715,13 +26791,18 @@ static int incl_declined_node(const NodeTable *nt, int node, const char *param) 
   case NK_DefNode: return 0;
   /* an instance variable: the module's own where the hook's body names it
      (self is the module there; spliced, it would read as the includer's),
-     so the pre-walk splice keeps it, with the passes that read it
-     (desugar_body_ivars, desugar_const_ivar_access). In a class_eval block
-     on the includer it is the includer's, as it is once the walk has
-     spliced the block's statements into the includer's body. */
+     so a body that makes nothing of the includer is called, not spliced
+     (incl_hook_called), and the called method reads its ivar as any method
+     of the module does; one that also makes the includer keeps the
+     pre-walk splice and the passes that read the ivar there
+     (desugar_body_ivars, desugar_const_ivar_access). In a
+     class_eval block on the includer it is the includer's, as it is once
+     the walk has spliced the block's statements into the includer's body.
+     One in a block of a body that is called stays a reason. */
   case NK_InstanceVariableReadNode: case NK_InstanceVariableWriteNode: case NK_InstanceVariableOperatorWriteNode:
   case NK_InstanceVariableOrWriteNode: case NK_InstanceVariableAndWriteNode: case NK_InstanceVariableTargetNode:
     if (g_incl_body_spliced && g_incl_on_base) break;
+    if (!g_incl_body_spliced && !g_incl_on_base) break;
     return 1;
   /* `class << x`: in a body the walk splices it is a statement of the
      includer's body, where the walk reads it */
@@ -26839,7 +26920,7 @@ static int incl_declined_stmts(NodeTable *nt, int body, const char *param) {
      mixin stays a call on a value, so the pre-walk splice keeps it. */
   int *rest = malloc(sizeof(int) * (size_t)(bn > 0 ? bn : 1)), rn = 0;
   if (!rest) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  int spliced = body >= 0 && !incl_hook_returns(nt, body);
+  int spliced = body >= 0 && !incl_hook_called(nt, body, param);
   for (int i = 0; i < bn; i++) {
     int s = bv[i], r = nt_kind(nt, s) == NK_CallNode ? nt_ref(nt, s, "receiver") : -1;
     int on_base = r >= 0 && nt_kind(nt, r) == NK_LocalVariableReadNode && param && nt_str(nt, r, "name") &&
@@ -26861,7 +26942,7 @@ int incl_hook_declined(NodeTable *nt, int def) {
   const int *rq = ps >= 0 ? nt_arr(nt, ps, "requireds", &rn) : NULL;
   const char *param = rn == 1 ? nt_str(nt, rq[0], "name") : NULL;
   int hb = nt_ref(nt, def, "body");
-  g_incl_body_spliced = hb >= 0 && !incl_hook_returns(nt, hb);
+  g_incl_body_spliced = hb >= 0 && !incl_hook_called(nt, hb, param);
   int r = incl_declined_stmts(nt, hb, param);
   g_incl_body_spliced = 0;
   return r;
@@ -27165,6 +27246,9 @@ int desugar_included_hooks(Compiler *c, HostStep *h) {
         int hb = nt_ref(nt, hook, "body");
         if (hb < 0) continue;
         int was = no;
+        /* (a body kept here for a shape of its own is spliced unless a
+           `return` forbids it: one that names the module's ivar is read
+           by the ivar steps, as before) */
         if (incl_hook_returns(nt, hb)) {
           int call = incl_hook_call(nt, s, av[j], is_ext ? "extended" : "included");
           if (call < 0) continue;

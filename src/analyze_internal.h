@@ -1240,6 +1240,7 @@ void incl_subst(const Compiler *c, NodeTable *nt, int node, const InclSubst *is,
 void incl_emit_stmt(const NodeTable *nt, int s, int **out, int *no, int *cap, char **frame);
 void incl_detach_shell(NodeTable *nt, int node, const int *out, int no);   /* an unwrapped container lets its statements go */
 char *incl_frame_add(char *fr, const char *locals);
+int incl_hook_called(const NodeTable *nt, int body, const char *param);
 int incl_hook_returns(const NodeTable *nt, int node);   /* a `return` that leaves the hook */
 /* Does the body of hook def `def` carry a shape a step between
    desugar_included_hooks and the walk reads (host_prewalk_shape and the

@@ -4665,17 +4665,30 @@ void sp_sig_exit_dispatch(void) {
   sp_trap_proc[0] = NULL;   /* run once */
   if (p) { sp_int slot = 0; _sp_proc_poly_args[0] = sp_box_int(0); sp_proc_call(p, 1, &slot); }
 }
+/* What trap returns for a signal at its default, as CRuby: "DEFAULT" for a
+   signal CRuby handles itself, nil for PIPE, "SYSTEM_DEFAULT" otherwise. */
+static const char *sp_trap_default_name(int no) {
+  switch (no) {
+  case SIGINT: case SIGHUP: case SIGQUIT: case SIGTERM:
+  case SIGALRM: case SIGUSR1: case SIGUSR2: case SIGCHLD:
+    return (&("\xff" "DEFAULT")[1]);
+  case SIGPIPE:
+    return NULL;
+  }
+  return (&("\xff" "SYSTEM_DEFAULT")[1]);
+}
 sp_RbVal sp_signal_trap(sp_RbVal sig, sp_RbVal handler) {SP_GC_ROOT_RBVAL(sig);SP_GC_ROOT_RBVAL(handler);
   int no = sp_signal_resolve(sig);
   if (no == SIGKILL || no == SIGSTOP)
     sp_raise_cls("Errno::EINVAL",
                  sp_sprintf("Invalid argument - SIG%s", sp_signal_signame(no)));
   /* the previous handler: a stored proc or command string; an untouched
-     signal reads "DEFAULT", except EXIT whose default handler is nil (#2839) */
+     signal reads its default (sp_trap_default_name), and EXIT nil (#2839) */
+  const char *dflt = no == 0 ? NULL : sp_trap_default_name(no);
   sp_RbVal prev = sp_trap_proc[no] ? sp_box_proc((sp_Proc *)sp_trap_proc[no])
                 : sp_trap_state[no] ? sp_box_str_fresh(sp_trap_state[no])
-                : no == 0 ? sp_box_nil()
-                : sp_box_str_fresh((&("\xff" "DEFAULT")[1]));
+                : dflt ? sp_box_str_fresh(dflt)
+                : sp_box_nil();
   SP_GC_ROOT_RBVAL(prev);
   if (handler.tag == SP_TAG_OBJ && handler.cls_id == SP_BUILTIN_PROC && handler.v.p) {
     sp_trap_proc[no] = (sp_Proc *)handler.v.p;
@@ -4700,11 +4713,12 @@ sp_RbVal sp_signal_trap(sp_RbVal sig, sp_RbVal handler) {SP_GC_ROOT_RBVAL(sig);S
     int ignore = strcmp(hs, "IGNORE") == 0 || strcmp(hs, "SIG_IGN") == 0;
     sp_trap_proc[no] = NULL;
     /* SYSTEM_DEFAULT reads back as itself (#2839); it installs SIG_DFL too.
+       DEFAULT reads back as the default of the signal (sp_trap_default_name).
        An EXIT string command clears the handler, whose read-back is nil. */
     sp_trap_state[no] = no == 0 ? NULL
                       : ignore ? (&("\xff" "IGNORE")[1])
                       : strcmp(hs, "SYSTEM_DEFAULT") == 0 ? (&("\xff" "SYSTEM_DEFAULT")[1])
-                      : (&("\xff" "DEFAULT")[1]);
+                      : dflt;
     if (no != 0) signal(no, ignore ? SIG_IGN : SIG_DFL);
   }
   return prev;

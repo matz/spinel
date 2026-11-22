@@ -33251,7 +33251,7 @@ int declare_default_locals(Compiler *c, Scope *m, int dnode) {
   int uid = 0;
   for (int i = 0; i < nn; i++) {
     LocalVar *lv = scope_local(m, names[i]);
-    if (!lv || lv->is_param) continue;
+    if (!lv || lv->is_param || lv->owner != m->idx) continue;   /* (a local a block closes over is a cell of its definer's: env_bind_begin) */
     if (m->blk_param && sp_streq(lv->name, m->blk_param)) continue;
     if (!sp_streq(rename_local(lv->name), lv->name)) continue;
     if (nread < 0) {

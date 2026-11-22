@@ -1987,3 +1987,8 @@ char *repr_dump(const Compiler *c) {
   return out;
 }
 
+int repr_cell_capturable(const Compiler *c, const LocalVar *lv) {
+  return lv->type == TY_INT || lv->type == TY_BOOL || lv->type == TY_SYMBOL || lv->type == TY_UNKNOWN ||
+         lv->type == TY_PROC || lv->type == TY_FLOAT || lv->type == TY_POLY || cell_value_struct(lv->type) != NULL ||
+         (proc_slot_is_ptr(lv->type) && !comp_ty_value_obj((Compiler *)c, lv->type));
+}

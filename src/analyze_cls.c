@@ -913,6 +913,7 @@ static int cf_lv(CF *f, int v, const char *nm) {
   Scope *s = &f->c->scopes[si];
   LocalVar *lv = scope_local(s, nm);
   if (!lv) return -1;
+  if (lv->owner != si) { si = lv->owner; s = &f->c->scopes[si]; }
   int idx = (int)(lv - s->locals);
   if (idx < 0 || idx >= f->nlv[si]) return -1;
   if (!f->lv_el[si]) {
@@ -927,6 +928,7 @@ static int cf_lv_in(CF *f, int si, const char *nm) {
   Scope *s = &f->c->scopes[si];
   LocalVar *lv = nm ? scope_local(s, nm) : NULL;
   if (!lv) return -1;
+  if (lv->owner != si) { si = lv->owner; s = &f->c->scopes[si]; }
   int idx = (int)(lv - s->locals);
   if (idx < 0 || idx >= f->nlv[si]) return -1;
   if (!f->lv_el[si]) {

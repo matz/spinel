@@ -665,6 +665,15 @@ typedef struct {
   char *dm_subst_name;
   int dm_subst_node;
 
+  /* A define_method or define_singleton_method block in a def's body that reads or writes that def's locals
+     (scope_env_link): the def's scope index + 1 (0 for none), and the names of those locals (the strings are the
+     nodes'). A lookup of one of them in this scope answers the def's own LocalVar (scope_local), which is a heap
+     cell, and the method the block defines reads them through the environment the definer
+     stored (emit_env_store). */
+  int env_host;
+  const char **env_names;
+  int nenv_names;
+
   /* Synthesized compiler_state method (no AST body): codegen emits a
      hand-built body looping over the owning class's compiler_state entries.
      0=not synthesized, else CS_SYNTH_* (see codegen). */

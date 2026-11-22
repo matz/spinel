@@ -1,0 +1,11 @@
+"undefined method 'm' for an instance of Early"
+"undefined method 'm' for an instance of Early"
+"undefined method 'm' for an instance of Early"
+[NameError, "undefined local variable or method 'g' for class Early"]
+[NameError, "undefined local variable or method 'v' for an instance of Early"]
+[2]
+2
+[1, 5]
+[1, 5]
+[1, 5]
+[1, 9]

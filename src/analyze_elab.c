@@ -4834,14 +4834,15 @@ static void lr_run_points(Compiler *c);
 static int lr_span(Compiler *c, int cls, const char *name, int sg, const ElabWindow *w, const LrDef **out, int cap, int *idle, int every);
 static void lr_copy_scopes(Compiler *c) {
   LoadRecord *r = c->lrec;
+  /* (a history is read by its index i, not held: an ask below may make a history, growing r->hist; the entries of
+     history i, which no ask here appends to, stay where they are) */
   for (int i = 0; i < r->nhist; i++) {
-    LrHist *h = &r->hist[i];
-    if (h->a < LR_MAIN || !h->b) continue;
-    for (int j = 0; j < h->n; j++) {
-      LrDef *v = &h->v[j];
+    if (r->hist[i].a < LR_MAIN || !r->hist[i].b) continue;
+    for (int j = 0; j < r->hist[i].n; j++) {
+      LrDef *v = &r->hist[i].v[j];
       if (v->kind != LR_COPY || v->scope > 0 || !v->target) continue;
-      if (v->body) { v->scope = lr_body_copy_scope(c, h->a, v); continue; }
-      const LrDef *d = lr_alias_origin(c, h->a, v);
+      if (v->body) { v->scope = lr_body_copy_scope(c, r->hist[i].a, v); continue; }
+      const LrDef *d = lr_alias_origin(c, r->hist[i].a, v);
       if (d) v->scope = d->scope;
     }
   }

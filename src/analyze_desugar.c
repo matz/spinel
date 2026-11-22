@@ -26891,7 +26891,7 @@ static int incl_declined_node(const NodeTable *nt, int node, const char *param) 
    (desugar_extend_enumerable among them), which never see a statement the
    walk splices: `base.extend(Enumerable)` in a hook left the includer
    with no class-side sort or map. */
-static int incl_mixes_own_modules(const NodeTable *nt, int s) {
+int incl_mixes_own_modules(const NodeTable *nt, int s) {
   int an = nt_ref(nt, s, "arguments"), ac = 0;
   const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
   if (ac == 0) return 0;

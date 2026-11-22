@@ -14183,6 +14183,14 @@ static int host_id_cmp(const void *a, const void *b) {
    where it is written: its nodes are not asked. Code spliced in the walk
    carries none. */
 int host_prewalk_shape(NodeTable *nt, const int *ids, int n) {
+  return host_prewalk_shape_at(nt, ids, n, 0);
+}
+/* ...in_walk: asked of statements the walk itself splices (host_splice's
+   check). There a mixin of modules the program defines is no such shape:
+   the walk records it where the statement lands (lr_fire_mixin's splice of
+   a hook's `base.extend(M)`, incl_mixes_own_modules), which is what took
+   those hooks from the pre-walk splice. A builtin module's still is. */
+int host_prewalk_shape_at(NodeTable *nt, const int *ids, int n, int in_walk) {
   int nn = 0, nb = 0, ns = 0, hit = -1;
   int *all = nt_subtree_ids(nt, ids, n, &nn), *blk = malloc(sizeof(int) * (size_t)(nn + 1));
   if (!blk) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
@@ -14200,7 +14208,8 @@ int host_prewalk_shape(NodeTable *nt, const int *ids, int n) {
     if (own && bsearch(&id, own, (size_t)ns, sizeof(int), host_id_cmp)) continue;
     switch (nt_kind(nt, id)) {
     case NK_CallNode:
-      if (is_ffi_decl_name(nm) || is_mixin_call(nm) || is_const_query_name(nm) || is_instance_eval_family(nm) ||
+      if (is_ffi_decl_name(nm) || (is_mixin_call(nm) && !(in_walk && incl_mixes_own_modules(nt, id))) ||
+          is_const_query_name(nm) || is_instance_eval_family(nm) ||
           is_alias_method_name(nm) || is_method_defined_query(nm) ||
           ((nt_kind(nt, rv) == NK_ConstantReadNode || nt_kind(nt, rv) == NK_ConstantPathNode) &&
            is_class_builder(nt_str(nt, rv, "name"), nm)))
@@ -14224,7 +14233,7 @@ int host_splice(Compiler *c, HostStep *h, int owner, int body, int at, int n, co
   n = sce_span(c, h, owner, body, at, n, locals, gone);
   int bn = 0;
   const int *st = nt_arr(c->nt, body, "body", &bn);
-  if (h->now && h->lc->check && at + n <= bn && host_prewalk_shape((NodeTable *)c->nt, st + at, n) >= 0)
+  if (h->now && h->lc->check && at + n <= bn && host_prewalk_shape_at((NodeTable *)c->nt, st + at, n, 1) >= 0)
     lower_say(h->lc, "host_splice", "a statement spliced in the walk carries a shape a step before the walk reads");
   if (h->now && at + n <= bn) {   /* the walk reaches them next: lowered now, as one span */
     int *sp = malloc(sizeof(int) * (size_t)(2 * n + 1));   /* a row may replace the body's array */

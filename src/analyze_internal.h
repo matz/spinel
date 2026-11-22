@@ -1006,6 +1006,8 @@ int an_temp_node(NodeTable *nt, Scope *sc, const char *nm, int value);   /* anal
 int bo_shallow_copy(NodeTable *nt, int id);   /* analyze.c: a copy of a call's fields in a fresh node, for the parentheses that run it in the call's place */
 int bo_may_act(Compiler *c, int e);   /* analyze.c: can evaluating e do anything observable (a call may; a read of a local, an instance variable or a constant, a literal cannot) */
 int host_prewalk_shape(NodeTable *nt, const int *ids, int n);   /* a node of the span a pre-walk step reads, or -1 */
+int host_prewalk_shape_at(NodeTable *nt, const int *ids, int n, int in_walk);
+int incl_mixes_own_modules(const NodeTable *nt, int s);   /* analyze_desugar.c: every module a mixin call names is the program's */
 void lower_finish(Compiler *c, LowerCtx *lc);   /* frees; under the check, reports and exits */
 
 /* the rows' functions, in the files that own the rewrites */

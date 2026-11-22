@@ -419,7 +419,14 @@ which the plan reads where the word runs (`lr_version_vis`, from the
 version's visibility cell where only the run decides). Only a def or a
 word of a name the program makes no entry of that the call plan cannot
 answer next to it is such a version (`lr_body_def_version`, over
-`lr_body_forms`). So is a definer call on self that stands in a
+`lr_body_forms`); a visibility word placed in a class body is an entry of
+its name's history with a point of its own, which the plan orders before the
+body's version, so it is no such entry and bars none, but for the name its
+reach ends at in a partial statement (one no entry of the program's places
+at the word, which a body's definer may have made by then): that stays
+barred, so the body's definer of it keeps the refusal it has there; a
+class-method word (`private_class_method`, `public_class_method`) keeps
+barring every name it takes, as the class side's faces read it. So is a definer call on self that stands in a
 method's body, a def's or a `define_method`'s or
 `define_singleton_method`'s block's, with no class body between
 (`lr_body_call`, `lr_in_method_body`; one in a block a class body hands a

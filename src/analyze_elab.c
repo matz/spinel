@@ -2907,6 +2907,24 @@ static int lr_word_reach(Compiler *c, int node, int cls, int sg, int *copies) {
   *copies = !mf || !arr;
   return n;
 }
+/* The reach the record made of word node (lr_word_reach), kept on the node for the bars (lr_body_forms): none for a
+   word whose every name the record makes versions of. The name the reach ends at bars the body versions of it: the
+   index of the walk, where already made, takes it as the word is walked, so no answer it gave ahead of the bar is
+   one the finished record contradicts */
+static void lr_bform_add(LoadRecord *r, int *cap, const char *name, int node, int attr, int hdr, const char *via);
+static int lr_bform_cmp(const void *a, const void *b);
+static const char *lr_word_name(const NodeTable *nt, int word, int k, int defs);
+static void lr_word_mark(Compiler *c, int node, int reach) {
+  LoadRecord *r = c->lrec;
+  int keep = reach == INT_MAX || reach == LR_MF_INERT ? 0 : reach + 1;
+  nt_node_set_int((NodeTable *)c->nt, node, "word_reach", keep);
+  const char *cut = keep && r->bform_n != 0 && lr_body_word(c->nt, node) ? lr_word_name(c->nt, node, keep - 1, 0) : NULL;
+  if (cut) {
+    int cap = r->nbform;
+    lr_bform_add(r, &cap, cut, node, 0, -1, NULL);
+    qsort(r->bform, (size_t)r->nbform, sizeof *r->bform, lr_bform_cmp);
+  }
+}
 /* ...does such a word name class methods (private_class_method, public_class_method)? */
 static int lr_body_word_cside(const NodeTable *nt, int node) {
   return class_method_vis_of_name(vis_word_call(nt, node, NULL)) != 0;
@@ -3771,6 +3789,7 @@ static void lr_body_forms(Compiler *c, const int *par, int n) {
   LoadRecord *r = c->lrec;
   if (r->walk ? r->bform_n != 0 : r->bform_n == n + 1) return;
   int cap = 0, nold = r->bform_n < 0 ? r->nbform : 0, nal = 0, cal = 0, *al = NULL;   /* al: the top level's aliases, by node */
+  int *pw = NULL, npw = 0, cpw = 0;   /* the placed words in a partial statement */
   struct LrBodyForm *old = nold ? r->bform : NULL;
   if (!old) free(r->bform);
   r->bform = NULL; r->nbform = 0;
@@ -3825,9 +3844,26 @@ static void lr_body_forms(Compiler *c, const int *par, int n) {
     if (nm && !is_method_list_call(nm) && !vis && m > 1) m = 1;
     /* (a visibility word's names, an Array's elements among them, as the bars read them: lr_word_name) */
     int wd = k == NK_CallNode && lr_body_word(nt, id) && lr_body_around(nt, par, n, id) >= 0;   /* (a barred body word: its defs' names too) */
-    for (int a = 0; vis && lr_word_name(nt, id, a, wd); a++) lr_bform_add(r, &cap, lr_word_name(nt, id, a, wd), id, 0, hdr, NULL);
+    /* (an instance word placed in a class body is an entry of its name's history with a point of its own, which the plan
+       orders before a body's version of the name: it bars none; a class-method word keeps barring, as the class side's
+       faces read it) */
+    int placedw = k == NK_CallNode && lr_body_word(nt, id) && lr_body_around(nt, par, n, id) < 0 && !lr_body_word_cside(nt, id);
+    const LrStmt *pst = placedw ? lr_stmt_of(r, id) : NULL;
+    if (pst) {   /* (its reach may be unknown, below) */
+      if (npw == cpw && !(pw = realloc(pw, sizeof *pw * (size_t)(cpw = cpw ? 2 * cpw : 8)))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      pw[npw++] = id;
+    }
+    for (int a = 0; vis && !placedw && lr_word_name(nt, id, a, wd); a++) lr_bform_add(r, &cap, lr_word_name(nt, id, a, wd), id, 0, hdr, NULL);
     for (int a = 0; !vis && v && a < m; a++) lr_bform_add(r, &cap, vis_arg_name(nt, v[a]), id, nm && is_attr_name(nm), hdr, NULL);
   }
+  /* (the name a placed word's reach ends at, one no entry of the program's places at the word: a method body's definer
+     of it may have run by then, which the record does not order here, so whether the word reaches past it is unknown.
+     It bars the name as the word did, and the plan keeps the refusal a body's definer of it has there) */
+  for (int w = 0; w < npw; w++) {
+    int reach = (int)nt_int(nt, pw[w], "word_reach", 0) - 1;
+    if (reach >= 0) lr_bform_add(r, &cap, lr_word_name(nt, pw[w], reach, 0), pw[w], 0, -1, NULL);
+  }
+  free(pw);
   if (r->nbform) qsort(r->bform, (size_t)r->nbform, sizeof *r->bform, lr_bform_cmp);
   /* (an alias at the top level of a name the index holds, until none is new) */
   for (int more = nal > 0; more; ) {
@@ -4530,6 +4566,7 @@ static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int
   if (!nm || cls < LR_MAIN) return;
   /* (the names as far as the word reaches, module_function's private only where it copies none: lr_word_reach) */
   int mfc, mfr = lr_word_reach(x->c, node, cls, sg, &mfc), nk = 0;
+  if (bvis || cvis) lr_word_mark(x->c, node, mfr);
   if (mfr == LR_MF_INERT) return;
   if (!mfc) bvis = BVIS_PRIVATE;
   int attr_r = is_attr_decl_reader(nm), attr_w = is_attr_decl_writer(nm);

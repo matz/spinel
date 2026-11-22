@@ -1418,6 +1418,10 @@ spinel: 1 refusal, nothing written
 == test/reject/method_of_package_native_func.rb [promote] rc=1
 spinel: test/reject/method_of_package_native_func.rb:8: Base64.method(:strict_decode64) is not supported: a Method object of a package's native function has no compiled function to bind. Call Base64.strict_decode64 directly, or wrap it in a lambda
 spinel: 1 refusal, nothing written
+== test/reject/module_function_body_call_between.rb [default] rc=1
+spinel: test/reject/module_function_body_call_between.rb:14: M.m: a module_function that runs after the load (in a method, a block or a lambda), where more than one def of the method may be live, is not supported
+== test/reject/module_function_body_call_between.rb [promote] rc=1
+spinel: test/reject/module_function_body_call_between.rb:14: M.m: a module_function that runs after the load (in a method, a block or a lambda), where more than one def of the method may be live, is not supported
 == test/reject/module_method_capture_singleton_untold.rb [default] rc=1
 spinel: test/reject/module_method_capture_singleton_untold.rb:12: a Method of a module's class method it does not have, made where the program does not tell whether the module's singleton class is made yet (a form that makes it may run before): CRuby's NameError names the class `#<Class:V>` once it is, `Module` before
 spinel: 1 refusal, nothing written

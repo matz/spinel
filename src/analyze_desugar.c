@@ -26921,8 +26921,7 @@ static int incl_declined_node(const NodeTable *nt, int node, const char *param) 
      One in a block of a body that is called stays a reason. */
   case NK_InstanceVariableReadNode: case NK_InstanceVariableWriteNode: case NK_InstanceVariableOperatorWriteNode:
   case NK_InstanceVariableOrWriteNode: case NK_InstanceVariableAndWriteNode: case NK_InstanceVariableTargetNode:
-    if (g_incl_body_spliced && g_incl_on_base) break;
-    if (!g_incl_body_spliced && !g_incl_on_base) break;
+    if (g_incl_body_spliced || !g_incl_on_base) break;
     return 1;
   /* `class << x`: in a body the walk splices it is a statement of the
      includer's body, where the walk reads it */
@@ -31444,55 +31443,142 @@ int desugar_body_self_ivar_access_at(Compiler *c, LowerCtx *lc, int id) {
   return civ_self_body_access((NodeTable *)c->nt, id, 1);
 }
 
+/* `K.instance_variable_set(:@x, v)`, `_get` or `_defined?` at call node id:
+   the accessor's call (desugar_const_ivar_access). 0: left as it is. parent
+   is every node's parent, asked for (*need set, 0 answered) only where the
+   receiver is a class value and it is NULL. */
+static int civ_const_access_at(NodeTable *nt, int id, const int *parent, int *need) {
+  if (need) *need = 0;
+  if (nt_kind(nt, id) != NK_CallNode) return 0;
+  const char *nm = nt_str(nt, id, "name");
+  int setter = nm && sp_streq(nm, "instance_variable_set");
+  int has = nm && sp_streq(nm, "instance_variable_defined?");
+  if (!setter && !has && !(nm && sp_streq(nm, "instance_variable_get"))) return 0;
+  if (nt_ref(nt, id, "block") >= 0) return 0;
+  int r = nt_ref(nt, id, "receiver");
+  if (r < 0) return 0;
+  int args = nt_ref(nt, id, "arguments"), an = 0;
+  const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
+  if (an != (setter ? 2 : 1)) return 0;
+  const char *iv0 = sym_or_str_literal(nt, av[0]);
+  if (!civ_name_ok(iv0)) return 0;
+  int m;
+  if (nt_kind(nt, r) == NK_ConstantReadNode) {
+    const char *cn = nt_str(nt, r, "name");
+    m = cn ? civ_target_body(nt, cn) : -1;
+  }
+  else {
+    /* a class value only the run time knows: the accessor goes on the
+       class the receiver can only be or descend from, whose subclasses
+       answer it each on its own slot */
+    if (!parent) { if (need) *need = 1; return 0; }
+    m = civ_class_value_owner(nt, parent, r);
+  }
+  if (m < 0) return 0;
+  char iv[256]; snprintf(iv, sizeof iv, "%s", iv0);
+  int kind = setter ? 1 : has ? 3 : 0;
+  civ_ensure_accessor(nt, m, iv, kind);
+  char mname[256];
+  snprintf(mname, sizeof mname, class_ivar_accessor_fmt[kind], iv + 1);
+  nt_node_set_str(nt, id, "name", mname);
+  if (setter) {
+    int v = av[1];
+    int na = fwd_new_node_like(nt, id, "ArgumentsNode");
+    nt_node_set_arr(nt, na, "arguments", &v, 1);
+    nt_node_set_ref(nt, id, "arguments", na);
+  }
+  else nt_node_set_ref(nt, id, "arguments", -1);
+  return 1;
+}
+
+/* The module's own ivars a mixin hook of module node m names (in the body
+   of its `def self.included`, `extended` or `prepended`, outside a block
+   that has a self of its own): the accessors of each, made here, ahead of
+   the walk. The walk splices such a hook into the includer's body with the
+   ivar written `M.instance_variable_set(:@x, v)` (incl_mod_ivar), after
+   this step has run and after the walk has read M's body; the call is
+   then renamed by the row (desugar_const_ivar_call_at), which finds the
+   accessor in place and adds nothing to M. */
+static int civ_hook_ivars(NodeTable *nt, int m, int node) {
+  if (node < 0) return 0;
+  NodeKind k = nt_kind(nt, node);
+  int rd = k == NK_InstanceVariableReadNode, wr = k == NK_InstanceVariableWriteNode;
+  int both = k == NK_InstanceVariableOperatorWriteNode || k == NK_InstanceVariableOrWriteNode ||
+             k == NK_InstanceVariableAndWriteNode;
+  int changed = 0;
+  if (rd || wr || both) {
+    const char *iv0 = nt_str(nt, node, "name");
+    if (civ_name_ok(iv0)) {
+      char iv[256]; snprintf(iv, sizeof iv, "%s", iv0);
+      if (rd || both) civ_ensure_accessor(nt, m, iv, 0);
+      if (wr || both) civ_ensure_accessor(nt, m, iv, 1);
+      changed = 1;
+    }
+  }
+  if (k == NK_DefNode || k == NK_LambdaNode || k == NK_SingletonClassNode || class_def_opens_frame(nt, node)) return changed;
+  int skip = -1;
+  if (k == NK_CallNode) {
+    const char *cn = nt_str(nt, node, "name");
+    int blk = nt_ref(nt, node, "block");
+    if (cn && blk >= 0 && nt_kind(nt, blk) == NK_BlockNode &&
+        (is_eval_exec_family(cn) || sp_streq(cn, "define_method") || sp_streq(cn, "define_singleton_method")))
+      skip = blk;
+  }
+  int nr = nt_num_refs(nt, node);
+  for (int i = 0; i < nr; i++) {
+    int ch = nt_ref_at(nt, node, i);
+    if (ch != skip) changed |= civ_hook_ivars(nt, m, ch);
+  }
+  int na = nt_num_arrs(nt, node);
+  for (int i = 0; i < na; i++) {
+    int cnt = 0;
+    const int *ids = nt_arr_at(nt, node, i, &cnt);
+    for (int j = 0; j < cnt; j++) changed |= civ_hook_ivars(nt, m, ids[j]);
+  }
+  return changed;
+}
+
 int desugar_const_ivar_access(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count, changed = 0;
   int *parent = NULL;
+  NT_FOREACH_KIND(nt, NK_ModuleNode, mod) {
+    if (mod >= n0) continue;
+    const char *mn = class_def_bare_name(nt, mod);
+    int m = mn ? civ_target_body(nt, mn) : -1, body = class_def_body(nt, mod), bn = 0;
+    const int *bb = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &bn) : NULL;
+    for (int j = 0; m >= 0 && j < bn; j++) {
+      int d = bb[j], dr = nt_kind(nt, d) == NK_DefNode ? nt_ref(nt, d, "receiver") : -1;
+      const char *dn = dr >= 0 ? nt_str(nt, d, "name") : NULL;
+      if (!dn || nt_kind(nt, dr) != NK_SelfNode ||
+          (!sp_streq(dn, "included") && !sp_streq(dn, "extended") && !sp_streq(dn, "prepended"))) continue;
+      int hb = nt_ref(nt, d, "body");   /* (read before the accessors are added: the add may move the body's array) */
+      if (civ_hook_ivars(nt, m, hb)) { changed = 1; bb = nt_arr(nt, body, "body", &bn); }
+    }
+  }
   for (int id = 0; id < n0; id++) {
     if (nt_kind(nt, id) != NK_CallNode) continue;
-    const char *nm = nt_str(nt, id, "name");
-    int setter = nm && sp_streq(nm, "instance_variable_set");
-    int has = nm && sp_streq(nm, "instance_variable_defined?");
-    if (!setter && !has && !(nm && sp_streq(nm, "instance_variable_get"))) continue;
-    if (nt_ref(nt, id, "block") >= 0) continue;
-    int r = nt_ref(nt, id, "receiver");
-    if (r < 0) continue;
-    int args = nt_ref(nt, id, "arguments"), an = 0;
-    const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
-    if (an != (setter ? 2 : 1)) continue;
-    const char *iv0 = sym_or_str_literal(nt, av[0]);
-    if (!civ_name_ok(iv0)) continue;
-    int m;
-    if (nt_kind(nt, r) == NK_ConstantReadNode) {
-      const char *cn = nt_str(nt, r, "name");
-      m = cn ? civ_target_body(nt, cn) : -1;
-    }
-    else {
-      /* a class value only the run time knows: the accessor goes on the
-         class the receiver can only be or descend from, whose subclasses
-         answer it each on its own slot */
+    int need = 0, did = civ_const_access_at(nt, id, parent, &need);
+    if (need) {
       if (!parent) parent = an_parent_map(nt);
-      m = parent ? civ_class_value_owner(nt, parent, r) : -1;
+      if (parent) did = civ_const_access_at(nt, id, parent, NULL);
     }
-    if (m < 0) continue;
-    char iv[256]; snprintf(iv, sizeof iv, "%s", iv0);
-    int kind = setter ? 1 : has ? 3 : 0;
-    civ_ensure_accessor(nt, m, iv, kind);
-    char mname[256];
-    snprintf(mname, sizeof mname, class_ivar_accessor_fmt[kind], iv + 1);
-    nt_node_set_str(nt, id, "name", mname);
-    if (setter) {
-      int v = av[1];
-      int na = fwd_new_node_like(nt, id, "ArgumentsNode");
-      nt_node_set_arr(nt, na, "arguments", &v, 1);
-      nt_node_set_ref(nt, id, "arguments", na);
-    }
-    else nt_node_set_ref(nt, id, "arguments", -1);
-    changed = 1;
+    changed |= did;
   }
   free(parent);
   if (changed) comp_grow_node_arrays(c);
   return changed;
+}
+
+/* The row: civ_const_access_at at one call. A row so that a call the walk
+   splices into a body later (a hook's own ivar, written
+   `M.instance_variable_set(:@x, v)` where the hook lands) is renamed as one
+   written in the program is. */
+int desugar_const_ivar_call_at(Compiler *c, LowerCtx *lc, int id) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int need = 0, did = civ_const_access_at(nt, id, NULL, &need);
+  if (need) did = civ_const_access_at(nt, id, lower_parents(c, lc), NULL);
+  return did;
 }
 
 /* Does subtree n name an ivar one of the collected accesses names? */

@@ -26728,6 +26728,8 @@ static int incl_text_arg(const NodeTable *nt, int call) {
 }
 /* (incl_hook_declined's: does the walk splice the body being asked about?) */
 static int g_incl_body_spliced;
+/* (...and is the statement being asked about inside a class_eval block on the includer?) */
+static int g_incl_on_base;
 
 /* The rows incl_hook_declined adds to host_prewalk_shape, over the subtree
    of node: the shapes of the steps between desugar_included_hooks and the
@@ -26740,18 +26742,29 @@ static int incl_declined_node(const NodeTable *nt, int node, const char *param) 
   NodeKind k = nt_kind(nt, node);
   switch (k) {
   case NK_DefNode: return 0;
+  /* an instance variable: the module's own where the hook's body names it
+     (self is the module there; spliced, it would read as the includer's),
+     so the pre-walk splice keeps it, with the passes that read it
+     (desugar_body_ivars, desugar_const_ivar_access). In a class_eval block
+     on the includer it is the includer's, as it is once the walk has
+     spliced the block's statements into the includer's body. */
+  case NK_InstanceVariableReadNode: case NK_InstanceVariableWriteNode: case NK_InstanceVariableOperatorWriteNode:
+  case NK_InstanceVariableOrWriteNode: case NK_InstanceVariableAndWriteNode: case NK_InstanceVariableTargetNode:
+    if (g_incl_body_spliced && g_incl_on_base) break;
+    return 1;
+  /* `class << x`: in a body the walk splices it is a statement of the
+     includer's body, where the walk reads it */
+  case NK_SingletonClassNode:
+    if (g_incl_body_spliced) break;
+    return 1;
   /* a class-body ivar once spliced, or the module's in the hook
      (desugar_body_ivars, desugar_class_eval_ivars, desugar_const_ivar_access);
      a class variable (the cvar passes) */
-  case NK_InstanceVariableReadNode: case NK_InstanceVariableWriteNode: case NK_InstanceVariableOperatorWriteNode:
-  case NK_InstanceVariableOrWriteNode: case NK_InstanceVariableAndWriteNode: case NK_InstanceVariableTargetNode:
   case NK_ClassVariableReadNode: case NK_ClassVariableWriteNode: case NK_ClassVariableOperatorWriteNode:
   case NK_ClassVariableOrWriteNode: case NK_ClassVariableAndWriteNode: case NK_ClassVariableTargetNode:
   /* a constant write (desugar_constant_path_self_alias, qualify_colliding_classes) */
   case NK_ConstantWriteNode: case NK_ConstantOperatorWriteNode: case NK_ConstantOrWriteNode:
   case NK_ConstantAndWriteNode: case NK_ConstantTargetNode:
-  /* `class << x` (desugar_sclass_readers_through_class and the singleton mixins) */
-  case NK_SingletonClassNode:
   /* `v op= x` where the program may reopen the operator (desugar_reopened_op_write) */
   case NK_LocalVariableOperatorWriteNode: case NK_IndexOperatorWriteNode: case NK_CallOperatorWriteNode:
     return 1;
@@ -26831,7 +26844,11 @@ static int incl_declined_stmts(NodeTable *nt, int body, const char *param) {
       int an = nt_ref(nt, s, "arguments");
       if (nm && on_base && an < 0 && blk >= 0 && nt_kind(nt, blk) == NK_BlockNode && is_class_eval_family(nm) &&
           nt_ref(nt, blk, "parameters") < 0) {
-        if (incl_declined_stmts(nt, nt_ref(nt, blk, "body"), param)) return 1;
+        int was = g_incl_on_base;
+        g_incl_on_base = 1;
+        int d = incl_declined_stmts(nt, nt_ref(nt, blk, "body"), param);
+        g_incl_on_base = was;
+        if (d) return 1;
         continue;
       }
     }

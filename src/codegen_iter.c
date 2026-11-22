@@ -5090,11 +5090,16 @@ int emit_array_filter_loop(Compiler *c, int recv, int block, TyKind rt, const ch
      the frame declares boxed. A shadow cannot retype that cell, so an
      object element binds boxed into the parameter (as in emit_collect_expr). */
   int boxed_cell = flv && !one_h && flv->is_cell && fsaved == TY_POLY && ty_is_object(et);
+  /* A String Array that holds the handle (a flat_map's result, whose block
+     parameter the scope left widened): the parameter shadowed over it is
+     the handle too, as one the scope holds so is (one_h), not the bytes */
+  int held_h = flv && !one_h && !boxed_cell && et == TY_STRING && typed_elem_held(rt) == TY_STRBUF &&
+               !block_binds_gathered(c, block) && !(g_face_live_box && g_face_live_recv == recv);
   if (flv && !one_h && !boxed_cell) {
     /* a widened parameter shadowed at a numeric element type still holds
        the element's nil */
     if (fsaved == TY_POLY && (et == TY_INT || et == TY_FLOAT)) flv->nullable_int = 1;
-    lv_set_storage_type(flv, et); for (int j = 0; j < bn; j++) infer_subtree(c, bb[j]);
+    lv_set_storage_type(flv, held_h ? TY_STRBUF : et); for (int j = 0; j < bn; j++) infer_subtree(c, bb[j]);
   }
   int t = ++g_tmp, ti = ++g_tmp, to = ++g_tmp, tw = ++g_tmp, tk = ++g_tmp, tnv = ++g_tmp, te = ++g_tmp;
   int eid = ++g_tmp, tj = ++g_tmp;
@@ -5242,11 +5247,18 @@ int emit_array_filter_loop(Compiler *c, int recv, int block, TyKind rt, const ch
     else if (ote) {
       emit_ctype(c, et, b); buf_printf(b, " lv_%s = _t%d.v;", bp, te);
     }
+    else if (held_h) {
+      /* the step holds the element as the Array holds it, the handle, and
+         so does the parameter shadowed over a widened slot: a bang in the
+         block changes the element */
+      buf_printf(b, "sp_String *lv_%s = _t%d; SP_GC_ROOT(lv_%s);", bp, te, bp);
+    }
     else {
       if (et != TY_POLY || boxed_shadow) { emit_ctype(c, et, b); buf_puts(b, " "); }
       buf_printf(b, "lv_%s = _t%d;", bp, te);
     }
-    if (et == TY_STRING) buf_printf(b, " SP_GC_ROOT_STR(lv_%s);", bp);
+    if (held_h) { }
+    else if (et == TY_STRING) buf_printf(b, " SP_GC_ROOT_STR(lv_%s);", bp);
     else if (boxed_shadow) buf_printf(b, " SP_GC_ROOT_RBVAL(lv_%s);", bp);
     buf_puts(b, "\n");
   }

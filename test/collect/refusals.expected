@@ -204,6 +204,10 @@ spinel: test/reject/block_method_self_call_enum_guard.rb:14: a method that uses 
 spinel: test/reject/block_method_self_call_enum_guard.rb:14: a method that uses its block (yield or block.call) and calls itself recursively (inlining cannot terminate; no standalone function to fall back to)
 spinel: test/reject/block_method_self_call_enum_guard.rb:14: a method that uses its block (yield or block.call) and calls itself recursively (inlining cannot terminate; no standalone function to fall back to)
 spinel: 3 refusals, nothing written
+== test/reject/body_bar_names_current_parent_map.rb [default] rc=1
+spinel: test/reject/body_bar_names_current_parent_map.rb:17: Module#attr_accessor in a method body is not supported where a method_added or singleton_method_added hook of the program may observe it: the method it defines would be found before that body runs (see docs/limitations.md)
+== test/reject/body_bar_names_current_parent_map.rb [promote] rc=1
+spinel: test/reject/body_bar_names_current_parent_map.rb:17: Module#attr_accessor in a method body is not supported where a method_added or singleton_method_added hook of the program may observe it: the method it defines would be found before that body runs (see docs/limitations.md)
 == test/reject/body_definer_hook.rb [default] rc=1
 spinel: test/reject/body_definer_hook.rb:7: Module#define_method in a method body is not supported where a method_added or singleton_method_added hook of the program may observe it: the method it defines would be found before that body runs (see docs/limitations.md)
 == test/reject/body_definer_hook.rb [promote] rc=1

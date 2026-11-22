@@ -3765,8 +3765,10 @@ static int lr_bform_live(Compiler *c, const int *par, int n, struct LrBodyForm *
   if (f->gone) return 0;
   if (f->via) return depth > 16 || !lr_body_name_free_at(c, par, n, f->via, -1, depth + 1);
   if (f->hdr < 0 || !r->bnames || elab_header_class(c, f->hdr, NULL, NULL) == LR_UNKNOWN_CLASS) return 1;
+  r->bnames->par = par;   /* (the map the names were read with may have been replaced since: nt_parents frees it) */
   r->bform_pend = -1;
-  f->gone = !lr_bform_bars(c, par, n, f->node, r->bnames);
+  int bars = lr_bform_bars(c, par, n, f->node, r->bnames);
+  f->gone = !bars;
   f->hdr = f->gone ? -1 : r->bform_pend;
   return !f->gone;
 }

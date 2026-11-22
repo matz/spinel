@@ -12092,8 +12092,9 @@ static int lr_mix_hooks(Compiler *c) {
    module's singleton there (lr_hook_live) or none. A `def self.<hook>(base)`
    of the module's own body, run by a receiverless mixin, is spliced as the
    pre-walk splice splices it (incl_subst, incl_emit_stmt): base reads the
-   includer's constant, self the module. One with a `return` or a `super` of
-   its own, the conditional dispatcher, a hook reached another way (`class <<
+   includer's constant, self the module, and a `super` of its own, which
+   reaches Module's hook, is nothing. One with a `return` of its own, the
+   conditional dispatcher, a hook reached another way (`class <<
    self`, a module the module extends, define_singleton_method) or a version
    the record cannot name is called: `M.__send__(:included, K)`. A version
    that carries a shape a step before the walk reads (incl_hook_declined)
@@ -12125,7 +12126,7 @@ static void lr_fire_mixin(Compiler *c, const LrEvent *v, int node, int frame, Lo
   int splice = param && dr >= 0 && nt_kind(nt, dr) == NK_SelfNode && hdr >= 0 && class_def_is_module(nt, hdr) &&
                nt_ref(nt, node, "receiver") < 0 && !nt_int(nt, dn, "cond_lone_disp", 0) &&
                (nt_kind(nt, frame) == NK_ClassNode || nt_kind(nt, frame) == NK_ModuleNode) &&
-               !incl_hook_returns(nt, hb) && !incl_hook_supers(nt, hb);
+               !incl_hook_returns(nt, hb);
   if (!splice) {
     int call = lr_hook_call(c, node, nt_clone_subtree(nt, v->arg), v->name, base, NULL);
     nt_node_set_int(nt, call, "class_recv", 1);   /* (a module is a class value: the receiver is proven one) */

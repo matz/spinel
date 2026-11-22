@@ -26689,35 +26689,6 @@ int incl_hook_returns(const NodeTable *nt, int node) {
   return 0;
 }
 
-/* Does the hook body make a super of its own (Module#included and its kin)?
-   Spliced into the class body it would be a super outside any method. A
-   `def`, a lambda, a class body and a define_method block are code of their
-   own. */
-int incl_hook_supers(const NodeTable *nt, int node) {
-  if (node < 0) return 0;
-  NodeKind k = nt_kind(nt, node);
-  if (k == NK_SuperNode || k == NK_ForwardingSuperNode) return 1;
-  /* (`defined?(super)` calls nothing: incl_subst answers it "super") */
-  if (k == NK_DefinedNode || k == NK_DefNode || k == NK_LambdaNode || class_def_opens_frame(nt, node)) return 0;
-  int skip = -1;
-  if (k == NK_CallNode) {
-    const char *cn = nt_str(nt, node, "name");
-    if (cn && (sp_streq(cn, "define_method") || sp_streq(cn, "define_singleton_method"))) skip = nt_ref(nt, node, "block");
-  }
-  int nr = nt_num_refs(nt, node);
-  for (int i = 0; i < nr; i++) {
-    int ch = nt_ref_at(nt, node, i);
-    if (ch != skip && incl_hook_supers(nt, ch)) return 1;
-  }
-  int na = nt_num_arrs(nt, node);
-  for (int i = 0; i < na; i++) {
-    int cnt = 0;
-    const int *ids = nt_arr_at(nt, node, i, &cnt);
-    for (int j = 0; j < cnt; j++)
-      if (incl_hook_supers(nt, ids[j])) return 1;
-  }
-  return 0;
-}
 
 static int cb_self_act_name(const char *nm, int block);
 /* Is call's first argument a String written there (the text of a class_eval)? */
@@ -26793,7 +26764,7 @@ static int incl_declined_node(const NodeTable *nt, int node, const char *param) 
        string or a block argument (desugar_body_module_eval,
        desugar_eval_method_block). A bare Object or Module method run on
        the class is a reason only in a body the walk calls (one with a
-       `return` or a `super`): the statements the walk splices it gives
+       `return`): the statements the walk splices it gives
        the class for self itself (incl_give_self). */
     /* a class_eval or module_eval of a String written there, in a body the
        walk splices: the text is grafted where the walk's splice puts the
@@ -26855,14 +26826,14 @@ static int incl_declined_stmts(NodeTable *nt, int body, const char *param) {
     if (incl_declined_node(nt, s, param)) return 1;
   }
   /* A mixin on the includer (`base.extend(M)`, `base.include(M)`) as a
-     statement of a body the walk splices (one with no `super` and no
-     `return`: incl_hook_supers, incl_hook_returns) is the includer's own
+     statement of a body the walk splices (one with no `return`:
+     incl_hook_returns) is the includer's own
      mixin once spliced, which the walk records where the hook fires: it is
      not asked of host_prewalk_shape. In a body the walk calls instead, the
      mixin stays a call on a value, so the pre-walk splice keeps it. */
   int *rest = malloc(sizeof(int) * (size_t)(bn > 0 ? bn : 1)), rn = 0;
   if (!rest) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  int spliced = body >= 0 && !incl_hook_returns(nt, body) && !incl_hook_supers(nt, body);
+  int spliced = body >= 0 && !incl_hook_returns(nt, body);
   for (int i = 0; i < bn; i++) {
     int s = bv[i], r = nt_kind(nt, s) == NK_CallNode ? nt_ref(nt, s, "receiver") : -1;
     int on_base = r >= 0 && nt_kind(nt, r) == NK_LocalVariableReadNode && param && nt_str(nt, r, "name") &&
@@ -26884,7 +26855,7 @@ int incl_hook_declined(NodeTable *nt, int def) {
   const int *rq = ps >= 0 ? nt_arr(nt, ps, "requireds", &rn) : NULL;
   const char *param = rn == 1 ? nt_str(nt, rq[0], "name") : NULL;
   int hb = nt_ref(nt, def, "body");
-  g_incl_body_spliced = hb >= 0 && !incl_hook_returns(nt, hb) && !incl_hook_supers(nt, hb);
+  g_incl_body_spliced = hb >= 0 && !incl_hook_returns(nt, hb);
   int r = incl_declined_stmts(nt, hb, param);
   g_incl_body_spliced = 0;
   return r;

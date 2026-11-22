@@ -1241,7 +1241,6 @@ void incl_emit_stmt(const NodeTable *nt, int s, int **out, int *no, int *cap, ch
 void incl_detach_shell(NodeTable *nt, int node, const int *out, int no);   /* an unwrapped container lets its statements go */
 char *incl_frame_add(char *fr, const char *locals);
 int incl_hook_returns(const NodeTable *nt, int node);   /* a `return` that leaves the hook */
-int incl_hook_supers(const NodeTable *nt, int node);    /* a super the hook itself makes */
 /* Does the body of hook def `def` carry a shape a step between
    desugar_included_hooks and the walk reads (host_prewalk_shape and the
    rows it adds)? Such a hook keeps the pre-walk splice. */

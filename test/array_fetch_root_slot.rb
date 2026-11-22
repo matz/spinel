@@ -58,3 +58,17 @@ held = (1..40).map { |i| i * 10 }
 replace = -> { held = [99]; GC.start; 5 }
 puts held.fetch(replace.call)
 puts held[0]
+
+# Array#[] produces a nilable integer. A plain local containing that
+# value is safe to use as an index even when conversion raises.
+def fetch_indexed(words, indices, pc)
+  index = indices[pc]
+  words.fetch(index)
+end
+
+puts fetch_indexed(words, [-1], 0)
+begin
+  fetch_indexed(words, [0], 1)
+rescue TypeError => e
+  puts e.message
+end

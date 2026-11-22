@@ -1313,8 +1313,12 @@ static int fetch_recv_in_slot(Compiler *c, int recv, int index, const char *rend
   if (!rendered || !sp_streq(rendered, want)) return 0;
 
   index = nt_paren_single(nt, index);
-  if (index < 0 || repr_of(c, index).kind != RK_SCALAR || comp_ntype(c, index) != TY_INT) return 0;
+  if (index < 0 || comp_ntype(c, index) != TY_INT) return 0;
   NodeKind k = nt_kind(nt, index);
+  ReprKind kind = repr_of(c, index).kind;
+  /* Reading a nilable integer local runs no Ruby: its integer argument
+     conversion either takes the word or raises before the receiver is used. */
+  if (kind != RK_SCALAR && !(k == NK_LocalVariableReadNode && kind == RK_OPT)) return 0;
   if (k == NK_CallNode) {
     const char *op = nt_str(nt, index, "name");
     int ir = nt_ref(nt, index, "receiver"), ac = 0;

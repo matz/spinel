@@ -26720,6 +26720,12 @@ int incl_hook_supers(const NodeTable *nt, int node) {
 }
 
 static int cb_self_act_name(const char *nm, int block);
+/* Is call's first argument a String written there (the text of a class_eval)? */
+static int incl_text_arg(const NodeTable *nt, int call) {
+  int an = nt_ref(nt, call, "arguments"), ac = 0;
+  const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
+  return ac >= 1 && (nt_kind(nt, av[0]) == NK_StringNode || nt_kind(nt, av[0]) == NK_InterpolatedStringNode);
+}
 /* (incl_hook_declined's: does the walk splice the body being asked about?) */
 static int g_incl_body_spliced;
 
@@ -26776,6 +26782,11 @@ static int incl_declined_node(const NodeTable *nt, int node, const char *param) 
        the class is a reason only in a body the walk calls (one with a
        `return` or a `super`): the statements the walk splices it gives
        the class for self itself (incl_give_self). */
+    /* a class_eval or module_eval of a String written there, in a body the
+       walk splices: the text is grafted where the walk's splice puts the
+       statement (host_splice, sce_span), as the pre-walk splice's is */
+    else if (on_self && g_incl_body_spliced && is_class_eval_text_name(nm) && blk < 0 && incl_text_arg(nt, node)) {
+    }
     else if (on_self && (is_eval_exec_family(nm) ||
                          (!g_incl_body_spliced && cb_self_act_name(nm, blk >= 0 && nt_kind(nt, blk) == NK_BlockNode))))
       return 1;

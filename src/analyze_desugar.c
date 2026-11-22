@@ -26965,8 +26965,9 @@ static int incl_declined_node(const NodeTable *nt, int node, const char *param) 
        walk splices: self there, a statement of the includer's body, which
        the row that reads those rewrites where the walk puts it
        (desugar_body_self_ivar_access_at) */
-    else if (g_incl_body_spliced && on_param && blk < 0 &&
+    else if (g_incl_body_spliced && (on_param || (g_incl_on_base && r < 0)) && blk < 0 &&
              (sp_streq(nm, "instance_variable_get") || sp_streq(nm, "instance_variable_set"))) {
+      /* (...or receiverless in a class_eval block on the includer: self is the includer there) */
     }
     /* a declaration told to self's singleton class in a class_eval block
        on the includer, in a body the walk splices: a statement of the

@@ -1436,6 +1436,13 @@ typedef struct {
                         (LocalVar.obj_elem_may_nil); read through repr_of's
                         elem_nil_marked */
   int nil_fact_n;
+  unsigned char *scope_may_raise; /* [scope_may_raise_n] 1 if scope may raise or
+                        non-locally unwind, 0 if provably nothrow (analyze_raise.c) */
+  int scope_may_raise_n;
+  unsigned char *node_elide_setjmp; /* [node_elide_setjmp_n] 1 if BeginNode /
+                        RescueModifierNode elides setjmp, or RescueNode belongs
+                        to an elided BeginNode (analyze_raise.c) */
+  int node_elide_setjmp_n;
   int *cls_fact;    /* [cls_fact_n] per node: the index in cls_pool of the
                        set of user classes its value can hold (analyze_cls.c,
                        #8530); 0 is every class. Read through cls_fact_node. */

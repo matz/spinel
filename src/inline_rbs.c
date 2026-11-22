@@ -673,6 +673,16 @@ static void ir_names_merge(sbuf_t *into, const sbuf_t *from) {
  * It pins nothing ("-", as a `void` return reads), and the rest of the
  * signature still applies, as --rbs leaves such a slot to inference. A
  * program's own `boolish` alias is mapped as written. */
+/* A Proc type (`^(Integer) -> void`, optionally `(^(Integer) -> void)?`) in
+   a method's parameter or return slot. Spinel pins no proc type, and --rbs
+   leaves such a slot inferred while the rest of the signature applies; the
+   inline signature does the same rather than dropping the whole method. */
+static bool ir_is_proc(rbs_node_t *type) {
+    if (type == NULL) return false;
+    if (type->type == RBS_TYPES_OPTIONAL) type = ((rbs_types_optional_t *) type)->type;
+    return type != NULL && type->type == RBS_TYPES_PROC;
+}
+
 static bool ir_says_nothing(rbs_parser_t *p, rbs_node_t *type) {
     if (type->type == RBS_TYPES_OPTIONAL) type = ((rbs_types_optional_t *) type)->type;
     if (type->type == RBS_TYPES_BASES_TOP) return true;
@@ -909,6 +919,7 @@ static const char *ir_method_type(rbs_parser_t *p, rbs_node_t *mtn, const ir_tar
             else if (nfwd && ps[i].kind == 'o') k -= sreq - nreq;
             rbs_node_t *n = ir_list_at(l, k);
             rbs_types_function_param_t *fp = (rbs_types_function_param_t *) n;
+            if (n != NULL && n->type == RBS_TYPES_FUNCTION_PARAM && ir_is_proc(fp->type)) { sbuf_free(&tag); continue; }
             if (n == NULL || n->type != RBS_TYPES_FUNCTION_PARAM || !ir_map(p, fp->type, t, &tag)) {
                 sbuf_free(&tag);
                 return "a parameter type is outside the types Spinel can pin";
@@ -927,6 +938,7 @@ static const char *ir_method_type(rbs_parser_t *p, rbs_node_t *mtn, const ir_tar
                 }
             }
             if (fp == NULL) { sbuf_free(&tag); return "the signature does not name every keyword parameter of the method"; }
+            if (ir_is_proc(fp->type)) { sbuf_free(&tag); continue; }
             if (!ir_map(p, fp->type, t, &tag)) { sbuf_free(&tag); return "a parameter type is outside the types Spinel can pin"; }
         }
         else { sbuf_free(&tag); continue; }
@@ -938,7 +950,8 @@ static const char *ir_method_type(rbs_parser_t *p, rbs_node_t *mtn, const ir_tar
     for (int h = 0; h < 2; h++) if (hs2[h]) for (rbs_hash_node_t *e = hs2[h]->head; e; e = e->next) skw++;
     if (!nfwd && skw != nkw) return "the signature's keyword parameters do not match the method's";
     sbuf_t r; sbuf_init(&r);
-    if (!ir_map(p, fn->return_type, t, &r)) { sbuf_free(&r); return "the return type is outside the types Spinel can pin"; }
+    if (ir_is_proc(fn->return_type)) sbuf_set(&r, "-", 1);
+    else if (!ir_map(p, fn->return_type, t, &r)) { sbuf_free(&r); return "the return type is outside the types Spinel can pin"; }
     *ret = ir_strdup(r.buf);
     sbuf_free(&r);
     return NULL;
@@ -1125,6 +1138,7 @@ static void ir_apply_def(const ir_file *f, ir_target *t) {
                                 pname, ir_where(f, param_by[idx]->first_line));
                         bad = 1;
                     }
+                    else if (ir_is_proc(pa->param_type)) param_by[idx] = a;
                     else if (!ir_map(p, pa->param_type, t, &tag)) {
                         ir_warn(f, a, "a parameter annotation", "its type is outside the types Spinel can pin, so none of the method's annotations are applied");
                         skip = 1;
@@ -1144,6 +1158,7 @@ static void ir_apply_def(const ir_file *f, ir_target *t) {
                                 name, ir_where(f, ret_by->first_line));
                         bad = 1;
                     }
+                    else if (ir_is_proc(rt)) { ret_by = a; ret = ir_strdup("-"); }
                     else if (!ir_map(p, rt, t, &tag)) {
                         ir_warn(f, a, "a return annotation", "its type is outside the types Spinel can pin, so none of the method's annotations are applied");
                         skip = 1;

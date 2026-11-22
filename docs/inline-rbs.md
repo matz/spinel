@@ -131,6 +131,10 @@ A block type in the signature (`#: (Integer) { (String) -> bool } -> Integer`) i
 accepted and not seeded, as with `--rbs`: the block's parameters and result
 stay inferred from the yields and calls, and the positional, keyword and
 return types apply. A Ruby block parameter is inferred in the same way.
+A Proc type in a parameter or return slot (`#: (String, ^(Integer) -> void) -> Integer`,
+also `(^(Integer) -> void)?` and `# @rbs cb: ^(String) -> void`) is accepted and
+not seeded, as with `--rbs`: that slot stays inferred from the calls and the
+body, and the other parameter and return types apply.
 
 ## Where an annotation attaches
 
@@ -179,7 +183,7 @@ overridden return can remain inferred while supported parameter types apply.
 | Malformed RBS annotation | Error with the parser's message and source position |
 | Two signatures for one method, or duplicate parameter annotations | Error naming both locations |
 | Conflicting applied inline or external declarations | Error naming both locations |
-| Unseedable types: literals other than `true` and `false`, interfaces, tuples, records, procs, `class`, `self`/`instance` outside a class's instance method, type variables (but a builtin generic's own, above) | Warning; ignore the whole annotation |
+| Unseedable types: literals other than `true` and `false`, interfaces, tuples, records, procs nested in another type (`Array[^() -> void]`; a Proc parameter or return is left inferred, above), `class`, `self`/`instance` outside a class's instance method, type variables (but a builtin generic's own, above) | Warning; ignore the whole annotation |
 | Unknown program class, such as `Regexp` or `Array[Time]` (a builtin class with values of its own, such as `Time` or `File`, applies, and so do `Range` and an exception class: see [Type vocabulary](rbs-extract.md#type-vocabulary)) | Warning naming the type as written; ignore the whole annotation |
 | Positional kinds that differ from the method's (`(?Integer)` for `def m(x)`), or a destructuring parameter | Warning; ignore the whole signature |
 | Overloads, `...`, generic method signatures, and superclass/mixin type arguments | Warning; ignore the annotation |

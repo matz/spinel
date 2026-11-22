@@ -10632,7 +10632,7 @@ static void emit_env_globals(Compiler *c, Buf *decl, Buf *mark) {
   }
 }
 /* Load the environment as the method starts, and read the cells through it */
-static void emit_env_missing(Compiler *c, const Scope *dm, Buf *b, const char *self);
+static void emit_env_missing(Compiler *c, const Scope *dm, Buf *b, const char *self, int vcall);
 static void emit_env_load(Compiler *c, Scope *dm, Buf *b, NameSet *caps, char *capst, size_t cap) {
   char pid[24];
   env_tag(dm, pid, sizeof pid);
@@ -10642,18 +10642,28 @@ static void emit_env_load(Compiler *c, Scope *dm, Buf *b, NameSet *caps, char *c
   /* A call that reaches the method before its definer ran (a poly dispatch that has no version to read) finds no
      environment: CRuby has no such method yet */
   buf_puts(b, "    if (SP_UNLIKELY(!_cap)) { ");
-  emit_env_missing(c, dm, b, "self");
+  emit_env_missing(c, dm, b, "self", 0);
   if (method_is_void(dm)) buf_puts(b, " return; }\n");
   else buf_printf(b, " return %s; }\n", method_ret_zero(c, dm) ? method_ret_zero(c, dm) : "0");
 }
 /* The NoMethodError for a call that reaches a method before its definer ran, naming the receiver as CRuby does: the
    method's own `self`, or none (NULL) where a call site spells a default, which names the class alone. */
-static void emit_env_missing(Compiler *c, const Scope *dm, Buf *b, const char *self) {
-  buf_puts(b, "sp_raise_nomethod(sp_nomethod_msg(");
-  emit_str_literal(b, dm->name);
-  if (dm->is_cmethod) buf_printf(b, ", sp_box_class((sp_Class){%d, NULL})));", dm->class_id);
-  else if (dm->class_id >= 0 && !c->classes[dm->class_id].is_value_type) buf_printf(b, ", sp_box_obj((void *)%s, %d)));", self, dm->class_id);
-  else buf_puts(b, ", sp_box_nil()));");
+static void emit_env_missing(Compiler *c, const Scope *dm, Buf *b, const char *self, int vcall) {
+  Buf r; memset(&r, 0, sizeof r);
+  if (dm->is_cmethod) buf_printf(&r, "sp_box_class((sp_Class){%d, NULL})", dm->class_id);
+  else if (dm->class_id >= 0 && !c->classes[dm->class_id].is_value_type) buf_printf(&r, "sp_box_obj((void *)%s, %d)", self, dm->class_id);
+  else buf_puts(&r, "sp_box_nil()");
+  if (vcall) {   /* (a variable-like call: CRuby's NameError, as the version entries raise it) */
+    buf_puts(b, "sp_raise_cls(\"NameError\", sp_stage_recv_msg(sp_sprintf(\"undefined local variable or method '%s' for %s\", ");
+    emit_str_literal(b, dm->name);
+    buf_printf(b, ", sp_nomethod_recv_desc(%s)), %s));", r.p, r.p);
+  }
+  else {
+    buf_puts(b, "sp_raise_nomethod(sp_nomethod_msg(");
+    emit_str_literal(b, dm->name);
+    buf_printf(b, ", %s));", r.p);
+  }
+  free(r.p);
 }
 /* A default that a call site spells for a callee with an environment (a define_method block's parameter that reads
    a local it closes over) runs in the callee's context, as its self does (dflt_self_enter): one statement
@@ -10670,7 +10680,10 @@ void env_bind_begin(Compiler *c, Scope *dm, Buf *out, EnvBind *sv) {
   snprintf(sv->capst, sizeof sv->capst, "_proc_cap_%s", pid);
   g_cap_struct = sv->capst; g_cap_names = &sv->caps;
   buf_printf(out, "({ %s *_cap = (%s *)gv___spinel_env_%d; if (SP_UNLIKELY(!_cap)) { ", sv->capst, sv->capst, dm->def_node);
-  emit_env_missing(c, dm, out, "NULL");
+  /* (a call written as a variable, which CRuby raises as a NameError) */
+  int vc = g_nd_call_id >= 0 && g_nd_call_id < c->nt->count && nt_kind(c->nt, g_nd_call_id) == NK_CallNode && nt_vcall(c->nt, g_nd_call_id) &&
+           nt_str(c->nt, g_nd_call_id, "name") && dm->name && sp_streq(nt_str(c->nt, g_nd_call_id, "name"), dm->name);
+  emit_env_missing(c, dm, out, "NULL", vc);
   buf_puts(out, " } ");
   sv->at = out->len;
   sv->pre = g_pre; sv->indent = g_indent;

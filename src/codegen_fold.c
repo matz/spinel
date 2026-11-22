@@ -7946,7 +7946,7 @@ static void emit_arg_or_default_at(Compiler *c, Scope *m, int idx, int provided,
   g_open_defaults++;
   int sv_nren = declare_default_locals(c, m, m->pdefault[idx]);
   EnvBind env;
-  if (m->env_host) env_bind_begin(c, m, out, &env);
+  if (m->env_host) env_bind_begin(c, m, m->pdefault[idx], out, &env);
   emit_arg_or_default_fill(c, m, idx, provided, out);
   if (m->env_host) env_bind_end(out, &env);
   g_nren = sv_nren;

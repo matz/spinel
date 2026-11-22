@@ -10681,7 +10681,7 @@ static void emit_env_missing(Compiler *c, const Scope *dm, Buf *b, const char *s
    definer ran finds no environment: it raises the NoMethodError there, as the method's prologue does, before
    anything reads a cell. env_bind_begin opens it and saves the context; env_bind_end writes the hoisted code and
    closes. */
-void env_bind_begin(Compiler *c, Scope *dm, Buf *out, EnvBind *sv) {
+void env_bind_begin(Compiler *c, Scope *dm, int dflt, Buf *out, EnvBind *sv) {
   char pid[24];
   env_tag(dm, pid, sizeof pid);
   sv->st = g_cap_struct; sv->names = g_cap_names;
@@ -10693,7 +10693,9 @@ void env_bind_begin(Compiler *c, Scope *dm, Buf *out, EnvBind *sv) {
   int vc = g_nd_call_id >= 0 && g_nd_call_id < c->nt->count && nt_kind(c->nt, g_nd_call_id) == NK_CallNode && nt_vcall(c->nt, g_nd_call_id) &&
            nt_str(c->nt, g_nd_call_id, "name") && dm->name && sp_streq(nt_str(c->nt, g_nd_call_id, "name"), dm->name);
   emit_env_missing(c, dm, out, "NULL", vc);
-  buf_puts(out, " } SP_GC_ROOT(_cap); ");   /* (a default that runs the definer again replaces the global: this one is the default's) */
+  /* (a default that may run code or allocate may run the definer again, which replaces the global: this one is then the
+     default's only root; one that reads cells and literals cannot collect before its reads) */
+  buf_puts(out, subtree_may_allocate(c, dflt) ? " } SP_GC_ROOT(_cap); " : " } ");
   sv->at = out->len;
   sv->pre = g_pre; sv->indent = g_indent;
   memset(&sv->hoist, 0, sizeof sv->hoist);

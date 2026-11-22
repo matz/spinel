@@ -9657,10 +9657,11 @@ static const char *cplan_eval_what(Compiler *c, int id) {
 }
 
 /* Two gaps a call's tables decide, refused as `unsupported(c, id, "call")`:
-   a call on an IO whose reopening of the name yields or takes a block (a
-   block-taking one has no standalone function to call: emit_io_reopen_call),
-   and a bind_call on a Class value known only at run time where some class
-   has no arm to build (class_value_bind_call_gap). */
+   a call on an IO where an IO reopen method of the called name has
+   Scope.yields set, and a bind_call on a Class value known only at run time
+   where some class has no arm to build (class_value_bind_call_gap).
+   Scope.yields is set for a method that contains `yield` or calls a `&b` the
+   analysis inlines, and codegen splices such a method into each call site. */
 static int cplan_io_reopen_yields(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   if (nt_kind(nt, id) != NK_CallNode) return 0;
@@ -9672,7 +9673,7 @@ static int cplan_io_reopen_yields(Compiler *c, int id) {
   int ks[16], n = io_reopen_defs(c, id, name, 0, ks, 16);
   for (int i = 0; i < n; i++) {
     Scope *km = &c->scopes[call_target(c, id, ks[i], name, 0, NULL)];
-    if (km->yields || (km->blk_param && km->blk_param[0])) return 1;
+    if (km->yields) return 1;
   }
   return 0;
 }

@@ -183,6 +183,11 @@ int repr_self_shared(const Compiler *c, int node);
 /* The representation of a local variable's slot (a global's and a
    constant's LocalVar too). */
 Repr repr_of_slot(const Compiler *c, const LocalVar *lv);
+/* Can the closure cell of local lv hold its value, and so ride a capture struct (a proc's, or a define_method block's
+   environment)? A Float capture is a real sp_float field, not the proc's argument slot; a by-value struct rides its
+   own cell (#3995 for the class; the Range / Rational / Complex siblings were left on the reject, and Time / Tms / a
+   String range after them). */
+int repr_cell_capturable(const Compiler *c, const LocalVar *lv);
 /* An Array operand's stored representation. A subclass keeps its node's
    Array projection rather than its object's local-slot representation. */
 Repr repr_array_operand(Compiler *c, int node);

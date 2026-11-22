@@ -649,6 +649,7 @@ int elab_body_def(Compiler *c, int node);
    class and side it defines on in *cls and *sg; -1 where the record holds it
    as no version */
 int elab_body_call_version(Compiler *c, int call, int *cls, int *sg);
+int elab_body_call_owner(Compiler *c, int call);   /* does every run of the body's definer call define on one class and side */
 /* The define_method call whose block makes self an object where node
    stands, with no class body, eval block (or the spliced value of one),
    def or define_singleton_method's block between (lr_body_frame), or -1. Read from the tree alone (the

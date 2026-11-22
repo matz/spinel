@@ -431,9 +431,33 @@ object (`cplan_instance_call_named`, `an_call_may_reach_instance`: by
 its receiver's class facts, as a dynamic call's kill asks them, over the
 classes that mix a module in and a builtin superclass's values, or by
 self's class; a call in a method nothing reaches reaches none) and the
-program has no `define_singleton_method` of its own. The
-call plan refuses a block that reads or writes the locals of the code
-around it or yields to its block, where the program reaches the name it
+program has no `define_singleton_method` of its own. A block that reads
+or writes the locals of the def around it closes over them (`Scope.env_host`,
+`scope_env_link`): a lookup of one of those names in the block's scope
+answers the def's own `LocalVar` (`scope_local`, whichever node asks, so a
+desugar's clone or a pattern's binding needs no filing, and a reader that
+indexes a scope's locals takes the local's own scope), `mark_env_captures` makes
+them heap cells as a proc's captures are (the locals of a def, and the
+parameter of an iteration block around the definer, with its loop slot kept:
+`LocalVar.cell_shadow`), the definer's statement builds the capture struct
+`_proc_cap_env<scope>` over those cells and stores it in
+`gv___spinel_env_<scope>` (`emit_env_store`, one global per scope the method
+pass emits, marked by `sp_mark_user_globals`), and the method it defines
+loads that global into a rooted local `_cap` as it starts and reads the cells
+through it as a proc body does (`emit_env_load`, `g_cap_struct`): a run of the
+definer that comes while a call is in progress leaves that call its own
+environment. A call that reaches the method before its definer has run, by a
+dispatch that reads no version cell, finds no environment and raises
+NoMethodError. A default of the block's parameters that reads one of those locals is spelled at the call site in the method's
+environment (`env_bind_begin`: one statement expression binds it ahead of the default's own code, the statements
+it hoists included, and raises the NoMethodError there where the definer has not run). A method with an
+environment is never spliced into a call site (the yield-inlining pass skips it), so its prologue always loads it. The call plan refuses a block that yields to the method's
+block, writes one of them through a regex's named capture, reads or writes a local of the `define_method` block it is in, closes over the method's locals where a run may define the method on
+another class or object than the one it is registered on
+(`elab_body_call_owner`, set with the bars in `lr_body_forms`:
+`lr_body_owner_fixed`), or closes over the method's locals where the program aliases its name
+(`an_aliases_name`: the alias keeps the closure of one run), or a local no closure cell can hold (`cplan_env_cells_ok`, over `repr_cell_capturable`), where the
+program reaches the name it
 defines (`an_name_reached`: a written call, or a Symbol or String
 that may run it, `elab_name_spelled` without presence queries), and a barred
 define_method in a def's body whose method the walk registers from the

@@ -753,6 +753,18 @@ static int collect_dm_each_unroll(Compiler *c, int id, const WalkCtx *w) {
     int dkn0 = 0;
     if (dps0 >= 0) (void)nt_arr(nt, dps0, "keywords", &dkn0);
     if (dkn0 > 0) return 0; }
+  /* A block in a def's body that closes over that def's locals is a scope of its own that reads them through the
+     environment its definer stores (scope_env_link), one definer a method each: the unrolled copies have no
+     definer of their own to store it, so such a loop is left to the refusal */
+  if (scope_idx > 0 && c->scopes[scope_idx].def_node >= 0 && nt_kind(nt, c->scopes[scope_idx].def_node) == NK_DefNode) {
+    ANameSet names = {0};
+    int yields;
+    an_block_env(nt, dblk, &names, &yields);
+    int other = 0;
+    for (int i = 0; i < names.n; i++) other |= !sp_streq(names.v[i], bv);
+    free(names.v);
+    if (other) return 0;
+  }
   /* iterate the array literal's elements */
   int en = 0; const int *elems = nt_arr(nt, recv, "elements", &en);
   if (en == 0) return 1;  /* an empty loop defines nothing */
@@ -1775,6 +1787,22 @@ static int record_write_class(Compiler *c, int id, int hdr) {
   return cls->idx;
 }
 
+/* A define_method or define_singleton_method block in a def's body closes over that def's locals: a lookup of one of
+   them in the block's scope answers the def's own LocalVar (Scope.env_host, scope_local), whatever node asks, and the
+   capture marking makes those heap cells (mark_env_captures). The block's own parameters and locals are not the
+   def's (a local's depth tells them apart). */
+static void scope_env_link(Compiler *c, Scope *dm, int host, int blk) {
+  const Scope *hs = &c->scopes[host];
+  ANameSet names = {0};
+  int yields;
+  if (host <= 0 || hs->def_node < 0 || nt_kind(c->nt, hs->def_node) != NK_DefNode) return;
+  an_block_env(c->nt, blk, &names, &yields);
+  if (!names.n) { free(names.v); return; }
+  dm->env_host = host + 1;
+  dm->env_names = names.v;
+  dm->nenv_names = names.n;
+}
+
 static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
   if (id < 0 || id >= c->nt->count) return;
   int scope_idx = w.scope, class_id = w.cls, proc = w.proc, dead = w.dead;
@@ -2168,6 +2196,7 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
           if (dm_kn == 0) collect_def_params(c, dm_pn, dm_s);
           else collect_positional_params(c, dm_ps, dm_s);
           dm_s->nrequired = dm_rn;
+          scope_env_link(c, dm_s, scope_idx, dm_blk);
           child = dm_new_idx;
         }
       }
@@ -3829,6 +3858,14 @@ void scope_copy_method_shape(Scope *dst, Scope *src) {
   dst->nrequired = src->nrequired;
   dst->rest_idx = src->rest_idx;
   dst->kwrest_idx = src->kwrest_idx;
+  /* a block's closure over its definer's def's locals is part of its shape (scope_env_link) */
+  if (src->env_host && !dst->env_host) {
+    dst->env_host = src->env_host;
+    dst->nenv_names = src->nenv_names;
+    dst->env_names = malloc(sizeof *dst->env_names * (size_t)src->nenv_names);
+    if (!dst->env_names) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    memcpy(dst->env_names, src->env_names, sizeof *dst->env_names * (size_t)src->nenv_names);
+  }
   dst->accessor_of = src->accessor_of;
   dst->super_of = src->super_of;
   dst->alias_of = src->alias_of ? strdup(src->alias_of) : NULL;
@@ -4003,25 +4040,55 @@ static int sg_object_standin(Compiler *c, int wnode) {
    define_singleton_method block, read or write a local of the code around
    that block, or yield to its block? A local's depth counts the blocks
    between it and its scope. */
-int an_block_captures(const NodeTable *nt, int node, int level) {
+static int an_block_env_walk(const NodeTable *nt, int node, int level, ANameSet *names, int *yields) {
   if (node < 0) return 0;
   NodeKind k = nt_kind(nt, node);
   if (k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode) return 0;
-  if (k == NK_YieldNode) return 1;
-  if ((k == NK_LocalVariableReadNode || k == NK_LocalVariableWriteNode ||
-       k == NK_LocalVariableOperatorWriteNode || k == NK_LocalVariableOrWriteNode ||
-       k == NK_LocalVariableAndWriteNode || k == NK_LocalVariableTargetNode) &&
-      nt_int(nt, node, "depth", 0) >= level)
-    return 1;
+  if (k == NK_YieldNode) {
+    if (!yields) return 1;
+    *yields |= 1;
+  }
+  /* a regex's named captures write the locals they name through a writer of their own, which does not know a cell */
+  if (k == NK_MatchWriteNode && yields) {
+    int tn = 0;
+    const int *tv = nt_arr(nt, node, "targets", &tn);
+    for (int i = 0; i < tn; i++)
+      if (nt_int(nt, tv[i], "depth", 0) >= level) *yields |= 2;
+  }
+  if ((k == NK_LocalVariableReadNode || k == NK_LocalVariableWriteNode || k == NK_LocalVariableOperatorWriteNode ||
+       k == NK_LocalVariableOrWriteNode || k == NK_LocalVariableAndWriteNode || k == NK_LocalVariableTargetNode) &&
+      nt_int(nt, node, "depth", 0) >= level) {
+    if (!names) return 1;
+    aname_add(names, nt_str(nt, node, "name"));
+  }
   int inner = (k == NK_BlockNode || k == NK_LambdaNode) ? level + 1 : level;
   int nr = nt_num_refs(nt, node);
-  for (int i = 0; i < nr; i++) if (an_block_captures(nt, nt_ref_at(nt, node, i), inner)) return 1;
+  for (int i = 0; i < nr; i++) if (an_block_env_walk(nt, nt_ref_at(nt, node, i), inner, names, yields)) return 1;
   int na = nt_num_arrs(nt, node);
   for (int i = 0; i < na; i++) {
     int cnt = 0; const int *ids = nt_arr_at(nt, node, i, &cnt);
-    for (int j = 0; j < cnt; j++) if (an_block_captures(nt, ids[j], inner)) return 1;
+    for (int j = 0; j < cnt; j++) if (an_block_env_walk(nt, ids[j], inner, names, yields)) return 1;
   }
   return 0;
+}
+int an_block_captures(const NodeTable *nt, int node, int level) {
+  return an_block_env_walk(nt, node, level, NULL, NULL);
+}
+/* ...the names of those locals into `names`, and in *yields (a bit mask) whether the subtree yields (1) or writes
+   one of them through a regex's named capture (2) (the environment a
+   define_method block closes over: scope_env_link). The names one block binds are renamed apart from the
+   method's (block_param_invent_name), so a name the block reads from the method is never one it binds too. */
+void an_block_env(const NodeTable *nt, int block, ANameSet *names, int *yields) {
+  *yields = 0;
+  (void)an_block_env_walk(nt, block, 0, names, yields);
+}
+const char *an_block_env_gap(const NodeTable *nt, int block) {
+  ANameSet none = {0};
+  int gaps;
+  an_block_env(nt, block, &none, &gaps);
+  free(none.v);
+  return gaps & 1 ? "yields to that method's block" :
+         gaps & 2 ? "writes a local of that method through a regex's named capture" : NULL;
 }
 
 /* Can `obj.define_singleton_method(name) { ... }` become a method of the

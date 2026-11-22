@@ -22319,15 +22319,18 @@ static void emit_stmt_node(Compiler *c, int id, Buf *b, int indent) {
      resolved at analyze time into real method scopes; emit nothing here. */
   if (ty_k == NK_CallNode) {
     const char *cnm = nt_str(nt, id, "name");
-    if (cnm && sp_streq(cnm, "define_method") && nt_ref(nt, id, "receiver") < 0) return;
+    if (cnm && is_define_method_name(cnm) && nt_ref(nt, id, "receiver") < 0) {
+      emit_env_store(c, id, b, indent);
+      return;
+    }
     /* define_singleton_method on a supported target (no receiver, `self`, or a
        class-constant / namespaced-class receiver) is resolved into a class-method
        scope at analyze time, so the call emits no runtime code. Mirror exactly the
        receivers analyze registers; an arbitrary-instance receiver is NOT no-op'd
        here -- it falls through to the normal unresolved-call reject at this site. */
-    if (cnm && sp_streq(cnm, "define_singleton_method")) {
+    if (cnm && is_define_singleton_method_name(cnm)) {
       int dsm_recv = nt_ref(nt, id, "receiver");
-      if (dsm_recv < 0) return;
+      if (dsm_recv < 0) { emit_env_store(c, id, b, indent); return; }
       NodeKind dsm_rk = nt_kind(nt, dsm_recv);
       if ((dsm_rk == NK_SelfNode || dsm_rk == NK_ConstantReadNode ||
                       dsm_rk == NK_ConstantPathNode)) {
@@ -22335,6 +22338,7 @@ static void emit_stmt_node(Compiler *c, int id, Buf *b, int indent) {
            An INSTANCE constant (`B = Box.new`) matches the same node type but
            is a singleton binding, and the statement is where its override
            starts (#4084) -- a no-op for anything analyze did not mark. */
+        emit_env_store(c, id, b, indent);
         emit_sg_activate(c, id, dsm_recv, b, indent);
         return;
       }
@@ -23682,10 +23686,9 @@ void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent) {
     return;
   }
 
-  /* A local operator-assignment whose target is a captured/cell var (inside a
-     proc/block body) has no value form in emit_expr -- cells are int-restricted
-     and statement-only -- so keep emitting it as a statement; the enclosing
-     callable returns its default. Ordinary locals/ivars fall through below. */
+  /* A local operator-assignment whose target is a captured/cell var has no value form in emit_expr, which reads a
+     local's slot, not its cell: the write is emitted as a statement and the value read back from the cell, into a
+     proc's result slot or a method's return. Ordinary locals/ivars fall through below. */
   if (k == NK_LocalVariableOperatorWriteNode) {
     const char *nm = nt_str(nt, id, "name");
     LocalVar *lv = nm ? scope_local(comp_scope_of(c, id), nm) : NULL;
@@ -23694,8 +23697,7 @@ void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent) {
       /* Inside a proc/lambda body the cell op-write must still return the
          POST-assignment value (`->{ n += 1 }.call` is `n+1`, not the stale
          slot). Emit the mutation as a statement, then read the cell back and
-         publish it into the proc's result slot. Outside a proc body keep the
-         plain-statement form (the method's default return covers the value). */
+         publish it into the proc's result slot. */
       if (g_in_proc_body && g_result_var) {
         emit_stmt(c, id, b, indent);
         TyKind ct = lv ? lv->type : TY_INT;
@@ -23715,6 +23717,21 @@ void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent) {
           else if (!co && oint_kind(ct) && g_result_oint) buf_printf(b, "%s(%s);\n", oint_of(ct), rb.p ? rb.p : "0");
           else buf_printf(b, "%s;\n", rb.p ? rb.p : "0");
         }
+        free(rb.p);
+        return;
+      }
+      /* In a method body (a define_method's, or the def whose locals a proc closes over) the value is the cell's
+         after the write, as in a proc's: a nilable number's cell answers through its oint */
+      if (lv && tail_slot_reaches_ret(c, lv->type)) {
+        emit_stmt(c, id, b, indent);
+        Buf rb; memset(&rb, 0, sizeof rb); emit_local_ref(c, id, nm, &rb);
+        emit_indent(b, indent); emit_tail_lead(b);
+        if (slot_is_oint(lv)) {
+          if (g_result_var ? g_result_poly : g_ret_type == TY_POLY) buf_printf(b, "%s(%s);\n", oint_box(lv->type), rb.p ? rb.p : "0");
+          else if (g_result_var ? g_result_oint : g_ret_oint) buf_printf(b, "%s;\n", rb.p ? rb.p : "0");
+          else buf_printf(b, "%s.v;\n", rb.p ? rb.p : "0");
+        }
+        else emit_tail_slot(c, lv->type, rb.p ? rb.p : "0", b, id);
         free(rb.p);
         return;
       }

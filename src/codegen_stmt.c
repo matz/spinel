@@ -19809,7 +19809,7 @@ static int emit_multi_write_stmt_body(Compiler *c, int id, Buf *b, int indent, c
     if (rest_tgt >= 0) masgn_store(c, id, mt, rest_tgt, rx, rest_arr_t, tr, -1, -1, indent, b);
     else {
       emit_indent(b, indent);
-      if (rest_var) buf_printf(b, "lv_%s = ", rename_local(rest_var));
+      if (rest_var) { emit_local_ref(c, id, rest_var, b); buf_puts(b, " = "); }
       else buf_printf(b, "gv_%s = ", rest_gvar);
       masgn_conv(c, id, slot_t == TY_POLY ? TY_POLY : rest_arr_t, rest_arr_t, rx, b);
       buf_puts(b, ";\n");
@@ -19832,7 +19832,7 @@ static int emit_multi_write_stmt_body(Compiler *c, int id, Buf *b, int indent, c
       int rjpoly = rjlv && rjlv->type == TY_POLY;
       /* a local that holds its nil takes the element's oint (or nil) */
       int rjo = rjlv && oint_kind(rjlv->type) && slot_is_oint(rjlv);
-      buf_printf(b, "lv_%s = ", rename_local(rnm_j));
+      emit_local_ref(c, id, rnm_j, b); buf_puts(b, " = ");
       if (ridx >= 0 && ridx < en) {
         TyKind value_type = tmpts[ridx];
         char rex[32]; snprintf(rex, sizeof rex, "_t%d", tmps[ridx]);
@@ -23731,6 +23731,8 @@ void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent) {
           else if (g_result_var ? g_result_oint : g_ret_oint) buf_printf(b, "%s;\n", rb.p ? rb.p : "0");
           else buf_printf(b, "%s.v;\n", rb.p ? rb.p : "0");
         }
+        else if (oint_kind(lv->type) && !(g_result_var ? g_result_poly : g_ret_type == TY_POLY) && (g_result_var ? g_result_oint : g_ret_oint))
+          buf_printf(b, "%s(%s);\n", oint_of(lv->type), rb.p ? rb.p : "0");   /* (a plain cell, into a method that answers nil too) */
         else emit_tail_slot(c, lv->type, rb.p ? rb.p : "0", b, id);
         free(rb.p);
         return;

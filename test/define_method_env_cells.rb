@@ -204,3 +204,16 @@ p Dflt.new.m(1)
 p Dflt.new.m(1, 2, 3) { |x| x * 2 }
 Dflt.mk(8)
 p Dflt.new.m(1)
+
+# a proc that a class method's block makes, in a subclass's call, closes over a captured local and reads self
+class Cls
+  def self.install(x)
+    define_singleton_method(:m) do
+      n = self.name
+      -> { [x, n] }
+    end
+  end
+end
+class SubCls < Cls; end
+Cls.install(1)
+p SubCls.m.call

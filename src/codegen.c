@@ -10601,6 +10601,15 @@ static NameSet env_caps(const Scope *dm, Scope *host) {
 /* The environment is the definer's, not a scope's: the scope of a module's method an include copies (and every other
    copy) reads the one its definer stores, whichever of the copies is emitted. Keyed by the definer call. */
 static void env_tag(const Scope *dm, char *out, size_t cap) { snprintf(out, cap, "env%d", dm->def_node); }
+/* Is the capture struct in force (g_cap_struct) the environment of method scope dm, which has no receiving class in it
+   (a proc's struct has)? */
+static int env_struct_is(const Scope *dm, const char *capst) {
+  char pid[24], want[40];
+  if (!dm || !dm->env_host || !capst) return 0;
+  env_tag(dm, pid, sizeof pid);
+  snprintf(want, sizeof want, "_proc_cap_%s", pid);
+  return sp_streq(capst, want);
+}
 /* Is scope si the first emitted scope of its definer's environment (the one that declares it), and does any scope of
    definer call `node` get emitted (first = 0)? */
 static int env_emitted_scope(Compiler *c, int node, int si) {
@@ -10672,7 +10681,7 @@ static void emit_env_missing(Compiler *c, const Scope *dm, Buf *b, const char *s
    definer ran finds no environment: it raises the NoMethodError there, as the method's prologue does, before
    anything reads a cell. env_bind_begin opens it and saves the context; env_bind_end writes the hoisted code and
    closes. */
-void env_bind_begin(Compiler *c, Scope *dm, Buf *out, EnvBind *sv) {
+void env_bind_begin(Compiler *c, Scope *dm, int dflt, Buf *out, EnvBind *sv) {
   char pid[24];
   env_tag(dm, pid, sizeof pid);
   sv->st = g_cap_struct; sv->names = g_cap_names;
@@ -10684,7 +10693,10 @@ void env_bind_begin(Compiler *c, Scope *dm, Buf *out, EnvBind *sv) {
   int vc = g_nd_call_id >= 0 && g_nd_call_id < c->nt->count && nt_kind(c->nt, g_nd_call_id) == NK_CallNode && nt_vcall(c->nt, g_nd_call_id) &&
            nt_str(c->nt, g_nd_call_id, "name") && dm->name && sp_streq(nt_str(c->nt, g_nd_call_id, "name"), dm->name);
   emit_env_missing(c, dm, out, "NULL", vc);
-  buf_puts(out, " } ");
+  /* (a default that may run program code may run the definer again, which replaces the global, and collect: this one
+     is then the default's only root. Only one that provably runs none, reads of cells and locals, literals and scalar
+     operators, is left unrooted; anything else is rooted) */
+  buf_puts(out, subtree_code_is_pure_read(c, dflt) ? " } " : " } SP_GC_ROOT(_cap); ");
   sv->at = out->len;
   sv->pre = g_pre; sv->indent = g_indent;
   memset(&sv->hoist, 0, sizeof sv->hoist);
@@ -12117,7 +12129,7 @@ else if (orecv >= 0 && onm) {
          from another proc's capture struct when this one is nested */
       if (cap_cls) {
         emit_indent(g_pre, g_indent);
-        if (g_cap_struct)
+        if (g_cap_struct && !env_struct_is(bs, g_cap_struct))
           buf_printf(g_pre, "_capv_%s->__self_cls = ((%s *)_cap)->__self_cls;\n", pid, g_cap_struct);
         else
           buf_printf(g_pre, "_capv_%s->__self_cls = %s;\n", pid, bs->yields && sv_self ? sv_self : "_sp_cls");

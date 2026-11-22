@@ -43,3 +43,16 @@ class Opw
 end
 o = Opw.mk(3)
 p Opw.new.bump, Opw.new.bump, o.v, Opw.new.orw
+
+# a multiple assignment with a splat and a post target writes the captured locals through their cells
+class Splat
+  def self.mk
+    head, *middle, n = [1, 2, 3, 4]
+    define_singleton_method(:rd) { [head, middle, n] }
+    *init, last = [5, 6, 7]
+    define_singleton_method(:rd2) { [init, last] }
+    :ok
+  end
+end
+Splat.mk
+p Splat.rd, Splat.rd2

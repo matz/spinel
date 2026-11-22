@@ -10103,7 +10103,7 @@ static int cplan_env_cells_ok(Compiler *c, const Scope *dm) {
    or NULL: a define_method or define_singleton_method in a def's body, or one that is a version
    (elab_body_call_version: in a define_method's or define_singleton_method's block too), whose block yields to that
    method's block (the method it defines is laid out as a method of its own, which has none; the locals it reads or
-   writes it closes over, Scope.env_host), that reads or writes a local of the define_method block it is in, or
+   writes it closes over, Scope.env_host), that reads or writes a local from outside it where the definer is inside another definer's block (the method's or the outer block's), or
    that closes over the method's locals where a run may define it on another class or object than the one it is
    registered on, or where the program aliases its name (an alias keeps the environment of one run), where the program reaches the name it defines
    (an_name_reached: a call, or a Symbol or String that may run it; one nothing reaches is never run in place
@@ -10142,8 +10142,8 @@ static const char *cplan_body_definer_gap(Compiler *c, int id, char *buf, size_t
   }
   int host = elab_body_call_version(c, id, &cls, &sg);
   const char *envgap = !lit ? NULL : an_block_env_gap(nt, blk) ? an_block_env_gap(nt, blk) :
-    /* (a definer in a define_method's block: the locals it closes over are that block's own, which have no cells yet) */
-    !def && an_block_captures(nt, blk, 0) ? "reads or writes a local of the define_method block around it" :
+    /* (a definer in a define_method's block, a def around that block or not: the locals it closes over are that block's own, which have no cells yet, or reach the def's through that block's environment) */
+    (!def || (hs->def_node >= 0 && nt_kind(nt, hs->def_node) != NK_DefNode)) && an_block_captures(nt, blk, 0) ? "reads or writes a local from outside it, where the definer is inside another definer's block" :
     /* (the environment is the definer's one, so every run must define on the class and side the method is registered on) */
     an_block_captures(nt, blk, 0) && !elab_body_call_owner(c, id) ? "reads or writes that method's locals where a run may define it on another class or object than the one it is registered on" :
     /* (an alias keeps the method it found: the environment of one run of the definer) */

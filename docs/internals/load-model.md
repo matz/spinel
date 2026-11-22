@@ -452,7 +452,7 @@ NoMethodError. A default of the block's parameters that reads one of those local
 environment (`env_bind_begin`: one statement expression binds it ahead of the default's own code, the statements
 it hoists included, and raises the NoMethodError there where the definer has not run). A method with an
 environment is never spliced into a call site (the yield-inlining pass skips it), so its prologue always loads it. The call plan refuses a block that yields to the method's
-block, writes one of them through a regex's named capture, reads or writes a local of the `define_method` block it is in, closes over the method's locals where a run may define the method on
+block, writes one of them through a regex's named capture, is a definer inside another definer's block and reads or writes a local from outside its own block (the method's or the outer block's: only a def's locals have cells), closes over the method's locals where a run may define the method on
 another class or object than the one it is registered on
 (`elab_body_call_owner`, set with the bars in `lr_body_forms`:
 `lr_body_owner_fixed`), or closes over the method's locals where the program aliases its name

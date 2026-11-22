@@ -1849,7 +1849,7 @@ test-corpus-summary: test-corpus-results
 # entries, and a raise caught through the exported try helper -- and a kernel
 # whose entries start and join threads after an init that started some, and
 # one whose at_exit hooks run when the host exits, not as its init returns,
-# and one whose entry calls a Struct's `new` the load redefined, a typed and
+# and one whose entry uses Marshal, and one whose entry calls a Struct's `new` the load redefined, a typed and
 # an untyped entry that `new` one class compile, so do a typed entry and an
 # --ext-class table that `new` one class, and an
 # --ext-entry list longer than 2048 bytes exports every method it names.
@@ -1893,6 +1893,16 @@ ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SP_RT_PIC_LIB) $(SP_RT_MT_PIC
 	    printf 'init returned\nentry 41\n42\nmain returns\nentry hook 41\ntoplevel hook\n' | cmp -s - "$$tmp/out" && [ $$rc -eq 3 ] || \
 	      { echo "ext-test: FAIL (at_exit hooks not run at host exit, or status $$rc is not the host's 3)"; cat "$$tmp/out"; ok=0; }; \
 	  else echo "ext-test: FAIL (at_exit host C did not compile)"; sed -n 1,6p "$$tmp/cc.err"; ok=0; fi; \
+	fi; \
+	if [ $$ok -eq 1 ]; then \
+	  if ! $(SPINEL) test/ext/marshal.rb -c --no-line-map --ext-init Init_ext_marshal \
+	      --ext-entry ExtMarshal.round_trip -o "$$tmp/s.c" >/dev/null 2>&1; then \
+	    echo "ext-test: FAIL (marshal emission)"; ok=0; \
+	  elif $(CC) -O1 -w $(PLATFORM_FLAGS) -Ilib -I"$$tmp" test/ext/marshal_host.c "$$tmp/s.c" $(SP_RT_LIB) $(LDFLAGS) -lm -o "$$tmp/shost" 2>"$$tmp/cc.err"; then \
+	    "$$tmp/shost" > "$$tmp/out" 2>&1; rc=$$?; \
+	    printf '[41, :sym, "str"]\n42\n' | cmp -s - "$$tmp/out" && [ $$rc -eq 0 ] || \
+	      { echo "ext-test: FAIL (a library that uses Marshal answered wrong, or status $$rc)"; cat "$$tmp/out"; ok=0; }; \
+	  else echo "ext-test: FAIL (the C of a library that uses Marshal did not compile)"; sed -n 1,6p "$$tmp/cc.err"; ok=0; fi; \
 	fi; \
 	if [ $$ok -eq 1 ]; then \
 	  if ! $(SPINEL) test/ext/pic.rb -c --no-line-map --ext-init Init_ext_pic \

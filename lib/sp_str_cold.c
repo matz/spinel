@@ -57,7 +57,7 @@ static int _sp_hexval(unsigned char d){return (d<='9')?(d-'0'):(tolower(d)-'a'+1
 static char *sp_str_rep_expand(const char *rep, const char *match, size_t mlen, size_t *olen);
 /* String#inspect: wrap in double quotes and escape \, ", \n, \t, \r,
    plus any non-printable byte as \xNN. Output is always ASCII-safe. */
-const char*sp_str_inspect(const char*s){SP_GC_ROOT_STR(s);if(!s){char*r=sp_str_alloc_raw(4);r[0]='n';r[1]='i';r[2]='l';r[3]=0;return r;}size_t sl=sp_str_byte_len(s);size_t cap=(sl*6)+3;char*r=sp_str_alloc_raw(cap);size_t o=0;r[o++]='"';for(size_t i=0;i<sl;i++){unsigned char c=(unsigned char)s[i];if(c=='\\'||c=='"'){r[o++]='\\';r[o++]=c;}
+static const char*sp_str_inspect_x(const char*s,int xctl){SP_GC_ROOT_STR(s);if(!s){char*r=sp_str_alloc_raw(4);r[0]='n';r[1]='i';r[2]='l';r[3]=0;return r;}size_t sl=sp_str_byte_len(s);size_t cap=(sl*6)+3;char*r=sp_str_alloc_raw(cap);size_t o=0;r[o++]='"';for(size_t i=0;i<sl;i++){unsigned char c=(unsigned char)s[i];if(c=='\\'||c=='"'){r[o++]='\\';r[o++]=c;}
 /* `#` is escaped only where it would start an interpolation (#3558) */
 else if(c=='#'&&i+1<sl&&(s[i+1]=='{'||s[i+1]=='$'||s[i+1]=='@')){r[o++]='\\';r[o++]='#';}
 else if(c=='\a'){r[o++]='\\';r[o++]='a';}
@@ -68,7 +68,7 @@ else if(c=='\v'){r[o++]='\\';r[o++]='v';}
 else if(c=='\f'){r[o++]='\\';r[o++]='f';}
 else if(c=='\r'){r[o++]='\\';r[o++]='r';}
 else if(c==0x1b){r[o++]='\\';r[o++]='e';}
-else if(c<0x20||c==0x7f){/* other control bytes render as \uNNNN (UTF-8 default, matching CRuby source-literal strings); a BINARY string -- what pack and Random#bytes answer -- renders \xNN as CRuby does for ASCII-8BIT (#3553) */if(sp_str_is_binary(s)){snprintf(r+o,5,"\\x%02X",c);o+=4;}else{snprintf(r+o,7,"\\u%04X",c);o+=6;}}
+else if(c<0x20||c==0x7f){/* other control bytes render as \uNNNN (UTF-8 default, matching CRuby source-literal strings); a BINARY string -- what pack and Random#bytes answer -- renders \xNN as CRuby does for ASCII-8BIT (#3553), and so does a US-ASCII Symbol name */if(xctl){snprintf(r+o,5,"\\x%02X",c);o+=4;}else{snprintf(r+o,7,"\\u%04X",c);o+=6;}}
 /* A byte that is not part of a valid UTF-8 sequence escapes as \xNN, the way
    CRuby renders it: `"a\x80b".inspect` is "a\x80b". Passing the raw byte
    through made the inspect output itself invalid UTF-8, so a terminal drew
@@ -94,6 +94,9 @@ else if(c>=0x80){
     i+=(size_t)extra;}
 }
 else{r[o++]=(char)c;}}r[o++]='"';r[o]=0;sp_str_set_len(r,o);return r;}
+const char*sp_str_inspect(const char*s){return sp_str_inspect_x(s,s&&sp_str_is_binary(s));}
+/* A Symbol with an ASCII name is US-ASCII in CRuby: :"a\x00" */
+static const char*sp_sym_name_quote(const char*n){return sp_str_inspect_x(n,n&&(sp_str_is_binary(n)||sp_str_ascii_only(n)));}
 /* A symbol prints without quotes when its name is a plain identifier (an
    @ivar / @@cvar / $gvar, or a bare name optionally ending in ? ! =) or a
    known operator method name; otherwise it is quoted like a string: :"a b". */
@@ -132,7 +135,7 @@ const char *sp_sym_inspect_name(const char *name) {SP_GC_ROOT_STR(name);
      one byte before it (out of bounds of the .rodata constant). `body` is a
      real spinel string (the symbol's name, or its inspected form), so measuring
      it is safe. */
-  const char *body = sp_sym_simple_p(name) ? name : sp_str_inspect(name);
+  const char *body = sp_sym_simple_p(name) ? name : sp_sym_name_quote(name);
   SP_GC_ROOT_STR(body);   /* the non-simple branch just allocated body; keep it live across sp_str_alloc's GC */
   size_t bl = sp_str_byte_len(body);
   char *r = sp_str_alloc(1 + bl);
@@ -148,7 +151,7 @@ const char *sp_sym_inspect_name(const char *name) {SP_GC_ROOT_STR(name);
 const char *sp_sym_inspect_key(const char *name) {SP_GC_ROOT_STR(name);
   size_t l = name ? sp_str_byte_len(name) : 0;
   int label = l > 0 && l == strlen(name) && name[l - 1] != '=' && sp_sym_plain_name_p(name, TRUE);
-  return label ? name : sp_str_inspect(name);
+  return label ? name : sp_sym_name_quote(name);
 }
 /* Map every codepoint of s through fn; ß (U+00DF) upcases to "SS" when
    up is set, so allocate room for a 3x expansion. */

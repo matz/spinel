@@ -560,6 +560,8 @@ int is_kernel_module_function(const char *n);
 int kernel_function_ignores_self(const char *n);
 int builtin_object_method_known(const char *m);   /* one of Object's own methods every object answers */
 int builtin_module_method_known(const char *m);   /* one of Module's own methods a class answers, and no object's */
+int kernel_private_method(const char *name);   /* one of the methods Kernel defines private */
+int is_object_method_name(const char *nm);   /* one of Object's public or private instance methods, Kernel's private ones too */
 const char *builtin_method_owner(const char *cls, const char *m);   /* the class or module defining builtin cls's m */
 const char *builtin_bool_method_owner(const char *cls, const char *m);   /* ...a true's or false's m, of class cls when known; NULL where it is not known */
 const char *builtin_function_owner(const char *m);   /* the module defining the function a receiverless method(:m) binds */
@@ -629,6 +631,7 @@ int is_builtin_module_const_name(const char *n);
 int is_untabled_native_class_name(const char *n);
 
 int is_define_method_name(const char *n); /* define_method */
+extern const char DEFINE_METHOD_NAME[];   /* "define_method", the name a lookup of Module's definer asks */
 int is_define_singleton_method_name(const char *n); /* define_singleton_method */
 int is_singleton_class_name(const char *n); /* singleton_class */
 int is_reopen_self_name(const char *n);       /* __self: the receiver of a method a builtin's reopening defines */

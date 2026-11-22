@@ -6703,22 +6703,25 @@ int class_recv_is_dynamic(Compiler *c, int recv) {
 }
 
 
-/* Is module m module mod, or does it include mod (through its own includes)? */
-int comp_module_includes(Compiler *c, int m, int mod, int depth) {
-  if (m == mod) return 1;
+/* Is module k module m, or does m (a class or a module) mix it in: include it, or with prepends prepend it too,
+   through m's own mixins? */
+static int comp_mixes_in_at(Compiler *c, int m, int k, int prepends, int depth) {
+  if (m == k) return 1;
   if (m < 0 || m >= c->nclasses || depth > 16) return 0;
-  ClassInfo *mi = &c->classes[m];
-  for (int k = 0; k < mi->nincluded_mods; k++)
-    if (comp_module_includes(c, mi->included_mods[k], mod, depth + 1)) return 1;
+  const ClassInfo *mi = &c->classes[m];
+  for (int i = 0; i < mi->nincluded_mods; i++) if (comp_mixes_in_at(c, mi->included_mods[i], k, prepends, depth + 1)) return 1;
+  for (int i = 0; prepends && i < mi->nprepended_mods; i++)
+    if (comp_mixes_in_at(c, mi->prepended_mods[i], k, prepends, depth + 1)) return 1;
   return 0;
 }
+int comp_mixes_in(Compiler *c, int m, int k, int prepends) { return comp_mixes_in_at(c, m, k, prepends, 0); }
 /* Does module `mod` -- or a module including it -- take part in class `ci`'s
    singleton ancestors, through an `extend` of `ci` or of a superclass? Then
    `ci.is_a?(mod)` is true. */
 int comp_class_singleton_has_module(Compiler *c, int ci, int mod) {
   for (int k = ci, d = 0; k >= 0 && k < c->nclasses && d < 64; k = c->classes[k].parent, d++)
     for (int e = 0; e < c->classes[k].nextended_mods; e++)
-      if (comp_module_includes(c, c->classes[k].extended_mods[e], mod, 0)) return 1;
+      if (comp_mixes_in(c, c->classes[k].extended_mods[e], mod, 0)) return 1;
   return 0;
 }
 /* Does class `ci` or a superclass extend any module? */

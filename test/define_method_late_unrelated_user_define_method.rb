@@ -1,5 +1,5 @@
-# A define_method of the program's own, even in an unrelated class, may be
-# the one a call reaches, so the call is refused: CRuby prints "helper x",
+# A define_method of the program's own in an unrelated class is not the one
+# a receiverless call in R's class method reaches: CRuby prints "helper x",
 # "plain", "fancy".
 class Helper
   def define_method(name) = "helper #{name}"

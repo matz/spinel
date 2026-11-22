@@ -1,5 +1,6 @@
-# The method a define_method replaces can come from a superclass or an
-# included module: before `make_fancy!` runs, CRuby still calls that one.
+# The method a define_method in a method's body replaces can come from a
+# superclass or an included module: before `make_fancy!` runs, CRuby still
+# calls that one.
 module Plain
   def show(x) = "plain #{x}"
 end

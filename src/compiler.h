@@ -1548,7 +1548,8 @@ typedef struct {
   int *anon_struct_ids;
   int n_anon_struct_ids, anon_struct_ids_valid;
   int has_anonymous_classes; /* Class.new identities with execution-time names */
-  int user_define_method;    /* 0 not asked yet, else 1 + the UDM_ kinds of the program's own define_method (an_user_define_method_kinds; 1 none) */
+  struct UserMethodKinds { char name[32]; int kinds; } user_methods[8];   /* the UDM_ kinds of the program's own methods of a name, by name (an_user_method_kinds) */
+  int nuser_methods;
 
   /* local-write-by-name index; see comp_lvw_first */
   int *lvw_head;        /* [lvw_nbuckets] first write id in each name bucket */
@@ -2186,7 +2187,7 @@ typedef int (*IvarWriteFn)(void *ctx, const char *iv);
 int node_ivar_writes(Compiler *c, int id, int cls, int depth, IvarWriteFn add, void *ctx);
 int subtree_ivar_writes(Compiler *c, int id, int cls, int depth, IvarWriteFn add, void *ctx);
 int comp_lvw_first(Compiler *c, const char *name);
-int comp_module_includes(Compiler *c, int m, int mod, int depth);
+int comp_mixes_in(Compiler *c, int m, int k, int prepends);   /* is module k m, or does m include it (prepends: or prepend it), through m's own mixins? */
 int comp_class_singleton_has_module(Compiler *c, int ci, int mod);
 int comp_class_extends_any(Compiler *c, int ci);
 int comp_lvw_next(const Compiler *c, int w);

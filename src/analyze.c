@@ -18663,10 +18663,14 @@ static int oa_class_may_answer(Compiler *c, int ci, const char *name) {
    facts hold as k + nclasses: the value may be the class or a subclass, or
    a class they cannot bound (a reopened builtin's, whose Class object a
    builtin value's `.class` answers without a bit of its own). */
+static int an_recv_may_reach_class(Compiler *c, int recv, int ci, int cm);
 static int oa_recv_may_reach(Compiler *c, int recv, const OAS *s) {
   int ci = s->ici >= 0 ? s->ici : s->sidx >= 0 ? c->scopes[s->sidx].class_id : -1;
+  return an_recv_may_reach_class(c, recv, ci, s->ici < 0 && s->sidx >= 0 && c->scopes[s->sidx].is_cmethod);
+}
+/* ...may recv's value be an instance of class ci or of a class under it (cm: the Class object of one)? */
+static int an_recv_may_reach_class(Compiler *c, int recv, int ci, int cm) {
   if (recv < 0 || ci < 0 || ci >= c->nclasses || cls_fact_unbounded(c, recv)) return 1;
-  int cm = s->ici < 0 && s->sidx >= 0 && c->scopes[s->sidx].is_cmethod;
   const ClsSet *f = cm ? cls_fact_node(c, recv) : NULL;
   /* (a receiver no value reaches excludes nothing, as cls_fact_excludes says) */
   if (cm && (!f || (f->n == 0 && !f->bv && !f->os))) return 1;
@@ -18683,6 +18687,77 @@ static int oa_recv_may_reach(Compiler *c, int recv, const OAS *s) {
       return 1;
   }
   return 0;
+}
+/* Does module k reach every object, mixed in at the top level? */
+static int an_mixed_at_top(Compiler *c, int k) {
+  for (int i = 0; i < c->ntoplevel_includes; i++)
+    if (comp_mixes_in(c, c->toplevel_includes[i], k, 1)) return 1;
+  return 0;
+}
+/* The class after j (-1 for the first) that mixes module m in (comp_mixes_in), or -1 */
+static int an_mixer_next(Compiler *c, int m, int j) {
+  for (j++; j < c->nclasses; j++)
+    if (j != m && !comp_class_is_module(c, &c->classes[j]) && comp_mixes_in(c, j, m, 1)) return j;
+  return -1;
+}
+/* May an instance of class or module a, or of a class under it, be one of class or module k: of k or a class under
+   it, and for a module, of a class that mixes it in (an_mixer_next), or any where the top level does? */
+static int an_instances_meet(Compiler *c, int a, int k) {
+  if (a < 0 || a >= c->nclasses || k < 0 || k >= c->nclasses) return 1;
+  int am = comp_class_is_module(c, &c->classes[a]), km = comp_class_is_module(c, &c->classes[k]);
+  if (!am && !km) return a == k || is_descendant(c, a, k) || is_descendant(c, k, a);
+  int m = am ? a : k;
+  if (an_mixed_at_top(c, m)) return 1;
+  for (int j = an_mixer_next(c, m, -1); j >= 0; j = an_mixer_next(c, m, j))
+    if (am ? an_instances_meet(c, j, k) : an_instances_meet(c, a, j)) return 1;
+  return 0;
+}
+/* May recv's value be an instance of class or module k, or of a class under it: an_recv_may_reach_class, for a
+   module over the classes that mix it in (and the Class objects of those that extend it; any value where the top
+   level mixes it in), and for a class the facts cannot bound under a builtin superclass (an exception's, a
+   reopened builtin's), k or a class under it in the facts or a value of that builtin (cls_fact_may_hold_builtin)? */
+static int an_recv_may_be_of(Compiler *c, int recv, int k) {
+  if (k < 0 || k >= c->nclasses) return 1;
+  if (comp_class_is_module(c, &c->classes[k])) {
+    if (an_mixed_at_top(c, k)) return 1;
+    for (int j = an_mixer_next(c, k, -1); j >= 0; j = an_mixer_next(c, k, j))
+      if (an_recv_may_be_of(c, recv, j)) return 1;
+    for (int j = 0; j < c->nclasses; j++)
+      if (j != k && !comp_class_is_module(c, &c->classes[j]) && comp_class_singleton_has_module(c, j, k) &&
+          an_recv_may_reach_class(c, recv, j, 1))
+        return 1;
+    return 0;
+  }
+  const ClsSet *f = cls_fact_node(c, recv);
+  /* (an empty fact, or one of a literal's builtin seed alone, holds no instance of a class the facts bound: nil is
+     no member of a set, and code nothing runs reaches nothing. cls_fact_excludes excludes no class there, so that a
+     call nothing runs keeps binding the methods of its name, #9514; this asks what a call that runs may reach) */
+  if (f && cls_fact_bounded(c, k) && k < c->cls_fact_ncls && f->n == 0 && !f->bv && !f->os && !f->all &&
+      !cls_bk_has(f, CLS_BK_OTHER))
+    return 0;
+  const char *rn = !cls_fact_bounded(c, k) ? comp_super_builtin_root(c, k, NULL) : NULL;
+  int core = rn ? builtin_core_class_slot(rn) : -1;
+  if (!f || core < 0 || core == CORE_OBJECT || cls_fact_unbounded(c, recv)) return an_recv_may_reach_class(c, recv, k, 0);
+  int nd = 0;
+  const int *ds = comp_descendants(c, k, &nd);
+  for (int i = -1; i < nd; i++) {
+    int j = i < 0 ? k : ds[i];
+    if (j >= c->cls_fact_ncls || cls_set_has(f, j)) return 1;
+  }
+  return cls_fact_may_hold_builtin(c, recv, core);
+}
+/* See analyze_internal.h. */
+int an_call_may_reach_instance(Compiler *c, int call, int k) {
+  const Scope *s = comp_scope_of(c, call);
+  if (s && s->def_node >= 0 && !s->reachable) return 0;   /* (code nothing runs) */
+  int recv = nt_ref(c->nt, call, "receiver");
+  if (recv >= 0 && nt_kind(c->nt, recv) != NK_SelfNode) return an_recv_may_be_of(c, recv, k);
+  /* self: in a define_method's block the object it runs on, an instance of the block's class (elab_body_self_object);
+     in a method of a class an instance of it; in a top-level method any object; main, a class body's self and a
+     class method's are no instance */
+  if (!s) return 1;
+  if (elab_body_self_object(c, call) < 0 && (s->def_node < 0 || s->is_cmethod)) return 0;
+  return s->class_id < 0 || an_instances_meet(c, s->class_id, k);
 }
 
 /* The slots by the name a call on a dynamic receiver reaches them under: an
@@ -36472,7 +36547,7 @@ static int seed_contradicts(Compiler *c, TyKind slot, TyKind val, int ret) {
     if (comp_class_is_module(c, &c->classes[cv])) {
       int any = 0;
       for (int k = 0; k < c->nclasses; k++) {
-        if (k == cv || comp_class_is_module(c, &c->classes[k]) || !comp_module_includes(c, k, cv, 0)) continue;
+        if (k == cv || comp_class_is_module(c, &c->classes[k]) || !comp_mixes_in(c, k, cv, 0)) continue;
         if (!is_descendant(c, k, cs)) return 1;
         any = 1;
       }

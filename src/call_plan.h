@@ -55,7 +55,8 @@ typedef enum {
   CRF_TOP_SELF,    /* a receiverless call in a top-level def to a name main has a singleton method for (diagnose_unsupported_call) */
   CRF_CAPTURE,     /* a record class's class method captured where its def may not have run, or a module's absent one where its NameError's class is not told, or a public_method's whose visibility is not told (emit_call_method_obj_arms) */
   CRF_RECORD_NEW,  /* a record class's own `new` or `[]` called where its def may not have run (emit_new_call_arms, the bare new) */
-  CRF_MAIN_CHAIN   /* a bare call of a name a conditional or may-not-have-run mixin of main or Object defines (reject_main_chain) */
+  CRF_MAIN_CHAIN,  /* a bare call of a name a conditional or may-not-have-run mixin of main or Object defines (reject_main_chain) */
+  CRF_DEFINER      /* a define_method in a method body the plan answers as no version (reject_body_definers) */
 } CplanRefuseFrom;
 
 /* CallPlan.absent: the side a `method(:sym)` that finds no method names in
@@ -928,7 +929,6 @@ CallPlan cplan_refuse(Compiler *c, int id);
 /* the documented-limit family: the node's message or NULL; *stop 0 when
    a limit down the receiver chain is the one to report */
 const char *cplan_feature_why(Compiler *c, int id, int *stop, char *buf, size_t cap);
-int cplan_define_method_early(Compiler *c, int id);
 int cplan_record_sclass_early(Compiler *c, int id);
 
 /* The plan of the same call read in a context the node does not carry
@@ -1482,8 +1482,11 @@ int cplan_block_arg(Compiler *c, int id, const char **cn);
    NameError for a bare name, NoMethodError otherwise; self_text how the
    message names the receiver ("class U", "module M", "main"), or, for an
    anonymous class, which names itself at run time, *anon its index (-1
-   otherwise; anon may be NULL). Pure. */
-typedef enum { CM_NONE, CM_NAMEERROR, CM_NOMETHOD } CplanMissing;
+   otherwise; anon may be NULL). CM_NOMETHOD_SELF for a define_method or
+   attr_* whose self is an object (an_object_definer_missing): the
+   NoMethodError names that object, as the run time describes it (self_text
+   empty). Pure. */
+typedef enum { CM_NONE, CM_NAMEERROR, CM_NOMETHOD, CM_NOMETHOD_SELF } CplanMissing;
 int cplan_missing(Compiler *c, int id, char *self_text, size_t cap, int *anon);
 /* Does an undef of `name` on class cls's chain stop call id, an instance
    call on a cls receiver (comp_is_undeffed_in_chain), with no version entry

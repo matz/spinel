@@ -3523,6 +3523,7 @@ __attribute__((noreturn)) void refuse_nil_store(Compiler *c, int node, TyKind t,
 int node_may_be_nil(Compiler *c, int node);
 int call_names_only_void_methods(Compiler *c, int node);   /* codegen_stmt.c */
 int call_misses_self_method(Compiler *c, int id);   /* codegen_call.c: a self-call NoMethodError raises */
+void emit_call_self_boxed(Compiler *c, int id, Buf *b);   /* codegen_call_class.c: the self call id runs on, boxed */
 /* node as a plain scalar through its oint form: `sp_oint_val(<oint>, op)`
    when the node may be nil (cmp_operand_may_be_nil), else emit_expr */
 void emit_oint_unwrap_ck(Compiler *c, int node, TyKind t, const char *op, Buf *b);

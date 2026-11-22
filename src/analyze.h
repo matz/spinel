@@ -643,6 +643,36 @@ int elab_def_scope_of(Compiler *c, int node);   /* the scope elab_def_scope file
 /* the def node whose body holds node, with no class body or other def
    between; -1 for none */
 int elab_body_def(Compiler *c, int node);
+/* The body whose runs make definer call `call` (define_method or the like in
+   a body, lr_body_call) a version, ordered against the calls by its extent
+   (LrDef.body: a def, or the define_method call whose block it is), with the
+   class and side it defines on in *cls and *sg; -1 where the record holds it
+   as no version */
+int elab_body_call_version(Compiler *c, int call, int *cls, int *sg);
+/* The define_method call whose block makes self an object where node
+   stands, with no class body, eval block (or the spliced value of one),
+   def or define_singleton_method's block between (lr_body_frame), or -1. Read from the tree alone (the
+   record's parents once it is made), so the registration's walk asks it
+   too. */
+int elab_body_self_object(Compiler *c, int node);
+/* Does node run whenever body (a def's, a lambda's or a call's block node)
+   runs, once it gets past its start (lr_runs_with_body): no condition, rescued
+   begin, block of its own or early exit between them? */
+int elab_runs_with_body(Compiler *c, int node, int body);
+/* the k-th name definer call node defines (an attr_accessor's reader, then
+   its writer, `x=`, in buf, which holds ELAB_FORM_NAME_CAP bytes: a call
+   with a longer name makes no versions, lr_body_call), NULL past the last;
+   *writer (where set) says whether it is a writer */
+enum { ELAB_FORM_NAME_CAP = 256 };
+const char *elab_call_form_name(const NodeTable *nt, int node, int k, char *buf, size_t nb, int *writer);
+/* Does a Method's maker that reads the method tables (method,
+   instance_method and their kin, by a literal name, LR_REFL_MAKER) name
+   `name`? */
+int elab_method_captured(Compiler *c, const char *name);
+/* Does the program define a hook that definition form `form` (a definer call's name) fires on class cls's side sg, on
+   the class's chain, or one the record cannot tell (method_added, singleton_method_added)? A version a body's definer makes
+   would not call it where the body runs. */
+int elab_definer_hook_live(Compiler *c, int cls, int sg, const char *form);
 /* does the load phase apply def or define_method node `def` whenever the
    body it stands in runs (lr_stmt_applied): not under a run-time
    condition there, nor in an iterator's block, except a define_method an
@@ -896,6 +926,10 @@ int elab_autoload_file_defines(Compiler *c, int slot, int file);
    the method by a Symbol or a String, name or make methods by computed
    names, or run code the record has not seen? */
 int elab_version_captured(Compiler *c, const char *name);
+/* does a Symbol or a String literal of the program spell `name`, but node except? With runs, only one that may
+   run the method, in the program's own code (an_written_call): an argument of a presence query (respond_to?,
+   method_defined? and its kin, is_method_presence_name_query), which answers without running it, is none */
+int elab_name_spelled(Compiler *c, const char *name, int except, int runs);
 /* is module mod in the ancestors of cls (of its singleton when sg) at p? */
 int elab_mixed_at(Compiler *c, int cls, int sg, int mod, LoadPoint p);
 /* was a non-nil value written to the variable before p: a write that
@@ -1132,16 +1166,22 @@ void elab_absent_aliases(Compiler *c);
    end`, then `def self.cfg=`; `def x`, then `attr_reader :x`): a call that
    runs while one is live runs the accessor, any other the def, so each is
    a version of its own, a method register_attr_versions makes and
-   elab_attr_scope links to it (LrDef.scope); *n of them, the caller frees
-   the array. An accessor of a history no def is in stays its class's slot
-   or field alone. */
+   elab_attr_scope links to it (LrDef.scope); so is the version of an
+   accessor a body declares (LrDef.body), which is no slot of its class's
+   from the start; *n of them, the caller frees the array. Any other
+   accessor of a history no def is in stays its class's slot or field
+   alone. */
 ElabEntry *elab_replaced_attrs(Compiler *c, int *n);
+/* ...is entry e of them one of a history that mixes accessors and defs (a
+   def replaces it: Scope.attr_version), not a body's accessor alone, whose
+   method is the name's own? */
+int elab_attr_mixed(Compiler *c, const ElabEntry *e);
 void elab_attr_scope(Compiler *c, const ElabEntry *e, int scope);
 /* is accessor entry e (elab_replaced_attrs) the only kind of version its history holds: no def replaces it, and it is
    a method of its own because a method body's word sets its class side's visibility? */
 int elab_attr_lone(Compiler *c, const ElabEntry *e);
-/* does class cls's own side hold such an accessor version of name? */
-int elab_attr_replaced(Compiler *c, int cls, const char *name);
+/* does class cls's side sg (0: the instance side, 1: the singleton side) hold such an accessor version of name? */
+int elab_attr_replaced(Compiler *c, int cls, int sg, const char *name);
 /* Does a later method of class cls's own instance side replace its
    attr_* accessor `name` (a writer's as `x=`) as the load phase ends: the
    class's last version of the name the registration applies is a def, an

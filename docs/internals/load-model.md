@@ -392,7 +392,68 @@ which the plan reads where the word runs (`lr_version_vis`, from the
 version's visibility cell where only the run decides). Only a def or a
 word of a name the program makes no entry of that the call plan cannot
 answer next to it is such a version (`lr_body_def_version`, over
-`lr_body_forms`). The scope
+`lr_body_forms`). So is a definer call on self that stands in a
+method's body, a def's or a `define_method`'s or
+`define_singleton_method`'s block's, with no class body between
+(`lr_body_call`, `lr_in_method_body`; one in a block a class body hands a
+method that yields keeps its form, since that block is spliced into the
+class body's statement): a `define_method` or `define_singleton_method` with a
+literal name and a literal block, a version of the history of the class
+self is (the class side's for `define_singleton_method`; `lr_call_side`),
+whose scope is the block's (`ct_def_version` maps it as a def's), and an
+`attr_reader`, `attr_writer`, `attr_accessor` or `attr` with literal
+names, a version of each reader and writer it makes, whose method
+`register_attr_versions` makes of it (`def x = @x`): no slot of the class
+answers it from the start. A definer call bars its names (keeping the
+form it has where the record holds no body versions) where the tree does
+not spell the class self is (an instance method's self is an object, and
+so is a `define_method` block's, `LR_FS_OBJECT`; a
+`define_singleton_method` block's self is its receiver), on a module, in
+a class method a call may run on a subclass (`lr_body_self_unsure`; in a
+`define_singleton_method` block, `lr_body_dsm_unsure`), for
+a definer the program's own method of its name may answer
+(`an_user_method_reaches`), for a name not public where it runs, and on the instance side where the program
+gives an object a singleton method or module (`LrBodyNames.osg`: the
+class `register_singleton_defs` makes of it, after the record, reads the
+class's methods from the start) (`lr_body_call_barred`). A
+`define_method` or `attr_*` on self in a `define_method` block of an
+ordinary class's instance method (`elab_body_self_object`), which no
+method of the program's of its name nor a `method_missing` answers, is
+the plan's NoMethodError (`an_object_definer_missing`, `cplan_missing`'s
+`CM_NOMETHOD_SELF`, the object described at run time), and the walk
+registers no method for it. Self there is taken from the tree's frames
+(`lr_body_frame`): a class_eval-family block and the parentheses a
+value-read one is spliced into (`self_rebound`) make self their class. A
+`define_singleton_method` there, whose object no `.new` traces, makes no
+method; the call plan refuses one that runs whenever the block does
+(`elab_runs_with_body`) where a written call of its name may reach that
+object (`cplan_instance_call_named`, `an_call_may_reach_instance`: by
+its receiver's class facts, as a dynamic call's kill asks them, over the
+classes that mix a module in and a builtin superclass's values, or by
+self's class; a call in a method nothing reaches reaches none) and the
+program has no `define_singleton_method` of its own. The
+call plan refuses a block that reads or writes the locals of the code
+around it or yields to its block, where the program reaches the name it
+defines (`an_name_reached`: a written call, or a Symbol or String
+that may run it, `elab_name_spelled` without presence queries), and a barred
+define_method in a def's body whose method the walk registers from the
+start where the class or its chain answers the name, or a Symbol or a
+String spells it (`cplan_define_method_early`), or one with a Proc or a
+Method for its body (`cplan_body_definer_gap`). It refuses a definer
+call's version too where a reader of its name does not read it
+(`cplan_call_version_unread`): a method list or a reader of a name only
+the run tells (the `elab_body_reflected` exception, which keeps a body
+def's version off the late bit, and takes in every presence reader of
+the name where a `respond_to_missing?` is defined), a `method_missing`
+on the chain, a Method's maker of the name (`elab_method_captured`), a
+`method_added` or `singleton_method_added` hook of the program that the
+definition would fire (`elab_definer_hook_live`), a name Ruby calls by itself (`to_s`, `<=>`, `coerce`), keyword parameters,
+a read of the call's own value, a class method a `define_method`'s or
+`define_singleton_method`'s block makes, and a subclass's method that
+supers into it. Each answers from the method
+tables, which hold the block's scope from the start; a body def's
+version meets the same readers and keeps master's answer there.
+The scope
 is the name, program-wide: the plan answers no other entry as a body's
 version yet, and once a name has versions its readers (the entries' arms,
 the poly arms, the presence readers, `respond_to?`, `method_defined?` and
@@ -409,8 +470,8 @@ one whose frame the tree does not spell), an entry a literal send makes
 (`send(:define_method, :m)`: Spinel makes no method of it, so a version
 would hide the method CRuby has; a send of a visibility word is none);
 in a body, also every other
-entry it makes (an alias, an undef, an accessor, a `define_method`, a
-`define_singleton_method`); at the top level, an
+entry it makes that is no version (an alias, an undef, a barred definer
+call, a `module_function` copy); at the top level, an
 alias of a name barred so. Six more bars keep a body's word, or its
 non-public def, in the form it has where the record holds no body
 versions, until the readers it needs read the version cells; each says

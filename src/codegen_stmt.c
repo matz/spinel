@@ -4,6 +4,7 @@
 static void emit_ivar_lhs_otext(Compiler *c, int cid, int iv, const char *ivn, const char *lhs, const char *otext, Buf *b);
 static int emit_strbuf_boxed_store(Compiler *c, int v, Buf *b);
 static void emit_args_for_effect(Compiler *c, int call, Buf *b, int indent);
+static void emit_effect_stmt(Compiler *c, int e, Buf *b, int indent);
 #include "repr.h"
 #include "holder.h"
 #include "share.h"
@@ -22307,6 +22308,13 @@ static void emit_stmt_node(Compiler *c, int id, Buf *b, int indent) {
     }
   }
 
+  /* a define_method or attr_* on self where self is an object (cplan_missing's CM_NOMETHOD_SELF) is its
+     NoMethodError, not the declaration the forms below take it for */
+  { char st[160];
+    if (ty_k == NK_CallNode && cplan_missing(c, id, st, sizeof st, NULL) == CM_NOMETHOD_SELF) {
+      emit_effect_stmt(c, id, b, indent);
+      return;
+    } }
   /* `define_method` and the `[lits].each { define_method ... }` unroll are
      resolved at analyze time into real method scopes; emit nothing here. */
   if (ty_k == NK_CallNode) {

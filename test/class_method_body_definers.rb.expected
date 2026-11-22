@@ -1,0 +1,30 @@
+[NoMethodError, false, false]
+:ok
+1
+9
+3
+4
+4
+1
+[1, nil]
+[:a, :b=, :c, :c=]
+NoMethodError
+2
+40
+3
+[NoMethodError, :plain]
+[:shape, :plain]
+:shape
+:maybe
+NoMethodError
+NoMethodError
+:maybe
+"Base"
+"Sub"
+"Sub"
+true
+NoMethodError
+false
+7
+true
+nil

@@ -20857,16 +20857,6 @@ static int bx_recv_concrete(int bx, TyKind rt) {
   return 0;
 }
 
-/* Is module k module m, or does m mix it in, by include or by prepend
-   (through m's own mixins)? */
-static int bx_mixes_in(Compiler *c, int m, int k, int depth) {
-  if (m == k) return 1;
-  if (m < 0 || m >= c->nclasses || depth > 16) return 0;
-  const ClassInfo *mi = &c->classes[m];
-  for (int i = 0; i < mi->nincluded_mods; i++) if (bx_mixes_in(c, mi->included_mods[i], k, depth + 1)) return 1;
-  for (int i = 0; i < mi->nprepended_mods; i++) if (bx_mixes_in(c, mi->prepended_mods[i], k, depth + 1)) return 1;
-  return 0;
-}
 /* The Comparable builtins (other than Integer and Float) whose call to a
    method the program adds to `module Comparable` takes the method's copy
    (bx_cmp_own_class). NULL ends the list. */
@@ -20931,10 +20921,10 @@ static int bx_owner_in_string_chain(Compiler *c, int k) {
     int r = comp_builtin_class_named(c, i < nr ? bx_cmp_recv_cls[i] : more[i - nr]);
     if (r == k) return 1;
     for (int a = r, d = 0; a >= 0 && a < c->nclasses && d < 64; a = c->classes[a].parent, d++)
-      if (bx_mixes_in(c, a, k, 0)) return 1;
+      if (comp_mixes_in(c, a, k, 1)) return 1;
   }
   for (int i = 0; i < c->ntoplevel_includes; i++)
-    if (bx_mixes_in(c, c->toplevel_includes[i], k, 0)) return 1;
+    if (comp_mixes_in(c, c->toplevel_includes[i], k, 1)) return 1;
   return 0;
 }
 /* A Module method that can put a method of one class onto another, or

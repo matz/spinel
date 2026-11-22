@@ -1,0 +1,13 @@
+[NoMethodError, "undefined method 'attr_reader' for an instance of K", :attr_reader, K, [:q]]
+[NoMethodError, "undefined method 'attr_reader' for an instance of Sub", :attr_reader, Sub, [:q]]
+[NoMethodError, "undefined method 'define_method' for an instance of K", :define_method, K, [:z]]
+false
+nil
+[NoMethodError, "undefined method 'attr_accessor' for an instance of K", :attr_accessor, K, [:w]]
+[1, 2]
+NoMethodError
+[7, 3]
+false
+[10, 20]
+[NoMethodError, "undefined method 'define_method' for an instance of K", :define_method, K, [:h2]]
+false

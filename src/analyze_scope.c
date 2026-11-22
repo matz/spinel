@@ -1418,56 +1418,122 @@ void refuse_native_singleton_reopen(Compiler *c, Scope *s) {
   refuse_native_class_reopen(c, s->def_node, -1, recv, ci, encl >= 0 && block_body_class(c->nt, encl), nt_str(c->nt, recv, "name"));
 }
 
-/* Where the program defines or aliases a define_method of its own (a def,
-   a singleton def, `alias` or `alias_method`), whose call with a computed
-   name is then an ordinary call: the UDM_ kinds, by the self a receiverless
-   define_method could reach it from. A `def self.define_method`, one in a
-   `class << self`, or one in a reopened Module or Class answers the self
-   of a class body or a class method (UDM_CLASS_SELF); one in an ordinary
-   class's body answers an instance of that class, the self of its instance
-   methods (UDM_INSTANCE_SELF); a module's (extended or included), a
+/* Where the program defines or aliases a method `name` of its own (a def,
+   a singleton def, `alias` or `alias_method`) -- a definer's (define_method,
+   attr_*, define_singleton_method) or method_missing -- which then answers
+   a receiverless call of that name in place of the builtin's: the UDM_
+   kinds, by the self such a call could reach it from. A `def self.m`, one
+   in a `class << self`, or one in a reopened Module or Class answers the
+   self of a class body or a class method (UDM_CLASS_SELF); one in an
+   ordinary class's body answers an instance of that class, the self of its
+   instance methods (UDM_INSTANCE_SELF); a module's (extended or included), a
    reopened Object's or BasicObject's, a top-level def's (Object's private
-   method) and an alias answer either (UDM_ANY_SELF). Asked once per
-   compile: the first computed-name call scans the node table and the
-   kinds are kept on the Compiler. */
-int an_user_define_method_kinds(Compiler *c) {
-  if (c->user_define_method) return c->user_define_method - 1;
+   method), an alias and a definer's literal name (define_method, attr_*) answer either (UDM_ANY_SELF; a definer
+   in a class body as a def there is). Asked once per name
+   and compile: the first ask scans the node table and the kinds are kept on
+   the Compiler (user_methods, for the first few names). */
+/* ...the kinds a method defined in the body around node d is reached from (a def's in its class body, a definer
+   call's): by the class, module or singleton class body it stands in */
+static int udm_body_kind(Compiler *c, const NodeTable *nt, const int *par, int d) {
+  int h = par[d];
+  while (h >= 0 && nt_kind(nt, h) != NK_ClassNode && nt_kind(nt, h) != NK_ModuleNode &&
+         nt_kind(nt, h) != NK_SingletonClassNode) h = par[h];
+  const char *k = h >= 0 && nt_kind(nt, h) == NK_ClassNode ? const_key_at(c, nt_ref(nt, h, "constant_path")) : NULL;
+  if (h < 0 || nt_kind(nt, h) == NK_ModuleNode) return UDM_ANY_SELF;
+  if (nt_kind(nt, h) == NK_SingletonClassNode) return UDM_CLASS_SELF;
+  if (is_module_const_name(k) || is_class_const_name(k)) return UDM_CLASS_SELF;
+  return k && is_object_base_name(k) ? UDM_ANY_SELF : UDM_INSTANCE_SELF;
+}
+int an_user_method_kinds(Compiler *c, const char *name) {
+  if (!name) return 0;
+  for (int i = 0; i < c->nuser_methods; i++)
+    if (sp_streq(c->user_methods[i].name, name)) return c->user_methods[i].kinds;
   const NodeTable *nt = c->nt;
   int kinds = 0, *par = NULL;
   NT_FOREACH_KIND(nt, NK_DefNode, d) {
-    if (!is_define_method_name(nt_str(nt, d, "name"))) continue;
+    const char *dn = nt_str(nt, d, "name");
+    if (!dn || !sp_streq(dn, name)) continue;
     if (nt_ref(nt, d, "receiver") >= 0) { kinds |= UDM_CLASS_SELF; continue; }
     if (!par) par = an_parent_map(nt);
-    int h = par[d];
-    while (h >= 0 && nt_kind(nt, h) != NK_ClassNode && nt_kind(nt, h) != NK_ModuleNode &&
-           nt_kind(nt, h) != NK_SingletonClassNode) h = par[h];
-    const char *k = h >= 0 && nt_kind(nt, h) == NK_ClassNode ? const_key_at(c, nt_ref(nt, h, "constant_path")) : NULL;
-    if (h < 0 || nt_kind(nt, h) == NK_ModuleNode) kinds |= UDM_ANY_SELF;
-    else if (nt_kind(nt, h) == NK_SingletonClassNode) kinds |= UDM_CLASS_SELF;
-    else if (k && (sp_streq(k, "Module") || sp_streq(k, "Class"))) kinds |= UDM_CLASS_SELF;
-    else if (k && (sp_streq(k, "Object") || sp_streq(k, "BasicObject"))) kinds |= UDM_ANY_SELF;
-    else kinds |= UDM_INSTANCE_SELF;
+    kinds |= udm_body_kind(c, nt, par, d);
   }
-  free(par);
   NT_FOREACH_KIND(nt, NK_AliasMethodNode, a) {
     int nn = nt_ref(nt, a, "new_name");
-    if (nn >= 0 && is_define_method_name(nt_str(nt, nn, "value"))) kinds |= UDM_ANY_SELF;
+    const char *v = nn >= 0 ? nt_str(nt, nn, "value") : NULL;
+    if (v && sp_streq(v, name)) kinds |= UDM_ANY_SELF;
   }
   NT_FOREACH_KIND(nt, NK_CallNode, k) {
-    int an = nt_ref(nt, k, "arguments"), ac = 0;
+    int an = nt_ref(nt, k, "arguments"), ac = 0, used = 0;
     const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
-    if (ac > 0 && is_alias_method_name(nt_str(nt, k, "name")) &&
-        is_define_method_name(nt_str(nt, av[0], "value"))) kinds |= UDM_ANY_SELF;
+    const char *v = ac > 0 && is_alias_method_name(nt_str(nt, k, "name")) ? nt_str(nt, av[0], "value") : NULL;
+    if (v && sp_streq(v, name)) kinds |= UDM_ANY_SELF;   /* (a computed new name is none) */
+    /* (a definer's literal name, as a def's: define_method's first argument, an attr_*'s each, through a send of
+       it; a receiver or a send leaves the self open) */
+    const char *dn = ac > 0 ? call_sent_name(nt, k, &used) : NULL;
+    for (int i = used; dn && (is_define_method_name(dn) || is_attr_name(dn)) && i < ac && (i == used || is_attr_name(dn)); i++) {
+      const char *a = vis_arg_name(nt, av[i]);
+      if (!a || !sp_streq(a, name)) continue;
+      if (used || nt_ref(nt, k, "receiver") >= 0) { kinds |= UDM_ANY_SELF; continue; }
+      if (!par) par = an_parent_map(nt);
+      kinds |= udm_body_kind(c, nt, par, k);
+    }
   }
-  c->user_define_method = kinds + 1;
+  free(par);
+  struct UserMethodKinds *m = &c->user_methods[c->nuser_methods];
+  if (c->nuser_methods < (int)(sizeof c->user_methods / sizeof c->user_methods[0]) && strlen(name) < sizeof m->name) {
+    snprintf(m->name, sizeof m->name, "%s", name);
+    m->kinds = kinds;
+    c->nuser_methods++;
+  }
   return kinds;
 }
-int an_user_define_method(Compiler *c) { return an_user_define_method_kinds(c) != 0; }
-/* ...one that a receiverless define_method whose self is a class (class_self:
-   a class body's or a class method's) or an instance could reach */
-int an_user_define_method_reaches(Compiler *c, int class_self) {
-  int kinds = an_user_define_method_kinds(c);
+/* ...one that a receiverless call of `name` whose self is a class
+   (class_self: a class body's or a class method's) or an instance could
+   reach */
+int an_user_method_reaches(Compiler *c, const char *name, int class_self) {
+  int kinds = an_user_method_kinds(c, name);
   return (kinds & UDM_ANY_SELF) || (kinds & (class_self ? UDM_CLASS_SELF : UDM_INSTANCE_SELF));
+}
+/* Can an instance of program class cid be no module or class: cid is no
+   module, no reopened Object or BasicObject (whose methods every object,
+   a class too, has), and neither Module nor Class is on its chain, as a
+   class of it or as the superclass its root names? */
+static int an_instances_plain(Compiler *c, int cid) {
+  if (cid < 0 || cid >= c->nclasses || comp_class_is_module(c, &c->classes[cid]) ||
+      (c->classes[cid].name && is_object_base_name(c->classes[cid].name)))
+    return 0;
+  for (int k = cid, h = 0; k >= 0 && k < c->nclasses && h <= c->nclasses; k = c->classes[k].parent, h++) {
+    int sc = c->classes[k].parent < 0 && c->classes[k].def_node >= 0 ? class_def_super(c->nt, c->classes[k].def_node) : -1;
+    const char *sn = sc >= 0 && (nt_kind(c->nt, sc) == NK_ConstantReadNode || nt_kind(c->nt, sc) == NK_ConstantPathNode)
+                     ? key_name(c, sc) : NULL;
+    if (is_module_const_name(c->classes[k].name) || is_class_const_name(c->classes[k].name) ||
+        is_module_const_name(sn) || is_class_const_name(sn) || (sc >= 0 && !sn))
+      return 0;
+  }
+  return 1;
+}
+/* Is call -- a define_method or attr_* on self in scope s, the method whose
+   body it stands in -- one where self is an object: in the block of the
+   define_method (elab_body_self_object) that made s (or of one of these in
+   s's body), an instance method of
+   a class whose instances are plain objects (an_instances_plain), which no
+   method of the program's answers: none of its name, nor a method_missing,
+   an instance can reach (an_user_method_reaches)? Those are Module's
+   methods, which an object does not have: CRuby raises NoMethodError where
+   the call runs (cplan_missing), and the call defines nothing (walk_scope
+   registers no method for it). define_singleton_method there is the
+   object's own, and is left as it is. */
+int an_object_definer_missing(Compiler *c, int call, const Scope *s) {
+  const NodeTable *nt = c->nt;
+  const char *nm = call >= 0 && nt_kind(nt, call) == NK_CallNode ? nt_str(nt, call, "name") : NULL;
+  int rv = nm ? nt_ref(nt, call, "receiver") : -1;
+  if (!nm || !s || s->is_cmethod || (!is_define_method_name(nm) && !is_attr_name(nm)) || nt_vcall(nt, call) ||
+      (rv >= 0 && nt_kind(nt, rv) != NK_SelfNode) || !an_instances_plain(c, s->class_id))
+    return 0;
+  /* (the define_method whose block it is in made s, or is itself one of these, whose block never runs) */
+  int dm = elab_body_self_object(c, call);
+  return dm >= 0 && (dm == s->def_node || an_object_definer_missing(c, dm, s)) && !an_user_method_reaches(c, nm, 0) &&
+         !an_user_method_reaches(c, METHOD_MISSING_NAME, 0);
 }
 
 /* Does nothing in the program name the method `name`: no call of it, and no
@@ -1983,7 +2049,7 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
          rule) */
       if (ac == 2 && bx == -2 && scope_idx == 0 && nt_kind(c->nt, av[1]) == NK_LocalVariableReadNode) proc_ref = 1;
       if (ac > 0 && (proc_ref || (nt_kind(c->nt, av[0]) != NK_SymbolNode && nt_kind(c->nt, av[0]) != NK_StringNode)) &&
-          !an_user_define_method_reaches(c, scope_idx == 0 || c->scopes[scope_idx].is_cmethod)) {
+          !an_user_method_reaches(c, dm_cn, scope_idx == 0 || c->scopes[scope_idx].is_cmethod)) {
         NodeTable *nt = (NodeTable *)c->nt;
         int ds = detached_scope(c);
         file_detached(c, nt_ref(nt, id, "block"), ds, 0);
@@ -2046,6 +2112,9 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
     /* A define_method in a branch that never runs (`if false`) defines
        nothing, so nothing is registered for it. */
     if (dead && dm_is_dm) dm_ok = 0;
+    /* Nor does one whose self is an object, in a define_method's block
+       (an_object_definer_missing): it is CRuby's NoMethodError. */
+    if (dm_ok && dm_is_dm && an_object_definer_missing(c, id, &c->scopes[scope_idx])) dm_ok = 0;
     int dm_in_def = dm_ok && dm_is_dm && scope_idx > 0 && c->scopes[scope_idx].def_node >= 0 &&
                     nt_kind(c->nt, c->scopes[scope_idx].def_node) == NK_DefNode;
     /* A method a host can call through --ext-class (one an exported class
@@ -2054,11 +2123,6 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
        --ext-entry's does (method_never_named). */
     if (dm_in_def && !ext_scope_host_callable(c, scope_idx) && method_never_named(c, c->scopes[scope_idx].name))
       dm_ok = 0;
-    /* Otherwise it is registered from the start, which is right only for a
-       method the class does not answer yet: the codegen prepass refuses the
-       rest (cplan_define_method_early) once the class chains are known. */
-    else if (dm_in_def)
-      nt_node_set_int((NodeTable *)c->nt, id, "dm_host", scope_idx + 1);
     if (dm_ok) {
       int dm_args = nt_ref(c->nt, id, "arguments");
       int dm_na = 0;
@@ -2104,8 +2168,6 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
           if (dm_kn == 0) collect_def_params(c, dm_pn, dm_s);
           else collect_positional_params(c, dm_ps, dm_s);
           dm_s->nrequired = dm_rn;
-          if (nt_int(c->nt, id, "dm_host", 0))
-            nt_node_set_int((NodeTable *)c->nt, id, "dm_scope", dm_new_idx + 1);
           child = dm_new_idx;
         }
       }
@@ -3937,10 +3999,11 @@ static int sg_object_standin(Compiler *c, int wnode) {
   return c->object_standin - 1;
 }
 
-/* Does the subtree at `node`, `level` blocks inside a define_singleton_method
-   block, read or write a local of the code around that block, or yield to
-   its block? A local's depth counts the blocks between it and its scope. */
-static int sg_block_captures(const NodeTable *nt, int node, int level) {
+/* Does the subtree at `node`, `level` blocks inside a define_method or
+   define_singleton_method block, read or write a local of the code around
+   that block, or yield to its block? A local's depth counts the blocks
+   between it and its scope. */
+int an_block_captures(const NodeTable *nt, int node, int level) {
   if (node < 0) return 0;
   NodeKind k = nt_kind(nt, node);
   if (k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode) return 0;
@@ -3952,11 +4015,11 @@ static int sg_block_captures(const NodeTable *nt, int node, int level) {
     return 1;
   int inner = (k == NK_BlockNode || k == NK_LambdaNode) ? level + 1 : level;
   int nr = nt_num_refs(nt, node);
-  for (int i = 0; i < nr; i++) if (sg_block_captures(nt, nt_ref_at(nt, node, i), inner)) return 1;
+  for (int i = 0; i < nr; i++) if (an_block_captures(nt, nt_ref_at(nt, node, i), inner)) return 1;
   int na = nt_num_arrs(nt, node);
   for (int i = 0; i < na; i++) {
     int cnt = 0; const int *ids = nt_arr_at(nt, node, i, &cnt);
-    for (int j = 0; j < cnt; j++) if (sg_block_captures(nt, ids[j], inner)) return 1;
+    for (int j = 0; j < cnt; j++) if (an_block_captures(nt, ids[j], inner)) return 1;
   }
   return 0;
 }
@@ -3970,7 +4033,7 @@ static int sg_dsm_transplantable(const NodeTable *nt, int id) {
   const int *av = anode >= 0 ? nt_arr(nt, anode, "arguments", &an) : NULL;
   if (an != 1 || (nt_kind(nt, av[0]) != NK_SymbolNode && nt_kind(nt, av[0]) != NK_StringNode))
     return 0;
-  return !sg_block_captures(nt, nt_ref(nt, id, "block"), 0);
+  return !an_block_captures(nt, nt_ref(nt, id, "block"), 0);
 }
 
 /* Is `v` an expression whose value is a class: a class's own constant, or a
@@ -4561,9 +4624,10 @@ void register_attr_versions(Compiler *c) {
     comp_grow_node_arrays(c);
     walk_scope(c, def, c->nscope[a[i].node], a[i].cls);
     if (e >= c->nscopes || c->scopes[e].def_node != def) continue;
-    /* (one no def replaces is the name's method, found by name, as an alias's of an accessor is: Scope.accessor_of) */
-    if (elab_attr_lone(c, &a[i])) { c->scopes[e].accessor_of = a[i].node + 1; comp_touch_scope_shape(c, c->scopes[e].idx); }
-    else { c->scopes[e].attr_version = 1; comp_touch_scope(c->scopes[e].idx); }
+    if (elab_attr_mixed(c, &a[i])) { c->scopes[e].attr_version = 1; comp_touch_scope(c->scopes[e].idx); }
+    /* (one no def replaces, whose class side's visibility a method body's word sets, is the name's method, found
+       by name, as an alias's of an accessor is: Scope.accessor_of) */
+    else if (elab_attr_lone(c, &a[i])) { c->scopes[e].accessor_of = a[i].node + 1; comp_touch_scope_shape(c, c->scopes[e].idx); }
     comp_ivar_intern(&c->classes[a[i].cls], ivname, a[i].sg ? IVS_CLASS : IVS_INST);
     elab_attr_scope(c, &a[i], e);
   }
@@ -14875,7 +14939,7 @@ void refuse_unreachable_bare_constants(Compiler *c) {
    module one of them includes? */
 static int ssc_in_chain(Compiler *c, int k, int cls) {
   for (int d = 0; k >= 0 && k < c->nclasses && d < 64; k = c->classes[k].parent, d++)
-    if (comp_module_includes(c, k, cls, 0)) return 1;
+    if (comp_mixes_in(c, k, cls, 0)) return 1;
   return 0;
 }
 /* Can the receiver of a call on class k run a `def self.nm` that an

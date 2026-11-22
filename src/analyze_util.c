@@ -820,7 +820,7 @@ static int const_path_write_reaches(Compiler *c, int t, int k) {
   int qi = qn ? const_node_class_index(c, q) : -1;
   if (qi < 0) return 1;
   for (int a = k, d = 0; a >= 0 && a < c->nclasses && d < 64; a = c->classes[a].parent, d++)
-    if (comp_module_includes(c, a, qi, 0)) return 1;
+    if (comp_mixes_in(c, a, qi, 0)) return 1;
   return 0;
 }
 /* The constant writes by the key written (const_key_at), for the tree as
@@ -1408,6 +1408,11 @@ int an_calls_named_first(Compiler *c, const char *name) {
   return k >= 0 ? g_cn_first[k] : -1;
 }
 int an_calls_named_next(int id) { return (id >= 0 && id < g_cn_cnt) ? g_cn_next[id] : -1; }
+int an_name_reached(Compiler *c, const char *name, int except) {
+  for (int id = an_calls_named_first(c, name); id >= 0; id = an_calls_named_next(id))
+    if (an_written_call(id)) return 1;
+  return elab_name_spelled(c, name, except, 1);
+}
 
 /* Interposes a call named `name` (with arguments args, -1 for none) between
    call id and its receiver (`r.m` becomes `r.name.m`): a desugar's

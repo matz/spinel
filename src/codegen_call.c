@@ -24281,8 +24281,8 @@ static int class_or_module_reopen_mixes(Compiler *c, int m, int only_module) {
     if (k < 0 || k >= c->nclasses) continue;
     if (k == m) return 1;   /* (the reopening's own method) */
     const ClassInfo *ki = &c->classes[k];
-    for (int j = 0; j < ki->nincluded_mods; j++) if (comp_module_includes(c, ki->included_mods[j], m, 0)) return 1;
-    for (int j = 0; j < ki->nprepended_mods; j++) if (comp_module_includes(c, ki->prepended_mods[j], m, 0)) return 1;
+    for (int j = 0; j < ki->nincluded_mods; j++) if (comp_mixes_in(c, ki->included_mods[j], m, 0)) return 1;
+    for (int j = 0; j < ki->nprepended_mods; j++) if (comp_mixes_in(c, ki->prepended_mods[j], m, 0)) return 1;
   }
   return 0;
 }
@@ -25426,7 +25426,8 @@ static void emit_missing_raise(Compiler *c, int m, int kind, const char *self, i
   const char *name = nt_str(nt, m, "name");
   int recv = nt_ref(nt, m, "receiver");
   int argc = 0; const int *argv = call_args(nt, m, &argc);
-  int staged = kind == CM_NOMETHOD && !nt_argv_has(nt, argv, argc, NT_ARG_SPLAT | NT_ARG_KEYWORDS | NT_ARG_BLOCK | NT_ARG_FORWARDING);
+  int staged = (kind == CM_NOMETHOD || kind == CM_NOMETHOD_SELF) &&
+               !nt_argv_has(nt, argv, argc, NT_ARG_SPLAT | NT_ARG_KEYWORDS | NT_ARG_BLOCK | NT_ARG_FORWARDING);
   int t0 = g_tmp + 1;
   g_tmp += argc;
   /* (the operands, written first: a raise that runs none has no
@@ -25440,13 +25441,26 @@ static void emit_missing_raise(Compiler *c, int m, int kind, const char *self, i
   free(ops.p);
   snprintf(head, sizeof head, "%s '%s' for %s ", kind == CM_NAMEERROR ? "undefined local variable or method" : "undefined method",
            name, anon >= 0 && comp_class_is_module(c, &c->classes[anon]) ? "module" : "class");
+  /* (an object self, CM_NOMETHOD_SELF: the run time describes it, in a heap String rooted while the staging
+     allocates) */
+  int ts = -1, tm = -1;
+  if (kind == CM_NOMETHOD_SELF) {
+    ts = ++g_tmp; tm = ++g_tmp;
+    buf_printf(b, "({ sp_RbVal _t%d = ", ts);
+    if (recv >= 0) emit_boxed(c, recv, b);
+    else emit_call_self_boxed(c, m, b);
+    buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); const char *_t%d = sp_nomethod_msg(\"%s\", _t%d); SP_GC_ROOT_STR(_t%d); ",
+               ts, tm, name, ts, tm);
+  }
   buf_puts(b, staged ? "sp_stage_recv_args_msg(" : "sp_stage_recv_msg(");
-  if (anon >= 0) anon_class_text(c, anon, head, b);
+  if (tm >= 0) buf_printf(b, "_t%d", tm);
+  else if (anon >= 0) anon_class_text(c, anon, head, b);
   else if (kind == CM_NAMEERROR) buf_printf(b, "\"undefined local variable or method '%s' for %s\"", name, self);
   else buf_printf(b, "(&(\"\\xff\" \"undefined method '%s' for %s\")[1])", name, self);
   buf_puts(b, ", ");
-  int si = recv < 0 ? cplan_self_class(c, m) : -2;
-  if (recv >= 0) emit_boxed(c, recv, b);
+  int si = recv < 0 && ts < 0 ? cplan_self_class(c, m) : -2;
+  if (ts >= 0) buf_printf(b, "_t%d", ts);
+  else if (recv >= 0) emit_boxed(c, recv, b);
   else if (si >= 0) buf_printf(b, "sp_box_class(((sp_Class){%d}))", si);
   else buf_puts(b, si == -1 ? "sp_main_self()" : "sp_box_nil()");
   if (staged) {
@@ -25455,7 +25469,8 @@ static void emit_missing_raise(Compiler *c, int m, int kind, const char *self, i
     if (argc == 0) buf_puts(b, "sp_box_nil()");
     buf_puts(b, "}");
   }
-  buf_puts(b, body ? "); }))" : "))");
+  buf_puts(b, ts >= 0 ? "); })" : ")");
+  buf_puts(b, body ? "; }))" : ")");
   emit_raise_placeholder(c, holder, b);
 }
 /* A call that finds no method where it runs (cplan_missing): its raise

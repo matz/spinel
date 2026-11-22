@@ -5790,7 +5790,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
 /* The self of the call id runs in, boxed: the class a class body's or a class method's self is, main at the top
    level (and in a top-level def, which runs on main here), else the instance of the method's class, as the
    method holds it (a builtin's reopening included: emit_reopen_self_boxed) */
-static void emit_call_self_boxed(Compiler *c, int id, Buf *b) {
+void emit_call_self_boxed(Compiler *c, int id, Buf *b) {
   const Scope *s = comp_scope_of(c, id);
   char cb[48];
   int body = self_class_body(c, id);

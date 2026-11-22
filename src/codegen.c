@@ -19159,8 +19159,10 @@ void emit_regex_section(Compiler *c, Buf *b) {
      sp_tu_init can take their addresses before their definitions (emitted into
      the later `body` buffer). */
   if (g_uses_marshal) {
+    /* (the interner is not static in an --ext-init library: its declaration
+       here says the same as its definition) */
+    buf_printf(b, "%ssp_sym sp_sym_intern(const char *s);\n", g_ext_init_name ? "" : "static ");
     buf_puts(b,
-      "static sp_sym sp_sym_intern(const char *s);\n"
       "static int sp_marshal_obj_dump(sp_mar_buf *b, int cls_id, void *p);\n"
       "static sp_RbVal sp_marshal_obj_load(const char *name, sp_RbVal into, sp_RbVal iv, int *ok);\n");
   }

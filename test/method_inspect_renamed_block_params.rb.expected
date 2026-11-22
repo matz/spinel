@@ -1,0 +1,40 @@
+[5, 6, 7, 8]
+#<Method: C#req(a)>
+[[:req, :a]]
+#<Method: C#opt(a, b=...)>
+[[:req, :a], [:opt, :b]]
+#<Method: C#kw(a, k: ...)>
+[[:req, :a], [:key, :k]]
+#<Method: C#kwreq(k:)>
+[[:keyreq, :k]]
+#<Method: C#rest(a, *r)>
+[[:req, :a], [:rest, :r]]
+#<Method: C#two(a, b)>
+[[:req, :a], [:req, :b]]
+#<Method: C#nest(a)>
+[[:req, :a]]
+#<UnboundMethod: C#opt(a, b=...)>
+2
+3
+5
+9
+[1, [2, 3]]
+[1, 2]
+[2]
+[1, 2, 3]
+6
+4
+[[1], {z: 2}]
+1
+#<Method: C#wb(r, &b)>
+#<Method: C#wr(*r, **o)>
+#<Method: Object#du(_a, *_a, **_a, &_a)>
+[[:req, :r], [:block, :b]]
+[[:rest, :r], [:keyrest, :o]]
+[[:req, :_a], [:rest, :_a], [:keyrest, :_a], [:block, :_a]]
+[nil, 1]
+"A"
+2
+#<UnboundMethod: M#ms(s)>
+#<Method: C(M)#ms(s)>
+#<Method: F.fm(a)>

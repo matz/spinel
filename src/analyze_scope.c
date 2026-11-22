@@ -157,6 +157,7 @@ void collect_def_params(Compiler *c, int def_id, Scope *s) {
     if (bn && bn[0]) {
       LocalVar *blv = scope_local_intern(s, bn);
       blv->is_param = 1;
+      lv_set_wname(blv, nt_wname(c->nt, bp));
       lv_set_type(blv, TY_PROC);
     }
   }

@@ -336,20 +336,22 @@ static void emit_method_desc_literal(Compiler *c, int mn, int mi, int from, cons
     if (!m->pnames[i]) continue;
     if (i) buf_puts(&d, ", ");
     /* a method made of an accessor: its parameter has no name (`x=(_)`) */
-    if (native || scope_of_accessor(m)) buf_puts(&d, "_");
-    else if (i == m->rest_idx) buf_printf(&d, "*%s", m->pnames[i]);
-    else if (i == m->kwrest_idx) buf_printf(&d, "**%s", m->pnames[i]);
+    if (native || scope_of_accessor(m)) { buf_puts(&d, "_"); continue; }
+    /* the name the program wrote, not the slot a rename gave a define_method's block parameter */
+    const LocalVar *plv = scope_local(m, m->pnames[i]);
+    const char *wn = param_written_name(c, plv ? lv_wname(plv) : m->pnames[i]);
+    if (i == m->rest_idx) buf_printf(&d, "*%s", wn);
+    else if (i == m->kwrest_idx) buf_printf(&d, "**%s", wn);
     else if (callee_param_is_declared_kwarg(c, m, m->pnames[i]))
-      buf_printf(&d, m->pdefault[i] >= 0 ? "%s: ..." : "%s:", m->pnames[i]);
-    else if (m->pdefault[i] >= 0) buf_printf(&d, "%s=...", m->pnames[i]);
-    else { /* a define_method block's assigned parameter: the name written, not its slot */
-      const LocalVar *plv = scope_local(m, m->pnames[i]);
-      const char *rw = rbp_slot_written(c, plv ? lv_wname(plv) : m->pnames[i]);
-      buf_puts(&d, rw ? rw : m->pnames[i]);
-    }
+      buf_printf(&d, m->pdefault[i] >= 0 ? "%s: ..." : "%s:", wn);
+    else if (m->pdefault[i] >= 0) buf_printf(&d, "%s=...", wn);
+    else buf_puts(&d, wn);
   }
   /* the block parameter, last, as CRuby renders it (`&blk`; `&` anonymous) */
-  if (m->blk_param) buf_printf(&d, "%s&%s", m->nparams ? ", " : "", m->blk_param);
+  if (m->blk_param) {
+    const LocalVar *blv = m->blk_param[0] ? scope_local(m, m->blk_param) : NULL;
+    buf_printf(&d, "%s&%s", m->nparams ? ", " : "", param_written_name(c, blv ? lv_wname(blv) : m->blk_param));
+  }
   buf_puts(&d, ")");
   int ln = scope_def_line(c, m);
   if (ln > 0) buf_printf(&d, " %s:%d", scope_def_file(c, m), ln);

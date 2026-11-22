@@ -15351,7 +15351,7 @@ static void emit_inspect_class_row(Compiler *c, int i, MarRows *R, Buf *b) {
   else buf_puts(b, "NULL };\n");
 }
 /* the walk over the rows, as the arm per class wrote it */
-static void emit_inspect_walk(Compiler *c, int any_anon, int any_obj, int any_oarr, int any_computed, Buf *b) {
+static void emit_inspect_walk(Compiler *c, int any_anon, int any_obj, int any_oarr, int any_computed, int any_kind, Buf *b) {
   buf_printf(b,
     "static int sp_insp_set(const sp_insp_iv *v, const char *o) {\n"
     "  switch (v->set) {\n"
@@ -15378,9 +15378,13 @@ static void emit_inspect_walk(Compiler *c, int any_anon, int any_obj, int any_oa
     buf_puts(b,
       "  if (v->obj == 2) return sp_poly_inspect(sp_box_nullable_obj_dyn(*(void **)s, v->arg));\n"
       "  if (v->obj) return sp_poly_inspect(*(void **)s ? sp_box_obj(*(void **)s, v->arg) : sp_box_nil());\n");
-  buf_puts(b,
-    "  return sp_insp_fn[v->arg](s, v->nb >= 0 ? (const uint8_t *)(o + v->nb) : NULL);\n"
-    "}\n");
+  /* With no kind function every ivar the walk renders is an object, which
+     the lines above return; there is no table to call through. A call
+     through a table of { NULL } can be folded by the compiler into a call
+     to address 0, which some targets' linkers refuse. */
+  buf_puts(b, any_kind
+    ? "  return sp_insp_fn[v->arg](s, v->nb >= 0 ? (const uint8_t *)(o + v->nb) : NULL);\n}\n"
+    : "  (void)s; return \"\";\n}\n");
   buf_printf(b,
     "static const char *sp_insp_walk_row(const sp_insp_cls *d, int cls_id, void *p) {\n"
     "  char *o = (char *)p; (void)cls_id;\n"
@@ -15707,9 +15711,11 @@ static void emit_obj_inspect_dispatch(Compiler *c, Buf *b) {
               "typedef struct { const char *name; unsigned short niv; unsigned char any1, ranked, computed;\n"
               "  const sp_insp_iv *ivs; int (*order)(void *, int *); } sp_insp_cls;\n");
   for (int k = 0; k < IR.nk; k++) emit_inspect_kind_fn(c, IR.kinds[k], k, b);
-  buf_puts(b, "static const char *(*const sp_insp_fn[])(void *, const uint8_t *) = {");
-  for (int k = 0; k < IR.nk; k++) buf_printf(b, "%s sp_insp_fn_%d", k ? "," : "", k);
-  buf_puts(b, IR.nk ? " };\n" : " NULL };\n");
+  if (IR.nk) {
+    buf_puts(b, "static const char *(*const sp_insp_fn[])(void *, const uint8_t *) = {");
+    for (int k = 0; k < IR.nk; k++) buf_printf(b, "%s sp_insp_fn_%d", k ? "," : "", k);
+    buf_puts(b, " };\n");
+  }
   buf_puts(b, "static const char sp_insp_pool[] =\n");
   buf_puts(b, IR.pool.p ? IR.pool.p : "\"\"\n");
   buf_puts(b, ";\n");
@@ -15733,7 +15739,7 @@ static void emit_obj_inspect_dispatch(Compiler *c, Buf *b) {
         any_obj_walk = comp_ivar_on(&c->classes[i], j, IVS_INST) && inspect_ivar_is_obj(c->classes[i].ivar_types[j]);
   int any_computed_walk = 0;
   for (int i = 0; i < c->nclasses; i++) if (iwalk[i] && c->classes[i].computed_ivar_set) any_computed_walk = 1;
-  emit_inspect_walk(c, any_anon_walk, any_obj_walk, IR.any_oarr, any_computed_walk, b);
+  emit_inspect_walk(c, any_anon_walk, any_obj_walk, IR.any_oarr, any_computed_walk, IR.nk > 0, b);
   if (sw.p) buf_puts(b, sw.p);
   free(sw.p); free(irows.p); free(IR.pool.p); free(IR.kinds); free(IR.pnames); free(IR.poffs); free(iwalk);
 }

@@ -11002,6 +11002,72 @@ static TyKind super_target_ret(Compiler *c, Scope *s, int mi, int id) {
   return sret;
 }
 
+/* The type of NM read as a constant of the builtin class or module PAR_NM
+   (Float::INFINITY, File::SEPARATOR, Process::WNOHANG), PAR_ID the parent
+   node (Math's PI through a program class that includes Math); TY_UNKNOWN
+   for a name the compiler does not read there. */
+TyKind builtin_scoped_const_type(Compiler *c, int par_id, const char *par_nm, const char *nm) {
+  if (par_nm && sp_streq(par_nm, "Float")) {
+    if (nm && (sp_streq(nm, "MAX") || sp_streq(nm, "MIN") || sp_streq(nm, "EPSILON") ||
+               sp_streq(nm, "INFINITY") || sp_streq(nm, "NAN"))) return TY_FLOAT;
+    /* DIG/MANT_DIG/RADIX and the exponent limits are Integer constants */
+    if (nm && (sp_streq(nm, "DIG") || sp_streq(nm, "MANT_DIG") || sp_streq(nm, "RADIX") ||
+               sp_streq(nm, "MAX_EXP") || sp_streq(nm, "MIN_EXP") ||
+               sp_streq(nm, "MAX_10_EXP") || sp_streq(nm, "MIN_10_EXP"))) return TY_INT;
+  }
+  if (comp_const_path_on_math(c, par_id)) {
+    if (nm && (sp_streq(nm, "PI") || sp_streq(nm, "E"))) return TY_FLOAT;
+  }
+  if (par_nm && sp_streq(par_nm, "Regexp")) {
+    if (nm && (sp_streq(nm, "IGNORECASE") || sp_streq(nm, "EXTENDED") ||
+               sp_streq(nm, "MULTILINE") || sp_streq(nm, "FIXEDENCODING") ||
+               sp_streq(nm, "NOENCODING"))) return TY_INT;
+  }
+  if (par_nm && sp_streq(par_nm, "Encoding") && nm) {
+    /* the Unicode version is a String; an encoding's name or alias is a
+       boxed Encoding value: the two the runtime transcodes and every other
+       name it only carries (see the codegen arm) */
+    if (sp_streq(nm, "UNICODE_VERSION")) return TY_STRING;
+    if (encoding_const_name(nm) || sp_streq(nm, "UTF8")) return TY_POLY;
+  }
+  if (par_nm && sp_streq(par_nm, "File")) {
+    if (nm && (sp_streq(nm, "SEPARATOR") || sp_streq(nm, "PATH_SEPARATOR") ||
+               sp_streq(nm, "ALT_SEPARATOR"))) return TY_STRING;
+    if (nm && (sp_streq(nm, "RDONLY") || sp_streq(nm, "WRONLY") || sp_streq(nm, "RDWR") ||
+               sp_streq(nm, "CREAT") || sp_streq(nm, "EXCL") || sp_streq(nm, "TRUNC") ||
+               sp_streq(nm, "APPEND") || sp_streq(nm, "NONBLOCK") || sp_streq(nm, "BINARY") ||
+               sp_streq(nm, "NOFOLLOW") || sp_streq(nm, "NOCTTY") || sp_streq(nm, "SYNC") ||
+               sp_streq(nm, "DSYNC") ||
+               sp_streq(nm, "LOCK_SH") || sp_streq(nm, "LOCK_EX") || sp_streq(nm, "LOCK_UN") ||
+               sp_streq(nm, "LOCK_NB")))
+      return TY_INT;   /* the open(2)/flock(2) flag constants (#2788, #2808) */
+    if (nm && (sp_streq(nm, "FNM_NOESCAPE") || sp_streq(nm, "FNM_PATHNAME") || sp_streq(nm, "FNM_DOTMATCH") ||
+               sp_streq(nm, "FNM_CASEFOLD") || sp_streq(nm, "FNM_EXTGLOB") || sp_streq(nm, "FNM_SYSCASE") ||
+               sp_streq(nm, "FNM_SHORTNAME")))
+      return TY_INT;   /* File.fnmatch's flags */
+  }
+  if (par_nm && (is_io_class_name(par_nm))) {
+    /* IO#seek whence constants (File inherits them from IO) */
+    if (nm && (sp_streq(nm, "SEEK_SET") || sp_streq(nm, "SEEK_CUR") ||
+               sp_streq(nm, "SEEK_END"))) return TY_INT;
+    /* the null device, IO's and File's through it (the codegen arm) */
+    if (nm && sp_streq(nm, "NULL")) return TY_STRING;
+  }
+  if (par_nm && sp_streq(par_nm, "Process")) {
+    /* clock ids (codegen emits their integer values) */
+    if (nm && (sp_streq(nm, "CLOCK_MONOTONIC") || sp_streq(nm, "CLOCK_REALTIME") ||
+               sp_streq(nm, "CLOCK_PROCESS_CPUTIME_ID") || sp_streq(nm, "CLOCK_THREAD_CPUTIME_ID") ||
+               sp_streq(nm, "PRIO_PROCESS") || sp_streq(nm, "PRIO_PGRP") || sp_streq(nm, "PRIO_USER") ||
+               sp_streq(nm, "WNOHANG") || sp_streq(nm, "WUNTRACED") ||
+               process_rlimit_const(nm)))
+      return TY_INT;
+    /* RLIM_INFINITY is a Bignum where rlim_t's maximum passes the Integer range */
+    if (nm && (sp_streq(nm, "RLIM_INFINITY") || sp_streq(nm, "RLIM_SAVED_MAX") ||
+               sp_streq(nm, "RLIM_SAVED_CUR"))) return TY_POLY;
+  }
+  return TY_UNKNOWN;
+}
+
 /* A ConstantPathNode (A::B) (infer_uncached's arms, in their order) */
 static int infer_constant_path(Compiler *c, int id, const NodeTable *nt, NodeKind nk, TyKind *out) {
   if (!(nk == NK_ConstantPathNode)) return 0;
@@ -11133,64 +11199,7 @@ static int infer_constant_path(Compiler *c, int id, const NodeTable *nt, NodeKin
   const char *par_nm = ((par_k == NK_ConstantReadNode ||
                                    par_k == NK_ConstantPathNode))
                        ? nt_str(nt, par_id, "name") : NULL;
-  if (par_nm && sp_streq(par_nm, "Float")) {
-    if (nm && (sp_streq(nm, "MAX") || sp_streq(nm, "MIN") || sp_streq(nm, "EPSILON") ||
-               sp_streq(nm, "INFINITY") || sp_streq(nm, "NAN"))) { *out = TY_FLOAT; return 1; }
-    /* DIG/MANT_DIG/RADIX and the exponent limits are Integer constants */
-    if (nm && (sp_streq(nm, "DIG") || sp_streq(nm, "MANT_DIG") || sp_streq(nm, "RADIX") ||
-               sp_streq(nm, "MAX_EXP") || sp_streq(nm, "MIN_EXP") ||
-               sp_streq(nm, "MAX_10_EXP") || sp_streq(nm, "MIN_10_EXP"))) { *out = TY_INT; return 1; }
-  }
-  if (comp_const_path_on_math(c, par_id)) {
-    if (nm && (sp_streq(nm, "PI") || sp_streq(nm, "E"))) { *out = TY_FLOAT; return 1; }
-  }
-  if (par_nm && sp_streq(par_nm, "Regexp")) {
-    if (nm && (sp_streq(nm, "IGNORECASE") || sp_streq(nm, "EXTENDED") ||
-               sp_streq(nm, "MULTILINE") || sp_streq(nm, "FIXEDENCODING") ||
-               sp_streq(nm, "NOENCODING"))) { *out = TY_INT; return 1; }
-  }
-  if (par_nm && sp_streq(par_nm, "Encoding") && nm) {
-    /* the Unicode version is a String; an encoding's name or alias is a
-       boxed Encoding value: the two the runtime transcodes and every other
-       name it only carries (see the codegen arm) */
-    if (sp_streq(nm, "UNICODE_VERSION")) { *out = TY_STRING; return 1; }
-    if (encoding_const_name(nm) || sp_streq(nm, "UTF8")) { *out = TY_POLY; return 1; }
-  }
-  if (par_nm && sp_streq(par_nm, "File")) {
-    if (nm && (sp_streq(nm, "SEPARATOR") || sp_streq(nm, "PATH_SEPARATOR") ||
-               sp_streq(nm, "ALT_SEPARATOR"))) { *out = TY_STRING; return 1; }
-    if (nm && (sp_streq(nm, "RDONLY") || sp_streq(nm, "WRONLY") || sp_streq(nm, "RDWR") ||
-               sp_streq(nm, "CREAT") || sp_streq(nm, "EXCL") || sp_streq(nm, "TRUNC") ||
-               sp_streq(nm, "APPEND") || sp_streq(nm, "NONBLOCK") || sp_streq(nm, "BINARY") ||
-               sp_streq(nm, "NOFOLLOW") || sp_streq(nm, "NOCTTY") || sp_streq(nm, "SYNC") ||
-               sp_streq(nm, "DSYNC") ||
-               sp_streq(nm, "LOCK_SH") || sp_streq(nm, "LOCK_EX") || sp_streq(nm, "LOCK_UN") ||
-               sp_streq(nm, "LOCK_NB")))
-      { *out = TY_INT; return 1; }   /* the open(2)/flock(2) flag constants (#2788, #2808) */
-    if (nm && (sp_streq(nm, "FNM_NOESCAPE") || sp_streq(nm, "FNM_PATHNAME") || sp_streq(nm, "FNM_DOTMATCH") ||
-               sp_streq(nm, "FNM_CASEFOLD") || sp_streq(nm, "FNM_EXTGLOB") || sp_streq(nm, "FNM_SYSCASE") ||
-               sp_streq(nm, "FNM_SHORTNAME")))
-      { *out = TY_INT; return 1; }   /* File.fnmatch's flags */
-  }
-  if (par_nm && (is_io_class_name(par_nm))) {
-    /* IO#seek whence constants (File inherits them from IO) */
-    if (nm && (sp_streq(nm, "SEEK_SET") || sp_streq(nm, "SEEK_CUR") ||
-               sp_streq(nm, "SEEK_END"))) { *out = TY_INT; return 1; }
-    /* the null device, IO's and File's through it (the codegen arm) */
-    if (nm && sp_streq(nm, "NULL")) { *out = TY_STRING; return 1; }
-  }
-  if (par_nm && sp_streq(par_nm, "Process")) {
-    /* clock ids (codegen emits their integer values) */
-    if (nm && (sp_streq(nm, "CLOCK_MONOTONIC") || sp_streq(nm, "CLOCK_REALTIME") ||
-               sp_streq(nm, "CLOCK_PROCESS_CPUTIME_ID") || sp_streq(nm, "CLOCK_THREAD_CPUTIME_ID") ||
-               sp_streq(nm, "PRIO_PROCESS") || sp_streq(nm, "PRIO_PGRP") || sp_streq(nm, "PRIO_USER") ||
-               sp_streq(nm, "WNOHANG") || sp_streq(nm, "WUNTRACED") ||
-               process_rlimit_const(nm)))
-      { *out = TY_INT; return 1; }
-    /* RLIM_INFINITY is a Bignum where rlim_t's maximum passes the Integer range */
-    if (nm && (sp_streq(nm, "RLIM_INFINITY") || sp_streq(nm, "RLIM_SAVED_MAX") ||
-               sp_streq(nm, "RLIM_SAVED_CUR"))) { *out = TY_POLY; return 1; }
-  }
+  { TyKind bt = builtin_scoped_const_type(c, par_id, par_nm, nm); if (bt != TY_UNKNOWN) { *out = bt; return 1; } }
   if (par_nm && sp_streq(par_nm, "Integer")) {
     if (nm && (sp_streq(nm, "MAX") || sp_streq(nm, "MIN"))) { *out = TY_UNKNOWN; return 1; } /* raises NameError */
   }

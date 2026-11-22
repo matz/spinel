@@ -2873,6 +2873,7 @@ int        class_is_exc_subclass(Compiler *c, int ci);   /* analyze.c */
 int        comp_plain_class(Compiler *c, int cid);    /* only Object's and Kernel's builtin methods behind the class: no core class or core module among its ancestors */
 int        comp_chain_includes_core(Compiler *c, int cid, const char *mod);   /* builtin module mod is among the class's ancestors */
 int        comp_const_path_on_math(Compiler *c, int par_id);   /* a path's parent is Math or a program class that includes it */
+TyKind     builtin_scoped_const_type(Compiler *c, int par_id, const char *par_nm, const char *nm);   /* analyze_infer.c: Float::INFINITY, Process::WNOHANG; TY_UNKNOWN for none */
 int        comp_chain_core_answers(Compiler *c, int cid, const char *name);   /* a builtin module the class or a superclass includes has the name ahead of Object */
 int        comp_enum_behind(Compiler *c, int cid);    /* Enumerable's methods behind the class: Enumerable, or an Array, Struct or native ancestor */
 int        core_method_vis(const char *cls, const char *m, int inherit, const char **owner);   /* codegen_call_class.c */

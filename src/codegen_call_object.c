@@ -1131,8 +1131,13 @@ int emit_call_instance_eval_arms(Compiler *c, int id, Buf *b, const NodeTable *n
   return 0;
 }
 
-/* freeze / frozen?, dup / clone, the identity methods that answer the receiver, and then / yield_self */
-static int emit_cext_copy(Compiler *c, int recv, int cid, int freeze_mode, const char *name, Repr repr, Buf *b) {
+/* dup / clone of a cid receiver as a boxed copy at run time: `dup_fn` is
+   sp_cext_duplicate for a C-extension class, sp_poly_dup for a module (self
+   in a module's method is any includer's instance, and the module itself has
+   no struct to copy nor a pool to allocate from: sp_poly_dup copies the
+   run-time class's struct by its header and runs its initialize_copy) */
+static int emit_cext_copy(Compiler *c, int recv, int cid, int freeze_mode, const char *name, Repr repr,
+                          const char *dup_fn, Buf *b) {
   int nil_arm = repr.may_nil && !repr.nil_tested;
   const char *cls = c->classes[cid].c_name;
   int source = 0, copy = 0;
@@ -1145,7 +1150,8 @@ static int emit_cext_copy(Compiler *c, int recv, int cid, int freeze_mode, const
     buf_printf(b, "if (_t%d) _t%d = ", source, copy);
   }
   buf_printf(b, "((sp_%s *)(", cls);
-  buf_puts(b, freeze_mode >= 0 ? "sp_poly_clone_freeze(" : "sp_cext_duplicate(");
+  buf_puts(b, freeze_mode >= 0 ? "sp_poly_clone_freeze(" : dup_fn);
+  if (freeze_mode < 0) buf_puts(b, "(");
   if (nil_arm) buf_printf(b, "sp_box_obj(_t%d, %d)", source, cid);
   else emit_boxed(c, recv, b);
   buf_printf(b, ", %d)).v.p)", freeze_mode >= 0 ? freeze_mode : sp_streq(name, "clone"));
@@ -1385,7 +1391,12 @@ int emit_call_freeze_dup_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
            object's too. The copy carries the visible class's id, as the
            object did before its `def obj.m` ran, and the singleton's methods
            check for it on entry. */
-        if (c->classes[cid].cext_extension) return emit_cext_copy(c, recv, cid, freeze_mode, name, drr, b);
+        if (c->classes[cid].cext_extension) return emit_cext_copy(c, recv, cid, freeze_mode, name, drr, "sp_cext_duplicate", b);
+        /* self in a module's method (the module included into Object): the
+           copy below allocated the module's own struct, which has no pool
+           (`sp_M_pool_recycle` undeclared) and whose layout drops the
+           includer's instance variables */
+        if (comp_class_is_module(c, &c->classes[cid])) return emit_cext_copy(c, recv, cid, freeze_mode, name, drr, "sp_poly_dup", b);
         int dup_desingleton = sp_streq(name, "dup") && c->classes[cid].is_singleton_of;
         int dup_cls = dup_desingleton ? singleton_visible_ci(c, cid) : cid;
         ClassInfo *dci = &c->classes[cid];

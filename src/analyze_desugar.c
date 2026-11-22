@@ -26842,6 +26842,13 @@ static int incl_declined_node(const NodeTable *nt, int node, const char *param) 
        const_get desugars), a send (any name), a require (the load-order
        steps), a singleton class (desugar_singleton_attr's kin), a constant's
        visibility */
+    /* the includer's ivar by name, on the hook's parameter, in a body the
+       walk splices: self there, a statement of the includer's body, which
+       the row that reads those rewrites where the walk puts it
+       (desugar_body_self_ivar_access_at) */
+    else if (g_incl_body_spliced && on_param && blk < 0 &&
+             (sp_streq(nm, "instance_variable_get") || sp_streq(nm, "instance_variable_set"))) {
+    }
     else if (sp_streq(nm, "instance_variable_get") || sp_streq(nm, "instance_variable_set") ||
              sp_streq(nm, "instance_variable_defined?") || sp_streq(nm, "class_variable_get") ||
              sp_streq(nm, "class_variable_set") || is_const_set_name(nm) || is_send_family(nm) ||
@@ -31289,14 +31296,19 @@ static int civ_class_value_owner(const NodeTable *nt, const int *parent, int r) 
   return -1;
 }
 
+/* The row: civ_self_body_access at one statement of a body that opens a
+   frame. A row so that a statement the walk splices into a body later (a
+   hook's `base.instance_variable_set(:@x, v)`, base read as self there)
+   is rewritten as one written in the body is. */
+int desugar_body_self_ivar_access_at(Compiler *c, LowerCtx *lc, int id) {
+  (void)lc;
+  return civ_self_body_access((NodeTable *)c->nt, id, 1);
+}
+
 int desugar_const_ivar_access(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count, changed = 0;
   int *parent = NULL;
-  int ndk = 0; const NodeKind *dk = class_def_kinds(&ndk);
-  for (int dh = 0; dh < ndk; dh++)
-    NT_FOREACH_KIND(nt, dk[dh], m)
-      if (class_def_opens_frame(nt, m)) changed |= civ_self_body_access(nt, class_def_body(nt, m), 0);
   for (int id = 0; id < n0; id++) {
     if (nt_kind(nt, id) != NK_CallNode) continue;
     const char *nm = nt_str(nt, id, "name");

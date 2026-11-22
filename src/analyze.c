@@ -50871,6 +50871,7 @@ static void an_phase_desugar_register(Compiler *c) {
   AN_STEP_V("desugar_builtin_ivars", desugar_builtin_ivars(c));              /* class Array; def m = @x -> self.__bivar_get(:@x) */
   AN_STEP_V("desugar_object_method_builtin_overrides", desugar_object_method_builtin_overrides(c)); /* Hash#m + Object#m -> Object#m branching on self */
   AN_STEP_V("desugar_builtin_reopen_methods", desugar_builtin_reopen_methods(c));     /* class Hash; def m -> Object#m guarded by is_a?(Hash) */
+  lower_run(c, &lc, LW_BODY_SELF_IVAR_ACCESS);      /* instance_variable_set(:@x, v) on self in a class body -> @x = v */
   AN_STEP_V("desugar_const_ivar_access", desugar_const_ivar_access(c));          /* C.instance_variable_set(:@x, v) -> C.__spinel_civset_x(v) */
   AN_STEP_V("desugar_class_eval_ivars", desugar_class_eval_ivars(c));           /* C.class_eval { @x = v } -> C.class_eval { C.__spinel_civset_x(v) } */
   AN_STEP_V("desugar_body_ivars", desugar_body_ivars(c));                 /* module-body @x read / in a block -> Mod.__spinel_civget_x */

@@ -150,6 +150,8 @@ static const Lowering lowerings[LW__COUNT] = {
     desugar_itself_receiver_at, desugar_itself_receiver_left, "`x.itself` on a variable", desugar_itself_receiver_gate },
   [LW_TAP_VALUE_WRITE] = { "desugar_tap_value_write", 0, { NK_LocalVariableWriteNode },
     desugar_tap_value_write_at, NULL, "`x = e.tap { }`" },
+  [LW_BODY_SELF_IVAR_ACCESS] = { "desugar_body_self_ivar_access", LF_STMT | LF_FRAMES, { NK_NONE },
+    desugar_body_self_ivar_access_at, NULL, "`instance_variable_set(:@x, v)` on self in a class or module body" },
   [LW_BLK_PARAM_WRITES] = { "desugar_blk_param_writes", 0, { NK_DefNode },
     desugar_blk_param_writes_at, desugar_blk_param_writes_left, "a write to a method's `&blk` parameter" },
   [LW_REST_PARAM_WRITES] = { "desugar_rest_param_writes", 0, { NK_DefNode },

@@ -859,9 +859,9 @@ spinel: test/reject/define_method_body_named_capture_write.rb:7: Module#define_m
 == test/reject/define_method_body_named_capture_write.rb [promote] rc=1
 spinel: test/reject/define_method_body_named_capture_write.rb:7: Module#define_method in a method body with a block that writes a local of that method through a regex's named capture is not supported (see docs/limitations.md)
 == test/reject/define_method_body_nested_definer_captures.rb [default] rc=1
-spinel: test/reject/define_method_body_nested_definer_captures.rb:7: Module#define_method in a method body with a block that reads or writes a local of the define_method block around it is not supported (see docs/limitations.md)
+spinel: test/reject/define_method_body_nested_definer_captures.rb:7: Module#define_method in a method body with a block that reads or writes a local from outside it, where the definer is inside another definer's block is not supported (see docs/limitations.md)
 == test/reject/define_method_body_nested_definer_captures.rb [promote] rc=1
-spinel: test/reject/define_method_body_nested_definer_captures.rb:7: Module#define_method in a method body with a block that reads or writes a local of the define_method block around it is not supported (see docs/limitations.md)
+spinel: test/reject/define_method_body_nested_definer_captures.rb:7: Module#define_method in a method body with a block that reads or writes a local from outside it, where the definer is inside another definer's block is not supported (see docs/limitations.md)
 == test/reject/define_method_body_owner_not_fixed.rb [default] rc=1
 spinel: test/reject/define_method_body_owner_not_fixed.rb:8: Module#define_singleton_method in a method body with a block that reads or writes that method's locals where a run may define it on another class or object than the one it is registered on is not supported (see docs/limitations.md)
 == test/reject/define_method_body_owner_not_fixed.rb [promote] rc=1

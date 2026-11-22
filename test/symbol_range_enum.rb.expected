@@ -4,3 +4,35 @@
 [:x, :y, :z]
 true
 [:aa, :ab, :ac]
+:a..:c
+Range
+:a
+:c
+:a
+:c
+false
+true
+:a
+:c
+[:a, :c]
+nil
+3
+[:a, :b]
+[:b, :c]
+true
+false
+true
+true
+false
+true
+true
+[]
+[:a]
+:a..:c
+:a
+:c
+1
+in
+:x
+:y
+:z

@@ -12010,17 +12010,6 @@ TyKind infer_uncached(Compiler *c, int id) {
      is a separate gap); type it as poly so the slot holds a boxed nil. */
   if (nk == NK_WhileNode || nk == NK_UntilNode || nk == NK_ForNode) return TY_POLY;
   if (nk == NK_RangeNode) {
-    /* (:a..:e): symbols enumerate by name succession -- the whole range
-       lowers to a poly array of boxed symbols (see codegen_expr) */
-    {
-      int slo = nt_ref(nt, id, "left"), shi = nt_ref(nt, id, "right");
-      const char *slt = slo >= 0 ? nt_type(nt, slo) : NULL;
-      NodeKind slk = nt_kind(nt, slo);
-      const char *sht = shi >= 0 ? nt_type(nt, shi) : NULL;
-      NodeKind shk = nt_kind(nt, shi);
-      if (slt && sht && slk == NK_SymbolNode && shk == NK_SymbolNode)
-        return TY_POLY_ARRAY;
-    }
     /* infer the bounds so codegen can tell an int range from a string range */
     int lo = nt_ref(nt, id, "left"), hi = nt_ref(nt, id, "right");
     TyKind lt = lo >= 0 ? infer_type(c, lo) : TY_UNKNOWN;
@@ -12133,10 +12122,9 @@ TyKind infer_uncached(Compiler *c, int id) {
     {
       int lo_open = lo < 0 || lt == TY_NIL;
       int hi_open = hi < 0 || ht == TY_NIL;
-      /* (:a..), (x..:e): a Range of Symbols, which sp_range_new_box builds
-         as a String Range of their names (sym); a Symbol beside anything but
-         a Symbol or nil is its ArgumentError. A literal (:a..:e) keeps its
-         Array form above. */
+      /* (:a..:e), (:a..), (x..:e): a Range of Symbols, which
+         sp_range_new_box builds as a String Range of their names (sym); a
+         Symbol beside anything but a Symbol or nil is its ArgumentError. */
       if (lt == TY_SYMBOL || ht == TY_SYMBOL) return TY_POLY;
       if (((lt == TY_POLY && (hi_open || ht == TY_POLY)) || (ht == TY_POLY && lo_open)) &&
           (!g_promote_mode || range_end_reads_poly_elem(c, lo) || range_end_reads_poly_elem(c, hi) ||

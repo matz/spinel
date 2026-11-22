@@ -1018,8 +1018,7 @@ cannot be compared CRuby's ArgumentError. Such a Range is a boxed value, so
 its methods dispatch at run time. Under `--int-overflow=promote`, where every
 Integer is boxed, a Range of boxed ends keeps the Integer Range, and String or
 Symbol ends there read as numbers. A literal Range of Symbols (`:a..:e`) is
-built as its Array of Symbols: it enumerates and answers `include?` as CRuby's
-does, but `p` prints the Array and `size` counts it.
+such a boxed Range too.
 
 #### A String Range keeps the String objects of its endpoints
 

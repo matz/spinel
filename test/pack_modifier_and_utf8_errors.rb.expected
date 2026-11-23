@@ -1,0 +1,298 @@
+pack float d>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack int d>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack poly d>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack buf d>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack str d>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+unpack d>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack float d<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+pack int d<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+pack poly d<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+pack buf d<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+pack str d<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+unpack d<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+pack float D>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack int D>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack poly D>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack buf D>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack str D>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+unpack D>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack float D<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+pack int D<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+pack poly D<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+pack buf D<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+pack str D<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+unpack D<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+pack float f>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack int f>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack poly f>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack buf f>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack str f>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+unpack f>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack float f<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+pack int f<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+pack poly f<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+pack buf f<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+pack str f<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+unpack f<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+pack float F>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack int F>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack poly F>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack buf F>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack str F>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+unpack F>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack float F<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+pack int F<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+pack poly F<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+pack buf F<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+pack str F<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+unpack F<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+pack float e>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack int e>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack poly e>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack buf e>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack str e>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+unpack e>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack float E<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+pack int E<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+pack poly E<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+pack buf E<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+pack str E<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+unpack E<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+pack float g<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+pack int g<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+pack poly g<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+pack buf g<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+pack str g<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+unpack g<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+pack float G>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack int G>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack poly G>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack buf G>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack str G>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+unpack G>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack float d!: ArgumentError: '!' allowed only after types sSiIlLqQjJ
+pack int d!: ArgumentError: '!' allowed only after types sSiIlLqQjJ
+pack poly d!: ArgumentError: '!' allowed only after types sSiIlLqQjJ
+pack buf d!: ArgumentError: '!' allowed only after types sSiIlLqQjJ
+pack str d!: ArgumentError: '!' allowed only after types sSiIlLqQjJ
+unpack d!: ArgumentError: '!' allowed only after types sSiIlLqQjJ
+pack float d_: ArgumentError: '_' allowed only after types sSiIlLqQjJ
+pack int d_: ArgumentError: '_' allowed only after types sSiIlLqQjJ
+pack poly d_: ArgumentError: '_' allowed only after types sSiIlLqQjJ
+pack buf d_: ArgumentError: '_' allowed only after types sSiIlLqQjJ
+pack str d_: ArgumentError: '_' allowed only after types sSiIlLqQjJ
+unpack d_: ArgumentError: '_' allowed only after types sSiIlLqQjJ
+pack float f!: ArgumentError: '!' allowed only after types sSiIlLqQjJ
+pack int f!: ArgumentError: '!' allowed only after types sSiIlLqQjJ
+pack poly f!: ArgumentError: '!' allowed only after types sSiIlLqQjJ
+pack buf f!: ArgumentError: '!' allowed only after types sSiIlLqQjJ
+pack str f!: ArgumentError: '!' allowed only after types sSiIlLqQjJ
+unpack f!: ArgumentError: '!' allowed only after types sSiIlLqQjJ
+pack float f_: ArgumentError: '_' allowed only after types sSiIlLqQjJ
+pack int f_: ArgumentError: '_' allowed only after types sSiIlLqQjJ
+pack poly f_: ArgumentError: '_' allowed only after types sSiIlLqQjJ
+pack buf f_: ArgumentError: '_' allowed only after types sSiIlLqQjJ
+pack str f_: ArgumentError: '_' allowed only after types sSiIlLqQjJ
+unpack f_: ArgumentError: '_' allowed only after types sSiIlLqQjJ
+pack float C<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+pack int C<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+pack poly C<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+pack buf C<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+pack str C<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+unpack C<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+pack float c>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack int c>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack poly c>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack buf c>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack str c>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+unpack c>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack float n>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack int n>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack poly n>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack buf n>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack str n>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+unpack n>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack float V<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+pack int V<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+pack poly V<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+pack buf V<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+pack str V<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+unpack V<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+pack float U>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack int U>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack poly U>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack buf U>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack str U>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+unpack U>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack float a!: ArgumentError: '!' allowed only after types sSiIlLqQjJ
+pack int a!: ArgumentError: '!' allowed only after types sSiIlLqQjJ
+pack poly a!: ArgumentError: '!' allowed only after types sSiIlLqQjJ
+pack buf a!: ArgumentError: '!' allowed only after types sSiIlLqQjJ
+pack str a!: ArgumentError: '!' allowed only after types sSiIlLqQjJ
+unpack a!: ArgumentError: '!' allowed only after types sSiIlLqQjJ
+pack float x<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+pack int x<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+pack poly x<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+pack buf x<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+pack str x<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+unpack x<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+pack float X>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack int X>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack poly X>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack buf X>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack str X>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+unpack X>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack float @_: ArgumentError: '_' allowed only after types sSiIlLqQjJ
+pack int @_: ArgumentError: '_' allowed only after types sSiIlLqQjJ
+pack poly @_: ArgumentError: '_' allowed only after types sSiIlLqQjJ
+pack buf @_: ArgumentError: '_' allowed only after types sSiIlLqQjJ
+pack str @_: ArgumentError: '_' allowed only after types sSiIlLqQjJ
+unpack @_: ArgumentError: '_' allowed only after types sSiIlLqQjJ
+pack float m>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack int m>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack poly m>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack buf m>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack str m>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+unpack m>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+pack float <<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+pack int <<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+pack poly <<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+pack buf <<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+pack str <<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+unpack <<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+unpack1 d>: ArgumentError: '>' allowed only after types sSiIlLqQjJ
+unpack1 f<: ArgumentError: '<' allowed only after types sSiIlLqQjJ
+pack l><: RangeError: Can't use both '<' and '>'
+pack float l><: RangeError: Can't use both '<' and '>'
+pack poly l><: RangeError: Can't use both '<' and '>'
+pack buf l><: RangeError: Can't use both '<' and '>'
+pack str l><: RangeError: Can't use both '<' and '>'
+unpack l><: RangeError: Can't use both '<' and '>'
+pack l<>: RangeError: Can't use both '<' and '>'
+pack float l<>: RangeError: Can't use both '<' and '>'
+pack poly l<>: RangeError: Can't use both '<' and '>'
+pack buf l<>: RangeError: Can't use both '<' and '>'
+pack str l<>: RangeError: Can't use both '<' and '>'
+unpack l<>: RangeError: Can't use both '<' and '>'
+pack l<<: RangeError: Can't use both '<' and '>'
+pack float l<<: RangeError: Can't use both '<' and '>'
+pack poly l<<: RangeError: Can't use both '<' and '>'
+pack buf l<<: RangeError: Can't use both '<' and '>'
+pack str l<<: RangeError: Can't use both '<' and '>'
+unpack l<<: RangeError: Can't use both '<' and '>'
+pack l>>: RangeError: Can't use both '<' and '>'
+pack float l>>: RangeError: Can't use both '<' and '>'
+pack poly l>>: RangeError: Can't use both '<' and '>'
+pack buf l>>: RangeError: Can't use both '<' and '>'
+pack str l>>: RangeError: Can't use both '<' and '>'
+unpack l>>: RangeError: Can't use both '<' and '>'
+pack l<!<: RangeError: Can't use both '<' and '>'
+pack float l<!<: RangeError: Can't use both '<' and '>'
+pack poly l<!<: RangeError: Can't use both '<' and '>'
+pack buf l<!<: RangeError: Can't use both '<' and '>'
+pack str l<!<: RangeError: Can't use both '<' and '>'
+unpack l<!<: RangeError: Can't use both '<' and '>'
+pack l!><: RangeError: Can't use both '<' and '>'
+pack float l!><: RangeError: Can't use both '<' and '>'
+pack poly l!><: RangeError: Can't use both '<' and '>'
+pack buf l!><: RangeError: Can't use both '<' and '>'
+pack str l!><: RangeError: Can't use both '<' and '>'
+unpack l!><: RangeError: Can't use both '<' and '>'
+pack l_<<: RangeError: Can't use both '<' and '>'
+pack float l_<<: RangeError: Can't use both '<' and '>'
+pack poly l_<<: RangeError: Can't use both '<' and '>'
+pack buf l_<<: RangeError: Can't use both '<' and '>'
+pack str l_<<: RangeError: Can't use both '<' and '>'
+unpack l_<<: RangeError: Can't use both '<' and '>'
+pack s><: RangeError: Can't use both '<' and '>'
+pack float s><: RangeError: Can't use both '<' and '>'
+pack poly s><: RangeError: Can't use both '<' and '>'
+pack buf s><: RangeError: Can't use both '<' and '>'
+pack str s><: RangeError: Can't use both '<' and '>'
+unpack s><: RangeError: Can't use both '<' and '>'
+pack S<>: RangeError: Can't use both '<' and '>'
+pack float S<>: RangeError: Can't use both '<' and '>'
+pack poly S<>: RangeError: Can't use both '<' and '>'
+pack buf S<>: RangeError: Can't use both '<' and '>'
+pack str S<>: RangeError: Can't use both '<' and '>'
+unpack S<>: RangeError: Can't use both '<' and '>'
+pack i><: RangeError: Can't use both '<' and '>'
+pack float i><: RangeError: Can't use both '<' and '>'
+pack poly i><: RangeError: Can't use both '<' and '>'
+pack buf i><: RangeError: Can't use both '<' and '>'
+pack str i><: RangeError: Can't use both '<' and '>'
+unpack i><: RangeError: Can't use both '<' and '>'
+pack I<<: RangeError: Can't use both '<' and '>'
+pack float I<<: RangeError: Can't use both '<' and '>'
+pack poly I<<: RangeError: Can't use both '<' and '>'
+pack buf I<<: RangeError: Can't use both '<' and '>'
+pack str I<<: RangeError: Can't use both '<' and '>'
+unpack I<<: RangeError: Can't use both '<' and '>'
+pack q><: RangeError: Can't use both '<' and '>'
+pack float q><: RangeError: Can't use both '<' and '>'
+pack poly q><: RangeError: Can't use both '<' and '>'
+pack buf q><: RangeError: Can't use both '<' and '>'
+pack str q><: RangeError: Can't use both '<' and '>'
+unpack q><: RangeError: Can't use both '<' and '>'
+pack Q>>: RangeError: Can't use both '<' and '>'
+pack float Q>>: RangeError: Can't use both '<' and '>'
+pack poly Q>>: RangeError: Can't use both '<' and '>'
+pack buf Q>>: RangeError: Can't use both '<' and '>'
+pack str Q>>: RangeError: Can't use both '<' and '>'
+unpack Q>>: RangeError: Can't use both '<' and '>'
+pack j><: RangeError: Can't use both '<' and '>'
+pack float j><: RangeError: Can't use both '<' and '>'
+pack poly j><: RangeError: Can't use both '<' and '>'
+pack buf j><: RangeError: Can't use both '<' and '>'
+pack str j><: RangeError: Can't use both '<' and '>'
+unpack j><: RangeError: Can't use both '<' and '>'
+pack J<<: RangeError: Can't use both '<' and '>'
+pack float J<<: RangeError: Can't use both '<' and '>'
+pack poly J<<: RangeError: Can't use both '<' and '>'
+pack buf J<<: RangeError: Can't use both '<' and '>'
+pack str J<<: RangeError: Can't use both '<' and '>'
+unpack J<<: RangeError: Can't use both '<' and '>'
+pack l><0: RangeError: Can't use both '<' and '>'
+pack float l><0: RangeError: Can't use both '<' and '>'
+pack poly l><0: RangeError: Can't use both '<' and '>'
+pack buf l><0: RangeError: Can't use both '<' and '>'
+pack str l><0: RangeError: Can't use both '<' and '>'
+unpack l><0: RangeError: Can't use both '<' and '>'
+unpack_ints l><: RangeError: Can't use both '<' and '>'
+unpack_ints s<>: RangeError: Can't use both '<' and '>'
+unpack_ints l<<: RangeError: Can't use both '<' and '>'
+unpack_ints i>>: RangeError: Can't use both '<' and '>'
+l!> roundtrip: [1]
+l>! roundtrip: [1]
+l<_ roundtrip: [1]
+l!> width: true
+s!_: [1, 0]
+s!>: [0, 1]
+s<!: [1, 0]
+G: 3ff8000000000000
+E: 000000000000f83f
+g: c0200000
+e: 000020c0
+roundtrip G/E: 1.5 1.5
+roundtrip g/e: -2.5 -2.5
+int U -1: RangeError: pack(U): value out of range
+int U2 mid -1: RangeError: pack(U): value out of range
+flt U -1.0: RangeError: pack(U): value out of range
+flt U -0.9: ok [0]
+poly U -1: RangeError: pack(U): value out of range
+poly U -1.0: RangeError: pack(U): value out of range
+buf U -1: RangeError: pack(U): value out of range
+int U 0: ok [0]
+int U max31: ok [253, 191, 191, 191, 191, 191]
+str f: TypeError: can't convert String into Float
+str F: TypeError: can't convert String into Float
+str d: TypeError: can't convert String into Float
+str D: TypeError: can't convert String into Float
+str e: TypeError: can't convert String into Float
+str E: TypeError: can't convert String into Float
+str g: TypeError: can't convert String into Float
+str G: TypeError: can't convert String into Float
+str nil F: TypeError: can't convert nil into Float
+str nil D: TypeError: can't convert nil into Float
+str nil C: TypeError: no implicit conversion of nil into Integer
+leak-loop: ok

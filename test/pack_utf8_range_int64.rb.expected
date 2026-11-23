@@ -1,0 +1,23 @@
+int 0x7FFFFFFF: ok [253, 191, 191, 191, 191, 191]
+int 0x80000000: RangeError: pack(U): value out of range
+int 0x100000000: RangeError: pack(U): value out of range
+int 2**63-1: RangeError: pack(U): value out of range
+int -2**63: RangeError: pack(U): value out of range
+flt 2147483647.9: ok [253, 191, 191, 191, 191, 191]
+flt 2147483648.0: RangeError: pack(U): value out of range
+flt -9223372036854775808.0: RangeError: pack(U): value out of range
+flt 9223372036854775808.0: RangeError: bignum too big to convert into 'long'
+flt 2^64: RangeError: bignum too big to convert into 'long'
+flt 1e20: RangeError: bignum too big to convert into 'long'
+flt -1e20: RangeError: bignum too big to convert into 'long'
+flt NaN: FloatDomainError: NaN
+flt Inf: FloatDomainError: Infinity
+flt -Inf: FloatDomainError: -Infinity
+bignum 2^63: RangeError: bignum too big to convert into 'long'
+bignum 2^64+65: RangeError: bignum too big to convert into 'long'
+poly 2^63: RangeError: bignum too big to convert into 'long'
+poly 2^64+65: RangeError: bignum too big to convert into 'long'
+poly -2^64+65: RangeError: bignum too big to convert into 'long'
+buf 2^64+65: RangeError: bignum too big to convert into 'long'
+poly flt 2^64: RangeError: bignum too big to convert into 'long'
+buf flt 2^64: RangeError: bignum too big to convert into 'long'

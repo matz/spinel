@@ -1108,6 +1108,47 @@ static const char *ct_promoted(const CtBind *b, int frame, const char *nm) {
   return NULL;
 }
 
+/* Does node id read a local named nm, anywhere under it? */
+static int ct_reads_name(const NodeTable *nt, int id, const char *nm) {
+  if (id < 0) return 0;
+  if (nt_kind(nt, id) == NK_LocalVariableReadNode && sp_streq(nt_str(nt, id, "name"), nm)) return 1;
+  for (int i = 0, nr = nt_num_refs(nt, id); i < nr; i++) if (ct_reads_name(nt, nt_ref_at(nt, id, i), nm)) return 1;
+  for (int i = 0, na = nt_num_arrs(nt, id); i < na; i++) {
+    int n = 0;
+    const int *v = nt_arr_at(nt, id, i, &n);
+    for (int j = 0; j < n; j++) if (ct_reads_name(nt, v[j], nm)) return 1;
+  }
+  return 0;
+}
+/* A residual hands a String local on to code that runs where it stands,
+   which may change it (`keep(fk)`, a method of the program's that appends
+   to its argument): the run went on reading the bytes it held. May an
+   effect the run made after the residual have read the local (a
+   define_method's name, not its block), or come of a frame the run
+   entered after it, whose arguments it may have computed from it? Then
+   the residual can't share it. */
+static int ct_read_after(const CtBind *b, const char *nm) {
+  const CtEnv *e = b->e;
+  int at = b->fx ? (int)(b->fx - e->fx) : -1;
+  if (at < 0 || at >= e->nfx) return 1;
+  for (int g = at + 1; g < e->nfx; g++) {
+    const CtFx *f = &e->fx[g];
+    if (f->frame != b->fx->frame) return 1;
+    /* (a define_method's block reads the local itself where it runs, as
+       a promoted local, never bytes the run read: its arguments are what
+       the run read, kept in dm_args where the walk made the call the
+       refusal stand-in) */
+    if (f->k == CT_FX_DEFINE_METHOD) {
+      int da = nt_int(b->nt, f->site, "define_method_name", 0) == 1 ? (int)nt_int(b->nt, f->site, "dm_args", -1)
+                                                                    : nt_ref(b->nt, f->site, "arguments");
+      if (ct_reads_name(b->nt, da, nm)) return 1;
+      continue;
+    }
+    if (ct_reads_name(b->nt, f->site, nm)) return 1;
+  }
+  return 0;
+}
+
 static int ct_bind_read(CtBind *b, int id, int lv, int par, int gpar) {
   NodeTable *nt = b->nt;
   const char *nm = nt_str(nt, id, "name");
@@ -1138,7 +1179,7 @@ static int ct_bind_read(CtBind *b, int id, int lv, int par, int gpar) {
                          (gk != NK_EmbeddedStatementsNode && (!mv.frozen || !mv.lit || (gk != NK_BlockNode && gk != NK_BeginNode &&
                           gk != NK_RescueNode && gk != NK_ElseNode && gk != NK_EnsureNode)))))
   {
-    if (b->residual || !ct_promote(b, l, nm)) return 0;
+    if ((b->residual && ct_read_after(b, nm)) || !ct_promote(b, l, nm)) return 0;
     if (b->apply) nt_node_set_str(nt, id, "name", ct_promoted(b, b->frame, nm));
     return 1;
   }

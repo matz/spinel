@@ -24804,12 +24804,21 @@ static inline const char *sp_poly_pack(sp_RbVal recv, const char *fmt) {
    The header's render helpers still reference sp_sym_to_s / sp_class_to_s
    syntactically (they are unreachable in such a program), and GCC warns on a
    referenced-but-undefined static even when the referring function is dead --
-   so supply inert fallbacks that the optimizer prunes with everything else. */
-#ifdef SP_TU_NO_POLY_RENDER
-static const char *sp_sym_to_s(sp_sym id) { (void)id; return sp_str_empty; }
-static const char *sp_class_to_s(sp_Class c) { return c.name ? c.name : sp_str_empty; }
-static sp_sym sp_sym_intern(const char *s) { (void)s; return (sp_sym)0; }
-static sp_sym sp_sym_intern_n(const char *s, size_t n) { (void)s; (void)n; return (sp_sym)0; }
+   so supply inert fallbacks that the optimizer prunes with everything else.
+   An --ext-init kernel declares the four with external linkage (a host TU
+   resolves them to the kernel), so its fallbacks are the kernel's
+   definitions, not statics; a host TU takes the kernel's. */
+#if defined(SP_TU_NO_POLY_RENDER) && !defined(SPINEL_EXT_HOST)
+#ifdef SPINEL_EXT_KERNEL
+#define SP_NO_POLY_FALLBACK
+#else
+#define SP_NO_POLY_FALLBACK static
+#endif
+SP_NO_POLY_FALLBACK const char *sp_sym_to_s(sp_sym id) { (void)id; return sp_str_empty; }
+SP_NO_POLY_FALLBACK const char *sp_class_to_s(sp_Class c) { return c.name ? c.name : sp_str_empty; }
+SP_NO_POLY_FALLBACK sp_sym sp_sym_intern(const char *s) { (void)s; return (sp_sym)0; }
+SP_NO_POLY_FALLBACK sp_sym sp_sym_intern_n(const char *s, size_t n) { (void)s; (void)n; return (sp_sym)0; }
+#undef SP_NO_POLY_FALLBACK
 #endif
 
 /* One representation (string-one-repr-design.md): under the mode a String

@@ -31140,13 +31140,14 @@ static void cbi_rewrite_access(NodeTable *nt, int id, const char *cn) {
    so the call is `@x = v` / `@x` there. Left a call, it is taken for an
    instance's ivar, and the class body has no instance to set it on. A set
    is rewritten where it is a statement (`stmt`); as a value it stays refused.
-   The walk stops at a def, a block, a lambda, a `class << x` and a nested
+   The walk stops at a def, a lambda, a `class << x`, a block with a self of
+   its own (an eval's, a define_method's, a class builder's) and a nested
    class or module, which have a self of their own, and at `defined?`, which
    answers "method" for the call where `defined?(@x)` asks for the ivar. */
 static int civ_self_body_access(NodeTable *nt, int node, int stmt) {
   if (node < 0) return 0;
   NodeKind k = nt_kind(nt, node);
-  if (k == NK_DefNode || k == NK_BlockNode || k == NK_LambdaNode || k == NK_SingletonClassNode ||
+  if (k == NK_DefNode || k == NK_LambdaNode || k == NK_SingletonClassNode ||
       class_def_opens_frame(nt, node) || k == NK_DefinedNode) return 0;
   int changed = 0;
   if (k == NK_CallNode && nt_ref(nt, node, "block") < 0) {
@@ -31188,8 +31189,25 @@ static int civ_self_body_access(NodeTable *nt, int node, int stmt) {
       changed = 1;
     }
   }
+  /* a block keeps the self it is written in (`[1, 2].each { |t|
+     instance_variable_set(:@x, t) }` in a class body sets the class's), but
+     for one a call runs on another self or makes a method or a class of:
+     the eval and exec family, define_method, a class builder */
+  int own_self_blk = -1;
+  if (k == NK_CallNode) {
+    const char *nm = nt_str(nt, node, "name");
+    int r = nt_ref(nt, node, "receiver"), blk = nt_ref(nt, node, "block");
+    NodeKind rk = r >= 0 ? nt_kind(nt, r) : NK_NilNode;
+    if (blk >= 0 && nm &&
+        (is_eval_exec_family(nm) || sp_streq(nm, "define_method") || sp_streq(nm, "define_singleton_method") ||
+         ((rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) && is_class_builder(nt_str(nt, r, "name"), nm))))
+      own_self_blk = blk;
+  }
   int nr = nt_num_refs(nt, node);
-  for (int i = 0; i < nr; i++) changed |= civ_self_body_access(nt, nt_ref_at(nt, node, i), 0);
+  for (int i = 0; i < nr; i++) {
+    int ch = nt_ref_at(nt, node, i);
+    if (ch != own_self_blk) changed |= civ_self_body_access(nt, ch, 0);
+  }
   int na = nt_num_arrs(nt, node);
   for (int i = 0; i < na; i++) {
     int cnt = 0;

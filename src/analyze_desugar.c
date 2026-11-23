@@ -25314,12 +25314,35 @@ static int rbp_block(const NodeTable *nt, int b, int *ps, int *body) {
   return *body >= 0 && nt_kind(nt, *body) == NK_StatementsNode;
 }
 
-/* Is p, a required parameter of a block with this body, one the body assigns
-   and no nested block or lambda captures? */
-static int rbp_reassigned(const NodeTable *nt, int body, int p) {
+/* Does the subtree at node read the local `name`, as seen from `level` blocks out? */
+static int rbp_reads(const NodeTable *nt, int node, const char *name, int level) {
+  if (node < 0) return 0;
+  NodeKind k = nt_kind(nt, node);
+  if (k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode) return 0;
+  if (k == NK_LocalVariableReadNode && nt_str(nt, node, "name") && sp_streq(nt_str(nt, node, "name"), name) &&
+      nt_int(nt, node, "depth", 0) == level) return 1;
+  int inner = (k == NK_BlockNode || k == NK_LambdaNode) ? level + 1 : level;
+  int nr = nt_num_refs(nt, node);
+  for (int i = 0; i < nr; i++) if (rbp_reads(nt, nt_ref_at(nt, node, i), name, inner)) return 1;
+  int na = nt_num_arrs(nt, node);
+  for (int i = 0; i < na; i++) {
+    int cnt = 0; const int *ids = nt_arr_at(nt, node, i, &cnt);
+    for (int j = 0; j < cnt; j++) if (rbp_reads(nt, ids[j], name, inner)) return 1;
+  }
+  return 0;
+}
+
+/* Is p, a required parameter of the block with parameter list ps and this body, one the body assigns, no
+   default of the list reads (the default runs before the split's write), and no nested block or lambda
+   captures? A parameter written with a leading underscore says it is unused: it keeps its slot. */
+static int rbp_reassigned(const NodeTable *nt, int ps, int body, int p) {
   if (nt_kind(nt, p) != NK_RequiredParameterNode) return 0;
-  const char *pn = nt_str(nt, p, "name");
-  if (!pn || pn[0] == '_' || !rbp_writes(nt, body, pn, 0)) return 0;
+  const char *pn = nt_str(nt, p, "name"), *wn = nt_wname(nt, p);
+  if (!pn || !wn || wn[0] == '_' || !rbp_writes(nt, body, pn, 0)) return 0;
+  int on = 0; const int *opts = nt_arr(nt, ps, "optionals", &on);
+  for (int i = 0; i < on; i++) if (rbp_reads(nt, nt_ref(nt, opts[i], "value"), pn, 0)) return 0;
+  int kn = 0; const int *kws = nt_arr(nt, ps, "keywords", &kn);
+  for (int i = 0; i < kn; i++) if (rbp_reads(nt, nt_ref(nt, kws[i], "value"), pn, 0)) return 0;
   /* a parameter a nested block or lambda captures keeps its one cell per
      iteration, which only a block parameter has */
   return !rbp_captured(nt, body, pn, 0);
@@ -25330,7 +25353,7 @@ int desugar_reassigned_block_params_left(Compiler *c, LowerCtx *lc, int id) {
   int ps, body, rn = 0;
   if (!rbp_block(nt, id, &ps, &body)) return 0;
   const int *rq = nt_arr(nt, ps, "requireds", &rn);
-  for (int i = 0; i < rn; i++) if (rbp_reassigned(nt, body, rq[i])) return 1;
+  for (int i = 0; i < rn; i++) if (rbp_reassigned(nt, ps, body, rq[i])) return 1;
   return 0;
 }
 
@@ -25341,7 +25364,7 @@ int desugar_reassigned_block_params_at(Compiler *c, LowerCtx *lc, int id) {
   const int *rq = nt_arr(nt, ps, "requireds", &rn);
   int *pre = NULL; int npre = 0;
   for (int i = 0; i < rn; i++) {
-    if (!rbp_reassigned(nt, body, rq[i])) continue;
+    if (!rbp_reassigned(nt, ps, body, rq[i])) continue;
     const char *pn = nt_str(nt, rq[i], "name");
     char *orig = strdup(pn);   /* copy: nt_set_str frees pn's storage */
     if (!orig) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }

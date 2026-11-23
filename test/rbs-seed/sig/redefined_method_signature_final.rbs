@@ -1,0 +1,7 @@
+class VersionedBase
+  def self.all: () -> VersionedRel
+end
+
+class VersionedPick
+  def self.of: (bool flag) -> VersionedRel
+end

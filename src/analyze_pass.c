@@ -20845,6 +20845,7 @@ static int irt_scope(Compiler *c, int s, IrtCtx *x) {
     }
     if (other) hbr = TY_POLY;
   }
+  if (replaced_ret_seed_gives_way(c, s)) ch = 1;
   if (ret_seed_holds(sc, hbr)) {
     if (sc->ret == TY_STR_STR_HASH || sc->ret == TY_STR_INT_HASH) {
       if (hbr == TY_STR_POLY_HASH) { scope_set_ret(sc, TY_STR_POLY_HASH); ch = 1; }

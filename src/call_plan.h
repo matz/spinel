@@ -710,6 +710,13 @@ int cplan_to_ary_method(Compiler *c, int id, int op, int cid);
    answer: self may be a class under ci. ml may be NULL; its def_class is
    the class that holds the method, as comp_method_in_chain gives it. */
 int cplan_hook_target(Compiler *c, int id, int ci, const char *name, MethodLookup *ml);
+/* Does class ci's initialize, defined more than once in the class that
+   holds it, have versions the record leaves to the run, with an entry the
+   calls of `new` asked over them, which the constructor
+   cannot call: the initialize takes optional parameters, whose defaults are
+   each version's own and which the constructor's fixed parameters cannot
+   leave out (cplan_hook_target keeps the table's there)? */
+int cplan_init_entry_unfit(Compiler *c, int ci);
 /* The initialize the arm for class ci of a `new` on a Class value (call
    id) runs: the site's (cplan_hook_target), else the table's where ci
    is opened at no statement the call may run at (its window): no run

@@ -13724,6 +13724,13 @@ void emit_class_new(Compiler *c, ClassInfo *ci, Buf *b) {
                class_ruby_name(c, cid));
   }
   else if (init >= 0 && c->scopes[init].reachable && !c->scopes[init].yields) {
+    /* (the versions' defaults no constructor of fixed parameters can tell
+       apart: refused, where the table's would run the wrong one) */
+    if (cplan_init_entry_unfit(c, cid))
+      unsupported_feature(c, c->scopes[init].def_node,
+                          "an initialize with optional parameters defined more than once, where the load order the program "
+                          "runs leaves which definition the class ends with to run time: `new` would run the first one; "
+                          "give the definitions the same parameters with no defaults, or load the files in one order");
     /* (a version entry, where the record leaves the initialize the class
        ends with to the run: cplan_hook_target) */
     if (c->scopes[init].entry) buf_printf(b, "  %s(", mc_method(c, &c->scopes[init]));

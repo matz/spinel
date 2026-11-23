@@ -3429,6 +3429,24 @@ static int new_init_absent(Compiler *c, int id, int ci, const char *name) {
   if (framed) elab_plan_leave(c);
   return absent;
 }
+/* See call_plan.h. */
+int cplan_init_entry_unfit(Compiler *c, int ci) {
+  if (ci < 0 || !c->nver_entries) return 0;
+  int dc = -1;
+  mtab_enter(c);
+  int tm = comp_method_in_chain(c, ci, "initialize", &dc);
+  mtab_leave(c);
+  if (tm < 0 || ver_plain_arity(c, tm) == c->scopes[tm].nparams) return 0;
+  /* (the class that defines it holds two or more of its own: a chain of
+     one each, a subclass's over its parent's, is the table's to answer) */
+  ElabVersion vs[VER_MAX_ARMS];
+  if (elab_history_versions(c, dc >= 0 ? dc : ci, 0, "initialize", vs, VER_MAX_ARMS) < 2) return 0;
+  for (int i = 0; i < c->nver_entries; i++) {
+    const struct VerEntry *e = &c->ver_entries[i];
+    if (e->cls == ci && !e->sg && !e->guard && e->scope >= 0 && sp_streq(e->name, "initialize")) return 1;
+  }
+  return 0;
+}
 /* See call_plan.h. Class#new's initialize, or the initialize_copy a dup or
    clone runs on the copy (name): none where the record proves
    none there (new_init_absent: BasicObject's runs, or the builtin

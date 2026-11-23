@@ -1112,6 +1112,12 @@ spinel: test/reject/inherited_alias_computed_define_method_redefined.rb:7: B#n: 
 spinel: test/reject/inherited_singleton_alias_super_into_extend.rb:13: B.n: alias of an inherited class method whose `super` reaches a module the class extends, behind a later definition of the name, is not supported; see docs/limitations.md
 == test/reject/inherited_singleton_alias_super_into_extend.rb [promote] rc=1
 spinel: test/reject/inherited_singleton_alias_super_into_extend.rb:13: B.n: alias of an inherited class method whose `super` reaches a module the class extends, behind a later definition of the name, is not supported; see docs/limitations.md
+== test/reject/initialize_versions_defaults.rb [default] rc=1
+spinel: test/reject/initialize_versions_defaults/first.rb:2: an initialize with optional parameters defined more than once, where the load order the program runs leaves which definition the class ends with to run time: `new` would run the first one; give the definitions the same parameters with no defaults, or load the files in one order
+spinel: 1 refusal, nothing written
+== test/reject/initialize_versions_defaults.rb [promote] rc=1
+spinel: test/reject/initialize_versions_defaults/first.rb:2: an initialize with optional parameters defined more than once, where the load order the program runs leaves which definition the class ends with to run time: `new` would run the first one; give the definitions the same parameters with no defaults, or load the files in one order
+spinel: 1 refusal, nothing written
 == test/reject/instance_eval_def_beside_statements.rb [default] rc=1
 spinel: test/reject/instance_eval_def_beside_statements.rb:6: a method defined in an instance_eval block, other than one of defs only on a class or module the program defines and without arguments, is not supported: name the receiver (`def Klass.m`) instead
 == test/reject/instance_eval_def_beside_statements.rb [promote] rc=1

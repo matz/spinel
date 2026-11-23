@@ -1,0 +1,12 @@
+[:a, :b, :d, :g]
+[:c, :inherited, :initialize]
+[:e]
+[:f]
+[:a, :b, :d, :g]
+[:a, :b, :c, :d, :e, :f, :g, :inherited, :initialize]
+[:a, :b, :d, :g]
+[:c, :inherited, :initialize]
+true
+false
+[:inherited]
+[:initialize]

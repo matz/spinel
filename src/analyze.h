@@ -1617,6 +1617,7 @@ const char *an_value_methods_class(Compiler *c, int recv, TyKind rt, const char 
                                    const int *argv);
 int an_class_singleton_methods_listable(Compiler *c, int cid);
 int an_singleton_methods_foldable(Compiler *c, int recv);
+int an_class_method_list_foldable(Compiler *c, const char *name, int recv, int argc, const int *argv);
 int ewo_memo_passed_to_callable_at(Compiler *c, int callid, int pidx);
 
 /* Class index when a receiverless instance_eval/exec resolves to self, else -1. */

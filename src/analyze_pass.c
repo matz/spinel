@@ -1073,6 +1073,18 @@ static int subtree_has_return(const NodeTable *nt, int root, int skip) {
   return 0;
 }
 
+/* Does a class below cid answer `name` with a method other than mi, the one
+   class cid answers at site? Then a call on a cid-typed value may run that
+   method, and what is known of mi is not what the call answers. */
+int method_overridden_below(Compiler *c, int site, int cid, const char *name, int mi) {
+  for (int cj = 0; cj < c->nclasses; cj++) {
+    int an = cj;
+    while (an >= 0 && an != cid) an = c->classes[an].parent;
+    if (an != cid || cj == cid) continue;
+    if (call_target(c, site, cj, name, 0, NULL) != mi) return 1;
+  }
+  return 0;
+}
 /* The nodes of the tuple call `value` answers when its method has one tuple
    shape (`return a, b`, or a literal `[a, b]` last): their count, 0 when it
    has none. */
@@ -1097,12 +1109,7 @@ int multi_return_elem_nodes(Compiler *c, int value, const int **elems) {
       int cid = ty_object_class(rt);
       mi = call_target(c, value, cid, mn, 0, NULL);
       /* a subclass override could return different element types */
-      for (int cj = 0; mi >= 0 && cj < c->nclasses; cj++) {
-        int an = cj;
-        while (an >= 0 && an != cid) an = c->classes[an].parent;
-        if (an != cid || cj == cid) continue;
-        if (call_target(c, value, cj, mn, 0, NULL) != mi) return 0;
-      }
+      if (mi >= 0 && method_overridden_below(c, value, cid, mn, mi)) return 0;
     }
   }
   else {
@@ -1115,7 +1122,13 @@ int multi_return_elem_nodes(Compiler *c, int value, const int **elems) {
       if (mi >= 0 && c->scopes[mi].def_node < 0) mi = -1;
     }
   }
-  if (mi < 0) return 0;
+  return mi < 0 ? 0 : scope_tuple_elem_nodes(c, mi, elems);
+}
+/* The nodes of the one tuple the method scope mi answers (`return a, b`, or
+   a literal `[a, b]` last), which is never nil: their count, 0 when its body
+   has no one such shape. */
+int scope_tuple_elem_nodes(Compiler *c, int mi, const int **elems) {
+  const NodeTable *nt = c->nt;
   int def = c->scopes[mi].def_node;
   int body = def >= 0 ? nt_ref(nt, def, "body") : -1;
   int bn = 0;

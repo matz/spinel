@@ -2030,14 +2030,14 @@ void emit_poly_prearms0(Compiler *c, int id, const char *name, const PolySpecial
       int str_own = sci >= 0 && call_target(c, id, sci, name, 0, &ml) >= 0 && ml.def_class == sci;
       if (!str_own) {
         buf_puts(b, "if (");
-        emit_poly_str_guard(c, tv, name, b);
+        emit_str_kind_test(c, name, STROWN_PUBLIC, b, "_t%d", tv);
         buf_printf(b, ") _t%d = %ssp_poly_count(_t%d)%s; else ", tr, bopen, tv, bclose);
       }
     } else {
       buf_printf(b, "if (_t%d.tag == SP_TAG_SYM) _t%d = %ssp_str_length(sp_sym_to_s((sp_sym)_t%d.v.i))%s; else ", tv, tr, bopen, tv, bclose);
       if (!str_reopen_owns) {
         buf_puts(b, "if (");
-        emit_poly_str_guard(c, tv, name, b);
+        emit_str_kind_test(c, name, STROWN_PUBLIC, b, "_t%d", tv);
         buf_printf(b, ") _t%d = %s(sp_int)sp_str_length(sp_rbval_string_bytes(_t%d))%s; else ", tr, bopen, tv, bclose);
       }
     }
@@ -2061,7 +2061,7 @@ void emit_poly_prearms0(Compiler *c, int id, const char *name, const PolySpecial
     if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_EMPTY, -1, TY_UNKNOWN, PC_SAME);
     if (!str_reopen_owns) {
       buf_puts(b, "if (");
-      emit_poly_str_guard(c, tv, name, b);
+      emit_str_kind_test(c, name, STROWN_PUBLIC, b, "_t%d", tv);
       buf_printf(b, ") _t%d = %ssp_str_length(sp_rbval_string_bytes(_t%d)) == 0%s; else ", tr, ebopen, tv, ebclose);
     }
     buf_printf(b, "if (_t%d.tag == SP_TAG_SYM) _t%d = %sstrlen(sp_sym_to_s((sp_sym)_t%d.v.i)) == 0%s; else ", tv, tr, ebopen, tv, ebclose);
@@ -2385,7 +2385,7 @@ void emit_poly_prearms0(Compiler *c, int id, const char *name, const PolySpecial
         buf_puts(b, "; }\nelse ");
       }
       if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_STRT, -1, TY_UNKNOWN, PC_SAME);
-      buf_puts(b, "if ("); emit_poly_str_guard(c, tv, name, b);
+      buf_puts(b, "if ("); emit_str_kind_test(c, name, STROWN_PUBLIC, b, "_t%d", tv);
       buf_printf(b, ") { _t%d = ", tr);
       if (ret != TY_POLY) buf_printf(b, "%s(sp_rbval_string_bytes(_t%d))", str_op->fn, tv);
       else if (str_op->result == TY_INT_ARRAY) buf_printf(b, "sp_box_int_array(%s(sp_rbval_string_bytes(_t%d)))", str_op->fn, tv);
@@ -2400,7 +2400,7 @@ void emit_poly_prearms0(Compiler *c, int id, const char *name, const PolySpecial
     if (sp_streq(name, "split") &&
         (ret == TY_STR_ARRAY || ret == TY_POLY_ARRAY || ret == TY_POLY)) {
       if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_SPLIT, -1, TY_UNKNOWN, PC_SAME);
-      buf_puts(b, "if ("); emit_poly_str_guard(c, tv, name, b);
+      buf_puts(b, "if ("); emit_str_kind_test(c, name, STROWN_PUBLIC, b, "_t%d", tv);
       buf_printf(b, ") { _t%d = ", tr);
       if (ret == TY_STR_ARRAY) buf_printf(b, "sp_str_split_ws(sp_rbval_string_bytes(_t%d))", tv);
       else if (ret == TY_POLY_ARRAY) buf_printf(b, "sp_StrArray_to_poly_fmt(sp_str_split_ws(sp_rbval_string_bytes(_t%d)))", tv);
@@ -3474,7 +3474,7 @@ void emit_poly_str_aset_prearm(Compiler *c, int recv, const PolySpecialsN *ps, c
   Buf st; memset(&st, 0, sizeof st);
   char rv[24]; snprintf(rv, sizeof rv, "_t%d", tv);
   str_aset_store_text(c, T, rv, &st);
-  buf_puts(b, "if ("); emit_poly_str_guard(c, tv, "[]=", b); buf_puts(b, ") { ");
+  buf_puts(b, "if ("); emit_str_kind_test(c, "[]=", STROWN_PUBLIC, b, "_t%d", tv); buf_puts(b, ") { ");
   buf_printf(b, "%s;", st.p);
   if (tr >= 0) {
     char v0[24]; snprintf(v0, sizeof v0, "_t%d", T->atmp[1]);
@@ -3664,7 +3664,7 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
      A reopened or versioned String method has its own class arm. */
   if (str_builtin && ps->unpack1) {
     if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_UNPACK1, -1, TY_UNKNOWN, PC_SAME);
-    buf_puts(b, "if ("); emit_poly_str_guard(c, tv, name, b);
+    buf_puts(b, "if ("); emit_str_kind_test(c, name, STROWN_PUBLIC, b, "_t%d", tv);
     buf_puts(b, ") { ");
     /* The format's to_str can grow the receiver. Only borrow the receiver
        bytes after that conversion, while the format bytes are rooted. */
@@ -3692,12 +3692,12 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
      and a boxed one is checked at run time. */
   if (is_include) if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_INCLUDE, -1, TY_UNKNOWN, PC_SAME);
   if (is_include && !sp_streq(name, "include?"))
-    { buf_puts(b, "if ("); emit_poly_str_guard(c, tv, name, b);
+    { buf_puts(b, "if ("); emit_str_kind_test(c, name, STROWN_PUBLIC, b, "_t%d", tv);
       buf_printf(b, ") sp_raise_poly_nomethod(\"%s\", _t%d);\nelse ", name, tv); }
   /* (a String narrowed out of a boxed slot is held as that box: the boxed
      arm below reads it) */
   else if (is_include && comp_ntype(c, argv[0]) == TY_STRING && atmp_ty[0] != TY_POLY)
-    { buf_puts(b, "if ("); emit_poly_str_guard(c, tv, name, b);
+    { buf_puts(b, "if ("); emit_str_kind_test(c, name, STROWN_PUBLIC, b, "_t%d", tv);
       buf_printf(b, ") { _t%d = %ssp_str_include(sp_poly_recv_s(_t%d, \"include?\"), %s)%s; }\nelse ",
                  tr, ret == TY_POLY ? "sp_box_bool(" : "", tv, strarg,
                  ret == TY_POLY ? ")" : ""); }
@@ -3708,7 +3708,7 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
     else emit_boxed_text(c, atmp_ty[0], tn6, &ab6);
     /* The needle's to_str may grow the held receiver before the search. */
     int needle = ++g_tmp;
-    buf_puts(b, "if ("); emit_poly_str_guard(c, tv, name, b);
+    buf_puts(b, "if ("); emit_str_kind_test(c, name, STROWN_PUBLIC, b, "_t%d", tv);
     buf_printf(b, ") { const char *_t%d = sp_poly_arg_str_chk(%s); SP_GC_ROOT_STR(_t%d);"
                   " _t%d = %ssp_str_include(sp_poly_recv_s(_t%d, \"include?\"), _t%d)%s; }\nelse ",
                needle, ab6.p ? ab6.p : "sp_box_nil()", needle,
@@ -3720,7 +3720,7 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
      dispatch result stays poly. */
   if (str_builtin && is_strdel && (ret == TY_POLY || ret == TY_STRING)) {
     if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_STR_DELETE, -1, TY_UNKNOWN, PC_SAME);
-    buf_puts(b, "if ("); emit_poly_str_guard(c, tv, name, b);
+    buf_puts(b, "if ("); emit_str_kind_test(c, name, STROWN_PUBLIC, b, "_t%d", tv);
     buf_printf(b, ") { _t%d = ", tr);
     if (ret == TY_POLY) buf_printf(b, "sp_box_str_new(sp_str_delete(sp_rbval_string_bytes(_t%d), %s))", tv, strarg);
     else buf_printf(b, "sp_str_delete(sp_rbval_string_bytes(_t%d), %s)", tv, strarg);
@@ -3731,7 +3731,7 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
      widened the dispatch's result to poly. */
   if (str_builtin && is_strpart && (ret == TY_POLY || ret == TY_STR_ARRAY)) {
     if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_STR_PARTITION, -1, TY_UNKNOWN, PC_SAME);
-    buf_puts(b, "if ("); emit_poly_str_guard(c, tv, name, b);
+    buf_puts(b, "if ("); emit_str_kind_test(c, name, STROWN_PUBLIC, b, "_t%d", tv);
     buf_printf(b, ") { _t%d = ", tr);
     if (ret == TY_POLY)
       buf_printf(b, "sp_box_str_array(sp_str_%s(sp_rbval_string_bytes(_t%d), %s))", name, tv, strarg);
@@ -3762,7 +3762,7 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
         buf_puts(b, "})); }\nelse ");
       } else {
         buf_puts(b, "if (");
-        emit_poly_str_guard(c, tv, name, b);
+        emit_str_kind_test(c, name, STROWN_PUBLIC, b, "_t%d", tv);
         buf_puts(b, ") { ");
         char sets[256]; int sl;
         sl = snprintf(sets, sizeof sets, "(const char *[]){");
@@ -3837,7 +3837,7 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
       buf_printf(&eb, "(sp_raise_cls(\"NotImplementedError\", \"String#encode with the %s: option\"), (const char *)0)",
                  unread);
     }
-    buf_puts(b, "if ("); emit_poly_str_guard(c, tv, name, b);
+    buf_puts(b, "if ("); emit_str_kind_test(c, name, STROWN_PUBLIC, b, "_t%d", tv);
     buf_printf(b, ") { _t%d = ", tr);
     if (ret == TY_POLY) buf_printf(b, "SP_STR_BOX(%s)", eb.p); else buf_puts(b, eb.p);
     buf_puts(b, "; }\nelse ");
@@ -3852,7 +3852,7 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
     if (sat == TY_NIL) snprintf(call, sizeof call, "sp_str_split_ws(sp_rbval_string_bytes(_t%d))", tv);
     else if (sat == TY_REGEX) snprintf(call, sizeof call, "sp_re_split(_t%d, sp_rbval_string_bytes(_t%d))", atmp[0], tv);
     else snprintf(call, sizeof call, "sp_str_split_drop_trailing(sp_rbval_string_bytes(_t%d), %s)", tv, strarg);
-    buf_puts(b, "if ("); emit_poly_str_guard(c, tv, name, b);
+    buf_puts(b, "if ("); emit_str_kind_test(c, name, STROWN_PUBLIC, b, "_t%d", tv);
     buf_printf(b, ") { _t%d = ", tr);
     if (ret == TY_STR_ARRAY) buf_puts(b, call);
     else if (ret == TY_POLY_ARRAY) buf_printf(b, "sp_StrArray_to_poly_fmt(%s)", call);
@@ -3869,7 +3869,7 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
     if (atmp_ty[0] == TY_POLY && ret == TY_POLY) {
       buf_printf(b, "if (_t%d.tag != SP_TAG_INT && (_t%d.tag == SP_TAG_INT || ", atmp[0], tv);
       if (str_builtin) {
-        emit_poly_str_guard(c, tv, name, b);
+        emit_str_kind_test(c, name, STROWN_PUBLIC, b, "_t%d", tv);
         buf_puts(b, " || ");
       }
       buf_printf(b, "(_t%d.tag == SP_TAG_OBJ && sp_poly_is_array_kind(_t%d.cls_id)))) "
@@ -3887,7 +3887,7 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
        covers SP_TAG_OBJ variants, so without this tag arm a String receiver
        fell through and returned the seed (nil/0). */
     if (str_builtin && (ret == TY_POLY || ret == TY_STRING)) {
-      buf_puts(b, "if ("); emit_poly_str_guard(c, tv, name, b);
+      buf_puts(b, "if ("); emit_str_kind_test(c, name, STROWN_PUBLIC, b, "_t%d", tv);
       buf_printf(b, ") { _t%d = %ssp_str_char_at_or_nil(sp_rbval_string_bytes(_t%d), %s)%s; }\nelse ",
                  tr, ret == TY_POLY ? "sp_box_str_fresh(" : "", tv, idxref, ret == TY_POLY ? ")" : "");
     }

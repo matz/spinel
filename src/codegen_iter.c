@@ -2285,13 +2285,13 @@ void emit_block_binds(Compiler *c, int blk, const int *yargs, int yc,
      by index, `yield(x)` with x = [1, 2, 3] into `|a, b = 5, c|` answered
      [1, 5, nil]. Leading requireds alone keep the lighter per-index read
      below. */
-  /* An object of the program's yielded alone converts through its own
-     to_ary, as a boxed one does (its parameters' row): it is boxed, and
-     the Array its to_ary answers splats */
+  /* An object of the program's, or a String, yielded alone converts through
+     its own to_ary, as a boxed one does (its parameters' row): it is boxed,
+     and the Array its to_ary answers splats */
   int yobj_to_ary = 0;
   if (autosplat && yc == 1 && yargs && nt_kind(nt, yargs[0]) != NK_SplatNode) {
     Repr yr = repr_of(c, yargs[0]);
-    if (yr.kind != RK_BOXED && ty_is_object(yr.as_ty)) {
+    if (yr.kind != RK_BOXED && cplan_to_ary_class_of(c, yr.as_ty) >= 0) {
       int *ks = malloc(sizeof(int) * (size_t)(c->nclasses + 1));
       if (!ks) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
       int nk = cplan_boxed_to_ary_classes(c, nt_ref(nt, blk, "parameters"), NTI_YIELDED, ks, NULL, c->nclasses + 1);

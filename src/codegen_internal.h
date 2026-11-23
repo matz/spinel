@@ -2554,7 +2554,7 @@ int program_has_arysub(Compiler *c);
 int program_has_timesub(Compiler *c);   /* codegen.c: some class is a Time subclass (sp_timesub_copy) */
 int program_has_strsub(Compiler *c);   /* a class of the program that subclasses String */
 void emit_obj_switch_key(Compiler *c, int tv, Buf *b);   /* codegen.c: a class switch's key, Array subclasses included */
-void emit_poly_str_guard(Compiler *c, int tv, const char *name, Buf *b);   /* codegen.c: the String arm's test, a String subclass with its own method left to the switch */
+void emit_str_kind_test(Compiler *c, const char *name, StrOwnVis vis, Buf *b, const char *vfmt, ...) __attribute__((format(printf, 5, 6)));   /* codegen.c: the test that the boxed value named by the printf-formatted C text is a String, a String subclass with its own `name` left to the class switch */
 void emit_arysub_machinery(Compiler *c, Buf *b);
 /* a call Array answers on an Array subclass instance (#7449), as an
    expression or as a statement (codegen_call_array.c) */

@@ -2853,9 +2853,9 @@ int comp_arysub_reopen(Compiler *c, int cid) {
 /* The String subclasses whose instances answer `name` with a public method
    or reader of their own, not the String reopen's: a boxed instance is its
    String handle, and the dispatch on `name` keeps it for the class switch
-   (emit_poly_recv_deref, emit_poly_str_guard). Ascending; *n their count.
+   (emit_poly_recv_deref, emit_str_kind_test). Ascending; *n their count.
    The list is kept until the next ask. */
-const int *comp_strsub_own_classes(Compiler *c, const char *name, int *n) {
+const int *comp_strsub_own_classes(Compiler *c, const char *name, StrOwnVis vis, int *n) {
   static int *ks; static int cap;
   int cnt = 0;
   mtab_enter(c);   /* (the candidate owner of the String subclasses that answer name: no call's question) */
@@ -2864,7 +2864,7 @@ const int *comp_strsub_own_classes(Compiler *c, const char *name, int *n) {
     int dc = -1, ro = comp_arysub_reopen(c, k);
     if (!((comp_method_in_chain(c, k, name, &dc) >= 0 && (ro < 0 || dc != ro)) ||
           comp_reader_in_chain(c, k, name, NULL))) continue;
-    if (comp_method_vis_in_chain(c, k, name) != SP_VIS_PUBLIC) continue;
+    if (vis == STROWN_PUBLIC && comp_method_vis_in_chain(c, k, name) != SP_VIS_PUBLIC) continue;
     if (cnt == cap) {
       cap = cap ? cap * 2 : 8;
       ks = realloc(ks, sizeof(int) * (size_t)cap);

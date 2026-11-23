@@ -3751,6 +3751,7 @@ static int masgn_to_ary_call(NodeTable *nt, int v) {
   if (tp < 0) return -1;
   nt_node_set_ref(nt, tp, "receiver", v);
   nt_node_set_str(nt, tp, "name", "to_ary");
+  nt_node_set_int(nt, tp, "masgn_conv", 1);   /* (a nil answer keeps the value: the destructure reads it) */
   nt_set_ignore_visibility(nt, tp, 1);
   nt_set_safe_nav(nt, tp, 1);
   nt_node_set_ref(nt, tp, "arguments", -1);
@@ -3800,11 +3801,31 @@ static int masgn_to_ary_read(NodeTable *nt, const char *name) {
 /* ...where the assignment's own value is read: it answers the object, not
    the Array, so masgn id becomes `(<the assignment> = (t = obj)&.to_ary;
    t)` on a temp (masgn_to_ary_move) */
-static int masgn_to_ary_kept(Compiler *c, NodeTable *nt, int id, int value) {
+/* `(t = v; t&.to_ary)`: the value held in the temp once, the conversion read
+   from it, so the destructure that keeps the value where to_ary answers nil
+   reads the temp, never runs the value's code again */
+static int masgn_to_ary_held(Compiler *c, NodeTable *nt, int id, const char *name, int v) {
+  int tw = nt_new_node(nt, "LocalVariableWriteNode"), rd = masgn_to_ary_read(nt, name);
+  int ts = nt_new_node(nt, "StatementsNode"), tpar = nt_new_node(nt, "ParenthesesNode");
+  int call = rd >= 0 ? masgn_to_ary_call(nt, rd) : -1;
+  if (tw < 0 || ts < 0 || tpar < 0 || call < 0) return -1;
+  nt_node_set_str(nt, tw, "name", name);
+  nt_node_set_ref(nt, tw, "value", v);
+  int both[2] = { tw, call };
+  nt_node_set_arr(nt, ts, "body", both, 2);
+  nt_node_set_ref(nt, tpar, "body", ts);
+  scope_local_intern(comp_scope_of(c, id), name);
+  return tpar;
+}
+static int masgn_to_ary_kept(Compiler *c, NodeTable *nt, int id, int value, int hold) {
   char tname[48];
   snprintf(tname, sizeof tname, "__mta_%s", comp_node_tag(c, id));
-  int tpar = masgn_to_ary_temp(c, nt, id, tname, value), tr2 = masgn_to_ary_read(nt, tname);
-  int tp = tpar >= 0 ? masgn_to_ary_call(nt, tpar) : -1;
+  int tr2 = masgn_to_ary_read(nt, tname), tp;
+  if (hold) tp = masgn_to_ary_held(c, nt, id, tname, value);
+  else {
+    int tpar = masgn_to_ary_temp(c, nt, id, tname, value);
+    tp = tpar >= 0 ? masgn_to_ary_call(nt, tpar) : -1;
+  }
   return tr2 >= 0 && tp >= 0 && masgn_to_ary_move(nt, id, tp, tr2);
 }
 /* May an element of the Array a to_ary answers be an object that
@@ -3890,7 +3911,7 @@ int desugar_masgn_to_ary(Compiler *c) {
   int changed = 0, n0 = nt->count;
   for (int id = comp_kind_first(c, NK_MultiWriteNode); id >= 0 && id < n0; id = comp_kind_next(c, id)) {
     if (nt_kind(nt, id) != NK_MultiWriteNode) continue;
-    int value = nt_ref(nt, id, "value"), base = nt->count, did = 0, tp, mi;
+    int value = nt_ref(nt, id, "value"), base = nt->count, did = 0, tp, mi, hold = 0;
     if (value < 0) continue;
     if (masgn_tuple_rhs(nt, value)) {
       int en = 0;
@@ -3902,10 +3923,12 @@ int desugar_masgn_to_ary(Compiler *c) {
       if (did && !an_node_dropped(c, id)) did = masgn_to_ary_nested_kept(c, nt, id, value, orig, en);
       free(orig);
     }
-    else if (nt_kind(nt, value) != NK_ArrayNode && (mi = cplan_typed_to_ary(c, infer_type(c, value), id, value, NULL)) >= 0 &&
+    else if (nt_kind(nt, value) != NK_ArrayNode && (mi = cplan_typed_to_ary_held(c, infer_type(c, value), id, value, NULL, &hold)) >= 0 &&
              !(masgn_nests(nt, id) && masgn_element_may_convert(c, id, ty_array_elem(c->scopes[mi].ret)))) {
-      if (!an_node_dropped(c, id)) did = masgn_to_ary_kept(c, nt, id, value);
-      else if ((tp = masgn_to_ary_call(nt, value)) >= 0) { nt_node_set_ref(nt, id, "value", tp); did = 1; }
+      char hname[48];
+      snprintf(hname, sizeof hname, "__mth_%s", comp_node_tag(c, id));
+      if (!an_node_dropped(c, id)) did = masgn_to_ary_kept(c, nt, id, value, hold);
+      else if ((tp = hold ? masgn_to_ary_held(c, nt, id, hname, value) : masgn_to_ary_call(nt, value)) >= 0) { nt_node_set_ref(nt, id, "value", tp); did = 1; }
     }
     if (!did) continue;
     if (nt_kind(nt, id) == NK_MultiWriteNode) nt_node_set_int(nt, id, "masgn_ev", 0);
@@ -22486,6 +22509,24 @@ static int bs_bind_static(BsB *b, const BsShape *s, const char *const *args, int
   return n;
 }
 
+/* The conversion of the value `arg` names, as an assignment takes it apart
+   (`*t = value`: through its own to_ary, the value itself where it has
+   none), into the local `ary`: one write to out[] */
+static int bs_bind_conv(BsB *b, const char *arg, const char *ary, int *out) {
+  NodeTable *nt = b->nt;
+  int mw = bs_new(b, "MultiWriteNode"), sp = bs_new(b, "SplatNode"), tg = bs_new(b, "LocalVariableTargetNode");
+  if (mw < 0 || sp < 0 || tg < 0) return 0;
+  nt_node_set_str(nt, tg, "name", ary);
+  nt_node_set_int(nt, tg, "depth", 0);
+  nt_node_set_ref(nt, sp, "expression", tg);
+  nt_node_set_arr(nt, mw, "lefts", NULL, 0);
+  nt_node_set_arr(nt, mw, "rights", NULL, 0);
+  nt_node_set_ref(nt, mw, "rest", sp);
+  nt_node_set_ref(nt, mw, "value", bs_read(b, arg));
+  out[0] = mw;
+  return 1;
+}
+
 /* The same distribution over the elements of the Array `ary`, whose length
    is known only at run time. */
 static int bs_bind_dynamic(BsB *b, const BsShape *s, const char *ary, int copy_defaults, int *out) {
@@ -23010,7 +23051,13 @@ int desugar_builtin_iter_block_shapes(Compiler *c) {
       pnames[i] = numbered ? numbered_param_name(c, bp, i) : nt_str(nt, s.pre[i], "name");
     int extras = plain && !via_enum && nospread && s.P <= 12 &&
                  bs_extras_read(c, blk, pnames, s.P, hash_pair ? 2 : m, nm, argc);
-    if (plain && !extras && (m != 1 || s.P < 2 || hash_pair || via_enum || bs_spreads(nm, s.P))) continue;
+    /* a lone element of a kind the program's to_ary converts (a String the
+       program reopens) is taken apart by it, as an assignment takes its
+       value (cplan_typed_to_ary): the parameters bind from `*t = element` */
+    int conv = m == 1 && !hash_pair && !via_enum && s.P + s.O + s.Q <= 12 && bs_spreads(nm, s.P) &&
+               block_auto_splats(s.P, s.O, s.Q, s.rest >= 0) && cplan_value_to_ary(c, elem) &&
+               (!numbered || plain);
+    if (plain && !extras && !conv && (m != 1 || s.P < 2 || hash_pair || via_enum || bs_spreads(nm, s.P))) continue;
     bad = s.P + s.O + s.Q > 12;
     for (int i = 0; i < s.P && !numbered; i++) if (nt_kind(nt, s.pre[i]) != NK_RequiredParameterNode) bad = 1;
     for (int i = 0; i < s.Q; i++) if (nt_kind(nt, s.post[i]) != NK_RequiredParameterNode) bad = 1;
@@ -23035,8 +23082,8 @@ int desugar_builtin_iter_block_shapes(Compiler *c) {
          values past them, which every emitter does */
       int rest_bound = !(rn && *rn) || bs_binds_rest(rt, nm, argc);
       if (s.O == 0 && s.Q == 0 && !splat && m != 1 && !ty_is_hash(rt) && !via_enum && rest_bound && !extras) continue;
-      if (s.O == 0 && s.Q == 0 && splat && !hash_pair && !dyn && rest_bound && !extras) continue; }
-    if (plain && !dyn && !extras) continue;
+      if (s.O == 0 && s.Q == 0 && splat && !hash_pair && !dyn && rest_bound && !extras && !conv) continue; }
+    if (plain && !dyn && !extras && !conv) continue;
 
     BsB b = { nt, 1, blk };
     int base = nt->count;
@@ -23055,7 +23102,13 @@ int desugar_builtin_iter_block_shapes(Compiler *c) {
       if (reqs[k] >= 0) nt_node_set_str(nt, reqs[k], "name", argn[k]);
     }
     int pro[32]; int np = 0;
-    if (dyn == 0) np = bs_bind_static(&b, &s, argn, m, 0, pro);
+    char cname[64];
+    snprintf(cname, sizeof cname, "__bsc_%s", comp_node_tag(c, blk));
+    if (conv) {
+      np = bs_bind_conv(&b, argn[0], cname, pro);
+      np += bs_bind_dynamic(&b, &s, cname, 0, pro + np);
+    }
+    else if (dyn == 0) np = bs_bind_static(&b, &s, argn, m, 0, pro);
     else if (dyn == 1) np = bs_bind_dynamic(&b, &s, argn[0], 0, pro);
     else {
       int dw[16], sw[16];
@@ -23088,6 +23141,7 @@ int desugar_builtin_iter_block_shapes(Compiler *c) {
       LocalVar *lv = scope_local_intern(bs, argn[k]);
       if (lv) lv->is_block_param = 1;
     }
+    if (conv) scope_local_intern(bs, cname);
     /* the original names are plain locals now, and one nothing reads still
        needs its slot for the prologue's write */
     for (int i = 0; i < s.P; i++) scope_local_intern(bs, nt_str(nt, s.pre[i], "name"));

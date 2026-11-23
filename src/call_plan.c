@@ -12450,7 +12450,7 @@ static int cplan_nil_ivar_tested(Compiler *c, int r, TyKind rt, const char *nm) 
 static int cplan_block_conv_builtin(Compiler *c) {
   if (!c->block_arg_conv)
     c->block_arg_conv = an_name_binder_free(c, "to_proc") && an_name_binder_free(c, "respond_to?") &&
-                        an_name_binder_free(c, "respond_to_missing?") ? 1 : 2;
+                        an_name_binder_free(c, RESPOND_TO_MISSING_NAME) ? 1 : 2;
   return c->block_arg_conv == 1;
 }
 /* The class CRuby's TypeError names ("no implicit conversion of X into

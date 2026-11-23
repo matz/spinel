@@ -11241,7 +11241,7 @@ const char *const *object_private_method_names(void);   /* codegen_call.c */
 static int bam_poly_may_lack(Compiler *c, const char *sym) {
   const char *const *priv = object_private_method_names();
   for (int u = 0; priv[u]; u++) if (sp_streq(priv[u], sym)) return 0;
-  if (!an_name_binder_free(c, sym) || !an_name_binder_free(c, "respond_to_missing?")) return 0;
+  if (!an_name_binder_free(c, sym) || !an_name_binder_free(c, RESPOND_TO_MISSING_NAME)) return 0;
   /* (any feature a require loads, resolved or not read; a core library
      the program's start loads is read, and its defs are in the binder facts) */
   if (sp_requires_non_boot_feature() || g_require_unread) return 0;

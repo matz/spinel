@@ -7352,7 +7352,7 @@ int respond_to_missing_defined(Compiler *c) {
   unsigned tgen = comp_table_gen, shape = comp_class_shape_gen();
   if (!c->rtm_memo.ans || c->rtm_memo.count != nt->count || c->rtm_memo.version != nt->version || c->rtm_memo.edits != nt->edits ||
       c->rtm_memo.tgen != tgen || c->rtm_memo.shape != shape || c->rtm_memo.ncls != c->nclasses) {
-    int ans = 1 + !an_name_binder_free(c, "respond_to_missing?");
+    int ans = 1 + !an_name_binder_free(c, RESPOND_TO_MISSING_NAME);
     c->rtm_memo.ans = ans; c->rtm_memo.count = nt->count; c->rtm_memo.ncls = c->nclasses; c->rtm_memo.version = nt->version;
     c->rtm_memo.tgen = tgen; c->rtm_memo.shape = shape; c->rtm_memo.edits = nt->edits;
   }

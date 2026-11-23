@@ -3242,16 +3242,11 @@ static int lr_body_def_vis(Compiler *c, const int *par, int n, int d, int sg) {
 static int lr_body_def_public(Compiler *c, const int *par, int n, int d, int sg) {
   return lr_body_def_vis(c, par, n, d, sg) == BVIS_PUBLIC;
 }
-/* ...is def node d an instance method CRuby makes private whatever word is
-   around it (initialize and its kin)? */
-static int lr_body_def_kin(const NodeTable *nt, int d, int sg) {
-  return lr_kin_name(nt_str(nt, d, "name"), sg);
-}
 /* The program's entries, by name, that bar a body's version of the name
    (lr_body_def_version): the ones the call plan cannot answer as versions
    next to a body's version. Anywhere in the program, a body or the top
    level, any class, either side: initialize and its kin
-   (lr_body_def_kin), a def, an alias or an undef that lands on main
+   (lr_kin_name), a def, an alias or an undef that lands on main
    (lr_frame_main: Object's private method, whatever word takes it), the
    names a visibility word takes (on self) that is no body's version (one
    at the top level, one with a name only the run spells, module_function,
@@ -3860,13 +3855,13 @@ static int lr_body_call_barred(Compiler *c, const int *par, int n, int node, LrB
       lr_body_def_vis(c, par, n, node, sg) != BVIS_PUBLIC ||
       (!sg && x->osg))
     return 1;
-  if (sg) return 0;
+  if (sg) return 0;   /* (before the memo, which is of a node's instance side) */
   LoadRecord *r = c->lrec;
   if (r->ipn_node != node + 1) {
     const char *cn;
     r->ipn_any = 0;
     for (int k = 0; !r->ipn_any && (cn = elab_call_form_name(c->nt, node, k, b, sizeof b, NULL)); k++)
-      r->ipn_any = is_implicitly_private_name(cn);
+      r->ipn_any = lr_kin_name(cn, sg);
     r->ipn_node = node + 1;
   }
   return r->ipn_any;
@@ -3910,7 +3905,7 @@ static int lr_bform_bars(Compiler *c, const int *par, int n, int id, LrBodyNames
   if (lr_body_call(c, id) >= 0 && lr_body_around(nt, par, n, id) >= 0 && !lr_body_call_barred(c, par, n, id, x)) return 0;
   if (k != NK_DefNode) return 1;
   int dr = nt_ref(nt, id, "receiver");
-  return lr_body_def_kin(nt, id, dr >= 0) ||
+  return lr_kin_name(nt_str(nt, id, "name"), dr >= 0) ||
          ((dr < 0 || nt_kind(nt, dr) == NK_SelfNode) && !nt_int(nt, id, "kernel_def", 0) && lr_frame_main(nt, par, n, id)) ||
          (lr_body_around(nt, par, n, id) >= 0 && !lr_body_def_public(c, par, n, id, dr >= 0) && lr_body_def_barred(c, par, n, id, x));
 }
@@ -4018,7 +4013,7 @@ static void lr_body_forms(Compiler *c, const int *par, int n) {
    the presence readers, respond_to?, method_defined? and the list readers,
    the hooks), skipping the entries that are no version (lr_is_version).
    So the def is one of any visibility but initialize and its kin
-   (lr_body_def_kin), whose version holds the visibility it has where it
+   (lr_kin_name), whose version holds the visibility it has where it
    runs (lr_body_def_vis), and the program holds no entry of the name the plan cannot answer next to it
    (lr_body_forms), in any class, on either side, in a body or at the top
    level. Otherwise every entry bodies make of the name keeps the form it
@@ -4052,7 +4047,7 @@ static int lr_body_def_version(Compiler *c, const int *par, int n, int d, int sg
   }
   const char *name = nt_str(nt, d, "name");
   int a = d < n ? par[d] : -1, w = a >= 0 && nt_kind(nt, a) == NK_ArgumentsNode ? par[a] : -1;
-  return name && !lr_body_def_kin(nt, d, sg) && lr_body_name_free(c, par, n, name, w);
+  return name && !lr_kin_name(name, sg) && lr_body_name_free(c, par, n, name, w);
 }
 /* ...is name one the program makes no entry of that bars a body's version
    of it (lr_body_forms), but node own's (a def's word: a barred

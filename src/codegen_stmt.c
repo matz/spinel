@@ -15538,7 +15538,9 @@ void emit_rescue(Compiler *c, int id, Buf *b, int indent, int fr, const char *re
            its class (or an ancestor) includes M, so expand to the exception
            classes carrying the module. A module nobody includes keeps the
            plain name compare (which, like CRuby, never matches a class). */
-        buf_printf(b, "(strcmp(_rcls_%d, \"%s\") == 0", rc, ename);
+        /* (ename is the constant's name here; GCC cannot tell once the
+           qualified-name map above may keep a buffer of its own) */
+        buf_printf(b, "(strcmp(_rcls_%d, \"%s\") == 0", rc, ename ? ename : "");
         if (uci >= 0) {
           for (int k = 0; k < c->nclasses; k++) {
             if (!class_is_exc_subclass(c, k)) continue;

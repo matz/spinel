@@ -1,0 +1,12 @@
+"title:string"
+"done:bool"
+[:tags]
+4
+4
+{"title" => :string, "done" => :bool}
+[:tags]
+[:tags]
+[:pre, :a, :mid, :b]
+"body:string"
+{"body" => :string}
+{"title" => :string, "done" => :bool}

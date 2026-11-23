@@ -681,7 +681,22 @@ static int ct_exec_call(const NodeTable *nt, CtEnv *e, int call) {
     int def = e->self_macro(e->host, name);
     if (def >= 0) {
       ct_env_relied(e, name);
-      return ct_run_macro(nt, e, call, def);
+      int nfx0 = e->nfx, ok = ct_run_macro(nt, e, call, def), defines = 0, left = 0;
+      for (int i = nfx0; ok && i < e->nfx; i++) {
+        left |= e->fx[i].k == CT_FX_RESIDUAL;
+        defines |= e->fx[i].k != CT_FX_RESIDUAL && e->fx[i].k != CT_FX_LOCAL;
+      }
+      /* A frame that defines nothing and leaves statements as written
+         leaves the call itself as written instead: it runs where the
+         caller's call stands, its arguments the values bound here, and
+         does what CRuby's does (a `declare_attribute(name)` whose method
+         writes the class's state, as a statement the caller can let run) */
+      if (ok && left && !defines) {
+        while (e->nfx > nfx0) ct_fx_clear(&e->fx[--e->nfx]);
+        for (int i = 0; i < e->nrelied; i++) if (e->relied[i].after > nfx0) e->relied[i].after = nfx0;
+        ct_fx_snap(e, ct_fx(e, CT_FX_RESIDUAL, call));
+      }
+      return ok;
     }
   }
   /* attr_* of self or of its singleton class, by names the frame computes */

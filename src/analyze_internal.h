@@ -43,23 +43,6 @@ TyKind ffi_spec_to_ty(const char *spec);
 int ffi_find_func(Compiler *c, const char *mod, const char *name);
 /* `Fiber.new { }`'s block, or -1 */
 int an_fiber_new_block(Compiler *c, int v);
-/* --share-strings: can boxed or untyped receiver r be a String
-   (analyze.c)? `lits` is the asker's: bound() says how a literal block or
-   a lambda of scope `scope` binds variable `name`: 0 not at all, 1 only as
-   Enumerator.new's yielder, 2 another way (analyze_share.c keeps it).
-   ivar(), when set, says whether instance variable `name` (with its `@`)
-   may hold a String, by everything that writes one of that name; the
-   receiver an ivar's read or an attribute reader's call is answers by
-   it. */
-typedef struct PolyLits {
-  int (*bound)(void *ctx, Compiler *c, int scope, const char *name);
-  void *ctx;
-  int (*ivar)(void *ctx, Compiler *c, const char *name);
-} PolyLits;
-int an_recv_may_be_string(Compiler *c, int r, const PolyLits *lits);
-/* Can value v be a String, as an_recv_may_be_string reads a variable's
-   written value (by its type, or its form with `lits`)? */
-int an_value_may_be_string(Compiler *c, int v, const PolyLits *lits);
 int ffi_find_buf(Compiler *c, const char *mod, const char *name);
 int ffi_find_reader(Compiler *c, const char *mod, const char *name);
 int ffi_find_writer(Compiler *c, const char *mod, const char *name);
@@ -636,7 +619,6 @@ int arm_arg_param(Compiler *c, Scope *m);                        /* codegen_fold
 int arg_layout_param_node(Compiler *c, Scope *m, int call, int i, int *spread); /* codegen_fold.c */
 void arg_layout_param_map(Compiler *c, Scope *m, const int *argv, int argc, int *out); /* codegen_fold.c */
 void arg_layout_call_param_map(Compiler *c, Scope *m, int call, int n, int *out, int *spread); /* codegen_fold.c */
-int arg_layout_param_source(Compiler *c, Scope *m, int call, int i, int *spread);
 int zsuper_param_source(Compiler *c, Scope *s, Scope *pm, int j);         /* codegen_fold.c */
 int ty_runs_no_code(TyKind t);  /* codegen_call.c: a builtin reading such a value runs no program code */
 int refl_member_of_struct_superclass(Compiler *c, int ci, const char *m);  /* codegen_call.c */

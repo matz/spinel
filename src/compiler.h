@@ -1880,7 +1880,6 @@ typedef struct {
   unsigned char *bsl_val;
   int bsl_n, bsl_depth;
   unsigned bsl_cur;
-  struct HandleArgTab *share_args; /* final callers, while sealing share facts */
   struct SbArgIndex *sb_args; /* settled parameter sources, built once for storage */
   /* the names the program's global writes assign, as of the node table it
      was made for (analyze_infer.c, gvar_has_write; NULL before the first ask) */

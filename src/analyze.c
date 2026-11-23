@@ -29691,7 +29691,7 @@ typedef struct HandleArgTab {
   int *enext;          /* edge -> next edge for the same scope */
   int *enode;          /* edge -> the call node */
 } HandleArgTab;
-enum { HA_HANDLE = 1, HA_STRING_KNOWN = 2, HA_STRING_POSSIBLE = 4 };
+enum { HA_HANDLE = 1 };
 
 static void handle_arg_tab_init(Compiler *c, HandleArgTab *t) {
   const NodeTable *nt = c->nt;
@@ -29777,16 +29777,8 @@ static int promote_params_stored_in_shared_ivars(Compiler *c,
                                                  const HandleArgTab *hat) {
   const NodeTable *nt = c->nt;
   int changed = 0;
-  /* --share-strings: the one rule decides first (#6765). The facts it
-     builds ask whether a boxed receiver of a String mutator can be a
-     String (an_recv_may_be_string): with the caller table in hand a
-     parameter is bounded by what its callers pass, as it is at the seal,
-     so an accumulator handed down a chain of writers (ffi's `keep`, an
-     Array at every call) is no String's mutation (#8500, #8501). */
-  struct HandleArgTab *sv_args = c->share_args;
-  if (hat && hat->ok) c->share_args = (struct HandleArgTab *)hat;
+  /* --share-strings: the one rule decides first (#6765). */
   changed |= share_default_apply(c);
-  c->share_args = sv_args;
   for (int w = 0; w < nt->count; w++) {
     if (nt_kind(nt, w) != NK_InstanceVariableWriteNode) continue;
     int wv = nt_ref(nt, w, "value");
@@ -30829,15 +30821,9 @@ static int mark_reader_identity_operands(Compiler *c) {
    multiple assignment or an operator write, and a chain deeper than a few
    variables. */
 static int poly_var_may_hold_string(Compiler *c, const HandleArgTab *hat,
-                                    const char *vn, Scope *vs, int depth, const PolyLits *lits);
-static int poly_lit_may_be_string(Compiler *c, const HandleArgTab *hat, int v, int depth, const PolyLits *lits);
-static int poly_value_may_be_string(Compiler *c, const HandleArgTab *hat, int v, int depth, const PolyLits *lits) {
+                                    const char *vn, Scope *vs, int depth);
+static int poly_value_may_be_string(Compiler *c, const HandleArgTab *hat, int v, int depth) {
   const NodeTable *nt = c->nt;
-  if (lits) {
-    v = nt_paren_single(nt, v);
-    int got = v >= 0 ? poly_lit_may_be_string(c, hat, v, depth, lits) : -1;
-    if (got >= 0) return got;
-  }
   if (v < 0) return 1;
   TyKind t = comp_ntype(c, v);
   if (t == TY_UNKNOWN) t = infer_type(c, v);
@@ -30846,70 +30832,30 @@ static int poly_value_may_be_string(Compiler *c, const HandleArgTab *hat, int v,
   if (nt_kind(nt, v) != NK_LocalVariableReadNode) return 1;
   const char *rn = nt_str(nt, v, "name");
   Scope *rs = rn ? comp_scope_of(c, v) : NULL;
-  return !rs || poly_var_may_hold_string(c, hat, rn, rs, depth + 1, lits);
-}
-/* With `lits` (the share facts' question, an_recv_may_be_string, and
-   their index of the variables literal blocks bind), a value is also read
-   by its form (poly_lit_may_be_string): a literal of another
-   class is no String whatever its type settled as (an untyped method's
-   `acc = []`), and a conditional is one of its arms (`c ? [0] : 1`). The
-   lifts ask without it, and their answers and C stay as they were. The
-   arms are read through the iterator: an arm's last statement, through an
-   `else` and parentheses, and a missing arm answers nil. */
-typedef struct { Compiler *c; const HandleArgTab *hat; int depth; const PolyLits *lits; } PolyArms;
-static int poly_arm_may_be_string(const VpLeaf *lf, void *ud) {
-  const PolyArms *a = ud;
-  if (lf->kind == VPK_NIL) return 0;
-  if (lf->kind == VPK_GAVE_UP) return 1;
-  return poly_value_may_be_string(a->c, a->hat, lf->node, a->depth, a->lits);
-}
-/* 0 or 1 for a literal or a conditional, -1 for any other form */
-static int poly_lit_may_be_string(Compiler *c, const HandleArgTab *hat, int v, int depth, const PolyLits *lits) {
-  const NodeTable *nt = c->nt;
-  switch (nt_kind(nt, v)) {
-  case NK_ArrayNode: case NK_HashNode: case NK_IntegerNode: case NK_FloatNode: case NK_SymbolNode:
-  case NK_NilNode: case NK_TrueNode: case NK_FalseNode: case NK_RangeNode: case NK_LambdaNode:
-  case NK_RegularExpressionNode:
-    return 0;
-  case NK_IfNode: case NK_UnlessNode: case NK_OrNode: case NK_AndNode: {
-    PolyArms a = { c, hat, depth, lits };
-    return for_each_value_position(nt, v, VP_AND_LEFT | VPS_IF | VPS_UNLESS | VPS_LOGIC, poly_arm_may_be_string, &a);
-  }
-  default:
-    return -1;
-  }
+  return !rs || poly_var_may_hold_string(c, hat, rn, rs, depth + 1);
 }
 static int poly_var_may_hold_string(Compiler *c, const HandleArgTab *hat,
-                                    const char *vn, Scope *vs, int depth, const PolyLits *lits) {
+                                    const char *vn, Scope *vs, int depth) {
   const NodeTable *nt = c->nt;
   LocalVar *lv = vn && vs ? scope_local(vs, vn) : NULL;
-  /* with `lits`, how a block or a lambda binds it (PolyLits.bound): one
-     bound only as Enumerator.new's yielder is no String */
-  int bound = lv && lits && !lv->is_param ? lits->bound(lits->ctx, c, (int)(vs - c->scopes), vn) : 0;
-  if (!lv || (!lits && depth > 4) || lv->is_cell || (lv->is_block_param && bound != 1) || bound == 2) return 1;
+  if (!lv || depth > 4 || lv->is_cell || lv->is_block_param) return 1;
   /* a variable already being asked about further up the chain (a method
      handing its parameter to itself) adds no value of its own */
   static LocalVar *asking[10];
   for (int k = 0; k < depth && k < 10; k++) if (asking[k] == lv) return 0;
-  /* With literals, recognize a cycle before the conservative depth limit,
-     which is deeper than the lifts': an accumulator handed down a chain of
-     writers (ffi's `keep`, through six methods) is still an Array at its end */
-  if (depth > 8) return 1;
   asking[depth] = lv;
   int si = (int)(vs - c->scopes);
   if (lv->is_param) {
     int pj = an_param_idx(vs, vn);
     if (pj < 0 || !hat || !hat->ok || !vs->name) return 1;
     if (vs->pdefault && vs->pdefault[pj] >= 0 &&
-        poly_value_may_be_string(c, hat, vs->pdefault[pj], depth, lits)) return 1;
+        poly_value_may_be_string(c, hat, vs->pdefault[pj], depth)) return 1;
     for (int e = hat->head[si]; e >= 0; e = hat->enext[e]) {
       int sp = -1;
-      int a = lits ? arg_layout_param_source(c, vs, hat->enode[e], pj, &sp)
-                   : arg_layout_param_node(c, vs, hat->enode[e], pj, &sp);
-      if (a < 0 || sp >= 0 || poly_value_may_be_string(c, hat, a, depth, lits)) return 1;
+      int a = arg_layout_param_node(c, vs, hat->enode[e], pj, &sp);
+      if (a < 0 || sp >= 0 || poly_value_may_be_string(c, hat, a, depth)) return 1;
     }
   }
-  int seen = 0;
   for (int w = comp_lvw_first_sc(c, si, vn); w >= 0; w = comp_lvw_next_sc(c, w)) {
     if (comp_scope_of(c, w) != vs) continue;
     const char *wn = nt_str(nt, w, "name");
@@ -30917,12 +30863,9 @@ static int poly_var_may_hold_string(Compiler *c, const HandleArgTab *hat,
     NodeKind wk = nt_kind(nt, w);
     if (wk != NK_LocalVariableWriteNode && wk != NK_LocalVariableOrWriteNode &&
         wk != NK_LocalVariableAndWriteNode) return 1;
-    if (poly_value_may_be_string(c, hat, nt_ref(nt, w, "value"), depth, lits)) return 1;
-    seen = 1;
+    if (poly_value_may_be_string(c, hat, nt_ref(nt, w, "value"), depth)) return 1;
   }
-  /* with `lits`, a variable no write or yielder binds is bound some other
-     way */
-  return lits && !lv->is_param && !seen && bound != 1;
+  return 0;
 }
 
 /* Drop the rule's lifts of a variable that cannot hold a String: the final
@@ -30940,109 +30883,12 @@ static void strbuf_reconcile_lifted_reads(Compiler *c, const HandleArgTab *hat) 
         int r = comp_vsite_var(c, e);
         if (nt_kind(nt, r) != NK_LocalVariableReadNode || comp_scope_of(c, r) != s ||
             !sp_streq(nt_str(nt, r, "name"), vn) || !comp_poly_strbuf_lift_stored(c, r)) continue;
-        if (may_str < 0) may_str = poly_var_may_hold_string(c, hat, vn, s, 0, NULL);
+        if (may_str < 0) may_str = poly_var_may_hold_string(c, hat, vn, s, 0);
         if (may_str) break;
         comp_mark_poly_strbuf_lift(c, r, 0);
       }
     }
   }
-}
-
-/* The instance variable receiver r reads, as its node names it (with the
-   `@`), or NULL: an ivar's read, or an argument-less call on the current
-   instance or on a receiver of a known class that every class it can be --
-   the class and each subclass, which a singleton method or an extended
-   module also makes -- answers with one and the same reader: an attribute
-   reader, or a method with no `return` whose value is an ivar's read or
-   its memo (`def x = @x`, `@x ||= v`). A Struct's or a Data's member is set by its
-   constructor, not by a write, and a native class's attribute is its
-   binding's, so neither is one; nor is a module's self, which any
-   includer's own method may answer. The name is left in buf; one that
-   does not fit is no answer (NULL). */
-static const char *poly_recv_ivar(Compiler *c, int r, char *buf, size_t cap) {
-  const NodeTable *nt = c->nt;
-  NodeKind k = nt_kind(nt, r);
-  if (k == NK_InstanceVariableReadNode) {
-    int cid = comp_ivar_owner(c, r);
-    const char *in = nt_str(nt, r, "name");
-    if (!in || cid < 0 || cid >= c->nclasses || c->classes[cid].is_struct || c->classes[cid].is_data ||
-        c->classes[cid].is_native_class) return NULL;
-    return snprintf(buf, cap, "%s", in) < (int)cap ? buf : NULL;
-  }
-  const char *nm = nt_str(nt, r, "name");
-  if (k != NK_CallNode || !nm || nt_ref(nt, r, "arguments") >= 0 || nt_ref(nt, r, "block") >= 0) return NULL;
-  int recv = nt_paren_single(nt, nt_ref(nt, r, "receiver")), cid = -1;
-  if (recv < 0 || nt_kind(nt, recv) == NK_SelfNode) {
-    Scope *s = comp_scope_of(c, r);
-    if (!s || s->is_cmethod) return NULL;
-    cid = s->class_id;
-  }
-  else if (ty_is_object(comp_ntype(c, recv))) cid = ty_object_class(comp_ntype(c, recv));
-  if (cid < 0 || cid >= c->nclasses || comp_class_is_module(c, &c->classes[cid])) return NULL;
-  /* A subclass's alias can name another attribute of the same class
-     (`alias_method :x, :y` under the class of both readers): the reader is
-     the defining class's either way, so the attribute each class reads is
-     compared by the name its aliases resolve to. */
-  const char *an = comp_resolve_alias(c, cid, nm);
-  int attr = 0, dc = -1, mi = -1;
-  for (int j = 0; j < c->nclasses; j++) {
-    int a = j;
-    while (a >= 0 && a != cid) a = c->classes[a].parent;
-    if (a != cid) continue;
-    MethodLookup jml = { .def_class = -1 };
-    int jm = call_target(c, -1, j, nm, 0, &jml);
-    int jd = jml.def_class, jattr = jml.kind == ML_ATTR;
-    if ((jm < 0 && !jattr) || jd < 0 || jd >= c->nclasses) return NULL;
-    if (j == cid) { attr = jattr; dc = jd; mi = jm; }
-    else if (jattr != attr || jd != dc || (!jattr && jm != mi) ||
-             (jattr && !sp_streq(comp_resolve_alias(c, j, nm), an))) return NULL;
-  }
-  if (dc < 0 || c->classes[dc].is_struct || c->classes[dc].is_data || c->classes[dc].is_native_class)
-    return NULL;
-  if (attr)
-    return snprintf(buf, cap, "@%s", an) < (int)cap ? buf : NULL;
-  /* (a `return` elsewhere in the method answers another value) */
-  if (mi < 0 || mi >= c->nscopes || comp_ret_first(c, mi) >= 0) return NULL;
-  const char *ivn = an_memo_reader_ivar(c, mi);
-  int last = scope_body_last(c, mi);
-  if (!ivn && last >= 0 && nt_kind(nt, last) == NK_InstanceVariableReadNode) ivn = nt_str(nt, last, "name");
-  if (!ivn) return NULL;
-  return snprintf(buf, cap, "%s", ivn) < (int)cap ? buf : NULL;
-}
-
-int an_value_may_be_string(Compiler *c, int v, const PolyLits *lits) {
-  return poly_value_may_be_string(c, lits ? c->share_args : NULL, v, 0, lits);
-}
-
-/* --share-strings (#6765): can receiver r, a boxed or untyped value, be a
-   String? A variable answers by its values (poly_var_may_hold_string), a
-   literal or a conditional by its form, an instance variable's read or an
-   attribute reader's call by what is written to the ivar (PolyLits.ivar,
-   poly_recv_ivar); a parameter, a block's parameter, a captured local and
-   any other value may be one. At seal, the final caller table also bounds
-   parameters, using the same argument walk. */
-int an_recv_may_be_string(Compiler *c, int r, const PolyLits *lits) {
-  const NodeTable *nt = c->nt;
-  r = nt_paren_single(nt, r);
-  if (r < 0) return 1;
-  if (nt_kind(nt, r) != NK_LocalVariableReadNode) {
-    char ivb[300];
-    const char *iv = lits && lits->ivar ? poly_recv_ivar(c, r, ivb, sizeof ivb) : NULL;
-    if (iv) return lits->ivar(lits->ctx, c, iv);
-    return poly_lit_may_be_string(c, lits ? c->share_args : NULL, r, 0, lits) != 0;
-  }
-  const char *vn = nt_str(nt, r, "name");
-  Scope *vs = vn ? comp_scope_of(c, r) : NULL;
-  const HandleArgTab *hat = lits ? c->share_args : NULL;
-  int pj = hat && hat->ok && vs ? an_param_idx(vs, vn) : -1;
-  unsigned char *memo = pj >= 0 && hat->off[vs - c->scopes] >= 0
-                         ? &hat->bit[hat->off[vs - c->scopes] + pj] : NULL;
-  if (memo && (*memo & HA_STRING_KNOWN)) return (*memo & HA_STRING_POSSIBLE) != 0;
-  /* Only a completed outer query is cached: a nested cycle's no-value
-     answer depends on the callers still being visited above it. */
-  int may = !vs || poly_var_may_hold_string(c, hat, vn, vs, 0, lits);
-  if (memo) *memo |= HA_STRING_KNOWN | (may ? HA_STRING_POSSIBLE : 0);
-  return may;
 }
 
 /* Is POLY variable `vn` of scope `vs` appended to in place: the receiver of
@@ -31150,7 +30996,7 @@ static int lift_poly_read(Compiler *c, const HandleArgTab *hat, SbMutTab *lifted
   const char *vn = nt_str(nt, a, "name");
   Scope *vs = vn ? comp_scope_of(c, a) : NULL;
   LocalVar *lv = vs ? scope_local(vs, vn) : NULL;
-  if (!lv || lv->type != TY_POLY || !poly_var_may_hold_string(c, hat, vn, vs, 0,NULL)) return 0;
+  if (!lv || lv->type != TY_POLY || !poly_var_may_hold_string(c, hat, vn, vs, 0)) return 0;
   comp_mark_poly_strbuf_lift(c, a, 1);
   if (lifted) sb_mut_tab_note(lifted, vn, (int)(vs - c->scopes), 1);
   if (lv->is_param && !lv->is_block_param && an_param_idx(vs, vn) >= 0)
@@ -31196,7 +31042,7 @@ static int boxed_to_s_fresh(Compiler *c, int a) {
 static int boxed_to_s_arg_ok(Compiler *c, const HandleArgTab *hat, int a, int ivar_depth);
 /* A write's value: fresh, or no String */
 static int boxed_to_s_value_ok(Compiler *c, const HandleArgTab *hat, int v) {
-  return v >= 0 && (boxed_to_s_fresh(c, v) || !poly_value_may_be_string(c, hat, v, 0, NULL));
+  return v >= 0 && (boxed_to_s_fresh(c, v) || !poly_value_may_be_string(c, hat, v, 0));
 }
 static int boxed_to_s_arg_ok(Compiler *c, const HandleArgTab *hat, int a, int ivar_depth) {
   const NodeTable *nt = c->nt;
@@ -31500,7 +31346,7 @@ static int pull_args_into_handle_params(Compiler *c,
              much as one it appends to itself, so its callers are pulled in
              on the next round (poly_lift). */
           if (alv && alv->type == TY_POLY) {
-            if (comp_poly_strbuf_lift_stored(c, an2) || !poly_var_may_hold_string(c, hat, vn2, vs2, 0,NULL)) continue;
+            if (comp_poly_strbuf_lift_stored(c, an2) || !poly_var_may_hold_string(c, hat, vn2, vs2, 0)) continue;
             comp_mark_poly_strbuf_lift(c, an2, 1); changed = 1;
             if (alv->is_param && !alv->is_block_param && an_param_idx(vs2, vn2) >= 0 &&
                 !(alv->poly_lift & POLY_LIFT_APPENDED)) {
@@ -31613,7 +31459,7 @@ static int pull_args_into_handle_params(Compiler *c,
           const char *vn3 = pass ? (pi >= 0 ? s->pnames[pi] : NULL) : (an >= 0 ? nt_str(nt, an, "name") : NULL);
           Scope *vs3 = pass ? s : (an >= 0 ? comp_scope_of(c, an) : NULL);
           LocalVar *v3 = vn3 && vs3 ? scope_local(vs3, vn3) : NULL;
-          if (v3 && v3->type == TY_POLY && poly_var_may_hold_string(c, hat, vn3, vs3, 0,NULL)) {
+          if (v3 && v3->type == TY_POLY && poly_var_may_hold_string(c, hat, vn3, vs3, 0)) {
             if (!pass && !comp_poly_strbuf_lift_stored(c, an)) { comp_mark_poly_strbuf_lift(c, an, 1); changed = 1; }
             if (pass && v3->is_param && !(v3->poly_lift & POLY_LIFT_ZSUPER)) {
               v3->poly_lift |= POLY_LIFT_ZSUPER; changed = 1;
@@ -33988,7 +33834,7 @@ static int dyn_lift_poly_arg(Compiler *c, int n, int k, int a) {
   Scope *vs = vn ? comp_scope_of(c, a) : NULL;
   LocalVar *lv = vs ? scope_local(vs, vn) : NULL;
   if (!lv || lv->type != TY_POLY || comp_poly_strbuf_lift_stored(c, a)) return 0;
-  if (!poly_var_may_hold_string(c, NULL, vn, vs, 0,NULL)) return 0;
+  if (!poly_var_may_hold_string(c, NULL, vn, vs, 0)) return 0;
   DynReach r; memset(&r, 0, sizeof r);
   dyn_reach_value(c, nt_ref(nt, n, "receiver"), k, 0, &r);
   if (r.unlifted) return 0;
@@ -35258,7 +35104,7 @@ static int spread_lift_poly_elems(Compiler *c, const int *av, int ac, int past) 
       const char *vn = nt_str(nt, a, "name");
       Scope *vs = vn ? comp_scope_of(c, a) : NULL;
       LocalVar *lv = vs ? scope_local(vs, vn) : NULL;
-      if (!lv || lv->type != TY_POLY || lv->is_block_param || !poly_var_may_hold_string(c, NULL, vn, vs, 0,NULL)) continue;
+      if (!lv || lv->type != TY_POLY || lv->is_block_param || !poly_var_may_hold_string(c, NULL, vn, vs, 0)) continue;
       if (!comp_poly_strbuf_lift_stored(c, a)) { comp_mark_poly_strbuf_lift(c, a, 1); changed = 1; }
       /* the method's own POLY parameter, or one a local is written from
          (`v = x`): its box is the caller's, so it pulls its callers in */
@@ -57837,11 +57683,7 @@ void analyze_program(Compiler *c) {
   /* Identity operands can ask the settled call-return fact now. */
   AN_STEP_V("mark_reader_identity_operands", mark_reader_identity_operands(c));
   /* the representation flags are final from here (repr.h) */
-  /* The final share query sees every caller without rebuilding per receiver. */
-  HandleArgTab hat;
-  { handle_arg_tab_init(c, &hat); c->share_args = &hat; }
   repr_seal(c);
-  { c->share_args = NULL; handle_arg_tab_free(&hat); }
   /* no pass between the record's phase and the seal moved its inputs */
   order_facts_check(c);
   /* the block bodies codegen types per arm, typed here once (#7483) */

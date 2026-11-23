@@ -45,11 +45,6 @@ typedef struct ShareFacts {
   int ndyn, cdyn, dyn_all;
   int ostruct;         /* the program names OpenStruct, whose fields a poly
                           receiver's call may read */
-  struct ShNamed { const char *name; int k, yielder; } *blkp;
-  /* the block parameters by name: a literal block's and a lambda's, with
-     the method that yields to them or Enumerator.new's yielder; built on
-     first use (sh_blk_bound) */
-  int nblkp, cblkp, blkp_built;
 } ShareFacts;
 
 /* Can a value of type t hold a String, or a container of them? An object's
@@ -131,7 +126,6 @@ static void sh_block_value_to(ShareFacts *F, Compiler *c, int n, int blk, int mi
   else F->blk_unk[mi] = 1;
 }
 
-static int sh_named_first(const struct ShNamed *a, int n, const char *name);
 /* the receiver family a builtin's share row is keyed by */
 static TyKind sh_family(TyKind rt) {
   if (rt == TY_STRING || rt == TY_STRBUF) return TY_STRING;
@@ -141,20 +135,6 @@ static TyKind sh_family(TyKind rt) {
   if (rt == TY_ENV) return BOP_ENV;
   if (rt == TY_PROC || rt == TY_METHOD || rt == TY_CURRY) return BOP_CALLABLE;
   return rt;
-}
-
-static int sh_named_cmp(const void *a, const void *b) {
-  int d = strcmp(((const struct ShNamed *)a)->name, ((const struct ShNamed *)b)->name);
-  return d ? d : ((const struct ShNamed *)a)->k - ((const struct ShNamed *)b)->k;
-}
-/* the first entry of a sorted index whose name is `name` (n when none) */
-static int sh_named_first(const struct ShNamed *a, int n, const char *name) {
-  int lo = 0, hi = n;
-  while (lo < hi) {
-    int mid = (lo + hi) / 2;
-    if (strcmp(a[mid].name, name) < 0) lo = mid + 1; else hi = mid;
-  }
-  return lo;
 }
 
 static int sh_answers_elems_run(int share, int argc);
@@ -218,89 +198,6 @@ static int sh_string_conv_arg(Compiler *c, int n) {
   return argv[0];
 }
 
-/* The names parameter node p binds (a block's ParametersNode, or one of
-   its parameters, destructured or not), into F->blkp under scope si. */
-static void sh_blkp_add(ShareFacts *F, const NodeTable *nt, int p, int si, int yielder) {
-  if (p < 0) return;
-  const char *pn = nt_str(nt, p, "name");
-  if (pn) {
-    if (F->nblkp >= F->cblkp) {
-      F->cblkp = F->cblkp ? F->cblkp * 2 : 64;
-      F->blkp = realloc(F->blkp, sizeof *F->blkp * (size_t)F->cblkp);
-      if (!F->blkp) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-    }
-    F->blkp[F->nblkp++] = (struct ShNamed){ pn, si, yielder };
-  }
-  static const char *const lists[] = { "requireds", "optionals", "posts", "keywords", "lefts", "rights" };
-  for (int l = 0; l < 6; l++) {
-    int n = 0; const int *ps = nt_arr(nt, p, lists[l], &n);
-    for (int i = 0; i < n; i++) sh_blkp_add(F, nt, ps[i], si, 0);
-  }
-  static const char *const refs[] = { "rest", "keyword_rest", "block" };
-  for (int r = 0; r < 3; r++) sh_blkp_add(F, nt, nt_ref(nt, p, refs[r]), si, 0);
-}
-/* The parameters and block-locals of block (or lambda) b, under scope si;
-   with `yielder`, its first required parameter is Enumerator.new's
-   yielder. */
-static void sh_blkp_block(ShareFacts *F, const NodeTable *nt, int b, int si, int yielder) {
-  int bp = nt_ref(nt, b, "parameters");
-  if (bp < 0) return;
-  int pn = nt_ref(nt, bp, "parameters");
-  int nreq = 0; const int *reqs = pn >= 0 ? nt_arr(nt, pn, "requireds", &nreq) : NULL;
-  if (yielder && nreq >= 1 && nt_kind(nt, reqs[0]) != NK_MultiTargetNode) {
-    sh_blkp_add(F, nt, reqs[0], si, 1);
-    /* the rest as one would add them, the yielder left out */
-    for (int i = 1; i < nreq; i++) sh_blkp_add(F, nt, reqs[i], si, 0);
-    static const char *const lists[] = { "optionals", "posts", "keywords" };
-    for (int l = 0; l < 3; l++) {
-      int n = 0; const int *ps = nt_arr(nt, pn, lists[l], &n);
-      for (int i = 0; i < n; i++) sh_blkp_add(F, nt, ps[i], si, 0);
-    }
-    static const char *const refs[] = { "rest", "keyword_rest", "block" };
-    for (int r = 0; r < 3; r++) sh_blkp_add(F, nt, nt_ref(nt, pn, refs[r]), si, 0);
-  }
-  else sh_blkp_add(F, nt, pn, si, 0);
-  int ln = 0; const int *ls = nt_arr(nt, bp, "locals", &ln);
-  for (int i = 0; i < ln; i++) sh_blkp_add(F, nt, ls[i], si, 0);
-}
-
-/* Is call u a builtin class's constructor whose block's first parameter
-   is the yielder (its BSH_NEW_YIELDER row: `Enumerator.new { |y| }`)? */
-static int sh_yielder_new(Compiler *c, int u) {
-  const NodeTable *nt = c->nt;
-  int r = nt_ref(nt, u, "receiver");
-  NodeKind rk = r >= 0 ? nt_kind(nt, r) : NK_NONE;
-  const char *cn = rk == NK_ConstantReadNode || rk == NK_ConstantPathNode ? key_name(c, r) : NULL;
-  const char *nm = nt_str(nt, u, "name");
-  return cn && nm && bop_share_named(BOP_ANY_RECV, nm) == BSH_NEW && const_node_class_index(c, r) < 0 &&
-         bop_share_named(BOP_CLASS_NEW, cn) == BSH_NEW_YIELDER;
-}
-
-/* PolyLits.bound for an_recv_may_be_string: how a literal block or a
-   lambda of scope `scope` binds variable `name`, whether or not its binder
-   marked it a block's parameter (a Thread's block does not): 0 none binds
-   it, 1 only as Enumerator.new's yielder (sh_builtin_new: no String), 2
-   another way. The index is built once per build of the facts. */
-static int sh_blk_bound(void *ctx, Compiler *c, int scope, const char *name) {
-  ShareFacts *F = ctx;
-  const NodeTable *nt = c->nt;
-  if (!F->blkp_built) {
-    F->blkp_built = 1;
-    for (int si = 0; si < c->nscopes; si++)
-      for (int u = comp_bcall_first(c, si); u >= 0; u = comp_bcall_next(c, u))
-        sh_blkp_block(F, nt, nt_ref(nt, u, "block"), si, sh_yielder_new(c, u));
-    NT_FOREACH_KIND(nt, NK_LambdaNode, l) {
-      Scope *ls = comp_scope_of(c, l);
-      if (ls) sh_blkp_block(F, nt, l, (int)(ls - c->scopes), 0);
-    }
-    if (F->nblkp) qsort(F->blkp, (size_t)F->nblkp, sizeof *F->blkp, sh_named_cmp);
-  }
-  int got = 0;
-  for (int i = sh_named_first(F->blkp, F->nblkp, name); i < F->nblkp && sp_streq(F->blkp[i].name, name); i++)
-    if (F->blkp[i].k == scope) got = F->blkp[i].yielder && got != 2 ? 1 : 2;
-  return got;
-}
-
 static int sh_builtin_fresh(Compiler *c, int call, int ostruct);
 /* Under --share-strings, is call n an attribute assignment (`obj.x = v`,
    call_is_setter_assign) of one plain value? Its value is the right-hand
@@ -342,7 +239,7 @@ static void sh_free(ShareFacts *F) {
   if (!F) return;
   free(F->mb_m); free(F->mb_b); free(F->mb_start); free(F->mb_blk);
   free(F->fw_from); free(F->fw_to); free(F->blk_unk); free(F->fresh_blk); free(F->fresh_call);
-  free(F->dyn); free(F->blkp);
+  free(F->dyn);
   free(F);
 }
 

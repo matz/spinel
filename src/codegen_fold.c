@@ -11893,7 +11893,7 @@ static void arg_bind_end(ArgBind *B) {
 
 /* The argument node parameter i of m is bound to by `B`, or -1: see
    arg_layout_param_node. */
-static int arg_bind_param(Compiler *c, Scope *m, ArgBind *B, int i, int *spread, int defaults) {
+static int arg_bind_param(Compiler *c, Scope *m, ArgBind *B, int i, int *spread) {
   const NodeTable *nt = c->nt;
   const int *argv = B->argv;
   int argc = B->argc, kwh = B->kwh, pos_argc = B->pos_argc, nsplat = B->nsplat, splat = B->splat;
@@ -11908,7 +11908,6 @@ static int arg_bind_param(Compiler *c, Scope *m, ArgBind *B, int i, int *spread,
   /* A braceless Hash bound as a positional is the container itself.
      The sharing source walk must reach its original element stores. */
   else if (L->from[i] == ARG_KWH) a = kwh;
-  else if (defaults && L->from[i] == ARG_DEFAULT && m->pdefault) a = m->pdefault[i];
   else if (lead >= 0) a = argv[lead];
   else if (L->from[i] == ARG_ELEM || L->from[i] == ARG_GATHERED) {
     if (nsplat == 1 && spread) *spread = nt_ref(nt, splat, "expression");
@@ -11947,8 +11946,6 @@ static int arg_bind_param(Compiler *c, Scope *m, ArgBind *B, int i, int *spread,
       if (nt_kind(nt, el[e]) == NK_AssocSplatNode) { nds++; ds = el[e]; }
     if (!kwh_merged(c, m, kwh)) {
       a = kwh_lookup(nt, kwh, pn);
-      /* Only an omitted keyword with no spread source takes its default. */
-      if (a < 0 && !nds && defaults && m->pdefault) a = m->pdefault[i];
     }
     if (a < 0 && nds == 1 && spread) *spread = nt_ref(nt, ds, "value");
   }
@@ -11961,12 +11958,12 @@ static const int *call_arg_list(Compiler *c, int call, int *argc) {
   return args >= 0 ? nt_arr(c->nt, args, "arguments", argc) : NULL;
 }
 
-static int arg_bind_one(Compiler *c, Scope *m, const int *argv, int argc, int i, int *spread, int defaults) {
+static int arg_bind_one(Compiler *c, Scope *m, const int *argv, int argc, int i, int *spread) {
   if (spread) *spread = -1;
   if (!m || i < 0 || i >= m->nparams) return -1;
   ArgBind B;
   arg_bind_begin(c, m, argv, argc, &B);
-  int a = arg_bind_param(c, m, &B, i, spread, defaults);
+  int a = arg_bind_param(c, m, &B, i, spread);
   arg_bind_end(&B);
   return a;
 }
@@ -11983,7 +11980,7 @@ static int arg_bind_one(Compiler *c, Scope *m, const int *argv, int argc, int i,
 int arg_layout_param_node(Compiler *c, Scope *m, int call, int i, int *spread) {
   int argc = 0;
   const int *argv = call_arg_list(c, call, &argc);
-  return arg_bind_one(c, m, argv, argc, i, spread, 0);
+  return arg_bind_one(c, m, argv, argc, i, spread);
 }
 /* Every parameter of m at once, for an argument list that is not necessarily
    a call's own (`bind_call`'s, after its receiver; `argv` holds all `argc`
@@ -11993,7 +11990,7 @@ int arg_layout_param_node(Compiler *c, Scope *m, int call, int i, int *spread) {
 void arg_layout_param_map(Compiler *c, Scope *m, const int *argv, int argc, int *out) {
   ArgBind B;
   arg_bind_begin(c, m, argv, argc, &B);
-  for (int j = 0; m && j < m->nparams; j++) out[j] = arg_bind_param(c, m, &B, j, NULL, 0);
+  for (int j = 0; m && j < m->nparams; j++) out[j] = arg_bind_param(c, m, &B, j, NULL);
   arg_bind_end(&B);
 }
 /* The same for call `call`'s own arguments and the first n parameters: out[j]
@@ -12005,16 +12002,9 @@ void arg_layout_call_param_map(Compiler *c, Scope *m, int call, int n, int *out,
   const int *argv = call_arg_list(c, call, &argc);
   ArgBind B;
   arg_bind_begin(c, m, argv, argc, &B);
-  for (int j = 0; m && j < m->nparams && j < n; j++) out[j] = arg_bind_param(c, m, &B, j, spread ? &spread[j] : NULL, 0);
+  for (int j = 0; m && j < m->nparams && j < n; j++) out[j] = arg_bind_param(c, m, &B, j, spread ? &spread[j] : NULL);
   arg_bind_end(&B);
 }
-/* The value binding a parameter, including an omitted optional's default. */
-int arg_layout_param_source(Compiler *c, Scope *m, int call, int i, int *spread) {
-  int argc = 0;
-  const int *argv = call_arg_list(c, call, &argc);
-  return arg_bind_one(c, m, argv, argc, i, spread, 1);
-}
-
 /* How far from the end of the positionals parameter j of m takes its value,
    whatever their count: a post (behind a rest or an optional) the one as far
    from the last, and any positional of a method that takes a fixed count.

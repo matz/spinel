@@ -12651,7 +12651,6 @@ static void lr_fire_mixin(Compiler *c, const LrEvent *v, int node, int frame, Lo
   NodeTable *nt = (NodeTable *)c->nt;
   const LrDef *d = NULL;
   if (v->cls < 0 || v->cls >= c->nclasses || v->mod < 0 || v->mod >= c->nclasses) return;
-  if (is_builtin_class_name(c->classes[v->cls].name) || is_builtin_exception_name(c->classes[v->cls].name)) return;
   if (!lr_hook_live(c, v->mod, v->name, p, &d)) return;
   int dn = d ? d->node : -1;
   /* the includer: the frame's class, or the receiver a record-taken

@@ -27607,15 +27607,13 @@ int desugar_included_hooks(Compiler *c, HostStep *h) {
     else continue;
     if ((!cls && ck != NK_LocalVariableWriteNode) || body < 0 || nt_kind(nt, body) != NK_StatementsNode) continue;
     /* The walk fires a hook live at the mixin's point (elab_fire_after) in
-       every class and module body but two kinds, the only ones read here:
-       a Struct or class builder's block, whose class the record does not
-       hold, and a core class reopened, whose body the builtin-reopen steps
-       read. Their hooks are spliced here, the first def found, as before.
-       No shape of the hook's own body keeps one here: the steps that read
-       one are rows the walk's splice runs, or read the hook where it is
-       written. */
-    if ((ck == NK_ModuleNode || ck == NK_ClassNode) && !(cls && (is_builtin_class_name(cls) || is_builtin_exception_name(cls))))
-      continue;
+       every class and module body, a core class's reopening too; the one
+       kind read here is a Struct or class builder's block, whose class the
+       record does not hold. Its hooks are spliced here, the first def found,
+       as before. No shape of the hook's own body keeps one here: the steps
+       that read one are rows the walk's splice runs, or read the hook where
+       it is written. */
+    if (ck == NK_ModuleNode || ck == NK_ClassNode) continue;
     int n = 0; const int *st = nt_arr(nt, body, "body", &n);
     int *out = NULL; int no = 0, cap = 0, spliced = 0;
     int *clones = NULL, ncl = 0, ccl = 0;   /* the hook bodies cloned, for incl_detach_shell */

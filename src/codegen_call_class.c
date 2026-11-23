@@ -6013,6 +6013,21 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
             for (int k = 0; k < c->nclasses; k++) {
               if (k == new_cls || !is_descendant(c, k, new_cls) || !class_has_ctor(&c->classes[k])) continue;
               int ik = cplan_hook_target(c, -1, k, "initialize", NULL);
+              /* (a subclass whose initialize cannot take the call's
+                 arguments raises CRuby's ArgumentError in its own arm: the
+                 filler's raise is a statement ahead of the dispatch, which
+                 would run for every class) */
+              char amsg[256];
+              int na = 0;
+              call_args(nt, id, &na);
+              if (ik >= 0 && arity_count_error(c, &c->scopes[ik], na, amsg, sizeof amsg)) {
+                buf_printf(b, "%s.cls_id == %d ? (sp_raise_cls(\"ArgumentError\", ", cmethod_cls_token(c, encl), k);
+                buf_puts(b, "\"");
+                emit_c_escaped_n(b, amsg, strlen(amsg));
+                buf_puts(b, "\"");
+                buf_printf(b, "), (sp_%s *)NULL) : ", ncls->c_name);
+                continue;
+              }
               buf_printf(b, "%s.cls_id == %d ? (sp_%s *)sp_%s_new(", cmethod_cls_token(c, encl), k, ncls->c_name, c->classes[k].c_name);
               if (ik >= 0) emit_args_filled(c, ik, nt_ref(nt, id, "arguments"), "", b);
               /* (an initialize that takes its block as a proc takes it in

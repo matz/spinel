@@ -38,3 +38,13 @@ begin; s = 0.0; i = 0; a.each { |x| s += x * b[i]; i += 2 }; rescue TypeError =>
 s = 0.0; i = 0; a.each { |x| s += x * b[i]; [1].each { i = 0 }; i += 1 }; p s
 s = 0.0; i = 0; f = nil; a.each { |x| f = -> { b[i] }; s += x * b[i]; i += 1 }; p s, f.call
 s = 0.0; i = 0; a.each { |x| s += x * b[i]; b = [0.0] * 4; i += 1 }; p s
+
+# a user method's walk yields the counter: bound to the block's parameter
+# at its position, or spread after a prefix, which moves it
+def walk_pos(a) = (i = 0; a.each { |x| yield x, i; i += 1 })
+def walk_spread(pre, a) = (i = 0; a.each { |x| yield(*pre, i); i += 1 })
+def sum_pos(a, b) = (s = 0.0; walk_pos(a) { |x, q| s += x * b[q] }; s)
+def sum_spread(pre, a, b) = (s = 0.0; walk_spread(pre, a) { |x, q = 0| s += b[q] }; s)
+b = [10.0, 20.0, 30.0, 40.0]
+p sum_pos(a, b), sum_spread([], a, b), sum_spread([7], a, b), sum_spread([5, 2], a, b)
+begin; sum_spread([5, 300000000], a, b); rescue TypeError => e; p e.class; end

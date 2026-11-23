@@ -2739,9 +2739,12 @@ void emit_block_invoke(Compiler *c, int site, Buf *b, int indent, int as_expr,
   }
   emit_block_binds(c, blk, yargs, yc, b, indent, as_expr, &bi);
   /* a parameter bound from a versioned loop's index reads as that index in
-     the body (hcv_alias_param), on the block's side below */
+     the body (hcv_alias_param), on the block's side below; a yield that
+     spreads binds its parameters from the gathered values, not argument k
+     to parameter k (`yield(*pre, i)`), so it has none */
   int hcv_amark = hcv_alias_mark(), hcv_idx[4], hcv_nidx = 0;
-  for (int k = 0; k < yc && hcv_nidx < 4; k++)
+  int hcv_spread = yargs && call_args_need_spread(c->nt, yargs, yc);
+  for (int k = 0; !hcv_spread && k < yc && hcv_nidx < 4; k++)
     if (hcv_yield_arg_is_index(c, yargs[k])) hcv_idx[hcv_nidx++] = k;
   /* Keep the rename table active for the block body: the block's variable
      references are in the same lexical scope as the surrounding inlined

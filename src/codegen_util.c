@@ -5342,6 +5342,35 @@ void emit_coerce_text(Compiler *c, int node, TyKind from, TyKind slot, int how,
     buf_printf(b, "sp_bigint_new_int(%s)", text);
     RCCT(CF_INT2BIG);
     return;
+  case CF_HASH_WIDEN:
+    /* A narrower Hash widened into a poly-valued or general Hash slot:
+       preserve NULL (nil) and frozen/default state via the runtime converters. */
+    if (slot == TY_STR_POLY_HASH && (from == TY_STR_STR_HASH || from == TY_STR_INT_HASH)) {
+      int t = ++g_tmp;
+      const char *ct = from == TY_STR_STR_HASH ? "sp_StrStrHash *" : "sp_StrIntHash *";
+      const char *fn = from == TY_STR_STR_HASH ? "sp_StrPolyHash_from_str_str_hash"
+                                               : "sp_StrPolyHash_from_str_int_hash";
+      buf_printf(b, "({ %s _t%d = (%s); _t%d ? %s(_t%d) : NULL; })", ct, t, text, t, fn, t);
+    }
+    else {
+      buf_puts(b, "sp_poly_as_poly_poly_hash(");
+      emit_boxed_text(c, from, text, b);
+      buf_puts(b, ")");
+    }
+    RCCT(CF_HASH_WIDEN);
+    return;
+  case CF_ARRAY_WIDEN: {
+    /* A typed Array widened into a general PolyArray slot, preserving NULL (nil). */
+    int t = ++g_tmp;
+    const char *ct = from == TY_INT_ARRAY ? "sp_IntArray *"
+                   : from == TY_FLOAT_ARRAY ? "sp_FloatArray *" : "sp_StrArray *";
+    const char *fn = from == TY_INT_ARRAY ? "sp_PolyArray_from_int_array"
+                   : from == TY_FLOAT_ARRAY ? "sp_PolyArray_from_float_array"
+                                            : "sp_PolyArray_from_str_array";
+    buf_printf(b, "({ %s _t%d = (%s); _t%d ? %s(_t%d) : NULL; })", ct, t, text, t, fn, t);
+    RCCT(CF_ARRAY_WIDEN);
+    return;
+  }
   case CF_CONVERT:
     /* a Bignum or a Rational operand a Float slot converts, as Ruby does */
     buf_printf(b, "%s(%s)", from == TY_BIGINT ? "sp_bigint_to_double" : "sp_rational_to_f", text);

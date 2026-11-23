@@ -10742,39 +10742,124 @@ void seed_unsupplied_nil_defaults(Compiler *c) {
     }
   }
 }
+/* Unwrap a parameter default to its empty `[]` or `{}` literal node, seeing
+   through parentheses and plain `.freeze` / `.dup` / `.clone` calls. Sets
+   *is_arr to 1 for `[]`, 0 for `{}`, and returns the literal node id or -1. */
+static int default_empty_lit_node(Compiler *c, int dv, int *is_arr) {
+  const NodeTable *nt = c->nt;
+  int r = empty_container_copy_recv(c, dv, NULL);
+  int u = r >= 0 ? r : nt_paren_single(nt, dv);
+  if (u < 0) return -1;
+  NodeKind uk = nt_kind(nt, u);
+  int n = 0;
+  if (uk == NK_ArrayNode) {
+    nt_arr(nt, u, "elements", &n);
+    if (n == 0) { *is_arr = 1; return u; }
+  }
+  else if (uk == NK_HashNode || uk == NK_KeywordHashNode) {
+    nt_arr(nt, u, "elements", &n);
+    if (n == 0) { *is_arr = 0; return u; }
+  }
+  return -1;
+}
+
 int infer_default_param_types(Compiler *c) {
   int changed = 0;
   for (int s = 0; s < c->nscopes; s++) {
     Scope *sc = &c->scopes[s];
     for (int i = 0; i < sc->nparams; i++) {
       if (sc->pdefault[i] < 0) continue;
-      /* The callers already typed the parameter as one kind of array: an
-         empty `[]` default is built as that kind. Widened to the poly array,
-         `def initialize(initial = [])` given Array[Integer] by every caller
-         boxed the ivar it went into, and each element read. When the
-         parameter later widens past that kind (a String pushed in the body),
-         the literal widens with it. */
+      /* The callers (or an RBS signature) already typed the parameter as one
+         kind of Array or Hash: an empty `[]` / `{}` default (including `([])`,
+         `({})`, `[].freeze`, `{}.freeze`) is built as that kind rather than
+         widening the parameter to poly. When the parameter later widens past
+         that kind, the literal widens with it so mutations on the default stay
+         valid. */
       int dv = sc->pdefault[i];
-      int edn = -1;
-      if (nt_kind(c->nt, dv) == NK_ArrayNode) nt_arr(c->nt, dv, "elements", &edn);
-      LocalVar *ep = edn == 0 && c->arr_want && dv < c->node_cap ? scope_local(sc, sc->pnames[i]) : NULL;
-      if (ep && !ep->rbs_seeded) {
-        TyKind w = c->arr_want[dv];
-        if ((ty_is_array(ep->type) || ty_is_obj_array(ep->type)) && ep->type != TY_POLY_ARRAY &&
-            (w == TY_UNKNOWN || w == ep->type)) {
-          if (w != ep->type) { comp_set_arr_want(c, dv, ep->type); changed = 1; }
-          continue;
-        }
-        if ((ty_is_array(w) || ty_is_obj_array(w)) && w != TY_POLY_ARRAY) { comp_set_arr_want(c, dv, TY_POLY_ARRAY); changed = 1; }
-      }
-      /* The body widened the parameter to the poly-keyed hash (a key of
-         another type stored into it): a hash literal default is created
-         here, so it is built as that variant, as a caller's literal is,
-         and so are the literals a method called for it answers. */
+      int dv_unw = nt_paren_single(c->nt, dv);
       LocalVar *hp = scope_local(sc, sc->pnames[i]);
-      if (hp && !hp->rbs_seeded && hp->type == TY_POLY_POLY_HASH) {
-        if (nt_kind(c->nt, dv) == NK_HashNode) changed |= want_poly_hash(c, dv);
-        else if (widen_returned_hashes(c, dv) > 0) changed = 1;
+      int is_arr = 0;
+      int elit = default_empty_lit_node(c, dv, &is_arr);
+      if (elit >= 0 && hp) {
+        if (is_arr && c->arr_want && elit < c->node_cap) {
+          TyKind w = c->arr_want[elit];
+          if (hp->rbs_seeded) {
+            if ((ty_is_array(hp->type) || ty_is_obj_array(hp->type)) && hp->type != TY_POLY_ARRAY &&
+                w != hp->type) {
+              comp_set_arr_want(c, elit, hp->type); changed = 1;
+            }
+            continue;
+          }
+          if ((ty_is_array(hp->type) || ty_is_obj_array(hp->type)) && hp->type != TY_POLY_ARRAY &&
+              (w == TY_UNKNOWN || w == hp->type)) {
+            if (w != hp->type) { comp_set_arr_want(c, elit, hp->type); changed = 1; }
+            continue;
+          }
+          if ((ty_is_array(w) || ty_is_obj_array(w)) && w != TY_POLY_ARRAY) {
+            comp_set_arr_want(c, elit, TY_POLY_ARRAY); changed = 1;
+          }
+        }
+        else if (!is_arr && c->hash_want && elit < c->node_cap) {
+          TyKind w = c->hash_want[elit];
+          if (hp->rbs_seeded) {
+            if (ty_is_hash(hp->type)) {
+              if (w != hp->type) { comp_set_hash_want(c, elit, hp->type); changed = 1; }
+              if (c->empty_hash_recv && c->empty_hash_recv[elit] && hp->type != TY_STR_POLY_HASH) {
+                comp_set_empty_hash_recv(c, elit, 0); changed = 1;
+              }
+            }
+            continue;
+          }
+          if (ty_is_hash(hp->type)) {
+            if (w == TY_UNKNOWN && hp->why.node == dv && hp->why.reason)
+              continue;
+            if (w == TY_UNKNOWN || w == hp->type ||
+                hp->type == TY_POLY_POLY_HASH ||
+                (ty_hash_val(hp->type) == TY_POLY && ty_hash_key(hp->type) == ty_hash_key(w))) {
+              if (w != hp->type) { comp_set_hash_want(c, elit, hp->type); changed = 1; }
+              if (c->empty_hash_recv && c->empty_hash_recv[elit] && hp->type != TY_STR_POLY_HASH) {
+                comp_set_empty_hash_recv(c, elit, 0); changed = 1;
+              }
+              continue;
+            }
+          }
+          else if (hp->type == TY_POLY && ty_is_hash(w) && w != TY_POLY_POLY_HASH) {
+            comp_set_hash_want(c, elit, TY_POLY_POLY_HASH); changed = 1;
+            if (c->empty_hash_recv && c->empty_hash_recv[elit]) {
+              comp_set_empty_hash_recv(c, elit, 0); changed = 1;
+            }
+          }
+        }
+        /* While call sites are still settling (g_infer_optimistic), hold the
+           pessimistic fallback on an untyped parameter so a concrete kind from
+           a call site (e.g. a method returning Hash[String, String]) wins. */
+        if (hp->type == TY_UNKNOWN && g_infer_optimistic) continue;
+      }
+      else if (hp && an_empty_container_kind(c, dv)) {
+        int ek = an_empty_container_kind(c, dv);
+        if ((ek == 1 && (ty_is_array(hp->type) || ty_is_obj_array(hp->type))) ||
+            (ek == 2 && ty_is_hash(hp->type)))
+          continue;
+        if (hp->type == TY_UNKNOWN && g_infer_optimistic) continue;
+      }
+      /* A default built from an empty-`{}`-only local (`params: (h = {}; h)`)
+         adopts the parameter's Hash kind, mirroring bind_empty_hash_arg. */
+      if (hp && ty_is_hash(hp->type))
+        changed |= bind_empty_hash_arg(c, hp->type, value_node_or_self(c->nt, dv));
+      /* The parameter widened (or was seeded) to a poly-valued or general Hash
+         or general Array: build a compatible literal default directly at that
+         variant rather than converting or mis-unifying it. */
+      if (hp && hp->type == TY_POLY_POLY_HASH) {
+        if (nt_kind(c->nt, dv_unw) == NK_HashNode) changed |= want_poly_hash(c, dv_unw);
+        else if (!hp->rbs_seeded && widen_returned_hashes(c, dv_unw) > 0) changed = 1;
+      }
+      else if (hp && hp->type == TY_STR_POLY_HASH && nt_kind(c->nt, dv_unw) == NK_HashNode &&
+               c->hash_want && dv_unw < c->node_cap && c->hash_want[dv_unw] == TY_UNKNOWN) {
+        TyKind dt0 = infer_type(c, dv_unw);
+        if (dt0 == TY_STR_STR_HASH || dt0 == TY_STR_INT_HASH) {
+          comp_set_hash_want(c, dv_unw, TY_STR_POLY_HASH);
+          changed = 1;
+        }
       }
       TyKind dt = infer_type(c, dv);
       /* An empty hash `{}` default returns TY_UNKNOWN from infer_type; treat
@@ -10783,23 +10868,17 @@ int infer_default_param_types(Compiler *c) {
          #2919) -- without a concrete type the param, and any method returning
          it, stay untyped. */
       if (dt == TY_UNKNOWN) {
-        NodeKind dk = nt_kind(c->nt, sc->pdefault[i]);
-        if (dk == NK_HashNode || dk == NK_KeywordHashNode) {
-          int dn = 0; nt_arr(c->nt, sc->pdefault[i], "elements", &dn);
-          if (dn == 0) dt = TY_SYM_POLY_HASH;
-        }
-        else if (dk == NK_ArrayNode) {
-          int dn = 0; nt_arr(c->nt, sc->pdefault[i], "elements", &dn);
-          if (dn == 0) dt = TY_POLY_ARRAY;
-        }
+        int ek = elit >= 0 ? (is_arr ? 1 : 2) : an_empty_container_kind(c, dv);
+        if (ek == 2) dt = TY_SYM_POLY_HASH;
+        else if (ek == 1) dt = TY_POLY_ARRAY;
       }
       /* A default that cannot complete (`for_user: (raise "...")`, the Rails
          shape for a keyword that must be passed) gives the slot no value, so
          it says nothing about the type: typed from it the parameter was void,
          which no C slot holds, and the method refused to compile. */
       if (dt == TY_NIL || dt == TY_UNKNOWN || dt == TY_VOID) continue;
-      LocalVar *p = scope_local(sc, sc->pnames[i]);
-      if (!p || p->rbs_seeded) continue;
+      LocalVar *p = hp;
+      if (!p || param_seed_holds(p, dt)) continue;
       /* narrow_object_arrays took the default as one of the parameter's
          sources and narrowed it anyway: a default that reads as the poly
          array is that table built at the narrowed kind, as a narrowed

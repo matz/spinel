@@ -1,0 +1,21 @@
+class HdscRouter
+  def default_str_hash: () -> Hash[String, String]
+  def maybe_hash: (bool) -> Hash[String, String]?
+  def link_empty: (String, ?params: Hash[String, untyped]) -> String
+  def link_str_lit: (String, ?params: Hash[String, untyped]) -> Hash[String, untyped]
+  def link_int_lit: (String, ?params: Hash[String, untyped]) -> Hash[String, untyped]
+  def link_cleared: (String, ?params: Hash[String, untyped]) -> Hash[String, untyped]
+  def link_helper: (String, ?params: Hash[String, untyped]) -> Hash[String, untyped]
+  def link_nilable: (bool, ?params: Hash[String, untyped]?) -> String
+  def link_str_str: (String, ?params: Hash[String, String]) -> Array[untyped]
+  def link_local_empty: (?params: Hash[String, String]) -> Integer
+  def mut_const: (String, ?params: Hash[String, untyped]) -> Hash[String, untyped]
+  def frozen_const: (?params: Hash[String, untyped]) -> bool
+  def join_frozen: (?items: Array[String]) -> Array[untyped]
+  def count_poly: (?items: Array[untyped]) -> Integer
+end
+
+class HdscBox
+  @h: Hash[String, untyped]
+  def h: () -> Hash[String, untyped]
+end

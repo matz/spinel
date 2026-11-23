@@ -245,6 +245,7 @@ int an_local_writes_named_next(int id);
 int *an_scope_call_candidates(Compiler *c, Scope *m, int *n);
 int is_arith_op(const char *op);
 int node_is_empty_container(Compiler *c, int node);
+int empty_container_copy_recv(Compiler *c, int node, int *frozen_out);
 int nt_self_singleton_class(const NodeTable *nt, int recv);
 int bind_coerce_operator_params(Compiler *c);
 int is_cmp_op(const char *op);

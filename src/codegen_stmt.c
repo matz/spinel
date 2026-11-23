@@ -16842,6 +16842,31 @@ int emit_empty_literal_as(Compiler *c, int v, TyKind slot, Buf *b) {
       if (array_kind(slot)) { buf_printf(b, "sp_%sArray_new()", array_kind(slot)); return 1; }
     }
   }
+  /* `{}.freeze` / `[].freeze` (and `.dup` / `.clone`) when no user override
+     replaces the builtin (repr_empty_lit_as). */
+  int frozen = 0;
+  int r = empty_container_copy_recv(c, v, &frozen);
+  if (r >= 0) {
+    Buf inner; memset(&inner, 0, sizeof inner);
+    if (emit_empty_literal_as(c, r, slot, &inner)) {
+      if (frozen) {
+        if (ty_is_hash(slot) && ty_hash_cname(slot))
+          buf_printf(b, "((sp_%sHash *)sp_gc_freeze(%s))", ty_hash_cname(slot), inner.p ? inner.p : "");
+        else {
+          int ft = ++g_tmp;
+          Buf ct; memset(&ct, 0, sizeof ct);
+          emit_ctype(c, slot, &ct);
+          buf_printf(b, "({ %s _t%d = %s; _t%d->frozen = 1; _t%d; })",
+                     ct.p ? ct.p : "sp_PolyArray *", ft, inner.p ? inner.p : "", ft, ft);
+          free(ct.p);
+        }
+      }
+      else buf_puts(b, inner.p ? inner.p : "");
+      free(inner.p);
+      return 1;
+    }
+    free(inner.p);
+  }
   return 0;
 }
 

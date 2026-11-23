@@ -1668,6 +1668,29 @@ int node_is_empty_container(Compiler *c, int node) {
   return argc == 0 && cplan_const_user(c, node, r, 1).mi < 0;
 }
 
+/* If `node` (through parentheses) is a plain zero-argument, blockless
+   `.freeze` / `.dup` / `.clone` on an empty container (`[]`, `{}`, bare
+   `Array.new` / `Hash.new`) with no user override replacing the builtin,
+   return the unwrapped receiver node and set *frozen_out (when non-NULL) to 1
+   for `freeze` and 0 otherwise; else return -1. */
+int empty_container_copy_recv(Compiler *c, int node, int *frozen_out) {
+  const NodeTable *nt = c->nt;
+  int u = nt_paren_single(nt, node);
+  if (u < 0 || nt_kind(nt, u) != NK_CallNode || nt_ref(nt, u, "block") >= 0) return -1;
+  int recv = nt_ref(nt, u, "receiver");
+  if (recv < 0) return -1;
+  const char *nm = nt_str(nt, u, "name");
+  int args = nt_ref(nt, u, "arguments"), an = 0;
+  if (args >= 0) nt_arr(nt, args, "arguments", &an);
+  if (an != 0 || !nm || (!sp_streq(nm, "freeze") && !sp_streq(nm, "dup") && !sp_streq(nm, "clone"))) return -1;
+  CallPlan cp = cplan_user(c, u);
+  if (cp.mi >= 0 || cp.dispatch != CP_NONE) return -1;
+  int r = nt_paren_single(nt, recv);
+  if (!node_is_empty_container(c, r)) return -1;
+  if (frozen_out) *frozen_out = sp_streq(nm, "freeze");
+  return r;
+}
+
 int is_arith_op(const char *op) {
   static const char *const set[] = {"+", "-", "*", "/", "%", "**", NULL};
   return str_in(op, set);

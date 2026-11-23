@@ -2519,6 +2519,7 @@ int method_user_override_recv(Compiler *c, int node);
 void ty_recv_call_extra_args(const Compiler *c, const int *av, int argc,
                               TyKind *arg1, int *range_has_float_bound);
 int node_is_empty_container(Compiler *c, int node);
+int empty_container_copy_recv(Compiler *c, int node, int *frozen_out);
 int emit_call_block_arg_stmt(Compiler *c, int id, Buf *b, int indent);   /* codegen_call.c */
 int an_empty_container_kind(Compiler *c, int b);
 TyKind ffi_spec_to_ty(const char *spec);

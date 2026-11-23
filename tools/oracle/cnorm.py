@@ -9,7 +9,8 @@
 #   differs N  anything else (N lines)
 # The symbol table's lines and the revision in the version string are dropped before comparing.
 import re,sys
-SYM=re.compile(r'sp_sym|SP_SYM|sp_dyn_sym|sp_dsym|SP_DYN_SYM|^0[,x]|^0,0')
+# the symbol table's records, whole lines: names, hash table and its continuation rows, mask, and the helpers over them
+SYM=re.compile(r'^(?:static [^=]*\b(?:sp_sym_names|sp_sym_htab|sp_dyn_sym\w*|sp_dsym\w*)\b|static [^=(]*\bsp_sym_\w+\(|#define SP_SYM_HMASK\b|#define SP_DYN_SYM\w*|0[,x])')
 ID=re.compile(r'\b(?:lv_|_kwr_|_y\d+_|_cell_|c_|gv___dmcap)[A-Za-z0-9_]+')
 SUF=re.compile(r'(__b[pq]?[A-Za-z_]*\d+|__cb\d+|__b\d+|__dup\d*|__bpin)(?=\b|_)')
 SLOT=re.compile(r'(?:(?<=_)|^)((?:P_|D\d+_)*)B(\d+)_')
@@ -30,6 +31,7 @@ def lines(p):
         if SYM.search(l): continue
         for r in ROOTS: l=l.replace(r,'TREE')
         l=re.sub(r'sp_box_sym\(\d+\)','sp_box_sym(N)',l)   # a symbol's number, which the symbol table's entries move
+        l=re.sub(r'\(sp_sym\)\d+','(sp_sym)N',l)
         l=re.sub(r'\+[0-9]+ revision [0-9a-f]+','+N revision R',l)
         o.append(l)
     return o
@@ -59,7 +61,10 @@ if fnsort(A)==fnsort(B): print('order'); sys.exit()
 import collections
 def ms(ls): return collections.Counter(re.sub(r'\b\d+\b','N',re.sub(r'ID\d+','ID',x)) for x in ls)
 da=ms(A)-ms(B); db=ms(B)-ms(A)
-if all(re.search(r'(\bID\b|lv_|_cell_|_gcf|SP_GC_ENTRY|SP_GC_ROOT|\(void\) *lv_)',x) for x in list(da)+list(db)): print('slots %d'%(sum(da.values())+sum(db.values()))); sys.exit()
+# a slot line: a declaration of a local (a type, then the local), its GC root or frame entry, or `(void) lv_x;`; a
+# statement that only reads or assigns one is not
+SLOTLN=re.compile(r'^\s*(?:(?!return\b|goto\b|case\b|else\b)[A-Za-z_]\w*(?:\s+|\s*\*+\s*)\**(?:ID|lv_\w+|_cell_\w+)\s*(?:\[[^\]]*\])?\s*(?:=[^;]*)?;|\(void\)\s*(?:ID|lv_\w+);|.*\bSP_GC_(?:ROOT\w*|ENTRY\w*|SAVE)\b|.*\bsp_gc_frame_hdr\b)')
+if (da or db) and all(SLOTLN.search(x) for x in list(da)+list(db)): print('slots %d'%(sum(da.values())+sum(db.values()))); sys.exit()
 num=lambda l: re.sub(r'\b\d+\b','N',l)
 if [num(x) for x in A]==[num(x) for x in B]: print('ints'); sys.exit()
 import difflib

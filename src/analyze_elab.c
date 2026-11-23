@@ -2876,6 +2876,7 @@ static int lr_link_sure(Compiler *c, int cls, int owner, int sg, int depth) {
    so a word's reach is asked only where it is observable (lr_word_reach) */
 static int lr_has_at(Compiler *c, int cls, int sg, const char *nm, LoadPoint p, int depth);
 static int lr_chain_versions(Compiler *c, int cls, int sg, const char *name, ElabVersion *out, int cap);
+static int lr_in_ancestry(Compiler *c, int cls, int sg, int k, LoadPoint p);
 /* ...what one entry d a method's body makes says of the name at point p: 1 where its body surely ran ahead of p, -1 where it first
    runs after p or never (or d takes the name away and runs after p: it changes nothing there), 0 where it may have run before p or
    the extent is not known, 2 for an entry no body makes */
@@ -2912,10 +2913,15 @@ static int lr_body_state(Compiler *c, int cls, int sg, const char *nm, LoadPoint
   ElabVersion ev[LR_BODY_VERSIONS];
   if (other) *other = 0;
   if (!c->lrec->recorded) return 2;
-  int n = lr_chain_versions(c, cls, sg, nm, ev, LR_BODY_VERSIONS), state = 2;
+  int n = lr_chain_versions(c, cls, sg, nm, ev, LR_BODY_VERSIONS), state = 2, skipped = 0;
   if (n < 0 || n > LR_BODY_VERSIONS) return 0;
   for (int i = 0; i < n; i++) {
-    int s = lr_body_one(c, ev[i].v, p), k = c->lrec->hist[ev[i].hist].a;
+    int k = c->lrec->hist[ev[i].hist].a;
+    if (k != cls && !lr_in_ancestry(c, cls, sg, k, p)) {   /* (a module included after the word is no link its lookup has: its version is none the word finds) */
+      skipped = 1;
+      continue;
+    }
+    int s = lr_body_one(c, ev[i].v, p);
     if (s == 2) {
       if (other && ev[i].v->kind <= LR_REMOVE && !ev[i].v->body) *other = 1;
       continue;
@@ -2923,7 +2929,7 @@ static int lr_body_state(Compiler *c, int cls, int sg, const char *nm, LoadPoint
     if (s == 1 && k != cls && !lr_link_sure(c, cls, k, sg, 0)) s = 0;
     state = state == 2 ? s : s > state ? s : state;
   }
-  return state;
+  return state == 2 && skipped ? -1 : state;   /* (only versions the word's lookup does not reach: the name is absent there) */
 }
 static int lr_has_state(Compiler *c, int cls, int sg, const char *nm, LoadPoint p, int depth) {
   const LrDef *d = NULL;

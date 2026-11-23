@@ -1,0 +1,15 @@
+4
+8
+:also
+:h
+true
+false
+private: NoMethodError
+9
+1
+false
+own send attr_accessor [:v]
+2
+false
+6
+true

@@ -50521,6 +50521,105 @@ int desugar_send_class_makers_at(Compiler *c, LowerCtx *lc, int id) {
   nt_node_set_ref(ntm, id, "arguments", nrest > 0 ? na : -1);
   return 1;
 }
+/* `send(:attr_accessor, :v)`, `__send__(:define_method, :m) { }`,
+   `public_send(:alias_method, :a, :b)` as a statement of a class or module
+   body, on self (no receiver, `self.`, or the body's own class by its
+   constant): a method made by a declaration reached through a literal-name
+   send. The passes that register an attr, a define_method's block or an
+   alias read the direct call, so the statement becomes it: left a send, the
+   method was never made (`a.v = 3` raised NoMethodError at run time). All
+   three sends reach these, which are public methods of Module. A send of a
+   visibility word or of a mixin is not taken here: the load record reads
+   those itself, as a word it cannot follow or a mixin it does not record,
+   and they answer as written. A class that defines the send it is written
+   with keeps its call. */
+static int send_decl_name(const char *mn) {
+  static const char *const names[] = { "attr_accessor", "attr_reader", "attr_writer", "attr", "define_method",
+    "alias_method", NULL };
+  for (int i = 0; names[i]; i++) if (sp_streq(mn, names[i])) return 1;
+  return 0;
+}
+/* Does the class or module of body owner, or a class above it the program
+   writes, define a class method `nm` (`def self.send`, or a def of its
+   `class << self`)? A module it extends may too, which the plain names do
+   not tell: any module of the program that defines an instance method `nm`
+   counts for every class. */
+static int send_decl_class_has(const NodeTable *nt, int owner, const char *nm) {
+  NT_FOREACH_KIND(nt, NK_ModuleNode, m) {
+    int b = class_def_body(nt, m), bn = 0;
+    const int *bb = b >= 0 && nt_kind(nt, b) == NK_StatementsNode ? nt_arr(nt, b, "body", &bn) : NULL;
+    for (int j = 0; j < bn; j++)
+      if (nt_kind(nt, bb[j]) == NK_DefNode && nt_ref(nt, bb[j], "receiver") < 0 && nt_str(nt, bb[j], "name") &&
+          sp_streq(nt_str(nt, bb[j], "name"), nm)) return 1;
+  }
+  const char *cn = class_def_bare_name(nt, owner);
+  for (int hop = 0; cn && hop < 16; hop++) {
+    const char *sup = NULL;
+    int ndk = 0; const NodeKind *dk = class_def_kinds(&ndk);
+    for (int dh = 0; dh < ndk; dh++) {
+      NT_FOREACH_KIND(nt, dk[dh], m) {
+        const char *mn = class_def_opens_frame(nt, m) ? class_def_bare_name(nt, m) : NULL;
+        if (!mn || !sp_streq(mn, cn)) continue;
+        int sc = class_def_super(nt, m);
+        if (sc >= 0 && nt_str(nt, sc, "name")) sup = nt_str(nt, sc, "name");
+        int b = class_def_body(nt, m), bn = 0;
+        const int *bb = b >= 0 && nt_kind(nt, b) == NK_StatementsNode ? nt_arr(nt, b, "body", &bn) : NULL;
+        for (int j = 0; j < bn; j++) {
+          int st = bb[j];
+          if (nt_kind(nt, st) == NK_DefNode && nt_ref(nt, st, "receiver") >= 0 && nt_str(nt, st, "name") &&
+              sp_streq(nt_str(nt, st, "name"), nm)) return 1;
+          if (nt_kind(nt, st) != NK_SingletonClassNode) continue;
+          int sb = nt_ref(nt, st, "body"), sn = 0;
+          const int *ss = sb >= 0 && nt_kind(nt, sb) == NK_StatementsNode ? nt_arr(nt, sb, "body", &sn) : NULL;
+          for (int q = 0; q < sn; q++)
+            if (nt_kind(nt, ss[q]) == NK_DefNode && nt_str(nt, ss[q], "name") && sp_streq(nt_str(nt, ss[q], "name"), nm)) return 1;
+        }
+      }
+    }
+    cn = sup;
+  }
+  return 0;
+}
+int desugar_body_send_decl_left(Compiler *c, LowerCtx *lc, int id) {
+  const NodeTable *nt = c->nt;
+  if (nt_kind(nt, id) != NK_CallNode || nt_safe_nav(nt, id)) return 0;
+  const char *nm = nt_str(nt, id, "name");
+  if (!nm || !(sp_streq(nm, "public_send") || sp_streq(nm, "send") || sp_streq(nm, "__send__"))) return 0;
+  int owner = lc->owner;
+  NodeKind ok = owner >= 0 ? nt_kind(nt, owner) : NK_NilNode;
+  if ((ok != NK_ClassNode && ok != NK_ModuleNode) || class_def_body(nt, owner) != lc->body) return 0;
+  int rv = nt_ref(nt, id, "receiver");
+  if (rv >= 0 && nt_kind(nt, rv) != NK_SelfNode) {
+    const char *on = class_def_bare_name(nt, owner);
+    if (nt_kind(nt, rv) != NK_ConstantReadNode || !on || !nt_str(nt, rv, "name") || !sp_streq(nt_str(nt, rv, "name"), on)) return 0;
+  }
+  if (!sp_streq(nm, "__send__") && ct_method_defined(nt, nm) && send_decl_class_has(nt, owner, nm)) return 0;
+  int sa = nt_ref(nt, id, "arguments"), sac = 0;
+  const int *sav = sa >= 0 ? nt_arr(nt, sa, "arguments", &sac) : NULL;
+  if (sac < 1 || sac - 1 > 64 || nt_kind(nt, sav[0]) != NK_SymbolNode) return 0;
+  const char *mn = nt_str(nt, sav[0], "value");
+  return mn && send_decl_name(mn);
+}
+int desugar_body_send_decl_at(Compiler *c, LowerCtx *lc, int id) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  if (!desugar_body_send_decl_left(c, lc, id)) return 0;
+  int sa = nt_ref(nt, id, "arguments"), sac = 0;
+  const int *sav = nt_arr(nt, sa, "arguments", &sac);
+  char mbuf[32]; snprintf(mbuf, sizeof mbuf, "%s", nt_str(nt, sav[0], "value"));
+  int rest[64], nrest = sac - 1;
+  for (int k = 0; k < nrest; k++) rest[k] = sav[k + 1];
+  int na = nrest > 0 ? nt_new_node(nt, "ArgumentsNode") : -1;
+  if (nrest > 0 && na < 0) return 0;
+  if (na >= 0) {
+    comp_grow_node_arrays(c);
+    c->nscope[na] = c->nscope[id];
+    nt_node_set_arr(nt, na, "arguments", rest, nrest);
+  }
+  nt_node_set_str(nt, id, "name", mbuf);
+  nt_node_set_ref(nt, id, "arguments", na);
+  nt_node_set_ref(nt, id, "receiver", -1);   /* (the body's own self: `private` and its kin take no receiver) */
+  return 1;
+}
 /* `class Inner < self` written in a class's body: self is that class,
    so the superclass names it (activerecord's Promise::Complete <
    Promise). Classes are registered under their last name, and the name
@@ -50705,6 +50804,7 @@ static void an_phase_desugar_register(Compiler *c) {
   lower_run(c, &lc, LW_PAREN_BLOCK_ARG);
   lower_run(c, &lc, LW_PAREN_OPERANDS);
   lower_run(c, &lc, LW_SEND_CLASS_MAKERS);
+  lower_run(c, &lc, LW_BODY_SEND_DECL);            /* send(:attr_accessor, :v) in a class body -> attr_accessor :v */
   lower_run(c, &lc, LW_SELF_SUPERCLASS);
   lower_run(c, &lc, LW_STRUCT_SUBCLASS_NEW_WRITE);
   lower_run(c, &lc, LW_REFUSE_SUPERCLASS_EXPRS);

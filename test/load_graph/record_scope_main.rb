@@ -22,7 +22,7 @@ end
 class Macro
   def self.prop(n) = n
   prop :x
-  send(:attr_reader, :y)
+  send(:hash)
   private
   def hidden = 1
   public

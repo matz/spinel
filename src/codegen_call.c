@@ -20098,9 +20098,16 @@ int refl_note(ReflNames *r, const char *m, int show) {
   r->n++;
   return 1;
 }
-/* ...a builtin row's name, which the row answers (REFL_ROW) */
+/* ...a builtin row's name, which the row answers (REFL_ROW). A name the
+   program's methods noted first, shown, is the row's too: the builtin's
+   method answers it from the start, ahead of the program's def of the
+   name (a reopened String's `def self.try_convert`), so the list does not
+   leave it out where that def has not run yet. One noted hidden (made
+   private where the list runs) stays hidden. */
 static void refl_note_row(ReflNames *r, const char *m, int show) {
-  if (refl_note(r, m, show)) r->show[r->n - 1] |= REFL_ROW;
+  if (refl_note(r, m, show)) { r->show[r->n - 1] |= REFL_ROW; return; }
+  for (int i = 0; i < r->n; i++)
+    if (sp_streq(r->v[i], m) && (r->show[i] & REFL_SHOWN)) r->show[i] |= REFL_ROW;
 }
 /* See codegen_call_arms.h. */
 void refl_at(ReflNames *r, int id, int cls, unsigned side) {

@@ -212,7 +212,8 @@ static void prog_top_walk(const Compiler *c, int f, ProgStmtFn fn, void *ud, con
   for (int k = 0; k < n; k++) {
     fn(ud, v[k], f);
     int t = prog_ordered_load(c, v[k]);
-    if (t >= 0) prog_top_walk(c, t, fn, ud, pl);
+    /* (a file placed at this very statement, its `load_stmt`, is walked below, once) */
+    if (t >= 0 && nt_int(c->nt, nt_root(c->nt, t), "load_stmt", -1) != v[k]) prog_top_walk(c, t, fn, ud, pl);
     for (int i = 0; i < pl->n; i++)
       if (nt_int(c->nt, nt_root(c->nt, pl->f[i]), "load_stmt", -1) == v[k]) prog_top_walk(c, pl->f[i], fn, ud, pl);
   }
@@ -1584,6 +1585,11 @@ void prog_settle_files(Compiler *c) {
         nt_node_set_int(nt, nt_root(nt, f), "load_stmt", nest_at[f]);
       }
     }
+  }
+  if (pos) {   /* the files the passes above placed: their statements join the order */
+    free(seq); seq = prog_top_seq(c, &sn, NULL);
+    for (int i = 0; i < nt->count; i++) pos[i] = -1;
+    for (int k = 0; k < sn; k++) pos[seq[k]] = k;
   }
   /* A file that several requires name, each a top-level `require`
      statement or one nested in a statement that runs after the first of

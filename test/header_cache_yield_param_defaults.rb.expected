@@ -1,0 +1,13 @@
+[:clear_dflt, TypeError]
+[:pop_dflt, TypeError]
+[:kw_dflt, TypeError]
+[:ewi_dflt, TypeError]
+[:while_dflt, TypeError]
+[:times_dflt, TypeError]
+60.0
+50.0
+50.0
+120.0
+0.0
+0.0
+23.0

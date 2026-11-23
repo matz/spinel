@@ -125,3 +125,24 @@ dup_elem: false
 tap_elem: true
 tap_elem: false
 cb_eq_nil: false false true
+flat_map_int_recv: false true
+flat_map_int_recv: false true
+flat_map_int_recv: true false
+flat_map_int_recv: false true
+map_int_recv: false true
+map_int_recv: true false
+flat_map_next_arr: false true
+flat_map_next_arr: false true
+flat_map_next_arr: true false
+flat_map_next_arr: false true
+flat_map_next_clean: A
+flat_map_next_clean: B
+reduce_seed_arr: false true
+reduce_seed_arr: true false
+reduce_seed_arr: false true
+reduce_seed_enum: false true
+reduce_seed_enum: true false
+reduce_seed_enum: false true
+reduce_seed_hash: false true
+reduce_seed_hash: true false
+reduce_seed_hash: false true

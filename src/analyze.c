@@ -34703,22 +34703,6 @@ static int a_block_lifted_by_callee_name(Compiler *c, int id, const char *keeps)
   return a_name_keeps_block(c, nt_str(nt, id, "name"), keeps, NULL) >= 0;
 }
 
-/* True if `blk`'s subtree contains a YieldNode. */
-static int subtree_has_yield_node(Compiler *c, int node, int depth) {
-  const NodeTable *nt = c->nt;
-  if (node < 0 || depth > 64) return 0;
-  if (nt_kind(nt, node) == NK_YieldNode) return 1;
-  int nr = nt_num_refs(nt, node);
-  for (int i = 0; i < nr; i++)
-    if (subtree_has_yield_node(c, nt_ref_at(nt, node, i), depth + 1)) return 1;
-  int na = nt_num_arrs(nt, node);
-  for (int i = 0; i < na; i++) {
-    int n = 0; const int *ids = nt_arr_at(nt, node, i, &n);
-    for (int j = 0; j < n; j++)
-      if (subtree_has_yield_node(c, ids[j], depth + 1)) return 1;
-  }
-  return 0;
-}
 /* A Thread.new / Fiber.new block in this method whose body yields. Such a body
    is emitted as its own function, so the yield-splice has no block to inline. */
 static int scope_yields_inside_lifted_body(Compiler *c, int mi) {
@@ -34726,7 +34710,7 @@ static int scope_yields_inside_lifted_body(Compiler *c, int mi) {
   for (int id = 0; id < nt->count; id++) {
     if (c->nscope[id] != mi || nt_kind(nt, id) != NK_CallNode) continue;
     int blk = nt_ref(nt, id, "block");
-    if (blk < 0 || !subtree_has_yield_node(c, blk, 0)) continue;
+    if (blk < 0 || !nt_subtree_has_kind(nt, blk, NK_YieldNode)) continue;
     const char *nm = nt_str(nt, id, "name");
     int r = nt_ref(nt, id, "receiver");
     const char *rn = (r >= 0 && nt_kind(nt, r) == NK_ConstantReadNode) ? nt_str(nt, r, "name") : NULL;
@@ -56111,7 +56095,7 @@ static void an_phase_reconcile_check(Compiler *c) {
     for (int id = 0; id < c->nt->count; id++) {
       if (c->nscope[id] != s || !a_proc_create_or_lifted(c, id)) continue;
       int pb = a_proc_body(c, id);
-      if (pb < 0 || !subtree_has_yield_node(c, pb, 0)) continue;
+      if (pb < 0 || !nt_subtree_has_kind(c->nt, pb, NK_YieldNode)) continue;
       LocalVar *bl = scope_local_intern(d, d->blk_param);
       if (bl) { bl->is_cell = 1; comp_touch_scope(bl->owner); }
       break;

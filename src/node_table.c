@@ -1483,6 +1483,21 @@ const char *nt_content(const NodeTable *nt, int id) {
   return nd ? nd->content : NULL;
 }
 
+/* Does any node under root have kind k? Descends every ref and array field (the walk is bounded: a tree deeper than 200 has none). */
+static int nt_subtree_has_kind_at(const NodeTable *nt, int root, NodeKind k, int depth) {
+  if (root < 0 || root >= nt->count || depth > 200) return 0;
+  if (nt_kind(nt, root) == k) return 1;
+  const SpNode *nd = &nt->nodes[root];
+  for (int i = 0; i < nd->nr; i++)
+    if (nt_subtree_has_kind_at(nt, nd->r[i].ref, k, depth + 1)) return 1;
+  for (int i = 0; i < nd->na; i++)
+    for (int j = 0; j < nd->a[i].n; j++)
+      if (nt_subtree_has_kind_at(nt, nd->a[i].ids[j], k, depth + 1)) return 1;
+  return 0;
+}
+int nt_subtree_has_kind(const NodeTable *nt, int root, NodeKind k) {
+  return nt_subtree_has_kind_at(nt, root, k, 0);
+}
 int nt_num_refs(const NodeTable *nt, int id) {
   const SpNode *nd = node_at(nt, id);
   return nd ? nd->nr : 0;

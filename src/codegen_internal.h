@@ -1855,6 +1855,8 @@ const char *sg_refused_msg(Compiler *c, int def);
 void sg_refused_def(Compiler *c, int def);
 __attribute__((noreturn)) void unsupported_feature(Compiler *c, int id, const char *msg);
 void unsupported_feature_collect(Compiler *c, int id, const char *msg);
+/* the file and line a refusal of node id is reported at (codegen_util.c) */
+const char *unsup_pos(Compiler *c, int id, int *line);
 /* a Range literal only walked from an Integer begin (codegen.c) */
 int range_rat_walk(Compiler *c, int rn);
 

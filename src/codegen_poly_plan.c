@@ -1745,11 +1745,26 @@ void poly_specials0(Compiler *c, int id, const char *name, PolySpecials0 *s) {
   s->ncall_arm = ncall_arm;
 }
 
+/* A class or module value that reaches the Object method's default arm
+   answers the name with Module's own public method, ahead of Object's
+   (`klass.class_eval { ... }` beside Active Support's Kernel#class_eval,
+   which is for plain objects), and the dispatch has no class arm for it
+   (poly_class_reflect_arm): the arm is not its. It raises there, naming
+   the call's position, where it ran the def for the class. Written ahead
+   of the arm's statement; nothing for a name Module does not have. */
+static void emit_poly_obj_default_class_guard(Compiler *c, int id, const char *name, int tv, Buf *b) {
+  if (!cplan_class_value_answers(c, id, nt_ref(c->nt, id, "receiver"), name) || poly_class_reflect_arm(c, id, name, NULL)) return;
+  int ln; const char *file = unsup_pos(c, id, &ln);
+  buf_printf(b, "if (_t%d.tag == SP_TAG_CLASS) sp_raise_cls(\"NotImplementedError\", \"%s:%d: `%s` on a class value held in a boxed receiver is not supported by AOT compilation: CRuby answers it with Module's method, not the program's Object or Kernel def\"); ",
+             tv, file, ln, name);
+}
+
 /* The Object reopening's method of the name, as a zero-argument poly
    dispatch's `default:` arm (any receiver no class arm took): through its
    proc form with the call's block, plainly, or an arity refusal. 1 when the
    arm was written. *blk_tmp0 is the hoisted block, made here when the proc
-   form needs it. */
+   form needs it. A class value takes the guard ahead of each form
+   (emit_poly_obj_default_class_guard). */
 int emit_poly_obj_default0(Compiler *c, int id, const char *name, int argc, TyKind ret, int tv, int tr,
                            int *blk_tmp0, Buf *b) {
   const NodeTable *nt = c->nt;
@@ -1777,6 +1792,7 @@ int emit_poly_obj_default0(Compiler *c, int id, const char *name, int argc, TyKi
         buf_printf(&oc, "(_t%d, _t%d)", tv, (*blk_tmp0));
         TyKind pr = repr_method_ret_storage(&c->scopes[obj_pf]);
         buf_puts(b, " default: ");
+        emit_poly_obj_default_class_guard(c, id, name, tv, b);
         int pconv = PC_SAME;
         if (method_is_void(&c->scopes[obj_pf])) { buf_puts(b, oc.p); pconv = PC_VOID; }
         else {
@@ -1838,6 +1854,7 @@ int emit_poly_obj_default0(Compiler *c, int id, const char *name, int argc, TyKi
         buf_puts(&ob, ")");
         const char *ocall = ob.p;
         buf_puts(b, " default: ");
+        emit_poly_obj_default_class_guard(c, id, name, tv, b);
         if (apre.p && apre.p[0]) { buf_puts(b, "{ "); buf_puts(b, apre.p); }
         int pconv = PC_SAME;
         if (method_is_void(&c->scopes[obj_mi])) { buf_puts(b, ocall); pconv = PC_VOID; }
@@ -1867,7 +1884,8 @@ int emit_poly_obj_default0(Compiler *c, int id, const char *name, int argc, TyKi
       /* ... and one that needs arguments refuses them for any receiver */
       else { char oexp[600];
         if (ml.def_class == obj_cls && poly_arm_refuses_none(c, obj_mi, oexp, sizeof oexp)) {
-          buf_puts(b, " default: "); emit_poly_arity_raise(b, oexp); buf_puts(b, " break;");
+          buf_puts(b, " default: "); emit_poly_obj_default_class_guard(c, id, name, tv, b);
+          emit_poly_arity_raise(b, oexp); buf_puts(b, " break;");
           done = 1;
           if (g_plan_check) pa_observe(PA_ARITY, PA_KEY_DEFAULT, obj_mi, TY_UNKNOWN, PC_VOID);
         } }

@@ -4652,7 +4652,6 @@ int cplan_cmethod_later(Compiler *c, int id, int cls, const char *name) {
   if (asked) id = asked - 1;   /* defined?'s respond_to?: at the call it asks of */
   return id >= 0 && cls >= 0 && ct_before_versions(c, id, cls, name, CT_CMETHOD, -1);
 }
-/* (the class whose class side class-side reader id, on a constant or self, asks of) */
 /* See call_plan.h. */
 int cplan_site_self_class(Compiler *c, int id, const Scope **cm) {
   const Scope *s = comp_scope_of(c, id);
@@ -4666,6 +4665,7 @@ int cplan_site_self_class(Compiler *c, int id, const Scope **cm) {
      class_eval's, which self_class_body declines as it does an explicit self's) */
   return self_class_body(c, id);
 }
+/* (the class whose class side class-side reader id, on a constant or self, asks of) */
 static int cells_reader_class(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   int recv = nt_ref(nt, id, "receiver");

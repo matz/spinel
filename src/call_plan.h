@@ -1856,14 +1856,14 @@ int cplan_list_cells(Compiler *c, int id, int cls, unsigned side, const char *na
 /* Of the classes cand[0..ncand) a boxed receiver may hold, those whose chain list at id (`x.methods`) reads the cells of
    some name, into out: they are listed at the site, where the cells are the call's, the rest by the shared tables */
 int cplan_list_site_classes(Compiler *c, int id, const int *cand, int ncand, int *out);
-/* The cells that answer whether class cls's instances respond to `name` at respond_to? call id, of a name only the
-   run knows: the cells cplan_presence_cells gives for each name the survey asked of this reader (presence_asks),
-   for the public visibility, or with `all` every one (the include_all argument: the caller reads which of the two
-   the call asks, or both where the run decides); 0 where the table answers it */
 /* Each (name, class) the survey asks of respond_to? call id of a name only the run knows (a respond_to?'s cells of a
    name are read for no other pair, cplan_respond_runtime_cells); the receiver's classes are walked once for a name. */
 typedef void (*CplanRespondFn)(Compiler *c, int id, const char *name, int cls, void *arg);
 void cplan_respond_runtime_each(Compiler *c, int id, CplanRespondFn fn, void *arg);
+/* The cells that answer whether class cls's instances respond to `name` at respond_to? call id, of a name only the
+   run knows: the cells cplan_presence_cells gives for each name the survey asked of this reader (presence_asks),
+   for the public visibility, or with `all` every one (the include_all argument: the caller reads which of the two
+   the call asks, or both where the run decides); 0 where the table answers it */
 int cplan_respond_runtime_cells(Compiler *c, int id, int cls, const char *name, int all, CplanCells *out);
 /* Whether name answers on cls's chain where presence site id runs, as a
    call of the name there finds it, from call_target with CT_REACH (side: 0

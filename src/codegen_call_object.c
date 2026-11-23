@@ -220,8 +220,13 @@ int emit_call_identity_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
     /* An Integer/Float receiver with a Rational bound: `>=`/`<=` against an
        sp_Rational struct will not compile. Box both sides and compare through
        sp_poly_cmp_ck, which orders Rational against Integer/Float exactly (#3232). */
+    /* So does a boxed bound that reaches here: the bounds a Symbol's proc
+       hands on (`s.to_sym.to_proc.call(1)`, whose dispatch has an arm for
+       between?) are boxed values, and the plain compare below was written
+       against the box. */
     if ((rt == TY_INT || rt == TY_FLOAT) &&
-        (comp_ntype(c, argv[0]) == TY_RATIONAL || comp_ntype(c, argv[1]) == TY_RATIONAL)) {
+        (comp_ntype(c, argv[0]) == TY_RATIONAL || comp_ntype(c, argv[1]) == TY_RATIONAL ||
+         comp_ntype(c, argv[0]) == TY_POLY || comp_ntype(c, argv[1]) == TY_POLY)) {
       int ts = hoist_boxed_rooted(c, recv);
       int tlo = hoist_boxed_rooted(c, argv[0]), thi = hoist_boxed_rooted(c, argv[1]);
       buf_printf(b, "(sp_poly_cmp_ck(_t%d, _t%d) >= 0 && sp_poly_cmp_ck(_t%d, _t%d) <= 0)",

@@ -898,20 +898,44 @@ void prog_refuse_loads(Compiler *c) {
      a class body, an iterator's block, an assignment's value), is placed at
      that require: `load_by` the LoadNode, `load_stmt` the top-level
      statement holding it. The record enters it there, with the require's
-     may, as the inline model splices it. Any other file keeps a region of
-     its own.
+     may, as the inline model splices it. So is one whose other requires
+     are each a top-level `require` statement of the order that runs after
+     the statement holding that one, which surely runs (ELAB_SITE_SURE):
+     the file is loaded by then, and those requires load nothing (a file
+     a class body requires that a later top-level statement requires
+     again). Any other file keeps a region of its own.
    Asked after the folds, ahead of the readers of the program's order. */
-typedef struct { Compiler *c; int stmt, n, open; int *nsite, *site, *at; unsigned char *ok; } ProgSites;
+typedef struct {
+  Compiler *c; int stmt, n, open; int *nsite, *site, *at; unsigned char *ok;
+  /* the requires that are no top-level `require` statement (nest), and the ones that are (top: file, LoadNode) */
+  int *nnest, *nest_site, *nest_at; unsigned char *nest_sure, *spoil;
+  int *top_file, *top_load, ntop, captop;
+} ProgSites;
 static void prog_site_note(void *ud, int load, int in_place) {
   ProgSites *q = ud;
-  for (int k = 0; k < prog_load_ncand(q->c->nt, load); k++) {   /* a set's files: no one site places them */
-    int t = prog_load_cand(q->c->nt, load, k);
-    if (t > 0 && t < q->n) { q->nsite[t]++; q->ok[t] = 0; }
+  const NodeTable *nt = q->c->nt;
+  for (int k = 0; k < prog_load_ncand(nt, load); k++) {   /* a set's files: no one site places them */
+    int t = prog_load_cand(nt, load, k);
+    if (t > 0 && t < q->n) { q->nsite[t]++; q->ok[t] = 0; q->spoil[t] = 1; }
   }
-  q->open |= prog_load_open(q->c->nt, load);
-  int t = (int)nt_int(q->c->nt, load, "target_file", -1);
+  q->open |= prog_load_open(nt, load);
+  int t = (int)nt_int(nt, load, "target_file", -1);
   if (t <= 0 || t >= q->n) return;
-  q->nsite[t]++; q->site[t] = load; q->at[t] = q->stmt; q->ok[t] = (unsigned char)(in_place);
+  q->nsite[t]++; q->site[t] = load; q->at[t] = q->stmt; q->ok[t] = (unsigned char)(in_place & 1);
+  /* (not a `load`, which runs its file again) */
+  const char *m = nt_str(nt, load, "method");
+  if (load == q->stmt && m && (sp_streq(m, "require") || sp_streq(m, "require_relative"))) {
+    if (q->ntop == q->captop) {
+      q->captop = q->captop ? q->captop * 2 : 8;
+      q->top_file = realloc(q->top_file, sizeof(int) * (size_t)q->captop);
+      q->top_load = realloc(q->top_load, sizeof(int) * (size_t)q->captop);
+      if (!q->top_file || !q->top_load) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    }
+    q->top_file[q->ntop] = t; q->top_load[q->ntop++] = load;
+    return;
+  }
+  q->nnest[t]++; q->nest_site[t] = load; q->nest_at[t] = q->stmt;
+  q->nest_sure[t] = (unsigned char)((in_place & 1) && (in_place & ELAB_SITE_SURE));
 }
 /* The top-level statement of a file that holds node id, or -1. */
 static int prog_top_stmt_of(const Compiler *c, const int *parent, int id) {
@@ -1512,7 +1536,10 @@ void prog_settle_files(Compiler *c) {
   prog_reach(c, seen, live);
   prog_warn_missing(c, seen);
   if (n < 2) { free(seen); free(live); free(ok); free(nsite); free(site); free(at); return; }
-  ProgSites q = { c, -1, n, 0, nsite, site, at, ok };
+  int *nnest = calloc((size_t)n, sizeof(int)), *nest_site = calloc((size_t)n, sizeof(int)), *nest_at = calloc((size_t)n, sizeof(int));
+  unsigned char *nest_sure = calloc((size_t)n, 1), *spoil = calloc((size_t)n, 1);
+  if (!nnest || !nest_site || !nest_at || !nest_sure || !spoil) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  ProgSites q = { c, -1, n, 0, nsite, site, at, ok, nnest, nest_site, nest_at, nest_sure, spoil, NULL, NULL, 0, 0 };
   for (int f = 0; f < n; f++) {
     int st = prog_root_stmts(c, f), m = 0;
     const int *v = st >= 0 && live[f] ? nt_arr(nt, st, "body", &m) : NULL;
@@ -1520,10 +1547,17 @@ void prog_settle_files(Compiler *c) {
   }
   for (int k = 0; k < c->nautoloads; k++) {
     const AutoloadRegistration *a = &c->autoloads[k];
-    if (seen[a->node] && a->file > 0 && a->file < n) { nsite[a->file]++; ok[a->file] = 0; }
+    if (seen[a->node] && a->file > 0 && a->file < n) { nsite[a->file]++; ok[a->file] = 0; spoil[a->file] = 1; }
   }
   if (q.open) memset(ok, 0, (size_t)n);   /* an open require may run any file first */
   prog_unplace_candidates(c, seen, live);
+  int sn = 0, *seq = q.ntop ? prog_top_seq(c, &sn, NULL) : NULL, *pos = NULL;
+  if (seq) {
+    pos = malloc(sizeof(int) * ((size_t)nt->count + 1));
+    if (!pos) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    for (int i = 0; i < nt->count; i++) pos[i] = -1;
+    for (int k = 0; k < sn; k++) pos[seq[k]] = k;
+  }
   for (int f = 1; f < n; f++) {
     int st = live[f] ? -1 : prog_root_stmts(c, f);
     if (st >= 0) { nt_node_set_arr(nt, st, "body", NULL, 0); nt_node_set_int(nt, nt_root(nt, f), "file_dropped", 1); }
@@ -1531,7 +1565,19 @@ void prog_settle_files(Compiler *c) {
       nt_node_set_int(nt, nt_root(nt, f), "load_by", site[f]);
       nt_node_set_int(nt, nt_root(nt, f), "load_stmt", at[f]);
     }
+    else if (live[f] && pos && prog_load_by(c, f) < 0 && !q.open && !spoil[f] && nnest[f] == 1 && nest_sure[f] &&
+             pos[nest_at[f]] >= 0) {
+      int after = 1;
+      for (int k = 0; k < q.ntop && after; k++)
+        if (q.top_file[k] == f) after = pos[q.top_load[k]] > pos[nest_at[f]];
+      if (after) {
+        nt_node_set_int(nt, nt_root(nt, f), "load_by", nest_site[f]);
+        nt_node_set_int(nt, nt_root(nt, f), "load_stmt", nest_at[f]);
+      }
+    }
   }
+  free(seq); free(pos);
+  free(nnest); free(nest_site); free(nest_at); free(nest_sure); free(spoil); free(q.top_file); free(q.top_load);
   unsigned char *state = calloc((size_t)n, 1);
   if (!state) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   for (int f = 1; f < n; f++) prog_stamp_deferred(c, f, state);

@@ -1696,6 +1696,7 @@ TyKind g_ret_type = TY_UNKNOWN;
    expressions type. `return <value>` emitted into it is a C constraint
    violation, and GCC 14 rejects it. */
 int g_c_ret_void = 0;
+int g_in_file_top = 0;
 /* The body of the Fiber.new / Thread.new / Enumerator.new block whose C
    function is being emitted, or -1. A `next` this body owns leaves that
    function (emit_next_leaving_body). */
@@ -8231,7 +8232,7 @@ void emit_main_exit(Buf *b) {
 }
 
 void emit_retf_return(int eid, int has_retval, Buf *b) {
-  if (g_c_ret_void && g_ret_type == TY_UNKNOWN) { buf_printf(b, "if (_retf%d) { ", eid); emit_main_exit(b); }
+  if (g_c_ret_void && g_ret_type == TY_UNKNOWN && !g_in_file_top) { buf_printf(b, "if (_retf%d) { ", eid); emit_main_exit(b); }
   /* A fiber body is `static void`: returning the value there is a C
      constraint violation (GCC 14 rejects it), and the value had nowhere to
      go anyway -- a void function's caller cannot read it. Drop it and

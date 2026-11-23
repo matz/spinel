@@ -14934,7 +14934,7 @@ static void emit_return_1(Compiler *c, int id, Buf *b, int indent) {
     return;
   }
 
-  if (g_c_ret_void && g_ret_type == TY_UNKNOWN) {
+  if (g_c_ret_void && g_ret_type == TY_UNKNOWN && !g_in_file_top) {
     emit_indent(b, indent);
     buf_puts(b, "{ ");
     for (int k = 0; k < n; k++) { buf_puts(b, "(void)("); emit_expr_for_effect(c, a[k], b); buf_puts(b, "); "); }

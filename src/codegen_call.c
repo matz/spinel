@@ -1599,8 +1599,8 @@ void emit_io_reopen_call(Compiler *c, int id, int recv, const char *name, Buf *b
   Scope *cs = comp_scope_of(c, id);
   int caller = (cs && !cs->is_cmethod) ? cs->class_id : -1;
   int all_public = 1;
-  /* a block-taking one has no standalone function to call (the plan's
-     CRF_IO_REOPEN) */
+  /* codegen splices a method with Scope.yields set into each call site, so
+     the plan refuses this call (cplan_io_reopen_yields, CRF_IO_REOPEN) */
   refuse_from_plan(c, id, CRF_IO_REOPEN, "refuse-io-reopen");
   for (int i = 0; i < n; i++) {
     if (plain && io_reopen_call_vis(c, id, ks[i], name, 1, caller) != SP_VIS_PUBLIC) all_public = 0;
@@ -1611,6 +1611,7 @@ void emit_io_reopen_call(Compiler *c, int id, int recv, const char *name, Buf *b
     buf_printf(b, "%s(", mc_method(c, &c->scopes[mi]));
     emit_expr(c, recv, b);
     emit_args_filled(c, mi, args, ", ", b);
+    emit_trailing_blk_arg(c, &c->scopes[mi], id, -1, b);
     buf_puts(b, ")");
     return;
   }
@@ -1629,6 +1630,13 @@ void emit_io_reopen_call(Compiler *c, int id, int recv, const char *name, Buf *b
   free(rb.p);
   int *hsv = NULL, *hty = NULL;
   int hn = hoist_dispatch_args(c, args, &hsv, &hty);
+  /* one sp_Proc temp for the call's block, passed as the last argument to
+     each IO reopen method with a `&b` parameter (emit_trailing_blk_arg) */
+  int bt = -1;
+  for (int i = 0; i < n && bt < 0; i++) {
+    const Scope *km = &c->scopes[call_target(c, id, ks[i], name, 0, NULL)];
+    if (km->blk_param && km->blk_param[0] && !km->yields) bt = poly_call_blk_proc(c, id, -1);
+  }
   int tv = ++g_tmp;
   char h[32];
   snprintf(h, sizeof h, "_r%d", tv);
@@ -1642,6 +1650,7 @@ void emit_io_reopen_call(Compiler *c, int id, int recv, const char *name, Buf *b
     Buf cb; memset(&cb, 0, sizeof cb);
     buf_printf(&cb, "%s(_r%d", mc_method(c, &c->scopes[kmi]), tv);
     emit_args_filled(c, kmi, args, ", ", &cb);
+    emit_trailing_blk_arg(c, &c->scopes[kmi], id, bt, &cb);
     buf_puts(&cb, ")");
     Buf vb; memset(&vb, 0, sizeof vb);
     int vis = plain ? io_reopen_call_vis(c, id, ks[i], name, 1, caller) : SP_VIS_PUBLIC;
@@ -28480,6 +28489,16 @@ int reopen_override_block_ok(Compiler *c, int id) {
       int ami = aci >= 0 ? call_target(c, id, aci, nm, 0, &ml) : -1;
       if (ami >= 0 && ml.def_class == aci && c->scopes[ami].name && sp_streq(c->scopes[ami].name, nm))
         return !c->scopes[ami].yields || ((ty_is_array(rt) || ty_is_obj_array(rt)) && sp_streq(nm, "concat"));
+    }
+    /* so does a String's, a Symbol's or an IO's (`class IO; def tap = 42`);
+       a method defined only in a File reopen runs the builtin arms, which
+       also serve STDOUT, a pipe and a socket */
+    if (nm && (rt == TY_STRING || rt == TY_STRBUF || rt == TY_SYMBOL || rt == TY_IO)) {
+      int sci = comp_core_class(c, rt == TY_IO ? CORE_IO : rt == TY_SYMBOL ? CORE_SYMBOL : CORE_STRING);
+      MethodLookup ml = { .def_class = -1 };
+      int smi = sci >= 0 ? call_target(c, id, sci, nm, 0, &ml) : -1;
+      if (smi >= 0 && ml.def_class == sci && c->scopes[smi].name && sp_streq(c->scopes[smi].name, nm) &&
+          !c->scopes[smi].yields) return 1;
     } }
   if (nt_kind(c->nt, blk) != NK_BlockNode) return 0;
   const CallPlan p = cplan_user(c, id);

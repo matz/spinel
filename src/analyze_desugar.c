@@ -12158,7 +12158,7 @@ static int fwd_own_named_block(Compiler *c, int id, int ex) {
 
 /* The File and IO iterators whose arm (codegen_call_io.c) yields exactly one
    value per step. */
-static int fwd_io_one_param_iter(Compiler *c, const char *name) {
+static int fwd_io_one_param_iter(Compiler *c, int id, const char *name) {
   static const char *const names[] = {
     "each", "each_line", "each_char", "each_byte", "each_codepoint", NULL };
   if (!str_in(name, names)) return 0;
@@ -12166,7 +12166,7 @@ static int fwd_io_one_param_iter(Compiler *c, const char *name) {
   static const int owners[] = { CORE_FILE, CORE_IO, -1 };
   for (int k = 0; owners[k] >= 0; k++) {
     int ci = comp_core_class(c, owners[k]);
-    if (ci >= 0 && comp_method_in_chain(c, ci, name, NULL) >= 0) return 0;
+    if (ci >= 0 && call_target(c, id, ci, name, 0, NULL) >= 0) return 0;
   }
   return 1;
 }
@@ -13941,7 +13941,7 @@ int desugar_value_callable_forwards(Compiler *c) {
       arity = 1;
       pty[0] = TY_POLY;
     }
-    else if (rt == TY_IO && fwd_io_one_param_iter(c, name)) {
+    else if (rt == TY_IO && fwd_io_one_param_iter(c, id, name)) {
       /* A File or IO's line, character and byte loops yield one value each:
          a String, or an Integer from each_byte and each_codepoint. Their
          arms run a literal block's body in place and have no proc form, so

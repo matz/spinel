@@ -14211,6 +14211,9 @@ int desugar_block_implicit_rest_at(Compiler *c, LowerCtx *lc, int id) {
   if (p < 0) return 0;
   char nm[64]; snprintf(nm, sizeof nm, "__implicit_rest_%s", comp_node_tag(c, id));
   nt_node_set_str(nt, p, "name", nm);
+  int blk = lower_parents(c, lc)[id];   /* the block whose list this is */
+  nt_set_local_name(nt, p, nt_slot_name(nt, nm, comp_node_tag(c, blk)));   /* a declaration of the block's own */
+  nt_decl_in(nt, p, blk);
   nt_node_set_int(nt, p, "desugared_param", DPN_NONE);
   copy[rn] = p;
   nt_node_set_arr(nt, pn, "requireds", copy, rn + 1);

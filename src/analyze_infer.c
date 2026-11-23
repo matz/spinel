@@ -8050,11 +8050,7 @@ static int infer_enum_chain_call(Compiler *c, int id, const NodeTable *nt, const
     if (inner && ty_is_array(arr_t)) {
       if (is_map_alias(inner)) {
         int blk = nt_ref(nt, id, "block");
-        if (blk >= 0) {
-          int body = nt_ref(nt, blk, "body");
-          int bn = 0; const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
-          { *out = ty_array_of(bn > 0 ? yield_aware_elem_ty(c, bb[bn - 1]) : TY_UNKNOWN); return 1; }
-        }
+        if (blk >= 0) { *out = infer_map_block_ty(c, id, blk); return 1; }   /* a valued next's too, as a map's */
       }
       else if (sp_streq(inner, "each") || sp_streq(inner, "select") ||
                sp_streq(inner, "filter") || sp_streq(inner, "reject") ||

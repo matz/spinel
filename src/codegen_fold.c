@@ -6957,17 +6957,35 @@ int emit_with_index_expr(Compiler *c, int id, Buf *b) {
       if (elem_t == TY_POLY) buf_puts(g_pre, src); else emit_boxed_elem_read(c, elem_t, src, g_pre);
       buf_printf(g_pre, "; SP_GC_ROOT_RBVAL(_t%d);\n", tkept);
     }
-    IterStep st; emit_iter_step_open(c, block, !is_map, innerIndent, &st);
+    /* a map that collects boxed values carries each one boxed, a `next`'s
+       too, as a plain map does: a step slot of the tail's kind cut a `next`
+       of another kind to it (a Float to an Integer) */
+    IterStep st; emit_iter_step_open(c, block, !is_map || res_poly, innerIndent, &st);
     int saveInd = g_indent; g_indent = innerIndent;
     Buf vb; memset(&vb, 0, sizeof vb);
     TyKind body_ty = TY_UNKNOWN;
     /* select/reject test the block's value by Ruby's truthiness: an Integer
        0 keeps its element, and a boxed value is no C scalar (read raw, 0 was
        dropped and a boxed value did not build) */
-    if (is_map) body_ty = emit_iter_step_tail(c, &st, &vb);
+    /* a typed map's value that can be nil (a `next nil`) is held in the
+       step's oint slot and pushed with its nil, as a plain map's is
+       (emit_collect_expr): read as a plain value, the nil raised */
+    int vo = is_map && !res_poly && !is_mapbang && st.slot && oint_slot_is(st.slot);
+    if (vo) { body_ty = st.slot_ty; buf_printf(&vb, "_t%d", st.slot); }
+    /* ... and so is a tail that can answer nil (`x > 1 ? nil : x`), read
+       in its oint form */
+    else if (is_map && !res_poly && !is_mapbang && !st.slot && *nil_store_sfx(c, rk, bb[bn - 1]) &&
+             emit_iter_step_tail_o(c, &st, resr.elem, &vb))
+      { vo = 1; body_ty = resr.elem; }
+    else if (is_map) body_ty = emit_iter_step_tail(c, &st, &vb);
     else emit_iter_step_cond(c, &st, 0, &vb);
     g_indent = saveInd;
-    if (is_map) {
+    if (vo) {
+      emit_indent(g_pre, innerIndent);
+      emit_elem_entry(g_pre, 0, array_kind_ty(rk), rk, "push", "_nilable");
+      buf_printf(g_pre, "(_t%d, %s);\n", tres, vb.p);
+    }
+    else if (is_map) {
       const char *sfx = nil_store_sfx(c, rk, bb[bn - 1]);
       const char *psfx = array_push_sfx(rk, sfx);
       emit_indent(g_pre, innerIndent);

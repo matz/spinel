@@ -38229,6 +38229,36 @@ static int call_block_tail(Compiler *c, int call) {
   return st && n > 0 ? st[n - 1] : -1;
 }
 
+/* `arr.map.with_index(off) { }` (or collect): a map whose block is
+   handed to with_index */
+static int map_with_index_call(Compiler *c, int call) {
+  const NodeTable *nt = c->nt;
+  const char *nm = nt_str(nt, call, "name");
+  int r = nt_ref(nt, call, "receiver");
+  if (!nm || !sp_streq(nm, "with_index") || r < 0 || nt_kind(nt, r) != NK_CallNode ||
+      nt_ref(nt, r, "block") >= 0) return 0;
+  const char *rn = nt_str(nt, r, "name");
+  return rn && is_map_alias(rn);
+}
+
+/* Can a `next` of call's block (its own, not a nested block's) answer nil:
+   a bare `next`, or one whose value can be nil? Too many to read is a yes. */
+static int map_next_may_be_nil(Compiler *c, int call) {
+  const NodeTable *nt = c->nt;
+  int blk = nt_ref(nt, call, "block");
+  int body = blk >= 0 && nt_kind(nt, blk) == NK_BlockNode ? nt_ref(nt, blk, "body") : -1;
+  if (body < 0) return 0;
+  int nx[32];
+  int nn = an_block_nexts(nt, body, nx, 32);
+  if (nn < 0) return 1;
+  for (int k = 0; k < nn; k++) {
+    int a = nt_ref(nt, nx[k], "arguments"), an = 0;
+    const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+    if (an == 0 || (an == 1 && nullable_int_value(c, av[0]))) return 1;
+  }
+  return 0;
+}
+
 /* Can an ELEMENT of this array-valued expression be nil? A slot
    answers from its own marking; an expression that builds or forwards an array
    answers from what it was built out of, which is what lets a chain with no
@@ -38995,10 +39025,12 @@ static int nullable_int_elem_expr(Compiler *c, int v, int depth) {
   if (nt_kind(nt, v) == NK_CallNode) {
     const char *nm = nt_str(nt, v, "name");
     int tail = call_block_tail(c, v);
-    /* the mapped element IS the block's value */
+    /* the mapped element IS the block's value: its tail's, or a `next`'s
+       (a bare `next` or `next nil` lands a nil in the Array) */
     if (nm && tail >= 0 && (sp_streq(nm, "map") || sp_streq(nm, "collect") ||
-                            sp_streq(nm, "flat_map") || sp_streq(nm, "collect_concat")))
-      return nullable_int_value(c, tail);
+                            sp_streq(nm, "flat_map") || sp_streq(nm, "collect_concat") ||
+                            map_with_index_call(c, v)))
+      return nullable_int_value(c, tail) || map_next_may_be_nil(c, v);
     int rc = nt_ref(nt, v, "receiver");
     /* the values of a typed Integer-valued Hash that may hold a nil (D3b-ii) */
     if (nm && (sp_streq(nm, "values") || sp_streq(nm, "values_at") || sp_streq(nm, "fetch_values")) &&

@@ -1,0 +1,3 @@
+[:before, NoMethodError, NoMethodError, NoMethodError, false, [:a, :b], [:c], NoMethodError]
+[:after_unhide, :a, :b, NoMethodError, true, [], [:c], :a]
+[:after_hide, :a, :b, NoMethodError, true, [:c], [], :a]

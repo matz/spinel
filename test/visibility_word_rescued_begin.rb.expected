@@ -1,0 +1,12 @@
+"undefined method 'zz' for module 'M'"
+[:l1, NoMethodError, :l3, :l4]
+[NoMethodError, NoMethodError, NoMethodError, NoMethodError, :b]
+[NoMethodError, false, [:a]]
+[:x, :y, NoMethodError, []]
+[:m1, NoMethodError, :m3, :m4]
+[NoMethodError, :n3]
+[:z1, :z2, NoMethodError]
+[:y1, :y2, :y3]
+[:ba, :pa, :pb, :da, :dy, :dz]
+[:bc]
+[:sc, :so]

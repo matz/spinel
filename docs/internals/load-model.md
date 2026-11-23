@@ -350,17 +350,44 @@ the record holds of the name on the module, a module it includes
 (through another's include, or that one's prepend, too), Object, Kernel
 or main, or a builtin method of a builtin module among those (an
 included Comparable or Enumerable, by its builtin id) or of Object's
-table (`elab_module_has_method`, which the record's reach and the
-emitter both ask), not a def only another class has, nor the module
-object's own methods (`name`). So a word is a private version of the
-names ahead of the first one no method has, with a copy only where it
-reaches the end of names that are no Array (`lr_word_reach`); the word
-writes their visibility cells before it raises (`emit_vis_word_absent`),
-in a module body too. In an iterator's block or a begin body with rescue
+table (`elab_module_has_method`), not a def only another class has, nor
+the module object's own methods (`name`). Every visibility word is read
+so (private, protected, public, `private_class_method`,
+`public_class_method`, as `module_function`): CRuby changes its names in
+order and raises NameError at the first that no method has where the word
+runs, so the record takes the word as run for the names ahead of it
+only (`lr_word_reach`; module_function makes its versions of those only), where the word's statement is partial (in a rescued
+begin or a block: a word that runs whole ends the program where it raises),
+and of every name where an argument is no literal name (arguments are
+evaluated first). The test is the record's own at the word's point
+(`lr_word_has`: `lr_search` for a method the program holds, a def after the
+word is no method yet; the builtin fact only for a name no entry of the
+program's own on the class answers), so a name defined, aliased, included
+or reopened after the word is no method yet. A method counts only where
+the record can prove it ran: a def, a `define_method` or `attr_*` with a literal
+name, or an alias of one that is itself proven at the alias, on a straight-line
+path from the main file's top level (statement lists, class and module
+bodies, a `begin` with no rescue or ensure clause, a def a visibility word
+takes) and reached through superclass and include or prepend links that are
+too (`lr_path_sure`, `lr_link_sure`), none through a module the class itself prepends (the lookup starts at its origin), and Object's and the top level's
+entries only where Object is on the class's chain as the record holds it (a
+BasicObject subclass has none). A `def` among the names counts as one name, as
+the emitted word counts it. Everything else is unknown: a def in a
+block, a condition, a loop, a rescue modifier or a rescued begin, a Struct's or
+Data's member, an entry no point places or a method body's, a chain the record
+does not hold to its end. The reach stops at an unknown name as at a missing
+one: the names from there on keep the answer they have without the word, which
+is how their entries read where the word is partial (`LrDef.cut`: the word
+names them, and has not changed them). A
+module_function copies the names only where it makes every name private
+and is given no Array (`copies`); the word writes their visibility cells
+before it raises (`emit_vis_word_absent`, which asks the call plan whether
+a name is a method), in a module body too. In an iterator's block or a begin body with rescue
 clauses, where no statement ahead of the word in its frame may raise and
 skip it and no condition holds it, the record, with no run-time cell for
 the word's visibility, takes the word either to have run or not
-(`lr_word_runs`). The position walker marks each statement in iterators'
+(`lr_word_runs`; a word with an argument that is no literal name is left
+as any partial statement's). The position walker marks each statement in iterators'
 blocks (`ElabPos` and `LrStmt` `skip`, `unsure`): skipped where a block
 around it surely runs no time by the run count the record's iterator
 rows give (`[].each` on a literal, `0.times`) or a statement ahead of it
@@ -392,7 +419,14 @@ which the plan reads where the word runs (`lr_version_vis`, from the
 version's visibility cell where only the run decides). Only a def or a
 word of a name the program makes no entry of that the call plan cannot
 answer next to it is such a version (`lr_body_def_version`, over
-`lr_body_forms`). So is a definer call on self that stands in a
+`lr_body_forms`); a visibility word placed in a class body is an entry of
+its name's history with a point of its own, which the plan orders before the
+body's version, so it is no such entry and bars none, but for the name its
+reach ends at in a partial statement (one no entry of the program's places
+at the word, which a body's definer may have made by then): that stays
+barred, so the body's definer of it keeps the refusal it has there; a
+class-method word (`private_class_method`, `public_class_method`) keeps
+barring every name it takes, as the class side's faces read it. So is a definer call on self that stands in a
 method's body, a def's or a `define_method`'s or
 `define_singleton_method`'s block's, with no class body between
 (`lr_body_call`, `lr_in_method_body`; one in a block a class body hands a
@@ -723,7 +757,10 @@ body with rescue clauses there, counted from the frame. A constant
 condition is folded, so `attr_reader :x if true` applies. An entry under
 a run-time condition in its class body gives its name its visibility
 only (`elab_class_surface`). An entry with no point does not apply,
-unless its body is one the walk does not place. A mixin takes the test
+unless its body is one the walk does not place. A visibility word in a
+`begin` body with rescue clauses or an iterator's block that surely runs is
+taken to have run for the names it reaches (`lr_word_runs`, below).
+A mixin takes the test
 as the record is made (`LrMixin.applied`). A mixin in a branch the scope
 walk proves unreachable leaves the existing method history in place.
 

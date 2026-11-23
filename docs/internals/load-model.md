@@ -828,11 +828,12 @@ versions of, as a `respond_to?` of that name does (`presence_asks`):
 `cplan_list_cells` gives them, one list for each class a boxed receiver
 may hold (`emit_value_methods_reflection`,
 `emit_poly_object_methods_reflection`), and a `respond_to?` of a name only
-the run knows reads them per class (`cplan_respond_runtime_cells`). A
+the run knows reads them per class (`cplan_respond_runtime_cells`). A module's own instance side takes no entry, so
+its list reads the cells of its chain's versions (`presence_module_cells`). A
 list is not answered by `respond_to_missing?`, so it reads the cells in a
 program that defines it. The readers that still answer from the final
-tables are a module's list, a list on a receiver that is neither a
-constant nor an object, and a `respond_to?` or `method_defined?` of a
+tables are a list on a receiver that is neither a
+constant nor an object (a module value in a variable), and a `respond_to?` or `method_defined?` of a
 program that defines `respond_to_missing?`: the body's version a reader
 there names is not late (`lr_late_asked`), so a def is listed, and answers
 `respond_to?`, before it runs. A module's def such a list may read is the

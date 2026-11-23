@@ -4993,6 +4993,15 @@ static int presence_cells_at(Compiler *c, int id, int cls, unsigned side, const 
   int e = call_target(c, id, cls, name, side | CT_REACH, &ml);
   return presence_target_cells(c, id, e, &ml, cls, 0, name, mask, (side & CT_OWN) != 0, out);
 }
+/* ...a module's own instance side, no call of which takes an entry (the record gives its methods no verdict,
+   ML_TABLE): the cells of its chain's versions, as a class's entry holds them. A version whose visibility only
+   the run tells has no cell to read here (vis_kept 0): the table answers. */
+static int presence_module_cells(Compiler *c, int id, int cls, const char *name, int mask, int own, CplanCells *out) {
+  MethodLookup ml = { .def_class = -1 };
+  if (id < 0 || cls < 0 || !comp_class_is_module(c, &c->classes[cls])) return 0;
+  call_target(c, id, cls, name, CT_REACH, &ml);
+  return ml.kind == ML_TABLE && presence_cells_of(c, cls, 0, name, mask, own, VER_FINDS_NONE, 0, out);
+}
 /* See call_plan.h. */
 int cplan_presence_cells(Compiler *c, int id, int cls, unsigned side, const char *name, int mask, CplanCells *out) {
   return !respond_to_missing_defined(c) && presence_cells_at(c, id, cls, side, name, mask, out);
@@ -5007,9 +5016,10 @@ int cplan_list_cells(Compiler *c, int id, int cls, unsigned side, const char *na
   if (ln && is_instance_method_list(ln) && own && !list_own_reads_cells(c, id, cls)) return 0;
   if (chain && !((list_chain_shape(c->nt, id) || (own && list_own_object_shape(c->nt, id))) && reader_name_asks(c, id, cls, name))) return 0;
   /* (some version has cells, each answering for the visibilities mask counts: a run-time one from its cell) */
-  if (!(cm ? cplan_cmethod_presence(c, id, cls, name, mask, own, out)
-           : chain ? presence_cells_at(c, id, cls, side, name, mask, out) : cplan_presence_cells(c, id, cls, side, name, mask, out)) ||
-      out->n <= 0) return 0;
+  int ok = cm ? cplan_cmethod_presence(c, id, cls, name, mask, own, out)
+               : chain ? presence_cells_at(c, id, cls, side, name, mask, out) : cplan_presence_cells(c, id, cls, side, name, mask, out);
+  if (!ok && !cm && ln && (chain || (own && is_instance_method_list(ln)))) ok = presence_module_cells(c, id, cls, name, mask, own, out);
+  if (!ok || out->n <= 0) return 0;
   /* (where no version has run a list leaves the name out, whatever a call there finds: its else; the keep,
      ver_obj_presence_keep, and the list's read ask the same cells) */
   if (list) out->els = 0;

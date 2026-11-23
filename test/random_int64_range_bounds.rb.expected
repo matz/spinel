@@ -1,0 +1,12 @@
+ArgumentError
+ArgumentError
+nil
+[true, true]
+[true, true]
+[true, true, true]
+true
+true
+[true, true, true]
+[true, true, nil, ArgumentError]
+true
+true

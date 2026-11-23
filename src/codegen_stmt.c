@@ -1104,7 +1104,7 @@ else {
   }
   if (sp_streq(name, "srand")) {
     emit_indent(b, indent);
-    if (argc == 0) buf_puts(b, "(void)sp_kernel_srand((sp_int)time(NULL));\n");
+    if (argc == 0) buf_puts(b, "(void)sp_kernel_srand(sp_Random_new_seed());\n");
     else { buf_puts(b, "(void)sp_kernel_srand("); emit_seed_expr(c, argv[0], b); buf_puts(b, ");\n"); }
     return 1;
   }

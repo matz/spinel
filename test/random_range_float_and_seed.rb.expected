@@ -1,0 +1,49 @@
+[true, true]
+42
+7
+[true, true, true, true, true]
+[true, true, true, true]
+true
+[true, true, true]
+[0, true]
+[5, true]
+[5, true]
+[1.0, true]
+["0.0", "0.0", true]
+[true, true, true, true]
+ArgumentError
+ArgumentError
+ArgumentError
+ArgumentError
+ArgumentError
+ArgumentError
+ArgumentError
+ArgumentError
+nil
+nil
+nil
+nil
+nil
+nil
+Errno::EDOM
+Errno::EDOM
+Errno::EDOM
+Errno::EDOM
+Errno::EDOM
+Errno::EDOM
+Errno::EDOM
+Errno::EDOM
+Errno::EDOM
+Errno::EDOM
+Errno::EDOM
+Errno::EDOM
+Errno::EDOM
+[nil, ArgumentError]
+[nil, ArgumentError]
+[Errno::EDOM, Errno::EDOM]
+[Errno::EDOM, Errno::EDOM]
+[[Float, true], [Float, true]]
+true
+true
+true
+true

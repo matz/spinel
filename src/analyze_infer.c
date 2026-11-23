@@ -7216,22 +7216,23 @@ static int infer_receiverless_call(Compiler *c, int id, const NodeTable *nt, con
     }
     if (sp_streq(name, "rand")) {
       if (argc == 0) { *out = TY_FLOAT; return 1; }
-      if (infer_type(c, argv[0]) == TY_FLOAT_RANGE) { *out = TY_FLOAT; return 1; }   /* rand(float range) */
+      if (infer_type(c, argv[0]) == TY_FLOAT_RANGE) { *out = TY_POLY; return 1; }   /* Float, or nil if empty */
       NodeKind atype_k = nt_kind(nt, argv[0]);
       if (atype_k == NK_RangeNode) {
         int lo = nt_ref(nt, argv[0], "left");
         int hi = nt_ref(nt, argv[0], "right");
-        if (rand_lit_range_float(c, argv[0])) { *out = TY_FLOAT; return 1; }   /* rand(float_range), either bound */
+        if (rand_lit_range_float(c, argv[0])) { *out = TY_POLY; return 1; }   /* Float, or nil if empty */
+        if (lo < 0 || hi < 0) { *out = TY_INT; return 1; }   /* open side raises Errno::EDOM */
         /* a statically empty/reversed int range yields nil (#2519) */
-        if (lo >= 0 && hi >= 0 &&
-            nt_kind(nt, lo) == NK_IntegerNode &&
+        if (nt_kind(nt, lo) == NK_IntegerNode &&
             nt_kind(nt, hi) == NK_IntegerNode) {
           long long lov = nt_int(nt, lo, "value", 0);
           long long hiv = nt_int(nt, hi, "value", 0);
           int excl = nt_range_excl(nt, argv[0]);
-          if ((excl ? hiv - 1 : hiv) < lov) { *out = TY_POLY; return 1; }   /* nil */
+          if (excl ? hiv <= lov : hiv < lov) { *out = TY_POLY; return 1; }   /* nil */
+          { *out = TY_INT; return 1; }
         }
-        { *out = TY_INT; return 1; }
+        { *out = TY_POLY; return 1; }
       }
       /* rand(int range held in a variable): an Integer, or nil if the range is
          empty at runtime -> a poly (#3221). (A Float range in a variable is

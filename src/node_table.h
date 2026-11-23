@@ -126,6 +126,7 @@ typedef struct {
      be reading. */
   int **kind_ids;
   int *kind_n, *kind_cap;
+  unsigned *kind_gen;
   int kind_count;
   int *kind_moved, nkind_moved, ckind_moved;
   int kind_live;
@@ -272,6 +273,9 @@ static inline NodeKind nt_kind(const NodeTable *nt, int id) {
    Lets a pass iterate only the nodes it cares about instead of scanning the
    whole table and filtering by kind. *count receives the number of ids. */
 const int *nt_nodes_of_kind(const NodeTable *nt, NodeKind k, int *count);
+/* Generation counter for kind `k`'s id list: bumped whenever a node of kind
+   `k` is added, removed, retyped, swapped, or renumbered. */
+unsigned nt_kind_gen(const NodeTable *nt, NodeKind k);
 
 /* Iterate the ids of kind KIND (ascending), binding each to a fresh `int IDV`:
      NT_FOREACH_KIND(nt, NK_CallNode, id) { ... use id ... }

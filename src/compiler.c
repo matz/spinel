@@ -515,6 +515,15 @@ void comp_grow_node_arrays(Compiler *c) {
   c->node_cap = n;
 }
 
+int comp_cache_check_on(void) {
+  static int on = -1;
+  if (on < 0) {
+    const char *e = getenv("SPINEL_CACHE_CHECK");
+    on = (e && e[0] && !sp_streq(e, "0")) ? 1 : 0;
+  }
+  return on;
+}
+
 void comp_free(Compiler *c) {
   if (!c) return;
   mtab_report(c);   /* (--method-table-check: the end of the program) */
@@ -703,6 +712,10 @@ void comp_free(Compiler *c) {
   }
   free(c->ffi_sources);
   free(c->nscope);
+  free(c->scope_ret_has);
+  c->scope_ret_has = NULL;
+  c->scope_ret_nscopes = 0;
+  c->scope_ret_built = 0;
   free((unsigned char *)c->str_shadow);
   if (c->stmt_wr_names)
     for (int i = 0; i < c->stmt_wr_cap; i++) free(c->stmt_wr_names[i]);

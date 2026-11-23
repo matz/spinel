@@ -1,0 +1,12 @@
+[:custom, false]
+[:hidden, false]
+[:custom, false]
+[:hidden, false]
+[:methods, :private_methods, :x]
+[:listed]
+[:singleton_methods, :y]
+[:listed]
+[:singleton_methods, :y]
+true
+true
+true

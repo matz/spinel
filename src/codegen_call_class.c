@@ -4518,7 +4518,10 @@ static int emit_class_value_singleton_methods(Compiler *c, int id, Buf *b, const
   ReflNames r = {0};
   /* the class side where the list runs, its own methods alone for `false` */
   if (ci2 >= 0) refl_at(&r, id, ci2, CT_CMETHOD | (all ? 0 : CT_OWN));
-  if (cn2 && !priv) refl_builtin_singleton_methods(cn2, all, &r);
+  /* a reopened builtin's own singleton methods, asked of the constant or
+     of self in the reopening's body */
+  const char *bcn = cn2 ? cn2 : ci2 >= 0 ? c->classes[ci2].name : NULL;
+  if (bcn && !priv) refl_builtin_singleton_methods(bcn, all, &r);
   if (ci2 >= 0) {
     if (priv) refl_class_private_methods(c, ci2, &r);
     else refl_class_singleton_methods(c, ci2, all, &r);

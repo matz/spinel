@@ -24616,9 +24616,9 @@ static void emit_file_tops(Compiler *c, Buf *body) {
   prog_file_tops(c, has, NULL, NULL);
   /* a void function: a top-level `return` ends the file's load, as a void
      method's return ends the method, not the program's main body */
-  int sv_cv = g_c_ret_void;
+  int sv_cv = g_c_ret_void, sv_ft = g_in_file_top;
   TyKind sv_rt = g_ret_type;
-  g_c_ret_void = 1; g_ret_type = TY_VOID;
+  g_c_ret_void = 1; g_ret_type = TY_VOID; g_in_file_top = 1;
   for (int f = 1; f < n; f++) {
     if (!has[f]) continue;
     Scope *s = &c->scopes[c->file_scope[f]];
@@ -24647,7 +24647,7 @@ static void emit_file_tops(Compiler *c, Buf *body) {
     buf_puts(body, "}\n");
     if (!g_no_root_frame) gc_frame_build(c, body, frame_ins, tag);
   }
-  g_c_ret_void = sv_cv; g_ret_type = sv_rt;
+  g_c_ret_void = sv_cv; g_ret_type = sv_rt; g_in_file_top = sv_ft;
   free(has);
 }
 

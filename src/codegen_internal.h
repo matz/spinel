@@ -893,7 +893,9 @@ extern int g_block_brk_rescue_base;
    can be boxed when the method returns poly but the value is concrete. */
 extern TyKind g_ret_type;
 extern int g_c_ret_void;   /* the C function returns void (a fiber body) */
-extern int g_c_ret_void;   /* the C function returns void (a fiber body) */
+/* emitting a required file's top level (emit_file_tops): a return there ends the file's load, and main's exit,
+   with the `_sp_main_rc` main's body declares, is not in reach */
+extern int g_in_file_top;
 extern int g_fiber_body;   /* that fiber body's statements, or -1 */
 extern const char *g_fn_pr_label;   /* real function's return funnel (see codegen_util.c) */
 extern const char *g_fn_pr_var;

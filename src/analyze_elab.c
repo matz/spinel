@@ -164,6 +164,11 @@ struct LoadRecord {
   int recorded;
   int frontier;              /* the statements recorded so far, in seq order: while the walk records, a query at p is complete for p.seq <= frontier (lr_ready) */
   struct ElabRec *rec;       /* the record's state while elab_program makes it */
+  /* the bodies in a value the record places at their statements (lr_nested_body), by class or module node (nb_of:
+     [nnb_of] the node's index in nb + 1, 0 for none): the body statements recorded placed (placed) and the visibility
+     they leave (vs), which the rest, lr_body_defs, follow, and whether the body is held (lr_nested_hold: recorded as
+     an unplaced body is, kept when the record is made again) */
+  struct LrNbody { int node, placed; unsigned char vs, held; } *nb; int nnb, cnb, *nb_of, nnb_of;
   struct HostStep *host;     /* ...and the host a walk-time form splices through (elab_walk_host) */
   LrEvent *ev; int nev, cev;   /* the hook events of the statements recorded and not yet left by the scope walk */
   struct LrHist *hist; int nhist, chist, *hhead, nhbuckets;   /* nhbuckets: hhead's heads, grown with the histories (lr_hist) */
@@ -1352,6 +1357,23 @@ static void lr_version(LoadRecord *r, int a, int b, const char *name, LrDef d) {
    does not hold (one registration made after the walk) */
 static LrClass *lr_class(LoadRecord *r, int cls) {
   return cls >= LR_MAIN && cls + 1 < r->ncls ? &r->cls[cls + 1] : NULL;
+}
+
+/* Body node's entry among the bodies in a value (LoadRecord.nb), made when make; NULL for none */
+static struct LrNbody *lr_nbody(LoadRecord *r, int node, int make) {
+  if (node < 0) return NULL;
+  if (node < r->nnb_of && r->nb_of[node]) return &r->nb[r->nb_of[node] - 1];
+  if (!make) return NULL;
+  if (node >= r->nnb_of) {
+    int n = node + 1 > r->n ? node + 1 : r->n;
+    if (!(r->nb_of = realloc(r->nb_of, sizeof(int) * (size_t)n))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    memset(r->nb_of + r->nnb_of, 0, sizeof(int) * (size_t)(n - r->nnb_of));
+    r->nnb_of = n;
+  }
+  r->nb = lr_grow(r->nb, &r->cnb, r->nnb, sizeof *r->nb);
+  r->nb[r->nnb] = (struct LrNbody){ node, 0, BVIS_PUBLIC, 0 };
+  r->nb_of[node] = ++r->nnb;
+  return &r->nb[r->nnb - 1];
 }
 
 /* A class or module header the scope walk reached: the class registration
@@ -4931,16 +4953,17 @@ static int lr_body_leaves(const NodeTable *nt, int st) {
    top-level body's statements do: where it surely runs whenever the statement runs (lr_runs_up_to: no condition,
    rescue, block, lambda or safe navigation between), its forms are recorded placed at the statement, in the order
    lr_run_order gives against the calls the statement holds, up to the first that may leave the body early (the rest
-   stays unplaced, lr_body_defs: nested_placed counts the recorded, nested_vs is the visibility they left). A body
-   held (lr_nested_hold: nested_held) and any other keeps all its forms unplaced, as before. */
+   stays unplaced, lr_body_defs: LrNbody.placed counts the recorded, LrNbody.vs is the visibility they left). A body
+   held (lr_nested_hold: LrNbody.held) and any other keeps all its forms unplaced, as before. */
 static void lr_nested_body(LrNested *n, int node, int e) {
   ElabRec *x = n->x;
   const NodeTable *nt = x->c->nt;
   int ci = elab_header_class(x->c, node, NULL, NULL), body = class_def_body(nt, node), cnt = 0, upto = 0;
   LrClass *kc = ci >= 0 ? lr_class(x->r, ci) : NULL;
   const int *par = comp_parent_map(x->c);
-  nt_node_set_int((NodeTable *)nt, node, "nested_placed", 0);
-  if (!kc || body < 0 || !par || nt_int(nt, node, "nested_held", 0) || !lr_runs_up_to(nt, par, nt->count, node, x->r->st[e].node)) return;
+  int b = (int)(lr_nbody(x->r, node, 1) - x->r->nb);   /* (an index: the forms may make another body's entry) */
+  x->r->nb[b].placed = 0;
+  if (!kc || body < 0 || !par || x->r->nb[b].held || !lr_runs_up_to(nt, par, nt->count, node, x->r->st[e].node)) return;
   int one;
   const int *st = lr_body_stmts(nt, body, &cnt, &one);
   while (upto < cnt && !lr_body_leaves(nt, st[upto])) upto++;
@@ -4954,8 +4977,8 @@ static void lr_nested_body(LrNested *n, int node, int e) {
   for (int i = 0; i < upto; i++)
     if (st[i] < x->r->n && x->r->at[st[i]] == -2) { x->r->at[st[i]] = e; x->r->bits[st[i]] = x->r->bits[node]; }
   lr_body_stmt_forms(&y, ci, node, st, 0, upto, &vs, 0, x->r->st[e].may);
-  nt_node_set_int((NodeTable *)nt, node, "nested_placed", upto);
-  nt_node_set_int((NodeTable *)nt, node, "nested_vs", vs);   /* (the visibility the rest of the body, lr_body_defs, goes on in) */
+  x->r->nb[b].placed = upto;
+  x->r->nb[b].vs = vs;   /* (the visibility the rest of the body, lr_body_defs, goes on in) */
 }
 static int lr_nested_part(void *ud, int ch, ElabPos *q) {
   LrNested *n = ud;
@@ -5166,6 +5189,7 @@ static void lr_record_drop(LoadRecord *r) {
   free(r->bread); r->bread = NULL; r->nbread = 0;   /* (read through the dropped histories) */
   free(r->once); r->once = NULL; r->nonce = 0;
   r->npword = 0;   /* (the words are listed again as the statements are walked) */
+  for (int b = 0; b < r->nnb; b++) r->nb[b].placed = 0;   /* (a body's held mark stays: lr_nested_hold) */
 }
 
 static char *lr_dump_text(Compiler *c);
@@ -5217,12 +5241,13 @@ static void lr_body_defs(Compiler *c, int ci, int body, int fnode) {
   ElabRec x = { c, r, .unplaced = 1, .body = lr_body_around(nt, par, r->n, fnode) };
   if (x.body < 0) x.body = 0;
   unsigned char vs = BVIS_PUBLIC;
-  int n, from = nt_int(nt, fnode, "nested_placed", 0);
+  const struct LrNbody *nb = lr_nbody(r, fnode, 0);
+  int n, from = nb ? nb->placed : 0;
   int one;
   const int *st = lr_body_stmts(nt, body, &n, &one);
   /* (the statements a body in a value placed at its statement, lr_nested_body, are recorded: the rest follow them,
      in the visibility they left) */
-  if (from) vs = (unsigned char)nt_int(nt, fnode, "nested_vs", BVIS_PUBLIC);
+  if (from) vs = nb->vs;
   lr_body_stmt_forms(&x, ci, fnode, st, from, n, &vs, 1, 0);
 }
 /* Does def node d run whenever the body around it does (lr_body_around),
@@ -5632,7 +5657,6 @@ static void lr_words_refine(Compiler *c) {
 }
 
 static int lr_nested_hold(Compiler *c);
-static void lr_nested_hold_reset(Compiler *c);
 /* The record dropped and made again over the walked statements */
 static void lr_record_again(ElabRec *x) {
   LoadRecord *r = x->r;
@@ -5789,7 +5813,6 @@ void elab_program(Compiler *c, struct HostStep *h) {
   h->now = 0;
   r->host = NULL;
   double t0 = sp_timing_now();   /* the record's own cost after the walk (the map's is an_elab_points) */
-  lr_nested_hold_reset(c);
   lr_record_upto(r, r->nst);
   lr_settle_regions(c);
   lr_later_settle(c);
@@ -6196,33 +6219,23 @@ static int lr_stmt_held(Compiler *c, int ci, int st) {
    word, an alias or a define_method, which the plan answers no body's version of, or a name that has an unplaced def
    on its side in a class that may share its class's chain. An unplaced def (the `initialize` or private def a lambda
    makes) may have run before the call, and the supply rule (lr_unordered_supply) lets it show only where no placed
-   def of the name is on the chain, which this body's def would now be. Marks each such body (nested_held) and says
+   def of the name is on the chain, which this body's def would now be. Marks each such body (LrNbody.held) and says
    whether one is new: the record is made again without them (elab_program), and asked again, for a body held makes
    unplaced defs of its own. Each round only adds holds, so it ends. */
 static int lr_nested_hold(Compiler *c) {
+  LoadRecord *r = c->lrec;
   const NodeTable *nt = c->nt;
-  int ndk = 0, more = 0;
-  const NodeKind *dk = class_def_kinds(&ndk);
-  for (int dh = 0; dh < ndk; dh++)
-    NT_FOREACH_KIND(nt, dk[dh], id) {
-      int upto = nt_int(nt, id, "nested_placed", 0);
-      if (upto <= 0 || nt_int(nt, id, "nested_held", 0)) continue;
-      int ci = elab_header_class(c, id, NULL, NULL), body = class_def_body(nt, id), n = 0, one, hold = 0;
-      if (ci < 0 || body < 0) continue;
-      const int *st = lr_body_stmts(nt, body, &n, &one);
-      for (int i = 0; !hold && i < upto && i < n; i++) hold = lr_stmt_held(c, ci, st[i]);
-      if (hold) { nt_node_set_int((NodeTable *)nt, id, "nested_held", 1); more = 1; }
-    }
+  int more = 0;
+  for (int b = 0; b < r->nnb; b++) {
+    int id = r->nb[b].node, upto = r->nb[b].placed;
+    if (upto <= 0 || r->nb[b].held) continue;
+    int ci = elab_header_class(c, id, NULL, NULL), body = class_def_body(nt, id), n = 0, one, hold = 0;
+    if (ci < 0 || body < 0) continue;
+    const int *st = lr_body_stmts(nt, body, &n, &one);
+    for (int i = 0; !hold && i < upto && i < n; i++) hold = lr_stmt_held(c, ci, st[i]);
+    if (hold) r->nb[b].held = more = 1;
+  }
   return more;
-}
-/* ...and the marks of the bodies held, dropped before the record is first made */
-static void lr_nested_hold_reset(Compiler *c) {
-  const NodeTable *nt = c->nt;
-  int ndk = 0;
-  const NodeKind *dk = class_def_kinds(&ndk);
-  for (int dh = 0; dh < ndk; dh++)
-    NT_FOREACH_KIND(nt, dk[dh], id)
-      if (nt_int(nt, id, "nested_held", 0)) nt_node_set_int((NodeTable *)nt, id, "nested_held", 0);
 }
 
 int elab_method_versions(Compiler *c, const char *name) {
@@ -14772,7 +14785,7 @@ void elab_free(Compiler *c) {
   if (r->bnames) { lr_body_names_free(r->bnames); free(r->bnames); }
   for (int i = 0; i < r->nhdr; i++) free(r->hdr[i].leaf);
   free(r->hdr); free(r->hdr_head);
-  free(r->st); free(r->at); free(r->bits); free(r->dscope); free(r->bown); free(r->ddef); free(r->rend); free(r->rinst); free(r->rentry); free(r->rmade); free(r->ext); free(r->extix); free(r->cread); free(r->once); free(r);
+  free(r->st); free(r->at); free(r->bits); free(r->dscope); free(r->bown); free(r->ddef); free(r->rend); free(r->rinst); free(r->rentry); free(r->rmade); free(r->ext); free(r->extix); free(r->cread); free(r->once); free(r->nb); free(r->nb_of); free(r);
   c->lrec = NULL;
 }
 

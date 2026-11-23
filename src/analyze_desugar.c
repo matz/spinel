@@ -23268,19 +23268,32 @@ int mark_match_ranges_at(Compiler *c, LowerCtx *lc, int id) {
    (`r = x..y; a[r]`) is marked with that call too. The writes of range
    literals are few; each is checked against the index calls once. After
    mark_match_ranges_at has marked the ranges an index call takes directly. */
+/* The def, class body or file root whose locals a node reads. */
+static int range_local_owner(const NodeTable *nt, const int *par, int id) {
+  int top = id;
+  for (int a = par[id]; a >= 0; top = a, a = par[a]) {
+    NodeKind k = nt_kind(nt, a);
+    if (k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode || k == NK_SingletonClassNode) return a;
+  }
+  return top;
+}
 int mark_range_locals_at(Compiler *c, LowerCtx *lc, int id) {
   NodeTable *nt = (NodeTable *)c->nt;
   int w = id;
   int v = nt_paren_single(c->nt, nt_ref(nt, w, "value"));
   const char *nm = nt_str(nt, w, "name");
   if (v < 0 || !nm || nt_kind(nt, v) != NK_RangeNode || nt_int(nt, v, "index_of", 0)) return 0;
+  /* nscope alone is not the scope here: under the graph load model a file's
+     scopes are not made yet, and every node reads as the top level's (0) */
+  const int *par = lower_parents(c, lc);
+  int owner = range_local_owner(nt, par, w);
   for (int u = 0; u < nt->count; u++) {
     if (nt_kind(nt, u) != NK_CallNode || !nt_str(nt, u, "name") || !is_seq_index_call(nt_str(nt, u, "name"))) continue;
     int args = nt_ref(nt, u, "arguments"), an = 0;
     const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
     int ix = an >= 1 ? nt_paren_single(c->nt, av[0]) : -1;
     if (ix >= 0 && nt_kind(nt, ix) == NK_LocalVariableReadNode && c->nscope[ix] == c->nscope[w] &&
-        sp_streq(nt_str(nt, ix, "name"), nm)) {
+        sp_streq(nt_str(nt, ix, "name"), nm) && range_local_owner(nt, par, ix) == owner) {
       nt_node_set_int(nt, v, "index_of", u + 1);
       break;
     }

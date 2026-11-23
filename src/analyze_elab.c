@@ -812,14 +812,20 @@ static void elab_parts(Compiler *c, int p, const ElabPos *pp, ElabPartFn fn, voi
 /* The requires under `stmt` (a top-level statement, or the tree of one),
    and whether the load phase's walk reaches each where it stands -- not in
    a method, a lambda or a block kept to run later, and not in a part it
-   does not enter (an argument, an operand): fn(ud, load, in_place). The
+   does not enter (an argument, an operand): fn(ud, load, in_place), with
+   ELAB_SITE_SURE set in in_place where it also runs whenever the statement
+   does, under no condition and in no iterator's block or rescued body. The
    same elab_child the walk asks, from a position made up for the
    statement; a lone statement's parts are on its path. */
 typedef struct { const NodeTable *nt; void (*fn)(void *, int, int); void *ud; } ElabSites;
 static int elab_site_part(void *ud, int id, ElabPos *q) {
   const ElabSites *s = ud;
   if (q->kind == EP_NEW) q->kind = EP_SPINE;
-  if (nt_kind(s->nt, id) == NK_LoadNode) s->fn(s->ud, id, q->kind != EP_NODE && !(q->bits & LR_LATE));
+  if (nt_kind(s->nt, id) == NK_LoadNode) {
+    int place = q->kind != EP_NODE && !(q->bits & LR_LATE);
+    int sure = place && !q->may && !q->fmay && !q->partial && !q->fpartial && !q->defer;
+    s->fn(s->ud, id, place | (sure ? ELAB_SITE_SURE : 0));
+  }
   return 1;
 }
 void elab_load_sites(Compiler *c, int stmt, void (*fn)(void *ud, int load, int in_place), void *ud) {

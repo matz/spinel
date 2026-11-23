@@ -26800,9 +26800,6 @@ int strbuf_poly_user_boxes(Compiler *c, int v) {
     if (!held) continue;
     int ami = p.arm[i].mi;
     if (p.arm[i].kind != PA_USER || ami < 0) return 0;
-    /* (an arm that answers no String, nil or an Integer say, has none for
-       another name to see, and boxes as the value it is) */
-    if (share_scope_answers_no_string(c, ami)) continue;
     if (repr_method_ret_storage(&c->scopes[ami]) != TY_STRBUF) return 0;
     string_arm = 1;
   }

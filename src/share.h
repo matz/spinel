@@ -44,11 +44,6 @@ int share_call_stores_block(Compiler *c, int n);
 int sh_may_hold(const Compiler *c, TyKind t);
 
 
-/* Does method scope mi answer no String: each expression its value can be
-   (a nil among them) is none a String can be, by its type or form or by what
-   is written to an instance variable it reads? A method whose values are
-   not followed answers 0. */
-int share_scope_answers_no_string(Compiler *c, int mi);
 
 
 /* The class that `K.new(...)` (through parentheses) builds exactly: a class

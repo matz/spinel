@@ -969,7 +969,7 @@ static const char *probe_target_platform(const char *cc_cmd, int target_wasi,
   const char *cc_width_flag = "";
   const char *arch = NULL, *os = NULL;
   if (!sp_streq(cc_cmd, "cc") || sizeof(void *) == 4) {
-    int x64 = 0, arm64 = 0, i386 = 0, arm = 0, wasm32 = 0;
+    int x64 = 0, arm64 = 0, is_i386 = 0, arm = 0, wasm32 = 0;
     int wasi = 0, lin = 0, apple = 0, fbsd = 0, obsd = 0, win32 = 0;
     char ccq[1024];
 #ifdef _WIN32
@@ -985,7 +985,7 @@ static const char *probe_target_platform(const char *cc_cmd, int target_wasi,
         if (!strncmp(line, k, sizeof k - 1)) { int b = atoi(line + sizeof k - 1) * 8; if (b == 32 || b == 64) *target_int_bits = b; }
         else if (!strncmp(line, "#define __x86_64__ ", 19) || !strncmp(line, "#define _M_X64 ", 15)) x64 = 1;
         else if (!strncmp(line, "#define __aarch64__ ", 20) || !strncmp(line, "#define _M_ARM64 ", 17)) arm64 = 1;
-        else if (!strncmp(line, "#define __i386__ ", 17) || !strncmp(line, "#define _M_IX86 ", 16)) { i386 = 1; *target_i386 = 1; }
+        else if (!strncmp(line, "#define __i386__ ", 17) || !strncmp(line, "#define _M_IX86 ", 16)) { is_i386 = 1; *target_i386 = 1; }
         else if (!strncmp(line, "#define __arm__ ", 16)) arm = 1;
         else if (!strncmp(line, "#define __wasm32__ ", 19)) wasm32 = 1;
         else if (!strncmp(line, "#define __wasi__ ", 17)) wasi = 1;
@@ -1003,9 +1003,9 @@ static const char *probe_target_platform(const char *cc_cmd, int target_wasi,
 #if defined(__i386__)
       *target_i386 = 1;
 #endif
-      if (x64) { x64 = 0; i386 = 1; }
+      if (x64) { x64 = 0; is_i386 = 1; }
     }
-    arch = (x64 && win32) ? "x64" : x64 ? "x86_64" : arm64 ? "aarch64" : i386 ? "i686" : arm ? "arm" : wasm32 ? "wasm32" : "unknown";
+    arch = (x64 && win32) ? "x64" : x64 ? "x86_64" : arm64 ? "aarch64" : is_i386 ? "i686" : arm ? "arm" : wasm32 ? "wasm32" : "unknown";
     os = wasi ? "wasi" : lin ? "linux" : apple ? "darwin" : fbsd ? "freebsd" : obsd ? "openbsd" : win32 ? "mingw-ucrt" : "unknown";
   }
   else {

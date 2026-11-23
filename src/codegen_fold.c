@@ -4788,6 +4788,39 @@ int emit_each_with_index_chain(Compiler *c, int id, Buf *b) {
 void emit_block_value_into(Compiler *c, int block, const char *dest,
                            int want_poly, int indent);
 
+/* Does a map whose result is an Array of kind rk take each block value
+   through the plain store of its kind -- an Integer or a Float the block's
+   tail `tail` (-1 for none) cannot leave nil -- so the result is made at the
+   receiver's length and each value stored into its slot, as a while loop's
+   `r[i] = v` stores (sp_<rk>Array_new_fresh, _put_fresh, and _end_fresh
+   where the block shrank the receiver)? A push wrote the length per
+   element and grew the result from 16 by doubling. */
+static int map_fills_fresh(Compiler *c, int block, const char *rk, TyKind elem, int tail) {
+  return rk && is_numeric_literal_tag(rk) && !bv_value_may_be_nil(c, block, elem) && !*nil_store_sfx(c, rk, tail);
+}
+
+/* The type of an each_with_index terminal's block value (its body bb, bn
+   statements, read with the block's parameters typed), and in *boxed
+   whether it is carried boxed */
+static TyKind ewi_block_value_ty(Compiler *c, int block, const int *bb, int bn, int *boxed) {
+  TyKind bt = bn > 0 ? repr_of(c, bb[bn - 1]).as_ty : TY_NIL;
+  /* A body whose value IS nil types VOID here, and `void _tN` is not a
+     declaration -- `select { nil }` never compiled, and `select {}` reaches
+     the same place now that an empty body carries the nil it means (#4006).
+     nil is a value in this slot, not the absence of one. */
+  if (bt == TY_VOID) bt = TY_NIL;
+  /* A tail inference could not type is a call nothing resolves (`x.first`
+     on a String), which lowers to the nomethod gate's sp_RbVal token: a
+     boxed value, so it is carried boxed. Read as an Integer it was an
+     sp_RbVal assigned to an sp_int and the C did not build. */
+  if (bt == TY_UNKNOWN) bt = TY_POLY;
+  /* a number that can be nil is carried boxed, so its nil reads falsy */
+  *boxed = (bt == TY_POLY || bt == TY_NIL || (oint_kind(bt) && bn > 0 && node_has_oint_form(c, bb[bn - 1])) ||
+            bv_value_may_be_nil(c, block, bt) ||   /* a `next nil` too */
+            bv_next_boxed(c, block, bt));          /* and a boxed `next v` */
+  return bt;
+}
+
 /* The non-fold terminals over arr.each.with_index / arr.each_with_index:
    map/collect (collect block value), select/filter & reject & to_a/entries
    (collect the [v,i] pair), count, any?/all?/none? (scalar), each (side effect,
@@ -4877,8 +4910,7 @@ int emit_each_with_index_terminal(Compiler *c, int id, Buf *b) {
     Repr resr = repr_of(c, id);
     rk = resr.elem == TY_POLY ? "Poly" : array_kind(resr.as_ty);
     if (!rk) rk = "Poly";
-    tres = ++g_tmp;
-    emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_%sArray *_t%d = sp_%sArray_new(); SP_GC_ROOT(_t%d);\n", rk, tres, rk, tres);
+    tres = ++g_tmp;   /* made below, once the block's value is typed */
   }
   else if (collect_pair) {
     tres = ++g_tmp;
@@ -4915,6 +4947,25 @@ int emit_each_with_index_terminal(Compiler *c, int id, Buf *b) {
     int body = nt_ref(nt, block, "body");
     int bn = 0; const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
     for (int j = 0; j < bn; j++) infer_subtree(c, bb[j]);
+  }
+  /* a map's result, made at the receiver's length and filled slot by slot
+     where each value goes in through the plain store of its kind
+     (map_fills_fresh), as map.with_index's is */
+  int fresh = 0, tfill = -1;
+  if (is_map) {
+    int mbody = block >= 0 ? nt_ref(nt, block, "body") : -1;
+    int mbn = 0; const int *mbb = mbody >= 0 ? nt_arr(nt, mbody, "body", &mbn) : NULL;
+    int mboxed = 0;
+    ewi_block_value_ty(c, block, mbb, mbn, &mboxed);
+    fresh = !mboxed && mbn > 0 && array_kind_ty(rk) != TY_UNKNOWN &&
+            map_fills_fresh(c, block, rk, repr_of(c, id).elem, mbb[mbn - 1]);
+    emit_indent(g_pre, g_indent);
+    if (fresh) {
+      tfill = ++g_tmp;
+      buf_printf(g_pre, "sp_%sArray *_t%d = sp_%sArray_new_fresh(sp_%sArray_length(_t%d)); SP_GC_ROOT(_t%d); sp_int _t%d = 0;\n",
+                 rk, tres, rk, k, ta, tres, tfill);
+    }
+    else buf_printf(g_pre, "sp_%sArray *_t%d = sp_%sArray_new(); SP_GC_ROOT(_t%d);\n", rk, tres, rk, tres);
   }
 
   emit_indent(g_pre, g_indent);
@@ -4974,21 +5025,8 @@ int emit_each_with_index_terminal(Compiler *c, int id, Buf *b) {
     /* An empty block body (e.g. `map { |x, i| }`) has bn == 0, so guard the
        bb[bn - 1] read and treat the absent tail value as nil -- a poly value so
        the temp initializes to sp_box_nil() rather than an integer 0. */
-    TyKind bt = bn > 0 ? repr_of(c, bb[bn - 1]).as_ty : TY_NIL;
-    /* A body whose value IS nil types VOID here, and `void _tN` is not a
-       declaration -- `select { nil }` never compiled, and `select {}` reaches
-       the same place now that an empty body carries the nil it means (#4006).
-       nil is a value in this slot, not the absence of one. */
-    if (bt == TY_VOID) bt = TY_NIL;
-    /* A tail inference could not type is a call nothing resolves (`x.first`
-       on a String), which lowers to the nomethod gate's sp_RbVal token: a
-       boxed value, so it is carried boxed. Read as an Integer it was an
-       sp_RbVal assigned to an sp_int and the C did not build. */
-    if (bt == TY_UNKNOWN) bt = TY_POLY;
-    /* a number that can be nil is carried boxed, so its nil reads falsy */
-    int vpoly = (bt == TY_POLY || bt == TY_NIL || (oint_kind(bt) && bn > 0 && node_has_oint_form(c, bb[bn - 1])) ||
-                 bv_value_may_be_nil(c, block, bt) ||   /* a `next nil` too */
-                 bv_next_boxed(c, block, bt));          /* and a boxed `next v` */
+    int vpoly = 0;
+    TyKind bt = ewi_block_value_ty(c, block, bb, bn, &vpoly);
     int tv = ++g_tmp; char tvb[24]; snprintf(tvb, sizeof tvb, "_t%d", tv);
     emit_indent(g_pre, din);
     if (vpoly) buf_printf(g_pre, "sp_RbVal _t%d = sp_box_nil();\n", tv);
@@ -5025,6 +5063,7 @@ int emit_each_with_index_terminal(Compiler *c, int id, Buf *b) {
         Buf bx; memset(&bx, 0, sizeof bx); emit_boxed_text(c, bt, tvb, &bx);
         buf_printf(g_pre, "sp_PolyArray_push(_t%d, %s);\n", tres, bx.p ? bx.p : ""); free(bx.p);
       }
+      else if (fresh) buf_printf(g_pre, "sp_%sArray_put_fresh(_t%d, _t%d++, %s);\n", rk, tres, tfill, tvb);
       else { emit_kind_push(c, g_pre, rk, tres, tvb); buf_puts(g_pre, ";\n"); }
     }
     else if (is_sel || is_rej) {
@@ -5047,6 +5086,7 @@ int emit_each_with_index_terminal(Compiler *c, int id, Buf *b) {
   }
 
   emit_indent(g_pre, g_indent); buf_puts(g_pre, "}\n");
+  if (fresh) { emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_%sArray_end_fresh(_t%d, _t%d);\n", rk, tres, tfill); }
 
   if (lv) lv_set_storage_type(lv, sv); if (li) lv_set_storage_type(li, si);
 
@@ -6514,14 +6554,8 @@ int emit_collect_expr(Compiler *c, int id, Buf *b) {
   buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", trecv);
   emit_indent(g_pre, g_indent);
   /* a map answers one value per element: its result takes them all at its
-     first size, where pushes grew it from 16 by doubling. An Integer or
-     Float result whose values each go in through the plain store of its
-     kind (not one that can be nil) is made at that full length and each
-     value stored into its slot, as a while loop's `r[i] = v` stores; a push
-     wrote the length per element (sp_<rk>Array_new_fresh, _put_fresh, and
-     _end_fresh where the block shrank the receiver) */
-  int fresh = is_map && rk && is_numeric_literal_tag(rk) && !bv_value_may_be_nil(c, block, resr.elem) &&
-              !*nil_store_sfx(c, rk, bn > 0 ? bb[bn - 1] : -1);
+     first size (map_fills_fresh) */
+  int fresh = is_map && map_fills_fresh(c, block, rk, resr.elem, bn > 0 ? bb[bn - 1] : -1);
   int tfill = fresh ? ++g_tmp : -1;
   if (fresh) {
     buf_printf(g_pre, "sp_%sArray *_t%d = sp_%sArray_new_fresh(sp_%sArray_length(_t%d));\n", rk, tres, rk, k, trecv);
@@ -6854,8 +6888,7 @@ int emit_with_index_expr(Compiler *c, int id, Buf *b) {
      their kind (not one that can be nil): the result is made at the
      receiver's length and each value stored into its slot, as the plain
      map's are (emit_collect_expr); map! reads back the value it appended */
-  int fresh = is_map && !is_mapbang && rk && is_numeric_literal_tag(rk) && bn > 0 &&
-              !*nil_store_sfx(c, rk, bb[bn - 1]) && !bv_value_may_be_nil(c, block, resr.elem);
+  int fresh = is_map && !is_mapbang && bn > 0 && map_fills_fresh(c, block, rk, resr.elem, bb[bn - 1]);
   int tfill = fresh ? ++g_tmp : -1;
   if (collecting) {
     emit_indent(g_pre, g_indent);

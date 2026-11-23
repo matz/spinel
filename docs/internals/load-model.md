@@ -507,10 +507,7 @@ start where the class or its chain answers the name, or a Symbol or a
 String spells it (`cplan_define_method_early`), or one with a Proc or a
 Method for its body (`cplan_body_definer_gap`). It refuses a definer
 call's version too where a reader of its name does not read it
-(`cplan_call_version_unread`): a method list or a reader of a name only
-the run tells (the `elab_body_reflected` exception, which keeps a body
-def's version off the late bit, and takes in every presence reader of
-the name where a `respond_to_missing?` is defined), a `method_missing`
+(`cplan_call_version_unread`): a `method_missing`
 on the chain, a Method's maker of the name (`elab_method_captured`), a
 `method_added` or `singleton_method_added` hook of the program that the
 definition would fire (`elab_definer_hook_live`), a name Ruby calls by itself (`to_s`, `<=>`, `coerce`), keyword parameters,
@@ -821,16 +818,25 @@ the body may have run, the word's after a statement that surely ran it
 (`elab_method_vis_at`), and the visibility cell where the body may have
 run any number of times.
 
-A reader that answers from the final tables instead keeps the table's
-answer for the calls of the names it may read: such a version is not
-late (`elab_body_reflected`), so a guard and the call it guards answer
-alike. Those are a list that includes inherited names
-(`K.instance_methods`, `instance_methods.include?`), a list on a
-module (`M.instance_methods(false)`), a list on a receiver that is not
-a constant, and every reader of a program that defines
-`respond_to_missing?`; there a body's def is listed, and answers
-`respond_to?`, before it runs. A module's def such a list may read is
-the table's on a class that extends the module too, so the class value's
+Every reader of a name a body's version may make reads the version's
+cell, so the version is late (`lr_late_asked`) and a guard and the call
+it guards answer alike. A list of a whole chain's methods (`x.methods`,
+`x.public_methods`, `K.instance_methods` and its forms, with no argument,
+`true` or a flag the run decides, and `x.public_methods(false)`;
+`refl_cell_list`'s bit 4) asks the cells of each name the record holds
+versions of, as a `respond_to?` of that name does (`presence_asks`):
+`cplan_list_cells` gives them, one list for each class a boxed receiver
+may hold (`emit_value_methods_reflection`,
+`emit_poly_object_methods_reflection`), and a `respond_to?` of a name only
+the run knows reads them per class (`cplan_respond_runtime_cells`). A
+list is not answered by `respond_to_missing?`, so it reads the cells in a
+program that defines it. The readers that still answer from the final
+tables are a module's list, a list on a receiver that is neither a
+constant nor an object, and a `respond_to?` or `method_defined?` of a
+program that defines `respond_to_missing?`: the body's version a reader
+there names is not late (`lr_late_asked`), so a def is listed, and answers
+`respond_to?`, before it runs. A module's def such a list may read is the
+table's on a class that extends the module too, so the class value's
 `respond_to?` answers it from the start. Only list readers of the same
 side count: a class-side list (`K.singleton_methods`) leaves an instance
 method's versions to the cells. A body that makes a definition the

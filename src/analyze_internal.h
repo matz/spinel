@@ -654,6 +654,14 @@ int capture_cells_shape(const NodeTable *nt, int id);
    2 for `C.instance_methods(false)` and its public_, private_ and protected_ forms, its own instance
    methods'; 0 for any other */
 int list_cells_shape(const NodeTable *nt, int id);
+/* ...and is call id a list of a whole chain's methods, of one the plan may read the cells of (cplan_list_cells):
+   `x.methods`, `x.public_methods`, `K.instance_methods` and the like with no argument or `true` (an object's list
+   also with a flag the run decides), and no block; 0 for any other (its own methods' form, `(false)`, reads the
+   tables) */
+int list_chain_shape(const NodeTable *nt, int id);
+/* ...and `x.public_methods(false)`, an object's list of its class's own public methods (the plan reads their cells as
+   it reads a chain's) */
+int list_own_object_shape(const NodeTable *nt, int id);
 /* May a respond_to? answer for a name other than by the methods: the program
    defines respond_to_missing?. The cells answer no respond_to? then. */
 int respond_to_missing_defined(Compiler *c);

@@ -1828,6 +1828,11 @@ int cplan_list_class(Compiler *c, int id, int *own);
    name) and for a method_defined? kin what a call there finds; 0 where the table answers it, and for an
    instance-method list of another shape than list_cells_shape's, whose names the survey does not ask. */
 int cplan_list_cells(Compiler *c, int id, int cls, unsigned side, const char *name, int mask, CplanCells *out);
+/* The cells that answer whether class cls's instances respond to `name` at respond_to? call id, of a name only the
+   run knows: the cells cplan_presence_cells gives for each name the survey asked of this reader (presence_asks),
+   for the public visibility, or with `all` every one (the include_all argument: the caller reads which of the two
+   the call asks, or both where the run decides); 0 where the table answers it */
+int cplan_respond_runtime_cells(Compiler *c, int id, int cls, const char *name, int all, CplanCells *out);
 /* Whether name answers on cls's chain where presence site id runs, as a
    call of the name there finds it, from call_target with CT_REACH (side: 0
    for an instance's chain, CT_CMETHOD for the class side, with CT_OWN for

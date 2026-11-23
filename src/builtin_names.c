@@ -2291,6 +2291,9 @@ int method_list_vis_mask(const char *n) {
        : builtin_name_in(n, prot) ? 1 << SP_VIS_PROTECTED
        : builtin_name_in(n, priv) ? 1 << SP_VIS_PRIVATE : 0;
 }
+/* A list of the methods a chain answers (methods, public_methods and the instance-method lists, which a class
+   or module asks for its instances), not the singleton list, which names an object's own */
+int is_chain_method_list(const char *n) { return method_list_vis_mask(n) && !is_singleton_method_list(n); }
 /* The Module methods that read a class's method table: the instance-method
    lists and instance_method */
 int is_instance_method_table_read(const char *n) { return n && (is_instance_method_list(n) || sp_streq(n, "instance_method")); }

@@ -2885,7 +2885,7 @@ static int ver_chain_count(Compiler *c, int rcls, int sg, const char *name, int 
     }
   ElabVersion vs[VER_MAX_ARMS];
   int n = elab_chain_versions(c, rcls, sg, name, vs, VER_MAX_ARMS), def = n >= 1 && vs[0].v->kind == LR_DEF, any = 0;
-  for (int k = 0; k < n; k++) any |= (elab_version_extent(c, &vs[k]) != 0 && !elab_body_reflected(c, name, sg)) || elab_version_held_row(vs[k].v, name, sg);
+  for (int k = 0; k < n; k++) any |= elab_version_extent(c, &vs[k]) != 0 || elab_version_held_row(vs[k].v, name, sg);
   m->slot[j] = (struct VerChainSlot){ name_dup(name), rcls, sg, n, def, any, elab_versions_late(c, name, vs, n) };
   m->used++;
   *first_def = def;
@@ -4747,8 +4747,54 @@ static unsigned presence_reader_side(const NodeTable *nt, int id, int *mask, int
   const char *rn = nt_str(nt, id, "name");
   call_args(nt, id, &ac);
   *list = !is_respond_to_name(rn);
-  *mask = !*list ? (flag ? 7 : 1) : is_instance_method_list(rn) ? list_core_vis_mask(rn) : method_defined_vis_mask(rn);
-  return !*list || (ac == 1 && !is_instance_method_list(rn)) || flag ? CT_REACH : CT_OWN;
+  *mask = !*list ? (flag ? 7 : 1) : method_list_vis_mask(rn) ? list_core_vis_mask(rn) : method_defined_vis_mask(rn);
+  return !*list || (ac == 1 && !is_instance_method_list(rn)) || flag || list_chain_shape(nt, id) ? CT_REACH : CT_OWN;
+}
+/* A respond_to? of a name only the run knows (a plain call, one or two arguments, no literal name) */
+static int respond_to_runtime_name(Compiler *c, int id) {
+  int ac = 0;
+  const NodeTable *nt = c->nt;
+  if (nt_kind(nt, id) != NK_CallNode || !is_respond_to_name(nt_str(nt, id, "name")) || nt_ref(nt, id, "block") >= 0) return 0;
+  const int *av = call_args(nt, id, &ac);
+  return (ac == 1 || ac == 2) && nt_kind(nt, av[0]) != NK_SplatNode && !method_sym_arg(c, id);
+}
+/* The classes reader id, which names no one method (a chain's list, list_chain_shape, or a respond_to? of a name
+   only the run knows), may ask name qm of, each handed to fn as a literal respond_to?'s are: a list of an
+   object's methods (`x.methods`) or the respond_to?, the classes its receiver may hold; a list of a class's
+   instance methods, the class its receiver names or `x.class`'s instances */
+typedef struct { CtClassFn fn; void *arg; } ChainFilter;
+/* (a class whose chain holds no version of the name has no cell of it to read: the name is not asked of it) */
+static void reader_name_filter(Compiler *c, int id, const char *nm, int k, unsigned flags, void *arg) {
+  const ChainFilter *f = arg;
+  ElabVersion vs[1];
+  if (k >= 0 && elab_chain_versions(c, k, 0, nm, vs, 1) != 0) f->fn(c, id, nm, k, flags, f->arg);
+}
+static void reader_name_classes(Compiler *c, int id, const char *qm, CtClassFn fn, void *arg) {
+  const NodeTable *nt = c->nt;
+  int r = nt_ref(nt, id, "receiver"), k;
+  ChainFilter f = { fn, arg };
+  PresAsk a = { id, 0, reader_name_filter, &f };
+  NodeKind rk = r >= 0 ? nt_kind(nt, r) : NK_SelfNode;
+  if (!is_instance_method_list(nt_str(nt, id, "name"))) ct_version_classes(c, id, qm, pres_ask_one, &a);
+  else if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) {
+    if ((k = class_recv_static_ci(c, r)) >= 0) reader_name_filter(c, id, qm, k, 0, &f);
+  }
+  else if (rk == NK_CallNode && is_class_query(nt_str(nt, r, "name")) && nt_ref(nt, r, "receiver") >= 0)
+    ct_version_classes(c, r, qm, pres_ask_one, &a);
+}
+typedef struct { int cls, hit; } ChainHit;
+static void reader_name_hit(Compiler *c, int id, const char *nm, int k, unsigned flags, void *arg) {
+  ChainHit *h = arg;
+  (void)c; (void)id; (void)nm; (void)flags;
+  h->hit |= k == h->cls;
+}
+/* Does such a reader (id) read the cells of class cls's name: the keep (presence_asks) asks the same, one name at
+   a time */
+static int reader_name_asks(Compiler *c, int id, int cls, const char *name) {
+  ChainHit h = { cls, 0 };
+  if (!ct_version_named(c, name)) return 0;
+  reader_name_classes(c, id, name, reader_name_hit, &h);
+  return h.hit;
 }
 static void presence_asks(Compiler *c, int id, CtClassFn fn, void *arg) {
   const NodeTable *nt = c->nt;
@@ -4756,6 +4802,16 @@ static void presence_asks(Compiler *c, int id, CtClassFn fn, void *arg) {
   if (list_cells_shape(nt, id) == 2) {
     PresListAsk la = { c, id, class_recv_static_ci(c, nt_ref(nt, id, "receiver")), fn, arg };
     if (list_own_reads_cells(c, id, la.cls)) cplan_list_candidates(c, la.cls, CT_OWN, pres_list_one, &la);
+    return;
+  }
+  /* a chain's list, or a respond_to? of a name only the run knows (not in a program whose respond_to? asks only the
+     methods, respond_to_missing_defined: a list is not answered by them), asks the cells of each name the record
+     holds versions of, as a literal respond_to? of it would */
+  if (list_chain_shape(nt, id) || list_own_object_shape(nt, id) || (respond_to_runtime_name(c, id) && !respond_to_missing_defined(c))) {
+    for (int i = 0; elab_version_name(c, i); i++) {
+      const char *nm = elab_version_name(c, i);
+      if (ct_version_named(c, nm)) reader_name_classes(c, id, nm, fn, arg);
+    }
     return;
   }
   const char *qm = is_method_presence_name_query(rn) ? method_sym_arg(c, id) : NULL;
@@ -4773,7 +4829,7 @@ static void presence_asks(Compiler *c, int id, CtClassFn fn, void *arg) {
 }
 /* ...each such reader's of the program (written: in a scope the C writes, ver_scope_written) */
 static int ver_scope_written(const Scope *s);
-static int presence_reader_name(const char *n) { return is_method_presence_name_query(n) || is_instance_method_list(n); }
+static int presence_reader_name(const char *n) { return is_method_presence_name_query(n) || is_instance_method_list(n) || is_chain_method_list(n); }
 static void presence_readers(Compiler *c, int written, CtClassFn fn, void *arg) {
   int *ids = NULL, n = an_calls_named_if(c, presence_reader_name, c->nt->count, &ids);
   for (int i = 0; i < n; i++)
@@ -4930,21 +4986,29 @@ int cplan_cmethod_presence(Compiler *c, int id, int cls, const char *name, int m
   int e = call_target(c, id, cls, name, CT_CMETHOD | CT_CAPTURE, &ml);
   return presence_target_cells(c, id, e, &ml, cls, 1, name, mask, own, out);
 }
-/* See call_plan.h. */
-int cplan_presence_cells(Compiler *c, int id, int cls, unsigned side, const char *name, int mask, CplanCells *out) {
+/* ...for any reader, a method list among them (cplan_list_cells), which respond_to_missing? does not answer for */
+static int presence_cells_at(Compiler *c, int id, int cls, unsigned side, const char *name, int mask, CplanCells *out) {
   MethodLookup ml = { .def_class = -1 };
-  if (id < 0 || cls < 0 || (side & (CT_CMETHOD | CT_TOP)) || respond_to_missing_defined(c)) return 0;
+  if (id < 0 || cls < 0 || (side & (CT_CMETHOD | CT_TOP))) return 0;
   int e = call_target(c, id, cls, name, side | CT_REACH, &ml);
   return presence_target_cells(c, id, e, &ml, cls, 0, name, mask, (side & CT_OWN) != 0, out);
 }
 /* See call_plan.h. */
+int cplan_presence_cells(Compiler *c, int id, int cls, unsigned side, const char *name, int mask, CplanCells *out) {
+  return !respond_to_missing_defined(c) && presence_cells_at(c, id, cls, side, name, mask, out);
+}
+/* See call_plan.h. */
 int cplan_list_cells(Compiler *c, int id, int cls, unsigned side, const char *name, int mask, CplanCells *out) {
   int own = (side & CT_OWN) != 0, cm = (side & CT_CMETHOD) != 0;
-  int list = cm || (id >= 0 && is_instance_method_list(nt_str(c->nt, id, "name")));
-  /* (an instance-method list reads them in the shape its asks were made for, presence_asks) */
-  if (!cm && list && !list_own_reads_cells(c, id, cls)) return 0;
+  const char *ln = !cm && id >= 0 ? nt_str(c->nt, id, "name") : NULL;
+  int chain = ln && method_list_vis_mask(ln) && !(own && is_instance_method_list(ln)), list = cm || (ln && method_list_vis_mask(ln));
+  /* (a list reads them in the shape its asks were made for, presence_asks: a class's own instance methods', or a
+     chain's, of the names it asked) */
+  if (ln && is_instance_method_list(ln) && own && !list_own_reads_cells(c, id, cls)) return 0;
+  if (chain && !((list_chain_shape(c->nt, id) || (own && list_own_object_shape(c->nt, id))) && reader_name_asks(c, id, cls, name))) return 0;
   /* (some version has cells, each answering for the visibilities mask counts: a run-time one from its cell) */
-  if (!(cm ? cplan_cmethod_presence(c, id, cls, name, mask, own, out) : cplan_presence_cells(c, id, cls, side, name, mask, out)) ||
+  if (!(cm ? cplan_cmethod_presence(c, id, cls, name, mask, own, out)
+           : chain ? presence_cells_at(c, id, cls, side, name, mask, out) : cplan_presence_cells(c, id, cls, side, name, mask, out)) ||
       out->n <= 0) return 0;
   /* (where no version has run a list leaves the name out, whatever a call there finds: its else; the keep,
      ver_obj_presence_keep, and the list's read ask the same cells) */
@@ -6310,6 +6374,11 @@ int cplan_undef_at(Compiler *c, int id, int cls, const char *name) {
   int o = elab_method_at(c, cls, name, 0, p, &d);
   if (o == ELAB_UNKNOWN) return -1;
   return o == ELAB_NO && d && d->kind == LR_UNDEF;
+}
+/* See call_plan.h. */
+int cplan_respond_runtime_cells(Compiler *c, int id, int cls, const char *name, int all, CplanCells *out) {
+  return respond_to_runtime_name(c, id) && reader_name_asks(c, id, cls, name) &&
+         cplan_presence_cells(c, id, cls, 0, name, all ? 7 : 1, out) && out->n > 0;
 }
 /* See call_plan.h. */
 PresenceKind cplan_presence(Compiler *c, int id, int cls, unsigned side, const char *name, CplanPresence *out) {
@@ -10143,9 +10212,7 @@ static int ver_dm_keywords(const NodeTable *nt, int dm);
 /* Why the readers of name nm cannot read the version definer call id makes (host: the body whose runs make it, on
    cls's side sg), or NULL: a reader that answers from the method tables, which hold the method from the start
    (walk_scope registers its scope there), or one that does not read a definer call's versions yet. They are the
-   program's lists and readers of a name only the run tells (elab_body_reflected, which keeps a body def's version off
-   the late bit too, and takes in every presence reader of the name where a respond_to_missing? is defined), a
-   method_missing on the chain, which the entry's else arm does not call, a Method's maker of the name, the calls
+   program's method_missing on the chain, which the entry's else arm does not call, a Method's maker of the name, the calls
    Ruby makes by itself (to_s, <=>, coerce), a hook of the program that would observe the definition
    (elab_definer_hook_live), a name every object has (is_object_method_name: the version would
    replace the builtin's only once the body runs), keyword parameters, which the method's scope does not bind
@@ -10155,7 +10222,6 @@ static int ver_dm_keywords(const NodeTable *nt, int dm);
    lr_body_call_barred.) */
 static const char *cplan_call_version_unread(Compiler *c, int id, int host, int cls, int sg, const char *nm) {
   const NodeTable *nt = c->nt;
-  if (elab_body_reflected(c, nm, sg)) return "a method list, or a reflection reader of a name only the run tells, reads it";
   if (cplan_has_method_missing(c, id, cls, sg)) return "the class's chain has a method_missing";
   if (elab_method_captured(c, nm)) return "a Method or UnboundMethod of it is made";
   if (elab_definer_hook_live(c, cls, sg, nt_str(nt, id, "name"))) return "a method_added or singleton_method_added hook of the program may observe it";

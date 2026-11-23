@@ -551,6 +551,8 @@ int elab_cvar_cref_at(Compiler *c, int node);
    module's histories: defs, define_methods, attrs, aliases, module_function
    copies, undefs and removes (not visibility changes) */
 int elab_method_versions(Compiler *c, const char *name);
+/* ...the i-th name the record holds versions of, in no order; NULL past the last */
+const char *elab_version_name(Compiler *c, int i);
 /* may a call of `name` reach a replaced version: does some class's (or
    main's) history of it hold more than one version, or an alias, which
    names the version it captured? */
@@ -607,14 +609,6 @@ int elab_method_late(Compiler *c, const char *name);
    presence answers (refl_fixed). A respond_to? whose answer the version
    cells hold for a class method (sg) does not. */
 int elab_method_reflected(Compiler *c, const char *name, int sg);
-/* ...the same for a method body's version of `name` on side sg, whose
-   calls take the entry before the body runs (lr_late_make): a
-   respond_to?, defined? or method_defined? of an instance's method, which
-   the plan's presence answers there (cplan_presence's PR_CELLS), does not
-   count, nor one on side sg in a program that defines respond_to_missing?;
-   a list counts for its own side only (a class-side list the cells answer,
-   `K.singleton_methods`, leaves an instance method's versions alone) */
-int elab_body_reflected(Compiler *c, const char *name, int sg);
 /* Does any reflection reader the record takes (lr_refl_take) name `name`:
    one answering from the table, a respond_to? or defined? the cells
    answer, a Method's maker; or one name any? */

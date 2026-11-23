@@ -367,6 +367,25 @@ static void emit_respond_guard(void *ud, const char *name) {
   emit_guarded_presence(g->c, &cs, g->b);
   buf_printf(g->b, " & (_a%d ? 7 : 1)) != 0) : ", g->tmp);
 }
+/* ...a name of a class's chain whose versions the plan's cells answer (cplan_respond_runtime_cells), as the
+   literal respond_to? of it there answers: `(_k == class && name == _q) ? answer : `, ahead of the lists below,
+   which hold every def of the program */
+typedef struct { Compiler *c; Buf *b; int id, cls, tmp, ia; } RespondCells;   /* ia: its include_all, 0 absent or false, 1 true, 2 the run's */
+static void emit_respond_cells(void *ud, const char *name) {
+  RespondCells *g = ud;
+  CplanCells pub, all;
+  if ((g->ia != 1 && (!cplan_respond_runtime_cells(g->c, g->id, g->cls, name, 0, &pub) || !emit_cells_answer(g->c, &pub, NULL))) ||
+      (g->ia != 0 && (!cplan_respond_runtime_cells(g->c, g->id, g->cls, name, 1, &all) || !emit_cells_answer(g->c, &all, NULL)))) return;
+  buf_printf(g->b, "(_k%d == %d && !strcmp(_q%d, \"", g->tmp, g->cls, g->tmp);
+  emit_c_escaped(g->b, name);
+  buf_puts(g->b, "\")) ? ");
+  if (g->ia == 2) buf_printf(g->b, "(_a%d ? ", g->tmp);
+  if (g->ia != 0) emit_cells_answer(g->c, &all, g->b);
+  if (g->ia == 2) buf_puts(g->b, " : ");
+  if (g->ia != 1) emit_cells_answer(g->c, &pub, g->b);
+  if (g->ia == 2) buf_puts(g->b, ")");
+  buf_puts(g->b, " : ");
+}
 /* respond_to? asked at run time, by the name's string: each class's own
    methods by the value's class, then what every object has. */
 static void emit_respond_to_runtime_name(Compiler *c, int id, Buf *b, int recv, int argc, const int *argv,
@@ -381,6 +400,17 @@ static void emit_respond_to_runtime_name(Compiler *c, int id, Buf *b, int recv, 
       RespondGuard guard = { c, &guarded, k, tv, literal != NULL };
       if (literal) emit_respond_guard(&guard, literal);
       else cplan_chain_names(c, k, emit_respond_guard, &guard);
+    }
+  }
+  if (!literal) {
+    TyKind rt = repr_of(c, recv).as_ty;
+    NodeKind iak = argc >= 2 ? nt_kind(nt, argv[1]) : NK_FalseNode;
+    int ia = iak == NK_TrueNode ? 1 : iak == NK_FalseNode || iak == NK_NilNode ? 0 : 2;
+    for (int k = 0; k < c->nclasses; k++) {
+      if (comp_class_is_module(c, &c->classes[k]) || !c->classes[k].instantiated ||
+          !(rt == TY_POLY || rt == TY_UNKNOWN || (ty_is_object(rt) && is_descendant(c, k, ty_object_class(rt))))) continue;
+      RespondCells cells = { c, &guarded, id, k, tv, ia };
+      cplan_chain_names(c, k, emit_respond_cells, &cells);
     }
   }
   /* boxed when the call is typed so (an IO's is, see the fold above) */

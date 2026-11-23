@@ -182,9 +182,9 @@ struct LoadRecord {
   char **refl_cell; int nrefl_cell, crefl_cell;      /* ...a respond_to? the version cells may answer */
   char **refl_capt; int nrefl_capt, crefl_capt;      /* ...a Method's maker that takes the entry, as a call */
   char **refl_maker; int nrefl_maker, crefl_maker;   /* ...a Method's maker that does not (LR_REFL_MAKER, elab_method_captured) */
-  char **refl_fixed[2]; int nrefl_fixed[2], crefl_fixed[2];   /* ...the table's readers but a respond_to? or method_defined? of an instance's (elab_body_reflected) */
+  char **refl_fixed[2]; int nrefl_fixed[2], crefl_fixed[2];   /* ...the table's readers but a respond_to? or method_defined? of an instance's (elab_method_reflected's class side under an extend) */
   unsigned char refl_any;               /* ...and one names a name the record cannot read */
-  unsigned char refl_cell_list;         /* ...a method list the version cells may answer, of any name (list_cells_shape's sides: 1 a class's class-side list, 2 its own instance methods') */
+  unsigned char refl_cell_list;         /* ...a method list the version cells may answer, of any name (list_cells_shape's sides: 1 a class's class-side list, 2 its own instance methods'; 4 a chain's list, list_chain_shape: it answers a body's versions by their cells and the rest by the tables) */
   unsigned char names_any;              /* ...and one it defines by a name the record cannot read */
   /* ...the blocks of the define_methods whose name the record cannot read,
      each of which defines one method that runs that block: a call of any
@@ -2491,13 +2491,15 @@ static void lr_refl_take(Compiler *c) {
     int ac = 0, a = 0, pq;
     const int *av = call_args(nt, n, &ac);
     const char *rn = call_sent_name(nt, n, &a);
-    if (!rn) {
-      if (ac) lr_refl_add(r, NULL, LR_REFL_TABLE, 3, 0);   /* (a send with no argument reads no name) */
-      continue;
-    }
+    /* (a send whose name only the run knows is the arms desugar_dynamic_send makes of it: real calls, which ask the plan) */
+    if (!rn) continue;
     int ls = list_cells_shape(nt, n);
     if (ls && sp_streq(rn, nt_str(nt, n, "name"))) {   /* (reads the cells of every method of its side; one of the other side it does not name) */
       r->refl_cell_list |= (unsigned char)ls;
+      continue;
+    }
+    if (list_chain_shape(nt, n) && sp_streq(rn, nt_str(nt, n, "name"))) {   /* (a chain's list reads the cells of a body's versions, the tables for the rest) */
+      r->refl_cell_list |= 4;
       continue;
     }
     if ((pq = is_method_presence_query(rn)))
@@ -5933,6 +5935,12 @@ int elab_method_versions(Compiler *c, const char *name) {
 static int lr_refl_has(char *const *l, int n, const char *name) {
   return n && bsearch(&name, l, (size_t)n, sizeof *l, lr_name_cmp);
 }
+/* Does a reader name a name the record cannot read (refl_any), or list a chain's methods (refl_cell_list's bit 4)?
+   A placed def's calls are the table's either way: such a reader answers a def by its table, whichever name it
+   lists. A body's version it reads by the cells (cplan_list_cells), so no reader asks the body's late bit. */
+static int lr_refl_wide(const LoadRecord *r) {
+  return r->refl_any || (r->refl_cell_list & 4);
+}
 /* Does a respond_to? the cells may answer (refl_cell) answer `name` from
    the table after all: where the side is not a class's own class side
    (cside 0), in a program that defines respond_to_missing?
@@ -5975,9 +5983,16 @@ static int lr_late_asked(Compiler *c, const LrVers *x, const LrHist *h, int nh) 
   /* (a class side's body word: a reader of the name reads its cells or bars the word, lr_cside_unfollowed, so a
      call takes the face entry, ct_face_for, whichever readers answer from the table) */
   if (cside && lr_body_word_of(h)) return 1;
-  if (lr_version_extent(c, h, fv) || lr_body_word_of(h) ? elab_body_reflected(c, x->name, cside) :
-      r->refl_any || (!cside && r->refl_cell_list) || lr_refl_has(r->refl, r->nrefl, x->name) || lr_refl_cell_table(c, x->name, cside) ||
-      (!cside && lr_refl_has(r->refl_capt, r->nrefl_capt, x->name)) || (nh > 1 && !cside && !str_reader)) return 0;
+  int extent = lr_version_extent(c, h, fv) || lr_body_word_of(h);
+  /* (a program that defines respond_to_missing? answers its presence readers from the tables, which no cell tells: a
+     body's version a reader there names is not late, so the guard and the call it guards answer alike; carry 17
+     reads the cells there with respond_to_missing? as the else, and this goes) */
+  if (!cside && extent && respond_to_missing_defined(c) &&
+      (r->refl_any || lr_refl_has(r->refl, r->nrefl, x->name) || lr_refl_has(r->refl_cell, r->nrefl_cell, x->name) ||
+       lr_refl_has(r->refl_capt, r->nrefl_capt, x->name))) return 0;
+  if (!extent &&
+      (lr_refl_wide(r) || (!cside && r->refl_cell_list) || lr_refl_has(r->refl, r->nrefl, x->name) || lr_refl_cell_table(c, x->name, cside) ||
+       (!cside && lr_refl_has(r->refl_capt, r->nrefl_capt, x->name)) || (nh > 1 && !cside && !str_reader))) return 0;
   if (str_reader || lr_body_word_of(h)) return 1;
   if (cside)
     return bop_class_answers(x->name, 0, 0) || elab_record_cmethod(c, h->a, x->name) || is_definition_hook_name(x->name) ||
@@ -6116,31 +6131,19 @@ int elab_method_reflected(Compiler *c, const char *name, int sg) {
   LoadRecord *r = c->lrec;
   if (!r || !r->recorded || !name) return 0;
   sg = sg != 0;
-  return r->refl_any || (!sg && r->refl_cell_list) || lr_refl_has(r->refl_table[sg], r->nrefl_table[sg], name) ||
+  return lr_refl_wide(r) || (!sg && r->refl_cell_list) || lr_refl_has(r->refl_table[sg], r->nrefl_table[sg], name) ||
          (sg && lr_refl_has(r->refl_fixed[0], r->nrefl_fixed[0], name) && lr_singleton_mixed(r)) ||
          lr_refl_cell_table(c, name, sg);
 }
 
-static int lr_name_asked(const LoadRecord *r, const char *name, int lists);
-int elab_body_reflected(Compiler *c, const char *name, int sg) {
-  LoadRecord *r = c->lrec;
-  if (!r || !r->recorded || !name) return 0;
-  sg = sg != 0;
-  return r->refl_any || lr_refl_has(r->refl_fixed[sg], r->nrefl_fixed[sg], name) ||
-         (sg && lr_refl_has(r->refl_fixed[0], r->nrefl_fixed[0], name) && lr_singleton_mixed(r)) ||
-         (sg ? lr_refl_cell_table(c, name, 1) : lr_name_asked(c->lrec, name, 0) && respond_to_missing_defined(c));
-}
-
-/* Does a reader name `name` (see elab_method_asked); a method list the cells answer (refl_cell_list: a class-side
-   list, bit 1, or a class's own instance-method list, bit 2) among them where lists is set: it may name any method
-   of its side */
-static int lr_name_asked(const LoadRecord *r, const char *name, int lists) {
-  if (!r || !r->recorded || !name) return 0;
-  return r->refl_any || (lists && r->refl_cell_list) || lr_refl_has(r->refl, r->nrefl, name) || lr_refl_has(r->refl_cell, r->nrefl_cell, name) ||
-         lr_refl_has(r->refl_capt, r->nrefl_capt, name);
-}
+/* Does a reader name `name`: a Method's maker, a respond_to? the cells answer, any other reader by it; or one name
+   any, or a method list the cells answer (refl_cell_list: a class-side list, bit 1, a class's own instance-method
+   list, bit 2, a chain's, bit 4), which may name any method of its side */
 int elab_method_asked(Compiler *c, const char *name) {
-  return lr_name_asked(c->lrec, name, 1);
+  const LoadRecord *r = c->lrec;
+  if (!r || !r->recorded || !name) return 0;
+  return r->refl_any || r->refl_cell_list || lr_refl_has(r->refl, r->nrefl, name) || lr_refl_has(r->refl_cell, r->nrefl_cell, name) ||
+         lr_refl_has(r->refl_capt, r->nrefl_capt, name);
 }
 
 int elab_method_replaced(Compiler *c, const char *name) {
@@ -6230,6 +6233,13 @@ int elab_method_may_be_protected(Compiler *c, const char *name) {
       if (v->kind != LR_UNDEF && v->kind != LR_REMOVE && v->vis == SP_VIS_PROTECTED) return 1;
     }
   return 0;
+}
+
+const char *elab_version_name(Compiler *c, int i) {
+  LoadRecord *r = c->lrec;
+  if (!r || !r->recorded) return NULL;
+  lr_vers_index(r);
+  return i >= 0 && i < r->nvers ? r->vers[i].name : NULL;
 }
 
 int elab_method_holder(Compiler *c, const char *name, int i, int *cls, int *sg) {

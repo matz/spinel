@@ -981,6 +981,43 @@ static const char *scope_self_cls_text(Compiler *c, const Scope *s, char *buf, s
   snprintf(buf, size, "((sp_Class){%d})", s->class_id);
   return buf;
 }
+/* `B.const_defined?(:N)` with N a constant of builtin B that the compiler
+   reads (Process::WNOHANG, Math::PI, Process::Status): the C test in buf, 1
+   or the platform's (Process::RLIMIT_NOFILE); NULL for another name. OWN,
+   the `false` form, takes File's three separators alone in File (its flags
+   are File::Constants') and skips Math's in a class that includes Math. A
+   program class the receiver resolves to (CLS) with another name, such as
+   Foo::Process, takes Math's alone, when its chain includes Math. */
+static const char *builtin_const_defined_text(Compiler *c, int recv, int cls, const char *nm, int own, char *buf, size_t size) {
+  NodeKind rk = nt_kind(c->nt, recv);
+  const char *rn = rk == NK_ConstantReadNode || rk == NK_ConstantPathNode ? nt_str(c->nt, recv, "name") : NULL;
+  if (!rn || !nm || strstr(nm, "::")) return NULL;
+  /* (UTF8 is Spinel's alias, which CRuby's Encoding does not define) */
+  if (sp_streq(rn, "Encoding") && sp_streq(nm, "UTF8")) return NULL;
+  if (cls >= 0 && cls < c->nclasses && c->classes[cls].name && !sp_streq(c->classes[cls].name, rn)) {
+    /* (Foo::Math is the program's module, Math's only when it includes Math) */
+    if (own || !(sp_streq(nm, "PI") || sp_streq(nm, "E")) || !comp_chain_includes_core(c, cls, "Math")) return NULL;
+    snprintf(buf, size, "1");
+    return buf;
+  }
+  if (sp_streq(rn, "Process") && process_rlimit_const(nm)) {
+    snprintf(buf, size, "sp_process_rlimit_defined(\"%s\")", nm + 7);
+    return buf;
+  }
+  if (sp_streq(rn, "Process") && (sp_streq(nm, "RLIM_SAVED_MAX") || sp_streq(nm, "RLIM_SAVED_CUR"))) {
+    snprintf(buf, size, "sp_process_rlim_defined(%d)", sp_streq(nm, "RLIM_SAVED_MAX") ? 1 : 2);
+    return buf;
+  }
+  char q[256];
+  snprintf(q, sizeof q, "%s::%s", rn, nm);
+  int yes = builtin_class_id(q) != 0 || is_builtin_class_name(q) || is_builtin_module_name(q);
+  if (!yes && builtin_scoped_const_type(c, own && !sp_streq(rn, "Math") ? -1 : recv, rn, nm) != TY_UNKNOWN)
+    yes = !(own && sp_streq(rn, "File") && !sp_streq(nm, "SEPARATOR") && !sp_streq(nm, "PATH_SEPARATOR") &&
+            !sp_streq(nm, "ALT_SEPARATOR"));
+  if (!yes) return NULL;
+  snprintf(buf, size, "1");
+  return buf;
+}
 int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt) {
   if (sp_streq(name, "respond_to?") && argc >= 1 && !respond_to_user_defined(c, id, recv)) {
     NodeKind ak = nt_kind(nt, argv[0]);
@@ -1846,7 +1883,10 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       }
       /* a constant not assigned yet is not defined: asked at run time */
       LocalVar *cd_lv = const_defined_slot(c, cd_rk, qm);
+      char bt[160];
+      const char *bcd = yes ? NULL : builtin_const_defined_text(c, recv, cd_rk, qm, argc >= 2 && nt_kind(nt, argv[1]) == NK_FalseNode, bt, sizeof bt);
       if (yes && const_has_flag(cd_lv)) buf_printf(b, "cst_%s__set", cd_lv->name);
+      else if (bcd) buf_puts(b, bcd);
       else buf_printf(b, "%d", yes);
       return 1;
     }
@@ -5217,10 +5257,13 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
           buf_puts(b, "; })");
           return 1;
         }
+        char bt[160];
+        const char *bcd = !yes && vci < 0 && lit0 ? builtin_const_defined_text(c, recv, rk0c, cn0, 0, bt, sizeof bt) : NULL;
         buf_printf(b, "((void)("); emit_expr_for_effect(c, recv, b);
         /* a constant not assigned yet is not defined: asked at run time */
         LocalVar *cd0 = const_defined_slot(c, rk0c, cn0);
         if (yes && const_has_flag(cd0)) buf_printf(b, "), cst_%s__set)", cd0->name);
+        else if (bcd) buf_printf(b, "), %s)", bcd);
         else buf_printf(b, "), %d)", yes);
         return 1;
       }

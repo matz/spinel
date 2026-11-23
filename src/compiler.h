@@ -2421,6 +2421,7 @@ void builtin_given_free(Compiler *c);
 int const_path_class(Compiler *c, int id);
 /* a segment naming a builtin class, module or constant (analyze_util.c) */
 int const_seg_builtin(Compiler *c, int id);
+int const_path_builtin_other(Compiler *c, int id, int k);
 
 /* Classes. */
 ClassInfo *comp_class_new(Compiler *c, const char *name, int def_node);

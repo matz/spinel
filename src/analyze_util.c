@@ -595,6 +595,7 @@ int const_node_class_index(Compiler *c, int id) {
     if (one >= 0) return one;
   }
   int k = const_node_class_index_tree(c, id);
+  if (const_path_builtin_other(c, id, k)) return -1;
   /* the record resolves the name to the builtin (Object holds no constant of
      the program's by it): only a top-level class of that name can be the
      program's reopening of it, not a nested one that shares its leaf
@@ -714,6 +715,19 @@ int const_seg_builtin(Compiler *c, int id) {
   /* (Math's constants through a program class that includes Math: Calc::PI) */
   if ((sp_streq(nm, "PI") || sp_streq(nm, "E")) && comp_const_path_on_math(c, par)) return 1;
   return builtin_const_name(pn) && infer_cext_builtin_constant(c, id);
+}
+/* Is class k, which constant path id finds by its leaf, another class than
+   the builtin the whole path spells: `T::WaitReadable` for `IO::WaitReadable`?
+   A reopening of the builtin (`class Enumerator::Chain`) is the builtin. */
+int const_path_builtin_other(Compiler *c, int id, int k) {
+  const NodeTable *nt = c->nt;
+  if (k < 0 || id < 0 || nt_kind(nt, id) != NK_ConstantPathNode) return 0;
+  int par = nt_ref(nt, id, "parent");
+  const char *pn = par >= 0 && nt_kind(nt, par) == NK_ConstantReadNode ? nt_str(nt, par, "name") : NULL;
+  const char *nm = nt_str(nt, id, "name"), *rn = class_ruby_name(c, k);
+  char qn[256];
+  return pn && nm && snprintf(qn, sizeof qn, "%s::%s", pn, nm) < (int)sizeof qn && builtin_core_class_slot(qn) >= 0 &&
+         !(rn && sp_streq(rn, qn));
 }
 /* Does the program define a class or module whose own name is `leaf`, nested
    in another (Frame::JSON::Encoding)? Inside it, `leaf::X` can name it. */

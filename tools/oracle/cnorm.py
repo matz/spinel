@@ -25,15 +25,26 @@ def unslot(k):
         else: out+=k[i:m.end()]; i=m.end()
 import os
 ROOTS=[r for r in os.environ.get('CNORM_ROOTS','').split(':') if r]
+LIT=re.compile(r'"(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\'')
+def symnum(line):
+    # a symbol's number, which the symbol table's entries move, in the code of a line: a string or character
+    # literal keeps its text, so two literals that differ stay different
+    out=[]; i=0
+    for m in LIT.finditer(line):
+        out.append(re.sub(r'\(sp_sym\)\d+','(sp_sym)N',re.sub(r'sp_box_sym\(\d+\)','sp_box_sym(N)',line[i:m.start()])))
+        out.append(m.group(0)); i=m.end()
+    out.append(re.sub(r'\(sp_sym\)\d+','(sp_sym)N',re.sub(r'sp_box_sym\(\d+\)','sp_box_sym(N)',line[i:])))
+    return ''.join(out)
 def lines(p):
     o=[]
-    for l in open(p,errors='replace').read().splitlines():
-        if SYM.search(l): continue
-        for r in ROOTS: l=l.replace(r,'TREE')
-        l=re.sub(r'sp_box_sym\(\d+\)','sp_box_sym(N)',l)   # a symbol's number, which the symbol table's entries move
-        l=re.sub(r'\(sp_sym\)\d+','(sp_sym)N',l)
-        l=re.sub(r'\+[0-9]+ revision [0-9a-f]+','+N revision R',l)
-        o.append(l)
+    # a backslash-newline joins its two lines before anything else (translation phase 2), so a literal or a
+    # macro a line break continues is one logical line here; the counts below are of logical lines
+    for ln in re.sub(r'\\\n','',open(p,errors='replace').read()).splitlines():
+        if SYM.search(ln): continue
+        for r in ROOTS: ln=ln.replace(r,'TREE')
+        ln=symnum(ln)
+        ln=re.sub(r'\+[0-9]+ revision [0-9a-f]+','+N revision R',ln)
+        o.append(ln)
     return o
 def alpha(ls,strip):
     m={}; o=[]

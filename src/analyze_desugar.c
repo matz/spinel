@@ -6466,15 +6466,32 @@ int desugar_binding_lvget(Compiler *c) {
       changed = 1;
       continue;
     }
-    if (!get || !scope_local(&c->scopes[sc], vn)) continue;
-    char *vnbuf = malloc(strlen(vn) + 1);   /* copy before nt_new_node may realloc vn's storage */
-    if (!vnbuf) continue;
-    strcpy(vnbuf, vn);
+    if (!get) continue;
+    /* the scope that declares the written name, seen from the call: out through blocks and lambdas
+       to the def, class body or program that ends the walk */
+    int dscope = -1, depth = 0;
+    char *slot = NULL;
+    for (int up = nt_parents(nt)[id]; up >= 0 && dscope < 0; up = nt_parents(nt)[up]) {
+      NodeKind uk = nt_kind(nt, up);
+      if (uk != NK_BlockNode && uk != NK_LambdaNode && uk != NK_DefNode && uk != NK_ClassNode &&
+          uk != NK_ModuleNode && uk != NK_SingletonClassNode && uk != NK_ProgramNode) continue;
+      const char *sl = nt_scope_slot_of(nt, up, vn);
+      /* the program's own locals are on no list: a local node it declares names it */
+      for (int q = 0; !sl && uk == NK_ProgramNode && q < nt->count; q++)
+        if (a_is_local_node(nt_type(nt, q)) && nt_int(nt, q, "decl", -1) == up &&
+            nt_str(nt, q, "name") && sp_streq(nt_wname(nt, q), vn)) sl = nt_str(nt, q, "name");
+      if (sl) { slot = strdup(sl); dscope = up; break; }   /* copy before nt_new_node may realloc */
+      if (uk != NK_BlockNode && uk != NK_LambdaNode) break;
+      depth++;
+    }
+    if (dscope < 0 || !slot) { free(slot); continue; }
     int base = nt->count;
     int lread = nt_new_node(nt, "LocalVariableReadNode");
-    if (lread < 0) { free(vnbuf); continue; }
-    nt_node_set_str(nt, lread, "name", vnbuf);
-    free(vnbuf);
+    if (lread < 0) { free(slot); continue; }
+    nt_node_set_str(nt, lread, "name", slot);
+    nt_node_set_int(nt, lread, "depth", depth);
+    nt_decl_in(nt, lread, dscope);
+    free(slot);
     nt_node_set_ref(nt, id, "receiver", lread);            /* <local>.itself */
     nt_set_itself_call(nt, id);
     nt_node_set_ref(nt, id, "arguments", -1);

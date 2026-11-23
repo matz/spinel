@@ -2021,9 +2021,12 @@ static int strbuf_site_tail(Compiler *c) {
   }
   return -1;
 }
+/* Is value v held: any expression's value is. No value is proved a new
+   String no name holds; the handle face adopts a just-made one (SP_STR_HDL)
+   and returns a held one's own handle. */
 static int strbuf_value_held(Compiler *c, int v) {
   v = nt_paren_single(c->nt, v);
-  return v >= 0 && !share_value_fresh(c, v, 0);
+  return v >= 0;
 }
 /* Does a `next v` that leaves block body n (not a nested block's, loop's
    or method's) hand on a held String? */

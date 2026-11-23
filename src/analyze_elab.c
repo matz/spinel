@@ -5513,6 +5513,7 @@ static void lr_words_refine(Compiler *c) {
   const NodeTable *nt = c->nt;
   if (!r->npword) return;
   lr_run_points(c);
+  int changed = 0;
   for (int w = 0; w < r->npword; w++) {
     struct LrPWord pw = r->pword[w];
     int ne = lr_word_elems(nt, pw.node);
@@ -5560,7 +5561,7 @@ static void lr_words_refine(Compiler *c) {
           v->vis = (unsigned char)(pv >= 0 ? pv : SP_VIS_PUBLIC);   /* (no method of the name yet: one a body makes later is public) */
         }
         else v->vis = (unsigned char)lr_vis(pw.vis);
-        if (was != v->vis || cut != v->cut) r->hgen++;   /* (what was read through the entries is read again) */
+        changed |= was != v->vis || cut != v->cut;
       }
     }
     /* (the reach ends at a name an entry no body makes may have made too, a def under a condition the run time decides: whether the
@@ -5571,12 +5572,11 @@ static void lr_words_refine(Compiler *c) {
       ElabVersion ev[LR_BODY_VERSIONS];
       int nv = lr_chain_versions(c, pw.cls, pw.sg, nms[now], ev, LR_BODY_VERSIONS);
       for (int i = 0; i < nv; i++)
-        if (ev[i].v->body) ((LrDef *)ev[i].v)->absent = 1;
-      r->hgen++;
+        if (ev[i].v->body) ((LrDef *)ev[i].v)->absent = 1, changed = 1;
     }
     free(nms); free(ord); free(rank);
   }
-  free(r->surf); free(r->surf_at); r->surf = NULL; r->surf_at = NULL;
+  if (changed) lr_entries_changed(r);   /* (the by-name index, the late bits and the surface count the entries as they were) */
 }
 
 /* The record dropped and made again over the walked statements */

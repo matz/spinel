@@ -83,11 +83,14 @@ int is_builtin_exception_name(const char *n) {
    walk of the class bodies, the path writes and the nils a desugaring
    dropped. Each question walked all of them, once for each pair, and N
    scoped reads of N names asked N pairs. */
-struct ConstPairs { const NodeTable *nt; unsigned ver; unsigned long edits; int count; ANameHash keys; };
+struct ConstPairs { const NodeTable *nt; unsigned ver; unsigned long edits; int count; ANameHash keys, heads; };
 static void const_pairs_clear(struct ConstPairs *p) {
   for (int i = 0; i < p->keys.n; i++) free((char *)p->keys.key[i]);
+  for (int i = 0; i < p->heads.n; i++) free((char *)p->heads.key[i]);
   anh_free(&p->keys);
+  anh_free(&p->heads);
   memset(&p->keys, 0, sizeof p->keys);
+  memset(&p->heads, 0, sizeof p->heads);
 }
 void const_pairs_free(Compiler *c) {
   if (!c->const_pairs) return;
@@ -146,6 +149,9 @@ static const ANameHash *const_pairs_of(Compiler *c) {
     NT_FOREACH_KIND(nt, dk[dh], d) {
       const char *dn = class_def_opens_cref(nt, d) ? class_def_key(c, d) : NULL;
       if (dn) body_const_writes(c, nt, class_def_body(nt, d), dn, &p->keys);
+      /* heads: the path P::N of a header such as `class Encoding::Converter` */
+      int cp = class_def_path(nt, d), q = cp >= 0 && nt_kind(nt, cp) == NK_ConstantPathNode ? nt_ref(nt, cp, "parent") : -1;
+      if (q >= 0 && nt_kind(nt, q) == NK_ConstantReadNode) const_pair_add(&p->heads, nt_str(nt, q, "name"), nt_str(nt, cp, "name"));
     }
   static const NodeKind writes[] = { NK_ConstantPathWriteNode, NK_ConstantPathOrWriteNode,
                                      NK_ConstantPathAndWriteNode, NK_ConstantPathOperatorWriteNode };
@@ -163,6 +169,16 @@ int program_writes_const_in(Compiler *c, const char *pn, const char *nm) {
   if (!pn || !nm) return 0;
   char kb[256], *key = const_pair_key(kb, sizeof kb, pn, nm);
   int r = anh_has(const_pairs_of(c), key);
+  if (key != kb) free(key);
+  return r;
+}
+/* Does a class or module header open the path `pn::nm` (`class
+   Encoding::Converter`)? */
+static int program_opens_path(Compiler *c, const char *pn, const char *nm) {
+  if (!pn || !nm) return 0;
+  const_pairs_of(c);
+  char kb[256], *key = const_pair_key(kb, sizeof kb, pn, nm);
+  int r = anh_has(&c->const_pairs->heads, key);
   if (key != kb) free(key);
   return r;
 }
@@ -716,19 +732,6 @@ int const_seg_builtin(Compiler *c, int id) {
   if ((sp_streq(nm, "PI") || sp_streq(nm, "E")) && comp_const_path_on_math(c, par)) return 1;
   return builtin_const_name(pn) && infer_cext_builtin_constant(c, id);
 }
-/* Is class k, which constant path id finds by its leaf, another class than
-   the builtin the whole path spells: `T::WaitReadable` for `IO::WaitReadable`?
-   A reopening of the builtin (`class Enumerator::Chain`) is the builtin. */
-int const_path_builtin_other(Compiler *c, int id, int k) {
-  const NodeTable *nt = c->nt;
-  if (k < 0 || id < 0 || nt_kind(nt, id) != NK_ConstantPathNode) return 0;
-  int par = nt_ref(nt, id, "parent");
-  const char *pn = par >= 0 && nt_kind(nt, par) == NK_ConstantReadNode ? nt_str(nt, par, "name") : NULL;
-  const char *nm = nt_str(nt, id, "name"), *rn = class_ruby_name(c, k);
-  char qn[256];
-  return pn && nm && snprintf(qn, sizeof qn, "%s::%s", pn, nm) < (int)sizeof qn && builtin_core_class_slot(qn) >= 0 &&
-         !(rn && sp_streq(rn, qn));
-}
 /* Does the program define a class or module whose own name is `leaf`, nested
    in another (Frame::JSON::Encoding)? Inside it, `leaf::X` can name it. */
 static int program_nests_class_named(Compiler *c, const char *leaf) {
@@ -767,6 +770,32 @@ static int lexically_sees_nested(Compiler *c, int id, const char *leaf) {
     for (int j = 0; j < c->nclasses; j++)
       if (c->classes[j].enclosing_class == k && class_leaf_is(c, j, leaf)) return 1;
   return 0;
+}
+static int program_gives_builtin_const(Compiler *c, const char *nm);
+/* Returns 1 when constant path id is a builtin's path (IO::WaitReadable,
+   File::Stat) and class k, which the lookup found by the path's leaf, is a
+   program class with another Ruby name (T::WaitReadable, T::Stat). The
+   caller then uses the builtin. Returns 0 when the Ruby name of k is the
+   whole path, as for `class Enumerator::Chain`, which reopens the builtin.
+   For a path listed in lib/sp_builtin_classes.h (IO::WaitReadable), those
+   two checks decide. For another builtin path (File::Stat), the function
+   also returns 0 when the program can define the leaf in the builtin: a
+   module App::File nested where the path is written, a class header or
+   write of the path, a module mixed into a builtin, or a const_set. */
+int const_path_builtin_other(Compiler *c, int id, int k) {
+  const NodeTable *nt = c->nt;
+  if (k < 0 || id < 0 || nt_kind(nt, id) != NK_ConstantPathNode) return 0;
+  int par = nt_ref(nt, id, "parent");
+  const char *pn = par >= 0 && nt_kind(nt, par) == NK_ConstantReadNode ? nt_str(nt, par, "name") : NULL;
+  const char *nm = nt_str(nt, id, "name"), *rn = class_ruby_name(c, k);
+  char qn[256];
+  if (!pn || !nm || snprintf(qn, sizeof qn, "%s::%s", pn, nm) >= (int)sizeof qn || (rn && sp_streq(rn, qn))) return 0;
+  if (builtin_core_class_slot(qn) >= 0) return 1;
+  /* qc_orig_name is the leaf the program wrote when a pass renamed the
+     path to the alias's class (M::A to Foo) */
+  const char *wn = nt_str(nt, id, "qc_orig_name"), *ln = class_leaf_name(wn ? wn : nm);
+  return class_leaf_is(c, k, ln) && const_path_in_closed_builtin(c, id) && !program_gives_builtin_const(c, ln) &&
+         !program_places_const_dynamically(c, ln) && !program_opens_path(c, pn, nm);
 }
 /* `P::NAME` where P is a builtin class or module: NAME is P's own constant,
    never a program constant that shares the leaf name (the leaf-keyed table

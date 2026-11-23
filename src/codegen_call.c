@@ -23719,7 +23719,7 @@ int emit_arg_type_guards(Compiler *c, int id, Buf *b) {
    change through another name is one the Enumerator sees; a frozen literal
    changes through no name. */
 int str_each_recv_shares(Compiler *c, int recv) {
-  return recv >= 0 && !share_frozen_literal(c, recv);
+  return recv >= 0 && !repr_frozen_literal(c, recv);
 }
 /* Does the Enumerator of call id outlive the expression it is made in:
    kept, handed on, or built on by blockless calls answering Enumerators
@@ -27760,7 +27760,7 @@ static void operands_held_for_later(Compiler *c, const int *operand, int nop, in
     if (i >= has_recv && !ran && an_const_read_keeps_class(c, v) && subtree_has_side_effect(c, v)) held[i] = 1;
     /* (a read of a String slot is no new value: the operand order holds
        its handle where a sibling may rebind it, string_group_at) */
-    /* (nor is a frozen literal standing alone, share_frozen_literal_alone:
+    /* (nor is a frozen literal standing alone, repr_frozen_literal_alone:
        every evaluation answers the one static object, which no collection
        frees. Statements before it in parentheses, `(f; "lit")`, run first:
        held, it is bound in order with the operand after it; left out, a
@@ -27769,7 +27769,7 @@ static void operands_held_for_later(Compiler *c, const int *operand, int nop, in
        has an effect is not asked: `1 / z` raises) */
     if (i >= has_recv && later && !ran && operand_binds_as_value(nt_kind(c->nt, v)) && !operand_reads_string_slot(c, v) &&
         (needs_root(r.as_ty) || r.as_ty == TY_POLY) && r.as_ty != TY_STRBUF && !r.handle && !r.demand &&
-        !share_frozen_literal_alone(c, v) && operand_allocates_beside(c, v))
+        !repr_frozen_literal_alone(c, v) && operand_allocates_beside(c, v))
       held[i] = 1;
     if (!ran && operand_allocates_beside(c, v)) later = 1;
   }
@@ -28362,7 +28362,7 @@ static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
     else if (comp_ty_value_obj(c, ty[i])) { emit_gc_root_tmp_refs(c, ty[i], tmp[i], b); buf_puts(b, " "); }
     /* (a frozen literal, `(f; "lit")` held for its statements' order,
        answers the one static object, which no collection frees: no root) */
-    else if (needs_root(ty[i]) && !share_frozen_literal(c, node[i])) buf_printf(b, "SP_GC_ROOT(_t%d); ", tmp[i]);
+    else if (needs_root(ty[i]) && !repr_frozen_literal(c, node[i])) buf_printf(b, "SP_GC_ROOT(_t%d); ", tmp[i]);
     free(opb[i].p);
   }
   /* (a held route that answered nil, a bang's: its arguments ran, and the

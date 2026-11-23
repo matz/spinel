@@ -25662,12 +25662,12 @@ static int strbuf_demand_nested_literal(Compiler *c, int lit, int depth) {
 static int strbuf_demand_store_leaf(Compiler *c, int sn, int depth) {
   const NodeTable *nt = c->nt;
   if (sn < 0 || comp_strbuf_box_stored(c, sn)) return 0;
-  /* A frozen String (a literal, share_frozen_literal) needs no handle: no
+  /* A frozen String (a literal, repr_frozen_literal) needs no handle: no
      mutation reaches it, its plain box raises the FrozenError, and it is
      the one object each read answers, as strbuf_demand_nested_literal
      leaves a nested literal's. Wrapped in a handle, the store copied it
      for nothing. */
-  if (share_frozen_literal(c, sn)) return 0;
+  if (repr_frozen_literal(c, sn)) return 0;
   /* Parentheses around one statement are transparent: the demand is the
      statement's, as if they were not there, and the parenthesis carries
      the mark only once the statement does. emit_boxed_impl boxes the
@@ -26908,7 +26908,7 @@ int cext_demand_reader(Compiler *c, int call) {
   return changed;
 }
 int cext_demand_string(Compiler *c, int value) {
-  if (share_frozen_literal(c, value)) return 0;
+  if (repr_frozen_literal(c, value)) return 0;
   if(nt_kind(c->nt,value)==NK_InstanceVariableReadNode) {
     Scope *scope=comp_scope_of(c,value);
     const char *name=nt_str(c->nt,value,"name");

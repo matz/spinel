@@ -1666,7 +1666,7 @@ int strbuf_hash_default_arg(Compiler *c, int v) {
   if ((rt != TY_POLY && (!ty_is_hash(rt) || ty_hash_val(rt) != TY_POLY)) || argc != 1 ||
       cplan_user_fresh(c, v).dispatch != CP_NONE) return -1;
   /* A dropped frozen literal already keeps its frozen mark in the box. */
-  if (share_frozen_literal(c, argv[0]) && an_node_dropped(c, v)) return -1;
+  if (repr_frozen_literal(c, argv[0]) && an_node_dropped(c, v)) return -1;
   TyKind at = repr_of(c, argv[0]).ty;
   return at == TY_STRING || at == TY_STRBUF ? argv[0] : -1;
 }
@@ -2186,7 +2186,7 @@ static int strbuf_inline_tail_ok(Compiler *c, int mi, int t, int depth) {
      the String, whose handle the slot takes as emit_strbuf_value takes the
      route's: `v.is_a?(String) ? v.to_s : ""`, over a String v or a boxed
      local the guard narrows, whose box the slot lifts) */
-  if (share_frozen_literal(c, t)) return 1;
+  if (repr_frozen_literal(c, t)) return 1;
   if (strbuf_narrowed_box_conversion(c, t) >= 0) return 1;
   int x = repr_string_conversion_operand(c, t);
   return x >= 0 && repr_of(c, x).kind != RK_BOXED && comp_ntype(c, x) != TY_POLY && !strbuf_boxed_local(c, x) &&

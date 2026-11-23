@@ -1301,38 +1301,6 @@ static int sh_call_fresh(Compiler *c, int n, int depth) {
   return ok;
 }
 
-/* Is node n the frozen String literal itself: a literal of a file whose
-   literals are frozen (`fzl`), or a `freeze`, `-@` or `dedup` of one, which
-   answer their receiver? Every evaluation answers the one object the
-   literal names, so the handle a shared slot takes for it is that
-   literal's own static object (sp_StringLiteral), never a new one. Adjacent
-   literals (`"a" "b"`) and a squiggly heredoc of mixed indents parse as an
-   interpolated String that emit_interp folds into one literal: that is one
-   too (interp_is_literal_fold). A `+"lit"` is a call that copies, and a
-   String with a part to evaluate is built each time: neither is one. */
-int share_frozen_literal(Compiler *c, int n) {
-  const NodeTable *nt = c->nt;
-  /* parentheses are the frozen literal their value is (vp_one), as
-     share_value_fresh reads them: `(x; "lit")` is "lit" */
-  if (vp_one(nt, n, VPS_NONE | VP_PARENS_ONLY, &n) != VP1_NODE) return 0;
-  NodeKind k = nt_kind(nt, n);
-  if (k == NK_StringNode) return nt_int(nt, n, "fzl", 0) != 0;
-  if (k == NK_InterpolatedStringNode) return nt_int(nt, n, "fzl", 0) != 0 && interp_is_literal_fold(nt, n);
-  if (k != NK_CallNode || nt_ref(nt, n, "arguments") >= 0 || nt_ref(nt, n, "block") >= 0 ||
-      (bop_share_named(TY_STRING, nt_str(nt, n, "name")) != BSH_FROZEN && !is_freeze_name(nt_str(nt, n, "name")))) return 0;
-  return share_frozen_literal(c, nt_ref(nt, n, "receiver"));
-}
-/* Is node n a frozen literal (share_frozen_literal) that runs nothing
-   besides: each parenthesis on the way holds the literal alone,
-   `("lit")` or `("lit").freeze`, never `(f; "lit")`, whose statements run
-   before the literal answers? */
-int share_frozen_literal_alone(Compiler *c, int n) {
-  const NodeTable *nt = c->nt;
-  n = nt_paren_single(nt, n);
-  if (nt_kind(nt, n) == NK_ParenthesesNode || !share_frozen_literal(c, n)) return 0;
-  /* (a freeze of one is one when its receiver is) */
-  return nt_kind(nt, n) != NK_CallNode || share_frozen_literal_alone(c, nt_ref(nt, n, "receiver"));
-}
 /* Is unary `+` of n a new String: n a builtin String constant
    (share_frozen_string), or what the builtin freeze answers, frozen
    whatever its receiver (`+RUBY_ENGINE.freeze`, `+s.freeze`)? */
@@ -1364,7 +1332,7 @@ int share_frozen_string(Compiler *c, int n) {
     return pn && sp_streq(pn, "IO") && (comp_core_class(c, CORE_IO) < 0 || const_path_in_closed_builtin(c, u)) &&
            cn && sp_streq(cn, "NULL");
   }
-  return share_frozen_literal(c, n);
+  return repr_frozen_literal(c, n);
 }
 /* Is call n a builtin whose share row answers a new value (PURE), for its
    receiver's family or any receiver, reaching no method of the program's? */

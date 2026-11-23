@@ -1430,6 +1430,39 @@ ReprForm repr_box_form(const Compiler *c, Repr r) {
   return RF_NULLABLE;
 }
 
+/* Is node n the frozen String literal itself: a literal of a file whose
+   literals are frozen (`fzl`), or a `freeze`, `-@` or `dedup` of one, which
+   answer their receiver? Every evaluation answers the one object the
+   literal names, so the handle a slot takes for it is that literal's own
+   static object (sp_StringLiteral), never a new one. Adjacent literals
+   (`"a" "b"`) and a squiggly heredoc of mixed indents parse as an
+   interpolated String that emit_interp folds into one literal: that is one
+   too (interp_is_literal_fold). A `+"lit"` is a call that copies, and a
+   String with a part to evaluate is built each time: neither is one.
+   Parentheses are the literal their value is (vp_one): `(x; "lit")` is
+   "lit". Its handle is the identity every reader of the literal sees, so the
+   fact is Repr's, read from the node table, the value-position walker and
+   the String freeze row. */
+int repr_frozen_literal(Compiler *c, int n) {
+  const NodeTable *nt = c->nt;
+  if (vp_one(nt, n, VPS_NONE | VP_PARENS_ONLY, &n) != VP1_NODE) return 0;
+  NodeKind k = nt_kind(nt, n);
+  if (k == NK_StringNode) return nt_int(nt, n, "fzl", 0) != 0;
+  if (k == NK_InterpolatedStringNode) return nt_int(nt, n, "fzl", 0) != 0 && interp_is_literal_fold(nt, n);
+  if (k != NK_CallNode || nt_ref(nt, n, "arguments") >= 0 || nt_ref(nt, n, "block") >= 0 ||
+      (bop_share_named(TY_STRING, nt_str(nt, n, "name")) != BSH_FROZEN && !is_freeze_name(nt_str(nt, n, "name")))) return 0;
+  return repr_frozen_literal(c, nt_ref(nt, n, "receiver"));
+}
+/* ...with nothing run beside it: each parenthesis on the way holds the
+   literal alone, `("lit")` or `("lit").freeze`, never `(f; "lit")`, whose
+   statements run before the literal answers. */
+int repr_frozen_literal_alone(Compiler *c, int n) {
+  const NodeTable *nt = c->nt;
+  n = nt_paren_single(nt, n);
+  if (nt_kind(nt, n) == NK_ParenthesesNode || !repr_frozen_literal(c, n)) return 0;
+  /* (a freeze of one is one when its receiver is) */
+  return nt_kind(nt, n) != NK_CallNode || repr_frozen_literal_alone(c, nt_ref(nt, n, "receiver"));
+}
 /* See repr.h. Every box can, unless its form proves an immediate: an
    Integer, a Float (each with its nil or not), true, false, a Symbol, nil
    and a void value's nil; or a Class, boxed by its id or by its name
@@ -1441,10 +1474,10 @@ ReprForm repr_box_form(const Compiler *c, Repr r) {
    compiled pattern: its row roots no slot) is not one. An untyped value
    is boxed by its shape where it has one (an empty `[]` or `{}`, a bare
    Array.new or Hash.new): a new container. A frozen String literal's box
-   is its static handle (share_frozen_literal). */
+   is its static handle (repr_frozen_literal). */
 int repr_box_holds_heap(Compiler *c, int node) {
   Repr r = repr_of(c, node);
-  if (share_frozen_literal(c, node)) return 0;
+  if (repr_frozen_literal(c, node)) return 0;
   switch (repr_box_form(c, r)) {
   case RF_INT: case RF_INT_NIL: case RF_FLT: case RF_FLT_NIL: case RF_BOOL: case RF_SYM:
     return 0;

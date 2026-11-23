@@ -340,4 +340,11 @@ int repr_write_share(const Compiler *c, int node);
    class variable's */
 int repr_static_read_kind(NodeKind k);
 
+/* Is node n the frozen String literal itself (a literal of a file whose
+   literals are frozen, or a freeze, -@ or dedup of one)? Its handle is the
+   literal's own static object, never a new one. */
+int repr_frozen_literal(Compiler *c, int n);
+/* ...with nothing run besides it: no statements before it in parentheses */
+int repr_frozen_literal_alone(Compiler *c, int n);
+
 #endif

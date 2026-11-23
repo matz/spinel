@@ -66,11 +66,17 @@ const char *sp_crypto_sha1_hex(const char *msg);
 /* SHA-256(msg) -> 64-char lowercase hex. */
 const char *sp_crypto_sha256_hex(const char *msg);
 
-/* Raw digest bytes: 32 for SHA-256, 20 for SHA-1. The result is NOT
- * NUL-terminated data -- it is arbitrary bytes -- so the length is published
- * in sp_ffi_bin_len (sp_alloc.h) for the `:cbinstr` / `:binstr` return modes
- * to pick up. Callers reading these directly must use the same length. */
+/* SHA-384(msg) -> 96-char lowercase hex; SHA-512(msg) -> 128-char lowercase hex. */
+const char *sp_crypto_sha384_hex(const char *msg);
+const char *sp_crypto_sha512_hex(const char *msg);
+
+/* Raw digest bytes: 32 for SHA-256, 48 for SHA-384, 64 for SHA-512, 20 for SHA-1.
+ * The result is NOT NUL-terminated data -- it is arbitrary bytes -- so the length
+ * is published in sp_ffi_bin_len (sp_alloc.h) for the `:cbinstr` / `:binstr` return
+ * modes to pick up. Callers reading these directly must use the same length. */
 const char *sp_crypto_sha256_bin(const char *msg);
+const char *sp_crypto_sha384_bin(const char *msg);
+const char *sp_crypto_sha512_bin(const char *msg);
 const char *sp_crypto_sha1_bin(const char *msg);
 
 /* MD5(msg) -> 32-char lowercase hex / the raw 16 digest bytes. Legacy hash,
@@ -79,20 +85,27 @@ const char *sp_crypto_sha1_bin(const char *msg);
 const char *sp_crypto_md5_hex(const char *msg);
 const char *sp_crypto_md5_bin(const char *msg);
 
-/* Digest::X.base64digest: strict base64 of the raw digest (24, 28 and 44
- * chars, `=` padded). */
+/* Digest::X.base64digest: strict base64 of the raw digest (24, 28, 44, 64
+ * and 88 chars, `=` padded). */
 const char *sp_crypto_md5_b64(const char *msg);
 const char *sp_crypto_sha1_b64(const char *msg);
 const char *sp_crypto_sha256_b64(const char *msg);
+const char *sp_crypto_sha384_b64(const char *msg);
+const char *sp_crypto_sha512_b64(const char *msg);
 
 /* Incremental hashing, for a digest object fed in pieces. The state is a
- * binary String of a fixed size (104, 92 and 88 bytes): the chaining value,
- * the byte count and the partial block. An empty String is the initial
- * state. `_update` answers the state after `chunk`; `_final` answers the raw
- * digest of what the state has seen and leaves it usable. Both lengths ride
- * sp_ffi_bin_len, as for sp_crypto_sha256_bin. */
+ * binary String of a fixed size (104, 92, 88, and 208 bytes for SHA-256,
+ * SHA-1, MD5, and SHA-384/SHA-512): the chaining value, the byte count and
+ * the partial block. An empty String is the initial state. `_update` answers
+ * the state after `chunk`; `_final` answers the raw digest of what the state
+ * has seen and leaves it usable. Both lengths ride sp_ffi_bin_len, as for
+ * sp_crypto_sha256_bin. */
 const char *sp_crypto_sha256_update(const char *state, const char *chunk);
 const char *sp_crypto_sha256_final(const char *state);
+const char *sp_crypto_sha384_update(const char *state, const char *chunk);
+const char *sp_crypto_sha384_final(const char *state);
+const char *sp_crypto_sha512_update(const char *state, const char *chunk);
+const char *sp_crypto_sha512_final(const char *state);
 const char *sp_crypto_sha1_update(const char *state, const char *chunk);
 const char *sp_crypto_sha1_final(const char *state);
 const char *sp_crypto_md5_update(const char *state, const char *chunk);

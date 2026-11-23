@@ -4845,6 +4845,58 @@ void register_attrs(Compiler *c) {
   free(a);
 }
 
+/* Walk node n of a class method of a builtin class: each receiverless `new`
+   becomes `self.new`, which it is in Ruby (a nested def or class body is
+   another self). */
+static void bare_new_self(Compiler *c, int n, int *changed) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  if (n < 0) return;
+  NodeKind k = nt_kind(nt, n);
+  if (k == NK_DefNode || class_def_opens_frame(nt, n) || k == NK_SingletonClassNode) return;
+  if (k == NK_CallNode && nt_ref(nt, n, "receiver") < 0 && is_new_name(nt_str(nt, n, "name"))) {
+    int self = nt_new_node(nt, "SelfNode");
+    if (self >= 0) {
+      comp_grow_node_arrays(c);
+      c->nscope[self] = c->nscope[n];   /* (the class method's self, not main's) */
+      nt_node_set_int(nt, self, "node_line", nt_int(nt, n, "node_line", -1));
+      nt_node_set_int(nt, self, "node_file", nt_int(nt, n, "node_file", -1));
+      nt_set_self_receiver(nt, n, self);
+      *changed = 1;
+    }
+  }
+  for (int i = 0, nr = nt_num_refs(nt, n); i < nr; i++) bare_new_self(c, nt_ref_at(nt, n, i), changed);
+  for (int i = 0, na = nt_num_arrs(nt, n); i < na; i++) {
+    int m = 0;
+    const int *ids = nt_arr_at(nt, n, i, &m);
+    int *cp = m > 0 ? malloc(sizeof(int) * (size_t)m) : NULL;
+    if (m > 0 && !cp) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    if (m > 0) memcpy(cp, ids, sizeof(int) * (size_t)m);
+    for (int j = 0; j < m; j++) bare_new_self(c, cp[j], changed);
+    free(cp);
+  }
+}
+/* A builtin class's own class method (`class String; def self.blank =
+   new("")`): a bare `new` there is the builtin's, built through the
+   class-value `self.new` the receiver form takes. The constructor path a
+   program class's bare `new` takes wrote the program-class constructor,
+   with no initialize to take the argument: the C did not build. (A
+   module's method a builtin class extends, copied in as its class method,
+   keeps the module's body and is not taken here.) */
+void register_builtin_bare_new(Compiler *c) {
+  int changed = 0;
+  for (int s = 0; s < c->nscopes; s++) {
+    const Scope *m = &c->scopes[s];
+    if (!m->is_cmethod || m->class_id < 0 || m->class_id >= c->nclasses || m->def_node < 0) continue;
+    const ClassInfo *k = &c->classes[m->class_id];
+    if (!is_builtin_class_name(k->name) || k->is_native_class) continue;
+    /* (the class's own `def self.x`, not a module's method an extend
+       copies in, whose body is the module's) */
+    if (nt_ref(c->nt, m->def_node, "receiver") < 0) continue;
+    bare_new_self(c, nt_ref(c->nt, m->def_node, "body"), &changed);
+  }
+  if (changed) comp_grow_node_arrays(c);
+}
+
 /* A `class << self` accessor's slot is the class-level ivar's (sg_civ) where
    a class method names `@x`, register_attrs and the inheritance pass ask
    before the mixins are copied: a module's method the class extends, copied

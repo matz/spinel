@@ -50591,6 +50591,7 @@ static void an_phase_class_structure(Compiler *c) {
   register_include_attrs(c);
   AN_STEP_V("register_extends", register_extends(c));
   register_sg_civ_after_extends(c);
+  register_builtin_bare_new(c);
   AN_STEP_V("register_prepends", register_prepends(c));
   /* (the classes, their attrs and mixins are registered: a read of an ivar
      nothing sets becomes the nil it always answers) */

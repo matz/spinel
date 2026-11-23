@@ -526,6 +526,7 @@ void register_singleton_defs(Compiler *c);
 void register_attr_versions(Compiler *c);
 void register_attrs(Compiler *c);
 void register_sg_civ_after_extends(Compiler *c);
+void register_builtin_bare_new(Compiler *c);
 void register_aliases(Compiler *c);
 void register_alias_methods(Compiler *c, int modules);   /* analyze_scope.c */
 void scope_copy_method_shape(Scope *dst, Scope *src);    /* analyze_scope.c */

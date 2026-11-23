@@ -215,6 +215,16 @@ const char *sp_syserr_text(int has_num, sp_int num, const char *func, const char
 void sp_exc_syserr_init(sp_Exception *e);   /* #errno from the class's Errno ancestor */
 sp_int sp_errno_num(const char *cls);   /* Errno::ENOENT::Errno; -1 for a name outside Errno:: */
 const char *sp_exc_parent_of_name(const char *cls);
+/* FNV-1a over a class name, for the name-keyed tables of the exception
+   hierarchy. src/codegen.c fills the slots of the generated
+   sp_user_exc_parent with the same function: change both together. */
+static inline unsigned sp_exc_name_hash(const char *n) {
+  unsigned h = 2166136261u;
+  for (; *n; n++) h = (h ^ (unsigned char)*n) * 16777619u;
+  return h;
+}
+int sp_exc_name_slot(const char *n, const char *const *keys, int stride,
+                     const unsigned short *slots, unsigned mask);
 sp_RbVal sp_exc_name_acc(sp_Exception *e);
 sp_RbVal sp_exc_key_acc(sp_Exception *e);
 sp_RbVal sp_exc_receiver_acc(sp_Exception *e);

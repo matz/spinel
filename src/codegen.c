@@ -23184,8 +23184,13 @@ static void emit_class_machinery(const NodeTable *nt, Compiler *c, Buf *b, char 
     for (int i = 0; i < c->nclasses; i++) {
       if (class_is_exc_subclass(c, i)) { any = 1; break; }
     }
-    buf_puts(b, "static const char *sp_user_exc_parent(const char *cls){\n");
-    if (!any) buf_puts(b, "  (void)cls;\n");
+    /* The rows, {name, parent}, in class order: a class answers under its
+       qualified name and under its own name. A rescue arm and every is_a?
+       ask at each level of a chain, so the function finds a name through a
+       hash of slots filled here, not a strcmp per row. The first row of a
+       name wins, as the strcmp chain this replaced did. */
+    int nrows = 0, caprows = 0;
+    char **rkey = NULL, **rpar = NULL;
     if (any) {
       for (int i = 0; i < c->nclasses; i++) {
         if (!class_is_exc_subclass(c, i)) continue;
@@ -23227,15 +23232,53 @@ static void emit_class_machinery(const NodeTable *nt, Compiler *c, Buf *b, char 
           }
         }
         if (par) {
-          buf_printf(b, "  if(!strcmp(cls,\"%s\"))return \"%s\";\n", cn, par);
-          /* also register the leaf name if different from qualified name */
-          if (c->classes[i].name && !sp_streq(cn, c->classes[i].name))
-            buf_printf(b, "  if(!strcmp(cls,\"%s\"))return \"%s\";\n", c->classes[i].name, par);
+          /* the leaf name too, when it differs from the qualified one */
+          const char *names[2] = { cn, c->classes[i].name && !sp_streq(cn, c->classes[i].name) ? c->classes[i].name : NULL };
+          for (int k = 0; k < 2 && names[k]; k++) {
+            int seen = 0;
+            for (int r = 0; r < nrows && !seen; r++) seen = sp_streq(rkey[r], names[k]);
+            if (seen) continue;
+            if (nrows == caprows) {
+              caprows = caprows ? 2 * caprows : 16;
+              rkey = realloc(rkey, caprows * sizeof *rkey);
+              rpar = realloc(rpar, caprows * sizeof *rpar);
+            }
+            rkey[nrows] = strdup(names[k]);
+            rpar[nrows] = strdup(par);
+            nrows++;
+          }
         }
         free(cn);
       }
     }
-    buf_puts(b, "  return 0;\n}\n");
+    buf_puts(b, "static const char *sp_user_exc_parent(const char *cls){\n");
+    if (nrows == 0) {
+      buf_puts(b, "  (void)cls;\n  return 0;\n}\n");
+    } else {
+      unsigned nslots = 16;
+      while (nslots < 2u * (unsigned)nrows) nslots *= 2;
+      unsigned short *slot = calloc(nslots, sizeof *slot);
+      for (int r = 0; r < nrows; r++) {
+        /* sp_exc_name_hash (lib/sp_exc.h): the runtime looks with it */
+        unsigned h = 2166136261u;
+        for (const char *q = rkey[r]; *q; q++) h = (h ^ (unsigned char)*q) * 16777619u;
+        h &= nslots - 1;
+        while (slot[h]) h = (h + 1) & (nslots - 1);
+        slot[h] = (unsigned short)(r + 1);
+      }
+      buf_puts(b, "  static const char *const rows[] = {\n");
+      for (int r = 0; r < nrows; r++)
+        buf_printf(b, "    \"%s\", \"%s\",\n", rkey[r], rpar[r]);
+      buf_puts(b, "  };\n");
+      buf_printf(b, "  static const unsigned short slots[%u] = {", nslots);
+      for (unsigned h = 0; h < nslots; h++) buf_printf(b, "%s%u", h ? "," : "", slot[h]);
+      buf_puts(b, "};\n");
+      buf_printf(b, "  int i = sp_exc_name_slot(cls, rows, 2, slots, %uu);\n", nslots - 1);
+      buf_puts(b, "  return i >= 0 ? rows[2 * i + 1] : 0;\n}\n");
+      free(slot);
+    }
+    for (int r = 0; r < nrows; r++) { free(rkey[r]); free(rpar[r]); }
+    free(rkey); free(rpar);
     /* A rescued exception's #class, from its name: a class of the program
        answers its own id, so #superclass and #ancestors walk the user chain
        from it; any other name is a name-backed class on cls_id -1, which no

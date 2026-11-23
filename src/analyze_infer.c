@@ -8753,9 +8753,11 @@ static int infer_last_resort_call(Compiler *c, int id, const NodeTable *nt, cons
      if the receiver were that handle. Codegen unboxes it back to exactly that
      before re-dispatching, and checks the runtime cls_id first, so a value of
      any other kind still raises NoMethodError (#4158 follow-up). */
+  /* (asked for the builtin answer alone, the dispatch's default arm beside a
+     class of the program's that defines the name: that arm is the handle's) */
   if (recv >= 0 && rt == TY_POLY && !face_active() &&
       ty_poly_handle_face_args(name, argc) != TY_UNKNOWN &&
-      !an_user_defines_or_reads(c, name) && !an_native_defines_method(c, name)) {
+      (an_builtin_only || (!an_user_defines_or_reads(c, name) && !an_native_defines_method(c, name)))) {
     an_face_push(recv, ty_poly_handle_face_args(name, argc));
     TyKind kt = infer_call(c, id);
     an_face_pop();

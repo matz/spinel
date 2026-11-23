@@ -25969,8 +25969,8 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
        guard (#4158 follow-up). */
     if (grtr.kind == RK_BOXED && g_handle_face_node != id &&
         ty_poly_handle_face_args(nt_str(nt, id, "name"), argc) != TY_UNKNOWN &&
-        !user_defines_or_reads(c, nt_str(nt, id, "name")) &&
-        !native_class_defines(c, nt_str(nt, id, "name")) &&
+        ((g_arm.builtin_arm && g_arm.pd_skip == id) ||
+         (!user_defines_or_reads(c, nt_str(nt, id, "name")) && !native_class_defines(c, nt_str(nt, id, "name")))) &&
         g_n_argov < MAX_ARG_OVERRIDE) {
       const char *knm = nt_str(nt, id, "name");
       TyKind kt = ty_poly_handle_face_args(knm, argc);

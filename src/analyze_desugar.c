@@ -6484,13 +6484,20 @@ int desugar_binding_lvget(Compiler *c) {
       if (uk != NK_BlockNode && uk != NK_LambdaNode) break;
       depth++;
     }
-    if (dscope < 0 || !slot) { free(slot); continue; }
+    /* (a local the analysis' scope table holds where no node lists it, as before the walk: the call's own scope's) */
+    if ((dscope < 0 || !slot) && scope_local(&c->scopes[sc], vn)) {
+      free(slot);
+      slot = strdup(vn);
+      depth = 0;
+      dscope = -2;
+    }
+    if (dscope == -1 || !slot) { free(slot); continue; }
     int base = nt->count;
     int lread = nt_new_node(nt, "LocalVariableReadNode");
     if (lread < 0) { free(slot); continue; }
     nt_node_set_str(nt, lread, "name", slot);
     nt_node_set_int(nt, lread, "depth", depth);
-    nt_decl_in(nt, lread, dscope);
+    if (dscope >= 0) nt_decl_in(nt, lread, dscope);
     free(slot);
     nt_node_set_ref(nt, id, "receiver", lread);            /* <local>.itself */
     nt_set_itself_call(nt, id);

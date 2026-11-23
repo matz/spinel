@@ -211,6 +211,31 @@ static inline void sp_String_append_bin(sp_String*s,const char*t){
   sp_String_append_enc(s,t,tl);
   sp_fd_append_len(s,t,(int64_t)tl);
 }
+/* concat(a, b, ...) with the arguments already taken (CRuby's
+   rb_str_concat_multi: every argument is a value before the first change, so
+   `s.concat(s, s)` appends the String as it was, and an argument an earlier
+   one's evaluation changed is read as it is now). The arguments are the
+   handles of the Strings, read here and not before; the receiver's own bytes
+   are kept aside once, only when the receiver is among them. The appends
+   cannot collect, so the handles need no root here. */
+static inline void sp_String_concat_multi(sp_String *s, int n, sp_String *const *a) {
+  if (SP_UNLIKELY(!s)) sp_nil_recv("concat");
+  if (sp_String_is_immutable(s)) { sp_raise_frozen_str(s->data); return; }
+  char *kept = NULL;
+  int64_t kept_len = s->len;
+  for (int i = 0; i < n && !kept; i++)
+    if (a[i] == s) {
+      kept = (char *)malloc((size_t)kept_len + 1);
+      if (!kept) sp_oom_die();
+      memcpy(kept, s->data, (size_t)kept_len);
+    }
+  for (int i = 0; i < n; i++) {
+    if (!a[i]) continue;
+    if (a[i] == s) sp_fd_append_len(s, kept, kept_len);
+    else sp_String_append_n(s, a[i]->data, (size_t)a[i]->len);
+  }
+  free(kept);
+}
 /* Handle wrap for CODEGEN-emitted sources only: every spinel-emitted string
    carries a marker byte at s[-1], so the frozen state (0xf1: an explicit
    .freeze / frozen_string_literal) can be inherited safely. Runtime-internal

@@ -24837,73 +24837,114 @@ static int strbuf_recv_hold(Compiler *c, int recv, const char *name, int argc, c
   return 1;
 }
 
-/* emit_array_mutate_stmt_body's String appends (<< and concat) and its bang
-   methods, with and without arguments (answers 1 emitted, 0 declined, -1 to
-   go on) */
-static int str_append_arg_staged_own(Compiler *c, int argc, int arg) {
-  return argc > 1 && !share_value_fresh(c, arg, 0);
+/* Is argument v of a multi-argument concat, already run by an ordering, a
+   handle that ordering rooted (a temp of its own, which SP_STR_HDL returns
+   as it is)? An ordered temp of bytes is not: its handle is made at the
+   staging. */
+static int concat_arg_ordered_handle(Compiler *c, int v) {
+  return ran_first_handle(v) >= 0 || ran_first_handle(nt_paren_single(c->nt, v)) >= 0;
+}
+/* Is argument v of a multi-argument concat already a handle: the read of a
+   String slot, or a value the handle face answers? Staged as that handle,
+   not as its bytes. */
+static int concat_arg_is_handle(Compiler *c, int v) {
+  Repr r = repr_of(c, v);
+  return r.as_ty == TY_STRBUF || r.handle || r.read_raw || strbuf_slot_has(c, v);
+}
+/* Can staging argument v of a multi-argument concat allocate: its evaluation
+   (subtree_may_allocate, unless an ordering ran it already), or its handle?
+   SP_STR_HDL returns the handle a String's own view or a just-made String
+   already has, and makes a new one for any other bytes, so an operand staged
+   from bytes allocates, unless it is a frozen literal standing alone (a
+   static object) or the read of a String slot or an ordered handle (its
+   handle is the owner). A handle held across such an argument is rooted. */
+static int concat_arg_stage_allocates(Compiler *c, int v) {
+  if (repr_frozen_literal_alone(c, v) || concat_arg_ordered_handle(c, v)) return 0;
+  if (!arg_ran_first(v, 0) && subtree_may_allocate(c, v)) return 1;
+  return !concat_arg_is_handle(c, v);
 }
 /* concat(a, b, ...) onto the handle `sref`: every argument taken before
-   anything is appended, as CRuby does (one of several is staged as a copy,
-   str_append_arg_staged_own, so `s.concat(s, s)` appends the String as it
-   was), then the frozen check, then the appends in order */
+   anything is appended, as CRuby does. One argument goes through the bytes
+   face, as `<<` does. Several are staged as their handles (SP_STR_HDL adopts
+   a just-made String and returns a view's owner), and sp_String_concat_multi
+   reads them at the append, after every argument ran: `s.concat(s, s)`
+   appends the String as it was (the receiver's bytes are kept aside once,
+   only when it is among the arguments), and an argument that a later
+   argument's evaluation changes is read as it is then. No argument is
+   copied here. */
 void emit_str_concat_handle(Compiler *c, const char *sref, int argc, const int *argv, Buf *b, int indent) {
-  /* the last argument whose staging can allocate: its own evaluation, a
-     conversion's answer, or the copy it is staged as */
-  int last_alloc = -1;
-  for (int a = argc - 1; a >= 0; a--) {
-    Repr r = repr_of(c, argv[a]);
-    if (r.as_ty != TY_STRING || str_append_arg_staged_own(c, argc, argv[a]) ||
-        (!arg_ran_first(argv[a], 0) && operand_may_allocate(c, argv[a]))) {
-      last_alloc = a;
-      break;
-    }
-  }
   int base = g_tmp + 1; g_tmp += argc;
   emit_indent(b, indent);
   buf_puts(b, "{");
   Buf rt; memset(&rt, 0, sizeof rt);
   buf_printf(&rt, "sp_String_cstr(%s)", sref);
-  /* Every argument runs before the frozen check, as in CRuby. A boxed
-     argument may be this very String, whose sp_poly_to_s is the live buffer
-     the first append grows: it is staged as a copy. */
-  int held0 = g_one_held;
-  /* (one representation: each of several is kept as the copy it is staged
-     as, and no call holds what it is computed from: those operands are read
-     where they run, as a statement's are. Read as copies under g_one_held,
-     the two of `a + b` were made one after the other, the first with no
-     root while the second was made) */
-  if (argc > 1) g_one_held = 0;
-  for (int a = 0; a < argc; a++) {
-    int boxed = repr_of(c, argv[a]).kind == RK_BOXED;
-    int own = str_append_arg_staged_own(c, argc, argv[a]);
-    buf_printf(b, " const char *_t%d = %s", base + a, boxed ? "sp_str_concat(" : "");
-    if (own) emit_str_append_arg_own(c, argv[a], rt.p, b);
-    else emit_str_append_arg(c, argv[a], rt.p, b);
+  if (argc == 1) {
+    /* Every argument runs before the frozen check, as in CRuby. A boxed
+       argument may be this very String, whose sp_poly_to_s is the live buffer
+       the append grows: it is staged as a copy. */
+    int boxed = repr_of(c, argv[0]).kind == RK_BOXED;
+    buf_printf(b, " const char *_t%d = %s", base, boxed ? "sp_str_concat(" : "");
+    emit_str_append_arg(c, argv[0], rt.p, b);
     buf_printf(b, "%s;", boxed ? ", \"\")" : "");
+    free(rt.p);
+    buf_printf(b, " if (sp_String_is_immutable(%s)) sp_raise_frozen_str((%s)->data);\n", sref, sref);
+    emit_indent(b, indent + 1);
+    buf_printf(b, "sp_String_append_bin(%s, _t%d);\n", sref, base);
+    emit_indent(b, indent); buf_puts(b, "}\n");
+    return;
+  }
+  /* the last argument whose staging can allocate */
+  int last_alloc = -1;
+  for (int a = argc - 1; a >= 0 && last_alloc < 0; a--)
+    if (concat_arg_stage_allocates(c, argv[a])) last_alloc = a;
+  /* (one representation: no call holds what it is computed from: the
+     operands are read where they run, as a statement's are) */
+  int held0 = g_one_held;
+  g_one_held = 0;
+  for (int a = 0; a < argc; a++) {
+    /* a String operand is read as its handle; an Integer (a codepoint), a
+       boxed value and any other conversion are bytes, whose handle is made
+       here */
+    Repr ar = repr_of(c, argv[a]);
+    if ((ar.ty == TY_STRING || ar.ty == TY_STRBUF) && ar.kind != RK_BOXED && concat_arg_is_handle(c, argv[a])) {
+      /* (the statements a handle read puts ahead of itself, a sequence's
+         `(x << "z"; v)`, run here, after the arguments before it, not ahead
+         of the whole concat) */
+      Buf op, hb;
+      memset(&op, 0, sizeof op);
+      memset(&hb, 0, sizeof hb);
+      Buf *sv_pre = g_pre;
+      g_pre = &op;
+      emit_strbuf_handle_of(c, argv[a], &hb);
+      g_pre = sv_pre;
+      if (op.p) buf_puts(b, op.p);
+      buf_printf(b, " sp_String *_t%d = %s;", base + a, hb.p ? hb.p : "NULL");
+      free(op.p); free(hb.p);
+    }
+    else {
+      buf_printf(b, " sp_String *_t%d = SP_STR_HDL(", base + a);
+      emit_str_append_arg(c, argv[a], rt.p, b);
+      buf_puts(b, ");");
+    }
     int v = argv[a];
     while (v >= 0 && nt_kind(c->nt, v) == NK_ParenthesesNode) {
       int body = nt_ref(c->nt, v, "body"), n = 0;
       const int *seq = body >= 0 ? nt_arr(c->nt, body, "body", &n) : NULL;
       v = n > 0 ? seq[n - 1] : -1;
     }
-    int literal = v >= 0 && nt_kind(c->nt, v) == NK_StringNode && !operand_may_allocate(c, v);
-    /* (an ordered temp read as it is: one staged as a copy is the copy,
-       which the temp's root does not reach) */
-    int held = !own && repr_of(c, argv[a]).as_ty == TY_STRING && arg_ran_first(argv[a], 0);
-    /* Fresh snapshots span later sp_strbuf_read/sp_str_concat copies
-       or argument allocations such as sp_str_repeat. append_bin cannot
-       collect; an ordered String temp or immortal literal needs no root. */
-    if (a < last_alloc && (boxed || (!literal && !held)))
-      buf_printf(b, " SP_GC_ROOT_STR(_t%d);", base + a);
+    int literal = (v >= 0 && nt_kind(c->nt, v) == NK_StringNode && !operand_may_allocate(c, v)) ||
+                  repr_frozen_literal_alone(c, argv[a]);
+    /* A handle taken before a later argument that can allocate is rooted
+       across it, unless it is a static literal's or an ordered handle the
+       ordering rooted; the appends themselves cannot collect. */
+    if (a < last_alloc && !literal && !concat_arg_ordered_handle(c, argv[a]))
+      buf_printf(b, " SP_GC_ROOT(_t%d);", base + a);
   }
   g_one_held = held0;
   free(rt.p);
-  buf_printf(b, " if (sp_String_is_immutable(%s)) sp_raise_frozen_str((%s)->data);\n", sref, sref);
-  for (int a = 0; a < argc; a++) {
-    emit_indent(b, indent + 1);
-    buf_printf(b, "sp_String_append_bin(%s, _t%d);\n", sref, base + a);
-  }
+  buf_printf(b, " sp_String *const _a%d[] = {", base);
+  for (int a = 0; a < argc; a++) buf_printf(b, "%s_t%d", a ? ", " : "", base + a);
+  buf_printf(b, "}; sp_String_concat_multi(%s, %d, _a%d);\n", sref, argc, base);
   emit_indent(b, indent); buf_puts(b, "}\n");
 }
 

@@ -10,6 +10,7 @@
 #include "implied_calls.h"
 #include "value_pos.h"
 #include <errno.h>
+static int iter_cob_open(Compiler *c, int arr, int oint_slot, TyKind ek, int t, Buf *b);   /* the element in place, in a versioned walk */
 
 /* Is `s` the C text of an integer literal (`589LL`, `-8LL`, `(-8LL)`)? Its
    value in *v. */
@@ -2737,6 +2738,14 @@ void emit_block_invoke(Compiler *c, int site, Buf *b, int indent, int as_expr,
     BI_METHOD_SIDE();
   }
   emit_block_binds(c, blk, yargs, yc, b, indent, as_expr, &bi);
+  /* a parameter bound from a versioned loop's index reads as that index in
+     the body (hcv_alias_param), on the block's side below; a yield that
+     spreads binds its parameters from the gathered values, not argument k
+     to parameter k (`yield(*pre, i)`), so it has none */
+  int hcv_amark = hcv_alias_mark(), hcv_idx[4], hcv_nidx = 0;
+  int hcv_spread = yargs && call_args_need_spread(c->nt, yargs, yc);
+  for (int k = 0; !hcv_spread && k < yc && hcv_nidx < 4; k++)
+    if (hcv_yield_arg_is_index(c, yargs[k])) hcv_idx[hcv_nidx++] = k;
   /* Keep the rename table active for the block body: the block's variable
      references are in the same lexical scope as the surrounding inlined
      method, so renames like x → _y3_x must stay visible. Nested inlines
@@ -2760,6 +2769,7 @@ void emit_block_invoke(Compiler *c, int site, Buf *b, int indent, int as_expr,
      yield inside the body splices at the right level */
   BI_BLOCK_SIDE();
   int sv_bnren = g_block_nren; g_block_nren = g_yield_block_fallback_nren;
+  for (int q = 0; q < hcv_nidx; q++) hcv_alias_param(c, blk, hcv_idx[q]);
   /* The block body about to be emitted is g_block_owner_param_name's own
      code: a `<name>.call(...)` inside it, where <name> is THAT scope's own
      &block parameter, must still expand as a yield there, so this splice
@@ -3282,6 +3292,7 @@ void emit_block_invoke(Compiler *c, int site, Buf *b, int indent, int as_expr,
   g_block_nren = sv_bnren;
   BI_METHOD_SIDE();
   yield_target_restore(&yts);
+  hcv_alias_drop(hcv_amark);
   g_block_id = svb; g_yield_block_fallback = svfb; g_block_param_name = svbpn;
   g_block_owner_param_name = svbown;
   if (as_expr) {
@@ -6637,6 +6648,10 @@ static int iter_enum_poly_walk_arms(Compiler *c, int id, Buf *b, int indent, con
         hc_array(c, recv, rt == TY_FLOAT_ARRAY, hd, hl, hw, sizeof hd))
       hc_read_len(hd, hr, sizeof hr);
     else if (!rev && hc_ptr_array(c, recv, hd, hl, sizeof hd)) hp = 1;
+    /* the element and other arrays read at the index -- a counter the body
+       steps once per pass, `i = 0` ahead of the walk -- in place, behind one
+       test (hcv_begin_walk), as a while over the same array reads them */
+    void *ehcv = hd[0] && !rev && is_each_name(name) ? hcv_begin_walk(c, id, body, block, hl, recv, &b) : NULL;
     emit_indent(b, indent);
     if (rev) buf_printf(b, "for (sp_int _t%d = _t%d - 1; _t%d >= 0; _t%d--) {\n", t, tn, t, t);
     else if (hd[0]) buf_printf(b, "for (sp_int _t%d = 0; _t%d < %s; _t%d++) {\n", t, t, hl, t);
@@ -6730,12 +6745,22 @@ static int iter_enum_poly_walk_arms(Compiler *c, int id, Buf *b, int indent, con
           buf_puts(b, rb.p); buf_printf(b, ", _t%d));\n", t);
         }
         else if (hp) buf_printf(b, "lv_%s = %s[_t%d];\n", p0, hd, t);
-        else if (hd[0] && !o0)
-          buf_printf(b, "lv_%s = SP_LIKELY((unsigned long long)_t%d < (unsigned long long)%s) ? %s[_t%d] : sp_%sArray_get(%s, _t%d);\n",
-                     p0, t, hr, hd, t, k, rb.p, t);
+        else if (hd[0] && !o0) {
+          buf_printf(b, "lv_%s = ", p0);
+          int cob = ehcv ? iter_cob_open(c, recv, 0, et, t, b) : 0;
+          buf_printf(b, "SP_LIKELY((unsigned long long)_t%d < (unsigned long long)%s) ? %s[_t%d] : sp_%sArray_get(%s, _t%d)",
+                     t, hr, hd, t, k, rb.p, t);
+          if (cob) hc_cob_mark(b, 2);
+          buf_puts(b, ";\n");
+        }
         else {
-        buf_printf(b, "lv_%s = sp_%sArray_%s(", p0, k, o0 ? "oget" : "get");
-        buf_puts(b, rb.p); buf_printf(b, ", _t%d);\n", t);
+        buf_printf(b, "lv_%s = ", p0);
+        /* (an oint slot's element in place, its nil a nil-free length rules out) */
+        int cob = ehcv && hd[0] ? iter_cob_open(c, recv, o0, et, t, b) : 0;
+        buf_printf(b, "sp_%sArray_%s(", k, o0 ? "oget" : "get");
+        buf_puts(b, rb.p); buf_printf(b, ", _t%d)", t);
+        if (cob) hc_cob_mark(b, 2);
+        buf_puts(b, ";\n");
         }
       }
     }
@@ -6751,6 +6776,7 @@ static int iter_enum_poly_walk_arms(Compiler *c, int id, Buf *b, int indent, con
     each_body:
     emit_loop_body(c, body, b, indent + 1);
     emit_indent(b, indent); buf_puts(b, "}\n");
+    hcv_end(c, ehcv, indent);
     if (outer) { emit_indent(b, indent); buf_printf(b, "lv_%s = _t%d;\n", p0, ts); }
     free(rb.p);
     return 1;

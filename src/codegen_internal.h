@@ -624,6 +624,14 @@ void *hcv_begin(Compiler *c, int node, int body, int blk, const char *bi, const 
                 const char *trip, int trip_node, int walk, Buf **bp);
 extern int g_loop_quiet;   /* the next emit_loop_body leaves its safepoint and finalizer polls to an enclosing loop */
 void hcv_end(Compiler *c, void *v, int indent);
+/* an array's block walk, versioned with a counter it steps (`i = 0` ahead,
+   `i += 1` last) as its index where it has one */
+void *hcv_begin_walk(Compiler *c, int node, int body, int blk, const char *trip, int trip_node, Buf **bp);
+/* a yield's parameters bound from a versioned loop's index (emit_block_invoke) */
+int hcv_alias_mark(void);
+int hcv_yield_arg_is_index(Compiler *c, int yarg);
+void hcv_alias_param(Compiler *c, int blk, int k);
+void hcv_alias_drop(int mark);
 int hc_cob_entry(Compiler *c, int recv, int idx, char *d, size_t cap);
 int hc_cob_entry_of(Compiler *c, int recv, char *d, size_t cap);
 /* Does the loop with body `body` and block `blk` (-1 for none) leave the
@@ -634,7 +642,7 @@ void hc_cob_mark(Buf *b, int part);
 extern int g_hc_cob_off;
 /* ...and that state, saved and put back around a unit a refusal may abandon
    (EmitUnitState, codegen.c) */
-typedef struct { void *hc, *hcv; int cob_off, loop_quiet; } HcState;
+typedef struct { void *hc, *hcv; int cob_off, loop_quiet, nalias; } HcState;
 void hc_state_save(HcState *s);
 void hc_state_restore(const HcState *s);
 void *hc_iter_begin(Compiler *c, int id, Buf **bp);   /* an Integer block loop's header cache region */

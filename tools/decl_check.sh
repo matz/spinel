@@ -11,7 +11,8 @@ SPINEL=${SPINEL:-bin/spinel}
 write=0; [ "$1" = --write ] && write=1
 ok=1
 for t in test/decl/*.rb; do
-  got=$($SPINEL --dump-ast "$t" 2>&1 | awk '
+  dump=$($SPINEL --dump-ast "$t" 2>&1) || { echo "decl-test: FAIL ($t): $SPINEL --dump-ast failed"; ok=0; continue; }
+  got=$(printf '%s\n' "$dump" | awk '
     $1 == "N" { type[$2] = $3 }
     $1 == "S" && $3 == "name" { name[$2] = $4 }
     $1 == "I" && $3 == "node_line" { line[$2] = $4 }

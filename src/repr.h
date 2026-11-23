@@ -309,6 +309,8 @@ typedef enum {
   CF_REFUSE,        /* no conversion keeps the value: refused */
   CF__COUNT
 } CoerceForm;
+/* How emit_coerce may convert: hold as-is, or run a Ruby conversion. */
+enum { CO_HOLD, CO_CONVERT };
 /* the form emit_coerce stores `node` into a `slot` slot in (how: CO_HOLD
    or CO_CONVERT) */
 int repr_coerce_form(Compiler *c, int node, TyKind slot, int how);

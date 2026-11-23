@@ -11668,16 +11668,17 @@ void inherit_members(Compiler *c) {
              had read it as nil). A seed of the child's own on the same ivar
              that names another type yields to it, as to an ancestor's
              inferred type below, and says so. */
-          if (own_pin && own_pin[k] && oldt[k] != TY_UNKNOWN && oldt[k] != pt) {
+          if (own_pin && own_pin[k] && oldt[k] != TY_UNKNOWN && oldt[k] != pt && !g_opt_strict_rbs) {
             fprintf(stderr,
                     "spinel: warning: --rbs ivar pin %s dropped on %s: ancestor %s pins it as %s (layouts must stay cast-compatible)\n",
                     old[k], ci->name, pc->name, ty_name(pt));
           }
         }
         else if (pidx >= 0 && pt != TY_UNKNOWN && pt != TY_NIL && pt != oldt[k]) {
-          fprintf(stderr,
-                  "spinel: warning: --rbs ivar pin %s dropped on %s: ancestor %s holds it as %s (layouts must stay cast-compatible)\n",
-                  old[k], ci->name, pc->name, ty_name(pt));
+          if (!g_opt_strict_rbs)
+            fprintf(stderr,
+                    "spinel: warning: --rbs ivar pin %s dropped on %s: ancestor %s holds it as %s (layouts must stay cast-compatible)\n",
+                    old[k], ci->name, pc->name, ty_name(pt));
           class_unpin_ivar(ci, old[k]);
           ivar_set_type(ci, idx, ty_unify(ci->ivar_types[idx], oldt[k]));
         }
@@ -11761,9 +11762,10 @@ int infer_inherited_ivars(Compiler *c) {
            inherit_members; the write reaches this slot through a Parent*). */
         TyKind pt2 = pc->ivar_types[k];
         if (pt2 == TY_UNKNOWN || pt2 == TY_NIL || pt2 == ci->ivar_types[idx]) continue;
-        fprintf(stderr,
-                "spinel: warning: --rbs ivar pin %s dropped on %s: ancestor %s holds it as %s (layouts must stay cast-compatible)\n",
-                pc->ivars[k], ci->name, pc->name, ty_name(pt2));
+        if (!g_opt_strict_rbs)
+          fprintf(stderr,
+                  "spinel: warning: --rbs ivar pin %s dropped on %s: ancestor %s holds it as %s (layouts must stay cast-compatible)\n",
+                  pc->ivars[k], ci->name, pc->name, ty_name(pt2));
         class_unpin_ivar(ci, pc->ivars[k]);
       }
       TyKind merged = ty_unify(ci->ivar_types[idx], pc->ivar_types[k]);

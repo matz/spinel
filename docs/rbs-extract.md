@@ -99,6 +99,17 @@ The two halves are complementary by construction: this one needs both
 types known and costs nothing to run, the other needs the path to
 execute and sees the real tag.
 
+### Strict mode (`--strict-rbs`)
+
+Pass `--strict-rbs` to promote every statically contradictory assignment,
+call site, return, or dropped/widened RBS pin into a compile-time error
+(`spinel: FILE:LINE: --strict-rbs: ...`). This catches container value
+and key-form mismatches (such as `Hash[String, Integer]` or
+`Hash[String, untyped]` passed to `Hash[String, String]`), incompatible
+object classes, container pins dropped to boxed/untyped representations,
+and inherited instance-variable pins dropped for ancestor layout
+compatibility. Default behavior without `--strict-rbs` is unchanged.
+
 ## Checking seeds
 
 Building the generated C with **`-DSP_RBS_CHECK`** turns that silence into

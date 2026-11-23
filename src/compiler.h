@@ -207,6 +207,9 @@ typedef struct {
                        Integer, so a Range of it stays boxed in promote mode */
   int rbs_seeded;   /* param type pinned from an --rbs advisory seed: the
                        fixpoint must not widen it (see apply_rbs_seeds) */
+  TyKind rbs_decl_type; /* original type declared by an --rbs / inline RBS
+                       signature for this parameter, preserved even if
+                       param_seed_holds drops rbs_seeded (for --strict-rbs) */
   int oa_seed;      /* (params) a seed's `Array[Class]`: 1 + the class index.
                        Not a pin -- the parameter is a boxed array the seed
                        left unpinned -- but the element evidence
@@ -735,6 +738,9 @@ typedef struct {
                           library exports (ext_emit_method_tables) */
   int ret_rbs_seeded;  /* ret pinned from an --rbs advisory seed: the fixpoint
                           must not recompute it from the body */
+  TyKind ret_rbs_type; /* original return type declared by an --rbs / inline RBS
+                          signature, preserved if ret_seed_holds drops the pin
+                          or infer_return_types widens it (for --strict-rbs) */
   int ret_rbs_box_held; /* a box reached that container seed while the
                           fixpoint ran and the seed held: the settled types
                           decide (ret_seed_holds, an_settle_seed_boxes) */
@@ -949,6 +955,9 @@ typedef struct {
   char **rbs_pin_ivars; /* ivar names (incl '@') pinned by an --rbs seed: the
                            fixpoint must not widen their type */
   int n_rbs_pin_ivars, c_rbs_pin_ivars;
+  char **rbs_orig_ivars;       /* ivars explicitly declared on this class by RBS */
+  TyKind *rbs_orig_ivar_types; /* declared TyKinds, kept if a pin drops (--strict-rbs) */
+  int n_rbs_orig_ivars, c_rbs_orig_ivars;
   int ivar_box_held;    /* a box reached one of those container pins while the
                            fixpoint ran and the pin held: the settled types
                            decide (class_ivar_pin_holds, an_settle_seed_boxes) */

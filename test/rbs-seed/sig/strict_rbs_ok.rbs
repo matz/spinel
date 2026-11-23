@@ -1,0 +1,17 @@
+class StrictOkBase
+  def tag: () -> String
+end
+
+class StrictOkSub < StrictOkBase
+  def tag: () -> String
+end
+
+class StrictOkApi
+  @headers: Hash[String, String]
+  def initialize: (Hash[String, String] headers) -> void
+  def header: (String k) -> String
+  def copy_headers: () -> Hash[String, String]
+  def empty_headers: () -> Hash[String, String]
+  def accept_any_str_hash: (Hash[String, untyped] h) -> Integer
+  def take_base: (StrictOkBase obj) -> String
+end

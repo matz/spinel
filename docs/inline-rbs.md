@@ -233,6 +233,39 @@ annotations. An inline annotation does not select between them.
 External `--rbs` signatures still apply. Use this option when source
 annotations are not trusted to describe the compiled program.
 
+## Strict mode (`--strict-rbs`)
+
+By default, Spinel keeps `--rbs` and inline RBS contradictions narrow so
+that programs whose container pins widen or whose call sites fall back to
+runtime `TypeError` checks still compile.
+
+Pass `--strict-rbs` to turn RBS contract violations into compile-time
+errors with the offending Ruby `FILE:LINE` (for both external `--rbs`
+signatures and inline annotations):
+
+- A call site, parameter default, instance-variable write, attribute
+  writer, Struct/Data constructor, or return whose static type does not
+  fit an RBS-pinned slot (for example passing `Hash[String, Integer]` or
+  `Hash[String, untyped]` to a `Hash[String, String]` parameter, or an
+  unrelated class `Bar` to a `Foo` parameter) is refused at compile time
+  instead of emitting a guaranteed runtime `TypeError`.
+- A container pin dropped or widened away from its declared
+  representation (such as a boxed value or `Hash[untyped, untyped]`
+  reaching a `Hash[String, String]` parameter, return, or instance
+  variable) is refused at the offending site.
+- An inherited instance-variable pin dropped because an ancestor holds
+  the slot with an incompatible layout is refused instead of warning.
+
+```
+spinel: app.rb:7: --strict-rbs: inline RBS annotation contradicted: parameter h of send_headers is declared Hash[String, String] at app.rb:2 but this call passes Hash[String, Integer]
+```
+
+Valid subtyping (`Hash[String, String]` into `Hash[String, untyped]`,
+`Array[Integer]` into `Array[untyped]`, subclass into ancestor, empty
+container literals `{}` and `[]`) and polymorphic dispatch arms where
+only one receiver class mismatches continue to compile. Without
+`--strict-rbs`, compiler behavior is unchanged.
+
 ## What a signature buys
 
 An annotation gives the compiler a type inference could not find. Where

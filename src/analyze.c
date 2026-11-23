@@ -8636,6 +8636,50 @@ void class_pin_ivar(ClassInfo *ci, const char *name) {
   ci->rbs_pin_ivars[ci->n_rbs_pin_ivars++] = strdup(name);
 }
 
+/* Record an ivar's original RBS-declared type on `ci` so --strict-rbs can
+   still judge assignments and layout drops after a pin gives way. */
+static void class_record_rbs_ivar(ClassInfo *ci, const char *name, TyKind t) {
+  if (!ci || !name || t == TY_UNKNOWN) return;
+  for (int i = 0; i < ci->n_rbs_orig_ivars; i++) {
+    if (sp_streq(ci->rbs_orig_ivars[i], name)) {
+      ci->rbs_orig_ivar_types[i] = t;
+      return;
+    }
+  }
+  if (ci->n_rbs_orig_ivars >= ci->c_rbs_orig_ivars) {
+    int nc = ci->c_rbs_orig_ivars ? ci->c_rbs_orig_ivars * 2 : 4;
+    ci->rbs_orig_ivars = realloc(ci->rbs_orig_ivars, sizeof(char *) * (size_t)nc);
+    ci->rbs_orig_ivar_types = realloc(ci->rbs_orig_ivar_types, sizeof(TyKind) * (size_t)nc);
+    ci->c_rbs_orig_ivars = nc;
+  }
+  ci->rbs_orig_ivars[ci->n_rbs_orig_ivars] = strdup(name);
+  ci->rbs_orig_ivar_types[ci->n_rbs_orig_ivars++] = t;
+}
+
+static TyKind class_rbs_orig_ivar_type(const Compiler *c, int cid, const char *name, int *decl_cid) {
+  for (int k = cid; k >= 0 && k < c->nclasses; k = c->classes[k].parent) {
+    const ClassInfo *ci = &c->classes[k];
+    for (int i = 0; i < ci->n_rbs_orig_ivars; i++) {
+      if (sp_streq(ci->rbs_orig_ivars[i], name)) {
+        if (decl_cid) *decl_cid = k;
+        return ci->rbs_orig_ivar_types[i];
+      }
+    }
+  }
+  if (decl_cid) *decl_cid = -1;
+  return TY_UNKNOWN;
+}
+
+static void seed_node_loc(const NodeTable *nt, int id, const char **file_out, int *ln_out) {
+  int ln = id >= 0 ? (int)nt_int(nt, id, "node_line", 0) : 0;
+  int fid = id >= 0 ? (int)nt_int(nt, id, "node_file", 0) : 0;
+  const char *file = id >= 0 ? nt_file_path(nt, fid) : NULL;
+  if (!file || !*file) file = nt->source_file;
+  if (!file || !*file) file = "source.rb";
+  *file_out = file;
+  *ln_out = ln;
+}
+
 /* Does `name` belong to an override family -- defined on two related
    classes (one an ancestor of the other)? A return seed on any member
    would pin that member's C decl repr while poly-dispatch call sites
@@ -8716,6 +8760,14 @@ static int seed_ret_contradicts_class_body(Compiler *c, Scope *s, TyKind rt) {
     if (!av || n != 1 || !value_leaves_are_classes(c, av[0], names, sizeof names)) return 0;
   }
   const char *cls = s->class_id >= 0 && s->class_id < c->nclasses ? c->classes[s->class_id].name : NULL;
+  if (g_opt_strict_rbs && ty_is_object(rt)) {
+    const char *file = NULL; int ln = 0;
+    seed_node_loc(c->nt, s->def_node, &file, &ln);
+    fprintf(stderr, "spinel: %s:%d: --strict-rbs: %s%s%s is declared to return an instance, but it returns "
+                    "the class itself (%s); write singleton(...) in the signature\n",
+            file, ln, cls ? cls : "", cls ? (s->is_cmethod ? "." : "#") : "", s->name ? s->name : "?", names);
+    exit(1);
+  }
   fprintf(stderr, "spinel: warning: --rbs: %s%s%s is declared to return an instance, but it returns "
                   "the class itself (%s); write singleton(...) in the signature. %s\n",
           cls ? cls : "", cls ? (s->is_cmethod ? "." : "#") : "", s->name ? s->name : "?", names,
@@ -8804,7 +8856,7 @@ static void seed_method(Compiler *c, Scope *s, const char *ret_tok, char *ptypes
   if (rt != TY_UNKNOWN && seed_ret_contradicts_class_body(c, s, rt)) rt = TY_UNKNOWN;
   g_seed_nilable = nilable_seed;
   if (rt != TY_UNKNOWN) {
-    scope_set_ret(s, rt); s->ret_rbs_seeded = 1;
+    scope_set_ret(s, rt); s->ret_rbs_seeded = 1; s->ret_rbs_type = rt;
     /* `String?` is as nilable as `Integer?`: a bare `const char *` slot
        carries nil as NULL, so the seed has to record it or the implicit
        nil arm returns the empty string instead (#4250). */
@@ -8835,6 +8887,7 @@ static void seed_method(Compiler *c, Scope *s, const char *ret_tok, char *ptypes
             int idx = comp_ivar_intern(ci, ivn, s->is_cmethod ? IVS_CLASS : IVS_INST);
             ivar_set_type(ci, idx, rt);
             class_pin_ivar(ci, ivn);
+            class_record_rbs_ivar(ci, ivn, rt);
             if (!from_rbs) inline_pin_record(NULL, s->class_id, ivn, ret_tok, NULL, where, head);
           }
         }
@@ -8865,7 +8918,7 @@ static void seed_method(Compiler *c, Scope *s, const char *ret_tok, char *ptypes
     if (pt != TY_UNKNOWN) {
       LocalVar *lv = scope_local(s, s->pnames[slot]);
       if (lv) {
-        lv_set_type(lv, pt); lv->rbs_seeded = 1; lv->rbs_type = pt;
+        lv_set_type(lv, pt); lv->rbs_seeded = 1; lv->rbs_type = pt; lv->rbs_decl_type = pt;
         if (nil_param) lv->nil_only = 1;
         /* a nilable int parameter can hold nil like any other: mark it so
            it is an oint and boxing it answers nil rather than a number */
@@ -8957,6 +9010,7 @@ static void seed_class_ivar(Compiler *c, int cur_ci, const char *a1, const char 
     int idx = comp_ivar_intern(ci, ivn, IVS_INST);
     ivar_set_type(ci, idx, t);
     class_pin_ivar(ci, ivn);
+    class_record_rbs_ivar(ci, ivn, t);
   }
 }
 
@@ -36779,7 +36833,604 @@ static int seed_chase_contradicts(Compiler *c, TyKind slot, int a, int depth, Se
   return any;
 }
 
+/* --strict-rbs: check whether a settled slot type `settled` still represents
+   the declared RBS type `decl` (rather than having dropped/widened away). */
+static int strict_rbs_slot_equiv(TyKind decl, TyKind settled, int shared_elems) {
+  if (settled == decl) return 1;
+  if ((decl == TY_STRING || decl == TY_STRBUF) &&
+      (settled == TY_STRING || settled == TY_STRBUF))
+    return 1;
+  if (decl == TY_INT && settled == TY_BIGINT) return 1;
+  if (decl == TY_STR_ARRAY && settled == TY_POLY_ARRAY && shared_elems) return 1;
+  return 0;
+}
+
+/* True when `v` is an empty container literal (`{}`, `[]`, `Hash.new`, `Array.new`)
+   that codegen builds directly at `slot`'s declared container kind. */
+static int strict_rbs_is_empty_container(Compiler *c, int v, TyKind slot) {
+  const NodeTable *nt = c->nt;
+  v = nt_paren_single(nt, v);
+  if (v < 0) return 0;
+  if (nt_kind(nt, v) == NK_StatementsNode) {
+    int bn = 0; const int *bb = nt_arr(nt, v, "body", &bn);
+    v = (bn > 0 && bb) ? nt_paren_single(nt, bb[bn - 1]) : -1;
+    if (v < 0) return 0;
+  }
+  NodeKind k = nt_kind(nt, v);
+  if (ty_is_hash(slot) && (k == NK_HashNode || k == NK_KeywordHashNode)) {
+    int en = 0; nt_arr(nt, v, "elements", &en);
+    return en == 0;
+  }
+  if (ty_is_array(slot) && k == NK_ArrayNode) {
+    int en = 0; nt_arr(nt, v, "elements", &en);
+    return en == 0;
+  }
+  if (k == NK_CallNode && node_is_empty_container(c, v)) {
+    int rc = nt_ref(nt, v, "receiver");
+    const char *rn = rc >= 0 ? nt_str(nt, rc, "name") : NULL;
+    if (rn && sp_streq(rn, "Hash") && ty_is_hash(slot)) return 1;
+    if (rn && sp_streq(rn, "Array") && ty_is_array(slot)) return 1;
+  }
+  return 0;
+}
+
+/* --strict-rbs: single representation-layer predicate answering whether a value
+   of settled type `val` at `node` satisfies a slot declared as `slot`.
+   `pin_dropped` is 1 when the fixpoint dropped or widened the slot away from
+   `slot` (e.g., a boxed value into a container seed). */
+static int strict_rbs_val_fits(Compiler *c, int node, TyKind slot, TyKind val,
+                               int is_ret, int pin_dropped) {
+  if (slot == TY_UNKNOWN || slot == TY_POLY || slot == TY_VOID || (is_ret && slot == TY_NIL)) return 1;
+  if (val == TY_UNKNOWN || val == TY_VOID || val == TY_NIL) return 1;
+  if (val == TY_POLY) return !pin_dropped;
+  if (val == slot) return 1;
+  if ((slot == TY_STRING || slot == TY_STRBUF) &&
+      (val == TY_STRING || val == TY_STRBUF))
+    return 1;
+  if ((slot == TY_INT && val == TY_BIGINT) || (slot == TY_BIGINT && val == TY_INT))
+    return 1;
+  if (ty_is_object(slot) && ty_is_object(val)) {
+    int cs = ty_object_class(slot), cv = ty_object_class(val);
+    if (cs < 0 || cs >= c->nclasses || cv < 0 || cv >= c->nclasses) return 1;
+    if (is_descendant(c, cv, cs)) return 1;
+    if (comp_class_is_module(c, &c->classes[cv])) {
+      int any = 0;
+      for (int k = 0; k < c->nclasses; k++) {
+        if (k == cv || comp_class_is_module(c, &c->classes[k]) || !comp_mixes_in(c, k, cv, 1)) continue;
+        if (!is_descendant(c, k, cs)) return 0;
+        any = 1;
+      }
+      if (any) return 1;
+    }
+    return 0;
+  }
+  if (ty_is_object(val)) {
+    int cv = ty_object_class(val);
+    if (cv >= 0 && cv < c->nclasses) {
+      if ((slot == TY_STRING || slot == TY_STRBUF) && comp_ary_is_str(c, cv)) return 1;
+      if (slot == TY_POLY_ARRAY && comp_ary_is_array_proper(c, cv)) return 1;
+      if (slot == TY_POLY_POLY_HASH && comp_ary_is_hash(c, cv)) return 1;
+      if (slot == TY_TIME && comp_ary_is_time(c, cv)) return 1;
+    }
+  }
+  if (slot == TY_POLY_ARRAY &&
+      (val == TY_INT_ARRAY || val == TY_FLOAT_ARRAY || val == TY_STR_ARRAY))
+    return 1;
+  if (slot == TY_STR_POLY_HASH && (val == TY_STR_STR_HASH || val == TY_STR_INT_HASH))
+    return 1;
+  if (slot == TY_POLY_POLY_HASH && ty_is_hash(val)) return 1;
+  if ((slot == TY_BOOL || val == TY_BOOL) && slot != val) return 0;
+  if ((slot == TY_SYMBOL || val == TY_SYMBOL) && slot != val) return 0;
+  if (seed_contradicts(c, slot, val, is_ret)) return 0;
+  if (repr_coerce_text_form(c, node, val, slot, CO_HOLD) == CF_REFUSE) return 0;
+  return 1;
+}
+
+/* Resolve direct call targets for --strict-rbs: covers ConstantPathNode,
+   Cls.new -> Cls#initialize, SelfNode, and CP_DIRECT call plans in addition
+   to seed_call_target. */
+static int seed_call_target_strict(Compiler *c, int id, const char *name) {
+  int mi = seed_call_target(c, id, name);
+  if (mi >= 0) return mi;
+  const NodeTable *nt = c->nt;
+  int recv = nt_ref(nt, id, "receiver");
+  if (recv >= 0) {
+    NodeKind rk = nt_kind(nt, recv);
+    if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) {
+      int rc = const_node_class_index(c, recv);
+      if (rc >= 0) {
+        mi = call_target(c, id, rc, name, CT_CMETHOD, NULL);
+        if (mi < 0 && sp_streq(name, "new"))
+          mi = call_target(c, id, rc, "initialize", 0, NULL);
+        if (mi < 0) mi = call_target(c, id, rc, name, 0, NULL);
+        if (mi >= 0) return mi;
+      }
+    }
+    else if (rk == NK_SelfNode) {
+      mi = comp_self_call_mi(c, id, name);
+      if (mi < 0 && sp_streq(name, "new")) {
+        Scope *in = comp_scope_of(c, id);
+        if (in && in->is_cmethod && in->class_id >= 0)
+          mi = call_target(c, id, in->class_id, "initialize", 0, NULL);
+      }
+      if (mi >= 0) return mi;
+    }
+  }
+  else if (sp_streq(name, "new")) {
+    Scope *in = comp_scope_of(c, id);
+    if (in && in->is_cmethod && in->class_id >= 0) {
+      mi = call_target(c, id, in->class_id, "initialize", 0, NULL);
+      if (mi >= 0) return mi;
+    }
+  }
+  if (!is_send_family(name) && !sp_streq(name, "method") && !sp_streq(name, "public_method") &&
+      !sp_streq(name, "instance_method") && !sp_streq(name, "respond_to?")) {
+    CallPlan cp = cplan_user(c, id);
+    if (cp.dispatch == CP_DIRECT && cp.mi >= 0 && !cp.method_call && cp.via != UC_SEND_BLIND)
+      return cp.mi;
+  }
+  return -1;
+}
+
+typedef struct { int cid; const char *nm; } StrictIvarMark;
+
+static void strict_ivar_mark_add(StrictIvarMark **marks, int *nmarks, int cid, const char *nm) {
+  for (int i = 0; i < *nmarks; i++)
+    if ((*marks)[i].cid == cid && sp_streq((*marks)[i].nm, nm)) return;
+  *marks = realloc(*marks, sizeof **marks * (size_t)(*nmarks + 1));
+  (*marks)[(*nmarks)++] = (StrictIvarMark){ cid, nm };
+}
+
+static int strict_ivar_marked(const StrictIvarMark *marks, int nmarks, int cid, const char *nm) {
+  for (int i = 0; i < nmarks; i++)
+    if (marks[i].cid == cid && sp_streq(marks[i].nm, nm)) return 1;
+  return 0;
+}
+
+static void strict_rbs_report_ivar_write(Compiler *c, int loc_node, int cid, int decl_cid,
+                                         const char *nm, TyKind decl, TyKind val,
+                                         SeedIvarReport **reported, int *nreported,
+                                         StrictIvarMark **marks, int *nmarks) {
+  const NodeTable *nt = c->nt;
+  const char *file = NULL; int ln = 0;
+  seed_node_loc(nt, loc_node, &file, &ln);
+  int fid = loc_node >= 0 ? (int)nt_int(nt, loc_node, "node_file", 0) : 0;
+  const char *by = inline_pin_at_ivar(decl_cid, nm);
+  if (by) {
+    for (int k = 0; k < *nreported; k++)
+      if ((*reported)[k].fid == fid && (*reported)[k].ln == ln && sp_streq((*reported)[k].nm, nm))
+        return;
+    *reported = realloc(*reported, sizeof **reported * (size_t)(*nreported + 1));
+    (*reported)[(*nreported)++] = (SeedIvarReport){ fid, ln, nm };
+  }
+  strict_ivar_mark_add(marks, nmarks, cid, nm);
+  strict_ivar_mark_add(marks, nmarks, decl_cid, nm);
+  char _sn1[192], _sn2[192];
+  if (by)
+    fprintf(stderr,
+            "spinel: %s:%d: --strict-rbs: inline RBS annotation contradicted: %s is declared %s at %s "
+            "but this assigns %s\n",
+            file, ln, nm, seed_ty_name_into(c, decl, _sn1, sizeof _sn1), by,
+            seed_ty_name_into(c, val, _sn2, sizeof _sn2));
+  else
+    fprintf(stderr,
+            "spinel: %s:%d: --strict-rbs: --rbs seed contradicted: %s is declared %s "
+            "but this assigns %s\n",
+            file, ln, nm, seed_ty_name_into(c, decl, _sn1, sizeof _sn1),
+            seed_ty_name_into(c, val, _sn2, sizeof _sn2));
+  if (!collect_mode()) exit(1);
+  g_seed_bad = 1;
+}
+
+static void strict_rbs_check_ivars(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  SeedIvarReport *reported = NULL; int nreported = 0;
+  StrictIvarMark *marks = NULL; int nmarks = 0;
+  for (int id = 0; id < nt->count; id++) {
+    NodeKind nk = nt_kind(nt, id);
+    if (nk == NK_InstanceVariableWriteNode || nk == NK_InstanceVariableOrWriteNode ||
+        nk == NK_InstanceVariableAndWriteNode) {
+      const char *nm = nt_str(nt, id, "name");
+      int v = nt_ref(nt, id, "value");
+      if (!nm || v < 0) continue;
+      Scope *sc = comp_scope_of(c, id);
+      if (sc && sc->name && !sc->reachable) continue;
+      int cid = sc ? sc->class_id : -1;
+      if (cid < 0) continue;
+      int decl_cid = -1;
+      TyKind decl = class_rbs_orig_ivar_type(c, cid, nm, &decl_cid);
+      if (decl == TY_UNKNOWN || decl == TY_POLY) continue;
+      ClassInfo *ci = &c->classes[cid];
+      int iv = comp_ivar_index(ci, nm);
+      if (iv < 0) continue;
+      for (int d = 0; d < 32; d++) {
+        NodeKind vk = nt_kind(nt, v);
+        if (vk != NK_InstanceVariableWriteNode && vk != NK_LocalVariableWriteNode &&
+            vk != NK_GlobalVariableWriteNode && vk != NK_ClassVariableWriteNode) break;
+        int inner = nt_ref(nt, v, "value");
+        if (inner < 0) break;
+        v = inner;
+      }
+      if (strict_rbs_is_empty_container(c, v, decl)) continue;
+      TyKind val = infer_type(c, v);
+      int shared_e = ci->ivar_elems_shared && (ci->ivar_elems_shared[iv] & ELEMS_POLY);
+      if (decl == TY_STR_ARRAY && shared_e && val == TY_STR_ARRAY) continue;
+      int dropped = !strict_rbs_slot_equiv(decl, ci->ivar_types[iv], shared_e);
+      if (!strict_rbs_val_fits(c, v, decl, val, 0, dropped))
+        strict_rbs_report_ivar_write(c, id, cid, decl_cid, nm, decl, val,
+                                     &reported, &nreported, &marks, &nmarks);
+    }
+    else if (nk == NK_CallNode) {
+      if (nt_int(nt, id, "rt_probe", 0)) continue;
+      const Scope *in = comp_scope_of(c, id);
+      if (in && in->name && !in->reachable) continue;
+      const char *nm = nt_str(nt, id, "name");
+      int recv = nt_ref(nt, id, "receiver");
+      if (!nm || recv < 0) continue;
+      int args = nt_ref(nt, id, "arguments"), an = 0;
+      const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
+      char base[256];
+      if (an == 1 && argv && setter_base_name(nm, base, sizeof base)) {
+        char ivn[sizeof base + 1];
+        snprintf(ivn, sizeof ivn, "@%s", base);
+        int cid = -1;
+        TyKind rt = infer_type(c, recv);
+        if (ty_is_object(rt)) {
+          int tc = ty_object_class(rt);
+          if (tc >= 0 && tc < c->nclasses && comp_is_writer(&c->classes[tc], base)) cid = tc;
+        }
+        else if (nt_kind(nt, recv) == NK_ConstantReadNode || nt_kind(nt, recv) == NK_ConstantPathNode) {
+          int rc = const_node_class_index(c, recv);
+          if (rc >= 0 && comp_is_sg_writer(&c->classes[rc], base)) cid = rc;
+        }
+        if (cid >= 0) {
+          int decl_cid = -1;
+          TyKind decl = class_rbs_orig_ivar_type(c, cid, ivn, &decl_cid);
+          if (decl != TY_UNKNOWN && decl != TY_POLY && !strict_rbs_is_empty_container(c, argv[0], decl)) {
+            ClassInfo *ci = &c->classes[cid];
+            int iv = comp_ivar_index(ci, ivn);
+            int shared_e = iv >= 0 && ci->ivar_elems_shared && (ci->ivar_elems_shared[iv] & ELEMS_POLY);
+            int dropped = iv >= 0 && !strict_rbs_slot_equiv(decl, ci->ivar_types[iv], shared_e);
+            TyKind val = infer_type(c, argv[0]);
+            if (!strict_rbs_val_fits(c, argv[0], decl, val, 0, dropped))
+              strict_rbs_report_ivar_write(c, argv[0], cid, decl_cid, ivn, decl, val,
+                                           &reported, &nreported, &marks, &nmarks);
+          }
+        }
+      }
+      else if (sp_streq(nm, "new") && argv && an > 0 &&
+               (nt_kind(nt, recv) == NK_ConstantReadNode || nt_kind(nt, recv) == NK_ConstantPathNode)) {
+        int rc = const_node_class_index(c, recv);
+        if (rc >= 0 && (c->classes[rc].is_struct || c->classes[rc].is_data)) {
+          ClassInfo *cls = &c->classes[rc];
+          int kwh = (an == 1 && nt_kind(nt, argv[0]) == NK_KeywordHashNode) ? argv[0] : -1;
+          for (int a = 0; a < cls->nmembers; a++) {
+            const char *ivn = cls->ivars[a];
+            int decl_cid = -1;
+            TyKind decl = class_rbs_orig_ivar_type(c, rc, ivn, &decl_cid);
+            if (decl == TY_UNKNOWN || decl == TY_POLY) continue;
+            int vnode = kwh >= 0 ? seed_kwarg_value(nt, kwh, ivn + 1) : (a < an ? argv[a] : -1);
+            if (vnode < 0 || nt_kind(nt, vnode) == NK_SplatNode ||
+                strict_rbs_is_empty_container(c, vnode, decl)) continue;
+            int shared_e = cls->ivar_elems_shared && (cls->ivar_elems_shared[a] & ELEMS_POLY);
+            int dropped = !strict_rbs_slot_equiv(decl, cls->ivar_types[a], shared_e);
+            TyKind val = infer_type(c, vnode);
+            if (!strict_rbs_val_fits(c, vnode, decl, val, 0, dropped))
+              strict_rbs_report_ivar_write(c, vnode, rc, decl_cid, ivn, decl, val,
+                                           &reported, &nreported, &marks, &nmarks);
+          }
+        }
+      }
+    }
+  }
+  /* Catch any RBS-pinned ivar whose pin was dropped or widened (including
+     ancestor layout conflicts in inherit_members / infer_inherited_ivars). */
+  for (int cid = 0; cid < c->nclasses; cid++) {
+    ClassInfo *ci = &c->classes[cid];
+    for (int i = 0; i < ci->n_rbs_orig_ivars; i++) {
+      const char *ivn = ci->rbs_orig_ivars[i];
+      TyKind decl = ci->rbs_orig_ivar_types[i];
+      if (decl == TY_UNKNOWN || decl == TY_POLY) continue;
+      if (strict_ivar_marked(marks, nmarks, cid, ivn)) continue;
+      int iv = comp_ivar_index(ci, ivn);
+      if (iv < 0) continue;
+      int shared_e = ci->ivar_elems_shared && (ci->ivar_elems_shared[iv] & ELEMS_POLY);
+      if (strict_rbs_slot_equiv(decl, ci->ivar_types[iv], shared_e))
+        continue;
+      const char *file = NULL; int ln = 0;
+      seed_node_loc(nt, ci->def_node, &file, &ln);
+      const char *by = inline_pin_at_ivar(cid, ivn);
+      char _sn1[192], _sn2[192];
+      int anc_cid = -1;
+      TyKind anc_ty = TY_UNKNOWN;
+      for (int p = ci->parent; p >= 0 && p < c->nclasses; p = c->classes[p].parent) {
+        int piv = comp_ivar_index(&c->classes[p], ivn);
+        if (piv >= 0 && c->classes[p].ivar_types[piv] != TY_UNKNOWN &&
+            c->classes[p].ivar_types[piv] != TY_NIL &&
+            !strict_rbs_slot_equiv(decl, c->classes[p].ivar_types[piv], 0)) {
+          anc_cid = p; anc_ty = c->classes[p].ivar_types[piv]; break;
+        }
+      }
+      if (anc_cid >= 0) {
+        if (by)
+          fprintf(stderr,
+                  "spinel: %s: --strict-rbs: ivar pin %s on %s (declared %s) dropped: "
+                  "ancestor %s holds it as %s (layouts must stay cast-compatible)\n",
+                  by, ivn, ci->name ? ci->name : "?",
+                  seed_ty_name_into(c, decl, _sn1, sizeof _sn1),
+                  c->classes[anc_cid].name ? c->classes[anc_cid].name : "?",
+                  seed_ty_name_into(c, anc_ty, _sn2, sizeof _sn2));
+        else
+          fprintf(stderr,
+                  "spinel: %s:%d: --strict-rbs: ivar pin %s on %s (declared %s) dropped: "
+                  "ancestor %s holds it as %s (layouts must stay cast-compatible)\n",
+                  file, ln, ivn, ci->name ? ci->name : "?",
+                  seed_ty_name_into(c, decl, _sn1, sizeof _sn1),
+                  c->classes[anc_cid].name ? c->classes[anc_cid].name : "?",
+                  seed_ty_name_into(c, anc_ty, _sn2, sizeof _sn2));
+      }
+      else {
+        if (by)
+          fprintf(stderr,
+                  "spinel: %s: --strict-rbs: ivar pin %s on %s (declared %s) widened to %s\n",
+                  by, ivn, ci->name ? ci->name : "?",
+                  seed_ty_name_into(c, decl, _sn1, sizeof _sn1),
+                  seed_ty_name_into(c, ci->ivar_types[iv], _sn2, sizeof _sn2));
+        else
+          fprintf(stderr,
+                  "spinel: %s:%d: --strict-rbs: ivar pin %s on %s (declared %s) widened to %s\n",
+                  file, ln, ivn, ci->name ? ci->name : "?",
+                  seed_ty_name_into(c, decl, _sn1, sizeof _sn1),
+                  seed_ty_name_into(c, ci->ivar_types[iv], _sn2, sizeof _sn2));
+      }
+      if (!collect_mode()) exit(1);
+      g_seed_bad = 1;
+    }
+  }
+  free(reported);
+  free(marks);
+}
+
+static void strict_rbs_check_returns(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  char _sn1[192], _sn2[192];
+  for (int s = 0; s < c->nscopes; s++) {
+    Scope *sc = &c->scopes[s];
+    if (sc->ret_rbs_type == TY_UNKNOWN || sc->ret_rbs_type == TY_POLY ||
+        sc->body < 0 || !sc->reachable)
+      continue;
+    if (sc->class_id >= 0 && sc->name) {
+      int eff = call_target(c, -1, sc->class_id, sc->name, sc->is_cmethod ? CT_CMETHOD : 0, NULL);
+      if (eff >= 0 && eff != s) continue;
+    }
+    TyKind decl = sc->ret_rbs_type;
+    int dropped = !strict_rbs_slot_equiv(decl, sc->ret, sc->ret_elems_shared);
+    int sites[64]; unsigned reach[64]; int nsites = 0;
+    int narrow[64];
+    seed_ret_branch_sites(nt, sc->body, sites, reach, &nsites, 64);
+    for (int k = 0; k < 64; k++) narrow[k] = -1;
+    NT_FOREACH_KIND(nt, NK_ReturnNode, id) {
+      if (nsites >= 64) break;
+      if (c->nscope[id] != s) continue;
+      int rv = nt_ref(nt, id, "arguments");
+      if (rv < 0) continue;
+      int an = 0; const int *av = nt_arr(nt, rv, "arguments", &an);
+      if (!av || an != 1) continue;
+      int from = nsites;
+      seed_ret_branch_sites(nt, av[0], sites, reach, &nsites, 64);
+      const int *par = comp_parent_map(c);
+      int st = par[id], g = st >= 0 ? par[st] : -1, rn = -1;
+      int kc = g >= 0 ? isa_guard_class(c, g, &rn) : -1;
+      if (kc >= 0 && rn == id)
+        for (int k = from; k < nsites; k++) narrow[k] = kc;
+    }
+    int reported_scope = 0, nonempty_sites = 0;
+    const char *cn = (sc->class_id >= 0 && sc->class_id < c->nclasses)
+                       ? c->classes[sc->class_id].name : NULL;
+    const char *sep = cn ? (sc->is_cmethod ? "." : "#") : "";
+    const char *by = inline_pin_at_method(sc, -1);
+    for (int k = 0; k < nsites; k++) {
+      if (reach[k] == (VPR_TRUTHY | VPR_FALSY)) continue;
+      if (reach[k] == VPR_FALSY && (infer_type(c, sites[k]) != TY_BOOL || seed_value_only(c, sites[k], 0, 0))) continue;
+      if (reach[k] == VPR_TRUTHY && seed_value_only(c, sites[k], 1, 0)) continue;
+      { int lit = sites[k];
+        if (nt_kind(nt, lit) == NK_StatementsNode) {
+          int bn2 = 0; const int *bb2 = nt_arr(nt, lit, "body", &bn2);
+          lit = (bn2 > 0 && bb2) ? bb2[bn2 - 1] : -1;
+        }
+        if (lit >= 0 && strict_rbs_is_empty_container(c, lit, decl)) {
+          NodeKind sk = nt_kind(nt, lit);
+          if (sc->ret_rbs_seeded && lit < c->node_cap &&
+              ((ty_is_hash(decl) && (sk == NK_HashNode || sk == NK_KeywordHashNode)) ||
+               (ty_is_array(decl) && sk == NK_ArrayNode))) {
+            comp_set_ntype(c, lit, decl);
+            if (c->hash_want && ty_is_hash(decl)) comp_set_hash_want(c, lit, decl);
+          }
+          continue;
+        }
+      }
+      nonempty_sites++;
+      TyKind val = narrow[k] >= 0 ? ty_object(narrow[k]) : infer_type(c, sites[k]);
+      if (sc->ret_elems_shared && sc->ret == TY_POLY_ARRAY &&
+          (val == TY_STR_ARRAY || val == TY_POLY_ARRAY))
+        continue;
+      if (strict_rbs_val_fits(c, sites[k], decl, val, 1, dropped)) continue;
+      const char *file = NULL; int ln = 0;
+      seed_node_loc(nt, sites[k], &file, &ln);
+      char pos[1200];
+      if (ln > 0) snprintf(pos, sizeof pos, "%s:%d: ", file, ln);
+      else        snprintf(pos, sizeof pos, "%s: ", file);
+      if (by)
+        fprintf(stderr,
+                "spinel: %s--strict-rbs: inline RBS annotation contradicted: %s%s%s is declared to return "
+                "%s at %s but this returns %s\n",
+                pos, cn ? cn : "", sep, sc->name ? sc->name : "?",
+                seed_ty_name_into(c, decl, _sn1, sizeof _sn1), by,
+                seed_ty_name_into(c, val, _sn2, sizeof _sn2));
+      else
+        fprintf(stderr,
+                "spinel: %s--strict-rbs: --rbs seed contradicted: %s%s%s is declared to return "
+                "%s but this returns %s\n",
+                pos, cn ? cn : "", sep, sc->name ? sc->name : "?",
+                seed_ty_name_into(c, decl, _sn1, sizeof _sn1),
+                seed_ty_name_into(c, val, _sn2, sizeof _sn2));
+      reported_scope = 1;
+      if (!collect_mode()) exit(1);
+      g_seed_bad = 1;
+    }
+    int only_empty_container = nsites > 0 && nonempty_sites == 0 &&
+                               ((ty_is_array(decl) && ty_is_array(sc->ret)) ||
+                                (ty_is_hash(decl) && ty_is_hash(sc->ret)));
+    if (dropped && !reported_scope && !only_empty_container) {
+      const char *file = NULL; int ln = 0;
+      seed_node_loc(nt, sc->def_node, &file, &ln);
+      fprintf(stderr,
+              "spinel: %s:%d: --strict-rbs: return pin of %s%s%s (declared %s) widened to %s\n",
+              file, ln, cn ? cn : "", sep, sc->name ? sc->name : "?",
+              seed_ty_name_into(c, decl, _sn1, sizeof _sn1),
+              seed_ty_name_into(c, sc->ret, _sn2, sizeof _sn2));
+      if (!collect_mode()) exit(1);
+      g_seed_bad = 1;
+    }
+  }
+}
+
+static void strict_rbs_check_calls(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  char _sn1[192], _sn2[192];
+  unsigned char *param_reported = calloc((size_t)(c->nscopes > 0 ? c->nscopes : 1) * 64, 1);
+  for (int id = 0; id < nt->count; id++) {
+    if (nt_kind(nt, id) != NK_CallNode) continue;
+    if (nt_int(nt, id, "rt_probe", 0)) continue;
+    const char *name = nt_str(nt, id, "name");
+    if (!name) continue;
+    const Scope *in = comp_scope_of(c, id);
+    if (in && in->name && !in->reachable) continue;
+    int mi = seed_call_target_strict(c, id, name);
+    if (mi < 0 || mi >= c->nscopes) continue;
+    Scope *m = &c->scopes[mi];
+    int args = nt_ref(nt, id, "arguments");
+    int argc = 0; const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
+    if (!argv || (argc > m->nparams && m->rest_idx < 0 && m->kwrest_idx < 0)) continue;
+    ArgLayout L;
+    call_layout(c, m, argv, argc, &L);
+    for (int i = 0; i < m->nparams; i++) {
+      if (i == m->rest_idx || i == m->kwrest_idx) continue;
+      int a = layout_plain_arg(c, m, argv, &L, i);
+      if (a < 0 && L.from[i] == ARG_BY_NAME && L.kw.role == KWH_KEYWORDS && L.kw.kwh >= 0 &&
+          !L.kw.spread && m->pnames[i] && callee_param_is_declared_kwarg(c, m, m->pnames[i]))
+        a = seed_kwarg_value(nt, L.kw.kwh, m->pnames[i]);
+      if (a < 0 || nt_kind(nt, a) == NK_BlockArgumentNode || nt_kind(nt, a) == NK_SplatNode) continue;
+      LocalVar *lv = m->pnames[i] ? scope_local(m, m->pnames[i]) : NULL;
+      if (!lv || lv->rbs_decl_type == TY_UNKNOWN || lv->rbs_decl_type == TY_POLY) continue;
+      TyKind decl = lv->rbs_decl_type;
+      if (strict_rbs_is_empty_container(c, a, decl)) continue;
+      int dropped = !strict_rbs_slot_equiv(decl, lv->type, 0);
+      TyKind val = infer_type(c, a);
+      int via_mi = -1, via_pi = -1;
+      if (val == TY_POLY && !dropped) {
+        SeedChase ch = { NULL, 0, 0, 0, TY_UNKNOWN };
+        int all = seed_chase_contradicts(c, decl, a, 0, &ch);
+        if (all && ch.nseen >= 2) { via_mi = ch.seen[0]; via_pi = ch.seen[1]; }
+        free(ch.seen);
+        if (!all || ch.shown == TY_UNKNOWN) continue;
+        val = ch.shown;
+      }
+      if (strict_rbs_val_fits(c, a, decl, val, 0, dropped)) continue;
+      /* Runtime-name send arm (`send(name, h)`): keep the runtime TypeError
+         behavior for unrelated arms (#6672). */
+      if (nt_int(nt, id, "dyn_arm", 0) && nt_str(nt, id, "dyn_name")) {
+        const char *vc = builtin_class_of_type(val);
+        if (!vc) vc = seed_ty_name_into(c, val, _sn2, sizeof _sn2);
+        char msg[512];
+        snprintf(msg, sizeof msg, "%s: parameter %s is declared %s by --rbs but got %s",
+                 name, m->pnames[i], seed_ty_name_into(c, decl, _sn1, sizeof _sn1), vc);
+        nt_node_set_str((NodeTable *)nt, id, "seed_type_error", msg);
+        break;
+      }
+      if (param_reported && i < 64) param_reported[mi * 64 + i] = 1;
+      const char *file = NULL; int ln = 0;
+      seed_node_loc(nt, a, &file, &ln);
+      const char *by = inline_pin_at_method(m, i);
+      if (by)
+        fprintf(stderr,
+                "spinel: %s:%d: --strict-rbs: inline RBS annotation contradicted: parameter %s of %s is "
+                "declared %s at %s but this call passes %s\n",
+                file, ln, m->pnames[i], m->name ? m->name : name,
+                seed_ty_name_into(c, decl, _sn1, sizeof _sn1), by,
+                seed_ty_name_into(c, val, _sn2, sizeof _sn2));
+      else
+        fprintf(stderr,
+                "spinel: %s:%d: --strict-rbs: --rbs seed contradicted: parameter %s of %s is "
+                "declared %s but this call passes %s\n",
+                file, ln, m->pnames[i], m->name ? m->name : name,
+                seed_ty_name_into(c, decl, _sn1, sizeof _sn1),
+                seed_ty_name_into(c, val, _sn2, sizeof _sn2));
+      if (via_mi >= 0)
+        fprintf(stderr, "  The value is parameter %s of %s, which every call of %s hands a %s.\n",
+                c->scopes[via_mi].pnames[via_pi], c->scopes[via_mi].name, c->scopes[via_mi].name,
+                seed_ty_name_into(c, val, _sn2, sizeof _sn2));
+      if (!collect_mode()) exit(1);
+      g_seed_bad = 1;
+    }
+    arg_layout_free(&L);
+  }
+  /* Check parameter defaults and any parameter whose RBS pin was dropped or
+     widened through a path no direct call site already reported. */
+  for (int mi = 0; mi < c->nscopes; mi++) {
+    Scope *m = &c->scopes[mi];
+    if (!m->reachable) continue;
+    const char *cn = (m->class_id >= 0 && m->class_id < c->nclasses)
+                       ? c->classes[m->class_id].name : NULL;
+    const char *sep = cn ? (m->is_cmethod ? "." : "#") : "";
+    for (int i = 0; i < m->nparams; i++) {
+      if (i == m->rest_idx || i == m->kwrest_idx || !m->pnames[i]) continue;
+      LocalVar *lv = scope_local(m, m->pnames[i]);
+      if (!lv || lv->rbs_decl_type == TY_UNKNOWN || lv->rbs_decl_type == TY_POLY) continue;
+      TyKind decl = lv->rbs_decl_type;
+      int dropped = !strict_rbs_slot_equiv(decl, lv->type, 0);
+      int dv = m->pdefault ? m->pdefault[i] : -1;
+      if (dv >= 0 && !strict_rbs_is_empty_container(c, dv, decl)) {
+        TyKind dval = infer_type(c, dv);
+        if (!strict_rbs_val_fits(c, dv, decl, dval, 0, dropped)) {
+          if (param_reported && i < 64) param_reported[mi * 64 + i] = 1;
+          const char *file = NULL; int ln = 0;
+          seed_node_loc(nt, dv, &file, &ln);
+          fprintf(stderr,
+                  "spinel: %s:%d: --strict-rbs: parameter %s of %s%s%s is declared %s "
+                  "but its default is %s\n",
+                  file, ln, m->pnames[i], cn ? cn : "", sep, m->name ? m->name : "?",
+                  seed_ty_name_into(c, decl, _sn1, sizeof _sn1),
+                  seed_ty_name_into(c, dval, _sn2, sizeof _sn2));
+          if (!collect_mode()) exit(1);
+          g_seed_bad = 1;
+        }
+      }
+      if (dropped && !(param_reported && i < 64 && param_reported[mi * 64 + i])) {
+        const char *file = NULL; int ln = 0;
+        seed_node_loc(nt, m->def_node, &file, &ln);
+        fprintf(stderr,
+                "spinel: %s:%d: --strict-rbs: parameter %s of %s%s%s (declared %s) widened to %s\n",
+                file, ln, m->pnames[i], cn ? cn : "", sep, m->name ? m->name : "?",
+                seed_ty_name_into(c, decl, _sn1, sizeof _sn1),
+                seed_ty_name_into(c, lv->type, _sn2, sizeof _sn2));
+        if (!collect_mode()) exit(1);
+        g_seed_bad = 1;
+      }
+    }
+  }
+  free(param_reported);
+}
+
+static void check_strict_rbs_contradictions(Compiler *c) {
+  strict_rbs_check_ivars(c);
+  strict_rbs_check_returns(c);
+  strict_rbs_check_calls(c);
+  if (g_seed_bad) exit(1);
+}
+
 static void check_seed_contradictions(Compiler *c) {
+  if (g_opt_strict_rbs) { check_strict_rbs_contradictions(c); return; }
   const NodeTable *nt = c->nt;
   char _sn1[192], _sn2[192];
   SeedIvarReport *reported = NULL;

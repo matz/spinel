@@ -564,6 +564,9 @@ static void usage(void) {
     "  --rbs DIR   Seed analyzer with RBS signatures from DIR (advisory)\n"
     "  --no-inline-rbs  Ignore inline RBS comments (`#: ...`, `# @rbs ...`)\n"
     "              in the program (default: apply them; docs/inline-rbs.md)\n"
+    "  --strict-rbs  Refuse at compile time any call site, assignment, return, or\n"
+    "              inherited layout that drops, widens, or contradicts an RBS\n"
+    "              signature pin instead of degrading or raising TypeError at run time\n"
     "  --int-overflow=MODE  Int +/-/* overflow handling (default: raise)\n"
     "  --no-bigint No value may be a Bignum: loop accumulators stay Integer and\n"
     "              raise on overflow, a value that could only be a Bignum is a\n"
@@ -1029,6 +1032,7 @@ int main(int argc, char **argv) {
     else if (!strncmp(a, "--rbs=", 6))    { rbs_dir = a + 6; i++; }
     else if (sp_streq(a, "--rbs"))         { if (++i < argc) rbs_dir = argv[i]; i++; }
     else if (sp_streq(a, "--no-inline-rbs")) { sp_inline_rbs_enabled = 0; i++; }
+    else if (sp_streq(a, "--strict-rbs"))  { g_opt_strict_rbs = 1; i++; }
     else if (sp_streq(a, "--disable=frozen-string-literal") ||
              sp_streq(a, "--disable-frozen-string-literal")) {
       fprintf(stderr, "spinel: --disable=frozen-string-literal is not "

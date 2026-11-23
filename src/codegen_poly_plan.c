@@ -3492,9 +3492,14 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
   const char *idxref = T->idxref;
   /* Byte-taking builtin arms read the held handle; boxed arms keep it. */
   char strarg[64];
+  /* (a String narrowed out of a boxed slot is held as the slot's box,
+     cplan_poly_arg_storage: its bytes are the box's) */
+  int strarg_boxed = argc > 0 && atmp_ty[0] == TY_POLY &&
+                     (comp_ntype(c, argv[0]) == TY_STRING || comp_ntype(c, argv[0]) == TY_STRBUF);
   snprintf(strarg, sizeof strarg, argc > 0 && atmp_ty[0] == TY_STRBUF
            ? "sp_strbuf_read(_t%d)"
-           : argc > 0 && atmp_ty[0] == TY_STRING ? "SP_STR_B(_t%d)" : "_t%d",   /* (one representation: a handle held) */
+           : argc > 0 && atmp_ty[0] == TY_STRING ? "SP_STR_B(_t%d)"   /* (one representation: a handle held) */
+           : strarg_boxed ? "sp_rbval_string_bytes(_t%d)" : "_t%d",
            argc > 0 ? atmp[0] : 0);
   int is_cover = ps->cover, is_ctryconv = ps->ctryconv, is_gcdlcm = ps->gcdlcm;
   int is_include = ps->include, is_strdel = ps->strdel, is_strpart = ps->strpart;
@@ -3665,7 +3670,9 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
   if (is_include && !sp_streq(name, "include?"))
     { buf_puts(b, "if ("); emit_poly_str_guard(c, tv, name, b);
       buf_printf(b, ") sp_raise_poly_nomethod(\"%s\", _t%d);\nelse ", name, tv); }
-  else if (is_include && comp_ntype(c, argv[0]) == TY_STRING)
+  /* (a String narrowed out of a boxed slot is held as that box: the boxed
+     arm below reads it) */
+  else if (is_include && comp_ntype(c, argv[0]) == TY_STRING && atmp_ty[0] != TY_POLY)
     { buf_puts(b, "if ("); emit_poly_str_guard(c, tv, name, b);
       buf_printf(b, ") { _t%d = %ssp_str_include(sp_poly_recv_s(_t%d, \"include?\"), %s)%s; }\nelse ",
                  tr, ret == TY_POLY ? "sp_box_bool(" : "", tv, strarg,
@@ -4537,6 +4544,11 @@ void emit_poly_cases_n(Compiler *c, int id, const char *name, const PolySpecials
        argument temps): the arms take it as promote's boxed argument */
     TyKind at = comp_ntype(c, argv[0]);
     if (oint_kind(at) && atmp_ty[0] == TY_POLY) at = TY_POLY;
+    /* so is a String narrowed out of a boxed slot (`if name.is_a?(String)`
+       with name a boxed parameter): the temp is the slot's box
+       (cplan_poly_arg_storage, RS_SLOT_POLY), and the String arms below
+       bound it to a `const char *` parameter, C that did not compile */
+    if ((at == TY_STRING || at == TY_STRBUF) && atmp_ty[0] == TY_POLY) at = TY_POLY;
     switch (at) {
     case TY_INT:
       buf_printf(b, " case SP_BUILTIN_INT_ARRAY: _t%d = %ssp_IntArray_include((sp_IntArray *)_t%d.v.p, _t%d)%s; break;", tr, ibo, tv, atmp[0], ibc);

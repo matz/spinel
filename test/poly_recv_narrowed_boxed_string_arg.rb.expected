@@ -1,0 +1,10 @@
+"i64"
+:u8
+[true, true, true, true, "i64", :deleted]
+[false, false, false, false, nil, :kept]
+[]
+[true, 3, false, 1, "abcTT", false]
+nil
+[true, 0, 1, 3, "T"]
+nil
+[false, false, false, false, nil, :kept]

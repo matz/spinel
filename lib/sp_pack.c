@@ -51,11 +51,10 @@ static void pk_append(char **buf, size_t *len, size_t *cap, const char *src, siz
 
 /* Encode codepoint `v` as UTF-8 (the `U` directive) into out[0..5].
    Mirrors CRuby's permissive scheme: up to 6 bytes for values through
-   0x7FFFFFFF. Negative / out-of-range values encode nothing (CRuby
-   raises RangeError; spinel has no exception path here). Returns the
-   byte count written. */
+   0x7FFFFFFF. Returns -1 for negative or out-of-range values so the caller
+   can free its buffer and raise RangeError, matching CRuby. */
 static int pk_utf8(unsigned char *out, int64_t v) {
-  if (v < 0) return 0;
+  if (v < 0) return -1;
   uint64_t uv = (uint64_t)v;
   if (uv <= 0x7F) {
     out[0] = (unsigned char)uv;
@@ -96,23 +95,41 @@ static int pk_utf8(unsigned char *out, int64_t v) {
     out[5] = (unsigned char)(0x80 | (uv & 0x3F));
     return 6;
   }
-  return 0;
+  return -1;
+}
+
+static int pk_host_big(void) {
+  const uint16_t x = 1;
+  return *(const unsigned char *)&x == 0;
+}
+
+static int pk_allows_endian_mods(char spec) {
+  return spec && strchr("sSiIlLqQjJ", spec) != NULL;
 }
 
 /* Consume any '<' '>' '!' '_' modifiers after a directive letter, then the
-   optional count. Without this, `pack('l<l<l<l<')` treated each '<' as its
-   own directive -- and since the element cursor advances per directive, every
-   other value was silently dropped (doom's SDL_Rect bytes came out as
-   {x,w,0,0}). '!'/'_' pick the native size (what the plain directive
-   already is here); '<'/'>' set *big. CRuby raises RangeError on a
-   repeated endian modifier ("l><"); spinel's pack has no exception
-   path, so the last one wins instead. */
-static int64_t pk_parse_count_mods(const char **pp, int *big) {
+   optional count. CRuby allows these modifiers only after sSiIlLqQjJ
+   (ArgumentError otherwise, including float directives d/D/f/F/e/E/g/G) and
+   raises RangeError on repeated '<'/'>' modifiers (e.g. "l><", "l<<").
+   Without an explicit '<' or '>', *big defaults to the host byte order.
+   Frees `buf` (NULL on unpack) before raising. */
+static int64_t pk_parse_count_mods(char spec, const char **pp, int *big, char *buf) {
   const char *p = *pp;
+  int endian_seen = 0;
+  if (big) *big = pk_host_big();
   while (*p == '<' || *p == '>' || *p == '!' || *p == '_') {
-    if (big) {
-      if (*p == '>') *big = 1;
-      else if (*p == '<') *big = 0;
+    if (!pk_allows_endian_mods(spec)) {
+      char mod = *p;
+      free(buf);
+      sp_raise_cls("ArgumentError", sp_sprintf("'%c' allowed only after types sSiIlLqQjJ", mod));
+    }
+    if (*p == '>' || *p == '<') {
+      if (endian_seen) {
+        free(buf);
+        sp_raise_cls("RangeError", "Can't use both '<' and '>'");
+      }
+      endian_seen = 1;
+      if (big) *big = (*p == '>');
     }
     p++;
   }
@@ -132,9 +149,6 @@ static char pk_native_spec(char spec, const char *p) {
       if (*q == '!' || *q == '_') return spec == 'l' ? 'q' : 'Q';
   }
   return spec;
-}
-static int64_t pk_parse_count(const char **pp) {
-  return pk_parse_count_mods(pp, NULL);
 }
 /* Serialize / deserialize an integer as `n` bytes, little- or
    big-endian, via shifts (host-endianness independent, like the
@@ -251,6 +265,10 @@ static int pk_int_directive(char spec, int64_t v, int big, char **buf, size_t *l
     case 'U': {
       unsigned char ub[6];
       int ulen = pk_utf8(ub, v);
+      if (ulen < 0) {
+        free(*buf);
+        sp_raise_cls("RangeError", "pack(U): value out of range");
+      }
       pk_append(buf, len, cap, (const char *)ub, (size_t)ulen);
       break;
     }
@@ -278,9 +296,9 @@ static double uk_get_flt(char spec, const unsigned char *u) {
    exact Integer, and the directive's byte mask keeps only the low bits). A
    plain (int64_t) cast is undefined C for anything outside
    [INT64_MIN, INT64_MAX], including NaN. */
-static int64_t pk_flt_to_int(double dv) {
-  if (isnan(dv)) sp_raise_cls("FloatDomainError", "NaN");
-  if (isinf(dv)) sp_raise_cls("FloatDomainError", dv > 0 ? "Infinity" : "-Infinity");
+static int64_t pk_flt_to_int(double dv, char *buf) {
+  if (isnan(dv)) { free(buf); sp_raise_cls("FloatDomainError", "NaN"); }
+  if (isinf(dv)) { free(buf); sp_raise_cls("FloatDomainError", dv > 0 ? "Infinity" : "-Infinity"); }
   if (dv >= -9223372036854775808.0 && dv < 9223372036854775808.0)
     return (int64_t)dv;
   /* Out-of-range finite: |dv| >= 2^63, so the mantissa is shifted left by
@@ -291,6 +309,20 @@ static int64_t pk_flt_to_int(double dv) {
   uint64_t mant = (bits & 0xFFFFFFFFFFFFFULL) | (1ULL << 52);
   uint64_t u = sh >= 64 ? 0 : mant << sh;
   return (int64_t)(dv < 0 ? 0 - u : u);
+}
+
+/* Convert a Float for the `U` directive without wrapping mod 2^64:
+   NaN/Infinity raise FloatDomainError, values outside signed 64-bit raise
+   CRuby's bignum RangeError, and anything else outside [0, 0x7FFFFFFF] is
+   caught by pk_utf8. */
+static int64_t pk_flt_to_u(double dv, char *buf) {
+  if (isnan(dv)) { free(buf); sp_raise_cls("FloatDomainError", "NaN"); }
+  if (isinf(dv)) { free(buf); sp_raise_cls("FloatDomainError", dv > 0 ? "Infinity" : "-Infinity"); }
+  if (dv >= 9223372036854775808.0 || dv < -9223372036854775808.0) {
+    free(buf);
+    sp_raise_cls("RangeError", "bignum too big to convert into 'long'");
+  }
+  return (int64_t)dv;
 }
 
 /* The wording CRuby uses when a value cannot become an Integer: special
@@ -355,10 +387,10 @@ static sp_RbVal uk_ber_value(const unsigned char *src, size_t n) {
   return sp_box_bigint(b);
 }
 
-static int64_t pk_poly_to_int(sp_RbVal v) {
+static int64_t pk_poly_to_int(sp_RbVal v, char *buf) {
   switch (v.tag) {
     case SP_TAG_INT:    return v.v.i;
-    case SP_TAG_FLT:    return pk_flt_to_int(v.v.f);
+    case SP_TAG_FLT:    return pk_flt_to_int(v.v.f, buf);
     case SP_TAG_BIGINT: return sp_bigint_to_int((sp_Bigint *)v.v.p);
     case SP_TAG_OBJ:
       /* a user object converts through its compiled #to_int (the generated
@@ -372,9 +404,23 @@ static int64_t pk_poly_to_int(sp_RbVal v) {
       break;
     default: break;
   }
+  free(buf);
   sp_raise_cls("TypeError",
                sp_sprintf("no implicit conversion of %s into Integer", pk_val_name(v)));
   return 0;
+}
+
+static int64_t pk_poly_to_u(sp_RbVal v, char *buf) {
+  if (v.tag == SP_TAG_FLT) return pk_flt_to_u(v.v.f, buf);
+  if (v.tag == SP_TAG_BIGINT) {
+    sp_Bigint *b = (sp_Bigint *)v.v.p;
+    if (sp_bigint_bit_length(b) > 63) {
+      free(buf);
+      sp_raise_cls("RangeError", "bignum too big to convert into 'long'");
+    }
+    return sp_bigint_to_int(b);
+  }
+  return pk_poly_to_int(v, buf);
 }
 
 size_t sp_bigint_byte_len(sp_Bigint *b);
@@ -433,7 +479,7 @@ static void pk_ber_poly(sp_RbVal v, char **buf, size_t *len, size_t *cap) {
     pk_ber_bigint(sp_bigint_new_double(v.v.f), buf, len, cap);
     return;
   }
-  pk_ber_int(pk_poly_to_int(v), buf, len, cap);
+  pk_ber_int(pk_poly_to_int(v, *buf), buf, len, cap);
 }
 
 /* Keep the ordinary loop's inlined conversion with a second packing entry. */
@@ -468,7 +514,7 @@ static const char *pk_conv_name(sp_RbVal v) {
    into String"): the element read as no bytes, so `[1].pack("a*")`
    answered "" and `[1].pack("a")` a NUL. A shared String handle in a poly
    Array is its live bytes; it too read as none. */
-static const char *pk_str_elem_bytes(char spec, sp_RbVal v, size_t *n) {
+static const char *pk_str_elem_bytes(char spec, sp_RbVal v, size_t *n, char *buf) {
   *n = 0;
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_STRBUF && v.v.p) {
     sp_String *h = (sp_String *)v.v.p;
@@ -490,6 +536,7 @@ static const char *pk_str_elem_bytes(char spec, sp_RbVal v, size_t *n) {
     const char *r = sp_String_cstr_nil(sp_obj_to_str_handle((int)v.cls_id, v.v.p));
     if (r) { *n = sp_str_byte_len(r); return r; }
   }
+  free(buf);
   sp_raise_cls("TypeError", sp_sprintf("no implicit conversion of %s into String", pk_conv_name(v)));
   return "";
 }
@@ -639,7 +686,7 @@ static void pk_str_spec(char spec, int64_t count, sp_RbVal e, int have,
                         char **buf, size_t *len, size_t *cap) {
   size_t sl = 0;
   if (!have) pk_too_few(*buf);
-  const char *s = pk_str_elem_bytes(spec, e, &sl);
+  const char *s = pk_str_elem_bytes(spec, e, &sl, *buf);
   if (spec == 'a' || spec == 'A' || spec == 'Z') {
     size_t want = (count < 0) ? sl : (size_t)count;
     if (spec == 'Z' && count < 0) want = sl + 1;
@@ -665,7 +712,7 @@ static void pk_str_spec(char spec, int64_t count, sp_RbVal e, int have,
 static inline int pk_cursor_directive(char spec, int64_t count, char **buf, size_t *len, size_t *cap) {
   if (spec == 'X') {
     size_t back = count < 0 ? 0 : (size_t)count;
-    if (back > *len) sp_raise_cls("ArgumentError", "X outside of string");
+    if (back > *len) { free(*buf); sp_raise_cls("ArgumentError", "X outside of string"); }
     *len -= back;
     return 1;
   }
@@ -692,7 +739,8 @@ static SP_NOINLINE SP_COLD int64_t pk_missing_int(char spec, char *buf) {
   if (pk_int_directive_consumes(spec)) pk_too_few(buf);
   return 0;
 }
-static SP_NORETURN void pk_nil_elem(int flt) {
+static SP_NORETURN void pk_nil_elem(int flt, char *buf) {
+  free(buf);
   sp_raise_cls("TypeError", flt ? "can't convert nil into Float" : "no implicit conversion of nil into Integer");
 }
 
@@ -725,7 +773,7 @@ const char *sp_IntArray_pack(sp_IntArray *arr, const char *fmt) {SP_GC_ROOT(arr)
     spec = pk_native_spec(spec, p);
     if (spec == ' ' || spec == '\t' || spec == '\n') continue;
     int big = 0;
-    int64_t count = pk_parse_count_mods(&p, &big);
+    int64_t count = pk_parse_count_mods(spec, &p, &big, buf);
     if (pk_cursor_directive(spec, count, &buf, &len, &cap)) continue;
     /* a String directive converts the element as CRuby does: an Integer
        is no String (TypeError), a nil element (its bit) is nil */
@@ -739,7 +787,7 @@ const char *sp_IntArray_pack(sp_IntArray *arr, const char *fmt) {SP_GC_ROOT(arr)
     if (spec == 'w') {
       int64_t wc = count < 0 ? arr->len - idx : count;
       for (int64_t k = 0; k < wc; k++) {
-        if (idx < arr->len && sp_IntArray_elem_nil(arr, idx)) pk_nil_elem(0);
+        if (idx < arr->len && sp_IntArray_elem_nil(arr, idx)) pk_nil_elem(0, buf);
         int64_t sv = (idx < arr->len) ? arr->data[arr->start + idx] : (pk_too_few(buf), 0); idx++;
         pk_ber_int(sv, &buf, &len, &cap);
       }
@@ -749,7 +797,7 @@ const char *sp_IntArray_pack(sp_IntArray *arr, const char *fmt) {SP_GC_ROOT(arr)
     if (count < 0) count = 0;
     if (pk_is_flt_spec(spec)) {
       for (int64_t k = 0; k < count; k++) {
-        if (idx < arr->len && sp_IntArray_elem_nil(arr, idx)) pk_nil_elem(1);
+        if (idx < arr->len && sp_IntArray_elem_nil(arr, idx)) pk_nil_elem(1, buf);
         double dv = (idx < arr->len) ? (double)arr->data[arr->start + idx] : (pk_too_few(buf), 0.0);
         idx++;
         pk_flt_directive(spec, dv, &buf, &len, &cap);
@@ -758,7 +806,7 @@ const char *sp_IntArray_pack(sp_IntArray *arr, const char *fmt) {SP_GC_ROOT(arr)
     }
     for (int64_t k = 0; k < count; k++) {
       int64_t v = (idx < arr->len) ? arr->data[arr->start + idx] : pk_missing_int(spec, buf);
-      if (idx < arr->len && sp_IntArray_elem_nil(arr, idx) && pk_int_directive_consumes(spec)) pk_nil_elem(0);
+      if (idx < arr->len && sp_IntArray_elem_nil(arr, idx) && pk_int_directive_consumes(spec)) pk_nil_elem(0, buf);
       idx++;
       if (!pk_int_directive(spec, v, big, &buf, &len, &cap)) idx--;
     }
@@ -792,7 +840,7 @@ const char *sp_FloatArray_pack(sp_FloatArray *arr, const char *fmt) {
     spec = pk_native_spec(spec, p);
     if (spec == ' ' || spec == '\t' || spec == '\n') continue;
     int big = 0;
-    int64_t count = pk_parse_count_mods(&p, &big);
+    int64_t count = pk_parse_count_mods(spec, &p, &big, buf);
     if (pk_cursor_directive(spec, count, &buf, &len, &cap)) continue;
     /* a String directive converts the element as CRuby does: a Float is no
        String (TypeError), a nil element (its bit) is nil */
@@ -806,7 +854,7 @@ const char *sp_FloatArray_pack(sp_FloatArray *arr, const char *fmt) {
       int64_t wc = count < 0 ? arr->len - idx : count;
       for (int64_t k = 0; k < wc; k++) {
         if (idx >= arr->len) pk_too_few(buf);
-        if (sp_FloatArray_elem_nil(arr, idx)) pk_nil_elem(0);
+        if (sp_FloatArray_elem_nil(arr, idx)) pk_nil_elem(0, buf);
         sp_float v = arr->data[idx++];
         pk_ber_poly(sp_box_float(v), &buf, &len, &cap);
       }
@@ -817,15 +865,17 @@ const char *sp_FloatArray_pack(sp_FloatArray *arr, const char *fmt) {
     if (pk_is_flt_spec(spec)) {
       for (int64_t k = 0; k < count; k++) {
         double dv = (idx < arr->len) ? arr->data[idx] : (pk_too_few(buf), 0.0);
-        if (idx < arr->len && sp_FloatArray_elem_nil(arr, idx)) pk_nil_elem(1);
+        if (idx < arr->len && sp_FloatArray_elem_nil(arr, idx)) pk_nil_elem(1, buf);
         idx++;
         pk_flt_directive(spec, dv, &buf, &len, &cap);
       }
       continue;
     }
     for (int64_t k = 0; k < count; k++) {
-      if (idx < arr->len && sp_FloatArray_elem_nil(arr, idx) && pk_int_directive_consumes(spec)) pk_nil_elem(0);
-      int64_t v = (idx < arr->len) ? pk_flt_to_int(arr->data[idx]) : pk_missing_int(spec, buf);
+      if (idx < arr->len && sp_FloatArray_elem_nil(arr, idx) && pk_int_directive_consumes(spec)) pk_nil_elem(0, buf);
+      int64_t v = (idx < arr->len)
+                  ? (spec == 'U' ? pk_flt_to_u(arr->data[idx], buf) : pk_flt_to_int(arr->data[idx], buf))
+                  : pk_missing_int(spec, buf);
       idx++;
       if (!pk_int_directive(spec, v, big, &buf, &len, &cap)) idx--;
     }
@@ -851,7 +901,7 @@ static void pk_ptr_poly(char spec, int64_t count, sp_PolyArray *arr, sp_int *idx
       free(*buf);
       sp_raise_cls("TypeError", sp_sprintf("no implicit conversion of %s into String", pk_conv_name(e)));
     }
-    pk_int_directive('J', (int64_t)(intptr_t)sp_rbval_string_bytes(e), 0, buf, len, cap);
+    pk_int_directive('J', (int64_t)(intptr_t)sp_rbval_string_bytes(e), pk_host_big(), buf, len, cap);
   }
 }
 
@@ -868,7 +918,7 @@ const char *sp_PolyArray_pack(sp_PolyArray *arr, const char *fmt) {SP_GC_ROOT(ar
     spec = pk_native_spec(spec, p);
     if (spec == ' ' || spec == '\t' || spec == '\n') continue;
     int big = 0;
-    int64_t count = pk_parse_count_mods(&p, &big);
+    int64_t count = pk_parse_count_mods(spec, &p, &big, buf);
     if (pk_cursor_directive(spec, count, &buf, &len, &cap)) continue;
     /* a/A/Z, m/M, H/h, B/b, u: consume one element, converted as CRuby
        converts it (pk_str_elem_bytes) */
@@ -897,7 +947,7 @@ const char *sp_PolyArray_pack(sp_PolyArray *arr, const char *fmt) {SP_GC_ROOT(ar
       for (int64_t k = 0; k < count; k++) {
         /* a poly array's nil is a tagged one, which pk_poly_to_flt reads as
            0.0; it raises here as a typed array's nil bit does */
-        if (idx < arr->len && arr->data[idx].tag == SP_TAG_NIL) pk_nil_elem(1);
+        if (idx < arr->len && arr->data[idx].tag == SP_TAG_NIL) pk_nil_elem(1, buf);
         double dv = (idx < arr->len) ? pk_poly_to_flt(arr->data[idx]) : (pk_too_few(buf), 0.0);
         idx++;
         pk_flt_directive(spec, dv, &buf, &len, &cap);
@@ -909,7 +959,10 @@ const char *sp_PolyArray_pack(sp_PolyArray *arr, const char *fmt) {SP_GC_ROOT(ar
          NUL and leaves it, so a nil under it (`[1, nil].pack("qx")`) is not
          converted, as the typed arrays' nil-bit check already skips it */
       int64_t v = pk_int_directive_consumes(spec)
-                  ? (idx < arr->len ? pk_poly_to_int(arr->data[idx]) : (pk_too_few(buf), 0)) : 0;
+                  ? (idx < arr->len ? (spec == 'U' ? pk_poly_to_u(arr->data[idx], buf)
+                                                   : pk_poly_to_int(arr->data[idx], buf))
+                                    : (pk_too_few(buf), 0))
+                  : 0;
       idx++;
       if (!pk_int_directive(spec, v, big, &buf, &len, &cap)) idx--;
     }
@@ -937,7 +990,7 @@ const char *sp_PolyArray_pack_buffer(sp_PolyArray *arr, const char *fmt, const c
     spec = pk_native_spec(spec, p);
     if (spec == ' ' || spec == '\t' || spec == '\n') continue;
     int big = 0;
-    int64_t count = pk_parse_count_mods(&p, &big);
+    int64_t count = pk_parse_count_mods(spec, &p, &big, buf);
     if (pk_cursor_directive(spec, count, &buf, &len, &cap)) continue;
     /* a/A/Z, m/M, H/h, B/b, u: consume one element, converted as CRuby
        converts it (pk_str_elem_bytes) */
@@ -966,7 +1019,7 @@ const char *sp_PolyArray_pack_buffer(sp_PolyArray *arr, const char *fmt, const c
       for (int64_t k = 0; k < count; k++) {
         /* a poly array's nil is a tagged one, which pk_poly_to_flt reads as
            0.0; it raises here as a typed array's nil bit does */
-        if (idx < arr->len && arr->data[idx].tag == SP_TAG_NIL) pk_nil_elem(1);
+        if (idx < arr->len && arr->data[idx].tag == SP_TAG_NIL) pk_nil_elem(1, buf);
         double dv = (idx < arr->len) ? pk_poly_to_flt(arr->data[idx]) : (pk_too_few(buf), 0.0);
         idx++;
         pk_flt_directive(spec, dv, &buf, &len, &cap);
@@ -978,7 +1031,10 @@ const char *sp_PolyArray_pack_buffer(sp_PolyArray *arr, const char *fmt, const c
          NUL and leaves it, so a nil under it (`[1, nil].pack("qx")`) is not
          converted, as the typed arrays' nil-bit check already skips it */
       int64_t v = pk_int_directive_consumes(spec)
-                  ? (idx < arr->len ? pk_poly_to_int(arr->data[idx]) : (pk_too_few(buf), 0)) : 0;
+                  ? (idx < arr->len ? (spec == 'U' ? pk_poly_to_u(arr->data[idx], buf)
+                                                   : pk_poly_to_int(arr->data[idx], buf))
+                                    : (pk_too_few(buf), 0))
+                  : 0;
       idx++;
       if (!pk_int_directive(spec, v, big, &buf, &len, &cap)) idx--;
     }
@@ -1009,7 +1065,7 @@ const char *sp_StrArray_pack(sp_StrArray *arr, const char *fmt) {
     spec = pk_native_spec(spec, p);
     if (spec == ' ' || spec == '\t' || spec == '\n') continue;
     int big = 0;
-    int64_t count = pk_parse_count_mods(&p, &big);
+    int64_t count = pk_parse_count_mods(spec, &p, &big, buf);
     if (pk_cursor_directive(spec, count, &buf, &len, &cap)) continue;
     /* a nil element (NULL) is nil to the String directives: padding for
        a A Z B b H h, "" for M, and the TypeError m and u raise */
@@ -1027,20 +1083,28 @@ const char *sp_StrArray_pack(sp_StrArray *arr, const char *fmt) {
       int64_t n = count < 0 ? arr->len - idx : count;
       for (int64_t k = 0; k < n; k++) {
         if (idx >= arr->len) pk_too_few(buf);
-        pk_int_directive('J', (int64_t)(intptr_t)sp_StrArray_get(arr, idx), 0, &buf, &len, &cap);
+        pk_int_directive('J', (int64_t)(intptr_t)sp_StrArray_get(arr, idx), pk_host_big(), &buf, &len, &cap);
         idx++;
       }
       continue;
     }
     if (idx >= arr->len) pk_too_few(buf);
+    const char *elem = sp_StrArray_get(arr, idx);
+    int is_nil = (sp_StrArray_get_e(arr, idx) == NULL);
     idx++;
     if (spec == 'P') {
-      pk_int_directive('J', (int64_t)(intptr_t)sp_StrArray_get(arr, idx - 1), 0, &buf, &len, &cap);
+      pk_int_directive('J', (int64_t)(intptr_t)elem, pk_host_big(), &buf, &len, &cap);
     }
-    else if (strchr("cCsSlLqQnNvVjJiIfdeEgGUw", spec)) {
+    else if (pk_is_flt_spec(spec)) {
+      free(buf);
+      sp_raise_cls("TypeError", is_nil ? "can't convert nil into Float" : "can't convert String into Float");
+    }
+    else if (strchr("cCsSlLqQnNvVjJiIUw", spec)) {
       /* a numeric directive cannot take a String element: CRuby's TypeError
          (the directive was silently dropped before) */
-      sp_raise_cls("TypeError", "no implicit conversion of String into Integer");
+      free(buf);
+      sp_raise_cls("TypeError", is_nil ? "no implicit conversion of nil into Integer"
+                                       : "no implicit conversion of String into Integer");
     }
   }
   char *r = sp_str_alloc(len);
@@ -1242,10 +1306,10 @@ sp_PolyArray *sp_str_unpack_off(const char *str, const char *fmt, sp_int byteoff
     if (spec == ' ' || spec == '\t' || spec == '\n' || spec == '\v' || spec == '\f' || spec == '\r') continue;
     /* `#` comments to the end of the line */
     if (spec == '#') { while (p < pend && *p != '\n') p++; continue; }
+    int big = 0;
+    int64_t count = pk_parse_count_mods(spec, &p, &big, NULL);
     /* `%` prefixes a checksum request, which CRuby 4 no longer accepts (#3553) */
     if (spec == '%') sp_raise_cls("ArgumentError", "% is not supported");
-    int big = 0;
-    int64_t count = pk_parse_count_mods(&p, &big);
     /* X moves the read position back, @ moves it to an absolute offset; both
        were dropped, so every following directive read from the wrong place */
     if (spec == 'X') {
@@ -1432,7 +1496,7 @@ else if (spec == 'Z') {
         /* a pointer CRuby's own pack did not make: nil for NULL, else it has
            no object to answer */
         case 'p': case 'P':
-          if (pk_get_int(u, (int)sizeof(intptr_t), 0)) sp_raise_cls("ArgumentError", "no associated pointer");
+          if (pk_get_int(u, (int)sizeof(intptr_t), pk_host_big())) sp_raise_cls("ArgumentError", "no associated pointer");
           off += fsize;
           sp_PolyArray_push(out, sp_box_nil());
           continue;
@@ -1470,7 +1534,7 @@ sp_IntArray *sp_str_unpack_ints(const char *str, const char *fmt) {
     char spec = *p++;
     spec = pk_native_spec(spec, p);
     int big = 0;
-    int64_t count = pk_parse_count_mods(&p, &big);
+    int64_t count = pk_parse_count_mods(spec, &p, &big, NULL);
     if (spec == 'U') {
       for (int64_t got = 0; (count < 0 || got < count) && off < slen; got++)
         sp_IntArray_push(out, (sp_int)uk_utf8_cp(str, slen, &off));

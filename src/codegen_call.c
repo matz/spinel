@@ -25996,14 +25996,17 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
       int svkn = g_handle_face_node; g_handle_face_node = id;
       /* the handle's own emitter answers its own type (MatchData#string a
          `const char *`); a poly slot gets it boxed, or the arm assigned the
-         raw pointer into an sp_RbVal */
-      TyKind got = infer_type(c, id);
+         raw pointer into an sp_RbVal. Ask purely so c->ntype[id] stays untouched
+         (mutating it corrupted later safe-nav / repr-check reads). */
+      TyKind got = cg_natural_type(c, id);
       if (wr.kind == RK_BOXED && got != TY_POLY && got != TY_UNKNOWN && got != TY_VOID) {
         Buf fb; memset(&fb, 0, sizeof fb);
+        int vg = view_push(c, id, got);
         emit_call(c, id, &fb);
         /* under the face the call answers its oint where it can be nil */
         if (oint_kind(got) && node_is_oint(c, id)) buf_printf(b, "%s(%s)", oint_box(got), fb.p ? fb.p : oint_nil(got));
         else emit_boxed_text(c, got, fb.p ? fb.p : "0", b);
+        view_pop(c, vg);
         free(fb.p);
       }
       else if (oint_kind(want) && outer_o != node_is_oint(c, id)) {

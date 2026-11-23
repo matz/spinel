@@ -16721,8 +16721,9 @@ static int emit_poly_call0_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
         buf_printf(b, ", %d)", sp_streq(view, "args"));
         { *out = 1; return 1; }
       }
-      /* to_a itself also answers a Time's fields (sp_poly_to_a_call) */
-      buf_puts(b, sp_streq(name, "to_a") ? "sp_poly_to_a_call(" : "sp_poly_to_a_arr(");
+      /* to_a itself also answers a Time's fields (sp_poly_to_a_call);
+         deconstruct answers MatchData captures, Arrays, and Struct/Data. */
+      buf_puts(b, sp_streq(name, "to_a") ? "sp_poly_to_a_call(" : "sp_poly_deconstruct_call(");
       emit_expr(c, recv, b); buf_puts(b, ")");
       { *out = 1; return 1; }
     }
@@ -19201,6 +19202,61 @@ static int emit_poly_unpack_off(Compiler *c, int id, Buf *b, const NodeTable *nt
   return 1;
 }
 
+/* Boxed 1-arg #match: MatchData#match returns String|nil while
+   Regexp/String/Symbol#match returns MatchData|nil. */
+static void emit_poly_match_call1(Compiler *c, int id, int recv, int arg, Buf *b) {
+  int ta = ++g_tmp;
+  Buf mb = {0};
+  buf_printf(&mb, "({ sp_RbVal _t%d = ", ta); emit_boxed(c, recv, &mb);
+  buf_printf(&mb, "; SP_GC_ROOT_RBVAL(_t%d); sp_poly_match_call(_t%d, ", ta, ta);
+  emit_boxed(c, arg, &mb);
+  buf_puts(&mb, "); })");
+  Repr wr = repr_of(c, id);
+  if (wr.kind == RK_BOXED) buf_puts(b, mb.p);
+  else emit_unbox_text(c, wr.as_ty, mb.p, b);
+  free(mb.p);
+}
+
+/* Boxed 1-arg #clamp(range): handles literal Integer/Float ranges on their
+   fast paths and any runtime Range (or non-Range TypeError) via sp_poly_clamp_val. */
+static void emit_poly_clamp1(Compiler *c, int recv, int arg, Buf *b) {
+  const NodeTable *nt = c->nt;
+  TyKind at = comp_ntype(c, arg);
+  if (nt_kind(nt, arg) == NK_RangeNode && at == TY_FLOAT_RANGE) {
+    int tv = ++g_tmp, tf = ++g_tmp;
+    buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_boxed(c, recv, b);
+    buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_FloatRange _t%d = ", tv, tf); emit_expr(c, arg, b);
+    buf_printf(b, "; sp_poly_recv_ck(_t%d, \"clamp\");"
+                  " if (_t%d.excl && !(_t%d.omitted & SP_FRANGE_NO_END))"
+                  " sp_raise_cls(\"ArgumentError\", \"cannot clamp with an exclusive range\");"
+                  " sp_num_clamp_open(_t%d, (_t%d.omitted & SP_FRANGE_NO_BEGIN) ? sp_box_nil() : sp_box_float(_t%d.first),"
+                  " (_t%d.omitted & SP_FRANGE_NO_END) ? sp_box_nil() : sp_box_float(_t%d.last)); })",
+               tv, tf, tf, tv, tf, tf, tf, tf);
+    return;
+  }
+  if (at == TY_RANGE) {
+    int tv = ++g_tmp;
+    buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_boxed(c, recv, b);
+    buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_poly_clamp_range(_t%d, ", tv, tv);
+    emit_expr(c, arg, b); buf_puts(b, "); })");
+    return;
+  }
+  int tv = ++g_tmp;
+  buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_boxed(c, recv, b);
+  buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_poly_clamp_val(_t%d, ", tv, tv);
+  emit_boxed(c, arg, b); buf_puts(b, "); })");
+}
+
+/* Boxed 2-arg #clamp(lo, hi): root receiver and lower bound across boxing
+   subsequent operands so GC stress cannot sweep a freshly boxed Rational/Bignum. */
+static void emit_poly_clamp2(Compiler *c, int recv, int lo, int hi, Buf *b) {
+  int tv = ++g_tmp, tl = ++g_tmp;
+  buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_boxed(c, recv, b);
+  buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_RbVal _t%d = ", tv, tl); emit_boxed(c, lo, b);
+  buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_poly_clamp(_t%d, _t%d, ", tl, tv, tl);
+  emit_boxed(c, hi, b); buf_puts(b, "); })");
+}
+
 int emit_poly_call(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
@@ -19572,9 +19628,10 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
         buf_puts(b, ").v.p)");
       }
       else if (sp_streq(name, "to_c")) {
-        buf_puts(b, "(*(sp_Complex *)sp_poly_to_c_m(");
+        int bx = repr_of(c, id).kind == RK_BOXED;
+        buf_puts(b, bx ? "sp_poly_to_c_m(" : "(*(sp_Complex *)sp_poly_to_c_m(");
         emit_expr(c, recv, b);
-        buf_puts(b, ").v.p)");
+        buf_puts(b, bx ? ")" : ").v.p)");
       }
       else {
         /* to_h: the helper passes a real hash through unchanged, so guard
@@ -19638,6 +19695,11 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
                          comp_ntype(c, argv[0]) == TY_POLY))) {
     if (sp_streq(name, "=~") || sp_streq(name, "!~"))
       return emit_poly_match_index(c, id, name, recv, argv[0], b);
+    if (rt == TY_POLY && argc == 1 && sp_streq(name, "match") &&
+        cls_fact_may_hold_builtin(c, recv, CORE_MATCHDATA)) {
+      emit_poly_match_call1(c, id, recv, argv[0], b);
+      return 1;
+    }
     /* the operands are held and checked first (sp_poly_match_check): the
        helpers answered no match for a receiver without the method and for
        a pattern of the wrong kind */
@@ -20097,32 +20159,13 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
      the dispatch has its arm, and a builtin one that comes back here. */
   if (recv >= 0 && rt == TY_POLY && sp_streq(name, "clamp") && argc == 2 &&
       !user_defines_or_reads(c, name)) {
-    buf_puts(b, "sp_poly_clamp("); emit_boxed(c, recv, b);
-    buf_puts(b, ", "); emit_boxed(c, argv[0], b);
-    buf_puts(b, ", "); emit_boxed(c, argv[1], b); buf_puts(b, ")");
+    emit_poly_clamp2(c, recv, argv[0], argv[1], b);
     return 1;
   }
   if (recv >= 0 && rt == TY_POLY && sp_streq(name, "clamp") && argc == 1 &&
-      nt_kind(nt, argv[0]) == NK_RangeNode &&
+      nt_kind(nt, argv[0]) != NK_SplatNode &&
       !user_defines_or_reads(c, name)) {
-    /* raises on an exclusive range with a real end; routes a user-object
-       receiver through the `<=>` hook (sp_obj_clamp_range) */
-    /* a Float Range (promote boxes an Integer receiver) clamps on its boxed
-       bounds, an omitted side open, as the Range form does */
-    if (comp_ntype(c, argv[0]) == TY_FLOAT_RANGE) {
-      int tv = ++g_tmp, tf = ++g_tmp;
-      buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_boxed(c, recv, b);
-      buf_printf(b, "; sp_FloatRange _t%d = ", tf); emit_expr(c, argv[0], b);
-      buf_printf(b, "; sp_poly_recv_ck(_t%d, \"clamp\");"
-                    " if (_t%d.excl && !(_t%d.omitted & SP_FRANGE_NO_END))"
-                    " sp_raise_cls(\"ArgumentError\", \"cannot clamp with an exclusive range\");"
-                    " sp_num_clamp_open(_t%d, (_t%d.omitted & SP_FRANGE_NO_BEGIN) ? sp_box_nil() : sp_box_float(_t%d.first),"
-                    " (_t%d.omitted & SP_FRANGE_NO_END) ? sp_box_nil() : sp_box_float(_t%d.last)); })",
-                 tv, tf, tf, tv, tf, tf, tf, tf);
-      return 1;
-    }
-    buf_puts(b, "sp_poly_clamp_range("); emit_boxed(c, recv, b);
-    buf_puts(b, ", "); emit_expr(c, argv[0], b); buf_puts(b, ")");
+    emit_poly_clamp1(c, recv, argv[0], b);
     return 1;
   }
   /* poly receiver: replace(other) -> runtime dispatch (nullable array). The

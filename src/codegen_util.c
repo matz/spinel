@@ -1811,6 +1811,8 @@ int re_engine_flags(int pf) {
   if (pf & NT_RE_IGNORE_CASE) f |= 1;
   if (pf & NT_RE_EXTENDED) f |= 8;
   if (pf & NT_RE_MULTI_LINE) f |= 6;
+  if (pf & (NT_RE_EUC_JP | NT_RE_WINDOWS_31J | NT_RE_UTF_8)) f |= 16;
+  if (pf & NT_RE_ASCII_8BIT) f |= 32;
   return f;
 }
 /* The RegularExpressionNode behind `nid`, or -1 when the pattern is only

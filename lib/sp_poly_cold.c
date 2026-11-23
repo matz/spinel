@@ -2264,3 +2264,82 @@ sp_int sp_obj_to_int_answer(int cls_id, sp_RbVal r) {
                                        n, n, sp_poly_class_name(r)));
   return 0;
 }
+
+/* MatchData bytebegin/byteend/match with a runtime-boxed selector: Symbol or
+   String resolves by capture name, anything else converts via to_int. */
+sp_oint sp_MatchData_bytebegin_poly(sp_MatchData *m, sp_RbVal k) {
+  SP_GC_ROOT(m); SP_GC_ROOT_RBVAL(k);
+  if (k.tag == SP_TAG_SYM) return sp_MatchData_bytebegin_name(m, sp_sym_to_s((sp_sym)k.v.i));
+  if (sp_rbval_is_string(k)) {
+    const char *nm = sp_rbval_string_bytes(k);
+    return sp_MatchData_bytebegin_name(m, nm ? nm : sp_str_empty);
+  }
+  return sp_MatchData_bytebegin(m, sp_poly_arg_int_chk(k));
+}
+
+sp_oint sp_MatchData_byteend_poly(sp_MatchData *m, sp_RbVal k) {
+  SP_GC_ROOT(m); SP_GC_ROOT_RBVAL(k);
+  if (k.tag == SP_TAG_SYM) return sp_MatchData_byteend_name(m, sp_sym_to_s((sp_sym)k.v.i));
+  if (sp_rbval_is_string(k)) {
+    const char *nm = sp_rbval_string_bytes(k);
+    return sp_MatchData_byteend_name(m, nm ? nm : sp_str_empty);
+  }
+  return sp_MatchData_byteend(m, sp_poly_arg_int_chk(k));
+}
+
+const char *sp_MatchData_match_poly(sp_MatchData *m, sp_RbVal k) {
+  SP_GC_ROOT(m); SP_GC_ROOT_RBVAL(k);
+  if (k.tag == SP_TAG_SYM) return sp_MatchData_aref_name(m, sp_sym_to_s((sp_sym)k.v.i));
+  if (sp_rbval_is_string(k)) {
+    const char *nm = sp_rbval_string_bytes(k);
+    return sp_MatchData_aref_name(m, nm ? nm : sp_str_empty);
+  }
+  return sp_MatchData_match(m, sp_poly_arg_int_chk(k));
+}
+
+/* Boxed unary ~: Integer/Bignum bitwise complement, Regexp#~ matching $_
+   (returning char offset or nil, clearing $~ when $_ is not a String),
+   NoMethodError for all other receivers. */
+sp_RbVal sp_poly_tilde(sp_RbVal v, sp_RbVal lastline) {
+  SP_GC_ROOT_RBVAL(v); SP_GC_ROOT_RBVAL(lastline);
+  if (v.tag == SP_TAG_INT) return sp_box_int(~v.v.i);
+  if (v.tag == SP_TAG_BIGINT && v.v.p)
+    return sp_box_bigint(sp_bigint_not((sp_Bigint *)v.v.p));
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_REGEX && v.v.p) {
+    if (sp_rbval_is_string(lastline)) {
+      const char *s = sp_rbval_string_bytes(lastline);
+      return sp_re_match_poly((mrb_regexp_pattern *)v.v.p, s ? s : sp_str_empty);
+    }
+    sp_re_clear_last_match();
+    return sp_box_nil();
+  }
+  sp_raise_nomethod(sp_nomethod_msg("~", v));
+  return sp_box_nil();
+}
+
+/* Boxed #deconstruct: MatchData answers its captures array, Array answers
+   its elements, Struct/Data answers its member values; everything else raises
+   NoMethodError naming "deconstruct". */
+sp_PolyArray *sp_poly_deconstruct_call(sp_RbVal v) {
+  SP_GC_ROOT_RBVAL(v);
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_MATCHDATA && v.v.p)
+    return sp_MatchData_captures((sp_MatchData *)v.v.p);
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_POLY_ARRAY)
+    return (sp_PolyArray *)v.v.p;
+  if (v.tag == SP_TAG_OBJ && sp_poly_is_array_kind(v.cls_id))
+    return sp_enum_items_from(v);
+  if (v.tag == SP_TAG_OBJ && v.cls_id >= 0 && v.v.p) {
+    if (sp_obj_deconstruct_fn) {
+      sp_RbVal d = sp_obj_deconstruct_fn(v);
+      if (d.tag == SP_TAG_OBJ && sp_poly_is_array_kind(d.cls_id))
+        return sp_poly_to_poly_array(d);
+    }
+    if (sp_obj_to_h_fn) {
+      sp_RbVal h = sp_obj_to_h_fn(v);
+      if (h.tag == SP_TAG_OBJ && h.cls_id == SP_BUILTIN_SYM_POLY_HASH)
+        return sp_SymPolyHash_values((sp_SymPolyHash *)h.v.p);
+    }
+  }
+  sp_raise_nomethod(sp_nomethod_msg("deconstruct", v));
+  return NULL;
+}

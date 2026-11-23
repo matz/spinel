@@ -1610,6 +1610,7 @@ int an_program_names_name_error(Compiler *c);   /* the program names NameError o
 int an_program_makes_dir(Compiler *c);   /* the program names Dir anywhere */
 int an_program_makes_bsearch_enum(Compiler *c);   /* Array#bsearch without a block, anywhere */
 int an_program_makes_io(Compiler *c);   /* a boxed value may be an IO (a syntactic test) */
+int an_program_makes_complex(Compiler *c, const NodeTable *nt);   /* the program builds a Complex */
 int an_zero_arg_builtin_shadowed(Compiler *c, const char *name, int argc);
 int an_user_recv_defines_method(Compiler *c, const char *name);
 /* obj.methods / public_methods / singleton_methods on an instance of `cid`

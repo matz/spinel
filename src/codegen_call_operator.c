@@ -1643,6 +1643,20 @@ static int mutator0_block_droppable(Compiler *c, int id) {
   return et == TY_PROC || et == TY_NIL;
 }
 
+static void emit_poly_tilde_call(Compiler *c, int id, int recv, Buf *b) {
+  int tr = ++g_tmp;
+  Buf tb = {0};
+  buf_printf(&tb, "({ sp_RbVal _t%d = ", tr);
+  emit_boxed(c, recv, &tb);
+  buf_printf(&tb, "; SP_GC_ROOT_RBVAL(_t%d); sp_poly_tilde(_t%d, ", tr, tr);
+  emit_gvar_lastline_boxed(c, &tb);
+  buf_puts(&tb, "); })");
+  Repr wr = repr_of(c, id);
+  if (wr.kind == RK_BOXED) buf_puts(b, tb.p);
+  else emit_unbox_text(c, wr.as_ty, tb.p, b);
+  free(tb.p);
+}
+
 int emit_call_operator_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt, TyKind a0) {
   /* An operator override owns its poly arm before the builtin protocol's
      delegation. The existing dispatch reads each arm's planned target. */
@@ -1845,9 +1859,9 @@ int emit_call_operator_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
                   " if (_t%d.tag == SP_TAG_OBJ && sp_poly_is_array_kind(_t%d.cls_id) && sp_poly_frozen(_t%d)) sp_raise_frozen_array_v(_t%d); _t%d; })", t, t, name, t, t, t, t, t, t);
     return 1;
   }
-  /* unary bitwise complement: ~int -> (~x); ~poly -> coerce to int first */
+  /* unary ~: Integer bitwise complement, or boxed Integer/Bignum/Regexp#~ */
   if (sp_streq(name, "~") && recv >= 0 && argc == 0 && (rt == TY_INT || rt == TY_POLY)) {
-    if (rt == TY_POLY) { buf_puts(b, "(~sp_poly_recv_i(\"~\", "); emit_expr(c, recv, b); buf_puts(b, "))"); }
+    if (rt == TY_POLY) emit_poly_tilde_call(c, id, recv, b);
     /* an Integer that may be nil: nil has no `~` (NoMethodError), where the
        strict read raised the argument's TypeError (#7444) */
     else { buf_puts(b, "(~"); emit_scalar_operand_op(c, recv, "~", b); buf_puts(b, ")"); }
@@ -1938,10 +1952,12 @@ int emit_call_operator_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
     return 1;
   }
 
-  /* Numeric#fdiv on a boxed receiver: both operands as Floats, a Float out
-     (#3767). Ahead of the poly arithmetic below, whose ops all answer boxed. */
+  /* Numeric#fdiv on a boxed receiver when Complex cannot reach it: both
+     operands as Floats, a Float out (#3767). Ahead of the poly arithmetic
+     below, which answers boxed (and handles Complex#fdiv). */
   if (recv >= 0 && argc == 1 && rt == TY_POLY && sp_streq(name, "fdiv") &&
-      repr_of(c, id).as_ty == TY_FLOAT) {
+      repr_of(c, id).as_ty == TY_FLOAT &&
+      (!an_program_makes_complex(c, nt) || !cls_fact_may_hold_builtin(c, recv, CORE_COMPLEX))) {
     buf_puts(b, "sp_poly_fdiv("); emit_boxed(c, recv, b); buf_puts(b, ", ");
     emit_boxed(c, argv[0], b); buf_puts(b, ")");
     return 1;
@@ -1978,7 +1994,7 @@ int emit_call_operator_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
        -- correct, and three operations worse, on a path that was fine. */
     else if (rt != TY_INT && rt != TY_FLOAT && rt != TY_BIGINT && !user_defines_or_reads(c, name)) {
       if (sp_streq(name, "quo")) pfn = "sp_poly_quo";
-      else if (sp_streq(name, "fdiv")) pfn = "sp_poly_fdiv";
+      else if (sp_streq(name, "fdiv")) pfn = "sp_poly_fdiv_v";
       else if (sp_streq(name, "div")) pfn = "sp_poly_div_m";
       else if (sp_streq(name, "divmod")) pfn = "sp_poly_divmod";
       else if (sp_streq(name, "modulo")) pfn = "sp_poly_modulo";
@@ -2030,15 +2046,19 @@ int emit_call_operator_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
          scalar belongs. The operators above never needed this: they are
          typed poly wherever they reach here. */
       else if (sp_streq(name, "div") || sp_streq(name, "divmod") ||
-               sp_streq(name, "modulo") || sp_streq(name, "remainder")) {
-        const char *unbox = pres == TY_INT ? "sp_poly_to_i("
-                          : pres == TY_FLOAT ? "sp_poly_to_f("
-                          : pres == TY_POLY_ARRAY ? "sp_poly_to_poly_array("
-                          : NULL;
-        if (unbox) {
-          buf_puts(b, unbox); buf_puts(b, pcall.p ? pcall.p : "sp_box_nil()"); buf_puts(b, ")");
+               sp_streq(name, "modulo") || sp_streq(name, "remainder") ||
+               sp_streq(name, "fdiv")) {
+        if (pres == TY_COMPLEX) emit_unbox_text(c, pres, pcall.p ? pcall.p : "sp_box_nil()", b);
+        else {
+          const char *unbox = pres == TY_INT ? "sp_poly_to_i("
+                            : pres == TY_FLOAT ? "sp_poly_to_f("
+                            : pres == TY_POLY_ARRAY ? "sp_poly_to_poly_array("
+                            : NULL;
+          if (unbox) {
+            buf_puts(b, unbox); buf_puts(b, pcall.p ? pcall.p : "sp_box_nil()"); buf_puts(b, ")");
+          }
+          else buf_puts(b, pcall.p ? pcall.p : "sp_box_nil()");
         }
-        else buf_puts(b, pcall.p ? pcall.p : "sp_box_nil()");
       }
       else buf_puts(b, pcall.p ? pcall.p : "sp_box_nil()");
       free(pcall.p);

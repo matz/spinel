@@ -76,20 +76,8 @@ SCOPE = %w[Array Hash String Integer Float Range Symbol Proc Exception Regexp Ma
 
 INTERNAL_NAME = BuiltinRowGen::INTERNAL_NAME
 
-# Names bop_rows has for a typed Regexp / MatchData / Complex / Rational
-# that a boxed one cannot be called with yet (the call raises
-# NoMethodError, or for ~ does integer conversion instead of matching $_),
-# so its table leaves them out on purpose: answering true would send a
-# respond_to?-guarded call into that raise.
-BOXED_UNCALLABLE = {
-  "Regexp" => %w[encoding fixed_encoding? timeout ~],
-  "MatchData" => %w[bytebegin byteend deconstruct deconstruct_keys match],
-  "Complex" => %w[fdiv],
-  "Rational" => %w[clamp to_c],
-}.freeze
-
 pairs = BuiltinRowGen.method_list.select do |family, name|
-  SCOPE.include?(family) && !INTERNAL_NAME.match?(name) && !BOXED_UNCALLABLE.fetch(family, []).include?(name)
+  SCOPE.include?(family) && !INTERNAL_NAME.match?(name)
 end
 if pairs.empty?
   warn "respond_to_audit: no (family, name) pairs parsed -- bop_rows's shape changed?"

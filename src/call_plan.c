@@ -3707,6 +3707,7 @@ int cplan_to_ary_method(Compiler *c, int id, int op, int cid) {
   if (comp_ary_is_array_proper(c, cid)) return -1;
   return cplan_implied_target(c, id, op, cid, "to_ary", 0, NULL);
 }
+static int cplan_to_ary_candidate(Compiler *c, int id, int op, const PolyCand *pc, int early);
 /* See call_plan.h. The classes are cplan_boxed_to_ary_classes' (a box can
    hold them, their to_ary is the table's no-argument one). */
 const CplanToAryEntries *cplan_to_ary_entries(Compiler *c) {
@@ -3719,8 +3720,8 @@ const CplanToAryEntries *cplan_to_ary_entries(Compiler *c) {
   es->cls = cls;
   es->scope = scope;
   for (int i = 0; i < np; i++) {
-    int k = pc[i].cls, mi = comp_implicit_to_ary_mi(c, -1, -1, k);
-    if (pc[i].native || mi < 0 || mi != pc[i].mi || c->scopes[mi].nparams != 0 || !c->classes[k].instantiated) continue;
+    int k = pc[i].cls, mi = cplan_to_ary_candidate(c, -1, -1, &pc[i], 0);
+    if (mi < 0) continue;
     int e = cplan_implied_entry(c, k, "to_ary", mi);
     if (e < 0 || !c->scopes[e].reachable) continue;
     es->cls[es->n] = k;
@@ -3750,6 +3751,33 @@ static int cplan_to_ary_entry_of(Compiler *c, int k) {
   }
   return -1;
 }
+/* See call_plan.h. */
+int cplan_to_ary_takes(Compiler *c, int k, TyKind t) {
+  if (t == TY_POLY) return 1;
+  return ty_is_object(t) && is_descendant(c, k, ty_object_class(t));
+}
+/* The scope of the no-argument to_ary a candidate class of the implied
+   to_ary survey (comp_poly_candidates) answers for the call node id makes
+   on operand op, or -1 for a class that has none a box can reach: a class
+   that can have instances (early: the census before the fixpoint settles
+   `instantiated`, ctor_reachable stands in). */
+static int cplan_to_ary_candidate(Compiler *c, int id, int op, const PolyCand *pc, int early) {
+  int k = pc->cls, mi = comp_implicit_to_ary_mi(c, id, op, k);
+  if (pc->native || mi < 0 || mi != pc->mi || c->scopes[mi].nparams != 0) return -1;
+  const ClassInfo *ci = &c->classes[k];
+  return ci->instantiated || (early && ci->ctor_reachable) ? mi : -1;
+}
+/* See call_plan.h. A class whose to_ary the plan answers none for (a call
+   that may run before any version exists) keeps the object, as CRuby's
+   does before a to_ary is defined. */
+int cplan_value_to_ary(Compiler *c, TyKind t) {
+  if (!ty_is_object(t)) return 0;
+  int np = 0;
+  const PolyCand *pc = comp_poly_candidates(c, "to_ary", &np);
+  for (int i = 0; i < np; i++)
+    if (cplan_to_ary_candidate(c, -1, -1, &pc[i], 1) >= 0 && cplan_to_ary_takes(c, pc[i].cls, t)) return 1;
+  return 0;
+}
 /* The classes whose own to_ary the implied to_ary call node id makes on
    operand op reaches when the operand is boxed (a multiple assignment's
    value, the value a block of several parameters takes apart): each
@@ -3769,13 +3797,11 @@ static int cplan_to_ary_entry_of(Compiler *c, int k) {
 int cplan_boxed_to_ary_classes(Compiler *c, int id, int op, int *out, CplanToAry *ans, int cap) {
   int n = 0, np = 0;
   TyKind ot = op >= 0 ? comp_ntype(c, op) : TY_POLY;
-  int oc = ty_is_object(ot) ? ty_object_class(ot) : -1;
-  if (oc < 0 && ot != TY_POLY) return 0;
+  if (ot != TY_POLY && !ty_is_object(ot)) return 0;
   const PolyCand *pc = comp_poly_candidates(c, "to_ary", &np);
   for (int i = 0; i < np && n < cap; i++) {
-    int k = pc[i].cls, mi = comp_implicit_to_ary_mi(c, id, op, k);
-    if (pc[i].native || mi < 0 || mi != pc[i].mi || c->scopes[mi].nparams != 0 || !c->classes[k].instantiated) continue;
-    if (oc >= 0 && !is_descendant(c, k, oc)) continue;
+    int k = pc[i].cls, mi = cplan_to_ary_candidate(c, id, op, &pc[i], 0);
+    if (mi < 0 || !cplan_to_ary_takes(c, k, ot)) continue;
     MethodLookup ml;
     int vi = cplan_implied_target(c, id, op, k, "to_ary", 0, &ml);
     if (vi < 0 || ml.kind == ML_TABLE || c->scopes[vi].nparams != 0) continue;

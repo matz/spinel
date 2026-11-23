@@ -2292,11 +2292,10 @@ void emit_block_binds(Compiler *c, int blk, const int *yargs, int yc,
   if (autosplat && yc == 1 && yargs && nt_kind(nt, yargs[0]) != NK_SplatNode) {
     Repr yr = repr_of(c, yargs[0]);
     if (yr.kind != RK_BOXED && ty_is_object(yr.as_ty)) {
-      int oc = ty_object_class(yr.as_ty);
       int *ks = malloc(sizeof(int) * (size_t)(c->nclasses + 1));
       if (!ks) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
       int nk = cplan_boxed_to_ary_classes(c, nt_ref(nt, blk, "parameters"), NTI_YIELDED, ks, NULL, c->nclasses + 1);
-      for (int q = 0; q < nk; q++) yobj_to_ary |= is_descendant(c, ks[q], oc);
+      for (int q = 0; q < nk; q++) yobj_to_ary |= cplan_to_ary_takes(c, ks[q], yr.as_ty);
       free(ks);
     }
   }

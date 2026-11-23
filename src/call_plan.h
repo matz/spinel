@@ -768,6 +768,17 @@ typedef struct CplanToAry { int mi; CtaHow how; } CplanToAry;
    the record proves it: into out[0..cap), with the method each runs
    there and how into ans[0..cap) (may be NULL); the count */
 int cplan_boxed_to_ary_classes(Compiler *c, int id, int op, int *out, CplanToAry *ans, int cap);
+/* Does an operand of type t convert through the to_ary of class k, one of
+   cplan_boxed_to_ary_classes': a TY_POLY operand through any, a program
+   object through its class or a subclass of it, anything else through
+   none */
+int cplan_to_ary_takes(Compiler *c, int k, TyKind t);
+/* Can a value of type t convert through a to_ary of the program's that
+   takes no argument, a block of several parameters then taking the Array
+   it answers apart? The early census the analysis asks before the
+   fixpoint settles which classes have instances; the emission's sites ask
+   cplan_boxed_to_ary_classes. */
+int cplan_value_to_ary(Compiler *c, TyKind t);
 /* The classes a boxed site's implied to_ary may answer by their version
    entry, through the program's one switch of them (sp_obj_to_ary_entry):
    each class a box can hold whose to_ary has an entry made and reachable,

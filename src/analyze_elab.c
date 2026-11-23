@@ -12188,11 +12188,9 @@ static int lr_mix_hooks(Compiler *c) {
    reaches Module's hook, is nothing. One with a `return` of its own, the
    conditional dispatcher, a hook reached another way (`class <<
    self`, a module the module extends, define_singleton_method) or a version
-   the record cannot name is called: `M.__send__(:included, K)`. A version
-   that carries a shape a step before the walk reads (incl_hook_declined)
-   fires nothing, as it never did where the pre-walk splice does not take
-   the mixin; nor does a core class's reopening, whose mixins the builtin
-   reopen steps read. */
+   the record cannot name is called: `M.__send__(:included, K)`. A core
+   class's reopening fires nothing: its mixins the builtin reopen steps
+   read, and the pre-walk splice takes them. */
 static void lr_fire_mixin(Compiler *c, const LrEvent *v, int node, int frame, LoadPoint p, LrSpans *out) {
   NodeTable *nt = (NodeTable *)c->nt;
   const LrDef *d = NULL;
@@ -12200,7 +12198,6 @@ static void lr_fire_mixin(Compiler *c, const LrEvent *v, int node, int frame, Lo
   if (is_builtin_class_name(c->classes[v->cls].name) || is_builtin_exception_name(c->classes[v->cls].name)) return;
   if (!lr_hook_live(c, v->mod, v->name, p, &d)) return;
   int dn = d ? d->node : -1;
-  if (dn >= 0 && nt_kind(nt, dn) == NK_DefNode && incl_hook_declined(nt, dn)) return;
   /* the includer: the frame's class, or the receiver a record-taken
      mixin names (`K.include(M)` at the top level or in another body) */
   int recv = nt_int(nt, node, "mixin_by_record", 0) ? nt_ref(nt, node, "receiver") : -1;

@@ -26918,220 +26918,6 @@ int incl_hook_called(const NodeTable *nt, int body, const char *param) {
 }
 
 
-static int cb_self_act_name(const char *nm, int block);
-/* Is call's first argument a String written there (the text of a class_eval)? */
-static int incl_text_arg(const NodeTable *nt, int call) {
-  int an = nt_ref(nt, call, "arguments"), ac = 0;
-  const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
-  return ac >= 1 && (nt_kind(nt, av[0]) == NK_StringNode || nt_kind(nt, av[0]) == NK_InterpolatedStringNode);
-}
-/* (incl_hook_declined's: does the walk splice the body being asked about?) */
-static int g_incl_body_spliced;
-/* (...and is the statement being asked about inside a class_eval block on the includer?) */
-static int g_incl_on_base;
-
-/* The rows incl_hook_declined adds to host_prewalk_shape, over the subtree
-   of node: the shapes of the steps between desugar_included_hooks and the
-   walk that read class-body code, each named by the step. param is the
-   hook's parameter (the includer); a call on it is a call on the class
-   once spliced. A def and a define_method block are method code, which
-   those steps read where it is written. */
-static int incl_declined_node(const NodeTable *nt, int node, const char *param) {
-  if (node < 0) return 0;
-  NodeKind k = nt_kind(nt, node);
-  switch (k) {
-  case NK_DefNode: return 0;
-  /* an instance variable: the module's own where the hook's body names it
-     (self is the module there; spliced, it would read as the includer's),
-     so a body that makes nothing of the includer is called, not spliced
-     (incl_hook_called), and the called method reads its ivar as any method
-     of the module does; one that also makes the includer keeps the
-     pre-walk splice and the passes that read the ivar there
-     (desugar_body_ivars, desugar_const_ivar_access). In a
-     class_eval block on the includer it is the includer's, as it is once
-     the walk has spliced the block's statements into the includer's body.
-     One in a block of a body that is called stays a reason. */
-  case NK_InstanceVariableReadNode: case NK_InstanceVariableWriteNode: case NK_InstanceVariableOperatorWriteNode:
-  case NK_InstanceVariableOrWriteNode: case NK_InstanceVariableAndWriteNode: case NK_InstanceVariableTargetNode:
-    if (g_incl_body_spliced || !g_incl_on_base) break;
-    return 1;
-  /* `class << x`: in a body the walk splices it is a statement of the
-     includer's body, where the walk reads it */
-  case NK_SingletonClassNode:
-    if (g_incl_body_spliced) break;
-    return 1;
-  /* a class-body ivar once spliced, or the module's in the hook
-     (desugar_body_ivars, desugar_class_eval_ivars, desugar_const_ivar_access);
-     a class variable (the cvar passes) */
-  case NK_ClassVariableReadNode: case NK_ClassVariableWriteNode: case NK_ClassVariableOperatorWriteNode:
-  case NK_ClassVariableOrWriteNode: case NK_ClassVariableAndWriteNode: case NK_ClassVariableTargetNode:
-  /* a constant write (desugar_constant_path_self_alias, qualify_colliding_classes) */
-  case NK_ConstantWriteNode: case NK_ConstantOperatorWriteNode: case NK_ConstantOrWriteNode:
-  case NK_ConstantAndWriteNode: case NK_ConstantTargetNode:
-  /* `v op= x` where the program may reopen the operator
-     (desugar_reopened_op_write): a reason in a body the walk calls. In
-     one the walk splices, the statement calls the reopened operator
-     where it lands, as it does written in the class body
-     (test/included_hook_op_assign_reopened_operator.rb) */
-  case NK_LocalVariableOperatorWriteNode: case NK_IndexOperatorWriteNode: case NK_CallOperatorWriteNode:
-    if (g_incl_body_spliced) break;
-    return 1;
-  default: break;
-  }
-  int skip = -1;
-  if (k == NK_CallNode) {
-    const char *nm = nt_str(nt, node, "name");
-    int r = nt_ref(nt, node, "receiver"), blk = nt_ref(nt, node, "block");
-    int on_self = r < 0 || nt_kind(nt, r) == NK_SelfNode ||
-                  (nt_kind(nt, r) == NK_LocalVariableReadNode && param && nt_str(nt, r, "name") &&
-                   sp_streq(nt_str(nt, r, "name"), param));
-    /* (...the hook's parameter itself: `base.name`) */
-    int on_param = r >= 0 && nt_kind(nt, r) == NK_LocalVariableReadNode;
-    if (!nm) return 1;
-    if (sp_streq(nm, "define_method") || sp_streq(nm, "define_singleton_method")) skip = blk;
-    /* an ivar or a constant by name (desugar_const_ivar_access, the
-       const_get desugars), a send (any name), a require (the load-order
-       steps), a singleton class (desugar_singleton_attr's kin), a constant's
-       visibility */
-    /* the includer's ivar by name, on the hook's parameter, in a body the
-       walk splices: self there, a statement of the includer's body, which
-       the row that reads those rewrites where the walk puts it
-       (desugar_body_self_ivar_access_at) */
-    else if (g_incl_body_spliced && (on_param || (g_incl_on_base && r < 0)) && blk < 0 &&
-             (sp_streq(nm, "instance_variable_get") || sp_streq(nm, "instance_variable_set") ||
-              sp_streq(nm, "instance_variable_defined?"))) {
-      /* (...or receiverless in a class_eval block on the includer: self is the includer there) */
-    }
-    /* a declaration told to self's singleton class in a class_eval block
-       on the includer, in a body the walk splices: a statement of the
-       includer's body where it lands, which the row that reads those
-       rewrites (desugar_body_singleton_class_meta_at) */
-    else if (g_incl_body_spliced && g_incl_on_base && r < 0 && sp_streq(nm, "singleton_class")) {
-    }
-    else if (sp_streq(nm, "instance_variable_get") || sp_streq(nm, "instance_variable_set") ||
-             sp_streq(nm, "instance_variable_defined?") || sp_streq(nm, "class_variable_get") ||
-             sp_streq(nm, "class_variable_set") || is_const_set_name(nm) || is_send_family(nm) ||
-             is_file_load_name(nm) || is_require_name(nm) || sp_streq(nm, "autoload") ||
-             sp_streq(nm, "singleton_class") || is_const_visibility_name(nm))
-      return 1;
-    /* an eval-family call the splice does not unwrap, or one given a
-       string or a block argument (desugar_body_module_eval,
-       desugar_eval_method_block). A bare Object or Module method run on
-       the class is a reason only in a body the walk calls (one with a
-       `return`): the statements the walk splices it gives
-       the class for self itself (incl_give_self). One the body calls on
-       the hook's parameter (`return if base.name == "X"`) is a call on the
-       value the hook is called with, which the called method makes as any
-       method does: no reason. */
-    /* a class_eval or module_eval of a String written there, in a body the
-       walk splices: the text is grafted where the walk's splice puts the
-       statement (host_splice, sce_span), as the pre-walk splice's is */
-    else if (on_self && g_incl_body_spliced && is_class_eval_text_name(nm) && blk < 0 && incl_text_arg(nt, node)) {
-    }
-    else if (on_self && (is_eval_exec_family(nm) ||
-                         (!g_incl_body_spliced && !on_param &&
-                          cb_self_act_name(nm, blk >= 0 && nt_kind(nt, blk) == NK_BlockNode))))
-      return 1;
-    /* attr_accessor(*FLAGS) (desugar_attr_const_splat) */
-    else if (is_attr_decl_reader(nm) || is_attr_decl_writer(nm)) {
-      int an = nt_ref(nt, node, "arguments"), ac = 0;
-      const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
-      for (int i = 0; i < ac; i++) if (nt_kind(nt, av[i]) == NK_SplatNode) return 1;
-    }
-  }
-  int nr = nt_num_refs(nt, node);
-  for (int i = 0; i < nr; i++) {
-    int ch = nt_ref_at(nt, node, i);
-    if (ch != skip && incl_declined_node(nt, ch, param)) return 1;
-  }
-  int na = nt_num_arrs(nt, node);
-  for (int i = 0; i < na; i++) {
-    int cnt = 0;
-    const int *ids = nt_arr_at(nt, node, i, &cnt);
-    for (int j = 0; j < cnt; j++)
-      if (incl_declined_node(nt, ids[j], param)) return 1;
-  }
-  return 0;
-}
-
-/* The statements of a hook body as the splice leaves them at the class
-   body's level: a class_eval-family block on the includer (bare once
-   spliced) is its body's statements (incl_emit_stmt), anything else
-   itself. Each is asked of incl_declined_node, and all of them of
-   host_prewalk_shape. */
-static int incl_declined_stmts(NodeTable *nt, int body, const char *param) {
-  int bn = 0;
-  const int *bv = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &bn) : NULL;
-  if (body >= 0 && !bv) { bv = &body; bn = 1; }
-  for (int i = 0; i < bn; i++) {
-    int s = bv[i];
-    if (nt_kind(nt, s) == NK_CallNode) {
-      const char *nm = nt_str(nt, s, "name");
-      int r = nt_ref(nt, s, "receiver"), blk = nt_ref(nt, s, "block");
-      int on_base = r >= 0 && nt_kind(nt, r) == NK_LocalVariableReadNode && param && nt_str(nt, r, "name") &&
-                    sp_streq(nt_str(nt, r, "name"), param);
-      int an = nt_ref(nt, s, "arguments");
-      if (nm && on_base && an < 0 && blk >= 0 && nt_kind(nt, blk) == NK_BlockNode && is_class_eval_family(nm) &&
-          nt_ref(nt, blk, "parameters") < 0) {
-        int was = g_incl_on_base;
-        g_incl_on_base = 1;
-        int d = incl_declined_stmts(nt, nt_ref(nt, blk, "body"), param);
-        g_incl_on_base = was;
-        if (d) return 1;
-        continue;
-      }
-    }
-    if (incl_declined_node(nt, s, param)) return 1;
-  }
-  /* A mixin on the includer (`base.extend(M)`, `base.include(M)`) as a
-     statement of a body the walk splices (one with no `return`:
-     incl_hook_returns) is the includer's own
-     mixin once spliced, which the walk records where the hook fires: it is
-     not asked of host_prewalk_shape. In a body the walk calls instead, the
-     mixin stays a call on a value, so the pre-walk splice keeps it. */
-  int *rest = malloc(sizeof(int) * (size_t)(bn > 0 ? bn : 1)), rn = 0;
-  if (!rest) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  int spliced = body >= 0 && !incl_hook_called(nt, body, param);
-  for (int i = 0; i < bn; i++) {
-    int s = bv[i], call = nt_kind(nt, s) == NK_CallNode, r = call ? nt_ref(nt, s, "receiver") : -1;
-    int blk = call ? nt_ref(nt, s, "block") : -1;
-    const char *nm = call ? nt_str(nt, s, "name") : NULL;
-    int on_base = r >= 0 && nt_kind(nt, r) == NK_LocalVariableReadNode && param && nt_str(nt, r, "name") &&
-                  sp_streq(nt_str(nt, r, "name"), param);
-    if (spliced && on_base && is_mixin_call(nm) && blk < 0) continue;
-    /* (a receiverless one in a class_eval block on the includer is the
-       includer's own too, a statement of its body once the block's
-       statements are spliced there) */
-    if (spliced && g_incl_on_base && call && r < 0 && is_mixin_call(nm) && blk < 0) continue;
-    /* (a class_eval block on the includer was asked above, statement by
-       statement: its own statements are the ones that land in the body) */
-    if (nm && on_base && nt_ref(nt, s, "arguments") < 0 && blk >= 0 && nt_kind(nt, blk) == NK_BlockNode &&
-        is_class_eval_family(nm) && nt_ref(nt, blk, "parameters") < 0)
-      continue;
-    rest[rn++] = s;
-  }
-  /* (an alias in a body the walk splices is rewritten where it lands, by
-     the row of the step that reads one: desugar_body_inherited_alias_at) */
-  int hit = rn > 0 ? host_prewalk_shape_at(nt, rest, rn, spliced ? HPS_NO_ALIAS : 0) : -1;
-  free(rest);
-  return hit >= 0;
-}
-
-/* Does hook body `body` (of a `def self.<hook>(param)`, param read off the
-   def) carry a shape a step between desugar_included_hooks and the walk
-   reads? The walk splices or calls only a hook that carries none; the
-   others keep the pre-walk splice, which those steps then read. */
-int incl_hook_declined(NodeTable *nt, int def) {
-  int ps = nt_ref(nt, def, "parameters"), rn = 0;
-  const int *rq = ps >= 0 ? nt_arr(nt, ps, "requireds", &rn) : NULL;
-  const char *param = rn == 1 ? nt_str(nt, rq[0], "name") : NULL;
-  int hb = nt_ref(nt, def, "body");
-  g_incl_body_spliced = hb >= 0 && !incl_hook_called(nt, hb, param);
-  int r = incl_declined_stmts(nt, hb, param);
-  g_incl_body_spliced = 0;
-  return r;
-}
-
 /* `M.__send__(:included, self)`: the hook run as the method it is, for a body
    that cannot be spliced. -1 when a node cannot be made. */
 static int incl_hook_call(NodeTable *nt, int at, int mod, const char *hook_name) {
@@ -27242,24 +27028,6 @@ static void incl_range_add(InclRanges *r, int from, int to, char *frame, const c
   r->frame[r->len] = frame;
   r->gone[r->len] = gone ? strdup(gone) : NULL;
   r->n[r->len++] = to - from;
-}
-/* Is any `def self.<hook>` of the module node m names (its qualified name,
-   in any of its bodies) one incl_hook_declined declines? */
-static int incl_hook_declined_any(NodeTable *nt, char *const *qn, int n0, int m, const char *hook) {
-  const char *mn = qn[m] ? qn[m] : class_def_name(nt, m);
-  for (int o = 0; o < n0; o++) {
-    if (!class_def_is_module(nt, o)) continue;
-    const char *on = qn[o] ? qn[o] : class_def_name(nt, o);
-    if (o != m && (!on || !mn || !sp_streq(on, mn))) continue;
-    int body = class_def_body(nt, o), n = 0;
-    const int *st = body >= 0 ? nt_arr(nt, body, "body", &n) : NULL;
-    for (int k = 0; k < n; k++) {
-      int d = st[k], r = nt_ref(nt, d, "receiver");
-      const char *dn = nt_kind(nt, d) == NK_DefNode ? nt_str(nt, d, "name") : NULL;
-      if (dn && sp_streq(dn, hook) && r >= 0 && nt_kind(nt, r) == NK_SelfNode && incl_hook_declined(nt, d)) return 1;
-    }
-  }
-  return 0;
 }
 
 /* `Ver.extend(Basic)` at the top level, Basic a module with a `def self.extended(base)`: as `module Ver; extend
@@ -27417,13 +27185,13 @@ int desugar_included_hooks(Compiler *c, HostStep *h) {
         int hook = incl_find_hook_at(nt, parent, qn, n0, cn, av[j], &param, hname, &hook_mod);
         /* The walk fires the hook live at the mixin's point (elab_fire_after),
            except in a Struct or class builder's block, whose class the
-           record does not hold, for a core class reopened, whose body the
-           builtin-reopen steps read, and for a hook one of whose defs
-           carries a shape a step before the walk reads (incl_hook_declined):
-           those are spliced here, the first def found, as before. */
+           record does not hold, and for a core class reopened, whose body
+           the builtin-reopen steps read: those are spliced here, the first
+           def found, as before. No shape of the hook's own body keeps it
+           here: the steps that read one are rows the walk's splice runs,
+           or read the hook where it is written. */
         int keep = ck != NK_ModuleNode && ck != NK_ClassNode;
         if (!keep && cls && (is_builtin_class_name(cls) || is_builtin_exception_name(cls))) keep = 1;
-        if (!keep && hook >= 0) keep = incl_hook_declined_any(nt, qn, n0, hook_mod, hname);
         if (!keep) continue;
         nt_node_set_int(nt, av[j], "incl_prewalk", 1);
         if (hook < 0) continue;

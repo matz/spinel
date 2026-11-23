@@ -23,3 +23,27 @@ class VersionedBase
 end
 
 puts show
+
+# Each value the replaced version answers is judged, not their join: an
+# Array on one path and a String on the other.
+class VersionedPick
+  def self.of(flag)
+    if flag
+      [1]
+    else
+      "s"
+    end
+  end
+end
+
+def pick(flag) = VersionedPick.of(flag).inspect
+puts pick(true)
+puts pick(false)
+
+class VersionedPick
+  def self.of(flag)
+    VersionedRel.new(flag)
+  end
+end
+
+puts VersionedPick.of(true).to_s

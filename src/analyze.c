@@ -36526,8 +36526,23 @@ static int seed_ret_family(Compiler *c, TyKind t);
 static int seed_ret_kind(TyKind t);
 static int seed_contradicts(Compiler *c, TyKind slot, TyKind val, int ret);
 /* See analyze_internal.h. */
-int replaced_ret_seed_gives_way(Compiler *c, Scope *s, TyKind r) {
-  if (!s->ret_rbs_seeded || !s->replaced || !seed_contradicts(c, s->ret, r, 1)) return 0;
+int replaced_ret_seed_gives_way(Compiler *c, int si) {
+  Scope *s = &c->scopes[si];
+  if (!s->ret_rbs_seeded || !s->replaced || s->body < 0) return 0;
+  const NodeTable *nt = c->nt;
+  /* each value the method can answer, as the contradiction pass reads them: two that join to a box hide either */
+  int sites[64]; unsigned reach[64]; int n = 0;
+  seed_ret_branch_sites(nt, s->body, sites, reach, &n, 64);
+  NT_FOREACH_KIND(nt, NK_ReturnNode, id) {
+    if (n >= 64) break;
+    if (c->nscope[id] != si) continue;
+    int rv = nt_ref(nt, id, "arguments"), an = 0;
+    const int *av = rv >= 0 ? nt_arr(nt, rv, "arguments", &an) : NULL;
+    if (av && an == 1) seed_ret_branch_sites(nt, av[0], sites, reach, &n, 64);
+  }
+  int bad = 0;
+  for (int k = 0; k < n && !bad; k++) bad = seed_contradicts(c, s->ret, infer_type(c, sites[k]), 1);
+  if (!bad) return 0;
   s->ret_rbs_seeded = 0;
   s->ret_rbs_nilable = 0;
   return 1;

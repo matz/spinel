@@ -137,6 +137,10 @@ flat_map_next_arr: true false
 flat_map_next_arr: false true
 flat_map_next_clean: A
 flat_map_next_clean: B
+flat_map_next_splat: false true
+flat_map_next_splat: false true
+flat_map_next_splat: true false
+flat_map_next_splat: false true
 reduce_seed_arr: false true
 reduce_seed_arr: true false
 reduce_seed_arr: false true
@@ -146,3 +150,13 @@ reduce_seed_enum: false true
 reduce_seed_hash: false true
 reduce_seed_hash: true false
 reduce_seed_hash: false true
+reduce_mark_back_tail: false true
+reduce_mark_back_tail: true false
+reduce_mark_back_tail: false true
+reduce_mark_back_next: false true
+reduce_mark_back_next: true false
+reduce_mark_back_next: false true
+reduce_mark_back_enum: false true
+reduce_mark_back_enum: true false
+reduce_mark_back_enum: false true
+reduce_clean_repl: B

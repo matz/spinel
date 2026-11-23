@@ -4490,11 +4490,26 @@ static int lr_prot_scan_part(void *ud, int ch, ElabPos *q) {
   LrProtScan *n = ud;
   NodeKind k = nt_kind(n->x->c->nt, ch);
   if (q->may || q->defer || (q->bits & LR_LATE) || k == NK_ClassNode || k == NK_ModuleNode || k == NK_SingletonClassNode ||
-      k == NK_BlockNode || k == NK_LambdaNode || k == NK_DefNode || k == NK_DefinedNode) return 0;
+      k == NK_BlockNode || k == NK_LambdaNode || k == NK_DefNode || k == NK_DefinedNode || k == NK_RescueModifierNode ||
+      (k == NK_BeginNode && nt_ref(n->x->c->nt, ch, "rescue_clause") >= 0)) return 0;   /* (a rescue may catch what raises inside) */
   if (k == NK_CallNode && lr_main_protected(n->x, ch, n->fc, n->fs)) n->hit = 1;
   return !n->hit;
 }
-/* Does call `node` never finish where it runs, because main's `protected` raises among its operands, however deep
+/* ...is an operand of call node Kernel's `raise` or `fail` (`module_function :a, raise("stop")`): the operands run before the word,
+   so a raise among them leaves it and none of its names changes? Only a call of that name with no receiver, where the program
+   defines no method of the name (one of its own could answer instead), and itself an operand, which runs whenever the word's
+   operands do: a raise in a block, behind `&&` or in a rescue modifier is not asked */
+static int lr_raise_operand(Compiler *c, int node) {
+  const NodeTable *nt = c->nt;
+  int an = nt_ref(nt, node, "arguments"), ac = 0;
+  const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
+  for (int i = 0; i < ac; i++) {
+    const char *nm = nt_kind(nt, av[i]) == NK_CallNode && nt_ref(nt, av[i], "receiver") < 0 ? nt_str(nt, av[i], "name") : NULL;
+    if (nm && is_raise_alias(nm) && !lr_named(c, nm)) return 1;
+  }
+  return 0;
+}
+/* Does call `node` never finish where it runs, because main's `protected` is among its operands, however deep, or Kernel's `raise` is one
    (`private(protected(public(:m)))`)? Its own effect is then none (the operands before the word run, as parts of the
    statement, and the word raises), and codegen reads the mark to run them. A form is the call asked: any other
    call's operands are parts the walk of its statement already enters. */
@@ -4502,6 +4517,7 @@ static int lr_form_never_runs(ElabRec *x, int node, int fc, int fs) {
   const NodeTable *nt = x->c->nt;
   if (lr_main_protected(x, node, fc, fs)) return 1;
   if (!lr_nested_form(nt_str(nt, node, "name"))) return 0;
+  if (lr_raise_operand(x->c, node)) return 1;
   LrProtScan n = { x, fc, fs, 0 };
   ElabPos at = { .e = 0, .top = -1, .frame = -1, .rep = -1, .list = -1, .kind = EP_NEW };
   elab_parts(x->c, node, &at, lr_prot_scan_part, &n);

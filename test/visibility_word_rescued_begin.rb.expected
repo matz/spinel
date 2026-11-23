@@ -11,3 +11,5 @@
 [:bc]
 [:sc, :so]
 [NoMethodError, :i3c, NoMethodError]
+[true, false]
+[false]

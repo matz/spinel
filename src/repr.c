@@ -988,6 +988,14 @@ int repr_native_call_handle(Compiler *c, int v) {
     }
   }
   const CallPlan plan = cplan_user(c, v);
+  /* a boxed receiver's call that codegen takes as the builtin, where only a
+     class method has the name (`K.pack` beside `@a.pack("n*")`): the
+     builtin's String, not that method's handle */
+  if (k == NK_CallNode && plan.mi >= 0 && c->scopes[plan.mi].is_cmethod) {
+    int r = nt_ref(nt, v, "receiver");
+    const char *name = nt_str(nt, v, "name");
+    if (r >= 0 && comp_ntype(c, r) == TY_POLY && !user_defines_or_reads(c, name)) return 0;
+  }
   if (plan.dispatch == CP_DIRECT && plan.mi >= 0)
     return repr_method_ret_storage(&c->scopes[plan.mi]) == TY_STRBUF;
   if (plan.dispatch != CP_SWITCH && plan.dispatch != CP_PER_ARM) {

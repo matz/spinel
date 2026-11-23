@@ -1,0 +1,19 @@
+class WacrArr
+  def f: (Array[Integer], ?Array[untyped]) -> bool
+end
+
+class WacrCache
+  def cached: () -> Hash[String, String]
+  def mutate: (?Hash[String, untyped]) -> Hash[String, untyped]
+end
+
+class WacrBase
+  def make_h: () -> Hash[String, String]
+  def run: (?Hash[String, untyped]) -> Hash[String, untyped]
+end
+
+class WacrIvar
+  @h: Hash[String, untyped]
+  def set: (Hash[String, String]) -> void
+  def h: () -> Hash[String, untyped]
+end

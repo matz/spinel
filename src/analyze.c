@@ -51655,6 +51655,7 @@ static int an_settle_seed_boxes(Compiler *c) {
   int nclasses = c->nclasses;
   g_seed_box_settled = 1;
   infer_param_types(c);
+  infer_default_param_types(c);
   infer_ivar_types(c);
   infer_return_types(c);
   g_seed_box_settled = 0;

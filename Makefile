@@ -3432,6 +3432,17 @@ build/rbs-seed-results/%.res: FORCE | rbs-seed-extractor $(SP_RT_LIB) $(SPINEL_T
 	  { echo "rbs-seed-test: FAIL (#10681 the refusal of a String through untyped parameters)"; sed -n 1,4p "$$tmp/sptu.err"; ok=0; }; \
 	fi; \
 	;; \
+	widen_aliased_container_refuse) \
+	if $(SPINEL) test/rbs-seed/widen_aliased_container_refuse.rb --rbs test/rbs-seed/sig -o "$$tmp/wacr" >/dev/null 2>"$$tmp/wacr.err"; then \
+	  echo "rbs-seed-test: FAIL (aliased container widening compiled instead of refusing)"; ok=0; \
+	else \
+	  SP_COLLECT_ERRORS=1 $(SPINEL) test/rbs-seed/widen_aliased_container_refuse.rb --rbs test/rbs-seed/sig -c -o "$$tmp/wacr.c" >/dev/null 2>"$$tmp/wacr.all"; \
+	  grep -q 'a parameter default given a Array, which no conversion keeps in its sp_PolyArray \* slot' "$$tmp/wacr.all" && \
+	  [ "$$(grep -c 'a parameter default given a Hash, which no conversion keeps in its sp_StrPolyHash \* slot' "$$tmp/wacr.all")" = 2 ] && \
+	  grep -q 'an instance variable write given a Hash, which no conversion keeps in its sp_StrPolyHash \* slot' "$$tmp/wacr.all" || \
+	  { echo "rbs-seed-test: FAIL (expected all 4 aliased container widening refusals)"; cat "$$tmp/wacr.all"; ok=0; }; \
+	fi; \
+	;; \
 	dyn_send_arm_seed_contradiction) \
 	$(SPINEL) test/rbs-seed/dyn_send_arm_seed_contradiction.rb --rbs test/rbs-seed/sig -o "$$tmp/dasc" >/dev/null 2>&1 && \
 	  "$$tmp/dasc" > "$$tmp/dasc.out" 2>/dev/null && cmp -s "$$tmp/dasc.out" test/rbs-seed/dyn_send_arm_seed_contradiction.expected || { echo "rbs-seed-test: FAIL (#6672 a runtime-name send arm contradicting a seeded parameter: refused, or did not raise TypeError when chosen)"; ok=0; }; \

@@ -12265,6 +12265,15 @@ static int hc_node_ok(Compiler *c, int id, int stmt, HcRegion *r) {
       int blk = g_block_id;
       if (in_yield || blk < 0 || nt_kind(nt, blk) != NK_BlockNode || block_param_is_multi(c, blk, 0))
         return 0;
+      /* (parameters that run code or bind more than the requireds -- an
+         optional's or a keyword's default, which runs at each pass and may
+         change an array the loop reads, a rest, a post, a `**` or a `&b` --
+         are not checked here, so such a block keeps the loop out) */
+      int bpp = nt_ref(nt, blk, "parameters");
+      int bps = bpp >= 0 && nt_kind(nt, bpp) == NK_BlockParametersNode ? nt_ref(nt, bpp, "parameters") : -1;
+      if (block_opt_name(c, blk, 0) || block_post_name(c, blk, 0) || block_rest_marker(c, blk) ||
+          block_keyword_name(c, blk, 0) || block_kwrest_name(c, blk) || (bps >= 0 && nt_ref(nt, bps, "block") >= 0))
+        return 0;
       for (int k = 0; ; k++) {
         const char *pn = block_param_name(c, blk, k);
         if (!pn) break;

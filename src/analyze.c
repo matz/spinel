@@ -13754,6 +13754,11 @@ int desugar_kernel_recv(Compiler *c) {
     const char *mn = nt_str(nt, id, "name");
     if (!mn || !is_kernel_module_function(mn) || cplan_const_user(c, id, recv, 1).mi >= 0) continue;
     nt_node_set_ref(nt, id, "receiver", -1);
+    /* the constant leaves the program with it: orphaned but still a
+       ConstantReadNode, it read as a use of Kernel as a value, and a boxed
+       receiver's `io.gets` got an arm for `Kernel.gets`
+       (desugar_class_value_builtin_cmethod) */
+    nt_subtree_blank(nt, recv);
     /* still Kernel's: a reopening's pass that gives a bare call self
        (desugar_handle_reopen_self_recv) leaves it bare, and no method
        the program defines of the name answers it (`def warn(m) =

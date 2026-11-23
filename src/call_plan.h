@@ -823,6 +823,20 @@ int cplan_targets_unknown_why(Compiler *c, int id, int cap);
    its cplan_targets. Same answers as cplan_targets otherwise (n >= 0,
    CPT_UNKNOWN). Never what the call answers: that is cplan_targets'. */
 int cplan_entries(Compiler *c, int id, int *out, int cap);
+/* Can call `call` reach its target `mi`? Not a class method a boxed
+   receiver's call lists for the class objects a box may hold, where no
+   class reaching it by that name can be a value (comp_class_may_be_value):
+   no box ever holds that class object. */
+int cplan_target_reachable(Compiler *c, int call, int mi);
+/* Is user method mi, a target cplan_targets lists for boxed call `call`,
+   one its dispatch arms: does a class the receiver's class fact keeps reach
+   it (comp_poly_candidates_at)? */
+int cplan_target_armed(Compiler *c, int call, int mi);
+/* Does call `call` reach a user method: one of the methods cplan_targets
+   lists that it can reach (cplan_target_reachable, cplan_target_armed), or,
+   for a receiverless call in a module's method an include copied away, one
+   its includers answer to the name? Not asked to list them. */
+int cplan_has_targets(Compiler *c, int call);
 /* What a builtin class's `new` call id (Array.new, Hash.new, Fiber.new) reduces
    to where a program initialize stands ahead of the builtin's own, a prepend's or
    the reopening's (CRuby's chain order, ct_behind_builtin_init): BNF_OWN the
@@ -960,6 +974,20 @@ void cplan_served_report(void);
    descendant's. */
 /* Whether a descendant defines its own method of this name. */
 int cplan_overridden(Compiler *c, int cid, const char *name, int cmeth);
+/* Can a method of the program's own (a reopening of builtin class cls, or
+   a module a prepend or an extend can put ahead of it) stand in for cls's
+   method name where the call plan does not see it? Asked of the whole
+   program, with no call site: a class the plan keeps (cplan_overridden,
+   cplan_builtin_reopen_def) answers for one site or one receiver class,
+   and user_defines_or_reads for any class. elab_reopen_answers asks about
+   the same thing from the load record (a reopening of cls or of an ancestor
+   it inherits the name from, a mixin of one, version by version, the
+   unsure ones answering yes), where this reads the method candidates by
+   name (a class named cls, or a module a prepend or an extend can put
+   ahead, whenever the program runs it): the answers differ for a
+   reopening of an ancestor and for a version that never runs, and callers
+   of either keep the one they were written against. */
+int cplan_builtin_overridden(Compiler *c, const char *cls, const char *name);
 int cplan_dispatch_form(Compiler *c, int call, int cid, const char *name, int has_base);
 /* A bare call in an instance method of class scls whose own chain has no
    method of `name`, so it reaches root_mi: a top-level def or a method the

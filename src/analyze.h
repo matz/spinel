@@ -1310,12 +1310,6 @@ int an_value_top(Compiler *c, int n);
    isn't the start of a non-capturing/extension group '(?...'. scan returns
    nested arrays for capturing patterns, which the str_array path can't model. */
 int an_re_has_captures(const char *src);
-/* Whether every String result is fresh, or comes from one parameter. */
-int scope_ret_fresh(Compiler *c, int mi);
-int scope_ret_param(Compiler *c, int mi);
-/* A String `||` or `&&` over a String left operand: a tail whose operands
-   are its arms (an_tail_is_shared_handle, emit_tail_value). */
-int an_tail_logic_op(Compiler *c, int node);
 int an_send_name_is_computed(Compiler *c, int arg);
 /* Is scope si an iterator synth_struct_each generated, not a def? */
 int scope_is_struct_synth(Compiler *c, int si);

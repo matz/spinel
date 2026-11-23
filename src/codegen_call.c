@@ -2038,7 +2038,7 @@ int poly_cls_value_cands(Compiler *c, int id, const char *name, int argc, const 
     int kmi = cplan_cand_target(c, id, name, &cc8[ki], CT_CMETHOD);
     /* nor a module's own `def self.x` when no box can hold the module, one
        the program only calls by name (comp_class_may_be_value), or no box
-       reaches the method (share_target_reachable): the analysis leaves its
+       reaches the method (cplan_target_reachable): the analysis leaves its
        answer out of the call's type (an_class_concrete), so its arm would put
        that answer into a slot typed for the others -- Shellwords.split beside
        a String's split in a lambda's parameter, or beside a Class value the
@@ -23741,7 +23741,7 @@ int emit_arg_type_guards(Compiler *c, int id, Buf *b) {
    change through another name is one the Enumerator sees; a frozen literal
    changes through no name. */
 int str_each_recv_shares(Compiler *c, int recv) {
-  return recv >= 0 && !share_frozen_literal(c, recv);
+  return recv >= 0 && !repr_frozen_literal(c, recv);
 }
 /* Does the Enumerator of call id outlive the expression it is made in:
    kept, handed on, or built on by blockless calls answering Enumerators
@@ -27782,7 +27782,7 @@ static void operands_held_for_later(Compiler *c, const int *operand, int nop, in
     if (i >= has_recv && !ran && an_const_read_keeps_class(c, v) && subtree_has_side_effect(c, v)) held[i] = 1;
     /* (a read of a String slot is no new value: the operand order holds
        its handle where a sibling may rebind it, string_group_at) */
-    /* (nor is a frozen literal standing alone, share_frozen_literal_alone:
+    /* (nor is a frozen literal standing alone, repr_frozen_literal_alone:
        every evaluation answers the one static object, which no collection
        frees. Statements before it in parentheses, `(f; "lit")`, run first:
        held, it is bound in order with the operand after it; left out, a
@@ -27791,7 +27791,7 @@ static void operands_held_for_later(Compiler *c, const int *operand, int nop, in
        has an effect is not asked: `1 / z` raises) */
     if (i >= has_recv && later && !ran && operand_binds_as_value(nt_kind(c->nt, v)) && !operand_reads_string_slot(c, v) &&
         (needs_root(r.as_ty) || r.as_ty == TY_POLY) && r.as_ty != TY_STRBUF && !r.handle && !r.demand &&
-        !share_frozen_literal_alone(c, v) && operand_allocates_beside(c, v))
+        !repr_frozen_literal_alone(c, v) && operand_allocates_beside(c, v))
       held[i] = 1;
     if (!ran && operand_allocates_beside(c, v)) later = 1;
   }
@@ -28384,7 +28384,7 @@ static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
     else if (comp_ty_value_obj(c, ty[i])) { emit_gc_root_tmp_refs(c, ty[i], tmp[i], b); buf_puts(b, " "); }
     /* (a frozen literal, `(f; "lit")` held for its statements' order,
        answers the one static object, which no collection frees: no root) */
-    else if (needs_root(ty[i]) && !share_frozen_literal(c, node[i])) buf_printf(b, "SP_GC_ROOT(_t%d); ", tmp[i]);
+    else if (needs_root(ty[i]) && !repr_frozen_literal(c, node[i])) buf_printf(b, "SP_GC_ROOT(_t%d); ", tmp[i]);
     free(opb[i].p);
   }
   /* (a held route that answered nil, a bang's: its arguments ran, and the
@@ -29066,7 +29066,7 @@ static void nil_target_operands(Compiler *c, int id, int boxed, NilOperands *o) 
    handle beside it (ran_first_bind), which a mutator changes
    (strbuf_recv_handle). Answers the read's temp, or -1 with nothing
    emitted. */
-static int emit_nil_target_route(Compiler *c, int r, int handle, Buf *b, const char *lead) {
+static int emit_nil_target_route(Compiler *c, int id, int r, int handle, Buf *b, const char *lead) {
   Buf hb, op;
   memset(&hb, 0, sizeof hb);
   memset(&op, 0, sizeof op);
@@ -29084,7 +29084,13 @@ static int emit_nil_target_route(Compiler *c, int r, int handle, Buf *b, const c
     buf_puts(b, lead);
     buf_printf(b, "sp_String * _t%d = SP_STR_HDL(%s); SP_GC_ROOT(_t%d);", th, hb.p, th);
     buf_printf(b, " const char * _t%d = ", t);
+    /* the read is a snapshot only for a call with a block of its own (the
+       block can change the String); a mark left by an enclosing call's block
+       is not this call's */
+    int held = g_one_held;
+    g_one_held = nt_ref(c->nt, id, "block") >= 0;
     str_read_handle_tmp(b, th);
+    g_one_held = held;
     buf_printf(b, "; SP_GC_ROOT(_t%d);", t);
     buf_puts(b, *lead ? "\n" : " ");
     ran_first_bind(r, t, th);
@@ -29208,15 +29214,15 @@ static void emit_nil_target_head_r(Compiler *c, int id, Buf *b, const char *lead
        (emit_strbuf_route) is held as the handle it hands on, which the
        mutator then changes (strbuf_recv_handle reads it) */
     if (node[i] == r && (ty[i] == TY_STRING || ty[i] == TY_STRBUF)) {
-      int t = emit_nil_target_route(c, r, 0, b, lead);
+      int t = emit_nil_target_route(c, id, r, 0, b, lead);
       /* (and so is a call answering its receiver over one, `id(s).upcase!`:
          its handle, run once here, never again by the mutator) */
-      if (t < 0 && strbuf_self_route(c, r)) t = emit_nil_target_route(c, r, 1, b, lead);
+      if (t < 0 && strbuf_self_route(c, r)) t = emit_nil_target_route(c, id, r, 1, b, lead);
       if (t >= 0) { snprintf(rtext, sizeof rtext, "_t%d", t); continue; }
     }
     /* A retained argument's handle is taken at this first evaluation,
        before another operand can overwrite the return channel. */
-    if (node[i] == harg && emit_nil_target_route(c, node[i], 1, b, lead) >= 0) continue;
+    if (node[i] == harg && emit_nil_target_route(c, id, node[i], 1, b, lead) >= 0) continue;
     /* An argument that is a shared String's handle (a slot's, a reader's)
        is held as the handle, and read from it: held as its value form, a
        copy of its bytes, the arm that boxes the handle for a boxed

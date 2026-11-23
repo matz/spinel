@@ -6,7 +6,7 @@
 #include "implicit_calls.h"
 #include "method_table_check.h"
 #include "codegen_call_arms.h"
-#include "share.h"
+#include "call_plan.h"
 #include <limits.h>
 
 /* See order_plan.h. Operands that all answer yes need no ordering and no
@@ -37,7 +37,7 @@ static int order_typed_len(Compiler *c, int id) {
   if (!sp_streq(nm, "size") && !sp_streq(nm, "length") && !sp_streq(nm, "empty?")) return 0;
   TyKind rt = comp_ntype(c, recv);
   const char *cls = ty_is_array(rt) || ty_is_ptr_array(rt) ? "Array" : ty_is_hash(rt) ? "Hash" : NULL;
-  return cls && !share_builtin_overridden(c, cls, nm);
+  return cls && !cplan_builtin_overridden(c, cls, nm);
 }
 int order_pure_walk(Compiler *c, int id, const OrderWalk *w) {
   if (id < 0 || (w->ran && w->ran(id))) return 1;
@@ -63,7 +63,7 @@ static int walk_value_only(Compiler *c, int id, const OrderWalk *w) {
     /* (a frozen literal, `"lit"` or `"lit".freeze`; never a statement
        list, whose other statements run) */
     case NK_StringNode: case NK_InterpolatedStringNode: case NK_CallNode:
-      return share_frozen_literal_alone(c, id);
+      return repr_frozen_literal_alone(c, id);
     default:
       return 0;
   }
@@ -759,7 +759,7 @@ static int order_min(int a, int b) { return a < b ? a : b; }
 static int facts_rebinder(Compiler *c, OrderFacts *f, int x, int cls, const OrderNext *nx) {
   const NodeTable *nt = c->nt;
   int r = ORDER_NONE;
-  if (share_frozen_literal_alone(c, x)) return -1;
+  if (repr_frozen_literal_alone(c, x)) return -1;
   switch (nt_kind(nt, x)) {
     case NK_LocalVariableReadNode: {
       const char *nm = nt_str(nt, x, "name");
@@ -796,7 +796,7 @@ static int facts_rebinder(Compiler *c, OrderFacts *f, int x, int cls, const Orde
    too), or a variable's read of a scalar (rule 1)? An element or a field
    read is not: a later call may store into its container. */
 static int order_immutable(Compiler *c, OrderFacts *f, int x, int cls, const OrderNext *nx) {
-  if (share_frozen_literal_alone(c, x)) return 1;
+  if (repr_frozen_literal_alone(c, x)) return 1;
   switch (nt_kind(c->nt, x)) {
     case NK_IntegerNode: case NK_FloatNode: case NK_NilNode: case NK_TrueNode:
     case NK_FalseNode: case NK_SymbolNode: case NK_SelfNode: case NK_RegularExpressionNode:

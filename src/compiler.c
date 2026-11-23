@@ -537,7 +537,6 @@ void comp_free(Compiler *c) {
   free(c->cext_stubs);
   for (int i = 0; i < c->n_cext_classes; i++) free(c->cext_classes[i].path);
   free(c->cext_classes);
-  share_facts_free(c);
   dsn_free(c);
   order_facts_free(c);
   free(c->ie_map.cls); free(c->ie_map.nonobj); free(c->ie_map.own); free(c->ie_map.pending);
@@ -1076,7 +1075,6 @@ Scope *comp_scope_new(Compiler *c, const char *name, int def_node) {
   }
   Scope *s = &c->scopes[c->nscopes++];
   memset(s, 0, sizeof(*s));
-  s->ret_param = -1;
   s->name = name ? strdup(name) : NULL;
   { s->def_node = def_node; comp_touch_scope(s->idx); }
   { s->body = -1; comp_touch_scope(s->idx); }

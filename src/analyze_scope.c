@@ -13332,7 +13332,7 @@ int poly_cls_arm_left_out(Compiler *c, int call, int k, int kmi) {
   Scope *ks = &c->scopes[kmi];
   int own_module_cmethod = ks->is_cmethod && ks->class_id == k && !ks->origin_module_ci &&
                            !strstr(c->classes[k].name, "__reopen") && comp_class_is_module(c, &c->classes[k]);
-  return own_module_cmethod && (!comp_class_may_be_value(c, k) || !share_target_reachable(c, call, kmi));
+  return own_module_cmethod && (!comp_class_may_be_value(c, k) || !cplan_target_reachable(c, call, kmi));
 }
 /* See analyze.h. */
 int poly_recv_cls_method_owns(Compiler *c, int call, const char *name) {

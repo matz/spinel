@@ -1656,7 +1656,7 @@ int strbuf_chain_has_block(Compiler *c, int v) {
 /* A shared Hash default setter stores and answers the same argument.
    Its boxed value slot can keep the argument's String handle. */
 int strbuf_hash_default_arg(Compiler *c, int v) {
-  if (!c->share) return -1;
+  if (!c->share_applied) return -1;
   v = nt_paren_single(c->nt, v);
   if (v < 0 || nt_kind(c->nt, v) != NK_CallNode ||
       !is_hash_default_setter(nt_str(c->nt, v, "name"))) return -1;
@@ -1666,7 +1666,7 @@ int strbuf_hash_default_arg(Compiler *c, int v) {
   if ((rt != TY_POLY && (!ty_is_hash(rt) || ty_hash_val(rt) != TY_POLY)) || argc != 1 ||
       cplan_user_fresh(c, v).dispatch != CP_NONE) return -1;
   /* A dropped frozen literal already keeps its frozen mark in the box. */
-  if (share_frozen_literal(c, argv[0]) && an_node_dropped(c, v)) return -1;
+  if (repr_frozen_literal(c, argv[0]) && an_node_dropped(c, v)) return -1;
   TyKind at = repr_of(c, argv[0]).ty;
   return at == TY_STRING || at == TY_STRBUF ? argv[0] : -1;
 }
@@ -1681,9 +1681,10 @@ static int strbuf_route_inject(Compiler *c, int v) {
   int recv = nt_ref(nt, v, "receiver"), blk = nt_ref(nt, v, "block"), argc = 0;
   const int *argv = call_args(nt, v, &argc);
   int seed = argc == 1 && strbuf_value_carries(c, argv[0]);
-  /* The same emitter wraps a new String seed in its own rooted handle. */
-  if (!seed && argc == 1 && repr_of(c, argv[0]).as_ty == TY_STRING &&
-      share_value_fresh(c, argv[0], 0)) seed = 1;
+  /* The same emitter wraps a String seed in its own rooted handle: SP_STR_HDL
+     adopts a just-made String, answers a view's owner and a literal's static
+     object. */
+  if (!seed && argc == 1 && repr_of(c, argv[0]).as_ty == TY_STRING) seed = 1;
   if (recv < 0 || argc != 1 || blk < 0 || nt_kind(nt, blk) != NK_BlockNode || call_breaks(c, v) ||
       (!ty_is_array(repr_of(c, recv).as_ty) && repr_of(c, recv).as_ty != TY_RANGE) ||
       comp_ntype(c, v) != TY_STRING ||
@@ -1853,15 +1854,18 @@ int strbuf_route_ie(Compiler *c, int v);
 int strbuf_route_loop(Compiler *c, int v);
 int strbuf_route_operand(Compiler *c, int v);
 int strbuf_route_inline_call(Compiler *c, int v);
-/* Is value v a holder's read, nil, a conditional with a handle arm, a
-   route the handle face renders (a proc's answer, a `then`, a `loop`, a bang
-   on a boxed receiver), or a `raise` (which leaves no value)? */
+/* Is value v a String, a holder's read, nil, a conditional with a handle
+   arm, a route the handle face renders (a proc's answer, a `then`, a
+   `loop`, a bang on a boxed receiver), or a `raise` (which leaves no
+   value)? */
 int strbuf_tail_plain(Compiler *c, int v) {
   if (v < 0) return 0;
-  /* A fresh arm needs no incoming handle; the demanded tail wraps its
-     own String, beside borrowed arms that keep their existing handle. */
-  TyKind t = comp_ntype(c, v);
-  if ((t == TY_STRING || t == TY_STRBUF) && share_value_fresh(c, v, 0)) return 1;
+  /* A String-typed tail needs no incoming handle: the demanded tail wraps
+     its own String (SP_STR_HDL adopts a just-made one, answers a view's
+     owner and a literal's static object), beside borrowed arms that keep
+     their existing handle. */
+  TyKind t = repr_of(c, v).ty;
+  if (t == TY_STRING || t == TY_STRBUF) return 1;
   if (strbuf_native_answer(c, v)) return 1;
   /* A shared reader's demanded value is its slot's handle too, a reflective
      read's as well. */
@@ -1957,13 +1961,9 @@ static int strbuf_cond_arm_any(Compiler *c, int v, int (*leaf)(Compiler *, int),
 static int strbuf_cond_arm_any_in(Compiler *c, int v, unsigned extra, int (*leaf)(Compiler *, int), int deep);
 /* A leaf of the arm walk: a String Range's endpoint (strbuf_srange_tail), a
    `next` of one, or a `begin` (with no rescue, else or ensure) ending in one */
-static int strbuf_value_held(Compiler *c, int v);
-static int strbuf_srange_leaf_d(Compiler *c, int v, int unheld);
-static int strbuf_srange_leaf(Compiler *c, int v) { return strbuf_srange_leaf_d(c, v, 0); }
-static int strbuf_srange_unheld_leaf(Compiler *c, int v) { return strbuf_srange_leaf_d(c, v, 1); }
-static int strbuf_srange_leaf_d(Compiler *c, int v, int unheld) {
+static int strbuf_srange_leaf(Compiler *c, int v) {
   const NodeTable *nt = c->nt;
-  int (*leaf)(Compiler *, int) = unheld ? strbuf_srange_unheld_leaf : strbuf_srange_leaf;
+  int (*leaf)(Compiler *, int) = strbuf_srange_leaf;
   v = nt_paren_single(nt, v);
   /* a begin's value is its body's, a rescue's or its else's (an ensure's is
      dropped), as strbuf_begin_arm_leaf takes them; a rescue modifier's is
@@ -1979,9 +1979,7 @@ static int strbuf_srange_leaf_d(Compiler *c, int v, int unheld) {
   if (v >= 0 && nt_kind(nt, v) == NK_CallNode && nt_ref(nt, v, "block") >= 0 &&
       nt_kind(nt, nt_ref(nt, v, "block")) == NK_BlockNode && strbuf_route_inline_call(c, v))
     return strbuf_cond_arm_any(c, nt_ref(nt, nt_ref(nt, v, "block"), "body"), leaf, 0);
-  /* (unheld: an endpoint the String plan shares is the handle its Range
-     keeps, which the handle route hands on) */
-  return strbuf_srange_tail(c, v) >= 0 && !(unheld && strbuf_value_held(c, v));
+  return strbuf_srange_tail(c, v) >= 0;
 }
 /* ...is value v a String Range's endpoint, or a conditional (`?:`, if,
    unless, case, `&&`, `||`, as the walk of the handle arms takes them) with
@@ -1990,14 +1988,6 @@ static int strbuf_srange_leaf_d(Compiler *c, int v, int unheld) {
    around the bytes of one the Range keeps none for. */
 int strbuf_srange_arm(Compiler *c, int v) {
   return v >= 0 && strbuf_cond_arm_any(c, v, strbuf_srange_leaf, 0);
-}
-/* ...and is `next v` one whose value v is such, with no handle the plan
-   shares for the endpoint? The handle face leaves it to the Range's own
-   test. */
-int strbuf_next_srange_value(Compiler *c, int v) {
-  int na = 0;
-  const int *av = nt_kind(c->nt, v) == NK_NextNode ? call_args(c->nt, v, &na) : NULL;
-  return na == 1 && av[0] >= 0 && strbuf_cond_arm_any(c, av[0], strbuf_srange_unheld_leaf, 0);
 }
 /* The tail of the literal block spliced here, past each tail that is
    itself a yield, or -1. */
@@ -2017,10 +2007,6 @@ static int strbuf_site_tail(Compiler *c) {
   }
   return -1;
 }
-static int strbuf_value_held(Compiler *c, int v) {
-  v = nt_paren_single(c->nt, v);
-  return v >= 0 && !share_value_fresh(c, v, 0);
-}
 /* Does a `next v` that leaves block body n (not a nested block's, loop's
    or method's) hand on a held String? */
 static int strbuf_next_held(Compiler *c, int n) {
@@ -2031,7 +2017,7 @@ static int strbuf_next_held(Compiler *c, int n) {
       k == NK_UntilNode || k == NK_ForNode) return 0;
   if (k == NK_NextNode) {
     int argc = 0; const int *argv = call_args(nt, n, &argc);
-    if (argc == 1 && strbuf_value_held(c, argv[0])) return 1;
+    if (argc == 1 && nt_paren_single(nt, argv[0]) >= 0) return 1;
   }
   for (int i = 0; i < nt_num_refs(nt, n); i++)
     if (strbuf_next_held(c, nt_ref_at(nt, n, i))) return 1;
@@ -2042,44 +2028,25 @@ static int strbuf_next_held(Compiler *c, int n) {
   return 0;
 }
 /* --share-strings: is a value of the literal block spliced here (its
-   tail, or a next's) a String a holder keeps and the rule shares, or a
-   value the handle face renders (strbuf_tail_plain: a new String, a
-   proc's answer, a `then`'s)? Then the yield's handle (strbuf_route_yield)
+   tail, or a next's) held: any value but a String literal or nil is, a
+   String Range's endpoint included, and the yield's handle (strbuf_route_yield)
    is what identity and a box see. The tail's facts are this site's; the
-   yield's own are the union of every site. */
-/* ...but not where the demand has no handle to hand on for a value of the
-   tail that is a read of a String the plan does not share, a call of the
-   program's own that answers one it keeps, or a String Range's endpoint no
-   handle is shared for: it would wrap a new handle around the bytes, another
-   object. A literal String or nil takes either, and beside one of those
-   alone the others keep the handle they were given. A `next` and a call of a
-   yielding method with a literal block answer what their value, or the
-   block's last statement, does. */
-enum { SLK_HELD, SLK_FRESH, SLK_UNHELD };
+   yield's own are the union of every site. A literal String or nil takes
+   either, and beside one of those alone the others keep the handle they were
+   given; a `next` and a call of a yielding method with a literal block
+   answer what their value, or the block's last statement, does. */
+enum { SLK_HELD, SLK_LITERAL };
 int strbuf_route_ivar_get(Compiler *c, int v);
-/* a call of a method of the program's own that answers a variable it keeps
-   (`def s = @s`) */
-static int strbuf_user_getter_call(Compiler *c, int v) {
-  if (nt_kind(c->nt, v) != NK_CallNode || nt_ref(c->nt, v, "block") >= 0 || cplan_user(c, v).dispatch != CP_DIRECT ||
-      cplan_user(c, v).mi < 0)
-    return 0;
-  int mi = cplan_user(c, v).mi, body = c->scopes[mi].body;
-  int last = scope_body_last(c, mi);
-  if (last < 0) last = body;   /* (an endless def's body is its expression) */
-  NodeKind lk = last >= 0 ? nt_kind(c->nt, nt_paren_single(c->nt, last)) : NK_NONE;
-  return lk == NK_InstanceVariableReadNode || repr_static_read_kind(lk);
-}
 static int strbuf_leaf_is(Compiler *c, int v, int want);
 static int strbuf_leaf_held(Compiler *c, int v) { return strbuf_leaf_is(c, v, SLK_HELD); }
-static int strbuf_leaf_fresh(Compiler *c, int v) { return strbuf_leaf_is(c, v, SLK_FRESH); }
-static int strbuf_leaf_unheld(Compiler *c, int v) { return strbuf_leaf_is(c, v, SLK_UNHELD); }
+static int strbuf_leaf_literal(Compiler *c, int v) { return strbuf_leaf_is(c, v, SLK_LITERAL); }
 static int strbuf_leaf_is(Compiler *c, int v, int want) {
   const NodeTable *nt = c->nt;
-  int (*walk)(Compiler *, int) = want == SLK_HELD ? strbuf_leaf_held : want == SLK_FRESH ? strbuf_leaf_fresh : strbuf_leaf_unheld;
+  int (*walk)(Compiler *, int) = want == SLK_HELD ? strbuf_leaf_held : strbuf_leaf_literal;
   v = nt_paren_single(nt, v);
   if (v < 0) return 0;
   NodeKind k = nt_kind(nt, v);
-  if (k == NK_NilNode) return want == SLK_FRESH;
+  if (k == NK_NilNode) return want == SLK_LITERAL;
   if (k == NK_NextNode) {
     int na = 0; const int *av = call_args(nt, v, &na);
     return na != 1 ? want == SLK_HELD : strbuf_cond_arm_any(c, av[0], walk, 0);
@@ -2087,24 +2054,20 @@ static int strbuf_leaf_is(Compiler *c, int v, int want) {
   int blk = k == NK_CallNode ? nt_ref(nt, v, "block") : -1;
   if (blk >= 0 && nt_kind(nt, blk) == NK_BlockNode && strbuf_route_inline_call(c, v))
     return strbuf_cond_arm_any(c, nt_ref(nt, blk, "body"), walk, 0);
-  int kind = SLK_HELD;
-  if (strbuf_srange_tail(c, v) >= 0)
-    kind = strbuf_value_held(c, v) ? SLK_HELD : SLK_UNHELD;
-  else if (k == NK_StringNode || k == NK_InterpolatedStringNode)
-    kind = SLK_FRESH;
-  else if (strbuf_route_reader(c, v) || strbuf_route_ivar_get(c, v) || strbuf_user_getter_call(c, v))
-    kind = strbuf_value_held(c, v) || strbuf_slot_has(c, v) || repr_call_returns_handle(c, v) ? SLK_HELD : SLK_UNHELD;
-  /* Variable and constant reads use the default held result. */
+  /* a String literal, and nil above, take either; every other value is held
+     (a String Range's endpoint too, a literal one included) */
+  int kind = strbuf_srange_tail(c, v) < 0 && (k == NK_StringNode || k == NK_InterpolatedStringNode)
+             ? SLK_LITERAL : SLK_HELD;
   return kind == want;
 }
 /* ...is the value v of a block's tail one the demand has a handle for? */
 int strbuf_value_handleish(Compiler *c, int v) {
-  return strbuf_cond_arm_any(c, v, strbuf_leaf_held, 1) ||
-         (strbuf_cond_arm_any(c, v, strbuf_leaf_fresh, 0) && !strbuf_cond_arm_any(c, v, strbuf_leaf_unheld, 1));
+  return strbuf_cond_arm_any(c, v, strbuf_leaf_held, 1) || strbuf_cond_arm_any(c, v, strbuf_leaf_literal, 0);
 }
 int strbuf_yield_tail_held(Compiler *c) {
-  int tail = strbuf_site_tail(c);
-  if (tail >= 0 && (strbuf_value_held(c, tail) || (strbuf_tail_plain(c, tail) && strbuf_value_handleish(c, tail)))) return 1;
+  /* (a block's tail is held whatever it is: no value is proved a new String
+     no name holds, and the handle face adopts a just-made one) */
+  if (strbuf_site_tail(c) >= 0) return 1;
   /* or a `next v` of the block spliced here hands one on */
   return g_block_id >= 0 && strbuf_next_held(c, nt_ref(c->nt, g_block_id, "body"));
 }
@@ -2168,8 +2131,8 @@ int strbuf_narrowed_box_conversion(Compiler *c, int v) {
 }
 /* Does tail t of spliced method mi hand its call's result slot what it
    holds: what the block answers, a variable's String, or under a
-   conditional each arm's (a missing arm's nil, a new String the slot
-   takes as a new handle)? */
+   conditional each arm's (a missing arm's nil, a String the slot takes
+   as its handle)? */
 static int strbuf_inline_tail_ok(Compiler *c, int mi, int t, int depth) {
   const NodeTable *nt = c->nt;
   t = nt_paren_single(nt, t);
@@ -2181,12 +2144,15 @@ static int strbuf_inline_tail_ok(Compiler *c, int mi, int t, int depth) {
   /* The selected call already returns its handle. */
   if (k == NK_CallNode && repr_call_returns_handle(c, t)) return 1;
   if (depth == 0) return 0;
-  if (k == NK_NilNode || share_value_fresh(c, t, 0)) return 1;
+  /* (a String tail, whatever made it: the slot adopts its handle as
+     SP_STR_HDL does, a just-made String's, a view's owner and a literal's
+     static object) */
+  if (k == NK_NilNode || repr_of(c, t).ty == TY_STRING || repr_of(c, t).ty == TY_STRBUF) return 1;
   /* (a frozen literal is its own handle; a String's conversion answers
      the String, whose handle the slot takes as emit_strbuf_value takes the
      route's: `v.is_a?(String) ? v.to_s : ""`, over a String v or a boxed
      local the guard narrows, whose box the slot lifts) */
-  if (share_frozen_literal(c, t)) return 1;
+  if (repr_frozen_literal(c, t)) return 1;
   if (strbuf_narrowed_box_conversion(c, t) >= 0) return 1;
   int x = repr_string_conversion_operand(c, t);
   return x >= 0 && repr_of(c, x).kind != RK_BOXED && comp_ntype(c, x) != TY_POLY && !strbuf_boxed_local(c, x) &&
@@ -2369,7 +2335,7 @@ int strbuf_route_srange_kept(Compiler *c, int v) {
   v = nt_paren_single(nt, v);
   if (v < 0 || nt_ref(nt, v, "arguments") >= 0 || nt_ref(nt, v, "block") >= 0) return 0;
   const BuiltinOp *row = cplan_builtin_handle_row(c, v);
-  return row && row->recv == TY_STR_RANGE && !share_builtin_overridden(c, "Range", row->name);
+  return row && row->recv == TY_STR_RANGE && !cplan_builtin_overridden(c, "Range", row->name);
 }
 
 /* The endpoint returned by the sequence's final expression. */
@@ -2601,7 +2567,7 @@ int strbuf_route_clamp(Compiler *c, int v, int *ops) {
   v = nt_paren_single(c->nt, v);
   if (v < 0 || nt_kind(nt, v) != NK_CallNode ||
       bop_share_named(TY_STRING, nt_str(nt, v, "name")) != BSH_CLAMP) return 0;
-  if (!c->share) return 0;
+  if (!c->share_applied) return 0;
   ops[0] = nt_ref(nt, v, "receiver");
   if (ops[0] < 0 || comp_recv_type(c, ops[0]) != TY_STRING ||
       cplan_user(c, v).dispatch != CP_NONE) return 0;
@@ -3425,7 +3391,7 @@ static int strbuf_handle_arm(const VpLeaf *lf, void *ud) {
        String where the Range keeps none */
     case NK_NextNode: {
       int na = 0; const int *av = call_args(nt, v, &na);
-      return na == 1 && next_is_block_value(c, v) && !strbuf_next_srange_value(c, v) &&
+      return na == 1 && next_is_block_value(c, v) &&
              strbuf_handle_walk(c, av[0], 1);
     }
     /* `+g` is g itself unless g is frozen (sp_String_uplus) */
@@ -12211,7 +12177,7 @@ static int hc_block_loop(Compiler *c, int id) {
     int a = nt_ref(nt, id, "arguments"), an = 0;
     const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
     return an <= 1 && (an < 1 || comp_ntype(c, av[0]) == TY_INT) &&
-           !an_range_step_rat(c, id, 0) && !share_builtin_overridden(c, "Range", "step");
+           !an_range_step_rat(c, id, 0) && !cplan_builtin_overridden(c, "Range", "step");
   }
   return rt == TY_RANGE && sp_streq(nm, "each");
 }
@@ -25114,73 +25080,114 @@ static int strbuf_recv_hold(Compiler *c, int recv, const char *name, int argc, c
   return 1;
 }
 
-/* emit_array_mutate_stmt_body's String appends (<< and concat) and its bang
-   methods, with and without arguments (answers 1 emitted, 0 declined, -1 to
-   go on) */
-static int str_append_arg_staged_own(Compiler *c, int argc, int arg) {
-  return argc > 1 && !share_value_fresh(c, arg, 0);
+/* Is argument v of a multi-argument concat, already run by an ordering, a
+   handle that ordering rooted (a temp of its own, which SP_STR_HDL returns
+   as it is)? An ordered temp of bytes is not: its handle is made at the
+   staging. */
+static int concat_arg_ordered_handle(Compiler *c, int v) {
+  return ran_first_handle(v) >= 0 || ran_first_handle(nt_paren_single(c->nt, v)) >= 0;
+}
+/* Is argument v of a multi-argument concat already a handle: the read of a
+   String slot, or a value the handle face answers? Staged as that handle,
+   not as its bytes. */
+static int concat_arg_is_handle(Compiler *c, int v) {
+  Repr r = repr_of(c, v);
+  return r.as_ty == TY_STRBUF || r.handle || r.read_raw || strbuf_slot_has(c, v);
+}
+/* Can staging argument v of a multi-argument concat allocate: its evaluation
+   (subtree_may_allocate, unless an ordering ran it already), or its handle?
+   SP_STR_HDL returns the handle a String's own view or a just-made String
+   already has, and makes a new one for any other bytes, so an operand staged
+   from bytes allocates, unless it is a frozen literal standing alone (a
+   static object) or the read of a String slot or an ordered handle (its
+   handle is the owner). A handle held across such an argument is rooted. */
+static int concat_arg_stage_allocates(Compiler *c, int v) {
+  if (repr_frozen_literal_alone(c, v) || concat_arg_ordered_handle(c, v)) return 0;
+  if (!arg_ran_first(v, 0) && subtree_may_allocate(c, v)) return 1;
+  return !concat_arg_is_handle(c, v);
 }
 /* concat(a, b, ...) onto the handle `sref`: every argument taken before
-   anything is appended, as CRuby does (one of several is staged as a copy,
-   str_append_arg_staged_own, so `s.concat(s, s)` appends the String as it
-   was), then the frozen check, then the appends in order */
+   anything is appended, as CRuby does. One argument goes through the bytes
+   face, as `<<` does. Several are staged as their handles (SP_STR_HDL adopts
+   a just-made String and returns a view's owner), and sp_String_concat_multi
+   reads them at the append, after every argument ran: `s.concat(s, s)`
+   appends the String as it was (the receiver's bytes are kept aside once,
+   only when it is among the arguments), and an argument that a later
+   argument's evaluation changes is read as it is then. No argument is
+   copied here. */
 void emit_str_concat_handle(Compiler *c, const char *sref, int argc, const int *argv, Buf *b, int indent) {
-  /* the last argument whose staging can allocate: its own evaluation, a
-     conversion's answer, or the copy it is staged as */
-  int last_alloc = -1;
-  for (int a = argc - 1; a >= 0; a--) {
-    Repr r = repr_of(c, argv[a]);
-    if (r.as_ty != TY_STRING || str_append_arg_staged_own(c, argc, argv[a]) ||
-        (!arg_ran_first(argv[a], 0) && operand_may_allocate(c, argv[a]))) {
-      last_alloc = a;
-      break;
-    }
-  }
   int base = g_tmp + 1; g_tmp += argc;
   emit_indent(b, indent);
   buf_puts(b, "{");
   Buf rt; memset(&rt, 0, sizeof rt);
   buf_printf(&rt, "sp_String_cstr(%s)", sref);
-  /* Every argument runs before the frozen check, as in CRuby. A boxed
-     argument may be this very String, whose sp_poly_to_s is the live buffer
-     the first append grows: it is staged as a copy. */
-  int held0 = g_one_held;
-  /* (one representation: each of several is kept as the copy it is staged
-     as, and no call holds what it is computed from: those operands are read
-     where they run, as a statement's are. Read as copies under g_one_held,
-     the two of `a + b` were made one after the other, the first with no
-     root while the second was made) */
-  if (argc > 1) g_one_held = 0;
-  for (int a = 0; a < argc; a++) {
-    int boxed = repr_of(c, argv[a]).kind == RK_BOXED;
-    int own = str_append_arg_staged_own(c, argc, argv[a]);
-    buf_printf(b, " const char *_t%d = %s", base + a, boxed ? "sp_str_concat(" : "");
-    if (own) emit_str_append_arg_own(c, argv[a], rt.p, b);
-    else emit_str_append_arg(c, argv[a], rt.p, b);
+  if (argc == 1) {
+    /* Every argument runs before the frozen check, as in CRuby. A boxed
+       argument may be this very String, whose sp_poly_to_s is the live buffer
+       the append grows: it is staged as a copy. */
+    int boxed = repr_of(c, argv[0]).kind == RK_BOXED;
+    buf_printf(b, " const char *_t%d = %s", base, boxed ? "sp_str_concat(" : "");
+    emit_str_append_arg(c, argv[0], rt.p, b);
     buf_printf(b, "%s;", boxed ? ", \"\")" : "");
+    free(rt.p);
+    buf_printf(b, " if (sp_String_is_immutable(%s)) sp_raise_frozen_str((%s)->data);\n", sref, sref);
+    emit_indent(b, indent + 1);
+    buf_printf(b, "sp_String_append_bin(%s, _t%d);\n", sref, base);
+    emit_indent(b, indent); buf_puts(b, "}\n");
+    return;
+  }
+  /* the last argument whose staging can allocate */
+  int last_alloc = -1;
+  for (int a = argc - 1; a >= 0 && last_alloc < 0; a--)
+    if (concat_arg_stage_allocates(c, argv[a])) last_alloc = a;
+  /* (one representation: no call holds what it is computed from: the
+     operands are read where they run, as a statement's are) */
+  int held0 = g_one_held;
+  g_one_held = 0;
+  for (int a = 0; a < argc; a++) {
+    /* a String operand is read as its handle; an Integer (a codepoint), a
+       boxed value and any other conversion are bytes, whose handle is made
+       here */
+    Repr ar = repr_of(c, argv[a]);
+    if ((ar.ty == TY_STRING || ar.ty == TY_STRBUF) && ar.kind != RK_BOXED && concat_arg_is_handle(c, argv[a])) {
+      /* (the statements a handle read puts ahead of itself, a sequence's
+         `(x << "z"; v)`, run here, after the arguments before it, not ahead
+         of the whole concat) */
+      Buf op, hb;
+      memset(&op, 0, sizeof op);
+      memset(&hb, 0, sizeof hb);
+      Buf *sv_pre = g_pre;
+      g_pre = &op;
+      emit_strbuf_handle_of(c, argv[a], &hb);
+      g_pre = sv_pre;
+      if (op.p) buf_puts(b, op.p);
+      buf_printf(b, " sp_String *_t%d = %s;", base + a, hb.p ? hb.p : "NULL");
+      free(op.p); free(hb.p);
+    }
+    else {
+      buf_printf(b, " sp_String *_t%d = SP_STR_HDL(", base + a);
+      emit_str_append_arg(c, argv[a], rt.p, b);
+      buf_puts(b, ");");
+    }
     int v = argv[a];
     while (v >= 0 && nt_kind(c->nt, v) == NK_ParenthesesNode) {
       int body = nt_ref(c->nt, v, "body"), n = 0;
       const int *seq = body >= 0 ? nt_arr(c->nt, body, "body", &n) : NULL;
       v = n > 0 ? seq[n - 1] : -1;
     }
-    int literal = v >= 0 && nt_kind(c->nt, v) == NK_StringNode && !operand_may_allocate(c, v);
-    /* (an ordered temp read as it is: one staged as a copy is the copy,
-       which the temp's root does not reach) */
-    int held = !own && repr_of(c, argv[a]).as_ty == TY_STRING && arg_ran_first(argv[a], 0);
-    /* Fresh snapshots span later sp_strbuf_read/sp_str_concat copies
-       or argument allocations such as sp_str_repeat. append_bin cannot
-       collect; an ordered String temp or immortal literal needs no root. */
-    if (a < last_alloc && (boxed || (!literal && !held)))
-      buf_printf(b, " SP_GC_ROOT_STR(_t%d);", base + a);
+    int literal = (v >= 0 && nt_kind(c->nt, v) == NK_StringNode && !operand_may_allocate(c, v)) ||
+                  repr_frozen_literal_alone(c, argv[a]);
+    /* A handle taken before a later argument that can allocate is rooted
+       across it, unless it is a static literal's or an ordered handle the
+       ordering rooted; the appends themselves cannot collect. */
+    if (a < last_alloc && !literal && !concat_arg_ordered_handle(c, argv[a]))
+      buf_printf(b, " SP_GC_ROOT(_t%d);", base + a);
   }
   g_one_held = held0;
   free(rt.p);
-  buf_printf(b, " if (sp_String_is_immutable(%s)) sp_raise_frozen_str((%s)->data);\n", sref, sref);
-  for (int a = 0; a < argc; a++) {
-    emit_indent(b, indent + 1);
-    buf_printf(b, "sp_String_append_bin(%s, _t%d);\n", sref, base + a);
-  }
+  buf_printf(b, " sp_String *const _a%d[] = {", base);
+  for (int a = 0; a < argc; a++) buf_printf(b, "%s_t%d", a ? ", " : "", base + a);
+  buf_printf(b, "}; sp_String_concat_multi(%s, %d, _a%d);\n", sref, argc, base);
   emit_indent(b, indent); buf_puts(b, "}\n");
 }
 
@@ -27036,9 +27043,6 @@ int strbuf_poly_user_boxes(Compiler *c, int v) {
     if (!held) continue;
     int ami = p.arm[i].mi;
     if (p.arm[i].kind != PA_USER || ami < 0) return 0;
-    /* (an arm that answers no String, nil or an Integer say, has none for
-       another name to see, and boxes as the value it is) */
-    if (share_scope_answers_no_string(c, ami)) continue;
     if (repr_method_ret_storage(&c->scopes[ami]) != TY_STRBUF) return 0;
     string_arm = 1;
   }
@@ -27076,7 +27080,7 @@ int strbuf_poly_user_base(Compiler *c, int v) {
     const char *nm = nt_kind(nt, v) == NK_CallNode ? nt_str(nt, v, "name") : NULL;
     int r = nm ? nt_ref(nt, v, "receiver") : -1;
     if (r < 0 || !is_receiver_conversion(nm) || call_plain_argc(c, v) != 0 || nt_ref(nt, v, "block") >= 0 ||
-        comp_ntype(c, r) != TY_STRING || share_builtin_overridden(c, "String", nm))
+        comp_ntype(c, r) != TY_STRING || cplan_builtin_overridden(c, "String", nm))
       return -1;
     v = nt_paren_single(c->nt, r);
   }

@@ -2002,7 +2002,7 @@ int text_diverges(const char *txt) {
          strncmp(p, "sp_abort_raise(", 15) == 0 || strncmp(p, "sp_exit_raise(", 14) == 0;
 }
 
-static void emit_str_expr_ex(Compiler *c, int node, int strict, int own, Buf *b) {
+static void emit_str_expr_ex(Compiler *c, int node, int strict, Buf *b) {
   /* --share-strings: a value marked to be stored as the handle (strbuf_box:
      a literal or a constant a shared container keeps) is read here as its
      String, with the mark lifted, as emit_boxed_strbuf reads it: this slot
@@ -2010,7 +2010,7 @@ static void emit_str_expr_ex(Compiler *c, int node, int strict, int own, Buf *b)
      conversion keeps in a const char * slot */
   if (node >= 0 && comp_strbuf_box_stored(c, node) && store_value_kind(c, node) == TY_STRBUF) {
     int sv = view_push_repr(c, node, VR_STRBUF_BOX, 0);
-    emit_str_expr_ex(c, node, strict, own, b);
+    emit_str_expr_ex(c, node, strict, b);
     view_pop(c, sv);
     return;
   }
@@ -2028,7 +2028,7 @@ static void emit_str_expr_ex(Compiler *c, int node, int strict, int own, Buf *b)
   }
   if (emit_nilbool_conv_raise_w(c, node, TY_STRING, !strict, 0, b)) return;
   if (!arg_ran_first(node, 0) && repr_native_call_handle(c, node)) {
-    buf_puts(b, own || (g_one_held && !node_is_block_stmt(c, node)) ? "SP_STR_BC(" : "SP_STR_B(");
+    buf_puts(b, (g_one_held && !node_is_block_stmt(c, node)) ? "SP_STR_BC(" : "SP_STR_B(");
     emit_native_string_handle(c, node, b);
     buf_puts(b, ")");
     return;
@@ -2057,7 +2057,7 @@ static void emit_str_expr_ex(Compiler *c, int node, int strict, int own, Buf *b)
     /* one representation: the operand may be the handle (an element read,
        a slot) where this wants bytes; SP_STR_B resolves the face on the
        expression's C type (spinel_rt.h) */
-    buf_puts(b, own || (g_one_held && !node_is_block_stmt(c, node)) ? "SP_STR_BC(" : "SP_STR_B(");
+    buf_puts(b, (g_one_held && !node_is_block_stmt(c, node)) ? "SP_STR_BC(" : "SP_STR_B(");
     emit_coerce_text(c, node, store_value_kind(c, node), TY_STRING, CO_HOLD, txt, "a String operand", b);
     buf_puts(b, ")");
   }
@@ -2066,18 +2066,8 @@ static void emit_str_expr_ex(Compiler *c, int node, int strict, int own, Buf *b)
 
 void emit_str_expr(Compiler *c, int node, Buf *b) {
   if (b == g_pre) { emit_into_pre_line(c, emit_str_expr, node); return; }
-  emit_str_expr_ex(c, node, 1, 0, b);
+  emit_str_expr_ex(c, node, 1, b);
 }
-/* A String operand its consumer keeps while the String can still change
-   under it: an argument of a concat of several, taken before any is
-   appended, may be the receiver the first append grows. Its read face is a
-   copy (SP_STR_BC), as an operand's held across a block is (g_one_held);
-   only its own, not that of the operands it is computed from. */
-void emit_str_expr_own(Compiler *c, int node, Buf *b) {
-  if (b == g_pre) { emit_into_pre_line(c, emit_str_expr_own, node); return; }
-  emit_str_expr_ex(c, node, 1, 1, b);
-}
-
 /* A node entering a PATH slot: File, Dir and IO's path arguments. CRuby's
    rb_get_path asks the object for #to_path before #to_str, which is how a
    Pathname, or any user class that names a file, is accepted wherever a
@@ -2267,7 +2257,7 @@ void emit_to_s_expr(Compiler *c, int node, Buf *b) {
 
 /* The slot accepts nil in CRuby: keep the historical looseness. */
 void emit_str_expr_nilable(Compiler *c, int node, Buf *b) {
-  emit_str_expr_ex(c, node, 0, 0, b);
+  emit_str_expr_ex(c, node, 0, b);
 }
 
 /* A line reader's separator: nil (NULL) reads to the end and "" is paragraph
@@ -24108,7 +24098,7 @@ static void emit_sym_class_name_rt(Compiler *c, Buf *b) {
    inspect is taken (cls_user_display_mi): any other prints as before. */
 int array_user_inspect_mi(Compiler *c) {
   int ac = comp_core_class(c, CORE_ARRAY);
-  if (ac < 0 || !share_builtin_overridden(c, "Array", "inspect")) return -1;
+  if (ac < 0 || !cplan_builtin_overridden(c, "Array", "inspect")) return -1;
   /* (the one hook every `inspect` of an Array shares, registered once for the program: no call's question) */
   mtab_enter(c);
   int mi = call_target(c, -1, ac, "inspect", CT_METHODS | CT_SHARED, NULL);

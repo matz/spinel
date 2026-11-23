@@ -321,7 +321,6 @@ int strbuf_arg_carries(Compiler *c, int v);
 int logic_value_handle(Compiler *c, int v);
 int strbuf_arg_bang(Compiler *c, int v);
 int strbuf_arg_bang_value(Compiler *c, int v);
-int strbuf_next_srange_value(Compiler *c, int v);
 int strbuf_srange_arm(Compiler *c, int v);
 int strbuf_value_handleish(Compiler *c, int v);
 int strbuf_yield_proc_box(Compiler *c, int v);
@@ -1510,9 +1509,6 @@ int emit_unknown_kwarg_raise(Compiler *c, Scope *m, const int *argv, int argc);
 void emit_str_append_arg(Compiler *c, int arg, const char *rtext, Buf *b);
 /* The bytes are consumed by this append before another operand runs. */
 void emit_str_append_arg_immediate(Compiler *c, int arg, const char *rtext, Buf *b);
-/* ...for a consumer that takes every argument before it appends any: a
-   String argument is read as a copy (emit_str_expr_own). */
-void emit_str_append_arg_own(Compiler *c, int arg, const char *rtext, Buf *b);
 void emit_str_force_encoding(Compiler *c, const char *name, const char *r, const int *argv, int argc, Buf *b);
 int rest_shortfall_required(Compiler *c, Scope *m);
 /* Emit a hash key, unboxing a poly value to the typed-hash's key type. */
@@ -3267,7 +3263,6 @@ void emit_int_expr(Compiler *c, int node, Buf *b);
    an `x + c` whose check waited (codegen.c) */
 void emit_int_index_late(Compiler *c, int node, int tk, char *redo, size_t n, Buf *b);
 void emit_str_expr(Compiler *c, int node, Buf *b);
-void emit_str_expr_own(Compiler *c, int node, Buf *b);
 void emit_path_expr(Compiler *c, int node, Buf *b);
 void emit_to_s_expr(Compiler *c, int node, Buf *b);
 /* Converted String operands held across the call they enter (codegen.c).

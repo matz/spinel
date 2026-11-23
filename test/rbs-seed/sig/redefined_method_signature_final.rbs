@@ -1,0 +1,3 @@
+class VersionedBase
+  def self.all: () -> VersionedRel
+end

@@ -36524,6 +36524,14 @@ static void seed_ret_branch_sites(const NodeTable *nt, int v, int *sites, unsign
 }
 static int seed_ret_family(Compiler *c, TyKind t);
 static int seed_ret_kind(TyKind t);
+static int seed_contradicts(Compiler *c, TyKind slot, TyKind val, int ret);
+/* See analyze_internal.h. */
+int replaced_ret_seed_gives_way(Compiler *c, Scope *s, TyKind r) {
+  if (!s->ret_rbs_seeded || !s->replaced || !seed_contradicts(c, s->ret, r, 1)) return 0;
+  s->ret_rbs_seeded = 0;
+  s->ret_rbs_nilable = 0;
+  return 1;
+}
 static int seed_contradicts(Compiler *c, TyKind slot, TyKind val, int ret) {
   int fs = ret ? seed_ret_family(c, slot) : seed_repr_family(c, slot);
   int fv = ret ? seed_ret_family(c, val)  : seed_repr_family(c, val);

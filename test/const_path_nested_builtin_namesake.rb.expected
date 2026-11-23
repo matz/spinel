@@ -1,0 +1,10 @@
+App::IO::WaitReadable
+"App::IO::WaitReadable"
+false
+App::Process::Status
+[App::IO::WaitReadable, App::Process::Status, IO::WaitReadable, App::Errno::ENOENT]
+IO::WaitReadable
+App::Errno::ENOENT
+Errno::ENOENT
+A::B::IO::WaitWritable
+A::B::IO::WaitWritable

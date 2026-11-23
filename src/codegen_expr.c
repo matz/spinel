@@ -3569,6 +3569,20 @@ int emit_builtin_scoped_const(Compiler *c, int par_id, const char *par_nm, const
   return 0;
 }
 
+/* Returns 1 when par resolves to a program class whose Ruby name differs
+   from pn, such as App::IO, and path id resolves to the class whose Ruby
+   name is the parent's Ruby name followed by ::nm, such as
+   App::IO::WaitReadable. */
+static int const_path_program_member(Compiler *c, int id, int par, const char *pn, const char *nm) {
+  int pk = const_node_class_index(c, par);
+  const char *prn = pk >= 0 ? class_ruby_name(c, pk) : NULL;
+  if (!prn || sp_streq(prn, pn)) return 0;
+  int k = const_node_class_index(c, id);
+  const char *rn = k >= 0 ? class_ruby_name(c, k) : NULL;
+  char want[256];
+  return rn && snprintf(want, sizeof want, "%s::%s", prn, nm) < (int)sizeof want && sp_streq(rn, want);
+}
+
 /* A constant read: ConstantReadNode and ConstantPathNode (A::B) (emit_expr_node's arms, in their order).
    `checks` holds the parents' presence checks of a path: the raise of an
    undefined path takes them and empties the buffer, any other form leaves
@@ -3715,13 +3729,16 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
       char qbuf[160];
       snprintf(qbuf, sizeof qbuf, "%s::%s", par_nmc, nm);
       int qid = builtin_class_id(qbuf);
-      if (qid != 0) {
+      /* App::IO::WaitReadable and App::Errno::ENOENT resolve to the program's
+         class (const_path_program_member) */
+      int prog = (qid != 0 || is_builtin_exception_name(qbuf)) && const_path_program_member(c, id, par_idc, par_nmc, nm);
+      if (qid != 0 && !prog) {
         emit_builtin_class_value(c, qbuf, b);
         return 1;
       }
       /* the Errno:: family (and its id-less siblings) is a name-backed
          Class value; raised exceptions carry this same qualified name */
-      if (is_builtin_exception_name(qbuf)) {
+      if (is_builtin_exception_name(qbuf) && !prog) {
         emit_builtin_class_value(c, qbuf, b);
         return 1;
       }

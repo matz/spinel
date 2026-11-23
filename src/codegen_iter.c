@@ -2921,9 +2921,13 @@ void emit_block_invoke(Compiler *c, int site, Buf *b, int indent, int as_expr,
       g_ie_next_ty = (nx_bt == TY_INT || nx_bt == TY_FLOAT || nx_bt == TY_STRBUF ||
                       ty_is_array(nx_bt) || ty_is_hash(nx_bt)) ? nx_bt : TY_UNKNOWN;
       g_ie_next_oint = ywo && oint_kind(nx_bt);
+      /* the carrier holds the value while an `ensure` the block leaves
+         through runs, before the yield's caller takes it: rooted then
+         (emit_bv_root), whatever it holds */
       if (g_ie_res_poly) {
         buf_printf(b, "sp_RbVal _t%d = sp_box_nil(); ", nx_tmp);
         if (string_result) buf_printf(b, "SP_GC_ROOT_RBVAL(_t%d); ", nx_tmp);
+        else if (emit_bv_root(c, bbody, TY_POLY, nx_tmp, b)) buf_puts(b, " ");
       }
       else if (g_ie_next_oint) buf_printf(b, "%s _t%d = %s; ", oint_ctype(nx_bt), nx_tmp, oint_nil(nx_bt));
       else if (nx_bt == TY_INT || nx_bt == TY_BOOL || nx_bt == TY_SYMBOL)
@@ -2933,6 +2937,7 @@ void emit_block_invoke(Compiler *c, int site, Buf *b, int indent, int as_expr,
         if (ty_is_array(nx_bt) || ty_is_hash(nx_bt)) {
           emit_gc_root_tmp(c, nx_bt, nx_tmp, b); buf_puts(b, " ");
         }
+        else if (emit_bv_root(c, bbody, nx_bt, nx_tmp, b)) buf_puts(b, " ");
       }
       /* a Float, a Range, a Rational ...: the carrier is the value's own C
          type, not the sp_int it was declared as (a Float next truncated, a
@@ -2942,6 +2947,7 @@ void emit_block_invoke(Compiler *c, int site, Buf *b, int indent, int as_expr,
                 nx_bt == TY_RATIONAL || nx_bt == TY_COMPLEX || nx_bt == TY_TIME)) {
         emit_ctype(c, nx_bt, b);
         buf_printf(b, " _t%d = %s; ", nx_tmp, res_zero(c, nx_bt, 0));
+        if (emit_bv_root(c, bbody, nx_bt, nx_tmp, b)) buf_puts(b, " ");   /* a String Range's ends */
       }
       else {
         /* type-opaque tail (e.g. the body IS the `next`): ride a plain

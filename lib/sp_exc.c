@@ -1236,11 +1236,44 @@ sp_RbVal sp_exc_parse_column_acc(sp_Exception *e) {SP_GC_ROOT(e);
   sp_exc_acc_gate(e, SP_BCLS_JSON_PARSERERROR, "JSON::ParserError", "column");
   return e->has_key ? e->result : sp_box_nil();
 }
+/* Find `n` among `keys` (one every `stride` pointers) through an
+   open-addressed table of `mask + 1` slots, each 0 or a key's index plus one,
+   filled from sp_exc_name_hash. -1 when it is not there. The generated
+   sp_user_exc_parent asks it with slots the compiler filled. */
+int sp_exc_name_slot(const char *n, const char *const *keys, int stride,
+                     const unsigned short *slots, unsigned mask) {
+  for (unsigned h = sp_exc_name_hash(n) & mask; slots[h]; h = (h + 1) & mask)
+    if (!strcmp(n, keys[(slots[h] - 1) * stride])) return slots[h] - 1;
+  return -1;
+}
+/* SP_EXC_HIER by name: the walks of rescue and is_a? ask it at every level
+   of a chain, so a scan of the whole table each time was most of their cost. */
+#define SP_EXC_HIER_SLOTS 128   /* a power of two, over twice the rows */
+_Static_assert(SP_EXC_HIER_SLOTS >= 2 * (int)(sizeof SP_EXC_HIER / sizeof SP_EXC_HIER[0]), "raise SP_EXC_HIER_SLOTS");
+static unsigned short sp_exc_hier_slot[SP_EXC_HIER_SLOTS];
+static int sp_exc_hier_slot_state;   /* 0 not built, 1 a thread is building it, 2 built */
+static void sp_exc_hier_slot_build(void) {
+  int none = 0;
+  if (!SP_ATOMIC_CAS(&sp_exc_hier_slot_state, &none, 1, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+    while (SP_ATOMIC_LOAD(&sp_exc_hier_slot_state, __ATOMIC_ACQUIRE) != 2) {}
+    return;
+  }
+  for (int i = 0; SP_EXC_HIER[i][0]; i++) {
+    /* the first row of a name wins, as the scan this replaced did */
+    if (sp_exc_name_slot(SP_EXC_HIER[i][0], &SP_EXC_HIER[0][0], 2, sp_exc_hier_slot,
+                         SP_EXC_HIER_SLOTS - 1) >= 0) continue;
+    unsigned h = sp_exc_name_hash(SP_EXC_HIER[i][0]) & (SP_EXC_HIER_SLOTS - 1);
+    while (sp_exc_hier_slot[h]) h = (h + 1) & (SP_EXC_HIER_SLOTS - 1);
+    sp_exc_hier_slot[h] = (unsigned short)(i + 1);
+  }
+  SP_ATOMIC_STORE(&sp_exc_hier_slot_state, 2, __ATOMIC_RELEASE);
+}
 /* A builtin class's direct superclass by name (SP_EXC_HIER, above). */
 const char *sp_exc_parent_of_name(const char *cls) {
   if (!cls) return NULL;
-  for (int i = 0; SP_EXC_HIER[i][0]; i++)
-    if (!strcmp(cls, SP_EXC_HIER[i][0])) return SP_EXC_HIER[i][1];
+  if (SP_ATOMIC_LOAD(&sp_exc_hier_slot_state, __ATOMIC_ACQUIRE) != 2) sp_exc_hier_slot_build();
+  int i = sp_exc_name_slot(cls, &SP_EXC_HIER[0][0], 2, sp_exc_hier_slot, SP_EXC_HIER_SLOTS - 1);
+  if (i >= 0) return SP_EXC_HIER[i][1];
   /* Every Errno::* is a SystemCallError, as in CRuby. The names are open --
      sp_file_raise_errno picks one from errno at run time -- so this is a
      prefix rule rather than a table row, and `rescue SystemCallError` catches

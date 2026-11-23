@@ -26724,8 +26724,7 @@ char *incl_frame_add(char *fr, const char *locals) {
 
 /* The statements a hook statement becomes: a bare class_eval-family call
    with a block is its block's body; anything else is itself. *frame, when
-   asked for, gains the locals of each block unwrapped (sce_span), or
-   becomes NULL, not known, at a block that takes parameters. */
+   asked for, gains the locals of each block unwrapped (sce_span). */
 /* The statements of a block being unwrapped move out by one scope: a local
    of the scope around the block (the hook's own, `opts = ...` ahead of its
    `base.class_eval do`) was read from inside it one scope up (depth 1 at
@@ -26758,11 +26757,15 @@ void incl_emit_stmt(const NodeTable *nt, int s, int **out, int *no, int *cap, ch
   if (nt_kind(nt, s) == NK_CallNode && nt_ref(nt, s, "receiver") < 0) {
     const char *nm = nt_str(nt, s, "name");
     int blk = nt_ref(nt, s, "block");
+    /* (a block that takes parameters is not unwrapped: its statements
+       read them, and unwrapped they read nothing, `base.class_exec(7) {
+       |n| define_method(:seven) { n } }` answering nil. The statement
+       stays the call it is, on the includer for self, where the row for a
+       class_exec with arguments binds them: desugar_body_class_exec_args_at) */
     if (nm && blk >= 0 && nt_kind(nt, blk) == NK_BlockNode &&
-        is_eval_exec_family(nm)) {
+        is_eval_exec_family(nm) && nt_ref(nt, blk, "parameters") < 0) {
       const char *bl = nt_str(nt, blk, "locals");
-      if (frame && *frame && nt_ref(nt, blk, "parameters") >= 0) { free(*frame); *frame = NULL; }
-      else if (frame && *frame && bl && *bl) *frame = incl_frame_add(*frame, bl);
+      if (frame && *frame && bl && *bl) *frame = incl_frame_add(*frame, bl);
       int bb = nt_ref(nt, blk, "body");
       int bn = 0; const int *bs = bb >= 0 && nt_kind(nt, bb) == NK_StatementsNode ? nt_arr(nt, bb, "body", &bn) : NULL;
       for (int j = 0; j < bn; j++) incl_unwrap_depths((NodeTable *)nt, bs[j], 0);

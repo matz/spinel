@@ -897,7 +897,7 @@ int ct_in_walk_loop_block(const NodeTable *nt, const int *parent, int call);   /
 enum {
   LW_NIL_BLOCK_ARG, LW_CONST_SET_WRITE, LW_THREAD_START, LW_MARSHAL_RESTORE, LW_SOCKET_OPEN, LW_SYSTEM_OPTIONS, LW_IO_POPEN_BLOCK,
   LW_USER_BACKTICK, LW_LITERAL_UNDEF_METHOD, LW_EXPLICIT_INITIALIZE_CALLS, LW_NOARG_DISPLAY_WRAPPERS, LW_BIND_ATTR_HELPERS,
-  LW_PAREN_BLOCK_ARG, LW_PAREN_OPERANDS, LW_SEND_CLASS_MAKERS, LW_BODY_SEND_DECL, LW_SELF_SUPERCLASS, LW_STRUCT_SUBCLASS_NEW_WRITE,
+  LW_PAREN_BLOCK_ARG, LW_PAREN_OPERANDS, LW_SEND_CLASS_MAKERS, LW_BODY_SEND_DECL, LW_BODY_CLASS_EXEC_ARGS, LW_SELF_SUPERCLASS, LW_STRUCT_SUBCLASS_NEW_WRITE,
   LW_REFUSE_SUPERCLASS_EXPRS, LW_RESCUE_BLOCK_BODIES, LW_BIND_MEMBER_HELPERS,
   LW_MARK_SYM_PROC_BLOCKS, LW_BUILDER_BLOCK_PARAM, LW_BODY_LOCAL_SCOPES, LW_ERRNO_ALIASES, LW_PAREN_DEF_BODY, LW_MARK_MATCH_RANGES,
   LW_MARK_RANGE_LOCALS, LW_DUPLICATE_UNDERSCORE_PARAMS, LW_ENCODING_QUERIES, LW_ALIAS_METHOD_STRING_NAMES,
@@ -1023,6 +1023,7 @@ LowerGate desugar_itself_receiver_gate, desugar_builtin_kwsplat_gate;
 LowerFn desugar_itself_receiver_at, desugar_itself_receiver_left;
 LowerGate desugar_const_set_write_gate;
 LowerFn desugar_body_send_decl_at, desugar_body_send_decl_left;
+LowerFn desugar_body_class_exec_args_at, desugar_body_class_exec_args_left;
 LowerFn desugar_body_self_ivar_access_at, desugar_body_singleton_class_meta_at, desugar_body_inherited_alias_at, desugar_const_ivar_call_at;
 LowerFn desugar_const_set_write_at, desugar_const_set_write_left;
 LowerFn desugar_struct_subclass_new_write_at, desugar_struct_subclass_new_write_left;

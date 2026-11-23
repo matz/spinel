@@ -51271,6 +51271,111 @@ int desugar_body_send_decl_at(Compiler *c, LowerCtx *lc, int id) {
   nt_node_set_ref(nt, id, "receiver", -1);   /* (the body's own self: `private` and its kin take no receiver) */
   return 1;
 }
+/* `class_exec(7) { |n| define_method(:seven) { n } }` as a statement of a
+   class or module body, on self: the block runs once, there, with the
+   arguments for its parameters and the class for self, which is
+   `class_eval do n = 7; define_method(:seven) { n } end`. The block's
+   parameters become its first statements, each assigned its argument, and
+   the call the class_eval the passes below read. Left as it was, a block
+   holding only a define_method compiled with the parameter never bound:
+   the method answered nil. Taken where the block's parameters are plain
+   required ones, as many as the arguments, and the arguments are plain
+   values (no splat, keywords or block argument); anything else stays, and
+   is refused as before. `class_eval do |k| .. end` hands its block the
+   class the same way: `k = self` first. */
+/* An argument moves into the block: a local of the body it was written in
+   is one scope further out from there (depth 0 becomes 1; in a block of
+   its own inside the argument, level deep, depth above level gains one). */
+static void cea_into_block(NodeTable *nt, int node, int level) {
+  if (node < 0) return;
+  NodeKind k = nt_kind(nt, node);
+  if (k == NK_DefNode || class_def_opens_frame(nt, node) || k == NK_SingletonClassNode) return;
+  const char *ty = nt_type(nt, node);
+  if (ty && !strncmp(ty, "LocalVariable", 13)) {
+    long long d = nt_int(nt, node, "depth", -1);
+    if (d >= level) nt_node_set_int(nt, node, "depth", d + 1);
+  }
+  int inner = level + (k == NK_BlockNode || k == NK_LambdaNode);
+  int nr = nt_num_refs(nt, node);
+  for (int i = 0; i < nr; i++) cea_into_block(nt, nt_ref_at(nt, node, i), inner);
+  int na = nt_num_arrs(nt, node);
+  for (int i = 0; i < na; i++) {
+    int cnt = 0;
+    const int *ids = nt_arr_at(nt, node, i, &cnt);
+    for (int j = 0; j < cnt; j++) cea_into_block(nt, ids[j], inner);
+  }
+}
+int desugar_body_class_exec_args_left(Compiler *c, LowerCtx *lc, int id) {
+  const NodeTable *nt = c->nt;
+  if (nt_kind(nt, id) != NK_CallNode || nt_safe_nav(nt, id)) return 0;
+  const char *nm = nt_str(nt, id, "name");
+  /* (class_eval and module_eval with a block hand it the class: `class_eval do |k| .. end`) */
+  int ev = nm && (sp_streq(nm, "class_eval") || sp_streq(nm, "module_eval"));
+  if (!nm || !(ev || sp_streq(nm, "class_exec") || sp_streq(nm, "module_exec"))) return 0;
+  int owner = lc->owner;
+  NodeKind ok = owner >= 0 ? nt_kind(nt, owner) : NK_NilNode;
+  if ((ok != NK_ClassNode && ok != NK_ModuleNode) || class_def_body(nt, owner) != lc->body) return 0;
+  int rv = nt_ref(nt, id, "receiver"), blk = nt_ref(nt, id, "block");
+  if ((rv >= 0 && nt_kind(nt, rv) != NK_SelfNode) || blk < 0 || nt_kind(nt, blk) != NK_BlockNode) return 0;
+  int sa = nt_ref(nt, id, "arguments"), sac = 0;
+  const int *sav = sa >= 0 ? nt_arr(nt, sa, "arguments", &sac) : NULL;
+  if (ev ? sac != 0 : (sac < 1 || sac > 16)) return 0;
+  for (int k = 0; k < sac; k++) {
+    NodeKind ak = nt_kind(nt, sav[k]);
+    if (ak == NK_SplatNode || ak == NK_KeywordHashNode || ak == NK_BlockArgumentNode) return 0;
+  }
+  int bp = nt_ref(nt, blk, "parameters"), ps = bp >= 0 && nt_kind(nt, bp) == NK_BlockParametersNode ? nt_ref(nt, bp, "parameters") : -1;
+  if (ps < 0 || nt_kind(nt, ps) != NK_ParametersNode) return 0;
+  int rn = 0, on = 0, pn = 0, kn = 0, bln = 0;
+  const int *rq = nt_arr(nt, ps, "requireds", &rn);
+  nt_arr(nt, ps, "optionals", &on); nt_arr(nt, ps, "posts", &pn); nt_arr(nt, ps, "keywords", &kn);
+  nt_arr(nt, bp, "locals", &bln);
+  if (rn != (ev ? 1 : sac) || on || pn || kn || bln || nt_ref(nt, ps, "rest") >= 0 || nt_ref(nt, ps, "keyword_rest") >= 0 ||
+      nt_ref(nt, ps, "block") >= 0) return 0;
+  for (int k = 0; k < rn; k++) if (nt_kind(nt, rq[k]) != NK_RequiredParameterNode || !nt_str(nt, rq[k], "name")) return 0;
+  return 1;
+}
+int desugar_body_class_exec_args_at(Compiler *c, LowerCtx *lc, int id) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  if (!desugar_body_class_exec_args_left(c, lc, id)) return 0;
+  int blk = nt_ref(nt, id, "block"), bp = nt_ref(nt, blk, "parameters"), ps = nt_ref(nt, bp, "parameters");
+  int sac = 0, rn = 0;
+  int sa0 = nt_ref(nt, id, "arguments");
+  const int *sav = sa0 >= 0 ? nt_arr(nt, sa0, "arguments", &sac) : NULL;
+  const int *rq = nt_arr(nt, ps, "requireds", &rn);
+  int body = nt_ref(nt, blk, "body"), bn = 0;
+  const int *bs = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &bn) : NULL;
+  if (body >= 0 && !bs) return 0;
+  int *out = malloc(sizeof(int) * (size_t)(rn + bn + 1));
+  if (!out) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int k = 0; k < rn; k++) {
+    char pn[256]; snprintf(pn, sizeof pn, "%s", nt_str(nt, rq[k], "name"));
+    int arg = k < sac ? sav[k] : nt_new_node(nt, "SelfNode");   /* (class_eval's one parameter: the class) */
+    if (arg < 0) { free(out); return 0; }
+    if (k < sac) cea_into_block(nt, arg, 0);
+    int w = nt_new_node(nt, "LocalVariableWriteNode");
+    if (w < 0) { free(out); return 0; }
+    nt_node_set_str(nt, w, "name", pn);
+    nt_node_set_int(nt, w, "depth", 0);
+    nt_node_set_ref(nt, w, "value", arg);
+    nt_node_set_int(nt, w, "node_line", nt_int(nt, id, "node_line", 0));
+    nt_node_set_int(nt, w, "node_file", nt_int(nt, id, "node_file", 0));
+    out[k] = w;
+  }
+  for (int k = 0; k < bn; k++) out[rn + k] = bs[k];
+  if (body < 0) {
+    body = nt_new_node(nt, "StatementsNode");
+    if (body < 0) { free(out); return 0; }
+    nt_node_set_ref(nt, blk, "body", body);
+  }
+  nt_node_set_arr(nt, body, "body", out, rn + bn);
+  free(out);
+  nt_node_set_ref(nt, blk, "parameters", -1);
+  nt_node_set_ref(nt, id, "arguments", -1);
+  nt_node_set_str(nt, id, "name", "class_eval");
+  comp_grow_node_arrays(c);
+  return 1;
+}
 /* `class Inner < self` written in a class's body: self is that class,
    so the superclass names it (activerecord's Promise::Complete <
    Promise). Classes are registered under their last name, and the name
@@ -51456,6 +51561,7 @@ static void an_phase_desugar_register(Compiler *c) {
   lower_run(c, &lc, LW_PAREN_OPERANDS);
   lower_run(c, &lc, LW_SEND_CLASS_MAKERS);
   lower_run(c, &lc, LW_BODY_SEND_DECL);            /* send(:attr_accessor, :v) in a class body -> attr_accessor :v */
+  lower_run(c, &lc, LW_BODY_CLASS_EXEC_ARGS);      /* class_exec(7) { |n| .. } in a class body -> class_eval do n = 7; .. end */
   lower_run(c, &lc, LW_SELF_SUPERCLASS);
   lower_run(c, &lc, LW_STRUCT_SUBCLASS_NEW_WRITE);
   lower_run(c, &lc, LW_REFUSE_SUPERCLASS_EXPRS);

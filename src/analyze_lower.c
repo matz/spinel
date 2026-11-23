@@ -111,6 +111,8 @@ static const Lowering lowerings[LW__COUNT] = {
     desugar_send_class_makers_at, desugar_send_class_makers_left, "`Struct.send(:new, ..)`, `Data.send(:define, ..)`" },
   [LW_BODY_SEND_DECL] = { "desugar_body_send_decl", LF_STMT | LF_FRAMES, { NK_NONE },
     desugar_body_send_decl_at, desugar_body_send_decl_left, "`send(:attr_accessor, :v)`: a declaration sent by a literal name in a class body" },
+  [LW_BODY_CLASS_EXEC_ARGS] = { "desugar_body_class_exec_args", LF_STMT | LF_FRAMES, { NK_NONE },
+    desugar_body_class_exec_args_at, desugar_body_class_exec_args_left, "`class_exec(a) { |p| .. }` in a class body" },
   [LW_SELF_SUPERCLASS] = { "desugar_self_superclass", LF_STMT | LF_FRAMES, { NK_NONE },
     desugar_self_superclass_at, desugar_self_superclass_left, "`class I < self` in a class body" },
   [LW_STRUCT_SUBCLASS_NEW_WRITE] = { "desugar_struct_subclass_new_write", 0, { NK_ConstantWriteNode },

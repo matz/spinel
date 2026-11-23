@@ -654,6 +654,9 @@ void comp_free(Compiler *c) {
     free(c->classes[i].ivar_elem_may_nil);
     for (int j = 0; j < c->classes[i].n_rbs_pin_ivars; j++) free(c->classes[i].rbs_pin_ivars[j]);
     free(c->classes[i].rbs_pin_ivars);
+    for (int j = 0; j < c->classes[i].n_rbs_orig_ivars; j++) free(c->classes[i].rbs_orig_ivars[j]);
+    free(c->classes[i].rbs_orig_ivars);
+    free(c->classes[i].rbs_orig_ivar_types);
     for (int j = 0; j < c->classes[i].nreaders; j++) free(c->classes[i].readers[j]);
     free(c->classes[i].readers);
     for (int j = 0; j < c->classes[i].nown_readers; j++) free(c->classes[i].own_readers[j]);

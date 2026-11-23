@@ -1207,8 +1207,7 @@ TyKind store_value_kind(Compiler *c, int node);
 int store_fits(Compiler *c, TyKind from, TyKind to);
 void store_check(Compiler *c, int node, TyKind slot, const char *what, Buf *b);
 void store_check_kind(Compiler *c, int node, TyKind from, TyKind slot, const char *what, Buf *b);
-/* How emit_coerce may convert: see codegen_util.c. */
-enum { CO_HOLD, CO_CONVERT };
+/* How emit_coerce may convert (CO_HOLD, CO_CONVERT in repr.h): see codegen_util.c. */
 void emit_coerce(Compiler *c, int node, TyKind slot, int how, const char *what, Buf *b);
 void emit_expr_face(Compiler *c, int node, TyKind t, Buf *b);
 void emit_coerce_text(Compiler *c, int node, TyKind from, TyKind slot, int how,

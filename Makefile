@@ -3922,6 +3922,34 @@ build/rbs-seed-results/%.res: FORCE | rbs-seed-extractor $(SP_RT_LIB) $(SPINEL_T
 	$(SPINEL) test/rbs-seed/rbs_parse_failure_stops_build.rb -o "$$tmp/rpf" >/dev/null 2>&1 && [ "$$("$$tmp/rpf")" = 42 ] || \
 	  { echo "rbs-seed-test: FAIL (#11323 the program without --rbs)"; ok=0; }; \
 	;; \
+	strict_rbs_ok) \
+	$(SPINEL) test/rbs-seed/strict_rbs_ok.rb --rbs test/rbs-seed/sig --strict-rbs \
+	  -c --no-line-map -o "$$tmp/sro.c" 2>"$$tmp/sro.err"; \
+	if $(CC) -O0 -Ilib $(RBS_SEED_STRICT) "$$tmp/sro.c" $(SP_RT_LIB) $(LDFLAGS) -lm -o "$$tmp/sro" 2>"$$tmp/sro.cc"; then \
+	  "$$tmp/sro" > "$$tmp/sro.out" 2>/dev/null && \
+	  cmp -s "$$tmp/sro.out" test/rbs-seed/strict_rbs_ok.expected || { echo "rbs-seed-test: FAIL (strict_rbs_ok output mismatch)"; diff -u test/rbs-seed/strict_rbs_ok.expected "$$tmp/sro.out" || true; ok=0; }; \
+	else echo "rbs-seed-test: FAIL (strict_rbs_ok: failed under --strict-rbs)"; sed -n 1,10p "$$tmp/sro.err" "$$tmp/sro.cc"; ok=0; fi; \
+	;; \
+	strict_rbs_contradictions) \
+	if $(SPINEL) test/rbs-seed/strict_rbs_contradictions.rb --rbs test/rbs-seed/sig --strict-rbs \
+	     -c --no-line-map -o "$$tmp/src.c" >"$$tmp/src.out" 2>&1; then \
+	  echo "rbs-seed-test: FAIL (strict_rbs_contradictions compiled under --strict-rbs)"; ok=0; \
+	else \
+	  grep -q 'strict_rbs_contradictions.rb:54: --strict-rbs:.*parameter h of send_headers is declared Hash\[String, String\] but this call passes Hash\[String, Integer\]' "$$tmp/src.out" && \
+	  grep -q 'strict_rbs_contradictions.rb:55: --strict-rbs:.*parameter h of send_headers is declared Hash\[String, String\] but this call passes Hash\[String, untyped\]' "$$tmp/src.out" && \
+	  grep -q 'strict_rbs_contradictions.rb:56: --strict-rbs:.*parameter h of send_headers is declared Hash\[String, String\] but this call passes Hash\[untyped, untyped\]' "$$tmp/src.out" && \
+	  grep -q 'strict_rbs_contradictions.rb:57: --strict-rbs:.*parameter h of send_headers is declared Hash\[String, String\] but this call passes untyped' "$$tmp/src.out" && \
+	  grep -q 'strict_rbs_contradictions.rb:35: --strict-rbs:.*StrictBadApi#mixed_return is declared to return Hash\[String, String\] but this returns Hash\[String, untyped\]' "$$tmp/src.out" && \
+	  grep -q 'strict_rbs_contradictions.rb:39: --strict-rbs:.*@headers is declared Hash\[String, String\] but this assigns Hash\[String, Integer\]' "$$tmp/src.out" && \
+	  grep -q 'strict_rbs_contradictions.rb:60: --strict-rbs: inline RBS annotation contradicted: parameter h of inline_send is declared Hash\[String, String\] at test/rbs-seed/strict_rbs_contradictions.rb:42 but this call passes Hash\[String, Integer\]' "$$tmp/src.out" && \
+	  grep -q 'strict_rbs_contradictions.rb:61: --strict-rbs:.*parameter obj of initialize is declared StrictBadFoo but this call passes StrictBadBar' "$$tmp/src.out" && \
+	  grep -q 'strict_rbs_contradictions.rb:15: --strict-rbs: ivar pin @id on StrictBadChild (declared Integer) dropped: ancestor StrictBadParent holds it as untyped' "$$tmp/src.out" || \
+	  { echo "rbs-seed-test: FAIL (strict_rbs_contradictions missing expected --strict-rbs diagnostics)"; cat "$$tmp/src.out"; ok=0; }; \
+	fi; \
+	$(SPINEL) test/rbs-seed/strict_rbs_contradictions.rb --rbs test/rbs-seed/sig \
+	  -c --no-line-map -o "$$tmp/src_default.c" 2>"$$tmp/src_default.err" || \
+	  { echo "rbs-seed-test: FAIL (strict_rbs_contradictions broke default --rbs mode)"; sed -n 1,5p "$$tmp/src_default.err"; ok=0; }; \
+	;; \
 	*) echo "rbs-seed-test: FAIL (no check named $*)"; ok=0 ;; \
 	esac; } > "$$tmp/log" 2>&1; \
 	cat "$$tmp/log"; rm -rf "$$tmp"; echo $$ok > $@

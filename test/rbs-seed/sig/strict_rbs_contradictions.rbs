@@ -1,0 +1,21 @@
+class StrictBadFoo
+end
+
+class StrictBadBar
+end
+
+class StrictBadChild < StrictBadParent
+  @id: Integer
+end
+
+class StrictBadBox
+  def initialize: (StrictBadFoo obj) -> void
+end
+
+class StrictBadApi
+  @headers: Hash[String, String]
+  def initialize: (Hash[String, String] h) -> void
+  def send_headers: (Hash[String, String] h) -> String
+  def mixed_return: () -> Hash[String, String]
+  def set_bad_ivar: () -> void
+end

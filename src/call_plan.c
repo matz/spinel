@@ -3447,6 +3447,19 @@ int cplan_hook_target(Compiler *c, int id, int ci, const char *name, MethodLooku
   int tm = ci >= 0 ? comp_method_in_chain(c, ci, name, &dc) : -1;
   int undef = tm >= 0 && id >= 0 && comp_is_undeffed_in_chain(c, ci, name);
   mtab_leave(c);
+  /* (a class's initialize with versions the record leaves to the run: the
+     entry the calls of `new` asked over them, ver_entries_build, where the
+     constructor's initialize takes required parameters alone, the entry's
+     count; an optional one's default is the version's, which the
+     constructor's fixed parameters cannot leave out) */
+  if (tm >= 0 && is_initialize_name(name) && c->nver_entries && ver_plain_arity(c, tm) == c->scopes[tm].nparams) {
+    for (int i = 0; i < c->nver_entries; i++) {
+      const struct VerEntry *e = &c->ver_entries[i];
+      if (e->cls != ci || e->sg || e->guard || e->scope < 0 || e->ar != c->scopes[tm].nparams || !sp_streq(e->name, name)) continue;
+      *m = (MethodLookup){ .kind = ML_METHOD, .def_class = ci };
+      return e->scope;
+    }
+  }
   *m = (MethodLookup){ .kind = tm >= 0 ? ML_TABLE : ML_NONE, .why = MLW_UNASKED, .def_class = dc };
   /* (a siteless ask, which every reader of a class's constructions makes with id -1, answers the table's method:
      for a name with versions that is an unasked table line, as call_target's no-site ask reports one) */
@@ -14871,6 +14884,17 @@ void ver_entries_build(Compiler *c) {
     if (pc >= 0 && cplan_presence_asks(c, id, pc, qm)) ver_need(c, id, qm, pc, CT_CMETHOD | CT_PUBLIC | CT_PROTECTED, &o);
     list_asks(c, id, list_ver_need, &o);   /* (a class-side list asks the same of each name it may list) */
     ct_implied_classes(c, id, ct_version_named, ver_need, &o);
+    /* a `new` runs the initialize of the class it builds, which no name
+       of the call names: where that initialize has versions, the entry
+       over them (cplan_hook_target), of each class the call may build */
+    if (nt_kind(nt, id) == NK_CallNode && is_new_name(nt_str(nt, id, "name")) && nt_ref(nt, id, "block") < 0 &&
+        ct_version_named(c, "initialize")) {
+      int rv = nt_ref(nt, id, "receiver");
+      int ck = rv >= 0 && (nt_kind(nt, rv) == NK_ConstantReadNode || nt_kind(nt, rv) == NK_ConstantPathNode) &&
+               !const_class_value_only(c, rv) ? const_node_class_index(c, rv) : -2;
+      for (int k = 0; k < c->nclasses; k++)
+        if (ck >= -1 ? k == ck : dynamic_new_may_reach(c, id, k)) ver_need(c, id, "initialize", k, CT_NOFACE, &o);
+    }
     for (int i = 0, nn = call_node_names(c, id, names); i < nn; i++) {
       if (!names[i]) continue;
       if (ct_version_named(c, names[i])) ct_version_classes(c, id, names[i], ver_need, &o);

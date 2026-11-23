@@ -13724,7 +13724,10 @@ void emit_class_new(Compiler *c, ClassInfo *ci, Buf *b) {
                class_ruby_name(c, cid));
   }
   else if (init >= 0 && c->scopes[init].reachable && !c->scopes[init].yields) {
-    buf_printf(b, "  sp_%s_initialize(", c->classes[initcls].c_name);
+    /* (a version entry, where the record leaves the initialize the class
+       ends with to the run: cplan_hook_target) */
+    if (c->scopes[init].entry) buf_printf(b, "  %s(", mc_method(c, &c->scopes[init]));
+    else buf_printf(b, "  sp_%s_initialize(", c->classes[initcls].c_name);
     if (initcls != cid) buf_printf(b, "(sp_%s *)", c->classes[initcls].c_name);
     buf_puts(b, "self");
     Scope *s = &c->scopes[init];

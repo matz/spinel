@@ -67,6 +67,35 @@ static int bv_value_may_be_nil(Compiler *c, int block, TyKind t) {
 /* Does a `next v` of the block (not one of a block nested in it) answer a
    boxed value, while its tail is a typed t? The block's value slot is then
    the box (#9300). */
+/* Does an `ensure` run inside block body n (not inside a method, class or
+   lambda written there)? A value the block answers through one sits in its
+   temp while the ensure runs. */
+static int bv_body_has_ensure(const NodeTable *nt, int n, int depth) {
+  if (n < 0 || depth > 512) return 0;
+  NodeKind k = nt_kind(nt, n);
+  if (k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode || k == NK_LambdaNode) return 0;
+  if (k == NK_BeginNode && nt_ref(nt, n, "ensure_clause") >= 0) return 1;
+  for (int i = 0; i < nt_num_refs(nt, n); i++) if (bv_body_has_ensure(nt, nt_ref_at(nt, n, i), depth + 1)) return 1;
+  for (int i = 0; i < nt_num_arrs(nt, n); i++) {
+    int an = 0; const int *av = nt_arr_at(nt, n, i, &an);
+    for (int j = 0; j < an; j++) if (bv_body_has_ensure(nt, av[j], depth + 1)) return 1;
+  }
+  return 0;
+}
+
+/* The temp `_t<tmp>` of kind t that holds block's value until the caller
+   stores it is a GC root where the block has an `ensure`: the value can
+   leave through it (a `next`, or the tail inside a begin), and the ensure
+   runs, and can allocate, before the store (emit_transform_hash_expr's
+   next slot is rooted alike). Without one nothing runs in between, and a
+   hot map keeps its temp out of the root stack. Ends the declaration's
+   line. */
+static void bv_root_tmp(Compiler *c, int block, TyKind t, int tmp, Buf *b) {
+  int body = block >= 0 ? nt_ref(c->nt, block, "body") : -1;
+  if (ty_gc_holds_refs(c, t) && bv_body_has_ensure(c->nt, body, 0)) { buf_puts(b, " "); emit_gc_root_tmp_refs(c, t, tmp, b); }
+  buf_puts(b, "\n");
+}
+
 static int bv_next_boxed_walk(Compiler *c, int n, int depth) {
   const NodeTable *nt = c->nt;
   if (n < 0 || depth > 64) return 0;
@@ -510,9 +539,10 @@ static char *emit_hash_block_eval(Compiler *c, int block, Repr hr, const char *h
            (node_has_oint_form(c, bb[bn - 1]) || block_next_may_be_nil(c, body));
   g_hbe_oint = vo;
   emit_indent(g_pre, g_indent + 1);
-  if (want_poly) buf_printf(g_pre, "sp_RbVal _t%d = sp_box_nil();\n", tvv);
+  /* rooted where an `ensure` can run before the store (bv_root_tmp) */
+  if (want_poly) { buf_printf(g_pre, "sp_RbVal _t%d = sp_box_nil();", tvv); bv_root_tmp(c, block, TY_POLY, tvv, g_pre); }
   else if (vo) buf_printf(g_pre, "%s _t%d = %s;\n", oint_ctype(bret), tvv, oint_nil(bret));
-  else { emit_ctype(c, bret, g_pre); buf_printf(g_pre, " _t%d = %s;\n", tvv, default_value_from_compiler(c, bret)); }
+  else { emit_ctype(c, bret, g_pre); buf_printf(g_pre, " _t%d = %s;", tvv, default_value_from_compiler(c, bret)); bv_root_tmp(c, block, bret, tvv, g_pre); }
   int sv_bvo = g_bv_dest_oint;
   if (vo) g_bv_dest_oint = 1;
   /* (one representation: the slot is the bytes face, bret above; a `next` or
@@ -4801,8 +4831,9 @@ static int map_fills_fresh(Compiler *c, int block, const char *rk, TyKind elem, 
 
 /* The type of an each_with_index terminal's block value (its body bb, bn
    statements, read with the block's parameters typed), and in *boxed
-   whether it is carried boxed */
-static TyKind ewi_block_value_ty(Compiler *c, int block, const int *bb, int bn, int *boxed) {
+   whether it is carried boxed. res_elem is the element of the Array a map
+   collects the values into (TY_UNKNOWN for the other terminals). */
+static TyKind ewi_block_value_ty(Compiler *c, int block, const int *bb, int bn, TyKind res_elem, int *boxed) {
   TyKind bt = bn > 0 ? repr_of(c, bb[bn - 1]).as_ty : TY_NIL;
   /* A body whose value IS nil types VOID here, and `void _tN` is not a
      declaration -- `select { nil }` never compiled, and `select {}` reaches
@@ -4817,7 +4848,11 @@ static TyKind ewi_block_value_ty(Compiler *c, int block, const int *bb, int bn, 
   /* a number that can be nil is carried boxed, so its nil reads falsy */
   *boxed = (bt == TY_POLY || bt == TY_NIL || (oint_kind(bt) && bn > 0 && node_has_oint_form(c, bb[bn - 1])) ||
             bv_value_may_be_nil(c, block, bt) ||   /* a `next nil` too */
-            bv_next_boxed(c, block, bt));          /* and a boxed `next v` */
+            bv_next_boxed(c, block, bt) ||         /* and a boxed `next v` */
+            /* and a value of another kind than the tail's (`next 0.5` in an
+               Integer-tailed map): a map collecting boxed values, as a plain
+               map's does, so a Float next is not cut to an Integer */
+            (res_elem == TY_POLY && bt != TY_POLY));
   return bt;
 }
 
@@ -4956,7 +4991,7 @@ int emit_each_with_index_terminal(Compiler *c, int id, Buf *b) {
     int mbody = block >= 0 ? nt_ref(nt, block, "body") : -1;
     int mbn = 0; const int *mbb = mbody >= 0 ? nt_arr(nt, mbody, "body", &mbn) : NULL;
     int mboxed = 0;
-    ewi_block_value_ty(c, block, mbb, mbn, &mboxed);
+    ewi_block_value_ty(c, block, mbb, mbn, repr_of(c, id).elem, &mboxed);
     fresh = !mboxed && mbn > 0 && array_kind_ty(rk) != TY_UNKNOWN &&
             map_fills_fresh(c, block, rk, repr_of(c, id).elem, mbb[mbn - 1]);
     emit_indent(g_pre, g_indent);
@@ -5026,14 +5061,15 @@ int emit_each_with_index_terminal(Compiler *c, int id, Buf *b) {
        bb[bn - 1] read and treat the absent tail value as nil -- a poly value so
        the temp initializes to sp_box_nil() rather than an integer 0. */
     int vpoly = 0;
-    TyKind bt = ewi_block_value_ty(c, block, bb, bn, &vpoly);
+    TyKind bt = ewi_block_value_ty(c, block, bb, bn, is_map ? repr_of(c, id).elem : TY_UNKNOWN, &vpoly);
     int tv = ++g_tmp; char tvb[24]; snprintf(tvb, sizeof tvb, "_t%d", tv);
     emit_indent(g_pre, din);
-    if (vpoly) buf_printf(g_pre, "sp_RbVal _t%d = sp_box_nil();\n", tv);
+    /* rooted where an `ensure` can run before the push (bv_root_tmp) */
+    if (vpoly) { buf_printf(g_pre, "sp_RbVal _t%d = sp_box_nil();", tv); bv_root_tmp(c, block, TY_POLY, tv, g_pre); }
     /* (one representation: a handle slot takes the tail's String of either
        face as the handle) */
-    else if (bt == TY_STRBUF) { buf_printf(g_pre, "sp_String *_t%d = NULL;\n", tv); g_bv_dest_ty = TY_STRBUF; }
-    else { emit_ctype(c, bt, g_pre); buf_printf(g_pre, " _t%d = %s;\n", tv, default_value_from_compiler(c, bt)); }
+    else if (bt == TY_STRBUF) { buf_printf(g_pre, "sp_String *_t%d = NULL;", tv); bv_root_tmp(c, block, TY_STRBUF, tv, g_pre); g_bv_dest_ty = TY_STRBUF; }
+    else { emit_ctype(c, bt, g_pre); buf_printf(g_pre, " _t%d = %s;", tv, default_value_from_compiler(c, bt)); bv_root_tmp(c, block, bt, tv, g_pre); }
     emit_block_value_into(c, block, tvb, vpoly, din);
     /* Ruby truthiness of the block value: only nil/false are falsy. C
        zero-falsiness ("(_tN)") would wrongly drop a numeric 0 / 0.0 (or an
@@ -5974,9 +6010,10 @@ int emit_collect_expr(Compiler *c, int id, Buf *b) {
             int tv_es = ++g_tmp; char tvb_es[24]; snprintf(tvb_es, sizeof tvb_es, "_t%d", tv_es);
             emit_indent(g_pre, g_indent + 1);
             int vo_es = !res_poly_es && bv_value_may_be_nil(c, block, melem_es);
-            if (res_poly_es) buf_printf(g_pre, "sp_RbVal _t%d = sp_box_nil();\n", tv_es);
+            /* rooted where an `ensure` can run before the push (bv_root_tmp) */
+            if (res_poly_es) { buf_printf(g_pre, "sp_RbVal _t%d = sp_box_nil();", tv_es); bv_root_tmp(c, block, TY_POLY, tv_es, g_pre); }
             else if (vo_es) buf_printf(g_pre, "%s _t%d = %s;\n", oint_ctype(melem_es), tv_es, oint_nil(melem_es));
-            else { emit_ctype(c, melem_es, g_pre); buf_printf(g_pre, " _t%d = %s;\n", tv_es, default_value_from_compiler(c, melem_es)); }
+            else { emit_ctype(c, melem_es, g_pre); buf_printf(g_pre, " _t%d = %s;", tv_es, default_value_from_compiler(c, melem_es)); bv_root_tmp(c, block, melem_es, tv_es, g_pre); }
             if (vo_es) g_bv_dest_oint = 1;
             emit_block_value_into(c, block, tvb_es, res_poly_es, g_indent + 1);
             emit_indent(g_pre, g_indent + 1);
@@ -6678,12 +6715,13 @@ int emit_collect_expr(Compiler *c, int id, Buf *b) {
     emit_indent(g_pre, innerIndent);
     /* a value that can be nil (a `next nil`) is held as its oint and pushed with it */
     int vo = !res_poly && bv_value_may_be_nil(c, block, elem);
-    if (res_poly) buf_printf(g_pre, "sp_RbVal _t%d = sp_box_nil();\n", tv);
+    /* rooted where an `ensure` can run before the push (bv_root_tmp) */
+    if (res_poly) { buf_printf(g_pre, "sp_RbVal _t%d = sp_box_nil();", tv); bv_root_tmp(c, block, TY_POLY, tv, g_pre); }
     else if (vo) buf_printf(g_pre, "%s _t%d = %s;\n", oint_ctype(elem), tv, oint_nil(elem));
     /* (one representation: a String value of either face is collected as
        the handle, which the String Array holds) */
-    else if (elem == TY_STRING) { buf_printf(g_pre, "sp_String *_t%d = NULL;\n", tv); g_bv_dest_ty = TY_STRBUF; }
-    else { emit_ctype(c, elem, g_pre); buf_printf(g_pre, " _t%d = %s;\n", tv, default_value_from_compiler(c, elem)); }
+    else if (elem == TY_STRING) { buf_printf(g_pre, "sp_String *_t%d = NULL;", tv); bv_root_tmp(c, block, TY_STRBUF, tv, g_pre); g_bv_dest_ty = TY_STRBUF; }
+    else { emit_ctype(c, elem, g_pre); buf_printf(g_pre, " _t%d = %s;", tv, default_value_from_compiler(c, elem)); bv_root_tmp(c, block, elem, tv, g_pre); }
     if (vo) g_bv_dest_oint = 1;
     emit_block_value_into(c, block, tvbuf, res_poly, innerIndent);
     emit_indent(g_pre, innerIndent);

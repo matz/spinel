@@ -1,0 +1,9 @@
+[25, 25, 25, 25]
+"can't dump hash with default proc"
+"singleton can't be dumped"
+true
+TypeError
+"can't dump hash with default proc"
+[25, 25, 25, 25]
+"marshal data too short"
+{ok: [1, "two", :three]}

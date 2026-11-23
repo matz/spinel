@@ -13881,7 +13881,8 @@ int elab_defines(Compiler *c, int cls, const char *name) {
 int elab_mixin_module(Compiler *c, const LrMixin *m) {
   if (m->mod >= 0) return m->mod;
   NodeKind k = m->ref >= 0 ? nt_kind(c->nt, m->ref) : NK_NilNode;
-  return k == NK_ConstantReadNode || k == NK_ConstantPathNode ? elab_module_named(c, key_name(c, m->ref)) : -1;
+  int mod = k == NK_ConstantReadNode || k == NK_ConstantPathNode ? elab_module_named(c, key_name(c, m->ref)) : -1;
+  return const_path_builtin_other(c, m->ref, mod) ? -1 : mod;
 }
 
 /* ---- SPINEL_ELAB_CHECK ---- */

@@ -1,0 +1,7 @@
+T::WaitReadable rescued as IO::WaitReadable
+T::Other rescued as IO::WaitReadable
+WaitWritable rescued as IO::WaitWritable
+true
+false
+3
+true

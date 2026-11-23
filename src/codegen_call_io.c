@@ -467,7 +467,8 @@ static void emit_write_nb_head(Compiler *c, const char *io, const char *op, int 
     emit_boxed(c, node, b);
   }
   else {
-    buf_printf(b, "%s(%s, ", r.as_ty == TY_STRING ? "sp_sock_write_nb_bin" : "sp_sock_write_nb", io);
+    int str = r.as_ty == TY_STRING || r.as_ty == TY_STRBUF;
+    buf_printf(b, "%s(%s, ", str ? "sp_sock_write_nb_bin" : "sp_sock_write_nb", io);
     emit_to_s_expr(c, node, b);
   }
 }

@@ -1,0 +1,5 @@
+App::IO::Err rescued as App::IO::WaitReadable
+App::BuiltinErr missed by App::IO::WaitReadable
+App::IO::Err missed by ::IO::WaitReadable
+App::BuiltinErr rescued as ::IO::WaitReadable
+[false, true, true, false]

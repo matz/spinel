@@ -654,7 +654,8 @@ int const_node_match_class_or_named(Compiler *c, int node) {
   if (k >= 0) return k;
   const char *n = const_node_match_class_name(c, node);
   if (!n) n = nt_str(c->nt, node, "name");
-  return n ? comp_class_index(c, n) : -1;
+  k = n ? comp_class_index(c, n) : -1;
+  return const_path_builtin_other(c, node, k) ? -1 : k;
 }
 static int const_node_class_index_tree(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
@@ -777,8 +778,10 @@ static int program_gives_builtin_const(Compiler *c, const char *nm);
    program class with another Ruby name (T::WaitReadable, T::Stat). The
    caller then uses the builtin. Returns 0 when the Ruby name of k is the
    whole path, as for `class Enumerator::Chain`, which reopens the builtin.
-   For a path listed in lib/sp_builtin_classes.h (IO::WaitReadable), those
-   two checks decide. For another builtin path (File::Stat), the function
+   For a path listed in lib/sp_builtin_classes.h (IO::WaitReadable), the
+   function also returns 0 when the parent is a module App::IO nested where
+   the path is written, except for a path from the top level
+   (::IO::WaitReadable). For another builtin path (File::Stat), the function
    also returns 0 when the program can define the leaf in the builtin: a
    module App::File nested where the path is written, a class header or
    write of the path, a module mixed into a builtin, or a const_set. */
@@ -786,11 +789,12 @@ int const_path_builtin_other(Compiler *c, int id, int k) {
   const NodeTable *nt = c->nt;
   if (k < 0 || id < 0 || nt_kind(nt, id) != NK_ConstantPathNode) return 0;
   int par = nt_ref(nt, id, "parent");
-  const char *pn = par >= 0 && nt_kind(nt, par) == NK_ConstantReadNode ? nt_str(nt, par, "name") : NULL;
+  int root = par >= 0 && nt_kind(nt, par) == NK_ConstantPathNode && nt_ref(nt, par, "parent") < 0;
+  const char *pn = par >= 0 && (root || nt_kind(nt, par) == NK_ConstantReadNode) ? nt_str(nt, par, "name") : NULL;
   const char *nm = nt_str(nt, id, "name"), *rn = class_ruby_name(c, k);
   char qn[256];
   if (!pn || !nm || snprintf(qn, sizeof qn, "%s::%s", pn, nm) >= (int)sizeof qn || (rn && sp_streq(rn, qn))) return 0;
-  if (builtin_core_class_slot(qn) >= 0) return 1;
+  if (builtin_core_class_slot(qn) >= 0) return root || !lexically_sees_nested(c, id, pn);
   /* qc_orig_name is the leaf the program wrote when a pass renamed the
      path to the alias's class (M::A to Foo) */
   const char *wn = nt_str(nt, id, "qc_orig_name"), *ln = class_leaf_name(wn ? wn : nm);

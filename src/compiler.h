@@ -768,10 +768,6 @@ typedef struct {
                            methods (`def pass(x) = x.p_`) and methods whose value
                            is their block's (`def key_of(x) = yield x`), which no
                            RBS signature covers (#3505). */
-  unsigned char ret_fresh; /* the same return-tail walk proves a new String
-                              (or nil) on every path; no incoming handle */
-  int ret_param;       /* --share-strings: every non-fresh return reads this
-                          unchanged parameter; -1 when no such proof */
   int ret_obj_may_nil; /* the nil fact for the method's value (analyze_nil.c,
                           #7444): its body's value or a `return` may be nil;
                           nonzero, where the nil comes from (NFW_*) */
@@ -1863,10 +1859,6 @@ typedef struct {
   /* the operand-order record (order_plan.c): per operand list, where each
      operand is evaluated; built by the analysis phase operand_order */
   struct OrderFacts *order;
-  /* --share-strings: the walk deciding the methods' answers while
-     an_mark_return_origins runs (analyze.c), else NULL: a method's answer
-     asked meanwhile is decided where it is asked (scope_ret_fresh, scope_ret_param) */
-  struct ReturnWalk *ret_walk;
   /* per class, whether its class object can be a value
      (comp_class_may_be_value), built for the node and class counts kept */
   unsigned char *cls_value;

@@ -1,13 +1,13 @@
 /* analyze_share.c -- the questions the String rule asks of the program
-   (#6765): whether a value is a new String no other name holds
-   (share_value_fresh), which literal blocks a method can run
-   (sh_blocks_fresh), and the plain questions of names, targets and literals
-   beside them. See share.h.
+   (#6765): whether a slot's type can hold a String (sh_may_hold), whether
+   a call stores the block it is given (share_call_stores_block) and whether
+   a block hands control back to its caller (share_block_returns). See
+   share.h.
 
-   The tables they keep (ShareFacts) are read from the calls when the
+   The tables the facts keep (ShareFacts) are read from the calls when the
    rule is applied (share_facts_build): the blocks each method can be
-   given, the methods a method hands its own block on to, the names a
-   send or a Method may reach, and the memos the questions fill. */
+   given, the methods a method hands its own block on to and the names a
+   send or a Method may reach. */
 
 #include <stdlib.h>
 #include <string.h>
@@ -27,18 +27,12 @@ typedef struct ShareFacts {
      once built, per method scope its run (mb_start..mb_start+1) of mb_blk */
   int *mb_m, *mb_b, nmb, cmb;
   int *mb_start, *mb_blk;
-  /* the blocks a method can run as share_value_fresh asks: a method's
-     `&blk` handed on (`m2(&blk)`, an anonymous `&`, a zsuper) as an edge
-     from the method to each it reaches (fw_from, fw_to), and blk_unk per
-     method scope: a block that is neither a literal nor such a forward
-     reaches it; fresh_blk per method scope, once asked: every block it can
-     run answers a new String (1), not (0), not asked (-1) */
+  /* the blocks a method can run: a method's `&blk` handed on (`m2(&blk)`,
+     an anonymous `&`, a zsuper) as an edge from the method to each it
+     reaches (fw_from, fw_to), and blk_unk per method scope: a block that is
+     neither a literal nor such a forward reaches it */
   int *fw_from, *fw_to, nfw, cfw;
   unsigned char *blk_unk;
-  signed char *fresh_blk;
-  /* per node, once asked: a `call` on a callable whose every value is a
-     new String or no String (1), not (0), not asked (-1); NULL until then */
-  signed char *fresh_call;
   /* the method names a Method, `send` or `&:name` can reach; dyn_all when
      one is computed */
   const char **dyn;
@@ -98,7 +92,7 @@ static const char *sh_lit_name(const NodeTable *nt, int a) {
   return NULL;
 }
 
-/* Method from hands the block it was given on to method to (share_value_fresh) */
+/* Method from hands the block it was given on to method to */
 static void sh_fwd_edge(ShareFacts *F, int from, int to) {
   if (from < 0 || to < 0) return;
   if (F->nfw >= F->cfw) {
@@ -126,94 +120,6 @@ static void sh_block_value_to(ShareFacts *F, Compiler *c, int n, int blk, int mi
   else F->blk_unk[mi] = 1;
 }
 
-/* the receiver family a builtin's share row is keyed by */
-static TyKind sh_family(TyKind rt) {
-  if (rt == TY_STRING || rt == TY_STRBUF) return TY_STRING;
-  if (ty_is_array(rt) || ty_is_ptr_array(rt) || rt == TY_STR_RANGE || rt == TY_ENUMERATOR) return BOP_ANY_ARRAY;
-  if (ty_is_hash(rt)) return BOP_ANY_HASH;
-  if (rt == TY_ARGF) return TY_IO;
-  if (rt == TY_ENV) return BOP_ENV;
-  if (rt == TY_PROC || rt == TY_METHOD || rt == TY_CURRY) return BOP_CALLABLE;
-  return rt;
-}
-
-static int sh_answers_elems_run(int share, int argc);
-
-static int sh_native_placeholder(Compiler *c, const PolyCand *p, const char *name);
-
-/* The class that `K.new(...)` (through parentheses) builds, whatever else
-   the program has for the class to be: the instance of exactly K, when K is
-   a class of the program's and no `def self.new` stands between. -1 for any
-   other node. */
-int share_exact_new_class(Compiler *c, int n) {
-  const NodeTable *nt = c->nt;
-  n = nt_paren_single(nt, n);
-  if (n < 0 || nt_kind(nt, n) != NK_CallNode || !sp_streq(nt_str(nt, n, "name"), "new")) return -1;
-  int r = nt_ref(nt, n, "receiver");
-  if (r < 0 || (nt_kind(nt, r) != NK_ConstantReadNode && nt_kind(nt, r) != NK_ConstantPathNode)) return -1;
-  int k = const_node_class_index(c, r);
-  return k >= 0 && comp_cmethod_in_chain(c, k, "new", NULL) < 0 ? k : -1;
-}
-/* Kernel#String(x) answers x for a String, and for any other value what its
-   #to_str answers, or with none its #to_s. A method of the program answers
-   a String it holds as it is, so `String(obj) << "?"` changes the obj's own
-   String, however new the call looks (sh_builtin's BSH_ARGS row sees only
-   the argument). The #to_str and #to_s that a value of argument arg's type
-   can run, as method indexes (-1 for an attr_reader of the name): an
-   object's class and its subclasses' (the class alone for a `K.new`, which
-   builds exactly K), and a boxed value's classes, each less the classes the
-   class facts rule out (cls_fact_excludes). 0 for an argument of any other type, whose
-   conversion is the builtin's; more than cap when they do not fit. */
-static int sh_string_conv_methods(Compiler *c, int arg, int *mis, int cap) {
-  TyKind at = comp_ntype_settled(c, arg);
-  int obj = ty_is_object(at), ocid = obj ? ty_object_class(at) : -1, n = 0;
-  int exact = obj && share_exact_new_class(c, arg) == ocid;
-  if ((!obj && at != TY_POLY && at != TY_UNKNOWN)) return 0;
-  for (int j = 0; j < 2; j++) {
-    int np = 0;
-    const PolyCand *pc = comp_poly_candidates(c, j ? "to_s" : "to_str", &np);
-    for (int i = 0; i < np; i++) {
-      int k = pc[i].cls;
-      if ((obj && k != ocid && (exact || !is_descendant(c, k, ocid))) || cls_fact_excludes(c, arg, k)) continue;
-      /* (Kernel#String asks #to_str first: a class with one never runs its #to_s) */
-      if (j && call_target(c, arg, k, "to_str", CT_METHODS, NULL) >= 0) continue;
-      if (pc[i].native) continue;
-      if (n < cap) mis[n] = pc[i].mi;
-      n++;
-    }
-  }
-  return n;
-}
-/* Is call n a Kernel#String of one plain argument, which the program does
-   not define itself? Its argument, or -1. */
-static int sh_string_conv_arg(Compiler *c, int n) {
-  const NodeTable *nt = c->nt;
-  const char *nm = nt_str(nt, n, "name");
-  if (!nm || !is_string_class_name(nm) || nt_ref(nt, n, "receiver") >= 0 ||
-      nt_ref(nt, n, "block") >= 0) return -1;
-  int argc = 0;
-  const int *argv = call_args(nt, n, &argc);
-  if (argc != 1 || nt_kind(nt, argv[0]) == NK_SplatNode || nt_kind(nt, argv[0]) == NK_KeywordHashNode ||
-      nt_kind(nt, argv[0]) == NK_BlockArgumentNode || cplan_has_targets(c, n)) return -1;
-  return argv[0];
-}
-
-static int sh_builtin_fresh(Compiler *c, int call, int ostruct);
-/* Under --share-strings, is call n an attribute assignment (`obj.x = v`,
-   call_is_setter_assign) of one plain value? Its value is the right-hand
-   side whatever the writer returns, and the object the writer was handed,
-   so no name-free String. */
-static int sh_assign_call(const Compiler *c, int n) {
-  if (nt_kind(c->nt, n) != NK_CallNode || nt_ref(c->nt, n, "block") >= 0 ||
-      !call_is_setter_assign(c->nt, n)) return 0;
-  int args = nt_ref(c->nt, n, "arguments"), argc = 0;
-  const int *argv = args >= 0 ? nt_arr(c->nt, args, "arguments", &argc) : NULL;
-  return argc == 1 && nt_kind(c->nt, argv[0]) != NK_SplatNode && nt_kind(c->nt, argv[0]) != NK_KeywordHashNode &&
-         nt_kind(c->nt, argv[0]) != NK_BlockArgumentNode;
-}
-
-static int sh_uplus_copies(Compiler *c, int n);
-
 int share_call_stores_block(Compiler *c, int n) {
   const NodeTable *nt = c->nt;
   int blk = nt_ref(nt, n, "block");
@@ -238,7 +144,7 @@ int share_call_stores_block(Compiler *c, int n) {
 static void sh_free(ShareFacts *F) {
   if (!F) return;
   free(F->mb_m); free(F->mb_b); free(F->mb_start); free(F->mb_blk);
-  free(F->fw_from); free(F->fw_to); free(F->blk_unk); free(F->fresh_blk); free(F->fresh_call);
+  free(F->fw_from); free(F->fw_to); free(F->blk_unk);
   free(F->dyn);
   free(F);
 }
@@ -327,7 +233,7 @@ static unsigned char *sh_dead_nodes(Compiler *c) {
 
    The literal blocks each method can be given (mb), the methods a method
    hands its own block on to (fw), the methods a block the table does not
-   list reaches (blk_unk). Read by sh_blocks_fresh. */
+   list reaches (blk_unk). */
 static void sh_mb_add(ShareFacts *F, Compiler *c, int blk, int mi) {
   const Scope *m = &c->scopes[mi];
   if (!m->yields && !m->is_lowered_yield && !m->blk_param) return;
@@ -430,9 +336,7 @@ static ShareFacts *sh_memo_build(Compiler *c) {
   if (!F) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   F->nnodes = nt->count;
   F->blk_unk = calloc(ns, 1);
-  F->fresh_blk = malloc(ns);
-  if (!F->blk_unk || !F->fresh_blk) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  memset(F->fresh_blk, -1, ns);
+  if (!F->blk_unk) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   NT_FOREACH_KIND(nt, NK_ConstantReadNode, cr)
     if (!F->ostruct && key_name(c, cr) && sp_streq(key_name(c, cr), "OpenStruct")) F->ostruct = 1;
   sh_mb_build(F, c);
@@ -451,735 +355,26 @@ void share_facts_free(Compiler *c) {
   c->share = NULL;
 }
 
-/* Native classes can appear in comp_poly_candidates as placeholders even
-   when they have no binding. Skip only those empty native rows; preserve
-   every Ruby candidate and every real native binding conservatively. The
-   non-arity registry query keeps real bindings regardless of signature. */
-static int sh_native_placeholder(Compiler *c, const PolyCand *p, const char *name) {
-  if (!p->native || p->mi >= 0 || p->rdcls >= 0) return 0;
-  MethodLookup ml = { .def_class = -1 };
-  call_target(c, -1, p->cls, name, 0, &ml);
-  if (ml.kind == ML_ATTR) return 0;
-  return !comp_poly_arm_defines(c, p->cls, name);
-}
-/* A boxed call's builtin arms answer a value of their own when the
-   any-receiver row says so. String's receiver conversions are the
-   exception to Object's row: to_s can hand its String back unchanged. */
-static int sh_builtin_fresh(Compiler *c, int call, int ostruct) {
-  const char *name = nt_str(c->nt, call, "name");
-  if (is_receiver_conversion(name)) return 0;
-  int share = bop_share_named(BOP_ANY_RECV, name);
-  if (share) return share == BSH_PURE;
-  /* A name no builtin owns has only the user targets' answers; every
-     other receiver raises. The arity tables already record that ownership.
-     The dispatch plan must also exclude readers, native bindings and
-     catch-all arms such as OpenStruct's member read. Object's public
-     method table covers the names the arity tables omit. (A method_missing
-     hook answers no name: Spinel never routes a call to it, and warns
-     where one is defined.) */
-  if (object_public_method_name(name)) return 0;
-  /* With no builtin face or dynamic fields, only the user methods can
-     answer. Their freshness is checked by the caller. */
-  if (!ostruct && !bop_name_has_reader(name, BOP_READ_NUMERIC | BOP_READ_CONTAINER | BOP_READ_STRING) &&
-      !ty_poly_face_owners(name, call_plain_argc(c, call), nt_ref(c->nt, call, "block") >= 0, 1, 1)) {
-    int n = 0;
-    const PolyCand *p = comp_poly_candidates(c, name, &n);
-    /* The walk has no settled dispatch plan yet. Its candidate index
-       still exposes aliases the same-named target set can miss. */
-    int tg[CPT_MAX], ntg = cplan_targets(c, call, tg, CPT_MAX);
-    int user_methods = 0;
-    for (int i = 0; i < n; i++) {
-      if (p[i].native) {
-        if (!sh_native_placeholder(c, &p[i], name)) return 0;
-        continue;
-      }
-      if (p[i].mi < 0 || p[i].rdcls >= 0) return 0;
-      user_methods++;
-      int found = 0;
-      for (int j = 0; j < ntg; j++) if (tg[j] == p[i].mi) { found = 1; break; }
-      if (!found) return 0;
-    }
-    if (user_methods > 0) return 1;
-  }
-  return 0;
-}
-/* Is poly arm a of call an IO's read with no buffer to fill (BSH_FILL1's
-   row with one argument at most): a new String? The generic default arm
-   and its tail read the box as an IO for such a name. */
-static int sh_arm_io_read_fresh(Compiler *c, int call, const PolyArm *a) {
-  if (call_plain_argc(c, call) >= 2 || bop_share_boxed(TY_IO, nt_str(c->nt, call, "name")) != BSH_FILL1) return 0;
-  if (a->kind == PA_TRIAL) return a->key == PA_KEY_TRIAL + PT_GENERIC_TAIL;
-  if (a->kind != PA_BUILTIN) return 0;
-  int fam = a->key - PA_KEY_BUILTIN;
-  return fam == PB_N_IO_READ || fam == PB_IO_SEEK_READ || fam == PB_IO_READ_NB || fam == PB_IO_READPARTIAL ||
-         fam == PB_ND_GENERIC;
-}
-int share_builtin_fresh(Compiler *c, int call) {
-  const char *name = nt_str(c->nt, call, "name");
-  if (bop_share_named(BOP_ANY_RECV, name) == BSH_PURE && !is_receiver_conversion(name)) return 1;
-  /* The share walk's builtin surfaces exclude typed-only methods such
-     as Thread#value; the settled plan below still checks every arm. */
-  if (!sh_builtin_fresh(c, call, !c->share || c->share->ostruct)) return 0;
-  /* A scope-name lookup can miss an alias's method. Every returning user
-     arm must occur in the target set whose return identities we check. */
-  int tg[CPT_MAX], n = cplan_targets(c, call, tg, CPT_MAX);
-  const PolyPlan p = cplan_poly_fresh(c, call);
-  for (int i = 0; i < p.n; i++) {
-    const PolyArm *a = &p.arm[i];
-    if (a->kind != PA_USER && a->kind != PA_PROC_FORM) continue;
-    int found = 0;
-    for (int j = 0; j < n; j++) if (tg[j] == a->mi) { found = 1; break; }
-    if (!found) return 0;
-  }
-  /* The generic default of a dispatch with arguments (PB_ND_GENERIC) is
-     only its tail (PT_GENERIC_TAIL) unless a name's own arm joins it,
-     which the plan lists as an arm of its own. The tail re-enters the call
-     as a builtin, or takes a block arm or an element store, all of names
-     some builtin class has; for a name none has (CRuby's tables, as
-     strbuf_poly_user_boxes asks) both only raise NoMethodError. */
-  int generic_raises = !builtin_object_method_known(name) && !builtin_instance_name_known(name);
-  for (int i = 0; i < p.n; i++) {
-    const PolyArm *a = &p.arm[i];
-    if (a->kind == PA_USER || a->kind == PA_ARITY || a->kind == PA_VIS || sh_arm_io_read_fresh(c, call, a)) continue;
-    if (a->kind == PA_TRIAL && (a->key == PA_KEY_TRIAL + PT_DEFAULT0 ||
-                               a->key == PA_KEY_TRIAL + PT_DEFAULT_N)) continue;
-    if (generic_raises && ((a->kind == PA_BUILTIN && a->key == PA_KEY_BUILTIN + PB_ND_GENERIC) ||
-                           (a->kind == PA_TRIAL && a->key == PA_KEY_TRIAL + PT_GENERIC_TAIL)))
-      continue;
-    return 0;
-  }
-  return p.n > 0;
-}
-/* ---- calls whose members the plan does not list (#9258) ----
-   A call on a boxed receiver whose name more classes define than the plan
-   lists (CPT_MAX), or on a receiver of no settled type, has members the
-   plan cannot name. They are still among the program's methods of its
-   name, or a builtin's, where nothing defines or answers that name past
-   what the walk sees (share_name_targets): the freshness of the call's
-   answer is theirs (sh_name_call_fresh, an_tail_name_fresh). */
-/* names a method the walk does not see may answer: one defined at run
-   time, a singleton def on a value, an alias, a module_function copy;
-   dyn_all: method_missing, a computed definer, a String evaluated */
-static const char **g_dyn_names;
-static int g_ndyn_names, g_cdyn_names, g_dyn_all;
-/* the old names of the program's aliases (a method that may also run under
-   another name), and whether it runs a method object on another receiver
-   or past an override (bind, bind_call, super_method) */
-static const char **g_alias_src;
-static int g_nalias_src, g_calias_src, g_rebind;
-static void sh_alias_src_add(const char *nm) {
-  if (g_nalias_src == g_calias_src) {
-    g_calias_src = g_calias_src ? g_calias_src * 2 : 16;
-    g_alias_src = realloc(g_alias_src, sizeof(*g_alias_src) * (size_t)g_calias_src);
-    if (!g_alias_src) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  }
-  g_alias_src[g_nalias_src++] = nm;
-}
-static const Compiler *g_dyn_c;
-static int g_dyn_count = -1;
-
-static void sh_dyn_name_add(const char *nm) {
-  if (!nm) return;
-  for (int i = 0; i < g_ndyn_names; i++) if (sp_streq(g_dyn_names[i], nm)) return;
-  if (g_ndyn_names >= g_cdyn_names) {
-    g_cdyn_names = g_cdyn_names ? g_cdyn_names * 2 : 32;
-    g_dyn_names = realloc(g_dyn_names, sizeof(char *) * (size_t)g_cdyn_names);
-    if (!g_dyn_names) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  }
-  g_dyn_names[g_ndyn_names++] = nm;
-}
-static const char *sh_lit_method_name(const NodeTable *nt, int a) {
-  NodeKind k = nt_kind(nt, a);
-  if (k == NK_SymbolNode) return nt_str(nt, a, "value");
-  if (k == NK_StringNode) return nt_str(nt, a, "content");
-  return NULL;
-}
-/* A call of a definer (define_method, alias_method, module_function, an
-   eval): the name it defines, or every name where it is computed */
-static void sh_dyn_definer_call(const NodeTable *nt, int id) {
-  static const char *const definers[] = { "define_method", "define_singleton_method", "alias_method",
-                                          "module_function", "instance_eval", "class_eval", "module_eval",
-                                          "class_exec", "module_exec", "instance_exec", "eval", NULL };
-  const char *nm = nt_str(nt, id, "name");
-  if (!nm) return;
-  int args = nt_ref(nt, id, "arguments"), an = 0;
-  const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
-  /* send(:define_method, ...) is the definer itself; a computed send
-     calls a method that exists */
-  if ((sp_streq(nm, "send") || sp_streq(nm, "__send__") || sp_streq(nm, "public_send")) && an > 0) {
-    nm = sh_lit_method_name(nt, av[0]);
-    if (!nm) return;
-    av++; an--;
-  }
-  int k = 0;
-  while (definers[k] && !sp_streq(definers[k], nm)) k++;
-  if (!definers[k]) return;
-  /* module_function's names (a bare one: the defs after it, below) */
-  if (sp_streq(nm, "module_function")) {
-    for (int a = 0; a < an; a++) {
-      const char *ln = sh_lit_method_name(nt, av[a]);
-      if (ln) sh_dyn_name_add(ln);
-      else g_dyn_all = 1;
-    }
-    return;
-  }
-  /* a body evaluated from a String may def anything; a block's defs are
-     the walk's own */
-  if (strstr(nm, "eval") || strstr(nm, "exec")) {
-    if (an > 0) g_dyn_all = 1;
-    return;
-  }
-  if (an == 0) return;
-  const char *ln = sh_lit_method_name(nt, av[0]);
-  if (ln) sh_dyn_name_add(ln);
-  else g_dyn_all = 1;
-}
-static void sh_dyn_names_build(Compiler *c) {
-  const NodeTable *nt = c->nt;
-  if (g_dyn_c == c && g_dyn_count == nt->count) return;
-  g_dyn_c = c;
-  g_dyn_count = nt->count;
-  g_ndyn_names = 0;
-  g_nalias_src = 0;
-  g_rebind = 0;
-  g_dyn_all = an_user_defines_method(c, "method_missing") || an_user_defines_method(c, "respond_to_missing?");
-  NT_FOREACH_KIND(nt, NK_CallNode, id) {
-    sh_dyn_definer_call(nt, id);
-    const char *cn = nt_str(nt, id, "name");
-    if (!cn) continue;
-    if (sp_streq(cn, "super_method") || sp_streq(cn, "bind") || sp_streq(cn, "bind_call")) g_rebind = 1;
-    if (sp_streq(cn, "alias_method")) {
-      int args = nt_ref(nt, id, "arguments"), an = 0;
-      const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
-      const char *on = an >= 2 ? sh_lit_method_name(nt, av[1]) : NULL;
-      if (on) sh_alias_src_add(on);
-      else g_rebind = 1;
-    }
-  }
-  /* a bare module_function: the defs after it in the same body */
-  NT_FOREACH_KIND(nt, NK_StatementsNode, st) {
-    int bn = 0;
-    const int *bv = nt_arr(nt, st, "body", &bn);
-    int on = 0;
-    for (int b = 0; b < bn; b++) {
-      NodeKind bk = nt_kind(nt, bv[b]);
-      if (bk == NK_CallNode && nt_ref(nt, bv[b], "receiver") < 0 && nt_ref(nt, bv[b], "arguments") < 0 &&
-          sp_streq(nt_str(nt, bv[b], "name"), "module_function")) on = 1;
-      else if (on && bk == NK_DefNode) sh_dyn_name_add(nt_str(nt, bv[b], "name"));
-    }
-  }
-  NT_FOREACH_KIND(nt, NK_DefNode, d) {
-    int r = nt_ref(nt, d, "receiver");
-    if (r >= 0 && nt_kind(nt, r) != NK_SelfNode) sh_dyn_name_add(nt_str(nt, d, "name"));
-  }
-  NT_FOREACH_KIND(nt, NK_AliasMethodNode, a) {
-    int nn = nt_ref(nt, a, "new_name"), on = nt_ref(nt, a, "old_name");
-    const char *ln = nn >= 0 ? sh_lit_method_name(nt, nn) : NULL;
-    if (ln) sh_dyn_name_add(ln);
-    else g_dyn_all = 1;
-    const char *lo = on >= 0 ? sh_lit_method_name(nt, on) : NULL;
-    if (lo) sh_alias_src_add(lo);
-    else g_rebind = 1;
-  }
-}
-/* Does the walk see every method a call of nm can run? (a writer may be
-   an attr_writer's store, which is no method's scope) */
-static int sh_name_methods_seen(Compiler *c, const char *nm) {
-  sh_dyn_names_build(c);
-  if (g_dyn_all || !nm) return 0;
-  size_t l = strlen(nm);
-  if (l == 0 || nm[l - 1] == '=') return 0;
-  for (int i = 0; i < g_ndyn_names; i++) if (sp_streq(g_dyn_names[i], nm)) return 0;
-  return 1;
-}
-/* Does the def at n hold a super or a bare super of its own (not one in a
-   nested def)? Too deep to walk counts as one. */
-static int sh_subtree_has_super(const NodeTable *nt, int n, int depth) {
-  if (n < 0) return 0;
-  if (depth > 200) return 1;
-  NodeKind k = nt_kind(nt, n);
-  if (k == NK_SuperNode || k == NK_ForwardingSuperNode) return 1;
-  if (depth > 0 && (k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode)) return 0;
-  for (int i = 0; i < nt_num_refs(nt, n); i++) if (sh_subtree_has_super(nt, nt_ref_at(nt, n, i), depth + 1)) return 1;
-  for (int i = 0; i < nt_num_arrs(nt, n); i++) {
-    int an = 0;
-    const int *av = nt_arr_at(nt, n, i, &an);
-    for (int j = 0; j < an; j++) if (sh_subtree_has_super(nt, av[j], depth + 1)) return 1;
-  }
-  return 0;
-}
-/* A receiverless call in an instance method can run, on each class made
-   whose instances run that method (the class or one below it whose chain
-   resolves the method's name to it), the method of the call's name that
-   class's chain has: those methods, each once, into out (at most cap), or
-   -1 where a builtin or method_missing may answer instead (#9258). A class
-   whose chain has none and nothing to answer raises NoMethodError, which
-   answers no String. */
-static int sh_self_call_targets(Compiler *c, int call, const char *nm, int *out, int cap) {
-  const NodeTable *nt = c->nt;
-  Scope *cur = comp_scope_of(c, call);
-  int ci = cur ? (int)(cur - c->scopes) : -1;
-  if (ci <= 0 || cur->is_cmethod || cur->class_id < 0 || !cur->name || cur->def_node < 0) return -1;
-  if (core_method_name(nm) || object_public_method_name(nm) ||
-      bop_share_kernel(nm, cplan_builtin_call(c, call)) || bop_share_named(BOP_ANY_RECV, nm))
-    return -1;
-  /* the enclosing method may also run on a class whose chain gives its
-     name another method: under an alias, or taken out of its class and
-     bound to another receiver (sh_dyn_names_build), or through a super
-     from that other method */
-  sh_dyn_names_build(c);
-  if (g_rebind) return -1;
-  for (int i = 0; i < g_nalias_src; i++) if (sp_streq(g_alias_src[i], cur->name)) return -1;
-  int k = 0, r = 0;
-  mtab_enter(c);   /* (the candidate owner of the classes the enclosing method runs on: every class is asked by design, no call's question) */
-  for (int cid = 0; cid < c->nclasses && !r; cid++) {
-    if (!c->classes[cid].instantiated && !c->classes[cid].is_builtin_const) continue;
-    int emi = comp_method_in_chain(c, cid, cur->name, NULL);
-    if (emi != ci) {
-      /* (a class below the method's own, or any where it is a module's) */
-      int below = comp_class_is_module(c, &c->classes[cur->class_id]) || is_descendant(c, cid, cur->class_id);
-      if (below && emi > 0 && emi < c->nscopes && sh_subtree_has_super(nt, c->scopes[emi].def_node, 0)) r = -1;
-      continue;
-    }
-    int mi = comp_method_in_chain(c, cid, nm, NULL);
-    if (mi < 0) {
-      if (comp_method_in_chain(c, cid, METHOD_MISSING_NAME, NULL) >= 0) r = -1;
-      continue;
-    }
-    if (c->scopes[mi].is_cmethod) { r = -1; continue; }
-    int seen = 0;
-    for (int i = 0; i < k && !seen; i++) seen = out[i] == mi;
-    if (seen) continue;
-    if (k >= cap) { r = -1; continue; }
-    out[k++] = mi;
-  }
-  mtab_leave(c);
-  return r ? -1 : k;
-}
-/* Does any class have an attr_reader `nm`? From a set of every class's
-   reader names, built again only when a reader table grows (comp_table_gen;
-   they never shrink) or the class count changes: share_name_targets asked
-   each class at every call it was asked for. */
-static int sh_any_reader(Compiler *c, const char *nm) {
-  static ANameHash names;
-  static unsigned stamp_gen; static int stamp_ncls = -1;
-  if (stamp_ncls != c->nclasses || stamp_gen != comp_table_gen) {
-    anh_free(&names);
-    for (int ci = 0; ci < c->nclasses; ci++)
-      for (int j = 0; j < c->classes[ci].nreaders; j++)
-        if (c->classes[ci].readers[j] && !anh_has(&names, c->classes[ci].readers[j]))
-          anh_add(&names, c->classes[ci].readers[j]);
-    stamp_ncls = c->nclasses; stamp_gen = comp_table_gen;
-  }
-  return anh_has(&names, nm);
-}
-/* The scopes of a name share_name_targets lists, ascending: the methods
-   with a def of the name, less the String reopen's instance methods, which
-   make the answer -1 (*n -1). Built per name once per scope-index epoch
-   (the by-name tables'), scanned while the index is not frozen (#10546). */
-static int *sh_ns_mis, sh_ns_cap, sh_ns_n;
-static char **sh_ns_name; static int *sh_ns_off, *sh_ns_cnt, sh_ns_entries, sh_ns_ecap;
-static int sh_ns_stamp_n = -1, sh_ns_stamp_str = -2; static unsigned sh_ns_stamp_gen;
-static ANameHash sh_ns_names;
-static int sh_name_scopes_scan(Compiler *c, const char *nm, int str_cid, int *mis, int *n) {
-  int k = 0;
-  for (int mi = an_scopes_named_first(c, nm); mi >= 1; mi = an_scopes_named_next(c, nm, mi)) {
-    Scope *m = &c->scopes[mi];
-    if (!m->name || m->def_node < 0 || !sp_streq(m->name, nm)) continue;
-    /* a String reopen's method: its self is the receiver */
-    if (str_cid >= 0 && m->class_id == str_cid && !m->is_cmethod) { *n = -1; return 0; }
-    if (mis) mis[k] = mi;
-    k++;
-  }
-  *n = k;
-  return 1;
-}
-static const int *sh_name_scopes(Compiler *c, const char *nm, int str_cid, int *n) {
-  if (!comp_scope_index_is_frozen() || comp_scope_moving()) {
-    /* (the scan, into a buffer of its own: names can still change) */
-    if (sh_ns_cap < c->nscopes + 1) {
-      sh_ns_cap = c->nscopes + 1;
-      sh_ns_mis = realloc(sh_ns_mis, sizeof(int) * (size_t)sh_ns_cap);
-      if (!sh_ns_mis) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-      sh_ns_entries = 0; sh_ns_n = 0; anh_free(&sh_ns_names); memset(&sh_ns_names, 0, sizeof sh_ns_names);
-      sh_ns_stamp_n = -1;
-    }
-    sh_name_scopes_scan(c, nm, str_cid, sh_ns_mis, n);
-    sh_ns_stamp_n = -1;   /* (the buffer is the scan's, not the memo's) */
-    return sh_ns_mis;
-  }
-  if (sh_ns_stamp_n != c->nscopes || sh_ns_stamp_gen != comp_scope_index_gen() || sh_ns_stamp_str != str_cid) {
-    anh_free(&sh_ns_names); memset(&sh_ns_names, 0, sizeof sh_ns_names);
-    sh_ns_entries = 0; sh_ns_n = 0;
-    sh_ns_stamp_n = c->nscopes; sh_ns_stamp_gen = comp_scope_index_gen(); sh_ns_stamp_str = str_cid;
-  }
-  int e = anh_find(&sh_ns_names, nm);
-  if (e < 0) {
-    int cnt = 0;
-    (void)sh_name_scopes_scan(c, nm, str_cid, NULL, &cnt);
-    if (sh_ns_entries == sh_ns_ecap) {
-      sh_ns_ecap = sh_ns_ecap ? sh_ns_ecap * 2 : 64;
-      sh_ns_name = realloc(sh_ns_name, sizeof(char *) * (size_t)sh_ns_ecap);
-      sh_ns_off = realloc(sh_ns_off, sizeof(int) * (size_t)sh_ns_ecap);
-      sh_ns_cnt = realloc(sh_ns_cnt, sizeof(int) * (size_t)sh_ns_ecap);
-      if (!sh_ns_name || !sh_ns_off || !sh_ns_cnt) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-    }
-    int need = cnt > 0 ? cnt : 0;
-    if (sh_ns_n + need > sh_ns_cap) {
-      while (sh_ns_n + need > sh_ns_cap) sh_ns_cap = sh_ns_cap ? sh_ns_cap * 2 : 1024;
-      sh_ns_mis = realloc(sh_ns_mis, sizeof(int) * (size_t)sh_ns_cap);
-      if (!sh_ns_mis) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-    }
-    e = sh_ns_entries++;
-    /* (the name is the scope's own, which the index keeps while frozen) */
-    sh_ns_name[e] = (char *)nm; sh_ns_off[e] = sh_ns_n; sh_ns_cnt[e] = cnt;
-    if (cnt > 0) { int c2 = 0; (void)sh_name_scopes_scan(c, nm, str_cid, sh_ns_mis + sh_ns_n, &c2); sh_ns_n += cnt; }
-    anh_add(&sh_ns_names, nm);
-  }
-  *n = sh_ns_cnt[e];
-  return sh_ns_mis + sh_ns_off[e];
-}
-/* See share.h. */
-int share_name_targets(Compiler *c, int call, int *out, int cap) {
-  const NodeTable *nt = c->nt;
-  if (call < 0 || nt_kind(nt, call) != NK_CallNode || nt_ref(nt, call, "block") >= 0) return -1;
-  if (nt_ref(nt, call, "receiver") < 0) {
-    const char *sn = nt_str(nt, call, "name");
-    if (cplan_targets_unknown_why(c, call, CPT_MAX) == CPT_WHY_NONE || !sh_name_methods_seen(c, sn)) return -1;
-    return sh_self_call_targets(c, call, sn, out, cap);
-  }
-  int why = cplan_targets_unknown_why(c, call, CPT_MAX);
-  if (why != CPT_WHY_CAP && why != CPT_WHY_RECV_UNTYPED) return -1;
-  const char *nm = nt_str(nt, call, "name");
-  if (!sh_name_methods_seen(c, nm)) return -1;
-  /* an attr_reader of the name answers the String its ivar holds, and is
-     no method's scope the walk below sees */
-  if (sh_any_reader(c, nm)) return -1;
-  int str_cid = comp_core_class(c, CORE_STRING);
-  /* the scopes of the name, in ascending order, through the by-name index:
-     kept per name while the index holds (sh_name_scopes), since the walk
-     ran at every call past the plan's list over every method of its name,
-     and the methods it reads are noted for the inference memo as before */
-  int n = 0;
-  const int *mis = sh_name_scopes(c, nm, str_cid, &n);
-  /* (every scope of the name is one the walk read: the inference memo
-     notes them, as the by-name tables' walk did, only when it is recording) */
-  if (imemo_dep_on)
-    for (int mi = an_scopes_named_first(c, nm); mi >= 1; mi = an_scopes_named_next(c, nm, mi)) ;
-  if (n < 0 || n > cap) return -1;
-  for (int i = 0; i < n; i++) out[i] = mis[i];
-  return n;
-}
-/* A call past the plan's list answers a new String where its builtin arms
-   do and every method of its name answers one (ret_fresh), answers nothing
-   (it only raises) or answers what Object's own inspect or to_s does
-   (share_name_targets, an_target_answers_new). A method that answers
-   anything else (its self, which may be the String receiver, among them)
-   leaves the call's answer unknown. */
-static int sh_name_call_fresh(Compiler *c, int call) {
-  if (!share_builtin_fresh(c, call)) return 0;
-  int *tg = malloc(sizeof(int) * (size_t)(c->nscopes + 1));
-  if (!tg) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  int n = share_name_targets(c, call, tg, c->nscopes + 1), ok = n > 0;
-  for (int i = 0; ok && i < n; i++) {
-    if (an_target_answers_new(c, tg[i])) continue;
-    if (scope_ret_param(c, tg[i]) >= 0 || !scope_ret_fresh(c, tg[i])) ok = 0;
-  }
-  free(tg);
-  return ok;
-}
-static int sh_user_call_fresh(Compiler *c, int call, int depth) {
-  const ShareFacts *F = c->share;
-  if (!F || call < 0 || depth > 8 || nt_kind(c->nt, call) != NK_CallNode) return 0;
-  /* an attribute assignment answers the String it handed the writer, not
-     what the writer returns */
-  if (sh_assign_call(c, call)) return 0;
-  /* A boxed dispatch can take a builtin arm too: its user targets alone
-     do not prove freshness (String#to_s can answer its receiver). */
-  if (cplan_user_fresh(c, call).via == UC_POLY && !share_builtin_fresh(c, call)) return 0;
-  int tg[64];
-  int n = cplan_targets(c, call, tg, 64);
-  if (n == CPT_UNKNOWN) return sh_name_call_fresh(c, call);
-  if (n <= 0) return 0;
-  for (int i = 0; i < n; i++) {
-    if (tg[i] < 0 || tg[i] >= c->nscopes) return 0;
-    /* (one that cannot bind the arguments only raises) */
-    if (!cplan_target_binds(c, call, tg[i])) continue;
-    /* (a class method of a class whose object no box holds) */
-    if (!cplan_target_reachable(c, call, tg[i])) continue;
-    /* (a method that answers its parameter answers what the caller has) */
-    if (scope_ret_param(c, tg[i]) >= 0 || !scope_ret_fresh(c, tg[i])) return 0;
-  }
-  return 1;
-}
 /* Does the subtree at n hold a `next` that leaves it (not one in a nested
-   block, lambda, method or loop)? With any, also a break or a return. */
-static int sh_has_jump_k(const NodeTable *nt, int n, int any) {
+   block, lambda, method or loop)? */
+static int sh_has_next(const NodeTable *nt, int n) {
   if (n < 0) return 0;
   NodeKind k = nt_kind(nt, n);
-  if (k == NK_NextNode || (any && (k == NK_BreakNode || k == NK_ReturnNode))) return 1;
+  if (k == NK_NextNode) return 1;
   if (k == NK_BlockNode || k == NK_LambdaNode || k == NK_DefNode || k == NK_WhileNode || k == NK_UntilNode ||
       k == NK_ForNode)
     return 0;
-  for (int i = 0; i < nt_num_refs(nt, n); i++) if (sh_has_jump_k(nt, nt_ref_at(nt, n, i), any)) return 1;
+  for (int i = 0; i < nt_num_refs(nt, n); i++) if (sh_has_next(nt, nt_ref_at(nt, n, i))) return 1;
   for (int i = 0; i < nt_num_arrs(nt, n); i++) {
     int m = 0; const int *ids = nt_arr_at(nt, n, i, &m);
-    for (int j = 0; j < m; j++) if (sh_has_jump_k(nt, ids[j], any)) return 1;
+    for (int j = 0; j < m; j++) if (sh_has_next(nt, ids[j])) return 1;
   }
   return 0;
 }
-static int sh_has_next(const NodeTable *nt, int n) { return sh_has_jump_k(nt, n, 0); }
-static int sh_has_jump(const NodeTable *nt, int n) { return sh_has_jump_k(nt, n, 1); }
 /* share.h */
 int share_block_returns(const Compiler *c, int blk) {
   const NodeTable *nt = c->nt;
   int body = blk >= 0 ? nt_ref(nt, blk, "body") : -1, n = 0;
   const int *st = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &n) : NULL;
   return n == 0 || nt_kind(nt, st[n - 1]) != NK_BreakNode || sh_has_next(nt, body);
-}
-
-/* Does share row `share`, with argc arguments, answer a container of some
-   of the receiver's own elements and of nothing else: a run of them
-   (BSH_SUB, a selection BSH_ITER_SEL, BSH_FLATTEN), or a counted element
-   answer (`first(2)`, `min(2)`)? */
-static int sh_answers_elems_run(int share, int argc) {
-  return share == BSH_SUB || share == BSH_ITER_SEL || share == BSH_FLATTEN ||
-         ((share == BSH_ELEM_N || share == BSH_ITER_FIND) && argc >= 1);
-}
-/* Is node r a temporary container (its own expression, held by no name)
-   whose elements are new Strings: an Array literal of them, or `map(&:sym)`
-   over elements that hold no String (Symbols, numbers), whose answers are
-   new? */
-static int sh_fresh_elems(Compiler *c, int r, int depth) {
-  const NodeTable *nt = c->nt;
-  r = nt_paren_single(nt, r);
-  if (r < 0 || depth > 8) return 0;
-  if (nt_kind(nt, r) == NK_ArrayNode) {
-    int en = 0; const int *el = nt_arr(nt, r, "elements", &en);
-    for (int i = 0; i < en; i++) if (!share_value_fresh(c, el[i], depth + 1)) return 0;
-    return 1;
-  }
-  if (nt_kind(nt, r) != NK_CallNode || cplan_has_targets(c, r)) return 0;
-  int blk = nt_ref(nt, r, "block"), recv = nt_ref(nt, r, "receiver");
-  const char *nm = nt_str(nt, r, "name");
-  /* a builtin answering a container of its receiver's own elements (the
-     share rows' run of them: sort, uniq, drop, reverse, compact, flatten,
-     take, a counted first or min) over such a temporary container holds the
-     same new Strings, which no name holds either. (A block's parameter
-     names them: `sort_by { |x| ... }` is left to the block's own facts, and
-     a name the program may answer itself to the Array rows,
-     cplan_builtin_overridden.) */
-  if (nm && recv >= 0 && blk < 0 && ty_is_array(comp_ntype_settled(c, recv)) &&
-      sh_answers_elems_run(bop_share_named(BOP_ANY_ARRAY, nm), call_plain_argc(c, r)) &&
-      !cplan_builtin_overridden(c, "Array", nm))
-    return sh_fresh_elems(c, recv, depth + 1);
-  if (!nm || recv < 0 || blk < 0 || bop_share_named(BOP_ANY_ARRAY, nm) != BSH_ITER_MAP) return 0;
-  /* map with a literal block whose value is a new String, and no next */
-  if (nt_kind(nt, blk) == NK_BlockNode) {
-    int body = nt_ref(nt, blk, "body");
-    int bn = 0; const int *bb = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &bn) : NULL;
-    return bn > 0 && !sh_has_next(nt, body) && share_value_fresh(c, bb[bn - 1], depth + 1);
-  }
-  if (nt_kind(nt, blk) != NK_BlockArgumentNode || nt_kind(nt, nt_ref(nt, blk, "expression")) != NK_SymbolNode) return 0;
-  TyKind at = comp_ntype_settled(c, recv);
-  TyKind et = ty_is_array(at) ? ty_array_elem(at) : TY_UNKNOWN;
-  return et != TY_UNKNOWN && !sh_may_hold(c, et);
-}
-
-/* Does every block method mi can run answer a new String: its literal
-   blocks' values (with no next, break or return), and those of the methods
-   that hand mi their own block, with no block the facts do not list? Asked
-   once per method (fresh_blk); a cycle answers no. */
-static int sh_blocks_fresh(Compiler *c, int mi, int depth) {
-  ShareFacts *F = c->share;
-  const NodeTable *nt = c->nt;
-  Scope *m = &c->scopes[mi];
-  if (!F) return 0;
-  if (F->fresh_blk[mi] >= 0) return F->fresh_blk[mi];
-  if (depth > 8 || F->blk_unk[mi] || m->is_lowered_yield || m->is_proc_form || !F->mb_start) return 0;
-  F->fresh_blk[mi] = 0;
-  int ok = 1;
-  for (int i = F->mb_start[mi]; ok && i < F->mb_start[mi + 1]; i++) {
-    int body = nt_ref(nt, F->mb_blk[i], "body");
-    int bn = 0; const int *bb = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &bn) : NULL;
-    ok = bn > 0 && !sh_has_jump(nt, body) && share_value_fresh(c, bb[bn - 1], depth + 1);
-  }
-  for (int e = 0; ok && e < F->nfw; e++)
-    if (F->fw_to[e] == mi) ok = sh_blocks_fresh(c, F->fw_from[e], depth + 1);
-  F->fresh_blk[mi] = (signed char)ok;
-  return ok;
-}
-
-/* Is callable literal k's value (pivs_callable_lit: a lambda's, a proc's
-   or a method's tail, with no jump) a new String, or a value no String
-   is? */
-static int sh_callable_fresh(Compiler *c, int k, int depth) {
-  const NodeTable *nt = c->nt;
-  const char *un = nt_kind(nt, k) == NK_CallNode ? nt_str(nt, k, "name") : NULL;
-  int body;
-  if (is_method_ref_name(un)) {
-    int a = nt_ref(nt, k, "arguments"), ac = 0;
-    const int *av = nt_arr(nt, a, "arguments", &ac);
-    int mi = call_target(c, k, -1, nt_str(nt, av[0], "value"), CT_TOP, NULL);
-    body = mi >= 0 && c->scopes[mi].def_node >= 0 ? nt_ref(nt, c->scopes[mi].def_node, "body") : -1;
-  }
-  else body = nt_ref(nt, un ? nt_ref(nt, k, "block") : k, "body");
-  int bn = 0; const int *bb = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &bn) : NULL;
-  if (bn == 0 || sh_has_jump(nt, body)) return 0;
-  TyKind t = comp_ntype_settled(c, bb[bn - 1]);
-  return (t != TY_STRING && t != TY_STRBUF && t != TY_POLY && t != TY_UNKNOWN) ||
-         share_value_fresh(c, bb[bn - 1], depth + 1);
-}
-/* Is `call` n, on a callable the boxed-receiver walk bounds to literals
-   (pivs_callables), a new String or no String whichever it runs? */
-static int sh_call_fresh(Compiler *c, int n, int depth) {
-  ShareFacts *F = c->share;
-  if (!F) return 0;
-  if (!F->fresh_call) {
-    F->fresh_call = malloc((size_t)(F->nnodes > 0 ? F->nnodes : 1));
-    if (!F->fresh_call) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-    memset(F->fresh_call, -1, (size_t)(F->nnodes > 0 ? F->nnodes : 1));
-  }
-  if (n >= F->nnodes) return 0;
-  if (F->fresh_call[n] >= 0) return F->fresh_call[n];
-  F->fresh_call[n] = 0;
-  int ks[16];
-  int nk = pivs_callables(c, n, ks, 16);
-  int ok = nk > 0;
-  for (int i = 0; ok && i < nk; i++) ok = sh_callable_fresh(c, ks[i], depth + 1);
-  F->fresh_call[n] = (signed char)ok;
-  return ok;
-}
-
-/* Is unary `+` of n a new String: n a builtin String constant
-   (share_frozen_string), or what the builtin freeze answers, frozen
-   whatever its receiver (`+RUBY_ENGINE.freeze`, `+s.freeze`)? */
-static int sh_uplus_copies(Compiler *c, int n) {
-  const NodeTable *nt = c->nt;
-  int u = nt_paren_single(nt, n);
-  if (u >= 0 && nt_kind(nt, u) == NK_CallNode && is_freeze_name(nt_str(nt, u, "name")) && call_plain_argc(c, u) == 0 &&
-      nt_ref(nt, u, "receiver") >= 0 && nt_ref(nt, u, "block") < 0 && !cplan_has_targets(c, u))
-    return 1;
-  return share_frozen_string(c, n);
-}
-int share_frozen_string(Compiler *c, int n) {
-  const NodeTable *nt = c->nt;
-  int u = nt_paren_single(nt, n);
-  if (u >= 0 && nt_kind(nt, u) == NK_ConstantReadNode) {
-    const char *nm = nt_str(nt, u, "name");
-    return is_engine_string_const(nm) && !comp_const(c, nm);
-  }
-  /* (File::NULL and the separators, and IO::NULL, static literals while
-     the program has no File, or IO, of its own) */
-  if (u >= 0 && nt_kind(nt, u) == NK_ConstantPathNode) {
-    int par = nt_ref(nt, u, "parent");
-    const char *pn = par >= 0 && nt_kind(nt, par) == NK_ConstantReadNode ? nt_str(nt, par, "name") : NULL;
-    const char *cn = nt_str(nt, u, "name");
-    /* (or while a File of the program writes no constant of the name: a
-       reopen with methods of its own, const_path_in_closed_builtin) */
-    if (pn && sp_streq(pn, "File"))
-      return (comp_core_class(c, CORE_FILE) < 0 || const_path_in_closed_builtin(c, u)) && is_file_string_const(cn);
-    return pn && sp_streq(pn, "IO") && (comp_core_class(c, CORE_IO) < 0 || const_path_in_closed_builtin(c, u)) &&
-           cn && sp_streq(cn, "NULL");
-  }
-  return repr_frozen_literal(c, n);
-}
-/* Is call n a builtin whose share row answers a new value (PURE), for its
-   receiver's family or any receiver, reaching no method of the program's? */
-static int sh_builtin_call_pure(Compiler *c, int n) {
-  const char *name = nt_str(c->nt, n, "name");
-  if (!name || is_receiver_conversion(name) || cplan_has_targets(c, n)) return 0;
-  int recv = nt_ref(c->nt, n, "receiver");
-  int s = recv >= 0 ? bop_share_named(sh_family(comp_ntype_settled(c, recv)), name)
-                     : bop_share_kernel(name, cplan_builtin_call(c, n));
-  if (!s) s = bop_share_named(BOP_ANY_RECV, name);
-  return s == BSH_PURE;
-}
-/* Is value n, a leaf of share_value_fresh's walk, a new String or nil: a
-   builtin that answers a new value, a conversion, a yield or a super that
-   answers one, an element read of a temporary container of them? */
-static int sh_value_fresh_leaf(Compiler *c, int n, int depth) {
-  const NodeTable *nt = c->nt;
-  NodeKind k = nt_kind(nt, n);
-  if (k == NK_NilNode) return 1;
-  if (k == NK_StringNode || k == NK_InterpolatedStringNode) return 1;
-  /* a builtin whose share row answers a new value, reaching no method of
-     the program's */
-  if (k == NK_CallNode && sh_builtin_call_pure(c, n)) return 1;
-  /* Kernel#String of a value whose #to_str or #to_s the program defines: a
-     new String when each of them answers one */
-  int conv = k == NK_CallNode ? sh_string_conv_arg(c, n) : -1, mis[64];
-  int nconv = conv >= 0 ? sh_string_conv_methods(c, conv, mis, 64) : 0;
-  if (nconv > 0) {
-    for (int i = 0; nconv <= 64 && i < nconv; i++)
-      if (mis[i] < 0 || scope_ret_param(c, mis[i]) >= 0 || !scope_ret_fresh(c, mis[i]))
-        return 0;
-    /* (a boxed argument may be a String, which Kernel#String answers itself) */
-    return nconv <= 64 && (ty_is_object(comp_ntype_settled(c, conv)) || share_value_fresh(c, conv, depth + 1));
-  }
-  if (k == NK_YieldNode) {
-    int mi = sh_method_index(c, n);
-    return mi >= 0 && sh_blocks_fresh(c, mi, depth + 1);
-  }
-  /* super answers what the method it reaches answers: a new String where
-     that method's returns joined nothing else, or each answers one, as a
-     call of it does (sh_user_call_fresh); not where it answers a
-     parameter, which zsuper hands on unseen */
-  if (k == NK_SuperNode || k == NK_ForwardingSuperNode) {
-    const CallPlan p = cplan_user_fresh(c, n);
-    int mi = p.mi;
-    if (!c->share || p.dispatch != CP_DIRECT || mi <= 0 || mi >= c->nscopes || scope_ret_param(c, mi) >= 0)
-      return 0;
-    return scope_ret_fresh(c, mi);
-  }
-  if (k != NK_CallNode) return 0;
-  if (sh_user_call_fresh(c, n, depth)) return 1;
-  /* ENV's [] answers a new String each read; to_s, to_str, itself and
-     freeze answer a new String receiver itself, and a bang answers it or
-     nil (`pick(s).upcase!`, pick answering `value + ""`) */
-  int rcv = nt_ref(nt, n, "receiver");
-  const char *cn = nt_str(nt, n, "name");
-  if (cn && rcv >= 0 && nt_ref(nt, n, "block") < 0 && !cplan_has_targets(c, n)) {
-    if (env_value_recv(c, rcv, comp_ntype_settled(c, rcv)) && is_aref_name(cn))
-      return 1;
-    if ((is_receiver_conversion(cn) || is_freeze_name(cn)) && call_plain_argc(c, n) == 0)
-      return share_value_fresh(c, rcv, depth + 1);
-    /* `+` of a frozen String (a builtin String constant, share_frozen_string)
-       is a new String, as `+"lit"` is */
-    if (is_unary_plus(cn) && call_plain_argc(c, n) == 0 && sh_uplus_copies(c, rcv)) return 1;
-    if (bop_share_self_answer(cn, 0)) return share_value_fresh(c, rcv, depth + 1);
-    /* a proc, a lambda or a Method the walk bounds to literals */
-    if (is_call_alias(cn) && sh_call_fresh(c, n, depth)) return 1;
-  }
-  /* an element read of a temporary container of new Strings */
-  int recv = nt_ref(nt, n, "receiver");
-  const char *nm = nt_str(nt, n, "name");
-  int sh = nm && recv >= 0 && !cplan_has_targets(c, n) ? bop_share_named(BOP_ANY_ARRAY, nm) : 0;
-  /* (max and min with no block or count answer one of them too) */
-  if (sh == BSH_ITER_FIND && is_minmax_query(nm) && call_plain_argc(c, n) == 0 &&
-      !cplan_builtin_overridden(c, "Array", nm)) sh = BSH_ELEM;
-  return (sh == BSH_ELEM || sh == BSH_ELEM_N) && nt_ref(nt, n, "block") < 0 && sh_fresh_elems(c, recv, depth + 1);
-}
-typedef struct { Compiler *c; int depth; } ShFresh;
-static int sh_fresh_arm_bad(const VpLeaf *lf, void *ud) {
-  const ShFresh *f = ud;
-  /* a conditional's missing arm and an empty body answer nil */
-  if (lf->kind == VPK_NIL) return 0;
-  if (lf->kind == VPK_GAVE_UP) return 1;
-  /* a rescue modifier is a leaf of the walk: each operand is a value of its
-     own, asked as the whole is */
-  if (nt_kind(f->c->nt, lf->node) == NK_RescueModifierNode)
-    return !(share_value_fresh(f->c, nt_ref(f->c->nt, lf->node, "expression"), f->depth + 1) &&
-             share_value_fresh(f->c, nt_ref(f->c->nt, lf->node, "rescue_expression"), f->depth + 1));
-  return !sh_value_fresh_leaf(f->c, lf->node, f->depth);
-}
-/* Is value n a new String or nil: a conditional each of whose arms is one
-   (or nil), a rescue modifier whose expression and fallback are, or such a
-   leaf? The arms of the conditional are read through the iterator, and so
-   are parentheses: `(x; s.dup)` is as new as `s.dup`, and `()` is nil.
-   `depth` bounds the leaves' own chains of calls, not the shapes. */
-int share_value_fresh(Compiler *c, int n, int depth) {
-  if (n < 0 || depth > 8) return 0;
-  ShFresh f = { c, depth };
-  return !for_each_value_position(c->nt, n, VPS_IF | VPS_UNLESS, sh_fresh_arm_bad, &f);
 }

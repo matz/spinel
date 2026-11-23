@@ -15,19 +15,20 @@
    The fact is a may-be-nil over-approximation. Where the analysis cannot
    see what reaches a slot it answers "may be nil": an object a builtin call
    it does not model answers, a parameter a call it cannot see binds (a
-   method named in a send or a method(:m), a method the runtime calls back),
-   a block a proc or a define_method takes, a splat's element, a pattern's
-   binding, a class-level ivar. Three shapes are taken as not nil without
-   proof, listed here so a later step can model them: an element a builtin
-   iteration, or a Ruby-defined builtin's yield, binds to a block parameter
-   (`boxes.each { |b| }`), unless the Array is one the program stores nil
-   into or leaves a gap in (one level in, below: NFW_ELEM_NIL); a container call
-   other than the element reads and picks that can miss (an Array's or a
-   Hash's own methods); and a builtin value a builtin call answers other
-   than those picks and a String's slice (`gets` at the end of its input).
-   A String bang that changed nothing is not one of them: it answers nil, and
-   its fact says so (a String slice, `slice!` included, stays the unarmed
-   element read it is, so a hot loop over slices pays for no test).
+   method named in a send or a method(:m), a method the runtime calls back:
+   bop_runtime_callback), a block a proc or a define_method takes, a splat's
+   element, a pattern's binding, a class-level ivar. Builtin null-return and
+   container element-nilness propagation come from the central builtin table
+   (bop_nil_kind, bop_elem_nil_kind in builtin_ops.c): bang methods with a
+   no-change nil contract (BOPF_SELF_OR_NIL), Array removals (BOPF_TAKEN_NIL),
+   nullable builtin readers (BOPF_MAY_NIL: container picks, String/Symbol
+   slices, IO#gets/getc/read, ENV lookups, Time#zone, MatchData#[]/match,
+   StringRange#begin/end/min/max, Method#source_location), and element-
+   preserving Array transforms (BOPF_KEEP_ELEMS, `+`, `|`, `values_at`,
+   `map`, `flat_map`). An element a builtin iteration, or a Ruby-defined
+   builtin's yield, binds to a block parameter (`boxes.each { |b| }`) is
+   taken as not nil unless the Array is one the program stores nil into or
+   leaves a gap in (one level in, below: NFW_ELEM_NIL).
 
    Flow: the slots are flow-insensitive (a slot one write leaves nil may be
    nil at every read), except that a read of a local inside a truthiness
@@ -241,7 +242,7 @@ static int nf_raises(const NodeTable *nt, int n) {
     return bn > 0 && nf_raises(nt, b[bn - 1]);
   }
   const char *cn = n >= 0 && nt_kind(nt, n) == NK_CallNode && nt_ref(nt, n, "receiver") < 0 ? nt_str(nt, n, "name") : NULL;
-  return cn && (sp_streq(cn, "raise") || sp_streq(cn, "fail"));
+  return cn && is_raise_alias(cn);
 }
 
 /* Does evaluating n, in method mi, write ivar ivn of self on every path
@@ -428,7 +429,7 @@ static int nf_truthy_implies(Compiler *c, int p, const char *nm) {
     if (!cn || r < 0) return 0;
     if (sp_streq(cn, "!")) return nf_falsy_implies(c, r, nm);
     if (!nf_is_read_of(nt, r, nm) || nt_kind(nt, nt_paren_single(nt, r)) != NK_LocalVariableReadNode) return 0;
-    if (sp_streq(cn, "is_a?") || sp_streq(cn, "kind_of?") || sp_streq(cn, "instance_of?"))
+    if (is_kind_query(cn))
       return nf_class_excludes_nil(c, p);
     if (sp_streq(cn, "!=")) {
       int a = nt_ref(nt, p, "arguments"), an = 0;
@@ -632,8 +633,7 @@ static int nf_is_jump(const NodeTable *nt, int s) {
   if (k == NK_ReturnNode || k == NK_NextNode || k == NK_BreakNode) return 1;
   if (k == NK_CallNode && nt_ref(nt, s, "receiver") < 0) {
     const char *cn = nt_str(nt, s, "name");
-    return cn && (sp_streq(cn, "raise") || sp_streq(cn, "fail") || sp_streq(cn, "exit") ||
-                  sp_streq(cn, "abort") || sp_streq(cn, "throw"));
+    return cn && is_diverging_call(cn);
   }
   return 0;
 }
@@ -766,7 +766,22 @@ static int nf_container(TyKind t) {
   return ty_is_array(t) || ty_is_obj_array(t) || ty_is_hash(t) || t == TY_POLY;
 }
 
+typedef struct { Compiler *c; const int *av; int an; } NfArgCtx;
+static TyKind nf_arg_kind(const void *ud, int i) {
+  const NfArgCtx *x = ud;
+  return i >= 0 && i < x->an ? comp_ntype(x->c, x->av[i]) : TY_UNKNOWN;
+}
+
+static int nf_recv_elem_nil(NF *f, int r, TyKind rt, TyKind res_t) {
+  return r >= 0 && res_t == ty_array_elem(rt) && nf_elem_tracked(rt) && nf_elem(f, r, 0);
+}
+
 static int nf_next_nil(NF *f, int n, int depth);
+static int nf_bop_argc(const NodeTable *nt, const int *av, int an) {
+  if (an > 0 && av && nt_kind(nt, av[an - 1]) == NK_KeywordHashNode) an--;
+  return an;
+}
+
 static int nf_call(NF *f, int v) {
   Compiler *c = f->c;
   const NodeTable *nt = f->nt;
@@ -782,7 +797,7 @@ static int nf_call(NF *f, int v) {
   int pmi = nf_plan(f, v, &owner, &dispatch);
   if (pmi >= 0) return nf_method_value(f, pmi, owner, dispatch, nm);
   TyKind rt = comp_ntype(c, r);
-  if (sp_streq(nm, "new") || sp_streq(nm, "allocate")) return NFW_NONE;
+  if (is_new_name(nm) || is_allocate_name(nm)) return NFW_NONE;
   /* an attr reader: its ivar */
   if (ty_is_object(rt) || r < 0) {
     int cls = ty_is_object(rt) ? ty_object_class(rt) : -1;
@@ -796,54 +811,41 @@ static int nf_call(NF *f, int v) {
       return nf_ivar(f, cls, ivn);
     }
   }
+  int blk = nt_ref(nt, v, "block");
   /* --share-strings: `then` with a literal block answers its block's value,
      which can be the receiver's nil (a route of the shared String, which a
      parameter it is handed may then bind) */
   if (r >= 0 && is_then_alias(nm)) {
-    int blk = nt_ref(nt, v, "block");
     /* the tail's value, or a `next`'s (as a yielded block's value is read) */
     if (blk >= 0 && nt_kind(nt, blk) == NK_BlockNode)
       return nf_or(nf_list(f, nt_ref(nt, blk, "body")), nf_next_nil(f, nt_ref(nt, blk, "body"), 0));
   }
-  /* the receiver itself */
-  if (r >= 0 && (sp_streq(nm, "itself") || sp_streq(nm, "tap") || sp_streq(nm, "dup") ||
-                 sp_streq(nm, "clone") || sp_streq(nm, "freeze")))
-    return nf_expr(f, r);
-  /* a String bang answers nil when it changes nothing (strip!, sub!, chomp!,
-     ...), except those that answer the receiver always (PF_STR_SELF): the
-     nil a mutator or any other method called on its result then meets. A
-     boxed receiver (an element of a boxed Array or Hash) answers it as a
-     String too. */
-  if (r >= 0 && (rt == TY_STRING || rt == TY_STRBUF || (rt == TY_POLY && comp_ntype_settled(c, v) == TY_STRING)) &&
-      ty_str_typed_bang_flags(nm) && !(ty_str_typed_bang_flags(nm) & PF_STR_SELF))
+  int pan = nf_bop_argc(nt, av, an);
+  NfArgCtx actx = { c, av, pan };
+  TyKind res_t = comp_ntype_settled(c, v);
+  BopNilKind nk = bop_nil_kind(r >= 0 ? rt : BOP_KERNEL, nm, pan, blk >= 0, nf_arg_kind, &actx);
+  switch (nk) {
+  case BOPN_RECV:
+    return r >= 0 ? nf_expr(f, r) : NFW_NONE;
+  case BOPN_SELF_OR_NIL:
     return NFW_NIL;
-  /* a removal from an object Array: a queue or a stack the program empties,
-     whose nil a call on the element then meets */
-  if (r >= 0 && ty_is_obj_array(rt) &&
-      (sp_streq(nm, "pop") || sp_streq(nm, "shift") || sp_streq(nm, "delete_at") || sp_streq(nm, "delete")))
-    return NFW_TAKEN;
-  /* an element read that can miss, a pick that finds nothing */
-  if (r >= 0 && nf_container(rt)) {
-    static const char *const picks[] = { "find", "detect", "first", "last", "min", "max", "min_by",
-      "max_by", "sample", "shift", "pop", "[]", "at", "dig", "delete", "delete_at", "slice",
-      "slice!", "inject", "reduce", "sum", "find_index", "key", "fetch", "assoc", "rassoc", "values_at", NULL };
-    for (int i = 0; picks[i]; i++) {
-      if (!sp_streq(nm, picks[i])) continue;
-      /* an element of an Array that can hold nil may be nil wherever it is */
-      return comp_ntype_settled(c, v) == ty_array_elem(rt) && nf_elem_tracked(rt) && nf_elem(f, r, 0) ? NFW_ELEM_NIL
-             : NFW_ELEM;
-    }
+  case BOPN_TAKEN:
+    if (r >= 0 && ty_is_obj_array(rt)) return NFW_TAKEN;
+    return nf_recv_elem_nil(f, r, rt, res_t) ? NFW_ELEM_NIL : NFW_ELEM;
+  case BOPN_ELEM_ONLY:
+    return nf_recv_elem_nil(f, r, rt, res_t) ? NFW_ELEM_NIL : NFW_NONE;
+  case BOPN_MAY_NIL:
+    if (nf_recv_elem_nil(f, r, rt, res_t)) return NFW_ELEM_NIL;
+    return r >= 0 && (nf_container(rt) || rt == TY_STRING || rt == TY_STRBUF) ? NFW_ELEM : NFW_NIL;
+  case BOPN_NONE:
     return NFW_NONE;
+  case BOPN_UNKNOWN:
+    break;
   }
-  /* a String's slice past its end */
-  if (r >= 0 && (rt == TY_STRING || rt == TY_STRBUF) &&
-      (sp_streq(nm, "[]") || sp_streq(nm, "slice") || sp_streq(nm, "slice!") || sp_streq(nm, "byteslice")))
-    return NFW_ELEM;
   /* the builtin surface: an object-typed answer of a call it does not model
      (send, instance_variable_get, a Method's or a Proc's call, a yield's
      value through then) may be nil; a builtin-typed one is taken as not nil
      (see the header) */
-  (void)an; (void)av;
   return ty_is_object(comp_ntype(c, v)) ? NFW_OPAQUE : NFW_NONE;
 }
 
@@ -1090,17 +1092,31 @@ static int nf_elem_uncached(NF *f, int v, int depth) {
       int mb = f->c->scopes[pmi].body;
       return mb >= 0 ? nf_elem(f, mb, depth + 1) : 0;
     }
-    if (r < 0 || !nf_elem_tracked(comp_ntype(f->c, r))) return 0;
-    /* the mapped element is the block's value */
-    if (is_map_alias(nm) && blk >= 0)
-      return nf_written_nil(nf_or(nf_list(f, body), nf_next_nil(f, body, 0))) ? NFW_ELEM_NIL : 0;
-    /* `a + b`, `a | b`, `a.union(b)` (a concat lands in its receiver's slot) */
-    if (is_plus_op(nm) || is_union_alias(nm)) {
+    TyKind rt = r >= 0 ? comp_ntype(f->c, r) : TY_UNKNOWN;
+    if (r < 0) return 0;
+    int pan = nf_bop_argc(nt, av, an);
+    NfArgCtx actx = { f->c, av, pan };
+    BopElemNil ek = bop_elem_nil_kind(rt, nm, pan, blk >= 0, nf_arg_kind, &actx);
+    if (ek == BOPEL_MAY_NIL) return NFW_ELEM_NIL;
+    if (!nf_elem_tracked(rt)) return 0;
+    switch (ek) {
+    case BOPEL_MAP:
+      return blk >= 0 && nf_written_nil(nf_or(nf_list(f, body), nf_next_nil(f, body, 0))) ? NFW_ELEM_NIL : 0;
+    case BOPEL_FLAT_MAP:
+      if (blk < 0) return 0;
+      return nf_elem(f, body, depth + 1) ||
+             nf_written_nil(nf_or(nf_list(f, body), nf_next_nil(f, body, 0))) ? NFW_ELEM_NIL : 0;
+    case BOPEL_MERGE:
       for (int k = 0; k < an; k++) if (nf_elem(f, av[k], depth + 1)) return NFW_ELEM_NIL;
       return nf_elem(f, r, depth + 1);
+    case BOPEL_RECV:
+      return nf_elem(f, r, depth + 1);
+    case BOPEL_MAY_NIL:
+      return NFW_ELEM_NIL;
+    case BOPEL_NONE:
+      break;
     }
-    if ((is_slice_alias(nm) && slice_read_call(f->c, v)) || elem_preserving_call(nm) ||
-        mutated_array(f->c, v) != v)
+    if ((is_slice_alias(nm) && slice_read_call(f->c, v)) || mutated_array(f->c, v) != v)
       return nf_elem(f, r, depth + 1);
     return 0;
   }
@@ -1165,15 +1181,46 @@ static LocalVar *nf_block_param(NF *f, int blk, int i) {
   return lv || !pn ? lv : nf_local_of(f, blk, pn);
 }
 
-/* The block parameters a builtin iteration over such an Array binds to its
-   elements (elem_block_params): each may be nil. A parameter's slot can be
-   boxed while an inlined iteration binds it typed, so the flag goes on a
-   boxed slot too: the read is what the guard asks about. */
+static int nf_unwrap_lowered_enum_call(const NodeTable *nt, int id, const char *cn,
+                                       int *recv_out, int *argc_out, char *name_buf, size_t buf_sz) {
+  if (!pivs_enum_iter(cn, name_buf, buf_sz)) return 0;
+  int an = 0;
+  const int *av = call_args(nt, id, &an);
+  if (an < 1 || !av) return 0;
+  *recv_out = av[0];
+  *argc_out = an - 1;
+  return 1;
+}
+
 static void nf_bind_elems(NF *f, int id, int blk) {
+  const NodeTable *nt = f->nt;
   int recv = -1;
   int np = elem_block_params(f->c, id, &recv);
-  if (!np || !nf_elem_tracked(comp_ntype(f->c, recv)) || !nf_elem(f, recv, 0)) return;
-  for (int i = 0; i < np; i++) {
+  if (np) {
+    if (nf_elem_tracked(comp_ntype(f->c, recv)) && nf_elem(f, recv, 0)) {
+      for (int i = 0; i < np; i++) {
+        LocalVar *lv = nf_block_param(f, blk, i);
+        if (lv && (nf_tracked(f->c, lv->type) || lv->type == TY_POLY)) nf_set(f, &lv->obj_may_nil, NFW_ELEM_NIL);
+      }
+    }
+    return;
+  }
+  int r = nt_ref(nt, id, "receiver");
+  const char *cn = nt_str(nt, id, "name");
+  if (!cn) return;
+  char ebuf[64];
+  int an = -1;
+  if (r < 0) {
+    if (!nf_unwrap_lowered_enum_call(nt, id, cn, &r, &an, ebuf, sizeof ebuf)) return;
+    cn = ebuf;
+  }
+  TyKind rt = comp_ntype(f->c, r);
+  if (!nf_elem_tracked(rt) || !nf_elem(f, r, 0)) return;
+  if (an < 0) call_args(nt, id, &an);
+  const IterRow *ir = iter_row_of(rt, cn, an);
+  if (!ir) return;
+  for (int i = 0; i < ir->nyield; i++) {
+    if (ir->yield[i] != YS_ELEM) continue;
     LocalVar *lv = nf_block_param(f, blk, i);
     if (lv && (nf_tracked(f->c, lv->type) || lv->type == TY_POLY)) nf_set(f, &lv->obj_may_nil, NFW_ELEM_NIL);
   }
@@ -1459,10 +1506,7 @@ static void nf_writes(NF *f) {
 /* Is method m one a call the analysis cannot see may reach: a name a send
    or a method(:m) carries, or one the runtime calls back with any value? */
 static int nf_unseen_callers(NF *f, const Scope *m) {
-  static const char *const callbacks[] = { "==", "!=", "eql?", "equal?", "<=>", "===", "coerce",
-    "method_missing", "respond_to_missing?", "initialize_copy", "inherited", "included", NULL };
-  if (!m->name) return 1;
-  for (int i = 0; callbacks[i]; i++) if (sp_streq(m->name, callbacks[i])) return 1;
+  if (!m->name || bop_runtime_callback(m->name)) return 1;
   /* (a set: asked for every method of the program, and a Rails application
      has tens of thousands of such names -- the list search was the whole
      of a sample inside the value-types phase) */
@@ -1530,15 +1574,47 @@ static void nf_bind_block(NF *f, int id, int blk, int mi, int **yields, int *nyi
   const NodeTable *nt = f->nt;
   const char *cn = nt_str(nt, id, "name");
   int all = 0, from_recv = 0, acc = -1;
-  /* a Ruby-defined builtin (builtins/enumerable.rb's `__enum_minmax`)
-     yields its receiver's elements, as a builtin iteration does: its own
-     `min = nil` before the first element is not what the block sees */
-  if (mi >= 0 && c->scopes[mi].name && !strncmp(c->scopes[mi].name, "__enum_", 7)) return;
+  /* a Ruby-defined builtin (builtins/enumerable.rb's `__enum_minmax`,
+     `__enum_each_with_index`, ...) yields its receiver's elements, as a
+     builtin iteration does: its own `min = nil` before the first element is
+     not what the block sees, while a nil stored in the receiver Array is. */
+  if (mi >= 0 && c->scopes[mi].name && !strncmp(c->scopes[mi].name, "__enum_", 7)) {
+    nf_bind_elems(f, id, blk);
+    char ebuf[64];
+    int er = -1, ean = 0;
+    if (nf_unwrap_lowered_enum_call(nt, id, c->scopes[mi].name, &er, &ean, ebuf, sizeof ebuf)) {
+      int an = 0;
+      const int *av = call_args(nt, id, &an);
+      int body = nt_ref(nt, blk, "body");
+      if (is_with_object_alias(ebuf) && an >= 2) {
+        LocalVar *lv = nf_block_param(f, blk, 1);
+        if (lv) {
+          if (nf_open(lv->obj_may_nil) && (nf_tracked(c, lv->type) || lv->type == TY_POLY))
+            nf_set(f, &lv->obj_may_nil, nf_expr(f, av[1]));
+          if (nf_elem_tracked(lv->type) && !(lv->obj_elem_may_nil & NF_EL_HOLDS) && nf_elem(f, av[1], 0))
+            nf_elem_add(f, &lv->obj_elem_may_nil, NF_EL_HOLDS);
+          if ((nf_elem_tracked(lv->type) || lv->type == TY_POLY) && (lv->obj_elem_may_nil & NF_EL_STORED))
+            nf_elem_mark_back(f, av[1], 0);
+        }
+      } else if (is_reduce_alias(ebuf)) {
+        LocalVar *lv = nf_block_param(f, blk, 0);
+        if (lv && nf_open(lv->obj_may_nil) && (nf_tracked(c, lv->type) || lv->type == TY_POLY)) {
+          int why = an >= 2 ? nf_expr(f, av[1])
+                  : (nf_elem_tracked(comp_ntype(c, er)) && nf_elem(f, er, 0)) ? NFW_ELEM_NIL : NFW_NONE;
+          int bwhy = body >= 0 ? nf_or(nf_list(f, body), nf_next_nil(f, body, 0)) : NFW_NONE;
+          why = nf_or(why, bwhy);
+          if (ty_is_obj_array(comp_ntype(c, er))) why = nf_or(why, NFW_OPAQUE);
+          nf_set(f, &lv->obj_may_nil, why);
+        }
+      }
+    }
+    return;
+  }
   if (mi >= 0) {
     if (!c->scopes[mi].yields) all = 1;
   }
-  else if (cn && (sp_streq(cn, "tap") || sp_streq(cn, "then") || sp_streq(cn, "yield_self"))) from_recv = 1;
-  else if (cn && (sp_streq(cn, "inject") || sp_streq(cn, "reduce") || sp_streq(cn, "each_with_object"))) {
+  else if (cn && iter_hands_recv(cn)) from_recv = 1;
+  else if (cn && (is_reduce_alias(cn) || is_with_object_alias(cn))) {
     int a = nt_ref(nt, id, "arguments"), an = 0;
     const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
     /* a fold over an Array of one class (narrow_object_arrays) binds its
@@ -1546,7 +1622,7 @@ static void nf_bind_block(NF *f, int id, int blk, int mi, int **yields, int *nyi
        accumulator holds the block's last value, which may be such an
        element, so it may be nil too */
     int r = nt_ref(nt, id, "receiver");
-    if (!sp_streq(cn, "each_with_object") && r >= 0 && ty_is_obj_array(comp_ntype(c, r))) {
+    if (is_reduce_alias(cn) && r >= 0 && ty_is_obj_array(comp_ntype(c, r))) {
       int elem_nil = nf_elem(f, r, 0);
       for (int i = 0; i < 2; i++) {
         LocalVar *lv = nf_block_param(f, blk, i);

@@ -15452,17 +15452,21 @@ void emit_rescue(Compiler *c, int id, Buf *b, int indent, int fr, const char *re
       }
       /* A builtin namespaced exception (e.g. StringScanner::Error) is raised
          under its qualified name. Map the path to that form only when it
-         names a known builtin exception, so user classes like M::Err keep
-         matching on their leaf name. */
+         names a known builtin exception and no class of the program with
+         another name (App::IO::WaitReadable), so user classes like M::Err
+         keep matching on their leaf name. */
       char enbuf[128];
       if (en_k == NK_ConstantPathNode) {
         int par = nt_ref(nt, exc[i], "parent");
+        /* (`IO::WaitReadable` or `::IO::WaitReadable`) */
         const char *pnm = (par >= 0 &&
-                           nt_kind(nt, par) == NK_ConstantReadNode)
+                           (nt_kind(nt, par) == NK_ConstantReadNode ||
+                            (nt_kind(nt, par) == NK_ConstantPathNode && nt_ref(nt, par, "parent") < 0)))
                           ? nt_str(nt, par, "name") : NULL;
         if (pnm && ename) {
           snprintf(enbuf, sizeof enbuf, "%s::%s", pnm, ename);
-          if (is_exc_name(enbuf)) ename = enbuf;
+          const char *rrn = rci >= 0 ? class_ruby_name(c, rci) : NULL;
+          if (is_exc_name(enbuf) && (!rrn || sp_streq(rrn, enbuf))) ename = enbuf;
         }
       }
       /* A user exception class is raised under its QUALIFIED Ruby name

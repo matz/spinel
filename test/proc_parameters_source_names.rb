@@ -1,14 +1,15 @@
 # `Proc#parameters` reports the names the PROGRAM wrote. Three things leaked
 # the compiler's own names instead (#4045).
 #
-# A block parameter colliding with an outer local is renamed to `b__bp<N>`, and
-# the emitter strips that suffix -- for the positional kinds only, so rest,
-# keyword, keyword-rest and block reported the suffix verbatim.
+# A block parameter colliding with an outer local has a slot of its own, and
+# the name the program wrote is what Proc#parameters reports -- for the
+# positional kinds only, once, so rest, keyword, keyword-rest and block
+# reported the slot's spelling.
 #
-# Stripping alone was not enough either: the stripped name appears nowhere else
+# Reporting the written name alone was not enough either: it appears nowhere else
 # in the program, so it is not in the generated symbol table, and interning it
-# at emit time came too late -- the symbol rendered EMPTY. The rename interns
-# the source name now, while the table is still open.
+# at emit time came too late -- the symbol rendered EMPTY. The parameter list
+# interns the written name now, while the table is still open.
 #
 # And the implicit rest a trailing comma synthesizes (`|a,|`) is not a
 # parameter Ruby reports at all.

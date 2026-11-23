@@ -54,7 +54,7 @@ static void graft(Compiler *c, int site, Buf *b, int ext, int slot, int arity) {
   int st = nt_ref(tmp, tmp->root_id, "statements");
   int ns = 0; const int *nodes = nt_arr(tmp, st, "body", &ns);
   if (ns != 1) unsupported_feature(c, site, "recorder declaration must produce one statement");
-  int root = nt_import_subtree(nt, tmp, nodes[0]);
+  int root = comp_import_subtree(c, tmp, nodes[0]);
   nt_free(tmp);
   if (root < 0) unsupported_feature(c, site, "cannot import recorder declaration");
   int line = nt_int(nt, site, "node_line", 1), file = nt_int(nt, site, "node_file", -1);
@@ -426,7 +426,7 @@ static void lower_constant_stub(Compiler *c, int mi) {
   const int *roots = nt_arr(tmp, st, "body", &n);
   int start = c->nt->count;
   int tmp_body = n == 1 ? nt_ref(tmp, roots[0], "body") : -1;
-  int root = tmp_body >= 0 ? nt_import_subtree((NodeTable *)c->nt, tmp, tmp_body) : -1;
+  int root = tmp_body >= 0 ? comp_import_subtree(c, tmp, tmp_body) : -1;
   nt_free(tmp); free(body.p);
   if (root < 0) unsupported_feature(c, sc->def_node, "invalid C extension constant stub");
   nt_node_set_ref((NodeTable *)c->nt, sc->def_node, "body", root); { sc->body = root; comp_touch_scope(sc->idx); }

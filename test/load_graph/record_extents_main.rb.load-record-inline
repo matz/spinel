@@ -53,9 +53,9 @@ r0 #50 f0 LocalVariableWriteNode v line 52
 r0 #51 f0 CallNode each_with_index line 53
   r0 #52 f0 CallNode p line 53
 r0 #53 f0 CallNode uniq line 54
-  r0 #54 f0 LocalVariableReadNode e__bp144 line 54
+  r0 #54 f0 LocalVariableReadNode e line 54
 r0 #55 f0 CallNode sort_by! line 55
-  r0 #56 f0 LocalVariableReadNode e__bp153 line 55
+  r0 #56 f0 LocalVariableReadNode e line 55
 r0 #57 f0 CallNode slice_before line 56
   r0 #58 f0 CallNode > line 56
 r0 #59 f0 IfNode line 57

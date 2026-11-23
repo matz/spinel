@@ -2089,22 +2089,6 @@ typedef struct {
      which desugar_splat_view_scalars rewrites once typed (-1 once seen) */
   int *splat_views;
   int nsplat_views;
-  /* the slot names desugar_reassigned_block_params invents, each with the
-     name it stands for (param_written_name) */
-  char **rbp_slot_names;
-  char **rbp_slot_written;
-  int nrbp_slots;
-  /* the names the shadow rename invents for block parameters, each with the
-     block it was invented for: an open table of mask+1 slots, nbp used. The
-     name the program wrote is on the renamed nodes (nt_wname) */
-  char **bp_name;
-  int *bp_blk;    /* the block each was invented for (block_param_made_for) */
-  unsigned bp_mask;
-  int nbp;
-  /* the names the program wrote that hold `__bp` or `__bq`, collected when
-     the first invented name is made (bp_user_uses) */
-  char **bp_user;
-  int nbp_user, bp_user_built;
   /* the method names a definition query (`method_defined?(:m)`, its public
      form) asked before the walk, where a fold answered it from the program's
      text (desugar_engine_branches, desugar_def_unless_method_defined): a
@@ -2172,6 +2156,8 @@ void comp_def_asked_add(Compiler *c, const char *name);   /* a fold answered a d
 void comp_grow_node_arrays(Compiler *c);
 void comp_node_pbases(Compiler *c);   /* the parsed program nodes' bases (comp_new) */
 const char *comp_node_tag(Compiler *c, int id);
+void comp_name_locals(Compiler *c, int from);
+int comp_import_subtree(Compiler *c, const NodeTable *src, int root);   /* nt_import_subtree, then the locals named */   /* the locals of nodes from `from` on, named by their scope (a slot) */
 
 /* If `id` is a ternary `cond ? A : B` -- an IfNode whose then- and else-clauses
    are each a single value expression (the shape the ternary emitter lowers to a
@@ -2344,6 +2330,7 @@ LocalVar *scope_local_intern(Scope *s, const char *name);
 static inline const char *lv_wname(const LocalVar *lv) { return lv->wname ? lv->wname : lv->name; }
 void lv_set_wname(LocalVar *lv, const char *wname);
 const char *scope_local_wname(Compiler *c, int scope_idx, const LocalVar *lv);
+void local_names_check(Compiler *c);   /* --plan-check: slot-named nodes carry their written name */
 void scope_locals_appended(Scope *s);  /* scope_local's index, after an append */
 void scope_locals_removed(Scope *s);   /* ... after a local is taken out of `locals` */
 

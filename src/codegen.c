@@ -8511,11 +8511,9 @@ static void collect_numbered_reads(Compiler *c, int id, NameSet *out) {
   if (id < 0) return;
   NodeKind k = nt_kind(c->nt, id);
   if (k == NK_BlockNode || k == NK_LambdaNode) return;
-  if (k == NK_LocalVariableReadNode || k == NK_ItLocalVariableReadNode) {
+  if (k == NK_ItLocalVariableReadNode || (k == NK_LocalVariableReadNode && is_numbered_param_name(nt_wname(c->nt, id)))) {
     const char *nm = nt_str(c->nt, id, "name");
-    if (nm && ((nm[0] == '_' && nm[1] >= '1' && nm[1] <= '9' && (!nm[2] || nm[2] == '_')) ||
-               (nm[0] == 'i' && nm[1] == 't' && (!nm[2] || nm[2] == '_'))))
-      nameset_add(out, nm);
+    if (nm) nameset_add(out, nm);
   }
   int nr = nt_num_refs(c->nt, id);
   for (int i = 0; i < nr; i++) { int ch = nt_ref_at(c->nt, id, i); if (ch >= 0) collect_numbered_reads(c, ch, out); }
@@ -8835,6 +8833,11 @@ int proc_numbered_params_node(Compiler *c, int create) {
   return (bk == NK_NumberedParametersNode) ? bp : -1;
 }
 
+/* Is the proc-creating node a block or lambda that reads `it`: Proc#parameters names no parameter of it. */
+static int proc_implicit_it(Compiler *c, int create) {
+  int bpn = proc_numbered_params_node(c, create);
+  return (int)nt_int(c->nt, bpn >= 0 ? bpn : create, "implicit_it", 0);
+}
 int proc_params_node(Compiler *c, int create) {
   NodeKind k = nt_kind(c->nt, create);
   if (k == NK_LambdaNode) return nt_ref(c->nt, create, "parameters");
@@ -8919,18 +8922,6 @@ static void proc_collect_used_shallow(Compiler *c, int id, NameSet *out) {
   int na = nt_num_arrs(c->nt, id);
   for (int i = 0; i < na; i++) { int n = 0; const int *ids = nt_arr_at(c->nt, id, i, &n); for (int j = 0; j < n; j++) if (ids[j] >= 0) proc_collect_used_shallow(c, ids[j], out); }
 }
-int proc_numbered_max(const NameSet *used) {
-  int mx = 0;
-  for (int i = 0; i < used->n; i++) {
-    const char *nm = used->v[i];
-    if (nm && nm[0] == '_' && nm[1] >= '1' && nm[1] <= '9' && nm[2] == '\0') {
-      int k = nm[1] - '0';
-      if (k > mx) mx = k;
-    }
-  }
-  return mx;
-}
-
 int proc_opt_count(Compiler *c, int create) {
   int pn = proc_params_node(c, create);
   if (pn < 0) return 0;
@@ -10292,7 +10283,7 @@ static TyKind lambda_nonlocal_return_ty(Compiler *c, int id) {
   return r;
 }
 /* The symbol Proc#parameters reports for parameter node p: the name the
-   program wrote (param_written_name), `anon` for one with no name, CRuby's
+   program wrote (nt_wname), `anon` for one with no name, CRuby's
    text for an anonymous one the desugar named; -1 for a destructuring
    group's slot, which has no name, and -2 for a parameter the desugar made
    that is none, the implicit rest of a trailing comma (`|a,|`, #4045)
@@ -10303,7 +10294,7 @@ static int proc_param_sym(Compiler *c, int p, const char *anon) {
   case DPN_NONE: return -2;
   case DPN_NAMELESS: return -1;
   case DPN_WRITTEN: return comp_sym_intern(c, w);
-  default: return comp_sym_intern(c, nm ? param_written_name(c, nt_wname(c->nt, p)) : anon);
+  default: return comp_sym_intern(c, nm ? nt_wname(c->nt, p) : anon);
   }
 }
 
@@ -10809,9 +10800,9 @@ static void emit_proc_kw_head(int no_kw, int npos, Buf *pb) {
     buf_puts(pb, "    if (_sp_haskw && sp_poly_length(_sp_kwh) > 0)"
                  " sp_raise_cls(\"ArgumentError\", \"no keywords accepted\");\n");
 }
-static void emit_proc_numbered_args(Compiler *c, Scope *bs, int n, Buf *pb) {
+static void emit_proc_numbered_args(Compiler *c, Scope *bs, int create, int n, Buf *pb) {
   for (int k = 0; k < n; k++) {
-    char name[32]; snprintf(name, sizeof name, "_%d", k + 1);
+    const char *name = numbered_param_name(c, create, k);
     buf_printf(pb, "    sp_RbVal lv_%s = ", name);
     emit_proc_poly_arg(c, bs, scope_local(bs, name), name, k, pb);
     buf_printf(pb, "    (void)lv_%s;\n", name);
@@ -11039,18 +11030,13 @@ static void emit_proc_literal_here(Compiler *c, int create, Buf *b) {
     }
     else if (arity == 0 && nposts == 0 && !(restn && restn[0]) && nopts == 0) {
       /* `-> { _1 * 10 }` carries no parameters node at all -- the numbered
-         names surface as plain local reads -- so the count comes from the
-         body, and the names are the literal ones (nothing renames a block
-         with no node to record the new name on). */
-      { NameSet own = {0};
-        proc_collect_used_shallow(c, body, &own);
-        nnumbered = proc_numbered_max(&own);
-        free(own.v); }
+         names surface as plain local reads -- so the count and the names
+         are on the lambda itself. */
+      nnumbered = (int)nt_int(nt, create, "numbered_max", 0);   /* (the bridge counted them on the lambda) */
       for (int k = 1; k <= nnumbered; k++) {
         /* NameSet stores the POINTER: use the scope-interned stable name, not
            a stack buffer. The analyze pass interned _k on this scope already. */
-        char nb[4] = { '_', (char)('0' + k), 0, 0 };
-        LocalVar *nlv = scope_local_intern(bs, nb);
+        LocalVar *nlv = scope_local_intern(bs, numbered_param_name(c, create, k - 1));
         nameset_add(&params, nlv->name);
       }
     } }
@@ -11361,7 +11347,7 @@ else if (orecv >= 0 && onm) {
      order. Positionals (leading + post) are :req for a lambda and :opt for a
      proc; defaulted positionals are :opt in both; then :rest, :keyreq / :key,
      :keyrest, :block. An anonymous rest/kwrest/block reports the CRuby
-     placeholder name (:*, :**, :&); numbered params report as (:opt, :_N).
+     placeholder name (:*, :**, :&); numbered params report as (:opt, :_N), an `it` as (:opt).
      Kinds and names are interned symbol ids. */
   char meta_args[2 * UNIT_TAG_MAX + 64];
   int meta_count = 0;
@@ -11429,7 +11415,7 @@ else if (orecv >= 0 && onm) {
         char nbuf[4];
         snprintf(nbuf, sizeof nbuf, "_%d", i + 1);
         pkind[meta_count] = "req";  /* canonical, like a named plain positional */
-        pname[meta_count++] = comp_sym_intern(c, nbuf);
+        pname[meta_count++] = proc_implicit_it(c, create) ? -1 : comp_sym_intern(c, nbuf);
       }
     }
     if (meta_count > 0) {
@@ -11790,7 +11776,7 @@ else if (orecv >= 0 && onm) {
        names and the requireds loop above has already declared and bound them;
        doing it twice is a redefinition the C compiler stops on. */
     if (proc_numbered_params_node(c, create) < 0)
-      emit_proc_numbered_args(c, bs, nnumbered, pb);
+      emit_proc_numbered_args(c, bs, create, nnumbered, pb);
     /* Optionals fill from the front with whatever arguments remain after the
        requireds and the posts (_sp_ot of them); a slot with no argument evaluates its
        default (which may reference earlier params -- they are bound above /
@@ -11873,13 +11859,13 @@ else if (orecv >= 0 && onm) {
         buf_puts(pb, "    { static const char *const _pkw[] = {");
         for (int j = 0; j < nkw2; j++) {
           const char *kn = nt_str(nt, kwn[j], "name");
-          if (kn) buf_printf(pb, "\"%s\", ", param_written_name(c, nt_wname(nt, kwn[j])));
+          if (kn) buf_printf(pb, "\"%s\", ", nt_wname(nt, kwn[j]));
         }
         buf_puts(pb, "0}, *const _pkr[] = {");
         for (int j = 0; j < nkw2; j++) {
           const char *kn = nt_str(nt, kwn[j], "name");
           if (kn && nt_kind(nt, kwn[j]) == NK_RequiredKeywordParameterNode)
-            buf_printf(pb, "\"%s\", ", param_written_name(c, nt_wname(nt, kwn[j])));
+            buf_printf(pb, "\"%s\", ", nt_wname(nt, kwn[j]));
         }
         buf_printf(pb, "0}, *const _pkn[] = {0};%c", 10);
         /* judged without building anything on the path that binds: the
@@ -11892,7 +11878,7 @@ else if (orecv >= 0 && onm) {
             const char *kn = nt_str(nt, kwn[j], "name");
             if (kn && nt_kind(nt, kwn[j]) == NK_RequiredKeywordParameterNode)
               buf_printf(pb, " || !sp_poly_has_key(_sp_kwh, sp_box_sym((sp_sym)%d))",
-                         comp_sym_intern(c, param_written_name(c, nt_wname(nt, kwn[j]))));
+                         comp_sym_intern(c, nt_wname(nt, kwn[j])));
           }
           buf_puts(pb, ")");
         }
@@ -11902,7 +11888,7 @@ else if (orecv >= 0 && onm) {
           for (int j = 0; j < nkw2; j++) {
             const char *kn = nt_str(nt, kwn[j], "name");
             if (!kn || nt_kind(nt, kwn[j]) != NK_RequiredKeywordParameterNode) continue;
-            char iv[300]; snprintf(iv, sizeof iv, ":%s", param_written_name(c, nt_wname(nt, kwn[j])));
+            char iv[300]; snprintf(iv, sizeof iv, ":%s", nt_wname(nt, kwn[j]));
             kw_names_add(miss, sizeof miss, &nm, iv);
           }
           kw_error_message(km, sizeof km, "missing", nm, miss);
@@ -11917,7 +11903,7 @@ else if (orecv >= 0 && onm) {
       int dv = (kpk == NK_OptionalKeywordParameterNode)
                  ? nt_ref(nt, kwn[j], "value") : -1;
       char key[128];
-      snprintf(key, sizeof key, "%s", param_written_name(c, nt_wname(nt, kwn[j])));
+      snprintf(key, sizeof key, "%s", nt_wname(nt, kwn[j]));
       int sym_id = comp_sym_intern(c, key);
       char cond[160], arg[128], missing[160];
       snprintf(cond, sizeof cond, "_sp_haskw && sp_poly_has_key(_sp_kwh, sp_box_sym((sp_sym)%d))", sym_id);
@@ -11949,7 +11935,7 @@ else if (orecv >= 0 && onm) {
         for (int j = 0; j < nkw3; j++) {
           const char *kn = nt_str(nt, kwn3[j], "name");
           if (kn) buf_printf(pb, "    sp_PolyPolyHash_delete((sp_PolyPolyHash *)_kwr_%s.v.p, sp_box_sym((sp_sym)%d));%c",
-                             krn, comp_sym_intern(c, param_written_name(c, nt_wname(nt, kwn3[j]))), 10);
+                             krn, comp_sym_intern(c, nt_wname(nt, kwn3[j])), 10);
         }
       }
       else
@@ -20325,7 +20311,7 @@ static char *build_types_json(Compiler *c) {
       if (eln > 0) buf_printf(&b, ",\"end_line\":%d,\"end_col\":%d", eln, (int)nt_int(nt, id, "node_end_col", 0)); }
     { const char *kind = nt_type(nt, id);
       if (kind) { buf_puts(&b, ",\"kind\":\""); json_escape_into(&b, kind); buf_puts(&b, "\""); }
-      const char *nm = key_name(c, id);
+      const char *nm = nt_str(nt, id, "wname") ? nt_wname(nt, id) : key_name(c, id);   /* a local as the program wrote it */
       if (nm && *nm) { buf_puts(&b, ",\"name\":\""); json_escape_into(&b, nm); buf_puts(&b, "\""); } }
     buf_puts(&b, ",\"type\":\"");
     Buf tag; memset(&tag, 0, sizeof tag);
@@ -24882,6 +24868,7 @@ char *codegen_program(const NodeTable *nt) {
   Compiler *c = comp_new(nt);
   plain_note_parsed(c);   /* ahead of the analysis's desugars */
   analyze_program(c);
+  if (g_plan_check) local_names_check(c);
   double tcg = sp_timing_now();
   if (g_dump_traits) { ty_traits_dump(c); exit(0); }
   /* --dump-repr: the analysis's answer, printed once the compile passes */

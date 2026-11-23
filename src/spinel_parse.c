@@ -422,6 +422,35 @@ static void emit_int(int id, const char *field, long long val) {
   nt_put_int(out_nt, id, field, val);
 }
 
+/* ---- The scope a local belongs to ----
+   Prism pushes a scope at a program, class, module, singleton class, def,
+   block and lambda; `for`, BEGIN/END and rescue push none, and a local's
+   `depth` counts the scopes that way. The ids of the scopes being flattened,
+   outermost first, make a local node's `depth` a node: its "decl" is the
+   scope that declares it (stack[top - depth]), and a parameter's or block-
+   local's is the innermost. A snippet's host scopes stand as -1 (a local
+   there has no decl). */
+/* An `it` block's parameters, lowered to one numbered parameter that Proc#parameters names no more than CRuby does. */
+static void emit_it_parameters(int id) {
+  nt_put_type(out_nt, id, "NumberedParametersNode");
+  emit_int(id, "maximum", 1);
+  emit_int(id, "implicit_it", 1);
+}
+static void decl_push(int id) { nt_build_scope_push(out_nt, id); }
+static void decl_pop(void) { nt_build_scope_pop(out_nt); }
+/* Node id is a local variable, parameter or block-local the program wrote as `w` in the scope `depth` out of the
+   innermost: its name as written, and its decl (comp_name_locals gives a local of a scope that is no frame root its
+   slot name). */
+static void emit_local_s(int id, const char *w, int depth) {
+  int d = nt_build_scope_at(out_nt, depth);
+  emit_str(id, "name", w);
+  if (d >= 0) emit_int(id, "decl", d);
+}
+static void emit_local(int id, pm_constant_id_t name, int depth) {
+  char *w = cstr(name);
+  emit_local_s(id, w, depth);
+  free(w);
+}
 static void emit_float(int id, double val) {
   /* Issue #766: 64-byte buf; "%.17g" produces at most 24 chars, plus
      ".0" trailer = 26. Safe by margin.
@@ -448,6 +477,13 @@ static void emit_float(int id, double val) {
 static void emit_ref(int id, const char *field, pm_node_t *child) {
   int cid = child ? flatten(child) : -1;
   nt_put_ref(out_nt, id, field, cid);
+}
+
+/* Field `field` of scope node id, flattened inside the scope. */
+static void flat_scoped(int id, const char *field, pm_node_t *child) {
+  decl_push(id);
+  emit_ref(id, field, child);
+  decl_pop();
 }
 
 /* `class A < (Base)`: parentheses around a single expression carry no
@@ -572,8 +608,10 @@ static void flat_def(int id, const pm_def_node_t *n) {
   char *nm = cstr(n->name);
   emit_str(id, "name", nm);
   free(nm);
+  decl_push(id);
   emit_ref(id, "parameters", (pm_node_t *)n->parameters);
   emit_ref(id, "body", (pm_node_t *)n->body);
+  decl_pop();
   emit_ref(id, "receiver", (pm_node_t *)n->receiver);
   out_scope_locals(id, &n->locals);
 }
@@ -1247,7 +1285,7 @@ static void flatten_parameter(int id, pm_node_t *node) {
   }
   nt_put_type(out_nt, id, type);
   emit_int(id, "flags", node->flags);
-  if (name) { char *n = cstr(name); emit_str(id, "name", n); free(n); }
+  if (name) emit_local(id, name, 0);
   if (value) emit_ref(id, "value", value);
 }
 
@@ -1877,6 +1915,9 @@ static void sp_pre_pm_dead_locals(const pm_parser_t *p, const pm_node_t *dead_no
   SpDeadLocalWalk w = { p, NULL, 0, 0 };
   pm_visit_node(dead_node, sp_dead_local_visit, &w);
   if (w.buf && w.len) {
+    /* the names are as written, in the scope the branch is in: its decl, for comp_name_locals */
+    int d = nt_build_scope_at(out_nt, 0);
+    if (d >= 0) emit_int(cond_id, "decl", d);
     const char *prev = nt_str(out_nt, cond_id, "dead_locals");
     if (prev && *prev) {
       size_t pl = strlen(prev);
@@ -2003,7 +2044,7 @@ static void flat_class(int id, pm_class_node_t *n) {
   emit_ref(id, "superclass", flat_superclass(n->superclass));
   int is_bo = sp_pre_pm_is_basic_object(g_parser, n->superclass);
   g_in_basic_object += is_bo;
-  emit_ref(id, "body", n->body);
+  flat_scoped(id, "body", n->body);
   g_in_basic_object -= is_bo;
 }
 
@@ -2081,7 +2122,7 @@ static int flatten_node(pm_node_t *node) {
   case PM_PROGRAM_NODE: {
     pm_program_node_t *n = (pm_program_node_t *)node;
     N("ProgramNode");
-    R("statements", n->statements);
+    flat_scoped(id, "statements", (pm_node_t *)n->statements);
     break;
   }
   case PM_STATEMENTS_NODE:
@@ -2096,7 +2137,7 @@ static int flatten_node(pm_node_t *node) {
     N("ModuleNode");
     out_scope_locals(id, &n->locals);
     R("constant_path", n->constant_path);
-    R("body", n->body);
+    flat_scoped(id, "body", n->body);
     break;
   }
   case PM_SINGLETON_CLASS_NODE: {
@@ -2110,7 +2151,7 @@ static int flatten_node(pm_node_t *node) {
     pm_singleton_class_node_t *n = (pm_singleton_class_node_t *)node;
     N("SingletonClassNode");
     R("expression", n->expression);
-    R("body", n->body);
+    flat_scoped(id, "body", n->body);
     break;
   }
   case PM_DEF_NODE:
@@ -2234,23 +2275,20 @@ static int flatten_node(pm_node_t *node) {
   case PM_LOCAL_VARIABLE_WRITE_NODE: {
     pm_local_variable_write_node_t *n = (pm_local_variable_write_node_t *)node;
     N("LocalVariableWriteNode");
-    NAME("name", n->name);
-    I("depth", n->depth);
+    emit_local(id, n->name, n->depth); I("depth", n->depth);
     R("value", n->value);
     break;
   }
   case PM_LOCAL_VARIABLE_READ_NODE: {
     pm_local_variable_read_node_t *n = (pm_local_variable_read_node_t *)node;
     N("LocalVariableReadNode");
-    NAME("name", n->name);
-    I("depth", n->depth);
+    emit_local(id, n->name, n->depth); I("depth", n->depth);
     break;
   }
   case PM_LOCAL_VARIABLE_OPERATOR_WRITE_NODE: {
     pm_local_variable_operator_write_node_t *n = (pm_local_variable_operator_write_node_t *)node;
     N("LocalVariableOperatorWriteNode");
-    NAME("name", n->name);
-    I("depth", n->depth);
+    emit_local(id, n->name, n->depth); I("depth", n->depth);
     NAME("binary_operator", n->binary_operator);
     R("value", n->value);
     break;
@@ -2258,24 +2296,21 @@ static int flatten_node(pm_node_t *node) {
   case PM_LOCAL_VARIABLE_OR_WRITE_NODE: {
     pm_local_variable_or_write_node_t *n = (pm_local_variable_or_write_node_t *)node;
     N("LocalVariableOrWriteNode");
-    NAME("name", n->name);
-    I("depth", n->depth);
+    emit_local(id, n->name, n->depth); I("depth", n->depth);
     R("value", n->value);
     break;
   }
   case PM_LOCAL_VARIABLE_AND_WRITE_NODE: {
     pm_local_variable_and_write_node_t *n = (pm_local_variable_and_write_node_t *)node;
     N("LocalVariableAndWriteNode");
-    NAME("name", n->name);
-    I("depth", n->depth);
+    emit_local(id, n->name, n->depth); I("depth", n->depth);
     R("value", n->value);
     break;
   }
   case PM_LOCAL_VARIABLE_TARGET_NODE: {
     pm_local_variable_target_node_t *n = (pm_local_variable_target_node_t *)node;
     N("LocalVariableTargetNode");
-    NAME("name", n->name);
-    I("depth", n->depth);
+    emit_local(id, n->name, n->depth); I("depth", n->depth);
     break;
   }
   case PM_INSTANCE_VARIABLE_WRITE_NODE: {
@@ -2733,7 +2768,7 @@ static int flatten_node(pm_node_t *node) {
   }
   case PM_BLOCK_NODE: {
     pm_block_node_t *n = (pm_block_node_t *)node;
-    N("BlockNode");
+    N("BlockNode"); decl_push(id);
     if (!n->opening_loc.start) I("sym_proc_block", 1);  /* an &:name block (sp_sym_proc_block) has no `{` */
     /* Block-local variables (params + first-assigned-inside): Ruby scoping
        makes non-param locals FRESH on every block invocation; codegen needs
@@ -2762,7 +2797,7 @@ else {
         R("parameters", n->parameters);
       }
     }
-    R("body", n->body);
+    R("body", n->body); decl_pop();
     break;
   }
   case PM_PARAMETERS_NODE: {
@@ -2945,18 +2980,23 @@ else {
   case PM_LAMBDA_NODE: {
     pm_lambda_node_t *n = (pm_lambda_node_t *)node;
     N("LambdaNode");
-    out_scope_locals(id, &n->locals);
+    decl_push(id); out_scope_locals(id, &n->locals);
+    /* a lambda holds no numbered-parameters node: how many `_1`.. it reads is on the lambda */
+    if (n->parameters && PM_NODE_TYPE(n->parameters) == PM_NUMBERED_PARAMETERS_NODE)
+      I("numbered_max", ((pm_numbered_parameters_node_t *)n->parameters)->maximum);
+    else if (n->parameters && PM_NODE_TYPE(n->parameters) == PM_IT_PARAMETERS_NODE) { I("numbered_max", 1); I("implicit_it", 1); }
     if (n->parameters) {
       if (PM_NODE_TYPE(n->parameters) == PM_BLOCK_PARAMETERS_NODE) {
         pm_block_parameters_node_t *bp = (pm_block_parameters_node_t *)n->parameters;
         if (bp->parameters) R("parameters", bp->parameters);
         A("block_locals", &bp->locals);   /* (a lambda holds no BlockParametersNode to carry them) */
       }
-else if (PM_NODE_TYPE(n->parameters) != PM_NUMBERED_PARAMETERS_NODE) {
+else if (PM_NODE_TYPE(n->parameters) != PM_NUMBERED_PARAMETERS_NODE && PM_NODE_TYPE(n->parameters) != PM_IT_PARAMETERS_NODE) {
         R("parameters", n->parameters);
       }
     }
     if (n->body) R("body", n->body);
+    decl_pop();
     break;
   }
   case PM_X_STRING_NODE: {
@@ -3016,7 +3056,7 @@ else if (PM_NODE_TYPE(n->parameters) != PM_NUMBERED_PARAMETERS_NODE) {
     if (n->pattern && PM_NODE_TYPE_P(n->pattern, PM_LOCAL_VARIABLE_TARGET_NODE)) {
       pm_local_variable_target_node_t *t = (pm_local_variable_target_node_t *)n->pattern;
       N("LocalVariableWriteNode");
-      NAME("name", t->name);
+      emit_local(id, t->name, t->depth);
       R("value", n->value);
     }
 else {
@@ -3139,15 +3179,15 @@ else {
        NumberedParametersNode arity path (get_block_param) handles it
        transparently. The block body's `it` references separately
        become PM_IT_LOCAL_VARIABLE_READ_NODE, also lowered below. */
-    N("NumberedParametersNode");
-    I("maximum", 1);
+    emit_it_parameters(id);
     break;
   case PM_IT_LOCAL_VARIABLE_READ_NODE:
     /* `it` inside the block body. Lowered to a regular
        LocalVariableReadNode named "_1" so it pairs with the
        lowered NumberedParametersNode { maximum: 1 } above; implicit_it keeps it
        apart from a written `_1` (blockarg_plain_read). */
-    N("LocalVariableReadNode"); S("name", "_1"); I("implicit_it", 1);
+    N("LocalVariableReadNode"); I("implicit_it", 1);
+    emit_local_s(id, "_1", 0);
     break;
   case PM_INTERPOLATED_SYMBOL_NODE: {
     /* `:"foo_#{x}"`. Carries `parts` like InterpolatedStringNode;
@@ -10116,6 +10156,7 @@ NodeTable *sp_parse_snippet_in(const char *src, const SnipFrame *f) {
     if (parser.error_list.size == 0) {
       g_parser = &parser;
       out_nt = nt_new_table(); node_counter = 0;
+      for (int i = 0; f && i < f->nscopes; i++) decl_push(-1);   /* the host's scopes: no decl */
       out_nt->root_id = flatten(root);
       if (path) nt_put_source_file(out_nt, path);
       res = out_nt;

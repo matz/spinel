@@ -78,7 +78,7 @@ keep() {
     "$first" "$second" "$first" "$second" > "$T/both.rb"
   for v in one both; do
     "$SP" "$T/$v.rb" -c --no-line-map -o "$T/$v.c" > "$T/$v.log" 2>&1 || { echo "unit-stability: $what: $v.rb does not compile" >&2; fail=1; return; }
-    grep -o 'lv_y__bp[A-Za-z0-9_]*' "$T/$v.c" | sort -u > "$T/$v.names"
+    grep -oE 'lv_B[0-9]+_[A-Za-z0-9_]+_y\b' "$T/$v.c" | sort -u > "$T/$v.names"
   done
   if [ -s "$T/one.names" ] && cmp -s "$T/one.names" "$T/both.names"; then verdict=ok; else verdict=FAIL; fail=1; fi
   echo "unit-stability: a method added before $what keeps its names $verdict"

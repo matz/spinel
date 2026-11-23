@@ -4226,7 +4226,7 @@ static int infer_write_container_usage(Compiler *c, const NodeTable *nt, int nfb
            get their type from infer_block_params; promoting them here to
            TY_STR_POLY_HASH before is_block_param is set creates a TY_POLY
            that ty_unify can never narrow back to the yield arg type. A
-           reassigned block parameter's rebinding (`a = a__bpin`) is no such
+           reassigned block parameter's rebinding (`a = P_<slot of a>`) is no such
            site, and neither is a write of a call on the local itself
            (`a = a.keys`): counting them, a block parameter nothing types was
            promoted to the hash, typed by its own call from that hash the
@@ -13344,17 +13344,13 @@ int infer_catch_block_params(Compiler *c) {
 }
 
 /* The name of a numbered block parameter (`_1` .. `_9`, and `it`, which the
-   parser lowers to `_1`). Normally the literal name -- but a scope holding more
-   than one numbered-param block shares its local table, so those blocks would
-   intern the SAME slot and their types would merge; scope_numbered_block_params
-   gives each of them its own name and records it here (#4116). Every site that
-   needs the name goes through this, so the rule lives in one place. */
+   bridge lowers to one numbered parameter marked `implicit_it`): the slot the block that binds it owns (`B<n>_<tag>__1`, set on its
+   NumberedParametersNode by comp_name_locals), so two numbered-param blocks of one scope never
+   share a slot (#4116). Every site that needs the name goes through this. */
 const char *numbered_param_name(Compiler *c, int params_node, int idx) {
-  static const char *names[] = {"_1","_2","_3","_4","_5","_6","_7","_8","_9"};
   if (idx < 0 || idx >= 9) return NULL;
   char key[8]; snprintf(key, sizeof key, "n%d", idx + 1);
-  const char *gen = nt_str(c->nt, params_node, key);
-  return (gen && *gen) ? gen : names[idx];
+  return nt_str(c->nt, params_node, key);
 }
 
 /* Name of a block's idx-th required parameter, or NULL. */
@@ -14417,7 +14413,7 @@ void check_block_rest_support(Compiler *c) {
     if (!(ty_is_array(rt) || ty_is_hash(rt) || rt == TY_RANGE || rt == TY_INT ||
           rt == TY_ENUMERATOR || rt == TY_STRING)) continue;
     {
-      /* report the param as written, not the shadow rename's slot name */
+      /* report the param as written, not its slot's name */
       const char *disp = nt_wname(nt, block_rest_node(c, blk));
       long long fid = nt_int(nt, id, "node_file", -1);
       const char *file = fid >= 0 ? nt_file_path(nt, (int)fid) : NULL;
@@ -14590,7 +14586,7 @@ static void rehome_block_body(Compiler *c, int body, int encl) {
   free(stack);
 }
 
-static void subtree_rename_local(NodeTable *nt, int root, const char *oldn, const char *newn, int depth);
+static void subtree_rename_local(NodeTable *nt, int root, const char *oldn, const char *newn, int model, int depth);
 /* Does the code under `root` append to local `name` in place or hand it to
    a call? */
 static int exec_subtree_lends_local(const NodeTable *nt, int root, const char *name, int depth) {
@@ -14667,7 +14663,7 @@ int desugar_class_eval_value(Compiler *c) {
     if (subtree_has_kind(nt, body, NK_DefNode, 0)) continue;   /* reopen path */
 
     /* the block's params bind the exec args; collect their names */
-    const char *pnames[8]; int pvals[8]; int np = 0;
+    const char *pnames[8]; int pnodes[8], pvals[8]; int np = 0;
     {
       int bparams = nt_ref(nt, blk, "parameters");
       int params = bparams >= 0 ? nt_ref(nt, bparams, "parameters") : -1;
@@ -14678,6 +14674,7 @@ int desugar_class_eval_value(Compiler *c) {
       int ok = 1;
       for (int k = 0; k < rn && ok; k++) {
         pnames[k] = nt_str(nt, reqs[k], "name");
+        pnodes[k] = reqs[k];
         pvals[k] = av2[k];
         if (!pnames[k]) ok = 0;
       }
@@ -14695,12 +14692,13 @@ int desugar_class_eval_value(Compiler *c) {
     int items[8 + 64]; int ni = 0;
     for (int k = 0; k < np; k++) {
       if (exec_param_reads_arg(c, body, pnames[k], pvals[k])) {
-        subtree_rename_local(nt, body, pnames[k], nt_str(nt, pvals[k], "name"), 0);
+        subtree_rename_local(nt, body, pnames[k], nt_str(nt, pvals[k], "name"), pvals[k], 0);
         continue;
       }
       int w = nt_new_node(nt, "LocalVariableWriteNode");
       if (w < 0) { ni = -1; break; }
       nt_node_set_str(nt, w, "name", pnames[k]);
+      nt_local_facts_from(nt, w, pnodes[k]);   /* the parameter's variable */
       nt_node_set_ref(nt, w, "value", pvals[k]);
       items[ni++] = w;
     }
@@ -15133,7 +15131,7 @@ int desugar_instance_eval_builtin(Compiler *c) {
     int is_exec = sp_streq(nm, "instance_exec");
     /* pvals[k]: the node bound to parameter pnames[k] -- a call argument, a
        keyword argument's value, or the parameter's own default */
-    const char *pnames[16]; int pvals[16], pdef[16] = {0}, pnew[16] = {0}; int np = 0;
+    const char *pnames[16]; int pnodes[16], pvals[16], pdef[16] = {0}, pnew[16] = {0}; int np = 0;
     {
       int bparams = nt_ref(nt, blk, "parameters");
       int params = bparams >= 0 ? nt_ref(nt, bparams, "parameters") : -1;
@@ -15164,10 +15162,12 @@ int desugar_instance_eval_builtin(Compiler *c) {
       int ok = 1;
       for (int k = 0; k < rn && ok; k++) {
         if (!(pnames[np] = nt_str(nt, reqs[k], "name"))) ok = 0;
+        pnodes[np] = reqs[k];
         pvals[np++] = is_exec ? av2[k] : -1;
       }
       for (int k = 0; k < on && ok; k++) {
         if (!(pnames[np] = nt_str(nt, opts[k], "name"))) ok = 0;
+        pnodes[np] = opts[k];
         pdef[np] = rn + k >= pac;
         pvals[np] = pdef[np] ? nt_ref(nt, opts[k], "value") : av2[rn + k];
         np++;
@@ -15179,6 +15179,7 @@ int desugar_instance_eval_builtin(Compiler *c) {
       int ken = 0; const int *kels = kwh >= 0 ? nt_arr(nt, kwh, "elements", &ken) : NULL;
       for (int k = 0; k < kn && ok; k++) {
         if (!(pnames[np] = nt_str(nt, kws[k], "name"))) { ok = 0; break; }
+        pnodes[np] = kws[k];
         int v = ie_kwhash_value(c, kwh, nt_wname(nt, kws[k]));
         if (v >= 0) {
           if (defaulted || kmatched >= ken || nt_ref(nt, kels[kmatched], "value") != v) ok = 0;
@@ -15198,12 +15199,13 @@ int desugar_instance_eval_builtin(Compiler *c) {
         int ra = nt_new_node(nt, "ArrayNode");
         if (ra < 0) continue;
         if (pac > rn + on) nt_node_set_arr(nt, ra, "elements", av2 + rn + on, pac - rn - on);
-        pnames[np] = nt_str(nt, restp, "name"); pnew[np] = 1; pvals[np++] = ra;
+        pnames[np] = nt_str(nt, restp, "name"); pnodes[np] = restp; pnew[np] = 1; pvals[np++] = ra;
       }
       if (ok && kwrp >= 0) {
         int hn = nt_new_node(nt, "HashNode");
         if (hn < 0) continue;
         if (!(pnames[np] = nt_str(nt, kwrp, "name"))) ok = 0;
+        pnodes[np] = kwrp;
         pnew[np] = 1; pvals[np++] = hn;
       }
       if (!ok) continue;
@@ -15250,12 +15252,13 @@ int desugar_instance_eval_builtin(Compiler *c) {
         int later = 0;
         for (int j = k + 1; j < np && !later; j++) later = ie_subtree_uses_local(nt, pvals[j], pnames[k], 0);
         if (!pdef[k] && !pnew[k] && !later && exec_param_reads_arg(c, body, pnames[k], pvals[k])) {
-          subtree_rename_local(nt, body, pnames[k], nt_str(nt, pvals[k], "name"), 0);
+          subtree_rename_local(nt, body, pnames[k], nt_str(nt, pvals[k], "name"), pvals[k], 0);
           continue;
         }
         int w = nt_new_node(nt, "LocalVariableWriteNode");
         if (w < 0) { ni = -1; break; }
         nt_node_set_str(nt, w, "name", pnames[k]);
+        nt_local_facts_from(nt, w, pnodes[k]);   /* the parameter's variable */
         nt_node_set_ref(nt, w, "value", pvals[k]);
         items[ni++] = w;
       }
@@ -15265,13 +15268,14 @@ int desugar_instance_eval_builtin(Compiler *c) {
          nothing (#2734). A String receiver the block appends to through the
          param is the caller's variable itself (exec_param_reads_arg). */
       if (exec_param_reads_arg(c, body, pnames[0], recv))
-        subtree_rename_local(nt, body, pnames[0], nt_str(nt, recv, "name"), 0);
+        subtree_rename_local(nt, body, pnames[0], nt_str(nt, recv, "name"), recv, 0);
       else {
         int rd = nt_new_node(nt, "LocalVariableReadNode");
         int w = nt_new_node(nt, "LocalVariableWriteNode");
         if (rd < 0 || w < 0) continue;
         nt_node_set_str(nt, rd, "name", tmp);
         nt_node_set_str(nt, w, "name", pnames[0]);
+        nt_local_facts_from(nt, w, pnodes[0]);   /* the parameter's variable */
         nt_node_set_ref(nt, w, "value", rd);
         items[ni++] = w;
       }
@@ -15517,20 +15521,25 @@ static int subtree_proc_captures_name(Compiler *c, int root, const char *nm, int
   return 0;
 }
 
-/* Rename every local read/write of `oldn` under `root` to `newn`. */
-static void subtree_rename_local(NodeTable *nt, int root, const char *oldn, const char *newn, int depth) {
+/* Rename every local read/write of `oldn` under `root` to `newn`, the variable that node `model` is one of
+   (-1: an invented temporary): they take its written name and decl. */
+static void subtree_rename_local(NodeTable *nt, int root, const char *oldn, const char *newn, int model, int depth) {
   if (root < 0 || root >= nt->count || depth > 200) return;
   NodeKind k = nt_kind(nt, root);
   if (k == NK_LocalVariableReadNode || k == NK_LocalVariableWriteNode ||
       k == NK_LocalVariableOrWriteNode || k == NK_LocalVariableAndWriteNode ||
       k == NK_LocalVariableOperatorWriteNode || k == NK_LocalVariableTargetNode) {
     const char *nm = nt_str(nt, root, "name");
-    if (nm && sp_streq(nm, oldn)) nt_node_set_str(nt, root, "name", newn);
+    if (nm && sp_streq(nm, oldn)) {
+      nt_node_set_str(nt, root, "name", newn);
+      if (model >= 0) nt_local_facts_from(nt, root, model);
+      else { nt_node_set_str(nt, root, "wname", newn); nt_node_set_int(nt, root, "decl", -1); }
+    }
   }
   const SpNode *nd = &nt->nodes[root];
-  for (int i = 0; i < nd->nr; i++) subtree_rename_local(nt, nd->r[i].ref, oldn, newn, depth + 1);
+  for (int i = 0; i < nd->nr; i++) subtree_rename_local(nt, nd->r[i].ref, oldn, newn, model, depth + 1);
   for (int i = 0; i < nd->na; i++)
-    for (int j = 0; j < nd->a[i].n; j++) subtree_rename_local(nt, nd->a[i].ids[j], oldn, newn, depth + 1);
+    for (int j = 0; j < nd->a[i].n; j++) subtree_rename_local(nt, nd->a[i].ids[j], oldn, newn, model, depth + 1);
 }
 
 /* An INLINED iterator block whose param is captured by a proc it creates:
@@ -15587,12 +15596,11 @@ int desugar_block_capture_wrap(Compiler *c) {
     for (int k = 0; k < rn && ok; k++) {
       snprintf(wn[k], sizeof wn[k], "__cap_%s_%s", comp_node_tag(c, id), pn[k]);
       wreqs[k] = nt_new_node(nt, "RequiredParameterNode");
-      wreads[k] = nt_new_node(nt, "LocalVariableReadNode");
+      wreads[k] = nt_new_local_of(nt, "LocalVariableReadNode", reqs[k]);   /* call arg reads the ORIGINAL */
       if (wreqs[k] < 0 || wreads[k] < 0) { ok = 0; break; }
       nt_node_set_str(nt, wreqs[k], "name", wn[k]);
-      nt_node_set_str(nt, wreads[k], "name", pn[k]);   /* call arg reads the ORIGINAL */
     }
-    if (ok) for (int k = 0; k < rn; k++) subtree_rename_local(nt, body, pn[k], wn[k], 0);
+    if (ok) for (int k = 0; k < rn; k++) subtree_rename_local(nt, body, pn[k], wn[k], -1, 0);
     if (!ok) continue;
     /* The body's uses are the copy's now: a container kind they gave the
        parameter is put back, for the call that binds it to decide. */
@@ -16138,6 +16146,10 @@ int desugar_dir_surface(Compiler *c) {
       nt_node_set_ref(nt, nblk, "parameters", bparams2);
       nt_node_set_ref(nt, nblk, "body", cbody);
       nt_node_set_ref(nt, id, "block", nblk);
+      /* the parameter is a new declaration of the new block's: a slot of that block's tag */
+      { const char *slot = nt_slot_name(nt, pnm, comp_node_tag(c, nblk));
+        nt_set_local_name(nt, req, slot); nt_set_local_name(nt, pread, slot);
+        nt_node_set_int(nt, req, "decl", nblk); nt_node_set_int(nt, pread, "decl", nblk); }
       comp_grow_node_arrays(c);
       { int encl2 = c->nscope[id];
         for (int j = base2; j < nt->count; j++) c->nscope[j] = encl2; }
@@ -16220,6 +16232,7 @@ int desugar_dir_surface(Compiler *c) {
       if (plv) {
         nt_node_set_str(nt, rdir2, "name", dirn);
         nt_node_set_str(nt, wparam, "name", cdp0);
+        nt_decl_in(nt, wparam, blk);   /* the block's parameter, a local of the block */
         nt_node_set_ref(nt, wparam, "value", rdir2);
       }
       nt_node_set_str(nt, pwdr, "name", "Dir");
@@ -16806,9 +16819,8 @@ static int bdp_convert_target(NodeTable *nt, int node) {
       if (!nmbuf) return -1;
       strcpy(nmbuf, nm);
     }
-    int t = nt_new_node(nt, "LocalVariableTargetNode");
-    if (t < 0) { free(nmbuf); return -1; }
-    if (nmbuf) { nt_node_set_str(nt, t, "name", nmbuf); free(nmbuf); }
+    int t = nt_new_local_of(nt, "LocalVariableTargetNode", node);   /* the parameter's variable */
+    free(nmbuf);
     return t;
   }
   if (k == NK_SplatNode) {
@@ -17214,25 +17226,22 @@ static int cs_type_params(Compiler *c, int create, const int *argv, int argc) {
    no parameters node, so derive them from the body's local reads. Poly-typed
    boxed slots like every other first-class proc parameter. */
 static int register_proc_numbered(Compiler *c, int create) {
-  int body = a_proc_body(c, create);
-  if (body < 0) return 0;
-  ANameSet used = {0};
-  a_collect_used(c, body, &used);
+  /* the `_1` .. `_9` the block binds: its numbered-parameters node's, a lambda's own */
+  int holder = create, np = -1;
+  NodeKind ck = nt_kind(c->nt, create);
+  if (ck == NK_BlockNode || ck == NK_CallNode) {
+    int blk = ck == NK_BlockNode ? create : nt_ref(c->nt, create, "block");
+    int pn = blk >= 0 ? nt_ref(c->nt, blk, "parameters") : -1;
+    if (pn >= 0 && nt_kind(c->nt, pn) == NK_NumberedParametersNode) { holder = pn; np = (int)nt_int(c->nt, pn, "maximum", 0); }
+  }
+  else if (ck == NK_LambdaNode) np = (int)nt_int(c->nt, create, "numbered_max", 0);
   Scope *bs = comp_scope_of(c, create);
   int changed = 0;
-  for (int i = 0; i < used.n; i++) {
-    const char *nm = used.v[i];
-    /* `_1` as the parser wrote it, and `_1__bNN` where a colliding scope's
-       blocks were given their own (scope_numbered_block_params) -- the body
-       names the second one, and interning the first instead left the block
-       reading a slot the bind never wrote. */
-    if (!(nm && nm[0] == '_' && nm[1] >= '1' && nm[1] <= '9' &&
-          (nm[2] == '\0' || !strncmp(nm + 2, "__b", 3)))) continue;
-    LocalVar *lv = scope_local_intern(bs, nm);
+  for (int k = 0; k < np && k < 9; k++) {
+    LocalVar *lv = scope_local_intern(bs, numbered_param_name(c, holder, k));
     lv->is_block_param = 1;
     if (lv->type != TY_POLY) { lv_set_type(lv, TY_POLY); changed = 1; }
   }
-  free(used.v);
   return changed;
 }
 
@@ -22800,6 +22809,7 @@ int desugar_io_console_modes(Compiler *c) {
       int rio2 = nt_new_node(nt, "LocalVariableReadNode"); nt_node_set_str(nt, rio2, "name", ion);
       int wp = nt_new_node(nt, "LocalVariableWriteNode");
       nt_node_set_str(nt, wp, "name", bp0);
+      nt_decl_in(nt, wp, blk);   /* the block's parameter, a local of the block */
       nt_node_set_ref(nt, wp, "value", rio2);
       items[ni++] = wp;
     }

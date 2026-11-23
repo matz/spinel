@@ -790,7 +790,7 @@ static int bpw_walk(NodeTable *nt, int node, const char *bp, const char *rename)
   if (bpw_kind_is_lvar(k)) {
     const char *nm = nt_str(nt, node, "name");
     if (nm && sp_streq(nm, bp)) {
-      if (rename) nt_node_set_str(nt, node, "name", rename);
+      if (rename) nt_set_local_name(nt, node, rename);
       if (bpw_kind_is_write(k)) hits++;
     }
   }
@@ -4224,7 +4224,7 @@ static int mrv_target_read(NodeTable *nt, int w) {
     int r = nt_new_node(nt, rt);
     if (r < 0) return -1;
     nt_node_set_str(nt, r, "name", nt_str(nt, w, "name"));
-    if (i == 0) nt_node_set_int(nt, r, "depth", nt_int(nt, w, "depth", 0));
+    if (i == 0) { nt_node_set_int(nt, r, "depth", nt_int(nt, w, "depth", 0)); nt_local_facts_from(nt, r, w); }
     nt_node_set_int(nt, r, "node_line", nt_int(nt, w, "node_line", 0));
     return r;
   }
@@ -4702,9 +4702,12 @@ static int hwi_lread(NodeTable *nt, const char *nm) {
   if (n >= 0) nt_node_set_str(nt, n, "name", nm);
   return n;
 }
-static int hwi_lwrite(NodeTable *nt, const char *nm, int val) {
+static int hwi_lwrite(NodeTable *nt, const char *nm, int val, int model) {
   int n = nt_new_node(nt, "LocalVariableWriteNode");
-  if (n >= 0) { nt_node_set_str(nt, n, "name", nm); nt_node_set_ref(nt, n, "value", val); }
+  if (n >= 0) {
+    nt_node_set_str(nt, n, "name", nm); nt_node_set_ref(nt, n, "value", val);
+    if (model >= 0) nt_local_facts_from(nt, n, model);   /* a write of the block's parameter's variable */
+  }
   return n;
 }
 int desugar_hash_iter_with_index(Compiler *c) {
@@ -4803,13 +4806,13 @@ int desugar_hash_iter_with_index(Compiler *c) {
       int arr = nt_new_node(nt, "ArrayNode");
       int els[2] = { hwi_lread(nt, kn), hwi_lread(nt, vn) };
       nt_node_set_arr(nt, arr, "elements", els, 2);
-      pre[npre++] = hwi_lwrite(nt, p0name, arr);
+      pre[npre++] = hwi_lwrite(nt, p0name, arr, p0);
       LocalVar *pl = scope_local_intern(&c->scopes[bscope], p0name);
       pl->is_block_param = 0;
     }
     else { nreqs[0] = p0; nnr = 1; }
     /* i = c; c = c + 1 */
-    pre[npre++] = hwi_lwrite(nt, iname, hwi_lread(nt, cn));
+    pre[npre++] = hwi_lwrite(nt, iname, hwi_lread(nt, cn), req[1]);
     { int plus = nt_new_node(nt, "CallNode");
       int pa = nt_new_node(nt, "ArgumentsNode");
       int one = hwi_new_int(nt, 1);
@@ -4818,7 +4821,7 @@ int desugar_hash_iter_with_index(Compiler *c) {
       nt_node_set_ref(nt, plus, "receiver", hwi_lread(nt, cn));
       nt_node_set_ref(nt, plus, "arguments", pa);
       nt_node_set_ref(nt, plus, "block", -1);
-      pre[npre++] = hwi_lwrite(nt, cn, plus); }
+      pre[npre++] = hwi_lwrite(nt, cn, plus, -1); }
     { LocalVar *il = scope_local_intern(&c->scopes[bscope], iname); il->is_block_param = 0; }
     int newp = nt_new_node(nt, "ParametersNode");
     nt_node_set_arr(nt, newp, "requireds", nreqs, nnr);
@@ -4833,7 +4836,7 @@ int desugar_hash_iter_with_index(Compiler *c) {
     int bnodes_end = nt->count;
     /* (c = off; src.m { ... }) */
     nt_node_set_ref(nt, recv, "block", blk);
-    int init = hwi_lwrite(nt, cn, wn == 1 ? wv[0] : hwi_new_int(nt, 0));
+    int init = hwi_lwrite(nt, cn, wn == 1 ? wv[0] : hwi_new_int(nt, 0), -1);
     int stmts = nt_new_node(nt, "StatementsNode");
     { int items[2] = { init, recv }; nt_node_set_arr(nt, stmts, "body", items, 2); }
     int paren = nt_new_node(nt, "ParenthesesNode");
@@ -6435,7 +6438,7 @@ int desugar_binding_lvget(Compiler *c) {
     if (!vn) continue;
     int sc = c->nscope[id];
     if (sc < 0 || sc >= c->nscopes) continue;
-    if (vn[0] == '_' && vn[1] >= '1' && vn[1] <= '9' && !vn[2]) {
+    if (is_numbered_param_name(vn)) {
       char msg[64];
       snprintf(msg, sizeof msg, "numbered parameter '%s' is not a local variable", vn);
       int base = nt->count, sym = av[0], val = set ? av[1] : -1;
@@ -14208,6 +14211,9 @@ int desugar_block_implicit_rest_at(Compiler *c, LowerCtx *lc, int id) {
   if (p < 0) return 0;
   char nm[64]; snprintf(nm, sizeof nm, "__implicit_rest_%s", comp_node_tag(c, id));
   nt_node_set_str(nt, p, "name", nm);
+  int blk = lower_parents(c, lc)[id];   /* the block whose list this is */
+  nt_set_local_name(nt, p, nt_slot_name(nt, nm, comp_node_tag(c, blk)));   /* a declaration of the block's own */
+  nt_decl_in(nt, p, blk);
   nt_node_set_int(nt, p, "desugared_param", DPN_NONE);
   copy[rn] = p;
   nt_node_set_arr(nt, pn, "requireds", copy, rn + 1);
@@ -15573,7 +15579,7 @@ int desugar_extend_enumerable(Compiler *c, HostStep *h) {
     const int *ts = st >= 0 ? nt_arr(tmp, st, "body", &tn) : NULL;
     int add[2], na = 0;
     for (int j = 0; j < tn && na < 2; j++) {
-      int imp = nt_import_subtree(nt, tmp, ts[j]);
+      int imp = comp_import_subtree(c, tmp, ts[j]);
       if (imp >= 0) add[na++] = imp;
     }
     nt_free(tmp);
@@ -16118,39 +16124,36 @@ static void dmc_walk(NodeTable *nt, int id, int lvl, int in_dm, const char *cls,
   }
 }
 
-/* The text a scope's locals carry: the tag of the node that names the
-   scope, asked when the scope has a local to name */
-typedef struct { Compiler *c; int node, made; char s[64]; } BlsTag;
-static const char *bls_tag(BlsTag *t) {
-  if (!t->made) snprintf(t->s, sizeof t->s, "%s", comp_node_tag(t->c, t->node));
-  t->made = 1;
-  return t->s;
-}
-
-/* Rename every reference in a body's lexical scope (blocks included, defs
-   and nested classes not) to a local the body owns: depth equal to the
-   blocks entered. */
-static void bls_walk(NodeTable *nt, int id, int lvl, BlsTag *tag) {
+/* Re-key every local a body's own lexical scope declares (blocks included, defs and nested classes not; depth
+   equal to the blocks entered) to the body's new home: the slot (nt_slot_name) of `tag`, the tag of the scope node
+   that is the new home, the name written kept as `wname`. A def's body spliced into a class body (a hook's) holds
+   the plain names of a frame root, which main's frame would share with every other body's. A local a pass named
+   for itself (`P_B1_5_x`) keeps its name. */
+static void bls_walk(NodeTable *nt, int id, int lvl, int scope, const char *tag) {
   if (id < 0) return;
   NodeKind k = nt_kind(nt, id);
   if (k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode ||
       k == NK_SingletonClassNode) return;
   const char *nm = dmc_local_kind(k) >= 0 ? nt_str(nt, id, "name") : NULL;
-  /* a node this pass has renamed (cb_renamed) is not renamed again: its name
-     says nothing, a program can spell a local like the names made here */
-  if (nm && nt_int(nt, id, "depth", 0) == lvl && !nt_int(nt, id, "cb_renamed", 0)) {
-    char buf[256];
-    snprintf(buf, sizeof buf, "%s__cb%s", nm, bls_tag(tag));
-    nt_node_set_str(nt, id, "name", buf);
-    nt_node_set_int(nt, id, "cb_renamed", 1);
+  /* `depth`, not `decl`: the statements are a def's body (or a hook's) with no scope node of their own to name, and
+     `decl` of their locals is the def they were written in, which is no scope here; the body's own locals are the
+     ones Prism counted `lvl` scopes out from where they are read */
+  if (nm && nt_int(nt, id, "depth", 0) == lvl) {
+    const char *w = nt_wname(nt, id);
+    int ruled = sp_streq(nm, w) || nt_slot_minted(nt, nm);
+    const char *now = ruled ? nt_slot_name(nt, w, tag) : NULL;
+    if (now && !sp_streq(nm, now)) {   /* (a second run finds it done) */
+      nt_set_local_name(nt, id, now);
+      nt_node_set_int(nt, id, "decl", scope);
+    }
   }
   if (k == NK_BlockNode || k == NK_LambdaNode) lvl++;
   int nr = nt_num_refs(nt, id);
-  for (int i = 0; i < nr; i++) bls_walk(nt, nt_ref_at(nt, id, i), lvl, tag);
+  for (int i = 0; i < nr; i++) bls_walk(nt, nt_ref_at(nt, id, i), lvl, scope, tag);
   int na = nt_num_arrs(nt, id);
   for (int i = 0; i < na; i++) {
     int n = 0; const int *v = nt_arr_at(nt, id, i, &n);
-    for (int j = 0; j < n; j++) bls_walk(nt, v[j], lvl, tag);
+    for (int j = 0; j < n; j++) bls_walk(nt, v[j], lvl, scope, tag);
   }
 }
 
@@ -16197,11 +16200,12 @@ int desugar_builder_block_param_at(Compiler *c, LowerCtx *lc, int id) {
              ? nt_ref(nt, bb[w], "value") : -1;
     if (wv >= 0 && !shared && bpw_walk(nt, wv, k, NULL) == 0 && !rbp_captured(nt, wv, k, 0)) {
       char nn[300]; snprintf(nn, sizeof nn, "__bbpv_%s", k);
-      nt_node_set_str(nt, bb[w], "name", nn);
+      nt_set_local_name(nt, bb[w], nn);   /* a new declaration of the name: a slot of its own */
       for (int j = w + 1; j < bn; j++) bpw_walk(nt, bb[j], k, nn);
     }
     int wr = fwd_new_node_like(nt, rq, "LocalVariableWriteNode");
     nt_node_set_str(nt, wr, "name", k);
+    nt_local_facts_from(nt, wr, rq);   /* the parameter's variable, now a local of the body */
     nt_node_set_ref(nt, wr, "value", fwd_new_node_like(nt, rq, "SelfNode"));
     bb = nt_arr(nt, body, "body", &bn);
     int *nb = malloc(sizeof(int) * (size_t)(bn + 1));
@@ -16238,11 +16242,16 @@ int desugar_builder_block_param_at(Compiler *c, LowerCtx *lc, int id) {
    context hands the scope's statements and the node that names it, the
    body and its owner for the body's own. A class builder's block is one
    too: it reads no local of the enclosing scope (one that does stays a
-   value builder), so each of its locals is the block's own. */
+   value builder), so each of its locals is the block's own. The tag the
+   scope's locals are named by is the one of the node LF_SCOPE names: a
+   hook's spliced statements carry another tag than the class body's own,
+   so a hook's local and the body's of one name are two variables. */
 int desugar_body_local_scopes_at(Compiler *c, LowerCtx *lc, int id) {
   NodeTable *nt = (NodeTable *)c->nt;
-  BlsTag tag = { c, lc->scope, 0, "" };
-  for (int i = 0; i < lc->scope_n; i++) bls_walk(nt, lc->scope_stmts[i], 0, &tag);
+  char *tag = strdup(comp_node_tag(c, lc->scope));
+  if (!tag) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int i = 0; i < lc->scope_n; i++) bls_walk(nt, lc->scope_stmts[i], 0, lc->scope, tag);
+  free(tag);
   return 1;
 }
 
@@ -16734,6 +16743,7 @@ int desugar_define_method_keywords_at(Compiler *c, LowerCtx *lc, int stmt) {
   nt_node_set_ref(nt, def, "body", nt_ref(nt, blk, "body"));
   nt_node_set_ref(nt, def, "receiver", dself);
   method_body_next_to_return(nt, nt_ref(nt, def, "body"));
+  nt_rekey_scope(nt, def, blk, def);   /* the block's own variables are the def's: plain names */
   if (id != bv[i]) {
     /* `private define_method(...)` -> `private def ...` */
     nt_node_set_arr(nt, nt_ref(nt, bv[i], "arguments"), "arguments", &def, 1);
@@ -19050,7 +19060,7 @@ int desugar_builtins(Compiler *c) {
   /* Only for a name such a call can have: one the program spells as a
      Symbol or a String, a reopening's own method, or any name where a send
      builds one. An unreachable copy reaches no C, but its block parameters
-     still put their names in the symbol table (rename_shadowing_block_params). */
+     still put their names in the symbol table (the Proc#parameters names interned after the passes). */
   int late = bi_program_calls_late(nt, n0);
   ANameHash spelled; memset(&spelled, 0, sizeof spelled);
   if (late == 1)
@@ -19901,7 +19911,7 @@ int desugar_builtin_splat_forward(Compiler *c) {
       int encl = c->nscope[id];
       if (encl < 0 || encl >= c->nscopes) continue;
       scope_local_intern(&c->scopes[encl], tn);
-      hold = hwi_lwrite(nt, tn, recv);
+      hold = hwi_lwrite(nt, tn, recv, -1);
       recv = hwi_lread(nt, tn);
     }
     /* the arms, innermost last: CRuby's ArgumentError for any other size */
@@ -20010,19 +20020,19 @@ int desugar_index_value_block_pass(Compiler *c) {
     if (!value_arg_pure(nt, recv)) {
       snprintf(tn, sizeof tn, "_spvr%s", comp_node_tag(c, id));
       scope_local_intern(sc, tn);
-      pre[npre++] = hwi_lwrite(nt, tn, recv);
+      pre[npre++] = hwi_lwrite(nt, tn, recv, -1);
       recv = hwi_lread(nt, tn);
     }
     int arg = av[0];
     if (!value_arg_pure(nt, arg)) {
       snprintf(tn, sizeof tn, "_spva%s", comp_node_tag(c, id));
       scope_local_intern(sc, tn);
-      pre[npre++] = hwi_lwrite(nt, tn, arg);
+      pre[npre++] = hwi_lwrite(nt, tn, arg, -1);
       arg = hwi_lread(nt, tn);
     }
     snprintf(tn, sizeof tn, "_spvb%s", comp_node_tag(c, id));
     scope_local_intern(sc, tn);
-    pre[npre++] = hwi_lwrite(nt, tn, ex);
+    pre[npre++] = hwi_lwrite(nt, tn, ex, -1);
     int nblk = nt_new_node(nt, "BlockArgumentNode");
     nt_node_set_ref(nt, nblk, "expression", hwi_lread(nt, tn));
     int call = nblk >= 0 ? spl_arm_on(nt, id, recv, &arg, 1, nblk) : -1;
@@ -20271,7 +20281,7 @@ static int enum_sym_proc_block(const NodeTable *nt, int blk) {
   int bp = nt_ref(nt, blk, "parameters");
   int ps = bp >= 0 && nt_kind(nt, bp) == NK_BlockParametersNode ? nt_ref(nt, bp, "parameters") : -1;
   int rn = 0; const int *reqs = ps >= 0 ? nt_arr(nt, ps, "requireds", &rn) : NULL;
-  const char *pn = rn == 1 ? nt_str(nt, reqs[0], "name") : NULL;
+  const char *pn = rn == 1 && nt_str(nt, reqs[0], "name") ? nt_wname(nt, reqs[0]) : NULL;
   if (!pn || !sp_streq(pn, "_spx")) return 0;
   int on = 0, kn = 0; nt_arr(nt, ps, "optionals", &on); nt_arr(nt, ps, "keywords", &kn);
   if (on || kn || nt_ref(nt, ps, "rest") >= 0 || nt_ref(nt, ps, "block") >= 0) return 0;
@@ -20279,7 +20289,7 @@ static int enum_sym_proc_block(const NodeTable *nt, int blk) {
   int bn = 0; const int *bs = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &bn) : NULL;
   if (bn != 1 || nt_kind(nt, bs[0]) != NK_CallNode) return 0;
   int call = bs[0], r = nt_ref(nt, call, "receiver");
-  const char *rn2 = r >= 0 && nt_kind(nt, r) == NK_LocalVariableReadNode ? nt_str(nt, r, "name") : NULL;
+  const char *rn2 = r >= 0 && nt_kind(nt, r) == NK_LocalVariableReadNode ? nt_wname(nt, r) : NULL;
   return rn2 && sp_streq(rn2, "_spx") && nt_ref(nt, call, "arguments") < 0 && nt_ref(nt, call, "block") < 0;
 }
 /* Does Struct have an Enumerable name of its own (CRuby 4.0's
@@ -22320,10 +22330,18 @@ static int bs_enum_yield_count(Compiler *c, int recv, const char *nm, int argc, 
   return 0;
 }
 
+/* blk: the block or def whose own variables the builder names (a name it lists as its own is declared
+   there: the nodes the builder makes for it take blk as their decl), -1 for none */
 typedef struct {
   NodeTable *nt;
   int ok;
+  int blk;
 } BsB;
+
+/* local node id names a variable the builder's scope declares: it is that scope's (its decl) */
+static void bs_decl(BsB *b, int id, const char *name) {
+  if (b->blk >= 0 && nt_scope_has_local(b->nt, b->blk, name)) nt_decl_in(b->nt, id, b->blk);
+}
 
 static int bs_new(BsB *b, const char *type) {
   int id = nt_new_node(b->nt, type);
@@ -22335,6 +22353,7 @@ static int bs_read(BsB *b, const char *name) {
   if (id < 0) return id;
   nt_node_set_str(b->nt, id, "name", name);
   nt_node_set_int(b->nt, id, "depth", 0);
+  bs_decl(b, id, name);
   return id;
 }
 static int bs_int(BsB *b, long v) {
@@ -22387,7 +22406,14 @@ static int bs_write(BsB *b, const char *name, int value) {
   if (id < 0 || value < 0) { b->ok = 0; return -1; }
   nt_node_set_str(b->nt, id, "name", name);
   nt_node_set_int(b->nt, id, "depth", 0);
+  bs_decl(b, id, name);
   nt_node_set_ref(b->nt, id, "value", value);
+  return id;
+}
+/* a write of the variable the parameter node `model` is one of (its name, written name and decl) */
+static int bs_write_of(BsB *b, int model, int value) {
+  int id = bs_write(b, nt_str(b->nt, model, "name"), value);
+  if (id >= 0) nt_local_facts_from(b->nt, id, model);
   return id;
 }
 static int bs_index(BsB *b, const char *ary, long i) {
@@ -22422,11 +22448,11 @@ static int bs_bind_static(BsB *b, const BsShape *s, const char *const *args, int
   NodeTable *nt = b->nt;
   int n = 0;
   for (int i = 0; i < s->P; i++)
-    out[n++] = bs_write(b, nt_str(nt, s->pre[i], "name"),
+    out[n++] = bs_write_of(b, s->pre[i],
                         i < m ? bs_read(b, args[i]) : bs_new(b, "NilNode"));
   int avail = m - s->P - s->Q;
   for (int j = 0; j < s->O; j++)
-    out[n++] = bs_write(b, nt_str(nt, s->opt[j], "name"),
+    out[n++] = bs_write_of(b, s->opt[j],
                         j < avail ? bs_read(b, args[s->P + j]) : bs_default(b, s, j, copy_defaults));
   const char *rn = s->rest >= 0 ? nt_str(nt, s->rest, "name") : NULL;
   if (rn && *rn) {
@@ -22434,11 +22460,11 @@ static int bs_bind_static(BsB *b, const BsShape *s, const char *const *args, int
     for (int k = s->P + s->O; k < m - s->Q; k++) els[ne++] = bs_read(b, args[k]);
     int arr = bs_new(b, "ArrayNode");
     if (arr >= 0) nt_node_set_arr(nt, arr, "elements", els, ne);
-    out[n++] = bs_write(b, rn, arr);
+    out[n++] = bs_write_of(b, s->rest, arr);
   }
   int pstart = m - s->Q > s->P ? m - s->Q : s->P;
   for (int k = 0; k < s->Q; k++)
-    out[n++] = bs_write(b, nt_str(nt, s->post[k], "name"),
+    out[n++] = bs_write_of(b, s->post[k],
                         pstart + k < m ? bs_read(b, args[pstart + k]) : bs_new(b, "NilNode"));
   return n;
 }
@@ -22449,11 +22475,11 @@ static int bs_bind_dynamic(BsB *b, const BsShape *s, const char *ary, int copy_d
   NodeTable *nt = b->nt;
   int n = 0;
   for (int i = 0; i < s->P; i++)
-    out[n++] = bs_write(b, nt_str(nt, s->pre[i], "name"), bs_index(b, ary, i));
+    out[n++] = bs_write_of(b, s->pre[i], bs_index(b, ary, i));
   for (int j = 0; j < s->O; j++) {
     const char *on = nt_str(nt, s->opt[j], "name");
-    int t = bs_write(b, on, bs_index(b, ary, s->P + j));
-    int e = bs_write(b, on, bs_default(b, s, j, copy_defaults));
+    int t = bs_write_of(b, s->opt[j], bs_index(b, ary, s->P + j));
+    int e = bs_write_of(b, s->opt[j], bs_default(b, s, j, copy_defaults));
     out[n++] = bs_if(b, bs_len_gt(b, ary, s->P + s->Q + j), &t, 1, &e, 1);
   }
   const char *rn = s->rest >= 0 ? nt_str(nt, s->rest, "name") : NULL;
@@ -22462,17 +22488,17 @@ static int bs_bind_dynamic(BsB *b, const BsShape *s, const char *ary, int copy_d
     int len = bs_bcall(b, bs_read(b, ary), "length", NULL, 0);
     int fx = bs_int(b, fixed);
     int sargs[2] = { bs_int(b, s->P + s->O), bs_bcall(b, len, "-", &fx, 1) };
-    int t = bs_write(b, rn, bs_bcall(b, bs_read(b, ary), "[]", sargs, 2));
+    int t = bs_write_of(b, s->rest, bs_bcall(b, bs_read(b, ary), "[]", sargs, 2));
     int z[2] = { bs_int(b, 0), bs_int(b, 0) };
-    int e = bs_write(b, rn, bs_bcall(b, bs_read(b, ary), "[]", z, 2));
+    int e = bs_write_of(b, s->rest, bs_bcall(b, bs_read(b, ary), "[]", z, 2));
     out[n++] = bs_if(b, bs_len_gt(b, ary, fixed), &t, 1, &e, 1);
   }
   /* the posts take the last values once the pre-requireds are covered, and
      the ones right after them otherwise */
   for (int k = 0; k < s->Q; k++) {
     const char *qn = nt_str(nt, s->post[k], "name");
-    int t = bs_write(b, qn, bs_index(b, ary, k - s->Q));
-    int e = bs_write(b, qn, bs_index(b, ary, s->P + k));
+    int t = bs_write_of(b, s->post[k], bs_index(b, ary, k - s->Q));
+    int e = bs_write_of(b, s->post[k], bs_index(b, ary, s->P + k));
     out[n++] = bs_if(b, bs_len_gt(b, ary, s->P + s->Q), &t, 1, &e, 1);
   }
   return n;
@@ -22508,7 +22534,7 @@ static int bs_strip_keywords(Compiler *c, int blk, int bp, int pn) {
   if (kn > 16) return 0;
   int kws[16];
   for (int i = 0; i < kn; i++) kws[i] = kwa[i];
-  BsB b = { nt, 1 };
+  BsB b = { nt, 1, blk };
   int base = nt->count;
   int pro[20]; int np = 0;
   char names[512]; int missing = 0, mo = 0;
@@ -22530,15 +22556,15 @@ static int bs_strip_keywords(Compiler *c, int blk, int bp, int pn) {
   }
   for (int i = 0; i < kn; i++)
     if (fwd_node_is(nt, kws[i], "OptionalKeywordParameterNode"))
-      pro[np++] = bs_write(&b, nt_str(nt, kws[i], "name"), nt_ref(nt, kws[i], "value"));
+      pro[np++] = bs_write_of(&b, kws[i], nt_ref(nt, kws[i], "value"));
   const char *krn = kr >= 0 && nt_kind(nt, kr) == NK_KeywordRestParameterNode ? nt_str(nt, kr, "name") : NULL;
   if (krn && *krn) {
     int h = bs_new(&b, "HashNode");
     if (h >= 0) nt_node_set_arr(nt, h, "elements", NULL, 0);
-    pro[np++] = bs_write(&b, krn, h);
+    pro[np++] = bs_write_of(&b, kr, h);
   }
   const char *bln = bl >= 0 ? nt_str(nt, bl, "name") : NULL;
-  if (bln && *bln) pro[np++] = bs_write(&b, bln, bs_new(&b, "NilNode"));
+  if (bln && *bln) pro[np++] = bs_write_of(&b, bl, bs_new(&b, "NilNode"));
   for (int i = 0; i < np; i++) if (pro[i] < 0) b.ok = 0;
   int nbody = np ? bs_prepend(&b, blk, pro, np) : nt_ref(nt, blk, "body");
   if (!b.ok || (np && nbody < 0)) return 0;
@@ -22553,17 +22579,8 @@ static int bs_strip_keywords(Compiler *c, int blk, int bp, int pn) {
   comp_grow_node_arrays(c);
   for (int j = base; j < nt->count; j++) c->nscope[j] = c->nscope[blk];
   Scope *bs = comp_scope_of(c, blk);
-  /* the keywords are plain locals of this block now, kept apart from any
-     other scope's local of the same name */
-  for (int i = 0; i < kn; i++) {
-    const char *wn = nt_str(nt, kws[i], "name");
-    if (block_param_is_renamed(c, wn)) { scope_local_intern(bs, wn); continue; }
-    char *kname = block_param_invent_name(c, wn, blk);
-    blkp_rewrite_refs(c, nbody, nt_str(nt, kws[i], "name"), kname);
-    numbered_rename_locals_str(nt, blk, nt_str(nt, kws[i], "name"), kname);
-    scope_local_intern(bs, kname);
-    free(kname);
-  }
+  /* the keywords are plain locals of this block now */
+  for (int i = 0; i < kn; i++) scope_local_intern(bs, nt_str(nt, kws[i], "name"));
   if (krn && *krn) scope_local_intern(bs, krn);
   if (bln && *bln) scope_local_intern(bs, bln);
   return 1;
@@ -22663,7 +22680,7 @@ int desugar_reduce_splat_args(Compiler *c) {
     snprintf(rn, sizeof rn, "__inj_%s_r", comp_node_tag(c, id));
     snprintf(an, sizeof an, "__inj_%s_a", comp_node_tag(c, id));
     int base = nt->count;
-    BsB b = { nt, 1 };
+    BsB b = { nt, 1, blk };
     /* the call moves to a new number, and the conditional takes `id`'s */
     int call = bs_new(&b, "CallNode");
     if (!b.ok) continue;
@@ -22793,7 +22810,7 @@ int desugar_iter_splat_args(Compiler *c) {
     snprintf(rn, sizeof rn, "__isp_%s_r", comp_node_tag(c, id));
     snprintf(sn, sizeof sn, "__isp_%s_s", comp_node_tag(c, id));
     int base = nt->count;
-    BsB b = { nt, 1 };
+    BsB b = { nt, 1, -1 };
     /* the call moves to a new number, and the parenthesized form takes `id`'s */
     int call = bs_new(&b, "CallNode");
     if (!b.ok) continue;
@@ -23004,12 +23021,12 @@ int desugar_builtin_iter_block_shapes(Compiler *c) {
       if (s.O == 0 && s.Q == 0 && splat && !hash_pair && !dyn && rest_bound && !extras) continue; }
     if (plain && !dyn && !extras) continue;
 
-    BsB b = { nt, 1 };
+    BsB b = { nt, 1, blk };
     int base = nt->count;
     if (numbered)
       for (int i = 0; i < s.P; i++) {
         npre[i] = bs_new(&b, "RequiredParameterNode");
-        if (npre[i] >= 0) nt_node_set_str(nt, npre[i], "name", numbered_param_name(c, bp, i));
+        if (npre[i] >= 0) { nt_node_set_str(nt, npre[i], "name", numbered_param_name(c, bp, i)); nt_decl_in(nt, npre[i], blk); }
       }
     char names[2][64];
     const char *argn[2];
@@ -23276,7 +23293,7 @@ static int desugar_enum_pair_op_sym(Compiler *c, int id, int recv, int blk, cons
   char pa[48], pb[48];
   snprintf(pa, sizeof pa, "__spa_%s", comp_node_tag(c, blk));
   snprintf(pb, sizeof pb, "__spb_%s", comp_node_tag(c, blk));
-  BsB b = { nt, 1 };
+  BsB b = { nt, 1, blk };
   int base = nt->count;
   int reqs[2] = { bs_new(&b, "RequiredParameterNode"), bs_new(&b, "RequiredParameterNode") };
   if (!b.ok) return 0;
@@ -23320,7 +23337,7 @@ static int sym_proc_blockify_op(Compiler *c, int id) {
   int known = 0;
   for (int k = 0; ops[k]; k++) if (sp_streq(mn, ops[k])) known = 1;
   if (!known) return 0;
-  BsB b = { nt, 1 };
+  BsB b = { nt, 1, -1 };
   int base = nt->count;
   int req = bs_new(&b, "RequiredParameterNode");
   if (req < 0) return 0;
@@ -23383,7 +23400,7 @@ static int sym_proc_rest_view(Compiler *c, int blk, const char *mn) {
   char xn[64] = "";
   if (P == 1 && nt_str(nt, pre[0], "name")) snprintf(xn, sizeof xn, "%s", nt_str(nt, pre[0], "name"));
   char rn[48]; snprintf(rn, sizeof rn, "__spr_%s", comp_node_tag(c, blk));
-  BsB b = { nt, 1 };
+  BsB b = { nt, 1, blk };
   int base = nt->count;
   int rest = bs_new(&b, "RestParameterNode");
   if (rest < 0) return 0;
@@ -23436,7 +23453,7 @@ int sym_proc_poly_pair_view(Compiler *c, int id) {
   const char *xn = nt_str(nt, pre[0], "name");
   if (!xn) return changed;
   char an[48]; snprintf(an, sizeof an, "__spy_%s", comp_node_tag(c, blk));
-  BsB b = { nt, 1 };
+  BsB b = { nt, 1, blk };
   int base = nt->count;
   int call = sym_proc_call2(&b, xn, mn, bs_read(&b, an));
   if (!b.ok || call < 0) return changed;
@@ -23507,7 +23524,7 @@ int desugar_enum_pair_lone_param(Compiler *c) {
       continue;
     }
     const char *mn = sym_proc_block_name(nt, blk);
-    BsB b = { nt, 1 };
+    BsB b = { nt, 1, blk };
     int base = nt->count;
     int m = sym_n ? sym_n : 2;
     char ans[8][64];
@@ -23574,7 +23591,7 @@ void enum_hop_yield_view(Compiler *c, int id, int hop) {
   if (sym_proc_blockify_op(c, id)) blk = nt_ref(nt, id, "block");
   if (nt_kind(nt, blk) != NK_BlockNode) return;
   const char *mn = sym_proc_block_name(nt, blk);
-  BsB b = { nt, 1 };
+  BsB b = { nt, 1, blk };
   int base = nt->count;
   int bp = nt_ref(nt, blk, "parameters");
   int pn = -1;
@@ -23621,6 +23638,7 @@ void enum_hop_yield_view(Compiler *c, int id, int hop) {
     req = bs_new(&b, "RequiredParameterNode");
     if (req < 0) return;
     nt_node_set_str(nt, req, "name", nt_str(nt, lone_rest, "name"));
+    nt_local_facts_from(nt, req, lone_rest);   /* the rest parameter's variable, now a required one */
     nt_node_set_ref(nt, pn, "rest", -1);
   }
   else if (lone_req) {
@@ -23773,8 +23791,10 @@ static int rename_repeated_param(Compiler *c, NodeTable *nt, int owner, int p, c
                                  int *na, int *cap, int *serial) {
   const char *nm = nt_str(nt, p, "name");
   if (!nm || !nt_param_repeated(nt, p)) return 0;
-  char nn[160];
-  do snprintf(nn, sizeof nn, "%s__dup%d", nm, ++*serial);
+  size_t nnl = strlen(nm) + 24;
+  char *nn = malloc(nnl);
+  if (!nn) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  do snprintf(nn, nnl, "D%d_%s", ++*serial, nm);
   while (dup_param_taken(*names, *na, nn));
   if (*na == *cap) { *cap *= 2; *names = realloc(*names, sizeof(char *) * (size_t)*cap); }
   (*names)[(*na)++] = strdup(nn);
@@ -23786,6 +23806,7 @@ static int rename_repeated_param(Compiler *c, NodeTable *nt, int owner, int p, c
          leaves it, which a bare `super` passes on */
       int body[2] = { w, nl };
       nt_node_set_str(nt, w, "name", nm);
+      nt_local_facts_from(nt, w, p);   /* a write of the name the repeat shares */
       nt_node_set_ref(nt, w, "value", nt_ref(nt, p, "value"));
       nt_node_set_arr(nt, st, "body", body, 2);
       nt_node_set_ref(nt, par, "body", st);
@@ -23793,7 +23814,9 @@ static int rename_repeated_param(Compiler *c, NodeTable *nt, int owner, int p, c
       comp_grow_node_arrays(c);
     }
   }
-  nt_rename_local(nt, p, nn);   /* (the written name stays, for #parameters) */
+  /* the repeat binds a slot of its own, which nothing reads */
+  nt_set_local_name(nt, p, nn);
+  free(nn);
   /* the repeat is renamed: a second run finds no repeat */
   nt_node_set_int(nt, p, "flags", nt_int(nt, p, "flags", 0) & ~NT_PARAM_REPEATED);
   return 1;
@@ -25247,7 +25270,7 @@ int desugar_readers_over_inherited_defs(Compiler *c) {
  * rebinds its own parameter to a value of another class. A block parameter's
  * type is its yield's, so the write was forced into the yielded type and the
  * conversion raised TypeError. Such a parameter becomes an ordinary local fed
- * from a renamed parameter (`|stmt__bpin| stmt = stmt__bpin; ...`), whose
+ * from a renamed parameter (`|P_<slot of stmt>| stmt = P_<slot of stmt>; ...`), whose
  * writes widen it like any local's. */
 static int rbp_writes(const NodeTable *nt, int node, const char *name, int level) {
   if (node < 0) return 0;
@@ -25294,62 +25317,6 @@ static int rbp_captured(const NodeTable *nt, int node, const char *name, int lev
   return 0;
 }
 
-/* The slot names this pass invents, each with the name it stands for: what a
-   program prints (`Proc#parameters`, `Method#inspect`) is the name it wrote.
-   A slot name steps past one the program itself uses, so no name the program
-   wrote is taken for a slot. */
-static int rbp_slot_of(const Compiler *c, const char *name) {
-  for (int i = 0; i < c->nrbp_slots; i++)
-    if (sp_streq(c->rbp_slot_names[i], name)) return i;
-  return -1;
-}
-
-/* The name slot w (nt_wname of a parameter, or a LocalVar's wname) stands
-   for, when this pass made it for a parameter the body assigns; NULL for any
-   other name. */
-const char *rbp_slot_written(const Compiler *c, const char *w) {
-  int i = w ? rbp_slot_of(c, w) : -1;
-  return i >= 0 ? c->rbp_slot_written[i] : NULL;
-}
-
-/* The name the program wrote for a parameter whose written name (nt_wname,
-   or a LocalVar's wname) is w: the name a reassigned parameter's slot stands
-   for, else w itself. */
-const char *param_written_name(const Compiler *c, const char *w) {
-  const char *r = rbp_slot_written(c, w);
-  return r ? r : w;
-}
-
-/* True when the program itself uses `name`. Only a name with `__bpin` in it
-   can clash with a slot's, so those are collected once. */
-static int rbp_program_uses(Compiler *c, LowerCtx *lc, const char *name) {
-  if (!lc->used_built) {
-    lc->used_built = 1;
-    for (int id = 0; id < lc->n0; id++) {
-      const char *nm = nt_wname(c->nt, id);
-      if (!nm || !strstr(nm, "__bpin") || rbp_slot_of(c, nm) >= 0) continue;
-      lc->used = realloc(lc->used, sizeof(char *) * (size_t)(lc->nused + 1));
-      lc->used[lc->nused++] = strdup(nm);
-    }
-  }
-  for (int i = 0; i < lc->nused; i++) if (sp_streq(lc->used[i], name)) return 1;
-  return 0;
-}
-
-static char *rbp_slot_name(Compiler *c, LowerCtx *lc, const char *orig) {
-  size_t n = strlen(orig) + 32;   /* "__bpin_<k>" */
-  char *buf = malloc(n);
-  if (!buf) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  snprintf(buf, n, "%s__bpin", orig);
-  for (int k = 1; rbp_program_uses(c, lc, buf); k++) snprintf(buf, n, "%s__bpin_%d", orig, k);
-  if (rbp_slot_of(c, buf) >= 0) return buf;
-  c->rbp_slot_names = realloc(c->rbp_slot_names, sizeof(char *) * (size_t)(c->nrbp_slots + 1));
-  c->rbp_slot_written = realloc(c->rbp_slot_written, sizeof(char *) * (size_t)(c->nrbp_slots + 1));
-  c->rbp_slot_names[c->nrbp_slots] = strdup(buf);
-  c->rbp_slot_written[c->nrbp_slots++] = strdup(orig);
-  return buf;
-}
-
 /* block b's parameter list and body, when it has both (a StatementsNode body) */
 static int rbp_block(const NodeTable *nt, int b, int *ps, int *body) {
   int bps = nt_ref(nt, b, "parameters");
@@ -25360,12 +25327,35 @@ static int rbp_block(const NodeTable *nt, int b, int *ps, int *body) {
   return *body >= 0 && nt_kind(nt, *body) == NK_StatementsNode;
 }
 
-/* Is p, a required parameter of a block with this body, one the body assigns
-   and no nested block or lambda captures? */
-static int rbp_reassigned(const NodeTable *nt, int body, int p) {
+/* Does the subtree at node read the local `name`, as seen from `level` blocks out? */
+static int rbp_reads(const NodeTable *nt, int node, const char *name, int level) {
+  if (node < 0) return 0;
+  NodeKind k = nt_kind(nt, node);
+  if (k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode) return 0;
+  if (k == NK_LocalVariableReadNode && nt_str(nt, node, "name") && sp_streq(nt_str(nt, node, "name"), name) &&
+      nt_int(nt, node, "depth", 0) == level) return 1;
+  int inner = (k == NK_BlockNode || k == NK_LambdaNode) ? level + 1 : level;
+  int nr = nt_num_refs(nt, node);
+  for (int i = 0; i < nr; i++) if (rbp_reads(nt, nt_ref_at(nt, node, i), name, inner)) return 1;
+  int na = nt_num_arrs(nt, node);
+  for (int i = 0; i < na; i++) {
+    int cnt = 0; const int *ids = nt_arr_at(nt, node, i, &cnt);
+    for (int j = 0; j < cnt; j++) if (rbp_reads(nt, ids[j], name, inner)) return 1;
+  }
+  return 0;
+}
+
+/* Is p, a required parameter of the block with parameter list ps and this body, one the body assigns, no
+   default of the list reads (the default runs before the split's write), and no nested block or lambda
+   captures? A parameter written with a leading underscore says it is unused: it keeps its slot. */
+static int rbp_reassigned(const NodeTable *nt, int ps, int body, int p) {
   if (nt_kind(nt, p) != NK_RequiredParameterNode) return 0;
-  const char *pn = nt_str(nt, p, "name");
-  if (!pn || pn[0] == '_' || !rbp_writes(nt, body, pn, 0)) return 0;
+  const char *pn = nt_str(nt, p, "name"), *wn = nt_wname(nt, p);
+  if (!pn || !wn || wn[0] == '_' || !rbp_writes(nt, body, pn, 0)) return 0;
+  int on = 0; const int *opts = nt_arr(nt, ps, "optionals", &on);
+  for (int i = 0; i < on; i++) if (rbp_reads(nt, nt_ref(nt, opts[i], "value"), pn, 0)) return 0;
+  int kn = 0; const int *kws = nt_arr(nt, ps, "keywords", &kn);
+  for (int i = 0; i < kn; i++) if (rbp_reads(nt, nt_ref(nt, kws[i], "value"), pn, 0)) return 0;
   /* a parameter a nested block or lambda captures keeps its one cell per
      iteration, which only a block parameter has */
   return !rbp_captured(nt, body, pn, 0);
@@ -25376,7 +25366,7 @@ int desugar_reassigned_block_params_left(Compiler *c, LowerCtx *lc, int id) {
   int ps, body, rn = 0;
   if (!rbp_block(nt, id, &ps, &body)) return 0;
   const int *rq = nt_arr(nt, ps, "requireds", &rn);
-  for (int i = 0; i < rn; i++) if (rbp_reassigned(nt, body, rq[i])) return 1;
+  for (int i = 0; i < rn; i++) if (rbp_reassigned(nt, ps, body, rq[i])) return 1;
   return 0;
 }
 
@@ -25387,18 +25377,24 @@ int desugar_reassigned_block_params_at(Compiler *c, LowerCtx *lc, int id) {
   const int *rq = nt_arr(nt, ps, "requireds", &rn);
   int *pre = NULL; int npre = 0;
   for (int i = 0; i < rn; i++) {
-    if (!rbp_reassigned(nt, body, rq[i])) continue;
+    if (!rbp_reassigned(nt, ps, body, rq[i])) continue;
     const char *pn = nt_str(nt, rq[i], "name");
     char *orig = strdup(pn);   /* copy: nt_set_str frees pn's storage */
     if (!orig) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-    char *renamed = rbp_slot_name(c, lc, orig);
-    nt_set_str(nt, rq[i], "name", renamed);
+    /* the parameter keeps the name it was written with (nt_wname), and its slot takes a name of its own */
+    size_t rl = strlen(orig) + 8;
+    char *renamed = malloc(rl);
+    if (!renamed) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    snprintf(renamed, rl, "P_%s", orig);
+    nt_set_local_name(nt, rq[i], renamed);
     int w = fwd_new_node_like(nt, rq[i], "LocalVariableWriteNode");
     nt_node_set_str(nt, w, "name", orig);
     nt_node_set_int(nt, w, "depth", 0);
+    nt_local_facts_from(nt, w, rq[i]);   /* the block's variable the body writes */
     int rd = fwd_new_node_like(nt, rq[i], "LocalVariableReadNode");
     nt_node_set_str(nt, rd, "name", renamed);
     nt_node_set_int(nt, rd, "depth", 0);
+    nt_local_facts_from(nt, rd, rq[i]);   /* the parameter, read under its own slot */
     free(orig); free(renamed);
     nt_node_set_ref(nt, w, "value", rd);
     /* the iteration's setup, which a redo does not re-run
@@ -33115,7 +33111,7 @@ int desugar_param_default_assigns_local_at(Compiler *c, LowerCtx *lc, int id) {
     const char *names[32]; int nn = 0;
     pdl_collect_writes(nt, v, names, 32, &nn);
     if (!nn || !pdl_body_reads(nt, nt_ref(nt, def, "body"), names, nn)) continue;
-    BsB b = { nt, 1 };
+    BsB b = { nt, 1, def };
     long long line = nt_int(nt, ps[i], "node_line", 0);
     for (int k = 0; k < nn && npro < 60; k++) {
       /* a parameter the default writes (`v = (n += 1)`) is bound already:
@@ -33145,7 +33141,7 @@ int desugar_param_default_assigns_local_at(Compiler *c, LowerCtx *lc, int id) {
     nt_node_set_ref(nt, ps[i], "value", sym);
   }
   if (!npro) return 0;
-  BsB b = { nt, 1 };
+  BsB b = { nt, 1, def };
   int nbody = bs_prepend(&b, def, pro, npro);
   if (nbody < 0 || !b.ok) return 0;
   nt_node_set_ref(nt, def, "body", nbody);
@@ -33829,6 +33825,7 @@ int desugar_reopened_op_write(Compiler *c) {
       int rd = nt_new_node(nt, vars[f].read);
       if (rd < 0) continue;
       nt_node_set_str(nt, rd, "name", nt_str(nt, id, "name"));
+      if (f == 0) nt_local_facts_from(nt, rd, id);
       if (k == NK_LocalVariableOperatorWriteNode) nt_node_set_int(nt, rd, "depth", nt_int(nt, id, "depth", 0));
       int call = ca_attr_call(nt, rd, op, v, 0);
       if (call < 0) continue;
@@ -35110,13 +35107,16 @@ static int sce_scope_add(SceScope *sc, char *from, char *to) {
   return sc->n++;
 }
 /* a scope node's comma-joined locals, kept (reach) or not */
-static void sce_scope_of(SceScope *sc, const char *locals, int reach) {
+static void sce_scope_of(const NodeTable *nt, SceScope *sc, const char *locals, int reach) {
   for (const char *p = locals ? locals : ""; *p; ) {
     const char *e = strchr(p, ',');
     size_t l = e ? (size_t)(e - p) : strlen(p);
-    char *nm = strndup(p, l);
-    if (!nm) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-    sce_scope_add(sc, nm, reach ? nm : NULL);
+    char *slot = strndup(p, l);
+    const char *w = slot ? nt_slot_written(nt, slot) : NULL;
+    char *nm = slot ? (w ? strdup(w) : strdup(slot)) : NULL;   /* the name the text writes */
+    if (!nm || !slot) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    if (!reach) { free(slot); slot = NULL; }
+    sce_scope_add(sc, nm, slot);
     p += l + (e ? 1 : 0);
   }
 }
@@ -35172,7 +35172,7 @@ static void sce_text_local(NodeTable *t, int id, int nest, SceText *w) {
     to = i >= 0 ? sc->to[i] : NULL;
   }
   if (!to) { w->bad = 1; return; }
-  if (!sp_streq(to, nm)) nt_node_set_str(t, id, "name", to);
+  if (!sp_streq(to, nm)) nt_set_local_name(t, id, to);   /* (the name the text wrote stays as its wname) */
   if (r > 0) nt_node_set_int(t, id, "depth", nest);
 }
 /* The subtree id of the text at block depth nest; in_def inside a def,
@@ -35260,7 +35260,7 @@ static int sce_graft(Compiler *c, const SceFrame *fr, SceText *up, int k, const 
   /* a class_eval among the statements runs in this text's frame */
   SceScope *in = NULL;
   for (int i = 0; i < sn && ok; i++) {
-    int id = nt_import_subtree(nt, tmp, ss[i]);
+    int id = comp_import_subtree(c, tmp, ss[i]);
     int str = id >= 0 ? sce_eval_string(nt, id) : -1;
     if (id < 0) ok = 0;
     else if (str < 0) xc_push(out, n, id);
@@ -36283,7 +36283,7 @@ static int sce_body(Compiler *c, HostStep *h, int owner, int body, int at, int n
     if ((str >= 0 || each) && f->gate < 0) f->gate = sce_program_reflects_scoped(c, nt, &f->scoped);
     if (f->gate > 0 || ((str >= 0 || each) && f->scoped.n > 0 && sce_scoped_reaches(nt, &f->scoped, owner, 0))) { str = -1; each = 0; }
     if ((str >= 0 || each) && known && !framed) {
-      sce_scope_of(&scope, locals, 1);
+      sce_scope_of(nt, &scope, locals, 1);
       int g = gone ? sce_scope_find(&scope, gone) : -1;
       if (g >= 0) scope.to[g] = NULL;
     }
@@ -36311,7 +36311,7 @@ static int sce_body(Compiler *c, HostStep *h, int owner, int body, int at, int n
       if (var && estr >= 0 && ne >= 0) {
         /* the block's locals, which the graft outside it leaves */
         SceScope bs[2] = { scope, { 0 } };
-        if (known) sce_scope_of(&bs[1], nt_str(nt, blk, "locals"), 0);
+        if (known) sce_scope_of(nt, &bs[1], nt_str(nt, blk, "locals"), 0);
         SceFrame bfr = { bs, known ? 2 : 0 };
         ok = 1;
         for (int e = 0; e < ne && ok; e++) {

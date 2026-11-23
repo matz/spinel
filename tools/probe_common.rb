@@ -494,9 +494,9 @@ module ProbeCommon
 
   # A refusal or C error in words that do not change as a case shrinks, or
   # as it shares a program with others: a name the compiler numbers (`p1`,
-  # and `p1__bp72` for the same parameter in a larger program) is `#`.
+  # and `B2_72_p1` for the same parameter in a larger program) is `#`.
   def error_kind(detail)
-    detail.sub(/\Aspinel: /, "").sub(LOCATION, "").gsub(/node \d+/, "node N").gsub(/\b[a-z_]\w*\d\b/, "#")
+    detail.sub(/\Aspinel: /, "").sub(LOCATION, "").gsub(/node \d+/, "node N").gsub(/\b(?:[a-z_]|B\d+_)\w*\d\b/, "#")
           .sub(/ \(\w+Node.*\z/, "").sub(/ recv=.*\z/, "")[0, 100]
   end
 

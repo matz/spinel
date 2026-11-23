@@ -95,7 +95,8 @@ export MODE DECLS_AWK PAIRS_DIR
 
 # one dump per program and side, each job keyed by its input position so
 # no two paths share a file; a block parameter's numbered suffix
-# (`i__bp49`) follows node ids, so it is dropped
+# (`B2_49_i`: the scope's tag and the name written; a compiler before the scope naming spelled it `i__bp49`)
+# follows the scope or node ids, so it is dropped
 i=0
 for p in "$@"; do i=$((i + 1)); printf '%06d:%s\0' "$i" "$p"; done | xargs -0 -P "$JOBS" -n 1 bash -c '
   k=${4%%:*}; p=${4#*:}
@@ -113,7 +114,7 @@ for p in "$@"; do i=$((i + 1)); printf '%06d:%s\0' "$i" "$p"; done | xargs -0 -P
     rc=$?
     rm -f "$3/$k.$side.c"
     [ $rc -eq 0 ] || { echo "$p" > "$3/$k.fail"; continue; }
-    sed -E "s/__bp[A-Za-z0-9_]+/__bp/g" "$3/$k.$side.raw" | LC_ALL=C sort > "$3/$k.$side"
+    perl -pe '"'"'s/(?<![A-Za-z0-9])((?:P_|D\d+_)*)B(\d+)_(??{".{$2}"})_/$1/g; s/__b[pq][A-Za-z0-9_]+//g'"'"' "$3/$k.$side.raw" | LC_ALL=C sort > "$3/$k.$side"
   done
   printf "%s\n" "$p" > "$3/$k.name"' _ "$REF" "$NEW" "$T" || { echo "repr_diff: dumping the programs failed" >&2; exit 2; }
 

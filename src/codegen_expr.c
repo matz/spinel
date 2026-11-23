@@ -6605,7 +6605,7 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
       int one_to = nlv && (nlv->type == TY_STRING || nlv->type == TY_STRBUF);
       if (one_to) buf_printf(b, "lv_%s = SP_STR_TO(lv_%s, sp_re_named_capture(sp_re_pat_%d, ", rename_local(tnm), rename_local(tnm), reidx);
       else buf_printf(b, "lv_%s = sp_re_named_capture(sp_re_pat_%d, ", rename_local(tnm), reidx);
-      emit_str_literal(b, tnm);
+      emit_str_literal(b, nt_wname(nt, tv[ti]));   /* the group is named as the program wrote it */
       buf_puts(b, one_to ? ")); " : "); ");
     }
     buf_printf(b, "_t%d; })", t);

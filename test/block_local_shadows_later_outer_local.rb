@@ -1,7 +1,7 @@
 # A name first assigned inside a block is the block's own local, even when the
 # enclosing scope assigns the same name further down: Ruby scopes a block's
 # body by what is declared textually before it. A paramless block skipped the
-# shadow rename, so its local shared one slot with the later top-level
+# slot of its own, so its local shared one slot with the later top-level
 # assignment -- every thread of `Thread.new do y = ...; blk { y } end` read
 # the last writer's value (found under #4528).
 ths = Array.new(3) { |i| Thread.new { y = i; sleep 0.01 * (3 - i); [0].map { y }.first } }

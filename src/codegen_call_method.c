@@ -57,7 +57,7 @@ static void method_param_add_n(MethodParam **v, int *n, int *cap, const char *ki
   (*v)[(*n)++] = (MethodParam){ kind, name, len };
 }
 /* Add the entry of parameter node p: the name the program wrote for it
-   (desugared_param_name, param_written_name), none for a destructuring
+   (desugared_param_name, nt_wname), none for a destructuring
    group's, no entry for a parameter the desugar made that is none */
 static void method_param_add(Compiler *c, MethodParam **v, int *n, int *cap, const char *kind, int p) {
   const char *w = NULL, *slot = nt_str(c->nt, p, "name");
@@ -65,7 +65,7 @@ static void method_param_add(Compiler *c, MethodParam **v, int *n, int *cap, con
   case DPN_NONE: return;
   case DPN_NAMELESS: method_param_add_n(v, n, cap, kind, NULL, 0); return;
   case DPN_WRITTEN: method_param_add_n(v, n, cap, kind, w, strlen(w)); return;
-  default: { const char *wr = param_written_name(c, nt_wname(c->nt, p)); method_param_add_n(v, n, cap, kind, wr, strlen(wr)); return; }
+  default: { const char *wr = nt_wname(c->nt, p); method_param_add_n(v, n, cap, kind, wr, strlen(wr)); return; }
   }
 }
 
@@ -339,7 +339,7 @@ static void emit_method_desc_literal(Compiler *c, int mn, int mi, int from, cons
     if (native || scope_of_accessor(m)) { buf_puts(&d, "_"); continue; }
     /* the name the program wrote, not the slot a rename gave a define_method's block parameter */
     const LocalVar *plv = scope_local(m, m->pnames[i]);
-    const char *wn = param_written_name(c, plv ? lv_wname(plv) : m->pnames[i]);
+    const char *wn = plv ? lv_wname(plv) : m->pnames[i];
     if (i == m->rest_idx) buf_printf(&d, "*%s", wn);
     else if (i == m->kwrest_idx) buf_printf(&d, "**%s", wn);
     else if (callee_param_is_declared_kwarg(c, m, m->pnames[i]))
@@ -350,7 +350,7 @@ static void emit_method_desc_literal(Compiler *c, int mn, int mi, int from, cons
   /* the block parameter, last, as CRuby renders it (`&blk`; `&` anonymous) */
   if (m->blk_param) {
     const LocalVar *blv = m->blk_param[0] ? scope_local(m, m->blk_param) : NULL;
-    buf_printf(&d, "%s&%s", m->nparams ? ", " : "", param_written_name(c, blv ? lv_wname(blv) : m->blk_param));
+    buf_printf(&d, "%s&%s", m->nparams ? ", " : "", (blv ? lv_wname(blv) : m->blk_param));
   }
   buf_puts(&d, ")");
   int ln = scope_def_line(c, m);

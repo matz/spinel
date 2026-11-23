@@ -187,12 +187,13 @@ Compiler *comp_new(const NodeTable *nt) {
   for (int k = 0; k < CORE_N; k++) c->core_cls[k] = -1;
   comp_node_pbases(c);
   comp_node_ords(c);   /* the parsed nodes, before any rewrite */
+  comp_name_locals(c, 0);   /* each local of a block, lambda or class body by its slot, tagged as the nodes are */
   nt_track_origins((NodeTable *)nt);   /* the appended ones, by origin */
   return c;
 }
 
 /* The number a name the compiler invents from a node carries (`__fwdc_12`,
-   `x__bp12`), in place of the node id. The builtins are spliced into the
+   `__cap_12_x`), in place of the node id. The builtins are spliced into the
    source ahead of the program, so every node a builtin gained or lost moved
    the id of every node after it, and with it a name in programs that never
    call that builtin. A program node is numbered by its place in table order
@@ -403,6 +404,91 @@ static void comp_node_ords(Compiler *c) {
   c->node_ord_parsed = n;
 }
 
+/* A subtree of a parsed snippet imported into the program (nt_import_subtree), its locals named by their scope. */
+int comp_import_subtree(Compiler *c, const NodeTable *src, int root) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int first = nt->count, id = nt_import_subtree(nt, src, root);
+  if (id >= 0) comp_name_locals(c, first);
+  return id;
+}
+static int decl_is_frame_root(const NodeTable *nt, int d) {
+  NodeKind k = nt_kind(nt, d);
+  return k == NK_ProgramNode || k == NK_DefNode || nt_int(nt, d, "frame_root", 0);   /* (a define_method block, a method's body: nt_rekey_scope) */
+}
+/* Does a node of kind k bind or read a local variable (a write, read, parameter or block-local)? */
+static int comp_is_local_node(NodeKind k) {
+  return comp_is_local_write(k) || k == NK_LocalVariableReadNode || k == NK_RequiredParameterNode ||
+         k == NK_OptionalParameterNode || k == NK_RestParameterNode || k == NK_BlockParameterNode ||
+         k == NK_KeywordRestParameterNode || k == NK_RequiredKeywordParameterNode ||
+         k == NK_OptionalKeywordParameterNode || k == NK_BlockLocalVariableNode;
+}
+/* The nodes from `from` on that bind or read a local variable name it by the scope that declares it. The bridge
+   wrote the names as the program did and each node's `decl`; a local of a scope that is no frame root (a block,
+   lambda, class or module body; the roots are the program and a def) takes `B<n>_<tag of its scope>_<written>`
+   (nt_slot_name), the name written kept as `wname`. So do the scope's own `locals` and the `_1`.. names of a
+   numbered-parameters node (a lambda's on the lambda). A name is then one variable wherever a pass sees it,
+   before any of them runs; a snippet's nodes, appended since, are named the same way (sce_graft). */
+void comp_name_locals(Compiler *c, int from) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  for (int id = from; id < nt->count; id++) {
+    NodeKind k = nt_kind(nt, id);
+    if (!nt_type(nt, id)) continue;
+    if (comp_is_local_node(k)) {
+      int d = (int)nt_int(nt, id, "decl", -1);
+      const char *w = nt_str(nt, id, "name");
+      if (d < 0 || !w || nt_str(nt, id, "wname") || decl_is_frame_root(nt, d)) continue;
+      char *wr = strdup(w);
+      if (!wr) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      nt_node_set_str(nt, id, "wname", wr);
+      nt_node_set_str(nt, id, "name", nt_slot_name(nt, wr, comp_node_tag(c, d)));
+      free(wr);
+    }
+    else if (nt_str(nt, id, "dead_locals") && nt_int(nt, id, "decl", -1) >= 0 &&
+             !decl_is_frame_root(nt, (int)nt_int(nt, id, "decl", -1))) {
+      /* the locals a pruned branch wrote (spinel_parse.c) are the scope's: by their slots */
+      int d = (int)nt_int(nt, id, "decl", -1);
+      const char *tag = comp_node_tag(c, d);
+      char *dl = strdup(nt_str(nt, id, "dead_locals")), *out = NULL;
+      size_t cap = strlen(nt_str(nt, id, "dead_locals")) * 2 + strlen(tag) * 8 + 64, ol = 0;
+      if (dl) out = malloc(cap);
+      if (!dl || !out) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      out[0] = 0;
+      for (char *p = dl, *sv = NULL, *nm = strtok_r(p, ",", &sv); nm; nm = strtok_r(NULL, ",", &sv)) {
+        const char *slot = nt_slot_written(nt, nm) ? nm : nt_slot_name(nt, nm, tag);
+        size_t need = ol + strlen(slot) + 2;
+        if (need > cap) { cap = need * 2; out = realloc(out, cap); if (!out) exit(1); }
+        ol += (size_t)sprintf(out + ol, "%s%s", ol ? "," : "", slot);
+      }
+      nt_node_set_str(nt, id, "dead_locals", out);
+      free(dl); free(out);
+    }
+    if (k == NK_BlockNode || k == NK_LambdaNode || k == NK_ClassNode || k == NK_ModuleNode) {
+      int n = 0;
+      const char *const *ls = nt_scope_locals(nt, id, &n);
+      char *tag = n > 0 || k == NK_BlockNode || k == NK_LambdaNode ? strdup(comp_node_tag(c, id)) : NULL;
+      if (n > 0) {   /* each entry on its own: a list may hold slots (an import's) beside written names */
+        const char **out = malloc((size_t)n * sizeof *out);
+        if (!out) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+        for (int i = 0; i < n; i++) out[i] = nt_slot_written(nt, ls[i]) ? ls[i] : nt_slot_name(nt, ls[i], tag);
+        nt_scope_locals_set(nt, id, out, n);
+        free(out);
+      }
+      int np = -1, max = 0;
+      if (k == NK_LambdaNode) { np = id; max = (int)nt_int(nt, id, "numbered_max", 0); }
+      else if (k == NK_BlockNode) {
+        int pn = nt_ref(nt, id, "parameters");
+        if (pn >= 0 && nt_kind(nt, pn) == NK_NumberedParametersNode) { np = pn; max = (int)nt_int(nt, pn, "maximum", 0); }
+      }
+      for (int q = 1; np >= 0 && q <= max && q <= 9; q++) {
+        char key[8], w2[8];
+        snprintf(key, sizeof key, "n%d", q); snprintf(w2, sizeof w2, "_%d", q);
+        nt_node_set_str(nt, np, key, nt_slot_name(nt, w2, tag));
+      }
+      free(tag);
+    }
+  }
+}
+
 /* A parsed node's tag: "12" for a program node outside every def and class,
    "p5Model_5label_3" for one in a method (its base's key and its number
    there), and for a builtin's "q", its method's name and its number there
@@ -607,12 +693,6 @@ void comp_free(Compiler *c) {
   free(c->ver_vis_call_cell); c->ver_vis_call_cell = NULL; c->ver_vis_call_cap = 0;
   free(c->ver_vis_scope_mark); c->ver_vis_scope_mark = NULL; c->ver_vis_scope_cap = 0;
   free(c->ver_vis_hist_seen); c->ver_vis_hist_seen = NULL; c->ver_vis_hist_cap = 0; c->ver_vis_guard_stamp = 0;
-  for (int i = 0; i < c->nrbp_slots; i++) { free(c->rbp_slot_names[i]); free(c->rbp_slot_written[i]); }
-  free(c->rbp_slot_names); free(c->rbp_slot_written); c->rbp_slot_names = NULL; c->rbp_slot_written = NULL; c->nrbp_slots = 0;
-  if (c->bp_name) for (unsigned i = 0; i <= c->bp_mask; i++) free(c->bp_name[i]);
-  free(c->bp_name); free(c->bp_blk); c->bp_name = NULL; c->bp_blk = NULL; c->bp_mask = 0; c->nbp = 0;
-  for (int i = 0; i < c->nbp_user; i++) free(c->bp_user[i]);
-  free(c->bp_user); c->bp_user = NULL; c->nbp_user = 0; c->bp_user_built = 0;
   for (int i = 0; i < c->ndef_asked; i++) free(c->def_asked[i]);
   free(c->def_asked); c->def_asked = NULL; c->ndef_asked = c->cdef_asked = 0;
   c->pres_names = NULL; c->pres_flags = NULL; c->npres = c->cpres = 0;
@@ -5941,6 +6021,64 @@ void scope_locals_appended(Scope *s) {
 }
 void scope_locals_removed(Scope *s) {
   free(s->lidx); s->lidx = NULL; s->lidx_cap = 0;
+}
+
+typedef struct { const char *slot, *wr; int frame, decl, node; } LnEntry;
+static int ln_by_slot(const void *x, const void *y) {
+  const LnEntry *a = x, *b = y;
+  if (a->frame != b->frame) return a->frame < b->frame ? -1 : 1;
+  int r = strcmp(a->slot, b->slot);
+  return r ? r : a->decl != b->decl ? (a->decl < b->decl ? -1 : 1) : a->node - b->node;
+}
+static int ln_by_decl(const void *x, const void *y) {
+  const LnEntry *a = x, *b = y;
+  if (a->decl != b->decl) return a->decl < b->decl ? -1 : 1;
+  int r = strcmp(a->wr, b->wr);
+  return r ? r : a->node - b->node;
+}
+/* The slot invariant of the local names (comp_name_locals): every local a scope that is no frame root
+   declares carries a slot name, recorded with the name the program wrote (its `wname`); within a frame (the def
+   or the program a scope is in) a slot names one declaration (the declaring scope and the name written) and a
+   declaration has one slot. A copy of a scope (nt_clone_subtree, `clone_of`) is its source's declaration, run
+   at another place; a pass that makes a new declaration of a written name gives it a slot of its own.
+   It does not cover: a local with no `decl` (a temporary a pass invents: `__pv`, `__py`, `__ewi_v`, `__sm_*`,
+   `__bs*`, and the nodes subtree_rename_local gives a model of -1), whose name is the pass's own and is not
+   proved unique here; the slots a pass names itself (P_, D<n>_), checked only to be recorded; and the copies of
+   a scope, which share their source's slots by design (two copies in one frame are not reported). */
+void local_names_check(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  const int *par = nt_parents(nt);
+  LnEntry *e = NULL; int n = 0, cap = 0;
+  for (int id = 0; id < nt->count; id++) {
+    NodeKind k = nt_kind(nt, id);
+    if (!nt_type(nt, id)) continue;
+    if (!comp_is_local_node(k)) continue;
+    const char *nm = nt_str(nt, id, "name");
+    int d = (int)nt_int(nt, id, "decl", -1);
+    if (!nm || d < 0 || d >= nt->count) continue;
+    const char *w = nt_wname(nt, id);
+    if (!decl_is_frame_root(nt, d) && (!nt_slot_written(nt, nm) || strcmp(nt_slot_written(nt, nm), w))) {
+      fprintf(stderr, "plan-check: local-name: node %d %s %s of scope %d (%s) carries no slot of its written name\n",
+              id, nt_type(nt, id), nm, d, nt_type(nt, d));
+      continue;
+    }
+    int fr = d;
+    while (fr >= 0 && !decl_is_frame_root(nt, fr)) fr = par[fr];
+    if (n == cap) { cap = cap ? 2 * cap : 256; e = realloc(e, (size_t)cap * sizeof *e); if (!e) { fprintf(stderr, "spinel: out of memory\n"); exit(1); } }
+    e[n++] = (LnEntry){ nm, w, fr, (int)nt_int(nt, d, "clone_of", d), id };
+  }
+  qsort(e, (size_t)n, sizeof *e, ln_by_slot);
+  for (int i = 1; i < n; i++)
+    if (e[i].frame == e[i - 1].frame && !strcmp(e[i].slot, e[i - 1].slot) && e[i].decl != e[i - 1].decl)
+      fprintf(stderr, "plan-check: local-name: slot %s names the declarations of scopes %d and %d (nodes %d, %d)\n",
+              e[i].slot, e[i - 1].decl, e[i].decl, e[i - 1].node, e[i].node);
+  qsort(e, (size_t)n, sizeof *e, ln_by_decl);
+  for (int i = 1; i < n; i++)
+    if (e[i].decl == e[i - 1].decl && !strcmp(e[i].wr, e[i - 1].wr) && strcmp(e[i].slot, e[i - 1].slot) &&
+        nt_slot_minted(nt, e[i].slot) && nt_slot_minted(nt, e[i - 1].slot))
+      fprintf(stderr, "plan-check: local-name: `%s` of scope %d has slots %s and %s (nodes %d, %d)\n",
+              e[i].wr, e[i].decl, e[i - 1].slot, e[i].slot, e[i - 1].node, e[i].node);
+  free(e);
 }
 
 /* Record the name the program wrote for slot lv: none when it is the slot's own */

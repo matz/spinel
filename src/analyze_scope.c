@@ -2167,6 +2167,7 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
           dm_mname = nt_str(c->nt, dm_argv[0], "content");
         int dm_blk = nt_ref(c->nt, id, "block");
         if (dm_mname && dm_blk >= 0) {
+          nt_rekey_scope((NodeTable *)c->nt, dm_blk, dm_blk, dm_blk);   /* the block is a method's body: its variables are the method's own, plain */
           Scope *dm_s = comp_scope_new(c, dm_mname, id);
           int dm_new_idx = c->nscopes - 1;
           elab_def_scope(c, id, dm_new_idx);
@@ -4176,8 +4177,8 @@ int an_block_captures(const NodeTable *nt, int node, int level) {
 }
 /* ...the names of those locals into `names`, and in *yields (a bit mask) whether the subtree yields (1) or writes
    one of them through a regex's named capture (2) (the environment a
-   define_method block closes over: scope_env_link). The names one block binds are renamed apart from the
-   method's (block_param_invent_name), so a name the block reads from the method is never one it binds too. */
+   define_method block closes over: scope_env_link). The names one block binds carry the block's tag (a slot), so a name the block reads from the
+   method is never one it binds too. */
 void an_block_env(const NodeTable *nt, int block, ANameSet *names, int *yields) {
   *yields = 0;
   (void)an_block_env_walk(nt, block, 0, names, yields);

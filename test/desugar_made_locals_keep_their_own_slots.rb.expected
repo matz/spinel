@@ -1,0 +1,13 @@
+[1]
+:outer
+"1!"
+:v_outer
+"reassigned"
+3
+2
+1
+"user x"
+[:a, 0]
+[:b, :z]
+"U"
+:top_y

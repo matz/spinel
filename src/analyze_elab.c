@@ -14159,7 +14159,10 @@ void elab_dump(Compiler *c, FILE *out) {
   for (int e = 0; e < r->nst; e++) {
     const LrStmt *s = &r->st[e];
     int cp = nt_ref(nt, s->node, "constant_path");
-    const char *nm = cp >= 0 ? key_name(c, cp) : key_name(c, s->node);
+    NodeKind sk = nt_kind(nt, s->node);
+    const char *nm = cp >= 0 ? key_name(c, cp)
+                     : sk == NK_LocalVariableReadNode || comp_is_local_write(sk) ? nt_wname(nt, s->node)   /* (the name written, not the slot) */
+                     : key_name(c, s->node);
     fprintf(out, "%*sr%d #%d%s f%d %s%s%s line %d\n", 2 * s->depth, "", s->region, e, s->may ? " may" : "",
             s->file, nt_type(nt, s->node), nm ? " " : "", nm ? nm : "", (int)nt_int(nt, s->node, "node_line", 0));
   }

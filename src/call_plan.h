@@ -960,6 +960,20 @@ void cplan_served_report(void);
    descendant's. */
 /* Whether a descendant defines its own method of this name. */
 int cplan_overridden(Compiler *c, int cid, const char *name, int cmeth);
+/* Can a method of the program's own (a reopening of builtin class cls, or
+   a module a prepend or an extend can put ahead of it) stand in for cls's
+   method name where the call plan does not see it? Asked of the whole
+   program, with no call site: a class the plan keeps (cplan_overridden,
+   cplan_builtin_reopen_def) answers for one site or one receiver class,
+   and user_defines_or_reads for any class. elab_reopen_answers asks about
+   the same thing from the load record (a reopening of cls or of an ancestor
+   it inherits the name from, a mixin of one, version by version, the
+   unsure ones answering yes), where this reads the method candidates by
+   name (a class named cls, or a module a prepend or an extend can put
+   ahead, whenever the program runs it): the answers differ for a
+   reopening of an ancestor and for a version that never runs, and callers
+   of either keep the one they were written against. */
+int cplan_builtin_overridden(Compiler *c, const char *cls, const char *name);
 int cplan_dispatch_form(Compiler *c, int call, int cid, const char *name, int has_base);
 /* A bare call in an instance method of class scls whose own chain has no
    method of `name`, so it reaches root_mi: a top-level def or a method the

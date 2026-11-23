@@ -24013,7 +24013,7 @@ static void emit_sym_class_name_rt(Compiler *c, Buf *b) {
    inspect is taken (cls_user_display_mi): any other prints as before. */
 int array_user_inspect_mi(Compiler *c) {
   int ac = comp_core_class(c, CORE_ARRAY);
-  if (ac < 0 || !share_builtin_overridden(c, "Array", "inspect")) return -1;
+  if (ac < 0 || !cplan_builtin_overridden(c, "Array", "inspect")) return -1;
   /* (the one hook every `inspect` of an Array shares, registered once for the program: no call's question) */
   mtab_enter(c);
   int mi = call_target(c, -1, ac, "inspect", CT_METHODS | CT_SHARED, NULL);

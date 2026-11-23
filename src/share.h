@@ -49,10 +49,6 @@ int sh_may_hold(const Compiler *c, TyKind t);
    is written to an instance variable it reads? A method whose values are
    not followed answers 0. */
 int share_scope_answers_no_string(Compiler *c, int mi);
-/* Can a method of the program's own (a reopening of builtin class cls, or
-   a module a prepend can put ahead of it) stand in for cls's method name
-   where the call plan does not see it? */
-int share_builtin_overridden(Compiler *c, const char *cls, const char *name);
 
 
 /* The class that `K.new(...)` (through parentheses) builds exactly: a class

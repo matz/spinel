@@ -1294,46 +1294,6 @@ int share_block_returns(const Compiler *c, int blk) {
   return n == 0 || nt_kind(nt, st[n - 1]) != NK_BreakNode || sh_has_next(nt, body);
 }
 
-/* Can a `prepend` or an `extend` the program calls put module mname ahead
-   of a builtin's own methods: a call of either naming it, or one whose
-   argument is no constant? A module only included, which a class's own
-   methods come before, cannot. A constant that aliases the module
-   (`Alias = Overrides`) names it just as well, also through a chain of
-   them (`Outer = Inner`, `Inner = Overrides`): each link is followed
-   (const_alias_source) until a class or module of the program's own, at
-   most once per constant, so a cycle ends. */
-static int sh_module_put_ahead(Compiler *c, const char *mname) {
-  const char *tail = mname ? strrchr(mname, ':') : NULL;
-  tail = tail ? tail + 1 : mname;
-  const char *names[2] = { "prepend", "extend" };
-  for (int j = 0; j < 2; j++)
-    for (int id = an_calls_named_first(c, names[j]); id >= 0; id = an_calls_named_next(id)) {
-      int argc = 0;
-      const int *argv = call_args(c->nt, id, &argc);
-      for (int i = 0; i < argc; i++) {
-        NodeKind k = nt_kind(c->nt, argv[i]);
-        const char *an = k == NK_ConstantReadNode || k == NK_ConstantPathNode ? nt_str(c->nt, argv[i], "name") : NULL;
-        for (int d = 0; an && comp_class_index(c, an) < 0 && d < c->nconsts; d++) {
-          const char *src = const_alias_source(c, an);
-          if (!src) break;
-          an = src;
-        }
-        if (!an || (tail && sp_streq(an, tail))) return 1;
-      }
-    }
-  return 0;
-}
-int share_builtin_overridden(Compiler *c, const char *cls, const char *name) {
-  int n = 0;
-  const PolyCand *p = name ? comp_poly_candidates(c, name, &n) : NULL;
-  for (int i = 0; i < n; i++) {
-    if (p[i].mi < 0 && p[i].rdcls < 0) continue;
-    ClassInfo *ci = &c->classes[p[i].cls];
-    if (ci->name && sp_streq(ci->name, cls)) return 1;
-    if (comp_class_is_module(c, ci) && sh_module_put_ahead(c, ci->name)) return 1;
-  }
-  return 0;
-}
 /* Does share row `share`, with argc arguments, answer a container of some
    of the receiver's own elements and of nothing else: a run of them
    (BSH_SUB, a selection BSH_ITER_SEL, BSH_FLATTEN), or a counted element
@@ -1364,10 +1324,10 @@ static int sh_fresh_elems(Compiler *c, int r, int depth) {
      same new Strings, which no name holds either. (A block's parameter
      names them: `sort_by { |x| ... }` is left to the block's own facts, and
      a name the program may answer itself to the Array rows,
-     share_builtin_overridden.) */
+     cplan_builtin_overridden.) */
   if (nm && recv >= 0 && blk < 0 && ty_is_array(comp_ntype_settled(c, recv)) &&
       sh_answers_elems_run(bop_share_named(BOP_ANY_ARRAY, nm), call_plain_argc(c, r)) &&
-      !share_builtin_overridden(c, "Array", nm))
+      !cplan_builtin_overridden(c, "Array", nm))
     return sh_fresh_elems(c, recv, depth + 1);
   if (!nm || recv < 0 || blk < 0 || bop_share_named(BOP_ANY_ARRAY, nm) != BSH_ITER_MAP) return 0;
   /* map with a literal block whose value is a new String, and no next */
@@ -1585,7 +1545,7 @@ static int sh_value_fresh_leaf(Compiler *c, int n, int depth) {
   int sh = nm && recv >= 0 && !sh_has_targets(c, n) ? bop_share_named(BOP_ANY_ARRAY, nm) : 0;
   /* (max and min with no block or count answer one of them too) */
   if (sh == BSH_ITER_FIND && is_minmax_query(nm) && call_plain_argc(c, n) == 0 &&
-      !share_builtin_overridden(c, "Array", nm)) sh = BSH_ELEM;
+      !cplan_builtin_overridden(c, "Array", nm)) sh = BSH_ELEM;
   return (sh == BSH_ELEM || sh == BSH_ELEM_N) && nt_ref(nt, n, "block") < 0 && sh_fresh_elems(c, recv, depth + 1);
 }
 typedef struct { Compiler *c; int depth; } ShFresh;

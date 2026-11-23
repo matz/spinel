@@ -7447,7 +7447,11 @@ static int lr_reopen_answers(Compiler *c, const char *cls, const char *name) {
   return 0;
 }
 /* lr_reopen_answers for other files: may the program's reopenings answer
-   name on a value of builtin class cls ahead of the builtin's method? */
+   name on a value of builtin class cls ahead of the builtin's method? Read
+   from the load record, so it follows a reopening of an ancestor, a mixin
+   and the version that runs; cplan_builtin_overridden asks the nearby
+   question of the method candidates by name (a class named cls, a module a
+   prepend or an extend can put ahead), with no versions. */
 int elab_reopen_answers(Compiler *c, const char *cls, const char *name) {
   return lr_reopen_answers(c, cls, name);
 }

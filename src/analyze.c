@@ -17284,7 +17284,7 @@ static int oa_filter_call(Compiler *c, int id) {
    as a copy's. Killed with the nil-answering bangs, `def drop(n) =
    @items.delete_if { ... }` left @items a poly array wherever drop's value
    was read, an --ext-entry's return among them. Where the program defines
-   the filter's name on Array (share_builtin_overridden, which a module put
+   the filter's name on Array (cplan_builtin_overridden, which a module put
    ahead of any class answers too), its value is the program's method's,
    neither the receiver nor a copy of its elements: no edge, and the slot
    dies, its value read or thrown away, as the walk arm's does under a
@@ -17302,7 +17302,7 @@ static int oa_filter_arm(Compiler *c, int id, int recv, OAS *sl, int S, char *cl
   int disc = id < nc && walk_disc[id];
   const char *fnm = nt_str(c->nt, id, "name");
   int self_ans = fk == 1 && fnm && !is_select_reject_bang(fnm);
-  int own = fnm && share_builtin_overridden(c, "Array", fnm);
+  int own = fnm && cplan_builtin_overridden(c, "Array", fnm);
   if (own || (fk == 1 && !self_ans && !disc)) sl[S].alive = 0;
   if ((fk == 2 || self_ans) && !own && id < nc) { call_ret[id] = S; value_ok[id] &= disc; }
   return 1;
@@ -17331,7 +17331,7 @@ static int oa_printer_takes_args(Compiler *c, int id, const char *walk_disc, int
   if (!answers_arg && !sp_streq(nm, "puts") && !sp_streq(nm, "print")) return 0;
   if (answers_arg && !(id < nc && walk_disc[id])) return 0;
   if (call_target(c, id, -1, nm, CT_TOP, NULL) >= 0 || comp_self_call_mi(c, id, nm) >= 0) return 0;
-  if (share_builtin_overridden(c, "Array", "inspect") || share_builtin_overridden(c, "Array", "to_s")) return 0;
+  if (cplan_builtin_overridden(c, "Array", "inspect") || cplan_builtin_overridden(c, "Array", "to_s")) return 0;
   int args = nt_ref(nt, id, "arguments"), argc = 0;
   const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
   return argc > 0 && !nt_argv_has_splat(nt, argv, argc) && !nt_argv_has_keywords(nt, argv, argc);
@@ -18148,7 +18148,7 @@ static int narrow_walk_block_params(Compiler *c) {
     TyKind zt = cn && is_zip_name(cn) && cac == 1 ? infer_type(c, nt_arr(nt, ca, "arguments", &cac)[0]) : TY_UNKNOWN;
     int zip = cn && is_zip_name(cn) && cac == 1 && blk != id && !extra && np == 2 &&
               !block_param_is_multi(c, blk, 0) && !block_param_is_multi(c, blk, 1) &&
-              (ty_is_array(rt) || ty_is_obj_array(rt)) && !share_builtin_overridden(c, "Array", cn) &&
+              (ty_is_array(rt) || ty_is_obj_array(rt)) && !cplan_builtin_overridden(c, "Array", cn) &&
               (ty_is_obj_array(rt) || ty_is_obj_array(zt));
     for (int pi = 0; pi < np; pi++) {
       const char *nm = block_param_name(c, blk, pi);
@@ -18432,14 +18432,14 @@ static void oa_classify_value(Compiler *c, OAS *sl, int n, const int *read_slot,
        method ending in one, after an early `return`, kept its return slot
        boxed while the walk, its value unread (walk_disc), let the list
        narrow -- the same sp_PtrArray under an sp_PolyArray return. Where
-       the program may redefine that walk on Array (share_builtin_overridden,
+       the program may redefine that walk on Array (cplan_builtin_overridden,
        which a module put ahead of any class answers too), the walk's value
        is not known to be the receiver: both stay boxed. */
     else if (cn && is_each_walk_or_with_index(cn) && can == 0 && crecv >= 0 && read_slot[crecv] >= 0 &&
              nt_ref(nt, v, "block") >= 0 && nt_kind(nt, nt_ref(nt, v, "block")) == NK_BlockNode &&
              !block_body_breaks(nt, nt_ref(nt, nt_ref(nt, v, "block"), "body"))) {
       claimed[crecv] = 1;
-      if (share_builtin_overridden(c, "Array", cn)) sl[read_slot[crecv]].alive = sl[S].alive = 0;
+      if (cplan_builtin_overridden(c, "Array", cn)) sl[read_slot[crecv]].alive = sl[S].alive = 0;
       else oa_uf_union(sl, S, read_slot[crecv]);
     }
     /* `t = Array.new(n, v)`: every slot holds the one fill value v, so v is
@@ -18836,7 +18836,7 @@ static int oa_ignores_block_value(Compiler *c, int call) {
   TyKind rt = infer_type(c, recv);
   const char *cls = ty_is_array(rt) || ty_is_ptr_array(rt) ? "Array" : ty_is_hash(rt) ? "Hash" :
                     rt == TY_RANGE ? "Range" : rt == TY_INT ? "Integer" : NULL;
-  return cls && !share_builtin_overridden(c, cls, nm);
+  return cls && !cplan_builtin_overridden(c, cls, nm);
 }
 
 /* an_value_dropped's answer, with the block of an iterator taken to throw
@@ -19583,7 +19583,7 @@ static void oa_recv_use(Compiler *c, OAS *sl, int S, int id, int recv, const int
     claimed[recv] = 1;
     sl[S].removes = 1;
     sl[S].row_iter |= 1;
-    if (share_builtin_overridden(c, "Array", name)) sl[S].alive = 0;
+    if (cplan_builtin_overridden(c, "Array", name)) sl[S].alive = 0;
   }
   else if (!oa_walk_arm(c, id, recv, sl, S, claimed, walk_disc, nc) &&
            !oa_filter_arm(c, id, recv, sl, S, claimed, call_ret, value_ok, walk_disc, nc)) sl[S].alive = 0;

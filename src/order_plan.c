@@ -6,7 +6,7 @@
 #include "implicit_calls.h"
 #include "method_table_check.h"
 #include "codegen_call_arms.h"
-#include "share.h"
+#include "call_plan.h"
 #include <limits.h>
 
 /* See order_plan.h. Operands that all answer yes need no ordering and no
@@ -37,7 +37,7 @@ static int order_typed_len(Compiler *c, int id) {
   if (!sp_streq(nm, "size") && !sp_streq(nm, "length") && !sp_streq(nm, "empty?")) return 0;
   TyKind rt = comp_ntype(c, recv);
   const char *cls = ty_is_array(rt) || ty_is_ptr_array(rt) ? "Array" : ty_is_hash(rt) ? "Hash" : NULL;
-  return cls && !share_builtin_overridden(c, cls, nm);
+  return cls && !cplan_builtin_overridden(c, cls, nm);
 }
 int order_pure_walk(Compiler *c, int id, const OrderWalk *w) {
   if (id < 0 || (w->ran && w->ran(id))) return 1;

@@ -2369,7 +2369,7 @@ int strbuf_route_srange_kept(Compiler *c, int v) {
   v = nt_paren_single(nt, v);
   if (v < 0 || nt_ref(nt, v, "arguments") >= 0 || nt_ref(nt, v, "block") >= 0) return 0;
   const BuiltinOp *row = cplan_builtin_handle_row(c, v);
-  return row && row->recv == TY_STR_RANGE && !share_builtin_overridden(c, "Range", row->name);
+  return row && row->recv == TY_STR_RANGE && !cplan_builtin_overridden(c, "Range", row->name);
 }
 
 /* The endpoint returned by the sequence's final expression. */
@@ -12209,7 +12209,7 @@ static int hc_block_loop(Compiler *c, int id) {
     int a = nt_ref(nt, id, "arguments"), an = 0;
     const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
     return an <= 1 && (an < 1 || comp_ntype(c, av[0]) == TY_INT) &&
-           !an_range_step_rat(c, id, 0) && !share_builtin_overridden(c, "Range", "step");
+           !an_range_step_rat(c, id, 0) && !cplan_builtin_overridden(c, "Range", "step");
   }
   return rt == TY_RANGE && sp_streq(nm, "each");
 }
@@ -26789,7 +26789,7 @@ int strbuf_poly_user_base(Compiler *c, int v) {
     const char *nm = nt_kind(nt, v) == NK_CallNode ? nt_str(nt, v, "name") : NULL;
     int r = nm ? nt_ref(nt, v, "receiver") : -1;
     if (r < 0 || !is_receiver_conversion(nm) || call_plain_argc(c, v) != 0 || nt_ref(nt, v, "block") >= 0 ||
-        comp_ntype(c, r) != TY_STRING || share_builtin_overridden(c, "String", nm))
+        comp_ntype(c, r) != TY_STRING || cplan_builtin_overridden(c, "String", nm))
       return -1;
     v = nt_paren_single(c->nt, r);
   }

@@ -6776,7 +6776,7 @@ void emit_str_array_handles(Compiler *c, int v, Buf *b) {
   if (u >= 0 && nt_kind(c->nt, u) == NK_CallNode && is_minmax_pair(nt_str(c->nt, u, "name")) &&
       nt_ref(c->nt, u, "arguments") < 0 && nt_ref(c->nt, u, "block") < 0 && nt_ref(c->nt, u, "receiver") >= 0 &&
       comp_ntype(c, nt_ref(c->nt, u, "receiver")) == TY_STR_RANGE && cplan_user(c, u).dispatch == CP_NONE &&
-      !share_builtin_overridden(c, "Range", "minmax")) {
+      !cplan_builtin_overridden(c, "Range", "minmax")) {
     int tr = ++g_tmp, tp = ++g_tmp;
     buf_printf(b, "({ sp_StrRange _t%d = ", tr);
     emit_expr(c, nt_ref(c->nt, u, "receiver"), b);

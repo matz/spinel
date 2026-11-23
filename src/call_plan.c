@@ -146,6 +146,48 @@ int cplan_overridden(Compiler *c, int cid, const char *name, int cmeth) {
   return comp_method_overridden(c, cid, name, cmeth);
 }
 
+/* Can a `prepend` or an `extend` the program calls put module mname ahead
+   of a builtin's own methods: a call of either naming it, or one whose
+   argument is no constant? A module only included, which a class's own
+   methods come before, cannot. A constant that aliases the module
+   (`Alias = Overrides`) names it just as well, also through a chain of
+   them (`Outer = Inner`, `Inner = Overrides`): each link is followed
+   (const_alias_source) until a class or module of the program's own, at
+   most once per constant, so a cycle ends. */
+static int cplan_module_put_ahead(Compiler *c, const char *mname) {
+  const char *tail = mname ? strrchr(mname, ':') : NULL;
+  tail = tail ? tail + 1 : mname;
+  const char *names[2] = { "prepend", "extend" };
+  for (int j = 0; j < 2; j++)
+    for (int id = an_calls_named_first(c, names[j]); id >= 0; id = an_calls_named_next(id)) {
+      int argc = 0;
+      const int *argv = call_args(c->nt, id, &argc);
+      for (int i = 0; i < argc; i++) {
+        NodeKind k = nt_kind(c->nt, argv[i]);
+        const char *an = k == NK_ConstantReadNode || k == NK_ConstantPathNode ? nt_str(c->nt, argv[i], "name") : NULL;
+        for (int d = 0; an && comp_class_index(c, an) < 0 && d < c->nconsts; d++) {
+          const char *src = const_alias_source(c, an);
+          if (!src) break;
+          an = src;
+        }
+        if (!an || (tail && sp_streq(an, tail))) return 1;
+      }
+    }
+  return 0;
+}
+/* See call_plan.h. */
+int cplan_builtin_overridden(Compiler *c, const char *cls, const char *name) {
+  int n = 0;
+  const PolyCand *p = name ? comp_poly_candidates(c, name, &n) : NULL;
+  for (int i = 0; i < n; i++) {
+    if (p[i].mi < 0 && p[i].rdcls < 0) continue;
+    ClassInfo *ci = &c->classes[p[i].cls];
+    if (ci->name && sp_streq(ci->name, cls)) return 1;
+    if (comp_class_is_module(c, ci) && cplan_module_put_ahead(c, ci->name)) return 1;
+  }
+  return 0;
+}
+
 int cplan_dispatch_form(Compiler *c, int call, int cid, const char *name, int has_base) {
   if (cid < 0 || !name) return has_base ? CP_DIRECT : CP_NONE;
   int n = dispatch_impl_count(c, call, cid, name);

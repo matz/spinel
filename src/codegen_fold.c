@@ -5231,14 +5231,14 @@ int emit_sortby_expr(Compiler *c, int id, Buf *b) {
 static int cmp_sign_ops_overridden(Compiler *c, TyKind t) {
   static const char *const ops[] = { ">", "<" };
   static const char *const rat_holders[] = { "Rational", "Numeric", "Comparable" };
-  if (t == TY_RATIONAL && share_builtin_overridden(c, "Rational", "<=>")) return 1;
+  if (t == TY_RATIONAL && cplan_builtin_overridden(c, "Rational", "<=>")) return 1;
   for (int o = 0; o < 2; o++) {
     if (t == TY_FLOAT) {
-      if (share_builtin_overridden(c, "Float", ops[o])) return 1;
+      if (cplan_builtin_overridden(c, "Float", ops[o])) return 1;
       continue;
     }
     for (int h = 0; h < 3; h++)
-      if (share_builtin_overridden(c, rat_holders[h], ops[o])) return 1;
+      if (cplan_builtin_overridden(c, rat_holders[h], ops[o])) return 1;
     int n = 0;
     const PolyCand *p = comp_poly_candidates(c, ops[o], &n);
     for (int i = 0; i < n; i++)

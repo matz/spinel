@@ -2620,10 +2620,11 @@ const char *an_value_methods_class(Compiler *c, int recv, TyKind rt, const char 
    define the name itself and every ancestor is a user class spinel knows the
    class methods of -- not a Struct/Data (whose generated class methods are
    not scopes), an exception, a native class, or a builtin's subclass. */
-int an_class_singleton_methods_listable(Compiler *c, int cid) {
+static int class_method_list_listable(Compiler *c, int cid, const char *name) {
   const NodeTable *nt = c->nt;
   if (cid < 0 || cid >= c->nclasses || class_is_exc_subclass(c, cid)) return 0;
-  if (comp_name_responder(c, cid, "singleton_methods", CT_CMETHOD) >= 0) return 0;
+  /* a class method of the program's under the list's name answers the call */
+  if (comp_name_responder(c, cid, name, CT_CMETHOD) >= 0) return 0;
   for (int k = cid, g = 0; k >= 0 && g <= c->nclasses; k = c->classes[k].parent, g++) {
     ClassInfo *ci = &c->classes[k];
     if (ci->is_native_class || ci->is_struct || ci->is_data) return 0;
@@ -2633,12 +2634,21 @@ int an_class_singleton_methods_listable(Compiler *c, int cid) {
   }
   return 1;
 }
+int an_class_singleton_methods_listable(Compiler *c, int cid) {
+  return class_method_list_listable(c, cid, "singleton_methods");
+}
 
-int an_singleton_methods_foldable(Compiler *c, int recv) {
+/* The list `name` of the class constant `recv` names: a builtin's, unless a
+   reopening defines a class method of the name; a program class's where
+   class_method_list_listable says. */
+static int const_method_list_foldable(Compiler *c, int recv, const char *name) {
   const char *cn = nt_str(c->nt, recv, "name");
   int ci = const_node_class_index(c, recv);
-  if (builtin_class_id(cn)) return ci < 0 || comp_name_responder(c, ci, "singleton_methods", CT_CMETHOD) < 0;
-  return an_class_singleton_methods_listable(c, ci);
+  if (builtin_class_id(cn)) return ci < 0 || comp_name_responder(c, ci, name, CT_CMETHOD) < 0;
+  return class_method_list_listable(c, ci, name);
+}
+int an_singleton_methods_foldable(Compiler *c, int recv) {
+  return const_method_list_foldable(c, recv, "singleton_methods");
 }
 
 /* Klass.singleton_methods (with `all` or not), and a class's methods(false)
@@ -2656,12 +2666,12 @@ int an_class_method_list_foldable(Compiler *c, const char *name, int recv, int a
   if (!single && argc != 1) return 0;
   int ci;
   if (nt_kind(nt, recv) == NK_ConstantReadNode) {
-    if (!an_singleton_methods_foldable(c, recv)) return 0;
+    if (!const_method_list_foldable(c, recv, name)) return 0;
     ci = const_node_class_index(c, recv);
     if (!priv) return 1;
   } else {
     ci = class_body_self_ci(c, recv);
-    if (ci < 0 || !an_class_singleton_methods_listable(c, ci)) return 0;
+    if (ci < 0 || !class_method_list_listable(c, ci, name)) return 0;
   }
   return !priv || (ci >= 0 && !comp_class_is_module(c, &c->classes[ci]));
 }

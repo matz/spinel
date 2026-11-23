@@ -4653,15 +4653,26 @@ int cplan_cmethod_later(Compiler *c, int id, int cls, const char *name) {
   return id >= 0 && cls >= 0 && ct_before_versions(c, id, cls, name, CT_CMETHOD, -1);
 }
 /* (the class whose class side class-side reader id, on a constant or self, asks of) */
+/* The class self is at node id: the class of the class method it is in (that method's scope in *cm), or the class whose
+   body holds it; -1 for an instance method or any other site. A respond_to?'s cells reader and a method list in a class
+   body or class method (cplan_self_list_classes) both resolve their self so. */
+static int self_class_at(Compiler *c, int id, const Scope **cm) {
+  const Scope *s = comp_scope_of(c, id);
+  *cm = NULL;
+  if (s && s->class_id >= 0) {
+    if (!s->is_cmethod) return -1;
+    *cm = s;
+    return s->class_id;
+  }
+  return s && c->node_cbody && id < c->node_cap ? c->node_cbody[id] : -1;
+}
 static int cells_reader_class(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   int recv = nt_ref(nt, id, "receiver");
   NodeKind rk = recv >= 0 ? nt_kind(nt, recv) : NK_SelfNode;
+  const Scope *cm;
   if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) return class_recv_static_ci(c, recv);
-  if (rk != NK_SelfNode) return -1;
-  const Scope *s = comp_scope_of(c, id);
-  if (s && s->class_id >= 0) return s->is_cmethod ? s->class_id : -1;
-  return s && c->node_cbody && id < c->node_cap ? c->node_cbody[id] : -1;
+  return rk == NK_SelfNode ? self_class_at(c, id, &cm) : -1;
 }
 /* See call_plan.h. */
 int cplan_presence_class(Compiler *c, int id) {
@@ -4788,14 +4799,11 @@ int cplan_self_list_classes(Compiler *c, int id, int recv, const char *name, int
   int ci = -1, n = 0;
   *form = 0;
   if (recv >= 0 && nt_kind(c->nt, recv) != NK_SelfNode) return 0;
-  const Scope *s = comp_scope_of(c, id);
-  if (s && s->is_cmethod && s->class_id >= 0 && call_target(c, id, s->class_id, name, CT_CMETHOD, NULL) < 0) {
-    ci = s->class_id;
-    *form = CSL_CMETHOD | (s->yields ? CSL_SPLICE : 0) | (cmethod_takes_self_cls(c, s) ? CSL_DYN : 0);
-  }
-  /* (a class body's self names the class whose body holds it, unless that class has a class method of the name) */
-  else if (recv >= 0 && (ci = class_body_self_ci(c, recv)) >= 0 && call_target(c, id, ci, name, CT_CMETHOD, NULL) >= 0)
-    ci = -1;
+  const Scope *cm;
+  ci = self_class_at(c, id, &cm);
+  /* (unless that class has a class method of the name; a spliced or receiving-class method lists the classes below it) */
+  if (ci >= 0 && call_target(c, id, ci, name, CT_CMETHOD, NULL) >= 0) ci = -1;
+  if (ci >= 0 && cm) *form = CSL_CMETHOD | (cm->yields ? CSL_SPLICE : 0) | (cmethod_takes_self_cls(c, cm) ? CSL_DYN : 0);
   if (ci < 0) return 0;
   *ci_out = ci;
   /* (the class, and where the method takes its receiving class or is spliced into each subclass, those below it) */

@@ -1134,7 +1134,8 @@ extern int g_uses_traps;
    method on a call cycle, a loop that may not end or that no loop of its
    function encloses): one that sets a trap runs the trap's proc there
    (sp_sig_run_pending), one with no thread raises the default SIGINT or
-   SIGTERM there (sp_sig_poll_raise, which returns while sp_sig_default_pending is 0) */
+   SIGTERM there (sp_sig_poll_raise, which returns while sp_sig_default_pending[0] and
+   sp_sig_default_pending[1] are 0) */
 static inline int sig_polls(void) { return g_uses_traps || !g_uses_threads; }
 static inline const char *sig_poll_stmt(void) {
   return g_uses_traps ? "if (SP_UNLIKELY(SP_ATOMIC_LOAD(&sp_sig_pending_flag, __ATOMIC_RELAXED))) sp_sig_run_pending()"

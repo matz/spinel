@@ -407,10 +407,10 @@ extern volatile int sp_sig_async_ok;
 extern volatile int sp_sig_hold;
 /* A default signal recorded before the call, as during a Process.spawn, is
    raised as the call begins (sp_sig_blocking_raise, lib/sp_cold.c). */
-extern volatile int sp_sig_default_pending;
+extern volatile int sp_sig_default_pending[2];
 void sp_sig_blocking_raise(void);
 #define SP_SIG_BLOCKING(expr) \
-  __extension__ ({ sp_sig_async_ok++; if (sp_sig_default_pending) sp_sig_blocking_raise(); \
+  __extension__ ({ sp_sig_async_ok++; if (sp_sig_default_pending[0] | sp_sig_default_pending[1]) sp_sig_blocking_raise(); \
                    __typeof__(expr) _sp_sb_r = (expr); sp_sig_async_ok--; _sp_sb_r; })
 
 #endif

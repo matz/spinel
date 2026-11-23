@@ -1864,7 +1864,7 @@ int strbuf_tail_plain(Compiler *c, int v) {
      its own String (SP_STR_HDL adopts a just-made one, answers a view's
      owner and a literal's static object), beside borrowed arms that keep
      their existing handle. */
-  TyKind t = comp_ntype(c, v);
+  TyKind t = repr_of(c, v).ty;
   if (t == TY_STRING || t == TY_STRBUF) return 1;
   if (strbuf_native_answer(c, v)) return 1;
   /* A shared reader's demanded value is its slot's handle too, a reflective
@@ -1961,13 +1961,9 @@ static int strbuf_cond_arm_any(Compiler *c, int v, int (*leaf)(Compiler *, int),
 static int strbuf_cond_arm_any_in(Compiler *c, int v, unsigned extra, int (*leaf)(Compiler *, int), int deep);
 /* A leaf of the arm walk: a String Range's endpoint (strbuf_srange_tail), a
    `next` of one, or a `begin` (with no rescue, else or ensure) ending in one */
-static int strbuf_value_held(Compiler *c, int v);
-static int strbuf_srange_leaf_d(Compiler *c, int v, int unheld);
-static int strbuf_srange_leaf(Compiler *c, int v) { return strbuf_srange_leaf_d(c, v, 0); }
-static int strbuf_srange_unheld_leaf(Compiler *c, int v) { return strbuf_srange_leaf_d(c, v, 1); }
-static int strbuf_srange_leaf_d(Compiler *c, int v, int unheld) {
+static int strbuf_srange_leaf(Compiler *c, int v) {
   const NodeTable *nt = c->nt;
-  int (*leaf)(Compiler *, int) = unheld ? strbuf_srange_unheld_leaf : strbuf_srange_leaf;
+  int (*leaf)(Compiler *, int) = strbuf_srange_leaf;
   v = nt_paren_single(nt, v);
   /* a begin's value is its body's, a rescue's or its else's (an ensure's is
      dropped), as strbuf_begin_arm_leaf takes them; a rescue modifier's is
@@ -1983,9 +1979,7 @@ static int strbuf_srange_leaf_d(Compiler *c, int v, int unheld) {
   if (v >= 0 && nt_kind(nt, v) == NK_CallNode && nt_ref(nt, v, "block") >= 0 &&
       nt_kind(nt, nt_ref(nt, v, "block")) == NK_BlockNode && strbuf_route_inline_call(c, v))
     return strbuf_cond_arm_any(c, nt_ref(nt, nt_ref(nt, v, "block"), "body"), leaf, 0);
-  /* (unheld: an endpoint the String plan shares is the handle its Range
-     keeps, which the handle route hands on) */
-  return strbuf_srange_tail(c, v) >= 0 && !(unheld && strbuf_value_held(c, v));
+  return strbuf_srange_tail(c, v) >= 0;
 }
 /* ...is value v a String Range's endpoint, or a conditional (`?:`, if,
    unless, case, `&&`, `||`, as the walk of the handle arms takes them) with
@@ -1994,14 +1988,6 @@ static int strbuf_srange_leaf_d(Compiler *c, int v, int unheld) {
    around the bytes of one the Range keeps none for. */
 int strbuf_srange_arm(Compiler *c, int v) {
   return v >= 0 && strbuf_cond_arm_any(c, v, strbuf_srange_leaf, 0);
-}
-/* ...and is `next v` one whose value v is such, with no handle the plan
-   shares for the endpoint? The handle face leaves it to the Range's own
-   test. */
-int strbuf_next_srange_value(Compiler *c, int v) {
-  int na = 0;
-  const int *av = nt_kind(c->nt, v) == NK_NextNode ? call_args(c->nt, v, &na) : NULL;
-  return na == 1 && av[0] >= 0 && strbuf_cond_arm_any(c, av[0], strbuf_srange_unheld_leaf, 0);
 }
 /* The tail of the literal block spliced here, past each tail that is
    itself a yield, or -1. */
@@ -2021,13 +2007,6 @@ static int strbuf_site_tail(Compiler *c) {
   }
   return -1;
 }
-/* Is value v held: any expression's value is. No value is proved a new
-   String no name holds; the handle face adopts a just-made one (SP_STR_HDL)
-   and returns a held one's own handle. */
-static int strbuf_value_held(Compiler *c, int v) {
-  v = nt_paren_single(c->nt, v);
-  return v >= 0;
-}
 /* Does a `next v` that leaves block body n (not a nested block's, loop's
    or method's) hand on a held String? */
 static int strbuf_next_held(Compiler *c, int n) {
@@ -2038,7 +2017,7 @@ static int strbuf_next_held(Compiler *c, int n) {
       k == NK_UntilNode || k == NK_ForNode) return 0;
   if (k == NK_NextNode) {
     int argc = 0; const int *argv = call_args(nt, n, &argc);
-    if (argc == 1 && strbuf_value_held(c, argv[0])) return 1;
+    if (argc == 1 && nt_paren_single(nt, argv[0]) >= 0) return 1;
   }
   for (int i = 0; i < nt_num_refs(nt, n); i++)
     if (strbuf_next_held(c, nt_ref_at(nt, n, i))) return 1;
@@ -2049,44 +2028,25 @@ static int strbuf_next_held(Compiler *c, int n) {
   return 0;
 }
 /* --share-strings: is a value of the literal block spliced here (its
-   tail, or a next's) a String a holder keeps and the rule shares, or a
-   value the handle face renders (strbuf_tail_plain: a new String, a
-   proc's answer, a `then`'s)? Then the yield's handle (strbuf_route_yield)
+   tail, or a next's) held: any value but a String literal or nil is, a
+   String Range's endpoint included, and the yield's handle (strbuf_route_yield)
    is what identity and a box see. The tail's facts are this site's; the
-   yield's own are the union of every site. */
-/* ...but not where the demand has no handle to hand on for a value of the
-   tail that is a read of a String the plan does not share, a call of the
-   program's own that answers one it keeps, or a String Range's endpoint no
-   handle is shared for: it would wrap a new handle around the bytes, another
-   object. A literal String or nil takes either, and beside one of those
-   alone the others keep the handle they were given. A `next` and a call of a
-   yielding method with a literal block answer what their value, or the
-   block's last statement, does. */
-enum { SLK_HELD, SLK_FRESH, SLK_UNHELD };
+   yield's own are the union of every site. A literal String or nil takes
+   either, and beside one of those alone the others keep the handle they were
+   given; a `next` and a call of a yielding method with a literal block
+   answer what their value, or the block's last statement, does. */
+enum { SLK_HELD, SLK_LITERAL };
 int strbuf_route_ivar_get(Compiler *c, int v);
-/* a call of a method of the program's own that answers a variable it keeps
-   (`def s = @s`) */
-static int strbuf_user_getter_call(Compiler *c, int v) {
-  if (nt_kind(c->nt, v) != NK_CallNode || nt_ref(c->nt, v, "block") >= 0 || cplan_user(c, v).dispatch != CP_DIRECT ||
-      cplan_user(c, v).mi < 0)
-    return 0;
-  int mi = cplan_user(c, v).mi, body = c->scopes[mi].body;
-  int last = scope_body_last(c, mi);
-  if (last < 0) last = body;   /* (an endless def's body is its expression) */
-  NodeKind lk = last >= 0 ? nt_kind(c->nt, nt_paren_single(c->nt, last)) : NK_NONE;
-  return lk == NK_InstanceVariableReadNode || repr_static_read_kind(lk);
-}
 static int strbuf_leaf_is(Compiler *c, int v, int want);
 static int strbuf_leaf_held(Compiler *c, int v) { return strbuf_leaf_is(c, v, SLK_HELD); }
-static int strbuf_leaf_fresh(Compiler *c, int v) { return strbuf_leaf_is(c, v, SLK_FRESH); }
-static int strbuf_leaf_unheld(Compiler *c, int v) { return strbuf_leaf_is(c, v, SLK_UNHELD); }
+static int strbuf_leaf_literal(Compiler *c, int v) { return strbuf_leaf_is(c, v, SLK_LITERAL); }
 static int strbuf_leaf_is(Compiler *c, int v, int want) {
   const NodeTable *nt = c->nt;
-  int (*walk)(Compiler *, int) = want == SLK_HELD ? strbuf_leaf_held : want == SLK_FRESH ? strbuf_leaf_fresh : strbuf_leaf_unheld;
+  int (*walk)(Compiler *, int) = want == SLK_HELD ? strbuf_leaf_held : strbuf_leaf_literal;
   v = nt_paren_single(nt, v);
   if (v < 0) return 0;
   NodeKind k = nt_kind(nt, v);
-  if (k == NK_NilNode) return want == SLK_FRESH;
+  if (k == NK_NilNode) return want == SLK_LITERAL;
   if (k == NK_NextNode) {
     int na = 0; const int *av = call_args(nt, v, &na);
     return na != 1 ? want == SLK_HELD : strbuf_cond_arm_any(c, av[0], walk, 0);
@@ -2094,24 +2054,20 @@ static int strbuf_leaf_is(Compiler *c, int v, int want) {
   int blk = k == NK_CallNode ? nt_ref(nt, v, "block") : -1;
   if (blk >= 0 && nt_kind(nt, blk) == NK_BlockNode && strbuf_route_inline_call(c, v))
     return strbuf_cond_arm_any(c, nt_ref(nt, blk, "body"), walk, 0);
-  int kind = SLK_HELD;
-  if (strbuf_srange_tail(c, v) >= 0)
-    kind = strbuf_value_held(c, v) ? SLK_HELD : SLK_UNHELD;
-  else if (k == NK_StringNode || k == NK_InterpolatedStringNode)
-    kind = SLK_FRESH;
-  else if (strbuf_route_reader(c, v) || strbuf_route_ivar_get(c, v) || strbuf_user_getter_call(c, v))
-    kind = strbuf_value_held(c, v) || strbuf_slot_has(c, v) || repr_call_returns_handle(c, v) ? SLK_HELD : SLK_UNHELD;
-  /* Variable and constant reads use the default held result. */
+  /* a String literal, and nil above, take either; every other value is held
+     (a String Range's endpoint too, a literal one included) */
+  int kind = strbuf_srange_tail(c, v) < 0 && (k == NK_StringNode || k == NK_InterpolatedStringNode)
+             ? SLK_LITERAL : SLK_HELD;
   return kind == want;
 }
 /* ...is the value v of a block's tail one the demand has a handle for? */
 int strbuf_value_handleish(Compiler *c, int v) {
-  return strbuf_cond_arm_any(c, v, strbuf_leaf_held, 1) ||
-         (strbuf_cond_arm_any(c, v, strbuf_leaf_fresh, 0) && !strbuf_cond_arm_any(c, v, strbuf_leaf_unheld, 1));
+  return strbuf_cond_arm_any(c, v, strbuf_leaf_held, 1) || strbuf_cond_arm_any(c, v, strbuf_leaf_literal, 0);
 }
 int strbuf_yield_tail_held(Compiler *c) {
-  int tail = strbuf_site_tail(c);
-  if (tail >= 0 && (strbuf_value_held(c, tail) || (strbuf_tail_plain(c, tail) && strbuf_value_handleish(c, tail)))) return 1;
+  /* (a block's tail is held whatever it is: no value is proved a new String
+     no name holds, and the handle face adopts a just-made one) */
+  if (strbuf_site_tail(c) >= 0) return 1;
   /* or a `next v` of the block spliced here hands one on */
   return g_block_id >= 0 && strbuf_next_held(c, nt_ref(c->nt, g_block_id, "body"));
 }
@@ -3435,7 +3391,7 @@ static int strbuf_handle_arm(const VpLeaf *lf, void *ud) {
        String where the Range keeps none */
     case NK_NextNode: {
       int na = 0; const int *av = call_args(nt, v, &na);
-      return na == 1 && next_is_block_value(c, v) && !strbuf_next_srange_value(c, v) &&
+      return na == 1 && next_is_block_value(c, v) &&
              strbuf_handle_walk(c, av[0], 1);
     }
     /* `+g` is g itself unless g is frozen (sp_String_uplus) */

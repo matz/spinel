@@ -321,7 +321,6 @@ int strbuf_arg_carries(Compiler *c, int v);
 int logic_value_handle(Compiler *c, int v);
 int strbuf_arg_bang(Compiler *c, int v);
 int strbuf_arg_bang_value(Compiler *c, int v);
-int strbuf_next_srange_value(Compiler *c, int v);
 int strbuf_srange_arm(Compiler *c, int v);
 int strbuf_value_handleish(Compiler *c, int v);
 int strbuf_yield_proc_box(Compiler *c, int v);

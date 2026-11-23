@@ -2175,8 +2175,8 @@ int strbuf_narrowed_box_conversion(Compiler *c, int v) {
 }
 /* Does tail t of spliced method mi hand its call's result slot what it
    holds: what the block answers, a variable's String, or under a
-   conditional each arm's (a missing arm's nil, a new String the slot
-   takes as a new handle)? */
+   conditional each arm's (a missing arm's nil, a String the slot takes
+   as its handle)? */
 static int strbuf_inline_tail_ok(Compiler *c, int mi, int t, int depth) {
   const NodeTable *nt = c->nt;
   t = nt_paren_single(nt, t);
@@ -2188,7 +2188,10 @@ static int strbuf_inline_tail_ok(Compiler *c, int mi, int t, int depth) {
   /* The selected call already returns its handle. */
   if (k == NK_CallNode && repr_call_returns_handle(c, t)) return 1;
   if (depth == 0) return 0;
-  if (k == NK_NilNode || share_value_fresh(c, t, 0)) return 1;
+  /* (a String tail, whatever made it: the slot adopts its handle as
+     SP_STR_HDL does, a just-made String's, a view's owner and a literal's
+     static object) */
+  if (k == NK_NilNode || repr_of(c, t).ty == TY_STRING || repr_of(c, t).ty == TY_STRBUF) return 1;
   /* (a frozen literal is its own handle; a String's conversion answers
      the String, whose handle the slot takes as emit_strbuf_value takes the
      route's: `v.is_a?(String) ? v.to_s : ""`, over a String v or a boxed

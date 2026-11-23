@@ -164,3 +164,23 @@ p [Y.new.y1, Y.new.y2, Y.new.y3]
 p [BO.new.ba, PC.new.pa, PC.new.pb, DA.new.da, DA.new.dy, DA.new.dz]
 p [BC.new.bc]
 p [Foo::SK.new.sc, Foo::SO.new.so]
+class IA
+  begin; private(:ia, def ia; 1; end); rescue NameError; end
+end
+class I3x
+  def i3c = :i3c
+  begin; private(def i3d; 1; end, :missing3x, :i3c); rescue NameError; end
+end
+p [(IA.new.ia rescue $!.class), I3x.new.i3c, (I3x.new.i3d rescue $!.class)]
+module MR
+  def mra = :mra
+  begin; module_function :mra, raise("stop"); rescue RuntimeError; end
+end
+class MH; include MR; end
+p [MH.new.respond_to?(:mra), MR.respond_to?(:mra)]
+module MS
+  def msa = :msa
+  begin; module_function :msa, (raise("x") rescue :msa); rescue RuntimeError; end
+end
+class HS; include MS; end
+p [HS.new.respond_to?(:msa)]

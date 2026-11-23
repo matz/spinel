@@ -10,3 +10,6 @@
 [:ba, :pa, :pb, :da, :dy, :dz]
 [:bc]
 [:sc, :so]
+[NoMethodError, :i3c, NoMethodError]
+[true, false]
+[false]

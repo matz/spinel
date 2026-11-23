@@ -378,7 +378,11 @@ Data's member, an entry no point places or a method body's, a chain the record
 does not hold to its end. The reach stops at an unknown name as at a missing
 one: the names from there on keep the answer they have without the word, which
 is how their entries read where the word is partial (`LrDef.cut`: the word
-names them, and has not changed them). A
+names them, and has not changed them). A def among the word's arguments is
+a method the word names (the arguments run first, `private(:m, def m; end)`)
+and the name of one element of it, in the reach; where the word runs
+(`lr_def_arg_runs`) the def is made whenever the statement is reached, with the
+word's visibility, as the word is (`private(def a; end, :missing)`). A
 module_function copies the names only where it makes every name private
 and is given no Array (`copies`); the word writes their visibility cells
 before it raises (`emit_vis_word_absent`, which asks the call plan whether
@@ -387,7 +391,11 @@ clauses, where no statement ahead of the word in its frame may raise and
 skip it and no condition holds it, the record, with no run-time cell for
 the word's visibility, takes the word either to have run or not
 (`lr_word_runs`; a word with an argument that is no literal name is left
-as any partial statement's). The position walker marks each statement in iterators'
+as any partial statement's). A word with Kernel's `raise` or `fail` as an operand (`module_function :a,
+raise("stop")`: the operands run before the word does; the program defines no method of the
+name, and a raise in a block, behind `&&` or in a rescue modifier is not one) never finishes,
+and none of its names changes: the record holds it as it holds a form main's `protected` leaves (`lr_form_never_runs`),
+and codegen runs the operands only. The position walker marks each statement in iterators'
 blocks (`ElabPos` and `LrStmt` `skip`, `unsure`): skipped where a block
 around it surely runs no time by the run count the record's iterator
 rows give (`[].each` on a literal, `0.times`) or a statement ahead of it

@@ -12,5 +12,11 @@ module M
 end
 class H; include M; end
 k = K.new
-p [(k.x rescue $!.class), (k.send(:y) rescue $!.class), (k.z rescue $!.class), (k.x2 rescue $!.class), (K.cx rescue $!.class), (k.w rescue $!.class)]
-p [(H.new.g1 rescue $!.class), (H.new.g2 rescue $!.class), M.respond_to?(:g1)]
+p [(k.send(:x) rescue $!.class), k.y, (k.send(:z) rescue $!.class), (k.send(:x2) rescue $!.class), (K.send(:cx) rescue $!.class), (k.send(:w) rescue $!.class)]
+p [(H.new.send(:g1) rescue $!.class), (H.new.send(:g2) rescue $!.class), M.respond_to?(:g1)]
+class K2
+  begin; private(def before; :ok; end, raise("stop")); rescue RuntimeError; end
+  begin; private(raise("stop"), (def z2; :ok; end)); rescue RuntimeError; end
+end
+k2 = K2.new
+p [k2.before, (k2.send(:z2) rescue $!.class)]

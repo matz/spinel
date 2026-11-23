@@ -1854,15 +1854,18 @@ int strbuf_route_ie(Compiler *c, int v);
 int strbuf_route_loop(Compiler *c, int v);
 int strbuf_route_operand(Compiler *c, int v);
 int strbuf_route_inline_call(Compiler *c, int v);
-/* Is value v a holder's read, nil, a conditional with a handle arm, a
-   route the handle face renders (a proc's answer, a `then`, a `loop`, a bang
-   on a boxed receiver), or a `raise` (which leaves no value)? */
+/* Is value v a String, a holder's read, nil, a conditional with a handle
+   arm, a route the handle face renders (a proc's answer, a `then`, a
+   `loop`, a bang on a boxed receiver), or a `raise` (which leaves no
+   value)? */
 int strbuf_tail_plain(Compiler *c, int v) {
   if (v < 0) return 0;
-  /* A fresh arm needs no incoming handle; the demanded tail wraps its
-     own String, beside borrowed arms that keep their existing handle. */
+  /* A String-typed tail needs no incoming handle: the demanded tail wraps
+     its own String (SP_STR_HDL adopts a just-made one, answers a view's
+     owner and a literal's static object), beside borrowed arms that keep
+     their existing handle. */
   TyKind t = comp_ntype(c, v);
-  if ((t == TY_STRING || t == TY_STRBUF) && share_value_fresh(c, v, 0)) return 1;
+  if (t == TY_STRING || t == TY_STRBUF) return 1;
   if (strbuf_native_answer(c, v)) return 1;
   /* A shared reader's demanded value is its slot's handle too, a reflective
      read's as well. */

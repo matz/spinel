@@ -137,112 +137,6 @@ static void sh_block_value_to(ShareFacts *F, Compiler *c, int n, int blk, int mi
 }
 
 static int sh_named_first(const struct ShNamed *a, int n, const char *name);
-static int sh_copied_self_targets(Compiler *c, int call, int *out, int cap);
-/* ... with the call's fresh plan `p` in hand: the facts' target walk asks
-   this of every target of a call, and resolved the plan again for each
-   (cplan_user_fresh keeps nothing), which on a Rails program was 7% of a
-   sampled window of the share pass. */
-static int share_target_armed_plan(Compiler *c, const CallPlan *p, int call, int mi) {
-  if (p->via != UC_POLY || p->send_fallback == mi || mi < 0 || mi >= c->nscopes || c->scopes[mi].is_cmethod) return 1;
-  int recv = nt_ref(c->nt, call, "receiver");
-  /* (a receiver of no type the walk follows the user methods of: with
-     them gone its builtin arm is an unknown call, which joins UNKNOWN) */
-  if (recv < 0 || comp_ntype_settled(c, recv) != TY_POLY) return 1;
-  const ClsSet *cs = cls_fact_node(c, recv);
-  if (!cs || cs->all) return 1;
-  const char *nm = nt_str(c->nt, call, "name");
-  if (!nm) return 1;
-  int np = 0;
-  const PolyCand *pc = comp_poly_candidates_at(c, call, nm, &np);
-  for (int i = 0; i < np; i++)
-    if (pc[i].mi == mi || (pc[i].mi < 0 && call_target(c, call, pc[i].cls, nm, CT_METHODS, NULL) == mi)) return 1;
-  return 0;
-}
-int share_target_armed(Compiler *c, int call, int mi) {
-  const CallPlan p = cplan_user_fresh(c, call);
-  return share_target_armed_plan(c, &p, call, mi);
-}
-/* The methods call enters (cplan_entries) when `entries`, else those whose
-   return is its value (cplan_targets), that the share walk follows. */
-static int sh_targets_in(Compiler *c, int call, int *out, int cap, int entries) {
-  int n = entries ? cplan_entries(c, call, out, cap) : cplan_targets(c, call, out, cap), m = 0;
-  if (n == CPT_UNKNOWN) return -1;
-  if (n == 0) return sh_copied_self_targets(c, call, out, cap);
-  /* the plan once for the call */
-  CallPlan p = cplan_user_fresh(c, call);
-  for (int i = 0; i < n; i++)
-    if (share_target_reachable(c, call, out[i]) && share_target_armed_plan(c, &p, call, out[i])) out[m++] = out[i];
-  return m;
-}
-static int sh_targets(Compiler *c, int call, int *out, int cap) { return sh_targets_in(c, call, out, cap, 0); }
-/* A module's method an include copied into its includers runs as those
-   copies (is_transplanted_source), where self is an includer, so a
-   receiverless call in it reaches what each includer's chain answers to
-   the name. Asked in the module's own method, the plan finds nothing for a
-   name only the includers define (openssl's Buffering#do_write calls the
-   includer's syswrite), and the walk took it as a call it does not follow,
-   with the write buffer it was handed. The methods the copies' classes
-   reach; 0 when one reaches none (a builtin, or NoMethodError), -1 past
-   cap. */
-static int sh_copied_self_targets(Compiler *c, int call, int *out, int cap) {
-  const NodeTable *nt = c->nt;
-  const char *name = nt_kind(nt, call) == NK_CallNode ? nt_str(nt, call, "name") : NULL;
-  Scope *s = comp_scope_of(c, call);
-  int si = (int)(s - c->scopes);
-  if (!name || nt_ref(nt, call, "receiver") >= 0 || cplan_builtin_call(c, call) || !comp_scope_copied_away(c, si) ||
-      s->is_cmethod || s->def_node < 0)
-    return 0;
-  /* (a name no class answers, a builtin's, reaches none) */
-  int n = 0;
-  comp_poly_candidates(c, name, &n);
-  if (n == 0) return 0;
-  n = 0;
-  /* (the body's copies: the scopes of its def node) */
-  for (int k = comp_def_oldest(c, s->def_node); k >= 0; k = comp_def_newer(c, k)) {
-    const Scope *cp = &c->scopes[k];
-    if (k == si || cp->class_id < 0 || cp->is_cmethod) continue;
-    int mi = call_target(c, call, cp->class_id, name, CT_METHODS, NULL);
-    if (mi < 0) return 0;
-    int seen = 0;
-    for (int j = 0; j < n && !seen; j++) seen = out[j] == mi;
-    if (seen) continue;
-    if (n == cap) return -1;
-    out[n++] = mi;
-  }
-  return n;
-}
-int share_target_reachable(Compiler *c, int call, int mi) {
-  if (mi < 0 || mi >= c->nscopes || !c->scopes[mi].is_cmethod || cplan_user_fresh(c, call).via != UC_POLY)
-    return 1;
-  int ncc = 0;
-  const PolyCand *ccs = comp_cmethod_candidates(c, c->scopes[mi].name, &ncc);
-  /* and only a class this receiver can hold, as the dispatch arms it
-     (poly_cls_value_reaches): `options.fetch(:protocol, "http").sub(...)`
-     on a Hash of Strings never reaches `Params.sub`, though Params is a
-     value elsewhere (campfire's ActiveStorage::Current.base_url) */
-  for (int i = 0; i < ncc; i++)
-    if (ccs[i].mi == mi && comp_class_may_be_value(c, ccs[i].cls) && poly_cls_value_reaches(c, call, ccs[i].cls))
-      return 1;
-  return 0;
-}
-/* does a call reach a user method (sh_targets != 0), without listing them */
-static int sh_has_targets(Compiler *c, int call) {
-  const CallPlan p = cplan_user_fresh(c, call);
-  if (p.dispatch == CP_REFUSE) return 0;
-  /* (a module's self call that names no method of the module reaches the
-     includers' methods its copies call, sh_copied_self_targets: a `puts`
-     they define is no Kernel#puts) */
-  if (p.mi < 0) {
-    int tg[CPT_MAX];
-    return sh_copied_self_targets(c, call, tg, CPT_MAX) != 0;
-  }
-  /* (a boxed receiver's plan lists only the methods its arms reach:
-     share_target_reachable, share_target_armed; none may be left) */
-  if (p.via != UC_POLY) return 1;
-  int tg[CPT_MAX];
-  return sh_targets(c, call, tg, CPT_MAX) != 0;
-}
-
 /* the receiver family a builtin's share row is keyed by */
 static TyKind sh_family(TyKind rt) {
   if (rt == TY_STRING || rt == TY_STRBUF) return TY_STRING;
@@ -325,7 +219,7 @@ static int sh_string_conv_arg(Compiler *c, int n) {
   int argc = 0;
   const int *argv = call_args(nt, n, &argc);
   if (argc != 1 || nt_kind(nt, argv[0]) == NK_SplatNode || nt_kind(nt, argv[0]) == NK_KeywordHashNode ||
-      nt_kind(nt, argv[0]) == NK_BlockArgumentNode || sh_has_targets(c, n)) return -1;
+      nt_kind(nt, argv[0]) == NK_BlockArgumentNode || cplan_has_targets(c, n)) return -1;
   return argv[0];
 }
 
@@ -572,7 +466,7 @@ int share_call_stores_block(Compiler *c, int n) {
   const NodeTable *nt = c->nt;
   int blk = nt_ref(nt, n, "block");
   const char *nm = nt_str(nt, n, "name");
-  if (!nm || blk < 0 || nt_kind(nt, blk) != NK_BlockNode || sh_has_targets(c, n)) return 0;
+  if (!nm || blk < 0 || nt_kind(nt, blk) != NK_BlockNode || cplan_has_targets(c, n)) return 0;
   int recv = nt_ref(nt, n, "receiver");
   NodeKind rk = recv >= 0 ? nt_kind(nt, recv) : NK_NONE;
   if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) {
@@ -733,7 +627,7 @@ static void sh_mb_build(ShareFacts *F, Compiler *c) {
     sh_mb_dyn(F, c, n, dead);
     int blk = nt_ref(nt, n, "block");
     if (blk < 0) continue;
-    int tg[64], ntg = sh_targets_in(c, n, tg, 64, 1);
+    int tg[64], ntg = cplan_live_targets(c, n, tg, 64, 1);
     /* methods the plan cannot list: its block may reach each method of the
        names the plan bounds them by (cplan_entries_bound_names) */
     if (ntg < 0) {
@@ -756,7 +650,7 @@ static void sh_mb_build(ShareFacts *F, Compiler *c) {
       int blk = nt_ref(nt, n, "block");
       /* (the methods it enters: a program `new`'s super into the builtin
          Class#new enters the initialize it runs, which answers no value) */
-      int tg[64], ntg = sh_targets_in(c, n, tg, 64, 1), cur = sh_method_index(c, n);
+      int tg[64], ntg = cplan_live_targets(c, n, tg, 64, 1), cur = sh_method_index(c, n);
       for (int i = 0; i < ntg; i++) {
         if (sup[k] == NK_ForwardingSuperNode && cur >= 0) sh_fwd_edge(F, cur, tg[i]);
         if (blk >= 0 && nt_kind(nt, blk) == NK_BlockNode) sh_mb_add(F, c, blk, tg[i]);
@@ -1262,7 +1156,7 @@ static int sh_user_call_fresh(Compiler *c, int call, int depth) {
     /* (one that cannot bind the arguments only raises) */
     if (!cplan_target_binds(c, call, tg[i])) continue;
     /* (a class method of a class whose object no box holds) */
-    if (!share_target_reachable(c, call, tg[i])) continue;
+    if (!cplan_target_reachable(c, call, tg[i])) continue;
     /* (a method that answers its parameter answers what the caller has) */
     if (scope_ret_param(c, tg[i]) >= 0 || !scope_ret_fresh(c, tg[i])) return 0;
   }
@@ -1315,7 +1209,7 @@ static int sh_fresh_elems(Compiler *c, int r, int depth) {
     for (int i = 0; i < en; i++) if (!share_value_fresh(c, el[i], depth + 1)) return 0;
     return 1;
   }
-  if (nt_kind(nt, r) != NK_CallNode || sh_has_targets(c, r)) return 0;
+  if (nt_kind(nt, r) != NK_CallNode || cplan_has_targets(c, r)) return 0;
   int blk = nt_ref(nt, r, "block"), recv = nt_ref(nt, r, "receiver");
   const char *nm = nt_str(nt, r, "name");
   /* a builtin answering a container of its receiver's own elements (the
@@ -1446,7 +1340,7 @@ static int sh_uplus_copies(Compiler *c, int n) {
   const NodeTable *nt = c->nt;
   int u = nt_paren_single(nt, n);
   if (u >= 0 && nt_kind(nt, u) == NK_CallNode && is_freeze_name(nt_str(nt, u, "name")) && call_plain_argc(c, u) == 0 &&
-      nt_ref(nt, u, "receiver") >= 0 && nt_ref(nt, u, "block") < 0 && !sh_has_targets(c, u))
+      nt_ref(nt, u, "receiver") >= 0 && nt_ref(nt, u, "block") < 0 && !cplan_has_targets(c, u))
     return 1;
   return share_frozen_string(c, n);
 }
@@ -1476,7 +1370,7 @@ int share_frozen_string(Compiler *c, int n) {
    receiver's family or any receiver, reaching no method of the program's? */
 static int sh_builtin_call_pure(Compiler *c, int n) {
   const char *name = nt_str(c->nt, n, "name");
-  if (!name || is_receiver_conversion(name) || sh_has_targets(c, n)) return 0;
+  if (!name || is_receiver_conversion(name) || cplan_has_targets(c, n)) return 0;
   int recv = nt_ref(c->nt, n, "receiver");
   int s = recv >= 0 ? bop_share_named(sh_family(comp_ntype_settled(c, recv)), name)
                      : bop_share_kernel(name, cplan_builtin_call(c, n));
@@ -1527,7 +1421,7 @@ static int sh_value_fresh_leaf(Compiler *c, int n, int depth) {
      nil (`pick(s).upcase!`, pick answering `value + ""`) */
   int rcv = nt_ref(nt, n, "receiver");
   const char *cn = nt_str(nt, n, "name");
-  if (cn && rcv >= 0 && nt_ref(nt, n, "block") < 0 && !sh_has_targets(c, n)) {
+  if (cn && rcv >= 0 && nt_ref(nt, n, "block") < 0 && !cplan_has_targets(c, n)) {
     if (env_value_recv(c, rcv, comp_ntype_settled(c, rcv)) && is_aref_name(cn))
       return 1;
     if ((is_receiver_conversion(cn) || is_freeze_name(cn)) && call_plain_argc(c, n) == 0)
@@ -1542,7 +1436,7 @@ static int sh_value_fresh_leaf(Compiler *c, int n, int depth) {
   /* an element read of a temporary container of new Strings */
   int recv = nt_ref(nt, n, "receiver");
   const char *nm = nt_str(nt, n, "name");
-  int sh = nm && recv >= 0 && !sh_has_targets(c, n) ? bop_share_named(BOP_ANY_ARRAY, nm) : 0;
+  int sh = nm && recv >= 0 && !cplan_has_targets(c, n) ? bop_share_named(BOP_ANY_ARRAY, nm) : 0;
   /* (max and min with no block or count answer one of them too) */
   if (sh == BSH_ITER_FIND && is_minmax_query(nm) && call_plain_argc(c, n) == 0 &&
       !cplan_builtin_overridden(c, "Array", nm)) sh = BSH_ELEM;

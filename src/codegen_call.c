@@ -2038,7 +2038,7 @@ int poly_cls_value_cands(Compiler *c, int id, const char *name, int argc, const 
     int kmi = cplan_cand_target(c, id, name, &cc8[ki], CT_CMETHOD);
     /* nor a module's own `def self.x` when no box can hold the module, one
        the program only calls by name (comp_class_may_be_value), or no box
-       reaches the method (share_target_reachable): the analysis leaves its
+       reaches the method (cplan_target_reachable): the analysis leaves its
        answer out of the call's type (an_class_concrete), so its arm would put
        that answer into a slot typed for the others -- Shellwords.split beside
        a String's split in a lambda's parameter, or beside a Class value the

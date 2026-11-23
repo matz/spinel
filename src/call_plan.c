@@ -8718,6 +8718,112 @@ int cplan_targets(Compiler *c, int id, int *out, int cap) {
   return n;
 }
 
+/* See call_plan.h. */
+int cplan_target_reachable(Compiler *c, int call, int mi) {
+  if (mi < 0 || mi >= c->nscopes || !c->scopes[mi].is_cmethod || cplan_user_fresh(c, call).via != UC_POLY)
+    return 1;
+  int ncc = 0;
+  const PolyCand *ccs = comp_cmethod_candidates(c, c->scopes[mi].name, &ncc);
+  /* and only a class this receiver can hold, as the dispatch arms it
+     (poly_cls_value_reaches): `options.fetch(:protocol, "http").sub(...)`
+     on a Hash of Strings never reaches `Params.sub`, though Params is a
+     value elsewhere (campfire's ActiveStorage::Current.base_url) */
+  for (int i = 0; i < ncc; i++)
+    if (ccs[i].mi == mi && comp_class_may_be_value(c, ccs[i].cls) && poly_cls_value_reaches(c, call, ccs[i].cls))
+      return 1;
+  return 0;
+}
+/* cplan_target_armed with the call's fresh plan `p` in hand: the walk over
+   every target of a call asks this of each, and resolved the plan again for
+   each (cplan_user_fresh keeps nothing), which on a Rails program was 7% of
+   a sampled window of the share pass. */
+static int cplan_target_armed_plan(Compiler *c, const CallPlan *p, int call, int mi) {
+  if (p->via != UC_POLY || p->send_fallback == mi || mi < 0 || mi >= c->nscopes || c->scopes[mi].is_cmethod) return 1;
+  int recv = nt_ref(c->nt, call, "receiver");
+  /* (a receiver of no type whose user methods are followed: with
+     them gone its builtin arm is an unknown call, which joins UNKNOWN) */
+  if (recv < 0 || comp_ntype_settled(c, recv) != TY_POLY) return 1;
+  const ClsSet *cs = cls_fact_node(c, recv);
+  if (!cs || cs->all) return 1;
+  const char *nm = nt_str(c->nt, call, "name");
+  if (!nm) return 1;
+  int np = 0;
+  const PolyCand *pc = comp_poly_candidates_at(c, call, nm, &np);
+  for (int i = 0; i < np; i++)
+    if (pc[i].mi == mi || (pc[i].mi < 0 && call_target(c, call, pc[i].cls, nm, CT_METHODS, NULL) == mi)) return 1;
+  return 0;
+}
+/* See call_plan.h. */
+int cplan_target_armed(Compiler *c, int call, int mi) {
+  const CallPlan p = cplan_user_fresh(c, call);
+  return cplan_target_armed_plan(c, &p, call, mi);
+}
+/* A module's method an include copied into its includers runs as those
+   copies (is_transplanted_source), where self is an includer, so a
+   receiverless call in it reaches what each includer's chain answers to
+   the name. Asked in the module's own method, the plan finds nothing for a
+   name only the includers define (openssl's Buffering#do_write calls the
+   includer's syswrite), and the walk over a call's methods took it as one it
+   does not follow, with the write buffer it was handed. The methods the copies' classes
+   reach; 0 when one reaches none (a builtin, or NoMethodError), -1 past
+   cap. */
+static int cplan_copied_self_targets(Compiler *c, int call, int *out, int cap) {
+  const NodeTable *nt = c->nt;
+  const char *name = nt_kind(nt, call) == NK_CallNode ? nt_str(nt, call, "name") : NULL;
+  Scope *s = comp_scope_of(c, call);
+  int si = (int)(s - c->scopes);
+  if (!name || nt_ref(nt, call, "receiver") >= 0 || cplan_builtin_call(c, call) || !comp_scope_copied_away(c, si) ||
+      s->is_cmethod || s->def_node < 0)
+    return 0;
+  /* (a name no class answers, a builtin's, reaches none) */
+  int n = 0;
+  comp_poly_candidates(c, name, &n);
+  if (n == 0) return 0;
+  n = 0;
+  /* (the body's copies: the scopes of its def node) */
+  for (int k = comp_def_oldest(c, s->def_node); k >= 0; k = comp_def_newer(c, k)) {
+    const Scope *cp = &c->scopes[k];
+    if (k == si || cp->class_id < 0 || cp->is_cmethod) continue;
+    int mi = call_target(c, call, cp->class_id, name, CT_METHODS, NULL);
+    if (mi < 0) return 0;
+    int seen = 0;
+    for (int j = 0; j < n && !seen; j++) seen = out[j] == mi;
+    if (seen) continue;
+    if (n == cap) return -1;
+    out[n++] = mi;
+  }
+  return n;
+}
+/* See call_plan.h. */
+int cplan_live_targets(Compiler *c, int call, int *out, int cap, int entries) {
+  int n = entries ? cplan_entries(c, call, out, cap) : cplan_targets(c, call, out, cap), m = 0;
+  if (n == CPT_UNKNOWN) return -1;
+  if (n == 0) return cplan_copied_self_targets(c, call, out, cap);
+  /* the plan once for the call */
+  CallPlan p = cplan_user_fresh(c, call);
+  for (int i = 0; i < n; i++)
+    if (cplan_target_reachable(c, call, out[i]) && cplan_target_armed_plan(c, &p, call, out[i])) out[m++] = out[i];
+  return m;
+}
+/* See call_plan.h. */
+int cplan_has_targets(Compiler *c, int call) {
+  const CallPlan p = cplan_user_fresh(c, call);
+  if (p.dispatch == CP_REFUSE) return 0;
+  /* (a module's self call that names no method of the module reaches the
+     includers' methods its copies call, cplan_copied_self_targets: a `puts`
+     they define is no Kernel#puts) */
+  if (p.mi < 0) {
+    int tg[CPT_MAX];
+    return cplan_copied_self_targets(c, call, tg, CPT_MAX) != 0;
+  }
+  /* (a boxed receiver's plan lists only the methods its arms reach:
+     cplan_target_reachable, cplan_target_armed; none may be left) */
+  if (p.via != UC_POLY) return 1;
+  int tg[CPT_MAX];
+  return cplan_live_targets(c, call, tg, CPT_MAX, 0) != 0;
+}
+
+
 /* A super, bare or not, in a program `new` that reaches the builtin
    Class#new (no program `new` above the method): the initialize methods it
    runs, those of the method's class and its subclasses, which self is one

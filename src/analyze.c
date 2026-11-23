@@ -28747,8 +28747,8 @@ static int an_tail_origin(Compiler *c, ReturnWalk *R, int n, ReturnOrigin *tc) {
   if (cnt == CPT_UNKNOWN) return an_tail_name_fresh(c, R, n);
   if (cnt == 0) return isa_node_diverges(c, n) && !bare_call_class_owned(c, n);
   for (int i = 0; i < cnt; i++) {
-    if (!cplan_target_binds(c, n, mis[i]) || !share_target_reachable(c, n, mis[i]) ||
-        !share_target_armed(c, n, mis[i])) continue;
+    if (!cplan_target_binds(c, n, mis[i]) || !cplan_target_reachable(c, n, mis[i]) ||
+        !cplan_target_armed(c, n, mis[i])) continue;
     if (!an_ret_origin(c, R, mis[i]) || !c->scopes[mis[i]].ret_fresh) return 0;
   }
   return cnt > 0;
@@ -38097,12 +38097,12 @@ static int poly_dispatch_nullable(Compiler *c, int v, const char *cn) {
   int nil_rides = vt == TY_INT || vt == TY_FLOAT || vt == TY_NIL;
   const PdnEnt *pe = pdn_lookup(c, cn);
   /* only the methods the dispatch has arms for: a class the receiver's
-     class fact rules out is no target (share_target_armed), as inference
+     class fact rules out is no target (cplan_target_armed), as inference
      leaves it out of the call's type (comp_poly_candidates_at) */
   for (int k = 0; k < pe->nsc; k++) {
     int si = pe->sc[k];
     if ((nil_rides ? method_answers_nil(&c->scopes[si]) : c->scopes[si].ret_nullable_int) &&
-        share_target_armed(c, v, si)) return 1;
+        cplan_target_armed(c, v, si)) return 1;
   }
   /* ...and the method the plan binds on each candidate class where it is
      not the table's (cplan_cand_target): a version entry, under a name of

@@ -55,15 +55,6 @@ int share_scope_answers_no_string(Compiler *c, int mi);
    of the program's with no `def self.new` in its chain. -1 for any other
    node. */
 int share_exact_new_class(Compiler *c, int n);
-/* Can call `call` reach its target `mi`? Not a class method a boxed
-   receiver's call lists for the class objects a box may hold, where no
-   class reaching it by that name can be a value (comp_class_may_be_value):
-   no box ever holds that class object. */
-int share_target_reachable(Compiler *c, int call, int mi);
-/* Is user method mi, a target cplan_targets lists for boxed call `call`,
-   one its dispatch arms: does a class the receiver's class fact keeps reach
-   it (comp_poly_candidates_at)? */
-int share_target_armed(Compiler *c, int call, int mi);
 /* Can block node blk hand control back to the call that yields to it: does
    its body fall off its end, or hold a `next` of its own (not a nested
    block's, lambda's, method's or loop's)? A body whose last statement is a

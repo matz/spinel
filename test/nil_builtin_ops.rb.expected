@@ -1,0 +1,127 @@
+io_loop: ["ab", "cd"]
+io_gets_nil: true NilClass false false
+io_gets_empty: NoMethodError (empty?)
+io_gets_upcase: NoMethodError (upcase)
+io_getc_nil: true false
+io_getc_empty: NoMethodError (empty?)
+io_read_n_nil: true false
+io_read_n_empty: NoMethodError (empty?)
+io_read_all: "" true
+raw_line_0: true false
+raw_line_1: false true
+env_miss: true NilClass false
+env_miss_empty: NoMethodError (empty?)
+env_del: true false
+env_fetch_nil: true false
+time_utc_zone: true UTC
+time_off_zone: true false
+time_off_zone_empty: NoMethodError (empty?)
+md_aref: true false true b
+md_match: true false
+md_aref_empty: NoMethodError (empty?)
+md_match_empty: NoMethodError (empty?)
+sym_slice: el true false false
+sym_miss_empty: NoMethodError (empty?)
+str_strip_nil: true false
+str_slice_miss: true false
+str_slice_empty: NoMethodError (empty?)
+srange_open: true false true false
+srange_end_empty: NoMethodError (empty?)
+srange_empty_minmax: true false true false
+str_bsearch: true false
+str_bsearch_empty: NoMethodError (empty?)
+nested_bsearch: true false
+nested_bsearch_size: NoMethodError (size)
+obj_bsearch: true false
+obj_bsearch_v: NoMethodError (v)
+find_all_str: true
+find_all_str: false
+select_str: true
+select_str: false
+reject_str: true
+reject_str: false
+uniq_str: true
+uniq_str: false
+poly_blk: true
+poly_blk_empty: OK false
+poly_blk: false
+poly_blk_empty: NoMethodError (empty?)
+pop_n_str: true
+pop_n_str: false
+shift_n_str: true
+shift_n_str: false
+values_at_str: true
+values_at_str: false
+mul_non_nil: OK
+mul_nil: true
+mul_nil: false
+flat_map_nil: true
+flat_map_nil: false
+compact_str: OK
+filter_map_str: OK
+min_n_blk: A
+obj_find_all: OK 10
+obj_find_all: NoMethodError (v)
+obj_ewi: OK 10
+obj_ewi: NoMethodError (v)
+obj_pop_n: OK 20
+obj_pop_n: NoMethodError (v)
+obj_values_at: OK 30
+obj_values_at: NoMethodError (v)
+fetch_non_nil: HELLO
+fetch_from_nil_arr: false
+fetch_default_nil: false
+fetch_default_empty: NoMethodError (empty?)
+hash_miss: true false
+hash_del: true false
+hash_dig: true false
+hash_assoc: true false
+hash_rassoc: true false
+hash_find: true false
+hash_fetch_nil: true false
+hash_fetch_nil_empty: NoMethodError (empty?)
+hash_shift: true false
+hash_values_nil: true
+hash_values_nil: false
+arr_minmax_empty: true false
+arr_minmax_empty: true false
+arr_minmax_by_empty: true false
+arr_minmax_by_empty: true false
+srange_minmax_empty: true false
+srange_minmax_empty: true false
+sample_n_kw: false
+sample_n_kw: true
+grep_v_blk: false
+rfind_blk: false
+rfind_blk: true
+ewo_memo: A true false
+taken_str_pop1: ONLY
+taken_str_pop2: true false
+taken_str_pop_empty: NoMethodError (empty?)
+taken_str_shift1: ONLY
+taken_str_shift2: true false
+taken_str_del: true true true
+taken_obj_pop1: 42
+taken_obj_pop2: true false
+taken_obj_pop_v: NoMethodError (v)
+taken_obj_shift1: 43
+taken_obj_shift_v: NoMethodError (v)
+taken_obj_del_v: NoMethodError (v)
+taken_obj_del_at_v: NoMethodError (v)
+taken_obj_slice_bang_v: NoMethodError (v)
+recv_fwd: true true false false
+dir_read_eof: true false
+poly_recv_aref: true false
+map_next_nil: true
+map_next_nil: false
+merge_plus: true
+merge_plus: false
+merge_pipe: true
+merge_pipe: false
+merge_union: true
+merge_union: false
+dup_elem: true
+dup_elem: false
+tap_elem: true
+tap_elem: false
+cb_eq_nil: false false true

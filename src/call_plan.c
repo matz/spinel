@@ -4778,6 +4778,12 @@ static int respond_to_runtime_name(Compiler *c, int id) {
    object's methods (`x.methods`) or the respond_to?, the classes its receiver may hold; a list of a class's
    instance methods, the class its receiver names or `x.class`'s instances */
 /* See call_plan.h. */
+int cplan_class_receiver(Compiler *c, int recv, unsigned reads) {
+  NodeKind k = nt_kind(c->nt, recv);
+  int ci = k == NK_ConstantReadNode || k == NK_ConstantPathNode ? class_recv_static_ci(c, recv) : -1;
+  return ci >= 0 || !reads ? ci : view_class_is(c, recv, reads);
+}
+/* See call_plan.h. */
 int cplan_self_list_classes(Compiler *c, int id, int recv, const char *name, int *ks, int *ci_out, unsigned *form) {
   int ci = -1, n = 0;
   *form = 0;

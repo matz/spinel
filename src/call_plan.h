@@ -1827,6 +1827,10 @@ int cplan_list_class(Compiler *c, int id, int *own);
    takes its receiving class (CSL_DYN: the list switches on it) or is spliced into each subclass (CSL_SPLICE: the
    receiving class is the one emitted), the classes below it; *ci is the class itself. 0 for any other receiver. The survey asks each name of these classes
    (presence_asks), and the emitter lists each. */
+/* The class a class-valued receiver names where a method list reads it: the class a constant or constant path names
+   (class_recv_static_ci), else, with reads (the ELAB_GAIN_* the emission reads of it), the class a class-tag arm's
+   receiver stands for (view_class_is); -1 for any other, self among them (cplan_self_list_classes). */
+int cplan_class_receiver(Compiler *c, int recv, unsigned reads);
 enum { CSL_CMETHOD = 1, CSL_DYN = 2, CSL_SPLICE = 4 };
 int cplan_self_list_classes(Compiler *c, int id, int recv, const char *name, int *ks, int *ci, unsigned *form);
 /* The cells that answer whether list id lists method `name` of cls on side (CT_CMETHOD for a class-side list,

@@ -4241,13 +4241,10 @@ static int emit_class_instance_methods_list(Compiler *c, int id, Buf *b, const N
   int prot = sp_streq(name, "instance_methods");
   if (!prot && !sp_streq(name, "public_instance_methods")) return 0;
   if (argc > 1 || (argc == 1 && nt_kind(nt, argv[0]) != NK_TrueNode)) return 0;
-  int ci = recv >= 0 ? view_class_is(c, recv, ELAB_GAIN_METHODS | ELAB_GAIN_INHERITED) : -1, dyn = 0, nks = 0;
+  /* a constant's class, or a class-tag arm's receiver's (the call plan's, cplan_class_receiver) */
+  int ci = recv >= 0 ? cplan_class_receiver(c, recv, ELAB_GAIN_METHODS | ELAB_GAIN_INHERITED) : -1, dyn = 0, nks = 0;
   unsigned form = 0;
-  /* a constant path (`Outer::Mod`) names its class by the leaf, as constant
-     paths resolve here; a class-tag arm's receiver, the class it names */
   if (ci >= 0) ;
-  else if (recv >= 0 && (nt_kind(nt, recv) == NK_ConstantReadNode || nt_kind(nt, recv) == NK_ConstantPathNode))
-    ci = const_node_class_index(c, recv);
   else if (recv < 0 || nt_kind(nt, recv) == NK_SelfNode) {
     /* the class of a class body's or class method's self, and those a method taking its receiving class lists
        too: the call plan's (cplan_self_list_classes), which the survey asks */
@@ -4538,9 +4535,9 @@ void emit_class_value_constants(Compiler *c, const char *cv, int inherit, Buf *b
    program defines, a compile-time list like the one above. */
 static int emit_class_value_singleton_methods(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv) {
   if (!an_class_method_list_foldable(c, name, recv, argc, argv)) return 0;
-  const char *cn2 = nt_kind(nt, recv) == NK_ConstantReadNode
-                    ? nt_str(nt, recv, "name") : NULL;
-  int ci2 = cn2 ? const_node_class_index(c, recv) : class_body_self_ci(c, recv);
+  const char *cn2 = nt_kind(nt, recv) == NK_ConstantReadNode ? nt_str(nt, recv, "name") : NULL;
+  int ci2 = cplan_class_receiver(c, recv, 0);
+  if (ci2 < 0) ci2 = class_body_self_ci(c, recv);
   int all = argc == 0 || nt_kind(nt, argv[0]) == NK_TrueNode;
   int priv = sp_streq(name, "private_methods");
   ReflNames r = {0};
@@ -4754,11 +4751,8 @@ static int emit_class_own_instance_methods(Compiler *c, int id, Buf *b, const No
   int vm = is_instance_method_list(name) ? method_list_vis_mask(name) : 0;
   int im_pub = (vm >> SP_VIS_PUBLIC) & 1, im_prot = (vm >> SP_VIS_PROTECTED) & 1, im_priv = (vm >> SP_VIS_PRIVATE) & 1;
   if (!vm || argc != 1 || nt_kind(nt, argv[0]) != NK_FalseNode) return 0;
-  const char *cn2 = nt_kind(nt, recv) == NK_ConstantReadNode
-                    ? nt_str(nt, recv, "name") : NULL;
-  /* (a class body's self names its class, class_recv_static_ci) */
-  int ci2 = nt_kind(nt, recv) == NK_SelfNode ? class_body_self_ci(c, recv)
-          : cn2 ? const_node_class_index(c, recv) : view_class_is(c, recv, ELAB_GAIN_METHODS);   /* or a class-tag arm's */
+  /* (a class body's self names its class, class_body_self_ci; a constant's or a class-tag arm's, cplan_class_receiver) */
+  int ci2 = nt_kind(nt, recv) == NK_SelfNode ? class_body_self_ci(c, recv) : cplan_class_receiver(c, recv, ELAB_GAIN_METHODS);
   if (ci2 < 0 && nt_kind(nt, recv) == NK_SelfNode) ci2 = view_class_is(c, recv, ELAB_GAIN_METHODS);
   if (ci2 >= 0) {
     ReflNames r = {0};

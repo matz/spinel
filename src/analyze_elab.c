@@ -12916,12 +12916,14 @@ int elab_fire_after(Compiler *c, int list, int j) {
   HostStep *h = elab_walk_host(c);
   int bn = 0;
   if (!h || (!lr_event_hooks(c) && !lr_mix_hooks(c))) return 0;
+  const int *st = nt_arr(nt, list, "body", &bn);
+  int node = st && j < bn ? st[j] : -1, frame = -1;
+  int e = node >= 0 && node < r->n ? r->at[node] : -1;
+  /* (a statement of the record's: one of a class body in a value is none, and is not recorded ahead of the
+     statement it stands in, whose parts the walk has not all passed: lr_nested_body reads their headers) */
+  if (e < 0 || r->st[e].node != node) return 0;
   lr_record_upto(r, r->nst);   /* the statement is recorded: the hooks are asked after its versions */
-  const int *st = r->nev ? nt_arr(nt, list, "body", &bn) : NULL;
-  if (!st || j >= bn) return 0;
-  int node = st[j], frame = -1;
-  int e = node < r->n ? r->at[node] : -1;
-  if (e < 0 || r->st[e].node != node || elab_stmt_list(c, node, &frame) != list) return 0;
+  if (!r->nev || elab_stmt_list(c, node, &frame) != list) return 0;
   /* in a class or module body, or a class builder's block: a class_eval
      block run in a frame of its own (a top-level one) has the caller's self */
   int body = frame >= 0 && (class_def_opens_frame(nt, frame) || nt_kind(nt, frame) == NK_SingletonClassNode);

@@ -37,7 +37,9 @@ def symnum(line):
     return ''.join(out)
 def lines(p):
     o=[]
-    for ln in open(p,errors='replace').read().splitlines():
+    # a backslash-newline joins its two lines before anything else (translation phase 2), so a literal or a
+    # macro a line break continues is one logical line here; the counts below are of logical lines
+    for ln in re.sub(r'\\\n','',open(p,errors='replace').read()).splitlines():
         if SYM.search(ln): continue
         for r in ROOTS: ln=ln.replace(r,'TREE')
         ln=symnum(ln)

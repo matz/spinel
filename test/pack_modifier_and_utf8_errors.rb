@@ -45,7 +45,7 @@ puts "l!> roundtrip: #{[1].pack('l!>').unpack('l!>').inspect}"
 puts "l>! roundtrip: #{[1].pack('l>!').unpack('l>!').inspect}"
 puts "l<_ roundtrip: #{[1].pack('l<_').unpack('l<_').inspect}"
 puts "l!> width: #{[1].pack('l!>').bytesize == [0].pack('J').bytesize}"
-puts "s!_: #{[1].pack('s!_').bytes.inspect}"
+puts "s!_: #{[1].pack('s!_').bytes == [1].pack('s').bytes}"
 puts "s!>: #{[1].pack('s!>').bytes.inspect}"
 puts "s<!: #{[1].pack('s<!').bytes.inspect}"
 

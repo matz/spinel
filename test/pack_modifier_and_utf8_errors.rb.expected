@@ -266,7 +266,7 @@ l!> roundtrip: [1]
 l>! roundtrip: [1]
 l<_ roundtrip: [1]
 l!> width: true
-s!_: [1, 0]
+s!_: true
 s!>: [0, 1]
 s<!: [1, 0]
 G: 3ff8000000000000

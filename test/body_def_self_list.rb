@@ -36,3 +36,27 @@ class Inc
 end
 Mod.setup
 p [Inc.instance_methods.include?(:mm), Inc.new.mm]
+
+# a plain block in a class body keeps the body's self, so its list is the class's
+class Blk
+  def self.setup = (def bm = :bk)
+  def n = 1
+  p [1].map { instance_methods.include?(:n) }
+  p [1].map { instance_methods.include?(:bm) ? new.bm : :none }
+end
+Blk.setup
+p [Blk.instance_methods.include?(:bm), Blk.new.bm]
+
+# a computed-name public_send in a module's method, run by the body of the class that extends it: the
+# arm for `instance_methods` lists that class
+module Lister
+  def kind(k) = @kind = k
+  def keep(c) = const_set(c, public_send(["instance", @kind].join("_")))
+end
+class Sent
+  extend Lister
+  def sm = 1
+  kind :methods
+  keep :LIST
+end
+p Sent::LIST.include?(:sm)

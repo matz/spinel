@@ -6,3 +6,7 @@
 [:b, :d]
 [:none]
 [true, :mm]
+[true]
+[:none]
+[true, :bk]
+true

@@ -523,6 +523,8 @@ void attr_facts_free(Compiler *c);
 int ct_main_target(Compiler *c, int id, const char *name);
 typedef void (*CtClassFn)(Compiler *c, int id, const char *nm, int k, unsigned flags, void *arg);
 void ct_version_classes(Compiler *c, int id, const char *nm, CtClassFn fn, void *arg);
+/* ...the classes whose instances a call of nm may reach, no class's own side (a reader of an instance's methods) */
+void ct_version_instance_classes(Compiler *c, int id, const char *nm, CtClassFn fn, void *arg);
 /* ...for each call node id makes that the plan binds by version
    (call_node_implied_names) of a name `versioned` answers (ct_version_named,
    ct_version_marked): the classes the operand its row names may be, on the
@@ -1821,17 +1823,28 @@ int cplan_slot_may_hold(Compiler *c, int k, int cid);
    survey asks each name it may list the entry a call there would take (cplan_presence_asks), so that
    cplan_list_cells gives its cells. */
 int cplan_list_class(Compiler *c, int id, int *own);
-/* The classes a receiverless or `self.` instance-method list at id lists the methods of (recv: its receiver node, -1
-   for none), into ks (sized nclasses), in class order: the class a class body's self is, or the class of the class
-   method it is in (unless the class has a class method of the name: *form CSL_CMETHOD), and, where that method
-   takes its receiving class (CSL_DYN: the list switches on it) or is spliced into each subclass (CSL_SPLICE: the
-   receiving class is the one emitted), the classes below it; *ci is the class itself. 0 for any other receiver. The survey asks each name of these classes
-   (presence_asks), and the emitter lists each. */
-/* The class a class-valued receiver names where a method list reads it: the class a constant or constant path names
-   (class_recv_static_ci), else, with reads (the ELAB_GAIN_* the emission reads of it), the class a class-tag arm's
-   receiver stands for (view_class_is); -1 for any other, self among them (cplan_self_list_classes). */
+/* The class self is at node id, as a site of the program's body of code: the class of the class method it is in (that
+   method's scope in *cm), or the class whose body holds it where no block rebinds self (an instance_eval or class_eval
+   block's self is its receiver, self_class_body); -1 for an instance method, a block the plan cannot prove keeps the
+   enclosing self, and any other site. The one answer a reader that needs a site's self asks (a method list, a
+   respond_to?'s cells reader); it names no reader. */
+int cplan_site_self_class(Compiler *c, int id, const Scope **cm);
+/* The class a class-valued receiver names where a method list reads it: the class a constant, a constant path or a
+   class body's self names (class_recv_static_ci), else, with reads (the ELAB_GAIN_* the emission reads of it), the class
+   a class-tag arm's receiver stands for (view_class_is); -1 for any other. A receiverless or `self.` list resolves
+   its self in a class method or a block by cplan_self_list_class instead. */
 int cplan_class_receiver(Compiler *c, int recv, unsigned reads);
+/* The class a receiverless or `self.` instance-method list at id (recv: its receiver node, -1 for none) lists the
+   methods of: the class self is there (cplan_site_self_class) unless that class has a class method of the name, or is a
+   module and the list is in a class method of it; -1 for none. *cm is the class method it is in, or NULL. Inference types the list by it and the emitter lists it. */
+int cplan_self_list_class(Compiler *c, int id, int recv, const char *name, const Scope **cm);
+/* ...and the classes it lists, into ks (sized nclasses), in class order: that class, and where the method takes its
+   receiving class (CSL_DYN: the list switches on it) or is spliced into each subclass (CSL_SPLICE: the receiving
+   class is the one emitted), the classes below it; *ci is the class itself, *form the CSL_* flags (CSL_CMETHOD for a
+   class method). The survey asks each name of these classes (presence_asks), and the emitter lists each. */
 enum { CSL_CMETHOD = 1, CSL_DYN = 2, CSL_SPLICE = 4 };
+/* The CSL_* form of the class method *cm a list is in (0 for a class body or no method). */
+unsigned cplan_self_list_form(Compiler *c, const Scope *cm);
 int cplan_self_list_classes(Compiler *c, int id, int recv, const char *name, int *ks, int *ci, unsigned *form);
 /* The cells that answer whether list id lists method `name` of cls on side (CT_CMETHOD for a class-side list,
    CT_OWN for its own versions), or a method_defined? kin there finds it: the cells cplan_cmethod_presence
@@ -1847,6 +1860,10 @@ int cplan_list_site_classes(Compiler *c, int id, const int *cand, int ncand, int
    run knows: the cells cplan_presence_cells gives for each name the survey asked of this reader (presence_asks),
    for the public visibility, or with `all` every one (the include_all argument: the caller reads which of the two
    the call asks, or both where the run decides); 0 where the table answers it */
+/* Each (name, class) the survey asks of respond_to? call id of a name only the run knows (a respond_to?'s cells of a
+   name are read for no other pair, cplan_respond_runtime_cells); the receiver's classes are walked once for a name. */
+typedef void (*CplanRespondFn)(Compiler *c, int id, const char *name, int cls, void *arg);
+void cplan_respond_runtime_each(Compiler *c, int id, CplanRespondFn fn, void *arg);
 int cplan_respond_runtime_cells(Compiler *c, int id, int cls, const char *name, int all, CplanCells *out);
 /* Whether name answers on cls's chain where presence site id runs, as a
    call of the name there finds it, from call_target with CT_REACH (side: 0

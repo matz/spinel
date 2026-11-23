@@ -119,19 +119,24 @@ a public keyword `def` whose class the record resolves, a version with the
 body's extent (`LrDef.body`, `lr_version_order`, "Versions bodies make"
 below); a constant write marked `LR_LATE`, held as a possible write
 (`lr_record_unplaced`); and a visibility word that runs later or is sent,
-held on the table it names (`lr_unplaced_words`). A class or module body in a value
-(`z = [(class K; def m = 1; end; 0)]`, an argument, a multiple assignment's
-value, a hash value, a parenthesised value) that surely runs whenever its
-statement does (`lr_runs_up_to`: no condition, rescue modifier, block,
-lambda, safe navigation or `defined?` between) is placed at that statement:
-its forms are recorded as a top-level body's are, ordered against the calls
-the statement holds by `lr_run_order`, up to the first statement that may
-leave the body early (a jump, an uncaught `raise`; `lr_nested_body`). A
-class body that is no statement of the load phase otherwise (in a lambda, in
-a block kept to run later, a class builder's block in an expression, a body
-behind a condition) is its class's body all the same: its public defs are
-versions of the body around it, and its other definitions (and the forms of
-a placed body past an early exit) are recorded after the placed bodies,
+held on the table it names (`lr_unplaced_words`). A class or module body in a
+value (`z = [(class K; def m = 1; end; 0)]`, an argument, a multiple
+assignment's value, a hash value, a parenthesised value) that surely runs
+whenever its statement does (`lr_runs_up_to`: no condition, rescue modifier,
+block, lambda, safe navigation or `defined?` between) is placed at that
+statement: its forms are recorded as a top-level body's are, ordered against
+the calls the statement holds by `lr_run_order`, up to the first statement
+that is a `raise` or may jump out of the body (`lr_nested_body`). A placed body
+that defines `initialize` or a kin of it (by a def, a def an argument of a
+word, an alias or a `define_method`), which the plan answers no body version
+of, or a name that has an unplaced def on its side in a class that may share
+its chain, is held: the record is made again with it unplaced,
+until no body is newly held (`lr_nested_hold`). A class body that is no
+statement of the load phase otherwise (in a lambda, in a block kept to run
+later, a class builder's block in an expression, a body behind a condition,
+a body held) is its class's body all the same: its public defs are versions
+of the body around it, and its other definitions (and the forms of a placed
+body past a `raise` or a jump) are recorded after the placed bodies,
 `unplaced`, so the registrations apply them but no query at a point sees
 them (`lr_record_unplaced`, `lr_body_defs`).
 

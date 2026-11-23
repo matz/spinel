@@ -22,3 +22,9 @@ p(false && (class H
   undef_method :hi
   self
 end))
+# A body in a value that defines `initialize` (a name the plan answers no body's version of) is recorded as an unplaced body is, as a whole.
+p(class J
+  def initialize(x) = 1
+  def plain = 2
+  self
+end)

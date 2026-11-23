@@ -267,7 +267,7 @@ struct LoadRecord {
      implicitly private: a call's entries are asked one name at a time (lr_bform_live), and each ask read every
      name the call takes */
   int ipn_node, ipn_any;
-  struct LrPWord { int node, cls, sg, side, vis, reach; } *pword; int npword, cpword;   /* the visibility words the walk made entries of that stop short of their names (lr_call), asked again once the bodies are ordered (lr_words_refine) */
+  struct LrPWord { int node, cls, sg, side, vis, reach; unsigned char cside; } *pword; int npword, cpword;   /* the visibility words the walk made entries of that stop short of their names (lr_call), asked again once the bodies are ordered (lr_words_refine) */
   unsigned char *bown; int nbown;   /* [nbown] by node: a body's definer call every run of which defines on one class and side (lr_body_owner_fixed, set with the forms) */
   struct LrHeader *hdr; int nhdr, chdr, *hdr_head;   /* the class and module headers, in the order the walk reaches them (elab_header_class), and the class builders' calls and writes noted ahead of the walk (elab_builder_note) */
   ElabSurface *surf; int *surf_at;   /* elab_class_surface's, by class side: [2 * (cls + 1) + sg] .. [+ 1] */
@@ -4741,7 +4741,7 @@ static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int
   if ((bvis || cvis) && mfr != INT_MAX && !lr_word_is_mf(nt, node) && !(cvis && sg)) {   /* (a name past the reach the word has not changed: asked again, lr_words_refine) */
     LoadRecord *r = x->r;
     if (r->npword == r->cpword && !(r->pword = realloc(r->pword, sizeof *r->pword * (size_t)(r->cpword = r->cpword ? 2 * r->cpword : 8)))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-    r->pword[r->npword++] = (struct LrPWord){ node, cls, sg, bvis ? sg : 1, bvis ? bvis : cvis, mfr };
+    r->pword[r->npword++] = (struct LrPWord){ node, cls, sg, bvis ? sg : 1, bvis ? bvis : cvis, mfr, !bvis };
   }
   if (!mfc) bvis = BVIS_PRIVATE;
   int attr_r = is_attr_decl_reader(nm), attr_w = is_attr_decl_writer(nm);
@@ -5534,16 +5534,18 @@ static void lr_words_refine(Compiler *c) {
     /* (the elements once, as lr_word_elem counts them; a name given twice has an entry for each, in order) */
     const char **nms = malloc(sizeof *nms * (size_t)ne);
     struct LrElemName *ord = malloc(sizeof *ord * (size_t)ne);
-    int *rank = malloc(sizeof *rank * (size_t)ne);
-    if (!nms || !ord || !rank) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    int *rank = malloc(sizeof *rank * (size_t)ne), *dnode = malloc(sizeof *dnode * (size_t)ne);
+    if (!nms || !ord || !rank || !dnode) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
     int skip = 0, an = (vis_word_call(nt, pw.node, &skip), nt_ref(nt, pw.node, "arguments")), ac = 0, k = 0;
     const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
     int arr = ac - skip == 1 && nt_kind(nt, av[skip]) == NK_ArrayNode;
     for (int i = skip; i < ac; i++) {
       int en = 1;
       const int *ev = arr ? nt_arr(nt, av[i], "elements", &en) : &av[i];
-      for (int e = 0; e < en && k < ne; e++, k++)
-        nms[k] = nt_kind(nt, ev[e]) == NK_DefNode ? "" : vis_arg_name(nt, ev[e]);   /* (a def: no name here; a computed one: NULL) */
+      for (int e = 0; e < en && k < ne; e++, k++) {
+        dnode[k] = nt_kind(nt, ev[e]) == NK_DefNode ? ev[e] : -1;
+        nms[k] = dnode[k] >= 0 ? "" : vis_arg_name(nt, ev[e]);   /* (a def: no name here; a computed one: NULL) */
+      }
     }
     for (int q = 0; q < ne; q++) ord[q] = (struct LrElemName){ nms[q], q };
     qsort(ord, (size_t)ne, sizeof *ord, lr_elem_cmp);
@@ -5554,7 +5556,16 @@ static void lr_words_refine(Compiler *c) {
     for (k = from; k < ne; k++) {
       const char *nm = nms[k];
       if (!nm) break;   /* (a computed name ends the names) */
-      if (!*nm) continue;   /* (a def's own entry is made by the def, lr_applied) */
+      if (!*nm) {   /* (a def an instance word takes: its entry is the def's, with its section's visibility where the word stopped short; the word reaches it now) */
+        const LrHist *dh = k < now && !pw.cside && nt_ref(nt, dnode[k], "receiver") < 0 ? lr_hist(r, pw.cls, pw.sg, nt_str(nt, dnode[k], "name"), 0) : NULL;
+        for (int q = 0; dh && q < dh->n; q++) {
+          LrDef *v = (LrDef *)&dh->v[q];
+          if (v->node != dnode[k] || v->kind != LR_DEF || v->vis == lr_vis(pw.vis)) continue;
+          v->vis = (unsigned char)lr_vis(pw.vis);
+          changed = 1;
+        }
+        continue;
+      }
       const LrHist *h = lr_hist(r, pw.cls, pw.side, nm, 0);
       for (int q = 0, seen = 0; h && q < h->n; q++) {
         LrDef *v = (LrDef *)&h->v[q];
@@ -5580,7 +5591,7 @@ static void lr_words_refine(Compiler *c) {
       for (int i = 0; i < nv; i++)
         if (ev[i].v->body) ((LrDef *)ev[i].v)->absent = 1, changed = 1;
     }
-    free(nms); free(ord); free(rank);
+    free(nms); free(ord); free(rank); free(dnode);
   }
   if (changed) lr_entries_changed(r);   /* (the by-name index, the late bits and the surface count the entries as they were) */
 }

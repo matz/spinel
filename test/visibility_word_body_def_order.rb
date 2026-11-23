@@ -146,3 +146,10 @@ class C14
   include M14
 end
 p [(C14.new.tail14 rescue $!.class), (C14.new.zz14 rescue $!.class)]
+class C15
+  def self.mk15 = (def zz15 = :zz15)
+  mk15
+  begin; private(:zz15, def tail15; :tail15; end); rescue NameError; end
+end
+c15 = C15.new
+p [(c15.zz15 rescue $!.class), (c15.tail15 rescue $!.class)]

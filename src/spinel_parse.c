@@ -6087,6 +6087,7 @@ typedef struct {
                              call stands in (a boot library's: below 0, ahead of the
                              entry's first), and 1 when the call is that statement */
   int node;               /* --load-model=graph: its LoadNode, once flattened (-1 before) */
+  int begin_block;        /* ... and 1 when its statement is a `BEGIN { }`, which runs ahead of the file's others */
   int ncand, *cand;       /* SP_LOAD_SET: the files a path computed when it runs may name, ... */
   int open;               /* ... or (open) any file of the program */
   char *pat_pre, *pat_suf; /* ... a plain require's literal head and tail around what
@@ -9137,6 +9138,7 @@ static bool sp_graph_site_visit(const pm_node_t *node, void *data) {
     else e = sp_graph_computed(w, n, method, line);
     w->g->edge[e].stmt = w->stmt;
     w->g->edge[e].top = !auto_load && node == w->top;
+    w->g->edge[e].begin_block = PM_NODE_TYPE(w->top) == PM_PRE_EXECUTION_NODE;
     SpGraphFile *r = sp_graph_rec(w->g, w->f);
     if (r->nsite == r->sitecap) {
       r->sitecap = r->sitecap ? r->sitecap * 2 : 8;
@@ -9656,6 +9658,29 @@ static int sp_load_by_boot(const SpLoadGraph *g, int f) {
   }
   return 0;
 }
+static int sp_load_path(const SpLoadGraph *g, int f, int s, int *fs, int *ss, int cap);
+/* Does a require that is no statement of a top level, x, run after the
+   top-level require that places its file? It stands in a top-level
+   statement of a placed file, and nothing under that statement runs
+   before the statement does (a method it defines is called, a block it
+   makes runs, once it has; not a `BEGIN`, which runs ahead of the file's
+   other statements): when that statement comes after the placing
+   require's in the load order, the file is loaded by then, and x loads
+   nothing. */
+static int sp_load_nested_after(const SpLoadGraph *g, const SpLoadEdge *x) {
+  int by = g->entered[x->to];
+  if (by < 0 || g->entered[x->from] == -1 || x->stmt < 0 || x->begin_block) return 0;
+  const SpLoadEdge *e = &g->edge[by];
+  enum { CAP = 64 };
+  int xf[CAP], xs[CAP], ef[CAP], es[CAP];
+  int nx = sp_load_path(g, x->from, x->stmt, xf, xs, CAP), ne = sp_load_path(g, e->from, e->stmt, ef, es, CAP);
+  if (!nx || !ne || nx == CAP || ne == CAP) return 0;
+  for (int i = 0; i < nx && i < ne; i++) {
+    if (xf[i] != ef[i]) return 0;
+    if (xs[i] != es[i]) return xs[i] > es[i];
+  }
+  return 0;
+}
 static void sp_load_order_build(SpLoadGraph *g) {
   g->entered = malloc(sizeof(int) * (size_t)(g->nfile + 1));
   if (!g->entered) { fprintf(stderr, "spinel_parse: out of memory\n"); exit(1); }
@@ -9671,7 +9696,7 @@ static void sp_load_order_build(SpLoadGraph *g) {
       const SpLoadEdge *x = &g->edge[e];
       if (x->how != SP_LOAD_FILE || x->to <= 0 || g->entered[x->to] == -1 || sp_load_by_boot(g, x->to)) continue;
       int by = g->entered[x->to];
-      if (!x->top || g->entered[x->from] == -1 || (by >= 0 && g->entered[g->edge[by].from] == -1)) {
+      if ((!x->top && !sp_load_nested_after(g, x)) || g->entered[x->from] == -1 || (by >= 0 && g->entered[g->edge[by].from] == -1)) {
         g->entered[x->to] = -1;
         changed = 1;
       }

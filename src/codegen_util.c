@@ -2459,18 +2459,15 @@ static int subtree_has_param_named(const Compiler *c, int id, const char *nm) {
 
   /* numbered params (_1.._9): the NumberedParametersNode carries no child
      parameter nodes, yet the block's locals list contains the names. */
-  /* `_1` as the parser wrote it, and `_1__bNN` where scope_numbered_block_params
-     gave a colliding scope's blocks their own -- the same two spellings the
-     shadow rename leaves for an ordinary parameter, matched the same way. */
-  if (k == NK_NumberedParametersNode &&
-      nm[0] == '_' && nm[1] >= '1' && nm[1] <= '9' &&
-      (!nm[2] || !strncmp(nm + 2, "__b", 3))) return 1;
+  if (k == NK_NumberedParametersNode) {
+    int max = (int)nt_int(nt, id, "maximum", 0);
+    for (int q = 0; q < max; q++)
+      if (sp_streq(nm, numbered_param_name((Compiler *)c, id, q))) return 1;
+  }
   if (k == NK_ItParametersNode && sp_streq(nm, "it")) return 1;
   if (ty && (strstr(ty, "ParameterNode") || k == NK_LocalVariableTargetNode)) {
     const char *pn = nt_str(nt, id, "name");
-    /* shadow-renaming rewrites a param's node-table name to NAME__bpNN;
-       the parser's locals list keeps the raw NAME -- match both. */
-    if (pn && (sp_streq(pn, nm) || sp_streq(nt_wname(nt, id), nm))) return 1;
+    if (pn && sp_streq(pn, nm)) return 1;
   }
   int nr = nt_num_refs(nt, id);
   for (int i = 0; i < nr; i++)
@@ -8291,7 +8288,6 @@ void arity_kw_suffix(const Compiler *c, int params, char *out, size_t n) {
   size_t off = (size_t)snprintf(out, n, "; required keyword%s: ", nreq > 1 ? "s" : "");
   for (int i = 0, first = 1; i < nk && off < n; i++) {
     if (!param_is_required_kw(nt, kws[i])) continue;
-    /* a block parameter's rename suffix (`k__bp3`) is ours, not the name */
     const char *kn = nt_str(nt, kws[i], "name") ? nt_wname(nt, kws[i]) : "?";
     off += (size_t)snprintf(out + off, n - off, "%s%s", first ? "" : ", ", kn);
     first = 0;

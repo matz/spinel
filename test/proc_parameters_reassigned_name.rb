@@ -1,7 +1,7 @@
 # Proc#parameters and Method#inspect name a parameter the body assigns by
 # the name the program wrote. Such a parameter is fed from a slot the
 # compiler names (desugar_reassigned_block_params), and the slot's name was
-# what printed: `[[:req, :k__bpin]]`.
+# what printed, the slot's spelling, not `[[:req, :k]]`.
 by_lambda = lambda { |k| k = k + 1; k }
 by_proc = proc { |k, j| k = k.to_s; k + j.to_s }
 mixed = lambda { |k, m = 2, *r, z| k = k + 1; z = z + m; k + z }

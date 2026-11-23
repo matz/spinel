@@ -29,7 +29,7 @@
 #   keyed by the lines it covers, without columns, and is never a slot of its
 #   own: its type is the type of whichever definition is last. A difference
 #   there is listed as detail when both orders have the record.
-# - Names the compiler makes up carry node ids (`x__bp28`, `__cap_38_s`,
+# - Names the compiler makes up carry node ids (`__cap_38_s`,
 #   `__enum_find__1931`, `obj_StructAnon_1220`), and ids move when definitions
 #   do. They are removed from names and from type text.
 # - A cloned or inlined body writes a record of its own at the span it was
@@ -84,12 +84,11 @@ module OrderTypes
   Root = Struct.new(:name, :slots, :klass, :pair, keyword_init: true)
   Detail = Struct.new(:what, :line, :end_line, :kind, :name, :types_a, :types_b, keyword_init: true)
 
-  # Ids appended to a name the user wrote, removed whole: a block's parameter
-  # is `i` at one call site and `i__bp98` at another, and which site gets
-  # which follows the order. Formats as in src/: %s__bp%d, %s__bp%d_%d,
-  # _%d__b%d, %s__sg_%d, %s__sg_%d_%d, %s__dup%d, %s__redef%d, %s__main%d,
-  # %s#__cond%d.
-  NAME_ID = /#?__(?:bp|sg_|dup|redef|main|cond|b)\d+(?:_\d+)?/
+  # Ids appended to a name the user wrote, removed whole. A local's slot
+  # (`B2_49_i`: the tag of the scope that declares it, then the name) holds no
+  # node id of its own, so it is the same in every order. Formats as in src/:
+  # %s__sg_%d, %s__sg_%d_%d, %s__dup%d, %s__redef%d, %s__main%d, %s#__cond%d.
+  NAME_ID = /#?__(?:sg_|dup|redef|main|cond)\d+(?:_\d+)?/
   # The same class ids as they come out in RBS, where `_` reads as `::`.
   RBS_ID = /::::(?:sg::|dup|redef|main)\d+(?:::\d+)?/
   ANON_ID = /(StructAnon|SpinelAnonClass)(?:_|::)?\d+/

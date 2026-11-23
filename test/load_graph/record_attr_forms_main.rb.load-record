@@ -3,7 +3,7 @@ r0 #0 f0 ProgramNode line 6
 r0 #1 f0 ClassNode A line 6
   r0 #2 f0 CallNode attr line 7
   r0 #3 f0 CallNode private line 8
-  r0 #4 f0 LocalVariableWriteNode r__cbp1A_0 line 9
+  r0 #4 f0 LocalVariableWriteNode r line 9
   r0 #5 f0 CallNode p line 10
   r0 #6 f0 CallNode p line 11
   r0 #7 f0 DefNode initialize line 12

@@ -1668,6 +1668,10 @@ static int builtin_name_in(const char *name, const char *const *names) {
    are told by their spelling): their values are the runtime's objects, not
    a write of the program's. tools/runtime_gvar_check.rb holds the list
    against CRuby's global_variables. */
+int is_numbered_param_name(const char *n) {
+  return n && n[0] == '_' && n[1] >= '1' && n[1] <= '9' && !n[2];
+}
+
 int is_runtime_gvar_name(const char *n) {
   static const char *const names[] = { "stdout", "stderr", "stdin", "PROGRAM_NAME", "LOAD_PATH", "LOADED_FEATURES",
                                        "VERBOSE", "DEBUG", "FILENAME", "_", NULL };

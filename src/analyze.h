@@ -1553,9 +1553,8 @@ int block_param_used_up(Compiler *c, int blk, const char *nm, int value);
    Kernel#loop rescues (analyze_util.c)? 0 only when nothing in it, nor any
    method it calls by name, can: its emitters then open no setjmp frame. */
 int loop_may_stop(Compiler *c, int loop_call);
-/* The name of a numbered block parameter (`_1`..`_9`) on this parameters node.
-   Per BLOCK where a scope holds more than one such block; see
-   scope_numbered_block_params. Every site that needs the name goes here. */
+/* The name of a numbered block parameter (`_1`..`_9`) on this parameters node:
+   the slot its block owns (`B<n>_<tag>__1`). Every site that needs the name goes here. */
 const char *numbered_param_name(Compiler *c, int params_node, int idx);
 /* Name of a block's trailing rest parameter (`|*a|`), or NULL. */
 const char *block_rest_name(Compiler *c, int block);
@@ -1642,15 +1641,10 @@ void ie_body_restore(Compiler *c, int *snap);
 /* instance_exec keyword-arg helpers: the call's trailing KeywordHashNode (or
    -1), and the value node bound to a keyword name within it (or -1). */
 int ie_call_kwhash(Compiler *c, int id);
-const char *rbp_slot_written(const Compiler *c, const char *w);
-const char *param_written_name(const Compiler *c, const char *w);
 /* What a parameter node the desugar made or named stands for, as its
    "desugared_param" mark says (desugared_param_name) */
 enum { DPN_OWN, DPN_WRITTEN, DPN_NAMELESS, DPN_NONE };
 int desugared_param_name(const NodeTable *nt, int p, const char **written);
-int block_param_is_renamed(const Compiler *c, const char *name);
-int block_param_made_for(const Compiler *c, const char *name, int blk);   /* an invented name of that block */
-char *block_param_invent_name(Compiler *c, const char *written, int blk);
 int ie_kwhash_value(Compiler *c, int kwhash, const char *name);
 TyKind ie_kwhash_computed_type(Compiler *c, int kwhash);
 

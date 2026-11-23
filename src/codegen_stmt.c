@@ -1616,14 +1616,10 @@ int strbuf_self_chain_base(Compiler *c, int v) {
      it: its name is bound to the receiver as a block parameter is, typed as
      bytes, which the held handle has no form for) */
   if (any_blk && k == NK_LocalVariableReadNode && nt_str(nt, v, "name")) {
-    const char *bn = nt_str(nt, v, "name");
-    size_t bl = strlen(bn);
+    const char *bn = nt_wname(nt, v);   /* what the program wrote */
     for (int w = start; w >= 0 && nt_kind(nt, w) == NK_CallNode; w = nt_paren_single(c->nt, nt_ref(nt, w, "receiver"))) {
       int wb = nt_ref(nt, w, "block");
-      int nls = 0;
-      const char *const *ls = nt_scope_locals(nt, wb, &nls);
-      for (int li = 0; li < nls; li++)
-        if (!strncmp(ls[li], bn, bl) && (!ls[li][bl] || !strncmp(ls[li] + bl, "__bp", 4))) return -1;   /* (renamed apart: s__bp30) */
+      if (wb >= 0 && nt_scope_slot_of(nt, wb, bn)) return -1;   /* (a block's own variable of that name) */
     }
   }
   /* a chain with a block runs over the handle held ahead of the block,
@@ -24377,8 +24373,8 @@ int block_of_body(Compiler *c, int body) {
 }
 
 /* How many statements open block body `body` by rebinding a parameter the
-   body assigns: desugar_reassigned_block_params turns `|x|` into `|x__bpin|`
-   and prepends `x = x__bpin`, marked `bp_rebind`. They set up the iteration,
+   body assigns: desugar_reassigned_block_params turns `|x|` into `|P_<slot of x>|`
+   and prepends `x = P_<slot of x>`, marked `bp_rebind`. They set up the iteration,
    like the parameter binding itself, so a `redo` re-runs the body after
    them: before them, it put the parameter back to the yielded value and lost
    the body's write. */

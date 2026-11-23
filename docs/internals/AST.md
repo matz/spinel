@@ -164,7 +164,7 @@ Prism documents, with a few Spinel-specific aliases for clarity.
 | `BlockNode`         | `locals` (S), `parameters` (R), `body` (R) | `do ... end` / `{ ... }` attached to a call. `parameters` is a BlockParametersNode (or a NumberedParametersNode or ItParametersNode). |
 | `BlockParametersNode` | `parameters` (R), `locals` (A)         | The `|a, b; x, y|` list of a block. `locals` holds one BlockLocalVariableNode per `; x` declaration, `[]` when there is none. |
 | `BlockLocalVariableNode` | `name` (S)                          | One `; x` declaration: the name is fresh to the block, whatever the enclosing scope calls it. |
-| `ParametersNode`    | `requireds` (A), `optionals` (A), `keywords` (A), `posts` (A), `rest` (R), `block` (R) | Per-method or per-block parameter list. Each parameter node (`RequiredParameterNode`, `OptionalParameterNode`, `RestParameterNode`, the keyword, keyword-rest and `BlockParameterNode` kinds) carries `name` (S), and `wname` (S) where a rename gave it another (see "References & assignment"). |
+| `ParametersNode`    | `requireds` (A), `optionals` (A), `keywords` (A), `posts` (A), `rest` (R), `block` (R) | Per-method or per-block parameter list. Each parameter node (`RequiredParameterNode`, `OptionalParameterNode`, `RestParameterNode`, the keyword, keyword-rest and `BlockParameterNode` kinds) carries `name` (S), and `wname` (S) where its slot name differs from the one written (see "References & assignment"). |
 | `NumberedParametersNode` | `value` (I) (max param `_1` .. `_N`) | `{ _1 + _2 }` shorthand.                              |
 
 ### Control flow
@@ -253,17 +253,42 @@ writes it on the six local nodes above (from `depth`), on every parameter node
 that binds a name and on a block-local, and on the `it` and `_1` reads (the
 innermost block). A copy (`nt_clone_subtree`, `nt_import_subtree`) re-points
 a `decl` that names a node of the copy at the copy's, so a cloned block's own
-locals are new variables while its reads of outer ones still reach the
-originals. A node a pass made for an invented temporary has no `decl`. `wname` (S) is the name the program wrote, on a local-binding or
-local-reference node (the nodes above, a block-local, and the parameter nodes
-below) that a pass renamed to give it a slot of its own: `name` is then the
-slot, and `nt_wname` answers the written one, falling back to `name` for a
-node nothing renamed or a desugar made. `nt_rename_local` renames a local
-that way and keeps the first name in `wname`: the shadow rename of block
-parameters and block-locals, and the keyword slots of a block handed to a
-builtin. Three renames do not go through it yet and leave no `wname`: the
-slot of a reassigned block parameter (`__bpin`), a class-body capture
-(`__cb`) and the colliding numbered parameters (`_1__b…`).
+locals are variables of the copy while its reads of outer ones still reach the
+originals (the clone keeps its original's slot names and marks each scope it
+copies with `clone_of`, the first scope of a chain of copies: the copies of one
+block in a frame share its slots, as one declaration run at several places; an
+import gives the imported scopes' locals the names of the table they land in). A node a pass made for an invented temporary has no `decl`.
+
+A local that a block, lambda or class body declares is named when the table is
+built (`comp_name_locals`, from the `decl` the bridge wrote; the bridge itself
+writes the name as the program did) for the scope that declares it:
+`B<n>_<tag>_<name>` (`nt_slot_name`), `tag` being the scope's `comp_node_tag`
+and `n` its length, so one name is one variable in a frame wherever a pass sees
+it and the name does not move when code elsewhere in the program does; the
+locals of a frame root (the program's top level, a def, a `define_method` block
+once `nt_rekey_scope` made it a method body) keep the name they were written
+with. A Ruby local never begins with an uppercase letter, so no name a program
+writes is a slot name, and `lv_` plus a slot is a plain C identifier. The table
+records the written name of every slot (`nt_slot_written`); no reader takes it
+back out of the spelling. `wname` (S) is the name the program wrote, on every
+node whose `name` differs from it (`nt_wname` answers it, falling back to
+`name`), and it is what a program can see of the variable (`Proc#parameters`,
+`Method#inspect`, keyword symbols, named-capture groups). The block's, lambda's
+and class body's `locals` string and a `NumberedParametersNode`'s `n1`..`n9`
+(a lambda's on the lambda) hold the slot names. A body spliced into a class body
+(a hook's def body) takes the slot rule's names for the scope it is spliced
+into (`bls_walk`: the locals of that body at its own level get the tag of the
+scope node the lowering context names, which for a hook's spliced statements
+is not the class body's own, so a hook's local and the body's are two
+variables). A pass that makes a new declaration of a
+written name gives it a slot of its own, `P_<slot>` for a reassigned block
+parameter and `D<n>_<slot>` for a repeated `_` (`nt_set_local_name`), the
+written name staying on `wname`. A pass that makes a node for a variable the
+program wrote copies a model's name, written name and decl (`nt_new_local_of`,
+`nt_local_facts_from`, `nt_decl_in`). `--plan-check` reports a local of a
+non-root scope whose name is no recorded slot of its written name, a slot that
+names two declarations in one frame (a copy of a scope is its source's), and a
+declaration with two slots (`local-name`).
 
 ### Index access
 

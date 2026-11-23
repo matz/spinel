@@ -18,6 +18,8 @@
 
 #include <stddef.h>
 #include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
 #include "types.h"   /* sp_streq -- used by the node-table accessors below */
 
 /* Field lookups are by NAME and are the compiler's hottest operation
@@ -146,6 +148,10 @@ typedef struct {
      until the first ask */
   struct NtScopeSplit *splits;
   int nsplits;
+  /* the name written for each slot a pass named (nt_slot_name, nt_set_local_name) */
+  struct NtSlots *slots;
+  /* the scopes the parse is flattening, outermost first (nt_build_scope_push): freed with the table */
+  int *build_scope, nbuild_scope, cbuild_scope;
   /* how many times a call was marked to bind the builtin's own method
      (nt_mark_builtin_call): none, and no call is marked, which an ask can
      tell without a node read (a clone copies a marked node's mark) */
@@ -209,6 +215,13 @@ struct NtScopeSplit {
   char *buf;
   const char **names;
   int n;
+};
+
+struct NtSlots {
+  char **slot, **written;
+  unsigned char *minted;
+  int n, cap;
+  int *hash, hcap;   /* open addressing over slot[]: index + 1, 0 empty */
 };
 
 /* The roots of the program's files, entry first (see file_roots). */
@@ -849,17 +862,52 @@ int nt_param_binds(const NodeTable *nt, int id, const char *name);
    a block-local (`|a; name|`), -1 if it declares none. */
 int nt_block_local_node(const NodeTable *nt, int blk, const char *name);
 
-/* The name a local-binding or local-reference node was written with: its
-   `wname`, which a pass that renamed the node (nt_rename_local) kept, else
-   its `name`. A node a desugar made has no Prism origin, so its name is what
-   it wrote. */
+/* The name a local-binding or local-reference node was written with: its `wname`, which the bridge
+   writes where the slot's name (`name`) differs from it, else its `name`. A node a desugar made has no
+   Prism origin, so its name is what it wrote. */
 static inline const char *nt_wname(const NodeTable *nt, int id) {
   const char *w = nt_str(nt, id, "wname");
   return w ? w : nt_str(nt, id, "name");
 }
-/* Rename local node id to newname, keeping the name it was first written
-   with in `wname`. A node without a `name` is left as it is. */
-void nt_rename_local(NodeTable *nt, int id, const char *newname);
+/* The parse step's stack of the scope nodes it is flattening, outermost first: a local's Prism `depth` names the
+   scope that declares it, `depth` scopes out from the innermost (nt_build_scope_at; -1 for none, as for a
+   snippet's host scopes). */
+void nt_build_scope_push(NodeTable *nt, int id);
+void nt_build_scope_pop(NodeTable *nt);
+int nt_build_scope_at(const NodeTable *nt, int depth);
+/* The slot name of local `written` declared by a scope that is no frame root (a block, lambda or class body):
+   `B<n>_<tag>_<written>`, `tag` being the scope node's comp_node_tag and `n` its length, so a name is one
+   variable wherever it is seen, the name does not move when code elsewhere in the program does, and no two
+   (tag, written) pairs make one name. A frame root's locals (the program's, a def's) keep the name they were
+   written with. A Ruby local never begins with an uppercase letter, so no name a program writes is a minted
+   slot name (the slots a pass names for itself, `P_<slot>` and `D<n>_<slot>`, are as unspellable), and `lv_`
+   plus a slot is a plain C identifier. The table remembers the name written for each slot
+   (nt_slot_written): nothing reads it back out of the spelling. The result is the table's own. */
+const char *nt_slot_name(NodeTable *nt, const char *written, const char *tag);
+/* The name a program wrote for slot `name` (minted, or a pass's own: nt_set_local_name), NULL for a name that is
+   not a recorded slot. */
+const char *nt_slot_written(const NodeTable *nt, const char *name);
+/* Is `name` a slot nt_slot_name minted (not one a pass named for itself)? */
+int nt_slot_minted(const NodeTable *nt, const char *name);
+/* Local node id's name is `name` from now on, its written name kept (`wname`, the name it has now when it has
+   none yet): the one entry for a pass that gives a slot a name of its own (a repeated `_`'s, a snippet's own
+   locals) and for the bridge's naming of the table (comp_name_locals). */
+void nt_set_local_name(NodeTable *nt, int id, const char *name);
+/* The slot scope node `scope` holds for the local its program wrote as `written` (a name in scope's `locals`),
+   NULL when it declares none. */
+const char *nt_scope_slot_of(const NodeTable *nt, int scope, const char *written);
+/* A new node of `type` for the variable local or parameter node `model` is one of: its name, written name and
+   decl. A pass that makes a read, write or target of a program's variable makes it so, not from a bare name. */
+int nt_new_local_of(NodeTable *nt, const char *type, int model);
+/* ...and the written name and decl alone, for a node that takes another name of the same variable. */
+void nt_local_facts_from(NodeTable *nt, int id, int model);
+/* Local node id names a variable scope `scope` declares: its decl, and its written name (what the table
+   records for its slot name, nt_slot_written). */
+void nt_decl_in(NodeTable *nt, int id, int scope);
+/* The locals of the subtree at id that scope `from` declares become the frame root's `to`'s: a
+   block whose parameters and body a pass makes a def's (define_method's) holds plain names there, so
+   each takes the name the program wrote (nt_wname) and `to` as its decl. */
+void nt_rekey_scope(NodeTable *nt, int id, int from, int to);
 
 /* The name a class or module header's constant path is keyed by: the one
    qualify_colliding_classes gave a colliding header ("qc_name"), else the

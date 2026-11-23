@@ -904,9 +904,9 @@ enum {
   LW_MARK_RANGE_LOCALS, LW_DUPLICATE_UNDERSCORE_PARAMS, LW_ENCODING_QUERIES, LW_ALIAS_METHOD_STRING_NAMES,
   LW_ALIAS_METHOD_VALUES, LW_BODY_INHERITED_ALIAS, LW_REASSIGNED_BLOCK_PARAMS, LW_BODY_SINGLETON_CLASS_META, LW_CLASS_BODY_VALUES,
   LW_ITSELF_RECEIVER, LW_TAP_VALUE_WRITE, LW_BODY_SELF_IVAR_ACCESS, LW_CONST_IVAR_CALL, LW_BLK_PARAM_WRITES, LW_REST_PARAM_WRITES, LW_YIELD_IN_CLOSURE,
-  LW_SAFE_NAV_ATTR_WRITE, LW_CONST_ATTR_OP_ASSIGN, LW_STORED_ENUM_EACH, LW_SCOPE_NUMBERED_BLOCK_PARAMS,
+  LW_SAFE_NAV_ATTR_WRITE, LW_CONST_ATTR_OP_ASSIGN, LW_STORED_ENUM_EACH,
   LW_SINGLETON_CLASS_DEFINE_METHOD, LW_EMPTY_HASH_COMPARE_BY_IDENTITY, LW_DEFINE_METHOD_PROC_ARG,
-  LW_DEFINE_METHOD_CAPTURES, LW_DEFINE_METHOD_KEYWORDS, LW_NAME_ANON_BLOCK_KWREST, LW_RENAME_SHADOWING_BLOCK_PARAMS,
+  LW_DEFINE_METHOD_CAPTURES, LW_DEFINE_METHOD_KEYWORDS, LW_NAME_ANON_BLOCK_KWREST,
   LW_SYM_TO_PROC_CALL, LW_ENUM_CHAIN_SHAPES, LW_BUILTIN_KWSPLAT, LW_RIGHTWARD_PATTERN, LW_MATCH_PREDICATE,
   LW_SORT_BY_WITH_INDEX, LW_FORWARDING_TO_REST_CALLEE, LW_ANON_BLOCK_PARAM, LW_BLOCK_IMPLICIT_REST,
   LW_MULTI_VALUE_JUMP, LW_BLOCK_DESTRUCTURE_PARAMS, LW_FOR_NONLOCAL_INDEX, LW_ENUM_FOR_WITH_ARGS,
@@ -925,9 +925,6 @@ typedef struct LowerCtx {
   int scope_n;
   /* scratch of the running row, zero at each run */
   int serial;               /* the fresh-name counter of a run */
-  char **used;              /* names the program wrote that a row's invented ones must step past */
-  int nused;
-  int used_built;
   int *ids;                 /* node ids a row's gate collected for its visits */
   int nids;
   const char **aliases;     /* recursive_param_defaults: the program's alias pairs, new name then old */
@@ -950,7 +947,6 @@ typedef struct LowerCtx {
   int span_now;             /* ... and they are the walk's, lowered one splice at a time as it makes them */
   int *later, nlater, clater;   /* span_now: (row, owner) pairs, a row that visits the body's owner, which
                                    lower_settle visits once for all the spans of that body */
-  struct BlkpStep *blkp;    /* rename_shadowing_block_params' span form: the program's names, kept for the step */
 } LowerCtx;
 
 typedef int LowerFn(Compiler *c, LowerCtx *lc, int id);
@@ -966,7 +962,6 @@ int lower_run(Compiler *c, LowerCtx *lc, int row);   /* the nodes it rewrote */
 int lower_row_once(Compiler *c, int row);   /* a row on a context of its own, for a pass the fixpoint repeats */
 int lower_span(Compiler *c, LowerCtx *lc, int owner, int body, const int *stmts, const int *scopes, int n);   /* the rows that ran, on spliced statements */
 int *lower_span_ids(const LowerCtx *lc, int *n);   /* the span's nodes and the ones rows appended for it, ascending; the caller frees */
-void blkp_step_free(struct BlkpStep *st);   /* analyze.c */
 void lower_settle(Compiler *c, LowerCtx *lc);   /* the rows spans left to the program, once per step */
 
 /* ---- the host (analyze_elab.c, #9898) ----
@@ -1031,8 +1026,7 @@ LowerFn desugar_struct_subclass_new_write_at, desugar_struct_subclass_new_write_
 LowerFn refuse_superclass_exprs_at, desugar_sym_to_proc_call_at, desugar_builtin_kwsplat_at;
 LowerGate desugar_user_backtick_gate;
 LowerFn desugar_user_backtick_at;                                            /* analyze.c */
-LowerFn desugar_explicit_initialize_calls_at, scope_numbered_block_params_at, rename_shadowing_block_params_at,
-  rename_shadowing_block_params_span;
+LowerFn desugar_explicit_initialize_calls_at;
 LowerFn desugar_body_local_scopes_at, desugar_define_method_captures_at;     /* analyze_desugar.c */
 LowerFn desugar_builder_block_param_at, desugar_builder_block_param_left;   /* analyze_desugar.c */
 LowerFn desugar_forwarding_to_rest_callee_at, desugar_recursive_param_defaults_at;
@@ -1375,9 +1369,6 @@ int ie_own_class_of(Compiler *c, int node);
 int ie_pending_node(Compiler *c, int node);
 int blkp_params_node(Compiler *c, int create);
 int blkp_binds_param(Compiler *c, int create, const char *name);
-void blkp_rewrite_refs(Compiler *c, int node, const char *oldn, const char *newn);
-void numbered_rename_locals_str(NodeTable *nt, int L, const char *from, const char *to);
-void blkp_mark_subtree(const NodeTable *nt, int node, char *marks);
 void qc_collect_writes(Compiler *c, int node, char (*path)[64], int depth, QCWrite **ws, int *n, int *cap);
 int qc_read_chain(const NodeTable *nt, int node, char (*chain)[64], int *abs_anchor);
 void qc_qualified_name(char *out, size_t cap, const QCWrite *w);

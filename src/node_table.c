@@ -612,6 +612,13 @@ int nt_clone_subtree(NodeTable *nt, int root) {
   nt_aux(nt, nt->count - 1);
   nt_aux_reset(nt, base, nt->count);
   if (nt->orig_lo) for (int i = 0; i < sn; i++) nt_set_origin(nt, base + i, list[i], 'c', 0);
+  /* a copy of a scope is the same declaration of its locals as its source, run at another place: it keeps the
+     slots, and names the scope it is a copy of (the first of a chain of copies) */
+  for (int i = 0; i < sn; i++) {
+    NodeKind k = nt_kind(nt, base + i);
+    if (k == NK_BlockNode || k == NK_LambdaNode || k == NK_ClassNode || k == NK_ModuleNode || k == NK_DefNode)
+      nt_node_set_int(nt, base + i, "clone_of", nt_int(nt, list[i], "clone_of", list[i]));
+  }
   nt->version++; nt->edits++;
   par_cover(nt);
   for (int i = 0; i < sn; i++) par_node(nt, base + i);
@@ -937,6 +944,11 @@ void nt_free(NodeTable *nt) {
   if (nt->holders) { free(nt->holders->par); free(nt->holders->stamp); free(nt->holders); }
   for (int i = 0; i < nt->nsplits; i++) { free(nt->splits[i].buf); free(nt->splits[i].names); }
   free(nt->splits);
+  free(nt->build_scope);
+  if (nt->slots) {
+    for (int i = 0; i < nt->slots->n; i++) { free(nt->slots->slot[i]); free(nt->slots->written[i]); }
+    free(nt->slots->slot); free(nt->slots->written); free(nt->slots->minted); free(nt->slots->hash); free(nt->slots);
+  }
   if (nt->builders) { free(nt->builders->call); free(nt->builders->module); free(nt->builders->stamp); free(nt->builders); }
   free(nt);
 }
@@ -1198,11 +1210,28 @@ static void nki_refresh(NodeTable *nt) {
    one in node order (passes that fold by ascending id read it first) builds
    it at the end and swaps it into the earlier slot; the caller re-points the
    references to both. */
+/* the locals under id that a scope node declared by its number `from` (a scope that moved to `to`) */
+static void decl_follow(NodeTable *nt, int id, int from, int to) {
+  if (id < 0 || id >= nt->count) return;
+  SpNode *nd = &nt->nodes[id];
+  for (int j = 0; j < nd->ni; j++)
+    if (!strcmp(nd->i[j].key, "decl") && nd->i[j].val == from) nd->i[j].val = to;
+  for (int j = 0; j < nd->nr; j++) decl_follow(nt, nd->r[j].ref, from, to);
+  for (int j = 0; j < nd->na; j++)
+    for (int k = 0; k < nd->a[j].n; k++) decl_follow(nt, nd->a[j].ids[k], from, to);
+}
+static int nt_is_decl_scope(NodeKind k) {
+  return k == NK_ProgramNode || k == NK_DefNode || k == NK_BlockNode || k == NK_LambdaNode || k == NK_ClassNode ||
+         k == NK_ModuleNode || k == NK_SingletonClassNode;
+}
 void nt_swap_nodes(NodeTable *nt, int a, int b) {
   if (a < 0 || b < 0 || a >= nt->count || b >= nt->count || a == b) return;
   SpNode t = nt->nodes[a];
   nt->nodes[a] = nt->nodes[b];
   nt->nodes[b] = t;
+  /* a scope that moved is the declaration its locals name by its new number */
+  if (nt_is_decl_scope(nt_kind(nt, b))) decl_follow(nt, b, a, b);
+  if (nt_is_decl_scope(nt_kind(nt, a))) decl_follow(nt, a, b, a);
   nt->version++; nt->edits++;
   nt_low_touch(nt, a); nt_low_touch(nt, b);
   par_drop(nt);   /* every node a or b held, and each that holds them, moves */
@@ -1230,7 +1259,7 @@ unsigned nt_kind_gen(const NodeTable *nt, NodeKind k) {
 
 /* Renumber the table's nodes: order[k] is the id node k had. Every field
    that holds a node id moves with it: the refs, the arrays, the root and
-   the two int fields the parse writes that hold a node id: node_bi (the
+   the int fields the parse writes that hold a node id: a local's decl, node_bi (the
    builtin node a builtins/ node counts from, plus one) and a root's load_by
    (the LoadNode that first runs its file). */
 void nt_renumber(NodeTable *nt, const int *order) {
@@ -1249,7 +1278,7 @@ void nt_renumber(NodeTable *nt, const int *order) {
     if (((nd->posmask >> 3) & 1) && nd->pos[3] > 0 && nd->pos[3] <= n) nd->pos[3] = perm[nd->pos[3] - 1] + 1;
     for (int j = 0; j < nd->ni; j++) {
       if (sp_streq(nd->i[j].key, "node_bi") && nd->i[j].val > 0 && nd->i[j].val <= n) nd->i[j].val = perm[nd->i[j].val - 1] + 1;
-      if (sp_streq(nd->i[j].key, "load_by") && nd->i[j].val >= 0 && nd->i[j].val < n) nd->i[j].val = perm[nd->i[j].val];
+      if ((sp_streq(nd->i[j].key, "load_by") || sp_streq(nd->i[j].key, "decl")) && nd->i[j].val >= 0 && nd->i[j].val < n) nd->i[j].val = perm[nd->i[j].val];
     }
   }
   free(nt->nodes);
@@ -1288,11 +1317,144 @@ int nt_set_str(NodeTable *nt, int id, const char *key, const char *val) {
 
 
 
-void nt_rename_local(NodeTable *nt, int id, const char *newname) {
-  const char *was = nt_str(nt, id, "name");
-  if (!was) return;
-  if (!nt_str(nt, id, "wname")) nt_node_set_str(nt, id, "wname", was);
-  nt_set_str(nt, id, "name", newname);
+void nt_build_scope_push(NodeTable *nt, int id) {
+  if (nt->nbuild_scope == nt->cbuild_scope) {
+    nt->cbuild_scope = nt->cbuild_scope ? 2 * nt->cbuild_scope : 64;
+    nt->build_scope = realloc(nt->build_scope, sizeof(int) * (size_t)nt->cbuild_scope);
+    if (!nt->build_scope) nt_oom();
+  }
+  nt->build_scope[nt->nbuild_scope++] = id;
+}
+void nt_build_scope_pop(NodeTable *nt) { nt->nbuild_scope--; }
+int nt_build_scope_at(const NodeTable *nt, int depth) {
+  int at = nt->nbuild_scope - 1 - depth;
+  return at >= 0 ? nt->build_scope[at] : -1;
+}
+static unsigned slot_hash(const char *s) {
+  unsigned h = 2166136261u;
+  for (; *s; s++) h = (h ^ (unsigned char)*s) * 16777619u;
+  return h;
+}
+static int slot_find(const struct NtSlots *t, const char *name) {
+  if (!t || !t->hcap) return -1;
+  for (unsigned i = slot_hash(name) & (unsigned)(t->hcap - 1); t->hash[i]; i = (i + 1) & (unsigned)(t->hcap - 1))
+    if (!strcmp(t->slot[t->hash[i] - 1], name)) return t->hash[i] - 1;
+  return -1;
+}
+static void slot_record(NodeTable *nt, const char *slot, const char *written, int minted) {
+  if (!nt->slots && !(nt->slots = calloc(1, sizeof *nt->slots))) nt_oom();
+  struct NtSlots *t = nt->slots;
+  if (slot_find(t, slot) >= 0) return;
+  if (t->n == t->cap) {
+    t->cap = t->cap ? 2 * t->cap : 64;
+    t->slot = realloc(t->slot, (size_t)t->cap * sizeof *t->slot);
+    t->written = realloc(t->written, (size_t)t->cap * sizeof *t->written);
+    t->minted = realloc(t->minted, (size_t)t->cap);
+    if (!t->slot || !t->written || !t->minted) nt_oom();
+  }
+  if (2 * (t->n + 1) > t->hcap) {
+    free(t->hash);
+    t->hcap = t->hcap ? 2 * t->hcap : 128;
+    t->hash = calloc((size_t)t->hcap, sizeof *t->hash);
+    if (!t->hash) nt_oom();
+    for (int j = 0; j < t->n; j++) {
+      unsigned i = slot_hash(t->slot[j]) & (unsigned)(t->hcap - 1);
+      while (t->hash[i]) i = (i + 1) & (unsigned)(t->hcap - 1);
+      t->hash[i] = j + 1;
+    }
+  }
+  t->slot[t->n] = dup_n(slot, strlen(slot));
+  t->written[t->n] = dup_n(written, strlen(written));
+  t->minted[t->n] = (unsigned char)minted;
+  unsigned i = slot_hash(slot) & (unsigned)(t->hcap - 1);
+  while (t->hash[i]) i = (i + 1) & (unsigned)(t->hcap - 1);
+  t->hash[i] = ++t->n;
+}
+const char *nt_slot_name(NodeTable *nt, const char *written, const char *tag) {
+  size_t n = strlen(written) + strlen(tag) + 24;
+  char *r = malloc(n);
+  if (!r) nt_oom();
+  snprintf(r, n, "B%zu_%s_%s", strlen(tag), tag, written);
+  slot_record(nt, r, written, 1);
+  int i = slot_find(nt->slots, r);
+  free(r);
+  return nt->slots->slot[i];
+}
+const char *nt_slot_written(const NodeTable *nt, const char *name) {
+  int i = slot_find(nt->slots, name);
+  return i >= 0 ? nt->slots->written[i] : NULL;
+}
+int nt_slot_minted(const NodeTable *nt, const char *name) {
+  int i = slot_find(nt->slots, name);
+  return i >= 0 && nt->slots->minted[i];
+}
+void nt_set_local_name(NodeTable *nt, int id, const char *name) {
+  const char *w = nt_wname(nt, id);
+  if (!nt_str(nt, id, "wname")) {
+    char *was = dup_n(w, strlen(w));
+    nt_node_set_str(nt, id, "wname", was);
+    free(was);
+    w = nt_str(nt, id, "wname");
+  }
+  if (strcmp(w, name)) slot_record(nt, name, w, 0);
+  nt_node_set_str(nt, id, "name", name);
+}
+void nt_decl_in(NodeTable *nt, int id, int scope) {
+  const char *nm = nt_str(nt, id, "name"), *w = nm ? nt_slot_written(nt, nm) : NULL;
+  nt_node_set_int(nt, id, "decl", scope);
+  if (w && !nt_str(nt, id, "wname")) nt_node_set_str(nt, id, "wname", w);
+}
+void nt_local_facts_from(NodeTable *nt, int id, int model) {
+  const char *w = nt_wname(nt, model);
+  if (w) nt_node_set_str(nt, id, "wname", w);
+  nt_node_set_int(nt, id, "decl", nt_int(nt, model, "decl", -1));
+}
+int nt_new_local_of(NodeTable *nt, const char *type, int model) {
+  int id = nt_new_node(nt, type);
+  if (id < 0) return id;
+  const char *nm = nt_str(nt, model, "name");
+  if (nm) nt_node_set_str(nt, id, "name", nm);
+  nt_local_facts_from(nt, id, model);
+  return id;
+}
+const char *nt_scope_slot_of(const NodeTable *nt, int scope, const char *written) {
+  int n = 0;
+  const char *const *ls = nt_scope_locals(nt, scope, &n);
+  for (int i = 0; i < n; i++) {
+    const char *w = nt_slot_written(nt, ls[i]);
+    if (sp_streq(w ? w : ls[i], written)) return ls[i];
+  }
+  return NULL;
+}
+
+void nt_rekey_scope(NodeTable *nt, int id, int from, int to) {
+  if (id < 0 || id >= nt->count) return;
+  if (id == from) {   /* the scope's own `locals` list, in the written names; it is a frame root now */
+    nt_node_set_int(nt, id, "frame_root", 1);
+    int n = 0;
+    const char *const *ls = nt_scope_locals(nt, id, &n);
+    if (n > 0) {
+      const char **out = malloc((size_t)n * sizeof *out);
+      if (!out) nt_oom();
+      for (int i = 0; i < n; i++) {
+        const char *w = nt_slot_minted(nt, ls[i]) ? nt_slot_written(nt, ls[i]) : NULL;
+        out[i] = w ? w : ls[i];
+      }
+      nt_scope_locals_set(nt, id, out, n);
+      free(out);
+    }
+  }
+  if (nt_int(nt, id, "decl", -1) == from && nt_str(nt, id, "name")) {
+    /* a slot a pass invented for it (a repeated `_a`'s, a reassigned parameter's) is not renamed */
+    const char *nm = nt_str(nt, id, "name"), *w = nt_wname(nt, id);
+    if (nt_slot_minted(nt, nm)) nt_node_set_str(nt, id, "name", w);
+    nt_node_set_int(nt, id, "decl", to);
+  }
+  for (int i = 0; i < nt_num_refs(nt, id); i++) nt_rekey_scope(nt, nt_ref_at(nt, id, i), from, to);
+  for (int i = 0; i < nt_num_arrs(nt, id); i++) {
+    int n = 0; const int *ids = nt_arr_at(nt, id, i, &n);
+    for (int j = 0; j < n; j++) nt_rekey_scope(nt, ids[j], from, to);
+  }
 }
 
 /* A condition's predicate as a constant: 1 always truthy, 0 always falsy,

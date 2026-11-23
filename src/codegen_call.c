@@ -26968,7 +26968,7 @@ static int plain_is_plain_symbol(const NodeTable *nt, int id) {
    `&:name` (`m(&:name)` reaches the table as `m { |_spx| _spx.name }`)? */
 static int plain_recv_is_sym_proc(const NodeTable *nt, int call) {
   int r = nt_ref(nt, call, "receiver");
-  const char *rn = r >= 0 && nt_kind(nt, r) == NK_LocalVariableReadNode ? nt_str(nt, r, "name") : NULL;
+  const char *rn = r >= 0 && nt_kind(nt, r) == NK_LocalVariableReadNode ? nt_wname(nt, r) : NULL;
   return rn && sp_streq(rn, "_spx");
 }
 /* Is the local only ever a `&` parameter: every node of the table that

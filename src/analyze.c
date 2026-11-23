@@ -3825,8 +3825,7 @@ static int te_stmts1(NodeTable *nt, int s);
 static int dyn_parent_copy(NodeTable *nt, int par) {
   NodeKind k = nt_kind(nt, par);
   if (k == NK_LocalVariableReadNode) {
-    int n = nt_new_node(nt, "LocalVariableReadNode");
-    nt_node_set_str(nt, n, "name", nt_str(nt, par, "name"));
+    int n = nt_new_local_of(nt, "LocalVariableReadNode", par);
     nt_node_set_int(nt, n, "depth", nt_int(nt, par, "depth", 0));
     return n;
   }
@@ -4576,95 +4575,6 @@ static int ie_poly_mark(Compiler *c, int id, TyKind rt) {
      takes the non-object arm, and the classes are then a guess. Else self is
      still rebound, to each class or none. */
   return n == 1 && !poly_recv_builtin(c, id) ? k[0] : -2 - id;
-}
-
-/* The names the shadow rename invents (`k__bp12` for a keyword `k`), each with
-   the block it was invented for, in the Compiler's open-addressed table
-   (bp_name, bp_blk, bp_mask, nbp). Only a name recorded there is an
-   invented one: a program can write `k__bp12` itself, and that name is its
-   own. */
-static int bp_rename_slot(const Compiler *c, const char *name) {
-  if (!c->bp_name || !name) return -1;
-  unsigned i = sp_strhash(name) & c->bp_mask;
-  while (c->bp_name[i]) {
-    if (sp_streq(c->bp_name[i], name)) return (int)i;
-    i = (i + 1) & c->bp_mask;
-  }
-  return -1;
-}
-
-static void bp_rename_insert(Compiler *c, char *name, int blk) {
-  unsigned i = sp_strhash(name) & c->bp_mask;
-  while (c->bp_name[i]) i = (i + 1) & c->bp_mask;
-  c->bp_name[i] = name;
-  c->bp_blk[i] = blk;
-}
-
-static void bp_rename_record(Compiler *c, const char *name, int blk) {
-  int s = bp_rename_slot(c, name);
-  if (s >= 0) { c->bp_blk[s] = blk; return; }
-  unsigned ocap = c->bp_name ? c->bp_mask + 1 : 0;
-  if ((unsigned)(c->nbp + 1) * 2 > ocap) {
-    char **on = c->bp_name;
-    int *ob = c->bp_blk;
-    unsigned cap = ocap ? ocap * 2 : 64;
-    c->bp_name = calloc(cap, sizeof(char *));
-    c->bp_blk = calloc(cap, sizeof(int));
-    c->bp_mask = cap - 1;
-    for (unsigned i = 0; i < ocap; i++) if (on[i]) bp_rename_insert(c, on[i], ob[i]);
-    free(on);
-    free(ob);
-  }
-  bp_rename_insert(c, strdup(name), blk);
-  c->nbp++;
-}
-
-int block_param_is_renamed(const Compiler *c, const char *name) {
-  return bp_rename_slot(c, name) >= 0;
-}
-
-/* True when the program itself uses `name`. Only a name with `__bp` or `__bq`
-   in it can clash with an invented one, so those are collected once. */
-static int bp_user_uses(Compiler *c, const char *name) {
-  const NodeTable *nt = c->nt;
-  if (!c->bp_user_built) {
-    c->bp_user_built = 1;
-    int cap = 0;
-    for (int id = 0; id < nt->count; id++) {
-      const char *nm = nt_str(nt, id, "name");
-      if (!nm || (!strstr(nm, "__bp") && !strstr(nm, "__bq")) || block_param_is_renamed(c, nm)) continue;
-      if (c->nbp_user == cap) {
-        cap = cap ? cap * 2 : 8;
-        c->bp_user = realloc(c->bp_user, (size_t)cap * sizeof(char *));
-      }
-      c->bp_user[c->nbp_user++] = strdup(nm);
-    }
-  }
-  for (int i = 0; i < c->nbp_user; i++) if (sp_streq(c->bp_user[i], name)) return 1;
-  return 0;
-}
-
-/* Is `name` one block_param_invent_name made for block `blk`? The record
-   says: it holds each invented name with its block. */
-int block_param_made_for(const Compiler *c, const char *name, int blk) {
-  int s = bp_rename_slot(c, name);
-  return s >= 0 && c->bp_blk[s] == blk;
-}
-
-/* Invent the slot name for the parameter `written` of block `blk` and record
-   it, stepping past a name the program already uses. The caller frees it. */
-char *block_param_invent_name(Compiler *c, const char *written, int blk) {
-  /* `x__bp12` for a program block, `x__bqmin_by_12` for a builtin's */
-  const char *tag = comp_node_tag(c, blk);
-  const char *p = tag[0] == 'q' || tag[0] == 'p' ? "" : "p";
-  size_t n = strlen(written) + strlen(tag) + 32;   /* "__bp", "_<k>" */
-  char *buf = malloc(n);
-  if (!buf) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  snprintf(buf, n, "%s__b%s%s", written, p, tag);
-  for (int k = 1; bp_user_uses(c, buf); k++)
-    snprintf(buf, n, "%s__b%s%s_%d", written, p, tag, k);
-  bp_rename_record(c, buf, blk);
-  return buf;
 }
 
 /* In a call-site KeywordHashNode (`k: 9, j: 2`), the value node bound to the
@@ -5825,15 +5735,11 @@ int register_ie_block_ivars(Compiler *c) {
   return changed;
 }
 
-/* ---- Block/lambda parameter alpha-renaming ----------------------------
- * Block and lambda parameters are interned into the *enclosing* scope, so a
- * parameter sharing a name with an enclosing local collapses onto a single
- * LocalVar (hence one type), corrupting both. Ruby semantics say the two are
- * distinct (the parameter shadows). When the name is also assigned outside the
- * block body -- the case that pollutes the shared type -- rename the parameter
- * and its in-body references to a fresh, collision-free name so they become
- * separate variables. Runs before walk_scope so all downstream interning and
- * codegen see the disambiguated names. */
+/* ---- Block/lambda parameters ------------------------------------------
+ * A block's and lambda's parameters are named by the block that declares them
+ * (`B<n>_<tag>_x`, comp_name_locals), so a parameter that shares a name with an
+ * enclosing local is a slot of its own. blkp_binds_param asks whether a block
+ * or def binds a name as a parameter or a local. */
 
 /* The ParametersNode for a block (BlockParametersNode -> ParametersNode) or a
    lambda (ParametersNode directly). -1 if none / not a plain ParametersNode. */
@@ -5884,49 +5790,6 @@ int blkp_binds_param(Compiler *c, int create, const char *name) {
   for (int a = 0; a < 3; a++)
     if (blkp_param_binds(nt, nt_ref(nt, pn, refs[a]), name)) return 1;
   return 0;
-}
-
-/* Rewrite references to `oldn` -> `newn`, stopping at nested defs/classes and
-   at nested blocks/lambdas that re-bind `oldn`. */
-void blkp_rewrite_refs(Compiler *c, int node, const char *oldn, const char *newn) {
-  if (node < 0) return;
-  const NodeTable *nt = c->nt;
-  const char *ty = nt_type(nt, node);
-  NodeKind ty_k = nt_kind(nt, node);
-  if (!ty) return;
-  /* a def's receiver (`def x.m`) is read in the enclosing scope; the rest of
-     a def, and a class or module body, is a scope of its own */
-  if (ty_k == NK_DefNode) { blkp_rewrite_refs(c, nt_ref(nt, node, "receiver"), oldn, newn); return; }
-  if (ty_k == NK_ClassNode || ty_k == NK_ModuleNode) return;
-  if ((ty_k == NK_BlockNode || ty_k == NK_LambdaNode) && blkp_binds_param(c, node, oldn)) return;
-  if (a_is_local_node(ty)) {
-    const char *nm = nt_str(nt, node, "name");
-    if (nm && sp_streq(nm, oldn)) nt_rename_local((NodeTable *)nt, node, newn);
-  }
-  int nr = nt_num_refs(nt, node);
-  for (int i = 0; i < nr; i++) blkp_rewrite_refs(c, nt_ref_at(nt, node, i), oldn, newn);
-  int na = nt_num_arrs(nt, node);
-  for (int i = 0; i < na; i++) { int n = 0; const int *ids = nt_arr_at(nt, node, i, &n); for (int k = 0; k < n; k++) blkp_rewrite_refs(c, ids[k], oldn, newn); }
-}
-
-void blkp_mark_subtree(const NodeTable *nt, int node, char *marks) {
-  if (node < 0) return;
-  marks[node] = 1;
-  int nr = nt_num_refs(nt, node);
-  for (int i = 0; i < nr; i++) blkp_mark_subtree(nt, nt_ref_at(nt, node, i), marks);
-  int na = nt_num_arrs(nt, node);
-  for (int i = 0; i < na; i++) { int n = 0; const int *ids = nt_arr_at(nt, node, i, &n); for (int k = 0; k < n; k++) blkp_mark_subtree(nt, ids[k], marks); }
-}
-/* Generation-stamping variant: writes `gen` instead of 1, so the membership
-   array can be reused across blocks without an O(n) memset per block (a node is
-   "in body" iff stamp[node] == gen). */
-static void blkp_stamp_subtree(const NodeTable *nt, int node, int *stamp, int gen) {
-  if (node < 0) return;
-  stamp[node] = gen;
-  int nr = nt_num_refs(nt, node);
-  for (int i = 0; i < nr; i++) blkp_stamp_subtree(nt, nt_ref_at(nt, node, i), stamp, gen);
-  int na = nt_num_arrs(nt, node);
-  for (int i = 0; i < na; i++) { int n = 0; const int *ids = nt_arr_at(nt, node, i, &n); for (int k = 0; k < n; k++) blkp_stamp_subtree(nt, ids[k], stamp, gen); }
 }
 
 /* ---- Colliding nested-constant qualification --------------------------
@@ -7530,112 +7393,6 @@ void qualify_colliding_reads(Compiler *c) {
   elab_prov_free_leaves();
 }
 
-/* True if `name` is used as a local write or block parameter OUTSIDE the given
-   block body (stamp `gen`) -- i.e. a block-local of that name would shadow a
-   real enclosing use, so it must be split into its own slot. */
-/* Name index over the write/param node set. The collision checks below ask
-   "is this name used outside the block body?", and scanning every write and
-   parameter node per block parameter was O(blocks * params * n) -- 12.7% of a
-   37k-line compile. Bucketing by name makes each check touch only the nodes
-   that actually carry it. A rename during the pass changes node names, so the
-   index is rebuilt lazily when that happens (renames are the exception). */
-typedef struct { const Compiler *c; const int *wp; int wpn; int *head; int *next; unsigned mask; } BlkpIdx;
-
-static void blkp_idx_build(BlkpIdx *ix, const NodeTable *nt) {
-  for (unsigned b = 0; b <= ix->mask; b++) ix->head[b] = -1;
-  for (int i = 0; i < ix->wpn; i++) {
-    const char *nm = nt_str(nt, ix->wp[i], "name");
-    if (!nm) { ix->next[i] = -1; continue; }
-    unsigned b = sp_strhash(nm) & ix->mask;
-    ix->next[i] = ix->head[b];
-    ix->head[b] = i;
-  }
-}
-static int blkp_idx_init(BlkpIdx *ix, const Compiler *c, const int *wp, int wpn) {
-  const NodeTable *nt = c->nt;
-  unsigned nb = 16;
-  while (nb < (unsigned)wpn * 2u && nb < (1u << 22)) nb <<= 1;
-  ix->c = c; ix->wp = wp; ix->wpn = wpn; ix->mask = nb - 1;
-  ix->head = malloc((size_t)nb * sizeof(int));
-  ix->next = malloc((size_t)(wpn > 0 ? wpn : 1) * sizeof(int));
-  if (!ix->head || !ix->next) { free(ix->head); free(ix->next); ix->head = ix->next = NULL; return 0; }
-  blkp_idx_build(ix, nt);
-  return 1;
-}
-static void blkp_idx_free(BlkpIdx *ix) { free(ix->head); free(ix->next); ix->head = ix->next = NULL; }
-/* Scan the wp entries bucketed under `name`. The index is built ONCE and never
-   rebuilt: a rename only ever moves a node from its source name to an invented
-   `x__bpN`, and callers re-read and compare the name, so an entry left in a
-   stale bucket is simply rejected. The one shape that could MISS an entry is a
-   query for an invented name, which falls back to scanning every entry. */
-typedef struct { const BlkpIdx *ix; int all; int i; } BlkpScan;
-
-static BlkpScan blkp_scan(const BlkpIdx *ix, const char *name) {
-  BlkpScan sc;
-  sc.ix = ix;
-  sc.all = block_param_is_renamed(ix->c, name);
-  sc.i = sc.all ? 0 : ix->head[sp_strhash(name) & ix->mask];
-  return sc;
-}
-static int blkp_scan_next(BlkpScan *sc, int *out) {
-  if (sc->all) {
-    if (sc->i >= sc->ix->wpn) return 0;
-    *out = sc->ix->wp[sc->i++];
-    return 1;
-  }
-  if (sc->i < 0) return 0;
-  *out = sc->ix->wp[sc->i];
-  sc->i = sc->ix->next[sc->i];
-  return 1;
-}
-
-static int name_written_outside(const NodeTable *nt, const char *name,
-                                BlkpIdx *ix, const int *inbody, int gen) {
-  BlkpScan sc = blkp_scan(ix, name);
-  int w;
-  while (blkp_scan_next(&sc, &w)) {
-    if (inbody[w] == gen) continue;
-    const char *wn = nt_str(nt, w, "name");
-    if (wn && sp_streq(wn, name)) return 1;
-  }
-  return 0;
-}
-
-/* Rename any block-local (`; x`) whose name collides with a local used outside
-   the block body so the shadow becomes a distinct slot, mirroring the block
-   parameter rename below. The declaration is in the block's `locals`, where
-   the rename is written in lock-step with the declaration's own node, so
-   emit_block_locals_reset nils the renamed slot rather than the enclosing
-   one. */
-static void rename_shadowing_block_locals(Compiler *c, int L, int pn, int body,
-                                          const int *inbody, int gen,
-                                          BlkpIdx *ix) {
-  NodeTable *nt = (NodeTable *)c->nt;
-  int n = 0;
-  const char *const *ls = nt_scope_locals(nt, L, &n);
-  if (n == 0) return;
-  const char **out = malloc((size_t)n * sizeof *out);
-  char **made = calloc((size_t)n, sizeof *made);
-  if (!out || !made) { free(out); free(made); return; }
-  int changed = 0;
-  for (int i = 0; i < n; i++) {
-    out[i] = ls[i];
-    if (!nt_param_binds(nt, pn, ls[i]) && !block_param_made_for(c, ls[i], L) &&
-        name_written_outside(nt, ls[i], ix, inbody, gen)) {
-      made[i] = block_param_invent_name(c, ls[i], L);
-      blkp_rewrite_refs(c, body, ls[i], made[i]);
-      int decl = nt_block_local_node(nt, L, ls[i]);
-      if (decl >= 0) nt_rename_local(nt, decl, made[i]);
-      out[i] = made[i];
-      changed = 1;
-    }
-  }
-  if (changed) nt_scope_locals_set(nt, L, out, n);
-  for (int i = 0; i < n; i++) free(made[i]);
-  free(made);
-  free(out);
-}
-
 /* A native class's own methods, called on an implicit self from a method the
    program adds by reopening the class. The native surface is dispatched
    through the receiver, and an implicit self has no receiver node at all, so
@@ -7861,154 +7618,6 @@ static int give_self_predicates_a_receiver(Compiler *c) {
   return changed;
 }
 
-/* Give each block its own numbered parameters, where a scope holds more than
-   one block that uses them.
-
-   `_1` .. `_9` (and `it`, which the parser lowers to `_1`) are names spinel
-   synthesizes rather than names the author wrote, and blocks share their
-   enclosing scope's local table -- so two such blocks in one method interned
-   the SAME slot and their types merged. A scope with one of them gets
-   `sp_int lv__1`; add a second over strings and both become a boxed
-   `sp_RbVal`. Values stayed right (each block writes the slot before reading
-   it), so what this costs is the type. It also left two passes typing that one
-   slot from different call shapes on every round, which is the last program in
-   the suite whose inference fixpoint ran to its cap (#4116).
-
-   Only where the names actually collide, which is what rename_shadowing_block_params
-   does for a named parameter and for the same reason: a scope with a single
-   numbered-param block is already correct, and renaming it would churn the
-   emitted identifier for nothing.
-
-   The rewrite is textual on the AST, like that pass: the body's reads are
-   rewritten, the block's comma-joined `locals` string with them, and the
-   generated name is recorded on the NumberedParametersNode where
-   numbered_param_name reads it back. The node keeps its shape, so every pass
-   that recognises a numbered-param block still does.
-
-   A nested block with its own numbered parameters is a SyntaxError in CRuby
-   ("numbered parameter is already used in outer block"), so the walk stops at
-   one rather than guessing which block a name belongs to. */
-static int numbered_params_node_of(Compiler *c, int L) {
-  const NodeTable *nt = c->nt;
-  NodeKind k = nt_kind(nt, L);
-  if (k != NK_BlockNode && k != NK_LambdaNode) return -1;
-  int bp = nt_ref(nt, L, "parameters");
-  if (bp < 0) return -1;
-  NodeKind bpk = nt_kind(nt, bp);
-  return (bpk == NK_NumberedParametersNode) ? bp : -1;
-}
-
-static void numbered_rename_reads(NodeTable *nt, int id, const char *from,
-                                  const char *to, int depth) {
-  if (id < 0 || id >= nt->count || depth > 200) return;
-  const char *ty = nt_type(nt, id);
-  NodeKind k = nt_kind(nt, id);
-  if (!ty) return;
-  if (k == NK_BlockNode || k == NK_LambdaNode) {
-    int bp = nt_ref(nt, id, "parameters");
-    NodeKind bpk = nt_kind(nt, bp);
-    if (bpk == NK_NumberedParametersNode) return;   /* binds it itself */
-  }
-  if (k == NK_LocalVariableReadNode || k == NK_LocalVariableWriteNode ||
-      k == NK_LocalVariableTargetNode || k == NK_LocalVariableOperatorWriteNode ||
-      k == NK_LocalVariableOrWriteNode || k == NK_LocalVariableAndWriteNode) {
-    const char *nm = nt_str(nt, id, "name");
-    if (nm && sp_streq(nm, from)) nt_set_str(nt, id, "name", to);
-  }
-  const SpNode *nd = &nt->nodes[id];
-  for (int i = 0; i < nd->nr; i++) numbered_rename_reads(nt, nd->r[i].ref, from, to, depth + 1);
-  for (int i = 0; i < nd->na; i++)
-    for (int j = 0; j < nd->a[i].n; j++)
-      numbered_rename_reads(nt, nd->a[i].ids[j], from, to, depth + 1);
-}
-
-/* Replace `from` with `to` in a block's `locals`.
-   emit_block_locals_reset nils every name in it that is not a parameter, so a
-   stale entry there nils the renamed slot right after the bind, once per
-   iteration, and the body reads nil. */
-void numbered_rename_locals_str(NodeTable *nt, int L, const char *from, const char *to) {
-  int n = 0;
-  const char *const *ls = nt_scope_locals(nt, L, &n);
-  if (n == 0) return;
-  const char **out = malloc((size_t)n * sizeof *out);
-  if (!out) return;
-  for (int i = 0; i < n; i++) out[i] = sp_streq(ls[i], from) ? to : ls[i];
-  nt_scope_locals_set(nt, L, out, n);
-  free(out);
-}
-
-int scope_numbered_block_params_at(Compiler *c, LowerCtx *lc, int id) {
-  NodeTable *nt = (NodeTable *)c->nt;
-  int n0 = nt->count;
-  /* how many numbered-param blocks each scope holds */
-  int *per_scope = (int *)calloc((size_t)(c->nscopes > 0 ? c->nscopes : 1), sizeof(int));
-  if (!per_scope) return 0;
-  for (int L = 0; L < n0; L++) {
-    if (numbered_params_node_of(c, L) < 0) continue;
-    int sc = c->nscope[L];
-    if (sc >= 0 && sc < c->nscopes) per_scope[sc]++;
-  }
-  for (int L = 0; L < n0; L++) {
-    int bp = numbered_params_node_of(c, L);
-    if (bp < 0) continue;
-    int sc = c->nscope[L];
-    if (sc < 0 || sc >= c->nscopes || per_scope[sc] < 2) continue;   /* no collision */
-    int maxn = (int)nt_int(nt, bp, "maximum", 0);
-    if (maxn <= 0 || maxn > 9) continue;
-    int body = nt_ref(nt, L, "body");
-    for (int k = 1; k <= maxn; k++) {
-      char from[8], to[64], key[8];
-      snprintf(from, sizeof from, "_%d", k);
-      snprintf(to, sizeof to, "_%d__b%s", k, comp_node_tag(c, L));
-      snprintf(key, sizeof key, "n%d", k);
-      if (body >= 0) numbered_rename_reads(nt, body, from, to, 0);
-      numbered_rename_locals_str(nt, L, from, to);
-      /* nt_node_set_str, not nt_set_str: the latter only UPDATES a key the node
-         already carries and silently drops a new one. */
-      nt_node_set_str(nt, bp, key, to);
-    }
-  }
-  free(per_scope);  return 0;
-}
-
-/* Every parameter kind that binds a name: a block parameter or block-local
-   shadowing any of them needs its own slot, not just a shadowed required
-   parameter. Counting only RequiredParameterNode left `def m(q = 7)` with a
-   `|x; q|` block writing the method's q, and `*q` / `**q` / `&q` sharing the
-   C slot with a different C type, which did not compile. */
-static int is_name_binding_param(const char *ty) {
-  return ty && (sp_streq(ty, "RequiredParameterNode") ||
-                sp_streq(ty, "OptionalParameterNode") ||
-                sp_streq(ty, "RestParameterNode") ||
-                sp_streq(ty, "RequiredKeywordParameterNode") ||
-                sp_streq(ty, "OptionalKeywordParameterNode") ||
-                sp_streq(ty, "KeywordRestParameterNode") ||
-                sp_streq(ty, "BlockParameterNode"));
-}
-
-/* The names a destructuring parameter (`|(a, (b, *c))|`) binds: the
-   RequiredParameterNode leaves under its MultiTargetNode / SplatNode. */
-static void blkp_collect_destructured(const NodeTable *nt, int id, int *out, int *n, int cap) {
-  const char *ty = id >= 0 ? nt_type(nt, id) : NULL;
-  NodeKind ty_k = nt_kind(nt, id);
-  if (!ty) return;
-  if (ty_k == NK_RequiredParameterNode) {
-    if (*n < cap && nt_str(nt, id, "name")) out[(*n)++] = id;
-    return;
-  }
-  if (ty_k == NK_SplatNode) {
-    blkp_collect_destructured(nt, nt_ref(nt, id, "expression"), out, n, cap);
-    return;
-  }
-  if (ty_k != NK_MultiTargetNode) return;
-  static const char *const parts[] = { "lefts", "rights" };
-  for (int k = 0; k < 2; k++) {
-    int m = 0; const int *ids = nt_arr(nt, id, parts[k], &m);
-    for (int i = 0; i < m; i++) blkp_collect_destructured(nt, ids[i], out, n, cap);
-  }
-  blkp_collect_destructured(nt, nt_ref(nt, id, "rest"), out, n, cap);
-}
-
 /* A block's or lambda's anonymous `**` takes every keyword no named one
    does, as a `**kw` would; named after its block, it is one to every binder
    that builds a keyword-rest and skips the unknown-keyword check for it. */
@@ -8034,220 +7643,6 @@ int name_anon_block_kwrest_at(Compiler *c, LowerCtx *lc, int id) {
   nt_node_set_str(nt, kr, "name", nm);
   nt_node_set_int(nt, kr, "desugared_param", DPN_WRITTEN);
   return 1;
-}
-
-/* What the pass knows of the program: each block's owning call (the node
-   whose "block" ref it is), a generation stamp per node for "inside this
-   block's body", and the program's local writes and parameters indexed by
-   name, all over the nodes [0, upto). blkp_step_extend takes in the nodes
-   made since, so the walk's spans (rename_shadowing_block_params_span) ask
-   the program without rebuilding it per splice. */
-typedef struct BlkpStep {
-  int *owner, *inbody, *wp;
-  int wpn, cap, upto, gen;
-  BlkpIdx ix;
-} BlkpStep;
-
-static void blkp_step_extend(Compiler *c, BlkpStep *st) {
-  const NodeTable *nt = c->nt;
-  int n = nt->count, from = st->upto;
-  if (n <= from) return;
-  st->owner = realloc(st->owner, (size_t)n * sizeof(int));
-  st->inbody = realloc(st->inbody, (size_t)n * sizeof(int));
-  st->wp = realloc(st->wp, (size_t)n * sizeof(int));
-  if (!st->owner || !st->inbody || !st->wp) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  for (int i = from; i < n; i++) { st->owner[i] = -1; st->inbody[i] = 0; }
-  /* Reverse map block-node -> owning node, built in one O(n) pass. Finding
-     a block's owner by scanning all n nodes per block made this whole pass
-     O(blocks*n) on large inputs (a flattened runtime is ~500k nodes). */
-  for (int id = from; id < n; id++) {
-    int b = nt_ref(nt, id, "block");
-    if (b >= 0 && b < n) st->owner[b] = id;
-  }
-  /* All local-variable-write and parameter nodes, collected once; the
-     per-param collision scan iterates this set rather than all n nodes (it
-     re-reads each name fresh, so a rename made earlier in this pass is still
-     reflected). */
-  int wp0 = st->wpn;
-  for (int w = from; w < n; w++) {
-    const char *wty = nt_type(nt, w);
-    if (a_is_write_node(wty) || is_name_binding_param(wty)) st->wp[st->wpn++] = w;
-  }
-  st->upto = n;
-  if (!st->ix.head) {
-    if (!blkp_idx_init(&st->ix, c, st->wp, st->wpn)) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-    return;
-  }
-  st->ix.wp = st->wp;
-  st->ix.next = realloc(st->ix.next, (size_t)(st->wpn > 0 ? st->wpn : 1) * sizeof(int));
-  if (!st->ix.next) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  for (int i = wp0; i < st->wpn; i++) {
-    const char *nm = nt_str(nt, st->wp[i], "name");
-    unsigned b = nm ? sp_strhash(nm) & st->ix.mask : 0;
-    st->ix.next[i] = nm ? st->ix.head[b] : -1;
-    if (nm) st->ix.head[b] = i;
-  }
-  st->ix.wpn = st->wpn;
-}
-
-void blkp_step_free(BlkpStep *st) {
-  if (!st) return;
-  blkp_idx_free(&st->ix);
-  free(st->owner); free(st->inbody); free(st->wp); free(st);
-}
-
-static void blkp_rename_blocks(Compiler *c, BlkpStep *st, const int *ids, int nids);
-
-int rename_shadowing_block_params_at(Compiler *c, LowerCtx *lc, int id) {
-  BlkpStep *st = calloc(1, sizeof *st);
-  if (!st) return 0;
-  blkp_step_extend(c, st);
-  blkp_rename_blocks(c, st, NULL, st->upto);
-  blkp_step_free(st);
-  return 0;
-}
-
-/* The same over the blocks of a span of the walk's (lower_span), as it is
-   spliced: a parameter that collides is renamed before the walk registers
-   it (a define_method block's are the method's). The program's names are
-   kept for the step (LowerCtx.blkp) and take in each span's nodes. */
-int rename_shadowing_block_params_span(Compiler *c, LowerCtx *lc, int id) {
-  if (!lc->blkp && !(lc->blkp = calloc(1, sizeof *lc->blkp))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  blkp_step_extend(c, lc->blkp);
-  int n = 0, *ids = lower_span_ids(lc, &n);
-  blkp_rename_blocks(c, lc->blkp, ids, n);
-  free(ids);
-  return 0;
-}
-
-/* The blocks among ids[0..nids) (NULL: the nodes [0, nids)) */
-static void blkp_rename_blocks(Compiler *c, BlkpStep *st, const int *ids, int nids) {
-  const NodeTable *nt = c->nt;
-  int *owner = st->owner, *inbody = st->inbody;
-  BlkpIdx ix = st->ix;
-  for (int q = 0; q < nids; q++) {
-    int L = ids ? ids[q] : q;
-    if (L >= st->upto) continue;
-    const char *ty = nt_type(nt, L);
-    NodeKind k = nt_kind(nt, L);
-    if (!ty) continue;
-    int is_lambda = k == NK_LambdaNode;
-    if (!is_lambda && k != NK_BlockNode) continue;
-    /* renameable: a lambda, or a block owned by a named call -- resolved in
-       O(1) through the owner index. */
-    if (!is_lambda) {
-      int o = owner[L];
-      if (o < 0 || nt_str(nt, o, "name") == NULL) continue;
-    }
-    int pn = blkp_params_node(c, L);
-    NodeKind pk = nt_kind(nt, pn);
-    /* Numbered parameters are renamed by scope_numbered_block_params, which
-       runs just before this and keys on the NumberedParametersNode; this pass
-       only ever sees an ordinary ParametersNode -- or no parameters at all,
-       for a block whose only names are its body's own locals. */
-    if (pn >= 0 && (pk != NK_ParametersNode)) continue;
-    int rn = 0; const int *reqs = pn >= 0 ? nt_arr(nt, pn, "requireds", &rn) : NULL;
-    /* rest / post parameters shadow-rename the same way as the requireds: a
-       rest param sharing an outer local's name shares its C slot, so the
-       rest-packing assignment aliases the outer variable (a sole-rest block
-       whose name matches the inlined method's own param read garbage). */
-    int extras[129]; int ne = 0;
-    if (pn >= 0) {
-      int rref = nt_ref(nt, pn, "rest");
-      if (rref >= 0 && nt_kind(nt, rref) == NK_RestParameterNode &&
-          nt_str(nt, rref, "name")) extras[ne++] = rref;
-      int pon = 0; const int *posts = nt_arr(nt, pn, "posts", &pon);
-      for (int q = 0; q < pon; q++) blkp_collect_destructured(nt, posts[q], extras, &ne, 128);
-      /* a destructured required (`|(b, j)|`) binds its leaves like any other */
-      for (int q = 0; q < rn; q++)
-        if (reqs[q] >= 0 && nt_kind(nt, reqs[q]) == NK_MultiTargetNode)
-          blkp_collect_destructured(nt, reqs[q], extras, &ne, 128);
-      int oon = 0; const int *opts = nt_arr(nt, pn, "optionals", &oon);
-      for (int q = 0; q < oon && ne < 128; q++)
-        if (opts[q] >= 0 &&
-            nt_kind(nt, opts[q]) == NK_OptionalParameterNode &&
-            nt_str(nt, opts[q], "name")) extras[ne++] = opts[q];
-      int kwn = 0; const int *kws = nt_arr(nt, pn, "keywords", &kwn);
-      for (int q = 0; q < kwn && ne < 128; q++)
-        if (kws[q] >= 0 && is_name_binding_param(nt_type(nt, kws[q])) &&
-            nt_str(nt, kws[q], "name")) extras[ne++] = kws[q];
-      int kwr = nt_ref(nt, pn, "keyword_rest");
-      if (kwr >= 0 && ne < 128 &&
-          nt_kind(nt, kwr) == NK_KeywordRestParameterNode &&
-          nt_str(nt, kwr, "name")) extras[ne++] = kwr;
-      int bpr = nt_ref(nt, pn, "block");
-      if (bpr >= 0 && ne < 128 && nt_str(nt, bpr, "name")) extras[ne++] = bpr;
-    }
-    /* block-locals (`; a, b`) are in the BlockNode's `locals` with its
-       parameters; a block may carry them with no required params
-       (`{ |; x| ... }`), and the parser lists a body's own locals there
-       too: a name first assigned inside the block, which Ruby scopes to the block even when the
-       enclosing scope assigns the same name further down. A paramless block
-       (`Thread.new do ... end`) was skipped here, so its local shared the
-       enclosing slot with that later assignment -- one cell for every thread
-       (found under #4528). */
-    int nlocs = 0;
-    nt_scope_locals(nt, L, &nlocs);
-    int have_locals = nlocs > 0;
-    if (rn == 0 && ne == 0 && !have_locals) continue;
-    /* An EMPTY body (`tap do |a| end`) still binds the parameter, so it still
-       collides: skipping it left the two names sharing one C slot, and the
-       slot took the inner block's type while the outer block assigned its own
-       (#4027). There is simply nothing inside to rewrite -- both helpers below
-       take a negative body as the empty subtree it is. */
-    int body = nt_ref(nt, L, "body");
-    int gen = ++st->gen;
-    blkp_stamp_subtree(nt, body, inbody, gen);
-    for (int ii = 0; ii < rn + ne; ii++) {
-      int pnode = ii < rn ? reqs[ii] : extras[ii - rn];
-      const char *p = nt_str(nt, pnode, "name");
-      if (!p) continue;
-      /* a parameter this block has already been given a slot name for keeps it */
-      if (block_param_made_for(c, p, L)) continue;
-      /* collision: the name is used outside this block's body -- as a local
-         write/read or as another block's parameter (param-vs-param, e.g. two
-         inject folds sharing `|a, b|` with different element types). Both pollute
-         the shared LocalVar's type. */
-      int collide = 0;
-      BlkpScan sc = blkp_scan(&ix, p);
-      int w;
-      while (!collide && blkp_scan_next(&sc, &w)) {
-        if (inbody[w] == gen) continue;
-        const char *wty = nt_type(nt, w);
-        int is_param_node = is_name_binding_param(wty);
-        /* don't let this block's own parameter nodes count as a collision */
-        if (is_param_node) {
-          int own = 0;
-          for (int q = 0; q < rn; q++) if (reqs[q] == w) { own = 1; break; }
-          for (int q = 0; q < ne && !own; q++) if (extras[q] == w) own = 1;
-          if (own) continue;
-        }
-        const char *wn = nt_str(nt, w, "name");
-        if (wn && sp_streq(wn, p)) collide = 1;
-      }
-      if (!collide) continue;
-      char *oldn = strdup(p);   /* copy: the rename frees p's storage */
-      if (!oldn) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-      char *newn = block_param_invent_name(c, oldn, L);
-      /* `Proc#parameters` reports the name the program wrote. A name that
-         appears nowhere else is not in the generated symbol table, so
-         interning it at emit time came too late and it rendered as the empty
-         symbol (#4045). Put it in the table here, while the table is still
-         open: the name written, when `oldn` is the slot of a parameter the
-         body assigns. */
-      { const char *rw = rbp_slot_written(c, nt_wname(nt, pnode));
-        comp_sym_intern(c, rw ? rw : oldn); }
-      nt_rename_local((NodeTable *)nt, pnode, newn);
-      blkp_rewrite_refs(c, body, oldn, newn);
-      /* an optional's default expression can reference a renamed sibling
-         param (`|a, b=a|`); those reads live under the ParametersNode, not
-         the body, so rewrite there too */
-      blkp_rewrite_refs(c, pn, oldn, newn);
-      free(oldn); free(newn);
-    }
-    if (have_locals)
-      rename_shadowing_block_locals(c, L, pn, body, inbody, gen, &ix);
-  }
 }
 
 /* ---- --rbs advisory type seeds ----
@@ -9771,9 +9166,10 @@ int desugar_enumerator_produce_at(Compiler *c, LowerCtx *lc, int id) {
       if (!pk) break;
       int idxc = te_call(nt, te_lvread(nt, "__pv"), "[]", te_args1(nt, nt_new_int(nt, k)), -1);
       loopbodyarr[nlb++] = te_lvwrite(nt, pk, idxc);
+      nt_decl_in(nt, loopbodyarr[nlb - 1], blk);   /* the block's own parameter */
     }
   }
-  else loopbodyarr[nlb++] = te_lvwrite(nt, pname, te_lvread(nt, "__pv"));
+  else { loopbodyarr[nlb++] = te_lvwrite(nt, pname, te_lvread(nt, "__pv")); nt_decl_in(nt, loopbodyarr[nlb - 1], blk); }
   int beginn = nt_new_node(nt, "BeginNode"); nt_node_set_ref(nt, beginn, "statements", bbody);
   int pv_w2 = te_lvwrite(nt, "__pv", beginn);
   loopbodyarr[nlb++] = pv_w2;
@@ -11787,7 +11183,7 @@ static int bam_split_user_method(Compiler *c, int id, int recv, const char *sym)
   if (!nown) return 0;
   int base = nt->count;
 #define BSU_RECV() (rk == NK_SelfNode ? nt_new_node(nt, "SelfNode") : \
-                    (bsu_t = nt_new_node(nt, "LocalVariableReadNode"), nt_node_set_str(nt, bsu_t, "name", nt_str(nt, recv, "name")), \
+                    (bsu_t = nt_new_local_of(nt, "LocalVariableReadNode", recv), \
                      nt_node_set_int(nt, bsu_t, "depth", nt_int(nt, recv, "depth", 0)), bsu_t))
   int bsu_t, cond = -1;
   for (int i = 0; i < nown; i++) {
@@ -16269,7 +15665,10 @@ static int desugar_for_enumerable(Compiler *c) {
         (stmts < 0 || nt_kind(nt, stmts) == NK_StatementsNode)) {
       int n1 = nt->count;
       const char *xn = nt_str(nt, idxn, "name");
-      int wr = te_lvwrite(nt, xn, te_call(nt, te_lvread(nt, xn), "[]", te_args1(nt, nt_new_int(nt, 0)), -1));
+      int xr = te_lvread(nt, xn);
+      nt_local_facts_from(nt, xr, idxn);   /* the loop variable read and written is the one the `for` names */
+      int wr = te_lvwrite(nt, xn, te_call(nt, xr, "[]", te_args1(nt, nt_new_int(nt, 0)), -1));
+      nt_local_facts_from(nt, wr, idxn);
       int bn = 0; const int *bb = stmts >= 0 ? nt_arr(nt, stmts, "body", &bn) : NULL;
       int *nb = malloc(sizeof(int) * (size_t)(bn + 1));
       if (!nb) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
@@ -16344,6 +15743,7 @@ static int desugar_ewi_pack_values(Compiler *c) {
     int nreq = 0; const int *reqs = nt_arr(nt, pn, "requireds", &nreq);
     if (nreq != 1 || nt_kind(nt, reqs[0]) != NK_RequiredParameterNode || nt_ref(nt, pn, "rest") >= 0) continue;
     const char *pnm = nt_str(nt, reqs[0], "name");
+    int p0 = reqs[0];   /* (reqs is the table's array, which the parameter list below replaces) */
     int body = nt_ref(nt, blk, "body");
     if (!pnm || body < 0 || nt_kind(nt, body) != NK_StatementsNode) continue;
     int bn = 0; const int *bb = nt_arr(nt, body, "body", &bn);
@@ -16365,6 +15765,7 @@ static int desugar_ewi_pack_values(Compiler *c) {
     nt_node_set_ref(nt, iff, "subsequent", els);
     int nb[64];
     nb[0] = te_lvwrite(nt, pnm, iff);
+    nt_local_facts_from(nt, nb[0], p0);   /* the block's parameter, written from its values */
     for (int q = 0; q < bn; q++) nb[q + 1] = bb[q];
     nt_node_set_arr(nt, body, "body", nb, bn + 1);
     nt_node_set_int(nt, blk, "ewi_packed", 1);
@@ -16439,25 +15840,31 @@ static int desugar_multi_yield_map_param(Compiler *c) {
     if (bn + 1 > 64) continue;
     int n1 = nt->count;
     /* `x = x[0]`, `a = a[0]`, or `x = x.empty? ? d : x[0]` */
-    int val = te_call(nt, te_lvread(nt, pnm), "[]", te_args1(nt, nt_new_int(nt, 0)), -1);
+    int pr0 = te_lvread(nt, pnm);
+    nt_local_facts_from(nt, pr0, p0);
+    int val = te_call(nt, pr0, "[]", te_args1(nt, nt_new_int(nt, 0)), -1);
     if (nt_kind(nt, p0) == NK_OptionalParameterNode) {
       int dflt = nt_ref(nt, p0, "value");
       if (dflt < 0) continue;
       int els = nt_new_node(nt, "ElseNode");
       nt_node_set_ref(nt, els, "statements", te_stmts1(nt, val));
       int iff = nt_new_node(nt, "IfNode");
-      nt_node_set_ref(nt, iff, "predicate", te_call(nt, te_lvread(nt, pnm), "empty?", -1, -1));
+      int pr1 = te_lvread(nt, pnm);
+      nt_local_facts_from(nt, pr1, p0);
+      nt_node_set_ref(nt, iff, "predicate", te_call(nt, pr1, "empty?", -1, -1));
       nt_node_set_ref(nt, iff, "statements", te_stmts1(nt, dflt));
       nt_node_set_ref(nt, iff, "subsequent", els);
       val = iff;
       /* the element is always there: the default moves into the body */
       int req = nt_new_node(nt, "RequiredParameterNode");
       nt_node_set_str(nt, req, "name", pnm);
+      nt_local_facts_from(nt, req, p0);
       nt_node_set_arr(nt, pn, "requireds", &req, 1);
       nt_node_set_arr(nt, pn, "optionals", NULL, 0);
     }
     int wr = nt_new_node(nt, "LocalVariableWriteNode");
     nt_node_set_str(nt, wr, "name", pnm);
+    nt_local_facts_from(nt, wr, p0);
     nt_node_set_ref(nt, wr, "value", val);
     nt_node_set_int(nt, wr, "map_first", 1);
     { int nb[64];
@@ -45696,8 +45103,7 @@ static int desugar_splat_view_scalars(Compiler *c) {
     if (!scalar && t != TY_NIL) continue;
     int el = -1;
     if (scalar) {
-      el = nt_new_node(nt, "LocalVariableReadNode");
-      nt_node_set_str(nt, el, "name", nt_str(nt, id, "name"));
+      el = nt_new_local_of(nt, "LocalVariableReadNode", id);
       nt_node_set_int(nt, el, "depth", nt_int(nt, id, "depth", 0));
     }
     nt_node_set_type(nt, id, "ArrayNode");
@@ -50967,7 +50373,7 @@ int desugar_itself_receiver_at(Compiler *c, LowerCtx *lc, int id) {
   long long depth = nt_int(nt, r, "depth", 0);
   nt_node_reset(nt, id, rk == NK_LocalVariableReadNode ? "LocalVariableReadNode" : "InstanceVariableReadNode");
   nt_node_set_str(nt, id, "name", vn);
-  if (rk == NK_LocalVariableReadNode) nt_node_set_int(nt, id, "depth", depth);
+  if (rk == NK_LocalVariableReadNode) { nt_node_set_int(nt, id, "depth", depth); nt_local_facts_from(nt, id, r); }
   nt_node_set_int(nt, id, "node_line", line);
   nt_node_set_int(nt, id, "node_file", file);
   return 1;
@@ -51605,7 +51011,7 @@ static void an_phase_desugar_register(Compiler *c) {
   AN_STEP_V("desugar_inherited_aliases", desugar_inherited_aliases(c));         /* alias_method :next, :builtin_m on a chain rooted at Array, Hash or String -> a forwarding def, until such an alias binds from the record */
   lower_run(c, &lc, LW_BODY_INHERITED_ALIAS);      /* ...and as a row, for an alias the walk splices into a body */
   AN_STEP_V("desugar_readers_over_inherited_defs", desugar_readers_over_inherited_defs(c)); /* def r in Base; attr_reader :r in Sub < Base -> Sub: def r = @r */
-  lower_run(c, &lc, LW_REASSIGNED_BLOCK_PARAMS);   /* |p| p = other -> |p__bpin| p = p__bpin; p = other */
+  lower_run(c, &lc, LW_REASSIGNED_BLOCK_PARAMS);   /* |p| p = other -> |P_<slot>| p = P_<slot>; p = other */
   AN_STEP_V("desugar_sclass_hooks", desugar_sclass_hooks(c));                 /* class << self; def extended(b) -> def self.extended(b) */
   AN_STEP_V("desugar_instance_eval_defs", desugar_instance_eval_defs(c));         /* K.instance_eval { def m } -> K.class_eval { def K.m } */
   AN_STEP_V("desugar_self_class_eval_blocks", desugar_self_class_eval_blocks(c));   /* class_eval { tag n } in def self.m -> self.instance_exec { tag n } */
@@ -51685,14 +51091,12 @@ static void an_phase_desugar_register(Compiler *c) {
   AN_STEP_V("desugar_builtin_scalar_defs", desugar_builtin_scalar_defs(c));
   prog_settle_files(c);                  /* (--load-model=graph: a file no live require reaches is dropped; one a nested require places is placed) */
   prog_refuse_order(c);                  /* (--load-model=graph: what these read across files) */
-  lower_run(c, &lc, LW_SCOPE_NUMBERED_BLOCK_PARAMS);
   lower_run(c, &lc, LW_SINGLETON_CLASS_DEFINE_METHOD); /* singleton_class.define_method -> define_singleton_method */
   lower_run(c, &lc, LW_EMPTY_HASH_COMPARE_BY_IDENTITY); /* {}.compare_by_identity -> Hash.new.compare_by_identity */
   lower_run(c, &lc, LW_DEFINE_METHOD_PROC_ARG);     /* define_method(:m, -> { }) -> define_method(:m) { } */
   lower_run(c, &lc, LW_DEFINE_METHOD_CAPTURES);     /* class body local a define_method reads -> a global */
   lower_run(c, &lc, LW_DEFINE_METHOD_KEYWORDS);     /* define_method(:m) { |k: 1| } -> def m(k: 1) */
   lower_run(c, &lc, LW_NAME_ANON_BLOCK_KWREST);
-  lower_run(c, &lc, LW_RENAME_SHADOWING_BLOCK_PARAMS);
   /* `:m.to_proc.call(r, a)` -> `r.m(a)`, before the to_proc rewrite below
      turns the receiver into a fixed-arity lambda (#3097). */
   lower_run(c, &lc, LW_SYM_TO_PROC_CALL);
@@ -52672,37 +52076,35 @@ static void an_phase_pre_fixpoint(Compiler *c) {
       }
       continue;
     }
-    int rn = 0; const int *reqs = nt_arr(c->nt, pn, "requireds", &rn);
-    for (int k = 0; k < rn; k++) { const char *nm = nt_str(c->nt, reqs[k], "name"); if (nm) { const char *rw = rbp_slot_written(c, nt_wname(c->nt, reqs[k])); comp_sym_intern(c, rw ? rw : nm); } }
-    int on = 0; const int *opts = nt_arr(c->nt, pn, "optionals", &on);
-    for (int k = 0; k < on; k++) { const char *nm = nt_str(c->nt, opts[k], "name"); if (nm) comp_sym_intern(c, nm); }
-    int psn = 0; const int *posts = nt_arr(c->nt, pn, "posts", &psn);
-    for (int k = 0; k < psn; k++) { const char *nm = nt_str(c->nt, posts[k], "name"); if (nm) comp_sym_intern(c, nm); }
+    /* the names the program wrote (nt_wname), not the slots' */
+    static const char *const lists[] = { "requireds", "optionals", "posts" };
+    for (int q = 0; q < 3; q++) {
+      int ln = 0; const int *lv = nt_arr(c->nt, pn, lists[q], &ln);
+      for (int k = 0; k < ln; k++) if (nt_str(c->nt, lv[k], "name")) comp_sym_intern(c, nt_wname(c->nt, lv[k]));
+    }
     int rest = nt_ref(c->nt, pn, "rest");
     if (rest >= 0) {
       comp_sym_intern(c, "rest");
-      const char *nm = nt_str(c->nt, rest, "name");
-      comp_sym_intern(c, nm ? nm : "*");
+      comp_sym_intern(c, nt_str(c->nt, rest, "name") ? nt_wname(c->nt, rest) : "*");
     }
     int kn = 0; const int *kws = nt_arr(c->nt, pn, "keywords", &kn);
     for (int k = 0; k < kn; k++) {
       NodeKind kk = nt_kind(c->nt, kws[k]);
       comp_sym_intern(c,
                       (kk == NK_OptionalKeywordParameterNode) ? "key" : "keyreq");
-      const char *nm = nt_str(c->nt, kws[k], "name");
-      if (nm) comp_sym_intern(c, nm);
+      if (nt_str(c->nt, kws[k], "name")) comp_sym_intern(c, nt_wname(c->nt, kws[k]));
     }
     int kwrest = nt_ref(c->nt, pn, "keyword_rest");
     if (kwrest >= 0) {
       comp_sym_intern(c, "keyrest");
-      const char *w, *nm = nt_str(c->nt, kwrest, "name");
-      comp_sym_intern(c, desugared_param_name(c->nt, kwrest, &w) == DPN_WRITTEN ? w : nm ? nm : "**");
+      const char *w;
+      comp_sym_intern(c, desugared_param_name(c->nt, kwrest, &w) == DPN_WRITTEN ? w
+                         : nt_str(c->nt, kwrest, "name") ? nt_wname(c->nt, kwrest) : "**");
     }
     int bpar = nt_ref(c->nt, pn, "block");
     if (bpar >= 0) {
       comp_sym_intern(c, "block");
-      const char *nm = nt_str(c->nt, bpar, "name");
-      comp_sym_intern(c, nm ? nm : "&");
+      comp_sym_intern(c, nt_str(c->nt, bpar, "name") ? nt_wname(c->nt, bpar) : "&");
     }
   }
 

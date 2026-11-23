@@ -31458,10 +31458,20 @@ static void refuse_string_copies(Compiler *c, int id) {
       const char *through = shift ? "`bind_call`" : comp_ntype(c, recv) == TY_CURRY ? "a curried proc"
                           : "a proc or Method read out of a slot that holds other values";
       int n = refuse_arg_layout(c, id, av, 16);
+      /* A boxed receiver's call with plain positional arguments is a poly
+         dispatch, which holds a String read out of a boxed local as the
+         local's box (cplan_poly_arg_storage, RS_SLOT_POLY). A boxed String
+         is its handle, so a proc arm is handed the caller's String itself
+         and its append is the caller's: nothing is copied. */
+      int pa = nt_ref(nt, id, "arguments"), pac = 0;
+      const int *pav = pa >= 0 ? nt_arr(nt, pa, "arguments", &pac) : NULL;
+      int plain = !shift && comp_ntype(c, recv) == TY_POLY && nt_ref(nt, id, "block") < 0 &&
+                  !nt_argv_has_splat(nt, pav, pac) && nt_argv_kwh(nt, pav, pac) < 0;
       for (int k = shift; k < n; k++) {
         int shared;
         const char *kind = strvar_arg(c, av[k], &shared);
         if (!kind || shared) continue;
+        if (plain && k < pac && pav[k] == av[k] && repr_of(c, av[k]).strbuf_src == RS_SLOT_POLY) continue;
         DynReach r;
         dyn_open_reach(c, id, k, &r);
         if (!r.app) continue;

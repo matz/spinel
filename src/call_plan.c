@@ -8795,17 +8795,6 @@ static int cplan_copied_self_targets(Compiler *c, int call, int *out, int cap) {
   return n;
 }
 /* See call_plan.h. */
-int cplan_live_targets(Compiler *c, int call, int *out, int cap, int entries) {
-  int n = entries ? cplan_entries(c, call, out, cap) : cplan_targets(c, call, out, cap), m = 0;
-  if (n == CPT_UNKNOWN) return -1;
-  if (n == 0) return cplan_copied_self_targets(c, call, out, cap);
-  /* the plan once for the call */
-  CallPlan p = cplan_user_fresh(c, call);
-  for (int i = 0; i < n; i++)
-    if (cplan_target_reachable(c, call, out[i]) && cplan_target_armed_plan(c, &p, call, out[i])) out[m++] = out[i];
-  return m;
-}
-/* See call_plan.h. */
 int cplan_has_targets(Compiler *c, int call) {
   const CallPlan p = cplan_user_fresh(c, call);
   if (p.dispatch == CP_REFUSE) return 0;
@@ -8819,8 +8808,12 @@ int cplan_has_targets(Compiler *c, int call) {
   /* (a boxed receiver's plan lists only the methods its arms reach:
      cplan_target_reachable, cplan_target_armed; none may be left) */
   if (p.via != UC_POLY) return 1;
-  int tg[CPT_MAX];
-  return cplan_live_targets(c, call, tg, CPT_MAX, 0) != 0;
+  int tg[CPT_MAX], n = cplan_targets(c, call, tg, CPT_MAX);
+  if (n == CPT_UNKNOWN) return 1;
+  if (n == 0) return cplan_copied_self_targets(c, call, tg, CPT_MAX) != 0;
+  for (int i = 0; i < n; i++)
+    if (cplan_target_reachable(c, call, tg[i]) && cplan_target_armed_plan(c, &p, call, tg[i])) return 1;
+  return 0;
 }
 
 

@@ -25709,7 +25709,7 @@ static int strbuf_demand_store_leaf(Compiler *c, int sn, int depth) {
            (share_default_apply), or the seal refuses it by name, and the element is
            that handle (`each { |e| acc << e }` over a yielding each) */
         int yo = block_param_user_yield_only(c, snm, sns);
-        if (yo && c->share &&
+        if (yo && c->share_applied &&
             repr_local_shares(c, sns, snv)) {
           if (snv->type != TY_STRBUF || !snv->str_shared) { lv_set_type(snv, TY_STRBUF); { snv->str_shared = 1; comp_touch_scope(snv->owner); } ch = 1; }
           if (!comp_strbuf_box_stored(c, sn)) { comp_set_strbuf_box(c, sn, 1); ch = 1; }
@@ -28032,7 +28032,7 @@ static ShareHolder *slot_holders(Compiler *c, int *out_n) {
 }
 
 static int share_default_apply(Compiler *c) {
-  share_facts_build(c);
+  share_rule_begin(c);
   int changed = one_reflect_widen(c), any = 0;
   sb_share_begin(&changed, &any);   /* (the walks below share their records; sb_share_end folds `any` back) */
   int nh = 0;

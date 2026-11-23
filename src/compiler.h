@@ -1855,7 +1855,7 @@ typedef struct {
   /* the scope + 1 whose block a yield under emit_proc_yield hands its
      arguments to (a proc form, or a method with a `&blk` it calls), or 0 */
   int proc_arg_src;
-  struct ShareFacts *share;
+  int share_applied;   /* the share rule has run on this program's types (share_rule_begin) */
   /* the operand-order record (order_plan.c): per operand list, where each
      operand is evaluated; built by the analysis phase operand_order */
   struct OrderFacts *order;

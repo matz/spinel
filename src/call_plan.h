@@ -832,14 +832,10 @@ int cplan_target_reachable(Compiler *c, int call, int mi);
    one its dispatch arms: does a class the receiver's class fact keeps reach
    it (comp_poly_candidates_at)? */
 int cplan_target_armed(Compiler *c, int call, int mi);
-/* The methods call enters (cplan_entries) when `entries`, else those whose
-   return is its value (cplan_targets), that it can reach (cplan_target_reachable,
-   cplan_target_armed): their count into out (at most cap), -1 past it or
-   where the plan cannot list them. A receiverless call in a module's method
-   an include copied away lists the methods its includers answer to the name. */
-int cplan_live_targets(Compiler *c, int call, int *out, int cap, int entries);
-/* Does call `call` reach a user method (cplan_live_targets != 0), without
-   listing them? */
+/* Does call `call` reach a user method: one of the methods cplan_targets
+   lists that it can reach (cplan_target_reachable, cplan_target_armed), or,
+   for a receiverless call in a module's method an include copied away, one
+   its includers answer to the name? Not asked to list them. */
 int cplan_has_targets(Compiler *c, int call);
 /* What a builtin class's `new` call id (Array.new, Hash.new, Fiber.new) reduces
    to where a program initialize stands ahead of the builtin's own, a prepend's or

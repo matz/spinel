@@ -537,7 +537,6 @@ void comp_free(Compiler *c) {
   free(c->cext_stubs);
   for (int i = 0; i < c->n_cext_classes; i++) free(c->cext_classes[i].path);
   free(c->cext_classes);
-  share_facts_free(c);
   dsn_free(c);
   order_facts_free(c);
   free(c->ie_map.cls); free(c->ie_map.nonobj); free(c->ie_map.own); free(c->ie_map.pending);

@@ -1656,7 +1656,7 @@ int strbuf_chain_has_block(Compiler *c, int v) {
 /* A shared Hash default setter stores and answers the same argument.
    Its boxed value slot can keep the argument's String handle. */
 int strbuf_hash_default_arg(Compiler *c, int v) {
-  if (!c->share) return -1;
+  if (!c->share_applied) return -1;
   v = nt_paren_single(c->nt, v);
   if (v < 0 || nt_kind(c->nt, v) != NK_CallNode ||
       !is_hash_default_setter(nt_str(c->nt, v, "name"))) return -1;
@@ -2567,7 +2567,7 @@ int strbuf_route_clamp(Compiler *c, int v, int *ops) {
   v = nt_paren_single(c->nt, v);
   if (v < 0 || nt_kind(nt, v) != NK_CallNode ||
       bop_share_named(TY_STRING, nt_str(nt, v, "name")) != BSH_CLAMP) return 0;
-  if (!c->share) return 0;
+  if (!c->share_applied) return 0;
   ops[0] = nt_ref(nt, v, "receiver");
   if (ops[0] < 0 || comp_recv_type(c, ops[0]) != TY_STRING ||
       cplan_user(c, v).dispatch != CP_NONE) return 0;

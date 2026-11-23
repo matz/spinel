@@ -25,9 +25,8 @@ typedef struct {
   const char *name;     /* SHK_IVAR/GVAR/CVAR/CONST */
 } ShareHolder;
 
-/* (Re)build c->share's tables from the current types and calls. */
-void share_facts_build(Compiler *c);
-void share_facts_free(Compiler *c);
+/* The rule is about to run (once per round): see analyze_share.c. */
+void share_rule_begin(Compiler *c);
 
 /* Does call n store its literal block's values into a container it
    answers or changes (an Array's or a Hash's map, map!, zip with a block,

@@ -896,7 +896,7 @@ static int repr_boxed_native_handle(Compiler *c, int v) {
    binding's handle form answers the handle it kept. The binding, or NULL. */
 const NativeMethod *repr_super_native_keeps(Compiler *c, int n) {
   const NodeTable *nt = c->nt;
-  if (!c->share || n < 0 || nt_kind(nt, n) != NK_SuperNode) return NULL;
+  if (!c->share_applied || n < 0 || nt_kind(nt, n) != NK_SuperNode) return NULL;
   Scope *ms = comp_scope_of(c, n);
   if (!ms || ms->is_cmethod || ms->class_id < 0 || ms->class_id >= c->nclasses || ms->def_node < 0 ||
       !ms->name || is_initialize_family(ms->name) || c->classes[ms->class_id].nsub_root <= 0)

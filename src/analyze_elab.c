@@ -2847,7 +2847,8 @@ static int lr_link_sure(Compiler *c, int cls, int owner, int sg, int depth) {
    hold to its end, is unknown, and so is no: the reach stops there and the names from there on keep the answer they
    have without the word. The record knows nothing of the methods a native binding or a builtin class's reopening gives,
    so a word's reach is asked only where it is observable (lr_word_reach) */
-static int lr_has_at(Compiler *c, int cls, int sg, const char *nm, LoadPoint p, int depth) {
+static int lr_has_at(Compiler *c, int cls, int sg, const char *nm, LoadPoint p, int depth);
+static int lr_has_state(Compiler *c, int cls, int sg, const char *nm, LoadPoint p, int depth) {
   const LrDef *d = NULL;
   int o = lr_search(c, cls, sg, nm, -1, p, p.region < 0, 0, &d, 0);
   if (o == ELAB_YES) {
@@ -2872,7 +2873,10 @@ static int lr_has_at(Compiler *c, int cls, int sg, const char *nm, LoadPoint p, 
   const LrHist *h = lr_hist(c->lrec, cls, sg, nm, 0);
   for (int i = 0; h && i < h->n; i++)
     if (h->v[i].kind <= LR_REMOVE) return 0;   /* (a def after the word, an undef, a removal, one no point places: the program's own entries answer the name) */
-  return sg ? cplan_class_builtin_has(c, cls, nm) : builtin_id_has_instance_method(class_builtin_parent(c, cls), nm);
+  return (sg ? cplan_class_builtin_has(c, cls, nm) : builtin_id_has_instance_method(class_builtin_parent(c, cls), nm)) ? 1 : -1;
+}
+static int lr_has_at(Compiler *c, int cls, int sg, const char *nm, LoadPoint p, int depth) {
+  return lr_has_state(c, cls, sg, nm, p, depth) == 1;
 }
 static int lr_word_has(Compiler *c, int cls, int sg, const char *nm, int node) {
   return lr_has_at(c, cls, sg, nm, elab_point_of(c, node), 0);
@@ -2888,6 +2892,23 @@ static int lr_word_defines(const NodeTable *nt, int node, const char *nm, int cs
     if (cside ? dr >= 0 && nt_kind(nt, dr) == NK_SelfNode : dr < 0) return 1;
   }
   return 0;
+}
+/* ...the name of the k-th element of word node's arguments, counted as lr_word_reach counts them (an Array given alone has
+   its elements in their place, a def is one element, a def's name its name): NULL for none, or for an argument that is
+   no name. *def says it is a def */
+static const char *lr_word_elem(const NodeTable *nt, int node, int k, int *def) {
+  int skip = 0, an = (vis_word_call(nt, node, &skip), nt_ref(nt, node, "arguments")), ac = 0;
+  const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
+  int arr = ac - skip == 1 && nt_kind(nt, av[skip]) == NK_ArrayNode;
+  if (def) *def = 0;
+  for (int i = skip; i < ac; i++) {
+    int en = 1;
+    const int *ev = arr ? nt_arr(nt, av[i], "elements", &en) : &av[i];
+    if (k >= en) { k -= en; continue; }
+    if (nt_kind(nt, ev[k]) == NK_DefNode) { if (def) *def = 1; return nt_str(nt, ev[k], "name"); }
+    return vis_arg_name(nt, ev[k]);
+  }
+  return NULL;
 }
 static int lr_body_word_cside(const NodeTable *nt, int node);
 static int lr_word_reach(Compiler *c, int node, int cls, int sg, int *copies) {
@@ -2924,6 +2945,14 @@ static int lr_word_reach(Compiler *c, int node, int cls, int sg, int *copies) {
   }
   *copies = !mf || !arr;
   return n;
+}
+/* ...does the reach (lr_word_reach) of word node end at a name the record knows no method of at the word's point (a name the
+   word raises NameError for: the names past it stay as they were), not at one it merely cannot tell? */
+static int lr_word_end_missing(Compiler *c, int node, int cls, int sg, int reach) {
+  int def = 0;
+  const char *nm = reach >= 0 && reach != INT_MAX ? lr_word_elem(c->nt, node, reach, &def) : NULL;
+  return nm && !def && !lr_word_defines(c->nt, node, nm, lr_body_word_cside(c->nt, node)) &&
+         lr_has_state(c, cls, lr_body_word_cside(c->nt, node) ? 1 : sg, nm, elab_point_of(c, node), 0) < 0;
 }
 /* The reach the record made of word node (lr_word_reach), kept on the node for the bars (lr_body_forms): none for a
    word whose every name the record makes versions of. The name the reach ends at bars the body versions of it: the
@@ -4669,10 +4698,16 @@ static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int
       for (int k = 0; k < en && (!cvis || !sg); k++, nk++) {
         /* (a name past the word's reach has its entry too, as the word names it, which the word has not changed: cut;
            module_function's copies and privates are made of the names it reaches only) */
-        int past = nk >= mfr;
+        int past = nk >= mfr, wv = bvis ? bvis : cvis;
         if (past && lr_word_is_mf(nt, node)) break;
+        /* (past a name the word raises NameError for, the names keep the visibility they had: the word's entry says so;
+           past one the record cannot tell, as the word names them) */
+        if (past && lr_word_end_missing(x->c, node, cls, sg, mfr)) {
+          int pv = lr_vis_at(x->c, cls, vis_arg_name(nt, ev[k]), bvis ? sg : 1, elab_point_of(x->c, node));
+          if (pv >= 0) wv = pv == SP_VIS_PRIVATE ? BVIS_PRIVATE : pv == SP_VIS_PROTECTED ? BVIS_PROTECTED : BVIS_PUBLIC;
+        }
         x->cut = (unsigned char)past;
-        lr_method(x, cls, bvis ? sg : 1, vis_arg_name(nt, ev[k]), node, LR_VIS, bvis ? bvis : cvis, may, NULL);
+        lr_method(x, cls, bvis ? sg : 1, vis_arg_name(nt, ev[k]), node, LR_VIS, wv, may, NULL);
         x->cut = 0;
       }
     else if (attr_r || attr_w) {

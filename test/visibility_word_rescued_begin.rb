@@ -184,3 +184,11 @@ module MS
 end
 class HS; include MS; end
 p [HS.new.respond_to?(:msa)]
+class I5
+  def i5a = :i5a
+  def i5b = :i5b
+  begin; private :i5a, :missing5, :i5b; rescue NameError; end
+  alias_method :i5c, :i5b
+  alias i5d i5b
+end
+p [(I5.new.i5a rescue $!.class), I5.new.i5b, I5.new.i5c, I5.new.i5d]

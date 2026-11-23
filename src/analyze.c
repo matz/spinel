@@ -44388,11 +44388,14 @@ static void desugar_diverging_args(Compiler *c) {
       own = c->scopes[i].class_id < 0 && c->scopes[i].def_node >= 0 && c->scopes[i].name &&
             sp_streq(c->scopes[i].name, nt_str(nt, av[k], "name"));
     if (own) continue;
-    int *st = malloc(sizeof(int) * (size_t)(k + 2)), ns = 0, recv = nt_ref(nt, id, "receiver");
+    int *st = malloc(sizeof(int) * (size_t)(n + 2)), ns = 0, recv = nt_ref(nt, id, "receiver");
     if (!st) continue;
     if (recv >= 0 && subtree_has_side_effect(c, recv)) st[ns++] = recv;
     for (int i = 0; i < k; i++) if (subtree_has_side_effect(c, av[i])) st[ns++] = av[i];
     st[ns++] = av[k];
+    /* (a def among the operands after it is never made, as one written after a raise: kept as the dead statement it is, so the
+       method it would make stays one that no call finds defined) */
+    for (int i = k + 1; i < n; i++) if (nt_kind(nt, av[i]) == NK_DefNode) st[ns++] = av[i];
     int s = nt_new_node(nt, "StatementsNode");
     nt_node_set_arr(nt, s, "body", st, ns);
     free(st);

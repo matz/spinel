@@ -13,3 +13,6 @@
 [NoMethodError, :i3c, NoMethodError]
 [true, false]
 [false]
+[NoMethodError, :i5b, :i5b, :i5b]
+[:i3b]
+[NoMethodError]

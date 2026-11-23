@@ -307,6 +307,9 @@ end
 ["a", "b"].flat_map { |s| next [s] if s == "b"; [s] }.each do |s|
   puts "flat_map_next_clean: #{s.upcase}"
 end
+["a", "b"].flat_map { |s| next *gap_strs if s == "b"; [s] }.each do |s|
+  puts "flat_map_next_splat: #{s.nil?} #{s.respond_to?(:upcase)}"
+end
 
 seed_arr = ["a"]
 seed_arr[2] = "b"
@@ -332,3 +335,45 @@ seed_hash[2] = "b"
   acc.each { |s| puts "reduce_seed_hash: #{s.nil?} #{s.respond_to?(:upcase)}" }
   acc
 end
+
+seed_mb1 = ["a"]
+repl_tail = ["b"]
+[1, 2].reduce(seed_mb1) do |acc, i|
+  if i == 1
+    repl_tail
+  else
+    acc[2] = "z"
+    acc
+  end
+end
+repl_tail.each { |s| puts "reduce_mark_back_tail: #{s.nil?} #{s.respond_to?(:upcase)}" }
+
+seed_mb2 = ["a"]
+repl_next = ["b"]
+[1, 2].reduce(seed_mb2) do |acc, i|
+  next repl_next if i == 1
+  acc[2] = "z"
+  acc
+end
+repl_next.each { |s| puts "reduce_mark_back_next: #{s.nil?} #{s.respond_to?(:upcase)}" }
+
+class MiniEnum2
+  include Enumerable
+  def each
+    yield 1
+    yield 2
+  end
+end
+seed_mb3 = ["a"]
+repl_enum = ["b"]
+MiniEnum2.new.reduce(seed_mb3) do |acc, i|
+  next repl_enum if i == 1
+  acc[2] = "z"
+  acc
+end
+repl_enum.each { |s| puts "reduce_mark_back_enum: #{s.nil?} #{s.respond_to?(:upcase)}" }
+
+seed_mb_clean = ["a"]
+repl_clean = ["b"]
+[1, 2].reduce(seed_mb_clean) { |acc, i| i == 1 ? repl_clean : acc }
+repl_clean.each { |s| puts "reduce_clean_repl: #{s.upcase}" }

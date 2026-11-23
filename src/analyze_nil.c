@@ -1028,6 +1028,30 @@ static void nf_elem_mark_back(NF *f, int v, int depth) {
   }
 }
 
+/* Mark back Array sources returned via `next expr` in block body n (not inside
+   a nested block, lambda, or def). `next *x` and multi-arg `next a, b` build a
+   fresh Array rather than aliasing an existing one. */
+static void nf_next_mark_back(NF *f, int n, int depth) {
+  const NodeTable *nt = f->nt;
+  if (n < 0 || depth > 512) return;
+  NodeKind k = nt_kind(nt, n);
+  if (k == NK_BlockNode || k == NK_LambdaNode || k == NK_DefNode) return;
+  if (k == NK_NextNode) {
+    int a = nt_ref(nt, n, "arguments"), an = 0;
+    const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+    if (an == 1 && nt_kind(nt, av[0]) != NK_SplatNode)
+      nf_elem_mark_back(f, av[0], 0);
+    return;
+  }
+  for (int i = 0; i < nt_num_refs(nt, n); i++)
+    nf_next_mark_back(f, nt_ref_at(nt, n, i), depth + 1);
+  for (int i = 0; i < nt_num_arrs(nt, n); i++) {
+    int an = 0; const int *av = nt_arr_at(nt, n, i, &an);
+    for (int k2 = 0; k2 < an; k2++)
+      nf_next_mark_back(f, av[k2], depth + 1);
+  }
+}
+
 /* Can an element of the Array node v's value be nil (NFW_ELEM_NIL, else
    0)? A slot's flag, a literal's elements, what `Array.new` or a map
    fills it with, and the receiver's or the operands' own elements for a
@@ -1602,10 +1626,14 @@ static void nf_bind_elem_slot(NF *f, LocalVar *lv, int arg) {
 static void nf_bind_reduce_elem(NF *f, LocalVar *lv, int seed, int blk) {
   if (!lv) return;
   nf_bind_elem_slot(f, lv, seed);
-  if (nf_elem_tracked(lv->type) && !(lv->obj_elem_may_nil & NF_EL_HOLDS)) {
-    int body = nt_ref(f->nt, blk, "body");
-    if (body >= 0 && (nf_elem(f, body, 0) || nf_next_elem(f, body, 0, 0)))
-      nf_elem_add(f, &lv->obj_elem_may_nil, NF_EL_HOLDS);
+  int body = nt_ref(f->nt, blk, "body");
+  if (body < 0) return;
+  if (nf_elem_tracked(lv->type) && !(lv->obj_elem_may_nil & NF_EL_HOLDS) &&
+      (nf_elem(f, body, 0) || nf_next_elem(f, body, 0, 0)))
+    nf_elem_add(f, &lv->obj_elem_may_nil, NF_EL_HOLDS);
+  if ((nf_elem_tracked(lv->type) || lv->type == TY_POLY) && (lv->obj_elem_may_nil & NF_EL_STORED)) {
+    nf_elem_mark_back(f, body, 0);
+    nf_next_mark_back(f, body, 0);
   }
 }
 
@@ -1677,9 +1705,9 @@ static void nf_bind_block(NF *f, int id, int blk, int mi, int **yields, int *nyi
       return;
     }
     acc = an >= 1 ? av[0] : -1;
+    if (is_reduce_alias(cn)) nf_bind_reduce_elem(f, nf_block_param(f, blk, 0), acc, blk);
     if (acc < 0) return;
     if (is_with_object_alias(cn)) nf_bind_elem_slot(f, nf_block_param(f, blk, 1), acc);
-    else nf_bind_reduce_elem(f, nf_block_param(f, blk, 0), acc, blk);
   }
   else if (cn && (sp_streq(cn, "lambda") || sp_streq(cn, "proc") || sp_streq(cn, "new") ||
                   sp_streq(cn, "define_method") || sp_streq(cn, "define_singleton_method") ||
@@ -1798,11 +1826,18 @@ static int nf_next_elem(NF *f, int n, int depth, int edepth) {
     int a = nt_ref(nt, n, "arguments"), an = 0;
     const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
     if (an == 0) return NFW_ELEM_NIL;
-    if (an == 1) return nf_elem(f, av[0], edepth + 1);
+    if (an == 1) {
+      int v = nt_kind(nt, av[0]) == NK_SplatNode ? nt_ref(nt, av[0], "expression") : av[0];
+      return v < 0 ? NFW_ELEM_NIL : nf_elem(f, v, edepth + 1);
+    }
     for (int j = 0; j < an; j++) {
-      int w = nt_kind(nt, av[j]) == NK_SplatNode
-              ? nf_elem(f, nt_ref(nt, av[j], "expression"), edepth + 1)
-              : nf_written_nil(nf_expr(f, av[j]));
+      int w;
+      if (nt_kind(nt, av[j]) == NK_SplatNode) {
+        int e = nt_ref(nt, av[j], "expression");
+        w = e < 0 ? NFW_ELEM_NIL : nf_elem(f, e, edepth + 1);
+      } else {
+        w = nf_written_nil(nf_expr(f, av[j]));
+      }
       if (w) return NFW_ELEM_NIL;
     }
     return 0;

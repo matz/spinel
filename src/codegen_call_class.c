@@ -4518,14 +4518,18 @@ static int emit_class_value_singleton_methods(Compiler *c, int id, Buf *b, const
   ReflNames r = {0};
   /* the class side where the list runs, its own methods alone for `false` */
   if (ci2 >= 0) refl_at(&r, id, ci2, CT_CMETHOD | (all ? 0 : CT_OWN));
-  /* a reopened builtin's own singleton methods, asked of the constant or
-     of self in the reopening's body */
-  const char *bcn = cn2 ? cn2 : ci2 >= 0 ? c->classes[ci2].name : NULL;
-  if (bcn && !priv) refl_builtin_singleton_methods(bcn, all, &r);
+  /* the program's class methods first: a name is noted once, with the
+     visibility of its first note, so a reopening's private class method of
+     a builtin's name (`private_class_method :try_convert`) keeps the
+     builtin's row from showing it */
   if (ci2 >= 0) {
     if (priv) refl_class_private_methods(c, ci2, &r);
     else refl_class_singleton_methods(c, ci2, all, &r);
   }
+  /* a reopened builtin's own singleton methods, asked of the constant or
+     of self in the reopening's body */
+  const char *bcn = cn2 ? cn2 : ci2 >= 0 ? c->classes[ci2].name : NULL;
+  if (bcn && !priv) refl_builtin_singleton_methods(bcn, all, &r);
   buf_puts(b, "sp_box_poly_array(");
   refl_emit_sym_array(c, -1, &r, b);
   buf_puts(b, ")");

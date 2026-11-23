@@ -4801,8 +4801,9 @@ static int map_fills_fresh(Compiler *c, int block, const char *rk, TyKind elem, 
 
 /* The type of an each_with_index terminal's block value (its body bb, bn
    statements, read with the block's parameters typed), and in *boxed
-   whether it is carried boxed */
-static TyKind ewi_block_value_ty(Compiler *c, int block, const int *bb, int bn, int *boxed) {
+   whether it is carried boxed. res_elem is the element of the Array a map
+   collects the values into (TY_UNKNOWN for the other terminals). */
+static TyKind ewi_block_value_ty(Compiler *c, int block, const int *bb, int bn, TyKind res_elem, int *boxed) {
   TyKind bt = bn > 0 ? repr_of(c, bb[bn - 1]).as_ty : TY_NIL;
   /* A body whose value IS nil types VOID here, and `void _tN` is not a
      declaration -- `select { nil }` never compiled, and `select {}` reaches
@@ -4817,7 +4818,11 @@ static TyKind ewi_block_value_ty(Compiler *c, int block, const int *bb, int bn, 
   /* a number that can be nil is carried boxed, so its nil reads falsy */
   *boxed = (bt == TY_POLY || bt == TY_NIL || (oint_kind(bt) && bn > 0 && node_has_oint_form(c, bb[bn - 1])) ||
             bv_value_may_be_nil(c, block, bt) ||   /* a `next nil` too */
-            bv_next_boxed(c, block, bt));          /* and a boxed `next v` */
+            bv_next_boxed(c, block, bt) ||         /* and a boxed `next v` */
+            /* and a value of another kind than the tail's (`next 0.5` in an
+               Integer-tailed map): a map collecting boxed values, as a plain
+               map's does, so a Float next is not cut to an Integer */
+            (res_elem == TY_POLY && bt != TY_POLY));
   return bt;
 }
 
@@ -4956,7 +4961,7 @@ int emit_each_with_index_terminal(Compiler *c, int id, Buf *b) {
     int mbody = block >= 0 ? nt_ref(nt, block, "body") : -1;
     int mbn = 0; const int *mbb = mbody >= 0 ? nt_arr(nt, mbody, "body", &mbn) : NULL;
     int mboxed = 0;
-    ewi_block_value_ty(c, block, mbb, mbn, &mboxed);
+    ewi_block_value_ty(c, block, mbb, mbn, repr_of(c, id).elem, &mboxed);
     fresh = !mboxed && mbn > 0 && array_kind_ty(rk) != TY_UNKNOWN &&
             map_fills_fresh(c, block, rk, repr_of(c, id).elem, mbb[mbn - 1]);
     emit_indent(g_pre, g_indent);
@@ -5026,7 +5031,7 @@ int emit_each_with_index_terminal(Compiler *c, int id, Buf *b) {
        bb[bn - 1] read and treat the absent tail value as nil -- a poly value so
        the temp initializes to sp_box_nil() rather than an integer 0. */
     int vpoly = 0;
-    TyKind bt = ewi_block_value_ty(c, block, bb, bn, &vpoly);
+    TyKind bt = ewi_block_value_ty(c, block, bb, bn, is_map ? repr_of(c, id).elem : TY_UNKNOWN, &vpoly);
     int tv = ++g_tmp; char tvb[24]; snprintf(tvb, sizeof tvb, "_t%d", tv);
     emit_indent(g_pre, din);
     if (vpoly) buf_printf(g_pre, "sp_RbVal _t%d = sp_box_nil();\n", tv);

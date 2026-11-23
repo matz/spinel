@@ -26,3 +26,16 @@ def nextw(f)
   [10, 20, 30].each.with_index(1).map { |x, i| next b if i == 2; x + i }
 end
 p nextw(true), nextw(false)
+
+# a next of the other numeric kind keeps its kind: the values are collected
+# boxed, not cut to the tail's kind
+def fnext(a) = a.each_with_index.map { |x, i| next 0.5 if i == 0; x }
+def fnext1(a) = a.each.with_index(1).map { |x, i| next 0.5 if i == 1; x }
+def inext(a) = a.each_with_index.map { |x, i| next 1 if i == 0; x }
+def snext(a) = a.each_with_index.map { |x, i| next "s" if i == 0; x }
+p fnext([10, 20]), fnext1([10, 20]), inext([1.5, 2.5]), snext([1, 2])
+
+# a next of another kind than an object tail keeps its value
+NPt = Struct.new(:x)
+def onext(a) = a.each_with_index.map { |x, i| next 0 if i == 0; NPt.new(x) }
+p onext([5, 6])

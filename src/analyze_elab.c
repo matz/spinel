@@ -7078,11 +7078,12 @@ static int lr_child_first(const NodeTable *nt, int p, int x, int y) {
 /* Does node run whenever the statement it stands in runs: is every edge from
    it up to that statement one that runs its child when it runs itself (an
    assignment's value, a multiple assignment's, a call's argument or receiver,
-   parentheses, a statement list's member), but for a block, which its call runs
+   parentheses, a statement list's member, an Array's or a Hash's element, key or
+   value), but for a block, which its call runs
    when it decides, and the arguments of a `&.` call, which run only on a
    receiver that is not nil? Any other edge (a condition, a branch, a
    short-circuit, defined?, an op-write's value, a begin, a rescue modifier, a
-   literal's element) is not known to. That the statement itself runs (not under
+   string's interpolation) is not known to. That the statement itself runs (not under
    a condition, in a block or a rescue) is for the caller to ask: its may,
    partial and kept. */
 static int lr_runs_with_stmt(Compiler *c, int node) {
@@ -7096,7 +7097,8 @@ static int lr_runs_with_stmt(Compiler *c, int node) {
     NodeKind k = nt_kind(nt, pv);
     if (k == NK_CallNode && (nt_ref(nt, pv, "block") == v || (nt_safe_nav(nt, pv) && nt_ref(nt, pv, "receiver") != v))) return 0;
     if (k != NK_CallNode && k != NK_ArgumentsNode && k != NK_ParenthesesNode && k != NK_StatementsNode && k != NK_MultiWriteNode &&
-        k != NK_LocalVariableWriteNode && k != NK_InstanceVariableWriteNode && k != NK_ConstantWriteNode) return 0;
+        k != NK_LocalVariableWriteNode && k != NK_InstanceVariableWriteNode && k != NK_ConstantWriteNode &&
+        k != NK_ArrayNode && k != NK_HashNode && k != NK_KeywordHashNode && k != NK_AssocNode) return 0;
   }
   return s != NULL;
 }

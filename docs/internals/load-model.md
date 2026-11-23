@@ -382,7 +382,19 @@ names them, and has not changed them). Past a name the word raises
 NameError for, a name the record knows no method of, the entries keep the
 visibility the name had (`lr_word_end_missing`), so an alias of one takes
 that; past one the record merely cannot tell they are as the word names
-them. A def among the word's arguments is
+them. The walk sees only the entries it has reached, so a name only a method's
+body makes (`def self.mk = (def zz = :zz)`, `mk`, then a rescued `private :a, :zz`)
+ends the reach there. Once the run points give every body its extent,
+`lr_words_refine` asks the reach of each such word again (`lr_has_state`, through
+`lr_body_state`): a name a body's version stands for is present where that
+body surely ran ahead of the word's statement (a def in a block that runs at
+once where its call does takes its method's extent), absent where it first runs
+after it or never, and unknown where it may have run before, which ends the reach
+as for any name the record cannot tell. The versions are those of the ancestry the
+lookup uses, but for a module the class prepends to itself, which the word's lookup,
+from the class's origin, does not find (`lr_link_sure`): that one is unknown. A reach that now passes names un-cuts
+their entries; where it ends at an absent name the entries past it keep the
+visibility they had. The plan reads the finished entries only. A def among the word's arguments is
 a method the word names (the arguments run first, `private(:m, def m; end)`)
 and the name of one element of it, in the reach; where the word runs
 (`lr_def_arg_runs`) the def is made whenever the statement is reached, with the
@@ -433,11 +445,9 @@ word of a name the program makes no entry of that the call plan cannot
 answer next to it is such a version (`lr_body_def_version`, over
 `lr_body_forms`); a visibility word placed in a class body is an entry of
 its name's history with a point of its own, which the plan orders before the
-body's version, so it is no such entry and bars none, but for the name its
-reach ends at in a partial statement (one no entry of the program's places
-at the word, which a body's definer may have made by then): that stays
-barred, so the body's definer of it keeps the refusal it has there; a
-class-method word (`private_class_method`, `public_class_method`) keeps
+body's version, so it is no such entry and bars none, the name its reach
+ends at in a partial statement among them (the reach is asked again of the
+finished record, below); a class-method word (`private_class_method`, `public_class_method`) keeps
 barring every name it takes, as the class side's faces read it. So is a definer call on self that stands in a
 method's body, a def's or a `define_method`'s or
 `define_singleton_method`'s block's, with no class body between

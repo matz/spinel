@@ -1,0 +1,13 @@
+[NoMethodError, NoMethodError, :zz1]
+[NoMethodError, NoMethodError, NoMethodError]
+[NoMethodError, :zz3]
+[NoMethodError, NoMethodError, :zz4]
+[NoMethodError, NoMethodError]
+[:a6, :zz6]
+[NoMethodError, NoMethodError, NoMethodError]
+[NoMethodError, NoMethodError]
+[NoMethodError, NoMethodError, NoMethodError]
+[NoMethodError, :zz10, :b10]
+[NoMethodError, :zz11, :b11, false]
+NameError
+[NoMethodError, NoMethodError]

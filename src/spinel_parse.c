@@ -8813,6 +8813,28 @@ static int sp_load_by_boot(const SpLoadGraph *g, int f) {
   }
   return 0;
 }
+static int sp_load_path(const SpLoadGraph *g, int f, int s, int *fs, int *ss, int cap);
+/* Does a require that is no statement of a top level, x, run after the
+   top-level require that places its file? It stands in a top-level
+   statement of a placed file, and nothing under that statement runs
+   before the statement does (a method it defines is called, a block it
+   makes runs, once it has): when that statement comes after the placing
+   require's in the load order, the file is loaded by then, and x loads
+   nothing. */
+static int sp_load_nested_after(const SpLoadGraph *g, const SpLoadEdge *x) {
+  int by = g->entered[x->to];
+  if (by < 0 || g->entered[x->from] == -1 || x->stmt < 0) return 0;
+  const SpLoadEdge *e = &g->edge[by];
+  enum { CAP = 64 };
+  int xf[CAP], xs[CAP], ef[CAP], es[CAP];
+  int nx = sp_load_path(g, x->from, x->stmt, xf, xs, CAP), ne = sp_load_path(g, e->from, e->stmt, ef, es, CAP);
+  if (!nx || !ne || nx == CAP || ne == CAP) return 0;
+  for (int i = 0; i < nx && i < ne; i++) {
+    if (xf[i] != ef[i]) return 0;
+    if (xs[i] != es[i]) return xs[i] > es[i];
+  }
+  return 0;
+}
 static void sp_load_order_build(SpLoadGraph *g) {
   g->entered = malloc(sizeof(int) * (size_t)(g->nfile + 1));
   if (!g->entered) { fprintf(stderr, "spinel_parse: out of memory\n"); exit(1); }
@@ -8828,7 +8850,7 @@ static void sp_load_order_build(SpLoadGraph *g) {
       const SpLoadEdge *x = &g->edge[e];
       if (x->how != SP_LOAD_FILE || x->to <= 0 || g->entered[x->to] == -1 || sp_load_by_boot(g, x->to)) continue;
       int by = g->entered[x->to];
-      if (!x->top || g->entered[x->from] == -1 || (by >= 0 && g->entered[g->edge[by].from] == -1)) {
+      if ((!x->top && !sp_load_nested_after(g, x)) || g->entered[x->from] == -1 || (by >= 0 && g->entered[g->edge[by].from] == -1)) {
         g->entered[x->to] = -1;
         changed = 1;
       }

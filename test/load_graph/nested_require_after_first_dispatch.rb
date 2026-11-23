@@ -1,0 +1,1 @@
+require_relative "nested_require_after_first_flash"

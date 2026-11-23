@@ -5915,7 +5915,7 @@ magic-comment-test: $(SPINEL)
 # each required file's top level runs at its require, once; what graph mode
 # does not compile yet it refuses by name (#9898). make test runs it.
 .PHONY: load-graph-test
-test-run: load-graph-test load-model-inline-test
+test-run: load-graph-test load-model-inline-test decl-test
 .PHONY: load-model-inline-test
 load-model-inline-test: $(SPINEL)
 	@ok=1; tmp=$$(mktemp -d /tmp/spinel-lmi.XXXXXX); \
@@ -5932,6 +5932,13 @@ load-model-inline-test: $(SPINEL)
 	[ $$ok = 1 ] && echo "load-model-inline-test: pass" || exit 1
 load-graph-test: $(SPINEL)
 	@tools/load_graph_check.sh
+
+# The scope each local variable node, parameter and block-local is declared in
+# (its `decl`, from Prism's scope nesting): test/decl/NAME.decl, written by
+# tools/decl_check.sh --write. make test runs it.
+.PHONY: decl-test
+decl-test: $(SPINEL)
+	@SPINEL=$(SPINEL) tools/decl_check.sh
 
 # SIGINT with no trap: an Interrupt in the main thread (test/signal_default_interrupt.rb),
 # and when nothing rescues it the ensure runs and the process ends by SIGINT, a parent reads 130 (#7202).

@@ -245,7 +245,16 @@ disambiguating field is `name`, plus the recv / args / block triple.
 | `MultiTargetNode`                 | `lefts` (A), `rest` (R), `rights` (A)      |
 
 `depth` (I) is Prism's: how many scopes up the local is bound (0: the scope the
-node is in). `wname` (S) is the name the program wrote, on a local-binding or
+node is in). `decl` (I) is the same fact as a node: the id of the scope that
+declares the local, a `ProgramNode`, `ClassNode`, `ModuleNode`,
+`SingletonClassNode`, `DefNode`, `BlockNode` or `LambdaNode` (exactly the nodes
+Prism pushes a scope at: `for`, BEGIN/END and rescue push none). The bridge
+writes it on the six local nodes above (from `depth`), on every parameter node
+that binds a name and on a block-local, and on the `it` and `_1` reads (the
+innermost block). A copy (`nt_clone_subtree`, `nt_import_subtree`) re-points
+a `decl` that names a node of the copy at the copy's, so a cloned block's own
+locals are new variables while its reads of outer ones still reach the
+originals. A node a pass made for an invented temporary has no `decl`. `wname` (S) is the name the program wrote, on a local-binding or
 local-reference node (the nodes above, a block-local, and the parameter nodes
 below) that a pass renamed to give it a slot of its own: `name` is then the
 slot, and `nt_wname` answers the written one, falling back to `name` for a

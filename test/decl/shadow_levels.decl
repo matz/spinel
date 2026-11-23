@@ -1,0 +1,16 @@
+LocalVariableWriteNode x @2 -> ProgramNode @2
+RequiredParameterNode x @3 -> BlockNode @3
+LocalVariableReadNode x @3 -> BlockNode @3
+RequiredParameterNode x @4 -> BlockNode @4
+LocalVariableReadNode x @4 -> BlockNode @4
+RequiredParameterNode y @4 -> BlockNode @4
+LocalVariableReadNode y @4 -> BlockNode @4
+RequiredParameterNode x @4 -> BlockNode @4
+LocalVariableReadNode x @4 -> BlockNode @4
+RequiredParameterNode x @5 -> BlockNode @5
+RequiredParameterNode x @5 -> BlockNode @5
+RequiredParameterNode x @5 -> BlockNode @5
+LocalVariableReadNode x @5 -> BlockNode @5
+LocalVariableReadNode x @5 -> BlockNode @5
+LocalVariableReadNode x @5 -> BlockNode @5
+LocalVariableReadNode x @6 -> ProgramNode @2

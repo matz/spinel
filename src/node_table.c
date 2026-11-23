@@ -585,7 +585,11 @@ int nt_clone_subtree(NodeTable *nt, int root) {
     memcpy(dst->pos, src->pos, sizeof dst->pos); dst->posmask = src->posmask;
     dst->ni = dst->ci = src->ni;
     if (src->ni) { dst->i = nt_alloc(sizeof(SpIntField) * (size_t)src->ni);
-      for (int j = 0; j < src->ni; j++) { dst->i[j].key = dup_n(src->i[j].key, strlen(src->i[j].key)); dst->i[j].disc = src->i[j].disc; dst->i[j].val = src->i[j].val; } }
+      for (int j = 0; j < src->ni; j++) {
+        dst->i[j].key = dup_n(src->i[j].key, strlen(src->i[j].key)); dst->i[j].disc = src->i[j].disc;
+        /* a local's decl names a scope: the copy of it when the scope is in the clone, else the same one */
+        dst->i[j].val = !strcmp(src->i[j].key, "decl") ? nt_clone_map(nt, base, (int)src->i[j].val) : src->i[j].val;
+      } }
     dst->nr = dst->cr = src->nr;
     if (src->nr) { dst->r = nt_alloc(sizeof(SpRefField) * (size_t)src->nr);
       for (int j = 0; j < src->nr; j++) {
@@ -1349,12 +1353,11 @@ int nt_call_args_plain(const NodeTable *nt, int id) {
 /* Copy the subtree at `root` of `src` into `dst` (every field, children
    recursively); the new root's id in dst, or -1. A desugar parses a snippet
    into its own table and grafts the result into the program's. */
-int nt_import_subtree(NodeTable *dst, const NodeTable *src, int root) {
-  if (!dst || !src || root < 0 || root >= src->count) return -1;
-  dst->has_cext_decls |= src->has_cext_decls;
+static int nt_import_rec(NodeTable *dst, const NodeTable *src, int root, int *map) {
   const SpNode *sn = &src->nodes[root];
   int id = nt_new_node(dst, sn->type ? sn->type : "");
   if (id < 0) return -1;
+  map[root] = id;
   if (sn->content) { SpNode *dn = &dst->nodes[id]; dn->content = dup_n(sn->content, strlen(sn->content)); }
   for (int j = 0; j < sn->ns; j++) {
     char *v = dup_n(sn->s[j].val, sn->s[j].val_len);
@@ -1362,21 +1365,35 @@ int nt_import_subtree(NodeTable *dst, const NodeTable *src, int root) {
   }
   for (int k = 0; k < 4; k++) if ((sn->posmask >> k) & 1) nt_node_set_int(dst, id, NT_POS_KEYS[k], sn->pos[k]);
   for (int j = 0; j < sn->ni; j++) {
-    nt_node_set_int(dst, id, sn->i[j].key, sn->i[j].val);
+    long long v = sn->i[j].val;
+    if (!strcmp(sn->i[j].key, "decl")) {   /* the scope's copy: an ancestor, so already imported; one outside has none */
+      v = v >= 0 && v < src->count ? map[v] : -1;
+      if (v < 0) continue;
+    }
+    nt_node_set_int(dst, id, sn->i[j].key, v);
     /* (an imported builtin-call mark counts in dst as nt_mark_builtin_call's does) */
     dst->builtin_marks += sn->i[j].val != 0 && !strcmp(sn->i[j].key, "builtin_only");
   }
   for (int j = 0; j < sn->nr; j++) {
-    int ch = sn->r[j].ref >= 0 ? nt_import_subtree(dst, src, sn->r[j].ref) : -1;
+    int ch = sn->r[j].ref >= 0 ? nt_import_rec(dst, src, sn->r[j].ref, map) : -1;
     nt_node_set_ref(dst, id, sn->r[j].key, ch);
   }
   for (int j = 0; j < sn->na; j++) {
     int n = sn->a[j].n;
     int *ids = nt_alloc(sizeof(int) * (size_t)n);
-    for (int q = 0; q < n; q++) ids[q] = sn->a[j].ids[q] >= 0 ? nt_import_subtree(dst, src, sn->a[j].ids[q]) : -1;
+    for (int q = 0; q < n; q++) ids[q] = sn->a[j].ids[q] >= 0 ? nt_import_rec(dst, src, sn->a[j].ids[q], map) : -1;
     nt_node_set_arr(dst, id, sn->a[j].key, ids, n);
     free(ids);
   }
+  return id;
+}
+int nt_import_subtree(NodeTable *dst, const NodeTable *src, int root) {
+  if (!dst || !src || root < 0 || root >= src->count) return -1;
+  dst->has_cext_decls |= src->has_cext_decls;
+  int *map = nt_alloc(sizeof(int) * (size_t)src->count);
+  for (int i = 0; i < src->count; i++) map[i] = -1;
+  int id = nt_import_rec(dst, src, root, map);
+  free(map);
   return id;
 }
 

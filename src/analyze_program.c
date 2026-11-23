@@ -910,6 +910,8 @@ typedef struct {
   /* the requires that are no top-level `require` statement (nest), and the ones that are (top: file, LoadNode) */
   int *nnest, *nest_site, *nest_at; unsigned char *nest_sure, *spoil;
   int *top_file, *top_load, ntop, captop;
+  /* every nested require, with the top-level statement holding it (file, statement) */
+  int *nf_file, *nf_at, nnf, capnf;
 } ProgSites;
 static void prog_site_note(void *ud, int load, int in_place) {
   ProgSites *q = ud;
@@ -936,6 +938,13 @@ static void prog_site_note(void *ud, int load, int in_place) {
   }
   q->nnest[t]++; q->nest_site[t] = load; q->nest_at[t] = q->stmt;
   q->nest_sure[t] = (unsigned char)((in_place & 1) && (in_place & ELAB_SITE_SURE));
+  if (q->nnf == q->capnf) {
+    q->capnf = q->capnf ? q->capnf * 2 : 8;
+    q->nf_file = realloc(q->nf_file, sizeof(int) * (size_t)q->capnf);
+    q->nf_at = realloc(q->nf_at, sizeof(int) * (size_t)q->capnf);
+    if (!q->nf_file || !q->nf_at) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  }
+  q->nf_file[q->nnf] = t; q->nf_at[q->nnf++] = q->stmt;
 }
 /* The top-level statement of a file that holds node id, or -1. */
 static int prog_top_stmt_of(const Compiler *c, const int *parent, int id) {
@@ -1539,7 +1548,7 @@ void prog_settle_files(Compiler *c) {
   int *nnest = calloc((size_t)n, sizeof(int)), *nest_site = calloc((size_t)n, sizeof(int)), *nest_at = calloc((size_t)n, sizeof(int));
   unsigned char *nest_sure = calloc((size_t)n, 1), *spoil = calloc((size_t)n, 1);
   if (!nnest || !nest_site || !nest_at || !nest_sure || !spoil) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  ProgSites q = { c, -1, n, 0, nsite, site, at, ok, nnest, nest_site, nest_at, nest_sure, spoil, NULL, NULL, 0, 0 };
+  ProgSites q = { c, -1, n, 0, nsite, site, at, ok, nnest, nest_site, nest_at, nest_sure, spoil, NULL, NULL, 0, 0, NULL, NULL, 0, 0 };
   for (int f = 0; f < n; f++) {
     int st = prog_root_stmts(c, f), m = 0;
     const int *v = st >= 0 && live[f] ? nt_arr(nt, st, "body", &m) : NULL;
@@ -1576,8 +1585,40 @@ void prog_settle_files(Compiler *c) {
       }
     }
   }
+  /* A file that several requires name, each a top-level `require`
+     statement or one nested in a statement that runs after the first of
+     those: the first loads it and the others load nothing, as CRuby runs
+     them, so it is placed at that first one -- once every one of them is
+     in the order (`pos`: a statement of a placed file). Placing a file puts
+     its statements in the order, so the files settle in rounds (the
+     program and a package it requires both require another package). */
+  for (int round = 0, again = pos && !q.open; again && round < n; round++) {
+    again = 0;
+    for (int f = 1; f < n; f++) {
+      if (!live[f] || prog_load_by(c, f) >= 0 || spoil[f] || nsite[f] < 2) continue;
+      int first = -1, firstpos = -1, all = 1;
+      for (int k = 0; k < q.ntop && all; k++) {
+        if (q.top_file[k] != f) continue;
+        int p = pos[q.top_load[k]];
+        if (p < 0) all = 0;
+        else if (first < 0 || p < firstpos) { first = q.top_load[k]; firstpos = p; }
+      }
+      for (int k = 0; k < q.nnf && all; k++)
+        if (q.nf_file[k] == f && (first < 0 || pos[q.nf_at[k]] <= firstpos)) all = 0;   /* may run it first */
+      if (!all || first < 0) continue;
+      nt_node_set_int(nt, nt_root(nt, f), "load_by", first);
+      nt_node_set_int(nt, nt_root(nt, f), "load_stmt", first);
+      again = 1;
+    }
+    if (again) {   /* the placed files' statements join the order */
+      free(seq); seq = prog_top_seq(c, &sn, NULL);
+      for (int i = 0; i < nt->count; i++) pos[i] = -1;
+      for (int k = 0; k < sn; k++) pos[seq[k]] = k;
+    }
+  }
   free(seq); free(pos);
   free(nnest); free(nest_site); free(nest_at); free(nest_sure); free(spoil); free(q.top_file); free(q.top_load);
+  free(q.nf_file); free(q.nf_at);
   unsigned char *state = calloc((size_t)n, 1);
   if (!state) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   for (int f = 1; f < n; f++) prog_stamp_deferred(c, f, state);

@@ -31144,11 +31144,34 @@ static void cbi_rewrite_access(NodeTable *nt, int id, const char *cn) {
    its own (an eval's, a define_method's, a class builder's) and a nested
    class or module, which have a self of their own, and at `defined?`, which
    answers "method" for the call where `defined?(@x)` asks for the ivar. */
+static int civ_self_body_access(NodeTable *nt, int node, int stmt);
+/* ...the body of a method whose self is the class: its statements, or the
+   one expression an endless def has (a statement too) */
+static int civ_self_method_body(NodeTable *nt, int body) {
+  if (body < 0) return 0;
+  if (nt_kind(nt, body) == NK_StatementsNode) return civ_self_body_access(nt, body, 0);
+  return civ_self_body_access(nt, body, 1);
+}
 static int civ_self_body_access(NodeTable *nt, int node, int stmt) {
   if (node < 0) return 0;
   NodeKind k = nt_kind(nt, node);
-  if (k == NK_DefNode || k == NK_LambdaNode || k == NK_SingletonClassNode ||
-      class_def_opens_frame(nt, node) || k == NK_DefinedNode) return 0;
+  /* a class method's body (`def self.m`, or a def of a `class << self`
+     body) runs with the class for self too: the call there is the class's
+     ivar, as `@x` written there is. An instance method's is an instance's. */
+  if (k == NK_DefNode) {
+    int dr = nt_ref(nt, node, "receiver");
+    return dr >= 0 && nt_kind(nt, dr) == NK_SelfNode ? civ_self_method_body(nt, nt_ref(nt, node, "body")) : 0;
+  }
+  if (k == NK_SingletonClassNode) {
+    int ex = nt_ref(nt, node, "expression"), sb = nt_ref(nt, node, "body"), sn = 0, ch = 0;
+    if (ex < 0 || nt_kind(nt, ex) != NK_SelfNode) return 0;
+    const int *ss = sb >= 0 && nt_kind(nt, sb) == NK_StatementsNode ? nt_arr(nt, sb, "body", &sn) : NULL;
+    for (int i = 0; i < sn; i++)
+      if (nt_kind(nt, ss[i]) == NK_DefNode && nt_ref(nt, ss[i], "receiver") < 0)
+        ch |= civ_self_method_body(nt, nt_ref(nt, ss[i], "body"));
+    return ch;
+  }
+  if (k == NK_LambdaNode || class_def_opens_frame(nt, node) || k == NK_DefinedNode) return 0;
   int changed = 0;
   if (k == NK_CallNode && nt_ref(nt, node, "block") < 0) {
     const char *nm = nt_str(nt, node, "name");

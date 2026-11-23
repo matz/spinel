@@ -1,0 +1,11 @@
+true
+true
+true
+Process::Status
+Math::DomainError
+1024
+"/"
+2
+1
+#<Encoding:UTF-8>
+"uninitialized constant Process::NoSuchThing"

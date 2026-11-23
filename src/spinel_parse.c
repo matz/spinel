@@ -5352,6 +5352,8 @@ typedef struct {
   int stmt, top;          /* --load-model=graph: the top-level statement of `from` the
                              call stands in (a boot library's: below 0, ahead of the
                              entry's first), and 1 when the call is that statement */
+  int pre;                /* --load-model=graph: the statement is a BEGIN, which runs
+                             ahead of the statements before it */
   int node;               /* --load-model=graph: its LoadNode, once flattened (-1 before) */
   int ncand, *cand;       /* SP_LOAD_SET: the files a path computed when it runs may name, ... */
   int open;               /* ... or (open) any file of the program */
@@ -8305,6 +8307,7 @@ static bool sp_graph_site_visit(const pm_node_t *node, void *data) {
     else e = sp_graph_computed(w, n, method, line);
     w->g->edge[e].stmt = w->stmt;
     w->g->edge[e].top = !auto_load && node == w->top;
+    w->g->edge[e].pre = PM_NODE_TYPE_P(w->top, PM_PRE_EXECUTION_NODE);
     SpGraphFile *r = sp_graph_rec(w->g, w->f);
     if (r->nsite == r->sitecap) {
       r->sitecap = r->sitecap ? r->sitecap * 2 : 8;
@@ -8790,10 +8793,12 @@ static int sp_graph_boot(SpLoadGraph *g, const char *source_file, SpNames *facts
  * run inside that statement the first time one reaches it. `entered[f]` is
  * that require's edge (-2 for the entry). Every other file is not placed:
  * a require under a condition, in a method, block or class body, or in a
- * value may run it at another time. (A file a computed path may name is
- * placed here as a literal require places it; the program module takes it
- * out of that place where the computed require may run first,
- * prog_settle_files.) */
+ * value may run it at another time. Such a require takes the place of a
+ * file a top-level require loads away only where it may run first: one in
+ * a statement that starts after the load loads nothing (sp_load_after).
+ * (A file a computed path may name is placed here as a literal require
+ * places it; the program module takes it out of that place where the
+ * computed require may run first, prog_settle_files.) */
 static void sp_load_enter(SpLoadGraph *g, int e) {
   const SpLoadEdge *x = &g->edge[e];
   if (!x->top || x->how != SP_LOAD_FILE || g->entered[x->to] != -1) return;
@@ -8813,29 +8818,6 @@ static int sp_load_by_boot(const SpLoadGraph *g, int f) {
   }
   return 0;
 }
-static void sp_load_order_build(SpLoadGraph *g) {
-  g->entered = malloc(sizeof(int) * (size_t)(g->nfile + 1));
-  if (!g->entered) { fprintf(stderr, "spinel_parse: out of memory\n"); exit(1); }
-  for (int f = 0; f < g->nfile; f++) g->entered[f] = -1;
-  g->entered[0] = -2;
-  for (int b = 0; b < g->nboot; b++) sp_load_enter(g, g->boot[b]);
-  for (int i = 0; i < g->gf[0]->nsite; i++) sp_load_enter(g, g->gf[0]->site[i].edge);
-  /* a file another require may run first is not placed, nor is any file
-     only such a file places (not a boot library's: nothing runs before it) */
-  for (int changed = 1; changed; ) {
-    changed = 0;
-    for (int e = 0; e < g->nedge; e++) {
-      const SpLoadEdge *x = &g->edge[e];
-      if (x->how != SP_LOAD_FILE || x->to <= 0 || g->entered[x->to] == -1 || sp_load_by_boot(g, x->to)) continue;
-      int by = g->entered[x->to];
-      if (!x->top || g->entered[x->from] == -1 || (by >= 0 && g->entered[g->edge[by].from] == -1)) {
-        g->entered[x->to] = -1;
-        changed = 1;
-      }
-    }
-  }
-}
-
 /* The places of top-level statement `s` of file `f`, outermost first: each
    file's statement that runs it, from the entry's down to `s` itself. The
    count, 0 when the file is not placed. */
@@ -8853,6 +8835,47 @@ static int sp_load_path(const SpLoadGraph *g, int f, int s, int *fs, int *ss, in
     t = ss[i]; ss[i] = ss[n - 1 - i]; ss[n - 1 - i] = t;
   }
   return n;
+}
+/* Does require `x`, which is not a top-level statement, run only after the
+   file it names is loaded? The edge `by` loads the file, and `x` stands in
+   a statement that starts after the statement of `by` does: a later
+   statement of that file or of a file around it, or a statement of a file
+   that `by` loads. The body `x` is in (a class body, a method, a block)
+   runs no earlier than its statement, a BEGIN apart. `buf` holds 4 paths. */
+static int sp_load_after(const SpLoadGraph *g, const SpLoadEdge *x, int by, int *buf) {
+  int n = g->nfile + 1;
+  if (by < 0 || x->pre) return 0;
+  int *sa = buf + n, *sb = buf + 3 * n;
+  int ka = sp_load_path(g, g->edge[by].from, g->edge[by].stmt, buf, sa, n);
+  int kb = sp_load_path(g, x->from, x->stmt, buf + 2 * n, sb, n);
+  if (!ka || !kb) return 0;
+  for (int i = 0; i < ka && i < kb; i++) if (sa[i] != sb[i]) return sb[i] > sa[i];
+  return kb > ka;
+}
+static void sp_load_order_build(SpLoadGraph *g) {
+  int *buf = malloc(sizeof(int) * (size_t)(g->nfile + 1) * 4);
+  g->entered = malloc(sizeof(int) * (size_t)(g->nfile + 1));
+  if (!g->entered || !buf) { fprintf(stderr, "spinel_parse: out of memory\n"); exit(1); }
+  for (int f = 0; f < g->nfile; f++) g->entered[f] = -1;
+  g->entered[0] = -2;
+  for (int b = 0; b < g->nboot; b++) sp_load_enter(g, g->boot[b]);
+  for (int i = 0; i < g->gf[0]->nsite; i++) sp_load_enter(g, g->gf[0]->site[i].edge);
+  /* a file another require may run first is not placed, nor is any file
+     only such a file places (not a boot library's: nothing runs before it) */
+  for (int changed = 1; changed; ) {
+    changed = 0;
+    for (int e = 0; e < g->nedge; e++) {
+      const SpLoadEdge *x = &g->edge[e];
+      if (x->how != SP_LOAD_FILE || x->to <= 0 || g->entered[x->to] == -1 || sp_load_by_boot(g, x->to)) continue;
+      int by = g->entered[x->to];
+      if ((!x->top && !sp_load_after(g, x, by, buf)) || g->entered[x->from] == -1 ||
+          (by >= 0 && g->entered[g->edge[by].from] == -1)) {
+        g->entered[x->to] = -1;
+        changed = 1;
+      }
+    }
+  }
+  free(buf);
 }
 
 /* --dump-load-graph: where each file's top level runs, as the statements

@@ -168,9 +168,9 @@ struct LoadRecord {
      [nnb_of] the node's index in nb + 1, 0 for none): the body statements recorded placed (placed) and the visibility
      they leave (vs), which the rest, lr_body_defs, follow, whether the body is held (lr_nested_hold: recorded as an
      unplaced body is, kept when the record is made again), and the histories of the versions it recorded placed (h:
-     the last in nbh, a list through next, -1 for none), the names lr_nested_hold asks */
+     the last in nbh, a list through next, -1 for none, each with its body), the names lr_nested_hold asks */
   struct LrNbody { int node, placed, h; unsigned char vs, held; } *nb; int nnb, cnb, *nb_of, nnb_of;
-  struct LrNbodyH { int hist, next; } *nbh; int nnbh, cnbh;
+  struct LrNbodyH { int hist, body, next; } *nbh; int nnbh, cnbh;
   struct HostStep *host;     /* ...and the host a walk-time form splices through (elab_walk_host) */
   LrEvent *ev; int nev, cev;   /* the hook events of the statements recorded and not yet left by the scope walk */
   struct LrHist *hist; int nhist, chist, *hhead, nhbuckets;   /* nhbuckets: hhead's heads, grown with the histories (lr_hist) */
@@ -1383,7 +1383,7 @@ static void lr_nbody_note(LoadRecord *r, int b, int a, int sg, const char *name)
   int hi = h ? (int)(h - r->hist) : -1;
   if (hi < 0 || (r->nb[b].h >= 0 && r->nbh[r->nb[b].h].hist == hi)) return;   /* (the same history as the last: a def written twice) */
   r->nbh = lr_grow(r->nbh, &r->cnbh, r->nnbh, sizeof *r->nbh);
-  r->nbh[r->nnbh] = (struct LrNbodyH){ hi, r->nb[b].h };
+  r->nbh[r->nnbh] = (struct LrNbodyH){ hi, b, r->nb[b].h };
   r->nb[b].h = r->nnbh++;
 }
 
@@ -6219,20 +6219,60 @@ static int lr_name_held(Compiler *c, int cls, int sg, const char *name) {
    method, a def, an alias, an attr, a definer call or a copy, with each name it defines), not a list of forms. An
    unplaced def (the `initialize` or private def a lambda makes) may have run before the call, and the supply rule
    (lr_unordered_supply) lets it show only where no placed def of the name is on the chain, which this body's would
-   now be. Marks each such body (LrNbody.held) and says whether one is new: the record is made again without them
-   (elab_program), and asked again, for a body held makes unplaced defs of its own. Each round only adds holds, so it
-   ends. */
+   now be. A body held makes unplaced defs of its own, its versions', so the holds close over them here
+   (lr_nested_hold_close) rather than one record made again per body a hold reaches. Marks each such body
+   (LrNbody.held) and says whether one is new: the record is made again without them (elab_program) and asked again,
+   for the facts of a chain may change with the bodies held. Each round only adds holds, so it ends. */
+static void lr_nested_hold_close(Compiler *c, int *wl, int nwl);
 static int lr_nested_hold(Compiler *c) {
   LoadRecord *r = c->lrec;
-  int more = 0;
+  int *wl = malloc(sizeof(int) * (size_t)(r->nnb + 1)), nwl = 0;
+  if (!wl) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   for (int b = 0; b < r->nnb; b++) {
     if (r->nb[b].placed <= 0 || r->nb[b].held) continue;
     for (int i = r->nb[b].h; i >= 0 && !r->nb[b].held; i = r->nbh[i].next) {
       const LrHist *h = &r->hist[r->nbh[i].hist];
-      if (lr_name_held(c, h->a, h->b, h->name)) r->nb[b].held = more = 1;
+      if (lr_name_held(c, h->a, h->b, h->name)) { r->nb[b].held = 1; wl[nwl++] = b; }
     }
   }
-  return more;
+  if (nwl) lr_nested_hold_close(c, wl, nwl);
+  free(wl);
+  return nwl > 0;
+}
+/* ...the bodies held wl[0..nwl) (room for every body) and those their versions reach: a placed body with a version of
+   one of their names on the same side, in a class that may share the chain of the held version's class, which the
+   held body's def, unplaced once the record is made again, would reach as lr_name_held does. A worklist over the
+   held versions' histories, each taken once: one walk of the histories of its name, not a record per body reached */
+static void lr_nested_hold_close(Compiler *c, int *wl, int nwl) {
+  LoadRecord *r = c->lrec;
+  int *by = malloc(sizeof(int) * (size_t)(r->nhist + 1)), *bnext = malloc(sizeof(int) * (size_t)(r->nnbh + 1));
+  unsigned char *done = calloc((size_t)r->nhist + 1, 1);
+  if (!by || !bnext || !done) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int i = 0; i < r->nhist; i++) by[i] = -1;
+  for (int i = 0; i < r->nnbh; i++) { bnext[i] = by[r->nbh[i].hist]; by[r->nbh[i].hist] = i; }   /* (the bodies' versions by history) */
+  while (nwl) {
+    int b = wl[--nwl];
+    for (int i = r->nb[b].h; i >= 0; i = r->nbh[i].next) {
+      int hs = r->nbh[i].hist;
+      if (done[hs]) continue;
+      done[hs] = 1;
+      const LrHist *h = &r->hist[hs];
+      const LrVers *x = lr_vers(r, h->name);
+      for (int k = x ? x->first : -1; k >= 0; k = r->hist[k].nlink) {
+        if (r->hist[k].b != h->b) continue;
+        int meet = -1;
+        for (int j = by[k]; j >= 0; j = bnext[j]) {
+          int b2 = r->nbh[j].body;
+          if (r->nb[b2].held || r->nb[b2].placed <= 0) continue;
+          if (meet < 0) meet = lr_chains_may_meet(c, r->hist[k].a, h->a, h->b);
+          if (!meet) break;
+          r->nb[b2].held = 1;
+          wl[nwl++] = b2;
+        }
+      }
+    }
+  }
+  free(by); free(bnext); free(done);
 }
 
 int elab_method_versions(Compiler *c, const char *name) {

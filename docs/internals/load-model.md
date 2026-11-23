@@ -127,11 +127,14 @@ block, lambda, safe navigation or `defined?` between) is placed at that
 statement: its forms are recorded as a top-level body's are, ordered against
 the calls the statement holds by `lr_run_order`, up to the first statement
 that is a `raise` or may jump out of the body (`lr_nested_body`). A placed body
-that defines `initialize` or a kin of it (by a def, a def an argument of a
-word, an alias or a `define_method`), which the plan answers no body version
-of, or a name that has an unplaced def on its side in a class that may share
-its chain, is held: the record is made again with it unplaced,
-until no body is newly held (`lr_nested_hold`). A class body that is no
+is held when one of the versions it recorded (`LrNbody.h`: every form that
+makes a method, a def, an alias, an attr, a definer call, an undef or a copy,
+with each name it defines) is of `initialize` or a kin of it, which the plan
+answers no body version of, or of a name that has an unplaced def on its side
+in a class that may share the version's chain. A body held makes unplaced
+defs of its own versions, so the holds close over the names they reach in one
+worklist (`lr_nested_hold_close`); the record is then made again with the held
+bodies unplaced, and asked once more (`lr_nested_hold`). A class body that is no
 statement of the load phase otherwise (in a lambda, in a block kept to run
 later, a class builder's block in an expression, a body behind a condition,
 a body held) is its class's body all the same: its public defs are versions

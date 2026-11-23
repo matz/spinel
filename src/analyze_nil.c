@@ -865,6 +865,9 @@ static int nf_call(NF *f, int v) {
 
 static LocalVar *nf_local_of(NF *f, int node, const char *nm);
 static int nf_next_nil(NF *f, int n, int depth);
+static int nf_next_elem(NF *f, int n, int depth, int edepth);
+static int nf_unwrap_lowered_enum_call(const NodeTable *nt, int id, const char *cn,
+                                       int *recv_out, int *argc_out, char *name_buf, size_t buf_sz);
 
 /* an Array whose elements are pointers, NULL for nil (an Integer or Float
    Array holds the sentinel instead: analyze.c's nullable_int_elem) */
@@ -1086,11 +1089,23 @@ static int nf_elem_uncached(NF *f, int v, int depth) {
       if (an == 1 && !nf_elem_tracked(comp_ntype(f->c, av[0]))) return NFW_ELEM_NIL;
       return an == 2 && nf_written_nil(nf_expr(f, av[1])) ? NFW_ELEM_NIL : 0;
     }
-    /* a user method's value: its body's last value */
+    /* a user method's value: its body's last value; a lowered __enum_*
+       builtin routes through bop_elem_nil_kind on its receiver and block
+       first, falling back to its body when no element rule matches */
     int pmi = nf_plan(f, v, NULL, NULL);
+    char ebuf[64];
+    int er = -1, ean = 0;
     if (pmi >= 0) {
-      int mb = f->c->scopes[pmi].body;
-      return mb >= 0 ? nf_elem(f, mb, depth + 1) : 0;
+      if (f->c->scopes[pmi].name &&
+          nf_unwrap_lowered_enum_call(nt, v, f->c->scopes[pmi].name, &er, &ean, ebuf, sizeof ebuf)) {
+        r = er;
+        nm = ebuf;
+        av = av ? av + 1 : NULL;
+        an = ean;
+      } else {
+        int mb = f->c->scopes[pmi].body;
+        return mb >= 0 ? nf_elem(f, mb, depth + 1) : 0;
+      }
     }
     TyKind rt = r >= 0 ? comp_ntype(f->c, r) : TY_UNKNOWN;
     if (r < 0) return 0;
@@ -1098,13 +1113,19 @@ static int nf_elem_uncached(NF *f, int v, int depth) {
     NfArgCtx actx = { f->c, av, pan };
     BopElemNil ek = bop_elem_nil_kind(rt, nm, pan, blk >= 0, nf_arg_kind, &actx);
     if (ek == BOPEL_MAY_NIL) return NFW_ELEM_NIL;
-    if (!nf_elem_tracked(rt)) return 0;
+    if (ek != BOPEL_MAP && ek != BOPEL_FLAT_MAP && !nf_elem_tracked(rt)) {
+      if (pmi >= 0) {
+        int mb = f->c->scopes[pmi].body;
+        return mb >= 0 ? nf_elem(f, mb, depth + 1) : 0;
+      }
+      return 0;
+    }
     switch (ek) {
     case BOPEL_MAP:
       return blk >= 0 && nf_written_nil(nf_or(nf_list(f, body), nf_next_nil(f, body, 0))) ? NFW_ELEM_NIL : 0;
     case BOPEL_FLAT_MAP:
       if (blk < 0) return 0;
-      return nf_elem(f, body, depth + 1) ||
+      return nf_elem(f, body, depth + 1) || nf_next_elem(f, body, 0, depth) ||
              nf_written_nil(nf_or(nf_list(f, body), nf_next_nil(f, body, 0))) ? NFW_ELEM_NIL : 0;
     case BOPEL_MERGE:
       for (int k = 0; k < an; k++) if (nf_elem(f, av[k], depth + 1)) return NFW_ELEM_NIL;
@@ -1115,6 +1136,10 @@ static int nf_elem_uncached(NF *f, int v, int depth) {
       return NFW_ELEM_NIL;
     case BOPEL_NONE:
       break;
+    }
+    if (pmi >= 0) {
+      int mb = f->c->scopes[pmi].body;
+      return mb >= 0 ? nf_elem(f, mb, depth + 1) : 0;
     }
     if ((is_slice_alias(nm) && slice_read_call(f->c, v)) || mutated_array(f->c, v) != v)
       return nf_elem(f, r, depth + 1);
@@ -1566,6 +1591,24 @@ static void nf_bind_params(NF *f, int id, int mi, const int *av, int an) {
   (void)id;
 }
 
+static void nf_bind_elem_slot(NF *f, LocalVar *lv, int arg) {
+  if (!lv || arg < 0) return;
+  if (nf_elem_tracked(lv->type) && !(lv->obj_elem_may_nil & NF_EL_HOLDS) && nf_elem(f, arg, 0))
+    nf_elem_add(f, &lv->obj_elem_may_nil, NF_EL_HOLDS);
+  if ((nf_elem_tracked(lv->type) || lv->type == TY_POLY) && (lv->obj_elem_may_nil & NF_EL_STORED))
+    nf_elem_mark_back(f, arg, 0);
+}
+
+static void nf_bind_reduce_elem(NF *f, LocalVar *lv, int seed, int blk) {
+  if (!lv) return;
+  nf_bind_elem_slot(f, lv, seed);
+  if (nf_elem_tracked(lv->type) && !(lv->obj_elem_may_nil & NF_EL_HOLDS)) {
+    int body = nt_ref(f->nt, blk, "body");
+    if (body >= 0 && (nf_elem(f, body, 0) || nf_next_elem(f, body, 0, 0)))
+      nf_elem_add(f, &lv->obj_elem_may_nil, NF_EL_HOLDS);
+  }
+}
+
 /* The parameters of the block `blk` call `id` passes: what the callee's
    yields hand them, the receiver for tap and then, an accumulator's start;
    a proc's or a lambda's caller is not seen. */
@@ -1591,20 +1634,20 @@ static void nf_bind_block(NF *f, int id, int blk, int mi, int **yields, int *nyi
         if (lv) {
           if (nf_open(lv->obj_may_nil) && (nf_tracked(c, lv->type) || lv->type == TY_POLY))
             nf_set(f, &lv->obj_may_nil, nf_expr(f, av[1]));
-          if (nf_elem_tracked(lv->type) && !(lv->obj_elem_may_nil & NF_EL_HOLDS) && nf_elem(f, av[1], 0))
-            nf_elem_add(f, &lv->obj_elem_may_nil, NF_EL_HOLDS);
-          if ((nf_elem_tracked(lv->type) || lv->type == TY_POLY) && (lv->obj_elem_may_nil & NF_EL_STORED))
-            nf_elem_mark_back(f, av[1], 0);
+          nf_bind_elem_slot(f, lv, av[1]);
         }
       } else if (is_reduce_alias(ebuf)) {
         LocalVar *lv = nf_block_param(f, blk, 0);
-        if (lv && nf_open(lv->obj_may_nil) && (nf_tracked(c, lv->type) || lv->type == TY_POLY)) {
-          int why = an >= 2 ? nf_expr(f, av[1])
-                  : (nf_elem_tracked(comp_ntype(c, er)) && nf_elem(f, er, 0)) ? NFW_ELEM_NIL : NFW_NONE;
-          int bwhy = body >= 0 ? nf_or(nf_list(f, body), nf_next_nil(f, body, 0)) : NFW_NONE;
-          why = nf_or(why, bwhy);
-          if (ty_is_obj_array(comp_ntype(c, er))) why = nf_or(why, NFW_OPAQUE);
-          nf_set(f, &lv->obj_may_nil, why);
+        if (lv) {
+          if (nf_open(lv->obj_may_nil) && (nf_tracked(c, lv->type) || lv->type == TY_POLY)) {
+            int why = an >= 2 ? nf_expr(f, av[1])
+                    : (nf_elem_tracked(comp_ntype(c, er)) && nf_elem(f, er, 0)) ? NFW_ELEM_NIL : NFW_NONE;
+            int bwhy = body >= 0 ? nf_or(nf_list(f, body), nf_next_nil(f, body, 0)) : NFW_NONE;
+            why = nf_or(why, bwhy);
+            if (ty_is_obj_array(comp_ntype(c, er))) why = nf_or(why, NFW_OPAQUE);
+            nf_set(f, &lv->obj_may_nil, why);
+          }
+          nf_bind_reduce_elem(f, lv, an >= 2 ? av[1] : -1, blk);
         }
       }
     }
@@ -1630,10 +1673,13 @@ static void nf_bind_block(NF *f, int id, int blk, int mi, int **yields, int *nyi
         if (lv && nf_open(lv->obj_may_nil) && (nf_tracked(c, lv->type) || lv->type == TY_POLY))
           nf_set(f, &lv->obj_may_nil, i == 0 ? NFW_OPAQUE : elem_nil ? NFW_ELEM_NIL : NFW_NONE);
       }
+      nf_bind_reduce_elem(f, nf_block_param(f, blk, 0), an >= 1 ? av[0] : -1, blk);
       return;
     }
     acc = an >= 1 ? av[0] : -1;
     if (acc < 0) return;
+    if (is_with_object_alias(cn)) nf_bind_elem_slot(f, nf_block_param(f, blk, 1), acc);
+    else nf_bind_reduce_elem(f, nf_block_param(f, blk, 0), acc, blk);
   }
   else if (cn && (sp_streq(cn, "lambda") || sp_streq(cn, "proc") || sp_streq(cn, "new") ||
                   sp_streq(cn, "define_method") || sp_streq(cn, "define_singleton_method") ||
@@ -1741,6 +1787,38 @@ static int nf_next_nil(NF *f, int n, int depth) {
     for (int k2 = 0; k2 < an; k2++) { int w = nf_next_nil(f, av[k2], depth + 1); if (w) return w; }
   }
   return NFW_NONE;
+}
+
+static int nf_next_elem(NF *f, int n, int depth, int edepth) {
+  const NodeTable *nt = f->nt;
+  if (n < 0 || depth > 512) return 0;
+  NodeKind k = nt_kind(nt, n);
+  if (k == NK_BlockNode || k == NK_LambdaNode || k == NK_DefNode) return 0;
+  if (k == NK_NextNode) {
+    int a = nt_ref(nt, n, "arguments"), an = 0;
+    const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+    if (an == 0) return NFW_ELEM_NIL;
+    if (an == 1) return nf_elem(f, av[0], edepth + 1);
+    for (int j = 0; j < an; j++) {
+      int w = nt_kind(nt, av[j]) == NK_SplatNode
+              ? nf_elem(f, nt_ref(nt, av[j], "expression"), edepth + 1)
+              : nf_written_nil(nf_expr(f, av[j]));
+      if (w) return NFW_ELEM_NIL;
+    }
+    return 0;
+  }
+  for (int i = 0; i < nt_num_refs(nt, n); i++) {
+    int w = nf_next_elem(f, nt_ref_at(nt, n, i), depth + 1, edepth);
+    if (w) return w;
+  }
+  for (int i = 0; i < nt_num_arrs(nt, n); i++) {
+    int an = 0; const int *av = nt_arr_at(nt, n, i, &an);
+    for (int k2 = 0; k2 < an; k2++) {
+      int w = nf_next_elem(f, av[k2], depth + 1, edepth);
+      if (w) return w;
+    }
+  }
+  return 0;
 }
 
 static void nf_calls(NF *f, int **yields, int *nyields) {

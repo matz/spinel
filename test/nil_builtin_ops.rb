@@ -292,3 +292,43 @@ class CmpBox
 end
 cb = CmpBox.new(1)
 puts "cb_eq_nil: #{[cb].include?(nil)} #{cb == nil} #{(cb <=> nil).nil?}"
+
+gap_strs = ["a"]
+gap_strs[2] = "b"
+[1, 2].flat_map { |i| i == 1 ? ["x"] : gap_strs }.each do |s|
+  puts "flat_map_int_recv: #{s.nil?} #{s.respond_to?(:upcase)}"
+end
+[1, 2].map { |i| i == 1 ? "x" : nil }.each do |s|
+  puts "map_int_recv: #{s.nil?} #{s.respond_to?(:upcase)}"
+end
+["a", "b"].flat_map { |s| next gap_strs if s == "b"; [s] }.each do |s|
+  puts "flat_map_next_arr: #{s.nil?} #{s.respond_to?(:upcase)}"
+end
+["a", "b"].flat_map { |s| next [s] if s == "b"; [s] }.each do |s|
+  puts "flat_map_next_clean: #{s.upcase}"
+end
+
+seed_arr = ["a"]
+seed_arr[2] = "b"
+[1].reduce(seed_arr) do |acc, _|
+  acc.each { |s| puts "reduce_seed_arr: #{s.nil?} #{s.respond_to?(:upcase)}" }
+  acc
+end
+class MiniEnum
+  include Enumerable
+  def each
+    yield "x"
+  end
+end
+seed_enum = ["a"]
+seed_enum[2] = "b"
+MiniEnum.new.reduce(seed_enum) do |acc, _|
+  acc.each { |s| puts "reduce_seed_enum: #{s.nil?} #{s.respond_to?(:upcase)}" }
+  acc
+end
+seed_hash = ["a"]
+seed_hash[2] = "b"
+{ "k" => 1 }.reduce(seed_hash) do |acc, _|
+  acc.each { |s| puts "reduce_seed_hash: #{s.nil?} #{s.respond_to?(:upcase)}" }
+  acc
+end

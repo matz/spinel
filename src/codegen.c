@@ -5252,29 +5252,71 @@ static int fi_body_has_loop(Compiler *c, int id, int depth) {
   return 0;
 }
 
-/* True when the program can run user code on a fiber stack -- a Fiber, a green
-   thread, or a generator Enumerator. SP_FIBER_STACK_SIZE is the ceiling only
-   there; on the process stack the same frame has megabytes to sit in. */
-int fi_fiber_stack_risk(Compiler *c) {
+static int fi_is_fiber_const(const char *nm) {
+  return nm && (sp_streq(nm, "Fiber") || sp_streq(nm, "Thread") || sp_streq(nm, "Enumerator") ||
+                sp_streq(nm, "Queue") || sp_streq(nm, "SizedQueue") || sp_streq(nm, "Mutex") ||
+                sp_streq(nm, "Monitor") || sp_streq(nm, "ConditionVariable"));
+}
+
+static int fi_is_enum_call(const char *nm) {
+  /* an external enumerator's body runs on a generator fiber too */
+  return nm && (sp_streq(nm, "to_enum") || sp_streq(nm, "enum_for"));
+}
+
+static int fi_fiber_stack_risk_scan(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  NT_FOREACH_KIND(nt, NK_ConstantReadNode, i)
+    if (fi_is_fiber_const(key_name(c, i))) return 1;
+  NT_FOREACH_KIND(nt, NK_CallNode, i)
+    if (fi_is_enum_call(nt_str(nt, i, "name"))) return 1;
+  return 0;
+}
+
+static int fi_fiber_stack_risk_full_scan(Compiler *c) {
   const NodeTable *nt = c->nt;
   for (int i = 0; i < nt->count; i++) {
     const char *ty = nt_type(nt, i);
     NodeKind k = nt_kind(nt, i);
     if (!ty) continue;
     if (k == NK_ConstantReadNode) {
-      const char *nm = key_name(c, i);
-      if (nm && (sp_streq(nm, "Fiber") || sp_streq(nm, "Thread") || sp_streq(nm, "Enumerator") ||
-                 sp_streq(nm, "Queue") || sp_streq(nm, "SizedQueue") || sp_streq(nm, "Mutex") ||
-                 sp_streq(nm, "Monitor") || sp_streq(nm, "ConditionVariable")))
-        return 1;
+      if (fi_is_fiber_const(key_name(c, i))) return 1;
     }
     else if (k == NK_CallNode) {
-      const char *nm = nt_str(nt, i, "name");
-      /* an external enumerator's body runs on a generator fiber too */
-      if (nm && (sp_streq(nm, "to_enum") || sp_streq(nm, "enum_for"))) return 1;
+      if (fi_is_enum_call(nt_str(nt, i, "name"))) return 1;
     }
   }
   return 0;
+}
+
+/* True when the program can run user code on a fiber stack -- a Fiber, a green
+   thread, or a generator Enumerator. SP_FIBER_STACK_SIZE is the ceiling only
+   there; on the process stack the same frame has megabytes to sit in. */
+int fi_fiber_stack_risk(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  int has_lrec = c->lrec != NULL;
+  unsigned shape = comp_class_shape_gen();
+  if (!c->fiber_risk_memo.ans || c->fiber_risk_memo.count != nt->count ||
+      c->fiber_risk_memo.version != nt->version || c->fiber_risk_memo.edits != nt->edits ||
+      c->fiber_risk_memo.ncls != c->nclasses || c->fiber_risk_memo.shape != shape ||
+      c->fiber_risk_memo.has_lrec != has_lrec) {
+    c->fiber_risk_memo.ans = 1 + fi_fiber_stack_risk_scan(c);
+    c->fiber_risk_memo.count = nt->count;
+    c->fiber_risk_memo.version = nt->version;
+    c->fiber_risk_memo.edits = nt->edits;
+    c->fiber_risk_memo.ncls = c->nclasses;
+    c->fiber_risk_memo.shape = shape;
+    c->fiber_risk_memo.has_lrec = has_lrec;
+  }
+  int ans = c->fiber_risk_memo.ans == 2;
+  if (comp_cache_check_on()) {
+    int ref = fi_fiber_stack_risk_full_scan(c);
+    if (ans != ref) {
+      fprintf(stderr, "spinel-cache-check: fi_fiber_stack_risk mismatch: cached=%d scan=%d\n",
+              ans, ref);
+      abort();
+    }
+  }
+  return ans;
 }
 
 /* An estimate of the C frame a body contributes once it is absorbed into its

@@ -6203,12 +6203,45 @@ int method_call_param_shift(Compiler *c, int mn, int mi) {
   return (m->class_id < 0 && !m->is_cmethod && m->nparams > 0 && m->pnames) ? 1 : 0;
 }
 
-/* True when scope `scope_idx` contains an explicit `return`, which needs
-   a return funnel when the method is inlined at its call sites. */
-int scope_has_return(Compiler *c, int scope_idx) {
+static int scope_has_return_scan(Compiler *c, int scope_idx) {
   NT_FOREACH_KIND(c->nt, NK_ReturnNode, id)
     if (c->nscope[id] == scope_idx) return 1;
   return 0;
+}
+
+/* True when scope `scope_idx` contains an explicit `return`, which needs
+   a return funnel when the method is inlined at its call sites. */
+int scope_has_return(Compiler *c, int scope_idx) {
+  if (scope_idx < 0 || scope_idx >= c->nscopes || !comp_scope_index_is_frozen())
+    return scope_has_return_scan(c, scope_idx);
+  unsigned kgen = nt_kind_gen(c->nt, NK_ReturnNode);
+  unsigned sgen = comp_scope_index_gen();
+  if (!c->scope_ret_built || c->scope_ret_kgen != kgen ||
+      c->scope_ret_nscopes != c->nscopes || c->scope_ret_sgen != sgen) {
+    int ns = c->nscopes;
+    unsigned char *has = (unsigned char *)calloc((size_t)(ns > 0 ? ns : 1), 1);
+    if (!has) return scope_has_return_scan(c, scope_idx);
+    NT_FOREACH_KIND(c->nt, NK_ReturnNode, id) {
+      int si = c->nscope[id];
+      if (si >= 0 && si < ns) has[si] = 1;
+    }
+    free(c->scope_ret_has);
+    c->scope_ret_has = has;
+    c->scope_ret_nscopes = ns;
+    c->scope_ret_kgen = kgen;
+    c->scope_ret_sgen = sgen;
+    c->scope_ret_built = 1;
+  }
+  int ans = c->scope_ret_has[scope_idx] ? 1 : 0;
+  if (comp_cache_check_on()) {
+    int ref = scope_has_return_scan(c, scope_idx);
+    if (ans != ref) {
+      fprintf(stderr, "spinel-cache-check: scope_has_return mismatch for scope %d: cached=%d scan=%d\n",
+              scope_idx, ans, ref);
+      abort();
+    }
+  }
+  return ans;
 }
 
 /* Resolve a block-bearing CallNode to an INLINE-ABLE yielding user method:

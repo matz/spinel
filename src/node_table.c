@@ -911,6 +911,7 @@ void nt_free(NodeTable *nt) {
   }
   free(nt->nodes);
   nki_drop(nt);
+  free(nt->kind_gen);
   for (int i = 0; i < nt->nkind_retired; i++) free(nt->kind_retired[i]);
   free(nt->kind_retired);
   for (int i = 0; i < nt->nstr_retired; i++) free(nt->str_retired[i]);
@@ -1074,6 +1075,8 @@ void nt_kind_iter_close(NtKindIter *it) {
 }
 static void nki_drop(NodeTable *nt) {
   nt->nkind_moved = 0;
+  if (nt->kind_gen)
+    for (int k = 0; k < NK__COUNT; k++) nt->kind_gen[k]++;
   if (!nt->kind_ids) return;
   for (int k = 0; k < NK__COUNT; k++) nki_release(nt, nt->kind_ids[k]);
   free(nt->kind_ids); free(nt->kind_n); free(nt->kind_cap);
@@ -1156,6 +1159,7 @@ static void nki_apply_moves(NodeTable *nt) {
     nki_work(n);
     nki_release(nt, old);
     nt->kind_ids[k] = p; nt->kind_n[k] = n; nt->kind_cap[k] = cap;
+    nt->kind_gen[k]++;
   }
   free(hit);
   free(mv);
@@ -1165,6 +1169,10 @@ static void nki_apply_moves(NodeTable *nt) {
    yet added to their kinds' ids */
 static void nki_refresh(NodeTable *nt) {
   if (nt->kind_ids && nt->kind_count > nt->count) nki_drop(nt);
+  if (!nt->kind_gen) {
+    nt->kind_gen = (unsigned *)calloc((size_t)NK__COUNT, sizeof(unsigned));
+    if (!nt->kind_gen) nt_oom();
+  }
   if (!nt->kind_ids) {
     nt->kind_ids = (int **)calloc((size_t)NK__COUNT, sizeof(int *));
     nt->kind_n = (int *)calloc((size_t)NK__COUNT, sizeof(int));
@@ -1177,6 +1185,7 @@ static void nki_refresh(NodeTable *nt) {
     int k = (int)nt_kind(nt, id);
     nki_grow(nt, k, nt->kind_n[k] + 1);
     nt->kind_ids[k][nt->kind_n[k]++] = id;
+    nt->kind_gen[k]++;
   }
   nt->kind_count = nt->count;
 }
@@ -1205,6 +1214,13 @@ const int *nt_nodes_of_kind(const NodeTable *nt, NodeKind k, int *count) {
   if (!w->kind_ids || w->kind_count != w->count || w->nkind_moved) nki_refresh(w);
   *count = w->kind_n[k];
   return w->kind_ids[k];
+}
+
+unsigned nt_kind_gen(const NodeTable *nt, NodeKind k) {
+  if (k < 0 || k >= NK__COUNT) return 0;
+  NodeTable *w = (NodeTable *)nt;
+  if (!w->kind_ids || w->kind_count != w->count || w->nkind_moved) nki_refresh(w);
+  return w->kind_gen[k];
 }
 
 

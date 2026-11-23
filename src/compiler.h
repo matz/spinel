@@ -1824,6 +1824,17 @@ typedef struct {
   /* respond_to_missing_defined's answer, 1 + it (0 unasked), and the state it read: the tree's (count, version,
      edits) and the class tables' comp_name_reader_any keys on */
   struct { int ans, count, ncls; unsigned version, tgen, shape; unsigned long edits; } rtm_memo;
+  /* fi_fiber_stack_risk's answer (codegen.c), 1 + it (0 unasked), and the
+     table/class state it read. */
+  struct { int ans, count, ncls, has_lrec; unsigned version, shape; unsigned long edits; } fiber_risk_memo;
+  /* per-scope cache for scope_has_return (analyze_util.c): 1 if scope `si`
+     holds an NK_ReturnNode, rebuilt from NK_ReturnNode ids when their
+     generation or the scope table changes. */
+  unsigned char *scope_ret_has;
+  int scope_ret_nscopes;
+  unsigned scope_ret_kgen;
+  unsigned scope_ret_sgen;
+  int scope_ret_built;
   /* the last eight method C names mc_method spelled, and the next to reuse:
      each grown to its name (mc_ring_setf), which no length bounds */
   char *mc_ring[8]; size_t mc_ring_cap[8]; int mc_ring_next;
@@ -2148,6 +2159,9 @@ enum { IE_RB_IN = 1, IE_RB_OWN = 2, IE_RB_ROOT = 4, IE_RB_FWD = 8 };
 AutoloadRegistration *comp_autoloads(const Compiler *c, int node, int *count);
 Compiler *comp_new(const NodeTable *nt);
 void comp_free(Compiler *c);
+/* True when SPINEL_CACHE_CHECK is set and non-zero (verifies cached whole-
+   program predicates against their uncached scans). */
+int comp_cache_check_on(void);
 /* the dynamic send's candidate memo and literal set (Compiler.dsn), dropped (analyze_desugar.c) */
 void dsn_free(Compiler *c);
 void ic_free(Compiler *c);   /* implicit_calls.c */

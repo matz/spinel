@@ -30825,6 +30825,38 @@ int desugar_builtin_reopen_const_reads(Compiler *c) {
   return changed;
 }
 
+/* desugar_builtin_reopen_self_calls' class half as a row, for one statement
+   of a builtin class's reopening: a def's bare calls, and a define_method's
+   block's, of a builtin method of the class and no method the class's
+   bodies define, are the builtin value's own (`self.split`). Run after the
+   step, it rewrites nothing the step did not; it is there for the statements
+   the walk splices into the reopening (a hook's `base.class_eval { def
+   words = split(" ") }` on String), which lower_span lowers by the rows that
+   have run. */
+int desugar_builtin_reopen_self_calls_at(Compiler *c, LowerCtx *lc, int id) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int owner = lc->owner;
+  if (owner < 0 || !class_def_is_class(nt, owner) || class_def_body(nt, owner) != lc->body) return 0;
+  NodeKind k = nt_kind(nt, id);
+  if (k != NK_DefNode && k != NK_CallNode) return 0;
+  const char *cn = class_def_key(c, owner);
+  if (!cn || !rbself_builtin(cn)) return 0;
+  char *defs[512]; int nd = 0, n0 = nt->count, changed = 0;
+  for (int m2 = 0; m2 < n0; m2++) {
+    if (!class_def_is_class(nt, m2)) continue;
+    const char *cn2 = class_def_key(c, m2);
+    if (!cn2 || !sp_streq(cn2, cn)) continue;
+    int b2 = class_def_body(nt, m2);
+    int bn2 = 0; const int *bs2 = b2 >= 0 ? nt_arr(nt, b2, "body", &bn2) : NULL;
+    for (int q = 0; q < bn2 && nd < 512; q++)
+      if (nt_kind(nt, bs2[q]) == NK_DefNode && nt_str(nt, bs2[q], "name"))
+        defs[nd++] = (char *)nt_str(nt, bs2[q], "name");
+  }
+  rbself_defs(nt, id, defs, nd, &changed, rbself_kind(cn));
+  if (changed) comp_grow_node_arrays(c);
+  return changed;
+}
+
 int desugar_builtin_reopen_self_calls(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count, changed = 0;

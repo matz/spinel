@@ -111,6 +111,8 @@ static const Lowering lowerings[LW__COUNT] = {
     desugar_body_send_decl_at, desugar_body_send_decl_left, "`send(:attr_accessor, :v)`: a declaration sent by a literal name in a class body" },
   [LW_BODY_CLASS_EXEC_ARGS] = { "desugar_body_class_exec_args", LF_STMT | LF_FRAMES, { NK_NONE },
     desugar_body_class_exec_args_at, desugar_body_class_exec_args_left, "`class_exec(a) { |p| .. }` in a class body" },
+  [LW_BUILTIN_REOPEN_SELF_CALLS] = { "desugar_builtin_reopen_self_calls", LF_STMT | LF_FRAMES, { NK_NONE },
+    desugar_builtin_reopen_self_calls_at, NULL, "a bare call in a def a builtin class's reopening holds" },
   [LW_SELF_SUPERCLASS] = { "desugar_self_superclass", LF_STMT | LF_FRAMES, { NK_NONE },
     desugar_self_superclass_at, desugar_self_superclass_left, "`class I < self` in a class body" },
   [LW_STRUCT_SUBCLASS_NEW_WRITE] = { "desugar_struct_subclass_new_write", 0, { NK_ConstantWriteNode },

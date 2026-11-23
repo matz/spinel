@@ -6152,13 +6152,17 @@ static LrVers *lr_vers(LoadRecord *r, const char *name) {
   return NULL;
 }
 
-/* May classes a and b be on one chain: the record does not name one of them (main, a module, which a mixin puts
-   anywhere), or one is the other or under it? lr_unordered_supply's "on", asked with no point */
-static int lr_under(Compiler *c, int cls, int k);
-static int lr_may_share_chain(Compiler *c, int a, int b) {
-  if (a <= LR_MAIN || b <= LR_MAIN || a >= c->nclasses || b >= c->nclasses || a == b) return 1;
-  if (comp_class_is_module(c, &c->classes[a]) || comp_class_is_module(c, &c->classes[b])) return 1;
-  return lr_under(c, a, b) || lr_under(c, b, a);
+/* May class or module k be on cls's chain (its singleton's when sg) at p: main, a class the record does not name, or
+   lr_in_ancestry's answer? lr_unordered_supply's "on", asked of the classes that hold an unplaced def */
+static int lr_in_ancestry(Compiler *c, int cls, int sg, int k, LoadPoint p);
+static int lr_chain_may_hold(Compiler *c, int cls, int sg, int k, LoadPoint p) {
+  return k <= LR_MAIN || lr_in_ancestry(c, cls, sg, k, p);
+}
+/* ...either way and at no point: may a call on class a meet what class b defines, or the other way round (a body's
+   class against the class of an unplaced def; a mixin may put a module on any chain: no point decides it) */
+static int lr_chains_may_meet(Compiler *c, int a, int b, int sg) {
+  LoadPoint none = { -1, -1, -1 };
+  return lr_chain_may_hold(c, a, sg, b, none) || lr_chain_may_hold(c, b, sg, a, none);
 }
 /* Does body statement st define the method `name` on class ci's side sg that the record holds an unplaced def of on
    a class that may share ci's chain, or define a kin of initialize? */
@@ -6171,7 +6175,7 @@ static int lr_name_held(Compiler *c, int ci, int sg, const char *name) {
   LrVers *x = lr_vers(r, name);
   for (int i = x && lr_vers_unordered(c, x) ? x->first : -1; i >= 0; i = r->hist[i].nlink) {   /* (no history of the name holds one: one test per name, not a walk of its histories) */
     const LrHist *h = &r->hist[i];
-    if (h->b != sg || !lr_may_share_chain(c, ci, h->a)) continue;
+    if (h->b != sg || !lr_chains_may_meet(c, ci, h->a, sg)) continue;
     for (int j = 0; j < h->n; j++) if (lr_unplaced_def(&h->v[j])) return 1;
   }
   return 0;
@@ -11111,7 +11115,7 @@ static int lr_unordered_supply(Compiler *c, int cls, int sg, const char *name, L
       const LrDef *v = &r->hist[i].v[j];
       if (lr_is_version(v) && lr_unplaced(c, v->node)) return 1;
       if (!lr_unplaced_def(v) && !lr_is_version(v)) continue;
-      if (on < 0) on = r->hist[i].a <= LR_MAIN || lr_in_ancestry(c, cls, sg, r->hist[i].a, p);
+      if (on < 0) on = lr_chain_may_hold(c, cls, sg, r->hist[i].a, p);
       if (on && lr_unplaced_def(v)) unpl = 1;
       else if (on) placed = 1;
     }

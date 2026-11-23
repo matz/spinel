@@ -4750,6 +4750,21 @@ static unsigned presence_reader_side(const NodeTable *nt, int id, int *mask, int
   *mask = !*list ? (flag ? 7 : 1) : method_list_vis_mask(rn) ? list_core_vis_mask(rn) : method_defined_vis_mask(rn);
   return !*list || (ac == 1 && !is_instance_method_list(rn)) || flag || list_chain_shape(nt, id) ? CT_REACH : CT_OWN;
 }
+/* The classes whose instances a class-valued receiver r of reader id names qm of, each handed to fn: the class a
+   constant names, or the classes `x.class` may be (as a respond_to? asks them of x); 0 for any other receiver */
+static int class_receiver_instances(Compiler *c, int id, int r, const char *qm, CtClassFn fn, void *arg) {
+  const NodeTable *nt = c->nt;
+  NodeKind rk = r >= 0 ? nt_kind(nt, r) : NK_SelfNode;
+  PresAsk a = { id, 0, fn, arg };
+  int k;
+  if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) {
+    if ((k = class_recv_static_ci(c, r)) >= 0) fn(c, id, qm, k, 0, arg);
+    return 1;
+  }
+  if (rk != NK_CallNode || !is_class_query(nt_str(nt, r, "name")) || nt_ref(nt, r, "receiver") < 0) return 0;
+  ct_version_classes(c, r, qm, pres_ask_one, &a);
+  return 1;
+}
 /* A respond_to? of a name only the run knows (a plain call, one or two arguments, no literal name) */
 static int respond_to_runtime_name(Compiler *c, int id) {
   int ac = 0;
@@ -4762,25 +4777,50 @@ static int respond_to_runtime_name(Compiler *c, int id) {
    only the run knows), may ask name qm of, each handed to fn as a literal respond_to?'s are: a list of an
    object's methods (`x.methods`) or the respond_to?, the classes its receiver may hold; a list of a class's
    instance methods, the class its receiver names or `x.class`'s instances */
+/* See call_plan.h. */
+int cplan_self_list_classes(Compiler *c, int id, int recv, const char *name, int *ks, int *ci_out, unsigned *form) {
+  int ci = -1, n = 0;
+  *form = 0;
+  if (recv >= 0 && nt_kind(c->nt, recv) != NK_SelfNode) return 0;
+  const Scope *s = comp_scope_of(c, id);
+  if (s && s->is_cmethod && s->class_id >= 0 && call_target(c, id, s->class_id, name, CT_CMETHOD, NULL) < 0) {
+    ci = s->class_id;
+    *form = CSL_CMETHOD | (s->yields ? CSL_SPLICE : 0) | (cmethod_takes_self_cls(c, s) ? CSL_DYN : 0);
+  }
+  /* (a class body's self names the class whose body holds it, unless that class has a class method of the name) */
+  else if (recv >= 0 && (ci = class_body_self_ci(c, recv)) >= 0 && call_target(c, id, ci, name, CT_CMETHOD, NULL) >= 0)
+    ci = -1;
+  if (ci < 0) return 0;
+  *ci_out = ci;
+  /* (the class, and where the method takes its receiving class or is spliced into each subclass, those below it) */
+  for (int k = 0; k < c->nclasses; k++)
+    if (k == ci || ((*form & (CSL_DYN | CSL_SPLICE)) && is_descendant(c, k, ci))) ks[n++] = k;
+  return n;
+}
 typedef struct { CtClassFn fn; void *arg; } ChainFilter;
-/* (a class whose chain holds no version of the name has no cell of it to read: the name is not asked of it) */
+/* (a class whose chain holds no version of the name has no cell of it to read, and one that removes it has none the
+   cells answer from: presence_cells_of leaves it to the table, so the name is not asked of either) */
 static void reader_name_filter(Compiler *c, int id, const char *nm, int k, unsigned flags, void *arg) {
   const ChainFilter *f = arg;
-  ElabVersion vs[1];
-  if (k >= 0 && elab_chain_versions(c, k, 0, nm, vs, 1) != 0) f->fn(c, id, nm, k, flags, f->arg);
+  ElabVersion vs[VER_MAX_ARMS];
+  int n = k >= 0 ? elab_chain_versions(c, k, 0, nm, vs, VER_MAX_ARMS) : 0, removed = 0;
+  for (int i = 0; i < n; i++) removed |= vs[i].v->kind == LR_REMOVE;
+  if (n > 0 && !removed) f->fn(c, id, nm, k, flags, f->arg);
 }
 static void reader_name_classes(Compiler *c, int id, const char *qm, CtClassFn fn, void *arg) {
   const NodeTable *nt = c->nt;
-  int r = nt_ref(nt, id, "receiver"), k;
+  int r = nt_ref(nt, id, "receiver");
   ChainFilter f = { fn, arg };
   PresAsk a = { id, 0, reader_name_filter, &f };
-  NodeKind rk = r >= 0 ? nt_kind(nt, r) : NK_SelfNode;
   if (!is_instance_method_list(nt_str(nt, id, "name"))) ct_version_classes(c, id, qm, pres_ask_one, &a);
-  else if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) {
-    if ((k = class_recv_static_ci(c, r)) >= 0) reader_name_filter(c, id, qm, k, 0, &f);
+  else if (!class_receiver_instances(c, id, r, qm, reader_name_filter, &f) && (r < 0 || nt_kind(nt, r) == NK_SelfNode)) {
+    int *ks = malloc(sizeof *ks * (size_t)(c->nclasses > 0 ? c->nclasses : 1)), ci;
+    unsigned form;
+    if (!ks) cplan_oom();
+    int n = cplan_self_list_classes(c, id, r, nt_str(nt, id, "name"), ks, &ci, &form);
+    for (int i = 0; i < n; i++) reader_name_filter(c, id, qm, ks[i], 0, &f);
+    free(ks);
   }
-  else if (rk == NK_CallNode && is_class_query(nt_str(nt, r, "name")) && nt_ref(nt, r, "receiver") >= 0)
-    ct_version_classes(c, r, qm, pres_ask_one, &a);
 }
 typedef struct { int cls, hit; } ChainHit;
 static void reader_name_hit(Compiler *c, int id, const char *nm, int k, unsigned flags, void *arg) {
@@ -4816,16 +4856,10 @@ static void presence_asks(Compiler *c, int id, CtClassFn fn, void *arg) {
   }
   const char *qm = is_method_presence_name_query(rn) ? method_sym_arg(c, id) : NULL;
   if (!qm || !ct_version_named(c, qm) || respond_to_missing_defined(c)) return;
-  int r = nt_ref(nt, id, "receiver"), k;
+  int r = nt_ref(nt, id, "receiver");
   PresAsk a = { id, is_respond_to_name(rn), fn, arg };
-  NodeKind rk = r >= 0 ? nt_kind(nt, r) : NK_SelfNode;
   if (is_respond_to_name(rn)) ct_version_classes(c, id, qm, pres_ask_one, &a);
-  else if (!is_method_defined_query(rn) || r < 0) return;
-  else if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) {
-    if ((k = class_recv_static_ci(c, r)) >= 0) fn(c, id, qm, k, 0, arg);
-  }
-  else if (rk == NK_CallNode && is_class_query(nt_str(nt, r, "name")) && nt_ref(nt, r, "receiver") >= 0)
-    ct_version_classes(c, r, qm, pres_ask_one, &a);
+  else if (is_method_defined_query(rn) && r >= 0) class_receiver_instances(c, id, r, qm, fn, arg);
 }
 /* ...each such reader's of the program (written: in a scope the C writes, ver_scope_written) */
 static int ver_scope_written(const Scope *s);
@@ -6384,6 +6418,20 @@ int cplan_undef_at(Compiler *c, int id, int cls, const char *name) {
   int o = elab_method_at(c, cls, name, 0, p, &d);
   if (o == ELAB_UNKNOWN) return -1;
   return o == ELAB_NO && d && d->kind == LR_UNDEF;
+}
+/* See call_plan.h. */
+int cplan_list_site_classes(Compiler *c, int id, const int *cand, int ncand, int *out) {
+  CplanCells cs;
+  int n = 0, mask = list_core_vis_mask(nt_str(c->nt, id, "name"));
+  for (int i = 0; i < ncand; i++) {
+    int hit = 0;
+    for (int v = 0; !hit && elab_version_name(c, v); v++) {
+      const char *nm = elab_version_name(c, v);
+      hit = cplan_list_cells(c, id, cand[i], 0, nm, mask, &cs) && cplan_cells_testable(c, &cs);
+    }
+    if (hit) out[n++] = cand[i];
+  }
+  return n;
 }
 /* See call_plan.h. */
 int cplan_respond_runtime_cells(Compiler *c, int id, int cls, const char *name, int all, CplanCells *out) {

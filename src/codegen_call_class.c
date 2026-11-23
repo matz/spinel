@@ -402,17 +402,14 @@ static void emit_respond_to_runtime_name(Compiler *c, int id, Buf *b, int recv, 
       else cplan_chain_names(c, k, emit_respond_guard, &guard);
     }
   }
-  if (!literal) {
-    TyKind rt = repr_of(c, recv).as_ty;
-    NodeKind iak = argc >= 2 ? nt_kind(nt, argv[1]) : NK_FalseNode;
-    int ia = iak == NK_TrueNode ? 1 : iak == NK_FalseNode || iak == NK_NilNode ? 0 : 2;
+  /* (the plan answers for each class and name whether the reader reads its cells: cplan_respond_runtime_cells) */
+  if (!literal)
     for (int k = 0; k < c->nclasses; k++) {
-      if (comp_class_is_module(c, &c->classes[k]) || !c->classes[k].instantiated ||
-          !(rt == TY_POLY || rt == TY_UNKNOWN || (ty_is_object(rt) && is_descendant(c, k, ty_object_class(rt))))) continue;
-      RespondCells cells = { c, &guarded, id, k, tv, ia };
+      if (comp_class_is_module(c, &c->classes[k]) || !c->classes[k].instantiated) continue;
+      NodeKind iak = argc >= 2 ? nt_kind(nt, argv[1]) : NK_FalseNode;
+      RespondCells cells = { c, &guarded, id, k, tv, iak == NK_TrueNode ? 1 : iak == NK_FalseNode || iak == NK_NilNode ? 0 : 2 };
       cplan_chain_names(c, k, emit_respond_cells, &cells);
     }
-  }
   /* boxed when the call is typed so (an IO's is, see the fold above) */
   int boxed = repr_of(c, id).kind == RK_BOXED;
   if (boxed) buf_puts(b, "sp_box_bool(");
@@ -4240,27 +4237,26 @@ static int emit_class_name_reader_arity(Compiler *c, int id, const char *nm, int
   buf_printf(b, "sp_raise_cls(\"ArgumentError\", \"%s\"); (const char *)NULL; })", am);
   return 1;
 }
-static int emit_class_instance_methods_all(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv) {
+static int emit_class_instance_methods_list(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, int *ks) {
   int prot = sp_streq(name, "instance_methods");
   if (!prot && !sp_streq(name, "public_instance_methods")) return 0;
   if (argc > 1 || (argc == 1 && nt_kind(nt, argv[0]) != NK_TrueNode)) return 0;
-  int ci = recv >= 0 ? view_class_is(c, recv, ELAB_GAIN_METHODS | ELAB_GAIN_INHERITED) : -1, dyn = 0;
-  const Scope *cm = NULL;
+  int ci = recv >= 0 ? view_class_is(c, recv, ELAB_GAIN_METHODS | ELAB_GAIN_INHERITED) : -1, dyn = 0, nks = 0;
+  unsigned form = 0;
   /* a constant path (`Outer::Mod`) names its class by the leaf, as constant
      paths resolve here; a class-tag arm's receiver, the class it names */
   if (ci >= 0) ;
   else if (recv >= 0 && (nt_kind(nt, recv) == NK_ConstantReadNode || nt_kind(nt, recv) == NK_ConstantPathNode))
     ci = const_node_class_index(c, recv);
   else if (recv < 0 || nt_kind(nt, recv) == NK_SelfNode) {
-    Scope *s = comp_scope_of(c, id);
-    if (s && s->is_cmethod && s->class_id >= 0 && call_target(c, id, s->class_id, name, CT_CMETHOD, NULL) < 0) {
-      ci = s->class_id;
-      cm = s;
-    }
-    /* a class body's self names the class whose body holds it */
-    else if (recv >= 0 && (ci = class_body_self_ci(c, recv)) >= 0 &&
-             call_target(c, id, ci, name, CT_CMETHOD, NULL) >= 0)
-      ci = -1;
+    /* the class of a class body's or class method's self, and those a method taking its receiving class lists
+       too: the call plan's (cplan_self_list_classes), which the survey asks */
+    nks = cplan_self_list_classes(c, id, recv, name, ks, &ci, &form);
+    dyn = (form & CSL_DYN) != 0;
+    /* a spliced class method has its receiving class at the site */
+    if (nks > 0 && (form & CSL_SPLICE) && g_self && g_emitting_class_id >= 0) ci = g_emitting_class_id, dyn = 0;
+    /* (the list switches on the receiving class only where the method takes it) */
+    if (nks > 0 && !dyn) nks = 1, ks[0] = ci;
   }
   /* a class held in a value: a switch on its class id over the classes the
      walk bounds it to, each listing what its instances answer */
@@ -4291,15 +4287,9 @@ static int emit_class_instance_methods_all(Compiler *c, int id, Buf *b, const No
     return 1;
   }
   if (ci < 0) return 0;
-  if (cm) {
-    /* a spliced class method has its receiving class at the site; any
-       other that takes it reads it from _sp_cls */
-    if (cm->yields && g_self && g_emitting_class_id >= 0) ci = g_emitting_class_id;
-    else dyn = cmethod_takes_self_cls(c, cm);
-  }
   /* a module's: its own and its includes' */
   if (comp_class_is_module(c, &c->classes[ci])) {
-    if (cm || !cplan_module_listable(c, ci, name)) return 0;
+    if ((form & CSL_CMETHOD) || !cplan_module_listable(c, ci, name)) return 0;
     ReflNames r = {0};
     refl_at(&r, id, ci, 0);
     refl_module_instance_methods(c, ci, prot, &r);
@@ -4310,13 +4300,14 @@ static int emit_class_instance_methods_all(Compiler *c, int id, Buf *b, const No
     return 1;
   }
   /* every class the call can run on lists ahead of time, or none does */
-  for (int k = 0; k < c->nclasses; k++)
-    if ((k == ci || (dyn && is_descendant(c, k, ci))) && !an_object_methods_listable(c, k, name)) return 0;
+  if (nks <= 0) ks[0] = ci, nks = 1;
+  for (int i = 0; i < nks; i++)
+    if (!an_object_methods_listable(c, ks[i], name)) return 0;
   int rt = ++g_tmp;
   buf_printf(b, "({ sp_PolyArray *_t%d = NULL; ", rt);
   if (dyn) buf_puts(b, "switch (_sp_cls.cls_id) {");
-  for (int k = 0; k < c->nclasses; k++) {
-    if (k != ci && (!dyn || !is_descendant(c, k, ci))) continue;
+  for (int i = 0; i < nks; i++) {
+    int k = ks[i];
     ReflNames r = {0};
     refl_at(&r, id, k, 0);
     refl_class_instance_methods(c, k, 1, prot, &r);
@@ -4330,6 +4321,13 @@ static int emit_class_instance_methods_all(Compiler *c, int id, Buf *b, const No
   if (dyn) buf_puts(b, " default: break; }");
   buf_printf(b, " sp_box_poly_array(_t%d ? _t%d : sp_PolyArray_new()); })", rt, rt);
   return 1;
+}
+static int emit_class_instance_methods_all(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv) {
+  int *ks = malloc(sizeof *ks * (size_t)(c->nclasses > 0 ? c->nclasses : 1));
+  if (!ks) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  int done = emit_class_instance_methods_list(c, id, b, nt, name, recv, argc, argv, ks);
+  free(ks);
+  return done;
 }
 /* The value class k's `class << self` accessor slot for `base` holds, boxed:
    the civ_ static a class-level @ivar backs it with, or its own sg_ slot. */

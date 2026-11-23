@@ -20293,16 +20293,16 @@ void refl_class_private_methods(Compiler *c, int ci, ReflNames *r) {
 }
 
 static int emit_cells_test(Compiler *c, const CplanCells *cs, int tail, Buf *b);
-/* Does list r, at its call, read the version cells of some name (refl_emit_sym_array's `cells`)? */
-static int refl_reads_cells(Compiler *c, const ReflNames *r) {
-  CplanCells cs;
-  for (int i = 0; r->at && i < r->n; i++) {
-    int guarded = r->vis_mask && !(r->at_side & CT_CMETHOD) && cplan_guarded_presence(c, r->at_cls, r->v[i], (r->at_side & CT_OWN) != 0, NULL);
-    if (!guarded && !(r->show[i] & REFL_ROW) &&
-        cplan_list_cells(c, r->at - 1, r->at_cls, r->at_side, r->v[i], r->vis_mask ? r->vis_mask : 3, &cs) && cplan_cells_testable(c, &cs))
-      return 1;
-  }
-  return 0;
+/* Does name i of list r, at its call, read cells: a conditional def's guard (*guarded, its cells in cs), or the version
+   cells of a name whose versions the record cannot order against the list: listed where one of its cells says it is
+   live (cplan_list_cells), as a respond_to? there answers, of the visibilities the list shows; the cells answer its
+   visibility, so the table's, which the list shows the name by otherwise, is not asked */
+static int refl_name_cells(Compiler *c, const ReflNames *r, int i, CplanCells *cs, int *guarded) {
+  *guarded = r->at && r->vis_mask && !(r->at_side & CT_CMETHOD) &&
+             cplan_guarded_presence(c, r->at_cls, r->v[i], (r->at_side & CT_OWN) != 0, cs);
+  return r->at && !*guarded && !(r->show[i] & REFL_ROW) &&
+         cplan_list_cells(c, r->at - 1, r->at_cls, r->at_side, r->v[i], r->vis_mask ? r->vis_mask : 3, cs) &&
+         cplan_cells_testable(c, cs);
 }
 /* Emit the listed names of `r` as a PolyArray of symbols. Interned at run
    time: a name the source never spells is not in the generated symbol
@@ -20315,15 +20315,7 @@ void refl_emit_sym_array(Compiler *c, int cid, ReflNames *r, Buf *b) {
   buf_printf(b, "({ sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d); ", ta, ta);
   for (int i = 0; i < r->n; i++) {
     CplanCells cs;
-    int guarded = r->at && r->vis_mask && !(r->at_side & CT_CMETHOD) &&
-                  cplan_guarded_presence(c, r->at_cls, r->v[i], (r->at_side & CT_OWN) != 0, &cs);
-    /* a name whose versions the record cannot order against the list: listed where one of its cells says it is
-       live (cplan_list_cells), as a respond_to? there answers, of the visibilities the list shows, of a class-side
-       list or of a list of a class's own instance methods; the cells answer its visibility, so the table's,
-       which the list shows the name by otherwise, is not asked */
-    int cells = r->at && !guarded && !(r->show[i] & REFL_ROW) &&
-                cplan_list_cells(c, r->at - 1, r->at_cls, r->at_side, r->v[i], r->vis_mask ? r->vis_mask : 3, &cs) &&
-                cplan_cells_testable(c, &cs);
+    int guarded, cells = refl_name_cells(c, r, i, &cs, &guarded);
     if (guarded) {
       buf_puts(b, "if (");
       emit_guarded_presence(c, &cs, b);
@@ -20637,16 +20629,13 @@ int emit_value_methods_reflection(Compiler *c, int id, Buf *b) {
   if (!cls[0]) {
     /* an instance of a class whose list reads version cells here is listed at this site, where the cells are the
        call's (emit_object_methods_list); every other value by the shared helper's tables */
-    int nsite = 0, *site = calloc((size_t)(c->nclasses > 0 ? c->nclasses : 1), sizeof *site);
-    if (!site) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-    for (int k = 0; k < c->nclasses; k++) {
-      ReflNames r = {0};
-      if (!c->classes[k].instantiated || c->classes[k].is_singleton_of || !an_object_methods_listable(c, k, name)) continue;
-      refl_at(&r, id, k, 0);
-      refl_object_methods(c, k, 1, prot, 0, &r);
-      if (refl_reads_cells(c, &r)) site[nsite++] = k;
-      refl_free(&r);
-    }
+    int ncand = 0, nsite = 0, *cand = calloc((size_t)(c->nclasses > 0 ? c->nclasses : 1), sizeof *cand);
+    int *site = calloc((size_t)(c->nclasses > 0 ? c->nclasses : 1), sizeof *site);
+    if (!cand || !site) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    for (int k = 0; k < c->nclasses; k++)
+      if (c->classes[k].instantiated && !c->classes[k].is_singleton_of && an_object_methods_listable(c, k, name)) cand[ncand++] = k;
+    nsite = cplan_list_site_classes(c, id, cand, ncand, site);
+    free(cand);
     if (nsite) {
       int tv = ++g_tmp, ta = ++g_tmp;
       buf_printf(b, "({ sp_RbVal _t%d = ", tv);

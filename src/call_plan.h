@@ -1821,6 +1821,14 @@ int cplan_slot_may_hold(Compiler *c, int k, int cid);
    survey asks each name it may list the entry a call there would take (cplan_presence_asks), so that
    cplan_list_cells gives its cells. */
 int cplan_list_class(Compiler *c, int id, int *own);
+/* The classes a receiverless or `self.` instance-method list at id lists the methods of (recv: its receiver node, -1
+   for none), into ks (sized nclasses), in class order: the class a class body's self is, or the class of the class
+   method it is in (unless the class has a class method of the name: *form CSL_CMETHOD), and, where that method
+   takes its receiving class (CSL_DYN: the list switches on it) or is spliced into each subclass (CSL_SPLICE: the
+   receiving class is the one emitted), the classes below it; *ci is the class itself. 0 for any other receiver. The survey asks each name of these classes
+   (presence_asks), and the emitter lists each. */
+enum { CSL_CMETHOD = 1, CSL_DYN = 2, CSL_SPLICE = 4 };
+int cplan_self_list_classes(Compiler *c, int id, int recv, const char *name, int *ks, int *ci, unsigned *form);
 /* The cells that answer whether list id lists method `name` of cls on side (CT_CMETHOD for a class-side list,
    CT_OWN for its own versions), or a method_defined? kin there finds it: the cells cplan_cmethod_presence
    (cplan_presence_cells) gives for the visibilities mask counts (a list shows public and protected methods, 3;
@@ -1828,6 +1836,9 @@ int cplan_list_class(Compiler *c, int id, int *own);
    name) and for a method_defined? kin what a call there finds; 0 where the table answers it, and for an
    instance-method list of another shape than list_cells_shape's, whose names the survey does not ask. */
 int cplan_list_cells(Compiler *c, int id, int cls, unsigned side, const char *name, int mask, CplanCells *out);
+/* Of the classes cand[0..ncand) a boxed receiver may hold, those whose chain list at id (`x.methods`) reads the cells of
+   some name, into out: they are listed at the site, where the cells are the call's, the rest by the shared tables */
+int cplan_list_site_classes(Compiler *c, int id, const int *cand, int ncand, int *out);
 /* The cells that answer whether class cls's instances respond to `name` at respond_to? call id, of a name only the
    run knows: the cells cplan_presence_cells gives for each name the survey asked of this reader (presence_asks),
    for the public visibility, or with `all` every one (the include_all argument: the caller reads which of the two

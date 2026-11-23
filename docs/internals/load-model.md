@@ -818,9 +818,9 @@ the body may have run, the word's after a statement that surely ran it
 (`elab_method_vis_at`), and the visibility cell where the body may have
 run any number of times.
 
-Every reader of a name a body's version may make reads the version's
-cell, so the version is late (`lr_late_asked`) and a guard and the call
-it guards answer alike. A list of a whole chain's methods (`x.methods`,
+The readers the plan answers read the cell of a body's version, so the
+version is late (`lr_late_asked`) and a guard and the call it guards answer
+alike; the exceptions are listed below. A list of a whole chain's methods (`x.methods`,
 `x.public_methods`, `K.instance_methods` and its forms, with no argument,
 `true` or a flag the run decides, and `x.public_methods(false)`;
 `refl_cell_list`'s bit 4) asks the cells of each name the record holds
@@ -834,9 +834,15 @@ list is not answered by `respond_to_missing?`, so it reads the cells in a
 program that defines it. The readers that still answer from the final
 tables are a list on a receiver that is neither a
 constant nor an object (a module value in a variable), and a `respond_to?` or `method_defined?` of a
-program that defines `respond_to_missing?`: the body's version a reader
-there names is not late (`lr_late_asked`), so a def is listed, and answers
-`respond_to?`, before it runs. A module's def such a list may read is the
+program that defines `respond_to_missing?`, whose answers a body's
+version a reader names keeps from the start on either side (`lr_late_asked`:
+the instance side's presence readers, the class side's too with its lists and
+a Method's maker; reading the cells there, with `respond_to_missing?` as the else, removes it): the def is listed, and answers
+`respond_to?`, before it runs. A receiverless or `self.` list in a class body
+or class method, or in a plain block, lambda or proc in either, reads the cells of the class, and of the classes below it
+where the method takes its receiving class (`cplan_self_list_classes`); one in a module's body or class method, in a
+`class << self` body, or in a block that rebinds self (`instance_eval`, `class_eval`, `class_exec`: `self_class_body`
+declines it) is not listed ahead of time and is refused as before. A module's def such a list may read is the
 table's on a class that extends the module too, so the class value's
 `respond_to?` answers it from the start. Only list readers of the same
 side count: a class-side list (`K.singleton_methods`) leaves an instance

@@ -5984,12 +5984,13 @@ static int lr_late_asked(Compiler *c, const LrVers *x, const LrHist *h, int nh) 
      call takes the face entry, ct_face_for, whichever readers answer from the table) */
   if (cside && lr_body_word_of(h)) return 1;
   int extent = lr_version_extent(c, h, fv) || lr_body_word_of(h);
-  /* (a program that defines respond_to_missing? answers its presence readers from the tables, which no cell tells: a
-     body's version a reader there names is not late, so the guard and the call it guards answer alike; carry 17
-     reads the cells there with respond_to_missing? as the else, and this goes) */
-  if (!cside && extent && respond_to_missing_defined(c) &&
+  /* (a program that defines respond_to_missing? answers its presence readers, and on the class side its lists too,
+     from the tables, which no cell tells: a body's version a reader there names is not late, so the guard and the
+     call it guards answer alike; a reader of the cells there, with respond_to_missing? as its else, makes this go) */
+  if (extent && respond_to_missing_defined(c) &&
       (r->refl_any || lr_refl_has(r->refl, r->nrefl, x->name) || lr_refl_has(r->refl_cell, r->nrefl_cell, x->name) ||
-       lr_refl_has(r->refl_capt, r->nrefl_capt, x->name))) return 0;
+       lr_refl_has(r->refl_capt, r->nrefl_capt, x->name) ||
+       (cside && (lr_refl_cell_table(c, x->name, 1) || lr_refl_has(r->refl_fixed[1], r->nrefl_fixed[1], x->name))))) return 0;
   if (!extent &&
       (lr_refl_wide(r) || (!cside && r->refl_cell_list) || lr_refl_has(r->refl, r->nrefl, x->name) || lr_refl_cell_table(c, x->name, cside) ||
        (!cside && lr_refl_has(r->refl_capt, r->nrefl_capt, x->name)) || (nh > 1 && !cside && !str_reader))) return 0;

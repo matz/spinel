@@ -12,6 +12,7 @@
 #include "call_plan.h"
 #include "implied_calls.h"
 #include "method_table_check.h"
+#include "pre_const.h"
 #include <stdio.h>
 #include <ctype.h>
 #include <limits.h>
@@ -7228,35 +7229,142 @@ static int engine_absent_fold(Compiler *c, int e, int in) {
   return 1;
 }
 
-/* The settled engine checks of one statement list, spliced: each if /
-   unless whose predicate the engine fold decided is replaced by its live
-   branch's statements. An elsif chain is left as it is. */
-static int engine_splice_list(NodeTable *nt, int body) {
+/* Append comma-separated `add` names into node `dst`'s "dead_locals" string.
+   register_locals deduplicates via scope_local_intern (O(1) hash), so simple
+   concatenation avoids O(N^2) work across many folded branches. */
+static void pre_nt_merge_dead_locals(NodeTable *nt, int dst, const char *add) {
+  if (!add || !*add || dst < 0) return;
+  const char *cur = nt_str(nt, dst, "dead_locals");
+  if (!cur || !*cur) { nt_node_set_str(nt, dst, "dead_locals", add); return; }
+  size_t clen = strlen(cur), alen = strlen(add);
+  char *buf = malloc(clen + alen + 2);
+  if (!buf) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  memcpy(buf, cur, clen);
+  buf[clen] = ',';
+  memcpy(buf + clen + 1, add, alen + 1);
+  nt_node_set_str(nt, dst, "dead_locals", buf);
+  free(buf);
+}
+
+static void pre_nt_append_str(char **buf, size_t *len, size_t *cap, const char *s) {
+  if (!s || !*s) return;
+  size_t nl = strlen(s);
+  size_t need = *len + (*len ? 1 : 0) + nl + 1;
+  if (need > *cap) {
+    size_t ncap = *cap ? *cap * 2 : 64;
+    while (ncap < need) ncap *= 2;
+    char *nb = realloc(*buf, ncap);
+    if (!nb) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    *buf = nb; *cap = ncap;
+  }
+  if (*len) (*buf)[(*len)++] = ',';
+  memcpy(*buf + *len, s, nl);
+  *len += nl;
+  (*buf)[*len] = '\0';
+}
+
+/* Collect depth-0 local variable write names (and already-recorded dead_locals
+   from nested folded branches) in dead subtree `id`. */
+static void pre_nt_collect_dead_locals_walk(NodeTable *nt, int id, char **buf, size_t *len, size_t *cap, int depth) {
+  if (id < 0 || id >= nt->count || depth > 128) return;
+  NodeKind k = nt_kind(nt, id);
+  if (k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode ||
+      k == NK_SingletonClassNode || k == NK_BlockNode || k == NK_LambdaNode) return;
+  const char *nested_dl = nt_str(nt, id, "dead_locals");
+  if (nested_dl && *nested_dl) pre_nt_append_str(buf, len, cap, nested_dl);
+  if (k == NK_LocalVariableWriteNode || k == NK_LocalVariableTargetNode ||
+      k == NK_LocalVariableOperatorWriteNode || k == NK_LocalVariableOrWriteNode ||
+      k == NK_LocalVariableAndWriteNode) {
+    if (nt_int(nt, id, "depth", 0) == 0)
+      pre_nt_append_str(buf, len, cap, nt_str(nt, id, "name"));
+  }
+  int nr = nt_num_refs(nt, id);
+  for (int i = 0; i < nr; i++) pre_nt_collect_dead_locals_walk(nt, nt_ref_at(nt, id, i), buf, len, cap, depth + 1);
+  int na = nt_num_arrs(nt, id);
+  for (int i = 0; i < na; i++) {
+    int n = 0; const int *ids = nt_arr_at(nt, id, i, &n);
+    for (int j = 0; j < n; j++) pre_nt_collect_dead_locals_walk(nt, ids[j], buf, len, cap, depth + 1);
+  }
+}
+
+static void pre_nt_record_dead_locals(NodeTable *nt, int cond_id, int dead_id) {
+  char *buf = NULL; size_t len = 0, cap = 0;
+  pre_nt_collect_dead_locals_walk(nt, dead_id, &buf, &len, &cap, 0);
+  if (buf && len) pre_nt_merge_dead_locals(nt, cond_id, buf);
+  free(buf);
+}
+
+/* The settled engine checks of one statement list, spliced in O(N) per round:
+   each if / unless whose predicate the engine fold decided is replaced by its
+   live branch's statements, carrying dead_locals onto `body` and clearing them
+   from detached nodes so orphaned nodes never leak into top-level scope 0. */
+static int engine_splice_list(NodeTable *nt, int body, int keep_last_value) {
   if (body < 0 || nt_kind(nt, body) != NK_StatementsNode) return 0;
   int changed = 0;
-  for (int again = 1, rounds = 0; again && rounds < 8; rounds++) {
+  for (int again = 1, rounds = 0; again && rounds < 16; rounds++) {
     again = 0;
     int n = 0; const int *st = nt_arr(nt, body, "body", &n);
+    int cap = n > 0 ? n : 1, out_n = 0, round_chg = 0;
+    int *nb = NULL;
+    char *dl_buf = NULL; size_t dl_len = 0, dl_cap = 0;
     for (int k = 0; k < n; k++) {
       NodeKind sk = nt_kind(nt, st[k]);
       int pred = sk == NK_IfNode || sk == NK_UnlessNode ? nt_ref(nt, st[k], "predicate") : -1;
-      if (pred < 0 || nt_int(nt, pred, "engine_check", 0) <= 0) continue;
-      int live = (nt_kind(nt, pred) == NK_TrueNode) == (sk == NK_IfNode)
-                 ? nt_ref(nt, st[k], "statements")
-                 : nt_ref(nt, st[k], sk == NK_IfNode ? "subsequent" : "else_clause");
-      if (live >= 0 && nt_kind(nt, live) == NK_ElseNode) live = nt_ref(nt, live, "statements");
-      if (live >= 0 && nt_kind(nt, live) != NK_StatementsNode) continue;
-      int ln = 0; const int *lb = live >= 0 ? nt_arr(nt, live, "body", &ln) : NULL;
-      int *nb = malloc(sizeof(int) * (size_t)(n + ln));
-      if (!nb) return changed;
-      memcpy(nb, st, sizeof(int) * (size_t)k);
-      if (ln) memcpy(nb + k, lb, sizeof(int) * (size_t)ln);
-      memcpy(nb + k + ln, st + k + 1, sizeof(int) * (size_t)(n - k - 1));
-      nt_node_set_arr(nt, body, "body", nb, n - 1 + ln);
-      free(nb);
-      changed = again = 1;
-      break;
+      int splice = 0, live = -1;
+      if (pred >= 0 && nt_int(nt, pred, "engine_check", 0) > 0) {
+        live = (nt_kind(nt, pred) == NK_TrueNode) == (sk == NK_IfNode)
+               ? nt_ref(nt, st[k], "statements")
+               : nt_ref(nt, st[k], sk == NK_IfNode ? "subsequent" : "else_clause");
+        if (live >= 0 && nt_kind(nt, live) == NK_ElseNode) live = nt_ref(nt, live, "statements");
+        if (live >= 0 && nt_kind(nt, live) == NK_IfNode) splice = 2;
+        else if ((live < 0 && !(keep_last_value && k == n - 1)) ||
+                 (live >= 0 && nt_kind(nt, live) == NK_StatementsNode)) splice = 1;
+      }
+      if (!splice) {
+        if (nb) {
+          if (out_n >= cap) { cap *= 2; int *t = realloc(nb, sizeof(int) * (size_t)cap); if (!t) { free(nb); free(dl_buf); return changed; } nb = t; }
+          nb[out_n++] = st[k];
+        }
+        continue;
+      }
+      if (!nb) {
+        nb = malloc(sizeof(int) * (size_t)cap);
+        if (!nb) { free(dl_buf); return changed; }
+        if (k > 0) memcpy(nb, st, sizeof(int) * (size_t)k);
+        out_n = k;
+      }
+      const char *sdl = nt_str(nt, st[k], "dead_locals");
+      if (sdl && *sdl) { pre_nt_append_str(&dl_buf, &dl_len, &dl_cap, sdl); nt_node_set_str(nt, st[k], "dead_locals", ""); }
+      if (splice == 2) {
+        if (out_n >= cap) { cap *= 2; int *t = realloc(nb, sizeof(int) * (size_t)cap); if (!t) { free(nb); free(dl_buf); return changed; } nb = t; }
+        nb[out_n++] = live;
+        again = 1;
+      }
+      else if (live >= 0) {
+        const char *ldl = nt_str(nt, live, "dead_locals");
+        if (ldl && *ldl) { pre_nt_append_str(&dl_buf, &dl_len, &dl_cap, ldl); nt_node_set_str(nt, live, "dead_locals", ""); }
+        int ln = 0; const int *lb = nt_arr(nt, live, "body", &ln);
+        if (out_n + ln > cap) {
+          while (out_n + ln > cap) cap *= 2;
+          int *t = realloc(nb, sizeof(int) * (size_t)cap);
+          if (!t) { free(nb); free(dl_buf); return changed; }
+          nb = t;
+        }
+        if (ln) {
+          memcpy(nb + out_n, lb, sizeof(int) * (size_t)ln);
+          out_n += ln;
+          again = 1;
+        }
+      }
+      round_chg = 1;
     }
+    if (round_chg) {
+      if (dl_buf && dl_len) pre_nt_merge_dead_locals(nt, body, dl_buf);
+      nt_node_set_arr(nt, body, "body", nb, out_n);
+      changed = 1;
+    }
+    free(nb);
+    free(dl_buf);
   }
   return changed;
 }
@@ -7480,45 +7588,364 @@ int desugar_builtin_method_defined_conds(Compiler *c) {
   return changed;
 }
 
+typedef struct {
+  int allow_engine;
+  int allow_platform;
+  int allow_version;
+  int allow_object;
+  int has_remove_const;
+  int core_ops_reopened;
+  int cli_defined_only;
+  unsigned char *def_shadowed;
+} PreNtCtx;
+
+static int pre_nt_is_core_op_owner(const char *nm) {
+  return nm && sp_pre_is_core_op_owner(nm, strlen(nm));
+}
+
+static int pre_nt_body_redefines_op(NodeTable *nt, int id, int depth) {
+  if (id < 0 || id >= nt->count || depth > 64) return 0;
+  NodeKind k = nt_kind(nt, id);
+  if (k == NK_DefNode) return sp_pre_is_folded_op(nt_str(nt, id, "name"));
+  if (k == NK_AliasMethodNode) {
+    int nn = nt_ref(nt, id, "new_name");
+    return nn >= 0 && sp_pre_is_folded_op(nt_str(nt, nn, "value"));
+  }
+  if (k == NK_UndefNode) {
+    int un = 0; const int *uv = nt_arr(nt, id, "names", &un);
+    for (int i = 0; i < un; i++) if (sp_pre_is_folded_op(nt_str(nt, uv[i], "value"))) return 1;
+    return 0;
+  }
+  if (k == NK_CallNode) {
+    const char *cn = nt_str(nt, id, "name");
+    if (cn && (sp_streq(cn, "define_method") || sp_streq(cn, "alias_method") ||
+               sp_streq(cn, "undef_method") || sp_streq(cn, "remove_method") ||
+               sp_streq(cn, "include") || sp_streq(cn, "prepend"))) {
+      if (sp_streq(cn, "include") || sp_streq(cn, "prepend")) return 1;
+      int ac = 0; const int *av = call_args(nt, id, &ac);
+      if (ac == 0) return 1;
+      const char *mn = vis_arg_name(nt, av[0]);
+      if (!mn || sp_pre_is_folded_op(mn)) return 1;
+    }
+  }
+  for (int i = 0, nr = nt_num_refs(nt, id); i < nr; i++)
+    if (pre_nt_body_redefines_op(nt, nt_ref_at(nt, id, i), depth + 1)) return 1;
+  for (int i = 0, na = nt_num_arrs(nt, id); i < na; i++) {
+    int n = 0; const int *ids = nt_arr_at(nt, id, i, &n);
+    for (int j = 0; j < n; j++) if (pre_nt_body_redefines_op(nt, ids[j], depth + 1)) return 1;
+  }
+  return 0;
+}
+
+static int pre_nt_path_rooted(const NodeTable *nt, int id) {
+  while (id >= 0 && nt_kind(nt, id) == NK_ConstantPathNode) {
+    int p = nt_ref(nt, id, "parent");
+    if (p < 0) return 1;
+    id = p;
+  }
+  return 0;
+}
+
+static const char *pre_nt_const_name(NodeTable *nt, int id, int allow_bare) {
+  if (id < 0) return NULL;
+  NodeKind k = nt_kind(nt, id);
+  if (k == NK_ConstantReadNode) return allow_bare ? nt_str(nt, id, "name") : NULL;
+  if (k == NK_ConstantPathNode && engine_parent_is_object(nt, id)) {
+    if (!allow_bare && !pre_nt_path_rooted(nt, id)) return NULL;
+    return nt_str(nt, id, "name");
+  }
+  return NULL;
+}
+
+static int pre_nt_eval(NodeTable *nt, int id, const PreNtCtx *ctx, int allow_bare, SpPreVal *out, int *used_const, int depth) {
+  if (id < 0 || depth > 64) return 0;
+  NodeKind k = nt_kind(nt, id);
+  if (nt_int(nt, id, "engine_check", 0) > 0 && (k == NK_TrueNode || k == NK_FalseNode)) {
+    *used_const = 1;
+    *out = (SpPreVal){ .kind = SP_PRE_BOOL, .b = k == NK_TrueNode };
+    return 1;
+  }
+  switch (k) {
+    case NK_TrueNode: *out = (SpPreVal){ .kind = SP_PRE_BOOL, .b = 1 }; return 1;
+    case NK_FalseNode: *out = (SpPreVal){ .kind = SP_PRE_BOOL, .b = 0 }; return 1;
+    case NK_NilNode: *out = (SpPreVal){ .kind = SP_PRE_NIL }; return 1;
+    case NK_IntegerNode:
+      if (nt_str(nt, id, "bigval")) return 0;
+      *out = (SpPreVal){ .kind = SP_PRE_INT, .i = nt_int(nt, id, "value", 0) };
+      return 1;
+    case NK_StringNode: {
+      const char *s = nt_str(nt, id, "content");
+      if (!s) return 0;
+      *out = (SpPreVal){ .kind = SP_PRE_STR, .s = s, .slen = strlen(s) };
+      return 1;
+    }
+    case NK_ParenthesesNode: {
+      int body = nt_ref(nt, id, "body"), bn = 0;
+      const int *bb = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &bn) : NULL;
+      if (bn == 0) { *out = (SpPreVal){ .kind = SP_PRE_NIL }; return 1; }
+      return bn == 1 ? pre_nt_eval(nt, bb[0], ctx, allow_bare, out, used_const, depth + 1) : 0;
+    }
+    case NK_StatementsNode: {
+      int bn = 0; const int *bb = nt_arr(nt, id, "body", &bn);
+      return bn == 1 ? pre_nt_eval(nt, bb[0], ctx, allow_bare, out, used_const, depth + 1) : 0;
+    }
+    case NK_ConstantReadNode: case NK_ConstantPathNode: {
+      const char *nm = pre_nt_const_name(nt, id, allow_bare);
+      if (nm && sp_pre_lookup_const(nm, strlen(nm), ctx->allow_engine, ctx->allow_platform,
+                                    ctx->allow_version, ctx->def_shadowed, out)) {
+        *used_const = 1;
+        return 1;
+      }
+      return 0;
+    }
+    case NK_DefinedNode: {
+      const char *nm = pre_nt_const_name(nt, nt_ref(nt, id, "value"), allow_bare);
+      if (!nm) return 0;
+      size_t nlen = strlen(nm);
+      if (ctx->cli_defined_only && sp_pre_define_index(nm, nlen) < 0) return 0;
+      if (sp_pre_defined_const_fixed(nm, nlen, ctx->has_remove_const) == 1) {
+        *used_const = 1;
+        *out = (SpPreVal){ .kind = SP_PRE_STR, .s = "constant", .slen = 8 };
+        return 1;
+      }
+      return 0;
+    }
+    case NK_AndNode: case NK_OrNode: {
+      int lc = 0; SpPreVal lv;
+      if (!pre_nt_eval(nt, nt_ref(nt, id, "left"), ctx, allow_bare, &lv, &lc, depth + 1)) return 0;
+      int lt = sp_pre_val_truthy(&lv);
+      if ((k == NK_AndNode && !lt) || (k == NK_OrNode && lt)) {
+        *used_const |= lc;
+        *out = lv;
+        return 1;
+      }
+      int rc = 0; SpPreVal rv;
+      if (!pre_nt_eval(nt, nt_ref(nt, id, "right"), ctx, allow_bare, &rv, &rc, depth + 1)) return 0;
+      *used_const |= (lc | rc);
+      *out = rv;
+      return 1;
+    }
+    case NK_CallNode: {
+      if (nt_ref(nt, id, "block") >= 0) return 0;
+      if (ctx->core_ops_reopened) return 0;
+      const char *op = nt_str(nt, id, "name");
+      int recv = nt_ref(nt, id, "receiver");
+      int ac = 0; const int *av = call_args(nt, id, &ac);
+      int snav = nt_safe_nav(nt, id);
+      if (!op || recv < 0) return 0;
+      /* Object.const_defined?(:NAME) for provably fixed constants */
+      if (!snav && ctx->allow_object && sp_streq(op, "const_defined?") && ac == 1) {
+        const char *rn = pre_nt_const_name(nt, recv, allow_bare);
+        NodeKind ak = nt_kind(nt, av[0]);
+        const char *cn = ak == NK_SymbolNode ? nt_str(nt, av[0], "value")
+                       : ak == NK_StringNode ? nt_str(nt, av[0], "content") : NULL;
+        size_t clen = cn ? strlen(cn) : 0;
+        if (rn && sp_streq(rn, "Object") && cn &&
+            (!ctx->cli_defined_only || sp_pre_define_index(cn, clen) >= 0) &&
+            sp_pre_defined_const_fixed(cn, clen, ctx->has_remove_const) == 1) {
+          *used_const = 1;
+          *out = (SpPreVal){ .kind = SP_PRE_BOOL, .b = 1 };
+          return 1;
+        }
+        return 0;
+      }
+      int rc = 0; SpPreVal rv;
+      if (!pre_nt_eval(nt, recv, ctx, allow_bare, &rv, &rc, depth + 1)) return 0;
+      if (snav && rv.kind == SP_PRE_NIL) return 0;
+      if (ac == 0) {
+        if (!sp_pre_eval_unary(&rv, op, out)) return 0;
+        *used_const |= rc;
+        return 1;
+      }
+      if (sp_streq(op, "start_with?") || sp_streq(op, "end_with?")) {
+        if (ac > 16) return 0;
+        SpPreVal avals[16];
+        int auc = rc;
+        for (int i = 0; i < ac; i++)
+          if (!pre_nt_eval(nt, av[i], ctx, allow_bare, &avals[i], &auc, depth + 1)) return 0;
+        if (!sp_pre_eval_str_affix(&rv, sp_streq(op, "start_with?"), avals, ac, out)) return 0;
+        *used_const |= auc;
+        return 1;
+      }
+      if (ac == 1) {
+        int rrc = 0; SpPreVal av0;
+        if (!pre_nt_eval(nt, av[0], ctx, allow_bare, &av0, &rrc, depth + 1)) return 0;
+        if (!sp_pre_eval_binary(&rv, op, &av0, out)) return 0;
+        *used_const |= (rc | rrc);
+        return 1;
+      }
+      return 0;
+    }
+    default: return 0;
+  }
+}
+
+/* Mark all nodes inside a `class ... < BasicObject` subtree so bare (non-::)
+   top-level constants are never folded where Object is absent from ancestors. */
+static void pre_nt_mark_subtree(NodeTable *nt, int id, unsigned char *marks, int n0) {
+  if (id < 0 || id >= n0 || marks[id]) return;
+  marks[id] = 1;
+  int nr = nt_num_refs(nt, id);
+  for (int i = 0; i < nr; i++) pre_nt_mark_subtree(nt, nt_ref_at(nt, id, i), marks, n0);
+  int na = nt_num_arrs(nt, id);
+  for (int i = 0; i < na; i++) {
+    int n = 0; const int *ids = nt_arr_at(nt, id, i, &n);
+    for (int j = 0; j < n; j++) pre_nt_mark_subtree(nt, ids[j], marks, n0);
+  }
+}
+
+/* Fold `defined?(NAME)` / `Object.const_defined?(:NAME)` guards for CLI -D
+   constants first, so `NAME = "default" unless defined?(NAME)` prunes its dead
+   write before checking whether user code shadows NAME. */
+static int pre_nt_fold_cli_defined_guards(NodeTable *nt, int n0, const unsigned char *in_pat,
+                                          const unsigned char *in_bo, const PreNtCtx *base) {
+  int nd = sp_pre_define_count();
+  if (base->has_remove_const || base->core_ops_reopened || nd == 0) return 0;
+  unsigned char *all_shadowed = malloc((size_t)nd);
+  if (!all_shadowed) return 0;
+  memset(all_shadowed, 1, (size_t)nd);
+  PreNtCtx dctx = { 0, 0, 0, base->allow_object, base->has_remove_const, base->core_ops_reopened, 1, all_shadowed };
+  int changed = 0;
+  for (int id = 0; id < n0; id++) {
+    NodeKind k = nt_kind(nt, id);
+    if ((k != NK_IfNode && k != NK_UnlessNode) || in_pat[id]) continue;
+    int pred = nt_ref(nt, id, "predicate");
+    if (pred < 0 || nt_int(nt, pred, "engine_check", 0) > 0) continue;
+    int used = 0; SpPreVal v;
+    if (!pre_nt_eval(nt, pred, &dctx, !in_bo[id], &v, &used, 0) || !used) continue;
+    int truth = sp_pre_val_truthy(&v);
+    pre_nt_record_dead_locals(nt, id, pred);
+    int nr = nt_num_refs(nt, pred);
+    for (int i = 0; i < nr; i++) engine_blank(nt, nt_ref_at(nt, pred, i));
+    nt_node_reset(nt, pred, truth ? "TrueNode" : "FalseNode");
+    nt_node_set_int(nt, pred, "engine_check", 1);
+    int runs_statements = (truth != 0) == (k == NK_IfNode);
+    const char *dead = runs_statements ? (k == NK_IfNode ? "subsequent" : "else_clause") : "statements";
+    int d = nt_ref(nt, id, dead);
+    if (d >= 0) {
+      pre_nt_record_dead_locals(nt, id, d);
+      engine_blank(nt, d);
+      nt_node_set_ref(nt, id, dead, -1);
+    }
+    changed = 1;
+  }
+  free(all_shadowed);
+  return changed;
+}
+
+static void pre_nt_scan_ctx(NodeTable *nt, int n0, PreNtCtx *ctx) {
+  int ndefs = sp_pre_define_count();
+  ctx->allow_engine = 1;
+  ctx->allow_platform = sp_pre_target_platform_known();
+  ctx->allow_version = 1;
+  ctx->allow_object = 1;
+  ctx->has_remove_const = 0;
+  ctx->core_ops_reopened = 0;
+  ctx->cli_defined_only = 0;
+  ctx->def_shadowed = ndefs > 0 ? calloc((size_t)ndefs, 1) : NULL;
+  for (int id = 0; id < n0; id++) {
+    if (nt_int(nt, id, "node_bi", 0) > 0 || nt_file_tier(nt, (int)nt_int(nt, id, "node_file", -1)) == SP_LIB_BUILTIN)
+      continue;
+    NodeKind k = nt_kind(nt, id);
+    if (k == NK_CallNode) {
+      int ac = 0, via = 0;
+      const int *av = call_args(nt, id, &ac);
+      const char *nm = call_sent_name(nt, id, &via);
+      if (nm && is_remove_const_name(nm)) ctx->has_remove_const = 1;
+      if (nm && is_const_set_name(nm)) {
+        const char *cn = ac > via ? vis_arg_name(nt, av[via]) : NULL;
+        if (cn) {
+          if (sp_streq(cn, "RUBY_ENGINE")) ctx->allow_engine = 0;
+          if (sp_streq(cn, "RUBY_PLATFORM")) ctx->allow_platform = 0;
+          if (sp_streq(cn, "RUBY_VERSION")) ctx->allow_version = 0;
+          if (sp_streq(cn, "Object")) ctx->allow_object = 0;
+        }
+        for (int i = 0; i < ndefs; i++)
+          if (!cn || sp_streq(cn, sp_pre_define_name(i))) ctx->def_shadowed[i] = 1;
+      }
+      if (!ctx->core_ops_reopened && nm &&
+          (sp_streq(nm, "define_method") || sp_streq(nm, "alias_method") ||
+           sp_streq(nm, "undef_method") || sp_streq(nm, "remove_method") ||
+           sp_streq(nm, "include") || sp_streq(nm, "prepend") ||
+           sp_streq(nm, "class_eval") || sp_streq(nm, "module_eval"))) {
+        const char *rn = pre_nt_const_name(nt, nt_ref(nt, id, "receiver"), 1);
+        if (rn && pre_nt_is_core_op_owner(rn)) ctx->core_ops_reopened = 1;
+      }
+      continue;
+    }
+    if ((k == NK_ClassNode || k == NK_ModuleNode) && pre_nt_is_core_op_owner(class_def_name(nt, id)) &&
+        mo_def_is_toplevel(nt, id)) {
+      if (pre_nt_body_redefines_op(nt, class_def_body(nt, id), 0)) ctx->core_ops_reopened = 1;
+    }
+    if (nt_int(nt, id, "cli_define", 0)) continue;
+    const char *wn = engine_written(nt, id);
+    if (!wn) continue;
+    if (sp_streq(wn, "RUBY_ENGINE")) ctx->allow_engine = 0;
+    else if (sp_streq(wn, "RUBY_PLATFORM")) ctx->allow_platform = 0;
+    else if (sp_streq(wn, "RUBY_VERSION")) ctx->allow_version = 0;
+    else if (sp_streq(wn, "Object") && k != NK_ClassNode && k != NK_ModuleNode) ctx->allow_object = 0;
+    else if (ndefs > 0) {
+      int di = sp_pre_define_index(wn, strlen(wn));
+      if (di >= 0) ctx->def_shadowed[di] = 1;
+    }
+  }
+}
+
 int desugar_engine_branches(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count;
-  int changed = 0, eng = 1, ver = 1;
+  int changed = 0;
   g_engine_mixes = -1;
-  /* A program that defines a RUBY_ENGINE of its own (a shim module's
-     `RUBY_ENGINE = "jruby"`) reads that one where it is in scope, so the
-     fold, which knows only the global, would answer for the wrong constant:
-     leave every check alone then. */
+  unsigned char *in_pat = calloc((size_t)(n0 > 0 ? n0 : 1), 1);
+  unsigned char *in_bo = calloc((size_t)(n0 > 0 ? n0 : 1), 1);
+  if (!in_pat || !in_bo) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   for (int id = 0; id < n0; id++) {
-    const char *wn = engine_written(nt, id);
-    if (wn && sp_streq(wn, "RUBY_ENGINE")) eng = 0;
-    if (wn && sp_streq(wn, "RUBY_VERSION")) ver = 0;
+    NodeKind k = nt_kind(nt, id);
+    if (k == NK_InNode) {
+      int pat = nt_ref(nt, id, "pattern");
+      if (pat >= 0 && pat < n0) in_pat[pat] = 1;
+    }
+    else if (k == NK_ClassNode) {
+      const char *sn = pre_nt_const_name(nt, nt_ref(nt, id, "superclass"), 1);
+      if (sn && sp_streq(sn, "BasicObject")) pre_nt_mark_subtree(nt, nt_ref(nt, id, "body"), in_bo, n0);
+    }
   }
+  PreNtCtx pctx;
+  pre_nt_scan_ctx(nt, n0, &pctx);
+  if (pre_nt_fold_cli_defined_guards(nt, n0, in_pat, in_bo, &pctx)) {
+    changed = 1;
+    free(pctx.def_shadowed);
+    pre_nt_scan_ctx(nt, n0, &pctx);
+  }
+  int eng = pctx.allow_engine, ver = pctx.allow_version;
   /* every guard is decided against the load record as the first question
      finds it: a fold rewrites a predicate and moves no statement, and a
      class statement that stands under another guard is not surely run in
      it, so no proof leans on a fold made in this loop */
   elab_hold(c, 1);
   for (int id = 0; id < n0; id++)
-    if (nt_kind(nt, id) == NK_IfNode || nt_kind(nt, id) == NK_UnlessNode)
+    if ((nt_kind(nt, id) == NK_IfNode || nt_kind(nt, id) == NK_UnlessNode) && !in_pat[id])
       changed |= engine_absent_fold(c, nt_ref(nt, id, "predicate"), id);
   elab_hold(c, 0);
   /* `if false; def m ... end; end`: a condition its literals fix defines
      the method only on its live branch, as CRuby runs the body */
   for (int id = 0; id < n0; id++) {
-    if (nt_kind(nt, id) != NK_IfNode && nt_kind(nt, id) != NK_UnlessNode) continue;
+    if ((nt_kind(nt, id) != NK_IfNode && nt_kind(nt, id) != NK_UnlessNode) || in_pat[id]) continue;
     int pred = nt_ref(nt, id, "predicate");
     if (pred < 0 || nt_int(nt, pred, "engine_check", 0) > 0 || !literal_cond_has_def(nt, id)) continue;
     int truth = literal_truth(nt, pred);
     if (truth < 0) continue;
+    pre_nt_record_dead_locals(nt, id, pred);
     int nr = nt_num_refs(nt, pred);
     for (int i = 0; i < nr; i++) engine_blank(nt, nt_ref_at(nt, pred, i));
     nt_node_reset(nt, pred, truth ? "TrueNode" : "FalseNode");
     nt_node_set_int(nt, pred, "engine_check", 1);
     changed = 1;
   }
-  for (int id = 0; id < n0; id++) {
-    if (nt_kind(nt, id) != NK_CallNode) continue;
+  /* Fold RUBY_ENGINE / RUBY_VERSION / Gem::Version comparisons (including
+     value-position expressions outside if/unless). */
+  for (int id = 0; !pctx.core_ops_reopened && id < n0; id++) {
+    if (nt_kind(nt, id) != NK_CallNode || in_bo[id]) continue;
     const char *op = nt_str(nt, id, "name");
     int recv = nt_ref(nt, id, "receiver");
     int args = nt_ref(nt, id, "arguments");
@@ -7539,52 +7966,41 @@ int desugar_engine_branches(Compiler *c) {
     nt_node_set_int(nt, id, "engine_check", 1);
     changed = 1;
   }
-  /* `Object.const_defined?(:RUBY_ENGINE)` is true in every program (racc
-     asks it before comparing the engine) */
-  for (int id = 0; eng && id < n0; id++) {
-    if (nt_kind(nt, id) != NK_CallNode) continue;
-    const char *op = nt_str(nt, id, "name");
-    int recv = nt_ref(nt, id, "receiver");
-    int args = nt_ref(nt, id, "arguments");
-    int ac = 0; const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &ac) : NULL;
-    if (!op || !sp_streq(op, "const_defined?") || recv < 0 || ac != 1 || nt_ref(nt, id, "block") >= 0) continue;
-    if (nt_kind(nt, recv) != NK_ConstantReadNode || !sp_streq(nt_str(nt, recv, "name"), "Object")) continue;
-    NodeKind ak = nt_kind(nt, av[0]);
-    const char *cn = ak == NK_SymbolNode ? nt_str(nt, av[0], "value") : ak == NK_StringNode ? nt_str(nt, av[0], "content") : NULL;
-    if (!cn || !sp_streq(cn, "RUBY_ENGINE")) continue;
-    engine_blank(nt, recv);
-    engine_blank(nt, args);
-    nt_node_reset(nt, id, "TrueNode");
-    nt_node_set_int(nt, id, "engine_check", 1);
-    changed = 1;
-  }
-  for (int id = n0 - 1; id >= 0; id--) {
+  /* Evaluate composite constant predicates in if/unless/ternary/modifier guards
+     (RUBY_PLATFORM, RUBY_ENGINE, RUBY_VERSION, -D NAME, defined?, !, &&, ||,
+     include?, start_with?, end_with?, ==, !=, <, <=, >, >=). */
+  for (int id = 0; id < n0; id++) {
     NodeKind k = nt_kind(nt, id);
-    if (k != NK_AndNode && k != NK_OrNode) continue;
-    int l = nt_ref(nt, id, "left"), r = nt_ref(nt, id, "right");
-    if (nt_int(nt, l, "engine_check", 0) <= 0) continue;
-    int v = (nt_kind(nt, l) == NK_TrueNode) == (k == NK_OrNode) ? l : r;
-    if (nt_int(nt, v, "engine_check", 0) <= 0) continue;
-    int truth = nt_kind(nt, v) == NK_TrueNode;
-    engine_blank(nt, l);
-    engine_blank(nt, r);
-    nt_node_reset(nt, id, truth ? "TrueNode" : "FalseNode");
-    nt_node_set_int(nt, id, "engine_check", 1);
+    if ((k != NK_IfNode && k != NK_UnlessNode) || in_pat[id]) continue;
+    int pred = nt_ref(nt, id, "predicate");
+    if (pred < 0 || nt_int(nt, pred, "engine_check", 0) > 0) continue;
+    int used = 0; SpPreVal v;
+    if (!pre_nt_eval(nt, pred, &pctx, !in_bo[id], &v, &used, 0) || !used) continue;
+    int truth = sp_pre_val_truthy(&v);
+    pre_nt_record_dead_locals(nt, id, pred);
+    int nr = nt_num_refs(nt, pred);
+    for (int i = 0; i < nr; i++) engine_blank(nt, nt_ref_at(nt, pred, i));
+    nt_node_reset(nt, pred, truth ? "TrueNode" : "FalseNode");
+    nt_node_set_int(nt, pred, "engine_check", 1);
     changed = 1;
   }
   for (int id = 0; id < n0; id++) {
     NodeKind k = nt_kind(nt, id);
-    if (k != NK_IfNode && k != NK_UnlessNode) continue;
+    if ((k != NK_IfNode && k != NK_UnlessNode) || in_pat[id]) continue;
     int pred = nt_ref(nt, id, "predicate");
     if (pred < 0 || nt_int(nt, pred, "engine_check", 0) <= 0) continue;
     int runs_statements = (nt_kind(nt, pred) == NK_TrueNode) == (k == NK_IfNode);
     const char *dead = runs_statements ? (k == NK_IfNode ? "subsequent" : "else_clause") : "statements";
     int d = nt_ref(nt, id, dead);
     if (d < 0) continue;
+    pre_nt_record_dead_locals(nt, id, d);
     engine_blank(nt, d);
     nt_node_set_ref(nt, id, dead, -1);
     changed = 1;
   }
+  free(pctx.def_shadowed);
+  free(in_pat);
+  free(in_bo);
   for (int id = 0; id < nt->count; id++) {
     if (nt_kind(nt, id) != NK_StatementsNode) continue;
     int n = 0; const int *st = nt_arr(nt, id, "body", &n);
@@ -7612,7 +8028,10 @@ int desugar_engine_branches(Compiler *c) {
         nt_node_set_ref(nt, keep[k], other, els);
         comp_grow_node_arrays(c);
       }
-      for (int j = k + 1; folded && j < e; j++) engine_blank(nt, keep[j]);
+      for (int j = k + 1; folded && j < e; j++) {
+        pre_nt_record_dead_locals(nt, id, keep[j]);
+        engine_blank(nt, keep[j]);
+      }
       memmove(keep + k + 1, keep + e, sizeof(int) * (size_t)(n - e));
       nt_node_set_arr(nt, id, "body", keep, n - (e - k - 1));
       free(keep);
@@ -7626,11 +8045,11 @@ int desugar_engine_branches(Compiler *c) {
      attr_*), or a `module Kernel` reopening hoisted from the top level, is
      seen where it is written for one engine (#7205, #7204). */
   for (int r = 0; r < nt_nroots(nt); r++)   /* each file's top level */
-    changed |= engine_splice_list(nt, nt_ref(nt, nt_root(nt, r), "statements"));
+    changed |= engine_splice_list(nt, nt_ref(nt, nt_root(nt, r), "statements"), 0);
   for (int id = 0; id < nt->count; id++) {
     NodeKind ck = nt_kind(nt, id);
     if (ck == NK_ModuleNode || ck == NK_ClassNode || ck == NK_SingletonClassNode)
-      changed |= engine_splice_list(nt, nt_ref(nt, id, "body"));
+      changed |= engine_splice_list(nt, nt_ref(nt, id, "body"), 1);
   }
   return changed;
 }

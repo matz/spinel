@@ -6837,6 +6837,8 @@ int fwd_yield_proc_form_block(Compiler *c) {
 /* The static answer of one arm's predicate of a statement if: 1 or 0 for
    a guard the compiler decides, -1 for a run-time one. */
 static int if_arm_static_cond(Compiler *c, int pred) {
+  if (pred >= 0 && nt_int(c->nt, pred, "engine_check", 0) > 0)
+    return nt_kind(c->nt, pred) == NK_TrueNode ? 1 : 0;
   int sc = static_isa_cond(c, pred);
   if (sc < 0) sc = static_respond_to_cond(c, pred);
   if (sc < 0) sc = static_nil_ivar_cond(c, pred);

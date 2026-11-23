@@ -8581,6 +8581,27 @@ static void collect_locals_deep(Compiler *c, int id, NameSet *out) {
       ty_k == NK_LocalVariableOperatorWriteNode || ty_k == NK_LocalVariableOrWriteNode ||
       ty_k == NK_LocalVariableAndWriteNode)
     nameset_add(out, nt_str(c->nt, id, "name"));
+  {
+    const char *dl = nt_str(c->nt, id, "dead_locals");
+    if (dl && *dl) {
+      Scope *ds = comp_scope_of(c, id);
+      for (const char *p = dl; *p; ) {
+        const char *comma = strchr(p, ',');
+        size_t len = comma ? (size_t)(comma - p) : strlen(p);
+        if (len > 0 && ds) {
+          char sbuf[256];
+          char *nm = len < sizeof sbuf ? sbuf : malloc(len + 1);
+          if (nm) {
+            memcpy(nm, p, len); nm[len] = '\0';
+            LocalVar *lv = scope_local_intern(ds, nm);
+            if (lv) nameset_add(out, lv->name);
+            if (nm != sbuf) free(nm);
+          }
+        }
+        p = comma ? comma + 1 : p + len;
+      }
+    }
+  }
   if (is_nested_block(ty)) collect_block_param_names(c, id, out);
   int nr = nt_num_refs(c->nt, id);
   for (int i = 0; i < nr; i++) { int ch = nt_ref_at(c->nt, id, i); if (ch >= 0) collect_locals_deep(c, ch, out); }

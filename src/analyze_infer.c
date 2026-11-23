@@ -11991,6 +11991,31 @@ static int ie_poly_ivar_ty(Compiler *c, int id, const char *nm, int read, TyKind
   *out = pr;
   return npk > 0;
 }
+static TyKind infer_if_unless(Compiler *c, int id, NodeKind nk) {
+  const NodeTable *nt = c->nt;
+  int is_unless = nk == NK_UnlessNode;
+  int then_b = nt_ref(nt, id, "statements");
+  int else_b = nt_ref(nt, id, is_unless ? "else_clause" : "subsequent");
+  /* statically-answered constant or defined? predicate types as its live arm */
+  int dpred = nt_ref(nt, id, "predicate");
+  int ec = dpred >= 0 && nt_int(nt, dpred, "engine_check", 0) > 0 ? (nt_kind(nt, dpred) == NK_TrueNode) : -1;
+  int df = ec >= 0 ? !ec : comp_defined_guard_false(c, dpred);
+  int dt = ec >= 0 ? ec : (df ? 0 : comp_defined_guard_true(c, dpred));
+  if (df || dt) {
+    int take_then = is_unless ? df : dt;
+    return take_then ? (then_b >= 0 ? infer_type(c, then_b) : TY_NIL) : (else_b >= 0 ? infer_type(c, else_b) : TY_NIL);
+  }
+  int tdiv = branch_diverges(c, then_b);
+  int ediv = branch_diverges(c, else_b);
+  /* both arms diverging leaves nothing to type: fall through to the plain
+     unify rather than answering UNKNOWN out of nowhere */
+  if (tdiv && !ediv) return an_branch_ty(c, else_b);
+  if (ediv && !tdiv) return an_branch_ty(c, then_b);
+  TyKind tt = an_branch_ty(c, then_b);
+  TyKind et = an_branch_ty(c, else_b);
+  { TyKind ej = an_empty_arm_join(c, then_b, else_b, tt, et); if (ej != TY_UNKNOWN) return ej; }
+  return ty_unify(tt, et);
+}
 TyKind infer_uncached(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   const char *ty = nt_type(nt, id);
@@ -12557,31 +12582,7 @@ TyKind infer_uncached(Compiler *c, int id) {
     }
     return r;
   }
-  if (nk == NK_IfNode || nk == NK_UnlessNode) {
-    int is_unless = nk == NK_UnlessNode;
-    int then_b = nt_ref(nt, id, "statements");
-    int else_b = nt_ref(nt, id, is_unless ? "else_clause" : "subsequent");
-    /* a statically-answered defined? predicate types as its live arm alone
-       (the dead arm is never emitted -- see the codegen folds) */
-    int dpred = nt_ref(nt, id, "predicate");
-    int df = comp_defined_guard_false(c, dpred);
-    int dt = df ? 0 : comp_defined_guard_true(c, dpred);
-    if (df || dt) {
-      int take_then = is_unless ? df : dt;
-      if (take_then) return then_b >= 0 ? infer_type(c, then_b) : TY_NIL;
-      return else_b >= 0 ? infer_type(c, else_b) : TY_NIL;
-    }
-    int tdiv = branch_diverges(c, then_b);
-    int ediv = branch_diverges(c, else_b);
-    /* both arms diverging leaves nothing to type: fall through to the plain
-       unify rather than answering UNKNOWN out of nowhere */
-    if (tdiv && !ediv) return an_branch_ty(c, else_b);
-    if (ediv && !tdiv) return an_branch_ty(c, then_b);
-    TyKind tt = an_branch_ty(c, then_b);
-    TyKind et = an_branch_ty(c, else_b);
-    { TyKind ej = an_empty_arm_join(c, then_b, else_b, tt, et); if (ej != TY_UNKNOWN) return ej; }
-    return ty_unify(tt, et);
-  }
+  if (nk == NK_IfNode || nk == NK_UnlessNode) return infer_if_unless(c, id, nk);
   if (nk == NK_ElseNode) {
     int s = nt_ref(nt, id, "statements");
     return s >= 0 ? infer_type(c, s) : TY_NIL;

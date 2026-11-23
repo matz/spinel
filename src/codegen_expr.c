@@ -5107,6 +5107,8 @@ else {
    respond_to? it settles, and, for a `block_given? ? a : b` pair, `paired`,
    that), -1 for a run-time one. */
 static int if_expr_arm_known(Compiler *c, int pred, int paired) {
+  if (pred >= 0 && nt_int(c->nt, pred, "engine_check", 0) > 0)
+    return nt_kind(c->nt, pred) == NK_TrueNode ? 1 : 0;
   int df = comp_defined_guard_false(c, pred);
   int dt = df ? 0 : comp_defined_guard_true(c, pred);
   int known = df ? 0 : (dt ? 1 : static_isa_cond(c, pred));

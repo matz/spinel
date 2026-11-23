@@ -2971,11 +2971,20 @@ static int lr_has_at(Compiler *c, int cls, int sg, const char *nm, LoadPoint p, 
 static int lr_word_has(Compiler *c, int cls, int sg, const char *nm, int node) {
   return lr_has_at(c, cls, sg, nm, elab_point_of(c, node), 0);
 }
+/* ...the operands of visibility word node: av[*skip .. *ac), after a sent word's own (`K.send(:private, :m)`), and in *arr whether an Array
+   given alone stands for its elements (`private [:a, :b]`) */
+static const int *lr_word_operands(const NodeTable *nt, int node, int *skip, int *ac, int *arr) {
+  *skip = 0; *ac = 0;
+  (void)vis_word_call(nt, node, skip);
+  int an = nt_ref(nt, node, "arguments");
+  const int *av = an >= 0 ? nt_arr(nt, an, "arguments", ac) : NULL;
+  *arr = *ac - *skip == 1 && nt_kind(nt, av[*skip]) == NK_ArrayNode;
+  return av;
+}
 /* ...how many elements word node's arguments have, as lr_word_elem counts them */
 static int lr_word_elems(const NodeTable *nt, int node) {
-  int skip = 0, an = (vis_word_call(nt, node, &skip), nt_ref(nt, node, "arguments")), ac = 0, n = 0;
-  const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
-  int arr = ac - skip == 1 && nt_kind(nt, av[skip]) == NK_ArrayNode;
+  int skip, ac, arr, n = 0;
+  const int *av = lr_word_operands(nt, node, &skip, &ac, &arr);
   for (int i = skip; i < ac; i++) {
     int en = 1;
     if (arr) nt_arr(nt, av[i], "elements", &en);
@@ -2986,8 +2995,8 @@ static int lr_word_elems(const NodeTable *nt, int node) {
 /* ...does a def among the arguments of word node make the method nm (the word's arguments run before the word does:
    `private(:m, def m; end)` names a method it has)? */
 static int lr_word_defines(const NodeTable *nt, int node, const char *nm, int cside) {
-  int skip = 0, an = (vis_word_call(nt, node, &skip), nt_ref(nt, node, "arguments")), ac = 0;
-  const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
+  int skip, ac, arr;
+  const int *av = lr_word_operands(nt, node, &skip, &ac, &arr);
   for (int i = skip; i < ac; i++) {
     if (nt_kind(nt, av[i]) != NK_DefNode || !sp_streq(nt_str(nt, av[i], "name"), nm)) continue;
     int dr = nt_ref(nt, av[i], "receiver");
@@ -2999,9 +3008,8 @@ static int lr_word_defines(const NodeTable *nt, int node, const char *nm, int cs
    its elements in their place, a def is one element, a def's name its name): NULL for none, or for an argument that is
    no name. *def says it is a def */
 static const char *lr_word_elem(const NodeTable *nt, int node, int k, int *def) {
-  int skip = 0, an = (vis_word_call(nt, node, &skip), nt_ref(nt, node, "arguments")), ac = 0;
-  const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
-  int arr = ac - skip == 1 && nt_kind(nt, av[skip]) == NK_ArrayNode;
+  int skip, ac, arr;
+  const int *av = lr_word_operands(nt, node, &skip, &ac, &arr);
   if (def) *def = 0;
   for (int i = skip; i < ac; i++) {
     int en = 1;
@@ -3028,9 +3036,8 @@ static int lr_word_reach(Compiler *c, int node, int cls, int sg, int *copies) {
      cannot tell every method, a native binding's or a builtin reopening's, so it has no reach; one in a rescued begin or
      a block, whose statement is partial, has) */
   if (!mf && !(st && st->fpartial)) return INT_MAX;
-  int skip = 0, an = (vis_word_call(nt, node, &skip), nt_ref(nt, node, "arguments")), ac = 0, n = 0;
-  const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
-  int arr = ac - skip == 1 && nt_kind(nt, av[skip]) == NK_ArrayNode, hasdef = 0;
+  int skip, ac, arr, n = 0, hasdef = 0;
+  const int *av = lr_word_operands(nt, node, &skip, &ac, &arr);
   for (int i = skip; i < ac; i++) hasdef |= nt_kind(nt, av[i]) == NK_DefNode;   /* (asked once: a word with no def argument has none to look for among its names) */
   for (int i = skip; i < ac; i++) {
     int en = 1;
@@ -5536,9 +5543,8 @@ static void lr_words_refine(Compiler *c) {
     struct LrElemName *ord = malloc(sizeof *ord * (size_t)ne);
     int *rank = malloc(sizeof *rank * (size_t)ne), *dnode = malloc(sizeof *dnode * (size_t)ne);
     if (!nms || !ord || !rank || !dnode) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-    int skip = 0, an = (vis_word_call(nt, pw.node, &skip), nt_ref(nt, pw.node, "arguments")), ac = 0, k = 0;
-    const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
-    int arr = ac - skip == 1 && nt_kind(nt, av[skip]) == NK_ArrayNode;
+    int skip, ac, arr, k = 0;
+    const int *av = lr_word_operands(nt, pw.node, &skip, &ac, &arr);
     for (int i = skip; i < ac; i++) {
       int en = 1;
       const int *ev = arr ? nt_arr(nt, av[i], "elements", &en) : &av[i];

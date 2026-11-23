@@ -1879,11 +1879,11 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
       (sp_streq(name, "unbind") || sp_streq(name, "receiver")) &&
       an_program_builds_methods(c) && !an_user_recv_defines_method(c, name))
     { *out = TY_POLY; return 1; }
-  /* Numeric#fdiv on a boxed receiver is a Float whatever the operands are
-     (#3767); without a type the boxed result was dropped and read as nil. */
+  /* Numeric#fdiv / Complex#fdiv on a boxed receiver: Complex when the
+     receiver may hold one, Float otherwise (#3767). */
   if (recv >= 0 && rt == TY_POLY && argc == 1 && nt_ref(nt, id, "block") < 0 &&
       sp_streq(name, "fdiv") && !an_user_defines_or_reads(c, name))
-    { *out = TY_FLOAT; return 1; }
+    { *out = (an_program_makes_complex(c, nt) && cls_fact_may_hold_builtin(c, recv, CORE_COMPLEX)) ? TY_POLY : TY_FLOAT; return 1; }
   /* Complex#real / #imaginary on a poly value (a Complex read out of a
      container): the component is int- or float-classed at runtime, so the
      static result is poly. Without this the call typed nil and the boxed
@@ -2044,7 +2044,10 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
       (rt == TY_POLY || ((rt == TY_STRING || rt == TY_STRBUF) &&
                          infer_type(c, argv[0]) == TY_POLY))) {
     if (sp_streq(name, "match?")) { *out = TY_BOOL; return 1; }
-    if (sp_streq(name, "match")) { *out = TY_MATCHDATA; return 1; }
+    if (sp_streq(name, "match")) {
+      *out = (rt == TY_POLY && argc == 1 && cls_fact_may_hold_builtin(c, recv, CORE_MATCHDATA)) ? TY_POLY : TY_MATCHDATA;
+      return 1;
+    }
     if (sp_streq(name, "=~")) { *out = TY_POLY; return 1; }
   }
   /* The Integer surface on a boxed value that may hold a Bignum (#4665):

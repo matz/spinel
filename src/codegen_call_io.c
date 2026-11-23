@@ -1088,14 +1088,18 @@ int emit_call_poly_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
       int qname = argc == 0 && (sp_streq(name, "close") || sp_streq(name, "closed?"));
       /* and a boxed Mutex answers owned? itself, where a stat answers its own */
       int mname = argc == 0 && sp_streq(name, "owned?");
+      /* and a boxed Regexp answers timeout with nil (no per-instance timeout) */
+      int rx_timeout = argc == 0 && sp_streq(name, "timeout");
       /* A path read into a boxed slot (beside a class's reader of the name,
          whose answer the slot holds too) goes in boxed, as rewind's 0 does
          below: bare, the String stored into the sp_RbVal did not build. */
       int boxed_path = argc == 0 && is_path_reader(name) && repr_of(c, id).kind == RK_BOXED;
       int tdr = 0;
-      if (dirfn || qname || mname) {
+      if (dirfn || qname || mname || rx_timeout) {
         tdr = ++g_tmp;
         buf_puts(b, "({ "); tdr = hold_operand(c, recv, TY_POLY, 1, tdr, 1, " ", b);
+        if (rx_timeout)
+          buf_printf(b, "_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_REGEX && _t%d.v.p ? sp_box_nil() : ", tdr, tdr, tdr);
         if (qname) {
           buf_printf(b, "_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_QUEUE ? ", tdr, tdr);
           if (sp_streq(name, "close")) buf_printf(b, "((void)sp_Queue_close((sp_queue *)_t%d.v.p), _t%d) : ", tdr, tdr);

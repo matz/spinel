@@ -20,9 +20,11 @@
 /* The engine's internal flag bits. re_internal.h is the port island's own
    header and is not included here, so the three this side reads are named
    again; sp_re_raw_flags() answers a pattern's set. */
-#define SP_RE_F_IGNORECASE 1
-#define SP_RE_F_DOTALL     4   /* Ruby's /m: dot matches newline */
-#define SP_RE_F_EXTENDED   8
+#define SP_RE_F_IGNORECASE    1
+#define SP_RE_F_DOTALL        4   /* Ruby's /m: dot matches newline */
+#define SP_RE_F_EXTENDED      8
+#define SP_RE_F_FIXEDENCODING 16
+#define SP_RE_F_NOENCODING    32
 
 /* ---- regexp engine ABI (implemented in build/regexp/*.o) ---- */
 typedef struct mrb_regexp_pattern mrb_regexp_pattern;
@@ -136,6 +138,8 @@ sp_bool sp_re_src_linear_time(const char *src);   /* Regexp.linear_time? on a so
 const char *sp_re_inspect_str(void *pat);
 const char *sp_re_to_s_str(void *pat);
 sp_int sp_re_options(void *pat);
+sp_bool sp_re_fixed_encoding_p(void *pat);
+int sp_re_encoding_kind(void *pat);
 sp_int sp_re_hash(void *pat);
 sp_bool sp_re_eq(void *a, void *b);
 sp_bool sp_re_casefold_p(void *pat);

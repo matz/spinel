@@ -4956,7 +4956,7 @@ static const struct {
   {"nobits?",   1, 1, "sp_poly_int_bits_test", NULL,                NPA_BOOL,      0,  2, TY_UNKNOWN},
   {"divmod",    1, 1, "sp_poly_divmod",      NULL,                  NPA_PAIR,      0, -1, TY_UNKNOWN},
   {"remainder", 1, 1, "sp_poly_remainder",   NULL,                  NPA_BOXED,     0, -1, TY_UNKNOWN},
-  {"fdiv",      1, 1, "sp_poly_fdiv",        NULL,                  NPA_FLOAT,     0, -1, TY_UNKNOWN},
+  {"fdiv",      1, 1, "sp_poly_fdiv_v",      NULL,                  NPA_BOXED,     0, -1, TY_UNKNOWN},
   {"quo",       1, 1, "sp_poly_quo",         NULL,                  NPA_BOXED,     0, -1, TY_UNKNOWN},
   {"modulo",    1, 1, "sp_poly_modulo",      NULL,                  NPA_BOXED,     0, -1, TY_UNKNOWN},
   {"div",       1, 1, "sp_poly_div_m",       NULL,                  NPA_BOXED,     0, -1, TY_UNKNOWN},

@@ -145,6 +145,16 @@ static void emit_match_param_bind(Compiler *c, int mblk, int tm, Buf *b) {
 /* A `match` the String arms answer: its MatchData (or NULL), boxed where
    the call itself is typed boxed (a receiver known only at run time, whose
    slot took the box), as the value's other readers take it. */
+void emit_gvar_lastline_boxed(Compiler *c, Buf *b) {
+  const char *urn = comp_resolve_gvar(c, "_");
+  LocalVar *ugv = urn ? comp_gvar(c, urn) : NULL;
+  if (!ugv) { buf_puts(b, "sp_box_nil()"); return; }
+  if (ugv->type == TY_POLY) buf_printf(b, "gv_%s", urn);
+  else if (ugv->type == TY_STRING) buf_printf(b, "sp_box_nullable_str_new(gv_%s)", urn);
+  else if (ugv->type == TY_STRBUF) buf_printf(b, "sp_box_nullable_obj((void *)gv_%s, SP_BUILTIN_STRBUF)", urn);
+  else buf_puts(b, "sp_box_nil()");
+}
+
 static void emit_matchdata_as_call(Compiler *c, int id, const char *md, Buf *b) {
   if (repr_of(c, id).kind == RK_BOXED) emit_boxed_text(c, TY_MATCHDATA, md ? md : "NULL", b);
   else buf_puts(b, md ? md : "NULL");
@@ -180,17 +190,9 @@ int emit_call_regexp_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
     }
     /* ~ /re/ -> `/re/ =~ $_`: the match offset in the last-read line, or nil. */
     if (rre >= 0 && sp_streq(name, "~") && argc == 0) {
-      const char *urn = comp_resolve_gvar(c, "_");
-      LocalVar *ugv = urn ? comp_gvar(c, urn) : NULL;
-      if (ugv) {
-        if (ugv->type == TY_STRING) buf_printf(b, "sp_re_match_poly(sp_re_pat_%d, gv_%s)", rre, urn);
-        /* (one representation: a String global held as the handle) */
-        else if (ugv->type == TY_STRBUF) buf_printf(b, "sp_re_match_poly(sp_re_pat_%d, SP_STR_B(gv_%s))", rre, urn);
-        else buf_printf(b, "sp_re_match_poly(sp_re_pat_%d, sp_poly_to_s(gv_%s))", rre, urn);
-      }
-      else {
-        buf_puts(b, "sp_box_nil()");  /* $_ unset: no line to match against */
-      }
+      buf_printf(b, "sp_poly_tilde(sp_box_nullable_obj((void *)sp_re_pat_%d, SP_BUILTIN_REGEX), ", rre);
+      emit_gvar_lastline_boxed(c, b);
+      buf_puts(b, ")");
       return 1;
     }
     /* /re/.source and /re/.options are compile-time constants of the literal.
@@ -265,6 +267,15 @@ int emit_call_regexp_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
     }
     if (sp_streq(name, "to_s")) {
       emit_null_guarded_call(c, recv, TY_REGEX, "sp_re_to_s_str", "sp_str_empty", b);
+      return 1;
+    }
+    if (sp_streq(name, "~")) {
+      int tr = ++g_tmp;
+      buf_printf(b, "({ sp_RbVal _t%d = sp_box_nullable_obj((void *)(", tr);
+      emit_expr(c, recv, b);
+      buf_printf(b, "), SP_BUILTIN_REGEX); SP_GC_ROOT_RBVAL(_t%d); sp_poly_tilde(_t%d, ", tr, tr);
+      emit_gvar_lastline_boxed(c, b);
+      buf_puts(b, "); })");
       return 1;
     }
   }

@@ -229,6 +229,12 @@ mrb_regexp_pattern *re_compile(const char *pattern, mrb_int len, uint32_t flags)
   memcpy(r->source, pattern, (size_t)len);
   r->source[len] = 0;
   r->source_len = (uint32_t)len;
+  for (mrb_int i = 0; i < len; i++) {
+    if ((unsigned char)pattern[i] >= 0x80) {
+      flags |= RE_FLAG_FIXEDENCODING;
+      break;
+    }
+  }
   mrb_re_compile(&re_mrb, &r->pat, pattern, len, flags, FALSE);
   re_strs_release();
   if (r->pat.num_named) {
@@ -341,25 +347,43 @@ uint32_t sp_re_source_len(void *vpat) {
   return (r && r->source) ? r->source_len : 0;
 }
 /* Regexp#options: CRuby's public option bits IGNORECASE=1, EXTENDED=2,
-   MULTILINE=4 (the /m "dot matches newline", RE_FLAG_DOTALL here). Returns
-   the runtime's sp_int (intptr_t), as sp_re.h declares it. */
+   MULTILINE=4 (the /m "dot matches newline", RE_FLAG_DOTALL here),
+   FIXEDENCODING=16, NOENCODING=32. Returns the runtime's sp_int (intptr_t),
+   as sp_re.h declares it. */
 intptr_t sp_re_options(void *vpat) {
   mrb_regexp_pattern *pat = (mrb_regexp_pattern *)vpat;
   uint32_t f = pat ? pat->flags : 0;
   intptr_t o = 0;
-  if (f & RE_FLAG_IGNORECASE) o |= 1;
-  if (f & RE_FLAG_EXTENDED)   o |= 2;
-  if (f & RE_FLAG_DOTALL)     o |= 4;
+  if (f & RE_FLAG_IGNORECASE)    o |= 1;
+  if (f & RE_FLAG_EXTENDED)      o |= 2;
+  if (f & RE_FLAG_DOTALL)        o |= 4;
+  if (f & RE_FLAG_FIXEDENCODING) o |= 16;
+  if (f & RE_FLAG_NOENCODING)    o |= 32;
   return o;
 }
-/* Regexp#== / #eql? is source AND options: /ab/ and /ab/i differ (#3631).
+bool sp_re_fixed_encoding_p(void *vpat) {
+  mrb_regexp_pattern *pat = (mrb_regexp_pattern *)vpat;
+  return (pat && (pat->flags & RE_FLAG_FIXEDENCODING)) ? true : false;
+}
+/* 0 = US-ASCII, 1 = UTF-8, 2 = ASCII-8BIT (BINARY). */
+int sp_re_encoding_kind(void *vpat) {
+  mrb_regexp_pattern *pat = (mrb_regexp_pattern *)vpat;
+  uint32_t f = pat ? pat->flags : 0;
+  if (f & RE_FLAG_NOENCODING)
+    return (f & RE_FLAG_FIXEDENCODING) ? 2 : 0;
+  return (f & RE_FLAG_FIXEDENCODING) ? 1 : 0;
+}
+/* Regexp#== / #eql? is source, mix options, fixed_encoding? and encoding:
+   /ab/ and /ab/i differ (#3631); /a/ == /a/n is true, /a/ == /a/u is false.
    Declared sp_bool (a C bool) by the runtime. */
 bool sp_re_eq(void *a, void *b) {
   if (a == b) return 1;
   if (!a || !b) return 0;
   uint32_t la = sp_re_source_len(a), lb = sp_re_source_len(b);
   return la == lb && memcmp(sp_re_source(a), sp_re_source(b), la) == 0 &&
-         sp_re_options(a) == sp_re_options(b);
+         (sp_re_options(a) & 7) == (sp_re_options(b) & 7) &&
+         sp_re_fixed_encoding_p(a) == sp_re_fixed_encoding_p(b) &&
+         sp_re_encoding_kind(a) == sp_re_encoding_kind(b);
 }
 bool sp_re_casefold_p(void *vpat) {
   mrb_regexp_pattern *pat = (mrb_regexp_pattern *)vpat;
@@ -375,8 +399,10 @@ uint32_t sp_re_raw_flags(void *vpat) {
    flag bits re_compile takes (#3055). */
 uint32_t sp_re_opts_to_flags(intptr_t o) {
   uint32_t f = 0;
-  if (o & 1) f |= RE_FLAG_IGNORECASE;
-  if (o & 2) f |= RE_FLAG_EXTENDED;
-  if (o & 4) f |= RE_FLAG_DOTALL;   /* Ruby MULTILINE == "dot matches newline" */
+  if (o & 1)  f |= RE_FLAG_IGNORECASE;
+  if (o & 2)  f |= RE_FLAG_EXTENDED;
+  if (o & 4)  f |= RE_FLAG_DOTALL;   /* Ruby MULTILINE == "dot matches newline" */
+  if (o & 16) f |= RE_FLAG_FIXEDENCODING;
+  if (o & 32) f |= RE_FLAG_NOENCODING;
   return f;
 }

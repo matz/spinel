@@ -1,0 +1,82 @@
+[true, true, true, true]
+[true, true, true, true, true]
+[true, false]
+[true, true]
+[#<Encoding:US-ASCII>, #<Encoding:UTF-8>, #<Encoding:US-ASCII>, #<Encoding:UTF-8>]
+[false, true, false, true]
+[#<Encoding:UTF-8>, true]
+[nil, nil]
+enc_int: NoMethodError
+fixed_str: NoMethodError
+fixed_int: NoMethodError
+timeout_int: NoMethodError
+6
+"wor"
+nil
+nil
+5
+5
+nil
+nil
+-6
+tilde_str: NoMethodError
+tilde_nil: NoMethodError
+tilde_flt: NoMethodError
+[0, 0, nil, 0, 0, nil]
+[4, 3, nil, 3, 3, nil]
+[5, 8, 5, 8, 5]
+bb_neg: IndexError
+bb_oob: IndexError
+bb_bad: IndexError
+bb_nil: TypeError
+bb_recv: NoMethodError
+be_neg: IndexError
+be_oob: IndexError
+be_bad: IndexError
+be_nil: TypeError
+be_recv: NoMethodError
+["foo", nil]
+[]
+[1, 2]
+dec_int: NoMethodError
+dec_nil: NoMethodError
+{a: "foo", b: nil}
+{a: "foo"}
+{a: "foo"}
+{}
+dk_type: TypeError
+dk_elem: TypeError
+dk_recv: NoMethodError
+["foo-", "foo", nil, "foo", "foo", nil]
+["foo", "foo", "foo"]
+["a", "a"]
+[1, nil, nil]
+md_match_neg: IndexError
+md_match_oob: IndexError
+md_match_bad: IndexError
+md_match_nil: TypeError
+md_match_arity: ArgumentError
+(0.5+1.0i)
+(2.0+4.0i)
+(2.0+4.0i)
+(1.5+0.5i)
+(Infinity+Infinity*i)
+[0.5, 1.5]
+cpx_fdiv_str: TypeError
+cpx_fdiv_nil: TypeError
+fdiv_recv: NoMethodError
+[2, 4, (3/1)]
+[2, 4, (3/1)]
+[2, 4, 2, 2.5]
+[2, 2.5, 2]
+rat_clamp_excl: ArgumentError
+rat_clamp_excl_var: ArgumentError
+rat_clamp_order: ArgumentError
+rat_clamp_cmp: ArgumentError
+rat_clamp_nonrange: TypeError
+rat_clamp_nilrange: TypeError
+cpx_clamp: NoMethodError
+[Complex, true, true, true]
+[Complex, true, true, true]
+[(0+0i), (1+2i), (3+4i)]
+toc_arr: NoMethodError

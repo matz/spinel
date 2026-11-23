@@ -373,6 +373,7 @@ static inline TyKind ty_poly_handle_face(const char *nm) {
     static const char *const ENUMERATOR[] = { "next_values", "peek_values", "with_index", 0 };
     for (int i = 0; ENUMERATOR[i]; i++) if (sp_streq(nm, ENUMERATOR[i])) return TY_ENUMERATOR;
   }
+  if (sp_streq(nm, "fixed_encoding?")) return TY_REGEX;
   return TY_UNKNOWN;
 }
 /* The same, for a call passing `argc` arguments: the zero-argument names
@@ -384,6 +385,7 @@ static inline TyKind ty_poly_handle_face_args(const char *nm, int argc) {
   if (argc == 0) return ty_poly_handle_face(nm);
   static const struct { const char *nm; TyKind k; int lo, hi; } ARGS[] = {
     { "begin", TY_MATCHDATA, 1, 1 }, { "end", TY_MATCHDATA, 1, 1 },
+    { "bytebegin", TY_MATCHDATA, 1, 1 }, { "byteend", TY_MATCHDATA, 1, 1 },
     { "offset", TY_MATCHDATA, 1, 1 }, { "byteoffset", TY_MATCHDATA, 1, 1 },
     { "match_length", TY_MATCHDATA, 1, 1 },
     { "with_index", TY_ENUMERATOR, 1, 1 },

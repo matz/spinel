@@ -1713,9 +1713,12 @@ sp_int sp_re_source_hash(void *pat) {
   if (n > (size_t)(q - src)) h = sp_str_hash_walk_on(src, q, n, h, &hi);
   return (sp_int)h;
 }
-/* Regexp#hash: the source AND the flags. /ab/ and /ab/i are not eql?, so a
-   hash over the source alone made them collide as Hash keys (#3816). */
+/* Regexp#hash: the source AND the effective flags (/ab/ and /ab/i differ,
+   /a/ and /a/n are eql? and hash alike). */
 sp_int sp_re_hash(void *pat) {
   sp_int h = sp_re_source_hash(pat);
-  return h ^ ((sp_int)sp_re_options(pat) * 0x9E3779B1);
+  sp_int k = (sp_re_options(pat) & 7) |
+             (sp_re_fixed_encoding_p(pat) ? 16 : 0) |
+             ((sp_int)sp_re_encoding_kind(pat) << 5);
+  return h ^ (k * 0x9E3779B1);
 }

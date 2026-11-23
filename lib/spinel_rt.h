@@ -1854,6 +1854,8 @@ static const char *sp_re_source_str(void *pat) {
   return s ? sp_str_from_bytes(s, (size_t)sp_re_source_len(pat)) : sp_str_empty;
 }
 sp_int sp_re_options(void *pat);
+sp_bool sp_re_fixed_encoding_p(void *pat);
+int sp_re_encoding_kind(void *pat);
 sp_bool sp_re_eq(void *a, void *b);
 extern SP_TLS const mrb_regexp_pattern *sp_re_last_pat;
 sp_bool sp_re_casefold_p(void *pat);
@@ -2448,22 +2450,17 @@ static sp_bool sp_poly_responds_builtin(sp_RbVal v, const char *m) {
      found by tools/respond_to_audit.rb, which this answers for). */
   static const char *const excm[] = {
     "message", "to_s", "full_message", "backtrace", "cause", "exception", NULL };
-  /* bop_rows's TY_REGEX and TY_MATCHDATA surfaces that a boxed receiver can
-     also be called with: a boxed Regexp answered false for every name, so
-     minitest's assert_match, which asks `matcher.respond_to?(:=~)`, failed
-     for a Regexp held in a boxed slot. Left out until boxed dispatch has
-     them (the call raises NoMethodError, or for Regexp#~ converts the
-     receiver to an Integer instead of matching $_): Regexp's encoding,
-     fixed_encoding?, timeout and ~; MatchData's bytebegin, byteend,
-     deconstruct, deconstruct_keys and match (tools/respond_to_audit.rb
-     lists the same names). */
+  /* bop_rows's TY_REGEX and TY_MATCHDATA surfaces on a boxed receiver:
+     minitest's assert_match asks `matcher.respond_to?(:=~)`, and every row
+     for both classes is now callable on a boxed receiver too. */
   static const char *const regm[] = {
-    "=~", "match", "match?", "source", "options", "casefold?", "names",
-    "named_captures", NULL };
+    "=~", "~", "match", "match?", "source", "options", "casefold?", "names",
+    "named_captures", "encoding", "fixed_encoding?", "timeout", NULL };
   static const char *const mdm[] = {
-    "[]", "begin", "end", "byteoffset", "captures", "length", "size",
-    "match_length", "named_captures", "names", "offset", "post_match",
-    "pre_match", "regexp", "string", "to_a", "values_at", NULL };
+    "[]", "begin", "bytebegin", "byteend", "byteoffset", "captures",
+    "deconstruct", "deconstruct_keys", "end", "length", "match", "match_length",
+    "named_captures", "names", "offset", "post_match", "pre_match", "regexp",
+    "size", "string", "to_a", "values_at", NULL };
   const char *cn;
   if (!m) return 0;
   if (sp_str_in_list(m, uni)) return 1;
@@ -2494,25 +2491,25 @@ static sp_bool sp_poly_responds_builtin(sp_RbVal v, const char *m) {
   if (strcmp(cn, "Regexp") == 0) return sp_str_in_list(m, regm);
   if (strcmp(cn, "MatchData") == 0) return sp_str_in_list(m, mdm);
   /* Complex and Rational: the methods that work on a boxed receiver.
-     Complex#fdiv and Rational's clamp, step and to_c raise NoMethodError
-     there, so they are left out until boxed dispatch has them. */
+     Rational#step is left out until boxed dispatch has it. */
   if (strcmp(cn, "Complex") == 0) {
     static const char *const cpxm[] = {
       "*", "**", "+", "+@", "-", "-@", "/", "abs", "abs2", "angle", "arg", "coerce",
-      "conj", "conjugate", "denominator", "finite?", "imag", "imaginary", "infinite?",
-      "integer?", "magnitude", "nonzero?", "numerator", "phase", "polar", "quo",
-      "rationalize", "real", "real?", "rect", "rectangular", "to_c", "to_f", "to_i",
-      "to_int", "to_r", "zero?", NULL };
+      "conj", "conjugate", "denominator", "fdiv", "finite?", "imag", "imaginary",
+      "infinite?", "integer?", "magnitude", "nonzero?", "numerator", "phase",
+      "polar", "quo", "rationalize", "real", "real?", "rect", "rectangular",
+      "to_c", "to_f", "to_i", "to_int", "to_r", "zero?", NULL };
     return sp_str_in_list(m, cpxm);
   }
   if (strcmp(cn, "Rational") == 0) {
     static const char *const ratm[] = {
       "%", "*", "**", "+", "+@", "-", "-@", "/", "<", "<=", ">", ">=", "abs", "abs2",
-      "angle", "arg", "between?", "ceil", "coerce", "conj", "conjugate", "denominator",
-      "div", "divmod", "fdiv", "finite?", "floor", "i", "imag", "imaginary", "infinite?",
-      "integer?", "magnitude", "modulo", "negative?", "nonzero?", "numerator", "phase",
-      "polar", "positive?", "quo", "rationalize", "real", "real?", "rect", "rectangular",
-      "remainder", "round", "to_f", "to_i", "to_int", "to_r", "truncate", "zero?", NULL };
+      "angle", "arg", "between?", "ceil", "clamp", "coerce", "conj", "conjugate",
+      "denominator", "div", "divmod", "fdiv", "finite?", "floor", "i", "imag",
+      "imaginary", "infinite?", "integer?", "magnitude", "modulo", "negative?",
+      "nonzero?", "numerator", "phase", "polar", "positive?", "quo", "rationalize",
+      "real", "real?", "rect", "rectangular", "remainder", "round", "to_c", "to_f",
+      "to_i", "to_int", "to_r", "truncate", "zero?", NULL };
     return sp_str_in_list(m, ratm);
   }
   /* a boxed Time (a parameter with a nil default that a call passes a
@@ -5801,6 +5798,11 @@ static const char *sp_MatchData_aref_poly(sp_MatchData *m, sp_RbVal k) {
   SP_GC_ROOT(m);
   return sp_MatchData_aref(m, sp_poly_arg_int_chk(k));
 }
+sp_oint sp_MatchData_bytebegin_poly(sp_MatchData *m, sp_RbVal k);
+sp_oint sp_MatchData_byteend_poly(sp_MatchData *m, sp_RbVal k);
+const char *sp_MatchData_match_poly(sp_MatchData *m, sp_RbVal k);
+sp_RbVal sp_poly_tilde(sp_RbVal v, sp_RbVal lastline);
+sp_PolyArray *sp_poly_deconstruct_call(sp_RbVal v);
 /* A boxed MatchData's group, by index or by name, boxed: a group that did
    not take part in the match is nil. */
 static sp_RbVal sp_poly_md_group(sp_MatchData *m, sp_RbVal k) {
@@ -5941,16 +5943,24 @@ static sp_bool sp_poly_enc_pred(sp_RbVal v, const char *meth) {
   const char *n = v.v.s ? v.v.s : "";
   return !(strncmp(n, "UTF-16", 6) == 0 || strncmp(n, "UTF-32", 6) == 0);
 }
-/* String#encoding / Symbol#encoding on a boxed receiver: a Symbol is
-   US-ASCII when its name is all ASCII and UTF-8 otherwise, as the typed
-   Symbol arm answers; a String is ASCII-8BIT or UTF-8; anything else raises
-   NoMethodError. */
+static sp_RbVal sp_re_encoding_box(void *pat) {
+  int k = sp_re_encoding_kind(pat);
+  return sp_box_encoding(k == 2 ? sp_encoding_binary()
+                         : k == 1 ? sp_encoding_utf8()
+                         : sp_encoding_us_ascii());
+}
+/* String#encoding / Symbol#encoding / Regexp#encoding on a boxed receiver: a
+   Symbol is US-ASCII when its name is all ASCII and UTF-8 otherwise, as the
+   typed Symbol arm answers; a Regexp answers its compiled encoding; a String
+   is ASCII-8BIT or UTF-8; anything else raises NoMethodError. */
 static sp_RbVal sp_poly_encoding(sp_RbVal v) {
   if (v.tag == SP_TAG_SYM) {
     for (const char *p = sp_sym_to_s((sp_sym)v.v.i); *p; p++)
       if ((unsigned char)*p >= 0x80) return sp_box_encoding(sp_encoding_utf8());
     return sp_box_encoding(sp_encoding_us_ascii());
   }
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_REGEX && v.v.p)
+    return sp_re_encoding_box(v.v.p);
   return sp_box_encoding(sp_str_is_binary(sp_poly_recv_s(v, "encoding")) ? sp_encoding_binary() : sp_encoding_utf8());
 }
 
@@ -7424,7 +7434,7 @@ static int sp_poly_lacks_cmp(sp_RbVal v) {
     case SP_BUILTIN_PROC: case SP_BUILTIN_RANGE: case SP_BUILTIN_FLOAT_RANGE:
     case SP_BUILTIN_STR_RANGE: case SP_BUILTIN_TIME_RANGE: case SP_BUILTIN_OBJ_RANGE:
     case SP_BUILTIN_OBJECT: case SP_BUILTIN_METHOD:
-    case SP_BUILTIN_REGEX: case SP_BUILTIN_MATCHDATA:
+    case SP_BUILTIN_REGEX: case SP_BUILTIN_MATCHDATA: case SP_BUILTIN_COMPLEX:
       return 1;
     case SP_BUILTIN_EXCEPTION:
       for (int i = 0; sp_cmp_exc_open && sp_cmp_exc_open[i]; i++)
@@ -7949,6 +7959,22 @@ static sp_float sp_poly_fdiv(sp_RbVal a, sp_RbVal b) {
   sp_poly_div_operand(&a, &b, NULL);
   return sp_poly_to_f_with_rational(a) / sp_poly_to_f_with_rational(b);
 }
+/* Boxed fdiv: Complex#fdiv returns Complex (real divisor via sp_complex_div_real,
+   Complex divisor via sp_complex_fdiv); other Numerics return Float. */
+static sp_RbVal sp_poly_fdiv_v(sp_RbVal a, sp_RbVal b) SP_UNUSED;
+static sp_RbVal sp_poly_fdiv_v(sp_RbVal a, sp_RbVal b) {
+  SP_GC_ROOT_RBVAL(a); SP_GC_ROOT_RBVAL(b);
+  { sp_RbVal _u; if (sp_poly_coerce_binop("fdiv", a, b, &_u)) return _u; }
+  if (a.tag == SP_TAG_OBJ && a.cls_id == SP_BUILTIN_COMPLEX && a.v.p) {
+    sp_Complex ca = *(sp_Complex *)a.v.p;
+    if (b.tag == SP_TAG_INT || b.tag == SP_TAG_FLT || b.tag == SP_TAG_BIGINT || sp_poly_is_rat_kind(b))
+      return sp_box_complex(sp_complex_div_real(ca, sp_poly_to_f_with_rational(b)));
+    if (b.tag == SP_TAG_OBJ && b.cls_id == SP_BUILTIN_COMPLEX && b.v.p)
+      return sp_box_complex(sp_complex_fdiv(ca, *(sp_Complex *)b.v.p));
+    sp_raise_cls("TypeError", sp_sprintf("%s can't be coerced into Complex", sp_cmperr_desc(b)));
+  }
+  return sp_box_float(sp_poly_fdiv(a, b));
+}
 static sp_RbVal sp_poly_divmod(sp_RbVal a, sp_RbVal b) {
   SP_POLY_COERCE_NUM("divmod");
   /* the sibling helpers (div_m, remainder, fdiv) all refuse a non-numeric
@@ -8296,6 +8322,7 @@ static const char *sp_poly_cmp_err_repr(sp_RbVal v) {
   return sp_poly_cmp_err_immediate_p(v) ? sp_poly_inspect(v) : sp_poly_class_name(v);
 }
 static sp_RbVal sp_num_clamp(sp_RbVal v, sp_RbVal lo, sp_RbVal hi) {
+  SP_GC_ROOT_RBVAL(v); SP_GC_ROOT_RBVAL(lo); SP_GC_ROOT_RBVAL(hi);
   /* a nil bound is an open side (CRuby): it took part in the double
      comparison as 0.0, and was even handed back as the clamped value */
   int has_lo = lo.tag != SP_TAG_NIL, has_hi = hi.tag != SP_TAG_NIL;
@@ -8338,6 +8365,7 @@ static sp_RbVal sp_num_clamp_open(sp_RbVal v, sp_RbVal lo, sp_RbVal hi) {
    triple routes through sp_obj_clamp (the user `<=>` via the cmp hook) instead
    of being reinterpreted as a float. */
 static sp_RbVal sp_poly_clamp(sp_RbVal v, sp_RbVal lo, sp_RbVal hi) {
+  SP_GC_ROOT_RBVAL(v); SP_GC_ROOT_RBVAL(lo); SP_GC_ROOT_RBVAL(hi);
   sp_poly_recv_ck(v, "clamp");   /* nil has no #clamp: it answered nil */
   if ((v.tag == SP_TAG_OBJ && !sp_poly_numeric_p(v)) ||
       (lo.tag == SP_TAG_OBJ && !sp_poly_numeric_p(lo)) ||
@@ -8350,6 +8378,7 @@ static sp_RbVal sp_poly_clamp(sp_RbVal v, sp_RbVal lo, sp_RbVal hi) {
    unbounded sides for numerics and nil bounds for user objects. */
 static sp_RbVal sp_poly_clamp_range(sp_RbVal v, sp_Range r) SP_UNUSED;
 static sp_RbVal sp_poly_clamp_range(sp_RbVal v, sp_Range r) {
+  SP_GC_ROOT_RBVAL(v);
   sp_poly_recv_ck(v, "clamp");
   if (sp_range_excl_end(r) && (r.fe || r.noend == 0))
     sp_raise_cls("ArgumentError", "cannot clamp with an exclusive range");
@@ -8360,6 +8389,24 @@ static sp_RbVal sp_poly_clamp_range(sp_RbVal v, sp_Range r) {
   return sp_num_clamp_open(v, r.nobeg ? sp_box_nil() : sp_box_int(r.first),
                               r.fe ? sp_box_float(r.fend) :
                               r.noend ? sp_box_nil() : sp_box_int(r.last));
+}
+/* clamp(range) on a boxed value with a runtime-boxed Range (or non-Range,
+   raising CRuby's TypeError). Reuses sp_poly_clamp for any Range kind. */
+static sp_RbVal sp_poly_clamp_val(sp_RbVal v, sp_RbVal range) SP_UNUSED;
+static sp_RbVal sp_poly_clamp_val(sp_RbVal v, sp_RbVal range) {
+  SP_GC_ROOT_RBVAL(v); SP_GC_ROOT_RBVAL(range);
+  sp_poly_recv_ck(v, "clamp");
+  if (!(range.tag == SP_TAG_OBJ && range.v.p && sp_poly_is_range_kind(range.cls_id))) {
+    const char *got = range.tag == SP_TAG_NIL ? "nil"
+                    : range.tag == SP_TAG_BOOL ? (range.v.b ? "true" : "false")
+                    : sp_poly_class_name(range);
+    sp_raise_cls("TypeError", sp_sprintf("wrong argument type %s (expected Range)", got));
+  }
+  sp_RbVal lo = sp_poly_range_begin_v(range); SP_GC_ROOT_RBVAL(lo);
+  sp_RbVal hi = sp_poly_range_end_v(range); SP_GC_ROOT_RBVAL(hi);
+  if (sp_poly_range_exclude_end_p(range) && hi.tag != SP_TAG_NIL)
+    sp_raise_cls("ArgumentError", "cannot clamp with an exclusive range");
+  return sp_poly_clamp(v, lo, hi);
 }
 /* Integer #** : Spinel has no Rational, so a negative integer exponent --
    which CRuby evaluates to a Rational like (1/2) -- raises RangeError rather
@@ -9003,7 +9050,7 @@ static sp_RbVal sp_poly_binop_apply(const char *op, sp_RbVal a, sp_RbVal b) {
   if (strcmp(op, "modulo") == 0) return sp_poly_mod(a, b);
   if (strcmp(op, "remainder") == 0) return sp_poly_remainder(a, b);
   if (strcmp(op, "quo") == 0) return sp_poly_quo(a, b);
-  if (strcmp(op, "fdiv") == 0) return sp_box_float(sp_poly_fdiv(a, b));
+  if (strcmp(op, "fdiv") == 0) return sp_poly_fdiv_v(a, b);
   if (strcmp(op, "divmod") == 0) return sp_poly_divmod(a, b);
   return sp_box_nil();
 }
@@ -10811,11 +10858,28 @@ static void sp_poly_match_check(sp_RbVal a, const char *m, sp_int n, sp_RbVal *a
       sp_raise_no_str_conversion(b);
     return;
   }
+  if (a.tag == SP_TAG_OBJ && a.cls_id == SP_BUILTIN_MATCHDATA && strcmp(m, "match") == 0)
+    sp_raise_arity(n, 1, 1, NULL);
   if (!(sp_rbval_is_string(a) || a.tag == SP_TAG_SYM || (a.tag == SP_TAG_OBJ && a.cls_id == SP_BUILTIN_STRBUF)))
     sp_raise_nomethod(sp_nomethod_msg_args(m, a, n, args));
   if (!(sp_rbval_is_string(b) ||
         (b.tag == SP_TAG_OBJ && (b.cls_id == SP_BUILTIN_STRBUF || b.cls_id == SP_BUILTIN_REGEX))))
     sp_scan_bad_pattern(b);
+}
+/* Boxed 1-arg #match: MatchData#match returns a capture String (or nil),
+   while Regexp/String/Symbol#match returns a MatchData (or nil). */
+static sp_RbVal sp_poly_match_call(sp_RbVal recv, sp_RbVal arg) SP_UNUSED;
+static sp_RbVal sp_poly_match_call(sp_RbVal recv, sp_RbVal arg) {
+  SP_GC_ROOT_RBVAL(recv); SP_GC_ROOT_RBVAL(arg);
+  if (recv.tag == SP_TAG_OBJ && recv.cls_id == SP_BUILTIN_MATCHDATA && recv.v.p) {
+    const char *g = sp_MatchData_match_poly((sp_MatchData *)recv.v.p, arg);
+    return g ? sp_box_str_new(g) : sp_box_nil();
+  }
+  sp_RbVal args[1] = { arg };
+  SP_GC_ROOT_RBVAL(args[0]);
+  sp_poly_match_check(recv, "match", 1, args);
+  sp_MatchData *md = sp_poly_match_data(recv, args[0]);
+  return sp_box_nullable_obj(md, SP_BUILTIN_MATCHDATA);
 }
 /* Coercing the position can run Ruby code that changes the subject. */
 static sp_bool sp_poly_match_p_at_arg(sp_RbVal subject, mrb_regexp_pattern *pattern, sp_RbVal position) {
@@ -16335,6 +16399,18 @@ static sp_RbVal sp_poly_to_c_m(sp_RbVal v) {
     const char *bytes = sp_rbval_string_bytes(v);
     return sp_box_complex(sp_str_to_c(bytes ? bytes : sp_str_empty));
   }
+  if (v.tag == SP_TAG_BIGINT && v.v.p) {
+    sp_Complex z = {sp_poly_to_f(v), 0, 0};
+    return sp_box_complex(z);
+  }
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_RATIONAL && v.v.p) {
+    sp_Complex z = {sp_rational_to_f(*(sp_Rational *)v.v.p), 0, SP_CPLX_RE_F};
+    return sp_box_complex(z);
+  }
+  if (sp_poly_is_brat(v) && v.v.p) {
+    sp_Complex z = {sp_brat_to_f((sp_BigRational *)v.v.p), 0, SP_CPLX_RE_F};
+    return sp_box_complex(z);
+  }
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_COMPLEX) return v;
   sp_raise_nomethod(sp_nomethod_msg("to_c", v));  /* "for true", "for an instance of Array", as CRuby words it */
 }
@@ -20683,6 +20759,17 @@ static sp_RbVal sp_poly_pat_keyed(sp_RbVal v) {
   return v;
 }
 static sp_PolyPolyHash *sp_poly_deconstruct_keys(sp_RbVal v, sp_RbVal keys) {
+  /* MatchData#deconstruct_keys: delegate to sp_md_deconstruct_keys so nil,
+     Symbol-Array filtering, excess-key empty hash, and TypeErrors match. */
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_MATCHDATA && v.v.p) {
+    SP_GC_ROOT_RBVAL(v); SP_GC_ROOT_RBVAL(keys);
+    sp_SymPolyHash *mh = sp_md_deconstruct_keys((sp_MatchData *)v.v.p, keys);
+    SP_GC_ROOT(mh);
+    sp_PolyPolyHash *mout = sp_PolyPolyHash_new(); SP_GC_ROOT(mout);
+    for (sp_int i = 0; i < mh->len; i++)
+      sp_PolyPolyHash_set(mout, sp_box_sym(mh->order[i]), sp_SymPolyHash_get(mh, mh->order[i]));
+    return mout;
+  }
   /* Time#deconstruct_keys: every field for nil, else the requested Symbols
      it has, skipping the rest (CRuby's, which ignores a key it does not
      know rather than stopping there as a Struct does) */

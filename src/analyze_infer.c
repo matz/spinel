@@ -3858,7 +3858,7 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
        happens to define one (e.g. `-@cents` with @cents widened to poly must
        not infer the enclosing Money type). */
     if (argc == 0 && (is_unary_sign(name))) { *out = TY_POLY; return 1; }
-    if (argc == 0 && sp_streq(name, "~")) { *out = TY_INT; return 1; }
+    if (argc == 0 && sp_streq(name, "~")) { *out = (rt == TY_POLY && cls_fact_may_hold_builtin(c, recv, CORE_REGEXP)) ? TY_POLY : TY_INT; return 1; }
     /* The disagreeing arm only matters when the RECEIVER's own identity is
        ambiguous (rt == TY_POLY: it could dynamically be the reopening
        class). A poly ARGUMENT alone, on a receiver whose kind is concrete
@@ -5053,7 +5053,7 @@ static int rand_lit_range_float(Compiler *c, int arg) {
    exponent is not an Integer literal (a negative real ** a fraction)? Asked
    once per compile, for the boxed result of Math.sqrt, so a program with no
    Complex keeps a Float one. */
-static int an_program_makes_complex(Compiler *c, const NodeTable *nt) {
+int an_program_makes_complex(Compiler *c, const NodeTable *nt) {
   static const Compiler *mc_c; static int mc;
   if (mc_c == c) return mc;
   mc_c = c;
@@ -7726,9 +7726,9 @@ static int infer_universal_call(Compiler *c, int id, const NodeTable *nt, const 
     if (rt == TY_STRING) { *out = TY_STRING; return 1; }  /* +str = mutable copy; -str = frozen self */
     { *out = ty_is_numeric(rt) ? rt : rt == TY_POLY ? TY_POLY : TY_UNKNOWN; return 1; }
   }
-  /* unary bitwise complement: ~int / ~poly -> int (poly value coerced via to_i) */
+  /* unary ~: ~int -> int; ~poly -> poly when receiver may hold Regexp (Regexp#~ -> int|nil) */
   if (sp_streq(name, "~") && recv >= 0 && argc == 0 && (rt == TY_INT || rt == TY_POLY))
-    { *out = TY_INT; return 1; }
+    { *out = (rt == TY_POLY && cls_fact_may_hold_builtin(c, recv, CORE_REGEXP)) ? TY_POLY : TY_INT; return 1; }
   if (sp_streq(name, "!")) { *out = TY_BOOL; return 1; }
   if (sp_streq(name, "respond_to?") && recv >= 0) { *out = TY_BOOL; return 1; }
   if ((sp_streq(name, "method_defined?") || sp_streq(name, "const_defined?") ||

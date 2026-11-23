@@ -531,9 +531,12 @@ static int node_is_oint_asked(Compiler *c, int node) {
          ((sp_streq(nm, "pop") || sp_streq(nm, "shift")) && an2 == 0))) return 1;
     if (r >= 0 && ty_is_hash(rt) && (sp_streq(nm, "delete") || sp_streq(nm, "find_index"))) return 1;
     if (r >= 0 && ty_is_obj_array(rt) && (sp_streq(nm, "index") || sp_streq(nm, "find_index")) && an2 == 1) return 1;
-    if (r >= 0 && rt == TY_MATCHDATA && (sp_streq(nm, "bytebegin") || sp_streq(nm, "byteend"))) return 1;
+    int md_recv = (rt == TY_MATCHDATA) ||
+                  (rt == TY_POLY && ty_poly_handle_face_args(nm, an2) == TY_MATCHDATA &&
+                   cplan_user(c, node).dispatch == CP_NONE);
+    if (r >= 0 && md_recv && (sp_streq(nm, "bytebegin") || sp_streq(nm, "byteend"))) return 1;
     if (is_range_bound_reader(nm) && r >= 0 &&
-        (rt == TY_MATCHDATA || rt == TY_RANGE || rt == TY_FLOAT_RANGE)) return 1;
+        (md_recv || rt == TY_RANGE || rt == TY_FLOAT_RANGE)) return 1;
     if (r >= 0 && (rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY)) {
       /* an Integer / Float array's element answers: nil when empty or missing */
       if (an2 == 0 && blk < 0 &&

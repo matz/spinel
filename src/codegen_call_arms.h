@@ -337,6 +337,7 @@ int emit_str_format_untyped_array(Compiler *c, int recv, int a0n, int fck, Buf *
 void emit_voided_operands(Compiler *c, int recv, int arg, int v, Buf *b);
 int parse_named_format(const char *fmt, Buf *rew, const char **names, int *name_len, int maxn);
 int re_lit_enc_opts(Compiler *c, int recv, int rre);
+void emit_gvar_lastline_boxed(Compiler *c, Buf *b);
 void emit_re_opts_flags(Compiler *c, int argc, const int *argv, Buf *out);
 void emit_regexp_new(Compiler *c, int argc, const int *argv, Buf *b);
 int emit_try_convert_boxed(Compiler *c, const char *cname, int arg, Buf *b);

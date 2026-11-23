@@ -48,6 +48,13 @@ static sp_int   poly_i(sp_RbVal v) { return v.tag == SP_TAG_INT ? v.v.i : (sp_in
 static void mar_raise(const char *cls, const char *msg) {
   if (sp_marshal_v.raise) sp_marshal_v.raise(cls, msg);
 }
+/* The exception hooks the generated unit defines (lib/spinel_rt.h). */
+void sp_exc_arm(jmp_buf b);
+void sp_exc_disarm(void);
+const char *sp_exc_cur_cls(void);
+const char *sp_exc_cur_msg(void);
+void *sp_exc_cur_obj(void);
+void sp_fiber_reraise(const char *cls, const char *msg, void *obj);
 
 /* ---- dump ---- */
 static void sp_mar_raw(sp_mar_buf *b, const char *s, size_t n) {SP_GC_ROOT_STR(s); for (size_t i = 0; i < n; i++) sp_mar_b(b, (unsigned char)s[i]); }
@@ -75,7 +82,9 @@ void sp_mar_sym(sp_mar_buf *b, const char *name) {SP_GC_ROOT_STR(name);
   for (int i = 0; i < b->nws; i++)
     if (!strcmp(b->wsyms[i], name)) { sp_mar_b(b, ';'); sp_mar_long(b, i); return; }
   if (b->nws >= b->cws) { b->cws = b->cws ? b->cws * 2 : 8; b->wsyms = (char **)realloc(b->wsyms, sizeof(char *) * (size_t)b->cws); if (!b->wsyms) sp_oom_die(); }
-  b->wsyms[b->nws++] = strdup(name);
+  char *dup = strdup(name);
+  if (!dup) sp_oom_die();
+  b->wsyms[b->nws++] = dup;
   sp_mar_b(b, ':'); sp_mar_bytes(b, name, strlen(name));
 }
 /* CRuby's Marshal float text: the shortest %.g that round-trips, exponent
@@ -103,7 +112,12 @@ static int sp_mar_seen(sp_mar_buf *b, void *ptr) {
   if (ptr) for (int i = 0; i < b->nl; i++) if (b->lptr[i] == ptr) { sp_mar_b(b, '@'); sp_mar_long(b, b->lid[i]); return 1; }
   int id = b->link_next++;
   if (ptr) {
-    if (b->nl >= b->cl) { b->cl = b->cl ? b->cl * 2 : 16; b->lptr = (void **)realloc(b->lptr, sizeof(void *) * (size_t)b->cl); b->lid = (int *)realloc(b->lid, sizeof(int) * (size_t)b->cl); }
+    if (b->nl >= b->cl) {
+      b->cl = b->cl ? b->cl * 2 : 16;
+      b->lptr = (void **)realloc(b->lptr, sizeof(void *) * (size_t)b->cl);
+      b->lid = (int *)realloc(b->lid, sizeof(int) * (size_t)b->cl);
+      if (!b->lptr || !b->lid) sp_oom_die();
+    }
     b->lptr[b->nl] = ptr; b->lid[b->nl] = id; b->nl++;
   }
   return 0;
@@ -319,6 +333,7 @@ void sp_mar_w(sp_mar_buf *b, sp_RbVal v) {
       sp_Bigint *bg = (sp_Bigint *)v.v.p;
       size_t cap = sp_bigint_byte_len(bg) + 1;
       unsigned char *buf = (unsigned char *)calloc(cap + 1, 1);
+      if (!buf) sp_oom_die();
       size_t nbytes = sp_bigint_to_le_bytes(bg, buf, cap);
       size_t nwords = (nbytes + 1) / 2; if (nwords == 0) nwords = 1;
       sp_mar_b(b, 'l');
@@ -332,21 +347,48 @@ void sp_mar_w(sp_mar_buf *b, sp_RbVal v) {
       mar_raise("TypeError", "unsupported value for Marshal.dump");
   }
 }
+/* Free a writer's heap buffers (output bytes, symbol table, object-link table)
+   and the writer struct itself. */
+static void sp_mar_buf_done(sp_mar_buf *b) {
+  for (int i = 0; i < b->nws; i++) free(b->wsyms[i]);
+  free(b->wsyms);
+  free(b->p); free(b->lptr); free(b->lid);
+  free(b);
+}
 const char *sp_marshal_dump(sp_RbVal v) {
   SP_GC_ROOT_RBVAL(v);   /* a Float component allocates via sp_float_to_s -> may GC */
-  sp_mar_buf b; memset(&b, 0, sizeof b);
-  sp_mar_b(&b, 4); sp_mar_b(&b, 8);  /* major.minor = 4.8 */
-  sp_mar_w(&b, v);
-  char *out = sp_str_alloc_raw(b.len + 1);
-  memcpy(out, b.p, b.len); out[b.len] = 0;
-  sp_str_set_len(out, b.len);
-  /* a marshalled stream is bytes, and CRuby names it ASCII-8BIT: without the
-     tag #length counts UTF-8 units over binary data and [] slices by them */
-  sp_str_mark_binary(out);
-  for (int i = 0; i < b.nws; i++) free(b.wsyms[i]);
-  free(b.wsyms);
-  free(b.p); free(b.lptr); free(b.lid);
-  return out;
+  /* A raise inside the dump (unsupported object, default-proc Hash, singleton,
+     anonymous class) longjmps past normal cleanup. Heap-allocate the writer
+     after sp_exc_arm through a volatile pointer so its fields have allocated
+     storage duration across setjmp/longjmp, -O2 cannot clobber the pointer,
+     and a SystemStackError from sp_exc_arm leaks nothing. */
+  sp_mar_buf *volatile b = NULL;
+  int nroots = sp_gc_nroots;
+  jmp_buf jb;
+  if (setjmp(jb) == 0) {
+    sp_exc_arm(jb);
+    sp_mar_buf *w = (sp_mar_buf *)calloc(1, sizeof *w);
+    if (!w) sp_oom_die();
+    b = w;
+    sp_mar_b(w, 4); sp_mar_b(w, 8);  /* major.minor = 4.8 */
+    sp_mar_w(w, v);
+    char *out = sp_str_alloc_raw(w->len + 1);
+    memcpy(out, w->p, w->len); out[w->len] = 0;
+    sp_str_set_len(out, w->len);
+    /* a marshalled stream is bytes, and CRuby names it ASCII-8BIT: without the
+       tag #length counts UTF-8 units over binary data and [] slices by them */
+    sp_str_mark_binary(out);
+    sp_exc_disarm();
+    sp_mar_buf_done(w);
+    return out;
+  }
+  const char *cls = sp_exc_cur_cls(), *msg = sp_exc_cur_msg();
+  void *obj = sp_exc_cur_obj();
+  sp_exc_disarm();
+  sp_gc_nroots = nroots;   /* the dump's own roots unwound with it */
+  if (b) sp_mar_buf_done(b);
+  sp_fiber_reraise(cls, msg, obj);
+  return "";
 }
 
 /* ---- load ---- */
@@ -413,7 +455,11 @@ static char *sp_mar_rstr(sp_mar_rd *r, long n) {
 }
 /* Reserve the next object-link id (nil placeholder so a self-ref resolves). */
 static int sp_mar_reg(sp_mar_rd *r) {
-  if (r->nobj >= r->cobj) { r->cobj = r->cobj ? r->cobj * 2 : 16; r->objs = (sp_RbVal *)realloc(r->objs, sizeof(sp_RbVal) * (size_t)r->cobj); }
+  if (r->nobj >= r->cobj) {
+    r->cobj = r->cobj ? r->cobj * 2 : 16;
+    r->objs = (sp_RbVal *)realloc(r->objs, sizeof(sp_RbVal) * (size_t)r->cobj);
+    if (!r->objs) sp_oom_die();
+  }
   int id = r->nobj; r->objs[r->nobj++] = mk_nil(); return id;
 }
 static sp_sym mar_intern(const char *name) { return sp_marshal_v.sym_intern ? sp_marshal_v.sym_intern(name) : 0; }
@@ -530,8 +576,14 @@ static sp_RbVal sp_mar_r(sp_mar_rd *r) {
     case ':': {
       long n = sp_mar_rlong(r);
       char *name = sp_mar_rstr(r, n); SP_GC_ROOT(name);
-      if (r->nsym >= r->csym) { r->csym = r->csym ? r->csym * 2 : 8; r->syms = (char **)realloc(r->syms, sizeof(char *) * (size_t)r->csym); }
-      r->syms[r->nsym++] = strdup(name);
+      if (r->nsym >= r->csym) {
+        r->csym = r->csym ? r->csym * 2 : 8;
+        r->syms = (char **)realloc(r->syms, sizeof(char *) * (size_t)r->csym);
+        if (!r->syms) sp_oom_die();
+      }
+      char *dup = strdup(name);
+      if (!dup) sp_oom_die();
+      r->syms[r->nsym++] = dup;
       return mk_sym(mar_intern(name));
     }
     case ';': {
@@ -622,6 +674,7 @@ static sp_RbVal sp_mar_r(sp_mar_rd *r) {
       long nwords = sp_mar_rlong(r);
       size_t nbytes = (size_t)(nwords > 0 ? nwords : 0) * 2;
       unsigned char *buf = (unsigned char *)malloc(nbytes ? nbytes : 1);
+      if (!buf) sp_oom_die();
       for (size_t i = 0; i < nbytes; i++) buf[i] = sp_mar_rb(r);
       sp_Bigint *bn = sp_bigint_from_le_bytes(sign == '-', buf, nbytes);
       free(buf);
@@ -661,13 +714,6 @@ static sp_RbVal sp_mar_r(sp_mar_rd *r) {
     default: mar_raise("ArgumentError", "unsupported type in Marshal.load"); return mk_nil();
   }
 }
-/* The exception hooks the generated unit defines (lib/spinel_rt.h). */
-void sp_exc_arm(jmp_buf b);
-void sp_exc_disarm(void);
-const char *sp_exc_cur_cls(void);
-const char *sp_exc_cur_msg(void);
-void *sp_exc_cur_obj(void);
-void sp_fiber_reraise(const char *cls, const char *msg, void *obj);
 /* A reader leaves the active chain and frees its tables. */
 static void sp_mar_rd_done(sp_mar_rd *r) {
   SP_MAR_LOCK();
@@ -683,21 +729,26 @@ sp_RbVal sp_marshal_load(const char *s, sp_int len) {
      r->s is a plain field, not a root slot; the collector walks registered
      slots, so the parameter is what has to be registered. */
   SP_GC_ROOT_STR(s);
-  sp_mar_rd *r = (sp_mar_rd *)calloc(1, sizeof *r);
-  r->s = s ? s : ""; r->len = s ? (size_t)len : 0;
-  SP_MAR_LOCK();
-  r->prev = sp_mar_active; sp_mar_active = r;
-  SP_MAR_UNLOCK();
-  if (r->len >= 2) r->pos = 2;  /* skip the 4.8 version header */
   /* A raise inside the parse (an unknown class, a format error, a value a
      loader cannot convert) longjmps past the return below, and the reader
      stayed on the active chain: the next collection walked its freed
      frame. It is caught here, the reader taken off the chain, and raised
-     on to the program's own handler. */
+     on to the program's own handler. Allocate and link the reader after
+     sp_exc_arm so a SystemStackError from sp_exc_arm leaks nothing and
+     leaves no dangling entry on sp_mar_active. */
+  sp_mar_rd *volatile rd = NULL;
   int nroots = sp_gc_nroots;
   jmp_buf jb;
   if (setjmp(jb) == 0) {
     sp_exc_arm(jb);
+    sp_mar_rd *r = (sp_mar_rd *)calloc(1, sizeof *r);
+    if (!r) sp_oom_die();
+    r->s = s ? s : ""; r->len = s ? (size_t)len : 0;
+    SP_MAR_LOCK();
+    r->prev = sp_mar_active; sp_mar_active = r;
+    SP_MAR_UNLOCK();
+    rd = r;
+    if (r->len >= 2) r->pos = 2;  /* skip the 4.8 version header */
     sp_RbVal v = sp_mar_r(r);
     sp_exc_disarm();
     sp_mar_rd_done(r);
@@ -707,7 +758,7 @@ sp_RbVal sp_marshal_load(const char *s, sp_int len) {
   void *obj = sp_exc_cur_obj();
   sp_exc_disarm();
   sp_gc_nroots = nroots;   /* the parse's own roots unwound with it */
-  sp_mar_rd_done(r);
+  if (rd) sp_mar_rd_done(rd);
   sp_fiber_reraise(cls, msg, obj);
   return mk_nil();
 }

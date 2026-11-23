@@ -29044,7 +29044,7 @@ static void nil_target_operands(Compiler *c, int id, int boxed, NilOperands *o) 
    handle beside it (ran_first_bind), which a mutator changes
    (strbuf_recv_handle). Answers the read's temp, or -1 with nothing
    emitted. */
-static int emit_nil_target_route(Compiler *c, int r, int handle, Buf *b, const char *lead) {
+static int emit_nil_target_route(Compiler *c, int id, int r, int handle, Buf *b, const char *lead) {
   Buf hb, op;
   memset(&hb, 0, sizeof hb);
   memset(&op, 0, sizeof op);
@@ -29062,7 +29062,13 @@ static int emit_nil_target_route(Compiler *c, int r, int handle, Buf *b, const c
     buf_puts(b, lead);
     buf_printf(b, "sp_String * _t%d = SP_STR_HDL(%s); SP_GC_ROOT(_t%d);", th, hb.p, th);
     buf_printf(b, " const char * _t%d = ", t);
+    /* the read is a snapshot only for a call with a block of its own (the
+       block can change the String); a mark left by an enclosing call's block
+       is not this call's */
+    int held = g_one_held;
+    g_one_held = nt_ref(c->nt, id, "block") >= 0;
     str_read_handle_tmp(b, th);
+    g_one_held = held;
     buf_printf(b, "; SP_GC_ROOT(_t%d);", t);
     buf_puts(b, *lead ? "\n" : " ");
     ran_first_bind(r, t, th);
@@ -29186,15 +29192,15 @@ static void emit_nil_target_head_r(Compiler *c, int id, Buf *b, const char *lead
        (emit_strbuf_route) is held as the handle it hands on, which the
        mutator then changes (strbuf_recv_handle reads it) */
     if (node[i] == r && (ty[i] == TY_STRING || ty[i] == TY_STRBUF)) {
-      int t = emit_nil_target_route(c, r, 0, b, lead);
+      int t = emit_nil_target_route(c, id, r, 0, b, lead);
       /* (and so is a call answering its receiver over one, `id(s).upcase!`:
          its handle, run once here, never again by the mutator) */
-      if (t < 0 && strbuf_self_route(c, r)) t = emit_nil_target_route(c, r, 1, b, lead);
+      if (t < 0 && strbuf_self_route(c, r)) t = emit_nil_target_route(c, id, r, 1, b, lead);
       if (t >= 0) { snprintf(rtext, sizeof rtext, "_t%d", t); continue; }
     }
     /* A retained argument's handle is taken at this first evaluation,
        before another operand can overwrite the return channel. */
-    if (node[i] == harg && emit_nil_target_route(c, node[i], 1, b, lead) >= 0) continue;
+    if (node[i] == harg && emit_nil_target_route(c, id, node[i], 1, b, lead) >= 0) continue;
     /* An argument that is a shared String's handle (a slot's, a reader's)
        is held as the handle, and read from it: held as its value form, a
        copy of its bytes, the arm that boxes the handle for a boxed

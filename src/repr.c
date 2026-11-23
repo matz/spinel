@@ -1576,8 +1576,8 @@ int repr_store_fits(Compiler *c, TyKind from, TyKind to) {
 }
 
 /* Would emit_empty_literal_as build `v` at the slot's kind? An empty
-   literal, a bare Array.new or Hash.new, for an Array or Hash slot it has
-   a constructor for. */
+   literal, a bare Array.new or Hash.new, or a plain freeze/dup/clone of
+   one, for an Array or Hash slot it has a constructor for. */
 static int repr_empty_lit_as(Compiler *c, int v, TyKind slot) {
   const NodeTable *nt = c->nt;
   v = nt_paren_single(c->nt, v);
@@ -1599,7 +1599,30 @@ static int repr_empty_lit_as(Compiler *c, int v, TyKind slot) {
     if (rn && sp_streq(rn, "Array"))
       return ty_is_ptr_array(slot) || slot == TY_POLY_ARRAY || array_kind(slot);
   }
+  /* `{}.freeze` / `[].freeze` (and `.dup` / `.clone`) when no user override
+     replaces the builtin: the receiver is built at the slot's kind and
+     frozen where asked. */
+  int r = empty_container_copy_recv(c, v, NULL);
+  if (r >= 0) return repr_empty_lit_as(c, r, slot);
   return 0;
+}
+
+/* Can a Hash of variant `from` widen losslessly into a Hash slot of variant
+   `slot`? Same-key value widening (`StrStr`/`StrInt` -> `StrPoly`) and
+   widening any Hash into the general `PolyPoly` Hash keep every key and value
+   without changing key kinds. A key-kind clash (`SymPoly` -> `StrPoly`) or
+   narrowing (`PolyPoly` -> `StrPoly`) is never converted here. */
+static int repr_hash_widen_ok(TyKind from, TyKind slot) {
+  if (!ty_is_hash(from) || !ty_is_hash(slot) || from == slot) return 0;
+  if (slot == TY_STR_POLY_HASH) return from == TY_STR_STR_HASH || from == TY_STR_INT_HASH;
+  if (slot == TY_POLY_POLY_HASH) return 1;
+  return 0;
+}
+
+/* Can a typed Array widen into the general `PolyArray` slot? */
+static int repr_array_widen_ok(TyKind from, TyKind slot) {
+  return slot == TY_POLY_ARRAY &&
+         (from == TY_INT_ARRAY || from == TY_FLOAT_ARRAY || from == TY_STR_ARRAY);
 }
 
 /* Does emit_poly_rhs_coerced take a boxed value into a `slot` slot? An
@@ -1616,6 +1639,8 @@ int repr_coerce_text_form(Compiler *c, int node, TyKind from, TyKind slot, int h
   if (slot == TY_POLY) return CF_BOX;
   if (from == TY_VOID || from == TY_NIL) return CF_NIL_SENT;
   if (slot == TY_BIGINT && from == TY_INT) return CF_INT2BIG;
+  if (how == CO_HOLD && repr_hash_widen_ok(from, slot)) return CF_HASH_WIDEN;
+  if (how == CO_HOLD && repr_array_widen_ok(from, slot)) return CF_ARRAY_WIDEN;
   if (how == CO_CONVERT && slot == TY_FLOAT && (from == TY_BIGINT || from == TY_RATIONAL))
     return CF_CONVERT;
   return CF_REFUSE;
@@ -1626,7 +1651,7 @@ int repr_coerce_plan(Compiler *c, int node, TyKind slot, int how, TyKind *from_o
   if (how == CO_CONVERT && slot == TY_BOOL) return CF_CONVERT;
   TyKind from = store_value_kind(c, node);
   if (from_out) *from_out = from;
-  int container = ty_is_array(slot) || ty_is_hash(slot);
+  int container = ty_is_array(slot) || ty_is_ptr_array(slot) || ty_is_hash(slot);
   if (from == TY_UNKNOWN && container && repr_empty_lit_as(c, node, slot)) return CF_EMPTY_LIT;
   if (repr_store_fits(c, from, slot) || (from == TY_NIL && repr_store_nil_fits(c, node, slot, how)))
     return CF_FIT;
@@ -1654,7 +1679,8 @@ int repr_coerce_form(Compiler *c, int node, TyKind slot, int how) {
 
 const char *repr_coerce_form_name(int form) {
   static const char *const names[CF__COUNT] = {
-    "FIT", "BOX", "EMPTY_LIT", "NIL_SENT", "INT2BIG", "POLY_RHS", "CHECKED_UNBOX", "STRBUF_HANDLE", "CONVERT", "REFUSE",
+    "FIT", "BOX", "EMPTY_LIT", "NIL_SENT", "INT2BIG", "POLY_RHS", "CHECKED_UNBOX", "STRBUF_HANDLE",
+    "HASH_WIDEN", "ARRAY_WIDEN", "CONVERT", "REFUSE",
   };
   return form >= 0 && form < CF__COUNT ? names[form] : "?";
 }

@@ -79,7 +79,12 @@ owns the absent case. Variable-arity dispatchers forward their arguments to
 the selected arm, where that method's defaults and keywords are checked.
 
 A default argument is evaluated on the callee. Binding a String default
-uses the same handle as the expression that supplied it.
+uses the same handle as the expression that supplied it. Empty `{}` and
+`[]` parameter defaults (including parenthesized forms and `.freeze`/`.dup`/
+`.clone`) adopt the parameter's settled container variant without loosening
+it, and `repr_coerce_plan` / `emit_coerce` own both empty-container
+construction and lossless Hash/Array widening into poly-valued or general
+container slots.
 An ordered operand keeps its saved handle until its argument binding is
 removed. For a call with a native String result, it holds the handle
 from the call's result. An abandoned emission also removes the binding.

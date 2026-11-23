@@ -8642,33 +8642,7 @@ else if (dk == NK_NilNode) {
   /* a number slot that holds its nil beside the value takes the default's
      oint form (a plain default is wrapped as never nil) */
   else if (oint_kind(pt) && slot_is_oint(p)) emit_oint_expr(c, dv, pt, out);
-  else {
-    /* Default empty `[]` literal: emit the correct array constructor for
-       the parameter type rather than always sp_IntArray_new(). */
-    int den = 0;
-    int is_empty_arr_dv = dk == NK_ArrayNode &&
-                          (nt_arr(c->nt, dv, "elements", &den), den == 0);
-    if (is_empty_arr_dv && ty_is_array(pt) && pt != TY_INT_ARRAY) {
-      if (pt == TY_POLY_ARRAY) buf_puts(out, "sp_PolyArray_new()");
-      else { const char *k = array_kind(pt); if (k) buf_printf(out, "sp_%sArray_new()", k); else emit_expr(c, dv, out); }
-    }
-    /* Default empty `{}` literal: emit the correct hash constructor for the
-       parameter type, avoiding the "unsupported hash literal" fallback. */
-    else {
-      int dhn = 0;
-      int is_empty_hash_dv = (dk == NK_HashNode || dk == NK_KeywordHashNode) &&
-                              (nt_arr(c->nt, dv, "elements", &dhn), dhn == 0);
-      if (is_empty_hash_dv && ty_is_hash(pt)) {
-        const char *hn = ty_hash_cname(pt);
-        if (hn) buf_printf(out, "sp_%sHash_new()", hn);
-        else emit_expr(c, dv, out);
-      }
-      /* an Integer / Float parameter holding its nil beside the value takes
-         the default in its oint form (a nil default, a nullable one) */
-      else if (oint_kind(pt) && slot_is_oint(p)) emit_oint_expr(c, dv, pt, out);
-      else emit_coerce(c, dv, pt, CO_HOLD, "a parameter default", out);
-    }
-  }
+  else emit_coerce(c, dv, pt, CO_HOLD, "a parameter default", out);
   g_self = sv_self_dv; g_self_deref = sv_deref_dv;
   g_emitting_class_id = sv_emcls_dv;
 }

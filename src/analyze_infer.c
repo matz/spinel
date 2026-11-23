@@ -2641,6 +2641,31 @@ int an_singleton_methods_foldable(Compiler *c, int recv) {
   return an_class_singleton_methods_listable(c, ci);
 }
 
+/* Klass.singleton_methods (with `all` or not), and a class's methods(false)
+   (the same list: its singleton methods) and private_methods(false) (its
+   private class methods beside Class's own), asked of a constant or of self
+   in the class's body: listable ahead of time, as the singleton methods are
+   (a module's private_methods are Module's own, which are not listed). */
+int an_class_method_list_foldable(Compiler *c, const char *name, int recv, int argc, const int *argv) {
+  const NodeTable *nt = c->nt;
+  if (!name || recv < 0 || argc > 1) return 0;
+  int single = sp_streq(name, "singleton_methods"), priv = sp_streq(name, "private_methods");
+  if (!single && !priv && !sp_streq(name, "methods")) return 0;
+  NodeKind ak = argc == 1 ? nt_kind(nt, argv[0]) : NK_FalseNode;
+  if (ak != NK_FalseNode && !(single && ak == NK_TrueNode)) return 0;
+  if (!single && argc != 1) return 0;
+  int ci;
+  if (nt_kind(nt, recv) == NK_ConstantReadNode) {
+    if (!an_singleton_methods_foldable(c, recv)) return 0;
+    ci = const_node_class_index(c, recv);
+    if (!priv) return 1;
+  } else {
+    ci = class_body_self_ci(c, recv);
+    if (ci < 0 || !an_class_singleton_methods_listable(c, ci)) return 0;
+  }
+  return !priv || (ci >= 0 && !comp_class_is_module(c, &c->classes[ci]));
+}
+
 /* Does the program build Method objects (`method(:x)` / `instance_method(:x)`)?
    Only then can a boxed value answering #name be a Method (#3692). */
 int an_program_builds_methods(Compiler *c) {
@@ -6594,10 +6619,7 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
     if (argc == 1 && sp_streq(name, "class_variable_defined?")) { *out = TY_BOOL; return 1; }
     if (sp_streq(name, "class_variable_get") || sp_streq(name, "class_variable_set")) { *out = TY_POLY; return 1; }
     if (argc <= 1 && is_instance_method_list(name)) { *out = TY_POLY; return 1; }
-    if (argc <= 1 && sp_streq(name, "singleton_methods") &&
-        nt_kind(nt, recv) == NK_ConstantReadNode &&
-        an_singleton_methods_foldable(c, recv))
-      { *out = TY_POLY; return 1; }
+    if (an_class_method_list_foldable(c, name, recv, argc, argv)) { *out = TY_POLY; return 1; }
     /* a user class method on a Class-typed value carried in a plain variable
        (`model.table_name`): unify the return types of every user class
        defining it (poly on disagreement). A constant/accessor receiver keeps

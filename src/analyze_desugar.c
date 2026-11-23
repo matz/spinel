@@ -27279,7 +27279,7 @@ static int cb_self_act_name(const char *nm, int block) {
   static const char *const acts[] = { "display", "public_send", "instance_variable_set",
     /* Object's answers about self */
     "itself", "inspect", "to_s", "hash", "frozen?", "is_a?", "kind_of?", "instance_of?", "nil?",
-    "eql?", "equal?", "object_id",
+    "eql?", "equal?", "object_id", "methods", "private_methods", "singleton_methods",
     /* Module's */
     "name", "ancestors", "superclass", "instance_methods", "public_instance_methods",
     "private_instance_methods", "protected_instance_methods",

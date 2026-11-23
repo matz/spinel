@@ -293,6 +293,7 @@ int poly_scalar_arms_open(Compiler *c, int id, PolyScalarArms *pa, Buf *b);
 void poly_scalar_arms_close(Compiler *c, PolyScalarArms *pa, Buf *b);
 int obj_member_shadows(Compiler *c, TyKind rt, const char *nm);
 void refl_class_singleton_methods(Compiler *c, int ci, int all, ReflNames *r);
+void refl_class_private_methods(Compiler *c, int ci, ReflNames *r);
 void refl_builtin_singleton_methods(const char *cls, int all, ReflNames *r);
 void refl_class_instance_methods(Compiler *c, int ci, int pub, int prot, ReflNames *r);
 void refl_module_instance_methods(Compiler *c, int m, int prot, ReflNames *r);

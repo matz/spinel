@@ -4503,20 +4503,26 @@ void emit_class_value_constants(Compiler *c, const char *cv, int inherit, Buf *b
   buf_printf(b, " _t%d; })", ta);
 }
 
-/* ClassName.singleton_methods / singleton_methods(false): the class
-   methods the program defines, a compile-time list like the one above. */
+/* ClassName.singleton_methods / singleton_methods(false), and a class's
+   methods(false) (the same list) and private_methods(false) (its private
+   class methods beside Class's own), of a constant or of self in the
+   class's body (an_class_method_list_foldable): the class methods the
+   program defines, a compile-time list like the one above. */
 static int emit_class_value_singleton_methods(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv) {
-  if (!sp_streq(name, "singleton_methods") || argc > 1) return 0;
+  if (!an_class_method_list_foldable(c, name, recv, argc, argv)) return 0;
   const char *cn2 = nt_kind(nt, recv) == NK_ConstantReadNode
                     ? nt_str(nt, recv, "name") : NULL;
-  int ci2 = cn2 ? const_node_class_index(c, recv) : -1;
+  int ci2 = cn2 ? const_node_class_index(c, recv) : class_body_self_ci(c, recv);
   int all = argc == 0 || nt_kind(nt, argv[0]) == NK_TrueNode;
-  if (!cn2 || (argc == 1 && !all && nt_kind(nt, argv[0]) != NK_FalseNode) || !an_singleton_methods_foldable(c, recv)) return 0;
+  int priv = sp_streq(name, "private_methods");
   ReflNames r = {0};
   /* the class side where the list runs, its own methods alone for `false` */
   if (ci2 >= 0) refl_at(&r, id, ci2, CT_CMETHOD | (all ? 0 : CT_OWN));
-  refl_builtin_singleton_methods(cn2, all, &r);
-  if (ci2 >= 0) refl_class_singleton_methods(c, ci2, all, &r);
+  if (cn2 && !priv) refl_builtin_singleton_methods(cn2, all, &r);
+  if (ci2 >= 0) {
+    if (priv) refl_class_private_methods(c, ci2, &r);
+    else refl_class_singleton_methods(c, ci2, all, &r);
+  }
   buf_puts(b, "sp_box_poly_array(");
   refl_emit_sym_array(c, -1, &r, b);
   buf_puts(b, ")");

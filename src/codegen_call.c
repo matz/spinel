@@ -20245,22 +20245,36 @@ void refl_module_own_methods(Compiler *c, int m, int pub, int prot, int priv, Re
   mtab_build_leave(c);
 }
 
-/* A class-side candidate: singleton_methods lists the public and protected
-   ones, of the visibility they have where the list runs
-   (cplan_cmethod_list_vis). */
+/* A class-side candidate: listed with the visibility it has where the list
+   runs (cplan_cmethod_list_vis), where that is one the form asks. */
 static void refl_cmethod_cand_note(void *ud, const char *nm, int vis) {
   const ReflCand *n = ud;
   if (n->r->at) vis = cplan_cmethod_list_vis(n->c, n->r->at - 1, n->r->at_cls, nm, vis);
-  if (vis != SP_VIS_PRIVATE) refl_cand_note(ud, nm, vis);
+  refl_cand_note(ud, nm, vis);
 }
-/* The names Klass.singleton_methods lists: the class methods `ci` defines
-   (defs, `class << self` aliases and accessors), then with `all` those of
-   its superclasses and extended modules. */
-void refl_class_singleton_methods(Compiler *c, int ci, int all, ReflNames *r) {
-  ReflCand n = { c, r, 1, 1, 0 };
+/* The class methods `ci` defines (defs, `class << self` aliases and
+   accessors) of the visibilities asked, then with `all` those of its
+   superclasses and extended modules. */
+static void refl_class_cmethods(Compiler *c, int ci, int all, int pub, int prot, int priv, ReflNames *r) {
+  ReflCand n = { c, r, pub, prot, priv };
+  r->vis_mask = (!!pub) | ((!!prot) << 1) | ((!!priv) << 2);
   mtab_build_enter(c);
   cplan_list_candidates(c, ci, CT_CMETHOD | (all ? 0 : CT_OWN), refl_cmethod_cand_note, &n);
   mtab_build_leave(c);
+}
+/* The names Klass.singleton_methods lists (a class's methods(false) is the
+   same list): its public and protected class methods. */
+void refl_class_singleton_methods(Compiler *c, int ci, int all, ReflNames *r) {
+  refl_class_cmethods(c, ci, all, 1, 1, 0, r);
+}
+/* The names Klass.private_methods(false) lists: the private class methods
+   the class defines, beside Class's own private instance methods (inherited,
+   initialize) where no class method of the program's answers the name. */
+void refl_class_private_methods(Compiler *c, int ci, ReflNames *r) {
+  static const char *const own[] = { "inherited", "initialize", NULL };
+  refl_class_cmethods(c, ci, 0, 0, 0, 1, r);
+  for (int i = 0; own[i]; i++)
+    if (comp_name_responder(c, ci, own[i], CT_CMETHOD) < 0) refl_note_row(r, own[i], 1);
 }
 
 static int emit_cells_test(Compiler *c, const CplanCells *cs, int tail, Buf *b);

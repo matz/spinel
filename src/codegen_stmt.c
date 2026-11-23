@@ -1681,9 +1681,10 @@ static int strbuf_route_inject(Compiler *c, int v) {
   int recv = nt_ref(nt, v, "receiver"), blk = nt_ref(nt, v, "block"), argc = 0;
   const int *argv = call_args(nt, v, &argc);
   int seed = argc == 1 && strbuf_value_carries(c, argv[0]);
-  /* The same emitter wraps a new String seed in its own rooted handle. */
-  if (!seed && argc == 1 && repr_of(c, argv[0]).as_ty == TY_STRING &&
-      share_value_fresh(c, argv[0], 0)) seed = 1;
+  /* The same emitter wraps a String seed in its own rooted handle: SP_STR_HDL
+     adopts a just-made String, answers a view's owner and a literal's static
+     object. */
+  if (!seed && argc == 1 && repr_of(c, argv[0]).as_ty == TY_STRING) seed = 1;
   if (recv < 0 || argc != 1 || blk < 0 || nt_kind(nt, blk) != NK_BlockNode || call_breaks(c, v) ||
       (!ty_is_array(repr_of(c, recv).as_ty) && repr_of(c, recv).as_ty != TY_RANGE) ||
       comp_ntype(c, v) != TY_STRING ||

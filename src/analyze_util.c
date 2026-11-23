@@ -772,6 +772,17 @@ static int lexically_sees_nested(Compiler *c, int id, const char *leaf) {
       if (c->classes[j].enclosing_class == k && class_leaf_is(c, j, leaf)) return 1;
   return 0;
 }
+/* Is class k a constant of a namespace `leaf` nested in a scope around node
+   `id` (App::IO::WaitReadable for `IO::WaitReadable` written in App)? */
+static int class_in_lexical_nested(Compiler *c, int id, const char *leaf, int k) {
+  int p = c->classes[k].enclosing_class;
+  if (p < 0 || p >= c->nclasses || !class_leaf_is(c, p, leaf)) return 0;
+  if (!c->node_cbody || id >= c->node_cap) return 1;
+  int d = 0;
+  for (int e = c->node_cbody[id]; e >= 0 && e < c->nclasses && d < 64; e = c->classes[e].enclosing_class, d++)
+    if (c->classes[p].enclosing_class == e) return 1;
+  return 0;
+}
 static int program_gives_builtin_const(Compiler *c, const char *nm);
 /* Returns 1 when constant path id is a builtin's path (IO::WaitReadable,
    File::Stat) and class k, which the lookup found by the path's leaf, is a
@@ -779,12 +790,13 @@ static int program_gives_builtin_const(Compiler *c, const char *nm);
    caller then uses the builtin. Returns 0 when the Ruby name of k is the
    whole path, as for `class Enumerator::Chain`, which reopens the builtin.
    For a path listed in lib/sp_builtin_classes.h (IO::WaitReadable), the
-   function also returns 0 when the parent is a module App::IO nested where
-   the path is written, except for a path from the top level
-   (::IO::WaitReadable). For another builtin path (File::Stat), the function
-   also returns 0 when the program can define the leaf in the builtin: a
-   module App::File nested where the path is written, a class header or
-   write of the path, a module mixed into a builtin, or a const_set. */
+   function also returns 0 when k is a constant of a namespace App::IO nested
+   where the path is written (App::IO::WaitReadable), except for a path from
+   the top level (::IO::WaitReadable). For another builtin path (File::Stat),
+   the function also returns 0 when the program can define the leaf in the
+   builtin: a module App::File nested where the path is written, a class
+   header or write of the path, a module mixed into a builtin, or a
+   const_set. */
 int const_path_builtin_other(Compiler *c, int id, int k) {
   const NodeTable *nt = c->nt;
   if (k < 0 || id < 0 || nt_kind(nt, id) != NK_ConstantPathNode) return 0;
@@ -794,7 +806,7 @@ int const_path_builtin_other(Compiler *c, int id, int k) {
   const char *nm = nt_str(nt, id, "name"), *rn = class_ruby_name(c, k);
   char qn[256];
   if (!pn || !nm || snprintf(qn, sizeof qn, "%s::%s", pn, nm) >= (int)sizeof qn || (rn && sp_streq(rn, qn))) return 0;
-  if (builtin_core_class_slot(qn) >= 0) return root || !lexically_sees_nested(c, id, pn);
+  if (builtin_core_class_slot(qn) >= 0) return root || !class_in_lexical_nested(c, id, pn, k);
   /* qc_orig_name is the leaf the program wrote when a pass renamed the
      path to the alias's class (M::A to Foo) */
   const char *wn = nt_str(nt, id, "qc_orig_name"), *ln = class_leaf_name(wn ? wn : nm);

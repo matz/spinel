@@ -1,0 +1,2 @@
+WaitReadable rescued as ::WaitReadable
+App::BuiltinErr rescued as IO::WaitReadable

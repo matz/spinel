@@ -211,6 +211,9 @@ int reopened_owns(Compiler *c, int id, const char *cls, const char *name);
 int bool_side_responds(Compiler *c, int id, const char *qm, int include_all, int foldable, int *ta, int *fa);
 int private_answer_overridden(Compiler *c, const char *qm, TyKind rt);
 int refl_md_dynamic_used(Compiler *c);
+/* The version cells the method_defined? table's guarded rows read, each
+   passed to keep: none where the table is not written (ver_cells_settle) */
+void refl_md_table_cells(Compiler *c, void (*keep)(Compiler *, const char *));
 void emit_scope_parameters_pushes(Compiler *c, int mi, int tr4, Buf *b);
 int refl_im_params_used(Compiler *c);
 int emit_refl_im_params_call(Compiler *c, int id, Buf *b);

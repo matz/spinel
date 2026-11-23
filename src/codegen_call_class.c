@@ -6886,13 +6886,90 @@ int refl_md_dynamic_used(Compiler *c) {
 static void md_name_note(void *ud, const char *name) {
   refl_note(ud, name, 0);
 }
-void emit_refl_method_defined(Compiler *c, Buf *b) {
-  /* every name a method or attr accessor of any class carries */
+/* The names the table's callers may ask: every call of the family the table
+   answers (refl_md_dynamic_used's) names its method by a literal, its
+   receiver perhaps the run time's alone (`v.class.private_method_defined?(:to_ary)`,
+   Enumerable#flat_map's); 0 where one names it by a value. A call on a
+   constant counts too, which the table may answer once it is written. */
+static int refl_md_asked_names(Compiler *c, ReflNames *out) {
+  const NodeTable *nt = c->nt;
+  for (int id = 0; id < nt->count; id++) {
+    if (nt_kind(nt, id) != NK_CallNode) continue;
+    const char *nm = nt_str(nt, id, "name");
+    if (!nm || (!sp_streq(nm, "method_defined?") && !sp_streq(nm, "public_method_defined?") &&
+                !sp_streq(nm, "protected_method_defined?") && !sp_streq(nm, "private_method_defined?"))) continue;
+    int args = nt_ref(nt, id, "arguments");
+    int an = 0; const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
+    if (an < 1 || !av) continue;
+    NodeKind ak = nt_kind(nt, av[0]);
+    const char *lit = ak == NK_SymbolNode ? nt_str(nt, av[0], "value") : ak == NK_StringNode ? nt_str(nt, av[0], "content") : NULL;
+    if (!lit) return 0;
+    refl_note(out, lit, 0);
+  }
+  return 1;
+}
+/* The names the table holds rows for (emit_refl_method_defined), into rn */
+static void refl_md_table_names(Compiler *c, ReflNames *rn) {
+  ReflNames asked;
+  memset(&asked, 0, sizeof asked);
+  int only = refl_md_asked_names(c, &asked);
+  for (int s = 0; s < c->nscopes; s++)
+    if (c->scopes[s].name && c->scopes[s].class_id >= 0) refl_note(rn, c->scopes[s].name, 0);
+  for (int k = 0; k < c->nclasses; k++) cplan_chain_names(c, k, md_name_note, rn);
+  if (only) {
+    int w = 0;
+    for (int i = 0; i < rn->n; i++) {
+      int keep = 0;
+      for (int j = 0; j < asked.n && !keep; j++) keep = sp_streq(rn->v[i], asked.v[j]);
+      if (keep) { rn->v[w] = rn->v[i]; rn->show[w] = rn->show[i]; w++; }
+      else free(rn->v[i]);
+    }
+    rn->n = w;
+  }
+  refl_free(&asked);
+}
+static Buf *g_md_cell_out;
+static void md_cell_declare(Compiler *c, const char *name) {
+  LocalVar *g = name[0] == '$' ? (LocalVar *)comp_gvar(c, name + 1) : NULL;
+  if (!g_md_cell_out || !g || !is_scalar_ret(g->type)) return;
+  /* (as the globals' own declaration types it: an oint where the cell
+     holds an Integer that may be nil, a boxed value under promote) */
+  buf_puts(g_md_cell_out, "static ");
+  if (gvar_is_oint(c, g)) buf_puts(g_md_cell_out, oint_ctype(g->type)); else emit_ctype(c, g->type, g_md_cell_out);
+  buf_printf(g_md_cell_out, " gv_%s;\n", g->name);
+}
+/* See codegen_call_arms.h. */
+void refl_md_table_cells(Compiler *c, void (*keep)(Compiler *, const char *)) {
+  if (!refl_md_dynamic_used(c)) return;
   ReflNames rn;
   memset(&rn, 0, sizeof rn);
-  for (int s = 0; s < c->nscopes; s++)
-    if (c->scopes[s].name && c->scopes[s].class_id >= 0) refl_note(&rn, c->scopes[s].name, 0);
-  for (int k = 0; k < c->nclasses; k++) cplan_chain_names(c, k, md_name_note, &rn);
+  refl_md_table_names(c, &rn);
+  for (int k = 0; k < c->nclasses; k++)
+    for (int i = 0; i < rn.n; i++)
+      for (int own = 0; own < 2; own++) {
+        CplanCells cs;
+        if (!cplan_guarded_presence(c, k, rn.v[i], own, &cs)) continue;
+        for (int j = 0; j < cs.n; j++) {
+          if (cs.cell[j][0]) keep(c, cs.cell[j]);
+          if (cs.vis[j][0]) keep(c, cs.vis[j]);
+        }
+      }
+  refl_free(&rn);
+}
+void emit_refl_method_defined(Compiler *c, Buf *b) {
+  /* every name a method or attr accessor of any class carries; where every
+     caller names its method by a literal, those names alone: a row of
+     another name is one no caller reads. The cells the rows' guarded
+     presences read are kept for them (refl_md_table_cells) */
+  ReflNames rn;
+  memset(&rn, 0, sizeof rn);
+  refl_md_table_names(c, &rn);
+  /* (the cells the rows read are declared with the program's globals, after
+     the table: each is declared here first, a tentative definition the
+     later one completes) */
+  g_md_cell_out = b;
+  refl_md_table_cells(c, md_cell_declare);
+  g_md_cell_out = NULL;
   char **names = rn.v;
   int nn = rn.n;
   buf_puts(b, "static int sp_refl_method_defined(sp_Class k, const char *name, int mask, int inherit) {\n  if (sp_class_sclass_p(k)) sp_raise_cls(\"NotImplementedError\", \"spinel: the methods of a singleton class held in a variable are not modeled\");\n");

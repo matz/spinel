@@ -15267,6 +15267,8 @@ void ver_cells_settle(Compiler *c) {
   for (int id = any ? an_calls_named_first(c, SINGLETON_METHODS_NAME) : -1; id >= 0; id = an_calls_named_next(id))
     if (ver_scope_written(comp_scope_of(c, id))) list_asks(c, id, ver_presence_keep, NULL);
   if (any) presence_readers(c, 1, ver_obj_presence_keep, NULL);
+  /* (the method_defined? table's guarded rows, emit_refl_method_defined) */
+  if (any) refl_md_table_cells(c, ver_cell_keep);
 }
 /* See call_plan.h. */
 int cplan_cell_dropped(const Compiler *c, const LocalVar *g) {

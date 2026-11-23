@@ -1,7 +1,7 @@
 # A String argument narrowed out of a boxed parameter (`if name.is_a?(String)`)
 # handed to a boxed receiver: an ivar that starts as {} and is later given
-# another Hash, a String or an Array. key?, include?, member?, has_key? and
-# delete take it; the generated C bound the parameter's box to a
+# another Hash, a String or an Array. key?, include?, member?, has_key?,
+# delete, fetch and dig take it; the generated C bound the parameter's box to a
 # `const char *` and did not compile.
 class NbEnv
   def initialize = @env = {}
@@ -21,6 +21,12 @@ class NbEnv
     end
     out
   end
+  def fet(name)
+    if name.is_a?(String)
+      return [@env.fetch(name, :none), @env.dig(name), @env.fetch(name) { |k| k + "!" }]
+    end
+    name
+  end
   def str(name)
     if name.is_a?(String)
       [@env.include?(name), @env.index(name), @env.start_with?(name), @env.count(name), @env + name, @env == name]
@@ -36,6 +42,9 @@ c = NbEnv.new
 c.set({ "T" => "i64" })
 p c.get("T"), c.get(:u8)
 p c.all("T"), c.all("U"), c.all(:u8)
+p c.fet("T"), c.fet("U"), c.fet(:u8)
+c.set({ "T" => 1 })
+p c.fet("T"), c.fet("U")
 c.set("abcT")
 p c.str("T"), c.str(:x)
 c.set(["T", "U"])

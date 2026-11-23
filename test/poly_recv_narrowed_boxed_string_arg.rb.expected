@@ -3,6 +3,11 @@
 [true, true, true, true, "i64", :deleted]
 [false, false, false, false, nil, :kept]
 []
+[:none, nil, "T!"]
+[:none, nil, "U!"]
+:u8
+[1, 1, 1]
+[:none, nil, "U!"]
 [true, 3, false, 1, "abcTT", false]
 nil
 [true, 0, 1, 3, "T"]

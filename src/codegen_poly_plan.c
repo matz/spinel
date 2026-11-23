@@ -840,6 +840,20 @@ void emit_poly_enum_includer_arms0(Compiler *c, int id, const char *name, TyKind
   }
 }
 
+/* The first argument's temp as the bytes a String-taking builtin arm reads:
+   a handle held reads through sp_strbuf_read or SP_STR_B (one
+   representation), and a String narrowed out of a boxed slot, which the
+   dispatch holds as the slot's box (cplan_poly_arg_storage), reads the
+   box's bytes. Any other temp is its own text. */
+static void poly_strarg_text(Compiler *c, int argc, const int *argv, const int *atmp, const TyKind *atmp_ty,
+                             char *out, size_t n) {
+  TyKind nt0 = argc > 0 && atmp_ty[0] == TY_POLY ? comp_ntype(c, argv[0]) : TY_UNKNOWN;
+  snprintf(out, n, argc > 0 && atmp_ty[0] == TY_STRBUF ? "sp_strbuf_read(_t%d)"
+           : argc > 0 && atmp_ty[0] == TY_STRING ? "SP_STR_B(_t%d)"
+           : nt0 == TY_STRING || nt0 == TY_STRBUF ? "sp_rbval_string_bytes(_t%d)" : "_t%d",
+           argc > 0 ? atmp[0] : 0);
+}
+
 /* Reuse the typed Struct writer with the receiver and arguments already
    evaluated by the dispatch. The arm's views leave the original call intact. */
 static void emit_poly_struct_set(Compiler *c, int id, const PolyUserArgs *U, int k, Buf *b) {
@@ -3510,15 +3524,7 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
   const char *idxref = T->idxref;
   /* Byte-taking builtin arms read the held handle; boxed arms keep it. */
   char strarg[64];
-  /* (a String narrowed out of a boxed slot is held as the slot's box,
-     cplan_poly_arg_storage: its bytes are the box's) */
-  int strarg_boxed = argc > 0 && atmp_ty[0] == TY_POLY &&
-                     (comp_ntype(c, argv[0]) == TY_STRING || comp_ntype(c, argv[0]) == TY_STRBUF);
-  snprintf(strarg, sizeof strarg, argc > 0 && atmp_ty[0] == TY_STRBUF
-           ? "sp_strbuf_read(_t%d)"
-           : argc > 0 && atmp_ty[0] == TY_STRING ? "SP_STR_B(_t%d)"   /* (one representation: a handle held) */
-           : strarg_boxed ? "sp_rbval_string_bytes(_t%d)" : "_t%d",
-           argc > 0 ? atmp[0] : 0);
+  poly_strarg_text(c, argc, argv, atmp, atmp_ty, strarg, sizeof strarg);
   int is_cover = ps->cover, is_ctryconv = ps->ctryconv, is_gcdlcm = ps->gcdlcm;
   int is_include = ps->include, is_strdel = ps->strdel, is_strpart = ps->strpart;
   int is_strsetop_n = ps->strsetop_n, is_pstore = ps->pstore, is_strencode = ps->strencode;
@@ -4065,10 +4071,7 @@ void emit_poly_cases_n(Compiler *c, int id, const char *name, const PolySpecials
   int tv = T->tv, tr = T->tr;
   const char *idxref = T->idxref;
   char strarg[64];
-  snprintf(strarg, sizeof strarg, argc > 0 && atmp_ty[0] == TY_STRBUF
-           ? "sp_strbuf_read(_t%d)"
-           : argc > 0 && atmp_ty[0] == TY_STRING ? "SP_STR_B(_t%d)" : "_t%d",   /* (one representation: a handle held) */
-           argc > 0 ? atmp[0] : 0);
+  poly_strarg_text(c, argc, argv, atmp, atmp_ty, strarg, sizeof strarg);
   int is_index = ps->index, is_unshift = ps->unshift, is_push = ps->push, is_ppack = ps->ppack;
   int is_pjoin = ps->pjoin, is_include = ps->include, is_arr_index = ps->arr_index;
   int is_intersect = ps->intersect, is_strftime = ps->strftime, is_pred = ps->pred;

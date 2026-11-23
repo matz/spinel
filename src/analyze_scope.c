@@ -2542,6 +2542,7 @@ void register_locals(Compiler *c) {
      is that receiver's, which infer_ivar_types interns once its class is
      known, holder_ivar_side: the structure's rebound marks) */
   const unsigned char *rb = ie_rebound_marks(c);
+  int any_dead_locals = 0;
   for (int id = 0; id < nt->count; id++) {
     const char *ty = nt_type(nt, id);
     NodeKind k = nt_kind(nt, id);
@@ -2556,6 +2557,26 @@ void register_locals(Compiler *c) {
       if (nm) {
         LocalVar *lv = scope_local_intern(comp_scope_of(c, id), nm);
         if (k == NK_LocalVariableOrWriteNode) lv->or_written = 1;
+      }
+    }
+    const char *dl = nt_str(nt, id, "dead_locals");
+    if (dl && *dl) {
+      any_dead_locals = 1;
+      Scope *ds = comp_scope_of(c, id);
+      for (const char *p = dl; *p; ) {
+        const char *comma = strchr(p, ',');
+        size_t len = comma ? (size_t)(comma - p) : strlen(p);
+        if (len > 0) {
+          char sbuf[256];
+          char *nm = len < sizeof sbuf ? sbuf : malloc(len + 1);
+          if (nm) {
+            memcpy(nm, p, len);
+            nm[len] = '\0';
+            scope_local_intern(ds, nm);
+            if (nm != sbuf) free(nm);
+          }
+        }
+        p = comma ? comma + 1 : p + len;
       }
     }
     if (k == NK_InstanceVariableWriteNode ||
@@ -2574,6 +2595,65 @@ void register_locals(Compiler *c) {
       Scope *s = comp_scope_of(c, id);
       if (nm && s->class_id >= 0 && !(id < c->ie_map.cap && (rb[id] & IE_RB_OWN)))
         comp_ivar_intern(&c->classes[s->class_id], nm, s->is_cmethod ? IVS_CLASS : IVS_INST);
+    }
+  }
+  /* A local written ONLY inside a pruned constant-guard branch has value `nil`
+     on every execution; pinning it to TY_NIL now lets enclosing arrays and
+     constants see its real type from pass 1 instead of narrowing around
+     TY_UNKNOWN and colliding after an_phase_late_widen. Locals with any live
+     write or parameter binding stay untouched (zero widening). */
+  if (any_dead_locals && c->nscopes > 0) {
+    int *off = malloc(sizeof(int) * (size_t)c->nscopes);
+    int total = 0;
+    if (off) {
+      for (int s = 0; s < c->nscopes; s++) { off[s] = total; total += c->scopes[s].nlocals; }
+      unsigned char *live_w = total > 0 ? calloc((size_t)total, 1) : NULL;
+      if (live_w) {
+        for (int id = 0; id < nt->count; id++) {
+          NodeKind k = nt_kind(nt, id);
+          if (k == NK_LocalVariableWriteNode || k == NK_LocalVariableTargetNode ||
+              k == NK_LocalVariableOperatorWriteNode || k == NK_LocalVariableOrWriteNode ||
+              k == NK_LocalVariableAndWriteNode || k == NK_RequiredParameterNode ||
+              k == NK_OptionalParameterNode || k == NK_RestParameterNode ||
+              k == NK_BlockParameterNode || k == NK_KeywordRestParameterNode ||
+              k == NK_RequiredKeywordParameterNode || k == NK_OptionalKeywordParameterNode) {
+            const char *nm = nt_str(nt, id, "name");
+            Scope *sc = comp_scope_of(c, id);
+            LocalVar *lv = nm && sc ? scope_local(sc, nm) : NULL;
+            if (lv) {
+              int si = (int)(sc - c->scopes), li = (int)(lv - sc->locals);
+              if (si >= 0 && si < c->nscopes && li >= 0 && li < sc->nlocals) live_w[off[si] + li] = 1;
+            }
+          }
+        }
+        for (int id = 0; id < nt->count; id++) {
+          const char *dl = nt_str(nt, id, "dead_locals");
+          if (!dl || !*dl) continue;
+          Scope *ds = comp_scope_of(c, id);
+          int si = ds ? (int)(ds - c->scopes) : -1;
+          if (si < 0 || si >= c->nscopes) continue;
+          for (const char *p = dl; *p; ) {
+            const char *comma = strchr(p, ',');
+            size_t len = comma ? (size_t)(comma - p) : strlen(p);
+            if (len > 0) {
+              char sbuf[256];
+              char *nm = len < sizeof sbuf ? sbuf : malloc(len + 1);
+              if (nm) {
+                memcpy(nm, p, len); nm[len] = '\0';
+                LocalVar *lv = scope_local(ds, nm);
+                if (lv && !lv->is_param && lv->type == TY_UNKNOWN) {
+                  int li = (int)(lv - ds->locals);
+                  if (li >= 0 && li < ds->nlocals && !live_w[off[si] + li]) lv_set_type(lv, TY_NIL);
+                }
+                if (nm != sbuf) free(nm);
+              }
+            }
+            p = comma ? comma + 1 : p + len;
+          }
+        }
+        free(live_w);
+      }
+      free(off);
     }
   }
   /* Parameters are bound on entry, so their `||=` never sees the slot

@@ -1,0 +1,13 @@
+model=graph build=true
+cli_d_ok
+[true, "ios", 2, false, nil, nil, "local-variable"]
+model=inline build=true
+cli_d_ok
+[true, "ios", 2, false, nil, nil, "local-variable"]
+last_wins
+shadowed:override
+load graph: 1 files, 0 sites
+reject=lowercase:true
+reject=RUBY_ENGINE=other:true
+reject=123=1:true
+reject==val:true

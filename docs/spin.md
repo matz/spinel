@@ -149,6 +149,38 @@ constraint, so a build without a lockfile is still deterministic;
 entries. Set `SPIN_INDEX` to use another index (a `file://` URL works); each index
 URL is cached in its own clone under `~/.cache/spin/`.
 
+### Compile-time constants (`-D`) and branch pruning
+
+Cross-runtime gems shared between CRuby and Spinel targets (native, WASI, iOS)
+can guard runtime-specific code with `if` / `unless` / ternary / modifier
+predicates over provably fixed compile-time values:
+
+- `RUBY_ENGINE` (`"spinel"`), `RUBY_PLATFORM` (derived from `--target` / `--cc`,
+  for example `"wasm32-wasi"` under `--target=wasm32-wasi`), and `RUBY_VERSION`.
+- Target-fixed `defined?(Const)` / `Object.const_defined?(:Const)` (conservative:
+  only provably present core/builtin/`-D` constants fold to truthy; an arbitrary
+  constant never folds to `nil` if a reachable `require` or later statement could
+  define it).
+- Optional CLI compile-time constants passed with `-D NAME` (defines `NAME = true`)
+  or `-D NAME=VALUE` (parses `true`, `false`, `nil`, decimal integers, otherwise a
+  frozen String; last `-D` wins; `NAME` must be a valid Ruby constant name and
+  cannot redefine `RUBY_*`):
+
+```sh
+spinel -D CLIENT_ONLY -D TARGET=ios -D MAX_DEPTH=4 app.rb
+```
+
+In Ruby source, `TARGET = "default" unless defined?(TARGET)` works as a fallback
+when `-D TARGET=...` is not passed; if a program unconditionally assigns `NAME`
+itself, Spinel stops folding `NAME` so runtime semantics stay intact.
+
+Untaken branches of these guards are pruned **before** `require` resolution and
+type inference: dead `require` / `require_relative` / `autoload` calls (for
+example server-only gems such as `pg` or `rails`) are skipped even under
+`--strict-require`, dead branch expressions do not widen inferred types, and
+Ruby's exact `nil` return values and lexical local-variable declarations are
+preserved.
+
 ### The compiler's own version
 
 `spinel --version` prints the release the build belongs to, then the build

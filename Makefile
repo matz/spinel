@@ -344,8 +344,8 @@ SPINEL_OBJ  += build/csrc/order_plan.o
 SPINEL_HDRS += src/sha256.h
 SPINEL_OBJ  += build/csrc/sha256.o
 # --incremental's native step: preprocess, split into units, build.
-SPINEL_HDRS += src/unit_cache.h
-SPINEL_OBJ  += build/csrc/unit_cache.o
+SPINEL_HDRS += src/unit_cache.h src/pre_const.h
+SPINEL_OBJ  += build/csrc/unit_cache.o build/csrc/pre_const.o
 
 build/csrc:
 	@mkdir -p build/csrc
@@ -454,7 +454,7 @@ build/csrc/codegen_util.o: build/csrc/sp_rt_names.h
 
 FORCE:
 
-build/csrc/sp_parse_lib.o: src/spinel_parse.c src/prism_eval.c src/sp_macro.c src/sp_const_loop.c src/ct_value.h src/inline_rbs.c src/rbs_map.h src/node_table.h src/types.h $(PRISM_LIB) $(PLATFORM_HDRS) | build/csrc
+build/csrc/sp_parse_lib.o: src/spinel_parse.c src/prism_eval.c src/sp_macro.c src/sp_const_loop.c src/ct_value.h src/pre_const.h src/inline_rbs.c src/rbs_map.h src/node_table.h src/types.h $(PRISM_LIB) $(PLATFORM_HDRS) | build/csrc
 	$(CC) $(CFLAGS) -Werror=implicit-function-declaration -I$(PRISM_INC) $(INLINE_RBS_CFLAGS) -c src/spinel_parse.c -o $@
 build/csrc/rbs_map.o: src/rbs_map.c src/rbs_map.h $(PLATFORM_HDRS) | build/csrc
 	$(CC) -c $(CFLAGS) -Werror=implicit-function-declaration -I$(RBS_INC) src/rbs_map.c -o $@
@@ -462,7 +462,7 @@ build/csrc/rbs_map.o: src/rbs_map.c src/rbs_map.h $(PLATFORM_HDRS) | build/csrc
 # Exercise the fallback even when vendor/rbs is present, without replacing
 # the parser object used by the ordinary compiler.
 SPINEL_NO_RBS = build/spinel-no-rbs
-build/csrc/sp_parse_no_rbs.o: src/spinel_parse.c src/prism_eval.c src/sp_macro.c src/sp_const_loop.c src/ct_value.h src/node_table.h src/types.h $(PRISM_LIB) $(PLATFORM_HDRS) | build/csrc
+build/csrc/sp_parse_no_rbs.o: src/spinel_parse.c src/prism_eval.c src/sp_macro.c src/sp_const_loop.c src/ct_value.h src/pre_const.h src/node_table.h src/types.h $(PRISM_LIB) $(PLATFORM_HDRS) | build/csrc
 	$(CC) $(CFLAGS) -Werror=implicit-function-declaration -I$(PRISM_INC) -U SPINEL_INLINE_RBS -c src/spinel_parse.c -o $@
 
 # The compiler links the regexp engine so it can compile a literal at build
@@ -572,7 +572,7 @@ build/csrc-san/%.o: src/%.c $(SPINEL_HDRS) | build/csrc
 	$(CC) $(CFLAGS) $(SAN_FLAGS) -Isrc -Ibuild/csrc -c $< -o $@
 build/csrc-san/main.o: build/csrc/spinel_rev.h
 build/csrc-san/codegen_util.o: build/csrc/sp_rt_names.h
-build/csrc-san/sp_parse_lib.o: src/spinel_parse.c src/prism_eval.c src/sp_macro.c src/sp_const_loop.c src/ct_value.h src/inline_rbs.c src/rbs_map.h src/node_table.h src/types.h $(PRISM_LIB) | build/csrc
+build/csrc-san/sp_parse_lib.o: src/spinel_parse.c src/prism_eval.c src/sp_macro.c src/sp_const_loop.c src/ct_value.h src/pre_const.h src/inline_rbs.c src/rbs_map.h src/node_table.h src/types.h $(PRISM_LIB) | build/csrc
 	@mkdir -p build/csrc-san
 	$(CC) $(CFLAGS) $(SAN_FLAGS) -I$(PRISM_INC) $(INLINE_RBS_CFLAGS) -c src/spinel_parse.c -o $@
 $(SPINEL_SAN): $(SPINEL_SAN_OBJ) build/csrc-san/sp_parse_lib.o build/csrc/re_lit_check.o $(RE_OBJ) $(PRISM_LIB) $(INLINE_RBS_LIBS)

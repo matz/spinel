@@ -112,6 +112,12 @@ This is honest about the subset: if Spinel cannot provide `ripper`, the program
 genuinely cannot run, and you learn it when you compile rather than via a
 confusing failure later. With the gate off this is a warning instead.
 
+`require`, `require_relative`, and `autoload` calls inside branches ruled out by
+provably fixed compile-time guards (`RUBY_ENGINE`, `RUBY_PLATFORM`,
+`RUBY_VERSION`, target-fixed `defined?`, or `-D NAME[=VALUE]`) are pruned before
+require resolution, so cross-runtime libraries can guard CRuby/server-only
+requires cleanly even under `--strict-require`.
+
 A few `require`s name a capability Spinel already provides as core, and are
 **tolerated** as a no-op (modern CRuby treats them as already-loaded too):
 

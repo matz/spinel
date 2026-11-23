@@ -166,9 +166,11 @@ struct LoadRecord {
   struct ElabRec *rec;       /* the record's state while elab_program makes it */
   /* the bodies in a value the record places at their statements (lr_nested_body), by class or module node (nb_of:
      [nnb_of] the node's index in nb + 1, 0 for none): the body statements recorded placed (placed) and the visibility
-     they leave (vs), which the rest, lr_body_defs, follow, and whether the body is held (lr_nested_hold: recorded as
-     an unplaced body is, kept when the record is made again) */
-  struct LrNbody { int node, placed; unsigned char vs, held; } *nb; int nnb, cnb, *nb_of, nnb_of;
+     they leave (vs), which the rest, lr_body_defs, follow, whether the body is held (lr_nested_hold: recorded as an
+     unplaced body is, kept when the record is made again), and the histories of the versions it recorded placed (h:
+     the last in nbh, a list through next, -1 for none), the names lr_nested_hold asks */
+  struct LrNbody { int node, placed, h; unsigned char vs, held; } *nb; int nnb, cnb, *nb_of, nnb_of;
+  struct LrNbodyH { int hist, next; } *nbh; int nnbh, cnbh;
   struct HostStep *host;     /* ...and the host a walk-time form splices through (elab_walk_host) */
   LrEvent *ev; int nev, cev;   /* the hook events of the statements recorded and not yet left by the scope walk */
   struct LrHist *hist; int nhist, chist, *hhead, nhbuckets;   /* nhbuckets: hhead's heads, grown with the histories (lr_hist) */
@@ -1371,9 +1373,18 @@ static struct LrNbody *lr_nbody(LoadRecord *r, int node, int make) {
     r->nnb_of = n;
   }
   r->nb = lr_grow(r->nb, &r->cnb, r->nnb, sizeof *r->nb);
-  r->nb[r->nnb] = (struct LrNbody){ node, 0, BVIS_PUBLIC, 0 };
+  r->nb[r->nnb] = (struct LrNbody){ node, 0, -1, BVIS_PUBLIC, 0 };
   r->nb_of[node] = ++r->nnb;
   return &r->nb[r->nnb - 1];
+}
+/* ...and a version body b (an index in nb) recorded placed of name on class a's side sg: its history joins b's */
+static void lr_nbody_note(LoadRecord *r, int b, int a, int sg, const char *name) {
+  const LrHist *h = lr_hist(r, a, sg, name, 0);
+  int hi = h ? (int)(h - r->hist) : -1;
+  if (hi < 0 || (r->nb[b].h >= 0 && r->nbh[r->nb[b].h].hist == hi)) return;   /* (the same history as the last: a def written twice) */
+  r->nbh = lr_grow(r->nbh, &r->cnbh, r->nnbh, sizeof *r->nbh);
+  r->nbh[r->nnbh] = (struct LrNbodyH){ hi, r->nb[b].h };
+  r->nb[b].h = r->nnbh++;
 }
 
 /* A class or module header the scope walk reached: the class registration
@@ -1446,7 +1457,7 @@ enum { LR_FS_NONE, LR_FS_SCLASS, LR_FS_IEVAL, LR_FS_IEVAL_SCLASS, LR_FS_OBJECT }
 /* elab_program's state: each statement's frame class (fc) and singleton
    flag (fs), each frame's visibility state (vs) and each file's top
    level's (vmain) */
-typedef struct ElabRec { Compiler *c; LoadRecord *r; int *fc; unsigned char *fs, *vs, *vmain; int cap; unsigned char unplaced, nbody; int cur, cfc; unsigned char cfs; int body; int vkey; unsigned char vans; unsigned char cut; } ElabRec;   /* cur: the statement being recorded, in the frame cfc / cfs; body: the def whose body makes the versions (LrDef.body); nbody: the forms are a body in a value's, placed at its statement (lr_nested_body); vkey, vans: the last answer of lr_body_def_version (node * 2 + sg + 1), which a definer call asks once for each name it defines */
+typedef struct ElabRec { Compiler *c; LoadRecord *r; int *fc; unsigned char *fs, *vs, *vmain; int cap; unsigned char unplaced; int nbody, cur, cfc; unsigned char cfs; int body; int vkey; unsigned char vans; unsigned char cut; } ElabRec;   /* cur: the statement being recorded, in the frame cfc / cfs; body: the def whose body makes the versions (LrDef.body); nbody: the forms are a body in a value's, placed at its statement (lr_nested_body), its index in LoadRecord.nb + 1; vkey, vans: the last answer of lr_body_def_version (node * 2 + sg + 1), which a definer call asks once for each name it defines */
 
 /* The constant name a class or module header (or a read) names, as the
    program wrote it: a header keeps the name written beside the C name the
@@ -2126,11 +2137,13 @@ static void lr_method(ElabRec *x, int cls, int sg, const char *name, int node, L
   int sc = kind == LR_DEF || kind == LR_DEFINE_METHOD ? lr_def_scope(x->r, node) : 0;
   lr_version(x->r, cls, sg, name, (LrDef){ node, (unsigned char)kind, (unsigned char)vis, (unsigned char)may, 0, target, .unplaced = body ? 0 : x->unplaced, .scope = sc, .body = body,
                                                        .arm1 = kind == LR_DEF ? nt_int(x->c->nt, node, "cond_first_arm", 0) : 0, .cut = x->cut });
+  if (x->nbody && kind <= LR_REMOVE) lr_nbody_note(x->r, x->nbody - 1, cls, sg, name);
   lr_event(x, cls, sg, name, kind, node, vis);
   if (!sg && bvis == BVIS_MODULE_FUNCTION && lr_mf_copies(kind, target)) {
     /* (a body's copy is a version of the singleton's as the word's is of the instance side's: its scope the def
        live at the word, lr_body_copy_scope) */
     lr_version(x->r, cls, 1, name, (LrDef){ node, LR_COPY, SP_VIS_PUBLIC, (unsigned char)may, 0, name, .unplaced = body ? 0 : x->unplaced, .scope = sc, .body = body });
+    if (x->nbody) lr_nbody_note(x->r, x->nbody - 1, cls, 1, name);
     lr_event(x, cls, 1, name, LR_COPY, node, SP_VIS_PUBLIC);
   }
 }
@@ -4962,7 +4975,7 @@ static void lr_nested_body(LrNested *n, int node, int e) {
   LrClass *kc = ci >= 0 ? lr_class(x->r, ci) : NULL;
   const int *par = comp_parent_map(x->c);
   int b = (int)(lr_nbody(x->r, node, 1) - x->r->nb);   /* (an index: the forms may make another body's entry) */
-  x->r->nb[b].placed = 0;
+  x->r->nb[b].placed = 0; x->r->nb[b].h = -1;
   if (!kc || body < 0 || !par || x->r->nb[b].held || !lr_runs_up_to(nt, par, nt->count, node, x->r->st[e].node)) return;
   int one;
   const int *st = lr_body_stmts(nt, body, &cnt, &one);
@@ -4970,7 +4983,7 @@ static void lr_nested_body(LrNested *n, int node, int e) {
   int sc = class_def_super(nt, node);
   if (sc >= 0 && !kc->has_sup) { kc->sup = lr_class_ref_at(x->c, sc, NULL); kc->sup_ref = sc; kc->has_sup = 1; }
   ElabRec y = *x;
-  y.unplaced = 0; y.nbody = 1; y.body = 0; y.cur = e; y.cfc = ci; y.cfs = LR_FS_NONE;
+  y.unplaced = 0; y.nbody = b + 1; y.body = 0; y.cur = e; y.cfc = ci; y.cfs = LR_FS_NONE;
   unsigned char vs = BVIS_PUBLIC;
   /* (the statements stand at e as the walk places them, for the lookups the forms make as they are recorded: an
      alias reads its original's visibility at its own point) */
@@ -5189,7 +5202,8 @@ static void lr_record_drop(LoadRecord *r) {
   free(r->bread); r->bread = NULL; r->nbread = 0;   /* (read through the dropped histories) */
   free(r->once); r->once = NULL; r->nonce = 0;
   r->npword = 0;   /* (the words are listed again as the statements are walked) */
-  for (int b = 0; b < r->nnb; b++) r->nb[b].placed = 0;   /* (a body's held mark stays: lr_nested_hold) */
+  for (int b = 0; b < r->nnb; b++) { r->nb[b].placed = 0; r->nb[b].h = -1; }   /* (a body's held mark stays: lr_nested_hold) */
+  r->nnbh = 0;
 }
 
 static char *lr_dump_text(Compiler *c);
@@ -6182,58 +6196,41 @@ static int lr_chains_may_meet(Compiler *c, int a, int b, int sg) {
   LoadPoint none = { -1, -1, -1 };
   return lr_chain_may_hold(c, a, sg, b, none) || lr_chain_may_hold(c, b, sg, a, none);
 }
-/* Does body statement st define the method `name` on class ci's side sg that the record holds an unplaced def of on
-   a class that may share ci's chain, or define a kin of initialize? */
+/* Is a version of `name` a body in a value placed on class cls's side sg one it must hold: a kin of initialize, or a
+   name the record holds an unplaced def of on its side in a class that may share cls's chain? */
 static int lr_unplaced_def(const LrDef *v);
 static int lr_vers_unordered(Compiler *c, LrVers *x);
-static int lr_name_held(Compiler *c, int ci, int sg, const char *name) {
+static int lr_name_held(Compiler *c, int cls, int sg, const char *name) {
   LoadRecord *r = c->lrec;
   if (!name) return 0;
   if (lr_kin_name(name, sg)) return 1;
   LrVers *x = lr_vers(r, name);
   for (int i = x && lr_vers_unordered(c, x) ? x->first : -1; i >= 0; i = r->hist[i].nlink) {   /* (no history of the name holds one: one test per name, not a walk of its histories) */
     const LrHist *h = &r->hist[i];
-    if (h->b != sg || !lr_chains_may_meet(c, ci, h->a, sg)) continue;
+    if (h->b != sg || !lr_chains_may_meet(c, cls, h->a, sg)) continue;
     for (int j = 0; j < h->n; j++) if (lr_unplaced_def(&h->v[j])) return 1;
   }
   return 0;
 }
-static int lr_stmt_held(Compiler *c, int ci, int st) {
-  const NodeTable *nt = c->nt;
-  NodeKind k = nt_kind(nt, st);
-  if (k == NK_DefNode) return lr_name_held(c, ci, nt_ref(nt, st, "receiver") >= 0, nt_str(nt, st, "name"));
-  if (k == NK_AliasMethodNode) {
-    int nn = nt_ref(nt, st, "new_name");
-    return nn >= 0 && lr_name_held(c, ci, 0, vis_arg_name(nt, nn));
-  }
-  if (k != NK_CallNode) return 0;
-  const char *nm = nt_str(nt, st, "name");
-  int an = nt_ref(nt, st, "arguments"), ac = 0;
-  const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
-  for (int i = 0; i < ac; i++)   /* (a def an argument of a word: private def m, private_class_method def self.m) */
-    if (nt_kind(nt, av[i]) == NK_DefNode && lr_stmt_held(c, ci, av[i])) return 1;
-  return ac > 0 && nm && (is_alias_method_name(nm) || is_define_method_name(nm)) && lr_name_held(c, ci, 0, vis_arg_name(nt, av[0]));
-}
 /* The bodies in a value the record placed (lr_nested_body) that it must keep unplaced, as it records every other body
-   it does not place (lr_body_defs): a body that defines `initialize` or a kin of it, by a def, a def an argument of a
-   word, an alias or a define_method, which the plan answers no body's version of, or a name that has an unplaced def
-   on its side in a class that may share its class's chain. An unplaced def (the `initialize` or private def a lambda
-   makes) may have run before the call, and the supply rule (lr_unordered_supply) lets it show only where no placed
-   def of the name is on the chain, which this body's def would now be. Marks each such body (LrNbody.held) and says
-   whether one is new: the record is made again without them (elab_program), and asked again, for a body held makes
-   unplaced defs of its own. Each round only adds holds, so it ends. */
+   it does not place (lr_body_defs): a body that recorded a version of `initialize` or a kin of it, which the plan
+   answers no body's version of, or of a name that has an unplaced def on its side in a class that may share the
+   version's class's chain. The versions are the body's own entries in the record (LrNbody.h: every form that makes a
+   method, a def, an alias, an attr, a definer call or a copy, with each name it defines), not a list of forms. An
+   unplaced def (the `initialize` or private def a lambda makes) may have run before the call, and the supply rule
+   (lr_unordered_supply) lets it show only where no placed def of the name is on the chain, which this body's would
+   now be. Marks each such body (LrNbody.held) and says whether one is new: the record is made again without them
+   (elab_program), and asked again, for a body held makes unplaced defs of its own. Each round only adds holds, so it
+   ends. */
 static int lr_nested_hold(Compiler *c) {
   LoadRecord *r = c->lrec;
-  const NodeTable *nt = c->nt;
   int more = 0;
   for (int b = 0; b < r->nnb; b++) {
-    int id = r->nb[b].node, upto = r->nb[b].placed;
-    if (upto <= 0 || r->nb[b].held) continue;
-    int ci = elab_header_class(c, id, NULL, NULL), body = class_def_body(nt, id), n = 0, one, hold = 0;
-    if (ci < 0 || body < 0) continue;
-    const int *st = lr_body_stmts(nt, body, &n, &one);
-    for (int i = 0; !hold && i < upto && i < n; i++) hold = lr_stmt_held(c, ci, st[i]);
-    if (hold) r->nb[b].held = more = 1;
+    if (r->nb[b].placed <= 0 || r->nb[b].held) continue;
+    for (int i = r->nb[b].h; i >= 0 && !r->nb[b].held; i = r->nbh[i].next) {
+      const LrHist *h = &r->hist[r->nbh[i].hist];
+      if (lr_name_held(c, h->a, h->b, h->name)) r->nb[b].held = more = 1;
+    }
   }
   return more;
 }
@@ -14785,7 +14782,7 @@ void elab_free(Compiler *c) {
   if (r->bnames) { lr_body_names_free(r->bnames); free(r->bnames); }
   for (int i = 0; i < r->nhdr; i++) free(r->hdr[i].leaf);
   free(r->hdr); free(r->hdr_head);
-  free(r->st); free(r->at); free(r->bits); free(r->dscope); free(r->bown); free(r->ddef); free(r->rend); free(r->rinst); free(r->rentry); free(r->rmade); free(r->ext); free(r->extix); free(r->cread); free(r->once); free(r->nb); free(r->nb_of); free(r);
+  free(r->st); free(r->at); free(r->bits); free(r->dscope); free(r->bown); free(r->ddef); free(r->rend); free(r->rinst); free(r->rentry); free(r->rmade); free(r->ext); free(r->extix); free(r->cread); free(r->once); free(r->nb); free(r->nb_of); free(r->nbh); free(r);
   c->lrec = NULL;
 }
 

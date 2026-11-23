@@ -22443,6 +22443,48 @@ static int prep_zone_build(Compiler *c, int k, int **preps, const int *npreps,
 }
 
 /* The class machinery a program with classes or class values needs: class tables, names, is_a and the class-value runtime (codegen_program's steps, in their order) */
+/* The class method `<=>` of the program's a class value answers with, ahead
+   of Module's (sp_class_cmp3): an arm per class whose class side has one
+   (comp_cmethod_in_chain, so a subclass of the defining class has its
+   own), calling it on that class, with the operand as its parameter takes
+   it: boxed, or a class value (another kind of operand is Module's to
+   judge, as is a parameter list the operand does not fit). The runtime
+   comparator reaches it through sp_class_cmp_fn, so a no-block sort, min
+   or max of class values orders them by it, as instances are ordered by
+   theirs through sp_obj_cmp_hook; a railtie base class orders its
+   subclasses by a load index this way, and Module's `<=>` of two
+   unrelated classes answered nil, a failed comparison. Defined with the
+   other dispatchers, after the methods it calls; sp_class_cmp_rv, ahead
+   of them, calls it through its prototype. *own says an arm answered. */
+static void emit_class_cmp_user_dispatch(Compiler *c, Buf *b) {
+  buf_puts(b, "static sp_RbVal sp_class_cmp_user(sp_RbVal a, sp_RbVal b, int *own) {\n");
+  int any = 0;
+  for (int k = 0; k < c->nclasses; k++) {
+    if (is_builtin_reopen(c->classes[k].name) || comp_class_is_module(c, &c->classes[k])) continue;
+    int mi = comp_cmethod_in_chain(c, k, "<=>", NULL);
+    if (mi < 0) continue;
+    Scope *m = &c->scopes[mi];
+    if (!m->reachable || m->nparams != 1 || m->yields || arm_arg_param(c, m) != 0) continue;
+    TyKind pt = scope_param_type(m, 0);
+    if (pt != TY_POLY && pt != TY_CLASS) continue;
+    if (!any) buf_puts(b, "  if (a.tag == SP_TAG_CLASS) switch (sp_unbox_class(a).cls_id) {\n");
+    any = 1;
+    Buf cb; memset(&cb, 0, sizeof cb);
+    buf_puts(&cb, mc_method(c, m));
+    buf_puts(&cb, "(");
+    buf_puts(&cb, emit_cmethod_self_cls_arg(c, mi, k, &cb));
+    buf_puts(&cb, pt == TY_CLASS ? "sp_unbox_class(b)" : "b");
+    buf_puts(&cb, ")");
+    buf_printf(b, "    case %d: %s*own = 1; return ", k, pt == TY_CLASS ? "if (b.tag != SP_TAG_CLASS) break; " : "");
+    if ((TyKind)m->ret == TY_POLY && !method_ret_is_oint(m)) buf_puts(b, cb.p ? cb.p : "sp_box_nil()");
+    else emit_boxed_ret_call(c, m, cb.p ? cb.p : "", b);
+    buf_puts(b, ";\n");
+    free(cb.p);
+  }
+  if (any) buf_puts(b, "    default: break;\n  }\n");
+  else buf_puts(b, "  (void)a; (void)b;\n");
+  buf_puts(b, "  *own = 0; return sp_box_nil();\n}\n");
+}
 static void emit_class_machinery(const NodeTable *nt, Compiler *c, Buf *b, char **isa_ext, size_t *isa_ext_at) {
   if (g_needs_class_machinery) {
   /* sp_cls_is_module[i]: 1 if user class i was defined as a module, 0 if class */
@@ -23057,9 +23099,12 @@ static void emit_class_machinery(const NodeTable *nt, Compiler *c, Buf *b, char 
        answer of sp_class_lt3 and friends, TypeError for a non-class operand
        (nil for <=>), and the ordinary poly comparison when the receiver turns
        out not to be a class. The runtime reaches the same answer through
-       sp_class_cmp_fn. */
+       sp_class_cmp_fn, after the program's own class method `<=>`. */
     buf_puts(b,
-      "static sp_RbVal sp_class_cmp_rv(sp_RbVal a, sp_RbVal b){return sp_class_cmp3(sp_unbox_class(a),sp_unbox_class(b));}\n"
+      "static sp_RbVal sp_class_cmp_user(sp_RbVal a, sp_RbVal b, int *own);\n"
+      "static sp_RbVal sp_class_cmp_rv(sp_RbVal a, sp_RbVal b){\n"
+      "  int _own = 0; sp_RbVal _r = sp_class_cmp_user(a, b, &_own); if (_own) return _r;\n"
+      "  return sp_class_cmp3(sp_unbox_class(a),sp_unbox_class(b));\n}\n"
       "static sp_RbVal sp_class_op_rv(sp_RbVal a, sp_RbVal b, int op) SP_UNUSED;\n"
       "static sp_RbVal sp_class_op_rv(sp_RbVal a, sp_RbVal b, int op){\n"
       "  if(a.tag!=SP_TAG_CLASS){\n"
@@ -25315,6 +25360,8 @@ char *codegen_program(const NodeTable *nt) {
   emit_synth_line_marker(body);
   unit_begin_in(body, "dispatch2", "dispatch");
   if (g_has_user_cmp) emit_obj_cmp_dispatch(c, body);
+  /* the class values' (sp_class_cmp_rv, of the class machinery, calls it) */
+  if (g_needs_class_machinery) emit_class_cmp_user_dispatch(c, body);
   if (c->gen_comparable) emit_obj_comparable_dispatch(c, body);
   if (g_has_user_binop) emit_user_binop_dispatch(c, body);
   if (program_has_user_eql(c)) emit_user_eql_dispatch(c, body);

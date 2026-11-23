@@ -5393,7 +5393,13 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
     if ((sp_streq(name, "<") || sp_streq(name, "<=") || sp_streq(name, ">") ||
          sp_streq(name, ">=") || sp_streq(name, "<=>")) && argc == 1) {
       TyKind at = repr_of(c, argv[0]).as_ty;
-      if (at == TY_CLASS) {
+      /* a class method of the name of the program's (a railtie base's `<=>`
+         by load index) is the class value's, ahead of Module's: the switch
+         below arms the classes whose class side has it, and the Class row
+         (cls_value_row_default) answers the others as Module does */
+      int ncm = 0;
+      comp_cmethod_candidates(c, name, &ncm);
+      if (at == TY_CLASS && ncm == 0) {
         /* CRuby returns nil (not false) when the classes are unrelated, so the
            tri-state helpers yield a boxed true/false/nil (or -1/0/1/nil for
            <=>). */

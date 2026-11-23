@@ -1,0 +1,9 @@
+["Engine"]
+["Application"]
+[]
+[]
+["MyApp"]
+[]
+["Lazy", "MyApp"]
+excluded?(I18nRailtie)
+["I18nRailtie"]

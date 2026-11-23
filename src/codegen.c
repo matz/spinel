@@ -17412,9 +17412,11 @@ static void emit_super_value(Compiler *c, int id, Buf *b) {
         int par = c->classes[k].parent;
         if (par < 0 || (par != s->class_id && !is_descendant(c, par, s->class_id))) continue;
         if (is_builtin_reopen(c->classes[k].name) || c->classes[k].is_singleton_of) continue;
-        /* boxed by id, as Class#subclasses boxes them */
-        buf_printf(b, " if (_t%d.cls_id == %d) sp_PolyArray_push(_t%d, sp_box_class(((sp_Class){%d, NULL})));",
-                   tc, par, ta, k);
+        /* boxed by id, as Class#subclasses boxes them; listed once its header
+           has run (the flag the constant pass had the super ask) */
+        buf_printf(b, " if (_t%d.cls_id == %d", tc, par);
+        if (an_class_presence_is_read(c, k)) buf_printf(b, " && sp_class_present_%d", k);
+        buf_printf(b, ") sp_PolyArray_push(_t%d, sp_box_class(((sp_Class){%d, NULL})));", ta, k);
       }
       Repr sr = repr_of(c, id);
       if (sr.kind == RK_BOXED) buf_printf(b, " sp_box_poly_array(_t%d); })", ta);

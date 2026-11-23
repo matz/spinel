@@ -58,6 +58,7 @@ src/analyze_pass.c:propagate_prep_params
 src/codegen.c:class_has_user_binop
 src/codegen.c:class_gen_valeq
 src/codegen.c:emit_obj_cmp_dispatch
+src/codegen.c:emit_class_cmp_user_dispatch
 src/codegen.c:prepare_obj_cmp_dispatch
 src/codegen.c:emit_struct_display_decls
 src/codegen.c:exc_text_method

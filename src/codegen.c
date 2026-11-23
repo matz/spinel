@@ -22445,7 +22445,7 @@ static int prep_zone_build(Compiler *c, int k, int **preps, const int *npreps,
 /* The class machinery a program with classes or class values needs: class tables, names, is_a and the class-value runtime (codegen_program's steps, in their order) */
 /* The class method `<=>` of the program's a class value answers with, ahead
    of Module's (sp_class_cmp3): an arm per class whose class side has one
-   (comp_cmethod_in_chain, so a subclass of the defining class has its
+   (the chain's, so a subclass of the defining class has its
    own), calling it on that class, with the operand as its parameter takes
    it: boxed, or a class value (another kind of operand is Module's to
    judge, as is a parameter list the operand does not fit). The runtime
@@ -22461,7 +22461,9 @@ static void emit_class_cmp_user_dispatch(Compiler *c, Buf *b) {
   int any = 0;
   for (int k = 0; k < c->nclasses; k++) {
     if (is_builtin_reopen(c->classes[k].name) || comp_class_is_module(c, &c->classes[k])) continue;
-    int mi = comp_cmethod_in_chain(c, k, "<=>", NULL);
+    /* (the plan's no-site ask, as the instance dispatcher's: a read of the
+       class-method table here was one --method-table-check counts) */
+    int mi = call_target(c, -1, k, "<=>", CT_CMETHOD | CT_SHARED, NULL);
     if (mi < 0) continue;
     Scope *m = &c->scopes[mi];
     if (!m->reachable || m->nparams != 1 || m->yields || arm_arg_param(c, m) != 0) continue;

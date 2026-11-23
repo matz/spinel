@@ -2965,8 +2965,9 @@ static void lr_word_mark(Compiler *c, int node, int reach) {
   LoadRecord *r = c->lrec;
   int keep = reach == INT_MAX || reach == LR_MF_INERT ? 0 : reach + 1;
   nt_node_set_int((NodeTable *)c->nt, node, "word_reach", keep);
-  const char *cut = keep && r->bform_n != 0 && lr_body_word(c->nt, node) ? lr_word_name(c->nt, node, keep - 1, 0) : NULL;
-  if (cut) {
+  int def = 0;
+  const char *cut = keep && r->bform_n != 0 && lr_body_word(c->nt, node) ? lr_word_elem(c->nt, node, keep - 1, &def) : NULL;
+  if (cut && !def) {
     int cap = r->nbform;
     lr_bform_add(r, &cap, cut, node, 0, -1, NULL);
     qsort(r->bform, (size_t)r->nbform, sizeof *r->bform, lr_bform_cmp);
@@ -3908,7 +3909,9 @@ static void lr_body_forms(Compiler *c, const int *par, int n) {
      It bars the name as the word did, and the plan keeps the refusal a body's definer of it has there) */
   for (int w = 0; w < npw; w++) {
     int reach = (int)nt_int(nt, pw[w], "word_reach", 0) - 1;
-    if (reach >= 0) lr_bform_add(r, &cap, lr_word_name(nt, pw[w], reach, 0), pw[w], 0, -1, NULL);
+    int def = 0;
+    const char *cut = reach >= 0 ? lr_word_elem(nt, pw[w], reach, &def) : NULL;
+    if (cut && !def) lr_bform_add(r, &cap, cut, pw[w], 0, -1, NULL);
   }
   free(pw);
   if (r->nbform) qsort(r->bform, (size_t)r->nbform, sizeof *r->bform, lr_bform_cmp);

@@ -192,3 +192,11 @@ class I5
   alias i5d i5b
 end
 p [(I5.new.i5a rescue $!.class), I5.new.i5b, I5.new.i5c, I5.new.i5d]
+class I3
+  def i3b = :i3b
+  begin; private(def i3a; 1; end, :missing3, :i3b); rescue NameError; end
+  def self.hide = private(:i3b)
+end
+p [(I3.new.i3b rescue $!.class)]
+I3.hide
+p [(I3.new.i3b rescue $!.class)]

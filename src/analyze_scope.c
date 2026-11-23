@@ -4844,6 +4844,25 @@ void register_attrs(Compiler *c) {
   free(a);
 }
 
+/* A `class << self` accessor's slot is the class-level ivar's (sg_civ) where
+   a class method names `@x`, register_attrs and the inheritance pass ask
+   before the mixins are copied: a module's method the class extends, copied
+   in as one of its class methods (register_extends), reads and writes the
+   class-level ivar too, and the accessor kept its own slot, so
+   `self.k = v` through the accessor was not the `@k` the extended method
+   read. Asked again once the extends are copied. */
+void register_sg_civ_after_extends(Compiler *c) {
+  for (int i = 0; i < c->nclasses; i++) {
+    ClassInfo *k = &c->classes[i];
+    for (int j = 0; j < k->nsg_readers + k->nsg_writers; j++) {
+      const char *base = j < k->nsg_readers ? k->sg_readers[j] : k->sg_writers[j - k->nsg_readers];
+      char ivname[260];
+      snprintf(ivname, sizeof ivname, "@%s", base);
+      if (!comp_is_sg_civ(k, base) && cmethod_names_ivar(c, i, ivname)) comp_add_sg_civ(k, base);
+    }
+  }
+}
+
 /* Collect `alias new old` (AliasMethodNode) and `alias_method :new, :old`
    (CallNode) statements in class bodies into the class alias table. */
 /* A name an alias bound while a `def` of that same name is still to come in

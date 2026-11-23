@@ -1,6 +1,6 @@
 # A nested class body runs where it stands: a macro it calls on the outer
 # class by name writes that class's state, so a later macro reading it is
-# left as written (a run-time public_send, refused).
+# left as written (a run-time public_send over the class's calc_* methods).
 module Consts
   def kind(k)
     @kind = k

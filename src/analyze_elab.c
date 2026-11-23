@@ -186,6 +186,16 @@ struct LoadRecord {
   unsigned char refl_any;               /* ...and one names a name the record cannot read */
   unsigned char refl_cell_list;         /* ...a method list the version cells may answer, of any name (list_cells_shape's sides: 1 a class's class-side list, 2 its own instance methods') */
   unsigned char names_any;              /* ...and one it defines by a name the record cannot read */
+  /* ...the blocks of the define_methods whose name the record cannot read,
+     each of which defines one method that runs that block: a call of any
+     name may run one, and does what its body does (lr_anon_defines) */
+  int *anon_blocks; int nanon, canon;
+  unsigned char anon_at[3];             /* lr_anon_defines' answer + 1 by its `direct` (0, 1, LR_DEFINES_TREE), 0 not asked yet */
+  /* ...while it is asked (anon_busy), the memo answers stored (lr_version
+     on an lr_key_memo key), which it takes back where they may rest on
+     its guess */
+  unsigned char anon_busy;
+  struct { int a, b; const char *name; } *anon_jr; int nanon_jr, canon_jr;
   const char *watch; char *watch_key[2];   /* ...the name a def-watching ask looks for (lr_between_redefines: lr_node_defines counts a def of it as one that defines) and its two memo keys (lr_body_defines: plain, direct), so the answers it keeps are its own */
   /* the method histories by name (lr_vers_index), as of nentries entries */
   long nentries, indexed;
@@ -1329,6 +1339,11 @@ static void lr_version(LoadRecord *r, int a, int b, const char *name, LrDef d) {
   if (d.target && !(d.target = strdup(d.target))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   x->v = lr_grow(x->v, &x->cap, x->n, sizeof *x->v);
   x->v[x->n++] = d;
+  if (r->anon_busy && lr_key_memo(a)) {   /* (lr_anon_defines' journal) */
+    r->anon_jr = lr_grow(r->anon_jr, &r->canon_jr, r->nanon_jr, sizeof *r->anon_jr);
+    r->anon_jr[r->nanon_jr].a = a; r->anon_jr[r->nanon_jr].b = b; r->anon_jr[r->nanon_jr].name = name;
+    r->nanon_jr++;
+  }
   lr_entries_changed(r);
 }
 
@@ -2332,8 +2347,19 @@ static void lr_names_take(Compiler *c) {
         if (is_attr_decl_reader(nm)) lr_name(r, vis_arg_name(nt, av[i]), "");
         if (is_attr_decl_writer(nm)) lr_name(r, vis_arg_name(nt, av[i]), "=");
       }
-    else if (is_define_method_name(nm) || is_define_singleton_method_name(nm) || is_alias_method_name(nm))
-      lr_name(r, vis_arg_name(nt, av[0]), "");
+    else if (is_define_method_name(nm) || is_define_singleton_method_name(nm) || is_alias_method_name(nm)) {
+      const char *dn = vis_arg_name(nt, av[0]);
+      /* (a define_method of a computed name with its body as a block
+         literal defines a method that runs that block, of some name:
+         lr_anon_defines answers what a call of it may do) */
+      int blk = nt_ref(nt, n, "block");
+      if (!dn && !is_alias_method_name(nm) && ac == 1 && blk >= 0 && nt_kind(nt, blk) == NK_BlockNode) {
+        r->anon_blocks = lr_grow(r->anon_blocks, &r->canon, r->nanon, sizeof *r->anon_blocks);
+        r->anon_blocks[r->nanon++] = blk;
+        continue;
+      }
+      lr_name(r, dn, "");
+    }
   }
   if (r->nnames > 1) qsort(r->names, (size_t)r->nnames, sizeof *r->names, lr_name_cmp);
   if (r->ndefs > 1) qsort(r->defs, (size_t)r->ndefs, sizeof *r->defs, lr_name_cmp);   /* the name leads an LrSite */
@@ -4121,10 +4147,46 @@ static int lr_most(int o, int w) {
    the place is an attr, an alias or a define_method. A name the program
    defines nowhere is a builtin's, which lr_node_defines answers for by its
    name. */
+static int lr_node_defines(Compiler *c, int n, int direct, int depth);
+/* What may a method a define_method of a computed name defines do, run
+   (LoadRecord.anon_blocks): the most any of their blocks may, as
+   lr_node_defines answers for its parameters and body. Any name may be
+   one's, so a call of any name may run one, a call in such a block too.
+   That cycle is asked as nothing: an answer of nothing is then exact (the
+   least answer the cycle can hold), and any other is taken for
+   LR_OPAQUE_DEFINES, with every memo answer stored while it was asked
+   taken back, as one that may rest on the guess. Kept once asked, but
+   while the record watches a name, whose asks differ. */
+static int lr_anon_defines(Compiler *c, int direct, int depth) {
+  LoadRecord *r = c->lrec;
+  int d = direct == LR_DEFINES_TREE ? 2 : direct != 0;
+  if (!r->nanon) return 0;
+  if (r->anon_busy) return 0;   /* (the cycle: see above) */
+  if (r->anon_at[d] && !r->watch) return r->anon_at[d] - 1;
+  if (depth > 64) return LR_OPAQUE_DEFINES;
+  int jr0 = r->nanon_jr, o = 0;
+  r->anon_busy = 1;
+  for (int i = 0; i < r->nanon && o != LR_OPAQUE_DEFINES; i++)
+    o = lr_most(o, lr_node_defines(c, r->anon_blocks[i], direct, depth + 1));
+  r->anon_busy = 0;
+  if (o) {
+    o = LR_OPAQUE_DEFINES;
+    for (int i = r->nanon_jr - 1; i >= jr0; i--) {
+      LrHist *h = lr_hist(r, r->anon_jr[i].a, r->anon_jr[i].b, r->anon_jr[i].name, 0);
+      if (h && h->n) { free((char *)h->v[h->n - 1].target); h->n--; }
+    }
+  }
+  r->nanon_jr = jr0;
+  if (!r->watch) r->anon_at[d] = (unsigned char)(o + 1);
+  return o;
+}
+
 static int lr_callee_defines(Compiler *c, const char *name, int direct, int depth) {
   LoadRecord *r = c->lrec;
   int nn = 0, nd = 0, o = 0;
   if (r->names_any) return LR_OPAQUE_DEFINES;
+  /* (a method a computed define_method makes may be the call's) */
+  if (r->nanon && (o = lr_anon_defines(c, direct, depth)) == LR_OPAQUE_DEFINES) return o;
   lr_name_range(r->names, r->nnames, sizeof *r->names, name, &nn);
   const LrSite *d = lr_name_range(r->defs, r->ndefs, sizeof *r->defs, name, &nd);
   if (nd < nn) return LR_OPAQUE_DEFINES;
@@ -4287,7 +4349,7 @@ static int lr_callbacks_define(Compiler *c, int depth) {
     if ((i == 0 || strcmp(r->names[i - 1], r->names[i]) != 0) &&
         (method_name_implicitly_invoked(r->names[i]) || ic_core_callback(r->names[i], 0)))
       o = lr_most(o, lr_callee_defines(c, r->names[i], 1, depth));
-  if (!r->watch && (!o || r->recorded)) r->callbacks = (unsigned char)(o + 1);
+  if (!r->watch && !r->anon_busy && (!o || r->recorded)) r->callbacks = (unsigned char)(o + 1);
   return o;
 }
 
@@ -11035,7 +11097,7 @@ static int lr_name_taken_away(const NodeTable *nt, const char *name) {
 static int lr_name_drops_block(Compiler *c, const char *name) {
   const LoadRecord *r = c->lrec;
   int nn = 0, nd = 0;
-  if (r->names_any) return 0;
+  if (r->names_any || r->nanon) return 0;
   lr_name_range(r->names, r->nnames, sizeof *r->names, name, &nn);
   const LrSite *d = lr_name_range(r->defs, r->ndefs, sizeof *r->defs, name, &nd);
   if (!nd || nd < nn) return 0;
@@ -11392,7 +11454,7 @@ static int lr_either(int a, int b) {
 
 /* Does the program define a method `name` anywhere (lr_names_take)? */
 static int lr_named(Compiler *c, const char *name) {
-  return c->lrec->names_any || lr_defines(c->lrec, name);
+  return c->lrec->names_any || c->lrec->nanon || lr_defines(c->lrec, name);
 }
 
 /* ...by that name itself */
@@ -13800,11 +13862,19 @@ int elab_opaque_before(Compiler *c, int cls, LoadPoint p) {
    whose run wrote the class's instance variables alone (ct_state_note marks
    it ct_state_only): the record keeps it as code it does not follow, and
    the macro form follows that state itself */
-int elab_opaque_before_bar_state(Compiler *c, int cls, LoadPoint p) {
+int elab_opaque_before_bar_state(Compiler *c, int cls, LoadPoint p, int *writes) {
   int o = elab_opaque_before(c, cls, p);
   const LrHist *h = o != ELAB_NO ? lr_hist(c->lrec, LR_KEY_OPAQUE, lr_const_owner(cls), "", 0) : NULL;
-  for (int i = 0; h && i < h->n; i++)
-    if (h->v[i].node < 0 || !nt_int(c->nt, h->v[i].node, "ct_state_only", 0)) return o;
+  if (writes) *writes = 0;
+  for (int i = 0; h && i < h->n; i++) {
+    if (h->v[i].node >= 0 && nt_int(c->nt, h->v[i].node, "ct_state_only", 0)) continue;
+    /* ...and, asked with `writes`, code that writes instance variables or
+       class variables and no more (LR_OPAQUE_WRITES): the run then takes
+       none of self's instance variables for known (*writes), so what it
+       wrote is never read stale */
+    if (writes && h->v[i].vis == LR_OPAQUE_WRITES) { *writes = 1; continue; }
+    return o;
+  }
   return h ? ELAB_NO : o;
 }
 
@@ -14381,7 +14451,7 @@ void elab_free(Compiler *c) {
   for (int i = 0; i < r->nrefl_capt; i++) free(r->refl_capt[i]);
   for (int i = 0; i < r->nrefl_maker; i++) free(r->refl_maker[i]);
   free(r->refl_cell); free(r->refl_capt); free(r->refl_maker);
-  free(r->names); free(r->defs); free(r->reopens); free(r->refl);
+  free(r->names); free(r->defs); free(r->reopens); free(r->refl); free(r->anon_blocks); free(r->anon_jr);
   for (int i = 0; i < r->nsrcw; i++) free(r->srcw[i].name);
   free(r->srcw);
   free(r->slot); free(r->slot_head); free(r->slotp);

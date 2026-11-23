@@ -1,6 +1,6 @@
 # A macro called inside a case (or a block, a loop) the walk does not follow
 # writes what it does not see: a later macro reading the state is left as
-# written (a run-time public_send, refused), not expanded with the old value.
+# written (a run-time public_send over the class's calc_* methods), not expanded with the old value.
 module Consts
   def kind(k) = @kind = k
   def constant(c)

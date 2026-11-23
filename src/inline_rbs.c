@@ -14,12 +14,13 @@
  *
  *   S <def> rbs_ret <tag>        S <def> rbs_params <tag>,<tag>,...
  *   S <attr_* call> rbs_ivar <tag>
- *   S <class body> rbs_ivars @x=<tag>@<line>@<file>@<col>,...
+ *   S <class/module> rbs_ivars @x=<tag>@<line>@<file>@<col>,...
  *   I <node> rbs_line <line>     I <node> rbs_file <file id>
  *   I <node> rbs_col <col>       S <node> rbs_names <tag>=<type as written>...
  *
  * The analyzer (apply_inline_rbs) finds the method's Scope by its def node
- * and the class through the node's class body, so no class name is matched.
+ * and the class through the class/module node or the attr_* node's class body,
+ * so no class name is matched.
  *
  * Nothing is applied in part. An annotation is applied whole, refused with a
  * located error (a syntax error, two signatures for one method), or ignored
@@ -218,7 +219,7 @@ typedef struct {
     int is_def;            /* 0 class/module body, 1 method, 2 singleton class, 3 block */
     char *owner;           /* for a class body: its qualified name */
     char *lookup;
-    const pm_node_t *body; /* a class body: its statements, which carry its `# @rbs @x:` facts */
+    const pm_node_t *node; /* a class/module node, which carries its `# @rbs @x:` facts */
 } ir_container;
 
 typedef struct {
@@ -307,7 +308,7 @@ static void ir_container_add(ir_walk *w, const pm_node_t *n, int is_def,
     c->is_def = is_def;
     c->owner = ir_strdup(owner);
     c->lookup = ir_strdup(lookup);
-    c->body = NULL;
+    c->node = NULL;
 }
 
 static bool ir_is_attr_call(const ir_file *f, const pm_call_node_t *call) {
@@ -343,7 +344,7 @@ static void ir_class_body(ir_ctx *cx, const pm_node_t *container, const pm_node_
                           const char *leaf_path, int is_class) {
     char *owner = ir_join(cx->owner, leaf_path);
     ir_container_add(cx->w, container, 0, owner, cx->owner);
-    cx->w->conts[cx->w->nconts - 1].body = body;
+    cx->w->conts[cx->w->nconts - 1].node = container;
     known_names_add(owner, strlen(owner));
     ir_ctx sub = { cx->w, owner, cx->owner, 0, is_class, 0 };
     if (body != NULL) pm_visit_node(body, ir_visit, &sub);
@@ -761,10 +762,14 @@ static bool ir_map(rbs_parser_t *p, rbs_node_t *type, const ir_target *t, sbuf_t
     const char *sv = g_self_scope, *st = g_self_type;
     g_self_scope = strcmp(t->owner, "Object") == 0 ? "" : t->owner;
     g_self_type = t->self_class;
+    g_alias_unresolved = false;
     bool ok = map_type(p, type, t->lookup, out);
+    bool unresolved = g_alias_unresolved;
+    g_alias_unresolved = false;
     g_self_scope = sv;
     g_self_type = st;
-    if (!ok && ir_says_nothing(p, type)) { sbuf_set(out, "-", 1); return true; }
+    if (unresolved) ok = false;
+    if (!ok && !unresolved && ir_says_nothing(p, type)) { sbuf_set(out, "-", 1); return true; }
     if (ok && out->buf && type->location.end_byte > type->location.start_byte)
         ir_names_add(&g_ir_names, out->buf, p->lexer->string.start + type->location.start_byte,
                      (size_t) (type->location.end_byte - type->location.start_byte));
@@ -1247,14 +1252,10 @@ static void ir_apply_attr(const ir_file *f, ir_target *t) {
     rbs_parser_free(p);
 }
 
-/* `# @rbs @x: T` in a class body. */
+/* `# @rbs @x: T` in a class or module body. */
 static void ir_apply_ivar_decl(const ir_file *f, const ir_ann *a, const ir_container *c,
                                const char *owner, const char *lookup) {
-    if (c != NULL && !c->is_def && owner[0] && (c->body == NULL || !PM_NODE_TYPE_P(c->body, PM_STATEMENTS_NODE))) {
-        ir_warn(f, a, "this instance variable declaration", "the class body has no statements for it to belong to");
-        return;
-    }
-    if (c == NULL || c->is_def || !owner[0]) {
+    if (c == NULL || c->is_def || !owner[0] || c->node == NULL) {
         ir_warn(f, a, "this instance variable declaration",
                 c && c->is_def == 1 ? "it is inside a method body; declare it in the class body"
                 : c && c->is_def == 2 ? "it is inside `class << self`, whose variables are the class's own, which are not seeded"
@@ -1275,12 +1276,12 @@ static void ir_apply_ivar_decl(const ir_file *f, const ir_ann *a, const ir_conta
     if (!ir_map(p, iv->type, &t, &tag)) ir_warn(f, a, "this instance variable type", "it is outside the types Spinel can pin");
     else {
         char *nm = ir_sym_name(p, iv->ivar_name);
-        ir_nfact *fa = ir_nfact_for(f, c->body);
+        ir_nfact *fa = ir_nfact_for(f, c->node);
         const char *file;
         int line, fid;
         ir_orig(f, a->first_line, &file, &line, &fid);
         /* the fact's own place, for a fact of declarations only: the first
-           one's, which sp_inline_rbs_done names when its class body is
+           one's, which sp_inline_rbs_done names when its class node is
            never flattened (ir_nfact_for sets only its file; a line of 0
            says no annotation gave it a place yet) */
         if (fa->line == 0) { fa->file = file; fa->line = line; fa->fid = fid; fa->col = a->first_col + 1; }
@@ -1292,6 +1293,135 @@ static void ir_apply_ivar_decl(const ir_file *f, const ir_ann *a, const ir_conta
         free(nm);
     }
     sbuf_free(&tag);
+    rbs_parser_free(p);
+}
+
+/* ---- inline `# @rbs type name = T` alias declarations ------------------- */
+
+typedef struct {
+    rbs_parser_t *parser;
+    rbs_ast_declarations_type_alias_t *decl;
+    char *text;
+    char *scope;
+    char *outer_scope;
+} ir_alias_def;
+
+static ir_alias_def *g_ir_aliases = NULL;
+static int g_nir_aliases = 0, g_cir_aliases = 0;
+static bool g_ir_declared_all = false;
+
+/* Byte offset of `type` in `a->text` when `a` is an inline `# @rbs type ...`
+   alias declaration, or -1 otherwise. `# @rbs type: T` and `# @rbs type : T`
+   annotate a parameter named `type`, whereas `# @rbs type ::name = T` starts
+   an absolute alias name. */
+static int ir_type_alias_offset(const ir_ann *a) {
+    if (a == NULL || a->shape != IA_RBS || a->len < 4) return -1;
+    const char *r = a->text + 4;
+    while (*r == ' ' || *r == '\t') r++;
+    if (strncmp(r, "type", 4) != 0 || (r[4] != ' ' && r[4] != '\t' && r[4] != '\n')) return -1;
+    const char *q = r + 4;
+    while (*q == ' ' || *q == '\t' || *q == '\n') q++;
+    if (*q == '\0' || (*q == ':' && q[1] != ':')) return -1;
+    return (int) (r - a->text);
+}
+
+/* Parse a `# @rbs type ...` declaration starting at `off` in `text`. */
+static rbs_ast_declarations_type_alias_t *ir_parse_type_alias_buf(
+    const char *text, size_t len, int off, rbs_parser_t **pout) {
+    rbs_string_t str = rbs_string_new(text, text + len);
+    rbs_parser_t *p = rbs_parser_new(str, RBS_ENCODING_UTF_8_ENTRY, off, (int) len);
+    *pout = p;
+    if (p == NULL) return NULL;
+    rbs_signature_t *sig = NULL;
+    if (!rbs_parse_signature(p, &sig) || sig == NULL ||
+        sig->declarations == NULL || sig->declarations->length != 1 ||
+        sig->declarations->head->node->type != RBS_AST_DECLARATIONS_TYPE_ALIAS) {
+        return NULL;
+    }
+    return (rbs_ast_declarations_type_alias_t *) sig->declarations->head->node;
+}
+
+static void ir_alias_def_push(rbs_parser_t *p, rbs_ast_declarations_type_alias_t *decl,
+                              char *text, const char *scope, const char *outer_scope) {
+    if (g_nir_aliases >= g_cir_aliases) {
+        g_cir_aliases = g_cir_aliases ? g_cir_aliases * 2 : 16;
+        g_ir_aliases = (ir_alias_def *) realloc(g_ir_aliases, sizeof(ir_alias_def) * (size_t) g_cir_aliases);
+        if (g_ir_aliases == NULL) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    }
+    ir_alias_def *d = &g_ir_aliases[g_nir_aliases++];
+    d->parser = p;
+    d->decl = decl;
+    d->text = text;
+    d->scope = ir_strdup(scope ? scope : "");
+    d->outer_scope = ir_strdup(outer_scope ? outer_scope : "");
+}
+
+/* Resolve all declared inline aliases to a fixpoint in rbs_map, mirroring
+   spinel_rbs_extract's fixpoint loop, then release their parser ASTs. */
+static void ir_resolve_aliases(void) {
+    if (g_nir_aliases == 0) return;
+    for (;;) {
+        size_t before = alias_count();
+        for (int i = 0; i < g_nir_aliases; i++) {
+            ir_alias_def *d = &g_ir_aliases[i];
+            alias_register_decl(d->parser, d->decl, d->scope, d->outer_scope, false);
+        }
+        if (alias_count() == before) break;
+    }
+    for (int i = 0; i < g_nir_aliases; i++) {
+        rbs_parser_free(g_ir_aliases[i].parser);
+        free(g_ir_aliases[i].text);
+        free(g_ir_aliases[i].scope);
+        free(g_ir_aliases[i].outer_scope);
+    }
+    free(g_ir_aliases);
+    g_ir_aliases = NULL;
+    g_nir_aliases = g_cir_aliases = 0;
+}
+
+static void ir_apply_type_alias(const ir_file *f, const ir_ann *a, const ir_container *c) {
+    if (c != NULL && c->is_def) {
+        ir_warn(f, a, "this type alias declaration",
+                c->is_def == 1 ? "it is inside a method body; declare it at the top level or in a class or module body"
+                : c->is_def == 2 ? "it is inside `class << self`, which does not declare type aliases"
+                : "it is inside a block; declare it at the top level or in a class or module body");
+        return;
+    }
+    int off = ir_type_alias_offset(a);
+    rbs_parser_t *p = NULL;
+    rbs_ast_declarations_type_alias_t *decl = ir_parse_type_alias_buf(a->text, a->len, off, &p);
+    if (decl == NULL) {
+        if (p != NULL && p->error == NULL)
+            rbs_parser_set_error(p, p->next_token, true, "expected a single type alias declaration");
+        if (p != NULL) { ir_syntax_error(f, a, p); rbs_parser_free(p); }
+        return;
+    }
+    if (decl->type_params != NULL && decl->type_params->length > 0) {
+        ir_warn(f, a, "a generic type alias", "generic type aliases are not modelled");
+        rbs_parser_free(p);
+        return;
+    }
+    const char *scope = c ? c->owner : "";
+    const char *outer = c ? c->lookup : "";
+    sbuf_t qualified; sbuf_init(&qualified);
+    alias_qualify_name(p, decl->name, scope, &qualified);
+    if (alias_find(qualified.buf) == NULL) {
+        sbuf_t tag; sbuf_init(&tag);
+        const char *sv_scope = g_self_scope, *sv_type = g_self_type;
+        g_self_scope = scope[0] ? scope : NULL;
+        g_self_type = NULL;
+        g_alias_unresolved = false;
+        (void) map_type(p, decl->type, outer, &tag);
+        bool unresolved = g_alias_unresolved;
+        g_alias_unresolved = false;
+        g_self_scope = sv_scope;
+        g_self_type = sv_type;
+        sbuf_free(&tag);
+        ir_warn(f, a, "this type alias declaration",
+                unresolved ? "it forms a cycle or refers to an unmapped type alias"
+                           : "its type is outside the types Spinel can pin");
+    }
+    sbuf_free(&qualified);
     rbs_parser_free(p);
 }
 
@@ -1310,7 +1440,7 @@ static void ir_apply_other(const ir_file *f, ir_target *t) {
                 ir_warn(f, a, "a type on a constant", "constants are not seeded; their type is inferred from the value");
                 break;
             case IT_CLASS:
-                ir_warn(f, a, "an annotation on a class or module", "generic classes, type aliases and module self types are not modelled");
+                ir_warn(f, a, "an annotation on a class or module", "generic classes and module self types are not modelled");
                 break;
             default:
                 ir_warn(f, a, "a type on an expression", "Spinel does not hold a type for a single expression");
@@ -1319,13 +1449,12 @@ static void ir_apply_other(const ir_file *f, ir_target *t) {
     }
 }
 
-/* Build the comment blocks of one file and attach each annotation. */
-static void ir_associate(ir_file *f, ir_walk *w) {
+static int ir_collect_comments(const ir_file *f, ir_comment **out) {
     int ncm = 0;
     ir_comment *cms = NULL;
     for (const pm_comment_t *c = (const pm_comment_t *) f->pm->comment_list.head; c; c = (const pm_comment_t *) c->node.next) {
+        if (c->type == PM_COMMENT_EMBDOC || sp_in_builtin(c->location.start)) continue;
         size_t s = ir_off(f, c->location.start), e = ir_off(f, c->location.end);
-        if (c->type == PM_COMMENT_EMBDOC) continue;
         int line = ir_line_of(f, s);
         size_t ls = f->line_starts[line - 1];
         int leading = 1;
@@ -1335,6 +1464,99 @@ static void ir_associate(ir_file *f, ir_walk *w) {
         cms[ncm].col = (int) (s - ls); cms[ncm].leading = leading;
         ncm++;
     }
+    *out = cms;
+    return ncm;
+}
+
+static int ir_block_anns(const ir_file *f, const ir_comment *cms, int i, int j, ir_ann ***out) {
+    ir_ann **anns = NULL;
+    int nanns = 0;
+    ir_ann *cur = NULL;
+    int pending_blank = -1;
+    for (int k = i; k < j; k++) {
+        const char *s = (const char *) f->src + cms[k].start;
+        size_t n = cms[k].end - cms[k].start;
+        while (n > 0 && (s[n - 1] == '\r' || s[n - 1] == '\n')) n--;
+        ir_cline kind = ir_classify(s, n);
+        if (kind == CL_COLON || kind == CL_RBS) {
+            cur = ir_ann_new(kind == CL_COLON ? IA_COLON : IA_RBS);
+            size_t pre = (kind == CL_RBS && n >= 2 && s[1] == ' ') ? 2 : 1;
+            ir_ann_add_line(cur, s + pre, n - pre, cms[k].line, cms[k].col + (int) pre);
+            cur->first_col = cms[k].col;
+            anns = (ir_ann **) realloc(anns, sizeof(ir_ann *) * (size_t) (nanns + 1));
+            anns[nanns++] = cur;
+            pending_blank = -1;
+        }
+        else if (cur != NULL) {
+            /* a continuation: `#|` and the rest of the signature, or an
+               indented line after `# ` */
+            bool bar = n >= 2 && s[1] == '|';
+            size_t pre = ir_cont_prefix(s, n);
+            bool blank = true;
+            for (size_t z = pre; z < n; z++)
+                if (s[z] != ' ' && s[z] != '\t') { blank = false; break; }
+            if (blank) {
+                if (pending_blank < 0) pending_blank = k;
+            }
+            else if (bar || s[pre] == ' ' || s[pre] == '\t') {
+                /* Internal blank comment lines belong to a continuation;
+                   trailing blank comment lines do not. */
+                if (pending_blank >= 0)
+                    for (int z = pending_blank; z < k; z++) ir_ann_add_comment(f, cur, &cms[z]);
+                ir_ann_add_comment(f, cur, &cms[k]);
+                pending_blank = -1;
+            }
+            else { cur = NULL; pending_blank = -1; }
+        }
+    }
+    *out = anns;
+    return nanns;
+}
+
+/* Pre-pass: declare every non-generic `# @rbs type name = T` in valid
+   top-level or class/module scopes so forward and cross-file references
+   resolve to the nearest declaration before signatures are mapped. */
+static void ir_collect_type_aliases(const ir_file *f, const ir_walk *w) {
+    ir_comment *cms = NULL;
+    int ncm = ir_collect_comments(f, &cms);
+    for (int i = 0; i < ncm; ) {
+        ir_comment *cm = &cms[i];
+        int j = i + 1;
+        while (j < ncm && cms[j].leading && cms[j].line == cms[j - 1].line + 1 && cms[j].col == cm->col) j++;
+        if (!cm->leading) { i = j; continue; }
+        ir_ann **anns = NULL;
+        int nanns = ir_block_anns(f, cms, i, j, &anns);
+        int ci = nanns > 0 ? ir_find_container(w, cms[j - 1].start) : -1;
+        const ir_container *cont = ci >= 0 ? &w->conts[ci] : NULL;
+        i = j;
+        for (int k = 0; k < nanns; k++) {
+            ir_ann *a = anns[k];
+            int off = ir_type_alias_offset(a);
+            if (off >= 0 && (cont == NULL || !cont->is_def)) {
+                char *text = ir_strndup(a->text, a->len);
+                rbs_parser_t *p = NULL;
+                rbs_ast_declarations_type_alias_t *decl = ir_parse_type_alias_buf(text, a->len, off, &p);
+                const char *scope = cont ? cont->owner : "";
+                const char *outer = cont ? cont->lookup : "";
+                if (decl != NULL && alias_register_decl(p, decl, scope, outer, true)) {
+                    ir_alias_def_push(p, decl, text, scope, outer);
+                }
+                else {
+                    if (p != NULL) rbs_parser_free(p);
+                    free(text);
+                }
+            }
+            ir_ann_free(a);
+        }
+        free(anns);
+    }
+    free(cms);
+}
+
+/* Build the comment blocks of one file and attach each annotation. */
+static void ir_associate(ir_file *f, ir_walk *w) {
+    ir_comment *cms = NULL;
+    int ncm = ir_collect_comments(f, &cms);
 
     for (int i = 0; i < ncm; ) {
         ir_comment *cm = &cms[i];
@@ -1383,45 +1605,7 @@ static void ir_associate(ir_file *f, ir_walk *w) {
         int block_end = cms[j - 1].line;
         /* annotations in the block, with their continuation lines */
         ir_ann **anns = NULL;
-        int nanns = 0;
-        ir_ann *cur = NULL;
-        int pending_blank = -1;
-        for (int k = i; k < j; k++) {
-            const char *s = (const char *) f->src + cms[k].start;
-            size_t n = cms[k].end - cms[k].start;
-            while (n > 0 && (s[n - 1] == '\r' || s[n - 1] == '\n')) n--;
-            ir_cline kind = ir_classify(s, n);
-            if (kind == CL_COLON || kind == CL_RBS) {
-                cur = ir_ann_new(kind == CL_COLON ? IA_COLON : IA_RBS);
-                size_t pre = (kind == CL_RBS && n >= 2 && s[1] == ' ') ? 2 : 1;
-                ir_ann_add_line(cur, s + pre, n - pre, cms[k].line, cms[k].col + (int) pre);
-                cur->first_col = cms[k].col;
-                anns = (ir_ann **) realloc(anns, sizeof(ir_ann *) * (size_t) (nanns + 1));
-                anns[nanns++] = cur;
-                pending_blank = -1;
-            }
-            else if (cur != NULL) {
-                /* a continuation: `#|` and the rest of the signature, or an
-                   indented line after `# ` */
-                bool bar = n >= 2 && s[1] == '|';
-                size_t pre = ir_cont_prefix(s, n);
-                bool blank = true;
-                for (size_t z = pre; z < n; z++)
-                    if (s[z] != ' ' && s[z] != '\t') { blank = false; break; }
-                if (blank) {
-                    if (pending_blank < 0) pending_blank = k;
-                }
-                else if (bar || s[pre] == ' ' || s[pre] == '\t') {
-                    /* Internal blank comment lines belong to a continuation;
-                       trailing blank comment lines do not. */
-                    if (pending_blank >= 0)
-                        for (int z = pending_blank; z < k; z++) ir_ann_add_comment(f, cur, &cms[z]);
-                    ir_ann_add_comment(f, cur, &cms[k]);
-                    pending_blank = -1;
-                }
-                else { cur = NULL; pending_blank = -1; }
-            }
-        }
+        int nanns = ir_block_anns(f, cms, i, j, &anns);
         i = j;
         if (nanns == 0) { free(anns); continue; }
         int ci = ir_find_container(w, cms[j - 1].start);
@@ -1438,6 +1622,12 @@ static void ir_associate(ir_file *f, ir_walk *w) {
         }
         for (int k = 0; k < nanns; k++) {
             ir_ann *a = anns[k];
+            /* `# @rbs type name = T` belongs to the enclosing namespace */
+            if (ir_type_alias_offset(a) >= 0) {
+                ir_apply_type_alias(f, a, cont);
+                ir_ann_free(a);
+                continue;
+            }
             /* `# @rbs @x: T` belongs to the class body it is written in */
             if (a->shape == IA_RBS) {
                 const char *r = a->text + 4;
@@ -1538,9 +1728,11 @@ static int sp_inline_rbs_any(pm_parser_t *parser) {
 }
 static void sp_inline_rbs_declare(pm_parser_t *parser, pm_node_t *root, const char *source, size_t len) {
     if (!sp_inline_rbs_enabled) return;
+    g_ir_declared_all = true;
     ir_file f;
     ir_walk w;
     ir_walk_open(&f, &w, parser, root, source, len, "", 0);
+    if (ir_any_annotation(parser)) ir_collect_type_aliases(&f, &w);
     ir_walk_close(&f, &w);
 }
 
@@ -1553,6 +1745,8 @@ static int sp_inline_rbs_run(pm_parser_t *parser, pm_node_t *root,
     ir_file f;
     ir_walk w;
     ir_walk_open(&f, &w, parser, root, source, len, path, fid);
+    if (!g_ir_declared_all) ir_collect_type_aliases(&f, &w);
+    ir_resolve_aliases();
     g_hold = 1;
     ir_associate(&f, &w);
     g_hold = 0;

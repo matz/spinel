@@ -2620,10 +2620,11 @@ const char *an_value_methods_class(Compiler *c, int recv, TyKind rt, const char 
    define the name itself and every ancestor is a user class spinel knows the
    class methods of -- not a Struct/Data (whose generated class methods are
    not scopes), an exception, a native class, or a builtin's subclass. */
-int an_class_singleton_methods_listable(Compiler *c, int cid) {
+static int class_method_list_listable(Compiler *c, int cid, const char *name) {
   const NodeTable *nt = c->nt;
   if (cid < 0 || cid >= c->nclasses || class_is_exc_subclass(c, cid)) return 0;
-  if (comp_name_responder(c, cid, "singleton_methods", CT_CMETHOD) >= 0) return 0;
+  /* a class method of the program's under the list's name answers the call */
+  if (comp_name_responder(c, cid, name, CT_CMETHOD) >= 0) return 0;
   for (int k = cid, g = 0; k >= 0 && g <= c->nclasses; k = c->classes[k].parent, g++) {
     ClassInfo *ci = &c->classes[k];
     if (ci->is_native_class || ci->is_struct || ci->is_data) return 0;
@@ -2633,12 +2634,21 @@ int an_class_singleton_methods_listable(Compiler *c, int cid) {
   }
   return 1;
 }
+int an_class_singleton_methods_listable(Compiler *c, int cid) {
+  return class_method_list_listable(c, cid, "singleton_methods");
+}
 
-int an_singleton_methods_foldable(Compiler *c, int recv) {
+/* The list `name` of the class constant `recv` names: a builtin's, unless a
+   reopening defines a class method of the name; a program class's where
+   class_method_list_listable says. */
+static int const_method_list_foldable(Compiler *c, int recv, const char *name) {
   const char *cn = nt_str(c->nt, recv, "name");
   int ci = const_node_class_index(c, recv);
-  if (builtin_class_id(cn)) return ci < 0 || comp_name_responder(c, ci, "singleton_methods", CT_CMETHOD) < 0;
-  return an_class_singleton_methods_listable(c, ci);
+  if (builtin_class_id(cn)) return ci < 0 || comp_name_responder(c, ci, name, CT_CMETHOD) < 0;
+  return class_method_list_listable(c, ci, name);
+}
+int an_singleton_methods_foldable(Compiler *c, int recv) {
+  return const_method_list_foldable(c, recv, "singleton_methods");
 }
 
 /* Klass.singleton_methods (with `all` or not), and a class's methods(false)
@@ -2656,12 +2666,12 @@ int an_class_method_list_foldable(Compiler *c, const char *name, int recv, int a
   if (!single && argc != 1) return 0;
   int ci;
   if (nt_kind(nt, recv) == NK_ConstantReadNode) {
-    if (!an_singleton_methods_foldable(c, recv)) return 0;
+    if (!const_method_list_foldable(c, recv, name)) return 0;
     ci = const_node_class_index(c, recv);
     if (!priv) return 1;
   } else {
     ci = class_body_self_ci(c, recv);
-    if (ci < 0 || !an_class_singleton_methods_listable(c, ci)) return 0;
+    if (ci < 0 || !class_method_list_listable(c, ci, name)) return 0;
   }
   return !priv || (ci >= 0 && !comp_class_is_module(c, &c->classes[ci]));
 }
@@ -7216,22 +7226,23 @@ static int infer_receiverless_call(Compiler *c, int id, const NodeTable *nt, con
     }
     if (sp_streq(name, "rand")) {
       if (argc == 0) { *out = TY_FLOAT; return 1; }
-      if (infer_type(c, argv[0]) == TY_FLOAT_RANGE) { *out = TY_FLOAT; return 1; }   /* rand(float range) */
+      if (infer_type(c, argv[0]) == TY_FLOAT_RANGE) { *out = TY_POLY; return 1; }   /* Float, or nil if empty */
       NodeKind atype_k = nt_kind(nt, argv[0]);
       if (atype_k == NK_RangeNode) {
         int lo = nt_ref(nt, argv[0], "left");
         int hi = nt_ref(nt, argv[0], "right");
-        if (rand_lit_range_float(c, argv[0])) { *out = TY_FLOAT; return 1; }   /* rand(float_range), either bound */
+        if (rand_lit_range_float(c, argv[0])) { *out = TY_POLY; return 1; }   /* Float, or nil if empty */
+        if (lo < 0 || hi < 0) { *out = TY_INT; return 1; }   /* open side raises Errno::EDOM */
         /* a statically empty/reversed int range yields nil (#2519) */
-        if (lo >= 0 && hi >= 0 &&
-            nt_kind(nt, lo) == NK_IntegerNode &&
+        if (nt_kind(nt, lo) == NK_IntegerNode &&
             nt_kind(nt, hi) == NK_IntegerNode) {
           long long lov = nt_int(nt, lo, "value", 0);
           long long hiv = nt_int(nt, hi, "value", 0);
           int excl = nt_range_excl(nt, argv[0]);
-          if ((excl ? hiv - 1 : hiv) < lov) { *out = TY_POLY; return 1; }   /* nil */
+          if (excl ? hiv <= lov : hiv < lov) { *out = TY_POLY; return 1; }   /* nil */
+          { *out = TY_INT; return 1; }
         }
-        { *out = TY_INT; return 1; }
+        { *out = TY_POLY; return 1; }
       }
       /* rand(int range held in a variable): an Integer, or nil if the range is
          empty at runtime -> a poly (#3221). (A Float range in a variable is
@@ -7914,6 +7925,74 @@ static int infer_universal_call(Compiler *c, int id, const NodeTable *nt, const 
   return 0;
 }
 
+/* arr.each.with_index(off).<terminal> / arr.each_with_index.<terminal>:
+   a blockless [elem, index]-pair enumerator over an Array consumed by the
+   terminal, typed as the chain emitters walk the array.
+   (matz/spinel#1481 inject/reduce result; #1483 others.) */
+static int infer_indexed_each_terminal(Compiler *c, int id, const NodeTable *nt, const char *name, int recv, TyKind *out) {
+  if (recv >= 0 &&
+      nt_kind(nt, recv) == NK_CallNode &&
+      nt_ref(nt, recv, "block") < 0) {
+    int chain_arr = an_indexed_each_source(nt, recv);
+    TyKind chain_at = chain_arr >= 0 ? infer_type(c, chain_arr) : TY_UNKNOWN;
+    if (ty_is_array(chain_at)) {
+      TyKind elem = ty_array_elem(chain_at);
+      if (is_reduce_alias(name)) {
+        int args = nt_ref(nt, id, "arguments");
+        int argc = 0; const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
+        TyKind acc = (argc > 0 && argv) ? infer_type(c, argv[0]) : elem;
+        if (acc == TY_NIL) acc = TY_POLY;   /* a nil seed: boxed, as infer_array_reduce's */
+        /* an empty `{}` seed is a general boxed-key/value hash builder, like
+           each_with_object({}) -- not the element type (#2958) */
+        if (acc == TY_UNKNOWN && argc > 0 && argv &&
+            nt_kind(nt, argv[0]) == NK_HashNode) {
+          int hn = 0; nt_arr(nt, argv[0], "elements", &hn);
+          if (hn == 0) acc = TY_POLY_POLY_HASH;
+        }
+        if (acc == TY_UNKNOWN) acc = elem;
+        int blk = nt_ref(nt, id, "block");
+        if (blk >= 0) {
+          int body = nt_ref(nt, blk, "body");
+          int bn = 0; const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
+          if (bn > 0) {
+            TyKind bt = infer_type(c, bb[bn - 1]);
+            if (ty_is_numeric(bt)) acc = ty_promote_numeric(acc, bt);
+            /* a boxed body (a fold that may promote under
+               --int-overflow=promote, a Rational) cannot fold back into a
+               numeric seed slot: the accumulator is boxed, as the array
+               inject rule has it */
+            else if (ty_is_numeric(acc) && (bt == TY_POLY || bt == TY_BIGINT || bt == TY_RATIONAL || bt == TY_COMPLEX))
+              acc = TY_POLY;
+          }
+        }
+        { *out = acc; return 1; }
+      }
+      int blk = nt_ref(nt, id, "block");
+      int body = blk >= 0 ? nt_ref(nt, blk, "body") : -1;
+      int bn = 0; const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
+      /* The codegen path only handles the |v, i| two-param block form; gate the
+         result type on it so single-param forms fall to their normal rules. */
+      int two_param = blk >= 0 && !block_param_is_multi(c, blk, 0) &&
+                      block_param_name(c, blk, 0) && block_param_name(c, blk, 1);
+      if (two_param && (is_map_alias(name)))
+        { *out = infer_map_block_ty(c, id, blk); return 1; }   /* a valued next's too, as a map's */
+      if (is_to_array_alias(name) ||
+          (two_param && (is_select_reject(name))))
+        { *out = TY_POLY_ARRAY; return 1; }   /* an array of [element, index] pairs */
+      if (blk < 0 && sp_streq(name, "to_h")) {
+        /* an array of [element, index] pairs collected into {element => index};
+           the block form instead maps each pair, so leave it to its own rule. */
+        TyKind h = ty_hash_of(elem, TY_INT);
+        { *out = h != TY_UNKNOWN ? h : TY_POLY_POLY_HASH; return 1; }
+      }
+      if (two_param && sp_streq(name, "count")) { *out = TY_INT; return 1; }
+      if (two_param && (sp_streq(name, "any?") || sp_streq(name, "all?") || sp_streq(name, "none?")))
+        { *out = TY_BOOL; return 1; }
+    }
+  }
+  return 0;
+}
+
 /* An enumerator chain (each_slice, with_index, the each family's value form) and an object array's iterators (infer_call_inner's rules, in their order) */
 static int infer_enum_chain_call(Compiler *c, int id, const NodeTable *nt, const char *name, int recv, int args, int argc, const int *argv, TyKind rt, TyKind *out) {
   /* each_slice(n).map/collect { |...| } chain: return array of block result type.
@@ -7986,69 +8065,7 @@ static int infer_enum_chain_call(Compiler *c, int id, const NodeTable *nt, const
     }
   }
 
-  /* arr.each.with_index(off).<terminal> / arr.each_with_index.<terminal>:
-     a blockless [elem, index]-pair enumerator consumed by the terminal.
-     (matz/spinel#1481 inject/reduce result; #1483 others.) */
-  if (recv >= 0 &&
-      nt_kind(nt, recv) == NK_CallNode &&
-      nt_ref(nt, recv, "block") < 0) {
-    int chain_arr = an_indexed_each_source(nt, recv);
-    TyKind chain_at = chain_arr >= 0 ? infer_type(c, chain_arr) : TY_UNKNOWN;
-    if (ty_is_array(chain_at)) {
-      TyKind elem = ty_array_elem(chain_at);
-      if (is_reduce_alias(name)) {
-        int args = nt_ref(nt, id, "arguments");
-        int argc = 0; const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
-        TyKind acc = (argc > 0 && argv) ? infer_type(c, argv[0]) : elem;
-        if (acc == TY_NIL) acc = TY_POLY;   /* a nil seed: boxed, as infer_array_reduce's */
-        /* an empty `{}` seed is a general boxed-key/value hash builder, like
-           each_with_object({}) -- not the element type (#2958) */
-        if (acc == TY_UNKNOWN && argc > 0 && argv &&
-            nt_kind(nt, argv[0]) == NK_HashNode) {
-          int hn = 0; nt_arr(nt, argv[0], "elements", &hn);
-          if (hn == 0) acc = TY_POLY_POLY_HASH;
-        }
-        if (acc == TY_UNKNOWN) acc = elem;
-        int blk = nt_ref(nt, id, "block");
-        if (blk >= 0) {
-          int body = nt_ref(nt, blk, "body");
-          int bn = 0; const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
-          if (bn > 0) {
-            TyKind bt = infer_type(c, bb[bn - 1]);
-            if (ty_is_numeric(bt)) acc = ty_promote_numeric(acc, bt);
-            /* a boxed body (a fold that may promote under
-               --int-overflow=promote, a Rational) cannot fold back into a
-               numeric seed slot: the accumulator is boxed, as the array
-               inject rule has it */
-            else if (ty_is_numeric(acc) && (bt == TY_POLY || bt == TY_BIGINT || bt == TY_RATIONAL || bt == TY_COMPLEX))
-              acc = TY_POLY;
-          }
-        }
-        { *out = acc; return 1; }
-      }
-      int blk = nt_ref(nt, id, "block");
-      int body = blk >= 0 ? nt_ref(nt, blk, "body") : -1;
-      int bn = 0; const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
-      /* The codegen path only handles the |v, i| two-param block form; gate the
-         result type on it so single-param forms fall to their normal rules. */
-      int two_param = blk >= 0 && !block_param_is_multi(c, blk, 0) &&
-                      block_param_name(c, blk, 0) && block_param_name(c, blk, 1);
-      if (two_param && (is_map_alias(name)))
-        { *out = ty_array_of(bn > 0 ? yield_aware_elem_ty(c, bb[bn - 1]) : TY_UNKNOWN); return 1; }
-      if (is_to_array_alias(name) ||
-          (two_param && (is_select_reject(name))))
-        { *out = TY_POLY_ARRAY; return 1; }   /* an array of [element, index] pairs */
-      if (blk < 0 && sp_streq(name, "to_h")) {
-        /* an array of [element, index] pairs collected into {element => index};
-           the block form instead maps each pair, so leave it to its own rule. */
-        TyKind h = ty_hash_of(elem, TY_INT);
-        { *out = h != TY_UNKNOWN ? h : TY_POLY_POLY_HASH; return 1; }
-      }
-      if (two_param && sp_streq(name, "count")) { *out = TY_INT; return 1; }
-      if (two_param && (sp_streq(name, "any?") || sp_streq(name, "all?") || sp_streq(name, "none?")))
-        { *out = TY_BOOL; return 1; }
-    }
-  }
+  { TyKind r; if (infer_indexed_each_terminal(c, id, nt, name, recv, &r)) { *out = r; return 1; } }
 
   /* homogeneous object array (sp_PtrArray of unboxed sp_X*): the typed
      counterpart of the poly-array block below, for the narrowed TY_OBJ_ARRAY
@@ -8369,6 +8386,10 @@ static int infer_runtime_value_call(Compiler *c, int id, const NodeTable *nt, co
   }
   /* TY_ENUMERATOR instance methods */
   if (recv >= 0 && rt == TY_ENUMERATOR) {
+    /* an immediate arr.each_with_index / arr.each.with_index chain is typed
+       by its chain rule, as the chain emitter walks the array (its `map` an
+       Array of the block's values, not the generic Enumerator's boxed one) */
+    if (infer_indexed_each_terminal(c, id, nt, name, recv, out)) return 1;
     const BuiltinOp *op = an_bop_find(c, id, rt, name, argc, nt_ref(nt, id, "block") >= 0);
     if (op && op->result != TY_UNKNOWN) { *out = an_bop_result(c, op, rt, id, argc, argv); return 1; }
     if (sp_streq(name, "+") && argc == 1 && infer_type(c, argv[0]) == TY_ENUMERATOR) { *out = TY_ENUMERATOR; return 1; }  /* #2481 */

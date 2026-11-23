@@ -1,0 +1,12 @@
+"11100011"
+"00011111"
+"11000011"
+:web_not_found
+:db
+:web
+:runtime
+:KeyError
+[E19, true, true, false]
+[E07, false, true]
+[JSON::ParserError, true, true, false]
+[Errno::ENOENT, true, true, false]

@@ -1,5 +1,5 @@
 # An attr_writer on the singleton class writes the macro state through
-# `self.k = v`: the macro reading it is left as written (refused).
+# `self.k = v`: the macro reading it is left as written (a run-time public_send over the class's calc_* methods).
 module Consts
   def kind(k = nil)
     return @k if k.nil?

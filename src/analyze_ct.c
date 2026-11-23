@@ -1054,7 +1054,7 @@ static int ct_macro_def(void *host, const char *meth) {
    frame. */
 typedef struct { const char *name; int frame; char *as; } CtProm;
 typedef struct {
-  NodeTable *nt; const CtEnv *e; int frame, lexical, residual, value, apply;
+  NodeTable *nt; const CtEnv *e; int frame, lexical, residual, value, apply, root;
   const CtFx *fx;
   CtProm *prom; int nprom, cprom;
 } CtBind;
@@ -1178,6 +1178,14 @@ static int ct_bind_read(CtBind *b, int id, int lv, int par, int gpar) {
    through any receiver. No jump out of the macro, alias, undef or super,
    and no instance or class variable (a module body's are rewritten before
    the walk). */
+/* Is nm a name the steps before the walk read as a class body's own word
+   (attr_*, include, private, ...: is_load_effect_call), or one that
+   reflects, defines or asks of constants, which they read through any
+   receiver? */
+static int ct_body_word_name(const char *nm) {
+  return is_load_effect_call(nm) || is_method_name_reflection(nm) || is_const_query_name(nm) ||
+         is_reflective_access(nm) || is_definition_hook_name(nm);
+}
 static int ct_residual_node(const NodeTable *nt, int id, NodeKind k) {
   switch (k) {
   case NK_CallNode: {
@@ -1207,7 +1215,15 @@ static int ct_bind(CtBind *b, int id, int lv, int par, int gpar) {
   for (int i = 0; b->fx && i < b->fx->nfold; i++) if (b->fx->fold[i] == id) return 1;   /* written as its Symbol */
   NodeKind k = nt_kind(nt, id);
   int here = nt_int(nt, id, "depth", -1) == lv;
-  if (b->residual && !ct_residual_node(nt, id, k)) return 0;
+  /* (a call on self in a residual runs the program's method of the name,
+     no word of a class body's, which the steps before the walk read: a
+     macro's call ct_exec_call leaves for a frame that defines nothing, or
+     one whose value the statement uses, `has_manys << x`) */
+  int self_call = b->residual && k == NK_CallNode && b->e->self_macro &&
+                  (nt_ref(nt, id, "receiver") < 0 || nt_kind(nt, nt_ref(nt, id, "receiver")) == NK_SelfNode) &&
+                  nt_ref(nt, id, "block") < 0 && nt_str(nt, id, "name") && !ct_body_word_name(nt_str(nt, id, "name")) &&
+                  b->e->self_macro(b->e->host, nt_str(nt, id, "name")) >= 0;
+  if (b->residual && !self_call && !ct_residual_node(nt, id, k)) return 0;
   switch (k) {
   case NK_LocalVariableReadNode: return !here || ct_bind_read(b, id, lv, par, gpar);
   case NK_LocalVariableWriteNode: case NK_LocalVariableOperatorWriteNode: case NK_LocalVariableOrWriteNode:
@@ -1292,6 +1308,7 @@ static int ct_bind_fx(CtBind *b, Compiler *c, int list, const CtFx *f, int code)
   b->residual = f->k == CT_FX_RESIDUAL;
   b->fx = f->k == CT_FX_DEFINE_METHOD ? NULL : f;
   b->value = f->k == CT_FX_LOCAL || f->k == CT_FX_CONST_SET;
+  b->root = code;   /* (the statement itself, or its clone where the bindings are written) */
   return ct_bind(b, code, 0, f->k == CT_FX_DEFINE_METHOD ? f->site : -1, -1);
 }
 
@@ -1986,11 +2003,11 @@ int ct_macro_form(Compiler *c, int call, int list, int j) {
       !class_def_opens_frame(nt, frame) || !ct_body_arm(nt, class_def_body(nt, frame), list))
     return -1;
   /* the class, and what its call can meet at its point */
-  int cls = elab_self_at(c, call);
+  int cls = elab_self_at(c, call), opaque_writes = 0;
   LoadPoint p = elab_point_of(c, call);
   if (cls >= 0 && ct_ffi_decl_note(c, h, call, cls, p)) return -1;
   if (cls < 0 || (!elab_class_provisional(c, cls) && (is_builtin_class_name(c->classes[cls].name) || is_builtin_module_name(c->classes[cls].name))) ||
-      elab_opaque_before_bar_state(c, cls, p) != ELAB_NO || elab_body_visibility_at(c, call) != BVIS_PUBLIC ||
+      elab_opaque_before_bar_state(c, cls, p, &opaque_writes) != ELAB_NO || elab_body_visibility_at(c, call) != BVIS_PUBLIC ||
       elab_method_at(c, cls, "method_added", 1, p, NULL) != ELAB_NO)
     return -1;
   /* run it: self the class, the parameters the call's values; the macros
@@ -2001,6 +2018,9 @@ int ct_macro_form(Compiler *c, int call, int list, int j) {
   /* self's state as the class's statements before the call leave it */
   CtIvs st;
   ct_class_state(c, ct_macro_facts(c, h), cls, call, list, j, &st);
+  /* (code ahead of the call the record does not follow wrote variables:
+     none of self's is known) */
+  if (opaque_writes) ct_ivs_open(&st);
   for (int i = 0; i < st.n; i++) {
     CtVal v; memset(&v, 0, sizeof v);
     if (st.iv[i].known) v.mv = st.iv[i].v;
@@ -2029,7 +2049,7 @@ int ct_macro_form(Compiler *c, int call, int list, int j) {
   if (ok) ok = defs > 0 && !ct_macro_core_changed(c, h, e.ran, e.nran) && !ct_relied_redefined(nt, &e, tid, tn);
   /* the code each effect carries must run where the call stands; a local
      a promoted local's value reads may need promoting too */
-  CtBind b = { nt, &e, 0, 0, 0, 0, 0, NULL, NULL, 0, 0 };
+  CtBind b = { nt, &e, 0, 0, 0, 0, 0, -1, NULL, NULL, 0, 0 };
   for (int f = 0; f < e.nfx && ok; f++)
     if (e.fx[f].k != CT_FX_LOCAL && e.fx[f].k != CT_FX_ATTR && e.fx[f].k != CT_FX_EVAL &&
         (e.fx[f].k != CT_FX_CONST_SET || e.fx[f].vcode))

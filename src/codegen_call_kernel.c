@@ -825,10 +825,10 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
     if (sp_streq(name, "rand")) {
       if (ac == 0) { buf_puts(b, "sp_krand_float()"); return 1; }
       Repr a0r = repr_of(c, av[0]);
-      if (a0r.range == TY_FLOAT) {   /* rand(1.0..10.0) -> a Float in [first, last) */
+      if (a0r.range == TY_FLOAT) {   /* rand(1.0..10.0) -> Float, or nil if empty */
         int tr = ++g_tmp;
         buf_printf(b, "({ sp_FloatRange _t%d = ", tr); emit_expr(c, av[0], b);
-        buf_printf(b, "; _t%d.first + sp_Random_rand_float(sp_random_default_get()) * (_t%d.last - _t%d.first); })", tr, tr, tr);
+        buf_printf(b, "; sp_rand_frange_v(sp_random_default_get(), _t%d, 1); })", tr);
         return 1;
       }
       if (a0r.range == TY_INT) {
@@ -844,25 +844,24 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
         /* either bound a Float draws a Float; an Integer begin keeps the end
            as written (sp_range_end_num) */
         int is_float = (lo >= 0 && repr_of(c, lo).as_ty == TY_FLOAT) || (hi >= 0 && repr_of(c, hi).as_ty == TY_FLOAT);
-        /* a statically empty/reversed int range -> nil (#2519) */
-        if (islit && !is_float && lo >= 0 && hi >= 0 &&
+        int is_const_int = islit && !is_float && lo >= 0 && hi >= 0 &&
             nt_kind(nt, lo) == NK_IntegerNode &&
-            nt_kind(nt, hi) == NK_IntegerNode) {
+            nt_kind(nt, hi) == NK_IntegerNode;
+        /* a statically empty/reversed int range -> nil (#2519) */
+        if (is_const_int) {
           long long lov = nt_int(nt, lo, "value", 0);
           long long hiv = nt_int(nt, hi, "value", 0);
           int excl = nt_range_excl(nt, av[0]);
-          if ((excl ? hiv - 1 : hiv) < lov) { buf_puts(b, "sp_box_nil()"); return 1; }
+          if (excl ? hiv <= lov : hiv < lov) { buf_puts(b, "sp_box_nil()"); return 1; }
         }
         int tr = ++g_tmp;
         buf_printf(b, "({ sp_Range _t%d = ", tr); emit_expr(c, av[0], b); buf_puts(b, "; ");
-        if (is_float)
-          buf_printf(b, "(sp_float)_t%d.first + sp_Random_rand_float(sp_random_default_get()) * (sp_range_end_num(_t%d) - (sp_float)_t%d.first); })", tr, tr, tr);
-        else if (islit)
-          buf_printf(b, "_t%d.first + sp_Random_rand_int(sp_random_default_get(), _t%d.last - _t%d.first + 1 - _t%d.excl); })", tr, tr, tr, tr);
+        if (is_const_int)
+          buf_printf(b, "sp_Random_rand_range(sp_random_default_get(), _t%d); })", tr);
         else
-          /* a range held in a variable can be empty at run time -> nil, like
-             CRuby, open -> Errno::EDOM, and an end written as a Float draws a
-             Float: the result is a poly (#3221, sp_rand_range_v) */
+          /* a range with non-literal or Float ends can be empty at run time ->
+             nil, like CRuby, open -> Errno::EDOM, and an end written as a
+             Float draws a Float: the result is a poly (#3221, sp_rand_range_v) */
           buf_printf(b, "sp_rand_range_v(sp_random_default_get(), _t%d, 1); })", tr);
         return 1;
       }
@@ -925,7 +924,7 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
     }
     if (sp_streq(name, "srand")) {
       /* srand returns the PREVIOUS seed (#2517). */
-      if (ac == 0) { buf_puts(b, "sp_kernel_srand((sp_int)time(NULL))"); return 1; }
+      if (ac == 0) { buf_puts(b, "sp_kernel_srand(sp_Random_new_seed())"); return 1; }
       buf_puts(b, "sp_kernel_srand("); emit_seed_expr(c, av[0], b); buf_puts(b, ")");
       return 1;
     }

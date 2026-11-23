@@ -5192,35 +5192,38 @@ static SP_UNUSED sp_RbVal sp_rand_range_v(sp_Random *g, sp_Range r, int kernel) 
   if (!r.fe && (r.nobeg || r.noend))
     sp_raise_cls("Errno::EDOM", "Numerical argument out of domain");
   if (r.fe) {
-    if (r.nobeg || r.fend != r.fend || r.fend == HUGE_VAL)
+    if (r.nobeg || !isfinite(r.fend))
       sp_raise_cls("Errno::EDOM", "Numerical argument out of domain");
     if ((sp_float)r.first > r.fend || (r.fe == 2 && (sp_float)r.first == r.fend))
       return sp_rand_empty(sp_range_inspect(r), kernel);
-    return sp_box_float((sp_float)r.first + sp_Random_rand_float(g) * (r.fend - (sp_float)r.first));
+    return sp_box_float(sp_Random_rand_float_range_excl(g, (sp_float)r.first, r.fend, r.fe == 2));
   }
-  sp_int hi = r.excl ? r.last - 1 : r.last;
-  if (hi < r.first) return sp_rand_empty(sp_range_inspect(r), kernel);
-  return sp_box_int(r.first + sp_Random_rand_int(g, hi - r.first + 1));
+  sp_int out;
+  if (!sp_Random_try_rand_range(g, r, &out)) return sp_rand_empty(sp_range_inspect(r), kernel);
+  return sp_box_int(out);
 }
 static SP_UNUSED sp_RbVal sp_rand_frange_v(sp_Random *g, sp_FloatRange r, int kernel) {
-  if (r.omitted & (SP_FRANGE_NO_BEGIN | SP_FRANGE_NO_END) || r.first != r.first || r.last != r.last ||
-      r.first == -HUGE_VAL || r.last == HUGE_VAL)
+  if (r.omitted & (SP_FRANGE_NO_BEGIN | SP_FRANGE_NO_END) || !isfinite(r.first) || !isfinite(r.last))
     sp_raise_cls("Errno::EDOM", "Numerical argument out of domain");
   if (r.first > r.last || (r.excl && r.first == r.last)) return sp_rand_empty(sp_frange_inspect(r), kernel);
-  return sp_box_float(sp_Random_rand_float_range(g, r.first, r.last));
+  return sp_box_float(sp_Random_rand_float_range_excl(g, r.first, r.last, (int)r.excl));
 }
 /* Typed Random Float draws keep the range metadata for empty-range errors.
    Leave non-finite endpoint validation and the draw to the existing helper. */
 static SP_UNUSED sp_float sp_random_rand_frange(sp_Random *g, sp_FloatRange r) {
+  if (r.omitted & (SP_FRANGE_NO_BEGIN | SP_FRANGE_NO_END))
+    sp_raise_cls("Errno::EDOM", "Numerical argument out of domain");
   if (isfinite(r.first) && isfinite(r.last) && (r.first > r.last || (r.excl && r.first == r.last)))
     sp_rand_empty(sp_frange_inspect(r), 0);
-  return sp_Random_rand_float_range(g, r.first, r.last);
+  return sp_Random_rand_float_range_excl(g, r.first, r.last, (int)r.excl);
 }
 static SP_UNUSED sp_float sp_random_rand_fend(sp_Random *g, sp_Range r) {
+  if (r.nobeg || r.noend)
+    sp_raise_cls("Errno::EDOM", "Numerical argument out of domain");
   sp_float lo = (sp_float)r.first, hi = sp_range_end_num(r);
   if (isfinite(hi) && (lo > hi || (sp_range_excl_end(r) && lo == hi)))
     sp_rand_empty(sp_range_inspect(r), 0);
-  return sp_Random_rand_float_range(g, lo, hi);
+  return sp_Random_rand_float_range_excl(g, lo, hi, sp_range_excl_end(r));
 }
 /* the argument boxed: whatever CRuby's rand takes (an Integer or Float
    bound, a Range of either, nil) answers as it does there, and anything else

@@ -1104,7 +1104,7 @@ else {
   }
   if (sp_streq(name, "srand")) {
     emit_indent(b, indent);
-    if (argc == 0) buf_puts(b, "(void)sp_kernel_srand((sp_int)time(NULL));\n");
+    if (argc == 0) buf_puts(b, "(void)sp_kernel_srand(sp_Random_new_seed());\n");
     else { buf_puts(b, "(void)sp_kernel_srand("); emit_seed_expr(c, argv[0], b); buf_puts(b, ");\n"); }
     return 1;
   }
@@ -12264,6 +12264,15 @@ static int hc_node_ok(Compiler *c, int id, int stmt, HcRegion *r) {
       static int in_yield = 0;
       int blk = g_block_id;
       if (in_yield || blk < 0 || nt_kind(nt, blk) != NK_BlockNode || block_param_is_multi(c, blk, 0))
+        return 0;
+      /* (parameters that run code or bind more than the requireds -- an
+         optional's or a keyword's default, which runs at each pass and may
+         change an array the loop reads, a rest, a post, a `**` or a `&b` --
+         are not checked here, so such a block keeps the loop out) */
+      int bpp = nt_ref(nt, blk, "parameters");
+      int bps = bpp >= 0 && nt_kind(nt, bpp) == NK_BlockParametersNode ? nt_ref(nt, bpp, "parameters") : -1;
+      if (block_opt_name(c, blk, 0) || block_post_name(c, blk, 0) || block_rest_marker(c, blk) ||
+          block_keyword_name(c, blk, 0) || block_kwrest_name(c, blk) || (bps >= 0 && nt_ref(nt, bps, "block") >= 0))
         return 0;
       for (int k = 0; ; k++) {
         const char *pn = block_param_name(c, blk, k);

@@ -350,8 +350,8 @@ written onto the node it describes, and only onto that node:
   field per parameter in the def's order, empty where unsaid, `-` for none.
 - `S <attr_* call> rbs_ivar <tag>` -- the type of each attribute the call
   declares.
-- `S <class body StatementsNode> rbs_ivars @x=<tag>@<line>@<file>@<col>,...` --
-  the class body's `# @rbs @x: T` declarations, each with its position.
+- `S <class or module node> rbs_ivars @x=<tag>@<line>@<file>@<col>,...` --
+  the class or module body's `# @rbs @x: T` declarations, each with its position.
 - `I <node> rbs_line <line>`, `I <node> rbs_col <col>`, `I <node> rbs_file
   <file id>` -- the original position of the comment (its `#`), for anything
   reported about it later.

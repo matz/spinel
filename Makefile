@@ -1849,6 +1849,7 @@ test-corpus-summary: test-corpus-results
 # entries, and a raise caught through the exported try helper -- and a kernel
 # whose entries start and join threads after an init that started some, and
 # one whose at_exit hooks run when the host exits, not as its init returns,
+# one that renders no Symbol and no class name (SP_TU_NO_POLY_RENDER),
 # and one whose entry uses Marshal, and one whose entry calls a Struct's `new` the load redefined, a typed and
 # an untyped entry that `new` one class compile, so do a typed entry and an
 # --ext-class table that `new` one class, and an
@@ -1953,6 +1954,18 @@ ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SP_RT_PIC_LIB) $(SP_RT_MT_PIC
 	    printf '2\n3\n' | cmp -s - "$$tmp/out" && [ $$rc -eq 0 ] || \
 	      { echo "ext-test: FAIL (late_new host output mismatch, or status $$rc)"; cat "$$tmp/out"; ok=0; }; \
 	  else echo "ext-test: FAIL (late_new host C did not compile)"; sed -n 1,6p "$$tmp/cc.err"; ok=0; fi; \
+	fi; \
+	if [ $$ok -eq 1 ]; then \
+	  if ! $(SPINEL) test/ext/no_poly.rb -c --no-line-map --ext-init Init_ext_no_poly \
+	      -o "$$tmp/np.c" >/dev/null 2>&1; then \
+	    echo "ext-test: FAIL (no_poly emission)"; ok=0; \
+	  elif ! grep -q '^#define SP_TU_NO_POLY_RENDER' "$$tmp/np.c"; then \
+	    echo "ext-test: FAIL (no_poly renders a value now; it no longer covers SP_TU_NO_POLY_RENDER)"; ok=0; \
+	  elif $(CC) -O1 -w $(PLATFORM_FLAGS) -Ilib -I"$$tmp" test/ext/no_poly_host.c "$$tmp/np.c" $(SP_RT_LIB) $(LDFLAGS) -lm -o "$$tmp/nphost" 2>"$$tmp/cc.err"; then \
+	    "$$tmp/nphost" > "$$tmp/out" 2>&1; rc=$$?; \
+	    printf 'loaded 42\ninit returned\n' | cmp -s - "$$tmp/out" && [ $$rc -eq 0 ] || \
+	      { echo "ext-test: FAIL (no_poly host output mismatch, or status $$rc)"; cat "$$tmp/out"; ok=0; }; \
+	  else echo "ext-test: FAIL (an ext-init library with no poly rendering did not compile)"; sed -n 1,6p "$$tmp/cc.err"; ok=0; fi; \
 	fi; \
 	if [ $$ok -eq 1 ]; then \
 	  if ! $(SPINEL) test/ext/reopen_include.rb -c --no-line-map --ext-init Init_ext_reopen_include \

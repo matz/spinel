@@ -36959,15 +36959,18 @@ static int map_with_index_call(Compiler *c, int call) {
 }
 
 /* Can a `next` of call's block (its own, not a nested block's) answer nil:
-   a bare `next`, or one whose value can be nil? Too many to read is a yes. */
+   a bare `next`, or one whose value can be nil? Too many to read is a yes:
+   an_block_nexts stops at a full buffer, so one slot past the 32 read tells
+   a block with more `next`s (whose rest went unread) from one with 32. */
 static int map_next_may_be_nil(Compiler *c, int call) {
   const NodeTable *nt = c->nt;
   int blk = nt_ref(nt, call, "block");
   int body = blk >= 0 && nt_kind(nt, blk) == NK_BlockNode ? nt_ref(nt, blk, "body") : -1;
   if (body < 0) return 0;
-  int nx[32];
-  int nn = an_block_nexts(nt, body, nx, 32);
-  if (nn < 0) return 1;
+  enum { NX_READ = 32 };
+  int nx[NX_READ + 1];
+  int nn = an_block_nexts(nt, body, nx, NX_READ + 1);
+  if (nn < 0 || nn > NX_READ) return 1;
   for (int k = 0; k < nn; k++) {
     int a = nt_ref(nt, nx[k], "arguments"), an = 0;
     const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;

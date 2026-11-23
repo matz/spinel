@@ -37,6 +37,7 @@ void sp_pcg_seed(uint64_t *state, uint64_t seed) {
    internal lock, so a shared stream would race across workers. */
 static SP_TLS uint64_t sp_krand_state;
 static SP_TLS int sp_krand_seeded;
+static SP_TLS sp_int sp_kernel_seed;
 
 void sp_krand_srand(uint64_t seed) {
   sp_pcg_seed(&sp_krand_state, seed);
@@ -45,31 +46,15 @@ void sp_krand_srand(uint64_t seed) {
 
 uint64_t sp_krand_next(void) {
   if (!sp_krand_seeded) {
-    /* Auto-seed on first draw, mirroring CRuby's startup seeding so
-       unseeded rand/shuffle/sample vary per run. time() alone repeats
-       within a second; mix in clock() and the per-worker state address. */
-    sp_krand_srand((uint64_t)time(NULL) ^ ((uint64_t)clock() << 24) ^
-                   (uint64_t)(uintptr_t)&sp_krand_state);
+    /* Auto-seed on first draw from OS entropy and record the seed so an
+       initial srand() returns the seed that actually drove prior draws,
+       mirroring CRuby 4.0. */
+    sp_int init = sp_Random_new_seed();
+    sp_kernel_seed = init;
+    sp_krand_srand((uint64_t)init);
   }
   uint64_t hi = sp_pcg32_adv(&sp_krand_state);
   return (hi << 32) | sp_pcg32_adv(&sp_krand_state);
-}
-
-sp_int sp_krand_below(sp_int n) {
-  if (n <= 0) return 0;
-  /* uniform in [0, n) without modulo bias: reject draws below the
-     wrap-around threshold (0 for powers of two, so the loop is rare) */
-  uint64_t umax = (uint64_t)n;
-  uint64_t threshold = (uint64_t)(-(int64_t)umax) % umax;
-  uint64_t r;
-  do {
-    r = sp_krand_next();
-  } while (r < threshold);
-  return (sp_int)(r % umax);
-}
-
-sp_float sp_krand_float(void) {
-  return (sp_float)(sp_krand_next() >> 11) / (sp_float)(1ULL << 53);
 }
 
 /* ---- Random instance methods ---- */
@@ -86,10 +71,52 @@ sp_float sp_krand_float(void) {
 static SP_TLS struct { char guard[_Alignof(sp_Random)]; sp_Random r; } sp_random_default_box
     = { .guard = { [_Alignof(sp_Random) - 1] = (char)SP_STATIC_GUARD } };
 #define sp_random_default (sp_random_default_box.r)
-uint64_t sp_random_next(sp_Random *r) {SP_GC_ROOT(r);
+
+static uint64_t sp_random_raw_next(sp_Random *r) {
   if (r == &sp_random_default) return sp_krand_next();
   uint64_t hi = sp_pcg32_adv(&r->state);
   return (hi << 32) | sp_pcg32_adv(&r->state);
+}
+
+/* Uniform uint64_t in [0, bound) for bound >= 1 without modulo bias.
+   Uses Lemire's nearly divisionless method when 128-bit multiplication is
+   available (SP_HAVE_INT128), and standard 64-bit rejection sampling as the
+   portable fallback. Degenerate bound <= 1 returns 0 without advancing the
+   stream, matching CRuby 4.0. */
+static uint64_t sp_random_below_u64(sp_Random *r, uint64_t bound) {
+  if (bound <= 1) return 0;
+#if SP_HAVE_INT128
+  sp_uint128 m = (sp_uint128)sp_random_raw_next(r) * (sp_uint128)bound;
+  uint64_t l = (uint64_t)m;
+  if (l < bound) {
+    uint64_t t = ((uint64_t)0 - bound) % bound;
+    while (l < t) {
+      m = (sp_uint128)sp_random_raw_next(r) * (sp_uint128)bound;
+      l = (uint64_t)m;
+    }
+  }
+  return (uint64_t)(m >> 64);
+#else
+  uint64_t threshold = ((uint64_t)0 - bound) % bound;
+  uint64_t x;
+  do {
+    x = sp_random_raw_next(r);
+  } while (x < threshold);
+  return x % bound;
+#endif
+}
+
+sp_int sp_krand_below(sp_int n) {
+  if (n <= 1) return 0;
+  return (sp_int)sp_random_below_u64(&sp_random_default, (uint64_t)n);
+}
+
+sp_float sp_krand_float(void) {
+  return (sp_float)(sp_krand_next() >> 11) / (sp_float)(1ULL << 53);
+}
+
+uint64_t sp_random_next(sp_Random *r) {SP_GC_ROOT(r);
+  return sp_random_raw_next(r);
 }
 sp_Random *sp_Random_new(sp_int seed) {
   sp_Random *r = (sp_Random *)sp_gc_alloc(sizeof(sp_Random), NULL, NULL);
@@ -134,17 +161,36 @@ sp_bool sp_Random_eq(sp_Random *a, sp_Random *b) {
   if (!a || !b) return FALSE;
   return (a->state == b->state && a->seed == b->seed) ? TRUE : FALSE;
 }
-/* Random.new with no seed: OS-entropy-ish auto seed. time() alone made two
-   instances created in the same second identical; mix in a per-thread counter
-   and the object address so every instance gets its own stream. */
+/* Random.new with no seed: seed from OS entropy via sp_Random_new_seed so
+   every instance gets an independent stream and Random.new(r.seed) reproduces
+   it, matching CRuby 4.0. */
 sp_Random *sp_Random_new_auto(void) {
-  static SP_TLS uint64_t sp_random_auto_ctr = 0;
+  sp_int seed = sp_Random_new_seed();
   sp_Random *r = (sp_Random *)sp_gc_alloc(sizeof(sp_Random), NULL, NULL);
-  uint64_t e = (((uint64_t)time(NULL)) << 20) ^ (++sp_random_auto_ctr * 0x9E3779B97F4A7C15ULL) ^
-               (uint64_t)(uintptr_t)r;
-  sp_pcg_seed(&r->state, e);
-  r->seed = (sp_int)(e >> 1);
+  sp_pcg_seed(&r->state, (uint64_t)seed);
+  r->seed = seed;
   return r;
+}
+/* Draw a uniform integer in [rg.first, rg.last] (or [rg.first, rg.last) when
+   rg.excl). Returns 1 and writes *out, or returns 0 when the range is empty.
+   Uses unsigned difference arithmetic so signed overflow/underflow UB and
+   full-span (+1 wrap-to-zero) cannot occur on either 32-bit or 64-bit sp_int. */
+int sp_Random_try_rand_range(sp_Random *r, sp_Range rg, sp_int *out) {SP_GC_ROOT(r);
+  sp_int lo = rg.first, hi = rg.last;
+  if (rg.excl) {
+    if (lo >= hi) return 0;
+    if (!r) { *out = lo; return 1; }
+    uint64_t bound = (uint64_t)hi - (uint64_t)lo;
+    *out = (sp_int)((uintptr_t)lo + (uintptr_t)sp_random_below_u64(r, bound));
+    return 1;
+  }
+  if (lo > hi) return 0;
+  if (!r) { *out = lo; return 1; }
+  uint64_t span = (uint64_t)hi - (uint64_t)lo;
+  uint64_t delta = (span == UINT64_MAX) ? sp_random_raw_next(r)
+                                        : sp_random_below_u64(r, span + 1);
+  *out = (sp_int)((uintptr_t)lo + (uintptr_t)delta);
+  return 1;
 }
 /* Random#rand(Range): an integer in the (int-endpoint) range, empty raises. */
 sp_int sp_Random_rand_range(sp_Random *r, sp_Range rg) {SP_GC_ROOT(r);
@@ -152,15 +198,15 @@ sp_int sp_Random_rand_range(sp_Random *r, sp_Range rg) {SP_GC_ROOT(r);
   /* an open side has no span: CRuby's Errno::EDOM */
   if (rg.nobeg || rg.noend)
     sp_raise_cls("Errno::EDOM", "Numerical argument out of domain");
-  sp_int lo = rg.first, hi = rg.excl ? rg.last - 1 : rg.last;
-  if (hi < lo) sp_raise_cls("ArgumentError", sp_sprintf("invalid argument - %s", sp_Range_inspect(&rg)));
-  if (!r) return lo;
-  return lo + (sp_int)(sp_random_next(r) % ((uint64_t)(hi - lo) + 1));
+  sp_int out;
+  if (!sp_Random_try_rand_range(r, rg, &out))
+    sp_raise_cls("ArgumentError", sp_sprintf("invalid argument - %s", sp_Range_inspect(&rg)));
+  return out;
 }
 sp_int sp_Random_rand_int(sp_Random *r, sp_int n) {SP_GC_ROOT(r);
   if (n <= 0) sp_raise_cls("ArgumentError", sp_sprintf("invalid argument - %lld", (long long)n));
   if (!r) return 0;
-  return (sp_int)(sp_random_next(r) % (uint64_t)n);
+  return (sp_int)sp_random_below_u64(r, (uint64_t)n);
 }
 sp_float sp_Random_rand_float(sp_Random *r) {SP_GC_ROOT(r);
   if (!r) return 0.0;
@@ -197,17 +243,63 @@ const char *sp_Random_bytes(sp_Random *r, sp_int n) {SP_GC_ROOT(r);
   sp_str_mark_binary(b);
   return b;
 }
-/* Random#rand(Float range): a Float in [lo, hi) (or [lo, hi] for an inclusive
-   range, though the float boundary is effectively open). */
-sp_float sp_Random_rand_float_range(sp_Random *r, sp_float lo, sp_float hi) {SP_GC_ROOT(r);
-  if (isnan(lo) || isinf(lo) || isnan(hi) || isinf(hi))
+/* Random#rand(Float range): a Float in [lo, hi] (or [lo, hi) when excl).
+   Validates finite bounds and non-empty ordering, scales large spans via
+   halved endpoints so -Float::MAX..Float::MAX never overflows to Inf, and
+   clamps rounding at the endpoints to preserve the interval invariant. */
+sp_float sp_Random_rand_float_range_excl(sp_Random *r, sp_float lo, sp_float hi, int excl) {SP_GC_ROOT(r);
+  if (!isfinite(lo) || !isfinite(hi))
     sp_raise_cls("Errno::EDOM", "Numerical argument out of domain");
-  return lo + sp_Random_rand_float(r) * (hi - lo);
+  if (hi < lo || (excl && hi == lo)) {
+    const char *sep = excl ? "..." : "..";
+    const char *lo_s = sp_float_to_s(lo);
+    SP_GC_ROOT_STR(lo_s);
+    const char *hi_s = sp_float_to_s(hi);
+    SP_GC_ROOT_STR(hi_s);
+    sp_raise_cls("ArgumentError", sp_sprintf("invalid argument - %s%s%s", lo_s, sep, hi_s));
+  }
+  if (lo == hi) return lo + 0.0;
+  if (!r) return lo;
+  sp_float u = sp_Random_rand_float(r);
+  sp_float span = hi - lo;
+  sp_float val;
+  if (isfinite(span)) {
+    val = lo + u * span;
+  }
+  else {
+    sp_float half_lo = lo * 0.5;
+    sp_float half_hi = hi * 0.5;
+    sp_float half_val = half_lo + u * (half_hi - half_lo);
+    if (half_val < half_lo) half_val = half_lo;
+    if (half_val > half_hi) half_val = half_hi;
+    val = half_val * 2.0;
+  }
+  if (val < lo) val = lo;
+  if (excl) {
+    if (val >= hi) val = nextafter(hi, lo);
+  }
+  else if (val > hi) {
+    val = hi;
+  }
+  return val;
 }
-/* Random.new_seed: a fresh nonneg seed drawn from the default stream. */
+sp_float sp_Random_rand_float_range(sp_Random *r, sp_float lo, sp_float hi) {
+  return sp_Random_rand_float_range_excl(r, lo, hi, 0);
+}
+/* Random.new_seed: a fresh positive seed drawn from OS entropy
+   (sp_crypto_entropy), independent of the default PRNG stream. */
 sp_int sp_Random_new_seed(void) {
-  sp_int s = (sp_int)(sp_random_next(sp_random_default_get()) >> 1);
-  return s < 0 ? -s : s;
+  static SP_TLS uint64_t sp_seed_fallback_ctr = 0;
+  uint64_t raw = 0;
+  if (!sp_crypto_entropy((unsigned char *)&raw, (int)sizeof(raw))) {
+    uint64_t s = (uint64_t)time(NULL) ^ ((uint64_t)clock() << 24) ^
+                 (++sp_seed_fallback_ctr * 0x9E3779B97F4A7C15ULL) ^
+                 (uint64_t)(uintptr_t)&raw;
+    sp_pcg_seed(&s, s);
+    raw = ((uint64_t)sp_pcg32_adv(&s) << 32) | sp_pcg32_adv(&s);
+  }
+  sp_int seed = (sp_int)(raw & (uint64_t)INTPTR_MAX);
+  return seed == 0 ? 1 : seed;
 }
 /* Random.urandom(n): n bytes from the OS entropy source (sp_crypto_entropy) as
    a String. Raises RuntimeError when sp_crypto_entropy has no secure source. */
@@ -247,9 +339,12 @@ const char *sp_Random_inspect(sp_Random *r) {SP_GC_ROOT(r);
    seed, which srand returns (CRuby returns the prior seed, not the new
    one). Every rand form -- bare/int/range, shuffle, sample, the Random
    default instance -- draws from that one stream, so a single srand makes
-   them all reproducible. */
-static SP_TLS sp_int sp_kernel_seed = 0;
+   them all reproducible. An unseeded stream initializes its prior seed from
+   OS entropy so the first srand() returns a non-zero seed, matching CRuby 4.0. */
 sp_int sp_kernel_srand(sp_int seed) {
+  if (!sp_krand_seeded) {
+    sp_kernel_seed = sp_Random_new_seed();
+  }
   sp_int prev = sp_kernel_seed;
   sp_kernel_seed = seed;
   sp_krand_srand((uint64_t)seed);

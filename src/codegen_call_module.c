@@ -2419,7 +2419,7 @@ int emit_call_enum_random_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
       return 1;
     }
     if (sp_streq(name, "srand")) {                    /* #2525 (returns previous seed) */
-      if (argc == 0) { buf_puts(b, "sp_kernel_srand((sp_int)time(NULL))"); return 1; }
+      if (argc == 0) { buf_puts(b, "sp_kernel_srand(sp_Random_new_seed())"); return 1; }
       buf_puts(b, "sp_kernel_srand("); emit_seed_expr(c, argv[0], b); buf_puts(b, ")");
       return 1;
     }

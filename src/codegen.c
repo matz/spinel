@@ -3783,7 +3783,8 @@ static int begin_has_handler(const NodeTable *nt, int id) {
 }
 static int is_setjmp_construct(Compiler *c, int id) {
   NodeKind k = nt_kind(c->nt, id);
-  return (k == NK_BeginNode && begin_has_handler(c->nt, id)) || k == NK_RescueModifierNode ||
+  return (k == NK_BeginNode && begin_has_handler(c->nt, id) && !an_begin_elides_setjmp(c, id)) ||
+         (k == NK_RescueModifierNode && !an_rescue_mod_elides_setjmp(c, id)) ||
          is_stopiter_loop(c, id) || is_catch_call(c, id) || is_heavy_brk_call(c, id);
 }
 
@@ -3792,7 +3793,9 @@ static int is_setjmp_construct(Compiler *c, int id) {
 static int scope_emits_setjmp(Compiler *c, int si) {
   int nids = 0; const int *ids = cg_scope_nodes(c, si, &nids);
   for (int k = 0; k < nids; k++)
-    if (nt_kind(c->nt, ids[k]) == NK_RescueNode || is_setjmp_construct(c, ids[k])) return 1;
+    if ((nt_kind(c->nt, ids[k]) == NK_RescueNode && !an_rescue_elided(c, ids[k])) ||
+        is_setjmp_construct(c, ids[k]))
+      return 1;
   return 0;
 }
 
@@ -3868,7 +3871,7 @@ static void begin_volatile_names(Compiler *c, int si, char ***out, int *nout, in
     if (is_setjmp_construct(c, id) || is_rescuing_yield_call(c, id)) mark_subtree(nt, id, inb);
   }
   for (int k = 0; k < nids; k++)
-    if (nt_kind(nt, ids[k]) == NK_RescueNode && !inb[ids[k]]) { *all = 1; break; }
+    if (nt_kind(nt, ids[k]) == NK_RescueNode && !inb[ids[k]] && !an_rescue_elided(c, ids[k])) { *all = 1; break; }
   if (*all) { free(inb); return; }
   char **names = NULL; int n = 0, cap = 0;
   for (int k = 0; k < nids; k++) {
@@ -3897,13 +3900,23 @@ static void setjmp_written_names_under(Compiler *c, int id, int in, char ***name
   const NodeTable *nt = c->nt;
   if (*all || id < 0 || id >= nt->count) return;
   NodeKind k = nt_kind(nt, id);
-  if (k == NK_RescueNode && !in) { *all = 1; return; }
+  if (k == NK_RescueNode && !in && !an_rescue_elided(c, id)) { *all = 1; return; }
   if (in && lv_is_write_or_target(k)) {
     const char *nm = nt_str(nt, id, "name");
     if (nm && !name_list_has(*names, *n, nm)) {
       if (*n == *cap) { *cap = *cap ? *cap * 2 : 8; *names = (char **)realloc(*names, sizeof(char *) * (size_t)*cap); }
       (*names)[(*n)++] = (char *)nm;
     }
+  }
+  if (k == NK_BeginNode && an_begin_elides_setjmp(c, id)) {
+    setjmp_written_names_under(c, nt_ref(nt, id, "statements"), in, names, n, cap, all);
+    setjmp_written_names_under(c, nt_ref(nt, id, "else_clause"), in, names, n, cap, all);
+    setjmp_written_names_under(c, nt_ref(nt, id, "ensure_clause"), in, names, n, cap, all);
+    return;
+  }
+  if (k == NK_RescueModifierNode && an_rescue_mod_elides_setjmp(c, id)) {
+    setjmp_written_names_under(c, nt_ref(nt, id, "expression"), in, names, n, cap, all);
+    return;
   }
   if (is_setjmp_construct(c, id) || is_rescuing_yield_call(c, id)) in = 1;
   int nr = nt_num_refs(nt, id);
@@ -4970,9 +4983,21 @@ static int fi_body_setjmp(Compiler *c, int id, int depth) {
   if (depth > 64) return 1;
   switch (nt_kind(nt, id)) {
     case NK_BeginNode:
+      if (an_begin_elides_setjmp(c, id)) {
+        return fi_body_setjmp(c, nt_ref(nt, id, "statements"), depth + 1) ||
+               fi_body_setjmp(c, nt_ref(nt, id, "else_clause"), depth + 1) ||
+               fi_body_setjmp(c, nt_ref(nt, id, "ensure_clause"), depth + 1);
+      }
       if (nt_ref(nt, id, "rescue_clause") >= 0 || nt_ref(nt, id, "ensure_clause") >= 0) return 1;
       break;
-    case NK_RescueNode: case NK_RescueModifierNode: case NK_RetryNode: case NK_EnsureNode:
+    case NK_RescueNode:
+      if (an_rescue_elided(c, id)) return 0;
+      return 1;
+    case NK_RescueModifierNode:
+      if (an_rescue_mod_elides_setjmp(c, id))
+        return fi_body_setjmp(c, nt_ref(nt, id, "expression"), depth + 1);
+      return 1;
+    case NK_RetryNode: case NK_EnsureNode:
       return 1;
     default: break;
   }

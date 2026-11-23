@@ -619,6 +619,8 @@ void comp_free(Compiler *c) {
   c->pres_names = NULL; c->pres_flags = NULL; c->npres = c->cpres = 0;
   free(c->nil_fact);
   free(c->nil_elem_fact);
+  free(c->scope_may_raise);
+  free(c->node_elide_setjmp);
   free(c->cls_fact); cls_pool_free(c->cls_pool, c->ncls_pool); free(c->cls_bk_sub); free(c->cls_bk_sub_ok); cplan_send_owners_free(c); cplan_memo_free(c);
   free(c->send_param_memo);
   free(c->node_ord); free(c->node_base); free(c->node_pbase);

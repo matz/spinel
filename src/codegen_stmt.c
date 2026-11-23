@@ -14930,8 +14930,9 @@ static void emit_return_deferred(Compiler *c, const int *a, int n, Buf *b, int i
   emit_rescue_pops_to(b, ctx->rescue_base);
   int other = ctx->pr_track && !same_pr_label(g_method_pr_label, ctx->pr_label);
   if (other) ensure_note_oret(ctx);
-  buf_printf(b, "_retf%d = %d; sp_exc_top -= %d; goto _ensure%d; }\n",
-             ctx->lid, other ? 2 : 1, pops, ctx->lid);
+  buf_printf(b, "_retf%d = %d; ", ctx->lid, other ? 2 : 1);
+  if (pops > 0) buf_printf(b, "sp_exc_top -= %d; ", pops);
+  buf_printf(b, "goto _ensure%d; }\n", ctx->lid);
 }
 
 static void emit_return_1(Compiler *c, int id, Buf *b, int indent);
@@ -15852,6 +15853,146 @@ static void emit_ensure_else(Compiler *c, int stmts, const char *resultvar,
   emit_indent(b, indent); buf_puts(b, "}\n");
 }
 
+/* Emit a BeginNode whose body (and else, when ensure is present) provably
+   cannot raise or non-locally unwind (an_begin_elides_setjmp). Skips setjmp,
+   sp_exc_stack framing, and dead rescue clauses while preserving exact CRuby
+   evaluation order for body, else, and ensure (including deferred local
+   return/break/next/redo into ensure when present). */
+static void emit_begin_elided(Compiler *c, int id, int body, int else_c,
+                              int else_stmts, int ensure_stmts, Buf *b,
+                              int indent, const char *resultvar) {
+  int has_jump = (ensure_stmts >= 0) &&
+                 (an_subtree_has_local_jump(c->nt, body) ||
+                  an_subtree_has_local_jump(c->nt, else_stmts));
+  if (ensure_stmts >= 0 && has_jump && g_ensure_depth < MAX_ENSURE_DEPTH) {
+    int eid = ++g_tmp;
+    int has_retval = (g_ret_type != TY_VOID && g_ret_type != TY_UNKNOWN &&
+                      g_ret_type != TY_NIL &&
+                      (ty_is_object(g_ret_type) || c_type_name(g_ret_type) != NULL));
+    emit_indent(b, indent); buf_printf(b, "int _retf%d = 0;\n", eid);
+    emit_indent(b, indent); buf_printf(b, "int _nxtf%d = 0; (void)_nxtf%d;\n", eid, eid);
+    emit_redo_region_open(b, eid, indent);
+    if (g_c_loop_depth > 0) {
+      emit_indent(b, indent); buf_printf(b, "int _brkf%d = 0; (void)_brkf%d;\n", eid, eid);
+    }
+    if (has_retval) {
+      emit_indent(b, indent);
+      if (oint_kind(g_ret_type) && g_ret_oint)
+        buf_printf(b, "%s _retv%d = %s;", oint_ctype(g_ret_type), eid, oint_nil(g_ret_type));
+      else {
+        emit_ctype(c, g_ret_type, b);
+        if (ty_is_object(g_ret_type) && comp_ty_value_obj(c, g_ret_type))
+          buf_printf(b, " _retv%d = (sp_%s){0};", eid, c->classes[ty_object_class(g_ret_type)].c_name);
+        else
+          buf_printf(b, " _retv%d = %s;", eid, default_value_from_compiler(c, g_ret_type));
+      }
+      if (ty_gc_rootable(c, g_ret_type)) {
+        char rn[24]; snprintf(rn, sizeof rn, "_retv%d", eid);
+        buf_puts(b, " "); emit_gc_root_var(c, g_ret_type, rn, b);
+      }
+      buf_puts(b, "\n");
+    }
+    g_ensure_stack[g_ensure_depth++] = (EnsureCtx){
+      .lid = eid, .has_retval = has_retval, .exc_base = g_exc_frame_depth,
+      .retv_ty = g_ret_type, .rescue_base = g_rescue_save_depth,
+      .retv_o = g_ret_oint, .pr_track = 1, .pr_label = g_method_pr_label
+    };
+    /* Wrap body/else in a block scope so goto _ensure<eid> never jumps past an
+       SP_GC_ROOT (__attribute__((cleanup))) declaration in the body. */
+    emit_indent(b, indent); buf_puts(b, "{\n");
+    if (body >= 0) {
+      if (resultvar && else_stmts < 0) {
+        const char *sv = g_result_var; g_result_var = resultvar;
+        emit_stmts_tail(c, body, b, indent + 1);
+        g_result_var = sv;
+      }
+      else emit_stmts(c, body, b, indent + 1);
+    }
+    if (else_stmts >= 0) {
+      if (resultvar) {
+        const char *sv = g_result_var; g_result_var = resultvar;
+        emit_stmts_tail(c, else_stmts, b, indent + 1);
+        g_result_var = sv;
+      }
+      else emit_stmts(c, else_stmts, b, indent + 1);
+    }
+    else if (else_c >= 0 && resultvar) {
+      Repr br = repr_of(c, id);
+      TyKind bt = br.as_ty;
+      emit_indent(b, indent + 1);
+      if (oint_kind(bt) && !cond_res_oint(c, id, bt)) refuse_nil_store(c, id, bt, "an empty else clause");
+      buf_printf(b, "%s = %s;\n", resultvar,
+                 br.kind == RK_BOXED ? "sp_box_nil()" : res_zero(c, bt, cond_res_oint(c, id, bt)));
+    }
+    emit_indent(b, indent); buf_puts(b, "}\n");
+    EnsureCtx self_ctx = g_ensure_stack[g_ensure_depth - 1];
+    g_ensure_depth--;
+    buf_printf(b, "_ensure%d: {\n", eid);
+    emit_stmts(c, ensure_stmts, b, indent);
+    emit_indent(b, indent); buf_puts(b, "}\n");
+    emit_redo_region_close(b, &self_ctx, indent);
+    if (g_ensure_depth > g_loop_ensure_base) {
+      EnsureCtx *outer2 = &g_ensure_stack[g_ensure_depth - 1];
+      emit_indent(b, indent);
+      int fp2 = g_exc_frame_depth - outer2->exc_base;
+      buf_printf(b, "if (_nxtf%d) { _nxtf%d = 1; ", eid, outer2->lid);
+      if (fp2 > 0) buf_printf(b, "sp_exc_top -= %d; ", fp2);
+      emit_rescue_pops_to(b, outer2->rescue_base);
+      buf_printf(b, "goto _ensure%d; }\n", outer2->lid);
+    }
+    else if (g_c_loop_depth > 0) {
+      emit_indent(b, indent);
+      buf_printf(b, "if (_nxtf%d) { ", eid);
+      emit_loop_unwind(b);
+      emit_loop_latch_poll(b, " ");
+      buf_puts(b, "continue; }\n");
+    }
+    if (g_c_loop_depth > 0 && g_ensure_depth > g_loop_ensure_base) {
+      EnsureCtx *outer3 = &g_ensure_stack[g_ensure_depth - 1];
+      int fp3 = g_exc_frame_depth - outer3->exc_base;
+      emit_indent(b, indent);
+      buf_printf(b, "if (_brkf%d) { _brkf%d = _brkf%d; ", eid, outer3->lid, eid);
+      if (fp3 > 0) buf_printf(b, "sp_exc_top -= %d; ", fp3);
+      buf_printf(b, "goto _ensure%d; }\n", outer3->lid);
+    }
+    else if (g_c_loop_depth > 0) {
+      int fpl = g_exc_frame_depth - g_loop_exc_base;
+      emit_indent(b, indent);
+      buf_printf(b, "if (_brkf%d) { ", eid);
+      if (fpl > 0) buf_printf(b, "sp_exc_top -= %d; ", fpl);
+      buf_printf(b, "sp_rescue_sp -= _brkf%d - 1; break; }\n", eid);
+    }
+    emit_indent(b, indent);
+    emit_ensure_return(c, &self_ctx, eid, has_retval, b, indent);
+    return;
+  }
+  if (body >= 0) {
+    if (resultvar && else_stmts < 0) {
+      const char *sv = g_result_var; g_result_var = resultvar;
+      emit_stmts_tail(c, body, b, indent);
+      g_result_var = sv;
+    }
+    else emit_stmts(c, body, b, indent);
+  }
+  if (else_stmts >= 0) {
+    if (resultvar) {
+      const char *sv = g_result_var; g_result_var = resultvar;
+      emit_stmts_tail(c, else_stmts, b, indent);
+      g_result_var = sv;
+    }
+    else emit_stmts(c, else_stmts, b, indent);
+  }
+  else if (else_c >= 0 && resultvar) {
+    Repr bt_repr = repr_of(c, id);
+    TyKind bt = bt_repr.as_ty;
+    emit_indent(b, indent);
+    if (oint_kind(bt) && !cond_res_oint(c, id, bt)) refuse_nil_store(c, id, bt, "an empty else clause");
+    buf_printf(b, "%s = %s;\n", resultvar,
+               bt_repr.kind == RK_BOXED ? "sp_box_nil()" : res_zero(c, bt, cond_res_oint(c, id, bt)));
+  }
+  if (ensure_stmts >= 0) emit_stmts(c, ensure_stmts, b, indent);
+}
+
 /* begin/body/rescue (ensure/else deferred) via the setjmp exception model.
    When resultvar != NULL, the body's and rescue handlers' values are
    assigned to it (begin/rescue as an expression). */
@@ -15876,6 +16017,12 @@ void emit_begin(Compiler *c, int id, Buf *b, int indent, const char *resultvar) 
       }
       else emit_stmts(c, body, b, indent);
     }
+    return;
+  }
+  if (an_begin_elides_setjmp(c, id) &&
+      !(ensure_stmts >= 0 && g_ensure_depth >= MAX_ENSURE_DEPTH &&
+        (an_subtree_has_local_jump(nt, body) || an_subtree_has_local_jump(nt, else_stmts)))) {
+    emit_begin_elided(c, id, body, else_c, else_stmts, ensure_stmts, b, indent, resultvar);
     return;
   }
   int fr = ++g_tmp;
@@ -23165,6 +23312,10 @@ static void emit_stmt_node(Compiler *c, int id, Buf *b, int indent) {
        fall through to the rescue expression on any exception. */
     int e = nt_ref(nt, id, "expression");
     int r = nt_ref(nt, id, "rescue_expression");
+    if (an_rescue_mod_elides_setjmp(c, id)) {
+      if (e >= 0) emit_stmt(c, e, b, indent);
+      return;
+    }
     emit_indent(b, indent); buf_puts(b, "sp_exc_check_depth();\n");
     emit_indent(b, indent); buf_puts(b, "sp_exc_rootmark[sp_exc_top] = sp_gc_nroots; sp_rescue_mark[sp_exc_top] = sp_rescue_sp;\n");
     emit_indent(b, indent); buf_puts(b, "sp_exc_msg[sp_exc_top] = 0; sp_exc_obj[sp_exc_top] = 0; sp_exc_top++;\n");

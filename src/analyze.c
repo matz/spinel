@@ -57846,6 +57846,8 @@ void analyze_program(Compiler *c) {
   order_facts_check(c);
   /* the block bodies codegen types per arm, typed here once (#7483) */
   AN_PHASE("arm_facts", an_arm_facts(c));
+  /* whole-program conservative nothrow / may_raise facts for setjmp elision */
+  AN_PHASE("raise_facts", an_raise_facts(c));
   if (elab_check_on(c)) elab_check_visibility(c);
   sp_timing_end(tm_an, "analysis", "");
 }

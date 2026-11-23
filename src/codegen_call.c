@@ -19699,11 +19699,19 @@ static int emit_array_arith_call(Compiler *c, int id, Buf *b) {
    (any of which may carry the break out of the spliced body as a
    sp_brk_throw), no begin/rescue/ensure or while inside it (a break that
    crosses a frame longjmps). */
-static int brk_block_direct_only(const NodeTable *nt, int node, int depth) {
+static int brk_block_direct_only(Compiler *c, const NodeTable *nt, int node, int depth) {
   if (node < 0 || depth > 200) return 1;
   NodeKind k = nt_kind(nt, node);
   /* a yield splices the CALLER's block, whose breaks address the caller's
      own wrapper (by its name, see g_yield_blk_brk_fallback), not this one */
+  if (k == NK_BeginNode && an_begin_elides_setjmp(c, node)) {
+    int ec = nt_ref(nt, node, "ensure_clause");
+    if (ec >= 0 && nt_ref(nt, ec, "statements") >= 0) return 0;
+    return brk_block_direct_only(c, nt, nt_ref(nt, node, "statements"), depth + 1) &&
+           brk_block_direct_only(c, nt, nt_ref(nt, node, "else_clause"), depth + 1);
+  }
+  if (k == NK_RescueModifierNode && an_rescue_mod_elides_setjmp(c, node))
+    return brk_block_direct_only(c, nt, nt_ref(nt, node, "expression"), depth + 1);
   if (k == NK_LambdaNode || k == NK_BlockArgumentNode ||
       k == NK_BeginNode || k == NK_RescueModifierNode || k == NK_WhileNode ||
       k == NK_UntilNode || k == NK_ForNode || k == NK_DefNode) return 0;
@@ -19717,10 +19725,10 @@ static int brk_block_direct_only(const NodeTable *nt, int node, int depth) {
   }
   const SpNode *nd = &nt->nodes[node];
   for (int i = 0; i < nd->nr; i++)
-    if (!brk_block_direct_only(nt, nd->r[i].ref, depth + 1)) return 0;
+    if (!brk_block_direct_only(c, nt, nd->r[i].ref, depth + 1)) return 0;
   for (int i = 0; i < nd->na; i++)
     for (int j = 0; j < nd->a[i].n; j++)
-      if (!brk_block_direct_only(nt, nd->a[i].ids[j], depth + 1)) return 0;
+      if (!brk_block_direct_only(c, nt, nd->a[i].ids[j], depth + 1)) return 0;
   return 1;
 }
 /* Is the call a builtin class's reopened yielding method, reached through
@@ -19743,7 +19751,7 @@ int brk_wrapper_light(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   int blk = nt_ref(nt, id, "block");
   if (blk < 0 || nt_kind(nt, blk) != NK_BlockNode) return 0;
-  if (!brk_block_direct_only(nt, nt_ref(nt, blk, "body"), 0)) return 0;
+  if (!brk_block_direct_only(c, nt, nt_ref(nt, blk, "body"), 0)) return 0;
   int recv = nt_ref(nt, id, "receiver");
   /* a builtin class's reopened yielding method is called through its proc
      form with the block as a proc, whose break is a throw */
@@ -19753,7 +19761,7 @@ int brk_wrapper_light(Compiler *c, int id) {
        and lowered forms call it as a proc, whose break is a throw */
     Scope *m = &c->scopes[call_user_yield_mi(c, id)];
     if (m->is_proc_form || m->is_lowered_yield || !m->yields) return 0;
-    return m->body >= 0 && brk_block_direct_only(nt, m->body, 0);
+    return m->body >= 0 && brk_block_direct_only(c, nt, m->body, 0);
   }
   if (recv < 0) return 0;
   TyKind rt = comp_ntype(c, recv);

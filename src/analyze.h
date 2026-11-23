@@ -123,6 +123,18 @@ const ArmFact *arm_fact_find(const Compiler *c, int block, TyKind kind);
    Scope.ret_obj_may_nil. repr_of and repr_of_slot read them into may_nil. */
 enum { NF_UNKNOWN, NF_NOT_NIL, NF_MAY_NIL, NF_GUARDED /* not nil past a guard */ };
 void an_nil_facts(Compiler *c);
+/* Whole-program conservative may_raise / nothrow analysis (analyze_raise.c).
+   One place per decision: codegen reads these settled facts for both setjmp
+   emission (emit_begin, RescueModifierNode) and volatile qualification
+   (is_setjmp_construct, scope_emits_setjmp, begin_volatile_names). */
+void an_raise_facts(Compiler *c);
+int an_scope_may_raise(const Compiler *c, int si);
+int an_expr_may_raise(Compiler *c, int id);
+int an_stmt_may_raise(Compiler *c, int id);
+int an_begin_elides_setjmp(const Compiler *c, int id);
+int an_rescue_mod_elides_setjmp(const Compiler *c, int id);
+int an_rescue_elided(const Compiler *c, int id);
+int an_subtree_has_local_jump(const NodeTable *nt, int id);
 /* Which constants a read can reach before their assignment: sets
    LocalVar.const_early on each one whose assignment is not settled
    (analyze_const.c). Runs once the constants are registered, ahead of the

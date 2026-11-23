@@ -102,7 +102,10 @@ program and the runtime are compiled without the sjlj lowering and without
   top-level program with many `begin`/`rescue` blocks and hundreds of
   locals can exceed the cap in `main` (the engine says
   `function body size count exceeds limit`). A method is a function of
-  its own: moving such code into methods is the fix. For the same reason a
+  its own: moving such code into methods is the fix. A `begin`/`rescue`/`ensure`
+  or rescue modifier whose body provably cannot raise or non-locally unwind
+  elides its `setjmp` frame and `volatile` local qualifiers (`analyze_raise.c`).
+  For the same reason a
   method of the program that yields and has a `rescue`, an `ensure` or a
   rescue modifier takes its block as a proc on this target (`&blk`,
   `blk.call`), where elsewhere it is copied into each caller with the

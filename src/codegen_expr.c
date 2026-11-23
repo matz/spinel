@@ -5488,6 +5488,62 @@ static int untyped_boxed_call(Compiler *c, int node) {
 }
 
 /* And/or, a rescue modifier and a begin block in value position (emit_expr_node's arms, in their order) */
+/* Emit an rvalue `expr rescue fallback` whose expression provably cannot raise
+   (an_rescue_mod_elides_setjmp): skip setjmp and coerce `e` to the modifier's
+   result representation. */
+static int emit_rescue_modifier_elided(Compiler *c, int id, int e, Buf *b) {
+  const NodeTable *nt = c->nt;
+  TyKind rt = repr_of(c, id).as_ty;
+  if (rt == TY_VOID || rt == TY_UNKNOWN || rt == TY_NIL) rt = TY_POLY;
+  int res_o = cond_res_oint(c, id, rt);
+  if (e < 0) {
+    buf_puts(b, res_o ? oint_nil(rt) : slot_zero(c, rt));
+    return 1;
+  }
+  Repr er = repr_of(c, e);
+  TyKind et = er.as_ty;
+  int one, e_yields = 0, e_nil = 0, e_val = e;
+  switch (vp_one(nt, e, VPS_NONE | VP_PARENS_ONLY, &one)) {
+    case VP1_NODE:
+      e_yields = is_yield_or_blk_param_call(c, one);
+      e_nil = nt_kind(nt, one) == NK_NilNode;
+      e_val = one;
+      break;
+    case VP1_NIL: e_nil = 1; break;
+    case VP1_MANY: break;
+  }
+  int e_diverges = (er.untyped || et == TY_VOID || (et == TY_NIL && rt != TY_POLY && e_yields)) &&
+                   !an_empty_container_kind(c, e);
+  int hdem = rt == TY_STRBUF && repr_of(c, id).demand;
+  if (!e_diverges && rt != TY_POLY && et != rt && !(hdem && et == TY_STRING) &&
+      !ty_is_numeric(rt) && nt_kind(nt, e_val) == NK_CallNode)
+    e_diverges = 1;
+  if (!e_diverges) {
+    buf_puts(b, "(");
+    if (rt == TY_POLY && er.kind != RK_BOXED) emit_boxed(c, e, b);
+    else if (res_o) emit_oint_expr(c, e, rt, b);
+    else if (hdem) emit_strbuf_handle_of(c, e, b);
+    else if (et == TY_NIL && e_nil && nil_value(rt)) emit_ternary_arm_o(c, e, rt, res_o, b);
+    else emit_expr_slot(c, e, rt, b);
+    buf_puts(b, ")");
+    return 1;
+  }
+  int t = ++g_tmp;
+  buf_puts(b, "({ ");
+  emit_res_ctype(c, rt, res_o, b);
+  buf_printf(b, " _t%d = %s;\n  ", t, res_o ? oint_nil(rt) : slot_zero(c, rt));
+  Buf epre; memset(&epre, 0, sizeof epre);
+  Buf *sv_pre = g_pre; int sv_ind = g_indent;
+  g_pre = &epre; g_indent = 1;
+  Buf ev; memset(&ev, 0, sizeof ev);
+  emit_expr_for_effect(c, e, &ev);
+  g_pre = sv_pre; g_indent = sv_ind;
+  if (epre.p) buf_puts(b, epre.p);
+  buf_printf(b, "%s; _t%d; })", ev.p ? ev.p : "", t);
+  free(epre.p); free(ev.p);
+  return 1;
+}
+
 static int emit_and_or_begin_expr(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *ty) {
   if (sp_streq(ty, "AndNode") || sp_streq(ty, "OrNode")) {
     int is_and = sp_streq(ty, "AndNode");
@@ -5780,6 +5836,8 @@ static int emit_and_or_begin_expr(Compiler *c, int id, Buf *b, const NodeTable *
        on exception, evaluate fallback instead. */
     int e  = nt_ref(nt, id, "expression");
     int r  = nt_ref(nt, id, "rescue_expression");
+    if (an_rescue_mod_elides_setjmp(c, id))
+      return emit_rescue_modifier_elided(c, id, e, b);
     TyKind rt = repr_of(c, id).as_ty;
     /* a value-less modifier (`(raise "x" rescue (return :a if c))`) still
        answers one, nil when the fallback falls through: held boxed */

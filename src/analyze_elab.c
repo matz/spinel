@@ -2871,6 +2871,18 @@ static int lr_has_at(Compiler *c, int cls, int sg, const char *nm, LoadPoint p, 
 static int lr_word_has(Compiler *c, int cls, int sg, const char *nm, int node) {
   return lr_has_at(c, cls, sg, nm, elab_point_of(c, node), 0);
 }
+/* ...does a def among the arguments of word node make the method nm (the word's arguments run before the word does:
+   `private(:m, def m; end)` names a method it has)? */
+static int lr_word_defines(const NodeTable *nt, int node, const char *nm, int cside) {
+  int skip = 0, an = (vis_word_call(nt, node, &skip), nt_ref(nt, node, "arguments")), ac = 0;
+  const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
+  for (int i = skip; i < ac; i++) {
+    if (nt_kind(nt, av[i]) != NK_DefNode || !sp_streq(nt_str(nt, av[i], "name"), nm)) continue;
+    int dr = nt_ref(nt, av[i], "receiver");
+    if (cside ? dr >= 0 && nt_kind(nt, dr) == NK_SelfNode : dr < 0) return 1;
+  }
+  return 0;
+}
 static int lr_body_word_cside(const NodeTable *nt, int node);
 static int lr_word_reach(Compiler *c, int node, int cls, int sg, int *copies) {
   const NodeTable *nt = c->nt;
@@ -2901,7 +2913,7 @@ static int lr_word_reach(Compiler *c, int node, int cls, int sg, int *copies) {
       const char *nm = nt_kind(nt, ev[k]) == NK_DefNode ? nt_str(nt, ev[k], "name") : vis_arg_name(nt, ev[k]);
       if (!nm && !mf) return *copies = 1, INT_MAX;
       /* (module_function's own lookup, from the module's origin: elab_module_has_method) */
-      if (!nm || (!def && !(mf ? elab_module_has_method(c, cls, nm) : lr_word_has(c, cls, cside ? 1 : sg, nm, node)))) return n;
+      if (!nm || (!def && !lr_word_defines(nt, node, nm, cside) && !(mf ? elab_module_has_method(c, cls, nm) : lr_word_has(c, cls, cside ? 1 : sg, nm, node)))) return n;
     }
   }
   *copies = !mf || !arr;
@@ -13390,6 +13402,18 @@ int elab_method_vis_held_from(Compiler *c, int cls, const char *name, int sg, Lo
   return vis;
 }
 
+/* ...are the arguments of word node all literal (asked once for the word, not for each of its entries) */
+static int lr_word_lit(Compiler *c, int node) {
+  long long lit = nt_int(c->nt, node, "word_literal", 0);
+  if (!lit) nt_node_set_int((NodeTable *)c->nt, node, "word_literal", lit = lr_word_is_mf(c->nt, node) || lr_body_word(c->nt, node) ? 1 : 2);
+  return lit == 1;
+}
+/* ...does a word's statement run whole where it is partial: no statement ahead of it in the frame may raise and skip it,
+   no condition holds it, and the blocks around it surely run it? */
+static int lr_word_stmt_runs(Compiler *c, int node, const LrStmt *s) {
+  return s && s->region >= 0 && s->fpartial && !s->fmay && !s->may && !s->skip && !s->unsure && lr_word_reach_limits(c->nt, node) &&
+         lr_word_lit(c, node);
+}
 /* ...does visibility version v (a word's at a point) apply though its statement is partial (in an iterator's block or
    a begin body with rescue clauses): a word whose versions the record makes only of the names it reaches
    (lr_word_reach_limits), where no statement ahead of it in the frame may raise and skip it (fmay), no condition
@@ -13398,13 +13422,17 @@ int elab_method_vis_held_from(Compiler *c, int cls, const char *name, int sg, Lo
    takes it either to have run or not: one surely not reached has not, as any partial statement's; one not known to
    be reached keeps every name's versions and copies (lr_word_reach), its statement as any partial statement. */
 static int lr_word_runs(Compiler *c, const LrDef *v, const LrStmt *s) {
-  if (!(v->kind == LR_VIS && !v->body && !v->cut && s && s->region >= 0 && s->fpartial && !s->fmay && !s->may && !s->skip &&
-        !s->unsure && lr_word_reach_limits(c->nt, v->node)))
-    return 0;
-  /* (whether the word's arguments are all literal names, asked once for the word, not for each of its entries) */
-  long long lit = nt_int(c->nt, v->node, "word_literal", 0);
-  if (!lit) nt_node_set_int((NodeTable *)c->nt, v->node, "word_literal", lit = lr_word_is_mf(c->nt, v->node) || lr_body_word(c->nt, v->node) ? 1 : 2);
-  return lit == 1;
+  return v->kind == LR_VIS && !v->body && !v->cut && lr_word_stmt_runs(c, v->node, s);
+}
+/* ...is def entry v an argument of a visibility word that runs (lr_word_stmt_runs)? The arguments run ahead of the word and
+   whatever it raises for, so the def is made whenever the word's statement is reached, with the visibility the word gives it
+   (`private(:m, def m; end)`, `private(def a; end, :missing)`): applied, as the word is. */
+static int lr_def_arg_runs(Compiler *c, const LrDef *v) {
+  if (v->kind != LR_DEF || v->body || v->node < 0) return 0;
+  const int *par = lr_par(c, 1);
+  int a = par ? par[v->node] : -1, w = a >= 0 && nt_kind(c->nt, a) == NK_ArrayNode ? par[a] : a;
+  if (w >= 0 && nt_kind(c->nt, w) == NK_ArgumentsNode) w = par[w];
+  return w >= 0 && nt_kind(c->nt, w) == NK_CallNode && lr_word_stmt_runs(c, w, lr_stmt_of(c->lrec, w));
 }
 /* Does the registration apply entry v as the load phase ends
    (lr_stmt_applied, at v's point now) */
@@ -13412,6 +13440,11 @@ static int lr_applied(Compiler *c, const LrDef *v) {
   LoadRecord *r = elab_fresh(c);
   if (v->absent || v->unplaced == LR_UNPLACED_LATER) return 0;
   const LrStmt *s = lr_stmt_of(r, v->node);
+  if (v->kind == LR_DEF && s && lr_def_arg_runs(c, v)) {   /* (a def a running word takes: its statement's partial run aside) */
+    LrStmt whole = *s;
+    whole.fpartial = 0;
+    return lr_def_applied(c, v->node, &whole, v->unplaced, v->may);
+  }
   if (v->kind == LR_DEF || v->kind == LR_DEFINE_METHOD) return lr_def_applied(c, v->node, s, v->unplaced, v->may);
   if (lr_word_runs(c, v, s)) {   /* (the names it reaches, its statement's partial run aside: lr_word_reach) */
     LrStmt whole = *s;

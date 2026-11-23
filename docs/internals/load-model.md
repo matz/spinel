@@ -378,7 +378,11 @@ Data's member, an entry no point places or a method body's, a chain the record
 does not hold to its end. The reach stops at an unknown name as at a missing
 one: the names from there on keep the answer they have without the word, which
 is how their entries read where the word is partial (`LrDef.cut`: the word
-names them, and has not changed them). A
+names them, and has not changed them). A def among the word's arguments is
+a method the word names (the arguments run first, `private(:m, def m; end)`)
+and the name of one element of it, in the reach; where the word runs
+(`lr_def_arg_runs`) the def is made whenever the statement is reached, with the
+word's visibility, as the word is (`private(def a; end, :missing)`). A
 module_function copies the names only where it makes every name private
 and is given no Array (`copies`); the word writes their visibility cells
 before it raises (`emit_vis_word_absent`, which asks the call plan whether

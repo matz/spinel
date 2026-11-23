@@ -9038,7 +9038,7 @@ static void seed_module_function_copies(Compiler *c, const Scope *ms, const char
 /* ---- inline RBS (docs/inline-rbs.md) ----
    The parser attaches each applied annotation to its node as attributes
    (rbs_ret / rbs_params on a def, rbs_ivar on an attr_* call,
-   rbs_ivars on a class body; rbs_line / rbs_col / rbs_file name the
+   rbs_ivars on a class or module node; rbs_line / rbs_col / rbs_file name the
    comment, and rbs_names spells each tag the way the comment wrote it).
    apply_inline_rbs pins them through the same helpers as the seed file, so
    the slots and flags are the ones the equivalent --rbs signature gives; the
@@ -9432,7 +9432,7 @@ static void apply_inline_rbs(Compiler *c) {
                   nt_type(nt, id) ? nt_type(nt, id) : "node", "");
     }
     if (nt_str(nt, id, "rbs_ivars")) {
-      int ci = c->node_cbody[id];
+      int ci = (k == NK_ClassNode || k == NK_ModuleNode) ? elab_header_class(c, id, NULL, NULL) : c->node_cbody[id];
       char *list = strdup(nt_str(nt, id, "rbs_ivars"));
       for (char *e = strtok(list, ","); e; e = strtok(NULL, ",")) {
         /* @x=<tag>@<line>@<file>@<col> */

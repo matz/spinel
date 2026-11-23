@@ -512,33 +512,7 @@ else {
 static void collect_aliases(rbs_parser_t *p, rbs_node_t *node,
                             const char *scope, const char *outer_scope, bool declare) {
     if (node->type == RBS_AST_DECLARATIONS_TYPE_ALIAS) {
-        rbs_ast_declarations_type_alias_t *a = (rbs_ast_declarations_type_alias_t *) node;
-        if (a->type_params != NULL && a->type_params->length > 0) return;
-        sbuf_t leaf, qualified, tag;
-        sbuf_init(&leaf);
-        sbuf_init(&qualified);
-        sbuf_init(&tag);
-        name_of_type_name(p, a->name, &leaf);
-        if (scope != NULL && scope[0] != '\0') {
-            sbuf_append_cstr(&qualified, scope);
-            sbuf_append_cstr(&qualified, "_");
-        }
-        sbuf_append(&qualified, leaf.buf, leaf.len);
-        if (declare) {
-            alias_declare(qualified.buf);
-        }
-else if (alias_find(qualified.buf) == NULL) {
-            const char *sv_self_scope = g_self_scope;
-            g_self_scope = (scope != NULL && scope[0] != '\0') ? scope : NULL;
-            g_alias_unresolved = false;
-            bool ok = map_type(p, a->type, outer_scope, &tag);
-            if (ok && !g_alias_unresolved) alias_add(qualified.buf, tag.buf);
-            g_alias_unresolved = false;
-            g_self_scope = sv_self_scope;
-        }
-        sbuf_free(&tag);
-        sbuf_free(&qualified);
-        sbuf_free(&leaf);
+        alias_register_decl(p, (rbs_ast_declarations_type_alias_t *) node, scope, outer_scope, declare);
         return;
     }
     sbuf_t leaf;

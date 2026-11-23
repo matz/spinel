@@ -423,14 +423,13 @@ else {
 /* ---- type aliases ------------------------------------------ */
 
 /* `type patch_t = Array[untyped]`, by qualified name, with the tag the
- * aliased type maps to. The extractor declares every alias name first
- * and fills the tags before its emit pass; a reference (`Array[patch_t]`)
- * then maps as the aliased type would. A name resolves among the DECLARED
- * aliases, so a nearer declaration wins over an outer one whatever the
- * order the files are read in; a declared alias whose tag is not known
- * yet is unresolved (g_alias_unresolved), not an outer one of its name.
- * The inline RBS reader declares none, so a reference stays out of the
- * subset there, as before. */
+ * aliased type maps to. Both the extractor and the inline RBS reader
+ * declare every alias name first and fill the tags to a fixpoint before
+ * mapping signatures; a reference (`Array[patch_t]`) then maps as the
+ * aliased type would. A name resolves among the DECLARED aliases, so a
+ * nearer declaration wins over an outer one whatever the order the files
+ * are read in; a declared alias whose tag is not known yet is unresolved
+ * (g_alias_unresolved), not an outer one of its name. */
 typedef struct { char *name; char *tag; } alias_entry_t;
 static alias_entry_t *aliases = NULL;
 static size_t aliases_len = 0;
@@ -491,6 +490,55 @@ size_t alias_count(void) {
 
 static bool alias_declared(const char *name) {
     return alias_entry(name) != NULL;
+}
+
+void alias_qualify_name(rbs_parser_t *p, rbs_type_name_t *tn, const char *scope, sbuf_t *out) {
+    sbuf_t leaf;
+    sbuf_init(&leaf);
+    name_of_type_name(p, tn, &leaf);
+    bool absolute = tn != NULL && tn->rbs_namespace != NULL && tn->rbs_namespace->absolute;
+    out->len = 0;
+    if (!absolute && scope != NULL && scope[0] != '\0') {
+        sbuf_append_cstr(out, scope);
+        sbuf_append_cstr(out, "_");
+    }
+    sbuf_append(out, leaf.buf, leaf.len);
+    sbuf_free(&leaf);
+}
+
+bool alias_register_decl(rbs_parser_t *p, rbs_ast_declarations_type_alias_t *decl,
+                         const char *scope, const char *outer_scope, bool declare) {
+    if (decl == NULL || (decl->type_params != NULL && decl->type_params->length > 0)) return false;
+    sbuf_t qualified, tag;
+    sbuf_init(&qualified);
+    sbuf_init(&tag);
+    alias_qualify_name(p, decl->name, scope, &qualified);
+    bool done = false;
+    if (declare) {
+        alias_declare(qualified.buf);
+        done = true;
+    }
+    else if (alias_find(qualified.buf) != NULL) {
+        done = true;
+    }
+    else {
+        const char *sv_self_scope = g_self_scope;
+        const char *sv_self_type = g_self_type;
+        g_self_scope = (scope != NULL && scope[0] != '\0') ? scope : NULL;
+        g_self_type = NULL;
+        g_alias_unresolved = false;
+        bool ok = map_type(p, decl->type, outer_scope, &tag);
+        if (ok && !g_alias_unresolved) {
+            alias_add(qualified.buf, tag.buf);
+            done = true;
+        }
+        g_alias_unresolved = false;
+        g_self_scope = sv_self_scope;
+        g_self_type = sv_self_type;
+    }
+    sbuf_free(&tag);
+    sbuf_free(&qualified);
+    return done;
 }
 
 /* Resolve a type name as a constant is looked up: an absolute one

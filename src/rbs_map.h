@@ -42,6 +42,9 @@ void alias_declare(const char *name);
 void alias_add(const char *name, const char *tag);
 const char *alias_find(const char *name);
 size_t alias_count(void);
+void alias_qualify_name(rbs_parser_t *p, rbs_type_name_t *tn, const char *scope, sbuf_t *out);
+bool alias_register_decl(rbs_parser_t *p, rbs_ast_declarations_type_alias_t *decl,
+                         const char *scope, const char *outer_scope, bool declare);
 extern bool g_alias_unresolved;
 
 /* The qualified name of the declaration whose members are being mapped;

@@ -92,11 +92,14 @@ annotations with ruby/rbs's default `untyped` signatures.
 | Skip a method annotation | `# @rbs skip` |
 | Trailing attribute type | `attr_reader :name, :title #: String` |
 | Standalone class/module-body ivar | `# @rbs @name: String`, separated from the next declaration by a blank line |
+| Type alias | `# @rbs type word_list = Array[String]` at the top level or in a class or module body |
 
 The supported types match `--rbs`: `Integer`, `Float`, `String`, `Symbol`,
 `bool`, `nil`, `untyped`, program classes, `Array[T]`, `Hash[K, V]`,
-`T?`, unions as boxed values, `singleton(C)`, the literals `true` and
-`false` (as `bool`), and `self` (or `instance`) in a class's instance
+`T?`, unions as boxed values, `singleton(C)`, non-generic type aliases
+(`# @rbs type word_list = Array[String]`, resolved by lexical scope to a
+fixpoint across declarations and files, with cycle detection, identically to
+`--rbs`), the literals `true` and `false` (as `bool`), and `self` (or `instance`) in a class's instance
 method, which is that class (`-> self` and `-> self?` in `class String` are
 `-> String` and `-> String?`); a `void` return is accepted and pins nothing (it says
 the value is unused, not what it is). So is a `top` or `boolish` (core's
@@ -147,11 +150,15 @@ body, and the other parameter and return types apply.
   parameter list. An endless method needs a leading signature.
 - Attribute types attach only after the `attr_reader`, `attr_writer`, or
   `attr_accessor` call. Leading types do not annotate attributes.
-- A class-body `# @rbs @x: T` applies only when its block is standalone
-  and the class/module body contains Ruby statements. Annotation-only bodies
-  have no analyzer node for the declaration and warn without a pin.
+- A class-body `# @rbs @x: T` applies when its block is standalone,
+  including in statementless (annotation-only) class and module bodies.
   A following method, attribute, or constant consumes an adjacent block
   without an ivar pin. Separate the ivar block with a blank source line.
+- A `# @rbs type name = T` alias applies at the top level or directly inside
+  a static `class` or `module` body (whether standalone or immediately above
+  another declaration). Generic type aliases (`# @rbs type box[T] = ...`),
+  cyclic or unmappable aliases, and aliases inside a method body, block, or
+  `class << self` warn and are ignored.
 - A def directly inside a class or module body's `class << self` is that
   class's method, and its signature applies as a `def self.m`'s. The other
   declarations of `class << self` (attributes, `@x` declarations, constants)
@@ -186,8 +193,8 @@ overridden return can remain inferred while supported parameter types apply.
 | Unseedable types: literals other than `true` and `false`, interfaces, tuples, records, procs nested in another type (`Array[^() -> void]`; a Proc parameter or return is left inferred, above), `class`, `self`/`instance` outside a class's instance method, type variables (but a builtin generic's own, above) | Warning; ignore the whole annotation |
 | Unknown program class, such as `Regexp` or `Array[Time]` (a builtin class with values of its own, such as `Time` or `File`, applies, and so do `Range` and an exception class: see [Type vocabulary](rbs-extract.md#type-vocabulary)) | Warning naming the type as written; ignore the whole annotation |
 | Positional kinds that differ from the method's (`(?Integer)` for `def m(x)`), or a destructuring parameter | Warning; ignore the whole signature |
-| Overloads, `...`, generic method signatures, and superclass/mixin type arguments | Warning; ignore the annotation |
-| Constants and type/module declarations that have no analyzer pin | Warning; ignore the annotation |
+| Overloads, `...`, generic method signatures, generic type aliases, and superclass/mixin type arguments | Warning; ignore the annotation |
+| Constants, cyclic or unmappable type aliases, and class/module declarations (generic classes, module self types) that have no analyzer pin | Warning; ignore the annotation |
 | Unattached annotations and unsupported placements | Warning with the reason; no pin |
 | Return of a method overridden by a related class | Warning; leave the return inferred and apply supported parameter types, as with `--rbs` |
 | Module methods copied through `include`, `extend`, or `prepend` | Warning; no pin reaches those per-class copies, as with `--rbs` |

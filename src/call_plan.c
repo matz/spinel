@@ -1488,11 +1488,8 @@ static void cplan_resolve_call(Compiler *c, int id, CallPlan *p) {
                       rt == TY_NIL ? CORE_NILCLASS : CORE_NUMERIC, p);
     if (p->mi >= 0) return;
   }
-  /* an Array or Hash reopen's own method of the name. With a block, the
-     reopen's only when the builtin arms do not keep the call: a yielding
-     reopen of a name the builtin surface has (`each`, `map`) stays the
-     builtin's loop; one of a name it lacks, or one that does not yield,
-     runs the reopen's method, through its proc form when it yields
+  /* an Array or Hash reopen's own method of the name, a yielding one with a
+     block too (`each`, `map`), through its proc form, as CRuby runs it
      (an_reopen_owner: the inference and the emitter decide alike) */
   if (ty_is_array(rt) || ty_is_obj_array(rt) || ty_is_hash(rt)) {
     int cn = ty_is_hash(rt) ? CORE_HASH : CORE_ARRAY;

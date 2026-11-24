@@ -37061,6 +37061,13 @@ static void emit_call_body_ordinary(Compiler *c, int id, Buf *b) {
      whole chain down once here rather than in each emitter -- the guard
      re-enters this same chain on the guarded temp with g_sn_skip set, and that
      pass lowers normally. */
+  /* a reopened builtin's yielding method of the name runs with the call's
+     block, through its proc form, as in CRuby: the builtin loops below are
+     no answer for it (emit_call_reopen_arms) */
+  if (nt_ref(nt, id, "block") >= 0 && !nt_safe_nav(nt, id) && call_reaches_reopen_pf(c, id)) {
+    int rr = nt_ref(nt, id, "receiver");
+    if (rr >= 0 && emit_call_reopen_arms(c, id, b, nt, nt_str(nt, id, "name"), rr, comp_ntype(c, rr))) return;
+  }
   /* a boxed receiver's `each { }` that splits on its kind answers from
      whichever arm runs (emit_iter_value_expr) */
   if (each_split_applies(c, id) && !sn_guard_pending(c, id) &&

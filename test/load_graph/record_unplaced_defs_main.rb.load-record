@@ -1,19 +1,35 @@
-load record: 4 points, 1 regions
+load record: 6 points, 1 regions
 r0 #0 f0 ProgramNode line 6
 r0 #1 f0 ModuleNode M line 6
   r0 #2 f0 DefNode hi line 6
 r0 #3 f0 CallNode p line 7
+r0 #4 f0 CallNode p line 16
+r0 #5 f0 CallNode p line 26
 class M: body#1
 class G: body#3 include M#3
+class H: body#4 include M#4
+class J: body#5
 entity M: owner main leaf M
 entity G: owner main leaf G
+entity H: owner main leaf H
+entity J: owner main leaf J
 const M: write#1
-M#hi: def#2 end=yes
+M#hi: def#2 runs=never end=yes
 const G: write#3
-G#z: reader#3 unplaced end=no
-G#y: def#3 unplaced vis#3 unplaced private end=no
-G#w: alias#3 unplaced (y: none) private end=no
-G#hi: undef#3 unplaced end=yes
-post: after #3
+G#z: reader#3 end=yes
+G#y: def#3 vis#3 private end=yes
+G#w: alias#3 (y: def#3) private end=yes
+G#hi: undef#3 end=no
+const J: write#5
+H#z: reader#4 unplaced end=no
+H#y: def#4 unplaced vis#4 unplaced private end=no
+H#w: alias#4 unplaced (y: none) private end=no
+H#hi: undef#4 unplaced end=yes
+J#initialize: def#5 unplaced private end=no
+J#plain: def#5 unplaced end=no
+post: after #5
 extent def hi line 6: from=never sure=never count=zero kept=no
 extent def y line 10: from=never sure=never count=zero kept=no
+extent def y line 19: from=never sure=never count=zero kept=no
+extent def initialize line 27: from=never sure=never count=zero kept=no
+extent def plain line 28: from=never sure=never count=zero kept=no

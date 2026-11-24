@@ -119,13 +119,29 @@ a public keyword `def` whose class the record resolves, a version with the
 body's extent (`LrDef.body`, `lr_version_order`, "Versions bodies make"
 below); a constant write marked `LR_LATE`, held as a possible write
 (`lr_record_unplaced`); and a visibility word that runs later or is sent,
-held on the table it names (`lr_unplaced_words`). A class body that is no
-statement of the load phase (in a lambda, in a block kept to run later, a
-class builder's block in an expression) is its class's body all the same:
-its public defs are versions of the body around it, and its other
-definitions are recorded after the placed bodies, `unplaced`, so the
-registrations apply them but no query at a point sees them
-(`lr_record_unplaced`, `lr_body_defs`).
+held on the table it names (`lr_unplaced_words`). A class or module body in a
+value (`z = [(class K; def m = 1; end; 0)]`, an argument, a multiple
+assignment's value, a hash value, a parenthesised value) that surely runs
+whenever its statement does (`lr_runs_up_to`: no condition, rescue modifier,
+block, lambda, safe navigation or `defined?` between) is placed at that
+statement: its forms are recorded as a top-level body's are, ordered against
+the calls the statement holds by `lr_run_order`, up to the first statement
+that is a `raise` or may jump out of the body (`lr_nested_body`). A placed body
+is held when one of the versions it recorded (`LrNbody.h`: every form that
+makes a method, a def, an alias, an attr, a definer call, an undef or a copy,
+with each name it defines) is of `initialize` or a kin of it, which the plan
+answers no body version of, or of a name that has an unplaced def on its side
+in a class that may share the version's chain. A body held makes unplaced
+defs of its own versions, so the holds close over the names they reach in one
+worklist (`lr_nested_hold_close`); the record is then made again with the held
+bodies unplaced, and asked once more (`lr_nested_hold`). A class body that is no
+statement of the load phase otherwise (in a lambda, in a block kept to run
+later, a class builder's block in an expression, a body behind a condition,
+a body held) is its class's body all the same: its public defs are versions
+of the body around it, and its other definitions (and the forms of a placed
+body past a `raise` or a jump) are recorded after the placed bodies,
+`unplaced`, so the registrations apply them but no query at a point sees
+them (`lr_record_unplaced`, `lr_body_defs`).
 
 Some answers wait for the whole record. A file in a region after region 0
 is walked after everything the entry does, so the answers recorded on the

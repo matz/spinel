@@ -874,7 +874,8 @@ void sp_Fiber_storage_set(sp_Fiber*f,sp_sym k,sp_RbVal v){
       if (s->cap == -1) {
         sp_FiberHashStore *h = (sp_FiberHashStore *)s;
         sp_RbVal key = { .tag = SP_TAG_SYM, .v.i = k };
-        h->ops->remove(h->hash, key);
+        /* parenthesized: lib/win32/stdio.h defines remove(p) as a function-like macro */
+        (h->ops->remove)(h->hash, key);
       }
       else sp_FiberStore_delete(s, k);
     }

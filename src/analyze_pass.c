@@ -3018,7 +3018,7 @@ static int widen_arg_hash(Compiler *c, int arg);
 static int widen_returned_hashes(Compiler *c, int call);
 int widen_arg_array(Compiler *c, int arg);
 static int widen_boxed_array_sources(Compiler *c, int v, TyKind elem, int depth);
-static int widen_proc_call_hash_args(Compiler *c, int lit, const char *pn, TyKind hk, TyKind hv);
+static int widen_block_param_hash_args(Compiler *c, Scope *sc, const char *nm, TyKind hk, TyKind hv);
 
 /* Widens the parameters class `cls` assigns `inm` (`@c = a`) to the
    general Array, as a push through the parameter itself would, with its
@@ -4509,8 +4509,7 @@ static int infer_write_container_usage(Compiler *c, const NodeTable *nt, int nfb
          only a Hash argument widens here (widen_hash_arg_for_store) */
       if (lv && lv->is_block_param && lv->type == TY_POLY && is_idx_write && !is_push && !is_splice &&
           kt != TY_UNKNOWN && kt != TY_POLY && vt != TY_UNKNOWN && !g_infer_optimistic) {
-        int plit = local_proc_literal_param_of(c, lsc, rnm);
-        if (plit >= 0) changed |= widen_proc_call_hash_args(c, plit, rnm, (TyKind)kt, (TyKind)vt);
+        changed |= widen_block_param_hash_args(c, lsc, rnm, (TyKind)kt, (TyKind)vt);
       }
       if (!lv || lv->is_block_param) continue;
       /* A parameter is typed from its call sites, not from its uses -- except
@@ -8603,6 +8602,7 @@ static int widen_array_sources(Compiler *c, int v) {
    Returns 1 on a change. */
 /* The callee parameter a reverse binding widens on behalf of (-1: none). */
 static int widen_iter_param_elems(Compiler *c, Scope *sc, const char *nm, TyKind elem, int depth);
+static int widen_block_param_arrays(Compiler *c, Scope *sc, const char *nm, TyKind elem, int depth);
 static int g_wcause_scope = -1;
 static const char *g_wcause_name = NULL;
 int widen_arg_array(Compiler *c, int arg) {
@@ -8627,6 +8627,8 @@ int widen_arg_array(Compiler *c, int arg) {
     if (al->is_block_param) {
       if (!wbas_shared) wbas_touch();
       int ch = widen_iter_param_elems(c, asc, an, TY_POLY, 0);
+      /* ...and what the sites that bind it pass there */
+      ch |= widen_block_param_arrays(c, asc, an, TY_POLY, 0);
       if (!wbas_shared) wbas_touch();
       return ch;
     }
@@ -8660,44 +8662,77 @@ const char *block_param_name(Compiler *c, int block, int idx);
 static int widen_boxed_elem_sources(Compiler *c, int r, TyKind elem, int depth);
 static int widen_boxed_sub_elem_sources(Compiler *c, int r, int k, TyKind elem, int depth);
 
-/* The calls whose literal block names a positional parameter, keyed by the
-   name and the block's scope: the calls a block parameter is bound by.
-   Rebuilt, as lw_shared_ix is, when the node table or the scope shape
-   moves; a scan of every call per lookup was quadratic in a program of many
-   blocks. */
-static struct { int cap, n; int *head, *next, *call, *idx, *scope; const char **name; } bp_ix;
+/* The named parameters of the literal blocks and the proc and lambda
+   literals, keyed by the name and the scope that holds them: for each, the
+   call whose block it is, or the literal (holder), its place
+   among the binders' parameters (pos: a positional of block_sig's order,
+   np + k for keyword k), and for a call's leading
+   required named from the first one on its index (idx, else -1: what an
+   element iterator yields it). A destructuring parameter is a required
+   the block takes apart by a multiple assignment by now
+   (LW_BLOCK_DESTRUCTURE_PARAMS). Rebuilt, as lw_shared_ix is, when the node
+   table or the scope shape moves; a scan of every call per lookup was
+   quadratic in a program of many blocks. */
+static struct { int cap, n, nalloc; int *head, *next, *call, *idx, *pos, *scope; const char **name; } bp_ix;
 static const NodeTable *bp_ix_nt = NULL;
 static int bp_ix_ntc = -1;
 static unsigned bp_ix_gen = 0;
+static void bp_ix_add(int holder, int idx, int pos, int sc, const char *name) {
+  if (!name) return;
+  if (bp_ix.n == bp_ix.nalloc) {
+    bp_ix.nalloc = bp_ix.nalloc ? bp_ix.nalloc * 2 : 64;
+    size_t z = (size_t)bp_ix.nalloc;
+    int **iv[5] = { &bp_ix.next, &bp_ix.call, &bp_ix.idx, &bp_ix.pos, &bp_ix.scope };
+    for (int i = 0; i < 5; i++) {
+      int *nv = realloc(*iv[i], sizeof(int) * z);
+      if (!nv) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      *iv[i] = nv;
+    }
+    const char **nn = realloc(bp_ix.name, sizeof(char *) * z);
+    if (!nn) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    bp_ix.name = nn;
+  }
+  int k = bp_ix.n++;
+  bp_ix.call[k] = holder; bp_ix.idx[k] = idx; bp_ix.pos[k] = pos;
+  bp_ix.scope[k] = sc; bp_ix.name[k] = name;
+}
+/* Every parameter of holder's, whose parameters node is params. */
+static void bp_ix_add_holder(Compiler *c, int holder, int params, int lambda, int sc, int iter) {
+  const NodeTable *nt = c->nt;
+  BlockSig s;
+  block_sig(c, params, lambda, &s);
+  int np = s.P + s.O + s.Q, named = iter;
+  for (int i = 0; i < np; i++) {
+    const char *nm = block_sig_name(c, &s, i);
+    if (i < s.P && !nm) named = 0;
+    bp_ix_add(holder, i < s.P && named ? i : -1, i, sc, nm);
+  }
+  for (int k = 0; k < s.nk; k++) bp_ix_add(holder, -1, np + k, sc, block_sig_kw_name(c, &s, k));
+}
 static int bp_ix_first(Compiler *c, const char *name, int scope) {
   const NodeTable *nt = c->nt;
   unsigned gen = comp_scope_index_gen();
   if (!comp_scope_index_is_frozen() || bp_ix_nt != nt || bp_ix_ntc != nt->count || bp_ix_gen != gen) {
-    free(bp_ix.head); free(bp_ix.next); free(bp_ix.call); free(bp_ix.idx); free(bp_ix.scope); free(bp_ix.name);
-    int n = 0, cap = 16;
-    NT_FOREACH_KIND(nt, NK_CallNode, call) {
-      int blk = nt_ref(nt, call, "block");
-      if (blk < 0 || nt_kind(nt, blk) != NK_BlockNode) continue;
-      for (int bi = 0; block_param_name(c, blk, bi); bi++) n++;
-    }
-    while (cap < n * 2) cap <<= 1;
-    bp_ix.cap = cap; bp_ix.n = 0;
-    bp_ix.head = malloc(sizeof(int) * cap);
-    for (int i = 0; i < cap; i++) bp_ix.head[i] = -1;
-    bp_ix.next = malloc(sizeof(int) * (n + 1)); bp_ix.call = malloc(sizeof(int) * (n + 1));
-    bp_ix.idx = malloc(sizeof(int) * (n + 1)); bp_ix.scope = malloc(sizeof(int) * (n + 1));
-    bp_ix.name = malloc(sizeof(char *) * (n + 1));
+    free(bp_ix.head);
+    bp_ix.n = 0;
     NT_FOREACH_KIND(nt, NK_CallNode, call) {
       int blk = nt_ref(nt, call, "block");
       if (blk < 0 || nt_kind(nt, blk) != NK_BlockNode) continue;
       int sc = (int)(comp_scope_of(c, blk) - c->scopes);
-      const char *bp;
-      for (int bi = 0; (bp = block_param_name(c, blk, bi)) && bp_ix.n < n; bi++) {
-        int k = bp_ix.n++;
-        unsigned h = lw_hash(bp, sc) & (unsigned)(cap - 1);
-        bp_ix.call[k] = call; bp_ix.idx[k] = bi; bp_ix.scope[k] = sc; bp_ix.name[k] = bp;
-        bp_ix.next[k] = bp_ix.head[h]; bp_ix.head[h] = k;
-      }
+      int lambda = is_proc_create(c, call) && is_lambda_create(c, call);
+      bp_ix_add_holder(c, call, nt_ref(nt, blk, "parameters"), lambda, sc, 1);
+    }
+    NT_FOREACH_KIND(nt, NK_LambdaNode, lam)
+      bp_ix_add_holder(c, lam, a_proc_params_node(c, lam), 1, (int)(comp_scope_of(c, lam) - c->scopes), 0);
+    int cap = 16;
+    while (cap < bp_ix.n * 2) cap <<= 1;
+    bp_ix.cap = cap;
+    bp_ix.head = malloc(sizeof(int) * (size_t)cap);
+    if (!bp_ix.head) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    for (int i = 0; i < cap; i++) bp_ix.head[i] = -1;
+    for (int k = 0; k < bp_ix.n; k++) {
+      unsigned h = lw_hash(bp_ix.name[k], bp_ix.scope[k]) & (unsigned)(cap - 1);
+      bp_ix.next[k] = bp_ix.head[h]; bp_ix.head[h] = k;
     }
     bp_ix_nt = nt; bp_ix_ntc = nt->count; bp_ix_gen = gen;
   }
@@ -8806,15 +8841,7 @@ int widen_hash_arg_for_store(Compiler *c, int arg, TyKind hk, TyKind hv) {
   if (fold_evidence(&folded, 0, 0, hk, hv) && folded == at) return 0;
   return widen_arg_hash(c, arg);
 }
-static int widen_proc_call_args_m(Compiler *c, int lit, const char *pn, TyKind elem, int depth,
-                                  int hash, TyKind hk, TyKind hv);
-static int widen_proc_call_args(Compiler *c, int lit, const char *pn, TyKind elem, int depth) {
-  return widen_proc_call_args_m(c, lit, pn, elem, depth, 0, TY_UNKNOWN, TY_UNKNOWN);
-}
-static int widen_proc_call_hash_args(Compiler *c, int lit, const char *pn, TyKind hk, TyKind hv) {
-  return widen_proc_call_args_m(c, lit, pn, TY_UNKNOWN, 0, 1, hk, hv);
-}
-/* The calls that may run proc literal `lit`, as widen_proc_call_args_m
+/* The calls that may run proc literal `lit`, as block_param_values
    reads them: each a run of ints `u, ms, pj, n, cands[n]`, where ms is -1
    for a call whose receiver carries the literal, else the method whose
    parameter pj the receiver reads, and cands its candidate callers that pass
@@ -9005,40 +9032,6 @@ static int *proc_call_sites(Compiler *c, int lit, int *n) {
   memcpy(cp, pcs_pool + at + 1, sizeof(int) * (size_t)*n);
   return cp;
 }
-static int widen_proc_call_args_m(Compiler *c, int lit, const char *pn, TyKind elem, int depth,
-                                  int hash, TyKind hk, TyKind hv) {
-  const NodeTable *nt = c->nt;
-  int ppn = a_proc_params_node(c, lit), rn = 0;
-  const int *rq = ppn >= 0 ? nt_arr(nt, ppn, "requireds", &rn) : NULL;
-  int k = -1;
-  for (int i = 0; i < rn && k < 0; i++) if (sp_streq(nt_str(nt, rq[i], "name"), pn)) k = i;
-  if (k < 0 || depth > 6) return 0;
-  int ch = 0, ns = 0;
-  int *sites = proc_call_sites(c, lit, &ns);
-  for (int x = 0; x < ns; x += 4 + sites[x + 3]) {
-    int u = sites[x], msi = sites[x + 1], pj = sites[x + 2], nc2 = sites[x + 3];
-    int a = nt_ref(nt, u, "arguments"), ac = 0;
-    const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
-    if (k >= ac) continue;
-    int plain = 1;
-    for (int q = 0; q <= k && plain; q++)
-      plain = nt_kind(nt, av[q]) != NK_SplatNode && nt_kind(nt, av[q]) != NK_KeywordHashNode;
-    if (!plain) continue;
-    int hands = msi < 0;
-    for (int i = 0; i < nc2 && !hands; i++) {
-      int u2 = sites[x + 4 + i];
-      if (backprop_call_target(c, u2) != msi) continue;
-      int a2 = nt_ref(nt, u2, "arguments"), ac2 = 0;
-      const int *av2 = a2 >= 0 ? nt_arr(nt, a2, "arguments", &ac2) : NULL;
-      int arg = call_param_arg(c, &c->scopes[msi], av2, ac2, pj);
-      hands = arg >= 0 && proc_lit_carrier(c, arg, lit);
-    }
-    if (hands)
-      ch |= hash ? widen_hash_arg_for_store(c, av[k], hk, hv) : widen_boxed_array_sources(c, av[k], elem, depth + 1);
-  }
-  free(sites);
-  return ch;
-}
 /* The walk follows every write of a local, to depth 6, and the writes of
    one local reach the same values again and again: unmemoized, a function
    of W writes to one local walked W^6 paths. A visit that changed nothing
@@ -9185,7 +9178,7 @@ static int widen_iter_param_elems(Compiler *c, Scope *sc, const char *nm, TyKind
   const NodeTable *nt = c->nt;
   int si = (int)(sc - c->scopes), ch = 0;
   for (int e = bp_ix_first(c, nm, si); e >= 0; e = bp_ix.next[e]) {
-    if (bp_ix.scope[e] != si || !sp_streq(bp_ix.name[e], nm)) continue;
+    if (bp_ix.scope[e] != si || bp_ix.idx[e] < 0 || !sp_streq(bp_ix.name[e], nm)) continue;
     int call = bp_ix.call[e], bi = bp_ix.idx[e];
     int r = nt_ref(nt, call, "receiver");
     const char *cn = nt_str(nt, call, "name");
@@ -9215,6 +9208,54 @@ static int widen_iter_param_elems(Compiler *c, Scope *sc, const char *nm, TyKind
   }
   return ch;
 }
+/* Every value the sites that bind block or proc-literal parameter `nm` of
+   scope `sc` pass it (block_param_values), for each block and literal of
+   the scope with a parameter of the name. Answers the OR of what fn
+   answers. */
+static int block_param_index_values(Compiler *c, Scope *sc, const char *nm, BlockValueVisit fn, void *ctx) {
+  int si = (int)(sc - c->scopes), ch = 0, n = 0, cap = 8;
+  int *hv = malloc(sizeof(int) * 2 * (size_t)cap);
+  if (!hv) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  /* (copied out first: a walk fn starts may rebuild the index) */
+  for (int e = bp_ix_first(c, nm, si); e >= 0; e = bp_ix.next[e]) {
+    if (bp_ix.scope[e] != si || !sp_streq(bp_ix.name[e], nm)) continue;
+    if (n == cap) {
+      cap *= 2;
+      int *nv = realloc(hv, sizeof(int) * 2 * (size_t)cap);
+      if (!nv) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      hv = nv;
+    }
+    hv[2 * n] = bp_ix.call[e]; hv[2 * n + 1] = bp_ix.pos[e]; n++;
+  }
+  for (int i = 0; i < n; i++) ch |= block_param_values(c, hv[2 * i], hv[2 * i + 1], fn, ctx);
+  free(hv);
+  return ch;
+}
+/* The arrays among what binds block parameter nm, widened where they are
+   built: a value itself, or its elements (BV_*). */
+typedef struct { TyKind elem; int depth; } WbpCtx;
+static int wbp_array(Compiler *c, int v, int how, void *ctx) {
+  const WbpCtx *x = ctx;
+  if (how == BV_WHOLE) return widen_boxed_array_sources(c, v, x->elem, x->depth + 1);
+  return widen_boxed_elem_sources(c, v, x->elem, x->depth + 1);
+}
+static int widen_block_param_arrays(Compiler *c, Scope *sc, const char *nm, TyKind elem, int depth) {
+  if (depth > 6) return 0;
+  WbpCtx x = { elem, depth };
+  return block_param_index_values(c, sc, nm, wbp_array, &x);
+}
+/* The Hashes that bind boxed block parameter nm, written as a Hash
+   (`proc { |t| t[:k] = 2 }`): each takes the key and the value, as a
+   method's boxed parameter's callers' do (widen_hash_arg_for_store). */
+typedef struct { TyKind hk, hv; } WbhCtx;
+static int wbp_hash(Compiler *c, int v, int how, void *ctx) {
+  const WbhCtx *x = ctx;
+  return how == BV_WHOLE ? widen_hash_arg_for_store(c, v, x->hk, x->hv) : 0;
+}
+static int widen_block_param_hash_args(Compiler *c, Scope *sc, const char *nm, TyKind hk, TyKind hv) {
+  WbhCtx x = { hk, hv };
+  return block_param_index_values(c, sc, nm, wbp_hash, &x);
+}
 /* The read of boxed local `nm` of scope `sc` (widen_boxed_array_sources):
    what it is written, bound or handed. The same for every read of it. */
 /* One value a write of local nm or a multiple assignment's target of it
@@ -9238,9 +9279,9 @@ static int widen_boxed_local_sources(Compiler *c, Scope *sc, const char *nm, Loc
   int ch = 0;
   if (lv->is_block_param) {
     ch |= widen_iter_param_elems(c, sc, nm, elem, depth);
-    /* a proc or lambda literal's parameter: what its calls pass there */
-    int lit = local_proc_literal_param_of(c, sc, nm);
-    if (lit >= 0) ch |= widen_proc_call_args(c, lit, nm, elem, depth + 1);
+    /* what the sites that bind it pass there: a proc or lambda literal's
+       call */
+    ch |= widen_block_param_arrays(c, sc, nm, elem, depth + 1);
   }
   /* a `for` variable, bound as a block parameter is */
   NT_FOREACH_KIND(nt, NK_ForNode, f) {
@@ -14924,6 +14965,63 @@ static int bs_type_site(Compiler *c, int site, const int *argv, int argc, void *
   return 0;
 }
 
+/* The values one site's arguments av (ac of them, a trailing keyword hash
+   included) bind parameter `at` of s with (a positional of block_sig's
+   order, np + k for keyword k), placed as block_site_types places them (block_site_place), each handed
+   to fn: BV_WHOLE for the value itself, BV_ELEM for its elements (a
+   splat's operand, a lone Array taken apart over the parameters). A
+   default the parameter may take is one of its values too, and a count
+   the run time lays out hands every value a gathered one may be, as
+   typing joins them. Answers the OR of what fn answers. */
+int block_site_values(Compiler *c, const BlockSig *s, const int *av, int ac, int at,
+                      BlockValueVisit fn, void *ctx) {
+  const NodeTable *nt = c->nt;
+  int P = s->P, O = s->O, np = P + O + s->Q, ch = 0;
+  int kwh = -1;
+  if (s->kw && nt_argv_kwh(nt, av, ac) >= 0) kwh = av[--ac];
+  if (at >= np) {
+    int kp = block_sig_kw(c, s, at - np);
+    if (kp < 0) return 0;
+    int vn = kwh >= 0 ? ie_kwhash_value(c, kwh, nt_wname(nt, kp)) : -1;
+    if (vn >= 0) return fn(c, vn, BV_WHOLE, ctx);
+    return nt_kind(nt, kp) == NK_OptionalKeywordParameterNode ? fn(c, nt_ref(nt, kp, "value"), BV_WHOLE, ctx) : 0;
+  }
+  BlockPlace pl;
+  block_site_place(c, s, av, ac, kwh, &pl);
+  int sure = 1;
+  if (pl.spread) {
+    /* the lone value's elements, or (whole) the value itself */
+    if (ac >= 1 && nt_kind(nt, av[0]) != NK_SplatNode) {
+      ch |= fn(c, av[0], BV_ELEM, ctx);
+      if (pl.whole) ch |= fn(c, av[0], BV_WHOLE, ctx);
+    }
+    sure = 0;
+  }
+  else if (pl.gather) {
+    /* a leading required before every splat takes its own value; any other
+       parameter may take any of them */
+    int first = ac;
+    for (int k = 0; k < ac && first == ac; k++) if (nt_kind(nt, av[k]) == NK_SplatNode) first = k;
+    int own = at < P && at < first;
+    for (int k = 0; k < ac; k++) {
+      if (own && k != at) continue;
+      if (nt_kind(nt, av[k]) == NK_SplatNode) ch |= fn(c, nt_ref(nt, av[k], "expression"), BV_ELEM, ctx);
+      else if (!(k == ac - 1 && kwh_only_spreads(nt, av[k]))) ch |= fn(c, av[k], BV_WHOLE, ctx);
+    }
+    sure = own;
+  }
+  else {
+    int vi = at < P ? at : at < P + O ? (at - P < pl.ot ? at : -1) : pl.ps + (at - P - O);
+    if (vi >= 0 && vi < ac) ch |= fn(c, av[vi], BV_WHOLE, ctx);
+    else sure = 0;
+  }
+  if (at >= P && at < P + O && (!sure || pl.gather)) {
+    int opn = 0; const int *opts = nt_arr(nt, s->pn, "optionals", &opn);
+    if (at - P < opn) ch |= fn(c, nt_ref(nt, opts[at - P], "value"), BV_WHOLE, ctx);
+  }
+  return ch;
+}
+
 int a_proc_params_node(Compiler *c, int create); /* forward decl */
 
 /* Follow a chain of pure `...` forwarders (a method whose whole body is a
@@ -18473,6 +18571,52 @@ static int block_bind_plan(Compiler *c, int id, int block, int mi, int ym, int y
   kept |= block_dispatch_bindings(c, id, mi, ym, seen, bs_type_site, &fx);
   free(seen);
   return kept;
+}
+
+/* Every value that binds parameter `at` (block_site_values) of a proc or
+   lambda literal `holder`, at the calls that run it (proc_call_sites), as
+   far as they show them: a Proc handed where no call shows binds what it
+   binds unseen. Answers the OR of what fn answers. */
+typedef struct { BlockSig s; int at, ch; BlockValueVisit fn; void *ctx; } BpvCtx;
+static int bpv_site(Compiler *c, int site, const int *argv, int argc, void *ctx) {
+  (void)site;
+  BpvCtx *x = ctx;
+  x->ch |= block_site_values(c, &x->s, argv, argc, x->at, x->fn, x->ctx);
+  return 0;
+}
+static void bpv_proc_sites(Compiler *c, int lit, BpvCtx *x) {
+  const NodeTable *nt = c->nt;
+  int ns = 0;
+  int *sites = proc_call_sites(c, lit, &ns);
+  for (int i = 0; i < ns; i += 4 + sites[i + 3]) {
+    int u = sites[i], msi = sites[i + 1], pj = sites[i + 2], nc2 = sites[i + 3];
+    /* a call on a method's parameter runs the literal where a caller of
+       the method hands it there */
+    int hands = msi < 0;
+    for (int j = 0; j < nc2 && !hands; j++) {
+      int u2 = sites[i + 4 + j];
+      if (backprop_call_target(c, u2) != msi) continue;
+      int a2 = nt_ref(nt, u2, "arguments"), ac2 = 0;
+      const int *av2 = a2 >= 0 ? nt_arr(nt, a2, "arguments", &ac2) : NULL;
+      int arg = call_param_arg(c, &c->scopes[msi], av2, ac2, pj);
+      hands = arg >= 0 && proc_lit_carrier(c, arg, lit);
+    }
+    if (!hands) continue;
+    int a = nt_ref(nt, u, "arguments"), ac = 0;
+    const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
+    bpv_site(c, u, av, ac, x);
+  }
+  free(sites);
+}
+int block_param_values(Compiler *c, int holder, int at, BlockValueVisit fn, void *ctx) {
+  const NodeTable *nt = c->nt;
+  BpvCtx x = { .at = at, .fn = fn, .ctx = ctx };
+  if (is_proc_create(c, holder)) {
+    block_sig(c, a_proc_params_node(c, holder), is_lambda_create(c, holder), &x.s);
+    bpv_proc_sites(c, holder, &x);
+    return x.ch;
+  }
+  return 0;
 }
 
 /* The blocks the last infer_block_params settled from a yielding method's

@@ -1,0 +1,13 @@
+one IO: trapped
+one IO: within 2s true
+two IOs: trapped
+two IOs: within 2s true
+error set: trapped
+error set: within 2s true
+wait_readable: trapped
+wait_readable: within 2s true
+counted: nil 1
+total timeout kept: true
+slow trap, one IO: nil true
+slow trap, error set: nil true
+slow trap, wait_readable: nil true

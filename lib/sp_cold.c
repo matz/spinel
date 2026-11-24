@@ -4749,7 +4749,8 @@ void sp_sig_blocking_raise(void) {
 /* A wait for a child has answered and its caller has stored $?: the signals
    recorded while it went on run now, as CRuby runs them on the way out of
    its wait (a trap for CHLD, which the child's own end records; a default
-   SIGINT, whose raise then leaves $? set). */
+   SIGINT, whose raise then leaves $? set). The IO waits call it after
+   EINTR (sp_io_trap_left). */
 void sp_sig_after_wait(void) {
   if (SP_ATOMIC_LOAD(&sp_sig_pending_flag, __ATOMIC_ACQUIRE)) sp_sig_run_pending();
 }
@@ -6558,6 +6559,53 @@ static void sp_io_sel_timeout(double timeout, struct timeval *tv, struct timeval
   tv->tv_usec = (suseconds_t)((timeout - (double)tv->tv_sec) * 1000000.0);
   *tvp = tv;
 }
+static double sp_io_now(void) {
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+}
+static double sp_io_left(double until, int *capped) {
+  double left = until - sp_io_now();
+  *capped = left > 86400.0;
+  return left > 86400.0 ? 86400.0 : left > 0.0 ? left : 0.0;
+}
+/* After EINTR: runs the traps delivered meanwhile (sp_sig_after_wait), and
+   returns what is left of the timeout once they are done. */
+static double sp_io_trap_left(double timeout, double until) {
+  sp_sig_after_wait();
+  if (timeout < 0.0) return -1.0;
+  double rest = until - sp_io_now();
+  return rest > 0.0 ? rest : 0.0;
+}
+/* poll(2) and select(2) for at most `timeout` seconds (negative: no limit),
+   a day at a time. After EINTR each returns -1 with errno EINTR and stores
+   the deadline, on the monotonic clock, in *until. The caller then waits
+   again for sp_io_trap_left, as sp_sleep_plain does; a trap proc can raise,
+   or close the IO. */
+static int sp_io_poll_timed(struct pollfd *pfs, nfds_t n, double timeout, double *until_out) {
+  double until = sp_io_now() + timeout;
+  for (;;) {
+    int capped = 0;
+    double t = timeout < 0.0 ? -1.0 : sp_io_left(until, &capped);
+    int r = SP_SIG_BLOCKING(poll(pfs, n, t < 0.0 ? -1 : (int)(t * 1000.0 + 0.5)));
+    if (r == 0 && capped) continue;
+    *until_out = until;
+    return r;
+  }
+}
+static int sp_io_select_timed(int nfds, fd_set *rs, fd_set *ws, fd_set *es, double timeout, double *until_out) {
+  double until = sp_io_now() + timeout;
+  fd_set r0 = *rs, w0 = *ws, e0 = *es;
+  for (;;) {
+    int capped = 0;
+    struct timeval tv, *tvp;
+    sp_io_sel_timeout(timeout < 0.0 ? -1.0 : sp_io_left(until, &capped), &tv, &tvp);
+    int r = SP_SIG_BLOCKING(select(nfds, rs, ws, es, tvp));
+    if (r == 0 && capped) { *rs = r0; *ws = w0; *es = e0; continue; }
+    *until_out = until;
+    return r;
+  }
+}
 #ifdef SP_THREADS
 /* Under the threaded runtime a timed single-fd wait parks the green thread
    (sp_sched_wait_io_timeout) instead of sitting in select(2): select blocks
@@ -6568,13 +6616,10 @@ static void sp_io_sel_timeout(double timeout, struct timeval *tv, struct timeval
 static short sp_io_park_events(sp_int kind) {
   return kind == 0 ? POLLIN : kind == 1 ? POLLOUT : kind == 3 ? (POLLIN | POLLOUT) : 0;
 }
-static double sp_io_now(void) {
-  struct timespec ts;
-  clock_gettime(CLOCK_MONOTONIC, &ts);
-  return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
-}
 #endif
-sp_File *sp_io_wait_events(sp_File *f, double timeout, sp_int kind) {SP_GC_ROOT(f);
+/* One wait of sp_io_wait_events. After EINTR it sets *intr and leaves the
+   deadline in *until, and sp_io_wait_events runs the traps and waits again. */
+static sp_File *sp_io_wait_events_pass(sp_File *f, double timeout, sp_int kind, int *intr, double *until) {
   SP_IO_OPEN(f);
   int fd = sp_io_readiness_fd(f, NULL);
 #ifdef SP_THREADS
@@ -6599,9 +6644,8 @@ sp_File *sp_io_wait_events(sp_File *f, double timeout, sp_int kind) {SP_GC_ROOT(
     pf.fd = fd; pf.revents = 0;
     pf.events = (short)((kind == 0 || kind == 3 ? POLLIN : 0) |
                         (kind == 1 || kind == 3 ? POLLOUT : 0));
-    int ms = timeout < 0.0 ? -1 : (int)(timeout * 1000.0 + 0.5);
-    int n;
-    do { n = SP_SIG_BLOCKING(poll(&pf, 1, ms)); } while (n < 0 && errno == EINTR);
+    int n = sp_io_poll_timed(&pf, 1, timeout, until);
+    if (n < 0 && errno == EINTR) { *intr = 1; return NULL; }
     if (n < 0) sp_raise_cls("IOError", "select failed");
     return n > 0 ? f : NULL;
   }
@@ -6609,12 +6653,19 @@ sp_File *sp_io_wait_events(sp_File *f, double timeout, sp_int kind) {SP_GC_ROOT(
   fd_set rs, ws, es;
   FD_ZERO(&rs); FD_ZERO(&ws); FD_ZERO(&es);
   FD_SET(fd, &es);
-  struct timeval tv, *tvp;
-  sp_io_sel_timeout(timeout, &tv, &tvp);
-  int n;
-  do { n = SP_SIG_BLOCKING(select(fd + 1, &rs, &ws, &es, tvp)); } while (n < 0 && errno == EINTR);
+  int n = sp_io_select_timed(fd + 1, &rs, &ws, &es, timeout, until);
+  if (n < 0 && errno == EINTR) { *intr = 1; return NULL; }
   if (n < 0) sp_raise_cls("IOError", "select failed");
   return n > 0 ? f : NULL;
+}
+sp_File *sp_io_wait_events(sp_File *f, double timeout, sp_int kind) {SP_GC_ROOT(f);
+  for (;;) {
+    int intr = 0;
+    double until;
+    sp_File *r = sp_io_wait_events_pass(f, timeout, kind, &intr, &until);
+    if (!intr) return r;
+    timeout = sp_io_trap_left(timeout, until);
+  }
 }
 
 /* IO.select(read, write, error, timeout) -> [ready_read, ready_write,
@@ -6644,7 +6695,8 @@ static int sp_select_pending(sp_RbVal v) {
   sp_File *f = sp_select_io_of(v);
   return f && f->fp && !f->closed && sp_io_pending(f) > 0;
 }
-sp_RbVal sp_io_select(sp_PolyArray *rd, sp_PolyArray *wr, sp_PolyArray *er, double timeout) {
+/* One wait of sp_io_select, as sp_io_wait_events_pass. */
+static sp_RbVal sp_io_select_pass(sp_PolyArray *rd, sp_PolyArray *wr, sp_PolyArray *er, double timeout, int *intr, double *until_out) {
   sp_PolyArray *src[3] = { rd, wr, er };
   sp_int pending = 0;
   for (sp_int i = 0; rd && i < rd->len; i++) pending += sp_select_pending(rd->data[i]);
@@ -6692,9 +6744,9 @@ sp_RbVal sp_io_select(sp_PolyArray *rd, sp_PolyArray *wr, sp_PolyArray *er, doub
         k++;
       }
     }
-    int ms = timeout < 0.0 ? -1 : (int)(timeout * 1000.0 + 0.5);
     int pn;
 #ifdef SP_THREADS
+    int ms = timeout < 0.0 ? -1 : (int)(timeout * 1000.0 + 0.5);
     /* Several handles park the same way one does: the thread waits through
        the scheduler for any of them and its OS worker runs other threads
        meanwhile. A poll here sat in the kernel on the worker, which capped a
@@ -6716,8 +6768,16 @@ sp_RbVal sp_io_select(sp_PolyArray *rd, sp_PolyArray *wr, sp_PolyArray *er, doub
     }
     else
 #endif
-    do { pn = SP_SIG_BLOCKING(poll(pfs, (nfds_t)nfd, ms)); } while (pn < 0 && errno == EINTR);
-    if (pn < 0) { free(pfs); sp_raise_cls("IOError", "select failed"); }
+    {
+      pn = sp_io_poll_timed(pfs, (nfds_t)nfd, timeout, until_out);
+      if (pn < 0) {
+        int eintr = errno == EINTR;
+        free(pfs);
+        if (!eintr) sp_raise_cls("IOError", "select failed");
+        *intr = 1;
+        return sp_box_nil();
+      }
+    }
     if (pn == 0 && !pending) { free(pfs); return sp_box_nil(); }
     /* Read back by DESCRIPTOR, not by entry. One IO can appear twice in a call
        -- a wrapper answering #to_io beside the IO itself -- and then two
@@ -6785,10 +6845,8 @@ sp_RbVal sp_io_select(sp_PolyArray *rd, sp_PolyArray *wr, sp_PolyArray *er, doub
     }
   }
 #endif
-  struct timeval tv, *tvp;
-  sp_io_sel_timeout(timeout, &tv, &tvp);
-  int n;
-  do { n = SP_SIG_BLOCKING(select(maxfd + 1, &sets[0], &sets[1], &sets[2], tvp)); } while (n < 0 && errno == EINTR);
+  int n = sp_io_select_timed(maxfd + 1, &sets[0], &sets[1], &sets[2], timeout, until_out);
+  if (n < 0 && errno == EINTR) { *intr = 1; return sp_box_nil(); }
   if (n < 0) sp_raise_cls("IOError", "select failed");
   if (n == 0 && !pending) return sp_box_nil();
   sp_PolyArray *out = sp_PolyArray_new();
@@ -6804,6 +6862,15 @@ sp_RbVal sp_io_select(sp_PolyArray *rd, sp_PolyArray *wr, sp_PolyArray *er, doub
     sp_PolyArray_push(out, sp_box_poly_array(part));
   }
   return sp_box_poly_array(out);
+}
+sp_RbVal sp_io_select(sp_PolyArray *rd, sp_PolyArray *wr, sp_PolyArray *er, double timeout) {SP_GC_ROOT(rd);SP_GC_ROOT(wr);SP_GC_ROOT(er);
+  for (;;) {
+    int intr = 0;
+    double until;
+    sp_RbVal r = sp_io_select_pass(rd, wr, er, timeout, &intr, &until);
+    if (!intr) return r;
+    timeout = sp_io_trap_left(timeout, until);
+  }
 }
 
 sp_int sp_io_sysopen(const char *path, sp_int flags, sp_int perm) {SP_GC_ROOT_STR(path);

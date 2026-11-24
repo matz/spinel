@@ -17,3 +17,10 @@ class WacrIvar
   def set: (Hash[String, String]) -> void
   def h: () -> Hash[String, untyped]
 end
+
+class WacrRec
+  def rec_hash: (Integer) -> Hash[String, String]
+  def run_hash: (?Hash[String, untyped]) -> Hash[String, untyped]
+  def rec_arr: (Integer) -> Array[String]
+  def run_arr: (?Array[untyped]) -> Array[untyped]
+end

@@ -1,5 +1,6 @@
 class HdscRouter
   def default_str_hash: () -> Hash[String, String]
+  def default_str_array: () -> Array[String]
   def maybe_hash: (bool) -> Hash[String, String]?
   def link_empty: (String, ?params: Hash[String, untyped]) -> String
   def link_str_lit: (String, ?params: Hash[String, untyped]) -> Hash[String, untyped]
@@ -13,6 +14,10 @@ class HdscRouter
   def frozen_const: (?params: Hash[String, untyped]) -> bool
   def join_frozen: (?items: Array[String]) -> Array[untyped]
   def count_poly: (?items: Array[untyped]) -> Integer
+  def frozen_helper_hash: (?params: Hash[String, untyped]) -> Array[untyped]
+  def branched_helper_hash: (bool, ?params: Hash[String, untyped]?) -> String
+  def frozen_helper_array: (?items: Array[untyped]) -> Array[untyped]
+  def branched_helper_array: (bool, ?items: Array[untyped]?) -> Integer
 end
 
 class HdscBox

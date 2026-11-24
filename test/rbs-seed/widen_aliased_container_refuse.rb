@@ -57,6 +57,24 @@ class WacrIvar
   end
 end
 
+class WacrRec
+  def rec_hash(n)
+    n > 0 ? rec_hash(n - 1).freeze : { "a" => "1" }
+  end
+
+  def run_hash(h = rec_hash(1))
+    h
+  end
+
+  def rec_arr(n)
+    n > 0 ? rec_arr(n - 1).freeze : ["a"]
+  end
+
+  def run_arr(xs = rec_arr(1))
+    xs
+  end
+end
+
 def wacr_run_arr
   x = [1]
   WacrArr.new.f(x)
@@ -70,9 +88,19 @@ def wacr_run_sub
   WacrSub.new.run
 end
 
+def wacr_run_rec_hash
+  WacrRec.new.run_hash
+end
+
+def wacr_run_rec_arr
+  WacrRec.new.run_arr
+end
+
 wacr_run_arr
 wacr_run_cache
 wacr_run_sub
+wacr_run_rec_hash
+wacr_run_rec_arr
 b = WacrIvar.new
 b.set({ "k" => "old" })
 p b.h

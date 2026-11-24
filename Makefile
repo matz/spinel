@@ -3437,10 +3437,10 @@ build/rbs-seed-results/%.res: FORCE | rbs-seed-extractor $(SP_RT_LIB) $(SPINEL_T
 	  echo "rbs-seed-test: FAIL (aliased container widening compiled instead of refusing)"; ok=0; \
 	else \
 	  SP_COLLECT_ERRORS=1 $(SPINEL) test/rbs-seed/widen_aliased_container_refuse.rb --rbs test/rbs-seed/sig -c -o "$$tmp/wacr.c" >/dev/null 2>"$$tmp/wacr.all"; \
-	  grep -q 'a parameter default given a Array, which no conversion keeps in its sp_PolyArray \* slot' "$$tmp/wacr.all" && \
-	  [ "$$(grep -c 'a parameter default given a Hash, which no conversion keeps in its sp_StrPolyHash \* slot' "$$tmp/wacr.all")" = 2 ] && \
+	  [ "$$(grep -c 'a parameter default given a Array, which no conversion keeps in its sp_PolyArray \* slot' "$$tmp/wacr.all")" = 2 ] && \
+	  [ "$$(grep -c 'a parameter default given a Hash, which no conversion keeps in its sp_StrPolyHash \* slot' "$$tmp/wacr.all")" = 3 ] && \
 	  grep -q 'an instance variable write given a Hash, which no conversion keeps in its sp_StrPolyHash \* slot' "$$tmp/wacr.all" || \
-	  { echo "rbs-seed-test: FAIL (expected all 4 aliased container widening refusals)"; cat "$$tmp/wacr.all"; ok=0; }; \
+	  { echo "rbs-seed-test: FAIL (expected all 6 aliased/recursive container widening refusals)"; cat "$$tmp/wacr.all"; ok=0; }; \
 	fi; \
 	;; \
 	dyn_send_arm_seed_contradiction) \

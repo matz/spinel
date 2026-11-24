@@ -12,6 +12,10 @@ class HdscRouter
     { "d" => "1" }
   end
 
+  def default_str_array
+    ["d"]
+  end
+
   def maybe_hash(flag)
     flag ? { "m" => "yes" } : nil
   end
@@ -70,6 +74,22 @@ class HdscRouter
   def count_poly(items: ["a"])
     items.size
   end
+
+  def frozen_helper_hash(params: default_str_hash.freeze)
+    [params["d"], params.frozen?]
+  end
+
+  def branched_helper_hash(flag, params: (flag ? default_str_hash : nil))
+    params.nil? ? "nil" : params["d"].to_s
+  end
+
+  def frozen_helper_array(items: default_str_array.freeze)
+    [items.size, items.frozen?]
+  end
+
+  def branched_helper_array(flag, items: (flag ? default_str_array : nil))
+    items.nil? ? -1 : items.size
+  end
 end
 
 class HdscSubRouter < HdscRouter
@@ -110,5 +130,11 @@ p r.join_frozen
 p r.join_frozen(items: ["x", "y"])
 p r.count_poly
 p r.count_poly(items: [1, "b"])
+p r.frozen_helper_hash
+puts r.branched_helper_hash(true)
+puts r.branched_helper_hash(false)
+p r.frozen_helper_array
+puts r.branched_helper_array(true)
+puts r.branched_helper_array(false)
 
 p HdscBox.new.h

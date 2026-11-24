@@ -11830,6 +11830,29 @@ static int pad_unsupplied_params(Compiler *c) {
    counting idiom each_with_object(Hash.new(0)). Rename the call to the
    internal `__hash_new_default`, which infers (stably) as the
    universally-boxed PolyPoly variant. */
+/* The arguments with a literal `*[a, b]` spread into `a, b` (the first splat
+   only, and not one with a splat inside), written to out[0..cap): the new
+   count, or -1 when nothing spreads. expand_literal_splat_args rewrites a
+   call by it, and the class-body class_exec reads its arguments through it,
+   so the two bind the same list. */
+static int literal_splat_spread(const NodeTable *nt, const int *av, int an, int *out, int cap) {
+  int sp_at = -1;
+  for (int j = 0; j < an; j++)
+    if (nt_kind(nt, av[j]) == NK_SplatNode) { sp_at = j; break; }
+  if (sp_at < 0 || an > 32) return -1;
+  int inner = nt_ref(nt, av[sp_at], "expression");
+  if (inner < 0 || nt_kind(nt, inner) != NK_ArrayNode) return -1;
+  int en = 0;
+  const int *ev = nt_arr(nt, inner, "elements", &en);
+  for (int j = 0; j < en; j++)
+    if (nt_kind(nt, ev[j]) == NK_SplatNode) return -1;
+  if (en > 32 || an - 1 + en > 64 || an - 1 + en > cap) return -1;
+  int m = 0;
+  for (int j = 0; j < sp_at; j++) out[m++] = av[j];
+  for (int j = 0; j < en; j++) out[m++] = ev[j];
+  for (int j = sp_at + 1; j < an; j++) out[m++] = av[j];
+  return m;
+}
 /* `m(*[a, b])`: a splat of an ARRAY LITERAL expands to its elements at
    compile time so builtin methods and proc calls (which have no runtime
    splat path) take plain positionals -- min(*[2]), add.(*[3, 4]). USER
@@ -11863,33 +11886,16 @@ static int expand_literal_splat_args(Compiler *c) {
     }
     else {
       TyKind rt = infer_type(c, recv);
-      if (rt == TY_UNKNOWN || ty_is_object(rt) || rt == TY_CLASS) continue;
+      /* (a class's exec block binds its parameters from plain positionals,
+         desugar_class_eval_value; class_eval's block takes none) */
+      if (rt == TY_UNKNOWN || ty_is_object(rt) || (rt == TY_CLASS && !is_class_exec_name(nm))) continue;
     }
     int argsn = nt_ref(nt, id, "arguments");
     int an = 0;
     const int *av = argsn >= 0 ? nt_arr(nt, argsn, "arguments", &an) : NULL;
-    int sp_at = -1;
-    for (int j = 0; j < an; j++) {
-      NodeKind ak = nt_kind(nt, av[j]);
-      if (ak == NK_SplatNode) { sp_at = j; break; }
-    }
-    if (sp_at < 0 || an > 32) continue;
-    int inner = nt_ref(nt, av[sp_at], "expression");
-    NodeKind ik = nt_kind(nt, inner);
-    if (ik != NK_ArrayNode) continue;
-    int en = 0;
-    const int *ev = nt_arr(nt, inner, "elements", &en);
-    int nested = 0;
-    for (int j = 0; j < en; j++) {
-      NodeKind ek = nt_kind(nt, ev[j]);
-      if (ek == NK_SplatNode) nested = 1;
-    }
-    if (nested || en > 32 || an - 1 + en > 64) continue;
     int na[96];
-    int m0 = 0;
-    for (int j = 0; j < sp_at; j++) na[m0++] = av[j];
-    for (int j = 0; j < en; j++) na[m0++] = ev[j];
-    for (int j = sp_at + 1; j < an; j++) na[m0++] = av[j];
+    int m0 = literal_splat_spread(nt, av, an, na, 96);
+    if (m0 < 0) continue;
     nt_node_set_arr((NodeTable *)nt, (int)argsn, "arguments", na, m0);
     changed = 1;
   }
@@ -50043,9 +50049,10 @@ int desugar_body_send_decl_at(Compiler *c, LowerCtx *lc, int id) {
    the call the class_eval the passes below read. Left as it was, a block
    holding only a define_method compiled with the parameter never bound:
    the method answered nil. Taken where the block's parameters are plain
-   required ones, as many as the arguments, and the arguments are plain
-   values (no splat, keywords or block argument); anything else stays, and
-   is refused as before. `class_eval do |k| .. end` hands its block the
+   required ones, as many as the arguments, and the arguments bind one to
+   one (nt_argv_binds_one_to_one; a literal `*[a, b]` is a and b, spread as
+   expand_literal_splat_args spreads it); anything else stays, and is
+   refused as before. `class_eval do |k| .. end` hands its block the
    class the same way: `k = self` first. */
 /* An argument moves into the block: a local of the body it was written in
    is one scope further out from there (depth 0 becomes 1; in a block of
@@ -50074,20 +50081,20 @@ int desugar_body_class_exec_args_left(Compiler *c, LowerCtx *lc, int id) {
   if (nt_kind(nt, id) != NK_CallNode || nt_safe_nav(nt, id)) return 0;
   const char *nm = nt_str(nt, id, "name");
   /* (class_eval and module_eval with a block hand it the class: `class_eval do |k| .. end`) */
-  int ev = nm && (sp_streq(nm, "class_eval") || sp_streq(nm, "module_eval"));
-  if (!nm || !(ev || sp_streq(nm, "class_exec") || sp_streq(nm, "module_exec"))) return 0;
+  int ev = nm && is_class_eval_text_name(nm);
+  if (!nm || !(ev || is_class_exec_name(nm))) return 0;
   int owner = lc->owner;
   NodeKind ok = owner >= 0 ? nt_kind(nt, owner) : NK_NilNode;
   if ((ok != NK_ClassNode && ok != NK_ModuleNode) || class_def_body(nt, owner) != lc->body) return 0;
   int rv = nt_ref(nt, id, "receiver"), blk = nt_ref(nt, id, "block");
   if ((rv >= 0 && nt_kind(nt, rv) != NK_SelfNode) || blk < 0 || nt_kind(nt, blk) != NK_BlockNode) return 0;
-  int sa = nt_ref(nt, id, "arguments"), sac = 0;
+  int sa = nt_ref(nt, id, "arguments"), sac = 0, spread[64];
   const int *sav = sa >= 0 ? nt_arr(nt, sa, "arguments", &sac) : NULL;
+  { int n = sav ? literal_splat_spread(nt, sav, sac, spread, 64) : -1;
+    if (n >= 0) { sav = spread; sac = n; } }   /* (`*[a, b]` binds a and b, as expand_literal_splat_args spreads it) */
   if (ev ? sac != 0 : (sac < 1 || sac > 16)) return 0;
-  for (int k = 0; k < sac; k++) {
-    NodeKind ak = nt_kind(nt, sav[k]);
-    if (ak == NK_SplatNode || ak == NK_KeywordHashNode || ak == NK_BlockArgumentNode) return 0;
-  }
+  /* (an empty `**h` passes no argument, which only the run time knows: that call stays refused) */
+  if (!nt_argv_binds_one_to_one(nt, sav, sac) || nt_argv_has_kwsplat(nt, sav, sac)) return 0;
   int bp = nt_ref(nt, blk, "parameters"), ps = bp >= 0 && nt_kind(nt, bp) == NK_BlockParametersNode ? nt_ref(nt, bp, "parameters") : -1;
   if (ps < 0 || nt_kind(nt, ps) != NK_ParametersNode) return 0;
   int rn = 0, on = 0, pn = 0, kn = 0, bln = 0;
@@ -50103,9 +50110,11 @@ int desugar_body_class_exec_args_at(Compiler *c, LowerCtx *lc, int id) {
   NodeTable *nt = (NodeTable *)c->nt;
   if (!desugar_body_class_exec_args_left(c, lc, id)) return 0;
   int blk = nt_ref(nt, id, "block"), bp = nt_ref(nt, blk, "parameters"), ps = nt_ref(nt, bp, "parameters");
-  int sac = 0, rn = 0;
+  int sac = 0, rn = 0, spread[64];
   int sa0 = nt_ref(nt, id, "arguments");
   const int *sav = sa0 >= 0 ? nt_arr(nt, sa0, "arguments", &sac) : NULL;
+  { int n = sav ? literal_splat_spread(nt, sav, sac, spread, 64) : -1;
+    if (n >= 0) { sav = spread; sac = n; } }
   const int *rq = nt_arr(nt, ps, "requireds", &rn);
   int body = nt_ref(nt, blk, "body"), bn = 0;
   const int *bs = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &bn) : NULL;

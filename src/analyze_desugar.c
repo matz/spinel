@@ -15160,8 +15160,7 @@ static int ee_self_holder(const NodeTable *nt, const int *parent, int id, int in
     if (k == NK_BlockNode) {
       int call = parent[p];
       const char *cn = call >= 0 && nt_kind(nt, call) == NK_CallNode ? nt_str(nt, call, "name") : NULL;
-      if (!cn || sp_streq(cn, "instance_eval") || sp_streq(cn, "instance_exec") || sp_streq(cn, "class_eval") ||
-          sp_streq(cn, "class_exec") || sp_streq(cn, "module_eval") || sp_streq(cn, "module_exec") ||
+      if (!cn || is_eval_exec_family(cn) ||
           sp_streq(cn, "define_method") || sp_streq(cn, "define_singleton_method") || sp_streq(cn, "new"))
         return -1;
       continue;
@@ -26421,8 +26420,7 @@ static int scm_body_stmts(NodeTable *nt, int id, int *out, int cap) {
     out[0] = call;
     return 1;
   }
-  if ((sp_streq(nm, "class_eval") || sp_streq(nm, "class_exec") || sp_streq(nm, "module_eval") ||
-       sp_streq(nm, "module_exec")) && ac == 0 && blk >= 0 && nt_kind(nt, blk) == NK_BlockNode &&
+  if (is_class_eval_family(nm) && ac == 0 && blk >= 0 && nt_kind(nt, blk) == NK_BlockNode &&
       nt_ref(nt, blk, "parameters") < 0) {
     int body = nt_ref(nt, blk, "body");
     if (body >= 0 && cn_reads_outer_local(nt, body, 0)) return -1;
@@ -27943,8 +27941,8 @@ int desugar_self_class_eval_blocks(Compiler *c) {
     if (nt_kind(nt, id) != NK_CallNode) continue;
     const char *nm = nt_str(nt, id, "name");
     if (!nm) continue;
-    int cls = sp_streq(nm, "class_eval") || sp_streq(nm, "module_eval") || sp_streq(nm, "class_exec") || sp_streq(nm, "module_exec");
-    int ins = sp_streq(nm, "instance_exec") || sp_streq(nm, "instance_eval");
+    int cls = is_class_eval_family(nm);
+    int ins = is_instance_eval_family(nm);
     int r = nt_ref(nt, id, "receiver");
     if (!(cls && (r < 0 || nt_kind(nt, r) == NK_SelfNode)) && !(ins && r < 0)) continue;
     int blk = nt_ref(nt, id, "block");

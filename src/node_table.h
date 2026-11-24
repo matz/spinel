@@ -742,6 +742,16 @@ static inline int nt_argv_has_kwsplat(const NodeTable *nt, const int *argv, int 
     if (nt_kind(nt, argv[i]) == NK_KeywordHashNode && nt_hash_has_splat(nt, argv[i])) return 1;
   return 0;
 }
+/* Do the arguments bind a block's required parameters one to one -- no splat,
+   block argument or `...`? A keyword hash is one positional Hash (a `**h`
+   one too, unless h is empty at run time, which a caller that cannot see it
+   asks nt_argv_has_kwsplat about). A class_exec / module_exec call whose
+   block takes only required parameters binds them from such arguments
+   (desugar_class_eval_value and desugar_body_class_exec_args_left check the
+   parameters). */
+static inline int nt_argv_binds_one_to_one(const NodeTable *nt, const int *argv, int argc) {
+  return !nt_argv_has(nt, argv, argc, NT_ARG_SPLAT | NT_ARG_BLOCK | NT_ARG_FORWARDING);
+}
 /* The call's `&blk` or `&`: its block when that is a BlockArgumentNode, -1
    for a literal block or none. */
 static inline int nt_call_block_arg(const NodeTable *nt, int call) {

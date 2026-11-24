@@ -22591,13 +22591,18 @@ static void emit_gvar_decl_head(Compiler *c, LocalVar *lv, Buf *b) {
    identifier not declared yet and the C did not compile. A cell is an
    Integer or a boxed value, whose types the runtime header declares; its
    definition follows with its initializer, as C allows a file-scope static
-   a tentative definition ahead of its definition. */
+   a tentative definition ahead of its definition. Only such a type is
+   declared here: a program's own `$__spinel_x` holding an object would name
+   a class struct the typedefs declare after the machinery. */
 static void emit_cell_gvar_decls(Compiler *c, Buf *b) {
   int n = 0;
   for (int i = 0; i < c->ngvars; i++) {
     LocalVar *lv = &c->gvars[i];
     if (!is_scalar_ret(lv->type) || cplan_cell_dropped(c, lv)) continue;
     if (strncmp(lv->name, "__spinel_", 9) != 0) continue;
+    /* a cell holds an Integer or a boxed value; a program's own global of
+       the name typed a class would name a struct the typedefs declare later */
+    if (lv->type != TY_INT && lv->type != TY_POLY) continue;
     emit_gvar_decl_head(c, lv, b); buf_puts(b, ";\n"); n++;
   }
   if (n) buf_puts(b, "\n");

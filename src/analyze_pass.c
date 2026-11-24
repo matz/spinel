@@ -6846,21 +6846,66 @@ int dynamic_new_may_reach(Compiler *c, int call_id, int cid) {
    `K.new(a, b)` would give them. */
 static int wbas_shared;
 static void wbas_touch(void);
+/* The positionals of such a call, and whether it has literal keywords
+   with no `**` among them. */
+static void dynamic_new_arg_counts(Compiler *c, int call_id, int *npos, int *kwh) {
+  const NodeTable *nt = c->nt;
+  int an = nt_ref(nt, call_id, "arguments");
+  int argc = 0;
+  const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &argc) : NULL;
+  *npos = 0; *kwh = 0;
+  for (int k = 0; k < argc; k++) {
+    NodeKind ak = nt_kind(nt, av[k]);
+    if (ak == NK_KeywordHashNode) {
+      int ne = 0; const int *els = nt_arr(nt, av[k], "elements", &ne);
+      *kwh = ne > 0;
+      for (int e = 0; e < ne; e++) if (nt_kind(nt, els[e]) == NK_AssocSplatNode) *kwh = 0;
+    }
+    else if (ak != NK_BlockArgumentNode) (*npos)++;
+  }
+}
+/* Does initialize imi take that many arguments? */
+static int dynamic_new_fits_initialize(Compiler *c, int imi, int npos, int kwh) {
+  const NodeTable *nt = c->nt;
+  int pn = c->scopes[imi].def_node >= 0 ? nt_ref(nt, c->scopes[imi].def_node, "parameters") : -1;
+  int nreq = 0, nopt = 0, npost = 0, nkw = 0, rest = -1, kwrest = -1;
+  if (pn >= 0) {
+    nt_arr(nt, pn, "requireds", &nreq);
+    nt_arr(nt, pn, "optionals", &nopt);
+    nt_arr(nt, pn, "posts", &npost);
+    nt_arr(nt, pn, "keywords", &nkw);
+    rest = nt_ref(nt, pn, "rest");
+    kwrest = nt_ref(nt, pn, "keyword_rest");
+  }
+  nreq += npost;
+  /* an initialize taking no keywords takes literal ones as one more
+     positional */
+  int n = npos + (kwh && nkw == 0 && kwrest < 0);
+  return n >= nreq && (rest >= 0 || n <= nreq + nopt);
+}
+/* See compiler.h. */
+int dynamic_new_initialize(Compiler *c, int call_id, int k) {
+  const NodeTable *nt = c->nt;
+  int recv = nt_ref(nt, call_id, "receiver");
+  if (recv < 0 || !cplan_as_new(c, call_id, k) || !dynamic_new_may_reach(c, call_id, k)) return -1;
+  int imi = cplan_new_arm_initialize(c, call_id, k);
+  if (imi < 0 || imi >= c->nscopes) return -1;
+  int an = nt_ref(nt, call_id, "arguments");
+  int argc = 0;
+  const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &argc) : NULL;
+  /* (a splat fills what the initialize takes) */
+  if (nt_argv_has_splat(nt, av, argc)) return imi;
+  int npos, kwh;
+  dynamic_new_arg_counts(c, call_id, &npos, &kwh);
+  return dynamic_new_fits_initialize(c, imi, npos, kwh) ? imi : -1;
+}
 static int bind_dynamic_new_initializers(Compiler *c, int call_id) {
   const NodeTable *nt = c->nt;
   int an = nt_ref(nt, call_id, "arguments");
   int argc = 0;
   const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &argc) : NULL;
-  int npos = 0, kwh = 0;
-  for (int k = 0; k < argc; k++) {
-    NodeKind ak = nt_kind(nt, av[k]);
-    if (ak == NK_KeywordHashNode) {
-      int ne = 0; const int *els = nt_arr(nt, av[k], "elements", &ne);
-      kwh = ne > 0;
-      for (int e = 0; e < ne; e++) if (nt_kind(nt, els[e]) == NK_AssocSplatNode) kwh = 0;
-    }
-    else if (ak != NK_BlockArgumentNode) npos++;
-  }
+  int npos, kwh;
+  dynamic_new_arg_counts(c, call_id, &npos, &kwh);
   int changed = 0;
   int *seen = (int *)calloc((size_t)(c->nscopes > 0 ? c->nscopes : 1), sizeof(int));
   for (int k = 0; k < c->nclasses; k++) {
@@ -6898,21 +6943,7 @@ static int bind_dynamic_new_initializers(Compiler *c, int call_id) {
     }
     if (imi < 0 || imi >= c->nscopes || seen[imi]) continue;
     seen[imi] = 1;
-    int pn = c->scopes[imi].def_node >= 0 ? nt_ref(nt, c->scopes[imi].def_node, "parameters") : -1;
-    int nreq = 0, nopt = 0, npost = 0, nkw = 0, rest = -1, kwrest = -1;
-    if (pn >= 0) {
-      nt_arr(nt, pn, "requireds", &nreq);
-      nt_arr(nt, pn, "optionals", &nopt);
-      nt_arr(nt, pn, "posts", &npost);
-      nt_arr(nt, pn, "keywords", &nkw);
-      rest = nt_ref(nt, pn, "rest");
-      kwrest = nt_ref(nt, pn, "keyword_rest");
-    }
-    nreq += npost;
-    /* an initialize taking no keywords takes literal ones as one more
-       positional */
-    int n = npos + (kwh && nkw == 0 && kwrest < 0);
-    if (n < nreq || (rest < 0 && n > nreq + nopt)) continue;
+    if (!dynamic_new_fits_initialize(c, imi, npos, kwh)) continue;
     changed |= bind_call_params(c, call_id, imi);
   }
   free(seen);

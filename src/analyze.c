@@ -18699,6 +18699,27 @@ static int oa_arg_dropped(Compiler *c, int id, int mi, LocalVar *plv) {
   return oa_value_dropped(c, id) && an_prog_never_gives(mn, 1) &&
          oa_param_use_ok(c, par, def, plv, def, 0);   /* (the parameters' defaults too) */
 }
+/* Call id on a Class value, where it is a `new` (cplan_as_new): its
+   arguments reach the initialize of each class the value may be, as the
+   binding gives them (dynamic_new_initialize), and they are no slots the
+   pass follows. A parameter of such an initialize does not narrow. Narrowed
+   from the static constructions alone (`UA.new([Tok.new])`), the binding
+   joined the call's argument into it (`error_type.new("code")`), the write
+   pass put the pin back, and the two traded the parameter each round to
+   the cap of the fixpoint. */
+static void oa_dynamic_new_kill(Compiler *c, OAS *sl, int n, int id) {
+  if (!cplan_as_new(c, id, -1)) return;
+  for (int k = 0; k < c->nclasses; k++) {
+    int imi = dynamic_new_initialize(c, id, k);
+    if (imi < 0) continue;
+    Scope *M = &c->scopes[imi];
+    for (int pk = 0; pk < M->nparams; pk++) {
+      LocalVar *plv = M->pnames[pk] ? scope_local(M, M->pnames[pk]) : NULL;
+      int T = plv ? oa_find(sl, n, imi, plv) : -1;
+      if (T >= 0) sl[T].alive = 0;
+    }
+  }
+}
 /* Interprocedural edges of call id, whose target narrow_object_arrays
    resolved to method oa_tmi (-1: unattributable). A PARAM slot may only
    narrow when EVERY argument reaching it is a same-component candidate
@@ -19936,9 +19957,12 @@ static int narrow_object_arrays(Compiler *c) {
            `self.new` is found above and keeps it. */
         if (oa_tmi < 0 && rci >= 0 && sp_streq(name, "new"))
           oa_tmi = cplan_hook_target(c, id, rci, "initialize", NULL);
+        /* (a constant that holds a Class value, `K = cond ? A : B`) */
+        if (rci < 0) oa_dynamic_new_kill(c, sl, n, id);
       }
       else {
         TyKind ort = infer_type(c, recv);
+        if (ort == TY_CLASS || ort == TY_POLY) oa_dynamic_new_kill(c, sl, n, id);
         if (ty_is_object(ort)) {
           oa_tmi = call_target(c, id, ty_object_class(ort), name, 0, &ml);
           /* an attribute reader of the class is no method scope: the call

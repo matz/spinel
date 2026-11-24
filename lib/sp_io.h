@@ -347,6 +347,10 @@ void sp_sock_socketpair(sp_int domain, sp_int type, sp_int proto, int fds[2]);
 sp_File *sp_sock_pair_handle(int fd, sp_int is_unix);
 sp_File *sp_sock_unix_server(const char *path);
 sp_File *sp_sock_unix_connect(const char *path);
+/* TCPServer.new(host, port) (a NULL host for TCPServer.new(port)) and
+   TCPSocket.new(host, port) */
+sp_File *sp_sock_tcp_server(const char *host, sp_int port);
+sp_File *sp_sock_tcp_client(const char *host, sp_int port);
 /* Socket.unix(path) / Socket.tcp(host, port): the connection as a Socket */
 sp_File *sp_sock_unix_socket(const char *path);
 sp_File *sp_sock_tcp_socket(const char *host, sp_int port);

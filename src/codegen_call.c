@@ -17099,18 +17099,18 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
        connect_timeout: bounds. The handle IS an sp_File with a socket-kind
        mode label (#2922). */
     if (cn && sp_streq(cn, "TCPServer") && sp_feature_required("socket") && argc >= 1) {
-      buf_puts(b, "sp_io_fdopen_sock(sp_net_listen_host(");
+      buf_puts(b, "sp_sock_tcp_server(");
       if (argc >= 2) { emit_str_expr(c, argv[0], b); buf_puts(b, ", "); emit_int_expr(c, argv[1], b); }
       else { buf_puts(b, "NULL, "); emit_int_expr(c, argv[0], b); }
-      buf_puts(b, ", 0), (&(\"\\xff\" \"tcpserver\")[1]))");
+      buf_puts(b, ")");
       { *out = 1; return 1; }
     }
     if (cn && sp_streq(cn, "TCPSocket") && sp_feature_required("socket") && argc >= 2) {
       if (emit_tcp_connect_timeout(c, argc, argv, b)) { *out = 1; return 1; }
-      buf_puts(b, "sp_io_fdopen_sock(sp_net_connect(");
+      buf_puts(b, "sp_sock_tcp_client(");
       emit_str_expr(c, argv[0], b); buf_puts(b, ", ");
       emit_int_expr(c, argv[1], b);
-      buf_puts(b, "), (&(\"\\xff\" \"tcp\")[1]))");
+      buf_puts(b, ")");
       { *out = 1; return 1; }
     }
     /* UDPSocket.new / UDPSocket.new(Socket::AF_INET6) */

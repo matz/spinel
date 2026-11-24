@@ -65,6 +65,8 @@ int sp_net_accept_nb(int sfd);
 /* The peer IP of a connected fd as text, "" when it has none. */
 const char *sp_net_peer_ip(int fd);
 int sp_net_connect(const char *host, int port);
+/* the packed address of connect's last failed attempt; returns its length */
+int sp_net_connect_failed_addr(void *out, int cap);
 /* connect an existing fd to a packed sockaddr, waiting as connect does */
 int sp_net_connect_sa(int fd, const void *sa, int len);
 

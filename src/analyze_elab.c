@@ -4449,12 +4449,15 @@ static int lr_node_defines(Compiler *c, int n, int direct, int depth) {
   /* (a send of a name the source spells runs the method of that name:
      `__send__(:plus, k)` does what `plus(k)` does; one of a name it cannot
      read is a call the record cannot read, call_sent_name's NULL. A
-     program's own method of the send's name, which a receiver may answer
-     instead, is asked too) */
+     program's own method of each send's name on the way, which a receiver
+     may answer instead (`x.__send__(:public_send, :m)`), is asked too) */
   if (k == NK_CallNode && !word && !lr_block_eval(c, n)) {
     const char *nm = nt_str(nt, n, "name"), *sent = call_sent_name(nt, n, NULL);
     o = lr_most(o, lr_call_defines(c, sent, direct, depth));
-    if (o != LR_OPAQUE_DEFINES && sent != nm && nm && lr_named(c, nm)) o = lr_most(o, lr_callee_defines(c, nm, direct, depth));
+    int an = 0, a = nt_ref(nt, n, "arguments");
+    const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+    for (int i = 0; sent != nm && nm && is_send_family(nm) && o != LR_OPAQUE_DEFINES; nm = i < an ? vis_arg_name(nt, av[i++]) : NULL)
+      if (lr_named(c, nm)) o = lr_most(o, lr_callee_defines(c, nm, direct, depth));
   }
   if (lr_variable_op_write(k)) o = lr_most(o, lr_call_defines(c, nt_str(nt, n, "binary_operator"), direct, depth));
   if (o != LR_OPAQUE_DEFINES && !direct && !word && lr_node_dispatches(nt, n)) o = lr_most(o, lr_callbacks_define(c, depth));

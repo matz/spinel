@@ -1156,9 +1156,10 @@ new array, through locals (their `||=` and the arms of a branch too), the
 value of a method (or a chain of them, a method a subclass overrides, or a
 method answering its block's value), a `then` block, a multiple assignment
 from a literal, a row of a literal table, a builtin that answers its receiver
-(`push`, `concat`, `tap`), an ivar or attr_reader every write of which builds
-a new array or keeps a parameter of the method writing it, a global, class
-variable or constant. The method's other callers then read the general Array
+(`push`, `concat`, `tap`), an ivar (the main object's too) or attr_reader
+every write of which builds a new array or keeps a parameter of the method
+writing it, a Struct member its constructor sets, a global, class variable or
+constant. The method's other callers then read the general Array
 too. A boxed argument -- a local written arrays of two kinds, an element read
 out of a general container, a block parameter, a `for` variable -- is
 followed the same way, to each typed array the store cannot fit.
@@ -1168,11 +1169,18 @@ receives, or into an Array that is an element of it (`|m| m[0] << 1`), does
 the same for the values the sites binding it pass: a yield or a block's
 `call` in each method the block is handed to (and on through `&blk`, and a
 `super` in a method that takes `&blk`), the calls of a proc or lambda
-literal, at an optional, a post, a keyword (a `**` operand's too) or as an
-element of a rest (a method's rest too). A block a method keeps (stored in
-an ivar, or answered as a value) and calls later is not followed, nor one a
-bare `super` hands on from a method without `&blk`: its store raises
-`TypeError` as above.
+literal, at an optional, a post, a keyword (also one a `**` of a Hash
+literal supplies) or as an element of a rest (a method's rest too, also one
+a bare `super` hands on), where the store is in the block's own body. Not
+followed: a block a method keeps (stored in an ivar, or answered as a
+value) and calls later, one a bare `super` hands on from a method without
+`&blk`, a Thread or Fiber body, a proc called from an ivar or a constant,
+through `curry`, after a `&` hand-off or more than one method down from
+where it is passed, a block given to a `Method` object's `call`, a block's
+`**`, a `**` of a Hash built by index writes, a destructuring parameter
+(`|(x)|`), an element of what a `define_method` body receives, a store from
+a block nested in the body, and an Array that is an element of an element.
+Such a store raises `TypeError` as above.
 
 Where it cannot follow a typed argument, the one conversion left is a copy,
 and the mutation would land in the copy where CRuby changes the caller's

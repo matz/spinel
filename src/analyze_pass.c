@@ -14924,6 +14924,26 @@ static void bs_splat(Compiler *c, int x, int np, TyKind *e, char *flags, int *nm
    there are (spread; whole when the value itself may be bound instead).
    Otherwise the count is static and block_fill places each value (ot, ps). */
 typedef struct { int gather, spread, whole, nmin, nmax, ot, ps; TyKind e; char enil; } BlockPlace;
+/* How one site's keyword hash kwh (-1: none) binds keyword k of s, for
+   block_site_types and block_site_values alike: kp its parameter node, vn
+   the value its key names (-1: none), dflt its default when it may be
+   absent (-1: none). The values of every `**` operand (block_kw_spread)
+   and of a computed key (ie_kwhash_computed_value) may name it too. */
+typedef struct { int kp, vn, dflt; } BlockKwPlace;
+static void block_kw_place(Compiler *c, const BlockSig *s, int kwh, int k, BlockKwPlace *pl) {
+  const NodeTable *nt = c->nt;
+  pl->kp = block_sig_kw(c, s, k);
+  pl->vn = kwh >= 0 && pl->kp >= 0 ? ie_kwhash_value(c, kwh, nt_wname(nt, pl->kp)) : -1;
+  pl->dflt = pl->vn < 0 && pl->kp >= 0 && nt_kind(nt, pl->kp) == NK_OptionalKeywordParameterNode
+             ? nt_ref(nt, pl->kp, "value") : -1;
+}
+/* Is keyword hash element el a `**` spread? Its operand in *x (-1: an
+   anonymous one). */
+static int block_kw_spread(const NodeTable *nt, int el, int *x) {
+  if (nt_kind(nt, el) != NK_AssocSplatNode) return 0;
+  *x = nt_ref(nt, el, "value");
+  return 1;
+}
 static void block_site_place(Compiler *c, const BlockSig *s, const int *av, int ac, int kwh, BlockPlace *pl) {
   const NodeTable *nt = c->nt;
   int P = s->P, O = s->O, Q = s->Q, np = P + O + Q;
@@ -14987,20 +15007,18 @@ void block_site_types(Compiler *c, const BlockSig *s, const int *av, int ac,
   int kwh = -1;
   if (s->kw && nt_argv_kwh(nt, av, ac) >= 0) kwh = av[--ac];
   for (int k = 0; k < s->nk; k++) {
-    int kp = block_sig_kw(c, s, k);
-    int vn = kwh >= 0 ? ie_kwhash_value(c, kwh, nt_wname(nt, kp)) : -1;
-    TyKind t = vn >= 0 ? bs_value(c, vn) : TY_UNKNOWN;
-    int en = 0; const int *els = kwh >= 0 ? nt_arr(nt, kwh, "elements", &en) : NULL;
+    BlockKwPlace kw;
+    block_kw_place(c, s, kwh, k, &kw);
+    TyKind t = kw.vn >= 0 ? bs_value(c, kw.vn) : TY_UNKNOWN;
+    int en = 0, x; const int *els = kwh >= 0 ? nt_arr(nt, kwh, "elements", &en) : NULL;
     for (int e = 0; e < en; e++) {
-      if (nt_kind(nt, els[e]) != NK_AssocSplatNode) continue;
-      int x = nt_ref(nt, els[e], "value");
+      if (!block_kw_spread(nt, els[e], &x)) continue;
       TyKind ht = x >= 0 ? infer_type(c, x) : TY_POLY;
       TyKind vt = ty_is_hash(ht) ? ty_hash_val(ht) : TY_POLY;
       t = bs_join(t, vt == TY_UNKNOWN ? TY_POLY : vt);
     }
     t = bs_join(t, ie_kwhash_computed_type(c, kwh));
-    if (vn < 0 && nt_kind(nt, kp) == NK_OptionalKeywordParameterNode)
-      t = bs_join(t, bs_value(c, nt_ref(nt, kp, "value")));
+    if (kw.dflt >= 0) t = bs_join(t, bs_value(c, kw.dflt));
     kws[k] = bs_join(kws[k], t);
   }
   BlockPlace pl;
@@ -15069,27 +15087,19 @@ int block_site_values(Compiler *c, const BlockSig *s, const int *av, int ac, int
   int kwh = -1;
   if (s->kw && nt_argv_kwh(nt, av, ac) >= 0) kwh = av[--ac];
   if (at >= np) {
-    /* as block_site_types types it: the value its key names, the values of
-       every `**` operand (BV_ELEM: a Hash's elements are its values) and
-       of a computed key (either may name it), and its default when it may
-       be absent */
-    int kp = block_sig_kw(c, s, at - np);
-    if (kp < 0) return 0;
-    int vn = kwh >= 0 ? ie_kwhash_value(c, kwh, nt_wname(nt, kp)) : -1;
-    if (vn >= 0) ch |= fn(c, vn, BV_WHOLE, ctx);
-    int en = 0; const int *els = kwh >= 0 ? nt_arr(nt, kwh, "elements", &en) : NULL;
+    /* as block_site_types types it (block_kw_place): the value its key
+       names, the values of every `**` operand (BV_ELEM: a Hash's elements
+       are its values) and of a computed key, and its default */
+    BlockKwPlace kw;
+    block_kw_place(c, s, kwh, at - np, &kw);
+    if (kw.kp < 0) return 0;
+    if (kw.vn >= 0) ch |= fn(c, kw.vn, BV_WHOLE, ctx);
+    int en = 0, x; const int *els = kwh >= 0 ? nt_arr(nt, kwh, "elements", &en) : NULL;
     for (int e = 0; e < en; e++) {
-      int x = nt_ref(nt, els[e], "value");
-      if (x < 0) continue;
-      if (nt_kind(nt, els[e]) == NK_AssocSplatNode) ch |= fn(c, x, BV_ELEM, ctx);
-      else if (nt_kind(nt, els[e]) == NK_AssocNode) {
-        int key = nt_ref(nt, els[e], "key");
-        if (key >= 0 && nt_kind(nt, key) != NK_SymbolNode && nt_kind(nt, key) != NK_StringNode)
-          ch |= fn(c, x, BV_WHOLE, ctx);
-      }
+      if (block_kw_spread(nt, els[e], &x)) { if (x >= 0) ch |= fn(c, x, BV_ELEM, ctx); }
+      else if ((x = ie_kwhash_computed_value(nt, els[e])) >= 0) ch |= fn(c, x, BV_WHOLE, ctx);
     }
-    if (vn < 0 && nt_kind(nt, kp) == NK_OptionalKeywordParameterNode)
-      ch |= fn(c, nt_ref(nt, kp, "value"), BV_WHOLE, ctx);
+    if (kw.dflt >= 0) ch |= fn(c, kw.dflt, BV_WHOLE, ctx);
     return ch;
   }
   BlockPlace pl;

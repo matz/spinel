@@ -4595,17 +4595,25 @@ int ie_kwhash_value(Compiler *c, int kwhash, const char *name) {
   return v;
 }
 
+/* The value of keyword hash element el when its key is an expression
+   (`k(1) => v`), which may name any keyword, or -1. */
+int ie_kwhash_computed_value(const NodeTable *nt, int el) {
+  if (nt_kind(nt, el) != NK_AssocNode) return -1;
+  int key = nt_ref(nt, el, "key");
+  if (key < 0 || nt_kind(nt, key) == NK_SymbolNode || nt_kind(nt, key) == NK_StringNode) return -1;
+  return nt_ref(nt, el, "value");
+}
+
 /* The type the values of `kwhash` whose key is an expression carry
-   (`k(1) => v`): such a key may name any keyword, so each keyword parameter
-   takes it too. TY_UNKNOWN when every key is a literal. */
+   (ie_kwhash_computed_value): such a key may name any keyword, so each
+   keyword parameter takes it too. TY_UNKNOWN when every key is a literal. */
 TyKind ie_kwhash_computed_type(Compiler *c, int kwhash) {
   const NodeTable *nt = c->nt;
   TyKind t = TY_UNKNOWN;
   int en = 0; const int *els = kwhash >= 0 ? nt_arr(nt, kwhash, "elements", &en) : NULL;
   for (int i = 0; i < en; i++) {
-    if (nt_kind(nt, els[i]) != NK_AssocNode) continue;
-    int key = nt_ref(nt, els[i], "key"), v = nt_ref(nt, els[i], "value");
-    if (key < 0 || v < 0 || nt_kind(nt, key) == NK_SymbolNode || nt_kind(nt, key) == NK_StringNode) continue;
+    int v = ie_kwhash_computed_value(nt, els[i]);
+    if (v < 0) continue;
     TyKind vt = infer_type(c, v);
     if (vt == TY_UNKNOWN || vt == TY_NIL) vt = TY_POLY; /* see bind_call_params */
     t = t == TY_UNKNOWN ? vt : ty_unify(t, vt);

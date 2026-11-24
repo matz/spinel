@@ -1358,8 +1358,10 @@ const char *sp_slurp_stream_parked(sp_File *f) {SP_GC_ROOT(f);
   SP_GC_ROOT_STR(buf);
   for (;;) {
     sp_io_wait_readable(f);
-    int ch = sp_io_getc(f);
-    if (ch == EOF) break;
+    /* fgetc directly so a read error raises with io_fread's message; sp_io_getc would use io_fillbuf's */
+    if (!f->own_buf) sp_io_clear_stale(f->fp);
+    int ch = f->own_buf ? sp_io_rbuf_getc(f) : SP_SIG_BLOCKING(fgetc(f->fp));
+    if (ch == EOF) { if (!f->own_buf) sp_io_check_ferror(f, 0); break; }
     if (len + 2 >= cap) {
       char *nb = sp_str_alloc(cap * 2);
       memcpy(nb, buf, len);

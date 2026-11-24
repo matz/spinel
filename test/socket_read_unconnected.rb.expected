@@ -1,0 +1,21 @@
+gets: Errno::ENOTCONN: "<ENOTCONN> @ io_fillbuf - fd:N "
+read: Errno::ENOTCONN: "<ENOTCONN>"
+readline: Errno::ENOTCONN: "<ENOTCONN> @ io_fillbuf - fd:N "
+getc: Errno::ENOTCONN: "<ENOTCONN> @ io_fillbuf - fd:N "
+getbyte: Errno::ENOTCONN: "<ENOTCONN> @ io_fillbuf - fd:N "
+read(10): Errno::ENOTCONN: "<ENOTCONN>"
+readchar: Errno::ENOTCONN: "<ENOTCONN> @ io_fillbuf - fd:N "
+readbyte: Errno::ENOTCONN: "<ENOTCONN> @ io_fillbuf - fd:N "
+each_line: Errno::ENOTCONN: "<ENOTCONN> @ io_fillbuf - fd:N "
+lines: 0
+readlines: Errno::ENOTCONN: "<ENOTCONN> @ io_fillbuf - fd:N "
+gets again: Errno::ENOTCONN: "<ENOTCONN> @ io_fillbuf - fd:N "
+dir gets: Errno::EISDIR
+dir getc: Errno::EISDIR
+dir read(10): Errno::EISDIR
+dir timed read(10): Errno::EISDIR
+fd after close: reused
+closed stdin:
+nil
+""
+nil

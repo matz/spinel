@@ -2119,8 +2119,10 @@ const char *sp_sock_recv(sp_File *f, sp_int len) {SP_GC_ROOT(f);
     size_t want = (size_t)len < (size_t)pend ? (size_t)len : (size_t)pend;
     char *r = sp_str_alloc(want);
     (void)sp_io_use(f);
-    size_t got = sp_io_fread(f, r, want);
+    int e;
+    size_t got = sp_io_fread_err(f, r, want, &e);
     sp_io_unuse(f);
+    if (e) sp_io_raise_read_error(f, e, 0);
     r[got] = 0;
     sp_str_set_len(r, got);
     sp_str_mark_binary(r);
@@ -2334,8 +2336,10 @@ static ssize_t sp_io_read_chunk_timed(sp_File *f, char *buf, size_t count) {
     if (!sp_io_parkable(f)) {
       (void)sp_io_timeout_seconds(f);
       (void)sp_io_use(f);
-      size_t got = sp_io_fread(f, buf, count);
+      int e;
+      size_t got = sp_io_fread_err(f, buf, count, &e);
       sp_io_unuse(f);
+      if (e) sp_io_raise_read_error(f, e, 0);
       return (ssize_t)got;
     }
     if (deadline == -2.0) deadline = sp_io_deadline(f);
@@ -2446,16 +2450,18 @@ const char *sp_File_readpartial_or_nil(sp_File *f, sp_int n) {SP_GC_ROOT(f);
   if (f->own_buf) return sp_io_rbuf_partial(f, (size_t)n, 0);
   char *r = sp_str_alloc((size_t)n);
   ssize_t got;
+  int fe = 0;
   FILE *fp = sp_io_use(f);
   long pend = (long)sp_io_pending(f);
   if (pend > 0) {
     size_t want = (size_t)n < (size_t)pend ? (size_t)n : (size_t)pend;
-    got = (ssize_t)sp_io_fread(f, r, want);
+    got = (ssize_t)sp_io_fread_err(f, r, want, &fe);
   }
   else {
     do { got = SP_SIG_BLOCKING(read(fileno(fp), r, (size_t)n)); } while (got < 0 && errno == EINTR);
   }
   { int e = errno; sp_io_unuse(f); errno = e; }
+  if (fe) sp_io_raise_read_error(f, fe, 0);
   if (got < 0) sp_file_raise_errno("read", "");
   if (got == 0) return NULL;
   r[got] = 0;
@@ -2840,6 +2846,27 @@ SP_NORETURN void sp_file_raise_errno(const char *op, const char *path) {SP_GC_RO
   int e = errno;   /* read once, before the formatting can touch it */
   sp_raise_cls(sp_errno_class_name(e),
                sp_sprintf("%s @ %s - %s", strerror(e), op, path ? path : ""));
+}
+
+int sp_io_read_errno(sp_File *f) {
+  FILE *fp = f->fp;
+  if (!fp || !ferror(fp)) return 0;
+  int e = errno;
+  clearerr(fp);
+  return (e == EAGAIN || e == EWOULDBLOCK || e == EINTR) ? 0 : e;
+}
+
+SP_NORETURN void sp_io_raise_read_error(sp_File *f, int e, int fillbuf) {SP_GC_ROOT(f);
+  const char *msg;
+  if (fillbuf) msg = sp_sprintf("%s @ io_fillbuf - fd:%d %s", strerror(e), fileno(f->fp), f->path ? f->path : "");
+  else if (f->path) msg = sp_sprintf("%s @ io_fread - %s", strerror(e), f->path);
+  else msg = sp_sprintf("%s", strerror(e));
+  sp_raise_cls(sp_errno_class_name(e), msg);
+}
+
+void sp_io_check_ferror(sp_File *f, int fillbuf) {
+  int e = sp_io_read_errno(f);
+  if (e) sp_io_raise_read_error(f, e, fillbuf);
 }
 
 void sp_pread_check(sp_File *f, sp_int len, sp_bool outbuf) {

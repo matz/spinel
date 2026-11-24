@@ -3770,7 +3770,9 @@ int cplan_to_ary_takes(Compiler *c, int k, TyKind t) {
   if (t == TY_POLY) return 1;
   int oc = cplan_to_ary_class_of(c, t);
   if (oc < 0) return 0;
-  if (!ty_is_object(t)) return k == oc;
+  /* (a value typed String may be an instance of a String subclass, whose own
+     to_ary its arm answers where the plan places it, cplan_boxed_to_ary_classes) */
+  if (!ty_is_object(t)) return k == oc || is_descendant(c, k, oc);
   /* (an instance of a String subclass is a String box: the program's String
      answers it where the subclass has no to_ary of its own) */
   if (k == cplan_to_ary_string_class(c)) return comp_ary_is_str(c, oc);

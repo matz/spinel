@@ -782,7 +782,7 @@ int cplan_to_ary_class_of(Compiler *c, TyKind t);
 /* Does an operand of type t convert through the to_ary of class k, one of
    cplan_boxed_to_ary_classes': a TY_POLY operand through any, a program
    object through its class or a subclass of it, a String through the
-   program's String, anything else through none */
+   program's String or a String subclass, anything else through none */
 int cplan_to_ary_takes(Compiler *c, int k, TyKind t);
 /* Can a value of type t convert through a to_ary of the program's that
    takes no argument, a block of several parameters then taking the Array

@@ -33,6 +33,7 @@ class C2
 end
 c2 = C2.new
 p [c2.respond_to?(:zz), (c2.tail rescue $!.class)]
+p (c2.send(:zz) rescue $!.class)   # (private, not absent)
 
 # 3: def directly under `if` in a class method body; mk(false)
 puts "3"
@@ -59,6 +60,7 @@ class C4
 end
 c4 = C4.new
 p [c4.respond_to?(:zz), (c4.tail rescue $!.class)]
+p (c4.send(:zz) rescue $!.class)
 
 # 5: def in a rescued begin of a method body, after a statement that may raise; mk(false)
 puts "5"
@@ -97,6 +99,7 @@ class C6
 end
 c6 = C6.new
 p [c6.respond_to?(:zz), (c6.tail rescue $!.class)]
+p (c6.send(:zz) rescue $!.class)
 
 # 9: two may-names: a present, b absent
 puts "9"
@@ -113,6 +116,7 @@ class C9
 end
 c9 = C9.new
 p [(c9.ma rescue $!.class), (c9.mb rescue $!.class), (c9.tail rescue $!.class)]
+p [(c9.send(:ma) rescue $!.class), (c9.send(:mb) rescue $!.class), (c9.send(:tail) rescue $!.class)]   # (ma private, mb absent, tail public)
 
 # 10: two may-names: both present
 puts "10"

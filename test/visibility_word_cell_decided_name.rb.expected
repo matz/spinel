@@ -2,16 +2,20 @@
 [false, :tail]
 2
 [false, NoMethodError]
+:zz
 3
 [false, :tail]
 4
 [false, NoMethodError]
+:zz
 5
 [false, :tail]
 6
 [false, NoMethodError]
+:zz
 9
 [NoMethodError, NoMethodError, :tail]
+[:ma, NoMethodError, :tail]
 10
 [NoMethodError, NoMethodError, NoMethodError]
 11

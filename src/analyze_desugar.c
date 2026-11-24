@@ -8062,33 +8062,18 @@ int desugar_engine_branches(Compiler *c) {
     for (int k = 0; k < n - 1; k++) {
       NodeKind sk = nt_kind(nt, st[k]);
       int pred = sk == NK_IfNode || sk == NK_UnlessNode ? nt_ref(nt, st[k], "predicate") : -1;
-      long long pop = nt_int(nt, st[k], "req_pop", 0);
-      const char *other = sk == NK_IfNode ? "subsequent" : "else_clause";
-      int folded = pred >= 0 && nt_int(nt, pred, "engine_check", 0) > 0;
-      if (pred < 0 || (folded ? (nt_kind(nt, pred) == NK_TrueNode) != (sk == NK_IfNode) :
-                                pop <= 0 || nt_ref(nt, st[k], other) >= 0)) continue;
+      if (pred < 0 || nt_int(nt, pred, "engine_check", 0) <= 0 || (nt_kind(nt, pred) == NK_TrueNode) != (sk == NK_IfNode)) continue;
       int body = nt_ref(nt, st[k], "statements");
       int bn = 0; const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
       if (bn == 0 || nt_kind(nt, bb[bn - 1]) != NK_ReturnNode) continue;
       int *keep = malloc(sizeof(int) * (size_t)n);
       if (!keep) break;
       memcpy(keep, st, sizeof(int) * (size_t)n);
-      int e = pop > 0 ? k + 1 : n;
-      while (e < n && nt_int(nt, keep[e], "req_pop", 0) > 0 && nt_int(nt, keep[e], "req_pop", 0) <= pop) e++;
-      if (pop > 0) engine_blank(nt, bb[bn - 1]);
-      if (!folded && e > k + 1) {
-        int rest = nt_new_node(nt, "StatementsNode"), els = nt_new_node(nt, "ElseNode");
-        nt_node_set_arr(nt, rest, "body", keep + k + 1, e - k - 1);
-        nt_node_set_ref(nt, els, "statements", rest);
-        nt_node_set_ref(nt, keep[k], other, els);
-        comp_grow_node_arrays(c);
-      }
-      for (int j = k + 1; folded && j < e; j++) {
+      for (int j = k + 1; j < n; j++) {
         pre_nt_record_dead_locals(nt, id, keep[j]);
         engine_blank(nt, keep[j]);
       }
-      memmove(keep + k + 1, keep + e, sizeof(int) * (size_t)(n - e));
-      nt_node_set_arr(nt, id, "body", keep, n - (e - k - 1));
+      nt_node_set_arr(nt, id, "body", keep, k + 1);
       free(keep);
       changed = 1;
       st = nt_arr(nt, id, "body", &n);
@@ -28437,11 +28422,6 @@ static void pb_walk(const NodeTable *nt, const int *parent, InhNames *r, char **
   for (int i = 0; i < n; i++) {
     int id = v[i], lexical = 0;
     char q[1024], w[512];
-    /* a statement of a file the inline model spliced here from a require that
-       may not run where it stands (sp_req_always_runs says no) runs only when
-       that does, not unconditionally earlier: it neither defines a namespace
-       nor is a write the walk marks */
-    if (nt_int(nt, id, "req_deferred", 0)) continue;
     if (nt_kind(nt, id) == NK_ConstantPathWriteNode) {
       int ns = nt_ref(nt, nt_ref(nt, id, "target"), "parent");
       NodeKind nk = ns >= 0 ? nt_kind(nt, ns) : NK_NONE;

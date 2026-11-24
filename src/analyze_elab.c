@@ -8402,10 +8402,8 @@ static int lr_may_not_have_run(Compiler *c, const LrDef *v, LoadPoint p) {
   if (!v) return 0;
   const LoadRecord *r = elab_fresh(c);
   const LrStmt *st = lr_stmt_of(r, v->node);
-  /* a def a file defines is made where the file's require runs: the inline model stamps the statements of a file
-     spliced from a require that may not run where it stands (req_deferred), the graph stamps that file's root
-     (prog_load_deferred), the one stamp for a file at any depth below such a require */
-  if (st && st->top >= 0 && nt_int(c->nt, r->st[st->top].node, "req_deferred", 0)) return 1;
+  /* a def a file defines is made where the file's require runs: the file's root carries whether that require may not
+     run where it stands (prog_load_deferred), the one stamp for a file at any depth below such a require */
   if (st && prog_load_deferred(c, st->file)) return 1;
   return nt_int(c->nt, v->node, "cond_lone_disp", 0) ||
          ((v->may || (st && (st->may || st->fmay || st->fpartial))) && !lr_may_dominates(c->lrec, v, p));
@@ -11177,21 +11175,17 @@ int elab_version_met(Compiler *c, int cls, int sg, const char *name, int def) {
 }
 
 /* Can the program run code the record has not seen? Only through a load
-   whose target it could not resolve: under --load-model=graph a LoadNode
-   whose path is computed when it runs, inline a require, require_relative,
-   load or autoload the parse left in the tree (one it resolved it spliced
-   away). A require or a load is Kernel's on no receiver or on Object or
-   Kernel (`YAML.load` reads no file); an autoload on any receiver is one
-   (`Mod.autoload(:X, path)`, which the parse leaves); and a require the
-   inline model ignored, which no node stands for (the root's
-   dropped_require). The files of a closed
-   set a computed path may name are seen: each is a region of its own.
-   Read from the tree, once. */
+   whose target it could not resolve: a require, require_relative, load or
+   autoload the parse left in the tree as a call. A require or a load is
+   Kernel's on no receiver or on Object or Kernel (`YAML.load` reads no
+   file); an autoload on any receiver is one (`Mod.autoload(:X, path)`,
+   which the parse leaves). The files of a closed set a computed path may
+   name are seen: each is a region of its own. Read from the tree, once. */
 int elab_runs_unseen(Compiler *c) {
   LoadRecord *r = lr_get(c);
   if (!r->unseen) {
     const NodeTable *nt = c->nt;
-    int hit = nt_int(nt, nt->root_id, "dropped_require", 0), n = 0;   /* (a require the inline model ignored, whose library CRuby would load) */
+    int hit = 0, n = 0;
     const int *v = nt_nodes_of_kind(nt, NK_CallNode, &n);
     for (int i = 0; !hit && i < n; i++) {
       int recv = nt_ref(nt, v[i], "receiver");

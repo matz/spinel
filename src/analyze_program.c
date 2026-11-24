@@ -83,9 +83,7 @@ static int prog_load_by(const Compiler *c, int f) {
    parser's sp_req_always_runs says no: the LoadNode's req_deferred), at any
    level of the requires that run it, or is it a file no require places? The
    one stamp prog_stamp_deferred writes on each file's root once the files
-   have their places (prog_settle_files); the inline splice stamps the
-   statements of a file spliced from such a require instead (req_deferred).
-   0 for a file with no root: the inline model's. */
+   have their places (prog_settle_files). 0 for the entry. */
 int prog_load_deferred(const Compiler *c, int f) {
   const NodeTable *nt = c->nt;
   int r = f > 0 && f < nt->nfile_roots ? nt_root(nt, f) : -1;

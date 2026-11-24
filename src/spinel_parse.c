@@ -247,15 +247,12 @@ static void sp_src_file_warn_encoding(const SpSrcFile *f) {
    require-resolution machinery that defines the builder. */
 static int *sp_line_file = NULL;  /* buffer line (1-based) -> file id */
 static int *sp_line_orig = NULL;  /* buffer line (1-based) -> original line */
-static int *sp_line_pop = NULL;
-static void sp_stamp_req_pop(int id, int32_t bl, int32_t ol);
 /* The position a `#<SPINEL_SOURCE>file:line` marker pins for the lines after
    it (0 = none). Kept apart from the physical map above: `__FILE__`,
    `__dir__` and `require_relative` still answer from the file the code is in,
    only the positions handed to `#line`, debug and the reports follow it. */
 static int *sp_disp_file = NULL;
 static int *sp_disp_line = NULL;
-static pm_node_t **g_stmt_next, **g_stmt_end;
 static const uint8_t *g_owner;
 static int sp_line_map_n = 0;
 static char **sp_file_table;   /* id -> path; defined with the map builder below */
@@ -1175,15 +1172,12 @@ static int flatten(pm_node_t *node) {
   return id;
 }
 
-/* A StatementsNode's body, each statement under the statement cursor; a
-   def_delegators statement is flattened as the defs it stands for. */
+/* A StatementsNode's body; a def_delegators statement is flattened as the
+   defs it stands for. */
 static void flatten_statements(int id, pm_node_list_t *list) {
-  pm_node_t **next = g_stmt_next, **end = g_stmt_end;
   pm_node_list_t low = { 0 }, made = { 0 };
   pm_node_list_t *body = sp_lower_body(list, &low, &made) ? &low : list;
-  g_stmt_next = body->nodes; g_stmt_end = g_stmt_next + body->size;
   emit_node_array(id, "body", body);
-  g_stmt_next = next; g_stmt_end = end;
   for (size_t i = 0; i < made.size; i++) pm_node_destroy((pm_parser_t *)g_parser, made.nodes[i]);
   pm_node_list_free(&made);
   pm_node_list_free(&low);
@@ -1995,12 +1989,6 @@ static int flatten_node(pm_node_t *node) {
   if (in_bi) {
     if (g_bi_base < 0 || t == PM_DEF_NODE) g_bi_base = id;
     emit_int(id, "node_bi", g_bi_base + 1);
-  }
-  if (g_stmt_next < g_stmt_end && node == *g_stmt_next) {
-    int32_t bl = pm_newline_list_line(&g_parser->newline_list, node->location.start, g_parser->start_line);
-    int32_t ol = owner ? pm_newline_list_line(&g_parser->newline_list, owner, g_parser->start_line) : 0;
-    g_stmt_next++;
-    sp_stamp_req_pop(id, bl, ol);
   }
   if (t != PM_STATEMENTS_NODE) g_owner = t == PM_PROGRAM_NODE ? NULL : node->location.start;
 
@@ -3455,36 +3443,6 @@ static char *sp_canonical_path(const char *path) {
   return strdup("");
 }
 
-/* ---- Debug multi-file source map (g_emit_line only) -------------------
-   require/require_relative are resolved by *textual* splicing into one
-   buffer, so a node's Prism line is a line in that concatenated buffer and
-   the original file boundaries are lost. For --debug we recover them: each
-   spliced file's content is wrapped in PUSH/POP marker *comments* (Prism
-   ignores comments, so the AST is unchanged), and a single pass over the
-   final buffer reconstructs, per buffer line, which file and original line
-   it came from. The stack accounting needs no original-line bookkeeping at
-   splice time: a PUSH consumes the parent's (replaced) require line, while
-   INSERT leaves that line in place. Content lines count within the child's
-   own coordinates until POP. */
-#define SP_PUSH_PREFIX "#<SPINEL_PUSH>"
-#define SP_INSERT_PREFIX "#<SPINEL_INSERT>"
-
-/* A PUSH or INSERT marker's file, after the prefix: its path, and the tier
-   sp_wrap_included wrote ahead of it (SP_LIB_NONE for the program's own),
-   with SP_FILE_DEFERRED when the marker says the file was spliced from a
-   require in a method, a block or a lambda */
-#define SP_TIER_MARK '\x1f'
-#define SP_DEFER_MARK '\x1e'
-#define SP_FILE_DEFERRED 0x40
-static const char *sp_marker_file(const char *p, size_t *len, int *tier) {
-  int deferred = *len >= 1 && p[0] == SP_DEFER_MARK;
-  if (deferred) { p++; (*len)--; }
-  *tier = SP_LIB_NONE;
-  if (*len >= 2 && p[0] == SP_TIER_MARK && p[1] >= '0' && p[1] <= '9') { *tier = p[1] - '0'; *len -= 2; p += 2; }
-  if (deferred) *tier |= SP_FILE_DEFERRED;
-  return p;
-}
-#define SP_POP_PREFIX "#<SPINEL_POP>"
 /* A generated .rb names the source its lines came from (#7630):
    `#<SPINEL_SOURCE>greeting.html.erb:12` pins file and line for the lines
    after it, until the next marker or the end of the file it is in. */
@@ -3497,8 +3455,7 @@ static int sp_in_builtin(const uint8_t *at) {
 }
 
 static char **sp_file_table = NULL;  /* id -> path (declared above flatten) */
-static unsigned char *sp_file_tier = NULL;   /* id -> where `require` found it (SP_LIB_*), and
-                                                SP_FILE_DEFERRED */
+static unsigned char *sp_file_tier = NULL;   /* id -> where `require` found it (SP_LIB_*) */
 static int sp_file_count = 0, sp_file_cap = 0;
 
 /* A file's tier once another require finds it too (one canonical path,
@@ -3525,8 +3482,7 @@ static int sp_new_file(const char *path, int tier) {
 static int sp_intern_file(const char *path, int tier) {
   for (int i = 0; i < sp_file_count; i++)
     if (strcmp(sp_file_table[i], path) == 0) {
-      sp_file_tier[i] = (unsigned char)(((sp_file_tier[i] | tier) & SP_FILE_DEFERRED) |
-                                        sp_tier_merge(sp_file_tier[i] & ~SP_FILE_DEFERRED, tier & ~SP_FILE_DEFERRED));
+      sp_file_tier[i] = (unsigned char)sp_tier_merge(sp_file_tier[i], tier);
       return i;
     }
   return sp_new_file(path, tier);
@@ -3565,119 +3521,57 @@ static void sp_file_tiers_mark(NodeTable *nt) {
     int src = i;   /* an id made for a marker's name has its path's first id's tier */
     if (sp_file_defer_force && sp_file_defer_force[i])
       for (int k = 0; k < i; k++) if (strcmp(sp_file_table[k], sp_file_table[i]) == 0) { src = k; break; }
-    if ((sp_file_tier[src] & ~SP_FILE_DEFERRED) != SP_LIB_NONE) nt_put_file_tier(nt, i, sp_file_tier[src] & ~SP_FILE_DEFERRED);
+    if (sp_file_tier[src] != SP_LIB_NONE) nt_put_file_tier(nt, i, sp_file_tier[src]);
   }
 }
-/* Was file fid spliced from a require that does not always run where it stands (sp_req_always_runs), or from inside
-   such a file? */
-static int sp_file_deferred(int fid) {
-  return sp_file_tier && fid >= 0 && fid < sp_file_count && (sp_file_tier[fid] & SP_FILE_DEFERRED);
-}
-/* Stamp top-level statement id, on source line bl under its owner's line ol,
-   with the splice it ends (req_pop) when the two lines' splices differ, and
-   req_deferred when its file was spliced from a require that may not run
-   (sp_req_always_runs says no), so its statements may not have run. */
-static void sp_stamp_req_pop(int id, int32_t bl, int32_t ol) {
-  if (bl < 1 || bl > sp_line_map_n || sp_line_pop[bl] <= 0 || sp_line_pop[bl] == sp_line_pop[ol]) return;
-  emit_int(id, "req_pop", sp_line_pop[bl]);
-  if (sp_file_deferred(sp_line_file[bl])) emit_int(id, "req_deferred", 1);
-}
-
-/* Reconstruct the line map from the final spliced buffer. toplevel is the
-   path of the outermost file (interned as the initial frame). */
-static void sp_build_line_map(const char *src, const char *toplevel) {
+/* The line map of one file's text: each line's file and line, and the
+   position a `#<SPINEL_SOURCE>file:line` marker pins for the lines after it.
+   file is the text's own path. */
+static void sp_build_line_map(const char *src, const char *file) {
   size_t nlines = 1;
   for (const char *p = src; *p; p++) if (*p == '\n') nlines++;
   sp_line_map_n = (int)nlines;
   sp_line_file = (int *)calloc(nlines + 2, sizeof(int));
   sp_line_orig = (int *)calloc(nlines + 2, sizeof(int));
-  sp_line_pop = (int *)calloc(nlines + 2, sizeof(int));
   sp_disp_file = (int *)calloc(nlines + 2, sizeof(int));
   sp_disp_line = (int *)calloc(nlines + 2, sizeof(int));
-  int *stk_dfile = (int *)calloc(nlines + 2, sizeof(int));  /* a frame's pinned file id, 0 = none */
-  int *stk_dline = (int *)calloc(nlines + 2, sizeof(int));
-
-  int *stk_file = (int *)malloc(sizeof(int) * (nlines + 2));
-  int *stk_next = (int *)malloc(sizeof(int) * (nlines + 2));
-  int *stk_start = (int *)malloc(sizeof(int) * (nlines + 2));
-  if (!sp_line_file || !sp_line_orig || !sp_line_pop || !sp_disp_file || !sp_disp_line || !stk_dfile || !stk_dline || !stk_file || !stk_next || !stk_start) {
+  if (!sp_line_file || !sp_line_orig || !sp_disp_file || !sp_disp_line) {
     fprintf(stderr, "spinel_parse: out of memory\n"); exit(1);
   }
-  int sp = 0;
-  stk_file[sp] = sp_intern_file(toplevel, SP_LIB_NONE);
-  stk_next[sp] = 1;
-
+  int fid = sp_intern_file(file, SP_LIB_NONE), dfile = 0, dline = 0;   /* dfile: the pinned file id, 0 = none */
   int bl = 1;
   const char *line = src;
   while (1) {
     const char *eol = strchr(line, '\n');
     size_t len = eol ? (size_t)(eol - line) : strlen(line);
-    size_t prefix_len = 0;
-    if (strncmp(line, SP_PUSH_PREFIX, strlen(SP_PUSH_PREFIX)) == 0) {
-      /* The replaced require occupied one parent line: consume it. */
-      if (sp >= 0) stk_next[sp] += 1;
-      prefix_len = strlen(SP_PUSH_PREFIX);
-    }
-else if (strncmp(line, SP_INSERT_PREFIX, strlen(SP_INSERT_PREFIX)) == 0) {
-      prefix_len = strlen(SP_INSERT_PREFIX);
-    }
-    if (prefix_len) {
+    sp_line_file[bl] = fid;
+    sp_line_orig[bl] = bl;
+    if (strncmp(line, SP_SOURCE_PREFIX, strlen(SP_SOURCE_PREFIX)) == 0) {
+      /* file:line, split at the last colon; anything else is a comment */
       char pathbuf[1024];
-      size_t plen = len - prefix_len;
-      int tier;
-      const char *fp = sp_marker_file(line + prefix_len, &plen, &tier);
+      size_t plen = len - strlen(SP_SOURCE_PREFIX);
       if (plen >= sizeof(pathbuf)) plen = sizeof(pathbuf) - 1;
-      memcpy(pathbuf, fp, plen);
+      memcpy(pathbuf, line + strlen(SP_SOURCE_PREFIX), plen);
       pathbuf[plen] = '\0';
-      /* a file spliced inside a deferred one runs when that one does */
-      if (sp_file_deferred(stk_file[sp])) tier |= SP_FILE_DEFERRED;
-      sp++;
-      stk_file[sp] = sp_intern_file(pathbuf, tier);
-      stk_next[sp] = 1;
-      stk_start[sp] = bl;
-      stk_dfile[sp] = 0;
-      /* marker line maps to nothing meaningful */
-    }
-else if (strncmp(line, SP_POP_PREFIX, strlen(SP_POP_PREFIX)) == 0) {
-      for (int j = sp > 0 ? stk_start[sp] : bl; j < bl; j++) if (!sp_line_pop[j]) sp_line_pop[j] = bl;
-      if (sp > 0) sp--;
-    }
-else if (len < 12 || strncmp(line + len - 12, "SPINEL_COND>", 12) != 0) {
-      sp_line_file[bl] = stk_file[sp];
-      sp_line_orig[bl] = stk_next[sp];
-      stk_next[sp] += 1;
-      if (strncmp(line, SP_SOURCE_PREFIX, strlen(SP_SOURCE_PREFIX)) == 0) {
-        /* file:line, split at the last colon; anything else is a comment */
-        char pathbuf[1024];
-        size_t plen = len - strlen(SP_SOURCE_PREFIX);
-        if (plen >= sizeof(pathbuf)) plen = sizeof(pathbuf) - 1;
-        memcpy(pathbuf, line + strlen(SP_SOURCE_PREFIX), plen);
-        pathbuf[plen] = '\0';
-        while (plen > 0 && (pathbuf[plen - 1] == '\r' || pathbuf[plen - 1] == ' ')) pathbuf[--plen] = '\0';
-        char *colon = strrchr(pathbuf, ':');
-        char *end = NULL;
-        long ln = colon ? strtol(colon + 1, &end, 10) : 0;
-        if (colon && colon > pathbuf && end && end != colon + 1 && *end == '\0' && ln > 0 && ln < 1000000000) {
-          *colon = '\0';
-          stk_dfile[sp] = sp_intern_display_file(pathbuf, stk_file[sp]);
-          stk_dline[sp] = (int)ln;
-        }
+      while (plen > 0 && (pathbuf[plen - 1] == '\r' || pathbuf[plen - 1] == ' ')) pathbuf[--plen] = '\0';
+      char *colon = strrchr(pathbuf, ':');
+      char *end = NULL;
+      long ln = colon ? strtol(colon + 1, &end, 10) : 0;
+      if (colon && colon > pathbuf && end && end != colon + 1 && *end == '\0' && ln > 0 && ln < 1000000000) {
+        *colon = '\0';
+        dfile = sp_intern_display_file(pathbuf, fid);
+        dline = (int)ln;
       }
-      else if (stk_dfile[sp]) {
-        sp_disp_file[bl] = stk_dfile[sp];
-        sp_disp_line[bl] = stk_dline[sp];
-      }
+    }
+    else if (dfile) {
+      sp_disp_file[bl] = dfile;
+      sp_disp_line[bl] = dline;
     }
     bl++;
     if (!eol) break;
     line = eol + 1;
     if (*line == '\0') break;
   }
-  free(stk_file);
-  free(stk_next);
-  free(stk_start);
-  free(stk_dfile);
-  free(stk_dline);
 }
 
 /* Lexically collapse "." and ".." path segments, like File.expand_path,
@@ -4251,8 +4145,8 @@ static bool sp_first_return_visit(const pm_node_t *node, void *data) {
 }
 
 /* Does the require `node` (below the ancestors stack[0..depth), the file's ProgramNode first) always run where its
-   file's statements run? The one fact the inline splice and the load graph's LoadNode both carry as req_deferred
-   (its negation), written here and nowhere else. It does when both hold:
+   file's statements run? The load graph's LoadNode carries its negation as req_deferred, written here and nowhere
+   else. It does when both hold:
    - the require is a statement of its own, and every ancestor is the file's top-level statement list, a class,
      module or singleton class body, or the body of a `begin` that has no rescue clause (with one, an earlier
      statement's raise can skip it; without, the raise ends the program, and nothing observes the difference);
@@ -4260,7 +4154,7 @@ static bool sp_first_return_visit(const pm_node_t *node, void *data) {
      an enclosing begin, which ends the load before the require.
    Every other placement (a method, a block, a lambda, a branch, a loop, a condition or short-circuit in expression
    position, a rescue clause, an argument) is deferred; and a file required from a deferred one is deferred
-   (sp_file_deferred, below). */
+   (prog_stamp_deferred). */
 static int sp_req_always_runs(const pm_node_t *const *stack, int depth, const pm_node_t *node, SpFileReturn *ret) {
   if (depth < 1 || PM_NODE_TYPE(stack[0]) != PM_PROGRAM_NODE) return 0;
   pm_node_type_t pt = PM_NODE_TYPE(stack[depth - 1]);
@@ -5320,9 +5214,6 @@ static const char *sp_package_feature(const char *lib_name) {
 }
 
 /* ---- Plain require resolution ---- */
-static char *resolve_plain_requires(SpLoadGraph *g, char *source, const char *exe_path,
-                                    unsigned char **fsl, size_t *fsl_n);
-
 static void sp_lib_dir(const char *exe_path, char *lib_dir, size_t lib_dir_n);
 /* ---- builtins/: the core methods written in Ruby ----
    The names builtins/enumerable.rb defines, read once: the analyzer rewrites
@@ -7206,7 +7097,7 @@ static int sp_graph_flatten(SpLoadGraph *g, int f, const char *source_file) {
   g_bi_base = -1;
   g_parser = &r->src.parser;
   g_source_file = source_file;
-  g_stmt_next = g_stmt_end = NULL; g_owner = NULL;
+  g_owner = NULL;
   /* inline RBS over the file's own comment list, its facts stamped on the
      file's own nodes as flatten makes them */
   if (sp_inline_rbs_run(&r->src.parser, r->src.root, r->text, strlen(r->text), sp_file_table[g_flat_file], g_flat_file) > 0) {
@@ -7218,7 +7109,7 @@ static int sp_graph_flatten(SpLoadGraph *g, int f, const char *source_file) {
      after it, as the inline model's map of the spliced buffer does: the
      file's own map for its parse, the file's own lines elsewhere */
   int saved_map_n = sp_line_map_n;
-  int *saved_lf = sp_line_file, *saved_lo = sp_line_orig, *saved_lp = sp_line_pop;
+  int *saved_lf = sp_line_file, *saved_lo = sp_line_orig;
   int *saved_df = sp_disp_file, *saved_dl = sp_disp_line;
   int own_map = r->text && strstr(r->text, SP_SOURCE_PREFIX) != NULL;
   if (own_map) sp_build_line_map(r->text, sp_file_table[g_flat_file]);
@@ -7232,9 +7123,9 @@ static int sp_graph_flatten(SpLoadGraph *g, int f, const char *source_file) {
   g_in_basic_object = 0;
   g_flat_sites = (SpGraphFlat){ NULL, NULL, 0 };
   if (own_map) {
-    free(sp_line_file); free(sp_line_orig); free(sp_line_pop); free(sp_disp_file); free(sp_disp_line);
+    free(sp_line_file); free(sp_line_orig); free(sp_disp_file); free(sp_disp_line);
     sp_line_map_n = saved_map_n;
-    sp_line_file = saved_lf; sp_line_orig = saved_lo; sp_line_pop = saved_lp;
+    sp_line_file = saved_lf; sp_line_orig = saved_lo;
     sp_disp_file = saved_df; sp_disp_line = saved_dl;
   }
   sp_inline_rbs_done();
@@ -7783,12 +7674,12 @@ NodeTable *sp_parse_snippet_in(const char *src, const SnipFrame *f) {
   int saved_emit_line = g_emit_line, saved_emit_end = g_emit_end;
   NodeTable *saved_nt = out_nt; int saved_counter = node_counter;
   int saved_map_n = sp_line_map_n; unsigned char *saved_fsl = g_fsl_lines; size_t saved_fsl_n = g_fsl_nlines;
-  int *saved_lf = sp_line_file, *saved_lo = sp_line_orig, *saved_lp = sp_line_pop;
+  int *saved_lf = sp_line_file, *saved_lo = sp_line_orig;
   int *saved_df = sp_disp_file, *saved_dl = sp_disp_line;
   const char *saved_src = g_source_file; int saved_flat = g_flat_file, saved_bi = g_flat_builtin;
-  pm_node_t **saved_next = g_stmt_next, **saved_end = g_stmt_end; const uint8_t *saved_owner = g_owner;
+  const uint8_t *saved_owner = g_owner;
   sp_line_map_n = 0; g_fsl_lines = NULL; g_fsl_nlines = 0;
-  g_stmt_next = g_stmt_end = NULL; g_owner = NULL; g_emit_end = 0; g_flat_builtin = 0;
+  g_owner = NULL; g_emit_end = 0; g_flat_builtin = 0;
   char *buf = strdup(src), *path = NULL;
   int *map = NULL;
   pm_options_t opts;
@@ -7818,10 +7709,10 @@ NodeTable *sp_parse_snippet_in(const char *src, const SnipFrame *f) {
        the site's line + i - 1 in the site's file */
     int nl = 1;
     for (const char *q = buf; *q; q++) nl += *q == '\n';
-    map = calloc((size_t)(nl + 2) * 5, sizeof(int));
+    map = calloc((size_t)(nl + 2) * 4, sizeof(int));
     if (map) {
-      sp_line_file = map; sp_line_orig = map + nl + 2; sp_line_pop = map + 2 * (nl + 2);
-      sp_disp_file = map + 3 * (nl + 2); sp_disp_line = map + 4 * (nl + 2);
+      sp_line_file = map; sp_line_orig = map + nl + 2;
+      sp_disp_file = map + 2 * (nl + 2); sp_disp_line = map + 3 * (nl + 2);
       for (int i = 1; i <= nl; i++) {
         sp_line_orig[i] = (int)(f->line + i - 1);
         if (f->site_line > 0) { sp_disp_line[i] = (int)(f->site_line + i - 1); sp_disp_file[i] = f->site_file; }
@@ -7853,9 +7744,9 @@ NodeTable *sp_parse_snippet_in(const char *src, const SnipFrame *f) {
   out_nt = saved_nt; node_counter = saved_counter;
   g_parser = saved_parser; g_emit_line = saved_emit_line; g_emit_end = saved_emit_end;
   sp_line_map_n = saved_map_n; g_fsl_lines = saved_fsl; g_fsl_nlines = saved_fsl_n;
-  sp_line_file = saved_lf; sp_line_orig = saved_lo; sp_line_pop = saved_lp;
+  sp_line_file = saved_lf; sp_line_orig = saved_lo;
   sp_disp_file = saved_df; sp_disp_line = saved_dl;
   g_source_file = saved_src; g_flat_file = saved_flat; g_flat_builtin = saved_bi;
-  g_stmt_next = saved_next; g_stmt_end = saved_end; g_owner = saved_owner;
+  g_owner = saved_owner;
   return res;
 }

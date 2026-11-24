@@ -14317,16 +14317,6 @@ static int ver_in_unrun_body(const Compiler *c, const int *par, int n) {
   }
   return 0;
 }
-/* Does node n stand in a rescue clause of a program whose root records
-   dropped_require: the inline model dropped a require CRuby's LoadError
-   would have left, so whether any rescue clause runs is not known (and its
-   defs keep their static handling)? */
-static int ver_in_dropped_rescue(const Compiler *c, const int *par, int n) {
-  if (!nt_int(c->nt, c->nt->root_id, "dropped_require", 0)) return 0;
-  for (int a = par[n]; a >= 0; n = a, a = par[a])
-    if (nt_kind(c->nt, a) == NK_RescueNode && n == nt_ref(c->nt, a, "statements")) return 1;
-  return 0;
-}
 /* ...for one open history, asked (its entry made after every ask), with
    its else kind (ver_named_kind): none for a history holding a version no
    arm calls (an undef, a copy, an alias, an accessor), one whose cell
@@ -14500,7 +14490,7 @@ static void ver_named_one(void *arg, int cls, int sg, const char *name) {
             (d->kind == LR_ALIAS && ct_versioned_string_reader(c, cls, sg, name)) ? d->scope : 0;
     int st = d->node;
     while (st >= 0 && par[st] >= 0 && nt_kind(c->nt, par[st]) != NK_StatementsNode) st = par[st];   /* (its cell write's, ver_cells_write) */
-    if (nt_int(c->nt, d->node, "cond_arm", 0) || ver_in_dropped_rescue(c, par, d->node)) return;
+    if (nt_int(c->nt, d->node, "cond_arm", 0)) return;
     held |= nt_int(c->nt, d->node, "cond_lone", 0) != 0;
     if (st < 0 || par[st] < 0 || (d->may == LR_MAY_IN && st != d->node) || ver_in_unrun_body(c, par, d->node)) { bad = 1; continue; }
     if (string_guard && d->kind == LR_UNDEF) {

@@ -20853,17 +20853,21 @@ int desugar_builtin_enum_calls(Compiler *c) {
     /* the builtin's own arity: `str.partition(sep)` on a value that is a
        String at run time is String's method, not Enumerable's. A program's
        own method may take a rest (activesupport's `excluding(*elements)`)
-       or keywords, and a splatted argument counts for any number. A boxed
-       receiver's call left as written is dispatched by the name it was
-       written with: a class's own `collect_concat(n)` is not flat_map's. */
+       or keywords, and a splatted argument counts for any number, none
+       too. A builtins/ definition covers only some forms (`inject` the
+       block's alone, the seed and the operator staying on its emitter), so
+       a splat there counts as one. A boxed receiver's call left as written
+       is dispatched by the name it was written with: a class's own
+       `collect_concat(n)` is not flat_map's. */
     { int cpn = nt_ref(nt, copy, "parameters");
       int crn = 0; if (cpn >= 0) nt_arr(nt, cpn, "requireds", &crn);
       int con = 0; if (cpn >= 0) nt_arr(nt, cpn, "optionals", &con);
       int ckn = 0; if (cpn >= 0) nt_arr(nt, cpn, "keywords", &ckn);
       int crest = cpn >= 0 && nt_ref(nt, cpn, "rest") >= 0;
       int pos = an, splat = nt_argv_has_splat(nt, av, an);
+      int none = splat && !nt_int(nt, copy, "node_bi", 0);
       if (ckn > 0 && nt_argv_kwh(nt, av, an) >= 0) pos--;
-      if ((!splat && pos + 1 < crn) || (!crest && pos + 1 > crn + con)) {
+      if ((!splat && pos + 1 < crn) || (!crest && pos - none + 1 > crn + con)) {
         if (rt == TY_POLY && enum_unrename(nt, id)) changed = 1;
         continue;
       } }

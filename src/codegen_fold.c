@@ -11342,6 +11342,17 @@ int emit_unknown_kwarg_raise(Compiler *c, Scope *m, const int *argv, int argc) {
   return 1;
 }
 
+/* 1 when m's first parameter is the receiver slot of an Enumerable copy
+   (desugar_builtins' `__enum_<name>__<k>`, enum_bi on its def): the call
+   rewritten onto the copy passes its receiver there. It is judged as a
+   required positional, and left out of the count CRuby reports, which is
+   the method's own: `[5].pick(*[])` against `def pick(i, j = 0)` is
+   "given 0, expected 1..2". */
+static int arity_recv_slot(Compiler *c, const Scope *m) {
+  return m && m->def_node >= 0 && nt_int(c->nt, m->def_node, "enum_bi", -1) >= 0 &&
+         m->nparams > 0 && is_reopen_self_name(m->pnames[0]);
+}
+
 /* The positional count a rest-parameter method requires, when a call that
    supplies fewer is judged: the parameters without a default, the rest and
    any keyword left out. -1 when it is not judged -- no rest, a keyword or
@@ -11351,8 +11362,8 @@ int emit_unknown_kwarg_raise(Compiler *c, Scope *m, const int *argv, int argc) {
    candidate the raise would refuse is never emitted as an arm (#3520). */
 int rest_shortfall_required(Compiler *c, Scope *m) {
   if (m->rest_idx < 0 || m->kwrest_idx >= 0 || m->cs_synth) return -1;
-  int nreq = 0;
-  for (int i = 0; i < m->nparams; i++) {
+  int rs = arity_recv_slot(c, m), nreq = rs;
+  for (int i = rs; i < m->nparams; i++) {
     if (i == m->rest_idx) continue;
     if (!m->pnames[i] || (m->pnames[i][0] == '_' && m->pnames[i][1] == '_') ||
         callee_has_kwarg(c, m, m->pnames[i])) return -1;
@@ -11407,7 +11418,12 @@ static void emit_positional_count_check(Compiler *c, Scope *m, const char *given
      wrapper whose builtin takes any count (bam_variadic_kernel) */
   int unbounded = m && (m->rest_idx >= 0 || bam_variadic_kernel(c->nt, m));
   emit_arity_presence(c, m);
-  emit_arity_check(g_pre, given, pos_required, unbounded ? -1 : pos_params, kw);
+  /* (an Enumerable copy's receiver slot is in `given` and in the
+     parameters, and out of the count CRuby reports) */
+  int rs = arity_recv_slot(c, m);
+  char gs[256];
+  snprintf(gs, sizeof gs, rs ? "(%s) - 1" : "%s", given);
+  emit_arity_check(g_pre, gs, pos_required - rs, unbounded ? -1 : pos_params - rs, kw);
   buf_puts(g_pre, ";\n");
 }
 
@@ -11454,7 +11470,7 @@ static int bam_variadic_kernel(const NodeTable *nt, const Scope *m) {
 static int arity_unjudged(Compiler *c, Scope *m) {
   if (m->entry || arity_conditional_dispatch(c, m)) return 0;
   if (m->cs_synth) return 1;
-  for (int i = 0; i < m->nparams; i++)
+  for (int i = arity_recv_slot(c, m); i < m->nparams; i++)
     if (m->pnames[i] && m->pnames[i][0] == '_' && m->pnames[i][1] == '_' &&
         strncmp(m->pnames[i], "__bam_", 6) != 0) return 1;
   int pn = m->def_node >= 0 ? nt_ref(c->nt, m->def_node, "parameters") : -1;
@@ -11531,7 +11547,8 @@ int arity_count_error(Compiler *c, Scope *m, int given, char *msg, size_t n) {
      keyword: k)" */
   char kwsuf[256];
   scope_arity_kw_suffix(c, m, kwsuf, sizeof kwsuf);
-  arity_message(msg, n, given, nreq, m->rest_idx >= 0 ? -1 : nfixed, kwsuf);
+  int rs = arity_recv_slot(c, m);
+  arity_message(msg, n, given - rs, nreq - rs, m->rest_idx >= 0 ? -1 : nfixed - rs, kwsuf);
   return 1;
 }
 

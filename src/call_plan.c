@@ -3882,13 +3882,15 @@ int cplan_typed_to_ary_held(Compiler *c, TyKind t, int at, int op, int *boxed, i
      be nil, and the value then stays the one element, as the destructure
      keeps it: the caller that asks for it (*hold) holds the value in a temp,
      which the destructure reads, never the expression. Only a PolyArray can
-     take that element, so another typed Array converts boxed (the nil fact
-     is not settled where the desugar asks, so every non-tuple answer is
-     taken as maybe nil). */
+     take that element, so a version that answers another typed Array
+     converts boxed, whatever the table's method answers: the conversion
+     runs, and is typed as, the version vi (the nil fact is not settled
+     where the desugar asks, so every non-tuple answer is taken as maybe
+     nil). */
   const int *tup;
   if (scope_tuple_elem_nodes(c, mi, &tup) > 0 && scope_tuple_elem_nodes(c, vi, &tup) > 0 &&
       !method_overridden_below(c, op, cls, "to_ary", mi)) return vi;
-  if (c->scopes[mi].ret == TY_POLY_ARRAY || c->scopes[vi].ret == TY_POLY_ARRAY) {
+  if (c->scopes[vi].ret == TY_POLY_ARRAY) {
     if (hold) *hold = 1;
     return vi;
   }

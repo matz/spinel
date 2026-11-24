@@ -5117,8 +5117,12 @@ infer-test-1: $(SPINEL) $(SP_RT_LIB)
 	  { echo "infer-test: FAIL (fill on an Integer or Float Array stores slot by slot again instead of its span: sp_<K>Array_fill_span)"; ok=0; }; \
 	$(SPINEL) test/each_counter_reads_in_place.rb -c --no-line-map -o "$$tmp/ecr.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (each_counter_reads_in_place: -c)"; ok=0; }; \
 	[ "$$(grep -cE '^static [^(]* sp_(rb_)?(dot_ewi|idot_ewi|dot_count)\(.*\{$$' "$$tmp/ecr.c")" = 3 ] || { echo "infer-test: FAIL (each_counter_reads_in_place: dot_ewi, idot_ewi or dot_count not found)"; ok=0; }; \
-	[ "$$(awk '/^static [^(]* sp_(rb_)?(dot_ewi|idot_ewi|dot_count)\(.*\{$$/,/^\}/' "$$tmp/ecr.c" | grep -cE '_hcv[0-9]+_[0-9]+\[')" = 6 ] || \
-	  { echo "infer-test: FAIL (an each_with_index or a counted each no longer reads its element and the other array at the counter in place: hcv_begin_walk)"; ok=0; }; \
+	[ "$$(awk '/^static [^(]* sp_(rb_)?dot_ewi\(.*\{$$/,/^\}/' "$$tmp/ecr.c" | grep -oE '_hcv[0-9]+_[0-9]+\[' | sort -u | wc -l | tr -d ' ')" = 2 ] || \
+	  { echo "infer-test: FAIL (an each_with_index no longer reads its element and the other array at the counter in place: hcv_begin_walk, dot_ewi)"; ok=0; }; \
+	[ "$$(awk '/^static [^(]* sp_(rb_)?idot_ewi\(.*\{$$/,/^\}/' "$$tmp/ecr.c" | grep -oE '_hcv[0-9]+_[0-9]+\[' | sort -u | wc -l | tr -d ' ')" = 2 ] || \
+	  { echo "infer-test: FAIL (an each_with_index no longer reads its element and the other array at the counter in place: hcv_begin_walk, idot_ewi)"; ok=0; }; \
+	[ "$$(awk '/^static [^(]* sp_(rb_)?dot_count\(.*\{$$/,/^\}/' "$$tmp/ecr.c" | grep -oE '_hcv[0-9]+_[0-9]+\[' | sort -u | wc -l | tr -d ' ')" = 2 ] || \
+	  { echo "infer-test: FAIL (a counted each no longer reads its element and the other array at the counter in place: hcv_begin_walk, dot_count)"; ok=0; }; \
 	$(SPINEL) test/each_with_index_map_typed.rb -c --no-line-map -o "$$tmp/ewm.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (each_with_index_map_typed: -c)"; ok=0; }; \
 	[ "$$(grep -cE '^static [^(]*sp_(Float|Int)Array \* sp_(rb_)?(fmap|imap|wmap|wmap1)\(.*\{$$' "$$tmp/ewm.c")" = 4 ] || \
 	  { echo "infer-test: FAIL (each_with_index_map_typed: each_with_index.map / each.with_index.map no longer answers a typed Array: infer_indexed_each_terminal)"; ok=0; }; \
@@ -5344,6 +5348,19 @@ infer-test-1: $(SPINEL) $(SP_RT_LIB)
 	for f in yield_chars yield_grow; do awk "/^[a-z].* sp_(rb_)?$$f\\(.*\\{\$$/,/^}/" "$$tmp/lcr.c" | grep -qF 'while (({ if (SP_UNLIKELY(SP_SAFEPOINT_POLL())) sp_safepoint(), ' || { echo "infer-test: FAIL (a nested loop whose yield splices in a block that counts characters or grows its array leaves its polls to the enclosing loop: $$f)"; ok=0; }; done; \
 	$(SPINEL) test/loop_chunked_polls.rb --int-overflow=wrap -c --no-line-map -o "$$tmp/lcw.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (loop_chunked_polls: -c wrap)"; ok=0; }; \
 	awk '/^[a-z].* sp_Box_sum_to\(.*\{$$/,/^}/' "$$tmp/lcw.c" | grep -qF '= SP_CHUNK_RUN(lv_j, self->iv_n, 1024, 1LL, 1, 0);' || { echo "infer-test: FAIL (a chunked loop's run is not SP_CHUNK_RUN, whose wrap form counts its passes so a variable that wraps past its bound reaches a poll)"; ok=0; }; \
+	$(SPINEL) test/iter_chunked_polls.rb -c --no-line-map -o "$$tmp/icp.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (iter_chunked_polls: -c)"; ok=0; }; \
+	for f in isum wsum byte_total; do awk "/^[a-z].* sp_$$f\\(.*\\{\$$/,/^}/" "$$tmp/icp.c" | grep -q 'sp_chunk_run_end(' || { echo "infer-test: FAIL (a block loop the region holds polls at each pass, not once per run: $$f)"; ok=0; }; done; \
+	awk '/^[a-z].* sp_lens\(.*\{$$/,/^}/' "$$tmp/icp.c" | grep -q 'sp_chunk_run_end(' && { echo "infer-test: FAIL (a block loop whose pass counts a String's characters runs 1024 of them between polls)"; ok=0; }; \
+	awk '/^[a-z].* sp_(rb_)?fill\(.*\{$$/,/^}/' "$$tmp/icp.c" | grep -q 'SP_CHUNK_FITS(' || { echo "infer-test: FAIL (a times whose block stores into an array has no plain loop, though no store grows its count)"; ok=0; }; \
+	awk '/^[a-z].* sp_copy\(.*\{$$/,/^}/' "$$tmp/icp.c" | grep -q 'sp_chunk_run_end(' || { echo "infer-test: FAIL (an each_with_index whose block stores into an array polls at each pass)"; ok=0; }; \
+	awk '/^[a-z].* sp_copy\(.*\{$$/,/^}/' "$$tmp/icp.c" | grep -q 'SP_CHUNK_FITS(' && { echo "infer-test: FAIL (an each_with_index whose block stores into an array runs a plain loop with no poll, though the store may grow the length it walks)"; ok=0; }; \
+	awk '/^[a-z].* sp_until_zero\(.*\{$$/,/^}/' "$$tmp/icp.c" | grep -q 'sp_chunk_run_end(' || { echo "infer-test: FAIL (a block loop whose pass may raise polls at each pass, so a raise mid-run is not tested)"; ok=0; }; \
+	grep -q '/\*@CP' "$$tmp/icp.c" "$$tmp/lcr.c" "$$tmp/lcw.c" && { echo "infer-test: FAIL (a block loop's poll marks were left in the C)"; ok=0; }; \
+	$(SPINEL) test/iter_chunked_polls.rb -c -o "$$tmp/icl.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (iter_chunked_polls: -c with the line map)"; ok=0; }; \
+	for f in isum wsum byte_total; do awk "/^[a-z].* sp_$$f\\(.*\\{\$$/,/^}/" "$$tmp/icl.c" | grep -q 'sp_chunk_run_end(' || { echo "infer-test: FAIL (with the line map's #line directives in its body, a block loop polls at each pass: $$f)"; ok=0; }; done; \
+	$(SPINEL) test/iter_chunked_polls.rb --int-overflow=promote -c --no-line-map -o "$$tmp/icpp.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (iter_chunked_polls: -c promote)"; ok=0; }; \
+	awk '/^[a-z].* sp_fsum\(.*\{$$/,/^}/' "$$tmp/icpp.c" | grep -q '_hcl' || { echo "infer-test: FAIL (a Float Array's walk under promote is not held by a region)"; ok=0; }; \
+	awk '/^[a-z].* sp_fsum\(.*\{$$/,/^}/' "$$tmp/icpp.c" | grep -q 'sp_chunk_run_end(' && { echo "infer-test: FAIL (a block loop under promote, where no region loop takes runs (hc_subtree_slow), runs 1024 passes between polls)"; ok=0; }; \
 	$(SPINEL) test/loop_bounded_index_nested.rb -c --no-line-map -o "$$tmp/lbn.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (loop_bounded_index_nested: -c)"; ok=0; }; \
 	grep -qE '_hcd[0-9]+_[0-9]+\[lv_e\]' "$$tmp/lbn.c" && grep -qE '_hcd[0-9]+_[0-9]+\[lv_ie\]' "$$tmp/lbn.c" && grep -qE '_hcd[0-9]+_[0-9]+\[lv_B[0-9]*_[A-Za-z0-9_]*_wi\]' "$$tmp/lbn.c" || { echo "infer-test: FAIL (a while nested in a cached loop is not proved by its own i < a.length test)"; ok=0; }; \
 	grep -qE 'while \(\(lv_e < _hcl[0-9]+_[0-9]+\)\) \{' "$$tmp/lbn.c" || { echo "infer-test: FAIL (a nested loop proved by its i < a.length test that stores no element polls in its own condition)"; ok=0; }; \
@@ -5395,7 +5412,7 @@ infer-test-1: $(SPINEL) $(SP_RT_LIB)
 	  *) [ "$$rounds" -lt 128 ] || { echo "infer-test: FAIL (an each walk's parameter pin and its boxed binding traded the parameter every round: the fixpoint ran to its cap)"; ok=0; };; \
 	esac; \
 	grep -q 'sp_PtrArray \* iv_pts;' "$$tmp/oae.c" || { echo "infer-test: FAIL (an array of one class whose class defines each stayed boxed through a walk)"; ok=0; }; \
-	[ "$$(grep -cE '\(lv_B[0-9]*_[A-Za-z0-9_]*_pt\)->iv_x' "$$tmp/oae.c")" = 3 ] || { echo "infer-test: FAIL (an each, reverse_each or each_with_index walk over an array of one class bound its parameter boxed)"; ok=0; }; \
+	[ "$$(grep -oE '\(lv_B[0-9]*_[A-Za-z0-9_]*_pt\)->iv_x' "$$tmp/oae.c" | sort -u | wc -l | tr -d ' ')" = 3 ] || { echo "infer-test: FAIL (an each, reverse_each or each_with_index walk over an array of one class bound its parameter boxed)"; ok=0; }; \
 	rm -rf "$$tmp"; \
 	if [ $$ok -eq 1 ]; then echo "infer-test: pass (1 of 2)"; else exit 1; fi
 infer-test-2: $(SPINEL) $(SP_RT_LIB)

@@ -4112,7 +4112,9 @@ int g_loop_uncounted = 0, g_poll_loop_nest = 0;
    straight back. Either place is a point between two statements. */
 int g_loop_sig_latch = 0;
 void emit_loop_latch_poll(Buf *b, const char *end) {
-  if (g_loop_sig_latch) buf_printf(b, "%s%s;%s", sig_poll_stmt(), hc_mark(), end);
+  if (g_loop_sig_latch)
+    buf_printf(b, "%s%s%s;%s%s", hc_iter_poll_mark(g_poll_loop_nest, 0), sig_poll_stmt(), hc_mark(),
+               hc_iter_poll_mark(g_poll_loop_nest, 1), end);
 }
 /* The polls at the top of a loop body (emit_loop_body): `uncounted`, the
    loop may not end; `nest`, how many loops of its function hold the body,
@@ -4122,15 +4124,17 @@ void emit_loop_latch_poll(Buf *b, const char *end) {
 int emit_loop_polls(Compiler *c, int body, Buf *b, int indent, int uncounted, int nest, int latch) {
   /* an array's walk an enclosing loop polls for (hcv_begin) */
   int quiet = g_loop_quiet; g_loop_quiet = 0;
-  if (g_uses_threads && !quiet) { emit_indent(b, indent); buf_printf(b, "if (SP_UNLIKELY(SP_SAFEPOINT_POLL())) sp_safepoint()%s;\n", hc_mark()); }
+  /* (a block loop's region marks its own polls: hc_iter_poll_mark) */
+  const char *mo = hc_iter_poll_mark(nest, 0), *mc = hc_iter_poll_mark(nest, 1);
+  if (g_uses_threads && !quiet) { emit_indent(b, indent); buf_printf(b, "%sif (SP_UNLIKELY(SP_SAFEPOINT_POLL())) sp_safepoint()%s;%s\n", mo, hc_mark(), mc); }
   /* and for pending finalizers (sp_gc.h), when the program defines any. A
      finalizer is Ruby code that may resize an array this loop has cached, so
      the cache reloads after one runs, as after a safepoint. */
-  if (g_uses_finalizers && !quiet) { emit_indent(b, indent); buf_printf(b, "if (SP_UNLIKELY(SP_ATOMIC_LOAD(&sp_fin_pending_flag, __ATOMIC_RELAXED))) sp_fin_run_pending()%s;\n", hc_mark()); }
+  if (g_uses_finalizers && !quiet) { emit_indent(b, indent); buf_printf(b, "%sif (SP_UNLIKELY(SP_ATOMIC_LOAD(&sp_fin_pending_flag, __ATOMIC_RELAXED))) sp_fin_run_pending()%s;%s\n", mo, hc_mark(), mc); }
   /* and for a delivered Signal.trap, Ruby code as a finalizer is */
   if (sig_polls() && (uncounted || nest == 1 || loop_body_polls_alone(c, body)) && !poll_in_pure(c, body)) {
     if (latch) return 1;
-    emit_indent(b, indent); buf_printf(b, "%s%s;\n", sig_poll_stmt(), hc_mark());
+    emit_indent(b, indent); buf_printf(b, "%s%s%s;%s\n", mo, sig_poll_stmt(), hc_mark(), mc);
   }
   return 0;
 }

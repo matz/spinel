@@ -11808,9 +11808,10 @@ enum { HC_INT, HC_FLOAT, HC_STR, HC_IOB, HC_PTR };
 typedef struct { char *recv; int kind; int nf; Buf guard; } HcEntry;   /* nf: hc_array_nilfree asked;
                                                        guard: Float locals whose nil zeroes _hcn */
 typedef struct { int id; int n; HcEntry e[16]; NameSet wl, wi; char mark[32];
-                 const char *bi, *ba; char *bic, *bac; int inl; } HcRegion;
+                 const char *bi, *ba; char *bic, *bac; int inl; int iter_nest; } HcRegion;
                  /* bi/ba: see hc_bounded_index (bic/bac, their C variables);
-                    inl: see hc_close */
+                    inl: see hc_close; iter_nest: a block loop's region, the
+                    poll nest of that loop's body (hc_iter_poll_mark) */
 static HcRegion *g_hc = NULL;
 static void hc_region_free(HcRegion *r) {
   for (int i = 0; i < r->n; i++) { free(r->e[i].recv); free(r->e[i].guard.p); }
@@ -13770,7 +13771,7 @@ static void emit_while_loop(Compiler *c, int id, Buf *b, int indent, int is_unti
    it. NULL
    when there is no region (one is open already, or the loop cannot keep
    them); *bp then stays the caller's buffer. */
-typedef struct { HcRegion r; Buf buf; Buf *out; } HcIter;
+typedef struct { HcRegion r; Buf buf; Buf *out; Compiler *c; int id, splice_blk, counts; } HcIter;
 void *hc_iter_begin(Compiler *c, int id, Buf **bp) {
   if (g_hc || !hc_block_loop(c, id)) return NULL;
   HcIter *h = calloc(1, sizeof *h);
@@ -13778,10 +13779,196 @@ void *hc_iter_begin(Compiler *c, int id, Buf **bp) {
   if (!hc_block_loop_ok(c, id, &h->r)) { hc_region_free(&h->r); free(h); return NULL; }
   h->r.id = ++g_hc_seq;
   h->r.inl = hc_in_splice_or_expr();
+  h->r.iter_nest = g_poll_loop_nest + 1;
   snprintf(h->r.mark, sizeof h->r.mark, "/*@HCR%d@*/", h->r.id);
   h->out = *bp;
+  h->c = c; h->id = id; h->splice_blk = g_block_id;
+  /* an Integer receiver's walk (`n.times`) counts to it, a bound no
+     store in the block grows; any other walks a length */
+  int recv = nt_ref(c->nt, id, "receiver");
+  h->counts = recv >= 0 && repr_of(c, recv).as_ty == TY_INT;
   g_hc = &h->r; *bp = &h->buf;
   return h;
+}
+
+/* ---- A block loop's polls once per run of passes ----
+
+   A block loop the region holds (`n.times { }`, an Integer or Float
+   Array's `each { }`, ...) polls at each pass, as an unproved while did.
+   Its walk is a C `for (sp_int V = 0; V < B; V++)` over a count or a
+   length nothing in the region shrinks, so it takes the polls once per run
+   of up to SP_SIG_CHUNK passes as a while does (emit_while_loop): ahead of
+   the test, with a run that ends at the end value sp_chunk_run_end answers
+   (V counts up from 0 by one and stops below a count or a length, so it
+   never wraps), and with a plain loop with no poll where the passes left
+   fit in one run and nothing in the body can grow the bound.
+
+   The emitters write the walk's header and its element reads in many
+   forms; what they share is that header and the polls emit_loop_polls puts
+   in the walk's own body, which it wraps in CP_OPEN / CP_CLOSE marks while
+   the region's loop is the one being emitted (hc_iter_poll_mark). Here
+   the loop's text is rewritten around them, as a versioned loop's is
+   (hcv_end), or, for a loop this does not take, the marks are dropped. */
+#define CP_OPEN "/*@CP(@*/"
+#define CP_CLOSE "/*@CP)@*/"
+/* The marks the polls of a loop body at `nest` take: those of the block
+   loop the open region holds */
+const char *hc_iter_poll_mark(int nest, int close) {
+  if (!g_hc || !g_hc->iter_nest || nest != g_hc->iter_nest) return "";
+  return close ? CP_CLOSE : CP_OPEN;
+}
+/* The end of the C text that opened at t (just past its `{`): the `}` that
+   closes it, past comments and string and character literals; NULL if the
+   text ends first */
+static const char *cp_block_end(const char *t) {
+  int depth = 1;
+  for (const char *p = t; *p; p++) {
+    if (p[0] == '/' && p[1] == '*') { const char *e = strstr(p + 2, "*/"); if (!e) return NULL; p = e + 1; continue; }
+    if (p[0] == '/' && p[1] == '/') { const char *e = strchr(p, '\n'); if (!e) return NULL; p = e; continue; }
+    if (*p == '"' || *p == '\'') {
+      char q = *p;
+      for (p++; *p && *p != q; p++) if (*p == '\\' && p[1]) p++;
+      if (!*p) return NULL;
+      continue;
+    }
+    if (*p == '{') depth++;
+    else if (*p == '}' && --depth == 0) return p;
+  }
+  return NULL;
+}
+/* Appends s[0, n) with the marked polls taken out (and a line they leave
+   empty), each poll's text added once to polls */
+static void cp_take_polls(const char *s, size_t n, Buf *out, Buf *polls) {
+  const char *p = s, *e = s + n;
+  while (p < e) {
+    const char *nl = memchr(p, '\n', (size_t)(e - p));
+    const char *le = nl ? nl + 1 : e;
+    Buf line; memset(&line, 0, sizeof line);
+    const char *q = p;
+    int took = 0;
+    while (q < le) {
+      const char *o = strstr(q, CP_OPEN);
+      if (!o || o >= le) { buf_putn(&line, q, (size_t)(le - q)); break; }
+      const char *cl = strstr(o, CP_CLOSE);
+      if (!cl || cl >= le) { buf_putn(&line, q, (size_t)(le - q)); break; }
+      buf_putn(&line, q, (size_t)(o - q));
+      const char *pt = o + strlen(CP_OPEN);
+      Buf one; memset(&one, 0, sizeof one);
+      buf_putn(&one, pt, (size_t)(cl - pt));
+      if (one.p && (!polls->p || !strstr(polls->p, one.p))) { buf_puts(polls, one.p); buf_puts(polls, " "); }
+      free(one.p);
+      took = 1;
+      q = cl + strlen(CP_CLOSE);
+    }
+    int blank = 1;
+    for (const char *r = line.p ? line.p : ""; *r; r++) if (*r != ' ' && *r != '\n') { blank = 0; break; }
+    if (!(took && blank) && line.p) buf_puts(out, line.p);
+    free(line.p);
+    p = le;
+  }
+}
+/* Drops the marks, keeping the polls they hold */
+static void cp_strip(const char *t, Buf *out) {
+  for (const char *p = t; *p; ) {
+    const char *o = strstr(p, CP_OPEN), *cl = strstr(p, CP_CLOSE);
+    const char *m = !o ? cl : !cl ? o : (o < cl ? o : cl);
+    if (!m) { buf_puts(out, p); return; }
+    buf_putn(out, p, (size_t)(m - p));
+    p = m + strlen(m == o ? CP_OPEN : CP_CLOSE);
+  }
+}
+/* Rewrites each `for (sp_int V = 0; V < B; V++) {` of t whose body holds
+   its marked polls (see above); `plain`: nothing in the body can grow B (it
+   stores nothing, or B is a count), so a loop whose passes fit in one run
+   may run as a plain loop */
+static void cp_chunk_loops(const char *t, int plain, Buf *out) {
+  const char *p = t;
+  while (*p) {
+    const char *nl = strchr(p, '\n');
+    const char *le = nl ? nl + 1 : p + strlen(p);
+    const char *s = p;
+    while (*s == ' ') s++;
+    const char *v0 = NULL, *b0 = NULL, *b1 = NULL;
+    size_t vn = 0;
+    if (!strncmp(s, "for (sp_int ", 12)) {
+      v0 = s + 12;
+      const char *ve = v0;
+      while ((*ve >= 'a' && *ve <= 'z') || (*ve >= 'A' && *ve <= 'Z') || (*ve >= '0' && *ve <= '9') || *ve == '_') ve++;
+      vn = (size_t)(ve - v0);
+      char tail[96];
+      if (vn > 0 && vn < 40 && !strncmp(ve, " = 0; ", 6) && !strncmp(ve + 6, v0, vn) && !strncmp(ve + 6 + vn, " < ", 3)) {
+        b0 = ve + 9 + vn;
+        snprintf(tail, sizeof tail, "; %.*s++) {", (int)vn, v0);
+        size_t tl = strlen(tail);
+        const char *lend = nl ? nl : le;
+        if ((size_t)(lend - b0) > tl && !strncmp(lend - tl, tail, tl)) b1 = lend - tl;
+      }
+    }
+    const char *close = b1 ? cp_block_end(b1 + strlen("; ") + vn + strlen("++) {")) : NULL;
+    const char *cline = close;
+    if (close) {
+      while (cline > t && cline[-1] == ' ') cline--;
+      if ((cline > t && cline[-1] != '\n') || close[1] != '\n') close = NULL;   /* `}` alone on its line */
+    }
+    const char *body = le;
+    if (!close || cline < body) { buf_putn(out, p, (size_t)(le - p)); p = le; continue; }
+    Buf bd; memset(&bd, 0, sizeof bd);
+    Buf polls; memset(&polls, 0, sizeof polls);
+    cp_take_polls(body, (size_t)(cline - body), &bd, &polls);
+    /* (a body emitted twice holds no label -- `x: ;`, `x:;`, a break's or an
+       ensure's -- no jump to one, and no directive but the line map's;
+       looked for outside the `#line` lines, whose path may hold any of
+       these, so the C is the same with and without them. A loop of the
+       block's own is refused on the AST (cp_body_runs); `for` and `while`
+       here are a second guard, which a `next`'s `do { } while (0)` passes) */
+    static const char *const no_dup[] = { "goto ", ": ;", ":;", "_brklbl", "_ensure", "for (sp_int ", "while (" };
+    int dup_ok = 1;
+    if (bd.p) {
+      for (size_t k = 0; k < sizeof no_dup / sizeof no_dup[0] && dup_ok; k++)
+        if (text_has_code(bd.p, 0, bd.len, no_dup[k])) dup_ok = 0;
+      for (const char *q = bd.p; *q && dup_ok; ) {
+        const char *d = q;
+        while (*d == ' ') d++;
+        if (*d == '#' && strncmp(d, "#line ", 6)) dup_ok = 0;
+        const char *nl = strchr(q, '\n');
+        q = nl ? nl + 1 : q + strlen(q);
+      }
+    }
+    if (!polls.p || !dup_ok) {
+      /* not a loop this takes: as it was, marks and all (dropped later) */
+      buf_putn(out, p, (size_t)(le - p));
+      free(bd.p); free(polls.p);
+      p = le;
+      continue;
+    }
+    const char *ce = strchr(close, '\n');
+    ce = ce ? ce + 1 : close + 1;
+    int ind = (int)(s - p);
+    char v[48]; snprintf(v, sizeof v, "%.*s", (int)vn, v0);
+    Buf bound; memset(&bound, 0, sizeof bound);
+    buf_putn(&bound, b0, (size_t)(b1 - b0));
+    int k = ++g_tmp;
+    const char *bp = bd.p ? bd.p : "";
+    buf_printf(out, "%*s{\n%*s  sp_int %s = 0;\n", ind, "", ind, "", v);
+    if (plain) {
+      buf_printf(out, "%*s  if (SP_LIKELY((%s < %s) && SP_CHUNK_FITS(%s, %s, %d, 1LL, 1, 0))) {\n", ind, "", v, bound.p,
+                 v, bound.p, SP_SIG_CHUNK);
+      buf_printf(out, "%*s    for (; %s < %s; %s++) {\n%s%*s    }\n%*s  } else\n", ind, "", v, bound.p, v, bp, ind, "", ind, "");
+    }
+    buf_printf(out, "%*s  for (; ({ %s(%s < %s); }); ) {\n", ind, "", polls.p, v, bound.p);
+    buf_printf(out, "%*s    sp_int _pr%d = sp_chunk_run_end(%s, %s, %d, 1, 1, 0);\n", ind, "", k, v, bound.p, SP_SIG_CHUNK);
+    buf_printf(out, "%*s    for (; %s < _pr%d; %s++) {\n%s%*s    }\n", ind, "", v, k, v, bp, ind, "");
+    buf_printf(out, "%*s    if (!(%s < %s)) break;\n%*s  }\n%*s}\n", ind, "", v, bound.p, ind, "", ind, "");
+    free(bd.p); free(polls.p); free(bound.p);
+    p = ce;
+  }
+}
+/* Can a block loop's body run in runs: no `break`, `redo` or loop of its
+   own, and no pass whose cost grows with what it holds (hc_subtree_slow);
+   an empty body can */
+static int cp_body_runs(Compiler *c, int body) {
+  return body < 0 || (!subtree_has_loop_break(c, body) && !subtree_has_own_redo(c->nt, body) &&
+                      !hc_subtree_loops(c->nt, body) && !hc_subtree_slow(c, body));
 }
 /* `keep`: the loop was emitted (else what it wrote is dropped, as the
    caller declined) */
@@ -13789,7 +13976,31 @@ void hc_iter_end(void *hv, Buf **bp, int indent, int keep) {
   if (!hv) return;
   HcIter *h = hv;
   g_hc = NULL; *bp = h->out;
-  if (keep) hc_close(&h->r, h->buf.p ? h->buf.p : "", *bp, indent);
+  if (keep) {
+    const char *t = h->buf.p ? h->buf.p : "";
+    Buf ch; memset(&ch, 0, sizeof ch);
+    Buf st; memset(&st, 0, sizeof st);
+    if (strstr(t, CP_OPEN)) {
+      /* the block: no `break` (a C break would leave the run only), `redo`
+         or loop of its own; a store may grow the length the walk counts
+         to, which keeps the runs. A yield in it (a library loop the
+         caller's block is spliced into, `each_with_index`) asks the same
+         of that block (hc_yield_body), whose loops would leave their polls
+         to this one */
+      const NodeTable *nt = h->c->nt;
+      int blk = nt_ref(nt, h->id, "block");
+      int body = blk >= 0 ? nt_ref(nt, blk, "body") : -1;
+      int sb = hc_yield_body(h->c, body, h->splice_blk);
+      if (body >= 0 && sb != -2 && cp_body_runs(h->c, body) && (sb < 0 || cp_body_runs(h->c, sb))) {
+        cp_chunk_loops(t, h->counts || (!hc_subtree_stores(nt, body) && (sb < 0 || !hc_subtree_stores(nt, sb))), &ch);
+        t = ch.p ? ch.p : "";
+      }
+      cp_strip(t, &st);
+      t = st.p ? st.p : "";
+    }
+    hc_close(&h->r, t, *bp, indent);
+    free(ch.p); free(st.p);
+  }
   free(h->buf.p); hc_region_free(&h->r); free(h);
 }
 

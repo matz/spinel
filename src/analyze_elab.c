@@ -3394,6 +3394,13 @@ static int lr_body_word_frame(Compiler *c, const int *par, int n, int node) {
    method is a version as any other: the copies an include, extend or prepend makes are the module's def
    versions, whose arms read the module's visibility cell the word writes. */
 static int lr_call_defines(Compiler *c, const char *nm, int direct, int depth);
+/* ...is call n a class_eval, class_exec, module_eval or module_exec with a literal block and no argument (`C.class_eval { def zz; end }`),
+   of the builtin (no method of the program's takes the name)? It runs its block with the class as self and does nothing else of its
+   own: what it defines is what its block does, which the walk over its parts reads (a def in it is the record's body version where
+   held, any other form is asked as it stands) */
+static int lr_block_eval(Compiler *c, int n) {
+  return class_eval_block(c->nt, n) >= 0 && !lr_named(c, nt_str(c->nt, n, "name"));
+}
 /* ...does the method body around node (lr_body_around; none: yes) call only
    code the record can follow? Each call it makes itself (in no def nested
    in it, nor a word it holds: those are its own entries) is asked what the
@@ -3423,7 +3430,7 @@ static int lr_body_followed(Compiler *c, const int *par, int n, int node) {
     for (int v = id; own && v >= 0 && v < n && v != body; v = par[v])
       own = v == id || (nt_kind(nt, v) != NK_DefNode && !(nt_kind(nt, v) == NK_CallNode && lr_body_word(nt, v)));
     if (!own || (k == NK_CallNode && lr_body_word(nt, id))) continue;
-    ok = k == NK_CallNode && lr_call_defines(c, nt_str(nt, id, "name"), LR_DEFINES_TREE, 0) != LR_OPAQUE_DEFINES;
+    ok = k == NK_CallNode && (lr_block_eval(c, id) || lr_call_defines(c, nt_str(nt, id, "name"), LR_DEFINES_TREE, 0) != LR_OPAQUE_DEFINES);
   }
   free(ids);
   lr_version(r, LR_KEY_DEFINES, body, "follows", (LrDef){ body, LR_OPAQUE, (unsigned char)ok, 0, 0, NULL });
@@ -4412,7 +4419,7 @@ static int lr_node_defines(Compiler *c, int n, int direct, int depth) {
      walk, which recorded the body without it: a check after the graft
      reads the body as the walk did) */
   if (k == NK_CallNode && nt_int(nt, n, "body_hook", 0)) return o;
-  if (k == NK_CallNode && !word) o = lr_most(o, lr_call_defines(c, nt_str(nt, n, "name"), direct, depth));
+  if (k == NK_CallNode && !word && !lr_block_eval(c, n)) o = lr_most(o, lr_call_defines(c, nt_str(nt, n, "name"), direct, depth));
   if (lr_variable_op_write(k)) o = lr_most(o, lr_call_defines(c, nt_str(nt, n, "binary_operator"), direct, depth));
   if (o != LR_OPAQUE_DEFINES && !direct && !word && lr_node_dispatches(nt, n)) o = lr_most(o, lr_callbacks_define(c, depth));
   for (int i = 0, nr = nt_num_refs(nt, n); i < nr && o != LR_OPAQUE_DEFINES; i++)

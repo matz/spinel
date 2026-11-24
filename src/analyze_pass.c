@@ -7981,10 +7981,13 @@ static int ivar_writes_fresh(Compiler *c, int cls, const char *ivn, int apply, i
 /* 1 when a read of the local `r` names is anything but the receiver of an
    element read, an iteration or a size, or an argument printed: the local
    may be stored into (`r << v`), aliased or handed on, so its elements may
-   be arrays none of its literals shows. */
-static int local_rows_escape(Compiler *c, int r) {
+   be arrays none of its literals shows. With `stores_only` the receiver of
+   a call other than a store (`r.dup`, `r.map`) is no such read either. */
+static int local_rows_escape_ex(Compiler *c, int r, int stores_only) {
   static const char *const reads[] = { "[]", "first", "last", "fetch", "each", "each_with_index",
                                        "size", "length", "empty?", "inspect", "to_s", NULL };
+  static const char *const stores[] = { "<<", "push", "append", "unshift", "prepend", "insert", "concat",
+                                        "[]=", "fill", "replace", "map!", "collect!", NULL };
   const NodeTable *nt = c->nt;
   const char *nm = nt_str(nt, r, "name");
   Scope *sc = comp_scope_of(c, r);
@@ -7997,7 +8000,7 @@ static int local_rows_escape(Compiler *c, int r) {
     if (!cn) continue;
     if (rc >= 0 && nt_kind(nt, rc) == NK_LocalVariableReadNode && comp_scope_of(c, rc) == sc &&
         sp_streq(nt_str(nt, rc, "name"), nm)) {
-      for (int k = 0; reads[k]; k++) if (sp_streq(cn, reads[k])) { nok++; break; }
+      if (stores_only ? !str_in(cn, stores) : str_in(cn, reads)) nok++;
       continue;
     }
     if (rc >= 0 || !(sp_streq(cn, "p") || sp_streq(cn, "puts") || sp_streq(cn, "print") || sp_streq(cn, "pp")))
@@ -8009,6 +8012,9 @@ static int local_rows_escape(Compiler *c, int r) {
           sp_streq(nt_str(nt, av[k], "name"), nm)) nok++;
   }
   return nok < nread;
+}
+static int local_rows_escape(Compiler *c, int r) {
+  return local_rows_escape_ex(c, r, 0);
 }
 
 /* An element read (`o[i]`, `first`, `last`, `fetch`) out of a local every
@@ -8040,6 +8046,15 @@ static int literal_rows_read(Compiler *c, int v, int apply) {
     for (int e = 0; e < en; e++) {
       int el = nt_paren_single(c->nt, ev[e]);
       TyKind et = infer_type(c, el);
+      /* a new Array a builtin answers (`[s.bytes]`): the literal is built as
+         the general Array, and the row boxed as one (box_lift_arr) */
+      if (nt_kind(nt, el) == NK_CallNode && (et == TY_INT_ARRAY || et == TY_FLOAT_ARRAY || et == TY_STR_ARRAY) &&
+          is_fresh_array(c, el) && fresh_array_builtin_name(nt_str(nt, el, "name")) && c->arr_want &&
+          c->box_lift_arr && lit < c->node_cap && el < c->node_cap) {
+        if (apply && c->arr_want[lit] != TY_POLY_ARRAY) { comp_set_arr_want(c, lit, TY_POLY_ARRAY); ch = 1; }
+        if (apply && !c->box_lift_arr[el]) { c->box_lift_arr[el] = 1; ch = 1; }
+        continue;
+      }
       if (nt_kind(nt, el) != NK_ArrayNode || !is_fresh_array(c, el) || ty_is_ptr_array(et) ||
           (et != TY_UNKNOWN && !ty_is_array(et)) || !c->arr_want || el >= c->node_cap) return -1;
       if (apply && c->arr_want[el] != TY_POLY_ARRAY) { comp_set_arr_want(c, el, TY_POLY_ARRAY); ch = 1; }
@@ -9009,6 +9024,16 @@ static int widen_boxed_array_sources_1(Compiler *c, int v, TyKind elem, int dept
       local_all_writes_empty_array(c, comp_scope_of(c, v), nt_str(nt, v, "name"))) return 0;
   if (ty_is_array(vt)) {
     if (vt == TY_POLY_ARRAY || ty_is_ptr_array(vt) || elem == ty_array_elem(vt)) return 0;
+    /* a new Array a builtin answers (`{a: s.bytes}`) is held by its box
+       alone: boxed as the general Array (box_lift_arr) */
+    if (nt_kind(nt, v) == NK_CallNode && v < c->node_cap && c->box_lift_arr &&
+        (vt == TY_INT_ARRAY || vt == TY_FLOAT_ARRAY || vt == TY_STR_ARRAY) && is_fresh_array(c, v) &&
+        nt_ref(nt, v, "receiver") >= 0 && fresh_array_builtin_name(nt_str(nt, v, "name"))) {
+      if (c->box_lift_arr[v]) return 0;
+      c->box_lift_arr[v] = 1;
+      wbas_touch();
+      return 1;
+    }
     int w = widen_arg_array(c, v);
     wbas_touch();
     return w;
@@ -9118,17 +9143,54 @@ static int widen_boxed_elem_sources(Compiler *c, int r, TyKind elem, int depth) 
   if (!ch) wbas_note(c, 1, r, elem, depth, gen);
   return ch;
 }
+/* 1 when the local read or written at `v` can hold a row none of its Array
+   literals shows: a write that is no Array literal, a store into it
+   (`a << r`, `a[i] = r`), or a read that hands it on (`b = a`, `m(a)`). A
+   read that is the receiver of another call (`a.dup`, `a.map`) or an
+   argument printed adds no row. */
+static int local_rows_added(Compiler *c, int v) {
+  const NodeTable *nt = c->nt;
+  const char *nm = nt_str(nt, v, "name");
+  Scope *sc = nm ? comp_scope_of(c, v) : NULL;
+  LocalVar *lv = sc ? scope_local(sc, nm) : NULL;
+  if (!lv || lv->is_param || lv->is_block_param || local_has_target_write(c, sc, nm)) return 1;
+  for (int w0 = lw_shared_first(c, nm, (int)(sc - c->scopes)); w0 >= 0; w0 = lw_shared_next(w0)) {
+    int w = lw_shared_node(w0);
+    if (comp_scope_of(c, w) != sc || !sp_streq(nt_str(nt, w, "name"), nm)) continue;
+    if (nt_kind(nt, w) != NK_LocalVariableWriteNode ||
+        nt_kind(nt, nt_paren_single(nt, nt_ref(nt, w, "value"))) != NK_ArrayNode) return 1;
+  }
+  return local_rows_escape_ex(c, v, 1);
+}
+/* The same for the local the Array literal `lit` is written to; 0 when the
+   literal is written to no local. */
+static int literal_local_rows_added(Compiler *c, int lit) {
+  NT_FOREACH_KIND(c->nt, NK_LocalVariableWriteNode, w)
+    if (nt_paren_single(c->nt, nt_ref(c->nt, w, "value")) == lit) return local_rows_added(c, w);
+  return 0;
+}
 static int widen_boxed_elem_sources_1(Compiler *c, int r, TyKind elem, int depth) {
   const NodeTable *nt = c->nt;
   int ch = 0;
   ContainerLiterals lits = {0};
   container_literals(c, r, &lits, 0);
+  int rl = nt_paren_single(nt, r);
   for (int q = 0; q < lits.count; q++) {
-    int en = 0; const int *ev = nt_arr(nt, lits.items[q], "elements", &en);
+    int lit = lits.items[q], esc = -1;
+    int en = 0; const int *ev = nt_arr(nt, lit, "elements", &en);
     for (int e = 0; e < en; e++) {
       int el = nt_kind(nt, ev[e]) == NK_AssocNode ? nt_ref(nt, ev[e], "value") : ev[e];
-      if (el >= 0 && nt_kind(nt, el) != NK_SplatNode && nt_kind(nt, el) != NK_AssocSplatNode)
-        ch |= widen_boxed_array_sources(c, el, elem, depth + 1);
+      if (el < 0 || nt_kind(nt, el) == NK_SplatNode || nt_kind(nt, el) == NK_AssocSplatNode) continue;
+      /* a new Array a call answers stays typed where the local can hold a
+         row its literals do not show (`a = [s.bytes]; a << t.bytes`,
+         local_rows_added): that row would be left typed beside it */
+      if (nt_kind(nt, lit) == NK_ArrayNode && nt_kind(nt, el) == NK_CallNode && is_fresh_array(c, el)) {
+        if (esc < 0)
+          esc = literal_local_rows_added(c, lit) ||
+                (nt_kind(nt, rl) == NK_LocalVariableReadNode && local_rows_added(c, rl));
+        if (esc) continue;
+      }
+      ch |= widen_boxed_array_sources(c, el, elem, depth + 1);
     }
   }
   free_container_literals(&lits);

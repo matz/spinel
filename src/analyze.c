@@ -16522,6 +16522,8 @@ static int oa_obj_class_of(Compiler *c, int node) {
      in the object (#7449) */
   if (comp_ty_ary_root(c, t) >= 0) return -2;
   if (ty_is_object(t)) return ty_object_class(t);
+  /* a new Array boxed as the general Array (box_lift_arr) */
+  if (c->box_lift_arr && node >= 0 && node < c->node_cap && c->box_lift_arr[node]) return -2;
   if (t == TY_INT_ARRAY || t == TY_FLOAT_ARRAY) {
     /* A literal whose elements are not all settled reads as a scalar array
        while the fixpoint runs -- an UNKNOWN element unifies away -- and

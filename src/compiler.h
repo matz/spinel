@@ -1469,6 +1469,10 @@ typedef struct {
                           the method stores an element into that the array
                           cannot hold: codegen refuses it unless the binding
                           widened it */
+  char *box_lift_arr;   /* [node_cap] a new Array a builtin answers, held in a
+                          box a push of an element its kind cannot hold
+                          reaches (widen_boxed_array_sources): boxed as the
+                          general Array */
   char *ivar_widen_src; /* [node_cap] an ivar read, or a reader call, that a
                           caller's array comes from (through locals and method
                           values) when a parameter it reaches stores elements
@@ -3102,6 +3106,7 @@ static inline uint64_t comp_node_marks_digest(const Compiler *c, uint64_t h, int
   if (c->pow_signed) h = mix(h, c->pow_signed, (size_t)n * sizeof *c->pow_signed);
   if (c->store_misfit_arg) h = mix(h, c->store_misfit_arg, (size_t)n * sizeof *c->store_misfit_arg);
   if (c->ivar_widen_src) h = mix(h, c->ivar_widen_src, (size_t)n * sizeof *c->ivar_widen_src);
+  if (c->box_lift_arr) h = mix(h, c->box_lift_arr, (size_t)n * sizeof *c->box_lift_arr);
   if (c->hash_want) h = mix(h, c->hash_want, (size_t)n * sizeof *c->hash_want);
   if (c->arr_want) h = mix(h, c->arr_want, (size_t)n * sizeof *c->arr_want);
   if (c->lw_joined) h = mix(h, c->lw_joined, (size_t)n * sizeof *c->lw_joined);

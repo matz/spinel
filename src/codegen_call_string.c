@@ -1579,9 +1579,12 @@ int emit_op_poly_case_options(Compiler *c, const BopCtx *x, Buf *b) {
      String or Symbol: the arms below map it as they do with none, and the
      options are checked as on a typed receiver (emit_case_opts_guard) -- a
      literal :ascii alone picks the ASCII mapping and needs no check. With no
-     arm the call raised NoMethodError naming String. */
+     arm the call raised NoMethodError naming String. A splat's options,
+     known only at run time, are gathered into one list and checked as
+     the other operands are (`x.public_send(:upcase, *opts)`). */
   if (!user_defines_or_reads(c, name)) {
-    int plain_args = !nt_argv_has(nt, argv, argc, NT_ARG_SPLAT | NT_ARG_KEYWORDS | NT_ARG_BLOCK);
+    int spread = nt_argv_has_splat(nt, argv, argc);
+    int plain_args = !nt_argv_has(nt, argv, argc, NT_ARG_KEYWORDS | NT_ARG_BLOCK);
     if (plain_args) {
       const char *sfx = case_map_suffix(c, argc, argv);
       int tv = ++g_tmp;
@@ -1594,25 +1597,36 @@ int emit_op_poly_case_options(Compiler *c, const BopCtx *x, Buf *b) {
           if (nt_kind(nt, argv[i]) != NK_SymbolNode) literals = 0;
         int *ta = calloc((size_t)argc + 1, sizeof *ta);
         if (!ta) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-        if (!literals) {
+        /* the operand list the two checks read: the held operands, or the
+           splat's gathered list */
+        Buf ol; memset(&ol, 0, sizeof ol);
+        if (spread) {
+          int tl = ++g_tmp;
+          emit_gather_call_args(c, argv, argc, tl, b);
+          buf_printf(&ol, "_t%d->len, _t%d->data", tl, tl);
+        }
+        else if (!literals) {
           int first = g_tmp + 1;
           g_tmp += argc;
           for (int i = 0; i < argc; i++) ta[i] = hold_operand(c, argv[i], TY_POLY, 1, first + i, 1, " ", b);
+          buf_printf(&ol, "%d, (sp_RbVal[]){", argc);
+          for (int i = 0; i < argc; i++) buf_printf(&ol, "%s_t%d", i ? ", " : "", ta[i]);
+          buf_puts(&ol, "}");
+        }
+        else {
+          buf_printf(&ol, "%d, (sp_RbVal[]){", argc);
+          for (int i = 0; i < argc; i++) { if (i) buf_puts(&ol, ", "); emit_boxed(c, argv[i], &ol); }
+          buf_puts(&ol, "}");
+        }
+        if (!literals) {
           turkic_rt = 1;
-          buf_printf(b, "sp_case_opts_is_turkic(%d, (sp_RbVal[]){", argc);
-          for (int i = 0; i < argc; i++) { if (i) buf_puts(b, ", "); buf_printf(b, "_t%d", ta[i]); }
-          buf_printf(b, "}) ? sp_poly_case_conv(_t%d, _t%d.tag == SP_TAG_SYM ? sp_str_%s_turkic_sym : sp_str_%s_turkic, \"%s\") : ({ ",
-                     tv, tv, name, name, name);
+          buf_printf(b, "sp_case_opts_is_turkic(%s) ? sp_poly_case_conv(_t%d, _t%d.tag == SP_TAG_SYM ? sp_str_%s_turkic_sym : sp_str_%s_turkic, \"%s\") : ({ ",
+                     ol.p, tv, tv, name, name, name);
         }
         buf_printf(b, "if (sp_rbval_is_string(_t%d) || _t%d.tag == SP_TAG_SYM || sp_poly_is_strbuf(_t%d)) "
-                      "sp_case_opts_check(%d, (sp_RbVal[]){", tv, tv, tv, argc);
-        for (int i = 0; i < argc; i++) {
-          if (i) buf_puts(b, ", ");
-          if (literals) emit_boxed(c, argv[i], b);
-          else buf_printf(b, "_t%d", ta[i]);
-        }
+                      "sp_case_opts_check(%s, %s, _t%d); ", tv, tv, tv, ol.p, x->op->arg, tv);
+        free(ol.p);
         free(ta);
-        buf_printf(b, "}, %s, _t%d); ", x->op->arg, tv);
       }
       if (sp_streq(sfx, "_turkic")) buf_printf(b, "sp_poly_case_conv(_t%d, _t%d.tag == SP_TAG_SYM ? sp_str_%s_turkic_sym : sp_str_%s_turkic, \"%s\"); })", tv, tv, name, name, name);
       else buf_printf(b, "sp_poly_case_conv(_t%d, sp_str_%s%s, \"%s\")%s; })", tv, name, sfx, name, turkic_rt ? "; })" : "");

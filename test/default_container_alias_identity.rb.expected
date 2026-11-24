@@ -1,0 +1,7 @@
+[1, "x"]
+true
+2
+{"k" => "v", 1 => "z"}
+true
+[{"p" => "v"}, true]
+[nil, false]

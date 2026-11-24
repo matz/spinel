@@ -1613,19 +1613,28 @@ static int repr_empty_lit_as(Compiler *c, int v, TyKind slot) {
 /* Can a Hash of variant `from` widen losslessly into a Hash slot of variant
    `slot`? Same-key value widening (`StrStr`/`StrInt` -> `StrPoly`) and
    widening any Hash into the general `PolyPoly` Hash keep every key and value
-   without changing key kinds. A key-kind clash (`SymPoly` -> `StrPoly`) or
-   narrowing (`PolyPoly` -> `StrPoly`) is never converted here. */
-static int repr_hash_widen_ok(TyKind from, TyKind slot) {
+   without changing key kinds, but the runtime converters allocate a new
+   container. Only provably fresh (unaliased) Hash values may convert here so
+   retained or aliased Hashes never lose object identity or mutations. A
+   key-kind clash (`SymPoly` -> `StrPoly`) or narrowing (`PolyPoly` ->
+   `StrPoly`) is never converted here. */
+static int repr_hash_widen_ok(Compiler *c, int node, TyKind from, TyKind slot) {
   if (!ty_is_hash(from) || !ty_is_hash(slot) || from == slot) return 0;
-  if (slot == TY_STR_POLY_HASH) return from == TY_STR_STR_HASH || from == TY_STR_INT_HASH;
-  if (slot == TY_POLY_POLY_HASH) return 1;
-  return 0;
+  if (!(slot == TY_STR_POLY_HASH
+        ? (from == TY_STR_STR_HASH || from == TY_STR_INT_HASH)
+        : slot == TY_POLY_POLY_HASH))
+    return 0;
+  return an_is_fresh_hash_value(c, node);
 }
 
-/* Can a typed Array widen into the general `PolyArray` slot? */
-static int repr_array_widen_ok(TyKind from, TyKind slot) {
-  return slot == TY_POLY_ARRAY &&
-         (from == TY_INT_ARRAY || from == TY_FLOAT_ARRAY || from == TY_STR_ARRAY);
+/* Can a typed Array widen into the general `PolyArray` slot? Like Hash
+   widening, the runtime converter copies elements into a new Array, so only
+   provably fresh (unaliased) Array values may convert here. */
+static int repr_array_widen_ok(Compiler *c, int node, TyKind from, TyKind slot) {
+  if (slot != TY_POLY_ARRAY ||
+      !(from == TY_INT_ARRAY || from == TY_FLOAT_ARRAY || from == TY_STR_ARRAY))
+    return 0;
+  return an_is_fresh_array_value(c, node);
 }
 
 /* Does emit_poly_rhs_coerced take a boxed value into a `slot` slot? An
@@ -1642,8 +1651,8 @@ int repr_coerce_text_form(Compiler *c, int node, TyKind from, TyKind slot, int h
   if (slot == TY_POLY) return CF_BOX;
   if (from == TY_VOID || from == TY_NIL) return CF_NIL_SENT;
   if (slot == TY_BIGINT && from == TY_INT) return CF_INT2BIG;
-  if (how == CO_HOLD && repr_hash_widen_ok(from, slot)) return CF_HASH_WIDEN;
-  if (how == CO_HOLD && repr_array_widen_ok(from, slot)) return CF_ARRAY_WIDEN;
+  if (how == CO_HOLD && repr_hash_widen_ok(c, node, from, slot)) return CF_HASH_WIDEN;
+  if (how == CO_HOLD && repr_array_widen_ok(c, node, from, slot)) return CF_ARRAY_WIDEN;
   if (how == CO_CONVERT && slot == TY_FLOAT && (from == TY_BIGINT || from == TY_RATIONAL))
     return CF_CONVERT;
   return CF_REFUSE;

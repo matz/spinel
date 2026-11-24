@@ -10742,6 +10742,174 @@ void seed_unsupplied_nil_defaults(Compiler *c) {
     }
   }
 }
+/* 1 iff `node` provably evaluates to a freshly allocated (unaliased) Hash or
+   nil, so widening it through a copying runtime converter cannot break object
+   identity or drop mutations visible through another reference. */
+static int fresh_hash_value_rec(Compiler *c, int node, int *stack, int depth) {
+  const NodeTable *nt = c->nt;
+  if (node < 0 || depth > 4) return 0;
+  node = value_node_or_self(nt, node);
+  if (node < 0) return 0;
+  NodeKind k = nt_kind(nt, node);
+  if (k == NK_NilNode || k == NK_HashNode || k == NK_KeywordHashNode) return 1;
+  if (k == NK_IfNode || k == NK_UnlessNode || k == NK_CaseNode || k == NK_CaseMatchNode ||
+      k == NK_AndNode || k == NK_OrNode || k == NK_BeginNode || k == NK_RescueModifierNode) {
+    int lv[16];
+    int n = value_leaves_ex(c, node, lv, 0, 16, VL_NIL);
+    if (n < 0) return 0;
+    for (int i = 0; i < n; i++) {
+      if (lv[i] == node || !fresh_hash_value_rec(c, lv[i], stack, depth + 1)) return 0;
+    }
+    return 1;
+  }
+  if (k != NK_CallNode || nt_ref(nt, node, "block") >= 0) return 0;
+  const char *nm = nt_str(nt, node, "name");
+  int recv = nt_ref(nt, node, "receiver");
+  if (nm && recv >= 0) {
+    if (nt_kind(nt, recv) == NK_ConstantReadNode && sp_streq(nm, "new") &&
+        sp_streq(nt_str(nt, recv, "name"), "Hash") && cplan_const_user(c, node, recv, 1).mi < 0)
+      return 1;
+    TyKind rt = infer_type(c, recv);
+    if (ty_is_hash(rt) && nt_ref(nt, node, "arguments") < 0 && cplan_user_fresh(c, node).mi < 0) {
+      if (sp_streq(nm, "dup") || sp_streq(nm, "clone")) return 1;
+      if (sp_streq(nm, "freeze") || sp_streq(nm, "itself"))
+        return fresh_hash_value_rec(c, recv, stack, depth + 1);
+    }
+  }
+  int mi = backprop_call_target(c, node);
+  if (mi < 0) return 0;
+  for (int d = 0; d < depth; d++) if (stack[d] == mi) return 0;
+  Scope *m = &c->scopes[mi];
+  int broad = m->class_id < 0 || comp_class_is_module(c, &c->classes[m->class_id]);
+  int other = broad || method_has_other_body(c, mi);
+  stack[depth] = mi;
+  for (int t = other ? 1 : mi; t < (other ? c->nscopes : mi + 1); t++) {
+    Scope *o = &c->scopes[t];
+    if (t != mi) {
+      if (!(o->name && m->name && sp_streq(o->name, m->name) && o->is_cmethod == m->is_cmethod))
+        continue;
+      if (!broad && o->class_id != m->class_id &&
+          !(o->class_id >= 0 && is_descendant(c, o->class_id, m->class_id)))
+        continue;
+    }
+    if (o->body < 0 || o->ret_specialized || o->cs_synth || o->is_lowered_yield) return 0;
+    int lv[16];
+    int n = method_value_leaves_or_nil(c, t, lv, 16);
+    if (n < 0) return 0;
+    for (int i = 0; i < n; i++) {
+      if (!fresh_hash_value_rec(c, lv[i], stack, depth + 1)) return 0;
+    }
+  }
+  return 1;
+}
+
+int an_is_fresh_hash_value(Compiler *c, int node) {
+  int stack[8];
+  return fresh_hash_value_rec(c, node, stack, 0);
+}
+
+/* 1 iff `node` provably evaluates to a freshly allocated (unaliased) Array or
+   nil, so widening it into PolyArray via a copying converter keeps Ruby's
+   aliasing semantics intact. */
+static int fresh_array_value_rec(Compiler *c, int node, int *stack, int depth) {
+  const NodeTable *nt = c->nt;
+  if (node < 0 || depth > 4) return 0;
+  node = value_node_or_self(nt, node);
+  if (node < 0) return 0;
+  NodeKind k = nt_kind(nt, node);
+  if (k == NK_NilNode) return 1;
+  if (is_fresh_array(c, node)) return 1;
+  if (k == NK_IfNode || k == NK_UnlessNode || k == NK_CaseNode || k == NK_CaseMatchNode ||
+      k == NK_AndNode || k == NK_OrNode || k == NK_BeginNode || k == NK_RescueModifierNode) {
+    int lv[16];
+    int n = value_leaves_ex(c, node, lv, 0, 16, VL_NIL);
+    if (n < 0) return 0;
+    for (int i = 0; i < n; i++) {
+      if (lv[i] == node || !fresh_array_value_rec(c, lv[i], stack, depth + 1)) return 0;
+    }
+    return 1;
+  }
+  if (k != NK_CallNode || nt_ref(nt, node, "block") >= 0) return 0;
+  const char *nm = nt_str(nt, node, "name");
+  int recv = nt_ref(nt, node, "receiver");
+  if (nm && recv >= 0 && ty_is_array(infer_type(c, recv)) &&
+      nt_ref(nt, node, "arguments") < 0 && cplan_user_fresh(c, node).mi < 0 &&
+      (sp_streq(nm, "freeze") || sp_streq(nm, "itself")))
+    return fresh_array_value_rec(c, recv, stack, depth + 1);
+  int mi = backprop_call_target(c, node);
+  if (mi < 0) return 0;
+  for (int d = 0; d < depth; d++) if (stack[d] == mi) return 0;
+  Scope *m = &c->scopes[mi];
+  int broad = m->class_id < 0 || comp_class_is_module(c, &c->classes[m->class_id]);
+  int other = broad || method_has_other_body(c, mi);
+  stack[depth] = mi;
+  for (int t = other ? 1 : mi; t < (other ? c->nscopes : mi + 1); t++) {
+    Scope *o = &c->scopes[t];
+    if (t != mi) {
+      if (!(o->name && m->name && sp_streq(o->name, m->name) && o->is_cmethod == m->is_cmethod))
+        continue;
+      if (!broad && o->class_id != m->class_id &&
+          !(o->class_id >= 0 && is_descendant(c, o->class_id, m->class_id)))
+        continue;
+    }
+    if (o->body < 0 || o->ret_specialized || o->cs_synth || o->is_lowered_yield) return 0;
+    int lv[16];
+    int n = method_value_leaves_or_nil(c, t, lv, 16);
+    if (n < 0) return 0;
+    for (int i = 0; i < n; i++) {
+      if (!fresh_array_value_rec(c, lv[i], stack, depth + 1)) return 0;
+    }
+  }
+  return 1;
+}
+
+int an_is_fresh_array_value(Compiler *c, int node) {
+  int stack[8];
+  return fresh_array_value_rec(c, node, stack, 0);
+}
+
+/* Widen a local variable whose every write in its scope is a String-keyed Hash
+   literal (`(h = { "" => "" }; h.clear; h)`) directly to TY_STR_POLY_HASH so
+   a StrPolyHash default shares the local's object with no copy. */
+static int widen_local_str_poly_hash(Compiler *c, int node) {
+  const NodeTable *nt = c->nt;
+  if (!c->hash_want) return 0;
+  int v = value_node_or_self(nt, node);
+  if (v < 0 || nt_kind(nt, v) != NK_LocalVariableReadNode) return 0;
+  const char *nm = nt_str(nt, v, "name");
+  Scope *sc = nm ? comp_scope_of(c, v) : NULL;
+  LocalVar *lv = sc ? scope_local(sc, nm) : NULL;
+  if (!lv || lv->is_param || lv->is_block_param || lv->rbs_seeded ||
+      local_has_target_write(c, sc, nm))
+    return 0;
+  int si = (int)(sc - c->scopes), saw = 0;
+  for (int r = lw_shared_first(c, nm, si); r >= 0; r = lw_shared_next(r)) {
+    int w = lw_shared_node(r);
+    if (comp_scope_of(c, w) != sc || !sp_streq(nt_str(nt, w, "name"), nm)) continue;
+    if (nt_kind(nt, w) != NK_LocalVariableWriteNode) return 0;
+    int rv = nt_paren_single(nt, nt_ref(nt, w, "value"));
+    if (rv < 0 || rv >= c->node_cap || nt_kind(nt, rv) != NK_HashNode) return 0;
+    TyKind rt = infer_type(c, rv);
+    int en = -1;
+    if (rt == TY_UNKNOWN) nt_arr(nt, rv, "elements", &en);
+    if (rt != TY_STR_STR_HASH && rt != TY_STR_INT_HASH && rt != TY_STR_POLY_HASH && en != 0)
+      return 0;
+    saw = 1;
+  }
+  if (!saw) return 0;
+  int ch = 0;
+  for (int r = lw_shared_first(c, nm, si); r >= 0; r = lw_shared_next(r)) {
+    int w = lw_shared_node(r);
+    if (comp_scope_of(c, w) != sc || !sp_streq(nt_str(nt, w, "name"), nm)) continue;
+    int rv = nt_paren_single(nt, nt_ref(nt, w, "value"));
+    if (c->hash_want[rv] != TY_STR_POLY_HASH) {
+      comp_set_hash_want(c, rv, TY_STR_POLY_HASH);
+      ch = 1;
+    }
+  }
+  return ch;
+}
+
 /* Unwrap a parameter default to its empty `[]` or `{}` literal node, seeing
    through parentheses and plain `.freeze` / `.dup` / `.clone` calls. Sets
    *is_arr to 1 for `[]`, 0 for `{}`, and returns the literal node id or -1. */
@@ -10847,19 +11015,32 @@ int infer_default_param_types(Compiler *c) {
       if (hp && ty_is_hash(hp->type))
         changed |= bind_empty_hash_arg(c, hp->type, value_node_or_self(c->nt, dv));
       /* The parameter widened (or was seeded) to a poly-valued or general Hash
-         or general Array: build a compatible literal default directly at that
-         variant rather than converting or mis-unifying it. */
+         or general Array: build a compatible literal or unaliased local default
+         directly at that variant, and widen non-fresh aliased sources (`b = a`)
+         in place so both references keep the same container identity. */
       if (hp && hp->type == TY_POLY_POLY_HASH) {
         if (nt_kind(c->nt, dv_unw) == NK_HashNode) changed |= want_poly_hash(c, dv_unw);
         else if (!hp->rbs_seeded && widen_returned_hashes(c, dv_unw) > 0) changed = 1;
-      }
-      else if (hp && hp->type == TY_STR_POLY_HASH && nt_kind(c->nt, dv_unw) == NK_HashNode &&
-               c->hash_want && dv_unw < c->node_cap && c->hash_want[dv_unw] == TY_UNKNOWN) {
-        TyKind dt0 = infer_type(c, dv_unw);
-        if (dt0 == TY_STR_STR_HASH || dt0 == TY_STR_INT_HASH) {
-          comp_set_hash_want(c, dv_unw, TY_STR_POLY_HASH);
-          changed = 1;
+        else if (!an_is_fresh_hash_value(c, dv)) {
+          TyKind dt0 = infer_type(c, dv);
+          if (ty_is_hash(dt0) && dt0 != TY_POLY_POLY_HASH) changed |= widen_arg_hash(c, dv);
         }
+      }
+      else if (hp && hp->type == TY_STR_POLY_HASH) {
+        if (nt_kind(c->nt, dv_unw) == NK_HashNode &&
+            c->hash_want && dv_unw < c->node_cap && c->hash_want[dv_unw] == TY_UNKNOWN) {
+          TyKind dt0 = infer_type(c, dv_unw);
+          if (dt0 == TY_STR_STR_HASH || dt0 == TY_STR_INT_HASH) {
+            comp_set_hash_want(c, dv_unw, TY_STR_POLY_HASH);
+            changed = 1;
+          }
+        }
+        else changed |= widen_local_str_poly_hash(c, dv);
+      }
+      else if (hp && hp->type == TY_POLY_ARRAY && !an_is_fresh_array_value(c, dv)) {
+        TyKind dt0 = infer_type(c, dv);
+        if (ty_is_array(dt0) && !ty_is_ptr_array(dt0) && dt0 != TY_POLY_ARRAY)
+          changed |= widen_arg_array(c, dv);
       }
       TyKind dt = infer_type(c, dv);
       /* An empty hash `{}` default returns TY_UNKNOWN from infer_type; treat

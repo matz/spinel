@@ -662,6 +662,8 @@ int respond_to_missing_defined(Compiler *c);
 int exc_has_nonstring_msg_override(Compiler *c);                 /* codegen_util.c */
 int interp_is_literal_fold(const NodeTable *nt, int id);         /* codegen_expr.c */
 int is_fresh_array(Compiler *c, int v);                          /* analyze_pass.c */
+int an_is_fresh_hash_value(Compiler *c, int node);               /* analyze_pass.c */
+int an_is_fresh_array_value(Compiler *c, int node);              /* analyze_pass.c */
 int ivar_assigned_in_initialize(Compiler *c, int k, const char *ivn);  /* analyze.c */
 int json_parse_ostruct_opts(Compiler *c, int kwh);               /* codegen_call_class.c */
 int kwh_lookup(const NodeTable *nt, int kwh, const char *kname); /* codegen_fold.c */

@@ -1163,14 +1163,16 @@ too. A boxed argument -- a local written arrays of two kinds, an element read
 out of a general container, a block parameter, a `for` variable -- is
 followed the same way, to each typed array the store cannot fit.
 
-A block or proc parameter that stores another kind does the same for the
-values the sites binding it pass: a yield or a block's `call` in each method
-the block is handed to (and on through `&blk`, and a `super` in a method that
-takes `&blk`), the calls of a proc or lambda literal, at an optional, a post,
-a keyword or as an element of a rest (a method's rest too). A block a method
-keeps (stored in an ivar, or answered as a value) and calls later is not
-followed, nor one a bare `super` hands on from a method without `&blk`: its
-store raises `TypeError` as above.
+A block or proc parameter that stores another kind into the Array it
+receives, or into an Array that is an element of it (`|m| m[0] << 1`), does
+the same for the values the sites binding it pass: a yield or a block's
+`call` in each method the block is handed to (and on through `&blk`, and a
+`super` in a method that takes `&blk`), the calls of a proc or lambda
+literal, at an optional, a post, a keyword (a `**` operand's too) or as an
+element of a rest (a method's rest too). A block a method keeps (stored in
+an ivar, or answered as a value) and calls later is not followed, nor one a
+bare `super` hands on from a method without `&blk`: its store raises
+`TypeError` as above.
 
 Where it cannot follow a typed argument, the one conversion left is a copy,
 and the mutation would land in the copy where CRuby changes the caller's

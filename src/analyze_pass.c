@@ -8661,7 +8661,7 @@ int widen_arg_array(Compiler *c, int arg) {
 const char *block_param_name(Compiler *c, int block, int idx);
 static int widen_boxed_elem_sources(Compiler *c, int r, TyKind elem, int depth);
 static int widen_boxed_sub_elem_sources(Compiler *c, int r, int k, TyKind elem, int depth);
-static int widen_rest_elem_sources(Compiler *c, int r, TyKind elem, int depth);
+static int widen_param_elem_sources(Compiler *c, int r, TyKind elem, int depth);
 
 /* The named parameters of the literal blocks and the proc and lambda
    literals, keyed by the name and the scope that holds them: for each, the
@@ -9460,13 +9460,37 @@ static int widen_method_value_sources(Compiler *c, int v, int mi, TyKind elem, i
   return ch;
 }
 
-/* The arrays that are elements of a rest parameter `r` reads (`|*r|`,
-   `def m(*r)`): what the sites binding a block's rest or a proc literal's
-   pass at its places (block_param_values), widened where they are built.
-   A method's rest records the element kind (rest_elem_store), and its
-   callers' binding widens what each call hands it (widen_rest_arg_arrays),
-   as a parameter's push widens through the reverse binding. */
-static int widen_rest_elem_sources(Compiler *c, int r, TyKind elem, int depth) {
+/* The arrays that are elements of an Array a block or proc parameter
+   receives (`|m| m[0] << 1`): those of each value its sites bind it to,
+   and for a value taken apart (BV_ELEM), those of each of its elements. */
+static int wbp_elem(Compiler *c, int v, int how, void *ctx) {
+  const WbpCtx *x = ctx;
+  if (how == BV_WHOLE) return widen_boxed_elem_sources(c, v, x->elem, x->depth + 1);
+  const NodeTable *nt = c->nt;
+  int ch = 0;
+  ContainerLiterals lits = {0};
+  container_literals(c, v, &lits, 0);
+  for (int q = 0; q < lits.count; q++) {
+    int en = 0; const int *ev = nt_arr(nt, lits.items[q], "elements", &en);
+    for (int e = 0; e < en; e++) {
+      int el = nt_kind(nt, ev[e]) == NK_AssocNode ? nt_ref(nt, ev[e], "value") : ev[e];
+      if (el >= 0 && nt_kind(nt, el) != NK_SplatNode && nt_kind(nt, el) != NK_AssocSplatNode)
+        ch |= widen_boxed_elem_sources(c, el, x->elem, x->depth + 2);
+    }
+  }
+  free_container_literals(&lits);
+  return ch;
+}
+/* The arrays that are elements of what a parameter `r` reads, followed
+   back through its binding: for a block's or a proc literal's parameter,
+   what its sites pass (block_param_values) -- a rest's elements are the
+   values at its places, another parameter's those of the value it is bound
+   to (wbp_elem) -- widened where they are built. A method's rest records
+   the element kind (rest_elem_store), and its callers' binding widens what
+   each call hands it (widen_rest_arg_arrays), as a parameter's push widens
+   through the reverse binding; a method's other parameters reach their
+   callers' arguments through container_literals. */
+static int widen_param_elem_sources(Compiler *c, int r, TyKind elem, int depth) {
   const NodeTable *nt = c->nt;
   r = nt_paren_single(nt, r);
   if (r < 0 || nt_kind(nt, r) != NK_LocalVariableReadNode || nt_int(nt, r, "depth", 0) != 0) return 0;
@@ -9476,7 +9500,8 @@ static int widen_rest_elem_sources(Compiler *c, int r, TyKind elem, int depth) {
   if (!lv || lv->rbs_seeded) return 0;
   if (lv->is_block_param) {
     WbpCtx x = { elem, depth };
-    return block_param_index_values(c, sc, nm, 1, wbp_array, &x);
+    return block_param_index_values(c, sc, nm, 1, wbp_array, &x) |
+           block_param_index_values(c, sc, nm, 0, wbp_elem, &x);
   }
   if (!lv->is_param || sc->rest_idx < 0 || !sc->pnames[sc->rest_idx] || !sp_streq(sc->pnames[sc->rest_idx], nm)) return 0;
   TyKind was = lv->rest_elem_store;
@@ -9525,7 +9550,7 @@ static int literal_local_rows_added(Compiler *c, int lit) {
 }
 static int widen_boxed_elem_sources_1(Compiler *c, int r, TyKind elem, int depth) {
   const NodeTable *nt = c->nt;
-  int ch = widen_rest_elem_sources(c, r, elem, depth);
+  int ch = widen_param_elem_sources(c, r, elem, depth);
   ContainerLiterals lits = {0};
   container_literals(c, r, &lits, 0);
   int rl = nt_paren_single(nt, r);
@@ -9861,7 +9886,7 @@ int layout_plain_arg(Compiler *c, Scope *m, const int *argv, const ArgLayout *L,
 }
 
 /* A method's rest one of whose elements a store needs to hold another kind
-   (rest_elem_store, widen_rest_elem_sources): the arrays each argument
+   (rest_elem_store, widen_param_elem_sources): the arrays each argument
    this call lays into the rest are widened where they are built, a
    splat's elements too. The arguments another parameter takes stay out;
    where the count is the run time's, every one that may land there is in

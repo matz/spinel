@@ -789,9 +789,10 @@ static int program_gives_builtin_const(Compiler *c, const char *nm);
    program class with another Ruby name (T::WaitReadable, T::Stat). The
    caller then uses the builtin. Returns 0 when the Ruby name of k is the
    whole path, as for `class Enumerator::Chain`, which reopens the builtin.
-   For a path listed in lib/sp_builtin_classes.h (IO::WaitReadable), the
-   function also returns 0 when k is a constant of a namespace App::IO nested
-   where the path is written (App::IO::WaitReadable), except for a path from
+   For a path listed in lib/sp_builtin_classes.h (IO::WaitReadable) or an
+   Errno path (Errno::EACCES), the function also returns 0 when k is a
+   constant of a namespace App::IO nested where the path is written
+   (App::IO::WaitReadable), except for a path from
    the top level (::IO::WaitReadable). For another builtin path (File::Stat),
    the function also returns 0 when the program can define the leaf in the
    builtin: a module App::File nested where the path is written, a class
@@ -806,7 +807,7 @@ int const_path_builtin_other(Compiler *c, int id, int k) {
   const char *nm = nt_str(nt, id, "name"), *rn = class_ruby_name(c, k);
   char qn[256];
   if (!pn || !nm || snprintf(qn, sizeof qn, "%s::%s", pn, nm) >= (int)sizeof qn || (rn && sp_streq(rn, qn))) return 0;
-  if (builtin_core_class_slot(qn) >= 0) return root || !class_in_lexical_nested(c, id, pn, k);
+  if (builtin_core_class_slot(qn) >= 0 || !strncmp(qn, "Errno::", 7)) return root || !class_in_lexical_nested(c, id, pn, k);
   /* qc_orig_name is the leaf the program wrote when a pass renamed the
      path to the alias's class (M::A to Foo) */
   const char *wn = nt_str(nt, id, "qc_orig_name"), *ln = class_leaf_name(wn ? wn : nm);

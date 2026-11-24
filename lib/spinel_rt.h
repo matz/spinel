@@ -798,19 +798,19 @@ static inline sp_gc_hdr *sp_pool_try_pop(sp_gc_hdr **head) {
    pool_max by up to their number. Add first; over the cap, give the slot back
    and free the storage. The count rises and falls by one per over-cap sweeper
    in between, which nothing reads for anything but the same cap. */
-#define SP_POOL_RECYCLE_BODY(CLS, h) \
-    long _c = SP_ATOMIC_ADD_FETCH(&sp_##CLS##_pool_count, 1, __ATOMIC_RELAXED); \
-    if (_c > sp_##CLS##_pool_max) { \
-      SP_ATOMIC_FETCH_SUB(&sp_##CLS##_pool_count, 1, __ATOMIC_RELAXED); \
-      sp_slab_free(h); SP_ATOMIC_FETCH_ADD(&sp_##CLS##_pool_freed, 1, __ATOMIC_RELAXED); return; \
+#define SP_POOL_RECYCLE_BODY(P, h) \
+    long _c = SP_ATOMIC_ADD_FETCH(&P##_pool_count, 1, __ATOMIC_RELAXED); \
+    if (_c > P##_pool_max) { \
+      SP_ATOMIC_FETCH_SUB(&P##_pool_count, 1, __ATOMIC_RELAXED); \
+      sp_slab_free(h); SP_ATOMIC_FETCH_ADD(&P##_pool_freed, 1, __ATOMIC_RELAXED); return; \
     } \
     { sp_gc_hdr *_old; \
-      do { _old = SP_ATOMIC_LOAD(&sp_##CLS##_pool_head, __ATOMIC_ACQUIRE); (h)->next = _old; \
-      } while (!SP_ATOMIC_CAS(&sp_##CLS##_pool_head, &_old, (h), \
+      do { _old = SP_ATOMIC_LOAD(&P##_pool_head, __ATOMIC_ACQUIRE); (h)->next = _old; \
+      } while (!SP_ATOMIC_CAS(&P##_pool_head, &_old, (h), \
                                             0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)); } \
-    { SP_ATOMIC_FETCH_ADD(&sp_##CLS##_pool_pushes, 1, __ATOMIC_RELAXED); \
-      long _hwm = SP_ATOMIC_LOAD(&sp_##CLS##_pool_hwm, __ATOMIC_RELAXED); \
-      while (_c > _hwm && !SP_ATOMIC_CAS(&sp_##CLS##_pool_hwm, &_hwm, _c, \
+    { SP_ATOMIC_FETCH_ADD(&P##_pool_pushes, 1, __ATOMIC_RELAXED); \
+      long _hwm = SP_ATOMIC_LOAD(&P##_pool_hwm, __ATOMIC_RELAXED); \
+      while (_c > _hwm && !SP_ATOMIC_CAS(&P##_pool_hwm, &_hwm, _c, \
                                                        1, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {} }
 #else
 static inline sp_gc_hdr *sp_pool_try_pop(sp_gc_hdr **head) {
@@ -820,15 +820,15 @@ static inline sp_gc_hdr *sp_pool_try_pop(sp_gc_hdr **head) {
 }
 #define SP_POOL_CTR_INC(c) ((c)++)
 #define SP_POOL_CTR_DEC(c) ((c)--)
-#define SP_POOL_RECYCLE_BODY(CLS, h) \
-    if (sp_##CLS##_pool_count >= sp_##CLS##_pool_max) { \
-      sp_slab_free(h); sp_##CLS##_pool_freed++; return; \
+#define SP_POOL_RECYCLE_BODY(P, h) \
+    if (P##_pool_count >= P##_pool_max) { \
+      sp_slab_free(h); P##_pool_freed++; return; \
     } \
-    (h)->next = sp_##CLS##_pool_head; \
-    sp_##CLS##_pool_head = (h); \
-    sp_##CLS##_pool_count++; \
-    sp_##CLS##_pool_pushes++; \
-    if (sp_##CLS##_pool_count > sp_##CLS##_pool_hwm) sp_##CLS##_pool_hwm = sp_##CLS##_pool_count;
+    (h)->next = P##_pool_head; \
+    P##_pool_head = (h); \
+    P##_pool_count++; \
+    P##_pool_pushes++; \
+    if (P##_pool_count > P##_pool_hwm) P##_pool_hwm = P##_pool_count;
 #endif
 #define SP_POOL_DEFINE(CLS) \
   static sp_gc_hdr *sp_##CLS##_pool_head = NULL; \
@@ -845,7 +845,7 @@ static inline sp_gc_hdr *sp_pool_try_pop(sp_gc_hdr **head) {
      pushes with the same CAS loop sp_PolyArray_pool_recycle uses, and counts
      atomically. Single-threaded: the exact plain code this always had. */ \
   static void sp_##CLS##_pool_recycle(sp_gc_hdr *h) { \
-    SP_POOL_RECYCLE_BODY(CLS, h) \
+    SP_POOL_RECYCLE_BODY(sp_##CLS, h) \
   }
 
 /* With the slab on the pool is bypassed: the slab's own allocation is as

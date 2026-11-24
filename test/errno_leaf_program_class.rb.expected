@@ -1,0 +1,8 @@
+Errno::ENOENT
+Errno::EACCES
+"Permission denied - x"
+Errno::ENOENT
+:t
+:top
+Errno::EACCES
+true

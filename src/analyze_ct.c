@@ -55,11 +55,7 @@
    as that literal, or one the loop made, written as a new unfrozen String;
    an object the loop made (such a String, an Array) is written at one place
    only, since each place's node is a new object (ct_objects_written_once).
-   Anything else leaves the loop as written.
-
-   Until the inline load model goes (#9898's last part), its text expansion
-   (sp_const_loop.c) runs these loops before the parse, and this desugar runs
-   on graph tables only (ct_loops_in_analysis). */
+   Anything else leaves the loop as written. */
 #include <stdlib.h>
 #include <string.h>
 
@@ -71,16 +67,6 @@
 /* two names, either of which may be missing (NULL), are the same */
 static int ct_eq(const char *a, const char *b) { return a && b && sp_streq(a, b); }
 
-/* The inline/graph coexistence switch: the inline model's text pass
-   expands the loops, so this desugar runs only on a graph table (its root
-   carries load_file), and under SPINEL_TABLE_LOOPS=analysis, where the
-   inline model leaves its loops to it (a test-only switch, to compare the
-   two). Deleted with the inline model. */
-static int ct_loops_in_analysis(const NodeTable *nt) {
-  const char *sw = getenv("SPINEL_TABLE_LOOPS");
-  return nt_int(nt, nt->root_id, "load_file", -1) >= 0 || ct_eq(sw, "analysis");
-}
-
 /* Does `call` stand in the block of a loop the walk may run
    (ct_table_loop_form: `H.each { |k, v| ... }`, H a constant, a statement
    of a class or module body)? A pass ahead of the walk leaves such a call
@@ -88,7 +74,6 @@ static int ct_loops_in_analysis(const NodeTable *nt) {
    superclass); where the walk does not run the loop, it is the call it
    was. parent: the parent map. */
 int ct_in_walk_loop_block(const NodeTable *nt, const int *parent, int call) {
-  if (!ct_loops_in_analysis(nt)) return 0;
   for (int x = call; x >= 0; x = parent[x]) {
     if (nt_kind(nt, x) != NK_BlockNode) continue;
     int lp = parent[x];
@@ -846,17 +831,7 @@ static int ct_try_loop(NodeTable *nt, int **parent, int *pcount, const int *befo
    reads a constant or class variable only when the macro is defined in the
    same body as the call (both are lexical); a String of the frame only for
    its bytes, or frozen where the block answers it. Anything else leaves
-   the call as written.
-
-   Until the inline load model goes, its text expansion (sp_macro.c) runs
-   these macros before the parse, and this form runs on graph tables only
-   (or under SPINEL_CLASS_MACROS=analysis, a test-only switch, where the
-   parse leaves them to it). */
-
-static int ct_macros_in_analysis(const NodeTable *nt) {
-  const char *sw = getenv("SPINEL_CLASS_MACROS");
-  return nt_int(nt, nt->root_id, "load_file", -1) >= 0 || ct_eq(sw, "analysis");
-}
+   the call as written. */
 
 /* What the walk's macros asked of the whole program, once per walk: the
    parent map of the nodes [0, count) and the core methods asked about; and
@@ -1955,7 +1930,7 @@ int ct_table_loop_form(Compiler *c, int st, int list, int j) {
   int bn = 0, frame = -1;
   const int *bb = nt_arr(nt, list, "body", &bn);
   if (!h || nt_kind(nt, st) != NK_CallNode || nt_ref(nt, st, "block") < 0 || j >= bn || bb[j] != st ||
-      !ct_loops_in_analysis(nt) || elab_stmt_list(c, st, &frame) != list ||
+      elab_stmt_list(c, st, &frame) != list ||
       !class_def_opens_frame(nt, frame) || class_def_body(nt, frame) != list)
     return -1;
   /* the loop's shape first (`H.each { |k, v| ... }`, H a constant): the
@@ -2064,7 +2039,7 @@ int ct_macro_form(Compiler *c, int call, int list, int j) {
   int rv = nt_ref(nt, call, "receiver"), bn = 0, frame = -1;
   const int *bb = nt_arr(nt, list, "body", &bn);
   if (!h || !name || (rv >= 0 && nt_kind(nt, rv) != NK_SelfNode && !nt_int(nt, call, "self_call", 0)) ||
-      nt_ref(nt, call, "block") >= 0 || j >= bn || bb[j] != call || !ct_macros_in_analysis(nt) || elab_stmt_list(c, call, &frame) != list ||
+      nt_ref(nt, call, "block") >= 0 || j >= bn || bb[j] != call || elab_stmt_list(c, call, &frame) != list ||
       !class_def_opens_frame(nt, frame) || !ct_body_arm(nt, class_def_body(nt, frame), list))
     return -1;
   /* the class, and what its call can meet at its point */

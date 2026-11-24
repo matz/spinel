@@ -3,7 +3,7 @@
    their order, and analyze_program's call sequence is untouched.
 
    Five desugars stay in analyze_pass.c because they use file-static helpers
-   that inference also uses (subtree_has_kind, subtree_rename_local, the
+   that inference also uses (nt_subtree_has_kind, subtree_rename_local, the
    bdp_/ie_ pairs); moving those would widen their linkage for no reason but
    this file split. */
 #include "builtin_ops.h"

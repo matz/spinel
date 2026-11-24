@@ -138,3 +138,18 @@ class R12
   begin; private :a12, :dm12, :zz12, :a12; rescue NameError => e12; p e12.class; end
 end
 p [(R12.new.a12 rescue $!.class), (R12.new.dm12 rescue $!.class)]
+module M14; def self.mk14 = (def zz14 = :zz14); end
+M14.mk14
+class C14
+  def tail14 = :tail14
+  begin; private :zz14, :tail14; rescue NameError; end
+  include M14
+end
+p [(C14.new.tail14 rescue $!.class), (C14.new.zz14 rescue $!.class)]
+class C15
+  def self.mk15 = (def zz15 = :zz15)
+  mk15
+  begin; private(:zz15, def tail15; :tail15; end); rescue NameError; end
+end
+c15 = C15.new
+p [(c15.zz15 rescue $!.class), (c15.tail15 rescue $!.class)]

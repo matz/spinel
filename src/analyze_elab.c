@@ -267,7 +267,7 @@ struct LoadRecord {
      implicitly private: a call's entries are asked one name at a time (lr_bform_live), and each ask read every
      name the call takes */
   int ipn_node, ipn_any;
-  struct LrPWord { int node, cls, sg, side, vis, reach; } *pword; int npword, cpword;   /* the visibility words the walk made entries of that stop short of their names (lr_call), asked again once the bodies are ordered (lr_words_refine) */
+  struct LrPWord { int node, cls, sg, side, vis, reach; unsigned char cside; } *pword; int npword, cpword;   /* the visibility words the walk made entries of that stop short of their names (lr_call), asked again once the bodies are ordered (lr_words_refine) */
   unsigned char *bown; int nbown;   /* [nbown] by node: a body's definer call every run of which defines on one class and side (lr_body_owner_fixed, set with the forms) */
   struct LrHeader *hdr; int nhdr, chdr, *hdr_head;   /* the class and module headers, in the order the walk reaches them (elab_header_class), and the class builders' calls and writes noted ahead of the walk (elab_builder_note) */
   ElabSurface *surf; int *surf_at;   /* elab_class_surface's, by class side: [2 * (cls + 1) + sg] .. [+ 1] */
@@ -2876,6 +2876,7 @@ static int lr_link_sure(Compiler *c, int cls, int owner, int sg, int depth) {
    so a word's reach is asked only where it is observable (lr_word_reach) */
 static int lr_has_at(Compiler *c, int cls, int sg, const char *nm, LoadPoint p, int depth);
 static int lr_chain_versions(Compiler *c, int cls, int sg, const char *name, ElabVersion *out, int cap);
+static int lr_in_ancestry(Compiler *c, int cls, int sg, int k, LoadPoint p);
 /* ...what one entry d a method's body makes says of the name at point p: 1 where its body surely ran ahead of p, -1 where it first
    runs after p or never (or d takes the name away and runs after p: it changes nothing there), 0 where it may have run before p or
    the extent is not known, 2 for an entry no body makes */
@@ -2912,10 +2913,15 @@ static int lr_body_state(Compiler *c, int cls, int sg, const char *nm, LoadPoint
   ElabVersion ev[LR_BODY_VERSIONS];
   if (other) *other = 0;
   if (!c->lrec->recorded) return 2;
-  int n = lr_chain_versions(c, cls, sg, nm, ev, LR_BODY_VERSIONS), state = 2;
+  int n = lr_chain_versions(c, cls, sg, nm, ev, LR_BODY_VERSIONS), state = 2, skipped = 0;
   if (n < 0 || n > LR_BODY_VERSIONS) return 0;
   for (int i = 0; i < n; i++) {
-    int s = lr_body_one(c, ev[i].v, p), k = c->lrec->hist[ev[i].hist].a;
+    int k = c->lrec->hist[ev[i].hist].a;
+    if (k != cls && !lr_in_ancestry(c, cls, sg, k, p)) {   /* (a module included after the word is no link its lookup has: its version is none the word finds) */
+      skipped = 1;
+      continue;
+    }
+    int s = lr_body_one(c, ev[i].v, p);
     if (s == 2) {
       if (other && ev[i].v->kind <= LR_REMOVE && !ev[i].v->body) *other = 1;
       continue;
@@ -2923,7 +2929,7 @@ static int lr_body_state(Compiler *c, int cls, int sg, const char *nm, LoadPoint
     if (s == 1 && k != cls && !lr_link_sure(c, cls, k, sg, 0)) s = 0;
     state = state == 2 ? s : s > state ? s : state;
   }
-  return state;
+  return state == 2 && skipped ? -1 : state;   /* (only versions the word's lookup does not reach: the name is absent there) */
 }
 static int lr_has_state(Compiler *c, int cls, int sg, const char *nm, LoadPoint p, int depth) {
   const LrDef *d = NULL;
@@ -2965,11 +2971,20 @@ static int lr_has_at(Compiler *c, int cls, int sg, const char *nm, LoadPoint p, 
 static int lr_word_has(Compiler *c, int cls, int sg, const char *nm, int node) {
   return lr_has_at(c, cls, sg, nm, elab_point_of(c, node), 0);
 }
+/* ...the operands of visibility word node: av[*skip .. *ac), after a sent word's own (`K.send(:private, :m)`), and in *arr whether an Array
+   given alone stands for its elements (`private [:a, :b]`) */
+static const int *lr_word_operands(const NodeTable *nt, int node, int *skip, int *ac, int *arr) {
+  *skip = 0; *ac = 0;
+  (void)vis_word_call(nt, node, skip);
+  int an = nt_ref(nt, node, "arguments");
+  const int *av = an >= 0 ? nt_arr(nt, an, "arguments", ac) : NULL;
+  *arr = *ac - *skip == 1 && nt_kind(nt, av[*skip]) == NK_ArrayNode;
+  return av;
+}
 /* ...how many elements word node's arguments have, as lr_word_elem counts them */
 static int lr_word_elems(const NodeTable *nt, int node) {
-  int skip = 0, an = (vis_word_call(nt, node, &skip), nt_ref(nt, node, "arguments")), ac = 0, n = 0;
-  const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
-  int arr = ac - skip == 1 && nt_kind(nt, av[skip]) == NK_ArrayNode;
+  int skip, ac, arr, n = 0;
+  const int *av = lr_word_operands(nt, node, &skip, &ac, &arr);
   for (int i = skip; i < ac; i++) {
     int en = 1;
     if (arr) nt_arr(nt, av[i], "elements", &en);
@@ -2980,8 +2995,8 @@ static int lr_word_elems(const NodeTable *nt, int node) {
 /* ...does a def among the arguments of word node make the method nm (the word's arguments run before the word does:
    `private(:m, def m; end)` names a method it has)? */
 static int lr_word_defines(const NodeTable *nt, int node, const char *nm, int cside) {
-  int skip = 0, an = (vis_word_call(nt, node, &skip), nt_ref(nt, node, "arguments")), ac = 0;
-  const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
+  int skip, ac, arr;
+  const int *av = lr_word_operands(nt, node, &skip, &ac, &arr);
   for (int i = skip; i < ac; i++) {
     if (nt_kind(nt, av[i]) != NK_DefNode || !sp_streq(nt_str(nt, av[i], "name"), nm)) continue;
     int dr = nt_ref(nt, av[i], "receiver");
@@ -2993,9 +3008,8 @@ static int lr_word_defines(const NodeTable *nt, int node, const char *nm, int cs
    its elements in their place, a def is one element, a def's name its name): NULL for none, or for an argument that is
    no name. *def says it is a def */
 static const char *lr_word_elem(const NodeTable *nt, int node, int k, int *def) {
-  int skip = 0, an = (vis_word_call(nt, node, &skip), nt_ref(nt, node, "arguments")), ac = 0;
-  const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
-  int arr = ac - skip == 1 && nt_kind(nt, av[skip]) == NK_ArrayNode;
+  int skip, ac, arr;
+  const int *av = lr_word_operands(nt, node, &skip, &ac, &arr);
   if (def) *def = 0;
   for (int i = skip; i < ac; i++) {
     int en = 1;
@@ -3022,9 +3036,8 @@ static int lr_word_reach(Compiler *c, int node, int cls, int sg, int *copies) {
      cannot tell every method, a native binding's or a builtin reopening's, so it has no reach; one in a rescued begin or
      a block, whose statement is partial, has) */
   if (!mf && !(st && st->fpartial)) return INT_MAX;
-  int skip = 0, an = (vis_word_call(nt, node, &skip), nt_ref(nt, node, "arguments")), ac = 0, n = 0;
-  const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
-  int arr = ac - skip == 1 && nt_kind(nt, av[skip]) == NK_ArrayNode, hasdef = 0;
+  int skip, ac, arr, n = 0, hasdef = 0;
+  const int *av = lr_word_operands(nt, node, &skip, &ac, &arr);
   for (int i = skip; i < ac; i++) hasdef |= nt_kind(nt, av[i]) == NK_DefNode;   /* (asked once: a word with no def argument has none to look for among its names) */
   for (int i = skip; i < ac; i++) {
     int en = 1;
@@ -4735,7 +4748,7 @@ static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int
   if ((bvis || cvis) && mfr != INT_MAX && !lr_word_is_mf(nt, node) && !(cvis && sg)) {   /* (a name past the reach the word has not changed: asked again, lr_words_refine) */
     LoadRecord *r = x->r;
     if (r->npword == r->cpword && !(r->pword = realloc(r->pword, sizeof *r->pword * (size_t)(r->cpword = r->cpword ? 2 * r->cpword : 8)))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-    r->pword[r->npword++] = (struct LrPWord){ node, cls, sg, bvis ? sg : 1, bvis ? bvis : cvis, mfr };
+    r->pword[r->npword++] = (struct LrPWord){ node, cls, sg, bvis ? sg : 1, bvis ? bvis : cvis, mfr, !bvis };
   }
   if (!mfc) bvis = BVIS_PRIVATE;
   int attr_r = is_attr_decl_reader(nm), attr_w = is_attr_decl_writer(nm);
@@ -5513,6 +5526,7 @@ static void lr_words_refine(Compiler *c) {
   const NodeTable *nt = c->nt;
   if (!r->npword) return;
   lr_run_points(c);
+  int changed = 0;
   for (int w = 0; w < r->npword; w++) {
     struct LrPWord pw = r->pword[w];
     int ne = lr_word_elems(nt, pw.node);
@@ -5527,16 +5541,17 @@ static void lr_words_refine(Compiler *c) {
     /* (the elements once, as lr_word_elem counts them; a name given twice has an entry for each, in order) */
     const char **nms = malloc(sizeof *nms * (size_t)ne);
     struct LrElemName *ord = malloc(sizeof *ord * (size_t)ne);
-    int *rank = malloc(sizeof *rank * (size_t)ne);
-    if (!nms || !ord || !rank) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-    int skip = 0, an = (vis_word_call(nt, pw.node, &skip), nt_ref(nt, pw.node, "arguments")), ac = 0, k = 0;
-    const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
-    int arr = ac - skip == 1 && nt_kind(nt, av[skip]) == NK_ArrayNode;
+    int *rank = malloc(sizeof *rank * (size_t)ne), *dnode = malloc(sizeof *dnode * (size_t)ne);
+    if (!nms || !ord || !rank || !dnode) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    int skip, ac, arr, k = 0;
+    const int *av = lr_word_operands(nt, pw.node, &skip, &ac, &arr);
     for (int i = skip; i < ac; i++) {
       int en = 1;
       const int *ev = arr ? nt_arr(nt, av[i], "elements", &en) : &av[i];
-      for (int e = 0; e < en && k < ne; e++, k++)
-        nms[k] = nt_kind(nt, ev[e]) == NK_DefNode ? "" : vis_arg_name(nt, ev[e]);   /* (a def: no name here; a computed one: NULL) */
+      for (int e = 0; e < en && k < ne; e++, k++) {
+        dnode[k] = nt_kind(nt, ev[e]) == NK_DefNode ? ev[e] : -1;
+        nms[k] = dnode[k] >= 0 ? "" : vis_arg_name(nt, ev[e]);   /* (a def: no name here; a computed one: NULL) */
+      }
     }
     for (int q = 0; q < ne; q++) ord[q] = (struct LrElemName){ nms[q], q };
     qsort(ord, (size_t)ne, sizeof *ord, lr_elem_cmp);
@@ -5547,7 +5562,16 @@ static void lr_words_refine(Compiler *c) {
     for (k = from; k < ne; k++) {
       const char *nm = nms[k];
       if (!nm) break;   /* (a computed name ends the names) */
-      if (!*nm) continue;   /* (a def's own entry is made by the def, lr_applied) */
+      if (!*nm) {   /* (a def an instance word takes: its entry is the def's, with its section's visibility where the word stopped short; the word reaches it now) */
+        const LrHist *dh = k < now && !pw.cside && nt_ref(nt, dnode[k], "receiver") < 0 ? lr_hist(r, pw.cls, pw.sg, nt_str(nt, dnode[k], "name"), 0) : NULL;
+        for (int q = 0; dh && q < dh->n; q++) {
+          LrDef *v = (LrDef *)&dh->v[q];
+          if (v->node != dnode[k] || v->kind != LR_DEF || v->vis == lr_vis(pw.vis)) continue;
+          v->vis = (unsigned char)lr_vis(pw.vis);
+          changed = 1;
+        }
+        continue;
+      }
       const LrHist *h = lr_hist(r, pw.cls, pw.side, nm, 0);
       for (int q = 0, seen = 0; h && q < h->n; q++) {
         LrDef *v = (LrDef *)&h->v[q];
@@ -5560,7 +5584,7 @@ static void lr_words_refine(Compiler *c) {
           v->vis = (unsigned char)(pv >= 0 ? pv : SP_VIS_PUBLIC);   /* (no method of the name yet: one a body makes later is public) */
         }
         else v->vis = (unsigned char)lr_vis(pw.vis);
-        if (was != v->vis || cut != v->cut) r->hgen++;   /* (what was read through the entries is read again) */
+        changed |= was != v->vis || cut != v->cut;
       }
     }
     /* (the reach ends at a name an entry no body makes may have made too, a def under a condition the run time decides: whether the
@@ -5571,12 +5595,11 @@ static void lr_words_refine(Compiler *c) {
       ElabVersion ev[LR_BODY_VERSIONS];
       int nv = lr_chain_versions(c, pw.cls, pw.sg, nms[now], ev, LR_BODY_VERSIONS);
       for (int i = 0; i < nv; i++)
-        if (ev[i].v->body) ((LrDef *)ev[i].v)->absent = 1;
-      r->hgen++;
+        if (ev[i].v->body) ((LrDef *)ev[i].v)->absent = 1, changed = 1;
     }
-    free(nms); free(ord); free(rank);
+    free(nms); free(ord); free(rank); free(dnode);
   }
-  free(r->surf); free(r->surf_at); r->surf = NULL; r->surf_at = NULL;
+  if (changed) lr_entries_changed(r);   /* (the by-name index, the late bits and the surface count the entries as they were) */
 }
 
 /* The record dropped and made again over the walked statements */

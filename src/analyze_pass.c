@@ -14695,18 +14695,6 @@ void check_block_rest_support(Compiler *c) {
 /* `recv.public_method(:sym)` -> `recv.method(:sym)`: the same bound Method,
    reusing all the `method(:sym)` machinery (reachability, arity, call). The
    private/protected visibility distinction is not modeled. #2687 */
-/* Does any node under `root` have kind `k`? Descends every ref/arr field. */
-static int subtree_has_kind(const NodeTable *nt, int root, NodeKind k, int depth) {
-  if (root < 0 || root >= nt->count || depth > 200) return 0;
-  if (nt_kind(nt, root) == k) return 1;
-  const SpNode *nd = &nt->nodes[root];
-  for (int i = 0; i < nd->nr; i++)
-    if (subtree_has_kind(nt, nd->r[i].ref, k, depth + 1)) return 1;
-  for (int i = 0; i < nd->na; i++)
-    for (int j = 0; j < nd->a[i].n; j++)
-      if (subtree_has_kind(nt, nd->a[i].ids[j], k, depth + 1)) return 1;
-  return 0;
-}
 
 /* The literal block of `call` when the call runs it with another self than
    the code around it: a builtin that rebinds self (is_block_self_call),
@@ -14920,7 +14908,7 @@ int desugar_class_eval_value(Compiler *c) {
     if (blk < 0 || nt_kind(nt, blk) != NK_BlockNode) continue;
     int body = nt_ref(nt, blk, "body");
     if (body < 0) continue;
-    if (subtree_has_kind(nt, body, NK_DefNode, 0)) continue;   /* reopen path */
+    if (nt_subtree_has_kind(nt, body, NK_DefNode)) continue;   /* reopen path */
 
     /* the block's params bind the exec args; collect their names */
     const char *pnames[8]; int pnodes[8], pvals[8]; int np = 0;
@@ -15361,7 +15349,7 @@ int desugar_instance_eval_builtin(Compiler *c) {
     if (rt == TY_POLY) {
       int blk = nt_ref(nt, id, "block");
       int body = blk >= 0 && nt_kind(nt, blk) == NK_BlockNode ? nt_ref(nt, blk, "body") : -1;
-      if (body >= 0 && !subtree_has_kind(nt, body, NK_DefNode, 0))
+      if (body >= 0 && !nt_subtree_has_kind(nt, body, NK_DefNode))
         changed |= ie_subtree_self_calls(c, body, NULL, 0);
       continue;
     }
@@ -15375,7 +15363,7 @@ int desugar_instance_eval_builtin(Compiler *c) {
     if (blk < 0 || nt_kind(nt, blk) != NK_BlockNode) continue;
     int body = nt_ref(nt, blk, "body");
     if (body < 0) continue;
-    if (subtree_has_kind(nt, body, NK_DefNode, 0)) continue;
+    if (nt_subtree_has_kind(nt, body, NK_DefNode)) continue;
     /* the block's ivars are the receiver's, which has none: spliced here
        they read and wrote the caller's. The codegen path reads them nil
        and refuses a write (emit_call's non-object instance_exec). */
@@ -16422,7 +16410,7 @@ int desugar_dir_surface(Compiler *c) {
     if (sp_streq(nm, "chdir") && blk >= 0 && nt_kind(nt, blk) == NK_BlockNode && an >= 1) {
       int body = nt_ref(nt, blk, "body");
       if (body < 0) continue;
-      if (subtree_has_kind(nt, body, NK_DefNode, 0)) continue;
+      if (nt_subtree_has_kind(nt, body, NK_DefNode)) continue;
       int bn = 0; const int *bb = nt_arr(nt, body, "body", &bn);
       if (bn > 58) continue;
       char sav[64], valn[64], dirn[64];
@@ -16518,7 +16506,7 @@ int desugar_dir_surface(Compiler *c) {
       nt_node_set_ref(nt, paren, "body", pstmts);
       nt_node_set_str(nt, wval, "name", valn);
       int value = paren;
-      if (subtree_has_kind(nt, body, NK_ReturnNode, 0) || once_block_jump(nt, body, NK_BreakNode, 0) >= 0)
+      if (nt_subtree_has_kind(nt, body, NK_ReturnNode) || once_block_jump(nt, body, NK_BreakNode, 0) >= 0)
         value = dir_chdir_control_call(nt, blk, pstmts);
       if (value < 0) continue;
       nt_node_set_ref(nt, wval, "value", value);
@@ -23017,7 +23005,7 @@ int desugar_io_console_modes(Compiler *c) {
     if (recv < 0 || blk < 0 || nt_kind(nt, blk) != NK_BlockNode || nt_ref(nt, id, "arguments") >= 0) continue;
     if (nt_int(nt, id, "ioc_kept", 0)) continue;   /* the program class's arm of a dispatch made here */
     int body = nt_ref(nt, blk, "body");
-    if (body >= 0 && subtree_has_kind(nt, body, NK_DefNode, 0)) continue;
+    if (body >= 0 && nt_subtree_has_kind(nt, body, NK_DefNode)) continue;
     int bn = 0; const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
     if (bn > 60) continue;
     int kind = sp_streq(nm, "raw") ? 1 : 2;

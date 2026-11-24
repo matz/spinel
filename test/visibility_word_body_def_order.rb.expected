@@ -11,3 +11,5 @@
 [NoMethodError, :zz11, :b11, false]
 NameError
 [NoMethodError, NoMethodError]
+[:tail14, :zz14]
+[NoMethodError, NoMethodError]

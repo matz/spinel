@@ -355,6 +355,8 @@ void nt_renumber(NodeTable *nt, const int *order);
    Appends nodes and grows nt->count -- parallel per-node arrays must be
    resized to match afterward. */
 int nt_clone_subtree(NodeTable *nt, int root);
+/* Does any node under `root` have kind `k`? (descends every ref and array field) */
+int nt_subtree_has_kind(const NodeTable *nt, int root, NodeKind k);
 /* The ids of the subtrees at roots[0..n), each once, in walk order (a node
    two roots share is listed once): a malloc'd list the caller frees, its
    length in *out. A walk of those subtrees alone. */

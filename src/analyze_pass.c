@@ -8586,7 +8586,9 @@ static int array_src_walk(Compiler *c, int v, int pinned, int apply, int *stack,
    attr_op_writes), walked as a write's value is, and counted (n): nonzero
    stops the calls where it is no one plain argument the walk can follow.
    An `||=` or `&&=` hands its value; an `op=` the Array the operator
-   builds out of the ivar's own, which is new, as a write's `@v + [x]` is. */
+   builds out of the ivar's own, which is new, as a write's `@v + [x]` is.
+   A nil holds no Array, as a write's `@v = nil` holds none
+   (ivar_writes_fresh): it is passed over. */
 typedef struct { int *stack, depth, apply, ch, n; } AttrArgWalk;
 static int attr_writer_arg_walk(Compiler *c, int call, void *ctx) {
   AttrArgWalk *w = ctx;
@@ -8600,6 +8602,7 @@ static int attr_writer_arg_walk(Compiler *c, int call, void *ctx) {
     if (an != 1 || nt_kind(c->nt, av[0]) == NK_SplatNode) return 1;
     arg = av[0];
   }
+  if (nt_kind(c->nt, nt_paren_single(c->nt, arg)) == NK_NilNode) return 0;
   int got = array_src_walk(c, arg, 1, w->apply, w->stack, w->depth + 1);
   if (!w->apply && !got) return 1;
   w->ch |= got;

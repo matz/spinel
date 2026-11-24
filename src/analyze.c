@@ -17765,11 +17765,16 @@ static void widen_ivars_from_pushed_params(Compiler *c) {
   for (int id = 0; c->ivar_widen_src && id < nt->count && id < c->node_cap; id++) {
     if (!c->ivar_widen_src[id]) continue;
     const char *ivn = NULL;
-    int cls = ivar_src_slot(c, id, &ivn);
-    int ivi = cls >= 0 ? comp_ivar_index(&c->classes[cls], ivn) : -1;
-    if (ivi < 0) continue;
-    TyKind ivt = c->classes[cls].ivar_types[ivi];
-    if (ty_is_array(ivt) && !ty_is_ptr_array(ivt)) ivar_set_type(&c->classes[cls], ivi, TY_POLY_ARRAY);
+    IvarSlots isl;
+    int ncl = ivar_src_slots(c, id, &ivn, &isl);
+    for (int q = 0; q < ncl; q++) {
+      ClassInfo *k = &c->classes[isl.cls[q]];
+      int ivi = comp_ivar_index(k, ivn);
+      if (ivi < 0) continue;
+      TyKind ivt = k->ivar_types[ivi];
+      if (ty_is_array(ivt) && !ty_is_ptr_array(ivt)) ivar_set_type(k, ivi, TY_POLY_ARRAY);
+    }
+    ivar_slots_free(&isl);
   }
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
     const char *name = nt_str(nt, id, "name");

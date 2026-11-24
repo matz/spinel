@@ -2425,12 +2425,14 @@ static int alias_side(Compiler *c, int n, AliasSide *out) {
   out->slot = NULL; out->local = out->reader = 0; out->cid = out->iv = -1;
   /* a reader's call names the ivar it answers (`o.items`, a Struct
      member), resolved as the array source walk resolves it
-     (ivar_src_slot), and taken on the source walk's terms: no writer
+     (ivar_src_slots), and taken on the source walk's terms: no writer
      called from outside, and every write of the ivar a new Array or a
      parameter (ivar_writes_fresh) */
   if (nt_kind(c->nt, n) == NK_CallNode) {
     const char *ivn = NULL;
-    int cls = ivar_src_slot(c, n, &ivn);
+    IvarSlots isl;
+    int ncl = ivar_src_slots(c, n, &ivn, &isl), cls = ncl == 1 ? isl.cls[0] : -1;
+    ivar_slots_free(&isl);
     MethodLookup rml = { .def_class = -1 };
     if (cls < 0 || !call_attr_target(c, -1, cls, ivn + 1, 0, &rml) || rml.def_class < 0) return 0;
     int dc = rml.def_class;
@@ -8547,39 +8549,92 @@ static int struct_aref_member_slot(Compiler *c, int v, const char **ivn) {
   *ivn = ci->ivars[mi];
   return cls;
 }
-/* The class whose ivar the value `v` reads, with the ivar's name in *ivn:
-   an ivar read in a method, an attr_reader call (`obj.items`, a bare
-   `items` in the class), or a Struct member's `[]` read
-   (struct_aref_member_slot). -1 when `v` is none of these. */
-int ivar_src_slot(Compiler *c, int v, const char **ivn) {
+/* Is class a, or a class above it, class k? */
+static int class_at_or_above(Compiler *c, int a, int k) {
+  for (int x = a; x >= 0; x = c->classes[x].parent) if (x == k) return 1;
+  return 0;
+}
+/* The classes whose attribute reader `nm` a read on receiver r may read,
+   where the class facts say r may hold objects of more than one class
+   (`o = cond ? k : q; o.v`): for each class of the set, the highest class
+   above it (or itself) answering the name by an attribute, whose ivar slot
+   it shares, into sl (malloc'd, as many as the set has members), and their
+   count. 0 for a set the facts do not bound, a Class object among its
+   members, a builtin among them where a builtin may answer the name
+   (bop_any_answers; one that does not raises NoMethodError, reading no
+   slot), or a class of the set the name reaches no attribute of. A class
+   the facts leave unbounded may be held beside the set's members
+   (cls_fact_excludes rules none out), so one of those that answers the
+   name must be below one of the classes and answer it by an attribute
+   too. */
+static int recv_fact_attr_classes(Compiler *c, int r, const char *nm, IvarSlots *sl) {
+  const ClsSet *s = cls_fact_node(c, r);
+  if (!s || s->all || s->n == 0 || s->os || ((s->bv || cls_bk_any(s)) && bop_any_answers(nm))) return 0;
+  int *out = malloc(sizeof(int) * (size_t)s->n), n = 0;
+  if (!out) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  sl->cls = out;
+  for (int m = cls_set_next(s, -1); m >= 0; m = cls_set_next(s, m)) {
+    if (m >= c->cls_fact_ncls || !cls_fact_bounded(c, m) || !call_attr_target(c, -1, m, nm, 0, NULL)) return 0;
+    int top = m, i = 0;
+    for (int a = c->classes[m].parent; a >= 0; a = c->classes[a].parent)
+      if (call_attr_target(c, -1, a, nm, 0, NULL)) top = a;
+    while (i < n && out[i] != top) i++;
+    if (i == n) out[n++] = top;
+  }
+  for (int k = 0; k < c->nclasses; k++) {
+    if ((k < c->cls_fact_ncls && cls_fact_bounded(c, k)) || comp_class_is_module(c, &c->classes[k]) ||
+        !call_answers(c, -1, k, nm, 0, NULL)) continue;
+    int i = 0;
+    while (i < n && !class_at_or_above(c, k, out[i])) i++;
+    if (i == n || !call_attr_target(c, -1, k, nm, 0, NULL)) return 0;
+  }
+  return n;
+}
+void ivar_slots_free(IvarSlots *sl) {
+  if (sl->cls != &sl->one) free(sl->cls);
+  sl->cls = &sl->one;
+  sl->n = 0;
+}
+/* The classes whose ivar the value `v` reads, into sl (ivar_slots_free),
+   with the ivar's name in *ivn, and their count: an ivar read in a method,
+   an attr_reader call (`obj.items`, a bare `items` in the class; on a
+   receiver that may hold objects of more than one class, the classes whose
+   readers they reach, recv_fact_attr_classes), or a Struct member's `[]`
+   read (struct_aref_member_slot). 0 when `v` is none of these. The name is
+   the node's, or the first class's own entry for the ivar, which stays
+   while the walks that follow it read other values. */
+int ivar_src_slots(Compiler *c, int v, const char **ivn, IvarSlots *sl) {
   const NodeTable *nt = c->nt;
-  static char ivb[128];
   Scope *sc = comp_scope_of(c, v);
-  if (!sc) return -1;
+  sl->cls = &sl->one; sl->n = 0;
+  if (!sc) return 0;
   if (nt_kind(nt, v) == NK_InstanceVariableReadNode) {
     *ivn = nt_str(nt, v, "name");
-    if (!*ivn) return -1;
-    return sc->class_id >= 0 ? sc->class_id : ivar_main_slot_class(c, sc, v);
+    sl->one = !*ivn ? -1 : sc->class_id >= 0 ? sc->class_id : ivar_main_slot_class(c, sc, v);
+    return sl->n = sl->one >= 0;
   }
-  if (nt_kind(nt, v) != NK_CallNode || nt_ref(nt, v, "block") >= 0) return -1;
+  if (nt_kind(nt, v) != NK_CallNode || nt_ref(nt, v, "block") >= 0) return 0;
   int a = nt_ref(nt, v, "arguments"), an = 0;
   if (a >= 0) nt_arr(nt, a, "arguments", &an);
   const char *nm = nt_str(nt, v, "name");
-  if (an == 1 && is_aref_name(nm)) return struct_aref_member_slot(c, v, ivn);
-  if (an > 0 || !nm || strlen(nm) >= sizeof ivb - 1) return -1;
-  int r = nt_ref(nt, v, "receiver"), cls = -1;
+  if (an == 1 && is_aref_name(nm)) return sl->n = (sl->one = struct_aref_member_slot(c, v, ivn)) >= 0;
+  char ivb[300];
+  if (an > 0 || !nm || snprintf(ivb, sizeof ivb, "@%s", nm) >= (int)sizeof ivb) return 0;
+  int r = nt_ref(nt, v, "receiver"), cls = -1, n = 0;
   if (r < 0) cls = sc->is_cmethod ? -1 : sc->class_id;
   else {
     TyKind rt = infer_type(c, r);
     if (ty_is_object(rt)) cls = ty_object_class(rt);
   }
   MtabMark mt_was = mtab_push_in(c, v);
-  int attr = cls >= 0 && call_attr_target(c, -1, cls, nm, 0, NULL);
+  if (cls >= 0) n = call_attr_target(c, -1, cls, nm, 0, NULL) ? (sl->one = cls, 1) : 0;
+  else if (r >= 0) n = recv_fact_attr_classes(c, r, nm, sl);
   mtab_pop(c, mt_was);
-  if (!attr) return -1;
-  ivb[0] = '@'; strcpy(ivb + 1, nm);
-  *ivn = ivb;
-  return cls;
+  ClassInfo *ci = n > 0 ? &c->classes[sl->cls[0]] : NULL;
+  int ix = ci ? comp_ivar_index(ci, ivb) : -1;
+  if (ix < 0) { ivar_slots_free(sl); return 0; }
+  *ivn = ci->ivars[ix];
+  return sl->n = n;
 }
 
 /* 1 when every write of the global, class variable or constant `v` reads
@@ -8830,6 +8885,42 @@ static int attr_writer_arg_walk(Compiler *c, int call, void *ctx) {
   }
   return attr_value_walk(c, arg, w);
 }
+/* array_src_walk's step for a value `v` that reads ivar ivn of class icls
+   (ivar_src_slots): whether it can be the general Array, or with apply 1
+   making it so, as array_src_walk answers. */
+static int ivar_src_walk(Compiler *c, int v, int icls, const char *ivn, int apply, int *stack, int depth) {
+  ClassInfo *ci = &c->classes[icls];
+  int ivi = comp_ivar_index(ci, ivn);
+  /* A Struct member the constructor sets widens now, as the alias step
+     widens it (alias_side): the constructions' arguments widen with it
+     in the rounds that follow (struct_new_types_members_at), or keep it
+     boxed where they cannot. An attribute's writer called from outside
+     (`k.v = [+"s"]`, a member's setter) is one more write, whose value
+     is followed as the class's own writes are (attr_writer_calls). */
+  int member = struct_member_set_by_new(c, icls, ivi);
+  int fresh = member || ivi < 0 ? 1 : ivar_writes_fresh(c, icls, ivn, 0, NULL);
+  if (ivi < 0 || class_ivar_pinned(ci, ivn) || !c->ivar_widen_src || v >= c->node_cap || fresh < 0) return 0;
+  AttrArgWalk aw = { stack, depth, 0, 0, 0 };
+  int writer = call_answers(c, -1, icls, ivn + 1, CT_WRITER, NULL);
+  if (attr_writer_calls(c, icls, ivn, attr_writer_arg_walk, &aw) ||
+      (writer && attr_op_writes(c, icls, ivn + 1, attr_writer_arg_walk, &aw)) ||
+      (!member && struct_super_member_values(c, icls, ivi, &aw)) ||
+      (!fresh && !aw.n)) return 0;
+  if (!apply) return 1;
+  aw.apply = 1;
+  attr_writer_calls(c, icls, ivn, attr_writer_arg_walk, &aw);
+  if (writer) attr_op_writes(c, icls, ivn + 1, attr_writer_arg_walk, &aw);
+  if (!member) struct_super_member_values(c, icls, ivi, &aw);
+  int ch = aw.ch;
+  if (member) {
+    AliasSide sd = { &ci->ivar_types[ivi], 0, 1, icls, ivi };
+    if (*sd.slot != TY_POLY_ARRAY) { ty_ref_set(c, sd.slot, TY_POLY_ARRAY); ch = 1; }
+    return ch | alias_ivar_widened(c, NULL, &sd, TY_POLY_ARRAY);
+  }
+  ivar_writes_fresh(c, icls, ivn, 1, &ch);
+  if (!c->ivar_widen_src[v]) { c->ivar_widen_src[v] = 1; ch = 1; }
+  return ch;
+}
 static int array_src_walk(Compiler *c, int v, int pinned, int apply, int *stack, int depth) {
   const NodeTable *nt = c->nt;
   v = nt_paren_single(c->nt, v);
@@ -8918,38 +9009,19 @@ static int array_src_walk(Compiler *c, int v, int pinned, int apply, int *stack,
      which widens with it for its callers (ivar_writes_fresh): a parameter
      left typed would be copied into the widened slot, away from its caller. */
   const char *ivn = NULL;
-  int icls = ivar_src_slot(c, v, &ivn);
-  if (icls >= 0) {
-    ClassInfo *ci = &c->classes[icls];
-    int ivi = comp_ivar_index(ci, ivn);
-    /* A Struct member the constructor sets widens now, as the alias step
-       widens it (alias_side): the constructions' arguments widen with it
-       in the rounds that follow (struct_new_types_members_at), or keep it
-       boxed where they cannot. An attribute's writer called from outside
-       (`k.v = [+"s"]`, a member's setter) is one more write, whose value
-       is followed as the class's own writes are (attr_writer_calls). */
-    int member = struct_member_set_by_new(c, icls, ivi);
-    int fresh = member || ivi < 0 ? 1 : ivar_writes_fresh(c, icls, ivn, 0, NULL);
-    if (ivi < 0 || class_ivar_pinned(ci, ivn) || !c->ivar_widen_src || v >= c->node_cap || fresh < 0) return 0;
-    AttrArgWalk aw = { stack, depth, 0, 0, 0 };
-    int writer = call_answers(c, -1, icls, ivn + 1, CT_WRITER, NULL);
-    if (attr_writer_calls(c, icls, ivn, attr_writer_arg_walk, &aw) ||
-        (writer && attr_op_writes(c, icls, ivn + 1, attr_writer_arg_walk, &aw)) ||
-        (!member && struct_super_member_values(c, icls, ivi, &aw)) ||
-        (!fresh && !aw.n)) return 0;
-    if (!apply) return 1;
-    aw.apply = 1;
-    attr_writer_calls(c, icls, ivn, attr_writer_arg_walk, &aw);
-    if (writer) attr_op_writes(c, icls, ivn + 1, attr_writer_arg_walk, &aw);
-    if (!member) struct_super_member_values(c, icls, ivi, &aw);
-    int ch = aw.ch;
-    if (member) {
-      AliasSide sd = { &ci->ivar_types[ivi], 0, 1, icls, ivi };
-      if (*sd.slot != TY_POLY_ARRAY) { ty_ref_set(c, sd.slot, TY_POLY_ARRAY); ch = 1; }
-      return ch | alias_ivar_widened(c, NULL, &sd, TY_POLY_ARRAY);
+  IvarSlots isl;
+  int nicl = ivar_src_slots(c, v, &ivn, &isl);
+  if (nicl > 0) {
+    /* (a read on a receiver of several classes reads one slot of each, all
+       of which must be followed before any widens) */
+    int ch = 0, ok = 1;
+    if (nicl == 1) ch = ivar_src_walk(c, v, isl.cls[0], ivn, apply, stack, depth);
+    else {
+      for (int q = 0; q < nicl && ok; q++) ok = ivar_src_walk(c, v, isl.cls[q], ivn, 0, stack, depth);
+      if (ok && !apply) ch = 1;
+      for (int q = 0; ok && apply && q < nicl; q++) ch |= ivar_src_walk(c, v, isl.cls[q], ivn, 1, stack, depth);
     }
-    ivar_writes_fresh(c, icls, ivn, 1, &ch);
-    if (!c->ivar_widen_src[v]) { c->ivar_widen_src[v] = 1; ch = 1; }
+    ivar_slots_free(&isl);
     return ch;
   }
   if (k != NK_CallNode) return 0;

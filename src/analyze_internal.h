@@ -1266,7 +1266,11 @@ TyKind return_node_type(Compiler *c, int id);
 int infer_return_types(Compiler *c);
 int backprop_hash_return_types(Compiler *c);
 int backprop_call_target(Compiler *c, int call_id);
-int ivar_src_slot(Compiler *c, int v, const char **ivn);
+/* the classes whose ivar a value reads (ivar_src_slots, analyze_pass.c):
+   cls[0..n), in `one` for a single class, else malloc'd (ivar_slots_free) */
+typedef struct { int *cls, n, one; } IvarSlots;
+int ivar_src_slots(Compiler *c, int v, const char **ivn, IvarSlots *sl);
+void ivar_slots_free(IvarSlots *sl);
 void cr_collect_calls(Compiler *c, const NodeTable *nt, int id, char ***out, int *n, int *cap, int instance_self);
 void cr_collect_program_end(Compiler *c, char ***out, int *n, int *cap);   /* the printer of an uncaught exception */
 int cr_ty_builtin_value(Compiler *c, TyKind t);

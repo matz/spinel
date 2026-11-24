@@ -21059,6 +21059,11 @@ typedef struct EmitUnitState {
      argument drops the statement and its declaration, and a constructor
      emitted after it passed the temporary nothing declares */
   int ctor_blk_tmp;
+  /* the frozen-receiver guard an ivar's `||=` holds around its value
+     (g_orw_store_guard): a refusal inside the value skipped the restore,
+     and a global's `||=` emitted after it took the guard, naming a `self`
+     the top level has none of */
+  const char *orw_store_guard;
   int loop_exc_base, loop_rescue_base, loop_ensure_base, redo_depth;
   /* whether the unit's block is a lowered method's proc parameter */
   int current_scope_is_lowered, yield_lowered_fallback;
@@ -21094,6 +21099,7 @@ void emit_unit_state_save(Compiler *c, EmitUnitState *s) {
   s->ie_next_ty = g_ie_next_ty;
   s->open_defaults = g_open_defaults;
   s->ctor_blk_tmp = g_ctor_blk_tmp;
+  s->orw_store_guard = g_orw_store_guard;
   s->pre = g_pre;
   s->yield_self_fallback = g_yield_self_fallback;
   s->yield_self_fallback2 = g_yield_self_fallback2; s->yield_self_deref_fallback2 = g_yield_self_deref_fallback2; s->yield_emitting_class_fallback2 = g_yield_emitting_class_fallback2;
@@ -21153,6 +21159,7 @@ void emit_unit_state_restore(Compiler *c, const EmitUnitState *s) {
   g_ie_next_ty = s->ie_next_ty;
   g_open_defaults = s->open_defaults;
   g_ctor_blk_tmp = s->ctor_blk_tmp;
+  g_orw_store_guard = s->orw_store_guard;
   g_pre = s->pre;
   g_yield_self_fallback = s->yield_self_fallback;
   g_yield_self_fallback2 = s->yield_self_fallback2; g_yield_self_deref_fallback2 = s->yield_self_deref_fallback2; g_yield_emitting_class_fallback2 = s->yield_emitting_class_fallback2;

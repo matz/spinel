@@ -3822,7 +3822,9 @@ int cplan_to_ary_takes(Compiler *c, int k, TyKind t) {
   if (t == TY_POLY) return 1;
   int oc = cplan_to_ary_class_of(c, t);
   if (oc < 0) return 0;
-  if (!ty_is_object(t)) return k == oc;
+  /* (a value typed String may be an instance of a String subclass, whose own
+     to_ary its arm answers where the plan places it, cplan_boxed_to_ary_classes) */
+  if (!ty_is_object(t)) return k == oc || is_descendant(c, k, oc);
   /* (an instance of a String subclass is a String box: the program's String
      answers it where the subclass has no to_ary of its own) */
   if (k == cplan_to_ary_string_class(c)) return comp_ary_is_str(c, oc);
@@ -3934,13 +3936,15 @@ int cplan_typed_to_ary_held(Compiler *c, TyKind t, int at, int op, int *boxed, i
      be nil, and the value then stays the one element, as the destructure
      keeps it: the caller that asks for it (*hold) holds the value in a temp,
      which the destructure reads, never the expression. Only a PolyArray can
-     take that element, so another typed Array converts boxed (the nil fact
-     is not settled where the desugar asks, so every non-tuple answer is
-     taken as maybe nil). */
+     take that element, so a version that answers another typed Array
+     converts boxed, whatever the table's method answers: the conversion
+     runs, and is typed as, the version vi (the nil fact is not settled
+     where the desugar asks, so every non-tuple answer is taken as maybe
+     nil). */
   const int *tup;
   if (scope_tuple_elem_nodes(c, mi, &tup) > 0 && scope_tuple_elem_nodes(c, vi, &tup) > 0 &&
       !method_overridden_below(c, op, cls, "to_ary", mi)) return vi;
-  if (c->scopes[mi].ret == TY_POLY_ARRAY || c->scopes[vi].ret == TY_POLY_ARRAY) {
+  if (c->scopes[vi].ret == TY_POLY_ARRAY) {
     if (hold) *hold = 1;
     return vi;
   }

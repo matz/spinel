@@ -313,10 +313,15 @@ int ic_runs_program_method(Compiler *c, int id) {
 /* A value of a builtin type (cr_ty_builtin_value) calls a method of its
    builtin class, never one of a program's class: unless the program reopened a
    builtin class with a method of that name (the name is not one only plain
-   classes hold). */
+   classes hold). A value typed String may be an instance of a String
+   subclass that answers the name with a method of its own
+   (comp_strsub_own_classes), which the call plan's String arms reach
+   (cplan_to_ary_takes). */
 static int ic_builtin_only(Compiler *c, TyKind t, const char *name) {
   if (!c->ic || !anh_has(&c->ic->class_only, name)) return 0;
   if (t == TY_POLY) return 0;
+  int nown = 0;
+  if ((t == TY_STRING || t == TY_STRBUF) && c->has_arysub && (comp_strsub_own_classes(c, name, STROWN_ANY, &nown), nown > 0)) return 0;
   return cr_ty_builtin_value(c, t);
 }
 

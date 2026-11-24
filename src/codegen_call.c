@@ -20946,33 +20946,24 @@ int emit_cells_answer(Compiler *c, const CplanCells *cs, Buf *b) {
   while (open-- >= 0) buf_puts(b, ")");
   return 1;
 }
-/* Does an instance of class cid have m as a builtin method of any visibility: one the lookup from its builtin
-   root finds (Kernel's through Object), or one a builtin module it includes or prepends has, directly or through
-   a program module (class_mixes_in)? */
-static int class_builtin_has_method(Compiler *c, int cid, const char *m) {
-  if (builtin_id_has_instance_method(class_builtin_parent(c, cid), m)) return 1;
-  for (int i = 0, mod; builtin_class_at(i); i++)
-    if ((mod = builtin_mixin_module_id(builtin_class_at(i)->name)) && class_mixes_in(c, cid, mod, 0) &&
-        builtin_id_has_instance_method(mod, m))
-      return 1;
-  return 0;
-}
 /* See codegen_call_arms.h. Each cell holds an Integer as the entries' arms
    read it (emit_cells_test) */
 /* See codegen_call_arms.h. */
 /* emit_vis_word_absent, with cw the writes of the word's visibility cells (emit_vis_cell_write, "" for none): the
    names ahead of the one that raises have their visibility once it raises, as CRuby's word changes each name in turn
    (the record places a version only for those, lr_word_reach) */
-static int emit_vis_word_absent_x(Compiler *c, int id, const char *cw, Buf *b);
+static int emit_vis_word_absent_x(Compiler *c, int id, const char *cw, int decl, Buf *b);
+static void emit_word_missing(Compiler *c, const char *mn, int cm, int mod, int vcid, Buf *b);
+static int emit_vis_cell_writes(Compiler *c, int id, int elem, Buf *b);
 static void emit_missing_raise(Compiler *c, int m, int kind, const char *self, int anon, const OrderRun *run,
                                int holder, Buf *b);
-int emit_vis_word_absent(Compiler *c, int id, Buf *b) {
+int emit_vis_word_absent(Compiler *c, int id, int decl, Buf *b) {
   Buf wb; memset(&wb, 0, sizeof wb);
-  int n = emit_vis_cell_write(c, id, &wb), r = emit_vis_word_absent_x(c, id, n ? wb.p : "", b);
+  int n = emit_vis_cell_write(c, id, &wb), r = emit_vis_word_absent_x(c, id, n ? wb.p : "", decl, b);
   free(wb.p);
   return r;
 }
-static int emit_vis_word_absent_x(Compiler *c, int id, const char *cw, Buf *b) {
+static int emit_vis_word_absent_x(Compiler *c, int id, const char *cw, int decl, Buf *b) {
   const NodeTable *nt = c->nt;
   const char *cs = *cw ? ", " : "", *ct = *cw ? "; " : "";
   int skip = 0;
@@ -21013,6 +21004,7 @@ static int emit_vis_word_absent_x(Compiler *c, int id, const char *cw, Buf *b) {
      the Array, `[:a] is not a symbol nor a string`, having made the names private, lr_word_reach. The Array is built
      first, once, as the call's argument is) */
   int ta = arr && mfw ? ++g_tmp : 0;
+  Buf seq; memset(&seq, 0, sizeof seq);   /* (what the word runs name by name where a cell decides a name or a write waits for its place) */
   if (ta) {
     buf_printf(b, "({ sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", ta, ta);
     for (int vi = 0; vi < van; vi++) {
@@ -21031,52 +21023,63 @@ static int emit_vis_word_absent_x(Compiler *c, int id, const char *cw, Buf *b) {
                  te, ta, vi, te, te, cw, ct, te);
     }
     if (!mn) continue;
-    char wb[256]; wb[0] = '\0';
-    setter_base_name(mn, wb, sizeof wb);
-    /* the name is defined where the word runs: a def, or a reader or
-       writer whose attr_* has run by this call, as the call plan
-       answers at it, or, in a class body, whose form applies a word on
-       one, a builtin method the class has (Kernel's puts, Comparable's
-       between?). A method body's word has no form that applies it to a
-       builtin method yet: a name it takes raises, as it did, and an
-       Array's, which it read none of, still does not */
-    int mf = -1;
-    /* (a module function a class body's word made is one method that serves both sides, the class method's:
-       mf_mark) */
-    if (!cm && mod && !mfw) mf = call_target(c, id, vcid, mn, CT_CMETHOD | CT_NOFACE, NULL);
-    /* (module_function's name, the one the record's reach tests, lr_word_reach: elab_module_has_method) */
-    int found = mfw ? elab_module_has_method(c, vcid, mn) : (mf >= 0 && c->scopes[mf].is_module_function) ||
-                (cm ? call_target(c, id, vcid, mn, CT_CMETHOD | CT_NOFACE, NULL) >= 0 || cplan_class_builtin_has(c, vcid, mn)
-                    : call_target(c, id, vcid, mn, CT_NOFACE, NULL) >= 0 ||
-                          call_attr_target(c, id, vcid, mn, CT_ATTR, NULL) ||
-                          (wb[0] && call_attr_target(c, id, vcid, wb, CT_ATTR | CT_WRITER, NULL)) ||
-                          ((g_class_body_id >= 0 || arr) && class_builtin_has_method(c, vcid, mn)));
-    if (!found) {
-      /* (the class side's is its singleton class's: `#<Class:K>`, a module's too) */
-      const char *cn = class_ruby_name(c, vcid) ? class_ruby_name(c, vcid) : c->classes[vcid].name;
-      if (ta || *cw) buf_printf(b, ta ? " %s%s" : "(%s%s", cw, ta ? ct : cs);
-      buf_puts(b, "sp_raise_cls(\"NameError\", \"undefined method '");
-      emit_c_escaped(b, mn);
-      buf_puts(b, cm ? "' for class '#<Class:" : mod ? "' for module '" : "' for class '");
-      emit_c_escaped(b, cn);
-      buf_puts(b, cm ? ">'\")" : "'\")");
-      buf_puts(b, ta ? "; })" : *cw ? ")" : "");
+    /* the name is defined where the word runs, as the call plan answers (cplan_word_elem_presence); a method body's
+       word has no form that applies it to a builtin method yet: a name it takes raises, as it did, and an Array's,
+       which it read none of, still does not */
+    CplanPresArm pa;
+    cplan_word_elem_presence(c, id, vi, vcid, mn, g_class_body_id >= 0 || arr, decl, &pa);
+    if (pa.ans == PRA_NO) {
+      if (ta || *cw || seq.len) buf_printf(b, ta ? " %s%s" : "(%s%s", cw, ta ? ct : cs);
+      if (seq.len) buf_printf(b, "%s, ", seq.p);
+      emit_word_missing(c, mn, cm, mod, vcid, b);
+      buf_puts(b, ta ? "; })" : *cw || seq.len ? ")" : "");
+      free(seq.p);
       return 1;
     }
+    /* (a name the run's cells decide is tested where the word reaches it: absent, the word raises NameError there, the names
+       ahead of it already changed; the names it changes are written as it passes them, cplan_vis_cell_after) */
+    if (pa.ans == PRA_CELLS) {
+      if (seq.len) buf_puts(&seq, ", ");
+      buf_puts(&seq, "(");
+      emit_cells_answer(c, &pa.cells, &seq);
+      buf_puts(&seq, " ? (void)0 : (void)");
+      emit_word_missing(c, mn, cm, mod, vcid, &seq);
+      buf_puts(&seq, ")");
+    }
+    Buf ew; memset(&ew, 0, sizeof ew);
+    if (emit_vis_cell_writes(c, id, vi, &ew)) buf_printf(&seq, "%s%s", seq.len ? ", " : "", ew.p);
+    free(ew.p);
   }
   if (ta) {
     int ts = ++g_tmp;
     buf_printf(b, " %s%sconst char *_t%d = sp_PolyArray_inspect(_t%d); SP_GC_ROOT_STR(_t%d);"
                " sp_raise_cls(\"TypeError\", sp_sprintf(\"%%s is not a symbol nor a string\", _t%d)); })", cw, ct, ts, ta, ts, ts);
+    free(seq.p);
     return 1;
   }
-  return 0;
+  /* (a word that tests a name the run decides, or writes a cell as it passes a name, is its own code: the cells ahead of the
+     word's own writes, then each name in order) */
+  if (seq.len) buf_printf(b, "%s%s%s", cw, *cw ? ", " : "", seq.p);
+  free(seq.p);
+  return seq.len > 0;
 }
-int emit_vis_cell_write(Compiler *c, int id, Buf *b) {
+/* ...the NameError a visibility word raises for a name no method of the class has where it runs (the class side's is its
+   singleton class's: `#<Class:K>`, a module's too) */
+static void emit_word_missing(Compiler *c, const char *mn, int cm, int mod, int vcid, Buf *b) {
+  const char *cn = class_ruby_name(c, vcid) ? class_ruby_name(c, vcid) : c->classes[vcid].name;
+  buf_puts(b, "sp_raise_cls(\"NameError\", \"undefined method '");
+  emit_c_escaped(b, mn);
+  buf_puts(b, cm ? "' for class '#<Class:" : mod ? "' for module '" : "' for class '");
+  emit_c_escaped(b, cn);
+  buf_puts(b, cm ? ">'\")" : "'\")");
+}
+/* ...the writes of the visibility cells of word id: those of element elem (a name the word changes only where its names ahead
+   are present, written as the word passes it), or elem < 0, the others (see codegen_call_arms.h) */
+static int emit_vis_cell_writes(Compiler *c, int id, int elem, Buf *b) {
   const LocalVar *g;
-  int v = 0, n = 0, only;
-  for (int k = 0; cplan_vis_cell_after(c, id, k, &g, &v, &only); k++) {
-    if (!g) continue;
+  int v = 0, n = 0, only, we;
+  for (int k = 0; cplan_vis_cell_after(c, id, k, &g, &v, &only, &we); k++) {
+    if (!g || we != elem) continue;
     if (n++) buf_puts(b, ", ");
     if (only >= 0) buf_printf(b, "_sp_cls.cls_id == %d ? (void)(", only);   /* (the class the include ran on) */
     buf_printf(b, repr_slot_kind(c, g) == RK_BOXED ? "gv_%s = sp_box_int(%dLL)" : "gv_%s = %dLL", g->name, v);
@@ -21084,6 +21087,7 @@ int emit_vis_cell_write(Compiler *c, int id, Buf *b) {
   }
   return n > 0;
 }
+int emit_vis_cell_write(Compiler *c, int id, Buf *b) { return emit_vis_cell_writes(c, id, -1, b); }
 /* See codegen_call_arms.h. */
 void emit_presence_answer(Compiler *c, const CplanPresArm *a, Buf *b) {
   if (a->ans == PRA_CELLS) emit_cells_answer(c, &a->cells, b);

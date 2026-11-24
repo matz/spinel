@@ -404,9 +404,18 @@ ends the reach there. Once the run points give every body its extent,
 `lr_words_refine` asks the reach of each such word again (`lr_has_state`, through
 `lr_body_state`): a name a body's version stands for is present where that
 body surely ran ahead of the word's statement (a def in a block that runs at
-once where its call does takes its method's extent), absent where it first runs
-after it or never, and unknown where it may have run before, which ends the reach
-as for any name the record cannot tell. The versions are those of the ancestry the
+once where its call does takes its method's extent, where the call runs whenever the method's body does:
+`lr_runs_with_body`, which a condition, a loop, an iterator's block, a rescue or an early exit ahead of it fails; and
+where the chain is one the record cannot follow, `lr_chain_whole`, the extent stands as it did), absent where it first runs after it or never, and
+`LR_HAS_CELL` where it may have run before, in a chain the record holds whole (`lr_chain_whole`: to its end, with no code it
+cannot follow that may define it, which `lr_cells_settle` asks with the versions): each version has the cell the run writes, which tells. The reach goes on past such a name and
+reports the first as the word's gate (`lr_word_reach`); the entries from the gate to the end of the reach are
+`LR_MAY_GATE`, the word's visibility, applied where the names ahead of them are present. The call plan tests
+the name where the word runs (`cplan_word_elem_presence`: the cells as a `respond_to?(name, true)` reads them there;
+the word asks that entry, `presence_asks`), raises NameError there where it is absent, and writes each gated name's
+visibility cell as the word passes it (`VerVisAfter.elem`, `emit_vis_word_absent`), so a name before a missing one
+is changed and the names after are not. Any other name the record cannot tell ends the reach as before (the entries
+from there on are cut). The versions are those of the ancestry the
 lookup uses, but for a module the class prepends to itself, which the word's lookup,
 from the class's origin, does not find (`lr_link_sure`): that one is unknown. A reach that now passes names un-cuts
 their entries; where it ends at an absent name the entries past it keep the
@@ -417,8 +426,8 @@ and the name of one element of it, in the reach; where the word runs
 word's visibility, as the word is (`private(def a; end, :missing)`). A
 module_function copies the names only where it makes every name private
 and is given no Array (`copies`); the word writes their visibility cells
-before it raises (`emit_vis_word_absent`, which asks the call plan whether
-a name is a method), in a module body too. In an iterator's block or a begin body with rescue
+before it raises (`emit_vis_word_absent`, which renders the call plan's
+answer whether a name is a method at the word, `cplan_word_elem_presence`), in a module body too. In an iterator's block or a begin body with rescue
 clauses, where no statement ahead of the word in its frame may raise and
 skip it and no condition holds it, the record, with no run-time cell for
 the word's visibility, takes the word either to have run or not
@@ -456,7 +465,11 @@ visibility it has where it runs (`lr_body_def_vis`: a word that takes
 it, a bare word before it in a class body's statements, private for
 `initialize` and its kin); a word's version holds the visibility it sets,
 which the plan reads where the word runs (`lr_version_vis`, from the
-version's visibility cell where only the run decides). Only a def or a
+version's visibility cell where only the run decides). A def of one version that a
+placed word changes only where the run decides (`private :m if c`, `c && private(:m)`) is versioned for
+that word alone (`elab_method_vis_gated`, on the instance side): its calls and readers take the face
+entry whose arm reads the visibility cell the word writes, and `elab_method_vis_at` tells "only the
+run" past the word. Only a def or a
 word of a name the program makes no entry of that the call plan cannot
 answer next to it is such a version (`lr_body_def_version`, over
 `lr_body_forms`); a visibility word placed in a class body is an entry of

@@ -199,8 +199,10 @@ int emit_vis_cell_write(Compiler *c, int id, Buf *b);
    class self is has no instance method of there (a Symbol's, a String's, a
    `def self.m`'s: the word looks the class method's name up among the
    instance methods), a TypeError for module_function given an Array, whose
-   names it does not read. 0, writing nothing, where each is found. */
-int emit_vis_word_absent(Compiler *c, int id, Buf *b);
+   names it does not read. 0, writing nothing, where each is found. decl: the word stands as a declaration
+   of a class's body (a bare statement), which tests only the names the call
+   plan's cells decide */
+int emit_vis_word_absent(Compiler *c, int id, int decl, Buf *b);
 int respond_to_user_defined(Compiler *c, int id, int recv);
 extern const char *const respond_universal[];
 extern const char *const respond_universal_all[]; /* public and private */

@@ -18616,9 +18616,11 @@ static void emit_class_body_stmts(Compiler *c, int ci, int body, Buf *b, int ind
       if (!executable) {
         emit_mixin_arg_reads(c, stmts[k], b, indent);
         emit_const_visibility_missing(c, stmts[k], ci, b, indent);
-        /* (an include the record cannot place ahead of every call writes the Kernel cells as it runs: cplan_vis_cell_after) */
+        /* (a word that takes a name the run's cells decide tests it where it runs, as one in a begin does) */
         Buf wb; memset(&wb, 0, sizeof wb);
-        if (emit_vis_cell_write(c, stmts[k], &wb)) { emit_indent(b, indent); buf_printf(b, "%s;\n", wb.p); }
+        if (cplan_word_tests_cells(c, stmts[k]) ? emit_vis_word_absent(c, stmts[k], 1, &wb) : 0) { emit_indent(b, indent); buf_printf(b, "%s;\n", wb.p); }
+        /* (an include the record cannot place ahead of every call writes the Kernel cells as it runs: cplan_vis_cell_after) */
+        else if (emit_vis_cell_write(c, stmts[k], &wb)) { emit_indent(b, indent); buf_printf(b, "%s;\n", wb.p); }
         free(wb.p);
         continue;
       }
@@ -20508,7 +20510,7 @@ static int emit_call_stmt(Compiler *c, int id, Buf *b, int indent, const NodeTab
       }
       {
         Buf eb; memset(&eb, 0, sizeof eb);
-        int absent = emit_vis_word_absent(c, id, &eb);
+        int absent = emit_vis_word_absent(c, id, 0, &eb);
         if (absent) { emit_indent(b, indent); buf_printf(b, "%s;\n", eb.p); }
         free(eb.p);
         if (absent) return 1;

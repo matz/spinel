@@ -1,0 +1,80 @@
+1
+[false, :tail]
+2
+[false, NoMethodError]
+:zz
+3
+[false, :tail]
+4
+[false, NoMethodError]
+:zz
+5
+[false, :tail]
+6
+[false, NoMethodError]
+:zz
+9
+[NoMethodError, NoMethodError, :tail]
+[:ma, NoMethodError, :tail]
+10
+[NoMethodError, NoMethodError, NoMethodError]
+11
+[NoMethodError, :mb, :tail]
+12
+[false, false, NoMethodError]
+[false, true, :tail]
+13
+[NoMethodError, false]
+14
+[:tail, true]
+15
+[:tail, false]
+16
+[NoMethodError, true]
+23
+[NoMethodError, :tail]
+24
+[NoMethodError, NoMethodError]
+28
+[true, :tail, :tail, true, false, [:tail]]
+29
+[false, NoMethodError, :tail, false, true, []]
+30
+[:tail]
+31
+[NoMethodError]
+36
+"undefined method 'zz' for class 'C36'"
+:tail
+41
+[NoMethodError, :tail]
+42
+[NoMethodError, NoMethodError]
+q01_each_empty
+"undefined method 'zz' for class 'F100'"
+[false, NoMethodError, :tail, [], true]
+q03_return_ahead_f
+"undefined method 'zz' for class 'F101'"
+[false, NoMethodError, :tail, [], true]
+q05_casein_f
+"undefined method 'zz' for class 'F102'"
+[false, NoMethodError, :tail, [], true]
+q06_for_empty
+"undefined method 'zz' for class 'F103'"
+[false, NoMethodError, :tail, [], true]
+q08_next_in_block
+"undefined method 'zz' for class 'F104'"
+[false, NoMethodError, :tail, [], true]
+q09_times_zero
+"undefined method 'zz' for class 'F105'"
+[false, NoMethodError, :tail, [], true]
+bare word, name from a conditional include
+[NoMethodError, NoMethodError, false]
+name from a conditional attribute
+[NoMethodError, NoMethodError, false]
+public_method of another class
+[:k, :k, NameError]
+public_method through a module with its own conditional word
+[:n, NameError]
+a conditional word ahead of the gated word
+[NameError, NoMethodError, NameError]

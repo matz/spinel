@@ -252,7 +252,8 @@ enum { ELAB_NO, ELAB_YES, ELAB_UNKNOWN };
 /* (an answer of the method lookups that read an undef: the lookup stops
    there, the name is undefined: elab_main_singleton_at) */
 enum { ELAB_STOP = 3 };
-enum { LR_MAY_IN = 2 };   /* LrDef.may */
+enum { LR_MAY_IN = 2, LR_MAY_GATE = 3 };   /* LrDef.may: LR_MAY_GATE, the `may` of an entry with LrDef.gate set where the word stands under no condition of its own */
+enum { LR_HAS_CELL = 2 };   /* a name's presence at a word the run's version cells decide (elab_word_elem_cell) */
 /* When a call's block (or an END body) runs, from the syntax alone
    (elab_block_runs): not now, at a time the syntax does not tell (a later
    def may or may not have run by then); not known (a program method may
@@ -322,6 +323,9 @@ typedef struct {
                            last (lr_cond_first_arm); 0 for any other version */
   unsigned char cut;    /* a visibility word's entry of a name past the names the word reaches (lr_word_reach), where its
                            statement is partial: the word has not changed it, so it is no run version (lr_word_runs) */
+  unsigned char gate;   /* a visibility word's entry of a word that takes a name the run's cells decide (lr_word_reach), up to the end of the
+                           reach: the word changes the names from that one on only where the names ahead of it are present, so it writes the
+                           visibility cells as it passes each name, between the tests (elab_version_word), whatever condition holds the word */
 } LrDef;
 enum { LR_UNPLACED_LATER = 2 };   /* LrDef.unplaced */
 typedef struct { int node, body; } LrOpen;
@@ -563,6 +567,25 @@ int elab_method_replaced(Compiler *c, const char *name);
    do the methods its versions give have more than one visibility (a
    module's private one and a class's public one)? */
 int elab_method_vis_varies(Compiler *c, const char *name);
+/* ...does a visibility word of `name` stand under a condition the run decides, with a write that keeps the name's
+   visibility cell (lr_vis_cellable), so that a call and a reader read that cell? The name's one def is versioned for
+   it alone: a face entry over the def, whose arm tests the cell. Of the instance side's histories: a class method's
+   word waits for the class side's cells */
+int elab_method_vis_gated(Compiler *c, const char *name);
+/* ...and is the last change of the name along cls's lookup at p (mixins and prepends among it) a word that takes a name the run's cells decide
+   (LrDef.gate), standing in class def_cls, the class of the def a public_method capture binds? Then the table's visibility, the word taken
+   as run, is the one the capture reads, as it was where the record applied such a word whole. A subclass's own def, an extended module's, a
+   singleton's, or a word under a condition after it is another answer */
+int elab_method_vis_tied(Compiler *c, int cls, const char *name, int def_cls, LoadPoint p);
+/* does the k-th name of visibility word node, taken on instance-side class cls, stand where the word runs by the run's version cells
+   (LR_HAS_CELL): its versions a method's body makes may or may not have run, each with a cell that tells? The word then tests the
+   cells, raises NameError where the name is absent, and changes the names from there on only where it passes (cplan_word_elem_presence) */
+int elab_word_elem_cell(Compiler *c, int node, int cls, int k);
+/* does word node take any name the run's cells decide on instance-side class cls (elab_word_elem_cell)? */
+int elab_word_has_cell(Compiler *c, int node, int cls);
+/* visibility word node's elements, and the name of the k-th (NULL for none or for one that is no name; *def says it is a def) */
+int elab_word_elems(const NodeTable *nt, int node);
+const char *elab_word_elem(const NodeTable *nt, int node, int k, int *def);
 /* is call id a visibility word with names a method body runs on the class
    self is there, as the record reads it from the tree, a version of that
    body or not, where it takes no def (its value is then the word's, as in a
@@ -909,8 +932,10 @@ int elab_physical_version_vis(Compiler *c, const ElabVersion *ev);
 /* ...and the visibility words that write that cell (`public :m`, in the
    version's history or the one that is one table entry with it), by the
    index i of the two histories' entries: 1 for a word (its node and
-   visibility in *node, *vis), 0 for another entry, -1 past the last. */
-int elab_version_word(Compiler *c, const ElabVersion *ev, int i, int *node, int *vis);
+   visibility in *node, *vis, and in *elem the element of the word that names it; 2 for a word whose entry applies only
+   where the names of the word ahead of it the run's cells decide are present, LR_MAY_GATE), 0 for another entry, -1 past
+   the last. */
+int elab_version_word(Compiler *c, const ElabVersion *ev, int i, int *node, int *vis, int *elem);
 /* ...and whether Object's own history of `name` (its reopenings' defs, not
    main's top-level ones) holds a live version at p: ELAB_YES, ELAB_NO, or
    ELAB_UNKNOWN where the record cannot say */

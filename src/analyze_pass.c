@@ -2237,15 +2237,136 @@ static int attr_dyn_call_sets(Compiler *c, int call, int cls, const char *ivn, c
    that answer; -1 where a send or instance_variable_set may set it too
    (attr_dyn_call_sets); 0 after the last. 0 when the class has no writer. */
 typedef int (*AttrWriterCallFn)(Compiler *c, int call, void *ctx);
+/* The calls of a writer's name by the classes the class facts say their
+   receiver may hold, kept on the Compiler (c->attr_call_ix) while the node
+   table, the class table and the facts are the ones it was made over. Per
+   name: the calls whose receiver has no bounded set (self, a node made
+   after the facts, one no value reaches) in `any`; by member class, the
+   calls whose receiver's set holds that class (`at`) or one below it
+   (`below`), each with its place among the name's calls. On n classes
+   sharing an attribute's name, each class tested every class's writer
+   calls (attr_recv_may_be), n^2 over the rounds. */
+typedef struct { int cls, ord, call; } ACEntry;
+typedef struct { char *name; ACEntry *any, *at, *below; int nany, nat, nbelow, cany, cat, cbelow; } ACName;
+struct AttrCallIndex {
+  const NodeTable *nt; int count, nclasses, fact_n; unsigned version;
+  unsigned char *sub_unbounded;   /* [nclasses] the class or one below it is no bounded member (cls_fact_excludes) */
+  ANameHash names; ACName *nm; int n, cap;
+};
+void attr_call_index_free(Compiler *c) {
+  struct AttrCallIndex *x = c->attr_call_ix;
+  if (!x) return;
+  for (int i = 0; i < x->n; i++) { free(x->nm[i].name); free(x->nm[i].any); free(x->nm[i].at); free(x->nm[i].below); }
+  free(x->nm); free(x->sub_unbounded); anh_free(&x->names); free(x);
+  c->attr_call_ix = NULL;
+}
+static void ac_push(ACEntry **v, int *n, int *cap, int cls, int ord, int call) {
+  if (*n == *cap) {
+    *cap = *cap ? 2 * *cap : 8;
+    ACEntry *g = realloc(*v, sizeof **v * (size_t)*cap);
+    if (!g) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    *v = g;
+  }
+  (*v)[(*n)++] = (ACEntry){ cls, ord, call };
+}
+static int ac_cmp(const void *a, const void *b) {
+  const ACEntry *x = a, *y = b;
+  if (x->cls != y->cls) return x->cls < y->cls ? -1 : 1;
+  return (x->ord > y->ord) - (x->ord < y->ord);
+}
+static ACName *attr_call_index(Compiler *c, const char *name) {
+  struct AttrCallIndex *x = c->attr_call_ix;
+  if (x && (x->nt != c->nt || x->count != c->nt->count || x->version != c->nt->version ||
+            x->nclasses != c->nclasses || x->fact_n != c->cls_fact_n)) {
+    attr_call_index_free(c);
+    x = NULL;
+  }
+  if (!x) {
+    x = calloc(1, sizeof *x);
+    if (x) x->sub_unbounded = calloc((size_t)c->nclasses + 1, 1);
+    if (!x || !x->sub_unbounded) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    x->nt = c->nt; x->count = c->nt->count; x->version = c->nt->version; x->nclasses = c->nclasses; x->fact_n = c->cls_fact_n;
+    /* (a class of no bounded member, and the classes above it: its
+       objects may be in a set that does not list them) */
+    for (int k = 0; k < c->nclasses; k++)
+      if (k >= c->cls_fact_ncls || !cls_fact_bounded(c, k))
+        for (int a = k; a >= 0 && !x->sub_unbounded[a]; a = c->classes[a].parent) x->sub_unbounded[a] = 1;
+    c->attr_call_ix = x;
+  }
+  int f = anh_find(&x->names, name);
+  if (f >= 0) return &x->nm[f];
+  if (x->n == x->cap) {
+    x->cap = x->cap ? 2 * x->cap : 16;
+    ACName *g = realloc(x->nm, sizeof *g * (size_t)x->cap);
+    if (!g) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    x->nm = g;
+  }
+  ACName *e = &x->nm[x->n];
+  memset(e, 0, sizeof *e);
+  e->name = strdup(name);
+  if (!e->name) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  int ord = 0;
+  for (int k = an_calls_named_first(c, name); k >= 0; k = an_calls_named_next(k), ord++) {
+    int r = nt_ref(c->nt, k, "receiver");
+    const ClsSet *s = r >= 0 ? cls_fact_node(c, r) : NULL;
+    /* (a set of no member excludes no class, as in cls_fact_excludes) */
+    if (!s || s->all || (s->n == 0 && !s->bv && !s->os)) { ac_push(&e->any, &e->nany, &e->cany, -1, ord, k); continue; }
+    for (int m = cls_set_next(s, -1); m >= 0 && m < c->cls_fact_ncls; m = cls_set_next(s, m)) {
+      ac_push(&e->at, &e->nat, &e->cat, m, ord, k);
+      for (int a = c->classes[m].parent; a >= 0; a = c->classes[a].parent) ac_push(&e->below, &e->nbelow, &e->cbelow, a, ord, k);
+    }
+  }
+  qsort(e->at, (size_t)e->nat, sizeof *e->at, ac_cmp);
+  qsort(e->below, (size_t)e->nbelow, sizeof *e->below, ac_cmp);
+  anh_add(&x->names, e->name);
+  x->n++;
+  return e;
+}
+/* Appends to *v the calls of the entries of class cls in e[0..n) (sorted by class). */
+static void ac_take(const ACEntry *e, int n, int cls, ACEntry **v, int *nv, int *cv) {
+  int lo = 0, hi = n;
+  while (lo < hi) { int m = (lo + hi) >> 1; if (e[m].cls < cls) lo = m + 1; else hi = m; }
+  for (; lo < n && e[lo].cls == cls; lo++) ac_push(v, nv, cv, cls, e[lo].ord, e[lo].call);
+}
+/* The calls of writer name `setter` whose receiver may hold an object of
+   class cls, in the order of the name's calls, into *calls (malloc'd), and
+   their count: those the facts leave unbounded and those whose receiver's
+   set holds cls, a class below it or one above it (an object of exactly a
+   class above is none of cls's, but attr_recv_may_be keeps a receiver typed
+   so). The facts are solved once, before the fixpoint (an_cls_facts), so a
+   set they give does not grow. Every call of the name before the facts, or
+   where cls or a class below it is no bounded member (cls_fact_excludes
+   rules nothing out there). */
+static int attr_writer_call_list(Compiler *c, int cls, const char *setter, int **calls) {
+  ACName *e = c->cls_fact && cls >= 0 && cls < c->nclasses ? attr_call_index(c, setter) : NULL;
+  ACEntry *v = NULL; int nv = 0, cv = 0;
+  if (e && !c->attr_call_ix->sub_unbounded[cls]) {
+    for (int i = 0; i < e->nany; i++) ac_push(&v, &nv, &cv, -1, e->any[i].ord, e->any[i].call);
+    ac_take(e->at, e->nat, cls, &v, &nv, &cv);
+    ac_take(e->below, e->nbelow, cls, &v, &nv, &cv);
+    for (int a = c->classes[cls].parent; a >= 0; a = c->classes[a].parent) ac_take(e->at, e->nat, a, &v, &nv, &cv);
+    for (int i = 0; i < nv; i++) v[i].cls = 0;
+    qsort(v, (size_t)nv, sizeof *v, ac_cmp);
+  }
+  else
+    for (int k = an_calls_named_first(c, setter), ord = 0; k >= 0; k = an_calls_named_next(k), ord++) ac_push(&v, &nv, &cv, 0, ord, k);
+  int *out = malloc(sizeof(int) * (size_t)(nv + 1)), n = 0;
+  if (!out) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int i = 0; i < nv; i++)
+    if (i == 0 || v[i].ord != v[i - 1].ord) out[n++] = v[i].call;
+  free(v);
+  *calls = out;
+  return n;
+}
 static int attr_writer_calls(Compiler *c, int cls, const char *ivn, AttrWriterCallFn fn, void *ctx) {
   if (!call_answers(c, -1, cls, ivn + 1, CT_WRITER, NULL)) return 0;
   char setter[300];
   snprintf(setter, sizeof setter, "%s=", ivn + 1);
-  for (int k = an_calls_named_first(c, setter); k >= 0; k = an_calls_named_next(k)) {
-    if (!attr_recv_may_be(c, k, cls)) continue;
-    int got = fn(c, k, ctx);
-    if (got) return got;
-  }
+  int *calls, n = attr_writer_call_list(c, cls, setter, &calls), got = 0;
+  for (int i = 0; i < n && !got; i++)
+    if (attr_recv_may_be(c, calls[i], cls)) got = fn(c, calls[i], ctx);
+  free(calls);
+  if (got) return got;
   for (int d = 0; dyn_ivar_set_names[d]; d++)
     for (int k = an_calls_named_first(c, dyn_ivar_set_names[d]); k >= 0; k = an_calls_named_next(k))
       if (attr_dyn_call_sets(c, k, cls, ivn, setter)) return -1;

@@ -15,6 +15,11 @@ p s.bytes, s.encoding
 b = "a".b
 b.concat(*[200, "b"].to_a)
 p b, b.encoding
+# a surrogate is no UTF-8 character, given alone or from a splat
+u = +"x"
+begin; u.concat(0xD800); rescue RangeError => x; p x.message; end
+begin; u.concat(*[98, 0xDFFF]); rescue RangeError => x; p x.message; end
+p u
 
 # no operands: the receiver is still checked
 e = []

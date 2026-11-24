@@ -5261,8 +5261,10 @@ const char*sp_int_chr_utf8(sp_int n){
    and return a NUL-terminated string. */
 const char *sp_int_codepoint_to_str(sp_int n) {
   /* String#<< / #concat with an out-of-range codepoint raises RangeError,
-     matching CRuby ("N out of char range"). */
+     matching CRuby ("N out of char range"), and so does a surrogate, which
+     UTF-8 cannot carry (sp_int_chr_utf8's words) */
   if (n < 0 || n > 0x10FFFF) sp_raise_cls("RangeError", sp_sprintf("%lld out of char range", (long long)n));
+  if (n >= 0xD800 && n <= 0xDFFF) sp_raise_cls("RangeError", sp_sprintf("invalid codepoint 0x%llX in UTF-8", (long long)n));
   /* An ASCII codepoint is its own byte: hand back the static one-byte
      String Integer#chr uses rather than allocate one per `s << 65` (the
      caller only copies the byte into the receiver). */

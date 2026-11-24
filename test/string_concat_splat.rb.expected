@@ -4,6 +4,9 @@ true
 #<Encoding:UTF-8>
 "a\xC8b"
 #<Encoding:BINARY (ASCII-8BIT)>
+"invalid codepoint 0xD800 in UTF-8"
+"invalid codepoint 0xDFFF in UTF-8"
+"x"
 "a"
 FrozenError
 "can't modify frozen String: \"z\""

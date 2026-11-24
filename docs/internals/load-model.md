@@ -872,8 +872,12 @@ calls one that asks `respond_to?(:m2)` or calls `m2`) reads what that
 body does: the record follows a def it holds as a body's version
 (`lr_body_held`) instead of taking the call for one that may define
 anything (`lr_callee_defines`), so the reader's call there takes the
-entry, which finds the def once it has run. These still make the body's
-calls opaque, and the reader answers from the start: a reader reached
+entry, which finds the def once it has run. A `class_eval`, `class_exec`,
+`module_eval` or `module_exec` with a literal block and no argument is
+followed too (`lr_block_eval`): it runs its block once with the class for
+self, so what it defines is what its block holds, a def there being the
+body's version under the conditions around the call. These still make the
+body's calls opaque, and the reader answers from the start: a reader reached
 through `super`, a literal `send` or `public_send`, or a Proc kept in a
 constant; a reader that makes a lambda, or takes a block and calls it; a
 body that passes its block on to the reader (`look(&b)`); and a body that

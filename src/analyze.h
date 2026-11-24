@@ -1067,6 +1067,8 @@ int class_def_record(const NodeTable *nt, int def_node);   /* the record call a 
 int class_def_record_is_data(const NodeTable *nt, int call);   /* is record call `call` Data.define's? */
 const NodeKind *class_def_kinds(int *n);   /* the node kinds a definition can be */
 const NodeKind *class_def_module_kinds(int *n);   /* ...a module's definition can be */
+/* The literal block of a class_eval, class_exec, module_eval or module_exec call that takes no argument (`C.class_eval { }`), -1 for any other node */
+int class_eval_block(const NodeTable *nt, int call);
 int class_def_builder(const NodeTable *nt, int def_node);   /* a constant write's Class.new / Module.new call that defines a class, -1 for none */
 int class_def_path(const NodeTable *nt, int def_node);   /* the constant node it writes: a header's path, a builder's write or path target */
 int mixin_stmt_args(const NodeTable *nt, int st, int *prepend, const int **av);   /* a body's receiverless include/prepend: its argument count, -1 for another node */

@@ -1,3 +1,5 @@
 [true, true, true, false]
 [true, true, true, false]
 true
+"wrong constant name bad"
+"wrong constant name Not-a-name"

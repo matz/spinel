@@ -1635,6 +1635,20 @@ sp_int sp_sock_const(const char *n) {
   return -1;
 }
 
+/* Socket.const_defined?(name) for a name known at run time: as CRuby, a name
+   that cannot be a constant's raises NameError before any lookup, and a valid
+   one missing from the table answers false. */
+sp_bool sp_sock_const_defined(const char *n) {
+  const char *s = n ? n : "";
+  int bad = !s[0] || ((unsigned char)s[0] < 0x80 && !(s[0] >= 'A' && s[0] <= 'Z'));
+  for (const char *p = s + 1; !bad && s[0] && *p; p++) {
+    unsigned char ch = (unsigned char)*p;
+    if (ch < 0x80 && !((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_')) bad = 1;
+  }
+  if (bad) sp_raise_cls("NameError", sp_sprintf("wrong constant name %s", s));
+  return sp_sock_const(s) >= 0;
+}
+
 /* UDPSocket.new / UNIXSocket.new / UNIXServer.new -- each wraps its fd in the
    same handle every other stream uses; the kind label is what tells them
    apart. A UDP handle keeps its own datagram path, so it is not fdopen'd. */

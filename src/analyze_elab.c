@@ -35,9 +35,7 @@
    The map is a function of the tree as it stands, rebuilt when the node
    table changes, as the parent map is: the readers ask the order ahead of
    the scope walk (the builtins/ per-call-site copies) and after it, of
-   nodes later passes add. Under --load-model=inline the walk is the same
-   over the one program text, so a statement a desugaring placed mid-body
-   has its point there, whatever its id.
+   nodes later passes add.
 
    prog_order and prog_sort read the map (analyze_program.c), by the rank of
    the top-level statement holding each node and node ids within one, which

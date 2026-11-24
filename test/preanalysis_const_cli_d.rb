@@ -16,15 +16,13 @@ begin
     p [FEATURE_X, TARGET, LEVEL, FLAG, NOTHING, dead_cli, defined?(dead_cli)]
   RUBY
 
-  %w[graph inline].each do |model|
-    bin = File.join(dir, "cli_d_#{model}")
-    ok = system("bin/spinel", "--load-model=#{model}", "--strict-require",
-                "-D", "FEATURE_X", "-D", "TARGET=ios", "-D", "LEVEL=2",
-                "-D", "FLAG=false", "-D", "NOTHING=nil", "-o", bin, cli_rb,
-                out: File::NULL, err: File::NULL)
-    puts "model=#{model} build=#{ok}"
-    puts IO.popen([bin], &:read)
-  end
+  bin = File.join(dir, "cli_d")
+  ok = system("bin/spinel", "--strict-require",
+              "-D", "FEATURE_X", "-D", "TARGET=ios", "-D", "LEVEL=2",
+              "-D", "FLAG=false", "-D", "NOTHING=nil", "-o", bin, cli_rb,
+              out: File::NULL, err: File::NULL)
+  puts "build=#{ok}"
+  puts IO.popen([bin], &:read)
 
   # Last -D definition wins
   last_rb = File.join(dir, "last.rb")

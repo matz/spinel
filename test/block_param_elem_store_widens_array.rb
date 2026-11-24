@@ -52,3 +52,13 @@ class S4 < P1; def run(a, &b) = super; end
 b = [[+"m"]]; S4.new.run(b) { |m| m[0] << 7 }; p b
 class S5 < S4; def run(a, &b) = super; end
 b = [[+"m"]]; S5.new.run(b) { |m| m[0] << 18 }; p b
+
+# a splat among the values a site passes, and a value of a kind only the
+# run time knows
+def yz(*r) = yield(0, *r)
+def g(n) = n > 0 ? 19 : "x"
+a = [+"s"]; yz(a) { |i, x| x << 20 }; p a
+a = [+"s"]; ys(a, 0) { |x, i| x << 21 }; p a
+b = [[+"m"]]; y1(b) { |m| m[0] << g(1) }; p b
+a = [+"s"]; ->(*r, z) { r[0] << z }.call(a, 22); p a
+b = [[+"m"]]; proc { |x, y| x[0] << y }.call([b, g(1)]); p b

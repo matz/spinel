@@ -3703,13 +3703,14 @@ static int push_chain_base(Compiler *c, int recv) {
 int widen_arg_array(Compiler *c, int arg);
 static int push_widens_arrays(const NodeTable *nt, int call, TyKind t);
 static int push_escape_widen(Compiler *c, int id, int recv, int is_push, TyKind vt) {
-  if (!is_push || g_infer_optimistic || vt == TY_UNKNOWN || vt == TY_POLY) return 0;
+  if (!is_push || g_infer_optimistic || vt == TY_UNKNOWN) return 0;
   TyKind rt = infer_type(c, recv);
   /* a boxed element (`e[0] << :t` over `e = [a]`, `h[:k] << "s"`): the
-     Arrays it can be widen where they are built, as a boxed local's do */
+     Arrays it can be widen where they are built, as a boxed local's do,
+     for a value of a kind the run time decides too (widen_local_array_stores) */
   if (rt == TY_POLY)
     return push_widens_arrays(c->nt, id, vt) ? widen_boxed_array_sources(c, recv, vt, 0) : 0;
-  if (!ty_is_array(rt) || rt == TY_POLY_ARRAY || ty_is_ptr_array(rt)) return 0;
+  if (vt == TY_POLY || !ty_is_array(rt) || rt == TY_POLY_ARRAY || ty_is_ptr_array(rt)) return 0;
   TyKind el = ty_array_elem(rt);
   if (el == vt || !push_widens_arrays(c->nt, id, vt)) return 0;
   return widen_arg_array(c, recv);
@@ -3791,14 +3792,15 @@ static void widen_named_hash_literals(Compiler *c, int recv, TyKind want) {
 }
 
 /* ...each value of a push of several kinds its own evidence: their join
-   is the boxed reading push_escape_widen leaves alone (`f.concat([2], ["s"])`) */
+   is the boxed reading push_escape_widen leaves alone (`f.concat([2], ["s"])`);
+   one value's is its own */
 static int push_escape_widen_each(Compiler *c, int id, int recv, int is_push, TyKind vt) {
-  if (vt != TY_POLY || !is_push) return push_escape_widen(c, id, recv, is_push, vt);
   const NodeTable *nt = c->nt;
   const char *nm = nt_str(nt, id, "name");
   int args = nt_ref(nt, id, "arguments"), an = 0;
   const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
   int cat = nm && sp_streq(nm, "concat"), from = nm && sp_streq(nm, "insert") ? 1 : 0;
+  if (vt != TY_POLY || !is_push || an - from <= 1) return push_escape_widen(c, id, recv, is_push, vt);
   int changed = 0;
   for (int k = from; k < an && an > 1; k++)
     changed |= push_escape_widen(c, id, recv, is_push, cat ? splice_incoming_elem(c, id, av[k]) : push_elem_ty(c, av[k]));
@@ -9566,10 +9568,12 @@ static int widen_method_value_sources(Compiler *c, int v, int mi, TyKind elem, i
 
 /* The arrays that are elements of an Array a block or proc parameter
    receives (`|m| m[0] << 1`): those of each value its sites bind it to,
-   and for a value taken apart (BV_ELEM), those of each of its elements. */
+   and for a value taken apart (BV_ELEM), those of each of its elements,
+   a splat's elements' too (`[0, *r]`). */
 static int wbp_elem(Compiler *c, int v, int how, void *ctx) {
   const WbpCtx *x = ctx;
   if (how == BV_WHOLE) return widen_boxed_elem_sources(c, v, x->elem, x->depth + 1);
+  if (x->depth > 6) return 0;
   const NodeTable *nt = c->nt;
   int ch = 0;
   ContainerLiterals lits = {0};
@@ -9578,8 +9582,12 @@ static int wbp_elem(Compiler *c, int v, int how, void *ctx) {
     int en = 0; const int *ev = nt_arr(nt, lits.items[q], "elements", &en);
     for (int e = 0; e < en; e++) {
       int el = nt_kind(nt, ev[e]) == NK_AssocNode ? nt_ref(nt, ev[e], "value") : ev[e];
-      if (el >= 0 && nt_kind(nt, el) != NK_SplatNode && nt_kind(nt, el) != NK_AssocSplatNode)
-        ch |= widen_boxed_elem_sources(c, el, x->elem, x->depth + 2);
+      if (el < 0 || nt_kind(nt, el) == NK_AssocSplatNode) continue;
+      if (nt_kind(nt, el) == NK_SplatNode) {
+        WbpCtx sx = { x->elem, x->depth + 1 };
+        ch |= wbp_elem(c, nt_ref(nt, el, "expression"), BV_ELEM, &sx);
+      }
+      else ch |= widen_boxed_elem_sources(c, el, x->elem, x->depth + 2);
     }
   }
   free_container_literals(&lits);
@@ -9662,7 +9670,8 @@ static int literal_local_rows_added(Compiler *c, int lit) {
 static int widen_boxed_elem_sources_1(Compiler *c, int r, TyKind elem, int depth) {
   return widen_param_elem_sources(c, r, ELEM_ANY, elem, depth) | widen_elem_literal_sources(c, r, elem, depth);
 }
-/* The arrays that are elements of the literals `r` can be. */
+/* The arrays that are elements of the literals `r` can be, a splat's
+   elements among them (`[0, *r]`). */
 static int widen_elem_literal_sources(Compiler *c, int r, TyKind elem, int depth) {
   const NodeTable *nt = c->nt;
   int ch = 0;
@@ -9674,7 +9683,11 @@ static int widen_elem_literal_sources(Compiler *c, int r, TyKind elem, int depth
     int en = 0; const int *ev = nt_arr(nt, lit, "elements", &en);
     for (int e = 0; e < en; e++) {
       int el = nt_kind(nt, ev[e]) == NK_AssocNode ? nt_ref(nt, ev[e], "value") : ev[e];
-      if (el < 0 || nt_kind(nt, el) == NK_SplatNode || nt_kind(nt, el) == NK_AssocSplatNode) continue;
+      if (el < 0 || nt_kind(nt, el) == NK_AssocSplatNode) continue;
+      if (nt_kind(nt, el) == NK_SplatNode) {
+        ch |= widen_boxed_elem_sources(c, nt_ref(nt, el, "expression"), elem, depth + 1);
+        continue;
+      }
       /* a new Array a call answers stays typed where the local can hold a
          row its literals do not show (`a = [s.bytes]; a << t.bytes`,
          local_rows_added): that row would be left typed beside it */
@@ -15273,8 +15286,10 @@ int block_site_values(Compiler *c, const BlockSig *s, const int *av, int ac, int
   int sure = 1;
   if (pl.spread) {
     /* the lone value's elements, or (whole) the value itself, which the
-       rest never takes */
-    if (ac >= 1 && nt_kind(nt, av[0]) != NK_SplatNode) {
+       rest never takes; a lone splat's values are its operand's elements
+       (`yield(0, *r)` is `yield(*[0, *r])`) */
+    if (ac >= 1 && nt_kind(nt, av[0]) == NK_SplatNode) ch |= fn(c, nt_ref(nt, av[0], "expression"), BV_ELEM, ctx);
+    else if (ac >= 1) {
       ch |= fn(c, av[0], BV_ELEM, ctx);
       if (pl.whole && at != BLOCK_REST) ch |= fn(c, av[0], BV_WHOLE, ctx);
     }

@@ -6389,6 +6389,9 @@ static int emit_blk_value_via_next(Compiler *c, int blk, TyKind vt, Buf *b) {
   if (vt == TY_STRING) vt = TY_STRBUF;
   buf_puts(b, "({ "); emit_ctype(c, vt, b);
   buf_printf(b, " %s = %s;\n", dest, vt == TY_POLY ? "sp_box_nil()" : default_value_from_compiler(c, vt));
+  /* rooted where an `ensure` the value leaves through runs before the
+     caller takes it (emit_bv_root) */
+  if (emit_bv_root(c, nt_ref(c->nt, blk, "body"), vt, t, b)) buf_puts(b, "\n");
   Buf *saved_pre = g_pre; int saved_ind = g_indent;
   g_pre = b;
   if (vt != TY_POLY) g_bv_dest_ty = vt;

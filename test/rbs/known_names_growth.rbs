@@ -1,0 +1,126 @@
+# Exercise rehashing, duplicate declarations and forward lexical lookup.
+module NameGrowth
+  class Item0
+    def peer: () -> Item1
+  end
+  class Item1
+    def peer: () -> Item2
+  end
+  class Item2
+    def peer: () -> Item3
+  end
+  class Item3
+    def peer: () -> Item4
+  end
+  class Item4
+    def peer: () -> Item5
+  end
+  class Item5
+    def peer: () -> Item6
+  end
+  class Item6
+    def peer: () -> Item7
+  end
+  class Item7
+    def peer: () -> Item8
+  end
+  class Item8
+    def peer: () -> Item9
+  end
+  class Item9
+    def peer: () -> Item10
+  end
+  class Item10
+    def peer: () -> Item11
+  end
+  class Item11
+    def peer: () -> Item12
+  end
+  class Item12
+    def peer: () -> Item13
+  end
+  class Item13
+    def peer: () -> Item14
+  end
+  class Item14
+    def peer: () -> Item15
+  end
+  class Item15
+    def peer: () -> Item16
+  end
+  class Item16
+    def peer: () -> Item17
+  end
+  class Item17
+    def peer: () -> Item18
+  end
+  class Item18
+    def peer: () -> Item19
+  end
+  class Item19
+    def peer: () -> Item20
+  end
+  class Item20
+    def peer: () -> Item21
+  end
+  class Item21
+    def peer: () -> Item22
+  end
+  class Item22
+    def peer: () -> Item23
+  end
+  class Item23
+    def peer: () -> Item24
+  end
+  class Item24
+    def peer: () -> Item25
+  end
+  class Item25
+    def peer: () -> Item26
+  end
+  class Item26
+    def peer: () -> Item27
+  end
+  class Item27
+    def peer: () -> Item28
+  end
+  class Item28
+    def peer: () -> Item29
+  end
+  class Item29
+    def peer: () -> Item30
+  end
+  class Item30
+    def peer: () -> Item31
+  end
+  class Item31
+    def peer: () -> Item32
+  end
+  class Item32
+    def peer: () -> Item33
+  end
+  class Item33
+    def peer: () -> Item34
+  end
+  class Item34
+    def peer: () -> Item35
+  end
+  class Item35
+    def peer: () -> Item36
+  end
+  class Item36
+    def peer: () -> Item37
+  end
+  class Item37
+    def peer: () -> Item38
+  end
+  class Item38
+    def peer: () -> Item39
+  end
+  class Item39
+    def peer: () -> Item0
+  end
+  class Item0
+    def again: () -> Item39
+  end
+end

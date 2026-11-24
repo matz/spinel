@@ -64,9 +64,6 @@ static int bv_value_may_be_nil(Compiler *c, int block, TyKind t) {
   if (body >= 0 && block_next_may_be_nil(c, body)) return 1;
   return bn > 0 && node_is_oint(c, bb[bn - 1]);
 }
-/* Does a `next v` of the block (not one of a block nested in it) answer a
-   boxed value, while its tail is a typed t? The block's value slot is then
-   the box (#9300). */
 /* Does an `ensure` run inside block body n (not inside a method, class or
    lambda written there)? A value the block answers through one sits in its
    temp while the ensure runs. */
@@ -83,19 +80,31 @@ static int bv_body_has_ensure(const NodeTable *nt, int n, int depth) {
   return 0;
 }
 
-/* The temp `_t<tmp>` of kind t that holds block's value until the caller
-   stores it is a GC root where the block has an `ensure`: the value can
-   leave through it (a `next`, or the tail inside a begin), and the ensure
-   runs, and can allocate, before the store (emit_transform_hash_expr's
-   next slot is rooted alike). Without one nothing runs in between, and a
-   hot map keeps its temp out of the root stack. Ends the declaration's
-   line. */
+/* The temp `_t<tmp>` of kind t that holds a block's value (its body is
+   `body`) until the caller takes it is a GC root where the block has an
+   `ensure`: the value can leave through it (a `next`, or the tail inside a
+   begin), and the ensure runs, and can allocate, before the caller stores
+   or uses it (emit_transform_hash_expr's next slot is rooted alike).
+   Without one nothing runs in between, and a hot loop keeps its temp out
+   of the root stack. Emits the root statement, or nothing; answers whether
+   it emitted one. */
+int emit_bv_root(Compiler *c, int body, TyKind t, int tmp, Buf *b) {
+  if (!ty_gc_holds_refs(c, t) || !bv_body_has_ensure(c->nt, body, 0)) return 0;
+  emit_gc_root_tmp_refs(c, t, tmp, b);
+  return 1;
+}
+/* emit_bv_root for block's temp, ending the declaration's line */
 static void bv_root_tmp(Compiler *c, int block, TyKind t, int tmp, Buf *b) {
   int body = block >= 0 ? nt_ref(c->nt, block, "body") : -1;
-  if (ty_gc_holds_refs(c, t) && bv_body_has_ensure(c->nt, body, 0)) { buf_puts(b, " "); emit_gc_root_tmp_refs(c, t, tmp, b); }
+  Buf r = {0};
+  if (emit_bv_root(c, body, t, tmp, &r)) { buf_puts(b, " "); buf_puts(b, r.p); }
+  free(r.p);
   buf_puts(b, "\n");
 }
 
+/* Does a `next v` of the block (not one of a block nested in it) answer a
+   boxed value, while its tail is a typed t? The block's value slot is then
+   the box (#9300). */
 static int bv_next_boxed_walk(Compiler *c, int n, int depth) {
   const NodeTable *nt = c->nt;
   if (n < 0 || depth > 64) return 0;
@@ -4520,6 +4529,13 @@ static void emit_iter_step_open_body(Compiler *c, int block, int want_poly, int 
     emit_indent(g_pre, indent); emit_ctype(c, vt, g_pre);
     buf_printf(g_pre, " %s = %s;\n", dst, vt == TY_POLY ? "sp_box_nil()" : default_value_from_compiler(c, vt));
     if (vt == TY_POLY) { emit_indent(g_pre, indent); buf_printf(g_pre, "SP_GC_ROOT_RBVAL(%s);\n", dst); }
+    /* a typed slot that holds a reference (an Array key, a String) is
+       rooted where an `ensure` runs before the step's caller reads it */
+    else {
+      Buf r = {0};
+      if (emit_bv_root(c, body, vt, st->slot, &r)) { emit_indent(g_pre, indent); buf_printf(g_pre, "%s\n", r.p); }
+      free(r.p);
+    }
     emit_block_value_into(c, block, dst, vt == TY_POLY, indent);
     return;
   }
@@ -7376,8 +7392,10 @@ int emit_enum_with_index_expr(Compiler *c, int id, Buf *b) {
   {
     int tv = ++g_tmp;
     emit_indent(g_pre, g_indent + 1);
-    /* nil until the block assigns it, so a bare `next` collects nil */
-    buf_printf(g_pre, "sp_RbVal _t%d = sp_box_nil();\n", tv);
+    /* nil until the block assigns it, so a bare `next` collects nil;
+       rooted where an `ensure` runs before the push (bv_root_tmp) */
+    buf_printf(g_pre, "sp_RbVal _t%d = sp_box_nil();", tv);
+    bv_root_tmp(c, block, TY_POLY, tv, g_pre);
     char dv[24]; snprintf(dv, sizeof dv, "_t%d", tv);
     emit_block_value_into(c, block, dv, 1, g_indent + 1);
     emit_indent(g_pre, g_indent + 1);

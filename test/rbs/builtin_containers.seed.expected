@@ -1,0 +1,22 @@
+class RuntimeContainers
+meth value_0 poly_array poly_array,sym_poly_hash,poly
+meth value_1 poly_array poly_array,sym_poly_hash,poly
+meth value_2 poly_array poly_array,sym_poly_hash,poly
+meth value_3 poly_array poly_array,sym_poly_hash,poly
+meth value_4 poly_array poly_array,sym_poly_hash,poly
+meth value_5 poly_array poly_array,sym_poly_hash,poly
+meth value_6 poly_array poly_array,sym_poly_hash,poly
+meth value_7 poly_array poly_array,sym_poly_hash,poly
+meth value_8 poly_array poly_array,sym_poly_hash,poly
+meth value_9 poly_array poly_array,sym_poly_hash,poly
+meth value_10 poly_array poly_array,sym_poly_hash,poly
+meth value_11 poly_array poly_array,sym_poly_hash,poly
+meth value_12 poly_array poly_array,sym_poly_hash,poly
+meth value_13 poly_array poly_array,sym_poly_hash,poly
+meth value_14 poly_array poly_array,sym_poly_hash,poly
+meth value_15 poly_array poly_array,sym_poly_hash,poly
+meth aliased sym_poly_hash poly_array
+meth optional poly_array poly_array
+meth nested str_poly_hash poly_array
+meth nominal obj_UnknownRuntime_ptr_array obj_Local_Time_ptr_array
+class Local

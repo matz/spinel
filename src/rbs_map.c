@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "rbs_map.h"
+#include "../lib/sp_builtin_classes.h"
 #include "rbs/util/rbs_constant_pool.h"
 
 /* ---- small string buffer ----------------------------------- */
@@ -66,19 +67,39 @@ static size_t known_names_cap = 0;
 const char *g_self_scope = NULL;
 const char *g_self_type = NULL;
 
-void known_names_add(const char *name, size_t n) {
-    /* dedupe (linear; n is small in practice) */
-    for (size_t i = 0; i < known_names_len; i++) {
-        if (strlen(known_names[i]) == n && memcmp(known_names[i], name, n) == 0) return;
+/* Power-of-two open addressing, at most half full. Each name is owned by
+ * its slot; rehashing moves pointers without changing the copied strings. */
+static size_t known_name_hash(const char *name, size_t n) {
+    size_t h = 2166136261u;
+    for (size_t i = 0; i < n; i++) h = (h ^ (unsigned char) name[i]) * 16777619u;
+    return h;
+}
+
+static size_t known_name_slot(char **slots, size_t cap, const char *name, size_t n) {
+    size_t i = known_name_hash(name, n) & (cap - 1);
+    while (slots[i] != NULL) {
+        if (strlen(slots[i]) == n && memcmp(slots[i], name, n) == 0) break;
+        i = (i + 1) & (cap - 1);
     }
-    if (known_names_len >= known_names_cap) {
+    return i;
+}
+
+void known_names_add(const char *name, size_t n) {
+    if (known_names_cap != 0
+        && known_names[known_name_slot(known_names, known_names_cap, name, n)] != NULL) return;
+    if (known_names_len >= known_names_cap / 2) {
         size_t ncap = known_names_cap == 0 ? 32 : known_names_cap * 2;
-        char **nbuf = (char **) realloc(known_names, ncap * sizeof(char *));
-        if (nbuf == NULL) {
+        char **slots = (char **) calloc(ncap, sizeof(char *));
+        if (slots == NULL) {
             fprintf(stderr, "spinel_rbs_extract: out of memory\n");
             exit(1);
         }
-        known_names = nbuf;
+        for (size_t i = 0; i < known_names_cap; i++) {
+            char *old = known_names[i];
+            if (old != NULL) slots[known_name_slot(slots, ncap, old, strlen(old))] = old;
+        }
+        free(known_names);
+        known_names = slots;
         known_names_cap = ncap;
     }
     char *copy = (char *) malloc(n + 1);
@@ -88,14 +109,13 @@ void known_names_add(const char *name, size_t n) {
     }
     memcpy(copy, name, n);
     copy[n] = '\0';
-    known_names[known_names_len++] = copy;
+    known_names[known_name_slot(known_names, known_names_cap, name, n)] = copy;
+    known_names_len++;
 }
 
 bool known_names_has(const char *name) {
-    for (size_t i = 0; i < known_names_len; i++) {
-        if (strcmp(known_names[i], name) == 0) return true;
-    }
-    return false;
+    return known_names_cap != 0
+        && known_names[known_name_slot(known_names, known_names_cap, name, strlen(name))] != NULL;
 }
 
 /* ---- name lookup via rbs constant pool --------------------- */
@@ -248,15 +268,46 @@ static bool type_name_is_unqualified(rbs_type_name_t *tn) {
     return tn->rbs_namespace->path->length == 0;
 }
 
-/* Map a ClassInstance node. Handles Array[T], Hash[K,V], primitives,
- * and nominal classes. */
-/* A type argument (`V` of `Hash[K, V]`): as map_type, except that `top`
- * (any value) is the boxed value an element of several types is, as
- * `untyped` is. A slot of its own typed `top` pins nothing instead. */
+/* A runtime class has no nominal object-array layout. Read the runtime's
+ * class-name vocabulary, rather than keeping a second list here. Compare
+ * its qualified spelling with the mapper's underscore-joined name. */
+static bool runtime_type_arg(const char *tag) {
+    static const char *const names[] = {
+#define X(key, name, id, flags) name,
+        SP_BUILTIN_CLASSES(X)
+#undef X
+    };
+    if (strncmp(tag, "obj_", 4) != 0) return false;
+    const char *name = tag + 4;
+    size_t len = strlen(name);
+    if (len > 0 && name[len - 1] == '?') len--;
+    /* The runtime's Errno family is open, not just its named table rows. */
+    if (len > 6 && strncmp(name, "Errno_", 6) == 0) return true;
+    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+        const char *p = names[i];
+        size_t j = 0;
+        while (*p && j < len) {
+            char c = *p++;
+            if (c == ':' && *p == ':') { c = '_'; p++; }
+            if (name[j] != c) break;
+            j++;
+        }
+        if (!*p && j == len) return true;
+    }
+    return false;
+}
+
+/* A container argument uses boxed runtime values; `top` is `untyped`
+ * here, while a slot of its own typed `top` pins nothing. */
 static bool map_type_arg(rbs_parser_t *p, rbs_node_t *node,
                          const char *enclosing_scope, sbuf_t *out) {
     if (node != NULL && node->type == RBS_TYPES_BASES_TOP) { sbuf_set(out, "poly", 4); return true; }
-    return map_type(p, node, enclosing_scope, out);
+    if (!map_type(p, node, enclosing_scope, out)) return false;
+    /* Keep scalar/top-level nominal seeds unchanged. Only a container's
+     * element/key/value needs the boxed representation; resolving first
+     * preserves a user class such as Local::Time and aliases of it. */
+    if (runtime_type_arg(out->buf)) sbuf_set(out, "poly", 4);
+    return true;
 }
 
 static bool map_class_instance(rbs_parser_t *p, rbs_types_class_instance_t *ci,

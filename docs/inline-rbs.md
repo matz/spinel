@@ -179,6 +179,11 @@ In particular, the tests leave endless-method trailing returns untyped.
 One placement departs from it: ruby/rbs reads a def in `class << self` as an
 instance method of the class, and Spinel reads it as the class method it is.
 
+Builtin runtime classes also work inside containers: `Array[Time]`,
+`Array[Regexp]`, `Array[MatchData]`, and `Hash[Symbol, Time]` retain
+their annotations. Their elements use boxed storage; this does not add
+element-class checking or enable top-level pins for every builtin class.
+
 ## Diagnostics and limitations
 
 An error stops compilation. Unsupported signatures never apply only some
@@ -191,7 +196,7 @@ overridden return can remain inferred while supported parameter types apply.
 | Two signatures for one method, or duplicate parameter annotations | Error naming both locations |
 | Conflicting applied inline or external declarations | Error naming both locations |
 | Unseedable types: literals other than `true` and `false`, interfaces, tuples, records, procs nested in another type (`Array[^() -> void]`; a Proc parameter or return is left inferred, above), `class`, `self`/`instance` outside a class's instance method, type variables (but a builtin generic's own, above) | Warning; ignore the whole annotation |
-| Unknown program class, such as `Regexp` or `Array[Time]` (a builtin class with values of its own, such as `Time` or `File`, applies, and so do `Range` and an exception class: see [Type vocabulary](rbs-extract.md#type-vocabulary)) | Warning naming the type as written; ignore the whole annotation |
+| Unknown program class, such as `Regexp` at top level or `Array[UnknownTime]` (a builtin class with values of its own, such as `Time` or `File`, applies, and so do `Range` and an exception class: see [Type vocabulary](rbs-extract.md#type-vocabulary)) | Warning naming the type as written; ignore the whole annotation |
 | Positional kinds that differ from the method's (`(?Integer)` for `def m(x)`), or a destructuring parameter | Warning; ignore the whole signature |
 | Overloads, `...`, generic method signatures, generic type aliases, and superclass/mixin type arguments | Warning; ignore the annotation |
 | Constants, cyclic or unmappable type aliases, and class/module declarations (generic classes, module self types) that have no analyzer pin | Warning; ignore the annotation |

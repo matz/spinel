@@ -8381,9 +8381,39 @@ static int ivar_main_slot_class(Compiler *c, Scope *sc, int n) {
   if (!sc || sc->class_id >= 0 || c->toplevel_class < 0) return -1;
   return n >= 0 && n < c->node_cap && c->node_cbody && c->node_cbody[n] >= 0 ? -1 : c->toplevel_class;
 }
+/* The class of a Struct member read by its name or its place (`s[:v]`,
+   `s["v"]`, `s[0]`, `s[-1]`), which reads what the member's reader
+   answers, with the member's ivar in *ivn; -1 for any other `[]`, and
+   where the class has a `[]` of its own. */
+static int struct_aref_member_slot(Compiler *c, int v, const char **ivn) {
+  const NodeTable *nt = c->nt;
+  int r = nt_ref(nt, v, "receiver"), a = nt_ref(nt, v, "arguments"), an = 0;
+  const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+  TyKind rt = r >= 0 ? infer_type(c, r) : TY_UNKNOWN;
+  int cls = ty_is_object(rt) ? ty_object_class(rt) : -1;
+  if (an != 1 || cls < 0 || !c->classes[cls].is_struct || c->classes[cls].is_data ||
+      call_target(c, v, cls, "[]", 0, NULL) >= 0) return -1;
+  ClassInfo *ci = &c->classes[cls];
+  const char *kn = an_literal_name(nt, av[0]);
+  int mi = -1;
+  if (kn) {
+    char ivb[300];
+    snprintf(ivb, sizeof ivb, "@%s", kn);
+    mi = comp_member_index(ci, ivb);
+  }
+  else if (nt_kind(nt, av[0]) == NK_IntegerNode && !nt_str(nt, av[0], "bigval")) {
+    long long at = nt_int(nt, av[0], "value", -1);
+    if (at < 0) at += ci->nmembers;
+    if (at >= 0 && at < ci->nmembers) mi = (int)at;
+  }
+  if (mi < 0) return -1;
+  *ivn = ci->ivars[mi];
+  return cls;
+}
 /* The class whose ivar the value `v` reads, with the ivar's name in *ivn:
-   an ivar read in a method, or an attr_reader call (`obj.items`, a bare
-   `items` in the class). -1 when `v` is neither. */
+   an ivar read in a method, an attr_reader call (`obj.items`, a bare
+   `items` in the class), or a Struct member's `[]` read
+   (struct_aref_member_slot). -1 when `v` is none of these. */
 int ivar_src_slot(Compiler *c, int v, const char **ivn) {
   const NodeTable *nt = c->nt;
   static char ivb[128];
@@ -8398,6 +8428,7 @@ int ivar_src_slot(Compiler *c, int v, const char **ivn) {
   int a = nt_ref(nt, v, "arguments"), an = 0;
   if (a >= 0) nt_arr(nt, a, "arguments", &an);
   const char *nm = nt_str(nt, v, "name");
+  if (an == 1 && is_aref_name(nm)) return struct_aref_member_slot(c, v, ivn);
   if (an > 0 || !nm || strlen(nm) >= sizeof ivb - 1) return -1;
   int r = nt_ref(nt, v, "receiver"), cls = -1;
   if (r < 0) cls = sc->is_cmethod ? -1 : sc->class_id;

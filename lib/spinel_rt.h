@@ -18051,12 +18051,13 @@ static inline void *sp_exc_caught_obj(void) {
   }
   return e;
 }
-/* Each of the fixed-depth handler stacks below fails the same way when a
-   program nests deeper than its array holds: CRuby's SystemStackError words,
-   on stderr, and out. One copy of them, called from each stack's check. Not a
-   Ruby SystemStackError -- catching one needs a handler slot, which is exactly
-   what has run out. (sp_rescue_push above keeps its own older wording, which
-   names the nesting that overflowed.) */
+/* Each of the fixed-depth handler stacks below raises the same way when a
+   program nests deeper than its array holds: CRuby's SystemStackError, into
+   the exception frame on top, which the check before every push leaves
+   armed and whole; with none armed, its words on stderr, and out. One copy
+   of it, called from each stack's check (lib/sp_exc.c). (sp_rescue_push
+   above keeps its own older wording, which names the nesting that
+   overflowed.) */
 SP_NORETURN SP_COLD void sp_stack_too_deep(void);   /* lib/sp_exc.c */
 /* sp_exc_check_depth: lib/sp_exc_ctx.h */
 /* ---- Native backtrace formatting (spinel --debug) ---------------------- */

@@ -125,10 +125,11 @@ SP_NORETURN SP_COLD void sp_stack_too_deep(void);   /* lib/sp_exc.c */
    the check must precede is that first indexed store, not the ++; it opens the
    frame-arming sequence at every arm the codegen emits. The depth is not a
    lexical property: a method whose body is a begin/rescue keeps its frame armed
-   across the calls that body makes, so ordinary recursion 65 deep reaches the
-   end of the array just as 65 nested begins do. Inside a fiber body, and inside
+   across the calls that body makes, so ordinary recursion as deep as the array
+   reaches its end just as that many nested begins do, and raises
+   SystemStackError there (sp_stack_too_deep). Inside a fiber body, and inside
    a thread's, one slot is already spent on the frame the runtime arms around it
-   (sp_exc_arm below), so 63 of the body's own is the last that fits. */
+   (sp_exc_arm below). */
 static inline void sp_exc_check_depth(void) {
   if (SP_UNLIKELY(sp_exc_top >= SP_EXC_STACK_MAX)) sp_stack_too_deep();
 #ifdef SP_CEXT

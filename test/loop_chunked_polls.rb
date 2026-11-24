@@ -168,6 +168,44 @@ def char_rows(w, reps)
   s
 end
 
+# ...and so does one whose yield splices in a block that counts characters,
+# or that grows the array the loop walks
+def each_word_twice(w)
+  r = 0
+  while r < 2
+    j = 0
+    while j < w.length
+      yield w[j]
+      j += 1
+    end
+    r += 1
+  end
+end
+
+def each_int_twice(a)
+  r = 0
+  while r < 2
+    j = 0
+    while j < a.length
+      yield a[j], j
+      j += 1
+    end
+    r += 1
+  end
+end
+
+def yield_chars(w)
+  s = 0
+  each_word_twice(w) { |x| s += x.length }
+  s
+end
+
+def yield_grow(a)
+  s = 0
+  each_int_twice(a) { |x, j| s += x; a[j + 1] = 1 if j < 1500 }
+  [s, a.length]
+end
+
 def words(n) = Array.new(n) { |k| "w\u00e9#{k}" }
 def ints(n) = Array.new(n) { |k| k % 7 + 1 }
 def floats(n) = Array.new(n) { |k| (k % 5) * 0.5 }
@@ -201,6 +239,8 @@ work = Thread.new do
   out << Box.new(3000).sum_lowered(ints(3000), 10, 20)
   out << char_count(words(1500), 1500)
   out << char_rows(words(1500), 2)
+  out << yield_chars(words(1500))
+  out << yield_grow(ints(3))
   out
 end
 

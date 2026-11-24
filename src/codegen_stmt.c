@@ -12609,6 +12609,19 @@ static int hc_subtree_slow(Compiler *c, int id) {
   }
   return 0;
 }
+/* The body of the block a yield in `body` splices in (`blk`, g_block_id
+   where the body is emitted): hc_node_ok takes a yield whose literal block
+   qualifies, so that block runs in the loop at each pass, and what a check
+   asks of a loop's body it asks of that block too. -1: no yield; -2: a
+   yield with no literal block to splice, or one in that block (its own
+   caller's, which hc_node_ok never takes), which no check can see. */
+static int hc_yield_body(Compiler *c, int body, int blk) {
+  if (body < 0 || !proc_body_has_yield(c, body)) return -1;
+  const NodeTable *nt = c->nt;
+  if (blk < 0 || nt_kind(nt, blk) != NK_BlockNode) return -2;
+  int bb = nt_ref(nt, blk, "body");
+  return proc_body_has_yield(c, bb) ? -2 : bb;
+}
 /* Does a body the cache took hold an element write (`x[j] = v`)? It is the
    one node such a body admits that can grow an array (hc_call_ok), and it
    may grow any array of its kind, since two names can denote one. */
@@ -13602,9 +13615,12 @@ static void emit_while_loop(Compiler *c, int id, Buf *b, int indent, int is_unti
      the loop an atomic load and the header reload behind it. Its signal poll
      was the enclosing loop's already (#9222). A body whose pass costs what
      a String or a number holds (hc_subtree_slow) keeps its polls: one pass
-     over the array could take seconds. */
+     over the array could take seconds. Both ask the same of the block a
+     yield in the body splices in (hc_yield_body). */
+  int ysb = hc_yield_body(c, body, g_block_id);
   int quiet = polls_in_cond && (g_uses_threads || g_uses_finalizers) && g_poll_loop_nest > 0 &&
-              !hc_subtree_stores(nt, body) && !hc_subtree_slow(c, body);
+              !hc_subtree_stores(nt, body) && !hc_subtree_slow(c, body) && ysb != -2 &&
+              (ysb < 0 || (!hc_subtree_stores(nt, ysb) && !hc_subtree_slow(c, ysb)));
   char trip[64] = "";
   if (proved) {
     Buf hcc; memset(&hcc, 0, sizeof hcc);

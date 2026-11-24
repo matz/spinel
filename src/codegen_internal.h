@@ -3238,6 +3238,8 @@ void emit_gc_root_tmp(Compiler *c, TyKind t, int tmp, Buf *b);
 int text_uses_tmp(const char *txt, int n);
 int ty_gc_holds_refs(Compiler *c, TyKind t);
 void emit_gc_root_tmp_refs(Compiler *c, TyKind t, int tmp, Buf *b);
+/* root a block-value temp where its block body has an `ensure` (codegen_fold.c) */
+int emit_bv_root(Compiler *c, int body, TyKind t, int tmp, Buf *b);
 void emit_srange_marks(Compiler *c, const char *ref, Buf *b);
 void emit_srange_walk_open(Compiler *c, int recv, int stride, char *elem, size_t elemcap, Buf *b, int indent);
 void emit_srange_member_param(Compiler *c, int block, const char *p0_orig, const char *p0, const char *elem, Buf *b, int indent);

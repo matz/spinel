@@ -8621,6 +8621,52 @@ static int array_src_walk(Compiler *c, int v, int pinned, int apply, int *stack,
    A nil holds no Array, as a write's `@v = nil` holds none
    (ivar_writes_fresh): it is passed over. */
 typedef struct { int *stack, depth, apply, ch, n; } AttrArgWalk;
+static int attr_value_walk(Compiler *c, int arg, AttrArgWalk *w) {
+  if (nt_kind(c->nt, nt_paren_single(c->nt, arg)) == NK_NilNode) return 0;
+  int got = array_src_walk(c, arg, 1, w->apply, w->stack, w->depth + 1);
+  if (!w->apply && !got) return 1;
+  w->ch |= got;
+  w->n++;
+  return 0;
+}
+/* The values for member iv of Struct class cls that the class's own
+   initialize hands the builtin one through `super` (`def initialize(x) =
+   super([x])`), each walked as a writer's argument is (attr_value_walk):
+   nonzero stops where one may not be followed (a bare `super`, a splat,
+   an initialize above that is not the builtin's); 0 when there is no
+   initialize of the class's own. */
+static int struct_super_member_values(Compiler *c, int cls, int iv, AttrArgWalk *w) {
+  const NodeTable *nt = c->nt;
+  ClassInfo *ci = &c->classes[cls];
+  MethodLookup ml = { .def_class = -1 };
+  int mi = iv >= 0 && iv < ci->nmembers ? cplan_hook_target(c, -1, cls, "initialize", &ml) : -1;
+  if (mi < 0) return 0;
+  int k = ml.def_class;
+  if (k < 0 || !c->classes[k].is_struct || c->classes[k].is_data ||
+      (c->classes[k].parent >= 0 && cplan_hook_target(c, -1, c->classes[k].parent, "initialize", NULL) >= 0)) return 1;
+  Scope *ms = &c->scopes[mi];
+  NT_FOREACH_KIND(nt, NK_ForwardingSuperNode, su)
+    if (comp_scope_of(c, su) == ms) return 1;
+  const char *mname = ci->ivars[iv] + 1;
+  NT_FOREACH_KIND(nt, NK_SuperNode, su) {
+    if (comp_scope_of(c, su) != ms) continue;
+    int args = nt_ref(nt, su, "arguments"), an = 0;
+    const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
+    if (struct_super_spreads(c, args)) return 1;
+    int vnode = -1;
+    if (an == 1 && nt_kind(nt, av[0]) == NK_KeywordHashNode) {
+      int kn = 0; const int *ke = nt_arr(nt, av[0], "elements", &kn);
+      for (int e = 0; e < kn && vnode < 0; e++) {
+        int key = nt_kind(nt, ke[e]) == NK_AssocNode ? nt_ref(nt, ke[e], "key") : -1;
+        const char *kv = key >= 0 && nt_kind(nt, key) == NK_SymbolNode ? nt_str(nt, key, "value") : NULL;
+        if (kv && sp_streq(kv, mname)) vnode = nt_ref(nt, ke[e], "value");
+      }
+    }
+    else if (iv < an) vnode = av[iv];
+    if (vnode >= 0 && attr_value_walk(c, vnode, w)) return 1;
+  }
+  return 0;
+}
 static int attr_writer_arg_walk(Compiler *c, int call, void *ctx) {
   AttrArgWalk *w = ctx;
   NodeKind k = nt_kind(c->nt, call);
@@ -8633,12 +8679,7 @@ static int attr_writer_arg_walk(Compiler *c, int call, void *ctx) {
     if (an != 1 || nt_kind(c->nt, av[0]) == NK_SplatNode) return 1;
     arg = av[0];
   }
-  if (nt_kind(c->nt, nt_paren_single(c->nt, arg)) == NK_NilNode) return 0;
-  int got = array_src_walk(c, arg, 1, w->apply, w->stack, w->depth + 1);
-  if (!w->apply && !got) return 1;
-  w->ch |= got;
-  w->n++;
-  return 0;
+  return attr_value_walk(c, arg, w);
 }
 static int array_src_walk(Compiler *c, int v, int pinned, int apply, int *stack, int depth) {
   const NodeTable *nt = c->nt;
@@ -8745,11 +8786,13 @@ static int array_src_walk(Compiler *c, int v, int pinned, int apply, int *stack,
     int writer = call_answers(c, -1, icls, ivn + 1, CT_WRITER, NULL);
     if (attr_writer_calls(c, icls, ivn, attr_writer_arg_walk, &aw) ||
         (writer && attr_op_writes(c, icls, ivn + 1, attr_writer_arg_walk, &aw)) ||
+        (!member && struct_super_member_values(c, icls, ivi, &aw)) ||
         (!fresh && !aw.n)) return 0;
     if (!apply) return 1;
     aw.apply = 1;
     attr_writer_calls(c, icls, ivn, attr_writer_arg_walk, &aw);
     if (writer) attr_op_writes(c, icls, ivn + 1, attr_writer_arg_walk, &aw);
+    if (!member) struct_super_member_values(c, icls, ivi, &aw);
     int ch = aw.ch;
     if (member) {
       AliasSide sd = { &ci->ivar_types[ivi], 0, 1, icls, ivi };

@@ -3249,6 +3249,9 @@ int desugar_dynamic_const_get_arms(Compiler *c) {
     if (!stash) continue;
     int recv = nt_ref(nt, id, "receiver");
     if (recv < 0) continue;
+    /* Socket's constants are the system's, not the program's: codegen asks its table by the name */
+    if (sp_streq(nm, "const_defined?") && nt_kind(nt, recv) == NK_ConstantReadNode &&
+        sp_streq(nt_str(nt, recv, "name"), "Socket") && sp_feature_required("socket")) continue;
     if ((sp_streq(nm, "const_get") ? inst_get : inst_def) && !const_get_recv_is_module(c, id, recv)) continue;
     { int dn = 0; nt_arr(nt, id, stash, &dn); if (dn > 0) continue; }
     int args = nt_ref(nt, id, "arguments");

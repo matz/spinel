@@ -1312,11 +1312,8 @@ int desugar_body_module_eval(Compiler *c) {
     if (bn > 0) memcpy(bb, bb0, sizeof(int) * (size_t)bn);
     for (int i = 0; i < bn; i++) {
       int st = bb[i];
-      int blk = nt_kind(nt, st) == NK_CallNode ? nt_ref(nt, st, "block") : -1;
-      const char *nm = blk >= 0 ? nt_str(nt, st, "name") : NULL;
-      int is_eval = nm && is_class_eval_family(nm) &&
-                    nt_kind(nt, blk) == NK_BlockNode && nt_ref(nt, blk, "parameters") < 0 &&
-                    nt_ref(nt, st, "arguments") < 0;
+      int blk = class_eval_block(nt, st);
+      int is_eval = blk >= 0 && nt_ref(nt, blk, "parameters") < 0;
       int recv = is_eval ? nt_ref(nt, st, "receiver") : -1;
       int is_own = 0;
       if (is_eval && recv >= 0) {
@@ -15384,13 +15381,12 @@ static int ee_hook_extends_enumerable(const NodeTable *nt, const int *parent, in
         for (int q = 0; q < hn; q++) {
           int s = hs[q], sr = nt_kind(nt, s) == NK_CallNode ? nt_ref(nt, s, "receiver") : -1;
           const char *sn = nt_kind(nt, s) == NK_CallNode ? nt_str(nt, s, "name") : NULL;
-          int blk = sn ? nt_ref(nt, s, "block") : -1;
+          int blk = sn ? nt_ref(nt, s, "block") : -1, eb = sn ? class_eval_block(nt, s) : -1;
           if (!sn || sr < 0 || nt_kind(nt, sr) != NK_LocalVariableReadNode || !nt_str(nt, sr, "name") ||
               !sp_streq(nt_str(nt, sr, "name"), pn)) continue;
           if (sp_streq(sn, "extend") && blk < 0 && ee_args_enumerable(nt, s)) return 1;
-          if (is_class_eval_family(sn) && nt_ref(nt, s, "arguments") < 0 && blk >= 0 && nt_kind(nt, blk) == NK_BlockNode &&
-              nt_ref(nt, blk, "parameters") < 0) {
-            int kb = nt_ref(nt, blk, "body"), kn = 0;
+          if (eb >= 0 && nt_ref(nt, eb, "parameters") < 0) {
+            int kb = nt_ref(nt, eb, "body"), kn = 0;
             const int *ks = kb >= 0 && nt_kind(nt, kb) == NK_StatementsNode ? nt_arr(nt, kb, "body", &kn) : NULL;
             for (int z = 0; z < kn; z++) if (ee_extends_enumerable(nt, ks[z], 0)) return 1;
           }
@@ -16701,10 +16697,8 @@ int desugar_define_method_captures_at(Compiler *c, LowerCtx *lc, int id) {
     int bn = 0; const int *bb = nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &bn) : NULL;
     for (int q = 0; q < bn; q++) {
       int st = bb[q];
-      if (nt_kind(nt, st) != NK_CallNode || !is_class_eval_family(nt_str(nt, st, "name")) || nt_ref(nt, st, "arguments") >= 0) continue;
-      int recv = nt_ref(nt, st, "receiver"), blk = nt_ref(nt, st, "block");
-      if (!(recv < 0 || nt_kind(nt, recv) == NK_SelfNode) || blk < 0 || nt_kind(nt, blk) != NK_BlockNode ||
-          nt_ref(nt, blk, "parameters") >= 0) continue;
+      int blk = class_eval_block(nt, st), recv = blk >= 0 ? nt_ref(nt, st, "receiver") : -1;
+      if (blk < 0 || !(recv < 0 || nt_kind(nt, recv) == NK_SelfNode) || nt_ref(nt, blk, "parameters") >= 0) continue;
       int bbody = nt_ref(nt, blk, "body");
       DmcNames bs = { 0 };
       dmc_walk(nt, bbody, 0, 0, NULL, &bs, 0);
@@ -26540,8 +26534,7 @@ static int scm_lift_attr_value(Compiler *c, NodeTable *nt, const int *parent, in
 static int scm_body_eval_block(const NodeTable *nt, const int *parent, int b) {
   if (b < 0 || nt_kind(nt, b) != NK_BlockNode || nt_ref(nt, b, "parameters") >= 0) return 0;
   int call = parent[b];
-  if (call < 0 || nt_kind(nt, call) != NK_CallNode || nt_ref(nt, call, "block") != b ||
-      !is_class_eval_family(nt_str(nt, call, "name")) || nt_ref(nt, call, "arguments") >= 0) return 0;
+  if (call < 0 || class_eval_block(nt, call) != b) return 0;
   int rv = nt_ref(nt, call, "receiver");
   int st = parent[call], owner = st >= 0 ? parent[st] : -1;
   if (st < 0 || nt_kind(nt, st) != NK_StatementsNode || owner < 0) return 0;
@@ -27872,9 +27865,9 @@ static int cb_give_self(NodeTable *nt, int node, const char *builtin, int strct,
   /* a class_eval block on the body's own class (no receiver, or self), not
      itself in a block: its statements are the body's, with the class for
      self (#10785) */
-  if (!inblk && blk >= 0 && nt_kind(nt, blk) == NK_BlockNode && is_class_eval_family(cm) &&
-      (r < 0 || nt_kind(nt, r) == NK_SelfNode) && nt_ref(nt, node, "arguments") < 0 && nt_ref(nt, blk, "parameters") < 0)
-    changed |= cb_give_self(nt, nt_ref(nt, blk, "body"), builtin, strct, cname, 0);
+  int eblk = !inblk ? class_eval_block(nt, node) : -1;
+  if (eblk >= 0 && (r < 0 || nt_kind(nt, r) == NK_SelfNode) && nt_ref(nt, eblk, "parameters") < 0)
+    changed |= cb_give_self(nt, nt_ref(nt, eblk, "body"), builtin, strct, cname, 0);
   int nr = nt_num_refs(nt, node);
   for (int i = 0; i < nr; i++) {
     int ch = nt_ref_at(nt, node, i);
@@ -31435,11 +31428,10 @@ static void cbi_collect(const NodeTable *nt, int node, int in_block, int no_proc
   /* a class_eval block on the body's own class (no receiver, or self), a
      statement of the body and not in a block of it: self stays the class,
      and the block's statements are body code (#10785) */
-  if (k == NK_CallNode && !in_block && !no_procs && is_class_eval_family(nt_str(nt, node, "name")) &&
-      nt_ref(nt, node, "arguments") < 0) {
-    int cr = nt_ref(nt, node, "receiver"), cb = nt_ref(nt, node, "block");
-    if ((cr < 0 || nt_kind(nt, cr) == NK_SelfNode) && cb >= 0 && nt_kind(nt, cb) == NK_BlockNode &&
-        nt_ref(nt, cb, "parameters") < 0) {
+  int cb = !in_block && !no_procs ? class_eval_block(nt, node) : -1;
+  if (cb >= 0) {
+    int cr = nt_ref(nt, node, "receiver");
+    if ((cr < 0 || nt_kind(nt, cr) == NK_SelfNode) && nt_ref(nt, cb, "parameters") < 0) {
       cbi_collect(nt, nt_ref(nt, cb, "body"), 0, 0, pl, hits, nhits, cap, trigger);
       return;
     }
@@ -32132,7 +32124,7 @@ int desugar_class_eval_ivars(Compiler *c) {
       own_ie = program_defines_name(nt, n0, "instance_eval") || program_defines_name(nt, n0, "instance_exec");
     if (!ie && own < 0) own = sce_program_owns_class_eval(c, nt);
     int r = nt_ref(nt, id, "receiver"), blk = nt_ref(nt, id, "block");
-    if (r >= 0 && !ie && blk >= 0 && nt_kind(nt, blk) == NK_BlockNode && nt_ref(nt, id, "arguments") < 0 &&
+    if (r >= 0 && !ie && class_eval_block(nt, id) >= 0 &&
         (nt_kind(nt, r) == NK_LocalVariableReadNode || nt_kind(nt, r) == NK_CallNode)) {
       /* (a class value's class_eval is Module's unless a reopening of
          Module's chain gives it one: a program class's own def of the

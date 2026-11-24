@@ -1127,8 +1127,7 @@ int class_eval_reopen_class(Compiler *c, int id, int enclosing_class) {
     /* (a block on the body's own class, in that body, runs its other
        statements as the body's own: codegen emits them where the call
        stands, #10785) */
-    if (ci == enclosing_class && is_class_eval_family(nm) && nt_ref(nt, blk, "parameters") < 0 &&
-        nt_ref(nt, id, "arguments") < 0) continue;
+    if (ci == enclosing_class && class_eval_block(nt, id) == blk && nt_ref(nt, blk, "parameters") < 0) continue;
     return -1;  /* a non-definition statement: not a pure reopen */
   }
   return ci;
@@ -2772,6 +2771,11 @@ static int builder_call(const NodeTable *nt, int def_node, int *module) {
   }
   *module = b->module[def_node];
   return b->call[def_node];
+}
+int class_eval_block(const NodeTable *nt, int call) {
+  if (nt_kind(nt, call) != NK_CallNode || !is_class_eval_family(nt_str(nt, call, "name")) || nt_ref(nt, call, "arguments") >= 0) return -1;
+  int blk = nt_ref(nt, call, "block");
+  return blk >= 0 && nt_kind(nt, blk) == NK_BlockNode ? blk : -1;
 }
 int class_def_builder(const NodeTable *nt, int def_node) {
   int module;
@@ -4724,10 +4728,10 @@ static int body_stmt_assigns_civ(const NodeTable *nt, int n, const char *ivname)
   if (k == NK_ElseNode) return body_stmt_assigns_civ(nt, nt_ref(nt, n, "statements"), ivname);
   /* a class_eval block on the body's own class: its statements are the
      body's (#10785) */
-  if (k == NK_CallNode && is_class_eval_family(nt_str(nt, n, "name")) && nt_ref(nt, n, "arguments") < 0) {
-    int recv = nt_ref(nt, n, "receiver"), blk = nt_ref(nt, n, "block");
-    if ((recv < 0 || nt_kind(nt, recv) == NK_SelfNode) && blk >= 0 && nt_kind(nt, blk) == NK_BlockNode &&
-        nt_ref(nt, blk, "parameters") < 0)
+  int blk = k == NK_CallNode ? class_eval_block(nt, n) : -1;
+  if (blk >= 0) {
+    int recv = nt_ref(nt, n, "receiver");
+    if ((recv < 0 || nt_kind(nt, recv) == NK_SelfNode) && nt_ref(nt, blk, "parameters") < 0)
       return body_stmt_assigns_civ(nt, nt_ref(nt, blk, "body"), ivname);
   }
   return 0;

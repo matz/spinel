@@ -1889,11 +1889,11 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
        declares none of the system's constants for desugar's arms to list */
     if (!qm && argc == 1 && sp_streq(nt_str(nt, recv, "name"), "Socket") && sp_feature_required("socket")) {
       TyKind st = comp_ntype(c, argv[0]);
-      buf_puts(b, "(sp_sock_const(");
+      buf_puts(b, "sp_sock_const_defined(");
       if (st == TY_STRING) { buf_puts(b, "SP_STR_B("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
       else if (st == TY_SYMBOL) { buf_puts(b, "sp_sym_to_s("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
       else { buf_puts(b, "sp_poly_to_s("); emit_boxed(c, argv[0], b); buf_puts(b, ")"); }
-      buf_puts(b, ") >= 0)");
+      buf_puts(b, ")");
       return 1;
     }
     if (qm) {

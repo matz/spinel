@@ -1,3 +1,10 @@
 [true, true, true, false]
 [true, true, true, false]
 true
+"wrong constant name bad"
+"wrong constant name Not-a-name"
+"wrong constant name bad"
+"wrong constant name ::"
+"wrong constant name A::"
+"wrong constant name Not-a-name"
+[false, false]

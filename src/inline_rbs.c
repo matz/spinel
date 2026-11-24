@@ -40,10 +40,8 @@ static ir_held *g_held = NULL;
 static int g_nheld = 0;
 static int g_hold = 0;
 
-/* The file one run of the pass reads: under --load-model=graph each file of
- * the program by itself, with its own parse; under the inline model the
- * spliced program, whose lines the multi-file map takes back to the files
- * they came from. */
+/* The file one run of the pass reads: each file of the program by itself,
+ * with its own parse. */
 typedef struct {
     const char *path;
     int fid;               /* its id in the node table's file list */

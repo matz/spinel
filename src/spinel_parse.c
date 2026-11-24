@@ -111,11 +111,11 @@ typedef struct {
   pm_node_t *root;
 } SpSrcFile;
 
-/* --load-model=graph: the name a message gives file `path` (the whole
-   path the graph holds), a file of the program's own (a compiler's
-   library keeps the path it was found at), as the inline model names it:
-   from the current directory when the entry file is given relative to it
-   and the file is under it, else the path. A pointer into path. */
+/* The name a message gives file `path` (the whole path the graph holds),
+   a file of the program's own (a compiler's library keeps the path it was
+   found at): from the current directory when the entry file is given
+   relative to it and the file is under it, else the path. A pointer into
+   path. */
 static const char *sp_shown_path(const char *path, const char *entry) {
   char cwd[1024];
   size_t cl = entry && entry[0] != '/' && getcwd(cwd, sizeof cwd) ? strlen(cwd) : 0;
@@ -5610,7 +5610,7 @@ static int sp_load_target(SpLoadGraph *g, int from, int rel, const char *path, i
     if (how == SP_LOAD_NONE && sp_lib_is_native(lib_name)) how = SP_LOAD_NATIVE;
     else if (how == SP_LOAD_NONE && sp_require_tolerated(lib_name)) how = SP_LOAD_CORE;
     /* the features a require enables (strict require) and the ones it
-       names, as the inline model's plain pass records them */
+       names */
     if (how == SP_LOAD_FILE || how == SP_LOAD_NATIVE) sp_feature_mark(lib_name);
     if (how != SP_LOAD_NONE) sp_note_required_feature(lib_name);
   }
@@ -6491,10 +6491,10 @@ static void sp_req_paths(const SpReqCtx *x, const pm_node_t *arg, SpPaths *out) 
   for (int i = 0; i < ev.nloc; i++) free(ev.loc[i].name);
 }
 
-/* The literals a computed path joins, as the inline model reads a plain
-   require naming a file beside this one (sp_join_visit): one path for each
-   word of the `%w(...).each` the require stands in, or one path. Open when
-   the path is not built so, or joins no literal. */
+/* The literals a computed path joins, for a require naming a file beside
+   this one (sp_join_visit): one path for each word of the `%w(...).each`
+   the require stands in, or one path. Open when the path is not built so,
+   or joins no literal. */
 static void sp_req_beside(const SpReqCtx *x, const pm_node_t *arg, SpPaths *out) {
   const pm_node_list_t *words = NULL;
   SpShape shape = { 0, 0 };
@@ -6978,10 +6978,10 @@ static void sp_graph_scan_sites(SpLoadGraph *g, int f, const char *path, SpNames
    could not be read or parsed (reported). */
 static int sp_graph_read(SpLoadGraph *g, int f, const char *source_file, SpNames *facts) {
   const char *path = f ? g->file[f] : source_file;
-  /* (a library of the compiler's has what the inline model's splice of it
-     appends, by the tier the require that found the file gave it, and
-     beside the path the require found it at, as the splice looks: a
-     package file that is a symlink has its declarations beside the link) */
+  /* (a library of the compiler's has its declarations appended, by the
+     tier the require that found the file gave it, and beside the path the
+     require found it at: a package file that is a symlink has its
+     declarations beside the link) */
   char *text = sp_lib_text_appended(read_file(path), f ? g->found[f] : source_file, sp_load_tier(g, f));
   if (!text) { fprintf(stderr, "spinel_parse: cannot open '%s'\n", path); return 0; }
   SpGraphFile *r = sp_graph_rec(g, f);
@@ -7091,7 +7091,7 @@ static int sp_graph_flatten(SpLoadGraph *g, int f, const char *source_file) {
   /* the file in the table's file list, in graph order: flatten stamps a
      node's position from this parse, and a builtins/ root's nodes as
      builtin ones; a file is named as a message names it (sp_shown_path),
-     its #line directives too, as the inline model names it */
+     its #line directives too */
   g_flat_file = sp_intern_file(f ? (r->src.shown ? r->src.shown : g->file[f]) : source_file, f ? sp_load_tier(g, f) : SP_LIB_NONE);
   g_flat_builtin = (*sp_load_flags(g, f) & SP_FILE_BUILTIN) != 0;
   g_bi_base = -1;
@@ -7106,8 +7106,8 @@ static int sp_graph_flatten(SpLoadGraph *g, int f, const char *source_file) {
     return 0;
   }
   /* a `#<SPINEL_SOURCE>file:line` marker in the file pins the positions
-     after it, as the inline model's map of the spliced buffer does: the
-     file's own map for its parse, the file's own lines elsewhere */
+     after it: the file's own map for its parse, the file's own lines
+     elsewhere */
   int saved_map_n = sp_line_map_n;
   int *saved_lf = sp_line_file, *saved_lo = sp_line_orig;
   int *saved_df = sp_disp_file, *saved_dl = sp_disp_line;
@@ -7456,11 +7456,10 @@ static void sp_load_order_dump(const SpLoadGraph *g) {
   free(fs);
 }
 
-/* --load-model=graph: the names builtins/enumerable.rb and the scalar
-   containers' files define, which the analysis rewrites calls onto
-   (desugar_builtins, desugar_builtin_scalar_defs), read as the inline model
-   reads them (sp_splice_builtins), whether the program loads the files or
-   not. */
+/* The names builtins/enumerable.rb and the scalar containers' files
+   define, which the analysis rewrites calls onto (desugar_builtins,
+   desugar_builtin_scalar_defs), read whether the program loads the files
+   or not. */
 static void sp_graph_builtin_names(const char *lib_dir) {
   if (getenv("SPINEL_NO_BUILTINS")) return;
   char found[1024];

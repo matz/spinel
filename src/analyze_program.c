@@ -129,8 +129,8 @@ int prog_ordered_load(const Compiler *c, int id) {
 /* The file a require that is not a statement of a file's top level runs:
    the target of the LoadNode prog_settle_files placed at its site, else -1.
    The record enters it where it reaches the require, so that the file's
-   statements run in place, as the inline model splices them; the top-level
-   statement holding the require is the root's `load_stmt`. */
+   statements run in place; the top-level statement holding the require is
+   the root's `load_stmt`. */
 int prog_site_places(const Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   if (id < 0 || nt_kind(nt, id) != NK_LoadNode) return -1;
@@ -348,8 +348,7 @@ static void prog_sort_keyed(int *v, long long *key, int n) {
    id, as prog_order answers for two of them; a node that runs at no known
    point (one under no root, which a desugaring hung nowhere, or one of a
    file the load graph does not place) after all the others, by id, so the
-   order is a total one even where prog_order answers by ids or UNKNOWN.
-   Under the inline model, the node ids. */
+   order is a total one even where prog_order answers by ids or UNKNOWN. */
 void prog_sort(Compiler *c, int *v, int n, const int *node_of) {
   if (n < 2) return;
   long long *key = malloc(sizeof(long long) * (size_t)n);
@@ -867,9 +866,8 @@ void prog_refuse_loads(Compiler *c) {
      fold of a constant condition (RUBY_VERSION, the engine checks) leaves a
      `require` in the branch it decided dead under no root's tree, and a file
      only such requires name, or only the requires of a file so dropped, is
-     never loaded. The inline model splices a file at its require, so a dead
-     branch takes the file along; here the file's statements are taken out
-     of the tree, and nothing registers its classes, methods and constants
+     never loaded: the file's statements are taken out of the tree, and
+     nothing registers its classes, methods and constants
      (ruby_version_fold's `const_defined?`). A file named by an autoload has
      no LoadNode: it is refused (prog_refuse_loads) until its own step. One a
      computed require's closed set names is reached by that LoadNode
@@ -885,7 +883,7 @@ void prog_refuse_loads(Compiler *c) {
      a class body, an iterator's block, an assignment's value), is placed at
      that require: `load_by` the LoadNode, `load_stmt` the top-level
      statement holding it. The record enters it there, with the require's
-     may, as the inline model splices it. So is one whose other requires
+     may. So is one whose other requires
      are each a top-level `require` statement of the order that runs after
      the statement holding that one, which surely runs (ELAB_SITE_SURE):
      the file is loaded by then, and those requires load nothing (a file
@@ -1459,7 +1457,7 @@ static void prog_warn_missing(Compiler *c, const unsigned char *seen) {
     int r = prog_root_of(c, parent, id);
     const char *file = r >= 0 ? nt_str(nt, r, "file_path") : nt_file_path(nt, (int)nt_int(nt, id, "node_file", 0));
     /* --strict-require (spin build): a require no file answers is a
-       compile-time refusal, as the inline model's resolve makes it */
+       compile-time refusal */
     if (g_strict_require) {
       fprintf(stderr, "spinel: %s:%lld: cannot load such file -- %s (%s \"%s\")\n",
               file ? file : "-", nt_int(nt, id, "node_line", 0), nt_str(nt, id, "path"), nt_str(nt, id, "method"),

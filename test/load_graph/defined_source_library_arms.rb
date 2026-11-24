@@ -1,7 +1,7 @@
 # A library spinel provides from Ruby source (packages/erb) is a file of its
 # own under the graph load model. defined?(ERB::Escape) after its require
 # asks the library's own class, whose file runs ahead of the guard, so the
-# guard decides at compile time as it does under the inline model. The
+# guard decides at compile time. The
 # define_method arm is the only definition of escape_html when its guard
 # holds (the module has no def of the name), and a def arm answers the same
 # when the guard names a constant the source does not define (ERB::NoSuch).

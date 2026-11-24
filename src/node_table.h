@@ -79,9 +79,9 @@ typedef struct {
                           library file (nt_put_file_tier); 0 (SP_LIB_NONE) for
                           the program's own; nfile_tier its length */
   int nfile_tier;
-  /* Under --load-model=graph (#9898) each file the program loads is a root:
-     its ProgramNode, by graph id (0 is the entry, the table's root). None
-     under the inline model, whose one root is root_id (nt_root). */
+  /* Each file the program loads is a root (#9898): its ProgramNode, by
+     graph id (0 is the entry, the table's root). None on a table no parse
+     of a program made, whose one root is root_id (nt_root). */
   int *file_roots;
   int nfile_roots;
   /* Bumped whenever a node is added or a string field is rewritten, i.e. by

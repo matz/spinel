@@ -1,6 +1,6 @@
-# The text pass refuses this call; the
-# class-body macro form runs the macro at the call's point under the load
-# graph, as CRuby runs it.
+# The class-body macro form runs the macro
+# at the call's point, as CRuby runs it.
+
 module A
   module ClassMethods
     def constant(c) = const_set(c, public_send("a_#{c.to_s.downcase}"))

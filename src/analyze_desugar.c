@@ -6844,8 +6844,7 @@ static int engine_method_absent(Compiler *c, const char *cls, const char *m, int
 }
 
 /* Is node `id` inside guard `in` as the program runs it? In its subtree, or
-   (--load-model=graph) in a file every load of which stands inside `in`: the
-   inline model splices a file's text at its require, and a definition the
+   in a file every load of which stands inside `in`: a definition the
    guard's require brings is one the guard's own code makes (a chain of
    requires goes as deep as the loads do). A file also loaded from outside
    the guard, or from two arms, is inside none: its definitions may be there
@@ -18385,8 +18384,8 @@ int desugar_conditional_defs(Compiler *c) {
 }
 
 /* ---- builtins/: Enumerable written in Ruby (builtins/enumerable.rb) ----
-   The file is spliced ahead of a program that mentions one of its names
-   (spinel_parse.c, sp_splice_builtins). Its `module Enumerable` reopen would
+   The file is a root the parse loads for a program that mentions one of
+   its names (spinel_parse.c, sp_graph_boot). Its `module Enumerable` reopen would
    register a class of that name, which no builtin receiver dispatches
    through, and would bring the class machinery along for a program that
    never asks for it. So, before the scopes are built, each definition

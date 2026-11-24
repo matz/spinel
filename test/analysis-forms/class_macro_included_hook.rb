@@ -1,6 +1,6 @@
-# The text pass refuses this call; the
-# class-body macro form runs the macro at the call's point under the load
-# graph, as CRuby runs it.
+# The class-body macro form runs the macro
+# at the call's point, as CRuby runs it.
+
 module Setup
   def self.included(base) = base.instance_variable_set(:@kind, :box)
 end

@@ -472,6 +472,12 @@ spinel: 1 refusal, nothing written
 == test/reject/class_macro_called_at_run_time.rb [promote] rc=1
 spinel: test/reject/class_macro_called_at_run_time.rb:5: Module#define_method with a non-literal name is not supported; use a literal Symbol or String (see docs/limitations.md)
 spinel: 1 refusal, nothing written
+== test/reject/class_macro_guard_after.rb [default] rc=1
+spinel: test/reject/class_macro_guard_after.rb:9: Module#define_method with a non-literal name is not supported; use a literal Symbol or String (see docs/limitations.md)
+spinel: 1 refusal, nothing written
+== test/reject/class_macro_guard_after.rb [promote] rc=1
+spinel: test/reject/class_macro_guard_after.rb:9: Module#define_method with a non-literal name is not supported; use a literal Symbol or String (see docs/limitations.md)
+spinel: 1 refusal, nothing written
 == test/reject/class_method_def_in_block_never_run_call.rb [default] rc=1
 spinel: test/reject/class_method_def_in_block_never_run_call.rb:11: undefined method 'cm' for a Class: no class in the program defines a class method 'cm' (NoMethodError)
 spinel: 1 refusal, nothing written
@@ -1214,34 +1220,14 @@ spinel: test/reject/load_path_alias_from.rb:3: unsupported alias of `$LOAD_PATH`
 spinel: test/reject/load_path_assign.rb:3: unsupported assignment to `$LOAD_PATH`: it is a read-only variable (CRuby raises NameError); change its Array in place instead
 == test/reject/load_path_assign.rb [promote] rc=1
 spinel: test/reject/load_path_assign.rb:3: unsupported assignment to `$LOAD_PATH`: it is a read-only variable (CRuby raises NameError); change its Array in place instead
-== test/reject/macro_alias_in_aliased_namespace.rb [default] rc=0
-== test/reject/macro_alias_in_aliased_namespace.rb [promote] rc=0
-== test/reject/macro_alias_in_block.rb [default] rc=0
-== test/reject/macro_alias_in_block.rb [promote] rc=0
-== test/reject/macro_alias_user_builtins_dir.rb [default] rc=0
-== test/reject/macro_alias_user_builtins_dir.rb [promote] rc=0
-== test/reject/macro_argument_write.rb [default] rc=0
-== test/reject/macro_argument_write.rb [promote] rc=0
-== test/reject/macro_block_param_receiver.rb [default] rc=0
-== test/reject/macro_block_param_receiver.rb [promote] rc=0
 == test/reject/macro_block_write.rb [default] rc=1
 spinel: test/reject/macro_block_write.rb:7: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
 == test/reject/macro_block_write.rb [promote] rc=1
 spinel: test/reject/macro_block_write.rb:7: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
-== test/reject/macro_conditional_class_body.rb [default] rc=0
-== test/reject/macro_conditional_class_body.rb [promote] rc=0
-== test/reject/macro_conditional_state.rb [default] rc=0
-== test/reject/macro_conditional_state.rb [promote] rc=0
 == test/reject/macro_const_added_hook.rb [default] rc=1
 spinel: test/reject/macro_const_added_hook.rb:4: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
 == test/reject/macro_const_added_hook.rb [promote] rc=1
 spinel: test/reject/macro_const_added_hook.rb:4: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
-== test/reject/macro_const_alias_reopen.rb [default] rc=0
-== test/reject/macro_const_alias_reopen.rb [promote] rc=0
-== test/reject/macro_constant_receiver_write.rb [default] rc=0
-== test/reject/macro_constant_receiver_write.rb [promote] rc=0
-== test/reject/macro_empty_branch.rb [default] rc=0
-== test/reject/macro_empty_branch.rb [promote] rc=0
 == test/reject/macro_eval_string_write.rb [default] rc=1
 spinel: test/reject/macro_eval_string_write.rb:9: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
 == test/reject/macro_eval_string_write.rb [promote] rc=1
@@ -1262,10 +1248,6 @@ spinel: test/reject/macro_generated_call.rb:13: unsupported send with a runtime 
 spinel: test/reject/macro_generated_writer.rb:9: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
 == test/reject/macro_generated_writer.rb [promote] rc=1
 spinel: test/reject/macro_generated_writer.rb:9: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
-== test/reject/macro_guarded_write.rb [default] rc=0
-== test/reject/macro_guarded_write.rb [promote] rc=0
-== test/reject/macro_guarded_writer.rb [default] rc=0
-== test/reject/macro_guarded_writer.rb [promote] rc=0
 == test/reject/macro_hidden_alias.rb [default] rc=1
 spinel: test/reject/macro_hidden_alias.rb:5: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
 == test/reject/macro_hidden_alias.rb [promote] rc=1
@@ -1282,14 +1264,10 @@ spinel: 1 refusal, nothing written
 spinel: test/reject/macro_hook_send.rb:7: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
 == test/reject/macro_hook_send.rb [promote] rc=1
 spinel: test/reject/macro_hook_send.rb:7: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
-== test/reject/macro_included_hook.rb [default] rc=0
-== test/reject/macro_included_hook.rb [promote] rc=0
 == test/reject/macro_int_overflow.rb [default] rc=1
 spinel: test/reject/macro_int_overflow.rb:9: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
 == test/reject/macro_int_overflow.rb [promote] rc=1
 spinel: test/reject/macro_int_overflow.rb:9: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
-== test/reject/macro_ivar_read.rb [default] rc=0
-== test/reject/macro_ivar_read.rb [promote] rc=0
 == test/reject/macro_lambda_assign.rb [default] rc=1
 spinel: test/reject/macro_lambda_assign.rb:11: undefined method 'k' for a Class: no class in the program defines a class method 'k' (NoMethodError)
 spinel: 1 refusal, nothing written
@@ -1300,38 +1278,18 @@ spinel: 1 refusal, nothing written
 spinel: test/reject/macro_local_mutated.rb:8: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
 == test/reject/macro_local_mutated.rb [promote] rc=1
 spinel: test/reject/macro_local_mutated.rb:8: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
-== test/reject/macro_local_receiver.rb [default] rc=0
-== test/reject/macro_local_receiver.rb [promote] rc=0
-== test/reject/macro_long_elsif_state.rb [default] rc=0
-== test/reject/macro_long_elsif_state.rb [promote] rc=0
-== test/reject/macro_lowercase_heredoc.rb [default] rc=0
-== test/reject/macro_lowercase_heredoc.rb [promote] rc=0
 == test/reject/macro_mention_send.rb [default] rc=1
 spinel: test/reject/macro_mention_send.rb:9: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
 == test/reject/macro_mention_send.rb [promote] rc=1
 spinel: test/reject/macro_mention_send.rb:9: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
-== test/reject/macro_module_attr_writer.rb [default] rc=0
-== test/reject/macro_module_attr_writer.rb [promote] rc=0
-== test/reject/macro_multiline_literal.rb [default] rc=0
-== test/reject/macro_multiline_literal.rb [promote] rc=0
 == test/reject/macro_named_by_string.rb [default] rc=1
 spinel: test/reject/macro_named_by_string.rb:5: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
 == test/reject/macro_named_by_string.rb [promote] rc=1
 spinel: test/reject/macro_named_by_string.rb:5: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
-== test/reject/macro_nested_compound_reopen.rb [default] rc=0
-== test/reject/macro_nested_compound_reopen.rb [promote] rc=0
-== test/reject/macro_nested_join.rb [default] rc=0
-== test/reject/macro_nested_join.rb [promote] rc=0
-== test/reject/macro_non_ascii.rb [default] rc=0
-== test/reject/macro_non_ascii.rb [promote] rc=0
 == test/reject/macro_not_extended.rb [default] rc=1
 spinel: test/reject/macro_not_extended.rb:5: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
 == test/reject/macro_not_extended.rb [promote] rc=1
 spinel: test/reject/macro_not_extended.rb:5: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
-== test/reject/macro_object_reopen.rb [default] rc=0
-== test/reject/macro_object_reopen.rb [promote] rc=0
-== test/reject/macro_own_class_method.rb [default] rc=0
-== test/reject/macro_own_class_method.rb [promote] rc=0
 == test/reject/macro_prim_override.rb [default] rc=1
 spinel: test/reject/macro_prim_override.rb:5: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
 == test/reject/macro_prim_override.rb [promote] rc=1
@@ -1342,22 +1300,14 @@ spinel: 1 refusal, nothing written
 == test/reject/macro_private_before.rb [promote] rc=1
 spinel: test/reject/macro_private_before.rb:5: unsupported call: node N (CallNode `module_eval`) recv=-/ty-1 argc=1 arg0ty6
 spinel: 1 refusal, nothing written
-== test/reject/macro_receiver_write.rb [default] rc=0
-== test/reject/macro_receiver_write.rb [promote] rc=0
-== test/reject/macro_refused_inner_write.rb [default] rc=0
-== test/reject/macro_refused_inner_write.rb [promote] rc=0
 == test/reject/macro_residual_call_keeps_macro.rb [default] rc=1
 spinel: test/reject/macro_residual_call_keeps_macro.rb:12: Module#define_method in a method body is supported only for a method the class does not answer yet, where the load record does not order it against the calls: it is defined from the start, not when that method runs (see docs/limitations.md)
 == test/reject/macro_residual_call_keeps_macro.rb [promote] rc=1
 spinel: test/reject/macro_residual_call_keeps_macro.rb:12: Module#define_method in a method body is supported only for a method the class does not answer yet, where the load record does not order it against the calls: it is defined from the start, not when that method runs (see docs/limitations.md)
-== test/reject/macro_residual_value.rb [default] rc=0
-== test/reject/macro_residual_value.rb [promote] rc=0
 == test/reject/macro_runtime_name_send.rb [default] rc=1
 spinel: test/reject/macro_runtime_name_send.rb:9: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
 == test/reject/macro_runtime_name_send.rb [promote] rc=1
 spinel: test/reject/macro_runtime_name_send.rb:9: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
-== test/reject/macro_self_def_write.rb [default] rc=0
-== test/reject/macro_self_def_write.rb [promote] rc=0
 == test/reject/macro_send_ivar_set.rb [default] rc=1
 spinel: test/reject/macro_send_ivar_set.rb:9: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
 == test/reject/macro_send_ivar_set.rb [promote] rc=1
@@ -1370,8 +1320,6 @@ spinel: test/reject/macro_send_write.rb:7: unsupported send with a runtime metho
 spinel: test/reject/macro_setter_send.rb:5: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=2 arg0ty6
 == test/reject/macro_setter_send.rb [promote] rc=1
 spinel: test/reject/macro_setter_send.rb:5: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=2 arg0ty6
-== test/reject/macro_source_line.rb [default] rc=0
-== test/reject/macro_source_line.rb [promote] rc=0
 == test/reject/macro_super_override_keeps_macro.rb [default] rc=1
 spinel: test/reject/macro_super_override_keeps_macro.rb:7: Module#define_method with a non-literal name is not supported; use a literal Symbol or String (see docs/limitations.md)
 spinel: 1 refusal, nothing written
@@ -1396,10 +1344,6 @@ spinel: 1 refusal, nothing written
 == test/reject/macro_text_private.rb [promote] rc=1
 spinel: test/reject/macro_text_private.rb:4: unsupported call: node N (CallNode `module_eval`) recv=-/ty-1 argc=1 arg0ty6
 spinel: 1 refusal, nothing written
-== test/reject/macro_text_source_line.rb [default] rc=0
-== test/reject/macro_text_source_line.rb [promote] rc=0
-== test/reject/macro_two_modules.rb [default] rc=0
-== test/reject/macro_two_modules.rb [promote] rc=0
 == test/reject/main_chain_conditional_include.rb [default] rc=1
 spinel: test/reject/main_chain_conditional_include.rb:8: a call of a name that a mixin of main or Object defines, where that mixin runs under a condition or from a method that may not have run: CRuby finds its method only once the mixin has run
 == test/reject/main_chain_conditional_include.rb [promote] rc=1
@@ -2098,8 +2042,6 @@ spinel: 1 refusal, nothing written
 spinel: test/reject/superclass_mismatch.rb:13: superclass mismatch for class Thing (B here, A at line 10)
 == test/reject/superclass_mismatch.rb [promote] rc=1
 spinel: test/reject/superclass_mismatch.rb:13: superclass mismatch for class Thing (B here, A at line 10)
-== test/reject/system_env_options_hash.rb [default] rc=0
-== test/reject/system_env_options_hash.rb [promote] rc=0
 == test/reject/systemcallerror_subclass_errno_const.rb [default] rc=1
 spinel: test/reject/systemcallerror_subclass_errno_const.rb:5: an Errno constant defined in a subclass of SystemCallError (its errno is read from the Errno class above it)
 == test/reject/systemcallerror_subclass_errno_const.rb [promote] rc=1

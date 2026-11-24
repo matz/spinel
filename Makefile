@@ -2463,13 +2463,6 @@ string-minus-reject-test: $(SPINEL)
 	done; rm -rf "$$tmp"; \
 	[ $$ok = 1 ] && echo "string-minus-reject-test: pass" || exit 1
 
-# Two of its groups are refusals of the inline load model alone, and are
-# compiled under --load-model=inline: a test/reject/macro_*.rb that
-# test/analysis-forms/ holds as class_<name> (the text pass refuses the call;
-# the analysis runs the macro where the call stands, and analysis-forms-test
-# runs that program), and system_env_options_hash (the text scan sees no
-# keyword in `**opts`; the tree does, and test/system_options_spread.rb runs
-# it).
 reject-test: string-minus-reject-test $(SPINEL)
 	@ok=1; tmp=$$(mktemp -d /tmp/spinel-reject.XXXXXX); \
 	t=test/reject/string_split_local_each_rescue_modifier_retry.rb; \
@@ -2650,11 +2643,6 @@ reject-test: string-minus-reject-test $(SPINEL)
 	  else grep -Eq "is not a (class|module)" "$$tmp/$$t.out" || \
 	    { echo "reject-test: FAIL (#4318: $$t rejected without saying why)"; sed -n 1,3p "$$tmp/$$t.out"; ok=0; }; fi; \
 	done; \
-	t=test/reject/system_env_options_hash.rb; \
-	if $(SPINEL) --load-model=inline "$$t" -c --no-line-map -o "$$tmp/se.c" >"$$tmp/se.out" 2>&1; then \
-	  echo "reject-test: FAIL (system with an environment Hash and an options Hash compiled)"; ok=0; \
-	else grep -q "system with an options Hash" "$$tmp/se.out" || \
-	  { echo "reject-test: FAIL (system with an environment and an options Hash refused without saying why)"; sed -n 1,5p "$$tmp/se.out"; ok=0; }; fi; \
 	t=test/reject/typed_array_kept_by_struct_into_boxed_param_store.rb; \
 	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/tb.c" >"$$tmp/tb.out" 2>&1; then \
 	  echo "reject-test: FAIL (a typed array held by the caller, stored into through a boxed parameter, compiled)"; ok=0; \
@@ -2677,8 +2665,7 @@ reject-test: string-minus-reject-test $(SPINEL)
 	  { echo "reject-test: FAIL ($$t: an alias of \$$LOAD_PATH refused without saying why)"; sed -n 1,5p "$$tmp/la.out"; ok=0; }; fi; \
 	done; \
 	for t in test/reject/macro_*.rb; do \
-	fl=; [ -f "test/analysis-forms/class_$$(basename "$$t")" ] && fl=--load-model=inline; \
-	if $(SPINEL) $$fl "$$t" -c --no-line-map -o "$$tmp/mc.c" >"$$tmp/mc.out" 2>&1; then \
+	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/mc.c" >"$$tmp/mc.out" 2>&1; then \
 	  echo "reject-test: FAIL ($$t: a macro over state or a name it cannot compute was expanded)"; ok=0; \
 	else pat="unsupported send with a runtime method name|unsupported .*CallNode .(module_eval|class_eval|const_set).|no class in the program defines"; \
 	  grep -q '^# spinel: reject-define-method-name$$' "$$t" && pat="define_method with a non-literal name|define_method in a method body is supported only"; \

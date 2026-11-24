@@ -1,5 +1,4 @@
-# The text pass refuses this call
-# (test/reject/macro_alias_in_aliased_namespace.rb); the class-body macro
+# The text pass refuses this call; the class-body macro
 # form runs the macro at the call's point under the load graph, as CRuby
 # runs it.
 module Consts

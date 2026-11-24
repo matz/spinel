@@ -1,5 +1,5 @@
 # A module_eval template holding a string over two lines: the text pass
-# refuses the call (test/reject/macro_multiline_literal.rb); the form
+# refuses the call; the form
 # parses the text the macro computes, the string as written.
 module Consts
   def greeting(name)

@@ -1,5 +1,4 @@
-# The text pass refuses this call
-# (test/reject/macro_alias_user_builtins_dir.rb); the class-body macro form
+# The text pass refuses this call; the class-body macro form
 # runs the macro at the call's point under the load graph, as CRuby runs it.
 require_relative "macro_alias_user_builtins_dir/builtins/names"
 module Lib

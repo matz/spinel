@@ -1,0 +1,406 @@
+["héllo", "l", ""]
+[["l", "l", nil], "l", nil, "l", "héllo", "", "l"]
+["", "", "héllol"]
+[nil, nil, nil, nil, nil, nil, nil]
+["héllol", "", ""]
+[["", ""], "", nil, "", "héllol", "", ""]
+["héllo", "l", ""]
+[["stale", "stale"], "stale", nil, "stale", "", "", "stale"]
+ArgumentError
+TypeError
+TypeError
+TypeError
+TypeError
+TypeError
+TypeError
+TypeError
+ArgumentError
+ArgumentError
+3
+[["stale", "stale"], "stale", "stale", "", ""]
+6
+[["stale", "stale"], "stale", "stale", "", ""]
+nil
+[["stale", "stale"], "stale", "stale", "", ""]
+nil
+[["stale", "stale"], "stale", "stale", "", ""]
+Encoding::CompatibilityError
+["stale", "stale"]
+Encoding::CompatibilityError
+["stale", "stale"]
+3
+[["l", "l"], "l", "l", "hé", "lol"]
+6
+[["l", "l"], "l", "l", "héllo", ""]
+nil
+[nil, nil, nil, nil, nil]
+nil
+[nil, nil, nil, nil, nil]
+IndexError
+["stale", "stale"]
+IndexError
+["stale", "stale"]
+IndexError
+["stale", "stale"]
+IndexError
+["stale", "stale"]
+3
+[["stale", "stale"], "stale", "stale", "", ""]
+3
+[["stale", "stale"], "stale", "stale", "", ""]
+3
+[["l"], nil, "l", "hé", "lol"]
+3
+[["l"], nil, "l", "hé", "lol"]
+nil
+[nil, nil, nil, nil, nil]
+nil
+[nil, nil, nil, nil, nil]
+nil
+[nil, nil, nil, nil, nil]
+6
+[["l"], nil, "l", "héllo", ""]
+7
+[["stale", "stale"], "stale", "stale", "", ""]
+7
+[["stale", "stale"], "stale", "stale", "", ""]
+ArgumentError
+["stale", "stale"]
+ArgumentError
+["stale", "stale"]
+TypeError
+["stale", "stale"]
+TypeError
+["stale", "stale"]
+TypeError
+["stale", "stale"]
+TypeError
+["stale", "stale"]
+TypeError
+["stale", "stale"]
+TypeError
+["stale", "stale"]
+TypeError
+["stale", "stale"]
+TypeError
+["stale", "stale"]
+TypeError
+["stale", "stale"]
+TypeError
+["stale", "stale"]
+TypeError
+["stale", "stale"]
+TypeError
+["stale", "stale"]
+TypeError
+["stale", "stale"]
+TypeError
+["stale", "stale"]
+TypeError
+["stale", "stale"]
+TypeError
+["stale", "stale"]
+3
+[["stale", "stale"], "stale", "stale", "", ""]
+nil
+[["stale", "stale"], "stale", "stale", "", ""]
+RangeError
+["stale", "stale"]
+RangeError
+["stale", "stale"]
+ArgumentError
+["stale", "stale"]
+ArgumentError
+["stale", "stale"]
+:user
+[["stale", "stale"], "stale", nil, "stale", "", "", "stale"]
+:user
+[["stale", "stale"], "stale", nil, "stale", "", "", "stale"]
+:user
+[["stale", "stale"], "stale", nil, "stale", "", "", "stale"]
+:user
+[["stale", "stale"], "stale", nil, "stale", "", "", "stale"]
+:user
+[["stale", "stale"], "stale", nil, "stale", "", "", "stale"]
+:user
+[["stale", "stale"], "stale", nil, "stale", "", "", "stale"]
+:user
+[["stale", "stale"], "stale", nil, "stale", "", "", "stale"]
+:user
+[["stale", "stale"], "stale", nil, "stale", "", "", "stale"]
+:user
+[["stale", "stale"], "stale", nil, "stale", "", "", "stale"]
+:user
+[["stale", "stale"], "stale", nil, "stale", "", "", "stale"]
+:user
+[["stale", "stale"], "stale", nil, "stale", "", "", "stale"]
+:user
+[["stale", "stale"], "stale", nil, "stale", "", "", "stale"]
+:user
+[["stale", "stale"], "stale", nil, "stale", "", "", "stale"]
+:user
+[["stale", "stale"], "stale", nil, "stale", "", "", "stale"]
+:user
+[["stale", "stale"], "stale", "stale", "", ""]
+:user
+[["stale", "stale"], "stale", "stale", "", ""]
+:user
+[["stale", "stale"], "stale", "stale", "", ""]
+:user
+[["stale", "stale"], "stale", "stale", "", ""]
+:user
+[["stale", "stale"], "stale", "stale", "", ""]
+:user
+[["stale", "stale"], "stale", "stale", "", ""]
+:user
+[["stale", "stale"], "stale", "stale", "", ""]
+:user
+[["stale", "stale"], "stale", "stale", "", ""]
+:user
+[["stale", "stale"], "stale", "stale", "", ""]
+:user
+[["stale", "stale"], "stale", "stale", "", ""]
+:user
+[["stale", "stale"], "stale", "stale", "", ""]
+:user
+[["stale", "stale"], "stale", "stale", "", ""]
+:user
+[["stale", "stale"], "stale", "stale", "", ""]
+:user
+[["stale", "stale"], "stale", "stale", "", ""]
+:user
+[["stale", "stale"], "stale", "stale", "", ""]
+:user
+[["stale", "stale"], "stale", "stale", "", ""]
+:user
+[["stale", "stale"], "stale", "stale", "", ""]
+:user
+[["stale", "stale"], "stale", "stale", "", ""]
+:user
+[["stale", "stale"], "stale", "stale", "", ""]
+:user
+[["stale", "stale"], "stale", "stale", "", ""]
+:user
+[["stale", "stale"], "stale", "stale", "", ""]
+:user
+[["stale", "stale"], "stale", "stale", "", ""]
+:user
+[["stale", "stale"], "stale", "stale", "", ""]
+:user
+[["stale", "stale"], "stale", "stale", "", ""]
+:user
+[["stale", "stale"], "stale", "stale", "", ""]
+:user
+[["stale", "stale"], "stale", "stale", "", ""]
+:user
+[["stale", "stale"], "stale", "stale", "", ""]
+:user
+[["stale", "stale"], "stale", "stale", "", ""]
+:user
+[["stale", "stale"], "stale", "stale", "", ""]
+:user
+[["stale", "stale"], "stale", "stale", "", ""]
+:user
+[["stale", "stale"], "stale", "stale", "", ""]
+:user
+[["stale", "stale"], "stale", "stale", "", ""]
+:user
+[["stale", "stale"], "stale", "stale", "", ""]
+:user
+[["stale", "stale"], "stale", "stale", "", ""]
+:user
+[["stale", "stale"], "stale", "stale", "", ""]
+:user
+[["stale", "stale"], "stale", "stale", "", ""]
+:user
+[["stale", "stale"], "stale", "stale", "", ""]
+:user
+[["stale", "stale"], "stale", "stale", "", ""]
+:user
+[["stale", "stale"], "stale", "stale", "", ""]
+:user
+[["stale", "stale"], "stale", "stale", "", ""]
+:user
+[["stale", "stale"], "stale", "stale", "", ""]
+:user
+[["stale", "stale"], "stale", "stale", "", ""]
+:user
+[["stale", "stale"], "stale", "stale", "", ""]
+:user
+[["stale", "stale"], "stale", "stale", "", ""]
+:user
+[["stale", "stale"], "stale", "stale", "", ""]
+:user
+[["stale", "stale"], "stale", "stale", "", ""]
+:user
+[["stale", "stale"], "stale", "stale", "", ""]
+:user
+[["stale", "stale"], "stale", "stale", "", ""]
+NoMethodError
+NoMethodError
+NoMethodError
+NoMethodError
+NoMethodError
+NoMethodError
+NoMethodError
+NoMethodError
+NoMethodError
+NoMethodError
+NoMethodError
+NoMethodError
+NoMethodError
+NoMethodError
+NoMethodError
+["stale", "stale"]
+NoMethodError
+["stale", "stale"]
+NoMethodError
+["stale", "stale"]
+NoMethodError
+["stale", "stale"]
+NoMethodError
+["stale", "stale"]
+NoMethodError
+["stale", "stale"]
+NoMethodError
+["stale", "stale"]
+NoMethodError
+["stale", "stale"]
+NoMethodError
+["stale", "stale"]
+NoMethodError
+["stale", "stale"]
+NoMethodError
+["stale", "stale"]
+NoMethodError
+["stale", "stale"]
+NoMethodError
+["stale", "stale"]
+NoMethodError
+["stale", "stale"]
+NoMethodError
+["stale", "stale"]
+NoMethodError
+["stale", "stale"]
+NoMethodError
+["stale", "stale"]
+NoMethodError
+["stale", "stale"]
+NoMethodError
+["stale", "stale"]
+NoMethodError
+["stale", "stale"]
+NoMethodError
+["stale", "stale"]
+NoMethodError
+["stale", "stale"]
+NoMethodError
+["stale", "stale"]
+NoMethodError
+["stale", "stale"]
+NoMethodError
+["stale", "stale"]
+NoMethodError
+["stale", "stale"]
+NoMethodError
+["stale", "stale"]
+NoMethodError
+["stale", "stale"]
+NoMethodError
+["stale", "stale"]
+NoMethodError
+["stale", "stale"]
+NoMethodError
+["stale", "stale"]
+NoMethodError
+["stale", "stale"]
+NoMethodError
+["stale", "stale"]
+NoMethodError
+["stale", "stale"]
+NoMethodError
+["stale", "stale"]
+NoMethodError
+["stale", "stale"]
+NoMethodError
+["stale", "stale"]
+NoMethodError
+["stale", "stale"]
+NoMethodError
+["stale", "stale"]
+NoMethodError
+["stale", "stale"]
+NoMethodError
+["stale", "stale"]
+NoMethodError
+["stale", "stale"]
+NoMethodError
+["stale", "stale"]
+NoMethodError
+["stale", "stale"]
+NoMethodError
+["stale", "stale"]
+NoMethodError
+["stale", "stale"]
+NoMethodError
+["stale", "stale"]
+NoMethodError
+["stale", "stale"]
+[1, 3]
+[1, 3]
+[nil, nil]
+IndexError
+IndexError
+[1, 3]
+[nil, nil]
+IndexError
+ArgumentError
+TypeError
+[1, 3]
+TypeError
+TypeError
+TypeError
+RangeError
+ArgumentError
+ArgumentError
+:user
+:user
+:user
+:user
+:user
+:user
+:user
+:user
+:user
+:user
+:user
+:user
+:user
+:user
+:user
+:user
+:user
+NoMethodError
+NoMethodError
+NoMethodError
+NoMethodError
+NoMethodError
+NoMethodError
+NoMethodError
+NoMethodError
+NoMethodError
+NoMethodError
+NoMethodError
+NoMethodError
+NoMethodError
+NoMethodError
+NoMethodError
+NoMethodError
+NoMethodError
+IndexError
+NoMethodError
+IndexError
+["hél", "l", "o"]
+[["l", "l"], "l", "l"]
+NoMethodError
+NoMethodError

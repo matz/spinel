@@ -2287,6 +2287,13 @@ sp_oint sp_MatchData_byteend_poly(sp_MatchData *m, sp_RbVal k) {
   return sp_MatchData_byteend(m, sp_poly_arg_int_chk(k));
 }
 
+sp_IntArray *sp_MatchData_byteoffset_poly(sp_MatchData *m, sp_RbVal k) {
+  SP_GC_ROOT(m); SP_GC_ROOT_RBVAL(k);
+  if (k.tag == SP_TAG_SYM) return sp_MatchData_byteoffset_name(m, sp_sym_to_s((sp_sym)k.v.i));
+  if (sp_rbval_is_string(k)) return sp_MatchData_byteoffset_name(m, sp_rbval_string_bytes(k));
+  return sp_MatchData_byteoffset(m, sp_poly_arg_int_chk(k));
+}
+
 const char *sp_MatchData_match_poly(sp_MatchData *m, sp_RbVal k) {
   SP_GC_ROOT(m); SP_GC_ROOT_RBVAL(k);
   if (k.tag == SP_TAG_SYM) return sp_MatchData_aref_name(m, sp_sym_to_s((sp_sym)k.v.i));

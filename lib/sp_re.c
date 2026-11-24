@@ -496,17 +496,19 @@ sp_StrArray *sp_re_rpartition(mrb_regexp_pattern *pat, const char *str) {
   sp_re_check_subject(str);
   SP_GC_ROOT_STR(str);
   int64_t slen = (int64_t)sp_str_byte_len(str);
-  int caps[2], at;
+  int caps[64], lastcaps[64], lastn = 0, at;
   int64_t pos = 0;
   sp_int ms = -1, me = -1;
   while (pos <= slen) {
-    int n = re_exec_attempt(pat, str, slen, pos, caps, 2, sp_str_is_binary(str), &at);
+    int n = re_exec_attempt(pat, str, slen, pos, caps, 64, sp_str_is_binary(str), &at);
     if (n <= 0) break;
     ms = caps[0]; me = caps[1];
+    if (sp_re_track_last) { lastn = n > 64 ? 64 : n; memcpy(lastcaps, caps, sizeof(int) * (size_t)lastn); }
     /* rpartition keys on the rightmost match START (MRI reverse search),
        so step one past this start to look for a later-starting match. */
     pos = at + 1;
   }
+  if (sp_re_track_last) sp_re_set_last_match(pat, str, lastcaps, lastn);
   sp_StrArray *r = sp_StrArray_new();
   SP_GC_ROOT(r);
   if (ms < 0) {
@@ -1064,34 +1066,41 @@ sp_RbVal sp_re_index_poly(mrb_regexp_pattern *pat, const char *str) {SP_GC_ROOT_
 /* String#byteindex(regexp[, start]): first match at or after BYTE offset
    `start`, answered as a byte offset (nil on miss). */
 sp_oint sp_re_byteindex_opt(mrb_regexp_pattern *pat, const char *str, sp_int start) {
+  SP_GC_ROOT_STR(str);
   sp_re_check_subject(str);
   if (!str) return sp_oint_nil();
   sp_int bl = (sp_int)sp_str_byte_len(str);
   if (start < 0) start += bl;
-  if (start < 0 || start > bl) return sp_oint_nil();
+  if (start < 0 || start > bl) { if (sp_re_track_last) sp_re_clear_last_match(); return sp_oint_nil(); }
   sp_str_byte_pos_check(str, bl, start);
   int caps[64];
   int n = spinel_re_exec(pat, str, (int64_t)bl, start, caps, 64, sp_str_is_binary(str));
+  if (sp_re_track_last) sp_re_set_last_match(pat, str, caps, n);
   if (n <= 0 || caps[0] < 0) return sp_oint_nil();
   return sp_oint_of((sp_int)caps[0]);
 }
 /* String#byterindex(regexp[, start]): last match starting at or before BYTE
    offset `start`, answered as a byte offset (nil on miss). */
 sp_oint sp_re_byterindex_opt(mrb_regexp_pattern *pat, const char *str, sp_int start) {
+  SP_GC_ROOT_STR(str);
   sp_re_check_subject(str);
   if (!str) return sp_oint_nil();
   sp_int bl = (sp_int)sp_str_byte_len(str);
   if (start < 0) start += bl;
-  if (start < 0) return sp_oint_nil();
+  if (start < 0) { if (sp_re_track_last) sp_re_clear_last_match(); return sp_oint_nil(); }
   if (start > bl) start = bl;
   sp_str_byte_pos_check(str, bl, start);
   /* the match STARTING latest wins (a match at 3 beats a longer one at 2),
      so probe each start position from `start` downward */
-  int caps[2], at;
+  int caps[64], at;
   for (sp_int p = start; p >= 0; p--) {
-    int n = re_exec_attempt(pat, str, (int64_t)bl, p, caps, 2, sp_str_is_binary(str), &at);
-    if (n > 0 && at == (int)p) return sp_oint_of(caps[0]);
+    int n = re_exec_attempt(pat, str, (int64_t)bl, p, caps, 64, sp_str_is_binary(str), &at);
+    if (n > 0 && at == (int)p) {
+      if (sp_re_track_last) sp_re_set_last_match(pat, str, caps, n);
+      return sp_oint_of(caps[0]);
+    }
   }
+  if (sp_re_track_last) sp_re_clear_last_match();
   return sp_oint_nil();
 }
 sp_oint sp_re_index_from_opt(mrb_regexp_pattern *pat, const char *str, sp_int start) {SP_GC_ROOT_STR(str);

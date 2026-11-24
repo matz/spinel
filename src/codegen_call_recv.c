@@ -9006,6 +9006,33 @@ static int str_arms_slice_encode(Compiler *c, int id, Buf *b, const char *name, 
   return 1;
 }
 
+/* Both byte searches accept a literal or runtime Regexp as well as a
+   String. The poly-pattern view selects the same arms for a boxed needle. */
+static int str_arms_byte_search(Compiler *c, Buf *b, const char *name, int argc, const int *argv, const char *r) {
+  int reverse = sp_streq(name, "byterindex");
+  if ((!reverse && !sp_streq(name, "byteindex")) || (argc != 1 && argc != 2)) return 0;
+  int lit = re_lit_index(c, argv[0]);
+  if (lit >= 0 || comp_ntype(c, argv[0]) == TY_REGEX) {
+    int ts = ++g_tmp;
+    buf_printf(b, "({ const char *_t%d = %s; SP_GC_ROOT_STR(_t%d); sp_re_%s_opt(", ts, r, ts, name);
+    if (lit >= 0) buf_printf(b, "sp_re_pat_%d", lit);
+    else emit_expr(c, argv[0], b);
+    buf_printf(b, ", _t%d, ", ts);
+    if (argc == 2) emit_int_expr(c, argv[1], b);
+    else if (reverse) buf_printf(b, "(sp_int)sp_str_byte_len(_t%d)", ts);
+    else buf_puts(b, "0");
+    buf_puts(b, "); })");
+  }
+  else if (str_needle_p(c, argv[0])) {
+    buf_printf(b, "sp_str_%s%s(%s, ", name, argc == 2 ? "_from" : "", r);
+    emit_str_expr(c, argv[0], b);
+    if (argc == 2) { buf_puts(b, ", "); emit_int_expr(c, argv[1], b); }
+    buf_puts(b, ")");
+  }
+  else return 0;
+  return 1;
+}
+
 /* A String receiver's length, case mapping (upcase, downcase, capitalize,
    swapcase), chomp, dup / clone, and its searches: start_with?, index /
    rindex, byteindex / byterindex, partition / rpartition, scrub
@@ -9238,39 +9265,7 @@ static int str_arms_case_search(Compiler *c, Buf *b, const NodeTable *nt, const 
     emit_str_expr(c, argv[0], b); buf_puts(b, ", ");
     emit_int_expr(c, argv[1], b); buf_puts(b, ")");
   }
-  /* byteindex/byterindex over a String needle: BYTE-offset search (result +
-     start are byte offsets). The runtime helpers answer an sp_oint. A Regexp
-     needle is a separate feature -- not handled here,
-     so it falls through to the unsupported-call reject. */
-  else if (sp_streq(name, "byteindex") && (argc == 1 || argc == 2) &&
-           re_lit_index(c, argv[0]) >= 0) {
-    buf_printf(b, "sp_re_byteindex_opt(sp_re_pat_%d, %s, ", re_lit_index(c, argv[0]), r);
-    if (argc == 2) emit_int_expr(c, argv[1], b); else buf_puts(b, "0");
-    buf_puts(b, ")");
-  }
-  else if (sp_streq(name, "byterindex") && (argc == 1 || argc == 2) &&
-           re_lit_index(c, argv[0]) >= 0) {
-    int tsr = ++g_tmp;
-    buf_printf(b, "({ const char *_t%d = %s; sp_re_byterindex_opt(sp_re_pat_%d, _t%d, ",
-               tsr, r, re_lit_index(c, argv[0]), tsr);
-    if (argc == 2) emit_int_expr(c, argv[1], b);
-    else buf_printf(b, "(sp_int)sp_str_byte_len(_t%d)", tsr);
-    buf_puts(b, "); })");
-  }
-  else if (sp_streq(name, "byteindex") && argc == 1 && str_needle_p(c, argv[0])) {
-    buf_printf(b, "sp_str_byteindex(%s, ", r); emit_str_expr(c, argv[0], b); buf_puts(b, ")");
-  }
-  else if (sp_streq(name, "byteindex") && argc == 2 && str_needle_p(c, argv[0])) {
-    buf_printf(b, "sp_str_byteindex_from(%s, ", r); emit_str_expr(c, argv[0], b);
-    buf_puts(b, ", "); emit_int_expr(c, argv[1], b); buf_puts(b, ")");
-  }
-  else if (sp_streq(name, "byterindex") && argc == 1 && str_needle_p(c, argv[0])) {
-    buf_printf(b, "sp_str_byterindex(%s, ", r); emit_str_expr(c, argv[0], b); buf_puts(b, ")");
-  }
-  else if (sp_streq(name, "byterindex") && argc == 2 && str_needle_p(c, argv[0])) {
-    buf_printf(b, "sp_str_byterindex_from(%s, ", r); emit_str_expr(c, argv[0], b);
-    buf_puts(b, ", "); emit_int_expr(c, argv[1], b); buf_puts(b, ")");
-  }
+  else if (str_arms_byte_search(c, b, name, argc, argv, r)) ;
   else if ((is_partition_family(name)) && argc == 1 &&
            re_lit_index(c, argv[0]) < 0 && comp_ntype(c, argv[0]) != TY_REGEX) {
     buf_printf(b, "sp_str_%s(%s, ", name, r); emit_str_expr(c, argv[0], b); buf_puts(b, ")");
@@ -10276,7 +10271,7 @@ static int nt_is_literal_arg(const NodeTable *nt, int n) {
                k == NK_NilNode);
 }
 static int str_poly_pattern_name(const char *name, int argc) {
-  if (sp_streq(name, "split")) return argc == 1 || argc == 2;
+  if (sp_streq(name, "split") || sp_streq(name, "byteindex") || sp_streq(name, "byterindex")) return argc == 1 || argc == 2;
   if (is_slice_alias(name)) return argc == 1 || argc == 2;
   return argc == 1 && (is_partition_family(name) || sp_streq(name, "start_with?"));
 }

@@ -64,3 +64,11 @@ S = Struct.new(:v)
 s = S.new([+"s"]); y1(s.v) { |x| x << 1 } if ARGV.size > 5; p s.v
 s = S.new([+"s"]); y1(s.v) { |x| x << 17 }; p s.v
 s = S.new([+"s"]); m(s.v); p s
+
+# an Array an attr_accessor holds, set from outside the class: also where
+# the store's call never runs, and through a method's value
+class K9; attr_accessor :v; end
+def kv(o) = o.v
+k = K9.new; k.v = [+"s"]; y1(k.v) { |x| x << 1 } if ARGV.size > 5; p k.v
+k = K9.new; k.v = [+"s"]; y1(k.v) { |x| x << 18 }; p k.v
+k = K9.new; k.v = [+"s"]; m(kv(k)); p k.v

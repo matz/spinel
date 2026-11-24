@@ -2207,26 +2207,45 @@ static TyRef named_array_slot(Compiler *c, int recv) {
    resets and re-derives each round; and for an ivar its class and index. */
 typedef struct { TyRef slot; unsigned char local, reader; int cid, iv; } AliasSide;
 
-/* May an attribute's ivar `ivn` of class `cls` be set other than by the
-   class's own writes: its writer is called (`b.items = v`, a Struct
-   member's setter), or any send or instance_variable_set may. */
-static int reader_ivar_set_outside(Compiler *c, int cls, const char *ivn) {
+/* The calls of the writer of attribute ivar `ivn` of class `cls` (`b.items
+   = v`, a Struct member's setter) whose receiver may be an object of the
+   class or of one sharing its slot (a boxed or unknown one may), each
+   handed to fn until one answers nonzero: that answer; -1 where a send
+   or instance_variable_set may set it too; 0 after the last. 0 when the
+   class has no writer. */
+typedef int (*AttrWriterCallFn)(Compiler *c, int call, void *ctx);
+static int attr_writer_calls(Compiler *c, int cls, const char *ivn, AttrWriterCallFn fn, void *ctx) {
   static const char *const dyn[] = { "send", "public_send", "__send__", "instance_variable_set", NULL };
   if (!call_answers(c, -1, cls, ivn + 1, CT_WRITER, NULL)) return 0;
   char setter[300];
   snprintf(setter, sizeof setter, "%s=", ivn + 1);
-  /* a call of the writer's name whose receiver may be an object of the
-     class or of one sharing its slot (a boxed or unknown one may) */
   for (int k = an_calls_named_first(c, setter); k >= 0; k = an_calls_named_next(k)) {
     int r = nt_ref(c->nt, k, "receiver");
     Scope *ks = comp_scope_of(c, k);
     TyKind rt = r >= 0 ? infer_type(c, r) : TY_UNKNOWN;
     int rc = r < 0 ? (ks ? ks->class_id : -1) : ty_is_object(rt) ? ty_object_class(rt) : -2;
     if (rc == -2 && rt != TY_POLY && rt != TY_UNKNOWN) continue;
-    if (rc < 0 || rc == cls || is_descendant(c, rc, cls) || is_descendant(c, cls, rc)) return 1;
+    if (rc >= 0 && rc != cls && !is_descendant(c, rc, cls) && !is_descendant(c, cls, rc)) continue;
+    int got = fn(c, k, ctx);
+    if (got) return got;
   }
-  for (int k = 0; dyn[k]; k++) if (an_calls_named_first(c, dyn[k]) >= 0) return 1;
+  for (int k = 0; dyn[k]; k++) if (an_calls_named_first(c, dyn[k]) >= 0) return -1;
   return 0;
+}
+/* Is an `o.name ||=`, `&&=` or `op=` left as written (the desugar lowers
+   one whose receiver it can type into the reader and writer calls)? */
+static int attr_op_write_left(Compiler *c, const char *name) {
+  static const NodeKind opw[] = { NK_CallOrWriteNode, NK_CallAndWriteNode, NK_CallOperatorWriteNode };
+  for (int q = 0; q < 3; q++)
+    for (int w = comp_kind_first(c, opw[q]); w >= 0; w = comp_kind_next(c, w))
+      if (nt_kind(c->nt, w) == opw[q] && nt_str(c->nt, w, "name") && sp_streq(nt_str(c->nt, w, "name"), name)) return 1;
+  return 0;
+}
+static int attr_writer_call_any(Compiler *c, int call, void *ctx) { (void)c; (void)call; (void)ctx; return 1; }
+/* May an attribute's ivar `ivn` of class `cls` be set other than by the
+   class's own writes (attr_writer_calls)? */
+static int reader_ivar_set_outside(Compiler *c, int cls, const char *ivn) {
+  return attr_writer_calls(c, cls, ivn, attr_writer_call_any, NULL) != 0;
 }
 static int ivar_writes_fresh(Compiler *c, int cls, const char *ivn, int apply, int *ch);
 /* 1 when ivar iv of class cls is a member of a Struct with no initialize of
@@ -2261,7 +2280,7 @@ static int alias_side(Compiler *c, int n, AliasSide *out) {
        with it or, where they cannot widen, keeps the member boxed */
     int member = struct_member_set_by_new(c, dc, iv);
     if (iv < 0 || class_ivar_pinned(ci, ivn) || ci->ivar_int_table[iv] ||
-        reader_ivar_set_outside(c, dc, ivn) || (!member && !ivar_writes_fresh(c, dc, ivn, 0, NULL))) return 0;
+        reader_ivar_set_outside(c, dc, ivn) || (!member && ivar_writes_fresh(c, dc, ivn, 0, NULL) <= 0)) return 0;
     out->slot = &ci->ivar_types[iv]; out->cid = dc; out->iv = iv; out->reader = 1;
     return 1;
   }
@@ -8393,8 +8412,9 @@ static int named_writes_fresh(Compiler *c, int v) {
    the slot with) stores nil, a new array nothing else holds, or a parameter
    of the method writing it, so the slot can be the general Array with no
    copy the program could see: a parameter it keeps (`@a = a`) is its
-   callers' array, and widens for them as one a store goes through does.
-   With `apply` widens those parameters, setting *ch on a change. */
+   callers' array, and widens for them as one a store goes through does:
+   1; 0 when nothing in the classes writes it; -1 for a write of another
+   value. With `apply` widens those parameters, setting *ch on a change. */
 static int ivar_writes_fresh(Compiler *c, int cls, const char *ivn, int apply, int *ch) {
   const NodeTable *nt = c->nt;
   static const NodeKind wk[4] = { NK_InstanceVariableWriteNode, NK_InstanceVariableOrWriteNode,
@@ -8407,14 +8427,14 @@ static int ivar_writes_fresh(Compiler *c, int cls, const char *ivn, int apply, i
       int wc = ws && ws->class_id >= 0 ? ws->class_id : c->node_cbody[w];
       if (wc < 0) wc = ivar_main_slot_class(c, ws, w);
       if (wc < 0 || (wc != cls && !is_descendant(c, wc, cls) && !is_descendant(c, cls, wc))) continue;
-      if (t >= 2) return 0;
+      if (t >= 2) return -1;
       int wv = nt_paren_single(c->nt, nt_ref(nt, w, "value"));
-      if (wv < 0) return 0;
+      if (wv < 0) return -1;
       saw = 1;
       if (nt_kind(nt, wv) == NK_NilNode || is_fresh_array(c, wv)) continue;
       LocalVar *pl = unassigned_param_read(c, ws, wv) >= 0 ? scope_local(ws, nt_str(nt, wv, "name")) : NULL;
       if (!pl || pl->rbs_seeded || !(ty_is_array(pl->type) || pl->type == TY_UNKNOWN) || ty_is_ptr_array(pl->type))
-        return 0;
+        return -1;
       if (apply && pl->type != TY_POLY_ARRAY) *ch |= widen_arg_array(c, wv);
     }
   return saw;
@@ -8522,6 +8542,22 @@ static int literal_rows_read(Compiler *c, int v, int apply) {
    none of these, and answers 0: the call site refuses it. The methods being
    walked are on `stack`, and a call back into one of them answers what the
    method does. */
+static int array_src_walk(Compiler *c, int v, int pinned, int apply, int *stack, int depth);
+/* The value one writer call hands an attribute's ivar (attr_writer_calls),
+   walked as a write's value is, and counted (n): nonzero stops the calls
+   where it is no one plain argument the walk can follow. */
+typedef struct { int *stack, depth, apply, ch, n; } AttrArgWalk;
+static int attr_writer_arg_walk(Compiler *c, int call, void *ctx) {
+  AttrArgWalk *w = ctx;
+  int a = nt_ref(c->nt, call, "arguments"), an = 0;
+  const int *av = a >= 0 ? nt_arr(c->nt, a, "arguments", &an) : NULL;
+  if (an != 1 || nt_kind(c->nt, av[0]) == NK_SplatNode) return 1;
+  int got = array_src_walk(c, av[0], 1, w->apply, w->stack, w->depth + 1);
+  if (!w->apply && !got) return 1;
+  w->ch |= got;
+  w->n++;
+  return 0;
+}
 static int array_src_walk(Compiler *c, int v, int pinned, int apply, int *stack, int depth) {
   const NodeTable *nt = c->nt;
   v = nt_paren_single(c->nt, v);
@@ -8617,14 +8653,20 @@ static int array_src_walk(Compiler *c, int v, int pinned, int apply, int *stack,
     /* A Struct member the constructor sets widens now, as the alias step
        widens it (alias_side): the constructions' arguments widen with it
        in the rounds that follow (struct_new_types_members_at), or keep it
-       boxed where they cannot. Its writer is the member's own, called from
-       outside only where reader_ivar_set_outside finds a call. */
+       boxed where they cannot. An attribute's writer called from outside
+       (`k.v = [+"s"]`, a member's setter) is one more write, whose value
+       is followed as the class's own writes are (attr_writer_calls). */
     int member = struct_member_set_by_new(c, icls, ivi);
-    if (ivi < 0 || class_ivar_pinned(ci, ivn) || !c->ivar_widen_src || v >= c->node_cap ||
-        (member ? reader_ivar_set_outside(c, icls, ivn) : call_attr_target(c, -1, icls, ivn + 1, CT_WRITER, NULL)) ||
-        (!member && !ivar_writes_fresh(c, icls, ivn, 0, NULL))) return 0;
+    int fresh = member || ivi < 0 ? 1 : ivar_writes_fresh(c, icls, ivn, 0, NULL);
+    if (ivi < 0 || class_ivar_pinned(ci, ivn) || !c->ivar_widen_src || v >= c->node_cap || fresh < 0) return 0;
+    AttrArgWalk aw = { stack, depth, 0, 0, 0 };
+    if (attr_writer_calls(c, icls, ivn, attr_writer_arg_walk, &aw) ||
+        (call_answers(c, -1, icls, ivn + 1, CT_WRITER, NULL) && attr_op_write_left(c, ivn + 1)) ||
+        (!fresh && !aw.n)) return 0;
     if (!apply) return 1;
-    int ch = 0;
+    aw.apply = 1;
+    attr_writer_calls(c, icls, ivn, attr_writer_arg_walk, &aw);
+    int ch = aw.ch;
     if (member) {
       AliasSide sd = { &ci->ivar_types[ivi], 0, 1, icls, ivi };
       if (*sd.slot != TY_POLY_ARRAY) { ty_ref_set(c, sd.slot, TY_POLY_ARRAY); ch = 1; }

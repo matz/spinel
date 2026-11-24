@@ -4448,8 +4448,14 @@ static int lr_node_defines(Compiler *c, int n, int direct, int depth) {
   if (k == NK_CallNode && nt_int(nt, n, "body_hook", 0)) return o;
   /* (a send of a name the source spells runs the method of that name:
      `__send__(:plus, k)` does what `plus(k)` does; one of a name it cannot
-     read is a call the record cannot read, call_sent_name's NULL) */
-  if (k == NK_CallNode && !word && !lr_block_eval(c, n)) o = lr_most(o, lr_call_defines(c, call_sent_name(nt, n, NULL), direct, depth));
+     read is a call the record cannot read, call_sent_name's NULL. A
+     program's own method of the send's name, which a receiver may answer
+     instead, is asked too) */
+  if (k == NK_CallNode && !word && !lr_block_eval(c, n)) {
+    const char *nm = nt_str(nt, n, "name"), *sent = call_sent_name(nt, n, NULL);
+    o = lr_most(o, lr_call_defines(c, sent, direct, depth));
+    if (o != LR_OPAQUE_DEFINES && sent != nm && nm && lr_named(c, nm)) o = lr_most(o, lr_callee_defines(c, nm, direct, depth));
+  }
   if (lr_variable_op_write(k)) o = lr_most(o, lr_call_defines(c, nt_str(nt, n, "binary_operator"), direct, depth));
   if (o != LR_OPAQUE_DEFINES && !direct && !word && lr_node_dispatches(nt, n)) o = lr_most(o, lr_callbacks_define(c, depth));
   for (int i = 0, nr = nt_num_refs(nt, n); i < nr && o != LR_OPAQUE_DEFINES; i++)

@@ -2219,23 +2219,36 @@ static int attr_recv_may_be(Compiler *c, int call, int cls) {
   return rc < 0 || rc == cls || is_descendant(c, rc, cls) || is_descendant(c, cls, rc);
 }
 /* May the dynamic call `call` (a send or instance_variable_set) set ivar
-   ivn through the writer `setter`? Its receiver may be of the class, and
-   its first argument names the ivar, the writer or another dynamic call,
-   or is not a literal. */
+   ivn through the writer `setter`? 0 where it cannot: its receiver may not
+   be of the class, its first argument is a literal naming neither the ivar
+   (instance_variable_set) nor the writer or another dynamic call (a send),
+   or it hands no value after the name, or more than the writer or
+   instance_variable_set takes (each raises ArgumentError then). 1 where it
+   may set the ivar to its last argument, which the walk follows as a
+   writer call's argument (attr_writer_arg_walk): the one value after a
+   literal name, or a computed name's last value, which is the value
+   wherever the name leads to a set (`send(m, :v=, x)`, `send(m, :@v, x)`);
+   -1 where that value may be another (a splat, a send of a dynamic call
+   by a literal name). */
 static int attr_dyn_call_sets(Compiler *c, int call, int cls, const char *ivn, const char *setter) {
   if (!attr_recv_may_be(c, call, cls)) return 0;
   int a = nt_ref(c->nt, call, "arguments"), an = 0;
   const int *av = a >= 0 ? nt_arr(c->nt, a, "arguments", &an) : NULL;
+  for (int i = 0; i < an; i++)
+    if (nt_kind(c->nt, av[i]) == NK_SplatNode) return -1;
   const char *lit = an > 0 ? an_literal_name(c->nt, av[0]) : NULL;
-  if (!lit) return 1;
-  if (is_ivar_set_name(nt_str(c->nt, call, "name"))) return sp_streq(lit, ivn);
-  return is_dyn_ivar_set_name(lit) || sp_streq(lit, setter);
+  if (is_ivar_set_name(nt_str(c->nt, call, "name"))) return (!lit || sp_streq(lit, ivn)) && an == 2;
+  if (lit && is_dyn_ivar_set_name(lit)) return -1;
+  if (lit && !sp_streq(lit, setter)) return 0;
+  return an >= 2 && (!lit || an == 2);
 }
 /* The calls of the writer of attribute ivar `ivn` of class `cls` (`b.items
    = v`, a Struct member's setter) whose receiver may be an object of the
    class (attr_recv_may_be), each handed to fn until one answers nonzero:
-   that answer; -1 where a send or instance_variable_set may set it too
-   (attr_dyn_call_sets); 0 after the last. 0 when the class has no writer. */
+   that answer; -1 where a send or instance_variable_set may set it to a
+   value the walk cannot name (attr_dyn_call_sets), while one that hands
+   its value plainly is one more call for fn; 0 after the last. 0 when the
+   class has no writer. */
 typedef int (*AttrWriterCallFn)(Compiler *c, int call, void *ctx);
 /* The calls of a writer's name by the classes the class facts say their
    receiver may hold, kept on the Compiler (c->attr_call_ix) while the node
@@ -2368,8 +2381,11 @@ static int attr_writer_calls(Compiler *c, int cls, const char *ivn, AttrWriterCa
   free(calls);
   if (got) return got;
   for (int d = 0; dyn_ivar_set_names[d]; d++)
-    for (int k = an_calls_named_first(c, dyn_ivar_set_names[d]); k >= 0; k = an_calls_named_next(k))
-      if (attr_dyn_call_sets(c, k, cls, ivn, setter)) return -1;
+    for (int k = an_calls_named_first(c, dyn_ivar_set_names[d]); k >= 0; k = an_calls_named_next(k)) {
+      int sets = attr_dyn_call_sets(c, k, cls, ivn, setter);
+      if (sets < 0) return -1;
+      if (sets && (got = fn(c, k, ctx))) return got;
+    }
   return 0;
 }
 /* The same for the `o.name ||=`, `&&=` and `op=` writes left as written
@@ -8800,8 +8816,17 @@ static int attr_writer_arg_walk(Compiler *c, int call, void *ctx) {
   else {
     int a = nt_ref(c->nt, call, "arguments"), an = 0;
     const int *av = a >= 0 ? nt_arr(c->nt, a, "arguments", &an) : NULL;
-    if (an != 1 || nt_kind(c->nt, av[0]) == NK_SplatNode) return 1;
-    arg = av[0];
+    /* (a send or instance_variable_set hands its value last, after the
+       name, attr_dyn_call_sets) */
+    int at = is_dyn_ivar_set_name(nt_str(c->nt, call, "name")) ? 1 : 0;
+    if ((at ? an < 2 : an != 1) || nt_kind(c->nt, av[an - 1]) == NK_SplatNode) return 1;
+    arg = av[an - 1];
+    /* a value of a kind that is no Array, a keyword Hash too, holds none
+       of the ivar's: passed over, as a nil is (`k.send(m, 1, 2)`,
+       `k.send(m, a: 1)`) */
+    TyKind t = at ? infer_type(c, arg) : TY_UNKNOWN;
+    if (at && (nt_kind(c->nt, arg) == NK_KeywordHashNode || (t != TY_UNKNOWN && t != TY_POLY && !ty_is_array(t))))
+      return 0;
   }
   return attr_value_walk(c, arg, w);
 }

@@ -5505,9 +5505,9 @@ static int emit_iteration_stmt_sn(Compiler *c, int id, Buf *b, int indent) {
 }
 
 int emit_iteration_stmt(Compiler *c, int id, Buf *b, int indent) {
-  /* a reopened builtin's yielding method of the name runs, through its proc
-     form, as in CRuby: the builtin's loop is no answer for it */
-  { CallPlan pl = cplan_user(c, id); if (pl.mi >= 0 && pl.via == UC_REOPEN && c->scopes[pl.mi].yields) return 0; }
+  /* a reopened builtin's method of the name runs, through its proc form
+     when it yields, as in CRuby: the builtin's loop is no answer for it */
+  { CallPlan pl = cplan_user(c, id); if (pl.mi >= 0 && pl.via == UC_REOPEN) return 0; }
   if (sn_guard_pending(c, id)) {
     /* a count the row refuses raises where the receiver is not nil: the call
        is left to the `&.` guard, whose non-nil arm carries the arity guard */

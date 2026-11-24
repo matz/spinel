@@ -53,3 +53,14 @@ b = [+"s"]; o = { k: b }; pk.call(1, **o, **{}); p b
 c = [+"n"]; nm = :k; pk.call(1, nm => c); p c
 pz = proc { |x, k: 0| x << k }
 d = [+"d"]; pz.call(d, **{}); p d
+
+# an Array a main-object ivar or a Struct member holds, also where the
+# store's call never runs, and through a method's parameter
+def m(x) = x << 15
+S = Struct.new(:v)
+@a = [+"s"]; y1(@a) { |x| x << 1 } if ARGV.size > 5; p @a
+@a = [+"s"]; y1(@a) { |x| x << 16 }; p @a
+@a = [+"s"]; m(@a); p @a
+s = S.new([+"s"]); y1(s.v) { |x| x << 1 } if ARGV.size > 5; p s.v
+s = S.new([+"s"]); y1(s.v) { |x| x << 17 }; p s.v
+s = S.new([+"s"]); m(s.v); p s

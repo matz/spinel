@@ -2229,6 +2229,13 @@ static int reader_ivar_set_outside(Compiler *c, int cls, const char *ivn) {
   return 0;
 }
 static int ivar_writes_fresh(Compiler *c, int cls, const char *ivn, int apply, int *ch);
+/* 1 when ivar iv of class cls is a member of a Struct with no initialize of
+   its own: the constructor's arguments set it, and they widen with it
+   (struct_new_types_members_at) or, where they cannot, keep it boxed. */
+static int struct_member_set_by_new(Compiler *c, int cls, int iv) {
+  ClassInfo *ci = &c->classes[cls];
+  return ci->is_struct && iv >= 0 && iv < ci->nmembers && cplan_hook_target(c, -1, cls, "initialize", NULL) < 0;
+}
 
 /* Resolves `n` into *out; 0 for a parameter or a block parameter (typed
    from their call sites), an ivar a seed pins or a narrowed int table
@@ -2252,7 +2259,7 @@ static int alias_side(Compiler *c, int n, AliasSide *out) {
     /* a Struct member of a Struct with no initialize of its own is set by
        the constructor's arguments, which struct_new_types_members_at widens
        with it or, where they cannot widen, keeps the member boxed */
-    int member = ci->is_struct && iv >= 0 && iv < ci->nmembers && cplan_hook_target(c, -1, dc, "initialize", NULL) < 0;
+    int member = struct_member_set_by_new(c, dc, iv);
     if (iv < 0 || class_ivar_pinned(ci, ivn) || ci->ivar_int_table[iv] ||
         reader_ivar_set_outside(c, dc, ivn) || (!member && !ivar_writes_fresh(c, dc, ivn, 0, NULL))) return 0;
     out->slot = &ci->ivar_types[iv]; out->cid = dc; out->iv = iv; out->reader = 1;
@@ -8171,6 +8178,14 @@ static int array_answers_receiver(Compiler *c, int v) {
   return str_in(nm, self_ret);
 }
 
+/* The class whose ivar slots an ivar at node `n` of scope `sc`, which no
+   class owns, names: Toplevel's (the main object's) at top level and in a
+   top-level method, as the ivar's C slots are; -1 in a class body or when
+   the program has no Toplevel class. */
+static int ivar_main_slot_class(Compiler *c, Scope *sc, int n) {
+  if (!sc || sc->class_id >= 0 || c->toplevel_class < 0) return -1;
+  return n >= 0 && n < c->node_cap && c->node_cbody && c->node_cbody[n] >= 0 ? -1 : c->toplevel_class;
+}
 /* The class whose ivar the value `v` reads, with the ivar's name in *ivn:
    an ivar read in a method, or an attr_reader call (`obj.items`, a bare
    `items` in the class). -1 when `v` is neither. */
@@ -8181,7 +8196,8 @@ int ivar_src_slot(Compiler *c, int v, const char **ivn) {
   if (!sc) return -1;
   if (nt_kind(nt, v) == NK_InstanceVariableReadNode) {
     *ivn = nt_str(nt, v, "name");
-    return *ivn && sc->class_id >= 0 ? sc->class_id : -1;
+    if (!*ivn) return -1;
+    return sc->class_id >= 0 ? sc->class_id : ivar_main_slot_class(c, sc, v);
   }
   if (nt_kind(nt, v) != NK_CallNode || nt_ref(nt, v, "block") >= 0) return -1;
   int a = nt_ref(nt, v, "arguments"), an = 0;
@@ -8252,6 +8268,7 @@ static int ivar_writes_fresh(Compiler *c, int cls, const char *ivn, int apply, i
       if (!sp_streq(nt_str(nt, w, "name"), ivn)) continue;
       Scope *ws = comp_scope_of(c, w);
       int wc = ws && ws->class_id >= 0 ? ws->class_id : c->node_cbody[w];
+      if (wc < 0) wc = ivar_main_slot_class(c, ws, w);
       if (wc < 0 || (wc != cls && !is_descendant(c, wc, cls) && !is_descendant(c, cls, wc))) continue;
       if (t >= 2) return 0;
       int wv = nt_paren_single(c->nt, nt_ref(nt, w, "value"));
@@ -8460,11 +8477,22 @@ static int array_src_walk(Compiler *c, int v, int pinned, int apply, int *stack,
   if (icls >= 0) {
     ClassInfo *ci = &c->classes[icls];
     int ivi = comp_ivar_index(ci, ivn);
+    /* A Struct member the constructor sets widens now, as the alias step
+       widens it (alias_side): the constructions' arguments widen with it
+       in the rounds that follow (struct_new_types_members_at), or keep it
+       boxed where they cannot. Its writer is the member's own, called from
+       outside only where reader_ivar_set_outside finds a call. */
+    int member = struct_member_set_by_new(c, icls, ivi);
     if (ivi < 0 || class_ivar_pinned(ci, ivn) || !c->ivar_widen_src || v >= c->node_cap ||
-        (call_attr_target(c, -1, icls, ivn + 1, CT_WRITER, NULL)) ||
-        !ivar_writes_fresh(c, icls, ivn, 0, NULL)) return 0;
+        (member ? reader_ivar_set_outside(c, icls, ivn) : call_attr_target(c, -1, icls, ivn + 1, CT_WRITER, NULL)) ||
+        (!member && !ivar_writes_fresh(c, icls, ivn, 0, NULL))) return 0;
     if (!apply) return 1;
     int ch = 0;
+    if (member) {
+      AliasSide sd = { &ci->ivar_types[ivi], 0, 1, icls, ivi };
+      if (*sd.slot != TY_POLY_ARRAY) { ty_ref_set(c, sd.slot, TY_POLY_ARRAY); ch = 1; }
+      return ch | alias_ivar_widened(c, NULL, &sd, TY_POLY_ARRAY);
+    }
     ivar_writes_fresh(c, icls, ivn, 1, &ch);
     if (!c->ivar_widen_src[v]) { c->ivar_widen_src[v] = 1; ch = 1; }
     return ch;

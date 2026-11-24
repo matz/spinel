@@ -23038,30 +23038,12 @@ int an_str_mutator_name(const char *nm) {
    group's answer. Asking for the UNIQUE one instead made a second
    same-named method anywhere in the program silently answer -1, which is how
    an unused class dropped a callee's appends (#4390). */
+static int an_sbn_find(Compiler *c, const char *nm);
 static int an_any_scope_by_name(Compiler *c, const char *nm) {
   if (!nm) return -1;
-  /* frozen (scope names fixed): the first scope of each name from a table
-     built once per scope-index epoch; asked per call site, the scan was
-     (sites x scopes) (rubys in #5035) */
-  if (comp_scope_index_is_frozen()) {
-    static ANameHash names; static int *first, nfirst, stamp_n = -1;
-    static unsigned stamp_gen;
-    if (stamp_n != c->nscopes || stamp_gen != comp_scope_index_gen()) {
-      anh_free(&names); memset(&names, 0, sizeof names);
-      free(first); first = NULL; nfirst = 0;
-      int cap = 0;
-      for (int i = 1; i < c->nscopes; i++) {
-        const char *sn = c->scopes[i].name;
-        if (!sn || anh_has(&names, sn)) continue;
-        if (nfirst == cap) { cap = cap ? cap * 2 : 256; first = realloc(first, sizeof(int) * (size_t)cap); }
-        first[nfirst++] = i;
-        anh_add(&names, sn);
-      }
-      stamp_n = c->nscopes; stamp_gen = comp_scope_index_gen();
-    }
-    int k = anh_find(&names, nm);
-    return k >= 0 ? first[k] : -1;
-  }
+  /* frozen (scope names fixed): the first scope of each name from the table of an_scopes_named_first; asked per call
+     site, the scan was (sites x scopes) (rubys in #5035) */
+  if (comp_scope_index_is_frozen()) return an_sbn_find(c, nm);
   for (int i = 1; i < c->nscopes; i++)
     if (c->scopes[i].name && sp_streq(c->scopes[i].name, nm)) return i;
   return -1;
@@ -23072,53 +23054,71 @@ static int an_any_scope_by_name(Compiler *c, const char *nm) {
    an_any_scope_by_name's; else the scan. The strbuf walks asked every
    scope for the methods of a call's name at each call they walked, every
    round: 17k compares per call on a Rails program, most of its fixpoint. */
-static ANameHash an_sbn_names;
-static int *an_sbn_first, an_sbn_nfirst, *an_sbn_next, an_sbn_stamp_n = -1;
-static unsigned an_sbn_stamp_gen;
-static void an_sbn_build(Compiler *c) {
-  anh_free(&an_sbn_names); memset(&an_sbn_names, 0, sizeof an_sbn_names);
-  free(an_sbn_first); an_sbn_first = NULL; an_sbn_nfirst = 0;
-  free(an_sbn_next);
-  an_sbn_next = malloc(sizeof(int) * (size_t)(c->nscopes > 0 ? c->nscopes : 1));
-  if (!an_sbn_next) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  int *last = NULL, cap = 0;
-  for (int i = 1; i < c->nscopes; i++) {
+struct ScopesByName { ANameHash names; int *first, *last, *next, nfirst, cap, stamp_n; unsigned stamp_gen; };
+void scopes_by_name_free(Compiler *c) {
+  struct ScopesByName *t = c->scopes_by_name;
+  if (!t) return;
+  anh_free(&t->names);
+  free(t->first); free(t->last); free(t->next); free(t);
+  c->scopes_by_name = NULL;
+}
+/* Scopes from..nscopes-1 enter the table. A scope made while the index is frozen (a version entry's) is entered by this
+   alone: the table is rebuilt from scratch only when the epoch moves, not for each scope a pass adds. */
+static void an_sbn_extend(Compiler *c, struct ScopesByName *t, int from) {
+  int *nx = realloc(t->next, sizeof(int) * (size_t)(c->nscopes > 0 ? c->nscopes : 1));
+  if (!nx) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  t->next = nx;
+  for (int i = from; i < c->nscopes; i++) {
     const char *sn = c->scopes[i].name;
-    an_sbn_next[i] = -1;
+    t->next[i] = -1;
     if (!sn) continue;
-    int k = anh_find(&an_sbn_names, sn);
-    if (k >= 0) { an_sbn_next[last[k]] = i; last[k] = i; continue; }
-    if (an_sbn_nfirst == cap) {
-      cap = cap ? cap * 2 : 256;
-      an_sbn_first = realloc(an_sbn_first, sizeof(int) * (size_t)cap);
-      last = realloc(last, sizeof(int) * (size_t)cap);
-      if (!an_sbn_first || !last) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    int k = anh_find(&t->names, sn);
+    if (k >= 0) { t->next[t->last[k]] = i; t->last[k] = i; continue; }
+    if (t->nfirst == t->cap) {
+      t->cap = t->cap ? t->cap * 2 : 256;
+      t->first = realloc(t->first, sizeof(int) * (size_t)t->cap);
+      t->last = realloc(t->last, sizeof(int) * (size_t)t->cap);
+      if (!t->first || !t->last) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
     }
-    an_sbn_first[an_sbn_nfirst] = i; last[an_sbn_nfirst] = i; an_sbn_nfirst++;
-    anh_add(&an_sbn_names, sn);
+    t->first[t->nfirst] = i; t->last[t->nfirst] = i; t->nfirst++;
+    anh_add(&t->names, sn);
   }
-  free(last);
-  an_sbn_stamp_n = c->nscopes; an_sbn_stamp_gen = comp_scope_index_gen();
+  t->stamp_n = c->nscopes; t->stamp_gen = comp_scope_index_gen();
+}
+/* The table, current for the scopes and the epoch (rebuilt only when the epoch moves or the scopes shrink). */
+static struct ScopesByName *an_sbn(Compiler *c) {
+  struct ScopesByName *t = c->scopes_by_name;
+  if (!t) {
+    if (!(t = c->scopes_by_name = calloc(1, sizeof *t))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    t->stamp_n = -1;
+  }
+  if (t->stamp_n == c->nscopes && t->stamp_gen == comp_scope_index_gen()) return t;
+  if (t->stamp_gen == comp_scope_index_gen() && t->stamp_n >= 1 && t->stamp_n < c->nscopes) an_sbn_extend(c, t, t->stamp_n);
+  else {
+    anh_free(&t->names); memset(&t->names, 0, sizeof t->names);
+    t->nfirst = 0;
+    an_sbn_extend(c, t, 1);
+  }
+  return t;
+}
+/* The first scope of a name (the lowest index from 1), -1 for none; no dependency noted. */
+static int an_sbn_find(Compiler *c, const char *nm) {
+  struct ScopesByName *t = an_sbn(c);
+  int k = anh_find(&t->names, nm);
+  return k >= 0 ? t->first[k] : -1;
 }
 /* (each scope listed is one the asker reads: infer_type's memo notes it) */
 static int an_scopes_named_dep(int s) { if (s >= 0) IMEMO_DEP_SCOPE(s); return s; }
 int an_scopes_named_first(Compiler *c, const char *nm) {
   if (!nm) return -1;
-  if (comp_scope_index_is_frozen()) {
-    if (an_sbn_stamp_n != c->nscopes || an_sbn_stamp_gen != comp_scope_index_gen()) an_sbn_build(c);
-    int k = anh_find(&an_sbn_names, nm);
-    return an_scopes_named_dep(k >= 0 ? an_sbn_first[k] : -1);
-  }
+  if (comp_scope_index_is_frozen()) return an_scopes_named_dep(an_sbn_find(c, nm));
   for (int i = 1; i < c->nscopes; i++)
     if (c->scopes[i].name && sp_streq(c->scopes[i].name, nm)) return an_scopes_named_dep(i);
   return -1;
 }
 int an_scopes_named_next(Compiler *c, const char *nm, int s) {
   if (!nm || s < 1) return -1;
-  if (comp_scope_index_is_frozen()) {
-    if (an_sbn_stamp_n != c->nscopes || an_sbn_stamp_gen != comp_scope_index_gen()) an_sbn_build(c);
-    return an_scopes_named_dep(s < c->nscopes ? an_sbn_next[s] : -1);
-  }
+  if (comp_scope_index_is_frozen()) return an_scopes_named_dep(s < c->nscopes ? an_sbn(c)->next[s] : -1);
   for (int i = s + 1; i < c->nscopes; i++)
     if (c->scopes[i].name && sp_streq(c->scopes[i].name, nm)) return an_scopes_named_dep(i);
   return -1;

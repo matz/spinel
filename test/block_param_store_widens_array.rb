@@ -93,3 +93,16 @@ D11 = Data.define(:v) do
   def initialize(v:) = super(v: [v])
 end
 d11 = D11.new(+"s"); y1(d11.v) { |x| x << 25 }; p d11.v
+
+# an attribute beside a send that hands no value and one that names its
+# writer or ivar by a computed name, and an attribute read on a receiver
+# of more than one class
+class K12; attr_accessor :v; end
+k12 = K12.new; k12.v = [+"s"]; mn = :v; k12.send(mn); y1(k12.v) { |x| x << 26 }; p k12.v
+j12 = K12.new; j12.v = [+"s"]; wn = :v=; j12.send(wn, [+"t"]); y1(j12.v) { |x| x << 27 }; p j12.v
+i12 = K12.new; i12.v = [+"s"]; ivn = :@v; i12.instance_variable_set(ivn, [+"u"]); y1(i12.v) { |x| x << 28 }; p i12.v
+class Q12 < K12; end
+class L12; attr_accessor :v; end
+q12 = Q12.new; q12.v = [+"q"]; l12 = L12.new; l12.v = [+"l"]
+o12 = ARGV.size > 5 ? k12 : q12; y1(o12.v) { |x| x << 29 }; p o12.v
+o12 = ARGV.size > 5 ? q12 : l12; y1(o12.v) { |x| x << 30 }; p o12.v

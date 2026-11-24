@@ -62,3 +62,11 @@ a = [+"s"]; ys(a, 0) { |x, i| x << 21 }; p a
 b = [[+"m"]]; y1(b) { |m| m[0] << g(1) }; p b
 a = [+"s"]; ->(*r, z) { r[0] << z }.call(a, 22); p a
 b = [[+"m"]]; proc { |x, y| x[0] << y }.call([b, g(1)]); p b
+
+# each forward of the block or super with it is one level, as far as the
+# whole value goes: four forwards through &b, three supers handing it on
+def f3(a, &b) = f2(a, &b)
+def f4(a, &b) = f3(a, &b)
+class S6 < S5; def run(a, &b) = super(a, &b); end
+b = [[+"m"]]; f4(b) { |m| m[0] << 23 }; p b
+b = [[+"m"]]; S6.new.run(b) { |m| m[0] << 24 }; p b

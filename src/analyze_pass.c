@@ -3737,14 +3737,18 @@ static int push_escape_widen(Compiler *c, int id, int recv, int is_push, TyKind 
 
 typedef struct {
   const char *name;
-  int scope, depth;
+  int scope, depth, levels;
 } ContainerLocalVisit;
+/* The levels a value is handed on through, a parameter's callers' or a
+   `super`'s arguments: one each, as block_reach counts a block's forwards. */
+enum { HAND_ON_LEVELS = 16 };
 typedef struct {
   int *items, count, capacity;
   int small[32];
   ContainerLocalVisit *locals;
   int nlocals, local_capacity;
   ContainerLocalVisit small_locals[8];
+  int levels;   /* (the hand-ons the walk is in: container_hand_on) */
 } ContainerLiterals;
 static void container_literals(Compiler *c, int n, ContainerLiterals *out, int depth);
 static void free_container_literals(ContainerLiterals *list) {
@@ -7645,15 +7649,16 @@ static void add_container_literal(ContainerLiterals *out, int n, int nodes) {
   out->items[out->count++] = n;
 }
 
-/* Revisit a slot only from a shorter path, where the depth bound permits
-   more of its producers to be reached. Keep separate visits for an
-   element read's intermediate collection of receiver literals. */
+/* Revisit a slot only from a shorter path, where the depth or the hand-on
+   bound permits more of its producers to be reached. Keep separate visits
+   for an element read's intermediate collection of receiver literals. */
 static int container_local_seen(ContainerLiterals *out, int scope, const char *name, int depth) {
   for (int i = 0; i < out->nlocals; i++) {
     ContainerLocalVisit *visit = &out->locals[i];
     if (visit->scope != scope || !sp_streq(visit->name, name)) continue;
-    if (visit->depth <= depth) return 1;
-    visit->depth = depth;
+    if (visit->depth <= depth && visit->levels <= out->levels) return 1;
+    if (depth < visit->depth) visit->depth = depth;
+    if (out->levels < visit->levels) visit->levels = out->levels;
     return 0;
   }
   if (!out->locals) {
@@ -7668,7 +7673,7 @@ static int container_local_seen(ContainerLiterals *out, int scope, const char *n
     out->locals = larger;
     out->local_capacity = capacity;
   }
-  out->locals[out->nlocals++] = (ContainerLocalVisit){name, scope, depth};
+  out->locals[out->nlocals++] = (ContainerLocalVisit){name, scope, depth, out->levels};
   return 0;
 }
 
@@ -7676,6 +7681,16 @@ static int container_local_seen(ContainerLiterals *out, int scope, const char *n
    a local's read): its writes' values, and for a method's parameter what its
    callers pass there, a `super`'s too (container_super_literals). */
 static void container_super_literals(Compiler *c, int si, Scope *sc, int pi, ContainerLiterals *out, int depth);
+static void container_local_literals(Compiler *c, Scope *sc, const char *nm, ContainerLiterals *out, int depth);
+/* The literals the argument `arg` (or, past -1, local nm of sc, a bare
+   super's) hands a parameter: one level, not one step of the depth. */
+static void container_hand_on(Compiler *c, int arg, Scope *sc, const char *nm, ContainerLiterals *out, int depth) {
+  if (out->levels >= HAND_ON_LEVELS) return;
+  out->levels++;
+  if (arg >= 0) container_literals(c, arg, out, depth);
+  else container_local_literals(c, sc, nm, out, depth);
+  out->levels--;
+}
 static void container_local_literals(Compiler *c, Scope *sc, const char *nm, ContainerLiterals *out, int depth) {
   const NodeTable *nt = c->nt;
   int si = (int)(sc - c->scopes);
@@ -7707,7 +7722,7 @@ static void container_local_literals(Compiler *c, Scope *sc, const char *nm, Con
         }
         if (resume != -2 || q == e->n) break;
         int call = e->call[q];
-        container_literals(c, e->arg[q], out, depth + 1);
+        container_hand_on(c, e->arg[q], NULL, NULL, out, depth);
         if (clp_epoch != ep || !clp_holds(c)) resume = an_calls_named_next(call);
         else e = clp_find(si, pi);   /* (the walk may have grown the table) */
       }
@@ -7722,7 +7737,7 @@ static void container_local_literals(Compiler *c, Scope *sc, const char *nm, Con
       int a = nt_ref(nt, call, "arguments"), an = 0;
       const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
       int from = cla_layout_arg(c, call, si, sc, av, an, pi);
-      if (from >= 0 && from < an) container_literals(c, av[from], out, depth + 1);
+      if (from >= 0 && from < an) container_hand_on(c, av[from], NULL, NULL, out, depth);
     }
   }
 }
@@ -7747,11 +7762,11 @@ static void container_super_literals(Compiler *c, int si, Scope *sc, int pi, Con
           int a = nt_ref(nt, q, "arguments"), an = 0;
           const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
           int from = cla_layout_arg(c, q, si, sc, av, an, pi);
-          if (from >= 0 && from < an) container_literals(c, av[from], out, depth + 1);
+          if (from >= 0 && from < an) container_hand_on(c, av[from], NULL, NULL, out, depth);
           continue;
         }
         int p = zsuper_param_source(c, ms, sc, pi);
-        if (p >= 0 && ms->pnames[p]) container_local_literals(c, ms, ms->pnames[p], out, depth + 1);
+        if (p >= 0 && ms->pnames[p]) container_hand_on(c, -1, ms, ms->pnames[p], out, depth);
       }
   }
 }
@@ -7797,7 +7812,7 @@ static void container_literals(Compiler *c, int n, ContainerLiterals *out, int d
       return;
     }
     if (r < 0 || !elem_read || nt_ref(nt, n, "block") >= 0) return;
-    ContainerLiterals outer = {0};
+    ContainerLiterals outer = { .levels = out->levels };
     container_literals(c, r, &outer, depth + 1);
     for (int q = 0; q < outer.count; q++) {
       int en = 0; const int *ev = nt_arr(nt, outer.items[q], "elements", &en);
@@ -15517,7 +15532,7 @@ static int block_kept_by_builtin(const char *name) {
 typedef int (*BlockSiteVisit)(Compiler *c, int site, const int *argv, int argc, void *ctx);
 static int block_reach(Compiler *c, int si, char *seen, int fold, int depth, BlockSiteVisit visit, void *ctx) {
   const NodeTable *nt = c->nt;
-  if (si < 1 || si >= c->nscopes || seen[si] || depth > 16) return 0;
+  if (si < 1 || si >= c->nscopes || seen[si] || depth > HAND_ON_LEVELS) return 0;
   seen[si] = 1;
   if (bsi_kept && si < bsi_ns && bsi_kept[si]) return 1;
   if (fold) {

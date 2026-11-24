@@ -6159,7 +6159,7 @@ static void lr_settle_regions(Compiler *c) {
    define_method, an attr, an alias, a module_function copy, an undef or
    remove), not a visibility change. lr_vers_index indexes the histories as
    they stand, again once more entries have been recorded. */
-typedef struct LrVers { const char *name; int first, nver, next, pend, alias; unsigned char captured, replaced, late, visvar, supply; } LrVers;   /* captured: elab_version_captured's memo, 1 no, 2 yes; visvar: elab_method_vis_varies's, the same; supply: lr_vers_unordered's, the same; replaced: one history holds two versions, or an alias; late: lr_late_make's, 1 no history late, 2 one is, 3 none asked; pend: the histories asked that are not late yet; alias: the first alias of the name, in LoadRecord.valias, -1 for none */
+typedef struct LrVers { const char *name; int first, nver, next, pend, alias; unsigned char captured, replaced, late, visvar, supply, vgate; } LrVers;   /* vgate: elab_method_vis_gated's, 1 no, 2 yes; captured: elab_version_captured's memo, 1 no, 2 yes; visvar: elab_method_vis_varies's, the same; supply: lr_vers_unordered's, the same; replaced: one history holds two versions, or an alias; late: lr_late_make's, 1 no history late, 2 one is, 3 none asked; pend: the histories asked that are not late yet; alias: the first alias of the name, in LoadRecord.valias, -1 for none */
 
 static int lr_is_version(const LrDef *v) { return v->kind <= LR_REMOVE && !v->unplaced && !v->absent; }
 
@@ -6638,7 +6638,7 @@ int elab_method_holder(Compiler *c, const char *name, int i, int *cls, int *sg) 
 /* Each method scope's version facts (analyze.h):
    Scope.versioned when the record holds more than one version of its name
    (a mixin's hidden copy's: the program's name of it), or one that a call
-   may run before (elab_method_late);
+   may run before (elab_method_late), or one a visibility word changes only where the run decides (elab_method_vis_gated);
    Scope.replaced when it is a def's scope that a later scope of the same
    class, side and name takes the method table's place of (a top-level
    method: a later def's), so that the tables answer the later one. */
@@ -6665,7 +6665,7 @@ void elab_mark_versions(Compiler *c) {
     const char *name = sc->mixin_guarded ? comp_scope_user_name(sc) : sc->name;
     const char *vname = (sc->is_include_copy || sc->is_extend_copy) && sc->shadow ? comp_scope_user_name(sc) : name;
     const LrVers *x = vname && sc->def_node >= 0 ? lr_vers(r, vname) : NULL;
-    if (!x || (x->nver < 2 && !elab_method_late(c, vname))) continue;
+    if (!x || (x->nver < 2 && !elab_method_late(c, vname) && (sc->is_cmethod || !elab_method_vis_gated(c, vname)))) continue;
     { sc->versioned = 1; comp_touch_scope(sc->idx); }
     /* an accessor's version (elab_attr_scope) is one the def that ends its
        history replaces; its scope, made after that def's, takes no key */
@@ -8033,6 +8033,10 @@ static int lr_vis_call_ahead(Compiler *c, const LrHist *h, const LrHist *t, cons
     return 0;
   return elab_cmp(pw, elab_point_from(c, id)) != PROG_BEFORE;
 }
+/* ...is d a visibility word whose effect only the run decides: it stands under a condition (LrDef.may), and is placed? */
+static int lr_word_gated(const LrDef *d) {
+  return d->kind == LR_VIS && !d->unplaced && !d->absent && !d->body && d->may;
+}
 /* The visibility a version's face arm takes (elab_version_vis), for
    version v of history h: its def's, or that of the last visibility word
    that runs on it, where the record proves the word runs, on it, ahead of
@@ -8139,6 +8143,22 @@ int elab_physical_version_vis(Compiler *c, const ElabVersion *ev) {
   int unmapped = 0;
   return lr_version_vis(c, &r->hist[ev->hist], ev->v, &unmapped, 1);
 }
+/* See analyze.h. */
+int elab_method_vis_gated(Compiler *c, const char *name) {
+  LoadRecord *r = c->lrec;
+  LrVers *x = r && r->recorded && name ? lr_vers(r, name) : NULL;
+  if (!x) return 0;
+  if (!x->vgate) {
+    int gated = 0;
+    for (int i = x->first; i >= 0 && !gated; i = r->hist[i].nlink) {
+      const LrHist *h = &r->hist[i], *t = lr_table_twin(c, h);
+      for (int j = 0; j < h->n && !gated && !h->b; j++) gated = lr_word_gated(&h->v[j]) && lr_vis_cellable(c, h, t);
+    }
+    x->vgate = (unsigned char)(gated ? 2 : 1);
+  }
+  return x->vgate == 2;
+}
+
 int elab_version_word(Compiler *c, const ElabVersion *ev, int i, int *node, int *vis) {
   LoadRecord *r = c->lrec;
   const LrHist *h = r && r->recorded && ev->hist >= 0 && ev->hist < r->nhist ? &r->hist[ev->hist] : NULL;
@@ -13796,7 +13816,12 @@ static int lr_vis_at(Compiler *c, int cls, const char *name, int sg, LoadPoint p
 /* (where p has no point, the answer is the load's end; a visibility word a method body runs, whose body may run
    before or after the call, leaves it unknown there: elab_method_body_word) */
 int elab_method_vis_at(Compiler *c, int cls, const char *name, int sg, LoadPoint p) {
-  return lr_ready(c, p) && (p.region >= 0 || !elab_method_body_word(c, name, sg)) ? lr_vis_at(c, cls, name, sg, p) : -1;
+  const LrDef *d = NULL;
+  if (!lr_ready(c, p) || (p.region < 0 && elab_method_body_word(c, name, sg)) ||
+      lr_search(c, cls, sg, name, -1, p, p.region < 0, 1, &d, 0) != ELAB_YES || !d)
+    return -1;
+  /* (a word that only the run decides is the last change: the visibility is the cell's, elab_method_vis_gated) */
+  return !sg && lr_word_gated(d) && elab_method_vis_gated(c, name) ? -1 : d->vis;
 }
 
 /* See analyze.h. */

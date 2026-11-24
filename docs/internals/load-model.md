@@ -456,7 +456,11 @@ visibility it has where it runs (`lr_body_def_vis`: a word that takes
 it, a bare word before it in a class body's statements, private for
 `initialize` and its kin); a word's version holds the visibility it sets,
 which the plan reads where the word runs (`lr_version_vis`, from the
-version's visibility cell where only the run decides). Only a def or a
+version's visibility cell where only the run decides). A def of one version that a
+placed word changes only where the run decides (`private :m if c`, `c && private(:m)`) is versioned for
+that word alone (`elab_method_vis_gated`, on the instance side): its calls and readers take the face
+entry whose arm reads the visibility cell the word writes, and `elab_method_vis_at` tells "only the
+run" past the word. Only a def or a
 word of a name the program makes no entry of that the call plan cannot
 answer next to it is such a version (`lr_body_def_version`, over
 `lr_body_forms`); a visibility word placed in a class body is an entry of

@@ -4398,10 +4398,11 @@ static int ct_front_layer(Compiler *c, int id, int rcls, int mi, unsigned flags,
   ml->kind = ML_ENTRY;
   return c->ver_entries[ix].scope;
 }
+static int presence_reader_name(const char *n);
 static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigned flags, int mi, MethodLookup *ml) {
   /* (a presence reader's own ask, respond_to? or method_defined?, reads the visibility cells of the face entry an
      enforcing call there takes: presence_cells) */
-  unsigned ff = (flags & CT_REACH) && id >= 0 && nt_kind(c->nt, id) == NK_CallNode && is_method_presence_name_query(call_sent_name(c->nt, id, NULL)) ?
+  unsigned ff = (flags & CT_REACH) && id >= 0 && nt_kind(c->nt, id) == NK_CallNode && presence_reader_name(call_sent_name(c->nt, id, NULL)) ?
                 flags | CT_PUBLIC : flags;
   int sg = (flags & CT_CMETHOD) != 0, rcls = flags & CT_TOP ? ct_top_chain(c, name, sg) : cls, vi = -1, dc = -1, n = 0, first_def = 0, none = 0, body = 0, cl = 0;
   /* (the table's answer a late layer in front of the chain: its entry, whose arms tell the live version) */
@@ -4420,7 +4421,7 @@ static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigne
   int late = (cl == 2 || body || kernel_callback) && !ct_capture_keeps_table(c, id, rcls, sg, name, flags, 1);
   /* one def on rcls's whole chain, which no call runs ahead of: the
      table's (a name with versions on other chains only) */
-  if (nc == 1 && first_def && !late) {
+  if (nc == 1 && first_def && !late && (sg || !elab_method_vis_gated(c, name))) {
     ml->n = 0;
     return mi;
   }
@@ -7304,7 +7305,7 @@ int cplan_recv_class(Compiler *c, int id, int recv) {
    hold more than one version of the name, or an alias, which names the
    version it captured? */
 int ct_version_named(Compiler *c, const char *nm) {
-  return nm && (elab_method_replaced(c, nm) || elab_method_versions(c, nm) > 1 || elab_method_late(c, nm));
+  return nm && (elab_method_replaced(c, nm) || elab_method_versions(c, nm) > 1 || elab_method_late(c, nm) || elab_method_vis_gated(c, nm));
 }
 /* ...and does a call of nm bind a method only its call's marks keep
    (cr_collect_versions): a replaced version, which the table does not

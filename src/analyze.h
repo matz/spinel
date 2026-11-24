@@ -564,6 +564,11 @@ int elab_method_replaced(Compiler *c, const char *name);
    do the methods its versions give have more than one visibility (a
    module's private one and a class's public one)? */
 int elab_method_vis_varies(Compiler *c, const char *name);
+/* ...does a visibility word of `name` stand under a condition the run decides, with a write that keeps the name's
+   visibility cell (lr_vis_cellable), so that a call and a reader read that cell? The name's one def is versioned for
+   it alone: a face entry over the def, whose arm tests the cell. Of the instance side's histories: a class method's
+   word waits for the class side's cells */
+int elab_method_vis_gated(Compiler *c, const char *name);
 /* is call id a visibility word with names a method body runs on the class
    self is there, as the record reads it from the tree, a version of that
    body or not, where it takes no def (its value is then the word's, as in a

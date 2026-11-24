@@ -50401,6 +50401,7 @@ static void an_phase_desugar_register(Compiler *c) {
   AN_STEP_V("desugar_builtin_reopen_self_calls", desugar_builtin_reopen_self_calls(c));  /* class Hash; def m = each {..} -> self.each */
   lower_run(c, &lc, LW_BUILTIN_REOPEN_SELF_CALLS);  /* ...and as a row, for a def the walk splices into a reopening (a hook's class_eval) */
   AN_STEP_V("desugar_builtin_ivars", desugar_builtin_ivars(c));              /* class Array; def m = @x -> self.__bivar_get(:@x) */
+  lower_run(c, &lc, LW_BUILTIN_IVARS);  /* ...and as a row, for a def the walk splices into a reopening (a hook's class_eval) */
   AN_STEP_V("desugar_object_method_builtin_overrides", desugar_object_method_builtin_overrides(c)); /* Hash#m + Object#m -> Object#m branching on self */
   AN_STEP_V("desugar_builtin_reopen_methods", desugar_builtin_reopen_methods(c));     /* class Hash; def m -> Object#m guarded by is_a?(Hash) */
   lower_run(c, &lc, LW_BODY_SELF_IVAR_ACCESS);      /* instance_variable_set(:@x, v) on self in a class body -> @x = v */

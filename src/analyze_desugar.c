@@ -32765,6 +32765,41 @@ static int biv_subclasses(Compiler *c, NodeTable *nt, int n0) {
   return changed;
 }
 
+/* desugar_builtin_ivars' def half as a row, for one statement of a builtin
+   class's reopening: a def (or `private def`) the reopening holds reads and
+   writes the builtin value's instance variables through the table, as the
+   step's do. Run after the step, it rewrites nothing the step did not (a def
+   it rewrote reads no ivar any more); it is there for the defs the walk
+   splices into the reopening (a hook's `base.class_eval { def tag = @tag }`
+   on String), which lower_span lowers by the rows that have run. */
+int desugar_builtin_ivars_at(Compiler *c, LowerCtx *lc, int id) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int owner = lc->owner;
+  if (owner < 0 || !class_def_opens_frame(nt, owner) || class_def_is_module(nt, owner) ||
+      class_def_super(nt, owner) >= 0 || class_def_body(nt, owner) != lc->body) return 0;
+  int cp = nt_ref(nt, owner, "constant_path");
+  if (cp < 0 || nt_kind(nt, cp) != NK_ConstantReadNode) return 0;
+  const char *cn = key_name(c, cp);
+  int mode = cn ? biv_mode(cn) : BIV_NONE;
+  if (mode == BIV_NONE) return 0;
+  /* `module Text; class String` is the program's own class */
+  if (biv_nested(nt, lower_parents(c, lc), owner)) return 0;
+  int d = id;
+  if (nt_kind(nt, d) == NK_CallNode && nt_str(nt, d, "name") && visibility_of_name(nt_str(nt, d, "name"))) {
+    int an = nt_ref(nt, d, "arguments"), ac = 0;
+    const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
+    d = ac == 1 ? av[0] : -1;
+  }
+  if (d < 0 || nt_kind(nt, d) != NK_DefNode || nt_ref(nt, d, "receiver") >= 0) return 0;
+  int before = nt->count;
+  g_biv_collect = mode == BIV_TABLE ? biv_family(cn) : BIVF_NONE;
+  biv_def(c, nt, d, mode);
+  g_biv_collect = BIVF_NONE;
+  if (nt->count == before) return 0;
+  comp_grow_node_arrays(c);
+  return 1;
+}
+
 int desugar_builtin_ivars(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count, changed = 0;

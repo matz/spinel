@@ -80,12 +80,14 @@ int emit_call_proc_literal_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
    A name is recorded once, at its first (most derived) sighting, and listed
    only if that sighting was visible, so a subclass that makes an inherited
    method private hides the ancestor's public one. show[i] holds REFL_SHOWN
-   for a visible sighting and REFL_ROW where a builtin row made it (a
-   method present from the start, version 0, which the row answers). at:
+   for a visible sighting, REFL_ROW where a builtin row made it (a
+   method present from the start, version 0, which the row answers) and
+   REFL_OWN where the object's own singleton class made it (a method it has
+   from its own def, which no cell of the class at `at_cls` tells). at:
    the list call the names answer (its node + 1, 0 for a list no one site
    has), at_cls and at_side the receiver class and side it asks there
    (refl_at, cplan_list_omits). */
-enum { REFL_SHOWN = 1, REFL_ROW = 2 };
+enum { REFL_SHOWN = 1, REFL_ROW = 2, REFL_OWN = 4 };
 typedef struct { char **v; unsigned char *show; int n, cap, at, at_cls, vis_mask; unsigned at_side; } ReflNames;
 /* The classes a `k.new(...)` switch gives an ArgumentError arm, grouped by
    message so each message is emitted once. */

@@ -578,6 +578,18 @@ printf 'class UserAuto\n  def autoload(name, path) = puts("user #{name}")\nend\n
 if "$SPINEL" --load-model=graph "$tmp/autoload/main.rb" -o "$tmp/autoload/bin" >"$tmp/autoload/cc" 2>&1; then
   [ "$("$tmp/autoload/bin")" = "user X" ] || fail "a program's own autoload on a constant did not run"
 else fail "a program's own autoload on a constant parsed its argument's file"; sed -n 1,3p "$tmp/autoload/cc"; fi
+# An unrelated definition does not show that a value receiver is shadowed.
+cat > "$tmp/autoload/main.rb" <<'RUBY'
+module Unrelated
+  def autoload(*) = nil
+end
+module Holder; end
+autoload :Other, File.join(__dir__, "lib")
+owner = [Holder].first
+owner.autoload(:X, File.join(__dir__, "lib"))
+puts Holder::X
+RUBY
+refused autoload "unresolved autoload owner"
 # a value that may be a module (CRuby registers on it) stays refused
 printf 'module Holder; end\nM = [Holder].first\nM.autoload(:X, File.join(__dir__, "lib"))\np Holder::X\n' > "$tmp/autoload/main.rb"
 refused autoload "unresolved autoload owner"

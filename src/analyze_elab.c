@@ -2361,7 +2361,7 @@ static void lr_name(LoadRecord *r, const char *name, const char *suffix) {
 }
 
 enum { LR_AUTO_FORM = 1, LR_AUTO_HELD = 2, LR_AUTO_COMPUTED = 4 };
-enum { LR_AUTO_BLOCKED = -1, LR_AUTO_OBJECT = -2 };
+enum { LR_AUTO_SHADOWED = -1, LR_AUTO_OBJECT = -2, LR_AUTO_UNKNOWN = -3 };
 
 static void lr_auto_form(Compiler *c, int node, const char *name) {
   LoadRecord *r = c->lrec;
@@ -5223,7 +5223,7 @@ static void lr_autoload_filter(Compiler *c) {
     const AutoloadRegistration *a = &c->autoloads[k];
     int recv = nt_ref(nt, a->node, "receiver");
     c->auto_at[a->node] = 0;
-    if (elab_autoload_shadowed(c, a->node)) continue;
+    if (elab_autoload_shadow(c, a->node) != ELAB_NO) continue;
     if (a->slot || recv < 0 || nt_kind(nt, recv) == NK_SelfNode || !elab_value_not_module(c, recv))
       c->autoloads[m++] = *a;
   }
@@ -5237,7 +5237,7 @@ static void lr_autoload(ElabRec *x, int node, int fc, int fs, int may) {
     const char *name = nt_kind(nt, node) == NK_CallNode ? nt_str(nt, node, "name") : NULL;
     if (node >= x->r->nauto_owner || !name || !is_autoload_name(name)) return;
     int sg, recv = nt_ref(nt, node, "receiver"), cls = lr_receiver(x, recv, fc, fs, &sg, 0);
-    int owner = LR_AUTO_BLOCKED;
+    int owner = LR_AUTO_UNKNOWN;
     if (!sg && !x->r->st[x->cur].kept) {
       if (cls >= LR_MAIN) owner = cls + 2;
       else if (recv >= 0) {
@@ -5247,7 +5247,7 @@ static void lr_autoload(ElabRec *x, int node, int fc, int fs, int may) {
       }
     }
     int *held = &x->r->auto_owner[node];
-    *held = !*held || *held == owner ? owner : LR_AUTO_BLOCKED;
+    *held = !*held || *held == owner ? owner : LR_AUTO_UNKNOWN;
     return;
   }
   int n; AutoloadRegistration *a = comp_autoloads(x->c, node, &n);
@@ -8158,21 +8158,27 @@ static int lr_auto_chain(Compiler *c, int cls, int object) {
   /* An unreopened Object has no record class. Start at main, then
      account for the missing part of the class object's chain. */
   if (object && lr_auto_core(c, &w, CORE_MODULE, 0)) return 1;
-  if (lr_auto_core(c, &w, CORE_CLASS_REOPEN, 0)) return 1;
   /* Class objects also reach Object and BasicObject's singletons. */
   if (!object && (cls == LR_MAIN || comp_class_is_module(c, &c->classes[cls]))) return 0;
-  return lr_auto_core(c, &w, CORE_OBJECT, 1) || lr_auto_core(c, &w, CORE_BASIC_OBJECT, 1);
+  return lr_auto_core(c, &w, CORE_CLASS_REOPEN, 0) || lr_auto_core(c, &w, CORE_OBJECT, 1) || lr_auto_core(c, &w, CORE_BASIC_OBJECT, 1);
 }
 
-int elab_autoload_shadowed(Compiler *c, int id) {
+int elab_autoload_shadow(Compiler *c, int id) {
   LoadRecord *r = c->lrec;
-  if (r->auto_unknown || r->names_any) return 1;
-  if (!r->auto_owner) return lr_named(c, "autoload");
-  if (id >= r->nauto_owner) return 1;
-  int owner = r->auto_owner[id];
-  if (!owner || owner == LR_AUTO_BLOCKED) return 1;
-  if (!r->auto_pending) return 0;
-  return owner == LR_AUTO_OBJECT ? lr_auto_chain(c, LR_MAIN, 1) : lr_auto_chain(c, owner - 2, 0);
+  if (!r->auto_owner) {
+    if (!lr_named(c, "autoload")) return ELAB_NO;
+    int recv = nt_ref(c->nt, id, "receiver");
+    NodeKind k = recv < 0 ? NK_SelfNode : nt_kind(c->nt, recv);
+    if (k == NK_SelfNode) return ELAB_YES;
+    int core;
+    return lr_class_ref_at(c, recv, &core) >= LR_MAIN || core >= 0 ? ELAB_YES : ELAB_UNKNOWN;
+  }
+  int owner = id < r->nauto_owner ? r->auto_owner[id] : 0;
+  if (!owner || owner == LR_AUTO_UNKNOWN) return ELAB_UNKNOWN;
+  if (owner == LR_AUTO_SHADOWED || r->auto_unknown || r->names_any) return ELAB_YES;
+  if (!r->auto_pending) return ELAB_NO;
+  int shadowed = owner == LR_AUTO_OBJECT ? lr_auto_chain(c, LR_MAIN, 1) : lr_auto_chain(c, owner - 2, 0);
+  return shadowed ? ELAB_YES : ELAB_NO;
 }
 
 /* Settle the candidates against the record made without registrations.
@@ -8195,7 +8201,7 @@ static void lr_autoload_settle(Compiler *c) {
   for (int i = 0; !r->auto_unknown && !r->names_any && i < r->ncls; i++)
     if (r->cls[i].unheld && (r->cls[i].auto_computed & 1)) r->auto_unknown = 1;
   for (int i = 0; !r->auto_unknown && !r->names_any && i < r->nauto_owner; i++)
-    if (r->auto_owner[i] && elab_autoload_shadowed(c, i)) r->auto_owner[i] = LR_AUTO_BLOCKED;
+    if (r->auto_owner[i] && elab_autoload_shadow(c, i) == ELAB_YES) r->auto_owner[i] = LR_AUTO_SHADOWED;
 
   r->auto_pending = 0;
   lr_autoload_filter(c);

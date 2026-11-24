@@ -797,8 +797,10 @@ void prog_refuse_loads(Compiler *c) {
       if (elab_autoload_read(c, mav[j]))
         unsupported_feature(c, id, "--load-model=graph loads an autoload's file at its constant's first reference only later, for now");
     if (!is_autoload_name(name)) continue;
-    if (elab_autoload_shadowed(c, id)) {
-      if (nt_ref(nt, id, "receiver") < 0)
+    int rv = nt_ref(nt, id, "receiver");
+    int shadow = elab_autoload_shadow(c, id);
+    if (shadow == ELAB_YES || (shadow == ELAB_UNKNOWN && rv < 0)) {
+      if (rv < 0)
         unsupported_feature(c, id, "--load-model=graph loads an autoload's file at its constant's first reference only later, for now");
       continue;
     }
@@ -806,10 +808,9 @@ void prog_refuse_loads(Compiler *c) {
        holding one), there is no registration (lr_autoload_filter): the call
        stays the run-time call, which raises. Any other value may be a
        module, whose registration the parse did not take. */
-    int rv = nt_ref(nt, id, "receiver");
     NodeKind rk = rv >= 0 ? nt_kind(nt, rv) : NK_SelfNode;
     if (rk != NK_SelfNode && elab_value_not_module(c, rv)) continue;
-    if (rk != NK_SelfNode && rk != NK_ConstantReadNode && rk != NK_ConstantPathNode)
+    if (shadow == ELAB_UNKNOWN || (rk != NK_SelfNode && rk != NK_ConstantReadNode && rk != NK_ConstantPathNode))
       unsupported_feature(c, id, "--load-model=graph: unresolved autoload owner");
     int n; const AutoloadRegistration *a = comp_autoloads(c, id, &n);
     if (!n) unsupported_feature(c, id, "--load-model=graph: unresolved autoload registration");

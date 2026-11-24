@@ -22569,6 +22569,32 @@ static void emit_class_cmp_user_dispatch(Compiler *c, Buf *b) {
   else buf_puts(b, "  (void)a; (void)b;\n");
   buf_puts(b, "  *own = 0; return sp_box_nil();\n}\n");
 }
+/* `static <type> gv_<name>`, the declaration of a global's file-scope
+   static (its definition in codegen_program adds the initializer). */
+static void emit_gvar_decl_head(Compiler *c, LocalVar *lv, Buf *b) {
+  buf_puts(b, "static ");
+  if (gvar_is_oint(c, lv)) buf_puts(b, oint_ctype(lv->type)); else emit_ctype(c, lv->type, b);
+  buf_printf(b, " gv_%s", lv->name);
+}
+/* Tentative declarations of the version and visibility cells, call_plan's
+   `$__spinel_*` globals, ahead of the class machinery: a guarded row of
+   sp_refl_method_defined tests a later mixin's cell and a version's
+   visibility cell, and the globals are defined after the machinery, with
+   the class structs they may name, so a row that read a cell named an
+   identifier not declared yet and the C did not compile. A cell is an
+   Integer or a boxed value, whose types the runtime header declares; its
+   definition follows with its initializer, as C allows a file-scope static
+   a tentative definition ahead of its definition. */
+static void emit_cell_gvar_decls(Compiler *c, Buf *b) {
+  int n = 0;
+  for (int i = 0; i < c->ngvars; i++) {
+    LocalVar *lv = &c->gvars[i];
+    if (!is_scalar_ret(lv->type) || cplan_cell_dropped(c, lv)) continue;
+    if (strncmp(lv->name, "__spinel_", 9) != 0) continue;
+    emit_gvar_decl_head(c, lv, b); buf_puts(b, ";\n"); n++;
+  }
+  if (n) buf_puts(b, "\n");
+}
 static void emit_class_machinery(const NodeTable *nt, Compiler *c, Buf *b, char **isa_ext, size_t *isa_ext_at) {
   if (g_needs_class_machinery) {
   /* sp_cls_is_module[i]: 1 if user class i was defined as a module, 0 if class */
@@ -22678,7 +22704,7 @@ static void emit_class_machinery(const NodeTable *nt, Compiler *c, Buf *b, char 
     buf_puts(b, "    cur=next;\n");
     buf_puts(b, "  }\n");
     buf_puts(b, "  return 0;\n}\n");
-    if (refl_md_dynamic_used(c)) emit_refl_method_defined(c, b);
+    if (refl_md_dynamic_used(c)) { emit_cell_gvar_decls(c, b); emit_refl_method_defined(c, b); }
     if (refl_im_params_used(c)) emit_refl_im_params(c, b);
     /* The same walk up from a user class, matching an ANCESTOR by name: the
        runtime's poly is_a? and class-arm helper hold the arm's class as the
@@ -25216,10 +25242,9 @@ char *codegen_program(const NodeTable *nt) {
   for (int i = 0; i < c->ngvars; i++) {
     LocalVar *lv = &c->gvars[i];
     if (!is_scalar_ret(lv->type) || cplan_cell_dropped(c, lv)) continue;   /* (a version cell nothing reads) */
-    buf_puts(&b, "static ");
     int goint = gvar_is_oint(c, lv);
-    if (goint) buf_puts(&b, oint_ctype(lv->type)); else emit_ctype(c, lv->type, &b);
-    buf_printf(&b, " gv_%s = %s;\n", lv->name,
+    emit_gvar_decl_head(c, lv, &b);
+    buf_printf(&b, " = %s;\n",
                lv->type == TY_RANGE ? "{0}" :
                /* The interpreter's own flags start false, not nil: the
                   ruby run without -w or -d reads `$VERBOSE` and `$DEBUG` as

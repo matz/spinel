@@ -20,10 +20,10 @@
    SP_CATCH_STACK_MAX) goes to the archive's build, and a program compiled
    with another value fails to link (sp_exc_stacks_<exc>_<catch>). */
 #ifndef SP_EXC_STACK_MAX
-#define SP_EXC_STACK_MAX 64
+#define SP_EXC_STACK_MAX 1024
 #endif
 #ifndef SP_CATCH_STACK_MAX
-#define SP_CATCH_STACK_MAX 64
+#define SP_CATCH_STACK_MAX 1024
 #endif
 #define SP_EXC_DEPTHS_SYM_(e, c) sp_exc_stacks_##e##_##c
 #define SP_EXC_DEPTHS_SYM(e, c) SP_EXC_DEPTHS_SYM_(e, c)
@@ -125,12 +125,19 @@ SP_NORETURN SP_COLD void sp_stack_too_deep(void);   /* lib/sp_exc.c */
    the check must precede is that first indexed store, not the ++; it opens the
    frame-arming sequence at every arm the codegen emits. The depth is not a
    lexical property: a method whose body is a begin/rescue keeps its frame armed
-   across the calls that body makes, so ordinary recursion 65 deep reaches the
-   end of the array just as 65 nested begins do. Inside a fiber body, and inside
+   across the calls that body makes, so ordinary recursion as deep as the array
+   reaches its end just as that many nested begins do, and raises
+   SystemStackError there (sp_stack_too_deep). Inside a fiber body, and inside
    a thread's, one slot is already spent on the frame the runtime arms around it
-   (sp_exc_arm below), so 63 of the body's own is the last that fits. */
-static inline void sp_exc_check_depth(void) {
+   (sp_exc_arm below). */
+/* The bound alone, for an arm that changes state the raise would leave
+   behind (a mutex taken, a flag set) before its check: the raise comes
+   first, and the arm's own check follows the change with the marks. */
+static inline void sp_exc_check_room(void) {
   if (SP_UNLIKELY(sp_exc_top >= SP_EXC_STACK_MAX)) sp_stack_too_deep();
+}
+static inline void sp_exc_check_depth(void) {
+  sp_exc_check_room();
 #ifdef SP_CEXT
   sp_exc_cextmark[sp_exc_top] = sp_cext_arena_snapshot();
 #endif

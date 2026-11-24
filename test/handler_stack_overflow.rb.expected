@@ -1,0 +1,12 @@
+rescue frames: SystemStackError
+ensure frames: rescued, ensures missed beyond the innermost: false
+synchronize frames: rescued, all unlocked: true
+catch frames: rescued
+again 0
+again 1
+500
+500
+thread: rescued
+fiber: rescued
+1000
+end

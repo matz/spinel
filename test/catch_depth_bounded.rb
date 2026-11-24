@@ -1,14 +1,11 @@
 # The same bound on the catch stack, reached the same dynamic way: each level
-# holds its catch open across the recursive call, so level 65 would push a 65th
-# entry. Spinel stops with CRuby's "stack level too deep (SystemStackError)"
-# and exits 1; CRuby runs to the end. Silent on stdout either way -- see
-# test/exc_frame_depth_bounded.rb for why that is what the suite can hold.
+# holds its catch open across the recursive call, so a recursion with no end
+# pushes one entry per level until the array is full. SystemStackError, as
+# for the exception frames (test/exc_frame_depth_bounded.rb); unrescued here,
+# so CRuby's words on stderr and exit 1, which is what CRuby does when its own
+# stack runs out. Silent on stdout either way.
 def deep_catch(n)
-  return 0 if n <= 0
-  catch(:t) { deep_catch(n - 1) + 1 }
+  catch(:t) { deep_catch(n + 1) + 1 }
 end
-deep_catch(70)
-
-# CRuby runs this to the end; Spinel stops above, at its handler-stack bound,
-# with the fatal on stderr. The non-zero CRuby exit keeps regen off both files.
-exit 1
+deep_catch(0)
+puts "unreachable"

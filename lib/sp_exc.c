@@ -1569,9 +1569,17 @@ sp_int sp_exc_is_a(volatile sp_Exception *ve, const char *cn) {
   return 0;
 }
 
-/* Each of the fixed-depth handler stacks in spinel_rt.h fails the same way when
-   a program nests deeper than its array holds; see the comment there. */
+/* Each of the fixed-depth handler stacks in spinel_rt.h comes here when a
+   program nests deeper than its array holds; see the comment there. The
+   check runs before the push, so the frame on top is armed and whole, and
+   the raise lands in it as a raise of a C stack that ran out does
+   (sp_raise_stack_overflow): the frames that filled the stack unwind, their
+   ensures run, and a rescue of SystemStackError among them takes it, as
+   CRuby's does. With no frame armed the message stands and the process
+   ends, as before. */
+void sp_raise_stack_overflow(void);   /* below */
 SP_NORETURN SP_COLD void sp_stack_too_deep(void) {
+  sp_raise_stack_overflow();   /* returns only with nothing armed */
   fputs("stack level too deep (SystemStackError)\n", stderr);
   exit(1);
 }
@@ -1830,8 +1838,8 @@ void *sp_exc_ending_obj(const char *cls, const char *msg, void *obj, void *cause
    crossed on that leg, so an ensure can still use targets outside its
    landing frame. */
 static void sp_handler_stacks_unwind(void) {
-  /* a dead catch entry is worse than a leak: sp_catch_top is fixed at 64, so a
-     raise out of a catch in a loop walks it off the end -- and a later `throw`
+  /* a dead catch entry is worse than a leak: sp_catch_top has a fixed bound, so
+     a raise out of a catch in a loop walks it off the end -- and a later `throw`
      that matches one longjmps into a finished frame */
   while (sp_catch_top > 0 && sp_catch_exc_top[sp_catch_top - 1] >= sp_exc_top)
     sp_catch_top--;
@@ -1918,9 +1926,9 @@ static void sp_exc_write_uncaught(const char *cls, const char *msg, sp_StrArray 
 void sp_exc_print_uncaught(const char *cls, const char *msg, sp_StrArray *bt) {
   sp_exc_write_uncaught(cls, msg, bt, 0);
 }
-/* The C stack ran out. Unlike the handler-stack exhaustion below, this one
-   CAN be rescued: the frames that filled the stack are about to be unwound,
-   and the handler that catches it sits in one of them.
+/* The C stack ran out, or a handler stack did (sp_stack_too_deep). Either
+   one CAN be rescued: the frames that filled the stack are about to be
+   unwound, and the handler that catches it sits in one of them.
    Called from the SIGSEGV handler, on the alternate signal stack, so nothing
    here may allocate or take a lock -- sp_raise_cls does both. These are the
    three plain stores sp_raise_cls ends with, and the same longjmp: the

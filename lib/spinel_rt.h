@@ -18051,12 +18051,13 @@ static inline void *sp_exc_caught_obj(void) {
   }
   return e;
 }
-/* Each of the fixed-depth handler stacks below fails the same way when a
-   program nests deeper than its array holds: CRuby's SystemStackError words,
-   on stderr, and out. One copy of them, called from each stack's check. Not a
-   Ruby SystemStackError -- catching one needs a handler slot, which is exactly
-   what has run out. (sp_rescue_push above keeps its own older wording, which
-   names the nesting that overflowed.) */
+/* Each of the fixed-depth handler stacks below raises the same way when a
+   program nests deeper than its array holds: CRuby's SystemStackError, into
+   the exception frame on top, which the check before every push leaves
+   armed and whole; with none armed, its words on stderr, and out. One copy
+   of it, called from each stack's check (lib/sp_exc.c). (sp_rescue_push
+   above keeps its own older wording, which names the nesting that
+   overflowed.) */
 SP_NORETURN SP_COLD void sp_stack_too_deep(void);   /* lib/sp_exc.c */
 /* sp_exc_check_depth: lib/sp_exc_ctx.h */
 /* ---- Native backtrace formatting (spinel --debug) ---------------------- */
@@ -19277,7 +19278,7 @@ static void sp_throw(const char *tag, int kind, sp_RbVal val) {
    ~200 bytes) shifts every hot TLS variable's layout and cost optcarrot
    ~8% fps in a program that never breaks from a block. TLS holds only
    the pointers, so break-free programs pay nothing. */
-#define SP_BRK_STACK_MAX 64
+#define SP_BRK_STACK_MAX 1024
 extern SP_TLS jmp_buf *sp_brk_stack;              /* lazily allocated */
 extern SP_TLS sp_RbVal *sp_brk_val;
 extern SP_TLS sp_int *sp_brk_serial;
@@ -22936,10 +22937,12 @@ int sp_Kernel_require_relative(const char *feature, int *loaded, void (*top)(voi
 static int sp_load_file(const char *feature, int *loaded, void (*top)(void)) {
   if (!top) sp_raise_load_error(feature);
   if (*loaded) return 0;
-  *loaded = 1;
   const char *ecls = NULL, *emsg = NULL; void *eobj = NULL;
   SP_GC_ROOT_STR(emsg); SP_GC_ROOT(eobj);
+  /* the mark comes after the check: a stack that is full raises here, and
+     a feature whose load never began is not loaded */
   sp_exc_check_depth();
+  *loaded = 1;
   sp_exc_rootmark[sp_exc_top] = sp_gc_nroots; sp_rescue_mark[sp_exc_top] = sp_rescue_sp;
   sp_exc_msg[sp_exc_top] = 0; sp_exc_obj[sp_exc_top] = 0; sp_exc_top++;
   if (setjmp(sp_exc_stack[sp_exc_top - 1]) == 0) {
@@ -22975,6 +22978,9 @@ static sp_RbVal sp_Mutex_synchronize_proc(sp_mutex *m, sp_Proc *blk) {
   SP_GC_ROOT_RBVAL(r);
   const char *ecls = NULL, *emsg = NULL; void *eobj = NULL; int excf = 0;
   SP_GC_ROOT_STR(emsg); SP_GC_ROOT(eobj);
+  /* a stack that is full raises before the lock: a raise after it would
+     leave the mutex held. The lock can park, so the marks are taken after */
+  sp_exc_check_room();
   sp_Mutex_lock(m);
   sp_exc_check_depth();
   sp_exc_rootmark[sp_exc_top] = sp_gc_nroots; sp_rescue_mark[sp_exc_top] = sp_rescue_sp;
@@ -23008,8 +23014,8 @@ static sp_RbVal sp_Fiber_blocking_proc(sp_Proc *blk) {
   SP_GC_ROOT_RBVAL(r);
   const char *ecls = NULL, *emsg = NULL; void *eobj = NULL; int excf = 0;
   SP_GC_ROOT_STR(emsg); SP_GC_ROOT(eobj);
+  sp_exc_check_depth();   /* before the flag: a raise here leaves it as it was */
   f->blocking = 1;
-  sp_exc_check_depth();
   sp_exc_rootmark[sp_exc_top] = sp_gc_nroots; sp_rescue_mark[sp_exc_top] = sp_rescue_sp;
   sp_exc_msg[sp_exc_top] = 0; sp_exc_obj[sp_exc_top] = 0; sp_exc_top++;
   if (setjmp(sp_exc_stack[sp_exc_top - 1]) == 0) {

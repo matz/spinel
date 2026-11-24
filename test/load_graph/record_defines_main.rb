@@ -1,7 +1,8 @@
 # A class body's call of a program method that defines and writes nothing
 # when it runs is no code the record cannot follow; one whose definitions
-# the macro form runs is recorded as them (defs); one that writes, may (a
-# cycle), or calls a method the walk has not recorded yet is (opaque).
+# the macro form runs is recorded as them (defs); one that writes, or calls a
+# method the walk has not recorded yet, is (opaque). Two methods that call
+# each other and do nothing else (ping, pong) do nothing, a cycle or not.
 class Foo
   def self.label(x) = "foo #{x}"
   def self.twice = label(1) + label(2)

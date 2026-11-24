@@ -4548,7 +4548,10 @@ static int lr_callbacks_define(Compiler *c, int depth) {
     if ((i == 0 || strcmp(r->names[i - 1], r->names[i]) != 0) &&
         (method_name_implicitly_invoked(r->names[i]) || ic_core_callback(r->names[i], 0)))
       o = lr_most(o, lr_callee_defines(c, r->names[i], 1, depth));
-  if (!r->watch && !r->anon_busy && !r->ndask && (!o || r->recorded)) r->callbacks = (unsigned char)(o + 1);
+  /* (kept while a def is asked too: a def's root that finds its guess did
+     not hold takes it back with the answers that may rest on the guess,
+     lr_journal_drop) */
+  if (!r->watch && !r->anon_busy && (!o || r->recorded)) r->callbacks = (unsigned char)(o + 1);
   return o;
 }
 

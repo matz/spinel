@@ -8629,9 +8629,10 @@ static int attr_value_walk(Compiler *c, int arg, AttrArgWalk *w) {
   w->n++;
   return 0;
 }
-/* The values for member iv of Struct class cls that the class's own
-   initialize hands the builtin one through `super` (`def initialize(x) =
-   super([x])`), each walked as a writer's argument is (attr_value_walk):
+/* The values for member iv of Struct or Data class cls that the class's
+   own initialize hands the builtin one through `super` (`def initialize(x)
+   = super([x])`, a Data's by keyword), each walked as a writer's argument
+   is (attr_value_walk):
    nonzero stops where one may not be followed (a bare `super`, a splat,
    an initialize above that is not the builtin's); 0 when there is no
    initialize of the class's own. */
@@ -8642,8 +8643,9 @@ static int struct_super_member_values(Compiler *c, int cls, int iv, AttrArgWalk 
   int mi = iv >= 0 && iv < ci->nmembers ? cplan_hook_target(c, -1, cls, "initialize", &ml) : -1;
   if (mi < 0) return 0;
   int k = ml.def_class;
-  if (k < 0 || !c->classes[k].is_struct || c->classes[k].is_data ||
+  if (k < 0 || !c->classes[k].is_struct ||
       (c->classes[k].parent >= 0 && cplan_hook_target(c, -1, c->classes[k].parent, "initialize", NULL) >= 0)) return 1;
+  int data = c->classes[k].is_data;
   Scope *ms = &c->scopes[mi];
   NT_FOREACH_KIND(nt, NK_ForwardingSuperNode, su)
     if (comp_scope_of(c, su) == ms) return 1;
@@ -8662,6 +8664,7 @@ static int struct_super_member_values(Compiler *c, int cls, int iv, AttrArgWalk 
         if (kv && sp_streq(kv, mname)) vnode = nt_ref(nt, ke[e], "value");
       }
     }
+    else if (data && an > 0) return 1;   /* (a Data's initialize takes its members by keyword) */
     else if (iv < an) vnode = av[iv];
     if (vnode >= 0 && attr_value_walk(c, vnode, w)) return 1;
   }

@@ -19831,9 +19831,8 @@ sp_StrArray *sp_dir_glob_flags(const char *pattern, const char *base, sp_int fla
 /* Dir.glob(pattern, base:, flags:, sort:): the values come boxed, in source
    order; a keyword not given is nil with its `given` flag 0. A nil base: is
    no base, flags: converts as an Integer argument (a Float truncates, a
-   String or nil is TypeError) and takes 0 or File::FNM_DOTMATCH, any other
-   value being NotImplementedError rather than a glob that ignores it (as
-   Pathname.glob's flags), and a sort: not given is true. */
+   String or nil is TypeError). The runtime applies glob-specific flag
+   semantics; a sort: not given is true. */
 static sp_StrArray *sp_dir_glob_keywords(sp_RbVal pattern, sp_RbVal base, sp_RbVal flags,
                                          int flags_given, sp_RbVal sort, int sort_given) {
   const char *p = sp_poly_arg_path(pattern); SP_GC_ROOT_STR(p);

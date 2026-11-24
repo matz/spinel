@@ -10,3 +10,15 @@ true
 ["a.txt", "b.txt"]
 ["a.txt", "b.txt"]
 []
+["a.txt", "b.txt"]
+["a.txt", "b.txt"]
+[".", ".hid", "a*b", "a.txt", "a\\b", "b.txt", "sub"]
+[".", ".hid", "a*b", "a.txt", "a\\b", "b.txt", "sub"]
+"no implicit conversion of String into Integer"
+"no implicit conversion of String into Integer"
+"no implicit conversion from nil to integer"
+"no implicit conversion from nil to integer"
+"no implicit conversion of true into Integer"
+"no implicit conversion of true into Integer"
+"no implicit conversion of false into Integer"
+"no implicit conversion of false into Integer"

@@ -1,3 +1,4 @@
+# spinel: share
 # spinel: gc-stress
 require "pathname"
 require "tmpdir"
@@ -28,6 +29,21 @@ begin
     p short.(pn.glob("*", flags))
   end
   Dir.chdir(dir) { p Pathname.new(".").glob("*", File::FNM_DOTMATCH).map(&:to_s) }
+  # All flag words reach Dir.glob, including combinations. CASEFOLD follows
+  # the filesystem, so compare with the unflagged result on APFS and ext4.
+  [File::FNM_CASEFOLD, File::FNM_PATHNAME, File::FNM_EXTGLOB].each do |flags|
+    p Pathname.glob("#{dir}/V*", flags) == Pathname.glob("#{dir}/V*")
+    p pn.glob("V*", flags) == pn.glob("V*")
+    p short.(pn.glob("{visible,sub}", flags)).sort
+  end
+  File.write("#{dir}/a*b", "")
+  File.write("#{dir}/a\\b", "")
+  p short.(Pathname.glob("#{dir}/a\\*b", File::FNM_NOESCAPE))
+  p short.(pn.glob("a\\*b", File::FNM_NOESCAPE | File::FNM_CASEFOLD))
+  File.delete("#{dir}/a*b")
+  File.delete("#{dir}/a\\b")
+  p short.(Pathname.glob("#{dir}/**/*", File::FNM_DOTMATCH | File::FNM_EXTGLOB))
+  p short.(pn.glob("**/*", File::FNM_DOTMATCH | File::FNM_PATHNAME))
   # a Float is truncated
   p short.(pn.glob("*", 4.9))
   # a "." pattern names the receiver

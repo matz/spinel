@@ -6679,6 +6679,7 @@ BLOCK_CONDITIONS_LIMIT ?= 2.2
 # prints its count from an atexit handler, also when the compile fails, so
 # reading it alone would accept the ratio of a program that did not build.
 scale-test: $(SPINEL_WORK)
+	@sh test/scale/autoload_diamond.sh $(SPINEL_WORK)
 	@tmp=$$(mktemp -d /tmp/spinel-scale.XXXXXX); \
 	gen () { sh test/scale/$$1.sh $$2 > "$$tmp/$$3" && test -s "$$tmp/$$3" || \
 	  { echo "scale-test: FAIL (test/scale/$$1.sh $$2 failed or wrote no program)"; rm -rf "$$tmp"; exit 1; }; }; \

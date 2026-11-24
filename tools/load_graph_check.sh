@@ -397,8 +397,7 @@ refused() {
 mkdir "$tmp/autoload" "$tmp/entry" "$tmp/end" "$tmp/mixin"
 printf 'module Lib; end\n' > "$tmp/autoload/lib.rb"
 printf 'autoload :Lib, File.join(__dir__, "lib")\np Lib\n' > "$tmp/autoload/main.rb"
-# A possible autoload definition anywhere keeps the original graph refusal,
-# even when the program owns the name.
+# A program method on the receiver's chain keeps the graph refusal.
 printf 'puts "must not load"\nclass Lib; end\n' > "$tmp/autoload/lib.rb"
 cat > "$tmp/autoload/main.rb" <<'RUBY'
 def autoload(*) = puts("user top")
@@ -416,18 +415,49 @@ end
 Holder.new.run
 RUBY
 refused autoload "--load-model=graph loads an autoload's file at its constant's first reference only later, for now"
-printf 'puts "loaded"\nclass Holder; Z = 7; end\n' > "$tmp/autoload/lib.rb"
-cat > "$tmp/autoload/main.rb" <<'RUBY'
-class Other
-  def autoload(*) = puts("user other")
+# A mixin that supplies autoload, even conditionally, prevents registration.
+for form in 'extend Lazy' 'extend Lazy if ARGV.empty?'; do
+  cat > "$tmp/autoload/main.rb" <<RUBY
+module Lazy
+  def autoload(*) = puts("user mixin")
 end
-class Holder
-  autoload :Z, File.join(__dir__, "lib")
+module Holder
+  $form
+  autoload :Lib, File.join(__dir__, "lib")
 end
-puts "before"
-p Holder::Z
 RUBY
-refused autoload "--load-model=graph loads an autoload's file at its constant's first reference only later, for now"
+  refused autoload "--load-model=graph loads an autoload's file at its constant's first reference only later, for now"
+done
+
+# A change to autoload in the receiver's lookup chain must not register a file.
+for change in \
+  'class Module; def autoload(*) = nil; end' \
+  'class Class; def autoload(*) = nil; end' \
+  'class Object; def autoload(*) = nil; end' \
+  'module Kernel; def autoload(*) = nil; end' \
+  'def autoload(*) = nil' \
+  'def Holder.autoload(*) = nil' \
+  'class << Holder; define_method("auto#{:load}") { |*| nil }; end' \
+  'Holder.define_singleton_method("auto#{:load}") { |*| nil }' \
+  'class Module; define_method("auto#{:load}") { |*| nil }; end' \
+  'class Class; define_method("auto#{:load}") { |*| nil }; end' \
+  'class Object; define_method("auto#{:load}") { |*| nil }; end' \
+  'module Kernel; define_method("auto#{:load}") { |*| nil }; end' \
+  'define_method("auto#{:load}") { |*| nil }' \
+  'obj = Holder; obj.define_singleton_method("auto#{:load}") { |*| nil }' \
+  'Holder.send(:define_singleton_method, "auto#{:load}") { |*| nil }' \
+  'Holder.class_eval(ARGV.first)' \
+  'class Module; undef autoload; def method_missing(*) = nil; end' \
+  'class Module; remove_method :autoload; end'; do
+  cat > "$tmp/autoload/main.rb" <<RUBY
+class Holder; end
+$change
+class Holder
+  autoload :Lib, File.join(__dir__, "lib")
+end
+RUBY
+  refused autoload "--load-model=graph loads an autoload's file at its constant's first reference only later, for now"
+done
 # A scoped read through a class whose superclass chain the record does not
 # know may reach Object's registration: refused as on master.
 printf 'puts "loaded"\nclass Scoped; end\n' > "$tmp/autoload/lib.rb"
@@ -548,6 +578,18 @@ printf 'class UserAuto\n  def autoload(name, path) = puts("user #{name}")\nend\n
 if "$SPINEL" --load-model=graph "$tmp/autoload/main.rb" -o "$tmp/autoload/bin" >"$tmp/autoload/cc" 2>&1; then
   [ "$("$tmp/autoload/bin")" = "user X" ] || fail "a program's own autoload on a constant did not run"
 else fail "a program's own autoload on a constant parsed its argument's file"; sed -n 1,3p "$tmp/autoload/cc"; fi
+# An unrelated definition does not show that a value receiver is shadowed.
+cat > "$tmp/autoload/main.rb" <<'RUBY'
+module Unrelated
+  def autoload(*) = nil
+end
+module Holder; end
+autoload :Other, File.join(__dir__, "lib")
+owner = [Holder].first
+owner.autoload(:X, File.join(__dir__, "lib"))
+puts Holder::X
+RUBY
+refused autoload "unresolved autoload owner"
 # a value that may be a module (CRuby registers on it) stays refused
 printf 'module Holder; end\nM = [Holder].first\nM.autoload(:X, File.join(__dir__, "lib"))\np Holder::X\n' > "$tmp/autoload/main.rb"
 refused autoload "unresolved autoload owner"

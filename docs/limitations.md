@@ -2065,9 +2065,17 @@ Error: global aliasing of regexp special globals is not supported (alias $MATCH 
 Direct reads of the match globals work as usual; only aliasing them is
 unsupported, so `require "English"` does not compile.
 
-#### `autoload` loads its file when the program starts
+#### `autoload`
 
-Spinel resolves `require` and `require_relative` when it compiles, and an
+With the default `--load-model=graph`, a registration with a resolved
+module, constant name, and file loads the file when that constant is first
+referenced. Spinel refuses receiverless calls when the receiver's lookup
+chain may shadow the builtin `autoload`. Definitions on unrelated classes
+and modules do not prevent registration. Constant-table queries such as
+`autoload?`, `const_defined?`, and `constants` are refused in programs
+with graph-mode autoload registrations.
+
+With `--load-model=inline`, Spinel resolves `require` and `require_relative` when it compiles, and an
 `autoload` whose path it can read is compiled as a require of that file:
 `autoload :X, "path"`, `autoload :X, "#{__dir__}/path"` and
 `autoload :X, File.expand_path("path", __dir__)`. In a required file the

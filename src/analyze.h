@@ -351,6 +351,8 @@ typedef enum { LR_INCLUDE, LR_EXTEND, LR_PREPEND, LR_SG_PREPEND } LrMixKind;   /
 typedef struct { int node, kind, mod, ref; unsigned char dup, cond, applied; int open; unsigned char early, unplaced; } LrMixin;
 typedef enum { ELAB_GVAR, ELAB_MAIN_IVAR, ELAB_CONST } ElabVar;
 struct HostStep;
+/* ELAB_UNKNOWN for an unresolved receiver, ELAB_YES for possible shadowing on a resolved chain. */
+int elab_autoload_shadow(Compiler *c, int id);
 void elab_program(Compiler *c, struct HostStep *h);
 void elab_const_keys(Compiler *c);   /* each constant write and resolved read takes its entity's key (#10787); SPINEL_CONST_KEY_CHECK reports the changes */
 /* (the same from the node table alone: a key whose node a later pass

@@ -1157,9 +1157,10 @@ value of a method (or a chain of them, a method a subclass overrides, or a
 method answering its block's value), a `then` block, a multiple assignment
 from a literal, a row of a literal table, a builtin that answers its receiver
 (`push`, `concat`, `tap`), an ivar (the main object's too) or attr_reader
-every write of which builds a new array or keeps a parameter of the method
-writing it, a Struct member its constructor sets, a global, class variable or
-constant. The method's other callers then read the general Array
+every write of which, an attribute writer's call among them, builds a new
+array or keeps a parameter of the method writing it, a Struct member its
+constructor sets and nothing writes after, read by its reader, a global,
+class variable or constant. The method's other callers then read the general Array
 too. A boxed argument -- a local written arrays of two kinds, an element read
 out of a general container, a block parameter, a `for` variable -- is
 followed the same way, to each typed array the store cannot fit.
@@ -1179,8 +1180,11 @@ through `curry`, after a `&` hand-off or more than one method down from
 where it is passed, a block given to a `Method` object's `call`, a block's
 `**`, a `**` of a Hash built by index writes, a destructuring parameter
 (`|(x)|`), an element of what a `define_method` body receives, a store from
-a block nested in the body, and an Array that is an element of an element.
-Such a store raises `TypeError` as above.
+a block nested in the body, an Array that is an element of an element, a
+rest's element read by `dig`, `values_at` or `first(n)` or stored into by
+`[]=`, and a splat of a Hash into a block or of a method's rest into another
+method. Such a store raises `TypeError` as above, and a `[]=` into a rest's
+element is dropped.
 
 Where it cannot follow a typed argument, the one conversion left is a copy,
 and the mutation would land in the copy where CRuby changes the caller's

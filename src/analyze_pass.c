@@ -8664,7 +8664,7 @@ static int widen_boxed_sub_elem_sources(Compiler *c, int r, int k, TyKind elem, 
 
 /* The named parameters of the literal blocks and the proc and lambda
    literals, keyed by the name and the scope that holds them: for each, the
-   call whose block it is, or the literal (holder), its place
+   call (or super) whose block it is, or the literal (holder), its place
    among the binders' parameters (pos: a positional of block_sig's order,
    np + k for keyword k), and for a call's leading
    required named from the first one on its index (idx, else -1: what an
@@ -8715,13 +8715,16 @@ static int bp_ix_first(Compiler *c, const char *name, int scope) {
   if (!comp_scope_index_is_frozen() || bp_ix_nt != nt || bp_ix_ntc != nt->count || bp_ix_gen != gen) {
     free(bp_ix.head);
     bp_ix.n = 0;
-    NT_FOREACH_KIND(nt, NK_CallNode, call) {
-      int blk = nt_ref(nt, call, "block");
-      if (blk < 0 || nt_kind(nt, blk) != NK_BlockNode) continue;
-      int sc = (int)(comp_scope_of(c, blk) - c->scopes);
-      int lambda = is_proc_create(c, call) && is_lambda_create(c, call);
-      bp_ix_add_holder(c, call, nt_ref(nt, blk, "parameters"), lambda, sc, 1);
-    }
+    /* a call's block, a super's (whose plan enters the method it runs) */
+    const NodeKind hk[3] = { NK_CallNode, NK_SuperNode, NK_ForwardingSuperNode };
+    for (int q = 0; q < 3; q++)
+      NT_FOREACH_KIND(nt, hk[q], call) {
+        int blk = nt_ref(nt, call, "block");
+        if (blk < 0 || nt_kind(nt, blk) != NK_BlockNode) continue;
+        int sc = (int)(comp_scope_of(c, blk) - c->scopes);
+        int lambda = q == 0 && is_proc_create(c, call) && is_lambda_create(c, call);
+        bp_ix_add_holder(c, call, nt_ref(nt, blk, "parameters"), lambda, sc, q == 0);
+      }
     NT_FOREACH_KIND(nt, NK_LambdaNode, lam)
       bp_ix_add_holder(c, lam, a_proc_params_node(c, lam), 1, (int)(comp_scope_of(c, lam) - c->scopes), 0);
     int cap = 16;
@@ -9279,8 +9282,8 @@ static int widen_boxed_local_sources(Compiler *c, Scope *sc, const char *nm, Loc
   int ch = 0;
   if (lv->is_block_param) {
     ch |= widen_iter_param_elems(c, sc, nm, elem, depth);
-    /* what the sites that bind it pass there: a proc or lambda literal's
-       call */
+    /* what the sites that bind it pass there: a yield or a block's call
+       in a method the block is handed to, a proc or lambda literal's call */
     ch |= widen_block_param_arrays(c, sc, nm, elem, depth + 1);
   }
   /* a `for` variable, bound as a block parameter is */
@@ -18573,10 +18576,15 @@ static int block_bind_plan(Compiler *c, int id, int block, int mi, int ym, int y
   return kept;
 }
 
-/* Every value that binds parameter `at` (block_site_values) of a proc or
-   lambda literal `holder`, at the calls that run it (proc_call_sites), as
-   far as they show them: a Proc handed where no call shows binds what it
-   binds unseen. Answers the OR of what fn answers. */
+/* Every value that binds parameter `at` (block_site_values) of `holder`'s
+   block -- a call's or a super's literal block, or a proc or lambda
+   literal -- as far as the sites that bind it show them: a call's through
+   every method its plan enters (cplan_entries), at their own sites and
+   those they hand the block on to (block_own_sites, block_reach), as
+   block_bind_plan binds it; a literal's at the calls that run it
+   (proc_call_sites). Sites out of sight (a kept block, a Proc handed where
+   no call shows) bind what they bind unseen. Answers the OR of what fn
+   answers. */
 typedef struct { BlockSig s; int at, ch; BlockValueVisit fn; void *ctx; } BpvCtx;
 static int bpv_site(Compiler *c, int site, const int *argv, int argc, void *ctx) {
   (void)site;
@@ -18616,7 +18624,25 @@ int block_param_values(Compiler *c, int holder, int at, BlockValueVisit fn, void
     bpv_proc_sites(c, holder, &x);
     return x.ch;
   }
-  return 0;
+  int blk = nt_ref(nt, holder, "block");
+  if (blk < 0 || nt_kind(nt, blk) != NK_BlockNode) return 0;
+  block_sig(c, nt_ref(nt, blk, "parameters"), 0, &x.s);
+  int targets[CPT_MAX], n = cplan_entries(c, holder, targets, CPT_MAX);
+  if (n == CPT_UNKNOWN) return 0;
+  char *seen = calloc((size_t)c->nscopes + 1, 1);
+  if (!seen) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int i = 0; i < n; i++) {
+    int arms[VER_MAX_ARMS + 1];
+    int na = c->scopes[targets[i]].entry ? ver_entry_targets(c, targets[i], arms, NULL) : (arms[0] = targets[i], 1);
+    for (int j = 0; j < na; j++) {
+      int y = forwarding_yield_target(c, arms[j], 0);
+      if (y < 0 || seen[y]) continue;
+      block_own_sites(c, holder, arms[j], y, 0, bpv_site, &x);
+      block_reach(c, y, seen, 0, 0, bpv_site, &x);
+    }
+  }
+  free(seen);
+  return x.ch;
 }
 
 /* The blocks the last infer_block_params settled from a yielding method's

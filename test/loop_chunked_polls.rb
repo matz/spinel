@@ -140,6 +140,19 @@ rescue NoMethodError, TypeError => e
   [s, e.class]
 end
 
+# a pass that counts a String's characters costs what the String holds:
+# such a loop keeps its polls at each pass
+def char_count(w, n)
+  s = 0
+  j = 0
+  while j < n
+    s += w[j].length
+    j += 1
+  end
+  s
+end
+
+def words(n) = Array.new(n) { |k| "w\u00e9#{k}" }
 def ints(n) = Array.new(n) { |k| k % 7 + 1 }
 def floats(n) = Array.new(n) { |k| (k % 5) * 0.5 }
 
@@ -170,6 +183,7 @@ work = Thread.new do
   [1500, 2049].each { |n| out << fsum_lit(floats(n)) }
   out << over_read(Array.new(1030, 1), 2000)
   out << Box.new(3000).sum_lowered(ints(3000), 10, 20)
+  out << char_count(words(1500), 1500)
   out
 end
 

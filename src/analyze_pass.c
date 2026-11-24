@@ -19899,6 +19899,19 @@ static TyKind scan_block_param_type(Compiler *c, int id) {
   return TY_STRING;
 }
 
+/* Does plan p bind a String's, Symbol's, Float's or other builtin class's
+   reopening of tap, then or yield_self (`class Symbol; def then =
+   yield(5)`)? The method's yield, if any, types the block parameter;
+   typing it as the receiver as well never settled. (Object's and the
+   other roots' are cplan_root_reopen_call's.) An IO receiver runs only an
+   IO reopen's method that does not yield (reopen_override_block_ok). */
+static int reopen_tap_plan(Compiler *c, int id, const CallPlan *p) {
+  if (p->mi < 0 || p->via != UC_REOPEN || cplan_root_reopen_owner(c, p)) return 0;
+  int recv = nt_ref(c->nt, id, "receiver");
+  if (recv >= 0 && comp_ntype(c, recv) == TY_IO)
+    return !c->scopes[p->mi].yields && c->scopes[p->mi].class_id == comp_core_class(c, CORE_IO);
+  return 1;
+}
 int infer_block_params(Compiler *c) {
   nn_inference_round(c);
   const NodeTable *nt = c->nt;
@@ -20044,7 +20057,7 @@ int infer_block_params(Compiler *c) {
        block: its own yield types the parameter, not the receiver */
     if (yields_self) {
       const CallPlan p = cplan_user_fresh(c, id);
-      if (cplan_root_reopen_call(c, id, &p)) continue;
+      if (cplan_root_reopen_call(c, id, &p) || reopen_tap_plan(c, id, &p)) continue;
     }
     /* An untyped receiver leaves the param untyped too -- body usage is what
        types it there (`[].tap { |a| a << 1 }` gets its array kind from the
@@ -20320,7 +20333,7 @@ int infer_block_params(Compiler *c) {
     if ((is_then_alias(name)) && p0) {
       /* (a program's method the plan binds yields it: its yield types it) */
       const CallPlan rp = cplan_user_fresh(c, id);
-      if (cplan_root_reopen_call(c, id, &rp)) continue;
+      if (cplan_root_reopen_call(c, id, &rp) || reopen_tap_plan(c, id, &rp)) continue;
       Scope *bs = comp_scope_of(c, block);
       LocalVar *plv = scope_local(bs, p0);
       if (plv && lv_is_handle_of(c, plv, rt)) continue;

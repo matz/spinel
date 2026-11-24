@@ -224,6 +224,7 @@ the field layouts coincide by construction.
 | `Array[Foo]`                           | `obj_Foo_ptr_array`                   |
 | `Array[Array[Integer]]`                | `int_array_array`                     |
 | `Array[Array[Float]]`                  | `float_array_array`                   |
+| `Array[Time]`, `Array[Regexp]`, `Array[MatchData]`, other builtin runtime elements | `poly_array` |
 | `Array[<other>]`                       | `poly_array`                          |
 | `Hash[String, Integer]`                | `str_int_hash`                        |
 | `Hash[String, String]`                 | `str_str_hash`                        |
@@ -248,7 +249,15 @@ native class a package declares under a qualified name (`IO::Buffer`) is
 matched by that name. The other builtin classes (`Regexp`, `MatchData`,
 `Proc`, `Method`, `Mutex`, `Queue`, `ConditionVariable`, `Complex`,
 `Rational`, `Enumerator`, `Dir`, `Process::Status`, `File::Stat`) still
-name no type the analyzer pins, and the declaration is dropped.
+name no top-level type the analyzer pins, and that declaration is dropped.
+Inside `Array[T]` and `Hash[K, V]`, builtin runtime classes use boxed
+storage instead: this includes `Regexp`, `MatchData`, `Complex`,
+`Rational`, `Time`, `File`, `IO`,
+`Range`, and exception classes. String- and Symbol-keyed hashes retain
+their specialized key storage; runtime-class keys use `poly`. Optional
+elements and aliases follow the same rule. These are representation seeds,
+not checks of every element's Ruby class. Qualified user classes such as
+`Local::Time` retain nominal handling.
 
 The analyzer has one Symbol-keyed Hash kind, the poly-valued one, so every
 `Hash[Symbol, V]` maps to it and the values stay boxed.

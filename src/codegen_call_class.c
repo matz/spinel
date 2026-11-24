@@ -1885,6 +1885,17 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
     const char *qm = NULL;
     if (ak == NK_SymbolNode) qm = nt_str(nt, argv[0], "value");
     else if (ak == NK_StringNode) qm = nt_str(nt, argv[0], "content");
+    /* a run-time name asks Socket's table as a literal one does: the program
+       declares none of the system's constants for desugar's arms to list */
+    if (!qm && argc == 1 && sp_streq(nt_str(nt, recv, "name"), "Socket") && sp_feature_required("socket")) {
+      TyKind st = comp_ntype(c, argv[0]);
+      buf_puts(b, "(sp_sock_const(");
+      if (st == TY_STRING) { buf_puts(b, "SP_STR_B("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
+      else if (st == TY_SYMBOL) { buf_puts(b, "sp_sym_to_s("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
+      else { buf_puts(b, "sp_poly_to_s("); emit_boxed(c, argv[0], b); buf_puts(b, ")"); }
+      buf_puts(b, ") >= 0)");
+      return 1;
+    }
     if (qm) {
       if (const_name_is_wrong(qm)) {
         buf_printf(b, "((void)("); emit_expr_for_effect(c, recv, b);

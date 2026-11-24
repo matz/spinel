@@ -1864,6 +1864,13 @@ int cplan_class_builtin_responds(Compiler *c, int ci, const char *qm);
    BasicObject's (`inspect`, `puts`, `private`), as CRuby's lookup on the class side finds them (cu_class_value_vis),
    and the builtin ones it answers respond_to? with */
 int cplan_class_builtin_has(Compiler *c, int ci, const char *name);
+/* Does a name that an element of visibility word id takes have a method where the word runs, in class vcid (the one
+   the word acts on): PRA_YES or PRA_NO, also in *out as a presence arm of vcid. The word's own lookup, as CRuby's
+   rb_export_method makes it: a method (a def, or a reader or writer whose attr_* has run by the word), a module
+   function a class body's word made, module_function's own, a class method's for a class-side word, and, where
+   builtin (a class body's word, or an Array given as its operands), a builtin method of the class. The renderer
+   raises NameError for PRA_NO (emit_vis_word_absent) */
+int cplan_word_elem_presence(Compiler *c, int id, int vcid, const char *mn, int builtin, CplanPresArm *out);
 /* Is call id (receiverless or on self, no block) of a Module method that no route took (no class method of the
    program's, no word the record reads) in a class method, where self is a class? The raise codegen makes of an
    unrouted self call names an instance of the class, which a class method's self is not: the call is refused, not

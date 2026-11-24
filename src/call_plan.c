@@ -7945,6 +7945,40 @@ int cplan_class_builtin_has(Compiler *c, int ci, const char *name) {
   const char *own = NULL;
   return cu_class_value_vis(mod, mod ? NULL : cu_class_root(c, ci), name, 1, &own, &sep) > 0 || cplan_class_builtin_responds(c, ci, name);
 }
+/* Does an instance of class cid have m as a builtin method of any visibility: one the lookup from its builtin
+   root finds (Kernel's through Object), or one a builtin module it includes or prepends has, directly or through
+   a program module (class_mixes_in)? */
+static int class_builtin_has_method(Compiler *c, int cid, const char *m) {
+  if (builtin_id_has_instance_method(class_builtin_parent(c, cid), m)) return 1;
+  for (int i = 0, mod; builtin_class_at(i); i++)
+    if ((mod = builtin_mixin_module_id(builtin_class_at(i)->name)) && class_mixes_in(c, cid, mod, 0) &&
+        builtin_id_has_instance_method(mod, m))
+      return 1;
+  return 0;
+}
+/* See call_plan.h. */
+int cplan_word_elem_presence(Compiler *c, int id, int vcid, const char *mn, int builtin, CplanPresArm *out) {
+  const NodeTable *nt = c->nt;
+  int skip = 0;
+  const char *w = vis_word_call(nt, id, &skip);
+  int cm = class_method_vis_of_name(w) != 0, mfw = !cm && visibility_of_name(w) == BVIS_MODULE_FUNCTION;
+  int mod = vcid >= 0 && comp_class_is_module(c, &c->classes[vcid]);
+  char wb[256]; wb[0] = '\0';
+  setter_base_name(mn, wb, sizeof wb);
+  /* a module function a class body's word made is one method that serves both sides, the class method's (mf_mark) */
+  int mf = -1;
+  if (!cm && mod && !mfw) mf = call_target(c, id, vcid, mn, CT_CMETHOD | CT_NOFACE, NULL);
+  int found = mfw ? elab_module_has_method(c, vcid, mn) : (mf >= 0 && c->scopes[mf].is_module_function) ||
+              (cm ? call_target(c, id, vcid, mn, CT_CMETHOD | CT_NOFACE, NULL) >= 0 || cplan_class_builtin_has(c, vcid, mn)
+                  : call_target(c, id, vcid, mn, CT_NOFACE, NULL) >= 0 ||
+                        call_attr_target(c, id, vcid, mn, CT_ATTR, NULL) ||
+                        (wb[0] && call_attr_target(c, id, vcid, wb, CT_ATTR | CT_WRITER, NULL)) ||
+                        (builtin && class_builtin_has_method(c, vcid, mn)));
+  memset(out, 0, sizeof *out);
+  out->cls = vcid;
+  out->ans = found ? PRA_YES : PRA_NO;
+  return out->ans;
+}
 /* See call_plan.h. */
 CplanUnrouted cplan_unrouted(Compiler *c, int id, char *owner, size_t cap, int *nil_answers) {
   const NodeTable *nt = c->nt;

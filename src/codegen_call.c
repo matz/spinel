@@ -20946,17 +20946,6 @@ int emit_cells_answer(Compiler *c, const CplanCells *cs, Buf *b) {
   while (open-- >= 0) buf_puts(b, ")");
   return 1;
 }
-/* Does an instance of class cid have m as a builtin method of any visibility: one the lookup from its builtin
-   root finds (Kernel's through Object), or one a builtin module it includes or prepends has, directly or through
-   a program module (class_mixes_in)? */
-static int class_builtin_has_method(Compiler *c, int cid, const char *m) {
-  if (builtin_id_has_instance_method(class_builtin_parent(c, cid), m)) return 1;
-  for (int i = 0, mod; builtin_class_at(i); i++)
-    if ((mod = builtin_mixin_module_id(builtin_class_at(i)->name)) && class_mixes_in(c, cid, mod, 0) &&
-        builtin_id_has_instance_method(mod, m))
-      return 1;
-  return 0;
-}
 /* See codegen_call_arms.h. Each cell holds an Integer as the entries' arms
    read it (emit_cells_test) */
 /* See codegen_call_arms.h. */
@@ -21031,27 +21020,12 @@ static int emit_vis_word_absent_x(Compiler *c, int id, const char *cw, Buf *b) {
                  te, ta, vi, te, te, cw, ct, te);
     }
     if (!mn) continue;
-    char wb[256]; wb[0] = '\0';
-    setter_base_name(mn, wb, sizeof wb);
-    /* the name is defined where the word runs: a def, or a reader or
-       writer whose attr_* has run by this call, as the call plan
-       answers at it, or, in a class body, whose form applies a word on
-       one, a builtin method the class has (Kernel's puts, Comparable's
-       between?). A method body's word has no form that applies it to a
-       builtin method yet: a name it takes raises, as it did, and an
-       Array's, which it read none of, still does not */
-    int mf = -1;
-    /* (a module function a class body's word made is one method that serves both sides, the class method's:
-       mf_mark) */
-    if (!cm && mod && !mfw) mf = call_target(c, id, vcid, mn, CT_CMETHOD | CT_NOFACE, NULL);
-    /* (module_function's name, the one the record's reach tests, lr_word_reach: elab_module_has_method) */
-    int found = mfw ? elab_module_has_method(c, vcid, mn) : (mf >= 0 && c->scopes[mf].is_module_function) ||
-                (cm ? call_target(c, id, vcid, mn, CT_CMETHOD | CT_NOFACE, NULL) >= 0 || cplan_class_builtin_has(c, vcid, mn)
-                    : call_target(c, id, vcid, mn, CT_NOFACE, NULL) >= 0 ||
-                          call_attr_target(c, id, vcid, mn, CT_ATTR, NULL) ||
-                          (wb[0] && call_attr_target(c, id, vcid, wb, CT_ATTR | CT_WRITER, NULL)) ||
-                          ((g_class_body_id >= 0 || arr) && class_builtin_has_method(c, vcid, mn)));
-    if (!found) {
+    /* the name is defined where the word runs, as the call plan answers (cplan_word_elem_presence); a method body's
+       word has no form that applies it to a builtin method yet: a name it takes raises, as it did, and an Array's,
+       which it read none of, still does not */
+    CplanPresArm pa;
+    cplan_word_elem_presence(c, id, vcid, mn, g_class_body_id >= 0 || arr, &pa);
+    if (pa.ans == PRA_NO) {
       /* (the class side's is its singleton class's: `#<Class:K>`, a module's too) */
       const char *cn = class_ruby_name(c, vcid) ? class_ruby_name(c, vcid) : c->classes[vcid].name;
       if (ta || *cw) buf_printf(b, ta ? " %s%s" : "(%s%s", cw, ta ? ct : cs);

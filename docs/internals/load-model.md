@@ -417,8 +417,8 @@ and the name of one element of it, in the reach; where the word runs
 word's visibility, as the word is (`private(def a; end, :missing)`). A
 module_function copies the names only where it makes every name private
 and is given no Array (`copies`); the word writes their visibility cells
-before it raises (`emit_vis_word_absent`, which asks the call plan whether
-a name is a method), in a module body too. In an iterator's block or a begin body with rescue
+before it raises (`emit_vis_word_absent`, which renders the call plan's
+answer whether a name is a method at the word, `cplan_word_elem_presence`), in a module body too. In an iterator's block or a begin body with rescue
 clauses, where no statement ahead of the word in its frame may raise and
 skip it and no condition holds it, the record, with no run-time cell for
 the word's visibility, takes the word either to have run or not

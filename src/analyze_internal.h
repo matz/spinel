@@ -377,6 +377,7 @@ int sclass_value_call(Compiler *c, int id);   /* analyze_infer.c */
 /* 1 if `id` is any proc-creating literal: a proc/lambda/Proc.new call (above)
    or a `->(){}` LambdaNode. */
 int is_proc_create(Compiler *c, int id);
+int is_lambda_create(Compiler *c, int create);
 int local_proc_literal_param_of(Compiler *c, Scope *sc, const char *nm);
 int proc_literal_calls_in_sight(Compiler *c, int lit);
 int proc_literal_uncalled(Compiler *c, int lit);

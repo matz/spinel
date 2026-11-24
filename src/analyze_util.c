@@ -5297,6 +5297,13 @@ int is_proc_create(Compiler *c, int id) {
   if (k == NK_LambdaNode) return 1;
   return is_proc_literal(c, id);
 }
+/* Is proc literal `create` (is_proc_create) a lambda, binding its
+   arguments strictly: `->(a) { }` or `lambda { |a| }`? */
+int is_lambda_create(Compiler *c, int create) {
+  const NodeTable *nt = c->nt;
+  const char *cn = nt_str(nt, create, "name");
+  return nt_kind(nt, create) == NK_LambdaNode || (cn && is_lambda_constructor(cn));
+}
 /* Unify the value types of `return <expr>` nodes lexically inside a proc body,
    without descending into a nested scope (a def/class/module, or a nested block
    or lambda -- whose returns are their own or non-local). Used to widen a proc

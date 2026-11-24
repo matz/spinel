@@ -69,9 +69,7 @@ static int fwd_callable_arity(Compiler *c, int ex, FwdShape *shape) {
   if (pn < 0) return -1;
   int rn = 0; nt_arr(nt, pn, "requireds", &rn);
   if (shape) {
-    NodeKind ck = nt_kind(nt, create);
-    const char *cn = nt_str(nt, create, "name");
-    shape->strict = ck == NK_LambdaNode || (cn && sp_streq(cn, "lambda"));
+    shape->strict = is_lambda_create(c, create);
     shape->arity = params_arity(nt, pn);
   }
   return rn;

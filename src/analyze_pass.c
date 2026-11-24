@@ -17838,11 +17838,8 @@ static int cs_type_params(Compiler *c, int create, const int *argv, int argc) {
   int pn = a_proc_params_node(c, create);
   if (pn < 0) return 0;
   Scope *bs = comp_scope_of(c, create);
-  NodeKind ck = nt_kind(nt, create);
-  const char *cnm = nt_str(nt, create, "name");
-  int is_lambda = (ck == NK_LambdaNode) || (cnm && sp_streq(cnm, "lambda"));
   BlockSig s;
-  block_sig(c, pn, is_lambda, &s);
+  block_sig(c, pn, is_lambda_create(c, create), &s);
   int np = s.P + s.O + s.Q;
   TyKind *pos = calloc((size_t)(np + s.nk + 1), sizeof(TyKind));
   char *absent = calloc((size_t)np + 1, 1);

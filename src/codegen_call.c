@@ -20278,6 +20278,17 @@ void refl_class_private_methods(Compiler *c, int ci, ReflNames *r) {
 }
 
 static int emit_cells_test(Compiler *c, const CplanCells *cs, int tail, Buf *b);
+/* Does name i of list r, at its call, read cells: a conditional def's guard (*guarded, its cells in cs), or the version
+   cells of a name whose versions the record cannot order against the list: listed where one of its cells says it is
+   live (cplan_list_cells), as a respond_to? there answers, of the visibilities the list shows; the cells answer its
+   visibility, so the table's, which the list shows the name by otherwise, is not asked */
+static int refl_name_cells(Compiler *c, const ReflNames *r, int i, CplanCells *cs, int *guarded) {
+  *guarded = r->at && r->vis_mask && !(r->at_side & CT_CMETHOD) &&
+             cplan_guarded_presence(c, r->at_cls, r->v[i], (r->at_side & CT_OWN) != 0, cs);
+  return r->at && !*guarded && !(r->show[i] & REFL_ROW) &&
+         cplan_list_cells(c, r->at - 1, r->at_cls, r->at_side, r->v[i], r->vis_mask ? r->vis_mask : 3, cs) &&
+         cplan_cells_testable(c, cs);
+}
 /* Emit the listed names of `r` as a PolyArray of symbols. Interned at run
    time: a name the source never spells is not in the generated symbol
    table. A name of the program's is left out where the call plan proves
@@ -20289,15 +20300,7 @@ void refl_emit_sym_array(Compiler *c, int cid, ReflNames *r, Buf *b) {
   buf_printf(b, "({ sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d); ", ta, ta);
   for (int i = 0; i < r->n; i++) {
     CplanCells cs;
-    int guarded = r->at && r->vis_mask && !(r->at_side & CT_CMETHOD) &&
-                  cplan_guarded_presence(c, r->at_cls, r->v[i], (r->at_side & CT_OWN) != 0, &cs);
-    /* a name whose versions the record cannot order against the list: listed where one of its cells says it is
-       live (cplan_list_cells), as a respond_to? there answers, of the visibilities the list shows, of a class-side
-       list or of a list of a class's own instance methods; the cells answer its visibility, so the table's,
-       which the list shows the name by otherwise, is not asked */
-    int cells = r->at && !guarded && (r->at_side & (CT_CMETHOD | CT_OWN)) && !(r->show[i] & REFL_ROW) &&
-                cplan_list_cells(c, r->at - 1, r->at_cls, r->at_side, r->v[i], r->vis_mask ? r->vis_mask : 3, &cs) &&
-                cplan_cells_testable(c, &cs);
+    int guarded, cells = refl_name_cells(c, r, i, &cs, &guarded);
     if (guarded) {
       buf_puts(b, "if (");
       emit_guarded_presence(c, &cs, b);
@@ -20332,7 +20335,7 @@ void refl_emit_sym_array(Compiler *c, int cid, ReflNames *r, Buf *b) {
    singleton_methods(false) answer for an instance of `cid`: the singleton
    methods the object has of its own (public and protected), and for
    public_methods the public ones of its class's own besides. */
-static void refl_object_own_methods(Compiler *c, int cid, const char *name, ReflNames *r) {
+static void refl_object_own_methods(Compiler *c, int id, int cid, const char *name, ReflNames *r) {
   int pub_only = sp_streq(name, "public_methods");
   int k = cid;
   mtab_build_enter(c);
@@ -20340,7 +20343,10 @@ static void refl_object_own_methods(Compiler *c, int cid, const char *name, Refl
     refl_own_instance_methods(c, cid, 1, !pub_only, 0, 0, r);
     k = c->classes[cid].is_singleton_of - 1;
   }
-  if (pub_only && k >= 0) refl_own_instance_methods(c, k, 1, 0, 0, 0, r);
+  if (pub_only && k >= 0) {
+    refl_own_instance_methods(c, k, 1, 0, 0, 0, r);
+    refl_at(r, id, k, CT_OWN);   /* (the class's own public methods ask the plan at the call, as a chain's list does) */
+  }
   mtab_build_leave(c);
 }
 
@@ -20352,7 +20358,7 @@ static void emit_object_methods_list(Compiler *c, int id, int cid, const char *n
   ReflNames ra = {0}, ro = {0};
   if (!sg) refl_at(&ra, id, cid, 0);
   if (all != 0) refl_object_methods(c, cid, pub, prot, sg, &ra);
-  if (all != 1) refl_object_own_methods(c, cid, name, &ro);
+  if (all != 1) refl_object_own_methods(c, id, cid, name, &ro);
   if (all == 2) {
     buf_puts(b, "((");
     emit_cond(c, arg, b);
@@ -20606,6 +20612,30 @@ int emit_value_methods_reflection(Compiler *c, int id, Buf *b) {
   if (!cls) return 0;
   int prot = sp_streq(name, "methods");
   if (!cls[0]) {
+    /* an instance of a class whose list reads version cells here is listed at this site, where the cells are the
+       call's (emit_object_methods_list); every other value by the shared helper's tables */
+    int ncand = 0, nsite = 0, *cand = calloc((size_t)(c->nclasses > 0 ? c->nclasses : 1), sizeof *cand);
+    int *site = calloc((size_t)(c->nclasses > 0 ? c->nclasses : 1), sizeof *site);
+    if (!cand || !site) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    for (int k = 0; k < c->nclasses; k++)
+      if (c->classes[k].instantiated && !c->classes[k].is_singleton_of && an_object_methods_listable(c, k, name)) cand[ncand++] = k;
+    nsite = cplan_list_site_classes(c, id, cand, ncand, site);
+    free(cand);
+    if (nsite) {
+      int tv = ++g_tmp, ta = ++g_tmp;
+      buf_printf(b, "({ sp_RbVal _t%d = ", tv);
+      emit_boxed(c, recv, b);
+      buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_PolyArray *_t%d = NULL; if (sp_poly_is_user_obj(_t%d)) switch (_t%d.cls_id) {", tv, ta, tv, tv);
+      for (int i = 0; i < nsite; i++) {
+        buf_printf(b, " case %d: _t%d = ", site[i], ta);
+        emit_object_methods_list(c, id, site[i], name, 1, prot, 0, 1, -1, b);
+        buf_puts(b, "; break;");
+      }
+      buf_printf(b, " default: break; } _t%d ? _t%d : sp_value_methods_poly(_t%d, %d); })", ta, ta, tv, prot);
+      free(site);
+      return 1;
+    }
+    free(site);
     buf_puts(b, "sp_value_methods_poly(");
     emit_boxed(c, recv, b);
     buf_printf(b, ", %d)", prot);

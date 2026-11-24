@@ -1,0 +1,8 @@
+[false, false, NoMethodError, false]
+[:none, :none, :p]
+[true, true, :k, true]
+[:k, :k, :p]
+:none
+:t
+[false, false, false]
+[false, true, false]

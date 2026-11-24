@@ -2029,6 +2029,8 @@ typedef struct {
   int nver_defer;
   struct MainChainMemo *main_chain;   /* the main-chain fact by (name, point or window start, side): call_plan.c, ct_main_chain */
   struct VerChain *ver_chain;   /* how many versions a class's chain holds of a name, by (class, side, name) (call_plan.c, ver_chain_count) */
+  struct ScopesByName *scopes_by_name;   /* the scopes of each name while the scope index is frozen (analyze.c, an_sbn) */
+  struct NameOwners *name_owners;   /* where a name can be answered, and each class's scopes (compiler.c, name_owners) */
   struct VerHold *ver_hold;   /* the holders of a name worth asking, by name (call_plan.c, ver_holders) */
   struct NewInits *new_inits;   /* the initialize methods a `new` of a class may run, by class (call_plan.c, cplan_new_initializers) */
   struct AttrFacts *attr_facts;   /* whether a name's only attr_* call on a class chain comes first, by (class, name) (call_plan.c, ct_attr_point) */
@@ -2675,6 +2677,11 @@ int        comp_shadowed_body(Compiler *c, int class_id, int is_cm, int def_node
    name for each; at every boxed comparison site, every round, that was a
    third of a Rails program's re-narrow round (1,299 classes). */
 const int *comp_name_responders(Compiler *c, const char *name, int is_cm, int *n);
+void scopes_by_name_free(Compiler *c);
+/* The scopes class cls owns (the top-level ones for -1), in scope order, malloc'd, *n of them. The walks that asked
+   every scope of the program for each class read the class's own list while the scope index is frozen. */
+int *comp_class_scopes(Compiler *c, int cls, int *n);
+void name_owners_free(Compiler *c);
 /* Whether some class's chain answers `name` with a reader
    (comp_reader_in_chain), kept per name while the reader and alias tables
    and the class shape stand still. A retargeted send on a boxed receiver

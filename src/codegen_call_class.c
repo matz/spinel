@@ -367,6 +367,25 @@ static void emit_respond_guard(void *ud, const char *name) {
   emit_guarded_presence(g->c, &cs, g->b);
   buf_printf(g->b, " & (_a%d ? 7 : 1)) != 0) : ", g->tmp);
 }
+/* ...a name of a class's chain whose versions the plan's cells answer (cplan_respond_runtime_cells), as the
+   literal respond_to? of it there answers: `(_k == class && name == _q) ? answer : `, ahead of the lists below,
+   which hold every def of the program */
+typedef struct { Buf *b; int tmp, ia; } RespondCells;   /* ia: its include_all, 0 absent or false, 1 true, 2 the run's */
+static void emit_respond_cells(Compiler *c, int id, const char *name, int cls, void *ud) {
+  RespondCells *g = ud;
+  CplanCells pub, all;
+  if ((g->ia != 1 && (!cplan_respond_runtime_cells(c, id, cls, name, 0, &pub) || !emit_cells_answer(c, &pub, NULL))) ||
+      (g->ia != 0 && (!cplan_respond_runtime_cells(c, id, cls, name, 1, &all) || !emit_cells_answer(c, &all, NULL)))) return;
+  buf_printf(g->b, "(_k%d == %d && !strcmp(_q%d, \"", g->tmp, cls, g->tmp);
+  emit_c_escaped(g->b, name);
+  buf_puts(g->b, "\")) ? ");
+  if (g->ia == 2) buf_printf(g->b, "(_a%d ? ", g->tmp);
+  if (g->ia != 0) emit_cells_answer(c, &all, g->b);
+  if (g->ia == 2) buf_puts(g->b, " : ");
+  if (g->ia != 1) emit_cells_answer(c, &pub, g->b);
+  if (g->ia == 2) buf_puts(g->b, ")");
+  buf_puts(g->b, " : ");
+}
 /* respond_to? asked at run time, by the name's string: each class's own
    methods by the value's class, then what every object has. */
 static void emit_respond_to_runtime_name(Compiler *c, int id, Buf *b, int recv, int argc, const int *argv,
@@ -382,6 +401,12 @@ static void emit_respond_to_runtime_name(Compiler *c, int id, Buf *b, int recv, 
       if (literal) emit_respond_guard(&guard, literal);
       else cplan_chain_names(c, k, emit_respond_guard, &guard);
     }
+  }
+  /* (the plan answers for each class and name whether the reader reads its cells: cplan_respond_runtime_each) */
+  if (!literal) {
+    NodeKind iak = argc >= 2 ? nt_kind(nt, argv[1]) : NK_FalseNode;
+    RespondCells cells = { &guarded, tv, iak == NK_TrueNode ? 1 : iak == NK_FalseNode || iak == NK_NilNode ? 0 : 2 };
+    cplan_respond_runtime_each(c, id, emit_respond_cells, &cells);
   }
   /* boxed when the call is typed so (an IO's is, see the fold above) */
   int boxed = repr_of(c, id).kind == RK_BOXED;
@@ -4210,27 +4235,23 @@ static int emit_class_name_reader_arity(Compiler *c, int id, const char *nm, int
   buf_printf(b, "sp_raise_cls(\"ArgumentError\", \"%s\"); (const char *)NULL; })", am);
   return 1;
 }
-static int emit_class_instance_methods_all(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv) {
+static int emit_class_instance_methods_list(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, int *ks) {
   int prot = sp_streq(name, "instance_methods");
   if (!prot && !sp_streq(name, "public_instance_methods")) return 0;
   if (argc > 1 || (argc == 1 && nt_kind(nt, argv[0]) != NK_TrueNode)) return 0;
-  int ci = recv >= 0 ? view_class_is(c, recv, ELAB_GAIN_METHODS | ELAB_GAIN_INHERITED) : -1, dyn = 0;
-  const Scope *cm = NULL;
-  /* a constant path (`Outer::Mod`) names its class by the leaf, as constant
-     paths resolve here; a class-tag arm's receiver, the class it names */
+  /* a constant's class, a class body's self's, or a class-tag arm's receiver's (the call plan's, cplan_class_receiver) */
+  int ci = recv >= 0 ? cplan_class_receiver(c, recv, ELAB_GAIN_METHODS | ELAB_GAIN_INHERITED) : -1, dyn = 0, nks = 0;
+  unsigned form = 0;
   if (ci >= 0) ;
-  else if (recv >= 0 && (nt_kind(nt, recv) == NK_ConstantReadNode || nt_kind(nt, recv) == NK_ConstantPathNode))
-    ci = const_node_class_index(c, recv);
   else if (recv < 0 || nt_kind(nt, recv) == NK_SelfNode) {
-    Scope *s = comp_scope_of(c, id);
-    if (s && s->is_cmethod && s->class_id >= 0 && call_target(c, id, s->class_id, name, CT_CMETHOD, NULL) < 0) {
-      ci = s->class_id;
-      cm = s;
-    }
-    /* a class body's self names the class whose body holds it */
-    else if (recv >= 0 && (ci = class_body_self_ci(c, recv)) >= 0 &&
-             call_target(c, id, ci, name, CT_CMETHOD, NULL) >= 0)
-      ci = -1;
+    /* the class of a class body's or class method's self, and those a method taking its receiving class lists
+       too: the call plan's (cplan_self_list_classes), which the survey asks */
+    nks = cplan_self_list_classes(c, id, recv, name, ks, &ci, &form);
+    dyn = (form & CSL_DYN) != 0;
+    /* a spliced class method has its receiving class at the site */
+    if (nks > 0 && (form & CSL_SPLICE) && g_self && g_emitting_class_id >= 0) ci = g_emitting_class_id, dyn = 0;
+    /* (the list switches on the receiving class only where the method takes it) */
+    if (nks > 0 && !dyn) nks = 1, ks[0] = ci;
   }
   /* a class held in a value: a switch on its class id over the classes the
      walk bounds it to, each listing what its instances answer */
@@ -4261,15 +4282,9 @@ static int emit_class_instance_methods_all(Compiler *c, int id, Buf *b, const No
     return 1;
   }
   if (ci < 0) return 0;
-  if (cm) {
-    /* a spliced class method has its receiving class at the site; any
-       other that takes it reads it from _sp_cls */
-    if (cm->yields && g_self && g_emitting_class_id >= 0) ci = g_emitting_class_id;
-    else dyn = cmethod_takes_self_cls(c, cm);
-  }
   /* a module's: its own and its includes' */
   if (comp_class_is_module(c, &c->classes[ci])) {
-    if (cm || !cplan_module_listable(c, ci, name)) return 0;
+    if (!cplan_module_listable(c, ci, name)) return 0;
     ReflNames r = {0};
     refl_at(&r, id, ci, 0);
     refl_module_instance_methods(c, ci, prot, &r);
@@ -4280,13 +4295,14 @@ static int emit_class_instance_methods_all(Compiler *c, int id, Buf *b, const No
     return 1;
   }
   /* every class the call can run on lists ahead of time, or none does */
-  for (int k = 0; k < c->nclasses; k++)
-    if ((k == ci || (dyn && is_descendant(c, k, ci))) && !an_object_methods_listable(c, k, name)) return 0;
+  if (nks <= 0) ks[0] = ci, nks = 1;
+  for (int i = 0; i < nks; i++)
+    if (!an_object_methods_listable(c, ks[i], name)) return 0;
   int rt = ++g_tmp;
   buf_printf(b, "({ sp_PolyArray *_t%d = NULL; ", rt);
   if (dyn) buf_puts(b, "switch (_sp_cls.cls_id) {");
-  for (int k = 0; k < c->nclasses; k++) {
-    if (k != ci && (!dyn || !is_descendant(c, k, ci))) continue;
+  for (int i = 0; i < nks; i++) {
+    int k = ks[i];
     ReflNames r = {0};
     refl_at(&r, id, k, 0);
     refl_class_instance_methods(c, k, 1, prot, &r);
@@ -4300,6 +4316,13 @@ static int emit_class_instance_methods_all(Compiler *c, int id, Buf *b, const No
   if (dyn) buf_puts(b, " default: break; }");
   buf_printf(b, " sp_box_poly_array(_t%d ? _t%d : sp_PolyArray_new()); })", rt, rt);
   return 1;
+}
+static int emit_class_instance_methods_all(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv) {
+  int *ks = malloc(sizeof *ks * (size_t)(c->nclasses > 0 ? c->nclasses : 1));
+  if (!ks) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  int done = emit_class_instance_methods_list(c, id, b, nt, name, recv, argc, argv, ks);
+  free(ks);
+  return done;
 }
 /* The value class k's `class << self` accessor slot for `base` holds, boxed:
    the civ_ static a class-level @ivar backs it with, or its own sg_ slot. */
@@ -4510,9 +4533,8 @@ void emit_class_value_constants(Compiler *c, const char *cv, int inherit, Buf *b
    program defines, a compile-time list like the one above. */
 static int emit_class_value_singleton_methods(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv) {
   if (!an_class_method_list_foldable(c, name, recv, argc, argv)) return 0;
-  const char *cn2 = nt_kind(nt, recv) == NK_ConstantReadNode
-                    ? nt_str(nt, recv, "name") : NULL;
-  int ci2 = cn2 ? const_node_class_index(c, recv) : class_body_self_ci(c, recv);
+  const char *cn2 = nt_kind(nt, recv) == NK_ConstantReadNode ? nt_str(nt, recv, "name") : NULL;
+  int ci2 = cplan_class_receiver(c, recv, 0);
   int all = argc == 0 || nt_kind(nt, argv[0]) == NK_TrueNode;
   int priv = sp_streq(name, "private_methods");
   ReflNames r = {0};
@@ -4726,12 +4748,8 @@ static int emit_class_own_instance_methods(Compiler *c, int id, Buf *b, const No
   int vm = is_instance_method_list(name) ? method_list_vis_mask(name) : 0;
   int im_pub = (vm >> SP_VIS_PUBLIC) & 1, im_prot = (vm >> SP_VIS_PROTECTED) & 1, im_priv = (vm >> SP_VIS_PRIVATE) & 1;
   if (!vm || argc != 1 || nt_kind(nt, argv[0]) != NK_FalseNode) return 0;
-  const char *cn2 = nt_kind(nt, recv) == NK_ConstantReadNode
-                    ? nt_str(nt, recv, "name") : NULL;
-  /* (a class body's self names its class, class_recv_static_ci) */
-  int ci2 = nt_kind(nt, recv) == NK_SelfNode ? class_body_self_ci(c, recv)
-          : cn2 ? const_node_class_index(c, recv) : view_class_is(c, recv, ELAB_GAIN_METHODS);   /* or a class-tag arm's */
-  if (ci2 < 0 && nt_kind(nt, recv) == NK_SelfNode) ci2 = view_class_is(c, recv, ELAB_GAIN_METHODS);
+  /* (a constant's, a class body's self's or a class-tag arm's class, cplan_class_receiver) */
+  int ci2 = cplan_class_receiver(c, recv, ELAB_GAIN_METHODS);
   if (ci2 >= 0) {
     ReflNames r = {0};
     refl_at(&r, id, ci2, CT_OWN);

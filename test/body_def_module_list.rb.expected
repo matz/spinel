@@ -1,0 +1,7 @@
+[false, false, false, false, false, true, false, false, NoMethodError]
+[true, true, true, true, true, true, true, true, :m]
+[:none, :none, false]
+[:n, :n, true]
+[false, false, false, false, false, false, NoMethodError, NoMethodError]
+[true, true, true, true, false, true, :a, :p]
+[true, true, true, true, true, true, :b, :p]

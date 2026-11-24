@@ -10387,11 +10387,10 @@ static TyKind infer_call_inner(Compiler *c, int id) {
      method list, boxed as on the constant */
   if ((recv < 0 || nt_kind(nt, recv) == NK_SelfNode) && argc <= 1 &&
       (sp_streq(name, "instance_methods") || sp_streq(name, "public_instance_methods"))) {
-    Scope *self = comp_scope_of(c, id);
-    if (self && self->is_cmethod && self->class_id >= 0 &&
-        call_target(c, id, self->class_id, name, CT_CMETHOD, NULL) < 0 &&
-        !comp_class_is_module(c, &c->classes[self->class_id]))
-      return TY_POLY;
+    /* (the class the call plan lists for, which the emitter lists: cplan_self_list_class) */
+    const Scope *cm;
+    int ci = cplan_self_list_class(c, id, recv, name, &cm);
+    if (ci >= 0 && !comp_class_is_module(c, &c->classes[ci])) return TY_POLY;
   }
 
   { TyKind r; if (infer_block_kernel_call(c, id, nt, name, recv, rt, &r)) return r; }

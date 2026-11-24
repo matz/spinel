@@ -7385,6 +7385,25 @@ int list_cells_shape(const NodeTable *nt, int id) {
   return ac <= 1 && (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) && (ak == NK_FalseNode || (side == 1 && ak == NK_TrueNode)) ? side : 0;
 }
 /* See analyze_internal.h. */
+int list_chain_shape(const NodeTable *nt, int id) {
+  int ac = 0;
+  if (nt_kind(nt, id) != NK_CallNode || nt_ref(nt, id, "block") >= 0 || !is_chain_method_list(nt_str(nt, id, "name"))) return 0;
+  const int *av = call_args(nt, id, &ac);
+  if (ac > 1) return 0;
+  NodeKind ak = ac == 1 ? nt_kind(nt, av[0]) : NK_TrueNode;
+  /* (an object's list takes the flag the run decides too, an_object_methods_all_arg's 2; a class's instance-method list does not) */
+  return ak == NK_TrueNode || (!is_instance_method_list(nt_str(nt, id, "name")) && ak != NK_FalseNode && ak != NK_NilNode && ak != NK_SplatNode);
+}
+/* See analyze_internal.h. */
+int list_own_object_shape(const NodeTable *nt, int id) {
+  int ac = 0;
+  const char *nm = nt_kind(nt, id) == NK_CallNode ? nt_str(nt, id, "name") : NULL;
+  if (!nm || nt_ref(nt, id, "block") >= 0 || !is_chain_method_list(nm) || is_instance_method_list(nm) || method_list_vis_mask(nm) != 1 << SP_VIS_PUBLIC)
+    return 0;
+  const int *av = call_args(nt, id, &ac);
+  return ac == 1 && (nt_kind(nt, av[0]) == NK_FalseNode || nt_kind(nt, av[0]) == NK_NilNode);
+}
+/* See analyze_internal.h. */
 int capture_cells_shape(const NodeTable *nt, int id) {
   int ac = 0;
   const int *av = nt_kind(nt, id) == NK_CallNode && is_bound_method_maker(nt_str(nt, id, "name")) &&
@@ -7401,7 +7420,7 @@ int respond_to_missing_defined(Compiler *c) {
   unsigned tgen = comp_table_gen, shape = comp_class_shape_gen();
   if (!c->rtm_memo.ans || c->rtm_memo.count != nt->count || c->rtm_memo.version != nt->version || c->rtm_memo.edits != nt->edits ||
       c->rtm_memo.tgen != tgen || c->rtm_memo.shape != shape || c->rtm_memo.ncls != c->nclasses) {
-    int ans = 1 + !an_name_binder_free(c, "respond_to_missing?");
+    int ans = 1 + !an_name_binder_free(c, RESPOND_TO_MISSING_NAME);
     c->rtm_memo.ans = ans; c->rtm_memo.count = nt->count; c->rtm_memo.ncls = c->nclasses; c->rtm_memo.version = nt->version;
     c->rtm_memo.tgen = tgen; c->rtm_memo.shape = shape; c->rtm_memo.edits = nt->edits;
   }

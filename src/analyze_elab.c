@@ -137,6 +137,10 @@ typedef struct { const char *name; int node, owner; } LrCvarWrite;   /* a class 
 typedef struct LrSlot { const char *name; int first, next, points, other; LoadPoint done, from; } LrSlot;
 typedef struct LrSlotPoint { int region, sure, any, next; } LrSlotPoint;
 
+/* How deep lr_body_defines follows the calls of the methods it reads, one
+   name to the next, before it answers that they may define */
+#define LR_DEFINES_DEPTH 64
+
 struct LoadRecord {
   LrStmt *st; int nst, cst;  /* the walked statements, in the order they run: seq is the index */
   int *at;                   /* [n] each node's statement; -1 under no file's root */
@@ -201,7 +205,13 @@ struct LoadRecord {
   /* ...while it is asked (anon_busy), the memo answers stored (lr_version
      on an lr_key_memo key), which it takes back where they may rest on
      its guess */
-  unsigned char anon_busy;
+  unsigned char anon_busy, anon_guess;   /* (anon_guess: what the cycle is asked as) */
+  /* ...and the defs lr_body_defines is asking (dask, ndask), each with its
+     key, the guess an ask of it while it is asked answers (g), the lowest
+     def on the stack its answer rests on such a guess of (low), and the
+     most the defs of its cycle above it answered (mx); while any is asked
+     the memo answers stored are journaled too */
+  struct LrDask { int def, low; const char *key; unsigned char g, mx; } dask[LR_DEFINES_DEPTH + 2]; int ndask;
   struct { int a, b; const char *name; } *anon_jr; int nanon_jr, canon_jr;
   const char *watch; char *watch_key[2];   /* ...the name a def-watching ask looks for (lr_between_redefines: lr_node_defines counts a def of it as one that defines) and its two memo keys (lr_body_defines: plain, direct), so the answers it keeps are its own */
   /* the method histories by name (lr_vers_index), as of nentries entries */
@@ -1347,7 +1357,7 @@ static void lr_version(LoadRecord *r, int a, int b, const char *name, LrDef d) {
   if (d.target && !(d.target = strdup(d.target))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   x->v = lr_grow(x->v, &x->cap, x->n, sizeof *x->v);
   x->v[x->n++] = d;
-  if (r->anon_busy && lr_key_memo(a)) {   /* (lr_anon_defines' journal) */
+  if ((r->anon_busy || r->ndask) && lr_key_memo(a)) {   /* (lr_anon_defines' and lr_body_defines' journal) */
     r->anon_jr = lr_grow(r->anon_jr, &r->canon_jr, r->nanon_jr, sizeof *r->anon_jr);
     r->anon_jr[r->nanon_jr].a = a; r->anon_jr[r->nanon_jr].b = b; r->anon_jr[r->nanon_jr].name = name;
     r->nanon_jr++;
@@ -4276,32 +4286,47 @@ static int lr_node_defines(Compiler *c, int n, int direct, int depth);
    (LoadRecord.anon_blocks): the most any of their blocks may, as
    lr_node_defines answers for its parameters and body. Any name may be
    one's, so a call of any name may run one, a call in such a block too.
-   That cycle is asked as nothing: an answer of nothing is then exact (the
-   least answer the cycle can hold), and any other is taken for
-   LR_OPAQUE_DEFINES, with every memo answer stored while it was asked
-   taken back, as one that may rest on the guess. Kept once asked, but
-   while the record watches a name, whose asks differ. */
+   That cycle is asked as a guess, nothing first: an answer equal to the
+   guess holds of the cycle, at or above the least it can hold, and is
+   kept; another is asked again with it for the guess, every memo answer
+   stored while it was asked taken back, as one that may rest on the guess
+   (lr_journal_drop). Kept once asked, but while the record watches a
+   name, whose asks differ, or while a def's cycle it may rest on is
+   asked. */
+/* The memo answers journaled since jr0 taken back, as ones that may rest
+   on a guess that did not hold, with the memos kept outside the histories
+   that may rest on them too */
+static void lr_journal_drop(LoadRecord *r, int jr0) {
+  for (int i = r->nanon_jr - 1; i >= jr0; i--) {
+    LrHist *h = lr_hist(r, r->anon_jr[i].a, r->anon_jr[i].b, r->anon_jr[i].name, 0);
+    if (h && h->n) { free((char *)h->v[h->n - 1].target); h->n--; }
+  }
+  r->nanon_jr = jr0;
+  memset(r->anon_at, 0, sizeof r->anon_at);
+  r->callbacks = 0;
+}
 static int lr_anon_defines(Compiler *c, int direct, int depth) {
   LoadRecord *r = c->lrec;
   int d = direct == LR_DEFINES_TREE ? 2 : direct != 0;
   if (!r->nanon) return 0;
-  if (r->anon_busy) return 0;   /* (the cycle: see above) */
+  if (r->anon_busy) return r->anon_guess;   /* (the cycle: see above) */
   if (r->anon_at[d] && !r->watch) return r->anon_at[d] - 1;
-  if (depth > 64) return LR_OPAQUE_DEFINES;
+  if (depth > LR_DEFINES_DEPTH) return LR_OPAQUE_DEFINES;
   int jr0 = r->nanon_jr, o = 0;
-  r->anon_busy = 1;
-  for (int i = 0; i < r->nanon && o != LR_OPAQUE_DEFINES; i++)
-    o = lr_most(o, lr_node_defines(c, r->anon_blocks[i], direct, depth + 1));
-  r->anon_busy = 0;
-  if (o) {
-    o = LR_OPAQUE_DEFINES;
-    for (int i = r->nanon_jr - 1; i >= jr0; i--) {
-      LrHist *h = lr_hist(r, r->anon_jr[i].a, r->anon_jr[i].b, r->anon_jr[i].name, 0);
-      if (h && h->n) { free((char *)h->v[h->n - 1].target); h->n--; }
-    }
+  for (int guess = 0;; guess = o) {
+    r->anon_busy = 1;
+    r->anon_guess = (unsigned char)guess;
+    o = 0;
+    for (int i = 0; i < r->nanon && o != LR_OPAQUE_DEFINES; i++)
+      o = lr_most(o, lr_node_defines(c, r->anon_blocks[i], direct, depth + 1));
+    r->anon_busy = 0;
+    if (o == guess) break;
+    lr_journal_drop(r, jr0);
+    if (o == LR_OPAQUE_DEFINES) break;   /* (the most there is, whatever the guess) */
   }
-  r->nanon_jr = jr0;
-  if (!r->watch) r->anon_at[d] = (unsigned char)(o + 1);
+  /* (an answer a def's guess may hold up stays journaled for that def) */
+  if (!r->ndask) r->nanon_jr = jr0;
+  if (!r->watch && !r->ndask) r->anon_at[d] = (unsigned char)(o + 1);
   return o;
 }
 
@@ -4421,7 +4446,10 @@ static int lr_node_defines(Compiler *c, int n, int direct, int depth) {
      walk, which recorded the body without it: a check after the graft
      reads the body as the walk did) */
   if (k == NK_CallNode && nt_int(nt, n, "body_hook", 0)) return o;
-  if (k == NK_CallNode && !word && !lr_block_eval(c, n)) o = lr_most(o, lr_call_defines(c, nt_str(nt, n, "name"), direct, depth));
+  /* (a send of a name the source spells runs the method of that name:
+     `__send__(:plus, k)` does what `plus(k)` does; one of a name it cannot
+     read is a call the record cannot read, call_sent_name's NULL) */
+  if (k == NK_CallNode && !word && !lr_block_eval(c, n)) o = lr_most(o, lr_call_defines(c, call_sent_name(nt, n, NULL), direct, depth));
   if (lr_variable_op_write(k)) o = lr_most(o, lr_call_defines(c, nt_str(nt, n, "binary_operator"), direct, depth));
   if (o != LR_OPAQUE_DEFINES && !direct && !word && lr_node_dispatches(nt, n)) o = lr_most(o, lr_callbacks_define(c, depth));
   for (int i = 0, nr = nt_num_refs(nt, n); i < nr && o != LR_OPAQUE_DEFINES; i++)
@@ -4443,19 +4471,59 @@ static int lr_node_defines(Compiler *c, int n, int direct, int depth) {
    (lr_callbacks_define); a write of a global too, whose setter may call
    back: LR_OPAQUE_DEFINES), write a variable and no more (a class variable
    or an instance variable, its class's, run on a class, or a call of a
-   method that does no more: LR_OPAQUE_WRITES), or neither (0)? A def asked again while it is asked (a cycle) may define.
-   Memoized by the def (LR_KEY_DEFINES; "direct" for the direct answer). */
+   method that does no more: LR_OPAQUE_WRITES), or neither (0)?
+   Memoized by the def (LR_KEY_DEFINES; "direct" for the direct answer).
+
+   A def asked again while it is asked (a cycle: a method that calls a
+   method of its own name, or one of another that calls it) answers a
+   guess, one for the defs the cycle runs through, nothing first. The def
+   the cycle comes back to first (the lowest on the stack the answers rest
+   on, its root) checks it: when no def of the cycle answered more than
+   the guess, the guess holds of them all, at or above the least answer
+   the cycle can hold, and their answers are kept; else they are asked
+   again with the most they answered, every memo answer stored on the way
+   taken back (lr_journal_drop). A def of the cycle over its root leaves
+   the check to the root. */
 static int lr_body_defines(Compiler *c, int def, int direct, int depth) {
   LoadRecord *r = c->lrec;
   const char *key = r->watch ? r->watch_key[direct != 0] : direct == LR_DEFINES_TREE ? "tree" : direct ? "direct" : "";
   const LrHist *h = lr_hist(r, LR_KEY_DEFINES, def, key, 0);
-  if (h && h->n) return h->v[h->n - 1].vis;
-  if (depth > 64) return LR_OPAQUE_DEFINES;
-  lr_version(r, LR_KEY_DEFINES, def, key, (LrDef){ def, LR_OPAQUE, LR_OPAQUE_DEFINES, 0, 0, NULL });   /* while it is asked */
-  int o = lr_node_defines(c, nt_ref(c->nt, def, "parameters"), direct, depth);
-  if (o != LR_OPAQUE_DEFINES) o = lr_most(o, lr_node_defines(c, nt_ref(c->nt, def, "body"), direct, depth));
+  if (h && h->n) {
+    /* (a def asked while it is asked: the cycle's guess, which the asker's
+       answer now rests on) */
+    for (int k = 0; k < r->ndask; k++)
+      if (r->dask[k].def == def && r->dask[k].key == key) {
+        if (k < r->dask[r->ndask - 1].low) r->dask[r->ndask - 1].low = k;
+        return r->dask[k].g;
+      }
+    return h->v[h->n - 1].vis;
+  }
+  if (depth > LR_DEFINES_DEPTH || r->ndask >= (int)(sizeof r->dask / sizeof *r->dask)) return LR_OPAQUE_DEFINES;
+  int jr0 = r->nanon_jr, me = r->ndask++, o = 0, none = (int)(sizeof r->dask / sizeof *r->dask);
+  r->dask[me].def = def; r->dask[me].key = key;
+  r->dask[me].g = me ? r->dask[me - 1].g : 0;
+  for (;;) {
+    r->dask[me].low = none; r->dask[me].mx = 0;
+    lr_version(r, LR_KEY_DEFINES, def, key, (LrDef){ def, LR_OPAQUE, r->dask[me].g, 0, 0, NULL });   /* while it is asked */
+    o = lr_node_defines(c, nt_ref(c->nt, def, "parameters"), direct, depth);
+    if (o != LR_OPAQUE_DEFINES) o = lr_most(o, lr_node_defines(c, nt_ref(c->nt, def, "body"), direct, depth));
+    int most = lr_most(o, r->dask[me].mx);
+    if (r->dask[me].low != me || most <= r->dask[me].g) break;
+    lr_journal_drop(r, jr0);
+    r->dask[me].g = (unsigned char)most;
+  }
+  r->ndask--;
   LrHist *m = lr_hist(r, LR_KEY_DEFINES, def, key, 0);
   m->v[m->n - 1].vis = (unsigned char)o;
+  if (r->dask[me].low < me) {   /* (a def of a cycle whose root is under it: the root checks its answer) */
+    struct LrDask *up = &r->dask[me - 1];
+    if (r->dask[me].low < up->low) up->low = r->dask[me].low;
+    up->mx = (unsigned char)lr_most(up->mx, lr_most(o, r->dask[me].mx));
+  }
+  /* (once no def is asked, no answer stored rests on a guess: a memo
+     answer read under a cycle's guess may hold up a def that met no def
+     still asked, so the journal is kept for the root until then) */
+  if (!r->ndask && !r->anon_busy) r->nanon_jr = jr0;
   return o;
 }
 
@@ -4473,7 +4541,7 @@ static int lr_callbacks_define(Compiler *c, int depth) {
     if ((i == 0 || strcmp(r->names[i - 1], r->names[i]) != 0) &&
         (method_name_implicitly_invoked(r->names[i]) || ic_core_callback(r->names[i], 0)))
       o = lr_most(o, lr_callee_defines(c, r->names[i], 1, depth));
-  if (!r->watch && !r->anon_busy && (!o || r->recorded)) r->callbacks = (unsigned char)(o + 1);
+  if (!r->watch && !r->anon_busy && !r->ndask && (!o || r->recorded)) r->callbacks = (unsigned char)(o + 1);
   return o;
 }
 

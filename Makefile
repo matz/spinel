@@ -1466,13 +1466,6 @@ endif
 ifneq ($(shell uname -s),Linux)
 TESTS := $(filter-out $(shell grep -l '^\# spinel: linux' test/*.rb),$(TESTS))
 endif
-# A test only --load-model=inline answers yet: the default model refuses a
-# define_method a class method's body makes under a computed name, until
-# such a definition is placed where it runs. load-model-inline-test runs
-# these under the inline model and asks that the default one still refuses
-# them, so a program leaves the list when it compiles.
-LOAD_MODEL_INLINE_ONLY := test/class_macro_guard_after.rb
-TESTS := $(filter-out $(LOAD_MODEL_INLINE_ONLY),$(TESTS))
 # A platform that cannot give some tests their subject lists them in
 # TEST_SKIP -- native Windows (win32.mk), for tests of what only a POSIX
 # system answers -- and they are not run there.
@@ -5949,21 +5942,7 @@ magic-comment-test: $(SPINEL)
 # each required file's top level runs at its require, once; what graph mode
 # does not compile yet it refuses by name (#9898). make test runs it.
 .PHONY: load-graph-test
-test-run: load-graph-test load-model-inline-test decl-test
-.PHONY: load-model-inline-test
-load-model-inline-test: $(SPINEL)
-	@ok=1; tmp=$$(mktemp -d /tmp/spinel-lmi.XXXXXX); \
-	for t in $(LOAD_MODEL_INLINE_ONLY); do \
-	  b=$$(basename "$$t" .rb); \
-	  if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/$$b.c" >"$$tmp/$$b.out" 2>&1; then \
-	    echo "load-model-inline-test: FAIL ($$t compiles under the default model: take it off LOAD_MODEL_INLINE_ONLY)"; ok=0; fi; \
-	  if ! $(SPINEL) --load-model=inline "$$t" -o "$$tmp/$$b" >"$$tmp/$$b.out" 2>&1; then \
-	    echo "load-model-inline-test: FAIL ($$t: compile under --load-model=inline)"; sed -n 1,5p "$$tmp/$$b.out"; ok=0; continue; fi; \
-	  "$$tmp/$$b" >"$$tmp/$$b.run" 2>&1; \
-	  cmp -s "$$tmp/$$b.run" "$$t.expected" || \
-	    { echo "load-model-inline-test: FAIL ($$t: output)"; diff -u "$$t.expected" "$$tmp/$$b.run" | head -10; ok=0; }; \
-	done; \
-	[ $$ok = 1 ] && echo "load-model-inline-test: pass" || exit 1
+test-run: load-graph-test decl-test
 load-graph-test: $(SPINEL)
 	@tools/load_graph_check.sh
 

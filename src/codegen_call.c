@@ -112,30 +112,6 @@ int parse_named_format(const char *fmt, Buf *rew, const char **names,
   return has_named ? n : -1;
 }
 
-/* A regexp's encoding is US-ASCII when its source is 7-bit clean (the common
-   case), else UTF-8. Spinel is ASCII/UTF-8 only, so this covers the supported
-   domain; fixed_encoding? is true exactly when the encoding is not US-ASCII. */
-static int re_src_all_ascii(const char *s) {
-  if (!s) return 1;
-  for (; *s; s++) if ((unsigned char)*s >= 0x80) return 0;
-  return 1;
-}
-
-/* A regexp literal's encoding bits as Regexp#options answers them:
-   NOENCODING (32) for //n, and FIXEDENCODING (16) for //u, //e and //s and for
-   a source that is not 7-bit clean, whose encoding is fixed to the source's.
-   They come from the literal's own Prism flags: the literal table keys a
-   pattern by its source and engine flags only, so `//u` and `//` share a
-   slot. */
-int re_lit_enc_opts(Compiler *c, int recv, int rre) {
-  int nid = re_lit_node(c, recv);
-  int pf = nid >= 0 ? nt_regexp_opts(c->nt, nid) : 0;
-  int o = 0;
-  if (pf & NT_RE_ASCII_8BIT) o |= 32;                      /* n */
-  if ((pf & (NT_RE_EUC_JP | NT_RE_WINDOWS_31J | NT_RE_UTF_8)) || !re_src_all_ascii(g_re_src[rre])) o |= 16;   /* e, s, u */
-  return o;
-}
-
 /* A backreference (\1..\9, \k<name>, \g<name>) defeats the linear-time matcher,
    so Regexp.linear_time? is false for such a pattern and true otherwise. */
 int re_src_has_backref(const char *s) {

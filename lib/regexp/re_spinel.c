@@ -365,10 +365,12 @@ bool sp_re_fixed_encoding_p(void *vpat) {
   mrb_regexp_pattern *pat = (mrb_regexp_pattern *)vpat;
   return (pat && (pat->flags & RE_FLAG_FIXEDENCODING)) ? true : false;
 }
-/* 0 = US-ASCII, 1 = UTF-8, 2 = ASCII-8BIT (BINARY). */
+/* 0 = US-ASCII, 1 = UTF-8, 2 = ASCII-8BIT (BINARY), 3 = EUC-JP, 4 = Windows-31J. */
 int sp_re_encoding_kind(void *vpat) {
   mrb_regexp_pattern *pat = (mrb_regexp_pattern *)vpat;
   uint32_t f = pat ? pat->flags : 0;
+  if (f & RE_FLAG_ENC_EUCJP) return 3;
+  if (f & RE_FLAG_ENC_SJIS)  return 4;
   if (f & RE_FLAG_NOENCODING)
     return (f & RE_FLAG_FIXEDENCODING) ? 2 : 0;
   return (f & RE_FLAG_FIXEDENCODING) ? 1 : 0;

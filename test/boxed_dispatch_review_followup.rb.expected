@@ -1,0 +1,54 @@
+[:lit_u_brace, "UTF-8", true, 16, "UTF-8", true, 16]
+[:lit_u_4hex, "UTF-8", true, 16, "UTF-8", true, 16]
+[:lit_u_ascii_brace, "US-ASCII", false, 0, "US-ASCII", false, 0]
+[:lit_u_ascii_4hex, "US-ASCII", false, 0, "US-ASCII", false, 0]
+[:new_u_brace, "UTF-8", true, 16, "UTF-8", true, 16]
+[:new_u_4hex, "UTF-8", true, 16, "UTF-8", true, 16]
+[:new_u_cc, "UTF-8", true, 16, "UTF-8", true, 16]
+[:new_u_list, "UTF-8", true, 16, "UTF-8", true, 16]
+[:new_u_ascii_brace, "US-ASCII", false, 0, "US-ASCII", false, 0]
+[:new_u_ascii_4hex, "US-ASCII", false, 0, "US-ASCII", false, 0]
+[:new_u_ascii_noenc, "US-ASCII", false, 32, "US-ASCII", false, 32]
+[:new_u_comment_x, "US-ASCII", false, 2, "US-ASCII", false, 2]
+[:lit_linebreak, "US-ASCII", false, 0, "US-ASCII", false, 0]
+[:new_linebreak_noenc, "US-ASCII", false, 32, "US-ASCII", false, 32]
+new_u_non_ascii_noenc: RegexpError
+new_u_cc_non_ascii_noenc: RegexpError
+(2.0+4.0i)
+(0.1-0.2i)
+(2.0+4.0i)
+(0.1-0.2i)
+(2.0+4.0i)
+(0.1-0.2i)
+(2.0+4.0i)
+complex_fdiv_no_coerce: TypeError
+complex_fdiv_typed_no_coerce: TypeError
+{}
+{}
+{a: "a"}
+{a: "a"}
+{a: "a"}
+{a: "a"}
+{}
+{}
+{}
+{}
+{b: "b", a: "a"}
+{b: "b", a: "a"}
+{a: "a", b: "b", c: "c"}
+{a: "a", b: "b", c: "c"}
+md_dk_str_typed: TypeError
+md_dk_str_boxed: TypeError
+["EUC-JP", true, 16]
+["Windows-31J", true, 16]
+["UTF-8", true, 16]
+["US-ASCII", false, 32]
+["US-ASCII", false, 0]
+[true, true, true, true]
+[true, true, true, true]
+[false, false, false, true, true, true]
+[false, false, false, true]
+[false, false, false]
+["EUC-JP", "Windows-31J"]
+["EUC-JP", "Windows-31J"]
+4

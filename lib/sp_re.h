@@ -25,6 +25,8 @@
 #define SP_RE_F_EXTENDED      8
 #define SP_RE_F_FIXEDENCODING 16
 #define SP_RE_F_NOENCODING    32
+#define SP_RE_F_ENC_EUCJP     64
+#define SP_RE_F_ENC_SJIS      128
 
 /* ---- regexp engine ABI (implemented in build/regexp/*.o) ---- */
 typedef struct mrb_regexp_pattern mrb_regexp_pattern;

@@ -204,23 +204,13 @@ int emit_call_regexp_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
       emit_str_literal(b, g_re_src[rre]); return 1;
     }
     if (rre >= 0 && sp_streq(name, "options") && argc == 0) {
-      int pf = g_re_flg[rre];
-      int opt = ((pf & 1) ? 1 : 0) | ((pf & 8) ? 2 : 0) | ((pf & 4) ? 4 : 0) |
-                re_lit_enc_opts(c, recv, rre);
-      buf_printf(b, "%d", opt); return 1;
+      buf_printf(b, "sp_re_options(sp_re_pat_%d)", rre); return 1;
     }
-    /* //u fixes UTF-8 even on an ASCII source; //n keeps an ASCII source
-       US-ASCII and makes any other ASCII-8BIT */
     if (rre >= 0 && sp_streq(name, "encoding") && argc == 0) {
-      int eo = re_lit_enc_opts(c, recv, rre);
-      buf_printf(b, "sp_box_encoding(%s)",
-                 (eo & 32) ? ((eo & 16) ? "sp_encoding_binary()" : "sp_encoding_us_ascii()")
-                 : (eo & 16) ? "sp_encoding_utf8()" : "sp_encoding_us_ascii()");
-      return 1;
+      buf_printf(b, "sp_re_encoding_box(sp_re_pat_%d)", rre); return 1;
     }
     if (rre >= 0 && sp_streq(name, "fixed_encoding?") && argc == 0) {
-      buf_puts(b, (re_lit_enc_opts(c, recv, rre) & 16) ? "TRUE" : "FALSE");
-      return 1;
+      buf_printf(b, "sp_re_fixed_encoding_p(sp_re_pat_%d)", rre); return 1;
     }
   }
   /* Regexp VALUE receiver (a variable, or a literal in value position):

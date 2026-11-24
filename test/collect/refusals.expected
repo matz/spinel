@@ -1138,6 +1138,14 @@ spinel: 1 refusal, nothing written
 == test/reject/file_read_other_options.rb [promote] rc=1
 spinel: test/reject/file_read_other_options.rb:8: File.read with options other than an encoding (UTF-8 or BINARY) is not supported
 spinel: 1 refusal, nothing written
+== test/reject/forward_args_builtin_destructure.rb [default] rc=1
+spinel: test/reject/forward_args_builtin_destructure.rb:5: `...` forwarded into a builtin method, from calls that do not all pass the same number of positional arguments
+== test/reject/forward_args_builtin_destructure.rb [promote] rc=1
+spinel: test/reject/forward_args_builtin_destructure.rb:5: `...` forwarded into a builtin method, from calls that do not all pass the same number of positional arguments
+== test/reject/forward_args_builtin_optional.rb [default] rc=1
+spinel: test/reject/forward_args_builtin_optional.rb:5: `...` forwarded into a builtin method, from calls that do not all pass the same number of positional arguments
+== test/reject/forward_args_builtin_optional.rb [promote] rc=1
+spinel: test/reject/forward_args_builtin_optional.rb:5: `...` forwarded into a builtin method, from calls that do not all pass the same number of positional arguments
 == test/reject/forwarding_builtin_uneven_calls.rb [default] rc=1
 spinel: test/reject/forwarding_builtin_uneven_calls.rb:1: `...` forwarded into a builtin method, from calls that do not all pass the same number of positional arguments
 == test/reject/forwarding_builtin_uneven_calls.rb [promote] rc=1

@@ -52,6 +52,23 @@ end
   end
 end
 
+# a bounded recursion that holds a frame at every level runs to its end, as
+# CRuby's does
+def bounded(n)
+  begin
+    return 0 if n <= 0
+    bounded(n - 1) + 1
+  rescue ZeroDivisionError
+    -1
+  end
+end
+p bounded(500)
+def bounded_catch(n)
+  return 0 if n <= 0
+  catch(:t) { bounded_catch(n - 1) + 1 }
+end
+p bounded_catch(500)
+
 # the same inside a thread and a fiber, whose handler stacks are their own
 t = Thread.new do
   begin

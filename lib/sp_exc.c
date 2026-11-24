@@ -1838,8 +1838,8 @@ void *sp_exc_ending_obj(const char *cls, const char *msg, void *obj, void *cause
    crossed on that leg, so an ensure can still use targets outside its
    landing frame. */
 static void sp_handler_stacks_unwind(void) {
-  /* a dead catch entry is worse than a leak: sp_catch_top is fixed at 64, so a
-     raise out of a catch in a loop walks it off the end -- and a later `throw`
+  /* a dead catch entry is worse than a leak: sp_catch_top has a fixed bound, so
+     a raise out of a catch in a loop walks it off the end -- and a later `throw`
      that matches one longjmps into a finished frame */
   while (sp_catch_top > 0 && sp_catch_exc_top[sp_catch_top - 1] >= sp_exc_top)
     sp_catch_top--;

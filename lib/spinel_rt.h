@@ -19278,7 +19278,7 @@ static void sp_throw(const char *tag, int kind, sp_RbVal val) {
    ~200 bytes) shifts every hot TLS variable's layout and cost optcarrot
    ~8% fps in a program that never breaks from a block. TLS holds only
    the pointers, so break-free programs pay nothing. */
-#define SP_BRK_STACK_MAX 64
+#define SP_BRK_STACK_MAX 1024
 extern SP_TLS jmp_buf *sp_brk_stack;              /* lazily allocated */
 extern SP_TLS sp_RbVal *sp_brk_val;
 extern SP_TLS sp_int *sp_brk_serial;

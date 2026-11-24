@@ -20,10 +20,10 @@
    SP_CATCH_STACK_MAX) goes to the archive's build, and a program compiled
    with another value fails to link (sp_exc_stacks_<exc>_<catch>). */
 #ifndef SP_EXC_STACK_MAX
-#define SP_EXC_STACK_MAX 64
+#define SP_EXC_STACK_MAX 1024
 #endif
 #ifndef SP_CATCH_STACK_MAX
-#define SP_CATCH_STACK_MAX 64
+#define SP_CATCH_STACK_MAX 1024
 #endif
 #define SP_EXC_DEPTHS_SYM_(e, c) sp_exc_stacks_##e##_##c
 #define SP_EXC_DEPTHS_SYM(e, c) SP_EXC_DEPTHS_SYM_(e, c)

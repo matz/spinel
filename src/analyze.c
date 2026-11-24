@@ -8167,6 +8167,7 @@ static int seed_ret_contradicts_class_body(Compiler *c, Scope *s, TyKind rt, int
 
 static int inline_pin_agrees(Compiler *c, Scope *s, int ci, const char *ivar, const char *ret,
                              const char *params, const char *where, int from_rbs);
+static int seed_reader_ivar_agrees(Compiler *c, Scope *s, const char *ivar, TyKind rt);
 static void inline_pin_record(Scope *s, int ci, const char *ivar, const char *ret,
                               const char *params, const char *where, const char *head);
 
@@ -8236,9 +8237,10 @@ static const char *seed_type_of_param(const Scope *s, const char *list, int slot
 /* Pin scope `s`'s return and each named parameter to its seeded type. ptypes
    is a comma-separated list: a plain field is aligned with the parameter
    index (empty fields preserved so a skipped middle param doesn't shift the
-   rest), a `name:type` field with the parameter of that name. */
+   rest), a `name:type` field with the parameter of that name. Replay also
+   checks external ivar declarations, which have now all been applied. */
 static void seed_method(Compiler *c, Scope *s, const char *ret_tok, char *ptypes,
-                         const char *where, const char *head, int from_rbs) {
+                         const char *where, const char *head, int from_rbs, int replay) {
   if (!s) return;
   TyKind rt = parse_seed_type(c, ret_tok);
   int nilable_seed = g_seed_nilable;
@@ -8272,6 +8274,7 @@ static void seed_method(Compiler *c, Scope *s, const char *ret_tok, char *ptypes
                before replacing a pin and retain an inline origin for later
                ivar declarations, other readers and contradiction checks. */
             if (!inline_pin_agrees(c, NULL, s->class_id, ivn, ret_tok, NULL, where, from_rbs)) return;
+            if (replay && !seed_reader_ivar_agrees(c, s, ivn, rt)) return;
             ClassInfo *ci = &c->classes[s->class_id];
             int idx = comp_ivar_intern(ci, ivn, s->is_cmethod ? IVS_CLASS : IVS_INST);
             ivar_set_type(ci, idx, rt);
@@ -8341,10 +8344,10 @@ static void seed_declared_method(Compiler *c, Scope *s, const char *ret, char *p
                                  const char *where, const char *head, int from_rbs) {
   if (!s) return;
   if (!method_in_override_family(c, s->class_id, s->name, s->is_cmethod)) {
-    seed_method(c, s, ret, params, where, head, from_rbs);
+    seed_method(c, s, ret, params, where, head, from_rbs, 0);
     return;
   }
-  seed_method(c, s, NULL, params, where, head, from_rbs);
+  seed_method(c, s, NULL, params, where, head, from_rbs, 0);
   if (!ret || !*ret || sp_streq(ret, "-")) return;
   if (!g_seed_family_returns)
     g_seed_family_returns = calloc((size_t)c->nscopes, sizeof(*g_seed_family_returns));
@@ -8405,7 +8408,7 @@ static void apply_seed_family_returns(Compiler *c) {
     if (!p->ret) continue;
     Scope *s = &c->scopes[si];
     if (seed_family_return_agrees(c, s))
-      seed_method(c, s, p->ret, NULL, p->where, p->head, p->from_rbs);
+      seed_method(c, s, p->ret, NULL, p->where, p->head, p->from_rbs, 1);
     else if (p->head)
       inline_warn(p->head, "the return type of %s is not applied: the method is overridden in a related class, "
                            "and not every definition declares the same return representation (its parameter types are applied)%s",
@@ -8513,7 +8516,7 @@ static void seed_module_function_copies(Compiler *c, const Scope *ms, const char
     if (s == ms || !s->is_include_copy || s->def_node != ms->def_node) continue;
     char *pcopy = params ? strdup(params) : NULL;
     seed_method(c, s, method_in_override_family(c, s->class_id, comp_scope_user_name(s), 0) ? NULL : ret,
-                pcopy, where, head, from_rbs);
+                pcopy, where, head, from_rbs, 0);
     free(pcopy);
     /* an annotation on the def is one on each copy: a later --rbs
        signature for the includer's method meets it (inline_pin_agrees) */
@@ -8615,6 +8618,23 @@ static const InlinePin *inline_pin_of_ivar(int ci, const char *ivar) {
 static const char *inline_pin_at_ivar(int ci, const char *ivar) {
   const InlinePin *p = inline_pin_of_ivar(ci, ivar);
   return p ? p->where : NULL;
+}
+
+/* Deferred family returns arrive after external ivar declarations. Check the
+   original declaration, including an inherited slot, before an implicit reader
+   pin can replace either its representation or its contradiction-check record. */
+static int seed_reader_ivar_agrees(Compiler *c, Scope *s, const char *ivar, TyKind rt) {
+  int decl_ci;
+  TyKind declared = class_rbs_orig_ivar_type(c, s->class_id, ivar, &decl_ci);
+  if (declared == TY_UNKNOWN || declared == rt) return 1;
+  const char *file; int line;
+  seed_node_loc(c->nt, s->def_node, &file, &line);
+  fprintf(stderr, "spinel: %s:%d: --rbs seed contradicted: the return declaration of %s%s%s "
+                  "disagrees with the declared type of %s %s\n",
+          file, line, c->classes[s->class_id].name, s->is_cmethod ? "." : "#", s->name,
+          c->classes[decl_ci].name, ivar);
+  g_inline_rbs_bad = 1;
+  return 0;
 }
 
 /* A fact about to be applied -- a .rbs seed line (rbs_where is its position,
@@ -8878,7 +8898,7 @@ static void apply_inline_rbs(Compiler *c) {
             if (s == ms || s->def_node != id || s->class_id != ms->class_id) continue;
             pcopy = params ? strdup(params) : NULL;
             seed_method(c, s, method_in_override_family(c, ms->class_id, ms->name, ms->is_cmethod) ? NULL : ret,
-                        pcopy, where, head, 0);
+                        pcopy, where, head, 0, 0);
             free(pcopy);
           }
         }

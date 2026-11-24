@@ -205,6 +205,10 @@ overridden return can remain inferred while supported parameter types apply.
 | Module methods copied through `include`, `extend`, or `prepend` | Warning; no pin reaches those per-class copies, as with `--rbs` |
 | Annotated method replaced by a later unannotated or unsupported definition | Warning naming the replacement; ignore the original annotation |
 
+Container return pins on overriding readers must agree with existing ivar
+declarations, including inherited declarations from `--rbs`; a disagreement
+is refused before the ivar declaration can be replaced.
+
 A `module_function` or `extend self` method can receive a pin because its
 function serves every caller. Other module methods copied into classes
 need separate analyzer support.

@@ -1,0 +1,6 @@
+class ReplayDirectBase
+  @rows: Array[String]
+end
+class ReplayDirectBaseSub
+  @rows: Array[String]
+end

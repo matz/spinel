@@ -1,0 +1,3 @@
+class ReplayInheritedBase
+  @rows: Array[String]
+end

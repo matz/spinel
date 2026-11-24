@@ -35,3 +35,19 @@ p ExplicitReader.new.items
 reader = ImplicitReader.new
 p reader.strings, reader.items
 p MemoReader.strings, MemoReader.items
+
+# Deferred override pins must also accept matching external ivar declarations.
+class FamilyReader
+  def initialize
+    @rows = ["family"]
+  end
+
+  #: () -> Array[String]
+  def rows = @rows
+end
+class FamilyReaderChild < FamilyReader
+  #: () -> Array[String]
+  def rows = @rows
+end
+[FamilyReader.new, FamilyReaderChild.new].each { |obj| p obj.rows }
+p FamilyReaderChild.new.rows

@@ -26,7 +26,19 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #ifdef __APPLE__
-#include <netinet/tcp_fsm.h> /* TCPS_CLOSED / TCPS_LISTEN for the socket read probe */
+/* TCPS_CLOSED / TCPS_LISTEN for the socket read probe. macOS's SDK has
+   netinet/tcp_fsm.h and iOS's does not; the two states are XNU's on both. */
+#if defined(__has_include)
+#  if __has_include(<netinet/tcp_fsm.h>)
+#    include <netinet/tcp_fsm.h>
+#  endif
+#endif
+#ifndef TCPS_CLOSED
+#  define TCPS_CLOSED 0
+#endif
+#ifndef TCPS_LISTEN
+#  define TCPS_LISTEN 1
+#endif
 #endif
 #include <sys/un.h>
 #include <netdb.h>  /* gai_strerror for Socket::ResolutionError */

@@ -2014,6 +2014,18 @@ nanosecond value, so `Time.at(12345.678).to_f` is `12345.677999999`), and
 `#subsec` returns a nanosecond-resolution `Rational` (`Time.at(2.2).subsec` is
 `(1/5)`) rather than the exact binary fraction of the source `Float`.
 
+#### `Time` range
+
+The `int64` second count holds instants up to about 2.9e11 years from the
+epoch, and CRuby uses a Bignum second count past it. `#to_i` covers the
+whole `int64` range; `#year`, `#to_s` and `#strftime` return year 1900 after
+year 2147485547 and before year -2147481748, since `struct tm`'s `tm_year`
+is an `int`. `Time.at` with a `Float` raises `RangeError` when the second
+count falls outside `int64` (`Time.at(1e19)` raises
+`float 1e+19 out of range of Time`), and `Time#+` / `Time#-` with an
+`Integer` or a `Float` raise `RangeError` (`time out of range`) past the
+`int64` range.
+
 #### Aliasing the regexp match globals
 
 CRuby's `English` library aliases the punctuation match globals to readable

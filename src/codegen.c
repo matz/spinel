@@ -11632,8 +11632,8 @@ else if (orecv >= 0 && onm) {
      and the boxed channel before binding the parameters. */
   if (!is_lambda && block_auto_splats(arity, nopts, nposts, has_rest_marker)) {
     g_needs_proc_poly_argslot = 1;
-    /* a lone object of the program's converts through its own to_ary
-       first, as a yield's does (the parameters' implied to_ary, its row):
+    /* a lone object of the program's, or a String, converts through its
+       own to_ary first, as a yield's does (the parameters' implied to_ary, its row):
        the Array it answers splats, a nil answer keeps the object */
     { int bpn = -1;
       NodeKind ck = nt_kind(nt, create);
@@ -12733,9 +12733,9 @@ int program_has_timesub(Compiler *c) {
 /* Whether the boxed value `v` is an instance of a String subclass that
    answers `name` itself (comp_strsub_own_classes), as a C test; 0 when no
    class does. */
-static int emit_strsub_own_test(Compiler *c, const char *v, const char *name, Buf *b) {
+static int emit_strsub_own_test(Compiler *c, const char *v, const char *name, StrOwnVis vis, Buf *b) {
   int n = 0;
-  const int *ks = comp_strsub_own_classes(c, name, &n);
+  const int *ks = comp_strsub_own_classes(c, name, vis, &n);
   if (n == 0) return 0;
   buf_printf(b, "({ int _bk = sp_bsub_cls_of(%s); ", v);
   for (int i = 0; i < n; i++) buf_printf(b, "%s_bk == %d", i ? " || " : "", ks[i]);
@@ -12744,18 +12744,24 @@ static int emit_strsub_own_test(Compiler *c, const char *v, const char *name, Bu
 }
 
 /* The test a dispatch on `name` puts before its String arm: the boxed
-   _t<tv> is a String, a shared String's handle included, but not a String
-   subclass instance with a `name` of its own, which the class switch
-   after it serves. */
-void emit_poly_str_guard(Compiler *c, int tv, const char *name, Buf *b) {
-  char v[24]; snprintf(v, sizeof v, "_t%d", tv);
+   value the printf-formatted C text names is a String, a shared String's
+   handle included, but not a String subclass instance with a `name` of its
+   own, which the class switch after it serves. */
+void emit_str_kind_test(Compiler *c, const char *name, StrOwnVis vis, Buf *b, const char *vfmt, ...) {
+  va_list ap, ap2;
+  va_start(ap, vfmt);
+  va_copy(ap2, ap);
+  int n = vsnprintf(NULL, 0, vfmt, ap);
+  va_end(ap);
+  char *v = malloc((size_t)n + 1);
+  if (!v) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  vsnprintf(v, (size_t)n + 1, vfmt, ap2);
+  va_end(ap2);
   Buf own; memset(&own, 0, sizeof own);
-  if (!emit_strsub_own_test(c, v, name, &own)) {
-    buf_printf(b, "sp_rbval_is_string(_t%d)", tv);
-    return;
-  }
-  buf_printf(b, "(sp_rbval_is_string(_t%d) && !%s)", tv, own.p);
+  if (!emit_strsub_own_test(c, v, name, vis, &own)) buf_printf(b, "sp_rbval_is_string(%s)", v);
+  else buf_printf(b, "(sp_rbval_is_string(%s) && !%s)", v, own.p);
   free(own.p);
+  free(v);
 }
 
 /* A boxed Array subclass instance is boxed as its Array (arysub_box_id);

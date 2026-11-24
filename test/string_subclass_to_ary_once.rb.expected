@@ -1,0 +1,8 @@
+["nil", nil]
+["nil", nil]
+["nil", nil]
+["ok", :str]
+["b", nil]
+["b", nil]
+["nil", nil]
+[A, A, A, A, [:b, B], [:b, B], String]

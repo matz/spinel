@@ -8722,7 +8722,7 @@ static int emit_poly_str_prearm(Compiler *c, int id, int recv, const char *name,
     return 0;
   }
   /* The guard selects the builtin String arm for eligible handle boxes. */
-  buf_puts(b, "if ("); emit_poly_str_guard(c, tv, name, b);
+  buf_puts(b, "if ("); emit_str_kind_test(c, name, STROWN_PUBLIC, b, "_t%d", tv);
   buf_printf(b, ") { %s _t%d = %s; }\nelse ", arm_pre ? arm_pre : "", tr, ib.p);
   free(ib.p); free(arm_pre);
   if (g_plan_check) pa_observe_at(id, PA_TRIAL, PA_KEY_TRIAL + PT_STR, -1, TY_UNKNOWN, 1);
@@ -18677,11 +18677,12 @@ static void emit_boxed_to_ary_entry_test(Compiler *c, const int *ks, const Cplan
    through the one call of sp_obj_to_ary_entry the program has for them
    (cplan_to_ary_entries); each class the window answers another version
    for gets an arm of its own that calls it, so a site's own arms are
-   bounded by such classes. The two latter hand the answer to
+   bounded by such classes; the program's String the same, behind its
+   kind's test (CTA_KIND). The two latter hand the answer to
    sp_poly_ary_answer: nil keeps the object, any other non-Array is
    CRuby's TypeError. */
 void emit_boxed_to_ary_arms(Compiler *c, const int *ks, const CplanToAry *vs, int n, const char *guard, const char *v, int rooted, Buf *b, int indent) {
-  int count[3] = { 0, 0, 0 };
+  int count[4] = { 0, 0, 0, 0 };
   for (int i = 0; i < n; i++) count[vs[i].how]++;
   /* (an unrooted v holds the answer through a rooted temp) */
   const char *open = rooted ? "" : "{ sp_RbVal _sp_ta = ", *close = rooted ? ";" : "; SP_GC_ROOT_RBVAL(_sp_ta); ";
@@ -18698,10 +18699,17 @@ void emit_boxed_to_ary_arms(Compiler *c, const int *ks, const CplanToAry *vs, in
     else buf_printf(b, "%s = _sp_ta; }\n", v);
   }
   for (int i = 0; i < n; i++) {
-    if (vs[i].how != CTA_VERSION) continue;
+    if (vs[i].how != CTA_VERSION && vs[i].how != CTA_KIND) continue;
     emit_indent(b, indent);
-    buf_printf(b, "if (%s%s.tag == SP_TAG_OBJ && %s.cls_id == %d && %s.v.p) %s%ssp_poly_ary_answer(%s, ",
-               guard, v, v, ks[i], v, rooted ? v : open, rooted ? " = " : "", v);
+    /* (the program's String is no class id of the box: its kind's test, a subclass with a to_ary of its own left to its class) */
+    if (vs[i].how == CTA_KIND) {
+      buf_printf(b, "if (%s", guard);
+      emit_str_kind_test(c, "to_ary", STROWN_ANY, b, "%s", v);
+      buf_puts(b, ") ");
+    }
+    else if (comp_ary_is_str(c, ks[i])) buf_printf(b, "if (%ssp_rbval_is_string(%s) && sp_bsub_cls_of(%s) == %d) ", guard, v, v, ks[i]);
+    else buf_printf(b, "if (%s%s.tag == SP_TAG_OBJ && %s.cls_id == %d && %s.v.p) ", guard, v, v, ks[i], v);
+    buf_printf(b, "%s%ssp_poly_ary_answer(%s, ", rooted ? v : open, rooted ? " = " : "", v);
     emit_obj_to_ary_call(c, vs[i].mi, c->scopes[vs[i].mi].class_id, v, b);
     if (rooted) buf_puts(b, ");\n");
     else buf_printf(b, ")%s%s = _sp_ta; }\n", close, v);

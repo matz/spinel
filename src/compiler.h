@@ -2725,7 +2725,10 @@ int        comp_ary_is_array_proper(Compiler *c, int cid);
 int        comp_implicit_to_ary_mi(Compiler *c, int site, int op, int cid);
 int        comp_ty_ary_root(Compiler *c, TyKind t);
 int        comp_ty_arysub_array(Compiler *c, TyKind t);
-const int *comp_strsub_own_classes(Compiler *c, const char *name, int *n);
+/* Which of a method's visibilities make a String subclass answer it as its own: an
+   explicit call reaches the public ones, an implicit conversion (to_ary) any */
+typedef enum { STROWN_PUBLIC, STROWN_ANY } StrOwnVis;
+const int *comp_strsub_own_classes(Compiler *c, const char *name, StrOwnVis vis, int *n);
 TyKind     comp_ary_kind(Compiler *c, int cid);
 /* Whether Array answers a call named n on an instance of Array subclass
    cid: no method, reader or writer of the class chain takes the name, it

@@ -797,15 +797,37 @@ int cplan_raise_class_value(Compiler *c, int id);
    (cplan_boxed_to_ary_classes), its targets taking what that conversion
    gives. */
 int cplan_typed_to_ary(Compiler *c, TyKind t, int at, int op, int *boxed);
+/* The same, for a caller that holds the value in a temp where the typed
+   answer may be nil (a PolyArray): the scope is answered with *hold set to
+   1 for it to do so, and the destructure reads the temp for the one
+   element a nil answer leaves. */
+int cplan_typed_to_ary_held(Compiler *c, TyKind t, int at, int op, int *boxed, int *hold);
 /* How a class's boxed to_ary runs where the plan answers it: the method
    table's method (the one sp_obj_to_ary calls), the version entry, or
-   another version its window proves */
-typedef enum { CTA_TABLE, CTA_ENTRY, CTA_VERSION } CtaHow;
+   another version its window proves; for the program's String, the
+   scope the plan answers called directly behind the String kind's test
+   (a box of a String carries no class id of the program's) */
+typedef enum { CTA_TABLE, CTA_ENTRY, CTA_VERSION, CTA_KIND } CtaHow;
 typedef struct CplanToAry { int mi; CtaHow how; } CplanToAry;
 /* The classes whose to_ary that call reaches on a boxed operand, where
    the record proves it: into out[0..cap), with the method each runs
    there and how into ans[0..cap) (may be NULL); the count */
 int cplan_boxed_to_ary_classes(Compiler *c, int id, int op, int *out, CplanToAry *ans, int cap);
+/* The class a value of type t converts as: a program object's class, the
+   program's String (CORE_STRING) for a String of either face, -1 for any
+   other type */
+int cplan_to_ary_class_of(Compiler *c, TyKind t);
+/* Does an operand of type t convert through the to_ary of class k, one of
+   cplan_boxed_to_ary_classes': a TY_POLY operand through any, a program
+   object through its class or a subclass of it, a String through the
+   program's String, anything else through none */
+int cplan_to_ary_takes(Compiler *c, int k, TyKind t);
+/* Can a value of type t convert through a to_ary of the program's that
+   takes no argument, a block of several parameters then taking the Array
+   it answers apart? The early census the analysis asks before the
+   fixpoint settles which classes have instances; the emission's sites ask
+   cplan_boxed_to_ary_classes. */
+int cplan_value_to_ary(Compiler *c, TyKind t);
 /* The classes a boxed site's implied to_ary may answer by their version
    entry, through the program's one switch of them (sp_obj_to_ary_entry):
    each class a box can hold whose to_ary has an entry made and reachable,

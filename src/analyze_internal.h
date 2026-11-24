@@ -546,6 +546,8 @@ int infer_multiwrite_const_types(Compiler *c);
 int masgn_tuple_rhs(const NodeTable *nt, int value);
 int multi_return_elem_types(Compiler *c, int value, TyKind *out, int max);
 int multi_return_elem_nodes(Compiler *c, int value, const int **elems);
+int scope_tuple_elem_nodes(Compiler *c, int mi, const int **elems);   /* analyze_pass.c: the same for a method scope */
+int method_overridden_below(Compiler *c, int site, int cid, const char *name, int mi);   /* analyze_pass.c: a descendant answers `name` with another method */
 void resolve_parents(Compiler *c);
 void resolve_inherited_aliases(Compiler *c);
 void settle_object_builtin_aliases(Compiler *c);

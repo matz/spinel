@@ -18684,8 +18684,8 @@ static int emit_multi_write_scalar(Compiler *c, int id, Buf *b, int indent, cons
      so it must take the runtime-destructure path below, not the
      scalar fill -- which handed the whole array to the first target. So
      must an Array of a class's objects. */
-  /* nor must an object the plan converts boxed (cplan_typed_to_ary): the
-     path below converts it */
+  /* nor must an object or a String the plan converts boxed
+     (cplan_typed_to_ary): the path below converts it */
   int boxed = 0;
   cplan_typed_to_ary(c, st, id, value, &boxed);
   if (vty && !multi_src && !boxed && !ty_is_array(st) && !ty_is_obj_array(st) && !ty_is_hash(st) && st != TY_UNKNOWN && st != TY_POLY) {
@@ -18834,6 +18834,18 @@ static int emit_multi_write_scalar(Compiler *c, int id, Buf *b, int indent, cons
     if (!k) k = "Int";
     TyKind elem = ty_array_elem(st);
     int tarr = ++g_tmp;
+    /* the value a to_ary answers nil for stays the one element (CRuby keeps
+       the object that has no Array); the desugar held the value in a temp
+       (cplan_typed_to_ary_held), which is read again below */
+    int cv = -1;
+    if (nt_kind(nt, value) == NK_ParenthesesNode) vp_one(nt, value, VPS_NONE, &cv);   /* (t = v; t&.to_ary): the conversion is the last statement */
+    int conv = st == TY_POLY_ARRAY && cv >= 0 && nt_kind(nt, cv) == NK_CallNode && nt_int(nt, cv, "masgn_conv", 0) &&
+               !recv_never_nil(c, value) ? nt_ref(nt, cv, "receiver") : -1;
+    /* a held conversion's receiver is the hold's local (masgn_to_ary_held) */
+    if (conv >= 0 && nt_kind(nt, conv) != NK_LocalVariableReadNode) {
+      fprintf(stderr, "spinel: internal error: a to_ary conversion that keeps its value reads a receiver that is not the hold's local\n");
+      exit(1);
+    }
     emit_indent(b, indent);
     emit_ctype(c, st, b);
     buf_printf(b, " _t%d = ", tarr); emit_expr(c, value, b); buf_puts(b, ";\n");
@@ -18844,7 +18856,14 @@ static int emit_multi_write_scalar(Compiler *c, int id, Buf *b, int indent, cons
        nil fact says is never nil keeps its C. */
     {
       const char *nk = array_iter_kind(st);
-      if (nk && !recv_never_nil(c, value)) {
+      if (conv >= 0) {
+        Buf bx; memset(&bx, 0, sizeof bx);
+        emit_boxed(c, conv, &bx);
+        emit_indent(b, indent);
+        buf_printf(b, "if (!_t%d) { _t%d = sp_PolyArray_new(); sp_PolyArray_push(_t%d, %s); }\n", tarr, tarr, tarr, bx.p ? bx.p : "sp_box_nil()");
+        free(bx.p);
+      }
+      else if (nk && !recv_never_nil(c, value)) {
         emit_indent(b, indent);
         buf_printf(b, "if (!_t%d) _t%d = sp_%sArray_new();\n", tarr, tarr, nk);
       }
@@ -19135,7 +19154,7 @@ static int emit_multi_write_scalar(Compiler *c, int id, Buf *b, int indent, cons
     emit_indent(b, indent);
     buf_printf(b, "SP_GC_ROOT_RBVAL(_t%d);\n", tarr);
     /* a boxed value converts as the assignment's implied to_ary of it (its
-       row), an object boxed here too: the desugar leaves whole an object
+       row), an object or a String boxed here too: the desugar leaves whole an object
        whose to_ary Array may hold one a nested target converts in turn
        (masgn_element_may_convert), and `(a, b), c = Pair.new(p, 3)` took
        the Pair as the one element; and one whose to_ary versions may give

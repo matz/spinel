@@ -1,0 +1,8 @@
+["nil", nil]
+["nil", nil]
+["nil", nil]
+["nil", nil]
+["nil", "nil", nil]
+["nil", nil, "other"]
+[Pair, nil, false]
+[Pair, nil]

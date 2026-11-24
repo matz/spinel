@@ -1073,6 +1073,18 @@ static int subtree_has_return(const NodeTable *nt, int root, int skip) {
   return 0;
 }
 
+/* Does a class below cid answer `name` with a method other than mi, the one
+   class cid answers at site? Then a call on a cid-typed value may run that
+   method, and what is known of mi is not what the call answers. */
+int method_overridden_below(Compiler *c, int site, int cid, const char *name, int mi) {
+  for (int cj = 0; cj < c->nclasses; cj++) {
+    int an = cj;
+    while (an >= 0 && an != cid) an = c->classes[an].parent;
+    if (an != cid || cj == cid) continue;
+    if (call_target(c, site, cj, name, 0, NULL) != mi) return 1;
+  }
+  return 0;
+}
 /* The nodes of the tuple call `value` answers when its method has one tuple
    shape (`return a, b`, or a literal `[a, b]` last): their count, 0 when it
    has none. */
@@ -1097,12 +1109,7 @@ int multi_return_elem_nodes(Compiler *c, int value, const int **elems) {
       int cid = ty_object_class(rt);
       mi = call_target(c, value, cid, mn, 0, NULL);
       /* a subclass override could return different element types */
-      for (int cj = 0; mi >= 0 && cj < c->nclasses; cj++) {
-        int an = cj;
-        while (an >= 0 && an != cid) an = c->classes[an].parent;
-        if (an != cid || cj == cid) continue;
-        if (call_target(c, value, cj, mn, 0, NULL) != mi) return 0;
-      }
+      if (mi >= 0 && method_overridden_below(c, value, cid, mn, mi)) return 0;
     }
   }
   else {
@@ -1115,7 +1122,13 @@ int multi_return_elem_nodes(Compiler *c, int value, const int **elems) {
       if (mi >= 0 && c->scopes[mi].def_node < 0) mi = -1;
     }
   }
-  if (mi < 0) return 0;
+  return mi < 0 ? 0 : scope_tuple_elem_nodes(c, mi, elems);
+}
+/* The nodes of the one tuple the method scope mi answers (`return a, b`, or
+   a literal `[a, b]` last), which is never nil: their count, 0 when its body
+   has no one such shape. */
+int scope_tuple_elem_nodes(Compiler *c, int mi, const int **elems) {
+  const NodeTable *nt = c->nt;
   int def = c->scopes[mi].def_node;
   int body = def >= 0 ? nt_ref(nt, def, "body") : -1;
   int bn = 0;
@@ -14382,26 +14395,6 @@ static void bs_splat(Compiler *c, int x, int np, TyKind *e, char *flags, int *nm
    value takes its default. A keyword takes the value its key names, the
    values of every `**` operand and of a computed key (either may name it),
    and its default when it may be absent -- never a positional's. */
-/* Can an object of type t answer a to_ary of the program's that takes no
-   argument: its class, or a subclass of it, defines one? Such a value
-   yielded alone to a block that auto-splats is taken apart through it
-   (CRuby's rb_check_array_type), so the parameters may take its
-   elements. */
-static int bs_object_to_ary(Compiler *c, TyKind t) {
-  if (!ty_is_object(t)) return 0;
-  int oc = ty_object_class(t), np = 0;
-  /* the classes codegen converts (cplan_boxed_to_ary_classes): a program
-     to_ary of no parameter on a class that can have instances (the early
-     census; `instantiated` is unset while the fixpoint runs) */
-  const PolyCand *pc = comp_poly_candidates(c, "to_ary", &np);
-  for (int i = 0; i < np; i++) {
-    int k = pc[i].cls, mi = comp_implicit_to_ary_mi(c, -1, -1, k);
-    if (pc[i].native || mi < 0 || mi != pc[i].mi || c->scopes[mi].nparams != 0) continue;
-    if (!(c->classes[k].ctor_reachable || c->classes[k].instantiated)) continue;
-    if (k == oc || is_descendant(c, k, oc)) return 1;
-  }
-  return 0;
-}
 void block_site_types(Compiler *c, const BlockSig *s, const int *av, int ac,
                       TyKind *pos, char *absent, TyKind *kws) {
   const NodeTable *nt = c->nt;
@@ -14447,7 +14440,7 @@ void block_site_types(Compiler *c, const BlockSig *s, const int *av, int ac,
   int kw_spreads = kwh >= 0 && kwh_only_spreads(nt, kwh);
   if (!s->lambda && (kwh < 0 || kw_spreads) && block_auto_splats(P, O, Q, s->R) &&
       (gather ? nmin <= 1 : ac == 1) &&
-      (ty_is_array(e) || e == TY_POLY || e == TY_POLY_ARRAY || (!gather && bs_object_to_ary(c, e)))) {
+      (ty_is_array(e) || e == TY_POLY || e == TY_POLY_ARRAY || (!gather && cplan_value_to_ary(c, e)))) {
     /* spread across the parameters: an element, or (gathered, or boxed)
        possibly the value itself */
     TyKind et = ty_is_array(e) ? ty_array_elem(e) : TY_POLY;

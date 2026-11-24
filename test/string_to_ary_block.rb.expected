@@ -1,0 +1,63 @@
+to_ary
+["s", "tail"]
+to_ary
+["s", "tail"]
+to_ary
+["s"]
+to_ary
+["s", ["tail"]]
+to_ary
+["s", "tail"]
+to_ary
+to_ary
+["s", "tail", "tail"]
+"s"
+["s"]
+"s"
+to_ary
+["s", "tail"]
+to_ary
+["tail"]
+to_ary
+["s", "tail", 0]
+to_ary
+["a", "tail"]
+to_ary
+["b", "tail"]
+to_ary
+["s", "tail"]
+to_ary
+["s", "tail"]
+to_ary
+["s", "tail"]
+to_ary
+["s", "tail"]
+to_ary
+["s", "tail"]
+to_ary
+["s", "tail", 1]
+["s", nil]
+["s", 1]
+to_ary
+["m", "tail"]
+to_ary
+["m", "tail"]
+["s", nil]
+["s", nil]
+["s", nil]
+can't convert String to Array (String#to_ary gives Integer)
+can't convert String to Array (String#to_ary gives Integer)
+[1, 2]
+["o", [:tail]]
+["o", :tail]
+[["o"], :tail]
+["o", 7, :tail]
+["o"]
+["o", :tail]
+"o"
+["o", [:tail]]
+[["o"], :tail]
+["m", :sub]
+["m", :sub]
+["m", :sub]
+["o", :tail]

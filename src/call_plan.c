@@ -3759,6 +3759,8 @@ int cplan_to_ary_method(Compiler *c, int id, int op, int cid) {
   if (comp_ary_is_array_proper(c, cid)) return -1;
   return cplan_implied_target(c, id, op, cid, "to_ary", 0, NULL);
 }
+static int cplan_to_ary_candidate(Compiler *c, int id, int op, const PolyCand *pc, int early);
+static int cplan_to_ary_string_class(Compiler *c);
 /* See call_plan.h. The classes are cplan_boxed_to_ary_classes' (a box can
    hold them, their to_ary is the table's no-argument one). */
 const CplanToAryEntries *cplan_to_ary_entries(Compiler *c) {
@@ -3771,8 +3773,9 @@ const CplanToAryEntries *cplan_to_ary_entries(Compiler *c) {
   es->cls = cls;
   es->scope = scope;
   for (int i = 0; i < np; i++) {
-    int k = pc[i].cls, mi = comp_implicit_to_ary_mi(c, -1, -1, k);
-    if (pc[i].native || mi < 0 || mi != pc[i].mi || c->scopes[mi].nparams != 0 || !c->classes[k].instantiated) continue;
+    int k = pc[i].cls, mi = cplan_to_ary_candidate(c, -1, -1, &pc[i], 0);
+    /* (the program's String has no class id for the switch to key a case on) */
+    if (mi < 0 || k == cplan_to_ary_string_class(c)) continue;
     int e = cplan_implied_entry(c, k, "to_ary", mi);
     if (e < 0 || !c->scopes[e].reachable) continue;
     es->cls[es->n] = k;
@@ -3802,6 +3805,52 @@ static int cplan_to_ary_entry_of(Compiler *c, int k) {
   }
   return -1;
 }
+/* The class a boxed or typed String converts as: the program's own String
+   (CORE_STRING), whose to_ary a String value reaches behind a kind test, as
+   a box of a String is the one handle box and carries no class id of the
+   program's (CTA_KIND). -1 where the program has none. */
+static int cplan_to_ary_string_class(Compiler *c) {
+  return comp_core_class(c, CORE_STRING);
+}
+/* See call_plan.h. */
+int cplan_to_ary_class_of(Compiler *c, TyKind t) {
+  if (ty_is_object(t)) return ty_object_class(t);
+  return t == TY_STRING || t == TY_STRBUF ? cplan_to_ary_string_class(c) : -1;
+}
+/* See call_plan.h. */
+int cplan_to_ary_takes(Compiler *c, int k, TyKind t) {
+  if (t == TY_POLY) return 1;
+  int oc = cplan_to_ary_class_of(c, t);
+  if (oc < 0) return 0;
+  if (!ty_is_object(t)) return k == oc;
+  /* (an instance of a String subclass is a String box: the program's String
+     answers it where the subclass has no to_ary of its own) */
+  if (k == cplan_to_ary_string_class(c)) return comp_ary_is_str(c, oc);
+  return is_descendant(c, k, oc);
+}
+/* The scope of the no-argument to_ary a candidate class of the implied
+   to_ary survey (comp_poly_candidates) answers for the call node id makes
+   on operand op, or -1 for a class that has none a box can reach: a class
+   that can have instances (early: the census before the fixpoint settles
+   `instantiated`, ctor_reachable stands in), or the program's String. */
+static int cplan_to_ary_candidate(Compiler *c, int id, int op, const PolyCand *pc, int early) {
+  int k = pc->cls, mi = comp_implicit_to_ary_mi(c, id, op, k);
+  if (pc->native || mi < 0 || mi != pc->mi || c->scopes[mi].nparams != 0) return -1;
+  if (k == cplan_to_ary_string_class(c)) return mi;
+  const ClassInfo *ci = &c->classes[k];
+  return ci->instantiated || (early && ci->ctor_reachable) ? mi : -1;
+}
+/* See call_plan.h. A class whose to_ary the plan answers none for (a call
+   that may run before any version exists) keeps the object, as CRuby's
+   does before a to_ary is defined. */
+int cplan_value_to_ary(Compiler *c, TyKind t) {
+  if (cplan_to_ary_class_of(c, t) < 0) return 0;
+  int np = 0;
+  const PolyCand *pc = comp_poly_candidates(c, "to_ary", &np);
+  for (int i = 0; i < np; i++)
+    if (cplan_to_ary_candidate(c, -1, -1, &pc[i], 1) >= 0 && cplan_to_ary_takes(c, pc[i].cls, t)) return 1;
+  return 0;
+}
 /* The classes whose own to_ary the implied to_ary call node id makes on
    operand op reaches when the operand is boxed (a multiple assignment's
    value, the value a block of several parameters takes apart): each
@@ -3811,27 +3860,39 @@ static int cplan_to_ary_entry_of(Compiler *c, int k) {
    its own level, as its MultiTargetNode's implied to_ary of the element
    it takes (emit_massign_poly_target). An operand node of a program
    class's type (op >= 0) is boxed as that object, and reaches only the
-   to_ary of its class or a subclass; one of another type (a Hash, a
-   scalar) none. Into out[0..cap), ascending, with the method each class
-   runs there into ans[0..cap) when ans is given, and how: the table's, a
-   version the window proves, or the entry (the plan's MethodLookup); the
-   count. A class the plan answers
+   to_ary of its class or a subclass, a String's the program's String
+   (cplan_to_ary_takes); one of another type (a Hash, a scalar) none. Into
+   out[0..cap), ascending, with the method each class runs there into
+   ans[0..cap) when ans is given, and how: the table's, a version the
+   window proves, or the entry (the plan's MethodLookup), or the String's
+   by its kind (CTA_KIND); the count. A class the plan answers
    none for (a call that may run before any version exists) keeps the
    object, as CRuby's does before a to_ary is defined. */
 int cplan_boxed_to_ary_classes(Compiler *c, int id, int op, int *out, CplanToAry *ans, int cap) {
   int n = 0, np = 0;
   TyKind ot = op >= 0 ? comp_ntype(c, op) : TY_POLY;
-  int oc = ty_is_object(ot) ? ty_object_class(ot) : -1;
-  if (oc < 0 && ot != TY_POLY) return 0;
+  if (ot != TY_POLY && cplan_to_ary_class_of(c, ot) < 0) return 0;
   const PolyCand *pc = comp_poly_candidates(c, "to_ary", &np);
   for (int i = 0; i < np && n < cap; i++) {
-    int k = pc[i].cls, mi = comp_implicit_to_ary_mi(c, id, op, k);
-    if (pc[i].native || mi < 0 || mi != pc[i].mi || c->scopes[mi].nparams != 0 || !c->classes[k].instantiated) continue;
-    if (oc >= 0 && !is_descendant(c, k, oc)) continue;
+    int k = pc[i].cls, mi = cplan_to_ary_candidate(c, id, op, &pc[i], 0);
+    if (mi < 0 || !cplan_to_ary_takes(c, k, ot)) continue;
     MethodLookup ml;
     int vi = cplan_implied_target(c, id, op, k, "to_ary", 0, &ml);
     if (vi < 0 || ml.kind == ML_TABLE || c->scopes[vi].nparams != 0) continue;
-    if (ans) ans[n] = (CplanToAry){ vi, ml.kind == ML_ENTRY && cplan_to_ary_entry_of(c, k) == vi ? CTA_ENTRY : vi == mi ? CTA_TABLE : CTA_VERSION };
+    /* (a String subclass that inherits the program's String's to_ary is that String's arm) */
+    if (k != cplan_to_ary_string_class(c) && comp_ary_is_str(c, k) && c->scopes[vi].class_id == cplan_to_ary_string_class(c)) continue;
+    /* (a String subclass's to_ary has no version entry, so the plan answers its one method wherever it is asked: a value of unknown class gets the arm only where the record proves the method is there when the call runs, and a call it cannot place keeps the String, as the call did before) */
+    if (id >= 0 && !ty_is_object(ot) && k != cplan_to_ary_string_class(c) && comp_ary_is_str(c, k)) {
+      int framed = elab_plan_enter(c, id), at = elab_call_method(c, id, k, "to_ary", 0, 0);
+      if (framed) elab_plan_leave(c);
+      if (at != ELAB_YES) continue;
+    }
+    if (ans) {
+      /* (an instance of a String subclass is a String box whose class the scan names: its own arm tests that, never a case of the class switches) */
+      CtaHow how = k == cplan_to_ary_string_class(c) ? CTA_KIND : comp_ary_is_str(c, k) ? CTA_VERSION
+                 : ml.kind == ML_ENTRY && cplan_to_ary_entry_of(c, k) == vi ? CTA_ENTRY : vi == mi ? CTA_TABLE : CTA_VERSION;
+      ans[n] = (CplanToAry){ vi, how };
+    }
     out[n++] = k;
   }
   return n;
@@ -3839,17 +3900,55 @@ int cplan_boxed_to_ary_classes(Compiler *c, int id, int op, int *out, CplanToAry
 
 /* See call_plan.h. An Array subclass instance is an Array already
    (comp_implicit_to_ary_mi). */
-int cplan_typed_to_ary(Compiler *c, TyKind t, int at, int op, int *boxed) {
+int cplan_typed_to_ary_held(Compiler *c, TyKind t, int at, int op, int *boxed, int *hold) {
   if (boxed) *boxed = 0;
-  int cls = ty_is_object(t) ? ty_object_class(t) : -1;
+  if (hold) *hold = 0;
+  int cls = cplan_to_ary_class_of(c, t);
+  /* (a value typed String may be an instance of a String subclass that has a
+     to_ary of its own, which the typed call would not run: the boxed arms
+     dispatch it) */
+  if (!ty_is_object(t) && cls >= 0) {
+    int nown = 0;
+    comp_strsub_own_classes(c, "to_ary", STROWN_ANY, &nown);
+    if (nown > 0) {
+      if (boxed) *boxed = 1;
+      return -1;
+    }
+  }
   int mi = cls >= 0 ? comp_implicit_to_ary_mi(c, at, op, cls) : -1;
   if (mi < 0 || c->scopes[mi].nparams != 0) return -1;
   MethodLookup ml;
   int vi = cplan_implied_target(c, at, op, cls, "to_ary", 0, &ml);
   if (vi < 0 || ml.kind == ML_TABLE || c->scopes[vi].nparams != 0) return -1;
-  if (ty_is_array(c->scopes[mi].ret) && ty_is_array(c->scopes[vi].ret)) return vi;
+  /* (an instance of a String subclass is a String box: the typed call has no String to take it as) */
+  if (ty_is_object(t) && comp_ary_is_str(c, cls)) {
+    if (boxed) *boxed = 1;
+    return -1;
+  }
+  if (!ty_is_array(c->scopes[mi].ret) || !ty_is_array(c->scopes[vi].ret)) {
+    if (boxed) *boxed = 1;
+    return -1;
+  }
+  /* An answer that is one tuple (the shape multi_return_elem_nodes types the
+     targets from) that no subclass overrides is never nil, and is destructured as it is. Any other may
+     be nil, and the value then stays the one element, as the destructure
+     keeps it: the caller that asks for it (*hold) holds the value in a temp,
+     which the destructure reads, never the expression. Only a PolyArray can
+     take that element, so another typed Array converts boxed (the nil fact
+     is not settled where the desugar asks, so every non-tuple answer is
+     taken as maybe nil). */
+  const int *tup;
+  if (scope_tuple_elem_nodes(c, mi, &tup) > 0 && scope_tuple_elem_nodes(c, vi, &tup) > 0 &&
+      !method_overridden_below(c, op, cls, "to_ary", mi)) return vi;
+  if (c->scopes[mi].ret == TY_POLY_ARRAY || c->scopes[vi].ret == TY_POLY_ARRAY) {
+    if (hold) *hold = 1;
+    return vi;
+  }
   if (boxed) *boxed = 1;
   return -1;
+}
+int cplan_typed_to_ary(Compiler *c, TyKind t, int at, int op, int *boxed) {
+  return cplan_typed_to_ary_held(c, t, at, op, boxed, NULL);
 }
 /* See call_plan.h. */
 int cplan_index_writer(Compiler *c, int cls, int *cdef) {

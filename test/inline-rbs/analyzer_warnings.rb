@@ -6,7 +6,7 @@
 require_relative "analyzer_warnings_part"
 
 class Clock
-  # @rbs @log: Array[Time]
+  # @rbs @log: Array[UnknownTime]
   # @rbs @zone: Net::HTTP
 
   attr_accessor :stamp #: Regexp?

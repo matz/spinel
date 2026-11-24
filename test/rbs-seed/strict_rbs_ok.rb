@@ -68,3 +68,6 @@ p api.inline_header(empty)
 arms = [StrictOkStrArm.new, StrictOkArrArm.new]
 p arms[0].classify("gear")
 p arms[1].classify(["a", "b"])
+
+# The same runtime container signatures must also apply in strict mode.
+require_relative "runtime_containers"

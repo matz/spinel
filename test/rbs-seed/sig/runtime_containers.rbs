@@ -1,0 +1,13 @@
+class RuntimeContainerValues
+  def times: (Array[Time]) -> Array[Time]
+  def regexps: (Array[Regexp]) -> Array[Regexp]
+  def matches: (Array[MatchData]) -> Array[MatchData]
+  def complexes: (Array[Complex]) -> Array[Complex]
+  def rationals: (Array[Rational]) -> Array[Rational]
+  def ranges: (Array[Range]) -> Array[Range]
+  def ios: (Array[IO]) -> Array[IO]
+  def stamps: (Hash[Symbol, Time]) -> Hash[Symbol, Time]
+  def patterns: (Hash[String, Regexp]) -> Hash[String, Regexp]
+  def keyed: (Hash[Time, String]) -> Hash[Time, String]
+  def files: (Array[File]) -> Array[File]
+end

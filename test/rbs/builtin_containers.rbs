@@ -1,0 +1,28 @@
+# Runtime container elements use boxed storage, not nominal object arrays.
+type runtime_time = Time
+class RuntimeContainers
+  def value_0: (Array[Time], Hash[Symbol, Time], Hash[Time, String]) -> Array[Time]
+  def value_1: (Array[Regexp], Hash[Symbol, Regexp], Hash[Regexp, String]) -> Array[Regexp]
+  def value_2: (Array[MatchData], Hash[Symbol, MatchData], Hash[MatchData, String]) -> Array[MatchData]
+  def value_3: (Array[File], Hash[Symbol, File], Hash[File, String]) -> Array[File]
+  def value_4: (Array[IO], Hash[Symbol, IO], Hash[IO, String]) -> Array[IO]
+  def value_5: (Array[Complex], Hash[Symbol, Complex], Hash[Complex, String]) -> Array[Complex]
+  def value_6: (Array[Rational], Hash[Symbol, Rational], Hash[Rational, String]) -> Array[Rational]
+  def value_7: (Array[Range], Hash[Symbol, Range], Hash[Range, String]) -> Array[Range]
+  def value_8: (Array[Thread], Hash[Symbol, Thread], Hash[Thread, String]) -> Array[Thread]
+  def value_9: (Array[Fiber], Hash[Symbol, Fiber], Hash[Fiber, String]) -> Array[Fiber]
+  def value_10: (Array[Random], Hash[Symbol, Random], Hash[Random, String]) -> Array[Random]
+  def value_11: (Array[Class], Hash[Symbol, Class], Hash[Class, String]) -> Array[Class]
+  def value_12: (Array[StandardError], Hash[Symbol, StandardError], Hash[StandardError, String]) -> Array[StandardError]
+  def value_13: (Array[Errno::ENOENT], Hash[Symbol, Errno::ENOENT], Hash[Errno::ENOENT, String]) -> Array[Errno::ENOENT]
+  def value_14: (Array[TCPSocket], Hash[Symbol, TCPSocket], Hash[TCPSocket, String]) -> Array[TCPSocket]
+  def value_15: (Array[Process::Status], Hash[Symbol, Process::Status], Hash[Process::Status, String]) -> Array[Process::Status]
+  def aliased: (Array[runtime_time]) -> Hash[Symbol, runtime_time]
+  def optional: (Array[Time?]) -> Array[Regexp | nil]
+  def nested: (Array[Array[Time]]) -> Hash[String, Array[MatchData]]
+  def nominal: (Array[Local::Time]) -> Array[UnknownRuntime]
+end
+module Local
+  class Time
+  end
+end

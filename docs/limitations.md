@@ -1480,6 +1480,11 @@ encodings: `/[\x80]/` matches the byte 0x80, where CRuby refuses a UTF-8
 pattern with `invalid multibyte escape`. It reads the same byte inside a
 nested class or a `&&` intersection, where CRuby answers differently again.
 
+RBS container annotations accept builtin runtime classes such as `Array[Time]`,
+`Array[Regexp]`, and `Hash[Symbol, Time]` using boxed elements. They do not
+check each element's Ruby class; top-level builtin pin limitations still apply
+(see [RBS type vocabulary](rbs-extract.md#type-vocabulary)).
+
 **An `--rbs` Hash type gives way to a Hash whose keys are boxed.** A
 parameter, instance variable, attribute, Struct or Data member, or return
 that a signature types as a Hash keyed by one class (`Hash[Symbol, untyped]`,

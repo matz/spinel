@@ -456,7 +456,7 @@ FORCE:
 
 build/csrc/sp_parse_lib.o: src/spinel_parse.c src/prism_eval.c src/sp_macro.c src/sp_const_loop.c src/ct_value.h src/pre_const.h src/inline_rbs.c src/rbs_map.h src/node_table.h src/types.h $(PRISM_LIB) $(PLATFORM_HDRS) | build/csrc
 	$(CC) $(CFLAGS) -Werror=implicit-function-declaration -I$(PRISM_INC) $(INLINE_RBS_CFLAGS) -c src/spinel_parse.c -o $@
-build/csrc/rbs_map.o: src/rbs_map.c src/rbs_map.h $(PLATFORM_HDRS) | build/csrc
+build/csrc/rbs_map.o: src/rbs_map.c src/rbs_map.h lib/sp_builtin_classes.h $(PLATFORM_HDRS) | build/csrc
 	$(CC) -c $(CFLAGS) -Werror=implicit-function-declaration -I$(RBS_INC) src/rbs_map.c -o $@
 
 # Exercise the fallback even when vendor/rbs is present, without replacing
@@ -3949,6 +3949,7 @@ build/rbs-seed-results/%.res: FORCE | rbs-seed-extractor $(SP_RT_LIB) $(SPINEL_T
 	strict_rbs_ok) \
 	$(SPINEL) test/rbs-seed/strict_rbs_ok.rb --rbs test/rbs-seed/sig --strict-rbs \
 	  -c --no-line-map -o "$$tmp/sro.c" 2>"$$tmp/sro.err"; \
+	if grep -q "warning:.*RBS\|warning: --rbs" "$$tmp/sro.err"; then echo "rbs-seed-test: FAIL (strict_rbs_ok dropped an annotation)"; cat "$$tmp/sro.err"; ok=0; fi; \
 	if $(CC) -O0 -Ilib $(RBS_SEED_STRICT) "$$tmp/sro.c" $(SP_RT_LIB) $(LDFLAGS) -lm -o "$$tmp/sro" 2>"$$tmp/sro.cc"; then \
 	  "$$tmp/sro" > "$$tmp/sro.out" 2>/dev/null && \
 	  cmp -s "$$tmp/sro.out" test/rbs-seed/strict_rbs_ok.expected || { echo "rbs-seed-test: FAIL (strict_rbs_ok output mismatch)"; diff -u test/rbs-seed/strict_rbs_ok.expected "$$tmp/sro.out" || true; ok=0; }; \
@@ -4351,7 +4352,7 @@ build/inline-rbs-results/%.res: FORCE | rbs-seed-extractor $(SP_RT_LIB) $(SPINEL
 	cmp -s "$$tmp/w.c" "$$tmp/n.c" || { echo "inline-rbs-test: FAIL (an annotation the compiler reported was applied, in part or whole)"; diff "$$tmp/n.c" "$$tmp/w.c" | head -10; ok=0; }; \
 	$(call IRB_IGNORED,analyzer_warnings.rb); \
 	for w in 'analyzer_warnings_part.rb:3:3: warning: inline RBS: the signature of `part_count` is not applied: `Array[Set]` names no type' \
-	         'analyzer_warnings.rb:9:3: warning: inline RBS: the declaration of @log is not applied: `Array[Time]` names no type' \
+	         'analyzer_warnings.rb:9:3: warning: inline RBS: the declaration of @log is not applied: `Array[UnknownTime]` names no type' \
 	         'analyzer_warnings.rb:12:24: warning: inline RBS: this type is not applied: `Regexp?` names no type' \
 	         'analyzer_warnings.rb:10:3: warning: inline RBS: the declaration of @zone is not applied: `Net::HTTP` names no type' \
 	         'analyzer_warnings.rb:20:3: warning: inline RBS: the signature of `at` is not applied: `Regexp` names no type' \

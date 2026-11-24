@@ -160,6 +160,7 @@ typedef struct {
   mrb_bool needs_backtrack;
   mrb_bool binary;      /* the pattern string is byte-indexed: its bytes
                             spell no characters (see mrb_re_compile()) */
+  mrb_bool synthetic;   /* parsing an internal expansion (e.g. `\R`), not user source */
   mrb_bool dont_capture;    /* pattern declares a named group: plain (...) does not capture */
   uint16_t max_backref;     /* the largest group number the pattern refers
                                back to, whichever of `\NN` and `\k<n>` spelled
@@ -1270,6 +1271,12 @@ check_unicode_cp(re_compiler *c, uint32_t cp)
 {
   if (cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)) {
     compile_error(c, "invalid Unicode range");
+  }
+  if (cp >= 0x80 && !c->synthetic) {
+    if (c->orig_flags & (RE_FLAG_NOENCODING | RE_FLAG_ENC_EUCJP | RE_FLAG_ENC_SJIS)) {
+      compile_error(c, "incompatible character encoding");
+    }
+    c->pat->flags |= RE_FLAG_FIXEDENCODING;
   }
 }
 
@@ -4057,9 +4064,12 @@ compile_atom(re_compiler *c)
       next_char(c);
       const char *sub = c->binary ? lb_bytes : lb_utf8;
       const char *sv_p = c->p, *sv_end = c->src_end;
+      mrb_bool sv_syn = c->synthetic;
       c->p = sub;
       c->src_end = sub + strlen(sub);
+      c->synthetic = TRUE;
       compile_levels(c);
+      c->synthetic = sv_syn;
       c->p = sv_p;
       c->src_end = sv_end;
     }

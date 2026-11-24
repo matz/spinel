@@ -592,6 +592,8 @@ static inline int64_t sp_process_clock_res_ns(sp_int clock_id) {
 static inline sp_Encoding sp_encoding_utf8(void){return(sp_Encoding){&("\xff" "UTF-8")[1]};}
 static inline sp_Encoding sp_encoding_us_ascii(void){return(sp_Encoding){&("\xff" "US-ASCII")[1]};}
 static inline sp_Encoding sp_encoding_binary(void){return(sp_Encoding){&("\xff" "ASCII-8BIT")[1]};}
+static inline sp_Encoding sp_encoding_euc_jp(void){return(sp_Encoding){&("\xff" "EUC-JP")[1]};}
+static inline sp_Encoding sp_encoding_windows_31j(void){return(sp_Encoding){&("\xff" "Windows-31J")[1]};}
 
 /* sp_str_alloc / _raw / byte_len / set_len / from_bytes / dup_external moved to
    sp_alloc.h (shared inline over extern heap state). */
@@ -3173,14 +3175,13 @@ static int sp_brat_cmp_poly(sp_RbVal a, sp_RbVal b) { sp_Bigint *an,*ad,*bn,*bd;
    operand, so preserve that distinction at the dynamic fallback. */
 /* The ops a Complex receiver takes through the coerce protocol. CRuby's
    Complex has `+ - * / ** <=> quo fdiv` and nothing else -- the ordered
-   comparisons, % and the named division family raise NoMethodError with no
-   coerce call, so admitting them here answered where CRuby raises. quo and
-   fdiv are left out on the other grounds: their boxed entries have no
-   Complex arm, so routing the pair through them answered a wrong number
-   ((0/1), Infinity) where master's refusal at least failed loudly. */
+   comparisons, % and the remaining named divisions raise NoMethodError with
+   no coerce call, so admitting them here answered where CRuby raises. quo is
+   left out on the other grounds: its boxed entry has no Complex arm, so
+   routing the pair through it answered a wrong number ((0/1)). */
 static sp_bool sp_complex_coerce_op_p(const char *op) {
   static const char *const set[] = {
-    "+", "-", "*", "/", "**", "<=>", NULL};
+    "+", "-", "*", "/", "**", "<=>", "fdiv", NULL};
   for (int i = 0; set[i]; i++) {
     if (strcmp(op, set[i]) == 0) return TRUE;
   }
@@ -5945,7 +5946,9 @@ static sp_bool sp_poly_enc_pred(sp_RbVal v, const char *meth) {
 }
 static sp_RbVal sp_re_encoding_box(void *pat) {
   int k = sp_re_encoding_kind(pat);
-  return sp_box_encoding(k == 2 ? sp_encoding_binary()
+  return sp_box_encoding(k == 4 ? sp_encoding_windows_31j()
+                         : k == 3 ? sp_encoding_euc_jp()
+                         : k == 2 ? sp_encoding_binary()
                          : k == 1 ? sp_encoding_utf8()
                          : sp_encoding_us_ascii());
 }
@@ -12043,8 +12046,9 @@ static sp_SymPolyHash *sp_md_named_captures_sym(sp_MatchData *m) {
   return h;
 }
 /* MatchData#deconstruct_keys(keys): nil returns all named captures; an array
-   returns just the requested keys (in order, missing ones skipped), but the
-   empty hash right away when more keys are asked for than exist (#3015). */
+   returns requested keys in order, stopping at the first unknown name (and
+   returning an empty hash right away when more keys are asked for than exist,
+   matching CRuby 4.0). */
 static sp_SymPolyHash *sp_md_deconstruct_keys(sp_MatchData *m, sp_RbVal keys) {
   if (keys.tag == SP_TAG_NIL) return sp_md_named_captures_sym(m);
   SP_GC_ROOT(m); SP_GC_ROOT_RBVAL(keys);   /* read after the hash's allocation */
@@ -12057,26 +12061,25 @@ static sp_SymPolyHash *sp_md_deconstruct_keys(sp_MatchData *m, sp_RbVal keys) {
   SP_GC_ROOT(h);
   int nnamed = re_num_named(m->pat);
   sp_int klen = sp_poly_length(keys);
-  for (sp_int i = 0; i < klen; i++) {
-    sp_RbVal ck = sp_poly_arr_get(keys, i);
-    if (ck.tag != SP_TAG_SYM)
-      sp_raise_cls("TypeError", sp_sprintf("wrong argument type %s (expected Symbol)",
-                                           sp_poly_class_name(ck)));
-  }
   if (klen > nnamed) return h;
   for (sp_int i = 0; i < klen; i++) {
     sp_RbVal k = sp_poly_arr_get(keys, i);
-    if (k.tag != SP_TAG_SYM) continue;
+    if (k.tag != SP_TAG_SYM)
+      sp_raise_cls("TypeError", sp_sprintf("wrong argument type %s (expected Symbol)",
+                                           sp_poly_class_name(k)));
     const char *kn = sp_sym_to_s((sp_sym)k.v.i);
+    int found = 0;
     for (int j = 0; j < nnamed; j++) {
       int g = -1;
       const char *nm = re_named_name(m->pat, j, &g);
       if (nm && strcmp(nm, kn) == 0) {
         g = sp_re_name_group(m->pat, nm, m->caps, m->ncap * 2);
         sp_SymPolyHash_set(h, (sp_sym)k.v.i, sp_MatchData_aref_box(m, g));
+        found = 1;
         break;
       }
     }
+    if (!found) break;
   }
   return h;
 }

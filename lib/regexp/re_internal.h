@@ -329,8 +329,10 @@ typedef struct mrb_regexp_pattern {
 #define RE_FLAG_MULTILINE     2  /* ^ and $ match at \n boundaries */
 #define RE_FLAG_DOTALL        4  /* . matches \n (Ruby's /m for dot behavior) */
 #define RE_FLAG_EXTENDED      8  /* ignore whitespace and #comments in pattern */
-#define RE_FLAG_FIXEDENCODING 16 /* Ruby Regexp::FIXEDENCODING (//u, //e, //s, or non-ASCII source) */
-#define RE_FLAG_NOENCODING    32 /* Ruby Regexp::NOENCODING (//n) */
+#define RE_FLAG_FIXEDENCODING 16  /* Ruby Regexp::FIXEDENCODING (//u, //e, //s, or non-ASCII source) */
+#define RE_FLAG_NOENCODING    32  /* Ruby Regexp::NOENCODING (//n) */
+#define RE_FLAG_ENC_EUCJP     64  /* internal: //e (EUC-JP) */
+#define RE_FLAG_ENC_SJIS      128 /* internal: //s (Windows-31J) */
 
 /* Note: Ruby's /m flag means BOTH multiline anchors AND dotall.
    Ruby's /i flag is ignorecase.  Ruby's /x flag is extended. */

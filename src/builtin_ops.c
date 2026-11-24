@@ -818,11 +818,12 @@ static const BuiltinOp bop_rows[] = {
   { TY_COMPLEX, "denominator", 0,   0, BF_ANY, TY_INT,        BOPE_TEMPLATE, "sp_complex_denominator($r)" },
   { TY_COMPLEX, "denominator", 0, 127, BF_ANY, TY_INT,        BOPE_NONE },
   /* fdiv by a Complex is ordinary complex division in floats (#2555);
-     coerce/fdiv against a non-numeric operand raise TypeError, not
-     NoMethodError (#2964) */
+     boxed/Rational/Bignum/custom-coerce operands route through sp_poly_fdiv_v,
+     which raises TypeError on non-numeric values without #coerce (#2964) */
   { TY_COMPLEX, "fdiv",        1,   1, BF_ANY, TY_COMPLEX,    BOPE_TEMPLATE, "sp_complex_div_real($r, (sp_float)($e0))", BOP_K(TY_INT) | BOP_K(TY_FLOAT) },
   { TY_COMPLEX, "fdiv",        1,   1, BF_ANY, TY_COMPLEX,    BOPE_TEMPLATE, "sp_complex_fdiv($r, $e0)", BOP_K(TY_COMPLEX) },
-  { TY_COMPLEX, "fdiv",        1,   1, BF_ANY, TY_COMPLEX,    BOPE_TEMPLATE, CX_TYPEERROR },
+  { TY_COMPLEX, "fdiv",        1,   1, BF_ANY, TY_POLY,       BOPE_TEMPLATE,
+    "({ sp_Complex _t$t = $r; sp_RbVal _t$u = $b0; SP_GC_ROOT_RBVAL(_t$u); sp_poly_fdiv_v(sp_box_complex(_t$t), _t$u); })" },
   { TY_COMPLEX, "coerce",      1,   1, BF_ANY, TY_POLY_ARRAY, BOPE_TEMPLATE,
     "({ sp_PolyArray *_t$t = sp_PolyArray_new(); SP_GC_ROOT(_t$t);"
     " sp_PolyArray_push(_t$t, sp_box_complex($c0)); sp_PolyArray_push(_t$t, sp_box_complex($r)); _t$t; })",

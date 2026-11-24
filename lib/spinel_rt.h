@@ -24622,6 +24622,14 @@ static sp_RbVal sp_fiber_storage_copy_hash(sp_RbVal v) {
     return sp_box_obj(dst, SP_BUILTIN_SYM_POLY_HASH);
   }
   if (v.cls_id == SP_BUILTIN_POLY_POLY_HASH) return sp_poly_dup(v, 0);
+  /* Validation leaves a String-keyed source empty. Its Ruby Proc accepts
+     Symbol keys too, and must receive the new store rather than its source. */
+  if (v.cls_id == SP_BUILTIN_STR_POLY_HASH) {
+    sp_StrPolyHash *src = v.v.p;
+    if (src->dproc && sp_hash_default_is_proc(src->dproc_self))
+      return sp_box_obj(sp_PolyPolyHash_new_dproc(sp_dyn_hash_dproc, src->dproc_self),
+                        SP_BUILTIN_POLY_POLY_HASH);
+  }
   /* An empty String/Integer-keyed Hash must accept future Symbol writes. */
   return sp_box_obj(sp_poly_hash_merge(v, sp_box_nil()), SP_BUILTIN_POLY_POLY_HASH);
 }

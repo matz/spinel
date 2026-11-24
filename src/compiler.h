@@ -2480,6 +2480,11 @@ int        class_name_reader_argc_raises(Compiler *c, int id, const char *nm, in
 /* a Module/Class reopen or an Object class method answers name/to_s/inspect */
 int        prog_owns_class_name_reader(Compiler *c, int id, const char *nm);
 int        dynamic_new_may_reach(Compiler *c, int call_id, int cid);  /* k.new can build cid */
+/* The initialize of class k whose parameters call_id, a `new` on a Class
+   value, gives its arguments to (bind_dynamic_new_initializers): the one
+   the call's arm for k runs, where the call can reach k and the initialize
+   takes that many arguments. -1 where there is none. */
+int        dynamic_new_initialize(Compiler *c, int call_id, int k);
 int        anon_struct_ci_for_value(Compiler *c, int val);  /* k = Struct.new(...) value node */
 const char *struct_call_dup_member(Compiler *c, int callnode);  /* first duplicate member sym name, or NULL */
 const char *sym_static_value(Compiler *c, int node);  /* SymbolNode or sole-symbol local */

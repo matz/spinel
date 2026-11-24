@@ -417,7 +417,9 @@ int emit_call_synchronize_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
             rk != NK_ConstantReadNode && rk != NK_ConstantPathNode && rk != NK_GlobalVariableReadNode &&
             rk != NK_ClassVariableReadNode)
           buf_printf(b, "SP_GC_ROOT(_t%d); ", mtmp); }
-      buf_printf(b, "sp_Mutex_lock(_t%d); ", mtmp);
+      /* a handler stack that is full raises before the lock, as the runtime's
+         synchronize does: a raise after it would leave the mutex held */
+      buf_printf(b, "sp_exc_check_room(); sp_Mutex_lock(_t%d); ", mtmp);
       buf_printf(b, "int _retf%d = 0; int _excf%d = 0; const char *_excmsg%d = NULL, *_exccls%d = NULL; ",
                  eid, eid, eid, eid);
       /* the fields a begin..ensure nested in the block hands its deferred

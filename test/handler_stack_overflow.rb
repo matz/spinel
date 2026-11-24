@@ -18,10 +18,14 @@ rescue SystemStackError => e
   puts "rescue frames: #{e.class}"
 end
 
-# every ensure of the frames that are unwound runs
+# every ensure of the frames that are unwound runs, one for each frame
+# entered; CRuby, whose innermost ensure body runs on the stack that just ran
+# out, can lose that one, so the innermost is allowed
 $ensures = 0
+$entered = 0
 def deep_ensure(n)
   begin
+    $entered += 1
     deep_ensure(n + 1)
   ensure
     $ensures += 1
@@ -30,7 +34,22 @@ end
 begin
   deep_ensure(0)
 rescue SystemStackError
-  puts "ensure frames: rescued, ensures ran: #{$ensures > 60}"
+  puts "ensure frames: rescued, ensures missed beyond the innermost: #{$entered - $ensures > 1}"
+end
+
+# an arm that takes something before its frame (Mutex#synchronize its lock)
+# raises before it does, so nothing is left taken by the frame that never
+# armed
+$ms = []
+def deep_sync(n)
+  m = Mutex.new
+  $ms << m
+  m.synchronize { deep_sync(n + 1) }
+end
+begin
+  deep_sync(0)
+rescue SystemStackError
+  puts "synchronize frames: rescued, all unlocked: #{$ms.none?(&:locked?)}"
 end
 
 # a catch held open at every level

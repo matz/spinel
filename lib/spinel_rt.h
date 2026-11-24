@@ -22937,10 +22937,12 @@ int sp_Kernel_require_relative(const char *feature, int *loaded, void (*top)(voi
 static int sp_load_file(const char *feature, int *loaded, void (*top)(void)) {
   if (!top) sp_raise_load_error(feature);
   if (*loaded) return 0;
-  *loaded = 1;
   const char *ecls = NULL, *emsg = NULL; void *eobj = NULL;
   SP_GC_ROOT_STR(emsg); SP_GC_ROOT(eobj);
+  /* the mark comes after the check: a stack that is full raises here, and
+     a feature whose load never began is not loaded */
   sp_exc_check_depth();
+  *loaded = 1;
   sp_exc_rootmark[sp_exc_top] = sp_gc_nroots; sp_rescue_mark[sp_exc_top] = sp_rescue_sp;
   sp_exc_msg[sp_exc_top] = 0; sp_exc_obj[sp_exc_top] = 0; sp_exc_top++;
   if (setjmp(sp_exc_stack[sp_exc_top - 1]) == 0) {
@@ -22976,6 +22978,9 @@ static sp_RbVal sp_Mutex_synchronize_proc(sp_mutex *m, sp_Proc *blk) {
   SP_GC_ROOT_RBVAL(r);
   const char *ecls = NULL, *emsg = NULL; void *eobj = NULL; int excf = 0;
   SP_GC_ROOT_STR(emsg); SP_GC_ROOT(eobj);
+  /* a stack that is full raises before the lock: a raise after it would
+     leave the mutex held. The lock can park, so the marks are taken after */
+  sp_exc_check_room();
   sp_Mutex_lock(m);
   sp_exc_check_depth();
   sp_exc_rootmark[sp_exc_top] = sp_gc_nroots; sp_rescue_mark[sp_exc_top] = sp_rescue_sp;
@@ -23009,8 +23014,8 @@ static sp_RbVal sp_Fiber_blocking_proc(sp_Proc *blk) {
   SP_GC_ROOT_RBVAL(r);
   const char *ecls = NULL, *emsg = NULL; void *eobj = NULL; int excf = 0;
   SP_GC_ROOT_STR(emsg); SP_GC_ROOT(eobj);
+  sp_exc_check_depth();   /* before the flag: a raise here leaves it as it was */
   f->blocking = 1;
-  sp_exc_check_depth();
   sp_exc_rootmark[sp_exc_top] = sp_gc_nroots; sp_rescue_mark[sp_exc_top] = sp_rescue_sp;
   sp_exc_msg[sp_exc_top] = 0; sp_exc_obj[sp_exc_top] = 0; sp_exc_top++;
   if (setjmp(sp_exc_stack[sp_exc_top - 1]) == 0) {

@@ -130,8 +130,14 @@ SP_NORETURN SP_COLD void sp_stack_too_deep(void);   /* lib/sp_exc.c */
    SystemStackError there (sp_stack_too_deep). Inside a fiber body, and inside
    a thread's, one slot is already spent on the frame the runtime arms around it
    (sp_exc_arm below). */
-static inline void sp_exc_check_depth(void) {
+/* The bound alone, for an arm that changes state the raise would leave
+   behind (a mutex taken, a flag set) before its check: the raise comes
+   first, and the arm's own check follows the change with the marks. */
+static inline void sp_exc_check_room(void) {
   if (SP_UNLIKELY(sp_exc_top >= SP_EXC_STACK_MAX)) sp_stack_too_deep();
+}
+static inline void sp_exc_check_depth(void) {
+  sp_exc_check_room();
 #ifdef SP_CEXT
   sp_exc_cextmark[sp_exc_top] = sp_cext_arena_snapshot();
 #endif

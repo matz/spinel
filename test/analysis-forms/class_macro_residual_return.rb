@@ -1,5 +1,5 @@
-# The class-body macro form declines: a statement it would leave as written
-# returns from the macro.
+# The class-body macro form takes a macro whose run returns before it
+# defines anything: that call defines nothing, the next defines `a`.
 class Base
   def self.mk(n)
     return if n == :skip

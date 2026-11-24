@@ -15525,6 +15525,17 @@ static void emit_obj_to_str_bridge(Compiler *c, Buf *b) {
   }
   buf_puts(b, "    default: *found = 0; return sp_box_nil();\n  }\n}\n");
 }
+/* See codegen_internal.h. */
+int obj_root_display_scope(Compiler *c, int site, int k, int inspect) {
+  int oc = comp_core_class(c, CORE_OBJECT);
+  if (oc < 0 || k == oc || k < 0 || comp_ty_value_obj(c, ty_object(k))) return -1;
+  int def = -1;
+  if (display_method_scope(c, site, k, inspect, &def) >= 0) return -1;
+  MethodLookup ml = { .def_class = -1 };
+  int om = call_target(c, site, oc, inspect ? "inspect" : "to_s", 0, &ml);
+  return om >= 0 && c->scopes[om].class_id == oc && !c->scopes[om].yields && c->scopes[om].nparams == 0 &&
+         c->scopes[om].reachable ? om : -1;
+}
 static void emit_display_overrides(Compiler *c, Buf *b) {
   buf_puts(b, "static int sp_display_override(int k, void *p, int inspect, sp_RbVal *out) {\n");
   for (int inspect = 0; inspect < 2; inspect++) {
@@ -15533,9 +15544,20 @@ static void emit_display_overrides(Compiler *c, Buf *b) {
       if (!class_has_obj_arm(c, k) || c->classes[k].is_native_class) continue;
       int def = -1;
       int mi = display_method_scope(c, -1, k, inspect, &def);
+      char self[160];
+      /* (none on the class's chain: a reopened Object's, which CRuby's lookup
+         reaches ahead of Kernel's, on the boxed object, as a call of it
+         passes self) */
+      int om = mi < 0 ? obj_root_display_scope(c, -1, k, inspect) : -1;
+      if (om >= 0) {
+        snprintf(self, sizeof self, "sp_box_obj(p, %d)", k);
+        buf_printf(b, "    case %d: *out = %s", k, ppu_open(c));
+        emit_zero_arg_boxed_call(c, om, self, b);
+        buf_printf(b, "%s; return 1;\n", ppu_close(c));
+        continue;
+      }
       if (mi < 0 || !c->scopes[mi].reachable || def < 0) continue;
       if (comp_class_is_module(c, &c->classes[def])) def = k;
-      char self[160];
       snprintf(self, sizeof self, "%s((sp_%s *)p)", comp_ty_value_obj(c, ty_object(def)) ? "*" : "", c->classes[def].c_name);
       if (c->scopes[mi].yields) {
         int pf = scope_proc_form_of(c, mi);

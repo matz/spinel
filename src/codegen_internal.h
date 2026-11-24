@@ -1268,6 +1268,13 @@ void emit_raise_operands(Compiler *c, int m, int staged, int t0, Buf *b);
 int scope_def_line(Compiler *c, Scope *s);
 const char *scope_def_file(Compiler *c, Scope *s);
 int display_method_scope(Compiler *c, int site, int cid, int want_inspect, int *defcls);
+/* The program's own Object#inspect (to_s unless inspect) that an object of
+   program class k answers with, having none on its own chain: CRuby's lookup
+   reaches a reopened Object ahead of Kernel. Called on the boxed object;
+   -1 for none (or one the display arms cannot call: it yields or takes
+   parameters). Asked at node site, the displayed value, or -1 for the
+   display dispatcher (emit_display_overrides), which no call stands behind. */
+int obj_root_display_scope(Compiler *c, int site, int k, int inspect);
 const char *obj_str_cname(Compiler *c, int site, int cid, int want_inspect);
 int obj_str_undef(Compiler *c, int site, int cid, int want_inspect);
 void emit_nomethod_raise(Compiler *c, int obj, int argc, const int *argv, const char *name, const char *dflt, const char *same, Buf *b);

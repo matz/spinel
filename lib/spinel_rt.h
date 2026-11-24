@@ -6877,18 +6877,6 @@ static sp_int sp_poly_int_bit(sp_RbVal v, sp_int i) {
   sp_Bigint *bit = sp_bigint_and(sh, sp_bigint_new_int(1));
   return (sp_int)sp_bigint_to_int(bit);
 }
-/* Rational#numerator / #denominator on a boxed value: a Rational reports its
-   reduced parts; an Integer is n/1. Both commit to sp_int (analyze's TY_INT),
-   matching the typed Rational path. */
-/* A BigRational's parts are Bignums and this slot is an sp_int: the value
-   when it fits (a denominator almost always does), the same loud RangeError
-   a boxed Bignum's to_i gives when it does not -- never a NoMethodError for
-   a name Rational has. */
-static sp_int sp_brat_part_i(sp_Bigint *b) {
-  if (sp_bigint_fits_int(b)) return (sp_int)sp_bigint_to_int(b);
-  sp_raise_cls("RangeError", "bignum too big to convert into 'long'");
-  return 0;
-}
 /* The digit count of a boxed round / floor / ceil / truncate given as a
    value that may be no Integer: a Rational receiver takes an Integer only
    ("not an integer", as CRuby), any other converts it as an argument. */
@@ -6897,12 +6885,12 @@ static SP_UNUSED sp_int sp_poly_round_digits(sp_RbVal recv, sp_RbVal d) {
     sp_raise_cls("TypeError", "not an integer");
   return sp_poly_arg_int_chk(d);
 }
-/* ...and as a boxed value, a Bignum under --int-overflow=promote */
+/* Rational#numerator / #denominator on a boxed value: a Rational reports its
+   reduced parts; an Integer is n/1. A BigRational's part is a boxed Integer,
+   a Bignum when it does not fit sp_int. */
 static sp_RbVal sp_brat_part_v(sp_Bigint *b) {
-#ifdef SP_INT_OVERFLOW_MODE_PROMOTE
   if (!sp_bigint_fits_int(b)) return sp_box_bigint(b);
-#endif
-  return sp_box_int(sp_brat_part_i(b));
+  return sp_box_int((sp_int)sp_bigint_to_int(b));
 }
 static sp_RbVal sp_poly_numerator(sp_RbVal v) { if (v.tag == SP_TAG_BIGINT || v.tag == SP_TAG_INT) return v; if (v.tag == SP_TAG_FLT) return sp_float_numerator(v.v.f); /* as the typed Float arm (#3011) */ if (sp_poly_is_rational(v)) return sp_box_int(sp_poly_as_rational(v).num); if (sp_poly_is_brat(v) && v.v.p) return sp_brat_part_v(((sp_BigRational *)v.v.p)->num); if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_COMPLEX && v.v.p) return sp_box_complex(sp_complex_numerator(*(sp_Complex *)v.v.p)); sp_raise_poly_nomethod("numerator", v); }
 static sp_RbVal sp_poly_denominator(sp_RbVal v) { if (v.tag == SP_TAG_BIGINT || v.tag == SP_TAG_INT) return sp_box_int(1); if (v.tag == SP_TAG_FLT) return sp_box_int(sp_float_denominator(v.v.f)); if (sp_poly_is_rational(v)) return sp_box_int(sp_poly_as_rational(v).den); if (sp_poly_is_brat(v) && v.v.p) return sp_brat_part_v(((sp_BigRational *)v.v.p)->den); if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_COMPLEX && v.v.p) return sp_box_int(sp_complex_denominator(*(sp_Complex *)v.v.p)); sp_raise_poly_nomethod("denominator", v); }
@@ -16344,35 +16332,73 @@ static sp_RbVal sp_poly_to_r_m(sp_RbVal v) {
    Integer ignore it and answer (0/1) and (n/1); a Float answers the simplest
    rational within it, or the simplest that rounds back to the Float, as its
    typed receiver does; a Rational the same through its double, as the typed
-   Rational#rationalize(eps) does (#3057). The epsilon is read only by the
-   kinds that use it. */
+   Rational#rationalize(eps) does (#3057), and a big Rational exactly, as
+   CRuby does. The epsilon is read only by the kinds that use it. */
 #ifdef SP_INT_OVERFLOW_MODE_PROMOTE
+# define sp_rsb_add sp_poly_add
+# define sp_rsb_mul sp_poly_mul
+#else
+/* the other modes raise or wrap where two Integers overflow, so p, q and
+   the partial quotients are summed and multiplied as Bignums */
+static sp_RbVal sp_rsb_add(sp_RbVal x, sp_RbVal y) {
+  sp_Bigint *bx = sp_poly_as_bigint(x); SP_GC_ROOT(bx);
+  sp_Bigint *by = sp_poly_as_bigint(y); SP_GC_ROOT(by);
+  return sp_box_bigint(sp_bigint_add(bx, by));
+}
+static sp_RbVal sp_rsb_mul(sp_RbVal x, sp_RbVal y) {
+  sp_Bigint *bx = sp_poly_as_bigint(x); SP_GC_ROOT(bx);
+  sp_Bigint *by = sp_poly_as_bigint(y); SP_GC_ROOT(by);
+  return sp_box_bigint(sp_bigint_mul(bx, by));
+}
+#endif
 /* CRuby's nurat_rationalize_internal: the simplest Rational p/q with
    a <= p/q <= b, a and b two numbers of the tower (Floats for a Float's
    epsilon form, Rationals for its bare form), p and q Integers that may be
-   Bignums. Under --int-overflow=promote the arithmetic goes on as Bignums
-   and big Rationals, so a tiny Float rationalizes exactly as CRuby's. */
+   Bignums. The arithmetic goes on as Bignums and big Rationals, so a tiny
+   Float under --int-overflow=promote, or a big Rational in any mode,
+   rationalizes exactly as CRuby's. */
 static sp_RbVal sp_rat_simplest_between_v(sp_RbVal a, sp_RbVal b) {
   sp_RbVal one = sp_box_int(1);
-  sp_RbVal p0 = sp_box_int(0), p1 = one, q0 = one, q1 = sp_box_int(0), c;
+  sp_RbVal p0 = sp_box_int(0), p1 = one, q0 = one, q1 = sp_box_int(0), c = sp_box_int(0), m = sp_box_int(0);
   SP_GC_ROOT_RBVAL(a); SP_GC_ROOT_RBVAL(b); SP_GC_ROOT_RBVAL(p0); SP_GC_ROOT_RBVAL(p1);
-  SP_GC_ROOT_RBVAL(q0); SP_GC_ROOT_RBVAL(q1);
+  SP_GC_ROOT_RBVAL(q0); SP_GC_ROOT_RBVAL(q1); SP_GC_ROOT_RBVAL(c); SP_GC_ROOT_RBVAL(m);
   for (;;) {
-    c = sp_poly_ceil(a); SP_GC_ROOT_RBVAL(c);
+    c = sp_poly_ceil(a);
     if (sp_poly_lt(c, b)) break;
-    sp_RbVal k = sp_poly_sub(c, one); SP_GC_ROOT_RBVAL(k);
-    sp_RbVal p2 = sp_poly_add(sp_poly_mul(k, p1), p0); SP_GC_ROOT_RBVAL(p2);
-    sp_RbVal q2 = sp_poly_add(sp_poly_mul(k, q1), q0); SP_GC_ROOT_RBVAL(q2);
-    sp_RbVal t = sp_poly_div(one, sp_poly_sub(b, k)); SP_GC_ROOT_RBVAL(t);
-    b = sp_poly_div(one, sp_poly_sub(a, k));
+    sp_RbVal k = sp_rsb_add(c, sp_box_int(-1)); SP_GC_ROOT_RBVAL(k);
+    m = sp_rsb_mul(k, p1);
+    sp_RbVal p2 = sp_rsb_add(m, p0); SP_GC_ROOT_RBVAL(p2);
+    m = sp_rsb_mul(k, q1);
+    sp_RbVal q2 = sp_rsb_add(m, q0); SP_GC_ROOT_RBVAL(q2);
+    m = sp_poly_sub(b, k);
+    sp_RbVal t = sp_poly_div(one, m); SP_GC_ROOT_RBVAL(t);
+    m = sp_poly_sub(a, k);
+    b = sp_poly_div(one, m);
     a = t;
     p0 = p1; q0 = q1; p1 = p2; q1 = q2;
   }
-  sp_RbVal p = sp_poly_add(sp_poly_mul(c, p1), p0); SP_GC_ROOT_RBVAL(p);
-  sp_RbVal q = sp_poly_add(sp_poly_mul(c, q1), q0); SP_GC_ROOT_RBVAL(q);
+  m = sp_rsb_mul(c, p1);
+  sp_RbVal p = sp_rsb_add(m, p0); SP_GC_ROOT_RBVAL(p);
+  m = sp_rsb_mul(c, q1);
+  sp_RbVal q = sp_rsb_add(m, q0); SP_GC_ROOT_RBVAL(q);
   sp_Bigint *bp = sp_poly_as_bigint(p); SP_GC_ROOT(bp);
   return SP_BRAT_BOX(bp, sp_poly_as_bigint(q));
 }
+/* Rational#rationalize(eps) of a big Rational, as CRuby's: the simplest
+   Rational between |self| - |eps| and |self| + |eps|, with the sign put
+   back, or the receiver when the two bounds are equal */
+static sp_RbVal sp_brat_rationalize_v(sp_RbVal v, sp_RbVal eps) {
+  SP_GC_ROOT_RBVAL(v); SP_GC_ROOT_RBVAL(eps);
+  int neg = sp_bigint_sign(((sp_BigRational *)v.v.p)->num) < 0;
+  sp_RbVal r = neg ? sp_poly_sub(sp_box_int(0), v) : v; SP_GC_ROOT_RBVAL(r);
+  sp_RbVal e = sp_poly_abs(eps); SP_GC_ROOT_RBVAL(e);
+  sp_RbVal a = sp_poly_sub(r, e); SP_GC_ROOT_RBVAL(a);
+  sp_RbVal b = sp_poly_add(r, e); SP_GC_ROOT_RBVAL(b);
+  if (sp_poly_eq(a, b)) return v;
+  sp_RbVal s = sp_rat_simplest_between_v(a, b); SP_GC_ROOT_RBVAL(s);
+  return neg ? sp_poly_sub(sp_box_int(0), s) : s;
+}
+#ifdef SP_INT_OVERFLOW_MODE_PROMOTE
 /* Float#rationalize([eps]), as CRuby's float_rationalize: the simplest
    Rational within |eps| of the Float (a and b the Float's sum and
    difference with it, in Floats), or within half a unit in the last place
@@ -16427,7 +16453,7 @@ static sp_RbVal sp_poly_rationalize_m(sp_RbVal v, int argc, sp_RbVal eps) {
   /* a big Rational is itself, or the simplest within its epsilon */
   if (sp_poly_is_brat(v) && v.v.p) {
     if (!argc) return v;
-    return sp_box_rational(sp_float_rationalize(sp_brat_to_f((sp_BigRational *)v.v.p), sp_poly_to_f(eps)));
+    return sp_brat_rationalize_v(v, eps);
   }
   /* a Complex is its Complex#rationalize, as the typed receiver answers */
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_COMPLEX && v.v.p)

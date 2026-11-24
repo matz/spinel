@@ -16,7 +16,7 @@ ex = Rational(2**70, 1)
   end
 end
 begin; br.to_int; rescue RangeError => e; puts "to_int: #{e.message}"; end
-begin; br.numerator; rescue RangeError => e; puts "numerator: #{e.message}"; end
+puts "numerator: #{br.numerator}"
 begin; Integer(br); rescue RangeError => e; puts "Integer: #{e.message}"; end
 pb = [Rational(2**70, 3), nil][0]
 begin; pb.to_i; rescue RangeError => e; puts "boxed to_i: #{e.message}"; end

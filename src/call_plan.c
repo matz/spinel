@@ -282,6 +282,13 @@ int cplan_core_method(Compiler *c, int id, int core, const char *name) {
   return k >= 0 ? call_target(c, id, k, name, 0, NULL) : -1;
 }
 /* See call_plan.h. */
+int cplan_instance_method(Compiler *c, int id, int cid, const char *name) {
+  int mi = call_target(c, id, cid, name, 0, NULL);
+  if (mi >= 0) return mi;
+  /* (the roots after the class's chain, a blank slate's chain ending at BasicObject) */
+  return cplan_root_method(c, id, cid >= 0 && class_is_blank_slate(c, cid) ? "BasicObject" : "Object", name, NULL);
+}
+/* See call_plan.h. */
 int comp_call_reaches_own(Compiler *c, int id, int class_id, const char *name) {
   if (cplan_builtin_call(c, id)) return 0;
   return call_target(c, id, class_id, name, 0, NULL) >= 0 || cplan_core_method(c, id, CORE_OBJECT, name) >= 0;
@@ -1978,16 +1985,17 @@ static void ver_vis_cell_name(int cell, char out[32]) {
 void ver_prepend_cell_name(int cell, char out[32]) {
   snprintf(out, 32, "$__spinel_ver_p%d", cell);
 }
-static int ver_plain_arity(Compiler *c, int s) {   /* -1: not only required positionals */
+/* See call_plan.h. */
+int ver_plain_arity(Compiler *c, int s, int blk_ok) {
   const NodeTable *nt = c->nt;
   int def = c->scopes[s].def_node, pn = def >= 0 && nt_kind(nt, def) == NK_DefNode ? nt_ref(nt, def, "parameters") : -2, n = 0;
   const char *arrs[] = { "optionals", "posts", "keywords" };
   if (pn == -1) return 0;
   if (pn == -2 && def >= 0 && nt_kind(nt, def) == NK_CallNode && is_define_method_name(nt_str(nt, def, "name"))) {   /* a define_method's block: its scope's parameters (walk_scope) */
     const Scope *sc = &c->scopes[s];
-    return sc->rest_idx < 0 && sc->kwrest_idx < 0 && !sc->blk_param && sc->nrequired == sc->nparams ? sc->nparams : -1;
+    return sc->rest_idx < 0 && sc->kwrest_idx < 0 && (blk_ok || !sc->blk_param) && sc->nrequired == sc->nparams ? sc->nparams : -1;
   }
-  if (pn < 0 || nt_ref(nt, pn, "rest") >= 0 || nt_ref(nt, pn, "keyword_rest") >= 0 || nt_ref(nt, pn, "block") >= 0) return -1;
+  if (pn < 0 || nt_ref(nt, pn, "rest") >= 0 || nt_ref(nt, pn, "keyword_rest") >= 0 || (!blk_ok && nt_ref(nt, pn, "block") >= 0)) return -1;
   for (int i = 0; i < 3; i++) {
     nt_arr(nt, pn, arrs[i], &n);
     if (n) return -1;
@@ -2434,9 +2442,9 @@ static int ver_arity(Compiler *c, int id, const int *to, int nto) {
   const int *av = a >= 0 ? nt_arr(c->nt, a, "arguments", &ac) : NULL;
   /* not the versions' required ones: a boxed receiver's arm cannot gather a splat into __cond0.. (arg_layout_gathers) */
   if (nt_argv_has(c->nt, av, ac, NT_ARG_SPLAT)) return -1;
-  int ar = ver_plain_arity(c, to[0]), fits = 1, held = 0;
+  int ar = ver_plain_arity(c, to[0], 0), fits = 1, held = 0;
   for (int i = 0; i < nto; i++) {
-    if (ver_plain_arity(c, to[i]) != ar) ar = -1;
+    if (ver_plain_arity(c, to[i], 0) != ar) ar = -1;
     fits &= ver_takes(c, to[i], n);
     held |= ver_held_row(c, &c->scopes[to[i]]);
   }
@@ -2929,9 +2937,23 @@ static int ct_window_def(Compiler *c, int cls, const char *name, int sg, int ali
    statement that may raise in a begin body with rescue clauses:
    elab_point_partial); a def, or with aliased an alias or a reader too
    (ct_window_def) */
-static int ct_window_version(Compiler *c, int id, int cls, const char *name, int sg, int aliased) {
+int cplan_window_version(Compiler *c, int id, int cls, const char *name, int sg, int aliased) {
   const LrDef *ds[2];
-  return ct_every_span(c, id, cls, name, sg, ds, 2) == 1 ? ct_window_def(c, cls, name, sg, aliased, ds[0]) : -1;
+  int framed = elab_plan_enter(c, id);
+  int v = ct_every_span(c, id, cls, name, sg, ds, 2) == 1 ? ct_window_def(c, cls, name, sg, aliased, ds[0]) : -1;
+  if (framed) elab_plan_leave(c);
+  return v;
+}
+/* See call_plan.h. */
+int cplan_hook_at(Compiler *c, int id, int cid, const char *name) {
+  int mi = cplan_instance_method(c, id, cid, name);
+  if (mi < 0) return CPH_NONE;
+  const LrDef *ds[2];
+  int framed = elab_plan_enter(c, id);
+  int n = elab_call_span(c, id, cid, name, 0, ct_after_point(c, id), NULL, ds, 2);
+  if (framed) elab_plan_leave(c);
+  if (n == 1 && !ds[0]) return CPH_ABSENT;   /* (no version at any state of the window: the def comes after every run of the site) */
+  return cplan_window_version(c, id, cid, name, 0, 0) >= 0 ? mi : CPH_UNKNOWN;
 }
 /* Does call id meet versions after its point (elab_call_meet's 1): it runs
    later (ct_after_point), or the record keeps a block around it
@@ -3433,7 +3455,7 @@ int cplan_init_entry_unfit(Compiler *c, int ci) {
   mtab_enter(c);
   int tm = comp_method_in_chain(c, ci, "initialize", &dc);
   mtab_leave(c);
-  if (tm < 0 || ver_plain_arity(c, tm) == c->scopes[tm].nparams) return 0;
+  if (tm < 0 || ver_plain_arity(c, tm, 0) == c->scopes[tm].nparams) return 0;
   /* (the class that defines it holds two or more of its own: a chain of
      one each, a subclass's over its parent's, is the table's to answer) */
   ElabVersion vs[VER_MAX_ARMS];
@@ -3467,7 +3489,7 @@ int cplan_hook_target(Compiler *c, int id, int ci, const char *name, MethodLooku
      constructor's initialize takes required parameters alone, the entry's
      count; an optional one's default is the version's, which the
      constructor's fixed parameters cannot leave out) */
-  if (tm >= 0 && is_initialize_name(name) && c->nver_entries && ver_plain_arity(c, tm) == c->scopes[tm].nparams) {
+  if (tm >= 0 && is_initialize_name(name) && c->nver_entries && ver_plain_arity(c, tm, 0) == c->scopes[tm].nparams) {
     for (int i = 0; i < c->nver_entries; i++) {
       const struct VerEntry *e = &c->ver_entries[i];
       if (e->cls != ci || e->sg || e->guard || e->scope < 0 || e->ar != c->scopes[tm].nparams || !sp_streq(e->name, name)) continue;
@@ -5487,7 +5509,7 @@ static int user_new_at(Compiler *c, int id, int ci, int *unplaced) {
   int framed = elab_plan_enter(c, id), at = elab_call_method(c, id, ci, nm, 1, 1), absent = at == ELAB_NO;
   /* (a call in a method or a block: the def in force over its window, or
      none over all of it) */
-  int made = at == ELAB_YES || ct_window_version(c, id, ci, nm, 1, 0) == t;
+  int made = at == ELAB_YES || cplan_window_version(c, id, ci, nm, 1, 0) == t;
   const LrDef *ds[2];
   if (!made && !absent) absent = elab_call_span(c, id, ci, nm, 1, 0, NULL, ds, 2) == 1 && !ds[0];
   if (framed) elab_plan_leave(c);
@@ -9957,7 +9979,7 @@ static void cplan_bycount_ask(Compiler *c, int id, const char *nm, int k, unsign
   int kw = via && nt_kind(c->nt, ad->node) == NK_AliasMethodNode;
   int by = nt_int(c->nt, t->def_node, "cond_def_bycount", 0) && !kw && (ml.kind == ML_TABLE || !t->replaced || via),
       n = ver_call_n(c, id), refl = t->entry == ENTRY_NAMED && bop_kernel_answers(nm, -1, 0) && nt_int(c->nt, t->def_node, "cond_def_refl", 0),
-      row = refl && ver_kernel_row_behind(c, t->class_id, nm), held = row && n >= 0 && n != ver_plain_arity(c, r);
+      row = refl && ver_kernel_row_behind(c, t->class_id, nm), held = row && n >= 0 && n != ver_plain_arity(c, r, 0);
   /* (a held def's entry in a class without Kernel, on a class k whose chain mixes Kernel in below it: CRuby's lookup meets
      Kernel's method in front of the history, which the entry does not stand for) */
   int front = refl && !row && ver_kernel_row_behind(c, k, nm);

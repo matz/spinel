@@ -818,7 +818,8 @@ int is_method_naming_call(const char *n);  /* define_method define_singleton_met
 int is_attr_name(const char *n);           /* attr attr_reader attr_writer attr_accessor: the Module methods that define accessors */
 int is_attr_decl_reader(const char *n);    /* attr attr_reader attr_accessor, and Spinel's class-body attribute attributes: declare a reader of each name */
 int is_attr_decl_writer(const char *n);    /* attr_writer attr_accessor attribute attributes: declare a writer of each name */
-int is_attr_may_write(const char *n);      /* is_attr_decl_writer's, and attr (`attr :x, true`) */
+int is_attr_may_write(const char *n);
+void attr_synonyms_set(int on);         /* whether attribute and attributes are is_attr_decl_reader and _writer names */      /* is_attr_decl_writer's, and attr (`attr :x, true`) */
 int class_method_vis_of_name(const char *n); /* private_class_method public_class_method: BVIS_PRIVATE / BVIS_PUBLIC, else 0 */
 int is_refine_name(const char *n);         /* refine */
 int is_enum_helper_name(const char *n);   /* __enum_pairs __enum_count_int: the compiler's helpers a receiverless call names */

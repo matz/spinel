@@ -56450,7 +56450,20 @@ static void refuse_end_beside_own_at_exit(Compiler *c) {
     if (!own && sp_streq(nt_str(nt, y, "value"), "at_exit") && !nt_int(nt, y, "node_bi", 0)) own = 1;
   if (own) unsupported_feature(c, end_at, "END beside a program-defined at_exit method, for now");
 }
+/* A program that defines a method named attribute or attributes runs its own
+   at a class-body call of that name: Spinel's declarations of the names step
+   aside for the whole program (attr_synonyms_set). */
+static void note_program_attribute_methods(Compiler *c) {
+  int on = 1;
+  for (int id = 0; id < c->nt->count && on; id++) {
+    const char *nm = nt_kind(c->nt, id) == NK_DefNode ? nt_str(c->nt, id, "name") : NULL;
+    if (nm && (sp_streq(nm, "attribute") || sp_streq(nm, "attributes"))) on = 0;
+  }
+  attr_synonyms_set(on);
+}
+
 void analyze_program(Compiler *c) {
+  note_program_attribute_methods(c);   /* (before any pass reads a class body's declarations) */
   refuse_end_beside_own_at_exit(c);
   double tm_an = sp_timing_now();
   AN_STEP_V("prune_unnamed_methods", prune_unnamed_methods(c));   /* (before any pass reads or copies them) */

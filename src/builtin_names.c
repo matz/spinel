@@ -3353,11 +3353,19 @@ int is_method_naming_call(const char *n) {
 int is_attr_name(const char *n) {
   return n && (sp_streq(n, "attr") || is_attr_reader_family(n) || is_attr_writer_family(n));
 }
+/* Whether Spinel's class-body `attribute` and `attributes` declare
+   accessors: not in a program that defines a method of either name, whose
+   own method a class-body call runs, as in CRuby (Module has neither). */
+static int g_attr_synonyms_on = 1;
+void attr_synonyms_set(int on) { g_attr_synonyms_on = on; }
+static int is_attr_synonym(const char *n) {
+  return g_attr_synonyms_on && (sp_streq(n, "attribute") || sp_streq(n, "attributes"));
+}
 int is_attr_decl_reader(const char *n) {
-  return n && (sp_streq(n, "attr") || is_attr_reader_family(n) || sp_streq(n, "attribute") || sp_streq(n, "attributes"));
+  return n && (sp_streq(n, "attr") || is_attr_reader_family(n) || is_attr_synonym(n));
 }
 int is_attr_decl_writer(const char *n) {
-  return n && (is_attr_writer_family(n) || sp_streq(n, "attribute") || sp_streq(n, "attributes"));
+  return n && (is_attr_writer_family(n) || is_attr_synonym(n));
 }
 /* A call that may declare a writer: the writer declarations, and `attr`
    (whose `attr :x, true` form is one) */

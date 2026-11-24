@@ -12630,10 +12630,14 @@ static int pivs_param(Compiler *c, Scope *s, const char *pn, char *set, int dept
   if (!(isalpha((unsigned char)mn[0]) || mn[0] == '_')) return 0;
   for (const char *q = mn; *q; q++)
     if (!(isalnum((unsigned char)*q) || *q == '_' || ((*q == '?' || *q == '!' || (!pn && *q == '=')) && !q[1]))) return 0;
-  /* `super` in a method of this name passes its own arguments on */
+  /* the call sites below omit a `super` from an override of this method
+     (for an initialize, an override in a subclass or a module) */
   for (int u = pivs_ix_first(c, PX_SUPER, mn); u >= 0; u = c->pivs->next[u]) {
     Scope *us = comp_scope_of(c, u);
-    if (us && us->name && sp_streq(us->name, mn)) return 0;
+    if (!us || !us->name || !sp_streq(us->name, mn)) continue;
+    if (!init || us->class_id < 0 || comp_class_is_module(c, &c->classes[us->class_id])) return 0;
+    for (int x = us == s ? -1 : us->class_id; x >= 0; x = c->classes[x].parent)
+      if (x == s->class_id) return 0;
   }
   int i = -1, dflt = -1, kwpos = 0;
   if (pn) {

@@ -358,8 +358,10 @@ sp_File *sp_io_pipe_reader(int fd) {
    friends need lookahead); every write bypasses stdio straight to write(2) --
    see sp_sock_write below -- so a response is on the wire immediately, like
    CRuby sockets' sync = true default. `kind` lands in ->mode for #class.
-   The caller raises for a -1 before the call. */
-sp_File *sp_io_fdopen_sock(int fd, const char *kind) {SP_GC_ROOT_STR(kind);
+   The caller raises for a -1 before the call. NULL when fdopen fails,
+   with the descriptor closed when owns_fd is set (false for a for_fd
+   descriptor, as for sp_io_fdopen_ex); the caller raises. */
+static sp_File *sp_io_fdopen_sock_try(int fd, const char *kind, int owns_fd) {SP_GC_ROOT_STR(kind);
   /* The scheduler-aware accept/connect helpers may hand us a non-blocking
      fd; the stdio read side must BLOCK (fgets treats EAGAIN as EOF), so
      clear O_NONBLOCK. Green threads still yield: every read entry point
@@ -367,10 +369,13 @@ sp_File *sp_io_fdopen_sock(int fd, const char *kind) {SP_GC_ROOT_STR(kind);
      handle with its own buffer has no stdio read side and keeps
      O_NONBLOCK: its reads park on EAGAIN (sp_io_rbuf_fill). */
   int own = sp_io_sock_takes_own_buf(fd);
-  { int fl = fcntl(fd, F_GETFL); if (fl >= 0) fcntl(fd, F_SETFL, own ? (fl | O_NONBLOCK) : (fl & ~O_NONBLOCK)); }
   sp_File *f = (sp_File *)sp_gc_alloc(sizeof(sp_File), sp_File_fin, sp_File_scan);
   f->fp = fdopen(fd, "r+");
-  if (!f->fp) { sp_raise_cls("IOError", "fdopen failed"); return NULL; }
+  if (!f->fp) {
+    if (owns_fd) close(fd);
+    return NULL;
+  }
+  { int fl = fcntl(fd, F_GETFL); if (fl >= 0) fcntl(fd, F_SETFL, own ? (fl | O_NONBLOCK) : (fl & ~O_NONBLOCK)); }
   f->path = NULL;
   f->mode = kind;
   f->lineno = 0;
@@ -379,6 +384,11 @@ sp_File *sp_io_fdopen_sock(int fd, const char *kind) {SP_GC_ROOT_STR(kind);
     f->own_buf = SP_OWN_SOCK; f->wstream = 1;
     f->wnonblock = 1; f->wgen = SP_ATOMIC_LOAD(&sp_io_child_fds_gen, __ATOMIC_ACQUIRE);
   }
+  return f;
+}
+sp_File *sp_io_fdopen_sock(int fd, const char *kind) {
+  sp_File *f = sp_io_fdopen_sock_try(fd, kind, 1);
+  if (!f) sp_raise_cls("IOError", "fdopen failed");
   return f;
 }
 
@@ -1847,8 +1857,14 @@ sp_PolyArray *sp_sock_tcp_server_sockets(const char *host, sp_int port) {SP_GC_R
   }
   sp_PolyArray *a = sp_PolyArray_new();
   SP_GC_ROOT(a);
-  for (int i = 0; i < n; i++)
-    sp_PolyArray_push(a, sp_box_obj(sp_io_fdopen_sock(fds[i], SPL("socket")), SP_BUILTIN_IO));
+  for (int i = 0; i < n; i++) {
+    sp_File *f = sp_io_fdopen_sock_try(fds[i], SPL("socket"), 1);
+    if (!f) {
+      while (++i < n) close(fds[i]);
+      sp_raise_cls("IOError", "fdopen failed");
+    }
+    sp_PolyArray_push(a, sp_box_obj(f, SP_BUILTIN_IO));
+  }
   return a;
 }
 /* TCPServer.for_fd(fd) and the other socket classes': wrap a descriptor the
@@ -1861,7 +1877,9 @@ sp_File *sp_sock_for_fd(sp_int fd, sp_int kind) {
   const char *k = kind == 1 ? SPL("tcpserver") : kind == 2 ? SPL("tcp") :
                   kind == 3 ? SPL("udp") : kind == 4 ? SPL("unixserver") :
                   kind == 5 ? SPL("unix") : SPL("socket");
-  return sp_io_fdopen_sock(d, k);
+  sp_File *f = sp_io_fdopen_sock_try(d, k, 0);
+  if (!f) sp_raise_cls("IOError", "fdopen failed");
+  return f;
 }
 /* The two connected descriptors of a socket pair, into the caller's fds:
    each call keeps its own, so two threads making pairs at once cannot
@@ -1872,10 +1890,16 @@ void sp_sock_socketpair(sp_int domain, sp_int type, sp_int proto, int fds[2]) {
     sp_sock_raise_errno("socketpair(2)");
 }
 
-/* One end of a socket pair as a handle: a UNIXSocket for UNIXSocket.pair
-   (is_unix set), a Socket for Socket.pair. */
-sp_File *sp_sock_pair_handle(int fd, sp_int is_unix) {
-  return sp_io_fdopen_sock(fd, is_unix ? SPL("unix") : SPL("socket"));
+/* End i of a socket pair as a handle: a UNIXSocket for UNIXSocket.pair
+   (is_unix set), a Socket for Socket.pair. A failed end 0 closes end 1,
+   which has no handle yet. */
+sp_File *sp_sock_pair_handle(int fds[2], int i, sp_int is_unix) {
+  sp_File *f = sp_io_fdopen_sock_try(fds[i], is_unix ? SPL("unix") : SPL("socket"), 1);
+  if (!f) {
+    if (i == 0) close(fds[1]);
+    sp_raise_cls("IOError", "fdopen failed");
+  }
+  return f;
 }
 
 /* A family or socket type named by a String or Symbol, with or without its

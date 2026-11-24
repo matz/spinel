@@ -12275,6 +12275,17 @@ static int hc_node_ok(Compiler *c, int id, int stmt, HcRegion *r) {
       if ((local || ivar) && strstr(ty, "WriteNode")) {
         const char *wn = nt_str(nt, id, "name");
         if (!wn) return 0;
+        /* an operator write calls its operator, which for a variable that
+           holds an object is the program's code (a class's own `+`) and may
+           change an array the region holds or a loop's bound: only one over
+           numbers runs none, as the pure loop's walk asks (poll_pure_node) */
+        if (k == NK_LocalVariableOperatorWriteNode || k == NK_InstanceVariableOperatorWriteNode) {
+          int v = nt_ref(nt, id, "value");
+          TyKind wt = comp_ntype(c, id), vt = v >= 0 ? comp_ntype(c, v) : TY_UNKNOWN;
+          if (!((wt == TY_INT || wt == TY_FLOAT || hc_promoted_int(c, id)) &&
+                (vt == TY_INT || vt == TY_FLOAT || hc_promoted_int(c, v))))
+            return 0;
+        }
         nameset_add(local ? &r->wl : &r->wi, wn);
         break;
       }
@@ -13280,7 +13291,11 @@ static int chunk_writes_ivar(Compiler *c, int n, const char *nm) {
   const NodeTable *nt = c->nt;
   if (n < 0) return 0;
   NodeKind k = nt_kind(nt, n);
-  if ((k == NK_InstanceVariableWriteNode || k == NK_InstanceVariableOperatorWriteNode) &&
+  /* (`@n &&= v` changes an Integer; `@n ||= v` and a multiple
+     assignment's target may as well) */
+  if ((k == NK_InstanceVariableWriteNode || k == NK_InstanceVariableOperatorWriteNode ||
+       k == NK_InstanceVariableAndWriteNode || k == NK_InstanceVariableOrWriteNode ||
+       k == NK_InstanceVariableTargetNode) &&
       sp_streq(nt_str(nt, n, "name"), nm)) return 1;
   if (k == NK_CallNode) {
     const char *cn = nt_str(nt, n, "name");
@@ -13317,16 +13332,31 @@ static long long chunk_counted_step(Compiler *c, int pred, int body) {
   int va = nt_ref(nt, val, "arguments"), vc = 0; const int *vv = va >= 0 ? nt_arr(nt, va, "arguments", &vc) : NULL;
   return vc == 1 ? nt_int(nt, vv[0], "value", 0) : 0;
 }
+/* A run of a chunked loop, in _pr<k>: SP_CHUNK_RUN of the counted variable
+   `cv`, stepping by `step` toward the bound `cb` (op is the test, `<`, `<=`,
+   `>` or `>=`), for up to SP_SIG_CHUNK passes, which the run's test
+   SP_CHUNK_MORE ends (lib/spinel_rt.h: the last value the variable may
+   reach, or a count of passes under --int-overflow=wrap). */
+static void emit_chunk_run(Buf *b, int indent, int k, const char *op, const char *cv, const char *cb, long long step) {
+  emit_indent(b, indent);
+  buf_printf(b, "sp_int _pr%d = SP_CHUNK_RUN(%s, %s, %d, %lldLL, %d, %d);\n", k, cv, cb, SP_SIG_CHUNK, step,
+             op[0] == '<', op[1] == '=');
+}
+static void emit_chunk_run_test(Buf *b, int k, const char *op, const char *cv) {
+  buf_printf(b, "} while (SP_CHUNK_MORE(%s, %s, _pr%d));\n", cv, op, k);
+}
 /* A chunked loop (poll_chunk_loop): the pure loop's body runs SP_SIG_CHUNK
    passes in an inner loop with no poll, and the outer one polls ahead of
-   each run of them. The poll is a call, so the C compiler stores what the
-   passes before it wrote, and the raise finds them there; between polls it
-   keeps the slots in registers as it does in a pure loop.
+   each run of them, ahead of its test: a trap's proc the poll runs may
+   change the bound, and the run then starts from a test of the new one.
+   The poll is a call, so the C compiler stores what the passes before it
+   wrote, and the raise finds them there; between polls it keeps the slots
+   in registers as it does in a pure loop.
 
-   A counted loop's inner one tests only the last value of the variable this
-   run may reach, which the outer one sets from the bound (one compare a
-   pass: with a second test of the count, clang would not keep `@v += 1` in
-   a register). Any other loop counts its passes down and tests the
+   A counted loop's inner one counts down the passes this run takes, which
+   the outer one sets from the bound (emit_chunk_run: one test a pass;
+   with a second test of the condition, clang would not keep `@v += 1` in a
+   register). Any other loop counts its passes down and tests the
    condition after each; the outer loop tests it again where it was false,
    so only a test that writes nothing is taken (poll_pred_quiet). A `next` is
    the inner loop's `continue`, which goes to the test. Answers 0, having
@@ -13355,28 +13385,19 @@ static int emit_while_chunked(Compiler *c, int id, Buf *b, int indent, int is_un
   free(cpre.p);
   if (!ok) { free(ccond.p); free(cv.p); free(cb.p); return 0; }
   int k = ++g_tmp;
-  emit_indent(b, indent); buf_printf(b, "while (%s(%s)) {\n", is_until ? "!" : "", ccond.p);
-  emit_indent(b, indent + 1); buf_printf(b, "%s%s;\n", sig_poll_stmt(), hc_mark());
+  emit_indent(b, indent);
+  buf_printf(b, "while (({ %s%s; %s(%s); })) {\n", sig_poll_stmt(), hc_mark(), is_until ? "!" : "", ccond.p);
   /* (a counted loop's test is a comparison; any other test may be no call
      at all, `while true`, and has no name) */
   const char *op = step ? nt_str(nt, pred, "name") : NULL;
-  int up = op && op[0] == '<', incl = op && op[1] == '=';
-  long long span = (long long)SP_SIG_CHUNK * (long long)step;
-  if (step) {
-    /* the distance to the bound, which the test says is positive, taken
-       unsigned so a wide range cannot overflow it */
-    emit_indent(b, indent + 1);
-    buf_printf(b, "sp_int _pl%d = (unsigned long long)(%s) - (unsigned long long)(%s) %s %lldULL ? (%s) %s %lldLL : (%s);\n",
-               k, up ? cb.p : cv.p, up ? cv.p : cb.p, incl ? ">=" : ">", span,
-               cv.p, up ? "+" : "-", incl ? span - 1 : span, cb.p);
-  }
+  if (step) emit_chunk_run(b, indent + 1, k, op, cv.p, cb.p, step);
   else { emit_indent(b, indent + 1); buf_printf(b, "int _pk%d = %d;\n", k, SP_SIG_CHUNK); }
   emit_indent(b, indent + 1); buf_puts(b, "do {\n");
   g_pure_region++;
   emit_loop_body(c, body, b, indent + 2);
   g_pure_region--;
   emit_indent(b, indent + 1);
-  if (step) buf_printf(b, "} while ((%s) %s _pl%d);\n", cv.p, op, k);
+  if (step) emit_chunk_run_test(b, k, op, cv.p);
   else buf_printf(b, "} while (--_pk%d && %s(%s));\n", k, is_until ? "!" : "", ccond.p);
   emit_indent(b, indent); buf_puts(b, "}\n");
   free(ccond.p); free(cv.p); free(cb.p);
@@ -13580,27 +13601,105 @@ static void emit_while_loop(Compiler *c, int id, Buf *b, int indent, int is_unti
   else {
     /* other arrays read at the proved index, in place (hcv_begin) */
     void *hv = trip[0] ? hcv_begin(c, id, body, -1, pr->bi, pr->bic, trip, -1, 0, &b) : NULL;
+    /* A loop in a region (which runs no code) that polls takes its polls
+       once per run of up to SP_SIG_CHUNK passes, not at each pass: a
+       per-pass atomic load and branch kept the C compiler from vectorizing
+       the pass. Such a loop is a proved one, or one counted to an Integer
+       bound the body leaves as it is (chunk_counted_step). The polls stay
+       ahead of the test, so whatever they ran (a collection, another green
+       thread, a finalizer, a trap's proc) is behind a test of the refreshed
+       length or bound, and the run that follows ends where the index may
+       reach in SP_SIG_CHUNK passes, or at that length or bound when it is
+       nearer. Nothing in the run shrinks an array or changes the bound,
+       and the index steps once a pass toward it, so the run ends there. A
+       `next` or a `redo` (which may skip the step, so the run would neither
+       end nor poll), a `break` (a C break would leave the run only), a loop
+       in the body and a yield (a loop of the block spliced in may leave its
+       polls to this one) keep the polls at each pass. */
+    int chunkable = pr && !is_until && (g_uses_threads || g_uses_finalizers || sig_polls()) &&
+                    !subtree_has_own_next(nt, body) && !subtree_has_own_redo(nt, body) &&
+                    !subtree_has_loop_break(c, body) && !hc_subtree_loops(nt, body) && !proc_body_has_yield(c, body);
+    long long cstep = 0;
+    Buf cv; memset(&cv, 0, sizeof cv);
+    Buf cb; memset(&cb, 0, sizeof cb);
+    if (chunkable && !proved) {
+      cstep = chunk_counted_step(c, pred, body);
+      if (cstep > (1 << 20)) cstep = 0;   /* the run's span stays an Integer of any width */
+      if (cstep) {
+        Buf cpre2; memset(&cpre2, 0, sizeof cpre2);
+        Buf *sv_pre2 = g_pre; int sv_ind2 = g_indent;
+        g_pre = &cpre2; g_indent = indent + 1;
+        int a = nt_ref(nt, pred, "arguments"), ac = 0; const int *av = nt_arr(nt, a, "arguments", &ac);
+        emit_expr(c, nt_ref(nt, pred, "receiver"), &cv);
+        emit_expr(c, av[0], &cb);
+        g_pre = sv_pre2; g_indent = sv_ind2;
+        if ((cpre2.p && cpre2.p[0]) || !cv.p || !cb.p) cstep = 0;
+        free(cpre2.p);
+      }
+    }
+    /* (a quiet loop has none left there; its body takes none either) */
+    int cond_polls = (polls_in_cond && !quiet) || cstep;
+    Buf polls; memset(&polls, 0, sizeof polls);
+    if (cond_polls) {
+      if (g_uses_threads) buf_printf(&polls, "if (SP_UNLIKELY(SP_SAFEPOINT_POLL())) sp_safepoint()%s; ", hc_mark());
+      if (g_uses_finalizers)
+        buf_printf(&polls, "if (SP_UNLIKELY(SP_ATOMIC_LOAD(&sp_fin_pending_flag, __ATOMIC_RELAXED))) sp_fin_run_pending()%s; ", hc_mark());
+      /* (a counted loop another loop of its function encloses keeps none;
+         an unproved one keeps it where emit_loop_polls would in its body) */
+      if (sig_polls() && !poll_in_pure(c, cstep ? body : id) &&
+          (g_poll_loop_nest == 0 ||
+           (cstep && (!poll_while_counted(c, pred, body) || loop_body_polls_alone(c, body)))))
+        buf_printf(&polls, "%s%s; ", sig_poll_stmt(), hc_mark());
+    }
+    int chunk = chunkable && polls.p && polls.p[0] && (cstep || (proved && trip[0] && pr->bic));
+    /* (an unproved loop that is not chunked polls in its body, as before) */
+    if (!chunk && !proved) cond_polls = 0;
+    int k = chunk ? ++g_tmp : 0;
+    const char *ci = chunk ? (cstep ? cv.p : pr->bic) : NULL;
+    const char *cop = chunk && cstep ? nt_str(nt, pred, "name") : "<";
+    const char *cbound = chunk ? (cstep ? cb.p : trip) : NULL;
+    long long cstp = cstep ? cstep : 1;
+    /* A loop whose passes left fit in one run, as a short loop's do, runs
+       them as a plain loop: no poll, no run to work out, one loop head (each
+       costs a short loop a share of its time). Its bound cannot move on the
+       way, so its own test ends it within that run: a counted loop's bound
+       is one the body leaves as it is, and a proved loop's length grows only
+       through a store, so one that stores keeps the runs. */
+    if (chunk && (cstep || !hc_subtree_stores(nt, body))) {
+      emit_indent(b, indent);
+      buf_printf(b, "if (SP_LIKELY((%s) && SP_CHUNK_FITS(%s, %s, %d, %lldLL, %d, %d))) {\n", ccond.p, ci, cbound,
+                 SP_SIG_CHUNK, cstp, cop[0] == '<', cop[1] == '=');
+      emit_indent(b, indent + 1); buf_puts(b, "do {\n");
+      g_loop_polls_in_cond = 1;
+      g_loop_uncounted = 0;
+      emit_loop_body(c, body, b, indent + 2);
+      emit_indent(b, indent + 1); buf_printf(b, "} while (%s);\n", ccond.p);
+      emit_indent(b, indent); buf_puts(b, "} else\n");
+    }
     emit_indent(b, indent);
     buf_puts(b, "while (");
-    /* (a quiet loop has none left there; its body takes none either) */
-    int cond_polls = polls_in_cond && !quiet;
-    if (cond_polls) {
-      buf_puts(b, "({ ");
-      if (g_uses_threads) buf_printf(b, "if (SP_UNLIKELY(SP_SAFEPOINT_POLL())) sp_safepoint()%s; ", hc_mark());
-      if (g_uses_finalizers)
-        buf_printf(b, "if (SP_UNLIKELY(SP_ATOMIC_LOAD(&sp_fin_pending_flag, __ATOMIC_RELAXED))) sp_fin_run_pending()%s; ", hc_mark());
-      /* (a counted loop another loop of its function encloses keeps none) */
-      if (sig_polls() && g_poll_loop_nest == 0 && !poll_in_pure(c, id))
-        buf_printf(b, "%s%s; ", sig_poll_stmt(), hc_mark());
-    }
+    if (cond_polls) { buf_puts(b, "({ "); buf_puts(b, polls.p ? polls.p : ""); }
+    free(polls.p);
     if (is_until) buf_puts(b, "!(");
     buf_puts(b, ccond.p ? ccond.p : "");
     if (is_until) buf_puts(b, ")");
     if (cond_polls) buf_puts(b, "; })");
     buf_puts(b, ") {\n");
-    g_loop_polls_in_cond = polls_in_cond;
+    if (chunk) {
+      /* (a proved loop's run is SP_SIG_CHUNK passes of one, or fewer of a
+         longer step, up to the cached length) */
+      emit_chunk_run(b, indent + 1, k, cop, ci, cbound, cstp);
+      emit_indent(b, indent + 1); buf_puts(b, "do {\n");
+    }
+    g_loop_polls_in_cond = polls_in_cond || chunk;
     g_loop_uncounted = !proved && !(sig_polls() && !is_until && poll_while_counted(c, pred, body));
-    emit_loop_body(c, body, b, indent + 1);
+    emit_loop_body(c, body, b, indent + 1 + (chunk != 0));
+    /* (a loop the run finished leaves without polling again) */
+    if (chunk) {
+      emit_indent(b, indent + 1); emit_chunk_run_test(b, k, cop, ci);
+      emit_indent(b, indent + 1); buf_printf(b, "if (!(%s)) break;\n", ccond.p ? ccond.p : "0");
+    }
+    free(cv.p); free(cb.p);
     emit_indent(b, indent);
     buf_puts(b, "}\n");
     hcv_end(c, hv, indent);

@@ -58,6 +58,9 @@ is a user guarantee.
   `a.length` over an array it stores no element of, and runs no other code,
   polls at the enclosing loop's back-edge instead of its own, so it yields up
   to one pass over that array late, as a runtime call over the array would.
+  A loop that counts to an array's length or to an Integer bound over a body
+  that runs no code polls once per run of up to 1024 passes, ahead of its
+  test, so it yields up to that many of those passes late.
   The preemption signal is `SIGURG`, overridable with
   `SPINEL_PREEMPT_SIGNAL`.
 - **The single-threaded archive is unchanged.** A program that never uses

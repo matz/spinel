@@ -260,6 +260,51 @@ static inline sp_int sp_imod(sp_int a, sp_int b) {
    out of band no helper tests a sentinel, so each is the plain one */
 static inline sp_int sp_idiv_nn(sp_int a, sp_int b) { return sp_idiv(a, b); }
 static inline sp_int sp_imod_nn(sp_int a, sp_int b) { return sp_imod(a, b); }
+/* A chunked loop's runs (codegen_stmt.c, emit_chunk_run): its counted
+   variable cv steps by step toward the bound cb (up: `cv < cb`, or `<=` when
+   incl; else `>`, `>=`), and a run takes the passes left to the bound, or
+   chunk of them when more are left. The loop's test has just said cv is
+   short of cb; the distance is taken unsigned, so a wide range cannot
+   overflow it. Codegen writes `sp_int r = SP_CHUNK_RUN(cv, cb, chunk, step,
+   up, incl); do { ... } while (SP_CHUNK_MORE(cv, op, r));`.
+
+   Where an overflow raises, the run is the last value cv may reach
+   (sp_chunk_run_end) and a pass's test compares cv with it: the C compiler
+   then knows the step inside the run cannot overflow and drops its test.
+   Under --int-overflow=wrap a variable can wrap past a bound near the end of
+   the Integers instead of passing it, and that test would hold for good, so
+   the run is a count of passes (sp_chunk_passes) the test counts down: the
+   run ends whatever the variable does, and the loop reaches its polls. */
+static inline sp_int sp_chunk_run_end(sp_int cv, sp_int cb, sp_int chunk, sp_int step, int up, int incl) {
+  uintptr_t d = up ? (uintptr_t)cb - (uintptr_t)cv : (uintptr_t)cv - (uintptr_t)cb;
+  sp_int span = chunk * step, run = incl ? span - 1 : span;
+  if (incl ? d >= (uintptr_t)span : d > (uintptr_t)span) return up ? cv + run : cv - run;
+  return cb;
+}
+static inline sp_int sp_chunk_passes(sp_int cv, sp_int cb, sp_int chunk, sp_int step, int up, int incl) {
+  uintptr_t d = up ? (uintptr_t)cb - (uintptr_t)cv : (uintptr_t)cv - (uintptr_t)cb;
+  if (d >= (uintptr_t)chunk * (uintptr_t)step) return chunk;
+  return incl ? (sp_int)(d / (uintptr_t)step) + 1 : (sp_int)((d + (uintptr_t)step - 1) / (uintptr_t)step);
+}
+/* Do the passes left fit in one run? Such a loop runs them as a plain loop
+   with no poll (SP_CHUNK_FITS), its own test ending it. Under wrap a bound
+   within a step of the end of the Integers never fits: the variable could
+   wrap past it, and that loop would then run on with no poll. */
+static inline int sp_chunk_fits(sp_int cv, sp_int cb, sp_int chunk, sp_int step, int up) {
+#ifdef SP_INT_OVERFLOW_MODE_WRAP
+  if (SP_UNLIKELY(up ? cb > INTPTR_MAX - step : cb < INTPTR_MIN + step)) return 0;
+#endif
+  uintptr_t d = up ? (uintptr_t)cb - (uintptr_t)cv : (uintptr_t)cv - (uintptr_t)cb;
+  return d < (uintptr_t)chunk * (uintptr_t)step;
+}
+#define SP_CHUNK_FITS(cv, cb, chunk, step, up, incl) sp_chunk_fits((cv), (cb), (chunk), (step), (up))
+#ifdef SP_INT_OVERFLOW_MODE_WRAP
+#define SP_CHUNK_RUN(cv, cb, chunk, step, up, incl) sp_chunk_passes((cv), (cb), (chunk), (step), (up), (incl))
+#define SP_CHUNK_MORE(cv, op, run) (--(run))
+#else
+#define SP_CHUNK_RUN(cv, cb, chunk, step, up, incl) sp_chunk_run_end((cv), (cb), (chunk), (step), (up), (incl))
+#define SP_CHUNK_MORE(cv, op, run) ((cv) op (run))
+#endif
 /* Float#% (and Integer % Float): floored modulo whose result takes the sign of
    the divisor, unlike C fmod which follows the dividend (-5.5 % 2 == 0.5). */
 /* float %% with an INTEGER zero divisor raises in CRuby (5.0 %% 0), while a

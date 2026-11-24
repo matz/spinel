@@ -1,0 +1,4 @@
+[true, 0, true]
+[true, 10]
+[:counted, true]
+[:pure, true]

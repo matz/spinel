@@ -12954,6 +12954,16 @@ static int param_takes_store(Compiler *c, Scope *s, int g, TyKind t) {
   LocalVar *p = g >= 0 && g < s->nparams && s->pnames[g] ? scope_local(s, s->pnames[g]) : NULL;
   return p && !p->rbs_seeded ? param_push_note(c, p, NULL, 0, 0, t, 0, 1) : 0;
 }
+/* pm's parameter dst takes s's src, which a bare super hands it: src's
+   type, or, where a push widened dst to the general Array, any Array as
+   that, and src with it, as a call's binding widens its argument. */
+static int zsuper_param_take(LocalVar *dst, LocalVar *src) {
+  if (!dst->push_widened || dst->type != TY_POLY_ARRAY || !ty_is_array(src->type)) return lv_widen(dst, src->type);
+  if (src->type == TY_POLY_ARRAY || ty_is_ptr_array(src->type) || src->rbs_seeded) return 0;
+  lv_set_type(src, TY_POLY_ARRAY);
+  src->push_widened = 1;
+  return 1;
+}
 static int bind_zsuper_params(Compiler *c, int id, Scope *s, Scope *pm) {
   int changed = 0;
   if (zsuper_kw_positional(c, s, pm))
@@ -12999,7 +13009,7 @@ static int bind_zsuper_params(Compiler *c, int id, Scope *s, Scope *pm) {
       LocalVar *src = scope_local(s, s->pnames[a]);
       LocalVar *dst = scope_local(pm, pm->pnames[i]);
       if (!src || !dst || dst->rbs_seeded || src->type == TY_UNKNOWN) continue;
-      if (lv_widen(dst, src->type)) changed = 1;
+      changed |= zsuper_param_take(dst, src);
     }
     return changed | zsuper_rest_elem_stores(c, s, pm);
   }
@@ -13019,9 +13029,7 @@ static int bind_zsuper_params(Compiler *c, int id, Scope *s, Scope *pm) {
     int own = zsuper_param_source(c, s, pm, pk);
     if (own > srest) {
       LocalVar *src = scope_local(s, s->pnames[own]);
-      if (src && src->type != TY_UNKNOWN) {
-        if (lv_widen(p, src->type)) changed = 1;
-      }
+      if (src && src->type != TY_UNKNOWN) changed |= zsuper_param_take(p, src);
       opt_seen |= optional;
       continue;
     }
@@ -13031,7 +13039,7 @@ static int bind_zsuper_params(Compiler *c, int id, Scope *s, Scope *pm) {
       for (int j = 0; j < srest; j++) {
         LocalVar *src = scope_local(s, s->pnames[j]);
         if (!src || src->type == TY_UNKNOWN) continue;
-        if (lv_widen(p, src->type)) changed = 1;
+        changed |= zsuper_param_take(p, src);
       }
       if (rt != TY_UNKNOWN) changed |= slot_take(c, p, at, id);
       continue;
@@ -13040,7 +13048,7 @@ static int bind_zsuper_params(Compiler *c, int id, Scope *s, Scope *pm) {
     if (pk < srest && (pm->rest_idx < 0 || pk < pm->rest_idx)) {
       LocalVar *src = scope_local(s, s->pnames[pk]);
       if (!src || src->type == TY_UNKNOWN) continue;
-      if (lv_widen(p, src->type)) changed = 1;
+      changed |= zsuper_param_take(p, src);
     }
     else if (rt != TY_UNKNOWN && pk >= srest && (pm->rest_idx < 0 || pk < pm->rest_idx))
       changed |= slot_take(c, p, at, id);

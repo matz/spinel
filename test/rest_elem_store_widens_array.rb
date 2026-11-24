@@ -56,3 +56,8 @@ class S10 < P10; def rr(*r, z) = super; end
 class S11 < P10; def rr(x, y) = super; end
 a = [+"s"]; b = [+"t"]; S10.new.rr(a, b); p [a, b]
 a = [+"s"]; b = [+"t"]; S11.new.rr(a, b); p [a, b]
+
+# two bare supers onto children without a rest: the push the first
+# child's positional takes widens what the second hands it
+class S12 < S11; def rr(x, y) = super; end
+a = [+"s"]; b = [+"t"]; S12.new.rr(a, b); p [a, b]

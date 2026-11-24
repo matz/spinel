@@ -4804,6 +4804,12 @@ static int emit_recv_class_value(Compiler *c, Buf *b, const NodeTable *nt, int r
       if (!sp_streq(ecn, "TrueClass") && !sp_streq(ecn, "FalseClass") && !io_family_class(c, g_emitting_class_id) && !sp_streq(ecn, "Enumerator"))
         rt = TY_POLY;
     }
+    /* self in the program's String is any String or String subclass instance:
+       its class is read off the box as a boxed String's is */
+    if (nt_kind(nt, recv) == NK_SelfNode && program_has_strsub(c)) {
+      const Scope *ss = comp_scope_of(c, recv);
+      if (ss && ss->class_id >= 0 && ss->class_id == comp_core_class(c, CORE_STRING)) rt = TY_STRING;
+    }
     /* MatchData is nullable (nil on no-match): .class checks at run time so a
        non-match reports NilClass, not MatchData (#2311) */
     if (rt == TY_MATCHDATA) {

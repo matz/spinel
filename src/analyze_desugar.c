@@ -36446,14 +36446,42 @@ static int cbs_path_text(const NodeTable *nt, int p, char *buf, size_t cap, int 
    Hash#extract! collects into `self.class.new`); resolved to the reopening
    it named a user class of its own, with no constructor or struct. A
    Numeric, Comparable or Object reopening serves several classes and keeps
-   its run-time answer. */
+   its run-time answer. Where the program has a String subclass, self in the
+   String reopening may be an instance of it, and a bare `self.class` is
+   read off the box (bsc_string_subclassed); `self.class.new` still builds
+   the builtin. */
+static int bsc_string_subclassed(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  for (int n = comp_kind_first(c, NK_ClassNode); n >= 0; n = comp_kind_next(c, n)) {
+    int sup = nt_kind(nt, n) == NK_ClassNode ? class_def_super(nt, n) : -1;
+    const char *sn = sup >= 0 && nt_kind(nt, sup) == NK_ConstantReadNode ? nt_str(nt, sup, "name") : NULL;
+    if (sn && is_string_class_name(sn)) return 1;
+  }
+  return 0;
+}
 static int bsc_builtin_one_class(const char *cn) {
   static const char *const B[] = { "String", "Array", "Hash", "Symbol", "Integer", "Float",
     "Range", "Regexp", "Time", "Proc", "NilClass", "TrueClass", "FalseClass", NULL };
   for (int i = 0; B[i]; i++) if (sp_streq(cn, B[i])) return 1;
   return 0;
 }
-static int bsc_walk(NodeTable *nt, int n, const char *cn) {
+static int bsc_self_class(const NodeTable *nt, int n) {
+  if (n < 0 || nt_kind(nt, n) != NK_CallNode) return 0;
+  const char *nm = nt_str(nt, n, "name");
+  int r = nt_ref(nt, n, "receiver");
+  return nm && sp_streq(nm, "class") && nt_ref(nt, n, "arguments") < 0 && nt_ref(nt, n, "block") < 0 &&
+         (r < 0 || nt_kind(nt, r) == NK_SelfNode);
+}
+static void bsc_to_const(NodeTable *nt, int n, const char *cn) {
+  /* (the read keeps the call's line, so the record answers it where
+     the call stood) */
+  long long line = nt_int(nt, n, "node_line", 0), file = nt_int(nt, n, "node_file", 0);
+  nt_node_reset(nt, n, "ConstantReadNode");
+  nt_node_set_int(nt, n, "node_line", line);
+  nt_node_set_int(nt, n, "node_file", file);
+  nt_node_set_str(nt, n, "name", cn);
+}
+static int bsc_walk(NodeTable *nt, int n, const char *cn, int keep_bare) {
   if (n < 0) return 0;
   NodeKind k = nt_kind(nt, n);
   /* another class, a singleton body or a nested def has a self of its own */
@@ -36467,28 +36495,25 @@ static int bsc_walk(NodeTable *nt, int n, const char *cn) {
   if (k == NK_CallNode) {
     const char *nm = nt_str(nt, n, "name");
     int r = nt_ref(nt, n, "receiver");
-    if (nm && sp_streq(nm, "class") && nt_ref(nt, n, "arguments") < 0 && nt_ref(nt, n, "block") < 0 &&
-        (r < 0 || nt_kind(nt, r) == NK_SelfNode)) {
-      /* (the read keeps the call's line, so the record answers it where
-         the call stood) */
-      long long line = nt_int(nt, n, "node_line", 0), file = nt_int(nt, n, "node_file", 0);
-      nt_node_reset(nt, n, "ConstantReadNode");
-      nt_node_set_int(nt, n, "node_line", line);
-      nt_node_set_int(nt, n, "node_file", file);
-      nt_node_set_str(nt, n, "name", cn);
+    if (bsc_self_class(nt, n) && !keep_bare) {
+      bsc_to_const(nt, n, cn);
       return 1;
+    }
+    if (keep_bare && is_new_name(nm) && bsc_self_class(nt, r)) {
+      bsc_to_const(nt, r, cn);
+      changed = 1;
     }
   }
   const SpNode *nd = &nt->nodes[n];
   int nr = nd->nr; int refs[64]; if (nr > 64) nr = 64;
   for (int j = 0; j < nr; j++) refs[j] = nd->r[j].ref;
-  for (int j = 0; j < nr; j++) changed |= bsc_walk(nt, refs[j], cn);
+  for (int j = 0; j < nr; j++) changed |= bsc_walk(nt, refs[j], cn, keep_bare);
   for (int j = 0; j < nt->nodes[n].na; j++) {
     int an = nt->nodes[n].a[j].n;
     if (an <= 0) continue;  /* an empty array's ids may be NULL: memcpy from NULL is UB */
     int *ids = malloc(sizeof(int) * (size_t)(an + 1));
     memcpy(ids, nt->nodes[n].a[j].ids, sizeof(int) * (size_t)an);
-    for (int q = 0; q < an; q++) changed |= bsc_walk(nt, ids[q], cn);
+    for (int q = 0; q < an; q++) changed |= bsc_walk(nt, ids[q], cn, keep_bare);
     free(ids);
   }
   return changed;
@@ -36498,7 +36523,7 @@ static int bsc_walk(NodeTable *nt, int n, const char *cn) {
    module's own body keeps its run-time `self.class`). */
 int desugar_included_self_class(Compiler *c, int body, const char *cn) {
   if (!cn || !bsc_builtin_one_class(cn)) return 0;
-  return bsc_walk((NodeTable *)c->nt, body, cn);
+  return bsc_walk((NodeTable *)c->nt, body, cn, is_string_class_name(cn) && bsc_string_subclassed(c));
 }
 
 int builtin_instance_method_known(const char *cls, const char *m);
@@ -36584,13 +36609,14 @@ int desugar_builtin_reopen_self_class(Compiler *c) {
     if (cp < 0 || nt_kind(nt, cp) != NK_ConstantReadNode) continue;
     const char *cn = key_name(c, cp);
     if (!cn || !bsc_builtin_one_class(cn)) continue;
+    int keep_bare = is_string_class_name(cn) && bsc_string_subclassed(c);
     char cname[64]; snprintf(cname, sizeof cname, "%s", cn);
     int b = nt_ref(nt, n, "body");
     int bn = 0; const int *bs = b >= 0 && nt_kind(nt, b) == NK_StatementsNode ? nt_arr(nt, b, "body", &bn) : NULL;
     for (int k = 0; k < bn; k++) {
       int st = bs[k];
       if (nt_kind(nt, st) != NK_DefNode || nt_ref(nt, st, "receiver") >= 0) continue;
-      changed |= bsc_walk(nt, nt_ref(nt, st, "body"), cname);
+      changed |= bsc_walk(nt, nt_ref(nt, st, "body"), cname, keep_bare);
     }
   }
   free(top);

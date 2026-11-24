@@ -21437,7 +21437,7 @@ int desugar_builtin_scalar_defs(Compiler *c) {
   int *first = malloc(sizeof(int) * (size_t)(n0 > 0 ? n0 : 1));
   if (!first) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   for (int id = 0; id < n0; id++) if (nt_kind(nt, id) == NK_CallNode) first[nfirst++] = id;
-  if (prog_has_files(c)) prog_sort(c, first, nfirst, NULL);
+  prog_sort(c, first, nfirst, NULL);
   for (int q = 0; ; q++) {
     int id = q < nfirst ? first[q] : site_lo + (q - nfirst);
     if (id >= nt->count) break;

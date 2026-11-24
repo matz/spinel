@@ -4172,25 +4172,21 @@ TyKind yield_value_type(Compiler *c, int mi) {
   int pf_fwd = 0, poly_site = 0;
   YvtIndex *y = yvt_get(c);
   YvtIt yit; yvt_it_init(c, &yit, mi);
-  /* Under --load-model=graph the call sites are taken in the program's
-     order (prog_sort): where the first site's block answers (a method
-     specialized per site keeps one), it is the site the program reaches
-     first, whichever file holds it, not the one the node table happens to
-     number first. One program text (the inline model) numbers its nodes in
-     that order already, and its sites are read as they come. */
+  /* The call sites are taken in the program's order (prog_sort): where the
+     first site's block answers (a method specialized per site keeps one), it
+     is the site the program reaches first, whichever file holds it, not the
+     one the node table happens to number first. */
   int nsite = 0, csite = 0, si = 0, *site = NULL;
-  if (prog_has_files(c)) {
-    for (int ii; (ii = yvt_it_next(&yit)) >= 0; ) {
-      if (nsite == csite) {
-        csite = csite ? csite * 2 : 16;
-        site = realloc(site, sizeof(int) * (size_t)csite);
-        if (!site) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-      }
-      site[nsite++] = ii;
+  for (int ii; (ii = yvt_it_next(&yit)) >= 0; ) {
+    if (nsite == csite) {
+      csite = csite ? csite * 2 : 16;
+      site = realloc(site, sizeof(int) * (size_t)csite);
+      if (!site) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
     }
-    prog_sort(c, site, nsite, y->ids);
+    site[nsite++] = ii;
   }
-  for (int ii; (ii = site ? (si < nsite ? site[si++] : -1) : yvt_it_next(&yit)) >= 0; ) {
+  prog_sort(c, site, nsite, y->ids);
+  for (int ii; (ii = si < nsite ? site[si++] : -1) >= 0; ) {
     int cid = y->ids[ii];
     /* A `callee(...)` forward carries its block implicitly inside the `...`
        (no explicit block node); treat it as a forwarded block too. */

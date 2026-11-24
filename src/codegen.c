@@ -24841,8 +24841,6 @@ static void emit_class_presence_decls(Compiler *c, Buf *b) {
 }
 static void emit_file_top_decls(Compiler *c, Buf *b) {
   int n = nt_nroots(c->nt);
-  /* (a path builder's class needs its flag under no file too) */
-  if (!prog_has_files(c)) { emit_class_presence_decls(c, b); return; }
   unsigned char *has = calloc((size_t)n, 1);
   if (!has) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   NativeFlags nf = { c, b };

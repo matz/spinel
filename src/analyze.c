@@ -47232,10 +47232,7 @@ static int cm_alias_order_unproven(Compiler *c, const int *par, int id, int an) 
   long long cl = nt_int(nt, id, "node_line", 0), al = nt_int(nt, an, "node_line", 0);
   if (cl <= 0) return 0;
   if (nt_int(nt, id, "node_file", 0) != nt_int(nt, an, "node_file", 0)) {
-    /* two files: the program's order (prog_order); none known is no proof.
-       (The inline model's one spliced text answers as it always did, until
-       it goes.) */
-    if (!prog_has_files(c)) return 0;
+    /* two files: the program's order (prog_order); none known is no proof */
     int o = prog_order(c, id, an);
     if (o == PROG_UNKNOWN) return 1;
     if (o == PROG_AFTER) return 0;

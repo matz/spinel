@@ -28,9 +28,6 @@
 #include "call_plan.h"
 #include <limits.h>
 
-static int prog_graph(const Compiler *c) { return c->nt->nfile_roots > 0; }
-/* Is the program its files (--load-model=graph), each a root? */
-int prog_has_files(const Compiler *c) { return prog_graph(c); }
 
 int prog_root_stmts(const Compiler *c, int i) {
   int r = nt_root(c->nt, i);
@@ -55,7 +52,7 @@ int prog_is_root_stmts(const Compiler *c, int st) {
    required files' scopes are made one after another (prog_file_scopes). */
 int prog_is_top_scope(const Compiler *c, const Scope *s) {
   int i = (int)(s - c->scopes), n = nt_nroots(c->nt);
-  return i == 0 || (prog_graph(c) && n > 1 && i >= c->file_scope[1] && i <= c->file_scope[n - 1]);
+  return i == 0 || (n > 1 && i >= c->file_scope[1] && i <= c->file_scope[n - 1]);
 }
 
 /* A required file's top-level scope, after main's (scope 0). */
@@ -63,7 +60,7 @@ void prog_file_scopes(Compiler *c) {
   int n = nt_nroots(c->nt);
   c->file_scope = calloc((size_t)n, sizeof(int));
   if (!c->file_scope) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  for (int i = 1; prog_graph(c) && i < n; i++) {
+  for (int i = 1; i < n; i++) {
     Scope *s = comp_scope_new(c, NULL, -1);
     { s->body = prog_root_stmts(c, i); comp_touch_scope(s->idx); }
     c->file_scope[i] = c->nscopes - 1;
@@ -305,7 +302,7 @@ void prog_visit_files(const Compiler *c, void (*fn)(void *ud, int node, int file
    otherwise (elab_check_order). */
 static int prog_order_now(Compiler *c, int a, int b) {
   if (a == b) return PROG_SAME;
-  if (!prog_graph(c) || a < 0 || b < 0) return a < b ? PROG_BEFORE : PROG_AFTER;
+  if (a < 0 || b < 0) return a < b ? PROG_BEFORE : PROG_AFTER;
   int fa, fb, ra, rb;
   elab_top_place(c, a, &fa, &ra);
   elab_top_place(c, b, &fb, &rb);
@@ -363,14 +360,15 @@ void prog_sort(Compiler *c, int *v, int n, const int *node_of) {
   if (was) memcpy(was, v, sizeof(int) * (size_t)n);
   for (int i = 0; i < n; i++) {
     int id = node_of ? node_of[v[i]] : v[i], f = -1, r = 0;
-    if (prog_graph(c)) { elab_top_place(c, id, &f, &r); if (f < 0) r = -1; }
+    elab_top_place(c, id, &f, &r);
+    if (f < 0) r = -1;
     key[i] = ((long long)(r >= 0 ? r : INT_MAX) << 32) | (unsigned)id;
   }
   prog_sort_keyed(v, key, n);
   /* statements of a file a require places share the rank of the statement
      holding it: within a rank, by the statement the record runs first (the
      id order above stays within one statement) */
-  for (int f = 1; prog_graph(c) && f < nt_nroots(c->nt); f++) {
+  for (int f = 1; f < nt_nroots(c->nt); f++) {
     if (nt_root(c->nt, f) < 0 || nt_int(c->nt, nt_root(c->nt, f), "load_stmt", -1) < 0) continue;
     for (int i = 0; i < n; i++) {
       int id = node_of ? node_of[v[i]] : v[i], fl = -1, r = 0;
@@ -778,7 +776,6 @@ static int prog_header_scope_autoloaded(Compiler *c, int id) {
        ends the file's load from wherever the block runs. */
 void prog_refuse_loads(Compiler *c) {
   const NodeTable *nt = c->nt;
-  if (!prog_graph(c)) return;
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
     const char *name = nt_str(nt, id, "name");
     if (c->nautoloads && (is_const_query_name(name) || is_constants_list_name(name) || is_autoload_query_name(name)))
@@ -1396,16 +1393,14 @@ static void prog_rescue_mark_in(LoadSrc *s, int load, int n) {
    raise counted as run (not told apart). Otherwise it is the first that
    is not quiet (prog_stmt_quiet). That first one starts for sure (a
    call's own effect, an undef's, taken as run), and the statement lists
-   it runs are marked so in turn (prog_rescue_mark). These are asked in
-   both load models,
-   rescue_runs only in the graph one, which keeps the requires.
+   it runs are marked so in turn (prog_rescue_mark).
    Asked ahead of the reach (prog_reach), which reads it. */
 static void prog_note_rescues(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int nrc = 0;
   (void)nt_nodes_of_kind(nt, NK_RescueNode, &nrc);
   if (!nrc) return;
-  int byval = elab_consts_by_value(c, 0), graph = prog_graph(c);
+  int byval = elab_consts_by_value(c, 0);
   const int *parent = comp_parent_map(c);
   int hooks = prog_may_give_hook(c);
   unsigned char *retry = calloc((size_t)nt->count + 1, 1);
@@ -1437,7 +1432,7 @@ static void prog_note_rescues(Compiler *c) {
     int rc0 = nt_ref(nt, b, "rescue_clause");
     for (int rc = rc0, first = 1; rc >= 0; rc = nt_ref(nt, rc, "subsequent"), first = 0) {
       load &= prog_rescue_load_only(c, parent, rc);
-      if (byval || !graph) continue;
+      if (byval) continue;
       int names = prog_rescue_names(c, parent, rc);
       int runs = first && raises && (names & PROG_RC_LOAD) && !retry[rc] ? 1 : quiet && (names & PROG_RC_SCRIPT) ? 0 : -1;
       if (runs >= 0) nt_node_set_int(nt, rc, "rescue_runs", runs);
@@ -1518,7 +1513,7 @@ static void prog_unplace_candidates(Compiler *c, const unsigned char *seen, cons
 /* See analyze.h. */
 int prog_node_in_dropped_file(Compiler *c, int node) {
   const NodeTable *nt = c->nt;
-  if (node < 0 || !prog_graph(c)) return 0;
+  if (node < 0) return 0;
   long long fid = nt_int(nt, node, "node_file", -1);
   if (fid < 0) return 0;
   for (int f = 1; f < nt_nroots(nt); f++)
@@ -1529,8 +1524,7 @@ int prog_node_in_dropped_file(Compiler *c, int node) {
 void prog_settle_files(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n = nt_nroots(nt);
-  prog_note_rescues(c);   /* (both models: a rescued body's sure statements) */
-  if (!prog_graph(c)) return;
+  prog_note_rescues(c);
   unsigned char *seen = calloc((size_t)nt->count + 1, 1), *live = calloc((size_t)n, 1), *ok = calloc((size_t)n, 1);
   int *nsite = calloc((size_t)n, sizeof(int)), *site = calloc((size_t)n, sizeof(int)), *at = calloc((size_t)n, sizeof(int));
   if (!seen || !live || !ok || !nsite || !site || !at) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
@@ -1629,7 +1623,6 @@ void prog_settle_files(Compiler *c) {
    `include` in a required file's top level. */
 void prog_refuse_order(Compiler *c) {
   const NodeTable *nt = c->nt;
-  if (!prog_graph(c)) return;
   for (int i = 0; i < nt_nroots(nt); i++) {
     int st = prog_root_stmts(c, i), n = 0;
     const int *v = st >= 0 ? nt_arr(nt, st, "body", &n) : NULL;

@@ -552,7 +552,7 @@ int const_has_flag(const LocalVar *lv) {
    builder is written under (path_ns) only. */
 static int header_in_unplaced_file(Compiler *c, int ci) {
   int node = c->classes[ci].def_node;
-  return prog_has_files(c) && node >= 0 && elab_point_from(c, node).region > 0;
+  return node >= 0 && elab_point_from(c, node).region > 0;
 }
 int an_class_needs_presence(Compiler *c, int ci) {
   if (ci < 0 || ci >= c->nclasses) return 0;

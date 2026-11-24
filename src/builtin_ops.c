@@ -78,7 +78,8 @@ int bop_name_mutates(const char *name, unsigned sites) {
 typedef struct { const char *name; int most; } BopGenericRow;
 static const BopGenericRow bop_generic_rows[] = {
   { "abs", -1 }, { "abs2", -1 }, { "angle", -1 }, { "arg", -1 }, { "ascii_only?", -1 }, { "asctime", -1 },
-  { "at", -1 }, { "b", -1 }, { "between?", -1 }, { "bit_length", -1 }, { "bytesize", -1 },
+  { "at", -1 }, { "b", -1 }, { "between?", -1 }, { "bit_length", -1 },
+  { "byteindex", -1 }, { "byteoffset", -1 }, { "byterindex", -1 }, { "bytesize", -1 },
   { "byteslice", -1 }, { "capitalize", -1 }, { "capitalize!", -1 }, { "captures", -1 }, { "casecmp", -1 },
   { "casecmp?", -1 }, { "ceil", 0 }, { "center", -1 }, { "chars", -1 }, { "chomp", -1 }, { "chomp!", -1 },
   { "chop", -1 }, { "chop!", -1 }, { "chr", -1 }, { "clamp", -1 }, { "close", -1 }, { "closed?", -1 },
@@ -102,7 +103,7 @@ static const BopGenericRow bop_generic_rows[] = {
   { "post_match", -1 }, { "pre_match", -1 }, { "prepend", -1 }, { "prev_float", -1 }, { "read", 1 },
   { "real", -1 }, { "real?", -1 }, { "rect", -1 }, { "rectangular", -1 }, { "regexp", -1 },
   { "replace", -1 }, { "reverse", -1 }, { "reverse!", -1 }, { "rjust", -1 }, { "rotate!", -1 },
-  { "round", 0 }, { "rstrip", -1 }, { "rstrip!", 0 }, { "saturday?", -1 }, { "scan", -1 }, { "scrub", -1 },
+  { "round", 0 }, { "rpartition", -1 }, { "rstrip", -1 }, { "rstrip!", 0 }, { "saturday?", -1 }, { "scan", -1 }, { "scrub", -1 },
   { "scrub!", -1 }, { "sec", -1 }, { "shift", -1 }, { "sort", -1 }, { "sort!", -1 }, { "split", -1 },
   { "squeeze", -1 }, { "squeeze!", -1 }, { "store", -1 }, { "strip", -1 }, { "strip!", 0 }, { "sub", -1 },
   { "sub!", -1 }, { "subsec", -1 }, { "succ", -1 }, { "succ!", -1 }, { "sum", -1 }, { "sunday?", -1 },
@@ -651,6 +652,7 @@ static const BuiltinOp bop_rows[] = {
   { TY_MATCHDATA, "byteend",         1,   1, BF_ANY, TY_INT,            BOPE_TEMPLATE, "$<sp_MatchData_byteend($r, $i0)$>", TY_UNKNOWN },
   { TY_MATCHDATA, "byteoffset",      1,   1, BF_ANY, TY_INT_ARRAY,      BOPE_TEMPLATE, "sp_MatchData_byteoffset_name($r, sp_sym_to_s($e0))", BOP_K(TY_SYMBOL) },
   { TY_MATCHDATA, "byteoffset",      1,   1, BF_ANY, TY_INT_ARRAY,      BOPE_TEMPLATE, "sp_MatchData_byteoffset_name($r, $e0)", BOP_K(TY_STRING) },
+  { TY_MATCHDATA, "byteoffset",      1,   1, BF_ANY, TY_INT_ARRAY,      BOPE_TEMPLATE, "sp_MatchData_byteoffset_poly($r, $b0)", BOP_K(TY_POLY) | BOP_K(TY_NIL) },
   { TY_MATCHDATA, "byteoffset",      1,   1, BF_ANY, TY_INT_ARRAY,      BOPE_TEMPLATE, "sp_MatchData_byteoffset($r, $i0)", TY_UNKNOWN },
   { TY_MATCHDATA, "begin",            0, 127, BF_ANY, TY_INT,            BOPE_NONE },
   { TY_MATCHDATA, "end",              0, 127, BF_ANY, TY_INT,            BOPE_NONE },

@@ -1,3 +1,5 @@
+# spinel: share
+# spinel: gc-stress
 # MatchData#values_at selects groups by index (nil for a group that did not
 # participate); #byteoffset/#bytebegin/#byteend report raw byte positions (the
 # char-based #begin/#end/#offset already worked). The MatchData receiver is
@@ -19,3 +21,12 @@ p n.values_at(1, 2)
 p n.bytebegin(1)
 p n.byteend(1)
 p n.byteoffset(1)
+
+# Offset accessors reject missing indices, rather than returning nil pairs.
+[5, -1].each do |i|
+  begin
+    p m.byteoffset(i)
+  rescue IndexError => e
+    p e.message
+  end
+end

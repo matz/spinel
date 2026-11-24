@@ -5801,6 +5801,7 @@ static const char *sp_MatchData_aref_poly(sp_MatchData *m, sp_RbVal k) {
 }
 sp_oint sp_MatchData_bytebegin_poly(sp_MatchData *m, sp_RbVal k);
 sp_oint sp_MatchData_byteend_poly(sp_MatchData *m, sp_RbVal k);
+sp_IntArray *sp_MatchData_byteoffset_poly(sp_MatchData *m, sp_RbVal k);
 const char *sp_MatchData_match_poly(sp_MatchData *m, sp_RbVal k);
 sp_RbVal sp_poly_tilde(sp_RbVal v, sp_RbVal lastline);
 sp_PolyArray *sp_poly_deconstruct_call(sp_RbVal v);

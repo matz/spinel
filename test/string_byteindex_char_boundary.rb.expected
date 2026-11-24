@@ -16,3 +16,21 @@ IndexError: offset 4 does not land on character boundary
 1
 1
 IndexError: offset 2 does not land on character boundary
+3
+[["l", "l", nil], "l", nil, "l", "hé", "lo"]
+4
+[["l", "l"], [4, 5], "l", "l", "hél", "o"]
+nil
+[nil, nil]
+nil
+[nil, nil]
+nil
+[nil, nil]
+nil
+[nil, nil]
+nil
+nil
+Encoding::CompatibilityError: incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)
+Encoding::CompatibilityError: incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)
+2
+2

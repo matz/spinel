@@ -381,6 +381,21 @@ reads), and the `self` of a `def self?.` method is both, so `-`. In a
 module `self` and `instance` are the including object, which the seed
 cannot name, so `-`.
 
+### Returns in a class override family
+
+A return pin survives class inheritance when every definition in the override
+family declares the same mapped return type and nilability. The family includes
+siblings and grandchildren of the oldest defining ancestor, for instance and
+class methods separately. Inline annotations and external signatures can supply
+different members' declarations; their order does not matter.
+
+An unannotated definition, a different return representation, or a module copy
+keeps the family returns inferred and produces a warning. Supported parameter
+pins still apply. Different object classes and different container layouts are
+not interchangeable just because both use C pointers. The ordinary fallback
+for container storage conflicts still applies during inference. This does not
+extend signature support to methods copied by `include`, `extend`, or `prepend`.
+
 ### A container return whose body answers a boxed value
 
 A container return seed (`-> Hash[String, String]`, `-> Array[Integer]`,

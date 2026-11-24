@@ -1,0 +1,9 @@
+class MissingBase
+  def value: () -> untyped
+end
+class MissingSub < MissingBase
+  def value: () -> untyped
+end
+class MissingSibling < MissingBase
+  def value: () -> untyped
+end

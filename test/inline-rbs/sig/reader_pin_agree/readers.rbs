@@ -10,3 +10,7 @@ end
 class MemoReader
   def self.items: () -> Array[String]
 end
+
+class FamilyReader
+  @rows: Array[String]
+end

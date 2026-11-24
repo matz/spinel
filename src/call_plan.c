@@ -4787,7 +4787,7 @@ static unsigned presence_reader_side(const NodeTable *nt, int id, int *mask, int
   call_args(nt, id, &ac);
   *list = !is_respond_to_name(rn);
   *mask = !*list ? (flag ? 7 : 1) : method_list_vis_mask(rn) ? list_core_vis_mask(rn) : method_defined_vis_mask(rn);
-  return !*list || (ac == 1 && !is_instance_method_list(rn)) || flag || list_chain_shape(nt, id) ? CT_REACH : CT_OWN;
+  return !*list || (ac == 1 && !is_instance_method_list(rn) && !list_own_object_shape(nt, id)) || flag || list_chain_shape(nt, id) ? CT_REACH : CT_OWN;
 }
 /* The classes whose instances a class-valued receiver r of reader id names qm of, each handed to fn: the class a
    constant names, or the classes `x.class` may be (as a respond_to? asks them of x); 0 for any other receiver */

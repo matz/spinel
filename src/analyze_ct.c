@@ -2033,6 +2033,30 @@ static int ct_ffi_decl_note(Compiler *c, HostStep *h, int call, int cls, LoadPoi
   return 1;
 }
 
+/* Does tree `id` hold a define_method of a computed name that the scope
+   walk made a refusal (define_method_name 1)? */
+static int ct_holds_dm_refusal(const NodeTable *nt, int id) {
+  if (id < 0) return 0;
+  if (nt_kind(nt, id) == NK_CallNode && nt_int(nt, id, "define_method_name", 0) == 1) return 1;
+  for (int i = 0, nr = nt_num_refs(nt, id); i < nr; i++) if (ct_holds_dm_refusal(nt, nt_ref_at(nt, id, i))) return 1;
+  for (int i = 0, na = nt_num_arrs(nt, id); i < na; i++) {
+    int n = 0;
+    const int *v = nt_arr_at(nt, id, i, &n);
+    for (int k = 0; k < n; k++) if (ct_holds_dm_refusal(nt, v[k])) return 1;
+  }
+  return 0;
+}
+
+/* A run that defined nothing (a macro that returned early, `return if
+   name == :id`) is still the macro's form when a def it ran holds such a
+   define_method: left as written, the call would reach that refusal,
+   where CRuby runs the same branch and defines nothing */
+static int ct_ran_dm_refusal(const NodeTable *nt, const CtEnv *e) {
+  for (int i = 0; i < e->nframes; i++)
+    if (ct_holds_dm_refusal(nt, nt_ref(nt, e->frames[i].def, "body"))) return 1;
+  return 0;
+}
+
 int ct_macro_form(Compiler *c, int call, int list, int j) {
   NodeTable *nt = (NodeTable *)c->nt;
   HostStep *h = elab_walk_host(c);
@@ -2087,7 +2111,7 @@ int ct_macro_form(Compiler *c, int call, int list, int j) {
                 (k == CT_FX_CONST_SET && ct_macro_const_set_ok(c, &e, f, cls, p)));
     if (ok) ok = ct_fx_each_name(&e.fx[f], ct_name_unasked, c);
     }
-  if (ok) ok = defs > 0 && !ct_macro_core_changed(c, h, e.ran, e.nran) && !ct_relied_redefined(nt, &e, tid, tn);
+  if (ok) ok = (defs > 0 || ct_ran_dm_refusal(nt, &e)) && !ct_macro_core_changed(c, h, e.ran, e.nran) && !ct_relied_redefined(nt, &e, tid, tn);
   /* the code each effect carries must run where the call stands; a local
      a promoted local's value reads may need promoting too */
   CtBind b = { nt, &e, 0, 0, 0, 0, 0, -1, NULL, NULL, 0, 0 };
@@ -2122,14 +2146,16 @@ int ct_macro_form(Compiler *c, int call, int list, int j) {
     return -1;
   }
   free(seed_nw);
-  /* each statement, bound, where the call stood */
-  int *out = malloc(sizeof(int) * (size_t)(bn + nout));
+  /* each statement, bound, where the call stood (a run that leaves none,
+     ct_ran_dm_refusal's, leaves nil there, as the call's value is unread) */
+  int *out = malloc(sizeof(int) * (size_t)(bn + nout + 1));
   if (!out) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   memcpy(out, bb, sizeof(int) * (size_t)j);
   b.apply = 1;
   for (int f = 0, o = j; f < e.nfx; f++)
     if (e.fx[f].k == CT_FX_EVAL) for (int i = 0; i < tn[f]; i++) out[o++] = tid[f][i];
     else if (ct_fx_kept(&b, &e.fx[f])) out[o++] = ct_fx_stmt(&b, c, list, call, &e.fx[f]);
+  if (!nout) { out[j] = ct_node_at(nt, "NilNode", call); nout = 1; }
   bb = nt_arr(nt, list, "body", &bn);
   memcpy(out + j + nout, bb + j + 1, sizeof(int) * (size_t)(bn - j - 1));
   nt_node_set_arr(nt, list, "body", out, bn - 1 + nout);

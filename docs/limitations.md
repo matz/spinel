@@ -1157,13 +1157,26 @@ value of a method (or a chain of them, a method a subclass overrides, or a
 method answering its block's value), a `then` block, a multiple assignment
 from a literal, a row of a literal table, a builtin that answers its receiver
 (`push`, `concat`, `tap`), an ivar (the main object's too) or attr_reader
-every write of which, an attribute writer's call among them, builds a new
-array or keeps a parameter of the method writing it, a Struct member its
-constructor sets and nothing writes after, read by its reader, a global,
-class variable or constant. The method's other callers then read the general Array
-too. A boxed argument -- a local written arrays of two kinds, an element read
-out of a general container, a block parameter, a `for` variable -- is
-followed the same way, to each typed array the store cannot fit.
+every write of which builds a new array or keeps a parameter of the method
+writing it, a Struct member its constructor or its own `initialize`'s
+`super` sets (a Data member, the keyword `super` gives) and nothing writes
+after, a global, class variable or constant. The method's other callers
+then read the general Array too. An attribute's writes include its
+writer's calls from outside the class, its `o.v ||=`, `&&=` and `op=`,
+and a `send`, `public_send`, `__send__` or `instance_variable_set` that may
+set it, by a literal or a computed name, with its one value after the name;
+a writer handed nil is passed over, and a `send` that hands no value sets
+nothing. The read may be the reader's, on a receiver that may hold objects
+of more than one class when each answers the reader by an attribute (the
+class and classes below it, or unrelated classes or Structs whose
+attributes share the name), and then each class's writes are followed; or,
+for a Struct member, `s[:v]`, `s["v"]` or its place (`s[0]`, `s[-1]`).
+Not followed: a `send` that splats its arguments or hands more than one
+value after a computed name, a `super(*a)` or `super(**h)` in a Struct's
+`initialize`, and the `initialize` of a class below the Struct. A boxed
+argument -- a local written arrays of two kinds, an element read out of a
+general container, a block parameter, a `for` variable -- is followed the
+same way, to each typed array the store cannot fit.
 
 A block or proc parameter that stores another kind into the Array it
 receives, or into an Array that is an element of it (`|m| m[0] << 1`), does

@@ -1,0 +1,6 @@
+2**64: RangeError bignum too big to convert into 'long'
+-2**64: RangeError bignum too big to convert into 'long'
+2**64 usec: RangeError bignum too big to convert into 'long'
+2**64 nsec: RangeError bignum too big to convert into 'long'
+2**64 in: RangeError bignum too big to convert into 'long'
+2**70 - 2**70 + 7: 7

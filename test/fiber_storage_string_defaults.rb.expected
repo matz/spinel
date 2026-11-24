@@ -1,0 +1,16 @@
+["Symbol", "missing", "keptkept"]
+true
+false
+["Symbol", "missing", "keptkept"]
+["Symbol", "child", "keptkept"]
+false
+["Symbol", "copy", "keptkept"]
+["String", "string", "keptkept"]
+["Symbol", "explicit", "keptkept"]
+false
+{}
+["Symbol", "assigned", "keptkept"]
+["Symbol", "snapshot", "keptkept"]
+["Symbol", "inherited", "keptkept"]
+[:assigned]
+"retained"

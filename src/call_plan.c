@@ -6575,18 +6575,25 @@ int cplan_list_omits(Compiler *c, int id, int cls, unsigned side, const char *na
 /* See call_plan.h. A chain lookup from class cls answers a scope owned by cls or one of its ancestors (chain_lookup:
    an alias resumes at an ancestor, and the walk is up the parents), so only those scopes are asked, in the order every
    scope was. The names are noted after the walk, outside the question's bracket: the reader's own reads stay its own. */
+static int scope_id_cmp(const void *a, const void *b) { return *(const int *)a - *(const int *)b; }
 void cplan_chain_names(Compiler *c, int cls, CplanNameFn fn, void *ud) {
-  unsigned char *anc = calloc((size_t)c->nclasses + 1, 1);
-  int *own = calloc((size_t)c->nscopes + 1, sizeof *own), nown = 0;
-  if (!anc || !own) cplan_oom();
+  int ncand = 0, nown = 0, *cand = malloc(sizeof(int) * (size_t)(c->nscopes + 1)), *own = cand;
+  if (!cand) cplan_oom();
+  /* (the scopes of the top level and of the class and its ancestors, in scope order) */
+  for (int p = -1, first = 1; first || p >= 0; first = 0, p = p < 0 ? cls : c->classes[p].parent) {
+    int nk = 0, *ks = comp_class_scopes(c, p, &nk);
+    memcpy(cand + ncand, ks, sizeof(int) * (size_t)nk);
+    ncand += nk;
+    free(ks);
+  }
+  qsort(cand, (size_t)ncand, sizeof *cand, scope_id_cmp);
   mtab_enter(c);
-  for (int p = cls; p >= 0; p = c->classes[p].parent) anc[p] = 1;
-  for (int s = 0; s < c->nscopes; s++)
+  for (int q = 0; q < ncand; q++) {
+    int s = cand[q];
     if (c->scopes[s].name && !c->scopes[s].is_cmethod && !c->scopes[s].is_proc_form &&
-        (c->scopes[s].class_id < 0 || (c->scopes[s].class_id < c->nclasses && anc[c->scopes[s].class_id])) &&
         call_target(c, -1, cls, c->scopes[s].name, CT_METHODS, NULL) == s)
       own[nown++] = s;
-  free(anc);
+  }
   mtab_leave(c);
   for (int q = 0; q < nown; q++) fn(ud, c->scopes[own[q]].name);
   free(own);
@@ -6611,12 +6618,12 @@ void cplan_chain_names(Compiler *c, int cls, CplanNameFn fn, void *ud) {
 }
 /* See call_plan.h. */
 void cplan_own_names(Compiler *c, int cls, CplanNameFn fn, void *ud) {
-  int *own = calloc((size_t)c->nscopes + 1, sizeof *own), nown = 0;
-  if (!own) cplan_oom();
+  int ncand = 0, nown = 0, *own = comp_class_scopes(c, cls, &ncand);
   mtab_enter(c);
-  for (int s = 0; s < c->nscopes; s++) {
+  for (int q = 0; q < ncand; q++) {
+    int s = own[q];
     const Scope *os = &c->scopes[s];
-    if (!os->name || os->is_cmethod || os->is_proc_form || os->class_id != cls) continue;
+    if (!os->name || os->is_cmethod || os->is_proc_form) continue;
     if (call_target(c, -1, cls, os->name, CT_OWN, NULL) == s) own[nown++] = s;
   }
   mtab_leave(c);
@@ -6707,15 +6714,17 @@ static void list_ask(Compiler *c, int cls, unsigned side, const char *nm, CplanC
    include made besides unless CT_OWN. */
 static void list_instance_candidates(Compiler *c, int ci, unsigned side, CplanCandFn fn, void *ud) {
   ClassInfo *k = &c->classes[ci];
-  for (int si = 0; si < c->nscopes; si++) {
-    Scope *s = &c->scopes[si];
-    if (s->class_id != ci || s->is_cmethod || !s->name || !s->name[0]) continue;
+  int nso = 0, *own = comp_class_scopes(c, ci, &nso);
+  for (int q = 0; q < nso; q++) {
+    Scope *s = &c->scopes[own[q]];
+    if (s->is_cmethod || !s->name || !s->name[0]) continue;
     /* a prepended module's method displaced the class's own body, which
        carries a shadow name: the name it is listed under is the user's,
        and a renamed module copy (a second prepend over the first) is none */
     if (s->shadow == SHADOW_PREP && s->origin_module_ci > 0) continue;
     list_ask(c, ci, side, s->shadow == SHADOW_PREP ? s->shadow_user : s->name, fn, ud);
   }
+  free(own);
   for (int i = 0; i < k->naliases; i++)
     if (k->alias_new[i]) list_ask(c, ci, side, k->alias_new[i], fn, ud);
   /* accessors are flattened into descendants, so a class lists the ones it
@@ -6733,10 +6742,12 @@ static void list_instance_candidates(Compiler *c, int ci, unsigned side, CplanCa
 static void list_cmethod_candidates(Compiler *c, int cls, unsigned side, CplanCandFn fn, void *ud) {
   for (int k = cls, g = 0; k >= 0 && g <= c->nclasses; k = c->classes[k].parent, g++) {
     ClassInfo *kc = &c->classes[k];
-    for (int si = 0; si < c->nscopes; si++) {
-      Scope *s = &c->scopes[si];
-      if (s->class_id == k && s->is_cmethod && s->name && s->name[0]) list_ask(c, cls, side, s->name, fn, ud);
+    int nso = 0, *own = comp_class_scopes(c, k, &nso);
+    for (int q = 0; q < nso; q++) {
+      Scope *s = &c->scopes[own[q]];
+      if (s->is_cmethod && s->name && s->name[0]) list_ask(c, cls, side, s->name, fn, ud);
     }
+    free(own);
     for (int i = 0; i < kc->naliases; i++)
       if (kc->alias_new[i]) list_ask(c, cls, side, kc->alias_new[i], fn, ud);
     for (int i = 0; i < kc->nsg_readers; i++) list_ask(c, cls, side, kc->sg_readers[i], fn, ud);

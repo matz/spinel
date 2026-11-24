@@ -675,6 +675,7 @@ void comp_free(Compiler *c) {
   free(c->ver_late); c->ver_late = NULL; c->nver_late = 0;
   ver_hold_free(c);
   scopes_by_name_free(c);
+  name_owners_free(c);
   main_chain_free(c);
   ver_chain_free(c);
   new_inits_free(c);
@@ -4483,9 +4484,119 @@ void comp_poly_candidates_reset(void) {
   for (struct pc_entry *e = pc_retired; e; ) { struct pc_entry *nx = e->next; free(e->name); free(e->cands); free(e->overridden); free(e); e = nx; }
   pc_retired = NULL;
 }
-static void pc_build(Compiler *c, const char *name, PolyCand **out, int *n_out) {
-  PolyCand *v = NULL; int n = 0, cap = 0;
+/* The index of where a name can be answered, for the candidate build and for a class's chain names: each name by the
+   classes that own a scope, a reader or an alias of it, and each class by the scopes it owns (top-level scopes under
+   class nclasses). A class answers a name through its own chain only (chain_lookup follows the parent links and
+   resolves aliases from the class's own table), so the classes that can answer it are the owners and their
+   descendants, with the native classes and those under one, which are always listed. Made on the first ask after the
+   scopes, the class count, the reader and alias tables or the class shape move, and only while the scope index is
+   frozen and no scope is moved; any other ask scans every class or scope as before. */
+struct NameOwners {
+  unsigned gen, tgen, shape; int nscopes, nclasses;
+  ANameHash names; char **key; int *head, *ent_cls, *ent_next, nent, cent;   /* per name: its owners */
+  int *always, nalways;   /* the native classes and those below one */
+  int *sc_head, *sc_next;   /* per class (and top level), its scopes in order */
+  int *mark, tick;   /* a class's candidacy by the name being asked */
+};
+void name_owners_free(Compiler *c) {
+  struct NameOwners *m = c->name_owners;
+  if (!m) return;
+  for (int i = 0; i < m->names.n; i++) free(m->key[i]);
+  anh_free(&m->names);
+  free(m->key); free(m->head); free(m->ent_cls); free(m->ent_next); free(m->always); free(m->sc_head); free(m->sc_next); free(m->mark); free(m);
+  c->name_owners = NULL;
+}
+static int owner_int_cmp(const void *a, const void *b) { return *(const int *)a - *(const int *)b; }
+static void name_owner_add(struct NameOwners *m, const char *name, int cls) {
+  int ix = anh_find(&m->names, name);
+  if (ix < 0) {
+    ix = m->names.n;
+    if (!(m->key = realloc(m->key, sizeof *m->key * (size_t)(ix + 1))) || !(m->head = realloc(m->head, sizeof(int) * (size_t)(ix + 1))) ||
+        !(m->key[ix] = strdup(name))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    anh_add(&m->names, m->key[ix]);
+    m->head[ix] = -1;
+  }
+  if (m->nent == m->cent) {
+    m->cent = m->cent ? 2 * m->cent : 256;
+    if (!(m->ent_cls = realloc(m->ent_cls, sizeof(int) * (size_t)m->cent)) || !(m->ent_next = realloc(m->ent_next, sizeof(int) * (size_t)m->cent))) {
+      fprintf(stderr, "spinel: out of memory\n"); exit(1);
+    }
+  }
+  m->ent_cls[m->nent] = cls; m->ent_next[m->nent] = m->head[ix]; m->head[ix] = m->nent++;
+}
+static struct NameOwners *name_owners(Compiler *c) {
+  if (!sm_frozen || mv_n || c->nclasses <= 0) return NULL;
+  struct NameOwners *m = c->name_owners;
+  if (m && (m->gen != sm_gen || m->tgen != comp_table_gen || m->shape != cmc_shape || m->nscopes != c->nscopes || m->nclasses != c->nclasses)) {
+    name_owners_free(c); m = NULL;
+  }
+  if (m) return m;
+  if (!(m = c->name_owners = calloc(1, sizeof *m))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  m->gen = sm_gen; m->tgen = comp_table_gen; m->shape = cmc_shape; m->nscopes = c->nscopes; m->nclasses = c->nclasses;
+  m->sc_head = malloc(sizeof(int) * (size_t)(c->nclasses + 1));
+  m->sc_next = malloc(sizeof(int) * (size_t)(c->nscopes + 1));
+  m->mark = calloc((size_t)c->nclasses, sizeof(int));
+  m->always = malloc(sizeof(int) * (size_t)c->nclasses);
+  if (!m->sc_head || !m->sc_next || !m->mark || !m->always) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int k = 0; k <= c->nclasses; k++) m->sc_head[k] = -1;
+  for (int sc = c->nscopes - 1; sc >= 0; sc--) {
+    const Scope *s = &c->scopes[sc];
+    int k = s->class_id >= 0 && s->class_id < c->nclasses ? s->class_id : s->class_id < 0 ? c->nclasses : -1;
+    if (k < 0) continue;
+    m->sc_next[sc] = m->sc_head[k]; m->sc_head[k] = sc;
+    if (k < c->nclasses && s->name) {
+      name_owner_add(m, s->name, k);
+      if (s->mixin_guarded) name_owner_add(m, comp_scope_user_name(s), k);
+    }
+  }
   for (int k = 0; k < c->nclasses; k++) {
+    const ClassInfo *ci = &c->classes[k];
+    for (int r = 0; r < ci->nreaders; r++) name_owner_add(m, ci->readers[r], k);
+    for (int a = 0; a < ci->naliases; a++) name_owner_add(m, ci->alias_new[a], k);
+    if (ci->is_native_class || ci->nsub_root > 0) m->always[m->nalways++] = k;
+  }
+  return m;
+}
+/* The classes that can answer name by their own chain, ascending (malloc'd, *n of them), or NULL while the index is
+   not available: the caller asks every class. */
+static int *pc_classes_of(Compiler *c, const char *name, int *n) {
+  struct NameOwners *m = name_owners(c);
+  if (!m) return NULL;
+  int *out = malloc(sizeof(int) * (size_t)c->nclasses), cnt = 0, ix = anh_find(&m->names, name);
+  if (!out) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  m->tick++;
+  for (int i = 0; i < m->nalways; i++) if (m->mark[m->always[i]] != m->tick) { m->mark[m->always[i]] = m->tick; out[cnt++] = m->always[i]; }
+  for (int e = ix >= 0 ? m->head[ix] : -1; e >= 0; e = m->ent_next[e]) {
+    int nd = 0, o = m->ent_cls[e];
+    const int *ds = comp_descendants(c, o, &nd);
+    for (int i = -1; i < nd; i++) {
+      int k = i < 0 ? o : ds[i];
+      if (m->mark[k] != m->tick) { m->mark[k] = m->tick; out[cnt++] = k; }
+    }
+  }
+  if (cnt > 1) qsort(out, (size_t)cnt, sizeof *out, owner_int_cmp);
+  *n = cnt;
+  return out;
+}
+/* See compiler.h. */
+int *comp_class_scopes(Compiler *c, int cls, int *n) {
+  struct NameOwners *m = name_owners(c);
+  int *out = malloc(sizeof(int) * (size_t)(c->nscopes + 1)), cnt = 0;
+  if (!out) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  if (!m) {
+    for (int sc = 0; sc < c->nscopes; sc++)
+      if (c->scopes[sc].class_id == cls || (cls < 0 && c->scopes[sc].class_id < 0)) out[cnt++] = sc;
+  }
+  else
+    for (int sc = m->sc_head[cls < 0 ? c->nclasses : cls]; sc >= 0; sc = m->sc_next[sc]) out[cnt++] = sc;
+  *n = cnt;
+  return out;
+}
+static void pc_build(Compiler *c, const char *name, PolyCand **out, int *n_out) {
+  PolyCand *v = NULL; int n = 0, cap = 0, nks = 0;
+  int *ks = pc_classes_of(c, name, &nks);   /* (the classes that can answer it, or every class) */
+  for (int i = 0; i < (ks ? nks : c->nclasses); i++) {
+    int k = ks ? ks[i] : i;
     PolyCand pc; pc.cls = k; pc.rdcls = -1; pc.native = c->classes[k].is_native_class;
     int mdc = -1, rdc = -1;
     pc.mi = comp_method_in_chain(c, k, name, &mdc);
@@ -4503,6 +4614,7 @@ static void pc_build(Compiler *c, const char *name, PolyCand **out, int *n_out) 
     if (n == cap) { cap = cap ? cap * 2 : 8; v = realloc(v, sizeof *v * (size_t)cap); }
     v[n++] = pc;
   }
+  free(ks);
   *out = v; *n_out = n;
 }
 static struct pc_entry *pc_memo(Compiler *c, const char *name) {

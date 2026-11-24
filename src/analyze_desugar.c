@@ -15967,14 +15967,20 @@ static int anon_fwd_rewrite(Compiler *c, int node, int parent, unsigned anon) {
   return changed;
 }
 
-/* The names a bare `extend` call names as a constant, in every call of the
-   program. They are borrowed from the node table: the rewrite below adds defs
-   and instance variable accesses, never an `extend` call, and sets no string
-   of an existing node. */
+/* The names an `extend` call names as a constant, in every call of the
+   program, whatever its receiver: a body's bare `extend M`, and a hook's
+   `base.extend(ClassMethods)`, which the walk fires on the includer once the
+   program's order is known (lr_fire_mixin), so the module's accessors must
+   be defs by then -- as attr_accessor they were not the includer's class
+   methods, and `klass.allowed_tags = ...` in the hook, or a later
+   `K.allowed_tags`, found no class method of the name. They are borrowed
+   from the node table: the rewrite below adds defs and instance variable
+   accesses, never an `extend` call, and sets no string of an existing
+   node. */
 static void extended_module_names(const NodeTable *nt, ANameHash *names) {
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
     const char *nm = nt_str(nt, id, "name");
-    if (!nm || !sp_streq(nm, "extend") || nt_ref(nt, id, "receiver") >= 0) continue;
+    if (!nm || !sp_streq(nm, "extend")) continue;
     int an = nt_ref(nt, id, "arguments");
     int ac = 0; const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
     for (int k = 0; k < ac; k++) {

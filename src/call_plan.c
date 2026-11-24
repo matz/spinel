@@ -5048,8 +5048,27 @@ static int self_list_reader(Compiler *c, int id, CtClassFn fn, void *arg) {
   free(ks);
   return 1;
 }
+/* ...a visibility word (private, public, protected, or a send of one) asks the entry of each name it takes that the run's cells
+   decide (elab_word_elem_cell), of the class it acts on: it tests them as a respond_to? of the name does (cplan_word_elem_presence) */
+static int presence_word(const NodeTable *nt, int id) {
+  const char *w = vis_word_call(nt, id, NULL);
+  return w && visibility_of_name(w) > BVIS_MODULE_FUNCTION;
+}
+/* See call_plan.h. */
+int cplan_word_tests_cells(Compiler *c, int id) {
+  int cls = presence_word(c->nt, id) ? vis_decl_class(c, id) : -1;
+  return cls >= 0 && elab_word_has_cell(c, id, cls);
+}
 static void presence_asks(Compiler *c, int id, CtClassFn fn, void *arg) {
   const NodeTable *nt = c->nt;
+  if (presence_word(nt, id)) {
+    int cls = vis_decl_class(c, id);
+    for (int k = 0, n = elab_word_elems(nt, id); cls >= 0 && k < n; k++) {
+      const char *nm = elab_word_elem(nt, id, k, NULL);
+      if (nm && ct_version_named(c, nm) && elab_word_elem_cell(c, id, cls, k)) fn(c, id, nm, cls, 0, arg);
+    }
+    return;
+  }
   const char *rn = nt_kind(nt, id) == NK_CallNode ? nt_str(nt, id, "name") : NULL;
   if (list_cells_shape(nt, id) == 2) {
     PresListAsk la = { c, id, class_recv_static_ci(c, nt_ref(nt, id, "receiver")), fn, arg };
@@ -5077,8 +5096,9 @@ static void presence_asks(Compiler *c, int id, CtClassFn fn, void *arg) {
 /* ...each such reader's of the program (written: in a scope the C writes, ver_scope_written) */
 static int ver_scope_written(const Scope *s);
 static int presence_reader_name(const char *n) { return is_method_presence_name_query(n) || is_instance_method_list(n) || is_chain_method_list(n); }
+static int presence_asker_name(const char *n) { return presence_reader_name(n) || visibility_of_name(n) > BVIS_MODULE_FUNCTION || is_send_family(n); }
 static void presence_readers(Compiler *c, int written, CtClassFn fn, void *arg) {
-  int *ids = NULL, n = an_calls_named_if(c, presence_reader_name, c->nt->count, &ids);
+  int *ids = NULL, n = an_calls_named_if(c, presence_asker_name, c->nt->count, &ids);
   for (int i = 0; i < n; i++)
     if (!written || ver_scope_written(comp_scope_of(c, ids[i]))) presence_asks(c, ids[i], fn, arg);
   free(ids);
@@ -7958,7 +7978,7 @@ static int class_builtin_has_method(Compiler *c, int cid, const char *m) {
   return 0;
 }
 /* See call_plan.h. */
-int cplan_word_elem_presence(Compiler *c, int id, int vcid, const char *mn, int builtin, CplanPresArm *out) {
+int cplan_word_elem_presence(Compiler *c, int id, int k, int vcid, const char *mn, int builtin, int decl, CplanPresArm *out) {
   const NodeTable *nt = c->nt;
   int skip = 0;
   const char *w = vis_word_call(nt, id, &skip);
@@ -7978,6 +7998,12 @@ int cplan_word_elem_presence(Compiler *c, int id, int vcid, const char *mn, int 
   memset(out, 0, sizeof *out);
   out->cls = vcid;
   out->ans = found ? PRA_YES : PRA_NO;
+  /* (a word that stands as a declaration of a class's body tests none of the names the table does not find that some code makes: the
+     record cannot place the mixin or attribute, one under a condition or in a block, that may provide it) */
+  if (decl && !found && elab_names_method(c, mn)) out->ans = PRA_YES;
+  if (found && elab_word_elem_cell(c, id, vcid, k) && ct_version_named(c, mn) && cplan_presence_cells(c, id, vcid, 0, mn, 7, &out->cells) &&
+      cplan_cells_testable(c, &out->cells) && !cplan_cells_fixed(&out->cells))
+    out->ans = PRA_CELLS;
   return out->ans;
 }
 /* See call_plan.h. */
@@ -8205,8 +8231,8 @@ static int cplan_capture_closed(Compiler *c, int id, int mi, short *cls) {
     ci = ty_object_class(comp_ntype(c, recv));
   int v = ci >= 0 ? cplan_method_vis(c, id, ci, sym, sg ? CPV_CMETHOD : 0, NULL) : SP_VIS_PUBLIC;
   if (v == SP_VIS_PUBLIC || elab_method_vis_unplaced(c, sym) ||
-      (elab_method_vis_varies(c, sym) && elab_method_vis_at(c, ci, sym, sg, elab_point_of(c, id)) != v))
-    return 0;
+      (elab_method_vis_varies(c, sym) && !(!sg && ci >= 0 && elab_method_vis_tied(c, ci, sym, c->scopes[mi].class_id, elab_point_of(c, id))) && elab_method_vis_at(c, ci, sym, sg, elab_point_of(c, id)) != v))
+    return 0;   /* (a word that takes a name the run's cells decide counts as run, the table's visibility: the capture's NameError is the word's, as it was; no cell tells a capture's) */
   *cls = (short)ci;
   return v;
 }
@@ -15576,6 +15602,11 @@ static void ver_presence_keep(Compiler *c, int id, const char *name, int cls, vo
    (presence_reader_side), where they do not fix its answer) */
 static void ver_obj_presence_keep(Compiler *c, int id, const char *name, int cls, unsigned flags, void *arg) {
   CplanCells cs;
+  if (presence_word(c->nt, id)) {   /* (a word tests the version cells of a name the run decides, as a respond_to?(name, true)) */
+    if (cplan_presence_cells(c, id, cls, 0, name, 7, &cs) && !cplan_cells_fixed(&cs))
+      for (int i = 0; i < cs.n; i++) ver_cell_keep(c, cs.cell[i]);
+    return;
+  }
   int mask, list;
   unsigned side = presence_reader_side(c->nt, id, &mask, &list);
   if (flags & CT_CMETHOD) {   /* (a respond_to?'s class arm: a class's own respond_to?'s cells) */
@@ -15667,8 +15698,9 @@ int cplan_cell_dropped(const Compiler *c, const LocalVar *g) {
   return i >= 0 && i < c->nver_cell_dropped && c->ver_cell_dropped[i];
 }
 /* See call_plan.h. */
-int cplan_vis_cell_after(Compiler *c, int id, int k, const LocalVar **g, int *v, int *only) {
+int cplan_vis_cell_after(Compiler *c, int id, int k, const LocalVar **g, int *v, int *only, int *elem) {
   *only = -1;
+  *elem = -1;
   for (int i = 0; i < c->nver_vis_after; i++) {
     const struct VerVisAfter *a = &c->ver_vis_after[i];
     if (a->node != id || k--) continue;
@@ -15677,6 +15709,7 @@ int cplan_vis_cell_after(Compiler *c, int id, int k, const LocalVar **g, int *v,
     *g = comp_gvar(c, cell + 1);
     if (*g && cplan_cell_dropped(c, *g)) *g = NULL;
     *v = a->v;
+    *elem = a->elem;
     return 1;
   }
   /* ...and the Kernel cells an include writes as it runs (ver_kern_sites): one of several classes' by the receiving class */
@@ -15743,14 +15776,14 @@ void ver_cells_write(Compiler *c) {
 }
 /* (a word inside an expression's write of visibility cell `cell`, once per
    word and cell: cplan_vis_cell_after) */
-static void ver_vis_after_add(Compiler *c, int node, int cell, int v) {
+static void ver_vis_after_add(Compiler *c, int node, int cell, int v, int elem) {
   int n = c->nver_vis_after;
   for (int i = 0; i < n; i++)
     if (c->ver_vis_after[i].node == node && c->ver_vis_after[i].cell == cell) return;
   if (!(n & (n - 1)) && !(c->ver_vis_after = realloc(c->ver_vis_after, sizeof *c->ver_vis_after * (size_t)(n ? 2 * n : 1)))) {
     fprintf(stderr, "spinel: out of memory\n"); exit(1);
   }
-  c->ver_vis_after[c->nver_vis_after++] = (struct VerVisAfter){ node, cell, v };
+  c->ver_vis_after[c->nver_vis_after++] = (struct VerVisAfter){ node, cell, v, elem };
 }
 /* (a String history's entry keeps its own mark, VER_VIS_STRING_HISTORY: its visibility cells are written already) */
 static void ver_entry_vis_mark(Compiler *c, int e) {
@@ -15762,6 +15795,7 @@ static void ver_entry_vis_mark(Compiler *c, int e) {
 static void ver_obj_presence_mark(Compiler *c, int id, const char *name, int cls, unsigned flags, void *arg) {
   MethodLookup ml = { .def_class = -1 };
   (void)arg;
+  if (presence_word(c->nt, id)) return;   /* (a word reads no visibility cell of the name it tests) */
   int e = call_target(c, id, cls, name, flags & CT_CMETHOD ? CT_CMETHOD | CT_CAPTURE : CT_REACH, &ml);
   if (ml.kind == ML_ENTRY) ver_entry_vis_mark(c, e);
 }
@@ -15880,12 +15914,18 @@ static void ver_word_writes(Compiler *c, const int *par, VerCellsAt *cells, VerW
                             const ElabVersion *vs, int nv, int pass) {
   const NodeTable *nt = c->nt;
   for (int j = 0; j < nv; j++)
-    for (int k = 0, wn, wv, o; (o = elab_version_word(c, &vs[j], k, &wn, &wv)) >= 0; k++) {
+    for (int k = 0, wn, wv, we, o; (o = elab_version_word(c, &vs[j], k, &wn, &wv, &we)) >= 0; k++) {
       int st = o ? ver_write_stmt(nt, par, wn) : -1;
       if (st < 0 || par[st] < 0 || !ver_cell_once(cells, wn, -2 - vs[j].cell) || !pass) continue;
       int d = vs[j].v->node, takes = d >= 0 && par[d] >= 0 && nt_kind(nt, par[d]) == NK_ArgumentsNode && par[par[d]] == wn;
+      /* (a name the word changes only where the names ahead of it the run's cells decide are present is written as the word
+         runs, at its element, between the tests: emit_vis_word_absent) */
+      if (o == 2) {
+        ver_vis_after_add(c, wn, vs[j].cell, wv, we);
+        continue;
+      }
       if (nt_kind(nt, par[wn]) != NK_StatementsNode) {
-        ver_vis_after_add(c, wn, vs[j].cell, wv);
+        ver_vis_after_add(c, wn, vs[j].cell, wv, -1);
         if (!takes) continue;
       }
       ver_write_add(w, nw, (VerWrite){ par[st], st, wn, wv, vs[j].cell, an_value_dropped(c, par, st), 0, -1, 0, 1, 1 });

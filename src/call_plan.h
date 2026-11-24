@@ -556,8 +556,10 @@ int cplan_cell_write_dropped(Compiler *c, int id);
    past the last, and for any other node. The cells of an include that
    brings Kernel into a class come after the visibility cells, each written
    as 1; *only is the class whose cell it is where the include writes the
-   cells of several classes by the class it ran on (_sp_cls), else -1. */
-int cplan_vis_cell_after(Compiler *c, int id, int k, const LocalVar **g, int *v, int *only);
+   cells of several classes by the class it ran on (_sp_cls), else -1. *elem is the element of the word whose name it is,
+   for a name the word changes only where the names ahead of it the run's cells decide are present (written between the
+   tests of those names, emit_vis_word_absent), else -1. */
+int cplan_vis_cell_after(Compiler *c, int id, int k, const LocalVar **g, int *v, int *only, int *elem);
 /* The name of class cls's Kernel cell, `$__spinel_kern_<cls>`, which a blank slate's readers test where an include
    brings Kernel into it at run time (cplan_class_kernel: KERN_CELL), and whether the class method of scope index
    scope holds an include that writes the cells of several classes by the receiving class, which the method then
@@ -1869,8 +1871,14 @@ int cplan_class_builtin_has(Compiler *c, int ci, const char *name);
    rb_export_method makes it: a method (a def, or a reader or writer whose attr_* has run by the word), a module
    function a class body's word made, module_function's own, a class method's for a class-side word, and, where
    builtin (a class body's word, or an Array given as its operands), a builtin method of the class. The renderer
-   raises NameError for PRA_NO (emit_vis_word_absent) */
-int cplan_word_elem_presence(Compiler *c, int id, int vcid, const char *mn, int builtin, CplanPresArm *out);
+   raises NameError for PRA_NO (emit_vis_word_absent). A name the run's version cells decide (elab_word_elem_cell, the word's
+   k-th element) is PRA_CELLS, with the cells of its versions as a respond_to?(name, true) reads them there: present where one
+   has run. decl: the word stands as a declaration of a class's body (a bare statement), which tests no name the table does not find
+   that some code makes: the record cannot place its provider, a mixin or an attribute under a condition or in a block */
+/* Does visibility word id take a name the run's version cells decide (cplan_word_elem_presence gives PRA_CELLS), so that the word tests
+   it where it runs, even where it stands as a declaration of a class's body? */
+int cplan_word_tests_cells(Compiler *c, int id);
+int cplan_word_elem_presence(Compiler *c, int id, int k, int vcid, const char *mn, int builtin, int decl, CplanPresArm *out);
 /* Is call id (receiverless or on self, no block) of a Module method that no route took (no class method of the
    program's, no word the record reads) in a class method, where self is a class? The raise codegen makes of an
    unrouted self call names an instance of the class, which a class method's self is not: the call is refused, not

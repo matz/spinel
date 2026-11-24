@@ -1,0 +1,5 @@
+opaque to_s, run true
+pt
+[false, NoMethodError, NoMethodError, [:tail, :zz], false]
+word in 1.times, run true
+[false, NoMethodError, NoMethodError, [:tail, :zz], false]

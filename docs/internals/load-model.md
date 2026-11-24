@@ -404,9 +404,18 @@ ends the reach there. Once the run points give every body its extent,
 `lr_words_refine` asks the reach of each such word again (`lr_has_state`, through
 `lr_body_state`): a name a body's version stands for is present where that
 body surely ran ahead of the word's statement (a def in a block that runs at
-once where its call does takes its method's extent), absent where it first runs
-after it or never, and unknown where it may have run before, which ends the reach
-as for any name the record cannot tell. The versions are those of the ancestry the
+once where its call does takes its method's extent, where the call runs whenever the method's body does:
+`lr_runs_with_body`, which a condition, a loop, an iterator's block, a rescue or an early exit ahead of it fails; and
+where the chain is one the record cannot follow, `lr_chain_whole`, the extent stands as it did), absent where it first runs after it or never, and
+`LR_HAS_CELL` where it may have run before, in a chain the record holds whole (`lr_chain_whole`: to its end, with no code it
+cannot follow that may define it, which `lr_cells_settle` asks with the versions): each version has the cell the run writes, which tells. The reach goes on past such a name and
+reports the first as the word's gate (`lr_word_reach`); the entries from the gate to the end of the reach are
+`LR_MAY_GATE`, the word's visibility, applied where the names ahead of them are present. The call plan tests
+the name where the word runs (`cplan_word_elem_presence`: the cells as a `respond_to?(name, true)` reads them there;
+the word asks that entry, `presence_asks`), raises NameError there where it is absent, and writes each gated name's
+visibility cell as the word passes it (`VerVisAfter.elem`, `emit_vis_word_absent`), so a name before a missing one
+is changed and the names after are not. Any other name the record cannot tell ends the reach as before (the entries
+from there on are cut). The versions are those of the ancestry the
 lookup uses, but for a module the class prepends to itself, which the word's lookup,
 from the class's origin, does not find (`lr_link_sure`): that one is unknown. A reach that now passes names un-cuts
 their entries; where it ends at an absent name the entries past it keep the

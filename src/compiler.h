@@ -1985,7 +1985,7 @@ typedef struct {
   /* the visibility cells a visibility word inside an expression writes as
      its own call runs (`c && public(:m, :n)`), one per cell, with the
      value (call_plan.c, ver_cells_put; cplan_vis_cell_after) */
-  struct VerVisAfter { int node, cell, v; } *ver_vis_after;
+  struct VerVisAfter { int node, cell, v, elem; } *ver_vis_after;
   int nver_vis_after;
   /* the visibility cells a call guard reads (CallPlan.vis_cell), one per call
      and cell: the history's name, its cell, the call; written: its cell's

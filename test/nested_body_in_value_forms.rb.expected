@@ -14,3 +14,10 @@ NoMethodError
 2
 NoMethodError
 NoMethodError
+1
+1
+1
+:t
+"undefined method 'source' for class 'KN'"
+NoMethodError
+NoMethodError

@@ -22,3 +22,12 @@ a = [+"s"]; D.new.m4(a); p a
 # stores of two kinds into two elements, each into its own
 def m5(*r) = (r[0] << 7; r[-1] << :s)
 a = [1]; b = [+"t"]; m5(a, 0, b); p [a.sum, b]
+
+# a rest handed on through a bare super
+class P1; def rr(*r) = r[0] << 6; end
+class S4 < P1; def rr(*r) = super; end
+class S5 < S4; def rr(*r) = super; end
+class S7 < P1; def rr(x, *r) = super; end
+a = [+"s"]; S4.new.rr(a); p a
+a = [+"s"]; S5.new.rr(a); p a
+a = [+"s"]; b = [+"t"]; S7.new.rr(b, a); p [a, b]

@@ -50,3 +50,5 @@ b = [[+"m"]]; p(y1(b) { |m| m[0] << 17; m }.equal?(b)); p b
 class P1; def run(a) = yield(a); end
 class S4 < P1; def run(a, &b) = super; end
 b = [[+"m"]]; S4.new.run(b) { |m| m[0] << 7 }; p b
+class S5 < S4; def run(a, &b) = super; end
+b = [[+"m"]]; S5.new.run(b) { |m| m[0] << 18 }; p b

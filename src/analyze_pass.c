@@ -7589,6 +7589,90 @@ static int container_local_seen(ContainerLiterals *out, int scope, const char *n
   return 0;
 }
 
+/* The container literals local `nm` of scope sc can hold (container_literals,
+   a local's read): its writes' values, and for a method's parameter what its
+   callers pass there, a `super`'s too (container_super_literals). */
+static void container_super_literals(Compiler *c, int si, Scope *sc, int pi, ContainerLiterals *out, int depth);
+static void container_local_literals(Compiler *c, Scope *sc, const char *nm, ContainerLiterals *out, int depth) {
+  const NodeTable *nt = c->nt;
+  int si = (int)(sc - c->scopes);
+  if (depth > 4 || container_local_seen(out, si, nm, depth)) return;
+  for (int r = lw_shared_first(c, nm, si); r >= 0; r = lw_shared_next(r)) {
+    int w = lw_shared_node(r);
+    if (nt_kind(nt, w) != NK_LocalVariableWriteNode || comp_scope_of(c, w) != sc ||
+        !sp_streq(nt_str(nt, w, "name"), nm)) continue;
+    container_literals(c, nt_ref(nt, w, "value"), out, depth + 1);
+  }
+  /* a method's parameter: the containers its callers pass there
+     (`def add(h) = h[:attrs]["y"] = v` with `add({attrs: {x: 1}})`) */
+  LocalVar *lv = scope_local(sc, nm);
+  if (lv && lv->is_param && !lv->is_block_param && sc->name && sc->def_node >= 0) {
+    int pi = -1;
+    for (int i = 0; i < sc->nparams && pi < 0; i++) if (sc->pnames[i] && sp_streq(sc->pnames[i], nm)) pi = i;
+    if (pi >= 0) container_super_literals(c, si, sc, pi, out, depth);
+    /* the held arguments (clp_entry), as long as they hold; past a
+       change the walk goes on from the call it was at */
+    int resume = -2;   /* (the call to go on from; -2: from the first) */
+    if (pi >= 0 && !imemo_dep_on) {
+      ClpEntry *e = clp_entry(c, si, sc, pi);
+      unsigned ep = clp_epoch;
+      for (int q = 0; resume == -2; q++) {
+        while (q == e->n && e->next >= 0) {
+          int was = e->next;
+          if (!clp_extend(c, si, sc, pi, ep)) { resume = was; break; }
+          e = clp_find(si, pi);
+        }
+        if (resume != -2 || q == e->n) break;
+        int call = e->call[q];
+        container_literals(c, e->arg[q], out, depth + 1);
+        if (clp_epoch != ep || !clp_holds(c)) resume = an_calls_named_next(call);
+        else e = clp_find(si, pi);   /* (the walk may have grown the table) */
+      }
+      if (resume == -2) return;
+    }
+    for (int call = pi < 0 ? -1 : resume != -2 ? resume : an_calls_named_first(c, sc->name);
+         call >= 0;
+         call = an_calls_named_next(call)) {
+      int targets[CPT_MAX], nt_ = cplan_entries(c, call, targets, CPT_MAX), hit = 0;
+      for (int t = 0; t < nt_ && !hit; t++) hit = targets[t] == si;
+      if (!hit) continue;
+      int a = nt_ref(nt, call, "arguments"), an = 0;
+      const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+      int from = cla_layout_arg(c, call, si, sc, av, an, pi);
+      if (from >= 0 && from < an) container_literals(c, av[from], out, depth + 1);
+    }
+  }
+}
+
+/* The arguments the `super` calls into method si hand its parameter pi
+   (container_literals, the parameter case): an explicit one's by its
+   layout, a bare one's the parameter of its own method that zsuper_param_source
+   places there, followed as that method's callers hand it. Asked only of a
+   method another of its name reaches by `super` (the scopes of the name are
+   few; the supers are scanned only past that). */
+static void container_super_literals(Compiler *c, int si, Scope *sc, int pi, ContainerLiterals *out, int depth) {
+  const NodeTable *nt = c->nt;
+  for (int t = an_scopes_named_first(c, sc->name); t >= 1; t = an_scopes_named_next(c, sc->name, t)) {
+    Scope *ms = &c->scopes[t];
+    if (t == si || ms->class_id < 0 || ms->is_cmethod != sc->is_cmethod || ms->is_proc_form ||
+        cplan_super_target(c, -1, ms, NULL) != si) continue;
+    const NodeKind sk[2] = { NK_SuperNode, NK_ForwardingSuperNode };
+    for (int k = 0; k < 2; k++)
+      for (int q = comp_kind_first(c, sk[k]); q >= 0; q = comp_kind_next(c, q)) {
+        if (nt_kind(nt, q) != sk[k] || comp_scope_of(c, q) != ms) continue;
+        if (sk[k] == NK_SuperNode) {
+          int a = nt_ref(nt, q, "arguments"), an = 0;
+          const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+          int from = cla_layout_arg(c, q, si, sc, av, an, pi);
+          if (from >= 0 && from < an) container_literals(c, av[from], out, depth + 1);
+          continue;
+        }
+        int p = zsuper_param_source(c, ms, sc, pi);
+        if (p >= 0 && ms->pnames[p]) container_local_literals(c, ms, ms->pnames[p], out, depth + 1);
+      }
+  }
+}
+
 /* Collects into out the container literals `n` can evaluate to, as far
    as the program shows: a literal itself, the literals a variable is
    assigned, and, for an element read `x[k]` (`fetch`, `first`, `last`),
@@ -7646,52 +7730,7 @@ static void container_literals(Compiler *c, int n, ContainerLiterals *out, int d
   Scope *sc = comp_scope_of(c, n);
   if (!sc) return;
   if (k == NK_LocalVariableReadNode) {
-    int si = (int)(sc - c->scopes);
-    if (container_local_seen(out, si, nm, depth)) return;
-    for (int r = lw_shared_first(c, nm, si); r >= 0; r = lw_shared_next(r)) {
-      int w = lw_shared_node(r);
-      if (nt_kind(nt, w) != NK_LocalVariableWriteNode || comp_scope_of(c, w) != sc ||
-          !sp_streq(nt_str(nt, w, "name"), nm)) continue;
-      container_literals(c, nt_ref(nt, w, "value"), out, depth + 1);
-    }
-    /* a method's parameter: the containers its callers pass there
-       (`def add(h) = h[:attrs]["y"] = v` with `add({attrs: {x: 1}})`) */
-    LocalVar *lv = scope_local(sc, nm);
-    if (lv && lv->is_param && !lv->is_block_param && sc->name && sc->def_node >= 0) {
-      int pi = -1;
-      for (int i = 0; i < sc->nparams && pi < 0; i++) if (sc->pnames[i] && sp_streq(sc->pnames[i], nm)) pi = i;
-      /* the held arguments (clp_entry), as long as they hold; past a
-         change the walk goes on from the call it was at */
-      int resume = -2;   /* (the call to go on from; -2: from the first) */
-      if (pi >= 0 && !imemo_dep_on) {
-        ClpEntry *e = clp_entry(c, si, sc, pi);
-        unsigned ep = clp_epoch;
-        for (int q = 0; resume == -2; q++) {
-          while (q == e->n && e->next >= 0) {
-            int was = e->next;
-            if (!clp_extend(c, si, sc, pi, ep)) { resume = was; break; }
-            e = clp_find(si, pi);
-          }
-          if (resume != -2 || q == e->n) break;
-          int call = e->call[q];
-          container_literals(c, e->arg[q], out, depth + 1);
-          if (clp_epoch != ep || !clp_holds(c)) resume = an_calls_named_next(call);
-          else e = clp_find(si, pi);   /* (the walk may have grown the table) */
-        }
-        if (resume == -2) return;
-      }
-      for (int call = pi < 0 ? -1 : resume != -2 ? resume : an_calls_named_first(c, sc->name);
-           call >= 0;
-           call = an_calls_named_next(call)) {
-        int targets[CPT_MAX], nt_ = cplan_entries(c, call, targets, CPT_MAX), hit = 0;
-        for (int t = 0; t < nt_ && !hit; t++) hit = targets[t] == si;
-        if (!hit) continue;
-        int a = nt_ref(nt, call, "arguments"), an = 0;
-        const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
-        int from = cla_layout_arg(c, call, si, sc, av, an, pi);
-        if (from >= 0 && from < an) container_literals(c, av[from], out, depth + 1);
-      }
-    }
+    container_local_literals(c, sc, nm, out, depth);
     return;
   }
   NodeKind wk = k == NK_InstanceVariableReadNode ? NK_InstanceVariableWriteNode
@@ -12705,6 +12744,47 @@ int zsuper_kw_positional(Compiler *c, Scope *s, Scope *pm) {
    `**h` gives one), which codegen reads it from (zsuper_kw_begin). Keywords
    a parent without any take as a positional Hash (zsuper_kw_positional)
    may land in any of its positionals, which are boxed for it. */
+/* A store through an element of pm's rest is one through s's own rest's,
+   where a bare `super` in s gathers s's positionals for it
+   (bind_zsuper_params), so the callers of s widen for it too
+   (widen_rest_arg_arrays): pm's element j is the gather's past pm's own
+   positionals, s's rest's element as far past s's; from the end the same
+   index, where neither has posts. One the counts leave to the run time is
+   any index's. One that lands on a positional of s is a store into that
+   parameter (param_takes_store). */
+static int param_takes_store(Compiler *c, Scope *s, int g, TyKind t);
+static int zsuper_rest_elem_stores(Compiler *c, Scope *s, Scope *pm) {
+  if (pm->rest_idx < 0 || !pm->pnames[pm->rest_idx] || s->rest_idx < 0 || !s->pnames[s->rest_idx]) return 0;
+  LocalVar *src = scope_local(pm, pm->pnames[pm->rest_idx]), *dst = scope_local(s, s->pnames[s->rest_idx]);
+  if (!src || !dst || dst->rbs_seeded) return 0;
+  int fixed = 1;
+  for (int k = 0; k < pm->rest_idx; k++) if (pm->pdefault && pm->pdefault[k] >= 0) fixed = 0;
+  int ch = src->rest_elem_store != TY_UNKNOWN ? fold_store_kind(&dst->rest_elem_store, src->rest_elem_store) : 0;
+  for (int k = 0; k < REST_ELEM_HEAD + REST_ELEM_TAIL; k++) {
+    if (src->rest_elem_at[k] == TY_UNKNOWN) continue;
+    int ix = rest_slot_index(k), d = ELEM_ANY;
+    if (ix >= 0 && fixed) d = ix + pm->rest_idx - s->rest_idx;
+    else if (ix < 0 && fixed && !pm->npost_rest && !s->npost_rest) d = ix;
+    if (d != ELEM_ANY && d < 0 && ix >= 0) { ch |= param_takes_store(c, s, ix + pm->rest_idx, src->rest_elem_at[k]); continue; }
+    int slot = rest_elem_slot(d);
+    ch |= fold_store_kind(slot >= 0 ? &dst->rest_elem_at[slot] : &dst->rest_elem_store, src->rest_elem_at[k]);
+  }
+  return ch;
+}
+/* A store of kind t into positional g of s, as a push through it is taken
+   (infer_write_container_usage): a typed Array it cannot hold becomes the
+   general one, which its callers' binding widens for, and a boxed one
+   records the evidence its callers' Arrays widen for. 1 on a change. */
+static int param_takes_store(Compiler *c, Scope *s, int g, TyKind t) {
+  LocalVar *p = g >= 0 && g < s->nparams && s->pnames[g] ? scope_local(s, s->pnames[g]) : NULL;
+  if (!p || p->rbs_seeded) return 0;
+  if (p->type == TY_POLY)
+    return fold_store_kind(&p->boxed_push_elem, t) | (t != TY_POLY && fold_store_kind(&p->boxed_known_elem, t));
+  if (!ty_is_array(p->type) || p->type == TY_POLY_ARRAY || ty_is_ptr_array(p->type) || ty_array_elem(p->type) == t) return 0;
+  lv_set_type(p, TY_POLY_ARRAY);
+  p->push_widened = 1;
+  return 1;
+}
 static int bind_zsuper_params(Compiler *c, int id, Scope *s, Scope *pm) {
   int changed = 0;
   if (zsuper_kw_positional(c, s, pm))
@@ -12796,7 +12876,7 @@ static int bind_zsuper_params(Compiler *c, int id, Scope *s, Scope *pm) {
     else if (rt != TY_UNKNOWN && pk >= srest && (pm->rest_idx < 0 || pk < pm->rest_idx))
       changed |= slot_take(c, p, at, id);
   }
-  return changed;
+  return changed | zsuper_rest_elem_stores(c, s, pm);
 }
 
 /* A conditional attribute write is not a CallNode, but its RHS still

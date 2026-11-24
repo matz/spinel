@@ -8928,6 +8928,27 @@ static int ivar_src_walk(Compiler *c, int v, int icls, const char *ivn, int appl
   if (!c->ivar_widen_src[v]) { c->ivar_widen_src[v] = 1; ch = 1; }
   return ch;
 }
+/* array_src_walk's step for method t, one a call no one target is
+   resolved for may run (the #10058 arm): each of its values followed and
+   pinned, and its own value pinned, *ch set on a change. 1 when followed,
+   0 where a value cannot be, -1 for a method on the walk's stack. */
+static int src_walk_any_body(Compiler *c, int t, int apply, int *stack, int depth, int *ch) {
+  Scope *o = &c->scopes[t];
+  for (int d = 0; d < depth; d++) if (stack[d] == t) return -1;
+  int ol[16];
+  int on = method_value_leaves(c, t, ol, 16);
+  if (o->ret_rbs_seeded || o->ret_specialized || o->cs_synth || o->is_lowered_yield ||
+      o->ret_oa_pin != TY_UNKNOWN || on <= 0) return 0;
+  stack[depth] = t;
+  for (int i = 0; i < on; i++) {
+    if (nt_kind(c->nt, ol[i]) == NK_YieldNode) return 0;
+    int got = array_src_walk(c, ol[i], 1, apply, stack, depth + 1);
+    if (!apply && !got) return 0;
+    *ch |= got;
+  }
+  if (apply && !o->ret_poly_array_pin) { { o->ret_poly_array_pin = 1; comp_touch_scope(o->idx); } *ch = 1; }
+  return 1;
+}
 static int array_src_walk(Compiler *c, int v, int pinned, int apply, int *stack, int depth) {
   const NodeTable *nt = c->nt;
   v = nt_paren_single(c->nt, v);
@@ -9062,21 +9083,20 @@ static int array_src_walk(Compiler *c, int v, int pinned, int apply, int *stack,
     /* (the methods of the name off the scopes-by-name index, ascending as
        the scan of every scope was) */
     for (int t = an_scopes_named_first(c, cn); t >= 1; t = an_scopes_named_next(c, cn, t)) {
-      Scope *o = &c->scopes[t];
-      if (o->class_id < 0) continue;
-      for (int d = 0; d < depth; d++) if (stack[d] == t) return !apply;
-      int ol[16];
-      int on = method_value_leaves(c, t, ol, 16);
-      if (o->ret_rbs_seeded || o->ret_specialized || o->cs_synth || o->is_lowered_yield ||
-          o->ret_oa_pin != TY_UNKNOWN || on <= 0) return 0;
-      stack[depth] = t;
-      for (int i = 0; i < on; i++) {
-        if (nt_kind(nt, ol[i]) == NK_YieldNode) return 0;
-        int got = array_src_walk(c, ol[i], 1, apply, stack, depth + 1);
-        if (!apply && !got) return 0;
-        ch |= got;
-      }
-      if (apply && !o->ret_poly_array_pin) { { o->ret_poly_array_pin = 1; comp_touch_scope(o->idx); } ch = 1; }
+      if (c->scopes[t].class_id < 0) continue;
+      int got = src_walk_any_body(c, t, apply, stack, depth, &ch);
+      if (got <= 0) return got < 0 ? !apply : 0;
+      any = 1;
+    }
+    /* and the method a class's alias of the name runs (`alias v w`), a
+       scope of another name, among the call plan's candidates for the call */
+    int npc = 0;
+    const PolyCand *pc = comp_poly_candidates_at(c, v, cn, &npc);
+    for (int i = 0; i < npc; i++) {
+      if (pc[i].native || pc[i].mi < 0 || sp_streq(c->scopes[pc[i].mi].name, cn) ||
+          sp_streq(comp_resolve_alias(c, pc[i].cls, cn), cn)) continue;
+      int got = src_walk_any_body(c, pc[i].mi, apply, stack, depth, &ch);
+      if (got <= 0) return got < 0 ? !apply : 0;
       any = 1;
     }
     if (any) return apply ? ch : 1;

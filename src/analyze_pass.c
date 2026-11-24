@@ -7648,6 +7648,215 @@ static void container_literals(Compiler *c, int n, ContainerLiterals *out, int d
   }
 }
 
+static int widen_boxed_elem_sources(Compiler *c, int r, TyKind elem, int depth);
+/* The stores that put rows into an Array, by the shape of their arguments:
+   each argument is a row, each from the second (`insert`), the last of two
+   (`a[i] = r`), the elements of each (`concat`, `a[i, n] = rows`,
+   `a[0..0] = rows`), the first (`fill(r)`), or none this pass follows (a
+   block's value). */
+enum { ROWS_ARGS, ROWS_FROM1, ROWS_INDEX, ROWS_ELEMS, ROWS_FILL, ROWS_NONE };
+static const struct { const char *name; int shape; } row_stores[] = {
+  { "<<", ROWS_ARGS }, { "push", ROWS_ARGS }, { "append", ROWS_ARGS }, { "unshift", ROWS_ARGS },
+  { "prepend", ROWS_ARGS }, { "insert", ROWS_FROM1 }, { "[]=", ROWS_INDEX }, { "concat", ROWS_ELEMS },
+  { "replace", ROWS_ELEMS }, { "fill", ROWS_FILL }, { "map!", ROWS_NONE }, { "collect!", ROWS_NONE },
+};
+/* The row_stores shape of `name`, -1 for no store */
+static int row_store_shape(const char *name) {
+  for (size_t i = 0; name && i < sizeof row_stores / sizeof row_stores[0]; i++)
+    if (sp_streq(row_stores[i].name, name)) return row_stores[i].shape;
+  return -1;
+}
+/* 1 when each value the row `el` can be is a new Array nothing else holds
+   (`s.bytes`, `f ? s.bytes : t.bytes`) */
+static int row_fresh(Compiler *c, int el) {
+  int lv[16];
+  int n = value_leaves_ex(c, el, lv, 0, 16, VL_NIL);
+  if (n <= 0 || n >= 16) return 0;
+  for (int i = 0; i < n; i++)
+    if (!is_fresh_array(c, lv[i])) return 0;
+  return 1;
+}
+static int array_src_walk(Compiler *c, int v, int pinned, int apply, int *stack, int depth);
+static int array_answers_receiver(Compiler *c, int v);
+/* 1 when each typed Array the row `el` can be takes an element of kind
+   `elem` or is one array_src_walk can build as the general Array (a call
+   that returns its receiver, `s.bytes << 3`, is none) */
+static int row_lifts(Compiler *c, int el, TyKind elem) {
+  int lv[16], stack[8];
+  int n = value_leaves_ex(c, el, lv, 0, 16, VL_NIL);
+  if (n <= 0 || n >= 16) return 0;
+  for (int i = 0; i < n; i++) {
+    if (nt_kind(c->nt, lv[i]) == NK_ArrayNode && is_fresh_array(c, lv[i])) continue;
+    TyKind t = infer_type(c, lv[i]);
+    if (t == TY_UNKNOWN) return 0;
+    if (!ty_is_array(t) || t == TY_POLY_ARRAY || ty_is_ptr_array(t) || elem == ty_array_elem(t)) continue;
+    if (nt_kind(c->nt, lv[i]) == NK_CallNode && array_answers_receiver(c, lv[i])) return 0;
+    if (!array_src_walk(c, lv[i], 1, 0, stack, 0)) return 0;
+  }
+  return 1;
+}
+/* 1 when the Array literal `lit` is the value a constant is written
+   (`N = [s.bytes]`, `N = [s.bytes].freeze`) */
+static int literal_in_constant(Compiler *c, int lit) {
+  const NodeTable *nt = c->nt;
+  const int *par = comp_parent_map(c);
+  for (int up = par ? par[lit] : -1, d = 0; up >= 0 && d < 4; up = par[up], d++) {
+    NodeKind k = nt_kind(nt, up);
+    if (k == NK_ConstantWriteNode || k == NK_ConstantPathWriteNode || k == NK_ConstantOrWriteNode) return 1;
+    if (k != NK_CallNode && k != NK_ParenthesesNode && k != NK_StatementsNode) return 0;
+  }
+  return 0;
+}
+static int lift_added_rows(Compiler *c, int lit, TyKind elem, int depth, int apply);
+/* The rows of the Array literal `lit` that do not take an element of kind
+   `elem` widen where they are built (widen_boxed_array_sources), a new one
+   boxed as the general Array (box_lift_arr), and the literal is built as the
+   general Array, as a row literal is; so do the rows stores add to the
+   literal. Returns 1 on a change. With `apply` 0 changes nothing, and
+   returns 1 when one of those rows is one row_lifts returns 0 for, or a
+   constant holds the literal and a row is a call: the constant reads
+   its rows as the typed Array. */
+static int lift_literal_rows_1(Compiler *c, int lit, TyKind elem, int depth, int apply);
+/* The literals one lift_read_rows pass has walked: a store of a table into
+   itself (`n.replace(n)`) or of one table into another at many sites
+   (`a.concat(b)`) comes back to a literal, which the pass walks once. */
+static int lift_seen[64], lift_nseen;
+static int lift_literal_rows(Compiler *c, int lit, TyKind elem, int depth, int apply) {
+  if (depth > 4 || lift_nseen >= 64) return !apply;
+  for (int i = 0; i < lift_nseen; i++) if (lift_seen[i] == lit) return 0;
+  lift_seen[lift_nseen++] = lit;
+  return lift_literal_rows_1(c, lit, elem, depth, apply);
+}
+static int lift_literal_rows_1(Compiler *c, int lit, TyKind elem, int depth, int apply) {
+  const NodeTable *nt = c->nt;
+  int en = 0, lifted = 0, ch = 0;
+  if (lit < 0 || lit >= c->node_cap || nt_kind(nt, lit) != NK_ArrayNode) return 0;
+  const int *ev = nt_arr(nt, lit, "elements", &en);
+  for (int e = 0; e < en; e++) {
+    int el = nt_paren_single(nt, ev[e]);
+    if (el < 0 || nt_kind(nt, el) == NK_SplatNode) continue;
+    TyKind et = infer_type(c, el);
+    if (!apply) {
+      if (!row_lifts(c, el, elem)) return 1;
+      if ((et == TY_INT_ARRAY || et == TY_FLOAT_ARRAY || et == TY_STR_ARRAY) && elem != ty_array_elem(et) &&
+          nt_kind(nt, el) != NK_ArrayNode && nt_kind(nt, el) != NK_LocalVariableReadNode &&
+          literal_in_constant(c, lit)) return 1;
+      continue;
+    }
+    if ((et != TY_INT_ARRAY && et != TY_FLOAT_ARRAY && et != TY_STR_ARRAY) || elem == ty_array_elem(et)) continue;
+    lifted = 1;
+    ch |= widen_boxed_array_sources(c, el, elem, 0);
+    if (el < c->node_cap && !c->box_lift_arr[el] && row_fresh(c, el)) { c->box_lift_arr[el] = 1; ch = 1; }
+  }
+  if (!apply) return lift_added_rows(c, lit, elem, depth, 0);
+  ch |= lift_added_rows(c, lit, elem, depth, 1);
+  if (!lifted) return ch;
+  if (c->arr_want[lit] != TY_POLY_ARRAY) { comp_set_arr_want(c, lit, TY_POLY_ARRAY); ch = 1; }
+  return ch;
+}
+/* The rows `arg`'s elements become (`concat(arg)`, `push(*arg)`) take an
+   element of kind `elem`. Returns 1 on a change; with `apply` 0, as
+   lift_literal_rows, and 1 for an `arg` container_literals finds no
+   literal of. */
+static int lift_elem_rows(Compiler *c, int arg, TyKind elem, int depth, int apply) {
+  int ch = apply ? widen_boxed_elem_sources(c, arg, elem, 0) : 0;
+  ContainerLiterals lits = {0};
+  container_literals(c, arg, &lits, 0);
+  if (!apply && lits.count == 0) ch = 1;
+  for (int q = 0; q < lits.count; q++) ch |= lift_literal_rows(c, lits.items[q], elem, depth + 1, apply);
+  free_container_literals(&lits);
+  return ch;
+}
+/* The same for an `arg` whose elements are lists of rows (`concat(*lists)`) */
+static int lift_list_rows(Compiler *c, int arg, TyKind elem, int depth, int apply) {
+  const NodeTable *nt = c->nt;
+  ContainerLiterals lits = {0};
+  container_literals(c, arg, &lits, 0);
+  int ch = !apply && lits.count == 0;
+  for (int q = 0; q < lits.count; q++) {
+    int en = 0;
+    const int *ev = nt_kind(nt, lits.items[q]) == NK_ArrayNode ? nt_arr(nt, lits.items[q], "elements", &en) : NULL;
+    if (!ev && !apply) ch = 1;
+    for (int e = 0; e < en; e++) ch |= lift_elem_rows(c, ev[e], elem, depth + 1, apply);
+  }
+  free_container_literals(&lits);
+  return ch;
+}
+/* The rows the store `call` of row_stores shape `shape` adds take an
+   element of kind `elem`. Returns 1 on a change; with `apply` 0, as
+   lift_literal_rows. */
+static int widen_stored_rows(Compiler *c, int call, int shape, TyKind elem, int depth, int apply) {
+  const NodeTable *nt = c->nt;
+  int a = nt_ref(nt, call, "arguments"), an = 0, ch = 0;
+  const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+  int splice = shape == ROWS_INDEX && (an == 3 || (an == 2 && infer_type(c, av[0]) == TY_RANGE));
+  for (int k = shape == ROWS_FROM1 ? 1 : shape == ROWS_INDEX ? an - 1 : 0; k < (shape == ROWS_FILL ? an > 0 : an); k++) {
+    int arg = nt_paren_single(nt, av[k]);
+    if (arg < 0) continue;
+    if (nt_kind(nt, arg) == NK_SplatNode)
+      ch |= (shape == ROWS_ELEMS ? lift_list_rows : lift_elem_rows)(c, nt_ref(nt, arg, "expression"), elem, depth, apply);
+    else if (shape == ROWS_ELEMS || splice) ch |= lift_elem_rows(c, arg, elem, depth, apply);
+    else if (!apply) ch |= (shape != ROWS_INDEX || an == 2) && !row_lifts(c, arg, elem);
+    else if (shape != ROWS_INDEX || an == 2) {
+      ch |= widen_boxed_array_sources(c, arg, elem, 0);
+      if (arg < c->node_cap && !c->box_lift_arr[arg] && nt_kind(nt, arg) != NK_ArrayNode && row_fresh(c, arg)) {
+        TyKind at = infer_type(c, arg);
+        if ((at == TY_INT_ARRAY || at == TY_FLOAT_ARRAY || at == TY_STR_ARRAY) && elem != ty_array_elem(at)) {
+          c->box_lift_arr[arg] = 1;
+          ch = 1;
+        }
+      }
+    }
+  }
+  return ch;
+}
+/* The rows the stores of row_stores add to the Array literal `lit`
+   (`n << s.bytes`, `n[1] = o`, `n.concat(rows)`) take an element of kind
+   `elem`, as the literal's own rows do. Returns 1 on a change; with `apply`
+   0, as lift_literal_rows. */
+static int lift_added_rows(Compiler *c, int lit, TyKind elem, int depth, int apply) {
+  const NodeTable *nt = c->nt;
+  int ch = 0;
+  NT_FOREACH_KIND(nt, NK_CallNode, call) {
+    int shape = row_store_shape(nt_str(nt, call, "name"));
+    int rc = nt_paren_single(nt, nt_ref(nt, call, "receiver"));
+    if (shape < 0 || shape == ROWS_NONE || rc < 0 || nt_ref(nt, call, "arguments") < 0) continue;
+    if (shape == ROWS_FILL && nt_ref(nt, call, "block") >= 0) continue;
+    ContainerLiterals held = {0};
+    container_literals(c, rc, &held, 0);
+    int hit = 0;
+    for (int q = 0; q < held.count && !hit; q++) hit = held.items[q] == lit;
+    free_container_literals(&held);
+    if (hit) ch |= widen_stored_rows(c, call, shape, elem, depth, apply);
+  }
+  return ch;
+}
+/* A store of kind `vt` into a local written the element read `v`
+   (`n = [s.bytes]; x = n[0]; x << "q"`): the rows of the literals the read
+   reaches take an element of kind `vt` (lift_literal_rows), when each of
+   those rows can (row_lifts). Returns 1 on a change. */
+static int lift_read_rows(Compiler *c, int v, int is_push, TyKind kt, TyKind vt) {
+  const NodeTable *nt = c->nt;
+  const char *nm = nt_str(nt, v, "name");
+  int r = nt_ref(nt, v, "receiver"), a = nt_ref(nt, v, "arguments"), an = 0, ch = 0;
+  if (a >= 0) nt_arr(nt, a, "arguments", &an);
+  /* (rows widen once the optimistic rounds have settled) */
+  if (!c->box_lift_arr || !c->arr_want || g_infer_optimistic || vt == TY_UNKNOWN || vt == TY_POLY ||
+      (!is_push && kt != TY_INT && kt != TY_POLY)) return 0;
+  if (!nm || r < 0 || nt_ref(nt, v, "block") >= 0 ||
+      !((sp_streq(nm, "[]") && an == 1) || (sp_streq(nm, "fetch") && an >= 1) || (is_endpoint_query(nm) && an == 0))) return 0;
+  ContainerLiterals outer = {0};
+  container_literals(c, r, &outer, 0);
+  TyKind elem = vt == TY_STRBUF ? TY_STRING : vt;
+  int blocked = 0;
+  lift_nseen = 0;
+  for (int q = 0; q < outer.count && !blocked; q++) blocked = lift_literal_rows(c, outer.items[q], elem, 0, 0);
+  lift_nseen = 0;
+  for (int q = 0; q < outer.count && !blocked; q++) ch |= lift_literal_rows(c, outer.items[q], elem, 0, 1);
+  free_container_literals(&outer);
+  return ch;
+}
+
 /* An element write or push whose receiver is an element read (`y[k][j] = v`,
    `a[0] << v`), or a parenthesized sequence ending in a literal, stores
    into a container literal (nested in another): widens
@@ -7664,6 +7873,7 @@ static int widen_nested_literals(Compiler *c, int recv, int is_push, int is_spli
     if (value_leaves(c, r, &leaf, 0, 1) == 1) { r = leaf; seq = 1; }
   }
   ContainerLiterals lits = {0};
+  int rows = 0;
   if (r >= 0 && nt_kind(nt, r) == NK_LocalVariableReadNode) {
     /* a local an element read or a copy of one wrote (`r = b[:attrs].dup;
        r["y"] = v`): the literals those calls reach, the nested one in a
@@ -7676,14 +7886,16 @@ static int widen_nested_literals(Compiler *c, int recv, int is_push, int is_spli
       if (nt_kind(nt, w) != NK_LocalVariableWriteNode || comp_scope_of(c, w) != rs ||
           !sp_streq(nt_str(nt, w, "name"), rn)) continue;
       int wv = nt_paren_single(c->nt, nt_ref(nt, w, "value"));
-      if (wv >= 0 && nt_kind(nt, wv) == NK_CallNode) container_literals(c, wv, &lits, 0);
+      if (wv < 0 || nt_kind(nt, wv) != NK_CallNode) continue;
+      container_literals(c, wv, &lits, 0);
+      rows |= lift_read_rows(c, wv, is_push, kt, vt);
     }
   }
   else {
     if (r < 0 || !(nt_kind(nt, r) == NK_CallNode || (seq && nt_kind(nt, r) == NK_ArrayNode))) return 0;
     container_literals(c, r, &lits, 0);
   }
-  int changed = 0;
+  int changed = rows;
   for (int q = 0; q < lits.count; q++) {
     int l = lits.items[q];
     TyKind lt = infer_type(c, l);
@@ -8035,8 +8247,6 @@ static int ivar_writes_fresh(Compiler *c, int cls, const char *ivn, int apply, i
 static int local_rows_escape_ex(Compiler *c, int r, int stores_only) {
   static const char *const reads[] = { "[]", "first", "last", "fetch", "each", "each_with_index",
                                        "size", "length", "empty?", "inspect", "to_s", NULL };
-  static const char *const stores[] = { "<<", "push", "append", "unshift", "prepend", "insert", "concat",
-                                        "[]=", "fill", "replace", "map!", "collect!", NULL };
   const NodeTable *nt = c->nt;
   const char *nm = nt_str(nt, r, "name");
   Scope *sc = comp_scope_of(c, r);
@@ -8049,7 +8259,7 @@ static int local_rows_escape_ex(Compiler *c, int r, int stores_only) {
     if (!cn) continue;
     if (rc >= 0 && nt_kind(nt, rc) == NK_LocalVariableReadNode && comp_scope_of(c, rc) == sc &&
         sp_streq(nt_str(nt, rc, "name"), nm)) {
-      if (stores_only ? !str_in(cn, stores) : str_in(cn, reads)) nok++;
+      if (stores_only ? row_store_shape(cn) < 0 : str_in(cn, reads)) nok++;
       continue;
     }
     if (rc >= 0 || !(sp_streq(cn, "p") || sp_streq(cn, "puts") || sp_streq(cn, "print") || sp_streq(cn, "pp")))

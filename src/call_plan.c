@@ -8001,7 +8001,8 @@ int cplan_word_elem_presence(Compiler *c, int id, int k, int vcid, const char *m
   /* (a word that stands as a declaration of a class's body tests none of the names the table does not find that some code makes: the
      record cannot place the mixin or attribute, one under a condition or in a block, that may provide it) */
   if (decl && !found && elab_names_method(c, mn)) out->ans = PRA_YES;
-  if (found && elab_word_elem_cell(c, id, vcid, k) && ct_version_named(c, mn) && cplan_presence_cells(c, id, vcid, 0, mn, 7, &out->cells) &&
+  /* (the word tests the methods, not what a respond_to_missing? answers: presence_cells_at, as ver_obj_presence_keep keeps its cells) */
+  if (found && elab_word_elem_cell(c, id, vcid, k) && ct_version_named(c, mn) && presence_cells_at(c, id, vcid, 0, mn, 7, &out->cells) &&
       cplan_cells_testable(c, &out->cells) && !cplan_cells_fixed(&out->cells))
     out->ans = PRA_CELLS;
   return out->ans;
@@ -15603,7 +15604,7 @@ static void ver_presence_keep(Compiler *c, int id, const char *name, int cls, vo
 static void ver_obj_presence_keep(Compiler *c, int id, const char *name, int cls, unsigned flags, void *arg) {
   CplanCells cs;
   if (presence_word(c->nt, id)) {   /* (a word tests the version cells of a name the run decides, as a respond_to?(name, true)) */
-    if (cplan_presence_cells(c, id, cls, 0, name, 7, &cs) && !cplan_cells_fixed(&cs))
+    if (presence_cells_at(c, id, cls, 0, name, 7, &cs) && !cplan_cells_fixed(&cs))
       for (int i = 0; i < cs.n; i++) ver_cell_keep(c, cs.cell[i]);
     return;
   }

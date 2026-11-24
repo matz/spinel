@@ -1,0 +1,4 @@
+on the class, zz skipped and made
+"undefined method 'zz' for class 'C310'"
+:ran
+[:tail, NoMethodError, NoMethodError, NoMethodError]

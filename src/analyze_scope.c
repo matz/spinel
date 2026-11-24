@@ -1229,6 +1229,7 @@ void desugar_class_reopen(Compiler *c) {
       unsupported_feature(c, id, "the constant name Class__reopen is reserved by the compiler");
   }
   class_reopen_stmts(c, nt_ref(nt, nt->root_id, "statements"), 0);
+  for (int i = 1; i < nt_nroots(nt); i++) class_reopen_stmts(c, prog_root_stmts(c, i), 0);
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
     const char *nm = nt_str(nt, id, "name");
     if (!is_class_eval_name(nm) || !is_class_const(nt, nt_ref(nt, id, "receiver"))) continue;

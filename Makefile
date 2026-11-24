@@ -6376,7 +6376,7 @@ LOWER_ROWS_PROGS ?= $(wildcard test/*.rb test/share/*.rb test/share/*/*.rb bench
 KWSPLAT_ROWS_PROGS ?= $(shell grep -l -F '**' $(LOWER_ROWS_PROGS))
 lower-rows-check: $(SPINEL)
 	@printf '%s\n' $(LOWER_ROWS_PROGS) | xargs -P $(NPROC) -n 1 sh -c \
-	  'SPINEL_LOWER_ROWS_CHECK=1 $(SPINEL) --load-model=graph --dump-ast "$$0" 2>&1 >/dev/null | grep "^lower-rows-check"' | \
+	  'SPINEL_LOWER_ROWS_CHECK=1 $(SPINEL) --dump-ast "$$0" 2>&1 >/dev/null | grep "^lower-rows-check"' | \
 	  awk -v want=$(words $(LOWER_ROWS_PROGS)) '/ calls, / { n++; c += $$2; d += $$4; next } { print } \
 	       END { printf "lower-rows-check: %d of %d programs, %d calls, %d disagreements\n", n, want, c, d; exit (d > 0 || n != want) }'
 # The second leg compiles the programs that write `**` (any operand: a
@@ -6385,7 +6385,7 @@ lower-rows-check: $(SPINEL)
 # compares the rows the parse noted for each shape (lr_rows, lr_rows_drop).
 # (-S writes the C to stdout, which is dropped: nothing lands in the tree.)
 	@printf '%s\n' $(KWSPLAT_ROWS_PROGS) | xargs -P $(NPROC) -n 1 sh -c \
-	  'SPINEL_LOWER_ROWS_CHECK=1 $(SPINEL) --load-model=graph -S "$$0" 2>&1 >/dev/null | grep "^lower-rows-check"' | \
+	  'SPINEL_LOWER_ROWS_CHECK=1 $(SPINEL) -S "$$0" 2>&1 >/dev/null | grep "^lower-rows-check"' | \
 	  awk -v want=$(words $(KWSPLAT_ROWS_PROGS)) '/ calls, / { n++; c += $$2; d += $$4; next } { print } \
 	       END { printf "lower-rows-check (after the split): %d of %d programs, %d calls, %d disagreements\n", n, want, c, d; exit (d > 0 || n != want) }'
 
@@ -6730,18 +6730,18 @@ scale-test: $(SPINEL_WORK)
 	xa=$$(sw -c -o "$$tmp/x2.c" "$$tmp/x2.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	xb=$$(sw -c -o "$$tmp/x4.c" "$$tmp/x4.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	gen class_macros 100 m1.rb; gen class_macros 200 m2.rb; \
-	ma=$$(sw --load-model=graph -c -o "$$tmp/m1.c" "$$tmp/m1.rb") || { rm -rf "$$tmp"; exit 1; }; \
-	mb=$$(sw --load-model=graph -c -o "$$tmp/m2.c" "$$tmp/m2.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	ma=$$(sw -c -o "$$tmp/m1.c" "$$tmp/m1.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	mb=$$(sw -c -o "$$tmp/m2.c" "$$tmp/m2.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	gen class_macros_one "2000 written" o1.rb; gen class_macros_one 2000 o2.rb; \
-	oa=$$(sw --load-model=graph -c -o "$$tmp/o1.c" "$$tmp/o1.rb") || { rm -rf "$$tmp"; exit 1; }; \
-	ob=$$(sw --load-model=graph -c -o "$$tmp/o2.c" "$$tmp/o2.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	oa=$$(sw -c -o "$$tmp/o1.c" "$$tmp/o1.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	ob=$$(sw -c -o "$$tmp/o2.c" "$$tmp/o2.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	gen const_collisions 400 cc4.rb; gen const_collisions 800 cc8.rb; \
 	ccs="qualify_colliding_classes elab_prov_apply elab_header_owner qualify_colliding_reads elab_const_keys"; \
 	cca=$$(sws "$$ccs" -c -o "$$tmp/cc4.c" "$$tmp/cc4.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	ccb=$$(sws "$$ccs" -c -o "$$tmp/cc8.c" "$$tmp/cc8.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	gen class_macro_state 200 cs2.rb; gen class_macro_state 400 cs4.rb; \
-	csa=$$(sw --load-model=graph -c -o "$$tmp/cs2.c" "$$tmp/cs2.rb") || { rm -rf "$$tmp"; exit 1; }; \
-	csb=$$(sw --load-model=graph -c -o "$$tmp/cs4.c" "$$tmp/cs4.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	csa=$$(sw -c -o "$$tmp/cs2.c" "$$tmp/cs2.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	csb=$$(sw -c -o "$$tmp/cs4.c" "$$tmp/cs4.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	gen cond_defs 200 q2.rb; gen cond_defs 400 q4.rb; \
 	qa=$$(sw -c -o "$$tmp/q2.c" "$$tmp/q2.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	qb=$$(sw -c -o "$$tmp/q4.c" "$$tmp/q4.rb") || { rm -rf "$$tmp"; exit 1; }; \
@@ -6760,13 +6760,9 @@ scale-test: $(SPINEL_WORK)
 	gen module_functions 100 jf1.rb; gen module_functions 200 jf2.rb; \
 	jia=$$(sw -c -o "$$tmp/jf1.c" "$$tmp/jf1.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	jib=$$(sw -c -o "$$tmp/jf2.c" "$$tmp/jf2.rb") || { rm -rf "$$tmp"; exit 1; }; \
-	jga=$$(sw --load-model=graph -c -o "$$tmp/jf1.c" "$$tmp/jf1.rb") || { rm -rf "$$tmp"; exit 1; }; \
-	jgb=$$(sw --load-model=graph -c -o "$$tmp/jf2.c" "$$tmp/jf2.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	gen unplaced_definers 200 ue2.rb; gen unplaced_definers 400 ue4.rb; \
 	uea=$$(sw -c -o "$$tmp/ue2.c" "$$tmp/ue2.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	ueb=$$(sw -c -o "$$tmp/ue4.c" "$$tmp/ue4.rb") || { rm -rf "$$tmp"; exit 1; }; \
-	uga=$$(sw --load-model=graph -c -o "$$tmp/ue2.c" "$$tmp/ue2.rb") || { rm -rf "$$tmp"; exit 1; }; \
-	ugb=$$(sw --load-model=graph -c -o "$$tmp/ue4.c" "$$tmp/ue4.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	gen shadowed_extends 400 se4.rb; gen shadowed_extends 800 se8.rb; \
 	gen shadowed_extends "400 plain" sp4.rb; gen shadowed_extends "800 plain" sp8.rb; \
 	sea=$$(sw -c -o "$$tmp/se4.c" "$$tmp/se4.rb") || { rm -rf "$$tmp"; exit 1; }; \
@@ -6782,8 +6778,6 @@ scale-test: $(SPINEL_WORK)
 	gen module_functions "100 read" jr1.rb; gen module_functions "200 read" jr2.rb; \
 	jra=$$(sw -c -o "$$tmp/jr1.c" "$$tmp/jr1.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	jrb=$$(sw -c -o "$$tmp/jr2.c" "$$tmp/jr2.rb") || { rm -rf "$$tmp"; exit 1; }; \
-	jha=$$(sw --load-model=graph -c -o "$$tmp/jr1.c" "$$tmp/jr1.rb") || { rm -rf "$$tmp"; exit 1; }; \
-	jhb=$$(sw --load-model=graph -c -o "$$tmp/jr2.c" "$$tmp/jr2.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	gen include_copies 200 ic2.rb; gen include_copies 400 ic4.rb; \
 	gen include_copies "200 plain" ip2.rb; gen include_copies "400 plain" ip4.rb; \
 	ica=$$(sw -c -o "$$tmp/ic2.c" "$$tmp/ic2.rb") || { rm -rf "$$tmp"; exit 1; }; \
@@ -6812,9 +6806,8 @@ scale-test: $(SPINEL_WORK)
 	   [ -z "$$xa" ] || [ -z "$$xb" ] || [ -z "$$ma" ] || [ -z "$$mb" ] || [ -z "$$oa" ] || [ -z "$$ob" ] || [ -z "$$qa" ] || [ -z "$$qb" ] || \
 	   [ -z "$$yna" ] || [ -z "$$ynb" ] || [ -z "$$yta" ] || [ -z "$$ytb" ] || \
 	   [ -z "$$uda" ] || [ -z "$$udb" ] || [ -z "$$sba" ] || [ -z "$$sbb" ] || \
-	   [ -z "$$jia" ] || [ -z "$$jib" ] || [ -z "$$jga" ] || [ -z "$$jgb" ] || \
-	   [ -z "$$uea" ] || [ -z "$$ueb" ] || [ -z "$$uga" ] || [ -z "$$ugb" ] || \
-	   [ -z "$$jra" ] || [ -z "$$jrb" ] || [ -z "$$jha" ] || [ -z "$$jhb" ] || \
+	   [ -z "$$jia" ] || [ -z "$$jib" ] || [ -z "$$uea" ] || [ -z "$$ueb" ] || \
+	   [ -z "$$jra" ] || [ -z "$$jrb" ] || \
 	   [ -z "$$sea" ] || [ -z "$$seb" ] || [ -z "$$spa" ] || [ -z "$$spb" ] || \
 	   [ -z "$$ica" ] || [ -z "$$icb" ] || [ -z "$$ipa" ] || [ -z "$$ipb" ] || \
 	   [ -z "$$bca" ] || [ -z "$$bcb" ] || [ -z "$$bpa" ] || [ -z "$$bpb" ]; then \
@@ -6877,24 +6870,15 @@ scale-test: $(SPINEL_WORK)
 	awk -v a="$$uea" -v b="$$ueb" -v lim="$(UNPLACED_DEFINERS_LIMIT)" 'BEGIN { r = b / a; \
 	  printf "scale-test: unplaced definer work at 2x the bodies is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
 	  { echo "scale-test: FAIL (the extents of the bodies without a load point, or a run predicate over them, grew superlinearly: see lr_extents and lr_in_body)"; exit 1; }; \
-	awk -v a="$$uga" -v b="$$ugb" -v lim="$(UNPLACED_DEFINERS_LIMIT)" 'BEGIN { r = b / a; \
-	  printf "scale-test: unplaced definer work at 2x the bodies, under graph, is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
-	  { echo "scale-test: FAIL (the extents of the bodies without a load point, or a run predicate over them, grew superlinearly under graph: see lr_extents and lr_in_body)"; exit 1; }; \
 	awk -v a="$$sba" -v b="$$sbb" -v lim="$(STRUCT_BLOCKS_LIMIT)" 'BEGIN { r = b / a; \
 	  printf "scale-test: Struct block anonymity work at 2x the blocks is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
 	  { echo "scale-test: FAIL (the anonymity pass scanned the program per call of a Struct block: see block_only_declares)"; exit 1; }; \
 	awk -v a="$$jia" -v b="$$jib" -v lim="$(MODULE_FUNCTIONS_LIMIT)" 'BEGIN { r = b / a; \
 	  printf "scale-test: module function work at 2x the modules is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
 	  { echo "scale-test: FAIL (a module function's copy or its mapping to the def grew superlinearly: see ct_def_version and mf_copy_entries)"; exit 1; }; \
-	awk -v a="$$jga" -v b="$$jgb" -v lim="$(MODULE_FUNCTIONS_LIMIT)" 'BEGIN { r = b / a; \
-	  printf "scale-test: module function work at 2x the modules, under graph, is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
-	  { echo "scale-test: FAIL (a module function's copy or its mapping to the def grew superlinearly under graph: see ct_def_version and mf_copy_entries)"; exit 1; }; \
 	awk -v a="$$jra" -v b="$$jrb" -v lim="$(MODULE_FUNCTIONS_LIMIT)" 'BEGIN { r = b / a; \
 	  printf "scale-test: kept extend copy work at 2x the modules is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
 	  { echo "scale-test: FAIL (the calls that meet an extend's version were asked superlinearly: see elab_version_met)"; exit 1; }; \
-	awk -v a="$$jha" -v b="$$jhb" -v lim="$(MODULE_FUNCTIONS_LIMIT)" 'BEGIN { r = b / a; \
-	  printf "scale-test: kept extend copy work at 2x the modules, under graph, is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
-	  { echo "scale-test: FAIL (the calls that meet an extend's version were asked superlinearly under graph: see elab_version_met)"; exit 1; }; \
 	awk -v na="$$sea" -v nb="$$seb" -v ta="$$spa" -v tb="$$spb" -v lim="$(SHADOWED_EXTENDS_LIMIT)" 'BEGIN { a = na - ta; b = nb - tb; \
 	  if (a <= 0 || b <= 0) { printf "scale-test: FAIL (the shadowing classes cost no more than the plain ones, %d - %d and %d - %d: the difference measures nothing; see test/scale/shadowed_extends.sh)\n", na, ta, nb, tb; exit 2 } \
 	  r = b / a; \

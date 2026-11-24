@@ -8128,11 +8128,25 @@ static int lr_reopen_answers(Compiler *c, const char *cls, const char *name) {
   }
   return 0;
 }
+typedef struct { int walk, depth; } LrAutoVisit;
+typedef struct { Compiler *c; LrAutoVisit *modules; int walk; } LrAutoWalk;
+
+/* A deeper visit still matters: its descendants can reach the walk's bound. */
+static int lr_auto_enter(void *ud, int mod, int depth) {
+  LrAutoWalk *x = ud;
+  if (mod + 1 >= x->c->lrec->ncls) return 0;
+  LrAutoVisit *seen = &x->modules[mod + 1];
+  if (seen->walk == x->walk && seen->depth >= depth) return 1;
+  *seen = (LrAutoVisit){ x->walk, depth };
+  return 0;
+}
+
 /* Any method-table change on the chain counts, including an undef of
    the builtin. The call need not have a unique load point: an earlier or
    later version, or one brought by a conditional mixin, can matter. */
 static int lr_auto_own(void *ud, int cls, int sg) {
-  Compiler *c = ud;
+  LrAutoWalk *x = ud;
+  Compiler *c = x->c;
   LoadRecord *r = c->lrec;
   const LrClass *k = lr_class(r, cls);
   if (lr_hist(r, cls, sg, "autoload", 0) || (k && (k->auto_computed & (1u << sg)))) return LR_W_STOP;
@@ -8147,20 +8161,21 @@ static int lr_auto_own(void *ud, int cls, int sg) {
 
 static int lr_auto_mixin(void *ud, int cls, int ref) { (void)ud; (void)cls; (void)ref; return LR_W_STOP; }
 
-static int lr_auto_core(Compiler *c, const LrWalker *w, int core, int sg) {
-  int cls = comp_core_class(c, core);
-  return cls >= 0 && lr_walk_one(c, w, c, cls, sg, 0);
+static int lr_auto_core(LrAutoWalk *x, const LrWalker *w, int core, int sg) {
+  int cls = comp_core_class(x->c, core);
+  return cls >= 0 && lr_walk_one(x->c, w, x, cls, sg, 0);
 }
 
-static int lr_auto_chain(Compiler *c, int cls, int object) {
-  LrWalker w = { .own = lr_auto_own, .mixin = lr_auto_mixin, .tail_end = LR_TAIL_N };
-  if (lr_chain_open(c, cls) || lr_walk(c, &w, c, cls, 1, 0)) return 1;
+static int lr_auto_chain(LrAutoWalk *x, int cls, int object) {
+  Compiler *c = x->c;
+  LrWalker w = { .own = lr_auto_own, .mixin = lr_auto_mixin, .tail_end = LR_TAIL_N, .enter = lr_auto_enter };
+  if (lr_chain_open(c, cls) || lr_walk(c, &w, x, cls, 1, 0)) return 1;
   /* An unreopened Object has no record class. Start at main, then
      account for the missing part of the class object's chain. */
-  if (object && lr_auto_core(c, &w, CORE_MODULE, 0)) return 1;
+  if (object && lr_auto_core(x, &w, CORE_MODULE, 0)) return 1;
   /* Class objects also reach Object and BasicObject's singletons. */
   if (!object && (cls == LR_MAIN || comp_class_is_module(c, &c->classes[cls]))) return 0;
-  return lr_auto_core(c, &w, CORE_CLASS_REOPEN, 0) || lr_auto_core(c, &w, CORE_OBJECT, 1) || lr_auto_core(c, &w, CORE_BASIC_OBJECT, 1);
+  return lr_auto_core(x, &w, CORE_CLASS_REOPEN, 0) || lr_auto_core(x, &w, CORE_OBJECT, 1) || lr_auto_core(x, &w, CORE_BASIC_OBJECT, 1);
 }
 
 int elab_autoload_shadow(Compiler *c, int id) {
@@ -8176,9 +8191,7 @@ int elab_autoload_shadow(Compiler *c, int id) {
   int owner = id < r->nauto_owner ? r->auto_owner[id] : 0;
   if (!owner || owner == LR_AUTO_UNKNOWN) return ELAB_UNKNOWN;
   if (owner == LR_AUTO_SHADOWED || r->auto_unknown || r->names_any) return ELAB_YES;
-  if (!r->auto_pending) return ELAB_NO;
-  int shadowed = owner == LR_AUTO_OBJECT ? lr_auto_chain(c, LR_MAIN, 1) : lr_auto_chain(c, owner - 2, 0);
-  return shadowed ? ELAB_YES : ELAB_NO;
+  return ELAB_NO;
 }
 
 /* Settle the candidates against the record made without registrations.
@@ -8200,8 +8213,21 @@ static void lr_autoload_settle(Compiler *c) {
     if (r->auto_forms[i] == LR_AUTO_FORM) r->auto_unknown = 1;
   for (int i = 0; !r->auto_unknown && !r->names_any && i < r->ncls; i++)
     if (r->cls[i].unheld && (r->cls[i].auto_computed & 1)) r->auto_unknown = 1;
-  for (int i = 0; !r->auto_unknown && !r->names_any && i < r->nauto_owner; i++)
-    if (r->auto_owner[i] && elab_autoload_shadow(c, i) == ELAB_YES) r->auto_owner[i] = LR_AUTO_SHADOWED;
+  unsigned long long work = nt_work_now();
+  LrAutoWalk x = { .c = c };
+  for (int i = 0; !r->auto_unknown && !r->names_any && i < r->nauto_owner; i++) {
+    int owner = r->auto_owner[i];
+    if (owner <= 0 && owner != LR_AUTO_OBJECT) continue;
+    if (!x.modules) {
+      x.modules = calloc((size_t)r->ncls, sizeof *x.modules);
+      if (!x.modules) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    }
+    x.walk = i + 1;
+    int object = owner == LR_AUTO_OBJECT;
+    if (lr_auto_chain(&x, object ? LR_MAIN : owner - 2, object)) r->auto_owner[i] = LR_AUTO_SHADOWED;
+  }
+  free(x.modules);
+  nt_work_step("elab_autoload_chain", work);
 
   r->auto_pending = 0;
   lr_autoload_filter(c);

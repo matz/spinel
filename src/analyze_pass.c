@@ -14783,6 +14783,58 @@ static void bs_splat(Compiler *c, int x, int np, TyKind *e, char *flags, int *nm
   *e = bs_join(*e, et == TY_UNKNOWN && xt != TY_UNKNOWN ? TY_POLY : et);
 }
 
+/* How the positional values av of one site (ac of them, the keyword hash
+   kwh the block's keywords take already off) are laid over the
+   positionals of s, by the plan its binders follow (emit_block_binds, the
+   proc prologue), for block_site_types and block_site_values alike. A
+   count only the run time knows -- a splat, or a trailing hash made only of
+   `**` spreads, a positional only when non-empty -- gathers the values
+   (emit_spread_args): e is the element type of them all, enil a literal
+   nil among them, nmin the values sure to be there and nmax a bound on
+   them. A lone Array (or a lone gathered one) into a block that auto-splats
+   (block_auto_splats; never a lambda) spreads its elements, however many
+   there are (spread; whole when the value itself may be bound instead).
+   Otherwise the count is static and block_fill places each value (ot, ps). */
+typedef struct { int gather, spread, whole, nmin, nmax, ot, ps; TyKind e; char enil; } BlockPlace;
+static void block_site_place(Compiler *c, const BlockSig *s, const int *av, int ac, int kwh, BlockPlace *pl) {
+  const NodeTable *nt = c->nt;
+  int P = s->P, O = s->O, Q = s->Q, np = P + O + Q;
+  int gather = 0, nmin = 0, nmax = 0;
+  TyKind e = TY_UNKNOWN;
+  char enil = 0;   /* a literal nil among the values e gathers */
+  memset(pl, 0, sizeof *pl);
+  for (int k = 0; k < ac; k++) {
+    if (av[k] >= 0 && nt_kind(nt, av[k]) == NK_SplatNode) {
+      gather = 1;
+      bs_splat(c, nt_ref(nt, av[k], "expression"), np, &e, &enil, &nmin, &nmax);
+    }
+    else {
+      e = bs_join_val(c, e, av[k], &enil);
+      if (k == ac - 1 && kwh_only_spreads(nt, av[k])) gather = 1;
+      else nmin++;
+      if (nmax <= np) nmax++;
+    }
+  }
+  /* Keywords the block's keywords take keep a lone Array whole, empty ones
+     too (emit_block_binds): only a `**` alone may spread it, for
+     instance_exec, which drops an empty one before it yields, so the
+     parameters then hold the Array or an element. */
+  int kw_spreads = kwh >= 0 && kwh_only_spreads(nt, kwh);
+  if (!s->lambda && (kwh < 0 || kw_spreads) && block_auto_splats(P, O, Q, s->R) &&
+      (gather ? nmin <= 1 : ac == 1) &&
+      (ty_is_array(e) || e == TY_POLY || e == TY_POLY_ARRAY || (!gather && cplan_value_to_ary(c, e)))) {
+    /* spread across the parameters: an element, or (gathered, or boxed)
+       possibly the value itself */
+    TyKind et = ty_is_array(e) ? ty_array_elem(e) : TY_POLY;
+    if (et == TY_UNKNOWN) et = TY_POLY;
+    pl->whole = gather || kw_spreads || !ty_is_array(e);
+    if (pl->whole) et = bs_join(et, e);
+    e = et; gather = 1; nmin = 0; nmax = np + 1;
+    pl->spread = 1;
+  }
+  if (!gather) block_fill(P, O, Q, s->R, ac, &pl->ot, &pl->ps);
+  pl->gather = gather; pl->nmin = nmin; pl->nmax = nmax; pl->e = e; pl->enil = enil;
+}
 /* Fold one site's values `av` (ac of them: the whole argument list, a
    trailing keyword hash included) into what each of a block's parameters
    receives, by the plan its binders follow (emit_block_binds, the proc
@@ -14792,16 +14844,12 @@ static void bs_splat(Compiler *c, int x, int np, TyKind *e, char *flags, int *nm
    literal nil (bs_join_val) -- and kws[k] for the k-th keyword.
 
    A trailing keyword hash is the keywords' when the block takes any, and
-   then never a positional. A count only the run time knows -- a splat, or a
-   trailing hash made only of `**` spreads, a positional only when
-   non-empty -- gathers the values (emit_spread_args): a positional that may
-   receive one takes the element type of them all, and only the values sure
-   to be there make a parameter certain of one. Otherwise the count is
-   static and block_fill places each value, the requireds and posts first,
-   the optionals what remains. A lone Array (or a lone gathered one) into a
-   block that auto-splats (block_auto_splats; never a lambda) spreads its
-   elements, however many there are. An optional that may be left without a
-   value takes its default. A keyword takes the value its key names, the
+   then never a positional. The positionals are laid out as
+   block_site_place lays them: a positional that may receive a gathered
+   value takes the element type of them all, and only the values sure to be
+   there make a parameter certain of one; a static count places each value,
+   the requireds and posts first, the optionals what remains. An optional
+   that may be left without a value takes its default. A keyword takes the value its key names, the
    values of every `**` operand and of a computed key (either may name it),
    and its default when it may be absent -- never a positional's. */
 void block_site_types(Compiler *c, const BlockSig *s, const int *av, int ac,
@@ -14827,38 +14875,11 @@ void block_site_types(Compiler *c, const BlockSig *s, const int *av, int ac,
       t = bs_join(t, bs_value(c, nt_ref(nt, kp, "value")));
     kws[k] = bs_join(kws[k], t);
   }
-  int gather = 0, nmin = 0, nmax = 0;
-  TyKind e = TY_UNKNOWN;
-  char enil = 0;   /* a literal nil among the values e gathers */
-  for (int k = 0; k < ac; k++) {
-    if (av[k] >= 0 && nt_kind(nt, av[k]) == NK_SplatNode) {
-      gather = 1;
-      bs_splat(c, nt_ref(nt, av[k], "expression"), np, &e, &enil, &nmin, &nmax);
-    }
-    else {
-      e = bs_join_val(c, e, av[k], &enil);
-      if (k == ac - 1 && kwh_only_spreads(nt, av[k])) gather = 1;
-      else nmin++;
-      if (nmax <= np) nmax++;
-    }
-  }
-  /* Keywords the block's keywords take keep a lone Array whole, empty ones
-     too (emit_block_binds): only a `**` alone may spread it, for
-     instance_exec, which drops an empty one before it yields, so the
-     parameters then hold the Array or an element. */
-  int kw_spreads = kwh >= 0 && kwh_only_spreads(nt, kwh);
-  if (!s->lambda && (kwh < 0 || kw_spreads) && block_auto_splats(P, O, Q, s->R) &&
-      (gather ? nmin <= 1 : ac == 1) &&
-      (ty_is_array(e) || e == TY_POLY || e == TY_POLY_ARRAY || (!gather && cplan_value_to_ary(c, e)))) {
-    /* spread across the parameters: an element, or (gathered, or boxed)
-       possibly the value itself */
-    TyKind et = ty_is_array(e) ? ty_array_elem(e) : TY_POLY;
-    if (et == TY_UNKNOWN) et = TY_POLY;
-    if (gather || kw_spreads || !ty_is_array(e)) et = bs_join(et, e);
-    e = et; gather = 1; nmin = 0; nmax = np + 1;
-  }
-  int ot = 0, ps = 0;
-  if (!gather) block_fill(P, O, Q, s->R, ac, &ot, &ps);
+  BlockPlace pl;
+  block_site_place(c, s, av, ac, kwh, &pl);
+  int gather = pl.gather, nmin = pl.nmin, nmax = pl.nmax, ot = pl.ot, ps = pl.ps;
+  TyKind e = pl.e;
+  char enil = pl.enil;
   for (int i = 0; i < np; i++) {
     TyKind t = TY_UNKNOWN;
     int may = 1, sure = 1;   /* may receive a value; sure to */
@@ -14891,6 +14912,16 @@ void block_site_types(Compiler *c, const BlockSig *s, const int *av, int ac,
     if (!sure) f |= BS_ABSENT;
     absent[i] |= f;
   }
+}
+
+/* block_site_types as a site visitor (block_own_sites, block_reach): one
+   site's values folded into what the parameters of s receive. */
+typedef struct { const BlockSig *s; TyKind *pos; char *absent; } BsTypeCtx;
+static int bs_type_site(Compiler *c, int site, const int *argv, int argc, void *ctx) {
+  (void)site;
+  BsTypeCtx *x = ctx;
+  block_site_types(c, x->s, argv, argc, x->pos, x->absent, x->pos + x->s->P + x->s->O + x->s->Q);
+  return 0;
 }
 
 int a_proc_params_node(Compiler *c, int create); /* forward decl */
@@ -14934,31 +14965,31 @@ static int block_kept_by_builtin(const char *name) {
 /* Where a block handed to scope `si` is bound besides si's own sites: the
    calls si hands its &block on to, with `&blk` or with `super`, bind it
    too, through every site of the callee (`def m(&b) = (inner(&b); yield
-   1)`), which this folds into pos/absent/kws as block_site_types does. Returns 1 when the
-   block goes where no site can be seen: kept as a value (bsi_kept_mark) or
-   handed to a builtin that keeps it. Its parameters then take whatever the
-   escaped calls pass, which only the box holds. `fold` is 0 for the scope
-   whose sites the caller folded already; `seen` stops a recursive forward. */
-static int block_reach(Compiler *c, int si, const BlockSig *s, TyKind *pos,
-                       char *absent, TyKind *kws, char *seen, int fold, int depth) {
+   1)`), each of which this hands to visit(c, site, argv, argc, ctx).
+   Returns 1 when the block goes where no site can be seen: kept as a value
+   (bsi_kept_mark) or handed to a builtin that keeps it. Its parameters then
+   take whatever the escaped calls pass, which only the box holds. `fold`
+   is 0 for the scope whose sites the caller visited already; `seen` stops a
+   recursive forward. */
+typedef int (*BlockSiteVisit)(Compiler *c, int site, const int *argv, int argc, void *ctx);
+static int block_reach(Compiler *c, int si, char *seen, int fold, int depth, BlockSiteVisit visit, void *ctx) {
   const NodeTable *nt = c->nt;
   if (si < 1 || si >= c->nscopes || seen[si] || depth > 16) return 0;
   seen[si] = 1;
   if (bsi_kept && si < bsi_ns && bsi_kept[si]) return 1;
-  int np = s->P + s->O + s->Q;
   if (fold) {
     const int *sites = NULL;
     int ns = block_sites(c, si, &sites);
     for (int k = 0; k < ns; k++) {
       int ya = block_site_args(c, si, sites[k], -1);
       int yc = 0; const int *yv = ya >= 0 ? nt_arr(nt, ya, "arguments", &yc) : NULL;
-      block_site_types(c, s, yv, yc, pos, absent, pos + np);
+      visit(c, sites[k], yv, yc, ctx);
     }
   }
   if (!bsi_fstart || si >= bsi_ns) return 0;
   if (bsi_super && bsi_super[si] && c->scopes[si].class_id >= 0) {
     int y = forwarding_yield_target(c, cplan_super_target(c, -1, &c->scopes[si], NULL), 0);
-    if (y >= 0 && block_reach(c, y, s, pos, absent, kws, seen, 1, depth + 1)) return 1;
+    if (y >= 0 && block_reach(c, y, seen, 1, depth + 1, visit, ctx)) return 1;
   }
   for (int k = 0; k < bsi_flen[si]; k++) {
     int f = bsi_fnode[bsi_fstart[si] + k];
@@ -14982,7 +15013,7 @@ static int block_reach(Compiler *c, int si, const BlockSig *s, TyKind *pos,
     }
     if (t >= 0) {
       int y = forwarding_yield_target(c, t, 0);
-      if (y >= 0 && block_reach(c, y, s, pos, absent, kws, seen, 1, depth + 1)) return 1;
+      if (y >= 0 && block_reach(c, y, seen, 1, depth + 1, visit, ctx)) return 1;
       continue;
     }
     int found = 0;
@@ -14995,7 +15026,7 @@ static int block_reach(Compiler *c, int si, const BlockSig *s, TyKind *pos,
       int y = forwarding_yield_target(c, u, 0);
       if (y < 0) continue;
       found = 1;
-      if (block_reach(c, y, s, pos, absent, kws, seen, 1, depth + 1)) return 1;
+      if (block_reach(c, y, seen, 1, depth + 1, visit, ctx)) return 1;
     }
     if (!found && block_kept_by_builtin(fn)) return 1;
   }
@@ -18378,20 +18409,42 @@ static int block_leaves_unify(Compiler *c, int block, Scope *s, TyKind t) {
    call's initially resolved method is only one arm. Fold their sites and
    forwards through the same binding walk, including a version entry's arms.
    An open target set can call the block with anything, as a kept block can. */
-static int block_dispatch_bindings(Compiler *c, int id, int mi, int ym, const BlockSig *s,
-                                   TyKind *pos, char *absent, char *seen) {
+static int block_dispatch_bindings(Compiler *c, int id, int mi, int ym, char *seen,
+                                   BlockSiteVisit visit, void *ctx) {
   int targets[CPT_MAX], n = cplan_entries(c, id, targets, CPT_MAX);
   if (n == CPT_UNKNOWN) return 1;
-  int np = s->P + s->O + s->Q, kept = 0;
+  int kept = 0;
   for (int i = 0; i < n; i++) {
     int t = targets[i];
     if (t == mi || t == ym) continue;   /* already bound by block_bind_plan */
     int arms[VER_MAX_ARMS + 1];
     int na = c->scopes[t].entry ? ver_entry_targets(c, t, arms, NULL) : (arms[0] = t, 1);
     for (int j = 0; j < na; j++)
-      kept |= block_reach(c, arms[j], s, pos, absent, pos + np, seen, 1, 0);
+      kept |= block_reach(c, arms[j], seen, 1, 0, visit, ctx);
   }
   return kept;
+}
+
+/* The sites of the block call `id` hands method mi, whose sites are ym's
+   (its yields when `yields`, else its &block's calls): visit(c, site,
+   argv, argc, ctx) with what each binds it. A yielding method with no site
+   in its own scope binds no values: every parameter nil or its default
+   (site -1, no argument). A version entry's block is bound where the
+   methods its arms call bind it. */
+static void block_own_sites(Compiler *c, int id, int mi, int ym, int yields, BlockSiteVisit visit, void *ctx) {
+  const NodeTable *nt = c->nt;
+  const int *sites = NULL;
+  int ys[VER_MAX_ARMS + 1], ny = c->scopes[ym].entry ? ver_entry_targets(c, ym, ys, NULL) : (ys[0] = ym, 1);
+  for (int j = 0; j < ny; j++) {
+    int y = ys[j];
+    int ns = block_sites(c, y, &sites);
+    for (int k = 0; k < ns || (yields && k == 0); k++) {
+      int ya = k < ns ? block_site_args(c, y, sites[k], mi == y ? id : -1) : -1;
+      int yc = 0;
+      const int *yv = ya >= 0 ? nt_arr(nt, ya, "arguments", &yc) : NULL;
+      visit(c, k < ns ? sites[k] : -1, yv, yc, ctx);
+    }
+  }
 }
 
 /* What binds `block`, handed by call `id` to method `mi` whose sites are
@@ -18402,35 +18455,22 @@ static int block_dispatch_bindings(Compiler *c, int id, int mi, int ym, const Bl
 static int block_bind_plan(Compiler *c, int id, int block, int mi, int ym, int yields, BlockSig *s,
                            TyKind **pos, char **absent, TyKind **posf, char **absentf) {
   const NodeTable *nt = c->nt;
-  const int *sites = NULL;
-  int ns = block_sites(c, ym, &sites);
   block_sig(c, nt_ref(nt, block, "parameters"), 0, s);
   int np = s->P + s->O + s->Q;
   *pos = calloc((size_t)(np + s->nk + 1), sizeof(TyKind));
   *absent = calloc((size_t)np + 1, 1);
   if (!*pos || !*absent) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  /* a yielding method with no site in its own scope binds no values:
-     every parameter nil or its default. A version entry's block is bound
-     where the methods its arms call bind it. */
-  int ys[VER_MAX_ARMS + 1], ny = c->scopes[ym].entry ? ver_entry_targets(c, ym, ys, NULL) : (ys[0] = ym, 1);
-  for (int j = 0; j < ny; j++) {
-    int y = ys[j];
-    ns = y != ym ? block_sites(c, y, &sites) : ns;
-    for (int k = 0; k < ns || (yields && k == 0); k++) {
-      int ya = k < ns ? block_site_args(c, y, sites[k], mi == y ? id : -1) : -1;
-      int yc = 0;
-      const int *yv = ya >= 0 ? nt_arr(nt, ya, "arguments", &yc) : NULL;
-      block_site_types(c, s, yv, yc, *pos, *absent, *pos + np);
-    }
-  }
+  BsTypeCtx tx = { s, *pos, *absent };
+  block_own_sites(c, id, mi, ym, yields, bs_type_site, &tx);
   /* the method may also hand the block on, or keep it: those bind it
      too, and a kept one can be called with anything (block_reach) */
   char *seen = calloc((size_t)c->nscopes + 1, 1);
   *posf = calloc((size_t)(np + s->nk + 1), sizeof(TyKind));
   *absentf = calloc((size_t)np + 1, 1);
   if (!seen || !*posf || !*absentf) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  int kept = block_reach(c, ym, s, *posf, *absentf, *posf + np, seen, 0, 0);
-  kept |= block_dispatch_bindings(c, id, mi, ym, s, *posf, *absentf, seen);
+  BsTypeCtx fx = { s, *posf, *absentf };
+  int kept = block_reach(c, ym, seen, 0, 0, bs_type_site, &fx);
+  kept |= block_dispatch_bindings(c, id, mi, ym, seen, bs_type_site, &fx);
   free(seen);
   return kept;
 }

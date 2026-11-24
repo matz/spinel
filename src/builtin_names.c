@@ -2308,6 +2308,10 @@ int is_struct_core_name(const char *n, int kind) {
   if (sp_streq(n, "with")) return kind == 2;
   return builtin_name_in(n, struct_core_names) || (kind == 1 && builtin_name_in(n, struct_names));
 }
+/* The calls that may set an ivar by a name they are handed: the send
+   family, which can call a writer, and instance_variable_set */
+const char *const dyn_ivar_set_names[] = { "send", "__send__", "public_send", "instance_variable_set", NULL };
+int is_dyn_ivar_set_name(const char *n) { return n && builtin_name_in(n, dyn_ivar_set_names); }
 /* A question whether a receiver has a method: of one by name (1), or a
    list of its methods: one that answers the whole program (2), or one a
    receiver's own chain decides (3) */

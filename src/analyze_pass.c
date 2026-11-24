@@ -2207,38 +2207,62 @@ static TyRef named_array_slot(Compiler *c, int recv) {
    resets and re-derives each round; and for an ivar its class and index. */
 typedef struct { TyRef slot; unsigned char local, reader; int cid, iv; } AliasSide;
 
+/* May the receiver of `call` be an object of class cls, or of one sharing
+   its slot? A boxed or unknown one may, and so may self where its class is
+   not one. */
+static int attr_recv_may_be(Compiler *c, int call, int cls) {
+  int r = nt_ref(c->nt, call, "receiver");
+  Scope *ks = comp_scope_of(c, call);
+  TyKind rt = r >= 0 ? infer_type(c, r) : TY_UNKNOWN;
+  int rc = r < 0 ? (ks ? ks->class_id : -1) : ty_is_object(rt) ? ty_object_class(rt) : -2;
+  if (rc == -2) return rt == TY_POLY || rt == TY_UNKNOWN;
+  return rc < 0 || rc == cls || is_descendant(c, rc, cls) || is_descendant(c, cls, rc);
+}
+/* May the dynamic call `call` (a send or instance_variable_set) set ivar
+   ivn through the writer `setter`? Its receiver may be of the class, and
+   its first argument names the ivar, the writer or another dynamic call,
+   or is not a literal. */
+static int attr_dyn_call_sets(Compiler *c, int call, int cls, const char *ivn, const char *setter) {
+  if (!attr_recv_may_be(c, call, cls)) return 0;
+  int a = nt_ref(c->nt, call, "arguments"), an = 0;
+  const int *av = a >= 0 ? nt_arr(c->nt, a, "arguments", &an) : NULL;
+  const char *lit = an > 0 ? an_literal_name(c->nt, av[0]) : NULL;
+  if (!lit) return 1;
+  if (is_ivar_set_name(nt_str(c->nt, call, "name"))) return sp_streq(lit, ivn);
+  return is_dyn_ivar_set_name(lit) || sp_streq(lit, setter);
+}
 /* The calls of the writer of attribute ivar `ivn` of class `cls` (`b.items
    = v`, a Struct member's setter) whose receiver may be an object of the
-   class or of one sharing its slot (a boxed or unknown one may), each
-   handed to fn until one answers nonzero: that answer; -1 where a send
-   or instance_variable_set may set it too; 0 after the last. 0 when the
-   class has no writer. */
+   class (attr_recv_may_be), each handed to fn until one answers nonzero:
+   that answer; -1 where a send or instance_variable_set may set it too
+   (attr_dyn_call_sets); 0 after the last. 0 when the class has no writer. */
 typedef int (*AttrWriterCallFn)(Compiler *c, int call, void *ctx);
 static int attr_writer_calls(Compiler *c, int cls, const char *ivn, AttrWriterCallFn fn, void *ctx) {
-  static const char *const dyn[] = { "send", "public_send", "__send__", "instance_variable_set", NULL };
   if (!call_answers(c, -1, cls, ivn + 1, CT_WRITER, NULL)) return 0;
   char setter[300];
   snprintf(setter, sizeof setter, "%s=", ivn + 1);
   for (int k = an_calls_named_first(c, setter); k >= 0; k = an_calls_named_next(k)) {
-    int r = nt_ref(c->nt, k, "receiver");
-    Scope *ks = comp_scope_of(c, k);
-    TyKind rt = r >= 0 ? infer_type(c, r) : TY_UNKNOWN;
-    int rc = r < 0 ? (ks ? ks->class_id : -1) : ty_is_object(rt) ? ty_object_class(rt) : -2;
-    if (rc == -2 && rt != TY_POLY && rt != TY_UNKNOWN) continue;
-    if (rc >= 0 && rc != cls && !is_descendant(c, rc, cls) && !is_descendant(c, cls, rc)) continue;
+    if (!attr_recv_may_be(c, k, cls)) continue;
     int got = fn(c, k, ctx);
     if (got) return got;
   }
-  for (int k = 0; dyn[k]; k++) if (an_calls_named_first(c, dyn[k]) >= 0) return -1;
+  for (int d = 0; dyn_ivar_set_names[d]; d++)
+    for (int k = an_calls_named_first(c, dyn_ivar_set_names[d]); k >= 0; k = an_calls_named_next(k))
+      if (attr_dyn_call_sets(c, k, cls, ivn, setter)) return -1;
   return 0;
 }
-/* Is an `o.name ||=`, `&&=` or `op=` left as written (the desugar lowers
-   one whose receiver it can type into the reader and writer calls)? */
-static int attr_op_write_left(Compiler *c, const char *name) {
+/* The same for the `o.name ||=`, `&&=` and `op=` writes left as written
+   (the desugar lowers one whose receiver it can type into the reader and
+   writer calls), each a call of the writer. */
+static int attr_op_writes(Compiler *c, int cls, const char *name, AttrWriterCallFn fn, void *ctx) {
   static const NodeKind opw[] = { NK_CallOrWriteNode, NK_CallAndWriteNode, NK_CallOperatorWriteNode };
   for (int q = 0; q < 3; q++)
-    for (int w = comp_kind_first(c, opw[q]); w >= 0; w = comp_kind_next(c, w))
-      if (nt_kind(c->nt, w) == opw[q] && nt_str(c->nt, w, "name") && sp_streq(nt_str(c->nt, w, "name"), name)) return 1;
+    for (int w = comp_kind_first(c, opw[q]); w >= 0; w = comp_kind_next(c, w)) {
+      const char *wn = nt_kind(c->nt, w) == opw[q] ? nt_str(c->nt, w, "name") : NULL;
+      if (!wn || !sp_streq(wn, name) || !attr_recv_may_be(c, w, cls)) continue;
+      int got = fn(c, w, ctx);
+      if (got) return got;
+    }
   return 0;
 }
 static int attr_writer_call_any(Compiler *c, int call, void *ctx) { (void)c; (void)call; (void)ctx; return 1; }
@@ -8558,16 +8582,25 @@ static int literal_rows_read(Compiler *c, int v, int apply) {
    walked are on `stack`, and a call back into one of them answers what the
    method does. */
 static int array_src_walk(Compiler *c, int v, int pinned, int apply, int *stack, int depth);
-/* The value one writer call hands an attribute's ivar (attr_writer_calls),
-   walked as a write's value is, and counted (n): nonzero stops the calls
-   where it is no one plain argument the walk can follow. */
+/* The value one writer call hands an attribute's ivar (attr_writer_calls,
+   attr_op_writes), walked as a write's value is, and counted (n): nonzero
+   stops the calls where it is no one plain argument the walk can follow.
+   An `||=` or `&&=` hands its value; an `op=` the Array the operator
+   builds out of the ivar's own, which is new, as a write's `@v + [x]` is. */
 typedef struct { int *stack, depth, apply, ch, n; } AttrArgWalk;
 static int attr_writer_arg_walk(Compiler *c, int call, void *ctx) {
   AttrArgWalk *w = ctx;
-  int a = nt_ref(c->nt, call, "arguments"), an = 0;
-  const int *av = a >= 0 ? nt_arr(c->nt, a, "arguments", &an) : NULL;
-  if (an != 1 || nt_kind(c->nt, av[0]) == NK_SplatNode) return 1;
-  int got = array_src_walk(c, av[0], 1, w->apply, w->stack, w->depth + 1);
+  NodeKind k = nt_kind(c->nt, call);
+  if (k == NK_CallOperatorWriteNode) { w->n++; return 0; }
+  int arg = -1;
+  if (k == NK_CallOrWriteNode || k == NK_CallAndWriteNode) arg = nt_ref(c->nt, call, "value");
+  else {
+    int a = nt_ref(c->nt, call, "arguments"), an = 0;
+    const int *av = a >= 0 ? nt_arr(c->nt, a, "arguments", &an) : NULL;
+    if (an != 1 || nt_kind(c->nt, av[0]) == NK_SplatNode) return 1;
+    arg = av[0];
+  }
+  int got = array_src_walk(c, arg, 1, w->apply, w->stack, w->depth + 1);
   if (!w->apply && !got) return 1;
   w->ch |= got;
   w->n++;
@@ -8675,12 +8708,14 @@ static int array_src_walk(Compiler *c, int v, int pinned, int apply, int *stack,
     int fresh = member || ivi < 0 ? 1 : ivar_writes_fresh(c, icls, ivn, 0, NULL);
     if (ivi < 0 || class_ivar_pinned(ci, ivn) || !c->ivar_widen_src || v >= c->node_cap || fresh < 0) return 0;
     AttrArgWalk aw = { stack, depth, 0, 0, 0 };
+    int writer = call_answers(c, -1, icls, ivn + 1, CT_WRITER, NULL);
     if (attr_writer_calls(c, icls, ivn, attr_writer_arg_walk, &aw) ||
-        (call_answers(c, -1, icls, ivn + 1, CT_WRITER, NULL) && attr_op_write_left(c, ivn + 1)) ||
+        (writer && attr_op_writes(c, icls, ivn + 1, attr_writer_arg_walk, &aw)) ||
         (!fresh && !aw.n)) return 0;
     if (!apply) return 1;
     aw.apply = 1;
     attr_writer_calls(c, icls, ivn, attr_writer_arg_walk, &aw);
+    if (writer) attr_op_writes(c, icls, ivn + 1, attr_writer_arg_walk, &aw);
     int ch = aw.ch;
     if (member) {
       AliasSide sd = { &ci->ivar_types[ivi], 0, 1, icls, ivi };

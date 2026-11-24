@@ -72,3 +72,9 @@ def kv(o) = o.v
 k = K9.new; k.v = [+"s"]; y1(k.v) { |x| x << 1 } if ARGV.size > 5; p k.v
 k = K9.new; k.v = [+"s"]; y1(k.v) { |x| x << 18 }; p k.v
 k = K9.new; k.v = [+"s"]; m(kv(k)); p k.v
+
+# beside an instance_variable_set on another object, the attribute's own
+# op-writes, and another class's attribute of the same name
+class L9; attr_accessor :v; end
+k = K9.new; k.v = [+"s"]; [0].instance_variable_set(:@v, 1); k.v += [+"t"]; y1(k.v) { |x| x << 19 }; p k.v
+k = K9.new; k.v = [+"s"]; k.v ||= [+"t"]; l = L9.new; l.v ||= [1]; y1(k.v) { |x| x << 20 } if ARGV.size > 5; p [k.v, l.v]

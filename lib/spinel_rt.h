@@ -24605,10 +24605,35 @@ static void sp_fiber_storage_own(sp_Fiber *f) {
   if (f != sp_fiber_current)
     sp_raise_cls("ArgumentError", "Fiber storage can only be accessed from the Fiber it belongs to");
 }
+/* Preserve the typed callback's receiver layout as well as its defaults. */
+static sp_RbVal sp_fiber_storage_copy_hash(sp_RbVal v) {
+  SP_GC_ROOT_RBVAL(v);
+  if (v.cls_id == SP_BUILTIN_SYM_POLY_HASH) {
+    sp_SymPolyHash *src = v.v.p;
+    sp_SymPolyHash *dst = sp_SymPolyHash_new();
+    SP_GC_ROOT(dst);
+    for (sp_int i = 0; i < src->len; i++)
+      sp_SymPolyHash_set(dst, src->order[i], sp_SymPolyHash_get(src, src->order[i]));
+    sp_gc_wb(dst);
+    dst->default_v = src->default_v;
+    dst->dproc = src->dproc;
+    dst->dproc_self = src->dproc_self;
+    dst->ident = src->ident;
+    return sp_box_obj(dst, SP_BUILTIN_SYM_POLY_HASH);
+  }
+  if (v.cls_id == SP_BUILTIN_POLY_POLY_HASH) return sp_poly_dup(v, 0);
+  /* An empty String/Integer-keyed Hash must accept future Symbol writes. */
+  return sp_box_obj(sp_poly_hash_merge(v, sp_box_nil()), SP_BUILTIN_POLY_POLY_HASH);
+}
+static const sp_FiberStorageHashOps sp_fiber_storage_hash_ops = {
+  sp_fiber_storage_copy_hash, sp_poly_get_sym, sp_poly_set_sym, sp_poly_delete_key
+};
 /* Fiber#storage: a copy of the store as a Hash, or nil when there is none */
 static sp_RbVal sp_Fiber_storage_hash(sp_Fiber *f) {
   sp_fiber_storage_own(f);
   if (!f->storage) return sp_box_nil();
+  sp_RbVal copy = sp_Fiber_storage_hash_copy(f);
+  if (copy.tag != SP_TAG_NIL) return copy;
   sp_PolyPolyHash *h = sp_PolyPolyHash_new();
   SP_GC_ROOT(h);
   for (sp_int i = 0; i < sp_Fiber_storage_len(f); i++)
@@ -24631,6 +24656,13 @@ static void sp_Fiber_storage_replace(sp_Fiber *f, sp_RbVal v) {
     sp_RbVal k = sp_PolyArray_get(keys, i);
     if (k.tag != SP_TAG_SYM)
       sp_raise_cls("TypeError", sp_sprintf("wrong argument type %s (expected Symbol)", sp_poly_class_name(k)));
+  }
+  int has_proc;
+  sp_RbVal def = sp_marv_hash_default(v, &has_proc);
+  if (has_proc || def.tag != SP_TAG_NIL) {
+    sp_RbVal copy = sp_fiber_storage_copy_hash(v);
+    sp_Fiber_storage_from_hash(f, copy, &sp_fiber_storage_hash_ops);
+    return;
   }
   sp_Fiber_storage_empty(f);
   for (sp_int i = 0; i < keys->len; i++)

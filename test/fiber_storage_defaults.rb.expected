@@ -1,0 +1,32 @@
+[1, :fallback, :fallback]
+[:fallback, false]
+:fallback
+[:fallback, :fallback]
+9
+nil
+"bb"
+false
+{a: nil, b: "bb"}
+false
+"bb"
+"childchild"
+false
+"copycopy"
+false
+{a: nil}
+"heldheldheld"
+"heldheldheld"
+7
+"heldheldheld"
+[:assigned]
+[:inherited]
+[:assigned]
+nil
+8
+8
+16
+16
+24
+24
+false
+nil

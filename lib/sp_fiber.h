@@ -128,6 +128,17 @@ sp_sym sp_Fiber_storage_key(sp_Fiber *f, sp_int i);
 sp_RbVal sp_Fiber_storage_val(sp_Fiber *f, sp_int i);
 void sp_Fiber_storage_clear(sp_Fiber *f);
 void sp_Fiber_storage_empty(sp_Fiber *f);
+/* Only defaulted storage needs a Hash. Its operations live beside the Hash
+   runtime in the generated TU; ordinary stores keep their compact layout. */
+typedef struct {
+  sp_RbVal (*copy)(sp_RbVal);
+  sp_RbVal (*get)(sp_RbVal, sp_sym);
+  sp_RbVal (*put)(sp_RbVal, sp_sym, sp_RbVal);
+  sp_RbVal (*remove)(sp_RbVal, sp_RbVal);
+} sp_FiberStorageHashOps;
+void sp_Fiber_storage_from_hash(sp_Fiber *f, sp_RbVal hash, const sp_FiberStorageHashOps *ops);
+sp_RbVal sp_Fiber_storage_hash_copy(sp_Fiber *f);
+
 sp_RbVal sp_Fiber_attr_get(sp_Fiber *f, sp_sym k);
 void sp_Fiber_attr_set(sp_Fiber *f, sp_sym k, sp_RbVal v);
 /* Reached from sp_re_mark_globals in the generated TU during a GC pass. */

@@ -774,8 +774,7 @@ static int prog_header_scope_autoloaded(Compiler *c, int id) {
      - an autoload: its file loads at the constant's first reference
        (part 4);
      - in a required file, an END block, registered when its statement
-       runs; `class Class`, which desugar_class_reopen reads at the entry's
-       top level only; and a `return` in a block at its top level, which
+       runs; and a `return` in a block at its top level, which
        ends the file's load from wherever the block runs. */
 void prog_refuse_loads(Compiler *c) {
   const NodeTable *nt = c->nt;
@@ -863,14 +862,6 @@ void prog_refuse_loads(Compiler *c) {
       if (r >= 0 && r != nt->root_id)
         unsupported_feature(c, id, "--load-model=graph: a `return` in a block at a required file's top level, for now");
     }
-  }
-  for (int i = 1; i < nt_nroots(nt); i++) {
-    int st = prog_root_stmts(c, i), n = 0;
-    const int *v = st >= 0 ? nt_arr(nt, st, "body", &n) : NULL;
-    for (int k = 0; k < n; k++)
-      if ((nt_kind(nt, v[k]) == NK_ClassNode || nt_kind(nt, v[k]) == NK_ModuleNode) &&
-          is_class_const(nt, nt_ref(nt, v[k], "constant_path")))
-        unsupported_feature(c, v[k], "--load-model=graph: `class Class` in a required file (desugar_class_reopen reads one file), for now");
   }
   free(parent);
 }

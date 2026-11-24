@@ -184,6 +184,10 @@ spinel: 1 refusal, nothing written
 == test/reject/anon_superclass_struct_ancestors.rb [promote] rc=1
 spinel: test/reject/anon_superclass_struct_ancestors.rb:6: unsupported `ancestors` that can reach a class whose superclass is an anonymous class (Class.new, Struct.new or Data.define as the superclass): spinel has no class object for the anonymous class
 spinel: 1 refusal, nothing written
+== test/reject/array_fresh_row_pushed_later.rb [default] rc=1
+spinel: test/reject/array_fresh_row_pushed_later.rb:7: an Array push given a String, which no conversion keeps in its sp_int slot
+spinel: 1 refusal, nothing written
+== test/reject/array_fresh_row_pushed_later.rb [promote] rc=0
 == test/reject/bare_const_unreachable_const_missing.rb [default] rc=1
 spinel: test/reject/bare_const_unreachable_const_missing.rb:9: uninitialized constant B::X (NameError): the program defines it only as A::X, which CRuby's lookup from B (its lexical scope, then its ancestors) does not reach; CRuby then calls const_missing (or raises NameError), which spinel does not follow here
 == test/reject/bare_const_unreachable_const_missing.rb [promote] rc=1

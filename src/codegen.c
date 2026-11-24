@@ -3333,6 +3333,21 @@ static void emit_boxed_impl(Compiler *c, int node, Buf *b) {
                     : tr.elem == TY_STRING ? "SP_BUILTIN_STR_ARRAY" : tr.elem == TY_POLY ? "SP_BUILTIN_POLY_ARRAY"
                     : t == TY_OPENSTRUCT ? "SP_BUILTIN_OPENSTRUCT" : NULL;
     if (aid) {
+      /* a new Array a push of another kind reaches (box_lift_arr) */
+      const char *lift = !c->box_lift_arr || node >= c->node_cap || !c->box_lift_arr[node] ? NULL
+                       : t == TY_INT_ARRAY ? "sp_PolyArray_from_int_array"
+                       : t == TY_FLOAT_ARRAY ? "sp_PolyArray_from_float_array"
+                       : t == TY_STR_ARRAY ? "sp_PolyArray_from_str_array" : NULL;
+      if (lift) {
+        /* (a nil `s&.bytes` stays nil) */
+        int lt = ++g_tmp;
+        buf_printf(b, "sp_box_nullable_obj((void *)(({ %s_t%d = ", t == TY_INT_ARRAY ? "sp_IntArray *"
+                   : t == TY_FLOAT_ARRAY ? "sp_FloatArray *" : "sp_StrArray *", lt);
+        emit_expr(c, node, b);
+        buf_printf(b, "; _t%d ? %s(_t%d) : NULL; })), SP_BUILTIN_POLY_ARRAY)", lt, lift, lt);
+        RC(RF_NULLABLE, RW_NONE);
+        return;
+      }
       /* (an Integer / Float array's nils are its own bitmap, which the box
          keeps: a boxed sum tells nil from any number without a mark) */
       buf_puts(b, "sp_box_nullable_obj((void *)("); emit_expr(c, node, b);

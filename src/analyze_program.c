@@ -797,14 +797,13 @@ void prog_refuse_loads(Compiler *c) {
       if (elab_autoload_read(c, mav[j]))
         unsupported_feature(c, id, "--load-model=graph loads an autoload's file at its constant's first reference only later, for now");
     if (!is_autoload_name(name)) continue;
-    /* Name membership does not establish which receiver owns autoload. */
-    if (elab_names_method(c, name)) {
+    if (elab_autoload_shadowed(c, id)) {
       if (nt_ref(nt, id, "receiver") < 0)
         unsupported_feature(c, id, "--load-model=graph loads an autoload's file at its constant's first reference only later, for now");
       continue;
     }
     /* on a value no module can be (`Object.new.autoload`, a constant
-       holding one), there is no registration (lr_autoload_values): the call
+       holding one), there is no registration (lr_autoload_filter): the call
        stays the run-time call, which raises. Any other value may be a
        module, whose registration the parse did not take. */
     int rv = nt_ref(nt, id, "receiver");

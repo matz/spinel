@@ -194,6 +194,9 @@ struct LoadRecord {
   char **refl_fixed[2]; int nrefl_fixed[2], crefl_fixed[2];   /* ...the table's readers but a respond_to? or method_defined? of an instance's (elab_method_reflected's class side under an extend) */
   unsigned char refl_any;               /* ...and one names a name the record cannot read */
   unsigned char refl_cell_list;         /* ...a method list the version cells may answer, of any name (list_cells_shape's sides: 1 a class's class-side list, 2 its own instance methods'; 4 a chain's list, list_chain_shape: it answers a body's versions by their cells and the rest by the tables) */
+  unsigned char *auto_forms; int nauto_forms;   /* method-table changes and their coverage in the provisional record */
+  int *auto_owner; int nauto_owner;               /* placed receiver class + 2, or an LR_AUTO_* state */
+  unsigned char auto_pending, auto_unknown;
   unsigned char names_any;              /* ...and one it defines by a name the record cannot read */
   /* ...the blocks of the define_methods whose name the record cannot read,
      each of which defines one method that runs that block: a call of any
@@ -1263,7 +1266,7 @@ static int lr_form_answer(Compiler *c, int node, int cls, int sg);
 typedef struct LrHist { int a, b; char *name; LrDef *v; int n, cap, next, nlink; unsigned char open, late; } LrHist;
 /* sup: the superclass the first header naming one names, as resolved
    there (has_sup); LR_UNKNOWN_CLASS when it is not a class the record knows */
-typedef struct LrClass { LrOpen *open; int nopen, copen; LrMixin *mix; int nmix, cmix, sup, sup_ref; unsigned char has_sup, unheld, vconst; } LrClass;   /* vconst: a header in a value wrote its constant (lr_nested_header) */   /* unheld: the module is mixed onto a receiver the record holds no class of (an object, `o.extend M`) */
+typedef struct LrClass { LrOpen *open; int nopen, copen; LrMixin *mix; int nmix, cmix, sup, sup_ref; unsigned char has_sup, unheld, vconst, auto_computed; } LrClass;   /* vconst: a header in a value wrote its constant (lr_nested_header) */   /* unheld: the module is mixed onto a receiver the record holds no class of (an object, `o.extend M`) */
 /* LR_NEW: a header's entity names a new class; LR_LATER_ALIAS: one an
    alias written after it reopens until N2b; LR_BUILTIN: it reopens a
    builtin, the class registration names (LrHeader.want) */
@@ -2357,6 +2360,20 @@ static void lr_name(LoadRecord *r, const char *name, const char *suffix) {
   r->names[r->nnames++] = d;
 }
 
+enum { LR_AUTO_FORM = 1, LR_AUTO_HELD = 2, LR_AUTO_COMPUTED = 4 };
+enum { LR_AUTO_BLOCKED = -1, LR_AUTO_OBJECT = -2 };
+
+static void lr_auto_form(Compiler *c, int node, const char *name) {
+  LoadRecord *r = c->lrec;
+  if (!c->nautoloads || (name && !is_autoload_name(name))) return;
+  if (!r->auto_forms) {
+    r->nauto_forms = c->nt->count;
+    r->auto_forms = calloc((size_t)r->nauto_forms, 1);
+    if (!r->auto_forms) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  }
+  r->auto_forms[node] |= LR_AUTO_FORM;
+}
+
 /* The names the program defines methods by, wherever it does (a statement
    of the load phase, a class the record does not know, a method body or a
    block run later): a def's, an alias's, an attr form's, a define_method's
@@ -2371,6 +2388,7 @@ static void lr_names_take(Compiler *c) {
   NT_FOREACH_KIND(nt, NK_DefNode, n) {
     const char *nm = nt_str(nt, n, "name");
     lr_name(r, nm, "");
+    if (c->nautoloads) lr_auto_form(c, n, nm);
     if (!nm) continue;
     LrSite *d = realloc(r->defs, sizeof *r->defs * (size_t)(r->ndefs + 1));
     if (!d) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
@@ -2378,7 +2396,14 @@ static void lr_names_take(Compiler *c) {
   }
   NT_FOREACH_KIND(nt, NK_AliasMethodNode, n) {
     int nn = nt_ref(nt, n, "new_name");
-    lr_name(r, nn >= 0 ? vis_arg_name(nt, nn) : NULL, "");
+    const char *nm = nn >= 0 ? vis_arg_name(nt, nn) : NULL;
+    lr_name(r, nm, "");
+    if (c->nautoloads) lr_auto_form(c, n, nm);
+  }
+  if (c->nautoloads) NT_FOREACH_KIND(nt, NK_UndefNode, n) {
+    int nn = 0;
+    const int *names = nt_arr(nt, n, "names", &nn);
+    for (int j = 0; j < nn; j++) lr_auto_form(c, n, vis_arg_name(nt, names[j]));
   }
   NT_FOREACH_KIND(nt, NK_CallNode, n) {
     const char *nm = nt_str(nt, n, "name");
@@ -2386,16 +2411,26 @@ static void lr_names_take(Compiler *c) {
     const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
     if (!nm || !ac) continue;
     if (is_send_family(nm) || (is_code_eval_name(nm) && nt_ref(nt, n, "block") < 0)) {
-      const char *fn = call_sent_name(nt, n, NULL);
+      int sent_args;
+      const char *fn = call_sent_name(nt, n, &sent_args);
       if (is_code_eval_name(nm) || !fn || is_method_naming_call(fn)) r->names_any = 1;
+      if (c->nautoloads && fn) {
+        if (is_code_eval_name(fn)) lr_auto_form(c, n, NULL);
+        else if (visibility_of_name(fn) || class_method_vis_of_name(fn))
+          for (int i = sent_args; i < ac; i++) lr_auto_form(c, n, vis_arg_name(nt, av[i]));
+      }
     }
     else if (is_attr_decl_reader(nm) || is_attr_decl_writer(nm))
       for (int i = 0; i < ac; i++) {
-        if (is_attr_decl_reader(nm)) lr_name(r, vis_arg_name(nt, av[i]), "");
+        if (is_attr_decl_reader(nm)) {
+          lr_name(r, vis_arg_name(nt, av[i]), "");
+          lr_auto_form(c, n, vis_arg_name(nt, av[i]));
+        }
         if (is_attr_decl_writer(nm)) lr_name(r, vis_arg_name(nt, av[i]), "=");
       }
     else if (is_define_method_name(nm) || is_define_singleton_method_name(nm) || is_alias_method_name(nm)) {
       const char *dn = vis_arg_name(nt, av[0]);
+      lr_auto_form(c, n, dn);
       /* (a define_method of a computed name with its body as a block
          literal defines a method that runs that block, of some name:
          lr_anon_defines answers what a call of it may do) */
@@ -2407,6 +2442,17 @@ static void lr_names_take(Compiler *c) {
       }
       lr_name(r, dn, "");
     }
+    else if (c->nautoloads && (is_undef_method_name(nm) || is_remove_method_name(nm) ||
+                             visibility_of_name(nm) || class_method_vis_of_name(nm)))
+      for (int i = 0; i < ac; i++) {
+        NodeKind k = nt_kind(nt, av[i]);
+        if (k == NK_ArrayNode && (visibility_of_name(nm) || class_method_vis_of_name(nm))) {
+          int ne = 0;
+          const int *ev = nt_arr(nt, av[i], "elements", &ne);
+          for (int j = 0; j < ne; j++) lr_auto_form(c, n, vis_arg_name(nt, ev[j]));
+        }
+        else if (k != NK_DefNode) lr_auto_form(c, n, vis_arg_name(nt, av[i]));
+      }
   }
   if (r->nnames > 1) qsort(r->names, (size_t)r->nnames, sizeof *r->names, lr_name_cmp);
   if (r->ndefs > 1) qsort(r->defs, (size_t)r->ndefs, sizeof *r->defs, lr_name_cmp);   /* the name leads an LrSite */
@@ -5012,6 +5058,17 @@ static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int
       else lr_method(x, cls, sg, an_, node, is_undef_method_name(nm) ? LR_UNDEF : LR_REMOVE, *vs, may, NULL);
     }
   }
+  /* A placed builtin definer can only change its recorded side. */
+  if (x->r->auto_pending && dm && ac && !vis_arg_name(nt, av[0]) &&
+      node < x->r->nauto_forms && !x->unplaced && x->cur >= 0 &&
+      !x->r->st[x->cur].kept && !lr_defines(x->r, nm)) {
+    LrClass *k = lr_class(x->r, cls);
+    if (k) {
+      k->auto_computed |= 1u << (sg || is_define_singleton_method_name(nm));
+      if (st == BVIS_MODULE_FUNCTION) k->auto_computed |= 2;
+      x->r->auto_forms[node] |= LR_AUTO_COMPUTED;
+    }
+  }
   /* (main's own define_method defines a public method whatever the section's visibility, as in CRuby) */
   if (dm && ac > 0)
     lr_method(x, cls, sg || is_define_singleton_method_name(nm), vis_arg_name(nt, av[0]), node, LR_DEFINE_METHOD,
@@ -5156,17 +5213,19 @@ static void lr_alias_undef(ElabRec *x, int node, int cls, int sg, int bvis, int 
   for (int i = 0; i < n; i++) lr_method(x, cls, sg, vis_arg_name(nt, v[i]), node, LR_UNDEF, bvis, may, NULL);
 }
 
-/* A registration on a constant holding a value no module can be (`INST =
-   Object.new; INST.autoload(...)`) is none: the call stays the run-time
-   call, which raises. Asked once the record is made. */
-static void lr_autoload_values(Compiler *c) {
+/* Drop registrations of calls that stay ordinary calls. A constant
+   holding a non-module value (INST = Object.new) can only get here
+   without a registration slot. */
+static void lr_autoload_filter(Compiler *c) {
   const NodeTable *nt = c->nt;
   int m = 0;
   for (int k = 0; k < c->nautoloads; k++) {
     const AutoloadRegistration *a = &c->autoloads[k];
     int recv = nt_ref(nt, a->node, "receiver");
     c->auto_at[a->node] = 0;
-    if (a->slot || recv < 0 || nt_kind(nt, recv) == NK_SelfNode || !elab_value_not_module(c, recv)) c->autoloads[m++] = *a;
+    if (elab_autoload_shadowed(c, a->node)) continue;
+    if (a->slot || recv < 0 || nt_kind(nt, recv) == NK_SelfNode || !elab_value_not_module(c, recv))
+      c->autoloads[m++] = *a;
   }
   c->nautoloads = m;
   for (int i = m - 1; i >= 0; i--) c->auto_at[c->autoloads[i].node] = i + 1;
@@ -5174,6 +5233,23 @@ static void lr_autoload_values(Compiler *c) {
 
 static void lr_autoload(ElabRec *x, int node, int fc, int fs, int may) {
   const NodeTable *nt = x->c->nt;
+  if (x->r->auto_pending) {
+    const char *name = nt_kind(nt, node) == NK_CallNode ? nt_str(nt, node, "name") : NULL;
+    if (node >= x->r->nauto_owner || !name || !is_autoload_name(name)) return;
+    int sg, recv = nt_ref(nt, node, "receiver"), cls = lr_receiver(x, recv, fc, fs, &sg, 0);
+    int owner = LR_AUTO_BLOCKED;
+    if (!sg && !x->r->st[x->cur].kept) {
+      if (cls >= LR_MAIN) owner = cls + 2;
+      else if (recv >= 0) {
+        int core;
+        lr_class_ref_at(x->c, recv, &core);
+        if (core == CORE_OBJECT) owner = LR_AUTO_OBJECT;
+      }
+    }
+    int *held = &x->r->auto_owner[node];
+    *held = !*held || *held == owner ? owner : LR_AUTO_BLOCKED;
+    return;
+  }
   int n; AutoloadRegistration *a = comp_autoloads(x->c, node, &n);
   if (!n) return;
   int recv = nt_ref(nt, node, "receiver");
@@ -5787,6 +5863,14 @@ static void lr_record_again(ElabRec *x) {
   LoadRecord *r = x->r;
   r->recorded = 0;
   lr_record_drop(r);
+  if (r->auto_pending) {
+    for (int i = 0; i < r->nauto_forms; i++) r->auto_forms[i] &= LR_AUTO_FORM;
+    memset(r->auto_owner, 0, (size_t)r->nauto_owner * sizeof *r->auto_owner);
+  }
+  for (int i = 0; i < x->c->nautoloads; i++) {
+    x->c->autoloads[i].slot = 0;
+    x->c->autoloads[i].first = 0;
+  }
   for (int f = 0; f < nt_nroots(x->c->nt); f++) x->vmain[f] = BVIS_PRIVATE;
   lr_record_upto(r, r->nst);
   lr_settle_regions(x->c);
@@ -5906,6 +5990,8 @@ static void lr_later_settle(Compiler *c) {
 
 static void lr_mixin_dups_settle(Compiler *c);
 
+static void lr_autoload_settle(Compiler *c);
+
 /* The scope walk of each file's top level, in the order the load phase
    runs them (elab_points_walk), which records what each statement defines
    once the walk has passed it, in that order. Besides the record, a
@@ -5925,10 +6011,16 @@ void elab_program(Compiler *c, struct HostStep *h) {
   /* each file's top level starts private: its methods are Object's private ones */
   for (int f = 0; f < nroots; f++) x.vmain[f] = BVIS_PRIVATE;
   lr_names_take(c);
-  /* Name membership is program-wide, not receiver ownership. Any possible
-     definition keeps base's policy: refuse receiverless calls and handle
-     explicit receivers as ordinary calls, with no registration for either. */
-  if (lr_named(c, "autoload")) c->nautoloads = 0;
+  int nautoloads = c->nautoloads;
+  /* Until the receiver chains are known, a candidate registration must
+     not supply a constant or make its file reachable during the walk. */
+  if (nautoloads && (r->auto_forms || r->names_any)) {
+    r->nauto_owner = c->nt->count;
+    r->auto_owner = calloc((size_t)r->nauto_owner, sizeof *r->auto_owner);
+    if (!r->auto_owner) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    r->auto_pending = 1;
+    c->nautoloads = 0;
+  }
   lr_reopens_take(c);
   lr_refl_take(c);
   r->rec = &x;
@@ -5946,6 +6038,15 @@ void elab_program(Compiler *c, struct HostStep *h) {
   lr_early_settle(c);
   lr_words_refine(c);
   while (lr_nested_hold(c)) lr_record_again(&x);   /* (without the bodies in a value it must keep unplaced) */
+  if (r->auto_pending) {
+    c->nautoloads = nautoloads;
+    lr_autoload_settle(c);
+    r->unseen = 0;
+    if (c->nautoloads) {
+      r->runs_of = -1;   /* the retained files can now be entered by autoload */
+      lr_record_again(&x);
+    }
+  }
   if (r->check) {   /* the same record made after the walk, as a check */
     lr_check_held(c);
     char *walked = lr_dump_text(c);
@@ -5953,7 +6054,7 @@ void elab_program(Compiler *c, struct HostStep *h) {
     lr_check_walked(c, walked);
     free(walked);
   }
-  lr_autoload_values(c);
+  lr_autoload_filter(c);
   r->rec = NULL;
   free(x.fc); free(x.fs); free(x.vs); free(x.vmain);
   lr_mixin_dups_settle(c);
@@ -8027,6 +8128,82 @@ static int lr_reopen_answers(Compiler *c, const char *cls, const char *name) {
   }
   return 0;
 }
+/* Any method-table change on the chain counts, including an undef of
+   the builtin. The call need not have a unique load point: an earlier or
+   later version, or one brought by a conditional mixin, can matter. */
+static int lr_auto_own(void *ud, int cls, int sg) {
+  Compiler *c = ud;
+  LoadRecord *r = c->lrec;
+  const LrClass *k = lr_class(r, cls);
+  if (lr_hist(r, cls, sg, "autoload", 0) || (k && (k->auto_computed & (1u << sg)))) return LR_W_STOP;
+  const LrHist *op = lr_hist(r, LR_KEY_OPAQUE, lr_const_owner(cls), "", 0);
+  for (int j = 0; op && j < op->n; j++) {
+    int node = op->v[j].node;
+    if (op->v[j].vis == LR_OPAQUE_DEFINES &&
+        (node < 0 || node >= r->nauto_forms || !(r->auto_forms[node] & LR_AUTO_COMPUTED))) return LR_W_STOP;
+  }
+  return 0;
+}
+
+static int lr_auto_mixin(void *ud, int cls, int ref) { (void)ud; (void)cls; (void)ref; return LR_W_STOP; }
+
+static int lr_auto_core(Compiler *c, const LrWalker *w, int core, int sg) {
+  int cls = comp_core_class(c, core);
+  return cls >= 0 && lr_walk_one(c, w, c, cls, sg, 0);
+}
+
+static int lr_auto_chain(Compiler *c, int cls, int object) {
+  LrWalker w = { .own = lr_auto_own, .mixin = lr_auto_mixin, .tail_end = LR_TAIL_N };
+  if (lr_chain_open(c, cls) || lr_walk(c, &w, c, cls, 1, 0)) return 1;
+  /* An unreopened Object has no record class. Start at main, then
+     account for the missing part of the class object's chain. */
+  if (object && lr_auto_core(c, &w, CORE_MODULE, 0)) return 1;
+  if (lr_auto_core(c, &w, CORE_CLASS_REOPEN, 0)) return 1;
+  /* Class objects also reach Object and BasicObject's singletons. */
+  if (!object && (cls == LR_MAIN || comp_class_is_module(c, &c->classes[cls]))) return 0;
+  return lr_auto_core(c, &w, CORE_OBJECT, 1) || lr_auto_core(c, &w, CORE_BASIC_OBJECT, 1);
+}
+
+int elab_autoload_shadowed(Compiler *c, int id) {
+  LoadRecord *r = c->lrec;
+  if (r->auto_unknown || r->names_any) return 1;
+  if (!r->auto_owner) return lr_named(c, "autoload");
+  if (id >= r->nauto_owner) return 1;
+  int owner = r->auto_owner[id];
+  if (!owner || owner == LR_AUTO_BLOCKED) return 1;
+  if (!r->auto_pending) return 0;
+  return owner == LR_AUTO_OBJECT ? lr_auto_chain(c, LR_MAIN, 1) : lr_auto_chain(c, owner - 2, 0);
+}
+
+/* Settle the candidates against the record made without registrations.
+   A source form the record did not account for has an unknown owner.
+   Only retained registrations get histories in the subsequent record. */
+static void lr_autoload_settle(Compiler *c) {
+  LoadRecord *r = c->lrec;
+  for (int i = 0; !r->names_any && i < r->nhist; i++) {
+    const LrHist *h = &r->hist[i];
+    if (h->a < LR_MAIN || !is_autoload_name(h->name)) continue;
+    const LrClass *k = lr_class(r, h->a);
+    if (k && k->unheld && !h->b) r->auto_unknown = 1;
+    for (int j = 0; j < h->n; j++) {
+      int node = h->v[j].node;
+      if (node >= 0 && node < r->nauto_forms) r->auto_forms[node] |= LR_AUTO_HELD;
+    }
+  }
+  for (int i = 0; !r->auto_unknown && i < r->nauto_forms; i++)
+    if (r->auto_forms[i] == LR_AUTO_FORM) r->auto_unknown = 1;
+  for (int i = 0; !r->auto_unknown && !r->names_any && i < r->ncls; i++)
+    if (r->cls[i].unheld && (r->cls[i].auto_computed & 1)) r->auto_unknown = 1;
+  for (int i = 0; !r->auto_unknown && !r->names_any && i < r->nauto_owner; i++)
+    if (r->auto_owner[i] && elab_autoload_shadowed(c, i)) r->auto_owner[i] = LR_AUTO_BLOCKED;
+
+  r->auto_pending = 0;
+  lr_autoload_filter(c);
+  free(r->auto_forms);
+  r->auto_forms = NULL;
+  r->nauto_forms = 0;
+}
+
 /* lr_reopen_answers for other files: may the program's reopenings answer
    name on a value of builtin class cls ahead of the builtin's method? Read
    from the load record, so it follows a reopening of an ancestor, a mixin
@@ -14950,7 +15127,7 @@ void elab_free(Compiler *c) {
   for (int i = 0; i < r->nrefl_capt; i++) free(r->refl_capt[i]);
   for (int i = 0; i < r->nrefl_maker; i++) free(r->refl_maker[i]);
   free(r->refl_cell); free(r->refl_capt); free(r->refl_maker);
-  free(r->names); free(r->defs); free(r->reopens); free(r->refl); free(r->anon_blocks); free(r->anon_jr);
+  free(r->names); free(r->defs); free(r->reopens); free(r->refl); free(r->anon_blocks); free(r->anon_jr); free(r->auto_owner); free(r->auto_forms);
   for (int i = 0; i < r->nsrcw; i++) free(r->srcw[i].name);
   free(r->srcw);
   free(r->slot); free(r->slot_head); free(r->slotp);

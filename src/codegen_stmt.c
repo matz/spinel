@@ -12585,6 +12585,30 @@ static int hc_subtree_loops(const NodeTable *nt, int id) {
   }
   return 0;
 }
+/* Does a body the cache took run a pass whose cost grows with what it
+   holds? hc_call_ok admits a String's `length` / `size`, which counts the
+   characters of a String not known to be ASCII (sp_str_length_mi), and,
+   under promote, the operators of Integers that may be Bignums. A loop of
+   such passes keeps its polls at each pass: a run of 1024 of them could
+   hold a collection, a thread switch or a signal for seconds. */
+static int hc_subtree_slow(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  if (id < 0) return 0;
+  if (g_promote_mode) return 1;
+  if (nt_kind(nt, id) == NK_CallNode) {
+    const char *nm = nt_str(nt, id, "name");
+    int recv = nt_ref(nt, id, "receiver");
+    if (nm && is_len_alias(nm) && recv >= 0 && comp_ntype(c, recv) == TY_STRING) return 1;
+  }
+  int nr = nt_num_refs(nt, id);
+  for (int i = 0; i < nr; i++) if (hc_subtree_slow(c, nt_ref_at(nt, id, i))) return 1;
+  int na = nt_num_arrs(nt, id);
+  for (int i = 0; i < na; i++) {
+    int n = 0; const int *el = nt_arr_at(nt, id, i, &n);
+    for (int j = 0; j < n; j++) if (hc_subtree_slow(c, el[j])) return 1;
+  }
+  return 0;
+}
 /* Does a body the cache took hold an element write (`x[j] = v`)? It is the
    one node such a body admits that can grow an array (hc_call_ok), and it
    may grow any array of its kind, since two names can denote one. */
@@ -13576,9 +13600,11 @@ static void emit_while_loop(Compiler *c, int id, Buf *b, int indent, int is_unti
      or a finalizer waits one such pass at most -- what a runtime call over
      the same array makes them wait already. An inner poll costs a pass of
      the loop an atomic load and the header reload behind it. Its signal poll
-     was the enclosing loop's already (#9222). */
+     was the enclosing loop's already (#9222). A body whose pass costs what
+     a String or a number holds (hc_subtree_slow) keeps its polls: one pass
+     over the array could take seconds. */
   int quiet = polls_in_cond && (g_uses_threads || g_uses_finalizers) && g_poll_loop_nest > 0 &&
-              !hc_subtree_stores(nt, body);
+              !hc_subtree_stores(nt, body) && !hc_subtree_slow(c, body);
   char trip[64] = "";
   if (proved) {
     Buf hcc; memset(&hcc, 0, sizeof hcc);
@@ -13615,10 +13641,13 @@ static void emit_while_loop(Compiler *c, int id, Buf *b, int indent, int is_unti
        `next` or a `redo` (which may skip the step, so the run would neither
        end nor poll), a `break` (a C break would leave the run only), a loop
        in the body and a yield (a loop of the block spliced in may leave its
-       polls to this one) keep the polls at each pass. */
+       polls to this one) keep the polls at each pass, and so does a body
+       whose pass costs what a String or a number holds (hc_subtree_slow):
+       1024 of them would hold a collection or a signal for that long. */
     int chunkable = pr && !is_until && (g_uses_threads || g_uses_finalizers || sig_polls()) &&
                     !subtree_has_own_next(nt, body) && !subtree_has_own_redo(nt, body) &&
-                    !subtree_has_loop_break(c, body) && !hc_subtree_loops(nt, body) && !proc_body_has_yield(c, body);
+                    !subtree_has_loop_break(c, body) && !hc_subtree_loops(nt, body) && !proc_body_has_yield(c, body) &&
+                    !hc_subtree_slow(c, body);
     long long cstep = 0;
     Buf cv; memset(&cv, 0, sizeof cv);
     Buf cb; memset(&cb, 0, sizeof cb);

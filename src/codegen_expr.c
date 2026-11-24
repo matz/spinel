@@ -5351,6 +5351,13 @@ static void emit_ternary_ladder(Compiler *c, int id, TyKind res, int res_o, Buf 
 }
 
 /* An if or unless in value position (and the ternary) (emit_expr_node's arms, in their order) */
+/* The type a value-position conditional's result slot holds: its own, or boxed
+   where it has no C storage type (a void or nil-typed if, an untyped one whose
+   every arm diverges). */
+static TyKind cond_value_ty(Compiler *c, int id) {
+  TyKind res = repr_of(c, id).as_ty;
+  return res == TY_VOID || res == TY_NIL || res == TY_UNKNOWN ? TY_POLY : res;
+}
 static int emit_if_expr(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *ty) {
   if (!(sp_streq(ty, "IfNode") || sp_streq(ty, "UnlessNode"))) return 0;
   /* if/unless as a value: a ternary when both branches are single
@@ -5378,8 +5385,7 @@ static int emit_if_expr(Compiler *c, int id, Buf *b, const NodeTable *nt, const 
     if (known < 0 && tn == 1 && en == 1) {
       int bg = static_block_given_cond(c, pred);
       if (bg >= 0) {
-        TyKind res = repr_of(c, id).as_ty;
-        if (res == TY_VOID || res == TY_NIL) res = TY_POLY;
+        TyKind res = cond_value_ty(c, id);
         emit_ternary_arm_o(c, (is_unless ? !bg : bg) ? tb[0] : eb[0], res, cond_res_oint(c, id, res), b);
         return 1;
       }
@@ -5394,15 +5400,20 @@ static int emit_if_expr(Compiler *c, int id, Buf *b, const NodeTable *nt, const 
       int live = take_then ? then_b : else_stmts;
       int ln = 0;
       const int *lb = live >= 0 ? nt_arr(nt, live, "body", &ln) : NULL;
-      if (ln == 0) { buf_puts(b, "sp_box_nil()"); return 1; }
+      if (ln == 0) {
+        /* no arm is left: the nil, in the form the slot takes, as the
+           unfolded pair's absent arm (res_zero) */
+        TyKind nres = cond_value_ty(c, id);
+        buf_puts(b, res_zero(c, nres, cond_res_oint(c, id, nres)));
+        return 1;
+      }
       /* The live arm still has to be rendered at the WHOLE expression's
          type, the way the unfolded pair below is: the slot receiving this
          was declared from that type, and the arm's own may be narrower.
          Emitting the arm raw put a `const char *` into an sp_RbVal local
          whenever an is_a? predicate folded (#4280's tmpdir package could
          not compile at its simplest call). */
-      TyKind fres = repr_of(c, id).as_ty;
-      if (fres == TY_VOID || fres == TY_NIL) fres = TY_POLY;
+      TyKind fres = cond_value_ty(c, id);
       /* Only the WIDENING conversion, into a poly result. Forcing a narrower
          one would convert rather than carry -- and where the result type is
          narrower than the arm the analysis has already gone wrong, so the C
@@ -5438,13 +5449,12 @@ static int emit_if_expr(Compiler *c, int id, Buf *b, const NodeTable *nt, const 
     }
   }
   if (tn == 1 && en == 1) {
-    TyKind res = repr_of(c, id).as_ty;
+    TyKind res = cond_value_ty(c, id);
     /* A void/nil-typed if (e.g. an arm that is a writer call, doom's
        `self.fullscreen = value if respond_to?(...)`), or an untyped one
        whose every arm diverges, has no C storage type -- emit_ctype would
        declare `void _tN` -- so hold the result boxed; void arms degrade
-       to nil. */
-    if (res == TY_VOID || res == TY_NIL || res == TY_UNKNOWN) res = TY_POLY;
+       to nil (cond_value_ty). */
     /* Each arm is emitted with a CAPTURED prelude: an arm whose sub-expressions
        hoist statements (a rooted call argument, a constructed receiver, ...)
        cannot ride a flat C ternary -- a shared prelude would evaluate BOTH
@@ -5458,9 +5468,8 @@ static int emit_if_expr(Compiler *c, int id, Buf *b, const NodeTable *nt, const 
   /* Multi-stmt branches or no-else: emit as if/else block with a result temp.
      Preludes and the if structure go into g_pre; `b` receives only _t<N>. */
   {
-    TyKind res = repr_of(c, id).as_ty;
     /* void/nil result: no C storage type (see the ternary form above). */
-    if (res == TY_VOID || res == TY_NIL) res = TY_POLY;
+    TyKind res = cond_value_ty(c, id);
     int res_o = cond_res_oint(c, id, res);
     int tr = ++g_tmp;
     /* Declare the temp and default-initialize it (an absent arm is nil). */

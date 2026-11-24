@@ -1,0 +1,21 @@
+class PinBase
+  def score: (Integer) -> untyped
+  def self.score: (Integer) -> untyped
+end
+class PinSub < PinBase
+  def score: (Integer) -> untyped
+  def self.score: (Integer) -> untyped
+end
+class PinSibling < PinBase
+  def score: (Integer) -> untyped
+end
+class PinValues
+  def maybe: (bool) -> Integer?
+  def render: (String) -> String
+  def identity: () -> PinValues
+end
+class PinValuesSub < PinValues
+  def maybe: (bool) -> Integer?
+  def render: (String) -> String
+  def identity: () -> PinValues
+end

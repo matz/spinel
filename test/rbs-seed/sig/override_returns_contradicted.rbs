@@ -1,0 +1,6 @@
+class FalsePinBase
+  def value: () -> String
+end
+class FalsePinSub < FalsePinBase
+  def value: () -> String
+end

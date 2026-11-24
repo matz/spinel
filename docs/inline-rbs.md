@@ -201,7 +201,7 @@ overridden return can remain inferred while supported parameter types apply.
 | Overloads, `...`, generic method signatures, generic type aliases, and superclass/mixin type arguments | Warning; ignore the annotation |
 | Constants, cyclic or unmappable type aliases, and class/module declarations (generic classes, module self types) that have no analyzer pin | Warning; ignore the annotation |
 | Unattached annotations and unsupported placements | Warning with the reason; no pin |
-| Return of a method overridden by a related class | Warning; leave the return inferred and apply supported parameter types, as with `--rbs` |
+| Return of a method overridden by a related class | Apply when every definition in the class override family declares the same mapped return type and nilability; otherwise warn, leave the return inferred, and apply supported parameter types, as with `--rbs` |
 | Module methods copied through `include`, `extend`, or `prepend` | Warning; no pin reaches those per-class copies, as with `--rbs` |
 | Annotated method replaced by a later unannotated or unsupported definition | Warning naming the replacement; ignore the original annotation |
 

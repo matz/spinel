@@ -1485,6 +1485,12 @@ RBS container annotations accept builtin runtime classes such as `Array[Time]`,
 check each element's Ruby class; top-level builtin pin limitations still apply
 (see [RBS type vocabulary](rbs-extract.md#type-vocabulary)).
 
+**RBS return pins across class overrides require agreement.** Every definition
+in the family must declare the same mapped return type and nilability, through
+inline RBS or `--rbs`. Otherwise the returns remain inferred, with a warning;
+parameter pins still apply. Module copies retain their existing limitations
+(see [inline RBS diagnostics](inline-rbs.md#diagnostics-and-limitations)).
+
 **An `--rbs` Hash type gives way to a Hash whose keys are boxed.** A
 parameter, instance variable, attribute, Struct or Data member, or return
 that a signature types as a Hash keyed by one class (`Hash[Symbol, untyped]`,

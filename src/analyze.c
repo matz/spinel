@@ -8073,13 +8073,9 @@ static void seed_node_loc(const NodeTable *nt, int id, const char **file_out, in
 }
 
 /* Does `name` belong to an override family -- defined on two related
-   classes (one an ancestor of the other)? A return seed on any member
-   would pin that member's C decl repr while poly-dispatch call sites
-   keep the family (boxed) view: `sp_Base_s_instantiate` declared
-   `sp_Base *` but unboxed `.v.p` at the call (#3203). Overridden
-   methods keep their inferred return -- the same never-makes-it-worse
-   rule the seed path applies to layout conflicts. Params still seed:
-   they are per-scope and carry no cross-family repr. */
+   classes? Return declarations need family-wide agreement before they pin
+   the C result; otherwise a pinned callee and a boxed dispatch caller can
+   disagree (#3203). Module-function copies still use the conservative rule. */
 static int method_in_override_family(Compiler *c, int class_id,
                                      const char *name, int is_cmethod) {
   if (class_id < 0 || !name) return 0;
@@ -8138,7 +8134,7 @@ static int value_leaves_are_classes(Compiler *c, int id, char *names, size_t cap
    which the C compiler rejected without a word about the signature; a union
    compiles (both are boxed) but types every call on the value from the wrong
    side. Answers 1 when the seed must be dropped. */
-static int seed_ret_contradicts_class_body(Compiler *c, Scope *s, TyKind rt) {
+static int seed_ret_contradicts_class_body(Compiler *c, Scope *s, TyKind rt, int report) {
   if (!ty_is_object(rt) && rt != TY_POLY) return 0;
   if (s->body < 0) return 0;
   char names[256] = "";
@@ -8151,6 +8147,7 @@ static int seed_ret_contradicts_class_body(Compiler *c, Scope *s, TyKind rt) {
     const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &n) : NULL;
     if (!av || n != 1 || !value_leaves_are_classes(c, av[0], names, sizeof names)) return 0;
   }
+  if (!report) return ty_is_object(rt);
   const char *cls = s->class_id >= 0 && s->class_id < c->nclasses ? c->classes[s->class_id].name : NULL;
   if (g_opt_strict_rbs && ty_is_object(rt)) {
     const char *file = NULL; int ln = 0;
@@ -8245,7 +8242,7 @@ static void seed_method(Compiler *c, Scope *s, const char *ret_tok, char *ptypes
   if (!s) return;
   TyKind rt = parse_seed_type(c, ret_tok);
   int nilable_seed = g_seed_nilable;
-  if (rt != TY_UNKNOWN && seed_ret_contradicts_class_body(c, s, rt)) rt = TY_UNKNOWN;
+  if (rt != TY_UNKNOWN && seed_ret_contradicts_class_body(c, s, rt, 1)) rt = TY_UNKNOWN;
   g_seed_nilable = nilable_seed;
   if (rt != TY_UNKNOWN) {
     scope_set_ret(s, rt); s->ret_rbs_seeded = 1; s->ret_rbs_type = rt;
@@ -8329,6 +8326,103 @@ static void seed_method(Compiler *c, Scope *s, const char *ret_tok, char *ptypes
       }
     }
   }
+}
+
+/* Returns in an override family must be decided after both inline and
+   external declarations have arrived. Parameters can be applied immediately.
+   Allocate only when an RBS declaration actually names an overridden method. */
+typedef struct {
+  char *ret, *where, *head;
+  int from_rbs;
+} SeedFamilyReturn;
+static SeedFamilyReturn *g_seed_family_returns;
+
+static void seed_declared_method(Compiler *c, Scope *s, const char *ret, char *params,
+                                 const char *where, const char *head, int from_rbs) {
+  if (!s) return;
+  if (!method_in_override_family(c, s->class_id, s->name, s->is_cmethod)) {
+    seed_method(c, s, ret, params, where, head, from_rbs);
+    return;
+  }
+  seed_method(c, s, NULL, params, where, head, from_rbs);
+  if (!ret || !*ret || sp_streq(ret, "-")) return;
+  if (!g_seed_family_returns)
+    g_seed_family_returns = calloc((size_t)c->nscopes, sizeof(*g_seed_family_returns));
+  if (!g_seed_family_returns) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  SeedFamilyReturn *p = &g_seed_family_returns[s->idx];
+  if (p->ret) return;  /* duplicate declarations have already been checked */
+  p->ret = strdup(ret);
+  p->where = strdup(where ? where : "");
+  p->head = head ? strdup(head) : NULL;
+  p->from_rbs = from_rbs;
+}
+
+/* The oldest defining ancestor anchors the whole family, including siblings.
+   Walk the class chain directly: reachability has not been computed yet. */
+static int seed_family_root(Compiler *c, const Scope *s) {
+  int root = s->class_id;
+  for (int si = an_scopes_named_first(c, s->name); si >= 1; si = an_scopes_named_next(c, s->name, si)) {
+    const Scope *other = &c->scopes[si];
+    if (!!other->is_cmethod != !!s->is_cmethod || other->class_id < 0) continue;
+    for (int ci = root; ci >= 0; ci = c->classes[ci].parent)
+      if (ci == other->class_id) { root = ci; break; }
+  }
+  return root;
+}
+
+static int seed_family_return_agrees(Compiler *c, const Scope *s) {
+  const SeedFamilyReturn *p = &g_seed_family_returns[s->idx];
+  TyKind want = parse_seed_type(c, p->ret);
+  int nilable = g_seed_nilable;
+  if (want == TY_UNKNOWN || s->is_include_copy) return 0;
+  int root = seed_family_root(c, s);
+  for (int si = an_scopes_named_first(c, s->name); si >= 1; si = an_scopes_named_next(c, s->name, si)) {
+    Scope *other = &c->scopes[si];
+    if (!!other->is_cmethod != !!s->is_cmethod || other->class_id < 0) continue;
+    int ci = other->class_id;
+    while (ci >= 0 && ci != root) ci = c->classes[ci].parent;
+    if (ci < 0) continue;
+    const SeedFamilyReturn *q = &g_seed_family_returns[si];
+    /* Copies keep their existing conservative behavior. A replaced or
+       unannotated definition cannot supply agreement for a live override. */
+    if (other->is_include_copy || other->replaced || !q->ret) return 0;
+    TyKind got = parse_seed_type(c, q->ret);
+    if (got != want || g_seed_nilable != nilable) return 0;
+    /* A seed this body cannot take must not authorize the rest of the family. */
+    if (seed_ret_contradicts_class_body(c, other, got, 0)) return 0;
+  }
+  return 1;
+}
+
+static void inline_warn(const char *where, const char *fmt, const char *a, const char *b);
+
+static void apply_seed_family_returns(Compiler *c) {
+  if (!g_seed_family_returns) return;
+  int was_frozen = comp_scope_index_is_frozen();
+  comp_scope_index_set_frozen(1);
+  for (int si = 1; si < c->nscopes; si++) {
+    SeedFamilyReturn *p = &g_seed_family_returns[si];
+    if (!p->ret) continue;
+    Scope *s = &c->scopes[si];
+    if (seed_family_return_agrees(c, s))
+      seed_method(c, s, p->ret, NULL, p->where, p->head, p->from_rbs);
+    else if (p->head)
+      inline_warn(p->head, "the return type of %s is not applied: the method is overridden in a related class, "
+                           "and not every definition declares the same return representation (its parameter types are applied)%s",
+                  s->name, "");
+    else
+      fprintf(stderr, "warning: --rbs: %s%s%s: the return type is not applied: the method is overridden in a related class, "
+                      "and not every definition declares the same return representation (its parameter types are applied)\n",
+              c->classes[s->class_id].name, s->is_cmethod ? "." : "#", s->name);
+  }
+  for (int si = 1; si < c->nscopes; si++) {
+    free(g_seed_family_returns[si].ret);
+    free(g_seed_family_returns[si].where);
+    free(g_seed_family_returns[si].head);
+  }
+  free(g_seed_family_returns);
+  g_seed_family_returns = NULL;
+  comp_scope_index_set_frozen(was_frozen);
 }
 
 static int is_empty_array_literal(const NodeTable *nt, int id, int cap);
@@ -8774,12 +8868,8 @@ static void apply_inline_rbs(Compiler *c) {
         /* A replaced definition participates in signature agreement, but its
            body must not pin a backing ivar that the live definition never reads. */
         if (rep < 0) {
-          int fam = method_in_override_family(c, ms->class_id, ms->name, ms->is_cmethod);
-          if (fam && ret && !sp_streq(ret, "-"))
-            inline_warn(head, "the return type of %s is not applied: the method is overridden in a related class, "
-                               "whose calls share one return representation (its parameter types are applied)%s", name, "");
           char *pcopy = params ? strdup(params) : NULL;
-          seed_method(c, ms, fam ? NULL : ret, pcopy, where, head, 0);
+          seed_declared_method(c, ms, ret, pcopy, where, head, 0);
           free(pcopy);
           seed_module_function_copies(c, ms, ret, params, where, head, 0);
           /* and the module's own class-side copy, from `extend self` */
@@ -8787,7 +8877,8 @@ static void apply_inline_rbs(Compiler *c) {
             Scope *s = &c->scopes[si];
             if (s == ms || s->def_node != id || s->class_id != ms->class_id) continue;
             pcopy = params ? strdup(params) : NULL;
-            seed_method(c, s, fam ? NULL : ret, pcopy, where, head, 0);
+            seed_method(c, s, method_in_override_family(c, ms->class_id, ms->name, ms->is_cmethod) ? NULL : ret,
+                        pcopy, where, head, 0);
             free(pcopy);
           }
         }
@@ -8928,7 +9019,7 @@ static void apply_rbs_seeds(Compiler *c, const char *path) {
         Scope *ms = find_method_scope(c, class_id, a1, 0);
         if (ms && !inline_pin_agrees(c, ms, -1, NULL, a2, a3, src, 1)) continue;
         if (ms) seed_warn_unknown_classes(c, class_id, "#", a1, a2, a3);
-        seed_method(c, ms, method_in_override_family(c, class_id, a1, 0) ? NULL : a2, a3, src, NULL, 1);
+        seed_declared_method(c, ms, a2, a3, src, NULL, 1);
         seed_module_function_copies(c, ms, a2, a3, src, NULL, 1);
       }
     }
@@ -8937,7 +9028,7 @@ static void apply_rbs_seeds(Compiler *c, const char *path) {
       Scope *ms = find_method_scope(c, cur_ci, a1, 1);
       if (ms && !inline_pin_agrees(c, ms, -1, NULL, a2, a3, src, 1)) continue;
       if (ms) seed_warn_unknown_classes(c, cur_ci, ".", a1, a2, a3);
-      seed_method(c, ms, method_in_override_family(c, cur_ci, a1, 1) ? NULL : a2, a3, src, NULL, 1);
+      seed_declared_method(c, ms, a2, a3, src, NULL, 1);
       seed_module_function_copies(c, ms, a2, a3, src, NULL, 1);
     }
     else if (sp_streq(kw, "src") && a1) {
@@ -51480,6 +51571,7 @@ static void an_phase_pre_fixpoint(Compiler *c) {
       apply_rbs_seeds(c, seed);
       comp_scope_index_set_frozen(was_frozen);
     }
+    apply_seed_family_returns(c);
     if (g_inline_rbs_bad) exit(1);
   }
 

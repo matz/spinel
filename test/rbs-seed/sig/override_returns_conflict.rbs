@@ -1,0 +1,15 @@
+class ConflictBase
+  def value: () -> Integer
+end
+class ConflictSub < ConflictBase
+  def value: () -> Integer
+end
+class ConflictSibling < ConflictBase
+  def value: () -> String
+end
+class OptionalBase
+  def value: () -> Integer
+end
+class OptionalSub < OptionalBase
+  def value: () -> Integer?
+end

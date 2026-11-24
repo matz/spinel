@@ -3838,7 +3838,11 @@ static int masgn_element_may_convert(Compiler *c, int id, TyKind e) {
 /* ...and the elements of a literal value a nested target destructures
    (`a, (b, c) = 1, obj`): a left target takes the element at its index, a
    right one (after a rest) the element counted from the end, where that
-   is past the left targets' elements (fewer elements leave it nil) */
+   is past the left targets' elements (fewer elements leave it nil). An
+   element whose to_ary may answer nil (*hold of cplan_typed_to_ary_held)
+   is left whole: the nested target converts it boxed at its own level
+   (emit_massign_poly_target), which keeps the element where the answer is
+   nil, as CRuby does. */
 static int masgn_to_ary_nested(Compiler *c, NodeTable *nt, int id, int value) {
   int changed = 0, ln = 0, rn = 0, en = 0;
   const int *els = nt_arr(nt, value, "elements", &en);
@@ -3846,10 +3850,11 @@ static int masgn_to_ary_nested(Compiler *c, NodeTable *nt, int id, int value) {
   for (int side = 0; side < 2; side++) {
     const int *ts = nt_arr(nt, id, side ? "rights" : "lefts", side ? &rn : &ln);
     for (int j = 0, n = side ? rn : ln; j < n; j++) {
-      int e = side ? (rest && en - rn + j >= ln ? en - rn + j : -1) : j, tp;
+      int e = side ? (rest && en - rn + j >= ln ? en - rn + j : -1) : j, tp, hold = 0;
       els = nt_arr(nt, value, "elements", &en);
-      int mi = e < 0 || e >= en || nt_kind(nt, ts[j]) != NK_MultiTargetNode ? -1 : cplan_typed_to_ary(c, infer_type(c, els[e]), ts[j], NTI_YIELDED, NULL);
-      if (mi < 0 || (masgn_nests(nt, ts[j]) && masgn_element_may_convert(c, id, ty_array_elem(c->scopes[mi].ret))) ||
+      int mi = e < 0 || e >= en || nt_kind(nt, ts[j]) != NK_MultiTargetNode ? -1
+             : cplan_typed_to_ary_held(c, infer_type(c, els[e]), ts[j], NTI_YIELDED, NULL, &hold);
+      if (mi < 0 || hold || (masgn_nests(nt, ts[j]) && masgn_element_may_convert(c, id, ty_array_elem(c->scopes[mi].ret))) ||
           (tp = masgn_to_ary_call(nt, els[e])) < 0) continue;
       int *nels = malloc(sizeof(int) * (size_t)en);
       if (!nels) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }

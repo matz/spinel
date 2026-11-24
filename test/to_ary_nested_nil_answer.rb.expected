@@ -1,0 +1,25 @@
+conv
+[Pair, nil, 1]
+conv
+[:x, :y, 2]
+["", nil, 3]
+["s", :t, 4]
+conv
+[1, [2], Pair, nil]
+conv
+[Pair, [], 5]
+conv
+[Pair, nil, "r", :t]
+conv
+[Q, nil, 6]
+[R, nil, 7]
+["", nil, 8, ["", 8]]
+conv
+[Pair, nil, 9, 1, [Pair, Integer]]
+conv
+["", nil, 1]
+["m", :t, 1]
+[Pair, NilClass, Integer]
+[nil, nil, 1]
+conv
+[Pair, nil, 2]

@@ -691,6 +691,35 @@ int cplan_targets(Compiler *c, int id, int *out, int cap);
 /* A flag of cplan_implied_target's side alone (call_target does not read it): see there */
 enum { CIT_TABLE = 16384 };
 int cplan_implied_target(Compiler *c, int site, int op, int cls, const char *name, unsigned side, MethodLookup *ml);
+/* The def of `name` that holds for an instance of cls at every state node
+   id may run in (a def that ran there for sure, the version the window
+   proves; an alias or a reader too with `aliased`; sg for the singleton):
+   its scope, or -1 where the record cannot prove one, because the def comes
+   after a point the node may run at, is under a condition, or has several
+   versions. The call plan's site answer for a method a node asks without
+   making a call of its own (method_missing for a splat's implied to_a). */
+int cplan_window_version(Compiler *c, int id, int cls, const char *name, int sg, int aliased);
+/* The program's def an instance of class cid meets for `name` where call id
+   runs: the class's chain, then the roots as cplan_root_method walks them
+   (Object with the top-level defs, Kernel, BasicObject; a blank slate's
+   chain ends at BasicObject). -1 where a builtin answers or none does. */
+int cplan_instance_method(Compiler *c, int id, int cid, const char *name);
+/* Where the program's def of `name` that an instance of cid meets (cplan_instance_method) stands at
+   site id: the scope of the version that holds at every state the site may
+   run in (cplan_window_version, not the table's, which a later reopening
+   may have replaced), CPH_ABSENT when it comes after every run of the
+   site (the instance answers as if the program had none), CPH_UNKNOWN when
+   the window holds states with it and without it, or the record cannot place
+   the site, and CPH_NONE when the program defines none. A hook the site asks
+   without making a call of its own (respond_to? and respond_to_missing? for a
+   splat's implied to_a). */
+enum { CPH_NONE = -1, CPH_ABSENT = -2, CPH_UNKNOWN = -3 };
+int cplan_hook_at(Compiler *c, int id, int cid, const char *name);
+/* The plain positional arity of version s (a def, or a define_method's
+   block): its count of required parameters, -1 for any other shape (an
+   optional, a rest, a keyword; a block parameter unless blk_ok, which asks
+   Method#arity's question: a block parameter does not count). */
+int ver_plain_arity(Compiler *c, int s, int blk_ok);
 /* The #to_ary a call node id makes on its operand op, an instance of class
    cid (rb_check_array_type), as cplan_implied_target answers it: -1 for an
    Array subclass, which is an Array already and never calls its own. */

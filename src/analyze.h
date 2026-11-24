@@ -843,7 +843,7 @@ void elab_call_meet(Compiler *c, int id, int cls, const char *name, int sg, int 
    to elab_call_meet), into out[0..cap): elab_method_span's answer, or
    ELAB_SPAN_NO_WINDOW for a call with no window. elab_call_meet asks it
    after its answer at the point (elab_method_at). The call plan asks it
-   itself in three places: ct_window_version, which has no answer at the
+   itself in three places: cplan_window_version, which has no answer at the
    point, and user_new_at and capture_live_at, whose answer there is
    elab_call_method's, not elab_method_at's. */
 enum { ELAB_SPAN_NO_WINDOW = -3 };

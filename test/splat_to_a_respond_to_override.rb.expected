@@ -1,0 +1,4 @@
+[BothRT]
+[:one, :arg]
+[NoRT]
+ArgumentError

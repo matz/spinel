@@ -379,6 +379,11 @@ int is_class_eval_family(const char *n) {
          sp_streq(n, "module_exec");
 }
 
+/* class_exec and module_exec: the block takes the call's arguments */
+int is_class_exec_name(const char *n) {
+  return sp_streq(n, "class_exec") || sp_streq(n, "module_exec");
+}
+
 int is_eval_exec_family(const char *n) {
   return is_class_eval_family(n) || sp_streq(n, "instance_eval") || sp_streq(n, "instance_exec");
 }

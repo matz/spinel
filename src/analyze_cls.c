@@ -4776,8 +4776,7 @@ static void cf_collect_dyn(CF *f) {
 
 /* a call that runs its block with another self (or as a method body) */
 static int cf_exec_name(const char *nm) {
-  return nm && (sp_streq(nm, "instance_exec") || sp_streq(nm, "instance_eval") || sp_streq(nm, "class_exec") ||
-                sp_streq(nm, "class_eval") || sp_streq(nm, "module_exec") || sp_streq(nm, "module_eval") ||
+  return nm && (is_eval_exec_family(nm) ||
                 sp_streq(nm, "define_method") || sp_streq(nm, "define_singleton_method"));
 }
 /* a call that may hand its block to such a call: by name, or a method of

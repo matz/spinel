@@ -12033,6 +12033,120 @@ static int splat_feeds_user_method(Compiler *c, int sp) {
   return 0;
 }
 
+static int cdef_local(NodeTable *nt, const char *ty, const char *nm);
+static int cdef_stmts(NodeTable *nt, int st);
+static int mm_user(Compiler *c, int id, int k);
+/* `t.<name>(:to_a[, true])`: the gate's ask of respond_to? or respond_to_missing? */
+static int splat_ask_call(Compiler *c, const char *tn, const char *name, int nargs) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  /* a send of the name: a top-level def is Object's private method, which only a send reaches (desugar_public_send_recv) */
+  int nm = nt_new_node(nt, "SymbolNode"), sy = nt_new_node(nt, "SymbolNode"), an = nt_new_node(nt, "ArgumentsNode");
+  nt_node_set_str(nt, nm, "value", name);
+  comp_sym_intern(c, name);
+  nt_node_set_str(nt, sy, "value", "to_a");
+  int av[3] = { nm, sy, -1 };
+  if (nargs > 1) av[2] = nt_new_node(nt, "TrueNode");
+  nt_node_set_arr(nt, an, "arguments", av, nargs + 1);
+  int call = fwd_new_call(nt, cdef_local(nt, "LocalVariableReadNode", tn), "__send__", -1);
+  nt_node_set_ref(nt, call, "arguments", an);
+  return call;
+}
+/* `*x` over an instance whose class has no #to_a but a method_missing that an
+   explicit call reaches (mm_user, the answer desugar_missing_method_calls
+   splits it by, and the call plan's window answer that the hook holds at
+   every state the splat runs in): CRuby converts with rb_check_funcall,
+   which asks respond_to? when the class overrides it, then
+   respond_to_missing? when the class overrides that (called directly, both
+   must say yes when both are defined), and then calls method_missing(:to_a).
+   With neither overridden it calls method_missing anyway and takes any
+   NoMethodError out of it as "no #to_a"; otherwise the error propagates. No
+   answer spreads the object itself (`[x]`); the checked conversion,
+   emit_splat_to_a_check_wrap, makes a nil answer `[x]` and a non-Array its
+   TypeError. The splat's operand becomes `(t = x; t.nil? ? [] : <gate>)` with
+   the gate
+   `t.respond_to?(:to_a, true) && t.respond_to_missing?(:to_a, true) ? t.to_a : [t]`
+   (each test only where the program defines it, as cplan_instance_method
+   finds it; respond_to? with the one argument a def of arity 1 takes), or
+   `begin t.to_a; rescue NoMethodError; [t]; end` where it defines neither.
+   A hook the program defines only after every run of the splat is not asked
+   there; one that some runs meet and some do not leaves the splat as it was
+   (cplan_hook_at; answers 0). */
+static int splat_conv_via_missing(Compiler *c, int id, int val, int cid, TyKind vt) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int base = nt->count;
+  char tn[64];
+  snprintf(tn, sizeof tn, "__sc_%s", comp_node_tag(c, id));
+  /* (the program's defs the plan finds for the instance, the roots and the top level included) */
+  int rt_mi = cplan_hook_at(c, id, cid, RESPOND_TO_NAME), rtm_mi = cplan_hook_at(c, id, cid, RESPOND_TO_MISSING_NAME);
+  if (rt_mi == CPH_UNKNOWN || rtm_mi == CPH_UNKNOWN) return 0;   /* (a hook some runs of the site meet and some do not: the splat stays as it was) */
+  int rt_own = rt_mi >= 0, rtm_own = rtm_mi >= 0;
+  /* (the include-private flag goes to every respond_to? but one of arity 1, as vm_respond_to does) */
+  int rt_args = rt_own && ver_plain_arity(c, rt_mi, 1) == 1 ? 1 : 2;
+  int bind = nt_new_node(nt, "LocalVariableWriteNode");
+  nt_node_set_str(nt, bind, "name", tn);
+  nt_node_set_ref(nt, bind, "value", val);
+  int conv = fwd_new_call(nt, -1, "to_a", -1);
+  int crecv = cdef_local(nt, "LocalVariableReadNode", tn);
+  nt_node_set_ref(nt, conv, "receiver", crecv);
+  nt_set_ignore_visibility(nt, conv, 1);
+  nt_node_set_int(nt, conv, "made_to_a", 1);
+  nt_node_set_int(nt, conv, "splat_to_a", 1);   /* its answer must be an Array (emit_splat_to_a_check_wrap) */
+  int one = nt_new_node(nt, "ArrayNode");
+  int elt = cdef_local(nt, "LocalVariableReadNode", tn);
+  nt_node_set_arr(nt, one, "elements", &elt, 1);
+  int arms = cdef_stmts(nt, conv), self_only = cdef_stmts(nt, one);
+  int cond;
+  if (rt_own || rtm_own) {
+    /* (each one the program defines, in CRuby's order and called as it is: respond_to_missing? alone is asked directly) */
+    cond = rt_own ? splat_ask_call(c, tn, RESPOND_TO_NAME, rt_args) : -1;
+    if (rtm_own) {
+      int q = splat_ask_call(c, tn, RESPOND_TO_MISSING_NAME, 2);
+      if (cond < 0) cond = q;
+      else {
+        int both = nt_new_node(nt, "AndNode");
+        nt_node_set_ref(nt, both, "left", cond);
+        nt_node_set_ref(nt, both, "right", q);
+        cond = both;
+      }
+    }
+    int els = nt_new_node(nt, "ElseNode");
+    nt_node_set_ref(nt, els, "statements", self_only);
+    int ifn = nt_new_node(nt, "IfNode");
+    nt_node_set_ref(nt, ifn, "predicate", cond);
+    nt_node_set_ref(nt, ifn, "statements", arms);
+    nt_node_set_ref(nt, ifn, "subsequent", els);
+    cond = ifn;
+  }
+  else {
+    int nm = nt_new_node(nt, "ConstantReadNode"), rs = nt_new_node(nt, "RescueNode"), bg = nt_new_node(nt, "BeginNode");
+    nt_node_set_str(nt, nm, "name", "NoMethodError");
+    nt_node_set_arr(nt, rs, "exceptions", &nm, 1);
+    nt_node_set_ref(nt, rs, "statements", self_only);
+    nt_node_set_ref(nt, bg, "statements", arms);
+    nt_node_set_ref(nt, bg, "rescue_clause", rs);
+    cond = bg;
+  }
+  /* a nil spreads nothing (nil.to_a): the instance's slot may hold one */
+  int isnil = fwd_new_call(nt, cdef_local(nt, "LocalVariableReadNode", tn), "nil?", -1);
+  nt_mark_builtin_call(nt, isnil);
+  int none = cdef_stmts(nt, nt_new_node(nt, "ArrayNode")), nels = nt_new_node(nt, "ElseNode"), nif = nt_new_node(nt, "IfNode");
+  nt_node_set_ref(nt, nels, "statements", cdef_stmts(nt, cond));
+  nt_node_set_ref(nt, nif, "predicate", isnil);
+  nt_node_set_ref(nt, nif, "statements", none);
+  nt_node_set_ref(nt, nif, "subsequent", nels);
+  int st[2] = { bind, nif };
+  int body = nt_new_node(nt, "StatementsNode"), par = nt_new_node(nt, "ParenthesesNode");
+  nt_node_set_arr(nt, body, "body", st, 2);
+  nt_node_set_ref(nt, par, "body", body);
+  nt_node_set_ref(nt, id, "expression", par);
+  comp_grow_node_arrays(c);
+  int encl = c->nscope[id];
+  for (int j = base; j < nt->count; j++) c->nscope[j] = encl;
+  lv_set_type(scope_local_intern(comp_scope_of(c, id), tn), vt);
+  cls_fact_same(c, crecv, val);   /* (the copy holds what the operand holds: the call to method_missing is split by it) */
+  return 1;
+}
+
 /* `[*h]`, `x = *h`, `f(*h)` with a Hash, a Struct, or an object defining #to_a:
    a splat converts its operand through #to_a, so a Hash spreads its [k, v]
    pairs rather than landing as one element. Rewrite the operand to
@@ -12068,7 +12182,13 @@ int desugar_splat_to_a(Compiler *c) {
       if (cid < 0) continue;
       int st = 0;
       for (int k = cid; k >= 0 && !st; k = c->classes[k].parent) st = c->classes[k].is_struct;
-      if (!st && !class_answers_own(c, id, val, cid, "to_a")) continue;
+      if (!st && !class_answers_own(c, id, val, cid, "to_a")) {
+        /* (no #to_a of the class's own: its method_missing, if any, is asked) */
+        /* (and the hook holds at every state the splat may run in: CRuby finds it only once it is defined) */
+        if (mm_user(c, id, cid) < 0 || cplan_window_version(c, id, cid, METHOD_MISSING_NAME, 0, 0) < 0) continue;
+        if (splat_conv_via_missing(c, id, val, cid, t)) changed = 1;
+        continue;
+      }
     }
     int base = nt->count;
     int call = nt_new_node(nt, "CallNode");
@@ -15160,8 +15280,7 @@ static int ee_self_holder(const NodeTable *nt, const int *parent, int id, int in
     if (k == NK_BlockNode) {
       int call = parent[p];
       const char *cn = call >= 0 && nt_kind(nt, call) == NK_CallNode ? nt_str(nt, call, "name") : NULL;
-      if (!cn || sp_streq(cn, "instance_eval") || sp_streq(cn, "instance_exec") || sp_streq(cn, "class_eval") ||
-          sp_streq(cn, "class_exec") || sp_streq(cn, "module_eval") || sp_streq(cn, "module_exec") ||
+      if (!cn || is_eval_exec_family(cn) ||
           sp_streq(cn, "define_method") || sp_streq(cn, "define_singleton_method") || sp_streq(cn, "new"))
         return -1;
       continue;
@@ -26421,8 +26540,7 @@ static int scm_body_stmts(NodeTable *nt, int id, int *out, int cap) {
     out[0] = call;
     return 1;
   }
-  if ((sp_streq(nm, "class_eval") || sp_streq(nm, "class_exec") || sp_streq(nm, "module_eval") ||
-       sp_streq(nm, "module_exec")) && ac == 0 && blk >= 0 && nt_kind(nt, blk) == NK_BlockNode &&
+  if (is_class_eval_family(nm) && ac == 0 && blk >= 0 && nt_kind(nt, blk) == NK_BlockNode &&
       nt_ref(nt, blk, "parameters") < 0) {
     int body = nt_ref(nt, blk, "body");
     if (body >= 0 && cn_reads_outer_local(nt, body, 0)) return -1;
@@ -27943,8 +28061,8 @@ int desugar_self_class_eval_blocks(Compiler *c) {
     if (nt_kind(nt, id) != NK_CallNode) continue;
     const char *nm = nt_str(nt, id, "name");
     if (!nm) continue;
-    int cls = sp_streq(nm, "class_eval") || sp_streq(nm, "module_eval") || sp_streq(nm, "class_exec") || sp_streq(nm, "module_exec");
-    int ins = sp_streq(nm, "instance_exec") || sp_streq(nm, "instance_eval");
+    int cls = is_class_eval_family(nm);
+    int ins = is_instance_eval_family(nm);
     int r = nt_ref(nt, id, "receiver");
     if (!(cls && (r < 0 || nt_kind(nt, r) == NK_SelfNode)) && !(ins && r < 0)) continue;
     int blk = nt_ref(nt, id, "block");

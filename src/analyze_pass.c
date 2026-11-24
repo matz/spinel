@@ -14952,6 +14952,7 @@ int desugar_class_eval_value(Compiler *c) {
       int an2 = nt_ref(nt, id, "arguments");
       int ac2 = 0; const int *av2 = an2 >= 0 ? nt_arr(nt, an2, "arguments", &ac2) : NULL;
       if (rn > 8 || rn != ac2) continue;   /* arity mismatch / exotic params: leave it */
+      if (!nt_argv_binds_one_to_one(nt, av2, ac2)) continue;   /* a splat, block pass or `...` binds no parameter one to one */
       int ok = 1;
       for (int k = 0; k < rn && ok; k++) {
         pnames[k] = nt_str(nt, reqs[k], "name");

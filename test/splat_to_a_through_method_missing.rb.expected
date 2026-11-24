@@ -1,0 +1,25 @@
+converted
+[:a, :b]
+converted
+[0, :a, :b, 9]
+converted
+2
+converted
+[:a, :b, 1]
+[:x, :y]
+[Ghost]
+[NoAnswer]
+[NilAnswer]
+converted
+[:a, :b, :x, :y]
+converted
+[:a, :b]
+[]
+converted
+[:a, :b]
+converted
+[:a, :b]
+converted
+:hit
+[ArgumentError, "inner"]
+[TypeError, "can't convert NotArray to Array (NotArray#to_a gives String)"]

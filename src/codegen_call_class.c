@@ -6928,16 +6928,6 @@ static void refl_md_table_names(Compiler *c, ReflNames *rn) {
   }
   refl_free(&asked);
 }
-static Buf *g_md_cell_out;
-static void md_cell_declare(Compiler *c, const char *name) {
-  LocalVar *g = name[0] == '$' ? (LocalVar *)comp_gvar(c, name + 1) : NULL;
-  if (!g_md_cell_out || !g || !is_scalar_ret(g->type)) return;
-  /* (as the globals' own declaration types it: an oint where the cell
-     holds an Integer that may be nil, a boxed value under promote) */
-  buf_puts(g_md_cell_out, "static ");
-  if (gvar_is_oint(c, g)) buf_puts(g_md_cell_out, oint_ctype(g->type)); else emit_ctype(c, g->type, g_md_cell_out);
-  buf_printf(g_md_cell_out, " gv_%s;\n", g->name);
-}
 /* See codegen_call_arms.h. */
 void refl_md_table_cells(Compiler *c, void (*keep)(Compiler *, const char *)) {
   if (!refl_md_dynamic_used(c)) return;
@@ -6964,12 +6954,6 @@ void emit_refl_method_defined(Compiler *c, Buf *b) {
   ReflNames rn;
   memset(&rn, 0, sizeof rn);
   refl_md_table_names(c, &rn);
-  /* (the cells the rows read are declared with the program's globals, after
-     the table: each is declared here first, a tentative definition the
-     later one completes) */
-  g_md_cell_out = b;
-  refl_md_table_cells(c, md_cell_declare);
-  g_md_cell_out = NULL;
   char **names = rn.v;
   int nn = rn.n;
   buf_puts(b, "static int sp_refl_method_defined(sp_Class k, const char *name, int mask, int inherit) {\n  if (sp_class_sclass_p(k)) sp_raise_cls(\"NotImplementedError\", \"spinel: the methods of a singleton class held in a variable are not modeled\");\n");

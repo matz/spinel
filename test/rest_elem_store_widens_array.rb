@@ -31,3 +31,8 @@ class S7 < P1; def rr(x, *r) = super; end
 a = [+"s"]; S4.new.rr(a); p a
 a = [+"s"]; S5.new.rr(a); p a
 a = [+"s"]; b = [+"t"]; S7.new.rr(b, a); p [a, b]
+
+# a rest the body reorders: a literal place no longer names one value
+def m6(*r) = (r.shift; r[0] << 8)
+a = [+"s"]; b = [+"t"]; m6(a, b); p [a, b]
+a = [+"s"]; b = [+"t"]; y2(a, b) { |*r| r.reverse!; r[0] << 9 }; p [a, b]

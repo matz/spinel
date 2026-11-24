@@ -553,6 +553,7 @@ int is_file_string_const(const char *n); /* File::SEPARATOR PATH_SEPARATOR NULL 
 int is_to_proc_name(const char *n); /* to_proc */
 int is_proc_conversion_name(const char *n); /* to_proc curry: makes a proc */
 int is_aref_name(const char *n);         /* []: an element read */
+int is_fetch_name(const char *n);        /* fetch: an element read with a fallback */
 int is_shovel_name(const char *n);       /* <<: an append, a chain's link */
 
 const char *dir_surface_alias(const char *n, int blockless_iter);

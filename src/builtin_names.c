@@ -2143,6 +2143,8 @@ int is_to_proc_name(const char *n) { return n && sp_streq(n, "to_proc"); }
 int is_proc_conversion_name(const char *n) { return is_to_proc_name(n) || (n && sp_streq(n, "curry")); }
 /* `[]` alone: an element read, not its write */
 int is_aref_name(const char *n) { return n && sp_streq(n, "[]"); }
+/* `fetch`: an element read whose miss takes a fallback */
+int is_fetch_name(const char *n) { return n && sp_streq(n, "fetch"); }
 /* `<<` alone: String#<<'s append, a chain's link */
 int is_shovel_name(const char *n) { return n && sp_streq(n, "<<"); }
 

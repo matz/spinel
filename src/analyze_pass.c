@@ -4008,6 +4008,52 @@ static TyKind rest_elem_need(const LocalVar *rp, int j, int n) {
   return t;
 }
 
+/* Is v an element read of its receiver: `r[i]`, `r.fetch(i)`, `r.first`,
+   `r.last`? */
+static int elem_read_call(const NodeTable *nt, int v) {
+  if (nt_kind(nt, v) != NK_CallNode || nt_ref(nt, v, "receiver") < 0) return 0;
+  const char *nm = nt_str(nt, v, "name");
+  int a = nt_ref(nt, v, "arguments"), an = 0;
+  if (a >= 0) nt_arr(nt, a, "arguments", &an);
+  return (is_aref_name(nm) && an == 1) || (is_fetch_name(nm) && an >= 1) ||
+         (nm && is_endpoint_query(nm) && an == 0);
+}
+/* Does the code under node use the local rn only as an element read's
+   receiver (elem_read_call), never writing it, changing it in place,
+   passing it on or naming it in another value? A rest so used holds what
+   its binding laid, each value at the place it was laid, so a literal
+   index names one of them (elem_read_index). 0 past depth 64. */
+static int local_read_by_element(const NodeTable *nt, int node, const char *rn, int depth) {
+  if (node < 0) return 1;
+  if (depth > 64) return 0;
+  switch (nt_kind(nt, node)) {
+    case NK_LocalVariableReadNode: case NK_LocalVariableWriteNode: case NK_LocalVariableOperatorWriteNode:
+    case NK_LocalVariableOrWriteNode: case NK_LocalVariableAndWriteNode: case NK_LocalVariableTargetNode: {
+      const char *nm = nt_str(nt, node, "name");
+      if (nm && sp_streq(nm, rn)) return 0;
+      break;
+    }
+    default: break;
+  }
+  /* the receiver of an element read is the one use that leaves it laid */
+  int skip = -1;
+  if (elem_read_call(nt, node)) {
+    int r = nt_ref(nt, node, "receiver");
+    if (nt_kind(nt, r) == NK_LocalVariableReadNode && nt_str(nt, r, "name") && sp_streq(nt_str(nt, r, "name"), rn))
+      skip = r;
+  }
+  int nr = nt_num_refs(nt, node);
+  for (int i = 0; i < nr; i++) {
+    int ch = nt_ref_at(nt, node, i);
+    if (ch != skip && !local_read_by_element(nt, ch, rn, depth + 1)) return 0;
+  }
+  int na = nt_num_arrs(nt, node);
+  for (int i = 0; i < na; i++) {
+    int n = 0; const int *a = nt_arr_at(nt, node, i, &n);
+    for (int k = 0; k < n; k++) if (!local_read_by_element(nt, a[k], rn, depth + 1)) return 0;
+  }
+  return 1;
+}
 /* The literal index the element read v (`r[0]`, `r.fetch(-1)`, `r.first`,
    `r.last`) reads, or ELEM_ANY. */
 static int elem_read_index(Compiler *c, int v) {
@@ -9341,7 +9387,13 @@ static int block_param_index_values(Compiler *c, Scope *sc, const char *nm, int 
     }
     hv[2 * n] = bp_ix.call[e]; hv[2 * n + 1] = bp_ix.pos[e]; n++;
   }
-  for (int i = 0; i < n; i++) ch |= block_param_values(c, hv[2 * i], hv[2 * i + 1], rix, fn, ctx);
+  /* a literal index names the value laid there while the block's body
+     leaves its rest as laid (local_read_by_element) */
+  for (int i = 0; i < n; i++) {
+    int at = rix;
+    if (at != ELEM_ANY && !local_read_by_element(c->nt, a_proc_body(c, hv[2 * i]), nm, 0)) at = ELEM_ANY;
+    ch |= block_param_values(c, hv[2 * i], hv[2 * i + 1], at, fn, ctx);
+  }
   free(hv);
   return ch;
 }
@@ -9504,8 +9556,7 @@ static int widen_boxed_array_sources_1(Compiler *c, int v, TyKind elem, int dept
   int r = nt_ref(nt, v, "receiver"), a = nt_ref(nt, v, "arguments"), an = 0;
   if (a >= 0) nt_arr(nt, a, "arguments", &an);
   if (!nm || nt_ref(nt, v, "block") >= 0) return 0;
-  if (r >= 0 && ((sp_streq(nm, "[]") && an == 1) || (sp_streq(nm, "fetch") && an >= 1) ||
-                 ((is_endpoint_query(nm)) && an == 0)))
+  if (elem_read_call(nt, v))
     return widen_boxed_elem_sources_at(c, r, elem_read_index(c, v), elem, depth + 1);
   int mi = backprop_call_target(c, v);
   if (mi >= 0) return widen_method_value_sources(c, v, mi, elem, depth, 0);
@@ -9616,6 +9667,11 @@ static int widen_param_elem_sources(Compiler *c, int r, int ix, TyKind elem, int
            block_param_index_values(c, sc, nm, 0, ELEM_ANY, wbp_elem, &x);
   }
   if (!lv->is_param || sc->rest_idx < 0 || !sc->pnames[sc->rest_idx] || !sp_streq(sc->pnames[sc->rest_idx], nm)) return 0;
+  /* a literal index names the value laid there while the body leaves the
+     rest as laid; otherwise it may be any of them */
+  int def = sc->def_node;
+  if (ix != ELEM_ANY && (def < 0 || nt_kind(nt, def) != NK_DefNode || !local_read_by_element(nt, nt_ref(nt, def, "body"), nm, 0)))
+    ix = ELEM_ANY;
   int slot = rest_elem_slot(ix);
   return fold_store_kind(slot >= 0 ? &lv->rest_elem_at[slot] : &lv->rest_elem_store, elem);
 }

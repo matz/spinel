@@ -20,3 +20,10 @@ l.call
 p K.new.m
 z = ((class K; def m = 10; end; 0) rescue 1)
 p K.new.m
+
+# a mixin of a body in a begin, which is not placed, has not run where a raise before it leaves for the rescue clause
+module UE; def uem = :uem; end
+class UK; end
+def uboom(*) = raise("boom")
+z = begin; [uboom, (class UK; extend UE; end; 0)]; rescue; (UK.uem rescue $!.class); end
+p z

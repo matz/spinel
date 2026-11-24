@@ -39,3 +39,20 @@ p Mo.a, Mo.b
 z = [(class K; def y1 = 1; private :y1; alias_method :w1, :y1; end; 0)]
 p((K.new.w1 rescue $!.class))
 p((K.new.y1 rescue $!.class))
+
+# a mixin earlier in the body, or in a body before it in the statement, has run at a later alias and call
+module MS; def source = 1; end
+module MT; def tsrc = :t; end
+class KS; end
+z = [(class KS; include MS; alias copied source; alias_method :copied2, :source; end; 0)]
+p KS.new.copied, KS.new.copied2
+class KT; end
+z = [(class KT; include MS; end; 0), (class KT; alias copied source; prepend MT; alias tcopy tsrc; end; 0)]
+p KT.new.copied, KT.new.tcopy
+class KN; end
+begin
+  z = [(class KN; alias copied source; include MS; end; 0)]
+rescue NameError => e
+  p e.message
+end
+p((KN.new.copied rescue $!.class), (KN.new.source rescue $!.class))

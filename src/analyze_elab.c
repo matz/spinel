@@ -4913,7 +4913,8 @@ static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int
       LrMixKind kind = lr_mix_kind(nt, node, nm, sg);
       int conditional_reopen = stmt && stmt->bmay && kind == LR_PREPEND && cls == lr_core(x->r, CORE_STRING);
       k->mix[k->nmix++] = (LrMixin){ node, kind, mod, av[i], .cond = stmt && (stmt->fmay || conditional_reopen),
-                                     .applied = !conditional_reopen && lr_stmt_applied(stmt, x->unplaced, may) == 1, .open = fnode };
+                                     .applied = !conditional_reopen && lr_stmt_applied(stmt, x->unplaced, may) == 1, .open = fnode,
+                                     .unplaced = x->unplaced != 0 };
       /* `K.include M` in another class's body or at the top level, on a
          class of the program: a mixin the passes take as one of K's
          bodies' (elab_all_bodies), so the statement itself does nothing
@@ -7328,11 +7329,10 @@ static int lr_runs_with_stmt(Compiler *c, int node) {
    does (elab_child's spine: a branch, the right side of `&&` or `||`, a
    block, a lambda or a method body) may not have run. PROG_BEFORE,
    PROG_AFTER, or PROG_UNKNOWN, as during the registration's walk, which
-   has no parents yet. */
-static int lr_run_order(Compiler *c, int d, int n) {
+   has no parents yet (lr_run_order_on climbs the parents par, of np
+   nodes, given). */
+static int lr_run_order_on(Compiler *c, const int *par, int np, int d, int n) {
   const NodeTable *nt = c->nt;
-  int np = 0;
-  const int *par = elab_node_parents(c, &np);
   int may = 0;
   for (int x = d; par && x >= 0 && x < np && par[x] >= 0; x = par[x]) {
     int p = par[x], y = n;
@@ -7347,6 +7347,11 @@ static int lr_run_order(Compiler *c, int d, int n) {
     may |= q.may || q.partial || q.defer || q.kept || (q.bits & LR_LATE);
   }
   return PROG_UNKNOWN;
+}
+static int lr_run_order(Compiler *c, int d, int n) {
+  int np = 0;
+  const int *par = elab_node_parents(c, &np);
+  return lr_run_order_on(c, par, np, d, n);
 }
 
 /* The history of h's name that is one entry of Object's method table with
@@ -7513,9 +7518,20 @@ static int lr_chain_bound(Compiler *c) {
 
 /* Did mixin m of a class happen before p (late: in the load phase)?
    ELAB_YES / NO / UNKNOWN; unknown too for one after p that may run
-   before it on a body's next run */
+   before it on a body's next run. A mixin in the statement of p's node (a
+   body in a value placed at it, lr_nested_body) runs as lr_run_order
+   orders it against that node, as an entry there does (lr_last_before);
+   one an unplaced body recorded has not run there, as before */
 static int lr_mixed_before(Compiler *c, const LrMixin *m, LoadPoint p, int late, int may) {
+  const LoadRecord *r = c->lrec;
   int o = late == 1 ? (elab_point_of(c, m->node).region == 0 ? PROG_BEFORE : PROG_UNKNOWN) : elab_cmp(elab_point_of(c, m->node), p);
+  if (o == PROG_SAME && !m->unplaced && p.node != m->node && p.node >= 0 && p.node < r->n && r->at[p.node] == p.seq) {   /* (asked at its own call: not yet, as before) */
+    int np = 0;
+    const int *par = elab_node_parents(c, &np);
+    /* (during the registration's walk, the tree's parents: the walk climbs the nodes as the tree holds them, and the
+       record made again orders the mixin by the build's) */
+    o = lr_run_order_on(c, par ? par : lr_par(c, 1), np, m->node, p.node);
+  }
   if (!late && lr_runs_again(c, m->node, p)) return ELAB_UNKNOWN;
   return o == PROG_UNKNOWN ? ELAB_UNKNOWN : o != PROG_BEFORE ? ELAB_NO : may ? ELAB_UNKNOWN : ELAB_YES;
 }

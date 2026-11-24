@@ -342,8 +342,10 @@ typedef enum { LR_INCLUDE, LR_EXTEND, LR_PREPEND, LR_SG_PREPEND } LrMixKind;   /
    runs whenever its body does (no condition of its own, elab_point_may),
    and stands in the body that made the class, or in a reopening that runs
    before any object of the class, or of one below it, may exist
-   (lr_early_settle). */
-typedef struct { int node, kind, mod, ref; unsigned char dup, cond, applied; int open; unsigned char early; } LrMixin;
+   (lr_early_settle). unplaced: recorded by a body the walk does not
+   place (lr_nested_body), as an unplaced LrDef is: its statement's point
+   is no point the call runs at. */
+typedef struct { int node, kind, mod, ref; unsigned char dup, cond, applied; int open; unsigned char early, unplaced; } LrMixin;
 typedef enum { ELAB_GVAR, ELAB_MAIN_IVAR, ELAB_CONST } ElabVar;
 struct HostStep;
 void elab_program(Compiler *c, struct HostStep *h);

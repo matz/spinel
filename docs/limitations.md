@@ -1169,14 +1169,15 @@ a writer handed nil is passed over, and a `send` that hands no value sets
 nothing. The read may be the reader's, on a receiver that may hold objects
 of more than one class when each answers the reader by an attribute (the
 class and classes below it, or unrelated classes or Structs whose
-attributes share the name), and then each class's writes are followed; or,
-for a Struct member, `s[:v]`, `s["v"]` or its place (`s[0]`, `s[-1]`).
-Not followed: a `send` that splats its arguments or hands more than one
-value after a computed name, a `super(*a)` or `super(**h)` in a Struct's
-`initialize`, and the `initialize` of a class below the Struct. A boxed
-argument -- a local written arrays of two kinds, an element read out of a
-general container, a block parameter, a `for` variable -- is followed the
-same way, to each typed array the store cannot fit.
+attributes share the name) or by nothing at all, and then each attribute's
+writes are followed; or, for a Struct member, `s[:v]`, `s["v"]` or its
+place (`s[0]`, `s[-1]`). Not followed: a `send` that splats its arguments
+or hands more than one value after a computed name, a `super(*a)` or
+`super(**h)` in a Struct's `initialize`, and the `initialize` of a class
+below the Struct. A boxed argument -- a local written arrays of two kinds,
+an element read out of a general container, a block parameter, a `for`
+variable -- is followed the same way, to each typed array the store cannot
+fit.
 
 A block or proc parameter that stores another kind into the Array it
 receives, or into an Array that is an element of it (`|m| m[0] << 1`), does

@@ -106,3 +106,10 @@ class L12; attr_accessor :v; end
 q12 = Q12.new; q12.v = [+"q"]; l12 = L12.new; l12.v = [+"l"]
 o12 = ARGV.size > 5 ? k12 : q12; y1(o12.v) { |x| x << 29 }; p o12.v
 o12 = ARGV.size > 5 ? q12 : l12; y1(o12.v) { |x| x << 30 }; p o12.v
+# and on a receiver that may also hold a class without the reader
+class M12; end
+n12 = L12.new; n12.v = [+"n"]; o12 = ARGV.size > 5 ? M12.new : n12; y1(o12.v) { |x| x << 31 }; p n12.v
+S12 = Struct.new(:w)
+s12 = S12.new([+"w"]); p s12.w
+T12 = Struct.new(:u, :w)
+s12 = T12.new([1], [+"t"]); y1(s12.u) { |x| x << 2.5 }; p s12.u

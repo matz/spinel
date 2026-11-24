@@ -8562,10 +8562,13 @@ static int class_at_or_above(Compiler *c, int a, int k) {
    count. 0 for a set the facts do not bound, a Class object among its
    members, a builtin among them where a builtin may answer the name
    (bop_any_answers; one that does not raises NoMethodError, reading no
-   slot), or a class of the set the name reaches no attribute of. A class
-   the facts leave unbounded may be held beside the set's members
-   (cls_fact_excludes rules none out), so one of those that answers the
-   name must be below one of the classes and answer it by an attribute
+   slot), or a class of the set the name reaches another method of. A
+   class of the set that answers the name by nothing, not by a
+   method_missing and not as a builtin's method, raises NoMethodError too
+   and is passed over (`s` once a Struct without `u`, then one with it:
+   `s.u`). A class the facts leave unbounded may be held beside the set's
+   members (cls_fact_excludes rules none out), so one of those that answers
+   the name must be below one of the classes and answer it by an attribute
    too. */
 static int recv_fact_attr_classes(Compiler *c, int r, const char *nm, IvarSlots *sl) {
   const ClsSet *s = cls_fact_node(c, r);
@@ -8574,7 +8577,11 @@ static int recv_fact_attr_classes(Compiler *c, int r, const char *nm, IvarSlots 
   if (!out) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   sl->cls = out;
   for (int m = cls_set_next(s, -1); m >= 0; m = cls_set_next(s, m)) {
-    if (m >= c->cls_fact_ncls || !cls_fact_bounded(c, m) || !call_attr_target(c, -1, m, nm, 0, NULL)) return 0;
+    if (m >= c->cls_fact_ncls || !cls_fact_bounded(c, m)) return 0;
+    if (!call_attr_target(c, -1, m, nm, 0, NULL)) {
+      if (call_answers(c, -1, m, nm, 0, NULL) || call_target(c, -1, m, METHOD_MISSING_NAME, CT_METHODS, NULL) >= 0 || bop_any_answers(nm)) return 0;
+      continue;
+    }
     int top = m, i = 0;
     for (int a = c->classes[m].parent; a >= 0; a = c->classes[a].parent)
       if (call_attr_target(c, -1, a, nm, 0, NULL)) top = a;

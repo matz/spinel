@@ -108,7 +108,7 @@ int fresh_array_builtin_name(const char *nm) {
     "map", "collect", "flat_map", "collect_concat", "filter_map", "select", "filter",
     "reject", "sort", "sort_by", "reverse", "uniq", "compact", "flatten", "zip",
     "split", "chars", "bytes", "unpack", "lines", "scan", "keys", "values", "dup",
-    "take", "drop", "take_while", "drop_while", "rotate", "shuffle", "divmod",
+    "take", "drop", "take_while", "drop_while", "rotate", "shuffle", "divmod", "entries",
     "+", "-", "*", "&", "|", NULL };
   return nm && str_in(nm, fresh);
 }
@@ -1151,6 +1151,14 @@ int is_add_sub(const char *n) {
 
 int is_array_push_family(const char *n) {
   return sp_streq(n, "push") || sp_streq(n, "<<") || sp_streq(n, "append") || sp_streq(n, "unshift") || sp_streq(n, "prepend");
+}
+
+int array_answers_receiver_name(const char *n) {
+  static const char *const self_ret[] = {
+    "<<", "push", "append", "unshift", "prepend", "insert", "concat", "fill", "replace",
+    "sort!", "sort_by!", "reverse!", "rotate!", "shuffle!", "map!", "collect!", "tap",
+    "freeze", "itself", "to_a", "to_ary", NULL };
+  return n && str_in(n, self_ret);
 }
 
 int is_take_drop(const char *n) {

@@ -8502,14 +8502,8 @@ static int masgn_target_value(Compiler *c, int t) {
 /* 1 when the call `v` is an Array method that answers its receiver itself,
    not a new array or nil. */
 static int array_answers_receiver(Compiler *c, int v) {
-  static const char *const self_ret[] = {
-    "<<", "push", "append", "unshift", "prepend", "insert", "concat", "fill", "replace",
-    "sort!", "sort_by!", "reverse!", "rotate!", "shuffle!", "map!", "collect!", "tap",
-    "freeze", "itself", NULL };
-  const char *nm = nt_str(c->nt, v, "name");
   int r = nt_ref(c->nt, v, "receiver");
-  if (!nm || r < 0 || !ty_is_array(infer_type(c, r))) return 0;
-  return str_in(nm, self_ret);
+  return r >= 0 && ty_is_array(infer_type(c, r)) && array_answers_receiver_name(nt_str(c->nt, v, "name"));
 }
 
 /* The class whose ivar slots an ivar at node `n` of scope `sc`, which no
@@ -8746,6 +8740,17 @@ static int local_rows_escape(Compiler *c, int r) {
   return local_rows_escape_ex(c, r, 0);
 }
 
+/* Is v a call that builds a new Array of Integers, Floats or Strings
+   nothing else holds (`s.bytes`, `a.map { }`, `(1..3).to_a`,
+   `Array.new(2, 0)`; is_fresh_array), which a box holds as the general
+   Array (box_lift_arr, emit_boxed_impl's lift)? */
+static int box_liftable_array(Compiler *c, int v) {
+  const NodeTable *nt = c->nt;
+  if (!c->box_lift_arr || v < 0 || v >= c->node_cap || nt_kind(nt, v) != NK_CallNode) return 0;
+  TyKind t = infer_type(c, v);
+  return (t == TY_INT_ARRAY || t == TY_FLOAT_ARRAY || t == TY_STR_ARRAY) && is_fresh_array(c, v);
+}
+
 /* An element read (`o[i]`, `first`, `last`, `fetch`) out of a local every
    write of which is an array literal of array literals, which nothing stores
    into or hands on: the rows are the arrays the read can answer. With
@@ -8777,9 +8782,7 @@ static int literal_rows_read(Compiler *c, int v, int apply) {
       TyKind et = infer_type(c, el);
       /* a new Array a builtin answers (`[s.bytes]`): the literal is built as
          the general Array, and the row boxed as one (box_lift_arr) */
-      if (nt_kind(nt, el) == NK_CallNode && (et == TY_INT_ARRAY || et == TY_FLOAT_ARRAY || et == TY_STR_ARRAY) &&
-          is_fresh_array(c, el) && fresh_array_builtin_name(nt_str(nt, el, "name")) && c->arr_want &&
-          c->box_lift_arr && lit < c->node_cap && el < c->node_cap) {
+      if (box_liftable_array(c, el) && c->arr_want && lit < c->node_cap) {
         if (apply && c->arr_want[lit] != TY_POLY_ARRAY) { comp_set_arr_want(c, lit, TY_POLY_ARRAY); ch = 1; }
         if (apply && !c->box_lift_arr[el]) { c->box_lift_arr[el] = 1; ch = 1; }
         continue;
@@ -8821,7 +8824,15 @@ static int array_src_walk(Compiler *c, int v, int pinned, int apply, int *stack,
    (ivar_writes_fresh): it is passed over. */
 typedef struct { int *stack, depth, apply, ch, n; } AttrArgWalk;
 static int attr_value_walk(Compiler *c, int arg, AttrArgWalk *w) {
-  if (nt_kind(c->nt, nt_paren_single(c->nt, arg)) == NK_NilNode) return 0;
+  int a = nt_paren_single(c->nt, arg);
+  if (nt_kind(c->nt, a) == NK_NilNode) return 0;
+  /* a new Array a builtin answers (`k.v = s.bytes`) is held by the ivar's
+     box alone, which holds it as the general Array (box_lift_arr) */
+  if (box_liftable_array(c, a)) {
+    if (w->apply && !c->box_lift_arr[a]) { c->box_lift_arr[a] = 1; w->ch = 1; }
+    w->n++;
+    return 0;
+  }
   int got = array_src_walk(c, arg, 1, w->apply, w->stack, w->depth + 1);
   if (!w->apply && !got) return 1;
   w->ch |= got;
@@ -8890,6 +8901,12 @@ static int attr_writer_arg_walk(Compiler *c, int call, void *ctx) {
     if (at && (nt_kind(c->nt, arg) == NK_KeywordHashNode || (t != TY_UNKNOWN && t != TY_POLY && !ty_is_array(t))))
       return 0;
   }
+  /* a new Array no box holds as the general one (one of another element
+     kind than box_liftable_array lifts) would reach the ivar as it is
+     built, and a store through the ivar's read would go to a copy */
+  int a = nt_paren_single(c->nt, arg);
+  if (nt_kind(c->nt, a) == NK_CallNode && !box_liftable_array(c, a) && infer_type(c, a) != TY_POLY_ARRAY &&
+      is_fresh_array(c, a)) return 1;
   return attr_value_walk(c, arg, w);
 }
 /* array_src_walk's step for a value `v` that reads ivar ivn of class icls
@@ -9945,9 +9962,7 @@ static int widen_boxed_array_sources_1(Compiler *c, int v, TyKind elem, int dept
     if (vt == TY_POLY_ARRAY || ty_is_ptr_array(vt) || elem == ty_array_elem(vt)) return 0;
     /* a new Array a builtin answers (`{a: s.bytes}`) is held by its box
        alone: boxed as the general Array (box_lift_arr) */
-    if (nt_kind(nt, v) == NK_CallNode && v < c->node_cap && c->box_lift_arr &&
-        (vt == TY_INT_ARRAY || vt == TY_FLOAT_ARRAY || vt == TY_STR_ARRAY) && is_fresh_array(c, v) &&
-        nt_ref(nt, v, "receiver") >= 0 && fresh_array_builtin_name(nt_str(nt, v, "name"))) {
+    if (box_liftable_array(c, v)) {
       if (c->box_lift_arr[v]) return 0;
       c->box_lift_arr[v] = 1;
       wbas_touch();
@@ -13109,6 +13124,13 @@ static int struct_member_widens_arg(Compiler *c, int v, TyKind mt, TyKind at) {
     ty_ref_set(c, sd.slot, mt);
     alias_ivar_widened(c, NULL, &sd, mt);
     return 1;
+  }
+  /* a new Array a builtin answers (`S.new(s.bytes)`) is held by the
+     member alone: the member stays boxed, and its box holds the Array as
+     the general one (box_lift_arr) */
+  if (mt == TY_POLY_ARRAY && box_liftable_array(c, v)) {
+    c->box_lift_arr[v] = 1;
+    return -1;
   }
   int w = mt == TY_POLY_ARRAY ? widen_arg_array(c, v) : widen_arg_hash(c, v);
   return w ? 1 : -1;

@@ -2882,6 +2882,12 @@ static void emit_array_lifted(Compiler *c, int node, TyKind t, Buf *b) {
   emit_expr(c, node, b);
   buf_printf(b, "; _t%d ? %s(_t%d) : NULL; })", lt, array_lift_fn(t), lt);
 }
+/* Did the analysis mark `node` a new Array its holder keeps as the general
+   Array (box_lift_arr: a box, a Struct member's `super` argument)? */
+static int box_lift_marked(Compiler *c, int node) {
+  node = nt_paren_single(c->nt, node);
+  return c->box_lift_arr && node >= 0 && node < c->node_cap && c->box_lift_arr[node];
+}
 static void emit_boxed_impl(Compiler *c, int node, Buf *b) {
   /* Parentheses are transparent: box the inner expression directly so a
      wrapped yield (`out << (yield x)`) reaches the per-call-site yield boxing
@@ -3348,7 +3354,7 @@ static void emit_boxed_impl(Compiler *c, int node, Buf *b) {
                     : t == TY_OPENSTRUCT ? "SP_BUILTIN_OPENSTRUCT" : NULL;
     if (aid) {
       /* a new Array a push of another kind reaches (box_lift_arr) */
-      if (c->box_lift_arr && node < c->node_cap && c->box_lift_arr[node] && array_lift_fn(t)) {
+      if (box_lift_marked(c, node) && array_lift_fn(t)) {
         buf_puts(b, "sp_box_nullable_obj((void *)(");
         emit_array_lifted(c, node, t, b);
         buf_puts(b, "), SP_BUILTIN_POLY_ARRAY)");
@@ -17210,8 +17216,9 @@ static int super_member_nilbit(Compiler *c, ClassInfo *cls, int a, int v, Buf *b
    a String member, boxed or unboxed to the member's kind (a poly arg, e.g.
    an initialize param that stayed poly, into a scalar member slot: unboxed
    to the member's C type), and a new Array into a general Array member
-   built as one, as nothing else holds it (the source walk follows it so,
-   struct_super_member_values). */
+   built as one, as nothing else holds it (the source walk marks it so,
+   struct_super_member_values: box_lift_arr, as emit_boxed_impl's lift
+   reads it). */
 static void emit_super_member_arg(Compiler *c, ClassInfo *cls, int a, int v, Buf *b) {
   TyKind ivt = cls->ivar_types[a];
   if (super_member_nilbit(c, cls, a, v, b)) return;
@@ -17223,7 +17230,7 @@ static void emit_super_member_arg(Compiler *c, ClassInfo *cls, int a, int v, Buf
     Buf ex; memset(&ex, 0, sizeof ex); emit_expr(c, v, &ex);
     emit_unbox_nilable_text(c, ivt, ex.p ? ex.p : "", b); free(ex.p);
   }
-  else if (ivt == TY_POLY_ARRAY && array_lift_fn(vr.as_ty) && is_fresh_array(c, v)) emit_array_lifted(c, v, vr.as_ty, b);
+  else if (ivt == TY_POLY_ARRAY && array_lift_fn(vr.as_ty) && box_lift_marked(c, v)) emit_array_lifted(c, v, vr.as_ty, b);
   else emit_expr(c, v, b);
 }
 /* A super's forwarded parameter pi, boxed: an Integer or Float parameter

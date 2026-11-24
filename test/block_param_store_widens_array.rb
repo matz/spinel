@@ -44,3 +44,12 @@ class S1 < P1; def run(a, &b) = super(a, &b); end
 class S4 < P1; def run(a, &b) = super; end
 a = [+"s"]; S1.new.run(a) { |x| x << 11 }; p a
 a = [+"s"]; S4.new.run(a) { |x| x << 12 }; p a
+
+# a keyword a `**` operand or a computed key supplies
+def ykw(**h) = yield(**h)
+b = [+"s"]; o = { k: b }; ykw(**o) { |k: nil| k << 13 }; p b
+pk = proc { |x, k: nil| k << 14 }
+b = [+"s"]; o = { k: b }; pk.call(1, **o, **{}); p b
+c = [+"n"]; nm = :k; pk.call(1, nm => c); p c
+pz = proc { |x, k: 0| x << k }
+d = [+"d"]; pz.call(d, **{}); p d

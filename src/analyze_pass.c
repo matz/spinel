@@ -15036,7 +15036,8 @@ static int bs_type_site(Compiler *c, int site, const int *argv, int argc, void *
    order, np + k for keyword k), or the rest's elements (BLOCK_REST),
    placed as block_site_types places them (block_site_place), each handed
    to fn: BV_WHOLE for the value itself, BV_ELEM for its elements (a
-   splat's operand, a lone Array taken apart over the parameters). A
+   splat's operand, a lone Array taken apart over the parameters, a `**`
+   operand's values for a keyword). A
    default the parameter may take is one of its values too, and a count
    the run time lays out hands every value a gathered one may be, as
    typing joins them. Answers the OR of what fn answers. */
@@ -15047,11 +15048,28 @@ int block_site_values(Compiler *c, const BlockSig *s, const int *av, int ac, int
   int kwh = -1;
   if (s->kw && nt_argv_kwh(nt, av, ac) >= 0) kwh = av[--ac];
   if (at >= np) {
+    /* as block_site_types types it: the value its key names, the values of
+       every `**` operand (BV_ELEM: a Hash's elements are its values) and
+       of a computed key (either may name it), and its default when it may
+       be absent */
     int kp = block_sig_kw(c, s, at - np);
     if (kp < 0) return 0;
     int vn = kwh >= 0 ? ie_kwhash_value(c, kwh, nt_wname(nt, kp)) : -1;
-    if (vn >= 0) return fn(c, vn, BV_WHOLE, ctx);
-    return nt_kind(nt, kp) == NK_OptionalKeywordParameterNode ? fn(c, nt_ref(nt, kp, "value"), BV_WHOLE, ctx) : 0;
+    if (vn >= 0) ch |= fn(c, vn, BV_WHOLE, ctx);
+    int en = 0; const int *els = kwh >= 0 ? nt_arr(nt, kwh, "elements", &en) : NULL;
+    for (int e = 0; e < en; e++) {
+      int x = nt_ref(nt, els[e], "value");
+      if (x < 0) continue;
+      if (nt_kind(nt, els[e]) == NK_AssocSplatNode) ch |= fn(c, x, BV_ELEM, ctx);
+      else if (nt_kind(nt, els[e]) == NK_AssocNode) {
+        int key = nt_ref(nt, els[e], "key");
+        if (key >= 0 && nt_kind(nt, key) != NK_SymbolNode && nt_kind(nt, key) != NK_StringNode)
+          ch |= fn(c, x, BV_WHOLE, ctx);
+      }
+    }
+    if (vn < 0 && nt_kind(nt, kp) == NK_OptionalKeywordParameterNode)
+      ch |= fn(c, nt_ref(nt, kp, "value"), BV_WHOLE, ctx);
+    return ch;
   }
   BlockPlace pl;
   block_site_place(c, s, av, ac, kwh, &pl);

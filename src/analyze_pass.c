@@ -10748,6 +10748,7 @@ void seed_unsupplied_nil_defaults(Compiler *c) {
 static int fresh_hash_value_rec(Compiler *c, int node, int *stack, int depth) {
   const NodeTable *nt = c->nt;
   if (node < 0 || depth > 4) return 0;
+  stack[depth] = -1;
   node = value_node_or_self(nt, node);
   if (node < 0) return 0;
   NodeKind k = nt_kind(nt, node);
@@ -10804,7 +10805,7 @@ static int fresh_hash_value_rec(Compiler *c, int node, int *stack, int depth) {
 }
 
 int an_is_fresh_hash_value(Compiler *c, int node) {
-  int stack[8];
+  int stack[8] = { -1, -1, -1, -1, -1, -1, -1, -1 };
   return fresh_hash_value_rec(c, node, stack, 0);
 }
 
@@ -10814,6 +10815,7 @@ int an_is_fresh_hash_value(Compiler *c, int node) {
 static int fresh_array_value_rec(Compiler *c, int node, int *stack, int depth) {
   const NodeTable *nt = c->nt;
   if (node < 0 || depth > 4) return 0;
+  stack[depth] = -1;
   node = value_node_or_self(nt, node);
   if (node < 0) return 0;
   NodeKind k = nt_kind(nt, node);
@@ -10864,7 +10866,7 @@ static int fresh_array_value_rec(Compiler *c, int node, int *stack, int depth) {
 }
 
 int an_is_fresh_array_value(Compiler *c, int node) {
-  int stack[8];
+  int stack[8] = { -1, -1, -1, -1, -1, -1, -1, -1 };
   return fresh_array_value_rec(c, node, stack, 0);
 }
 

@@ -17095,12 +17095,12 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
     /* File.new is File.open: handled by the File class-method block in the
        later dispatch (#2779). Dir.new likewise (#2821). */
     if (cn && (sp_streq(cn, "File") || sp_streq(cn, "Dir"))) { *out = 0; return 1; }
-    /* TCPServer.new(host, port) / (port); TCPSocket.new(host, port), which
-       connect_timeout: bounds. The handle IS an sp_File with a socket-kind
-       mode label (#2922). */
+    /* TCPServer.new(host, port) / (port), with NULL for a nil host;
+       TCPSocket.new(host, port), which connect_timeout: bounds. The handle
+       IS an sp_File with a socket-kind mode label (#2922). */
     if (cn && sp_streq(cn, "TCPServer") && sp_feature_required("socket") && argc >= 1) {
       buf_puts(b, "sp_sock_tcp_server(");
-      if (argc >= 2) { emit_str_expr(c, argv[0], b); buf_puts(b, ", "); emit_int_expr(c, argv[1], b); }
+      if (argc >= 2) { emit_native_value_arg(c, "string?", argv[0], b); buf_puts(b, ", "); emit_int_expr(c, argv[1], b); }
       else { buf_puts(b, "NULL, "); emit_int_expr(c, argv[0], b); }
       buf_puts(b, ")");
       { *out = 1; return 1; }

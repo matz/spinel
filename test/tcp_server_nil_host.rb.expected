@@ -1,0 +1,9 @@
+true
+"ab"
+Errno::EADDRINUSE
+bind(2) for nil port PORT
+Errno::EADDRINUSE
+bind(2) for nil port PORT
+Errno::EADDRINUSE
+bind(2) for nil port PORT
+"no implicit conversion of true into String"

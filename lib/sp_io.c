@@ -1635,17 +1635,27 @@ sp_int sp_sock_const(const char *n) {
   return -1;
 }
 
-/* Socket.const_defined?(name) for a name known at run time: as CRuby, a name
-   that cannot be a constant's raises NameError before any lookup, and a valid
-   one missing from the table answers false. */
+/* Socket.const_defined?(name) for a name known at run time. CRuby walks a
+   `::` path a segment at a time: a segment no constant can be named raises
+   NameError, an empty one names the whole path, and the first segment it does
+   not find answers false. The table holds single names, so the first segment
+   is checked and the table answers the rest, as it did before. */
+static int sp_sock_bad_segment(const char *s, size_t len) {
+  if (len == 0) return 1;
+  if ((unsigned char)s[0] < 0x80 && !(s[0] >= 'A' && s[0] <= 'Z')) return 1;
+  for (size_t i = 1; i < len; i++) {
+    unsigned char ch = (unsigned char)s[i];
+    if (ch < 0x80 && !((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_')) return 1;
+  }
+  return 0;
+}
 sp_bool sp_sock_const_defined(const char *n) {
   const char *s = n ? n : "";
-  int bad = !s[0] || ((unsigned char)s[0] < 0x80 && !(s[0] >= 'A' && s[0] <= 'Z'));
-  for (const char *p = s + 1; !bad && s[0] && *p; p++) {
-    unsigned char ch = (unsigned char)*p;
-    if (ch < 0x80 && !((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_')) bad = 1;
-  }
-  if (bad) sp_raise_cls("NameError", sp_sprintf("wrong constant name %s", s));
+  const char *seg = (s[0] == ':' && s[1] == ':') ? s + 2 : s;
+  const char *sep = strstr(seg, "::");
+  size_t len = sep ? (size_t)(sep - seg) : strlen(seg);
+  if (len == 0 || (sep && sep[2] == '\0')) sp_raise_cls("NameError", sp_sprintf("wrong constant name %s", s));
+  if (sp_sock_bad_segment(seg, len)) sp_raise_cls("NameError", sp_sprintf("wrong constant name %.*s", (int)len, seg));
   return sp_sock_const(s) >= 0;
 }
 

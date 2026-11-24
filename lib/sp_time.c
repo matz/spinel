@@ -91,9 +91,10 @@ sp_Time sp_timev_at_div(int64_t num, int64_t den) {
    nearest -1.3 is -1.3000000000000000444...). Reproduce that with integer
    math: decompose the double into mantissa * 2^exp via frexp, widen the
    mantissa-nanoseconds product to 128 bits, and arithmetic-shift (which
-   floors negatives) instead of multiplying in double precision. */
-static void sp_time_shift_ns(double secs, int64_t base_sec, int32_t base_ns,
-                             int64_t *out_sec, int32_t *out_ns) {
+   floors negatives) instead of multiplying in double precision. Returns 0
+   when the second count falls outside int64 (about +-2.9e11 years). */
+static int sp_time_shift_ns(double secs, int64_t base_sec, int32_t base_ns,
+                            int64_t *out_sec, int32_t *out_ns) {
   /* CRuby routes the Float through to_r, so a non-finite value raises
      FloatDomainError (Time.at(Float::INFINITY), t + Float::NAN, ...) rather
      than reaching frexp -- where (int64_t)(NaN/Inf * 2^53) would be UB. */
@@ -104,28 +105,35 @@ static void sp_time_shift_ns(double secs, int64_t base_sec, int32_t base_ns,
   int64_t mi = (int64_t)(m * 9007199254740992.0); /* m * 2^53, exact */
   e -= 53;
 #if SP_HAVE_INT128
+  if (e > 34) return 0;
   sp_int128 ns = (sp_int128)mi * 1000000000;
-  if (e > 0) ns = (e > 34) ? (ns < 0 ? INT64_MIN : INT64_MAX) : ns << e;
+  if (e > 0) ns <<= e;
   /* Floor toward -inf (arithmetic shift), matching CRuby's #nsec/#usec, which
      truncate the exact rational. spinel stores nanosecond resolution, so the
      sub-nanosecond bits CRuby keeps for #to_f round-tripping are lost by
      design (see docs/limitations.md). */
   else if (e < 0) ns = (-e > 126) ? (ns < 0 ? -1 : 0) : ns >> -e;
   sp_int128 total = ((sp_int128)base_sec * 1000000000 + base_ns) + ns;
-  int64_t sec = (int64_t)(total / 1000000000);
+  sp_int128 sec128 = total / 1000000000;
   int64_t rem = (int64_t)(total % 1000000000);
+  if (rem < 0) { sec128 -= 1; rem += 1000000000; }
+  if (sec128 > INT64_MAX || sec128 < INT64_MIN) return 0;
+  int64_t sec = (int64_t)sec128;
 #else
   /* no 128-bit integer (a 32-bit build): the same in long double, whose
      64-bit mantissa on x86 holds the nanosecond count of any date a
      32-bit sp_int can express; the floor is explicit */
   long double nsd = ldexpl((long double)mi * 1000000000.0L, e);
   long double totd = ((long double)base_sec * 1000000000.0L + (long double)base_ns) + floorl(nsd);
-  int64_t sec = (int64_t)floorl(totd / 1000000000.0L);
+  long double secd = floorl(totd / 1000000000.0L);
+  if (!(secd < 9223372036854775808.0L && secd >= -9223372036854775808.0L)) return 0;
+  int64_t sec = (int64_t)secd;
   int64_t rem = (int64_t)(totd - (long double)sec * 1000000000.0L);
-#endif
   if (rem < 0) { sec -= 1; rem += 1000000000; }
+#endif
   *out_sec = sec;
   *out_ns = (int32_t)rem;
+  return 1;
 }
 
 /* POSIX convention: keep tv_nsec in [0, 1e9). For negative epoch with
@@ -133,7 +141,8 @@ static void sp_time_shift_ns(double secs, int64_t base_sec, int32_t base_ns,
    into the positive nsec range -- so Time.at(-0.5).to_i returns -1, not 0. */
 sp_Time sp_timev_at_float(double epoch) {
   sp_Time r = { 0, 0, 0 };
-  sp_time_shift_ns(epoch, 0, 0, &r.tv_sec, &r.tv_nsec);
+  if (!sp_time_shift_ns(epoch, 0, 0, &r.tv_sec, &r.tv_nsec))
+    sp_raise_cls("RangeError", sp_sprintf("float %.10g out of range of Time", epoch));
   return r;
 }
 
@@ -490,7 +499,8 @@ int64_t sp_timev_utc_offset(sp_Time t){int32_t o;struct tm b;sp_timev_vtm(t,&b,&
    and offset are inherited from the receiver. */
 sp_Time sp_timev_add(sp_Time t, double secs) {
   sp_Time r = t;
-  sp_time_shift_ns(secs, t.tv_sec, t.tv_nsec, &r.tv_sec, &r.tv_nsec);
+  if (!sp_time_shift_ns(secs, t.tv_sec, t.tv_nsec, &r.tv_sec, &r.tv_nsec))
+    sp_raise_cls("RangeError", "time out of range");
   return r;
 }
 
@@ -917,13 +927,17 @@ int64_t sp_timev_hash(sp_Time t) {
   return (int64_t)(h & 0x3fffffffffffffffULL);
 }
 sp_Time sp_timev_add_i(sp_Time t, int64_t secs) {
+  if (secs > 0 ? t.tv_sec > INT64_MAX - secs : t.tv_sec < INT64_MIN - secs)
+    sp_raise_cls("RangeError", "time out of range");
   sp_Time r = t;
-  r.tv_sec = t.tv_sec + (time_t)secs;
+  r.tv_sec = t.tv_sec + secs;
   return r;
 }
 sp_Time sp_timev_sub_i(sp_Time t, int64_t secs) {
+  if (secs > 0 ? t.tv_sec < INT64_MIN + secs : t.tv_sec > INT64_MAX + secs)
+    sp_raise_cls("RangeError", "time out of range");
   sp_Time r = t;
-  r.tv_sec = t.tv_sec - (time_t)secs;
+  r.tv_sec = t.tv_sec - secs;
   return r;
 }
 double sp_timev_sub_t(sp_Time a, sp_Time b) {

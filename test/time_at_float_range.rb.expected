@@ -1,0 +1,22 @@
+9.2e+18: 9200000000000000000
+-9.2e+18: -9200000000000000000
+-9.223372036854776e+18: -9223372036854775808
+1000000000000.0: 1000000000000
+9.223372036854776e+18: RangeError float 9.223372037e+18 out of range of Time
+9.3e+18: RangeError float 9.3e+18 out of range of Time
+1.0e+19: RangeError float 1e+19 out of range of Time
+1.0e+300: RangeError float 1e+300 out of range of Time
+-9.3e+18: RangeError float -9.3e+18 out of range of Time
+-1.0e+300: RangeError float -1e+300 out of range of Time
++ 1.0e+17: RangeError time out of range
++ 1.0e+300: RangeError time out of range
++ -1.0e+300: RangeError time out of range
+- 1.0e+300: RangeError time out of range
+max + 0.5: 9223372036854775807
+max + 1.0: RangeError time out of range
++ 1: RangeError time out of range
++ 100000000000000000: RangeError time out of range
++ -1: RangeError time out of range
+- 1: RangeError time out of range
+- -1: RangeError time out of range
+- 0: 9223372036854775807

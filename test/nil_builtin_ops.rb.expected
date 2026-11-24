@@ -160,3 +160,16 @@ reduce_mark_back_enum: false true
 reduce_mark_back_enum: true false
 reduce_mark_back_enum: false true
 reduce_clean_repl: B
+reduce_seedless_tail: false true
+reduce_seedless_tail: true false
+reduce_seedless_tail: false true
+reduce_seedless_next: false true
+reduce_seedless_next: true false
+reduce_seedless_next: false true
+reduce_seedless_splat: false true
+reduce_seedless_splat: true false
+reduce_seedless_splat: false true
+reduce_seedless_enum: false true
+reduce_seedless_enum: true false
+reduce_seedless_enum: false true
+reduce_seedless_clean: B

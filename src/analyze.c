@@ -53208,6 +53208,71 @@ static int nil_default_maybe_taken(Compiler *c, Scope *sc, int i) {
   return taken;
 }
 
+/* Re-narrow a POLY_ARRAY ivar to IntArray when every element source is now
+   (post-fixpoint) int. The monotonic usage pass locks the slot to POLY_ARRAY
+   the first time it sees a push whose element type is still unknown -- e.g.
+   `@output_pixels << @output_color[i]` evaluated before @output_color settled
+   to IntArray. Once the element types settle, a slot whose only writes are int
+   pushes / int `[]=` / empty-or-int-array assignments can drop the per-element
+   boxing (optcarrot's per-frame pixel buffer is the motivating case). Strictly
+   conservative: any non-int source, or a write shape we don't model, keeps it
+   poly. */
+/* (the ivar writes and the calls on an ivar, by name, in one walk for every
+   ivar: a walk of the program per ivar grew with the ivars times the
+   program, and a class per attribute made every attribute such an ivar) */
+static void renarrow_int_array_ivars(Compiler *c) {
+  ANameIndex ix = {0};
+  int built = 0;
+  for (int ci = 0; ci < c->nclasses; ci++) {
+    ClassInfo *cl = &c->classes[ci];
+    for (int iv = 0; iv < cl->nivars; iv++) {
+      if (cl->ivar_int_table[iv]) continue;   /* already narrowed and pinned */
+      if (cl->ivar_types[iv] != TY_POLY_ARRAY) continue;
+      for (int id = 0; !built && id < c->nt->count; id++) {
+        NodeKind k = nt_kind(c->nt, id);
+        if (!nt_type(c->nt, id)) continue;
+        int recv = k == NK_CallNode ? nt_ref(c->nt, id, "receiver") : -1;
+        const char *nm = k == NK_InstanceVariableWriteNode ? nt_str(c->nt, id, "name")
+                       : recv >= 0 && nt_kind(c->nt, recv) == NK_InstanceVariableReadNode ? nt_str(c->nt, recv, "name") : NULL;
+        if (nm) ani_add(&ix, nm, id);
+      }
+      if (!built) { ani_sort(&ix); built = 1; }
+      const char *ivn = cl->ivars[iv];
+      int saw = 0, ok = 1;
+      for (int e = ani_first(&ix, ivn); e < ix.n && ok && sp_streq(ix.e[e].name, ivn); e++) {
+        int id = ix.e[e].v;
+        Scope *sc = comp_scope_of(c, id);
+        if (!sc || sc->class_id != ci) { ok = 0; break; }
+        if (nt_kind(c->nt, id) == NK_CallNode) {
+          const char *nm = nt_str(c->nt, id, "name");
+          int args = nt_ref(c->nt, id, "arguments"); int an = 0;
+          const int *argv = args >= 0 ? nt_arr(c->nt, args, "arguments", &an) : NULL;
+          if (nm && is_push_alias(nm)) {
+            for (int a = 0; a < an; a++) { saw = 1; if (infer_type(c, argv[a]) != TY_INT) { ok = 0; break; } }
+          }
+          else if (nm && is_index_assign(nm) && an == 2) {
+            saw = 1; if (infer_type(c, argv[1]) != TY_INT) ok = 0;
+          }
+        }
+        else {
+          int v = nt_ref(c->nt, id, "value");
+          TyKind vt = v >= 0 ? infer_type(c, v) : TY_UNKNOWN;
+          if (vt == TY_INT_ARRAY) { /* int array source */ }
+          else if (v >= 0 && nt_kind(c->nt, v) == NK_ArrayNode) {
+            int en = 0; const int *el = nt_arr(c->nt, v, "elements", &en);
+            for (int k = 0; k < en; k++) if (infer_type(c, el[k]) != TY_INT) { ok = 0; break; }
+          }
+          else { ok = 0; }
+        }
+      }
+      if (saw && ok) {
+        ivar_set_type(cl, iv, TY_INT_ARRAY);
+      }
+    }
+  }
+  ani_free(&ix);
+}
+
 /* After the fixpoint: the backstops for slots left without a type (empty literals, nullable params, unknown ivars and hashes), the nil-guard and is_a? narrowing, the return-type re-run, the param and hash-shape reconciliation, the bigint loop variables (analyze_program's steps, in their order) */
 static void an_phase_post_fixpoint(Compiler *c) {
   /* Backstop: a constant bound to an EMPTY array literal has no element type to
@@ -53413,65 +53478,7 @@ static void an_phase_post_fixpoint(Compiler *c) {
       lv_set_type(lv, want);
     }
   }
-  /* Re-narrow a POLY_ARRAY ivar to IntArray when every element source is now
-     (post-fixpoint) int. The monotonic usage pass locks the slot to POLY_ARRAY
-     the first time it sees a push whose element type is still unknown -- e.g.
-     `@output_pixels << @output_color[i]` evaluated before @output_color settled
-     to IntArray. Once the element types settle, a slot whose only writes are int
-     pushes / int `[]=` / empty-or-int-array assignments can drop the per-element
-     boxing (optcarrot's per-frame pixel buffer is the motivating case). Strictly
-     conservative: any non-int source, or a write shape we don't model, keeps it
-     poly. */
-  for (int ci = 0; ci < c->nclasses; ci++) {
-    ClassInfo *cl = &c->classes[ci];
-    for (int iv = 0; iv < cl->nivars; iv++) {
-      if (cl->ivar_int_table[iv]) continue;   /* already narrowed and pinned */
-      if (cl->ivar_types[iv] != TY_POLY_ARRAY) continue;
-      const char *ivn = cl->ivars[iv];
-      int saw = 0, ok = 1;
-      for (int id = 0; id < c->nt->count && ok; id++) {
-        const char *ty = nt_type(c->nt, id);
-        NodeKind ty_k = nt_kind(c->nt, id);
-        if (!ty) continue;
-        if (ty_k == NK_CallNode) {
-          int recv = nt_ref(c->nt, id, "receiver");
-          if (recv < 0) continue;
-          NodeKind rk = nt_kind(c->nt, recv);
-          if (rk != NK_InstanceVariableReadNode) continue;
-          const char *rivn = nt_str(c->nt, recv, "name");
-          if (!rivn || !sp_streq(rivn, ivn)) continue;
-          Scope *sc = comp_scope_of(c, id);
-          if (!sc || sc->class_id != ci) { ok = 0; break; }
-          const char *nm = nt_str(c->nt, id, "name");
-          int args = nt_ref(c->nt, id, "arguments"); int an = 0;
-          const int *argv = args >= 0 ? nt_arr(c->nt, args, "arguments", &an) : NULL;
-          if (nm && is_push_alias(nm)) {
-            for (int a = 0; a < an; a++) { saw = 1; if (infer_type(c, argv[a]) != TY_INT) { ok = 0; break; } }
-          }
-          else if (nm && sp_streq(nm, "[]=") && an == 2) {
-            saw = 1; if (infer_type(c, argv[1]) != TY_INT) ok = 0;
-          }
-        }
-        else if (ty_k == NK_InstanceVariableWriteNode) {
-          const char *wivn = nt_str(c->nt, id, "name");
-          if (!wivn || !sp_streq(wivn, ivn)) continue;
-          Scope *sc = comp_scope_of(c, id);
-          if (!sc || sc->class_id != ci) { ok = 0; break; }
-          int v = nt_ref(c->nt, id, "value");
-          TyKind vt = v >= 0 ? infer_type(c, v) : TY_UNKNOWN;
-          if (vt == TY_INT_ARRAY) { /* int array source */ }
-          else if (v >= 0 && nt_kind(c->nt, v) == NK_ArrayNode) {
-            int en = 0; const int *el = nt_arr(c->nt, v, "elements", &en);
-            for (int e = 0; e < en; e++) if (infer_type(c, el[e]) != TY_INT) { ok = 0; break; }
-          }
-          else { ok = 0; }
-        }
-      }
-      if (saw && ok) {
-        ivar_set_type(cl, iv, TY_INT_ARRAY);
-      }
-    }
-  }
+  renarrow_int_array_ivars(c);
 
   /* A read-only ivar (referenced but never assigned a typed value) stays
      TY_UNKNOWN -> it has no C type. Such a slot always reads nil at runtime;

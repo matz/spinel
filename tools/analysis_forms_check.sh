@@ -12,8 +12,7 @@
 #   under --int-overflow=promote and under SPINEL_GC_STRESS=1, each against
 #   its .expected;
 # - test/reject/table_loop_*.rb and test/reject/*macro*.rb, which must be
-#   refused, unless test/analysis-forms/ holds a program of the same name
-#   (class_<name> for a macro);
+#   refused;
 # - every other test/class_macro_*.rb and test/define_method_*.rb is refused,
 #   or answers its .expected and exits 0;
 # - test/analysis-forms/declines/*.rb, one program per reason the form
@@ -65,7 +64,6 @@ done
 
 for t in test/reject/table_loop_*.rb; do
   [ -f "$t" ] || continue
-  [ -f "test/analysis-forms/$(basename "$t")" ] && continue
   n=$((n + 1))
   if "$SP" "$t" -c --no-line-map -o "$tmp/r.c" >"$tmp/r.out" 2>&1; then
     echo "analysis-forms-test: FAIL ($t: compiled)"; ok=0
@@ -86,7 +84,6 @@ done
 
 for t in test/reject/*macro*.rb; do
   [ -f "$t" ] || continue
-  [ -f "test/analysis-forms/class_$(basename "$t")" ] && continue
   n=$((n + 1))
   if "$SP" "$t" -c --no-line-map -o "$tmp/r.c" >"$tmp/r.out" 2>&1; then
     echo "analysis-forms-test: FAIL ($t: compiled)"; ok=0

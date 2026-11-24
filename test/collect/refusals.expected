@@ -2084,8 +2084,6 @@ spinel: 1 refusal, nothing written
 == test/reject/table_loop_class_path_defined.rb [promote] rc=1
 spinel: test/reject/table_loop_class_path_defined.rb:9: unsupported call: node N (CallNode `const_set`) recv=-/ty-1 argc=2 arg0ty6
 spinel: 1 refusal, nothing written
-== test/reject/table_loop_computed_string_value.rb [default] rc=0
-== test/reject/table_loop_computed_string_value.rb [promote] rc=0
 == test/reject/table_loop_hash_each_redefined.rb [default] rc=1
 spinel: test/reject/table_loop_hash_each_redefined.rb:11: unsupported call: node N (CallNode `const_set`) recv=-/ty-1 argc=2 arg0ty6
 spinel: 1 refusal, nothing written

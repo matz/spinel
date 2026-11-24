@@ -20283,9 +20283,9 @@ static int emit_cells_test(Compiler *c, const CplanCells *cs, int tail, Buf *b);
    live (cplan_list_cells), as a respond_to? there answers, of the visibilities the list shows; the cells answer its
    visibility, so the table's, which the list shows the name by otherwise, is not asked */
 static int refl_name_cells(Compiler *c, const ReflNames *r, int i, CplanCells *cs, int *guarded) {
-  *guarded = r->at && r->vis_mask && !(r->at_side & CT_CMETHOD) &&
+  *guarded = r->at && r->vis_mask && !(r->at_side & CT_CMETHOD) && !(r->show[i] & REFL_OWN) &&
              cplan_guarded_presence(c, r->at_cls, r->v[i], (r->at_side & CT_OWN) != 0, cs);
-  return r->at && !*guarded && !(r->show[i] & REFL_ROW) &&
+  return r->at && !*guarded && !(r->show[i] & (REFL_ROW | REFL_OWN)) &&
          cplan_list_cells(c, r->at - 1, r->at_cls, r->at_side, r->v[i], r->vis_mask ? r->vis_mask : 3, cs) &&
          cplan_cells_testable(c, cs);
 }
@@ -20322,7 +20322,7 @@ void refl_emit_sym_array(Compiler *c, int cid, ReflNames *r, Buf *b) {
       buf_puts(b, "))); ");
       continue;
     }
-    if (!guarded && r->at && !(r->show[i] & REFL_ROW) && cplan_list_omits(c, r->at - 1, r->at_cls, r->at_side, r->v[i])) continue;
+    if (!guarded && r->at && !(r->show[i] & (REFL_ROW | REFL_OWN)) && cplan_list_omits(c, r->at - 1, r->at_cls, r->at_side, r->v[i])) continue;
     buf_printf(b, "sp_PolyArray_push(_t%d, sp_box_sym(sp_sym_intern(", ta);
     emit_str_literal(b, r->v[i]);
     buf_puts(b, "))); ");
@@ -20341,6 +20341,7 @@ static void refl_object_own_methods(Compiler *c, int id, int cid, const char *na
   mtab_build_enter(c);
   if (c->classes[cid].is_singleton_of) {
     refl_own_instance_methods(c, cid, 1, !pub_only, 0, 0, r);
+    for (int i = 0; i < r->n; i++) r->show[i] |= REFL_OWN;   /* (the object's own, whatever the class's cells say of the name) */
     k = c->classes[cid].is_singleton_of - 1;
   }
   if (pub_only && k >= 0) {

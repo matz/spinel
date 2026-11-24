@@ -1051,6 +1051,11 @@ int emit_call_file_dir_time_arms(Compiler *c, int id, Buf *b, const NodeTable *n
           return 1;
         }
       }
+      /* a Bignum past the word is the RangeError of the other Time.at forms */
+      if (at == TY_BIGINT) {
+        buf_puts(b, "sp_time_at_int("); emit_int_expr(c, argv[0], b); buf_puts(b, ")");
+        return 1;
+      }
       buf_printf(b, "sp_time_at_%s(", at == TY_FLOAT ? "float" : "int");
       emit_expr(c, argv[0], b); buf_puts(b, ")");
       return 1;

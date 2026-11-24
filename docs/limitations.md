@@ -2041,8 +2041,11 @@ The `int64` second count holds instants up to about 2.9e11 years from the
 epoch, and CRuby uses a Bignum second count past it. `#to_i` covers the
 whole `int64` range; `#year`, `#to_s` and `#strftime` return year 1900 after
 year 2147485547 and before year -2147481748, since `struct tm`'s `tm_year`
-is an `int`. `Time.at` with a `Float` raises `RangeError` when the second
-count falls outside `int64` (`Time.at(1e19)` raises
+is an `int`. `Time.at` with an `Integer` second count past `sp_int` (the
+machine word: `int64` on a 64-bit target, 32 bits on a 32-bit target) raises
+`RangeError` (`bignum too big to convert into 'long'`), `Time.at` with a
+`Float` raises `RangeError` when the second count falls outside `int64`
+(`Time.at(1e19)` raises
 `float 1e+19 out of range of Time`), and `Time#+` / `Time#-` with an
 `Integer` or a `Float` raise `RangeError` (`time out of range`) past the
 `int64` range.

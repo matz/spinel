@@ -377,3 +377,54 @@ seed_mb_clean = ["a"]
 repl_clean = ["b"]
 [1, 2].reduce(seed_mb_clean) { |acc, i| i == 1 ? repl_clean : acc }
 repl_clean.each { |s| puts "reduce_clean_repl: #{s.upcase}" }
+
+repl_seedless_tail = ["b"]
+[1, 2, 3].reduce do |acc, i|
+  if i == 2
+    repl_seedless_tail
+  else
+    acc[2] = "z"
+    acc
+  end
+end
+repl_seedless_tail.each { |s| puts "reduce_seedless_tail: #{s.nil?} #{s.respond_to?(:upcase)}" }
+
+repl_seedless_next = ["b"]
+[1, 2, 3].inject do |acc, i|
+  next repl_seedless_next if i == 2
+  acc[2] = "z"
+  acc
+end
+repl_seedless_next.each { |s| puts "reduce_seedless_next: #{s.nil?} #{s.respond_to?(:upcase)}" }
+
+repl_seedless_splat = ["b"]
+empty_reduce_args = []
+[1, 2, 3].reduce(*empty_reduce_args) do |acc, i|
+  if i == 2
+    repl_seedless_splat
+  else
+    acc[2] = "z"
+    acc
+  end
+end
+repl_seedless_splat.each { |s| puts "reduce_seedless_splat: #{s.nil?} #{s.respond_to?(:upcase)}" }
+
+class MiniEnum3
+  include Enumerable
+  def each
+    yield 1
+    yield 2
+    yield 3
+  end
+end
+repl_seedless_enum = ["b"]
+MiniEnum3.new.reduce do |acc, i|
+  next repl_seedless_enum if i == 2
+  acc[2] = "z"
+  acc
+end
+repl_seedless_enum.each { |s| puts "reduce_seedless_enum: #{s.nil?} #{s.respond_to?(:upcase)}" }
+
+repl_seedless_clean = ["b"]
+[1, 2, 3].reduce { |acc, i| i == 2 ? repl_seedless_clean : acc }
+repl_seedless_clean.each { |s| puts "reduce_seedless_clean: #{s.upcase}" }

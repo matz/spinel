@@ -305,6 +305,11 @@ typedef struct {
                        as it lands (#4481), and a concat of no Array raises
                        rather than stores. What a boxed argument's arrays
                        widen for (widen_boxed_array_sources). */
+  TyKind rest_elem_store; /* (a method's rest) the element type a store
+                       through one of the rest's elements carries
+                       (`r[0] << 1`), unified as boxed_push_elem is: the
+                       binding widens, for it, the arrays each call hands
+                       the rest (widen_rest_arg_arrays). */
   TyKind boxed_store_key, boxed_store_val; /* (params, boxed) the key and the
                        value an element write through this BOXED parameter
                        stores, unified as boxed_push_elem is: the evidence

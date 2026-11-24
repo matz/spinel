@@ -12271,6 +12271,17 @@ static int hc_node_ok(Compiler *c, int id, int stmt, HcRegion *r) {
       if ((local || ivar) && strstr(ty, "WriteNode")) {
         const char *wn = nt_str(nt, id, "name");
         if (!wn) return 0;
+        /* an operator write calls its operator, which for a variable that
+           holds an object is the program's code (a class's own `+`) and may
+           change an array the region holds or a loop's bound: only one over
+           numbers runs none, as the pure loop's walk asks (poll_pure_node) */
+        if (k == NK_LocalVariableOperatorWriteNode || k == NK_InstanceVariableOperatorWriteNode) {
+          int v = nt_ref(nt, id, "value");
+          TyKind wt = comp_ntype(c, id), vt = v >= 0 ? comp_ntype(c, v) : TY_UNKNOWN;
+          if (!((wt == TY_INT || wt == TY_FLOAT || hc_promoted_int(c, id)) &&
+                (vt == TY_INT || vt == TY_FLOAT || hc_promoted_int(c, v))))
+            return 0;
+        }
         nameset_add(local ? &r->wl : &r->wi, wn);
         break;
       }

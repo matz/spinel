@@ -144,15 +144,20 @@ def ints(n) = Array.new(n) { |k| k % 7 + 1 }
 def floats(n) = Array.new(n) { |k| (k % 5) * 0.5 }
 
 $stop = false
+ready = Queue.new
 churn = Thread.new do
   junk = 0
-  until $stop
+  loop do
     x = Array.new(64) { |k| "s#{k}" }
     junk += x.size
+    ready << true if junk == x.size
+    break if $stop
     Thread.pass
   end
   junk > 0
 end
+# (the loops start once the allocating thread has, so it runs beside them)
+ready.pop
 
 work = Thread.new do
   out = []

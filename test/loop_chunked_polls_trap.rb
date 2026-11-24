@@ -74,10 +74,13 @@ p [$o.s - $snap <= 10, $a.length]
 [:counted, :pure].each do |m|
   $at = nil
   Signal.trap(:USR1) { $o.n = 0; $at = $o.cur }
+  # (set once, ahead of the signal: a trap that lands between two calls
+  # leaves the bound lowered, and the next call stops at once)
+  $o.n = 400_000_000
+  last = 0
   k = kick
   arr = Array.new(1024, 1)
   while $at.nil?
-    $o.n = 400_000_000
     last = m == :counted ? $o.counted(arr) : $o.pure
   end
   Process.wait(k)

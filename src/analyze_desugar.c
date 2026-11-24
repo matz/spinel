@@ -30192,6 +30192,9 @@ int desugar_dynamic_const_get(Compiler *c) {
       scg_qual_build(nt, parent, n0, &q);
     }
     int g = scg_qual_resolve(nt, parent, &q, inh_scope_of(nt, parent, id), recv);
+    /* a builtin the receiver names, no module of the program (`Socket` beside a
+       `Cable::Socket`): taken by its leaf, the other module's table answered it */
+    if (g < 0 && nt_kind(nt, recv) == NK_ConstantReadNode && is_builtin_toplevel_const(mn)) continue;
     const char *key = g >= 0 ? q.names.key[g] : mn;
     int first = -1;
     if (g >= 0)

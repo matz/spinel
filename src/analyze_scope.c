@@ -12320,7 +12320,7 @@ typedef struct PivsFacts {
   int query, sweep, active;  /* active: the memo entry the query fills, -1 for none */
   int hash_mode;            /* the query's: 0 classes, 1 Hash origins, 2 callables */
   int init_args;            /* the query follows an initialize parameter through the arguments
-                               of the `K.new` calls that reach it (presence queries) */
+                               of the `K.new` calls that reach it (presence and Hash origin queries) */
   int stores_settled, stores_held, stores_widened;
   const NodeTable *ix_nt;
   unsigned ix_ver;
@@ -12630,10 +12630,14 @@ static int pivs_param(Compiler *c, Scope *s, const char *pn, char *set, int dept
     Scope *us = comp_scope_of(c, u);
     if (us && us->name && sp_streq(us->name, mn)) return 0;
   }
-  int i = -1, dflt = -1;
+  int i = -1, dflt = -1, kwpos = 0;
   if (pn) {
     int ps = nt_ref(nt, s->def_node, "parameters");
-    int rn = 0, on = 0;
+    int rn = 0, on = 0, kn = 0;
+    if (ps >= 0) nt_arr(nt, ps, "keywords", &kn);
+    /* brace-free pairs are the last positional argument of a method
+       with no keyword parameter (Hash origins queries) */
+    kwpos = c->pivs->hash_mode == 1 && kn == 0 && (ps < 0 || nt_ref(nt, ps, "keyword_rest") < 0);
     const int *rq = ps >= 0 ? nt_arr(nt, ps, "requireds", &rn) : NULL;
     const int *op = ps >= 0 ? nt_arr(nt, ps, "optionals", &on) : NULL;
     for (int k = 0; k < rn && i < 0; k++)
@@ -12683,7 +12687,8 @@ static int pivs_param(Compiler *c, Scope *s, const char *pn, char *set, int dept
     const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
     for (int k = 0; k < ac && k <= i; k++) {
       NodeKind ak = nt_kind(nt, av[k]);
-      if (ak == NK_SplatNode || ak == NK_BlockArgumentNode || ak == NK_KeywordHashNode) return 0;
+      if (ak == NK_SplatNode || ak == NK_BlockArgumentNode) return 0;
+      if (ak == NK_KeywordHashNode && !(kwpos && k == i && !nt_hash_has_splat(nt, av[k]))) return 0;
     }
     int x = i < ac ? av[i] : dflt;
     if (x < 0) continue;   /* too few: ArgumentError, no value */
@@ -13131,7 +13136,7 @@ static int pivs_value_walk(Compiler *c, int v, char *set, int depth) {
     return 1;
   }
   switch (nt_kind(nt, v)) {
-    case NK_HashNode:
+    case NK_HashNode: case NK_KeywordHashNode:
       pivs_note_builtin(c);
       if (c->pivs->hash_mode == 1 && !c->pivs->seen[v].done[0]) {
         int m = c->pivs->active, n = c->pivs->memo[m].nhash;
@@ -13198,6 +13203,11 @@ static int pivs_value_walk(Compiler *c, int v, char *set, int depth) {
         return pivs_elems(c, r, set, depth + 1) && pivs_value(c, fa[1], set, depth + 1);
       }
       if ((sp_streq(un, "itself") || sp_streq(un, "dup") || sp_streq(un, "clone")) && ac == 0)
+        return pivs_value(c, r, set, depth + 1);
+      /* a Hash's merge! answers its receiver (a merge! of two Hashes is
+         a chain of two): the Hash origins follow it. A block's break
+         answers another value. */
+      if (c->pivs->hash_mode == 1 && is_hash_merge_bang(un) && ac >= 1 && nt_ref(nt, v, "block") < 0)
         return pivs_value(c, r, set, depth + 1);
       return 0;
     }
@@ -13292,7 +13302,9 @@ static const char *pivs_call_set(Compiler *c, int call, const int **cls, int *n,
       const int *av = a >= 0 ? nt_arr(c->nt, a, "arguments", &ac) : NULL;
       if (ac == 1) recv = av[0];
     }
+    f->init_args = hashes == 1;
     f->memo[m].walked = pivs_value(c, recv, f->memo[m].set, 0);
+    f->init_args = 0;
     /* a Class value is no instance: the instance set bounds nothing then */
     f->memo[m].ok = f->memo[m].walked && !f->memo[m].has_class;
     f->memo[m].cls = NULL; f->memo[m].ncls = 0;
@@ -13935,19 +13947,38 @@ static int infer_struct_aset_call(Compiler *c, int id, NilWrites *writes, Struct
 /* A store through a bounded box types the original Hashes, so every alias
    observes the store. An unbounded answer changes no Hash. The store
    decides from settled types: until the re-narrow it is only noted as held
-   (pivs_settle_hash_stores). */
+   (pivs_settle_hash_stores). A merge! or update of typed Hashes, without a
+   block, stores the keys and values of each Hash the same way. */
 static int infer_hash_aset_call(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   int recv = nt_ref(nt, id, "receiver"), a = nt_ref(nt, id, "arguments"), ac = 0;
   const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
-  if (recv < 0 || ac != 2 || infer_type(c, recv) != TY_POLY) return 0;
-  TyKind hk = infer_type(c, av[0]), hv = infer_type(c, av[1]);
-  if (hk == TY_UNKNOWN || hv == TY_UNKNOWN) return 0;
+  if (recv < 0 || infer_type(c, recv) != TY_POLY) return 0;
+  int merge = is_hash_merge_bang(nt_str(nt, id, "name")), known = 0;
+  if (merge) {
+    if (ac < 1 || nt_ref(nt, id, "block") >= 0) return 0;
+    for (int i = 0; i < ac; i++) {
+      TyKind t = infer_type(c, av[i]);
+      if (!ty_is_hash(t)) return 0;
+      known |= ty_hash_key(t) != TY_UNKNOWN && ty_hash_val(t) != TY_UNKNOWN;
+    }
+  }
+  else {
+    if (ac != 2) return 0;
+    known = infer_type(c, av[0]) != TY_UNKNOWN && infer_type(c, av[1]) != TY_UNKNOWN;
+  }
+  if (!known) return 0;
   PivsFacts *f = pivs_facts(c);
   if (!f->stores_settled) { f->stores_held = 1; return 0; }
   if (!pivs_call_set(c, id, NULL, NULL, 1)) return 0;
   int m = f->memo_at[(size_t)id * 3 + 1] - 1, changed = 0;
-  for (int i = 0; i < f->memo[m].nhash; i++) changed |= widen_hash_arg_for_store(c, f->memo[m].hash[i], hk, hv);
+  for (int j = 0; j < (merge ? ac : 1); j++) {
+    TyKind t = merge ? infer_type(c, av[j]) : TY_UNKNOWN;
+    TyKind hk = merge ? ty_hash_key(t) : infer_type(c, av[0]);
+    TyKind hv = merge ? ty_hash_val(t) : infer_type(c, av[1]);
+    if (hk == TY_UNKNOWN || hv == TY_UNKNOWN) continue;
+    for (int i = 0; i < f->memo[m].nhash; i++) changed |= widen_hash_arg_for_store(c, f->memo[m].hash[i], hk, hv);
+  }
   f->stores_widened += changed;
   return changed;
 }
@@ -14198,6 +14229,10 @@ int infer_ivar_types(Compiler *c) {
       if (is_store_alias(nt_str(nt, id, "name"))) {
         if (infer_hash_aset_call(c, id)) changed = 1;
         if (infer_struct_aset_call(c, id, &nilw, &aset)) changed = 1;
+        continue;
+      }
+      if (is_hash_merge_bang(nt_str(nt, id, "name"))) {
+        if (infer_hash_aset_call(c, id)) changed = 1;
         continue;
       }
       /* attr-writer assignment: obj.x = v  (CallNode "x=") */

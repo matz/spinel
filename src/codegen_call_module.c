@@ -859,7 +859,7 @@ int emit_call_file_dir_time_arms(Compiler *c, int id, Buf *b, const NodeTable *n
         buf_puts(b, ")"); return 1;
       }
     }
-    /* Dir.glob(pattern, base:, sort:, flags: File::FNM_DOTMATCH) */
+    /* Dir.glob(pattern, base:, sort:, flags:) */
     if (sp_streq(name, "glob") && argc == 2 && nt_kind(nt, argv[1]) == NK_KeywordHashNode &&
         emit_dir_glob_options(c, argv[0], argv[1], -1, b)) return 1;
     /* Dir.glob(pattern, flags, base:, sort:): the positional flags beside the keywords */
@@ -867,11 +867,12 @@ int emit_call_file_dir_time_arms(Compiler *c, int id, Buf *b, const NodeTable *n
         nt_kind(nt, argv[1]) != NK_KeywordHashNode &&
         emit_dir_glob_options(c, argv[0], argv[2], argv[1], b)) return 1;
     /* Dir.glob(pattern, flags): a positional flag word with no keyword, which
-       sp_dir_glob_keywords reads as flags: does */
+       sp_dir_glob_keywords reads as flags: does. The Dir[] surface alias
+       is marked builtin-only and keeps its multiple-pattern route. */
     if (sp_streq(name, "glob") && argc == 2 && nt_kind(nt, argv[1]) != NK_KeywordHashNode &&
         nt_kind(nt, argv[1]) != NK_SplatNode && nt_kind(nt, argv[0]) != NK_SplatNode &&
         nt_kind(nt, argv[0]) != NK_ArrayNode && !ty_is_array(comp_ntype(c, argv[0])) &&
-        (comp_ntype(c, argv[1]) == TY_INT || nt_kind(nt, argv[1]) == NK_ConstantPathNode)) {
+        !cplan_builtin_call(c, id)) {
       buf_puts(b, "({ ");
       int first = emit_rooted_arg_list(c, argv, 2, "sp_RbVal", "SP_GC_ROOT_RBVAL", emit_boxed, NULL, b);
       buf_printf(b, "sp_dir_glob_keywords(_t%d, sp_box_nil(), _t%d, 1, sp_box_nil(), 0); })", first, first + 1);

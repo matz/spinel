@@ -42,10 +42,7 @@ class Pathname
   # Every path matching the glob pattern, as Pathnames. A Float flags value
   # is truncated, as CRuby truncates it; a flags value that is neither an
   # Integer nor a Float raises TypeError (a Rational or an object with
-  # #to_int is not accepted). Of the Integers, 0 takes the plain glob and
-  # File::FNM_DOTMATCH the one that keeps hidden entries; any other value
-  # raises NotImplementedError rather than reaching a Dir.glob that would not
-  # apply it.
+  # #to_int is not accepted). Dir.glob owns the flags' matching semantics.
   def self.glob(pattern, flags = 0)
     flags = flags.to_i if flags.is_a?(Float)
     unless flags.is_a?(Integer)
@@ -53,13 +50,7 @@ class Pathname
       what = flags == true || flags == false ? flags.to_s : flags.class.to_s
       raise TypeError, "no implicit conversion of #{what} into Integer"
     end
-    paths = if flags == 0
-      Dir.glob("#{pattern}")
-    elsif flags == File::FNM_DOTMATCH
-      Dir.glob("#{pattern}", File::FNM_DOTMATCH)
-    else
-      raise NotImplementedError, "Pathname.glob flags other than 0 and File::FNM_DOTMATCH"
-    end
+    paths = Dir.glob("#{pattern}", flags)
     paths.map { |x| new(x) }
   end
 

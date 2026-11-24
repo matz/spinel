@@ -12,6 +12,19 @@
 ["D/.", "D/.hidden", "D/sub", "D/visible"]
 ["D", "D/.hidden", "D/sub", "D/visible"]
 [".", ".hidden", "sub", "visible"]
+true
+true
+["D/sub", "D/visible"]
+true
+true
+["D/sub", "D/visible"]
+true
+true
+["D/sub", "D/visible"]
+["D/a\\b"]
+["D/a\\b"]
+["D/.", "D/.hidden", "D/sub", "D/sub/.inner", "D/visible"]
+["D", "D/.hidden", "D/sub", "D/sub/.inner", "D/visible"]
 ["D", "D/.hidden", "D/sub", "D/visible"]
 ["D"]
 [:class, "no implicit conversion of String into Integer"]

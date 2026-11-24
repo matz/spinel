@@ -1499,7 +1499,9 @@ const char *an_literal_name(const NodeTable *nt, int node) {
   NodeKind k = node >= 0 ? nt_kind(nt, node) : NK_NONE;
   if (k != NK_SymbolNode && k != NK_StringNode) return NULL;
   const char *v = nt_str(nt, node, "value");
-  return v ? v : nt_str(nt, node, "unescaped");
+  if (!v) v = nt_str(nt, node, "unescaped");
+  /* (a String literal as the parser gives it holds its text as content) */
+  return v ? v : nt_str(nt, node, "content");
 }
 /* Does the program alias method `a` or `b` (NULL for none): an `alias` or an `alias_method` whose old name is one of
    them, or is no literal name (it may be)? The copy an alias makes keeps the method it found. */

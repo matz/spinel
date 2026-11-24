@@ -2357,6 +2357,24 @@ static void lr_name(LoadRecord *r, const char *name, const char *suffix) {
   r->names[r->nnames++] = d;
 }
 
+/* Does send call n, whose sends take the first `used` of its ac arguments
+   av for the names, pass the method it runs nothing: no argument after the
+   names, no block, and no splat, keywords or `...` among the names? A
+   computed send of that shape makes no method of a name the record cannot
+   read: each form that names a method (define_method, attr_*, alias_method,
+   remove_method, undef_method, ...) takes the name as an argument, and an
+   attr form handed none makes nothing. What the method it runs may do is
+   the call's own answer (lr_node_defines: a call of a name it cannot
+   read may define). */
+static int lr_send_passes_nothing(const NodeTable *nt, int n, const int *av, int ac, int used) {
+  if (ac != used || nt_ref(nt, n, "block") >= 0) return 0;
+  for (int i = 0; i < ac; i++) {
+    NodeKind k = nt_kind(nt, av[i]);
+    if (k == NK_SplatNode || k == NK_KeywordHashNode || k == NK_ForwardingArgumentsNode || k == NK_BlockArgumentNode) return 0;
+  }
+  return 1;
+}
+
 /* The names the program defines methods by, wherever it does (a statement
    of the load phase, a class the record does not know, a method body or a
    block run later): a def's, an alias's, an attr form's, a define_method's
@@ -2386,8 +2404,10 @@ static void lr_names_take(Compiler *c) {
     const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
     if (!nm || !ac) continue;
     if (is_send_family(nm) || (is_code_eval_name(nm) && nt_ref(nt, n, "block") < 0)) {
-      const char *fn = call_sent_name(nt, n, NULL);
-      if (is_code_eval_name(nm) || !fn || is_method_naming_call(fn)) r->names_any = 1;
+      int used = 0;
+      const char *fn = call_sent_name(nt, n, &used);
+      if (is_code_eval_name(nm) || (!fn && !lr_send_passes_nothing(nt, n, av, ac, used)) || (fn && is_method_naming_call(fn)))
+        r->names_any = 1;
     }
     else if (is_attr_decl_reader(nm) || is_attr_decl_writer(nm))
       for (int i = 0; i < ac; i++) {

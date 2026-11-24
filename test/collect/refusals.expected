@@ -470,6 +470,12 @@ spinel: 1 refusal, nothing written
 == test/reject/class_eval_text_hook_param.rb [promote] rc=1
 spinel: test/reject/class_eval_text_hook_param.rb:7: unsupported call: node N (CallNode `class_eval`) recv=-/ty-1 argc=1 arg0ty6
 spinel: 1 refusal, nothing written
+== test/reject/class_macro_after_computed_send_of_a_defining_method.rb [default] rc=1
+spinel: test/reject/class_macro_after_computed_send_of_a_defining_method.rb:5: Module#define_method with a non-literal name is not supported; use a literal Symbol or String (see docs/limitations.md)
+spinel: 1 refusal, nothing written
+== test/reject/class_macro_after_computed_send_of_a_defining_method.rb [promote] rc=1
+spinel: test/reject/class_macro_after_computed_send_of_a_defining_method.rb:5: Module#define_method with a non-literal name is not supported; use a literal Symbol or String (see docs/limitations.md)
+spinel: 1 refusal, nothing written
 == test/reject/class_macro_after_cycle_read_under_guess.rb [default] rc=1
 spinel: test/reject/class_macro_after_cycle_read_under_guess.rb:7: Module#define_method with a non-literal name is not supported; use a literal Symbol or String (see docs/limitations.md)
 spinel: 1 refusal, nothing written
@@ -1286,10 +1292,6 @@ spinel: 1 refusal, nothing written
 spinel: test/reject/macro_hook_send.rb:7: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
 == test/reject/macro_hook_send.rb [promote] rc=1
 spinel: test/reject/macro_hook_send.rb:7: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
-== test/reject/macro_int_overflow.rb [default] rc=1
-spinel: test/reject/macro_int_overflow.rb:9: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
-== test/reject/macro_int_overflow.rb [promote] rc=1
-spinel: test/reject/macro_int_overflow.rb:9: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
 == test/reject/macro_lambda_assign.rb [default] rc=1
 spinel: test/reject/macro_lambda_assign.rb:11: undefined method 'k' for a Class: no class in the program defines a class method 'k' (NoMethodError)
 spinel: 1 refusal, nothing written
@@ -1334,10 +1336,6 @@ spinel: test/reject/macro_runtime_name_send.rb:9: unsupported send with a runtim
 spinel: test/reject/macro_send_ivar_set.rb:9: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
 == test/reject/macro_send_ivar_set.rb [promote] rc=1
 spinel: test/reject/macro_send_ivar_set.rb:9: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
-== test/reject/macro_send_write.rb [default] rc=1
-spinel: test/reject/macro_send_write.rb:7: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
-== test/reject/macro_send_write.rb [promote] rc=1
-spinel: test/reject/macro_send_write.rb:7: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=1 arg0ty6
 == test/reject/macro_setter_send.rb [default] rc=1
 spinel: test/reject/macro_setter_send.rb:5: unsupported send with a runtime method name (AOT needs a compile-time-known name): node N (CallNode `public_send`) recv=SelfNode/ty49 argc=2 arg0ty6
 == test/reject/macro_setter_send.rb [promote] rc=1

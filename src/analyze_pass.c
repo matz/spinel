@@ -10086,10 +10086,13 @@ static int widen_rest_arg_arrays(Compiler *c, Scope *m, const int *argv, const A
   LocalVar *rp = m->pnames[m->rest_idx] ? scope_local(m, m->pnames[m->rest_idx]) : NULL;
   if (!rp || rp->rbs_seeded || g_infer_optimistic || !argv || rest_elem_need(rp, 0, -1) == TY_UNKNOWN) return 0;
   /* a store at a literal index needs only the value laid there, where the
-     call's own arguments decide the count: none is a splat */
+     call's own arguments decide the count: none is a splat, and a keyword
+     hash the rest takes at its tail (rest_kwh) is one more value, or as
+     many as the run time finds keys for (a `**` spread) */
   int n = 0;
   for (int s = 0; s < L->pos_argc && n >= 0; s++)
     if (rest_arg_laid(c, m, argv, L, s)) n = L->gather || nt_kind(nt, argv[s]) == NK_SplatNode ? -1 : n + 1;
+  if (n >= 0 && L->rest_kwh >= 0) n = L->kw.count == KWC_ONE ? n + 1 : -1;
   int ch = 0;
   for (int s = 0, j = 0; s < L->pos_argc; s++) {
     if (!rest_arg_laid(c, m, argv, L, s)) continue;

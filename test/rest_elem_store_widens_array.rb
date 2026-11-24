@@ -36,3 +36,7 @@ a = [+"s"]; b = [+"t"]; S7.new.rr(b, a); p [a, b]
 def m6(*r) = (r.shift; r[0] << 8)
 a = [+"s"]; b = [+"t"]; m6(a, b); p [a, b]
 a = [+"s"]; b = [+"t"]; y2(a, b) { |*r| r.reverse!; r[0] << 9 }; p [a, b]
+
+# a keyword hash the rest takes at its tail is one more value
+def m7(*r) = r[-2] << 10
+a = [+"s"]; m7(a, k: 1); p a

@@ -13596,9 +13596,11 @@ static void emit_while_loop(Compiler *c, int id, Buf *b, int indent, int is_unti
      or a finalizer waits one such pass at most -- what a runtime call over
      the same array makes them wait already. An inner poll costs a pass of
      the loop an atomic load and the header reload behind it. Its signal poll
-     was the enclosing loop's already (#9222). */
+     was the enclosing loop's already (#9222). A body whose pass costs what
+     a String or a number holds (hc_subtree_slow) keeps its polls: one pass
+     over the array could take seconds. */
   int quiet = polls_in_cond && (g_uses_threads || g_uses_finalizers) && g_poll_loop_nest > 0 &&
-              !hc_subtree_stores(nt, body);
+              !hc_subtree_stores(nt, body) && !hc_subtree_slow(c, body);
   char trip[64] = "";
   if (proved) {
     Buf hcc; memset(&hcc, 0, sizeof hcc);

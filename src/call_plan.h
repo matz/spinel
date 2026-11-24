@@ -705,8 +705,9 @@ int cplan_window_version(Compiler *c, int id, int cls, const char *name, int sg,
    chain ends at BasicObject). -1 where a builtin answers or none does. */
 int cplan_instance_method(Compiler *c, int id, int cid, const char *name);
 /* Where the program's def of `name` that an instance of cid meets (cplan_instance_method) stands at
-   site id: its scope when it holds at every state the site may run in
-   (cplan_window_version), CPH_ABSENT when it comes after every run of the
+   site id: the scope of the version that holds at every state the site may
+   run in (cplan_window_version, not the table's, which a later reopening
+   may have replaced), CPH_ABSENT when it comes after every run of the
    site (the instance answers as if the program had none), CPH_UNKNOWN when
    the window holds states with it and without it, or the record cannot place
    the site, and CPH_NONE when the program defines none. A hook the site asks

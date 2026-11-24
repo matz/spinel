@@ -2953,7 +2953,9 @@ int cplan_hook_at(Compiler *c, int id, int cid, const char *name) {
   int n = elab_call_span(c, id, cid, name, 0, ct_after_point(c, id), NULL, ds, 2);
   if (framed) elab_plan_leave(c);
   if (n == 1 && !ds[0]) return CPH_ABSENT;   /* (no version at any state of the window: the def comes after every run of the site) */
-  return cplan_window_version(c, id, cid, name, 0, 0) >= 0 ? mi : CPH_UNKNOWN;
+  /* (the version the window proves is the one that runs, which a later reopening's table entry may not be) */
+  int v = cplan_window_version(c, id, cid, name, 0, 0);
+  return v >= 0 ? v : CPH_UNKNOWN;
 }
 /* Does call id meet versions after its point (elab_call_meet's 1): it runs
    later (ct_after_point), or the record keeps a block around it

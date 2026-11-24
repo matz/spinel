@@ -151,7 +151,7 @@ struct LoadRecord {
   /* the call plan's frame (elab_plan_enter): the map one build made, swapped
      in while call_target asks its questions, with the parents it climbed and
      the run points made of it (lr_run_points) */
-  struct LrPlan { LrStmt *st; int nst, cst, *at; unsigned char *bits; int n, ncap, runs_of, nrun, *rend, *rinst, *rentry, *rmade; struct LrExt *ext; int *extix, next, cext, cextix; } plan;
+  struct LrPlan { LrStmt *st; int nst, cst, *at; unsigned char *bits; int n, ncap, nregion, runs_of, nrun, *rend, *rinst, *rentry, *rmade; struct LrExt *ext; int *extix, next, cext, cextix; } plan;
   int *up, nup;              /* [nup] the parent each node's point was climbed from (lr_par) */
   int *plan_par, plan_depth;
   unsigned char plan_made;
@@ -1050,9 +1050,9 @@ void elab_hold(Compiler *c, int on) {
    lr_rta's first statements) are facts of one map's statement numbers, so
    they swap with it: the frame and the live map each make their own. */
 static void lr_plan_swap(LoadRecord *r) {
-  struct LrPlan live = { r->st, r->nst, r->cst, r->at, r->bits, r->n, r->ncap, r->runs_of, r->nrun, r->rend, r->rinst, r->rentry, r->rmade, r->ext, r->extix, r->next, r->cext, r->cextix };
+  struct LrPlan live = { r->st, r->nst, r->cst, r->at, r->bits, r->n, r->ncap, r->nregion, r->runs_of, r->nrun, r->rend, r->rinst, r->rentry, r->rmade, r->ext, r->extix, r->next, r->cext, r->cextix };
   r->st = r->plan.st; r->nst = r->plan.nst; r->cst = r->plan.cst; r->at = r->plan.at;
-  r->bits = r->plan.bits; r->n = r->plan.n; r->ncap = r->plan.ncap;
+  r->bits = r->plan.bits; r->n = r->plan.n; r->ncap = r->plan.ncap; r->nregion = r->plan.nregion;
   r->runs_of = r->plan.runs_of; r->nrun = r->plan.nrun; r->rend = r->plan.rend; r->rinst = r->plan.rinst;
   r->rentry = r->plan.rentry; r->rmade = r->plan.rmade; r->ext = r->plan.ext; r->extix = r->plan.extix; r->next = r->plan.next; r->cext = r->plan.cext;
   r->cextix = r->plan.cextix;
@@ -1098,7 +1098,7 @@ int elab_plan_enter(Compiler *c, int id) {
     r->plan.st = lr_dup(r->st, sizeof *r->st * (size_t)r->nst); r->plan.nst = r->plan.cst = r->nst;
     r->plan.at = lr_dup(r->at, sizeof(int) * (size_t)r->ncap);
     r->plan.bits = lr_dup(r->bits, (size_t)r->ncap);
-    r->plan.n = r->n; r->plan.ncap = r->ncap; r->plan.runs_of = -1;
+    r->plan.n = r->n; r->plan.ncap = r->ncap; r->plan.nregion = r->nregion; r->plan.runs_of = -1;
     r->plan_par = lr_dup(lr_par(c, 0), sizeof(int) * (size_t)r->n);
     r->plan_par = realloc(r->plan_par, sizeof(int) * (size_t)r->ncap);
     r->plan_made = 1;

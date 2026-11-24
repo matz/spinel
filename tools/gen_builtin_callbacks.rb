@@ -436,6 +436,7 @@ def probe(recv, builtin, own: nil, self_omit: [], own_role: :self, &build)
       TIMED_OUT << key if STATS[:timeout] > timeouts
       break unless events
       events.reject! { |n, role| role == own_role && n == own } if own
+      events.reject! { |n, _| FILL_NAMES.include?(n) }
       events.each { |n, role| ROWS[key] << [ROLES.fetch(effective_role(n, role)), n] }
       ROWS[key]
       grew = false
@@ -469,6 +470,13 @@ end
 # a probe in one slot (the rest 1 or "a"), in every slot, two probes in an
 # Array or a Hash (ELEM); a block that answers a probe (BLOCK) or the first
 # thing it is yielded (an element of the receiver).
+#
+# A fill is also a method name the builtin may be told to call: `inject("a")`
+# sends `a` to an element, a ghost probe that logs every name it is sent. That
+# is the method named by the argument, a call edge as a dynamic send's is (see
+# the head of the file), not a name the builtin calls back by itself, so a
+# call of a fill's name is no callback (probe).
+FILL_NAMES = %w[a Z].freeze
 def argument_shapes(n, elems, fills = [1, "a"], plain = [1])
   shapes = plain.map { |fill| [->(_mk) { Array.new(n, fill) }, ->(mk) { mk.(:block) }] }
   shapes.concat(plain.map { |fill| [->(_mk) { Array.new(n, fill) }, ->(_mk) { proc { |*a| a.first } }] }) if elems

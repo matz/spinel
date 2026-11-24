@@ -4450,12 +4450,22 @@ static int lr_node_defines(Compiler *c, int n, int direct, int depth) {
      program's own method of each send's name on the way, which a receiver
      may answer instead (`x.__send__(:public_send, :m)`), is asked too) */
   if (k == NK_CallNode && !word && !lr_block_eval(c, n)) {
-    const char *nm = nt_str(nt, n, "name"), *sent = call_sent_name(nt, n, NULL);
+    int used = 0;
+    const char *nm = nt_str(nt, n, "name"), *sent = call_sent_name(nt, n, &used);
     o = lr_most(o, lr_call_defines(c, sent, direct, depth));
     int an = 0, a = nt_ref(nt, n, "arguments");
     const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
     for (int i = 0; sent != nm && nm && is_send_family(nm) && o != LR_OPAQUE_DEFINES; nm = i < an ? vis_arg_name(nt, av[i++]) : NULL)
       if (lr_named(c, nm)) o = lr_most(o, lr_callee_defines(c, nm, direct, depth));
+    /* (inject and reduce with no block call the method their last argument
+       names on the accumulator: `[x, y].inject(:plus)` runs x.plus(y), a
+       call of that name; one the source does not spell may run any method.
+       So does one a send runs, `send(:inject, :plus)`: its arguments are
+       the ones after the names the sends take) */
+    int blk = nt_ref(nt, n, "block");
+    if (o != LR_OPAQUE_DEFINES && sent && (sp_streq(sent, "inject") || sp_streq(sent, "reduce")) && (an - used == 1 || an - used == 2) &&
+        (blk < 0 || (nt_kind(nt, blk) != NK_BlockNode && nt_kind(nt, blk) != NK_BlockArgumentNode)))
+      o = lr_most(o, lr_call_defines(c, vis_arg_name(nt, av[an - 1]), direct, depth));
   }
   if (lr_variable_op_write(k)) o = lr_most(o, lr_call_defines(c, nt_str(nt, n, "binary_operator"), direct, depth));
   if (o != LR_OPAQUE_DEFINES && !direct && !word && lr_node_dispatches(nt, n)) o = lr_most(o, lr_callbacks_define(c, depth));

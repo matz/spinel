@@ -476,6 +476,12 @@ spinel: 1 refusal, nothing written
 == test/reject/class_macro_after_cycle_read_under_guess.rb [promote] rc=1
 spinel: test/reject/class_macro_after_cycle_read_under_guess.rb:7: Module#define_method with a non-literal name is not supported; use a literal Symbol or String (see docs/limitations.md)
 spinel: 1 refusal, nothing written
+== test/reject/class_macro_after_inject_of_a_defining_name.rb [default] rc=1
+spinel: test/reject/class_macro_after_inject_of_a_defining_name.rb:6: Module#define_method with a non-literal name is not supported; use a literal Symbol or String (see docs/limitations.md)
+spinel: 1 refusal, nothing written
+== test/reject/class_macro_after_inject_of_a_defining_name.rb [promote] rc=1
+spinel: test/reject/class_macro_after_inject_of_a_defining_name.rb:6: Module#define_method with a non-literal name is not supported; use a literal Symbol or String (see docs/limitations.md)
+spinel: 1 refusal, nothing written
 == test/reject/class_macro_after_program_nested_send.rb [default] rc=1
 spinel: test/reject/class_macro_after_program_nested_send.rb:6: Module#define_method with a non-literal name is not supported; use a literal Symbol or String (see docs/limitations.md)
 spinel: 1 refusal, nothing written
@@ -487,6 +493,12 @@ spinel: test/reject/class_macro_after_program_send.rb:5: Module#define_method wi
 spinel: 1 refusal, nothing written
 == test/reject/class_macro_after_program_send.rb [promote] rc=1
 spinel: test/reject/class_macro_after_program_send.rb:5: Module#define_method with a non-literal name is not supported; use a literal Symbol or String (see docs/limitations.md)
+spinel: 1 refusal, nothing written
+== test/reject/class_macro_after_sent_inject_of_a_defining_name.rb [default] rc=1
+spinel: test/reject/class_macro_after_sent_inject_of_a_defining_name.rb:6: Module#define_method with a non-literal name is not supported; use a literal Symbol or String (see docs/limitations.md)
+spinel: 1 refusal, nothing written
+== test/reject/class_macro_after_sent_inject_of_a_defining_name.rb [promote] rc=1
+spinel: test/reject/class_macro_after_sent_inject_of_a_defining_name.rb:6: Module#define_method with a non-literal name is not supported; use a literal Symbol or String (see docs/limitations.md)
 spinel: 1 refusal, nothing written
 == test/reject/class_macro_called_at_run_time.rb [default] rc=1
 spinel: test/reject/class_macro_called_at_run_time.rb:5: Module#define_method with a non-literal name is not supported; use a literal Symbol or String (see docs/limitations.md)

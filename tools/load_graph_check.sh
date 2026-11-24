@@ -120,15 +120,6 @@ for e in test/load_graph/*.rb.load-record; do
   cmp -s "$tmp/record" "$e" || { fail "$t's load record is not its .load-record"; diff "$e" "$tmp/record" | sed -n 1,10p; }
 done
 
-# ...and the same program's record under --load-model=inline, where a require
-# is spliced (.load-record-inline)
-for e in test/load_graph/*.rb.load-record-inline; do
-  t=${e%.load-record-inline}
-  "$SPINEL" --load-model=inline --dump-load-record "$t" >"$tmp/record" 2>"$tmp/record.err" ||
-    { fail "$t: no load record under inline"; sed -n 1,5p "$tmp/record.err"; }
-  cmp -s "$tmp/record" "$e" || { fail "$t's inline load record is not its .load-record-inline"; diff "$e" "$tmp/record" | sed -n 1,10p; }
-done
-
 # A raise in a required file leaves its load with the frames it was raised
 # with: a --debug build's report of it names the raising method first, not
 # the load the exception passes through.
@@ -406,20 +397,14 @@ refused() {
 mkdir "$tmp/autoload" "$tmp/entry" "$tmp/end" "$tmp/mixin"
 printf 'module Lib; end\n' > "$tmp/autoload/lib.rb"
 printf 'autoload :Lib, File.join(__dir__, "lib")\np Lib\n' > "$tmp/autoload/main.rb"
-# A possible autoload definition anywhere keeps the original graph refusal.
-# Inline keeps its eager rewrite, even when the program owns the name.
+# A possible autoload definition anywhere keeps the original graph refusal,
+# even when the program owns the name.
 printf 'puts "must not load"\nclass Lib; end\n' > "$tmp/autoload/lib.rb"
 cat > "$tmp/autoload/main.rb" <<'RUBY'
 def autoload(*) = puts("user top")
 autoload(:Lib, File.join(__dir__, "lib"))
 RUBY
 refused autoload "--load-model=graph loads an autoload's file at its constant's first reference only later, for now"
-if "$SPINEL" --load-model=inline "$tmp/autoload/main.rb" -o "$tmp/autoload/bin" >"$tmp/autoload/cc" 2>&1; then
-  "$tmp/autoload/bin" > "$tmp/autoload/run"
-  printf 'must not load\n' | cmp -s - "$tmp/autoload/run" || fail "autoload inline changed its eager output"
-else
-  fail "autoload inline did not compile"
-fi
 cat > "$tmp/autoload/main.rb" <<'RUBY'
 class Holder
   def x(*) = puts("user alias")
@@ -431,12 +416,6 @@ end
 Holder.new.run
 RUBY
 refused autoload "--load-model=graph loads an autoload's file at its constant's first reference only later, for now"
-if "$SPINEL" --load-model=inline "$tmp/autoload/main.rb" -o "$tmp/autoload/bin" >"$tmp/autoload/cc" 2>&1; then
-  "$tmp/autoload/bin" > "$tmp/autoload/run"
-  printf 'must not load\n' | cmp -s - "$tmp/autoload/run" || fail "autoload inline changed its eager output"
-else
-  fail "autoload inline did not compile"
-fi
 printf 'puts "loaded"\nclass Holder; Z = 7; end\n' > "$tmp/autoload/lib.rb"
 cat > "$tmp/autoload/main.rb" <<'RUBY'
 class Other
@@ -449,12 +428,6 @@ puts "before"
 p Holder::Z
 RUBY
 refused autoload "--load-model=graph loads an autoload's file at its constant's first reference only later, for now"
-if "$SPINEL" --load-model=inline "$tmp/autoload/main.rb" -o "$tmp/autoload/bin" >"$tmp/autoload/cc" 2>&1; then
-  "$tmp/autoload/bin" > "$tmp/autoload/run"
-  printf 'loaded\nbefore\n7\n' | cmp -s - "$tmp/autoload/run" || fail "autoload inline changed its eager output"
-else
-  fail "autoload inline did not compile"
-fi
 # A scoped read through a class whose superclass chain the record does not
 # know may reach Object's registration: refused as on master.
 printf 'puts "loaded"\nclass Scoped; end\n' > "$tmp/autoload/lib.rb"
@@ -653,7 +626,7 @@ printf 'class Timer\n  def delay=(n); n + 2; end\nend\n' > "$tmp/alias_versions/
 printf 'def boot = require_relative("lib")\nclass Timer\n  def delay=(n); n + 1; end\n  alias_method :delay, :delay=\nend\nboot\np Timer.new.delay(10)\n' > "$tmp/alias_versions/main.rb"
 refused alias_versions "the alias reading reads the order of two files"
 
-# --strict-require holds in graph mode as in the inline one: a feature no
+# --strict-require holds under the load graph: a feature no
 # require names is not there (CRuby's NoMethodError for winsize, refused
 # here), and one a require names is.
 mkdir "$tmp/gate" "$tmp/gate_req"
@@ -721,18 +694,16 @@ fi
 # The load record reports whether the program may load an unread file.
 # The load, autoload and load-path nodes of the trees set this flag, as
 # does an unresolved require. A word in a comment or a String leaves it
-# clear. Both load models report the same result.
+# clear.
 unread_flag() {   # FILE UNREAD WHAT
-  for m in inline graph; do
-    if "$SPINEL" --load-model="$m" --dump-load-record "$1" >"$tmp/record" 2>"$tmp/record.err"; then
-      got=no
-      if grep -qx 'unread files: possible' "$tmp/record"; then got=yes; fi
-      [ "$got" = "$2" ] || fail "$3, --load-model=$m: unread files $got, expected $2"
-    else
-      fail "$3, --load-model=$m: no load record"
-      sed -n '1,5p' "$tmp/record.err"
-    fi
-  done
+  if "$SPINEL" --dump-load-record "$1" >"$tmp/record" 2>"$tmp/record.err"; then
+    got=no
+    if grep -qx 'unread files: possible' "$tmp/record"; then got=yes; fi
+    [ "$got" = "$2" ] || fail "$3: unread files $got, expected $2"
+  else
+    fail "$3: no load record"
+    sed -n '1,5p' "$tmp/record.err"
+  fi
 }
 unread_flag test/load_word_in_text.rb no "load in a comment and in a String"
 unread_flag test/load_word_called.rb yes "a call of load and the load path"
@@ -769,8 +740,7 @@ unread_form require_def no 'def require(x) = x\ndef require_all = 1\n'
 unread_form require_resolved no 'require "tmpdir"\n'
 unread_form require_receiver yes 'class K; def self.require(x) = x; end\nK.require "x"\n'
 
-# A parse error in a required file is placed as the inline model places it,
-# `file:line:col`, the file from the current directory, and --emit-types
+# A parse error in a required file is placed as `file:line:col`, the file from the current directory, and --emit-types
 # writes it as a diagnostic. Under --strict-require (spin build) a require
 # that no file answers is a compile-time refusal, not a run-time LoadError.
 mkdir -p "$tmp/pe"

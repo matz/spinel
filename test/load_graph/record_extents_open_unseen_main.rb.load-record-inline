@@ -1,9 +1,0 @@
-load record: 4 points, 1 regions
-unread files: possible
-r0 #0 f0 ProgramNode line 5
-r0 #1 f0 ConstantWriteNode L line 5
-r0 #2 f0 LocalVariableWriteNode name line 6
-r0 #3 f0 CallNode require_relative line 7
-const L: write#1
-post: after #3
-extent lambda line 5: from=#1 sure=never count=many kept=yes

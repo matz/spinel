@@ -1,7 +1,7 @@
 # Holds spinel's load record (--dump-load-record, src/analyze_elab.c)
 # against what CRuby does when it runs the same program's load phase.
 #
-#   ruby tools/load_record_oracle.rb [--spinel BIN] [--inline] [--timeout S] PROGRAM...
+#   ruby tools/load_record_oracle.rb [--spinel BIN] [--timeout S] PROGRAM...
 #
 # CRuby runs each program (its output thrown away) under a tracer that logs
 # what the load phase defines, as the program's own hooks would see it: a
@@ -35,8 +35,7 @@
 # Exits 1 when any program differs or spinel fails on one (any exit but a
 # refusal of --load-model=graph's); a program graph refuses is skipped, and
 # so is one CRuby stopped early on with no difference in what it ran, which
-# is said. Under graph (the default) each file has its own lines; --inline
-# is for a program of one file.
+# is said. Each file has its own lines.
 require "rbconfig"
 require "tempfile"
 require "timeout"
@@ -175,23 +174,18 @@ def hidden?(name) = name.start_with?("__") || name.include?("#") || name.include
 
 # The record's events: [path, line, kind, owner, name, seq, may]; or nil,
 # what spinel said, and whether that is a refusal of the graph model
-def spinel_events(spinel, prog, inline)
-  mode = [inline ? "--load-model=inline" : "--load-model=graph"]
-  ok, rec = run(spinel, *mode, "--dump-load-record", prog)
+def spinel_events(spinel, prog)
+  ok, rec = run(spinel, "--dump-load-record", prog)
   unless ok
     refusal = rec.lines.map(&:strip).find { |l| l.match?(/:\d+: --load-model=graph\b/) }
     return [nil, refusal, true] if refusal
     return [nil, rec.lines.last.to_s.strip.then { |l| l.empty? ? $?.to_s : l }, false]
   end
   files = {}
-  if inline
-    files[0] = File.expand_path(prog).b
-  else
-    ok, graph = run(spinel, "--load-model=graph", "--dump-load-graph", prog)
-    # without the graph no entry has a file, and every one would be dropped
-    return [nil, graph.lines.last.to_s.strip.then { |l| l.empty? ? $?.to_s : l }, false] unless ok
-    graph.scan(/^file (\d+) (.*)$/) { files[$1.to_i] = $2 }
-  end
+  ok, graph = run(spinel, "--dump-load-graph", prog)
+  # without the graph no entry has a file, and every one would be dropped
+  return [nil, graph.lines.last.to_s.strip.then { |l| l.empty? ? $?.to_s : l }, false] unless ok
+  graph.scan(/^file (\d+) (.*)$/) { files[$1.to_i] = $2 }
   own = %w[builtins packages].map { |d| File.join(File.dirname(File.expand_path(spinel)), d, "").b }
   st = {}
   ev = []
@@ -267,23 +261,21 @@ def compare(cruby, spinel, opaque, finished)
 end
 
 spinel = File.expand_path("../spinel", __dir__)
-inline = false
 timeout = 30
 progs = []
 args = ARGV.dup
 while (a = args.shift)
   case a
   when "--spinel" then spinel = args.shift
-  when "--inline" then inline = true
   when "--timeout" then timeout = args.shift.to_f
   else progs << File.expand_path(a)
   end
 end
-abort "usage: ruby tools/load_record_oracle.rb [--spinel BIN] [--inline] [--timeout S] PROGRAM..." if progs.empty?
+abort "usage: ruby tools/load_record_oracle.rb [--spinel BIN] [--timeout S] PROGRAM..." if progs.empty?
 
 agree = differ = 0
 progs.each do |prog|
-  sev, opaque, refused = spinel_events(spinel, prog, inline)
+  sev, opaque, refused = spinel_events(spinel, prog)
   if sev.nil?
     puts refused ? "#{prog}: skipped, spinel: #{opaque}" : "#{prog}: spinel failed: #{opaque}"
     differ += 1 unless refused

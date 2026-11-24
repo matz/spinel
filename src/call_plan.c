@@ -15424,11 +15424,16 @@ static void ver_obj_presence_keep(Compiler *c, int id, const char *name, int cls
     ver_cmethod_cells_keep(c, id, name, cls, list ? 0 : mask);
     return;
   }
-  if (!(list ? cplan_list_cells(c, id, cls, side, name, mask, &cs) : cplan_presence_cells(c, id, cls, side, name, mask, &cs)) ||
-      cplan_cells_fixed(&cs)) return;
-  for (int i = 0; i < cs.n; i++) {
-    ver_cell_keep(c, cs.cell[i]);
-    if (cs.vis[i][0]) ver_cell_keep(c, cs.vis[i]);
+  /* (a respond_to? whose include_all only the run knows asks the cells of both answers, the public one and every visibility's) */
+  int both = !list && !respond_to_vis_mask(c->nt, id);
+  for (int all = 0; all <= both; all++) {
+    int m = all ? 7 : mask;
+    if (!(list ? cplan_list_cells(c, id, cls, side, name, m, &cs) : cplan_presence_cells(c, id, cls, side, name, m, &cs)) ||
+        cplan_cells_fixed(&cs)) continue;
+    for (int i = 0; i < cs.n; i++) {
+      ver_cell_keep(c, cs.cell[i]);
+      if (cs.vis[i][0]) ver_cell_keep(c, cs.vis[i]);
+    }
   }
 }
 /* See call_plan.h. A cell is kept where the C reads it: a read in a

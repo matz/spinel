@@ -6924,7 +6924,7 @@ static int bind_dynamic_new_initializers(Compiler *c, int call_id) {
 static int is_fresh_hash(Compiler *c, int v) {
   const NodeTable *nt = c->nt;
   if (v < 0) return 0;
-  if (nt_kind(nt, v) == NK_HashNode) return 1;
+  if (nt_kind(nt, v) == NK_HashNode || nt_kind(nt, v) == NK_KeywordHashNode) return 1;
   if (nt_kind(nt, v) != NK_CallNode || !sp_streq(nt_str(nt, v, "name"), "new")) return 0;
   int r = nt_ref(nt, v, "receiver");
   return r >= 0 && nt_kind(nt, r) == NK_ConstantReadNode && sp_streq(nt_str(nt, r, "name"), "Hash");
@@ -7082,7 +7082,7 @@ static int widen_arg_hash(Compiler *c, int arg) {
   const NodeTable *nt = c->nt;
   arg = value_node_or_self(nt, arg);   /* `(a; {k: 1})` is the literal */
   NodeKind ak = nt_kind(nt, arg);
-  if (ak == NK_HashNode) return want_poly_hash(c, arg);
+  if (ak == NK_HashNode || ak == NK_KeywordHashNode) return want_poly_hash(c, arg);
   if (ak == NK_CallNode) {
     int w = widen_returned_hashes(c, arg);
     return w >= 0 ? w : widen_hash_sources(c, arg);

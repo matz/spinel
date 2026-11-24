@@ -78,3 +78,18 @@ k = K9.new; k.v = [+"s"]; m(kv(k)); p k.v
 class L9; attr_accessor :v; end
 k = K9.new; k.v = [+"s"]; [0].instance_variable_set(:@v, 1); k.v += [+"t"]; y1(k.v) { |x| x << 19 }; p k.v
 k = K9.new; k.v = [+"s"]; k.v ||= [+"t"]; l = L9.new; l.v ||= [1]; y1(k.v) { |x| x << 20 } if ARGV.size > 5; p [k.v, l.v]
+
+# an attribute handed nil first, a Struct member read by its name or place,
+# and members a super of the class's own initialize sets
+class K10; attr_accessor :v; end
+k10 = K10.new; k10.v = nil; k10.v = [1] if ARGV.size == 0; y1(k10.v) { |x| x << +"z" } if k10.v; p k10.v
+S10 = Struct.new(:v)
+s10 = S10.new([+"s"]); y1(s10[:v]) { |x| x << 21 }; y1(s10["v"]) { |x| x << 22 }; y1(s10[-1]) { |x| x << 23 }; p s10.v
+S11 = Struct.new(:v) do
+  def initialize(x) = super([x])
+end
+s11 = S11.new(+"s"); y1(s11.v) { |x| x << 24 }; p s11.v
+D11 = Data.define(:v) do
+  def initialize(v:) = super(v: [v])
+end
+d11 = D11.new(+"s"); y1(d11.v) { |x| x << 25 }; p d11.v

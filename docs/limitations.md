@@ -2048,7 +2048,10 @@ machine word: `int64` on a 64-bit target, 32 bits on a 32-bit target) raises
 (`Time.at(1e19)` raises
 `float 1e+19 out of range of Time`), and `Time#+` / `Time#-` with an
 `Integer` or a `Float` raise `RangeError` (`time out of range`) past the
-`int64` range.
+`int64` range. `Time#round` and `Time#ceil` raise `RangeError` when the
+rounding carry passes the `int64` range, and `Time.at(sec, frac, unit)` and
+`Time.at(sec, usec)` raise `RangeError` when the fraction's whole seconds or
+the carry pass the `int64` range.
 
 #### Aliasing the regexp match globals
 

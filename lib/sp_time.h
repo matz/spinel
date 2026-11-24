@@ -43,6 +43,8 @@ sp_Time sp_timev_now(void);
 sp_Time sp_timev_at_int(int64_t sec);
 sp_Time sp_timev_norm(sp_Time t);   /* carry a whole second out of tv_nsec */
 sp_Time sp_timev_add_nsec(sp_Time t, int64_t ns);
+sp_Time sp_timev_add_nsec_f(sp_Time t, double ns);
+sp_Time sp_timev_add_units(sp_Time t, int64_t n, int64_t mult);
 int64_t sp_time_zone_arg_off(const char *z, int *is_utc_out);
 sp_Time sp_timev_in_zone_i(sp_Time t, int64_t off);
 sp_Time sp_timev_in_zone_s(sp_Time t, const char *z);
@@ -126,6 +128,8 @@ sp_Time *sp_time_now(void);
 sp_Time *sp_time_at_int(int64_t sec);
 sp_Time *sp_time_norm(const sp_Time *t);
 sp_Time *sp_time_add_nsec(const sp_Time *t, int64_t ns);
+sp_Time *sp_time_add_nsec_f(const sp_Time *t, double ns);
+sp_Time *sp_time_add_units(const sp_Time *t, int64_t n, int64_t mult);
 sp_Time *sp_time_in_zone_i(const sp_Time *t, int64_t off);
 sp_Time *sp_time_in_zone_s(const sp_Time *t, const char *z);
 sp_Time *sp_time_at_float(double epoch);

@@ -1087,9 +1087,9 @@ int emit_call_file_dir_time_arms(Compiler *c, int id, Buf *b, const NodeTable *n
       buf_puts(b, ";");
       /* a second positional argument is microseconds */
       if (argc >= 3) {
-        buf_printf(b, " _t%d = sp_time_add_nsec(_t%d, (int64_t)((", ts, ts);
+        buf_printf(b, " _t%d = sp_time_add_units(_t%d, (int64_t)(", ts, ts);
         emit_int_expr(c, argv[1], b);
-        buf_puts(b, ")) * 1000);");
+        buf_puts(b, "), 1000);");
       }
       emit_time_in_zone(c, ts, inv, b);
       return 1;
@@ -1117,13 +1117,13 @@ int emit_call_file_dir_time_arms(Compiler *c, int id, Buf *b, const NodeTable *n
         buf_printf(b, "({ SP_TIME_TMP(_t%d) = ", ts);
         if (st == TY_FLOAT) { buf_puts(b, "sp_time_at_float("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
         else { buf_puts(b, "sp_time_at_int("); emit_int_expr(c, argv[0], b); buf_puts(b, ")"); }
-        buf_printf(b, "; _t%d = sp_time_add_nsec(_t%d, (int64_t)(", ts, ts);
+        buf_printf(b, "; _t%d = ", ts);
         TyKind ut = repr_of(c, argv[1]).as_ty;
-        if (ut == TY_FLOAT) { buf_puts(b, "("); emit_expr(c, argv[1], b); buf_printf(b, ") * %ld.0", mult); }
-        else if (ut == TY_RATIONAL) { buf_puts(b, "sp_rational_to_f("); emit_expr(c, argv[1], b); buf_printf(b, ") * %ld.0", mult); }
-        else { buf_puts(b, "((int64_t)("); emit_int_expr(c, argv[1], b); buf_printf(b, ")) * %ld", mult); }
+        if (ut == TY_FLOAT) { buf_printf(b, "sp_time_add_nsec_f(_t%d, (", ts); emit_expr(c, argv[1], b); buf_printf(b, ") * %ld.0", mult); }
+        else if (ut == TY_RATIONAL) { buf_printf(b, "sp_time_add_nsec_f(_t%d, sp_rational_to_f(", ts); emit_expr(c, argv[1], b); buf_printf(b, ") * %ld.0", mult); }
+        else { buf_printf(b, "sp_time_add_units(_t%d, (int64_t)(", ts); emit_int_expr(c, argv[1], b); buf_printf(b, "), %ld", mult); }
         /* a whole unit or more carries into the seconds field (#3704) */
-        buf_printf(b, ")); _t%d; })", ts);
+        buf_printf(b, "); _t%d; })", ts);
         return 1;
       }
     }
@@ -1139,13 +1139,13 @@ int emit_call_file_dir_time_arms(Compiler *c, int id, Buf *b, const NodeTable *n
       if (st == TY_FLOAT) { buf_puts(b, "sp_time_at_float("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
       else if (st_repr.kind == RK_BOXED || st == TY_UNKNOWN) { buf_puts(b, "sp_time_at_float(sp_poly_to_f("); emit_boxed(c, argv[0], b); buf_puts(b, "))"); }
       else { buf_puts(b, "sp_time_at_int("); emit_int_expr(c, argv[0], b); buf_puts(b, ")"); }
-      buf_printf(b, "; _t%d = sp_time_add_nsec(_t%d, (int64_t)(", ts, ts);
+      buf_printf(b, "; _t%d = ", ts);
       TyKind ut = repr_of(c, argv[1]).as_ty;
-      if (ut == TY_FLOAT) { emit_expr(c, argv[1], b); buf_puts(b, " * 1000.0"); }
-      else if (ut == TY_RATIONAL) { buf_puts(b, "sp_rational_to_f("); emit_expr(c, argv[1], b); buf_puts(b, ") * 1000.0"); }
-      else { buf_puts(b, "((int64_t)("); emit_int_expr(c, argv[1], b); buf_puts(b, ")) * 1000"); }
+      if (ut == TY_FLOAT) { buf_printf(b, "sp_time_add_nsec_f(_t%d, (", ts); emit_expr(c, argv[1], b); buf_puts(b, ") * 1000.0"); }
+      else if (ut == TY_RATIONAL) { buf_printf(b, "sp_time_add_nsec_f(_t%d, sp_rational_to_f(", ts); emit_expr(c, argv[1], b); buf_puts(b, ") * 1000.0"); }
+      else { buf_printf(b, "sp_time_add_units(_t%d, (int64_t)(", ts); emit_int_expr(c, argv[1], b); buf_puts(b, "), 1000"); }
       /* a whole second or more carries into the seconds field (#3704) */
-      buf_printf(b, ")); _t%d; })", ts);
+      buf_printf(b, "); _t%d; })", ts);
       return 1;
     }
     if ((sp_streq(name, "local") || sp_streq(name, "mktime") ||

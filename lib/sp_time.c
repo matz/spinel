@@ -32,7 +32,10 @@ sp_Time sp_timev_round_to(sp_Time t, int64_t ndigits, int mode) {
   if (mode == 0)      ns = ns / scale * scale;
   else if (mode == 1) { if (ns % scale) ns = (ns / scale + 1) * scale; }
   else                ns = (ns + scale / 2) / scale * scale;
-  if (ns >= 1000000000) { t.tv_sec += 1; ns -= 1000000000; }
+  if (ns >= 1000000000) {
+    if (t.tv_sec == INT64_MAX) sp_raise_cls("RangeError", "time out of range");
+    t.tv_sec += 1; ns -= 1000000000;
+  }
   t.tv_nsec = (int32_t)ns;
   return t;
 }
@@ -43,6 +46,13 @@ sp_Time sp_timev_now(void) {
   return (sp_Time){ ts.tv_sec, (int32_t)ts.tv_nsec, 0 };
 }
 
+/* tv_sec + secs, raising RangeError past int64 */
+static int64_t sp_time_sec_add(int64_t sec, int64_t secs) {
+  if (secs > 0 ? sec > INT64_MAX - secs : sec < INT64_MIN - secs)
+    sp_raise_cls("RangeError", "time out of range");
+  return sec + secs;
+}
+
 /* A sub-second argument of a whole unit or more belongs in the seconds
    field, the way CRuby normalises it (#3704). */
 sp_Time sp_timev_norm(sp_Time t) {
@@ -51,16 +61,23 @@ sp_Time sp_timev_norm(sp_Time t) {
     int64_t carry = ns / 1000000000LL;
     ns -= carry * 1000000000LL;
     if (ns < 0) { ns += 1000000000LL; carry--; }
-    t.tv_sec += carry;
+    t.tv_sec = sp_time_sec_add(t.tv_sec, carry);
     t.tv_nsec = (int32_t)ns;
   }
   return t;
 }
 /* Add a sub-second offset that may exceed a whole second (#3704). */
 sp_Time sp_timev_add_nsec(sp_Time t, int64_t ns) {
-  t.tv_sec += ns / 1000000000LL;
+  t.tv_sec = sp_time_sec_add(t.tv_sec, ns / 1000000000LL);
   t.tv_nsec = (int32_t)((int64_t)t.tv_nsec + ns % 1000000000LL);
   return sp_timev_norm(t);
+}
+/* Time.at(sec, n, unit) with an Integer n: n * mult nanoseconds, where mult
+   divides 1e9, split into seconds first so the product cannot overflow */
+sp_Time sp_timev_add_units(sp_Time t, int64_t n, int64_t mult) {
+  int64_t per = 1000000000LL / mult;
+  t.tv_sec = sp_time_sec_add(t.tv_sec, n / per);
+  return sp_timev_add_nsec(t, n % per * mult);
 }
 sp_Time sp_timev_at_int(int64_t sec) {
   return (sp_Time){ sec, 0, 0 };
@@ -503,6 +520,28 @@ sp_Time sp_timev_add(sp_Time t, double secs) {
     sp_raise_cls("RangeError", "time out of range");
   return r;
 }
+/* Time.at(sec, f, unit) with a Float f: f * mult nanoseconds. A product
+   past the int64 nanosecond range is an integer a * 2^k (k >= 11), split
+   exactly into seconds and nanoseconds by a long division by 1e9 =
+   2^9 * 1953125, with the seconds checked against the room tv_sec leaves. */
+sp_Time sp_timev_add_nsec_f(sp_Time t, double ns) {
+  if (fabs(ns) < 9223372036854775808.0) return sp_timev_add_nsec(t, (int64_t)ns);
+  if (!isfinite(ns)) return sp_timev_add(t, ns);   /* FloatDomainError */
+  int e;
+  double m = frexp(fabs(ns), &e);
+  uint64_t a = (uint64_t)(m * 9007199254740992.0);   /* fabs(ns) = a * 2^(e-53) */
+  uint64_t room = ns < 0 ? (uint64_t)t.tv_sec - (uint64_t)INT64_MIN
+                         : (uint64_t)INT64_MAX - (uint64_t)t.tv_sec;
+  uint64_t q = a / 1953125, r = a % 1953125;
+  for (int i = 0; i < e - 62; i++) {
+    if (q > (room >> 1)) sp_raise_cls("RangeError", "time out of range");
+    q <<= 1; r <<= 1;
+    if (r >= 1953125) { r -= 1953125; q++; }
+  }
+  if (q > room) sp_raise_cls("RangeError", "time out of range");
+  t.tv_sec = (int64_t)(ns < 0 ? (uint64_t)t.tv_sec - q : (uint64_t)t.tv_sec + q);
+  return sp_timev_add_nsec(t, ns < 0 ? -(int64_t)(r * 512) : (int64_t)(r * 512));
+}
 
 /* strftime returns 0 -- never overruns the buffer -- when the formatted
    result would exceed it, which we surface as "". The 4 KB buffer covers
@@ -941,7 +980,10 @@ sp_Time sp_timev_sub_i(sp_Time t, int64_t secs) {
   return r;
 }
 double sp_timev_sub_t(sp_Time a, sp_Time b) {
-  return sp_time_ns_to_f(a.tv_sec - b.tv_sec, (int64_t)a.tv_nsec - b.tv_nsec);
+  int64_t dns = (int64_t)a.tv_nsec - b.tv_nsec;
+  if (b.tv_sec > 0 ? a.tv_sec < INT64_MIN + b.tv_sec : a.tv_sec > INT64_MAX + b.tv_sec)
+    return (double)a.tv_sec - (double)b.tv_sec + (double)dns / 1e9;
+  return sp_time_ns_to_f(a.tv_sec - b.tv_sec, dns);
 }
 
 const char *sp_str_inspect(const char *s);
@@ -1336,6 +1378,8 @@ sp_Time *sp_time_now(void) { return sp_time_ref(sp_timev_now()); }
 sp_Time *sp_time_at_int(int64_t sec) { return sp_time_ref(sp_timev_at_int(sec)); }
 sp_Time *sp_time_norm(const sp_Time *t) { return sp_time_ref(sp_timev_norm(*t)); }
 sp_Time *sp_time_add_nsec(const sp_Time *t, int64_t ns) { return sp_time_ref(sp_timev_add_nsec(*t, ns)); }
+sp_Time *sp_time_add_nsec_f(const sp_Time *t, double ns) { return sp_time_ref(sp_timev_add_nsec_f(*t, ns)); }
+sp_Time *sp_time_add_units(const sp_Time *t, int64_t n, int64_t mult) { return sp_time_ref(sp_timev_add_units(*t, n, mult)); }
 sp_Time *sp_time_in_zone_i(const sp_Time *t, int64_t off) { return sp_time_ref(sp_timev_in_zone_i(*t, off)); }
 sp_Time *sp_time_in_zone_s(const sp_Time *t, const char *z) { return sp_time_ref(sp_timev_in_zone_s(*t, z)); }
 sp_Time *sp_time_at_float(double epoch) { return sp_time_ref(sp_timev_at_float(epoch)); }

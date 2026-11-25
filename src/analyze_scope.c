@@ -8370,7 +8370,9 @@ void register_rt_sites(Compiler *c) {
   int named = 0, per_eval = 1;
   for (int i = 0; i < c->nclasses; i++) {
     int def = c->classes[i].def_node, bare = nt_int(c->nt, def, "rt_bare_super", 0);
-    if (nt_int(c->nt, def, "class_new_static_repeat", 0)) per_eval = 0;
+    int rec = c->classes[i].is_struct || c->classes[i].is_data ? class_def_record(c->nt, def) : -1;
+    if (nt_int(c->nt, def, "class_new_static_repeat", 0) || (rec >= 0 && nt_int(c->nt, rec, "class_new_static_repeat", 0)))
+      per_eval = 0;
     if (nt_int(c->nt, def, "class_new_anonymous", 0) != 3) continue;
     if (!named) { program_def_names(c->nt, &defnames); named = 1; }
     int ok = !class_inherits_builtin_exception(c, i) && body_only_declares(c->nt, class_def_body(c->nt, def), &defnames);

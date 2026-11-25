@@ -27700,9 +27700,15 @@ int desugar_class_new_blocks(Compiler *c, HostStep *h) {
         continue;
       }
     }
-    if (!is_new_name(nm) || recv < 0) continue;
-    if (nt_kind(nt, recv) != NK_ConstantReadNode) continue;
+    if (!nm || recv < 0 || nt_kind(nt, recv) != NK_ConstantReadNode) continue;
     const char *rn = nt_str(nt, recv, "name");
+    /* (a Struct.new or Data.define evaluated more than once keeps one class
+       for every evaluation: register_rt_sites) */
+    if (is_record_class_builder(rn, nm)) {
+      if (cn_site_repeats(nt, parent, id)) nt_node_set_int(nt, id, "class_new_static_repeat", 1);
+      continue;
+    }
+    if (!is_new_name(nm)) continue;
     int is_module = is_module_new(rn, nm);
     if (!is_module && !is_class_new(rn, nm)) continue;
     int an = nt_ref(nt, id, "arguments");

@@ -8577,8 +8577,8 @@ static int class_at_or_above(Compiler *c, int a, int k) {
    `s.u`). A class the facts leave unbounded may be held beside the set's
    members (cls_fact_excludes rules none out), so one of those that answers
    the name must be below one of the classes and answer it by an attribute
-   too. */
-static int recv_fact_attr_classes(Compiler *c, int r, const char *nm, IvarSlots *sl) {
+   too. With CT_WRITER in fl, the same for the attribute's writer. */
+static int recv_fact_attr_classes(Compiler *c, int r, const char *nm, unsigned fl, IvarSlots *sl) {
   const ClsSet *s = cls_fact_node(c, r);
   if (!s || s->all || s->n == 0 || s->os || ((s->bv || cls_bk_any(s)) && bop_any_answers(nm))) return 0;
   int *out = malloc(sizeof(int) * (size_t)s->n), n = 0;
@@ -8586,22 +8586,22 @@ static int recv_fact_attr_classes(Compiler *c, int r, const char *nm, IvarSlots 
   sl->cls = out;
   for (int m = cls_set_next(s, -1); m >= 0; m = cls_set_next(s, m)) {
     if (m >= c->cls_fact_ncls || !cls_fact_bounded(c, m)) return 0;
-    if (!call_attr_target(c, -1, m, nm, 0, NULL)) {
-      if (call_answers(c, -1, m, nm, 0, NULL) || call_target(c, -1, m, METHOD_MISSING_NAME, CT_METHODS, NULL) >= 0 || bop_any_answers(nm)) return 0;
+    if (!call_attr_target(c, -1, m, nm, fl, NULL)) {
+      if (call_answers(c, -1, m, nm, fl, NULL) || call_target(c, -1, m, METHOD_MISSING_NAME, CT_METHODS, NULL) >= 0 || bop_any_answers(nm)) return 0;
       continue;
     }
     int top = m, i = 0;
     for (int a = c->classes[m].parent; a >= 0; a = c->classes[a].parent)
-      if (call_attr_target(c, -1, a, nm, 0, NULL)) top = a;
+      if (call_attr_target(c, -1, a, nm, fl, NULL)) top = a;
     while (i < n && out[i] != top) i++;
     if (i == n) out[n++] = top;
   }
   for (int k = 0; k < c->nclasses; k++) {
     if ((k < c->cls_fact_ncls && cls_fact_bounded(c, k)) || comp_class_is_module(c, &c->classes[k]) ||
-        !call_answers(c, -1, k, nm, 0, NULL)) continue;
+        !call_answers(c, -1, k, nm, fl, NULL)) continue;
     int i = 0;
     while (i < n && !class_at_or_above(c, k, out[i])) i++;
-    if (i == n || !call_attr_target(c, -1, k, nm, 0, NULL)) return 0;
+    if (i == n || !call_attr_target(c, -1, k, nm, fl, NULL)) return 0;
   }
   return n;
 }
@@ -8609,6 +8609,29 @@ void ivar_slots_free(IvarSlots *sl) {
   if (sl->cls != &sl->one) free(sl->cls);
   sl->cls = &sl->one;
   sl->n = 0;
+}
+/* The classes whose attribute `nm` the call `v` in scope sc reaches, by
+   its reader or (fl CT_WRITER) its writer, into sl, and their count, with
+   the ivar's name in *ivn, as ivar_src_slots answers for a reader's call. */
+static int ivar_attr_call_slots(Compiler *c, int v, Scope *sc, const char *nm, unsigned fl, const char **ivn,
+                                IvarSlots *sl) {
+  char ivb[300];
+  if (snprintf(ivb, sizeof ivb, "@%s", nm) >= (int)sizeof ivb) return 0;
+  int r = nt_ref(c->nt, v, "receiver"), cls = -1, n = 0;
+  if (r < 0) cls = sc->is_cmethod ? -1 : sc->class_id;
+  else {
+    TyKind rt = infer_type(c, r);
+    if (ty_is_object(rt)) cls = ty_object_class(rt);
+  }
+  MtabMark mt_was = mtab_push_in(c, v);
+  if (cls >= 0) n = call_attr_target(c, -1, cls, nm, fl, NULL) ? (sl->one = cls, 1) : 0;
+  else if (r >= 0) n = recv_fact_attr_classes(c, r, nm, fl, sl);
+  mtab_pop(c, mt_was);
+  ClassInfo *ci = n > 0 ? &c->classes[sl->cls[0]] : NULL;
+  int ix = ci ? comp_ivar_index(ci, ivb) : -1;
+  if (ix < 0) { ivar_slots_free(sl); return 0; }
+  *ivn = ci->ivars[ix];
+  return sl->n = n;
 }
 /* The classes whose ivar the value `v` reads, into sl (ivar_slots_free),
    with the ivar's name in *ivn, and their count: an ivar read in a method,
@@ -8633,23 +8656,40 @@ int ivar_src_slots(Compiler *c, int v, const char **ivn, IvarSlots *sl) {
   if (a >= 0) nt_arr(nt, a, "arguments", &an);
   const char *nm = nt_str(nt, v, "name");
   if (an == 1 && is_aref_name(nm)) return sl->n = (sl->one = struct_aref_member_slot(c, v, ivn)) >= 0;
-  char ivb[300];
-  if (an > 0 || !nm || snprintf(ivb, sizeof ivb, "@%s", nm) >= (int)sizeof ivb) return 0;
-  int r = nt_ref(nt, v, "receiver"), cls = -1, n = 0;
-  if (r < 0) cls = sc->is_cmethod ? -1 : sc->class_id;
-  else {
-    TyKind rt = infer_type(c, r);
-    if (ty_is_object(rt)) cls = ty_object_class(rt);
+  if (an > 0 || !nm) return 0;
+  return ivar_attr_call_slots(c, v, sc, nm, 0, ivn, sl);
+}
+/* The classes whose ivar a write used as a value stores into, as
+   ivar_src_slots answers for a read: an ivar write (`k.v = @w = x`) or an
+   attribute writer's call, written as an assignment (`k.v = q.v = x`) or
+   with its one value as an argument (`q.v=(x)`, which a send by the
+   writer's literal name `q.send(:v=, x)` is lowered to), each of which
+   answers the value it stores, which that ivar then holds too (an
+   attribute's writer answers its argument however it is called). */
+static int ivar_write_slots(Compiler *c, int v, const char **ivn, IvarSlots *sl) {
+  const NodeTable *nt = c->nt;
+  Scope *sc = comp_scope_of(c, v);
+  sl->cls = &sl->one; sl->n = 0;
+  if (!sc) return 0;
+  if (nt_kind(nt, v) == NK_InstanceVariableWriteNode) {
+    *ivn = nt_str(nt, v, "name");
+    sl->one = !*ivn ? -1 : sc->class_id >= 0 ? sc->class_id : ivar_main_slot_class(c, sc, v);
+    return sl->n = sl->one >= 0;
   }
-  MtabMark mt_was = mtab_push_in(c, v);
-  if (cls >= 0) n = call_attr_target(c, -1, cls, nm, 0, NULL) ? (sl->one = cls, 1) : 0;
-  else if (r >= 0) n = recv_fact_attr_classes(c, r, nm, sl);
-  mtab_pop(c, mt_was);
-  ClassInfo *ci = n > 0 ? &c->classes[sl->cls[0]] : NULL;
-  int ix = ci ? comp_ivar_index(ci, ivb) : -1;
-  if (ix < 0) { ivar_slots_free(sl); return 0; }
-  *ivn = ci->ivars[ix];
-  return sl->n = n;
+  if (nt_kind(nt, v) != NK_CallNode || nt_ref(nt, v, "block") >= 0) return 0;
+  const char *nm = nt_str(nt, v, "name");
+  int a = nt_ref(nt, v, "arguments"), an = 0;
+  const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+  if (an != 1 || nt_kind(nt, av[0]) == NK_SplatNode || nt_kind(nt, av[0]) == NK_BlockArgumentNode) return 0;
+  char base[256];
+  if (!nm || !name_is_plain_setter(nm) || !setter_base_name(nm, base, sizeof base)) return 0;
+  return ivar_attr_call_slots(c, v, sc, base, CT_WRITER, ivn, sl);
+}
+/* The classes whose ivar the value `v` is the Array of, read
+   (ivar_src_slots) or stored as the write's value (ivar_write_slots). */
+int ivar_value_slots(Compiler *c, int v, const char **ivn, IvarSlots *sl) {
+  int n = ivar_src_slots(c, v, ivn, sl);
+  return n > 0 ? n : ivar_write_slots(c, v, ivn, sl);
 }
 
 /* 1 when every write of the global, class variable or constant `v` reads
@@ -8944,7 +8984,7 @@ static int ivar_src_walk(Compiler *c, int v, int icls, const char *ivn, int appl
       (!member && struct_super_member_values(c, icls, ivi, &aw)) ||
       (!fresh && !aw.n)) return 0;
   if (!apply) return 1;
-  aw.apply = 1;
+  aw.apply = 1; aw.ch = 0;
   attr_writer_calls(c, icls, ivn, attr_writer_arg_walk, &aw);
   if (writer) attr_op_writes(c, icls, ivn + 1, attr_writer_arg_walk, &aw);
   if (!member) struct_super_member_values(c, icls, ivi, &aw);
@@ -9068,11 +9108,26 @@ static int array_src_walk(Compiler *c, int v, int pinned, int apply, int *stack,
      left typed would be copied into the widened slot, away from its caller. */
   const char *ivn = NULL;
   IvarSlots isl;
-  int nicl = ivar_src_slots(c, v, &ivn, &isl);
+  /* (a write used as a value answers the value it stores, which its ivar
+     holds: the ivar is followed as its read is, so both holders widen and
+     still hold one Array) */
+  int nicl = ivar_value_slots(c, v, &ivn, &isl);
   if (nicl > 0) {
     /* (a read on a receiver of several classes reads one slot of each, all
        of which must be followed before any widens) */
     int ch = 0, ok = 1;
+    /* (an ivar write's value is built as the general Array itself, as a
+       writer call's is (attr_value_walk), so the write answers the Array
+       its ivar holds, with no conversion between them) */
+    if (k == NK_InstanceVariableWriteNode) {
+      int wv = nt_ref(nt, v, "value");
+      if (!array_src_walk(c, wv, 1, 0, stack, depth + 1) ||
+          !ivar_src_walk(c, v, isl.cls[0], ivn, 0, stack, depth)) { ivar_slots_free(&isl); return 0; }
+      if (apply) ch = array_src_walk(c, wv, 1, 1, stack, depth + 1);
+      ch |= ivar_src_walk(c, v, isl.cls[0], ivn, apply, stack, depth);
+      ivar_slots_free(&isl);
+      return ch;
+    }
     if (nicl == 1) ch = ivar_src_walk(c, v, isl.cls[0], ivn, apply, stack, depth);
     else {
       for (int q = 0; q < nicl && ok; q++) ok = ivar_src_walk(c, v, isl.cls[q], ivn, 0, stack, depth);

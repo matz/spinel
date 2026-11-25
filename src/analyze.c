@@ -17766,7 +17766,7 @@ static void widen_ivars_from_pushed_params(Compiler *c) {
     if (!c->ivar_widen_src[id]) continue;
     const char *ivn = NULL;
     IvarSlots isl;
-    int ncl = ivar_src_slots(c, id, &ivn, &isl);
+    int ncl = ivar_value_slots(c, id, &ivn, &isl);
     for (int q = 0; q < ncl; q++) {
       ClassInfo *k = &c->classes[isl.cls[q]];
       int ivi = comp_ivar_index(k, ivn);

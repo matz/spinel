@@ -5609,8 +5609,9 @@ int self_is_main_raw(Compiler *c, int node) {
 int self_class_body(Compiler *c, int node) {
   Scope *s = comp_scope_of(c, node);
   if (!s || s->class_id >= 0) return -1;
-  if (an_ie_class_id >= 0 || ie_class_of(c, node) != -1) return -1;
-  if (!c->node_cbody || node < 0 || node >= c->node_cap) return -1;
+  if (!c->node_cbody || node < 0 || node >= c->node_cap || c->node_cbody[node] < 0) return -1;
+  if (an_ie_class_id >= 0 || ie_class_of(c, node) != -1 || ie_rebound_node(c, node) ||
+      ie_nonobj_node(c, node) || ie_pending_node(c, node)) return -1;
   return c->node_cbody[node];
 }
 

@@ -17097,7 +17097,7 @@ void emit_stmt(Compiler *c, int id, Buf *b, int indent) {
      compile time), so the class body skips these declarations -- also where
      one stands inside a conditional or a block of the body, which reaches
      here rather than the body's own skip (tzinfo's string_deduper.rb) */
-  if (g_class_body_id >= 0 && nt_kind(c->nt, id) == NK_CallNode && nt_ref(c->nt, id, "receiver") < 0) {
+  if (emit_self_class_body(c, id) >= 0 && nt_kind(c->nt, id) == NK_CallNode && nt_ref(c->nt, id, "receiver") < 0) {
     const char *dn = nt_str(c->nt, id, "name");
     if (dn && (sp_streq(dn, "private_constant") || sp_streq(dn, "public_constant") ||
                sp_streq(dn, "deprecate_constant"))) {

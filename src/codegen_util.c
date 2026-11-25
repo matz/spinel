@@ -1484,6 +1484,11 @@ int substituted_local_node(const NodeTable *nt, int node) {
 int g_ie_class_id = -1;
 int g_ie_discard_value = 0;
 int g_ie_nil_ivars = 0;
+
+int emit_self_class_body(Compiler *c, int id) {
+  if (g_class_body_id < 0 || g_ie_class_id >= 0 || g_ie_nil_ivars || g_ie_rself_on) return -1;
+  return self_class_body(c, id) == g_class_body_id ? g_class_body_id : -1;
+}
 int ie_nil_ivar_read(Compiler *c, int node) {
   return g_ie_nil_ivars && ie_class_of(c, node) < 0;
 }

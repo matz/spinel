@@ -291,7 +291,7 @@ int desugar_class_body_bare_new(Compiler *c) {
     if (!nm || !sp_streq(nm, "new")) continue;
     if (nt_ref(nt, id, "receiver") >= 0) continue;
     if (id >= c->node_cap) continue;
-    int cid = c->node_cbody[id];
+    int cid = self_class_body(c, id);
     if (cid < 0 || cid >= c->nclasses) continue;
     Scope *sc = comp_scope_of(c, id);
     if (sc && sc->name) continue;   /* inside a def: not the body */
@@ -351,7 +351,7 @@ int desugar_bare_class_self_calls(Compiler *c) {
     if (id >= c->node_cap) continue;
     Scope *sc = comp_scope_of(c, id);
     int in_cmethod = sc && sc->name && sc->is_cmethod && sc->class_id >= 0;
-    int in_body = (!sc || !sc->name) && c->node_cbody[id] >= 0;
+    int in_body = (!sc || !sc->name) && self_class_body(c, id) >= 0;
     if (!in_cmethod && !in_body) continue;
     /* A Struct or Data class answers `members` itself, ahead of Object's (a
        top-level def): in its class method the bare call is `self.members`,
@@ -5817,7 +5817,7 @@ static int send_family_user_answers(Compiler *c, int id, int recv, const char *n
     Scope *sc = comp_scope_of(c, id);
     if (!sc || sc->class_id < 0) {
       /* in a class's own body self is the class (comp_cbody_call_mi) */
-      int cb = c->node_cbody[id];
+      int cb = self_class_body(c, id);
       return cb >= 0 && !(sc && sc->name) && send_own_in_chain(c, id, cb, name, 1);
     }
     return send_own_in_chain(c, id, sc->class_id, name, sc->is_cmethod);

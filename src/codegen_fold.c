@@ -8334,7 +8334,7 @@ static void emit_arg_or_default_fill(Compiler *c, Scope *m, int idx, int provide
       }
       /* Bare call inside a class/module body: analyze may not have resolved the
          type. Look it up now. */
-      if (at == TY_UNKNOWN && g_class_body_id >= 0) {
+      if (at == TY_UNKNOWN && emit_self_class_body(c, provided) >= 0) {
         const char *ptn = nt_type(c->nt, provided);
         if (ptn && sp_streq(ptn, "CallNode") && nt_ref(c->nt, provided, "receiver") < 0) {
           const char *bn = nt_str(c->nt, provided, "name");

@@ -2384,11 +2384,13 @@ static void lr_auto_form(Compiler *c, int node, const char *name) {
      argument, and an attr form handed none makes nothing.
    - With one: in Ruby it may be `attr_reader(x)`, `include(x)`,
      `remove_method(x)`, `private(x)` or `class_eval(x)`, but no arm of
-     Spinel's computed send reaches a builtin form that names or mixes in
-     methods or evaluates code: on a class, main or any object such a name
-     raises NoMethodError at the dispatch. The program's own methods are
-     the arms, and `method(x)` / `instance_method(x)` answer a Method,
-     whose run is its `call`'s answer.
+     Spinel's computed send (desugar_dynamic_send) reaches a builtin form
+     that names or mixes in methods or evaluates code: on a class, main or
+     any object the dispatch raises NoMethodError for such a name. Its
+     arms are the program's own methods and builtins that make none
+     (`const_get`, `instance_variable_get`); `method(x)` answers a Method,
+     whose run is its `call`'s answer. If the dispatch ever takes such a
+     form as an arm, this no longer holds.
    What the method it runs may do is the call's own answer (lr_node_defines:
    a call of a name it cannot read may define). */
 static int lr_send_names_nothing(const NodeTable *nt, int n, const int *av, int ac, int used) {

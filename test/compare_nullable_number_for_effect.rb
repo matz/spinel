@@ -28,3 +28,12 @@ s = "abc"
 i = s.index("z")
 p o != i, o == i
 p :sym == i, :sym != i
+
+# a nullable number made by a call with an effect, as an operand: it runs
+# exactly once, whether it gives nil or a number
+$runs = []
+def counted(f) = ($runs << f; f ? 7 : nil)
+def counted_f(f) = ($runs << f; f ? 1.5 : nil)
+p o == counted(true), o != counted(false), t == counted_f(false), :s != counted(true)
+p o.equal?(counted(false)), o.equal?(counted(true))
+p $runs

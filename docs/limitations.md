@@ -340,13 +340,14 @@ A `Class.new` or `Module.new` evaluated more than once (in a method, a block,
 a lambda or a loop) whose superclass is omitted, `Object` or a class of the
 program makes a class of its own at each evaluation, with or without a block,
 as CRuby does: its identity, its name (the first constant assigned it), its
-`to_s`, `inspect`, `frozen?` and `superclass`, and the `class` its instances
-answer, also inside `initialize` and in the block's class methods. The classes
-one call makes share the block's methods, compiled once. At each evaluation
-the superclass's `inherited` runs, and then the block's statements other than
-its declarations, in their order, with the evaluation's class as `self` and as
-the block's one parameter (`Class.new { |k| ... }`). Such a class is never
-freed. These forms still answer one class for every evaluation, as before:
+`to_s`, `inspect`, `frozen?`, `superclass` and `singleton_class`, its entry
+in its superclass's `subclasses`, and the `class` its instances answer, also
+inside `initialize`, in the block's class methods and in those it inherits.
+The classes one call makes share the block's methods, compiled once. At each
+evaluation the superclass's `inherited` runs, and then the block's statements
+other than its declarations, in their order, with the evaluation's class as
+`self` and as the block's one parameter (`Class.new { |k| ... }`). Such a
+class is never freed. These forms still answer one class for every evaluation, as before:
 
 - a block with a statement that may not run again on each class: one that
   reads or writes a class-level instance variable or a class variable, that
@@ -363,24 +364,31 @@ freed. These forms still answer one class for every evaluation, as before:
   an exception class, a Struct or Data class, a subclass of Array, Hash, String
   or Time, a native or C-extension class, or a builtin superclass other than
   `Object`. Without a block such a call is refused at compile time;
-- a constant write's value (`Foo = Class.new { ... }` in a method), which
-  defines the one class the constant names.
+- a constant write's value (`Foo = Class.new { ... }` in a block, a lambda
+  or a loop), which defines the one class the constant names.
 
-In a program with one of these forms evaluated more than once, a
-`Class.new(Parent)` without a block evaluated more than once is refused at
-compile time: its classes would be its own while the form's are one, and a
-program mixing them would answer some identities right and others not. One
-with no superclass still makes a class of its own each time.
+A `Class.new` evaluated more than once whose superclass's `inherited` reads
+the class it is handed beyond what it is (an instance, its methods, its
+constants, rather than its name, superclass or identity) is refused at
+compile time: CRuby runs the hook before the block defines anything, and the
+compiled class has the block's methods from the start. A hook that counts,
+collects or names the classes it is handed runs at each evaluation.
+
+In a program with one of these forms evaluated more than once (a
+`Struct.new` or `Data.define` evaluated more than once counts as one), a
+`Class.new` or `Module.new` without a block evaluated more than once is
+refused at compile time: its classes would be its own while the form's are
+one, and a program mixing them would answer some identities right and others
+not.
 
 The classes one call makes share one set of class-level instance variables
 (`@count` written in a `def self.` method) and the methods `define_method`
 adds to any of them at run time. A `Method` taken from such a class
-(`k.method(:new)`) answers its readers (`name`, `arity`, `owner`), and is
-refused at compile time where the program calls it, binds it, copies it or
-turns it into a Proc, or hands it where the compiler cannot follow it, since
-it would run the call's compiled class. The default `to_s` of an instance held
-where any value may be, like a NoMethodError message about it, names the
-call's compiled class rather than the class made at run time.
+(`k.method(:new)`) answers its readers (`name`, `arity`, `owner`,
+`parameters`, `source_location`, `receiver`, `inspect`, `to_s`, `==`,
+`hash`), and is refused at compile time where the program calls any other
+method on it (`call`, a bind, `to_proc`, `then`) or hands it where the
+compiler cannot follow it, since it would run the call's compiled class.
 
 A `Class.new` or `Module.new` block that captures outer locals is refused at
 compile time for constant assignments, local assignments and reachable method

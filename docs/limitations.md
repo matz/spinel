@@ -375,9 +375,11 @@ counts only where it asks about the kind of thing the block declares: its
 instance methods (`instance_methods`, `method_defined?`, an instance), its
 own methods (`respond_to?`, `method`, `is_a?`, against a `def self.` or an
 `extend`), its ancestry (`ancestors`, `include?`, `<`, against an `include`
-or `prepend`), or its constants. A hook that counts, collects or names the
-classes it is handed, or asks about a kind the block does not declare, runs
-at each evaluation.
+or `prepend`), or its constants. The class is followed through the local and
+instance variables the hook writes it to, and a hook that hands it to a
+method of the program, a send, a proc or a block is refused too. A hook that
+counts, collects or names the classes it is handed, passes it to `super`, or
+asks about a kind the block does not declare, runs at each evaluation.
 
 In a program with one of these forms evaluated more than once (a
 `Struct.new` or `Data.define` evaluated more than once counts as one), a

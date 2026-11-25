@@ -7622,11 +7622,20 @@ int is_fresh_array(Compiler *c, int v) {
     return sp_streq(nm, "new") && sp_streq(nt_str(nt, r, "name"), "Array") &&
            cplan_const_user(c, v, r, 1).mi < 0;
   TyKind rt = infer_type(c, r);
-  if (rt == TY_UNKNOWN || rt == TY_POLY || ty_is_object(rt)) return 0;
+  /* an Array subclass's object answers a new Array for `to_a` and
+     `entries`, as a Hash's and a Range's do, where no method of the
+     program's answers the name (an Array's own `to_a` answers itself) */
+  if (ty_is_object(rt)) {
+    int cls = ty_object_class(rt), self = 0;
+    const char *root = comp_super_builtin_root(c, cls, &self);
+    return is_to_array_alias(nm) && is_array_class_name(root) && !self &&
+           call_target(c, v, cls, nm, 0, NULL) < 0;
+  }
+  if (rt == TY_UNKNOWN || rt == TY_POLY) return 0;
   /* a reopen's own method of the name answers what it answers: an Array it
      may hold elsewhere, not a fresh one */
   if (cplan_user_fresh(c, v).mi >= 0) return 0;
-  if (sp_streq(nm, "to_a")) return !ty_is_array(rt);
+  if (is_to_a_name(nm)) return !ty_is_array(rt);
   return fresh_array_builtin_name(nm);
 }
 
@@ -8676,9 +8685,12 @@ int ivar_src_slots(Compiler *c, int v, const char **ivn, IvarSlots *sl) {
    ivar_src_slots answers for a read: an ivar write (`k.v = @w = x`) or an
    attribute writer's call, written as an assignment (`k.v = q.v = x`) or
    with its one value as an argument (`q.v=(x)`, which a send by the
-   writer's literal name `q.send(:v=, x)` is lowered to), each of which
-   answers the value it stores, which that ivar then holds too (an
-   attribute's writer answers its argument however it is called). */
+   writer's literal name `q.send(:v=, x)` is lowered to), or an
+   instance_variable_set by a literal name (`q.instance_variable_set(:@v,
+   x)`) on a receiver of one class, which the walk follows among the ivar's
+   writes (attr_writer_calls), each of which answers the value it stores,
+   which that ivar then holds too (an attribute's writer answers its
+   argument however it is called). */
 static int ivar_write_slots(Compiler *c, int v, const char **ivn, IvarSlots *sl) {
   const NodeTable *nt = c->nt;
   Scope *sc = comp_scope_of(c, v);
@@ -8693,6 +8705,18 @@ static int ivar_write_slots(Compiler *c, int v, const char **ivn, IvarSlots *sl)
   const char *nm = nt_str(nt, v, "name");
   int a = nt_ref(nt, v, "arguments"), an = 0;
   const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+  if (an == 2 && is_ivar_set_name(nm) && nt_kind(nt, av[1]) != NK_SplatNode &&
+      nt_kind(nt, av[1]) != NK_BlockArgumentNode) {
+    const char *lit = an_literal_name(nt, av[0]);
+    int r = nt_ref(nt, v, "receiver");
+    TyKind rt = r >= 0 ? infer_type(c, r) : TY_UNKNOWN;
+    int cls = r < 0 ? (sc->is_cmethod ? -1 : sc->class_id) : ty_is_object(rt) ? ty_object_class(rt) : -1;
+    int ix = lit && cls >= 0 ? comp_ivar_index(&c->classes[cls], lit) : -1;
+    if (ix < 0) return 0;
+    *ivn = c->classes[cls].ivars[ix];
+    sl->one = cls;
+    return sl->n = 1;
+  }
   if (an != 1 || nt_kind(nt, av[0]) == NK_SplatNode || nt_kind(nt, av[0]) == NK_BlockArgumentNode) return 0;
   char base[256];
   if (!nm || !name_is_plain_setter(nm) || !setter_base_name(nm, base, sizeof base)) return 0;

@@ -220,7 +220,13 @@ the method names that appear as symbol/string **literals** anywhere in the
 program -- `recv.send(name) → name == :a ? recv.a : name == :b ? recv.b : … :
 raise NoMethodError` -- with the receiver's type and the argument count selecting
 which arms resolve (the result is `poly`). A name that is not one of those
-literals, or not a method on the receiver, raises `NoMethodError` at runtime. A
+literals, or not a method on the receiver, raises `NoMethodError` at runtime. The
+names a method list returns count among the literals: `K.instance_methods(false)`
+on a constant or in a class body counts K's methods, a list in a class method
+(`def self.tests = public_instance_methods(true).grep(/\Atest_/)`) counts the
+methods of the method's class and of the classes above and below it, and a list
+on a class held in a variable (`klass.public_instance_methods(false)`) counts the
+methods of the program's classes. A
 **computed** name (an interpolation, `to_sym`, a concatenation) sent to a user-class
 receiver dispatches over everything that class answers -- its methods, readers and
 writers, and the Object methods every instance has -- so the set is complete; sent

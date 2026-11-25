@@ -2247,8 +2247,9 @@ static int attr_dyn_call_sets(Compiler *c, int call, int cls, const char *ivn, c
    class (attr_recv_may_be), each handed to fn until one answers nonzero:
    that answer; -1 where a send or instance_variable_set may set it to a
    value the walk cannot name (attr_dyn_call_sets), while one that hands
-   its value plainly is one more call for fn; 0 after the last. 0 when the
-   class has no writer. */
+   its value plainly is one more call for fn; 0 after the last. A class
+   with no writer has only those dynamic calls: an instance_variable_set
+   sets its ivar all the same. */
 typedef int (*AttrWriterCallFn)(Compiler *c, int call, void *ctx);
 /* The calls of a writer's name by the classes the class facts say their
    receiver may hold, kept on the Compiler (c->attr_call_ix) while the node
@@ -2372,14 +2373,16 @@ static int attr_writer_call_list(Compiler *c, int cls, const char *setter, int *
   return n;
 }
 static int attr_writer_calls(Compiler *c, int cls, const char *ivn, AttrWriterCallFn fn, void *ctx) {
-  if (!call_answers(c, -1, cls, ivn + 1, CT_WRITER, NULL)) return 0;
   char setter[300];
   snprintf(setter, sizeof setter, "%s=", ivn + 1);
-  int *calls, n = attr_writer_call_list(c, cls, setter, &calls), got = 0;
-  for (int i = 0; i < n && !got; i++)
-    if (attr_recv_may_be(c, calls[i], cls)) got = fn(c, calls[i], ctx);
-  free(calls);
-  if (got) return got;
+  int got = 0;
+  if (call_answers(c, -1, cls, ivn + 1, CT_WRITER, NULL)) {
+    int *calls, n = attr_writer_call_list(c, cls, setter, &calls);
+    for (int i = 0; i < n && !got; i++)
+      if (attr_recv_may_be(c, calls[i], cls)) got = fn(c, calls[i], ctx);
+    free(calls);
+    if (got) return got;
+  }
   for (int d = 0; dyn_ivar_set_names[d]; d++)
     for (int k = an_calls_named_first(c, dyn_ivar_set_names[d]); k >= 0; k = an_calls_named_next(k)) {
       int sets = attr_dyn_call_sets(c, k, cls, ivn, setter);
@@ -8747,17 +8750,28 @@ static int named_writes_fresh(Compiler *c, int v) {
    among the ones it follows. */
 static int ivar_writes_fresh(Compiler *c, int cls, const char *ivn, int apply, int *ch, SrcWalk *st, int depth) {
   const NodeTable *nt = c->nt;
-  static const NodeKind wk[4] = { NK_InstanceVariableWriteNode, NK_InstanceVariableOrWriteNode,
-                                  NK_InstanceVariableAndWriteNode, NK_InstanceVariableOperatorWriteNode };
+  const NodeKind wk[5] = { NK_InstanceVariableWriteNode, NK_InstanceVariableOrWriteNode,
+                           NK_InstanceVariableTargetNode, NK_InstanceVariableAndWriteNode,
+                           NK_InstanceVariableOperatorWriteNode };
   int saw = 0;
-  for (int t = 0; t < 4; t++)
+  for (int t = 0; t < 5; t++)
     NT_FOREACH_KIND(nt, wk[t], w) {
       if (!sp_streq(nt_str(nt, w, "name"), ivn)) continue;
       Scope *ws = comp_scope_of(c, w);
       int wc = ws && ws->class_id >= 0 ? ws->class_id : c->node_cbody[w];
       if (wc < 0) wc = ivar_main_slot_class(c, ws, w);
       if (wc < 0 || (wc != cls && !is_descendant(c, wc, cls) && !is_descendant(c, cls, wc))) continue;
-      if (t >= 2) return -1;
+      if (t >= 3) return -1;
+      /* a target of a multiple assignment takes its element of the right
+         side, which it does not convert: not pinned, as a local's is */
+      if (t == 2) {
+        int tv = masgn_target_value(c, w);
+        int got = tv >= 0 ? array_src_walk(c, tv, 0, apply, st, depth + 1) : 0;
+        if (tv < 0 || (!apply && !got)) return -1;
+        if (apply) *ch |= got;
+        saw = 1;
+        continue;
+      }
       int wl[16];
       int nl = value_leaves_ex(c, nt_ref(nt, w, "value"), wl, 0, 16, VL_NIL);
       if (nl < 0) return -1;

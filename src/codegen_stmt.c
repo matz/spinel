@@ -19639,11 +19639,7 @@ static int emit_multi_write_scalar(Compiler *c, int id, Buf *b, int indent, cons
         /* a scalar slot another write typed takes an element of its own
            kind (or nil) and refuses any other (sp_slot_*_ck), rather
            than reading the other kind's bits as its own */
-        const char *ck = ivt == TY_INT ? "sp_slot_oint_ck" : ivt == TY_FLOAT ? "sp_slot_ofloat_ck"
-                       : ivt == TY_STRING ? "sp_slot_str_ck" : ivt == TY_BOOL ? "sp_slot_bool_ck"
-                       : ivt == TY_SYMBOL ? "sp_slot_sym_ck"
-                       /* (one-String mode: a String slot holds the handle) */
-                       : ivt == TY_STRBUF ? "sp_slot_strbuf_ck" : NULL;
+        const char *ck = ty_slot_check_fn(ivt);
         /* an Integer or Float element with its nil: into the field's bit,
            or refused for a plain field */
         if (ck && oint_kind(ivt) && ivar_read_slot_is_oint(c, lefts[i])) {

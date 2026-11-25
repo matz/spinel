@@ -271,3 +271,16 @@ y26(k26.w) { |x| x << +"c" } if ARGV.size > 5
 k26.r; p k26.w, k26.h.class
 k26.l; p k26.w, k26.h.class
 k26.q; p k26.w, k26.h
+
+# an ivar a multiple assignment gives an element of a boxed value, which it
+# holds boxed, with the store where it never runs
+class K27
+  def initialize = (@w = [1])
+  def s(v) = (@h, @w = v)
+  attr_reader :w, :h
+end
+k27 = K27.new
+def y27(a) = yield(a)
+y27(k27.w) { |x| x << +"c" } if ARGV.size > 5
+k27.s([1..2, 3][ARGV.size]); p k27.w, k27.h
+k27.s([[5, 6], 3][ARGV.size]); p k27.w, k27.h

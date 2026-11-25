@@ -3757,18 +3757,59 @@ static int masgn_unify_elem(Compiler *c, Scope *ms, const int *tgts, int n, TyKi
   return changed;
 }
 
-/* An instance variable target of a multiple assignment from a boxed value
-   whose slot nothing else has typed yet (unknown, or only nil): it takes the
-   boxed elements. A slot another write already types (optcarrot's int
-   @io_addr) keeps its type, so a boxed right side alone does not widen it. */
-static int masgn_ivar_untyped(Compiler *c, Scope *ms, int tgt) {
+/* The type of the element at place pos that the multiple assignment mw
+   takes of its right side rhs, into *out, where it is known (a place
+   counted from the end, -1, is not): the right side itself for the first place and nil for
+   the others where the assignment takes it whole (cplan_masgn_takes_apart),
+   or of each value a method there answers, an Array literal's element or
+   such a whole value. 0 where it is not known. */
+static int masgn_rhs_elem_type(Compiler *c, int mw, int rhs, int pos, TyKind *out) {
   const NodeTable *nt = c->nt;
-  if (nt_kind(nt, tgt) != NK_InstanceVariableTargetNode || !ms || ms->class_id < 0) return 0;
-  const char *ivnm = nt_str(nt, tgt, "name");
-  int iv = ivnm ? comp_ivar_index(&c->classes[ms->class_id], ivnm) : -1;
-  if (iv < 0) return 0;
-  TyKind t = c->classes[ms->class_id].ivar_types[iv];
-  return t == TY_UNKNOWN || t == TY_NIL || t == TY_POLY;
+  int lv[16], n = 1, mi = -1;
+  lv[0] = rhs;
+  if (pos < 0) return 0;
+  if (cplan_masgn_takes_apart(c, mw, rhs, infer_type(c, rhs)) &&
+      (nt_kind(nt, rhs) != NK_CallNode || (mi = backprop_call_target(c, rhs)) < 0 ||
+       (n = method_value_leaves(c, mi, lv, 16)) < 0)) return 0;
+  TyKind acc = TY_UNKNOWN;
+  for (int i = 0; i < n; i++) {
+    int v = nt_paren_single(nt, lv[i]), en = 0;
+    TyKind et = TY_NIL;
+    if (v >= 0 && nt_kind(nt, v) == NK_ArrayNode) {
+      const int *ev = nt_arr(nt, v, "elements", &en);
+      for (int e = 0; e < en; e++) if (nt_kind(nt, ev[e]) == NK_SplatNode) return 0;
+      if (pos < en) et = infer_type(c, ev[pos]);
+    }
+    else if (v < 0 || (mi >= 0 && cplan_masgn_takes_apart(c, mw, v, infer_type(c, v)))) return 0;
+    else if (pos == 0) et = infer_type(c, v);
+    acc = acc == TY_UNKNOWN ? et : et == TY_NIL ? acc : acc == TY_NIL ? et : ty_unify(acc, et);
+  }
+  *out = acc;
+  return 1;
+}
+/* Does an instance variable target tgt, at place pos of the multiple
+   assignment mw from the boxed value rhs, take the boxed elements? A slot
+   nothing else has typed yet (unknown, or only nil) does. A typed slot
+   keeps its type where its store checks the element (ty_slot_check_fn:
+   optcarrot's Integer @io_addr), or where the element the slot takes is of
+   its kind or nil (masgn_rhs_elem_type); any other takes them, as a plain
+   write of a boxed value (`@x = v`) makes it, since its store would read
+   another kind's value as nil. */
+static int masgn_ivar_takes_boxed(Compiler *c, int tgt, int mw, int rhs, int pos) {
+  const NodeTable *nt = c->nt;
+  const char *nm = nt_kind(nt, tgt) == NK_InstanceVariableTargetNode ? nt_str(nt, tgt, "name") : NULL;
+  int cl[64], n = nm ? ivar_node_classes(c, tgt, cl, 64, NULL, NULL) : 0;
+  TyKind et = TY_UNKNOWN;
+  int known = -1;
+  for (int i = 0; i < n; i++) {
+    int ix = comp_ivar_index(&c->classes[cl[i]], nm);
+    TyKind t = ix >= 0 ? c->classes[cl[i]].ivar_types[ix] : TY_POLY;
+    if (t == TY_UNKNOWN || t == TY_NIL || t == TY_POLY) return 1;
+    if (ty_slot_check_fn(t)) continue;
+    if (known < 0) known = masgn_rhs_elem_type(c, mw, rhs, pos, &et);
+    if (!known || (et != TY_NIL && ty_unify(t, et) != t)) return 1;
+  }
+  return 0;
 }
 
 /* The slots under a nested (a, *b, c) target of a multiple assignment take
@@ -5719,7 +5760,7 @@ static int infer_write_multi_assign(Compiler *c, const NodeTable *nt, const unsi
             if (sp_streq(lty_p, "LocalVariableTargetNode"))
               changed |= masgn_poly_local(c, ms_poly, lefts[i], TY_POLY, value);
             else if (sp_streq(lty_p, "GlobalVariableTargetNode") || sp_streq(lty_p, "ClassVariableTargetNode") ||
-                     masgn_ivar_untyped(c, ms_poly, lefts[i]))
+                     masgn_ivar_takes_boxed(c, lefts[i], id, value, i))
               changed |= masgn_unify_elem(c, ms_poly, &lefts[i], 1, TY_POLY);
           }
           int rn_p = 0;
@@ -5729,7 +5770,7 @@ static int infer_write_multi_assign(Compiler *c, const NodeTable *nt, const unsi
             if (sp_streq(rty_p, "LocalVariableTargetNode"))
               changed |= masgn_poly_local(c, ms_poly, rights_p[j], TY_POLY, value);
             else if (sp_streq(rty_p, "GlobalVariableTargetNode") || sp_streq(rty_p, "ClassVariableTargetNode") ||
-                masgn_ivar_untyped(c, ms_poly, rights_p[j]))
+                masgn_ivar_takes_boxed(c, rights_p[j], id, value, -1))
               changed |= masgn_unify_elem(c, ms_poly, &rights_p[j], 1, TY_POLY);
           }
           int rest_p = nt_ref(nt, id, "rest");

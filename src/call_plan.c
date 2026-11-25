@@ -8114,6 +8114,11 @@ int cplan_rt_family(const Compiler *c, int ci) {
 }
 int cplan_class_value_may_be_rt(Compiler *c, int node) {
   if (!c->has_rt_classes) return 0;
+  NodeKind nk = node >= 0 ? nt_kind(c->nt, node) : NK_NilNode;
+  if (nk == NK_ConstantReadNode || nk == NK_ConstantPathNode) {
+    int core = -1;
+    if (const_node_class_index(c, node) >= 0 || (elab_class_ref_at(c, node, &core) < 0 && core >= 0)) return 0;
+  }
   const ClsSet *s = node >= 0 ? cls_fact_node(c, node) : NULL;
   if (!s || s->all || s->bc) return 1;
   for (int k = 0; k < c->cls_fact_ncls && k < c->nclasses; k++)

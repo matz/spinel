@@ -555,7 +555,10 @@ int cplan_rt_family(const Compiler *c, int ci);
 enum { CNEW_NONE, CNEW_RUNTIME, CNEW_STATIC, CNEW_REFUSED };
 /* May the class value at node (-1: one no node gives) be a class made at
    run time, its id a record's: a site class's Class object is in its class
-   fact, or the fact is not bounded, in a program that has one? */
+   fact, or the fact is not bounded, in a program that has one? A constant
+   that names a class (the program's or a builtin's, elab_class_ref_at) is
+   that class, never a record's; one that holds a class value is asked as
+   any value is. */
 int cplan_class_value_may_be_rt(Compiler *c, int node);
 int cplan_class_new(const Compiler *c, int id, int *site);
 /* Is node a statement of a site class's body, of a site whose classes are

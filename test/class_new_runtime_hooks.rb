@@ -24,3 +24,8 @@ n = mk_member
 [m.new, n.new, nil, 3].each do |v|
   p(case v when n then :n when m then :m else :none end)
 end
+
+# a constant holding such a class asks its own === too
+C = mk_int
+D = mk_member
+p(case 7 when C then :c else :no end, case D.new when C then :c when D then :d else :no end)

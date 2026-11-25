@@ -7949,6 +7949,13 @@ static int pm_value_const(Compiler *c, int pat, const char *cn) {
   if (comp_ffi_const_at(c, pat, NULL)) return 1;
   return when_builtin_value_const(c, pat);
 }
+/* A constant in `when` that holds a value, not a class or module: one
+   pm_value_const answers, or one holding a class value that may be a class
+   made at run time (cplan_class_value_may_be_rt), whose own === answers
+   through the class-value arm, as a local holding it does. */
+static int when_value_const(Compiler *c, int cond, const char *cn) {
+  return pm_value_const(c, cond, cn) || cplan_class_value_may_be_rt(c, cond);
+}
 /* the kinds whose === is ==, so the arm is the equality test of `in ^x` */
 static int pm_eq_scalar(TyKind k) {
   return k == TY_INT || k == TY_FLOAT || k == TY_STRING || k == TY_SYMBOL;
@@ -11258,7 +11265,7 @@ static void emit_case_in(Compiler *c, int id, Buf *b, int indent) {
              to a constant false and the branch was never taken. So is a
              builtin's value constant (`Socket::AF_INET`, `File::SEPARATOR`):
              typed a number or a String, not a class (pm_value_const). */
-          if (cn2 && pm_value_const(c, conds[j], cn2)) cn2 = NULL;
+          if (cn2 && when_value_const(c, conds[j], cn2)) cn2 = NULL;
         /* a class whose own class method `===` (or an ancestor's) answers
            `when Klass`: that method with the subject, as CRuby calls it */
         if (cn2 && emit_when_class_cmethod_eq(c, conds[j], t, pt, b)) { }
@@ -11662,7 +11669,7 @@ static void emit_case_expr_in(Compiler *c, int id, Buf *b) {
         const char *cn2 = (cty2_k == NK_ConstantReadNode || cty2_k == NK_ConstantPathNode)
                          ? isa_match_class_name(c, conds[j], cq2, sizeof cq2) : NULL;
         /* value constant in `when`: equality, not a class test (see above) */
-        if (cn2 && pm_value_const(c, conds[j], cn2)) cn2 = NULL;
+        if (cn2 && when_value_const(c, conds[j], cn2)) cn2 = NULL;
         /* a class whose own class method `===` (or an ancestor's) answers
            `when Klass`: that method with the subject, as CRuby calls it */
         if (cn2 && emit_when_class_cmethod_eq(c, conds[j], t, pt, b)) { }

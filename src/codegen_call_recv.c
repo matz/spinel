@@ -13344,14 +13344,24 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
        sp_RbVal with a const char * and the C did not compile. */
     int bx = repr_of(c, id).kind == RK_BOXED;
     /* The builtin's own (builtin_only: a super's, lowered) is Kernel's text
-       itself, which the poly renderers would hand back to the program's */
+       itself, which the poly renderers would hand back to the program's:
+       of self as it is, of another receiver over a temp, nil's text for nil */
     if (cplan_builtin_call(c, id)) {
-      int to = ++g_tmp;
-      char obj[24]; snprintf(obj, sizeof obj, "_t%d", to);
-      buf_printf(b, "%s({ sp_%s *%s = ", bx ? "SP_STR_BOX(" : "", ci2->c_name, obj); emit_expr(c, recv, b);
-      buf_printf(b, "; %s ? ", obj);
-      emit_obj_kernel_text(c, cid2, want_ins, obj, b);
-      buf_printf(b, " : \"%s\"; })%s", want_ins ? "nil" : "", bx ? ")" : "");
+      if (bx) buf_puts(b, "SP_STR_BOX(");
+      if (nt_kind(nt, recv) == NK_SelfNode) {
+        Buf sv = {0};
+        emit_expr(c, recv, &sv);
+        emit_obj_kernel_text(c, cid2, want_ins, sv.p, b);
+        free(sv.p);
+      }
+      else {
+        char obj[24]; snprintf(obj, sizeof obj, "_t%d", ++g_tmp);
+        buf_printf(b, "({ sp_%s *%s = ", ci2->c_name, obj); emit_expr(c, recv, b);
+        buf_printf(b, "; %s ? ", obj);
+        emit_obj_kernel_text(c, cid2, want_ins, obj, b);
+        buf_printf(b, " : \"%s\"; })", want_ins ? "nil" : "");
+      }
+      if (bx) buf_puts(b, ")");
       return 1;
     }
     buf_printf(b, "sp_poly_%s%s(", want_ins ? "inspect" : "to_s", bx ? "_box" : "");

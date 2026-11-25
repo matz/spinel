@@ -15306,24 +15306,20 @@ int obj_arm_calls_own_inspect(Compiler *c, int cid) {
    plan answers with it (CallPlan.bsuper BSUP_OBJ_TEXT), or the builtin's own
    inspect of an object (builtin_only: such a super, lowered)? Only
    then is sp_obj_kernel_inspect emitted. A site no emitted code holds does
-   not count: one in a method that is not written out, or a respond_to?
-   probe (rt_probe, the analysis' stand-in for a name asked after, such as
-   an alias of inspect no call reaches). */
-static int kernel_inspect_site_dead(Compiler *c, int id) {
-  const Scope *sc = comp_scope_of(c, id);
-  if (nt_int(c->nt, id, "rt_probe", 0)) return 1;
-  return sc && sc->name && !sc->reachable && !(sc->is_proc_form && proc_form_live(c, (int)(sc - c->scopes)));
-}
+   not count: one in a method that is not written out (iter_scope_emitted),
+   or a respond_to? probe (rt_probe, the analysis' stand-in for a name asked
+   after, such as an alias of inspect no call reaches). */
 int obj_kernel_inspect_used(Compiler *c) {
   for (int q = 0; q < 2; q++)
     NT_FOREACH_KIND(c->nt, q ? NK_ForwardingSuperNode : NK_SuperNode, sn) {
       Scope *ss = comp_scope_of(c, sn);
-      if (ss && ss->name && !kernel_inspect_site_dead(c, sn) && is_inspect_name(comp_scope_def_name(c, ss)) &&
+      if (ss && ss->name && iter_scope_emitted(c, (int)(ss - c->scopes)) && is_inspect_name(comp_scope_def_name(c, ss)) &&
           cplan_user_fresh(c, sn).bsuper == BSUP_OBJ_TEXT)
         return 1;
     }
   NT_FOREACH_KIND(c->nt, NK_CallNode, cn) {
-    if (kernel_inspect_site_dead(c, cn)) continue;
+    const Scope *cs = comp_scope_of(c, cn);
+    if (nt_int(c->nt, cn, "rt_probe", 0) || (cs && cs->name && !iter_scope_emitted(c, (int)(cs - c->scopes)))) continue;
     int r = nt_ref(c->nt, cn, "receiver");
     TyKind rt = r >= 0 ? repr_of(c, r).as_ty : TY_UNKNOWN;
     if (cplan_builtin_call(c, cn) && is_inspect_name(nt_str(c->nt, cn, "name")) && ty_is_object(rt)) return 1;

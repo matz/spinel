@@ -10335,33 +10335,47 @@ int desugar_respond_to_missing(Compiler *c) {
     NodeKind k0 = nt_kind(nt, argv[0]);
     const char *sym = k0 == NK_SymbolNode ? nt_str(nt, argv[0], "value")
                     : k0 == NK_StringNode ? nt_str(nt, argv[0], "content") : NULL;
-    if (!sym || !*sym || !rtm_live_at(c, id)) continue;
+    /* a name known only at run time (a local, `s.to_sym`) is asked as
+       `respond_to_missing?(name.to_sym, ...)`, the name held as the
+       receiver is: CRuby asks it whatever spelled the name */
+    int computed = !sym && k0 != NK_SplatNode && k0 != NK_BlockArgumentNode && k0 != NK_KeywordHashNode;
+    if ((sym ? !*sym : !computed) || !rtm_live_at(c, id)) continue;
     if (argc == 2 && (nt_kind(nt, argv[1]) == NK_SplatNode || nt_kind(nt, argv[1]) == NK_BlockArgumentNode)) continue;
     char sbuf[256];
-    if (strlen(sym) >= sizeof sbuf) continue;
-    snprintf(sbuf, sizeof sbuf, "%s", sym);   /* copy before realloc */
+    if (sym && strlen(sym) >= sizeof sbuf) continue;
+    snprintf(sbuf, sizeof sbuf, "%s", sym ? sym : "");   /* copy before realloc */
     int recv = nt_ref(nt, id, "receiver"), a1 = argc == 2 ? argv[1] : -1, a0 = argv[0];
-    char tr[64], ti[64];
+    char tr[64], ti[64], tn[64];
     snprintf(tr, sizeof tr, "__rtm_r%s", comp_node_tag(c, id));
     snprintf(ti, sizeof ti, "__rtm_i%s", comp_node_tag(c, id));
+    snprintf(tn, sizeof tn, "__rtm_n%s", comp_node_tag(c, id));
     int base = nt->count;
-    int rw = -1, iw = -1;
+    int rw = -1, iw = -1, nw = -1;
     int rtemp = recv >= 0 ? rtm_hold(c, nt, id, recv, tr, &rw) : 0;
+    int ntemp = computed ? rtm_hold(c, nt, id, a0, tn, &nw) : 0;
     int itemp = a1 >= 0 ? rtm_hold(c, nt, id, a1, ti, &iw) : 0;
-    if (rtemp < 0 || itemp < 0) continue;
+    if (rtemp < 0 || ntemp < 0 || itemp < 0) continue;
     /* the method-table answer: the call as written, on the temps */
     int keep = nt_clone_subtree(nt, id);
     nt_node_set_int(nt, keep, "rtm_or", 1);
     if (recv >= 0) nt_node_set_ref(nt, keep, "receiver", rtm_read(c, nt, id, recv, tr, rtemp));
     { int ka = nt_new_node(nt, "ArgumentsNode"), kv[2];
-      kv[0] = nt_clone_subtree(nt, a0);
+      kv[0] = computed ? rtm_read(c, nt, id, a0, tn, ntemp) : nt_clone_subtree(nt, a0);
       if (a1 >= 0) kv[1] = rtm_read(c, nt, id, a1, ti, itemp);
       nt_node_set_arr(nt, ka, "arguments", kv, a1 >= 0 ? 2 : 1);
       nt_node_set_ref(nt, keep, "arguments", ka); }
     /* respond_to_missing?(:m, include_all as true or false) */
     int rr = recv >= 0 ? rtm_read(c, nt, id, recv, tr, rtemp) : nt_new_node(nt, "SelfNode");
-    int sn = nt_new_node(nt, "SymbolNode");
-    nt_node_set_str(nt, sn, "value", sbuf);
+    int sn;
+    if (computed) {
+      sn = nt_new_node(nt, "CallNode");
+      nt_node_set_str(nt, sn, "name", "to_sym");
+      nt_node_set_ref(nt, sn, "receiver", rtm_read(c, nt, id, a0, tn, ntemp));
+    }
+    else {
+      sn = nt_new_node(nt, "SymbolNode");
+      nt_node_set_str(nt, sn, "value", sbuf);
+    }
     int ia = a1 >= 0 ? rtm_bool_of(nt, rtm_read(c, nt, id, a1, ti, itemp)) : nt_new_node(nt, "FalseNode");
     int mc = nt_new_node(nt, "CallNode"), ma = nt_new_node(nt, "ArgumentsNode");
     { int mv[2] = { sn, ia }; nt_node_set_arr(nt, ma, "arguments", mv, 2); }
@@ -10374,8 +10388,9 @@ int desugar_respond_to_missing(Compiler *c) {
     int orn = nt_new_node(nt, "OrNode");
     nt_node_set_ref(nt, orn, "left", keep);
     nt_node_set_ref(nt, orn, "right", rtm_bool_of(nt, mc));
-    int stm[3], ns = 0;
+    int stm[4], ns = 0;
     if (rw >= 0) stm[ns++] = rw;
+    if (nw >= 0) stm[ns++] = nw;
     if (iw >= 0) stm[ns++] = iw;
     stm[ns++] = orn;
     int body = nt_new_node(nt, "StatementsNode");
@@ -10385,7 +10400,7 @@ int desugar_respond_to_missing(Compiler *c) {
     nt_node_set_ref(nt, id, "body", body);
     nt_node_set_int(nt, id, "node_line", line);
     nt_node_set_int(nt, id, "node_file", file);
-    comp_sym_intern(c, sbuf);
+    if (!computed) comp_sym_intern(c, sbuf);
     comp_grow_node_arrays(c);
     for (int j = base; j < nt->count; j++) {
       c->nscope[j] = c->nscope[id];

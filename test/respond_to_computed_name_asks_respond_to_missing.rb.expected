@@ -1,0 +1,17 @@
+[:boo, true, true, true, true]
+[:real, true, true, true, true]
+["boo2", true, true, true, true]
+[:nope, false, false, false, false]
+["secret", false, true, false, true]
+[Ghost, :boo, true]
+[Ghost, :real, true]
+[Ghost, "boo2", true]
+[Ghost, :nope, false]
+[Ghost, "secret", false]
+[Plain, :boo, false]
+[Plain, :real, true]
+[Plain, "boo2", false]
+[Plain, :nope, false]
+[Plain, "secret", false]
+true
+true

@@ -55793,13 +55793,30 @@ static void an_phase_value_types(Compiler *c) {
     }
     /* a super whose arm answers from the object itself (its address, its frozen bit, the object, a Kernel row
        over it: cplan_super_reads_self) reads the pointer a by-value copy does not have */
-    /* and so does the builtin's own comparison on self a super is lowered to (builtin_only: ==, !=, equal?, eql?,
-       ===), which the call layer answers from the object's address */
-    if (((ty_k == NK_SuperNode || ty_k == NK_ForwardingSuperNode) && cplan_super_reads_self(c, id)) ||
-        (ty_k == NK_CallNode && cplan_builtin_call(c, id) && nt_kind(c->nt, nt_ref(c->nt, id, "receiver")) == NK_SelfNode &&
-         (is_class_compare(nt_str(c->nt, id, "name")) || is_case_eq(nt_str(c->nt, id, "name"))))) {
+    if ((ty_k == NK_SuperNode || ty_k == NK_ForwardingSuperNode) && cplan_super_reads_self(c, id)) {
       Scope *s = comp_scope_of(c, id);
       if (s && !s->is_cmethod && s->class_id >= 0 && s->class_id < c->nclasses) c->classes[s->class_id].is_value_type = 0;
+    }
+    /* and so does Object's own call that reads its receiver's identity (builtin_call_reads_identity), which
+       the call layer answers from the object's address: an identity value (hash, object_id) from any call the
+       receiver's class does not answer itself, a comparison only as the builtin's call a super is lowered to
+       (an unanswered comparison with an operand of another kind answers by value, and one whose operand is
+       the object passes it as an argument, which keeps the pointer below) */
+    if (ty_k == NK_CallNode && builtin_call_reads_identity(nt_str(c->nt, id, "name"))) {
+      const char *inm = nt_str(c->nt, id, "name");
+      int irecv = nt_ref(c->nt, id, "receiver");
+      int q = -1;
+      if (irecv >= 0 && nt_kind(c->nt, irecv) != NK_SelfNode) {
+        TyKind irt = comp_ntype(c, irecv);
+        if (ty_is_object(irt)) q = ty_object_class(irt);
+      }
+      else {
+        Scope *s = comp_scope_of(c, id);
+        if (s && !s->is_cmethod) q = s->class_id;
+      }
+      if (q >= 0 && q < c->nclasses &&
+          (cplan_builtin_call(c, id) || (is_identity_value_name(inm) && !call_answers(c, id, q, inm, 0, NULL))))
+        c->classes[q].is_value_type = 0;
     }
     /* `instance_variable_set` on self mutates the receiver just like `@x = v`;
        a by-value class would take the write on a copy and silently drop it. */

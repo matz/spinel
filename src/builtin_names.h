@@ -708,6 +708,11 @@ int is_cover_name(const char *n); /* cover? */
 int is_flatten_name(const char *n); /* flatten */
 int is_hash_name(const char *n); /* hash */
 int is_object_id_name(const char *n); /* object_id __id__ */
+/* Object's identity values of its receiver: hash object_id __id__. */
+int is_identity_value_name(const char *n);
+/* A builtin call that reads its receiver's identity: Object's comparisons (== != === equal? eql?, the address)
+   and its identity values (is_identity_value_name). A by-value layout has no identity to read. */
+int builtin_call_reads_identity(const char *n);
 int is_spaceship_name(const char *n); /* <=> */
 int is_object_hook_name(const char *n); /* hash eql? <=>: what the runtime's hash-key and sort hooks call on a program object, with no block */
 int is_puts_name(const char *n); /* puts */

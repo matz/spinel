@@ -47,3 +47,22 @@ case n
 when n then p :same
 else p :other
 end
+
+# A super into hash is Object's identity hash, never the program's own hash
+# again, and a call of hash, object_id or __id__ the class does not answer
+# itself reads the object's identity: such a class keeps its pointer, whose
+# objects of equal ivars still hash and number apart.
+class Hv
+  def initialize(x) = @x = x
+  def hash = super
+end
+class Hsub < Hv; end
+hs = [Hv.new(1), Hv.new(1), Hv.new(2)]
+p hs.map(&:hash).uniq.size, hs[0].hash == hs[0].hash
+p Hsub.new(1).hash == Hsub.new(1).hash, [Hsub.new(1), Hsub.new(1)].map(&:hash).uniq.size
+class Iv
+  def initialize(x) = @x = x
+end
+a = Iv.new(1)
+b = Iv.new(1)
+p a.object_id == b.object_id, a.object_id == a.object_id, a.__id__ == b.__id__, a.hash == b.hash, a.hash == a.hash

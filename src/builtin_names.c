@@ -481,7 +481,7 @@ int is_load_path_write(const char *n) {
    rather than as a dispatch over the classes that define the name
    (emit_call_identity_arms, emit_poly_ivar_list). */
 int is_poly_object_surface_name(const char *n) {
-  return sp_streq(n, "hash") || sp_streq(n, "object_id") || sp_streq(n, "__id__") || sp_streq(n, "instance_variables");
+  return is_identity_value_name(n) || sp_streq(n, "instance_variables");
 }
 /* A call whose answer tells an object from a copy of it: its identity, or
    whether it is frozen (a copy of a String later frozen is not). */
@@ -3056,6 +3056,10 @@ int is_flatten_name(const char *n) { return n && sp_streq(n, "flatten"); }
 
 int is_hash_name(const char *n) { return n && sp_streq(n, "hash"); }
 int is_object_id_name(const char *n) { return n && (sp_streq(n, "object_id") || sp_streq(n, "__id__")); }
+int is_identity_value_name(const char *n) { return is_hash_name(n) || is_object_id_name(n); }
+int builtin_call_reads_identity(const char *n) {
+  return n && (is_class_compare(n) || is_case_eq(n) || is_identity_value_name(n));
+}
 
 int is_puts_name(const char *n) { return n && sp_streq(n, "puts"); }
 

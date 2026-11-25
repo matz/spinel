@@ -394,6 +394,16 @@ int emit_call_identity_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
      hashing the Hash container uses to bucket keys, so `h[k]` and `k.hash`
      agree. A boxed user object routes through sp_obj_hash_hook, which dispatches
      to a user-defined #hash (or pointer identity as Object#hash's default). */
+  /* the builtin's own Object#hash of a program object (builtin_only: the call a super is lowered to) is its
+     identity, the address the runtime's key takes for an object without a hash of its own; never through
+     sp_obj_hash_hook, which comes back into the program's hash, the method holding the super */
+  if (is_hash_name(name) && recv >= 0 && argc == 0 && ty_is_object(rt) && cplan_builtin_call(c, id) &&
+      !comp_ty_value_obj(c, rt) && !c->classes[ty_object_class(rt)].is_struct) {
+    buf_puts(b, node_is_oint(c, id) ? "sp_oint_of((sp_int)(uintptr_t)(" : "((sp_int)(uintptr_t)(");
+    emit_expr(c, recv, b);
+    buf_puts(b, "))");
+    return 1;
+  }
   /* #hash on a value-type user object with no user #hash: a by-value struct has
      no pointer identity, so hash its bytes for a stable, content-based id that
      agrees across calls (#2284). */

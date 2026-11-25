@@ -116,6 +116,9 @@ typedef enum {
 /* The count super id passes where the builtin it reaches cannot take it (BSUP_ARITY), and CRuby's "expected"
    text into *exp; -1 where it can, or the owner's facts do not prove it */
 int cplan_super_wrong_count(Compiler *c, int id, const char **exp);
+/* Does super id's builtin arm gather what it passes, a count only the run gives (a bare super's rest or keywords, a
+   splat), and check it against lo..hi, the counts the builtin takes (emit_super_gathered_args)? */
+int cplan_super_gathered(Compiler *c, int id, int *lo, int *hi);
 
 typedef struct {
   int mi;                  /* the method scope, or -1 */

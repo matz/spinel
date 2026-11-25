@@ -16810,17 +16810,26 @@ static void emit_zsuper_args(Compiler *c, Scope *s, Scope *pm, const char *sep0,
   zsuper_end(&z);
 }
 
-/* A bare `super` in a method taking `*rest`: CRuby passes its positionals
-   with the rest spread among them, so how many reach the parent is known only
-   at run time. Gather them into one Array rooted in the prelude and refuse a
-   count the parent cannot take; -1 when the method has no named rest. */
-static int emit_zsuper_gather(Compiler *c, Scope *s, Scope *pm) {
-  int kwpos = zsuper_kw_positional(c, s, pm);
+/* A gather's statement: on its own line in the prelude (g_pre), inline in
+   an expression elsewhere. */
+static void zsuper_gather_open(Buf *o) {
+  if (o == g_pre) emit_indent(o, g_indent);
+}
+static void zsuper_gather_close(Buf *o) {
+  buf_puts(o, o == g_pre ? "\n" : " ");
+}
+
+/* The positionals a bare `super` in s passes, with its rest spread among
+   them and, with kwpos, its keywords as one more positional Hash, gathered
+   into one Array rooted where it is built (o); -1 when the method has no
+   named rest and kwpos is 0. */
+static int zsuper_gather(Compiler *c, Scope *s, int kwpos, Buf *o) {
   LocalVar *rv = s->rest_idx >= 0 && s->pnames[s->rest_idx] ? scope_local(s, s->pnames[s->rest_idx]) : NULL;
   if (!rv && !kwpos) return -1;
   int ct = ++g_tmp;
-  emit_indent(g_pre, g_indent);
-  buf_printf(g_pre, "sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);\n", ct, ct);
+  zsuper_gather_open(o);
+  buf_printf(o, "sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", ct, ct);
+  zsuper_gather_close(o);
   for (int i = 0; i < s->nparams && i != s->kwrest_idx &&
                   !callee_param_is_declared_kwarg(c, s, s->pnames[i]); i++) {
     LocalVar *ep = scope_local(s, s->pnames[i]);
@@ -16829,11 +16838,12 @@ static int emit_zsuper_gather(Compiler *c, Scope *s, Scope *pm) {
     Buf ab; memset(&ab, 0, sizeof ab);
     emit_zsuper_boxed(c, ep, et, txt.p, &ab);
     free(txt.p);
-    emit_indent(g_pre, g_indent);
+    zsuper_gather_open(o);
     if (i == s->rest_idx)
-      buf_printf(g_pre, "sp_PolyArray_append_all(_t%d, sp_poly_to_poly_array(sp_splat_to_array(%s)));\n",
+      buf_printf(o, "sp_PolyArray_append_all(_t%d, sp_poly_to_poly_array(sp_splat_to_array(%s)));",
                  ct, ab.p);
-    else buf_printf(g_pre, "sp_PolyArray_push(_t%d, %s);\n", ct, ab.p);
+    else buf_printf(o, "sp_PolyArray_push(_t%d, %s);", ct, ab.p);
+    zsuper_gather_close(o);
     free(ab.p);
   }
   if (kwpos) {
@@ -16845,35 +16855,94 @@ static int emit_zsuper_gather(Compiler *c, Scope *s, Scope *pm) {
     int any = own && kwrest_any_key(c, s);
     const char *hk = any ? "sp_PolyPolyHash" : "sp_SymPolyHash";
     int t = ++g_tmp;
-    emit_indent(g_pre, g_indent);
-    buf_printf(g_pre, "%s *_t%d = %s_new(); SP_GC_ROOT(_t%d);\n", hk, t, hk, t);
+    zsuper_gather_open(o);
+    buf_printf(o, "%s *_t%d = %s_new(); SP_GC_ROOT(_t%d);", hk, t, hk, t);
+    zsuper_gather_close(o);
     if (own) {
       LocalVar *kv = scope_local(s, s->pnames[s->kwrest_idx]);
       Buf txt; memset(&txt, 0, sizeof txt); buf_printf(&txt, "lv_%s", rename_local(s->pnames[s->kwrest_idx]));
-      emit_indent(g_pre, g_indent);
-      buf_printf(g_pre, "%s(_t%d, ", any ? "sp_kw_merge_any" : "sp_kwrest_merge_poly", t);
-      if (kv && kv->type == TY_POLY) buf_puts(g_pre, txt.p);
-      else emit_boxed_text(c, kv ? kv->type : TY_SYM_POLY_HASH, txt.p, g_pre);
-      buf_puts(g_pre, ");\n");
+      zsuper_gather_open(o);
+      buf_printf(o, "%s(_t%d, ", any ? "sp_kw_merge_any" : "sp_kwrest_merge_poly", t);
+      if (kv && kv->type == TY_POLY) buf_puts(o, txt.p);
+      else emit_boxed_text(c, kv ? kv->type : TY_SYM_POLY_HASH, txt.p, o);
+      buf_puts(o, ");");
+      zsuper_gather_close(o);
       free(txt.p);
     }
     for (int i = 0; i < s->nparams; i++) {
       if (i == s->kwrest_idx || !s->pnames[i] || !callee_param_is_declared_kwarg(c, s, s->pnames[i])) continue;
       LocalVar *kp = scope_local(s, s->pnames[i]);
       Buf txt; memset(&txt, 0, sizeof txt); buf_printf(&txt, "lv_%s", rename_local(s->pnames[i]));
-      emit_indent(g_pre, g_indent);
-      buf_printf(g_pre, any ? "sp_PolyPolyHash_set(_t%d, sp_box_sym(sp_sym_intern(\"%s\")), "
-                            : "sp_SymPolyHash_set(_t%d, sp_sym_intern(\"%s\"), ", t, s->pnames[i]);
-      if (kp && kp->type == TY_POLY) buf_puts(g_pre, txt.p);
-      else emit_boxed_text(c, kp ? kp->type : TY_POLY, txt.p, g_pre);
-      buf_puts(g_pre, ");\n");
+      zsuper_gather_open(o);
+      buf_printf(o, any ? "sp_PolyPolyHash_set(_t%d, sp_box_sym(sp_sym_intern(\"%s\")), "
+                        : "sp_SymPolyHash_set(_t%d, sp_sym_intern(\"%s\"), ", t, s->pnames[i]);
+      if (kp && kp->type == TY_POLY) buf_puts(o, txt.p);
+      else emit_boxed_text(c, kp ? kp->type : TY_POLY, txt.p, o);
+      buf_puts(o, ");");
+      zsuper_gather_close(o);
       free(txt.p);
     }
-    emit_indent(g_pre, g_indent);
-    buf_printf(g_pre, "if (_t%d->len > 0) sp_PolyArray_push(_t%d, sp_box_obj(_t%d, %s));\n",
+    zsuper_gather_open(o);
+    buf_printf(o, "if (_t%d->len > 0) sp_PolyArray_push(_t%d, sp_box_obj(_t%d, %s));",
                t, ct, t, any ? "SP_BUILTIN_POLY_POLY_HASH" : "SP_BUILTIN_SYM_POLY_HASH");
+    zsuper_gather_close(o);
   }
-  emit_gather_arity_check(c, pm, ct);
+  return ct;
+}
+
+/* A bare `super` in a method taking `*rest`: CRuby passes its positionals
+   with the rest spread among them, so how many reach the parent is known only
+   at run time. Gather them into one Array rooted in the prelude and refuse a
+   count the parent cannot take; -1 when the method has no named rest. */
+static int emit_zsuper_gather(Compiler *c, Scope *s, Scope *pm) {
+  int ct = zsuper_gather(c, s, zsuper_kw_positional(c, s, pm), g_pre);
+  if (ct >= 0) emit_gather_arity_check(c, pm, ct);
+  return ct;
+}
+
+/* See codegen_internal.h. */
+int emit_super_gathered_args(Compiler *c, int id, Scope *s, int nread, Buf *b) {
+  int lo, hi;
+  if (!cplan_super_gathered(c, id, &lo, &hi)) return -1;
+  const NodeTable *nt = c->nt;
+  int ct;
+  char gv[256];
+  if (nt_kind(nt, id) == NK_ForwardingSuperNode) {
+    /* (the builtin takes no keywords: this method's are one more positional Hash) */
+    int kwpos = s->kwrest_idx >= 0 && s->pnames[s->kwrest_idx];
+    for (int i = 0; i < s->nparams && !kwpos; i++) kwpos = callee_param_is_declared_kwarg(c, s, s->pnames[i]);
+    /* a rest past the arguments the arm reads, and no keywords: the count is the parameters before and after it and
+       the rest's length, and the arm reads its arguments as the parameters, with no list built */
+    if (!kwpos && s->rest_idx >= nread && s->pnames[s->rest_idx]) {
+      LocalVar *rv = scope_local(s, s->pnames[s->rest_idx]);
+      Buf txt; memset(&txt, 0, sizeof txt); emit_scope_local_ref(c, s, s->pnames[s->rest_idx], &txt);
+      Buf rb; memset(&rb, 0, sizeof rb);
+      emit_zsuper_boxed(c, rv, rv && rv->type != TY_UNKNOWN ? rv->type : TY_POLY, txt.p, &rb);
+      snprintf(gv, sizeof gv, "%d + sp_poly_length(%s)", s->nparams - 1, rb.p ? rb.p : "sp_box_nil()");
+      free(txt.p); free(rb.p);
+      emit_arity_check(b, gv, lo, hi, NULL);
+      buf_puts(b, "; ");
+      return -1;
+    }
+    ct = zsuper_gather(c, s, kwpos, b);
+  }
+  else {
+    int sa = nt_ref(nt, id, "arguments"), n = 0;
+    const int *av = sa >= 0 ? nt_arr(nt, sa, "arguments", &n) : NULL;
+    ct = ++g_tmp;
+    buf_printf(b, "sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d); ", ct, ct);
+    for (int i = 0; i < n; i++) {
+      int op = nt_kind(nt, av[i]) == NK_SplatNode ? nt_ref(nt, av[i], "expression") : -1;
+      buf_printf(b, "sp_PolyArray_%s(_t%d, ", op >= 0 ? "append_all" : "push", ct);
+      if (op >= 0) emit_splat_operand_array(c, op, b);
+      else emit_boxed(c, av[i], b);
+      buf_puts(b, "); ");
+    }
+  }
+  if (ct < 0) return -1;
+  snprintf(gv, sizeof gv, "_t%d->len", ct);
+  emit_arity_check(b, gv, lo, hi, NULL);
+  buf_puts(b, "; ");
   return ct;
 }
 
@@ -17778,7 +17847,10 @@ static void emit_super_value(Compiler *c, int id, Buf *b) {
        filters `super` that way) */
     if (cmi < 0 && barm == BSUP_SUBCLASSES) {
       int ta = ++g_tmp, tc = ++g_tmp;
-      buf_printf(b, "({ sp_Class _t%d = ", tc);
+      /* (a list whose count the run gives is gathered and checked first) */
+      buf_puts(b, "({ ");
+      (void)emit_super_gathered_args(c, id, s, 0, b);
+      buf_printf(b, "sp_Class _t%d = ", tc);
       if (cmethod_takes_self_cls(c, s)) buf_puts(b, cmethod_cls_token(c, s));
       else buf_printf(b, "((sp_Class){%d, NULL})", s->class_id);
       buf_printf(b, "; sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", ta, ta);
@@ -17801,7 +17873,9 @@ static void emit_super_value(Compiler *c, int id, Buf *b) {
        receiving class's (analysis's twin: rel_super) */
     if (cmi < 0 && (barm == BSUP_ANCESTORS || barm == BSUP_SUPERCLASS)) {
       int tc = ++g_tmp;
-      buf_printf(b, "({ sp_Class _t%d = ", tc);
+      buf_puts(b, "({ ");
+      (void)emit_super_gathered_args(c, id, s, 0, b);
+      buf_printf(b, "sp_Class _t%d = ", tc);
       if (cmethod_takes_self_cls(c, s)) buf_puts(b, cmethod_cls_token(c, s));
       else buf_printf(b, "((sp_Class){%d, NULL})", s->class_id);
       Repr sr = repr_of(c, id);
@@ -17818,12 +17892,15 @@ static void emit_super_value(Compiler *c, int id, Buf *b) {
        dynamic receiver's default answers it (builtin_ops' TY_CLASS row) --
        an override's `mod == R ? false : super` raised there */
     if (cmi < 0 && barm == BSUP_INCLUDE_P) {
-      /* (one plain argument, or a bare super's one parameter) */
+      /* (one plain argument, a bare super's one parameter, or the first of a list the run counts) */
       int sargs = nt_kind(c->nt, id) == NK_SuperNode ? nt_ref(c->nt, id, "arguments") : -1;
       int san = 0;
       const int *sav = sargs >= 0 ? nt_arr(c->nt, sargs, "arguments", &san) : NULL;
+      Buf gb; memset(&gb, 0, sizeof gb);
+      int ga = emit_super_gathered_args(c, id, s, 1, &gb);
       Buf ab; memset(&ab, 0, sizeof ab);
-      if (sargs >= 0) {
+      if (ga >= 0) buf_printf(&ab, "sp_unbox_class(_t%d->data[0])", ga);
+      else if (sargs >= 0) {
         if (comp_ntype(c, sav[0]) == TY_CLASS) emit_expr(c, sav[0], &ab);
         else { buf_puts(&ab, "sp_unbox_class("); emit_boxed(c, sav[0], &ab); buf_puts(&ab, ")"); }
       }
@@ -17837,14 +17914,14 @@ static void emit_super_value(Compiler *c, int id, Buf *b) {
       }
       int tc = ++g_tmp, tm = ++g_tmp;
       Repr sr = repr_of(c, id);
-      buf_printf(b, "%s({ sp_Class _t%d = ", sr.kind == RK_BOXED ? "sp_box_bool(" : "", tc);
+      buf_printf(b, "%s({ %ssp_Class _t%d = ", sr.kind == RK_BOXED ? "sp_box_bool(" : "", gb.p ? gb.p : "", tc);
       if (cmethod_takes_self_cls(c, s)) buf_puts(b, cmethod_cls_token(c, s));
       else buf_printf(b, "((sp_Class){%d, NULL})", s->class_id);
       buf_printf(b, "; sp_Class _t%d = %s; if (!sp_class_is_module_val(_t%d)) "
                     "sp_raise_cls(\"TypeError\", \"wrong argument type Class (expected Module)\"); "
                     "_t%d.cls_id != _t%d.cls_id && sp_class_le(_t%d, _t%d); })%s",
                  tm, ab.p ? ab.p : "", tm, tc, tm, tc, tm, sr.kind == RK_BOXED ? ")" : "");
-      free(ab.p);
+      free(ab.p); free(gb.p);
       return;
     }
     /* `super` in a class-level ` override is Kernel#` too */

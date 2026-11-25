@@ -12058,6 +12058,15 @@ static TyKind super_builtin_type(Compiler *c, int id, Scope *s, const char *unam
   case BSUP_ALLOCATE: case BSUP_FREEZE: case BSUP_DATA_WITH: return ty_object(s->class_id);
   case BSUP_SUBCLASSES: case BSUP_ANCESTORS: return TY_POLY_ARRAY;
   case BSUP_SUPERCLASS: return TY_CLASS;
+  /* (a count Class's superclass, subclasses or ancestors does not take raises: typed as the count it takes answers,
+     which a caller's other value joins) */
+  case BSUP_ARITY:
+    if (!s->is_cmethod) return TY_UNKNOWN;
+    switch (class_super_arm(uname)) {
+    case CSA_SUPERCLASS: return TY_CLASS;
+    case CSA_SUBCLASSES: case CSA_ANCESTORS: return TY_POLY_ARRAY;
+    default: return TY_UNKNOWN;
+    }
   case BSUP_RESPOND_TO: case BSUP_IS_A: case BSUP_INSTANCE_OF: case BSUP_SAME: case BSUP_FALSE: case BSUP_FROZEN:
     return TY_BOOL;
   case BSUP_SELF: return repr_self_boxed(c, (int)(s - c->scopes)) ? TY_POLY : ty_object(s->class_id);

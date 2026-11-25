@@ -12,3 +12,18 @@
 false
 true
 true
+ArgumentError wrong number of arguments (given 1, expected 0)
+ArgumentError wrong number of arguments (given 1, expected 0)
+[CM]
+[CM]
+ArgumentError wrong number of arguments (given 2, expected 0)
+ArgumentError wrong number of arguments (given 1, expected 0)
+ArgumentError wrong number of arguments (given 1, expected 0)
+[CK, CK]
+[CN, CK]
+ArgumentError wrong number of arguments (given 1, expected 0)
+ArgumentError wrong number of arguments (given 1, expected 0)
+ArgumentError wrong number of arguments (given 1, expected 0)
+CK
+ArgumentError wrong number of arguments (given 1, expected 0)
+NoMethodError

@@ -762,6 +762,13 @@ static int prog_header_scope_autoloaded(Compiler *c, int id) {
   return 0;
 }
 
+/* Is node b the literal block of a receiverless `lambda` call, a lambda
+   (as return_in_lambda takes it)? */
+static int prog_lambda_block(const NodeTable *nt, const int *parent, int b) {
+  if (nt_kind(nt, b) != NK_BlockNode || parent[b] < 0 || nt_kind(nt, parent[b]) != NK_CallNode) return 0;
+  const char *cn = nt_str(nt, parent[b], "name");
+  return cn && is_lambda_constructor(cn) && nt_ref(nt, parent[b], "receiver") < 0 && nt_ref(nt, parent[b], "block") == b;
+}
 /* What the load model does not load yet, refused by name (#9898), asked
    once the load sites are known, ahead of the desugaring:
      - a require of the program's own entry file, which CRuby runs again as
@@ -846,13 +853,15 @@ void prog_refuse_loads(Compiler *c) {
           unsupported_feature(c, id, "load model: a computed require may load the program's own entry file again, for now");
     }
     else if (k == NK_ReturnNode) {
-      /* the nearest method, lambda or block around it: a block's, at the top level */
+      /* the nearest method, lambda or block around it: a block's, at the top level.
+         A receiverless `lambda { }` block is a lambda, whose `return` leaves it
+         (return_in_lambda) */
       int a = parent[id];
       while (a >= 0 && nt_kind(nt, a) != NK_DefNode && nt_kind(nt, a) != NK_LambdaNode && nt_kind(nt, a) != NK_BlockNode)
         a = parent[a];
       int r = a >= 0 && nt_kind(nt, a) == NK_BlockNode ? prog_root_of(c, parent, id) : -1;
       for (int b = a; r >= 0 && b >= 0; b = parent[b])
-        if (nt_kind(nt, b) == NK_DefNode || nt_kind(nt, b) == NK_LambdaNode) r = -1;
+        if (nt_kind(nt, b) == NK_DefNode || nt_kind(nt, b) == NK_LambdaNode || prog_lambda_block(nt, parent, b)) r = -1;
       if (r >= 0 && r != nt->root_id)
         unsupported_feature(c, id, "load model: a `return` in a block at a required file's top level, for now");
     }

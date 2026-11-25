@@ -9297,6 +9297,24 @@ static int dsend_name_only_outside(Compiler *c, int id, int recv, const char *na
   return any;
 }
 
+/* The classes the receiver recv may hold that define a method_missing of
+   the program's, which CRuby's dispatch calls for a name no method answers,
+   into out (up to cap); their count, -1 past cap. *guard is set when the
+   receiver may also hold a value of another class, which raises
+   NoMethodError for the name instead. */
+static int mm_path_node(NodeTable *nt, int like, const char *qn);
+static int dsend_recv_mm_classes(Compiler *c, int id, int recv, int *out, int cap, int *guard) {
+  int n = 0;
+  for (int k = 0; k < c->nclasses; k++)
+    if (!cls_fact_excludes(c, recv, k) && call_target(c, id, k, METHOD_MISSING_NAME, CT_METHODS, NULL) >= 0) {
+      if (n >= cap) return -1;
+      out[n++] = k;
+    }
+  TyKind rt = n > 0 ? infer_type(c, recv) : TY_UNKNOWN;
+  *guard = !(ty_is_object(rt) && call_target(c, id, ty_object_class(rt), METHOD_MISSING_NAME, CT_METHODS, NULL) >= 0);
+  return n;
+}
+
 /* The most arms a computed send dispatches over, and the most it keeps
    with a boxed receiver's builtin names among them. */
 #define DSEND_ARM_CAP 4096
@@ -9699,6 +9717,9 @@ static int desugar_dynamic_send_inner(Compiler *c) {
       if (nt_kind(nt, argv[k]) == NK_SplatNode && subtree_has_side_effect(c, argv[k])) dsplat = 1;
     TyKind drt = !dsplat && dsend_recv_local_ok(c, nt, recv, &drun) &&
                  (drun || dsend_recv_rebound(c, nt, recv, argv, argc)) ? infer_type(c, recv) : TY_VOID;
+    /* (asked ahead of the nodes this lowering makes, as the type is) */
+    int mmk[16], mm_guard = 0;
+    int nmmk = !sock && !sock_name && recv >= 0 && !sp_streq(nm, "method") ? dsend_recv_mm_classes(c, id, recv, mmk, 16, &mm_guard) : 0;
     int base = nt->count;
     if (splat_src >= 0) {
       int r0 = nt_clone_subtree(nt, splat_src); if (r0 < 0) continue;
@@ -9736,7 +9757,7 @@ static int desugar_dynamic_send_inner(Compiler *c) {
       NodeKind rk = nt_kind(nt, rest[k]);
       if (rk == NK_SplatNode || rk == NK_KeywordHashNode) rest_variadic = 1;
     }
-    int *arms = (int *)malloc(sizeof(int) * (size_t)(nuse > 0 ? nuse : 1)); int narm = 0;
+    int *arms = (int *)malloc(sizeof(int) * (size_t)(nuse + 1)); int narm = 0;   /* (and the method_missing arm) */
     for (int k = 0; k < nuse; k++) {
       /* (a boxed socket write's literal keeps them: its arm is the
          retargeted call, which reaches them as send does) */
@@ -9799,6 +9820,50 @@ static int desugar_dynamic_send_inner(Compiler *c) {
       nt_set_ignore_visibility(nt, call, !nt_str(nt, call, "vis_enforce") && nt_ignore_visibility(nt, id));
       arms[narm++] = call;
     }
+    /* A name no arm takes reaches the method_missing of a class the
+       receiver may hold, as CRuby's dispatch calls it whatever spelled the
+       name: the arm with no name (dsend_mm), the switch's default
+       (emit_dynamic_send), is `recv.method_missing(name.to_sym, *rest,
+       &blk)`, its name read as the symbol the switch is over */
+    int mm_tests[16], nmm_tests = 0;
+    if (nmmk > 0) {
+      int ts = nt_new_node(nt, "CallNode"), mna = nt_new_node(nt, "ArgumentsNode"), mm = nt_new_node(nt, "CallNode");
+      int sa = nt_ref(nt, id, "arguments"), sn = 0;
+      const int *sv = sa >= 0 ? nt_arr(nt, sa, "arguments", &sn) : NULL;
+      if (ts >= 0 && mna >= 0 && mm >= 0 && sn > 0) {
+        nt_node_set_str(nt, ts, "name", "to_sym");
+        nt_node_set_ref(nt, ts, "receiver", sv[0]);
+        int mv[65]; mv[0] = ts;
+        for (int k = 0; k < nrest; k++) mv[k + 1] = rest[k];
+        nt_node_set_arr(nt, mna, "arguments", mv, nrest + 1);
+        nt_node_set_str(nt, mm, "name", "method_missing");
+        nt_node_set_ref(nt, mm, "receiver", recv);
+        nt_node_set_ref(nt, mm, "arguments", mna);
+        if (sblk >= 0) nt_node_set_ref(nt, mm, "block", sblk);
+        nt_node_set_int(nt, mm, "dsend_mm", 1);
+        /* on a receiver that may hold another class's value, only where it
+           holds one of those classes' (`recv.is_a?(K) || ...`) */
+        int guard = -1;
+        for (int q = 0; mm_guard && q < nmmk; q++) {
+          int kp = mm_path_node(nt, id, c->classes[mmk[q]].name);
+          int test = kp >= 0 ? fwd_new_call(nt, recv, "is_a?", kp) : -1;
+          if (test < 0) { guard = -1; break; }
+          nt_mark_builtin_call(nt, test);
+          mm_tests[nmm_tests++] = test;
+          if (guard < 0) { guard = test; continue; }
+          int or = nt_new_node(nt, "OrNode");
+          nt_node_set_ref(nt, or, "left", guard);
+          nt_node_set_ref(nt, or, "right", test);
+          guard = or;
+        }
+        if (!mm_guard || guard >= 0) {
+          if (guard >= 0) nt_node_set_ref(nt, mm, "dsend_mm_guard", guard);
+          arms[narm++] = mm;
+        }
+        /* (CRuby's dispatch calls a private method_missing too) */
+        nt_set_ignore_visibility(nt, mm, 1);
+      }
+    }
     nt_node_set_arr(nt, id, "dyn_send_arms", arms, narm);
     if (sock) nt_node_set_int(nt, id, "sock_send", 1);
     /* --share-strings: a receiver that runs code (a call, a conditional, a
@@ -9824,6 +9889,7 @@ static int desugar_dynamic_send_inner(Compiler *c) {
         nt_node_set_int(nt, pr, "dsr_recv", 1);
         scope_local_intern(comp_scope_of(c, id), tname);
         for (int k = 0; k < narm; k++) nt_node_set_ref(nt, arms[k], "receiver", ta);
+        for (int k = 0; k < nmm_tests; k++) nt_node_set_ref(nt, mm_tests[k], "receiver", ta);
         /* the arms' receiver holds what the send's did: their dispatch
            takes the classes that one can be (comp_poly_candidates_at) */
         cls_fact_same(c, ta, recv);

@@ -5314,7 +5314,47 @@ static int emit_dynamic_send(Compiler *c, int id, Buf *b) {
   }
   free(seen);
   buf_puts(b, "default: ");
-  if (mo) {
+  /* a name no arm takes, on a receiver whose class has a method_missing:
+     that call (desugar_dynamic_send's dsend_mm arm), its name the symbol */
+  int mm_arm = -1;
+  for (int k = 0; k < narm && mm_arm < 0; k++) if (nt_int(nt, arms[k], "dsend_mm", 0)) mm_arm = arms[k];
+  int mm_name = -1, mma = mm_arm >= 0 ? nt_ref(nt, mm_arm, "arguments") : -1, mmn = 0;
+  const int *mmv = mma >= 0 ? nt_arr(nt, mma, "arguments", &mmn) : NULL;
+  if (mmn > 0) mm_name = mmv[0];
+  /* (emitted as an arm is, under a probe whose preludes run in the case:
+     one that does not emit leaves the NoMethodError) */
+  volatile int mm_ok = 0;
+  Buf mm_pre = {0, 0, 0}, mm_body = {0, 0, 0}, mm_cond = {0, 0, 0};
+  if (!mo && mm_name >= 0) {
+    int sv_mm = g_n_argov;
+    ArmProbe ap; arm_probe_begin(c, &ap, &mm_pre);
+    /* (a name typed other than Symbol, `to_sym` of a value of several
+       kinds, reads as the symbol boxed) */
+    if (repr_of(c, mm_name).as_ty == TY_SYMBOL) view_bind_temp(mm_name, t);
+    else view_bind_temp_read(mm_name, "sp_box_sym", t);
+    int guard = nt_ref(nt, mm_arm, "dsend_mm_guard");
+    if (setjmp(g_unsup_recover) == 0) {
+      if (guard >= 0) emit_cond(c, guard, &mm_cond);
+      emit_boxed(c, mm_arm, &mm_body);
+      mm_ok = 1;
+    }
+    else arm_probe_dropped(&ap);
+    arm_probe_end(c, &ap, mm_ok);
+    view_unbind(sv_mm);
+  }
+  if (mm_ok) {
+    buf_puts(b, "{ ");
+    if (mm_pre.p && mm_pre.len) buf_puts(b, mm_pre.p);
+    /* (the guard's false side is the NoMethodError below) */
+    if (mm_cond.p) buf_printf(b, "if (%s) { _r%d = %s; break; } }\n", mm_cond.p, t, mm_body.p ? mm_body.p : "sp_box_nil()");
+    else buf_printf(b, "_r%d = %s; } } _r%d; })", t, mm_body.p ? mm_body.p : "sp_box_nil()", t);
+  }
+  int mm_done = mm_ok && !mm_cond.p;
+  free(mm_pre.p); free(mm_body.p); free(mm_cond.p);
+  if (mm_done) {
+    /* (the default is the method_missing call's, closed above) */
+  }
+  else if (mo) {
     buf_printf(b, "{ sp_raise_cls(\"NameError\", sp_sprintf(\"undefined method '%%s' for class '%%s'\", sp_sym_to_s(_t%d), sp_poly_class_name(", t);
     emit_boxed(c, recv, b);
     buf_printf(b, "))); _r%d = sp_box_nil(); } } _r%d; })", t, t);

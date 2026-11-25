@@ -26459,8 +26459,11 @@ static int decl_arg_inert(const NodeTable *nt, int a) {
    method_missing the program defines (hooks) runs program code at a
    declaration. A statement this does not know costs the name path only. */
 static int block_only_declares(const NodeTable *nt, int blk, int hooks, const ANameHash *defnames) {
-  int body = nt_ref(nt, blk, "body"), n = 0;
-  if (hooks) return 0;
+  return !hooks && body_only_declares(nt, nt_ref(nt, blk, "body"), defnames);
+}
+/* ...and for the statements body (-1: none) of a block or a class body */
+int body_only_declares(const NodeTable *nt, int body, const ANameHash *defnames) {
+  int n = 0;
   if (body < 0) return 1;
   if (nt_kind(nt, body) != NK_StatementsNode) return 0;
   const int *st = nt_arr(nt, body, "body", &n);
@@ -26482,16 +26485,23 @@ static int block_only_declares(const NodeTable *nt, int blk, int hooks, const AN
   }
   return 1;
 }
-int desugar_struct_block_anonymous(Compiler *c) {
-  NodeTable *nt = (NodeTable *)c->nt;
-  int changed = 0, hooks = 0;
-  ANameHash defnames = {0};
+/* The names the program defines methods of, into *defnames; answers
+   whether one is a definition hook or method_missing (block_only_declares) */
+int program_def_names(const NodeTable *nt, ANameHash *defnames) {
+  int hooks = 0;
   for (int id = 0; id < nt->count; id++)
     if (nt_kind(nt, id) == NK_DefNode) {
       const char *dn = nt_str(nt, id, "name");
-      if (dn && !anh_has(&defnames, dn)) anh_add(&defnames, dn);
+      if (dn && !anh_has(defnames, dn)) anh_add(defnames, dn);
       hooks |= is_definition_hook_name(dn) || is_method_missing_name(dn);
     }
+  return hooks;
+}
+int desugar_struct_block_anonymous(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int changed = 0;
+  ANameHash defnames = {0};
+  int hooks = program_def_names(nt, &defnames);
   for (int id = 0; id < nt->count; id++) {
     NodeKind k = nt_kind(nt, id);
     if (k != NK_ConstantWriteNode && k != NK_LocalVariableWriteNode) continue;

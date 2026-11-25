@@ -1,0 +1,16 @@
+C("A")
+C("B")
+I("A")
+I("B")
+C("A")
+I("B")
+["C(\"A\")"]
+true
+false
+:x
+:int
+:no
+:m
+:n
+:none
+:none

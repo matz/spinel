@@ -4438,6 +4438,11 @@ int cmethod_takes_self_cls(Compiler *c, const Scope *s) {
       /* and any other super runs the method it reaches on that class, which
          may read it even where this body does not */
       if ((nt_kind(c->nt, nid) == NK_SuperNode || nt_kind(c->nt, nid) == NK_ForwardingSuperNode) && !cplan_core_hook(c, nid)) { ans = 1; break; }
+      /* a site class's bare `new` or `allocate` (a copy an inherited
+         method gets is the site's too) builds the class it is called on,
+         which may be one made at run time (emit_ctor_rt_arg) */
+      if (cplan_rt_site(c, s->class_id) && nt_kind(c->nt, nid) == NK_CallNode && nt_ref(c->nt, nid, "receiver") < 0 &&
+          (is_new_name(nt_str(c->nt, nid, "name")) || allocate_on_own_class(c, nid) >= 0)) { ans = 1; break; }
       NodeKind ty_k = nt_kind(c->nt, nid);
       if (ty_k == NK_CallNode && nt_ref(c->nt, nid, "receiver") < 0) {
         const char *nm = nt_str(c->nt, nid, "name");
@@ -4464,21 +4469,23 @@ int cmethod_takes_self_cls(Compiler *c, const Scope *s) {
 
 /* Emit the receiving-class argument for such a call: the class the call names,
    which every call site knows statically (a constant receiver, or one arm of a
-   cls_id cascade), or, for a site class (cplan_rt_site), the class value the
-   call holds (recv_val, NULL for none): one made at run time is known only
-   there. Returns the separator the rest of the arguments need. */
+   cls_id cascade), or, for a class of a site's family (cplan_rt_family), the
+   class value the call holds (recv_val: a switch's subject in its arm, NULL
+   for none): one made at run time is known only there, and an arm may take
+   it for its site's class. Returns the separator the rest of the arguments
+   need. */
 /* The receiving-class token the last call of a class method taking one
    passed (emit_cmethod_self_cls_arg): a parameter default of that method is
    spelled at the call site, after it, where the method's own `_sp_cls` is
    not declared (cmethod_cls_token). */
 static int g_cls_tok_mi = -1;
-static char g_cls_tok[64];
+static char g_cls_tok[1024];   /* (an object's class value, emit_obj_class_value, spans several reads) */
 
 const char *emit_cmethod_self_cls_arg(Compiler *c, int mi, int recv_cls, const char *recv_val, Buf *b) {
   if (mi < 0 || !cmethod_takes_self_cls(c, &c->scopes[mi])) return "";
   int rc = recv_cls >= 0 || recv_cls <= -100 ? recv_cls : c->scopes[mi].class_id;
   if (rc == c->scopes[mi].class_id && class_reopen_cmethod(c, -1, -1, c->scopes[mi].name) == mi) rc = builtin_class_id("Class");
-  if (recv_val && cplan_rt_site(c, rc)) snprintf(g_cls_tok, sizeof g_cls_tok, "%s", recv_val);
+  if (recv_val && cplan_rt_family(c, rc)) snprintf(g_cls_tok, sizeof g_cls_tok, "%s", recv_val);
   else snprintf(g_cls_tok, sizeof g_cls_tok, "((sp_Class){%d, NULL})", rc);
   buf_puts(b, g_cls_tok);
   g_cls_tok_mi = mi;
@@ -5935,11 +5942,37 @@ static void emit_cls_visible_fn(Compiler *c, Buf *b) {
 static void emit_rtclass_arm(Compiler *c, const char *stmt, Buf *b) {
   if (cplan_rt_site(c, -1)) buf_printf(b, "if(sp_rtclass_id_p(c.cls_id))%s", stmt);
 }
-/* An instance of a site class takes the class made at run time it is being
-   built for (sp_rtclass_take) as it is allocated: lv is the object's lvalue
-   prefix ("self->") */
-void emit_rtclass_take(Compiler *c, int cid, const char *lv, Buf *b) {
-  if (cplan_rt_site(c, cid)) buf_printf(b, " %s_sp_rtcls = sp_rtclass_take(%d);", lv, cid);
+/* The id of the class an instance of class ci is built for, the leading
+   argument of a site class's constructor (cplan_rt_site, DESIGN section 2):
+   off the class value `cls` the call holds (a C sp_Class), which may be a
+   class made at run time, or, with cls NULL, ci itself, for a call that
+   names the class statically. */
+static void rtclass_arg_text(int ci, const char *cls, Buf *b) {
+  if (cls) buf_printf(b, "(%s).cls_id", cls);
+  else buf_printf(b, "%d", ci);
+}
+/* Emit that argument at the head of a call of class ci's constructor
+   (sp_X_new, _new_blk, _new_noinit): nothing for a class that is no site
+   class. Returns the separator the rest of the arguments need. A site
+   class's constructor takes it, so a call that does not pass it does not
+   compile. */
+const char *emit_ctor_rt_arg(Compiler *c, int ci, const char *cls, Buf *b) {
+  if (!cplan_rt_site(c, ci)) return "";
+  rtclass_arg_text(ci, cls, b);
+  return ", ";
+}
+/* An instance of a site class keeps the class it is built for, set as it is
+   allocated, before initialize runs: lv is the object's lvalue prefix
+   ("self->"), val the C id (the constructor's `_sp_rt`) */
+static void emit_rtclass_store(Compiler *c, int cid, const char *lv, const char *val, Buf *b) {
+  if (cplan_rt_site(c, cid)) buf_printf(b, " %s_sp_rtcls = %s;", lv, val);
+}
+/* A site class's constructor parameter for that id (named, or NULL in a
+   prototype): returns the separator the rest of the parameters need. */
+static const char *emit_ctor_rt_param(Compiler *c, int cid, const char *name, Buf *b) {
+  if (!cplan_rt_site(c, cid)) return "";
+  buf_printf(b, "sp_int%s%s", name ? " " : "", name ? name : "");
+  return ", ";
 }
 /* sp_obj_rtclass (sp_obj_rtclass_fn): the class made at run time a boxed
    instance of a site class was built for, for sp_poly_class_val, the
@@ -5960,6 +5993,13 @@ void emit_obj_class_id(Compiler *c, int ci, const char *obj, Buf *b) {
   char id[256];
   snprintf(id, sizeof id, "((sp_%s *)(%s))->cls_id", c->classes[ci].c_name, obj);
   emit_visible_cls_id(c, ci, obj, id, 1, b);
+}
+/* ...as a class value (sp_Class), for a construction that builds an
+   instance of the object's class (emit_ctor_rt_arg) */
+void emit_obj_class_value(Compiler *c, int ci, const char *obj, Buf *b) {
+  buf_puts(b, "((sp_Class){");
+  emit_obj_class_id(c, ci, obj, b);
+  buf_puts(b, ", NULL})");
 }
 /* The id Ruby sees as the class of an object of user class ci or of one of
    its subclasses, the one reader of an object's visible class: `id` is a C
@@ -13295,11 +13335,14 @@ static TyKind scope_param_type(Scope *s, int i) {
   return (p && p->type != TY_UNKNOWN) ? p->type : TY_POLY;
 }
 
-static void emit_ctor_params(Compiler *c, int init, int init_has_blk, Buf *b) {
+/* The parameters of class cid's constructor: a site class's leading class
+   id (emit_ctor_rt_param), then its initialize's. */
+static void emit_ctor_params(Compiler *c, int cid, int init, int init_has_blk, Buf *b) {
+  const char *lead = emit_ctor_rt_param(c, cid, "_sp_rt", b);
   if (init >= 0 && (c->scopes[init].nparams > 0 || init_has_blk)) {
     Scope *s = &c->scopes[init];
     for (int i = 0; i < s->nparams; i++) {
-      if (i) buf_puts(b, ", ");
+      buf_puts(b, i ? ", " : lead);
       TyKind pt = scope_param_type(s, i);
       LocalVar *pl = scope_local(s, s->pnames[i]);
       /* as initialize's own signature declares it (an oint slot included) */
@@ -13307,11 +13350,11 @@ static void emit_ctor_params(Compiler *c, int init, int init_has_blk, Buf *b) {
       buf_printf(b, " lv_%s", s->pnames[i]);
     }
     if (init_has_blk) {
-      if (s->nparams > 0) buf_puts(b, ", ");
+      buf_puts(b, s->nparams > 0 ? ", " : lead);
       buf_printf(b, "sp_Proc *const lv_%s", s->blk_param);
     }
   }
-  else buf_puts(b, "void");
+  else if (!lead[0]) buf_puts(b, "void");
 }
 
 /* Root the Range's two handles before allocating its destination object. */
@@ -13615,7 +13658,7 @@ void emit_class_new(Compiler *c, ClassInfo *ci, Buf *b) {
       int si_blk = si->blk_param && si->blk_param[0] && !si->yields;
       buf_printf(b, "SP_POOL_DEFINE(%s)\n", ci->c_name);
       buf_printf(b, "static sp_%s *sp_%s_new(", ci->c_name, ci->c_name);
-      emit_ctor_params(c, sinit, si_blk, b);
+      emit_ctor_params(c, cid, sinit, si_blk, b);
       buf_puts(b, ") {\n");
       /* Root the reference arguments before the object allocation, for the
          reason the Struct constructor below does: SP_POOL_NEW can collect, and
@@ -13636,9 +13679,8 @@ void emit_class_new(Compiler *c, ClassInfo *ci, Buf *b) {
                 class_needs_scan(ci) ? "sp_" : "", class_needs_scan(ci) ? ci->c_name : "NULL",
                 class_needs_scan(ci) ? "__gc_scan" : "");
       buf_puts(b, "  SP_GC_ROOT(self);\n");
-      buf_printf(b, "  self->cls_id = %d;", ctor_cls_id(c, cid));
-      emit_rtclass_take(c, cid, "self->", b);
-      buf_puts(b, "\n");
+      /* (a Struct is no site class, register_rt_sites: no `_sp_rt`) */
+      buf_printf(b, "  self->cls_id = %d;\n", ctor_cls_id(c, cid));
       emit_ivar_nil_inits(c, b, ci, "self->", "  ", ";\n");
       /* Call the initialize under the name of the class that actually defines
          it: when it is inherited from an ancestor the C symbol is
@@ -13714,8 +13756,10 @@ void emit_class_new(Compiler *c, ClassInfo *ci, Buf *b) {
   if (ci->is_value_type) {
     /* value-type: build on the stack and return by value (no heap / GC) */
     buf_printf(b, "static sp_%s sp_%s_new(", ci->c_name, ci->c_name);
-    emit_ctor_params(c, init, init_has_blk, b);
-    buf_printf(b, ") {\n  sp_%s self = {0};\n  self.cls_id = %d;\n", ci->c_name, cid);
+    emit_ctor_params(c, cid, init, init_has_blk, b);
+    buf_printf(b, ") {\n  sp_%s self = {0};\n  self.cls_id = %d;", ci->c_name, cid);
+    emit_rtclass_store(c, cid, "self.", "_sp_rt", b);
+    buf_puts(b, "\n");
     emit_ivar_nil_inits(c, b, ci, "self.", "  ", ";\n");
     if (comp_class_is_module(c, ci)) {
       /* A MODULE has no `new` -- `Buffering.new` is a NoMethodError in Ruby --
@@ -13766,7 +13810,7 @@ void emit_class_new(Compiler *c, ClassInfo *ci, Buf *b) {
   if (class_pooled(c, cid)) buf_printf(b, "SP_POOL_DEFINE(%s)\n", ci->c_name);
   int init_pf = ctor_init_proc_form(c, cid);
   buf_printf(b, "static sp_%s *sp_%s_new%s(", ci->c_name, ci->c_name, init_pf >= 0 ? "_noinit" : "");
-  emit_ctor_params(c, init, init_has_blk, b);
+  emit_ctor_params(c, cid, init, init_has_blk, b);
   /* Exception subclasses: use sp_exc_new_sub as underlying storage so that
      sp_raise/rescue machinery sees the right cls_name and parent. */
   if (class_is_exc_subclass(c, cid)) {
@@ -13831,7 +13875,7 @@ void emit_class_new(Compiler *c, ClassInfo *ci, Buf *b) {
   }
   buf_printf(b, "  SP_GC_ROOT(self);\n");
   buf_printf(b, "  self->cls_id = %d;", ctor_cls_id(c, cid));
-  emit_rtclass_take(c, cid, "self->", b);
+  emit_rtclass_store(c, cid, "self->", "_sp_rt", b);
   buf_puts(b, "\n");
   /* memset zero-inits fields, but a poly ivar's zero pattern is not nil and an
      int ivar's nil is its nil byte, so seed them before initialize runs
@@ -13869,12 +13913,16 @@ void emit_class_new(Compiler *c, ClassInfo *ci, Buf *b) {
      which takes the block as a proc. sp_X_new_blk is for a `new(..., &pr)`
      whose proc is known only at run time; sp_X_new passes none. */
   Scope *s = &c->scopes[init], *pf = &c->scopes[init_pf];
+  /* (a site class's three take the class id first: emit_ctor_rt_param) */
+  int rt = cplan_rt_site(c, cid);
   buf_printf(b, "static sp_%s *sp_%s_new_blk(", ci->c_name, ci->c_name);
+  buf_puts(b, emit_ctor_rt_param(c, cid, "_sp_rt", b));
   for (int i = 0; i < s->nparams; i++) {
     emit_ctype(c, scope_param_type(s, i), b);
     buf_printf(b, " lv_%s, ", s->pnames[i]);
   }
   buf_printf(b, "sp_Proc *_sp_blk) {\n  sp_%s *self = sp_%s_new_noinit(", ci->c_name, ci->c_name);
+  if (rt) buf_puts(b, s->nparams ? "_sp_rt, " : "_sp_rt");
   for (int i = 0; i < s->nparams; i++) buf_printf(b, "%slv_%s", i ? ", " : "", s->pnames[i]);
   buf_puts(b, ");\n  SP_GC_ROOT(self);\n");
   buf_printf(b, "  (void)%s(", mc_method(c, pf));
@@ -13893,13 +13941,14 @@ void emit_class_new(Compiler *c, ClassInfo *ci, Buf *b) {
   }
   buf_puts(b, ", _sp_blk);\n  return self;\n}\n");
   buf_printf(b, "static sp_%s *sp_%s_new(", ci->c_name, ci->c_name);
+  const char *lead = emit_ctor_rt_param(c, cid, "_sp_rt", b);
   for (int i = 0; i < s->nparams; i++) {
-    if (i) buf_puts(b, ", ");
+    buf_puts(b, i ? ", " : lead);
     emit_ctype(c, scope_param_type(s, i), b);
     buf_printf(b, " lv_%s", s->pnames[i]);
   }
-  if (s->nparams == 0) buf_puts(b, "void");
-  buf_printf(b, ") {\n  return sp_%s_new_blk(", ci->c_name);
+  if (s->nparams == 0 && !rt) buf_puts(b, "void");
+  buf_printf(b, ") {\n  return sp_%s_new_blk(%s", ci->c_name, rt ? "_sp_rt, " : "");
   for (int i = 0; i < s->nparams; i++) buf_printf(b, "lv_%s, ", s->pnames[i]);
   buf_puts(b, "NULL);\n}\n");
 }
@@ -13908,35 +13957,47 @@ void emit_class_new(Compiler *c, ClassInfo *ci, Buf *b) {
    class method, the class its body is emitted for. In an instance method,
    the object's own class, picked by its id over `base` and the subclasses
    the program allocates, each cast to the base as a bare `new` in a class
-   method is; a class with no such subclass allocates `base` alone. */
+   method is; a class with no such subclass allocates `base` alone. A site
+   class's instance is built for the class the method runs for, which may
+   be one made at run time (emit_obj_alloc_expr's `cls`). */
 void emit_own_class_alloc(Compiler *c, int id, int base, Buf *b) {
   const NodeTable *nt = c->nt;
   Scope *s = comp_scope_of(c, id);
-  char sel[256] = "";
+  char sel[256] = "", cls[512] = "";
   if (s && s->is_cmethod) {
     /* a class method is copied for each subclass it runs for, as one with
        a bare `new` is: the copy allocates its class */
     if (g_emitting_class_id >= 0) base = g_emitting_class_id;
     /* one that takes the receiving class (a subclass's super reaches it)
-       allocates that class */
+       allocates that class, picked by its key (class_value_key) */
     /* (the token `self` reads there: a yielding method inlined at its
        caller reads g_self, a parameter default the call's class) */
-    if (cmethod_takes_self_cls(c, s))
-      snprintf(sel, sizeof sel, "(%s).cls_id", cmethod_self_cls(c, s));
+    if (cmethod_takes_self_cls(c, s)) {
+      snprintf(cls, sizeof cls, "(%s)", cmethod_self_cls(c, s));
+      class_value_key(c, -1, cls, sel, sizeof sel);
+    }
   }
   else if (!comp_ty_value_obj(c, ty_object(base))) {
     int recv = nt_ref(nt, id, "receiver");
     Buf sb; memset(&sb, 0, sizeof sb);
     emit_expr(c, nt_ref(nt, recv, "receiver"), &sb);
     if (sb.p) snprintf(sel, sizeof sel, "(%s)->cls_id", sb.p);
+    /* (the class an instance of a site class's family answers) */
+    if (sb.p && cplan_rt_family(c, base)) {
+      Buf ib; memset(&ib, 0, sizeof ib);
+      emit_obj_class_value(c, base, sb.p, &ib);
+      snprintf(cls, sizeof cls, "%s", ib.p);
+      free(ib.p);
+    }
     free(sb.p);
   }
+  const char *cv = cls[0] ? cls : NULL;
   int nsub = 0;
   for (int k = 0; sel[0] && k < c->nclasses; k++)
     if (k != base && is_descendant(c, k, base) && c->classes[k].instantiated &&
         !class_is_exc_subclass(c, k) && !c->classes[k].is_native_class &&
         !comp_ty_value_obj(c, ty_object(k))) nsub++;
-  if (!nsub) { emit_obj_alloc_expr(c, base, b); return; }
+  if (!nsub) { emit_obj_alloc_expr(c, base, cv, b); return; }
   int t = ++g_tmp;
   buf_printf(b, "({ int _ac%d = %s; ", t, sel);
   for (int k = 0; k < c->nclasses; k++) {
@@ -13944,10 +14005,10 @@ void emit_own_class_alloc(Compiler *c, int id, int base, Buf *b) {
         class_is_exc_subclass(c, k) || c->classes[k].is_native_class ||
         comp_ty_value_obj(c, ty_object(k))) continue;
     buf_printf(b, "_ac%d == %d ? (sp_%s *)", t, k, c->classes[base].c_name);
-    emit_obj_alloc_expr(c, k, b);
+    emit_obj_alloc_expr(c, k, cv, b);
     buf_puts(b, " : ");
   }
-  emit_obj_alloc_expr(c, base, b);
+  emit_obj_alloc_expr(c, base, cv, b);
   buf_puts(b, "; })");
 }
 
@@ -13972,8 +14033,10 @@ void emit_pool_fwd(Compiler *c, int cid) {
    its ivars zero/nil-initialized and cls_id stamped, but WITHOUT running
    initialize -- the Class#allocate primitive. Handles both value-type objects
    (returned by value) and pointer objects. The allocation mirrors the body of
-   emit_class_new above, minus the initialize call. */
-void emit_obj_alloc_expr(Compiler *c, int cid, Buf *b) {
+   emit_class_new above, minus the initialize call: an instance of a site
+   class keeps the class it is built for, off the class value `cls` the call
+   holds (NULL where it names the class statically: emit_ctor_rt_arg). */
+void emit_obj_alloc_expr(Compiler *c, int cid, const char *cls, Buf *b) {
   ClassInfo *ci = &c->classes[cid];
   int is_val = comp_ty_value_obj(c, ty_object(cid));
   int t = ++g_tmp;
@@ -14021,9 +14084,12 @@ void emit_obj_alloc_expr(Compiler *c, int cid, Buf *b) {
     buf_printf(b, " _t%d; })", t);
     return;
   }
+  Buf rt; memset(&rt, 0, sizeof rt);
+  rtclass_arg_text(cid, cls, &rt);
   if (is_val) {
     buf_printf(b, "({ sp_%s _t%d = {0}; _t%d.cls_id = %d;", ci->c_name, t, t, cid);
     char lv[32]; snprintf(lv, sizeof lv, "_t%d.", t);
+    emit_rtclass_store(c, cid, lv, rt.p, b);
     emit_ivar_nil_inits(c, b, ci, lv, " ", ";");
     buf_printf(b, " _t%d; })", t);
   }
@@ -14039,10 +14105,11 @@ void emit_obj_alloc_expr(Compiler *c, int cid, Buf *b) {
                class_needs_scan(ci) ? "sp_" : "", class_needs_scan(ci) ? ci->c_name : "NULL",
                class_needs_scan(ci) ? "__gc_scan" : "", t, t, t, cid);
     char lv[32]; snprintf(lv, sizeof lv, "_t%d->", t);
-    emit_rtclass_take(c, cid, lv, b);
+    emit_rtclass_store(c, cid, lv, rt.p, b);
     emit_ivar_nil_inits(c, b, ci, lv, " ", ";");
     buf_printf(b, " _t%d; })", t);
   }
+  free(rt.p);
 }
 
 /* The runtime calls the hooks below (sp_obj_to_a, sp_obj_conv_sw, the
@@ -14468,7 +14535,8 @@ static void emit_cls_answers_dispatch(Compiler *c, Buf *b) {
     if (is_builtin_reopen(ci->name) || ci->is_native_class || !ci->instantiated ||
         comp_class_is_module(c, ci)) continue;
     Buf ax; memset(&ax, 0, sizeof ax);
-    emit_obj_alloc_expr(c, i, &ax);
+    /* (a class made at run time takes its site's arm, and its instance is its own) */
+    emit_obj_alloc_expr(c, i, "v", &ax);
     buf_printf(b, "    case %d: return ", i);
     emit_boxed_text(c, ty_object(i), ax.p ? ax.p : "0", b);
     buf_puts(b, ";\n");
@@ -18606,7 +18674,7 @@ static void emit_cmeth_eqq_dispatch(Compiler *c, Buf *b) {
   emit_class_value_key(c, -1, "cl", b); buf_puts(b, ") {\n");
   for (int k = 0; k < c->nclasses; k++) {
     Buf t; memset(&t, 0, sizeof t);
-    if (class_own_cmethod_eqq(c, -1, -1, k) >= 0 && emit_class_cmethod_eqq(c, k, "e", TY_POLY, -1, 1, &t) && t.p)
+    if (class_own_cmethod_eqq(c, -1, -1, k) >= 0 && emit_class_cmethod_eqq(c, k, "e", TY_POLY, -1, 1, "cl", &t) && t.p)
       buf_printf(b, "    case %d: *out = %s; return 1;\n", k, t.p);
     free(t.p);
   }
@@ -22727,7 +22795,7 @@ static void emit_class_cmp_user_dispatch(Compiler *c, Buf *b) {
     Buf cb; memset(&cb, 0, sizeof cb);
     buf_puts(&cb, mc_method(c, m));
     buf_puts(&cb, "(");
-    buf_puts(&cb, emit_cmethod_self_cls_arg(c, mi, k, NULL, &cb));
+    buf_puts(&cb, emit_cmethod_self_cls_arg(c, mi, k, "sp_unbox_class(a)", &cb));
     buf_puts(&cb, pt == TY_CLASS ? "sp_unbox_class(b)" : "b");
     buf_puts(&cb, ")");
     buf_printf(b, "    case %d: %s*own = 1; return ", k, pt == TY_CLASS ? "if (b.tag != SP_TAG_CLASS) break; " : "");
@@ -24357,7 +24425,7 @@ static void emit_cls_user_display_hooks(Compiler *c, Buf *b) {
       int mi = cls_user_display_mi(c, -1, k, nms[q]);
       if (mi < 0) continue;
       Buf self = {0};
-      emit_cmethod_self_cls_arg(c, mi, k, NULL, &self);
+      emit_cmethod_self_cls_arg(c, mi, k, "c", &self);
       buf_printf(b, "case %d:return ", k);
       emit_zero_arg_boxed_call(c, mi, self.p, b);
       buf_puts(b, ";");
@@ -25379,20 +25447,23 @@ char *codegen_program(const NodeTable *nt) {
       const char *star = ci->is_value_type ? "" : "*";
       int p_has_blk = init >= 0 && c->scopes[init].blk_param &&
                       c->scopes[init].blk_param[0] && !c->scopes[init].yields;
+      /* (as emit_ctor_params declares them, a site class's class id first) */
+      int rt = cplan_rt_site(c, i);
       if (init >= 0 && (c->scopes[init].nparams > 0 || p_has_blk)) {
         buf_printf(&b, "static sp_%s %ssp_%s_new(", ci->c_name, star, ci->c_name);
+        const char *lead = emit_ctor_rt_param(c, i, NULL, &b);
         Scope *s = &c->scopes[init];
         for (int m = 0; m < s->nparams; m++) {
-          if (m) buf_puts(&b, ", ");
+          buf_puts(&b, m ? ", " : lead);
           TyKind pm = scope_param_type(s, m);
           LocalVar *pl = scope_local(s, s->pnames[m]);
           /* as emit_ctor_params declares it (an oint slot included) */
           if (pl && pl->type != TY_UNKNOWN) emit_slot_ctype(c, pl, &b); else emit_ctype(c, pm, &b);
         }
-        if (p_has_blk) { if (s->nparams > 0) buf_puts(&b, ", "); buf_puts(&b, "sp_Proc *"); }
+        if (p_has_blk) { buf_puts(&b, s->nparams > 0 ? ", " : lead); buf_puts(&b, "sp_Proc *"); }
         buf_puts(&b, ");\n");
       }
-      else buf_printf(&b, "static sp_%s %ssp_%s_new(void);\n", ci->c_name, star, ci->c_name);
+      else buf_printf(&b, "static sp_%s %ssp_%s_new(%s);\n", ci->c_name, star, ci->c_name, rt ? "sp_int" : "void");
       /* a proc body emitted ahead of the constructor definitions may box a
          value-type instance into its poly return slot */
       if (ci->is_value_type)
@@ -25400,14 +25471,16 @@ char *codegen_program(const NodeTable *nt) {
       /* the allocation-only half, for the sites that splice the body */
       if (ctor_init_proc_form(c, i) >= 0) {
         buf_printf(&b, "static sp_%s *sp_%s_new_noinit(", ci->c_name, ci->c_name);
+        const char *lead = emit_ctor_rt_param(c, i, NULL, &b);
         Scope *s = &c->scopes[init];
         for (int m = 0; m < s->nparams; m++) {
-          if (m) buf_puts(&b, ", ");
+          buf_puts(&b, m ? ", " : lead);
           emit_ctype(c, scope_param_type(s, m), &b);
         }
-        if (s->nparams == 0) buf_puts(&b, "void");
+        if (s->nparams == 0 && !rt) buf_puts(&b, "void");
         buf_puts(&b, ");\n");
         buf_printf(&b, "static sp_%s *sp_%s_new_blk(", ci->c_name, ci->c_name);
+        buf_puts(&b, emit_ctor_rt_param(c, i, NULL, &b));
         for (int m = 0; m < s->nparams; m++) {
           emit_ctype(c, scope_param_type(s, m), &b);
           buf_puts(&b, ", ");

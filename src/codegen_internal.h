@@ -869,7 +869,8 @@ int cmethod_takes_self_cls(Compiler *c, const Scope *s);
 /* self, boxed, in method scope s of class s->class_id: a builtin's reopening holds it as the builtin's own value */
 void emit_reopen_self_boxed(Compiler *c, Scope *s, Buf *b);
 const char *emit_cmethod_self_cls_arg(Compiler *c, int mi, int recv_cls, const char *recv_val, Buf *b);
-int emit_class_cmethod_eqq(Compiler *c, int ci, const char *subj, TyKind pt, int node, int boxed, Buf *b);
+/* (cls: the class value the call is on, its receiving class: emit_cmethod_self_cls_arg) */
+int emit_class_cmethod_eqq(Compiler *c, int ci, const char *subj, TyKind pt, int node, int boxed, const char *cls, Buf *b);
 const char *cmethod_cls_token(Compiler *c, Scope *encl);
 const char *cmethod_self_cls(Compiler *c, Scope *encl);
 Scope *open_default_method(void);
@@ -877,10 +878,11 @@ int reopen_self_defaults(Compiler *c, int mi);
 int ctor_needs_self_defaults(Compiler *c, int initm, int argc);
 int bytesplice_form_ok(Compiler *c, const int *argv, int argc);
 void emit_bytesplice_in_place(Compiler *c, const int *argv, int argc, const char *rs, const char *h, Buf *b);
-void emit_ctor_alloc_init(Compiler *c, int cid, int initm, int argsNode, int call_id, Buf *b);
+/* (cls: the class value the construction builds for, as emit_obj_alloc_expr takes it) */
+void emit_ctor_alloc_init(Compiler *c, int cid, int initm, int argsNode, int call_id, const char *cls, Buf *b);
 int ctor_needs_self_defaults_argv(Compiler *c, int initm, const int *argv, int argc);
 void emit_ctor_alloc_init_argv(Compiler *c, int cid, int initm, const int *argv, int argc, int argsNode,
-                               Buf *b);
+                               const char *cls, Buf *b);
 void emit_super_class_new(Compiler *c, int id, Buf *b); /* super in `self.new` */
 extern const char *g_ctor_self;
 extern const char *g_ctor_self_deref;
@@ -1278,6 +1280,7 @@ int class_is_comparable(Compiler *c, int cid);
 void emit_visible_cls_id(Compiler *c, int ci, const char *obj, const char *id, int masq, Buf *b);
 void obj_default_name(Compiler *c, int ci, const char *obj, char *name, size_t nn, char *arg, size_t na);
 void emit_obj_class_id(Compiler *c, int ci, const char *obj, Buf *b);
+void emit_obj_class_value(Compiler *c, int ci, const char *obj, Buf *b);   /* the same, as an sp_Class */
 /* Kernel#to_s or #inspect (want_inspect) of an object of program class cid,
    the builtin's own text whatever the program defines: #<Name:0x...>, and
    for inspect the default ivar walk (sp_obj_kernel_inspect). obj is the C
@@ -1285,7 +1288,7 @@ void emit_obj_class_id(Compiler *c, int ci, const char *obj, Buf *b);
    a by-value one), evaluated once or twice. */
 void emit_obj_kernel_text(Compiler *c, int cid, int want_inspect, const char *obj, Buf *b);
 void emit_obj_default_inspect(Compiler *c, int cid, const char *p, Buf *b);
-void emit_rtclass_take(Compiler *c, int cid, const char *lv, Buf *b);   /* (sp_rtclass_take) */
+const char *emit_ctor_rt_arg(Compiler *c, int ci, const char *cls, Buf *b);   /* a site class's constructor's leading argument */
 int class_has_ctor(const ClassInfo *ci);   /* does the class get a sp_X_new (an object of it may exist) */
 int anon_class_text(Compiler *c, int ci, const char *obj, const char *head, Buf *b);
 void emit_missing_operand(Compiler *c, int op, int t, Buf *b);
@@ -2312,7 +2315,7 @@ int each_split_applies(Compiler *c, int id);
 /* The condition the dispatch's enum-proc arm tests `_t<tv>` with: an Array,
    Hash, Range, String Range or Enumerator (codegen_poly_plan.c) */
 void emit_penum_kind_test(Buf *b, int tv);
-void emit_obj_alloc_expr(Compiler *c, int cid, Buf *b);
+void emit_obj_alloc_expr(Compiler *c, int cid, const char *cls, Buf *b);
 void emit_struct_members_ctor_name(Compiler *c, int cid, Buf *b);
 void emit_pool_fwd(Compiler *c, int cid);
 /* a body written to g_procs ahead of the constructors begins and ends (emit_pool_fwd) */
@@ -2679,7 +2682,7 @@ TyKind reader_override_ty(Compiler *c, int id, int cid, const char *name);
 int emit_tap_then_expr(Compiler *c, int id, Buf *b);
 int recv_is_const(const Compiler *c, const NodeTable *nt, int recv, const char *name);
 int sp_is_fiber_storage_recv(const NodeTable *nt, int recv);
-int emit_ctor_yield_inline(Compiler *c, int id, int ci, Buf *b);
+int emit_ctor_yield_inline(Compiler *c, int id, int ci, const char *cls, Buf *b);
 int emit_env_args_before(Compiler *c, int id);
 void emit_env_store_value(Compiler *c, int id, const int *argv, TyKind face, Buf *b);
 /* The value ENV.delete(k)'s literal missing-key block answers (its last

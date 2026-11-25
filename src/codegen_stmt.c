@@ -10628,7 +10628,7 @@ static void emit_when_boxed_user_arms(Compiler *c, int cond, int t, TyKind pt, i
    the value in C variable `subj` of type `pt`, and test the answer as `if`
    does (or give it boxed). The value is boxed when the method's parameter
    is. 0: no such method, or one this call cannot pass the value to. */
-int emit_class_cmethod_eqq(Compiler *c, int ci, const char *subj, TyKind pt, int node, int boxed, Buf *b) {
+int emit_class_cmethod_eqq(Compiler *c, int ci, const char *subj, TyKind pt, int node, int boxed, const char *cls, Buf *b) {
   int mi = pm_own_cmethod_eqq(c, node, ci);
   if (mi < 0 || !c->scopes[mi].reachable) return 0;
   Scope *ws = &c->scopes[mi];
@@ -10641,7 +10641,7 @@ int emit_class_cmethod_eqq(Compiler *c, int ci, const char *subj, TyKind pt, int
   }
   Buf cl; memset(&cl, 0, sizeof cl);
   buf_printf(&cl, "%s(", mc_method(c, ws));
-  buf_puts(&cl, emit_cmethod_self_cls_arg(c, mi, ci, NULL, &cl));
+  buf_puts(&cl, emit_cmethod_self_cls_arg(c, mi, ci, cls, &cl));
   if (raw || pt == TY_POLY) buf_puts(&cl, subj);
   else emit_boxed_text(c, pt, subj, &cl);
   /* (the optional parameters take their plain defaults) */
@@ -10670,7 +10670,14 @@ int emit_class_cmethod_eqq(Compiler *c, int ci, const char *subj, TyKind pt, int
    method `===`: the arm calls it with the subject. 0: no such method. */
 static int emit_when_class_cmethod_eq(Compiler *c, int cond, int t, TyKind pt, Buf *b) {
   char sref[24]; snprintf(sref, sizeof sref, "_t%d", t);
-  return emit_class_cmethod_eqq(c, const_node_class_index(c, cond), sref, pt, cond, 0, b);
+  int ci = const_node_class_index(c, cond);
+  /* (a constant of a site's family may hold a class made at run time: its
+     value is the receiving class) */
+  Buf cv; memset(&cv, 0, sizeof cv);
+  if (ci >= 0 && cplan_rt_family(c, ci)) emit_expr(c, cond, &cv);
+  int r = emit_class_cmethod_eqq(c, ci, sref, pt, cond, 0, cv.p, b);
+  free(cv.p);
+  return r;
 }
 
 static int when_boxed_has_user_arm(Compiler *c, int cond) {
@@ -10893,14 +10900,24 @@ static int emit_when_typed_test(Compiler *c, int cond, int t, TyKind pt, Buf *b)
        shape a variable pattern already uses (#4271). Comparing the
        subject to the class with `==` did not even compile. */
     char scref[32]; snprintf(scref, sizeof scref, "_t%d", t);
-    /* (a class made at run time is no name: tested by the class itself) */
-    int rt = cplan_class_value_may_be_rt(c, cond);
-    buf_puts(b, rt ? "sp_poly_is_a(" : "sp_poly_is_a_dyn(");
-    if (pt == TY_POLY) buf_puts(b, scref);
-    else emit_boxed_text(c, pt, scref, b);
-    buf_puts(b, rt ? ", " : ", sp_box_class(");
-    emit_expr(c, cond, b);
-    buf_puts(b, rt ? ")" : "), 0)");
+    /* (a class made at run time is no name: its own === answers, through
+       the class-method hook, and membership otherwise) */
+    if (cplan_class_value_may_be_rt(c, cond)) {
+      buf_puts(b, "sp_poly_case_eq(sp_box_class(");
+      emit_expr(c, cond, b);
+      buf_puts(b, "), ");
+      if (pt == TY_POLY) buf_puts(b, scref);
+      else emit_boxed_text(c, pt, scref, b);
+      buf_puts(b, ")");
+    }
+    else {
+      buf_puts(b, "sp_poly_is_a_dyn(");
+      if (pt == TY_POLY) buf_puts(b, scref);
+      else emit_boxed_text(c, pt, scref, b);
+      buf_puts(b, ", sp_box_class(");
+      emit_expr(c, cond, b);
+      buf_puts(b, "), 0)");
+    }
   }
   else if (eq_family(pt) && eq_family(comp_ntype(c, cond)) && eq_family(pt) != eq_family(comp_ntype(c, cond))) {
     /* a when value of a different comparable family never matches; one

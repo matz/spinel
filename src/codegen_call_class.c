@@ -83,7 +83,7 @@ static int emit_cv_new_arm(Compiler *c, int id, int ci, int argc, const int *atm
 }
 
 static void emit_cv_positional_new_arm(Compiler *c, int id, int ci, int argc, const int *argv, const int *atmp, int rt2,
-                                       CtorArityArms *aerr, Buf *b);
+                                       CtorArityArms *aerr, const char *cls, Buf *b);
 /* `k[args]` on a Class value (cplan_cv_ctor): an arm per Array or Hash
    subclass the fact says it builds, the arm of `new` for each Struct or
    Data class (cplan_cv_ctor's `[]` is their `new`, cplan_as_new), and for
@@ -111,7 +111,7 @@ static int emit_class_value_aref(Compiler *c, int id, Buf *b, int recv, int argc
   CtorArityArms aerr = {0};
   for (int ci = 0; ci < c->nclasses; ci++)
     if (cplan_cv_ctor_builds(c, id, ci)) emit_cv_ctor_arm(c, id, ci, an, av.p, rt2, b);
-    else if (cplan_as_new(c, id, ci)) emit_cv_positional_new_arm(c, id, ci, argc, argv, atmp, rt2, &aerr, b);
+    else if (cplan_as_new(c, id, ci)) emit_cv_positional_new_arm(c, id, ci, argc, argv, atmp, rt2, &aerr, NULL, b);
   ctor_arity_emit(&aerr, b);
   /* Array and Hash themselves: their reopening's class index when the
      program has one, else the builtin id */
@@ -3438,7 +3438,12 @@ int emit_call_const_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *n
         int w1 = node_is_oint(c, id);
         cm_ret_open(&c->scopes[mi], w1, b);
         buf_printf(b, "%s(", mc_method(c, &c->scopes[mi]));
-        const char *lead1 = emit_cmethod_self_cls_arg(c, mi, ci, NULL, b);
+        /* (a constant of a site's family may hold a class made at run
+           time: its value is the receiving class) */
+        Buf rv; memset(&rv, 0, sizeof rv);
+        if (bci < 0 && cplan_rt_family(c, ci)) emit_expr(c, recv, &rv);
+        const char *lead1 = emit_cmethod_self_cls_arg(c, mi, ci, rv.p, b);
+        free(rv.p);
         emit_args_filled(c, mi, nt_ref(nt, id, "arguments"), lead1, b);
         /* Pass &block as sp_Proc * when the class method keeps a real &blk
            param and isn't yield-inlined -- the instance-method and bare-call
@@ -3517,9 +3522,10 @@ static void ctor_deferred_arm(int ci, const char *msg, Buf *b) {
    in the boxed temps atmp, for class ci: the class's constructor, its
    initialize or a record's generated one, takes them as at a static
    `K.new(..)`. A class whose constructor takes some other count gets
-   CRuby's ArgumentError (aerr); one that cannot take them gets no arm. */
+   CRuby's ArgumentError (aerr); one that cannot take them gets no arm.
+   cls: the switch's class value, which the object is built for. */
 static void emit_cv_positional_new_arm(Compiler *c, int id, int ci, int argc, const int *argv, const int *atmp, int rt2,
-                                       CtorArityArms *aerr, Buf *b) {
+                                       CtorArityArms *aerr, const char *cls, Buf *b) {
   const NodeTable *nt = c->nt;
   /* the initialize the plan answers at the site: none before the class
      defines one (emit_ctor_arm_case allocates for it) */
@@ -3597,7 +3603,7 @@ static void emit_cv_positional_new_arm(Compiler *c, int id, int ci, int argc, co
   char *selftxt = NULL;
   int self_t = -1;
   if (ctor_needs_self_defaults(c, initm, argc)) {
-    self_t = ctor_alloc_decl(c, ci, &pdpre);
+    self_t = ctor_alloc_decl(c, ci, cls, &pdpre);
     selftxt = ctor_self_text(c, ci, initm, self_t);
     g_ctor_self = selftxt;
     g_ctor_self_deref = comp_ty_value_obj(c, ty_object(ci)) ? "." : "->";
@@ -3647,7 +3653,7 @@ static void emit_cv_positional_new_arm(Compiler *c, int id, int ci, int argc, co
   g_ctor_self = sv_cs; g_ctor_self_deref = sv_csd;
   free(selftxt);
   emit_ctor_block_slot(c, id, initm, np > 0 ? ", " : "", &ab);
-  emit_ctor_arm_case(c, ci, initm, rt2, self_t, pdpre.p, ab.p ? ab.p : "", is2 || kw_ctor ? -1 : argc, b);
+  emit_ctor_arm_case(c, ci, initm, rt2, self_t, pdpre.p, ab.p ? ab.p : "", is2 || kw_ctor ? -1 : argc, cls, b);
   free(pdpre.p); free(ab.p);
 }
 
@@ -3696,13 +3702,15 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
       buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ", atmp[a]);
     }
     emit_class_value_new_switch(c, recv, rt2, kt, 0, b);
+    /* (the value an arm's object and a `self.new`'s receiving class are) */
+    char kv[24]; snprintf(kv, sizeof kv, "_t%d", kt);
     CtorArityArms aerr = {0};
     for (int ci = 0; ci < c->nclasses; ci++) {
       if (is_builtin_reopen(c->classes[ci].name) || c->classes[ci].is_native_class) continue;
-      if (emit_user_new_arm(c, id, ci, argc, atmp, 1, rt2, b)) continue;
+      if (emit_user_new_arm(c, id, ci, argc, atmp, 1, rt2, kv, b)) continue;
       if (emit_cv_new_arm(c, id, ci, argc, atmp, rt2, b)) continue;
       if (emit_exc_sub_new_arm(c, id, ci, argc, atmp, rt2, b)) continue;
-      emit_cv_positional_new_arm(c, id, ci, argc, argv, atmp, rt2, &aerr, b);
+      emit_cv_positional_new_arm(c, id, ci, argc, argv, atmp, rt2, &aerr, kv, b);
     }
     /* A class the switch has no arm for is a program that cannot construct it,
        which is a raise -- the sibling emitter below has always said so. Without
@@ -3733,6 +3741,8 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
     buf_printf(b, "({ sp_Class _t%d = ", kt); emit_expr(c, recv, b); buf_printf(b, "; ");
     int sv_cbt = hoist_ctor_block(c, id, b);
     emit_class_value_new_switch(c, recv, rt2, kt, 0, b);
+    /* (the value an arm's object and a `self.new`'s receiving class are) */
+    char kv[24]; snprintf(kv, sizeof kv, "_t%d", kt);
     CtorArityArms aerr = {0};
     for (int ci = 0; ci < c->nclasses; ci++) {
       if (is_builtin_reopen(c->classes[ci].name)) continue;
@@ -3740,7 +3750,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
          an arm called an sp_<Module>_new that nothing defines, and the program
          failed to link (#3965). */
       if (comp_class_is_module(c, &c->classes[ci])) continue;
-      if (emit_user_new_arm(c, id, ci, 0, NULL, 1, rt2, b)) continue;
+      if (emit_user_new_arm(c, id, ci, 0, NULL, 1, rt2, kv, b)) continue;
       /* a zero-arg .new can only construct a class whose initialize takes no
          required args; an arg-requiring ctor is CRuby's ArgumentError, and its
          C function has parameters, so its arm raises (#2450) */
@@ -3753,7 +3763,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
       if (!class_has_ctor(&c->classes[ci])) continue;
       if (initm >= 0 && c->scopes[initm].nrequired != 0) continue;
       if (c->classes[ci].is_native_class) continue;
-      if (emit_ctor_splice_arm(c, id, ci, rt2, b)) continue;
+      if (emit_ctor_splice_arm(c, id, ci, rt2, kv, b)) continue;
       /* A Struct DOES answer a zero-arg `new` -- every member takes nil, which
          is what the constant spelling emits. Skipping it left a local holding
          two anon struct classes (so no single one resolves) with an EMPTY
@@ -3792,7 +3802,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
         Buf av; memset(&av, 0, sizeof av);
         buf_printf(&av, c->classes[ci].is_value_type ? "sp_box_vobj_%s(" : "sp_box_obj(",
                    c->classes[ci].c_name);
-        emit_ctor_alloc_init(c, ci, initm, -1, id, &av);
+        emit_ctor_alloc_init(c, ci, initm, -1, id, kv, &av);
         if (c->classes[ci].is_value_type) buf_puts(&av, ")");
         else { buf_puts(&av, ","); arysub_box_id(c, ty_object(ci), &av); buf_puts(&av, ")"); }
         g_pre = sv_pre;
@@ -3810,6 +3820,12 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
         continue;
       }
       emit_ctor_block_slot(c, id, initm, ab9.p && ab9.p[0] ? ", " : "", &ab9);
+      /* (a site class's constructor takes the class first) */
+      Buf ra9; memset(&ra9, 0, sizeof ra9);
+      const char *rl9 = emit_ctor_rt_arg(c, ci, kv, &ra9);
+      if (ab9.p && ab9.p[0]) buf_printf(&ra9, "%s%s", rl9, ab9.p);
+      free(ab9.p);
+      ab9 = ra9;
       g_pre = sv_pre;
       const char *args9 = ab9.p ? ab9.p : "";
       const char *pre9 = apre.p ? apre.p : "";
@@ -3894,6 +3910,8 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
       else buf_puts(b, "; ");
     }
     emit_class_value_new_switch(c, recv, rt2, kt, 1, b);
+    /* (the value an arm's object and a `self.new`'s receiving class are) */
+    char kv[24]; snprintf(kv, sizeof kv, "_t%d", kt);
     CtorArityArms aerr = {0};
     for (int ci = 0; ci < c->nclasses; ci++) {
       /* a class of the program's the receiver may hold (not one its fact
@@ -3901,7 +3919,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
       if (!cplan_new_arm_class(c, recv, ci)) continue;
       if (g_poly_new_only && !g_poly_new_only[ci]) continue;
       /* a class built by its own `self.new` may never be instantiated at all */
-      if (emit_user_new_arm(c, id, ci, argc, atmp, 1, rt2, b)) continue;
+      if (emit_user_new_arm(c, id, ci, argc, atmp, 1, rt2, kv, b)) continue;
       if (emit_cv_new_arm(c, id, ci, argc, atmp, rt2, b)) continue;
       if (emit_exc_sub_new_arm(c, id, ci, argc, atmp, rt2, b)) continue;
       int initm = cplan_new_arm_initialize(c, id, ci);
@@ -3914,7 +3932,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
       if (comp_class_is_module(c, &c->classes[ci])) continue;   /* a module has no `new` (#3965) */
       int np = initm >= 0 ? c->scopes[initm].nparams : 0;
       int nreq = initm >= 0 ? c->scopes[initm].nrequired : 0;
-      if (argc >= nreq && emit_ctor_splice_arm(c, id, ci, rt2, b)) continue;
+      if (argc >= nreq && emit_ctor_splice_arm(c, id, ci, rt2, kv, b)) continue;
       /* A Struct or Data class had no arm here at all, so `{0 => S}.fetch(0)
          .new(5)` raised NoMethodError. Its generated constructor takes the
          members positionally, with the exact test the class-value emitter
@@ -3935,7 +3953,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
         if (!ctor_new_runs(c, ci, initm) || ctor_needs_self_defaults(c, initm, 0)) {
           buf_printf(&av, c->classes[ci].is_value_type ? "sp_box_vobj_%s(" : "sp_box_obj(",
                      c->classes[ci].c_name);
-          emit_ctor_alloc_init(c, ci, initm, -1, id, &av);
+          emit_ctor_alloc_init(c, ci, initm, -1, id, kv, &av);
           if (c->classes[ci].is_value_type) buf_puts(&av, ")");
           else buf_printf(&av, ",%d)", ci);
         }
@@ -3949,6 +3967,12 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
             continue;
           }
           emit_ctor_block_slot(c, id, initm, ad.p && ad.p[0] ? ", " : "", &ad);
+          /* (a site class's constructor takes the class first) */
+          Buf ra; memset(&ra, 0, sizeof ra);
+          const char *rl = emit_ctor_rt_arg(c, ci, kv, &ra);
+          if (ad.p && ad.p[0]) buf_printf(&ra, "%s%s", rl, ad.p);
+          free(ad.p);
+          ad = ra;
           if (c->classes[ci].is_value_type)
             buf_printf(&av, "sp_box_vobj_%s(sp_%s_new(%s))",
                        c->classes[ci].c_name, c->classes[ci].c_name, ad.p ? ad.p : "");
@@ -3991,7 +4015,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
       char *selftxt = NULL;
       int self_t = -1;
       if (ctor_needs_self_defaults(c, initm, argc)) {
-        self_t = ctor_alloc_decl(c, ci, &pdpre);
+        self_t = ctor_alloc_decl(c, ci, kv, &pdpre);
         selftxt = ctor_self_text(c, ci, initm, self_t);
         g_ctor_self = selftxt;
         g_ctor_self_deref = comp_ty_value_obj(c, ty_object(ci)) ? "." : "->";
@@ -4037,7 +4061,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
       free(selftxt);
       emit_ctor_block_slot(c, id, initm, np > 0 ? ", " : "", &ab);
       g_arm_member_fills = afill.p;
-      emit_ctor_arm_case(c, ci, initm, rt2, self_t, pdpre.p, ab.p ? ab.p : "", is ? -1 : argc, b);
+      emit_ctor_arm_case(c, ci, initm, rt2, self_t, pdpre.p, ab.p ? ab.p : "", is ? -1 : argc, kv, b);
       g_arm_member_fills = NULL;
       free(pdpre.p); free(ab.p); free(afill.p);
     }
@@ -4071,7 +4095,8 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
       return 1;
     }
     if (acid >= 0) {
-      emit_obj_alloc_expr(c, acid, b);
+      char rcb[256];
+      emit_obj_alloc_expr(c, acid, ctor_recv_cls(c, acid, recv, rcb, sizeof rcb), b);
       return 1;
     }
     /* builtin allocables: the empty value of the class (#2655). CRuby's
@@ -4106,14 +4131,24 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
         (nt_argv_has_splat(nt, argv, argc) || nt_argv_kwh(nt, argv, argc) >= 0) &&
         emit_struct_new_call(c, id, cid, argc, argv, b))
       return 1;
+    /* (an instance of a site class builds for the class it was built for) */
+    Buf sc; memset(&sc, 0, sizeof sc);
+    if (cplan_rt_site(c, cid)) {
+      Buf so; memset(&so, 0, sizeof so);
+      emit_expr(c, nt_ref(nt, recv, "receiver"), &so);
+      emit_obj_class_value(c, cid, so.p ? so.p : "self", &sc);
+      free(so.p);
+    }
     buf_printf(b, "sp_%s_new(", c->classes[cid].c_name);
+    const char *lead = emit_ctor_rt_arg(c, cid, sc.p, b);
+    free(sc.p);
     /* the arguments converted to initialize's parameter types, as
        `V.new(...)` does: an `x.to_i` narrowed to sp_int passed raw into a
        poly parameter did not compile (#4534) */
     int initm = cplan_hook_target(c, -1, cid, "initialize", NULL);
-    if (initm >= 0) emit_args_filled(c, initm, nt_ref(nt, id, "arguments"), "", b);
-    else for (int a = 0; a < argc; a++) { if (a) buf_puts(b, ", "); emit_expr(c, argv[a], b); }
-    if (initm >= 0) emit_ctor_block_slot(c, id, initm, c->scopes[initm].nparams > 0 ? ", " : "", b);
+    if (initm >= 0) emit_args_filled(c, initm, nt_ref(nt, id, "arguments"), lead, b);
+    else for (int a = 0; a < argc; a++) { buf_puts(b, a ? ", " : lead); emit_expr(c, argv[a], b); }
+    if (initm >= 0) emit_ctor_block_slot(c, id, initm, c->scopes[initm].nparams > 0 ? ", " : lead, b);
     buf_puts(b, ")");
     return 1;
   }
@@ -4124,6 +4159,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
       nt_kind(nt, recv) == NK_ConstantPathNode) {
     const char *cn = key_name(c, recv);
     int ci = const_node_class_index(c, recv);
+    char rcb[256]; const char *rcls = ctor_recv_cls(c, ci, recv, rcb, sizeof rcb);
     /* native (C-backed) class reached as ::Name (root-qualified) */
     if (emit_native_ctor(c, id, ci, argc, argv, b)) return 1;
     if (ci >= 0) {
@@ -4131,7 +4167,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
         int initm = cplan_hook_target(c, id, ci, "initialize", NULL);
         /* (a version the constructor does not run: on the allocated object) */
         if (initm >= 0 && !ctor_new_runs(c, ci, initm)) {
-          emit_ctor_alloc_init(c, ci, initm, nt_ref(nt, id, "arguments"), id, b);
+          emit_ctor_alloc_init(c, ci, initm, nt_ref(nt, id, "arguments"), id, NULL, b);
           return 1;
         }
         if (initm >= 0) {
@@ -4182,7 +4218,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
         /* user-defined def self.new: call it as a regular class method */
         buf_puts(b, mc_method(c, &c->scopes[ucnew]));
         buf_puts(b, "(");
-        const char *ld = emit_cmethod_self_cls_arg(c, ucnew, ci, NULL, b);   /* #4217 */
+        const char *ld = emit_cmethod_self_cls_arg(c, ucnew, ci, rcls, b);   /* #4217 */
         emit_args_filled(c, ucnew, nt_ref(nt, id, "arguments"), ld, b);
         /* a `self.new` that keeps a named `&blk` takes it as a trailing C
            parameter, the same slot a stored-block initialize gets; leaving it
@@ -4201,12 +4237,13 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
         if (emit_or_take_back(c, id, b, emit_class_new_call)) return 1;
         int initm = cplan_hook_target(c, id, ci, "initialize", NULL);
         if (initm >= 0 && !ctor_new_runs(c, ci, initm)) {
-          emit_ctor_alloc_init(c, ci, initm, nt_ref(nt, id, "arguments"), id, b);
+          emit_ctor_alloc_init(c, ci, initm, nt_ref(nt, id, "arguments"), id, rcls, b);
           return 1;
         }
         buf_printf(b, "sp_%s_new(", c->classes[ci].c_name);
-        if (initm >= 0) emit_args_filled(c, initm, nt_ref(nt, id, "arguments"), "", b);
-        if (initm >= 0) emit_ctor_block_slot(c, id, initm, c->scopes[initm].nparams > 0 ? ", " : "", b);
+        const char *lead = emit_ctor_rt_arg(c, ci, rcls, b);
+        if (initm >= 0) emit_args_filled(c, initm, nt_ref(nt, id, "arguments"), lead, b);
+        if (initm >= 0) emit_ctor_block_slot(c, id, initm, c->scopes[initm].nparams > 0 ? ", " : lead, b);
         buf_puts(b, ")");
         return 1;
       }
@@ -5691,11 +5728,11 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
         else { at = TY_POLY; buf_printf(b, "; sp_RbVal _t%d = ", o); emit_boxed(c, argv[0], b); }
         int sw = 0;
         char sref[24]; snprintf(sref, sizeof sref, at == TY_POLY ? "_t%d" : "_a%d", o);
+        char clv[24]; snprintf(clv, sizeof clv, "_cl%d", _clt);
         for (int k = 0; k < c->nclasses && own; k++) {
           Buf t; memset(&t, 0, sizeof t);
-          if (class_own_cmethod_eqq(c, -1, -1, k) >= 0 && emit_class_cmethod_eqq(c, k, sref, at, -1, bx, &t) && t.p) {
+          if (class_own_cmethod_eqq(c, -1, -1, k) >= 0 && emit_class_cmethod_eqq(c, k, sref, at, -1, bx, clv, &t) && t.p) {
             if (!sw) {
-              char clv[24]; snprintf(clv, sizeof clv, "_cl%d", _clt);
               buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); %s _r%d; switch (", o, bx ? "sp_RbVal" : "sp_bool", o);
               emit_class_value_key(c, recv, clv, b); buf_puts(b, ") { ");
               sw = 1;
@@ -6045,6 +6082,12 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
          For an inherited cls method specialized into a subclass, the emitting
          class is that subclass, so `new` resolves to the subclass constructor. */
       int new_cls = (g_emitting_class_id >= 0) ? g_emitting_class_id : encl->class_id;
+      /* the receiving class, which may be one made at run time: the object
+         a site class's constructor builds is its instance (emit_ctor_rt_arg),
+         and an arm per class below picks by its key (class_value_key) */
+      const char *scls = cmethod_takes_self_cls(c, encl) ? cmethod_self_cls(c, encl) : NULL;
+      char skey[512] = "";
+      if (scls) class_value_key(c, -1, cmethod_cls_token(c, encl), skey, sizeof skey);
       /* ...unless the call reaches the class's own `self.new`, as the plan
          binds it (cplan_user_new: a version entry's arm reaches its
          version, and its else arm none, the builtin): bare `new` calls that
@@ -6095,7 +6138,7 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
            allocates, so without the inline the body's @ivar writes vanish
            (with or without a block at this site) */
         if (initm >= 0 && c->scopes[initm].yields &&
-            (emit_ctor_yield_inline(c, id, new_cls, b) || emit_ctor_new_with_proc(c, id, new_cls, b))) return 1;
+            (emit_ctor_yield_inline(c, id, new_cls, scls, b) || emit_ctor_new_with_proc(c, id, new_cls, scls, b))) return 1;
         /* A default reading the instance runs on the allocated object, as
            the receiver `Klass.new(...)` path has it: spelled here it read
            the class method's self, the class. A subclass the method may
@@ -6121,13 +6164,13 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
                 buf_puts(b, "(");
                 for (int k = 0; k < c->nclasses; k++) {
                   if (k == new_cls || !is_descendant(c, k, new_cls)) continue;
-                  buf_printf(b, "%s.cls_id == %d ? (sp_%s *)", cmethod_cls_token(c, encl), k, ncls->c_name);
+                  buf_printf(b, "%s == %d ? (sp_%s *)", skey, k, ncls->c_name);
                   emit_ctor_alloc_init(c, k, cplan_hook_target(c, -1, k, "initialize", NULL),
-                                       nt_ref(nt, id, "arguments"), id, b);
+                                       nt_ref(nt, id, "arguments"), id, scls, b);
                   buf_puts(b, " : ");
                 }
               }
-              emit_ctor_alloc_init(c, new_cls, initm, nt_ref(nt, id, "arguments"), id, b);
+              emit_ctor_alloc_init(c, new_cls, initm, nt_ref(nt, id, "arguments"), id, scls, b);
               if (arms) buf_puts(b, ")");
               return 1;
             }
@@ -6168,35 +6211,34 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
               int na = 0;
               call_args(nt, id, &na);
               if (ik >= 0 && arity_count_error(c, &c->scopes[ik], na, amsg, sizeof amsg)) {
-                buf_printf(b, "%s.cls_id == %d ? (sp_raise_cls(\"ArgumentError\", ", cmethod_cls_token(c, encl), k);
+                buf_printf(b, "%s == %d ? (sp_raise_cls(\"ArgumentError\", ", skey, k);
                 buf_puts(b, "\"");
                 emit_c_escaped_n(b, amsg, strlen(amsg));
                 buf_puts(b, "\"");
                 buf_printf(b, "), (sp_%s *)NULL) : ", ncls->c_name);
                 continue;
               }
-              buf_printf(b, "%s.cls_id == %d ? (sp_%s *)sp_%s_new(", cmethod_cls_token(c, encl), k, ncls->c_name, c->classes[k].c_name);
-              if (ik >= 0) emit_args_filled(c, ik, nt_ref(nt, id, "arguments"), "", b);
+              buf_printf(b, "%s == %d ? (sp_%s *)sp_%s_new(", skey, k, ncls->c_name, c->classes[k].c_name);
+              const char *klead = emit_ctor_rt_arg(c, k, scls, b);
+              if (ik >= 0) emit_args_filled(c, ik, nt_ref(nt, id, "arguments"), klead, b);
               /* (an initialize that takes its block as a proc takes it in
                  each arm, as the static constructor below does) */
-              if (ik >= 0) emit_ctor_block_slot(c, id, ik, c->scopes[ik].nparams > 0 ? ", " : "", b);
+              if (ik >= 0) emit_ctor_block_slot(c, id, ik, c->scopes[ik].nparams > 0 ? ", " : klead, b);
               buf_puts(b, ") : ");
             }
             buf_printf(b, "sp_%s_new(", ncls->c_name);
-            if (initm >= 0) emit_args_filled(c, initm, nt_ref(nt, id, "arguments"), "", b);
-            if (initm >= 0) emit_ctor_block_slot(c, id, initm, c->scopes[initm].nparams > 0 ? ", " : "", b);
+            const char *nlead = emit_ctor_rt_arg(c, new_cls, scls, b);
+            if (initm >= 0) emit_args_filled(c, initm, nt_ref(nt, id, "arguments"), nlead, b);
+            if (initm >= 0) emit_ctor_block_slot(c, id, initm, c->scopes[initm].nparams > 0 ? ", " : nlead, b);
             buf_puts(b, "))");
             return 1;
           }
         }
-        /* (a site class's builds the class it was called on, which may be
-           one made at run time: sp_rtclass_take) */
-        int rtk = cplan_rt_site(c, new_cls) && cmethod_takes_self_cls(c, encl);
-        if (rtk) buf_printf(b, "(sp_rtclass_pending = (%s).cls_id, ", cmethod_self_cls(c, encl));
         buf_printf(b, "sp_%s_new(", ncls->c_name);
-        if (initm >= 0) emit_args_filled(c, initm, nt_ref(nt, id, "arguments"), "", b);
-        if (initm >= 0) emit_ctor_block_slot(c, id, initm, c->scopes[initm].nparams > 0 ? ", " : "", b);
-        buf_puts(b, rtk ? "))" : ")");
+        const char *lead = emit_ctor_rt_arg(c, new_cls, scls, b);
+        if (initm >= 0) emit_args_filled(c, initm, nt_ref(nt, id, "arguments"), lead, b);
+        if (initm >= 0) emit_ctor_block_slot(c, id, initm, c->scopes[initm].nparams > 0 ? ", " : lead, b);
+        buf_puts(b, ")");
         return 1;
       }
       int smi = call_target(c, id, encl->class_id, name, CT_CMETHOD, NULL);
@@ -6410,8 +6452,8 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
         TyKind cret = (TyKind)c->scopes[defmi].ret;
         /* Stash the receiver object in a temp (referenced in every switch case) */
         Buf objptr; memset(&objptr, 0, sizeof objptr);   /* heap text: a 64-byte buffer cut long local names silently */
-        const char *rty = nt_type(nt, robj);
         NodeKind rk = nt_kind(nt, robj);
+        int self_recv = rk == NK_SelfNode;
         if (rk == NK_LocalVariableReadNode || rk == NK_InstanceVariableReadNode || rk == NK_SelfNode)
           objptr = expr_buf(c, robj);
         else {
@@ -6423,6 +6465,16 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
           buf_printf(&objptr, "_t%d", ot);
         }
         int blk_tmp = nimpl > 1 && wants_blk ? hoist_call_block_proc(c, id) : -1;
+        /* the object's class as a value, for a class of a site's family: an
+           instance of a site class answers the class made at run time it was
+           built for, the receiving class of each arm */
+        Buf ocv; memset(&ocv, 0, sizeof ocv);
+        if (cplan_rt_family(c, cid)) {
+          const char *op = objptr.p ? objptr.p : "";
+          if (!self_recv) buf_printf(&ocv, "((%s) ? ", op);
+          emit_obj_class_value(c, cid, op, &ocv);
+          if (!self_recv) buf_printf(&ocv, " : ((sp_Class){%d, NULL}))", cid);
+        }
         if (nimpl <= 1) {
           /* single implementation: call directly. The value still has to fit
              the slot the INFERENCE gave this call: the many-implementation
@@ -6440,9 +6492,8 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
              names Child in the body. Naming the static class (cid) answered
              Base for every subclass instance. */
           int rt_cls = cmethod_takes_self_cls(c, &c->scopes[defmi]) && !comp_ty_value_obj(c, rrt) &&
-                       class_has_subclass(c, cid);
+                       class_has_subclass(c, cid) && !ocv.p;
           if (rt_cls) {
-            int self_recv = sp_streq(rty ? rty : "", "SelfNode");
             const char *op = objptr.p ? objptr.p : "";
             buf_puts(&dcb, "((sp_Class){");
             if (!self_recv) buf_printf(&dcb, "(%s) ? ", op);
@@ -6450,7 +6501,7 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
             if (!self_recv) buf_printf(&dcb, " : %d", cid);
             buf_puts(&dcb, ", NULL})");
           }
-          { const char *ld = rt_cls ? ", " : emit_cmethod_self_cls_arg(c, defmi, cid, NULL, &dcb);
+          { const char *ld = rt_cls ? ", " : emit_cmethod_self_cls_arg(c, defmi, cid, ocv.p, &dcb);
             emit_args_filled(c, defmi, nt_ref(nt, id, "arguments"), ld, &dcb); }
           emit_cmethod_block_arg(c, id, &c->scopes[defmi], blk_tmp, &dcb);
           buf_puts(&dcb, ")");
@@ -6508,7 +6559,7 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
               /* void-return (raises): call then fall through with nil */
               buf_puts(b, mc_method(c, &c->scopes[kmi]));
               buf_puts(b, "(");
-              { const char *ld = emit_cmethod_self_cls_arg(c, kmi, k, NULL, b);
+              { const char *ld = emit_cmethod_self_cls_arg(c, kmi, k, ocv.p, b);
                 emit_args_filled(c, kmi, nt_ref(nt, id, "arguments"), ld, b); }
               emit_cmethod_block_arg(c, id, &c->scopes[kmi], blk_tmp, b);
               buf_printf(b, "); _t%d = sp_box_nil(); break;", rtmp);
@@ -6521,7 +6572,7 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
               Buf ab; memset(&ab, 0, sizeof ab);
               buf_puts(&ab, mc_method(c, &c->scopes[kmi]));
               buf_puts(&ab, "(");
-              { const char *ld = emit_cmethod_self_cls_arg(c, kmi, k, NULL, &ab);
+              { const char *ld = emit_cmethod_self_cls_arg(c, kmi, k, ocv.p, &ab);
                 emit_args_filled(c, kmi, nt_ref(nt, id, "arguments"), ld, &ab); }
               emit_cmethod_block_arg(c, id, &c->scopes[kmi], blk_tmp, &ab);
               buf_puts(&ab, ")");
@@ -6541,7 +6592,7 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
             if (unified == TY_POLY && method_is_void(&c->scopes[defmi])) {
               buf_puts(b, mc_method(c, &c->scopes[defmi]));
               buf_puts(b, "(");
-              { const char *ld = emit_cmethod_self_cls_arg(c, defmi, cid, NULL, b);
+              { const char *ld = emit_cmethod_self_cls_arg(c, defmi, cid, ocv.p, b);
                 emit_args_filled(c, defmi, nt_ref(nt, id, "arguments"), ld, b); }
               emit_cmethod_block_arg(c, id, &c->scopes[defmi], blk_tmp, b);
               buf_printf(b, "); _t%d = sp_box_nil(); break;", rtmp);
@@ -6550,7 +6601,7 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
               Buf db; memset(&db, 0, sizeof db);
               buf_puts(&db, mc_method(c, &c->scopes[defmi]));
               buf_puts(&db, "(");
-              { const char *ld = emit_cmethod_self_cls_arg(c, defmi, cid, NULL, &db);
+              { const char *ld = emit_cmethod_self_cls_arg(c, defmi, cid, ocv.p, &db);
                 emit_args_filled(c, defmi, nt_ref(nt, id, "arguments"), ld, &db); }
               emit_cmethod_block_arg(c, id, &c->scopes[defmi], blk_tmp, &db);
               buf_puts(&db, ")");
@@ -6575,7 +6626,7 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
           }
           else buf_printf(b, " } _t%d; })", rtmp);
         }
-        free(objptr.p);
+        free(objptr.p); free(ocv.p);
         return 1;
       }
       Buf sgb; memset(&sgb, 0, sizeof sgb);

@@ -1051,7 +1051,7 @@ static int emit_call_raise_arms_in(Compiler *c, int id, Buf *b, const NodeTable 
            the same `.new` does (emit_ctor_alloc_init), and a version the
            constructor does not run on it too */
         buf_puts(b, raise_fn("sp_raise_exc")); buf_puts(b, "(sp_Exception *)");
-        emit_ctor_alloc_init(c, xc, ic, -1, -1, b);
+        emit_ctor_alloc_init(c, xc, ic, -1, -1, NULL, b);
         buf_puts(b, ")");
       }
       else if (xc >= 0 && ic >= 0 && c->scopes[ic].reachable) {
@@ -1124,7 +1124,7 @@ static int emit_call_raise_arms_in(Compiler *c, int id, Buf *b, const NodeTable 
            allocated object, as for `Cls.new(msg)`, and a version the
            constructor does not run on it too */
         buf_puts(b, raise_fn("sp_raise_exc")); buf_puts(b, "(sp_Exception *)");
-        emit_ctor_alloc_init_argv(c, xc, ic, &av[1], 1, args, b);
+        emit_ctor_alloc_init_argv(c, xc, ic, &av[1], 1, args, NULL, b);
         buf_puts(b, ")");
       }
       else if (xc >= 0 && ic >= 0 && c->scopes[ic].reachable) {

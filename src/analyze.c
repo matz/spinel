@@ -17845,6 +17845,12 @@ static void widen_ivars_from_pushed_params(Compiler *c) {
       if (!ty_is_array(ivt) || ivt == TY_POLY_ARRAY) continue;
       if (boxed_hazard && (p->boxed_push_elem == TY_UNKNOWN || ty_array_elem(ivt) == p->boxed_push_elem) &&
           !param_src_misfits(c, m, p, ivt, av, &L) && !param_rest_misfits(c, m, p, ivt, av, an)) continue;
+      /* what the ivar's writes can hold is the source walk's to say, as
+         for every slot a push widens (array_src_walk): one it follows
+         widens with its writes, and one it cannot is left, which the call
+         then refuses rather than copy the caller's array */
+      if (!array_sources_widenable(c, a)) continue;
+      widen_arg_array(c, a);
       ivar_set_type(acls, ivi, TY_POLY_ARRAY);
     }
     arg_layout_free(&L);

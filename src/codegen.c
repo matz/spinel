@@ -4742,9 +4742,18 @@ static int  g_mih_callers_override = 0;
    index, where its name's calls are counted (a name every class defines is
    one count, not one per scope per call). Kept with the counts, so a call
    node appended later is counted without rebuilding it. */
+/* (a builtin_only call in a method of a plain program class, a super lowered to the builtin's own call on self,
+   reaches the builtin, never a method of the program's of the name; one in a builtin's reopening, or in a module's
+   copy prepended to one, is the call that reaches the reopening's method) */
+static int mih_reaches_builtin(Compiler *c, int id) {
+  int s = c->nscope[id];
+  if (!cplan_builtin_call(c, id) || s < 0 || s >= c->nscopes || c->scopes[s].is_prepend_copy) return 0;
+  int k = c->scopes[s].class_id;
+  return comp_plain_class(c, k) && builtin_core_class_slot(c->classes[k].name) < 0;
+}
 static void mih_count_call(Compiler *c, int id) {
   const char *nm = nt_str(c->nt, id, "name");
-  if (!nm) return;
+  if (!nm || mih_reaches_builtin(c, id)) return;
   unsigned h = sp_strhash(nm) & (unsigned)(c->mih_cap - 1);
   while (c->mih_head[h] >= 0 && !sp_streq(c->scopes[c->mih_head[h]].name, nm))
     h = (h + 1) & (unsigned)(c->mih_cap - 1);

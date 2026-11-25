@@ -6407,6 +6407,9 @@ static void lr_settle_regions(Compiler *c) {
   for (int i = 0; i < r->ncls; i++) {
     LrClass *k = &r->cls[i];
     for (int j = 0; j < k->nmix; j++) {
+      /* (`extend self` names the module whose body it is in, which the walk
+         took and no later region changes; the lookup has no class for self) */
+      if (nt_kind(c->nt, k->mix[j].ref) == NK_SelfNode) continue;
       int mod = lr_class_ref_at(c, k->mix[j].ref, NULL), was = k->mix[j].mod;
       k->mix[j].mod = mod;
       if (mod < 0 && mod != LR_LATER && !(was < 0 && was != LR_LATER) && i >= 1)

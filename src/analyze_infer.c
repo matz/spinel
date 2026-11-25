@@ -11986,9 +11986,52 @@ static TyKind ctr_site_join(TyKind nat, TyKind want) {
 }
 /* What a super that comp_super_object_builtin answers (kind) is typed: self for
    itself, the row's result for Kernel's row, a Boolean for the rest. */
-static TyKind super_object_type(Compiler *c, const Scope *s, const char *uname, int id, int kind) {
-  return kind == SUPER_OBJ_SELF ? (repr_self_boxed(c, (int)(s - c->scopes)) ? TY_POLY : ty_object(s->class_id))
-       : kind == SUPER_OBJ_ROW ? bop_result(comp_super_kernel_row(c, s, uname, id), BOP_KERNEL) : TY_BOOL;
+/* The type a super into a builtin answers, where no method of the program's does: the call plan's arm's
+   (CallPlan.bsuper), the one the super emission renders */
+static TyKind super_builtin_type(Compiler *c, int id, Scope *s, const char *uname) {
+  switch ((BsuperArm)cplan_user_fresh(c, id).bsuper) {
+  case BSUP_OBJ_TEXT: case BSUP_STRUCT_TEXT: case BSUP_BACKTICK: return TY_STRING;
+  case BSUP_CLASS_NEW:
+    /* an instance of the receiving class, which is this one or, through an inherited `self.new`, any descendant
+       (comp_super_class_new_boxed) */
+    return comp_super_class_new_boxed(c, id) ? TY_POLY : ty_object(s->class_id);
+  case BSUP_ALLOCATE: case BSUP_FREEZE: case BSUP_DATA_WITH: return ty_object(s->class_id);
+  case BSUP_SUBCLASSES: case BSUP_ANCESTORS: return TY_POLY_ARRAY;
+  case BSUP_SUPERCLASS: return TY_CLASS;
+  case BSUP_RESPOND_TO: case BSUP_IS_A: case BSUP_INSTANCE_OF: case BSUP_SAME: case BSUP_FALSE: case BSUP_FROZEN:
+    return TY_BOOL;
+  case BSUP_SELF: return repr_self_boxed(c, (int)(s - c->scopes)) ? TY_POLY : ty_object(s->class_id);
+  case BSUP_KERNEL_ROW: return bop_result(comp_super_kernel_row(c, s, uname, id), BOP_KERNEL);
+  case BSUP_NATIVE_CTOR: return TY_NIL;
+  case BSUP_NATIVE: {
+    int sa = nt_ref(c->nt, id, "arguments"), sac = 0;
+    if (sa >= 0) (void)nt_arr(c->nt, sa, "arguments", &sac);
+    int nm = comp_native_method_find(c, c->classes[s->class_id].nsub_root - 1, uname, sac, 0);
+    if (nm < 0) return TY_UNKNOWN;
+    return sp_streq(c->native_methods[nm].ret, "self") ? ty_object(s->class_id) : native_spec_to_ty(c->native_methods[nm].ret);
+  }
+  /* Exception's message, the String the exception keeps (super_reaches_exc_text), unless its #to_s of the
+     program's answers no String; a reopening above picked at run time answers either a Ruby override's value or
+     that text, kept boxed */
+  case BSUP_EXC_TEXT: return super_reaches_exc_text(c, id, 0) ? TY_STRING : TY_UNKNOWN;
+  case BSUP_EXC_REOPEN: return is_exception_message(uname) ? TY_POLY : TY_UNKNOWN;
+  default: return TY_UNKNOWN;
+  }
+}
+/* A super node: the program method the call plan binds it to (the next method of the prepend chain, else the parent
+   chain's, found from class ml.from; a class method's through the parent's CLASS-method chain), else the builtin's
+   (super_builtin_type) */
+static TyKind infer_super(Compiler *c, int id) {
+  if (g_plan_check && !an_pure_reads && id >= 0 && id < c->node_cap) c->ucall_inf[id].via = UC_NONE;
+  Scope *s = comp_scope_of(c, id);
+  if (s->class_id < 0 || !s->name) return TY_UNKNOWN;
+  MethodLookup ml = { .def_class = -1 };
+  int mi = cplan_super_target(c, id, s, &ml);
+  const Scope *st = comp_super_site(c, s);
+  if (mi < 0) return comp_super_shadow(c, st) ? TY_UNKNOWN : super_builtin_type(c, id, s, comp_super_name(c, ml.from, st));
+  /* (a yielding shadow is spliced as a parent is) */
+  an_user_call_record(c, id, mi, UC_SUPER, ml.from);
+  return super_target_ret(c, s, mi, id);
 }
 /* The ivar nm at node id inside an instance_eval/exec block on a boxed
    receiver: the meeting of the slots of the classes the receiver can be,
@@ -12781,99 +12824,7 @@ TyKind infer_uncached(Compiler *c, int id) {
     return TY_NIL;
   }
   { TyKind r; if (infer_yield_node(c, id, nt, nk, &r)) return r; }
-  if (nk == NK_SuperNode || nk == NK_ForwardingSuperNode) {
-    if (g_plan_check && !an_pure_reads && id >= 0 && id < c->node_cap) c->ucall_inf[id].via = UC_NONE;
-    Scope *s = comp_scope_of(c, id);
-    if (s->class_id < 0 || !s->name) return TY_UNKNOWN;
-    /* where the call plan binds the super: the next method of the prepend chain, else the
-       parent chain's, found from class ml.from (a class method's through the parent's
-       CLASS-method chain, which the instance chain would miss `def self.x` entirely) */
-    MethodLookup ml = { .def_class = -1 };
-    int mi = cplan_super_target(c, id, s, &ml);
-    if (comp_super_shadow(c, comp_super_site(c, s))) {
-      if (mi < 0) return TY_UNKNOWN;
-      /* a yielding shadow is spliced as a parent is */
-      an_user_call_record(c, id, mi, UC_SUPER, ml.from);
-      return super_target_ret(c, s, mi, id);
-    }
-    /* Class#new: an instance of the receiving class, which is this one or,
-       through an inherited `self.new`, any descendant (see
-       comp_super_class_new_boxed) */
-    if (comp_super_is_class_new(c, id))
-      return comp_super_class_new_boxed(c, id) ? TY_POLY : ty_object(s->class_id);
-    /* Class#allocate from an own allocate: an empty object of the class
-       the method (or its copy for a subclass) runs for */
-    if (allocate_super_reaches_class(c, id)) return ty_object(s->class_id);
-    int p = ml.from;
-    const char *uname = comp_super_name(c, p, comp_super_site(c, s));
-    /* `super` in a respond_to? override no ancestor defines is Object's
-       respond_to?: a boolean (see emit_super_respond_to) */
-    ObjectSuperArm arm = object_super_arm(uname);
-    int rto_super = !s->is_cmethod && (arm == OSA_RESPOND_TO ||
-                                       /* and is_a? / kind_of? / instance_of? (codegen's twin) */
-                                       arm == OSA_IS_A || arm == OSA_INSTANCE_OF);
-    /* (`super` in an exception subclass's #message / #to_s that reaches
-       Exception's is the message String, super_reaches_exc_text: untyped,
-       `def message = super` answered nil), and `super` in a freeze override
-       no ancestor defines is Object#freeze, which answers the object
-       (codegen's twin in emit_super) */
-    int freeze_super = !s->is_cmethod && arm == OSA_FREEZE;
-    /* and `super` in an ==, equal?, eql?, !, nil?, frozen? or itself
-       override reaches BasicObject's or Kernel's (comp_super_object_builtin;
-       emit_super_object_builtin is codegen's twin) */
-    int obj_super = comp_super_object_builtin(c, s, uname, id);
-    /* and `super` in a class method named subclasses reaches Class#subclasses,
-       an Array of classes (emit_super's twin) */
-    int subs_super = s->is_cmethod && uname && sp_streq(uname, "subclasses") &&
-                     nt_ref(nt, id, "arguments") < 0;
-    /* and `super` in a class method named superclass or ancestors reaches
-       Class#superclass (a class) or Module#ancestors (an Array of them);
-       a module has no #superclass (emit_super's twin) */
-    int rel_super = 0;
-    if (s->is_cmethod && uname && nt_ref(nt, id, "arguments") < 0 && s->class_id >= 0)
-      rel_super = sp_streq(uname, "ancestors") ? 2
-                : sp_streq(uname, "superclass") && !comp_class_is_module(c, &c->classes[s->class_id]) ? 1 : 0;
-    /* and `super` in a ` override reaches Kernel#`: the command's output */
-    int bt_arg, bt_super = uname && sp_streq(uname, "`") && an_super_backtick_shape(c, id, s, &bt_arg) > 0;
-    BsuperArm barm = (BsuperArm)cplan_user_fresh(c, id).bsuper;
-    TyKind none = super_reaches_exc_text(c, id, 0) ? TY_STRING
-                : barm == BSUP_OBJ_TEXT || barm == BSUP_STRUCT_TEXT ? TY_STRING
-                : bt_super ? TY_STRING
-                : subs_super || rel_super == 2 ? TY_POLY_ARRAY
-                : rel_super == 1 ? TY_CLASS
-                : rto_super ? TY_BOOL
-                : freeze_super ? ty_object(s->class_id)
-                : obj_super ? super_object_type(c, s, uname, id, obj_super) : TY_UNKNOWN;
-    /* and `super` in a Data's own with reaches Data#with: a copy, or self
-       (emit_super_data_with) */
-    if (!s->is_cmethod && uname && sp_streq(uname, "with") &&
-        c->classes[s->class_id].is_struct && c->classes[s->class_id].is_data) none = ty_object(s->class_id);
-    /* The exception reopening switch can answer either a Ruby override's
-       value or Exception's stored text. Keep that joined result boxed. */
-    if (mi < 0 && !s->is_cmethod && is_exception_message(uname) &&
-        (class_is_exc_subclass(c, s->class_id) || class_is_exc_reopen(c, s->class_id))) {
-      int xr[8], xn = exc_reopen_definers(c, uname, xr, 8);
-      for (int i = 0; i < xn; i++)
-        if (xr[i] != s->class_id) return TY_POLY;
-    }
-    if (p < 0 && mi < 0) return none;
-    /* a subclass of a native class (#9269): super reaches the native
-       class's constructor (initialize) or binding */
-    if (mi < 0 && !s->is_cmethod && uname && c->classes[s->class_id].nsub_root > 0) {
-      int root = c->classes[s->class_id].nsub_root - 1;
-      if (sp_streq(uname, "initialize")) return TY_NIL;
-      int sa = nk == NK_SuperNode ? nt_ref(nt, id, "arguments") : -1, sac = 0;
-      if (sa >= 0) (void)nt_arr(nt, sa, "arguments", &sac);
-      if (nk == NK_ForwardingSuperNode) sac = s->nparams;
-      int nm = comp_native_method_find(c, root, uname, sac, 0);
-      if (nm >= 0)
-        return sp_streq(c->native_methods[nm].ret, "self") ? ty_object(s->class_id)
-                                                           : native_spec_to_ty(c->native_methods[nm].ret);
-    }
-    if (mi < 0) return none;
-    an_user_call_record(c, id, mi, UC_SUPER, p);
-    return super_target_ret(c, s, mi, id);
-  }
+  if (nk == NK_SuperNode || nk == NK_ForwardingSuperNode) return infer_super(c, id);
   if (nk == NK_AndNode || nk == NK_OrNode) {
     int lnd = nt_ref(nt, id, "left"), rnd = nt_ref(nt, id, "right");
     TyKind lt = infer_type(c, lnd);

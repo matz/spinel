@@ -1,0 +1,1 @@
+require_relative "class_body_cycle_placed_late_lib"

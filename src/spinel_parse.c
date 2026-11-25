@@ -7387,7 +7387,9 @@ static int sp_load_path(const SpLoadGraph *g, int f, int s, int *fs, int *ss, in
 /* Does require x, standing in a top-level statement of a placed file,
    run only after the require `by` (an edge)? When x's statement comes
    after by's in the load order: nothing under a statement runs before the
-   statement does. */
+   statement does. Or when x runs inside the file by loads, at any depth
+   (`class Late; require_relative "msg"; end` in the file by runs): by has
+   begun by then, and its file is in the loaded features. */
 static int sp_load_edge_after(const SpLoadGraph *g, const SpLoadEdge *x, int by) {
   if (by < 0 || g->entered[x->from] == -1 || x->stmt < 0 || x->begin_block) return 0;
   const SpLoadEdge *e = &g->edge[by];
@@ -7399,7 +7401,7 @@ static int sp_load_edge_after(const SpLoadGraph *g, const SpLoadEdge *x, int by)
     if (xf[i] != ef[i]) return 0;
     if (xs[i] != es[i]) return xs[i] > es[i];
   }
-  return 0;
+  return nx > ne && g->entered[xf[ne]] == by;
 }
 static int sp_load_nested_after(const SpLoadGraph *g, const SpLoadEdge *x) {
   return sp_load_edge_after(g, x, g->entered[x->to]);

@@ -74,3 +74,8 @@ nil
 "no implicit conversion of Integer into Proc"
 "no implicit conversion of Integer into Proc"
 "a"
+op 1
+mk 1
+mk 2
+"babo"
+1

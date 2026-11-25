@@ -141,3 +141,12 @@ parts = ["b"]
   begin; t&.prepend(*parts, &v); rescue TypeError => e; p e.message; end
   p t
 end
+
+# a `&` expression bound as written runs for its effect, after the operands
+def mk(c) = (puts "mk #{c}"; proc { })
+def op(c) = (puts "op #{c}"; ["o"])
+cnt = 0
+t = +"a"
+t.concat(*parts, &(cnt += 1; pr))
+t.concat(*op(1), &mk(1))
+p t.prepend(*parts, &mk(2)), cnt

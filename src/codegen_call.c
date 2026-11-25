@@ -1207,11 +1207,19 @@ int emit_call_block_arg_stmt(Compiler *c, int id, Buf *b, int indent) {
    `&.` call's value is judged there too (cplan_block_arg_value), for
    nothing ahead of the call checks it. Elsewhere nothing where the check
    goes ahead of the call (np_check_ahead_ok); one that raises is the raise
-   form's, and does not reach the emitter. */
+   form's, and does not reach the emitter. One bound as written runs there
+   for its effect, the call taking no block, unless it runs nothing. */
 void emit_block_arg_check_staged(Compiler *c, int id, Buf *b) {
   const char *cn;
-  if (cplan_block_arg_value(c, id, &cn) == CB_BINDS) return;
   int fe = nt_ref(c->nt, nt_ref(c->nt, id, "block"), "expression");
+  if (cplan_block_arg_value(c, id, &cn) == CB_BINDS) {
+    if (fe >= 0 && !order_operand_inert(c, id, fe, 0)) {
+      buf_puts(b, " (void)(");
+      emit_expr_for_effect(c, fe, b);
+      buf_puts(b, ");");
+    }
+    return;
+  }
   if (!nt_safe_nav(c->nt, id) && np_check_ahead_ok(c, id, fe)) return;
   buf_puts(b, " (void)");
   emit_block_arg_check(c, fe, cn, b);

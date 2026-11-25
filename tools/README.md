@@ -942,6 +942,7 @@ file, no compiler, a bad option). This is a contract.
 | `push-slot` | the temp holding the receiver of `a << x` (and of unshift, prepend) takes no root, the receiver's own slot keeping it; denied, it is rooted |
 | `aon-get` | an index read whose receiver is proved a poly array or nil skips the dispatch on its type; denied, it dispatches |
 | `hc-cobound` | a loop proved over its index reads every other array at that index in place, behind one test ahead of the loop that each reaches as far as the loop runs with no nil below (the loop is emitted twice); denied, the loop is emitted once, every such read checked |
+| `hc-joint` | a run of consecutive in-place element updates (`a[i] op= x`) on arrays a loop caches tests every index ahead of the run, then stores each element in place (the run is emitted twice); denied, each update keeps its own test |
 | `index-sum` | an index `x + c` or `x - c` read or stored in a loop that holds the array's header is summed wrapped, its checked sum taken again only where the bounds compare fails (#8782); denied, the sum is checked first |
 
 Not keyed, because the other answer is not simply the slower one: the

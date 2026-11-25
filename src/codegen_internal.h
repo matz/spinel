@@ -612,6 +612,13 @@ int hc_array(Compiler *c, int recv, int is_float, char *d, char *l, char *w, siz
 void hc_read_len(const char *hd, char *out, size_t cap);
 int hc_ptr_array(Compiler *c, int recv, char *d, char *l, size_t cap);
 int hc_index_in_range(Compiler *c, int recv, int idx);
+/* Joint guards (codegen_stmt.c): how many of the n statements at stmts,
+   from the first, form a run of in-place element updates on cached arrays
+   that one range test ahead of the run can guard (0 when fewer than two) */
+int hc_joint_run(Compiler *c, const int *stmts, int n);
+/* `a[i] op= x` folds in place on an array the loop being emitted caches:
+   *hd its data, *wl the length an index below it writes in place */
+int iow_fused_cached(Compiler *c, int id, char *hd, char *wl, size_t cap);
 /* Co-bounded reads (codegen_stmt.c): a loop proved over the index local
    bi (the C variable bic) in [0, trip) -- a trip that reads trip_node again
    at each pass, or -1 -- reads other arrays at that index in place, behind one
@@ -2748,6 +2755,9 @@ unsigned view_class_is_read(int tok);
 /* A call re-entered after its enclosing emitter tested the receiver. */
 int view_push_call_nil_tested(Compiler *c, int id);
 int view_call_nil_tested(Compiler *c, int id);
+/* an element write whose index the header cache's joint guard tested */
+int view_push_range_tested(Compiler *c, int id);
+int view_range_tested(Compiler *c, int id);
 void view_nil_test_written(Compiler *c, int recv);   /* the guard of emit_nil_target_own's arm wrote its test */
 int emit_delegated_equality(Compiler *c, int id, int negate, Buf *b);
 int view_type_top(int node, TyKind *kind);   /* the open type view on node, if any */
@@ -3280,6 +3290,9 @@ void emit_int_expr(Compiler *c, int node, Buf *b);
    what the compare's out-of-range arm runs first, "" or the checked sum of
    an `x + c` whose check waited (codegen.c) */
 void emit_int_index_late(Compiler *c, int node, int tk, char *redo, size_t n, Buf *b);
+/* The literal c of an index `x + c` or `x - c` emit_int_index_late sums
+   wrapped (no further than 2^20 from 0, not 0), in *lit; else 0. */
+int index_sum_lit(Compiler *c, int node, long long *lit);
 void emit_str_expr(Compiler *c, int node, Buf *b);
 void emit_path_expr(Compiler *c, int node, Buf *b);
 void emit_to_s_expr(Compiler *c, int node, Buf *b);

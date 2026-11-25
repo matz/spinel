@@ -12866,6 +12866,68 @@ int hc_index_in_range(Compiler *c, int recv, int idx) {
          hc_reads_var(c, recv, g_hc->bac) && hc_reads_var(c, idx, g_hc->bic);
 }
 
+/* ---- Joint guards: one range test ahead of a run of element updates ----
+
+   A cached loop's `a[i] op= x` folds the element in place behind its own
+   test against the array's cached write length (emit_index_op_write); its
+   other arm is the get and the set, a call that may grow any array and
+   raise. Two such updates in a row (`h[s] += 1.0; h[s + 1] += v`, a pair of
+   accumulators) put the second test between the first store and the second
+   load, so the C compiler can merge the two adjacent elements into one
+   load, add and store only if the tests come first.
+
+   A run of consecutive statements that are each such a fold on a cached
+   array is emitted behind one test of every index, made ahead of the run:
+   the fast arm stores each element in place (view_push_range_tested), and
+   the other arm is the run as written. Running the tests first changes
+   nothing a program sees: a fast store neither moves nor grows an array and
+   writes no variable, and the right-hand sides still run where they did,
+   each after the stores before it. What the tests compute ahead of those
+   stores is each index, so an index after the first is one whose value no
+   store can change and whose computation cannot raise where Ruby would not
+   yet have computed it: variables and literals under scalar operators that
+   read no element (order_pure_walk, no_elems), either shown unable to raise
+   by the raise facts, or `x + c` / `x - c` over such an x that cannot, which
+   emit_int_index_late sums wrapped (`index-sum`): a sum that overflowed
+   wraps past any length, so the test fails, and the run as written raises
+   the overflow where Ruby does.
+
+   A run holds at most HC_JOINT_MAX statements (the run is emitted twice),
+   and its `hc-joint` decision may be denied. */
+#define HC_JOINT_MAX 4
+/* Can the joint guard compute the index `key` of the run's `pos`-th
+   statement ahead of the run? */
+static int hc_joint_key_ok(Compiler *c, int key, int pos) {
+  Repr kr = repr_of(c, key);
+  if (kr.kind != RK_SCALAR || kr.as_ty != TY_INT) return 0;
+  /* (the first index is computed where Ruby computes it, ahead of every
+     store; it runs again in the other arm, so it is a pure read) */
+  if (pos == 0) return subtree_is_pure_read(c, key);
+  OrderWalk w = { .ran = view_ran_first, .alloc = 1, .no_elems = 1 };
+  if (!order_pure_walk(c, key, &w)) return 0;
+  long long lit;
+  return !an_expr_may_raise(c, key) ||
+         (index_sum_lit(c, key, &lit) && !an_expr_may_raise(c, nt_ref(c->nt, key, "receiver")));
+}
+/* See codegen_internal.h. */
+int hc_joint_run(Compiler *c, const int *stmts, int n) {
+  const NodeTable *nt = c->nt;
+  /* (the shape first: asking the cache of a statement that starts no run
+     would add its entries in another order than its emission does) */
+  if (!g_hc || n < 2 || nt_kind(nt, stmts[0]) != NK_IndexOperatorWriteNode ||
+      nt_kind(nt, stmts[1]) != NK_IndexOperatorWriteNode) return 0;
+  int m = 0;
+  for (; m < n && m < HC_JOINT_MAX; m++) {
+    char hd[48], wl[48];
+    int args = nt_ref(nt, stmts[m], "arguments"), argc = 0;
+    if (!iow_fused_cached(c, stmts[m], hd, wl, sizeof hd)) break;
+    const int *argv = nt_arr(nt, args, "arguments", &argc);
+    if (!hc_joint_key_ok(c, argv[0], m)) break;
+  }
+  if (m < 2 || !decide_node(nt, stmts[0], "hc-joint", NULL)) return 0;
+  return m;
+}
+
 /* ---- Co-bounded reads: a second array read at a loop's proved index ----
 
    A loop whose index the cache proved in range of one array (a `while`'s
@@ -24776,6 +24838,65 @@ int block_param_rebind_len(const NodeTable *nt, int body) {
 }
 
 static int emit_body_stmt(Compiler *c, int st, Buf *b, int indent, int tail);
+/* The run hc_joint_run found, behind its joint guard: each index into a
+   temp, in order (an index after the first through emit_int_index_late,
+   which sums `x + c` wrapped), one test of them all, then the run with each
+   index bound to its temp and each store in place, else the run as
+   written. Answers 0, and emits nothing, when an index that may raise was
+   not summed wrapped (its `index-sum` decision denied). */
+static int hc_joint_emit(Compiler *c, const int *stmts, int m, Buf *b, int indent) {
+  const NodeTable *nt = c->nt;
+  /* (the indices go to a buffer of their own first: one that is not summed
+     wrapped drops them all) */
+  Buf g; memset(&g, 0, sizeof g);
+  Buf test; memset(&test, 0, sizeof test);
+  int kt[HC_JOINT_MAX];
+  emit_indent(&g, indent);
+  buf_puts(&g, "{ ");
+  for (int j = 0; j < m; j++) {
+    char hd[48], wl[48], redo[256];
+    iow_fused_cached(c, stmts[j], hd, wl, sizeof hd);
+    int args = nt_ref(nt, stmts[j], "arguments"), argc = 0;
+    const int *argv = nt_arr(nt, args, "arguments", &argc);
+    kt[j] = ++g_tmp;
+    if (j) {
+      emit_int_index_late(c, argv[0], kt[j], redo, sizeof redo, &g);
+      if (!redo[0] && an_expr_may_raise(c, argv[0])) { free(g.p); free(test.p); return 0; }
+    }
+    else { buf_printf(&g, "sp_int _t%d = ", kt[j]); emit_int_expr(c, argv[0], &g); }
+    buf_puts(&g, "; ");
+    buf_printf(&test, "%s(unsigned long long)_t%d < (unsigned long long)%s", j ? " && " : "", kt[j], wl);
+  }
+  buf_puts(b, g.p);
+  free(g.p);
+  buf_printf(b, "if (SP_LIKELY(%s)) {\n", test.p);
+  free(test.p);
+  int sv_cur = g_stmt_cur, sv_prev = g_stmt_prev;
+  int nb = g_n_argov;
+  for (int j = 0; j < m; j++) {
+    int args = nt_ref(nt, stmts[j], "arguments"), argc = 0;
+    const int *argv = nt_arr(nt, args, "arguments", &argc);
+    g_stmt_cur = stmts[j]; g_stmt_prev = j ? stmts[j - 1] : sv_prev;
+    view_bind_temp(argv[0], kt[j]);
+    int tok = view_push_range_tested(c, stmts[j]);
+    emit_stmt(c, stmts[j], b, indent + 1);
+    view_pop(c, tok);
+  }
+  view_unbind(nb);
+  emit_indent(b, indent);
+  buf_puts(b, "}\n");
+  emit_indent(b, indent);
+  buf_puts(b, "else {\n");
+  for (int j = 0; j < m; j++) {
+    g_stmt_cur = stmts[j]; g_stmt_prev = j ? stmts[j - 1] : sv_prev;
+    emit_body_stmt(c, stmts[j], b, indent + 1, 0);
+  }
+  g_stmt_cur = sv_cur; g_stmt_prev = sv_prev;
+  emit_indent(b, indent);
+  buf_puts(b, "} }\n");
+  return 1;
+}
+
 void emit_stmts(Compiler *c, int id, Buf *b, int indent) {
   /* Ruby block-locals are FRESH on every block invocation. Find the
      BlockNode whose body this is (block_of_body) and
@@ -24802,6 +24923,10 @@ void emit_stmts(Compiler *c, int id, Buf *b, int indent) {
       if (redo_lbl && k == head) { emit_indent(b, indent); buf_printf(b, "_redo_%d: ;\n", redo_lbl); }
       g_stmt_cur = body[k]; g_stmt_prev = k ? body[k - 1] : -1;
       emit_cell_defer_switch(c, id, k, b, indent);
+      /* a run of element updates behind one joint guard (hc_joint_run),
+         within the statements ahead of a redo label or past it */
+      int jm = hc_joint_run(c, body + k, (redo_lbl && k < head ? head : n) - k);
+      if (jm >= 2 && hc_joint_emit(c, body + k, jm, b, indent)) { k += jm - 1; continue; }
       if (!emit_body_stmt(c, body[k], b, indent, 0)) break;
       if (stmt_is_folded_return(c, body[k])) break;
     }
@@ -26889,6 +27014,44 @@ static int g_iow_val_taken = 0;
 void emit_index_opw_value_into(const char *tmp) { g_iow_val_next = tmp; g_iow_val_taken = 0; }
 int emit_index_opw_value_taken(void) { return g_iow_val_taken; }
 
+/* The fused fold of `a[i] op= x`: an Integer or Float element folded where
+   it is, behind one bounds check, takes a right-hand side that runs no code
+   and stores nothing (it is run ahead of the read, into a temp both arms
+   read). One answer for emit_index_op_write and the header cache's joint
+   guard. */
+static int iow_fuses(Compiler *c, TyKind rt, Repr vr, int v) {
+  return (rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY) && vr.kind != RK_BOXED && subtree_is_pure_read(c, v);
+}
+/* The fused fold's in-range test where the loop being emitted caches the
+   array: *hd its data, *wl the length an index below it writes in place
+   (for a Float element an operator reads, the nil-free one, which is 0
+   while the array may hold nil or is frozen). 0 when it is not cached. */
+static int iow_cached_write_len(Compiler *c, int recv, TyKind rt, const char *op, char *hd, char *wl, size_t cap) {
+  char hl[48], hw[48], hn[48];
+  if (!hc_array(c, recv, rt == TY_FLOAT_ARRAY, hd, hl, hw, cap < sizeof hl ? cap : sizeof hl)) return 0;
+  if (rt == TY_FLOAT_ARRAY && is_arith_op(op)) {
+    hc_array_nilfree(c, recv, -1, hd, hn, cap < sizeof hn ? cap : sizeof hn);
+    hc_write_len_nilfree(hd, hn, sizeof hn);
+    snprintf(wl, cap, "%s", hn);
+  }
+  else snprintf(wl, cap, "%s", hw);
+  return 1;
+}
+/* See codegen_internal.h. */
+int iow_fused_cached(Compiler *c, int id, char *hd, char *wl, size_t cap) {
+  const NodeTable *nt = c->nt;
+  if (id < 0 || nt_kind(nt, id) != NK_IndexOperatorWriteNode || g_iow_recv_ref || g_iow_key_ref || g_iow_val_next)
+    return 0;
+  int recv = nt_ref(nt, id, "receiver"), args = nt_ref(nt, id, "arguments"), v = nt_ref(nt, id, "value");
+  const char *op = nt_str(nt, id, "binary_operator");
+  int argc = 0;
+  if (args >= 0) nt_arr(nt, args, "arguments", &argc);
+  if (argc != 1 || !op || recv < 0 || v < 0) return 0;
+  TyKind rt = repr_of(c, recv).as_ty;
+  if (!iow_fuses(c, rt, repr_of(c, v), v)) return 0;
+  return iow_cached_write_len(c, recv, rt, op, hd, wl, cap);
+}
+
 void emit_index_op_write(Compiler *c, int id, Buf *b, int indent) {
   const char *val_ref = g_iow_val_next;
   g_iow_val_next = NULL;
@@ -27028,8 +27191,7 @@ void emit_index_op_write(Compiler *c, int id, Buf *b, int indent) {
     /* the fused fold below is decided here, ahead of the root and the capture
        it makes unnecessary: a pure RHS allocates nothing and has nothing to
        order against the read */
-    int fuse = (rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY) && vr.kind != RK_BOXED &&
-               subtree_is_pure_read(c, v);
+    int fuse = iow_fuses(c, rt, vr, v);
     /* A Float element is the operator's receiver: a nil one raises
        NoMethodError, as `a[i] + x` does. Only an element known to be no nil
        skips the test: the fold's range ends at the array's nil-free length
@@ -27136,16 +27298,22 @@ void emit_index_op_write(Compiler *c, int id, Buf *b, int indent) {
       else buf_printf(b, "__typeof__(%s) _t%d = %s; ", rhs, tv, rhs);
       /* a header the loop being emitted holds (hc_array) is the one read:
          the receiver's own would be read again at every iteration */
-      char hd[48], hl[48], hw[48], hn[48], may_nil_ck[48];
+      char hd[48], wl[48], may_nil_ck[48];
       snprintf(may_nil_ck, sizeof may_nil_ck, "!SP_MAY_NIL(_t%d) && ", ta);
-      if (hc_array(c, recv, rt == TY_FLOAT_ARRAY, hd, hl, hw, sizeof hd)) {
-        /* a Float element is folded only below the nil-free length (_hcn),
-           which is the array's length while it holds no nil and 0 otherwise */
-        /* a right-hand side that is a Float local the loop does not
-           assign zeroes the nil-free length while it is nil: the fold
-           below it then needs no test of its own */
-        if (fnil) { hc_array_nilfree(c, recv, -1, hd, hn, sizeof hd); hc_write_len_nilfree(hd, hn, sizeof hn); }
-        buf_printf(b, "if (SP_LIKELY((unsigned long long)_t%d < (unsigned long long)%s)) { ", tb, fnil ? hn : hw);
+      /* a Float element is folded only below the nil-free length (_hcn),
+         which is the array's length while it holds no nil and 0 otherwise */
+      if (iow_cached_write_len(c, recv, rt, op, hd, wl, sizeof hd)) {
+        /* a write whose index the header cache's joint guard tested ahead
+           of the run it stands in (hc_joint_emit) stores in place: that
+           arm is the run's fast one, and the run as written is its other */
+        if (view_range_tested(c, id)) {
+          buf_printf(b, "%s *_t%d = &%s[_t%d]; *_t%d = ", c_type_name(et), tp, hd, tb, tp);
+          if (!iow_scalar_fold(c, et, op, vt, v, fslot, rv, b)) buf_printf(b, "%s %s (%s)", fslot, op, rv);
+          free(rhs);
+          buf_puts(b, "; }\n");
+          return;
+        }
+        buf_printf(b, "if (SP_LIKELY((unsigned long long)_t%d < (unsigned long long)%s)) { ", tb, wl);
         buf_printf(b, "%s *_t%d = &%s[_t%d]; *_t%d = ", c_type_name(et), tp, hd, tb, tp);
       }
       else {

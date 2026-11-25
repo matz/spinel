@@ -1645,7 +1645,7 @@ static void emit_int_expr_ex(Compiler *c, int node, int strict, Buf *b) {
 
 /* The literal c of an index `x + c` or `x - c`, in *lit, when c is no
    further than 2^20 from 0 and not 0; else 0. */
-static int index_sum_lit(Compiler *c, int node, long long *lit) {
+int index_sum_lit(Compiler *c, int node, long long *lit) {
   const NodeTable *nt = c->nt;
   if (node < 0 || nt_kind(nt, node) != NK_CallNode || nt_ref(nt, node, "receiver") < 0 ||
       nt_ref(nt, node, "block") >= 0) return 0;

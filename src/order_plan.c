@@ -107,7 +107,7 @@ static int pure_walk_node(Compiler *c, int id, const OrderWalk *w) {
     case NK_CallNode: {
       int alloc = 0;
       MtabMark mt_was = mtab_push_in(c, id);   /* (the call's question, asked under its parent's frame) */
-      int pure = order_typed_index(c, id) || order_typed_len(c, id) || scalar_op_runs_no_code(c, id) ||
+      int pure = (!w->no_elems && order_typed_index(c, id)) || order_typed_len(c, id) || scalar_op_runs_no_code(c, id) ||
                  (call_is_field_read(c, id, w->alloc ? &alloc : NULL) && !alloc);
       mtab_pop(c, mt_was);
       if (!pure) return 0;

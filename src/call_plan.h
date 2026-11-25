@@ -153,7 +153,7 @@ typedef struct {
   const char *msg;         /* CP_REFUSE: the message, as the compiler prints it */
   unsigned char rfrom;     /* CP_REFUSE: CplanRefuseFrom */
   unsigned char bsuper;    /* a super with no program method (mi -1): BsuperArm */
-  unsigned char bpath;     /* a super with no program method (mi -1): the BsuperPath whose call on self lower_builtin_supers lowers it to, BSP_NONE for bsuper's arm; an argument list that call cannot spell (lower_builtin_supers' own declines) keeps the arm too */
+  unsigned char bpath;     /* a super with no program method (mi -1): the BsuperPath whose call on self lower_builtin_supers lowers it to, BSP_NONE for bsuper's arm (for BSP_OBJECT the plan also decides that the call spells the argument list, cplan_object_args_spelled) */
   const char *bowner;      /* UC_SUPER with no program method (mi -1): the builtin class or module whose method the super reaches (MethodLookup.bowner); in a class method, the owner of a definition hook (cplan_core_hook) */
   unsigned char answers_receiver; /* mi is a class method of an ancestor of owner_ci that answers an instance of owner_ci (cmethod_receiver_class): the function returns a pointer to its own class's type, the call is cast to owner_ci's */
   const char *delegate;     /* the protocol method name, before alias resolution */

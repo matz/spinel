@@ -1099,9 +1099,6 @@ static int cplan_super_argc(Compiler *c, int id, const Scope *s) {
   return n;
 }
 
-/* The count super id in s passes where bowner's method uname cannot take it, from the owner's facts (Kernel's and
-   BasicObject's methods are listed as Object's), and CRuby's "expected" text; -1 where it can, the count is the run's
-   (a splat, a keyword, a forwarded list) or the facts do not bound it */
 /* The counts bowner's method uname takes, from the owner's facts (Kernel's and BasicObject's methods are listed as
    Object's), with CRuby's "expected" texts: 0 where the facts do not bound them */
 static int cplan_owner_arity(const char *uname, const char *bowner, int *lo, int *hi, const char **lo_exp, const char **hi_exp) {
@@ -1109,6 +1106,9 @@ static int cplan_owner_arity(const char *uname, const char *bowner, int *lo, int
   const char *cls = builtin_owner_kind(bowner) == BOWN_KERNEL || slot == CORE_BASIC_OBJECT || slot == CORE_OBJECT ? "Object" : bowner;
   return bowner && uname && builtin_class_arity_spec(cls, uname, lo, hi, lo_exp, hi_exp);
 }
+/* The count super id in s passes where bowner's method uname cannot take it, from the owner's facts
+   (cplan_owner_arity), and CRuby's "expected" text; -1 where it can, the count is the run's
+   (a splat, a keyword, a forwarded list) or the facts do not bound it */
 static int cplan_super_count_fails(Compiler *c, int id, const Scope *s, const char *uname, const char *bowner,
                                    const char **exp) {
   int argc = bowner && uname ? comp_super_plain_argc(c, id, s) : -1, lo, hi;

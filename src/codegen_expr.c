@@ -1620,7 +1620,7 @@ static void emit_orw_raise(Compiler *c, const char *head, int cid, TyKind rt,
                            const char *recv, Buf *b) {
   buf_puts(b, "(sp_exc_stage_recv("); emit_boxed_text(c, rt, recv, b);
   buf_puts(b, "), sp_raise_cls(\"NoMethodError\", ");
-  if (anon_class_text(c, cid, head, b)) buf_puts(b, "))");
+  if (anon_class_text(c, cid, ty_is_object(rt) ? recv : NULL, head, b)) buf_puts(b, "))");
   else {
     const char *rn = class_ruby_name(c, cid) ? class_ruby_name(c, cid) : c->classes[cid].name;
     buf_printf(b, "(&(\"\\xff\" \"%s%s\")[1])))", head, rn);

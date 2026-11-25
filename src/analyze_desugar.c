@@ -27446,8 +27446,8 @@ static int builder_refused_kind(const NodeTable *nt, int call) {
    lowering leaves. */
 static void builder_lower_refused(Compiler *c, int call, int par, int kind) {
   NodeTable *nt = (NodeTable *)c->nt;
-  elab_builder_note(c, call, kind);
-  if (par >= 0) elab_builder_note(c, par, kind);
+  elab_builder_note(c, call, kind, -1);
+  if (par >= 0) elab_builder_note(c, par, kind, -1);
   cn_neutralize(nt, nt_ref(nt, call, "block"));
   cn_neutralize(nt, nt_ref(nt, call, "arguments"));   /* (its superclass's locals are no reads of main's) */
   cn_reset_call(nt, call);

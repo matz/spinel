@@ -46,5 +46,15 @@ void sp_rtclass_assign_name(sp_int id, const char *name);
    for, -1 for any other value: the generated unit's, installed by a program
    that has a site class (sp_poly_class_val and the default renderings ask it) */
 extern sp_int (*sp_obj_rtclass_fn)(sp_RbVal v);
+/* The class a `k.new` on a class value is building an instance of, per
+   thread: set ahead of the dispatch, and taken (and cleared) by the site
+   class's allocation, so its instance carries the class before initialize
+   runs; a site class built any other way is its own class. */
+extern SP_TLS sp_int sp_rtclass_pending;
+static inline sp_int sp_rtclass_take(sp_int site) {
+  sp_int p = sp_rtclass_pending;
+  sp_rtclass_pending = 0;
+  return sp_rtclass_id_p(p) && sp_rtclass_at(p)->site == site ? p : site;
+}
 
 #endif

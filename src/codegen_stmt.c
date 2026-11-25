@@ -276,8 +276,8 @@ void emit_puts_one(Compiler *c, int arg, Buf *b, int indent) {
   else if (ty_is_object(t)) {
     /* default Object#to_s: #<Name:0xADDR>, like CRuby (no ivars) */
     int cid = ty_object_class(t);
-    char rn[512], rarg[96];
-    obj_default_name(c, cid, rn, sizeof rn, rarg, sizeof rarg);
+    char rn[512], rarg[512];
+    obj_default_name(c, cid, "_po", rn, sizeof rn, rarg, sizeof rarg);
     buf_printf(b, "{ void *_po = (void *)("); emit_expr(c, arg, b);
     buf_printf(b, "); sp_puts_line(_po ? sp_sprintf(\"#<%s:0x%%016llx>\", %s(unsigned long long)(uintptr_t)_po) : \"\"); }\n", rn, rarg);
   }
@@ -10639,7 +10639,7 @@ int emit_class_cmethod_eqq(Compiler *c, int ci, const char *subj, TyKind pt, int
   }
   Buf cl; memset(&cl, 0, sizeof cl);
   buf_printf(&cl, "%s(", mc_method(c, ws));
-  buf_puts(&cl, emit_cmethod_self_cls_arg(c, mi, ci, &cl));
+  buf_puts(&cl, emit_cmethod_self_cls_arg(c, mi, ci, NULL, &cl));
   if (raw || pt == TY_POLY) buf_puts(&cl, subj);
   else emit_boxed_text(c, pt, subj, &cl);
   /* (the optional parameters take their plain defaults) */
@@ -10891,12 +10891,14 @@ static int emit_when_typed_test(Compiler *c, int cond, int t, TyKind pt, Buf *b)
        shape a variable pattern already uses (#4271). Comparing the
        subject to the class with `==` did not even compile. */
     char scref[32]; snprintf(scref, sizeof scref, "_t%d", t);
-    buf_puts(b, "sp_poly_is_a_dyn(");
+    /* (a class made at run time is no name: tested by the class itself) */
+    int rt = cplan_class_value_may_be_rt(c, cond);
+    buf_puts(b, rt ? "sp_poly_is_a(" : "sp_poly_is_a_dyn(");
     if (pt == TY_POLY) buf_puts(b, scref);
     else emit_boxed_text(c, pt, scref, b);
-    buf_puts(b, ", sp_box_class(");
+    buf_puts(b, rt ? ", " : ", sp_box_class(");
     emit_expr(c, cond, b);
-    buf_puts(b, "), 0)");
+    buf_puts(b, rt ? ")" : "), 0)");
   }
   else if (eq_family(pt) && eq_family(comp_ntype(c, cond)) && eq_family(pt) != eq_family(comp_ntype(c, cond))) {
     /* a when value of a different comparable family never matches; one

@@ -15,6 +15,7 @@
 
 sp_RtClass *sp_rtclass_chunks[SP_RTCLASS_CHUNKS];
 static sp_int sp_rtclass_count;
+SP_TLS sp_int sp_rtclass_pending;
 #ifdef SP_THREADS
 static pthread_mutex_t sp_rtclass_lock = PTHREAD_MUTEX_INITIALIZER;
 #endif

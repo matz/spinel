@@ -868,7 +868,7 @@ extern const char *g_proc_return_home;
 int cmethod_takes_self_cls(Compiler *c, const Scope *s);
 /* self, boxed, in method scope s of class s->class_id: a builtin's reopening holds it as the builtin's own value */
 void emit_reopen_self_boxed(Compiler *c, Scope *s, Buf *b);
-const char *emit_cmethod_self_cls_arg(Compiler *c, int mi, int recv_cls, Buf *b);
+const char *emit_cmethod_self_cls_arg(Compiler *c, int mi, int recv_cls, const char *recv_val, Buf *b);
 int emit_class_cmethod_eqq(Compiler *c, int ci, const char *subj, TyKind pt, int node, int boxed, Buf *b);
 const char *cmethod_cls_token(Compiler *c, Scope *encl);
 const char *cmethod_self_cls(Compiler *c, Scope *encl);
@@ -1275,8 +1275,10 @@ int cls_id_masquerades(Compiler *c, int cid);
 int visible_as_target(Compiler *c, int k, int target);
 int class_mixes_in(Compiler *c, int cid, int mod, int depth);
 int class_is_comparable(Compiler *c, int cid);
-void emit_visible_cls_id(Compiler *c, int ci, const char *obj, const char *id, Buf *b);
-void obj_default_name(Compiler *c, int ci, char *name, size_t nn, char *arg, size_t na);
+int class_family_has_rt_site(Compiler *c, int ci);   /* ci or a subclass is a run-time class's site */
+void emit_visible_cls_id(Compiler *c, int ci, const char *obj, const char *id, int masq, Buf *b);
+void obj_default_name(Compiler *c, int ci, const char *obj, char *name, size_t nn, char *arg, size_t na);
+void emit_obj_class_id(Compiler *c, int ci, const char *obj, Buf *b);
 /* Kernel#to_s or #inspect (want_inspect) of an object of program class cid,
    the builtin's own text whatever the program defines: #<Name:0x...>, and
    for inspect the default ivar walk (sp_obj_kernel_inspect). obj is the C
@@ -1284,8 +1286,9 @@ void obj_default_name(Compiler *c, int ci, char *name, size_t nn, char *arg, siz
    a by-value one), evaluated once or twice. */
 void emit_obj_kernel_text(Compiler *c, int cid, int want_inspect, const char *obj, Buf *b);
 void emit_obj_default_inspect(Compiler *c, int cid, const char *p, Buf *b);
+void emit_rtclass_take(Compiler *c, int cid, const char *lv, Buf *b);   /* (sp_rtclass_take) */
 int class_has_ctor(const ClassInfo *ci);   /* does the class get a sp_X_new (an object of it may exist) */
-int anon_class_text(Compiler *c, int ci, const char *head, Buf *b);
+int anon_class_text(Compiler *c, int ci, const char *obj, const char *head, Buf *b);
 void emit_missing_operand(Compiler *c, int op, int t, Buf *b);
 void emit_raise_operands(Compiler *c, int m, int staged, int t0, Buf *b);
 int scope_def_line(Compiler *c, Scope *s);

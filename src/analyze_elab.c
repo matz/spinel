@@ -1410,10 +1410,11 @@ static void lr_nbody_note(LoadRecord *r, int b, int a, int sg, const char *name)
    (want): the found header's class, LR_UNKNOWN_CLASS for an alias or one
    not known, LR_NEW for a new class. The map also keys a class builder's
    call, and the constant write holding it, by what the builder makes
-   (builder, EB_*; EB_NONE on a header): such an entry opens no class
+   (builder, EB_*; EB_NONE on a header) and the class node of a run-time
+   class's site (site, -1 for none): such an entry opens no class
    (cls and want LR_UNKNOWN_CLASS), so the header readers answer it as a
    node they hold nothing for. */
-typedef struct LrHeader { int node, cls, owner, verdict, found, want, next; char *leaf; unsigned char builder; } LrHeader;
+typedef struct LrHeader { int node, cls, owner, verdict, found, want, next; char *leaf; unsigned char builder; int site_def; } LrHeader;
 
 static LrCheck *lr_family(LoadRecord *r, const char *reader);
 static void lr_node_desc(Compiler *c, int id, char *buf, size_t sz);
@@ -1428,7 +1429,7 @@ static LrHeader *lr_header(LoadRecord *r, int node, int make) {
   for (int i = r->hdr_head[h]; i >= 0; i = r->hdr[i].next) if (r->hdr[i].node == node) return &r->hdr[i];
   if (!make) return NULL;
   r->hdr = lr_grow(r->hdr, &r->chdr, r->nhdr, sizeof *r->hdr);
-  r->hdr[r->nhdr] = (LrHeader){ node, LR_UNKNOWN_CLASS, LR_UNKNOWN_CLASS, ELAB_UNKNOWN, -1, LR_UNKNOWN_CLASS, r->hdr_head[h], NULL, EB_NONE };
+  r->hdr[r->nhdr] = (LrHeader){ node, LR_UNKNOWN_CLASS, LR_UNKNOWN_CLASS, ELAB_UNKNOWN, -1, LR_UNKNOWN_CLASS, r->hdr_head[h], NULL, EB_NONE, -1 };
   r->hdr_head[h] = r->nhdr;
   return &r->hdr[r->nhdr++];
 }
@@ -14040,18 +14041,28 @@ int elab_rec_open(Compiler *c, int node, int cp, const char *cname, const char *
    constant write holding it. A copy of such a node (a clone: a module's
    method copied into each class that includes it) answers as the node it
    copies (nt_clone_source), along a chain of up to 64 copies. */
-void elab_builder_note(Compiler *c, int node, int kind) {
-  lr_header(lr_get(c), node, 1)->builder = (unsigned char)kind;
+void elab_builder_note(Compiler *c, int node, int kind, int site_def) {
+  LrHeader *h = lr_header(lr_get(c), node, 1);
+  h->builder = (unsigned char)kind;
+  h->site_def = site_def;
 }
-int elab_builder_kind(const Compiler *c, int node) {
+static const LrHeader *lr_builder_header(const Compiler *c, int node) {
   for (int depth = 0; c->lrec && node >= 0 && depth < 64; depth++) {
     const LrHeader *h = lr_header(c->lrec, node, 0);
-    if (h) return h->builder;
+    if (h) return h;
     int o = nt_clone_source(c->nt, node);
     if (o < 0) break;
     node = o;
   }
-  return EB_NONE;
+  return NULL;
+}
+int elab_builder_kind(const Compiler *c, int node) {
+  const LrHeader *h = lr_builder_header(c, node);
+  return h ? h->builder : EB_NONE;
+}
+int elab_builder_site(const Compiler *c, int node) {
+  const LrHeader *h = lr_builder_header(c, node);
+  return h ? h->site_def : -1;
 }
 
 /* Header map entry h now keys `node`: moved to that node's bucket */

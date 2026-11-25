@@ -4449,16 +4449,18 @@ void unsupported_feature_collect(Compiler *c, int id, const char *msg) {
    raised and kept per raise site as a persistent string, because the raise
    stages it before anything roots it; it is rebuilt only when the class's
    display changes. In a program that uses Threads the site's cache is per
-   worker, so no two workers read or write it at once. 0 (nothing appended)
-   for any other class. */
-int anon_class_text(Compiler *c, int ci, const char *head, Buf *b) {
+   worker, so no two workers read or write it at once. The object obj (C,
+   NULL for none) names the class made at run time it was built for
+   (emit_obj_class_id). 0 (nothing appended) for any other class. */
+int anon_class_text(Compiler *c, int ci, const char *obj, const char *head, Buf *b) {
   if (!comp_class_anonymous(c, ci)) return 0;
   int t = ++g_tmp;
   /* in a program that uses Threads each worker keeps its own pair (SP_TLS), so
      two workers running this site never share it */
-  buf_printf(b, "({ static %sconst char *_nd%d, *_nm%d; const char *_d%d = sp_class_display((sp_Class){%d}); "
-                "if (_d%d != _nd%d || !_nm%d) { const char *_m%d = sp_anon_text(\"%s\", _d%d); _nm%d = _m%d; _nd%d = _d%d; } _nm%d; })",
-             g_uses_threads ? "SP_TLS " : "", t, t, t, ci, t, t, t, t, head, t, t, t, t, t, t);
+  buf_printf(b, "({ static %sconst char *_nd%d, *_nm%d; const char *_d%d = sp_class_display((sp_Class){", g_uses_threads ? "SP_TLS " : "", t, t, t);
+  emit_obj_class_id(c, ci, obj, b);
+  buf_printf(b, "}); if (_d%d != _nd%d || !_nm%d) { const char *_m%d = sp_anon_text(\"%s\", _d%d); _nm%d = _m%d; _nd%d = _d%d; } _nm%d; })",
+             t, t, t, t, head, t, t, t, t, t, t);
   return 1;
 }
 

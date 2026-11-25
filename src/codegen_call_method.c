@@ -2878,16 +2878,19 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
 
 /* CRuby's NameError for capture id, whose plan finds no method (CallPlan.absent), as a statement. A
    Class.new class is named as it prints at run time: by the constant written with it, once written
-   (obj_default_name's display). A module whose singleton class is not made yet is named 'Module'.
-   The method name is an argument of that format, not part of it: an operator's name may hold a `%`. */
-static void emit_capture_absent_raise(Compiler *c, const char *mn, const CallPlan *plan, Buf *b) {
+   (obj_default_name's display), the object obj's (C, NULL for none). A module whose singleton class
+   is not made yet is named 'Module'. The method name is an argument of that format, not part of it:
+   an operator's name may hold a `%`. */
+static void emit_capture_absent_raise(Compiler *c, const char *mn, const CallPlan *plan, const char *obj, Buf *b) {
   int module = plan->absent == CP_ABSENT_MODULE;
   const char *cn = module ? "Module" : class_ruby_name(c, plan->owner_ci), *open = plan->absent == CP_ABSENT_SG ? "#<Class:" : "", *close = plan->absent == CP_ABSENT_SG ? ">" : "";
   /* (the name is escaped for the C literal: :"a\"b") */
   if (!module && comp_class_anonymous(c, plan->owner_ci)) {
     buf_printf(b, "sp_raise_cls(\"NameError\", sp_sprintf(\"undefined method '%%s' for class '%s%%s%s'\", \"", open, close);
     emit_c_escaped(b, mn ? mn : "");
-    buf_printf(b, "\", sp_class_display((sp_Class){%d})));", plan->owner_ci);
+    buf_puts(b, "\", sp_class_display((sp_Class){");
+    emit_obj_class_id(c, plan->owner_ci, plan->absent == CP_ABSENT_SG ? NULL : obj, b);
+    buf_puts(b, "})));");
     return;
   }
   buf_puts(b, "sp_raise_cls(\"NameError\", (&(\"\\xff\" \"undefined method '\" \"");
@@ -2937,10 +2940,16 @@ int emit_call_method_obj_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
   int closed = is_method_object_maker(name) && (plan.closed == SP_VIS_PRIVATE || plan.closed == SP_VIS_PROTECTED);
   if ((plan.absent && plan.mi < 0 && is_method_object_maker(name)) || closed) {
     buf_puts(b, "({ ");
-    if (recv >= 0) { buf_puts(b, "(void)("); emit_expr(c, recv, b); buf_puts(b, "); "); }
+    /* (an object of a site class's family is held: its class names it) */
+    char ho[24] = "";
+    if (recv >= 0 && ty_is_object(repr_of(c, recv).as_ty) && class_family_has_rt_site(c, plan.owner_ci)) {
+      snprintf(ho, sizeof ho, "_t%d", ++g_tmp);
+      buf_printf(b, "void *%s = (void *)(", ho); emit_expr(c, recv, b); buf_puts(b, "); ");
+    }
+    else if (recv >= 0) { buf_puts(b, "(void)("); emit_expr(c, recv, b); buf_puts(b, "); "); }
     if (closed) emit_capture_closed_raise(c, method_sym_arg(c, id), &plan, b);
     else if (plan.absent == CP_ABSENT_MAIN) emit_main_capture_absent_raise(c, id, b);
-    else emit_capture_absent_raise(c, method_sym_arg(c, id), &plan, b);
+    else emit_capture_absent_raise(c, method_sym_arg(c, id), &plan, ho[0] ? ho : NULL, b);
     buf_puts(b, " ");
     emit_unread_value(c, id, b);
     buf_puts(b, "; })");
@@ -3008,7 +3017,7 @@ int emit_call_method_obj_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
        NameError (CallPlan.absent) */
     if (t[0] < 0 && t[1] < 0 && plan.absent) {
       buf_puts(b, "{ ");
-      emit_capture_absent_raise(c, method_sym_arg(c, id), &plan, b);
+      emit_capture_absent_raise(c, method_sym_arg(c, id), &plan, NULL, b);
       buf_printf(b, " _t%d = NULL; }\n", tr);
       continue;
     }
@@ -3023,7 +3032,7 @@ int emit_call_method_obj_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
     if (to[i] == CPLAN_ARM_NONE && c->scopes[mi].class_id == comp_core_class(c, CORE_STRING)) {
       CallPlan missing = { .owner_ci = c->scopes[mi].class_id };
       buf_puts(b, "{ ");
-      emit_capture_absent_raise(c, captured_name ? captured_name : method_sym_arg(c, id), &missing, b);
+      emit_capture_absent_raise(c, captured_name ? captured_name : method_sym_arg(c, id), &missing, NULL, b);
       buf_printf(b, " _t%d = NULL; }\n", tr);
       continue;
     }

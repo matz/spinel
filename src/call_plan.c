@@ -8102,6 +8102,26 @@ const BuiltinClassOp *cplan_builtin_class_row(Compiler *c, int id, const char *c
   return cop;
 }
 
+/* See call_plan.h. */
+int cplan_rt_site(const Compiler *c, int ci) {
+  return ci < 0 ? c->has_rt_classes : ci < c->nclasses && c->classes[ci].rt_site;
+}
+int cplan_class_value_may_be_rt(Compiler *c, int node) {
+  if (!c->has_rt_classes) return 0;
+  const ClsSet *s = node >= 0 ? cls_fact_node(c, node) : NULL;
+  if (!s || s->all || s->bc) return 1;
+  for (int k = 0; k < c->cls_fact_ncls && k < c->nclasses; k++)
+    if (c->classes[k].rt_site && cls_set_has(s, k + c->cls_fact_ncls)) return 1;
+  return 0;
+}
+int cplan_class_new(const Compiler *c, int id, int *site) {
+  int kind = elab_builder_kind(c, id), ci = -1;
+  if (kind == EB_RT_SITE || kind == EB_RT_BARE) ci = comp_class_of_def(c, elab_builder_site(c, id));
+  if (site) *site = ci;
+  if (ci < 0) return CNEW_NONE;
+  return c->classes[ci].rt_site ? CNEW_RUNTIME : kind == EB_RT_SITE ? CNEW_STATIC : CNEW_REFUSED;
+}
+
 /* Does a builtin answer `name` on program class ci (main for -1): one on
    any self, a core class's own, a record class's own
    (elab_record_cmethod)? */

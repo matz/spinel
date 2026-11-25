@@ -1053,6 +1053,10 @@ typedef struct {
   int nmembers;        /* is_struct/is_data: ivars[0..nmembers) back the
                           members, in declaration order; any later ivar is an
                           attr's or a method's own instance variable. */
+  int rt_site;         /* the site class of a Class.new or Module.new evaluated
+                          more than once: each evaluation makes a class of its
+                          own at run time, whose code and layout this is
+                          (register_rt_sites; read through cplan_rt_site) */
   int is_anon_struct;  /* k = Struct.new(:a, :b): synthesized for a local-held
                           anonymous struct class; #inspect omits the name. */
   int is_singleton_of; /* +1-based parent class index (0 = not one): a
@@ -1592,6 +1596,7 @@ typedef struct {
   int *anon_struct_ids;
   int n_anon_struct_ids, anon_struct_ids_valid;
   int has_anonymous_classes; /* Class.new identities with execution-time names */
+  int has_rt_classes;  /* some class is a run-time class's site (ClassInfo.rt_site) */
   struct UserMethodKinds { char name[32]; int kinds; } user_methods[8];   /* the UDM_ kinds of the program's own methods of a name, by name (an_user_method_kinds) */
   int nuser_methods;
 

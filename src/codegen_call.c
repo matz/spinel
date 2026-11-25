@@ -2438,7 +2438,7 @@ int emit_poly_cls_value_prearm(Compiler *c, int id, const char *name, int argc,
     buf_puts(&cb, "(");
     /* the receiving-class token, when the body reads it: the class this arm's
        case selected (#4217) */
-    const char *lead = rarm8 ? (buf_puts(&cb, rcls8), ", ") : emit_cmethod_self_cls_arg(c, cmi8[i], ccls8[i], &cb);
+    const char *lead = rarm8 ? (buf_puts(&cb, rcls8), ", ") : emit_cmethod_self_cls_arg(c, cmi8[i], ccls8[i], rcls8, &cb);
     ArgLayout L;
     poly_arm_layout(c, ks, &pargs, &L);
     emit_poly_arm_args(c, ks, ks, &L, &pargs, NULL, lead, &pre, &cb);
@@ -13965,7 +13965,7 @@ int emit_user_new_arm(Compiler *c, int id, int ci, int argc, const int *atmp,
   buf_puts(&cb, mc_method(c, ks));
   buf_puts(&cb, "(");
   /* the receiving class is the one this arm's case selected (#4217) */
-  const char *lead = emit_cmethod_self_cls_arg(c, kmi, ci, &cb);
+  const char *lead = emit_cmethod_self_cls_arg(c, kmi, ci, NULL, &cb);
   if (hoisted) {
     /* a default reading an earlier parameter (`def self.new(a, b = a)`)
        reads it bound to a local of the arm, as an initialize arm's does
@@ -14250,14 +14250,17 @@ static void emit_kwsplat_empty_check(Compiler *c, int id, int kwh, const char *l
 
 /* See codegen_call_arms.h. */
 void emit_class_value_key(Compiler *c, int recv, const char *val, Buf *b) {
-  (void)c; (void)recv;
-  buf_printf(b, "%s.cls_id", val);
+  /* (a class made at run time switches as its site class, sp_rtclass.h) */
+  if (cplan_class_value_may_be_rt(c, recv)) buf_printf(b, "sp_rtclass_site(%s.cls_id)", val);
+  else buf_printf(b, "%s.cls_id", val);
 }
 
 /* See codegen_call_arms.h. */
 void emit_class_value_new_switch(Compiler *c, int recv, int rt2, int kt, int boxed, Buf *b) {
   char kv[24]; snprintf(kv, sizeof kv, "_t%d", kt);
   buf_printf(b, "sp_RbVal _t%d = sp_box_nil(); ", rt2);
+  /* (the class a site class's allocation takes, sp_rtclass_take) */
+  if (cplan_class_value_may_be_rt(c, recv)) buf_printf(b, "sp_rtclass_pending = _t%d.cls_id; ", kt);
   /* (a class boxed by its name, an object's #class read back out of a
      boxed slot, switches on the id of the program's class of that name) */
   if (boxed && g_emit_class_names) {
@@ -16435,7 +16438,7 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
            an inherited `self.new` building with `super`, or naming it */
         buf_puts(b, mc_method(c, &c->scopes[ucnew]));
         buf_puts(b, "(");
-        const char *ld = emit_cmethod_self_cls_arg(c, ucnew, ci, b);
+        const char *ld = emit_cmethod_self_cls_arg(c, ucnew, ci, NULL, b);
         emit_args_filled(c, ucnew, nt_ref(nt, id, "arguments"), ld, b);
         emit_ctor_block_slot(c, id, ucnew, ctor_blk_lead(b), b);
         buf_puts(b, ")");
@@ -24677,7 +24680,7 @@ static int emit_object_reopen_vis_refusal(Compiler *c, int id, int vrecv, TyKind
     buf_puts(b, staged ? "sp_stage_recv_args_msg(" : "sp_stage_recv_msg(");
     if (named)
       buf_printf(b, "(&(\"\\xff\" \"%s method '%s' called for %s\")[1])", kind, vnm, cname);
-    else if (!(vcid >= 0 && anon_class_text(c, vcid, head, b)))
+    else if (!(vcid >= 0 && anon_class_text(c, vcid, NULL, head, b)))
       buf_printf(b, "(&(\"\\xff\" \"%s method '%s' called for an instance of %s\")[1])", kind, vnm, cname);
     buf_printf(b, ", _t%d%s%s)", tv, staged ? ", " : "", staged ? args.p : "");
   }
@@ -24846,7 +24849,7 @@ static int emit_vis_refusal_x(Compiler *c, int id, Buf *b, int guard) {
     buf_puts(b, "sp_raise_cls(\"NoMethodError\", ");
     /* nil is named as nil, as CRuby names it */
     int for_nil = !at_main && vcid == comp_core_class(c, CORE_NILCLASS);
-    if (!at_main && !for_nil && anon_class_text(c, vcid, head, b)) buf_puts(b, ")");
+    if (!at_main && !for_nil && anon_class_text(c, vcid, NULL, head, b)) buf_puts(b, ")");
     else buf_printf(b, "(&(\"\\xff\" \"%s method '%s' called for %s%s\")[1]))",
                     vis == SP_VIS_PRIVATE ? "private" : "protected", vnm, at_main || for_nil ? "" : "an instance of ",
                     for_nil ? "nil" : vrn);
@@ -25069,7 +25072,8 @@ void emit_poly_vis_precheck(Compiler *c, int id, int tv, Buf *b) {
                                vis == SP_VIS_PRIVATE ? "private" : "protected", vnm);
       buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == %d) { sp_exc_stage_recv(_t%d); sp_raise_cls(\"NoMethodError\", ",
                  tv, tv, k, tv);
-      if (!anon_class_text(c, k, head, b)) buf_printf(b, "(&(\"\\xff\" \"%s%s\")[1])", head, vrn);
+      char tvp[32]; snprintf(tvp, sizeof tvp, "_t%d.v.p", tv);
+      if (!anon_class_text(c, k, tvp, head, b)) buf_printf(b, "(&(\"\\xff\" \"%s%s\")[1])", head, vrn);
       buf_puts(b, "); } ");
     }
   }
@@ -25664,7 +25668,7 @@ static void emit_missing_raise(Compiler *c, int m, int kind, const char *self, i
   }
   buf_puts(b, staged ? "sp_stage_recv_args_msg(" : "sp_stage_recv_msg(");
   if (tm >= 0) buf_printf(b, "_t%d", tm);
-  else if (anon >= 0) anon_class_text(c, anon, head, b);
+  else if (anon >= 0) anon_class_text(c, anon, NULL, head, b);
   else if (kind == CM_NAMEERROR) buf_printf(b, "\"undefined local variable or method '%s' for %s\"", name, self);
   else buf_printf(b, "(&(\"\\xff\" \"undefined method '%s' for %s\")[1])", name, self);
   buf_puts(b, ", ");
@@ -25925,7 +25929,7 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
       const char *st = cplan_self_text(c, id, g_emitting_class_id, self, sizeof self);
       snprintf(head, sizeof head, "undefined local variable or method '%s' for an instance of ", vnm ? vnm : "?");
       buf_puts(b, "(sp_raise_cls(\"NameError\", ");
-      if (!st && anon_class_text(c, g_emitting_class_id, head, b)) buf_puts(b, ")");
+      if (!st && anon_class_text(c, g_emitting_class_id, g_self, head, b)) buf_puts(b, ")");
       else buf_printf(b, "\"undefined local variable or method '%s' for %s\")", vnm ? vnm : "?", st ? st : "main");
       emit_raise_placeholder(c, id, b);
       return 1;
@@ -25974,7 +25978,7 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
     {
       char head[200]; snprintf(head, sizeof head, "undefined method '%s' for an instance of ", name);
       buf_puts(b, "sp_raise_cls(\"NoMethodError\", ");
-      if (st || !anon_class_text(c, g_emitting_class_id, head, b))
+      if (st || !anon_class_text(c, g_emitting_class_id, g_self, head, b))
         buf_printf(b, "(&(\"\\xff\" \"undefined method '%s' for %s\")[1]))", name, st ? st : "main");
       else buf_puts(b, ")");
       buf_printf(b, ", %s)", (is_scalar_ret(uret) && uret != TY_UNKNOWN) ? default_value_from_compiler(c, uret) : "sp_box_nil()");
@@ -26019,7 +26023,7 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
       for (int k = 0; k < argc; k++) { buf_puts(b, "(void)("); emit_expr_for_effect(c, argv[k], b); buf_puts(b, "), "); }
       char head[200]; snprintf(head, sizeof head, "undefined method '%s' for an instance of ", name);
       buf_puts(b, "sp_raise_cls(\"NoMethodError\", ");
-      if (!st && anon_class_text(c, g_emitting_class_id, head, b)) buf_puts(b, ")");
+      if (!st && anon_class_text(c, g_emitting_class_id, g_self, head, b)) buf_puts(b, ")");
       else buf_printf(b, "(&(\"\\xff\" \"undefined method '%s' for %s\")[1]))", name, st ? st : "main");
       buf_printf(b, ", %s)", (is_scalar_ret(uret) && uret != TY_UNKNOWN) ? default_value_from_compiler(c, uret) : "sp_box_nil()");
       return 1;
@@ -26413,7 +26417,7 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
             Buf cb; memset(&cb, 0, sizeof cb);
             int ksym = cpf[k] >= 0 ? cpf[k] : cmi[k];
             buf_printf(&cb, "%s(", mc_method(c, &c->scopes[ksym]));
-            const char *leadk = rarm ? (buf_puts(&cb, rcls), ", ") : emit_cmethod_self_cls_arg(c, ksym, ccls[k], &cb);
+            const char *leadk = rarm ? (buf_puts(&cb, rcls), ", ") : emit_cmethod_self_cls_arg(c, ksym, ccls[k], rcls, &cb);
             /* What the binding puts ahead of the call -- a count or keyword
                check and its ArgumentError, a splat's gather, a `**` merge --
                belongs to this arm alone: in the statement's prelude it ran
@@ -26818,7 +26822,7 @@ if (recv >= 0 && nm && (grt == TY_RATIONAL || grt == TY_COMPLEX)) {
               if (anon_ci >= 0) {
                 char head[160]; snprintf(head, sizeof head, "%s an instance of ", hd);
                 Buf ab; memset(&ab, 0, sizeof ab);
-                if (anon_class_text(c, anon_ci, head, &ab)) snprintf(gmsg, sizeof gmsg, "%s", ab.p);
+                if (anon_class_text(c, anon_ci, NULL, head, &ab)) snprintf(gmsg, sizeof gmsg, "%s", ab.p);
                 free(ab.p);
               }
             }
@@ -33866,7 +33870,7 @@ int emit_method_tramp_fn(Compiler *c, Scope *tm, int shift, const char *fname,
   /* the class the call passes first, named before any default is spelled: a default of the method that reads
      its receiving class (`v = new`) spells the class this names (cmethod_cls_token) */
   Buf clsarg = {0};
-  const char *clslead = emit_cmethod_self_cls_arg(c, (int)(tm - c->scopes), self_cls, &clsarg);
+  const char *clslead = emit_cmethod_self_cls_arg(c, (int)(tm - c->scopes), self_cls, NULL, &clsarg);
   if (bind && tm->rest_idx >= 0) buf_puts(pb, "  SP_GC_SAVE();\n");
   buf_puts(pb, "  sp_BoundMethod *_m = (sp_BoundMethod *)cap; (void)_m; (void)argc; (void)args;\n");
   /* the block a `.call { }` or `.call(&b)` gave this call (_sp_proc_blk),
@@ -35041,7 +35045,7 @@ void emit_bound_method_call(Compiler *c, int id, int recv, int target, Buf *b) {
   const char *lead = "";
   if (boxed_self) { buf_printf(&args, "%s", selfp); lead = ", "; }
   else if (self_ful) { buf_printf(&args, "_t%d->self", tr); lead = ", "; }
-  else lead = emit_cmethod_self_cls_arg(c, target, method_node_recv_class(c, recv, tm->class_id), &args);
+  else lead = emit_cmethod_self_cls_arg(c, target, method_node_recv_class(c, recv, tm->class_id), NULL, &args);
   emit_args_filled(c, target, nt_ref(c->nt, id, "arguments"), lead, &args);
   g_arm_self = sv_arm_self; g_arm_scope = sv_arm_scope; g_arm_depth = sv_arm_depth;
   emit_method_call_block(c, id, tm, tm->nparams > 0 || args.len > 0, &args);

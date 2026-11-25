@@ -184,6 +184,7 @@ struct LoadRecord {
   char **names; int nnames, cnames;     /* the names the program defines methods by, sorted (lr_names_take) */
   LrSite *defs; int ndefs;              /* ...and its defs, sorted by name */
   LrSite *accs; int naccs;              /* ...and its attr forms' readers and writers (a writer's name with its =), sorted by name, at the form */
+  LrSite *als; int nals;                /* ...and its aliases of an old name the source spells, by the name they make, at the alias (lr_alias_old) */
   unsigned char callbacks;              /* lr_callbacks_define's memo: 1 + what they may do (LR_OPAQUE_*) */
   unsigned char evhooks;                /* lr_event_hooks' memo: 1 no, 2 yes */
   char **reopens; int nreopens, creopens;   /* the builtin classes and modules a header of the program reopens, sorted (lr_reopens_take) */
@@ -2402,12 +2403,23 @@ static int lr_send_names_nothing(const NodeTable *nt, int n, const int *av, int 
   }
   return 1;
 }
-/* Record the name lr_name just took as an attr form's reader or writer,
-   made at the form `node` */
-static void lr_acc(LoadRecord *r, int node) {
-  LrSite *d = realloc(r->accs, sizeof *r->accs * (size_t)(r->naccs + 1));
+/* Record the name lr_name just took as made at `node`, in sites v, n:
+   an attr form's reader or writer (accs), an alias (als) */
+static void lr_site(LoadRecord *r, LrSite **v, int *n, int node) {
+  LrSite *d = realloc(*v, sizeof **v * (size_t)(*n + 1));
   if (!d) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  (r->accs = d)[r->naccs++] = (LrSite){ r->names[r->nnames - 1], node };
+  (*v = d)[(*n)++] = (LrSite){ r->names[r->nnames - 1], node };
+}
+/* The old name of alias node n (`alias new old`, `alias_method :new,
+   :old`) when the source spells it, else NULL */
+static const char *lr_alias_old(const NodeTable *nt, int n) {
+  if (nt_kind(nt, n) == NK_AliasMethodNode) {
+    int on = nt_ref(nt, n, "old_name");
+    return on >= 0 ? vis_arg_name(nt, on) : NULL;
+  }
+  int an = nt_ref(nt, n, "arguments"), ac = 0;
+  const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
+  return ac == 2 && nt_ref(nt, n, "block") < 0 ? vis_arg_name(nt, av[1]) : NULL;
 }
 /* The names the program defines methods by, wherever it does (a statement
    of the load phase, a class the record does not know, a method body or a
@@ -2433,6 +2445,7 @@ static void lr_names_take(Compiler *c) {
     int nn = nt_ref(nt, n, "new_name");
     const char *nm = nn >= 0 ? vis_arg_name(nt, nn) : NULL;
     lr_name(r, nm, "");
+    if (nm && lr_alias_old(nt, n)) lr_site(r, &r->als, &r->nals, n);
     if (c->nautoloads) lr_auto_form(c, n, nm);
   }
   if (c->nautoloads) NT_FOREACH_KIND(nt, NK_UndefNode, n) {
@@ -2461,12 +2474,12 @@ static void lr_names_take(Compiler *c) {
         const char *a = vis_arg_name(nt, av[i]);
         if (is_attr_decl_reader(nm)) {
           lr_name(r, a, "");
-          if (a) lr_acc(r, n);
+          if (a) lr_site(r, &r->accs, &r->naccs, n);
           lr_auto_form(c, n, a);
         }
         if (is_attr_decl_writer(nm)) {
           lr_name(r, a, "=");
-          if (a) lr_acc(r, n);
+          if (a) lr_site(r, &r->accs, &r->naccs, n);
         }
       }
     else if (is_define_method_name(nm) || is_define_singleton_method_name(nm) || is_alias_method_name(nm)) {
@@ -2482,6 +2495,7 @@ static void lr_names_take(Compiler *c) {
         continue;
       }
       lr_name(r, dn, "");
+      if (dn && is_alias_method_name(nm) && lr_alias_old(nt, n)) lr_site(r, &r->als, &r->nals, n);
     }
     else if (c->nautoloads && (is_undef_method_name(nm) || is_remove_method_name(nm) ||
                              visibility_of_name(nm) || class_method_vis_of_name(nm)))
@@ -2498,6 +2512,7 @@ static void lr_names_take(Compiler *c) {
   if (r->nnames > 1) qsort(r->names, (size_t)r->nnames, sizeof *r->names, lr_name_cmp);
   if (r->ndefs > 1) qsort(r->defs, (size_t)r->ndefs, sizeof *r->defs, lr_name_cmp);   /* the name leads an LrSite */
   if (r->naccs > 1) qsort(r->accs, (size_t)r->naccs, sizeof *r->accs, lr_name_cmp);
+  if (r->nals > 1) qsort(r->als, (size_t)r->nals, sizeof *r->als, lr_name_cmp);
 }
 
 /* The entries of `name` in v, n of size sz sorted by the name that leads
@@ -4494,39 +4509,65 @@ static int lr_name_runs_stored_block(const char *name) {
 
 static int lr_callee_defines(Compiler *c, const char *name, int direct, int depth) {
   LoadRecord *r = c->lrec;
-  int nn = 0, nd = 0, na = 0, o = 0;
+  int o = 0;
   if (r->names_any) return LR_OPAQUE_DEFINES;
   /* (a method a computed define_method makes may be the call's) */
   if (r->nanon && (o = lr_anon_defines(c, direct, depth)) == LR_OPAQUE_DEFINES) return o;
-  lr_name_range(r->names, r->nnames, sizeof *r->names, name, &nn);
-  const LrSite *d = lr_name_range(r->defs, r->ndefs, sizeof *r->defs, name, &nd);
-  lr_name_range(r->accs, r->naccs, sizeof *r->accs, name, &na);
-  /* (a method made another way than by a def or an attr form, a
-     define_method's or an alias's, may run anything) */
-  if (nd + na < nn) return LR_OPAQUE_DEFINES;
-  /* (an attr form's reader reads an instance variable and calls nothing;
-     its writer writes one. Wherever the form is, and whether or not the
-     walk has reached it: a call before it runs another method of the name,
-     one the names hold too, or what the runtime calls back for a name
-     nothing answers (method_missing, lr_callbacks_define). An attr form
-     that runs a program's own method of its name makes no reader itself:
-     what that method makes, it makes by a form the names take as well.
-     But a builtin of the name may run a block the program stored, and a
-     receiver the record does not know may be one: such a name may define,
-     as it did before attr forms were read) */
-  if (na && lr_name_runs_stored_block(name)) return LR_OPAQUE_DEFINES;
-  if (na && name[strlen(name) - 1] == '=') o = lr_most(o, LR_OPAQUE_WRITES);
-  for (int i = 0; i < nd; i++) {
-    LoadPoint p = elab_point_of(c, d[i].node);
-    /* (a def the record holds as a body's version is followed: its body
-       says, lr_body_held; asked unkept first, as a no of a class the walk
-       has not reached yet would be kept) */
-    int tree = direct == LR_DEFINES_TREE,
-        held = !tree && !r->recorded && p.region < 0 && nt_kind(c->nt, d[i].node) == NK_DefNode && lr_body_holds(c, d[i].node) && lr_body_held(c, d[i].node);
-    if (!tree && !r->recorded && (p.region < 0 ? !held : p.seq >= r->frontier))
-      return LR_OPAQUE_DEFINES;
-    o = lr_most(o, lr_body_defines(c, d[i].node, direct, depth + 1));
-    if (o == LR_OPAQUE_DEFINES) return o;
+  /* The name, and the old name of each alias that makes one of them: an
+     alias copies the method the old name finds when it runs, so a call of
+     the new name may run a method of the old name's (a def's, an attr
+     form's, another alias's), or one of the name the program makes
+     otherwise, or a builtin of the name (below). One whose old name the
+     program does not make, or a core class's method has, may copy a
+     builtin method, which may run anything (`alias_method :s, :send`) */
+  const char *ns[32];
+  int nns = 0;
+  ns[nns++] = name;
+  for (int k = 0; k < nns; k++) {
+    const char *nm = ns[k];
+    int nn = 0, nd = 0, na = 0, nl = 0;
+    lr_name_range(r->names, r->nnames, sizeof *r->names, nm, &nn);
+    const LrSite *d = lr_name_range(r->defs, r->ndefs, sizeof *r->defs, nm, &nd);
+    const LrSite *al = lr_name_range(r->als, r->nals, sizeof *r->als, nm, &nl);
+    lr_name_range(r->accs, r->naccs, sizeof *r->accs, nm, &na);
+    if (k > 0 && (!nn || core_method_name_any(nm) || is_load_effect_call(nm))) return LR_OPAQUE_DEFINES;
+    /* (a method made another way than by a def, an attr form or an alias
+       of a name the source spells, a define_method's, may run anything) */
+    if (nd + na + nl < nn) return LR_OPAQUE_DEFINES;
+    /* (an attr form's reader reads an instance variable and calls nothing;
+       its writer writes one. Wherever the form is, and whether or not the
+       walk has reached it: a call before it runs another method of the
+       name, one the names hold too, or what the runtime calls back for a
+       name nothing answers (method_missing, lr_callbacks_define). An attr
+       form that runs a program's own method of its name makes no reader
+       itself: what that method makes, it makes by a form the names take as
+       well. But a builtin of the called name may run a block the program
+       stored, and a receiver the record does not know may be one: such a
+       name made by an attr form or an alias may define, as it did before
+       those were read. The closure grows from the called name by its
+       aliases only, so the first round asks it) */
+    if (k == 0 && (na || nl) && lr_name_runs_stored_block(name)) return LR_OPAQUE_DEFINES;
+    if (na && nm[strlen(nm) - 1] == '=') o = lr_most(o, LR_OPAQUE_WRITES);
+    for (int i = 0; i < nl; i++) {
+      const char *old = lr_alias_old(c->nt, al[i].node);
+      int seen = 0;
+      for (int q = 0; q < nns && !seen; q++) seen = sp_streq(ns[q], old);
+      if (seen) continue;
+      if (nns == (int)(sizeof ns / sizeof *ns)) return LR_OPAQUE_DEFINES;
+      ns[nns++] = old;
+    }
+    for (int i = 0; i < nd; i++) {
+      LoadPoint p = elab_point_of(c, d[i].node);
+      /* (a def the record holds as a body's version is followed: its body
+         says, lr_body_held; asked unkept first, as a no of a class the walk
+         has not reached yet would be kept) */
+      int tree = direct == LR_DEFINES_TREE,
+          held = !tree && !r->recorded && p.region < 0 && nt_kind(c->nt, d[i].node) == NK_DefNode && lr_body_holds(c, d[i].node) && lr_body_held(c, d[i].node);
+      if (!tree && !r->recorded && (p.region < 0 ? !held : p.seq >= r->frontier))
+        return LR_OPAQUE_DEFINES;
+      o = lr_most(o, lr_body_defines(c, d[i].node, direct, depth + 1));
+      if (o == LR_OPAQUE_DEFINES) return o;
+    }
   }
   return o;
 }

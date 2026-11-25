@@ -470,6 +470,24 @@ spinel: 1 refusal, nothing written
 == test/reject/class_eval_text_hook_param.rb [promote] rc=1
 spinel: test/reject/class_eval_text_hook_param.rb:7: unsupported call: node N (CallNode `class_eval`) recv=-/ty-1 argc=1 arg0ty6
 spinel: 1 refusal, nothing written
+== test/reject/class_macro_after_alias_name_a_builtin_runs_a_stored_block.rb [default] rc=1
+spinel: test/reject/class_macro_after_alias_name_a_builtin_runs_a_stored_block.rb:6: Module#define_method with a non-literal name is not supported; use a literal Symbol or String (see docs/limitations.md)
+spinel: 1 refusal, nothing written
+== test/reject/class_macro_after_alias_name_a_builtin_runs_a_stored_block.rb [promote] rc=1
+spinel: test/reject/class_macro_after_alias_name_a_builtin_runs_a_stored_block.rb:6: Module#define_method with a non-literal name is not supported; use a literal Symbol or String (see docs/limitations.md)
+spinel: 1 refusal, nothing written
+== test/reject/class_macro_after_alias_of_a_builtin_call.rb [default] rc=1
+spinel: test/reject/class_macro_after_alias_of_a_builtin_call.rb:4: Module#define_method with a non-literal name is not supported; use a literal Symbol or String (see docs/limitations.md)
+spinel: 1 refusal, nothing written
+== test/reject/class_macro_after_alias_of_a_builtin_call.rb [promote] rc=1
+spinel: test/reject/class_macro_after_alias_of_a_builtin_call.rb:4: Module#define_method with a non-literal name is not supported; use a literal Symbol or String (see docs/limitations.md)
+spinel: 1 refusal, nothing written
+== test/reject/class_macro_after_alias_of_a_defining_method.rb [default] rc=1
+spinel: test/reject/class_macro_after_alias_of_a_defining_method.rb:4: Module#define_method with a non-literal name is not supported; use a literal Symbol or String (see docs/limitations.md)
+spinel: 1 refusal, nothing written
+== test/reject/class_macro_after_alias_of_a_defining_method.rb [promote] rc=1
+spinel: test/reject/class_macro_after_alias_of_a_defining_method.rb:4: Module#define_method with a non-literal name is not supported; use a literal Symbol or String (see docs/limitations.md)
+spinel: 1 refusal, nothing written
 == test/reject/class_macro_after_attr_name_a_builtin_runs_a_stored_block.rb [default] rc=1
 spinel: test/reject/class_macro_after_attr_name_a_builtin_runs_a_stored_block.rb:7: Module#define_method with a non-literal name is not supported; use a literal Symbol or String (see docs/limitations.md)
 spinel: test/reject/class_macro_after_attr_name_a_builtin_runs_a_stored_block.rb:13: Module#define_method with a non-literal name is not supported; use a literal Symbol or String (see docs/limitations.md)

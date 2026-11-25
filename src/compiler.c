@@ -2635,6 +2635,15 @@ int comp_poly_arm_reader_any(Compiler *c, const char *name, int argc) {
   return 0;
 }
 
+/* Is there a class whose hash is a reader rather than a def? */
+int comp_has_hash_reader(Compiler *c) {
+  int n;
+  const int *owners = comp_name_reader_owners(c, "hash", &n);
+  for (int i = 0; i < n; i++)
+    if (comp_name_responder(c, owners[i], "hash", 0) < 0) return 1;
+  return 0;
+}
+
 /* See compiler.h. Kept as comp_name_reader_any's answers are, under the same
    stamps, in a table of its own: the names, each one's list and count. */
 static char **rdo_name; static int **rdo_list; static int *rdo_n; static int rdo_cap, rdo_cnt;

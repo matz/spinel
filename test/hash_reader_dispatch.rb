@@ -16,3 +16,12 @@ p [Key.new(3), :s, 2.5].map { |x| x.hash == (x.is_a?(Key) ? 6 : x.hash) }
 p [Node.new(nil), 4].map(&:hash).first
 p Node.new(9).hash
 p 5.hash == 5.hash
+
+class Registry
+  attr_reader :hash
+  def initialize = @hash = {}
+end
+modules = {}
+entry = modules[:host] ||= Registry.new
+entry.hash[:f] = 42
+p entry.hash[:f]

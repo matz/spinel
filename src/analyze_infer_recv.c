@@ -1825,16 +1825,13 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
     *out = TY_STRING;
     return 1;
   }
-  /* #hash on a boxed receiver is always the Integer sp_rbval_hash_key
-     answers -- a user #hash in the program is reached through
-     sp_obj_hash_hook inside it and its answer is folded to the key -- so the
-     static type is int whatever a user #hash of the program returns. Left to
-     the user-method union it was the union's poly (every int is poly under
-     --int-overflow=promote), and `h ^= x.hash` handed an sp_int to
-     sp_poly_bitop's sp_RbVal parameter: `require "set"` did not build there,
-     since Set#hash is exactly that loop (#4728). */
-  if (recv >= 0 && rt == TY_POLY && argc == 0 && sp_streq(name, "hash"))
-    { *out = TY_INT; return 1; }
+  /* A direct send can select a hash reader whose value is not an Integer.
+     Keep that result boxed across the dispatch. Without a reader the
+     emitter uses the integer key hash, including in promote mode (#4728). */
+  if (recv >= 0 && rt == TY_POLY && argc == 0 && sp_streq(name, "hash")) {
+    *out = comp_has_hash_reader(c) ? TY_POLY : TY_INT;
+    return 1;
+  }
   if (recv >= 0 && rt == TY_POLY && argc == 0) {
     const BuiltinOp *op = bop_find(BOP_BOXED_FALLBACK, name, argc, nt_ref(nt, id, "block") >= 0);
     if (op && op->result == TY_STRBUF && !an_user_defines_or_reads(c, name)) {

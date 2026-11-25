@@ -12326,6 +12326,9 @@ typedef struct PivsFacts {
   int hash_mode;            /* the query's: 0 classes, 1 Hash origins, 2 callables */
   int init_args;            /* the query follows an initialize parameter through the arguments
                                of the `K.new` calls that reach it (presence and Hash origin queries) */
+  int init_walk;            /* a Hash origins query is inside such a walk (pivs_unfollowed) */
+  int *init_done_q, ninit_done;   /* per scope: the query that walked it through a bare super, */
+  const char **init_done_pn;      /* and the parameter (pivs_param) */
   int stores_settled, stores_held, stores_widened;
   const NodeTable *ix_nt;
   unsigned ix_ver;
@@ -12360,6 +12363,7 @@ void pivs_facts_free(Compiler *c) {
   if (!f) return;
   for (int i = 0; i < f->nmemo; i++) { free(f->memo[i].set); free(f->memo[i].cls); free(f->memo[i].hash); free(f->memo[i].cvals); }
   free(f->memo); free(f->memo_at); free(f->seen);
+  free(f->init_done_q); free(f->init_done_pn);
   pivs_ix_clear(f);
   pivs_rv_clear(f);
   free(f);
@@ -12508,6 +12512,12 @@ static int pivs_elems(Compiler *c, int arr, char *set, int depth);
 static void pivs_note_builtin(Compiler *c) {
   if (c->pivs->active >= 0) c->pivs->memo[c->pivs->active].builtin = 1;
 }
+/* Inside the walk of an initialize parameter, a Hash origins query walks
+   on past a branch it cannot follow: the store widens the Hashes found on
+   the other branches (infer_hash_aset_call). */
+static int pivs_unfollowed(Compiler *c) {
+  return c->pivs->hash_mode == 1 && c->pivs->init_walk;
+}
 /* A constant naming a class or module, or a self that is one, read as a
    value: the class query records it beside its instance set
    (poly_recv_class_values) and walks on, though the instance set's own
@@ -12601,6 +12611,15 @@ static int pivs_local_writes_ok(Compiler *c, int si, const char *vn) {
     if (nt_int(nt, w, "depth", 0) > 0 && sp_streq(nt_str(nt, w, "name"), vn)) return 0;
   return 1;
 }
+/* A Hash origins query's walk of each argument of a call it cannot map to
+   a parameter: a splat's elements, any other argument's value. */
+static void pivs_each_arg(Compiler *c, const int *av, int ac, char *set, int depth) {
+  for (int k = 0; k < ac; k++) {
+    NodeKind ak = nt_kind(c->nt, av[k]);
+    if (ak == NK_SplatNode) pivs_elems(c, nt_ref(c->nt, av[k], "expression"), set, depth + 1);
+    else if (ak != NK_BlockArgumentNode) pivs_value(c, av[k], set, depth + 1);
+  }
+}
 /* Positional parameter `pn` of method scope `s` (a required one or an
    optional one ahead of any rest), rebound nowhere: the argument each call
    of the method's name passes there, or its default. A Symbol of the name
@@ -12627,12 +12646,18 @@ static int pivs_param(Compiler *c, Scope *s, const char *pn, char *set, int dept
   int init = pn && c->pivs->init_args && is_initialize_name(mn) && !s->is_cmethod && s->class_id >= 0 &&
              !class_is_exc_subclass(c, s->class_id);
   if (!init) for (int k = 0; PROTO[k]; k++) if (sp_streq(mn, PROTO[k])) return 0;
+  if (init && c->pivs->hash_mode == 1 && !c->pivs->init_walk) {
+    c->pivs->init_walk = 1;
+    int ok = pivs_param(c, s, pn, set, depth);
+    c->pivs->init_walk = 0;
+    return ok;
+  }
   if (!(isalpha((unsigned char)mn[0]) || mn[0] == '_')) return 0;
   for (const char *q = mn; *q; q++)
     if (!(isalnum((unsigned char)*q) || *q == '_' || ((*q == '?' || *q == '!' || (!pn && *q == '=')) && !q[1]))) return 0;
   /* the call sites below omit a `super` from an override of this method
      (for an initialize, an override in a subclass or a module) */
-  for (int u = pivs_ix_first(c, PX_SUPER, mn); u >= 0; u = c->pivs->next[u]) {
+  if (!pivs_unfollowed(c)) for (int u = pivs_ix_first(c, PX_SUPER, mn); u >= 0; u = c->pivs->next[u]) {
     Scope *us = comp_scope_of(c, u);
     if (!us || !us->name || !sp_streq(us->name, mn)) continue;
     if (!init || us->class_id < 0 || comp_class_is_module(c, &c->classes[us->class_id])) return 0;
@@ -12662,26 +12687,80 @@ static int pivs_param(Compiler *c, Scope *s, const char *pn, char *set, int dept
     for (int w = comp_lvw_first_sc(c, si, pn); w >= 0; w = comp_lvw_next_sc(c, w))
       if (c->nscope[w] == si && sp_streq(nt_str(nt, w, "name"), pn)) return 0;
   }
-  for (int y = pivs_ix_first(c, PX_SYMBOL, mn); y >= 0; y = c->pivs->next[y])
+  /* A Hash origins query also takes what a `super` in the initialize of a
+     subclass or a module passes at the position, or for a bare `super` what
+     that initialize's own parameter there takes. */
+  if (init && pn && pivs_unfollowed(c)) {
+    static const Scope *open[32];
+    static int nopen;
+    PivsFacts *f = c->pivs;
+    if (f->ninit_done < c->nscopes) {
+      f->init_done_q = realloc(f->init_done_q, sizeof *f->init_done_q * (size_t)c->nscopes);
+      f->init_done_pn = realloc(f->init_done_pn, sizeof *f->init_done_pn * (size_t)c->nscopes);
+      if (!f->init_done_q || !f->init_done_pn) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      for (int k = f->ninit_done; k < c->nscopes; k++) f->init_done_q[k] = -1;
+      f->ninit_done = c->nscopes;
+    }
+    int skip = nopen == 32;
+    for (int k = 0; k < nopen && !skip; k++) skip = open[k] == s;
+    if (skip) return 1;
+    open[nopen++] = s;
+    for (int u = pivs_ix_first(c, PX_SUPER, mn); u >= 0; u = c->pivs->next[u]) {
+      Scope *us = comp_scope_of(c, u);
+      if (!us || !us->name || !sp_streq(us->name, mn) || us->class_id < 0 || us->def_node == s->def_node) continue;
+      if (!comp_class_is_module(c, &c->classes[us->class_id]) && !is_descendant(c, us->class_id, s->class_id) &&
+          !cplan_caller_includes_module(c, us->class_id, s->class_id)) continue;
+      if (nt_kind(nt, u) == NK_SuperNode) {
+        int a = nt_ref(nt, u, "arguments"), ac = 0;
+        const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
+        int splat = 0;
+        for (int k = 0; k < ac && k <= i; k++) splat |= nt_kind(nt, av[k]) == NK_SplatNode;
+        if (splat) pivs_each_arg(c, av, ac, set, depth);
+        else if (i < ac || dflt >= 0) pivs_value(c, i < ac ? av[i] : dflt, set, depth + 1);
+        continue;
+      }
+      int ps = nt_ref(nt, us->def_node, "parameters"), rn = 0, on = 0;
+      const int *rq = ps >= 0 ? nt_arr(nt, ps, "requireds", &rn) : NULL;
+      const int *op = ps >= 0 ? nt_arr(nt, ps, "optionals", &on) : NULL;
+      int at = i < rn ? rq[i] : i - rn < on ? op[i - rn] : -1;
+      const char *an = at >= 0 ? nt_str(nt, at, "name") : NULL;
+      /* (each initialize once per query: modules passing on to each other) */
+      int ui = (int)(us - c->scopes);
+      if (!an || (f->init_done_q[ui] == f->query && f->init_done_pn[ui] == an)) continue;
+      pivs_param(c, us, an, set, depth + 1);
+      f->init_done_q[ui] = f->query; f->init_done_pn[ui] = an;
+    }
+    nopen--;
+  }
+  if (!pivs_unfollowed(c)) for (int y = pivs_ix_first(c, PX_SYMBOL, mn); y >= 0; y = c->pivs->next[y])
     if (sp_streq(nt_str(nt, y, nt_kind(nt, y) == NK_SymbolNode ? "value" : "content"), mn)) return 0;
   /* ... nor can a `new` be reached by its name */
-  if (init) for (int y = pivs_ix_first(c, PX_SYMBOL, "new"); y >= 0; y = c->pivs->next[y])
+  if (init && !pivs_unfollowed(c)) for (int y = pivs_ix_first(c, PX_SYMBOL, "new"); y >= 0; y = c->pivs->next[y])
     if (sp_streq(nt_str(nt, y, nt_kind(nt, y) == NK_SymbolNode ? "value" : "content"), "new")) return 0;
   int ncalls = 0;
   for (int u = an_calls_named_first(c, init ? "new" : mn); u >= 0; u = an_calls_named_next(u)) {
     if (nt_kind(nt, u) != NK_CallNode || !sp_streq(nt_str(nt, u, "name"), init ? "new" : mn)) continue;
+    int loose = 0;
     if (init) {
       /* the class a constant receiver names: a call of another class's
          initialize is none of ours; a receiver that is no constant (a
          variable, an implicit self) or a `new` of the program's own cannot
-         be followed */
-      int r = nt_ref(nt, u, "receiver");
-      if (r < 0 || (nt_kind(nt, r) != NK_ConstantReadNode && nt_kind(nt, r) != NK_ConstantPathNode)) return 0;
-      const char *rn = nt_str(nt, r, "name");
-      int rc = rn ? const_node_class_index(c, r) : -1;
-      if (rc < 0) { if (rn && is_builtin_class_name(rn)) continue; return 0; }
-      if (cplan_user_new(c, u, rc) >= 0) return 0;
-      if (cplan_hook_target(c, u, rc, "initialize", NULL) != (int)(s - c->scopes)) continue;
+         be followed, and a Hash origins query takes its arguments */
+      int r = nt_ref(nt, u, "receiver"), rc = -1;
+      if (r >= 0 && (nt_kind(nt, r) == NK_ConstantReadNode || nt_kind(nt, r) == NK_ConstantPathNode)) {
+        const char *rn = nt_str(nt, r, "name");
+        rc = rn ? const_node_class_index(c, r) : -1;
+        if (rc < 0 && rn && is_builtin_class_name(rn)) continue;
+      }
+      if (rc < 0 || cplan_user_new(c, u, rc) >= 0) {
+        if (!pivs_unfollowed(c)) return 0;
+        loose = 1;
+      }
+      else {
+        /* (a Hash origins query takes a class's copy of a module's initialize) */
+        int t = cplan_hook_target(c, u, rc, "initialize", NULL);
+        if (t != (int)(s - c->scopes) && !(pivs_unfollowed(c) && t >= 0 && c->scopes[t].def_node == s->def_node)) continue;
+      }
     }
     if (!pn) {
       int r = nt_ref(nt, u, "receiver");
@@ -12694,17 +12773,23 @@ static int pivs_param(Compiler *c, Scope *s, const char *pn, char *set, int dept
     }
     int a = nt_ref(nt, u, "arguments"), ac = 0;
     const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
-    for (int k = 0; k < ac && k <= i; k++) {
+    int shape = !loose;
+    for (int k = 0; k < ac && k <= i && shape; k++) {
       NodeKind ak = nt_kind(nt, av[k]);
-      if (ak == NK_SplatNode || ak == NK_BlockArgumentNode) return 0;
-      if (ak == NK_KeywordHashNode && !(kwpos && k == i && !nt_hash_has_splat(nt, av[k]))) return 0;
+      if (ak == NK_SplatNode || ak == NK_BlockArgumentNode) shape = 0;
+      if (ak == NK_KeywordHashNode && !(kwpos && k == i && !nt_hash_has_splat(nt, av[k]))) shape = 0;
+    }
+    if (!shape) {
+      if (!pivs_unfollowed(c)) return 0;
+      pivs_each_arg(c, av, ac, set, depth);
+      continue;
     }
     int x = i < ac ? av[i] : dflt;
     if (x < 0) continue;   /* too few: ArgumentError, no value */
     if (!pivs_value(c, x, set, depth + 1)) return 0;
     ncalls++;
   }
-  return !pn || ncalls > 0;
+  return !pn || ncalls > 0 || pivs_unfollowed(c);
 }
 /* A proc parameter follows arguments only while all its calls are in sight. */
 static int pivs_proc_param(Compiler *c, int lit, const char *pn, char *set, int depth, int elems) {
@@ -13000,7 +13085,7 @@ typedef struct {
 static int pivs_arm(const VpLeaf *leaf, void *ud) {
   PivsArms *a = ud;
   int (*f)(Compiler *, int, char *, int) = a->elems ? pivs_elems : pivs_value;
-  if (leaf->kind != VPK_GAVE_UP && f(a->c, leaf->node, a->set, a->depth + 1)) return 0;
+  if (leaf->kind != VPK_GAVE_UP ? f(a->c, leaf->node, a->set, a->depth + 1) : pivs_unfollowed(a->c)) return 0;
   a->ok = 0;
   return 1;
 }
@@ -13073,7 +13158,7 @@ static int pivs_visit(Compiler *c, int v, char *set, int depth, int elems) {
     if (!elems) pivs_note_builtin(c);
     return !elems;
   }
-  if (depth > 32) return 0;
+  if (depth > 32) return pivs_unfollowed(c);
   PivsFacts *f = c->pivs;
   int key = v, slot = elems;
   if (nt_kind(c->nt, v) == NK_LocalVariableReadNode) {
@@ -13094,8 +13179,10 @@ static int pivs_visit(Compiler *c, int v, char *set, int depth, int elems) {
   uint64_t bit = UINT64_C(1) << depth;
   if (f->seen[key].done[slot] & bit) return 1;
   int ok = elems ? pivs_elems_uncached(c, v, set, depth) : pivs_value_uncached(c, v, set, depth);
+  /* (a failure the initialize walk walks past is not done: a walk outside
+     it visits the node again) */
   if (ok) f->seen[key].done[slot] |= bit;
-  return ok;
+  return ok || pivs_unfollowed(c);
 }
 static int pivs_value(Compiler *c, int v, char *set, int depth) {
   return pivs_visit(c, v, set, depth, 0);
@@ -13265,6 +13352,7 @@ static PivsFacts *pivs_ready(Compiler *c) {
     for (int i = 0; i < f->nmemo; i++) { free(f->memo[i].set); free(f->memo[i].cls); free(f->memo[i].hash); free(f->memo[i].cvals); }
     free(f->memo_at); free(f->seen);
     f->nmemo = f->query = 0; f->memo_n = c->nclasses; f->memo_count = c->nt->count;
+    f->ninit_done = 0;
     f->memo_ver = c->nt->version;
     f->memo_rb = c->ie_map.rb_ver;
     f->memo_at = calloc((size_t)(f->memo_count > 0 ? f->memo_count : 1) * 3, sizeof *f->memo_at);

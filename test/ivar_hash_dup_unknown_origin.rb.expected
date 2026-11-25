@@ -1,0 +1,6 @@
+"command"
+{"note" => "command", "from-old-session" => 2}
+{"note" => "joined", "ack-nonce" => 8}
+{"pong-nonce" => 3, "ack-nonce" => 8}
+{"note" => "left", "ack-nonce" => 9}
+{"pong-nonce" => 4, "ack-nonce" => 9}

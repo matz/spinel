@@ -16,7 +16,7 @@ end
 
 class W
   attr_accessor :s, :cur
-  def initialize; @s = 0; @cur = 0; end
+  def initialize; @s = 0; @cur = -1; end
 
   # a while in a while
   def lens(words, reps)
@@ -141,9 +141,10 @@ class W
     reps.times { j = -1; ("x" * N).each_char { |_ch| j += 1; @cur = j; @s += big.length }; @cur = -1 }
   end
 
-  # a Hash's map
-  def hash_map_lens(words, reps)
-    h = (@h ||= words.each_with_index.to_h { |w, i| [i, w] })
+  # a Hash's map (the Hash built once, before any case: under GC stress
+  # its build outlasts the trap's delay)
+  def hash_map_lens(_words, reps)
+    h = $hw
     reps.times { j = -1; @s += h.map { |_k, w| j += 1; @cur = j; w.length }.size; @cur = -1 }
   end
 
@@ -174,6 +175,7 @@ def lands_inside(m, arg)
   false
 end
 
+$hw = words.each_with_index.to_h { |w, i| [i, w] }
 %i[lens counts boxed each_lens yield_lens two_level call_lens map_lens sum_lens select_lens
    inject_lens sort_by_lens next_map chars_lens hash_map_lens top_map].each do |m|
   p [m, lands_inside(m, words)]

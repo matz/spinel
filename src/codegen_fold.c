@@ -4224,6 +4224,24 @@ int emit_reduce_block_expr(Compiler *c, int id, Buf *b) {
                ? one_elem_decl_type(k, et) : et;
   if (rlv1) { one_elem_bind_slot(rlv1, et1); lv_set_storage_type(rlv1, et1); }
   for (int j = 0; j < bn; j++) infer_subtree(c, bb[j]);  /* refresh ntype cache */
+  /* The element a step binds is a shadow of its own, not the function's
+     rooted local, and the block may take it out of the array (`a.clear`)
+     and then allocate, or a poll at the step's head (emit_step_polls) run
+     a trap that does: each element passes through one temp rooted for the
+     whole fold, so a step pays a store, not a root of its own. */
+  TyKind eroot = TY_UNKNOWN;
+  if (p1_multi) eroot = TY_POLY;
+  else if (!p1 || range || (rlv1 && oint_kind(et) && slot_is_oint(rlv1))) { }
+  else eroot = nested ? et : one_elem_decl_type(k, et);
+  int tel = -1;
+  if (eroot != TY_UNKNOWN && ty_gc_rootable(c, eroot)) {
+    tel = ++g_tmp;
+    emit_ctype(c, eroot, b);
+    buf_printf(b, " _t%d = %s; ", tel, eroot == TY_POLY ? "sp_box_nil()" : "NULL");
+    emit_gc_root_tmp(c, eroot, tel, b); buf_puts(b, " ");
+  }
+  char elh[24] = "";
+  if (tel >= 0) snprintf(elh, sizeof elh, "_t%d = ", tel);
   if (range) {
     int ts = ++g_tmp, te = ++g_tmp;
     buf_printf(b, "sp_int _t%d = sp_range_step(_t%d); sp_int _t%d = _t%d.last - (_t%d.excl ? (_t%d > 0 ? 1 : -1) : 0); ",
@@ -4242,7 +4260,7 @@ int emit_reduce_block_expr(Compiler *c, int id, Buf *b) {
   else if (p0) { emit_ctype(c, acc_ty, b); buf_printf(b, " lv_%s = _t%d; ", p0, tacc); }
   if (p1_multi) {
     int te2 = ++g_tmp;
-    buf_printf(b, "sp_RbVal _t%d = sp_PolyArray_get(_t%d, _t%d); ", te2, ta, ti);
+    buf_printf(b, "sp_RbVal _t%d = (%ssp_PolyArray_get(_t%d, _t%d)); ", te2, elh, ta, ti);
     int lc2 = block_param_multi_count(c, block, 1);
     for (int li = 0; li < lc2; li++) {
       const char *ln = block_param_multi_leaf(c, block, 1, li);
@@ -4253,10 +4271,10 @@ int emit_reduce_block_expr(Compiler *c, int id, Buf *b) {
   }
   else if (!p1) { }
   else if (range) buf_printf(b, "sp_int lv_%s = _t%d; ", p1, ti);
-  else if (nested) { emit_ctype(c, et, b); buf_printf(b, " lv_%s = (sp_IntArray *)sp_PolyArray_get(_t%d, _t%d).v.p; ", p1, ta, ti); }
+  else if (nested) { emit_ctype(c, et, b); buf_printf(b, " lv_%s = (%s(sp_IntArray *)sp_PolyArray_get(_t%d, _t%d).v.p); ", p1, elh, ta, ti); }
   else if (rlv1 && oint_kind(et) && slot_is_oint(rlv1))
     buf_printf(b, "%s lv_%s = sp_%sArray_oget(_t%d, _t%d); ", oint_ctype(et), p1, k, ta, ti);
-  else { emit_ctype(c, one_elem_decl_type(k, et), b); buf_printf(b, " lv_%s = sp_%sArray_get%s(_t%d, _t%d); ", p1, k, typed_elem_store_sfx(rt), ta, ti); }
+  else { emit_ctype(c, one_elem_decl_type(k, et), b); buf_printf(b, " lv_%s = (%ssp_%sArray_get%s(_t%d, _t%d)); ", p1, elh, k, typed_elem_store_sfx(rt), ta, ti); }
   /* `next v` inside a fold block sets the accumulator and moves on, so point
      the next-value channel at the accumulator temp for this body (#3356). The
      for above is a real C loop, so the depth must say so or a `next` at the

@@ -4950,7 +4950,7 @@ static int emit_lazy_pipeline_expr_1(Compiler *c, int id, Buf *b) {
       emit_boxed_item_binds(c, blk, vbuf, g_indent + 2);
       int dwb = nt_ref(nt, blk, "body");
       int dwn = 0; const int *dwv = dwb >= 0 ? nt_arr(nt, dwb, "body", &dwn) : NULL;
-      for (int k = 0; k < dwn - 1; k++) emit_stmt(c, dwv[k], g_pre, g_indent + 2);
+      emit_iter_step_lead(c, dwb, dwn - 1, g_pre, g_indent + 2);
       if (dwn >= 1) {
         Buf cb; memset(&cb, 0, sizeof cb);
         int svind = g_indent; g_indent += 2; emit_cond(c, dwv[dwn - 1], &cb); g_indent = svind;

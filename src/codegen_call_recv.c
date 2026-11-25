@@ -2031,10 +2031,15 @@ static int emit_poly_array_call(Compiler *c, int id, Buf *b, const NodeTable *nt
       buf_printf(g_pre, "sp_PolyArray *_t%d = %s; SP_GC_ROOT(_t%d);\n", trecv, rb.p ? rb.p : "NULL", trecv); free(rb.p);
       emit_indent(g_pre, g_indent);
       buf_printf(g_pre, "sp_%sHash *_t%d = sp_%sHash_new(); SP_GC_ROOT(_t%d);\n", hn, th, hn, th);
+      /* (the element's shadow is no rooted local of the function's: each
+         element passes through one temp rooted for the whole walk, as the
+         block or a trap its step's poll runs may take it out of the array) */
+      int tel = bp ? ++g_tmp : -1;
+      if (bp) { emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_RbVal _t%d = sp_box_nil(); SP_GC_ROOT_RBVAL(_t%d);\n", tel, tel); }
       emit_indent(g_pre, g_indent);
       buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < sp_PolyArray_length(_t%d); _t%d++) {\n",
                  ti, ti, trecv, ti);
-      if (bp) { emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "sp_RbVal lv_%s = sp_PolyArray_get(_t%d, _t%d);\n", bp, trecv, ti); }
+      if (bp) { emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "sp_RbVal lv_%s = (_t%d = sp_PolyArray_get(_t%d, _t%d));\n", bp, tel, trecv, ti); }
       emit_iter_step_lead(c, body, bn - 1, g_pre, g_indent + 1);
       int sv = g_indent; g_indent++;
       Buf kb; memset(&kb, 0, sizeof kb);
@@ -9442,14 +9447,18 @@ static int str_arms_pattern(Compiler *c, int id, Buf *b, const NodeTable *nt, co
     int tr = ++g_tmp, tm = ++g_tmp, ti = ++g_tmp, tpat = -1, trx = -1;
     emit_indent(g_pre, g_indent);
     buf_printf(g_pre, "const char *_t%d = %s;\n", tr, r);
-    if (runtime_cap) {
-      emit_indent(g_pre, g_indent);
-      buf_printf(g_pre, "SP_GC_ROOT_STR(_t%d);\n", tr);
-    }
     /* (one representation: the subject is one String the block can change:
        each turn searches it as it is then and sets $~ to that turn's match,
        and a turn that changed its length raises, as rb_str_scan does) */
     int live = re_idx >= 0;
+    /* The precomputed walks answer the subject after the block has run, and
+       the subject may be a temporary nothing else holds (`(s * n).scan("a")
+       { ... }`): it is rooted across every turn, whose allocations and polls
+       may collect. The live walk roots its handle below. */
+    if (!live) {
+      emit_indent(g_pre, g_indent);
+      buf_printf(g_pre, "SP_GC_ROOT_STR(_t%d);\n", tr);
+    }
     emit_indent(g_pre, g_indent);
     if (live) {
       int th = ++g_tmp, tit = ++g_tmp;
@@ -9524,12 +9533,11 @@ static int str_arms_pattern(Compiler *c, int id, Buf *b, const NodeTable *nt, co
     }
     /* the rows are pre-computed, so the match registers hold the last
        match; walk the subject again per iteration when the body reads $~
-       or a capture global (#3601). The walk reads the subject after the
-       body has run, so it is rooted. */
+       or a capture global (#3601), the subject rooted above */
     int sc_pos = (!live && (re_idx >= 0 || tpat >= 0 || trx >= 0) && subtree_reads_match_globals(c, body)) ? ++g_tmp : -1;
     if (sc_pos >= 0) {
       emit_indent(g_pre, g_indent);
-      buf_printf(g_pre, "sp_int _t%d = 0; SP_GC_ROOT_STR(_t%d);\n", sc_pos, tr);
+      buf_printf(g_pre, "sp_int _t%d = 0;\n", sc_pos);
       /* (one representation: the walk sets $~ every turn, which keeps its
          target: the subject is kept once here, not copied per match) */
       emit_indent(g_pre, g_indent); buf_printf(g_pre, "_t%d = sp_str_keep(_t%d);\n", tr, tr);
@@ -16807,7 +16815,7 @@ static int emit_poly_call0_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
           }
         }
         int svind = g_indent; g_indent++;
-        for (int j = 0; j < cbn - 1; j++) emit_stmt(c, cbb[j], g_pre, g_indent);
+        emit_iter_step_lead(c, cbody, cbn - 1, g_pre, g_indent);
         /* Render the condition into its own buffer first: anything it has to
            hoist (a rooted argument temp) is a STATEMENT, and appending it to
            g_pre after "if (" was written put the declaration in the middle of
@@ -17187,7 +17195,7 @@ static int emit_poly_call0_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
                typed_elem_store_sfx(TY_STR_ARRAY), ta, ti);
       emit_str_elem_param(c, eblk, ebp, ebpn, element, b);
     }
-    for (int k2 = 0; k2 < ebn; k2++) emit_stmt(c, ebb[k2], b, 0);
+    emit_iter_step_lead(c, ebody, ebn, b, 0);
     buf_printf(b, " } _t%d; })", ts);
     { *out = 1; return 1; }
   }
@@ -17214,7 +17222,7 @@ static int emit_poly_call0_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
       else
         buf_printf(b, " sp_int lv_%s = sp_IntArray_get(_t%d, _t%d);", ebpn, ta, ti);
     }
-    for (int k2 = 0; k2 < ebn; k2++) emit_stmt(c, ebb[k2], b, 0);
+    emit_iter_step_lead(c, ebody, ebn, b, 0);
     buf_printf(b, " } _t%d; })", ts);
     { *out = 1; return 1; }
   }
@@ -18936,7 +18944,7 @@ static int emit_poly_scan_block(Compiler *c, int id, Buf *b, const NodeTable *nt
       else
         buf_printf(b, " const char *lv_%s = SP_STR_B(%s);", sp0r, sm);
     }
-    for (int k2 = 0; k2 < sbn; k2++) emit_stmt(c, sbb[k2], b, 0);
+    emit_iter_step_lead(c, sbody, sbn, b, 0);
     buf_printf(b, " } _t%d; })", ts);
     return 1;
   }

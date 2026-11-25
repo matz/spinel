@@ -19,8 +19,10 @@ ws = Array.new(300) { |i| "é" * (20 + i % 5) }
 xs = Array.new(2000) { |i| i % 300 }
 
 $stop = false
+$started = false
 churn = Thread.new do
-  junk = 0
+  junk = Array.new(64) { |k| "s#{k}" }.size
+  $started = true   # (so a walk that ends first cannot stop it before it allocates)
   until $stop
     junk += Array.new(64) { |k| "s#{k}" }.size
     Thread.pass
@@ -32,5 +34,6 @@ work = Thread.new do
   [nested_walk(xs, ws, 20), slow_map(ws).sum, tight_map(ws).sum]
 end
 p work.value
+Thread.pass until $started
 $stop = true
 p churn.value

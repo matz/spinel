@@ -65,9 +65,9 @@ is a user guarantee.
   `each_char`, ...) runs in the iterator's own loop, which takes no poll:
   the iterator yields when it returns, as a runtime call over the array
   does. A pass that reads what a String holds (its `length`, a `count`, an
-  `include?`, a comparison, a case conversion, ...), whose time grows with
-  the String, polls at each pass instead, in such a step and in a nested
-  loop alike, so a walk over long Strings yields within one pass.
+  `include?`, a case conversion, ...), whose time grows with the String,
+  polls at each pass instead, in such a step and in a nested loop alike,
+  so a walk over long Strings yields within one pass.
   The preemption signal is `SIGURG`, overridable with
   `SPINEL_PREEMPT_SIGNAL`.
 - **The single-threaded archive is unchanged.** A program that never uses

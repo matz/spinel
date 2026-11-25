@@ -23,6 +23,7 @@
 #include <errno.h>      /* EINTR (sleep fallback) */
 #ifdef __linux__
 #include <sys/prctl.h>  /* PR_SET_NAME (the sweeper threads' name) */
+#include <link.h>       /* dl_iterate_phdr (the static TLS size, for a thread's stack) */
 #endif
 #include <sys/wait.h>   /* waitpid (sp_sched_wait_child) */
 #include <signal.h>     /* preemption signal (SIGURG by default) */
@@ -2675,6 +2676,27 @@ static void sp_sched_par_mark(void) {
   if (sp_gc_ph_on) { sp_gc_ph_mk_helpers += (unsigned long long)g_mk_joined; sp_gc_ph_mk_drains++; }
   SCHED_UNLOCK();
 }
+/* The stack size of a sweeper or the trimmer: 1 MB, plus on Linux the static
+   TLS of the program. glibc places a thread's static TLS inside the thread's
+   stack, and pthread_create returns EINVAL for a stack smaller than the
+   static TLS: 1.2 MB on aarch64, where sizeof(jmp_buf) is 312. */
+#ifdef __linux__
+static int sp_cs_tls_phdr(struct dl_phdr_info *info, size_t size, void *data) {
+  (void)size;
+  for (int i = 0; i < info->dlpi_phnum; i++)
+    if (info->dlpi_phdr[i].p_type == PT_TLS)
+      *(size_t *)data += info->dlpi_phdr[i].p_memsz + info->dlpi_phdr[i].p_align;
+  return 0;
+}
+#endif
+static size_t sp_cs_stack_size(void) {
+  size_t n = 1024 * 1024;
+#ifdef __linux__
+  dl_iterate_phdr(sp_cs_tls_phdr, &n);
+  n = (n + 0xffff) & ~(size_t)0xffff;
+#endif
+  return n;
+}
 static int sp_available_cpus(void);   /* defined below; the CPUs this process may run on */
 static void sp_cs_start_sweepers(void) {
   { const char *o = getenv("SPINEL_GC_OWNER"); g_cs_owner_env = !(o && *o == '0'); }
@@ -2693,11 +2715,13 @@ static void sp_cs_start_sweepers(void) {
   }
   if (want > CS_SWEEPER_MAX) want = CS_SWEEPER_MAX;
   pthread_attr_t at; pthread_attr_init(&at);
-  pthread_attr_setstacksize(&at, 1024 * 1024);
+  pthread_attr_setstacksize(&at, sp_cs_stack_size());
   pthread_attr_setdetachstate(&at, PTHREAD_CREATE_DETACHED);
   for (int i = 0; i < want; i++) {
     pthread_t t;
-    if (pthread_create(&t, &at, sp_cs_sweeper_main, NULL) == 0) g_cs_nsweepers++;
+    int rc = pthread_create(&t, &at, sp_cs_sweeper_main, NULL);
+    if (rc == 0) g_cs_nsweepers++;
+    else if (sp_gc_ph_on) fprintf(stderr, "[gcph] sweeper thread did not start: %s\n", strerror(rc));
   }
   pthread_attr_destroy(&at);
   if (g_cs_nsweepers > 0) {
@@ -2778,13 +2802,13 @@ static void *sp_trim_thread_main(void *arg) {
 static void sp_trim_thread_start(void) {
   pthread_t t;
   pthread_attr_t at; pthread_attr_init(&at);
-  /* 1 MB, like the sweepers: a thread's stack also carries the runtime's
+  /* The sweepers' size: a thread's stack also carries the runtime's
      static TLS, and the mark stack there alone is half a megabyte, so the
      256 KB this asked for was refused by pthread_create (EINVAL). The
      trimmer then never started, and every full cycle's malloc_trim ran
      inline under the barrier -- 40 ms each, the whole reason the thread
      exists -- with nothing saying so. */
-  pthread_attr_setstacksize(&at, 1024 * 1024);
+  pthread_attr_setstacksize(&at, sp_cs_stack_size());
   pthread_attr_setdetachstate(&at, PTHREAD_CREATE_DETACHED);
   int rc = pthread_create(&t, &at, sp_trim_thread_main, NULL);
   if (rc == 0) sp_gc_trimmer_on = 1;

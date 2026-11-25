@@ -30285,7 +30285,8 @@ static void mm_relower_sends(Compiler *c, NodeTable *nt, int mi, const char *nm)
   for (int s = 0; s < g_mm_sends.len; s++) {
     int n = g_mm_sends.n[s];
     if (n >= c->node_cap) continue;
-    if (c->nscope[n] != mi || nt_kind(nt, n) != NK_CallNode || !is_send_family(nt_str(nt, n, "name"))) continue;
+    /* (the kind first: the scale test counts each send this visits, which the scope's array read is not) */
+    if (nt_kind(nt, n) != NK_CallNode || c->nscope[n] != mi || !is_send_family(nt_str(nt, n, "name"))) continue;
     int dn = 0; const int *arms = nt_arr(nt, n, "dyn_send_arms", &dn);
     int has = 0;
     for (int i = 0; i < dn && !has; i++) { const char *an = nt_str(nt, arms[i], "name"); has = an && sp_streq(an, nm); }
@@ -30302,6 +30303,7 @@ int desugar_missing_method_calls(Compiler *c) {
   int mm_any = 0;
   for (int k = 0; k < c->nclasses && !mm_any; k++) mm_any = mm_user(c, -1, k) >= 0;
   if (!mm_any && !str_missing) return 0;
+  unsigned long long work = nt_work_now();
   int n0 = nt->count, changed = 0, *parent = NULL;
   cplan_chain_undef_hold(1);
   for (int id = 0; id < n0; id++) {
@@ -30554,6 +30556,7 @@ int desugar_missing_method_calls(Compiler *c) {
   free(g_mm_sends.n);
   g_mm_sends = (MmSends){ 0 };
   free(parent);
+  nt_work_step("desugar_missing_method_calls", work);
   return changed;
 }
 

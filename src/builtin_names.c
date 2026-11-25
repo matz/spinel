@@ -2288,6 +2288,7 @@ const char *builtin_function_owner(const char *m) {
 
 /* respond_to?: whether the receiver itself answers a name, publicly or
    with include_all any */
+const char INITIALIZE_NAME[] = "initialize";
 const char RESPOND_TO_NAME[] = "respond_to?";
 int is_respond_to_name(const char *n) { return n && sp_streq(n, RESPOND_TO_NAME); }
 /* The names a Struct's instance answers from Struct itself. Data answers none of them: its own are the members and

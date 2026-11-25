@@ -266,6 +266,9 @@ static void rtr_lists_build(Compiler *c, int k, Buf *pb, Buf *vb) {
   if (k < 0) { emit_object_reopen_responds(c, -1, pb, vb); return; }
   RtrNames rn = { c, k, pb, vb };
   cplan_chain_names(c, k, rtr_name, &rn);
+  /* (an initialize the class made public, `public :initialize`, the plan's answer: the other names of the
+     family are no list's, emit_responds_name) */
+  if (cplan_obj_responds(c, k, INITIALIZE_NAME, -1) == 2) buf_printf(pb, "\"%s\", ", INITIALIZE_NAME);
   const char *const *imp[] = { enumerable_names, comparable_names, struct_names, struct_core_names };
   for (int l = 0; l < 4; l++)
     for (int i = 0; imp[l][i]; i++) {

@@ -590,6 +590,7 @@ int is_object_method_name(const char *nm);   /* one of Object's public or privat
 const char *builtin_method_owner(const char *cls, const char *m);   /* the class or module defining builtin cls's m */
 const char *builtin_bool_method_owner(const char *cls, const char *m);   /* ...a true's or false's m, of class cls when known; NULL where it is not known */
 const char *builtin_function_owner(const char *m);   /* the module defining the function a receiverless method(:m) binds */
+extern const char INITIALIZE_NAME[];   /* "initialize" */
 extern const char RESPOND_TO_NAME[];   /* "respond_to?", the name a lookup of the calls that ask presence goes by */
 int is_respond_to_name(const char *n); /* respond_to?: does the receiver itself answer a name */
 extern const char *const struct_names[];   /* the names a Struct's instance answers from Struct (not a Data's), NULL-terminated */

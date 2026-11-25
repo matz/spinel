@@ -8109,6 +8109,9 @@ int cplan_rt_site(const Compiler *c, int ci) {
   int k = ci < c->nclasses ? c->classes[ci].rt_site : RT_SITE_NONE;
   return k == RT_SITE_OWN || (k == RT_SITE_BARE && c->rt_identity_per_eval);
 }
+int cplan_rt_family(const Compiler *c, int ci) {
+  return ci >= 0 && ci < c->nclasses && c->classes[ci].rt_family;
+}
 int cplan_class_value_may_be_rt(Compiler *c, int node) {
   if (!c->has_rt_classes) return 0;
   const ClsSet *s = node >= 0 ? cls_fact_node(c, node) : NULL;
@@ -8133,10 +8136,21 @@ static int cplan_method_value_runs(Compiler *c, const int *par, int v, int local
     return 1;
   const char *vn = nt_str(nt, p, "name");
   const Scope *sc = comp_scope_of(c, p);
-  NT_FOREACH_KIND(nt, NK_LocalVariableReadNode, r)
-    if (vn && nt_str(nt, r, "name") && sp_streq(nt_str(nt, r, "name"), vn) && comp_scope_of(c, r) == sc &&
-        cplan_method_value_runs(c, par, r, 0)) return 1;
-  return 0;
+  if (!vn || !sc) return 1;
+  /* (each read's answer, by its scope and name, kept for every lookup) */
+  if (c->rt_method_runs_n != c->nscopes) {
+    for (int i = 0; i < c->rt_method_runs_n; i++) anh_free(&c->rt_method_runs[i]);
+    free(c->rt_method_runs);
+    c->rt_method_runs = calloc((size_t)c->nscopes + 1, sizeof *c->rt_method_runs);
+    if (!c->rt_method_runs) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    c->rt_method_runs_n = c->nscopes;
+    NT_FOREACH_KIND(nt, NK_LocalVariableReadNode, r) {
+      const char *rn = nt_str(nt, r, "name");
+      const Scope *rs = rn ? comp_scope_of(c, r) : NULL;
+      if (rs && cplan_method_value_runs(c, par, r, 0)) anh_add(&c->rt_method_runs[rs - c->scopes], rn);
+    }
+  }
+  return anh_has(&c->rt_method_runs[sc - c->scopes], vn);
 }
 /* Does Method lookup `id` on receiver `recv` read a class made at run time
    where a Method of a class value cannot (feature_limit): the receiver may

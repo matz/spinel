@@ -1062,6 +1062,10 @@ typedef struct {
                           answers class identity per evaluation, RT_SITE_OWN
                           for any other (register_rt_sites;
                           read through cplan_rt_site) */
+  unsigned char rt_family; /* this class or one below it is a site class
+                          (cplan_rt_site): its instances may carry a class made
+                          at run time (register_rt_sites; read through
+                          cplan_rt_family) */
   int is_anon_struct;  /* k = Struct.new(:a, :b): synthesized for a local-held
                           anonymous struct class; #inspect omits the name. */
   int is_singleton_of; /* +1-based parent class index (0 = not one): a
@@ -1606,6 +1610,10 @@ typedef struct {
                           repeated Class.new with a block, Struct.new or
                           Data.define keeps one class for every evaluation
                           (register_rt_sites; read by cplan_rt_site) */
+  ANameHash *rt_method_runs; /* [rt_method_runs_n] per scope, the locals a read of
+                          which may run a Method held in it (cplan_method_value_runs):
+                          one walk of the program, built at the first lookup */
+  int rt_method_runs_n;
   struct UserMethodKinds { char name[32]; int kinds; } user_methods[8];   /* the UDM_ kinds of the program's own methods of a name, by name (an_user_method_kinds) */
   int nuser_methods;
 

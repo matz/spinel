@@ -2963,7 +2963,7 @@ int emit_call_print_arms(Compiler *c, Buf *b, const NodeTable *nt, const char *n
     int dcid = ty_object_class(rt);
     char drn[512], darg[512];
     /* (an object of a site class's family is held: its class names it) */
-    if (class_family_has_rt_site(c, dcid)) {
+    if (cplan_rt_family(c, dcid)) {
       char ho[24]; snprintf(ho, sizeof ho, "_t%d", ++g_tmp);
       obj_default_name(c, dcid, ho, drn, sizeof drn, darg, sizeof darg);
       buf_printf(b, "({ void *%s = (void *)(", ho); emit_expr(c, recv, b);

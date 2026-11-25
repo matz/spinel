@@ -5952,6 +5952,15 @@ static void emit_obj_rtclass_fn(Compiler *c, Buf *b) {
   buf_puts(b, "  default: return -1;\n  }\n}\n");
 }
 
+/* The id of the class an instance of class ci answers #class with: ci, or,
+   with the object obj (C, NULL for none) of a site class's family, the class
+   made at run time it was built for (emit_visible_cls_id) */
+void emit_obj_class_id(Compiler *c, int ci, const char *obj, Buf *b) {
+  if (!obj || !cplan_rt_family(c, ci)) { buf_printf(b, "%d", ci); return; }
+  char id[256];
+  snprintf(id, sizeof id, "((sp_%s *)(%s))->cls_id", c->classes[ci].c_name, obj);
+  emit_visible_cls_id(c, ci, obj, id, 1, b);
+}
 /* The id Ruby sees as the class of an object of user class ci or of one of
    its subclasses, the one reader of an object's visible class: `id` is a C
    name holding the object's cls_id, `obj` one holding the object (NULL
@@ -5962,23 +5971,10 @@ static void emit_obj_rtclass_fn(Compiler *c, Buf *b) {
    the class an object's ancestry starts at. An instance of a site class
    answers the class made at run time it was built for (cplan_rt_site),
    off the object. */
-int class_family_has_rt_site(Compiler *c, int ci) {
-  for (int k = 0; cplan_rt_site(c, -1) && k < c->nclasses; k++)
-    if (cplan_rt_site(c, k) && (k == ci || is_descendant(c, k, ci))) return 1;
-  return 0;
-}
-/* The id of the class an instance of class ci answers #class with: ci, or,
-   with the object obj (C, NULL for none) of a site class's family, the class
-   made at run time it was built for (emit_visible_cls_id) */
-void emit_obj_class_id(Compiler *c, int ci, const char *obj, Buf *b) {
-  if (!obj || !class_family_has_rt_site(c, ci)) { buf_printf(b, "%d", ci); return; }
-  char id[256];
-  snprintf(id, sizeof id, "((sp_%s *)(%s))->cls_id", c->classes[ci].c_name, obj);
-  emit_visible_cls_id(c, ci, obj, id, 1, b);
-}
 void emit_visible_cls_id(Compiler *c, int ci, const char *obj, const char *id, int masq, Buf *b) {
   Buf rt; memset(&rt, 0, sizeof rt);
-  for (int k = 0; obj && class_family_has_rt_site(c, ci) && k < c->nclasses; k++)
+  int fam = obj && cplan_rt_family(c, ci);
+  for (int k = 0; fam && k < c->nclasses; k++)
     if (cplan_rt_site(c, k) && (k == ci || is_descendant(c, k, ci)))
       buf_printf(&rt, "%s == %d ? ((sp_%s *)%s)->_sp_rtcls : ", id, k, c->classes[k].c_name, obj);
   masq = masq && cls_id_masquerades(c, ci);
@@ -18131,7 +18127,7 @@ static void emit_super_value(Compiler *c, int id, Buf *b) {
          a site class's instance answers its record, emit_obj_class_id) */
       Buf ob; memset(&ob, 0, sizeof ob);
       if (c->classes[s->class_id].is_value_type) buf_printf(&ob, "%d", s->class_id);
-      else if (class_family_has_rt_site(c, s->class_id)) emit_obj_class_id(c, s->class_id, g_self, &ob);
+      else if (cplan_rt_family(c, s->class_id)) emit_obj_class_id(c, s->class_id, g_self, &ob);
       else buf_printf(&ob, "%s->cls_id", g_self);
       if (barm == BSUP_INSTANCE_OF)
         buf_printf(&rb, "(sp_bool)(sp_unbox_class(_t%d).cls_id == %s); })", tk, ob.p);

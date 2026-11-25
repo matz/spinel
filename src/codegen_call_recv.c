@@ -11235,8 +11235,8 @@ static int class_has_descendants(Compiler *c, int cid) {
    the constant. */
 static void emit_isa_self_class(Compiler *c, int recv, int cid, Buf *b) {
   if (cid >= 0 && cid < c->nclasses && !c->classes[cid].is_value_type &&
-      (c->classes[cid].is_singleton_of || class_has_descendants(c, cid) || class_family_has_rt_site(c, cid))) {
-    if (!class_family_has_rt_site(c, cid)) { buf_puts(b, "((sp_Class){("); emit_expr(c, recv, b); buf_puts(b, ")->cls_id})"); return; }
+      (c->classes[cid].is_singleton_of || class_has_descendants(c, cid) || cplan_rt_family(c, cid))) {
+    if (!cplan_rt_family(c, cid)) { buf_puts(b, "((sp_Class){("); emit_expr(c, recv, b); buf_puts(b, ")->cls_id})"); return; }
     /* (an instance of a site class starts at the class made at run time) */
     int t = ++g_tmp;
     char to[24], tv[32]; snprintf(to, sizeof to, "_t%d", t); snprintf(tv, sizeof tv, "_t%d->cls_id", t);
@@ -13181,7 +13181,7 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
             int t9 = ++g_tmp;
             /* (a site class's instance answers the class made at run time it
                was built for, which no constant names: the visible class) */
-            if (class_family_has_rt_site(c, cid)) {
+            if (cplan_rt_family(c, cid)) {
               char to[24], tv[48];
               snprintf(to, sizeof to, "_t%d", t9); snprintf(tv, sizeof tv, "_t%d->cls_id", t9);
               buf_printf(b, "({ sp_%s *_t%d = (", c->classes[cid].c_name, t9); emit_expr(c, recv, b);
@@ -13246,7 +13246,7 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
       else emit_expr(c, argv[0], b);
       buf_printf(b, "; ");
       if (sp_streq(name, "instance_of?")) {
-        int rtf = cid >= 0 && cid < c->nclasses && class_family_has_rt_site(c, cid);
+        int rtf = cid >= 0 && cid < c->nclasses && cplan_rt_family(c, cid);
         if (cid >= 0 && cid < c->nclasses && !c->classes[cid].is_value_type && (class_has_descendants(c, cid) || rtf)) {
           /* the object's own class, which a subclass instance running an
              inherited method (`instance_of?(w(Animal))` in a Dog) does not

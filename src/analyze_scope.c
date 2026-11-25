@@ -8386,7 +8386,14 @@ void register_rt_sites(Compiler *c) {
     else if (!bare) per_eval = 0;
   }
   c->rt_identity_per_eval = per_eval;
-  for (int i = 0; i < c->nclasses && !c->has_rt_classes; i++) c->has_rt_classes = cplan_rt_site(c, i);
+  for (int i = 0; i < c->nclasses; i++) {
+    if (!cplan_rt_site(c, i)) continue;
+    c->has_rt_classes = 1;
+    for (int k = i, g = 0; k >= 0 && g < 256 && !(k != i && c->classes[k].rt_family); k = c->classes[k].parent, g++) {
+      c->classes[k].rt_family = 1;
+      if (k == c->classes[k].parent) break;
+    }
+  }
   anh_free(&defnames);
 }
 

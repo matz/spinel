@@ -542,6 +542,8 @@ const BuiltinClassOp *cplan_builtin_class_row(Compiler *c, int id, const char *c
    (Compiler.rt_identity_per_eval). ci -1: does the
    program have any such class? */
 int cplan_rt_site(const Compiler *c, int ci);
+/* ...is ci or a class below it one (ClassInfo.rt_family)? */
+int cplan_rt_family(const Compiler *c, int ci);
 /* What a Class.new or Module.new evaluated more than once answers
    (desugar_class_new_blocks noted it, EB_RT_SITE / EB_RT_BARE), and in
    *site (NULL: not asked) its site class: CNEW_RUNTIME, a class of its own

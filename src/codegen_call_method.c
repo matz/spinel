@@ -2943,7 +2943,7 @@ int emit_call_method_obj_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
     buf_puts(b, "({ ");
     /* (an object of a site class's family is held: its class names it) */
     char ho[24] = "";
-    if (recv >= 0 && ty_is_object(repr_of(c, recv).as_ty) && class_family_has_rt_site(c, plan.owner_ci)) {
+    if (recv >= 0 && ty_is_object(repr_of(c, recv).as_ty) && cplan_rt_family(c, plan.owner_ci)) {
       snprintf(ho, sizeof ho, "_t%d", ++g_tmp);
       buf_printf(b, "void *%s = (void *)(", ho); emit_expr(c, recv, b); buf_puts(b, "); ");
     }

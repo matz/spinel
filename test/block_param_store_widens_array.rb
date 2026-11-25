@@ -233,3 +233,41 @@ M24::G = [1]; y1(M24::G) { |x| x << +"a" } if ARGV.size > 5; p M24::G
 M24::H = [2]; y1(M24::H) { |x| x << +"b" }; p M24::H
 M24::I = [3]; m24(M24::I); p M24::I
 A24::B24::G = [4]; y1(A24::B24::G) { |x| x << +"d" }; p A24::B24::G
+
+# a multiple assignment's right side it takes whole (a Range, a Proc, a
+# Regexp, a class, a Complex, a method's Range or nil): the first
+# target takes it and an ivar after it nil, with the store where it never
+# runs and where it does
+class K25
+  def initialize = (@w = [1])
+  def r = (@h, @w = 1..2)
+  def e = (@h, @w = 1..)
+  def l = (@h, @w = -> { 1 })
+  def x = (@h, @w = /x/)
+  def c = (@h, @w = K25)
+  def i = (@h, @w = 1i)
+  def q = (@h, @w = rg25)
+  def rg25 = (ARGV.size > 9 ? 1..2 : nil)
+  attr_reader :w, :h
+end
+k25 = K25.new
+y1(k25.w) { |x| x << +"a" } if ARGV.size > 5
+p k25.w
+[:r, :e, :l, :x, :c, :i, :q].each { |m| k25 = K25.new; k25.send(m); p k25.w, k25.h.class }
+k25 = K25.new
+y1(k25.w) { |x| x << +"b" }; p k25.w
+k25.r; p k25.w, k25.h
+class K26
+  def initialize = (@w = [1])
+  def r = (@h, @w = 1..2)
+  def l = (@h, @w = -> { 1 })
+  def q = (@h, @w = rg26)
+  def rg26 = (ARGV.size > 9 ? 1..2 : nil)
+  attr_reader :w, :h
+end
+k26 = K26.new
+def y26(a) = yield(a)
+y26(k26.w) { |x| x << +"c" } if ARGV.size > 5
+k26.r; p k26.w, k26.h.class
+k26.l; p k26.w, k26.h.class
+k26.q; p k26.w, k26.h

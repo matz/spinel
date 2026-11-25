@@ -109,3 +109,27 @@ true
 [2, "b"]
 [3, "c"]
 [4, "d"]
+[1]
+nil
+Range
+nil
+Range
+nil
+Proc
+nil
+Regexp
+nil
+Class
+nil
+Complex
+nil
+NilClass
+[1, "b"]
+nil
+1..2
+nil
+Range
+nil
+Proc
+nil
+nil

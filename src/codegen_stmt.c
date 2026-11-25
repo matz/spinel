@@ -19121,16 +19121,13 @@ static int emit_multi_write_scalar(Compiler *c, int id, Buf *b, int indent, cons
   if (vty && sp_streq(vty, "SplatNode")) st = TY_POLY_ARRAY;
   int multi_src = vty && (sp_streq(vty, "CallNode") || sp_streq(vty, "SuperNode") ||
                           sp_streq(vty, "ForwardingSuperNode") || sp_streq(vty, "YieldNode"));
-  /* a TY_POLY value can hold an array at runtime (doom's
-     `lump_name, mirrored = @sprite_index[key]` read through a local),
-     so it must take the runtime-destructure path below, not the
-     scalar fill -- which handed the whole array to the first target. So
-     must an Array of a class's objects. */
-  /* nor must an object or a String the plan converts boxed
-     (cplan_typed_to_ary): the path below converts it */
-  int boxed = 0;
-  cplan_typed_to_ary(c, st, id, value, &boxed);
-  if (vty && !multi_src && !boxed && !ty_is_array(st) && !ty_is_obj_array(st) && !ty_is_hash(st) && st != TY_UNKNOWN && st != TY_POLY) {
+  /* a value the assignment takes apart (cplan_masgn_takes_apart: a TY_POLY
+     value may hold an array at runtime, as doom's `lump_name, mirrored =
+     @sprite_index[key]` read through a local does, and an object the plan
+     converts boxed) takes the runtime-destructure path below, not the
+     scalar fill, which would hand the whole array to the first target; a
+     Hash, whole too, takes that path's arm of its own */
+  if (vty && !multi_src && !ty_is_hash(st) && !cplan_masgn_takes_apart(c, id, value, st)) {
     for (int i = 0; i < ln; i++) {
       const char *lty = nt_type(nt, lefts[i]);
       NodeKind lk = nt_kind(nt, lefts[i]);

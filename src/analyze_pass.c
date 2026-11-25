@@ -8546,24 +8546,18 @@ static int local_has_target_write(Compiler *c, Scope *sc, const char *name) {
   return 0;
 }
 
-/* Does a value of kind t take no part apart as a multiple assignment's
-   right side (`a, b = 0`: a is 0, b nil), being no Array and having no
-   to_ary? */
-static int masgn_rhs_whole(TyKind t) {
-  return t == TY_INT || t == TY_FLOAT || t == TY_BIGINT || t == TY_NIL || t == TY_BOOL ||
-         t == TY_SYMBOL || t == TY_STRING || t == TY_STRBUF;
-}
 /* What a multiple assignment (`a, b = x, y`) binds its target `t` to: the
    element of its literal right side at the target's place (a target past
    a splat, `a, *r, b = x, y, z`, counted from the end), answered as the
    node, or the right side itself for its first target where it is a value
-   no assignment takes apart (masgn_rhs_whole); MTV_NIL where the target
-   takes nil (past the elements, or after such a value's first target);
-   MTV_ELEM where it takes element *at of a right side that is no literal,
-   *rhs; MTV_NONE for any other target (the splat's, a nested one, a right
+   the assignment does not take apart (cplan_masgn_takes_apart); MTV_NIL
+   where the target takes nil (past the elements, or after such a value's
+   first target); MTV_ELEM where it takes element *at of a right side that
+   is no literal, *rhs, which the assignment *mwp takes apart (an Array, or
+   a boxed value that may be one); MTV_NONE for any other target (the splat's, a nested one, a right
    side with a splat, a place past a splat of a right side of no size). */
 enum { MTV_NONE = -1, MTV_NIL = -2, MTV_ELEM = -3 };
-static int masgn_target_value(Compiler *c, int t, int *rhs, int *at) {
+static int masgn_target_value(Compiler *c, int t, int *rhs, int *at, int *mwp) {
   const NodeTable *nt = c->nt;
   NT_FOREACH_KIND(nt, NK_MultiWriteNode, mw) {
     int ln = 0, rn = 0, en = 0;
@@ -8576,10 +8570,12 @@ static int masgn_target_value(Compiler *c, int t, int *rhs, int *at) {
     int val = nt_paren_single(c->nt, nt_ref(nt, mw, "value"));
     if (val < 0) return MTV_NONE;
     if (nt_kind(nt, val) != NK_ArrayNode) {
-      if (masgn_rhs_whole(infer_type(c, val))) return i == 0 ? val : MTV_NIL;
-      if (i == ln || !ty_is_array(infer_type(c, val))) return MTV_NONE;
+      TyKind vt = infer_type(c, val);
+      if (!cplan_masgn_takes_apart(c, mw, val, vt)) return i == 0 ? val : MTV_NIL;
+      if (i == ln) return MTV_NONE;
       if (rhs) *rhs = val;
       if (at) *at = i;
+      if (mwp) *mwp = mw;
       return MTV_ELEM;
     }
     const int *ev = nt_arr(nt, val, "elements", &en);
@@ -8986,37 +8982,45 @@ static int src_leaf_walk(Compiler *c, int leaf, int pinned, int apply, SrcWalk *
   return array_src_walk(c, leaf, pinned, apply, st, depth);
 }
 /* src_method_values's step for a multiple assignment's target that takes
-   element `at` of what a method answers: each value an Array literal,
-   whose element there is walked as a write's value is (slot_value_walk),
-   or passed over where it has none, which is nil. */
-typedef struct { AttrArgWalk *aw; int at; } MasgnElemWalk;
+   element `at` of what a method answers, for the assignment mw: each value
+   an Array literal, whose element there is walked as a write's value is
+   (slot_value_walk), or passed over where it has none, which is nil; or a
+   value the assignment takes whole (cplan_masgn_takes_apart), walked so
+   for the first target and nil for the others. */
+typedef struct { AttrArgWalk *aw; int at, mw; } MasgnElemWalk;
 static int masgn_elem_leaf(Compiler *c, int leaf, int pinned, int apply, SrcWalk *st, int depth, void *ctx) {
   const NodeTable *nt = c->nt;
   MasgnElemWalk *m = ctx;
   (void)pinned;
-  int lit = nt_paren_single(nt, leaf), en = 0;
-  if (lit < 0 || nt_kind(nt, lit) != NK_ArrayNode) return 0;
-  const int *ev = nt_arr(nt, lit, "elements", &en);
-  for (int e = 0; e < en; e++) if (nt_kind(nt, ev[e]) == NK_SplatNode) return 0;
-  if (m->at >= en) return !apply;
+  int lit = nt_paren_single(nt, leaf), en = 0, ev0 = lit;
+  if (lit < 0) return 0;
+  if (nt_kind(nt, lit) == NK_ArrayNode) {
+    const int *ev = nt_arr(nt, lit, "elements", &en);
+    for (int e = 0; e < en; e++) if (nt_kind(nt, ev[e]) == NK_SplatNode) return 0;
+    if (m->at >= en) return !apply;
+    ev0 = ev[m->at];
+  }
+  else if (cplan_masgn_takes_apart(c, m->mw, lit, infer_type(c, lit))) return 0;
+  else if (m->at > 0) return !apply;
   AttrArgWalk w = { st, depth, apply, 0, 0 };
-  int stop = slot_value_walk(c, comp_scope_of(c, lit), ev[m->at], &w);
+  int stop = slot_value_walk(c, comp_scope_of(c, lit), ev0, &w);
   m->aw->n += w.n;
   return apply ? w.ch : !stop;
 }
 /* The value multiple-assignment target t takes (masgn_target_value),
    walked as a write's value is (slot_value_walk): its element of a literal
    right side; nothing where it takes nil, as a nil value is passed over;
-   its element of each value a method on the right side answers
-   (src_method_values, masgn_elem_leaf). Nonzero where it cannot be. */
+   its element of each value a method on the right side answers, or the
+   value for the first target where it is taken whole (src_method_values,
+   masgn_elem_leaf). Nonzero where it cannot be. */
 static int masgn_target_walk(Compiler *c, int t, AttrArgWalk *aw) {
-  int rhs = -1, at = -1;
-  int tv = masgn_target_value(c, t, &rhs, &at);
+  int rhs = -1, at = -1, mwn = -1;
+  int tv = masgn_target_value(c, t, &rhs, &at, &mwn);
   if (tv >= 0) return slot_value_walk(c, comp_scope_of(c, t), tv, aw);
   if (tv == MTV_NIL) return 0;
   int mi = tv == MTV_ELEM ? backprop_call_target(c, rhs) : -1;
   if (mi < 0) return 1;
-  MasgnElemWalk mw = { aw, at };
+  MasgnElemWalk mw = { aw, at, mwn };
   int ch = 0, got = src_method_values(c, rhs, mi, aw->apply, 0, aw->st, aw->depth + 1, &ch, masgn_elem_leaf, &mw);
   aw->ch |= ch;
   return got == 0;
@@ -10237,7 +10241,7 @@ static int widen_boxed_local_sources(Compiler *c, Scope *sc, const char *nm, Loc
      that is not a literal) keeps the local off the pin */
   NT_FOREACH_KIND(nt, NK_LocalVariableTargetNode, t) {
     if (comp_scope_of(c, t) != sc || !sp_streq(nt_str(nt, t, "name"), nm)) continue;
-    int tv = masgn_target_value(c, t, NULL, NULL);
+    int tv = masgn_target_value(c, t, NULL, NULL, NULL);
     if (tv < 0) { all = 0; continue; }
     ch |= wbls_take(c, sc, nm, tv, elem, depth, wl, &nl, &all);
   }

@@ -43408,7 +43408,7 @@ static void mark_nullable_int_locals(Compiler *c) {
       int has_splat = 0;
       for (int e = 0; e < en; e++) if (nt_kind(nt, ev[e]) == NK_SplatNode) has_splat = 1;
       TyKind mvt = mv >= 0 ? infer_type(c, mv) : TY_UNKNOWN;
-      int scalar_rhs = !lit && mv >= 0 && !ty_is_array(mvt) && mvt != TY_POLY && mvt != TY_UNKNOWN;
+      int scalar_rhs = !lit && mv >= 0 && !cplan_masgn_takes_apart(c, mw, mv, mvt);
       for (int pass = 0; pass < 2; pass++) {
         int n = pass ? rn2 : ln; const int *tg = pass ? rs2 : ls;
         for (int j = 0; j < n; j++) {

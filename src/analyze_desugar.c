@@ -30396,8 +30396,7 @@ int desugar_missing_method_calls(Compiler *c) {
       else str_arm = 0;
     }
     if (nmiss <= 0) continue;
-    /* (a split reads the receiver twice: a variable or self, or none, is
-       read again; any other receiver is held in a local, below, run once) */
+    /* (a split reads a variable or self again, and holds other receivers) */
     if (r < 0 || ie_self) reread = 1;
     if (!others) {
       /* every class the value can be misses nm: the call is method_missing's */
@@ -30421,13 +30420,21 @@ int desugar_missing_method_calls(Compiler *c) {
       changed = 1;
       continue;
     }
+    /* (an unbounded computed receiver gives no class evidence for a split) */
+    if (!reread && !str_arm && cls_fact_unbounded(c, r)) continue;
     /* (a literal block would be the two calls' one block) */
     if (blk >= 0 && nt_kind(nt, blk) == NK_BlockNode) continue;
     if (!parent) parent = an_parent_map(nt);
     int p = parent ? parent[id] : -1;
     if (p < 0) continue;
+    int guard = str_arm && (str_guard >= 0 || hook_guard >= 0);
+    Scope *sc = !reread || guard ? comp_scope_of(c, id) : NULL;
+    if ((!reread || guard) && !sc) continue;
+    int named = 0;
+    while (named < nmiss && c->classes[miss[named]].name) named++;
+    if (named < nmiss) continue;
     int *pre = NULL, npre = 0;
-    if (str_arm && (str_guard >= 0 || hook_guard >= 0)) {
+    if (guard) {
       npre = sd_hold_call_operands(c, id, &pre, 1);
       if (npre < 0) { free(pre); continue; }
       reread = 0;
@@ -30436,17 +30443,16 @@ int desugar_missing_method_calls(Compiler *c) {
     int hold = -1;
     if (!reread) {
       snprintf(held, sizeof held, "__mm_r%d", id);
-      scope_local_intern(comp_scope_of(c, id), held);
+      scope_local_intern(sc, held);
       hold = fwd_new_node_like(nt, id, "LocalVariableWriteNode");
       nt_node_set_str(nt, hold, "name", held);
       nt_node_set_int(nt, hold, "depth", 0);
       nt_node_set_ref(nt, hold, "value", r);
       if (r < n0) parent[r] = hold;
     }
-    int pred = -1, str_pred = -1, clones[19], ncl = 0;
+    int pred = -1, str_pred = -1, clones[sizeof miss / sizeof miss[0] + 5], ncl = 0;
     for (int i = 0; i < nmiss; i++) {
       const char *cn = c->classes[miss[i]].name;
-      if (!cn) { pred = -1; break; }
       /* (`instance_of?`, not `===`: a subclass that answers the name is no miss) */
       int q = fwd_new_node_like(nt, id, "CallNode"), qa = fwd_new_node_like(nt, id, "ArgumentsNode");
       int rr = hold >= 0 ? local_read_like(nt, id, held)
@@ -30477,7 +30483,6 @@ int desugar_missing_method_calls(Compiler *c) {
         pred = o;
       }
     }
-    if (pred < 0 && str_pred < 0) { free(pre); continue; }
     int es = -1, replacement = id;
     if (pred >= 0) {
       int mr = hold >= 0 ? local_read_like(nt, id, held)
@@ -30505,14 +30510,15 @@ int desugar_missing_method_calls(Compiler *c) {
     nt_node_set_int(nt, id, "mm_split", 1);
     if (hold >= 0) {
       int saved = local_read_like(nt, id, held);
+      clones[ncl++] = saved;
       nt_node_set_ref(nt, id, "receiver", saved);
-      if (npre > 0) {
-        replacement = disp_ahead(nt, pre, npre, replacement);
-        if (nt_safe_nav(nt, id)) {
-          int nil = fwd_new_call(nt, local_read_like(nt, id, held), "nil?", -1);
-          nt_mark_builtin_call(nt, nil);
-          replacement = mm_if_call(nt, id, nil, fwd_new_node_like(nt, id, "NilNode"), replacement, NULL);
-        }
+      if (npre > 0) replacement = disp_ahead(nt, pre, npre, replacement);
+      if (nt_safe_nav(nt, id)) {
+        int nr = local_read_like(nt, id, held);
+        clones[ncl++] = nr;
+        int nil = fwd_new_call(nt, nr, "nil?", -1);
+        nt_mark_builtin_call(nt, nil);
+        replacement = mm_if_call(nt, id, nil, fwd_new_node_like(nt, id, "NilNode"), replacement, NULL);
       }
       replacement = disp_ahead(nt, &hold, 1, replacement);
     }

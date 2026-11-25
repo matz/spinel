@@ -1,0 +1,26 @@
+"mm:boo"
+"real"
+[:receiver, 0]
+[:argument, 1]
+[:argument, 2]
+[:argument, 3]
+[[1, 2, {k: 3}], :ghost_block]
+[:receiver, 1]
+[:argument, 1]
+[:argument, 2]
+[:argument, 3]
+[[1, 2, {k: 3}], :real_block]
+[:receiver, 2]
+nil
+[:receiver, 2]
+nil
+"mm:boo"
+[:argument, 4]
+"mm:boo"
+"mm:boo"
+4
+"mm:boo"
+["mm:boo", "real"]
+"mm:boo"
+"real"
+:only_real

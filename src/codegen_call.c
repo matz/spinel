@@ -7364,11 +7364,20 @@ static int emit_poly_builtin_method(Compiler *c, int id, Buf *b) {
   }
   if (tf) {
     int tv = ++g_tmp;
+    /* (an Integer the call is not typed as, where the inference did not
+       take this route (a program class's own `year`, Date's, kept it
+       boxed): boxed, as the slot it lands in is; typed an Integer that may
+       be nil, that oint) */
+    TyKind ct = repr_of(c, id).as_ty;
+    int box = ct == TY_POLY, oi = !box && oint_kind(ct) && node_is_oint(c, id);
+    if (box) buf_puts(b, "sp_box_int(");
+    else if (oi) buf_puts(b, "sp_oint_of(");
     buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_expr(c, recv, b);
     buf_printf(b, "; _t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_TIME"
                   " ? sp_time_%s((sp_Time *)_t%d.v.p)"
                   " : (sp_int)(sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d)), 0); })",
                tv, tv, tf, tv, name, tv);
+    if (box || oi) buf_puts(b, ")");
     return 1;
   }
   /* The Time methods that answer a Time. The surface had the scalar reads and

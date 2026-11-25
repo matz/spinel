@@ -30,6 +30,10 @@ typedef struct {
      (repr_frozen_literal_alone), a block or a lambda literal (its body
      runs when called, and that call is code) */
   int code;
+  /* when set, an index read of an Array is left out too: a store to an
+     element ahead of the read could change what it reads (a key the
+     header cache's joint guard computes ahead of the stores before it) */
+  int no_elems;
 } OrderWalk;
 
 /* Does evaluating the subtree at `id` run no code and store nothing --

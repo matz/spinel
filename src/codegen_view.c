@@ -45,6 +45,11 @@
    the emission (a class-tag arm's), for the Class emitters that answer
    from a statically known class; like a target it views no cached type.
 
+   view_push_range_tested says an element write's index was tested against
+   the array's cached write length ahead of it (the header cache's joint
+   guard), so the write stores in place with no test of its own; like a
+   call's nil test it views no cached type.
+
    view_push_arm does the same for the arm context a poly dispatch's
    builtin arm re-enters the call under (g_arm: the node whose dispatch
    declines its own re-entry, g_pd_skip and g_prbd_skip, and
@@ -64,7 +69,8 @@
 /* what an entry overrides: the node's type, one representation flag, or
    the arm context */
 enum { VK_TYPE = -1, VK_ARM = -2, VK_FACE = -3, VK_STMT = -4, VK_TARGET = -7, VK_CONVERSION = -8,
-       VK_CONST_READ = -9, VK_CLASS_IS = -10, VK_CALL_NIL_TESTED = -11, VK_BIND_PARKED = -12 };
+       VK_CONST_READ = -9, VK_CLASS_IS = -10, VK_CALL_NIL_TESTED = -11, VK_BIND_PARKED = -12,
+       VK_RANGE_TESTED = -13 };
 static struct { Compiler *c; int id; int kind; int saved; int val; ArmCtx arm_saved; const void *pre; } view_stack[VIEW_MAX];
 static int view_face = -1;   /* the innermost face entry, or -1 */
 static int view_stmt = -1;   /* the innermost statement entry, or -1 */
@@ -440,6 +446,20 @@ int view_call_nil_tested(Compiler *c, int id) {
   return 0;
 }
 
+/* An element write whose index the enclosing joint guard tested. */
+int view_push_range_tested(Compiler *c, int id) {
+  int tok = view_open_mark(VK_RANGE_TESTED, id, 0, NULL);
+  view_stack[tok].c = c;
+  view_nodes++;
+  view_epoch_n++;
+  return tok;
+}
+int view_range_tested(Compiler *c, int id) {
+  for (int i = view_sp - 1; i >= 0; i--)
+    if (view_stack[i].kind == VK_RANGE_TESTED && view_stack[i].c == c && view_stack[i].id == id) return 1;
+  return 0;
+}
+
 /* A nil arm that leaves the receiver's test to the call's own guard opens
    VR_NIL_TESTED at 3 (emit_nil_target_own); the guard that writes the test
    says so here, and the arm reads the 4 before it pops. A signal on the
@@ -459,7 +479,8 @@ static void view_close(int tok) {
     return;
   }
   if (view_stack[tok].kind != VK_TARGET && view_stack[tok].kind != VK_CONVERSION && view_stack[tok].kind != VK_CONST_READ &&
-      view_stack[tok].kind != VK_CLASS_IS && view_stack[tok].kind != VK_CALL_NIL_TESTED)
+      view_stack[tok].kind != VK_CLASS_IS && view_stack[tok].kind != VK_CALL_NIL_TESTED &&
+      view_stack[tok].kind != VK_RANGE_TESTED)
     view_write(view_stack[tok].c, view_stack[tok].kind, view_stack[tok].id, view_stack[tok].saved);
   view_nodes--;
   view_epoch_n++;

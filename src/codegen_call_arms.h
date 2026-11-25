@@ -208,7 +208,7 @@ extern const char *const respond_universal[];
 extern const char *const respond_universal_all[]; /* public and private */
 int object_private_method_name(const char *qm);
 const char *const *object_private_method_names(void); /* NULL-terminated */
-int respond_to_runtime_reaches(Compiler *c, TyKind rt);
+int respond_to_runtime_reaches(Compiler *c, int id, TyKind rt);
 /* 1 when the program's reopen of the builtin class or module `cls` (its
    chain) defines `name`, as call_target answers call id (-1: no call asks) */
 int reopened_owns(Compiler *c, int id, const char *cls, const char *name);

@@ -1262,6 +1262,12 @@ int class_mixes_in(Compiler *c, int cid, int mod, int depth);
 int class_is_comparable(Compiler *c, int cid);
 void emit_visible_cls_id(Compiler *c, const char *var, Buf *b);
 void obj_default_name(Compiler *c, int ci, char *name, size_t nn, char *arg, size_t na);
+/* Kernel#to_s or #inspect (want_inspect) of an object of program class cid,
+   the builtin's own text whatever the program defines: #<Name:0x...>, and
+   for inspect the default ivar walk (sp_obj_kernel_inspect). obj is the C
+   expression of the object's pointer, typed as the class's (the address of
+   a by-value one), evaluated once or twice. */
+void emit_obj_kernel_text(Compiler *c, int cid, int want_inspect, const char *obj, Buf *b);
 void emit_obj_default_inspect(Compiler *c, int cid, const char *p, Buf *b);
 int class_has_ctor(const ClassInfo *ci);   /* does the class get a sp_X_new (an object of it may exist) */
 int anon_class_text(Compiler *c, int ci, const char *head, Buf *b);

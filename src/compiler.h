@@ -3000,6 +3000,10 @@ int comp_zsuper_plain_params(Compiler *c, const Scope *s, int *out, int cap);
 /* The plain argument count super id in s passes, or -1 for a splat, a keyword or a forwarded list (a bare super's:
    comp_zsuper_plain_params) */
 int comp_super_plain_argc(Compiler *c, int id, const Scope *s);
+/* The expression of super id's block argument (`super(o, &side)`) whose
+   evaluation has an effect, or -1: none, or a read or literal, which has
+   none. Where the method reached takes no block it runs for that effect. */
+int comp_super_blockarg_effect(const NodeTable *nt, int id);
 /* Kernel's builtin row (a non-internal BOP_KERNEL row, matched by the count of
    super id's plain operands) that owns uname: the answer of a super that
    reaches Kernel's method of that name (SUPER_OBJ_ROW). NULL for none. */

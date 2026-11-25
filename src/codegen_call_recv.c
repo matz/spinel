@@ -13308,7 +13308,7 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
      renderer is emitted inline over a stack temp. */
   if (recv >= 0 && ty_is_object(rt) && !c->classes[ty_object_class(rt)].is_struct &&
       (is_text_conversion(name)) && argc == 0 &&
-      !obj_str_cname(c, recv, ty_object_class(rt), is_inspect_name(name)) &&
+      (cplan_builtin_call(c, id) || !obj_str_cname(c, recv, ty_object_class(rt), is_inspect_name(name))) &&
       /* a native class may bind its own to_s/inspect (IO::Buffer does);
          that declared method wins over the default renderer */
       comp_native_method_find(c, ty_object_class(rt), name, 0, 0) < 0) {
@@ -13343,6 +13343,17 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
        `"#{inspect}"` in a base class under such subclasses initialized an
        sp_RbVal with a const char * and the C did not compile. */
     int bx = repr_of(c, id).kind == RK_BOXED;
+    /* The builtin's own (builtin_only: a super's, lowered) is Kernel's text
+       itself, which the poly renderers would hand back to the program's */
+    if (cplan_builtin_call(c, id)) {
+      int to = ++g_tmp;
+      char obj[24]; snprintf(obj, sizeof obj, "_t%d", to);
+      buf_printf(b, "%s({ sp_%s *%s = ", bx ? "SP_STR_BOX(" : "", ci2->c_name, obj); emit_expr(c, recv, b);
+      buf_printf(b, "; %s ? ", obj);
+      emit_obj_kernel_text(c, cid2, want_ins, obj, b);
+      buf_printf(b, " : \"%s\"; })%s", want_ins ? "nil" : "", bx ? ")" : "");
+      return 1;
+    }
     buf_printf(b, "sp_poly_%s%s(", want_ins ? "inspect" : "to_s", bx ? "_box" : "");
     emit_boxed(c, recv, b);
     buf_puts(b, ")");

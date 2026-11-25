@@ -6749,10 +6749,11 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
       /* a generated READER of the name owns it on a concrete object, as any
          reader does in CRuby: fall through to the member-read rule (#4190);
          so does a method the class defines itself, whose value is what its
-         body answers -- `def dup = self.class.new(...)` answers boxed (#5461) */
-      !(ty_is_object(rt) &&
-        (call_answers(c, -1, ty_object_class(rt), name, 0, NULL))) &&
-      !(rt == TY_POLY && an_user_defines_method(c, name)) &&
+         body answers -- `def dup = self.class.new(...)` answers boxed (#5461).
+         Not for the builtin's own call (builtin_only: a super's), as the
+         emission has it */
+      !(!cplan_builtin_call(c, id) && ty_is_object(rt) && call_answers(c, -1, ty_object_class(rt), name, 0, NULL)) &&
+      !(!cplan_builtin_call(c, id) && rt == TY_POLY && an_user_defines_method(c, name)) &&
       /* (nor where TrueClass or FalseClass defines it: the reopen rule below
          types each value's side, cplan_bool_sides) */
       !(rt == TY_BOOL && cplan_bool_sides(c, id, &self_tmi, &self_fmi))) {

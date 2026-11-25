@@ -46,3 +46,17 @@ true
 true
 true
 true
+"#<Txt:X>"
+"#<Txt:X @a=1>"
+true
+false
+true
+"#<TxtSub:X>"
+"#<TxtSub:X @a=1, @b=\"x\">"
+true
+false
+true
+[true, false, true, false]
+"#<ByVal:X>"
+"#<ByVal:X @a=1>"
+[false]

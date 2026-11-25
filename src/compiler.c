@@ -6449,6 +6449,18 @@ int comp_super_plain_argc(Compiler *c, int id, const Scope *s) {
   }
   return n;
 }
+/* See compiler.h. */
+int comp_super_blockarg_effect(const NodeTable *nt, int id) {
+  int bk = nt_ref(nt, id, "block");
+  int e = bk >= 0 && nt_kind(nt, bk) == NK_BlockArgumentNode ? nt_ref(nt, bk, "expression") : -1;
+  /* a variable's read has no effect, and a block parameter of the
+     method is not in scope where the fold is emitted */
+  NodeKind ek = e >= 0 ? nt_kind(nt, e) : NK_NilNode;
+  if (e < 0 || ek == NK_LocalVariableReadNode || ek == NK_InstanceVariableReadNode ||
+      ek == NK_GlobalVariableReadNode || ek == NK_NilNode || ek == NK_SymbolNode)
+    return -1;
+  return e;
+}
 const BuiltinOp *comp_super_kernel_row(Compiler *c, const Scope *s, const char *uname, int id) {
   const BuiltinOp *op = uname ? bop_find(BOP_KERNEL, uname, comp_super_plain_argc(c, id, s), 0) : NULL;
   return op && !(op->flags & BOPF_INTERNAL) ? op : NULL;

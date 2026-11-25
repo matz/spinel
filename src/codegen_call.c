@@ -17842,15 +17842,19 @@ static int emit_case_eq_call(Compiler *c, int id, Buf *b) {
   /* Object#equal? is pointer identity and is never overridden, so a plain user
      object (e.g. a package's Set) answers it even with no user-defined method
      (#2629). A pointer-backed arg compares by address; anything else (a scalar,
-     or a value-type object with no stable identity) is never the same object. */
-  if (argc == 1 && sp_streq(name, "equal?") && recv >= 0 && ty_is_object(rt) &&
-      !comp_ty_value_obj(c, rt) &&
-      !call_answers(c, -1, ty_object_class(rt), "equal?", 0, &ml)) {
+     or a value-type object with no stable identity) is never the same object.
+     So is the builtin's own == (builtin_only: a super's, lowered) of a class
+     whose chain no core module answers == for: BasicObject's, which is
+     equal?, where the program's == must not take it. */
+  if (argc == 1 && recv >= 0 && ty_is_object(rt) && !comp_ty_value_obj(c, rt) &&
+      (is_equal_name(name) ? cplan_builtin_call(c, id) || !call_answers(c, -1, ty_object_class(rt), "equal?", 0, &ml)
+                           : is_eqeq_name(name) && cplan_builtin_call(c, id) && !comp_chain_core_answers(c, ty_object_class(rt), name))) {
     if (ty_is_object(a0) && !comp_ty_value_obj(c, a0)) {
       buf_puts(b, "((void *)("); emit_expr(c, recv, b); buf_puts(b, ") == (void *)(");
       emit_expr(c, argv[0], b); buf_puts(b, "))");
     }
-    else if (a0r.kind == RK_BOXED || a0 == TY_UNKNOWN) {
+    else if (a0r.kind == RK_BOXED || a0 == TY_UNKNOWN || ((a0 == TY_INT || a0 == TY_FLOAT) && nullable_int_value(c, argv[0]))) {
+      /* (an Integer or Float that also takes nil is read boxed, as it is held: unwrapped, a nil raised) */
       /* A boxed argument can be holding this very object -- the same call
          reached with an object and with a symbol widens the parameter to
          poly, and folding the comparison to false then answered false for an
@@ -20887,8 +20891,10 @@ static int rt_probe_unfounded(Compiler *c, int id, TyKind rt, const char *qm) {
    receiver of such a class, implicit self in one, or a boxed value when a
    class that can be one overrides it: the dispatch's default arm answers for
    every other value (emit_poly_builtin_default), re-entering here with
-   g_poly_builtin_arm set. */
+   g_poly_builtin_arm set. The builtin's own call (builtin_only: a super's,
+   lowered) is the fold's. */
 int respond_to_user_defined(Compiler *c, int id, int recv) {
+  if (cplan_builtin_call(c, id)) return 0;
   int any = 0;
   for (int k = 0; k < c->nclasses && !any; k++)
     if (call_target(c, -1, k, RESPOND_TO_NAME, CT_OWN, NULL) >= 0) any = 1;
@@ -35790,7 +35796,7 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
       object_private_method_name(qm) && !root_reopen_defines(c, id, qm)) {
     if (!private_answer_overridden(c, qm, rt)) resolved = yes = 1;
     /* the value's class picks, at run time (emit_call_reflection_arms) */
-    else if (respond_to_runtime_reaches(c, rt)) return -1;
+    else if (respond_to_runtime_reaches(c, id, rt)) return -1;
   }
   /* A builtin value reaches a method of a program's Object (Kernel,
      BasicObject) reopening that its own class lacks (true and false: both

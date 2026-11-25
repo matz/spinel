@@ -15293,14 +15293,21 @@ int obj_arm_calls_own_inspect(Compiler *c, int cid) {
     if ((i == cid || is_descendant(c, i, cid)) && !obj_arm_calls_own_inspect1(c, i)) return 0;
   return 1;
 }
-/* Does the program have a `def inspect = super` reaching Kernel#inspect
-   (CallPlan.bsuper BSUP_OBJ_TEXT)? Only then is sp_obj_kernel_inspect emitted. */
+/* Does the program reach Kernel#inspect itself: a `def inspect = super` the
+   plan answers with it (CallPlan.bsuper BSUP_OBJ_TEXT), or the builtin's own
+   inspect of an object by pointer (builtin_only: such a super, lowered)? Only
+   then is sp_obj_kernel_inspect emitted. */
 int obj_kernel_inspect_used(Compiler *c) {
   for (int q = 0; q < 2; q++)
     NT_FOREACH_KIND(c->nt, q ? NK_ForwardingSuperNode : NK_SuperNode, sn) {
       Scope *ss = comp_scope_of(c, sn);
-      if (ss && ss->name && sp_streq(comp_scope_def_name(c, ss), "inspect") && cplan_user_fresh(c, sn).bsuper == BSUP_OBJ_TEXT) return 1;
+      if (ss && ss->name && is_inspect_name(comp_scope_def_name(c, ss)) && cplan_user_fresh(c, sn).bsuper == BSUP_OBJ_TEXT) return 1;
     }
+  NT_FOREACH_KIND(c->nt, NK_CallNode, cn) {
+    int r = nt_ref(c->nt, cn, "receiver");
+    TyKind rt = r >= 0 ? repr_of(c, r).as_ty : TY_UNKNOWN;
+    if (cplan_builtin_call(c, cn) && is_inspect_name(nt_str(c->nt, cn, "name")) && ty_is_object(rt) && !comp_ty_value_obj(c, rt)) return 1;
+  }
   return 0;
 }
 /* ---- Default Object#inspect: a table, read by one walk ----
@@ -17167,14 +17174,8 @@ void emit_boxed_fwd_param(Compiler *c, Scope *s, int pi, Buf *b) {
 /* A super's block argument (`super(o, &side)`), run for its effect where
    the method it reaches takes no block: "(void)(side); " into b. */
 void emit_super_blockarg_effect(Compiler *c, int id, Buf *b) {
-  int bk = nt_ref(c->nt, id, "block");
-  int e = bk >= 0 && nt_kind(c->nt, bk) == NK_BlockArgumentNode ? nt_ref(c->nt, bk, "expression") : -1;
-  /* a variable's read has no effect, and a block parameter of the
-     method is not in scope where the fold is emitted */
-  NodeKind ek = e >= 0 ? nt_kind(c->nt, e) : NK_NilNode;
-  if (e < 0 || ek == NK_LocalVariableReadNode || ek == NK_InstanceVariableReadNode ||
-      ek == NK_GlobalVariableReadNode || ek == NK_NilNode || ek == NK_SymbolNode)
-    return;
+  int e = comp_super_blockarg_effect(c->nt, id);
+  if (e < 0) return;
   buf_puts(b, "(void)(");
   emit_expr_for_effect(c, e, b);
   buf_puts(b, "); ");
@@ -17330,6 +17331,24 @@ static void emit_exc_attrs_zsuper(Compiler *c, int id, Scope *s, const char *sel
   buf_printf(b, "sp_exc_attrs_super(%s, _t%d->len, _t%d->data, _t%d); })", self_text, ta, ta, tk);
 }
 static void emit_super_value(Compiler *c, int id, Buf *b);
+/* See codegen_internal.h. */
+void emit_obj_kernel_text(Compiler *c, int cid, int want_inspect, const char *obj, Buf *b) {
+  int vt = comp_ty_value_obj(c, ty_object(cid));
+  char cls[160];
+  if (!vt && class_has_subclass(c, cid)) snprintf(cls, sizeof cls, "(%s)->cls_id", obj);
+  else snprintf(cls, sizeof cls, "%d", cid);
+  /* with no switch written no object of a program class exists, and the
+     rendering is the one the name gives (obj_default_name) */
+  if (!g_emit_obj_dispatch) {
+    char drn[512], darg[96];
+    obj_default_name(c, cid, drn, sizeof drn, darg, sizeof darg);
+    buf_printf(b, "sp_sprintf(\"#<%s:0x%%016llx>\", %s(unsigned long long)(uintptr_t)%s)", drn, darg, obj);
+  }
+  else if (want_inspect)
+    buf_printf(b, "sp_obj_kernel_inspect(%s, (void *)%s)", cls, obj);
+  else
+    buf_printf(b, "sp_sprintf(\"#<%%s:0x%%016llx>\", sp_obj_cls_name_rt(%s), (unsigned long long)(uintptr_t)%s)", cls, obj);
+}
 void emit_super(Compiler *c, int id, Buf *b) {
   int read = repr_of(c, id).as_ty == TY_STRING && repr_native_call_handle(c, id);
   if (read) buf_puts(b, "SP_STR_B(");
@@ -17362,21 +17381,9 @@ static void emit_super_value(Compiler *c, int id, Buf *b) {
     emit_super_blockarg_effect(c, id, &eb);
     if (eb.p) buf_printf(b, "({ %s", eb.p);
     int vt = comp_ty_value_obj(c, ty_object(cid));
-    char cls[96];
-    if (!vt && class_has_subclass(c, cid)) snprintf(cls, sizeof cls, "(%s)->cls_id", g_self);
-    else snprintf(cls, sizeof cls, "%d", cid);
-    /* with no switch written no object of a program class exists, and the
-       rendering is the one the name gives (obj_default_name) */
-    if (!g_emit_obj_dispatch) {
-      char drn[512], darg[96];
-      obj_default_name(c, cid, drn, sizeof drn, darg, sizeof darg);
-      buf_printf(b, "sp_sprintf(\"#<%s:0x%%016llx>\", %s(unsigned long long)(uintptr_t)%s%s)", drn, darg, vt ? "&" : "", g_self);
-    }
-    else if (sp_streq(comp_scope_def_name(c, s), "inspect"))
-      buf_printf(b, "sp_obj_kernel_inspect(%s, (void *)%s%s)", cls, vt ? "&" : "", g_self);
-    else
-      buf_printf(b, "sp_sprintf(\"#<%%s:0x%%016llx>\", sp_obj_cls_name_rt(%s), (unsigned long long)(uintptr_t)%s%s)",
-                 cls, vt ? "&" : "", g_self);
+    char obj[96];
+    snprintf(obj, sizeof obj, "%s%s", vt ? "&" : "", g_self);
+    emit_obj_kernel_text(c, cid, is_inspect_name(comp_scope_def_name(c, s)), obj, b);
     if (eb.p) buf_puts(b, "; })");
     free(eb.p);
     return;

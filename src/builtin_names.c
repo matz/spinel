@@ -737,6 +737,7 @@ int is_element_pick(const char *n) {
 int is_equal_name(const char *n) {
   return sp_streq(n, "equal?");
 }
+int is_eqeq_name(const char *n) { return n && sp_streq(n, "=="); }
 int is_eql_or_equal(const char *n) {
   return sp_streq(n, "equal?") || sp_streq(n, "eql?");
 }
@@ -803,7 +804,7 @@ ObjectSuperArm object_super_arm(const char *n) {
   if (is_freeze_name(n)) return OSA_FREEZE;
   if (is_instance_of_query(n)) return OSA_INSTANCE_OF;
   if (is_kind_query(n)) return OSA_IS_A;
-  if (sp_streq(n, "==") || is_equal_name(n)) return OSA_SAME;
+  if (is_eqeq_name(n) || is_equal_name(n)) return OSA_SAME;
   if (is_eql_or_equal(n)) return OSA_KERNEL_SAME;
   if (sp_streq(n, "!")) return OSA_FALSE;
   if (sp_streq(n, "nil?")) return OSA_KERNEL_FALSE;

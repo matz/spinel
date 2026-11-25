@@ -1102,12 +1102,18 @@ static int cplan_super_argc(Compiler *c, int id, const Scope *s) {
 /* The count super id in s passes where bowner's method uname cannot take it, from the owner's facts (Kernel's and
    BasicObject's methods are listed as Object's), and CRuby's "expected" text; -1 where it can, the count is the run's
    (a splat, a keyword, a forwarded list) or the facts do not bound it */
+/* The counts bowner's method uname takes, from the owner's facts (Kernel's and BasicObject's methods are listed as
+   Object's), with CRuby's "expected" texts: 0 where the facts do not bound them */
+static int cplan_owner_arity(const char *uname, const char *bowner, int *lo, int *hi, const char **lo_exp, const char **hi_exp) {
+  int slot = builtin_core_class_slot(bowner);
+  const char *cls = builtin_owner_kind(bowner) == BOWN_KERNEL || slot == CORE_BASIC_OBJECT || slot == CORE_OBJECT ? "Object" : bowner;
+  return bowner && uname && builtin_class_arity_spec(cls, uname, lo, hi, lo_exp, hi_exp);
+}
 static int cplan_super_count_fails(Compiler *c, int id, const Scope *s, const char *uname, const char *bowner,
                                    const char **exp) {
-  int argc = bowner && uname ? comp_super_plain_argc(c, id, s) : -1, lo, hi, slot = builtin_core_class_slot(bowner);
+  int argc = bowner && uname ? comp_super_plain_argc(c, id, s) : -1, lo, hi;
   const char *lo_exp, *hi_exp;
-  const char *cls = builtin_owner_kind(bowner) == BOWN_KERNEL || slot == CORE_BASIC_OBJECT || slot == CORE_OBJECT ? "Object" : bowner;
-  if (argc < 0 || !builtin_class_arity_spec(cls, uname, &lo, &hi, &lo_exp, &hi_exp)) return -1;
+  if (argc < 0 || !cplan_owner_arity(uname, bowner, &lo, &hi, &lo_exp, &hi_exp)) return -1;
   if (argc < lo && lo_exp) { *exp = lo_exp; return argc; }
   if (argc > hi) { *exp = hi_exp; return argc; }
   return -1;
@@ -1199,6 +1205,23 @@ static BsuperArm cplan_super_instance_arm(Compiler *c, int id, const Scope *s, c
   }
 }
 
+/* Does the argument list super id in scope s passes spell as the call on self BSP_OBJECT lowers it to, one the call
+   layer takes (cplan_super_args_shape)? Not a `(...)` passed on, nor a bare super's parameters no call spells, nor a
+   bare super's keywords into a method whose keywords the builtin's parameters (BAP) do not list, where CRuby passes
+   a Hash or nothing */
+static int cplan_object_args_spelled(Compiler *c, int id, const Scope *s, const char *uname, const char *bowner) {
+  unsigned sh = cplan_super_args_shape(c, id, s);
+  if (sh & (SAS_FWD | SAS_UNSPELLED)) return 0;
+  /* (nor a spread of a run-time length into a method of a bounded count, whose call the call layer does not take:
+     the plan's arm reads the count the run gives, emit_super) */
+  int lo, hi;
+  const char *lo_exp, *hi_exp;
+  if ((sh & SAS_SPLAT) && cplan_owner_arity(uname, bowner, &lo, &hi, &lo_exp, &hi_exp)) return 0;
+  /* (nor a block argument with an effect into a method that reads no block, which is handed none: the plan's arm
+     runs it for its effect) */
+  if (!object_method_reads_block(uname) && comp_super_blockarg_effect(c->nt, id) >= 0) return 0;
+  return !(sh & SAS_KW) || !(sh & SAS_BARE) || builtin_method_takes_keywords(bowner, uname);
+}
 /* CallPlan.bpath: the call path lower_builtin_supers lowers a super in site
    scope st named uname whose plan names builtin bowner to, BSP_NONE where the
    plan's arm (bsuper) answers it. Not every owner has a call path from a program
@@ -1215,15 +1238,6 @@ static BsuperArm cplan_super_instance_arm(Compiler *c, int id, const Scope *s, c
    reopened builtin, and a prepended one's self typed as the builtin's value,
    have no such path: `self.m` there reaches no method at run time, or
    returns an Enumerator where the method answers a boxed value. */
-/* Does the argument list super id in scope s passes spell as the call on self BSP_OBJECT lowers it to, one the call
-   layer takes (cplan_super_args_shape)? Not a `(...)` passed on, nor a bare super's parameters no call spells, nor a
-   bare super's keywords into a method whose keywords the builtin's parameters (BAP) do not list, where CRuby passes
-   a Hash or nothing */
-static int cplan_object_args_spelled(Compiler *c, int id, const Scope *s, const char *uname, const char *bowner) {
-  unsigned sh = cplan_super_args_shape(c, id, s);
-  if (sh & (SAS_FWD | SAS_UNSPELLED)) return 0;
-  return !(sh & SAS_KW) || !(sh & SAS_BARE) || builtin_method_takes_keywords(bowner, uname);
-}
 static BsuperPath cplan_super_path(Compiler *c, int id, const Scope *s, const Scope *st, const char *uname, const char *bowner) {
   /* (the stand-in a version entry's else arm calls for the call made before a later include or prepend is that
      call's method: a Kernel function is private, and the visibility-blind call a lowered super is would answer an
@@ -1235,16 +1249,19 @@ static BsuperPath cplan_super_path(Compiler *c, int id, const Scope *s, const Sc
   const char *root = comp_super_builtin_root(c, st->class_id, &self);
   int slot = root ? builtin_core_class_slot(root) : -1;
   if (st->is_prepend_copy && self && slot >= 0 && slot != CORE_OBJECT && is_builtin_reopen_name(root)) return BSP_PREPENDED;
-  /* (a program class whose chain's root is Object or BasicObject, not the reopening itself, nor a module, whose self
-     is any includer's (its copy in a class is the class's): one of Object's public methods, which a call on self
-     reaches as on any object of the class, BSP_OBJECT. Not one the super emission answers itself, object_super_arm,
-     nor one whose call on self the call layer does not answer yet, object_self_call_unanswered; nor a send,
+  /* (a program class whose chain's root is Object, or BasicObject for one of BasicObject's own (Kernel's there come
+     from an include the run may or may not make: the plan's cells), not the reopening itself, nor a module, whose
+     self is any includer's (its copy in a class is the class's): one of Object's public methods, which a call on self
+     reaches as on any object of the class, BSP_OBJECT, the call layer answering the builtin's own (builtin_only).
+     Not one whose call on self the call layer does not answer yet, object_self_call_unanswered, nor one a core
+     module the chain includes answers first (Comparable#==, comp_chain_core_answers); nor a send,
      __send__ or public_send, whose call on self the run-time-name send answers only for the names it lists
      (where it is not the plan's refusal, the super is the whole body of a send, which the sends read as no method
      of the program's own, send_def_just_supers, and run as Object's); nor an argument list the call on self does
      not spell, cplan_object_args_spelled) */
   if (!self && (slot == CORE_OBJECT || slot == CORE_BASIC_OBJECT) && !comp_class_is_module(c, &c->classes[st->class_id]) &&
-      object_public_method_name(uname) && object_super_arm(uname) == OSA_NONE && !object_self_call_unanswered(uname) &&
+      (!class_is_blank_slate(c, st->class_id) || builtin_core_class_slot(bowner) == CORE_BASIC_OBJECT) &&
+      object_public_method_name(uname) && !object_self_call_unanswered(uname) && !comp_chain_core_answers(c, st->class_id, uname) &&
       !is_send_family(uname) && cplan_object_args_spelled(c, id, s, uname, bowner))
     return BSP_OBJECT;
   /* (Array's initialize and initialize_copy are rewrite_array_subclass_super's) */
@@ -1372,7 +1389,11 @@ static void cplan_resolve_super(Compiler *c, int id, CallPlan *p) {
   if (p->dispatch == CP_REFUSE) return;
   /* (the call path a super is lowered to: never a refused one's) */
   const char *mname = comp_scope_user_name(st);
-  if (!s->is_cmethod && s->class_id != c->toplevel_class && ml.bowner && mname)
+  /* (nor one an attribute answers, `attr_reader :inspect` in a superclass, ML_ATTR, nor the operand of a defined?,
+     which asks after the super itself) */
+  const int *par = comp_parent_map(c);
+  if (!s->is_cmethod && s->class_id != c->toplevel_class && ml.bowner && mname && ml.kind != ML_ATTR &&
+      !(par[id] >= 0 && nt_kind(c->nt, par[id]) == NK_DefinedNode))
     p->bpath = (unsigned char)cplan_super_path(c, id, s, st, mname, ml.bowner);
   /* (the default text answers ahead of a prepend chain's shadow; a class method's shadow is its own lookup) */
   p->bsuper = (unsigned char)cplan_super_text(c, id, s, p->bowner);

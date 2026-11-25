@@ -102,3 +102,38 @@ end
 fw = Fwd.new
 p fw.object_id.is_a?(Integer), fw.object_id == fw.object_id
 p fw.tap { |y| $u = y }.equal?(fw), $u.equal?(fw)
+
+# ==, to_s, inspect, itself and respond_to? answer as Object's, not as the
+# program's method that calls super, for a pointer object and a by-value one
+class Txt
+  def initialize; @a = 1; end
+  def ==(x) = super
+  def to_s = super
+  def inspect = super
+  def itself = super
+  def respond_to?(m, priv = false) = m == :magic || super
+  def secret = 1
+  private :secret
+end
+class TxtSub < Txt
+  def initialize; @a = 1; @b = "x"; end
+end
+[Txt.new, TxtSub.new].each do |t|
+  p t.to_s.sub(/0x\h+/, "X"), t.inspect.sub(/0x\h+/, "X")
+  p t == t, t == Txt.new, t.itself.equal?(t)
+end
+t = Txt.new
+p [t.respond_to?(:magic), t.respond_to?(:secret), t.respond_to?(:secret, true), t.respond_to?(:zz)]
+class ByVal
+  def initialize; @a = 1; end
+  def to_s = super
+  def inspect = super
+end
+p ByVal.new.to_s.sub(/0x\h+/, "X"), ByVal.new.inspect.sub(/0x\h+/, "X")
+
+# != is BasicObject's, which asks the program's ==
+class NotEq
+  def ==(o) = true
+  def !=(o) = super
+end
+p [NotEq.new != 1]

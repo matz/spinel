@@ -168,6 +168,7 @@ int is_hash_merge_bang(const char *n); /* merge! update */
 int is_membership_alias(const char *n); /* include? member? */
 int is_eql_or_equal(const char *n); /* eql? equal? */
 int is_equal_name(const char *n);   /* equal? */
+int is_eqeq_name(const char *n);    /* == */
 int is_substitution(const char *n); /* gsub sub */
 int is_substitution_bang(const char *n); /* gsub! sub! */
 int is_str_reassign_mutator(const char *n); /* prepend << concat replace delete_prefix! delete_suffix! */

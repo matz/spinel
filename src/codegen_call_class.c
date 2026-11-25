@@ -210,11 +210,12 @@ static void cm_ret_close(const Scope *s, int w, Buf *b) {
   if (oint_kind(s->ret) && method_ret_is_oint(s) != (w != 0)) buf_puts(b, ")");
 }
 
-/* Does the run-time respond_to? (emit_respond_to_runtime_name) answer for a
-   receiver of type rt? An override answers only for its own class's objects
-   (and a boxed value, which dispatches). */
-int respond_to_runtime_reaches(Compiler *c, TyKind rt) {
-  return !any_class_defines(c, "respond_to?") || g_poly_builtin_arm ||
+/* Does the run-time respond_to? (emit_respond_to_runtime_name) answer call
+   id on a receiver of type rt? An override answers only for its own class's
+   objects (and a boxed value, which dispatches); the builtin's own call
+   (builtin_only: a super's, lowered) is answered whatever overrides it. */
+int respond_to_runtime_reaches(Compiler *c, int id, TyKind rt) {
+  return !any_class_defines(c, "respond_to?") || g_poly_builtin_arm || cplan_builtin_call(c, id) ||
          !(rt == TY_POLY ||
            (ty_is_object(rt) && call_target(c, -1, ty_object_class(rt), RESPOND_TO_NAME, CT_METHODS, NULL) >= 0));
 }
@@ -1191,7 +1192,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
           (nt_kind(nt, argv[1]) == NK_TrueNode ? object_private_method_name(qm)
                                                : ty_is_object(rt) && nt_kind(nt, argv[1]) != NK_FalseNode &&
                                                  nt_kind(nt, argv[1]) != NK_NilNode) &&
-          respond_to_runtime_reaches(c, rt)) {
+          respond_to_runtime_reaches(c, id, rt)) {
         emit_respond_to_runtime_name(c, id, b, recv, argc, argv, qm);
         return 1;
       }
@@ -1450,7 +1451,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       }
     }
     else if (recv >= 0 && rt != TY_CLASS && nt_kind(nt, argv[0]) != NK_SplatNode &&
-             respond_to_runtime_reaches(c, rt)) {
+             respond_to_runtime_reaches(c, id, rt)) {
       emit_respond_to_runtime_name(c, id, b, recv, argc, argv, NULL);
       return 1;
     }

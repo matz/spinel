@@ -2170,11 +2170,14 @@ static int widen_aliased_array_ivars(Compiler *c, int node, int cls_id) {
   return changed;
 }
 
-/* The family of the global, class variable or constant node kind k is a
-   read or a write of (NS_NONE for another kind). */
-enum { NS_NONE, NS_GVAR, NS_CVAR, NS_CONST };
+/* The family of the global, class variable, constant or ivar node kind k
+   is a read or a write of (NS_NONE for another kind). */
+enum { NS_NONE, NS_GVAR, NS_CVAR, NS_CONST, NS_IVAR };
 static int named_slot_family(NodeKind k) {
   switch (k) {
+  case NK_InstanceVariableReadNode: case NK_InstanceVariableWriteNode: case NK_InstanceVariableOrWriteNode:
+  case NK_InstanceVariableAndWriteNode: case NK_InstanceVariableOperatorWriteNode: case NK_InstanceVariableTargetNode:
+    return NS_IVAR;
   case NK_GlobalVariableReadNode: case NK_GlobalVariableWriteNode: case NK_GlobalVariableOrWriteNode:
   case NK_GlobalVariableAndWriteNode: case NK_GlobalVariableOperatorWriteNode: case NK_GlobalVariableTargetNode:
     return NS_GVAR;
@@ -9075,26 +9078,47 @@ static int struct_super_member_values(Compiler *c, int cls, int iv, AttrArgWalk 
    (named_src_walk). An `op=` leaves the Array its operator builds out of
    the slot's own (`@v += [2]`), which is new. Nonzero stops the walk where
    the value is no one the walk can follow. */
+/* How slot_write_walk takes a write of kind k: SW_OP an op-write, SW_TARGET
+   a multiple assignment's target, SW_VALUE a write of its value node;
+   SW_NONE for any other kind (a read, an attribute writer's call). With
+   named_slot_family it lists the writes of a slot (slot_write_kind). */
+enum { SW_NONE, SW_OP, SW_TARGET, SW_VALUE };
+static int slot_write_form(NodeKind k) {
+  switch (k) {
+  case NK_InstanceVariableOperatorWriteNode: case NK_GlobalVariableOperatorWriteNode:
+  case NK_ClassVariableOperatorWriteNode: case NK_ConstantOperatorWriteNode:
+  case NK_ConstantPathOperatorWriteNode: case NK_CallOperatorWriteNode:
+    return SW_OP;
+  case NK_InstanceVariableTargetNode: case NK_GlobalVariableTargetNode: case NK_ClassVariableTargetNode:
+  case NK_ConstantTargetNode: case NK_ConstantPathTargetNode:
+    return SW_TARGET;
+  case NK_InstanceVariableWriteNode: case NK_InstanceVariableOrWriteNode: case NK_InstanceVariableAndWriteNode:
+  case NK_GlobalVariableWriteNode: case NK_GlobalVariableOrWriteNode: case NK_GlobalVariableAndWriteNode:
+  case NK_ClassVariableWriteNode: case NK_ClassVariableOrWriteNode: case NK_ClassVariableAndWriteNode:
+  case NK_ConstantWriteNode: case NK_ConstantOrWriteNode: case NK_ConstantAndWriteNode:
+  case NK_ConstantPathWriteNode: case NK_ConstantPathOrWriteNode: case NK_ConstantPathAndWriteNode:
+    return SW_VALUE;
+  default: return SW_NONE;
+  }
+}
+/* Is k a kind of write of a slot of family fam (named_slot_family), one
+   slot_write_walk takes? */
+static int slot_write_kind(NodeKind k, int fam) {
+  return named_slot_family(k) == fam && slot_write_form(k) != SW_NONE;
+}
 static int slot_write_walk(Compiler *c, int w, void *ctx) {
   const NodeTable *nt = c->nt;
   AttrArgWalk *aw = ctx;
   NodeKind k = nt_kind(nt, w);
   Scope *ws = comp_scope_of(c, w);
   int arg = -1;
-  switch (k) {
-  case NK_InstanceVariableOperatorWriteNode: case NK_GlobalVariableOperatorWriteNode:
-  case NK_ClassVariableOperatorWriteNode: case NK_ConstantOperatorWriteNode:
-  case NK_ConstantPathOperatorWriteNode: case NK_CallOperatorWriteNode:
+  switch (slot_write_form(k)) {
+  case SW_OP:
     aw->n++;
     return 0;
-  case NK_InstanceVariableTargetNode: case NK_GlobalVariableTargetNode: case NK_ClassVariableTargetNode:
-  case NK_ConstantTargetNode: case NK_ConstantPathTargetNode:
+  case SW_TARGET:
     return masgn_target_walk(c, w, aw);
-  case NK_InstanceVariableWriteNode: case NK_InstanceVariableOrWriteNode: case NK_InstanceVariableAndWriteNode:
-  case NK_GlobalVariableWriteNode: case NK_GlobalVariableOrWriteNode: case NK_GlobalVariableAndWriteNode:
-  case NK_ClassVariableWriteNode: case NK_ClassVariableOrWriteNode: case NK_ClassVariableAndWriteNode:
-  case NK_ConstantWriteNode: case NK_ConstantOrWriteNode: case NK_ConstantAndWriteNode:
-  case NK_ConstantPathWriteNode: case NK_ConstantPathOrWriteNode: case NK_ConstantPathAndWriteNode:
+  case SW_VALUE:
     return slot_value_walk(c, ws, nt_ref(nt, w, "value"), aw);
   default: break;
   }
@@ -9131,13 +9155,10 @@ static int slot_write_walk(Compiler *c, int w, void *ctx) {
    change. The walk is st at `depth`, the slot among the ones it follows. */
 static int ivar_writes_fresh(Compiler *c, int cls, const char *ivn, int apply, int *ch, SrcWalk *st, int depth) {
   const NodeTable *nt = c->nt;
-  const NodeKind wk[5] = { NK_InstanceVariableWriteNode, NK_InstanceVariableOrWriteNode,
-                           NK_InstanceVariableTargetNode, NK_InstanceVariableAndWriteNode,
-                           NK_InstanceVariableOperatorWriteNode };
   AttrArgWalk aw = { st, depth, apply, 0, 0 };
   int saw = 0;
-  for (int t = 0; t < 5; t++)
-    NT_FOREACH_KIND(nt, wk[t], w) {
+  for (NodeKind wk = NK_NONE; wk < NK__COUNT; wk++)
+    if (slot_write_kind(wk, NS_IVAR)) NT_FOREACH_KIND(nt, wk, w) {
       if (!sp_streq(nt_str(nt, w, "name"), ivn)) continue;
       Scope *ws = comp_scope_of(c, w);
       int wc = ws && ws->class_id >= 0 ? ws->class_id : c->node_cbody[w];
@@ -9273,21 +9294,11 @@ static int named_src_walk(Compiler *c, int v, int apply, SrcWalk *st, int depth)
   int cls = fam == NS_CVAR ? holder_cvar_owner(c, sn, nm, holder_cbody(c, sn)) : -1;
   if (!nm || st->nslot == 8) return 0;
   if (src_walk_follows(st, cls, nm)) return !apply;
-  const NodeKind gw[] = { NK_GlobalVariableWriteNode, NK_GlobalVariableOrWriteNode, NK_GlobalVariableAndWriteNode,
-                          NK_GlobalVariableOperatorWriteNode, NK_GlobalVariableTargetNode };
-  const NodeKind cw[] = { NK_ClassVariableWriteNode, NK_ClassVariableOrWriteNode, NK_ClassVariableAndWriteNode,
-                          NK_ClassVariableOperatorWriteNode, NK_ClassVariableTargetNode };
-  const NodeKind kw[] = { NK_ConstantWriteNode, NK_ConstantOrWriteNode, NK_ConstantAndWriteNode,
-                          NK_ConstantOperatorWriteNode, NK_ConstantTargetNode, NK_ConstantPathWriteNode,
-                          NK_ConstantPathOrWriteNode, NK_ConstantPathAndWriteNode, NK_ConstantPathOperatorWriteNode,
-                          NK_ConstantPathTargetNode };
-  const NodeKind *wk = fam == NS_GVAR ? gw : fam == NS_CVAR ? cw : kw;
-  int nk = fam == NS_CONST ? 10 : 5;
   st->slcls[st->nslot] = cls; st->slname[st->nslot++] = nm;
   AttrArgWalk aw = { st, depth, apply, 0, 0 };
   int saw = 0, stop = 0;
-  for (int t = 0; t < nk && !stop; t++)
-    NT_FOREACH_KIND(nt, wk[t], w) {
+  for (NodeKind wk = NK_NONE; wk < NK__COUNT && !stop; wk++)
+    if (slot_write_kind(wk, fam)) NT_FOREACH_KIND(nt, wk, w) {
       const char *wn = stop ? NULL : named_slot_name(c, w);
       if (!wn || !sp_streq(wn, nm)) continue;
       /* a class variable of another class is another slot, unless that class
@@ -9411,7 +9422,8 @@ static int array_src_walk(Compiler *c, int v, int pinned, int apply, SrcWalk *st
     if (!lv->poly_array_pin || lv->type != TY_POLY_ARRAY) { lv_set_type(lv, TY_POLY_ARRAY); lv->poly_array_pin = 1; ch = 1; }
     return ch;
   }
-  if (named_slot_family(k) != NS_NONE) return named_src_walk(c, v, apply, st, depth);
+  int fam = named_slot_family(k);
+  if (fam != NS_NONE && fam != NS_IVAR) return named_src_walk(c, v, apply, st, depth);
   /* An ivar, read here or through an attr_reader, widens after the
      fixpoint (widen_ivars_from_pushed_params), where the write passes cannot
      narrow it back; the locals and method values on the way are pinned now.

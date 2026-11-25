@@ -103,3 +103,8 @@ mk 2
 #<Encoding:UTF-8>
 "aéĀ"
 #<Encoding:UTF-8>
+[:u_b_i, Encoding::CompatibilityError]
+[:b_u_i, Encoding::CompatibilityError]
+[:e_u_b_i, Encoding::CompatibilityError]
+[:a_b_i, "a\xC3\xA9\xC8", #<Encoding:BINARY (ASCII-8BIT)>]
+[:splat, Encoding::CompatibilityError]

@@ -183,3 +183,16 @@ x = ''.b.concat(lw, 256)
 p x, x.encoding
 x = ''.b.concat("a" "é", 256)
 p x, x.encoding
+# operands staged together check their encodings as CRuby's appends do
+def ce(l)
+  r = yield
+  p [l, r, r.encoding]
+rescue Encoding::CompatibilityError => e
+  p [l, e.class]
+end
+ce(:u_b_i) { (+"é").concat("é".b, 200) }
+ce(:b_u_i) { "é".b.concat("é", 200) }
+ce(:e_u_b_i) { (+"").concat("é", "é".b, 200) }
+ce(:a_b_i) { (+"a").concat("é".b, 200) }
+cpl = [200, "é"]
+ce(:splat) { ''.b.concat(*cpl) }

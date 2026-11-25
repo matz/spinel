@@ -91,6 +91,11 @@ static void sp_pm_options_init(pm_options_t *opts, const char *path) {
   pm_options_frozen_string_literal_set(opts, true);
   pm_options_version_set(opts, "4.0", 3);
   if (path) pm_options_filepath_set(opts, path);
+  /* the text of -e is parsed as ruby -e parses it, which differs only in
+     the warnings: no unused local at the top level, and no literal in a
+     condition taken for a comparison with $. */
+  if (path && g_opt_eval_path && strcmp(path, g_opt_eval_path) == 0)
+    pm_options_command_line_set(opts, PM_OPTIONS_COMMAND_LINE_E);
 }
 static void sp_pm_parser_init(pm_parser_t *parser, const char *src, size_t len,
                               const char *path) {
@@ -6964,6 +6969,24 @@ static void sp_report_parse_errors(pm_parser_t *parser, const char *source_file,
   }
 }
 
+/* Each warning of the parse of a file of the program's own, as CRuby
+   writes it when it reads the file: the ones of the default level always,
+   the ones ruby -w adds (an unused local, a statement not reached, ...)
+   under -w. A compiled binary reads no source when it runs, so the compile
+   is where a slip such as a duplicated Hash key can be told. The text of
+   -e is named -e, as CRuby names it. */
+static void sp_report_parse_warnings(const SpSrcFile *f) {
+  const pm_parser_t *parser = &f->parser;
+  const char *file = f->shown ? f->shown : f->path;
+  if (g_opt_eval_path && strcmp(f->path, g_opt_eval_path) == 0) file = "-e";
+  for (const pm_diagnostic_t *d = (const pm_diagnostic_t *)parser->warning_list.head; d;
+       d = (const pm_diagnostic_t *)d->node.next) {
+    if (d->level == PM_WARNING_LEVEL_VERBOSE && !g_opt_warn_verbose) continue;
+    int32_t line = pm_newline_list_line(&parser->newline_list, d->location.start, parser->start_line);
+    fprintf(stderr, "spinel: %s:%d: warning: %s\n", file, (int)line, d->message);
+  }
+}
+
 static void sp_graph_scan_sites(SpLoadGraph *g, int f, const char *path, SpNames *facts, const SpPreFileCtx *pre) {
   SpGraphFile *r = sp_graph_rec(g, f);
   sp_roots_set(g, r->dirs, r->ndirs);
@@ -7014,6 +7037,8 @@ static int sp_graph_read(SpLoadGraph *g, int f, const char *source_file, SpNames
     return 0;
   }
   sp_src_file_fsl(&r->src);   /* (its pragma's warning; every literal is frozen) */
+  if (sp_load_tier(g, f) == SP_LIB_NONE && !(*sp_load_flags(g, f) & SP_FILE_BUILTIN))
+    sp_report_parse_warnings(&r->src);
   if (!(*sp_load_flags(g, f) & SP_FILE_BUILTIN)) {
     sp_pre_scan_file(&r->src.parser, r->src.root, g->has_pre_inherit ? &g->pre_inherit : NULL, &r->pre);
     r->has_pre = 1;
@@ -7672,9 +7697,9 @@ static NodeTable *sp_parse_graph(const char *source_file, const char *argv0) {
 }
 
 int g_opt_debug, g_opt_line_map, g_opt_positions, g_opt_warn_widen, g_opt_check_stores,
-    g_opt_defer_refusals, g_opt_emit_types_keep_c, g_opt_strict_rbs;
+    g_opt_defer_refusals, g_opt_emit_types_keep_c, g_opt_strict_rbs, g_opt_warn_verbose;
 const char *g_opt_emit_types, *g_opt_emit_rbs, *g_opt_emit_symbol_map, *g_opt_profile_symbol_map,
-           *g_opt_rbs_seed;
+           *g_opt_rbs_seed, *g_opt_eval_path;
 
 /* Whether flatten stamps each node's position (node_line / node_file /
    node_col, and its end where a report reads it), as the debug and report

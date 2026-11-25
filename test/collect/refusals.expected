@@ -2199,10 +2199,12 @@ spinel: 1 refusal, nothing written
 spinel: test/reject/typed_array_kept_by_struct_into_boxed_param_store.rb:11: an Array[Integer] is passed to `m`'s parameter `arr`, which the method stores elements of other kinds into: the caller's array cannot hold them, and the store would go to a copy it never sees. Build the argument where the call can follow it (an array literal or a new array, through locals and method values), so it is widened with the parameter.
 spinel: 1 refusal, nothing written
 == test/reject/unsupported_node_kind.rb [default] rc=1
+spinel: test/reject/unsupported_node_kind.rb:10: warning: regex literal in condition
 spinel: test/reject/unsupported_node_kind.rb:5: unsupported condition (non-bool): FlipFlopNode at test/reject/unsupported_node_kind.rb:5:8
 spinel: test/reject/unsupported_node_kind.rb:10: unsupported condition (non-bool): MatchLastLineNode at test/reject/unsupported_node_kind.rb:10:8
 spinel: 2 refusals, nothing written
 == test/reject/unsupported_node_kind.rb [promote] rc=1
+spinel: test/reject/unsupported_node_kind.rb:10: warning: regex literal in condition
 spinel: test/reject/unsupported_node_kind.rb:5: unsupported condition (non-bool): FlipFlopNode at test/reject/unsupported_node_kind.rb:5:8
 spinel: test/reject/unsupported_node_kind.rb:10: unsupported condition (non-bool): MatchLastLineNode at test/reject/unsupported_node_kind.rb:10:8
 spinel: 2 refusals, nothing written

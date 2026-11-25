@@ -507,6 +507,9 @@ static void usage(void) {
     "  --strict-require  Refuse an unresolvable require instead of warning\n"
     "  --emit-rbs  Dump inferred type signatures as RBS (-> app.rbs), no binary\n"
     "  --emit-types Dump per-position inferred types + diagnostics as JSON\n"
+    "  -w          Also write the parser's warnings that ruby -w adds (an\n"
+    "              unused local, a statement not reached, ...); the ones\n"
+    "              ruby writes by default are always written\n"
     "  --warn-widen  Warn, at the slot, for each parameter or return that\n"
     "              widened to untyped (the boxed slow path)\n"
     "  --check-stores  Warn, at the store, for each value written raw into a\n"
@@ -1167,6 +1170,7 @@ int main(int argc, char **argv) {
     else if (sp_streq(a, "--no-line-map")) { line_map = 0; i++; }
     else if (sp_streq(a, "--defer-refusals")) { g_opt_defer_refusals = 1; i++; }
     else if (sp_streq(a, "--warn-widen"))  { warn_widen = 1; i++; }
+    else if (sp_streq(a, "-w"))            { g_opt_warn_verbose = 1; i++; }
     else if (sp_streq(a, "--check-stores")) { check_stores = 1; i++; }
     /* keep every GC root, so a suspected miscompile can be bisected against
        the same binary rather than against a different build. */
@@ -1278,6 +1282,7 @@ int main(int argc, char **argv) {
     make_temp_path(eval_path, sizeof eval_path, "eval", 0, ".rb");
     if (!write_text_file(eval_path, eval_src.p ? eval_src.p : "")) return 1;
     source = eval_path;
+    g_opt_eval_path = eval_path;
   }
   free(eval_src.p);
 

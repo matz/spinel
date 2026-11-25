@@ -5968,6 +5968,12 @@ test-run: load-graph-test decl-test
 load-graph-test: $(SPINEL)
 	@tools/load_graph_check.sh
 
+# The parser's warnings at compile time, -w's under -w (tools/parse_warnings_check.sh).
+.PHONY: parse-warnings-test
+test-run: parse-warnings-test
+parse-warnings-test: $(SPINEL)
+	@tools/parse_warnings_check.sh
+
 # The scope each local variable node, parameter and block-local is declared in
 # (its `decl`, from Prism's scope nesting): test/decl/NAME.decl, written by
 # tools/decl_check.sh --write. make test runs it.

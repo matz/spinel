@@ -856,9 +856,9 @@ NodeTable *sp_parse_snippet_in(const char *src, const SnipFrame *f);
    src/main.c sets them, spinel_parse.c defines them. A string is a path to
    write, or NULL. */
 extern int g_opt_debug, g_opt_line_map, g_opt_positions, g_opt_warn_widen, g_opt_check_stores,
-           g_opt_defer_refusals, g_opt_emit_types_keep_c, g_opt_strict_rbs;
+           g_opt_defer_refusals, g_opt_emit_types_keep_c, g_opt_strict_rbs, g_opt_warn_verbose;
 extern const char *g_opt_emit_types, *g_opt_emit_rbs, *g_opt_emit_symbol_map, *g_opt_profile_symbol_map,
-                  *g_opt_rbs_seed;
+                  *g_opt_rbs_seed, *g_opt_eval_path;
 
 
 /* ---- a scope's local names ----

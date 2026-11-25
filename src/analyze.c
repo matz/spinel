@@ -46131,6 +46131,30 @@ static void bo_hold_ref(BoHoist *h, int node, const char *key) {
   int from = nt_ref(nt, node, key), to = bo_hoist(h, from, 0);
   if (to != from) nt_node_set_ref(nt, node, key, to);
 }
+/* Does operand `x` read, in its own evaluation, a variable that block
+   expression `be`, which acts, may change before the call: a local `be`
+   writes (`fb(s, &(s = +"x"; :upcase))`, `[s].map(&(s = 9; :to_s))`), or an
+   instance, global or class variable, which any code may? A block, a
+   lambda or a def reads its variables when it runs. */
+static int bo_read_rebound(const NodeTable *nt, int x, int be) {
+  if (x < 0) return 0;
+  NodeKind k = nt_kind(nt, x);
+  if (k == NK_LocalVariableReadNode) {
+    const char *nm = nt_str(nt, x, "name");
+    return nm && rr_writes_var(nt, be, "LocalVariable", nm);
+  }
+  if (k == NK_InstanceVariableReadNode || k == NK_GlobalVariableReadNode || k == NK_ClassVariableReadNode) return 1;
+  if (k == NK_DefNode || k == NK_LambdaNode || k == NK_BlockNode) return 0;
+  int nr = nt_num_refs(nt, x);
+  for (int i = 0; i < nr; i++)
+    if (bo_read_rebound(nt, nt_ref_at(nt, x, i), be)) return 1;
+  int na = nt_num_arrs(nt, x);
+  for (int i = 0; i < na; i++) {
+    int m = 0; const int *ids = nt_arr_at(nt, x, i, &m);
+    for (int j = 0; j < m; j++) if (bo_read_rebound(nt, ids[j], be)) return 1;
+  }
+  return 0;
+}
 /* `recv.m(args, &expr)`: Ruby evaluates the receiver, then the arguments, then
    the block expression. The emitted C passes the block as one more function
    argument (or hoists it ahead of a Class-value dispatch, #4992), and C leaves
@@ -46139,8 +46163,10 @@ static void bo_hold_ref(BoHoist *h, int node, const char *key) {
    and something ahead of it can too, the call becomes
      (__bo_N_0 = recv; __bo_N_1 = arg; ...; __bo_N_b = expr; __bo_N_0.m(__bo_N_1, ..., &__bo_N_b))
    so the order is the statements'. A safe navigation guards the argument
-   statements and call with a nil test on the held receiver. The original
-   node becomes the parentheses, keeping its id, line and scope. */
+   statements and call with a nil test on the held receiver. An operand
+   that only reads is held too when the block expression may change what it
+   reads (bo_read_rebound): Ruby read it first. The original node becomes
+   the parentheses, keeping its id, line and scope. */
 static void desugar_block_arg_order(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count;
@@ -46169,8 +46195,14 @@ static void desugar_block_arg_order(Compiler *c) {
     int args = nt_ref(nt, id, "arguments");
     int an = 0; const int *av0 = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
     int ahead = bo_may_act(c, recv), plain = 1;
+    /* (the reads ahead the block expression may change: held in their turn) */
+    int bact = !seq && !lread && bo_may_act(c, be);
+    int rb_recv = bact && bo_read_rebound(nt, recv, be), rebound = rb_recv;
     for (int k = 0; k < an; k++) {
       NodeKind ak = nt_kind(nt, av0[k]);
+      if (bact && ak != NK_SplatNode && ak != NK_KeywordHashNode && ak != NK_BlockArgumentNode &&
+          ak != NK_ForwardingArgumentsNode)
+        rebound |= bo_read_rebound(nt, av0[k], be);
       if (ak == NK_BlockArgumentNode || ak == NK_ForwardingArgumentsNode) plain = 0;
       else if (ak == NK_SplatNode) ahead |= bo_may_act(c, nt_ref(nt, av0[k], "expression"));
       else if (ak == NK_KeywordHashNode) {
@@ -46189,7 +46221,7 @@ static void desugar_block_arg_order(Compiler *c) {
       if (!rebinds) continue;
     }
     else lread = 0;
-    if (!plain || (!ahead && !seq)) continue;
+    if (!plain || (!ahead && !seq && !rebound)) continue;
     Scope *sc = comp_scope_of(c, id);
     if (!sc) continue;
     int *av = an > 0 ? malloc(sizeof(int) * (size_t)an) : NULL;
@@ -46205,7 +46237,7 @@ static void desugar_block_arg_order(Compiler *c) {
     if (!bo_hoist_init(&h, c, sc, id, seq, lread, nops)) { free(av); continue; }
     /* A sequence can reassign even a plain read: capture the receiver and
        arguments before it, inside the call's own evaluation site. */
-    int nrecv = bo_hoist(&h, recv, safe);
+    int nrecv = bo_hoist(&h, recv, safe || rb_recv);
     int nhead = h.ns;
     for (int k = 0; k < an; k++) {
       NodeKind ak = nt_kind(nt, av[k]);
@@ -46222,7 +46254,7 @@ static void desugar_block_arg_order(Compiler *c) {
         }
         free(el);
       }
-      else av[k] = bo_hoist(&h, av[k], 0);
+      else av[k] = bo_hoist(&h, av[k], bact && bo_read_rebound(nt, av[k], be));
     }
     /* `&(log; proc { ... })`: the sequence's statements run here, in turn,
        and the proc literal they end in is the block itself -- hoisted whole,

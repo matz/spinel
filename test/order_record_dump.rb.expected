@@ -27,13 +27,12 @@ g1_center_reas.rb:3 call +@: none (pure)
 g1_center_reas.rb:3 call +@: none (pure)
 g1_center_reas.rb:5 call run: none (pure)
 == g2_blockpass.rb
+g2_blockpass.rb:0 call public_send: none (pure)
 g2_blockpass.rb:0 call upcase: none (pure)
-g2_blockpass.rb:0 call proc: none (pure)
-g2_blockpass.rb:0 call ==: none (pure)
 g2_blockpass.rb:1 call call: none (pure)
 g2_blockpass.rb:2 call +@: none (pure)
 g2_blockpass.rb:3 call p: none (tail)
-g2_blockpass.rb:3 call fb: 0 s INLINE across | 1 BlockArgument AHEAD code | guard=call steps=0
+g2_blockpass.rb:3 call fb: none (pure)
 g2_blockpass.rb:3 call +@: none (pure)
 == g3_match_order.rb
 g3_match_order.rb:1 array: none (pure)

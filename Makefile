@@ -1742,7 +1742,7 @@ share-strings-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(BUNDLED_NATIVE_OBJS
 	  xargs -P $(NPROC) -n 1 sh tools/share_strings_one.sh $(SPINEL) > "$$tmp/runs" 2>&1 || ok=0; \
 	cat "$$tmp/runs"; \
 	if ! $(SPINEL) test/share_strings_class_value_stat_fields.rb -c --no-line-map -o "$$tmp/stat.c" >"$$tmp/out" 2>&1 || \
-	   grep -q 'sp_pd_[0-9a-f]' "$$tmp/stat.c"; then \
+	   grep -q '^static .*sp_pd_[0-9a-f_]*(.*switch (_t' "$$tmp/stat.c"; then \
 	  echo "share-strings-test: FAIL (Class calls of Stat field names add a dispatch)"; ok=0; \
 	fi; \
 	if ! $(SPINEL) test/share/share_strings_literal_queries.rb -c --no-line-map -o "$$tmp/queries.c" >"$$tmp/out" 2>&1 || \

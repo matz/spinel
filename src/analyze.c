@@ -46338,6 +46338,69 @@ static int rr_writes_var(const NodeTable *nt, int n, const char *pfx, const char
    write stands. The node itself becomes the parentheses, keeping its id,
    line and scope. This runs after the type fixpoint converges; a rewrite
    resumes inference so the new temporary takes its receiver's type. */
+/* The locals a proc or a lambda literal assigns, by the scope it is in,
+   gathered once for a run of the pass (a scan per call grew with the
+   program at each, scale-test): each name with its scope. */
+typedef struct { int encl; const char *name; } MrrWrite;
+static MrrWrite *g_mrr_w;
+static int g_mrr_n, g_mrr_cap, g_mrr_built;
+static void mrr_note_writes(const NodeTable *nt, int n, int encl) {
+  if (n < 0) return;
+  const char *ty = nt_type(nt, n);
+  NodeKind k = nt_kind(nt, n);
+  if (!ty || k == NK_DefNode) return;
+  const char *nm = nt_str(nt, n, "name");
+  if (!strncmp(ty, "LocalVariable", 13) && (strstr(ty, "Write") || strstr(ty, "Target")) && nm) {
+    int seen = 0;
+    for (int i = 0; i < g_mrr_n && !seen; i++) seen = g_mrr_w[i].encl == encl && sp_streq(g_mrr_w[i].name, nm);
+    if (!seen) {
+      if (g_mrr_n == g_mrr_cap) {
+        int nc = g_mrr_cap ? 2 * g_mrr_cap : 16;
+        MrrWrite *nw = realloc(g_mrr_w, sizeof *nw * (size_t)nc);
+        if (!nw) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+        g_mrr_w = nw; g_mrr_cap = nc;
+      }
+      g_mrr_w[g_mrr_n].encl = encl; g_mrr_w[g_mrr_n].name = nm; g_mrr_n++;
+    }
+  }
+  int nr = nt_num_refs(nt, n);
+  for (int i = 0; i < nr; i++) mrr_note_writes(nt, nt_ref_at(nt, n, i), encl);
+  int na = nt_num_arrs(nt, n);
+  for (int i = 0; i < na; i++) {
+    int m = 0; const int *ids = nt_arr_at(nt, n, i, &m);
+    for (int j = 0; j < m; j++) mrr_note_writes(nt, ids[j], encl);
+  }
+}
+static void mrr_writes_build(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  g_mrr_built = 1;
+  for (int n = 0; n < nt->count && n < c->node_cap; n++) {
+    NodeKind k = nt_kind(nt, n);
+    if (k == NK_LambdaNode) mrr_note_writes(nt, n, c->nscope[n]);
+    else if (k == NK_CallNode) {
+      /* a proc's block (one a method takes runs within its call, unless the
+         method keeps it: not followed here) */
+      int b = nt_ref(nt, n, "block");
+      if (b >= 0 && nt_kind(nt, b) == NK_BlockNode && is_proc_create(c, n)) mrr_note_writes(nt, b, c->nscope[n]);
+    }
+  }
+}
+static void mrr_writes_free(void) {
+  free(g_mrr_w); g_mrr_w = NULL; g_mrr_n = g_mrr_cap = g_mrr_built = 0;
+}
+/* Can operand subtree `x` of a call in scope encl change local vn other
+   than by a write it holds (rr_writes_var): a proc or a lambda literal of
+   the scope assigns it, and x may run one (`s.sub!(g.call, "K")` with
+   g = proc { s = +"x"; "j" })? The local's cells are marked after this
+   pass (mark_proc_captures), so the literal is found from the gathered
+   writes, before the question that settles plans. */
+static int mrr_rebinds_by_code(Compiler *c, int x, const char *vn, int encl) {
+  if (x < 0) return 0;
+  if (!g_mrr_built) mrr_writes_build(c);
+  int found = 0;
+  for (int i = 0; i < g_mrr_n && !found; i++) found = g_mrr_w[i].encl == encl && sp_streq(g_mrr_w[i].name, vn);
+  return found && subtree_may_run_proc(c, x);
+}
 static int desugar_mutator_recv_rebind(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count, changed = 0;
@@ -46366,6 +46429,11 @@ static int desugar_mutator_recv_rebind(Compiler *c) {
     for (int cur = id; cur >= 0 && cur != base && !hit; cur = nt_ref(nt, cur, "receiver"))
       hit = rr_writes_var(nt, nt_ref(nt, cur, "arguments"), pfx, vn) ||
             rr_writes_var(nt, nt_ref(nt, cur, "block"), pfx, vn);
+    /* ...or runs code that may (mrr_rebinds_by_code) */
+    int benc = base < c->node_cap ? c->nscope[base] : -1;
+    for (int cur = id; pfx[0] == 'L' && cur >= 0 && cur != base && !hit; cur = nt_ref(nt, cur, "receiver"))
+      hit = mrr_rebinds_by_code(c, nt_ref(nt, cur, "arguments"), vn, benc) ||
+            mrr_rebinds_by_code(c, nt_ref(nt, cur, "block"), vn, benc);
     if (!hit) continue;
     /* These names also belong to Arrays, Hashes and user objects. Only a
        String receiver needs the String emitters' receiver snapshot. */
@@ -46416,6 +46484,7 @@ static int desugar_mutator_recv_rebind(Compiler *c) {
     for (int j = first; j < nt->count; j++) c->nscope[j] = encl;
     changed = 1;
   }
+  mrr_writes_free();
   return changed;
 }
 

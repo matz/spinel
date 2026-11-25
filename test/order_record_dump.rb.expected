@@ -47,7 +47,7 @@ g4_mutator_recv.rb:2 call +@: none (pure)
 g4_mutator_recv.rb:3 call proc: none (pure)
 g4_mutator_recv.rb:3 call +@: none (pure)
 g4_mutator_recv.rb:4 call p: none (tail)
-g4_mutator_recv.rb:4 call insert: 0 s HOLD(by 1) across | 1 g.call AHEAD code | 2 String INLINE | guard=call steps=0
+g4_mutator_recv.rb:4 call insert: 0 __rr_p3run_15 INLINE across | 1 g.call AHEAD code | 2 String INLINE | guard=call steps=0
 g4_mutator_recv.rb:4 call call: none (pure)
 g4_mutator_recv.rb:6 call run: none (pure)
 == g5_user_recv.rb

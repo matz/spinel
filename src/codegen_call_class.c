@@ -4277,7 +4277,7 @@ static int emit_class_instance_methods_list(Compiler *c, int id, Buf *b, const N
     int any = 0;
     for (int k = 0; k < c->nclasses; k++) {
       if (!cv[k]) continue;
-      if (comp_class_is_module(c, &c->classes[k]) || !an_object_methods_listable(c, k, name)) return 0;
+      if (comp_class_is_module(c, &c->classes[k]) || !an_object_methods_listable(c, id, k, name)) return 0;
       any = 1;
     }
     if (!any) return 0;
@@ -4314,7 +4314,7 @@ static int emit_class_instance_methods_list(Compiler *c, int id, Buf *b, const N
   /* every class the call can run on lists ahead of time, or none does */
   if (nks <= 0) ks[0] = ci, nks = 1;
   for (int i = 0; i < nks; i++)
-    if (!an_object_methods_listable(c, ks[i], name)) return 0;
+    if (!an_object_methods_listable(c, id, ks[i], name)) return 0;
   int rt = ++g_tmp;
   buf_printf(b, "({ sp_PolyArray *_t%d = NULL; ", rt);
   if (dyn) buf_puts(b, "switch (_sp_cls.cls_id) {");

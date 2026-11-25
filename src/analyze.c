@@ -1,5 +1,6 @@
 #include "cext_bridge.h"
 #include "method_table_check.h"
+#include <assert.h>
 #include <stdint.h>
 #include <limits.h>
 #include <ctype.h>
@@ -47894,23 +47895,6 @@ static void rewrite_array_subclass_super(Compiler *c, int id) {
 }
 
 static void arysub_keep_builtin_only(Compiler *c, int m0, const char *name);
-/* Is the method of scope s a `(...)` forwarder? Its bare super passes a rest of unknown length too. */
-static int super_def_forwards(Compiler *c, const Scope *s) {
-  int pn = s->def_node >= 0 ? nt_ref(c->nt, s->def_node, "parameters") : -1;
-  int kwr = pn >= 0 ? nt_ref(c->nt, pn, "keyword_rest") : -1;
-  return kwr >= 0 && nt_kind(c->nt, kwr) == NK_ForwardingParameterNode;
-}
-/* Whether argument list args (an ArgumentsNode, or -1) passes a splat, and whether it passes keywords (a keyword
-   hash, a `**`). */
-static void super_args_shape(const NodeTable *nt, int args, int *splat, int *kw) {
-  int an = 0;
-  const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
-  for (int i = 0; i < an; i++) {
-    NodeKind ak = nt_kind(nt, av[i]);
-    if (ak == NK_SplatNode || ak == NK_ForwardingArgumentsNode) *splat = 1;
-    if (ak == NK_KeywordHashNode || ak == NK_AssocSplatNode) *kw = 1;
-  }
-}
 /* Each `super` the call plan finds no method of the program's for, whose
    builtin owner has a call path from a program object's self
    (CallPlan.bpath), is the builtin's own call on self: its name, with
@@ -47947,24 +47931,28 @@ static void lower_builtin_supers(Compiler *c) {
     if (k == NK_ForwardingSuperNode && args < 0) {
       /* (an Array subclass's was refused before, for every such parameter list; the other families keep the
          emission they had, which the corpus answers right for a `to_json(...)` prepended to Array) */
+      assert(path != BSP_OBJECT);
       if (path == BSP_ARRAY) zsuper_refuse(c, id, s);
       continue;
     }
     /* The call lowered is the one the program could write, so only where the call layer answers it: a Kernel
        function takes no keyword and no splat or `(...)` (the spread of a run-time length, 0b's); a bare
        super's keywords go to a builtin whose parameters (BAP) list one, else they would reach a method with
-       none, where CRuby passes a Hash or nothing (the spread, which master refused for a bare super). */
-    int splat = 0, kw = 0;
-    super_args_shape(nt, args, &splat, &kw);
-    if (kfn && (kw || splat || super_def_forwards(c, s))) continue;
-    if (kw && k == NK_ForwardingSuperNode && !builtin_method_takes_keywords(sp.bowner, mname)) {
+       none, where CRuby passes a Hash or nothing (the spread, which master refused for a bare super). The plan
+       asked an Object method's of its own (cplan_object_args_spelled). */
+    unsigned sh = cplan_super_args_shape(c, id, s);
+    if (kfn && ((sh & (SAS_SPLAT | SAS_KW)) || cplan_def_forwards(c, s))) continue;
+    if ((sh & SAS_KW) && k == NK_ForwardingSuperNode && !builtin_method_takes_keywords(sp.bowner, mname)) {
+      assert(path != BSP_OBJECT);
       if (path == BSP_ARRAY)
         unsupported_feature(c, id, "a bare `super` from a method with keyword or `**` parameters into a builtin whose keyword "
                                    "parameters are not known is not supported yet; pass the arguments explicitly");
       continue;
     }
     char *mn = strdup(mname);
-    lower_super_call(c, id, s, mn, 0, args, blk, kfn, path == BSP_PREPENDED);
+    /* (an Object method that reads no block is handed none: the block a bare super passes reaches no one, and
+       passing it would make the method a yielding one, spliced at each call) */
+    lower_super_call(c, id, s, mn, 0, args, blk, kfn, path == BSP_PREPENDED || (path == BSP_OBJECT && !object_method_reads_block(mn)));
     int m0 = nt->count;
     /* (a module prepended into a builtin keeps its splat as it was: the length dispatch's poly arm for a boxed self
        calls the prepended method itself, which loses builtin_only: a stack overflow for Hash#fetch) */
@@ -55829,7 +55817,11 @@ static void an_phase_value_types(Compiler *c) {
     }
     /* a super whose arm answers from the object itself (its address, its frozen bit, the object, a Kernel row
        over it: cplan_super_reads_self) reads the pointer a by-value copy does not have */
-    if ((ty_k == NK_SuperNode || ty_k == NK_ForwardingSuperNode) && cplan_super_reads_self(c, id)) {
+    /* and so does the builtin's own comparison on self a super is lowered to (builtin_only: ==, !=, equal?, eql?,
+       ===), which the call layer answers from the object's address */
+    if (((ty_k == NK_SuperNode || ty_k == NK_ForwardingSuperNode) && cplan_super_reads_self(c, id)) ||
+        (ty_k == NK_CallNode && cplan_builtin_call(c, id) && nt_kind(c->nt, nt_ref(c->nt, id, "receiver")) == NK_SelfNode &&
+         (is_class_compare(nt_str(c->nt, id, "name")) || is_case_eq(nt_str(c->nt, id, "name"))))) {
       Scope *s = comp_scope_of(c, id);
       if (s && !s->is_cmethod && s->class_id >= 0 && s->class_id < c->nclasses) c->classes[s->class_id].is_value_type = 0;
     }

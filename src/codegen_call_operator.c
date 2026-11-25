@@ -1930,8 +1930,10 @@ int emit_call_operator_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
     const ClassInfo *rci = &c->classes[ty_object_class(rt)];
     const char *cn = rci->c_name;
     /* a class whose == is not identity (its own, or a Struct's or a Data's
-       field-wise one): CRuby's rb_equal, the same object first, then == */
-    if (rci->is_struct || rci->is_data || call_target(c, id, ty_object_class(rt), "==", 0, NULL) >= 0) {
+       field-wise one): CRuby's rb_equal, the same object first, then ==;
+       and a boxed operand, which may be the object itself */
+    if (rci->is_struct || rci->is_data || call_target(c, id, ty_object_class(rt), "==", 0, NULL) >= 0 ||
+        repr_of(c, argv[0]).kind == RK_BOXED) {
       int ta = ++g_tmp, tb = ++g_tmp;
       buf_printf(b, "({ sp_RbVal _t%d = ", ta); emit_boxed(c, recv, b);
       buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_RbVal _t%d = ", ta, tb); emit_boxed(c, argv[0], b);

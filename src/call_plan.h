@@ -42,8 +42,9 @@ typedef enum {
 } CplanRefuse;
 
 /* The call path a super into a builtin is lowered to (CallPlan.bpath): an Array, Hash, String or Time subclass's
-   own, a Kernel module function's bare call, a module prepended into a builtin, or none (the plan's arm, bsuper) */
-typedef enum { BSP_NONE, BSP_ARRAY, BSP_KERNEL, BSP_PREPENDED } BsuperPath;
+   own, a Kernel module function's bare call, a module prepended into a builtin, a plain class's Object method,
+   or none (the plan's arm, bsuper) */
+typedef enum { BSP_NONE, BSP_ARRAY, BSP_KERNEL, BSP_PREPENDED, BSP_OBJECT } BsuperPath;
 
 /* which decision refuses it, in the order codegen meets them: the prepasses
    before any emission, then the emitters' own */
@@ -457,6 +458,14 @@ int cplan_super_start(Compiler *c, const Scope *s);
 /* The native class's binding (an index into Compiler.native_methods) a super node id whose arm is BSUP_NATIVE runs:
    of the name and count the plan found, and of the arguments' kinds; -1 for any other super */
 int cplan_super_native(Compiler *c, int id);
+/* The shape of the argument list super node id in scope s passes, spelled as a call's (an explicit one's own, a bare
+   super's the method's parameters, as lower_builtin_supers spells them): SAS_SPLAT for a spread (a `*`, a `(...)`
+   passed on, a rest parameter), SAS_KW for keywords (a keyword hash, a `**`, keyword parameters), SAS_FWD for a
+   `(...)` passed on, SAS_UNSPELLED for a bare super whose parameters no call spells (a destructured one, `**nil`, a
+   `(...)` beside a keyword) */
+enum { SAS_SPLAT = 1, SAS_KW = 2, SAS_FWD = 4, SAS_UNSPELLED = 8 };
+unsigned cplan_super_args_shape(Compiler *c, int id, const Scope *s);
+int cplan_def_forwards(Compiler *c, const Scope *s);   /* is the method of scope s a `(...)` forwarder? */
 /* Does super node id's arm (CallPlan.bsuper) answer from the object itself: its address (BSUP_SAME), its frozen bit
    (BSUP_FROZEN), the object (BSUP_SELF), or Kernel's row over it (BSUP_KERNEL_ROW)? A by-value object
    (an_phase_value_types) has none of them. */

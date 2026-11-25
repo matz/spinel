@@ -20505,7 +20505,7 @@ int emit_poly_object_methods_reflection(Compiler *c, int id, const char *name, i
   for (int i = 0; i < n; i++) {
     int k = ks ? ks[i] : i;
     if (k < 0 || k >= c->nclasses || !c->classes[k].instantiated || is_builtin_reopen(c->classes[k].name)) continue;
-    if (!an_object_methods_listable(c, k, name)) {
+    if (!an_object_methods_listable(c, id, k, name)) {
       /* a class whose list cannot be made ahead of time: said so, should
          the receiver be its instance, rather than CRuby's answer missed */
       buf_printf(b, " case %d: sp_raise_cls(\"NotImplementedError\", \"spinel: %s of an instance of %s is not listed:"
@@ -20533,13 +20533,13 @@ int emit_object_methods_reflection(Compiler *c, int id, int recv, int cid, const
                                    int arg, Buf *b) {
   int pub = 1, prot = 0, sg = 0;
   if (!object_method_list_form(name, &prot, &sg)) return 0;
-  if (!an_object_methods_listable(c, cid, name)) return 0;
+  if (!an_object_methods_listable(c, id, cid, name)) return 0;
   /* an object typed as its singleton class has those methods only once its
      `def obj.m` has run, and not in a #dup: until then it lists as the class
      before it */
   int pid = c->classes[cid].is_singleton_of && !c->classes[cid].is_value_type
             ? c->classes[cid].parent : -1;
-  if (pid >= 0 && !an_object_methods_listable(c, pid, name)) pid = -1;
+  if (pid >= 0 && !an_object_methods_listable(c, id, pid, name)) pid = -1;
   int t = ++g_tmp;
   if (pid >= 0) {
     buf_printf(b, "({ void *_r%d = (void *)(", t);
@@ -20673,7 +20673,7 @@ void emit_value_methods_helpers(Compiler *c, const char *const *texts, int ntext
     buf_printf(b, "    if (prot == %d) switch (v.cls_id) {\n", prot);
     for (int k = 0; k < c->nclasses; k++) {
       if (!c->classes[k].instantiated || c->classes[k].is_singleton_of ||
-          !an_object_methods_listable(c, k, name)) continue;
+          !an_object_methods_listable(c, -1, k, name)) continue;
       buf_printf(b, "    case %d: return ", k);
       emit_object_methods_list(c, -1, k, name, 1, prot, 0, 1, -1, b);
       buf_puts(b, ";\n");
@@ -20712,7 +20712,7 @@ int emit_value_methods_reflection(Compiler *c, int id, Buf *b) {
     int *site = calloc((size_t)(c->nclasses > 0 ? c->nclasses : 1), sizeof *site);
     if (!cand || !site) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
     for (int k = 0; k < c->nclasses; k++)
-      if (c->classes[k].instantiated && !c->classes[k].is_singleton_of && an_object_methods_listable(c, k, name)) cand[ncand++] = k;
+      if (c->classes[k].instantiated && !c->classes[k].is_singleton_of && an_object_methods_listable(c, id, k, name)) cand[ncand++] = k;
     nsite = cplan_list_site_classes(c, id, cand, ncand, site);
     free(cand);
     if (nsite) {

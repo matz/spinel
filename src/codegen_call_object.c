@@ -327,12 +327,12 @@ int emit_call_identity_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
      values use the pointer bit pattern; a symbol's is SP_SYM_OBJECT_ID of
      its interned id, apart from every other kind's. The immediates have
      fixed ids: nil is 4, false is 0, true is 20. */
-  if ((sp_streq(name, "object_id") || sp_streq(name, "__id__")) && recv >= 0 && argc == 0 &&
-      /* a generated READER of this name owns it on a concrete object, as in
-         CRuby (which warns and defines it): fall through to the member read,
-         which the inference already typed (#4190) */
-      !(ty_is_object(rt) &&
-        call_attr_target(c, -1, ty_object_class(rt), name, 0, NULL))) {
+  if (is_object_id_name(name) && recv >= 0 && argc == 0 &&
+      /* a method or a generated READER of this name owns it on a concrete
+         object, as in CRuby (which warns and defines it): fall through to
+         its call or the member read, which the inference already typed
+         (#4190); not for the builtin's own call (builtin_only: a super's) */
+      !(ty_is_object(rt) && call_answers(c, id, ty_object_class(rt), name, 0, NULL))) {
     /* a nullable Integer or Float whose nil flag is set is nil, whose id
        is nil's */
     if ((rt == TY_INT || rt == TY_FLOAT) && call_returns_nullable_int(c, recv)) {
@@ -2598,7 +2598,8 @@ int emit_call_object_override_arms(Compiler *c, int id, Buf *b, const NodeTable 
       Scope *nm2 = nmi2 >= 0 ? &c->scopes[nmi2] : NULL;
       int plain = nm2 && nm2->nparams == nc2 && nc2 <= 1 && nm2->rest_idx < 0 && nm2->kwrest_idx < 0 &&
                   (nc2 == 0 || (nm2->pdefault[0] < 0 && !callee_has_kwarg(c, nm2, nm2->pnames[0])));
-      if (nmi2 >= 0) {
+      /* (a yielding one has no function: the general call path inlines it) */
+      if (nmi2 >= 0 && !nm2->yields) {
         /* A value-type object is passed BY VALUE (sp_X, not sp_X *): casting
            it to a pointer is not a conversion the C compiler accepts, so a
            class with ivars that defines #! did not build (#3819). */

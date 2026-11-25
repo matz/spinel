@@ -563,6 +563,11 @@ int is_kernel_module_function(const char *n);
 /* ...and one that never consults self (not `binding`). */
 int kernel_function_ignores_self(const char *n);
 int builtin_object_method_known(const char *m);   /* one of Object's own methods every object answers */
+int object_method_reads_block(const char *n);   /* one of Object's public methods that reads its block: tap then yield_self instance_eval instance_exec define_singleton_method send __send__ public_send to_enum enum_for */
+/* One of Object's public methods whose call on a program object's self the call layer does not answer as CRuby does
+   yet: extend and define_singleton_method (an object gets methods of its own only at a call site whose receiver and
+   module the compiler sees), method and public_method (a Method of a builtin's method), !~ (no route). */
+int object_self_call_unanswered(const char *n);
 /* The answer the super emission (emit_super_value) gives a `super` from a program class into BasicObject's, Object's or
    Kernel's method n itself, rather than the builtin's own call the lowering of builtin supers makes: the default text
    (to_s inspect), the method table's (respond_to?), the object frozen (freeze), its class against the argument (is_a?
@@ -700,6 +705,7 @@ int is_clone_name(const char *n); /* clone */
 int is_cover_name(const char *n); /* cover? */
 int is_flatten_name(const char *n); /* flatten */
 int is_hash_name(const char *n); /* hash */
+int is_object_id_name(const char *n); /* object_id __id__ */
 int is_spaceship_name(const char *n); /* <=> */
 int is_object_hook_name(const char *n); /* hash eql? <=>: what the runtime's hash-key and sort hooks call on a program object, with no block */
 int is_puts_name(const char *n); /* puts */

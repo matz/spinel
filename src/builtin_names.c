@@ -785,6 +785,17 @@ int is_binary_operator(const char *n) {
 }
 
 /* See builtin_names.h. */
+int object_method_reads_block(const char *n) {
+  return n && (is_tap_alias(n) || is_instance_eval_family(n) || is_define_singleton_method_name(n) || is_send_family(n) ||
+               is_enumerator_maker(n));
+}
+
+/* See builtin_names.h. */
+int object_self_call_unanswered(const char *n) {
+  return n && (is_extend_name(n) || is_define_singleton_method_name(n) || is_method_object_maker(n) || is_match_operator(n));
+}
+
+/* See builtin_names.h. */
 ObjectSuperArm object_super_arm(const char *n) {
   if (!n) return OSA_NONE;
   if (is_to_s_name(n) || is_inspect_name(n)) return OSA_TEXT;
@@ -3042,6 +3053,7 @@ int is_cover_name(const char *n) { return n && sp_streq(n, "cover?"); }
 int is_flatten_name(const char *n) { return n && sp_streq(n, "flatten"); }
 
 int is_hash_name(const char *n) { return n && sp_streq(n, "hash"); }
+int is_object_id_name(const char *n) { return n && (sp_streq(n, "object_id") || sp_streq(n, "__id__")); }
 
 int is_puts_name(const char *n) { return n && sp_streq(n, "puts"); }
 

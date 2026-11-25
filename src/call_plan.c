@@ -1184,11 +1184,22 @@ static BsuperArm cplan_super_instance_arm(Compiler *c, int id, const Scope *s, c
    subclass (the instance is the builtin's value) for the names the Array
    path answers (comp_arysub_builtin_name; BSP_ARRAY, which passes the
    method's block on); a method a module prepended to a builtin reopening put
-   in front of the builtin's (BSP_PREPENDED). A module included into a
+   in front of the builtin's (BSP_PREPENDED); one of Object's public methods
+   from a plain class, Kernel's or BasicObject's (BSP_OBJECT: called on self,
+   as any call of the program reaches it). A module included into a
    reopened builtin, and a prepended one's self typed as the builtin's value,
    have no such path: `self.m` there reaches no method at run time, or
    returns an Enumerator where the method answers a boxed value. */
-static BsuperPath cplan_super_path(Compiler *c, int id, const Scope *st, const char *uname, const char *bowner) {
+/* Does the argument list super id in scope s passes spell as the call on self BSP_OBJECT lowers it to, one the call
+   layer takes (cplan_super_args_shape)? Not a `(...)` passed on, nor a bare super's parameters no call spells, nor a
+   bare super's keywords into a method whose keywords the builtin's parameters (BAP) do not list, where CRuby passes
+   a Hash or nothing */
+static int cplan_object_args_spelled(Compiler *c, int id, const Scope *s, const char *uname, const char *bowner) {
+  unsigned sh = cplan_super_args_shape(c, id, s);
+  if (sh & (SAS_FWD | SAS_UNSPELLED)) return 0;
+  return !(sh & SAS_KW) || nt_kind(c->nt, id) != NK_ForwardingSuperNode || builtin_method_takes_keywords(bowner, uname);
+}
+static BsuperPath cplan_super_path(Compiler *c, int id, const Scope *s, const Scope *st, const char *uname, const char *bowner) {
   /* (the stand-in a version entry's else arm calls for the call made before a later include or prepend is that
      call's method: a Kernel function is private, and the visibility-blind call a lowered super is would answer an
      explicit receiver where CRuby raises) */
@@ -1199,8 +1210,73 @@ static BsuperPath cplan_super_path(Compiler *c, int id, const Scope *st, const c
   const char *root = comp_super_builtin_root(c, st->class_id, &self);
   int slot = root ? builtin_core_class_slot(root) : -1;
   if (st->is_prepend_copy && self && slot >= 0 && slot != CORE_OBJECT && is_builtin_reopen_name(root)) return BSP_PREPENDED;
+  /* (a program class whose chain's root is Object or BasicObject, not the reopening itself, nor a module, whose self
+     is any includer's (its copy in a class is the class's): one of Object's public methods, which a call on self
+     reaches as on any object of the class, BSP_OBJECT. Not one the super emission answers itself, object_super_arm,
+     nor one whose call on self the call layer does not answer yet, object_self_call_unanswered; nor a send,
+     __send__ or public_send, whose call on self the run-time-name send answers only for the names it lists
+     (where it is not the plan's refusal, the super is the whole body of a send, which the sends read as no method
+     of the program's own, send_def_just_supers, and run as Object's); nor an argument list the call on self does
+     not spell, cplan_object_args_spelled) */
+  if (!self && (slot == CORE_OBJECT || slot == CORE_BASIC_OBJECT) && !comp_class_is_module(c, &c->classes[st->class_id]) &&
+      object_public_method_name(uname) && object_super_arm(uname) == OSA_NONE && !object_self_call_unanswered(uname) &&
+      !is_send_family(uname) && cplan_object_args_spelled(c, id, s, uname, bowner))
+    return BSP_OBJECT;
   /* (Array's initialize and initialize_copy are rewrite_array_subclass_super's) */
   return comp_ary_root(c, st->class_id) >= 0 && !is_initialize_family(uname) && comp_arysub_builtin_name(c, id, st->class_id, uname) ? BSP_ARRAY : BSP_NONE;
+}
+
+/* See call_plan.h. */
+int cplan_def_forwards(Compiler *c, const Scope *s) {
+  int pn = s->def_node >= 0 ? nt_ref(c->nt, s->def_node, "parameters") : -1;
+  int kwr = pn >= 0 ? nt_ref(c->nt, pn, "keyword_rest") : -1;
+  return kwr >= 0 && nt_kind(c->nt, kwr) == NK_ForwardingParameterNode;
+}
+/* The shape of a bare super's argument list: the parameters of scope s, as super_zsuper_args spells them */
+static unsigned cplan_zsuper_shape(Compiler *c, const Scope *s) {
+  const NodeTable *nt = c->nt;
+  int pn = s->def_node >= 0 ? nt_ref(nt, s->def_node, "parameters") : -1;
+  if (pn < 0) return 0;
+  /* (a `(...)`'s are the leading parameters and the slots the calls' arity gave it, by position) */
+  if (cplan_def_forwards(c, s)) {
+    for (int j = 0; j < s->nparams; j++)
+      if (!s->pnames || !s->pnames[j] || j == s->kwrest_idx || j == s->rest_idx ||
+          callee_param_is_declared_kwarg(c, (Scope *)s, s->pnames[j]))
+        return SAS_UNSPELLED;
+    return 0;
+  }
+  unsigned sh = 0;
+  const char *const pos[] = { "requireds", "optionals", "posts" };
+  for (int a = 0; a < 3; a++) {
+    int n = 0;
+    const int *ps = nt_arr(nt, pn, pos[a], &n);
+    for (int i = 0; i < n; i++)
+      if (!nt_str(nt, ps[i], "name") || nt_kind(nt, ps[i]) == NK_MultiTargetNode) return SAS_UNSPELLED;
+  }
+  int rest = nt_ref(nt, pn, "rest"), kwr = nt_ref(nt, pn, "keyword_rest"), kn = 0;
+  if (rest >= 0 && nt_kind(nt, rest) == NK_RestParameterNode) sh |= SAS_SPLAT;
+  (void)nt_arr(nt, pn, "keywords", &kn);
+  if (kn) sh |= SAS_KW;
+  if (kwr >= 0) {
+    if (nt_kind(nt, kwr) != NK_KeywordRestParameterNode) return SAS_UNSPELLED;
+    sh |= SAS_KW;
+  }
+  return sh;
+}
+/* See call_plan.h. */
+unsigned cplan_super_args_shape(Compiler *c, int id, const Scope *s) {
+  const NodeTable *nt = c->nt;
+  if (nt_kind(nt, id) == NK_ForwardingSuperNode) return cplan_zsuper_shape(c, s);
+  unsigned sh = 0;
+  int an = 0, args = nt_ref(nt, id, "arguments");
+  const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
+  for (int i = 0; i < an; i++) {
+    NodeKind ak = nt_kind(nt, av[i]);
+    if (ak == NK_SplatNode) sh |= SAS_SPLAT;
+    if (ak == NK_ForwardingArgumentsNode) sh |= SAS_SPLAT | SAS_FWD;
+    if (ak == NK_KeywordHashNode || ak == NK_AssocSplatNode) sh |= SAS_KW;
+  }
+  return sh;
 }
 
 /* See call_plan.h. */
@@ -1260,7 +1336,7 @@ static void cplan_resolve_super(Compiler *c, int id, CallPlan *p) {
   /* (the call path a super is lowered to: never a refused one's) */
   const char *mname = comp_scope_user_name(st);
   if (!s->is_cmethod && s->class_id != c->toplevel_class && ml.bowner && mname)
-    p->bpath = (unsigned char)cplan_super_path(c, id, st, mname, ml.bowner);
+    p->bpath = (unsigned char)cplan_super_path(c, id, s, st, mname, ml.bowner);
   /* (the default text answers ahead of a prepend chain's shadow; a class method's shadow is its own lookup) */
   p->bsuper = (unsigned char)cplan_super_text(c, id, s, p->bowner);
   if (p->bsuper == BSUP_NONE && uname)

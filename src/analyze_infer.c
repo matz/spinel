@@ -2543,18 +2543,20 @@ int reduce_tail_from_acc(Compiler *c, int tail, const char *accp) {
   return 0;
 }
 
-/* obj.methods / public_methods / singleton_methods on an instance of `cid`:
-   listable ahead of time when the class does not define the name itself and
-   every ancestor is a user class whose whole method surface spinel knows --
-   not an exception, a native class, or a class whose superclass is a
+/* obj.methods / public_methods / singleton_methods (call id, or -1) on an
+   instance of `cid`: listable ahead of time when the class does not define
+   the name itself, or the call is the builtin's own (builtin_only: a super's),
+   and every ancestor is a user class whose whole method surface spinel knows
+   -- not an exception, a native class, or a class whose superclass is a
    builtin. */
-int an_object_methods_listable(Compiler *c, int cid, const char *name) {
+int an_object_methods_listable(Compiler *c, int id, int cid, const char *name) {
   const NodeTable *nt = c->nt;
   if (cid < 0 || cid >= c->nclasses || class_is_exc_subclass(c, cid)) return 0;
-  if (comp_name_responder(c, cid, name, 0) >= 0) return 0;
+  int bonly = id >= 0 && cplan_builtin_call(c, id);
+  if (!bonly && comp_name_responder(c, cid, name, 0) >= 0) return 0;
   /* nor where it answers the name with a reader of its own: a Struct member
      or an attr named `methods` (#10345) */
-  if (call_answers(c, -1, cid, name, 0, NULL)) return 0;
+  if (call_answers(c, id, cid, name, 0, NULL)) return 0;
   for (int k = cid, g = 0; k >= 0 && g <= c->nclasses; k = c->classes[k].parent, g++) {
     if (c->classes[k].is_native_class) return 0;
     if (c->classes[k].parent < 0 && !c->classes[k].is_struct) {
@@ -9534,8 +9536,8 @@ int an_poly_object_methods_listable(Compiler *c, int id, const char *name, int a
   for (int i = 0; i < n; i++) {
     int k = ks ? ks[i] : i;
     if (k < 0 || k >= c->nclasses || !c->classes[k].instantiated || is_builtin_reopen(c->classes[k].name)) continue;
-    if (call_answers(c, -1, k, name, 0, NULL)) return 0;
-    if (an_object_methods_listable(c, k, name)) any = 1;
+    if (call_answers(c, id, k, name, 0, NULL)) return 0;
+    if (an_object_methods_listable(c, id, k, name)) any = 1;
   }
   return any;
 }
@@ -9546,7 +9548,7 @@ static int infer_methods_listed(Compiler *c, int id, int recv, TyKind rt, const 
       (sp_streq(name, "methods") || sp_streq(name, "public_methods") ||
        sp_streq(name, "singleton_methods")) &&
       an_object_methods_all_arg(c, ty_object_class(rt), argc, argv) >= 0 &&
-      an_object_methods_listable(c, ty_object_class(rt), name))
+      an_object_methods_listable(c, id, ty_object_class(rt), name))
     return 1;
   if (recv >= 0 && rt == TY_POLY && an_poly_object_methods_listable(c, id, name, argc, argv)) return 1;
   return an_value_methods_class(c, recv, rt, name, argc, argv) != NULL;
@@ -9799,9 +9801,9 @@ static TyKind infer_call_inner(Compiler *c, int id) {
   }
 
   /* Kernel#dup / #clone an alias captured on a program object
-     (builtin_only): a copy of the receiver, whatever the class's own method
-     of the name answers */
-  if ((bonly || cplan_builtin_call(c, id)) && recv >= 0 && is_copy_alias(name)) {
+     (builtin_only), or Kernel#freeze a super is: a copy of the receiver, or
+     the receiver, whatever the class's own method of the name answers */
+  if ((bonly || cplan_builtin_call(c, id)) && recv >= 0 && (is_copy_alias(name) || is_freeze_name(name))) {
     TyKind crt = infer_type(c, recv);
     if (ty_is_object(crt)) return crt;
   }

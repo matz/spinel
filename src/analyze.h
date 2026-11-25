@@ -1642,7 +1642,7 @@ int an_zero_arg_builtin_shadowed(Compiler *c, const char *name, int argc);
 int an_user_recv_defines_method(Compiler *c, const char *name);
 /* obj.methods / public_methods / singleton_methods on an instance of `cid`
    fold to a static symbol list */
-int an_object_methods_listable(Compiler *c, int cid, const char *name);
+int an_object_methods_listable(Compiler *c, int id, int cid, const char *name);
 int an_object_methods_all_arg(Compiler *c, int cid, int argc, const int *argv);
 int an_poly_object_methods_listable(Compiler *c, int id, const char *name, int argc, const int *argv);   /* a boxed receiver's list, per class it can hold */
 /* obj.methods / public_methods on a builtin value: the core class it lists as */

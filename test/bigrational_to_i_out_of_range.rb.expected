@@ -2,6 +2,6 @@ to_i: bignum too big to convert into 'long'
 to_i: bignum too big to convert into 'long'
 to_i: bignum too big to convert into 'long'
 to_int: bignum too big to convert into 'long'
-numerator: bignum too big to convert into 'long'
+numerator: 1180591620717411303424
 Integer: bignum too big to convert into 'long'
 boxed to_i: bignum too big to convert into 'long'

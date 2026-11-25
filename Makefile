@@ -1742,7 +1742,7 @@ share-strings-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(BUNDLED_NATIVE_OBJS
 	  xargs -P $(NPROC) -n 1 sh tools/share_strings_one.sh $(SPINEL) > "$$tmp/runs" 2>&1 || ok=0; \
 	cat "$$tmp/runs"; \
 	if ! $(SPINEL) test/share_strings_class_value_stat_fields.rb -c --no-line-map -o "$$tmp/stat.c" >"$$tmp/out" 2>&1 || \
-	   grep -q 'sp_pd_[0-9a-f]' "$$tmp/stat.c"; then \
+	   grep -q '^static .*sp_pd_[0-9a-f_]*(.*switch (_t' "$$tmp/stat.c"; then \
 	  echo "share-strings-test: FAIL (Class calls of Stat field names add a dispatch)"; ok=0; \
 	fi; \
 	if ! $(SPINEL) test/share/share_strings_literal_queries.rb -c --no-line-map -o "$$tmp/queries.c" >"$$tmp/out" 2>&1 || \
@@ -5273,6 +5273,9 @@ infer-test-1: $(SPINEL) $(SP_RT_LIB)
 	grep -B1 '^static .*sp_pd_[0-9a-f_]*(sp_RbVal _t0) {' "$$tmp/pdl_lm.c" | grep -q '^#line 12 "test/infer/poly_dispatch_out_of_line.rb"' || { echo "infer-test: FAIL (#4928 an out-of-line dispatch function does not name the call site it came from)"; ok=0; }; \
 	$(SPINEL) test/infer/poly_dispatch_out_of_line_array_subclass.rb -c --no-line-map -o "$$tmp/pdla.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (poly_dispatch_out_of_line_array_subclass: -c)"; ok=0; }; \
 	[ "$$(grep -c '^static .*sp_pd_[0-9a-f_]*(sp_RbVal _t0) {' "$$tmp/pdla.c")" = 1 ] && [ "$$(grep -o '= sp_pd_[0-9a-f_]*(' "$$tmp/pdla.c" | wc -l | tr -d ' ')" = 2 ] || { echo "infer-test: FAIL (a poly dispatch in a program that subclasses Array is not one shared out-of-line function)"; ok=0; }; \
+	$(SPINEL) test/infer/const_get_sites_shared.rb -c --no-line-map -o "$$tmp/cgs.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (const_get_sites_shared: -c)"; ok=0; }; \
+	[ "$$(grep -c 'strcmp(_t[0-9]*, "K7")' "$$tmp/cgs.c")" = 1 ] && [ "$$(grep -o '= sp_pd_[0-9a-f_]*(' "$$tmp/cgs.c" | wc -l | tr -d ' ')" = 3 ] || { echo "infer-test: FAIL (#12511 the arms of a run-time const_get are copied at each site, not one shared function)"; ok=0; }; \
+	[ "$$(grep -c 'sp_K7_s_v()' "$$tmp/cgs.c")" = 1 ] || { echo "infer-test: FAIL (#12511 a class method called on the Class a const_get answers is dispatched at each site, not in one shared function)"; ok=0; }; \
 	$(SPINEL) test/infer/string_handle_initialize_reader.rb -c --no-line-map -o "$$tmp/shi.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (string_handle_initialize_reader: -c)"; ok=0; }; \
 	grep -q 'sp_Count_initialize(sp_Count \*self, $(STR_SLOT_C) lv_s)' "$$tmp/shi.c" && grep -q 'sp_Name_initialize(sp_Name \*self, $(STR_SLOT_C) lv_s)' "$$tmp/shi.c" && grep -q '$(STR_SLOT_C) lv_line = NULL;' "$$tmp/shi.c" && grep -q 'sp_Grow_initialize(sp_Grow \*self, sp_String \* lv_s)' "$$tmp/shi.c" || { echo "infer-test: FAIL (#6179 an initialize that only reads or keeps its String took the shared handle)"; ok=0; }; \
 	$(SPINEL) test/infer/tally_typed.rb -c --no-line-map -o "$$tmp/tly.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (tally_typed: -c)"; ok=0; }; \

@@ -1516,6 +1516,12 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       CplanPresence pr;
       PresenceKind pk = presence_at(c, id, ci, inherit ? CT_REACH : CT_OWN, qm, &pr);
       if (pr.undef) { buf_puts(b, "FALSE"); return 1; }
+      /* a native class's binding (`IO::Buffer#xor!`) with no def of the name is a public method of its own */
+      if (c->classes[ci].is_native_class && comp_native_method_find(c, ci, qm, 0, 0) >= 0 && !pr.table) {
+        int vb = refl_explicit_vis(&c->classes[ci], qm);
+        buf_printf(b, "%d", vb ? (vb & md_mask) != 0 : md_pub);
+        return 1;
+      }
       /* a call there that takes the entry: its public versions' cells (the plan's list, cplan_presence_list) */
       CplanPresList pl;
       const CplanPresArm *pa = NULL;
@@ -6951,6 +6957,8 @@ static void refl_md_table_names(Compiler *c, ReflNames *rn) {
   for (int s = 0; s < c->nscopes; s++)
     if (c->scopes[s].name && c->scopes[s].class_id >= 0) refl_note(rn, c->scopes[s].name, 0);
   for (int k = 0; k < c->nclasses; k++) cplan_chain_names(c, k, md_name_note, rn);
+  for (int i = 0; i < c->n_native_methods; i++)
+    if (c->native_methods[i].kind == 0) refl_note(rn, c->native_methods[i].name, 0);
   if (only) {
     int w = 0;
     for (int i = 0; i < rn->n; i++) {
@@ -7004,6 +7012,15 @@ void emit_refl_method_defined(Compiler *c, Buf *b) {
           cplan_undefined(c, k, 0, qm)) continue;
       CplanPresence pr, ow;
       cplan_table_presence(c, k, 0, qm, &pr);
+      /* a native class's binding with no def of the name, as the literal branch answers it */
+      if (!pr.table && c->classes[k].is_native_class && comp_native_method_find(c, k, qm, 0, 0) >= 0) {
+        int vb = refl_explicit_vis(&c->classes[k], qm);
+        buf_puts(&rows, "      if (!strcmp(name, \"");
+        emit_c_escaped(&rows, qm);
+        buf_printf(&rows, "\")) return (%d & mask) != 0;\n", vb ? vb : 1);
+        nrows++;
+        continue;
+      }
       if (!pr.table) continue;
       cplan_table_presence(c, k, CT_OWN, qm, &ow);
       int own = ow.table;

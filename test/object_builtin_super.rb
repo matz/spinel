@@ -145,3 +145,20 @@ class DynSym
 end
 dyn = "zz#{[1].size}".to_sym
 p DynSym.new.respond_to?(dyn), DynSym.new.respond_to?(:inspect), DynSym.new.respond_to?("ins#{[1].size > 0 ? "pect" : ""}".to_sym)
+
+# a class super is the receiver's class, which the call layer answers for the
+# builtin's own call as for any `o.class`: of a subclass's object too, and
+# kept in a local
+class OwnCls
+  def initialize; @a = 1; end
+  def class = super
+end
+class OwnClsSub < OwnCls; end
+class OwnClsVal
+  def initialize; @a = 1; end
+  def class
+    r = super
+    r
+  end
+end
+p OwnCls.new.class, OwnClsSub.new.class, OwnClsVal.new.class.name

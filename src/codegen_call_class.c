@@ -4818,10 +4818,12 @@ static int emit_class_own_instance_methods(Compiler *c, int id, Buf *b, const No
   return 0;
 }
 
-/* `recv.class`: the receiver's class value, compile-time for the types
-   that know it, a builtin's as emit_builtin_class_value writes it; 0 when
-   the receiver's own `class` member answers instead. */
-static int emit_recv_class_value(Compiler *c, Buf *b, const NodeTable *nt, int recv) {
+/* `recv.class` (call id): the receiver's class value, compile-time for the
+   types that know it, a builtin's as emit_builtin_class_value writes it; 0
+   when the receiver's class answers the call itself (a user `def class`, a
+   Data/Struct member `:class`, #2975), which the user dispatch runs -- not
+   the builtin's own call (builtin_only: the call a super is lowered to). */
+static int emit_recv_class_value(Compiler *c, int id, Buf *b, const NodeTable *nt, int recv) {
   /* top-level `self.class` (and inside a top-level def): self is main, an
      Object instance, so the class is Object -- the SelfNode has no C slot at
      top level and previously fell through unsupported (#3035) */
@@ -4829,8 +4831,9 @@ static int emit_recv_class_value(Compiler *c, Buf *b, const NodeTable *nt, int r
     emit_builtin_class_value(c, "Object", b);
     return 1;
   }
-  if (!obj_member_shadows(c, comp_recv_type(c, recv), "class")) {
-    TyKind rt = comp_recv_type(c, recv);  /* empty-literal receivers coerce */
+  TyKind rt0 = comp_recv_type(c, recv);  /* empty-literal receivers coerce */
+  if (!(ty_is_object(rt0) && ty_object_class(rt0) < c->nclasses && call_answers(c, id, ty_object_class(rt0), "class", 0, NULL))) {
+    TyKind rt = rt0;
     /* When emitting a scope transplanted from a builtin-reopen class (Object/Array/
        Numeric), self is sp_RbVal even if the nscope-based type says otherwise.
        Override the inferred type to TY_POLY so we get sp_poly_class_name(self).
@@ -5104,7 +5107,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
     }
   }
 
-  if (recv >= 0 && is_class_query(name) && argc == 0 && emit_recv_class_value(c, b, nt, recv)) return 1;
+  if (recv >= 0 && is_class_query(name) && argc == 0 && emit_recv_class_value(c, id, b, nt, recv)) return 1;
 
   /* Module#< / <= / > / >= / <=> with one side boxed: a class value read out
      of an Array or Hash ordered against a class, or a class ordered against

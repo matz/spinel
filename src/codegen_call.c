@@ -17488,16 +17488,6 @@ int user_cmp_needs_check(Compiler *c, int id, int op, int cid) {
   return ret == TY_POLY || ret == TY_NIL || ret == TY_BIGINT || ret == TY_RATIONAL;
 }
 
-/* A user object whose class defines a reader or method named `nm` shadows the
-   builtin of that name (a Data/Struct member `:class`/`:hash`, or a user
-   `def class`): the builtin arm must yield so the user dispatch runs (#2975). */
-int obj_member_shadows(Compiler *c, TyKind rt, const char *nm) {
-  if (!ty_is_object(rt)) return 0;
-  int cid = ty_object_class(rt);
-  if (cid < 0 || cid >= c->nclasses) return 0;
-  return call_answers(c, -1, cid, nm, 0, NULL);
-}
-
 /* The unified `<=>` return type across a Comparable class and its descendants,
    or TY_UNKNOWN if none. Backs both user_cmp_needs_check and the protocol check
    below (a statically non-{Integer,Float,nil} result is a compile-time error). */

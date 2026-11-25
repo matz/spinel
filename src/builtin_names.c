@@ -784,6 +784,23 @@ int is_binary_operator(const char *n) {
   return 0;
 }
 
+/* See builtin_names.h. */
+ObjectSuperArm object_super_arm(const char *n) {
+  if (!n) return OSA_NONE;
+  if (is_to_s_name(n) || is_inspect_name(n)) return OSA_TEXT;
+  if (is_respond_to_name(n)) return OSA_RESPOND_TO;
+  if (is_freeze_name(n)) return OSA_FREEZE;
+  if (is_instance_of_query(n)) return OSA_INSTANCE_OF;
+  if (is_kind_query(n)) return OSA_IS_A;
+  if (sp_streq(n, "==") || is_equal_name(n)) return OSA_SAME;
+  if (is_eql_or_equal(n)) return OSA_KERNEL_SAME;
+  if (sp_streq(n, "!")) return OSA_FALSE;
+  if (sp_streq(n, "nil?")) return OSA_KERNEL_FALSE;
+  if (sp_streq(n, "frozen?")) return OSA_FROZEN;
+  if (is_itself_name(n)) return OSA_SELF;
+  return OSA_NONE;
+}
+
 /* Object's methods that hand their receiver on to code over its members or
    bind it into a wrapper: to_enum / enum_for walk each, instance_eval /
    instance_exec run a block with it as self, method / public_method bind a

@@ -6489,13 +6489,17 @@ int comp_super_object_builtin(Compiler *c, const Scope *s, const char *uname, in
      (Exception's private one) answer as the row does */
   const BuiltinOp *krow = comp_super_kernel_row(c, s, uname, id);
   int any_core = krow != NULL;
-  if (sp_streq(uname, "==") || sp_streq(uname, "equal?")) { kind = SUPER_OBJ_SAME; nargs = 1; }
-  else if (sp_streq(uname, "eql?")) { kind = SUPER_OBJ_SAME; nargs = 1; kernel = 1; }
-  else if (sp_streq(uname, "!")) kind = SUPER_OBJ_FALSE;
-  else if (sp_streq(uname, "nil?")) { kind = SUPER_OBJ_FALSE; kernel = 1; }
-  else if (sp_streq(uname, "frozen?")) { kind = SUPER_OBJ_FROZEN; kernel = 1; }
-  else if (sp_streq(uname, "itself")) { kind = SUPER_OBJ_SELF; kernel = 1; }
-  else if (any_core) { kind = SUPER_OBJ_ROW; nargs = super_plain_argc(c, id, s); kernel = 1; }
+  switch (object_super_arm(uname)) {
+  case OSA_SAME: kind = SUPER_OBJ_SAME; nargs = 1; break;
+  case OSA_KERNEL_SAME: kind = SUPER_OBJ_SAME; nargs = 1; kernel = 1; break;
+  case OSA_FALSE: kind = SUPER_OBJ_FALSE; break;
+  case OSA_KERNEL_FALSE: kind = SUPER_OBJ_FALSE; kernel = 1; break;
+  case OSA_FROZEN: kind = SUPER_OBJ_FROZEN; kernel = 1; break;
+  case OSA_SELF: kind = SUPER_OBJ_SELF; kernel = 1; break;
+  default:
+    if (any_core) { kind = SUPER_OBJ_ROW; nargs = super_plain_argc(c, id, s); kernel = 1; }
+    break;
+  }
   if (!kind || super_plain_argc(c, id, s) != nargs) return 0;
   /* (Comparable reached through Object's own include answers == too) */
   if (!any_core && (!comp_plain_class(c, s->class_id) || class_is_comparable(c, s->class_id))) return 0;

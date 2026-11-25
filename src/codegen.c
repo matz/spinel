@@ -18014,11 +18014,12 @@ static void emit_super_value(Compiler *c, int id, Buf *b) {
     }
     /* `super` in a respond_to? override no ancestor defines is Object's:
        the object's method-table answer for a runtime name */
-    if (uname && sp_streq(uname, "respond_to?") && emit_super_respond_to(c, id, s, b)) return;
+    ObjectSuperArm arm = object_super_arm(uname);
+    if (arm == OSA_RESPOND_TO && emit_super_respond_to(c, id, s, b)) return;
     /* `super` in a freeze override no ancestor defines is Object#freeze: the
        object frozen, answering itself (Thor's HashWithIndifferentAccess#freeze
        freezes its hash, then calls super) */
-    if (uname && sp_streq(uname, "freeze") && !s->is_cmethod && s->class_id >= 0) {
+    if (arm == OSA_FREEZE && !s->is_cmethod && s->class_id >= 0) {
       Buf fb; memset(&fb, 0, sizeof fb);
       buf_printf(&fb, "sp_gc_freeze(%s)", g_self);
       if (repr_of(c, id).kind == RK_BOXED) emit_boxed_text(c, ty_object(s->class_id), fb.p, b);
@@ -18030,8 +18031,7 @@ static void emit_super_value(Compiler *c, int id, Buf *b) {
        defines is Object's answer for this object: its runtime class against
        the argument (activesupport's TimeWithZone#is_a? says Time, then asks
        super). Not a class or module is CRuby's TypeError. */
-    if (uname && !s->is_cmethod && s->class_id >= 0 &&
-        (sp_streq(uname, "is_a?") || sp_streq(uname, "kind_of?") || sp_streq(uname, "instance_of?"))) {
+    if ((arm == OSA_IS_A || arm == OSA_INSTANCE_OF) && !s->is_cmethod && s->class_id >= 0) {
       NodeKind sk = nt_kind(c->nt, id);
       int fwd = sk == NK_ForwardingSuperNode;
       int sargs = fwd ? -1 : nt_ref(c->nt, id, "arguments");
@@ -18045,7 +18045,7 @@ static void emit_super_value(Compiler *c, int id, Buf *b) {
         buf_printf(&rb, "({ sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d); ", tk, kb.p ? kb.p : "sp_box_nil()", tk);
         emit_super_blockarg_effect(c, id, &rb);
         buf_printf(&rb, "if (_t%d.tag != SP_TAG_CLASS) sp_raise_cls(\"TypeError\", \"class or module required\"); ", tk);
-        if (sp_streq(uname, "instance_of?"))
+        if (arm == OSA_INSTANCE_OF)
           buf_printf(&rb, "(sp_bool)(sp_unbox_class(_t%d).cls_id == %s->cls_id); })", tk, g_self);
         else
           buf_printf(&rb, "(sp_bool)sp_class_le((sp_Class){%s->cls_id}, sp_unbox_class(_t%d)); })", g_self, tk);

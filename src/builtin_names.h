@@ -563,6 +563,16 @@ int is_kernel_module_function(const char *n);
 /* ...and one that never consults self (not `binding`). */
 int kernel_function_ignores_self(const char *n);
 int builtin_object_method_known(const char *m);   /* one of Object's own methods every object answers */
+/* The answer the super emission (emit_super_value) gives a `super` from a program class into BasicObject's, Object's or
+   Kernel's method n itself, rather than the builtin's own call the lowering of builtin supers makes: the default text
+   (to_s inspect), the method table's (respond_to?), the object frozen (freeze), its class against the argument (is_a?
+   kind_of?, instance_of?), the same object (== equal?; eql?, Kernel's), false (!; nil?, Kernel's), the frozen bit
+   (frozen?), the object (itself). OSA_NONE for any other name. */
+typedef enum {
+  OSA_NONE, OSA_TEXT, OSA_RESPOND_TO, OSA_FREEZE, OSA_IS_A, OSA_INSTANCE_OF, OSA_SAME, OSA_KERNEL_SAME, OSA_FALSE,
+  OSA_KERNEL_FALSE, OSA_FROZEN, OSA_SELF
+} ObjectSuperArm;
+ObjectSuperArm object_super_arm(const char *n);
 int builtin_module_method_known(const char *m);   /* one of Module's own methods a class answers, and no object's */
 int kernel_private_method(const char *name);   /* one of the methods Kernel defines private */
 int is_object_method_name(const char *nm);   /* one of Object's public or private instance methods, Kernel's private ones too */

@@ -27971,7 +27971,7 @@ int an_super_object_text(Compiler *c, int n, int mi) {
      class: `__inc_0_inspect`) */
   const char *nm = s->name ? comp_scope_def_name(c, s) : NULL;
   if (!nm || s->is_cmethod || s->class_id < 0 || s->nparams != 0 ||
-      (!sp_streq(nm, "inspect") && !sp_streq(nm, "to_s")))
+      object_super_arm(nm) != OSA_TEXT)
     return 0;
   NodeKind k = nt_kind(c->nt, n);
   if (k != NK_SuperNode && k != NK_ForwardingSuperNode) return 0;

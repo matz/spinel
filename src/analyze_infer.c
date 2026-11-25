@@ -12808,17 +12808,16 @@ TyKind infer_uncached(Compiler *c, int id) {
     const char *uname = comp_super_name(c, p, comp_super_site(c, s));
     /* `super` in a respond_to? override no ancestor defines is Object's
        respond_to?: a boolean (see emit_super_respond_to) */
-    int rto_super = !s->is_cmethod && uname &&
-                    (sp_streq(uname, "respond_to?") ||
-                     /* and is_a? / kind_of? / instance_of? (codegen's twin) */
-                     sp_streq(uname, "is_a?") || sp_streq(uname, "kind_of?") ||
-                     sp_streq(uname, "instance_of?"));
+    ObjectSuperArm arm = object_super_arm(uname);
+    int rto_super = !s->is_cmethod && (arm == OSA_RESPOND_TO ||
+                                       /* and is_a? / kind_of? / instance_of? (codegen's twin) */
+                                       arm == OSA_IS_A || arm == OSA_INSTANCE_OF);
     /* (`super` in an exception subclass's #message / #to_s that reaches
        Exception's is the message String, super_reaches_exc_text: untyped,
        `def message = super` answered nil), and `super` in a freeze override
        no ancestor defines is Object#freeze, which answers the object
        (codegen's twin in emit_super) */
-    int freeze_super = !s->is_cmethod && uname && sp_streq(uname, "freeze");
+    int freeze_super = !s->is_cmethod && arm == OSA_FREEZE;
     /* and `super` in an ==, equal?, eql?, !, nil?, frozen? or itself
        override reaches BasicObject's or Kernel's (comp_super_object_builtin;
        emit_super_object_builtin is codegen's twin) */

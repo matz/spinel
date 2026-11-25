@@ -9537,6 +9537,23 @@ int an_poly_object_methods_listable(Compiler *c, int id, const char *name, int a
   return any;
 }
 
+/* an_value_methods_class at call id: a boxed receiver's list, unless a
+   class the receiver can hold has its own reader of the name,
+   an attr or a Struct member (#10345), which the dispatch calls */
+const char *an_value_methods_class_at(Compiler *c, int id, int recv, TyKind rt, const char *name, int argc,
+                                      const int *argv) {
+  const char *cn = an_value_methods_class(c, recv, rt, name, argc, argv);
+  if (!cn || cn[0] || an_builtin_only) return cn;
+  int nk = 0;
+  const int *ks = poly_recv_classes(c, id, &nk);
+  for (int i = 0, n = ks ? nk : c->nclasses; i < n; i++) {
+    int k = ks ? ks[i] : i;
+    if (k >= 0 && k < c->nclasses && c->classes[k].instantiated && call_answers(c, id, k, name, 0, NULL))
+      return NULL;
+  }
+  return cn;
+}
+
 static int infer_methods_listed(Compiler *c, int id, int recv, TyKind rt, const char *name, int argc,
                                 const int *argv) {
   if (recv >= 0 && ty_is_object(rt) &&
@@ -9546,7 +9563,7 @@ static int infer_methods_listed(Compiler *c, int id, int recv, TyKind rt, const 
       an_object_methods_listable(c, id, ty_object_class(rt), name))
     return 1;
   if (recv >= 0 && rt == TY_POLY && an_poly_object_methods_listable(c, id, name, argc, argv)) return 1;
-  return an_value_methods_class(c, recv, rt, name, argc, argv) != NULL;
+  return an_value_methods_class_at(c, id, recv, rt, name, argc, argv) != NULL;
 }
 
 /* Complex(x, exception: false) or Rational(x, exception: false) can answer

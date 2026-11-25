@@ -12648,6 +12648,34 @@ void emit_args_filled_argv(Compiler *c, int callee_idx, const int *argv, int arg
   int rest_argc = L.rest_argc;
   int argov_saved = g_n_argov;
   emit_call_arity_check(c, m, argc, argv);
+  /* A count the check judged wrong here, or a keyword a `**nil` method
+     refuses, raises once the arguments have run (in the prelude, which
+     emit_call_arity_check wrote): the call after it never runs. Its
+     parameters take what a missing argument takes, not the arguments: a
+     String passed to an Integer parameter it can never reach was refused at
+     compile time, or written into the Integer slot as C that does not
+     compile, in a dispatch arm for a class whose method the call cannot
+     bind (`k.m("s", :sym)` where one class's `m` takes one argument). */
+  {
+    KwPlan P;
+    kw_plan(c, m, kwh, &P);
+    char amsg[512];
+    int surely = (P.role == KWH_REFUSED && P.literal) ||
+                 (!nt_argv_has_splat(nt, argv, pos_argc) && P.count != KWC_NONEMPTY &&
+                  arity_count_error(c, m, pos_argc + P.count, amsg, sizeof amsg));
+    if (surely) {
+      /* (a default is not spelled: it may read an earlier parameter, which
+         this call binds to nothing) */
+      for (int i = 0; i < m->nparams; i++) {
+        buf_puts(out, i == 0 ? lead : ", ");
+        int dflt = m->pdefault ? m->pdefault[i] : -1;
+        if (m->pdefault) m->pdefault[i] = -1;
+        emit_arg_or_default(c, m, i, -1, out);
+        if (m->pdefault) m->pdefault[i] = dflt;
+      }
+      return;
+    }
+  }
   emit_strict_args(c, callee_idx, argv, pos_argc, kwh, &L);
 
   /* Detect double-splat (**hash) inside kwh: AssocSplatNode wrapping a hash expr.

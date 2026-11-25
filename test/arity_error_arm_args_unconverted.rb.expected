@@ -1,0 +1,6 @@
+[:a, "s", :sym, 0]
+[:err, "wrong number of arguments (given 2, expected 1)"]
+[:b, 2]
+["s", :sym, "s", :sym]
+"wrong number of arguments (given 2, expected 1)"
+[[:a, nil, 1, 0], [:a, "s", :sym, 0]]

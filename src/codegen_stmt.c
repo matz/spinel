@@ -18762,7 +18762,11 @@ static int class_body_name_undefined(Compiler *c, const char *nm) {
 static void emit_class_body_stmts(Compiler *c, int ci, int body, Buf *b, int indent) {
   const NodeTable *nt = c->nt;
   int saved_cbi = g_class_body_id;
+  int saved_ie = g_ie_class_id, saved_nil = g_ie_nil_ivars, saved_rself = g_ie_rself_on;
+  /* A class body has its own self, even inside a rebound block. */
   g_class_body_id = ci;
+  g_ie_class_id = -1;
+  g_ie_nil_ivars = g_ie_rself_on = 0;
   int n = 0;
   const int *stmts = body >= 0 ? nt_arr(nt, body, "body", &n) : NULL;
   for (int k = 0; k < n; k++) {
@@ -18859,6 +18863,9 @@ static void emit_class_body_stmts(Compiler *c, int ci, int body, Buf *b, int ind
     emit_stmt_or_defer(c, stmts[k], b, indent);
   }
   g_class_body_id = saved_cbi;
+  g_ie_class_id = saved_ie;
+  g_ie_nil_ivars = saved_nil;
+  g_ie_rself_on = saved_rself;
 }
 
 /* An element, `_t<tmp>` of type valt (Ruby nil when tmp < 0 or nil_el), stored

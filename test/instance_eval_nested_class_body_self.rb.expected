@@ -1,0 +1,2 @@
+[:receiver, :outer_constant, :outer_class_variable, :receiver_ivar]
+[:nested, :nested_constant, :nested_class_variable, :nested_ivar]

@@ -175,3 +175,18 @@ q20.v = [4]; k20.x = q20.v; q20.v = k20.x; y1(q20.v) { |x| x << +"f" }; p k20.x
 k20.y = q20.instance_variable_set(:@v, [5]); y1(k20.y) { |x| x << +"g" }; p q20.v
 u20 = [9]; r20.instance_variable_set(:@v, u20); y1(r20.v) { |x| x << +"h" }; p u20
 l20 = L20.new([1]); k20.z = l20.to_a; y1(k20.z) { |x| x << +"i" }; p k20.z, l20
+
+# an ivar's own op-write, `&&=`, a builtin's new Array through a multiple
+# assignment and a target beside a splat, each followed as an attribute's
+# write is: in a class with a reader and on the main object
+class K21
+  attr_reader :v, :w
+  def initialize = (@v = [1]; @w = [5])
+  def grow = (@v += [2]; @w &&= [6, 7])
+end
+k21 = K21.new; k21.grow
+y1(k21.v) { |x| x << +"a" }; y1(k21.w) { |x| x << +"b" }; p k21.v, k21.w
+@a21 = [3]; @a21 += [4]; y1(@a21) { |x| x << +"c" }; p @a21
+@b21 = [8]; @b21 &&= [9]; y1(@b21) { |x| x << +"d" }; p @b21
+@c21 = nil; @c21, @d21 = "ab".bytes, 2; y1(@c21) { |x| x << +"e" }; p @c21, @d21
+@e21, *@f21 = [1, 2], 3; y1(@e21) { |x| x << +"f" }; p @e21, @f21

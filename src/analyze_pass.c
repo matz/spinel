@@ -2225,7 +2225,7 @@ static int attr_recv_may_be(Compiler *c, int call, int cls) {
    or it hands no value after the name, or more than the writer or
    instance_variable_set takes (each raises ArgumentError then). 1 where it
    may set the ivar to its last argument, which the walk follows as a
-   writer call's argument (attr_writer_arg_walk): the one value after a
+   writer call's argument (slot_write_walk): the one value after a
    literal name, or a computed name's last value, which is the value
    wherever the name leads to a set (`send(m, :v=, x)`, `send(m, :@v, x)`);
    -1 where that value may be another (a splat, a send of a dynamic call
@@ -8514,23 +8514,27 @@ static int local_has_target_write(Compiler *c, Scope *sc, const char *name) {
 }
 
 /* The value a multiple assignment (`a, b = x, y`) binds its target `t`
-   to: the element of its literal right side at the target's place. -1 when
-   the right side is no such literal, or the target no plain left one. */
+   to: the element of its literal right side at the target's place, a
+   target past a splat (`a, *r, b = x, y, z`) counted from the end. -1 when
+   the right side is no such literal, the target takes no element of its
+   own (the splat's, or one past the elements, which is nil), or is no
+   plain left or right one. */
 static int masgn_target_value(Compiler *c, int t) {
   const NodeTable *nt = c->nt;
   NT_FOREACH_KIND(nt, NK_MultiWriteNode, mw) {
     int ln = 0, rn = 0, en = 0;
-    const int *lefts = nt_arr(nt, mw, "lefts", &ln);
-    int i = 0;
+    const int *lefts = nt_arr(nt, mw, "lefts", &ln), *rights = nt_arr(nt, mw, "rights", &rn);
+    int i = 0, j = 0;
     while (i < ln && lefts[i] != t) i++;
-    if (i == ln) continue;
-    nt_arr(nt, mw, "rights", &rn);
+    while (i == ln && j < rn && rights[j] != t) j++;
+    if (i == ln && j == rn) continue;
     int val = nt_paren_single(c->nt, nt_ref(nt, mw, "value"));
-    if (nt_ref(nt, mw, "rest") >= 0 || rn > 0 || val < 0 || nt_kind(nt, val) != NK_ArrayNode) return -1;
+    if (val < 0 || nt_kind(nt, val) != NK_ArrayNode) return -1;
     const int *ev = nt_arr(nt, val, "elements", &en);
-    if (en != ln) return -1;
     for (int e = 0; e < en; e++) if (nt_kind(nt, ev[e]) == NK_SplatNode) return -1;
-    return ev[i];
+    if (nt_ref(nt, mw, "rest") < 0) return en == ln && i < ln ? ev[i] : -1;
+    int at = i < ln ? i : (en - rn > ln ? en - rn : ln) + j;
+    return at < en ? ev[at] : -1;
   }
   return -1;
 }
@@ -8762,61 +8766,6 @@ static int named_writes_fresh(Compiler *c, int v) {
   return saw;
 }
 
-/* 1 when every write of ivar `ivn` of class `cls` (or of a class it shares
-   the slot with) stores nil, a parameter of the method writing it, or a
-   value whose Arrays can all be the general Array (array_src_walk, each
-   arm of a branch, pinned as a writer's argument is), so the slot can be
-   the general Array with no copy the program could see: a parameter it
-   keeps (`@a = a`) is its callers' array, and widens for them as one a
-   store goes through does: 1; 0 when nothing in the classes writes it; -1
-   for an op-write or a value the walk cannot follow. With `apply` widens
-   them, setting *ch on a change. The walk is st at `depth`, the slot
-   among the ones it follows. */
-static int ivar_writes_fresh(Compiler *c, int cls, const char *ivn, int apply, int *ch, SrcWalk *st, int depth) {
-  const NodeTable *nt = c->nt;
-  const NodeKind wk[5] = { NK_InstanceVariableWriteNode, NK_InstanceVariableOrWriteNode,
-                           NK_InstanceVariableTargetNode, NK_InstanceVariableAndWriteNode,
-                           NK_InstanceVariableOperatorWriteNode };
-  int saw = 0;
-  for (int t = 0; t < 5; t++)
-    NT_FOREACH_KIND(nt, wk[t], w) {
-      if (!sp_streq(nt_str(nt, w, "name"), ivn)) continue;
-      Scope *ws = comp_scope_of(c, w);
-      int wc = ws && ws->class_id >= 0 ? ws->class_id : c->node_cbody[w];
-      if (wc < 0) wc = ivar_main_slot_class(c, ws, w);
-      if (wc < 0 || (wc != cls && !is_descendant(c, wc, cls) && !is_descendant(c, cls, wc))) continue;
-      if (t >= 3) return -1;
-      /* a target of a multiple assignment takes its element of the right
-         side, which it does not convert: not pinned, as a local's is */
-      if (t == 2) {
-        int tv = masgn_target_value(c, w);
-        int got = tv >= 0 ? array_src_walk(c, tv, 0, apply, st, depth + 1) : 0;
-        if (tv < 0 || (!apply && !got)) return -1;
-        if (apply) *ch |= got;
-        saw = 1;
-        continue;
-      }
-      int wl[16];
-      int nl = value_leaves_ex(c, nt_ref(nt, w, "value"), wl, 0, 16, VL_NIL);
-      if (nl < 0) return -1;
-      saw = 1;
-      for (int i = 0; i < nl; i++) {
-        if (nt_kind(nt, wl[i]) == NK_NilNode) continue;
-        if (unassigned_param_read(c, ws, wl[i]) >= 0) {
-          LocalVar *pl = scope_local(ws, nt_str(nt, wl[i], "name"));
-          if (!pl || pl->rbs_seeded || !(ty_is_array(pl->type) || pl->type == TY_UNKNOWN) || ty_is_ptr_array(pl->type))
-            return -1;
-          if (apply && pl->type != TY_POLY_ARRAY) *ch |= widen_arg_array(c, wl[i]);
-          continue;
-        }
-        int got = array_src_walk(c, wl[i], 1, apply, st, depth + 1);
-        if (!apply && !got) return -1;
-        if (apply) *ch |= got;
-      }
-    }
-  return saw;
-}
-
 /* 1 when a read of the local `r` names is anything but the receiver of an
    element read, an iteration or a size, or an argument printed: the local
    may be stored into (`r << v`), aliased or handed on, so its elements may
@@ -8910,34 +8859,47 @@ static int literal_rows_read(Compiler *c, int v, int apply) {
   return apply ? ch : 1;
 }
 
-/* The value one writer call hands an attribute's ivar (attr_writer_calls,
-   attr_op_writes), walked as a write's value is, and counted (n): nonzero
-   stops the calls where it is no one plain argument the walk can follow.
-   An `||=` or `&&=` hands its value; an `op=` the Array the operator
-   builds out of the ivar's own, which is new, as a write's `@v + [x]` is.
-   A nil holds no Array, as a write's `@v = nil` holds none
-   (ivar_writes_fresh): it is passed over. */
+/* The one step for a value a write leaves in an ivar's slot, whatever the
+   write's kind (slot_write_walk): followed as array_src_walk follows it,
+   pinned, since the slot's store converts a new Array of a typed kind,
+   each arm of a branch on its own; counted (n), and nonzero where one
+   cannot be followed. A nil holds no Array: passed over. A parameter of
+   the writing method ws that it keeps (`@a = a`) is its callers' array,
+   which widens for them as one a store goes through does. A new Array a
+   builtin answers (`s.bytes`) is held as the general Array, by a box too
+   (box_lift_arr). The walk is st at depth (AttrArgWalk), which with apply
+   widens them, setting ch on a change. */
 typedef struct { SrcWalk *st; int depth, apply, ch, n; } AttrArgWalk;
-static int attr_value_walk(Compiler *c, int arg, AttrArgWalk *w) {
-  int a = nt_paren_single(c->nt, arg);
-  if (nt_kind(c->nt, a) == NK_NilNode) return 0;
-  /* a new Array a builtin answers (`k.v = s.bytes`) is held by the ivar's
-     box alone, which holds it as the general Array (box_lift_arr) */
-  if (box_liftable_array(c, a)) {
-    if (w->apply && !c->box_lift_arr[a]) { c->box_lift_arr[a] = 1; w->ch = 1; }
+static int slot_value_walk(Compiler *c, Scope *ws, int v, AttrArgWalk *w) {
+  const NodeTable *nt = c->nt;
+  int wl[16];
+  int nl = value_leaves_ex(c, v, wl, 0, 16, VL_NIL);
+  if (nl < 0) return 1;
+  for (int i = 0; i < nl; i++) {
+    int a = nt_paren_single(nt, wl[i]);
+    if (nt_kind(nt, a) == NK_NilNode) continue;
     w->n++;
-    return 0;
+    if (ws && unassigned_param_read(c, ws, a) >= 0) {
+      LocalVar *pl = scope_local(ws, nt_str(nt, a, "name"));
+      if (!pl || pl->rbs_seeded || !(ty_is_array(pl->type) || pl->type == TY_UNKNOWN) || ty_is_ptr_array(pl->type))
+        return 1;
+      if (w->apply && pl->type != TY_POLY_ARRAY) w->ch |= widen_arg_array(c, a);
+      continue;
+    }
+    if (box_liftable_array(c, a)) {
+      if (w->apply && !c->box_lift_arr[a]) { c->box_lift_arr[a] = 1; w->ch = 1; }
+      continue;
+    }
+    int got = array_src_walk(c, a, 1, w->apply, w->st, w->depth + 1);
+    if (!w->apply && !got) return 1;
+    w->ch |= got;
   }
-  int got = array_src_walk(c, arg, 1, w->apply, w->st, w->depth + 1);
-  if (!w->apply && !got) return 1;
-  w->ch |= got;
-  w->n++;
   return 0;
 }
 /* The values for member iv of Struct or Data class cls that the class's
    own initialize hands the builtin one through `super` (`def initialize(x)
    = super([x])`, a Data's by keyword), each walked as a writer's argument
-   is (attr_value_walk):
+   is (slot_value_walk):
    nonzero stops where one may not be followed (a bare `super`, a splat,
    an initialize above that is not the builtin's); 0 when there is no
    initialize of the class's own. */
@@ -8971,38 +8933,81 @@ static int struct_super_member_values(Compiler *c, int cls, int iv, AttrArgWalk 
     }
     else if (data && an > 0) return 1;   /* (a Data's initialize takes its members by keyword) */
     else if (iv < an) vnode = av[iv];
-    if (vnode >= 0 && attr_value_walk(c, vnode, w)) return 1;
+    if (vnode >= 0 && slot_value_walk(c, ms, vnode, w)) return 1;
   }
   return 0;
 }
-static int attr_writer_arg_walk(Compiler *c, int call, void *ctx) {
-  AttrArgWalk *w = ctx;
-  NodeKind k = nt_kind(c->nt, call);
-  if (k == NK_CallOperatorWriteNode) { w->n++; return 0; }
+/* The value write `w` leaves in an ivar's slot, walked (slot_value_walk),
+   for every kind of write: the ivar's own (`@v = x`, `||=`, `&&=`, a
+   multiple assignment's target, which takes its element of the right side,
+   masgn_target_value), an attribute writer's call (`k.v = x`, `||=`,
+   `&&=`) and a send or instance_variable_set, which hands its value last.
+   An `op=` leaves the Array its operator builds out of the slot's own
+   (`@v += [2]`), which is new. Nonzero stops the walk where the value is
+   no one the walk can follow. */
+static int slot_write_walk(Compiler *c, int w, void *ctx) {
+  const NodeTable *nt = c->nt;
+  AttrArgWalk *aw = ctx;
+  NodeKind k = nt_kind(nt, w);
+  Scope *ws = comp_scope_of(c, w);
+  if (k == NK_InstanceVariableOperatorWriteNode || k == NK_CallOperatorWriteNode) { aw->n++; return 0; }
+  if (k == NK_InstanceVariableTargetNode) {
+    int tv = masgn_target_value(c, w);
+    return tv < 0 || slot_value_walk(c, ws, tv, aw);
+  }
   int arg = -1;
-  if (k == NK_CallOrWriteNode || k == NK_CallAndWriteNode) arg = nt_ref(c->nt, call, "value");
+  if (k == NK_InstanceVariableWriteNode || k == NK_InstanceVariableOrWriteNode || k == NK_InstanceVariableAndWriteNode)
+    return slot_value_walk(c, ws, nt_ref(nt, w, "value"), aw);
+  if (k == NK_CallOrWriteNode || k == NK_CallAndWriteNode) arg = nt_ref(nt, w, "value");
   else {
-    int a = nt_ref(c->nt, call, "arguments"), an = 0;
-    const int *av = a >= 0 ? nt_arr(c->nt, a, "arguments", &an) : NULL;
+    int a = nt_ref(nt, w, "arguments"), an = 0;
+    const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
     /* (a send or instance_variable_set hands its value last, after the
        name, attr_dyn_call_sets) */
-    int at = is_dyn_ivar_set_name(nt_str(c->nt, call, "name")) ? 1 : 0;
-    if ((at ? an < 2 : an != 1) || nt_kind(c->nt, av[an - 1]) == NK_SplatNode) return 1;
+    int at = is_dyn_ivar_set_name(nt_str(nt, w, "name")) ? 1 : 0;
+    if ((at ? an < 2 : an != 1) || nt_kind(nt, av[an - 1]) == NK_SplatNode) return 1;
     arg = av[an - 1];
     /* a value of a kind that is no Array, a keyword Hash too, holds none
        of the ivar's: passed over, as a nil is (`k.send(m, 1, 2)`,
        `k.send(m, a: 1)`) */
     TyKind t = at ? infer_type(c, arg) : TY_UNKNOWN;
-    if (at && (nt_kind(c->nt, arg) == NK_KeywordHashNode || (t != TY_UNKNOWN && t != TY_POLY && !ty_is_array(t))))
+    if (at && (nt_kind(nt, arg) == NK_KeywordHashNode || (t != TY_UNKNOWN && t != TY_POLY && !ty_is_array(t))))
       return 0;
   }
   /* a new Array no box holds as the general one (one of another element
      kind than box_liftable_array lifts) would reach the ivar as it is
-     built, and a store through the ivar's read would go to a copy */
-  int a = nt_paren_single(c->nt, arg);
-  if (nt_kind(c->nt, a) == NK_CallNode && !box_liftable_array(c, a) && infer_type(c, a) != TY_POLY_ARRAY &&
+     built, as the writer's store does not convert it, and a store through
+     the ivar's read would go to a copy */
+  int a = nt_paren_single(nt, arg);
+  if (nt_kind(nt, a) == NK_CallNode && !box_liftable_array(c, a) && infer_type(c, a) != TY_POLY_ARRAY &&
       is_fresh_array(c, a)) return 1;
-  return attr_value_walk(c, arg, w);
+  return slot_value_walk(c, ws, arg, aw);
+}
+/* 1 when every write of ivar `ivn` of class `cls` (or of a class it shares
+   the slot with) leaves a value whose Arrays can all be the general Array
+   (slot_write_walk), so the slot can be the general Array with no copy the
+   program could see; 0 when nothing in the classes writes it; -1 where a
+   value cannot be followed. With `apply` widens them, setting *ch on a
+   change. The walk is st at `depth`, the slot among the ones it follows. */
+static int ivar_writes_fresh(Compiler *c, int cls, const char *ivn, int apply, int *ch, SrcWalk *st, int depth) {
+  const NodeTable *nt = c->nt;
+  const NodeKind wk[5] = { NK_InstanceVariableWriteNode, NK_InstanceVariableOrWriteNode,
+                           NK_InstanceVariableTargetNode, NK_InstanceVariableAndWriteNode,
+                           NK_InstanceVariableOperatorWriteNode };
+  AttrArgWalk aw = { st, depth, apply, 0, 0 };
+  int saw = 0;
+  for (int t = 0; t < 5; t++)
+    NT_FOREACH_KIND(nt, wk[t], w) {
+      if (!sp_streq(nt_str(nt, w, "name"), ivn)) continue;
+      Scope *ws = comp_scope_of(c, w);
+      int wc = ws && ws->class_id >= 0 ? ws->class_id : c->node_cbody[w];
+      if (wc < 0) wc = ivar_main_slot_class(c, ws, w);
+      if (wc < 0 || (wc != cls && !is_descendant(c, wc, cls) && !is_descendant(c, cls, wc))) continue;
+      if (slot_write_walk(c, w, &aw) && !apply) return -1;
+      saw = 1;
+    }
+  if (apply) *ch |= aw.ch;
+  return saw;
 }
 /* ivar_src_walk's answers for ivar ivi of class cls, kept on the Compiler
    (c->ivar_walk_memo) for a walk that starts at the read (depth 0, where
@@ -9082,14 +9087,14 @@ static int ivar_src_walk(Compiler *c, int v, int icls, const char *ivn, int appl
   int fresh = member ? 1 : ivar_writes_fresh(c, icls, ivn, 0, NULL, st, depth);
   AttrArgWalk aw = { st, depth, 0, 0, 0 };
   int writer = fresh >= 0 && call_answers(c, -1, icls, ivn + 1, CT_WRITER, NULL);
-  int ok = fresh >= 0 && !attr_writer_calls(c, icls, ivn, attr_writer_arg_walk, &aw) &&
-           !(writer && attr_op_writes(c, icls, ivn + 1, attr_writer_arg_walk, &aw)) &&
+  int ok = fresh >= 0 && !attr_writer_calls(c, icls, ivn, slot_write_walk, &aw) &&
+           !(writer && attr_op_writes(c, icls, ivn + 1, slot_write_walk, &aw)) &&
            !(!member && struct_super_member_values(c, icls, ivi, &aw)) && (fresh || aw.n);
   if (m && !apply) { m->check = (unsigned char)ok; m->check_at = comp_ty_edits + 1; }
   if (!ok || !apply) { st->niv--; return ok; }
   aw.apply = 1; aw.ch = 0;
-  attr_writer_calls(c, icls, ivn, attr_writer_arg_walk, &aw);
-  if (writer) attr_op_writes(c, icls, ivn + 1, attr_writer_arg_walk, &aw);
+  attr_writer_calls(c, icls, ivn, slot_write_walk, &aw);
+  if (writer) attr_op_writes(c, icls, ivn + 1, slot_write_walk, &aw);
   if (!member) struct_super_member_values(c, icls, ivi, &aw);
   int ch = aw.ch;
   if (member) {
@@ -9183,12 +9188,12 @@ static int array_src_walk(Compiler *c, int v, int pinned, int apply, SrcWalk *st
     }
     int saw = 0, ch = 0;
     /* a target of a multiple assignment takes its element of the right
-       side, which it does not convert: not pinned */
+       side, which its store converts as a plain write's does: pinned */
     NT_FOREACH_KIND(nt, NK_LocalVariableTargetNode, t) {
       if (comp_scope_of(c, t) != sc || !sp_streq(nt_str(nt, t, "name"), nm)) continue;
       int tv = masgn_target_value(c, t);
       if (tv < 0) return 0;
-      int got = array_src_walk(c, tv, 0, apply, st, depth + 1);
+      int got = array_src_walk(c, tv, 1, apply, st, depth + 1);
       if (!apply && !got) return 0;
       ch |= got; saw = 1;
     }

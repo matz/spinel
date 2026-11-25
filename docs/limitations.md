@@ -1157,18 +1157,19 @@ value of a method (or a chain of them, a method a subclass overrides, or a
 method answering its block's value), a `then` block, a multiple assignment
 from a literal, a row of a literal table, a builtin that answers its
 receiver (`push`, `concat`, `tap`, an Array's own `to_a`), an ivar (the main
-object's too) or attr_reader every write of which, a multiple assignment's
-too, is nil, keeps a parameter of the method writing it, or is a value
-followed the same way (`@w = mk`, `@w = k.v`, a branch, `@w = k.v = x`), a
-Struct member its constructor or its own `initialize`'s `super` sets (a Data
-member, the keyword `super` gives) and nothing writes after, a global, class
-variable or constant. The method's other callers then read the general Array
-too. An attribute's writes include its writer's calls from outside the
-class, its `o.v ||=`, `&&=` and `op=`, and a `send`, `public_send`,
-`__send__` or `instance_variable_set` that may set it, by a literal or a
-computed name, with the value it hands last; a writer handed nil, and a
-computed name's value of a kind that is no Array (a keyword Hash too), are
-passed over, and a `send` that hands no value sets nothing; an
+object's too) or attr_reader every write of which (an `||=`, a `&&=`, a
+multiple assignment's, beside a splat too) is nil, keeps a parameter of the
+method writing it, or is a value followed the same way (`@w = mk`, `@w =
+k.v`, a branch, `@w = k.v = x`), or is an `op=`, which builds a new Array
+(`@w += [2]`), a Struct member its constructor or its own `initialize`'s
+`super` sets (a Data member, the keyword `super` gives) and nothing writes
+after, a global, class variable or constant. The method's other callers then
+read the general Array too. An attribute's writes include its writer's calls
+from outside the class, its `o.v ||=`, `&&=` and `op=`, and a `send`,
+`public_send`, `__send__` or `instance_variable_set` that may set it, by a
+literal or a computed name, with the value it hands last; a writer handed
+nil, and a computed name's value of a kind that is no Array (a keyword Hash
+too), are passed over, and a `send` that hands no value sets nothing; an
 `instance_variable_set` sets an ivar of a class with no writer too. A slot
 reached again through its own writes (`k.v = k.v`, two attributes handed
 each other) holds what its other writes hold. A writer's or an ivar's value
@@ -1178,21 +1179,22 @@ x)` too), of an ivar (`k.v = @w = x`) or by a literal
 holder is followed with it, so both keep the one general Array. A new Array
 a builtin answers (`s.bytes`, a `map`, a `split`, `entries`, a Range's or a
 Hash's `to_a`, an Array subclass's `to_a` or `entries`, `Array.new`) handed
-to a writer or to a Struct's constructor is held as the general Array; a
-`to_a` of a value that may be nil or an Array is taken as such a new Array
-too, so a store through where it is kept does not reach the receiver's
-Array. The read may be the reader's, on a receiver that may hold objects of
-any number of classes when each answers the reader by an attribute (the
-class and classes below it, or unrelated classes or Structs whose attributes
-share the name) or by nothing at all, and then each attribute's writes are
-followed, and a class that answers it by an alias of a method has that
-method's value followed; or, for a Struct member, `s[:v]`, `s["v"]` or its
-place (`s[0]`, `s[-1]`). Not followed: a `send` that splats its arguments, a
-`super(*a)` or `super(**h)` in a Struct's `initialize`, and the `initialize`
-of a class below the Struct. A boxed argument -- a local written arrays of
-two kinds, an element read out of a general container, a block parameter, a
-`for` variable -- is followed the same way, to each typed array the store
-cannot fit.
+to a writer or to a Struct's constructor, or stored through a multiple
+assignment (`w, u = s.bytes, 2`), is held as the general Array; a `to_a` of
+a value that may be nil or an Array is taken as such a new Array too, so a
+store through where it is kept does not reach the receiver's Array. The read
+may be the reader's, on a receiver that may hold objects of any number of
+classes when each answers the reader by an attribute (the class and classes
+below it, or unrelated classes or Structs whose attributes share the name)
+or by nothing at all, and then each attribute's writes are followed, and a
+class that answers it by an alias of a method has that method's value
+followed; or, for a Struct member, `s[:v]`, `s["v"]` or its place (`s[0]`,
+`s[-1]`). Not followed: a `send` that splats its arguments, a `super(*a)` or
+`super(**h)` in a Struct's `initialize`, and the `initialize` of a class
+below the Struct. A boxed argument -- a local written arrays of two kinds,
+an element read out of a general container, a block parameter, a `for`
+variable -- is followed the same way, to each typed array the store cannot
+fit.
 
 A block or proc parameter that stores another kind into the Array it
 receives, or into an Array that is an element of it (`|m| m[0] << 1`), does

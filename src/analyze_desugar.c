@@ -16038,6 +16038,52 @@ static int fwd_call_names(const NodeTable *nt, int id, const char *name, int *sk
   *skip = 1;
   return 1;
 }
+/* The innermost def around call `id`, or -1 */
+static int fwd_def_around(const NodeTable *nt, int id) {
+  for (int d = id - 1; d >= 0; d--)
+    if (nt_kind(nt, d) == NK_DefNode && id <= fwd_subtree_max(nt, d)) return d;
+  return -1;
+}
+/* Is call `id` (args av, ac) a forward of the def around it, named `name`,
+   that passes that def's leading parameters as they are and then its `...`:
+   `as_json.to_s(...)` in `def to_s(...)`, `@s.center(w, ...)` in
+   `def center(w, ...)`, or the same rewritten (fwd_forwarded: the `...` is
+   now `__fwdb_N` reads or an anonymous `*` and `**`)? It passes what the
+   def's callers pass. */
+static int fwd_identity_forward(const NodeTable *nt, int id, const int *av, int ac, const char *name) {
+  int fwd = nt_int(nt, id, "fwd_forwarded", 0);
+  if (!fwd && (ac < 1 || nt_kind(nt, av[ac - 1]) != NK_ForwardingArgumentsNode)) return 0;
+  int def = fwd_def_around(nt, id);
+  if (def < 0 || !sp_streq(nt_str(nt, def, "name"), name)) return 0;
+  /* the call's tail: the `...`, or what the rewrite put in its place */
+  int n = ac;
+  if (!fwd) n--;
+  else
+    while (n > 0) {
+      int a = av[n - 1];
+      NodeKind k = nt_kind(nt, a);
+      const char *an = k == NK_LocalVariableReadNode ? nt_str(nt, a, "name") : NULL;
+      if ((k == NK_SplatNode && nt_ref(nt, a, "expression") < 0) || k == NK_KeywordHashNode ||
+          (an && strncmp(an, "__fwdb_", 7) == 0)) n--;
+      else break;
+    }
+  /* ...after the def's leading parameters, read in order */
+  int pn = nt_ref(nt, def, "parameters"), nreq = 0, nopt = 0, k = 0;
+  const int *req = pn >= 0 ? nt_arr(nt, pn, "requireds", &nreq) : NULL;
+  const int *opt = pn >= 0 ? nt_arr(nt, pn, "optionals", &nopt) : NULL;
+  for (int i = 0; i < nreq + nopt; i++) {
+    const char *pnm = nt_str(nt, i < nreq ? req[i] : opt[i - nreq], "name");
+    /* (a destructuring `(x, y)` has no name, and is not passed as it is) */
+    if (!pnm) return 0;
+    if (strncmp(pnm, "__fwdb_", 7) == 0) continue;
+    /* (an optional parameter passes its default when the caller passes
+       nothing: one argument more than the caller's) */
+    if (i >= nreq) return 0;
+    if (k >= n || nt_kind(nt, av[k]) != NK_LocalVariableReadNode || !sp_streq(nt_str(nt, av[k], "name"), pnm)) return 0;
+    k++;
+  }
+  return k == n;
+}
 int fwd_fixed_call_arity(const NodeTable *nt, const char *name) {
   int n = -2;
   for (int id = 0; id < nt->count; id++) {
@@ -16046,6 +16092,10 @@ int fwd_fixed_call_arity(const NodeTable *nt, const char *name) {
     if (!fwd_call_names(nt, id, name, &skip)) continue;
     int ac = 0; const int *av = nt_arr(nt, nt_ref(nt, id, "arguments"), "arguments", &ac);
     av += skip; ac -= skip;
+    /* (a forwarder's own `as_json.to_s(...)` in `def to_s(...)`, before or
+       after its rewrite, passes what the callers counted here pass; one
+       that adds arguments, `@inner.fetch(0, ...)`, is counted) */
+    if (fwd_identity_forward(nt, id, av, ac, name)) continue;
     if (nt_argv_has(nt, av, ac, NT_ARG_SPLAT | NT_ARG_KEYWORDS | NT_ARG_FORWARDING)) return -1;
     if (n != -2 && ac != n) return -1;
     n = ac;
@@ -16174,12 +16224,30 @@ static int fwd_module_super_shape(FwdCtx *fx, int holder, const char *name) {
       is_initialize_name(name) || is_method_missing_name(name)) return -1;
   return def_shape_union_by_name(fx, name);
 }
+/* `def to_s(...) = as_json.to_s(...)`: a forward on another receiver into
+   the forwarder's own name, where each def of the name is a `...`
+   forwarder (or one rewritten as a builtin's, fwd_builtin), reaches the
+   builtin's method of the name. The defs take the same fixed count, the
+   one their callers pass (fwd_fixed_call_arity), or a rest when no call
+   names them. */
+static int fwd_same_name_builtin(const FwdCtx *fx, int def, int call, const char *name) {
+  const NodeTable *nt = fx->nt;
+  int recv = nt_ref(nt, call, "receiver");
+  if (!sp_streq(nt_str(nt, def, "name"), name) || recv < 0 || fwd_node_is(nt, recv, "SelfNode")) return 0;
+  int lo, hi;
+  fwd_named_range(fx, name, &lo, &hi);
+  for (int k = lo; k < hi; k++) {
+    int d = fx->named[k].def;
+    if (def_shape(nt, d) >= 0 && !nt_int(nt, d, "fwd_builtin", 0)) return 0;
+  }
+  return 1;
+}
 static int fwd_target_shape(FwdCtx *fx, int def, int call, int is_super) {
   const NodeTable *nt = fx->nt;
   const char *name = is_super ? nt_str(nt, def, "name") : nt_str(nt, call, "name");
   if (!name) return -1;
   if (!is_super && !sp_streq(name, "new")) {
-    if (!fwd_any_def_named(fx, name)) return FWD_BUILTIN;
+    if (!fwd_any_def_named(fx, name) || fwd_same_name_builtin(fx, def, call, name)) return FWD_BUILTIN;
     int sh = def_shape_union_by_name(fx, name);
     /* every def of the name a `...` forwarder (io-event's Timers::Handle
        `def call(...) = @block.call(...)`, its own name): a name that takes
@@ -17232,6 +17300,28 @@ static int fwd_waits_on_forwarder(const NodeTable *nt, int def, int hi) {
   }
   return 0;
 }
+/* Does the program make an Enumerator over a method named nm
+   (`enum_for(:nm)`, `to_enum(:nm)`)? */
+static int fwd_enumerated(const NodeTable *nt, const char *nm) {
+  for (int id = 0; id < nt->count; id++) {
+    if (nt_kind(nt, id) != NK_CallNode) continue;
+    const char *m = nt_str(nt, id, "name");
+    if (!m || (!sp_streq(m, "enum_for") && !sp_streq(m, "to_enum"))) continue;
+    int args = nt_ref(nt, id, "arguments"), an = 0;
+    const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
+    if (an >= 1 && nt_kind(nt, av[0]) == NK_SymbolNode && sp_streq(nt_str(nt, av[0], "value"), nm)) return 1;
+  }
+  return 0;
+}
+/* The names a `...` forwarder no call names takes as `(*)` (`(*, &)` for
+   each): JSON's generator, display, comparison, hashing, splat, `**` and
+   Enumerable call them with what the builtin of the name takes
+   (test/forward_args_builtin_uncalled*.rb) */
+static int fwd_uncalled_rest(const char *nm) {
+  static const char *const NAMES[] = { "to_json", "to_s", "inspect", "==", "<=>", "hash", "eql?", "to_a",
+    "to_hash", "each", NULL };
+  return str_in(nm, NAMES);
+}
 /* One pass over the `...` forwarders, in source order. With `wait`, one
    whose target is still a `...` forwarder is left for a later pass. */
 static int fwd_rest_callee_pass(Compiler *c, FwdCtx *fx, int wait) {
@@ -17287,6 +17377,10 @@ static int fwd_rest_callee_pass(Compiler *c, FwdCtx *fx, int wait) {
       int sh = fwd_target_shape(fx, def, id, is_super);
       if (sh == FWD_BUILTIN) {
         int arity = fwd_fixed_call_arity(nt, dname);
+        /* (an Enumerator over the forwarder, `enum_for(:map)`, does not hand
+           its block to a method that takes one: the same-name and uncalled
+           forms keep the refusal there) */
+        if ((arity == -2 || (cn && sp_streq(cn, dname))) && fwd_enumerated(nt, dname)) { ok = 0; break; }
         int via = cn && (sp_streq(cn, "__send__") || sp_streq(cn, "send") ||
                          sp_streq(cn, "public_send") || sp_streq(cn, "call") ||
                          /* hands whatever it is given to its block */
@@ -17304,8 +17398,18 @@ static int fwd_rest_callee_pass(Compiler *c, FwdCtx *fx, int wait) {
              refusal below. */
           sh = 1 | (any_call_passes_keywords(nt, dname) ? 2 : 0) | (any_call_passes_block(nt, dname) ? 4 : 0);
         }
+        /* A forwarder no call names, of a name the runtime calls itself
+           in the shape of the builtin it forwards to (fwd_uncalled_rest),
+           takes a rest, which the builtin is handed spread, and the block
+           for an `each`, which Enumerable and `for` call with one. Any
+           other keeps the __fwd_N model, as before: the runtime takes many
+           protocol methods (`coerce`, `to_path`) only in their own shape. */
+        else if (arity == -2) {
+          if (!fwd_uncalled_rest(dname)) { ok = 0; break; }
+          nt_node_set_int(nt, def, "fwd_builtin", 1);
+          sh = 1 | (sp_streq(dname, "each") ? 4 : 0);
+        }
         else {
-          if (arity == -2) { ok = 0; break; }
           if (arity < 0)
             unsupported_feature(c, id, "`...` forwarded into a builtin method, from calls that do not all "
                                        "pass the same number of positional arguments");
@@ -17383,6 +17487,7 @@ static int fwd_rest_callee_pass(Compiler *c, FwdCtx *fx, int wait) {
        its callers pass on, after any optionals, which they then fill */
     int nfixed = 0;
     if (shape == FWD_BUILTIN) {
+      nt_node_set_int(nt, def, "fwd_builtin", 1);
       nfixed = fwd_fixed_call_arity(nt, dname) - nlead;
       if (nfixed < 0) nfixed = 0;
       int np[nreq + nfixed + 1], nn = 0;
@@ -17467,6 +17572,7 @@ static int fwd_rest_callee_pass(Compiler *c, FwdCtx *fx, int wait) {
         nargs[nn++] = kh;
       }
       nt_node_set_arr(nt, args, "arguments", nargs, nn);
+      nt_node_set_int(nt, call, "fwd_forwarded", 1);
       if (fwd_block) {
         int ba = fwd_new_node_like(nt, call, "BlockArgumentNode");
         if (ba < 0) continue;

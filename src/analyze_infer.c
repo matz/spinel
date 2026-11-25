@@ -4735,6 +4735,15 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
       if (sp_streq(name, "close") && argc == 0) { *out = an_poly_concrete(c, id, name, TY_POLY); return 1; }
       if (sp_streq(name, "close") || sp_streq(name, "flush")) { *out = an_poly_concrete(c, id, name, TY_NIL); return 1; }
       if (sp_streq(name, "fileno")) { *out = an_poly_concrete(c, id, name, TY_INT); return 1; }
+      /* getbyte's byte or nil, the handle from binmode and set_encoding, nil
+         from the half closes, as the TY_IO arm types them */
+      if (sp_streq(name, "getbyte") && argc == 0) { *out = an_poly_concrete(c, id, name, TY_POLY); return 1; }
+      if ((sp_streq(name, "binmode") && argc == 0) ||
+          (sp_streq(name, "set_encoding") && (argc == 1 || argc == 2) && !nt_argv_has_splat(nt, argv, argc) &&
+           nt_argv_kwh(nt, argv, argc) < 0))
+        { *out = an_poly_concrete(c, id, name, TY_IO); return 1; }
+      if ((sp_streq(name, "close_read") || sp_streq(name, "close_write")) && argc == 0)
+        { *out = an_poly_concrete(c, id, name, TY_NIL); return 1; }
       /* the descriptor controls, at the arities the poly-IO arm takes them:
          integers, and advise's nil boxed as the TY_IO arm boxes it. Only
          where that arm emits the call: a class of the program's own (Object

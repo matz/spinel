@@ -698,6 +698,15 @@ static int boxed_io_library_call(Compiler *c, int id, const char *name) {
   return bop_io_library_row(op) || io_library_count_refused(c, id, op, name);
 }
 
+/* getbyte, binmode, set_encoding and the half closes, at the arities the
+   TY_IO arm takes them */
+static int boxed_io_byte_mode(const NodeTable *nt, const char *name, int argc, const int *argv) {
+  if (argc == 0 && (sp_streq(name, "getbyte") || sp_streq(name, "binmode") ||
+                    sp_streq(name, "close_read") || sp_streq(name, "close_write"))) return 1;
+  return sp_streq(name, "set_encoding") && (argc == 1 || argc == 2) &&
+         !nt_argv_has_splat(nt, argv, argc) && nt_argv_kwh(nt, argv, argc) < 0;
+}
+
 /* the IO methods on a poly receiver that may hold a stream (write, read, gets, puts, print, ...) */
 int emit_call_poly_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv) {
   if (emit_io_read_nonblock_outbuf(c, id, b)) return 1;
@@ -717,6 +726,7 @@ int emit_call_poly_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
        (sp_streq(name, "printf") && boxed_printf_list_ok(c, argv, argc)) ||
        sp_streq(name, "eof?") || sp_streq(name, "closed?") || sp_streq(name, "path") ||
        sp_streq(name, "to_path") ||
+       boxed_io_byte_mode(nt, name, argc, argv) ||
        sp_streq(name, "tty?") || sp_streq(name, "isatty") ||
        /* a library's methods (io/console's winsize, winsize=) */
        boxed_io_library_call(c, id, name) ||
@@ -1188,6 +1198,34 @@ int emit_call_poly_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
       }
       else if (sp_streq(name, "eof?")) buf_printf(b, "sp_File_eof_p(_t%d); })", tio2);
       else if (sp_streq(name, "closed?")) buf_printf(b, "sp_File_closed_p(_t%d); })", tio2);
+      else if (boxed_io_byte_mode(nt, name, argc, argv)) {
+        Repr res = repr_of(c, id);
+        if (sp_streq(name, "getbyte")) {
+          int tg = ++g_tmp;
+          buf_printf(b, "sp_oint _t%d = sp_File_getbyte(_t%d); ", tg, tio2);
+          if (res.kind == RK_OPT) buf_printf(b, "_t%d; })", tg);
+          else buf_printf(b, "_t%d.nil ? sp_box_nil() : sp_box_int(_t%d.v); })", tg, tg);
+        }
+        else if (sp_streq(name, "close_read") || sp_streq(name, "close_write")) {
+          buf_printf(b, "sp_File_close_half(_t%d, %d); ", tio2, sp_streq(name, "close_read"));
+          buf_puts(b, res.kind == RK_BOXED ? "sp_box_nil(); })" : "((sp_int)0); })");
+        }
+        else {
+          char h[32];
+          snprintf(h, sizeof h, "_t%d", tio2);
+          if (sp_streq(name, "binmode")) buf_printf(b, "sp_File_set_binmode(_t%d); ", tio2);
+          else {
+            int ta = ++g_tmp, tb = ++g_tmp;
+            buf_printf(b, "SP_GC_ROOT(_t%d); sp_RbVal _t%d = ", tio2, ta);
+            emit_boxed(c, argv[0], b);
+            buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_RbVal _t%d = ", ta, tb);
+            if (argc == 2) emit_boxed(c, argv[1], b); else buf_puts(b, "sp_box_nil()");
+            buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_File_set_encoding(_t%d, _t%d, _t%d); ", tb, tio2, ta, tb);
+          }
+          if (res.kind == RK_BOXED) emit_boxed_text(c, TY_IO, h, b); else buf_puts(b, h);
+          buf_puts(b, "; })");
+        }
+      }
       else if (sp_streq(name, "tty?") || sp_streq(name, "isatty"))
         buf_printf(b, "sp_File_tty_p(_t%d); })", tio2);
       /* a library's reader (io/console's winsize), through its row */

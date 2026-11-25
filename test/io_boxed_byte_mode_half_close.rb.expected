@@ -1,0 +1,22 @@
+true
+97
+98
+IO
+IO
+IO
+nil
+true
+nil
+true
+97
+98
+10
+nil
+[:getbyte, true]
+[:binmode, true]
+[:set_encoding, true]
+[:close_read, true]
+[:close_write, true]
+nil
+true
+1

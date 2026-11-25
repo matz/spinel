@@ -2325,16 +2325,16 @@ static sp_bool sp_io_responds(sp_File *f, const char *m, int typed) {
     "mtime", NULL };
   static const char *const statm_b[] = { "<", "<=", ">", ">=", "between?", "clamp",
     NULL };
-  static const char *const iom[] = { "<<", "advise", "close", "closed?", "each",
-    "eof?", "fcntl", "fdatasync", "fileno", "flush", "fsync", "gets", "isatty",
-    "path", "pos", "pos=", "pread", "print", "printf", "putc", "puts", "pwrite",
-    "read", "read_nonblock", "readline", "readlines", "readpartial", "rewind",
-    "seek", "stat", "sync", "sync=", "sysseek", "tell", "to_i", "to_path", "tty?",
-    "wait_priority", "wait_readable", "wait_writable", "write", "write_nonblock",
-    NULL };
-  static const char *const iom_t[] = { "autoclose=", "autoclose?", "binmode",
-    "binmode?", "close_on_exec=", "close_on_exec?", "close_read", "close_write",
-    "each_byte", "each_char", "each_codepoint", "each_line", "eof", "getbyte",
+  static const char *const iom[] = { "<<", "advise", "binmode", "close", "close_read",
+    "close_write", "closed?", "each", "eof?", "fcntl", "fdatasync", "fileno", "flush",
+    "fsync", "getbyte", "gets", "isatty", "path", "pos", "pos=", "pread", "print",
+    "printf", "putc", "puts", "pwrite", "read", "read_nonblock", "readline",
+    "readlines", "readpartial", "rewind", "seek", "set_encoding", "stat", "sync",
+    "sync=", "sysseek", "tell", "to_i", "to_path", "tty?", "wait_priority",
+    "wait_readable", "wait_writable", "write", "write_nonblock", NULL };
+  static const char *const iom_t[] = { "autoclose=", "autoclose?",
+    "binmode?", "close_on_exec=", "close_on_exec?",
+    "each_byte", "each_char", "each_codepoint", "each_line", "eof",
     "getc", "lineno", "lineno=", "pid", "readbyte", "readchar", "reopen", "sysread",
     "syswrite", "to_io", "ungetbyte", "ungetc", "wait", NULL };
   static const char *const iom_b[] = { "collect_concat", "count", "detect",

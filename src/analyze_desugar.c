@@ -27484,9 +27484,16 @@ static int cn_site_repeats(const NodeTable *nt, const int *parent, int id) {
   return 0;
 }
 /* What a statement of a Class.new block is checked against (cn_stmt_reruns):
-   the program's def names and whether the statement stands ahead of a
-   declaration */
-typedef struct { const ANameHash *defnames; int early; } CnRerun;
+   the program's def names, the block's one parameter (its class, NULL for
+   none) and whether the statement stands ahead of a declaration */
+typedef struct { const ANameHash *defnames; const char *param; int early; } CnRerun;
+/* Is node s the class the block runs on, read as a plain value: self, or
+   its one parameter? */
+static int cn_reads_class(const NodeTable *nt, const CnRerun *r, int s) {
+  if (nt_kind(nt, s) == NK_SelfNode) return 1;
+  const char *vn = nt_kind(nt, s) == NK_LocalVariableReadNode ? nt_str(nt, s, "name") : NULL;
+  return vn && r->param && sp_streq(vn, r->param);
+}
 /* May statement s of a Class.new block run again at each evaluation, in a
    class method of the site class with the evaluation's class as self, and
    answer as the block would? Not where it means something else in a method
@@ -27497,7 +27504,7 @@ typedef struct { const ANameHash *defnames; int early; } CnRerun;
    where it reads the frame it runs in (block_given?, binding, __method__).
    Ahead of a declaration (early), where the block would see what that
    declaration adds missing, it calls only Kernel's functions of a name the
-   program defines no method of and does not read self: nothing then
+   program defines no method of and does not read the class: nothing then
    asks the class what it has. */
 static int cn_stmt_reruns(const NodeTable *nt, int s, const CnRerun *r) {
   if (s < 0) return 1;
@@ -27513,8 +27520,8 @@ static int cn_stmt_reruns(const NodeTable *nt, int s, const CnRerun *r) {
   case NK_ConstantOrWriteNode: case NK_ConstantAndWriteNode: case NK_ConstantPathOperatorWriteNode:
   case NK_ConstantPathOrWriteNode: case NK_ConstantPathAndWriteNode:
     return 0;
-  case NK_SelfNode:
-    return !r->early;
+  case NK_SelfNode: case NK_LocalVariableReadNode:
+    return !r->early || !cn_reads_class(nt, r, s);
   case NK_CallNode: {
     const char *nm = nt_str(nt, s, "name");
     if (!nm || is_class_declaration_call(nm) || is_method_name_reflection(nm) || is_frame_reading_function(nm)) return 0;
@@ -27533,20 +27540,35 @@ static int cn_stmt_reruns(const NodeTable *nt, int s, const CnRerun *r) {
   }
   return 1;
 }
+/* The one plain parameter of a Class.new block (`|k|`, the class it runs
+   on): its node, -1 for none; -2 for any other parameter list */
+static int cn_block_param(const NodeTable *nt, int blk) {
+  int bp = nt_ref(nt, blk, "parameters");
+  if (bp < 0) return -1;
+  int pn = nt_kind(nt, bp) == NK_BlockParametersNode ? nt_ref(nt, bp, "parameters") : -1, rn = 0, n = 0;
+  if (pn < 0 || nt_ref(nt, pn, "rest") >= 0 || nt_ref(nt, pn, "keyword_rest") >= 0 || nt_ref(nt, pn, "block") >= 0) return -2;
+  const int *rq = nt_arr(nt, pn, "requireds", &rn);
+  nt_arr(nt, bp, "locals", &n);
+  int on = 0, pon = 0, kn = 0;
+  nt_arr(nt, pn, "optionals", &on); nt_arr(nt, pn, "posts", &pon); nt_arr(nt, pn, "keywords", &kn);
+  return rn == 1 && on + pon + kn + n == 0 && nt_kind(nt, rq[0]) == NK_RequiredParameterNode ? rq[0] : -2;
+}
 /* A run-time site's block that runs more than declarations: where each such
    statement may run again (cn_stmt_reruns), they move, in their order, into
    a class method of the site class, and the body calls it on the site class
    where the block ended (marked rt_body_call), after every declaration. A
    site class (register_rt_sites) runs that call at each evaluation, on the
    class it makes, after the superclass's inherited (cplan_rt_site_body);
-   another runs it in its class body, once, as the block ran before. A block
-   with parameters, or one statement that may not run again, keeps its body:
-   registration then keeps the site class itself. */
+   another runs it in its class body, once, as the block ran before. The
+   block's one parameter is the class: the method's first statement writes
+   self to it. A block with any other parameters, or one statement that may
+   not run again, keeps its body: registration then keeps the site class
+   itself. */
 static void cn_rt_body(NodeTable *nt, int blk, int body, const char *cname, const ANameHash *defnames) {
-  int n = 0, last = -1, moved = 0;
+  int n = 0, last = -1, moved = 0, param = cn_block_param(nt, blk);
   const int *st = nt_arr(nt, body, "body", &n);
-  if (nt_ref(nt, blk, "parameters") >= 0) return;
-  CnRerun r = { defnames, 0 };
+  if (param == -2) return;
+  CnRerun r = { defnames, param >= 0 ? nt_str(nt, param, "name") : NULL, 0 };
   for (int i = 0; i < n; i++) if (stmt_only_declares(nt, st[i], defnames)) last = i;
   for (int i = 0; i < n; i++) {
     if (stmt_only_declares(nt, st[i], defnames)) continue;
@@ -27558,12 +27580,15 @@ static void cn_rt_body(NodeTable *nt, int blk, int body, const char *cname, cons
   int def = fwd_new_node_like(nt, blk, "DefNode"), dself = fwd_new_node_like(nt, blk, "SelfNode");
   int dbody = fwd_new_node_like(nt, blk, "StatementsNode"), call = fwd_new_node_like(nt, blk, "CallNode");
   int recv = fwd_new_node_like(nt, blk, "ConstantReadNode");
-  int *keep = malloc(sizeof(int) * (size_t)(n + 2)), *run = malloc(sizeof(int) * (size_t)moved);
-  if (def < 0 || dself < 0 || dbody < 0 || call < 0 || recv < 0 || !keep || !run) {
+  int pw = param >= 0 ? nt_new_local_of(nt, "LocalVariableWriteNode", param) : -1;
+  int pself = param >= 0 ? fwd_new_node_like(nt, blk, "SelfNode") : -1;
+  int *keep = malloc(sizeof(int) * (size_t)(n + 2)), *run = malloc(sizeof(int) * (size_t)(moved + 1));
+  if (def < 0 || dself < 0 || dbody < 0 || call < 0 || recv < 0 || (param >= 0 && (pw < 0 || pself < 0)) || !keep || !run) {
     fprintf(stderr, "spinel: out of memory\n");
     exit(1);
   }
   int nk = 0, nr = 0;
+  if (pw >= 0) { nt_node_set_ref(nt, pw, "value", pself); run[nr++] = pw; }
   for (int i = 0; i < n; i++) {
     if (stmt_only_declares(nt, st[i], defnames)) keep[nk++] = st[i];
     else run[nr++] = st[i];

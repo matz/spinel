@@ -20082,18 +20082,19 @@ static int emit_multi_write_stmt_body(Compiler *c, int id, Buf *b, int indent, c
   /* A store that can run user code -- the general hash's key hooks, a
      receiver typed at run time, a user `[]=` or writer -- or that
      allocates -- the rest array, a store that copies a String key (#6410), a
-     value that is a by-value struct into a slot that boxes it -- comes
+     value that is a by-value struct into a slot that boxes it, a typed
+     Array converted into a general Array slot -- comes
      after every value is built and after the targets before it have taken
      theirs, so it can collect what an earlier target dropped. */
   int store_alloc = masgn_store_allocates(c, id, id, 0);
   int right_start = en - rn > ln ? en - rn : ln;
   for (int i = 0; i < en && !store_alloc; i++) {
     Repr vr = repr_of(c, els[i]);
+    int tgt = i < ln ? lefts[i] : i >= right_start ? rights[i - right_start] : -1;
     store_alloc = (vr.kind == RK_STRUCT || vr.kind == RK_VOBJ) && masgn_slot_boxes(c, id, lefts, ln, i, vr.as_ty);
-    if (!store_alloc && vr.kind == RK_BOXED) {
-      int tgt = i < ln ? lefts[i] : i >= right_start ? rights[i - right_start] : -1;
-      store_alloc = tgt >= 0 && masgn_slot_unbox_allocates(c, id, tgt);
-    }
+    if (!store_alloc && vr.kind == RK_BOXED) store_alloc = tgt >= 0 && masgn_slot_unbox_allocates(c, id, tgt);
+    /* (a typed Array into a general Array slot is converted, a new Array) */
+    if (!store_alloc && tgt >= 0) store_alloc = masgn_widens_array(masgn_slot_type(c, id, tgt), vr.as_ty);
   }
   /* evaluate all RHS values into temps first (so `a, b = b, a` swaps).
      Save each temp index separately: emit_expr may consume extra g_tmp

@@ -38,3 +38,26 @@ p k.w, k.v
 @w4, @u4 = "kl".bytes, 4
 y1(@w4) { |x| x << "q" }
 p @w4, @u4
+
+# two new Arrays, or a new Array and a String built after it: the
+# conversion of the first allocates while the second waits for its store
+w5, u5 = "mn".bytes, "op".bytes
+y1(w5) { |x| x << "q" }
+y1(u5) { |x| x << 1.5 }
+p w5, u5
+@w6, @u6 = "qr".bytes, "s" * 3
+y1(@w6) { |x| x << "q" }
+p @w6, @u6
+@w7, @u7 = "tu".bytes, "vw".bytes
+y1(@w7) { |x| x << "q" }
+y1(@u7) { |x| x << 2.5 }
+p @w7, @u7
+class J
+  attr_reader :w, :u
+  def initialize = (@w, @u = "xy".bytes, "za".bytes)
+  def go = (y1(@w) { |x| x << "q" }; y1(@u) { |x| x << 3.5 })
+  def y1(a) = yield(a)
+end
+j = J.new
+j.go
+p j.w, j.u

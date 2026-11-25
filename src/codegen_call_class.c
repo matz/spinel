@@ -5904,6 +5904,15 @@ void emit_call_self_boxed(Compiler *c, int id, Buf *b) {
   else buf_puts(b, "sp_main_self()");
 }
 
+/* Does the receiver an instance_eval / instance_exec block runs on answer
+   the bare call id of name? The block's self is that receiver, so the
+   class method the block is written in does not answer it with a sibling
+   class method, as the call plan takes it. */
+static int ie_recv_answers(Compiler *c, int id, const char *name) {
+  int iec = ie_class_of(c, id);
+  return iec >= 0 && iec < c->nclasses && call_target(c, id, iec, name, 0, NULL) >= 0;
+}
+
 /* a call that reaches a class method: a bare call inside a class method, a class body or a module_function's includer, obj.class.name / obj.class.cmeth, and a bare name in a class method */
 int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv) {
   /* A bare call inside a method: the enclosing class's own chain answers it
@@ -5932,7 +5941,7 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
     if (!shadowed) { emit_method_call(c, id, b); return 1; }
   }
   /* bare call to a sibling class method (inside def self.foo, calling bar()) */
-  if (recv < 0) {
+  if (recv < 0 && !ie_recv_answers(c, id, name)) {
     Scope *encl = comp_scope_of(c, id);
     if (encl && encl->is_cmethod && encl->class_id >= 0) {
       /* bare `new` inside a class method -> construct the *emitting* class.

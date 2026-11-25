@@ -2376,23 +2376,31 @@ static void lr_auto_form(Compiler *c, int node, const char *name) {
 }
 
 /* Does send call n, whose sends take the first `used` of its ac arguments
-   av for the names, pass the method it runs nothing: no argument after the
-   names, no block, and no splat, keywords or `...` among the names? A
-   computed send of that shape makes no method of a name the record cannot
-   read: each form that names a method (define_method, attr_*, alias_method,
-   remove_method, undef_method, ...) takes the name as an argument, and an
-   attr form handed none makes nothing. What the method it runs may do is
-   the call's own answer (lr_node_defines: a call of a name it cannot
-   read may define). */
-static int lr_send_passes_nothing(const NodeTable *nt, int n, const int *av, int ac, int used) {
-  if (ac != used || nt_ref(nt, n, "block") >= 0) return 0;
+   av for the names, make no method of a name the record cannot read? It
+   passes the method it runs at most one plain argument: no block, and no
+   splat, keywords or `...` among its arguments.
+   - With none: each form that names a method (define_method, attr_*,
+     alias_method, remove_method, undef_method, ...) takes the name as an
+     argument, and an attr form handed none makes nothing.
+   - With one: in Ruby it may be `attr_reader(x)`, `include(x)`,
+     `remove_method(x)`, `private(x)` or `class_eval(x)`, but no arm of
+     Spinel's computed send (desugar_dynamic_send) reaches a builtin form
+     that names or mixes in methods or evaluates code: on a class, main or
+     any object the dispatch raises NoMethodError for such a name. Its
+     arms are the program's own methods and builtins that make none
+     (`const_get`, `instance_variable_get`); `method(x)` answers a Method,
+     whose run is its `call`'s answer. If the dispatch ever takes such a
+     form as an arm, this no longer holds.
+   What the method it runs may do is the call's own answer (lr_node_defines:
+   a call of a name it cannot read may define). */
+static int lr_send_names_nothing(const NodeTable *nt, int n, const int *av, int ac, int used) {
+  if (ac < used || ac > used + 1 || nt_ref(nt, n, "block") >= 0) return 0;
   for (int i = 0; i < ac; i++) {
     NodeKind k = nt_kind(nt, av[i]);
     if (k == NK_SplatNode || k == NK_KeywordHashNode || k == NK_ForwardingArgumentsNode || k == NK_BlockArgumentNode) return 0;
   }
   return 1;
 }
-
 /* The names the program defines methods by, wherever it does (a statement
    of the load phase, a class the record does not know, a method body or a
    block run later): a def's, an alias's, an attr form's, a define_method's
@@ -2432,7 +2440,7 @@ static void lr_names_take(Compiler *c) {
     if (is_send_family(nm) || (is_code_eval_name(nm) && nt_ref(nt, n, "block") < 0)) {
       int sent_args = 0;
       const char *fn = call_sent_name(nt, n, &sent_args);
-      if (is_code_eval_name(nm) || (!fn && !lr_send_passes_nothing(nt, n, av, ac, sent_args)) || (fn && is_method_naming_call(fn)))
+      if (is_code_eval_name(nm) || (!fn && !lr_send_names_nothing(nt, n, av, ac, sent_args)) || (fn && is_method_naming_call(fn)))
         r->names_any = 1;
       if (c->nautoloads && fn) {
         if (is_code_eval_name(fn)) lr_auto_form(c, n, NULL);
@@ -11941,7 +11949,7 @@ static int lr_lambda_unknown_owner(Compiler *c) {
     if (is_send_family(name)) {
       int used = 0;
       const char *sent = call_sent_name(nt, f, &used);
-      if (!sent ? !lr_send_passes_nothing(nt, f, v, n, used)
+      if (!sent ? !lr_send_names_nothing(nt, f, v, n, used)
                 : is_method_naming_call(sent) || is_code_eval_name(sent)) return 1;
     }
   }

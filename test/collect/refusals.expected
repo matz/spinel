@@ -476,6 +476,12 @@ spinel: 1 refusal, nothing written
 == test/reject/class_macro_after_computed_send_of_a_defining_method.rb [promote] rc=1
 spinel: test/reject/class_macro_after_computed_send_of_a_defining_method.rb:5: Module#define_method with a non-literal name is not supported; use a literal Symbol or String (see docs/limitations.md)
 spinel: 1 refusal, nothing written
+== test/reject/class_macro_after_computed_send_of_a_defining_method_with_an_argument.rb [default] rc=1
+spinel: test/reject/class_macro_after_computed_send_of_a_defining_method_with_an_argument.rb:6: Module#define_method with a non-literal name is not supported; use a literal Symbol or String (see docs/limitations.md)
+spinel: 1 refusal, nothing written
+== test/reject/class_macro_after_computed_send_of_a_defining_method_with_an_argument.rb [promote] rc=1
+spinel: test/reject/class_macro_after_computed_send_of_a_defining_method_with_an_argument.rb:6: Module#define_method with a non-literal name is not supported; use a literal Symbol or String (see docs/limitations.md)
+spinel: 1 refusal, nothing written
 == test/reject/class_macro_after_cycle_read_under_guess.rb [default] rc=1
 spinel: test/reject/class_macro_after_cycle_read_under_guess.rb:7: Module#define_method with a non-literal name is not supported; use a literal Symbol or String (see docs/limitations.md)
 spinel: 1 refusal, nothing written

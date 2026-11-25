@@ -110,8 +110,12 @@ typedef enum {
   BSUP_FALSE,         /* BasicObject#!, Kernel#nil?: false */
   BSUP_FROZEN,        /* Kernel#frozen? */
   BSUP_SELF,          /* Kernel#itself */
-  BSUP_KERNEL_ROW     /* Kernel's builtin-op row of the name (comp_super_kernel_row) */
+  BSUP_KERNEL_ROW,    /* Kernel's builtin-op row of the name (comp_super_kernel_row) */
+  BSUP_ARITY          /* a count the builtin's own method cannot take: CRuby's ArgumentError (cplan_super_wrong_count) */
 } BsuperArm;
+/* The count super id passes where the builtin it reaches cannot take it (BSUP_ARITY), and CRuby's "expected"
+   text into *exp; -1 where it can, or the owner's facts do not prove it */
+int cplan_super_wrong_count(Compiler *c, int id, const char **exp);
 
 typedef struct {
   int mi;                  /* the method scope, or -1 */

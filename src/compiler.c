@@ -6437,7 +6437,7 @@ int comp_zsuper_plain_params(Compiler *c, const Scope *s, int *out, int cap) {
 /* The plain argument count a super passes, or -1 for a splat, a keyword
    or a forwarded list: a bare super's comes from the method's requireds
    and optionals (comp_zsuper_plain_params). */
-static int super_plain_argc(Compiler *c, int id, const Scope *s) {
+int comp_super_plain_argc(Compiler *c, int id, const Scope *s) {
   const NodeTable *nt = c->nt;
   if (nt_kind(nt, id) == NK_ForwardingSuperNode) return comp_zsuper_plain_params(c, s, NULL, 0);
   int sa = nt_ref(nt, id, "arguments"), n = 0;
@@ -6450,7 +6450,7 @@ static int super_plain_argc(Compiler *c, int id, const Scope *s) {
   return n;
 }
 const BuiltinOp *comp_super_kernel_row(Compiler *c, const Scope *s, const char *uname, int id) {
-  const BuiltinOp *op = uname ? bop_find(BOP_KERNEL, uname, super_plain_argc(c, id, s), 0) : NULL;
+  const BuiltinOp *op = uname ? bop_find(BOP_KERNEL, uname, comp_super_plain_argc(c, id, s), 0) : NULL;
   return op && !(op->flags & BOPF_INTERNAL) ? op : NULL;
 }
 int comp_super_object_builtin(Compiler *c, const Scope *s, const char *uname, int id) {
@@ -6469,10 +6469,10 @@ int comp_super_object_builtin(Compiler *c, const Scope *s, const char *uname, in
   case OSA_FROZEN: kind = SUPER_OBJ_FROZEN; kernel = 1; break;
   case OSA_SELF: kind = SUPER_OBJ_SELF; kernel = 1; break;
   default:
-    if (any_core) { kind = SUPER_OBJ_ROW; nargs = super_plain_argc(c, id, s); kernel = 1; }
+    if (any_core) { kind = SUPER_OBJ_ROW; nargs = comp_super_plain_argc(c, id, s); kernel = 1; }
     break;
   }
-  if (!kind || super_plain_argc(c, id, s) != nargs) return 0;
+  if (!kind || comp_super_plain_argc(c, id, s) != nargs) return 0;
   /* (Comparable reached through Object's own include answers == too) */
   if (!any_core && (!comp_plain_class(c, s->class_id) || class_is_comparable(c, s->class_id))) return 0;
   /* the method runs for a subclass's instance too, and a subclass that

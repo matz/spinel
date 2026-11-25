@@ -17348,6 +17348,13 @@ static void emit_super_value(Compiler *c, int id, Buf *b) {
   /* `def inspect = super` / `def to_s = super` reaching Kernel's: the default
      rendering of self's class, which no override of the program's takes
      (sp_obj_kernel_inspect; #<Name:0x...> for to_s) */
+  /* a count the builtin's own method cannot take: its arguments run, then CRuby's ArgumentError */
+  if (barm == BSUP_ARITY) {
+    const char *exp = NULL;
+    int given = cplan_super_wrong_count(c, id, &exp);
+    emit_wrong_count(c, id, exp ? exp : "0", 0, given, b);
+    return;
+  }
   if (barm == BSUP_OBJ_TEXT) {
     int cid = s->class_id;
     /* (a block argument runs for its effect, as below) */

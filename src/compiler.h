@@ -2995,8 +2995,11 @@ int comp_super_object_builtin(Compiler *c, const Scope *s, const char *uname, in
    requireds then the optionals, as parameter nodes into out (up to cap; out
    may be NULL), and their count; -1 where the def has a post, keyword or rest
    parameter (a block parameter is passed as the block, not counted); the one
-   place super_plain_argc and codegen read. */
+   place comp_super_plain_argc and codegen read. */
 int comp_zsuper_plain_params(Compiler *c, const Scope *s, int *out, int cap);
+/* The plain argument count super id in s passes, or -1 for a splat, a keyword or a forwarded list (a bare super's:
+   comp_zsuper_plain_params) */
+int comp_super_plain_argc(Compiler *c, int id, const Scope *s);
 /* Kernel's builtin row (a non-internal BOP_KERNEL row, matched by the count of
    super id's plain operands) that owns uname: the answer of a super that
    reaches Kernel's method of that name (SUPER_OBJ_ROW). NULL for none. */

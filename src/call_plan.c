@@ -1099,6 +1099,28 @@ static int cplan_super_argc(Compiler *c, int id, const Scope *s) {
   return n;
 }
 
+/* The count super id in s passes where bowner's method uname cannot take it, from the owner's facts (Kernel's and
+   BasicObject's methods are listed as Object's), and CRuby's "expected" text; -1 where it can, the count is the run's
+   (a splat, a keyword, a forwarded list) or the facts do not bound it */
+static int cplan_super_count_fails(Compiler *c, int id, const Scope *s, const char *uname, const char *bowner,
+                                   const char **exp) {
+  int argc = bowner && uname ? comp_super_plain_argc(c, id, s) : -1, lo, hi, slot = builtin_core_class_slot(bowner);
+  const char *lo_exp, *hi_exp;
+  const char *cls = builtin_owner_kind(bowner) == BOWN_KERNEL || slot == CORE_BASIC_OBJECT || slot == CORE_OBJECT ? "Object" : bowner;
+  if (argc < 0 || !builtin_class_arity_spec(cls, uname, &lo, &hi, &lo_exp, &hi_exp)) return -1;
+  if (argc < lo && lo_exp) { *exp = lo_exp; return argc; }
+  if (argc > hi) { *exp = hi_exp; return argc; }
+  return -1;
+}
+/* See call_plan.h. */
+int cplan_super_wrong_count(Compiler *c, int id, const char **exp) {
+  const CallPlan p = cplan_user(c, id);
+  const Scope *s = comp_scope_of(c, id);
+  if (p.bsuper != BSUP_ARITY || !s) return -1;
+  const Scope *st = comp_super_site(c, s);
+  return cplan_super_count_fails(c, id, s, comp_super_name(c, cplan_super_start(c, st), st), p.bowner, exp);
+}
+
 /* A class method's super that no program method answers: the builtin's arm (BsuperArm) */
 static BsuperArm cplan_super_class_arm(Compiler *c, int id, const Scope *s, const char *uname, const char *bowner) {
   if (comp_super_is_class_new(c, id)) return BSUP_CLASS_NEW;
@@ -1153,6 +1175,9 @@ static BsuperArm cplan_super_instance_arm(Compiler *c, int id, const Scope *s, c
     int xr[8], xn = exc_reopen_definers(c, uname, xr, 8);
     for (int q = 0; q < xn; q++) if (xr[q] != cid) return BSUP_EXC_REOPEN;
   }
+  /* (a reopening's own method above takes what it declares) */
+  const char *exp;
+  if (cplan_super_count_fails(c, id, s, uname, bowner, &exp) >= 0) return BSUP_ARITY;
   if (exc && is_exception_message(uname)) return BSUP_EXC_TEXT;
   switch (object_super_arm(uname)) {
   case OSA_RESPOND_TO: if (cplan_super_argc(c, id, s) >= 1) return BSUP_RESPOND_TO; break;

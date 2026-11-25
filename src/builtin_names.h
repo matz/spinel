@@ -168,6 +168,7 @@ int is_hash_merge_bang(const char *n); /* merge! update */
 int is_membership_alias(const char *n); /* include? member? */
 int is_eql_or_equal(const char *n); /* eql? equal? */
 int is_equal_name(const char *n);   /* equal? */
+int is_eqeq_name(const char *n);    /* == */
 int is_substitution(const char *n); /* gsub sub */
 int is_substitution_bang(const char *n); /* gsub! sub! */
 int is_str_reassign_mutator(const char *n); /* prepend << concat replace delete_prefix! delete_suffix! */
@@ -563,12 +564,34 @@ int is_kernel_module_function(const char *n);
 /* ...and one that never consults self (not `binding`). */
 int kernel_function_ignores_self(const char *n);
 int builtin_object_method_known(const char *m);   /* one of Object's own methods every object answers */
+int object_method_reads_block(const char *n);   /* one of Object's public methods that reads its block: tap then yield_self instance_eval instance_exec define_singleton_method send __send__ public_send to_enum enum_for */
+/* One of Object's public methods whose call on a program object's self the call layer does not answer as CRuby does
+   yet: extend and define_singleton_method (an object gets methods of its own only at a call site whose receiver and
+   module the compiler sees), method and public_method (a Method of a builtin's method), !~ (no route). */
+int object_self_call_unanswered(const char *n);
+/* The answer the super emission (emit_super_value) gives a `super` from a program class into BasicObject's, Object's or
+   Kernel's method n itself, rather than the builtin's own call the lowering of builtin supers makes: the default text
+   (to_s inspect), the method table's (respond_to?), the object frozen (freeze), its class against the argument (is_a?
+   kind_of?, instance_of?), the same object (== equal?; eql?, Kernel's), false (!; nil?, Kernel's), the frozen bit
+   (frozen?), the object (itself). OSA_NONE for any other name. */
+typedef enum {
+  OSA_NONE, OSA_TEXT, OSA_RESPOND_TO, OSA_FREEZE, OSA_IS_A, OSA_INSTANCE_OF, OSA_SAME, OSA_KERNEL_SAME, OSA_FALSE,
+  OSA_KERNEL_FALSE, OSA_FROZEN, OSA_SELF
+} ObjectSuperArm;
+ObjectSuperArm object_super_arm(const char *n);
+/* The same of a `super` in a class method: Class#subclasses, Class#superclass, Module#ancestors, Module#include?.
+   CSA_NONE for any other name. */
+typedef enum { CSA_NONE, CSA_SUBCLASSES, CSA_SUPERCLASS, CSA_ANCESTORS, CSA_INCLUDE_P } ClassSuperArm;
+ClassSuperArm class_super_arm(const char *n);
+int is_backtick_name(const char *n);   /* ` (Kernel#`) */
+int is_with_name(const char *n);   /* with (Data#with) */
 int builtin_module_method_known(const char *m);   /* one of Module's own methods a class answers, and no object's */
 int kernel_private_method(const char *name);   /* one of the methods Kernel defines private */
 int is_object_method_name(const char *nm);   /* one of Object's public or private instance methods, Kernel's private ones too */
 const char *builtin_method_owner(const char *cls, const char *m);   /* the class or module defining builtin cls's m */
 const char *builtin_bool_method_owner(const char *cls, const char *m);   /* ...a true's or false's m, of class cls when known; NULL where it is not known */
 const char *builtin_function_owner(const char *m);   /* the module defining the function a receiverless method(:m) binds */
+extern const char INITIALIZE_NAME[];   /* "initialize" */
 extern const char RESPOND_TO_NAME[];   /* "respond_to?", the name a lookup of the calls that ask presence goes by */
 int is_respond_to_name(const char *n); /* respond_to?: does the receiver itself answer a name */
 extern const char *const struct_names[];   /* the names a Struct's instance answers from Struct (not a Data's), NULL-terminated */
@@ -684,7 +707,14 @@ int is_clone_name(const char *n); /* clone */
 int is_cover_name(const char *n); /* cover? */
 int is_flatten_name(const char *n); /* flatten */
 int is_hash_name(const char *n); /* hash */
+int is_object_id_name(const char *n); /* object_id __id__ */
+/* Object's identity values of its receiver: hash object_id __id__. */
+int is_identity_value_name(const char *n);
+/* A builtin call that reads its receiver's identity: Object's comparisons (== != === equal? eql?, the address)
+   and its identity values (is_identity_value_name). A by-value layout has no identity to read. */
+int builtin_call_reads_identity(const char *n);
 int is_spaceship_name(const char *n); /* <=> */
+int is_object_hook_name(const char *n); /* hash eql? <=>: what the runtime's hash-key and sort hooks call on a program object, with no block */
 int is_puts_name(const char *n); /* puts */
 int is_to_f_name(const char *n); /* to_f */
 int is_to_i_name(const char *n); /* to_i */

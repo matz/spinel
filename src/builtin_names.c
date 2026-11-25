@@ -481,7 +481,7 @@ int is_load_path_write(const char *n) {
    rather than as a dispatch over the classes that define the name
    (emit_call_identity_arms, emit_poly_ivar_list). */
 int is_poly_object_surface_name(const char *n) {
-  return sp_streq(n, "hash") || sp_streq(n, "object_id") || sp_streq(n, "__id__") || sp_streq(n, "instance_variables");
+  return is_identity_value_name(n) || sp_streq(n, "instance_variables");
 }
 /* A call whose answer tells an object from a copy of it: its identity, or
    whether it is frozen (a copy of a String later frozen is not). */
@@ -737,6 +737,7 @@ int is_element_pick(const char *n) {
 int is_equal_name(const char *n) {
   return sp_streq(n, "equal?");
 }
+int is_eqeq_name(const char *n) { return n && sp_streq(n, "=="); }
 int is_eql_or_equal(const char *n) {
   return sp_streq(n, "equal?") || sp_streq(n, "eql?");
 }
@@ -783,6 +784,46 @@ int is_binary_operator(const char *n) {
   for (int i = 0; ops[i]; i++) if (sp_streq(n, ops[i])) return 1;
   return 0;
 }
+
+/* See builtin_names.h. */
+int object_method_reads_block(const char *n) {
+  return n && (is_tap_alias(n) || is_instance_eval_family(n) || is_define_singleton_method_name(n) || is_send_family(n) ||
+               is_enumerator_maker(n));
+}
+
+/* See builtin_names.h. */
+int object_self_call_unanswered(const char *n) {
+  return n && (is_extend_name(n) || is_define_singleton_method_name(n) || is_method_object_maker(n) || is_match_operator(n));
+}
+
+/* See builtin_names.h. */
+ObjectSuperArm object_super_arm(const char *n) {
+  if (!n) return OSA_NONE;
+  if (is_to_s_name(n) || is_inspect_name(n)) return OSA_TEXT;
+  if (is_respond_to_name(n)) return OSA_RESPOND_TO;
+  if (is_freeze_name(n)) return OSA_FREEZE;
+  if (is_instance_of_query(n)) return OSA_INSTANCE_OF;
+  if (is_kind_query(n)) return OSA_IS_A;
+  if (is_eqeq_name(n) || is_equal_name(n)) return OSA_SAME;
+  if (is_eql_or_equal(n)) return OSA_KERNEL_SAME;
+  if (sp_streq(n, "!")) return OSA_FALSE;
+  if (sp_streq(n, "nil?")) return OSA_KERNEL_FALSE;
+  if (sp_streq(n, "frozen?")) return OSA_FROZEN;
+  if (is_itself_name(n)) return OSA_SELF;
+  return OSA_NONE;
+}
+
+/* See builtin_names.h. */
+ClassSuperArm class_super_arm(const char *n) {
+  if (!n) return CSA_NONE;
+  if (sp_streq(n, "subclasses")) return CSA_SUBCLASSES;
+  if (sp_streq(n, "superclass")) return CSA_SUPERCLASS;
+  if (sp_streq(n, "ancestors")) return CSA_ANCESTORS;
+  if (sp_streq(n, "include?")) return CSA_INCLUDE_P;
+  return CSA_NONE;
+}
+int is_backtick_name(const char *n) { return n && sp_streq(n, "`"); }
+int is_with_name(const char *n) { return n && sp_streq(n, "with"); }
 
 /* Object's methods that hand their receiver on to code over its members or
    bind it into a wrapper: to_enum / enum_for walk each, instance_eval /
@@ -2248,6 +2289,7 @@ const char *builtin_function_owner(const char *m) {
 
 /* respond_to?: whether the receiver itself answers a name, publicly or
    with include_all any */
+const char INITIALIZE_NAME[] = "initialize";
 const char RESPOND_TO_NAME[] = "respond_to?";
 int is_respond_to_name(const char *n) { return n && sp_streq(n, RESPOND_TO_NAME); }
 /* The names a Struct's instance answers from Struct itself. Data answers none of them: its own are the members and
@@ -3013,6 +3055,11 @@ int is_cover_name(const char *n) { return n && sp_streq(n, "cover?"); }
 int is_flatten_name(const char *n) { return n && sp_streq(n, "flatten"); }
 
 int is_hash_name(const char *n) { return n && sp_streq(n, "hash"); }
+int is_object_id_name(const char *n) { return n && (sp_streq(n, "object_id") || sp_streq(n, "__id__")); }
+int is_identity_value_name(const char *n) { return is_hash_name(n) || is_object_id_name(n); }
+int builtin_call_reads_identity(const char *n) {
+  return n && (is_class_compare(n) || is_case_eq(n) || is_identity_value_name(n));
+}
 
 int is_puts_name(const char *n) { return n && sp_streq(n, "puts"); }
 
@@ -3025,6 +3072,7 @@ int is_intersect_name(const char *n) { return n && sp_streq(n, "intersect?"); }
 int is_compare_by_identity_name(const char *n) { return n && sp_streq(n, "compare_by_identity"); }
 
 int is_spaceship_name(const char *n) { return n && sp_streq(n, "<=>"); }
+int is_object_hook_name(const char *n) { return is_hash_name(n) || (n && sp_streq(n, "eql?")) || is_spaceship_name(n); }
 
 
 /* File::Stat's predicates, which the TY_IO arms answer for the handle a stat

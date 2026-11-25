@@ -1253,7 +1253,7 @@ int exc_message_super_to_s(Compiler *c, int id, int *out, int cap);
 int class_has_exc_name(Compiler *c, int ci);
 int any_exc_reopen(Compiler *c);
 char **dsend_candidates(Compiler *c, int *out_n);
-int emit_super_respond_to(Compiler *c, int id, Scope *s, Buf *b);
+void emit_super_respond_to(Compiler *c, int id, Scope *s, Buf *b);
 /* a super's forwarded parameter pi, boxed (an oint slot through oint_box) */
 void emit_boxed_fwd_param(Compiler *c, Scope *s, int pi, Buf *b);
 /* a super's block argument run for its effect: "(void)(x); " */
@@ -1274,6 +1274,12 @@ int class_mixes_in(Compiler *c, int cid, int mod, int depth);
 int class_is_comparable(Compiler *c, int cid);
 void emit_visible_cls_id(Compiler *c, const char *var, Buf *b);
 void obj_default_name(Compiler *c, int ci, char *name, size_t nn, char *arg, size_t na);
+/* Kernel#to_s or #inspect (want_inspect) of an object of program class cid,
+   the builtin's own text whatever the program defines: #<Name:0x...>, and
+   for inspect the default ivar walk (sp_obj_kernel_inspect). obj is the C
+   expression of the object's pointer, typed as the class's (the address of
+   a by-value one), evaluated once or twice. */
+void emit_obj_kernel_text(Compiler *c, int cid, int want_inspect, const char *obj, Buf *b);
 void emit_obj_default_inspect(Compiler *c, int cid, const char *p, Buf *b);
 int class_has_ctor(const ClassInfo *ci);   /* does the class get a sp_X_new (an object of it may exist) */
 int anon_class_text(Compiler *c, int ci, const char *head, Buf *b);
@@ -2190,6 +2196,7 @@ int read_of_fixed_param(Compiler *c, int node);
 int read_unbound_in_stmt(Compiler *c, int node);
 int  typed_array_src_held(Compiler *c, int node);   /* a typed Array held while it is boxed */
 int  proc_form_live(Compiler *c, int s);
+int  scope_unspliced_fn(Compiler *c, int mi);   /* the scope whose function a hook's call of mi with no block runs: mi, a yielding one's proc-form clone, or -1 */
 int  proc_form_source(Compiler *c, int s);
 int  ctor_site_on_cycle(Compiler *c, int id, int initm);
 int  ctor_init_proc_form(Compiler *c, int cid);
@@ -2367,7 +2374,7 @@ int kwh_merged(Compiler *c, Scope *m, int kwh);
    as a Data or Struct construction and a `**kwrest` of any key
    (kwrest_any_key) need (TY_POLY_POLY_HASH). */
 int emit_ds_hash_merge(Compiler *c, int kwh, int any_key, TyKind *out_type);
-int emit_super_data_with(Compiler *c, int id, Scope *s, Buf *b);
+void emit_super_data_with(Compiler *c, int id, Scope *s, Buf *b);
 /* True when emit_ds_hash_materialize runs keyword code with an effect ahead
    of the call's positionals: a kwh_merged call's merged hash, or a first
    `**` operand with a side effect that it evaluates. */
@@ -2516,8 +2523,6 @@ const struct BuiltinOp *an_bop_row_for_kind(Compiler *c, int id, TyKind rt);
 const struct BuiltinOp *poly_scalar_row(TyKind k, const char *name, int argc, int has_block);   /* analyze_infer.c */
 TyKind reduce_empty_seed_kind(Compiler *c, int id);   /* analyze_infer_recv.c: an empty `[]` reduce seed's Array kind */
 int an_arg_is_shared_handle(Compiler *c, int node);
-int an_super_object_text(Compiler *c, int n, int mi);
-int an_super_struct_text(Compiler *c, int n, int mi);
 int an_user_defines_method(Compiler *c, const char *name);
 int an_enum_own_find_index(Compiler *c, int id);
 /* Can no method of the program take `name`: no def of it or of method_missing, and no alias, define_method, attr_* or Struct / Data member that names it (or names a method only the run time knows)? */

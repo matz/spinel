@@ -12204,9 +12204,6 @@ const char*sp_SymPolyHash_inspect(sp_SymPolyHash*h);
    bound receiver + fn_ptr) when the program needs them -- null hooks
    leave the runtime at identity, which is the right default for typed
    pointers like IntArray. */
-/* FNV-1a over a fixed byte range -- gives value-type user objects (by-value
-   structs with no pointer identity) a stable Integer #hash / #object_id from
-   their content, so `v.hash == v.hash` holds (#2284, #2283). */
 /* Integer#<< with a RUNTIME shift amount: a negative count shifts right
    (floor semantics via arithmetic shift), a count past the word raises
    instead of C undefined behavior (#2423). The shift runs in unsigned space
@@ -12238,12 +12235,6 @@ static inline sp_int sp_int_shr_ck(sp_int a, sp_int b) {
   if ((uint64_t)b < 63u) return a >> b;
   if (b < 0) return sp_int_shl_ck(a, -b);
   return a < 0 ? -1 : 0;                  /* >>63.. : sign fill */
-}
-static sp_int sp_bytes_hash(const void *p, size_t n) {
-  const unsigned char *b = (const unsigned char *)p;
-  uint64_t h = 1469598103934665603ULL;
-  for (size_t i = 0; i < n; i++) { h ^= b[i]; h *= 1099511628211ULL; }
-  return (sp_int)(h & 0x7fffffffffffffffULL);
 }
 typedef sp_int  (*sp_obj_hash_fn)(int cls_id, void *p);
 typedef sp_bool (*sp_obj_eql_fn)(int cls_id, void *a, void *b);

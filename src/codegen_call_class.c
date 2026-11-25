@@ -210,11 +210,12 @@ static void cm_ret_close(const Scope *s, int w, Buf *b) {
   if (oint_kind(s->ret) && method_ret_is_oint(s) != (w != 0)) buf_puts(b, ")");
 }
 
-/* Does the run-time respond_to? (emit_respond_to_runtime_name) answer for a
-   receiver of type rt? An override answers only for its own class's objects
-   (and a boxed value, which dispatches). */
-int respond_to_runtime_reaches(Compiler *c, TyKind rt) {
-  return !any_class_defines(c, "respond_to?") || g_poly_builtin_arm ||
+/* Does the run-time respond_to? (emit_respond_to_runtime_name) answer call
+   id on a receiver of type rt? An override answers only for its own class's
+   objects (and a boxed value, which dispatches); the builtin's own call
+   (builtin_only: a super's, lowered) is answered whatever overrides it. */
+int respond_to_runtime_reaches(Compiler *c, int id, TyKind rt) {
+  return !any_class_defines(c, "respond_to?") || g_poly_builtin_arm || cplan_builtin_call(c, id) ||
          !(rt == TY_POLY ||
            (ty_is_object(rt) && call_target(c, -1, ty_object_class(rt), RESPOND_TO_NAME, CT_METHODS, NULL) >= 0));
 }
@@ -266,6 +267,9 @@ static void rtr_lists_build(Compiler *c, int k, Buf *pb, Buf *vb) {
   if (k < 0) { emit_object_reopen_responds(c, -1, pb, vb); return; }
   RtrNames rn = { c, k, pb, vb };
   cplan_chain_names(c, k, rtr_name, &rn);
+  /* (an initialize the class made public, `public :initialize`, the plan's answer: the other names of the
+     family are no list's, emit_responds_name) */
+  if (cplan_obj_responds(c, k, INITIALIZE_NAME, -1) == 2) buf_printf(pb, "\"%s\", ", INITIALIZE_NAME);
   const char *const *imp[] = { enumerable_names, comparable_names, struct_names, struct_core_names };
   for (int l = 0; l < 4; l++)
     for (int i = 0; imp[l][i]; i++) {
@@ -1188,7 +1192,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
           (nt_kind(nt, argv[1]) == NK_TrueNode ? object_private_method_name(qm)
                                                : ty_is_object(rt) && nt_kind(nt, argv[1]) != NK_FalseNode &&
                                                  nt_kind(nt, argv[1]) != NK_NilNode) &&
-          respond_to_runtime_reaches(c, rt)) {
+          respond_to_runtime_reaches(c, id, rt)) {
         emit_respond_to_runtime_name(c, id, b, recv, argc, argv, qm);
         return 1;
       }
@@ -1447,7 +1451,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       }
     }
     else if (recv >= 0 && rt != TY_CLASS && nt_kind(nt, argv[0]) != NK_SplatNode &&
-             respond_to_runtime_reaches(c, rt)) {
+             respond_to_runtime_reaches(c, id, rt)) {
       emit_respond_to_runtime_name(c, id, b, recv, argc, argv, NULL);
       return 1;
     }
@@ -4277,7 +4281,7 @@ static int emit_class_instance_methods_list(Compiler *c, int id, Buf *b, const N
     int any = 0;
     for (int k = 0; k < c->nclasses; k++) {
       if (!cv[k]) continue;
-      if (comp_class_is_module(c, &c->classes[k]) || !an_object_methods_listable(c, k, name)) return 0;
+      if (comp_class_is_module(c, &c->classes[k]) || !an_object_methods_listable(c, id, k, name)) return 0;
       any = 1;
     }
     if (!any) return 0;
@@ -4314,7 +4318,7 @@ static int emit_class_instance_methods_list(Compiler *c, int id, Buf *b, const N
   /* every class the call can run on lists ahead of time, or none does */
   if (nks <= 0) ks[0] = ci, nks = 1;
   for (int i = 0; i < nks; i++)
-    if (!an_object_methods_listable(c, ks[i], name)) return 0;
+    if (!an_object_methods_listable(c, id, ks[i], name)) return 0;
   int rt = ++g_tmp;
   buf_printf(b, "({ sp_PolyArray *_t%d = NULL; ", rt);
   if (dyn) buf_puts(b, "switch (_sp_cls.cls_id) {");
@@ -4814,10 +4818,12 @@ static int emit_class_own_instance_methods(Compiler *c, int id, Buf *b, const No
   return 0;
 }
 
-/* `recv.class`: the receiver's class value, compile-time for the types
-   that know it, a builtin's as emit_builtin_class_value writes it; 0 when
-   the receiver's own `class` member answers instead. */
-static int emit_recv_class_value(Compiler *c, Buf *b, const NodeTable *nt, int recv) {
+/* `recv.class` (call id): the receiver's class value, compile-time for the
+   types that know it, a builtin's as emit_builtin_class_value writes it; 0
+   when the receiver's class answers the call itself (a user `def class`, a
+   Data/Struct member `:class`, #2975), which the user dispatch runs -- not
+   the builtin's own call (builtin_only: the call a super is lowered to). */
+static int emit_recv_class_value(Compiler *c, int id, Buf *b, const NodeTable *nt, int recv) {
   /* top-level `self.class` (and inside a top-level def): self is main, an
      Object instance, so the class is Object -- the SelfNode has no C slot at
      top level and previously fell through unsupported (#3035) */
@@ -4825,8 +4831,9 @@ static int emit_recv_class_value(Compiler *c, Buf *b, const NodeTable *nt, int r
     emit_builtin_class_value(c, "Object", b);
     return 1;
   }
-  if (!obj_member_shadows(c, comp_recv_type(c, recv), "class")) {
-    TyKind rt = comp_recv_type(c, recv);  /* empty-literal receivers coerce */
+  TyKind rt0 = comp_recv_type(c, recv);  /* empty-literal receivers coerce */
+  if (!(ty_is_object(rt0) && ty_object_class(rt0) < c->nclasses && call_answers(c, id, ty_object_class(rt0), "class", 0, NULL))) {
+    TyKind rt = rt0;
     /* When emitting a scope transplanted from a builtin-reopen class (Object/Array/
        Numeric), self is sp_RbVal even if the nscope-based type says otherwise.
        Override the inferred type to TY_POLY so we get sp_poly_class_name(self).
@@ -5100,7 +5107,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
     }
   }
 
-  if (recv >= 0 && is_class_query(name) && argc == 0 && emit_recv_class_value(c, b, nt, recv)) return 1;
+  if (recv >= 0 && is_class_query(name) && argc == 0 && emit_recv_class_value(c, id, b, nt, recv)) return 1;
 
   /* Module#< / <= / > / >= / <=> with one side boxed: a class value read out
      of an Array or Hash ordered against a class, or a class ordered against

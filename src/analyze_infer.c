@@ -2543,18 +2543,20 @@ int reduce_tail_from_acc(Compiler *c, int tail, const char *accp) {
   return 0;
 }
 
-/* obj.methods / public_methods / singleton_methods on an instance of `cid`:
-   listable ahead of time when the class does not define the name itself and
-   every ancestor is a user class whose whole method surface spinel knows --
-   not an exception, a native class, or a class whose superclass is a
+/* obj.methods / public_methods / singleton_methods (call id, or -1) on an
+   instance of `cid`: listable ahead of time when the class does not define
+   the name itself, or the call is the builtin's own (builtin_only: a super's),
+   and every ancestor is a user class whose whole method surface spinel knows
+   -- not an exception, a native class, or a class whose superclass is a
    builtin. */
-int an_object_methods_listable(Compiler *c, int cid, const char *name) {
+int an_object_methods_listable(Compiler *c, int id, int cid, const char *name) {
   const NodeTable *nt = c->nt;
   if (cid < 0 || cid >= c->nclasses || class_is_exc_subclass(c, cid)) return 0;
-  if (comp_name_responder(c, cid, name, 0) >= 0) return 0;
+  int bonly = id >= 0 && cplan_builtin_call(c, id);
+  if (!bonly && comp_name_responder(c, cid, name, 0) >= 0) return 0;
   /* nor where it answers the name with a reader of its own: a Struct member
      or an attr named `methods` (#10345) */
-  if (call_answers(c, -1, cid, name, 0, NULL)) return 0;
+  if (call_answers(c, id, cid, name, 0, NULL)) return 0;
   for (int k = cid, g = 0; k >= 0 && g <= c->nclasses; k = c->classes[k].parent, g++) {
     if (c->classes[k].is_native_class) return 0;
     if (c->classes[k].parent < 0 && !c->classes[k].is_struct) {
@@ -6747,10 +6749,11 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
       /* a generated READER of the name owns it on a concrete object, as any
          reader does in CRuby: fall through to the member-read rule (#4190);
          so does a method the class defines itself, whose value is what its
-         body answers -- `def dup = self.class.new(...)` answers boxed (#5461) */
-      !(ty_is_object(rt) &&
-        (call_answers(c, -1, ty_object_class(rt), name, 0, NULL))) &&
-      !(rt == TY_POLY && an_user_defines_method(c, name)) &&
+         body answers -- `def dup = self.class.new(...)` answers boxed (#5461).
+         Not for the builtin's own call (builtin_only: a super's), as the
+         emission has it */
+      !(!cplan_builtin_call(c, id) && ty_is_object(rt) && call_answers(c, -1, ty_object_class(rt), name, 0, NULL)) &&
+      !(!cplan_builtin_call(c, id) && rt == TY_POLY && an_user_defines_method(c, name)) &&
       /* (nor where TrueClass or FalseClass defines it: the reopen rule below
          types each value's side, cplan_bool_sides) */
       !(rt == TY_BOOL && cplan_bool_sides(c, id, &self_tmi, &self_fmi))) {
@@ -9528,8 +9531,8 @@ int an_poly_object_methods_listable(Compiler *c, int id, const char *name, int a
   for (int i = 0; i < n; i++) {
     int k = ks ? ks[i] : i;
     if (k < 0 || k >= c->nclasses || !c->classes[k].instantiated || is_builtin_reopen(c->classes[k].name)) continue;
-    if (call_answers(c, -1, k, name, 0, NULL)) return 0;
-    if (an_object_methods_listable(c, k, name)) any = 1;
+    if (call_answers(c, id, k, name, 0, NULL)) return 0;
+    if (an_object_methods_listable(c, id, k, name)) any = 1;
   }
   return any;
 }
@@ -9540,7 +9543,7 @@ static int infer_methods_listed(Compiler *c, int id, int recv, TyKind rt, const 
       (sp_streq(name, "methods") || sp_streq(name, "public_methods") ||
        sp_streq(name, "singleton_methods")) &&
       an_object_methods_all_arg(c, ty_object_class(rt), argc, argv) >= 0 &&
-      an_object_methods_listable(c, ty_object_class(rt), name))
+      an_object_methods_listable(c, id, ty_object_class(rt), name))
     return 1;
   if (recv >= 0 && rt == TY_POLY && an_poly_object_methods_listable(c, id, name, argc, argv)) return 1;
   return an_value_methods_class(c, recv, rt, name, argc, argv) != NULL;
@@ -9793,9 +9796,9 @@ static TyKind infer_call_inner(Compiler *c, int id) {
   }
 
   /* Kernel#dup / #clone an alias captured on a program object
-     (builtin_only): a copy of the receiver, whatever the class's own method
-     of the name answers */
-  if ((bonly || cplan_builtin_call(c, id)) && recv >= 0 && is_copy_alias(name)) {
+     (builtin_only), or Kernel#freeze a super is: a copy of the receiver, or
+     the receiver, whatever the class's own method of the name answers */
+  if ((bonly || cplan_builtin_call(c, id)) && recv >= 0 && (is_copy_alias(name) || is_freeze_name(name))) {
     TyKind crt = infer_type(c, recv);
     if (ty_is_object(crt)) return crt;
   }
@@ -11980,9 +11983,52 @@ static TyKind ctr_site_join(TyKind nat, TyKind want) {
 }
 /* What a super that comp_super_object_builtin answers (kind) is typed: self for
    itself, the row's result for Kernel's row, a Boolean for the rest. */
-static TyKind super_object_type(Compiler *c, const Scope *s, const char *uname, int id, int kind) {
-  return kind == SUPER_OBJ_SELF ? (repr_self_boxed(c, (int)(s - c->scopes)) ? TY_POLY : ty_object(s->class_id))
-       : kind == SUPER_OBJ_ROW ? bop_result(comp_super_kernel_row(c, s, uname, id), BOP_KERNEL) : TY_BOOL;
+/* The type a super into a builtin answers, where no method of the program's does: the call plan's arm's
+   (CallPlan.bsuper), the one the super emission renders */
+static TyKind super_builtin_type(Compiler *c, int id, Scope *s, const char *uname) {
+  switch ((BsuperArm)cplan_user_fresh(c, id).bsuper) {
+  case BSUP_OBJ_TEXT: case BSUP_STRUCT_TEXT: case BSUP_BACKTICK: return TY_STRING;
+  case BSUP_CLASS_NEW:
+    /* an instance of the receiving class, which is this one or, through an inherited `self.new`, any descendant
+       (comp_super_class_new_boxed) */
+    return comp_super_class_new_boxed(c, id) ? TY_POLY : ty_object(s->class_id);
+  case BSUP_ALLOCATE: case BSUP_FREEZE: case BSUP_DATA_WITH: return ty_object(s->class_id);
+  case BSUP_SUBCLASSES: case BSUP_ANCESTORS: return TY_POLY_ARRAY;
+  case BSUP_SUPERCLASS: return TY_CLASS;
+  case BSUP_RESPOND_TO: case BSUP_IS_A: case BSUP_INSTANCE_OF: case BSUP_SAME: case BSUP_FALSE: case BSUP_FROZEN:
+    return TY_BOOL;
+  case BSUP_SELF: return repr_self_boxed(c, (int)(s - c->scopes)) ? TY_POLY : ty_object(s->class_id);
+  case BSUP_KERNEL_ROW: return bop_result(comp_super_kernel_row(c, s, uname, id), BOP_KERNEL);
+  case BSUP_NATIVE_CTOR: return TY_NIL;
+  case BSUP_NATIVE: {
+    int sa = nt_ref(c->nt, id, "arguments"), sac = 0;
+    if (sa >= 0) (void)nt_arr(c->nt, sa, "arguments", &sac);
+    int nm = comp_native_method_find(c, c->classes[s->class_id].nsub_root - 1, uname, sac, 0);
+    if (nm < 0) return TY_UNKNOWN;
+    return sp_streq(c->native_methods[nm].ret, "self") ? ty_object(s->class_id) : native_spec_to_ty(c->native_methods[nm].ret);
+  }
+  /* Exception's message, the String the exception keeps (super_reaches_exc_text), unless its #to_s of the
+     program's answers no String; a reopening above picked at run time answers either a Ruby override's value or
+     that text, kept boxed */
+  case BSUP_EXC_TEXT: return super_reaches_exc_text(c, id, 0) ? TY_STRING : TY_UNKNOWN;
+  case BSUP_EXC_REOPEN: return is_exception_message(uname) ? TY_POLY : TY_UNKNOWN;
+  default: return TY_UNKNOWN;
+  }
+}
+/* A super node: the program method the call plan binds it to (the next method of the prepend chain, else the parent
+   chain's, found from class ml.from; a class method's through the parent's CLASS-method chain), else the builtin's
+   (super_builtin_type) */
+static TyKind infer_super(Compiler *c, int id) {
+  if (g_plan_check && !an_pure_reads && id >= 0 && id < c->node_cap) c->ucall_inf[id].via = UC_NONE;
+  Scope *s = comp_scope_of(c, id);
+  if (s->class_id < 0 || !s->name) return TY_UNKNOWN;
+  MethodLookup ml = { .def_class = -1 };
+  int mi = cplan_super_target(c, id, s, &ml);
+  const Scope *st = comp_super_site(c, s);
+  if (mi < 0) return comp_super_shadow(c, st) ? TY_UNKNOWN : super_builtin_type(c, id, s, comp_super_name(c, ml.from, st));
+  /* (a yielding shadow is spliced as a parent is) */
+  an_user_call_record(c, id, mi, UC_SUPER, ml.from);
+  return super_target_ret(c, s, mi, id);
 }
 /* The ivar nm at node id inside an instance_eval/exec block on a boxed
    receiver: the meeting of the slots of the classes the receiver can be,
@@ -12775,99 +12821,7 @@ TyKind infer_uncached(Compiler *c, int id) {
     return TY_NIL;
   }
   { TyKind r; if (infer_yield_node(c, id, nt, nk, &r)) return r; }
-  if (nk == NK_SuperNode || nk == NK_ForwardingSuperNode) {
-    if (g_plan_check && !an_pure_reads && id >= 0 && id < c->node_cap) c->ucall_inf[id].via = UC_NONE;
-    Scope *s = comp_scope_of(c, id);
-    if (s->class_id < 0 || !s->name) return TY_UNKNOWN;
-    /* where the call plan binds the super: the next method of the prepend chain, else the
-       parent chain's, found from class ml.from (a class method's through the parent's
-       CLASS-method chain, which the instance chain would miss `def self.x` entirely) */
-    MethodLookup ml = { .def_class = -1 };
-    int mi = cplan_super_target(c, id, s, &ml);
-    if (comp_super_shadow(c, comp_super_site(c, s))) {
-      if (mi < 0) return TY_UNKNOWN;
-      /* a yielding shadow is spliced as a parent is */
-      an_user_call_record(c, id, mi, UC_SUPER, ml.from);
-      return super_target_ret(c, s, mi, id);
-    }
-    /* Class#new: an instance of the receiving class, which is this one or,
-       through an inherited `self.new`, any descendant (see
-       comp_super_class_new_boxed) */
-    if (comp_super_is_class_new(c, id))
-      return comp_super_class_new_boxed(c, id) ? TY_POLY : ty_object(s->class_id);
-    /* Class#allocate from an own allocate: an empty object of the class
-       the method (or its copy for a subclass) runs for */
-    if (allocate_super_reaches_class(c, id)) return ty_object(s->class_id);
-    int p = ml.from;
-    const char *uname = comp_super_name(c, p, comp_super_site(c, s));
-    /* `super` in a respond_to? override no ancestor defines is Object's
-       respond_to?: a boolean (see emit_super_respond_to) */
-    int rto_super = !s->is_cmethod && uname &&
-                    (sp_streq(uname, "respond_to?") ||
-                     /* and is_a? / kind_of? / instance_of? (codegen's twin) */
-                     sp_streq(uname, "is_a?") || sp_streq(uname, "kind_of?") ||
-                     sp_streq(uname, "instance_of?"));
-    /* (`super` in an exception subclass's #message / #to_s that reaches
-       Exception's is the message String, super_reaches_exc_text: untyped,
-       `def message = super` answered nil), and `super` in a freeze override
-       no ancestor defines is Object#freeze, which answers the object
-       (codegen's twin in emit_super) */
-    int freeze_super = !s->is_cmethod && uname && sp_streq(uname, "freeze");
-    /* and `super` in an ==, equal?, eql?, !, nil?, frozen? or itself
-       override reaches BasicObject's or Kernel's (comp_super_object_builtin;
-       emit_super_object_builtin is codegen's twin) */
-    int obj_super = comp_super_object_builtin(c, s, uname, id);
-    /* and `super` in a class method named subclasses reaches Class#subclasses,
-       an Array of classes (emit_super's twin) */
-    int subs_super = s->is_cmethod && uname && sp_streq(uname, "subclasses") &&
-                     nt_ref(nt, id, "arguments") < 0;
-    /* and `super` in a class method named superclass or ancestors reaches
-       Class#superclass (a class) or Module#ancestors (an Array of them);
-       a module has no #superclass (emit_super's twin) */
-    int rel_super = 0;
-    if (s->is_cmethod && uname && nt_ref(nt, id, "arguments") < 0 && s->class_id >= 0)
-      rel_super = sp_streq(uname, "ancestors") ? 2
-                : sp_streq(uname, "superclass") && !comp_class_is_module(c, &c->classes[s->class_id]) ? 1 : 0;
-    /* and `super` in a ` override reaches Kernel#`: the command's output */
-    int bt_arg, bt_super = uname && sp_streq(uname, "`") && an_super_backtick_shape(c, id, s, &bt_arg) > 0;
-    TyKind none = super_reaches_exc_text(c, id, 0) ? TY_STRING
-                : an_super_object_text(c, id, (int)(s - c->scopes)) || an_super_struct_text(c, id, (int)(s - c->scopes)) ? TY_STRING
-                : bt_super ? TY_STRING
-                : subs_super || rel_super == 2 ? TY_POLY_ARRAY
-                : rel_super == 1 ? TY_CLASS
-                : rto_super ? TY_BOOL
-                : freeze_super ? ty_object(s->class_id)
-                : obj_super ? super_object_type(c, s, uname, id, obj_super) : TY_UNKNOWN;
-    /* and `super` in a Data's own with reaches Data#with: a copy, or self
-       (emit_super_data_with) */
-    if (!s->is_cmethod && uname && sp_streq(uname, "with") &&
-        c->classes[s->class_id].is_struct && c->classes[s->class_id].is_data) none = ty_object(s->class_id);
-    /* The exception reopening switch can answer either a Ruby override's
-       value or Exception's stored text. Keep that joined result boxed. */
-    if (mi < 0 && !s->is_cmethod && is_exception_message(uname) &&
-        (class_is_exc_subclass(c, s->class_id) || class_is_exc_reopen(c, s->class_id))) {
-      int xr[8], xn = exc_reopen_definers(c, uname, xr, 8);
-      for (int i = 0; i < xn; i++)
-        if (xr[i] != s->class_id) return TY_POLY;
-    }
-    if (p < 0 && mi < 0) return none;
-    /* a subclass of a native class (#9269): super reaches the native
-       class's constructor (initialize) or binding */
-    if (mi < 0 && !s->is_cmethod && uname && c->classes[s->class_id].nsub_root > 0) {
-      int root = c->classes[s->class_id].nsub_root - 1;
-      if (sp_streq(uname, "initialize")) return TY_NIL;
-      int sa = nk == NK_SuperNode ? nt_ref(nt, id, "arguments") : -1, sac = 0;
-      if (sa >= 0) (void)nt_arr(nt, sa, "arguments", &sac);
-      if (nk == NK_ForwardingSuperNode) sac = s->nparams;
-      int nm = comp_native_method_find(c, root, uname, sac, 0);
-      if (nm >= 0)
-        return sp_streq(c->native_methods[nm].ret, "self") ? ty_object(s->class_id)
-                                                           : native_spec_to_ty(c->native_methods[nm].ret);
-    }
-    if (mi < 0) return none;
-    an_user_call_record(c, id, mi, UC_SUPER, p);
-    return super_target_ret(c, s, mi, id);
-  }
+  if (nk == NK_SuperNode || nk == NK_ForwardingSuperNode) return infer_super(c, id);
   if (nk == NK_AndNode || nk == NK_OrNode) {
     int lnd = nt_ref(nt, id, "left"), rnd = nt_ref(nt, id, "right");
     TyKind lt = infer_type(c, lnd);

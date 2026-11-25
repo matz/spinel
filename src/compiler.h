@@ -610,6 +610,10 @@ typedef struct {
                                    (inc_super_behind), which a Method made
                                    of it does not hold: it holds what the
                                    super reaches */
+  unsigned char super_lowered;  /* a super of the method became the
+                                   builtin's own call on self
+                                   (lower_builtin_supers): it calls super
+                                   still, where no super node is left */
   unsigned char mixin_plain_late;   /* a plain copy an include or prepend
                                        that may not run made where its
                                        guard could not tell the copy's
@@ -2988,8 +2992,6 @@ int method_answers_receiver(Compiler *c, int mi);
 int comp_super_parent(Compiler *c, int class_id, int is_cmethod); /* super in `self.new` is Class#new */
 const char *comp_super_builtin_root(Compiler *c, int cid, int *self);   /* the builtin at the top of class cid's chain ("Array", "Struct", "Object"); *self: cid is that reopening */
 const char *comp_super_bowner(Compiler *c, const Scope *s, const char *uname);   /* the builtin a super in instance method scope s reaches when no program method answers: the call plan's bowner */
-typedef enum { BSP_NONE, BSP_ARRAY, BSP_KERNEL, BSP_PREPENDED } BsuperPath;
-BsuperPath comp_bsuper_carried(Compiler *c, int id, const Scope *st, const char *uname, const char *bowner);   /* the call path lower_builtin_supers lowers a super whose plan names bowner to: an Array, Hash, String or Time subclass's own, a Kernel module function's bare call, a module prepended into a builtin, or none yet */
 const Scope *comp_super_site(Compiler *c, const Scope *s);   /* the method scope a super in s resolves as: its class starts the parent chain, its def names the method asked for; a copy of an alias (Scope.super_of) is the owner's */
 enum { SUPER_OBJ_SAME = 1, SUPER_OBJ_FALSE, SUPER_OBJ_FROZEN, SUPER_OBJ_SELF, SUPER_OBJ_ROW };
 /* a super (node id) no program ancestor answers that reaches BasicObject's
@@ -3001,8 +3003,15 @@ int comp_super_object_builtin(Compiler *c, const Scope *s, const char *uname, in
    requireds then the optionals, as parameter nodes into out (up to cap; out
    may be NULL), and their count; -1 where the def has a post, keyword or rest
    parameter (a block parameter is passed as the block, not counted); the one
-   place super_plain_argc and codegen read. */
+   place comp_super_plain_argc and codegen read. */
 int comp_zsuper_plain_params(Compiler *c, const Scope *s, int *out, int cap);
+/* The plain argument count super id in s passes, or -1 for a splat, a keyword or a forwarded list (a bare super's:
+   comp_zsuper_plain_params) */
+int comp_super_plain_argc(Compiler *c, int id, const Scope *s);
+/* The expression of super id's block argument (`super(o, &side)`) whose
+   evaluation has an effect, or -1: none, or a read or literal, which has
+   none. Where the method reached takes no block it runs for that effect. */
+int comp_super_blockarg_effect(const NodeTable *nt, int id);
 /* Kernel's builtin row (a non-internal BOP_KERNEL row, matched by the count of
    super id's plain operands) that owns uname: the answer of a super that
    reaches Kernel's method of that name (SUPER_OBJ_ROW). NULL for none. */

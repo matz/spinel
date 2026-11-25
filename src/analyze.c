@@ -1,5 +1,6 @@
 #include "cext_bridge.h"
 #include "method_table_check.h"
+#include <assert.h>
 #include <stdint.h>
 #include <limits.h>
 #include <ctype.h>
@@ -27975,57 +27976,6 @@ static int strbuf_demand_elem_arg(Compiler *c, int an) {
   sb_elem_nactive--;
   return r;
 }
-/* A super in an instance method `inspect` or `to_s` (no arguments of its
-   own) of a plain class -- no ancestor of the program defines the name,
-   none embeds a builtin or is a Struct, a native class or an Exception,
-   whose to_s is its message -- reaches Kernel#inspect or Kernel#to_s,
-   which build a new String each call. */
-int an_super_object_text(Compiler *c, int n, int mi) {
-  if (mi <= 0 || mi >= c->nscopes) return 0;
-  const Scope *s = comp_super_site(c, &c->scopes[mi]);
-  /* (an included module's method under the class's own is a shadow of the
-     class: `__inc_0_inspect`) */
-  const char *nm = s->name ? comp_scope_def_name(c, s) : NULL;
-  if (!nm || s->is_cmethod || s->class_id < 0 || s->nparams != 0 ||
-      (!sp_streq(nm, "inspect") && !sp_streq(nm, "to_s")))
-    return 0;
-  NodeKind k = nt_kind(c->nt, n);
-  if (k != NK_SuperNode && k != NK_ForwardingSuperNode) return 0;
-  if (k == NK_SuperNode && nt_ref(c->nt, n, "arguments") >= 0) return 0;
-  int cid = s->class_id;
-  ClassInfo *ci = &c->classes[cid];
-  /* (a reopened builtin -- Exception, String, Object -- has its own
-     inspect and to_s behind the program's) */
-  if (comp_class_is_module(c, ci) || is_builtin_reopen(ci->name) || ci->is_native_class || ci->nsub_root > 0) return 0;
-  /* (a method of an ancestor, an included module's, or an Object
-     reopening's, is the call plan's target; no method of the program's,
-     Kernel's is the builtin the plan names, which no Struct, Exception,
-     Array or blank slate has) */
-  CallPlan p = cplan_user_fresh(c, n);
-  return p.mi < 0 && builtin_owner_kind(p.bowner) == BOWN_KERNEL;
-}
-/* The same super in a Struct or Data class's own inspect or to_s, where no
-   class of the program above it defines the name: CRuby's Struct#inspect
-   (#to_s is its alias), the default #<struct ...> text, a new String
-   (emit_super; struct_default_text_fn names the function that builds it). */
-int an_super_struct_text(Compiler *c, int n, int mi) {
-  if (mi <= 0 || mi >= c->nscopes) return 0;
-  const Scope *s = comp_super_site(c, &c->scopes[mi]);
-  const char *nm = s->name ? comp_scope_def_name(c, s) : NULL;
-  if (!nm || s->is_cmethod || s->class_id < 0 || s->nparams != 0 ||
-      (!sp_streq(nm, "inspect") && !sp_streq(nm, "to_s")))
-    return 0;
-  NodeKind k = nt_kind(c->nt, n);
-  if (k != NK_SuperNode && k != NK_ForwardingSuperNode) return 0;
-  if (k == NK_SuperNode && nt_ref(c->nt, n, "arguments") >= 0) return 0;
-  ClassInfo *ci = &c->classes[s->class_id];
-  if (comp_class_is_module(c, ci)) return 0;
-  /* (a method of an ancestor or an included module's is the call plan's
-     target; no method of the program's, Struct's or Data's is the builtin
-     the plan names) */
-  CallPlan p = cplan_user_fresh(c, n);
-  return p.mi < 0 && builtin_owner_kind(p.bowner) == BOWN_STRUCT;
-}
 /* (a subtree too deep to walk counts as one with a return) */
 static int an_subtree_has_return(const NodeTable *nt, int n, int depth) {
   if (n < 0) return 0;
@@ -35317,10 +35267,12 @@ int make_yield_proc_forms(Compiler *c) {
     /* Exception text also runs through a runtime hook with no block. */
     int exc_text = src->class_id >= 0 && !src->is_cmethod && is_exception_message(src->name) &&
                    (class_is_exc_subclass(c, src->class_id) || class_is_exc_reopen(c, src->class_id));
+    /* so do a hash key's hash and eql? and a sort's <=> (emit_obj_hashkey_dispatch, emit_obj_cmp_dispatch) */
+    int hook = src->class_id >= 0 && !src->is_cmethod && is_object_hook_name(src->name);
     /* an initialize version a construction runs by a proc form of its own
        (pf_init_versions) */
     int init_version = s < n0 && init_versions[s] && pf_scope_named(c, src, src->name) != s;
-    if (src->class_id >= 0 && !shadow_clone && !exc_init && !display && !exc_text && !init_version && !pf_wanted(c, bsym ? bsym : comp_scope_user_name(src), src) &&
+    if (src->class_id >= 0 && !shadow_clone && !exc_init && !display && !exc_text && !hook && !init_version && !pf_wanted(c, bsym ? bsym : comp_scope_user_name(src), src) &&
         !pf_in_class_dispatch(c, src) && !(src->ctor_cycle && ctor_graph_init(c, s)))
       continue;
     /* A method the program reopens has two definitions in the scope table
@@ -47678,30 +47630,24 @@ static const char *zsuper_rest_local(Compiler *c, const int *par, int at, const 
    as a call's, by CRuby's rule: the requireds and optionals as reads, the
    rest as a splat (an anonymous `*` as the anonymous splat), the posts as
    reads, each keyword k as `k: k` and the keyword rest as `**` (an anonymous
-   one likewise), all in one KeywordHashNode. An ArgumentsNode for node `at`,
-   or -1 for a parameter list this spelling does not reproduce (a
-   destructured parameter has no local to read; with strict, a `...` whose
-   calls pass different positional counts too: its __fwd_N slots hold the
-   most any passes, which a builtin that takes what each passes (an
-   Array subclass's, refused before) cannot be given. A module prepended into
-   a builtin keeps the slots, as its super did). The block is the caller's
+   one likewise), all in one KeywordHashNode; a `(...)`'s, the leading
+   parameters and the __fwd_N slots the calls' arity gave it, by position.
+   An ArgumentsNode for node `at`, or -1 for a parameter list no call spells
+   (cplan_zsuper_shape decides it; with strict, a `...` whose calls pass
+   different counts is one: a builtin that takes what each passes (an Array
+   subclass's, refused before) cannot be given the slots. A module prepended
+   into a builtin keeps them, as its super did). The block is the caller's
    (lower_super_call). */
 static int super_zsuper_args(Compiler *c, int at, Scope *s, const int *par, int strict) {
   NodeTable *nt = (NodeTable *)c->nt;
+  if (cplan_zsuper_shape(c, s, strict) & SAS_UNSPELLED) return -1;
   int pn = s->def_node >= 0 ? nt_ref(nt, s->def_node, "parameters") : -1;
   if (pn < 0) return arysub_args(c, at, NULL, 0);
-  /* `(...)` is the scope's parameters, the leading ones and the __fwd_N the
-     calls' arity gave it, passed on by position */
-  int fwd = nt_ref(nt, pn, "keyword_rest");
-  if (fwd >= 0 && nt_kind(nt, fwd) == NK_ForwardingParameterNode) {
-    if (strict && fwd_fixed_call_arity(nt, nt_str(nt, s->def_node, "name")) == -1) return -1;
-    int *ids = (int *)malloc(sizeof(int) * (size_t)(s->nparams + 1)), n = 0, ok = 1;
+  if (cplan_def_forwards(c, s)) {
+    int *ids = (int *)malloc(sizeof(int) * (size_t)(s->nparams + 1)), n = 0;
     if (!ids) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-    for (int j = 0; ok && j < s->nparams; j++) {
-      int rd = s->pnames && s->pnames[j] && j != s->kwrest_idx && j != s->rest_idx ? zsuper_read(c, at, s->pnames[j]) : -1;
-      if (rd < 0 || callee_param_is_declared_kwarg(c, s, s->pnames[j])) ok = 0; else ids[n++] = rd;
-    }
-    int args = ok ? arysub_args(c, at, ids, n) : -1;
+    for (int j = 0; j < s->nparams; j++) ids[n++] = zsuper_read(c, at, s->pnames[j]);
+    int args = arysub_args(c, at, ids, n);
     free(ids);
     return args;
   }
@@ -47709,60 +47655,38 @@ static int super_zsuper_args(Compiler *c, int at, Scope *s, const int *par, int 
   const int *rq = nt_arr(nt, pn, "requireds", &rn), *op = nt_arr(nt, pn, "optionals", &on);
   const int *po = nt_arr(nt, pn, "posts", &qn), *kw = nt_arr(nt, pn, "keywords", &kn);
   int rest = nt_ref(nt, pn, "rest"), kwr = nt_ref(nt, pn, "keyword_rest");
-  int total = rn + on + qn + kn + 3;
-  int *ids = (int *)malloc(sizeof(int) * (size_t)total), *els = (int *)malloc(sizeof(int) * (size_t)(kn + 1));
+  int *ids = (int *)malloc(sizeof(int) * (size_t)(rn + on + qn + 3)), *els = (int *)malloc(sizeof(int) * (size_t)(kn + 1));
   if (!ids || !els) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  int n = 0, ne = 0, ok = 1;
-  for (int i = 0; ok && i < rn + on; i++) {
-    int p = i < rn ? rq[i] : op[i - rn];
-    const char *nm = nt_str(nt, p, "name");
-    int rd = nm && nt_kind(nt, p) != NK_MultiTargetNode ? zsuper_read(c, at, nm) : -1;
-    if (rd < 0) ok = 0; else ids[n++] = rd;
-  }
-  if (ok && rest >= 0 && nt_kind(nt, rest) == NK_RestParameterNode) {
+  int n = 0, ne = 0;
+  for (int i = 0; i < rn + on; i++) ids[n++] = zsuper_read(c, at, nt_str(nt, i < rn ? rq[i] : op[i - rn], "name"));
+  if (rest >= 0 && nt_kind(nt, rest) == NK_RestParameterNode) {
     const char *nm = nt_str(nt, rest, "name");
     char cp[300];
-    if (nm) nm = zsuper_rest_local(c, par, at, nm, cp, sizeof cp);
-    int sp = arysub_node(c, "SplatNode", at), rd = nm ? zsuper_read(c, at, nm) : -1;
-    if (sp < 0 || (nm && rd < 0)) ok = 0;
-    else {
-      if (nm) nt_node_set_ref(nt, sp, "expression", rd);
-      ids[n++] = sp;
-    }
+    int sp = arysub_node(c, "SplatNode", at);
+    if (nm) nt_node_set_ref(nt, sp, "expression", zsuper_read(c, at, zsuper_rest_local(c, par, at, nm, cp, sizeof cp)));
+    ids[n++] = sp;
   }
-  for (int i = 0; ok && i < qn; i++) {
-    const char *nm = nt_str(nt, po[i], "name");
-    int rd = nm && nt_kind(nt, po[i]) != NK_MultiTargetNode ? zsuper_read(c, at, nm) : -1;
-    if (rd < 0) ok = 0; else ids[n++] = rd;
-  }
-  for (int i = 0; ok && i < kn; i++) {
+  for (int i = 0; i < qn; i++) ids[n++] = zsuper_read(c, at, nt_str(nt, po[i], "name"));
+  for (int i = 0; i < kn; i++) {
     const char *nm = nt_str(nt, kw[i], "name");
-    int sy = arysub_node(c, "SymbolNode", at), as = arysub_node(c, "AssocNode", at), rd = nm ? zsuper_read(c, at, nm) : -1;
-    if (sy < 0 || as < 0 || rd < 0) { ok = 0; break; }
+    int sy = arysub_node(c, "SymbolNode", at), as = arysub_node(c, "AssocNode", at);
     nt_node_set_str(nt, sy, "value", nm);
     nt_node_set_ref(nt, as, "key", sy);
-    nt_node_set_ref(nt, as, "value", rd);
+    nt_node_set_ref(nt, as, "value", zsuper_read(c, at, nm));
     els[ne++] = as;
   }
-  if (ok && kwr >= 0 && nt_kind(nt, kwr) == NK_KeywordRestParameterNode) {
+  if (kwr >= 0) {
     const char *nm = nt_str(nt, kwr, "name");
-    int as = arysub_node(c, "AssocSplatNode", at), rd = nm ? zsuper_read(c, at, nm) : -1;
-    if (as < 0 || (nm && rd < 0)) ok = 0;
-    else {
-      if (nm) nt_node_set_ref(nt, as, "value", rd);
-      els[ne++] = as;
-    }
+    int as = arysub_node(c, "AssocSplatNode", at);
+    if (nm) nt_node_set_ref(nt, as, "value", zsuper_read(c, at, nm));
+    els[ne++] = as;
   }
-  else if (ok && kwr >= 0) ok = 0;
-  if (ok && ne) {
+  if (ne) {
     int kh = arysub_node(c, "KeywordHashNode", at);
-    if (kh < 0) ok = 0;
-    else {
-      nt_node_set_arr(nt, kh, "elements", els, ne);
-      ids[n++] = kh;
-    }
+    nt_node_set_arr(nt, kh, "elements", els, ne);
+    ids[n++] = kh;
   }
-  int args = ok ? arysub_args(c, at, ids, n) : -1;
+  int args = arysub_args(c, at, ids, n);
   free(ids);
   free(els);
   return args;
@@ -48076,26 +48000,9 @@ static void rewrite_array_subclass_super(Compiler *c, int id) {
 }
 
 static void arysub_keep_builtin_only(Compiler *c, int m0, const char *name);
-/* Is the method of scope s a `(...)` forwarder? Its bare super passes a rest of unknown length too. */
-static int super_def_forwards(Compiler *c, const Scope *s) {
-  int pn = s->def_node >= 0 ? nt_ref(c->nt, s->def_node, "parameters") : -1;
-  int kwr = pn >= 0 ? nt_ref(c->nt, pn, "keyword_rest") : -1;
-  return kwr >= 0 && nt_kind(c->nt, kwr) == NK_ForwardingParameterNode;
-}
-/* Whether argument list args (an ArgumentsNode, or -1) passes a splat, and whether it passes keywords (a keyword
-   hash, a `**`). */
-static void super_args_shape(const NodeTable *nt, int args, int *splat, int *kw) {
-  int an = 0;
-  const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
-  for (int i = 0; i < an; i++) {
-    NodeKind ak = nt_kind(nt, av[i]);
-    if (ak == NK_SplatNode || ak == NK_ForwardingArgumentsNode) *splat = 1;
-    if (ak == NK_KeywordHashNode || ak == NK_AssocSplatNode) *kw = 1;
-  }
-}
 /* Each `super` the call plan finds no method of the program's for, whose
    builtin owner has a call path from a program object's self
-   (comp_bsuper_carried), is the builtin's own call on self: its name, with
+   (CallPlan.bpath), is the builtin's own call on self: its name, with
    self as the receiver, marked builtin_only (and blind to visibility, as a
    super is) so the program's methods of the name do not take it; a Kernel
    module function is the bare call (kernel_recv), the route `Kernel.puts x`
@@ -48116,37 +48023,45 @@ static void lower_builtin_supers(Compiler *c) {
     int si = c->nscope[id];
     if (si < 0 || si >= c->nscopes) continue;
     Scope *s = &c->scopes[si];
-    if (s->is_cmethod || !s->name || s->class_id < 0 || s->class_id == c->toplevel_class) continue;
-    MethodLookup ml = { .def_class = -1 };
-    if (cplan_super_target(c, id, s, &ml) >= 0 || !ml.bowner) continue;
+    /* (the plan says which supers lower, and to which path: CallPlan.bpath) */
+    CallPlan sp = cplan_user_fresh(c, id);
+    BsuperPath path = (BsuperPath)sp.bpath;
+    if (path == BSP_NONE) continue;
     const Scope *st = comp_super_site(c, s);
     const char *mname = comp_scope_user_name(st);
     int blk = nt_ref(nt, id, "block");
-    BsuperPath path = mname ? comp_bsuper_carried(c, id, st, mname, ml.bowner) : BSP_NONE;
     int kfn = path == BSP_KERNEL;
-    if (path == BSP_NONE || (kfn && blk >= 0)) continue;
-    int args = k == NK_SuperNode ? nt_ref(nt, id, "arguments") : super_zsuper_args(c, id, s, par0, path == BSP_ARRAY);
-    if (k == NK_ForwardingSuperNode && args < 0) {
+    if (kfn && blk >= 0) continue;
+    /* (a `super(...)` that passes what a bare super does, SAS_BARE, is spelled as one: the slots the calls' arity gave
+       the `...`, the keywords among them, and the block, lower_super_call's) */
+    unsigned sh = cplan_super_args_shape(c, id, s);
+    int bare = k == NK_ForwardingSuperNode || (path == BSP_OBJECT && (sh & SAS_BARE));
+    int args = bare ? super_zsuper_args(c, id, s, par0, path == BSP_ARRAY || k == NK_SuperNode) : nt_ref(nt, id, "arguments");
+    if (bare && args < 0) {
       /* (an Array subclass's was refused before, for every such parameter list; the other families keep the
          emission they had, which the corpus answers right for a `to_json(...)` prepended to Array) */
+      assert(path != BSP_OBJECT);
       if (path == BSP_ARRAY) zsuper_refuse(c, id, s);
       continue;
     }
     /* The call lowered is the one the program could write, so only where the call layer answers it: a Kernel
        function takes no keyword and no splat or `(...)` (the spread of a run-time length, 0b's); a bare
        super's keywords go to a builtin whose parameters (BAP) list one, else they would reach a method with
-       none, where CRuby passes a Hash or nothing (the spread, which master refused for a bare super). */
-    int splat = 0, kw = 0;
-    super_args_shape(nt, args, &splat, &kw);
-    if (kfn && (kw || splat || super_def_forwards(c, s))) continue;
-    if (kw && k == NK_ForwardingSuperNode && !builtin_method_takes_keywords(ml.bowner, mname)) {
+       none, where CRuby passes a Hash or nothing (the spread, which master refused for a bare super). The plan
+       asked an Object method's of its own (cplan_object_args_spelled). */
+    if (kfn && ((sh & (SAS_SPLAT | SAS_KW)) || cplan_def_forwards(c, s))) continue;
+    if ((sh & SAS_KW) && bare && !builtin_method_takes_keywords(sp.bowner, mname)) {
+      assert(path != BSP_OBJECT);
       if (path == BSP_ARRAY)
         unsupported_feature(c, id, "a bare `super` from a method with keyword or `**` parameters into a builtin whose keyword "
                                    "parameters are not known is not supported yet; pass the arguments explicitly");
       continue;
     }
     char *mn = strdup(mname);
-    lower_super_call(c, id, s, mn, 0, args, blk, kfn, path == BSP_PREPENDED);
+    /* (an Object method that reads no block is handed none: the block a bare super passes reaches no one, and
+       passing it would make the method a yielding one, spliced at each call) */
+    lower_super_call(c, id, s, mn, 0, args, blk, kfn, path == BSP_PREPENDED || (path == BSP_OBJECT && !object_method_reads_block(mn)));
+    c->scopes[st->idx].super_lowered = 1;
     int m0 = nt->count;
     /* (a module prepended into a builtin keeps its splat as it was: the length dispatch's poly arm for a boxed self
        calls the prepended method itself, which loses builtin_only: a stack overflow for Hash#fetch) */
@@ -56016,6 +55931,33 @@ static void an_phase_value_types(Compiler *c) {
          on its copy */
       int pk[64], npk = ie_poly_classes_at(c, id, pk, 64);
       for (int i = 0; i < npk; i++) c->classes[pk[i]].is_value_type = 0;
+    }
+    /* a super whose arm answers from the object itself (its address, its frozen bit, the object, a Kernel row
+       over it: cplan_super_reads_self) reads the pointer a by-value copy does not have */
+    if ((ty_k == NK_SuperNode || ty_k == NK_ForwardingSuperNode) && cplan_super_reads_self(c, id)) {
+      Scope *s = comp_scope_of(c, id);
+      if (s && !s->is_cmethod && s->class_id >= 0 && s->class_id < c->nclasses) c->classes[s->class_id].is_value_type = 0;
+    }
+    /* and so does Object's own call that reads its receiver's identity (builtin_call_reads_identity), which
+       the call layer answers from the object's address: an identity value (hash, object_id) from any call the
+       receiver's class does not answer itself, a comparison only as the builtin's call a super is lowered to
+       (an unanswered comparison with an operand of another kind answers by value, and one whose operand is
+       the object passes it as an argument, which keeps the pointer below) */
+    if (ty_k == NK_CallNode && builtin_call_reads_identity(nt_str(c->nt, id, "name"))) {
+      const char *inm = nt_str(c->nt, id, "name");
+      int irecv = nt_ref(c->nt, id, "receiver");
+      int q = -1;
+      if (irecv >= 0 && nt_kind(c->nt, irecv) != NK_SelfNode) {
+        TyKind irt = comp_ntype(c, irecv);
+        if (ty_is_object(irt)) q = ty_object_class(irt);
+      }
+      else {
+        Scope *s = comp_scope_of(c, id);
+        if (s && !s->is_cmethod) q = s->class_id;
+      }
+      if (q >= 0 && q < c->nclasses &&
+          (cplan_builtin_call(c, id) || (is_identity_value_name(inm) && !call_answers(c, id, q, inm, 0, NULL))))
+        c->classes[q].is_value_type = 0;
     }
     /* `instance_variable_set` on self mutates the receiver just like `@x = v`;
        a by-value class would take the write on a copy and silently drop it. */

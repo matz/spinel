@@ -1519,8 +1519,9 @@ int infer_object_call(Compiler *c, int id, TyKind rt, TyKind *out) {
        can: a slot typed as that class is only its STATIC type -- an inherited
        method storing `self` types it as the class that DEFINED the method --
        so the call dispatches at run time and its value is that union (#4023).
-       The emitter routes the same shape through the poly dispatch. */
-    if (!call_answers(c, id, cid, name, 0, NULL) && !cls->is_native_class &&
+       The emitter routes the same shape through the poly dispatch. A builtin's own call (builtin_only) answers
+       for every class below. */
+    if (!call_answers(c, id, cid, name, 0, NULL) && !cls->is_native_class && !cplan_builtin_call(c, id) &&
         comp_subclass_answers(c, cid, name)) {
       /* Runtime-name send arms on boxed self may include classes the descendant plan excludes. */
       if (g_plan_check && !nt_int(nt, id, "dyn_arm", 0)) {
@@ -1538,11 +1539,11 @@ int infer_object_call(Compiler *c, int id, TyKind rt, TyKind *out) {
         (sp_streq(name, "is_a?") || sp_streq(name, "kind_of?") || sp_streq(name, "instance_of?") ||
          sp_streq(name, "respond_to?") || sp_streq(name, "==") || sp_streq(name, "!=") ||
          sp_streq(name, "nil?") || sp_streq(name, "equal?") || sp_streq(name, "frozen?"))) { *out = TY_BOOL; return 1; }
-    /* Object#hash default (no user hash in the chain): value/pointer int.
+    /* Object#hash default (no user hash in the chain, or the builtin's own call a super is): value/pointer int.
        Structs keep their dedicated value-based hash arm. */
-    if (sp_streq(name, "hash") && argc == 0 && !cls->is_struct &&
+    if (is_hash_name(name) && argc == 0 && !cls->is_struct &&
         /* (a reader named hash answers its ivar, typed as the ivar is) */
-        !call_answers(c, -1, cid, "hash", 0, NULL)) { *out = TY_INT; return 1; }
+        !call_answers(c, id, cid, name, 0, NULL)) { *out = TY_INT; return 1; }
     /* native class (C-backed): a declared instance method returns its spec
        type, also on a subclass of the class (#9269) */
     int ncid = comp_native_answer_class(c, cid, name);

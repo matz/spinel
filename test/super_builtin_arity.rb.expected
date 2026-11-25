@@ -1,0 +1,14 @@
+[ArgumentError, "wrong number of arguments (given 0, expected 1..2)"]
+[ArgumentError, "wrong number of arguments (given 2, expected 1)"]
+[ArgumentError, "wrong number of arguments (given 1, expected 0)"]
+[ArgumentError, "wrong number of arguments (given 0, expected 1)"]
+[ArgumentError, "wrong number of arguments (given 1, expected 0)"]
+[ArgumentError, "wrong number of arguments (given 1, expected 0)"]
+[ArgumentError, "wrong number of arguments (given 1, expected 0)"]
+[ArgumentError, "wrong number of arguments (given 0, expected 1..2)"]
+[ArgumentError, "wrong number of arguments (given 1, expected 0)"]
+[ArgumentError, "wrong number of arguments (given 0, expected 1)"]
+[ArgumentError, "wrong number of arguments (given 1, expected 0)"]
+false
+true
+true

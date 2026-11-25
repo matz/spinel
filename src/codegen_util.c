@@ -7735,6 +7735,14 @@ int scope_proc_form_of(Compiler *c, int s) {
   Scope *sc = &c->scopes[s];
   return sc->yields ? comp_scope_pf_clone(c, sc) : -1;
 }
+/* The scope whose function a call of method mi with no block runs where the call is not spliced in (a runtime
+   hook's dispatch switch): mi, or a yielding one's proc-form clone, which has the function and takes the block as its
+   last parameter; -1 for a yielding one with no clone written out. */
+int scope_unspliced_fn(Compiler *c, int mi) {
+  if (mi < 0 || mi >= c->nscopes || !c->scopes[mi].yields) return mi;
+  int pf = scope_proc_form_of(c, mi);
+  return pf >= 0 && proc_form_live(c, pf) ? pf : -1;
+}
 /* Is proc form `s` one some call can reach? The poly dispatch that names it
    is emitted after the reachability pass, so the clone's own flag cannot say;
    but its source method is reached by name wherever a call could take the

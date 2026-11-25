@@ -2174,7 +2174,12 @@ void emit_expr(Compiler *c, int id, Buf *b) {
    needs. */
 void emit_expr_for_effect(Compiler *c, int node, Buf *b) {
   int v = effect_view_open(c, node);
-  emit_expr(c, node, b);
+  /* an Integer or Float that may be nil (node_may_be_nil: not one bound to a
+     plain temp) is its own sp_oint here: read as the plain scalar it would be
+     unwrapped, and a nil nothing reads would raise */
+  Repr r = node >= 0 ? repr_of(c, node) : (Repr){0};
+  if (r.opt_producer && oint_kind(r.as_ty) && node_may_be_nil(c, node)) emit_oint_expr(c, node, r.as_ty, b);
+  else emit_expr(c, node, b);
   effect_view_close(c, v);
 }
 /* The view emit_expr_for_effect holds, for a discarding site whose operand

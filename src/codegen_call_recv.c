@@ -11695,14 +11695,12 @@ static void emit_data_with_in_order(Compiler *c, int id, ClassInfo *sc, int t, i
    Data#with on self: no keywords answer self, and otherwise a copy takes
    each member the keywords name, the rest from self, after CRuby's check
    for a key no member takes. The keywords are the super's own, or for a
-   bare super the method's keyword parameters and its `**rest`. Answers 0
-   when this is not that super. */
-int emit_super_data_with(Compiler *c, int id, Scope *s, Buf *b) {
+   bare super the method's keyword parameters and its `**rest`
+   (CallPlan.bsuper BSUP_DATA_WITH). */
+void emit_super_data_with(Compiler *c, int id, Scope *s, Buf *b) {
   const NodeTable *nt = c->nt;
-  if (s->is_cmethod || s->class_id < 0) return 0;
   int cid = s->class_id;
   ClassInfo *sc = &c->classes[cid];
-  if (!sc->is_struct || !sc->is_data) return 0;
   if (cplan_hook_target(c, -1, cid, "initialize", NULL) >= 0)
     unsupported_feature(c, id, "`super` from Data#with on a Data with an initialize of its own");
   /* the copy is built as this class: one of a subclass would change class */
@@ -11811,7 +11809,6 @@ int emit_super_data_with(Compiler *c, int id, Scope *s, Buf *b) {
   else if (ty_is_object(rty) && ty_object_class(rty) != cid) buf_printf(b, "((sp_%s *)%s)", c->classes[ty_object_class(rty)].c_name, v.p);
   else buf_puts(b, v.p);
   free(v.p);
-  return 1;
 }
 
 /* Keep the pair's key alive while its value runs. A String key stays a
@@ -12998,6 +12995,34 @@ static void recv_temp_named_if_preceded(int recv, const char *text, size_t pre_a
   buf_printf(g_pre, "(void)%s;\n", text);
 }
 
+/* The builtin's own to_s or inspect (want_ins) of an object of class cid, call id on receiver recv (builtin_only: a
+   super's, lowered): Kernel's text itself, which the poly renderers would hand back to the program's method. Of self
+   as it is, of another receiver over a temp, nil's text for nil; a by-value object's over its address (self's, or a
+   stack copy's), by Kernel's own walk; boxed where the call is typed so. */
+static void emit_obj_builtin_text(Compiler *c, int id, int recv, int cid, int want_ins, Buf *b) {
+  const ClassInfo *ci = &c->classes[cid];
+  int bx = repr_of(c, id).kind == RK_BOXED, self = nt_kind(c->nt, recv) == NK_SelfNode, vt = ci->is_value_type, t = 0;
+  Buf obj = {0};
+  if (bx) buf_puts(b, "SP_STR_BOX(");
+  if (self) {
+    if (vt) buf_puts(&obj, "&");
+    emit_expr(c, recv, &obj);
+  }
+  else {
+    t = ++g_tmp;
+    buf_printf(&obj, "%s_t%d", vt ? "&" : "", t);
+    buf_printf(b, "({ sp_%s %s_t%d = ", ci->c_name, vt ? "" : "*", t);
+    emit_expr(c, recv, b);
+    buf_puts(b, "; ");
+    if (!vt) buf_printf(b, "_t%d ? ", t);
+  }
+  emit_obj_kernel_text(c, cid, want_ins, obj.p, b);
+  if (!self && vt) buf_puts(b, "; })");
+  else if (!self) buf_printf(b, " : \"%s\"; })", want_ins ? "nil" : "");
+  if (bx) buf_puts(b, ")");
+  free(obj.p);
+}
+
 int emit_object_call(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
   const char *name = view_call_name(c, id);
@@ -13307,18 +13332,18 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
 
   /* Default Object#to_s / #inspect on a plain user object with no override:
      box and route through the poly renderers, which produce CRuby's
-     "#<Name:0x...>" (inspect appends the ivar list via the registered
-     per-class walker). A by-value class has no boxable pointer, so its
-     renderer is emitted inline over a stack temp. */
+     "#<Name:0x...>" (inspect appends the ivar list via the registered walker).
+     A by-value class has no boxable pointer: its renderer is inline over a
+     stack temp. The builtin's own (a lowered super's): emit_obj_builtin_text. */
   if (recv >= 0 && ty_is_object(rt) && !c->classes[ty_object_class(rt)].is_struct &&
       (is_text_conversion(name)) && argc == 0 &&
-      !obj_str_cname(c, recv, ty_object_class(rt), is_inspect_name(name)) &&
+      (cplan_builtin_call(c, id) || !obj_str_cname(c, recv, ty_object_class(rt), is_inspect_name(name))) &&
       /* a native class may bind its own to_s/inspect (IO::Buffer does);
          that declared method wins over the default renderer */
       comp_native_method_find(c, ty_object_class(rt), name, 0, 0) < 0) {
-    int cid2 = ty_object_class(rt);
+    int cid2 = ty_object_class(rt), want_ins = is_inspect_name(name);
     ClassInfo *ci2 = &c->classes[cid2];
-    int want_ins = sp_streq(name, "inspect");
+    if (cplan_builtin_call(c, id)) { emit_obj_builtin_text(c, id, recv, cid2, want_ins, b); return 1; }
     if (ci2->is_value_type) {
       char rn2[512], rarg2[96];
       obj_default_name(c, cid2, rn2, sizeof rn2, rarg2, sizeof rarg2);

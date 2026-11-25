@@ -41,6 +41,11 @@ typedef enum {
   CR_GAP         /* a codegen gap (unsupported) */
 } CplanRefuse;
 
+/* The call path a super into a builtin is lowered to (CallPlan.bpath): an Array, Hash, String or Time subclass's
+   own, a Kernel module function's bare call, a module prepended into a builtin, a plain class's Object method,
+   or none (the plan's arm, bsuper) */
+typedef enum { BSP_NONE, BSP_ARRAY, BSP_KERNEL, BSP_PREPENDED, BSP_OBJECT } BsuperPath;
+
 /* which decision refuses it, in the order codegen meets them: the prepasses
    before any emission, then the emitters' own */
 typedef enum {
@@ -69,6 +74,48 @@ enum { CP_ABSENT_NONE, CP_ABSENT_INST, CP_ABSENT_SG, CP_ABSENT_MODULE, CP_ABSENT
 /* CallPlan.closed past the visibilities (SP_VIS_PRIVATE, SP_VIS_PROTECTED): a class method's visibility a body's word
    sets, which the capture reads from the cells (CP_CLOSED_RUN), or which nothing there tells (CP_CLOSED_UNTOLD) */
 enum { CP_CLOSED_RUN = 3, CP_CLOSED_UNTOLD };
+
+/* CallPlan.bsuper: how the builtin a super reaches answers it, where no method of the program's does (mi -1) and the
+   lowering of builtin supers left it a super (lower_builtin_supers): the one decision the super emission
+   (emit_super_value) renders and its inference types. Each arm is chosen with its own conditions (the arity and the
+   shape of the call it renders), in the order the ladder asks them; BSUP_NONE is CRuby's NoMethodError. */
+typedef enum {
+  BSUP_NONE,
+  BSUP_OBJ_TEXT,      /* Kernel#inspect / #to_s: the default #<Name:0x...> */
+  BSUP_STRUCT_TEXT,   /* Struct#inspect / #to_s: the default #<struct ...> */
+  /* a class method's */
+  BSUP_CLASS_NEW,     /* Class#new (comp_super_is_class_new) */
+  BSUP_ALLOCATE,      /* Class#allocate (allocate_super_reaches_class) */
+  BSUP_CORE_HOOK,     /* Module's and Class's definition hooks: nil (cplan_core_hook) */
+  BSUP_SUBCLASSES,    /* Class#subclasses */
+  BSUP_ANCESTORS,     /* Module#ancestors */
+  BSUP_SUPERCLASS,    /* Class#superclass */
+  BSUP_INCLUDE_P,     /* Module#include? */
+  BSUP_BACKTICK,      /* Kernel#` (an_super_backtick_shape), from either side */
+  /* an instance method's */
+  BSUP_NATIVE_CTOR,   /* a native class's constructor, from a subclass's initialize (#9269) */
+  BSUP_NATIVE,        /* a native class's binding of the name */
+  BSUP_EXC_INIT,      /* Exception#initialize and its kin's */
+  BSUP_COPY_HOOK,     /* Object#initialize_copy / _dup / _clone: the copy is made */
+  BSUP_STRUCT_INIT,   /* Struct#initialize: the members */
+  BSUP_OBJ_INIT,      /* BasicObject#initialize: nil */
+  BSUP_EXC_REOPEN,    /* a program reopening of a builtin exception above the class, picked at run time */
+  BSUP_EXC_TEXT,      /* Exception#message / #to_s: the stored message */
+  BSUP_RESPOND_TO,    /* Object#respond_to?: the method table's answer */
+  BSUP_FREEZE,        /* Object#freeze */
+  BSUP_IS_A,          /* Object#is_a? / #kind_of? */
+  BSUP_INSTANCE_OF,   /* Object#instance_of? */
+  BSUP_DATA_WITH,     /* Data#with */
+  BSUP_SAME,          /* BasicObject#== / #equal?, Kernel#eql?: the same object */
+  BSUP_FALSE,         /* BasicObject#!, Kernel#nil?: false */
+  BSUP_FROZEN,        /* Kernel#frozen? */
+  BSUP_SELF,          /* Kernel#itself */
+  BSUP_KERNEL_ROW,    /* Kernel's builtin-op row of the name (comp_super_kernel_row) */
+  BSUP_ARITY          /* a count the builtin's own method cannot take: CRuby's ArgumentError (cplan_super_wrong_count) */
+} BsuperArm;
+/* The count super id passes where the builtin it reaches cannot take it (BSUP_ARITY), and CRuby's "expected"
+   text into *exp; -1 where it can, or the owner's facts do not prove it */
+int cplan_super_wrong_count(Compiler *c, int id, const char **exp);
 
 typedef struct {
   int mi;                  /* the method scope, or -1 */
@@ -105,6 +152,8 @@ typedef struct {
   unsigned char rkind;     /* CP_REFUSE: CplanRefuse */
   const char *msg;         /* CP_REFUSE: the message, as the compiler prints it */
   unsigned char rfrom;     /* CP_REFUSE: CplanRefuseFrom */
+  unsigned char bsuper;    /* a super with no program method (mi -1): BsuperArm */
+  unsigned char bpath;     /* a super with no program method (mi -1): the BsuperPath whose call on self lower_builtin_supers lowers it to, BSP_NONE for bsuper's arm (for BSP_OBJECT the plan also decides that the call spells the argument list, cplan_object_args_spelled) */
   const char *bowner;      /* UC_SUPER with no program method (mi -1): the builtin class or module whose method the super reaches (MethodLookup.bowner); in a class method, the owner of a definition hook (cplan_core_hook) */
   unsigned char answers_receiver; /* mi is a class method of an ancestor of owner_ci that answers an instance of owner_ci (cmethod_receiver_class): the function returns a pointer to its own class's type, the call is cast to owner_ci's */
   const char *delegate;     /* the protocol method name, before alias resolution */
@@ -410,6 +459,27 @@ int cplan_super_target(Compiler *c, int id, const Scope *s, MethodLookup *ml);
    exception, an Array, a Struct): the builtin's method is the answer, and a reopening of Object's is behind it.
    Every reader of a super's target starts here. */
 int cplan_super_start(Compiler *c, const Scope *s);
+/* The native class's binding (an index into Compiler.native_methods) a super node id whose arm is BSUP_NATIVE runs:
+   of the name and count the plan found, and of the arguments' kinds; -1 for any other super */
+int cplan_super_native(Compiler *c, int id);
+/* The shape of the argument list super node id in scope s passes, spelled as a call's (an explicit one's own, a bare
+   super's the method's parameters, as lower_builtin_supers spells them): SAS_SPLAT for a spread (a `*`, a `(...)`
+   passed on, a rest parameter), SAS_KW for keywords (a keyword hash, a `**`, keyword parameters), SAS_FWD for a
+   `(...)` passed on, SAS_UNSPELLED for a bare super whose parameters no call spells (a destructured one, `**nil`, a
+   `(...)` beside a keyword), SAS_BARE for a super that passes what a bare super does: a bare one, and a `super(...)`
+   from a method whose parameters are its `...` alone (the shape is then the bare super's) */
+enum { SAS_SPLAT = 1, SAS_KW = 2, SAS_FWD = 4, SAS_UNSPELLED = 8, SAS_BARE = 16 };
+unsigned cplan_super_args_shape(Compiler *c, int id, const Scope *s);
+int cplan_def_forwards(Compiler *c, const Scope *s);   /* is the method of scope s a `(...)` forwarder? */
+/* The shape of a bare super's argument list in scope s: the method's parameters, as a call spells them (SAS_* above,
+   always SAS_BARE but for a destructured or unnamed positional). With mixed, a `(...)` whose calls pass different
+   counts is SAS_UNSPELLED too: its slots hold the most any passes, which a call that passed fewer did not. The one
+   decider of whether super_zsuper_args (analyze.c) can spell them. */
+unsigned cplan_zsuper_shape(Compiler *c, const Scope *s, int mixed);
+/* Does super node id's arm (CallPlan.bsuper) answer from the object itself: its address (BSUP_SAME), its frozen bit
+   (BSUP_FROZEN), the object (BSUP_SELF), or Kernel's row over it (BSUP_KERNEL_ROW)? A by-value object
+   (an_phase_value_types) has none of them. */
+int cplan_super_reads_self(Compiler *c, int id);
 /* Is super node id, in a class method, the call of a definition hook (`inherited`, `method_added`) that only a builtin's no-op answers? */
 int cplan_core_hook(Compiler *c, int id);
 int cplan_kernel_def(Compiler *c, const char *name);   /* a version of the name's top-level history is a program Kernel def */

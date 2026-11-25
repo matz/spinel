@@ -6387,34 +6387,6 @@ const char *comp_super_bowner(Compiler *c, const Scope *s, const char *uname) {
   return root ? builtin_super_owner(root, uname, self && !s->is_prepend_copy) : NULL;
 }
 
-/* Does lower_builtin_supers lower a super in site scope st named uname whose
-   plan names builtin bowner? Not every owner has a call path from a program
-   object's self yet: each family is carried when its path is (the owners
-   not carried keep the ladder in emit_super, which answers them, as before).
-   Carried: a Kernel module function that takes no block (BSP_KERNEL: called
-   bare, as `Kernel.format` is); a super in an Array, Hash, String or Time
-   subclass (the instance is the builtin's value) for the names the Array
-   path answers (comp_arysub_builtin_name; BSP_ARRAY, which passes the
-   method's block on); a method a module prepended to a builtin reopening put
-   in front of the builtin's (BSP_PREPENDED). A module included into a
-   reopened builtin, and a prepended one's self typed as the builtin's value,
-   have no such path: `self.m` there reaches no method at run time, or
-   returns an Enumerator where the method answers a boxed value. */
-BsuperPath comp_bsuper_carried(Compiler *c, int id, const Scope *st, const char *uname, const char *bowner) {
-  /* (the stand-in a version entry's else arm calls for the call made before a later include or prepend is that
-     call's method: a Kernel function is private, and the visibility-blind call a lowered super is would answer an
-     explicit receiver where CRuby raises) */
-  if (builtin_owner_kind(bowner) == BOWN_KERNEL && !st->super_behind && is_kernel_module_function(uname) && !is_frame_reading_function(uname) &&
-      !iter_row(BOP_KERNEL, uname, -1, 0))
-    return BSP_KERNEL;
-  int self = 0;
-  const char *root = comp_super_builtin_root(c, st->class_id, &self);
-  int slot = root ? builtin_core_class_slot(root) : -1;
-  if (st->is_prepend_copy && self && slot >= 0 && slot != CORE_OBJECT && is_builtin_reopen_name(root)) return BSP_PREPENDED;
-  /* (Array's initialize and initialize_copy are rewrite_array_subclass_super's) */
-  return comp_ary_root(c, st->class_id) >= 0 && !is_initialize_family(uname) && comp_arysub_builtin_name(c, id, st->class_id, uname) ? BSP_ARRAY : BSP_NONE;
-}
-
 /* The proc-form clone scope `s` runs, or -1. A def that was cloned holds its
    clone (Scope.pf_clone). A yielding def that lost its name to a later one in
    its class, a reopen or a copy an include makes (pf_by_name), runs the clone
@@ -6477,7 +6449,7 @@ int comp_zsuper_plain_params(Compiler *c, const Scope *s, int *out, int cap) {
 /* The plain argument count a super passes, or -1 for a splat, a keyword
    or a forwarded list: a bare super's comes from the method's requireds
    and optionals (comp_zsuper_plain_params). */
-static int super_plain_argc(Compiler *c, int id, const Scope *s) {
+int comp_super_plain_argc(Compiler *c, int id, const Scope *s) {
   const NodeTable *nt = c->nt;
   if (nt_kind(nt, id) == NK_ForwardingSuperNode) return comp_zsuper_plain_params(c, s, NULL, 0);
   int sa = nt_ref(nt, id, "arguments"), n = 0;
@@ -6489,8 +6461,20 @@ static int super_plain_argc(Compiler *c, int id, const Scope *s) {
   }
   return n;
 }
+/* See compiler.h. */
+int comp_super_blockarg_effect(const NodeTable *nt, int id) {
+  int bk = nt_ref(nt, id, "block");
+  int e = bk >= 0 && nt_kind(nt, bk) == NK_BlockArgumentNode ? nt_ref(nt, bk, "expression") : -1;
+  /* a variable's read has no effect, and a block parameter of the
+     method is not in scope where the fold is emitted */
+  NodeKind ek = e >= 0 ? nt_kind(nt, e) : NK_NilNode;
+  if (e < 0 || ek == NK_LocalVariableReadNode || ek == NK_InstanceVariableReadNode ||
+      ek == NK_GlobalVariableReadNode || ek == NK_NilNode || ek == NK_SymbolNode)
+    return -1;
+  return e;
+}
 const BuiltinOp *comp_super_kernel_row(Compiler *c, const Scope *s, const char *uname, int id) {
-  const BuiltinOp *op = uname ? bop_find(BOP_KERNEL, uname, super_plain_argc(c, id, s), 0) : NULL;
+  const BuiltinOp *op = uname ? bop_find(BOP_KERNEL, uname, comp_super_plain_argc(c, id, s), 0) : NULL;
   return op && !(op->flags & BOPF_INTERNAL) ? op : NULL;
 }
 int comp_super_object_builtin(Compiler *c, const Scope *s, const char *uname, int id) {
@@ -6501,14 +6485,18 @@ int comp_super_object_builtin(Compiler *c, const Scope *s, const char *uname, in
      (Exception's private one) answer as the row does */
   const BuiltinOp *krow = comp_super_kernel_row(c, s, uname, id);
   int any_core = krow != NULL;
-  if (sp_streq(uname, "==") || sp_streq(uname, "equal?")) { kind = SUPER_OBJ_SAME; nargs = 1; }
-  else if (sp_streq(uname, "eql?")) { kind = SUPER_OBJ_SAME; nargs = 1; kernel = 1; }
-  else if (sp_streq(uname, "!")) kind = SUPER_OBJ_FALSE;
-  else if (sp_streq(uname, "nil?")) { kind = SUPER_OBJ_FALSE; kernel = 1; }
-  else if (sp_streq(uname, "frozen?")) { kind = SUPER_OBJ_FROZEN; kernel = 1; }
-  else if (sp_streq(uname, "itself")) { kind = SUPER_OBJ_SELF; kernel = 1; }
-  else if (any_core) { kind = SUPER_OBJ_ROW; nargs = super_plain_argc(c, id, s); kernel = 1; }
-  if (!kind || super_plain_argc(c, id, s) != nargs) return 0;
+  switch (object_super_arm(uname)) {
+  case OSA_SAME: kind = SUPER_OBJ_SAME; nargs = 1; break;
+  case OSA_KERNEL_SAME: kind = SUPER_OBJ_SAME; nargs = 1; kernel = 1; break;
+  case OSA_FALSE: kind = SUPER_OBJ_FALSE; break;
+  case OSA_KERNEL_FALSE: kind = SUPER_OBJ_FALSE; kernel = 1; break;
+  case OSA_FROZEN: kind = SUPER_OBJ_FROZEN; kernel = 1; break;
+  case OSA_SELF: kind = SUPER_OBJ_SELF; kernel = 1; break;
+  default:
+    if (any_core) { kind = SUPER_OBJ_ROW; nargs = comp_super_plain_argc(c, id, s); kernel = 1; }
+    break;
+  }
+  if (!kind || comp_super_plain_argc(c, id, s) != nargs) return 0;
   /* (Comparable reached through Object's own include answers == too) */
   if (!any_core && (!comp_plain_class(c, s->class_id) || class_is_comparable(c, s->class_id))) return 0;
   /* the method runs for a subclass's instance too, and a subclass that

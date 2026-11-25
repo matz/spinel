@@ -3275,7 +3275,8 @@ static unsigned udrc_gen, udrc_shape; static int udrc_nscopes = -1, udrc_nclasse
    in a reopened String#itself answered nil and a reopened Integer's did not
    compile, where the builtin was right for a boxed value. A program class's
    own method with super (comp_plain_class) does not count: no builtin value
-   reaches it, and its super works. */
+   reaches it, and its super works. A super lowered to the builtin's own call
+   on self (Scope.super_lowered) is that super still. */
 int user_defines_calls_super(Compiler *c, const char *name) {
   if (!name) return 0;
   for (int s = 0; s < c->nscopes; s++) {
@@ -3285,7 +3286,7 @@ int user_defines_calls_super(Compiler *c, const char *name) {
     for (int ck = 0; ck < CORE_N && k >= 0 && !core; ck++) core = comp_core_class(c, ck) == k;
     if (k >= 0 && k < c->nclasses && !core && !comp_class_is_module(c, &c->classes[k]) && comp_plain_class(c, k))
       continue;
-    if (scope_calls_super(c, s)) return 1;
+    if (sc->super_lowered || scope_calls_super(c, s)) return 1;
   }
   return 0;
 }
@@ -17543,16 +17544,6 @@ int user_cmp_needs_check(Compiler *c, int id, int op, int cid) {
   return ret == TY_POLY || ret == TY_NIL || ret == TY_BIGINT || ret == TY_RATIONAL;
 }
 
-/* A user object whose class defines a reader or method named `nm` shadows the
-   builtin of that name (a Data/Struct member `:class`/`:hash`, or a user
-   `def class`): the builtin arm must yield so the user dispatch runs (#2975). */
-int obj_member_shadows(Compiler *c, TyKind rt, const char *nm) {
-  if (!ty_is_object(rt)) return 0;
-  int cid = ty_object_class(rt);
-  if (cid < 0 || cid >= c->nclasses) return 0;
-  return call_answers(c, -1, cid, nm, 0, NULL);
-}
-
 /* The unified `<=>` return type across a Comparable class and its descendants,
    or TY_UNKNOWN if none. Backs both user_cmp_needs_check and the protocol check
    below (a statically non-{Integer,Float,nil} result is a compile-time error). */
@@ -17898,15 +17889,19 @@ static int emit_case_eq_call(Compiler *c, int id, Buf *b) {
   /* Object#equal? is pointer identity and is never overridden, so a plain user
      object (e.g. a package's Set) answers it even with no user-defined method
      (#2629). A pointer-backed arg compares by address; anything else (a scalar,
-     or a value-type object with no stable identity) is never the same object. */
-  if (argc == 1 && sp_streq(name, "equal?") && recv >= 0 && ty_is_object(rt) &&
-      !comp_ty_value_obj(c, rt) &&
-      !call_answers(c, -1, ty_object_class(rt), "equal?", 0, &ml)) {
+     or a value-type object with no stable identity) is never the same object.
+     So is the builtin's own == (builtin_only: a super's, lowered) of a class
+     whose chain no core module answers == for: BasicObject's, which is
+     equal?, where the program's == must not take it. */
+  if (argc == 1 && recv >= 0 && ty_is_object(rt) && !comp_ty_value_obj(c, rt) &&
+      (is_equal_name(name) ? cplan_builtin_call(c, id) || !call_answers(c, -1, ty_object_class(rt), "equal?", 0, &ml)
+                           : is_eqeq_name(name) && cplan_builtin_call(c, id) && !comp_chain_core_answers(c, ty_object_class(rt), name))) {
     if (ty_is_object(a0) && !comp_ty_value_obj(c, a0)) {
       buf_puts(b, "((void *)("); emit_expr(c, recv, b); buf_puts(b, ") == (void *)(");
       emit_expr(c, argv[0], b); buf_puts(b, "))");
     }
-    else if (a0r.kind == RK_BOXED || a0 == TY_UNKNOWN) {
+    else if (a0r.kind == RK_BOXED || a0 == TY_UNKNOWN || ((a0 == TY_INT || a0 == TY_FLOAT) && nullable_int_value(c, argv[0]))) {
+      /* (an Integer or Float that also takes nil is read boxed, as it is held: unwrapped, a nil raised) */
       /* A boxed argument can be holding this very object -- the same call
          reached with an object and with a symbol widens the parameter to
          poly, and folding the comparison to false then answered false for an
@@ -20561,7 +20556,7 @@ int emit_poly_object_methods_reflection(Compiler *c, int id, const char *name, i
   for (int i = 0; i < n; i++) {
     int k = ks ? ks[i] : i;
     if (k < 0 || k >= c->nclasses || !c->classes[k].instantiated || is_builtin_reopen(c->classes[k].name)) continue;
-    if (!an_object_methods_listable(c, k, name)) {
+    if (!an_object_methods_listable(c, id, k, name)) {
       /* a class whose list cannot be made ahead of time: said so, should
          the receiver be its instance, rather than CRuby's answer missed */
       buf_printf(b, " case %d: sp_raise_cls(\"NotImplementedError\", \"spinel: %s of an instance of %s is not listed:"
@@ -20589,13 +20584,13 @@ int emit_object_methods_reflection(Compiler *c, int id, int recv, int cid, const
                                    int arg, Buf *b) {
   int pub = 1, prot = 0, sg = 0;
   if (!object_method_list_form(name, &prot, &sg)) return 0;
-  if (!an_object_methods_listable(c, cid, name)) return 0;
+  if (!an_object_methods_listable(c, id, cid, name)) return 0;
   /* an object typed as its singleton class has those methods only once its
      `def obj.m` has run, and not in a #dup: until then it lists as the class
      before it */
   int pid = c->classes[cid].is_singleton_of && !c->classes[cid].is_value_type
             ? c->classes[cid].parent : -1;
-  if (pid >= 0 && !an_object_methods_listable(c, pid, name)) pid = -1;
+  if (pid >= 0 && !an_object_methods_listable(c, id, pid, name)) pid = -1;
   int t = ++g_tmp;
   if (pid >= 0) {
     buf_printf(b, "({ void *_r%d = (void *)(", t);
@@ -20729,7 +20724,7 @@ void emit_value_methods_helpers(Compiler *c, const char *const *texts, int ntext
     buf_printf(b, "    if (prot == %d) switch (v.cls_id) {\n", prot);
     for (int k = 0; k < c->nclasses; k++) {
       if (!c->classes[k].instantiated || c->classes[k].is_singleton_of ||
-          !an_object_methods_listable(c, k, name)) continue;
+          !an_object_methods_listable(c, -1, k, name)) continue;
       buf_printf(b, "    case %d: return ", k);
       emit_object_methods_list(c, -1, k, name, 1, prot, 0, 1, -1, b);
       buf_puts(b, ";\n");
@@ -20768,7 +20763,7 @@ int emit_value_methods_reflection(Compiler *c, int id, Buf *b) {
     int *site = calloc((size_t)(c->nclasses > 0 ? c->nclasses : 1), sizeof *site);
     if (!cand || !site) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
     for (int k = 0; k < c->nclasses; k++)
-      if (c->classes[k].instantiated && !c->classes[k].is_singleton_of && an_object_methods_listable(c, k, name)) cand[ncand++] = k;
+      if (c->classes[k].instantiated && !c->classes[k].is_singleton_of && an_object_methods_listable(c, id, k, name)) cand[ncand++] = k;
     nsite = cplan_list_site_classes(c, id, cand, ncand, site);
     free(cand);
     if (nsite) {
@@ -20943,8 +20938,10 @@ static int rt_probe_unfounded(Compiler *c, int id, TyKind rt, const char *qm) {
    receiver of such a class, implicit self in one, or a boxed value when a
    class that can be one overrides it: the dispatch's default arm answers for
    every other value (emit_poly_builtin_default), re-entering here with
-   g_poly_builtin_arm set. */
+   g_poly_builtin_arm set. The builtin's own call (builtin_only: a super's,
+   lowered) is the fold's. */
 int respond_to_user_defined(Compiler *c, int id, int recv) {
+  if (cplan_builtin_call(c, id)) return 0;
   int any = 0;
   for (int k = 0; k < c->nclasses && !any; k++)
     if (call_target(c, -1, k, RESPOND_TO_NAME, CT_OWN, NULL) >= 0) any = 1;
@@ -35415,17 +35412,15 @@ int object_private_method_name(const char *qm) {
    class (this class or a descendant, which inherits the method and its
    super) over the closed set of names a runtime-name send resolves over
    plus the universal ones. A name outside that set answers false, as the
-   runtime-name respond_to? does. Answers 1 when it emitted. */
-int emit_super_respond_to(Compiler *c, int id, Scope *s, Buf *b) {
+   runtime-name respond_to? does (CallPlan.bsuper BSUP_RESPOND_TO: one
+   argument or more). */
+void emit_super_respond_to(Compiler *c, int id, Scope *s, Buf *b) {
   const NodeTable *nt = c->nt;
-  if (!s || s->class_id < 0 || s->is_cmethod) return 0;
   int cid = s->class_id;
   NodeKind ty_k = nt_kind(nt, id);
   int fwd = ty_k == NK_ForwardingSuperNode;
   int args = fwd ? -1 : nt_ref(nt, id, "arguments");
   int argc = 0; const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
-  if (!fwd && argc < 1) return 0;
-  if (fwd && s->nparams < 1) return 0;
   int t = ++g_tmp;
   /* the name: a symbol, a string (interned), or a boxed value of either */
   Buf nm = {0, 0, 0}; TyKind nt_ty;
@@ -35540,7 +35535,6 @@ int emit_super_respond_to(Compiler *c, int id, Scope *s, Buf *b) {
   for (int q = 0; q < ncand; q++) free(cand[q]);
   free(cand);
   buf_printf(b, " default: _r%d = 0; } _r%d; })", t, t);
-  return 1;
 }
 
 /* The compile-time answer to `recv.respond_to?(qm)` for the call node `id`:
@@ -35842,7 +35836,7 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
       object_private_method_name(qm) && !root_reopen_defines(c, id, qm)) {
     if (!private_answer_overridden(c, qm, rt)) resolved = yes = 1;
     /* the value's class picks, at run time (emit_call_reflection_arms) */
-    else if (respond_to_runtime_reaches(c, rt)) return -1;
+    else if (respond_to_runtime_reaches(c, id, rt)) return -1;
   }
   /* A builtin value reaches a method of a program's Object (Kernel,
      BasicObject) reopening that its own class lacks (true and false: both

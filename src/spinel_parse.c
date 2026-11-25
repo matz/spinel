@@ -7384,8 +7384,11 @@ static int sp_load_path(const SpLoadGraph *g, int f, int s, int *fs, int *ss, in
    other statements): when that statement comes after the placing
    require's in the load order, the file is loaded by then, and x loads
    nothing. */
-static int sp_load_nested_after(const SpLoadGraph *g, const SpLoadEdge *x) {
-  int by = g->entered[x->to];
+/* Does require x, standing in a top-level statement of a placed file,
+   run only after the require `by` (an edge)? When x's statement comes
+   after by's in the load order: nothing under a statement runs before the
+   statement does. */
+static int sp_load_edge_after(const SpLoadGraph *g, const SpLoadEdge *x, int by) {
   if (by < 0 || g->entered[x->from] == -1 || x->stmt < 0 || x->begin_block) return 0;
   const SpLoadEdge *e = &g->edge[by];
   enum { CAP = 64 };
@@ -7398,6 +7401,27 @@ static int sp_load_nested_after(const SpLoadGraph *g, const SpLoadEdge *x) {
   }
   return 0;
 }
+static int sp_load_nested_after(const SpLoadGraph *g, const SpLoadEdge *x) {
+  return sp_load_edge_after(g, x, g->entered[x->to]);
+}
+/* Does unplaced file f run only after the require `by`? Each require that
+   may run it stands in a top-level statement of a placed file after by's
+   (sp_load_edge_after), or in an unplaced file that runs only after by in
+   turn: a file `later.rb` that only a method defined after by's statement
+   requires runs after it, and a require in it of by's file loads nothing.
+   No for the entry, or past a depth of files (a cycle of requires). */
+static int sp_load_file_after(const SpLoadGraph *g, int f, int by, int depth) {
+  if (f <= 0 || depth > 16) return 0;
+  int any = 0;
+  for (int e = 0; e < g->nedge; e++) {
+    const SpLoadEdge *y = &g->edge[e];
+    if (y->to != f) continue;
+    if (y->how != SP_LOAD_FILE) return 0;
+    any = 1;
+    if (g->entered[y->from] == -1 ? !sp_load_file_after(g, y->from, by, depth + 1) : !sp_load_edge_after(g, y, by)) return 0;
+  }
+  return any;
+}
 static void sp_load_order_build(SpLoadGraph *g) {
   g->entered = malloc(sizeof(int) * (size_t)(g->nfile + 1));
   if (!g->entered) { fprintf(stderr, "spinel_parse: out of memory\n"); exit(1); }
@@ -7406,14 +7430,18 @@ static void sp_load_order_build(SpLoadGraph *g) {
   for (int b = 0; b < g->nboot; b++) sp_load_enter(g, g->boot[b]);
   for (int i = 0; i < g->gf[0]->nsite; i++) sp_load_enter(g, g->gf[0]->site[i].edge);
   /* a file another require may run first is not placed, nor is any file
-     only such a file places (not a boot library's: nothing runs before it) */
+     only such a file places (not a boot library's: nothing runs before it);
+     a require in an unplaced file that runs only after the placing require
+     loads nothing (sp_load_file_after) */
   for (int changed = 1; changed; ) {
     changed = 0;
     for (int e = 0; e < g->nedge; e++) {
       const SpLoadEdge *x = &g->edge[e];
       if (x->how != SP_LOAD_FILE || x->to <= 0 || g->entered[x->to] == -1 || sp_load_by_boot(g, x->to)) continue;
       int by = g->entered[x->to];
-      if ((!x->top && !sp_load_nested_after(g, x)) || g->entered[x->from] == -1 || (by >= 0 && g->entered[g->edge[by].from] == -1)) {
+      int from_after = g->entered[x->from] == -1 && sp_load_file_after(g, x->from, by, 0);
+      if ((!from_after && ((!x->top && !sp_load_nested_after(g, x)) || g->entered[x->from] == -1)) ||
+          (by >= 0 && g->entered[g->edge[by].from] == -1)) {
         g->entered[x->to] = -1;
         changed = 1;
       }

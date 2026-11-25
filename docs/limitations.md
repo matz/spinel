@@ -367,12 +367,17 @@ class is never freed. These forms still answer one class for every evaluation, a
 - a constant write's value (`Foo = Class.new { ... }` in a block, a lambda
   or a loop), which defines the one class the constant names.
 
-A `Class.new` evaluated more than once whose superclass's `inherited` reads
-the class it is handed beyond what it is (an instance, its methods, its
-constants, rather than its name, superclass or identity) is refused at
-compile time: CRuby runs the hook before the block defines anything, and the
-compiled class has the block's methods from the start. A hook that counts,
-collects or names the classes it is handed runs at each evaluation.
+A `Class.new` evaluated more than once whose superclass's `inherited` asks
+the class it is handed for something its block declares is refused at
+compile time: CRuby runs the hook before the block declares anything, and
+the compiled class has the block's declarations from the start. The question
+counts only where it asks about the kind of thing the block declares: its
+instance methods (`instance_methods`, `method_defined?`, an instance), its
+own methods (`respond_to?`, `method`, `is_a?`, against a `def self.` or an
+`extend`), its ancestry (`ancestors`, `include?`, `<`, against an `include`
+or `prepend`), or its constants. A hook that counts, collects or names the
+classes it is handed, or asks about a kind the block does not declare, runs
+at each evaluation.
 
 In a program with one of these forms evaluated more than once (a
 `Struct.new` or `Data.define` evaluated more than once counts as one), a

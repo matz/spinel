@@ -2122,15 +2122,52 @@ int is_method_reader_name(const char *n) {
                sp_streq(n, "source_location") || sp_streq(n, "inspect") || sp_streq(n, "to_s") ||
                sp_streq(n, "==") || sp_streq(n, "hash") || sp_streq(n, "receiver"));
 }
-/* A call on a class that reads only what it is, not what it holds: its
-   name, its superclass, its identity and comparisons. Any other call (an
-   instance, its methods, its constants, an eval in it) reads what its body
-   declares. */
-int is_class_identity_reader_name(const char *n) {
-  return n && (sp_streq(n, "name") || sp_streq(n, "to_s") || sp_streq(n, "inspect") || sp_streq(n, "superclass") ||
-               sp_streq(n, "==") || sp_streq(n, "!=") || sp_streq(n, "equal?") || sp_streq(n, "eql?") ||
-               sp_streq(n, "hash") || sp_streq(n, "class") || sp_streq(n, "frozen?") || sp_streq(n, "object_id") ||
-               sp_streq(n, "instance_of?") || sp_streq(n, "is_a?") || sp_streq(n, "kind_of?") || sp_streq(n, "nil?"));
+/* What a call on a class observes of what the class's body declares
+   (CDECL_*, builtin_names.h): nothing for one that reads only what the
+   class is (its name, its superclass, its identity, comparisons); its
+   ancestry for an ancestry question; its instance methods for a method
+   table question; its own methods and extends for respond_to?, a method
+   object or is_a?; its constants (and those of what it includes) for a
+   constant question. Any other call (an instance, an eval in it, a send)
+   may observe all of it. */
+int class_reader_observes(const char *n) {
+  static const struct { const char *name; int kinds; } rows[] = {
+    { "name", 0 }, { "to_s", 0 }, { "inspect", 0 }, { "superclass", 0 }, { "==", 0 }, { "!=", 0 },
+    { "equal?", 0 }, { "eql?", 0 }, { "hash", 0 }, { "class", 0 }, { "frozen?", 0 }, { "object_id", 0 },
+    { "instance_of?", 0 }, { "nil?", 0 },
+    { "ancestors", CDECL_ANCESTORS }, { "include?", CDECL_ANCESTORS }, { "included_modules", CDECL_ANCESTORS },
+    { "<", CDECL_ANCESTORS }, { "<=", CDECL_ANCESTORS }, { ">", CDECL_ANCESTORS }, { ">=", CDECL_ANCESTORS },
+    { "<=>", CDECL_ANCESTORS },
+    { "instance_methods", CDECL_METHODS }, { "public_instance_methods", CDECL_METHODS },
+    { "private_instance_methods", CDECL_METHODS }, { "protected_instance_methods", CDECL_METHODS },
+    { "instance_method", CDECL_METHODS }, { "public_instance_method", CDECL_METHODS },
+    { "method_defined?", CDECL_METHODS }, { "public_method_defined?", CDECL_METHODS },
+    { "private_method_defined?", CDECL_METHODS }, { "protected_method_defined?", CDECL_METHODS },
+    { "respond_to?", CDECL_SMETHODS }, { "method", CDECL_SMETHODS }, { "public_method", CDECL_SMETHODS },
+    { "singleton_method", CDECL_SMETHODS }, { "singleton_methods", CDECL_SMETHODS }, { "methods", CDECL_SMETHODS },
+    { "public_methods", CDECL_SMETHODS }, { "is_a?", CDECL_SMETHODS }, { "kind_of?", CDECL_SMETHODS },
+    { "constants", CDECL_CONSTS | CDECL_ANCESTORS }, { "const_get", CDECL_CONSTS | CDECL_ANCESTORS },
+    { "const_defined?", CDECL_CONSTS | CDECL_ANCESTORS }, { "const_source_location", CDECL_CONSTS | CDECL_ANCESTORS },
+    { NULL, 0 } };
+  for (int i = 0; n && rows[i].name; i++) if (sp_streq(n, rows[i].name)) return rows[i].kinds;
+  return CDECL_ALL;
+}
+/* What a receiverless class-body declaration call adds to its class
+   (CDECL_*): a visibility change, an attribute, an alias or a removal its
+   instance methods; a class-method visibility change its own methods; a
+   constant visibility change its constants; an include or prepend its
+   ancestry, instance methods and constants; an extend its own methods.
+   Any other call may add anything. */
+int class_declaration_adds(const char *n) {
+  if (!n) return CDECL_ALL;
+  if (visibility_of_name(n) == BVIS_MODULE_FUNCTION) return CDECL_METHODS | CDECL_SMETHODS;
+  if (visibility_of_name(n) || is_attr_decl_reader(n) || is_attr_decl_writer(n) || is_alias_method_name(n) ||
+      is_undef_method_name(n) || is_remove_method_name(n))
+    return CDECL_METHODS;
+  if (class_method_vis_of_name(n)) return CDECL_SMETHODS;
+  if (is_const_visibility_name(n)) return CDECL_CONSTS;
+  if (is_mixin_call(n)) return is_extend_name(n) ? CDECL_SMETHODS : CDECL_ANCESTORS | CDECL_METHODS | CDECL_CONSTS;
+  return CDECL_ALL;
 }
 /* Marshal, whose load makes objects with any ivars set */
 int is_marshal_const(const char *n) { return n && sp_streq(n, "Marshal"); }

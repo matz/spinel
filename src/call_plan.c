@@ -8190,28 +8190,58 @@ int cplan_rt_site_body(Compiler *c, int ci) {
         nt_int(c->nt, c->scopes[s].def_node, "rt_body_def", 0)) return s;
   return -1;
 }
-/* Does a program `inherited` on the chain above site class ci read the
-   class it is handed for more than what it is (is_class_identity_reader_name):
-   an instance, its methods, its constants? CRuby runs the hook at each
-   evaluation before the block declares any of them, and the site class has
-   them from the start. A read of the hook's parameter in the hook's own
-   scope as the receiver of any other call is one; the class handed on as an
+/* What site class ci's body declares (CDECL_*, builtin_names.h), statement
+   by statement: a def an instance method or (on self) one of its own, an
+   alias or undef an instance method, a constant write a constant, a
+   receiverless declaration call what it adds (class_declaration_adds).
+   The statements its body runs at each evaluation (the inherited call and
+   the moved block statements, cplan_rt_site_body) declare nothing; any
+   other statement may declare anything. */
+static int cplan_rt_site_declares(Compiler *c, int ci) {
+  const NodeTable *nt = c->nt;
+  int def = c->classes[ci].def_node, body = def >= 0 ? class_def_body(nt, def) : -1, n = 0, kinds = 0;
+  const int *st = body >= 0 ? nt_arr(nt, body, "body", &n) : NULL;
+  for (int i = 0; i < n; i++) {
+    int t = st[i];
+    if (nt_int(nt, t, "inherited_hook", 0) || nt_int(nt, t, "rt_body_call", 0) || nt_int(nt, t, "rt_body_def", 0)) continue;
+    switch (nt_kind(nt, t)) {
+    case NK_DefNode: kinds |= nt_ref(nt, t, "receiver") >= 0 ? CDECL_SMETHODS : CDECL_METHODS; break;
+    case NK_AliasMethodNode: case NK_UndefNode: kinds |= CDECL_METHODS; break;
+    case NK_ConstantWriteNode: kinds |= CDECL_CONSTS; break;
+    case NK_CallNode: kinds |= nt_ref(nt, t, "receiver") < 0 ? class_declaration_adds(nt_str(nt, t, "name")) : CDECL_ALL; break;
+    default: kinds = CDECL_ALL; break;
+    }
+  }
+  return kinds;
+}
+/* Does a program `inherited` on the chain above site class ci observe what
+   the class's body declares (cplan_rt_site_declares)? CRuby runs the hook at
+   each evaluation before the block declares anything, and the site class
+   has it all from the start. A read of the hook's parameter in the hook's
+   own scope as the receiver of a call that observes a kind the body
+   declares (class_reader_observes) is one; the class handed on as an
    argument is not followed. */
 static int cplan_rt_hook_reflects(Compiler *c, int ci) {
+  int kinds = ci >= 0 ? cplan_rt_site_declares(c, ci) : 0;
+  if (!kinds) return 0;
   const int *par = comp_parent_map(c);
-  for (int k = ci >= 0 ? c->classes[ci].parent : -1, g = 0; k >= 0 && g < 256; k = c->classes[k].parent, g++) {
+  for (int k = c->classes[ci].parent, g = 0; k >= 0 && g < 256; k = c->classes[k].parent, g++) {
     int dc = -1, mi = comp_cmethod_in_chain(c, k, "inherited", &dc);
     if (mi < 0 || dc != k) continue;
     Scope *hs = &c->scopes[mi];
     int body = hs->def_node >= 0 ? nt_ref(c->nt, hs->def_node, "body") : -1, n = 0, hit = 0;
     if (hs->nparams < 1 || body < 0) continue;
-    int *ids = nt_subtree_ids(c->nt, &body, 1, &n);
+    int *ids = nt_subtree_ids((NodeTable *)c->nt, &body, 1, &n);
     for (int i = 0; i < n && !hit; i++) {
       int r = ids[i], p = par[r];
       const char *rn = nt_kind(c->nt, r) == NK_LocalVariableReadNode ? nt_str(c->nt, r, "name") : NULL;
+      /* (a respond_to? probe shares the read, desugar_respond_to_probe: its
+         use is the respond_to? that keeps the probe) */
+      if (p >= 0 && nt_kind(c->nt, p) == NK_ArgumentsNode && par[p] >= 0 && nt_int(c->nt, par[p], "rt_probe", 0)) p = par[p];
+      if (p >= 0 && nt_kind(c->nt, p) == NK_CallNode && nt_int(c->nt, p, "rt_probe", 0)) p = par[p];
       hit = rn && sp_streq(rn, hs->pnames[0]) && comp_scope_of(c, r) == hs && p >= 0 &&
             nt_kind(c->nt, p) == NK_CallNode && nt_ref(c->nt, p, "receiver") == r &&
-            !is_class_identity_reader_name(nt_str(c->nt, p, "name"));
+            (class_reader_observes(nt_str(c->nt, p, "name")) & kinds);
     }
     free(ids);
     if (hit) return 1;
@@ -10338,9 +10368,10 @@ static const char *feature_limit(Compiler *c, int id, int *stop, int *lx, char *
     /* a class made at each evaluation that its superclass's `inherited`
        reflects on: the hook would see what the block declares after it */
     else if (is_class_new(rcn, name) && cplan_class_new(c, id, &hk) == CNEW_RUNTIME && cplan_rt_hook_reflects(c, hk))
-      why = "Class.new evaluated more than once is not supported where its superclass's `inherited` reads "
-            "the class it is handed (an instance, its methods): CRuby runs the hook before the block defines "
-            "them, and the compiled class has them from the start (see docs/limitations.md)";
+      why = "Class.new evaluated more than once is not supported where its superclass's `inherited` asks "
+            "the class it is handed for what the block declares (its methods, mixins or constants, or an "
+            "instance): CRuby runs the hook before the block declares them, and the compiled class has them "
+            "from the start (see docs/limitations.md)";
     /* a block the desugar leaves on the call (desugar_class_new_blocks):
        one that is not a block literal (`Class.new(&b)`, `Class.new(&:x)`),
        or a literal whose body it cannot lift into a class body */

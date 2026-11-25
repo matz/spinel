@@ -14,16 +14,17 @@ class R
   def initialize; @s = 0; end
 
   # (CRuby may run the trap between the length test and the read, which
-  # then answers nil)
+  # then answers nil: `|| 1` counts that pass as any other, every element
+  # being 1, so a pass past the new length shows in @s)
   def walk(a)
     n = 0
-    a.each { |x| @s += x || 0; n += 1 }
+    a.each { |x| @s += x || 1; n += 1 }
     n
   end
 
   def walk_index(a)
     n = 0
-    a.each_with_index { |x, i| @s += (x || 0) + (i & 0); n += 1 }
+    a.each_with_index { |x, i| @s += (x || 1) + (i & 0); n += 1 }
     n
   end
 end

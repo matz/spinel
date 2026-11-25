@@ -3930,6 +3930,14 @@ build/rbs-seed-results/%.res: FORCE | rbs-seed-extractor $(SP_RT_LIB) $(SPINEL_T
 	fi; \
 	$(SPINEL) test/rbs-seed/rbs_parse_failure_stops_build.rb -o "$$tmp/rpf" >/dev/null 2>&1 && [ "$$("$$tmp/rpf")" = 42 ] || \
 	  { echo "rbs-seed-test: FAIL (#11323 the program without --rbs)"; ok=0; }; \
+	for d in 'sig$$(touch ran)' 'sig`touch ran`' 'sig"x'; do \
+	  case "$(TEST_HOST_OS):$$d" in MINGW*'"'*|MSYS*'"'*) continue ;; esac; \
+	  mkdir "$$tmp/$$d" && cp test/rbs-seed/broken_sig/broken_sig_box.rbs "$$tmp/$$d/"; \
+	  (cd "$$tmp" && "$(CURDIR)/$(SPINEL)" "$(CURDIR)/test/rbs-seed/rbs_parse_failure_stops_build.rb" --rbs "$$d" -o rpf) >/dev/null 2>"$$tmp/rpf.err"; \
+	  grep -qF "parse failed in $$d/broken_sig_box.rbs" "$$tmp/rpf.err" || \
+	    { echo "rbs-seed-test: FAIL (--rbs $$d did not reach the extractor as one path)"; sed -n 1,2p "$$tmp/rpf.err"; ok=0; }; \
+	done; \
+	[ ! -e "$$tmp/ran" ] || { echo "rbs-seed-test: FAIL (the shell ran a command substitution in an --rbs path)"; ok=0; }; \
 	;; \
 	strict_rbs_ok) \
 	$(SPINEL) test/rbs-seed/strict_rbs_ok.rb --rbs test/rbs-seed/sig --strict-rbs \

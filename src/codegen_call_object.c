@@ -80,16 +80,6 @@ static void emit_str_between_cmp(int tv, int tbnd, const char *op, Buf *b) {
              tbnd, tv, tbnd, op);
 }
 
-/* between?, object_id / __id__, hash, nil? and === on a receiver whose kind decides them */
-/* Is there a class whose hash is a reader rather than a def? */
-static int hash_reader_class(Compiler *c) {
-  int n;
-  const int *owners = comp_name_reader_owners(c, "hash", &n);
-  for (int i = 0; i < n; i++)
-    if (comp_name_responder(c, owners[i], "hash", 0) < 0) return 1;
-  return 0;
-}
-
 /* See codegen_call_arms.h. */
 int emit_main_text_call(Compiler *c, int id, Buf *b) {
   if (!cplan_main_text_call(c, id)) return 0;
@@ -98,6 +88,7 @@ int emit_main_text_call(Compiler *c, int id, Buf *b) {
   return 1;
 }
 
+/* between?, object_id / __id__, hash, nil? and === on a receiver whose kind decides them */
 int emit_call_identity_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt) {
   /* between?(lo, hi): lo <= self <= hi */
   if (sp_streq(name, "between?") && argc == 2) {
@@ -410,7 +401,7 @@ int emit_call_identity_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
      reader (`attr_reader :hash`) is left to the dispatch, which reads it: the
      key below reaches a def of hash through the runtime's hook (with its
      recursion guard) but hashes a reader's object by its identity */
-  if (sp_streq(name, "hash") && recv >= 0 && argc == 0 && rt == TY_POLY && hash_reader_class(c)) return 0;
+  if (sp_streq(name, "hash") && recv >= 0 && argc == 0 && rt == TY_POLY && comp_has_hash_reader(c)) return 0;
   if (sp_streq(name, "hash") && recv >= 0 && argc == 0 &&
       rt != TY_MATCHDATA &&   /* MatchData has a dedicated content hash (#3014) */
       (!ty_is_object(rt) ||

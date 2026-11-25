@@ -648,6 +648,7 @@ void *hc_iter_begin(Compiler *c, int id, Buf **bp);   /* an Integer block loop's
 void hc_iter_end(void *h, Buf **bp, int indent, int keep);
 const char *hc_iter_poll_mark(int nest, int close);   /* a block loop's own polls' marks */
 int text_has_code(const char *p, size_t beg, size_t end, const char *s);  /* codegen.c: s outside the `#line` lines */
+size_t text_code_bytes(const char *p, size_t beg, size_t end);   /* codegen.c: its bytes outside them, line breaks too */
 extern int g_loop_polls_in_cond;   /* the next emit_loop_body leaves its polls to the loop's condition */
 int hc_string(Compiler *c, int recv, char *d, char *l, size_t cap);
 /* an IO::Buffer's cached view (sp_iob_view): *d its bytes, *l their count;

@@ -2699,6 +2699,8 @@ void scopes_by_name_free(Compiler *c);
    every scope of the program for each class read the class's own list while the scope index is frozen. */
 int *comp_class_scopes(Compiler *c, int cls, int *n);
 void name_owners_free(Compiler *c);
+/* Whether boxed #hash sends can select a user-defined reader. */
+int        comp_has_hash_reader(Compiler *c);
 /* Whether some class's chain answers `name` with a reader
    (comp_reader_in_chain), kept per name while the reader and alias tables
    and the class shape stand still. A retargeted send on a boxed receiver

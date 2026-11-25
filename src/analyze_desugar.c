@@ -26463,15 +26463,18 @@ static int block_only_declares(const NodeTable *nt, int blk, int hooks, const AN
   return !hooks && body_only_declares(nt, nt_ref(nt, blk, "body"), defnames);
 }
 /* ...and for the statements body (-1: none) of a block or a class body; the
-   call of the statements a site class's body runs at each evaluation
-   (cn_rt_body) is no statement of it */
+   superclass's inherited call the record fires in a class body, and the call
+   of the statements a site class's body runs at each evaluation
+   (cn_rt_body), are no statements of it (they run at each evaluation,
+   cplan_stmt_at_evaluation) */
 int body_only_declares(const NodeTable *nt, int body, const ANameHash *defnames) {
   int n = 0;
   if (body < 0) return 1;
   if (nt_kind(nt, body) != NK_StatementsNode) return 0;
   const int *st = nt_arr(nt, body, "body", &n);
   for (int i = 0; i < n; i++)
-    if (!nt_int(nt, st[i], "rt_body_call", 0) && !stmt_only_declares(nt, st[i], defnames)) return 0;
+    if (!nt_int(nt, st[i], "inherited_hook", 0) && !nt_int(nt, st[i], "rt_body_call", 0) &&
+        !stmt_only_declares(nt, st[i], defnames)) return 0;
   return 1;
 }
 /* ...and for one statement s of such a body */
@@ -27483,6 +27486,22 @@ static int cn_site_repeats(const NodeTable *nt, const int *parent, int id) {
   }
   return 0;
 }
+/* Does each evaluation of such a call make a class of its own, a record at
+   run time sharing the site class's code (EB_RT_SITE)? One in a loop the
+   walk runs (ct_in_walk_loop_block) is the walk's to evaluate, a constant
+   write's value is the class the write defines (class_def_builder), and a
+   written builtin superclass other than Object keeps the one class the
+   site makes: its instances are the builtin's (the class's own family, a
+   program class's chain, and its body, registration answers,
+   register_rt_sites). */
+static int cn_rt_site(Compiler *c, const int *parent, int id, int super_node) {
+  int core = -1, par = parent[id];
+  if (!cn_site_repeats(c->nt, parent, id) || ct_in_walk_loop_block(c->nt, parent, id)) return 0;
+  if (par >= 0 && nt_ref(c->nt, par, "value") == id &&
+      (nt_kind(c->nt, par) == NK_ConstantWriteNode || nt_kind(c->nt, par) == NK_ConstantPathWriteNode)) return 0;
+  if (super_node >= 0) elab_class_ref_at(c, super_node, &core);
+  return core < 0 || core == CORE_OBJECT;
+}
 /* What a statement of a Class.new block is checked against (cn_stmt_reruns):
    the program's def names, the block's one parameter (its class, NULL for
    none), whether the statement stands ahead of a declaration, and whether
@@ -27622,7 +27641,8 @@ static void cn_rt_body(NodeTable *nt, int blk, int body, const char *cname, cons
 }
 int desugar_class_new_blocks(Compiler *c, HostStep *h) {
   NodeTable *nt = (NodeTable *)c->nt;
-  int n0 = nt->count, changed = 0, serial = 0;
+  int n0 = nt->count, changed = 0, serial = 0, named = 0;
+  ANameHash defnames = {0};   /* (the program's def names, for a run-time site's block: cn_rt_body) */
   int *parent = an_build_parent_index(nt, n0);
   if (!parent) return 0;
   for (int id = 0; id < n0; id++) {
@@ -27706,13 +27726,14 @@ int desugar_class_new_blocks(Compiler *c, HostStep *h) {
     }
     if (blk >= 0 && nt_kind(nt, blk) != NK_BlockNode) continue;
     int omitted = blk < 0;
+    int rt = cn_rt_site(c, parent, id, super_node);
     /* An omitted block has the same empty class body as `{}`. */
     if (blk < 0) {
       if (ac > (is_module ? 0 : 1)) continue;
       if (super_node >= 0 && is_embedding_builtin(nt_str(nt, super_node, "name"))) continue;
-      /* Keep repeated evaluation on its existing path until class identity
-         can be preserved: lowering it would reuse one static class. */
-      if (cn_site_repeats(nt, parent, id)) continue;
+      /* (one evaluated more than once that makes no class of its own each
+         time is the call plan's to refuse: one static class would not do) */
+      if (!rt && cn_site_repeats(nt, parent, id)) continue;
       blk = fwd_new_node_like(nt, id, "BlockNode");
       if (blk < 0) continue;
       nt_node_set_ref(nt, id, "block", blk);
@@ -27763,6 +27784,7 @@ int desugar_class_new_blocks(Compiler *c, HostStep *h) {
     if (!reads_outer && par >= 0 && nt_ref(nt, par, "value") == id &&
         (nt_kind(nt, par) == NK_ConstantWriteNode || (!omitted && class_def_builder(nt, par) >= 0))) {
       if (nt_ref(nt, blk, "body") != body) nt_node_set_ref(nt, blk, "body", body);
+      if (!omitted && cn_site_repeats(nt, parent, id)) nt_node_set_int(nt, par, "class_new_static_repeat", 1);
       cn_host_body(c, h, par, body);
       changed = 1;
       continue;
@@ -27785,7 +27807,10 @@ int desugar_class_new_blocks(Compiler *c, HostStep *h) {
       char name[64]; snprintf(name, sizeof name, "SpinelAnonClass%d", ++serial);
       int cls = cn_make_class(nt, id, is_module, name, super_node, body);
       if (cls < 0) continue;
-      nt_node_set_int(nt, cls, "class_new_anonymous", 2);
+      nt_node_set_int(nt, cls, "class_new_anonymous", rt ? 3 : 2);
+      if (rt && omitted) nt_node_set_int(nt, cls, super_node >= 0 ? "rt_bare_super" : "rt_bare", 1);
+      /* (one class for every evaluation of a block: register_rt_sites) */
+      if (!rt && !omitted && cn_site_repeats(nt, parent, id)) nt_node_set_int(nt, cls, "class_new_static_repeat", 1);
       nt_node_set_int(nt, cls, "block_made_body", 1);
       rs = nt_arr(nt, host_st, "body", &rn2);
       int *out = malloc(sizeof(int) * (size_t)(rn2 + 1));
@@ -27794,6 +27819,22 @@ int desugar_class_new_blocks(Compiler *c, HostStep *h) {
       memcpy(out + at + 1, rs + at, sizeof(int) * (size_t)(rn2 - at));
       nt_node_set_arr(nt, host_st, "body", out, rn2 + 1);
       free(out);
+      if (rt) {
+        /* a class at each evaluation: the call stays, its superclass and
+           body now the site class's, and the record keeps the site for the
+           call plan to answer it (the run-time class, or the site class
+           itself where its family cannot have records) */
+        elab_builder_note(c, id, omitted ? EB_RT_BARE : EB_RT_SITE, cls);
+        nt_node_set_ref(nt, id, "block", -1);
+        nt_node_set_ref(nt, id, "arguments", -1);
+        if (!omitted) {
+          if (!named) { program_def_names(nt, &defnames); named = 1; }
+          cn_rt_body(nt, blk, body, name, &defnames);
+        }
+        cn_host_body(c, h, cls, body);
+        changed = 1;
+        continue;
+      }
       { /* (the read keeps the call's place, so the record answers it
            after the class it names) */
         long long line = nt_int(nt, id, "node_line", 0), file = nt_int(nt, id, "node_file", 0);
@@ -27835,6 +27876,7 @@ int desugar_class_new_blocks(Compiler *c, HostStep *h) {
     changed = 1;
   }
   free(parent);
+  anh_free(&defnames);
   if (changed) comp_grow_node_arrays(c);
   return changed;
 }

@@ -291,9 +291,8 @@ An instance of an unnamed class inspects as `#<#<Class:0x...>:0x... @a=1>`,
 and as `#<Foo:0x... @a=1>` once a constant assignment names the class.
 
 At top level or in a class body outside a method, loop or block, omitting
-the block with a constant superclass is equivalent to an empty block.
-No-block calls in a method, loop or block retain their existing handling;
-this lowering does not give them fresh class identity on each evaluation. A local holding a class is still not a supported superclass expression.
+the block with a constant superclass is equivalent to an empty block. A local
+holding a class is still not a supported superclass expression.
 
 Besides `Class.new(Constant)`, a superclass written as a call may be
 `Struct.new(...)`, `Data.define(...)`, or the `new` of a Struct subclass of
@@ -334,14 +333,54 @@ p k.new.hi                                  # 1
 
 def make = Class.new(Base) { def hi = 1 }
 p make.new.hi                               # 1
-p make == make                              # true (CRuby: false)
+p make == make                              # false, as in CRuby
 ```
 
-Each evaluation of the same supported `Class.new` expression yields the same
-compiled class; CRuby creates a new class on each evaluation. Factories with
-a block remain accepted, including programs that do not observe class identity.
-Calls without a block in a method, loop or block are not lowered, so they gain
-no support for repeated construction.
+A `Class.new` or `Module.new` evaluated more than once (in a method, a block,
+a lambda or a loop) whose superclass is omitted, `Object` or a class of the
+program makes a class of its own at each evaluation, with or without a block,
+as CRuby does: its identity, its name (the first constant assigned it), its
+`to_s`, `inspect`, `frozen?` and `superclass`, and the `class` its instances
+answer, also inside `initialize` and in the block's class methods. The classes
+one call makes share the block's methods, compiled once. At each evaluation
+the superclass's `inherited` runs, and then the block's statements other than
+its declarations, in their order, with the evaluation's class as `self` and as
+the block's one parameter (`Class.new { |k| ... }`). Such a class is never
+freed. These forms still answer one class for every evaluation, as before:
+
+- a block with a statement that may not run again on each class: one that
+  reads or writes a class-level instance variable or a class variable, that
+  yields, returns, breaks, calls `super`, opens a class or writes a constant,
+  that declares with computed arguments (`define_method`, `attr_reader name`),
+  that reads the frame it runs in (`block_given?`, `binding`, `__method__`),
+  or, ahead of a declaration, that calls a method the program defines, calls a
+  method on the class (`self.foo` before `def foo`) or hands the class to a
+  method the program defines (to any method, in a block with a `def self.`);
+  a block with parameters other than one; a block whose declarations run a
+  hook the program defines (`included`, `extended`, `method_added` and their
+  kin). The block runs once, where the call is compiled;
+- a superclass whose instances are laid out as a builtin's or as a builder's:
+  an exception class, a Struct or Data class, a subclass of Array, Hash, String
+  or Time, a native or C-extension class, or a builtin superclass other than
+  `Object`. Without a block such a call is refused at compile time;
+- a constant write's value (`Foo = Class.new { ... }` in a method), which
+  defines the one class the constant names.
+
+In a program with one of these forms evaluated more than once, a
+`Class.new(Parent)` without a block evaluated more than once is refused at
+compile time: its classes would be its own while the form's are one, and a
+program mixing them would answer some identities right and others not. One
+with no superclass still makes a class of its own each time.
+
+The classes one call makes share one set of class-level instance variables
+(`@count` written in a `def self.` method) and the methods `define_method`
+adds to any of them at run time. A `Method` taken from such a class
+(`k.method(:new)`) answers its readers (`name`, `arity`, `owner`), and is
+refused at compile time where the program calls it, binds it, copies it or
+turns it into a Proc, or hands it where the compiler cannot follow it, since
+it would run the call's compiled class. The default `to_s` of an instance held
+where any value may be, like a NoMethodError message about it, names the
+call's compiled class rather than the class made at run time.
 
 A `Class.new` or `Module.new` block that captures outer locals is refused at
 compile time for constant assignments, local assignments and reachable method

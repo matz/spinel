@@ -3029,6 +3029,7 @@ int emit_op_io_for_fd(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_io_select(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_io_copy_stream(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_io_sysopen(Compiler *c, const BopCtx *x, Buf *b);
+int emit_op_class_new(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_io_set_winsize(Compiler *c, const BopCtx *x, Buf *b);
 /* A typed array receiver of a compare (`ck` "cmp") or a blockless sum (`ck`
    "sum"), wrapped in the runtime's nil check where the array can hold nil

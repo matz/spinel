@@ -3270,6 +3270,10 @@ static const BuiltinClassOp bop_class_rows[] = {
   { "IO", { TY_CLASS, "copy_stream", 0, 127, BF_ANY, TY_INT,        BOPE_NONE } },
   { "IO", { TY_CLASS, "sysopen",     1,   3, BF_ANY, TY_INT,        BOPE_IO_SYSOPEN } },
   { "IO", { TY_CLASS, "sysopen",     0, 127, BF_ANY, TY_INT,        BOPE_NONE } },
+  /* a Class.new or Module.new evaluated more than once, the desugar's
+     lowering left with no argument and no block (cplan_class_new) */
+  { "Class",  { TY_CLASS, "new", 0, 0, BF_NONE, TY_CLASS, BOPE_CLASS_NEW, NULL, 0, 0, BOPF_OWN_CLASS } },
+  { "Module", { TY_CLASS, "new", 0, 0, BF_NONE, TY_CLASS, BOPE_CLASS_NEW, NULL, 0, 0, BOPF_OWN_CLASS } },
 };
 
 const char *bop_class_owner(const char *cls, const char *name) {

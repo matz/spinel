@@ -51233,6 +51233,7 @@ static void an_phase_class_structure(Compiler *c) {
   type_rescue_bindings(c);
 
   AN_STEP_V("resolve_parents", resolve_parents(c));
+  register_rt_sites(c);
   AN_STEP_V("desugar_data_positional_new", desugar_data_positional_new(c));
   topup_forwarding_arity(c);
   AN_STEP_V("expand_struct_forwarding_super", expand_struct_forwarding_super(c));

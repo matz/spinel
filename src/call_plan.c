@@ -8093,6 +8093,7 @@ const BuiltinClassOp *cplan_builtin_class_row(Compiler *c, int id, const char *c
   int argc = 0;
   call_args(c->nt, id, &argc);
   const BuiltinClassOp *cop = bop_class_find(cls, name, argc, nt_ref(c->nt, id, "block") >= 0);
+  if (cop && cop->op.emit == BOPE_CLASS_NEW && cplan_class_new(c, id, NULL) == CNEW_NONE) return NULL;
   const char *a;
   for (int i = 0; cop && (a = builtin_ancestor_at(cls, i)); i++) {
     int ci = comp_class_index(c, a);
@@ -8104,22 +8105,78 @@ const BuiltinClassOp *cplan_builtin_class_row(Compiler *c, int id, const char *c
 
 /* See call_plan.h. */
 int cplan_rt_site(const Compiler *c, int ci) {
-  return ci < 0 ? c->has_rt_classes : ci < c->nclasses && c->classes[ci].rt_site;
+  if (ci < 0) return c->has_rt_classes;
+  int k = ci < c->nclasses ? c->classes[ci].rt_site : RT_SITE_NONE;
+  return k == RT_SITE_OWN || (k == RT_SITE_BARE_SUPER && c->rt_identity_per_eval);
 }
 int cplan_class_value_may_be_rt(Compiler *c, int node) {
   if (!c->has_rt_classes) return 0;
   const ClsSet *s = node >= 0 ? cls_fact_node(c, node) : NULL;
   if (!s || s->all || s->bc) return 1;
   for (int k = 0; k < c->cls_fact_ncls && k < c->nclasses; k++)
-    if (c->classes[k].rt_site && cls_set_has(s, k + c->cls_fact_ncls)) return 1;
+    if (cplan_rt_site(c, k) && cls_set_has(s, k + c->cls_fact_ncls)) return 1;
   return 0;
+}
+/* Does the Method value of node v reach a use that runs it
+   (is_method_running_name), or one this cannot follow? A call on it answers
+   by its name; a local it is written to answers by the calls on each read
+   of the local in its scope; a value nothing reads runs nothing. Anything
+   else (an argument, an element, a return, a block argument) is a use this
+   cannot follow. */
+static int cplan_method_value_runs(Compiler *c, const int *par, int v, int local) {
+  const NodeTable *nt = c->nt;
+  if (an_node_dropped(c, v)) return 0;
+  int p = par[v];
+  if (p >= 0 && nt_kind(nt, p) == NK_CallNode && nt_ref(nt, p, "receiver") == v)
+    return is_method_running_name(nt_str(nt, p, "name"));
+  if (!local || p < 0 || nt_kind(nt, p) != NK_LocalVariableWriteNode || nt_ref(nt, p, "value") != v || !an_node_dropped(c, p))
+    return 1;
+  const char *vn = nt_str(nt, p, "name");
+  const Scope *sc = comp_scope_of(c, p);
+  NT_FOREACH_KIND(nt, NK_LocalVariableReadNode, r)
+    if (vn && nt_str(nt, r, "name") && sp_streq(nt_str(nt, r, "name"), vn) && comp_scope_of(c, r) == sc &&
+        cplan_method_value_runs(c, par, r, 0)) return 1;
+  return 0;
+}
+/* Does Method lookup `id` on receiver `recv` read a class made at run time
+   where a Method of a class value cannot (feature_limit): the receiver may
+   be one (cplan_class_value_may_be_rt), and the Method may run, where it
+   would run the site class's method (a Method of a class value binds no
+   function of its own)? Its name and its other readers answer as for any
+   class value. */
+static int cplan_rt_class_method_object(Compiler *c, int id, int recv) {
+  return recv >= 0 && comp_ntype(c, recv) == TY_CLASS && cplan_class_value_may_be_rt(c, recv) &&
+         cplan_method_value_runs(c, comp_parent_map(c), id, 1);
+}
+int cplan_stmt_at_evaluation(Compiler *c, int node) {
+  if (!c->has_rt_classes || node < 0 ||
+      !(nt_int(c->nt, node, "inherited_hook", 0) || nt_int(c->nt, node, "rt_body_call", 0))) return 0;
+  int cb = self_class_body(c, node);
+  return cb >= 0 && cplan_rt_site(c, cb);
+}
+/* The statement of site class ci's body marked `mark` that runs at each
+   evaluation (cplan_stmt_at_evaluation), -1 for none */
+static int cplan_rt_site_stmt(Compiler *c, int ci, const char *mark) {
+  int def = cplan_rt_site(c, ci) ? c->classes[ci].def_node : -1;
+  int body = def >= 0 ? class_def_body(c->nt, def) : -1, n = 0;
+  const int *st = body >= 0 ? nt_arr(c->nt, body, "body", &n) : NULL;
+  for (int i = 0; i < n; i++) if (nt_int(c->nt, st[i], mark, 0) && cplan_stmt_at_evaluation(c, st[i])) return st[i];
+  return -1;
+}
+int cplan_rt_site_hook(Compiler *c, int ci) { return cplan_rt_site_stmt(c, ci, "inherited_hook"); }
+int cplan_rt_site_body(Compiler *c, int ci) {
+  if (cplan_rt_site_stmt(c, ci, "rt_body_call") < 0) return -1;
+  for (int s = 1; s < c->nscopes; s++)
+    if (c->scopes[s].class_id == ci && c->scopes[s].is_cmethod && c->scopes[s].def_node >= 0 &&
+        nt_int(c->nt, c->scopes[s].def_node, "rt_body_def", 0)) return s;
+  return -1;
 }
 int cplan_class_new(const Compiler *c, int id, int *site) {
   int kind = elab_builder_kind(c, id), ci = -1;
   if (kind == EB_RT_SITE || kind == EB_RT_BARE) ci = comp_class_of_def(c, elab_builder_site(c, id));
   if (site) *site = ci;
   if (ci < 0) return CNEW_NONE;
-  return c->classes[ci].rt_site ? CNEW_RUNTIME : kind == EB_RT_SITE ? CNEW_STATIC : CNEW_REFUSED;
+  return cplan_rt_site(c, ci) ? CNEW_RUNTIME : kind == EB_RT_SITE ? CNEW_STATIC : CNEW_REFUSED;
 }
 
 /* Does a builtin answer `name` on program class ci (main for -1): one on
@@ -10216,19 +10273,28 @@ static const char *feature_limit(Compiler *c, int id, int *stop, int *lx, char *
       why = "Continuation is not supported by AOT compilation: multi-shot full-stack "
             "capture has no flat-C analogue. Fiber covers the single-shot cases "
             "(see docs/limitations.md)";
-    /* `Class.new(parent) { ... }`: the class graph is baked at compile time. A
-       bare `Class.new` with no argument and no block is just an Object factory
-       and is left to the normal path. The message names the form written. */
-    else if (is_class_new(rcn, name) && cplan_argc(nt, id) > 0)
+    /* `Class.new(parent)` evaluated more than once, of a superclass whose
+       instances are laid out as a builtin's: one static class cannot be
+       the class each evaluation makes. */
+    else if (is_class_new(rcn, name) && (cplan_argc(nt, id) > 0 || cplan_class_new(c, id, NULL) == CNEW_REFUSED))
       why = "Class.new(parent) is not supported by AOT compilation: the class "
             "graph, ancestor chain, and method/ivar layout are baked at compile time. "
             "Declare the class with `class ... end` instead (see docs/limitations.md)";
+    /* a block the desugar leaves on the call (desugar_class_new_blocks):
+       one that is not a block literal (`Class.new(&b)`, `Class.new(&:x)`),
+       or a literal whose body it cannot lift into a class body */
     else if (is_class_new(rcn, name) && nt_ref(nt, id, "block") >= 0)
       why = "Class.new with a block is not supported here by AOT compilation: the class "
             "graph, ancestor chain, and method/ivar layout are baked at compile time. "
             "Declare the class with `class ... end` instead (see docs/limitations.md)";
     if (why) *lx = LX_NAME;
   }
+  /* `k.method(:new).call` on a class value that may be one made at run
+     time: a Method of a class value binds no function, and its run would
+     turn the refusal of such a class into a NoMethodError */
+  if (!why && is_method_object_name(name) && cplan_rt_class_method_object(c, id, recv))
+    why = "a Method of a class made at run time (`Class.new` evaluated more than once) is not "
+          "supported; call the method on the class instead (see docs/limitations.md)";
 
   /* Structural mutation of a class through an explicit receiver: the same
      declarations INSIDE a `class` body (where they are receiverless) work.

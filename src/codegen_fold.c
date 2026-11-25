@@ -4823,7 +4823,10 @@ int emit_each_with_index_chain(Compiler *c, int id, Buf *b) {
     buf_printf(b, "sp_int lv_%s = _t%d; ", rename_local(io), tidx);
   }
   else {
-    buf_printf(b, "sp_%sArray *lv_%s = sp_%sArray_new(); ", pk, rename_local(pairo), pk);
+    /* (the pair is the step's own, held by nothing else while the step's
+       head poll, the block's allocations and its pushes may collect) */
+    buf_printf(b, "sp_%sArray *lv_%s = sp_%sArray_new(); SP_GC_ROOT(lv_%s); ",
+               pk, rename_local(pairo), pk, rename_local(pairo));
     if (elem_t == TY_INT) {
       buf_printf(b, "sp_IntArray_push_nilable(lv_%s, sp_%sArray_oget(_t%d, _t%d)); sp_IntArray_push(lv_%s, _t%d); ",
                  rename_local(pairo), k, ta, ti, rename_local(pairo), tidx);

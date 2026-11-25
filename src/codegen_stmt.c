@@ -25837,9 +25837,19 @@ void emit_str_concat_handle(Compiler *c, const char *sref, int argc, const int *
   if (concat_args_code_late(c, argc, argv)) {
     buf_printf(b, " sp_RbVal _t%d[%d];", base, argc);
     for (int a = 0; a < argc; a++) {
-      buf_printf(b, " _t%d[%d] = ", base, a);
-      emit_boxed(c, argv[a], b);
-      buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d[%d]);", base, a);
+      /* (the statements an argument puts ahead of itself, a block's
+         `xs.map { ... }.join`, run here, after the arguments before it, as
+         the operand order has them (#11506), not ahead of the concat) */
+      Buf op, vb;
+      memset(&op, 0, sizeof op);
+      memset(&vb, 0, sizeof vb);
+      Buf *sv_pre = g_pre;
+      g_pre = &op;
+      emit_boxed(c, argv[a], &vb);
+      g_pre = sv_pre;
+      if (op.p) buf_puts(b, op.p);
+      buf_printf(b, " _t%d[%d] = %s; SP_GC_ROOT_RBVAL(_t%d[%d]);", base, a, vb.p ? vb.p : "sp_box_nil()", base, a);
+      free(op.p); free(vb.p);
     }
     free(rt.p);
     buf_printf(b, " sp_strbuf_concat_list(%s, %d, _t%d, 0);\n", sref, argc, base);
@@ -25875,9 +25885,17 @@ void emit_str_concat_handle(Compiler *c, const char *sref, int argc, const int *
       free(op.p); free(hb.p);
     }
     else {
-      buf_printf(b, " sp_String *_t%d = SP_STR_HDL(", base + a);
-      emit_str_append_arg(c, argv[a], rt.p, b);
-      buf_puts(b, ");");
+      /* (and so do a conversion's, as a handle read's do above) */
+      Buf op, vb;
+      memset(&op, 0, sizeof op);
+      memset(&vb, 0, sizeof vb);
+      Buf *sv_pre = g_pre;
+      g_pre = &op;
+      emit_str_append_arg(c, argv[a], rt.p, &vb);
+      g_pre = sv_pre;
+      if (op.p) buf_puts(b, op.p);
+      buf_printf(b, " sp_String *_t%d = SP_STR_HDL(%s);", base + a, vb.p ? vb.p : "NULL");
+      free(op.p); free(vb.p);
     }
     int v = argv[a];
     while (v >= 0 && nt_kind(c->nt, v) == NK_ParenthesesNode) {

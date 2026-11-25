@@ -378,14 +378,6 @@ int emit_call_identity_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
              rt == TY_STR_RANGE || rt == TY_TIME || rt == TY_FLOAT) {
       buf_puts(b, "sp_rbval_hash_key("); emit_boxed(c, recv, b); buf_puts(b, ")");
     }
-    /* a value-type user object is a by-value struct with no pointer identity;
-       hash its bytes for a stable id (`o.object_id == o.object_id`) (#2283) */
-    else if (ty_is_object(rt) && comp_ty_value_obj(c, rt)) {
-      int t = ++g_tmp;
-      buf_printf(b, "({ sp_%s _t%d = ", c->classes[ty_object_class(rt)].c_name, t);
-      emit_expr(c, recv, b);
-      buf_printf(b, "; sp_bytes_hash(&_t%d, sizeof _t%d); })", t, t);
-    }
     else { buf_puts(b, "((sp_int)(uintptr_t)("); emit_expr(c, recv, b); buf_puts(b, "))"); }
     return 1;
   }
@@ -398,22 +390,10 @@ int emit_call_identity_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
      identity, the address the runtime's key takes for an object without a hash of its own; never through
      sp_obj_hash_hook, which comes back into the program's hash, the method holding the super */
   if (is_hash_name(name) && recv >= 0 && argc == 0 && ty_is_object(rt) && cplan_builtin_call(c, id) &&
-      !comp_ty_value_obj(c, rt) && !c->classes[ty_object_class(rt)].is_struct) {
+      !c->classes[ty_object_class(rt)].is_struct) {
     buf_puts(b, node_is_oint(c, id) ? "sp_oint_of((sp_int)(uintptr_t)(" : "((sp_int)(uintptr_t)(");
     emit_expr(c, recv, b);
     buf_puts(b, "))");
-    return 1;
-  }
-  /* #hash on a value-type user object with no user #hash: a by-value struct has
-     no pointer identity, so hash its bytes for a stable, content-based id that
-     agrees across calls (#2284). */
-  if (sp_streq(name, "hash") && recv >= 0 && argc == 0 && ty_is_object(rt) &&
-      comp_ty_value_obj(c, rt) && !call_answers(c, id, ty_object_class(rt), name, 0, NULL) &&
-      !c->classes[ty_object_class(rt)].is_struct) {
-    int t = ++g_tmp;
-    buf_printf(b, "({ sp_%s _t%d = ", c->classes[ty_object_class(rt)].c_name, t);
-    emit_expr(c, recv, b);
-    buf_printf(b, "; sp_bytes_hash(&_t%d, sizeof _t%d); })", t, t);
     return 1;
   }
   /* a boxed receiver that may be an object whose class answers hash with a

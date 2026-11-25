@@ -26229,7 +26229,9 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
              chain runs for its effect and the hoisted argument is the value */
           int setter_val = argc == 1 && call_is_setter_assign(nt, id);
           if (setter_val) buf_puts(b, "({ (void)");
+          size_t chain_at = b->len;
           buf_printf(b, "({ (_t%d.tag == SP_TAG_CLASS) ? (", tv);
+          size_t arms_at = b->len;
           nd_stamp(id, ND_SWITCH);
           char rcls[48];
           snprintf(rcls, sizeof rcls, "sp_unbox_class(_t%d)", tv);
@@ -26315,8 +26317,36 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
           if (is_name_reader(nm) && class_name_reader_arity_msg(c, id, nm, argc, argv, am, sizeof am))
             snprintf(cls_raise, sizeof cls_raise, "(sp_raise_cls(\"ArgumentError\", \"%s\"), sp_box_nil())", am);
           else snprintf(cls_raise, sizeof cls_raise, "%s", raise);
-          buf_printf(b, "%s) : %s; })", cls_raise,
-                     (eb2.p && eb2.p[0]) ? eb2.p : raise);
+          /* The class arms read the receiver alone when the call passes
+             nothing: one function every site with the same arms calls
+             (pd_hoist, #12511), as a poly dispatch's is. A value of a
+             run-time const_get or constantize reaches every class of the
+             program, and a copy of the arms per site made the C grow with
+             the sites times the classes. */
+          char *hcall = NULL;
+          if (hoisted_n == 0 && blk_tmp < 0 && !setter_val && argc == 0) {
+            int tr = ++g_tmp;
+            Buf cp; memset(&cp, 0, sizeof cp);
+            buf_printf(&cp, "sp_RbVal _t%d; switch (0) { default: _t%d = ", tr, tr);
+            buf_puts(&cp, b->p + arms_at);
+            buf_printf(&cp, "%s; break; ", cls_raise);
+            TyKind pty = TY_POLY;
+            if (pd_hoist(c, id, nm, &cp, 0, tr, TY_POLY, &tv, &pty, 1)) {
+              /* the site is `sp_RbVal _t<tr> = sp_pd_<fn>(_t<tv>);`: its call */
+              char *eq = cp.p ? strstr(cp.p, " = ") : NULL;
+              char *semi = eq ? strrchr(eq, ';') : NULL;
+              if (eq && semi) hcall = strndup(eq + 3, (size_t)(semi - eq - 3));
+            }
+            free(cp.p);
+          }
+          if (hcall) {
+            b->len = chain_at; b->p[chain_at] = 0;
+            buf_printf(b, "({ (_t%d.tag == SP_TAG_CLASS) ? %s : %s; })", tv, hcall,
+                       (eb2.p && eb2.p[0]) ? eb2.p : raise);
+            free(hcall);
+          }
+          else buf_printf(b, "%s) : %s; })", cls_raise,
+                          (eb2.p && eb2.p[0]) ? eb2.p : raise);
           if (setter_val) { buf_puts(b, "; "); emit_boxed(c, argv[0], b); buf_puts(b, "; })"); }
           if (g_plan_check) pa_end(c, pa_frame, cplan_poly_cmeth(c, id));
           free(eb2.p);

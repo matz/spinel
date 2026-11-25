@@ -1,5 +1,6 @@
 # Three Object.const_get calls with a run-time name share one function of
-# the arms over the program's constants (#12511), not a copy at each site.
+# the arms over the program's constants (#12511), not a copy at each site,
+# and the class method called on each answer shares one dispatch function.
 class K1; def self.v = 1; end
 class K2; def self.v = 2; end
 class K3; def self.v = 3; end

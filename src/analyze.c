@@ -47956,6 +47956,7 @@ static void lower_builtin_supers(Compiler *c) {
     /* (an Object method that reads no block is handed none: the block a bare super passes reaches no one, and
        passing it would make the method a yielding one, spliced at each call) */
     lower_super_call(c, id, s, mn, 0, args, blk, kfn, path == BSP_PREPENDED || (path == BSP_OBJECT && !object_method_reads_block(mn)));
+    c->scopes[st->idx].super_lowered = 1;
     int m0 = nt->count;
     /* (a module prepended into a builtin keeps its splat as it was: the length dispatch's poly arm for a boxed self
        calls the prepended method itself, which loses builtin_only: a stack overflow for Hash#fetch) */

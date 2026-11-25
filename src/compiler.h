@@ -610,6 +610,10 @@ typedef struct {
                                    (inc_super_behind), which a Method made
                                    of it does not hold: it holds what the
                                    super reaches */
+  unsigned char super_lowered;  /* a super of the method became the
+                                   builtin's own call on self
+                                   (lower_builtin_supers): it calls super
+                                   still, where no super node is left */
   unsigned char mixin_plain_late;   /* a plain copy an include or prepend
                                        that may not run made where its
                                        guard could not tell the copy's

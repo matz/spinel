@@ -3266,7 +3266,8 @@ static unsigned udrc_gen, udrc_shape; static int udrc_nscopes = -1, udrc_nclasse
    in a reopened String#itself answered nil and a reopened Integer's did not
    compile, where the builtin was right for a boxed value. A program class's
    own method with super (comp_plain_class) does not count: no builtin value
-   reaches it, and its super works. */
+   reaches it, and its super works. A super lowered to the builtin's own call
+   on self (Scope.super_lowered) is that super still. */
 int user_defines_calls_super(Compiler *c, const char *name) {
   if (!name) return 0;
   for (int s = 0; s < c->nscopes; s++) {
@@ -3276,7 +3277,7 @@ int user_defines_calls_super(Compiler *c, const char *name) {
     for (int ck = 0; ck < CORE_N && k >= 0 && !core; ck++) core = comp_core_class(c, ck) == k;
     if (k >= 0 && k < c->nclasses && !core && !comp_class_is_module(c, &c->classes[k]) && comp_plain_class(c, k))
       continue;
-    if (scope_calls_super(c, s)) return 1;
+    if (sc->super_lowered || scope_calls_super(c, s)) return 1;
   }
   return 0;
 }

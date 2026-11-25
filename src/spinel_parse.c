@@ -328,6 +328,7 @@ static int flatten(pm_node_t *node);
 static void sp_lower_rows_note(const pm_node_t *node, int id);   /* SPINEL_LOWER_ROWS_CHECK */
 static int sp_load_call(const pm_call_node_t *n);
 static int sp_pm_name_is(const pm_parser_t *parser, pm_constant_id_t id, const char *word);
+static int sp_name_buf(const pm_parser_t *pp, pm_constant_id_t id, char *buf, size_t cap);
 static int sp_flatten_call_as(int id, pm_call_node_t *n);
 static int sp_graph_site_take(int id, const pm_node_t *call);   /* 1: its path is computed when it runs */
 /* inline RBS (inline_rbs.c): the facts of a node, written by flatten */
@@ -819,18 +820,30 @@ static size_t sp_const_accessor(const pm_node_t *n, const char **s) {
    other block argument: a binary operator (`&:+`) is left to the
    arithmetic reduce/inject lowering, the rest to the analysis. */
 static size_t sp_quoted_recv_sym(const pm_node_t *n, const char **s);
+/* The node a block argument's proc is read from: `:name.to_proc`'s Symbol,
+   as the proc is the one `&:name` passes, and any other node itself. */
+static const pm_node_t *sp_sym_proc_source(const pm_node_t *e) {
+  if (!e || PM_NODE_TYPE(e) != PM_CALL_NODE) return e;
+  const pm_call_node_t *c = (const pm_call_node_t *)e;
+  char name[8];
+  if (!c->receiver || PM_NODE_TYPE(c->receiver) != PM_SYMBOL_NODE || c->arguments || c->block ||
+      !sp_name_buf(g_parser, c->name, name, sizeof name) || !is_to_proc_name(name)) return e;
+  return c->receiver;
+}
 /* The name of the Symbol block argument `node` flatten makes a block of
    (its length, the bytes in *s); 0 for any other node */
 static size_t sp_sym_proc_name(const pm_node_t *node, const char **s) {
   if (PM_NODE_TYPE(node) != PM_BLOCK_ARGUMENT_NODE) return 0;
-  /* the Symbol written in parentheses (`&(:to_s)`) or quoted (`&:"to_s"`)
-     is the same block: left a BlockArgumentNode, a Symbol took no block */
+  /* the Symbol written in parentheses (`&(:to_s)`), quoted (`&:"to_s"`)
+     or as its proc (`&:to_s.to_proc`) is the same block: left a
+     BlockArgumentNode, a Symbol took no block */
   const pm_node_t *e = ((const pm_block_argument_node_t *)node)->expression;
   while (e && PM_NODE_TYPE(e) == PM_PARENTHESES_NODE) {
     const pm_node_t *pb = ((const pm_parentheses_node_t *)e)->body;
     if (!pb || PM_NODE_TYPE(pb) != PM_STATEMENTS_NODE || ((const pm_statements_node_t *)pb)->body.size != 1) { e = NULL; break; }
     e = ((const pm_statements_node_t *)pb)->body.nodes[0];
   }
+  e = sp_sym_proc_source(e);
   size_t n = sp_plain_sym(e, s);
   if (!n) n = sp_quoted_recv_sym(e, s);
   int word = n > 0;

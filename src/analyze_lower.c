@@ -192,6 +192,8 @@ static const Lowering lowerings[LW__COUNT] = {
     name_anon_block_kwrest_at, name_anon_block_kwrest_left, "an anonymous `**` block parameter" },
   [LW_SYM_TO_PROC_CALL] = { "desugar_sym_to_proc_call", 0, { NK_CallNode },
     desugar_sym_to_proc_call_at, NULL, "`:m.to_proc.call(r, a)`" },
+  [LW_SYM_TO_PROC_LAMBDA] = { "desugar_sym_to_proc_lambda", 0, { NK_CallNode },
+    desugar_sym_to_proc_lambda_at, NULL, "`:m.to_proc`" },
   [LW_ENUM_CHAIN_SHAPES] = { "desugar_enum_chain_shapes", 0, { NK_CallNode },
     desugar_enum_chain_shapes_at, NULL, "an iterator chain: each_char.with_index, each.with_object, ..", NULL, 2 },
   [LW_BUILTIN_KWSPLAT] = { "desugar_builtin_kwsplat", 0, { NK_CallNode },

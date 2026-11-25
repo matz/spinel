@@ -6117,6 +6117,10 @@ int desugar_public_send_recv(Compiler *c) {
        find's, called by the name it was written with, as a written detect */
     { const LowerRow *al = nt_int(nt, id, "enum_copy", -1) >= 0 ? lower_row_named(LR_ENUM_NAME, namebuf) : NULL;
       if (al) { nt_node_set_str(nt, id, "orig_name", namebuf); nt_node_set_str(nt, id, "name", al->target); } }
+    /* a send a pass wrote after desugar_builtins (a Symbol's proc,
+       `x.public_send(:special?, *r)`) takes the name's shared copy, as a
+       dynamic send's arm does; a written one has its site's already */
+    enum_send_copy_take(nt, id);
     if (is_pub && !m_is_send) {
       nt_node_set_str(nt, id, "vis_enforce", "1");
       nt_set_ignore_visibility(nt, id, 0);
@@ -16776,7 +16780,7 @@ int desugar_define_method_proc_arg_at(Compiler *c, LowerCtx *lc, int stmt) {
     nt_node_set_arr(nt, nt_ref(nt, vis, "arguments"), "arguments", &name, 1);
     return 1;
   }
-  int lit = dmp_literal_block(nt, src), copy = 0;
+  int lit = dmp_literal_block(nt, src), copy = 0, from = src;
   if (lit < 0 && nt_kind(nt, src) == NK_LocalVariableReadNode &&
       nt_int(nt, src, "depth", 0) == 0) {
     const char *ln = nt_str(nt, src, "name");
@@ -16787,12 +16791,16 @@ int desugar_define_method_proc_arg_at(Compiler *c, LowerCtx *lc, int stmt) {
       if (dmp_local_writes(nt, body, 0, ln) != 1) break;
       int cv = nt_clone_subtree(nt, nt_ref(nt, w, "value"));
       lit = dmp_literal_block(nt, cv);
+      from = nt_ref(nt, w, "value");   /* (a clone takes no marks) */
       if (lit >= 0 && lit != cv) nt_node_reset(nt, cv, "NilNode");
       copy = 1;
       break;
     }
   }
   if (lit < 0) return 0;
+  /* a Symbol's proc's method takes its receiver as the first argument
+     (method_is_sym_proc) */
+  if (nt_int(nt, from, "stp_arity", 0)) nt_node_set_int(nt, id, "sym_proc_method", 1);
   if (!copy && lit != src) nt_node_reset(nt, src, "NilNode");
   if (blk >= 0) nt_node_reset(nt, blk, "NilNode");
   if (nt_kind(nt, lit) == NK_LambdaNode) {
@@ -16911,6 +16919,7 @@ int desugar_define_method_keywords_at(Compiler *c, LowerCtx *lc, int stmt) {
   nt_node_set_ref(nt, def, "parameters", pn);
   nt_node_set_ref(nt, def, "body", nt_ref(nt, blk, "body"));
   nt_node_set_ref(nt, def, "receiver", dself);
+  if (nt_int(nt, id, "sym_proc_method", 0)) nt_node_set_int(nt, def, "sym_proc_method", 1);
   method_body_next_to_return(nt, nt_ref(nt, def, "body"));
   nt_rekey_scope(nt, def, blk, def);   /* the block's own variables are the def's: plain names */
   if (id != bv[i]) {

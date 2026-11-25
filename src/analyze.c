@@ -10644,11 +10644,49 @@ static int enum_chain_kept(Compiler *c, LowerCtx *lc, int id) {
   int recv = nt_ref(nt, up.parent, "receiver");
   return !(recv == up.node && nt_paren_single(nt, recv) == id);
 }
+/* The block a Symbol's lambda `lam` (sym_proc_lambda, its block `lblk`)
+   passes as a block argument, `m(&:op.to_proc)`, which is the block
+   `&:op` passes: `{ |a| a.op }`, or `{ |a, b| a.op(b) }` for a binary
+   operator but =~, === and the equalities, the call the lambda's own. A
+   proc's |recv, *args| would take apart the Array element a yield hands
+   it, which a block's |a, b| does as `&:op`'s does. */
+static int sym_proc_yield_block(Compiler *c, int lam, int lblk) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int body = nt_ref(nt, lblk, "body"), bn = 0;
+  const int *bv = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
+  const char *name = bn == 1 ? nt_str(nt, bv[0], "name") : NULL;
+  if (!name) return lblk;
+  int two = is_binary_operator(name) && !is_eql_or_equal(name) && !is_case_eq(name) &&
+            !is_match_operator(name);
+  int req[2], rd[2];
+  for (int k = 0; k <= two; k++) {
+    char pn[64];
+    snprintf(pn, sizeof pn, "__svp_%c_%s", k ? 'b' : 'a', comp_node_tag(c, lam));
+    req[k] = nt_new_node(nt, "RequiredParameterNode");
+    nt_node_set_str(nt, req[k], "name", pn);
+    rd[k] = nt_new_node(nt, "LocalVariableReadNode");
+    nt_node_set_str(nt, rd[k], "name", pn);
+  }
+  int params = nt_new_node(nt, "ParametersNode");
+  nt_node_set_arr(nt, params, "requireds", req, two + 1);
+  int bparams = nt_new_node(nt, "BlockParametersNode");
+  nt_node_set_ref(nt, bparams, "parameters", params);
+  /* (the lambda's call, its receiver and arguments the block's) */
+  int call = bv[0], args = -1;
+  nt_node_set_ref(nt, call, "receiver", rd[0]);
+  if (two) {
+    args = nt_new_node(nt, "ArgumentsNode");
+    nt_node_set_arr(nt, args, "arguments", &rd[1], 1);
+  }
+  nt_node_set_ref(nt, call, "arguments", args);
+  nt_node_set_ref(nt, lblk, "parameters", bparams);
+  comp_grow_node_arrays(c);
+  return lblk;
+}
 /* The shapes of an iterator chain at the call id, lowered to the forms the
    Enumerable and Enumerator routes read: each_char.with_index, the
    each.with_object family and the rest. A run sees shapes an earlier one
-   made (map(&:sym.to_proc): to_proc becomes a lambda first, then the lambda
-   block attaches), so the row runs twice. */
+   made, so the row runs twice. */
 static void enum_chain_node(Compiler *c, LowerCtx *lc, int id) {
   NodeTable *nt = (NodeTable *)c->nt;
   const char *nm = nt_str(nt, id, "name");
@@ -10696,9 +10734,9 @@ static void enum_chain_node(Compiler *c, LowerCtx *lc, int id) {
     else hash_merge_fold(c, id, 0);
     return;
   }
-  /* `m(&lambda_literal)`: attach the lambda's block directly as m's block
-     (the :sym.to_proc desugar below produces exactly this shape when the
-     proc is passed inline as a block argument). */
+  /* `m(&lambda_literal)`: attach the lambda's block directly as m's block.
+     A Symbol's lambda (`m(&:+.to_proc)`) passes the block `&:+` passes
+     (sym_proc_yield_block), as the parser spells `&:word.to_proc`. */
   {
     int blkref = nt_call_block_arg(nt, id);
     if (blkref >= 0) {
@@ -10709,7 +10747,7 @@ static void enum_chain_node(Compiler *c, LowerCtx *lc, int id) {
         if (lname && (is_proc_constructor(lname)) &&
             nt_ref(nt, bex, "receiver") < 0 && lblk >= 0 &&
             nt_kind(nt, lblk) == NK_BlockNode)
-          nt_node_set_ref(nt, id, "block", lblk);
+          nt_node_set_ref(nt, id, "block", nt_int(nt, bex, "stp_arity", 0) ? sym_proc_yield_block(c, bex, lblk) : lblk);
       }
     }
   }
@@ -10749,65 +10787,6 @@ static void enum_chain_node(Compiler *c, LowerCtx *lc, int id) {
         nt_node_set_ref(nt, id, "arguments", -1);
         nt_node_set_ref(nt, id, "block", -1);
       }
-      return;
-    }
-  }
-  /* :sym.to_proc (explicit): rewrite to the equivalent lambda -- one
-     parameter calling the method, or two for the binary operators
-     (:+.to_proc adds its two arguments). The &:sym shorthand stays on its
-     own (textual) path. */
-  if (sp_streq(nm, "to_proc") && recv >= 0 &&
-      nt_kind(nt, recv) == NK_SymbolNode && nt_ref(nt, id, "block") < 0) {
-    const char *sym = nt_str(nt, recv, "value");
-    if (sym && *sym) {
-      static const char *const binops[] = {
-        "+", "-", "*", "/", "%", "**", "==", "!=", "<", "<=", ">", ">=",
-        "<=>", "<<", ">>", "&", "|", "^", NULL };
-      int is_binop = 0;
-      for (int j = 0; binops[j]; j++) if (sp_streq(sym, binops[j])) { is_binop = 1; break; }
-      char pa[64], pb[64];
-      snprintf(pa, sizeof pa, "__stp_a_%s", comp_node_tag(c, id));
-      snprintf(pb, sizeof pb, "__stp_b_%s", comp_node_tag(c, id));
-      int kpa = nt_new_node(nt, "RequiredParameterNode");
-      nt_node_set_str(nt, kpa, "name", pa);
-      int preq[2] = { kpa, -1 };
-      int npar = 1;
-      if (is_binop) {
-        int kpb = nt_new_node(nt, "RequiredParameterNode");
-        nt_node_set_str(nt, kpb, "name", pb);
-        preq[1] = kpb; npar = 2;
-      }
-      int params = nt_new_node(nt, "ParametersNode");
-      nt_node_set_arr(nt, params, "requireds", preq, npar);
-      int bparams = nt_new_node(nt, "BlockParametersNode");
-      nt_node_set_ref(nt, bparams, "parameters", params);
-      int ra = nt_new_node(nt, "LocalVariableReadNode");
-      nt_node_set_str(nt, ra, "name", pa);
-      int call = nt_new_node(nt, "CallNode");
-      nt_node_set_str(nt, call, "name", sym);
-      nt_node_set_ref(nt, call, "receiver", ra);
-      enum_send_copy_take(nt, call);   /* `:tally.to_proc`'s call: the builtin's copy */
-      if (is_binop) {
-        int rb2 = nt_new_node(nt, "LocalVariableReadNode");
-        nt_node_set_str(nt, rb2, "name", pb);
-        int cargs = nt_new_node(nt, "ArgumentsNode");
-        nt_node_set_arr(nt, cargs, "arguments", &rb2, 1);
-        nt_node_set_ref(nt, call, "arguments", cargs);
-      }
-      int blkbody = nt_new_node(nt, "StatementsNode");
-      nt_node_set_arr(nt, blkbody, "body", &call, 1);
-      int blk = nt_new_node(nt, "BlockNode");
-      nt_node_set_ref(nt, blk, "parameters", bparams);
-      nt_node_set_ref(nt, blk, "body", blkbody);
-      nt_node_set_str(nt, id, "name", "lambda");
-      nt_node_set_ref(nt, id, "receiver", -1);
-      nt_node_set_ref(nt, id, "arguments", -1);
-      nt_node_set_ref(nt, id, "block", blk);
-      /* Symbol#to_proc always reports arity -2 (a required receiver plus
-         optional arguments), whatever the underlying method takes; the
-         synthesized lambda's own parameter count would say 1 or 2 (#3053) */
-      nt_node_set_int(nt, id, "stp_arity", 1);
-      comp_grow_node_arrays(c);
       return;
     }
   }
@@ -11026,6 +11005,87 @@ int desugar_enum_chain_shapes_at(Compiler *c, LowerCtx *lc, int id) {
   unsigned long edits = c->nt->edits;
   enum_chain_node(c, lc, id);
   return c->nt->edits != edits;
+}
+/* Symbol#to_proc's lambda, `|recv, *args| recv.name(name_arg, *args)`,
+   made of the to_proc call `id`: arity -2, and nameless parameters, which
+   CRuby reports as [[:req], [:rest]]. A literal's is the call of its name,
+   refused for a private or protected method as public_send refuses it; a
+   Symbol local's sends `public_send(sym, *args)` (desugar_symbol_var_block_arg). */
+static void sym_proc_lambda(Compiler *c, int id, const char *name, int name_arg) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  char pa[64], rn[64];
+  snprintf(pa, sizeof pa, "__svp_a_%s", comp_node_tag(c, id));
+  snprintf(rn, sizeof rn, "__svp_r_%s", comp_node_tag(c, id));
+  int req = nt_new_node(nt, "RequiredParameterNode");
+  nt_node_set_str(nt, req, "name", pa);
+  nt_node_set_int(nt, req, "desugared_param", DPN_NAMELESS);
+  int rp = nt_new_node(nt, "RestParameterNode");
+  nt_node_set_str(nt, rp, "name", rn);
+  nt_node_set_int(nt, rp, "desugared_param", DPN_NAMELESS);
+  int params = nt_new_node(nt, "ParametersNode");
+  nt_node_set_arr(nt, params, "requireds", &req, 1);
+  nt_node_set_ref(nt, params, "rest", rp);
+  int bparams = nt_new_node(nt, "BlockParametersNode");
+  nt_node_set_ref(nt, bparams, "parameters", params);
+  int ra = nt_new_node(nt, "LocalVariableReadNode");
+  nt_node_set_str(nt, ra, "name", pa);
+  int rr = nt_new_node(nt, "LocalVariableReadNode");
+  nt_node_set_str(nt, rr, "name", rn);
+  int sa[2], nsa = 0;
+  if (name_arg >= 0) sa[nsa++] = name_arg;
+  sa[nsa] = nt_new_node(nt, "SplatNode");
+  nt_node_set_ref(nt, sa[nsa++], "expression", rr);
+  int args = nt_new_node(nt, "ArgumentsNode");
+  nt_node_set_arr(nt, args, "arguments", sa, nsa);
+  int call = nt_new_node(nt, "CallNode");
+  nt_node_set_str(nt, call, "name", name);
+  nt_node_set_ref(nt, call, "receiver", ra);
+  nt_node_set_ref(nt, call, "arguments", args);
+  if (name_arg < 0) {
+    /* a literal's call is its name's, made after desugar_builtins: it takes
+       the name's shared Enumerable copy, as a written call has its site's */
+    enum_send_copy_take(nt, call);
+    if (!is_send_family(name)) {
+      nt_node_set_str(nt, call, "vis_enforce", "1");
+      nt_set_ignore_visibility(nt, call, 0);
+    }
+    /* A block or keywords the proc is called with are not handed on: a
+       named method's call keeps the count the literal's lambda took
+       before, |recv|, so it answers as it did (emit_lambda_arity_check).
+       A binary operator (the equalities and =~ among them) and !~ ignore
+       a block, so the call is the one without it, counted by the method
+       as CRuby counts it */
+    if (!is_binary_operator(name) && !is_match_operator(name))
+      nt_node_set_int(nt, id, "stp_block_arity", 1);
+  }
+  int body = nt_new_node(nt, "StatementsNode");
+  nt_node_set_arr(nt, body, "body", &call, 1);
+  int blk = nt_new_node(nt, "BlockNode");
+  nt_node_set_ref(nt, blk, "parameters", bparams);
+  nt_node_set_ref(nt, blk, "body", body);
+  nt_node_set_str(nt, id, "name", "lambda");
+  nt_node_set_ref(nt, id, "receiver", -1);
+  nt_node_set_ref(nt, id, "arguments", -1);
+  nt_node_set_ref(nt, id, "block", blk);
+  nt_node_set_int(nt, id, "stp_arity", 1);   /* Symbol#to_proc is -2 (#3053) */
+  comp_grow_node_arrays(c);
+}
+
+/* `:sym.to_proc` (explicit) is Symbol#to_proc's lambda, made ahead of the
+   builtins/ rewrites a written call of the name takes (Comparable's onto a
+   concrete receiver). The parser spells `m(&:sym.to_proc)` as `m(&:sym)`,
+   whose own path it takes. */
+int desugar_sym_to_proc_lambda_at(Compiler *c, LowerCtx *lc, int id) {
+  (void)lc;
+  const NodeTable *nt = c->nt;
+  const char *nm = nt_str(nt, id, "name");
+  int recv = nt_ref(nt, id, "receiver");
+  if (!is_to_proc_name(nm) || recv < 0 || nt_kind(nt, recv) != NK_SymbolNode ||
+      nt_ref(nt, id, "block") >= 0 || nt_ref(nt, id, "arguments") >= 0) return 0;
+  const char *sym = nt_str(nt, recv, "value");
+  if (!sym || !*sym) return 0;
+  sym_proc_lambda(c, id, sym, -1);
+  return 1;
 }
 
 /* How many positional arguments the program passes a `method(:sym)` value
@@ -12759,6 +12819,69 @@ static void sv_block_local(NodeTable *nt, const int *parent, int id, const char 
   }
 }
 
+/* The name Proc#parameters reports for parameter p, as proc_param_sym
+   picks it: the name the program wrote (nt_wname), `anon` for one with
+   none, CRuby's text for an anonymous one the desugar named, and nothing
+   for a nameless slot or for a parameter the desugar made that is none */
+static void proc_param_sym_intern(Compiler *c, int p, const char *anon) {
+  const char *w;
+  switch (desugared_param_name(c->nt, p, &w)) {
+  case DPN_NONE: case DPN_NAMELESS: return;
+  case DPN_WRITTEN: comp_sym_intern(c, w); return;
+  default:
+    if (nt_str(c->nt, p, "name")) comp_sym_intern(c, nt_wname(c->nt, p));
+    else if (anon) comp_sym_intern(c, anon);
+  }
+}
+
+/* Proc#parameters reports param kinds (:req/:opt/:rest/:keyreq/:key/
+   :keyrest/:block) and names as symbols; the ones proc literal id reports
+   are interned before the codegen prologue sizes the table. Anonymous
+   rest/kwrest/block use the CRuby placeholder names (:*, :**, :&); numbered
+   params report :_1.._9. A desugar that makes a lambda later
+   (desugar_symbol_var_block_arg) interns its own. */
+static void proc_param_syms_intern(Compiler *c, int id) {
+  comp_sym_intern(c, "req");
+  comp_sym_intern(c, "opt");
+  int pn = a_proc_params_node(c, id);
+  if (pn < 0) {
+    for (int k = 1; k <= 9; k++) {
+      char nbuf[4];
+      snprintf(nbuf, sizeof nbuf, "_%d", k);
+      comp_sym_intern(c, nbuf);
+    }
+    return;
+  }
+  /* the names the program wrote (nt_wname), not the slots' */
+  static const char *const lists[] = { "requireds", "optionals", "posts" };
+  for (int q = 0; q < 3; q++) {
+    int ln = 0; const int *lv = nt_arr(c->nt, pn, lists[q], &ln);
+    for (int k = 0; k < ln; k++) proc_param_sym_intern(c, lv[k], NULL);
+  }
+  int rest = nt_ref(c->nt, pn, "rest");
+  if (rest >= 0) {
+    comp_sym_intern(c, "rest");
+    proc_param_sym_intern(c, rest, "*");
+  }
+  int kn = 0; const int *kws = nt_arr(c->nt, pn, "keywords", &kn);
+  for (int k = 0; k < kn; k++) {
+    NodeKind kk = nt_kind(c->nt, kws[k]);
+    comp_sym_intern(c,
+                    (kk == NK_OptionalKeywordParameterNode) ? "key" : "keyreq");
+    proc_param_sym_intern(c, kws[k], NULL);
+  }
+  int kwrest = nt_ref(c->nt, pn, "keyword_rest");
+  if (kwrest >= 0) {
+    comp_sym_intern(c, "keyrest");
+    proc_param_sym_intern(c, kwrest, "**");
+  }
+  int bpar = nt_ref(c->nt, pn, "block");
+  if (bpar >= 0) {
+    comp_sym_intern(c, "block");
+    proc_param_sym_intern(c, bpar, "&");
+  }
+}
+
 static int desugar_symbol_var_block_arg(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int *parent = NULL;
@@ -12784,6 +12907,8 @@ static int desugar_symbol_var_block_arg(Compiler *c) {
     }
     if (ex < 0 || !nt_type(nt, ex)) continue;
     if (is_toproc && sym_to_proc_bind_recv(c, id, ex)) { changed = 1; continue; }
+    /* (a literal's lambda is its own lowering's, made before this pass:
+       desugar_sym_to_proc_lambda_at) */
     if (nt_kind(nt, ex) != NK_LocalVariableReadNode) continue;
     if (infer_type(c, ex) != TY_SYMBOL) continue;
     /* `m(&sym_var.to_proc)` is `m(&sym_var)`: the block argument takes the
@@ -12804,36 +12929,6 @@ static int desugar_symbol_var_block_arg(Compiler *c) {
         continue;
       }
     }
-    /* as many parameters as the call passes its block: the first receives
-       the send, the rest are its arguments */
-    int npar = is_toproc ? 1 : sym_block_values(c, id);
-    if (npar < 1) npar = 1;
-    char pn[8][64];
-    int preq[8], sa[9];
-    int base = nt->count;
-    for (int k = 0; k < npar; k++) {
-      snprintf(pn[k], sizeof pn[k], "__svp_%c_%s", 'a' + k, comp_node_tag(c, id));
-      preq[k] = nt_new_node(nt, "RequiredParameterNode");
-      nt_node_set_str(nt, preq[k], "name", pn[k]);
-    }
-    int params = nt_new_node(nt, "ParametersNode");
-    nt_node_set_arr(nt, params, "requireds", preq, npar);
-    /* Symbol#to_proc's lambda is `|recv, *args|`, the rest being the
-       method's arguments: with the one parameter it had,
-       `c.to_proc.call("ab", 6)` raised ArgumentError where CRuby centers.
-       A block takes the count sym_block_values gives, one parameter each. */
-    char rn[64];
-    int nsa = npar;
-    if (is_toproc) {
-      snprintf(rn, sizeof rn, "__svp_r_%s", comp_node_tag(c, id));
-      int rp = nt_new_node(nt, "RestParameterNode");
-      nt_node_set_str(nt, rp, "name", rn);
-      nt_node_set_ref(nt, params, "rest", rp);
-    }
-    int bparams = nt_new_node(nt, "BlockParametersNode");
-    nt_node_set_ref(nt, bparams, "parameters", params);
-    int ra = nt_new_node(nt, "LocalVariableReadNode");
-    nt_node_set_str(nt, ra, "name", pn[0]);
     /* `&s` and `s.to_proc` take the Symbol s holds where they are evaluated:
        the block sends the local __svs_N bound there, not s, which a later
        write -- after the call, or between two of its yields -- would have
@@ -12848,37 +12943,59 @@ static int desugar_symbol_var_block_arg(Compiler *c) {
                    nt_kind(nt, pc) == NK_DefinedNode));
     char vn[64];
     snprintf(vn, sizeof vn, "__svs_%s", comp_node_tag(c, id));
-    int bind = -1;
+    int base = nt->count;
+    int bind = -1, sym = ex;
     if (bound) {
       bind = nt_new_node(nt, "LocalVariableWriteNode");
       nt_node_set_str(nt, bind, "name", vn);
       nt_node_set_ref(nt, bind, "value", ex);
-      sa[0] = nt_new_node(nt, "LocalVariableReadNode");
-      nt_node_set_str(nt, sa[0], "name", vn);
+      sym = nt_new_node(nt, "LocalVariableReadNode");
+      nt_node_set_str(nt, sym, "name", vn);
     }
-    else sa[0] = ex;
-    int sargs = nt_new_node(nt, "ArgumentsNode");
-    for (int k = 1; k < npar; k++) {
-      sa[k] = nt_new_node(nt, "LocalVariableReadNode");
-      nt_node_set_str(nt, sa[k], "name", pn[k]);
-    }
+    /* as many parameters as the call passes its block: the first receives
+       the send, the rest are its arguments; a lambda's are `|recv, *args|` */
+    int npar = is_toproc ? 1 : sym_block_values(c, id);
+    if (npar < 1) npar = 1;
+    char pn[8][64];
     if (is_toproc) {
-      int rr = nt_new_node(nt, "LocalVariableReadNode");
-      nt_node_set_str(nt, rr, "name", rn);
-      sa[nsa] = nt_new_node(nt, "SplatNode");
-      nt_node_set_ref(nt, sa[nsa++], "expression", rr);
+      /* sym.to_proc -> lambda { |x, *r| x.public_send(sym, *r) } */
+      sym_proc_lambda(c, id, "public_send", sym);
+      snprintf(pn[0], sizeof pn[0], "__svp_a_%s", comp_node_tag(c, id));
     }
-    nt_node_set_arr(nt, sargs, "arguments", sa, nsa);
-    int call = nt_new_node(nt, "CallNode");
-    nt_node_set_str(nt, call, "name", "send");
-    nt_node_set_ref(nt, call, "receiver", ra);
-    nt_node_set_ref(nt, call, "arguments", sargs);
-    int blkbody = nt_new_node(nt, "StatementsNode");
-    nt_node_set_arr(nt, blkbody, "body", &call, 1);
-    int blk2 = nt_new_node(nt, "BlockNode");
-    nt_node_set_ref(nt, blk2, "parameters", bparams);
-    nt_node_set_ref(nt, blk2, "body", blkbody);
-    comp_grow_node_arrays(c);
+    else {
+      int preq[8], sa[8];
+      for (int k = 0; k < npar; k++) {
+        snprintf(pn[k], sizeof pn[k], "__svp_%c_%s", 'a' + k, comp_node_tag(c, id));
+        preq[k] = nt_new_node(nt, "RequiredParameterNode");
+        nt_node_set_str(nt, preq[k], "name", pn[k]);
+      }
+      int params = nt_new_node(nt, "ParametersNode");
+      nt_node_set_arr(nt, params, "requireds", preq, npar);
+      int bparams = nt_new_node(nt, "BlockParametersNode");
+      nt_node_set_ref(nt, bparams, "parameters", params);
+      int ra = nt_new_node(nt, "LocalVariableReadNode");
+      nt_node_set_str(nt, ra, "name", pn[0]);
+      sa[0] = sym;
+      for (int k = 1; k < npar; k++) {
+        sa[k] = nt_new_node(nt, "LocalVariableReadNode");
+        nt_node_set_str(nt, sa[k], "name", pn[k]);
+      }
+      int sargs = nt_new_node(nt, "ArgumentsNode");
+      nt_node_set_arr(nt, sargs, "arguments", sa, npar);
+      int call = nt_new_node(nt, "CallNode");
+      /* a Symbol's proc sends as public_send does, given as a block too: a
+         private or protected method is refused */
+      nt_node_set_str(nt, call, "name", "public_send");
+      nt_node_set_ref(nt, call, "receiver", ra);
+      nt_node_set_ref(nt, call, "arguments", sargs);
+      int blkbody = nt_new_node(nt, "StatementsNode");
+      nt_node_set_arr(nt, blkbody, "body", &call, 1);
+      int blk2 = nt_new_node(nt, "BlockNode");
+      nt_node_set_ref(nt, blk2, "parameters", bparams);
+      nt_node_set_ref(nt, blk2, "body", blkbody);
+      nt_node_set_ref(nt, id, "block", blk2);
+      comp_grow_node_arrays(c);
+    }
     /* new nodes belong to the call's scope */
     for (int j = base; j < nt->count; j++) c->nscope[j] = c->nscope[id];
     Scope *sc2 = comp_scope_of(c, id);
@@ -12887,20 +13004,14 @@ static int desugar_symbol_var_block_arg(Compiler *c) {
       if (lv) lv->is_block_param = 1;
     }
     if (sc2 && is_toproc) {
+      char rn[64];
+      snprintf(rn, sizeof rn, "__svp_r_%s", comp_node_tag(c, id));
       LocalVar *lv = scope_local_intern(sc2, rn);
       if (lv) lv->is_block_param = 1;
     }
-    if (is_toproc) {
-      /* sym_var.to_proc -> lambda { |x, *r| x.send(sym_var, *r) } */
-      nt_node_set_str(nt, id, "name", "lambda");
-      nt_node_set_ref(nt, id, "receiver", -1);
-      nt_node_set_ref(nt, id, "block", blk2);
-      nt_node_set_int(nt, id, "stp_arity", 1);   /* Symbol#to_proc is -2 (#3053) */
-    }
-    else
-      nt_node_set_ref(nt, id, "block", blk2);
+    if (is_toproc) proc_param_syms_intern(c, id);
     if (!bound) { changed = 1; continue; }
-    /* (__svs_N = s; m { |x| x.send(__svs_N) }): the node keeps its id, line
+    /* (__svs_N = s; m { |x| x.public_send(__svs_N) }): the node keeps its id, line
        and file as the parentheses, as desugar_poly_symbol_block_arg's */
     int nc = bo_shallow_copy(nt, id);
     int stmts = nt_new_node(nt, "StatementsNode");
@@ -43758,16 +43869,6 @@ int splat_local_sure_lit(Compiler *c, int x) {
   }
   return reads == seen ? lit : -1;
 }
-/* A binary operator takes its one operand whatever the receiver, and no
-   block moves that count. A splat into one -- `a.==(*rest)`, an operator
-   arm of `public_send(*args, &block)` -- passed the array itself as the
-   operand: == answered false and + raised TypeError. */
-static int splat_binary_operator(const char *name) {
-  static const char *const ops[] = { "==", "!=", "eql?", "equal?", "===", "=~", "<=>",
-    "<", "<=", ">", ">=", "+", "-", "*", "/", "%", "**", "<<", ">>", "&", "|", "^", NULL };
-  for (int i = 0; ops[i]; i++) if (sp_streq(name, ops[i])) return 1;
-  return 0;
-}
 /* How many arguments the builtin requires, for a splat whose length only the
    run time knows and that splat_dispatch_on_length declined (a block, `&.`, a
    user method of the name that cannot take every count). Only the required
@@ -43800,7 +43901,7 @@ static int splat_builtin_arity(const char *name) {
   };
   for (int i = 0; tab[i].name; i++)
     if (sp_streq(name, tab[i].name)) return tab[i].arity;
-  if (splat_binary_operator(name)) return 1;
+  if (is_binary_operator(name)) return 1;
   return -1;
 }
 /* Whether some user method of this name could not take `n` positional
@@ -43919,7 +44020,7 @@ static int splat_builtin_range(const char *name, int *lo, int *hi, int *variadic
       if (variadic) *variadic = tab[i].variadic;
       return 1;
     }
-  if (splat_binary_operator(name)) {
+  if (is_binary_operator(name)) {
     if (lo) *lo = 1;
     if (hi) *hi = 1;
     if (variadic) *variadic = 0;
@@ -44675,7 +44776,7 @@ static int splat_dispatch_on_length(Compiler *c, int id, const int *argv, int ar
     int bx = nt_ref(nt, blk, "expression");
     if (bx >= 0 && nt_kind(nt, bx) == NK_LocalVariableReadNode) fwd_blk = 1;
   }
-  if (blk >= 0 && !subst && !vob && !splat_binary_operator(cnm) && !odyn && !fwd_blk && ctor < 0) return 0;
+  if (blk >= 0 && !subst && !vob && !is_binary_operator(cnm) && !odyn && !fwd_blk && ctor < 0) return 0;
   if (blk >= 0 && subst) lo = 1;
   /* insert(i, *objs) spreads at run time (emit_array_splat_mutator) */
   if (sp_streq(cnm, "insert") && sp_at > 0) return 0;
@@ -45019,6 +45120,10 @@ static int splat_dispatch_on_length(Compiler *c, int id, const int *argv, int ar
       nt_node_set_int(nt, cl, "enum_copy", cp);
       if (nt_int(nt, cp, "enum_site", -1) == id) nt_node_set_int(nt, cp, "enum_site", cl);
     }
+    /* any other arm is a call written after desugar_builtins, and takes
+       the name's shared copy, as a dynamic send's arm does: without it a
+       Symbol's proc, `x.public_send(:tally, *r)`, found no tally */
+    enum_send_copy_take(nt, cl);
     if (krow >= 0) kwb_clone_split(c, cl, comp_scope_of(c, id));
     if (orow >= 0) kwb_optional_split(c, cl, orow, comp_scope_of(c, id));
     if (vob_test && m == 0) {
@@ -45206,7 +45311,7 @@ void expand_static_splat_args(Compiler *c, int from, int count) {
       int sblk = nt_ref(nt, id, "block");
       int fwd_sblk = sblk >= 0 && nt_kind(nt, sblk) == NK_BlockNode && nt_int(nt, sblk, "fwd_yield", 0) &&
                      !sp_streq(cnm, "sub") && !sp_streq(cnm, "sub!") && !sp_streq(cnm, "gsub") && !sp_streq(cnm, "gsub!");
-      n = sblk >= 0 && !splat_binary_operator(cnm) && !fwd_sblk ? -1 : splat_builtin_arity(cnm);
+      n = sblk >= 0 && !is_binary_operator(cnm) && !fwd_sblk ? -1 : splat_builtin_arity(cnm);
       /* slice has no arity to expand to on purpose (see the table). Leave the
          splat as it stands rather than refusing the program: Hash#slice's
          emitter iterates it, which is what the call means. */
@@ -50559,6 +50664,11 @@ static void an_phase_desugar_register(Compiler *c) {
   AN_STEP_V("split_kwsplat_calls", split_kwsplat_calls(c, 0));   /* r.sum(**kw) -> kw.empty? ? r.sum : r.sum(**kw) */
   if (getenv("SPINEL_LOWER_ROWS_CHECK")) lower_rows_check(c->nt);   /* both shapes of a split call (the table mode sees the parse only) */
   AN_STEP_V("desugar_builtins", desugar_builtins(c));
+  /* `:m.to_proc.call(r, a)` -> `r.m(a)`, before the to_proc rewrite turns
+     the receiver into the lambda (#3097); both ahead of the builtins/
+     rewrites below, which their calls take as written ones do */
+  lower_run(c, &lc, LW_SYM_TO_PROC_CALL);
+  lower_run(c, &lc, LW_SYM_TO_PROC_LAMBDA);
   lower_run(c, &lc, LW_STORED_ENUM_EACH);
   /* ahead of the per-call-site copies below, which its calls take as a
      written `v + x` does */
@@ -50574,9 +50684,6 @@ static void an_phase_desugar_register(Compiler *c) {
   lower_run(c, &lc, LW_DEFINE_METHOD_CAPTURES);     /* class body local a define_method reads -> a global */
   lower_run(c, &lc, LW_DEFINE_METHOD_KEYWORDS);     /* define_method(:m) { |k: 1| } -> def m(k: 1) */
   lower_run(c, &lc, LW_NAME_ANON_BLOCK_KWREST);
-  /* `:m.to_proc.call(r, a)` -> `r.m(a)`, before the to_proc rewrite below
-     turns the receiver into a fixed-arity lambda (#3097). */
-  lower_run(c, &lc, LW_SYM_TO_PROC_CALL);
   lower_run(c, &lc, LW_ENUM_CHAIN_SHAPES);   /* each_char.with_index / each.with_object; twice: the second sees the shapes the first made */
   lower_run(c, &lc, LW_BUILTIN_KWSPLAT);
   lower_run(c, &lc, LW_RIGHTWARD_PATTERN);          /* `x => pat` -> one-arm case/in */
@@ -51537,55 +51644,8 @@ static void an_phase_pre_fixpoint(Compiler *c) {
     }
   }
   free(par);
-  /* Proc#parameters reports param kinds (:req/:opt/:rest/:keyreq/:key/
-     :keyrest/:block) and names as symbols; intern them now so they land in
-     the table before the codegen prologue. Anonymous rest/kwrest/block use
-     the CRuby placeholder names (:*, :**, :&); numbered params report
-     :_1.._9. */
-  for (int id = 0; id < c->nt->count; id++) {
-    if (!is_proc_create(c, id)) continue;
-    comp_sym_intern(c, "req");
-    comp_sym_intern(c, "opt");
-    int pn = a_proc_params_node(c, id);
-    if (pn < 0) {
-      for (int k = 1; k <= 9; k++) {
-        char nbuf[4];
-        snprintf(nbuf, sizeof nbuf, "_%d", k);
-        comp_sym_intern(c, nbuf);
-      }
-      continue;
-    }
-    /* the names the program wrote (nt_wname), not the slots' */
-    static const char *const lists[] = { "requireds", "optionals", "posts" };
-    for (int q = 0; q < 3; q++) {
-      int ln = 0; const int *lv = nt_arr(c->nt, pn, lists[q], &ln);
-      for (int k = 0; k < ln; k++) if (nt_str(c->nt, lv[k], "name")) comp_sym_intern(c, nt_wname(c->nt, lv[k]));
-    }
-    int rest = nt_ref(c->nt, pn, "rest");
-    if (rest >= 0) {
-      comp_sym_intern(c, "rest");
-      comp_sym_intern(c, nt_str(c->nt, rest, "name") ? nt_wname(c->nt, rest) : "*");
-    }
-    int kn = 0; const int *kws = nt_arr(c->nt, pn, "keywords", &kn);
-    for (int k = 0; k < kn; k++) {
-      NodeKind kk = nt_kind(c->nt, kws[k]);
-      comp_sym_intern(c,
-                      (kk == NK_OptionalKeywordParameterNode) ? "key" : "keyreq");
-      if (nt_str(c->nt, kws[k], "name")) comp_sym_intern(c, nt_wname(c->nt, kws[k]));
-    }
-    int kwrest = nt_ref(c->nt, pn, "keyword_rest");
-    if (kwrest >= 0) {
-      comp_sym_intern(c, "keyrest");
-      const char *w;
-      comp_sym_intern(c, desugared_param_name(c->nt, kwrest, &w) == DPN_WRITTEN ? w
-                         : nt_str(c->nt, kwrest, "name") ? nt_wname(c->nt, kwrest) : "**");
-    }
-    int bpar = nt_ref(c->nt, pn, "block");
-    if (bpar >= 0) {
-      comp_sym_intern(c, "block");
-      comp_sym_intern(c, nt_str(c->nt, bpar, "name") ? nt_wname(c->nt, bpar) : "&");
-    }
-  }
+  for (int id = 0; id < c->nt->count; id++)
+    if (is_proc_create(c, id)) proc_param_syms_intern(c, id);
 
   /* Apply --rbs advisory seeds (pin param/return/ivar types) before the
      fixpoint so the inference passes observe the pinned types from round one.
@@ -52154,7 +52214,7 @@ static void an_phase_infer_fixpoint(Compiler *c) {
     ch |= AN_PASS("desugar_sym_to_proc_call", lower_row_once(c, LW_SYM_TO_PROC_CALL));         /* :m.to_proc.call(r, a) -> r.m(a) */
     ch |= AN_PASS("desugar_reduce_method_symbol", desugar_reduce_method_symbol(c));     /* reduce(:gcd) -> reduce { |a,x| a.gcd(x) } */
     ch |= AN_PASS("desugar_unused_block_arg", desugar_unused_block_arg(c));         /* a.size(&b) -> a.size */
-    ch |= AN_PASS("desugar_symbol_var_block_arg", desugar_symbol_var_block_arg(c));     /* m(&sym_var) -> m { |x| x.send(sym_var) } */
+    ch |= AN_PASS("desugar_symbol_var_block_arg", desugar_symbol_var_block_arg(c));     /* m(&sym_var) -> m { |x| x.public_send(sym_var) }; sym.to_proc -> a lambda */
     ch |= AN_PASS("desugar_poly_symbol_block_arg", desugar_poly_symbol_block_arg(c));    /* m(&poly) -> each literal Symbol its own proc */
     ch |= AN_PASS("desugar_kernel_method_block_arg", desugar_kernel_method_block_arg(c));  /* m(&method(:Integer)) -> m { |x| Integer(x) } */
     ch |= AN_PASS("desugar_empty_block_body", desugar_empty_block_body(c));         /* m { } -> m { nil } */

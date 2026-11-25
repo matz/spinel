@@ -10959,6 +10959,17 @@ static void emit_lambda_arity_check(Compiler *c, int create, int lreq, int max, 
   const NodeTable *nt = c->nt;
   char kw[256];
   arity_kw_suffix(c, proc_params_node(c, create), kw, sizeof kw);
+  /* A block or keywords reaching a literal Symbol's proc are not handed
+     on: the call keeps the count that proc took before it took further
+     arguments (sym_proc_lambda), so it answers as it did. The keywords are
+     the call site's flag, which the prologue read into _sp_kwpos for such
+     a lambda (emit_proc_literal_here) */
+  int bn = (int)nt_int(nt, create, "stp_block_arity", 0);
+  if (bn) {
+    buf_puts(pb, "    if (_sp_proc_blk || _sp_kwpos == 2) {\n      _sp_proc_blk = NULL;\n      ");
+    emit_arity_check(pb, "argc", bn, bn, "");
+    buf_puts(pb, ";\n    }\n");
+  }
   if (nt_int(nt, create, "stp_arity", 0) && lreq == 1)
     buf_puts(pb, "    if (argc == 0) sp_raise_cls(\"ArgumentError\", \"no receiver given\");\n");
   buf_puts(pb, "    ");
@@ -11630,7 +11641,7 @@ else if (orecv >= 0 && onm) {
     as_lead_only = !nopts && !nposts && !has_kwp &&
                    (rn < 0 ? arity > 1 : arity >= 1 && nt_kind(nt, rn) == NK_ImplicitRestNode); }
   int as_gate = !is_lambda && !as_lead_only && block_auto_splats(arity, nopts, nposts, has_rest_marker);
-  if (!has_kwp && as_gate)
+  if (!has_kwp && (as_gate || nt_int(nt, create, "stp_block_arity", 0)))
     buf_puts(pb, "    int _sp_kwpos = _sp_proc_kwpos; _sp_proc_kwpos = 0;\n");
   else if (!has_kwp) buf_puts(pb, "    _sp_proc_kwpos = 0;\n");
   /* `arity` counts numbered parameters when the block carries a

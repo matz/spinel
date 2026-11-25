@@ -772,6 +772,18 @@ int is_match_operator(const char *n) {
   return sp_streq(n, "=~") || sp_streq(n, "!~");
 }
 
+/* The operators taking one operand: the comparisons, equalities, matches,
+   arithmetic and bitwise ones. Their count is one whatever the receiver,
+   and no block moves it: a splat into one (`a.==(*rest)`, an operator arm
+   of `public_send(*args, &block)`) that passed the Array itself as the
+   operand answered false for == and raised TypeError for +. */
+int is_binary_operator(const char *n) {
+  static const char *const ops[] = { "==", "!=", "eql?", "equal?", "===", "=~", "<=>",
+    "<", "<=", ">", ">=", "+", "-", "*", "/", "%", "**", "<<", ">>", "&", "|", "^", NULL };
+  for (int i = 0; ops[i]; i++) if (sp_streq(n, ops[i])) return 1;
+  return 0;
+}
+
 /* Object's methods that hand their receiver on to code over its members or
    bind it into a wrapper: to_enum / enum_for walk each, instance_eval /
    instance_exec run a block with it as self, method / public_method bind a
@@ -2081,8 +2093,10 @@ int is_file_string_const(const char *n) {
 }
 /* ARGV, whose Strings CRuby freezes */
 int is_argv_const(const char *n) { return n && sp_streq(n, "ARGV"); }
+/* to_proc alone */
+int is_to_proc_name(const char *n) { return n && sp_streq(n, "to_proc"); }
 /* to_proc curry: a proc made of a Symbol, a Method or a proc */
-int is_proc_conversion_name(const char *n) { return n && (sp_streq(n, "to_proc") || sp_streq(n, "curry")); }
+int is_proc_conversion_name(const char *n) { return is_to_proc_name(n) || (n && sp_streq(n, "curry")); }
 /* `[]` alone: an element read, not its write */
 int is_aref_name(const char *n) { return n && sp_streq(n, "[]"); }
 /* `<<` alone: String#<<'s append, a chain's link */

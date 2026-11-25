@@ -1,0 +1,19 @@
+:sub_own
+:sub_own
+Sub::Box
+Sub::Box
+:mixed
+70
+:sub_own
+7
+7
+true
+false
+false
+true
+false
+true
+"uninitialized constant Reg::OWN"
+"uninitialized constant Other::OWN"
+"uninitialized constant Reg::Box"
+"uninitialized constant Sub::MIX"

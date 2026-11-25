@@ -3150,28 +3150,93 @@ static int cg_class_below(Compiler *c, int k, int a) {
    its ancestors and the modules they include hold, the top-level ones, and
    the paths whose first segment is one of those -- what CRuby's lookup
    reaches. A `self` receiver (SELF) can be a subclass at run time, in an
-   inherited class method: each class below RK adds its own. A receiver
+   inherited class method: each class below RK adds its own, and answers
+   them only when self is it or a class below it. With BSTART and BK, the
+   classes below RK that hold candidate i themselves or through a module
+   they include are (*bk)[(*bstart)[i] .. (*bstart)[i + 1]), the deepest
+   first, and *ATRK[i] says whether RK's own lookup reaches it. A receiver
    not known here takes them all. Answers the count. */
-static int cg_cands_for_recv(Compiler *c, const CgCands *cs, int rk, int self, char ***out) {
+typedef struct { int *v; int n, cap; } CgBelow;
+
+static void cg_below_add(CgBelow *l, int k) {
+  if (l->n == l->cap) {
+    l->cap = l->cap ? l->cap * 2 : 2;
+    l->v = realloc(l->v, sizeof(int) * (size_t)l->cap);
+    if (!l->v) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  }
+  l->v[l->n++] = k;
+}
+
+static int cg_cand_owned(Compiler *c, const CgCand *cd, const unsigned char *vis) {
+  for (int j = 0; j < cd->nown; j++) {
+    int o = cd->own[j];
+    if (o < 0 || (o < c->nclasses && vis[o])) return 1;
+  }
+  return 0;
+}
+
+static int cg_class_depth(Compiler *c, int k) {
+  int d = 0;
+  for (; k >= 0 && k < c->nclasses && d < 64; k = c->classes[k].parent) d++;
+  return d;
+}
+
+static int cg_cands_for_recv(Compiler *c, const CgCands *cs, int rk, int self, char ***out,
+                             int **bstart, int **bk, unsigned char **atrk) {
   *out = malloc(sizeof(char *) * (size_t)(cs->n > 0 ? cs->n : 1));
   if (!*out) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   int known = rk >= 0 || rk == CG_OBJECT;
   unsigned char *vis = calloc((size_t)c->nclasses + 1, 1);
   unsigned char *ok = calloc((size_t)cs->n + 1, 1);
-  if (!vis || !ok) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  unsigned char *ok0 = calloc((size_t)cs->n + 1, 1);
+  CgBelow *bl = calloc((size_t)cs->n + 1, sizeof(CgBelow));
+  if (!vis || !ok || !ok0 || !bl) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   if (rk >= 0) cg_mark_ancestors(c, rk, vis, 0);
-  for (int k = 0; self && rk >= 0 && k < c->nclasses; k++)
-    if (k != rk && cg_class_below(c, k, rk)) cg_mark_ancestors(c, k, vis, 0);
-  int n = 0;
   for (int i = 0; i < cs->n; i++) {
     const CgCand *cd = &cs->v[i];
     if (cd->path) continue;
-    ok[i] = !known;
-    for (int j = 0; j < cd->nown && !ok[i]; j++) {
-      int o = cd->own[j];
-      ok[i] = o < 0 || (o < c->nclasses && vis[o]);
+    ok0[i] = ok[i] = !known || cg_cand_owned(c, cd, vis);
+  }
+  /* the classes below RK, the deepest first: a constant a class holds
+     again below another answers by the nearer one */
+  int nbelow = 0, maxd = 0;
+  int *below = malloc(sizeof(int) * (size_t)(c->nclasses + 1));
+  int *depth = malloc(sizeof(int) * (size_t)(c->nclasses + 1));
+  if (!below || !depth) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int k = 0; self && rk >= 0 && k < c->nclasses; k++)
+    if (k != rk && cg_class_below(c, k, rk)) {
+      depth[k] = cg_class_depth(c, k);
+      if (depth[k] > maxd) maxd = depth[k];
+      below[nbelow++] = k;
+    }
+  /* by depth, stable: a pass per depth over the few levels a tree has */
+  int *sorted = malloc(sizeof(int) * (size_t)(nbelow + 1));
+  if (!sorted) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  int ns = 0;
+  for (int d = maxd; d > 0 && ns < nbelow; d--)
+    for (int a = 0; a < nbelow; a++) if (depth[below[a]] == d) sorted[ns++] = below[a];
+  free(below);
+  free(depth);
+  below = sorted;
+  for (int a = 0; a < nbelow; a++) {
+    int k = below[a];
+    /* K itself and the modules it includes, not what its superclass holds */
+    memset(vis, 0, (size_t)c->nclasses + 1);
+    vis[k] = 1;
+    for (int m = 0; m < c->classes[k].nincluded_mods; m++)
+      cg_mark_ancestors(c, c->classes[k].included_mods[m], vis, 1);
+    for (int i = 0; i < cs->n; i++) {
+      const CgCand *cd = &cs->v[i];
+      if (cd->path) continue;
+      int held = 0;
+      for (int j = 0; j < cd->nown && !held; j++) held = cd->own[j] >= 0 && cd->own[j] < c->nclasses && vis[cd->own[j]];
+      if (!held) continue;
+      ok[i] = 1;
+      cg_below_add(&bl[i], k);
     }
   }
+  free(below);
+  int n = 0, nb = 0;
   for (int i = 0; i < cs->n; i++) {
     const CgCand *cd = &cs->v[i];
     if (cd->path && known) {
@@ -3181,10 +3246,30 @@ static int cg_cands_for_recv(Compiler *c, const CgCands *cs, int rk, int self, c
       ok[i] = h >= 0 && ok[h];
     }
     else if (cd->path) ok[i] = 1;
-    if (ok[i]) (*out)[n++] = cd->name;
+    if (ok[i]) { (*out)[n++] = cd->name; if (!cd->path) nb += bl[i].n; }
   }
+  if (bstart && bk && atrk) {
+    *bstart = malloc(sizeof(int) * (size_t)(n + 1));
+    *bk = malloc(sizeof(int) * (size_t)(nb > 0 ? nb : 1));
+    *atrk = malloc((size_t)(n + 1));
+    if (!*bstart || !*bk || !*atrk) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    int o = 0, f = 0;
+    for (int i = 0; i < cs->n; i++) {
+      if (!ok[i]) continue;
+      /* a path is read segment by segment from RK's lookup, as before */
+      (*atrk)[o] = cs->v[i].path || ok0[i];
+      (*bstart)[o++] = f;
+      if (cs->v[i].path) continue;
+      const CgBelow *l = &bl[i];
+      for (int a = 0; a < l->n; a++) (*bk)[f++] = l->v[a];
+    }
+    (*bstart)[o] = f;
+  }
+  for (int i = 0; i < cs->n; i++) free(bl[i].v);
+  free(bl);
   free(vis);
   free(ok);
+  free(ok0);
   return n;
 }
 
@@ -3298,6 +3383,8 @@ int desugar_dynamic_const_get_arms(Compiler *c) {
   cg_cands_collect(c, n0, &cs);
   CgShares sh = {0};
   char **cand = NULL;
+  int *bstart = NULL, *bk = NULL;
+  unsigned char *atrk = NULL;
   for (int id = 0; id < n0; id++) {
     if (nt_kind(nt, id) != NK_CallNode) continue;
     const char *nm = nt_str(nt, id, "name");
@@ -3333,7 +3420,10 @@ int desugar_dynamic_const_get_arms(Compiler *c) {
     }
     int rest[8]; for (int k = 0; k < nrest; k++) rest[k] = argv[k + 1];
     free(cand);
-    int ncand = cg_cands_for_recv(c, &cs, const_get_recv_class(c, id, recv), nt_kind(nt, recv) == NK_SelfNode, &cand);
+    free(bstart); free(bk); free(atrk); bstart = bk = NULL; atrk = NULL;
+    int ncand = cg_cands_for_recv(c, &cs, const_get_recv_class(c, id, recv), nt_kind(nt, recv) == NK_SelfNode, &cand,
+                                  &bstart, &bk, &atrk);
+    int nbase = ncand;   /* the const_defined? names appended below have no class to be under */
     /* const_defined? also knows the builtin top-level names (String,
        Comparable, ARGV), each arm answered at compile time */
     int rci = const_get_recv_class(c, id, recv);
@@ -3375,23 +3465,62 @@ int desugar_dynamic_const_get_arms(Compiler *c) {
     }
     if (ncand == 0) continue;
     int base = nt->count;
-    int *arms = (int *)malloc(sizeof(int) * (size_t)ncand);
+    int nextra = bstart ? bstart[nbase] : 0;
+    int *arms = (int *)malloc(sizeof(int) * (size_t)(ncand + nextra));
     if (!arms) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
     int narm = 0;
     for (int k = 0; k < ncand; k++) {
-      int sym = nt_new_node(nt, "SymbolNode"); if (sym < 0) break;
-      nt_node_set_str(nt, sym, "value", cand[k]);
-      int na = nt_new_node(nt, "ArgumentsNode"); if (na < 0) break;
-      int aa[9]; aa[0] = sym; for (int j = 0; j < nrest; j++) aa[j + 1] = rest[j];
-      nt_node_set_arr(nt, na, "arguments", aa, nrest + 1);
-      int call = nt_new_node(nt, "CallNode"); if (call < 0) break;
-      nt_node_set_ref(nt, call, "receiver", recv);
-      nt_node_set_str(nt, call, "name", nm);
-      nt_set_ignore_visibility(nt, call, nt_ignore_visibility(nt, id));
-      nt_node_set_int(nt, call, "dyn_arm", 1);
-      nt_node_set_ref(nt, call, "arguments", na);
-      nt_node_set_ref(nt, call, "block", -1);
-      arms[narm++] = call;
+      /* a constant a class below the receiver's holds (cg_cands_for_recv):
+         an arm on that class, the deepest first, answering when self is it
+         or below it (`dyn_arm_below`, as text: an int array of a node is
+         its children to every walk); then the arm on self, when the
+         receiver's own lookup reaches the name. Past the arms below, self
+         looks the name up as its class does, and that arm is on the class:
+         on self, a literal name some class below writes is not resolved
+         here (const_get_recv_class_for) */
+      int nb = bstart && k < nbase ? bstart[k + 1] - bstart[k] : 0;
+      int own = !bstart || k >= nbase || atrk[k];
+      int rkc = nb > 0 ? const_get_recv_class(c, id, recv) : -1;
+      int q = 0, fail = 0;
+      for (; q < nb + own && !fail; q++) {
+        int on = -1;
+        if (q < nb || (rkc >= 0 && class_ruby_name(c, rkc))) {
+          const char *qn = class_ruby_name(c, q < nb ? bk[bstart[k] + q] : rkc);
+          if (!qn) continue;
+          /* `::A::B`, read from the top whatever scope the call is in */
+          for (const char *sg = qn; ; ) {
+            const char *e = strstr(sg, "::");
+            char seg[256];
+            snprintf(seg, sizeof seg, "%.*s", (int)(e ? (size_t)(e - sg) : strlen(sg)), sg);
+            int cp = nt_new_node(nt, "ConstantPathNode"); if (cp < 0) { fail = 1; break; }
+            nt_node_set_str(nt, cp, "name", seg);
+            nt_node_set_ref(nt, cp, "parent", on);
+            on = cp;
+            if (!e) break;
+            sg = e + 2;
+          }
+          if (fail) break;
+        }
+        int sym = nt_new_node(nt, "SymbolNode"); if (sym < 0) { fail = 1; break; }
+        nt_node_set_str(nt, sym, "value", cand[k]);
+        int na = nt_new_node(nt, "ArgumentsNode"); if (na < 0) { fail = 1; break; }
+        int aa[9]; aa[0] = sym; for (int j = 0; j < nrest; j++) aa[j + 1] = rest[j];
+        nt_node_set_arr(nt, na, "arguments", aa, nrest + 1);
+        int call = nt_new_node(nt, "CallNode"); if (call < 0) { fail = 1; break; }
+        nt_node_set_ref(nt, call, "receiver", on >= 0 ? on : recv);
+        nt_node_set_str(nt, call, "name", nm);
+        nt_set_ignore_visibility(nt, call, nt_ignore_visibility(nt, id));
+        nt_node_set_int(nt, call, "dyn_arm", 1);
+        nt_node_set_ref(nt, call, "arguments", na);
+        nt_node_set_ref(nt, call, "block", -1);
+        if (q < nb) {
+          char bt[32];
+          snprintf(bt, sizeof bt, "%d", bk[bstart[k] + q]);
+          nt_node_set_str(nt, call, "dyn_arm_below", bt);
+        }
+        arms[narm++] = call;
+      }
+      if (fail) break;
     }
     nt_node_set_arr(nt, id, stash, arms, narm);
     free(arms);
@@ -3406,6 +3535,7 @@ int desugar_dynamic_const_get_arms(Compiler *c) {
     changed = 1;
   }
   free(cand);
+  free(bstart); free(bk); free(atrk);
   for (int i = 0; i < sh.n; i++) free(sh.v[i].arms);
   free(sh.v);
   cg_cands_free(&cs);

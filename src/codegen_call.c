@@ -5459,7 +5459,7 @@ static int emit_dynamic_const_get(Compiler *c, int id, Buf *b) {
      the function they become takes it as its second parameter and every
      site on `self` with the same arms calls that function */
   Buf sv = {0, 0, 0};
-  if (!def && rvk == NK_SelfNode && rk >= 0 && repr_of(c, recv).as_ty == TY_CLASS) emit_expr(c, recv, &sv);
+  if (rvk == NK_SelfNode && rk >= 0 && repr_of(c, recv).as_ty == TY_CLASS) emit_expr(c, recv, &sv);
   int ts = -1;
   if (sv.p) { ts = ++g_tmp; buf_printf(b, "sp_Class _t%d = %s; ", ts, sv.p); }
   const char *memo = sv.p ? "\001self" : rvk == NK_SelfNode ? NULL : (rnm ? rnm : "");
@@ -5481,6 +5481,9 @@ static int emit_dynamic_const_get(Compiler *c, int id, Buf *b) {
     int aac = 0; const int *aav = aargs >= 0 ? nt_arr(nt, aargs, "arguments", &aac) : NULL;
     const char *nm = (aac >= 1 && aav) ? nt_str(nt, aav[0], "value") : NULL;
     if (!nm) continue;
+    /* an arm on a class below self's answers when self is it: with no
+       class value of self to test, the arm is left out */
+    if (ts < 0 && nt_str(nt, arm, "dyn_arm_below")) continue;
     /* Emit the arm under a silent probe, as the dynamic send does: an arm
        that resolves by type but not by codegen longjmps out and is dropped;
        its preludes replay inside its own branch. */
@@ -5491,7 +5494,11 @@ static int emit_dynamic_const_get(Compiler *c, int id, Buf *b) {
     else { ok = 0; arm_probe_dropped(&ap); }
     arm_probe_end(c, &ap, ok);
     if (ok) {
-      buf_printf(b, "if (strcmp(_t%d, \"", t); emit_c_escaped(b, nm); buf_puts(b, "\") == 0) { ");
+      buf_printf(b, "if (strcmp(_t%d, \"", t); emit_c_escaped(b, nm); buf_puts(b, "\") == 0");
+      /* an arm on a class below self's answers when self is it or below it */
+      const char *bl = ts >= 0 ? nt_str(nt, arm, "dyn_arm_below") : NULL;
+      if (bl) buf_printf(b, " && sp_class_le(_t%d, (sp_Class){%d})", ts, atoi(bl));
+      buf_puts(b, ") { ");
       if (pre.p && pre.len) buf_puts(b, pre.p);
       buf_printf(b, "_t%d = ", tr);
       if (def && at == TY_BOOL) buf_printf(b, "(%s)", body.p ? body.p : "0");
@@ -5505,9 +5512,12 @@ static int emit_dynamic_const_get(Compiler *c, int id, Buf *b) {
   if (def) {
     buf_printf(b, "{ if (!(_t%d[0] >= 'A' && _t%d[0] <= 'Z')) sp_raise_cls(\"NameError\", sp_sprintf(\"wrong constant name %%s\", _t%d)); "
                   "_t%d = 0; } ", t, t, t, tr);
-    if (!pd_hoist(c, id, "const_defined?", b, from, tr, TY_BOOL, &t, &nty, 1)) buf_puts(b, "}");
+    int dpid[2] = { t, ts };
+    TyKind dpty[2] = { nty, TY_CLASS };
+    if (!pd_hoist(c, id, "const_defined?", b, from, tr, TY_BOOL, dpid, dpty, ts >= 0 ? 2 : 1)) buf_puts(b, "}");
     else if (memo) cg_armfn_add(arms[0], narm, def, memo, b->p + from);
     buf_printf(b, " _t%d; })", tr);
+    free(sv.p);
     return 1;
   }
   buf_printf(b, "{ if (!(_t%d[0] >= 'A' && _t%d[0] <= 'Z')) sp_raise_cls(\"NameError\", sp_sprintf(\"wrong constant name %%s\", _t%d)); ", t, t, t);

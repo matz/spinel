@@ -1,0 +1,24 @@
+[:unshift_kw, FrozenError]
+[:push_kw, FrozenError]
+[:unshift_call_kw, FrozenError]
+[:unshift_two_kw, FrozenError]
+[:insert_kw, FrozenError]
+[:unshift_rest, FrozenError]
+[:push_rest, FrozenError]
+[:unshift_splat, FrozenError]
+[:push_splat, FrozenError]
+[:push_none, FrozenError]
+[:two, FrozenError]
+[:push_kw_full, FrozenError]
+FrozenError
+FrozenError
+FrozenError
+FrozenError
+[1, 2]
+[1, 2]
+[1, 2]
+[1, 2]
+[2, 3, {z: 1}, 1, 5, 2, 3, 6]
+8
+[9, 8, 9, 8, 9, 8, 9, 8]
+[9, 8, 9, 8, 9, 8, 9, 8]

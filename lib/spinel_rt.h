@@ -13172,6 +13172,7 @@ static sp_RbVal sp_poly_insert(sp_RbVal v, sp_int i, sp_RbVal x) {
   sp_raise_nomethod(sp_nomethod_msg("insert", v));
   return sp_box_nil();
 }
+static inline sp_bool sp_poly_frozen(sp_RbVal v);
 /* Array#insert with any number of values after the index: they go in
    consecutively from the resolved index, so a negative one is resolved
    against the length once, before the first of them. With none the array
@@ -13185,6 +13186,9 @@ static sp_RbVal sp_poly_insert_n(sp_RbVal v, sp_int i, sp_PolyArray *xs) {
   }
   if (!(v.tag == SP_TAG_OBJ && v.v.p && sp_poly_is_array_kind(v.cls_id)))
     sp_raise_nomethod(sp_nomethod_msg("insert", v));
+  /* a frozen Array raises first, whatever the count, as CRuby's
+     rb_ary_modify_check does ahead of the values */
+  if (sp_poly_frozen(v)) sp_raise_frozen_array_v(v);
   if (n == 0) return v;
   if (n == 1) return sp_poly_insert(v, i, xs->data[0]);
   if (i < 0) {
@@ -13195,7 +13199,22 @@ static sp_RbVal sp_poly_insert_n(sp_RbVal v, sp_int i, sp_PolyArray *xs) {
     i += len + 1;
   }
   SP_GC_ROOT_RBVAL(v);
+  /* the receiver's own list (`a.unshift(*a)`): its values are taken before
+     the first goes in */
+  if (v.v.p == (void *)xs) xs = sp_PolyArray_dup(xs);
+  SP_GC_ROOT(xs);
   for (sp_int k = 0; k < n; k++) v = sp_poly_insert(v, i + k, xs->data[k]);
+  return v;
+}
+/* Array#push with any number of values, a splat's or a list gathered with
+   one, on an Array of any kind: a frozen one raises FrozenError first,
+   whatever the count, as for insert; then each value goes on in order
+   through the kind dispatch. */
+static sp_RbVal sp_poly_push_n(sp_RbVal v, sp_PolyArray *xs) {
+  if (sp_poly_frozen(v)) sp_raise_frozen_array_v(v);
+  SP_GC_ROOT_RBVAL(v);
+  sp_int n = xs->len;
+  for (sp_int k = 0; k < n; k++) sp_poly_shl(v, xs->data[k]);
   return v;
 }
 /* Array#delete_at on a poly value: in-place removal at an index through the

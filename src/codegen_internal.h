@@ -2177,6 +2177,7 @@ int read_of_fixed_param(Compiler *c, int node);
 int read_unbound_in_stmt(Compiler *c, int node);
 int  typed_array_src_held(Compiler *c, int node);   /* a typed Array held while it is boxed */
 int  proc_form_live(Compiler *c, int s);
+int  scope_unspliced_fn(Compiler *c, int mi);   /* the scope whose function a hook's call of mi with no block runs: mi, a yielding one's proc-form clone, or -1 */
 int  proc_form_source(Compiler *c, int s);
 int  ctor_site_on_cycle(Compiler *c, int id, int initm);
 int  ctor_init_proc_form(Compiler *c, int cid);

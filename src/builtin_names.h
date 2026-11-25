@@ -701,6 +701,7 @@ int is_cover_name(const char *n); /* cover? */
 int is_flatten_name(const char *n); /* flatten */
 int is_hash_name(const char *n); /* hash */
 int is_spaceship_name(const char *n); /* <=> */
+int is_object_hook_name(const char *n); /* hash eql? <=>: what the runtime's hash-key and sort hooks call on a program object, with no block */
 int is_puts_name(const char *n); /* puts */
 int is_to_f_name(const char *n); /* to_f */
 int is_to_i_name(const char *n); /* to_i */

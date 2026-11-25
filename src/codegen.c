@@ -15592,8 +15592,8 @@ static void emit_display_overrides(Compiler *c, Buf *b) {
       if (comp_class_is_module(c, &c->classes[def])) def = k;
       snprintf(self, sizeof self, "%s((sp_%s *)p)", comp_ty_value_obj(c, ty_object(def)) ? "*" : "", c->classes[def].c_name);
       if (c->scopes[mi].yields) {
-        int pf = scope_proc_form_of(c, mi);
-        if (pf < 0 || !proc_form_live(c, pf) || c->scopes[mi].nparams != 0) continue;
+        int pf = scope_unspliced_fn(c, mi);
+        if (pf < 0 || c->scopes[mi].nparams != 0) continue;
         Buf call = {0};
         buf_printf(&call, "%s(%s, NULL)", mc_method(c, &c->scopes[pf]), self);
         buf_printf(b, "    case %d: *out = %s", k, ppu_open(c));
@@ -18203,8 +18203,11 @@ static void emit_obj_cmp_dispatch(Compiler *c, Buf *b) {
       continue;
     }
     if (bcase && defcls != k) continue;
+    if (!c->scopes[mi].reachable) continue;   /* nothing calls it: reachability keeps a `<=>` that a sort, a max or a Comparable operator can reach */
+    /* (the function the call runs, with no block: a yielding one's clone) */
+    mi = scope_unspliced_fn(c, mi);
+    if (mi < 0) continue;
     Scope *m = &c->scopes[mi];
-    if (!m->reachable) continue;   /* nothing calls it: reachability keeps a `<=>` that a sort, a max or a Comparable operator can reach */
     if (m->nparams < 1) continue;
     /* a `<=>` that answers no number (always nil) still runs: Comparable's
        == and the sorts call it and read its answer as not-comparable */
@@ -19032,8 +19035,11 @@ static void emit_obj_hashkey_dispatch(Compiler *c, Buf *b) {
       else buf_printf(b, "return %s;\n", fld);
       continue;
     }
+    if (!c->scopes[mi].reachable) continue;   /* no hash table op reaches it: the key hashes by identity */
+    /* (the function the call runs, with no block: a yielding one's clone) */
+    mi = scope_unspliced_fn(c, mi);
+    if (mi < 0) continue;
     Scope *m = &c->scopes[mi];   /* signature validated in class_is_hashkey */
-    if (!m->reachable) continue;   /* no hash table op reaches it: the key hashes by identity */
     const char *dcn = c->classes[defcls].c_name;
     const char *slf = c->classes[defcls].is_value_type ? "*" : "";
     buf_printf(b, "    case %d: ", k);
@@ -19077,8 +19083,11 @@ static void emit_obj_hashkey_dispatch(Compiler *c, Buf *b) {
     MethodLookup ml_mi = { .def_class = defcls };
     int mi = call_target(c, -1, k, "eql?", CT_METHODS | CT_SHARED, &ml_mi);
     defcls = ml_mi.def_class;
+    if (!c->scopes[mi].reachable) continue;   /* nothing compares two keys with it */
+    /* (the function the call runs, with no block: a yielding one's clone) */
+    mi = scope_unspliced_fn(c, mi);
+    if (mi < 0) continue;
     Scope *m = &c->scopes[mi];   /* signature validated in class_is_hashkey */
-    if (!m->reachable) continue;   /* nothing compares two keys with it */
     LocalVar *pp = scope_local(m, m->pnames[0]);
     TyKind pt = (pp && pp->type != TY_UNKNOWN) ? pp->type : TY_POLY;
     char argbuf[160];
@@ -24333,13 +24342,9 @@ static void emit_exc_reinit_dispatch(Compiler *c, Buf *b) {
 }
 
 static void emit_exc_text_call(Compiler *c, int mi, const char *self, Buf *b) {
-  if (c->scopes[mi].yields) {
-    int pf = scope_proc_form_of(c, mi);
-    if (pf < 0 || !proc_form_live(c, pf))
-      unsupported(c, c->scopes[mi].def_node, "exception text hook needs a callable proc form");
-    mi = pf;
-  }
-  emit_zero_arg_boxed_call(c, mi, self, b);
+  int fn = scope_unspliced_fn(c, mi);
+  if (fn < 0) unsupported(c, c->scopes[mi].def_node, "exception text hook needs a callable proc form");
+  emit_zero_arg_boxed_call(c, fn, self, b);
 }
 
 /* Ruby reads the override's actual value. Library reporting reads its

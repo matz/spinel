@@ -15448,24 +15448,46 @@ int desugar_marshal_restore_at(Compiler *c, LowerCtx *lc, int id) {
    names (the arguments go to the block; neither runs the subclass's
    initialize, which a program's Thread subclass is refused for anyway).
    Done first, so every pass that recognizes a thread's block reads one
-   spelling. A program defining a class method of either name on a class of
-   its own named Thread keeps its call. */
+   spelling. A program defining a class method of either name on Thread
+   itself keeps its call: `def self.start` in a Thread body (or in its
+   `class << self`) or `def Thread.start`. Another class's `def self.start`
+   (a server's) beside a Thread reopening that defines other methods (the
+   Process.detach builtin's #pid) is no such definition. */
+static int thread_start_def_on_thread(Compiler *c, const int *par, int def) {
+  const NodeTable *nt = c->nt;
+  int dr = nt_ref(nt, def, "receiver");
+  if (dr >= 0 && nt_kind(nt, dr) != NK_SelfNode) {
+    const char *rn = top_level_const_name(nt, dr);
+    return rn && sp_streq(rn, "Thread");
+  }
+  int sing = dr >= 0;   /* `def self.x` names the body's class; a bare def, only under its `class << self` */
+  for (int p = par[def]; p >= 0; p = par[p]) {
+    NodeKind k = nt_kind(nt, p);
+    if (k == NK_DefNode) return 0;
+    if (k == NK_SingletonClassNode) {
+      if (sing || nt_kind(nt, nt_ref(nt, p, "expression")) != NK_SelfNode) return 0;
+      sing = 1;
+      continue;
+    }
+    if (k == NK_ClassNode || k == NK_ModuleNode) {
+      const char *cn = class_def_key(c, p);
+      return sing && cn && sp_streq(cn, "Thread");
+    }
+  }
+  return 0;
+}
 int desugar_thread_start_gate(Compiler *c, LowerCtx *lc) {
   const NodeTable *nt = c->nt;
-  int own = 0;
+  int *par = NULL, own = 0;
   for (int id = 0; id < lc->n0 && !own; id++) {
     if (nt_kind(nt, id) != NK_DefNode) continue;
     const char *dn = nt_str(nt, id, "name");
-    int dr = nt_ref(nt, id, "receiver");
-    if (dn && dr >= 0 && (sp_streq(dn, "start") || sp_streq(dn, "fork"))) own = 1;
+    if (!dn || (!sp_streq(dn, "start") && !sp_streq(dn, "fork"))) continue;
+    if (!par && !(par = an_parent_map(nt))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    own = thread_start_def_on_thread(c, par, id);
   }
-  if (!own) return 1;
-  for (int id = 0; id < lc->n0; id++) {
-    if (nt_kind(nt, id) != NK_ClassNode) continue;
-    const char *cn = class_def_key(c, id);
-    if (cn && sp_streq(cn, "Thread")) return 0;
-  }
-  return 1;
+  free(par);
+  return !own;
 }
 int desugar_thread_start_left(Compiler *c, LowerCtx *lc, int id) {
   const NodeTable *nt = c->nt;

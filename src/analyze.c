@@ -45335,7 +45335,10 @@ void expand_static_splat_args(Compiler *c, int from, int count) {
       int sblk = nt_ref(nt, id, "block");
       int fwd_sblk = sblk >= 0 && nt_kind(nt, sblk) == NK_BlockNode && nt_int(nt, sblk, "fwd_yield", 0) &&
                      !sp_streq(cnm, "sub") && !sp_streq(cnm, "sub!") && !sp_streq(cnm, "gsub") && !sp_streq(cnm, "gsub!");
-      n = sblk >= 0 && !is_binary_operator(cnm) && !fwd_sblk ? -1 : splat_builtin_arity(cnm);
+      /* (nor an index's: `[]` and `[]=` take as many with a block as
+         without, one the call never yields to, as an operator's) */
+      int idx_op = sp_streq(cnm, "[]") || sp_streq(cnm, "[]=");
+      n = sblk >= 0 && !is_binary_operator(cnm) && !idx_op && !fwd_sblk ? -1 : splat_builtin_arity(cnm);
       /* slice has no arity to expand to on purpose (see the table). Leave the
          splat as it stands rather than refusing the program: Hash#slice's
          emitter iterates it, which is what the call means. */

@@ -4950,7 +4950,7 @@ static int emit_lazy_pipeline_expr_1(Compiler *c, int id, Buf *b) {
       emit_boxed_item_binds(c, blk, vbuf, g_indent + 2);
       int dwb = nt_ref(nt, blk, "body");
       int dwn = 0; const int *dwv = dwb >= 0 ? nt_arr(nt, dwb, "body", &dwn) : NULL;
-      for (int k = 0; k < dwn - 1; k++) emit_stmt(c, dwv[k], g_pre, g_indent + 2);
+      emit_iter_step_lead(c, dwb, dwn - 1, g_pre, g_indent + 2);
       if (dwn >= 1) {
         Buf cb; memset(&cb, 0, sizeof cb);
         int svind = g_indent; g_indent += 2; emit_cond(c, dwv[dwn - 1], &cb); g_indent = svind;
@@ -4966,7 +4966,7 @@ static int emit_lazy_pipeline_expr_1(Compiler *c, int id, Buf *b) {
     emit_boxed_item_binds(c, blk, vbuf, g_indent + 1);
     int bbody = nt_ref(nt, blk, "body");
     int bn = 0; const int *bb = bbody >= 0 ? nt_arr(nt, bbody, "body", &bn) : NULL;
-    for (int k = 0; k < bn - 1; k++) emit_stmt(c, bb[k], g_pre, g_indent + 1);
+    emit_iter_step_lead(c, bbody, bn - 1, g_pre, g_indent + 1);
     if (bn < 1) continue;
     if (ops[oi].kind == OP_MAP) {
       Buf eb; memset(&eb, 0, sizeof eb);
@@ -17018,7 +17018,7 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
         TyKind elem_t = ty_array_elem(at);
         Buf vb; memset(&vb, 0, sizeof vb);
         /* the statements before the tail run for their effect alone */
-        for (int bi = 0; bi < bn - 1; bi++) emit_stmt(c, bb[bi], g_pre, g_indent);
+        emit_iter_step_lead(c, bbody, bn - 1, g_pre, g_indent);
         /* a tail marked for the shared handle boxes through emit_boxed,
            which wraps the plain string it evaluates to in a fresh handle */
         int tail_strbuf = sp_streq(k, "Poly") && repr_of(c, bb[bn - 1]).as_ty == TY_STRBUF;

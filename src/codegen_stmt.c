@@ -12586,42 +12586,87 @@ static int hc_subtree_loops(const NodeTable *nt, int id) {
   }
   return 0;
 }
-/* Does a body the cache took run a pass whose cost grows with what it
-   holds? hc_call_ok admits a String's `length` / `size`, which counts the
-   characters of a String not known to be ASCII (sp_str_length_mi), and,
-   under promote, the operators of Integers that may be Bignums. A loop of
-   such passes keeps its polls at each pass: a run of 1024 of them could
-   hold a collection, a thread switch or a signal for seconds. */
-static int hc_subtree_slow(Compiler *c, int id) {
+/* Does the subtree run a call whose cost grows with what its receiver
+   holds: a builtin that walks a String receiver (BOPF_WALKS_RECV: a
+   `length` counting the characters of one not known to be ASCII, a count,
+   a search, ...), on a String or on a boxed value that may be one? */
+static int subtree_pass_grows(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   if (id < 0) return 0;
-  if (g_promote_mode) return 1;
   if (nt_kind(nt, id) == NK_CallNode) {
     const char *nm = nt_str(nt, id, "name");
     int recv = nt_ref(nt, id, "receiver");
-    if (nm && is_len_alias(nm) && recv >= 0 && comp_ntype(c, recv) == TY_STRING) return 1;
+    TyKind rt = recv >= 0 ? repr_of(c, recv).as_ty : TY_UNKNOWN;
+    if (nm && (rt == TY_STRING || (rt == TY_POLY && cls_fact_may_hold_builtin(c, recv, CORE_STRING)))) {
+      if (bop_walks_recv(TY_STRING, nm)) return 1;
+    }
   }
   int nr = nt_num_refs(nt, id);
-  for (int i = 0; i < nr; i++) if (hc_subtree_slow(c, nt_ref_at(nt, id, i))) return 1;
+  for (int i = 0; i < nr; i++) if (subtree_pass_grows(c, nt_ref_at(nt, id, i))) return 1;
   int na = nt_num_arrs(nt, id);
   for (int i = 0; i < na; i++) {
     int n = 0; const int *el = nt_arr_at(nt, id, i, &n);
-    for (int j = 0; j < n; j++) if (hc_subtree_slow(c, el[j])) return 1;
+    for (int j = 0; j < n; j++) if (subtree_pass_grows(c, el[j])) return 1;
   }
   return 0;
+}
+/* Does a body the cache took run a pass whose cost grows with what it
+   holds? hc_call_ok admits a String's `length` / `size`, whose row walks
+   it (subtree_pass_grows), and, under promote, the operators of Integers
+   that may be Bignums. A loop of such passes keeps its polls at each pass: a
+   run of 1024 of them could hold a collection, a thread switch or a signal
+   for seconds. */
+static int hc_subtree_slow(Compiler *c, int id) {
+  if (id < 0) return 0;
+  return g_promote_mode || subtree_pass_grows(c, id);
 }
 /* The body of the block a yield in `body` splices in (`blk`, g_block_id
    where the body is emitted): hc_node_ok takes a yield whose literal block
    qualifies, so that block runs in the loop at each pass, and what a check
    asks of a loop's body it asks of that block too. -1: no yield; -2: a
    yield with no literal block to splice, or one in that block (its own
-   caller's, which hc_node_ok never takes), which no check can see. */
+   caller's, which hc_node_ok never takes), which no check can see. A
+   call of the method's own `&blk` is spliced as a yield is
+   (proc_body_calls_block). */
 static int hc_yield_body(Compiler *c, int body, int blk) {
-  if (body < 0 || !proc_body_has_yield(c, body)) return -1;
+  if (body < 0 || !proc_body_calls_block(c, body)) return -1;
   const NodeTable *nt = c->nt;
   if (blk < 0 || nt_kind(nt, blk) != NK_BlockNode) return -2;
   int bb = nt_ref(nt, blk, "body");
-  return proc_body_has_yield(c, bb) ? -2 : bb;
+  return proc_body_calls_block(c, bb) ? -2 : bb;
+}
+/* Can a pass of the loop whose body is `body` (emitted where g_block_id is
+   the block a yield in it splices in) take as long as what a String holds:
+   a call in the body, or in that block, walks one (subtree_pass_grows)? A
+   block no check can see (a yield with no literal block to splice, or one
+   in the spliced block) may, too. Such a loop polls at each pass even where
+   another loop encloses it (loop_keeps_sig_poll), and so does a builtin
+   iterator's step (emit_step_polls): one pass over a long non-ASCII String
+   takes as long as a whole walk of a counted loop's, which the enclosing
+   loop's poll waited for (#9222). Not the operators of Integers that may
+   be Bignums under promote, which cost what they hold as well: their
+   passes are left to the enclosing loop as before. */
+int loop_pass_grows(Compiler *c, int body) {
+  if (subtree_pass_grows(c, body)) return 1;
+  int sb = hc_yield_body(c, body, g_block_id);
+  return sb == -2 || (sb >= 0 && subtree_pass_grows(c, sb));
+}
+/* Does a counted loop another loop of its function encloses keep a signal
+   poll of its own, which #9222 otherwise leaves to the enclosing loop's
+   latch? A pure one a rescue of Interrupt keeps from its pure region
+   (loop_body_polls_alone), or one whose pass may take as long as what a
+   String holds (loop_pass_grows). The one rule emit_loop_polls and a
+   region loop's condition polls ask. */
+int loop_keeps_sig_poll(Compiler *c, int body) {
+  return loop_body_polls_alone(c, body) || loop_pass_grows(c, body);
+}
+/* Can a pass of a loop the cache took (its body, and the block a yield in
+   it splices in) take as long as what it holds: one that may walk a String
+   (loop_pass_grows), or any under promote, whose Integers may be Bignums
+   (hc_subtree_slow)? Such a loop keeps its safepoint and finalizer polls
+   where another loop encloses it: the quiet rules ask this. */
+static int hc_pass_slow(Compiler *c, int body) {
+  return (body >= 0 && g_promote_mode) || loop_pass_grows(c, body);
 }
 /* Does a body the cache took hold an element write (`x[j] = v`)? It is the
    one node such a body admits that can grow an array (hc_call_ok), and it
@@ -13042,15 +13087,17 @@ static void *hcv_begin_ex(Compiler *c, int node, int body, int blk, const char *
      may, so it is held to the same tests (one that yields again runs its
      own caller's block, which nothing here sees) */
   int ublk = -1, ubody = -1;
-  if (proc_body_has_yield(c, body)) {
-    if (g_block_id < 0 || nt_kind(c->nt, g_block_id) != NK_BlockNode) return NULL;
-    ublk = g_block_id; ubody = nt_ref(c->nt, ublk, "body");
-    if (ubody >= 0 && (hc_subtree_stores(c->nt, ubody) || proc_body_has_yield(c, ubody))) return NULL;
-    if (trip_node >= 0 && ubody >= 0 && !hcv_node_stable(c, ubody, ublk, trip_node)) return NULL;
+  int ysb = hc_yield_body(c, body, g_block_id);
+  if (ysb == -2) return NULL;
+  if (ysb >= 0) {
+    ublk = g_block_id; ubody = ysb;
+    if (hc_subtree_stores(c->nt, ubody)) return NULL;
+    if (trip_node >= 0 && !hcv_node_stable(c, ubody, ublk, trip_node)) return NULL;
   }
   /* (the next emit_loop_body is this loop's, which leaves the polls; hcv_end
-     clears it for a loop that took none) */
-  if (walk && (g_uses_threads || g_uses_finalizers) && g_poll_loop_nest > 0) g_loop_quiet = 1;
+     clears it for a loop that took none. Not a pass that may be long,
+     hc_pass_slow, as emit_while_loop's quiet loop) */
+  if (walk && (g_uses_threads || g_uses_finalizers) && g_poll_loop_nest > 0 && !hc_pass_slow(c, body)) g_loop_quiet = 1;
   HcVer *v = calloc(1, sizeof *v);
   if (!v) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   v->id = ++g_hcv_seq; v->node = node; v->body = body; v->blk = blk; v->bi = bi;
@@ -13680,14 +13727,14 @@ static void emit_while_loop(Compiler *c, int id, Buf *b, int indent, int is_unti
      or a finalizer waits one such pass at most -- what a runtime call over
      the same array makes them wait already. An inner poll costs a pass of
      the loop an atomic load and the header reload behind it. Its signal poll
-     was the enclosing loop's already (#9222). A body whose pass costs what
-     a String or a number holds (hc_subtree_slow) keeps its polls: one pass
-     over the array could take seconds. Both ask the same of the block a
-     yield in the body splices in (hc_yield_body). */
+     was the enclosing loop's already (#9222). A body whose pass may take
+     as long as what a String or a number holds (hc_pass_slow) keeps its
+     polls: one pass over the array could take seconds. The store test asks
+     the same of the block a yield in the body splices in (hc_yield_body). */
   int ysb = hc_yield_body(c, body, g_block_id);
   int quiet = polls_in_cond && (g_uses_threads || g_uses_finalizers) && g_poll_loop_nest > 0 &&
-              !hc_subtree_stores(nt, body) && !hc_subtree_slow(c, body) && ysb != -2 &&
-              (ysb < 0 || (!hc_subtree_stores(nt, ysb) && !hc_subtree_slow(c, ysb)));
+              !hc_subtree_stores(nt, body) && !hc_pass_slow(c, body) &&
+              (ysb < 0 || !hc_subtree_stores(nt, ysb));
   char trip[64] = "";
   if (proved) {
     Buf hcc; memset(&hcc, 0, sizeof hcc);
@@ -13756,11 +13803,12 @@ static void emit_while_loop(Compiler *c, int id, Buf *b, int indent, int is_unti
       if (g_uses_threads) buf_printf(&polls, "if (SP_UNLIKELY(SP_SAFEPOINT_POLL())) sp_safepoint()%s; ", hc_mark());
       if (g_uses_finalizers)
         buf_printf(&polls, "if (SP_UNLIKELY(SP_ATOMIC_LOAD(&sp_fin_pending_flag, __ATOMIC_RELAXED))) sp_fin_run_pending()%s; ", hc_mark());
-      /* (a counted loop another loop of its function encloses keeps none;
-         an unproved one keeps it where emit_loop_polls would in its body) */
+      /* (a counted loop another loop of its function encloses keeps none
+         unless loop_keeps_sig_poll, as in emit_loop_polls; an unproved one
+         keeps it where emit_loop_polls would in its body) */
       if (sig_polls() && !poll_in_pure(c, cstep ? body : id) &&
-          (g_poll_loop_nest == 0 ||
-           (cstep && (!poll_while_counted(c, pred, body) || loop_body_polls_alone(c, body)))))
+          (g_poll_loop_nest == 0 || loop_keeps_sig_poll(c, body) ||
+           (cstep && !poll_while_counted(c, pred, body))))
         buf_printf(&polls, "%s%s; ", sig_poll_stmt(), hc_mark());
     }
     int chunk = chunkable && polls.p && polls.p[0] && (cstep || (proved && trip[0] && pr->bic));

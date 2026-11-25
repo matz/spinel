@@ -9103,6 +9103,22 @@ int proc_body_has_yield(Compiler *c, int id) {
   return 0;
 }
 
+/* True if the subtree at `id` runs the block its method was given: a
+   yield, or a call of the method's own `&blk` (`blk.call(x)`), which the
+   inliner splices as it splices a yield (is_yield_or_blk_param_call). Not
+   crossing DefNode. */
+int proc_body_calls_block(Compiler *c, int id) {
+  if (id < 0) return 0;
+  NodeKind k = nt_kind(c->nt, id);
+  if (k == NK_DefNode) return 0;
+  if ((k == NK_YieldNode || k == NK_CallNode) && is_yield_or_blk_param_call(c, id)) return 1;
+  int nr = nt_num_refs(c->nt, id);
+  for (int i = 0; i < nr; i++) if (proc_body_calls_block(c, nt_ref_at(c->nt, id, i))) return 1;
+  int na = nt_num_arrs(c->nt, id);
+  for (int i = 0; i < na; i++) { int n = 0; const int *ids = nt_arr_at(c->nt, id, i, &n); for (int j = 0; j < n; j++) if (proc_body_calls_block(c, ids[j])) return 1; }
+  return 0;
+}
+
 /* When walking a proc body for a `return`, recurse from `id` into child `ch`?
    Descend into an INLINED iteration block (a BlockNode owned by an ordinary
    method call) so a `return` there is seen as non-local to the home method --

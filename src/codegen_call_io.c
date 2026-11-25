@@ -62,6 +62,8 @@ static void emit_io_readlines_args(Compiler *c, const char *r, const int *pos, i
    into its cell first when a proc captures it. */
 static void emit_io_loop_body(Compiler *c, int blk, const char *pname, const int *stmts, int n, Buf *b) {
   if (pname) emit_param_cell_publish(c, blk, pname, b, 0);
+  /* (a long pass polls first, as a builtin iterator's step does) */
+  emit_step_polls(c, blk >= 0 ? nt_ref(c->nt, blk, "body") : -1, b, 0);
   const char *sv_nx = g_ie_next_var;
   int sv_lexc = g_loop_exc_base, sv_lens = g_loop_ensure_base;
   g_ie_next_var = NULL;

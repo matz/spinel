@@ -30366,8 +30366,8 @@ int desugar_missing_method_calls(Compiler *c) {
       reread = rk == NK_SelfNode || rk == NK_LocalVariableReadNode || rk == NK_InstanceVariableReadNode;
       /* (an object of the program's, or a box that may hold one) */
       TyKind rt = infer_type(c, r);
-      if (str_missing && elab_method_versions(c, nm) && (rt == TY_STRING || rt == TY_POLY) && cls_fact_may_hold_builtin(c, r, CORE_STRING) &&
-          (blk < 0 || nt_kind(nt, blk) != NK_BlockNode) && parent && parent[id] >= 0) {
+      if ((rt == TY_STRING || rt == TY_POLY) && cls_fact_may_hold_builtin(c, r, CORE_STRING) &&
+          (blk < 0 || nt_kind(nt, blk) != NK_BlockNode) && parent && parent[id] >= 0 && cplan_string_may_undef(c, nm)) {
         int undef;
         if (cplan_string_missing(c, id, nm, &str_mi, &undef)) {
           if (undef < 0) str_guard = cplan_string_undef_guard(c, id, nm);

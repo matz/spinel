@@ -113,3 +113,65 @@ S12 = Struct.new(:w)
 s12 = S12.new([+"w"]); p s12.w
 T12 = Struct.new(:u, :w)
 s12 = T12.new([1], [+"t"]); y1(s12.u) { |x| x << 2.5 }; p s12.u
+
+# an attribute handed another attribute's read, a read on nine classes,
+# and computed-name sends of two values and of a keyword
+class W13; attr_accessor :w; end
+w13 = W13.new; w13.w = [+"x"]; k13 = K12.new; k13.v = w13.w; y1(k13.v) { |x| x << 32 }; p w13.w
+C13 = (1..9).map { Class.new { attr_accessor :v } }
+c13 = C13.map { |k| o = k.new; o.v = [+"c"]; o }
+o13 = c13[ARGV.size]; y1(o13.v) { |x| x << 33 }; p c13[0].v, c13[8].v
+class K14; attr_accessor :v; def two(a, b) = a; def kw(a:) = a; end
+k14 = K14.new; k14.v = [+"s"]; mn = :two; p k14.send(mn, 1, 2); mn = :kw; p k14.send(mn, a: 1)
+y1(k14.v) { |x| x << 34 }; p k14.v
+
+# a reader that is an alias of a method, beside another class's attribute
+class L15; def initialize = (@v = [+"l"]); def w = @v; alias v w; end
+o15 = [L15.new, K12.new][ARGV.size]; y1(o15.v) { |x| x << 35 }; p o15.v
+
+# a new Array a builtin answers, handed to an attribute's writer and to a
+# Struct's constructor
+class K16; attr_accessor :v; end
+S16 = Struct.new(:w)
+k16 = K16.new; k16.v = "ab".bytes; y1(k16.v) { |x| x << +"q" }; p k16.v
+s16 = S16.new("cd".bytes); y1(s16.w) { |x| x << +"r" }; p s16.w
+# and to a super of a Struct's own initialize
+S17 = Struct.new(:v) do
+  def initialize(x) = super(x.bytes)
+end
+s17 = S17.new(+"ab"); y1(s17.v) { |x| x << +"s" }; p s17.v
+# and a new Array of to_a or Array.new to an attribute's writer
+class K18; attr_accessor :v, :w; end
+k18 = K18.new; k18.v = (1..3).to_a; k18.w = Array.new(2, 0)
+y1(k18.v) { |x| x << +"t" }; y1(k18.w) { |x| x << +"u" }; p k18.v, k18.w
+
+# a write used as a value (another attribute's writer, a main-object ivar,
+# a writer sent by its name), an Array's own to_a, and its entries
+class K19; attr_accessor :v; end
+class Q19; attr_accessor :v; end
+k19 = K19.new; q19 = Q19.new
+k19.v = q19.v = [1, 2]; y1(k19.v) { |x| x << +"v" }; p q19.v, k19.v.equal?(q19.v)
+@w19 = nil; k19.v = @w19 = [3]; y1(@w19) { |x| x << +"w" }; p k19.v, k19.v.equal?(@w19)
+k19.v = q19.send(:v=, [4]); y1(k19.v) { |x| x << +"x" }; p q19.v
+a19 = [5]; k19.v = a19.to_a; y1(k19.v) { |x| x << +"y" }; p a19
+k19.v = a19.entries; y1(k19.v) { |x| x << +"z" }; p a19, k19.v
+
+# an ivar's own writes the walk follows: a writer's call, a method's value,
+# a branch, another attribute's read, a multiple assignment; two attributes
+# handed each other; an instance_variable_set as a value, also on a class
+# with no writer; and an Array subclass's to_a
+class K20; attr_accessor :v, :w, :x, :y, :z; end
+class Q20; attr_accessor :v; end
+class R20; attr_reader :v; end
+class L20 < Array; end
+k20 = K20.new; q20 = Q20.new; r20 = R20.new
+def mk20 = [6]
+@a20 = k20.v = [1]; y1(@a20) { |x| x << +"a" }; p k20.v, k20.v.equal?(@a20)
+@b20 = mk20; y1(@b20) { |x| x << +"b" }; p @b20
+@c20 = ARGV.size > 9 ? [7] : [8]; y1(@c20) { |x| x << +"c" }; p @c20
+k20.w = [2]; @d20 = k20.w; y1(@d20) { |x| x << +"d" }; p k20.w
+t20 = [3]; @e20, @f20 = t20, 0; y1(@e20) { |x| x << +"e" }; p t20
+q20.v = [4]; k20.x = q20.v; q20.v = k20.x; y1(q20.v) { |x| x << +"f" }; p k20.x
+k20.y = q20.instance_variable_set(:@v, [5]); y1(k20.y) { |x| x << +"g" }; p q20.v
+u20 = [9]; r20.instance_variable_set(:@v, u20); y1(r20.v) { |x| x << +"h" }; p u20
+l20 = L20.new([1]); k20.z = l20.to_a; y1(k20.z) { |x| x << +"i" }; p k20.z, l20

@@ -462,8 +462,9 @@ int cplan_super_native(Compiler *c, int id);
    super's the method's parameters, as lower_builtin_supers spells them): SAS_SPLAT for a spread (a `*`, a `(...)`
    passed on, a rest parameter), SAS_KW for keywords (a keyword hash, a `**`, keyword parameters), SAS_FWD for a
    `(...)` passed on, SAS_UNSPELLED for a bare super whose parameters no call spells (a destructured one, `**nil`, a
-   `(...)` beside a keyword) */
-enum { SAS_SPLAT = 1, SAS_KW = 2, SAS_FWD = 4, SAS_UNSPELLED = 8 };
+   `(...)` beside a keyword), SAS_BARE for a super that passes what a bare super does: a bare one, and a `super(...)`
+   from a method whose parameters are its `...` alone (the shape is then the bare super's) */
+enum { SAS_SPLAT = 1, SAS_KW = 2, SAS_FWD = 4, SAS_UNSPELLED = 8, SAS_BARE = 16 };
 unsigned cplan_super_args_shape(Compiler *c, int id, const Scope *s);
 int cplan_def_forwards(Compiler *c, const Scope *s);   /* is the method of scope s a `(...)` forwarder? */
 /* Does super node id's arm (CallPlan.bsuper) answer from the object itself: its address (BSUP_SAME), its frozen bit

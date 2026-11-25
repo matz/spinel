@@ -92,3 +92,13 @@ class OwnId
   def !=(x) = block_given? ? :blk : :plain
 end
 p OwnId.new.object_id, (OwnId.new != 1)
+
+# a `(...)` super hands on the arguments, the block and the keywords
+class Fwd
+  def object_id(...) = super(...)
+  def tap(...) = super(...)
+  def initialize = @v = 3
+end
+fw = Fwd.new
+p fw.object_id.is_a?(Integer), fw.object_id == fw.object_id
+p fw.tap { |y| $u = y }.equal?(fw), $u.equal?(fw)

@@ -1197,7 +1197,7 @@ static BsuperArm cplan_super_instance_arm(Compiler *c, int id, const Scope *s, c
 static int cplan_object_args_spelled(Compiler *c, int id, const Scope *s, const char *uname, const char *bowner) {
   unsigned sh = cplan_super_args_shape(c, id, s);
   if (sh & (SAS_FWD | SAS_UNSPELLED)) return 0;
-  return !(sh & SAS_KW) || nt_kind(c->nt, id) != NK_ForwardingSuperNode || builtin_method_takes_keywords(bowner, uname);
+  return !(sh & SAS_KW) || !(sh & SAS_BARE) || builtin_method_takes_keywords(bowner, uname);
 }
 static BsuperPath cplan_super_path(Compiler *c, int id, const Scope *s, const Scope *st, const char *uname, const char *bowner) {
   /* (the stand-in a version entry's else arm calls for the call made before a later include or prepend is that
@@ -1236,16 +1236,18 @@ int cplan_def_forwards(Compiler *c, const Scope *s) {
 static unsigned cplan_zsuper_shape(Compiler *c, const Scope *s) {
   const NodeTable *nt = c->nt;
   int pn = s->def_node >= 0 ? nt_ref(nt, s->def_node, "parameters") : -1;
-  if (pn < 0) return 0;
-  /* (a `(...)`'s are the leading parameters and the slots the calls' arity gave it, by position) */
+  if (pn < 0) return SAS_BARE;
+  /* (a `(...)`'s are the leading parameters and the slots the calls' arity gave it, by position, when every call
+     passes it one count: the slots hold the most any passes, which a call that passed fewer did not) */
   if (cplan_def_forwards(c, s)) {
+    if (fwd_fixed_call_arity(nt, nt_str(nt, s->def_node, "name")) == -1) return SAS_BARE | SAS_UNSPELLED;
     for (int j = 0; j < s->nparams; j++)
       if (!s->pnames || !s->pnames[j] || j == s->kwrest_idx || j == s->rest_idx ||
           callee_param_is_declared_kwarg(c, (Scope *)s, s->pnames[j]))
-        return SAS_UNSPELLED;
-    return 0;
+        return SAS_BARE | SAS_UNSPELLED;
+    return SAS_BARE;
   }
-  unsigned sh = 0;
+  unsigned sh = SAS_BARE;
   const char *const pos[] = { "requireds", "optionals", "posts" };
   for (int a = 0; a < 3; a++) {
     int n = 0;
@@ -1258,10 +1260,18 @@ static unsigned cplan_zsuper_shape(Compiler *c, const Scope *s) {
   (void)nt_arr(nt, pn, "keywords", &kn);
   if (kn) sh |= SAS_KW;
   if (kwr >= 0) {
-    if (nt_kind(nt, kwr) != NK_KeywordRestParameterNode) return SAS_UNSPELLED;
+    if (nt_kind(nt, kwr) != NK_KeywordRestParameterNode) return SAS_BARE | SAS_UNSPELLED;
     sh |= SAS_KW;
   }
   return sh;
+}
+/* Is the method of scope s's parameter list its `...` alone? */
+static int cplan_def_forwards_only(Compiler *c, const Scope *s) {
+  int pn = s->def_node >= 0 ? nt_ref(c->nt, s->def_node, "parameters") : -1;
+  if (pn < 0 || !cplan_def_forwards(c, s)) return 0;
+  const char *const arrs[] = { "requireds", "optionals", "posts", "keywords" };
+  for (int i = 0, n = 0; i < 4; i++) { (void)nt_arr(c->nt, pn, arrs[i], &n); if (n) return 0; }
+  return nt_ref(c->nt, pn, "rest") < 0;
 }
 /* See call_plan.h. */
 unsigned cplan_super_args_shape(Compiler *c, int id, const Scope *s) {
@@ -1270,6 +1280,8 @@ unsigned cplan_super_args_shape(Compiler *c, int id, const Scope *s) {
   unsigned sh = 0;
   int an = 0, args = nt_ref(nt, id, "arguments");
   const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
+  /* (a `super(...)` from a method whose parameters are its `...` alone passes what a bare super does) */
+  if (an == 1 && nt_kind(nt, av[0]) == NK_ForwardingArgumentsNode && cplan_def_forwards_only(c, s)) return cplan_zsuper_shape(c, s);
   for (int i = 0; i < an; i++) {
     NodeKind ak = nt_kind(nt, av[i]);
     if (ak == NK_SplatNode) sh |= SAS_SPLAT;

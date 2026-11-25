@@ -47927,8 +47927,12 @@ static void lower_builtin_supers(Compiler *c) {
     int blk = nt_ref(nt, id, "block");
     int kfn = path == BSP_KERNEL;
     if (kfn && blk >= 0) continue;
-    int args = k == NK_SuperNode ? nt_ref(nt, id, "arguments") : super_zsuper_args(c, id, s, par0, path == BSP_ARRAY);
-    if (k == NK_ForwardingSuperNode && args < 0) {
+    /* (a `super(...)` that passes what a bare super does, SAS_BARE, is spelled as one: the slots the calls' arity gave
+       the `...`, the keywords among them, and the block, lower_super_call's) */
+    unsigned sh = cplan_super_args_shape(c, id, s);
+    int bare = k == NK_ForwardingSuperNode || (path == BSP_OBJECT && (sh & SAS_BARE));
+    int args = bare ? super_zsuper_args(c, id, s, par0, path == BSP_ARRAY || k == NK_SuperNode) : nt_ref(nt, id, "arguments");
+    if (bare && args < 0) {
       /* (an Array subclass's was refused before, for every such parameter list; the other families keep the
          emission they had, which the corpus answers right for a `to_json(...)` prepended to Array) */
       assert(path != BSP_OBJECT);
@@ -47940,9 +47944,8 @@ static void lower_builtin_supers(Compiler *c) {
        super's keywords go to a builtin whose parameters (BAP) list one, else they would reach a method with
        none, where CRuby passes a Hash or nothing (the spread, which master refused for a bare super). The plan
        asked an Object method's of its own (cplan_object_args_spelled). */
-    unsigned sh = cplan_super_args_shape(c, id, s);
     if (kfn && ((sh & (SAS_SPLAT | SAS_KW)) || cplan_def_forwards(c, s))) continue;
-    if ((sh & SAS_KW) && k == NK_ForwardingSuperNode && !builtin_method_takes_keywords(sp.bowner, mname)) {
+    if ((sh & SAS_KW) && bare && !builtin_method_takes_keywords(sp.bowner, mname)) {
       assert(path != BSP_OBJECT);
       if (path == BSP_ARRAY)
         unsupported_feature(c, id, "a bare `super` from a method with keyword or `**` parameters into a builtin whose keyword "

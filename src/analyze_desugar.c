@@ -30279,6 +30279,7 @@ int desugar_missing_method_calls(Compiler *c) {
   for (int k = 0; k < c->nclasses && !mm_any; k++) mm_any = mm_user(c, -1, k) >= 0;
   if (!mm_any && !str_missing) return 0;
   int n0 = nt->count, changed = 0, *parent = NULL;
+  cplan_chain_undef_hold(1);
   for (int id = 0; id < n0; id++) {
     if (nt_kind(nt, id) != NK_CallNode || nt_int(nt, id, "mm_split", 0) || nt_int(nt, id, "dyn_arm", 0)) continue;
     const char *nm = nt_str(nt, id, "name");
@@ -30519,6 +30520,7 @@ int desugar_missing_method_calls(Compiler *c) {
     }
     changed = 1;
   }
+  cplan_chain_undef_hold(0);
   free(parent);
   return changed;
 }

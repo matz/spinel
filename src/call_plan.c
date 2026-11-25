@@ -3322,7 +3322,52 @@ static int ct_table(Compiler *c, int cls, const char *name, unsigned flags, int 
    does not rebuild the record's map after the table changed, which
    placing the call outside a plan frame does once per ask (#12194). 1
    where the index cannot say. */
+/* cplan_chain_undef's answers, by class and name, while a pass that asks
+   them of many sites and changes no chain holds them
+   (cplan_chain_undef_hold): the chain's versions are the record's, which
+   such a pass does not change, so a name asked again answers the same. */
+typedef struct { int cls; char *name; int ans; } CuMemo;
+static CuMemo *g_cu; static int g_cu_cap, g_cu_n, g_cu_on;
+static unsigned cu_hash(int cls, const char *name) {
+  unsigned h = 2166136261u ^ (unsigned)cls;
+  for (const char *p = name; *p; p++) h = (h ^ (unsigned char)*p) * 16777619u;
+  return h;
+}
+static CuMemo *cu_slot(int cls, const char *name) {
+  for (unsigned i = cu_hash(cls, name) & (unsigned)(g_cu_cap - 1);; i = (i + 1) & (unsigned)(g_cu_cap - 1))
+    if (!g_cu[i].name || (g_cu[i].cls == cls && sp_streq(g_cu[i].name, name))) return &g_cu[i];
+}
+static void cu_put(int cls, const char *name, int ans) {
+  if (2 * (g_cu_n + 1) > g_cu_cap) {
+    int oc = g_cu_cap; CuMemo *old = g_cu;
+    g_cu_cap = oc ? 2 * oc : 256;
+    g_cu = calloc((size_t)g_cu_cap, sizeof *g_cu);
+    if (!g_cu) { g_cu = old; g_cu_cap = oc; return; }
+    for (int i = 0; i < oc; i++) if (old[i].name) *cu_slot(old[i].cls, old[i].name) = old[i];
+    free(old);
+  }
+  CuMemo *m = cu_slot(cls, name);
+  if (m->name) return;
+  char *n = strdup(name);
+  if (!n) return;
+  m->cls = cls; m->name = n; m->ans = ans; g_cu_n++;
+}
+void cplan_chain_undef_hold(int on) {
+  if (!on) {
+    for (int i = 0; i < g_cu_cap; i++) free(g_cu[i].name);
+    free(g_cu); g_cu = NULL; g_cu_cap = g_cu_n = 0;
+  }
+  g_cu_on = on;
+}
+static int cplan_chain_undef_ask(Compiler *c, int cls, const char *name);
 static int cplan_chain_undef(Compiler *c, int cls, const char *name) {
+  if (!g_cu_on) return cplan_chain_undef_ask(c, cls, name);
+  if (g_cu_cap) { CuMemo *m = cu_slot(cls, name); if (m->name) return m->ans; }
+  int ans = cplan_chain_undef_ask(c, cls, name);
+  cu_put(cls, name, ans);
+  return ans;
+}
+static int cplan_chain_undef_ask(Compiler *c, int cls, const char *name) {
   ElabVersion vs[VER_MAX_ARMS];
   int nv = elab_chain_versions(c, cls, 0, name, vs, VER_MAX_ARMS);
   if (nv < 0 || nv >= VER_MAX_ARMS) return 1;   /* (the index cannot say, or holds more: ask) */

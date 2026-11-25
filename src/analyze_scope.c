@@ -12625,8 +12625,9 @@ static void pivs_each_arg(Compiler *c, const int *av, int ac, char *set, int dep
    of the method's name passes there, or its default. A Symbol of the name
    (send, method, define_method) may reach it some other way, which leaves
    it unbounded. With no parameter name, follow the same calls' receivers
-   to bound a root method's boxed self. */
-static int pivs_param(Compiler *c, Scope *s, const char *pn, char *set, int depth) {
+   to bound a root method's boxed self. With `elems`, the elements of the
+   arguments (pivs_elems), for a parameter that is no initialize's. */
+static int pivs_param(Compiler *c, Scope *s, const char *pn, char *set, int depth, int elems) {
   /* Compiled C dispatch supplies values without a Ruby AST call site. */
   if (c->n_cext_extensions && s->def_node >= 0 && nt_int(c->nt, s->def_node, "cext_stub", 0)) return 0;
   const NodeTable *nt = c->nt;
@@ -12645,10 +12646,11 @@ static int pivs_param(Compiler *c, Scope *s, const char *pn, char *set, int dept
      whose class resolves to this initialize, in a query that asks for it. */
   int init = pn && c->pivs->init_args && is_initialize_name(mn) && !s->is_cmethod && s->class_id >= 0 &&
              !class_is_exc_subclass(c, s->class_id);
+  if (elems && (init || pivs_unfollowed(c))) return 0;
   if (!init) for (int k = 0; PROTO[k]; k++) if (sp_streq(mn, PROTO[k])) return 0;
   if (init && c->pivs->hash_mode == 1 && !c->pivs->init_walk) {
     c->pivs->init_walk = 1;
-    int ok = pivs_param(c, s, pn, set, depth);
+    int ok = pivs_param(c, s, pn, set, depth, elems);
     c->pivs->init_walk = 0;
     return ok;
   }
@@ -12727,7 +12729,7 @@ static int pivs_param(Compiler *c, Scope *s, const char *pn, char *set, int dept
       /* (each initialize once per query: modules passing on to each other) */
       int ui = (int)(us - c->scopes);
       if (!an || (f->init_done_q[ui] == f->query && f->init_done_pn[ui] == an)) continue;
-      pivs_param(c, us, an, set, depth + 1);
+      pivs_param(c, us, an, set, depth + 1, 0);
       f->init_done_q[ui] = f->query; f->init_done_pn[ui] = an;
     }
     nopen--;
@@ -12786,7 +12788,7 @@ static int pivs_param(Compiler *c, Scope *s, const char *pn, char *set, int dept
     }
     int x = i < ac ? av[i] : dflt;
     if (x < 0) continue;   /* too few: ArgumentError, no value */
-    if (!pivs_value(c, x, set, depth + 1)) return 0;
+    if (!(elems ? pivs_elems(c, x, set, depth + 1) : pivs_value(c, x, set, depth + 1))) return 0;
     ncalls++;
   }
   return !pn || ncalls > 0 || pivs_unfollowed(c);
@@ -13021,10 +13023,12 @@ static int pivs_local(Compiler *c, int v, char *set, int depth, int elems) {
       if (c->nscope[w] == si && sp_streq(nt_str(nt, w, "name"), vn)) return 0;
     return pivs_elems(c, ur, set, depth + 1);
   }
-  for (int i = 0; i < s->nparams; i++)
-    if (s->pnames[i] && sp_streq(s->pnames[i], vn))
-      return !elems && pivs_param(c, s, vn, set, depth);
-  if (!pivs_local_writes_ok(c, si, vn)) return 0;
+  /* a parameter: what its callers pass (pivs_param); its elements are
+     their arguments' elements and what the method stores through it */
+  int param = 0;
+  for (int i = 0; i < s->nparams && !param; i++) param = s->pnames[i] && sp_streq(s->pnames[i], vn);
+  if (param && !elems) return pivs_param(c, s, vn, set, depth, 0);
+  if (!param && !pivs_local_writes_ok(c, si, vn)) return 0;
   if (elems) {
     /* an Array local: what its literal writes hold, and what is pushed onto
        it; handed anywhere else, it may gain what this does not see. The
@@ -13047,6 +13051,7 @@ static int pivs_local(Compiler *c, int v, char *set, int depth, int elems) {
     if (!ok) return 0;
     if (pivs_local_escapes(c, vn)) return 0;
   }
+  if (param) return pivs_param(c, s, vn, set, depth, 1);
   for (int w = comp_lvw_first_sc(c, si, vn); w >= 0; w = comp_lvw_next_sc(c, w)) {
     if (c->nscope[w] != si || !sp_streq(nt_str(nt, w, "name"), vn)) continue;
     int wv = nt_ref(nt, w, "value");
@@ -13274,7 +13279,7 @@ static int pivs_value_walk(Compiler *c, int v, char *set, int depth) {
       if (!s || s->is_cmethod || s->class_id < 0) return 0;
       /* Object's boxed self is not bounded by the recorded class parents. */
       if (is_object_root(c->classes[s->class_id].name))
-        return !s->reachable || pivs_param(c, s, NULL, set, depth);
+        return !s->reachable || pivs_param(c, s, NULL, set, depth, 0);
       for (int k = 0; k < c->nclasses; k++)
         if (k == s->class_id || is_descendant(c, k, s->class_id)) set[k] = 1;
       return 1;

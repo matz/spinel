@@ -551,6 +551,7 @@ int is_method_reader_name(const char *n); /* name arity owner parameters source_
 enum { CDECL_METHODS = 1, CDECL_SMETHODS = 2, CDECL_ANCESTORS = 4, CDECL_CONSTS = 8, CDECL_ALL = 15 };
 int class_reader_observes(const char *n);   /* CDECL_*: what a call on a class observes of its body's declarations; 0 for name to_s inspect superclass == hash class ... */
 int class_declaration_adds(const char *n);  /* CDECL_*: what a receiverless class-body declaration call adds */
+int is_collection_identity_query(const char *n);   /* size length count empty? include? member? any? none?: what a collection holds, by identity */
 int is_marshal_const(const char *n);     /* Marshal, whose load makes objects with any ivars */
 int is_env_const(const char *n);         /* ENV */
 int is_argv_const(const char *n);        /* ARGV */

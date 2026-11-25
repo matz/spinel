@@ -8214,32 +8214,69 @@ static int cplan_rt_site_declares(Compiler *c, int ci) {
   }
   return kinds;
 }
+/* What an inherited hook's class is followed through (cplan_rt_hook_reflects):
+   the locals and instance variables that hold the class, those that hold
+   a collection it was stored in, and the names of the calls that answer
+   such a collection (`P.subs << k`) */
+typedef struct { ANameHash cls, coll, coll_calls; } HookHeld;
+enum { HOOK_NONE, HOOK_CLASS, HOOK_COLL };
+/* Does node r read the class (HOOK_CLASS) or a collection that holds it
+   (HOOK_COLL)? (A respond_to? probe, desugar_respond_to_probe, is no call.) */
+static int cplan_hook_read(const NodeTable *nt, const HookHeld *h, int r) {
+  NodeKind k = r >= 0 ? nt_kind(nt, r) : NK_NilNode;
+  const char *n = nt_str(nt, r, "name");
+  if (k == NK_LocalVariableReadNode || k == NK_InstanceVariableReadNode)
+    return anh_has(&h->cls, n) ? HOOK_CLASS : anh_has(&h->coll, n) ? HOOK_COLL : HOOK_NONE;
+  return k == NK_CallNode && !nt_int(nt, r, "rt_probe", 0) && anh_has(&h->coll_calls, n) ? HOOK_COLL : HOOK_NONE;
+}
+/* Is w a write of a local or an instance variable, the writes the class is
+   followed through? */
+static int cplan_hook_follows_write(NodeKind k) {
+  return k == NK_LocalVariableWriteNode || k == NK_LocalVariableOrWriteNode ||
+         k == NK_InstanceVariableWriteNode || k == NK_InstanceVariableOrWriteNode;
+}
+/* Is call q a builtin's store of its arguments into its receiver
+   (`subs << k`, `subs.push(k)`, `h[k] = v`), with no block? */
+static int cplan_hook_store(const NodeTable *nt, int q) {
+  const char *qn = nt_kind(nt, q) == NK_CallNode ? nt_str(nt, q, "name") : NULL;
+  return qn && nt_ref(nt, q, "block") < 0 && (is_array_push_family(qn) || is_store_alias(qn));
+}
+/* The collection store q stores into, read through parentheses: a local or
+   an instance variable (read or written there, `(@subs ||= []) << k`) into
+   *var, or a call (`P.subs`) into *call; 0 for any other */
+static int cplan_hook_store_target(const NodeTable *nt, int q, const char **var, const char **call) {
+  int r = nt_ref(nt, q, "receiver");
+  for (int d = 0; r >= 0 && nt_kind(nt, r) == NK_ParenthesesNode && d < 8; d++) {
+    int bd = nt_ref(nt, r, "body"), n = 0;
+    const int *st = bd >= 0 && nt_kind(nt, bd) == NK_StatementsNode ? nt_arr(nt, bd, "body", &n) : NULL;
+    r = n == 1 ? st[0] : -1;
+  }
+  NodeKind k = r >= 0 ? nt_kind(nt, r) : NK_NilNode;
+  *var = *call = NULL;
+  if (k == NK_LocalVariableReadNode || k == NK_InstanceVariableReadNode || cplan_hook_follows_write(k)) *var = nt_str(nt, r, "name");
+  else if (k == NK_CallNode) *call = nt_str(nt, r, "name");
+  return *var || *call;
+}
 /* Does a method of the program have name nm? */
 static int cplan_program_defines(const Compiler *c, const char *nm) {
   for (int s = 1; nm && s < c->nscopes; s++)
     if (c->scopes[s].def_node >= 0 && c->scopes[s].name && sp_streq(c->scopes[s].name, nm)) return 1;
   return 0;
 }
-/* Is node r a read of a local or an instance variable named in held? */
-static int cplan_hook_held_read(const NodeTable *nt, const ANameHash *held, int r) {
-  NodeKind k = r >= 0 ? nt_kind(nt, r) : NK_NilNode;
-  return (k == NK_LocalVariableReadNode || k == NK_InstanceVariableReadNode) && anh_has(held, nt_str(nt, r, "name"));
-}
-/* Is w a write of a local or an instance variable, the writes a hook's
-   class is followed through? */
-static int cplan_hook_follows_write(NodeKind k) {
-  return k == NK_LocalVariableWriteNode || k == NK_LocalVariableOrWriteNode ||
-         k == NK_InstanceVariableWriteNode || k == NK_InstanceVariableOrWriteNode;
-}
-/* May read r of the class an inherited hook (def node hd) is handed observe
-   what the site's body declares (kinds)? A call on it by what that reader
-   observes (class_reader_observes). As an argument: not of super, nor of a
-   builtin's call without a block (`subs << k`, a Hash store, `p k`); of a
-   method the program defines, a send, a call of a proc or a block, or a
-   call with a block, it may. A statement's value nothing uses, a string's
-   interpolation, a condition and a followed write (cplan_hook_follows_write)
-   observe nothing; any other place may hand it on. */
-static int cplan_hook_use_observes(Compiler *c, const int *par, int r, int kinds, int hd) {
+/* May read r of the class an inherited hook (def node hd) is handed, or
+   of a collection holding it (kind, cplan_hook_read), observe what the
+   site's body declares (kinds)? A call on the class by what that reader
+   observes (class_reader_observes); a call on a collection that stores
+   into it again or asks only what it holds (is_collection_identity_query),
+   none. The class as an argument: of super, an output call, a compare or
+   a collection's identity query, none; stored into a collection the hook
+   follows (cplan_hook_store_target), none; of any other call (a method the
+   program defines, a send, a proc's or a block's call, a call with a
+   block, a builtin that may keep it) it may observe anything. A
+   statement's value nothing uses, a string's interpolation, a condition
+   and a followed write (cplan_hook_follows_write) observe nothing; any
+   other place may hand it on. */
+static int cplan_hook_use_observes(Compiler *c, const int *par, int r, int kind, int kinds, int hd) {
   const NodeTable *nt = c->nt;
   int p = par[r];
   /* (a respond_to? probe shares the read, desugar_respond_to_probe: its use
@@ -8247,14 +8284,19 @@ static int cplan_hook_use_observes(Compiler *c, const int *par, int r, int kinds
   if (p >= 0 && nt_kind(nt, p) == NK_ArgumentsNode && par[p] >= 0 && nt_int(nt, par[p], "rt_probe", 0)) p = par[p];
   if (p >= 0 && nt_kind(nt, p) == NK_CallNode && nt_int(nt, p, "rt_probe", 0)) p = par[p];
   NodeKind pk = p >= 0 ? nt_kind(nt, p) : NK_NilNode;
-  if (pk == NK_CallNode && nt_ref(nt, p, "receiver") == r) return (class_reader_observes(nt_str(nt, p, "name")) & kinds) != 0;
+  if (pk == NK_CallNode && nt_ref(nt, p, "receiver") == r) {
+    const char *pn = nt_str(nt, p, "name");
+    if (kind == HOOK_COLL) return !(cplan_hook_store(nt, p) || (is_collection_identity_query(pn) && nt_ref(nt, p, "block") < 0));
+    return (class_reader_observes(pn) & kinds) != 0;
+  }
   if (pk == NK_ArgumentsNode) {
     int q = par[p];
     NodeKind qk = q >= 0 ? nt_kind(nt, q) : NK_NilNode;
-    const char *qn = qk == NK_CallNode ? nt_str(nt, q, "name") : NULL;
-    if (qk == NK_SuperNode) return 0;
-    return !qn || nt_ref(nt, q, "block") >= 0 || cplan_program_defines(c, qn) || is_send_family(qn) ||
-           is_call_alias(qn) || is_call_or_yield(qn);
+    const char *qn = qk == NK_CallNode ? nt_str(nt, q, "name") : NULL, *var, *call;
+    if (qk == NK_SuperNode) return kind == HOOK_COLL;
+    if (kind == HOOK_COLL || !qn || nt_ref(nt, q, "block") >= 0 || cplan_program_defines(c, qn)) return 1;
+    if (cplan_hook_store(nt, q)) return !cplan_hook_store_target(nt, q, &var, &call);
+    return !((is_stmt_output_name(qn) && nt_ref(nt, q, "receiver") < 0) || is_class_compare(qn) || is_collection_identity_query(qn));
   }
   if (pk == NK_StatementsNode) {
     int n = 0, pp = par[p];
@@ -8264,13 +8306,35 @@ static int cplan_hook_use_observes(Compiler *c, const int *par, int r, int kinds
   if (pk == NK_IfNode || pk == NK_UnlessNode || pk == NK_WhileNode || pk == NK_UntilNode) return nt_ref(nt, p, "predicate") != r;
   return !(cplan_hook_follows_write(pk) && nt_ref(nt, p, "value") == r);
 }
+/* Grow h by one pass over the hook's nodes ids[n]: a followed write of
+   what h follows follows it too, and a collection the class is stored into
+   (cplan_hook_store_target) holds it. Answers whether h grew. */
+static int cplan_hook_follow(const NodeTable *nt, const int *par, const int *ids, int n, HookHeld *h) {
+  int grew = 0;
+  for (int i = 0; i < n; i++) {
+    int w = ids[i], kind = HOOK_NONE;
+    const char *wn = cplan_hook_follows_write(nt_kind(nt, w)) ? nt_str(nt, w, "name") : NULL, *var, *call;
+    if (wn && (kind = cplan_hook_read(nt, h, nt_ref(nt, w, "value"))) != HOOK_NONE) {
+      ANameHash *into = kind == HOOK_CLASS ? &h->cls : &h->coll;
+      if (!anh_has(into, wn)) { anh_add(into, wn); grew = 1; }
+    }
+    int p = cplan_hook_read(nt, h, w) == HOOK_CLASS ? par[w] : -1, q = p >= 0 ? par[p] : -1;
+    if (p >= 0 && nt_kind(nt, p) == NK_ArgumentsNode && q >= 0 && cplan_hook_store(nt, q) &&
+        cplan_hook_store_target(nt, q, &var, &call)) {
+      ANameHash *into = var ? &h->coll : &h->coll_calls;
+      const char *nm = var ? var : call;
+      if (!anh_has(into, nm)) { anh_add(into, nm); grew = 1; }
+    }
+  }
+  return grew;
+}
 /* Does a program `inherited` on the chain above site class ci observe what
    the class's body declares (cplan_rt_site_declares)? CRuby runs the hook at
    each evaluation before the block declares anything, and the site class
    has it all from the start. The hook's parameter is followed through the
-   locals and instance variables it is written to in the hook (and its
-   blocks and lambdas), and each read of them asks its use
-   (cplan_hook_use_observes). */
+   locals and instance variables it is written to and the collections it is
+   stored in, in the hook (and its blocks and lambdas, cplan_hook_follow),
+   and each read of them asks its use (cplan_hook_use_observes). */
 static int cplan_rt_hook_reflects(Compiler *c, int ci) {
   int kinds = ci >= 0 ? cplan_rt_site_declares(c, ci) : 0;
   if (!kinds) return 0;
@@ -8283,18 +8347,14 @@ static int cplan_rt_hook_reflects(Compiler *c, int ci) {
     int body = hs->def_node >= 0 ? nt_ref(nt, hs->def_node, "body") : -1, n = 0, hit = 0;
     if (hs->nparams < 1 || body < 0) continue;
     int *ids = nt_subtree_ids((NodeTable *)c->nt, &body, 1, &n);
-    ANameHash held = {0};
-    anh_add(&held, hs->pnames[0]);
-    for (int grew = 1; grew; ) {
-      grew = 0;
-      for (int i = 0; i < n; i++) {
-        const char *wn = cplan_hook_follows_write(nt_kind(nt, ids[i])) ? nt_str(nt, ids[i], "name") : NULL;
-        if (wn && !anh_has(&held, wn) && cplan_hook_held_read(nt, &held, nt_ref(nt, ids[i], "value"))) { anh_add(&held, wn); grew = 1; }
-      }
+    HookHeld h = {0};
+    anh_add(&h.cls, hs->pnames[0]);
+    while (cplan_hook_follow(nt, par, ids, n, &h)) { }
+    for (int i = 0; i < n && !hit; i++) {
+      int kind = cplan_hook_read(nt, &h, ids[i]);
+      hit = kind != HOOK_NONE && cplan_hook_use_observes(c, par, ids[i], kind, kinds, hs->def_node);
     }
-    for (int i = 0; i < n && !hit; i++)
-      hit = cplan_hook_held_read(nt, &held, ids[i]) && cplan_hook_use_observes(c, par, ids[i], kinds, hs->def_node);
-    anh_free(&held);
+    anh_free(&h.cls); anh_free(&h.coll); anh_free(&h.coll_calls);
     free(ids);
     if (hit) return 1;
   }

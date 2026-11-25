@@ -2152,6 +2152,12 @@ int class_reader_observes(const char *n) {
   for (int i = 0; n && rows[i].name; i++) if (sp_streq(n, rows[i].name)) return rows[i].kinds;
   return CDECL_ALL;
 }
+/* A call on a collection that asks only what it holds, by identity: its
+   size, whether it is empty, whether it holds a value (with no block) */
+int is_collection_identity_query(const char *n) {
+  static const char *const names[] = { "size", "length", "count", "empty?", "include?", "member?", "any?", "none?", NULL };
+  return n && builtin_name_in(n, names);
+}
 /* What a receiverless class-body declaration call adds to its class
    (CDECL_*): a visibility change, an attribute, an alias or a removal its
    instance methods; a class-method visibility change its own methods; a

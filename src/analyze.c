@@ -55825,6 +55825,12 @@ static void an_phase_value_types(Compiler *c) {
       int pk[64], npk = ie_poly_classes_at(c, id, pk, 64);
       for (int i = 0; i < npk; i++) c->classes[pk[i]].is_value_type = 0;
     }
+    /* a super whose arm answers from the object itself (its address, its frozen bit, the object, a Kernel row
+       over it: cplan_super_reads_self) reads the pointer a by-value copy does not have */
+    if ((ty_k == NK_SuperNode || ty_k == NK_ForwardingSuperNode) && cplan_super_reads_self(c, id)) {
+      Scope *s = comp_scope_of(c, id);
+      if (s && !s->is_cmethod && s->class_id >= 0 && s->class_id < c->nclasses) c->classes[s->class_id].is_value_type = 0;
+    }
     /* `instance_variable_set` on self mutates the receiver just like `@x = v`;
        a by-value class would take the write on a copy and silently drop it. */
     if (ty_k == NK_CallNode) {

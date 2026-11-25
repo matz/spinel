@@ -457,6 +457,10 @@ int cplan_super_start(Compiler *c, const Scope *s);
 /* The native class's binding (an index into Compiler.native_methods) a super node id whose arm is BSUP_NATIVE runs:
    of the name and count the plan found, and of the arguments' kinds; -1 for any other super */
 int cplan_super_native(Compiler *c, int id);
+/* Does super node id's arm (CallPlan.bsuper) answer from the object itself: its address (BSUP_SAME), its frozen bit
+   (BSUP_FROZEN), the object (BSUP_SELF), or Kernel's row over it (BSUP_KERNEL_ROW)? A by-value object
+   (an_phase_value_types) has none of them. */
+int cplan_super_reads_self(Compiler *c, int id);
 /* Is super node id, in a class method, the call of a definition hook (`inherited`, `method_added`) that only a builtin's no-op answers? */
 int cplan_core_hook(Compiler *c, int id);
 int cplan_kernel_def(Compiler *c, const char *name);   /* a version of the name's top-level history is a program Kernel def */

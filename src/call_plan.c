@@ -1216,6 +1216,14 @@ int cplan_super_native(Compiler *c, int id) {
                                        sac, 0, nta == sac ? natys : NULL);
 }
 
+/* See call_plan.h. */
+int cplan_super_reads_self(Compiler *c, int id) {
+  switch ((BsuperArm)cplan_user(c, id).bsuper) {
+  case BSUP_SAME: case BSUP_FROZEN: case BSUP_SELF: case BSUP_KERNEL_ROW: return 1;
+  default: return 0;
+  }
+}
+
 static void cplan_resolve_super(Compiler *c, int id, CallPlan *p) {
   Scope *s = comp_scope_of(c, id);
   if (!s || s->class_id < 0 || !s->name) return;

@@ -8,3 +8,11 @@ false
 true
 false
 [false, false, true]
+eql? block
+false
+false
+false
+false
+false
+false
+[false, false, false]

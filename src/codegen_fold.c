@@ -4835,7 +4835,7 @@ int emit_each_with_index_chain(Compiler *c, int id, Buf *b) {
       buf_printf(b, "); sp_PolyArray_push(lv_%s, sp_box_int(_t%d)); ", rename_local(pairo), tidx);
     }
   }
-  for (int j = 0; j < bn - 1; j++) { emit_stmt(c, bb[j], b, 0); buf_puts(b, " "); }
+  emit_iter_step_lead(c, bbody, bn - 1, b, 0);
   /* The tail is rendered with the prelude pointed INSIDE the loop. Left at
      the caller's g_pre, a tail that hoists -- `acc + [pair]` builds the
      one-element array as statements -- put that construction ahead of the

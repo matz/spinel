@@ -17181,9 +17181,9 @@ void emit_super_blockarg_effect(Compiler *c, int id, Buf *b) {
 }
 /* emit_super's arms BSUP_SAME, BSUP_FALSE, BSUP_FROZEN, BSUP_SELF and BSUP_KERNEL_ROW (comp_super_object_builtin). */
 static int emit_super_object_builtin(Compiler *c, int id, Scope *s, const char *uname, BsuperArm barm, Buf *b) {
-  /* a by-value object (detect_value_types) has no identity to compare:
-     the super raises as before */
-  if (c->classes[s->class_id].is_value_type) return 0;
+  /* a by-value object (detect_value_types) has no identity to compare, nor a frozen bit or itself to answer: the
+     super raises as before; false needs neither */
+  if (c->classes[s->class_id].is_value_type && barm != BSUP_FALSE) return 0;
   Buf vb; memset(&vb, 0, sizeof vb);
   TyKind vt = TY_BOOL;
   /* a reopening of Object takes self boxed (emit_method_signature), any
@@ -18013,10 +18013,14 @@ static void emit_super_value(Compiler *c, int id, Buf *b) {
       buf_printf(&rb, "({ sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d); ", tk, kb.p ? kb.p : "sp_box_nil()", tk);
       emit_super_blockarg_effect(c, id, &rb);
       buf_printf(&rb, "if (_t%d.tag != SP_TAG_CLASS) sp_raise_cls(\"TypeError\", \"class or module required\"); ", tk);
+      /* (a by-value object, detect_value_types, is of the method's class: no class below it builds one) */
+      char scls[96];
+      if (c->classes[s->class_id].is_value_type) snprintf(scls, sizeof scls, "%d", s->class_id);
+      else snprintf(scls, sizeof scls, "%s->cls_id", g_self);
       if (barm == BSUP_INSTANCE_OF)
-        buf_printf(&rb, "(sp_bool)(sp_unbox_class(_t%d).cls_id == %s->cls_id); })", tk, g_self);
+        buf_printf(&rb, "(sp_bool)(sp_unbox_class(_t%d).cls_id == %s); })", tk, scls);
       else
-        buf_printf(&rb, "(sp_bool)sp_class_le((sp_Class){%s->cls_id}, sp_unbox_class(_t%d)); })", g_self, tk);
+        buf_printf(&rb, "(sp_bool)sp_class_le((sp_Class){%s}, sp_unbox_class(_t%d)); })", scls, tk);
       if (repr_of(c, id).kind == RK_BOXED) emit_boxed_text(c, TY_BOOL, rb.p, b);
       else buf_puts(b, rb.p);
       free(kb.p); free(rb.p);

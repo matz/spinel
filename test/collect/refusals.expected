@@ -1188,6 +1188,42 @@ spinel: 1 refusal, nothing written
 == test/reject/forwarding_super_yielding_optional.rb [promote] rc=1
 spinel: test/reject/forwarding_super_yielding_optional.rb:5: `super(...)` into a method that yields and takes an optional or *rest parameter: the forwarded arguments cannot leave one out
 spinel: 1 refusal, nothing written
+== test/reject/fwd_new_class_value_record_anon_data.rb [default] rc=1
+spinel: test/reject/fwd_new_class_value_record_anon_data.rb:10: `...` forwarded to `new` on a class value, where an initialize takes keywords and a Struct or Data class could be constructed
+spinel: 1 refusal, nothing written
+== test/reject/fwd_new_class_value_record_anon_data.rb [promote] rc=1
+spinel: test/reject/fwd_new_class_value_record_anon_data.rb:10: `...` forwarded to `new` on a class value, where an initialize takes keywords and a Struct or Data class could be constructed
+spinel: 1 refusal, nothing written
+== test/reject/fwd_new_class_value_record_anon_struct.rb [default] rc=1
+spinel: test/reject/fwd_new_class_value_record_anon_struct.rb:10: `...` forwarded to `new` on a class value, where an initialize takes keywords and a Struct or Data class could be constructed
+spinel: 1 refusal, nothing written
+== test/reject/fwd_new_class_value_record_anon_struct.rb [promote] rc=1
+spinel: test/reject/fwd_new_class_value_record_anon_struct.rb:10: `...` forwarded to `new` on a class value, where an initialize takes keywords and a Struct or Data class could be constructed
+spinel: 1 refusal, nothing written
+== test/reject/fwd_new_class_value_record_data.rb [default] rc=1
+spinel: test/reject/fwd_new_class_value_record_data.rb:11: `...` forwarded to `new` on a class value, where an initialize takes keywords and a Struct or Data class could be constructed
+spinel: 1 refusal, nothing written
+== test/reject/fwd_new_class_value_record_data.rb [promote] rc=1
+spinel: test/reject/fwd_new_class_value_record_data.rb:11: `...` forwarded to `new` on a class value, where an initialize takes keywords and a Struct or Data class could be constructed
+spinel: 1 refusal, nothing written
+== test/reject/fwd_new_class_value_record_itself.rb [default] rc=1
+spinel: test/reject/fwd_new_class_value_record_itself.rb:11: `...` forwarded to `new` on a class value, where an initialize takes keywords and a Struct or Data class could be constructed
+spinel: 1 refusal, nothing written
+== test/reject/fwd_new_class_value_record_itself.rb [promote] rc=1
+spinel: test/reject/fwd_new_class_value_record_itself.rb:11: `...` forwarded to `new` on a class value, where an initialize takes keywords and a Struct or Data class could be constructed
+spinel: 1 refusal, nothing written
+== test/reject/fwd_new_class_value_record_tap.rb [default] rc=1
+spinel: test/reject/fwd_new_class_value_record_tap.rb:11: `...` forwarded to `new` on a class value, where an initialize takes keywords and a Struct or Data class could be constructed
+spinel: 1 refusal, nothing written
+== test/reject/fwd_new_class_value_record_tap.rb [promote] rc=1
+spinel: test/reject/fwd_new_class_value_record_tap.rb:11: `...` forwarded to `new` on a class value, where an initialize takes keywords and a Struct or Data class could be constructed
+spinel: 1 refusal, nothing written
+== test/reject/fwd_new_class_value_record_tap_splat.rb [default] rc=1
+spinel: test/reject/fwd_new_class_value_record_tap_splat.rb:11: `...` forwarded to `new` on a class value, where an initialize takes keywords and a Struct or Data class could be constructed
+spinel: 1 refusal, nothing written
+== test/reject/fwd_new_class_value_record_tap_splat.rb [promote] rc=1
+spinel: test/reject/fwd_new_class_value_record_tap_splat.rb:11: `...` forwarded to `new` on a class value, where an initialize takes keywords and a Struct or Data class could be constructed
+spinel: 1 refusal, nothing written
 == test/reject/include_module_from_expression.rb [default] rc=1
 spinel: test/reject/include_module_from_expression.rb:9: `include` of a module named by an expression, not a constant, is not supported (the mixin is resolved at compile time)
 == test/reject/include_module_from_expression.rb [promote] rc=1

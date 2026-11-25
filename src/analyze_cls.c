@@ -3829,8 +3829,10 @@ static void cf_call(CF *f, int v) {
     if (cf_kernel_proc_call(f, v, k->name, nm, argv, argc, blk)) return;
     if (cf_poison_class_call(f, v, k->name, nm, argv, argc, blk)) return;
     /* a method of Class or Module: nothing of the program's own comes out,
-       except through a block */
+       except through a block, and Kernel's itself and tap, which answer
+       the Class object */
     if (blk >= 0 && nt_kind(nt, blk) == NK_BlockNode) cf_all_block_params(f, blk);
+    if (is_itself_name(nm) || is_tap_name(nm)) cf_add_set(f, v, cf_classval(f, x));
     cf_builtin_rule(f, v, -1, argv, argc, blk, nm);
     return;
   }

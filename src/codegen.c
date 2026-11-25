@@ -14468,6 +14468,24 @@ static int obj_deconstruct_keys_method(Compiler *c, int ci, int *defc) {
   return mi;
 }
 
+/* Class#subclasses' entry for the program's class k, pushed onto the
+   PolyArray arr: the class boxed by id (a class-side dispatch switches on
+   it, and sp_class_to_s names it), listed once its header has run (the
+   flag the constant pass had the call ask); for a site class, the classes
+   made at run time from it instead, newest first as CRuby lists them. */
+void emit_subclass_push(Compiler *c, int k, const char *arr, Buf *b) {
+  if (cplan_rt_site(c, k)) {
+    int r = ++g_tmp;
+    buf_printf(b, " for (sp_int _t%d = sp_rtclass_made(); _t%d-- > 0; )"
+                  " if (sp_rtclass_at(SP_RTCLASS_BASE + _t%d)->site == %d)"
+                  " sp_PolyArray_push(%s, sp_box_class(((sp_Class){SP_RTCLASS_BASE + _t%d, NULL})));",
+               r, r, r, k, arr, r);
+    return;
+  }
+  if (an_class_presence_is_read(c, k)) buf_printf(b, " if (sp_class_present_%d)", k);
+  buf_printf(b, " sp_PolyArray_push(%s, sp_box_class(((sp_Class){%d, NULL})));", arr, k);
+}
+
 /* The class-side names a Class read out of a boxed slot answers, each a
    switch over the program's classes, since the typed constant's answer is
    compiled from the class table: `subclasses` lists the classes whose parent
@@ -14507,10 +14525,7 @@ static void emit_cls_answers_dispatch(Compiler *c, Buf *b) {
     for (int k = 0; k < c->nclasses; k++) {
       if (c->classes[k].parent != i || is_builtin_reopen(c->classes[k].name)) continue;
       if (c->classes[k].is_singleton_of) continue;   /* a singleton class is not listed */
-      /* boxed by id, as the constant receiver's Class#subclasses is; listed
-         once its header has run (the flag the constant pass had the call ask) */
-      if (an_class_presence_is_read(c, k)) buf_printf(b, " if (sp_class_present_%d)", k);
-      buf_printf(b, " sp_PolyArray_push(a, sp_box_class(((sp_Class){%d, NULL})));", k);
+      emit_subclass_push(c, k, "a", b);
     }
     buf_puts(b, " return a;\n");
   }

@@ -52,13 +52,15 @@ sp_Class sp_rtclass_new(sp_int site, int is_module) {
   }
   r->site = site;
   r->key = key;
-  sp_rtclass_count = n + 1;
+  SP_ATOMIC_STORE(&sp_rtclass_count, n + 1, __ATOMIC_RELEASE);
   sp_rtclass_frozen_fn = sp_rtclass_frozen_flag;
 #ifdef SP_THREADS
   pthread_mutex_unlock(&sp_rtclass_lock);
 #endif
   return (sp_Class){ SP_RTCLASS_BASE + n, NULL };
 }
+
+sp_int sp_rtclass_made(void) { return SP_ATOMIC_LOAD(&sp_rtclass_count, __ATOMIC_ACQUIRE); }
 
 /* to_s and inspect: the first constant that names it, else its key */
 const char *sp_rtclass_display(sp_int id) {

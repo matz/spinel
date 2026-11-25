@@ -2021,7 +2021,12 @@ static int flatten_node(pm_node_t *node) {
     if (sp_line_map_n > 0 && bl >= 1 && bl <= sp_line_map_n && sp_line_orig[bl] > 0) {
       orig = sp_line_orig[bl];
       fid = sp_line_file[bl];
-      if (sp_disp_line[bl] > 0) { orig = sp_disp_line[bl]; fid = sp_disp_file[bl]; }
+      if (sp_disp_line[bl] > 0) {
+        /* The file the node is written in, kept apart from the marker's:
+           the load graph places a node by the file that holds it */
+        if (sp_disp_file[bl] != fid) emit_int(id, "node_src_file", (long long)fid);
+        orig = sp_disp_line[bl]; fid = sp_disp_file[bl];
+      }
     }
     emit_int(id, "node_line", (long long)orig);
     emit_int(id, "node_file", (long long)fid);

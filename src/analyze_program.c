@@ -96,10 +96,16 @@ int prog_load_deferred(const Compiler *c, int f) {
 /* The graph file whose tree holds node, or -1. Not the node's node_file
    itself: that is the #line table's id (879be11b4), which runs past the
    graph's files once the table holds more names than the graph has files. */
+/* The table id of the file node is written in: node_file, unless a
+   `#<SPINEL_SOURCE>` marker moved that to the marker's file for messages. */
+static long long prog_node_src_file(const NodeTable *nt, int node) {
+  long long s = nt_int(nt, node, "node_src_file", -1);
+  return s >= 0 ? s : nt_int(nt, node, "node_file", -1);
+}
 static int prog_graph_file_of(const NodeTable *nt, int node) {
-  long long fid = nt_int(nt, node, "node_file", -1);
+  long long fid = prog_node_src_file(nt, node);
   for (int f = 0; fid >= 0 && f < nt_nroots(nt); f++)
-    if (nt_int(nt, nt_root(nt, f), "node_file", -2) == fid) return f;
+    if (prog_node_src_file(nt, nt_root(nt, f)) == fid) return f;
   return -1;
 }
 static int prog_stamp_deferred(Compiler *c, int f, unsigned char *state) {
@@ -1598,10 +1604,10 @@ static void prog_unplace_candidates(Compiler *c, const unsigned char *seen, cons
 int prog_node_in_dropped_file(Compiler *c, int node) {
   const NodeTable *nt = c->nt;
   if (node < 0) return 0;
-  long long fid = nt_int(nt, node, "node_file", -1);
+  long long fid = prog_node_src_file(nt, node);
   if (fid < 0) return 0;
   for (int f = 1; f < nt_nroots(nt); f++)
-    if (nt_int(nt, nt_root(nt, f), "node_file", -2) == fid) return nt_int(nt, nt_root(nt, f), "file_dropped", 0) != 0;
+    if (prog_node_src_file(nt, nt_root(nt, f)) == fid) return nt_int(nt, nt_root(nt, f), "file_dropped", 0) != 0;
   return 0;
 }
 

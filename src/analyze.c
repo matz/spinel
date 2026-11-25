@@ -27959,57 +27959,6 @@ static int strbuf_demand_elem_arg(Compiler *c, int an) {
   sb_elem_nactive--;
   return r;
 }
-/* A super in an instance method `inspect` or `to_s` (no arguments of its
-   own) of a plain class -- no ancestor of the program defines the name,
-   none embeds a builtin or is a Struct, a native class or an Exception,
-   whose to_s is its message -- reaches Kernel#inspect or Kernel#to_s,
-   which build a new String each call. */
-int an_super_object_text(Compiler *c, int n, int mi) {
-  if (mi <= 0 || mi >= c->nscopes) return 0;
-  const Scope *s = comp_super_site(c, &c->scopes[mi]);
-  /* (an included module's method under the class's own is a shadow of the
-     class: `__inc_0_inspect`) */
-  const char *nm = s->name ? comp_scope_def_name(c, s) : NULL;
-  if (!nm || s->is_cmethod || s->class_id < 0 || s->nparams != 0 ||
-      object_super_arm(nm) != OSA_TEXT)
-    return 0;
-  NodeKind k = nt_kind(c->nt, n);
-  if (k != NK_SuperNode && k != NK_ForwardingSuperNode) return 0;
-  if (k == NK_SuperNode && nt_ref(c->nt, n, "arguments") >= 0) return 0;
-  int cid = s->class_id;
-  ClassInfo *ci = &c->classes[cid];
-  /* (a reopened builtin -- Exception, String, Object -- has its own
-     inspect and to_s behind the program's) */
-  if (comp_class_is_module(c, ci) || is_builtin_reopen(ci->name) || ci->is_native_class || ci->nsub_root > 0) return 0;
-  /* (a method of an ancestor, an included module's, or an Object
-     reopening's, is the call plan's target; no method of the program's,
-     Kernel's is the builtin the plan names, which no Struct, Exception,
-     Array or blank slate has) */
-  CallPlan p = cplan_user_fresh(c, n);
-  return p.mi < 0 && builtin_owner_kind(p.bowner) == BOWN_KERNEL;
-}
-/* The same super in a Struct or Data class's own inspect or to_s, where no
-   class of the program above it defines the name: CRuby's Struct#inspect
-   (#to_s is its alias), the default #<struct ...> text, a new String
-   (emit_super; struct_default_text_fn names the function that builds it). */
-int an_super_struct_text(Compiler *c, int n, int mi) {
-  if (mi <= 0 || mi >= c->nscopes) return 0;
-  const Scope *s = comp_super_site(c, &c->scopes[mi]);
-  const char *nm = s->name ? comp_scope_def_name(c, s) : NULL;
-  if (!nm || s->is_cmethod || s->class_id < 0 || s->nparams != 0 ||
-      (!sp_streq(nm, "inspect") && !sp_streq(nm, "to_s")))
-    return 0;
-  NodeKind k = nt_kind(c->nt, n);
-  if (k != NK_SuperNode && k != NK_ForwardingSuperNode) return 0;
-  if (k == NK_SuperNode && nt_ref(c->nt, n, "arguments") >= 0) return 0;
-  ClassInfo *ci = &c->classes[s->class_id];
-  if (comp_class_is_module(c, ci)) return 0;
-  /* (a method of an ancestor or an included module's is the call plan's
-     target; no method of the program's, Struct's or Data's is the builtin
-     the plan names) */
-  CallPlan p = cplan_user_fresh(c, n);
-  return p.mi < 0 && builtin_owner_kind(p.bowner) == BOWN_STRUCT;
-}
 /* (a subtree too deep to walk counts as one with a return) */
 static int an_subtree_has_return(const NodeTable *nt, int n, int depth) {
   if (n < 0) return 0;

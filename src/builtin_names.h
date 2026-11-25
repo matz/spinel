@@ -573,6 +573,12 @@ typedef enum {
   OSA_KERNEL_FALSE, OSA_FROZEN, OSA_SELF
 } ObjectSuperArm;
 ObjectSuperArm object_super_arm(const char *n);
+/* The same of a `super` in a class method: Class#subclasses, Class#superclass, Module#ancestors, Module#include?.
+   CSA_NONE for any other name. */
+typedef enum { CSA_NONE, CSA_SUBCLASSES, CSA_SUPERCLASS, CSA_ANCESTORS, CSA_INCLUDE_P } ClassSuperArm;
+ClassSuperArm class_super_arm(const char *n);
+int is_backtick_name(const char *n);   /* ` (Kernel#`) */
+int is_with_name(const char *n);   /* with (Data#with) */
 int builtin_module_method_known(const char *m);   /* one of Module's own methods a class answers, and no object's */
 int kernel_private_method(const char *name);   /* one of the methods Kernel defines private */
 int is_object_method_name(const char *nm);   /* one of Object's public or private instance methods, Kernel's private ones too */

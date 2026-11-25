@@ -11694,14 +11694,12 @@ static void emit_data_with_in_order(Compiler *c, int id, ClassInfo *sc, int t, i
    Data#with on self: no keywords answer self, and otherwise a copy takes
    each member the keywords name, the rest from self, after CRuby's check
    for a key no member takes. The keywords are the super's own, or for a
-   bare super the method's keyword parameters and its `**rest`. Answers 0
-   when this is not that super. */
-int emit_super_data_with(Compiler *c, int id, Scope *s, Buf *b) {
+   bare super the method's keyword parameters and its `**rest`
+   (CallPlan.bsuper BSUP_DATA_WITH). */
+void emit_super_data_with(Compiler *c, int id, Scope *s, Buf *b) {
   const NodeTable *nt = c->nt;
-  if (s->is_cmethod || s->class_id < 0) return 0;
   int cid = s->class_id;
   ClassInfo *sc = &c->classes[cid];
-  if (!sc->is_struct || !sc->is_data) return 0;
   if (cplan_hook_target(c, -1, cid, "initialize", NULL) >= 0)
     unsupported_feature(c, id, "`super` from Data#with on a Data with an initialize of its own");
   /* the copy is built as this class: one of a subclass would change class */
@@ -11810,7 +11808,6 @@ int emit_super_data_with(Compiler *c, int id, Scope *s, Buf *b) {
   else if (ty_is_object(rty) && ty_object_class(rty) != cid) buf_printf(b, "((sp_%s *)%s)", c->classes[ty_object_class(rty)].c_name, v.p);
   else buf_puts(b, v.p);
   free(v.p);
-  return 1;
 }
 
 /* Keep the pair's key alive while its value runs. A String key stays a

@@ -1241,7 +1241,7 @@ int exc_message_super_to_s(Compiler *c, int id, int *out, int cap);
 int class_has_exc_name(Compiler *c, int ci);
 int any_exc_reopen(Compiler *c);
 char **dsend_candidates(Compiler *c, int *out_n);
-int emit_super_respond_to(Compiler *c, int id, Scope *s, Buf *b);
+void emit_super_respond_to(Compiler *c, int id, Scope *s, Buf *b);
 /* a super's forwarded parameter pi, boxed (an oint slot through oint_box) */
 void emit_boxed_fwd_param(Compiler *c, Scope *s, int pi, Buf *b);
 /* a super's block argument run for its effect: "(void)(x); " */
@@ -2354,7 +2354,7 @@ int kwh_merged(Compiler *c, Scope *m, int kwh);
    as a Data or Struct construction and a `**kwrest` of any key
    (kwrest_any_key) need (TY_POLY_POLY_HASH). */
 int emit_ds_hash_merge(Compiler *c, int kwh, int any_key, TyKind *out_type);
-int emit_super_data_with(Compiler *c, int id, Scope *s, Buf *b);
+void emit_super_data_with(Compiler *c, int id, Scope *s, Buf *b);
 /* True when emit_ds_hash_materialize runs keyword code with an effect ahead
    of the call's positionals: a kwh_merged call's merged hash, or a first
    `**` operand with a side effect that it evaluates. */
@@ -2503,8 +2503,6 @@ const struct BuiltinOp *an_bop_row_for_kind(Compiler *c, int id, TyKind rt);
 const struct BuiltinOp *poly_scalar_row(TyKind k, const char *name, int argc, int has_block);   /* analyze_infer.c */
 TyKind reduce_empty_seed_kind(Compiler *c, int id);   /* analyze_infer_recv.c: an empty `[]` reduce seed's Array kind */
 int an_arg_is_shared_handle(Compiler *c, int node);
-int an_super_object_text(Compiler *c, int n, int mi);
-int an_super_struct_text(Compiler *c, int n, int mi);
 int an_user_defines_method(Compiler *c, const char *name);
 int an_enum_own_find_index(Compiler *c, int id);
 /* Can no method of the program take `name`: no def of it or of method_missing, and no alias, define_method, attr_* or Struct / Data member that names it (or names a method only the run time knows)? */

@@ -12835,8 +12835,9 @@ TyKind infer_uncached(Compiler *c, int id) {
                 : sp_streq(uname, "superclass") && !comp_class_is_module(c, &c->classes[s->class_id]) ? 1 : 0;
     /* and `super` in a ` override reaches Kernel#`: the command's output */
     int bt_arg, bt_super = uname && sp_streq(uname, "`") && an_super_backtick_shape(c, id, s, &bt_arg) > 0;
+    BsuperArm barm = (BsuperArm)cplan_user_fresh(c, id).bsuper;
     TyKind none = super_reaches_exc_text(c, id, 0) ? TY_STRING
-                : an_super_object_text(c, id, (int)(s - c->scopes)) || an_super_struct_text(c, id, (int)(s - c->scopes)) ? TY_STRING
+                : barm == BSUP_OBJ_TEXT || barm == BSUP_STRUCT_TEXT ? TY_STRING
                 : bt_super ? TY_STRING
                 : subs_super || rel_super == 2 ? TY_POLY_ARRAY
                 : rel_super == 1 ? TY_CLASS

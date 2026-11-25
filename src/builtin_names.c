@@ -801,6 +801,18 @@ ObjectSuperArm object_super_arm(const char *n) {
   return OSA_NONE;
 }
 
+/* See builtin_names.h. */
+ClassSuperArm class_super_arm(const char *n) {
+  if (!n) return CSA_NONE;
+  if (sp_streq(n, "subclasses")) return CSA_SUBCLASSES;
+  if (sp_streq(n, "superclass")) return CSA_SUPERCLASS;
+  if (sp_streq(n, "ancestors")) return CSA_ANCESTORS;
+  if (sp_streq(n, "include?")) return CSA_INCLUDE_P;
+  return CSA_NONE;
+}
+int is_backtick_name(const char *n) { return n && sp_streq(n, "`"); }
+int is_with_name(const char *n) { return n && sp_streq(n, "with"); }
+
 /* Object's methods that hand their receiver on to code over its members or
    bind it into a wrapper: to_enum / enum_for walk each, instance_eval /
    instance_exec run a block with it as self, method / public_method bind a

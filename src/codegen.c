@@ -13606,7 +13606,7 @@ void emit_class_new(Compiler *c, ClassInfo *ci, Buf *b) {
                    ci->c_name, ci->c_name, ci->c_name);
     }
     /* with both owned, the default text a super in either reaches
-       (an_super_struct_text) is a function of its own */
+       (CallPlan.bsuper BSUP_STRUCT_TEXT) is a function of its own */
     if (sp_streq(struct_default_text_fn(c, cid), "_struct_inspect"))
       emit_struct_default_inspect(c, ci, cid, "_struct_inspect", b);
     return;
@@ -15294,12 +15294,12 @@ int obj_arm_calls_own_inspect(Compiler *c, int cid) {
   return 1;
 }
 /* Does the program have a `def inspect = super` reaching Kernel#inspect
-   (an_super_object_text)? Only then is sp_obj_kernel_inspect emitted. */
+   (CallPlan.bsuper BSUP_OBJ_TEXT)? Only then is sp_obj_kernel_inspect emitted. */
 int obj_kernel_inspect_used(Compiler *c) {
   for (int q = 0; q < 2; q++)
     NT_FOREACH_KIND(c->nt, q ? NK_ForwardingSuperNode : NK_SuperNode, sn) {
       Scope *ss = comp_scope_of(c, sn);
-      if (ss && ss->name && sp_streq(comp_scope_def_name(c, ss), "inspect") && an_super_object_text(c, sn, (int)(ss - c->scopes))) return 1;
+      if (ss && ss->name && sp_streq(comp_scope_def_name(c, ss), "inspect") && cplan_user_fresh(c, sn).bsuper == BSUP_OBJ_TEXT) return 1;
     }
   return 0;
 }
@@ -17179,17 +17179,11 @@ void emit_super_blockarg_effect(Compiler *c, int id, Buf *b) {
   emit_expr_for_effect(c, e, b);
   buf_puts(b, "); ");
 }
-/* `super` in a ` override no ancestor defines is Kernel#`: it runs the
-   command and answers its output (infer's twin, bt_super). A super of
-   another shape (a splat, no argument, two) is refused. 0 where self has
-   no Kernel#` above it (a BasicObject subclass): the caller raises
-   NoMethodError. */
-/* emit_super's arm for comp_super_object_builtin. */
-static int emit_super_object_builtin(Compiler *c, int id, Scope *s, const char *uname, Buf *b) {
-  int kind = comp_super_object_builtin(c, s, uname, id);
+/* emit_super's arms BSUP_SAME, BSUP_FALSE, BSUP_FROZEN, BSUP_SELF and BSUP_KERNEL_ROW (comp_super_object_builtin). */
+static int emit_super_object_builtin(Compiler *c, int id, Scope *s, const char *uname, BsuperArm barm, Buf *b) {
   /* a by-value object (detect_value_types) has no identity to compare:
      the super raises as before */
-  if (!kind || c->classes[s->class_id].is_value_type) return 0;
+  if (c->classes[s->class_id].is_value_type) return 0;
   Buf vb; memset(&vb, 0, sizeof vb);
   TyKind vt = TY_BOOL;
   /* a reopening of Object takes self boxed (emit_method_signature), any
@@ -17198,7 +17192,7 @@ static int emit_super_object_builtin(Compiler *c, int id, Scope *s, const char *
   Buf sb; memset(&sb, 0, sizeof sb);
   int boxed_self = repr_self_boxed(c, (int)(s - c->scopes));
   if (boxed_self) emit_reopen_self_boxed(c, s, &sb);
-  if (kind == SUPER_OBJ_SAME) {
+  if (barm == BSUP_SAME) {
     Buf kb; memset(&kb, 0, sizeof kb);
     if (nt_kind(c->nt, id) == NK_ForwardingSuperNode) emit_boxed_fwd_param(c, s, 0, &kb);
     else {
@@ -17214,7 +17208,7 @@ static int emit_super_object_builtin(Compiler *c, int id, Scope *s, const char *
     buf_printf(&vb, "(sp_bool)(_a%d.tag == _s%d.tag && _a%d.v.p == _s%d.v.p); })", tk, tk, tk, tk);
     free(kb.p);
   }
-  else if (kind == SUPER_OBJ_ROW) {
+  else if (barm == BSUP_KERNEL_ROW) {
     /* Kernel's row answers over the super's operands (a bare super's are the
        method's parameters, read as their locals); the block argument's effect
        follows them */
@@ -17248,8 +17242,8 @@ static int emit_super_object_builtin(Compiler *c, int id, Scope *s, const char *
   else {
     buf_puts(&vb, "({ ");
     emit_super_blockarg_effect(c, id, &vb);
-    if (kind == SUPER_OBJ_FALSE) buf_puts(&vb, "((sp_bool)0); })");
-    else if (kind == SUPER_OBJ_FROZEN) {
+    if (barm == BSUP_FALSE) buf_puts(&vb, "((sp_bool)0); })");
+    else if (barm == BSUP_FROZEN) {
       if (boxed_self) buf_printf(&vb, "((sp_bool)sp_poly_frozen(%s)); })", sb.p);
       else buf_printf(&vb, "((sp_bool)sp_gc_is_frozen(%s)); })", g_self);
     }
@@ -17269,9 +17263,11 @@ static int emit_super_object_builtin(Compiler *c, int id, Scope *s, const char *
   return 1;
 }
 
-static int emit_super_backtick(Compiler *c, int id, Scope *s, Buf *b) {
+/* `super` in a ` override no ancestor defines is Kernel#` (BSUP_BACKTICK): it
+   runs the command and answers its output. A super of another shape (a
+   splat, no argument, two) is refused. */
+static void emit_super_backtick(Compiler *c, int id, Scope *s, Buf *b) {
   int arg, shape = an_super_backtick_shape(c, id, s, &arg);
-  if (shape < 0) return 0;
   if (!shape) {
     unsupported_feature(c, id, "unsupported `super` in a program-defined `: "
                         "only super(cmd) or a bare super in a def of one parameter reaches Kernel#`");
@@ -17291,7 +17287,6 @@ static int emit_super_backtick(Compiler *c, int id, Scope *s, Buf *b) {
   if (repr_of(c, id).kind == RK_BOXED) emit_boxed_text(c, TY_STRING, rb.p, b);
   else buf_puts(b, rb.p);
   free(rb.p);
-  return 1;
 }
 
 /* A bare `super` in the initialize of a class below KeyError and its like:
@@ -17351,10 +17346,12 @@ static void emit_super_value(Compiler *c, int id, Buf *b) {
   refuse_super_splat(c, id, super_plan_mi(c, id));
   Scope *s = comp_scope_of(c, id);
   if (s->class_id < 0 || !s->name) { unsupported(c, id, "super (not in a method)"); return; }
+  /* where no method of the program's answers, the builtin's arm the call plan chose (CallPlan.bsuper) */
+  BsuperArm barm = (BsuperArm)cplan_user(c, id).bsuper;
   /* `def inspect = super` / `def to_s = super` reaching Kernel's: the default
      rendering of self's class, which no override of the program's takes
      (sp_obj_kernel_inspect; #<Name:0x...> for to_s) */
-  if (an_super_object_text(c, id, (int)(s - c->scopes))) {
+  if (barm == BSUP_OBJ_TEXT) {
     int cid = s->class_id;
     /* (a block argument runs for its effect, as below) */
     Buf eb; memset(&eb, 0, sizeof eb);
@@ -17381,8 +17378,8 @@ static void emit_super_value(Compiler *c, int id, Buf *b) {
     return;
   }
   /* the same super in a Struct or Data class's own inspect or to_s: the
-     default #<struct ...> text (an_super_struct_text) */
-  if (an_super_struct_text(c, id, (int)(s - c->scopes))) {
+     default #<struct ...> text */
+  if (barm == BSUP_STRUCT_TEXT) {
     int cid = s->class_id;
     /* (a block argument runs for its effect: the default text takes none) */
     Buf eb; memset(&eb, 0, sizeof eb);
@@ -17446,9 +17443,9 @@ static void emit_super_value(Compiler *c, int id, Buf *b) {
      chain and call the sp_<Cls>_s_ form (class methods take no instance
      self). The instance path below would miss `def self.x` entirely. */
   if (s->is_cmethod) {
-    if (comp_super_is_class_new(c, id)) { emit_super_class_new(c, id, b); return; }
+    if (barm == BSUP_CLASS_NEW) { emit_super_class_new(c, id, b); return; }
     /* Class#allocate: an empty object of the class this copy runs for */
-    if (allocate_super_reaches_class(c, id)) { emit_own_class_alloc(c, id, s->class_id, b); return; }
+    if (barm == BSUP_ALLOCATE) { emit_own_class_alloc(c, id, s->class_id, b); return; }
     int cdef = -1;
     int cmi = -1;
     /* a later extend's copy: super reaches the earlier module's copy, kept in
@@ -17465,7 +17462,7 @@ static void emit_super_value(Compiler *c, int id, Buf *b) {
     /* Module's and Class's own hooks are no-ops answering nil: `super` from a
        program's method_added (Thor's), inherited, included, ... reaches them
        when no ancestor of the program defines one */
-    if (cmi < 0 && cplan_core_hook(c, id)) {
+    if (cmi < 0 && barm == BSUP_CORE_HOOK) {
       Repr hr = repr_of(c, id);
       TyKind ht = hr.as_ty;
       /* an explicit `super(...)` evaluates its arguments, in order, before
@@ -17494,7 +17491,7 @@ static void emit_super_value(Compiler *c, int id, Buf *b) {
        direct subclasses, of the classes the program defines below this
        one (activesupport's ReloadedClassesFiltering, prepended into Class,
        filters `super` that way) */
-    if (cmi < 0 && sp_streq(uname, "subclasses") && nt_ref(c->nt, id, "arguments") < 0) {
+    if (cmi < 0 && barm == BSUP_SUBCLASSES) {
       int ta = ++g_tmp, tc = ++g_tmp;
       buf_printf(b, "({ sp_Class _t%d = ", tc);
       if (cmethod_takes_self_cls(c, s)) buf_puts(b, cmethod_cls_token(c, s));
@@ -17517,15 +17514,13 @@ static void emit_super_value(Compiler *c, int id, Buf *b) {
     }
     /* Class#superclass and Module#ancestors at the end of the chain: the
        receiving class's (analysis's twin: rel_super) */
-    if (cmi < 0 && nt_ref(c->nt, id, "arguments") < 0 && s->class_id >= 0 &&
-        (sp_streq(uname, "ancestors") ||
-         (sp_streq(uname, "superclass") && !comp_class_is_module(c, &c->classes[s->class_id])))) {
+    if (cmi < 0 && (barm == BSUP_ANCESTORS || barm == BSUP_SUPERCLASS)) {
       int tc = ++g_tmp;
       buf_printf(b, "({ sp_Class _t%d = ", tc);
       if (cmethod_takes_self_cls(c, s)) buf_puts(b, cmethod_cls_token(c, s));
       else buf_printf(b, "((sp_Class){%d, NULL})", s->class_id);
       Repr sr = repr_of(c, id);
-      if (sp_streq(uname, "ancestors"))
+      if (barm == BSUP_ANCESTORS)
         buf_printf(b, "; %s(sp_class_ancestors(_t%d)); })", sr.kind == RK_BOXED ? "sp_box_poly_array" : "", tc);
       else {
         buf_printf(b, "; %s(", sr.kind == RK_BOXED ? "sp_box_class" : "");
@@ -17537,43 +17532,38 @@ static void emit_super_value(Compiler *c, int id, Buf *b) {
     /* Module#include? at the end of the chain: the receiving class's, as a
        dynamic receiver's default answers it (builtin_ops' TY_CLASS row) --
        an override's `mod == R ? false : super` raised there */
-    if (cmi < 0 && sp_streq(uname, "include?") && s->class_id >= 0) {
+    if (cmi < 0 && barm == BSUP_INCLUDE_P) {
+      /* (one plain argument, or a bare super's one parameter) */
       int sargs = nt_kind(c->nt, id) == NK_SuperNode ? nt_ref(c->nt, id, "arguments") : -1;
       int san = 0;
       const int *sav = sargs >= 0 ? nt_arr(c->nt, sargs, "arguments", &san) : NULL;
       Buf ab; memset(&ab, 0, sizeof ab);
-      int ok = 0;
-      if (sargs >= 0 && san == 1 && nt_kind(c->nt, sav[0]) != NK_SplatNode) {
+      if (sargs >= 0) {
         if (comp_ntype(c, sav[0]) == TY_CLASS) emit_expr(c, sav[0], &ab);
         else { buf_puts(&ab, "sp_unbox_class("); emit_boxed(c, sav[0], &ab); buf_puts(&ab, ")"); }
-        ok = 1;
       }
-      else if (sargs < 0 && nt_kind(c->nt, id) != NK_SuperNode && s->nparams == 1 && s->pnames && s->pnames[0]) {
+      else {
         LocalVar *lv = scope_local(s, s->pnames[0]);
         Buf lr; memset(&lr, 0, sizeof lr);
         emit_local_ref(c, id, s->pnames[0], &lr);
         if (lv && lv->type == TY_CLASS) buf_puts(&ab, lr.p ? lr.p : "");
         else buf_printf(&ab, "sp_unbox_class(%s)", lr.p ? lr.p : "sp_box_nil()");
         free(lr.p);
-        ok = 1;
       }
-      if (ok) {
-        int tc = ++g_tmp, tm = ++g_tmp;
-        Repr sr = repr_of(c, id);
-        buf_printf(b, "%s({ sp_Class _t%d = ", sr.kind == RK_BOXED ? "sp_box_bool(" : "", tc);
-        if (cmethod_takes_self_cls(c, s)) buf_puts(b, cmethod_cls_token(c, s));
-        else buf_printf(b, "((sp_Class){%d, NULL})", s->class_id);
-        buf_printf(b, "; sp_Class _t%d = %s; if (!sp_class_is_module_val(_t%d)) "
-                      "sp_raise_cls(\"TypeError\", \"wrong argument type Class (expected Module)\"); "
-                      "_t%d.cls_id != _t%d.cls_id && sp_class_le(_t%d, _t%d); })%s",
-                   tm, ab.p ? ab.p : "", tm, tc, tm, tc, tm, sr.kind == RK_BOXED ? ")" : "");
-        free(ab.p);
-        return;
-      }
+      int tc = ++g_tmp, tm = ++g_tmp;
+      Repr sr = repr_of(c, id);
+      buf_printf(b, "%s({ sp_Class _t%d = ", sr.kind == RK_BOXED ? "sp_box_bool(" : "", tc);
+      if (cmethod_takes_self_cls(c, s)) buf_puts(b, cmethod_cls_token(c, s));
+      else buf_printf(b, "((sp_Class){%d, NULL})", s->class_id);
+      buf_printf(b, "; sp_Class _t%d = %s; if (!sp_class_is_module_val(_t%d)) "
+                    "sp_raise_cls(\"TypeError\", \"wrong argument type Class (expected Module)\"); "
+                    "_t%d.cls_id != _t%d.cls_id && sp_class_le(_t%d, _t%d); })%s",
+                 tm, ab.p ? ab.p : "", tm, tc, tm, tc, tm, sr.kind == RK_BOXED ? ")" : "");
       free(ab.p);
+      return;
     }
     /* `super` in a class-level ` override is Kernel#` too */
-    if (cmi < 0 && sp_streq(uname, "`") && emit_super_backtick(c, id, s, b)) return;
+    if (cmi < 0 && barm == BSUP_BACKTICK) { emit_super_backtick(c, id, s, b); return; }
     if (cmi < 0) {
       const char *scn2 = class_ruby_name(c, s->class_id);
       if (!scn2) scn2 = c->classes[s->class_id].name;
@@ -17612,35 +17602,30 @@ static void emit_super_value(Compiler *c, int id, Buf *b) {
   if (g_plan_check && mi >= 0) ucall_observe(c, id, mi, defcls, 0);
   /* a subclass of a native class (#9269): super reaches the native class's
      constructor, as its in-place twin on self, or its binding on self */
-  if (mi < 0 && uname && c->classes[s->class_id].nsub_root > 0 && ty_k == NK_SuperNode) {
+  if (mi < 0 && (barm == BSUP_NATIVE_CTOR || barm == BSUP_NATIVE)) {
     int root = c->classes[s->class_id].nsub_root - 1;
     int sa = nt_ref(c->nt, id, "arguments"), sac = 0;
     const int *sav = sa >= 0 ? nt_arr(c->nt, sa, "arguments", &sac) : NULL;
-    if (sp_streq(uname, "initialize")) {
+    if (barm == BSUP_NATIVE_CTOR) {
       const char *sv = g_native_into;
       g_native_into = g_self;
       Buf ib; memset(&ib, 0, sizeof ib);
-      int ok = emit_native_ctor(c, id, root, sac, sav, &ib);
+      (void)emit_native_ctor(c, id, root, sac, sav, &ib);
       g_native_into = sv;
-      if (ok) {
-        buf_printf(b, "((void)(%s), %s)", ib.p, default_value_from_compiler(c, repr_of(c, id).as_ty));
-        free(ib.p);
-        return;
-      }
+      buf_printf(b, "((void)(%s), %s)", ib.p, default_value_from_compiler(c, repr_of(c, id).as_ty));
       free(ib.p);
+      return;
     }
-    else {
-      TyKind natys[8];
-      int nta = sac < 8 ? sac : 8;
-      for (int a = 0; a < nta; a++) natys[a] = comp_ntype(c, sav[a]);
-      int nm = comp_native_method_find_typed(c, root, uname, sac, 0, nta == sac ? natys : NULL);
-      if (nm >= 0) { emit_native_super_call(c, id, nm, sac, sav, b); return; }
-    }
+    /* (the binding of the arguments' kinds, of those of the name and count the plan found) */
+    TyKind natys[8];
+    int nta = sac < 8 ? sac : 8;
+    for (int a = 0; a < nta; a++) natys[a] = comp_ntype(c, sav[a]);
+    emit_native_super_call(c, id, comp_native_method_find_typed(c, root, uname, sac, 0, nta == sac ? natys : NULL), sac, sav, b);
+    return;
   }
   if (mi < 0) {
     /* super(msg) in exception subclass initialize: capture msg into self->msg */
-    if ((class_is_exc_subclass(c, s->class_id) || class_is_exc_reopen(c, s->class_id)) &&
-        uname && sp_streq(uname, "initialize")) {
+    if (barm == BSUP_EXC_INIT) {
       int args_id = nt_ref(c->nt, id, "arguments");
       int argc2 = 0;
       const int *argv2 = NULL;
@@ -17789,9 +17774,7 @@ static void emit_super_value(Compiler *c, int id, Buf *b) {
        as no-ops -- and spinel's dup/clone already memcpy'd the whole struct
        (cls_id + every ivar) before invoking the user hook, so Object's ivar
        copy is already done. Emit a no-op rather than raising NoMethodError. */
-    if (uname && (sp_streq(uname, "initialize_copy") ||
-                  sp_streq(uname, "initialize_dup") ||
-                  sp_streq(uname, "initialize_clone"))) {
+    if (barm == BSUP_COPY_HOOK) {
       buf_puts(b, "((void)0)");
       return;
     }
@@ -17801,7 +17784,7 @@ static void emit_super_value(Compiler *c, int id, Buf *b) {
        so route super to the same per-member ivar assignment. Without this the
        members set only via super (e.g. doom's Visplane `super(..., Array.new,
        Array.new, ...)`) stayed nil and later comparisons hit NilClass. */
-    if (builtin_owner_kind(cplan_user(c, id).bowner) == BOWN_STRUCT && uname && is_initialize_name(uname)) {
+    if (barm == BSUP_STRUCT_INIT) {
       ClassInfo *cls = &c->classes[s->class_id];
       /* A bare `super` (ForwardingSuperNode) forwards the current initialize's
          own params positionally into the members -- exactly what Struct's
@@ -17928,16 +17911,11 @@ static void emit_super_value(Compiler *c, int id, Buf *b) {
     /* `super()` from an initialize no ancestor defines reaches Object's, which
        takes no arguments and does nothing -- not a NoMethodError. The bare
        form forwards this method's params, so it is only that no-op when there
-       are none. */
-    if (sp_streq(uname, "initialize")) {
-      int fwd_super = ty_k == NK_ForwardingSuperNode;
-      int sup_args = ty_k == NK_SuperNode ? nt_ref(c->nt, id, "arguments") : -1;
-      int sup_argc = 0;
-      if (sup_args >= 0) nt_arr(c->nt, sup_args, "arguments", &sup_argc);
-      if ((fwd_super && (s->nparams == 0 || emit_zsuper_gather(c, s, NULL) >= 0)) || (!fwd_super && sup_argc == 0)) {
-        buf_puts(b, default_value_from_compiler(c, repr_of(c, id).as_ty));
-        return;
-      }
+       are none, or a rest the run counts (gathered as any bare super's). */
+    if (barm == BSUP_OBJ_INIT) {
+      if (ty_k == NK_ForwardingSuperNode && s->nparams > 0) (void)emit_zsuper_gather(c, s, NULL);
+      buf_puts(b, default_value_from_compiler(c, repr_of(c, id).as_ty));
+      return;
     }
     /* `super` from an exception subclass's own #message / #to_s reaches
        Exception's: the message the exception was raised with. The subclass's
@@ -17949,60 +17927,56 @@ static void emit_super_value(Compiler *c, int id, Buf *b) {
        that defines the name, picked at run time from the builtin ancestry
        -- the class's own parent for a reopening, the builtin it descends
        from (inclusive) for a subclass. */
-    if (!s->is_cmethod && uname && any_exc_reopen(c) &&
-        (class_is_exc_reopen(c, s->class_id) || class_is_exc_subclass(c, s->class_id))) {
+    if (barm == BSUP_EXC_REOPEN) {
       int xr0[8], xr[8], xn = 0;
       int xn0 = exc_reopen_definers(c, uname, xr0, 8);
       for (int q = 0; q < xn0; q++) if (xr0[q] != s->class_id) xr[xn++] = xr0[q];
-      if (xn > 0) {
-        char from[160];
-        if (class_is_exc_reopen(c, s->class_id))
-          snprintf(from, sizeof from, "sp_exc_parent_of_name(\"%s\")", c->classes[s->class_id].name);
-        else
-          snprintf(from, sizeof from, "\"%s\"", exc_builtin_parent(c, s->class_id));
-        const char *scn = class_ruby_name(c, s->class_id);
-        if (!scn) scn = c->classes[s->class_id].name;
-        buf_puts(b, "({ ");
-        int pk = emit_exc_reopen_pick_head(c, xr, xn, from, b);
-        /* none above it: #message / #to_s are Exception's own, the stored
-           message; any other name has no superclass method */
-        Repr r = repr_of(c, id);
-        int text = is_exception_message(uname);
-        if (text) {
-          int tos[16];
-          int dynamic = is_message_name(uname) && exc_message_super_to_s(c, id, tos, 16) != 0 &&
-                        exc_has_user_msg_override(c);
-          if (r.kind != RK_BOXED)
-            buf_puts(b, r.as_ty == TY_STRBUF || repr_native_call_handle(c, id) ? "sp_poly_as_strbuf(" : "sp_poly_unbox_s(");
-          buf_printf(b, "_xi%d < 0 ? %s((sp_Exception *)%s) : ", pk,
-                     dynamic ? "sp_user_exc_to_s_v" : "sp_exc_message_idbox", g_self);
-        }
-        else
-          buf_printf(b, "if (_xi%d < 0) sp_raise_cls(\"NoMethodError\", \"super: no superclass method '%s' for an instance of %s\"); ",
-                     pk, uname, scn);
-        for (int q = 0; q < xn; q++) {
-          int xm = call_target(c, id, xr[q], uname, CT_REACH, NULL);
-          /* (a record that finds no version at the super leaves the reopening's last def) */
-          if (xm < 0) xm = call_target(c, -1, xr[q], uname, 0, NULL);
-          if (q != xn - 1) buf_printf(b, "_xi%d == %d ? ", pk, q);
-          Buf call; memset(&call, 0, sizeof call);
-          buf_printf(&call, "%s((sp_Exception *)%s", mc_method(c, &c->scopes[xm]), g_self);
-          if (ty_k == NK_ForwardingSuperNode) emit_zsuper_args(c, s, &c->scopes[xm], ", ", &call);
-          else emit_args_filled(c, xm, nt_ref(c->nt, id, "arguments"), ", ", &call);
-          emit_super_block_arg(c, id, s, &c->scopes[xm], 1, &call);
-          buf_puts(&call, ")");
-          if (text) emit_boxed_ret_call(c, &c->scopes[xm], call.p, b);
-          else buf_puts(b, call.p);
-          free(call.p);
-          if (q != xn - 1) buf_puts(b, " : ");
-        }
-        if (text && r.kind != RK_BOXED) buf_puts(b, ")");
-        buf_puts(b, "; })");
-        return;
+      char from[160];
+      if (class_is_exc_reopen(c, s->class_id))
+        snprintf(from, sizeof from, "sp_exc_parent_of_name(\"%s\")", c->classes[s->class_id].name);
+      else
+        snprintf(from, sizeof from, "\"%s\"", exc_builtin_parent(c, s->class_id));
+      const char *scn = class_ruby_name(c, s->class_id);
+      if (!scn) scn = c->classes[s->class_id].name;
+      buf_puts(b, "({ ");
+      int pk = emit_exc_reopen_pick_head(c, xr, xn, from, b);
+      /* none above it: #message / #to_s are Exception's own, the stored
+         message; any other name has no superclass method */
+      Repr r = repr_of(c, id);
+      int text = is_exception_message(uname);
+      if (text) {
+        int tos[16];
+        int dynamic = is_message_name(uname) && exc_message_super_to_s(c, id, tos, 16) != 0 &&
+                      exc_has_user_msg_override(c);
+        if (r.kind != RK_BOXED)
+          buf_puts(b, r.as_ty == TY_STRBUF || repr_native_call_handle(c, id) ? "sp_poly_as_strbuf(" : "sp_poly_unbox_s(");
+        buf_printf(b, "_xi%d < 0 ? %s((sp_Exception *)%s) : ", pk,
+                   dynamic ? "sp_user_exc_to_s_v" : "sp_exc_message_idbox", g_self);
       }
+      else
+        buf_printf(b, "if (_xi%d < 0) sp_raise_cls(\"NoMethodError\", \"super: no superclass method '%s' for an instance of %s\"); ",
+                   pk, uname, scn);
+      for (int q = 0; q < xn; q++) {
+        int xm = call_target(c, id, xr[q], uname, CT_REACH, NULL);
+        /* (a record that finds no version at the super leaves the reopening's last def) */
+        if (xm < 0) xm = call_target(c, -1, xr[q], uname, 0, NULL);
+        if (q != xn - 1) buf_printf(b, "_xi%d == %d ? ", pk, q);
+        Buf call; memset(&call, 0, sizeof call);
+        buf_printf(&call, "%s((sp_Exception *)%s", mc_method(c, &c->scopes[xm]), g_self);
+        if (ty_k == NK_ForwardingSuperNode) emit_zsuper_args(c, s, &c->scopes[xm], ", ", &call);
+        else emit_args_filled(c, xm, nt_ref(c->nt, id, "arguments"), ", ", &call);
+        emit_super_block_arg(c, id, s, &c->scopes[xm], 1, &call);
+        buf_puts(&call, ")");
+        if (text) emit_boxed_ret_call(c, &c->scopes[xm], call.p, b);
+        else buf_puts(b, call.p);
+        free(call.p);
+        if (q != xn - 1) buf_puts(b, " : ");
+      }
+      if (text && r.kind != RK_BOXED) buf_puts(b, ")");
+      buf_puts(b, "; })");
+      return;
     }
-    if ((class_is_exc_subclass(c, s->class_id) || class_is_exc_reopen(c, s->class_id)) && !s->is_cmethod &&
-        (is_exception_message(uname))) {
+    if (barm == BSUP_EXC_TEXT) {
       int tos[16];
       int dynamic = is_message_name(uname) && exc_message_super_to_s(c, id, tos, 16) != 0 &&
                     exc_has_user_msg_override(c);
@@ -18014,12 +17988,11 @@ static void emit_super_value(Compiler *c, int id, Buf *b) {
     }
     /* `super` in a respond_to? override no ancestor defines is Object's:
        the object's method-table answer for a runtime name */
-    ObjectSuperArm arm = object_super_arm(uname);
-    if (arm == OSA_RESPOND_TO && emit_super_respond_to(c, id, s, b)) return;
+    if (barm == BSUP_RESPOND_TO) { emit_super_respond_to(c, id, s, b); return; }
     /* `super` in a freeze override no ancestor defines is Object#freeze: the
        object frozen, answering itself (Thor's HashWithIndifferentAccess#freeze
        freezes its hash, then calls super) */
-    if (arm == OSA_FREEZE && !s->is_cmethod && s->class_id >= 0) {
+    if (barm == BSUP_FREEZE) {
       Buf fb; memset(&fb, 0, sizeof fb);
       buf_printf(&fb, "sp_gc_freeze(%s)", g_self);
       if (repr_of(c, id).kind == RK_BOXED) emit_boxed_text(c, ty_object(s->class_id), fb.p, b);
@@ -18031,39 +18004,37 @@ static void emit_super_value(Compiler *c, int id, Buf *b) {
        defines is Object's answer for this object: its runtime class against
        the argument (activesupport's TimeWithZone#is_a? says Time, then asks
        super). Not a class or module is CRuby's TypeError. */
-    if ((arm == OSA_IS_A || arm == OSA_INSTANCE_OF) && !s->is_cmethod && s->class_id >= 0) {
+    if (barm == BSUP_IS_A || barm == BSUP_INSTANCE_OF) {
       NodeKind sk = nt_kind(c->nt, id);
       int fwd = sk == NK_ForwardingSuperNode;
       int sargs = fwd ? -1 : nt_ref(c->nt, id, "arguments");
       int sargc = 0; const int *sargv = sargs >= 0 ? nt_arr(c->nt, sargs, "arguments", &sargc) : NULL;
-      if ((fwd && s->nparams == 1) || (!fwd && sargc == 1)) {
-        int tk = ++g_tmp;
-        Buf kb; memset(&kb, 0, sizeof kb);
-        if (fwd) emit_boxed_fwd_param(c, s, 0, &kb);
-        else emit_boxed(c, sargv[0], &kb);
-        Buf rb; memset(&rb, 0, sizeof rb);
-        buf_printf(&rb, "({ sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d); ", tk, kb.p ? kb.p : "sp_box_nil()", tk);
-        emit_super_blockarg_effect(c, id, &rb);
-        buf_printf(&rb, "if (_t%d.tag != SP_TAG_CLASS) sp_raise_cls(\"TypeError\", \"class or module required\"); ", tk);
-        if (arm == OSA_INSTANCE_OF)
-          buf_printf(&rb, "(sp_bool)(sp_unbox_class(_t%d).cls_id == %s->cls_id); })", tk, g_self);
-        else
-          buf_printf(&rb, "(sp_bool)sp_class_le((sp_Class){%s->cls_id}, sp_unbox_class(_t%d)); })", g_self, tk);
-        if (repr_of(c, id).kind == RK_BOXED) emit_boxed_text(c, TY_BOOL, rb.p, b);
-        else buf_puts(b, rb.p);
-        free(kb.p); free(rb.p);
-        return;
-      }
+      int tk = ++g_tmp;
+      Buf kb; memset(&kb, 0, sizeof kb);
+      if (fwd) emit_boxed_fwd_param(c, s, 0, &kb);
+      else emit_boxed(c, sargv[0], &kb);
+      Buf rb; memset(&rb, 0, sizeof rb);
+      buf_printf(&rb, "({ sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d); ", tk, kb.p ? kb.p : "sp_box_nil()", tk);
+      emit_super_blockarg_effect(c, id, &rb);
+      buf_printf(&rb, "if (_t%d.tag != SP_TAG_CLASS) sp_raise_cls(\"TypeError\", \"class or module required\"); ", tk);
+      if (barm == BSUP_INSTANCE_OF)
+        buf_printf(&rb, "(sp_bool)(sp_unbox_class(_t%d).cls_id == %s->cls_id); })", tk, g_self);
+      else
+        buf_printf(&rb, "(sp_bool)sp_class_le((sp_Class){%s->cls_id}, sp_unbox_class(_t%d)); })", g_self, tk);
+      if (repr_of(c, id).kind == RK_BOXED) emit_boxed_text(c, TY_BOOL, rb.p, b);
+      else buf_puts(b, rb.p);
+      free(kb.p); free(rb.p);
+      return;
     }
     /* `super` in a Data's own with no ancestor defines is Data#with */
-    if (uname && sp_streq(uname, "with") && emit_super_data_with(c, id, s, b)) return;
+    if (barm == BSUP_DATA_WITH) { emit_super_data_with(c, id, s, b); return; }
     /* `super` in a ` override no ancestor defines is Kernel#` */
-    if (uname && sp_streq(uname, "`") && emit_super_backtick(c, id, s, b)) return;
+    if (barm == BSUP_BACKTICK) { emit_super_backtick(c, id, s, b); return; }
     /* `super` in an ==, equal?, eql?, !, nil?, frozen?, itself or
        respond_to_missing? override no program ancestor defines is
        BasicObject's or Kernel's (comp_super_object_builtin): the same object,
        false, the frozen bit, the object itself or Kernel's row's answer */
-    if (uname && emit_super_object_builtin(c, id, s, uname, b)) return;
+    if (barm >= BSUP_SAME && emit_super_object_builtin(c, id, s, uname, barm, b)) return;
     /* No superclass method anywhere (parent chain, included-module shadow, and
        the exception-initialize special case all missed). CRuby raises
        NoMethodError at runtime, so emit that rather than rejecting at compile

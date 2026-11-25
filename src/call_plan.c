@@ -309,6 +309,7 @@ static void cplan_set(CallPlan *p, int mi, int owner, int via, int dispatch) {
   p->closed = 0; p->closed_cls = -1;
   p->rkind = CR_NONE; p->msg = NULL; p->rfrom = CRF_NONE;
   p->bowner = NULL;
+  p->bsuper = BSUP_NONE;
   p->answers_receiver = 0;
   p->vis_cell = 0;
 }
@@ -1072,6 +1073,106 @@ static int cplan_send_super_refused(Compiler *c, const Scope *s, const char *una
   return !send_def_just_supers(c, (int)(s - c->scopes)) || (!s->is_cmethod && send_family_defined_anywhere(c, uname));
 }
 
+/* The default text of a super in an instance method inspect or to_s (no arguments of its own) where no program
+   method answers: Kernel's of a plain class (no ancestor of the program defines the name, none embeds a builtin or
+   is a native class, an Exception or a module: bowner Kernel), Struct's and Data's (bowner Struct) */
+static int cplan_super_text(Compiler *c, int id, const Scope *s0, const char *bowner) {
+  const Scope *s = comp_super_site(c, s0);
+  const char *nm = s->name ? comp_scope_def_name(c, s) : NULL;
+  if (!nm || s->is_cmethod || s->class_id < 0 || s->nparams != 0 || object_super_arm(nm) != OSA_TEXT) return BSUP_NONE;
+  if (nt_kind(c->nt, id) == NK_SuperNode && nt_ref(c->nt, id, "arguments") >= 0) return BSUP_NONE;
+  const ClassInfo *ci = &c->classes[s->class_id];
+  if (comp_class_is_module(c, ci)) return BSUP_NONE;
+  if (builtin_owner_kind(bowner) == BOWN_STRUCT) return BSUP_STRUCT_TEXT;
+  /* (a reopened builtin -- Exception, String, Object -- has its own inspect and to_s behind the program's) */
+  if (is_builtin_reopen(ci->name) || ci->is_native_class || ci->nsub_root > 0) return BSUP_NONE;
+  return builtin_owner_kind(bowner) == BOWN_KERNEL ? BSUP_OBJ_TEXT : BSUP_NONE;
+}
+
+/* The plain argument count of super node id in scope s, as the arms below count it: a bare super's the
+   method's parameters, an explicit one's its argument list */
+static int cplan_super_argc(Compiler *c, int id, const Scope *s) {
+  if (nt_kind(c->nt, id) == NK_ForwardingSuperNode) return s->nparams;
+  int sa = nt_ref(c->nt, id, "arguments"), n = 0;
+  if (sa >= 0) (void)nt_arr(c->nt, sa, "arguments", &n);
+  return n;
+}
+
+/* A class method's super that no program method answers: the builtin's arm (BsuperArm) */
+static BsuperArm cplan_super_class_arm(Compiler *c, int id, const Scope *s, const char *uname, const char *bowner) {
+  if (comp_super_is_class_new(c, id)) return BSUP_CLASS_NEW;
+  if (allocate_super_reaches_class(c, id)) return BSUP_ALLOCATE;
+  if (bowner) return BSUP_CORE_HOOK;
+  int noargs = nt_ref(c->nt, id, "arguments") < 0, fwd = nt_kind(c->nt, id) == NK_ForwardingSuperNode;
+  switch (class_super_arm(uname)) {
+  case CSA_SUBCLASSES: if (noargs) return BSUP_SUBCLASSES; break;
+  case CSA_ANCESTORS: if (noargs && s->class_id >= 0) return BSUP_ANCESTORS; break;
+  case CSA_SUPERCLASS:
+    if (noargs && s->class_id >= 0 && !comp_class_is_module(c, &c->classes[s->class_id])) return BSUP_SUPERCLASS;
+    break;
+  case CSA_INCLUDE_P: {
+    /* one plain argument, or a bare super from a method of one parameter */
+    int sa = fwd ? -1 : nt_ref(c->nt, id, "arguments"), san = 0;
+    const int *sav = sa >= 0 ? nt_arr(c->nt, sa, "arguments", &san) : NULL;
+    if (s->class_id >= 0 && ((sa >= 0 && san == 1 && nt_kind(c->nt, sav[0]) != NK_SplatNode) ||
+                             (sa < 0 && fwd && s->nparams == 1 && s->pnames && s->pnames[0])))
+      return BSUP_INCLUDE_P;
+    break;
+  }
+  default: break;
+  }
+  int bt_arg;
+  return is_backtick_name(uname) && an_super_backtick_shape(c, id, s, &bt_arg) >= 0 ? BSUP_BACKTICK : BSUP_NONE;
+}
+
+/* An instance method's super that no program method answers: the builtin's arm (BsuperArm) */
+static BsuperArm cplan_super_instance_arm(Compiler *c, int id, const Scope *s, const char *uname, const char *bowner) {
+  int cid = s->class_id, fwd = nt_kind(c->nt, id) == NK_ForwardingSuperNode;
+  const ClassInfo *ci = &c->classes[cid];
+  /* a subclass of a native class (#9269): the native class's constructor or binding */
+  if (ci->nsub_root > 0 && !fwd) {
+    int root = ci->nsub_root - 1, sac = cplan_super_argc(c, id, s);
+    if (is_initialize_name(uname)) {
+      if (c->classes[root].is_native_class && comp_native_method_find_typed(c, root, "new", sac, 1, NULL) >= 0)
+        return BSUP_NATIVE_CTOR;
+    }
+    else if (comp_native_method_find_typed(c, root, uname, sac, 0, NULL) >= 0) return BSUP_NATIVE;
+  }
+  int exc = class_is_exc_subclass(c, cid) || class_is_exc_reopen(c, cid);
+  if (exc && is_initialize_name(uname)) return BSUP_EXC_INIT;
+  if (is_initialize_hook_name(uname) && !is_initialize_name(uname)) return BSUP_COPY_HOOK;
+  if (builtin_owner_kind(bowner) == BOWN_STRUCT && is_initialize_name(uname)) return BSUP_STRUCT_INIT;
+  /* BasicObject#initialize takes no arguments: a bare super's are the method's parameters, none, or a rest's
+     elements, whose count the run tells */
+  if (is_initialize_name(uname)) {
+    const LocalVar *rv = s->rest_idx >= 0 && s->pnames[s->rest_idx] ? scope_local((Scope *)s, s->pnames[s->rest_idx]) : NULL;
+    if (fwd ? s->nparams == 0 || rv : cplan_super_argc(c, id, s) == 0) return BSUP_OBJ_INIT;
+  }
+  if (any_exc_reopen(c) && exc) {
+    int xr[8], xn = exc_reopen_definers(c, uname, xr, 8);
+    for (int q = 0; q < xn; q++) if (xr[q] != cid) return BSUP_EXC_REOPEN;
+  }
+  if (exc && is_exception_message(uname)) return BSUP_EXC_TEXT;
+  switch (object_super_arm(uname)) {
+  case OSA_RESPOND_TO: if (cplan_super_argc(c, id, s) >= 1) return BSUP_RESPOND_TO; break;
+  case OSA_FREEZE: return BSUP_FREEZE;
+  case OSA_IS_A: if (cplan_super_argc(c, id, s) == 1) return BSUP_IS_A; break;
+  case OSA_INSTANCE_OF: if (cplan_super_argc(c, id, s) == 1) return BSUP_INSTANCE_OF; break;
+  default: break;
+  }
+  if (is_with_name(uname) && ci->is_struct && ci->is_data) return BSUP_DATA_WITH;
+  int bt_arg;
+  if (is_backtick_name(uname) && an_super_backtick_shape(c, id, s, &bt_arg) >= 0) return BSUP_BACKTICK;
+  switch (comp_super_object_builtin(c, s, uname, id)) {
+  case SUPER_OBJ_SAME: return BSUP_SAME;
+  case SUPER_OBJ_FALSE: return BSUP_FALSE;
+  case SUPER_OBJ_FROZEN: return BSUP_FROZEN;
+  case SUPER_OBJ_SELF: return BSUP_SELF;
+  case SUPER_OBJ_ROW: return BSUP_KERNEL_ROW;
+  default: return BSUP_NONE;
+  }
+}
+
 static void cplan_resolve_super(Compiler *c, int id, CallPlan *p) {
   Scope *s = comp_scope_of(c, id);
   if (!s || s->class_id < 0 || !s->name) return;
@@ -1104,6 +1205,12 @@ static void cplan_resolve_super(Compiler *c, int id, CallPlan *p) {
     p->rkind = CR_FEATURE; p->rfrom = CRF_LIMIT;
     p->msg = cplan_keep(c, strdup(msg));
   }
+  if (p->dispatch == CP_REFUSE) return;
+  /* (the default text answers ahead of a prepend chain's shadow; a class method's shadow is its own lookup) */
+  p->bsuper = (unsigned char)cplan_super_text(c, id, s, p->bowner);
+  if (p->bsuper == BSUP_NONE && uname)
+    p->bsuper = (unsigned char)(s->is_cmethod ? cplan_super_class_arm(c, id, s, uname, p->bowner)
+                                              : cplan_super_instance_arm(c, id, s, uname, p->bowner));
 }
 
 /* See call_plan.h. */

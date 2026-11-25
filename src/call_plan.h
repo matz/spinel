@@ -70,6 +70,44 @@ enum { CP_ABSENT_NONE, CP_ABSENT_INST, CP_ABSENT_SG, CP_ABSENT_MODULE, CP_ABSENT
    sets, which the capture reads from the cells (CP_CLOSED_RUN), or which nothing there tells (CP_CLOSED_UNTOLD) */
 enum { CP_CLOSED_RUN = 3, CP_CLOSED_UNTOLD };
 
+/* CallPlan.bsuper: how the builtin a super reaches answers it, where no method of the program's does (mi -1) and the
+   lowering of builtin supers left it a super (lower_builtin_supers): the one decision the super emission
+   (emit_super_value) renders and its inference types. Each arm is chosen with its own conditions (the arity and the
+   shape of the call it renders), in the order the ladder asks them; BSUP_NONE is CRuby's NoMethodError. */
+typedef enum {
+  BSUP_NONE,
+  BSUP_OBJ_TEXT,      /* Kernel#inspect / #to_s: the default #<Name:0x...> */
+  BSUP_STRUCT_TEXT,   /* Struct#inspect / #to_s: the default #<struct ...> */
+  /* a class method's */
+  BSUP_CLASS_NEW,     /* Class#new (comp_super_is_class_new) */
+  BSUP_ALLOCATE,      /* Class#allocate (allocate_super_reaches_class) */
+  BSUP_CORE_HOOK,     /* Module's and Class's definition hooks: nil (cplan_core_hook) */
+  BSUP_SUBCLASSES,    /* Class#subclasses */
+  BSUP_ANCESTORS,     /* Module#ancestors */
+  BSUP_SUPERCLASS,    /* Class#superclass */
+  BSUP_INCLUDE_P,     /* Module#include? */
+  BSUP_BACKTICK,      /* Kernel#` (an_super_backtick_shape), from either side */
+  /* an instance method's */
+  BSUP_NATIVE_CTOR,   /* a native class's constructor, from a subclass's initialize (#9269) */
+  BSUP_NATIVE,        /* a native class's binding of the name */
+  BSUP_EXC_INIT,      /* Exception#initialize and its kin's */
+  BSUP_COPY_HOOK,     /* Object#initialize_copy / _dup / _clone: the copy is made */
+  BSUP_STRUCT_INIT,   /* Struct#initialize: the members */
+  BSUP_OBJ_INIT,      /* BasicObject#initialize: nil */
+  BSUP_EXC_REOPEN,    /* a program reopening of a builtin exception above the class, picked at run time */
+  BSUP_EXC_TEXT,      /* Exception#message / #to_s: the stored message */
+  BSUP_RESPOND_TO,    /* Object#respond_to?: the method table's answer */
+  BSUP_FREEZE,        /* Object#freeze */
+  BSUP_IS_A,          /* Object#is_a? / #kind_of? */
+  BSUP_INSTANCE_OF,   /* Object#instance_of? */
+  BSUP_DATA_WITH,     /* Data#with */
+  BSUP_SAME,          /* BasicObject#== / #equal?, Kernel#eql?: the same object */
+  BSUP_FALSE,         /* BasicObject#!, Kernel#nil?: false */
+  BSUP_FROZEN,        /* Kernel#frozen? */
+  BSUP_SELF,          /* Kernel#itself */
+  BSUP_KERNEL_ROW     /* Kernel's builtin-op row of the name (comp_super_kernel_row) */
+} BsuperArm;
+
 typedef struct {
   int mi;                  /* the method scope, or -1 */
   int method_node;         /* bound Method source node, or -1 */
@@ -105,6 +143,7 @@ typedef struct {
   unsigned char rkind;     /* CP_REFUSE: CplanRefuse */
   const char *msg;         /* CP_REFUSE: the message, as the compiler prints it */
   unsigned char rfrom;     /* CP_REFUSE: CplanRefuseFrom */
+  unsigned char bsuper;    /* a super with no program method (mi -1): BsuperArm */
   const char *bowner;      /* UC_SUPER with no program method (mi -1): the builtin class or module whose method the super reaches (MethodLookup.bowner); in a class method, the owner of a definition hook (cplan_core_hook) */
   unsigned char answers_receiver; /* mi is a class method of an ancestor of owner_ci that answers an instance of owner_ci (cmethod_receiver_class): the function returns a pointer to its own class's type, the call is cast to owner_ci's */
   const char *delegate;     /* the protocol method name, before alias resolution */

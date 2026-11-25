@@ -35366,17 +35366,15 @@ int object_private_method_name(const char *qm) {
    class (this class or a descendant, which inherits the method and its
    super) over the closed set of names a runtime-name send resolves over
    plus the universal ones. A name outside that set answers false, as the
-   runtime-name respond_to? does. Answers 1 when it emitted. */
-int emit_super_respond_to(Compiler *c, int id, Scope *s, Buf *b) {
+   runtime-name respond_to? does (CallPlan.bsuper BSUP_RESPOND_TO: one
+   argument or more). */
+void emit_super_respond_to(Compiler *c, int id, Scope *s, Buf *b) {
   const NodeTable *nt = c->nt;
-  if (!s || s->class_id < 0 || s->is_cmethod) return 0;
   int cid = s->class_id;
   NodeKind ty_k = nt_kind(nt, id);
   int fwd = ty_k == NK_ForwardingSuperNode;
   int args = fwd ? -1 : nt_ref(nt, id, "arguments");
   int argc = 0; const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
-  if (!fwd && argc < 1) return 0;
-  if (fwd && s->nparams < 1) return 0;
   int t = ++g_tmp;
   /* the name: a symbol, a string (interned), or a boxed value of either */
   Buf nm = {0, 0, 0}; TyKind nt_ty;
@@ -35491,7 +35489,6 @@ int emit_super_respond_to(Compiler *c, int id, Scope *s, Buf *b) {
   for (int q = 0; q < ncand; q++) free(cand[q]);
   free(cand);
   buf_printf(b, " default: _r%d = 0; } _r%d; })", t, t);
-  return 1;
 }
 
 /* The compile-time answer to `recv.respond_to?(qm)` for the call node `id`:

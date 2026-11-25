@@ -3586,7 +3586,8 @@ static TyKind an_bop_seed_type(const void *ud, int i) {
 const BuiltinOp *an_bop_find_arg(Compiler *c, int id, TyKind rt, const char *name,
                                  int argc, const int *argv, int has_block) {
   AnBopArgs a = { c, argv };
-  const BuiltinOp *op = bop_find_arg(rt, name, argc, has_block, an_bop_arg_type, &a);
+  const BuiltinOp *op = bop_find_stage(rt, name, argc, has_block, nt_argv_has_splat(c->nt, argv, argc),
+                                       an_bop_arg_type, &a, -1);
   if (op && op->result != TY_UNKNOWN && an_bop_records(c, id))
     c->bop_inf[id] = op;
   return op;
@@ -3601,8 +3602,9 @@ const BuiltinOp *an_bop_row_for_kind(Compiler *c, int id, TyKind rt) {
   int an = nt_ref(c->nt, id, "arguments"), argc = 0;
   const int *argv = an >= 0 ? nt_arr(c->nt, an, "arguments", &argc) : NULL;
   AnBopArgs a = { c, argv };
-  const BuiltinOp *op = bop_find_arg(bop_family_of(rt), nt_str(c->nt, id, "name"), argc,
-                                     nt_ref(c->nt, id, "block") >= 0, an_bop_arg_type, &a);
+  const BuiltinOp *op = bop_find_stage(bop_family_of(rt), nt_str(c->nt, id, "name"), argc,
+                                       nt_ref(c->nt, id, "block") >= 0, nt_argv_has_splat(c->nt, argv, argc),
+                                       an_bop_arg_type, &a, -1);
   return op && op->result != TY_UNKNOWN ? op : NULL;  /* as an_bop_find records */
 }
 
@@ -4576,8 +4578,8 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
       if (argc == 1 && sp_streq(name, "getbyte")) { *out = an_poly_concrete(c, id, name, TY_POLY); return 1; }
       /* After the random: forms, read the same boxed fallback as emission. */
       {
-        const BuiltinOp *op = bop_find_stage(BOP_BOXED_FALLBACK, name, argc,
-                                             nt_ref(nt, id, "block") >= 0, NULL, NULL, 0);
+        const BuiltinOp *op = bop_find_stage(BOP_BOXED_FALLBACK, name, argc, nt_ref(nt, id, "block") >= 0,
+                                             nt_argv_has_splat(nt, argv, argc), NULL, NULL, 0);
         if (op && !an_user_poly_arm(c, name, argc)) {
           if (an_bop_records(c, id)) c->bop_inf[id] = op;
           *out = an_poly_concrete(c, id, name, bop_result(op, rt));

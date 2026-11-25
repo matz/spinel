@@ -1,0 +1,68 @@
+:pub
+"protected method 'pro' called for an instance of Priv"
+"private method 'pri' called for an instance of Priv"
+"private method 'pri' called for an instance of Priv"
+"private method 'pri' called for an instance of Priv"
+"protected method 'pro' called for an instance of Priv"
+"g!?"
+"AB"
+"AB"
+:SY
+3
+"ab"
+[true, -2, [[:req], [:rest]]]
+[true, -2, [[:req], [:rest]]]
+"no receiver given"
+"wrong number of arguments (given 0, expected 1)"
+FrozenError
+"undefined method 'concat' for nil"
+"BA"
+"BA"
+"AB"
+"abc"
+[2, 1]
+"ba"
+["X", "Y"]
+"ab"
+MyS
+true
+"s!"
+[1, 2]
+[:SYM, "STR"]
+{1 => 2, 2 => 1}
+3
+13
+3
+[3, 2]
+{1 => 2, 2 => 1}
+true
+9
+[:foo, []]
+[:foo, [1, 2]]
+[1, 2]
+["", "b"]
+"private method 'pri' called for an instance of Priv"
+[1, 2]
+[3, 2]
+3
+"AB"
+{a: 1, b: 2}
+{a: 1}
+{a: 1, b: 2, c: 3}
+"undefined method 'merge' for an instance of Integer"
+[2, 1, 3]
+[1, 2, 3]
+false
+[3, 2]
+-1
+ArgumentError
+3
+3
+"no receiver given"
+"no receiver given"
+true
+1
+true
+false
+"wrong number of arguments (given 0, expected 1)"
+[1, 0]

@@ -2393,9 +2393,14 @@ static const BuiltinOp bop_rows[] = {
      nil? (stage 2), each looked up where its arm sat */
   { TY_STRING, "concat",          0,   0, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "({ const char *_t$t = $r; sp_str_check_mutable(_t$t); _t$t; })", 0, 0, BOPF_SELF | BOPF_ARGS_BUILTIN, 1 },
   { TY_STRING, "nil?",            0,   0, BF_ANY,      TY_BOOL,       BOPE_TEMPLATE, "(($r) == 0)", 0, 0, 0, 2 },  /* a nullable String carries nil as NULL */
+  /* a splat's operands, a list whose length is known at run time: every
+     one converted before the receiver changes (stage 7, where the in-place
+     String rows sit) */
+  { TY_STRING, "concat",          1, BOP_ARGC_ANY, BF_ANY, TY_STRING, BOPE_STRING_CONCAT_LIST, NULL, 0, 0, BOPF_SELF | BOPF_ARGS_BUILTIN | BOPF_ARGV | BOPF_SPREAD, 7 },
   { TY_STRING, "concat",          0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF | BOPF_ARGS_BUILTIN },  /* self (#2309) */
   { TY_STRING, "<<",              0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF | BOPF_ARGS_BUILTIN },
   { TY_STRING, "prepend",         0,   0, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "({ const char *_t$t = $r; sp_str_check_mutable(_t$t); _t$t; })", 0, 0, BOPF_SELF | BOPF_ARGS_BUILTIN },
+  { TY_STRING, "prepend",         1, BOP_ARGC_ANY, BF_ANY, TY_STRING, BOPE_STRING_PREPEND_LIST, NULL, 0, 0, BOPF_SELF | BOPF_ARGS_BUILTIN | BOPF_ARGV | BOPF_SPREAD, 7 },
   { TY_STRING, "prepend",         0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF | BOPF_ARGS_BUILTIN },
   { TY_STRING, "insert",          2,   2, BF_ANY,      TY_STRING,     BOPE_STRING_INSERT, NULL, 0, 0, BOPF_SELF | BOPF_ARGS_BUILTIN, 7 },
   { TY_STRING, "insert",          0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF | BOPF_ARGS_BUILTIN },
@@ -3356,7 +3361,7 @@ int bop_class_answers(const char *name, int argc, int has_block) {
 
 const BuiltinOp *bop_find_arg(TyKind rt, const char *name, int argc, int has_block,
                               BopArgKind arg_of, const void *ud) {
-  return bop_find_stage(rt, name, argc, has_block, arg_of, ud, -1);
+  return bop_find_stage(rt, name, argc, has_block, 0, arg_of, ud, -1);
 }
 /* the first place in the sorted index of the rows of kind rt for `name`
    (BOP_NROWS, or a row of another key, when there are none) */
@@ -3370,7 +3375,7 @@ static int bop_key_first(TyKind rt, const char *name) {
   }
   return lo;
 }
-const BuiltinOp *bop_find_stage(TyKind rt, const char *name, int argc, int has_block,
+const BuiltinOp *bop_find_stage(TyKind rt, const char *name, int argc, int has_block, int spread,
                                 BopArgKind arg_of, const void *ud, int stage) {
   if (!name) return NULL;
   int lo = bop_key_first(rt, name);
@@ -3382,7 +3387,7 @@ const BuiltinOp *bop_find_stage(TyKind rt, const char *name, int argc, int has_b
     const BuiltinOp *r = &bop_rows[bop_index[i]];
     if (bop_cmp_key(rt, name, r) != 0) break;
     if (stage >= 0 && r->stage != stage) continue;
-    if (!bop_row_fits(r, argc, has_block)) continue;
+    if (!bop_row_fits(r, argc, has_block) || ((r->flags & BOPF_SPREAD) && !spread)) continue;
     int ok = 1;
     for (int k = 0; k < 2 && ok; k++) {
       BopKinds want = k == 0 ? r->arg0 : r->arg1;

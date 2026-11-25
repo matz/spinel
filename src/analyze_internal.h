@@ -908,7 +908,7 @@ enum {
   LW_SAFE_NAV_ATTR_WRITE, LW_CONST_ATTR_OP_ASSIGN, LW_STORED_ENUM_EACH,
   LW_SINGLETON_CLASS_DEFINE_METHOD, LW_EMPTY_HASH_COMPARE_BY_IDENTITY, LW_DEFINE_METHOD_PROC_ARG,
   LW_DEFINE_METHOD_CAPTURES, LW_DEFINE_METHOD_KEYWORDS, LW_NAME_ANON_BLOCK_KWREST,
-  LW_SYM_TO_PROC_CALL, LW_ENUM_CHAIN_SHAPES, LW_BUILTIN_KWSPLAT, LW_RIGHTWARD_PATTERN, LW_MATCH_PREDICATE,
+  LW_SYM_TO_PROC_CALL, LW_SYM_TO_PROC_LAMBDA, LW_ENUM_CHAIN_SHAPES, LW_BUILTIN_KWSPLAT, LW_RIGHTWARD_PATTERN, LW_MATCH_PREDICATE,
   LW_SORT_BY_WITH_INDEX, LW_FORWARDING_TO_REST_CALLEE, LW_ANON_BLOCK_PARAM, LW_BLOCK_IMPLICIT_REST,
   LW_MULTI_VALUE_JUMP, LW_BLOCK_DESTRUCTURE_PARAMS, LW_FOR_NONLOCAL_INDEX, LW_ENUM_FOR_WITH_ARGS,
   LW_ENUMERATOR_PRODUCE, LW_PARAM_DEFAULT_ASSIGNS_LOCAL, LW_RECURSIVE_PARAM_DEFAULTS,
@@ -1025,7 +1025,7 @@ LowerFn desugar_builtin_reopen_self_calls_at, desugar_builtin_ivars_at;
 LowerFn desugar_body_self_ivar_access_at, desugar_body_singleton_class_meta_at, desugar_body_inherited_alias_at, desugar_const_ivar_call_at;
 LowerFn desugar_const_set_write_at, desugar_const_set_write_left;
 LowerFn desugar_struct_subclass_new_write_at, desugar_struct_subclass_new_write_left;
-LowerFn refuse_superclass_exprs_at, desugar_sym_to_proc_call_at, desugar_builtin_kwsplat_at;
+LowerFn refuse_superclass_exprs_at, desugar_sym_to_proc_call_at, desugar_sym_to_proc_lambda_at, desugar_builtin_kwsplat_at;
 LowerGate desugar_user_backtick_gate;
 LowerFn desugar_user_backtick_at;                                            /* analyze.c */
 LowerFn desugar_explicit_initialize_calls_at;

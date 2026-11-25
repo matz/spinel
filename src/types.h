@@ -84,6 +84,8 @@ enum {
   PF_SAME_OK  = 1 << 17, /* ... and contents that are the receiver's own mean no write, so no frozen check (scrub!) */
   PF_ENC      = 1 << 18, /* ... and the new contents carry the result's encoding, which a shared handle takes, binary or text (bytesplice) */
   PF_STR_TYPED = 1 << 19, /* a String bang for a receiver known to be a String (ty_str_typed_bang_flags), whose row is the mutator kind's for a boxed receiver (reverse!, scrub!); PF_STR_SELF on it says it answers self, PF_SAME_OK that an unchanged String is no write */
+  PF_SPREAD   = 1 << 20, /* the owner's typed emitter takes a splat's operand list too (concat, prepend, merge): a call that spreads one re-enters it */
+  PF_SPREAD_ONLY = 1 << 21, /* ... a row for that call alone: a plain one keeps the boxed arm it has (merge) */
   PF_LAST     = 1 << 16  /* answers only once no poly-receiver emitter of its own has claimed the name */
 };
 typedef struct {

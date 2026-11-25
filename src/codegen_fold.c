@@ -11342,19 +11342,45 @@ int emit_unknown_kwarg_raise(Compiler *c, Scope *m, const int *argv, int argc) {
   return 1;
 }
 
+/* 1 when m's first parameter is the receiver slot of an Enumerable copy
+   (desugar_builtins' `__enum_<name>__<k>`, enum_bi on its def): the call
+   rewritten onto the copy passes its receiver there. It is judged as a
+   required positional, and left out of the count CRuby reports, which is
+   the method's own: `[5].pick(*[])` against `def pick(i, j = 0)` is
+   "given 0, expected 1..2". */
+static int arity_recv_slot(Compiler *c, const Scope *m) {
+  return m && m->def_node >= 0 && nt_int(c->nt, m->def_node, "enum_bi", -1) >= 0 &&
+         m->nparams > 0 && is_reopen_self_name(m->pnames[0]);
+}
+
+/* 1 when m is the method `define_method(:m, :sym.to_proc)` (or `&:sym`)
+   defines, as a call or the def desugar_define_method_keywords makes of it
+   (sym_proc_method): its parameters are the proc's, `|recv, *args|` or
+   `|_spx|`, and its call is judged as the proc's, refusing no argument by
+   saying no receiver was given (emit_lambda_arity_check's words) */
+static int method_is_sym_proc(Compiler *c, const Scope *m) {
+  const NodeTable *nt = c->nt;
+  int d = m ? m->def_node : -1;
+  if (d < 0) return 0;
+  int b = nt_kind(nt, d) == NK_CallNode ? nt_ref(nt, d, "block") : -1;
+  return nt_int(nt, d, "sym_proc_method", 0) ||
+         (nt_kind(nt, b) == NK_BlockNode && nt_int(nt, b, "sym_proc_block", 0));
+}
+
 /* The positional count a rest-parameter method requires, when a call that
    supplies fewer is judged: the parameters without a default, the rest and
    any keyword left out. -1 when it is not judged -- no rest, a keyword or
    keyword-rest parameter (those bind by other rules), a synthesized
-   parameter or scope. One rule for the raise in emit_args_filled and for a
-   dispatch that lists candidates by what the call's count allows, so a
-   candidate the raise would refuse is never emitted as an arm (#3520). */
+   parameter (but a Symbol's proc's, method_is_sym_proc) or scope. One rule
+   for the raise in emit_args_filled and for a dispatch that lists
+   candidates by what the call's count allows, so a candidate the raise
+   would refuse is never emitted as an arm (#3520). */
 int rest_shortfall_required(Compiler *c, Scope *m) {
   if (m->rest_idx < 0 || m->kwrest_idx >= 0 || m->cs_synth) return -1;
-  int nreq = 0;
-  for (int i = 0; i < m->nparams; i++) {
+  int rs = arity_recv_slot(c, m), nreq = rs, sp = method_is_sym_proc(c, m);
+  for (int i = rs; i < m->nparams; i++) {
     if (i == m->rest_idx) continue;
-    if (!m->pnames[i] || (m->pnames[i][0] == '_' && m->pnames[i][1] == '_') ||
+    if (!m->pnames[i] || (!sp && m->pnames[i][0] == '_' && m->pnames[i][1] == '_') ||
         callee_has_kwarg(c, m, m->pnames[i])) return -1;
     if (!m->pdefault || m->pdefault[i] < 0) nreq++;
   }
@@ -11407,7 +11433,14 @@ static void emit_positional_count_check(Compiler *c, Scope *m, const char *given
      wrapper whose builtin takes any count (bam_variadic_kernel) */
   int unbounded = m && (m->rest_idx >= 0 || bam_variadic_kernel(c->nt, m));
   emit_arity_presence(c, m);
-  emit_arity_check(g_pre, given, pos_required, unbounded ? -1 : pos_params, kw);
+  /* (an Enumerable copy's receiver slot is in `given` and in the
+     parameters, and out of the count CRuby reports) */
+  int rs = arity_recv_slot(c, m);
+  char gs[256];
+  snprintf(gs, sizeof gs, rs ? "(%s) - 1" : "%s", given);
+  if (method_is_sym_proc(c, m))
+    buf_printf(g_pre, "if ((%s) == 0) sp_raise_cls(\"ArgumentError\", \"no receiver given\");\n", given);
+  emit_arity_check(g_pre, gs, pos_required - rs, unbounded ? -1 : pos_params - rs, kw);
   buf_puts(g_pre, ";\n");
 }
 
@@ -11452,9 +11485,9 @@ static int bam_variadic_kernel(const NodeTable *nt, const Scope *m) {
    Conditional dispatchers likewise expose real positional arguments; their
    synthesized names do not exempt callers from the argument contract. */
 static int arity_unjudged(Compiler *c, Scope *m) {
-  if (m->entry || arity_conditional_dispatch(c, m)) return 0;
+  if (m->entry || arity_conditional_dispatch(c, m) || method_is_sym_proc(c, m)) return 0;
   if (m->cs_synth) return 1;
-  for (int i = 0; i < m->nparams; i++)
+  for (int i = arity_recv_slot(c, m); i < m->nparams; i++)
     if (m->pnames[i] && m->pnames[i][0] == '_' && m->pnames[i][1] == '_' &&
         strncmp(m->pnames[i], "__bam_", 6) != 0) return 1;
   int pn = m->def_node >= 0 ? nt_ref(c->nt, m->def_node, "parameters") : -1;
@@ -11526,12 +11559,17 @@ int arity_count_error(Compiler *c, Scope *m, int given, char *msg, size_t n) {
      body with a padded a. */
   int over = m->rest_idx < 0 && given > nfixed && !bam_variadic_kernel(c->nt, m);
   if (!over && given >= nreq) return 0;
+  if (given == 0 && method_is_sym_proc(c, m)) {
+    snprintf(msg, n, "no receiver given");
+    return 1;
+  }
   /* CRuby names the callee's required keywords in every count error:
      `def h(x, k:)` called `h(k: 3)` is "(given 0, expected 1; required
      keyword: k)" */
   char kwsuf[256];
   scope_arity_kw_suffix(c, m, kwsuf, sizeof kwsuf);
-  arity_message(msg, n, given, nreq, m->rest_idx >= 0 ? -1 : nfixed, kwsuf);
+  int rs = arity_recv_slot(c, m);
+  arity_message(msg, n, given - rs, nreq - rs, m->rest_idx >= 0 ? -1 : nfixed - rs, kwsuf);
   return 1;
 }
 
@@ -13203,7 +13241,8 @@ static Scope *dispatch_first_arm(Compiler *c, int call, int cid, const char *nam
    when a parameter is synthesized (every __-prefixed one, a __bam_
    wrapper's too: a receiver-bound wrapper's first one is its receiver, not
    an argument). Conditional dispatchers' parameters are real arguments;
-   their count check is guarded by the dispatcher's availability. */
+   their count check is guarded by the dispatcher's availability. A Symbol's
+   proc's method's are its call's too (method_is_sym_proc). */
 static int dispatch_count_judged(Compiler *c, const Scope *pm, const int *argv, int argc) {
   const NodeTable *nt = c->nt;
   if (!pm || (!argv && argc)) return 0;
@@ -13211,7 +13250,7 @@ static int dispatch_count_judged(Compiler *c, const Scope *pm, const int *argv, 
     NodeKind ak = nt_kind(nt, argv[k]);
     if (ak == NK_ForwardingArgumentsNode || ak == NK_BlockArgumentNode) return 0;
   }
-  if (arity_conditional_dispatch(c, pm)) return 1;
+  if (arity_conditional_dispatch(c, pm) || method_is_sym_proc(c, pm)) return 1;
   for (int i = 0; i < pm->nparams; i++)
     if (pm->pnames[i] && pm->pnames[i][0] == '_' && pm->pnames[i][1] == '_') return 0;
   return 1;

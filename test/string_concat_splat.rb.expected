@@ -1,0 +1,67 @@
+"abc"
+true
+[97, 98, 99, 206, 177]
+#<Encoding:UTF-8>
+"a\xC8b"
+#<Encoding:BINARY (ASCII-8BIT)>
+"invalid codepoint 0xD800 in UTF-8"
+"invalid codepoint 0xDFFF in UTF-8"
+"x"
+"a"
+FrozenError
+"can't modify frozen String: \"z\""
+FrozenError
+"can't modify frozen String: \"z\""
+FrozenError
+"can't modify frozen String: \"z\""
+TypeError
+"no implicit conversion of nil into String"
+TypeError
+"no implicit conversion of nil into String"
+TypeError
+"no implicit conversion of Integer into String"
+RangeError
+"bignum out of char range"
+"a"
+"ababab"
+"xy-xyxy"
+"abcdef"
+"wcdfz"
+"a-bc"
+"a-"
+"12v"
+"abc"
+[1, 2, 3]
+"bca"
+[2, 3, 1]
+"boom"
+"aTb"
+"abc"
+MyS
+true
+"ijk"
+"abc"
+"bcb"
+"gbc"
+"zabc"
+"zabc"
+"zabc"
+"yzabcd"
+"yzabcd"
+"abcw"
+[1, 2, 3]
+"abcw"
+[1, 2, 3]
+"abcwv"
+[1, 2, 3, 4]
+[0, 9, 1, 2, 3, 4, 4, 5, {k: 1}]
+[0, 9, 1, 2, 3, 4, 4, 5, {k: 1}]
+[0, 9, 1, 2, 3, 4, 4, 5, {k: 1}]
+[0, 9, 1, 2, 3, 4, 4, 5, {k: 1}]
+"no implicit conversion of Hash into String"
+"no implicit conversion of Integer into Proc"
+"no implicit conversion of Integer into Proc"
+"no implicit conversion of Integer into Proc"
+"abc"
+"abc"
+nil

@@ -36,11 +36,11 @@ sp_RbVal sp_main_self(void) {
 sp_int sp_poly_arg_int(sp_RbVal v) { return sp_poly_arg_int_chk(v); }
 sp_String *sp_poly_arg_string(sp_RbVal v) { return sp_poly_arg_str_handle(v); }
 
-/* Arguments are Ruby values evaluated before method entry. Validate the whole
-   list, then grow once. Publishing the new length only at the end also lets
-   each occurrence of the receiver read its original bytes after growth. */
-void sp_strbuf_append_as_bytes(sp_String *s, sp_int argc, const sp_RbVal *args) {
-  if (!s) sp_nil_recv("append_as_bytes");
+/* CRuby's str_modifiable for a method changing the String it is called on:
+   NoMethodError on nil, then a locked String, then FrozenError naming the
+   receiver's class. */
+static void sp_strbuf_check_modifiable(sp_String *s, const char *name) {
+  if (!s) sp_nil_recv(name);
   if (s->temporarily_locked) sp_raise_locked_str();
   if (sp_String_is_frozen(s)) {
     sp_RbVal receiver = sp_box_obj(s, SP_BUILTIN_STRBUF);
@@ -54,6 +54,13 @@ void sp_strbuf_append_as_bytes(sp_String *s, sp_int argc, const sp_RbVal *args) 
     sp_exc_stage_recv(receiver);
     sp_raise_cls("FrozenError", message);
   }
+}
+
+/* Arguments are Ruby values evaluated before method entry. Validate the whole
+   list, then grow once. Publishing the new length only at the end also lets
+   each occurrence of the receiver read its original bytes after growth. */
+void sp_strbuf_append_as_bytes(sp_String *s, sp_int argc, const sp_RbVal *args) {
+  sp_strbuf_check_modifiable(s, "append_as_bytes");
   int64_t size = s->len;
   for (sp_int i = 0; i < argc; i++) {
     sp_RbVal arg = args[i];
@@ -84,6 +91,40 @@ void sp_strbuf_append_as_bytes(sp_String *s, sp_int argc, const sp_RbVal *args) 
   *out = 0;
   s->len = size;
   sp_fd_publish(s);
+}
+
+/* concat or prepend over an operand list that is known only at run time, a
+   splat's (CRuby's rb_str_concat_multi and rb_str_prepend_multi). The
+   receiver is checked first, even for no operands. Every operand is then
+   copied, in order, into one new String before the receiver changes: an
+   Integer as the character it codes in the receiver's encoding (concat
+   only; prepend takes Strings), any other value as its String or its
+   #to_str, TypeError otherwise. So a raise part way leaves the receiver as
+   it was, and an operand that is the receiver adds its bytes as they were. */
+void sp_strbuf_concat_list(sp_String *s, sp_int argc, const sp_RbVal *args, int prepend) {
+  sp_strbuf_check_modifiable(s, prepend ? "prepend" : "concat");
+  if (argc == 0) return;
+  SP_GC_ROOT(s);
+  sp_String *parts = sp_String_new_len("", 0);
+  SP_GC_ROOT(parts);
+  for (sp_int i = 0; i < argc; i++) {
+    sp_RbVal arg = args[i];
+    if (!prepend && arg.tag == SP_TAG_BIGINT) sp_raise_cls("RangeError", "bignum out of char range");
+    if (!prepend && arg.tag == SP_TAG_INT) {
+      const char *ch = sp_int_codepoint_to_str_in(s->data, arg.v.i);
+      sp_String_append_n(parts, ch, sp_str_byte_len(ch));
+    }
+    else if (sp_strface_b_box(arg)) {
+      sp_String *part = arg.v.p;
+      sp_String_append_n(parts, part->data, (size_t)part->len);
+    }
+    else {
+      const char *text = sp_poly_arg_str_chk(arg);
+      sp_String_append_n(parts, text, sp_str_byte_len(text));
+    }
+  }
+  if (prepend) sp_String_splice_bytes(s, 0, 0, parts->data, 0, parts->len, 0);
+  else sp_String_append_n(s, parts->data, (size_t)parts->len);
 }
 
 /* A sole chomp: arrives with its truth value. General keyword lists

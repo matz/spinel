@@ -217,6 +217,8 @@ typedef enum {
   BOPE_STRING_SLICE,
   BOPE_STRING_BYTESPLICE,
   BOPE_STRING_APPEND_AS_BYTES,
+  BOPE_STRING_CONCAT_LIST,
+  BOPE_STRING_PREPEND_LIST,
   BOPE_STRING_DEDUP,     /* String#dedup: -@ under the name a nil receiver is raised with */
   BOPE_STRING_SCRUB_BLOCK, /* String#scrub with a block */
   BOPE_STRING_LINES,       /* String#lines without a block */
@@ -403,6 +405,10 @@ typedef struct BuiltinOp {
    receiver holds no nil (Array#values_at(i, ...), Array#minmax/minmax_by on
    an empty Array, StringRange#minmax on an empty range, Hash#values). */
 #define BOPF_ELEM_NIL   524288u
+/* The row answers only a call whose operand list holds a splat, a list
+   whose length is known at run time (`s.concat(*parts)`); the call's other
+   forms are left to the rows and routes of their own. */
+#define BOPF_SPREAD     1048576u
 
 /* A row's recv may name a family of kinds rather than one; a caller looks
    the family up with the family's value. Not a TyKind any value has. */
@@ -524,8 +530,9 @@ typedef TyKind (*BopArgKind)(const void *ud, int i);
 const BuiltinOp *bop_find_arg(TyKind rt, const char *name, int argc, int has_block,
                               BopArgKind arg_of, const void *ud);
 /* bop_find_arg over the rows of one stage only (codegen's lookups); a
-   negative stage reads every row, as bop_find_arg does */
-const BuiltinOp *bop_find_stage(TyKind rt, const char *name, int argc, int has_block,
+   negative stage reads every row, as bop_find_arg does. spread says the
+   call's operands hold a splat: only then do the BOPF_SPREAD rows fit. */
+const BuiltinOp *bop_find_stage(TyKind rt, const char *name, int argc, int has_block, int spread,
                                 BopArgKind arg_of, const void *ud, int stage);
 
 /* Is op a library's IO row (io/console's winsize, winsize=) that emits the

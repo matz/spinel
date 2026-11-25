@@ -7706,6 +7706,7 @@ const BuiltinOp *cplan_builtin_op_row(Compiler *c, int id, TyKind rt, const char
   CallPlanArgKinds args = { c, argv };
   if (argcp) *argcp = argc;
   const BuiltinOp *op = bop_find_stage(fam, name, argc, nt_ref(c->nt, id, "block") >= 0,
+                                       nt_argv_has_splat(c->nt, argv, argc),
                                        stage >= 0 ? cplan_bop_arg : NULL, &args, stage);
   /* A class-preserving handle result needs the original String. A subclass
      call, including its re-entry on the embedded payload, has its own result. */
@@ -12839,11 +12840,15 @@ static const char *cplan_block_no_proc_class(Compiler *c, int blk, int fe) {
   return ft == TY_BOOL ? "" : conv_cls_name_of(c, ft);
 }
 int cplan_block_arg(Compiler *c, int id, const char **cn) {
+  *cn = NULL;
+  if (id >= 0 && id < c->nt->count && nt_safe_nav(c->nt, id)) return CB_BINDS;
+  return cplan_block_arg_value(c, id, cn);
+}
+int cplan_block_arg_value(Compiler *c, int id, const char **cn) {
   const NodeTable *nt = c->nt;
   *cn = NULL;
   int blk = id >= 0 && id < nt->count && nt_kind(nt, id) == NK_CallNode ? nt_ref(nt, id, "block") : -1;
-  if (blk < 0 || nt_kind(nt, blk) != NK_BlockArgumentNode || nt_safe_nav(nt, id) ||
-      !cplan_block_conv_builtin(c)) return CB_BINDS;
+  if (blk < 0 || nt_kind(nt, blk) != NK_BlockArgumentNode || !cplan_block_conv_builtin(c)) return CB_BINDS;
   int fe = nt_ref(nt, blk, "expression");
   if (fe < 0) return CB_BINDS;
   *cn = cplan_block_no_proc_class(c, blk, fe);
@@ -12854,6 +12859,15 @@ int cplan_block_arg(Compiler *c, int id, const char **cn) {
   /* what the slot can hold is the value's representation's fact: a nil
      passes no block, and only a value that cannot be nil raises */
   return repr_of(c, fe).may_nil ? CB_CHECK : CB_RAISE;
+}
+
+/* Is the `&` argument of call id bound as written with no program method
+   run to convert it: CB_BINDS where only the builtins convert (a program's
+   to_proc, respond_to? or respond_to_missing? is not guessed at)? Judged
+   where the call runs, on a `&.` call too. */
+int cplan_block_arg_builtin_binds(Compiler *c, int id) {
+  const char *cn;
+  return cplan_block_arg_value(c, id, &cn) == CB_BINDS && cplan_block_conv_builtin(c);
 }
 
 int cplan_nil(Compiler *c, int id) {

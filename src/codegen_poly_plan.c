@@ -4057,6 +4057,14 @@ static int poly_case_arg_boxed(Compiler *c, const PolyTemps *T, const PolyKw *kw
   return 0;
 }
 
+/* The `if` ahead of the statement that hands element argument a (its text
+   ab) to an Array: a keyword hash of `**h` splats alone that is empty is
+   no argument, as CRuby hands a method without keywords none. */
+static void poly_case_kw_elem_guard(Compiler *c, const PolyTemps *T, const PolyKw *kw, int a, const Buf *ab, Buf *b) {
+  if (kw && kw->kwh >= 0 && a >= T->pos_argc && ab->p && nt_kwh_splats_only(c->nt, kw->kwh))
+    buf_printf(b, " if (sp_poly_length(%s) != 0)", ab->p);
+}
+
 /* The builtin `case` arms a poly dispatch with arguments writes after its
    class arms: an Array's index, push, unshift, pack, join, include?,
    index and intersect?, an IO's write, read and the rest, a Time's
@@ -4395,6 +4403,7 @@ void emit_poly_cases_n(Compiler *c, int id, const char *name, const PolySpecials
       }
       Buf ab; memset(&ab, 0, sizeof ab);
       int kb = poly_case_arg_boxed(c, T, kw, a, &ab, b);
+      poly_case_kw_elem_guard(c, T, kw, a, &ab, b);
       buf_printf(b, " sp_poly_insert(_t%d, %d, %s);", tv, a, ab.p ? ab.p : "sp_box_nil()");
       if (kb) buf_puts(b, " }");
       free(ab.p);
@@ -4424,6 +4433,7 @@ void emit_poly_cases_n(Compiler *c, int id, const char *name, const PolySpecials
       }
       Buf ab; memset(&ab, 0, sizeof ab);
       int kb = poly_case_arg_boxed(c, T, kw, a, &ab, b);
+      poly_case_kw_elem_guard(c, T, kw, a, &ab, b);
       buf_printf(b, " sp_poly_shl(_t%d, %s);", tv, ab.p ? ab.p : "sp_box_nil()");
       if (kb) buf_puts(b, " }");
       free(ab.p);
@@ -4481,6 +4491,7 @@ void emit_poly_cases_n(Compiler *c, int id, const char *name, const PolySpecials
       }
       Buf ab; memset(&ab, 0, sizeof ab);
       int kb = poly_case_arg_boxed(c, T, kw, a, &ab, b);
+      poly_case_kw_elem_guard(c, T, kw, a, &ab, b);
       buf_printf(b, " sp_poly_shl(_t%d, %s);", tv, ab.p ? ab.p : "sp_box_nil()");
       if (kb) buf_puts(b, " }");
       free(ab.p);

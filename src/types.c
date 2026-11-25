@@ -89,8 +89,10 @@ static const PolyFace ty_poly_face_tbl[] = {
      the arm. concat's arguments are of the receiver's own kind in CRuby
      (a String concatenates Strings, an Array Arrays), so an argument the
      inference has typed as the other kind rules that arm out. */
-  {"concat", PF_STRING | PF_MUT | PF_ARGS_OWN | PF_VAL_SELF, 0, -1, 0}, {"concat", PF_ARRAY | PF_MUT | PF_VAL_SELF | PF_ARGS_OWN, 0, -1, 0},
-  {"prepend", PF_STRING | PF_MUT | PF_ARGS_OWN | PF_VAL_SELF, 0, -1, 0}, {"prepend", PF_ARRAY | PF_MUT | PF_VAL_SELF, 0, -1, 0},
+  {"concat", PF_STRING | PF_MUT | PF_ARGS_OWN | PF_VAL_SELF | PF_SPREAD, 0, -1, 0},
+  {"concat", PF_ARRAY | PF_MUT | PF_VAL_SELF | PF_ARGS_OWN | PF_SPREAD, 0, -1, 0},
+  {"prepend", PF_STRING | PF_MUT | PF_ARGS_OWN | PF_VAL_SELF | PF_SPREAD, 0, -1, 0},
+  {"prepend", PF_ARRAY | PF_MUT | PF_VAL_SELF | PF_SPREAD, 0, -1, 0},
   {"reverse!", PF_STRING | PF_MUT | PF_VAL_SELF | PF_STR_TYPED | PF_STR_SELF, 0, 0, 0}, {"reverse!", PF_ARRAY | PF_MUT | PF_VAL_SELF, 0, 0, 0},
   {"slice!", PF_STRING | PF_MUT, 1, 2, 0}, {"slice!", PF_ARRAY | PF_MUT, 1, 2, 0},
   /* The Hash mutators, on a Hash at run time; a typed variant takes the
@@ -149,6 +151,10 @@ static const PolyFace ty_poly_face_tbl[] = {
      difference / intersection / zip, the blockless index family and
      sort_by, slice, the String's start_with? / end_with? / dedup / encode!). */
   {"merge", PF_HASH, 0, 0, -1},
+  /* and merge's spread form, whose operands the boxed arm read as one
+     (`x.merge(*hs)` passed the list itself, a TypeError): the typed
+     emitter spreads them. A plain merge keeps its boxed arm. */
+  {"merge", PF_HASH | PF_SPREAD | PF_SPREAD_ONLY, 0, -1, -1},
   {"values_at", PF_ARRAY, 0, 0, 0}, {"values_at", PF_HASH, 0, 0, 0},
   {"union", PF_ARRAY, 0, 0, 0}, {"difference", PF_ARRAY, 0, 0, 0}, {"intersection", PF_ARRAY, 0, 0, 0},
   {"zip", PF_ARRAY | PF_HASH | PF_RANGE, 0, 0, 0},
@@ -161,7 +167,8 @@ static const PolyFace ty_poly_face_tbl[] = {
   {0, 0, 0, 0, 0}
 };
 static int face_row_matches(const PolyFace *r, int argc, int has_blk, int plain) {
-  if (!plain) return r->argc_min == 0 && r->argc_max < 0 && r->blk != 0;
+  if (!plain) return (r->flags & PF_SPREAD) || (r->argc_min == 0 && r->argc_max < 0 && r->blk != 0);
+  if (r->flags & PF_SPREAD_ONLY) return 0;
   if (argc < r->argc_min || (r->argc_max >= 0 && argc > r->argc_max)) return 0;
   return r->blk < 0 || r->blk == (has_blk != 0);
 }

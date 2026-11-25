@@ -520,6 +520,8 @@ static int (*const bop_emitters[BOPE__COUNT])(Compiler *, const BopCtx *, Buf *)
   [BOPE_STRING_SLICE] = emit_op_string_slice,
   [BOPE_STRING_BYTESPLICE] = emit_op_string_bytesplice,
   [BOPE_STRING_APPEND_AS_BYTES] = emit_op_string_append_as_bytes,
+  [BOPE_STRING_CONCAT_LIST] = emit_op_string_concat_list,
+  [BOPE_STRING_PREPEND_LIST] = emit_op_string_prepend_list,
   [BOPE_STRING_DEDUP] = emit_op_string_dedup,
   [BOPE_STRING_SCRUB_BLOCK] = emit_op_string_scrub_block,
   [BOPE_STRING_LINES] = emit_op_string_lines,

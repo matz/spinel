@@ -1,0 +1,14 @@
+"DEF"
+"IIİ"
+"ııi"
+"iII"
+"Def"
+:ABC
+:ABC
+[ArgumentError, "invalid option"]
+[ArgumentError, "invalid second option"]
+"too many options"
+"too many options"
+NoMethodError
+["iıi", "DEF"]
+:ABC

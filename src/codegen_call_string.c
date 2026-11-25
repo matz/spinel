@@ -1579,9 +1579,12 @@ int emit_op_poly_case_options(Compiler *c, const BopCtx *x, Buf *b) {
      String or Symbol: the arms below map it as they do with none, and the
      options are checked as on a typed receiver (emit_case_opts_guard) -- a
      literal :ascii alone picks the ASCII mapping and needs no check. With no
-     arm the call raised NoMethodError naming String. */
+     arm the call raised NoMethodError naming String. A splat's options,
+     known only at run time, are gathered into one list and checked as
+     the other operands are (`x.public_send(:upcase, *opts)`). */
   if (!user_defines_or_reads(c, name)) {
-    int plain_args = !nt_argv_has(nt, argv, argc, NT_ARG_SPLAT | NT_ARG_KEYWORDS | NT_ARG_BLOCK);
+    int spread = nt_argv_has_splat(nt, argv, argc);
+    int plain_args = !nt_argv_has(nt, argv, argc, NT_ARG_KEYWORDS | NT_ARG_BLOCK);
     if (plain_args) {
       const char *sfx = case_map_suffix(c, argc, argv);
       int tv = ++g_tmp;
@@ -1594,25 +1597,36 @@ int emit_op_poly_case_options(Compiler *c, const BopCtx *x, Buf *b) {
           if (nt_kind(nt, argv[i]) != NK_SymbolNode) literals = 0;
         int *ta = calloc((size_t)argc + 1, sizeof *ta);
         if (!ta) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-        if (!literals) {
+        /* the operand list the two checks read: the held operands, or the
+           splat's gathered list */
+        Buf ol; memset(&ol, 0, sizeof ol);
+        if (spread) {
+          int tl = ++g_tmp;
+          emit_gather_call_args(c, argv, argc, tl, b);
+          buf_printf(&ol, "_t%d->len, _t%d->data", tl, tl);
+        }
+        else if (!literals) {
           int first = g_tmp + 1;
           g_tmp += argc;
           for (int i = 0; i < argc; i++) ta[i] = hold_operand(c, argv[i], TY_POLY, 1, first + i, 1, " ", b);
+          buf_printf(&ol, "%d, (sp_RbVal[]){", argc);
+          for (int i = 0; i < argc; i++) buf_printf(&ol, "%s_t%d", i ? ", " : "", ta[i]);
+          buf_puts(&ol, "}");
+        }
+        else {
+          buf_printf(&ol, "%d, (sp_RbVal[]){", argc);
+          for (int i = 0; i < argc; i++) { if (i) buf_puts(&ol, ", "); emit_boxed(c, argv[i], &ol); }
+          buf_puts(&ol, "}");
+        }
+        if (!literals) {
           turkic_rt = 1;
-          buf_printf(b, "sp_case_opts_is_turkic(%d, (sp_RbVal[]){", argc);
-          for (int i = 0; i < argc; i++) { if (i) buf_puts(b, ", "); buf_printf(b, "_t%d", ta[i]); }
-          buf_printf(b, "}) ? sp_poly_case_conv(_t%d, _t%d.tag == SP_TAG_SYM ? sp_str_%s_turkic_sym : sp_str_%s_turkic, \"%s\") : ({ ",
-                     tv, tv, name, name, name);
+          buf_printf(b, "sp_case_opts_is_turkic(%s) ? sp_poly_case_conv(_t%d, _t%d.tag == SP_TAG_SYM ? sp_str_%s_turkic_sym : sp_str_%s_turkic, \"%s\") : ({ ",
+                     ol.p, tv, tv, name, name, name);
         }
         buf_printf(b, "if (sp_rbval_is_string(_t%d) || _t%d.tag == SP_TAG_SYM || sp_poly_is_strbuf(_t%d)) "
-                      "sp_case_opts_check(%d, (sp_RbVal[]){", tv, tv, tv, argc);
-        for (int i = 0; i < argc; i++) {
-          if (i) buf_puts(b, ", ");
-          if (literals) emit_boxed(c, argv[i], b);
-          else buf_printf(b, "_t%d", ta[i]);
-        }
+                      "sp_case_opts_check(%s, %s, _t%d); ", tv, tv, tv, ol.p, x->op->arg, tv);
+        free(ol.p);
         free(ta);
-        buf_printf(b, "}, %s, _t%d); ", x->op->arg, tv);
       }
       if (sp_streq(sfx, "_turkic")) buf_printf(b, "sp_poly_case_conv(_t%d, _t%d.tag == SP_TAG_SYM ? sp_str_%s_turkic_sym : sp_str_%s_turkic, \"%s\"); })", tv, tv, name, name, name);
       else buf_printf(b, "sp_poly_case_conv(_t%d, sp_str_%s%s, \"%s\")%s; })", tv, name, sfx, name, turkic_rt ? "; })" : "");
@@ -2145,7 +2159,14 @@ int emit_op_string_bytesplice(Compiler *c, const BopCtx *x, Buf *b) {
   return 1;
 }
 
-int emit_op_string_append_as_bytes(Compiler *c, const BopCtx *x, Buf *b) {
+/* A String method over the call's whole operand list, a splat's among them,
+   that the runtime takes as one array of values (fn(h, argc, argv[, extra])):
+   the receiver's handle first, then every operand boxed, or a splat's list
+   gathered with the others (emit_gather_call_args), then the run-time check
+   of a `&` argument (emit_block_arg_check_staged), then the nil receiver's
+   NoMethodError, then the call; the answer is the receiver. A boxed
+   receiver (the BOP_BOXED_FALLBACK row) is checked to be a String. */
+static int emit_str_operand_list(Compiler *c, const BopCtx *x, const char *fn, const char *extra, Buf *b) {
   int argc, chk = 0, t, a = ++g_tmp;
   const int *argv = call_args(c->nt, x->id, &argc);
   int boxed = x->op->recv == BOP_BOXED_FALLBACK;
@@ -2156,8 +2177,7 @@ int emit_op_string_append_as_bytes(Compiler *c, const BopCtx *x, Buf *b) {
     if (x->rtext) buf_puts(b, x->rtext); else emit_boxed(c, x->recv, b);
     buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d);", t);
   } else t = str_mut_open(c, x, &chk, b);
-  int splat = 0;
-  for (int i = 0; i < argc; i++) if (nt_kind(c->nt, argv[i]) == NK_SplatNode) splat = 1;
+  int splat = nt_argv_has_splat(c->nt, argv, argc);
   if (splat) emit_gather_call_args(c, argv, argc, a, b);
   else if (argc) {
     buf_printf(b, " sp_RbVal _t%d[%d];", a, argc);
@@ -2166,19 +2186,33 @@ int emit_op_string_append_as_bytes(Compiler *c, const BopCtx *x, Buf *b) {
       buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d[%d]);", a, i);
     }
   }
+  emit_block_arg_check_staged(c, x->id, b);
   if (boxed) {
-    buf_printf(b, " if (!sp_strface_b_box(_t%d)) sp_raise_poly_nomethod(\"append_as_bytes\", _t%d);"
-                  " sp_strbuf_append_as_bytes((sp_String *)_t%d.v.p, ", t, t, t);
+    buf_printf(b, " if (!sp_strface_b_box(_t%d)) sp_raise_poly_nomethod(\"%s\", _t%d);"
+                  " %s((sp_String *)_t%d.v.p, ", t, x->name, t, fn, t);
   } else {
     str_mut_nil_check(x, t, chk, b);
-    buf_printf(b, " sp_strbuf_append_as_bytes(_t%d, ", t);
+    buf_printf(b, " %s(_t%d, ", fn, t);
   }
-  if (splat) buf_printf(b, "_t%d->len, _t%d->data);", a, a);
-  else if (argc) buf_printf(b, "%d, _t%d);", argc, a);
-  else buf_puts(b, "0, NULL);");
+  if (splat) buf_printf(b, "_t%d->len, _t%d->data%s);", a, a, extra);
+  else if (argc) buf_printf(b, "%d, _t%d%s);", argc, a, extra);
+  else buf_printf(b, "0, NULL%s);", extra);
   if (boxed) buf_printf(b, " _t%d; })", t);
   else str_mut_self_answer(c, x, t, b);
   return 1;
+}
+
+int emit_op_string_append_as_bytes(Compiler *c, const BopCtx *x, Buf *b) {
+  return emit_str_operand_list(c, x, "sp_strbuf_append_as_bytes", "", b);
+}
+
+/* concat(*parts) and prepend(*parts): the spread forms (BOPF_SPREAD), which
+   convert the operands at run time (sp_strbuf_concat_list) */
+int emit_op_string_concat_list(Compiler *c, const BopCtx *x, Buf *b) {
+  return emit_str_operand_list(c, x, "sp_strbuf_concat_list", ", 0", b);
+}
+int emit_op_string_prepend_list(Compiler *c, const BopCtx *x, Buf *b) {
+  return emit_str_operand_list(c, x, "sp_strbuf_concat_list", ", 1", b);
 }
 
 int emit_op_string_clear(Compiler *c, const BopCtx *x, Buf *b) {
@@ -2310,6 +2344,7 @@ int str_in_place_row(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
   int argc;
-  (void)call_args(nt, id, &argc);
-  return name && bop_find_stage(TY_STRING, name, argc, nt_ref(nt, id, "block") >= 0, NULL, NULL, 7) != NULL;
+  const int *argv = call_args(nt, id, &argc);
+  return name && bop_find_stage(TY_STRING, name, argc, nt_ref(nt, id, "block") >= 0,
+                                nt_argv_has_splat(nt, argv, argc), NULL, NULL, 7) != NULL;
 }

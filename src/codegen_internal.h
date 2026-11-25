@@ -2529,6 +2529,7 @@ void ty_recv_call_extra_args(const Compiler *c, const int *av, int argc,
 int node_is_empty_container(Compiler *c, int node);
 int empty_container_copy_recv(Compiler *c, int node, int *frozen_out);
 int emit_call_block_arg_stmt(Compiler *c, int id, Buf *b, int indent);   /* codegen_call.c */
+void emit_block_arg_check_staged(Compiler *c, int id, Buf *b);   /* codegen_call.c */
 int an_empty_container_kind(Compiler *c, int b);
 TyKind ffi_spec_to_ty(const char *spec);
 int local_sole_range_node(Compiler *c, int recv);
@@ -2961,6 +2962,8 @@ int emit_op_string_insert(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_string_clear(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_string_slice(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_string_append_as_bytes(Compiler *c, const BopCtx *x, Buf *b);
+int emit_op_string_concat_list(Compiler *c, const BopCtx *x, Buf *b);
+int emit_op_string_prepend_list(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_string_bytesplice(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_string_dedup(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_string_lines(Compiler *c, const BopCtx *x, Buf *b);

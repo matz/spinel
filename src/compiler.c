@@ -6252,7 +6252,9 @@ LocalVar *scope_local_intern(Scope *s, const char *name) {
   lv->boxed_store_val = TY_UNKNOWN;
   lv->store_key_src = 0;
   lv->store_val_src = 0;
+  lv->store_push_src = 0;
   lv->store_elems_src = 0;
+  lv->store_splat_src = 0;
   lv->store_merge_src = 0;
   lv->store_merge_nblocks = 0;
   lv->store_rest_src = 0;

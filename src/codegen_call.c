@@ -1199,6 +1199,24 @@ int emit_call_block_arg_stmt(Compiler *c, int id, Buf *b, int indent) {
   return 0;
 }
 
+/* The check of call id's `&` argument that is not bound as written, for
+   an emitter that stages the call's operands itself and runs only on a
+   receiver that is not nil: put after the operands and ahead of the call,
+   as CRuby converts the block argument once the arguments have run. A
+   `&.` call's value is judged there too (cplan_block_arg_value), for
+   nothing ahead of the call checks it. Elsewhere nothing where the check
+   goes ahead of the call (np_check_ahead_ok); one that raises is the raise
+   form's, and does not reach the emitter. */
+void emit_block_arg_check_staged(Compiler *c, int id, Buf *b) {
+  const char *cn;
+  if (cplan_block_arg_value(c, id, &cn) == CB_BINDS) return;
+  int fe = nt_ref(c->nt, nt_ref(c->nt, id, "block"), "expression");
+  if (!nt_safe_nav(c->nt, id) && np_check_ahead_ok(c, id, fe)) return;
+  buf_puts(b, " (void)");
+  emit_block_arg_check(c, fe, cn, b);
+  buf_puts(b, ";");
+}
+
 int emit_ie_non_proc_block(Compiler *c, int id, int recv, int blk, Buf *b) {
   const NodeTable *nt = c->nt;
   const char *cn;
@@ -14201,10 +14219,7 @@ void emit_class_value_new_kw(Compiler *c, int id, int recv, int boxed, Buf *b) {
      empty */
   int kw_splat = -1, kw_hash = -1;
   if (argc == 2 && nt_kind(nt, argv[0]) == NK_SplatNode && nt_kind(nt, argv[1]) == NK_KeywordHashNode) {
-    int en = 0; const int *els = nt_arr(nt, argv[1], "elements", &en);
-    int all = en > 0;
-    for (int e = 0; e < en; e++) if (nt_kind(nt, els[e]) != NK_AssocSplatNode) all = 0;
-    if (all) {
+    if (nt_kwh_splats_only(nt, argv[1])) {
       kw_hash = argv[1];
       kw_splat = nt_ref(nt, argv[0], "expression");
       if (kw_splat < 0) kw_splat = argv[0];

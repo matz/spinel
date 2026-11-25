@@ -840,7 +840,7 @@ int emit_output_spilled(Compiler *c, int id, const char *name, int argc, const i
        the write, and p checks once more, since p flushes) */
     if (emit_io_frozen(c))
       buf_printf(b, "for (sp_int _i%d = 0; _i%d < _t%d->len; _i%d++) { "
-                       "const char *_s%d = %s(_t%d->data[_i%d]); sp_io_stdout_check_frozen(); sp_puts_line(_s%d); }%s\n",
+                       "const char *_s%d = %s(_t%d->data[_i%d]); sp_io_stdout_check_frozen(); sp_p_line(_s%d); }%s\n",
                     t, t, t, t, t, pp_own ? "sp_pp_inspect" : "sp_poly_inspect", t, t, t,
                     sp_streq(name, "p") ? " sp_io_stdout_check_frozen();" : "");
     else

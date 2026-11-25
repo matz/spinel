@@ -84,7 +84,7 @@ static int emit_p_splat_value(Compiler *c, const char *name, int argc, const int
      the write, and p checks once more, since p flushes) */
   if (emit_io_frozen(c))
     buf_printf(b, "for (sp_int _i%d = 0; _i%d < _t%d->len; _i%d++) { "
-                  "const char *_s%d = %s(_t%d->data[_i%d]); sp_io_stdout_check_frozen(); sp_puts_line(_s%d); } %s",
+                  "const char *_s%d = %s(_t%d->data[_i%d]); sp_io_stdout_check_frozen(); sp_p_line(_s%d); } %s",
                t, t, t, t, t, p_inspect_fn(c, name), t, t, t, sp_streq(name, "p") ? "sp_io_stdout_check_frozen(); " : "");
   else
     buf_printf(b, "for (sp_int _i%d = 0; _i%d < _t%d->len; _i%d++) { "
@@ -1036,7 +1036,8 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
   if (recv < 0 && !bare_call_class_owned(c, id) && (is_text_print(name)) &&
       nt_ref(nt, id, "block") < 0) {
     buf_puts(b, "({ ");
-    if (argc == 0 && sp_streq(name, "puts")) buf_puts(b, "putchar('\n');\n");
+    if (argc == 0 && sp_streq(name, "puts"))
+      buf_printf(b, "%sputchar('\\n'); ", emit_io_frozen(c) ? "sp_io_stdout_check_frozen(); " : "");
     if (!emit_output_spilled(c, id, name, argc, argv, b, 0)) {
       for (int k = 0; k < argc; k++) {
         if (sp_streq(name, "puts")) emit_puts_one(c, argv[k], b, 0);
@@ -1063,6 +1064,14 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
       emit_boxed_operand(c, argv, argc, k, b);
       buf_puts(b, "); ");
     }
+    /* (in a program that freezes an IO: the inspect, then the check, then
+       the write, and p checks once more, since p flushes) */
+    if (emit_io_frozen(c))
+      buf_printf(b, "for (sp_int _i%d = 0; _i%d < _t%d->len; _i%d++) { "
+                    "const char *_s%d = %s(_t%d->data[_i%d]); sp_io_stdout_check_frozen(); sp_p_line(_s%d); } %s_t%d; })",
+                 t, t, t, t, t, p_inspect_fn(c, name), t, t, t,
+                 sp_streq(name, "p") ? "sp_io_stdout_check_frozen(); fflush(stdout); " : "", t);
+    else
     buf_printf(b, "for (sp_int _i%d = 0; _i%d < _t%d->len; _i%d++) { "
                   "sp_puts_line(%s(_t%d->data[_i%d])); } %s_t%d; })",
                t, t, t, t, p_inspect_fn(c, name), t, t, sp_streq(name, "p") ? "fflush(stdout); " : "", t);
@@ -1072,6 +1081,10 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
     TyKind at = repr_of(c, argv[0]).as_ty;
     int t = ++g_tmp;
     buf_puts(b, "({ "); t = hold_operand(c, argv[0], TY_POLY, 1, t, 1, " ", b);
+    if (emit_io_frozen(c))
+      buf_printf(b, "{ const char *_s%d = %s(_t%d); sp_io_stdout_check_frozen(); sp_p_line(_s%d); } %s", t, p_inspect_fn(c, name), t, t,
+                 sp_streq(name, "p") ? "sp_io_stdout_check_frozen(); fflush(stdout); " : "");
+    else
     buf_printf(b, "sp_puts_line(%s(_t%d)); %s", p_inspect_fn(c, name), t,
                sp_streq(name, "p") ? "fflush(stdout); " : "");   /* p flushes, as CRuby's does */
     char tv[16]; snprintf(tv, sizeof tv, "_t%d", t);

@@ -542,7 +542,7 @@ static void inline_target_lookup(Compiler *c, int id, const char *name, int recv
         if (t->mi >= 0) t->implicit_self = 1;
       }
     }
-    else if (g_class_body_id >= 0) {
+    else if (emit_self_class_body(c, id) >= 0) {
       t->mi = call_target(c, id, g_class_body_id, name, CT_CMETHOD, NULL);
       if (t->mi >= 0) t->cm_class = g_class_body_id;
     }
@@ -657,7 +657,7 @@ static int inline_target_plan(Compiler *c, int id, const char *name, int recv, i
       return 1;
     }
     if (ecls < 0 && g_class_body_id >= 0 && p.via == UC_CMETH && p.owner_ci == g_class_body_id &&
-        c->node_cbody[id] == g_class_body_id) {
+        emit_self_class_body(c, id) >= 0) {
       t->mi = p.mi; t->cm_class = g_class_body_id;
       return 1;
     }
@@ -3819,7 +3819,7 @@ int call_targets_yielding_method(Compiler *c, int id) {
       if (encl->is_cmethod) mi = call_target(c, id, encl->class_id, name, CT_CMETHOD, NULL);
       if (mi < 0 && !cmethod_of_class(c, encl)) mi = call_target(c, id, encl->class_id, name, 0, NULL);
     }
-    else if (mi < 0 && g_class_body_id >= 0)
+    else if (mi < 0 && emit_self_class_body(c, id) >= 0)
       mi = call_target(c, id, g_class_body_id, name, CT_CMETHOD, NULL);
     if (mi < 0) mi = call_target(c, id, -1, name, CT_TOP, NULL);
     /* A bare call to a method of a module included at the top level, which

@@ -9643,8 +9643,8 @@ static int ver_list_held(Compiler *c, int id) {
   /* self in a class or module body is that class, as a constant naming
      it is (a list a body makes of the methods it has defined) */
   const Scope *cs = r < 0 ? comp_scope_of(c, id) : NULL;
-  if (r < 0 && !(cs && cs->name) && c->node_cbody && id < c->node_cap && c->node_cbody[id] >= 0)
-    return ver_list_chain(c, c->node_cbody[id], sg);
+  int body = r < 0 ? self_class_body(c, id) : -1;
+  if (!(cs && cs->name) && body >= 0) return ver_list_chain(c, body, sg);
   TyKind rt = r >= 0 ? comp_ntype(c, r) : TY_UNKNOWN;
   if (rt == TY_CLASS) {
     for (int si = 1; si < c->nscopes; si++) {

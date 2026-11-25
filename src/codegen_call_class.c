@@ -6150,19 +6150,20 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
     }
   }
   /* bare call to a class method of the enclosing module/class body */
-  if (recv < 0 && g_class_body_id >= 0) {
-    int smi = call_target(c, id, g_class_body_id, name, CT_CMETHOD, NULL);
-    if (smi < 0 && argc == 0 && comp_class_anonymous(c, g_class_body_id) && is_name_reader(name)) {
+  int body = recv < 0 ? emit_self_class_body(c, id) : -1;
+  if (body >= 0) {
+    int smi = call_target(c, id, body, name, CT_CMETHOD, NULL);
+    if (smi < 0 && argc == 0 && comp_class_anonymous(c, body) && is_name_reader(name)) {
       buf_printf(b, "%s((sp_Class){%d})",
-                 comp_class_reader_fn(c, name, 0), g_class_body_id);
+                 comp_class_reader_fn(c, name, 0), body);
       return 1;
     }
     if (smi >= 0) {
       Scope *ms = &c->scopes[smi];
-      if (g_plan_check) ucall_observe(c, id, smi, g_class_body_id, 0);
+      if (g_plan_check) ucall_observe(c, id, smi, body, 0);
       buf_puts(b, mc_method(c, ms));
       buf_puts(b, "(");
-      const char *lead3 = emit_cmethod_self_cls_arg(c, smi, g_class_body_id, b);
+      const char *lead3 = emit_cmethod_self_cls_arg(c, smi, body, b);
       emit_args_filled(c, smi, nt_ref(nt, id, "arguments"), lead3, b);
       emit_cmethod_block_arg(c, id, ms, -1, b);
       buf_puts(b, ")");

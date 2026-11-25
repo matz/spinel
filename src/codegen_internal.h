@@ -772,6 +772,7 @@ void emit_into_pre_line(Compiler *c, void (*fn)(Compiler *, int, Buf *), int nod
 extern int g_inline_recv_class;
 /* When emitting class/module body statements, the class index (-1 outside). */
 extern int g_class_body_id;
+int emit_self_class_body(Compiler *c, int id);
 /* Class id of the scope currently being emitted (-1 if none). Used to resolve
    implicit self calls in included-module methods to the including class. */
 extern int g_emitting_class_id;

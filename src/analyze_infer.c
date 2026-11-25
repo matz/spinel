@@ -7079,7 +7079,7 @@ static int infer_receiverless_call(Compiler *c, int id, const NodeTable *nt, con
      (a bare module-body cmethod call, e.g. `take(mk)` where mk is
      `def self.mk`). */
   if (recv < 0 && !kernel) {
-    int cbody = c->node_cbody[id];
+    int cbody = self_class_body(c, id);
     if (cbody >= 0) {
       int smi = call_target(c, id, cbody, name, CT_CMETHOD, NULL);
       if (smi >= 0) { *out = an_user_call(c, id, smi, UC_CMETH, cbody); return 1; }
@@ -7174,12 +7174,6 @@ static int infer_receiverless_call(Compiler *c, int id, const NodeTable *nt, con
 
   /* user-defined free-function call (no receiver) */
   if (recv < 0) {
-    /* in a class or module body, the body's own class method comes first,
-       as the call plan takes it (comp_cbody_call_mi); not where an
-       instance_eval block's receiver answers the name */
-    { int iec = ie_class_of(c, id);
-      int cb = iec >= 0 && iec < c->nclasses && call_target(c, id, iec, name, 0, NULL) >= 0 ? -1 : comp_cbody_call_mi(c, id, name);
-      if (cb >= 0) { *out = an_user_call(c, id, cb, UC_CMETH, c->node_cbody[id]); return 1; } }
     int mi = call_target(c, id, -1, name, CT_TOP | CT_INCLUDED, NULL), fvia = UC_TOP;
     if (mi >= 0 && c->scopes[mi].class_id >= 0 && !c->scopes[mi].is_cmethod) fvia = UC_INCLUDED;   /* (a module main extends or Object includes) */
     /* in a block run by instance_eval, the receiver's own method answers

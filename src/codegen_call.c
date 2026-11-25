@@ -36054,8 +36054,8 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
       }
       /* in a class body, self is the class object: as in a class method
          (`ruby2_keywords(:m) if respond_to?(:ruby2_keywords, true)`) */
-      else if (ss && c->node_cbody && id < c->node_cap && c->node_cbody[id] >= 0) {
-        int cid = c->node_cbody[id];
+      else if (ss && emit_self_class_body(c, id) >= 0) {
+        int cid = g_class_body_id;
         resolved = 1;
         yes = cplan_class_responds(c, cid, qm, id);
         if (yes && foldable && cplan_method_vis(c, id, cid, qm, CPV_CMETHOD, NULL) != SP_VIS_PUBLIC)

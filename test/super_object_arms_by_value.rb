@@ -33,3 +33,17 @@ p v == 1, v == nil, v.equal?(2), v.eql?(nil)
 p v.frozen?, v.itself.equal?(3)
 w = Qv.new(2)
 p [w == 1, w.equal?(nil), w.frozen?]
+
+# != and === reach the object's identity through ==: a class whose method
+# makes one keeps its pointer too, and the object equals only itself.
+class Qn
+  def initialize(x) = @x = x
+  def !=(o) = super
+  def ===(o) = super
+end
+n = Qn.new(1)
+p n != 1, n != nil, n != n, n === 1, n === nil, n === n
+case n
+when n then p :same
+else p :other
+end

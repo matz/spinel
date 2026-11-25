@@ -1,6 +1,6 @@
 # A require whose path is computed when it runs and names one of a closed
 # set of files -- the words of a literal array a loop goes over -- loads the
-# file the path names, when the require runs (--load-model=graph): once,
+# file the path names, when the require runs: once,
 # whichever require reaches the file first. A path naming none of them is
 # CRuby's LoadError.
 order = []

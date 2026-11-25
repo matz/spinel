@@ -33,7 +33,7 @@
 #   order       two events CRuby ran in one order and the record holds in
 #               the other.
 # Exits 1 when any program differs or spinel fails on one (any exit but a
-# refusal of --load-model=graph's); a program graph refuses is skipped, and
+# refusal of the load model's); a program the load model refuses is skipped, and
 # so is one CRuby stopped early on with no difference in what it ran, which
 # is said. Each file has its own lines.
 require "rbconfig"

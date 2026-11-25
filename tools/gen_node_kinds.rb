@@ -33,7 +33,7 @@ OUTPUT = File.join(ROOT, "src/node_kinds.inc")
 # name => what makes it (one short line, copied into the generated file)
 OWN = {
   "UnsupportedNode" => "flatten's stand-in (spinel_parse.c) for a Prism node type it has no case for",
-  "LoadNode" => "a require's load of its file's root under --load-model=graph (spinel_parse.c)",
+  "LoadNode" => "a require's load of its file's root (spinel_parse.c)",
 }.freeze
 
 def prism_nodes

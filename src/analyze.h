@@ -160,13 +160,13 @@ int an_class_presence_write(Compiler *c, int id);
 ConstReadEffect an_const_read_effect(Compiler *c, int id);
 int an_const_read_keeps_class(Compiler *c, int id);
 int an_const_read_is_value(Compiler *c, int id);
-/* The program's files under --load-model=graph (analyze_program.c, #9898):
+/* The program's files (analyze_program.c, #9898):
    their top-level scopes and roots, and what the model refuses for now. */
 void prog_file_scopes(Compiler *c);
 void prog_refuse_loads(Compiler *c);
 void prog_settle_files(Compiler *c);
 /* Is node in a required file prog_settle_files dropped, as no live require
-   reaches it (--load-model=graph)? */
+   reaches it? */
 int prog_node_in_dropped_file(Compiler *c, int node);
 void prog_refuse_order(Compiler *c);
 int prog_is_top_scope(const Compiler *c, const Scope *s);

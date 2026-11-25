@@ -580,7 +580,7 @@ void class_unpin_ivar(ClassInfo *ci, const char *name);
 int class_ivar_pin_holds(ClassInfo *ci, const char *name, TyKind vt);
 int param_seed_holds(LocalVar *lv, TyKind at);
 int ret_seed_holds(Scope *s, TyKind r);
-/* A version a later definition replaces, which a version entry may still run (--load-model=graph), whose
+/* A version a later definition replaces, which a version entry may still run, whose
    body answers, at any value it can return, a type its return seed cannot hold: the seed is dropped there.
    The signature describes the method its class ends with. */
 int replaced_ret_seed_gives_way(Compiler *c, int si);

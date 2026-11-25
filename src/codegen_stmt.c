@@ -16712,7 +16712,7 @@ static void emit_load_set(Compiler *c, int id, Buf *b) {
   else buf_puts(b, "NULL");
   buf_printf(b, ", %d, sp_Kernel_%s)", rel, mc(nt_str(nt, id, "method")));
 }
-/* Under --load-model=graph, the run-time $LOAD_PATH as CRuby's starts
+/* The run-time $LOAD_PATH as CRuby's starts
    (sp_load_path_seed): the directories from -I, absolute, then the
    compiler's feature root, which a bare computed path matches the features
    of (sp_require_search). Emitted into main where the program needs it
@@ -16736,7 +16736,7 @@ void emit_load_path_seed(Compiler *c, Buf *b) {
   emit_str_literal(b, root);
   buf_printf(b, "}; sp_load_path_seed(_lp, %d, _lp[%d]); }\n", n + 1, n);
 }
-/* A require under --load-model=graph (#9898), as the runtime's
+/* A require (#9898), as the runtime's
    Kernel#require or Kernel#require_relative (lib/spinel_rt.h), named for
    the method the call makes so a backtrace shows the load's frame as CRuby
    does: it runs the file's top level (sp_file_N_top, emit_file_tops) the

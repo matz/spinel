@@ -474,7 +474,7 @@ void register_cext_layouts(Compiler *c) {
       if (ruby_name && sp_streq(ruby_name, cc->path)) { cid = k; break; }
     }
     /* (a class declared in a file no live require reaches, dropped under
-       --load-model=graph: `require "sqlite3"` in an untaken RUBY_ENGINE
+       `require "sqlite3"` in an untaken RUBY_ENGINE
        branch; nothing makes it, and nothing of it runs) */
     if (cid < 0 && prog_node_in_dropped_file(c, cc->site)) continue;
     if (cid < 0) unsupported_feature(c, c->nt->root_id, "C extension class was not registered");

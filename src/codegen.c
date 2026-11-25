@@ -5983,8 +5983,8 @@ static int sg_delegate_scope(Compiler *c, Scope *s) {
 }
 
 /* --debug: the file each user function was written in, by its C symbol, for
-   the frames of Exception#backtrace: a method of a required file, and under
-   --load-model=graph a required file's top level (emit_file_tops). The
+   the frames of Exception#backtrace: a method of a required file, and a
+   required file's top level (emit_file_tops). The
    entry script is every other frame's default (sp_bt_srcfile). Takes sym,
    malloc'd. */
 static char **g_bt_files = NULL;
@@ -24763,7 +24763,7 @@ static double cg_phase(double t0, const char *phase) {
   return sp_timing_now();
 }
 
-/* --load-model=graph (#9898): each required file's top level as a function
+/* each required file's top level as a function
    of its own, which the first load of the file runs (sp_load_file), with
    the file's own locals and frame; its BEGIN blocks run first, when it
    loads. A file that only defines things has none while no load of it is a

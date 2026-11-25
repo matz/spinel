@@ -3266,8 +3266,8 @@ else {
 }
 
 /* A call flattened as node `id` of another kind: `__FILE__ == $0` and its
-   spellings as the constant they answer, stamped program_guard; and under
-   --load-model=graph a require as its LoadNode, which carries its path when
+   spellings as the constant they answer, stamped program_guard; and a
+   require as its LoadNode, which carries its path when
    it is one literal (or the one path its expression names), else the
    expression that computes it when it runs, and what its site resolved to
    before the file was flattened (sp_graph_site_take). 0 for a call
@@ -3794,8 +3794,8 @@ static bool sp_skip_dead_require(const pm_node_t *node, void *data) {
      - every require and require_relative call of the tree was resolved: a
        file read, one read before, or a feature the runtime provides. One
        left as a raise or a warning, blanked as unreachable, or past where
-       the scan gave up counts as written and not resolved, and under
-       --load-model=graph so does a LoadNode that names no file; one a
+       the scan gave up counts as written and not resolved, and so does a
+       LoadNode that names no file; one a
        rewrite made sets the flag itself.
    The text the class macros write (sp_expand_class_macros) is parsed once
    they have, for the load and load-path nodes: the parts a macro joins need
@@ -4841,10 +4841,10 @@ typedef struct {
   int from, line, plain;  /* the requiring file, the call's line, `require` (not _relative) */
   char *name;             /* the path as written */
   int how, to;            /* SP_LOAD_*; the target file for SP_LOAD_FILE */
-  int stmt, top;          /* --load-model=graph: the top-level statement of `from` the
+  int stmt, top;          /* the top-level statement of `from` the
                              call stands in (a boot library's: below 0, ahead of the
                              entry's first), and 1 when the call is that statement */
-  int node;               /* --load-model=graph: its LoadNode, once flattened (-1 before) */
+  int node;               /* its LoadNode, once flattened (-1 before) */
   int begin_block;        /* ... and 1 when its statement is a `BEGIN { }`, which runs ahead of the file's others */
   int ncand, *cand;       /* SP_LOAD_SET: the files a path computed when it runs may name, ... */
   int open;               /* ... or (open) any file of the program */
@@ -4858,11 +4858,11 @@ typedef struct {
                              (SpPaths.per_word) */
 } SpLoadEdge;
 
-/* --load-model=graph: a require of a file's tree: its edge, the call node it
+/* a require of a file's tree: its edge, the call node it
    was found at, and how many LoadNodes flatten made of that call (one). */
 typedef struct { int edge; const pm_node_t *call; int taken; int deferred; } SpGraphSite;   /* deferred: sp_req_always_runs says no */
 
-/* --load-model=graph: one file of the graph, read and parsed before any file
+/* one file of the graph, read and parsed before any file
    is flattened, and its sites, in the order its tree has them. */
 typedef struct {
   char *text;
@@ -4883,7 +4883,7 @@ typedef struct {
   unsigned char *flags; int flagcap;        /* [file] SP_FILE_* */
   SpLoadEdge *edge; int nedge, edgecap;     /* the tree's sites */
   SpLoadEdge *spl; int nspl, splcap;        /* the plain pass's resolutions */
-  /* --load-model=graph */
+  /* the files */
   SpGraphFile **gf; int gfcap;              /* [file], each where it was made: a
                                                parser is not moved once it has parsed */
   int *boot; int nboot, bootcap;            /* the edges of the libraries loaded at the
@@ -6209,7 +6209,7 @@ static int sp_builtins_dir(const char *lib_dir, char *out, size_t n) {
   return stat(out, &st) == 0 && S_ISDIR(st.st_mode);
 }
 
-/* --load-model=graph: file `f`'s record, made the first time it is asked for. */
+/* file `f`'s record, made the first time it is asked for. */
 static SpGraphFile *sp_graph_rec(SpLoadGraph *g, int f) {
   if (f >= g->gfcap) {
     int cap = g->gfcap ? g->gfcap : 16;
@@ -6972,7 +6972,7 @@ static void sp_graph_scan_sites(SpLoadGraph *g, int f, const char *path, SpNames
   sp_names_of(facts, &r->src.parser, r->src.root, pre);
 }
 
-/* --load-model=graph: file `f` of graph `g` read and parsed, before any
+/* file `f` of graph `g` read and parsed, before any
    file is flattened: its requires resolved (each target file a file of the
    graph, read in its turn) and the names it uses added to `facts`. 0 when it
    could not be read or parsed (reported). */
@@ -7006,13 +7006,13 @@ static int sp_graph_read(SpLoadGraph *g, int f, const char *source_file, SpNames
   return 1;
 }
 
-/* --load-model=graph: the file sp_graph_flatten is flattening, whose sites
+/* the file sp_graph_flatten is flattening, whose sites
    its LoadNodes look themselves up in, and the site after the last one
    taken. */
 typedef struct { SpLoadGraph *g; SpGraphFile *r; int next; } SpGraphFlat;
 static SpGraphFlat g_flat_sites;
 
-/* --load-model=graph: LoadNode `id`, flattened from require `call` of the
+/* LoadNode `id`, flattened from require `call` of the
    file being flattened, carries what the call's site resolved to. The site
    is found by its call node, not by its place: flatten meets a file's
    requires in its own order, which is not the tree's everywhere (a begin's
@@ -7080,7 +7080,7 @@ static int sp_graph_site_take(int id, const pm_node_t *call) {
   return 0;
 }
 
-/* --load-model=graph: file `f` of graph `g`, read before (sp_graph_read),
+/* file `f` of graph `g`, read before (sp_graph_read),
    flattened into the table as a root of its own (its ProgramNode carries
    its graph id, `load_file`; the entry's is the table's root), each of its
    requires a LoadNode carrying what it loads, and its inline RBS read from
@@ -7344,7 +7344,7 @@ static int sp_graph_boot(SpLoadGraph *g, const char *source_file, SpNames *facts
   return ok;
 }
 
-/* ---- Load order (--load-model=graph) ----
+/* ---- Load order ----
  *
  * When each file's top level runs, as CRuby runs it: the entry's statements
  * in order, the libraries CRuby has at boot ahead of them, and a file loaded
@@ -7478,7 +7478,7 @@ static void sp_graph_builtin_names(const char *lib_dir) {
   }
 }
 
-/* --load-model=graph: the load order handed to the analysis, as data in the
+/* the load order handed to the analysis, as data in the
    node table: each placed file's root carries `load_by`, the LoadNode whose
    edge first runs its top level (entered[]); an unplaced file's root has
    none. The analysis orders two files' nodes from it (prog_order), at the
@@ -7522,7 +7522,7 @@ static void sp_graph_layout_hook(NodeTable *nt) {
   free(file); free(order);
 }
 
-/* --load-model=graph: the program as the files it loads, the libraries
+/* the program as the files it loads, the libraries
    CRuby has loaded before it starts among them (sp_graph_boot): every file
    read and parsed first (sp_graph_read), then each flattened as a root of
    its own (sp_graph_flatten), each file's root in the table's file_roots,

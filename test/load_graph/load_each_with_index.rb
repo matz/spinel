@@ -1,5 +1,5 @@
 # A computed require in `%w(...).each_with_index { |word, i| ... }` names one
-# file for each word, as the same loop with `each` does (--load-model=graph):
+# file for each word, as the same loop with `each` does:
 # the first block parameter is the word, the second the index.
 $LOAD_PATH.unshift __dir__
 %w(a b).each_with_index do |v, i|

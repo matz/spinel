@@ -1,5 +1,5 @@
 # A write to the load path with several arguments adds each directory, in the
-# order CRuby's path takes them (--load-model=graph). unshift and prepend put
+# order CRuby's path takes them. unshift and prepend put
 # their arguments in front as written (the first is searched first), push and
 # append put them behind the path, a chain of << adds one after the other, and
 # concat adds the elements of its array literals. A directory that does not

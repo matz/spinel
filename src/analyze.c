@@ -50410,7 +50410,7 @@ static void an_phase_desugar_register(Compiler *c) {
   /* scope 0 = top level */
   Scope *top = comp_scope_new(c, NULL, -1);
   { top->body = nt_ref(c->nt, c->nt->root_id, "statements"); comp_touch_scope(top->idx); }
-  prog_file_scopes(c);   /* and each required file's (--load-model=graph) */
+  prog_file_scopes(c);   /* and each required file's */
   for (int r = 0; r < nt_nroots(c->nt); r++) reject_retry_in_ensure(c, nt_root(c->nt, r), 0, 0);
   if (g_exc_abort) reject_exc_abort_constructs(c);
   LowerCtx lc;
@@ -50564,8 +50564,8 @@ static void an_phase_desugar_register(Compiler *c) {
   /* builtins/integer.rb, float.rb, comparable.rb: the same idea, one more
      container per file (analyze_desugar.c's sp_bx_* table) */
   AN_STEP_V("desugar_builtin_scalar_defs", desugar_builtin_scalar_defs(c));
-  prog_settle_files(c);                  /* (--load-model=graph: a file no live require reaches is dropped; one a nested require places is placed) */
-  prog_refuse_order(c);                  /* (--load-model=graph: what these read across files) */
+  prog_settle_files(c);                  /* (a file no live require reaches is dropped; one a nested require places is placed) */
+  prog_refuse_order(c);                  /* (what these read across files) */
   lower_run(c, &lc, LW_SINGLETON_CLASS_DEFINE_METHOD); /* singleton_class.define_method -> define_singleton_method */
   lower_run(c, &lc, LW_EMPTY_HASH_COMPARE_BY_IDENTITY); /* {}.compare_by_identity -> Hash.new.compare_by_identity */
   lower_run(c, &lc, LW_DEFINE_METHOD_PROC_ARG);     /* define_method(:m, -> { }) -> define_method(:m) { } */
@@ -51477,7 +51477,7 @@ int an_def_value_used(const NodeTable *nt, const int *par, int v) {
         v = up.parent;
         continue;
       }
-      /* a required file's top level (--load-model=graph): nothing reads its
+      /* a required file's top level: nothing reads its
          value, since its require answers true or false */
       if (k == NK_ProgramNode && nt_int(nt, up.parent, "load_file", 0) > 0) return 0;
       return 1;

@@ -4,9 +4,8 @@
  * build without it.
  *
  * The parser calls sp_inline_rbs_run between pm_parse and flatten, when a
- * parse's tree and its comment list are alive together: under
- * --load-model=graph each file's own parse (sp_graph_file), under the inline
- * model the whole spliced program (sp_parse_emit). The pass groups the
+ * parse's tree and its comment list are alive together: each file's own
+ * parse (sp_graph_file). The pass groups the
  * comments into blocks, attaches each annotation to the node it describes,
  * parses it with the rbs C parser and maps its types with the extractor's own
  * map_type (rbs_map.c). The result is a fact on that node, written by flatten
@@ -1717,7 +1716,7 @@ static void ir_walk_close(ir_file *f, ir_walk *w) {
     free(f->line_starts);
 }
 
-/* Under --load-model=graph, before any file's annotations are read: does
+/* Before any file's annotations are read: does
  * the file's parse hold one, and the classes and modules it declares, for
  * a type any file names (RBS resolves a name against the whole program's
  * declarations, wherever they are). */

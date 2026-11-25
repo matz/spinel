@@ -1,7 +1,7 @@
 # A computed require in `%w(...).each_with_index { |word, i| ... }` whose path
 # reads the index names no file of the word alone: the literals of the path
 # are word.rb for each word, where the program requires word/<i>.rb. The set
-# of files such a require loads stays open (--load-model=graph), so it loads
+# of files such a require loads stays open, so it loads
 # the file its path names and word.rb is not loaded. So does a path that reads
 # any other local the loop does not bind to a value (here "0", but only the run
 # time knows it).

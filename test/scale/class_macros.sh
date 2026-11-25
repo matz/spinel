@@ -1,6 +1,6 @@
 #!/bin/sh
 # Class-body macros: N classes, each calling a superclass's macro ten
-# times, compiled under --load-model=graph, where the registration's walk
+# times, compiled where the registration's walk
 # runs each call and splices the define_method it makes. A walk-time
 # splice that rebuilds anything of the whole program (a parent map, the
 # kind lists, the load record) grows as N^2.

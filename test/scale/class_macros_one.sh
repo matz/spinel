@@ -1,9 +1,9 @@
 #!/bin/sh
 # Class-body macros in one class: K calls to a superclass's macro that
 # defines two methods each, and (with a second argument, `written`) the
-# same 2K define_methods written out in the class. Under --load-model=graph
-# the walk splices each call's methods into the one body; a row that walks
-# the whole body per splice, rather than once per body, makes the macro
+# same 2K define_methods written out in the class. The walk splices each
+# call's methods into the one body; a row that walks the whole body per
+# splice, rather than once per body, makes the macro
 # program cost K^2 more than the written one. (The pair compares the two
 # at one K: K methods in one class already cost more than linearly in the
 # analysis, macros or not.)

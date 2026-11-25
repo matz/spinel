@@ -5109,7 +5109,7 @@ static void alias_refuse_early_call(Compiler *c, ClassInfo *cls, const char *nw,
     if (!nm || !sp_streq(nm, nw)) continue;
     /* code run where the alias is: in its scope, or a file's top level as
        the alias is (a class body runs in its file's top-level scope, and
-       under --load-model=graph a reopening in another file has another) */
+       a reopening in another file has another) */
     Scope *ns = &c->scopes[c->nscope[n]], *as = &c->scopes[c->nscope[alias_node]];
     if (ns != as && !(prog_is_top_scope(c, ns) && prog_is_top_scope(c, as))) continue;
     /* class-body code of this class (any reopening of it): a call of the

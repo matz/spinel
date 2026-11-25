@@ -1,7 +1,7 @@
 #!/bin/sh
 # Class-body macros that keep state: one class of K calls that set it
 # (`kind :kI`) and K that read it to build a constant (`constant :CI`),
-# compiled under --load-model=graph. Each reading call follows the class's
+# compiled. Each reading call follows the class's
 # state over the statements before it (ct_class_state): from where the
 # last call stood, so the body is followed once; from the body's start at
 # each call, it grows as K^2.

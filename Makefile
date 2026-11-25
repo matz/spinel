@@ -5935,7 +5935,7 @@ source-marker-test: $(SPINEL)
 magic-comment-test: $(SPINEL)
 	@tools/magic_comment_check.sh
 
-# Under --load-model=graph each require's LoadNode carries the file its own
+# Each require's LoadNode carries the file its own
 # call loads, the libraries CRuby has at boot come first in load order, and
 # each required file's top level runs at its require, once; what graph mode
 # does not compile yet it refuses by name (#9898). make test runs it.
@@ -6562,8 +6562,8 @@ STRUCT_BLOCKS_LIMIT ?= 2.3
 # the program, and read 2.09x; asked of an index kept for the step
 # (SceConsts), 2.03x. A whole-program rebuild per splice reads as K^2 here.
 SPLICES_LIMIT ?= 2.2
-# Class-body macros (test/scale/class_macros.sh), compiled to C under
-# --load-model=graph at N=100 and N=200 classes of ten calls each to a
+# Class-body macros (test/scale/class_macros.sh), compiled to C at N=100
+# and N=200 classes of ten calls each to a
 # superclass's define_method macro: the walk runs each call at its point and
 # splices the method it makes (ct_macro_form, host_splice). The pair reads
 # 2.00x; a per-splice rebuild of a parent map, the kind lists or the load

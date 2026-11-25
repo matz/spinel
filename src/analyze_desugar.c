@@ -21408,7 +21408,7 @@ int desugar_builtin_scalar_defs(Compiler *c) {
      enumerable.rb (a shared definition would carry the union of every
      call site's argument types onto every site). The program's own sites
      come in the program's order (prog_sort: node order in one program text;
-     under --load-model=graph a builtins/ file, loaded at boot, ahead of the
+     a builtins/ file, loaded at boot, ahead of the
      program), so a generic's own sites take their copies before a call
      clones the generic, and the clone carries them (bx_copy). A site in a
      copy that has none, a call in the copy of an own reopen's method among
@@ -25258,8 +25258,7 @@ static int send_alias_leaf_followable(RodIndex *x, const NodeTable *nt, const ch
   return q != NULL && (!top || sp_streq(q, leaf));
 }
 /* Does statement `st` run before the alias? Node ids are one file's own
-   order, and under the inline load model the spliced program's. Under
-   --load-model=graph two files run in the load graph's order, which the
+   order. Two files run in the load graph's order, which the
    load record knows only after this pass (prog_order): a statement of
    another file is not taken. */
 static int send_alias_runs_before(const NodeTable *nt, int st, int alias) {
@@ -37225,7 +37224,7 @@ static int pum_body_speaks(const PumBody *pb, int n) {
   case NK_IndexOperatorWriteNode: case NK_IndexOrWriteNode: case NK_IndexAndWriteNode: case NK_IndexTargetNode:
   case NK_ForNode: case NK_PreExecutionNode: case NK_PostExecutionNode:
   case NK_XStringNode: case NK_InterpolatedXStringNode:
-  /* (a require, under --load-model=graph: it adds its file to the program) */
+  /* (a require: it adds its file to the program) */
   case NK_LoadNode:
     return 1;
   case NK_CallNode: {

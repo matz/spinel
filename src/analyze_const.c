@@ -252,7 +252,7 @@ static void cw_stmt_walk(ConstWalk *w, int id, int depth) {
       return;
     }
     case NK_LoadNode: {
-      /* --load-model=graph: a require naming its file runs no code of its
+      /* a require naming its file runs no code of its
          own; the file's top level is walked at its load, in load order
          (prog_top_stmts). One whose path is computed may load any. */
       const char *how = nt_str(nt, id, "how");

@@ -1293,7 +1293,7 @@ void emit_stmt(Compiler *c, int id, Buf *b, int indent);
 /* The trace build's node marker (src/emit_trace.c): 'c' a call, 's' a statement, 'l' a method's last one. */
 void emit_trace_node(Compiler *c, int id, int kind);
 #endif
-/* A require under --load-model=graph, as its value (codegen_stmt.c) */
+/* A require, as its value (codegen_stmt.c) */
 void emit_load_call(Compiler *c, int id, Buf *b);
 int emit_autoload_register(Compiler *c, int id, Buf *b);
 int ivar_slot_below(Compiler *c, int k, const char *nm);

@@ -2,7 +2,7 @@
    Every node type Prism has, sorted (nt_kind_resolve searches the list by
    name), and the compiler's own:
      UnsupportedNode: flatten's stand-in (spinel_parse.c) for a Prism node type it has no case for
-     LoadNode: a require's load of its file's root under --load-model=graph (spinel_parse.c)
+     LoadNode: a require's load of its file's root (spinel_parse.c)
    make node-kinds-check fails when this file is stale. */
 #define SP_NODE_KINDS(X) \
   X(AliasGlobalVariableNode) \

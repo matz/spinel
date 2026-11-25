@@ -1,4 +1,4 @@
-# A require that names no file compiles under --load-model=graph and raises
+# A require that names no file compiles and raises
 # CRuby's LoadError when it runs, wherever it stands: a `rescue LoadError`
 # fallback runs, the message names the feature, and LoadError#path answers
 # it (a require_relative's from the file's own directory).

@@ -1,7 +1,7 @@
 # A path the program spells out -- a local assigned one literal, the file's
 # directory (`__dir__`) joined with literals, `.freeze` -- is known when the
 # program is compiled: its require loads that file, where it stands, as the
-# literal require of it does (--load-model=graph). A path built of the
+# literal require of it does. A path built of the
 # literals of the file's own layout names the files beside it, and
 # loads the one it names when it runs.
 name = "computed_known_a"

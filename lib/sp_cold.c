@@ -2474,7 +2474,7 @@ else {                                        /* macOS: "<idx> <image> <addr> <s
   if (strncmp(sym, "sp_", 3) != 0) return 0;     /* skip non-Spinel frames */
   const char *name = sym + 3;
   if (sp_bt_is_runtime(name)) return 0;
-  /* A required file's top level runs in sp_file_<N>_top (--load-model=graph):
+  /* A required file's top level runs in sp_file_<N>_top:
      CRuby's `<top (required)>`. No method is emitted under that name: a
      top-level `def file_1_top` takes another, as the runtime's sp_file_
      functions reserve the prefix. */

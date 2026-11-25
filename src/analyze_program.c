@@ -1,6 +1,6 @@
 /* analyze_program.c -- the program's files and their load order.
 
-   Under --load-model=graph (#9898, CRuby's load model) each file the program
+   As CRuby loads a program (#9898), each file the program
    loads is a root of the node table (nt_root; the entry's is the table's
    root) and each require a LoadNode naming the file it loads
    (`target_file`). A file's top level is a body of its own, run when the
@@ -179,8 +179,8 @@ int prog_rescue_sure(const NodeTable *nt, int st) {
   return r ? r - 1 : PROG_RS_MAY;
 }
 /* Does the program need the run-time $LOAD_PATH to start as CRuby's does
-   (sp_load_path_seed)? Under --load-model=graph (the entry's root carries the
-   directories), where it has a require of a set of files, which searches the
+   (sp_load_path_seed)? It does (the entry's root carries the
+   directories) where it has a require of a set of files, which searches the
    array, or reads it. A program writes none of $LOAD_PATH's names (refused). */
 int prog_load_path_seeded(const NodeTable *nt) {
   if (!nt_str(nt, nt_root(nt, 0), "load_root")) return 0;
@@ -762,7 +762,7 @@ static int prog_header_scope_autoloaded(Compiler *c, int id) {
   return 0;
 }
 
-/* What --load-model=graph does not load yet, refused by name (#9898), asked
+/* What the load model does not load yet, refused by name (#9898), asked
    once the load sites are known, ahead of the desugaring:
      - a require of the program's own entry file, which CRuby runs again as
        a new file since `$0` is not a loaded feature;

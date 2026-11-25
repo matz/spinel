@@ -43,7 +43,7 @@ sp_StrArray *sp_get_loaded_features(void);
    written or as the end of a longer path (`File.join(__dir__, "x")`), with
    or without its ".rb". */
 void sp_require_computed(const char *path, const char *const *features, int n);
-/* --load-model=graph: `require path` with a path known only at run time
+/* `require path` with a path known only at run time
    names a file the program was compiled with, found as CRuby finds one
    (the inline model's sp_require_computed above is deleted with that model).
    A path is

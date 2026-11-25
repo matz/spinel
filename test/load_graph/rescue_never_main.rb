@@ -1,6 +1,6 @@
 # A rescue clause of the ScriptError family whose begin's body only
 # requires files that only define things never runs: loading such a file
-# raises nothing. Under --load-model=graph a require in that clause loads
+# raises nothing. A require in that clause loads
 # nothing, so a file only it names is not part of the program, and a
 # define_method there defines nothing, as for a branch whose condition is
 # false. The versioned file exists here, so its busy_timeout= is the one

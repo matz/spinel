@@ -190,3 +190,13 @@ y1(k21.v) { |x| x << +"a" }; y1(k21.w) { |x| x << +"b" }; p k21.v, k21.w
 @b21 = [8]; @b21 &&= [9]; y1(@b21) { |x| x << +"d" }; p @b21
 @c21 = nil; @c21, @d21 = "ab".bytes, 2; y1(@c21) { |x| x << +"e" }; p @c21, @d21
 @e21, *@f21 = [1, 2], 3; y1(@e21) { |x| x << +"f" }; p @e21, @f21
+
+# a multiple assignment's target that takes nil, or its element of what a
+# method answers
+def two22 = [[1, 2], 3]
+def tab22 = [[4], [5]]
+@a22 = [5]; @b22, @a22 = 0; y1(@a22) { |x| x << +"a" } if @a22; p @b22, @a22
+@c22 = [6]; @d22, *@e22, @c22 = 0; y1(@c22) { |x| x << +"b" } if @c22; p @d22, @e22, @c22
+@f22, @g22 = two22; y1(@f22) { |x| x << +"c" }; p @f22, @g22
+@h22, @i22 = tab22; y1(@h22) { |x| x << +"d" }; p @h22, @i22
+w22, u22 = two22; y1(w22) { |x| x << +"e" }; p w22, u22

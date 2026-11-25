@@ -8513,13 +8513,24 @@ static int local_has_target_write(Compiler *c, Scope *sc, const char *name) {
   return 0;
 }
 
-/* The value a multiple assignment (`a, b = x, y`) binds its target `t`
-   to: the element of its literal right side at the target's place, a
-   target past a splat (`a, *r, b = x, y, z`) counted from the end. -1 when
-   the right side is no such literal, the target takes no element of its
-   own (the splat's, or one past the elements, which is nil), or is no
-   plain left or right one. */
-static int masgn_target_value(Compiler *c, int t) {
+/* Does a value of kind t take no part apart as a multiple assignment's
+   right side (`a, b = 0`: a is 0, b nil), being no Array and having no
+   to_ary? */
+static int masgn_rhs_whole(TyKind t) {
+  return t == TY_INT || t == TY_FLOAT || t == TY_BIGINT || t == TY_NIL || t == TY_BOOL ||
+         t == TY_SYMBOL || t == TY_STRING || t == TY_STRBUF;
+}
+/* What a multiple assignment (`a, b = x, y`) binds its target `t` to: the
+   element of its literal right side at the target's place (a target past
+   a splat, `a, *r, b = x, y, z`, counted from the end), answered as the
+   node, or the right side itself for its first target where it is a value
+   no assignment takes apart (masgn_rhs_whole); MTV_NIL where the target
+   takes nil (past the elements, or after such a value's first target);
+   MTV_ELEM where it takes element *at of a right side that is no literal,
+   *rhs; MTV_NONE for any other target (the splat's, a nested one, a right
+   side with a splat, a place past a splat of a right side of no size). */
+enum { MTV_NONE = -1, MTV_NIL = -2, MTV_ELEM = -3 };
+static int masgn_target_value(Compiler *c, int t, int *rhs, int *at) {
   const NodeTable *nt = c->nt;
   NT_FOREACH_KIND(nt, NK_MultiWriteNode, mw) {
     int ln = 0, rn = 0, en = 0;
@@ -8528,15 +8539,22 @@ static int masgn_target_value(Compiler *c, int t) {
     while (i < ln && lefts[i] != t) i++;
     while (i == ln && j < rn && rights[j] != t) j++;
     if (i == ln && j == rn) continue;
+    int rest = nt_ref(nt, mw, "rest") >= 0;
     int val = nt_paren_single(c->nt, nt_ref(nt, mw, "value"));
-    if (val < 0 || nt_kind(nt, val) != NK_ArrayNode) return -1;
+    if (val < 0) return MTV_NONE;
+    if (nt_kind(nt, val) != NK_ArrayNode) {
+      if (masgn_rhs_whole(infer_type(c, val))) return i == 0 ? val : MTV_NIL;
+      if (i == ln || !ty_is_array(infer_type(c, val))) return MTV_NONE;
+      if (rhs) *rhs = val;
+      if (at) *at = i;
+      return MTV_ELEM;
+    }
     const int *ev = nt_arr(nt, val, "elements", &en);
-    for (int e = 0; e < en; e++) if (nt_kind(nt, ev[e]) == NK_SplatNode) return -1;
-    if (nt_ref(nt, mw, "rest") < 0) return en == ln && i < ln ? ev[i] : -1;
-    int at = i < ln ? i : (en - rn > ln ? en - rn : ln) + j;
-    return at < en ? ev[at] : -1;
+    for (int e = 0; e < en; e++) if (nt_kind(nt, ev[e]) == NK_SplatNode) return MTV_NONE;
+    int place = i < ln || !rest ? i : (en - rn > ln ? en - rn : ln) + j;
+    return place < en ? ev[place] : MTV_NIL;
   }
-  return -1;
+  return MTV_NONE;
 }
 
 /* 1 when the call `v` is an Array method that answers its receiver itself,
@@ -8896,6 +8914,113 @@ static int slot_value_walk(Compiler *c, Scope *ws, int v, AttrArgWalk *w) {
   }
   return 0;
 }
+/* The values method mi answers at call v, as the walk follows a method's
+   value (array_src_walk): each body's where a subclass overrides it or it
+   is defined again, the block's at this call where it answers its block's
+   value. Each is handed to fn with whether its slot is pinned, at depth + 1
+   (1 or 0 as array_src_walk answers, or with apply a change); with `pin`
+   each body's value is pinned to the general Array, *ch set on a change.
+   1 when every one is followed, 0 where one cannot be, -1 for a method
+   on the walk's stack (st), whose value the walk is following already. */
+typedef int (*SrcLeafFn)(Compiler *c, int leaf, int pinned, int apply, SrcWalk *st, int depth, void *ctx);
+static int src_method_values(Compiler *c, int v, int mi, int apply, int pin, SrcWalk *st, int depth, int *ch,
+                             SrcLeafFn fn, void *ctx) {
+  const NodeTable *nt = c->nt;
+  if (depth > 6) return 0;
+  for (int d = 0; d < depth; d++) if (st->meth[d] == mi) return -1;
+  Scope *m = &c->scopes[mi];
+  if (m->ret_rbs_seeded || m->ret_specialized || m->cs_synth || m->is_lowered_yield ||
+      m->ret_oa_pin != TY_UNKNOWN) return 0;
+  /* A method a subclass overrides, or one defined again, answers any of
+     its bodies' values: each is followed, and each body's value pinned. */
+  if (method_has_other_body(c, mi)) {
+    st->meth[depth] = mi;
+    /* (the scopes of the method's name off the index, mi among them, in
+       the ascending order the scan of every scope visited) */
+    for (int t = an_scopes_named_first(c, m->name); t >= 1; t = an_scopes_named_next(c, m->name, t)) {
+      Scope *o = &c->scopes[t];
+      if (t != mi && !(o->is_cmethod == m->is_cmethod &&
+                       (o->class_id == m->class_id ||
+                        (o->class_id >= 0 && m->class_id >= 0 && is_descendant(c, o->class_id, m->class_id)))))
+        continue;
+      int ol[16];
+      int on = method_value_leaves(c, t, ol, 16);
+      if (o->ret_rbs_seeded || o->ret_specialized || o->cs_synth || o->is_lowered_yield ||
+          o->ret_oa_pin != TY_UNKNOWN || on <= 0) return 0;
+      for (int i = 0; i < on; i++) {
+        if (nt_kind(nt, ol[i]) == NK_YieldNode) return 0;
+        int got = fn(c, ol[i], 1, apply, st, depth + 1, ctx);
+        if (!apply && !got) return 0;
+        *ch |= got;
+      }
+      if (pin && apply && !o->ret_poly_array_pin) { { o->ret_poly_array_pin = 1; comp_touch_scope(o->idx); } *ch = 1; }
+    }
+    return 1;
+  }
+  int lv[16];
+  int n = method_value_leaves(c, mi, lv, 16);
+  if (n <= 0) return 0;
+  st->meth[depth] = mi;
+  /* A method answering its block's value (`def build = yield`) answers, at
+     this call, what this call's block does. */
+  int yields = 0;
+  for (int i = 0; i < n; i++) yields += nt_kind(nt, lv[i]) == NK_YieldNode;
+  if (yields) {
+    int blk = nt_ref(nt, v, "block");
+    if (yields != n || blk < 0 || nt_kind(nt, blk) != NK_BlockNode ||
+        ie_block_break_next_ty(c, nt_ref(nt, blk, "body")) != TY_UNKNOWN) return 0;
+    n = value_leaves(c, nt_ref(nt, blk, "body"), lv, 0, 16);
+    if (n <= 0) return 0;
+  }
+  for (int i = 0; i < n; i++) {
+    int got = fn(c, lv[i], !yields, apply, st, depth + 1, ctx);
+    if (!apply && !got) return 0;
+    *ch |= got;
+  }
+  if (pin && apply && !yields && !m->ret_poly_array_pin) { { m->ret_poly_array_pin = 1; comp_touch_scope(m->idx); } *ch = 1; }
+  return 1;
+}
+/* src_method_values's step for a value array_src_walk follows. */
+static int src_leaf_walk(Compiler *c, int leaf, int pinned, int apply, SrcWalk *st, int depth, void *ctx) {
+  (void)ctx;
+  return array_src_walk(c, leaf, pinned, apply, st, depth);
+}
+/* src_method_values's step for a multiple assignment's target that takes
+   element `at` of what a method answers: each value an Array literal,
+   whose element there is walked as a write's value is (slot_value_walk),
+   or passed over where it has none, which is nil. */
+typedef struct { AttrArgWalk *aw; int at; } MasgnElemWalk;
+static int masgn_elem_leaf(Compiler *c, int leaf, int pinned, int apply, SrcWalk *st, int depth, void *ctx) {
+  const NodeTable *nt = c->nt;
+  MasgnElemWalk *m = ctx;
+  (void)pinned;
+  int lit = nt_paren_single(nt, leaf), en = 0;
+  if (lit < 0 || nt_kind(nt, lit) != NK_ArrayNode) return 0;
+  const int *ev = nt_arr(nt, lit, "elements", &en);
+  for (int e = 0; e < en; e++) if (nt_kind(nt, ev[e]) == NK_SplatNode) return 0;
+  if (m->at >= en) return !apply;
+  AttrArgWalk w = { st, depth, apply, 0, 0 };
+  int stop = slot_value_walk(c, comp_scope_of(c, lit), ev[m->at], &w);
+  m->aw->n += w.n;
+  return apply ? w.ch : !stop;
+}
+/* The value multiple-assignment target t takes (masgn_target_value),
+   walked as a write's value is (slot_value_walk): its element of a literal
+   right side; nothing where it takes nil, as a nil value is passed over;
+   its element of each value a method on the right side answers
+   (src_method_values, masgn_elem_leaf). Nonzero where it cannot be. */
+static int masgn_target_walk(Compiler *c, int t, AttrArgWalk *aw) {
+  int rhs = -1, at = -1;
+  int tv = masgn_target_value(c, t, &rhs, &at);
+  if (tv >= 0) return slot_value_walk(c, comp_scope_of(c, t), tv, aw);
+  if (tv == MTV_NIL) return 0;
+  int mi = tv == MTV_ELEM ? backprop_call_target(c, rhs) : -1;
+  if (mi < 0) return 1;
+  MasgnElemWalk mw = { aw, at };
+  int ch = 0, got = src_method_values(c, rhs, mi, aw->apply, 0, aw->st, aw->depth + 1, &ch, masgn_elem_leaf, &mw);
+  aw->ch |= ch;
+  return got == 0;
+}
 /* The values for member iv of Struct or Data class cls that the class's
    own initialize hands the builtin one through `super` (`def initialize(x)
    = super([x])`, a Data's by keyword), each walked as a writer's argument
@@ -8951,10 +9076,7 @@ static int slot_write_walk(Compiler *c, int w, void *ctx) {
   NodeKind k = nt_kind(nt, w);
   Scope *ws = comp_scope_of(c, w);
   if (k == NK_InstanceVariableOperatorWriteNode || k == NK_CallOperatorWriteNode) { aw->n++; return 0; }
-  if (k == NK_InstanceVariableTargetNode) {
-    int tv = masgn_target_value(c, w);
-    return tv < 0 || slot_value_walk(c, ws, tv, aw);
-  }
+  if (k == NK_InstanceVariableTargetNode) return masgn_target_walk(c, w, aw);
   int arg = -1;
   if (k == NK_InstanceVariableWriteNode || k == NK_InstanceVariableOrWriteNode || k == NK_InstanceVariableAndWriteNode)
     return slot_value_walk(c, ws, nt_ref(nt, w, "value"), aw);
@@ -9188,14 +9310,13 @@ static int array_src_walk(Compiler *c, int v, int pinned, int apply, SrcWalk *st
     }
     int saw = 0, ch = 0;
     /* a target of a multiple assignment takes its element of the right
-       side, which its store converts as a plain write's does: pinned */
+       side, which its store converts as a plain write's does: walked as a
+       write's value is (masgn_target_walk) */
     NT_FOREACH_KIND(nt, NK_LocalVariableTargetNode, t) {
       if (comp_scope_of(c, t) != sc || !sp_streq(nt_str(nt, t, "name"), nm)) continue;
-      int tv = masgn_target_value(c, t);
-      if (tv < 0) return 0;
-      int got = array_src_walk(c, tv, 1, apply, st, depth + 1);
-      if (!apply && !got) return 0;
-      ch |= got; saw = 1;
+      AttrArgWalk tw = { st, depth, apply, 0, 0 };
+      if (masgn_target_walk(c, t, &tw) && !apply) return 0;
+      ch |= tw.ch; saw = 1;
     }
     for (int r = lw_shared_first(c, nm, (int)(sc - c->scopes)); r >= 0; r = lw_shared_next(r)) {
       int w = lw_shared_node(r);
@@ -9302,61 +9423,8 @@ static int array_src_walk(Compiler *c, int v, int pinned, int apply, SrcWalk *st
     if (any) return apply ? ch : 1;
   }
   if (mi < 0) return 0;
-  for (int d = 0; d < depth; d++) if (st->meth[d] == mi) return !apply;
-  Scope *m = &c->scopes[mi];
-  if (m->ret_rbs_seeded || m->ret_specialized || m->cs_synth || m->is_lowered_yield ||
-      m->ret_oa_pin != TY_UNKNOWN) return 0;
-  /* A method a subclass overrides, or one defined again, answers any of
-     its bodies' values: each is followed, and each body's value pinned. */
-  if (method_has_other_body(c, mi)) {
-    int ch = 0;
-    st->meth[depth] = mi;
-    /* (the scopes of the method's name off the index, mi among them, in
-       the ascending order the scan of every scope visited) */
-    for (int t = an_scopes_named_first(c, m->name); t >= 1; t = an_scopes_named_next(c, m->name, t)) {
-      Scope *o = &c->scopes[t];
-      if (t != mi && !(o->is_cmethod == m->is_cmethod &&
-                       (o->class_id == m->class_id ||
-                        (o->class_id >= 0 && m->class_id >= 0 && is_descendant(c, o->class_id, m->class_id)))))
-        continue;
-      int ol[16];
-      int on = method_value_leaves(c, t, ol, 16);
-      if (o->ret_rbs_seeded || o->ret_specialized || o->cs_synth || o->is_lowered_yield ||
-          o->ret_oa_pin != TY_UNKNOWN || on <= 0) return 0;
-      for (int i = 0; i < on; i++) {
-        if (nt_kind(nt, ol[i]) == NK_YieldNode) return 0;
-        int got = array_src_walk(c, ol[i], 1, apply, st, depth + 1);
-        if (!apply && !got) return 0;
-        ch |= got;
-      }
-      if (apply && !o->ret_poly_array_pin) { { o->ret_poly_array_pin = 1; comp_touch_scope(o->idx); } ch = 1; }
-    }
-    return apply ? ch : 1;
-  }
-  int lv[16];
-  int n = method_value_leaves(c, mi, lv, 16);
-  if (n <= 0) return 0;
-  st->meth[depth] = mi;
-  /* A method answering its block's value (`def build = yield`) answers, at
-     this call, what this call's block does. */
-  int yields = 0;
-  for (int i = 0; i < n; i++) yields += nt_kind(nt, lv[i]) == NK_YieldNode;
-  if (yields) {
-    int blk = nt_ref(nt, v, "block");
-    if (yields != n || blk < 0 || nt_kind(nt, blk) != NK_BlockNode ||
-        ie_block_break_next_ty(c, nt_ref(nt, blk, "body")) != TY_UNKNOWN) return 0;
-    n = value_leaves(c, nt_ref(nt, blk, "body"), lv, 0, 16);
-    if (n <= 0) return 0;
-  }
-  int ch = 0;
-  for (int i = 0; i < n; i++) {
-    int got = array_src_walk(c, lv[i], !yields, apply, st, depth + 1);
-    if (!apply && !got) return 0;
-    ch |= got;
-  }
-  if (!apply) return 1;
-  if (!yields && !m->ret_poly_array_pin) { { m->ret_poly_array_pin = 1; comp_touch_scope(m->idx); } ch = 1; }
-  return ch;
+  int ch = 0, got = src_method_values(c, v, mi, apply, 1, st, depth, &ch, src_leaf_walk, NULL);
+  return got < 0 ? !apply : got && apply ? ch : got;
 }
 
 /* Can every array the value `v` can be be the general Array
@@ -10114,7 +10182,7 @@ static int widen_boxed_local_sources(Compiler *c, Scope *sc, const char *nm, Loc
      that is not a literal) keeps the local off the pin */
   NT_FOREACH_KIND(nt, NK_LocalVariableTargetNode, t) {
     if (comp_scope_of(c, t) != sc || !sp_streq(nt_str(nt, t, "name"), nm)) continue;
-    int tv = masgn_target_value(c, t);
+    int tv = masgn_target_value(c, t, NULL, NULL);
     if (tv < 0) { all = 0; continue; }
     ch |= wbls_take(c, sc, nm, tv, elem, depth, wl, &nl, &all);
   }

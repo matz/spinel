@@ -952,8 +952,8 @@ int emit_call_poly_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
         buf_puts(b, "({ "); trv = hold_operand(c, recv, TY_POLY, 1, trv, 1, " ", b);
         buf_printf(b, "sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d); ", tpa, tpa);
         emit_push_arg_list(c, argv, argc, tpa, b);
-        buf_printf(b, "sp_File *_t%d = sp_poly_as_io(_t%d, \"write\"); SP_IO_OPEN(_t%d); sp_int _t%d = 0; ",
-                   tio3, trv, tio3, tn);
+        buf_printf(b, "sp_File *_t%d = sp_poly_as_io(_t%d, \"write\"); if (_t%d->len == 1) SP_IO_OPEN(_t%d); else sp_io_check_writable(_t%d); sp_int _t%d = 0; ",
+                   tio3, trv, tpa, tio3, tio3, tn);
         buf_printf(b, "for (sp_int _i = 0; _i < _t%d->len; _i++) _t%d += sp_File_write_poly(_t%d, _t%d->data[_i]); _t%d; })",
                    tpa, tn, tio3, tpa, tn);
         c->args_in_call = recv;
@@ -2084,9 +2084,9 @@ int emit_call_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const ch
           buf_printf(b, "({ sp_File *_t%d = %s; SP_GC_ROOT(_t%d); sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d); ",
                      tio4, r, tio4, tpa4, tpa4);
           emit_push_arg_list(c, argv, argc, tpa4, b);
-          buf_printf(b, "SP_IO_OPEN(_t%d); sp_int _t%d = 0; "
+          buf_printf(b, "if (_t%d->len == 1) SP_IO_OPEN(_t%d); else sp_io_check_writable(_t%d); sp_int _t%d = 0; "
                         "for (sp_int _i = 0; _i < _t%d->len; _i++) _t%d += sp_File_write_poly(_t%d, _t%d->data[_i]); _t%d; })",
-                     tio4, tn4, tpa4, tn4, tio4, tpa4, tn4);
+                     tpa4, tio4, tio4, tn4, tpa4, tn4, tio4, tpa4, tn4);
           free(rb.p); return 1;
         }
       }
@@ -2123,12 +2123,14 @@ int emit_call_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const ch
         for (int k = 0; k < argc; k++)
           values[k] = hold_operand(c, argv[k], TY_POLY, 1, ++g_tmp, 1, " ", b);
         g_pre = saved_pre;
-        buf_printf(b, "sp_int _t%d = 0;", tw);
+        /* (a frozen, closed or read-only handle raises for two empty Strings too) */
+        buf_printf(b, "sp_io_check_writable(_t%d); sp_int _t%d = 0;", tf, tw);
         for (int k = 0; k < argc; k++)
           buf_printf(b, " _t%d += sp_File_write_poly(_t%d, _t%d);", tw, tf, values[k]);
         buf_printf(b, " _t%d; })", tw);
       }
-      else buf_puts(b, "0");
+      else if (is_sw) buf_puts(b, "0");
+      else buf_printf(b, "({ sp_io_check_writable(%s); (sp_int)0; })", r);
       free(rb.p); return 1;
     }
     if (sp_streq(name, "<<") && argc == 1) {

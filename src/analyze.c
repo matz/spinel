@@ -13506,6 +13506,17 @@ int std_stream_bare_call_own(Compiler *c, int id, const char *nm) {
   int iec = ie_class_of(c, id);
   return iec >= 0 && call_target(c, id, iec, nm, 0, NULL) >= 0;
 }
+/* Does the program freeze an IO? The IO can be STDOUT, whose write then
+   raises FrozenError for a bare puts as well. */
+int std_stream_io_frozen(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  NT_FOREACH_KIND(nt, NK_CallNode, id) {
+    const char *nm = nt_str(nt, id, "name");
+    int recv = nt_ref(nt, id, "receiver");
+    if (recv >= 0 && nm && sp_streq(nm, "freeze") && infer_type(c, recv) == TY_IO) return 1;
+  }
+  return 0;
+}
 static int desugar_std_stream_bare_output(Compiler *c) {
   if (!std_stream_assigned(c, "$stdout")) return 0;
   NodeTable *nt = (NodeTable *)c->nt;

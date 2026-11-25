@@ -3208,6 +3208,7 @@ void refuse_unredirected_output(Compiler *c, int id);   /* a bare print past a r
 void emit_system_call(Compiler *c, int id, const int *argv, int argc, Buf *b);
 int int_value_plain(Compiler *c, int node);   /* an Integer that can never be nil */
 int emit_output_spilled(Compiler *c, int id, const char *name, int argc, const int *argv, Buf *b, int indent);
+int emit_io_frozen(Compiler *c);   /* the program calls freeze on an IO */
 void emit_assign(Compiler *c, int id, Buf *b, int indent);
 void emit_op_assign(Compiler *c, int id, Buf *b, int indent);
 int emit_array_op_assign(Compiler *c, const char *lval, TyKind t, const char *op, int v, Buf *b);

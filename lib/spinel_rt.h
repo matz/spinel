@@ -10610,20 +10610,24 @@ static void sp_poly_print(sp_RbVal v) {
 }
 static void sp_puts_elems(sp_RbVal a) {
   sp_int n = sp_poly_arr_len(a);
-  if (sp_poly_recur_seen(SP_POLY_RECUR_PUTS, a.v.p, NULL)) { puts("[...]"); return; }
+  if (sp_poly_recur_seen(SP_POLY_RECUR_PUTS, a.v.p, NULL)) { sp_io_stdout_check_frozen(); puts("[...]"); return; }
   int pmark = sp_poly_recur_push(SP_POLY_RECUR_PUTS, a.v.p, NULL);
   for (sp_int i = 0; i < n; i++) {
     sp_RbVal e = sp_poly_arr_get(a, i);
     if (e.tag == SP_TAG_OBJ && sp_poly_is_array_kind(e.cls_id)) { sp_puts_elems(e); continue; }
     const char *s = sp_rbval_string_bytes(e);
-    if (s) { sp_puts_str_line(s); continue; }
-    sp_puts_cstr_line(sp_poly_to_s(e));
+    /* checked after a to_s runs and before the write; an empty Array
+       element writes nothing */
+    if (s) { sp_io_stdout_check_frozen(); sp_puts_str_line(s); continue; }
+    const char *t = sp_poly_to_s(e);
+    sp_io_stdout_check_frozen();
+    sp_puts_cstr_line(t);
   }
   sp_poly_recur_pop(pmark);
 }
 /* `puts *arr`: an empty array is a bare `puts` */
 static void sp_splat_puts(sp_RbVal a) {
-  if (sp_poly_arr_len(a) == 0) { putchar(10); return; }
+  if (sp_poly_arr_len(a) == 0) { sp_io_stdout_check_frozen(); putchar(10); return; }
   sp_puts_elems(a);
 }
 /* io.print(*parts): each element written in turn, as print's own operands are */
@@ -10632,14 +10636,26 @@ static SP_UNUSED void sp_File_splat_print(sp_File *f, sp_RbVal a) {
   sp_int n = sp_poly_arr_len(a);
   for (sp_int i = 0; i < n; i++) sp_File_write_poly(f, sp_poly_arr_get(a, i));
 }
+/* a frozen STDOUT raises for an element that writes bytes, as CRuby's does */
 static void sp_splat_print(sp_RbVal a) {
   sp_int n = sp_poly_arr_len(a);
-  for (sp_int i = 0; i < n; i++) sp_poly_print(sp_poly_arr_get(a, i));
+  for (sp_int i = 0; i < n; i++) {
+    sp_RbVal v = sp_poly_arr_get(a, i);
+    if (sp_rbval_is_string(v)) {
+      const char *s = sp_rbval_string_bytes(v);
+      if (s && sp_str_byte_len(s)) sp_io_stdout_check_frozen();
+      sp_print_str_bin(s);
+      continue;
+    }
+    const char *s = sp_poly_to_s(v);
+    if (s && *s) { sp_io_stdout_check_frozen(); fputs(s, stdout); }
+  }
 }
 static void sp_splat_p(sp_RbVal a) {
   sp_int n = sp_poly_arr_len(a);
   for (sp_int i = 0; i < n; i++) {
     const char *s = sp_poly_inspect(sp_poly_arr_get(a, i));
+    sp_io_stdout_check_frozen();
     fputs(s ? s : "nil", stdout); putchar(10);
   }
 }

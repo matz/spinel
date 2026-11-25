@@ -1,0 +1,7 @@
+demo
+1
+1
+can't modify frozen IO: #<IO:<STDOUT>>
+ArgumentError 1
+ArgumentError 1
+FrozenError 0

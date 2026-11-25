@@ -1810,6 +1810,7 @@ int std_stream_assigned(Compiler *c, const char *nm);   /* ... or is assigned at
 int std_stream_value_classes(Compiler *c, char *set);   /* classes the streams' stores hold; 0: unbounded */
 int std_stream_foreign_writer(Compiler *c, const char *nm);   /* an object output cannot write to */
 int std_stream_bare_call_own(Compiler *c, int id, const char *nm);   /* bare nm reaches the program's own */
+int std_stream_io_frozen(Compiler *c);   /* the program calls freeze on an IO */
 /* The operation (StrhOp, builtin_names.h) call node `call` is on a String
    Array, whose elements are handles, given the receiver's type rt:
    STRH_NONE unless rt is TY_STR_ARRAY, the call's index is an Integer

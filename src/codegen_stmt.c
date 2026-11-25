@@ -796,8 +796,12 @@ int emit_output_spilled(Compiler *c, int id, const char *name, int argc, const i
         !record_pp_skips_inspect(c, argv[k], ty_object_class(at)) && !obj_arm_calls_own_inspect(c, ty_object_class(at)))
       pp_own = 0;
   }
-  if (argc < 2 && !pp_own) return 0;
-  int effectful = pp_own;
+  /* a puts, print or p in a program that freezes an IO: every argument
+     first, then the check before a write (sp_puts_elems, sp_splat_print) */
+  int p_frozen = argc >= 1 && (sp_streq(name, "p") || sp_streq(name, "puts") || sp_streq(name, "print")) &&
+                 emit_io_frozen(c);
+  if (argc < 2 && !pp_own && !p_frozen) return 0;
+  int effectful = pp_own || p_frozen;
   for (int k = 1; k < argc && !effectful; k++) {
     int a = argv[k];
     if (nt_kind(c->nt, a) == NK_SplatNode) a = nt_ref(c->nt, a, "expression");
@@ -828,11 +832,22 @@ int emit_output_spilled(Compiler *c, int id, const char *name, int argc, const i
     free(apre.p); free(abody.p);
   }
   emit_indent(b, indent + 2);
-  if (sp_streq(name, "puts"))       buf_printf(b, "sp_puts_elems(sp_box_poly_array(_t%d));\n", t);
+  /* (a splat of an empty Array that reaches here as the one argument is a bare puts) */
+  if (sp_streq(name, "puts"))       buf_printf(b, "%s(sp_box_poly_array(_t%d));\n", p_frozen ? "sp_splat_puts" : "sp_puts_elems", t);
   else if (sp_streq(name, "print")) buf_printf(b, "sp_splat_print(sp_box_poly_array(_t%d));\n", t);
-  else buf_printf(b, "for (sp_int _i%d = 0; _i%d < _t%d->len; _i%d++) { "
-                     "sp_puts_line(%s(_t%d->data[_i%d])); }\n", t, t, t, t,
-                  pp_own ? "sp_pp_inspect" : "sp_poly_inspect", t, t);
+  else {
+    /* (in a program that freezes an IO: the inspect, then the check, then
+       the write, and p checks once more, since p flushes) */
+    if (emit_io_frozen(c))
+      buf_printf(b, "for (sp_int _i%d = 0; _i%d < _t%d->len; _i%d++) { "
+                       "const char *_s%d = %s(_t%d->data[_i%d]); sp_io_stdout_check_frozen(); sp_puts_line(_s%d); }%s\n",
+                    t, t, t, t, t, pp_own ? "sp_pp_inspect" : "sp_poly_inspect", t, t, t,
+                    sp_streq(name, "p") ? " sp_io_stdout_check_frozen();" : "");
+    else
+      buf_printf(b, "for (sp_int _i%d = 0; _i%d < _t%d->len; _i%d++) { "
+                       "sp_puts_line(%s(_t%d->data[_i%d])); }\n", t, t, t, t,
+                    pp_own ? "sp_pp_inspect" : "sp_poly_inspect", t, t);
+  }
   emit_indent(b, indent); buf_puts(b, "}\n");
   return 1;
 }
@@ -935,6 +950,12 @@ void refuse_unredirected_output(Compiler *c, int id) {
   unsupported(c, id, msg);
 }
 
+/* does the program call freeze on an IO (std_stream_io_frozen, asked once) */
+int emit_io_frozen(Compiler *c) {
+  if (!c->io_frozen_emit) c->io_frozen_emit = std_stream_io_frozen(c) ? 2 : 1;
+  return c->io_frozen_emit == 2;
+}
+
 int emit_output_call(Compiler *c, int id, Buf *b, int indent) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
@@ -958,6 +979,14 @@ int emit_output_call(Compiler *c, int id, Buf *b, int indent) {
   int argc = 0;
   const int *argv = NULL;
   if (args >= 0) argv = nt_arr(nt, args, "arguments", &argc);
+  /* in a program that freezes an IO, a bare output call checks a frozen
+     STDOUT after its operands, before a write: sp_puts_elems,
+     sp_splat_print and the p loop check for an element that writes bytes,
+     and p checks after its writes, since p flushes */
+  int io_frozen = emit_io_frozen(c);
+  if (io_frozen && sp_streq(name, "puts") && argc == 0) {
+    emit_indent(b, indent); buf_puts(b, "sp_io_stdout_check_frozen();\n");
+  }
 
   /* Kernel#p flushes stdout after writing, as CRuby's rb_p does: what it
      printed is out before an exec replaces the process (puts, print and pp
@@ -977,6 +1006,7 @@ int emit_output_call(Compiler *c, int id, Buf *b, int indent) {
   if (sp_streq(name, "print")) { for (int k = 0; k < argc; k++) emit_print_one(c, argv[k], b, indent); return 1; }
   if (is_inspect_print(name)) {
     for (int k = 0; k < argc; k++) emit_p_one(c, argv[k], b, indent);
+    if (io_frozen && sp_streq(name, "p")) { emit_indent(b, indent); buf_puts(b, "sp_io_stdout_check_frozen();\n"); }
     if (p_flush) { emit_indent(b, indent); buf_puts(b, "fflush(stdout);\n"); }
     return 1;
   }
@@ -985,10 +1015,20 @@ int emit_output_call(Compiler *c, int id, Buf *b, int indent) {
     Repr ar = repr_of(c, argv[0]);
     TyKind at = ar.as_ty;
     emit_indent(b, indent);
+    /* (in a program that freezes an IO, the byte is held, then STDOUT checked) */
+    const char *chk = io_frozen ? "sp_io_stdout_check_frozen(); " : "";
     if (at == TY_STRING) {
       int ts = ++g_tmp;
       buf_printf(b, "{ const char *_t%d = ", ts); emit_expr(c, argv[0], b);
-      buf_printf(b, "; if (_t%d && *_t%d) putchar((unsigned char)_t%d[0]); }\n", ts, ts, ts);
+      if (io_frozen) buf_printf(b, "; if (_t%d && sp_str_byte_len(_t%d)) { %sputchar((unsigned char)_t%d[0]); } }\n", ts, ts, chk, ts);
+      else buf_printf(b, "; if (_t%d && *_t%d) putchar((unsigned char)_t%d[0]); }\n", ts, ts, ts);
+    }
+else if (io_frozen) {
+      int ts = ++g_tmp;
+      buf_printf(b, "{ int _t%d = (int)((", ts);
+      if (ar.kind == RK_BOXED) { buf_puts(b, "sp_poly_arg_i("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
+      else emit_int_expr(c, argv[0], b);
+      buf_printf(b, ") & 0xff); %sputchar(_t%d); }\n", chk, ts);
     }
 else if (ar.kind == RK_BOXED) {
       buf_puts(b, "putchar((int)(sp_poly_arg_i("); emit_expr(c, argv[0], b); buf_puts(b, ") & 0xff));\n");
@@ -1031,9 +1071,10 @@ else {
           free(ab.p);
         }
         emit_indent(b, indent);
-        buf_puts(b, "  fputs(sp_str_format_polyarr(");
+        buf_puts(b, io_frozen ? "  { const char *_s = sp_str_format_polyarr(" : "  fputs(sp_str_format_polyarr(");
         emit_str_expr(c, argv[0], b);
-        buf_printf(b, ", _t%d), stdout); }\n", tpa);
+        if (io_frozen) buf_printf(b, ", _t%d); if (sp_str_byte_len(_s)) sp_io_stdout_check_frozen(); fputs(_s, stdout); } }\n", tpa);
+        else buf_printf(b, ", _t%d), stdout); }\n", tpa);
         return 1;
       }
     }

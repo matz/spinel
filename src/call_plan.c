@@ -3384,11 +3384,13 @@ int cplan_string_may_undef(Compiler *c, const char *name) {
 int cplan_undef_before(Compiler *c, int site, int cls, const char *name) {
   /* (no undef on the chain: none is in force at any point, and the answer
      below is 1 only for an undef) */
-  if (site < 0 || !cplan_chain_undef(c, cls, name) || elab_in_unplaced_block(c, site)) return 0;
+  if (site < 0 || !cplan_chain_undef(c, cls, name)) return 0;
+  /* (the block the site stands in is asked in the frame too: outside it, a
+     pass that split a call since the last ask rebuilt the map, #12542) */
   int framed = elab_plan_enter(c, site);
   LoadPoint p = elab_point_of(c, site);
   const LrDef *d = NULL;
-  int o = p.region >= 0 ? elab_method_at(c, cls, name, 0, p, &d) : ELAB_UNKNOWN;
+  int o = p.region >= 0 && !elab_in_unplaced_block(c, site) ? elab_method_at(c, cls, name, 0, p, &d) : ELAB_UNKNOWN;
   if (framed) elab_plan_leave(c);
   return o == ELAB_NO && d && d->kind == LR_UNDEF;
 }
@@ -6682,9 +6684,9 @@ static int pr_in_untyped_block(Compiler *c, int id) {
 /* Does node run at once, where it stands (ct_before_versions' proof for a call: no method body, and no block or lambda
    that may run later, ct_after_point and elab_blocks_run_at_once)? */
 int cplan_runs_at_once(Compiler *c, int node) {
-  if (elab_in_method_body(c, node)) return 0;
+  /* (in the frame, the method body too: outside it, a table changed since the last ask rebuilt the map) */
   int framed = elab_plan_enter(c, node);
-  int once = !ct_after_point(c, node) && elab_blocks_run_at_once(c, node);
+  int once = !elab_in_method_body(c, node) && !ct_after_point(c, node) && elab_blocks_run_at_once(c, node);
   if (framed) elab_plan_leave(c);
   return once;
 }
@@ -6692,12 +6694,15 @@ int cplan_runs_at_once(Compiler *c, int node) {
 int cplan_runs_once(Compiler *c, int node) {
   return cplan_runs_at_once(c, node) && !elab_runs_again(c, node);
 }
-/* See call_plan.h. */
+/* See call_plan.h. Asked in the plan frame, as cplan_undef_before is: outside it, each ask after a pass changed
+   the table rebuilt the record's map (#12194), and desugar_missing_method_calls, which splits a call between its
+   asks, rebuilt it once per String call site (#12542). */
 int cplan_undef_at(Compiler *c, int id, int cls, const char *name) {
+  int framed = elab_plan_enter(c, id), o = ELAB_UNKNOWN;
   LoadPoint p = elab_point_of(c, id);
-  if (p.region < 0 || !cplan_runs_once(c, id)) return -1;
   const LrDef *d = NULL;
-  int o = elab_method_at(c, cls, name, 0, p, &d);
+  if (p.region >= 0 && cplan_runs_once(c, id)) o = elab_method_at(c, cls, name, 0, p, &d);
+  if (framed) elab_plan_leave(c);
   if (o == ELAB_UNKNOWN) return -1;
   return o == ELAB_NO && d && d->kind == LR_UNDEF;
 }

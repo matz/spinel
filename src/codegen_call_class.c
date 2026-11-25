@@ -107,7 +107,7 @@ static int emit_class_value_aref(Compiler *c, int id, Buf *b, int recv, int argc
   }
   if (argc) buf_puts(&av, "}");
   char an[24]; snprintf(an, sizeof an, "%d", argc);
-  emit_class_value_new_switch(c, rt2, kt, 0, b);
+  emit_class_value_new_switch(c, recv, rt2, kt, 0, b);
   CtorArityArms aerr = {0};
   for (int ci = 0; ci < c->nclasses; ci++)
     if (cplan_cv_ctor_builds(c, id, ci)) emit_cv_ctor_arm(c, id, ci, an, av.p, rt2, b);
@@ -1727,7 +1727,8 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
           /* a class held boxed (out of an Array, say) is unboxed to its sp_Class */
           if (rt0 == TY_POLY) { buf_puts(b, "sp_unbox_class("); emit_boxed(c, recv, b); buf_puts(b, ")"); }
           else emit_expr(c, recv, b);
-          buf_printf(b, "; int _ck%d = %d; switch (_cr%d.cls_id) {", t, dflt, t);
+          char crv[24]; snprintf(crv, sizeof crv, "_cr%d", t);
+          buf_printf(b, "; int _ck%d = %d; switch (", t, dflt); emit_class_value_key(c, recv, crv, b); buf_puts(b, ") {");
           for (int k = 0; k < c->nclasses; k++)
             if (cks[k] != dflt) buf_printf(b, " case %d: _ck%d = %d; break;", k, t, cks[k]);
           buf_puts(b, " default: break; } ");
@@ -1765,14 +1766,16 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
         TyKind rt1 = infer_type(c, recv);
         /* (a boxed receiver that holds no class keeps the read: its own
            NoMethodError is not this check's) */
+        char crv[24]; snprintf(crv, sizeof crv, "_cr%d", t);
         if (rt1 == TY_POLY) {
           buf_printf(b, "(({ sp_RbVal _cv%d = ", t); emit_boxed(c, recv, b);
           buf_printf(b, "; sp_Class _cr%d = _cv%d.tag == SP_TAG_CLASS ? sp_unbox_class(_cv%d) : (sp_Class){SP_CLASS_NIL_ID}; "
-                        "int _ok%d = _cv%d.tag != SP_TAG_CLASS; switch (_cr%d.cls_id) {", t, t, t, t, t, t);
+                        "int _ok%d = _cv%d.tag != SP_TAG_CLASS; switch (", t, t, t, t, t);
         } else {
           buf_printf(b, "(({ sp_Class _cr%d = ", t); emit_expr(c, recv, b);
-          buf_printf(b, "; int _ok%d = 0; switch (_cr%d.cls_id) {", t, t);
+          buf_printf(b, "; int _ok%d = 0; switch (", t);
         }
+        emit_class_value_key(c, recv, crv, b); buf_puts(b, ") {");
         for (int k = 0; k < c->nclasses; k++) {
           int kc = -1;
           const char *kk = c->classes[k].name ? const_get_resolve(c, k, cg_qm, &kc) : NULL;
@@ -3689,7 +3692,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
       buf_printf(b, "sp_RbVal _t%d = ", atmp[a]); emit_boxed(c, argv[a], b);
       buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ", atmp[a]);
     }
-    emit_class_value_new_switch(c, rt2, kt, 0, b);
+    emit_class_value_new_switch(c, recv, rt2, kt, 0, b);
     CtorArityArms aerr = {0};
     for (int ci = 0; ci < c->nclasses; ci++) {
       if (is_builtin_reopen(c->classes[ci].name) || c->classes[ci].is_native_class) continue;
@@ -3726,7 +3729,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
     int kt = ++g_tmp, rt2 = ++g_tmp;
     buf_printf(b, "({ sp_Class _t%d = ", kt); emit_expr(c, recv, b); buf_printf(b, "; ");
     int sv_cbt = hoist_ctor_block(c, id, b);
-    emit_class_value_new_switch(c, rt2, kt, 0, b);
+    emit_class_value_new_switch(c, recv, rt2, kt, 0, b);
     CtorArityArms aerr = {0};
     for (int ci = 0; ci < c->nclasses; ci++) {
       if (is_builtin_reopen(c->classes[ci].name)) continue;
@@ -3887,7 +3890,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
       if (boxed_arg_wants_root(c, argv[a])) buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ", atmp[a]);
       else buf_puts(b, "; ");
     }
-    emit_class_value_new_switch(c, rt2, kt, 1, b);
+    emit_class_value_new_switch(c, recv, rt2, kt, 1, b);
     CtorArityArms aerr = {0};
     for (int ci = 0; ci < c->nclasses; ci++) {
       /* a class of the program's the receiver may hold (not one its fact
@@ -4295,8 +4298,9 @@ static int emit_class_instance_methods_list(Compiler *c, int id, Buf *b, const N
     }
     if (!any) return 0;
     int tc = ++g_tmp, rt = ++g_tmp;
+    char clv[24]; snprintf(clv, sizeof clv, "_cl%d", tc);
     buf_printf(b, "({ sp_Class _cl%d = ", tc); emit_expr(c, recv, b);
-    buf_printf(b, "; sp_PolyArray *_t%d = NULL; switch (_cl%d.cls_id) {", rt, tc);
+    buf_printf(b, "; sp_PolyArray *_t%d = NULL; switch (", rt); emit_class_value_key(c, recv, clv, b); buf_puts(b, ") {");
     for (int k = 0; k < c->nclasses; k++) {
       if (!cv[k]) continue;
       ReflNames r = {0};
@@ -4330,7 +4334,7 @@ static int emit_class_instance_methods_list(Compiler *c, int id, Buf *b, const N
     if (!an_object_methods_listable(c, id, ks[i], name)) return 0;
   int rt = ++g_tmp;
   buf_printf(b, "({ sp_PolyArray *_t%d = NULL; ", rt);
-  if (dyn) buf_puts(b, "switch (_sp_cls.cls_id) {");
+  if (dyn) { buf_puts(b, "switch ("); emit_class_value_key(c, -1, "_sp_cls", b); buf_puts(b, ") {"); }
   for (int i = 0; i < nks; i++) {
     int k = ks[i];
     ReflNames r = {0};
@@ -4545,7 +4549,11 @@ static void emit_class_constants_push(Compiler *c, int ci, int inherit, int ta, 
    raises rather than answer short. The answer is a PolyArray. */
 void emit_class_value_constants(Compiler *c, const char *cv, int inherit, Buf *b) {
   int ta = ++g_tmp;
-  buf_printf(b, "({ sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d); switch ((%s).cls_id) {", ta, ta, cv);
+  Buf cvp; memset(&cvp, 0, sizeof cvp);
+  buf_printf(&cvp, "(%s)", cv);
+  buf_printf(b, "({ sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d); switch (", ta, ta);
+  emit_class_value_key(c, -1, cvp.p, b); buf_puts(b, ") {");
+  free(cvp.p);
   for (int k = 0; k < c->nclasses; k++) {
     if (c->classes[k].is_native_class) continue;
     buf_printf(b, " case %d:", k);
@@ -4859,8 +4867,9 @@ static int emit_class_own_instance_methods(Compiler *c, int id, Buf *b, const No
   for (int k = 0; cv && k < c->nclasses; k++) any |= cv[k];
   if (any) {
     int tc = ++g_tmp, rt = ++g_tmp;
+    char clv[24]; snprintf(clv, sizeof clv, "_cl%d", tc);
     buf_printf(b, "({ sp_Class _cl%d = ", tc); emit_expr(c, recv, b);
-    buf_printf(b, "; sp_PolyArray *_t%d = NULL; switch (_cl%d.cls_id) {", rt, tc);
+    buf_printf(b, "; sp_PolyArray *_t%d = NULL; switch (", rt); emit_class_value_key(c, recv, clv, b); buf_puts(b, ") {");
     for (int k = 0; k < c->nclasses; k++) {
       if (!cv[k]) continue;
       ReflNames r = {0};
@@ -5474,7 +5483,10 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
         int ta = ++g_tmp;
         buf_printf(b, "({ sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", ta, ta);
         if (self_ci >= 0) {
-          buf_puts(b, " switch (("); emit_expr(c, recv, b); buf_puts(b, ").cls_id) {");
+          Buf rv = expr_buf(c, recv), rp; memset(&rp, 0, sizeof rp);
+          buf_printf(&rp, "(%s)", rv.p ? rv.p : "");
+          buf_puts(b, " switch ("); emit_class_value_key(c, recv, rp.p, b); buf_puts(b, ") {");
+          free(rv.p); free(rp.p);
           for (int k = 0; k < c->nclasses; k++) {
             if (k == self_ci || !is_descendant(c, k, self_ci)) continue;
             buf_printf(b, " case %d:", k);
@@ -5676,7 +5688,12 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
         for (int k = 0; k < c->nclasses && own; k++) {
           Buf t; memset(&t, 0, sizeof t);
           if (class_own_cmethod_eqq(c, -1, -1, k) >= 0 && emit_class_cmethod_eqq(c, k, sref, at, -1, bx, &t) && t.p) {
-            if (!sw) { buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); %s _r%d; switch (_cl%d.cls_id) { ", o, bx ? "sp_RbVal" : "sp_bool", o, _clt); sw = 1; }
+            if (!sw) {
+              char clv[24]; snprintf(clv, sizeof clv, "_cl%d", _clt);
+              buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); %s _r%d; switch (", o, bx ? "sp_RbVal" : "sp_bool", o);
+              emit_class_value_key(c, recv, clv, b); buf_puts(b, ") { ");
+              sw = 1;
+            }
             buf_printf(b, "case %d: _r%d = %s; break; ", k, o, t.p);
           }
           free(t.p);
@@ -5837,12 +5854,13 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
           /* a call that can answer nil holds an Integer or Float with its
              nil (#8985) */
           int onil9 = oint_kind(slot9) && node_is_oint(c, id);
-          if (onil9) buf_printf(b, "%s _t%d = %s; switch (_t%d.cls_id) {", oint_ctype(slot9), tr9, oint_nil(slot9), tk9);
+          char kv9[24]; snprintf(kv9, sizeof kv9, "_t%d", tk9);
+          if (onil9) buf_printf(b, "%s _t%d = %s; switch (", oint_ctype(slot9), tr9, oint_nil(slot9));
           else {
             emit_ctype(c, slot9, b);
-            buf_printf(b, " _t%d = %s; switch (_t%d.cls_id) {", tr9,
-                       slot9 == TY_POLY ? "sp_box_nil()" : default_value_from_compiler(c, slot9), tk9);
+            buf_printf(b, " _t%d = %s; switch (", tr9, slot9 == TY_POLY ? "sp_box_nil()" : default_value_from_compiler(c, slot9));
           }
+          emit_class_value_key(c, recv, kv9, b); buf_puts(b, ") {");
           char rcls9[24], rraise9[256];
           snprintf(rcls9, sizeof rcls9, "_t%d", tk9);
           snprintf(rraise9, sizeof rraise9, "sp_raise_nomethod(sp_sprintf(\"undefined method '%s' for %%s\", sp_class_to_s(_t%d)))", name, tk9);
@@ -7084,7 +7102,7 @@ void emit_refl_method_defined(Compiler *c, Buf *b) {
   buf_puts(b, "static int sp_refl_method_defined(sp_Class k, const char *name, int mask, int inherit) {\n  if (sp_class_sclass_p(k)) sp_raise_cls(\"NotImplementedError\", \"spinel: the methods of a singleton class held in a variable are not modeled\");\n");
   buf_puts(b, "  if (!strcmp(name, \"initialize\") || !strcmp(name, \"initialize_copy\") ||\n"
               "      !strcmp(name, \"initialize_clone\") || !strcmp(name, \"initialize_dup\")) return (mask & 4) != 0;\n");
-  buf_puts(b, "  switch (k.cls_id) {\n");
+  buf_puts(b, "  switch ("); emit_class_value_key(c, -1, "k", b); buf_puts(b, ") {\n");
   for (int k = 0; k < c->nclasses; k++) {
     Buf rows; memset(&rows, 0, sizeof rows);
     int nrows = 0;
@@ -7177,7 +7195,7 @@ int emit_refl_im_params_call(Compiler *c, int id, Buf *b) {
    builds it; CRuby's NameError when there is none. */
 void emit_refl_im_params(Compiler *c, Buf *b) {
   buf_puts(b, "static sp_PolyArray *sp_refl_instance_method_parameters(sp_Class k, const char *name) {\n  sp_sclass_unmodeled(k);\n");
-  buf_puts(b, "  switch (k.cls_id) {\n");
+  buf_puts(b, "  switch ("); emit_class_value_key(c, -1, "k", b); buf_puts(b, ") {\n");
   for (int k = 0; k < c->nclasses; k++) {
     Buf rows; memset(&rows, 0, sizeof rows);
     int nrows = 0;

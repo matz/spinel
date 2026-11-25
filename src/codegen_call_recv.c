@@ -17885,13 +17885,17 @@ static int class_ivar_slot(Compiler *c, int k, const char *sym, char *out, size_
    Static slots remain readable when no builtin-ivar map is needed.
    A boxed receiver only needs those of a class value that can escape. */
 static void emit_class_ivar_arm(Compiler *c, int tv, const char *sym, char op, const char *dflt, int chain, Buf *b) {
+  char tvn[24]; snprintf(tvn, sizeof tvn, "_t%d", tv);
   if (!c->bivar_table && op != 'g') return;
   int any = 0;
   for (int k = 0; k < c->nclasses; k++) {
     char slot[300]; TyKind t;
     if (!class_ivar_slot(c, k, sym, slot, sizeof slot, &t)) continue;
     if (!c->bivar_table && chain && !class_value_escapes(c, k)) continue;
-    if (!any) buf_printf(b, "%sif (_t%d.tag == SP_TAG_CLASS) switch (_t%d.cls_id) {", chain ? "else " : "", tv, tv);
+    if (!any) {
+      buf_printf(b, "%sif (_t%d.tag == SP_TAG_CLASS) switch (", chain ? "else " : "", tv);
+      emit_class_value_key(c, -1, tvn, b); buf_puts(b, ") {");
+    }
     any = 1;
     buf_printf(b, " case %d: ", k);
     /* a class-level number slot (civ_) holds its nil beside the value */
@@ -17927,7 +17931,8 @@ static void emit_class_ivar_arm(Compiler *c, int tv, const char *sym, char op, c
   }
   if (!any) {
     if (!c->bivar_table) return;
-    buf_printf(b, "%sif (_t%d.tag == SP_TAG_CLASS) switch (_t%d.cls_id) {", chain ? "else " : "", tv, tv);
+    buf_printf(b, "%sif (_t%d.tag == SP_TAG_CLASS) switch (", chain ? "else " : "", tv);
+    emit_class_value_key(c, -1, tvn, b); buf_puts(b, ") {");
   }
   if (op == 'd') buf_printf(b, " default: _ivd%d = %s; break; } ", tv, dflt);
   else if (c->bivar_table) buf_printf(b, " default: %s; break; } ", dflt);
@@ -17939,7 +17944,9 @@ static void emit_class_ivar_arm(Compiler *c, int tv, const char *sym, char op, c
    by a class method, lists after the reflective sets) */
 static void emit_class_ivar_list_arm(Compiler *c, int tv, Buf *b) {
   if (!c->bivar_table) return;
-  buf_printf(b, " if (_t%d.tag == SP_TAG_CLASS) { _ivl%d = sp_bivar_list(_t%d); switch (_t%d.cls_id) {", tv, tv, tv, tv);
+  char tvn[24]; snprintf(tvn, sizeof tvn, "_t%d", tv);
+  buf_printf(b, " if (_t%d.tag == SP_TAG_CLASS) { _ivl%d = sp_bivar_list(_t%d); switch (", tv, tv, tv);
+  emit_class_value_key(c, -1, tvn, b); buf_puts(b, ") {");
   for (int k = 0; k < c->nclasses; k++) {
     ClassInfo *ci = &c->classes[k];
     int any = 0;

@@ -11371,18 +11371,36 @@ static void emit_obj_clamp3(Compiler *c, int recv, int lo, int hi, Buf *b) {
   buf_puts(b, "); })");
 }
 
+/* An identity that folds to ans (0 or 1): a receiver that may run code runs first, as in CRuby, then the argument;
+   a pure read (subtree_is_pure_read: a local, self, a literal, a temp the run filled) is left out */
+static void emit_identity_fold(Compiler *c, int recv, int arg, int ans, Buf *b) {
+  if (!subtree_is_pure_read(c, recv)) {
+    buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), (void)(");
+  }
+  else buf_puts(b, "((");
+  emit_expr_for_effect(c, arg, b); buf_printf(b, "), %d)", ans);
+}
 static void emit_identity_equal(Compiler *c, int recv, int arg, TyKind rt, TyKind a0, Buf *b) {
   if (a0 == rt) {
     buf_puts(b, "(("); emit_expr(c, recv, b); buf_puts(b, ") == (");
     emit_expr(c, arg, b); buf_puts(b, "))");
   }
   else if (a0 == TY_POLY) {
+    /* (a receiver that may run code runs whatever the box holds; a pure read stays inline; operands with effects on
+       both sides are held in order before this) */
     int te = ++g_tmp;
     buf_printf(b, "({ sp_RbVal _t%d = ", te); emit_boxed(c, arg, b);
-    buf_printf(b, "; _t%d.tag == SP_TAG_OBJ && _t%d.v.p == (void*)(", te, te);
-    emit_expr(c, recv, b); buf_puts(b, "); })");
+    if (!subtree_is_pure_read(c, recv)) {
+      int tr = ++g_tmp;
+      buf_printf(b, "; void *_t%d = (void *)(", tr); emit_expr(c, recv, b);
+      buf_printf(b, "); _t%d.tag == SP_TAG_OBJ && _t%d.v.p == _t%d; })", te, te, tr);
+    }
+    else {
+      buf_printf(b, "; _t%d.tag == SP_TAG_OBJ && _t%d.v.p == (void*)(", te, te);
+      emit_expr(c, recv, b); buf_puts(b, "); })");
+    }
   }
-  else { buf_puts(b, "(("); emit_expr_for_effect(c, arg, b); buf_puts(b, "), 0)"); }
+  else emit_identity_fold(c, recv, arg, 0, b);
 }
 /* The root of a Struct receiver's temp `_tN`, for an arm that runs no Ruby
    code between the receiver and its last member read. A receiver made in
@@ -13121,8 +13139,7 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
       emit_identity_equal(c, recv, argv[0], rt, a0, b);
       return 1;
     }
-    if (same_sefree_lvalue(c, recv, argv[0])) { buf_puts(b, "(("); emit_expr_for_effect(c, argv[0], b); buf_puts(b, "), 1)"); }
-    else { buf_puts(b, "(("); emit_expr_for_effect(c, argv[0], b); buf_puts(b, "), 0)"); }
+    emit_identity_fold(c, recv, argv[0], same_sefree_lvalue(c, recv, argv[0]), b);
     return 1;
   }
 

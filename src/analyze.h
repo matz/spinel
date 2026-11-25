@@ -164,6 +164,7 @@ int an_const_read_is_value(Compiler *c, int id);
    their top-level scopes and roots, and what the model refuses for now. */
 void prog_file_scopes(Compiler *c);
 void prog_refuse_loads(Compiler *c);
+void prog_refuse_nested_lambda_returns(Compiler *c);
 void prog_settle_files(Compiler *c);
 /* Is node in a required file prog_settle_files dropped, as no live require
    reaches it? */
@@ -353,6 +354,8 @@ typedef enum { ELAB_GVAR, ELAB_MAIN_IVAR, ELAB_CONST } ElabVar;
 struct HostStep;
 /* ELAB_UNKNOWN for an unresolved receiver, ELAB_YES for possible shadowing on a resolved chain. */
 int elab_autoload_shadow(Compiler *c, int id);
+/* Whether a literal lambda block's constructor reaches builtin Kernel#lambda. */
+int elab_builtin_lambda(Compiler *c, int call, const int *parent);
 void elab_program(Compiler *c, struct HostStep *h);
 void elab_const_keys(Compiler *c);   /* each constant write and resolved read takes its entity's key (#10787); SPINEL_CONST_KEY_CHECK reports the changes */
 /* (the same from the node table alone: a key whose node a later pass

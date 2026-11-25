@@ -56376,6 +56376,7 @@ static void an_phase_reconcile_check(Compiler *c) {
      the cls_id dispatch (a real proc) while analyze left its captures
      uncelled, and the emit refuses. Only sets is_cell, and is idempotent. */
   AN_STEP_V("mark_proc_captures", mark_proc_captures(c));
+  prog_refuse_nested_lambda_returns(c);
   /* ...and a local it cells there may hold a value-type instance the
      detection above let through: a receiver typed poly only by the late
      widenings (a parameter every caller passes nil) lifts the block now.

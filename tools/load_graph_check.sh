@@ -1,5 +1,5 @@
 #!/bin/sh
-# Under --load-model=graph (#9898) each require is a LoadNode carrying the
+# Each require (#9898) is a LoadNode carrying the
 # file it loads: the one its own call resolved to, also where flatten meets
 # a file's requires in another order than its tree has them (a begin's
 # ensure before its else) and when two are on one line. The libraries
@@ -45,8 +45,8 @@ program() {
 loads() {
   name=$1 boots=$2; shift 2
   t=$tmp/cases/$name/main.rb
-  if ! "$SPINEL" --load-model=graph --dump-load-graph "$t" >"$tmp/graph" 2>"$tmp/err" ||
-     ! "$SPINEL" --load-model=graph --dump-ast "$t" >"$tmp/ast" 2>>"$tmp/err"; then
+  if ! "$SPINEL" --dump-load-graph "$t" >"$tmp/graph" 2>"$tmp/err" ||
+     ! "$SPINEL" --dump-ast "$t" >"$tmp/ast" 2>>"$tmp/err"; then
     fail "$name: did not flatten"; sed -n 1,3p "$tmp/err"; return
   fi
   # each LoadNode as its path and its target file
@@ -92,7 +92,7 @@ for e in test/load_graph/*.rb.expected; do
   t=${e%.expected}
   b=$(basename "$t" .rb)
   want=$(sed -n '1,5s/^# spinel: exit \([0-9][0-9]*\)$/\1/p' "$t")
-  if "$SPINEL" --load-model=graph "$t" -o "$tmp/$b" >"$tmp/$b.c.out" 2>&1; then
+  if "$SPINEL" "$t" -o "$tmp/$b" >"$tmp/$b.c.out" 2>&1; then
     "$tmp/$b" >"$tmp/$b.run" 2>/dev/null
     got=$?
     cmp -s "$tmp/$b.run" "$e" ||
@@ -115,7 +115,7 @@ grep -q "load_error_uncaught_main.rb:5: cannot load such file -- load_error_unca
 # those points (--dump-load-record, analyze_elab.c) ----
 for e in test/load_graph/*.rb.load-record; do
   t=${e%.load-record}
-  "$SPINEL" --load-model=graph --dump-load-record "$t" >"$tmp/record" 2>"$tmp/record.err" ||
+  "$SPINEL" --dump-load-record "$t" >"$tmp/record" 2>"$tmp/record.err" ||
     { fail "$t: no load record"; sed -n 1,5p "$tmp/record.err"; }
   cmp -s "$tmp/record" "$e" || { fail "$t's load record is not its .load-record"; diff "$e" "$tmp/record" | sed -n 1,10p; }
 done
@@ -126,7 +126,7 @@ done
 mkdir "$tmp/bt"
 printf 'def helper\n  raise ArgumentError, "bad"\nend\nhelper\n' > "$tmp/bt/lib.rb"
 printf 'puts "before"\nrequire_relative "lib"\n' > "$tmp/bt/main.rb"
-if "$SPINEL" --load-model=graph --debug --no-inline-hot "$tmp/bt/main.rb" -o "$tmp/bt/bin" >/dev/null 2>&1; then
+if "$SPINEL" --debug --no-inline-hot "$tmp/bt/main.rb" -o "$tmp/bt/bin" >/dev/null 2>&1; then
   "$tmp/bt/bin" >/dev/null 2>"$tmp/bt/err"
   head -1 "$tmp/bt/err" | grep -q "lib.rb:\([0-9]*:\)\{0,1\}in .helper': bad (ArgumentError)" ||
     { fail "a raise in a required file lost its frames"; cat "$tmp/bt/err"; }
@@ -154,7 +154,7 @@ mkdir "$tmp/frames"
 printf 'puts "a"\nrequire "frames_b"\n' > "$tmp/frames/a.rb"
 printf 'def helper\n  raise ArgumentError, "bad"\nend\nhere = caller(0)\nputs here\nhelper if ARGV.empty?\nrequire "frames_none"\n' > "$tmp/frames/frames_b.rb"
 printf 'puts "main"\nrequire_relative "a"\n' > "$tmp/frames/main.rb"
-if "$SPINEL" --load-model=graph --debug --no-inline-hot -I "$tmp/frames" "$tmp/frames/main.rb" -o "$tmp/frames/bin" >/dev/null 2>&1; then
+if "$SPINEL" --debug --no-inline-hot -I "$tmp/frames" "$tmp/frames/main.rb" -o "$tmp/frames/bin" >/dev/null 2>&1; then
   "$tmp/frames/bin" > "$tmp/frames/out" 2>"$tmp/frames/err"
   "$tmp/frames/bin" x >/dev/null 2>"$tmp/frames/lerr"
   n='\([0-9]*:\)\{0,1\}'; n2=$n n4=$n n6=$n n7=$n
@@ -205,7 +205,7 @@ rescue LoadError => e
   p e.class
 end
 RB
-if "$SPINEL" --load-model=graph -I "$tmp/exact/root" "$tmp/exact/main.rb" -o "$tmp/exact/bin" >"$tmp/exact/cc" 2>&1; then
+if "$SPINEL" -I "$tmp/exact/root" "$tmp/exact/main.rb" -o "$tmp/exact/bin" >"$tmp/exact/cc" 2>&1; then
   (cd "$tmp/exact" && ./bin > out 2>&1) || fail "exact exits $?"
   printf 'root dup\ntrue\nbeside dup\ntrue\nfalse\nfalse\nLoadError\n' | cmp -s - "$tmp/exact/out" ||
     { fail "a computed path did not name the file CRuby finds"; cat "$tmp/exact/out"; }
@@ -228,7 +228,7 @@ require_relative "sub/lib"
 p pull("sub/alias")
 p require(File.join(__dir__, "linkdir", "lib"))
 RB
-if "$SPINEL" --load-model=graph "$tmp/link/main.rb" -o "$tmp/link/bin" >"$tmp/link/cc" 2>&1; then
+if "$SPINEL" "$tmp/link/main.rb" -o "$tmp/link/bin" >"$tmp/link/cc" 2>&1; then
   "$tmp/link/bin" > "$tmp/link/out" 2>&1 || fail "link exits $?"
   printf 'lib ran\ntrue\nfalse\nfalse\n' | cmp -s - "$tmp/link/out" ||
     { fail "a computed path through a symlink did not name the file it points to"; cat "$tmp/link/out"; }
@@ -252,7 +252,7 @@ p pull("alias2")
 p pull(File.join(__dir__, "inc", "alias"))
 p require("alias")
 RB
-if "$SPINEL" --load-model=graph -I "$tmp/link_ext/inc" "$tmp/link_ext/main.rb" -o "$tmp/link_ext/bin" >"$tmp/link_ext/cc" 2>&1; then
+if "$SPINEL" -I "$tmp/link_ext/inc" "$tmp/link_ext/main.rb" -o "$tmp/link_ext/bin" >"$tmp/link_ext/cc" 2>&1; then
   "$tmp/link_ext/bin" > "$tmp/link_ext/out" 2>&1 || fail "link_ext exits $?"
   printf 'impl ran\ntrue\nfalse\nfalse\nfalse\n' | cmp -s - "$tmp/link_ext/out" ||
     { fail "a computed path through a symlink to a file of another name did not name it"; cat "$tmp/link_ext/out"; }
@@ -272,7 +272,7 @@ order() {   # NAME STATEMENT EXPECTED-OUTPUT
   mkdir "$tmp/order/$1"
   printf 'if ARGV.size > 5\n  require_relative "../inc/dup"\n  require_relative "../app/dup"\nend\n%s\ndef load_it(n) = require(n)\np load_it("dup")\np load_it("dup")\n' \
     "$2" > "$tmp/order/$1/main.rb"
-  if "$SPINEL" --load-model=graph -I "$tmp/order/inc" "$tmp/order/$1/main.rb" -o "$tmp/order/$1/bin" >"$tmp/order/$1/cc" 2>&1; then
+  if "$SPINEL" -I "$tmp/order/inc" "$tmp/order/$1/main.rb" -o "$tmp/order/$1/bin" >"$tmp/order/$1/cc" 2>&1; then
     "$tmp/order/$1/bin" > "$tmp/order/$1/out" 2>&1 || fail "order $1 exits $?"
     printf '%s\n' "$3" | cmp -s - "$tmp/order/$1/out" || { fail "order $1: \$LOAD_PATH did not search as CRuby's does"; cat "$tmp/order/$1/out"; }
   else
@@ -312,7 +312,7 @@ lorder() {   # NAME STATEMENTS EXPECTED-FIRST-LINE -I-DIR...
   mkdir "$tmp/order/$lo_name"
   printf '%s\nrequire "dup"\ndef load_it(n) = require(n)\np load_it("dup")\n' "$lo_stmts" > "$tmp/order/$lo_name/main.rb"
   for d in "$@"; do set -- "$@" -I "$tmp/order/$d"; shift; done   # (each -I and its directory one word)
-  if "$SPINEL" --load-model=graph "$@" "$tmp/order/$lo_name/main.rb" -o "$tmp/order/$lo_name/bin" >"$tmp/order/$lo_name/cc" 2>&1; then
+  if "$SPINEL" "$@" "$tmp/order/$lo_name/main.rb" -o "$tmp/order/$lo_name/bin" >"$tmp/order/$lo_name/cc" 2>&1; then
     "$tmp/order/$lo_name/bin" > "$tmp/order/$lo_name/out" 2>&1 || fail "order $lo_name exits $?"
     printf '%s\nfalse\n' "$lo_want" | cmp -s - "$tmp/order/$lo_name/out" ||
       { fail "order $lo_name: a literal require did not search as CRuby's does"; cat "$tmp/order/$lo_name/out"; }
@@ -336,7 +336,7 @@ lorder lit_unshift_twice "\$LOAD_PATH.unshift $app
 mkdir "$tmp/order/sym"
 ln -s "$tmp/order/inc" "$tmp/order/sym/lnk"
 printf 'if ARGV.size > 5\n  require_relative "../inc/dup"\nend\np $LOAD_PATH[0].end_with?("/sym/lnk")\np File.directory?($LOAD_PATH[1])\ndef load_it(n) = require(n)\np load_it("dup")\n' > "$tmp/order/sym/main.rb"
-if "$SPINEL" --load-model=graph -I "$tmp/order/sym/lnk" "$tmp/order/sym/main.rb" -o "$tmp/order/sym/bin" >"$tmp/order/sym/cc" 2>&1; then
+if "$SPINEL" -I "$tmp/order/sym/lnk" "$tmp/order/sym/main.rb" -o "$tmp/order/sym/bin" >"$tmp/order/sym/cc" 2>&1; then
   "$tmp/order/sym/bin" > "$tmp/order/sym/out" 2>&1 || fail "sym exits $?"
   printf 'true\ntrue\ninc\ntrue\n' | cmp -s - "$tmp/order/sym/out" ||
     { fail "a symlinked -I directory was not on \$LOAD_PATH as written, or did not name its file"; cat "$tmp/order/sym/out"; }
@@ -353,7 +353,7 @@ printf 'puts "xlib"\n' > "$tmp/ext/inc/xlib.rb"
 printf 'def never = require("xlib")\nname = ARGV.empty? ? "xlib" : ARGV.first\np require(name)\n' > "$tmp/ext/main.rb"
 printf 'void spx_lp(void);\nint main(void) { spx_lp(); return 0; }\n' > "$tmp/ext/host.c"
 rt=$(dirname "$SPINEL")/../lib
-if "$SPINEL" --load-model=graph -I "$tmp/ext/inc" -c --no-line-map --ext-init spx_lp "$tmp/ext/main.rb" -o "$tmp/ext/out.c" >"$tmp/ext/cc" 2>&1 &&
+if "$SPINEL" -I "$tmp/ext/inc" -c --no-line-map --ext-init spx_lp "$tmp/ext/main.rb" -o "$tmp/ext/out.c" >"$tmp/ext/cc" 2>&1 &&
    ${CC:-cc} -O1 -w -I"$rt" "$tmp/ext/host.c" "$tmp/ext/out.c" "$rt/libspinel_rt.a" -lm -o "$tmp/ext/host" >>"$tmp/ext/cc" 2>&1; then
   "$tmp/ext/host" > "$tmp/ext/out" 2>&1 || fail "ext host exits $?"
   printf 'xlib\ntrue\n' | cmp -s - "$tmp/ext/out" ||
@@ -376,7 +376,7 @@ printf '$LOAD_PATH.unshift __dir__ if false\ndef never = require_relative("x")\n
 printf 'def pull(path) = require(path)\ndef never = require_relative("x")\nbegin\n  pull("x")\nrescue LoadError => e\n  p e.class\nend\n$LOAD_PATH.unshift __dir__\np pull("x")\n' > "$tmp/lp_cbefore/main.rb"
 printf '$LOAD_PATH.unshift __dir__ if ARGV.empty?\ndef pull(path) = require(path)\ndef never = require_relative("x")\np pull("x")\n' > "$tmp/lp_ccond/main.rb"
 for d in lp_no lp_yes lp_before lp_cond lp_cbefore lp_ccond; do
-  if "$SPINEL" --load-model=graph "$tmp/$d/main.rb" -o "$tmp/$d/bin" >"$tmp/$d/cc" 2>&1; then "$tmp/$d/bin" > "$tmp/$d/out" 2>&1 || fail "$d exits $?"
+  if "$SPINEL" "$tmp/$d/main.rb" -o "$tmp/$d/bin" >"$tmp/$d/cc" 2>&1; then "$tmp/$d/bin" > "$tmp/$d/out" 2>&1 || fail "$d exits $?"
   else fail "$d did not compile"; sed -n 1,3p "$tmp/$d/cc"; fi
 done
 printf 'LoadError\n' | cmp -s - "$tmp/lp_no/out" || { fail "a bare computed path found a file beside the program, which is not on the load path"; cat "$tmp/lp_no/out"; }
@@ -388,7 +388,7 @@ printf 'LoadError\n' | cmp -s - "$tmp/lp_cond/out" || { fail "a require found a 
 
 # refused NAME MESSAGE: $tmp/NAME/main.rb refuses with MESSAGE
 refused() {
-  if "$SPINEL" --load-model=graph "$tmp/$1/main.rb" -o "$tmp/$1/bin" >"$tmp/$1/out" 2>&1; then
+  if "$SPINEL" "$tmp/$1/main.rb" -o "$tmp/$1/bin" >"$tmp/$1/out" 2>&1; then
     fail "$1 compiled"
   else
     grep -qF -- "$2" "$tmp/$1/out" || { fail "$1 refused without naming why"; sed -n 1,3p "$tmp/$1/out"; }
@@ -498,7 +498,7 @@ for form in 'define_method(["other"].first.to_sym) {}' 'def old; end; alias :"#{
 done
 printf 'autoload :Lib, File.join(__dir__, "lib")\np Lib\n' > "$tmp/autoload/main.rb"
 # Closed autoload registrations compile; unresolved names and path sets are refused.
-"$SPINEL" --load-model=graph "$tmp/autoload/main.rb" -o "$tmp/autoload/bin" >"$tmp/autoload/out" 2>&1 || fail "autoload did not compile"
+"$SPINEL" "$tmp/autoload/main.rb" -o "$tmp/autoload/bin" >"$tmp/autoload/out" 2>&1 || fail "autoload did not compile"
 printf 'autoload ARGV.first, File.join(__dir__, "lib")\np Lib\n' > "$tmp/autoload/main.rb"
 refused autoload "unresolved autoload registration"
 printf 'autoload :Lib, ARGV.first\np Lib\n' > "$tmp/autoload/main.rb"
@@ -561,21 +561,21 @@ refused entry "a computed require may load the program's own entry file"
 # and its file is not part of the program (one that does not parse included)
 printf 'module Lib; end\n' > "$tmp/autoload/lib.rb"
 printf 'begin\n  Object.new.autoload(:Lib, File.join(__dir__, "lib"))\nrescue NoMethodError => e\n  p e.class\nend\n' > "$tmp/autoload/main.rb"
-if "$SPINEL" --load-model=graph "$tmp/autoload/main.rb" -o "$tmp/autoload/bin" >"$tmp/autoload/cc" 2>&1; then
+if "$SPINEL" "$tmp/autoload/main.rb" -o "$tmp/autoload/bin" >"$tmp/autoload/cc" 2>&1; then
   [ "$("$tmp/autoload/bin")" = "NoMethodError" ] || fail "autoload on Object.new did not raise NoMethodError"
 else fail "autoload on Object.new refused"; sed -n 1,3p "$tmp/autoload/cc"; fi
 printf 'this is not ruby (\n' > "$tmp/autoload/data.rb"
 printf 'class UserAuto\n  def autoload(name, path) = puts("user #{name}")\nend\nUserAuto.new.autoload(:X, File.join(__dir__, "data"))\n' > "$tmp/autoload/main.rb"
-if "$SPINEL" --load-model=graph "$tmp/autoload/main.rb" -o "$tmp/autoload/bin" >"$tmp/autoload/cc" 2>&1; then
+if "$SPINEL" "$tmp/autoload/main.rb" -o "$tmp/autoload/bin" >"$tmp/autoload/cc" 2>&1; then
   [ "$("$tmp/autoload/bin")" = "user X" ] || fail "a program's own autoload on an object did not run"
 else fail "a program's own autoload on an object parsed its argument's file"; sed -n 1,3p "$tmp/autoload/cc"; fi
 # the same on a constant holding the value: no registration, no parse
 printf 'INST = Object.new\nbegin\n  INST.autoload(:X, File.join(__dir__, "data"))\nrescue NoMethodError => e\n  p e.class\nend\n' > "$tmp/autoload/main.rb"
-if "$SPINEL" --load-model=graph "$tmp/autoload/main.rb" -o "$tmp/autoload/bin" >"$tmp/autoload/cc" 2>&1; then
+if "$SPINEL" "$tmp/autoload/main.rb" -o "$tmp/autoload/bin" >"$tmp/autoload/cc" 2>&1; then
   [ "$("$tmp/autoload/bin")" = "NoMethodError" ] || fail "autoload on a constant holding Object.new did not raise NoMethodError"
 else fail "autoload on a constant holding Object.new refused"; sed -n 1,3p "$tmp/autoload/cc"; fi
 printf 'class UserAuto\n  def autoload(name, path) = puts("user #{name}")\nend\nINST = UserAuto.new\nINST.autoload(:X, File.join(__dir__, "data"))\n' > "$tmp/autoload/main.rb"
-if "$SPINEL" --load-model=graph "$tmp/autoload/main.rb" -o "$tmp/autoload/bin" >"$tmp/autoload/cc" 2>&1; then
+if "$SPINEL" "$tmp/autoload/main.rb" -o "$tmp/autoload/bin" >"$tmp/autoload/cc" 2>&1; then
   [ "$("$tmp/autoload/bin")" = "user X" ] || fail "a program's own autoload on a constant did not run"
 else fail "a program's own autoload on a constant parsed its argument's file"; sed -n 1,3p "$tmp/autoload/cc"; fi
 # An unrelated definition does not show that a value receiver is shadowed.
@@ -603,7 +603,7 @@ printf 'END { puts "lib END" }\nputs "lib"\n' > "$tmp/end/lib.rb"
 printf 'require_relative "lib"\nputs "main"\n' > "$tmp/end/main.rb"
 # An END block in a required file registers where its load runs it (an
 # at_exit), so it runs once, after main, as CRuby runs it.
-if "$SPINEL" --load-model=graph "$tmp/end/main.rb" -o "$tmp/end/bin" >"$tmp/end/out" 2>&1; then
+if "$SPINEL" "$tmp/end/main.rb" -o "$tmp/end/bin" >"$tmp/end/out" 2>&1; then
   "$tmp/end/bin" >"$tmp/end/run" 2>&1
   printf 'lib\nmain\nlib END\n' | cmp -s - "$tmp/end/run" || fail "an END block in a required file did not run after main"
 else
@@ -625,7 +625,7 @@ mkdir "$tmp/late_include_method"
 printf 'p C.new.tag\n' > "$tmp/late_include_method/lib.rb"
 printf 'module M\n  def tag = "m"\nend\nclass C\nend\ndef load_plugin\n  require_relative "lib"\nend\nbegin\n  load_plugin\nrescue NoMethodError\n  puts "no tag yet"\nend\nclass C\n  include M\nend\n' > "$tmp/late_include_method/main.rb"
 for d in late_include late_include_method; do
-  if "$SPINEL" --load-model=graph "$tmp/$d/main.rb" -o "$tmp/$d/bin" >"$tmp/$d/cc" 2>&1; then
+  if "$SPINEL" "$tmp/$d/main.rb" -o "$tmp/$d/bin" >"$tmp/$d/cc" 2>&1; then
     "$tmp/$d/bin" >"$tmp/$d/out" 2>&1 || fail "$d exits $?"
     case $d in late_include) want='no speak yet' ;; *) want='no tag yet' ;; esac
     printf '%s\n' "$want" | cmp -s - "$tmp/$d/out" || { fail "$d called the module's method before its include ran"; cat "$tmp/$d/out"; }
@@ -653,7 +653,7 @@ printf 'require_relative "lib"\n' > "$tmp/open_nested/wrap.rb"
 printf 'def setup = require_relative("wrap")\nsetup\ndef pull(path) = require_relative(path)\nclass OpenMoney\n  alias_method :add, :+\nend\np pull("lib")\np OpenMoney.new(10).add(1).cents\n' > "$tmp/open_nested/main.rb"
 
 for d in open_cond open_after open_nested; do
-  if "$SPINEL" --load-model=graph "$tmp/$d/main.rb" -o "$tmp/$d/bin" >"$tmp/$d/cc" 2>&1; then
+  if "$SPINEL" "$tmp/$d/main.rb" -o "$tmp/$d/bin" >"$tmp/$d/cc" 2>&1; then
     "$tmp/$d/bin" >"$tmp/$d/out" 2>&1 || fail "$d exits $?"
     printf 'false\n11\n' | cmp -s - "$tmp/$d/out" || { fail "$d did not keep the current alias target"; cat "$tmp/$d/out"; }
   else
@@ -674,10 +674,10 @@ refused alias_versions "the alias reading reads the order of two files"
 mkdir "$tmp/gate" "$tmp/gate_req"
 printf 'p $stdout.winsize.class\n' > "$tmp/gate/main.rb"
 printf 'require "io/console"\np $stdout.winsize.class\n' > "$tmp/gate_req/main.rb"
-"$SPINEL" --load-model=graph --strict-require "$tmp/gate/main.rb" -o "$tmp/gate/bin" >"$tmp/gate/out" 2>&1 &&
+"$SPINEL" --strict-require "$tmp/gate/main.rb" -o "$tmp/gate/bin" >"$tmp/gate/out" 2>&1 &&
   fail "--strict-require: a feature no require names compiled"
 grep -qF "winsize" "$tmp/gate/out" || { fail "--strict-require: refused without naming winsize"; sed -n 1,3p "$tmp/gate/out"; }
-"$SPINEL" --load-model=graph --strict-require "$tmp/gate_req/main.rb" -o "$tmp/gate_req/bin" >"$tmp/gate_req/out" 2>&1 ||
+"$SPINEL" --strict-require "$tmp/gate_req/main.rb" -o "$tmp/gate_req/bin" >"$tmp/gate_req/out" 2>&1 ||
   { fail "--strict-require: a feature a require names did not compile"; sed -n 1,3p "$tmp/gate_req/out"; }
 
 # a class-body call in a required file of a method a later file's
@@ -693,7 +693,7 @@ refused late_alias "is called in the class body before an alias rebinds it"
 mkdir "$tmp/lean"
 printf 'class Shape\n  def initialize(side) = @side = side\nend\n' > "$tmp/lean/lib.rb"
 printf 'require_relative "lib"\nputs 1\n' > "$tmp/lean/main.rb"
-if "$SPINEL" --load-model=graph -c "$tmp/lean/main.rb" -o "$tmp/lean/out.c" >/dev/null 2>&1; then
+if "$SPINEL" -c "$tmp/lean/main.rb" -o "$tmp/lean/out.c" >/dev/null 2>&1; then
   ! grep -qE 'sp_file_[0-9]+_top|sp_Kernel_require|sp_sym_names' "$tmp/lean/out.c" ||
     fail "a file that only defines things costs C"
 else
@@ -705,7 +705,7 @@ fi
 mkdir "$tmp/decls"
 printf 'puts "lib"\n' > "$tmp/decls/lib.rb"
 printf 'def run = 1\nrequire_relative "lib"\np run\n' > "$tmp/decls/main.rb"
-if "$SPINEL" --load-model=graph -S --no-line-map "$tmp/decls/main.rb" > "$tmp/decls/out.c" 2>/dev/null; then
+if "$SPINEL" -S --no-line-map "$tmp/decls/main.rb" > "$tmp/decls/out.c" 2>/dev/null; then
   awk '/sp_file_1_top\(void\);/ && !d { d = NR } /sp_run\(void\) \{/ && !r { r = NR } END { exit !(d && r && d < r) }' "$tmp/decls/out.c" ||
     fail "a file's function is declared after the method bodies"
 else
@@ -718,7 +718,7 @@ fi
 mkdir "$tmp/defsonly"
 printf 'class Foo\n  def w = 7\nend\n' > "$tmp/defsonly/lib.rb"
 printf 'class K; def v = 1; end\ndef probe = K.new.v\nrequire_relative "lib" if ARGV.size == 0\nclass K; def v = 2; end\nputs probe\nputs Foo.new.w\nrequire_relative "lib"\n' > "$tmp/defsonly/main.rb"
-if "$SPINEL" --load-model=graph -S --no-line-map "$tmp/defsonly/main.rb" > "$tmp/defsonly/out.c" 2>/dev/null; then
+if "$SPINEL" -S --no-line-map "$tmp/defsonly/main.rb" > "$tmp/defsonly/out.c" 2>/dev/null; then
   ! grep -qE '__spinel_ver|sp_K_v_entry' "$tmp/defsonly/out.c" ||
     fail "a require of a file of another region that only defines things made a version cell"
 else
@@ -726,7 +726,7 @@ else
 fi
 # (and the same program with a call in the file does: what the check looks for)
 printf 'class Foo\n  def w = 7\nend\nputs probe\n' > "$tmp/defsonly/lib.rb"
-if "$SPINEL" --load-model=graph -S --no-line-map "$tmp/defsonly/main.rb" > "$tmp/defsonly/out.c" 2>/dev/null; then
+if "$SPINEL" -S --no-line-map "$tmp/defsonly/main.rb" > "$tmp/defsonly/out.c" 2>/dev/null; then
   grep -qE '__spinel_ver' "$tmp/defsonly/out.c" && grep -q 'sp_K_v_entry' "$tmp/defsonly/out.c" ||
     fail "a require of a file of another region that calls a method made no version cell"
 else
@@ -789,11 +789,11 @@ mkdir -p "$tmp/pe"
 printf 'def helper(x)\n  x +\nend\n' > "$tmp/pe/pe_lib.rb"
 printf 'require_relative "pe_lib"\nputs helper(1)\n' > "$tmp/pe/pe.rb"
 sp_abs=$(cd "$(dirname "$SPINEL")" && pwd)/$(basename "$SPINEL")
-(cd "$tmp/pe" && "$sp_abs" --load-model=graph pe.rb --emit-types -o pe.json 2> pe.err; test $? -eq 1) || fail "a parse error in a required file exits 1"
+(cd "$tmp/pe" && "$sp_abs" pe.rb --emit-types -o pe.json 2> pe.err; test $? -eq 1) || fail "a parse error in a required file exits 1"
 grep -q '^  pe_lib.rb:3:1: unexpected' "$tmp/pe/pe.err" || { fail "a parse error in a required file is placed at file:line:col"; cat "$tmp/pe/pe.err"; }
 grep -q '{"file":"pe_lib.rb","line":3,"col":0,' "$tmp/pe/pe.json" 2>/dev/null || fail "--emit-types writes a required file's parse error as a diagnostic"
 printf 'require "no_such_gem_for_strict"\nputs 1\n' > "$tmp/pe/strict.rb"
-if "$SPINEL" --load-model=graph --strict-require "$tmp/pe/strict.rb" -o "$tmp/pe/strict" 2> "$tmp/pe/strict.err"; then
+if "$SPINEL" --strict-require "$tmp/pe/strict.rb" -o "$tmp/pe/strict" 2> "$tmp/pe/strict.err"; then
   fail "--strict-require compiled a require no file answers"
 fi
 grep -q "cannot load such file -- no_such_gem_for_strict" "$tmp/pe/strict.err" || fail "--strict-require names the missing file"
@@ -803,7 +803,7 @@ grep -q "cannot load such file -- no_such_gem_for_strict" "$tmp/pe/strict.err" |
 # the file no live require reaches is dropped, and its extension's classes
 # with it.
 printf 'if RUBY_ENGINE == "spinel"\n  puts "spinel"\nelse\n  require "sqlite3"\nend\n' > "$tmp/pe/dead_cext.rb"
-"$SPINEL" --load-model=graph "$tmp/pe/dead_cext.rb" -o "$tmp/pe/dead_cext" >/dev/null 2>"$tmp/pe/dead_cext.err" &&
+"$SPINEL" "$tmp/pe/dead_cext.rb" -o "$tmp/pe/dead_cext" >/dev/null 2>"$tmp/pe/dead_cext.err" &&
   [ "$("$tmp/pe/dead_cext")" = spinel ] || { fail "a C extension required in a branch that never runs"; head -3 "$tmp/pe/dead_cext.err"; }
 
 [ $ok -eq 1 ] && echo "load-graph-test: pass" || exit 1

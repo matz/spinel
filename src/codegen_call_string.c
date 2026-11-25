@@ -2145,7 +2145,14 @@ int emit_op_string_bytesplice(Compiler *c, const BopCtx *x, Buf *b) {
   return 1;
 }
 
-int emit_op_string_append_as_bytes(Compiler *c, const BopCtx *x, Buf *b) {
+/* A String method over the call's whole operand list, a splat's among them,
+   that the runtime takes as one array of values (fn(h, argc, argv[, extra])):
+   the receiver's handle first, then every operand boxed, or a splat's list
+   gathered with the others (emit_gather_call_args), then the run-time check
+   of a `&` argument (emit_block_arg_check_staged), then the nil receiver's
+   NoMethodError, then the call; the answer is the receiver. A boxed
+   receiver (the BOP_BOXED_FALLBACK row) is checked to be a String. */
+static int emit_str_operand_list(Compiler *c, const BopCtx *x, const char *fn, const char *extra, Buf *b) {
   int argc, chk = 0, t, a = ++g_tmp;
   const int *argv = call_args(c->nt, x->id, &argc);
   int boxed = x->op->recv == BOP_BOXED_FALLBACK;
@@ -2156,8 +2163,7 @@ int emit_op_string_append_as_bytes(Compiler *c, const BopCtx *x, Buf *b) {
     if (x->rtext) buf_puts(b, x->rtext); else emit_boxed(c, x->recv, b);
     buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d);", t);
   } else t = str_mut_open(c, x, &chk, b);
-  int splat = 0;
-  for (int i = 0; i < argc; i++) if (nt_kind(c->nt, argv[i]) == NK_SplatNode) splat = 1;
+  int splat = nt_argv_has_splat(c->nt, argv, argc);
   if (splat) emit_gather_call_args(c, argv, argc, a, b);
   else if (argc) {
     buf_printf(b, " sp_RbVal _t%d[%d];", a, argc);
@@ -2166,19 +2172,33 @@ int emit_op_string_append_as_bytes(Compiler *c, const BopCtx *x, Buf *b) {
       buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d[%d]);", a, i);
     }
   }
+  emit_block_arg_check_staged(c, x->id, b);
   if (boxed) {
-    buf_printf(b, " if (!sp_strface_b_box(_t%d)) sp_raise_poly_nomethod(\"append_as_bytes\", _t%d);"
-                  " sp_strbuf_append_as_bytes((sp_String *)_t%d.v.p, ", t, t, t);
+    buf_printf(b, " if (!sp_strface_b_box(_t%d)) sp_raise_poly_nomethod(\"%s\", _t%d);"
+                  " %s((sp_String *)_t%d.v.p, ", t, x->name, t, fn, t);
   } else {
     str_mut_nil_check(x, t, chk, b);
-    buf_printf(b, " sp_strbuf_append_as_bytes(_t%d, ", t);
+    buf_printf(b, " %s(_t%d, ", fn, t);
   }
-  if (splat) buf_printf(b, "_t%d->len, _t%d->data);", a, a);
-  else if (argc) buf_printf(b, "%d, _t%d);", argc, a);
-  else buf_puts(b, "0, NULL);");
+  if (splat) buf_printf(b, "_t%d->len, _t%d->data%s);", a, a, extra);
+  else if (argc) buf_printf(b, "%d, _t%d%s);", argc, a, extra);
+  else buf_printf(b, "0, NULL%s);", extra);
   if (boxed) buf_printf(b, " _t%d; })", t);
   else str_mut_self_answer(c, x, t, b);
   return 1;
+}
+
+int emit_op_string_append_as_bytes(Compiler *c, const BopCtx *x, Buf *b) {
+  return emit_str_operand_list(c, x, "sp_strbuf_append_as_bytes", "", b);
+}
+
+/* concat(*parts) and prepend(*parts): the spread forms (BOPF_SPREAD), which
+   convert the operands at run time (sp_strbuf_concat_list) */
+int emit_op_string_concat_list(Compiler *c, const BopCtx *x, Buf *b) {
+  return emit_str_operand_list(c, x, "sp_strbuf_concat_list", ", 0", b);
+}
+int emit_op_string_prepend_list(Compiler *c, const BopCtx *x, Buf *b) {
+  return emit_str_operand_list(c, x, "sp_strbuf_concat_list", ", 1", b);
 }
 
 int emit_op_string_clear(Compiler *c, const BopCtx *x, Buf *b) {
@@ -2310,6 +2330,7 @@ int str_in_place_row(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
   int argc;
-  (void)call_args(nt, id, &argc);
-  return name && bop_find_stage(TY_STRING, name, argc, nt_ref(nt, id, "block") >= 0, NULL, NULL, 7) != NULL;
+  const int *argv = call_args(nt, id, &argc);
+  return name && bop_find_stage(TY_STRING, name, argc, nt_ref(nt, id, "block") >= 0,
+                                nt_argv_has_splat(nt, argv, argc), NULL, NULL, 7) != NULL;
 }

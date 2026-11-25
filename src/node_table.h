@@ -710,6 +710,15 @@ static inline int nt_argv_splat_count(const NodeTable *nt, const int *argv, int 
     if (nt_kind(nt, argv[i]) == NK_SplatNode) n++;
   return n;
 }
+/* A keyword hash of `**h` splats alone (`f(**h)`, `f(**a, **b)`), which
+   passes nothing when they are all empty, where a `k: v` always passes. */
+static inline int nt_kwh_splats_only(const NodeTable *nt, int kwh) {
+  int en = 0;
+  const int *els = nt_kind(nt, kwh) == NK_KeywordHashNode ? nt_arr(nt, kwh, "elements", &en) : NULL;
+  for (int e = 0; e < en; e++)
+    if (nt_kind(nt, els[e]) != NK_AssocSplatNode) return 0;
+  return en > 0;
+}
 /* CONTAINS_KEYWORDS: does the call pass keyword arguments -- a literal
    `k: v` or a `**h`? A sole keyword hash counts too (the Struct/Data member
    form, `d.class.new(x: 1)`, is built as the static `D.new(x: 1)` is). */

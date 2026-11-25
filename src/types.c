@@ -89,8 +89,10 @@ static const PolyFace ty_poly_face_tbl[] = {
      the arm. concat's arguments are of the receiver's own kind in CRuby
      (a String concatenates Strings, an Array Arrays), so an argument the
      inference has typed as the other kind rules that arm out. */
-  {"concat", PF_STRING | PF_MUT | PF_ARGS_OWN | PF_VAL_SELF, 0, -1, 0}, {"concat", PF_ARRAY | PF_MUT | PF_VAL_SELF | PF_ARGS_OWN, 0, -1, 0},
-  {"prepend", PF_STRING | PF_MUT | PF_ARGS_OWN | PF_VAL_SELF, 0, -1, 0}, {"prepend", PF_ARRAY | PF_MUT | PF_VAL_SELF, 0, -1, 0},
+  {"concat", PF_STRING | PF_MUT | PF_ARGS_OWN | PF_VAL_SELF | PF_SPREAD, 0, -1, 0},
+  {"concat", PF_ARRAY | PF_MUT | PF_VAL_SELF | PF_ARGS_OWN | PF_SPREAD, 0, -1, 0},
+  {"prepend", PF_STRING | PF_MUT | PF_ARGS_OWN | PF_VAL_SELF | PF_SPREAD, 0, -1, 0},
+  {"prepend", PF_ARRAY | PF_MUT | PF_VAL_SELF | PF_SPREAD, 0, -1, 0},
   {"reverse!", PF_STRING | PF_MUT | PF_VAL_SELF | PF_STR_TYPED | PF_STR_SELF, 0, 0, 0}, {"reverse!", PF_ARRAY | PF_MUT | PF_VAL_SELF, 0, 0, 0},
   {"slice!", PF_STRING | PF_MUT, 1, 2, 0}, {"slice!", PF_ARRAY | PF_MUT, 1, 2, 0},
   /* The Hash mutators, on a Hash at run time; a typed variant takes the
@@ -161,7 +163,7 @@ static const PolyFace ty_poly_face_tbl[] = {
   {0, 0, 0, 0, 0}
 };
 static int face_row_matches(const PolyFace *r, int argc, int has_blk, int plain) {
-  if (!plain) return r->argc_min == 0 && r->argc_max < 0 && r->blk != 0;
+  if (!plain) return (r->flags & PF_SPREAD) || (r->argc_min == 0 && r->argc_max < 0 && r->blk != 0);
   if (argc < r->argc_min || (r->argc_max >= 0 && argc > r->argc_max)) return 0;
   return r->blk < 0 || r->blk == (has_blk != 0);
 }

@@ -4132,6 +4132,8 @@ static SP_INLINE const char *sp_str_arg_not_nil(const char *s) {
   return s;
 }
 void sp_strbuf_append_as_bytes(sp_String *s, sp_int argc, const sp_RbVal *args);
+/* String#concat and #prepend over a spread operand list (lib/sp_poly_cold.c) */
+void sp_strbuf_concat_list(sp_String *s, sp_int argc, const sp_RbVal *args, int prepend);
 /* The replacement String#[]= takes: a String, or an object's #to_str. Any
    other value is CRuby's TypeError, raised before the String is touched --
    not spliced in as its to_s. A Class or an Encoding has no #to_str either,

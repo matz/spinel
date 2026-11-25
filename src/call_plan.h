@@ -1561,6 +1561,14 @@ typedef enum {
   CB_CHECK     /* decided where it runs */
 } CplanBlockArg;
 int cplan_block_arg(Compiler *c, int id, const char **cn);
+/* The same, judged where the call runs: a `&.` call's value as well, which
+   cplan_block_arg binds as written whatever it is, for the receiver may be
+   nil. An emitter that runs the call only on a receiver that is not nil
+   checks the value as CRuby converts it there. */
+int cplan_block_arg_value(Compiler *c, int id, const char **cn);
+/* CB_BINDS where only the builtins convert: no program method runs on the
+   way to the block (cplan_block_arg_value) */
+int cplan_block_arg_builtin_binds(Compiler *c, int id);
 
 /* ---- CM_*: a call that finds no method where it runs ----
    Whether call id -- receiverless, on self, or on a constant naming a

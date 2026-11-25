@@ -1347,8 +1347,9 @@ void emit_str_insert_text(Compiler *c, int arg, Buf *b) {
 
 /* The arguments argv[0..argc) gathered, left to right, into a new rooted poly
    array _t<ta>: a `*splat` contributes each of its elements, any other
-   argument itself, boxed. An anonymous `*` needs emit_anon_rest_ref to have
-   answered for it. */
+   argument itself, boxed; a keyword hash of `**h` splats alone only when it
+   is not empty, as CRuby passes none for an empty one. An anonymous `*`
+   needs emit_anon_rest_ref to have answered for it. */
 void emit_gather_call_args(Compiler *c, const int *argv, int argc, int ta, Buf *b) {
   const NodeTable *nt = c->nt;
   buf_printf(b, "sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", ta, ta);
@@ -1370,6 +1371,12 @@ void emit_gather_call_args(Compiler *c, const int *argv, int argc, int ta, Buf *
       }
       buf_puts(b, ");");
     }
+    else if (nt_kwh_splats_only(nt, argv[a])) {
+      int tk = ++g_tmp;
+      buf_printf(b, " sp_RbVal _t%d = ", tk);
+      emit_boxed(c, argv[a], b);
+      buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); if (sp_poly_length(_t%d) != 0) sp_PolyArray_push(_t%d, _t%d);", tk, tk, ta, tk);
+    }
     else {
       buf_printf(b, " sp_PolyArray_push(_t%d, ", ta);
       emit_boxed(c, argv[a], b);
@@ -1390,13 +1397,21 @@ void emit_gather_call_args(Compiler *c, const int *argv, int argc, int ta, Buf *
 /* The builtin push, append, unshift, insert, concat and << never call a
    block, so a literal one (`a.push(*r) { }`) is left out and the splat
    still spreads. Not when the program defines a method of that name: its
-   own method may yield. A `&blk` pass keeps the per-argument path too. */
+   own method may yield. A `&` pass is left out the same way where the plan
+   binds it as written with no program method run on the way
+   (cplan_block_arg_builtin_binds) and it is an anonymous `&` or a local's
+   read, which leaving unread changes nothing; any other keeps the
+   per-argument path. */
 int splat_mutator_block_ok(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   int blk = nt_ref(nt, id, "block");
   if (blk < 0) return 1;
   const char *name = nt_str(nt, id, "name");
-  return nt_kind(nt, blk) == NK_BlockNode && name && !an_user_defines_method(c, name);
+  if (!name || an_user_defines_method(c, name)) return 0;
+  if (nt_kind(nt, blk) == NK_BlockNode) return 1;
+  int fe = nt_kind(nt, blk) == NK_BlockArgumentNode ? nt_ref(nt, blk, "expression") : -2;
+  return (fe == -1 || (fe >= 0 && nt_kind(nt, fe) == NK_LocalVariableReadNode)) &&
+         cplan_block_arg_builtin_binds(c, id);
 }
 
 int emit_array_splat_mutator(Compiler *c, int id, Buf *b) {

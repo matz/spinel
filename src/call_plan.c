@@ -3309,7 +3309,6 @@ static int ct_implied_row(Compiler *c, int id, const char *name, int op) {
    version proved. An undef the record cannot place before id leaves the
    table's method, ML_TABLE, as cplan_hook_target does. ml may be NULL. */
 static int ct_implied_at(Compiler *c, int id, int cls, const char *name, MethodLookup *m);
-static int ver_chain_undef(Compiler *c, int rcls, int sg, const char *name);
 static int ct_table(Compiler *c, int cls, const char *name, unsigned flags, int *def_class, int *attr);
 /* Does an undef of `name` on cls's chain take the method away at call site: the
    record places the undef before site's point, unconditionally (elab_method_at
@@ -3317,11 +3316,22 @@ static int ct_table(Compiler *c, int cls, const char *name, unsigned flags, int 
    the record places it, not in a method's body or a block it cannot place,
    which may run before the undef? Anywhere else the table's method stands, as
    cplan_hook_target keeps it. */
-/* Does cls's instance chain hold an undef of name among the record's
+/* Does cls's chain (its side sg) hold an undef of name among the record's
    versions? Read from the version index alone: it places no node, so it
    does not rebuild the record's map after the table changed, which
-   placing the call outside a plan frame does once per ask (#12194). 1
-   where the index cannot say. */
+   placing the call outside a plan frame does once per ask (#12194). 1 or
+   0; -1 where the index cannot say (a class on the chain the record does
+   not hold, a mixin's unknown module, more than VER_MAX_ARMS versions:
+   elab_chain_versions answers -1 past its cap, so a list of exactly that
+   many is whole). Each caller says what an unknown means for it. */
+static int ver_chain_undef(Compiler *c, int cls, int sg, const char *name) {
+  ElabVersion vs[VER_MAX_ARMS];
+  int nv = elab_chain_versions(c, cls, sg, name, vs, VER_MAX_ARMS);
+  if (nv < 0) return -1;
+  for (int i = 0; i < nv; i++)
+    if (vs[i].v->kind == LR_UNDEF) return 1;
+  return 0;
+}
 /* cplan_chain_undef's answers, by class and name, while a pass that asks
    them of many sites and changes no chain holds them
    (cplan_chain_undef_hold): the chain's versions are the record's, which
@@ -3367,13 +3377,9 @@ static int cplan_chain_undef(Compiler *c, int cls, const char *name) {
   cu_put(cls, name, ans);
   return ans;
 }
+/* (cls's instance chain may hold an undef of name: unknown reads as may) */
 static int cplan_chain_undef_ask(Compiler *c, int cls, const char *name) {
-  ElabVersion vs[VER_MAX_ARMS];
-  int nv = elab_chain_versions(c, cls, 0, name, vs, VER_MAX_ARMS);
-  if (nv < 0 || nv >= VER_MAX_ARMS) return 1;   /* (the index cannot say, or holds more: ask) */
-  for (int i = 0; i < nv; i++)
-    if (vs[i].v && vs[i].v->kind == LR_UNDEF) return 1;
-  return 0;
+  return ver_chain_undef(c, cls, 0, name) != 0;
 }
 /* See call_plan.h. */
 int cplan_string_may_undef(Compiler *c, const char *name) {
@@ -3384,11 +3390,13 @@ int cplan_string_may_undef(Compiler *c, const char *name) {
 int cplan_undef_before(Compiler *c, int site, int cls, const char *name) {
   /* (no undef on the chain: none is in force at any point, and the answer
      below is 1 only for an undef) */
-  if (site < 0 || !cplan_chain_undef(c, cls, name) || elab_in_unplaced_block(c, site)) return 0;
+  if (site < 0 || !cplan_chain_undef(c, cls, name)) return 0;
+  /* (the block the site stands in is asked in the frame too: outside it, a
+     pass that split a call since the last ask rebuilt the map, #12542) */
   int framed = elab_plan_enter(c, site);
   LoadPoint p = elab_point_of(c, site);
   const LrDef *d = NULL;
-  int o = p.region >= 0 ? elab_method_at(c, cls, name, 0, p, &d) : ELAB_UNKNOWN;
+  int o = p.region >= 0 && !elab_in_unplaced_block(c, site) ? elab_method_at(c, cls, name, 0, p, &d) : ELAB_UNKNOWN;
   if (framed) elab_plan_leave(c);
   return o == ELAB_NO && d && d->kind == LR_UNDEF;
 }
@@ -3400,7 +3408,7 @@ int cplan_implied_target(Compiler *c, int site, int op, int cls, const char *nam
   side &= ~(unsigned)CIT_TABLE;
   mtab_enter(c);
   /* (an undef the table no longer holds, a later def having replaced it, is in the record's versions) */
-  int undef = !table_only && !(side & (CT_CMETHOD | CT_TOP)) && (comp_is_undeffed_in_chain(c, cls, name) || (elab_method_versions(c, name) > 1 && ver_chain_undef(c, cls, 0, name)));
+  int undef = !table_only && !(side & (CT_CMETHOD | CT_TOP)) && (comp_is_undeffed_in_chain(c, cls, name) || (elab_method_versions(c, name) > 1 && ver_chain_undef(c, cls, 0, name) == 1));
   mtab_leave(c);
   /* (a call no planned row makes, a builtin's callback or a row not planned
      yet, is not asked of the record: the table's method, as call_target
@@ -4267,14 +4275,6 @@ static int ct_face_for(Compiler *c, int rcls, int sg, const char *name, unsigned
   if (cplan_mm_method(c, -1, oc, 0) >= 0) return VF_NONE;
   return ver_arms_closed(c, rcls, name, face, NULL) == -1 ? face : VF_NONE;
 }
-/* Does rcls's chain (its side sg) hold an undef of name? */
-static int ver_chain_undef(Compiler *c, int rcls, int sg, const char *name) {
-  ElabVersion vs[VER_MAX_ARMS];
-  int nv = elab_chain_versions(c, rcls, sg, name, vs, VER_MAX_ARMS);
-  for (int i = 0; i < nv; i++)
-    if (vs[i].v->kind == LR_UNDEF) return 1;
-  return 0;
-}
 static int ct_block_self_call(Compiler *c, int node);
 static int block_self_call_in(Compiler *c, const int *par, int n, int node, const CplanTreeFacts *tree);
 /* The self the block of call bsc (ct_block_self_call) runs with, as its
@@ -4383,7 +4383,7 @@ static int ver_protected_closed(Compiler *c, int id, int rcls, const char *name)
    only Object's owner apart, object_protected_open). (Elsewhere its entry
    is the one every other call takes.) */
 static int ct_call_face(Compiler *c, int id, int rcls, int sg, const char *name, unsigned flags, int none) {
-  if (id >= 0 && nt_kind(c->nt, id) == NK_CallNode && nt_vcall(c->nt, id) && (none || ver_chain_undef(c, rcls, sg, name))) return VF_VCALL;
+  if (id >= 0 && nt_kind(c->nt, id) == NK_CallNode && nt_vcall(c->nt, id) && (none || ver_chain_undef(c, rcls, sg, name) == 1)) return VF_VCALL;   /* (unknown: no vcall face) */
   /* (a call that enforces visibility, which may meet none of a class's definition hook: the core's private hook
      raises for it, where a send's runs it, ct_core_hook) */
   if (none && sg && id >= 0 && cplan_call_enforces_vis(c, id) && is_definition_hook_name(name)) return VF_PRIVATE;
@@ -5951,7 +5951,7 @@ static int ct_main_builtin_undef(Compiler *c, int id, const char *name) {
   const LrDef *d = NULL;
   unsigned f = CT_TOP;
   mtab_enter(c);   /* (the plan's own reads: main's lookup tail and the table's lookup of the name, as ct_main_stopped's) */
-  int none = builtin_self_method_known(name, BSELF_MAIN) && ct_pin_of(c, id) == -1 && ver_chain_undef(c, -1, 1, name) &&
+  int none = builtin_self_method_known(name, BSELF_MAIN) && ct_pin_of(c, id) == -1 && ver_chain_undef(c, -1, 1, name) == 1 &&
              comp_main_method(c, METHOD_MISSING_NAME) < 0 && cplan_mm_method(c, -1, -1, 0) < 0 && ct_runs_on_main(c, id) &&
              ct_lookup(c, id, -1, name, &f, NULL) < 0;
   mtab_leave(c);
@@ -6682,9 +6682,9 @@ static int pr_in_untyped_block(Compiler *c, int id) {
 /* Does node run at once, where it stands (ct_before_versions' proof for a call: no method body, and no block or lambda
    that may run later, ct_after_point and elab_blocks_run_at_once)? */
 int cplan_runs_at_once(Compiler *c, int node) {
-  if (elab_in_method_body(c, node)) return 0;
+  /* (in the frame, the method body too: outside it, a table changed since the last ask rebuilt the map) */
   int framed = elab_plan_enter(c, node);
-  int once = !ct_after_point(c, node) && elab_blocks_run_at_once(c, node);
+  int once = !elab_in_method_body(c, node) && !ct_after_point(c, node) && elab_blocks_run_at_once(c, node);
   if (framed) elab_plan_leave(c);
   return once;
 }
@@ -6692,12 +6692,15 @@ int cplan_runs_at_once(Compiler *c, int node) {
 int cplan_runs_once(Compiler *c, int node) {
   return cplan_runs_at_once(c, node) && !elab_runs_again(c, node);
 }
-/* See call_plan.h. */
+/* See call_plan.h. Asked in the plan frame, as cplan_undef_before is: outside it, each ask after a pass changed
+   the table rebuilt the record's map (#12194), and desugar_missing_method_calls, which splits a call between its
+   asks, rebuilt it once per String call site (#12542). */
 int cplan_undef_at(Compiler *c, int id, int cls, const char *name) {
+  int framed = elab_plan_enter(c, id), o = ELAB_UNKNOWN;
   LoadPoint p = elab_point_of(c, id);
-  if (p.region < 0 || !cplan_runs_once(c, id)) return -1;
   const LrDef *d = NULL;
-  int o = elab_method_at(c, cls, name, 0, p, &d);
+  if (p.region >= 0 && cplan_runs_once(c, id)) o = elab_method_at(c, cls, name, 0, p, &d);
+  if (framed) elab_plan_leave(c);
   if (o == ELAB_UNKNOWN) return -1;
   return o == ELAB_NO && d && d->kind == LR_UNDEF;
 }
@@ -11998,11 +12001,10 @@ int cplan_has_method_missing(Compiler *c, int id, int ci, int cmethod) {
 }
 
 int cplan_string_missing(Compiler *c, int id, const char *name, int *hook, int *undef) {
+  /* (no undef of the name on String's chain: no call misses it, and the
+     call is not placed to say so) */
+  if (cplan_builtin_call(c, id) || !cplan_string_may_undef(c, name)) return 0;
   int ci = comp_core_class(c, CORE_STRING);
-  if (ci < 0 || !elab_method_versions(c, name) || cplan_builtin_call(c, id) || !builtin_instance_method_known("String", name)) return 0;
-  /* (no undef of the name on String's chain: no call misses it, and
-     cplan_undef_at would place the call outside a plan frame to say so) */
-  if (!cplan_chain_undef(c, ci, name)) return 0;
   *undef = cplan_undef_before(c, id, ci, name) ? 1 : cplan_undef_at(c, id, ci, name);
   if (!*undef) return 0;
   *hook = cplan_mm_method(c, id, ci, 0);

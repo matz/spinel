@@ -6720,6 +6720,14 @@ INCLUDE_COPIES_LIMIT ?= 2.8
 # the method's writes and reads of the parameter, for each method: 4.00x at
 # 2x the methods; 2.00x with each scope's locals indexed once.
 BLOCK_CONDITIONS_LIMIT ?= 2.2
+# N call sites desugar_missing_method_calls asks of String's chain, N/2
+# mixins long, or splits (test/scale/missing_method_sites.sh), compiled to C
+# at N=400 and N=800: the pass's counted work (node accesses and name
+# compares; the relowering counts each listed send it visits). 3.76x at 2x
+# the sites where each split of a String arm rebuilt the load record's map
+# at the next site's undef ask, outside the plan frame; 2.37x with the
+# asks in the frame (#12542). The limit sits between them.
+MISSING_METHOD_SITES_LIMIT ?= 2.6
 # A chain of forty bangs over a String a method answers, compiled to C with
 # under a CPU-time limit, as the hash-literal fan-out is:
 # strbuf_bang_self_local asked each link once per path that reaches it,
@@ -6861,6 +6869,9 @@ scale-test: $(SPINEL_WORK)
 	gen inherited_class_calls 200 ih2.rb; gen inherited_class_calls 800 ih8.rb; \
 	iha=$$(sws an_class_structure -c -o "$$tmp/ih2.c" "$$tmp/ih2.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	ihb=$$(sws an_class_structure -c -o "$$tmp/ih8.c" "$$tmp/ih8.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	gen missing_method_sites 400 mm4.rb; gen missing_method_sites 800 mm8.rb; \
+	mma=$$(sws desugar_missing_method_calls -c -o "$$tmp/mm4.c" "$$tmp/mm4.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	mmb=$$(sws desugar_missing_method_calls -c -o "$$tmp/mm8.c" "$$tmp/mm8.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	rm -rf "$$tmp"; \
 	if [ -z "$$wa" ] || [ -z "$$wb" ] || [ -z "$$fa" ] || [ -z "$$fb" ] || [ -z "$$pa" ] || [ -z "$$pb" ] || \
 	   [ -z "$$ha" ] || [ -z "$$hb" ] || [ -z "$$ca" ] || [ -z "$$cb" ] || [ -z "$$sa" ] || [ -z "$$sb" ] || \
@@ -6969,7 +6980,10 @@ scale-test: $(SPINEL_WORK)
 	  { echo "scale-test: FAIL (each class a call may land on asked lookups that answer the same for every class: see ct_face_for)"; exit 1; }; \
 	awk -v a="$$iha" -v b="$$ihb" -v lim="$(INHERITED_CLASS_CALLS_LIMIT)" 'BEGIN { if (a <= 0) a = 1; r = b / a; \
 	  printf "scale-test: inherited class method lookup work at 4x the classes is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
-	  { echo "scale-test: FAIL (each class-body call scanned every scope per ancestor for its name: see comp_scope_batch_begin)"; exit 1; }
+	  { echo "scale-test: FAIL (each class-body call scanned every scope per ancestor for its name: see comp_scope_batch_begin)"; exit 1; }; \
+	awk -v a="$$mma" -v b="$$mmb" -v lim="$(MISSING_METHOD_SITES_LIMIT)" 'BEGIN { if (a <= 0) a = 1; r = b / a; \
+	  printf "scale-test: missing-method split work at 2x the call sites is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
+	  { echo "scale-test: FAIL (desugar_missing_method_calls's counted work grew faster than its call sites, as where an undef ask rebuilt the map per site outside the plan frame: see cplan_undef_at and cplan_undef_before)"; exit 1; }
 
 .PHONY: bisect-test
 # `spinel bisect`, end to end. The search has its own corpus test

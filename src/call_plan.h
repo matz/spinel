@@ -1312,7 +1312,8 @@ int cplan_string_missing(Compiler *c, int id, const char *name, int *hook, int *
 /* Can an undef make a call to String's builtin name miss: String has a class
    id, the name has versions, and String's chain holds an undef of it in the
    record's version index (which places no node). 0 lets a pass skip the
-   call without asking where it runs. */
+   call without asking where it runs; the one test of it, which
+   cplan_string_missing asks first. */
 int cplan_string_may_undef(Compiler *c, const char *name);
 /* While on, cplan_chain_undef (the undef of a name on a class's chain the
    string questions above read) answers a class and name asked before as

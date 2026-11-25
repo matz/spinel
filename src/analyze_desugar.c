@@ -27814,7 +27814,7 @@ int desugar_class_new_blocks(Compiler *c, HostStep *h) {
       int cls = cn_make_class(nt, id, is_module, name, super_node, body);
       if (cls < 0) continue;
       nt_node_set_int(nt, cls, "class_new_anonymous", rt ? 3 : 2);
-      if (rt && omitted) nt_node_set_int(nt, cls, super_node >= 0 ? "rt_bare_super" : "rt_bare", 1);
+      if (rt && omitted) nt_node_set_int(nt, cls, "rt_bare", 1);
       /* (one class for every evaluation of a block: register_rt_sites) */
       if (!rt && !omitted && cn_site_repeats(nt, parent, id)) nt_node_set_int(nt, cls, "class_new_static_repeat", 1);
       nt_node_set_int(nt, cls, "block_made_body", 1);

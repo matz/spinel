@@ -8369,7 +8369,7 @@ void register_rt_sites(Compiler *c) {
   ANameHash defnames = {0};
   int named = 0, per_eval = 1;
   for (int i = 0; i < c->nclasses; i++) {
-    int def = c->classes[i].def_node, bare = nt_int(c->nt, def, "rt_bare_super", 0);
+    int def = c->classes[i].def_node, bare = nt_int(c->nt, def, "rt_bare", 0);
     int rec = c->classes[i].is_struct || c->classes[i].is_data ? class_def_record(c->nt, def) : -1;
     if (nt_int(c->nt, def, "class_new_static_repeat", 0) || (rec >= 0 && nt_int(c->nt, rec, "class_new_static_repeat", 0)))
       per_eval = 0;
@@ -8382,8 +8382,8 @@ void register_rt_sites(Compiler *c) {
            !a->ary_time && !a->c_struct && !a->is_native_class && !a->nsub_root && !a->cext_layout;
       if (k == a->parent) break;
     }
-    if (ok) c->classes[i].rt_site = bare ? RT_SITE_BARE_SUPER : RT_SITE_OWN;
-    else if (!bare && !nt_int(c->nt, def, "rt_bare", 0)) per_eval = 0;
+    if (ok) c->classes[i].rt_site = bare ? RT_SITE_BARE : RT_SITE_OWN;
+    else if (!bare) per_eval = 0;
   }
   c->rt_identity_per_eval = per_eval;
   for (int i = 0; i < c->nclasses && !c->has_rt_classes; i++) c->has_rt_classes = cplan_rt_site(c, i);

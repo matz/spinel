@@ -537,9 +537,9 @@ const struct BuiltinOp *cplan_builtin_handle_row(Compiler *c, int id);
 const BuiltinClassOp *cplan_builtin_class_row(Compiler *c, int id, const char *cls);
 /* Is program class ci the site class of classes made at run time
    (ClassInfo.rt_site): its instances carry the class each was made from,
-   and a value of its class may be any of them? A site with a superclass
-   written and no block is one only where the program answers class
-   identity per evaluation (Compiler.rt_identity_per_eval). ci -1: does the
+   and a value of its class may be any of them? A site with no block is one
+   only where the program answers class identity per evaluation
+   (Compiler.rt_identity_per_eval). ci -1: does the
    program have any such class? */
 int cplan_rt_site(const Compiler *c, int ci);
 /* What a Class.new or Module.new evaluated more than once answers

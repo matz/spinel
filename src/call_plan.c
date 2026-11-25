@@ -8107,7 +8107,7 @@ const BuiltinClassOp *cplan_builtin_class_row(Compiler *c, int id, const char *c
 int cplan_rt_site(const Compiler *c, int ci) {
   if (ci < 0) return c->has_rt_classes;
   int k = ci < c->nclasses ? c->classes[ci].rt_site : RT_SITE_NONE;
-  return k == RT_SITE_OWN || (k == RT_SITE_BARE_SUPER && c->rt_identity_per_eval);
+  return k == RT_SITE_OWN || (k == RT_SITE_BARE && c->rt_identity_per_eval);
 }
 int cplan_class_value_may_be_rt(Compiler *c, int node) {
   if (!c->has_rt_classes) return 0;

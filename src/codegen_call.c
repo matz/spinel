@@ -35601,10 +35601,15 @@ void emit_super_respond_to(Compiler *c, int id, Scope *s, Buf *b) {
   int fwd = ty_k == NK_ForwardingSuperNode;
   int args = fwd ? -1 : nt_ref(nt, id, "arguments");
   int argc = 0; const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
+  /* (a list whose count the run gives is gathered and checked first: its first element is the name, its second
+     include_all) */
+  Buf gb = {0, 0, 0};
+  int ga = emit_super_gathered_args(c, id, s, 1, &gb);
   int t = ++g_tmp;
   /* the name: a symbol, a string (interned), or a boxed value of either */
   Buf nm = {0, 0, 0}; TyKind nt_ty;
-  if (fwd) {
+  if (ga >= 0) { buf_printf(&nm, "_t%d->data[0]", ga); nt_ty = TY_POLY; }
+  else if (fwd) {
     LocalVar *lv = scope_local(s, s->pnames[0]);
     nt_ty = lv && lv->type != TY_UNKNOWN ? lv->type : TY_POLY;
     /* an Integer or Float parameter that also takes nil goes in boxed */
@@ -35620,11 +35625,13 @@ void emit_super_respond_to(Compiler *c, int id, Scope *s, Buf *b) {
   /* a name of another kind is held boxed, and checked after the
      arguments and the block argument have run */
   int tn = -1;
-  if (nt_ty == TY_SYMBOL) buf_printf(b, "({ sp_sym _s%d = %s", t, nm.p ? nm.p : "0");
-  else if (nt_ty == TY_STRING) buf_printf(b, "({ sp_sym _s%d = sp_sym_intern(%s)", t, nm.p ? nm.p : "\"\"");
+  buf_printf(b, "({ %s", gb.p ? gb.p : "");
+  free(gb.p);
+  if (nt_ty == TY_SYMBOL) buf_printf(b, "sp_sym _s%d = %s", t, nm.p ? nm.p : "0");
+  else if (nt_ty == TY_STRING) buf_printf(b, "sp_sym _s%d = sp_sym_intern(%s)", t, nm.p ? nm.p : "\"\"");
   else {
     tn = ++g_tmp;
-    buf_printf(b, "({ sp_RbVal _t%d = ", tn);
+    buf_printf(b, "sp_RbVal _t%d = ", tn);
     emit_boxed_text(c, nt_ty, nm.p ? nm.p : "sp_box_nil()", b);
     buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_sym _s%d = 0", tn, t);
   }
@@ -35632,7 +35639,8 @@ void emit_super_respond_to(Compiler *c, int id, Scope *s, Buf *b) {
   /* include_all: the second argument or parameter, false when absent */
   buf_printf(b, "; sp_bool _i%d = ", t);
   Buf ia = {0, 0, 0}; TyKind ia_ty = TY_BOOL; int have_ia = 0;
-  if (fwd && s->nparams >= 2) {
+  if (ga >= 0) { buf_printf(&ia, "(_t%d->len > 1 && sp_poly_truthy(_t%d->data[1]))", ga, ga); have_ia = 1; }
+  else if (fwd && s->nparams >= 2) {
     LocalVar *lv = scope_local(s, s->pnames[1]);
     ia_ty = lv && lv->type != TY_UNKNOWN ? lv->type : TY_POLY;
     if (lv && slot_is_oint(lv)) { emit_boxed_fwd_param(c, s, 1, &ia); ia_ty = TY_POLY; }

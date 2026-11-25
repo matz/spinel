@@ -18345,12 +18345,16 @@ static void emit_super_value(Compiler *c, int id, Buf *b) {
       int fwd = sk == NK_ForwardingSuperNode;
       int sargs = fwd ? -1 : nt_ref(c->nt, id, "arguments");
       int sargc = 0; const int *sargv = sargs >= 0 ? nt_arr(c->nt, sargs, "arguments", &sargc) : NULL;
+      Buf rb; memset(&rb, 0, sizeof rb);
+      buf_puts(&rb, "({ ");
+      /* (the first of a list the run counts, gathered and checked first) */
+      int ga = emit_super_gathered_args(c, id, s, 1, &rb);
       int tk = ++g_tmp;
       Buf kb; memset(&kb, 0, sizeof kb);
-      if (fwd) emit_boxed_fwd_param(c, s, 0, &kb);
+      if (ga >= 0) buf_printf(&kb, "_t%d->data[0]", ga);
+      else if (fwd) emit_boxed_fwd_param(c, s, 0, &kb);
       else emit_boxed(c, sargv[0], &kb);
-      Buf rb; memset(&rb, 0, sizeof rb);
-      buf_printf(&rb, "({ sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d); ", tk, kb.p ? kb.p : "sp_box_nil()", tk);
+      buf_printf(&rb, "sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d); ", tk, kb.p ? kb.p : "sp_box_nil()", tk);
       emit_super_blockarg_effect(c, id, &rb);
       buf_printf(&rb, "if (_t%d.tag != SP_TAG_CLASS) sp_raise_cls(\"TypeError\", \"class or module required\"); ", tk);
       /* (a by-value object, detect_value_types, is of the method's class: no class below it builds one,

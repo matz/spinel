@@ -1233,10 +1233,10 @@ static BsuperArm cplan_super_instance_arm(Compiler *c, int id, const Scope *s, c
   if (cplan_super_count_fails(c, id, s, uname, bowner, &exp) >= 0) return BSUP_ARITY;
   if (exc && is_exception_message(uname)) return BSUP_EXC_TEXT;
   switch (object_super_arm(uname)) {
-  case OSA_RESPOND_TO: if (cplan_super_argc(c, id, s) >= 1) return BSUP_RESPOND_TO; break;
+  case OSA_RESPOND_TO: if (cplan_super_arm_takes(c, id, s, uname, bowner)) return BSUP_RESPOND_TO; break;
   case OSA_FREEZE: return BSUP_FREEZE;
-  case OSA_IS_A: if (cplan_super_argc(c, id, s) == 1) return BSUP_IS_A; break;
-  case OSA_INSTANCE_OF: if (cplan_super_argc(c, id, s) == 1) return BSUP_INSTANCE_OF; break;
+  case OSA_IS_A: if (cplan_super_arm_takes(c, id, s, uname, bowner)) return BSUP_IS_A; break;
+  case OSA_INSTANCE_OF: if (cplan_super_arm_takes(c, id, s, uname, bowner)) return BSUP_INSTANCE_OF; break;
   default: break;
   }
   if (is_with_name(uname) && ci->is_struct && ci->is_data) return BSUP_DATA_WITH;
@@ -1260,7 +1260,7 @@ static int cplan_object_args_spelled(Compiler *c, int id, const Scope *s, const 
   unsigned sh = cplan_super_args_shape(c, id, s);
   if (sh & (SAS_FWD | SAS_UNSPELLED)) return 0;
   /* (nor a spread of a run-time length into a method of a bounded count, whose call the call layer does not take:
-     the plan's arm reads the count the run gives, emit_super) */
+     the plan's arm gathers it and checks the count the run gives, emit_super_gathered_args) */
   int lo, hi;
   const char *lo_exp, *hi_exp;
   if ((sh & SAS_SPLAT) && cplan_owner_arity(uname, bowner, &lo, &hi, &lo_exp, &hi_exp)) return 0;

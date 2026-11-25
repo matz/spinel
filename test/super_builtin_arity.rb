@@ -110,3 +110,36 @@ begin
 rescue NoMethodError => nme
   p nme.class
 end
+
+# a super whose count the run gives (a rest, a splat) into respond_to?,
+# is_a? or instance_of?: the list is the arguments, counted as CRuby counts
+module RM; end
+class RA
+  include RM
+  def respond_to?(*args, &blk); super; end
+  def is_a?(*a) = super
+  def instance_of?(*a)
+    [1].map { super(*a) }.first
+  end
+  def foo; end
+end
+class RB < RA; def bar; end; end
+class RC < RB
+  def respond_to?(m, *rest) = super
+end
+ra = RA.new; rb = RB.new; rc = RC.new
+run { p ra.respond_to?(:foo), ra.respond_to?("foo"), ra.respond_to?(:bar) }
+run { p rb.respond_to?(:bar), rc.respond_to?(:bar), rc.respond_to?(:foo, true) }
+run { p ra.respond_to?(*[:foo, nil]) }
+run { p ra.respond_to?(nil) }
+run { p(ra.respond_to?(:foo) { 1 }) }
+run { p [ra.respond_to?(:foo), rb.respond_to?(:zz)] }
+run { p ra.respond_to?(*[]) }
+run { p ra.respond_to?(:foo, true, 1) }
+run { p rc.respond_to?(:foo, true, 1) }
+run { p ra.is_a?(RM), rc.is_a?(RA), rc.is_a?(String) }
+run { p ra.is_a?(nil) }
+run { p rc.is_a?(*[RB]) }
+run { p rc.is_a?(RB, RB) }
+run { p ra.instance_of?(RA), rc.instance_of?(RA), rc.instance_of?(RC) }
+run { p rc.instance_of? }

@@ -19189,6 +19189,11 @@ static int infer_block_params_enum_arms(Compiler *c, const NodeTable *nt, int id
     TyKind arr_t2 = es_recv2 >= 0 ? infer_type(c, es_recv2) : TY_UNKNOWN;
     /* a Range under the chain types its params as the materialized int array */
     if (arr_t2 == TY_RANGE && range_enum_redispatch(c, recv)) arr_t2 = TY_INT_ARRAY;
+    /* a boxed receiver's slices are those of the poly Array its dispatch
+       regroups, as for the block form above: left untyped until the late
+       widen, a param handed to a lambda let the lambda's parameter take the
+       Integer default */
+    if (arr_t2 == TY_POLY) arr_t2 = TY_POLY_ARRAY;
     if (ty_is_array(arr_t2)) {
       Scope *es2 = comp_scope_of(c, block);
       int np2 = 0; while (block_param_name(c, block, np2)) np2++;

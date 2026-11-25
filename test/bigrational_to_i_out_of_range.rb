@@ -1,3 +1,4 @@
+# spinel: not-cruby -- raise and wrap give a RangeError where CRuby answers the Bignum (promote_bigrational_to_i.rb is CRuby's)
 # raise/wrap only: a Bignum-numerator Rational whose integer value is wider
 # than the machine word. The sp_int slot cannot carry it, so it is the same
 # loud RangeError a boxed Bignum's #to_i gives, pending #2024 -- where it

@@ -47,8 +47,10 @@
 
    view_push_range_tested says an element write's index was tested against
    the array's cached write length ahead of it (the header cache's joint
-   guard), so the write stores in place with no test of its own; like a
-   call's nil test it views no cached type.
+   guard), so the write stores in place with no test of its own, and with
+   RANGE_TESTED_OPND that its right-hand side, held as an optional value,
+   was tested for nil there too; like a call's nil test it views no cached
+   type.
 
    view_push_arm does the same for the arm context a poly dispatch's
    builtin arm re-enters the call under (g_arm: the node whose dispatch
@@ -446,9 +448,10 @@ int view_call_nil_tested(Compiler *c, int id) {
   return 0;
 }
 
-/* An element write whose index the enclosing joint guard tested. */
-int view_push_range_tested(Compiler *c, int id) {
-  int tok = view_open_mark(VK_RANGE_TESTED, id, 0, NULL);
+/* An element write whose index the enclosing joint guard tested, and with
+   RANGE_TESTED_OPND its right-hand side's nil too. */
+int view_push_range_tested(Compiler *c, int id, int tested) {
+  int tok = view_open_mark(VK_RANGE_TESTED, id, tested | RANGE_TESTED_INDEX, NULL);
   view_stack[tok].c = c;
   view_nodes++;
   view_epoch_n++;
@@ -456,7 +459,8 @@ int view_push_range_tested(Compiler *c, int id) {
 }
 int view_range_tested(Compiler *c, int id) {
   for (int i = view_sp - 1; i >= 0; i--)
-    if (view_stack[i].kind == VK_RANGE_TESTED && view_stack[i].c == c && view_stack[i].id == id) return 1;
+    if (view_stack[i].kind == VK_RANGE_TESTED && view_stack[i].c == c && view_stack[i].id == id)
+      return view_stack[i].saved;
   return 0;
 }
 

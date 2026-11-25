@@ -12892,9 +12892,21 @@ int hc_index_in_range(Compiler *c, int recv, int idx) {
    wraps past any length, so the test fails, and the run as written raises
    the overflow where Ruby does.
 
+   A right-hand side that may be nil (`v = vals[j]` read once per row) is
+   unwrapped at its operator, a test and a raise between the stores; one
+   that the guard can read ahead by the same rule, and that cannot raise,
+   is tested for nil there too, and the fast arm adds its value unchecked.
+
    A run holds at most HC_JOINT_MAX statements (the run is emitted twice),
    and its `hc-joint` decision may be denied. */
 #define HC_JOINT_MAX 4
+/* Does `node` read what no store of the run can change, running no code
+   (an index read of an Array is left out: a store ahead of it may write
+   that element)? */
+static int hc_joint_reads_ahead(Compiler *c, int node) {
+  OrderWalk w = { .ran = view_ran_first, .alloc = 1, .no_elems = 1 };
+  return order_pure_walk(c, node, &w);
+}
 /* Can the joint guard compute the index `key` of the run's `pos`-th
    statement ahead of the run? */
 static int hc_joint_key_ok(Compiler *c, int key, int pos) {
@@ -12903,8 +12915,7 @@ static int hc_joint_key_ok(Compiler *c, int key, int pos) {
   /* (the first index is computed where Ruby computes it, ahead of every
      store; it runs again in the other arm, so it is a pure read) */
   if (pos == 0) return subtree_is_pure_read(c, key);
-  OrderWalk w = { .ran = view_ran_first, .alloc = 1, .no_elems = 1 };
-  if (!order_pure_walk(c, key, &w)) return 0;
+  if (!hc_joint_reads_ahead(c, key)) return 0;
   long long lit;
   return !an_expr_may_raise(c, key) ||
          (index_sum_lit(c, key, &lit) && !an_expr_may_raise(c, nt_ref(c->nt, key, "receiver")));
@@ -24867,13 +24878,35 @@ static int hc_joint_emit(Compiler *c, const int *stmts, int m, Buf *b, int inden
     buf_puts(&g, "; ");
     buf_printf(&test, "%s(unsigned long long)_t%d < (unsigned long long)%s", j ? " && " : "", kt[j], wl);
   }
+  /* a right-hand side held as an optional value is tested for nil with the
+     indices when it reads nothing a store of the run could change and
+     cannot raise: the fast arm then adds its value with no test between
+     the stores, and a nil takes the run as written, which raises it where
+     Ruby does, after the stores ahead of it. (A test of its own, ahead of
+     the indices': the C compiler keeps the flag of a value the loop does
+     not change in a register and branches on it alone, where one test of
+     all would fold it into the range compare at every iteration.) */
+  int opnd[HC_JOINT_MAX];
+  Buf nils; memset(&nils, 0, sizeof nils);
+  for (int j = 0; j < m; j++) {
+    int v = nt_ref(nt, stmts[j], "value");
+    opnd[j] = iow_opnd_held(c, stmts[j]) && hc_joint_reads_ahead(c, v) && !an_expr_may_raise(c, v);
+    if (!opnd[j]) continue;
+    Buf ob; memset(&ob, 0, sizeof ob);
+    TyKind vt = repr_of(c, v).as_ty;
+    emit_oint_expr(c, v, vt, &ob);
+    buf_printf(&nils, "%s!(%s).nil", nils.len ? " && " : "", ob.p ? ob.p : oint_nil(vt));
+    free(ob.p);
+  }
   /* the first index runs where its statement does, so an error it raises
      names that statement's line (the later ones raise in the arm as
      written, behind their own statements' lines) */
   emit_line_directive(c, stmts[0], b);
   buf_puts(b, g.p);
   free(g.p);
-  buf_printf(b, "if (SP_LIKELY(%s)) {\n", test.p);
+  if (nils.len) buf_printf(b, "if (SP_LIKELY(%s) && SP_LIKELY(%s)) {\n", nils.p, test.p);
+  else buf_printf(b, "if (SP_LIKELY(%s)) {\n", test.p);
+  free(nils.p);
   free(test.p);
   int sv_cur = g_stmt_cur, sv_prev = g_stmt_prev;
   int nb = g_n_argov;
@@ -24882,7 +24915,7 @@ static int hc_joint_emit(Compiler *c, const int *stmts, int m, Buf *b, int inden
     const int *argv = nt_arr(nt, args, "arguments", &argc);
     g_stmt_cur = stmts[j]; g_stmt_prev = j ? stmts[j - 1] : sv_prev;
     view_bind_temp(argv[0], kt[j]);
-    int tok = view_push_range_tested(c, stmts[j]);
+    int tok = view_push_range_tested(c, stmts[j], opnd[j] ? RANGE_TESTED_OPND : 0);
     emit_stmt(c, stmts[j], b, indent + 1);
     view_pop(c, tok);
   }
@@ -27026,6 +27059,15 @@ int emit_index_opw_value_taken(void) { return g_iow_val_taken; }
 static int iow_fuses(Compiler *c, TyKind rt, Repr vr, int v) {
   return (rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY) && vr.kind != RK_BOXED && subtree_is_pure_read(c, v);
 }
+/* A right-hand side that can be nil, of the element's class (or an Integer
+   for a Float element), is held as its oint and unwrapped at the operator:
+   "nil can't be coerced into <the element's class>", after a nil element's
+   NoMethodError. One answer for emit_index_op_write and the joint guard. */
+static int iow_opnd_oint(TyKind rt, const char *op, Repr vr) {
+  TyKind et = ty_array_elem(rt);
+  return (rt == TY_FLOAT_ARRAY || rt == TY_INT_ARRAY) && is_arith_op(op) && vr.kind == RK_OPT &&
+         (vr.as_ty == et || (et == TY_FLOAT && vr.as_ty == TY_INT));
+}
 /* The fused fold's in-range test where the loop being emitted caches the
    array: *hd its data, *wl the length an index below it writes in place
    (for a Float element an operator reads, the nil-free one, which is 0
@@ -27054,6 +27096,13 @@ int iow_fused_cached(Compiler *c, int id, char *hd, char *wl, size_t cap) {
   TyKind rt = repr_of(c, recv).as_ty;
   if (!iow_fuses(c, rt, repr_of(c, v), v)) return 0;
   return iow_cached_write_len(c, recv, rt, op, hd, wl, cap);
+}
+/* See codegen_internal.h. */
+int iow_opnd_held(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  int recv = nt_ref(nt, id, "receiver"), v = nt_ref(nt, id, "value");
+  const char *op = nt_str(nt, id, "binary_operator");
+  return recv >= 0 && v >= 0 && op && iow_opnd_oint(repr_of(c, recv).as_ty, op, repr_of(c, v));
 }
 
 void emit_index_op_write(Compiler *c, int id, Buf *b, int indent) {
@@ -27253,11 +27302,9 @@ void emit_index_op_write(Compiler *c, int id, Buf *b, int indent) {
        below (iow_nil_rhs_ck). */
     Buf nfb; memset(&nfb, 0, sizeof nfb);
     /* a right operand that can be nil is held as its oint and unwrapped at
-       the operator: "nil can't be coerced into <the element's class>", after
-       a nil element's NoMethodError */
+       the operator (iow_opnd_oint) */
     TyKind et0 = ty_array_elem(rt);
-    int ro = (rt == TY_FLOAT_ARRAY || rt == TY_INT_ARRAY) && is_arith_op(op) && mode == IOW_RHS_EXPR &&
-             vr.kind == RK_OPT && (vt == et0 || (et0 == TY_FLOAT && vt == TY_INT));
+    int ro = mode == IOW_RHS_EXPR && iow_opnd_oint(rt, op, vr);
     char *rhs;
     if (ro) {
       int tro = ++g_tmp;
@@ -27268,8 +27315,12 @@ void emit_index_op_write(Compiler *c, int id, Buf *b, int indent) {
       buf_printf(b, "%s _t%d = %s; ", oint_ctype(vt), tro, ob.p ? ob.p : oint_nil(vt));
       free(ob.p);
       char rb[96];
-      snprintf(rb, sizeof rb, "%s%s(_t%d, \"%s\")", et0 == TY_FLOAT && vt == TY_INT ? "(sp_float)" : "",
-               vt == TY_FLOAT ? "sp_ofloat_opnd_in" : "sp_oint_opnd_in", tro, et0 == TY_FLOAT ? "Float" : "Integer");
+      /* (in a joint guard's fast arm that tested it for nil, the value) */
+      if (fuse && (view_range_tested(c, id) & RANGE_TESTED_OPND))
+        snprintf(rb, sizeof rb, "%s_t%d.v", et0 == TY_FLOAT && vt == TY_INT ? "(sp_float)" : "", tro);
+      else
+        snprintf(rb, sizeof rb, "%s%s(_t%d, \"%s\")", et0 == TY_FLOAT && vt == TY_INT ? "(sp_float)" : "",
+                 vt == TY_FLOAT ? "sp_ofloat_opnd_in" : "sp_oint_opnd_in", tro, et0 == TY_FLOAT ? "Float" : "Integer");
       rhs = strdup(rb);
     }
     else rhs = fnil && fuse && vt == TY_FLOAT && emit_nilfree_operand(c, v, op, 0, slot, &nfb)

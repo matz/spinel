@@ -27493,14 +27493,38 @@ static int cn_site_repeats(const NodeTable *nt, const int *parent, int id) {
    written builtin superclass other than Object keeps the one class the
    site makes: its instances are the builtin's (the class's own family, a
    program class's chain, and its body, registration answers,
-   register_rt_sites). */
-static int cn_rt_site(Compiler *c, const int *parent, int id, int super_node) {
-  int core = -1, par = parent[id];
-  if (!cn_site_repeats(c->nt, parent, id) || ct_in_walk_loop_block(c->nt, parent, id)) return 0;
-  if (par >= 0 && nt_ref(c->nt, par, "value") == id &&
-      (nt_kind(c->nt, par) == NK_ConstantWriteNode || nt_kind(c->nt, par) == NK_ConstantPathWriteNode)) return 0;
-  if (super_node >= 0) elab_class_ref_at(c, super_node, &core);
-  return core < 0 || core == CORE_OBJECT;
+   register_rt_sites). The superclass's core class is the one
+   cn_super_cores resolved before the pass edited the tree. */
+static int cn_rt_site_candidate(const NodeTable *nt, const int *parent, int id) {
+  int par = parent[id];
+  if (!cn_site_repeats(nt, parent, id) || ct_in_walk_loop_block(nt, parent, id)) return 0;
+  return !(par >= 0 && nt_ref(nt, par, "value") == id &&
+           (nt_kind(nt, par) == NK_ConstantWriteNode || nt_kind(nt, par) == NK_ConstantPathWriteNode));
+}
+static int cn_rt_site(const NodeTable *nt, const int *parent, const int *super_core, int id) {
+  int core = super_core[id];
+  return cn_rt_site_candidate(nt, parent, id) && (core < 0 || core == CORE_OBJECT);
+}
+/* The core class (elab_class_ref_at) each Class.new(super) of the first n
+   nodes that may be a run-time site (cn_rt_site_candidate) names as its
+   superclass, by call node, -1 for none: asked before the pass edits the
+   tree, the load record answers each from the one elaboration, where one
+   asked after an edit elaborated the program again. A superclass the pass
+   rewrites is no builtin's, so it answers -1 either way. */
+static int *cn_super_cores(Compiler *c, const int *parent, int n) {
+  const NodeTable *nt = c->nt;
+  int *core = malloc(sizeof(int) * (size_t)(n > 0 ? n : 1));
+  if (!core) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int id = 0; id < n; id++) {
+    core[id] = -1;
+    if (nt_kind(nt, id) != NK_CallNode) continue;
+    int recv = nt_ref(nt, id, "receiver"), an = nt_ref(nt, id, "arguments"), ac = 0;
+    const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
+    if (ac < 1 || recv < 0 || nt_kind(nt, recv) != NK_ConstantReadNode ||
+        !is_class_new(nt_str(nt, recv, "name"), nt_str(nt, id, "name")) || !cn_rt_site_candidate(nt, parent, id)) continue;
+    elab_class_ref_at(c, av[0], &core[id]);
+  }
+  return core;
 }
 /* What a statement of a Class.new block is checked against (cn_stmt_reruns):
    the program's def names, the block's one parameter (its class, NULL for
@@ -27643,6 +27667,7 @@ int desugar_class_new_blocks(Compiler *c, HostStep *h) {
   ANameHash defnames = {0};   /* (the program's def names, for a run-time site's block: cn_rt_body) */
   int *parent = an_build_parent_index(nt, n0);
   if (!parent) return 0;
+  int *super_core = cn_super_cores(c, parent, n0);
   for (int id = 0; id < n0; id++) {
     if (nt_kind(nt, id) != NK_CallNode) continue;
     const char *nm = nt_str(nt, id, "name");
@@ -27730,7 +27755,7 @@ int desugar_class_new_blocks(Compiler *c, HostStep *h) {
     }
     if (blk >= 0 && nt_kind(nt, blk) != NK_BlockNode) continue;
     int omitted = blk < 0;
-    int rt = cn_rt_site(c, parent, id, super_node);
+    int rt = cn_rt_site(nt, parent, super_core, id);
     /* An omitted block has the same empty class body as `{}`. */
     if (blk < 0) {
       if (ac > (is_module ? 0 : 1)) continue;
@@ -27880,6 +27905,7 @@ int desugar_class_new_blocks(Compiler *c, HostStep *h) {
     changed = 1;
   }
   free(parent);
+  free(super_core);
   anh_free(&defnames);
   if (changed) comp_grow_node_arrays(c);
   return changed;

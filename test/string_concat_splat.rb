@@ -131,3 +131,13 @@ begin; s.concat(*l("b"), &bad); rescue TypeError => e; p e.message; end
 begin; s&.prepend(*l("b"), &bad); rescue TypeError => e; p e.message; end
 begin; xs[0].concat(*l("b"), &bad); rescue TypeError => e; p e.message; end
 p s.concat(*l("b"), &none), s&.concat(*l("c"), &none), none&.concat(*l("d"), &bad)
+
+# a boxed Array, Range or Integer `&` value raises beside a run-time splat,
+# on a `&.` call too, before the receiver changes
+parts = ["b"]
+[[[], proc { }][0], [1..2, proc { }][0], [7, proc { }][0]].each do |v|
+  t = +"a"
+  begin; t.concat(*parts, &v); rescue TypeError => e; p e.message; end
+  begin; t&.prepend(*parts, &v); rescue TypeError => e; p e.message; end
+  p t
+end

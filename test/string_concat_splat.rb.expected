@@ -65,3 +65,12 @@ true
 "abc"
 "abc"
 nil
+"no implicit conversion of Array into Proc"
+"no implicit conversion of Array into Proc"
+"a"
+"no implicit conversion of Range into Proc"
+"no implicit conversion of Range into Proc"
+"a"
+"no implicit conversion of Integer into Proc"
+"no implicit conversion of Integer into Proc"
+"a"

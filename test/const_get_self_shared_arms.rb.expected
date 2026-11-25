@@ -1,0 +1,16 @@
+:alpha
+:beta
+["s", 7]
+:alpha
+7
+:sub_own
+:beta
+7
+:other_alpha
+80
+80
+"uninitialized constant Reg::Nope"
+"uninitialized constant Sub::Nope"
+"uninitialized constant Other::Beta"
+"uninitialized constant Tools::Alpha"
+"wrong constant name lower"

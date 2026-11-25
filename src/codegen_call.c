@@ -5454,11 +5454,21 @@ static int emit_dynamic_const_get(Compiler *c, int id, Buf *b) {
   if (rk >= 0 && class_ruby_name(c, rk)) rnm = class_ruby_name(c, rk);
   /* Object is no qualifier of the NameError: its id, whether or not a class reopens it */
   if (rk == CG_OBJECT || rk == comp_core_class(c, CORE_OBJECT)) rnm = NULL;
-  /* a `self` receiver names its class at run time in the miss: not shared */
-  const char *memo = rvk == NK_SelfNode ? NULL : (rnm ? rnm : "");
+  /* `self` in a class method is the class it runs on, a subclass too: the
+     miss names it at run time. It is held in a temp ahead of the arms, so
+     the function they become takes it as its second parameter and every
+     site on `self` with the same arms calls that function */
+  Buf sv = {0, 0, 0};
+  if (!def && rvk == NK_SelfNode && rk >= 0 && repr_of(c, recv).as_ty == TY_CLASS) emit_expr(c, recv, &sv);
+  int ts = -1;
+  if (sv.p) { ts = ++g_tmp; buf_printf(b, "sp_Class _t%d = %s; ", ts, sv.p); }
+  const char *memo = sv.p ? "\001self" : rvk == NK_SelfNode ? NULL : (rnm ? rnm : "");
   const char *had = memo ? cg_armfn_find(arms[0], narm, def, memo) : NULL;
   if (had) {
-    buf_printf(b, "%s _t%d = %s(_t%d); _t%d; })", def ? "sp_bool" : "sp_RbVal", tr, had, t, tr);
+    buf_printf(b, "%s _t%d = %s(_t%d", def ? "sp_bool" : "sp_RbVal", tr, had, t);
+    if (ts >= 0) buf_printf(b, ", _t%d", ts);
+    buf_printf(b, "); _t%d; })", tr);
+    free(sv.p);
     return 1;
   }
   size_t from = b->len;
@@ -5500,18 +5510,17 @@ static int emit_dynamic_const_get(Compiler *c, int id, Buf *b) {
     buf_printf(b, " _t%d; })", tr);
     return 1;
   }
-  /* `self` in a class method is the class it runs on, a subclass too */
-  Buf sv = {0, 0, 0};
-  if (rvk == NK_SelfNode && rk >= 0 && repr_of(c, recv).as_ty == TY_CLASS) emit_expr(c, recv, &sv);
   buf_printf(b, "{ if (!(_t%d[0] >= 'A' && _t%d[0] <= 'Z')) sp_raise_cls(\"NameError\", sp_sprintf(\"wrong constant name %%s\", _t%d)); ", t, t, t);
-  if (sv.p)
-    buf_printf(b, "else sp_raise_cls(\"NameError\", sp_sprintf(\"uninitialized constant %%s::%%s\", sp_class_val_name(sp_box_class(%s)), _t%d)); ",
-               sv.p, t);
+  if (ts >= 0)
+    buf_printf(b, "else sp_raise_cls(\"NameError\", sp_sprintf(\"uninitialized constant %%s::%%s\", sp_class_val_name(sp_box_class(_t%d)), _t%d)); ",
+               ts, t);
   else
     buf_printf(b, "else sp_raise_cls(\"NameError\", sp_sprintf(\"uninitialized constant %s%s%%s\", _t%d)); ",
                rnm ? rnm : "", rnm ? "::" : "", t);
   buf_printf(b, "_t%d = sp_box_nil(); } ", tr);
-  if (!pd_hoist(c, id, "const_get", b, from, tr, TY_POLY, &t, &nty, 1)) buf_puts(b, "}");
+  int pid[2] = { t, ts };
+  TyKind pty[2] = { nty, TY_CLASS };
+  if (!pd_hoist(c, id, "const_get", b, from, tr, TY_POLY, pid, pty, ts >= 0 ? 2 : 1)) buf_puts(b, "}");
   else if (memo) cg_armfn_add(arms[0], narm, def, memo, b->p + from);
   buf_printf(b, " _t%d; })", tr);
   free(sv.p);

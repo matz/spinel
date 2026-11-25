@@ -3213,24 +3213,37 @@ static void cg_cands_free(CgCands *cs) {
    `Object.const_get(name)` calls reach the same constants through the same
    receiver, so the second takes the first one's arms: a set per site made
    the node table grow with the sites times the constants (#12511), and
-   every later pass and the emitter walked each copy. */
-typedef struct { const char *nm; int rk, vis, recv; int *arms; int narm; } CgShared;
+   every later pass and the emitter walked each copy. A `self` receiver in a
+   class method is keyed apart (SELF): it reaches the constants of the
+   classes below its own too, and its arms read `self` in a class method of
+   the same class, which every such site, and every copy specialization made
+   of one, has. */
+typedef struct { const char *nm; int rk, vis, self, recv; int *arms; int narm; } CgShared;
 typedef struct { CgShared *v; int n, cap; } CgShares;
 
 /* The key of call ID on RECV when its arms can be shared, else 0: a constant
-   receiver whose class is known here, and no argument past the name. */
+   receiver whose class is known here, or `self` in a class method (not a
+   module_function's, whose self is an includer's object too), and no
+   argument past the name. */
 static int cg_share_key(Compiler *c, int id, int recv, int nrest, const char *nm, CgShared *key) {
   NodeKind rvk = nt_kind(c->nt, recv);
-  if (nrest != 0 || (rvk != NK_ConstantReadNode && rvk != NK_ConstantPathNode)) return 0;
+  if (nrest != 0) return 0;
+  int self = rvk == NK_SelfNode;
+  if (self) {
+    Scope *s = comp_scope_of(c, id);
+    if (!s || !s->is_cmethod || s->is_module_function) return 0;
+  }
+  else if (rvk != NK_ConstantReadNode && rvk != NK_ConstantPathNode) return 0;
   int rk = const_get_recv_class(c, id, recv);
-  if (rk < 0 && rk != CG_OBJECT) return 0;
-  *key = (CgShared){ nm, rk, nt_ignore_visibility(c->nt, id) ? 1 : 0, recv, NULL, 0 };
+  if (rk < 0 && (self || rk != CG_OBJECT)) return 0;
+  *key = (CgShared){ nm, rk, nt_ignore_visibility(c->nt, id) ? 1 : 0, self, recv, NULL, 0 };
   return 1;
 }
 
 static CgShared *cg_share_find(CgShares *sh, const CgShared *key) {
   for (int i = 0; i < sh->n; i++)
-    if (sh->v[i].rk == key->rk && sh->v[i].vis == key->vis && sp_streq(sh->v[i].nm, key->nm)) return &sh->v[i];
+    if (sh->v[i].rk == key->rk && sh->v[i].vis == key->vis && sh->v[i].self == key->self &&
+        sp_streq(sh->v[i].nm, key->nm)) return &sh->v[i];
   return NULL;
 }
 

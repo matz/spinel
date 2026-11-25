@@ -48558,10 +48558,16 @@ static int rewrite_time_maker_class_value(Compiler *c) {
     if (!(sp_streq(nm, "at") || sp_streq(nm, "now") || sp_streq(nm, "utc") || sp_streq(nm, "gm") ||
           sp_streq(nm, "local") || sp_streq(nm, "mktime"))) continue;
     NodeKind rk = nt_kind(nt, recv);
-    if (rk != NK_LocalVariableReadNode && rk != NK_InstanceVariableReadNode && rk != NK_CallNode) continue;
+    /* (self too: in a class method of Time's that a subclass of the
+       program's inherits, packages/time's `self.now`, self is Time or the
+       subclass) */
+    if (rk != NK_LocalVariableReadNode && rk != NK_InstanceVariableReadNode && rk != NK_CallNode &&
+        rk != NK_SelfNode) continue;
     if (infer_type(c, recv) != TY_CLASS || nt_int(nt, id, "tmcv_else", 0)) continue;
     int args = nt_ref(nt, id, "arguments");
-    int ncc = tmcv_cands_taking(c, nm, args);
+    /* (another class's class method of the name is not self's: self is
+       Time or a subclass of it, so no call is left to the dispatch) */
+    int ncc = rk == NK_SelfNode ? 0 : tmcv_cands_taking(c, nm, args);
     int base = nt->count;
     /* a call's Class value (`self.class`, `klass`) is read once, into a
        local each arm reads: the arms test and use it more than once */
@@ -48577,14 +48583,16 @@ static int rewrite_time_maker_class_value(Compiler *c) {
       scope_local_intern(comp_scope_of(c, id), tname);
       recv = rd;
     }
-    int tail;
-    if (ncc > 0) {
+    /* (self is Time or a subclass: Time's arm is the last, with no test
+       and no else) */
+    int tail = -1;
+    if (rk != NK_SelfNode && ncc > 0) {
       /* Not skipped when another class has the class method (a parser
          rule `at` beside tzinfo's): that class's own answers from the else */
       tail = arysub_new_call(c, id, nt_clone_subtree(nt, recv), nm, args >= 0 ? nt_clone_subtree(nt, args) : -1, -1);
       nt_node_set_int(nt, tail, "tmcv_else", 1);
     }
-    else {
+    else if (rk != NK_SelfNode) {
       /* the NoMethodError CRuby raises for any other class value */
       /* CRuby names a module value as one: `for module Comparable` */
       char msg[96], mmsg[96];
@@ -48648,7 +48656,7 @@ static int rewrite_time_maker_class_value(Compiler *c) {
       int tc = tmcv_const(c, id, "Time");
       int eq = arysub_new_call(c, id, nt_clone_subtree(nt, recv), "==", arysub_args(c, id, &tc, 1), -1);
       int call = arysub_new_call(c, id, tmcv_const(c, id, "Time"), nm, args >= 0 ? nt_clone_subtree(nt, args) : -1, -1);
-      tail = tmcv_if(c, id, eq, call, tail);
+      tail = tail < 0 ? call : tmcv_if(c, id, eq, call, tail);
     }
     /* each Time subclass's, ahead of Time's: its instance, made of Time's */
     for (int k = 0; k < c->nclasses; k++) {

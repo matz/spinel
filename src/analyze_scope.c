@@ -13223,6 +13223,16 @@ static int pivs_value_uncached(Compiler *c, int v, char *set, int depth) {
 }
 static int pivs_value_walk(Compiler *c, int v, char *set, int depth) {
   const NodeTable *nt = c->nt;
+  /* an element store written as one (`h[k] = v`, a method's last
+     expression) is its value whatever `[]=` returns, so ahead of the
+     call's targets; `h&.[k] = v` is nil for a nil h. A call by name
+     (`h.[]=(k, v)`) returns what the method it reaches returns. */
+  if (nt_kind(nt, v) == NK_CallNode && nt_attr_write(nt, v) && !nt_safe_nav(nt, v) &&
+      nt_ref(nt, v, "block") < 0 && sp_streq(nt_str(nt, v, "name") ? nt_str(nt, v, "name") : "", "[]=")) {
+    int sn = 0;
+    const int *sa = nt_arr(nt, nt_ref(nt, v, "arguments"), "arguments", &sn);
+    if (sn >= 2) return pivs_value(c, sa[sn - 1], set, depth + 1);
+  }
   int br = pivs_branches(c, v, set, depth, 0);
   if (br >= 0) return br;
   /* a callables query keeps the callable literals it reaches (in the

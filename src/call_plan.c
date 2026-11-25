@@ -10319,7 +10319,14 @@ static const char *feature_limit(Compiler *c, int id, int *stop, int *lx, char *
     /* `Class.new(parent)` evaluated more than once, of a superclass whose
        instances are laid out as a builtin's: one static class cannot be
        the class each evaluation makes. */
-    else if (is_class_new(rcn, name) && (cplan_argc(nt, id) > 0 || cplan_class_new(c, id, NULL) == CNEW_REFUSED))
+    /* a blockless one beside a repeated form that answers one class
+       (Compiler.rt_identity_per_eval): its own classes would mix with it */
+    else if ((is_class_new(rcn, name) || is_module_new(rcn, name)) && cplan_class_new(c, id, NULL) == CNEW_REFUSED)
+      why = "Class.new or Module.new without a block, evaluated more than once, is not supported in a program "
+            "where another Class.new, Struct.new or Data.define evaluated more than once answers one class "
+            "for every evaluation: the program would answer some class identities per evaluation and others "
+            "not (see docs/limitations.md)";
+    else if (is_class_new(rcn, name) && cplan_argc(nt, id) > 0)
       why = "Class.new(parent) is not supported by AOT compilation: the class "
             "graph, ancestor chain, and method/ivar layout are baked at compile time. "
             "Declare the class with `class ... end` instead (see docs/limitations.md)";

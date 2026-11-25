@@ -118,3 +118,21 @@ class Kw; def m(a, k: 0) = [a, k]; end
 km = :m.to_proc
 h = {}
 p km.call(Kw.new, 1, **h)
+
+# called at once inside the class, a Symbol's proc still refuses a private
+# or protected method, as public_send does; send and a public method pass
+class Vis
+  def own = :pri.to_proc.call(self)
+  def other(o) = :pro.to_proc.call(o)
+  def other_arg(o) = :pro_arg.to_proc.call(o, 2)
+  def via_send = :send.to_proc.call(self, :pri)
+  def pub = :pub_t.to_proc.call(self)
+  def pub_t = :ok
+  protected def pro = :pro
+  protected def pro_arg(x) = x
+  private def pri = :pri
+end
+vs = Vis.new
+[-> { vs.own }, -> { vs.other(Vis.new) }, -> { vs.other_arg(Vis.new) }, -> { vs.via_send }, -> { vs.pub }].each do |f|
+  begin; p f.call; rescue NoMethodError => e; p e.class; end
+end

@@ -11011,6 +11011,15 @@ int desugar_enum_chain_shapes_at(Compiler *c, LowerCtx *lc, int id) {
    CRuby reports as [[:req], [:rest]]. A literal's is the call of its name,
    refused for a private or protected method as public_send refuses it; a
    Symbol local's sends `public_send(sym, *args)` (desugar_symbol_var_block_arg). */
+/* The call a Symbol's proc makes, `recv.name(...)`: the name's shared
+   Enumerable copy, as a written call has its site's, and the visibility
+   public_send keeps (send and __send__ call any method). */
+static void sym_proc_call_stamp(NodeTable *nt, int call, const char *name) {
+  enum_send_copy_take(nt, call);
+  if (is_send_family(name)) return;
+  nt_node_set_str(nt, call, "vis_enforce", "1");
+  nt_set_ignore_visibility(nt, call, 0);
+}
 static void sym_proc_lambda(Compiler *c, int id, const char *name, int name_arg) {
   NodeTable *nt = (NodeTable *)c->nt;
   char pa[64], rn[64];
@@ -11042,13 +11051,8 @@ static void sym_proc_lambda(Compiler *c, int id, const char *name, int name_arg)
   nt_node_set_ref(nt, call, "receiver", ra);
   nt_node_set_ref(nt, call, "arguments", args);
   if (name_arg < 0) {
-    /* a literal's call is its name's, made after desugar_builtins: it takes
-       the name's shared Enumerable copy, as a written call has its site's */
-    enum_send_copy_take(nt, call);
-    if (!is_send_family(name)) {
-      nt_node_set_str(nt, call, "vis_enforce", "1");
-      nt_set_ignore_visibility(nt, call, 0);
-    }
+    /* (a literal's call is its name's, made after desugar_builtins) */
+    sym_proc_call_stamp(nt, call, name);
     /* A block or keywords the proc is called with are not handed on: a
        named method's call keeps the count the literal's lambda took
        before, |recv|, so it answers as it did (emit_lambda_arity_check).
@@ -12309,7 +12313,7 @@ int desugar_sym_to_proc_call_at(Compiler *c, LowerCtx *lc, int id) {
   nt_node_set_str(nt, id, "name", sym);
   nt_node_set_ref(nt, id, "receiver", av[0]);
   nt_node_set_ref(nt, id, "arguments", an > 1 ? rest : -1);
-  enum_send_copy_take(nt, id);   /* `a.tally`: the builtin's copy, as a written call's */
+  sym_proc_call_stamp(nt, id, sym);   /* `a.tally`: the builtin's copy; public_send's visibility */
   /* the `:m.to_proc` call is left in the node table, unreached; cut its
      Symbol off so the to_proc -> lambda rewrite (desugar_enum_chain_shapes,
      which visits every node id) cannot turn it into a lambda whose

@@ -7411,18 +7411,34 @@ static int sp_load_nested_after(const SpLoadGraph *g, const SpLoadEdge *x) {
    (sp_load_edge_after), or in an unplaced file that runs only after by in
    turn: a file `later.rb` that only a method defined after by's statement
    requires runs after it, and a require in it of by's file loads nothing.
-   No for the entry, or past a depth of files (a cycle of requires). */
-static int sp_load_file_after(const SpLoadGraph *g, int f, int by, int depth) {
-  if (f <= 0 || depth > 16) return 0;
+   A requirer the walk is already asking about (a cycle of requires) adds
+   no way in: the files of the cycle run only once one of them is entered
+   from outside it, and those requires are asked. No for the entry, or past
+   a depth of files. */
+static int sp_load_file_after_in(const SpLoadGraph *g, int f, int by, int *asking, int depth) {
+  enum { DEPTH = 32 };
+  if (f <= 0 || depth >= DEPTH) return 0;
+  asking[depth] = f;
   int any = 0;
   for (int e = 0; e < g->nedge; e++) {
     const SpLoadEdge *y = &g->edge[e];
     if (y->to != f) continue;
     if (y->how != SP_LOAD_FILE) return 0;
     any = 1;
-    if (g->entered[y->from] == -1 ? !sp_load_file_after(g, y->from, by, depth + 1) : !sp_load_edge_after(g, y, by)) return 0;
+    if (g->entered[y->from] != -1) {
+      if (!sp_load_edge_after(g, y, by)) return 0;
+      continue;
+    }
+    int cyc = 0;
+    for (int k = 0; k <= depth && !cyc; k++) cyc = asking[k] == y->from;
+    if (!cyc && !sp_load_file_after_in(g, y->from, by, asking, depth + 1)) return 0;
   }
   return any;
+}
+static int sp_load_file_after(const SpLoadGraph *g, int f, int by, int depth) {
+  int asking[32];
+  (void)depth;
+  return sp_load_file_after_in(g, f, by, asking, 0);
 }
 static void sp_load_order_build(SpLoadGraph *g) {
   g->entered = malloc(sizeof(int) * (size_t)(g->nfile + 1));

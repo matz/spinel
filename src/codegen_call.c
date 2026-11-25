@@ -5371,6 +5371,35 @@ static int pd_hoist(Compiler *c, int id, const char *name, Buf *b, size_t from, 
    with no leading capital, else "uninitialized constant [Recv::]Name",
    qualified by a constant receiver other than Object as the literal rule
    qualifies it. */
+/* The function a const_get site's arms became, by the arms (the desugar
+   shares one set between the calls on the same constant receiver) and the
+   miss's message: a later site with the same calls it without writing the
+   arms again, which made the emitter's work grow with the sites times the
+   constants (#12511). */
+typedef struct { int arm0, narm, def; char *miss, *fn; } CgArmFn;
+static CgArmFn *g_cg_armfn;
+static int g_cg_narmfn, g_cg_carmfn;
+
+static const char *cg_armfn_find(int arm0, int narm, int def, const char *miss) {
+  for (int i = 0; i < g_cg_narmfn; i++) {
+    CgArmFn *e = &g_cg_armfn[i];
+    if (e->arm0 == arm0 && e->narm == narm && e->def == def && strcmp(e->miss, miss) == 0) return e->fn;
+  }
+  return NULL;
+}
+
+static void cg_armfn_add(int arm0, int narm, int def, const char *miss, const char *site) {
+  const char *f = strstr(site, "= sp_pd_");
+  const char *e = f ? strchr(f, '(') : NULL;
+  if (!f || !e) return;
+  if (g_cg_narmfn == g_cg_carmfn) {
+    g_cg_carmfn = g_cg_carmfn ? g_cg_carmfn * 2 : 8;
+    g_cg_armfn = realloc(g_cg_armfn, sizeof(CgArmFn) * (size_t)g_cg_carmfn);
+    if (!g_cg_armfn) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  }
+  g_cg_armfn[g_cg_narmfn++] = (CgArmFn){ arm0, narm, def, strdup(miss), strndup(f + 2, (size_t)(e - f - 2)) };
+}
+
 static int emit_dynamic_const_get(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
   int narm = 0; const int *arms = nt_arr(nt, id, "dyn_cget_arms", &narm);
@@ -5399,6 +5428,21 @@ static int emit_dynamic_const_get(Compiler *c, int id, Buf *b) {
      same constants, and a copy of the arms per site made the C grow with
      the sites times the constants */
   buf_printf(b, "; if (!_t%d) _t%d = sp_str_empty; ", t, t);
+  NodeKind rvk = nt_kind(nt, recv);
+  const char *rnm = (rvk == NK_ConstantReadNode || rvk == NK_ConstantPathNode)
+                    ? nt_str(nt, recv, "name") : NULL;
+  /* the receiver's class (`self` in a class method too) by its Ruby name */
+  int rk = recv >= 0 ? const_get_recv_class(c, id, recv) : CG_NONE;
+  if (rk >= 0 && class_ruby_name(c, rk)) rnm = class_ruby_name(c, rk);
+  /* Object is no qualifier of the NameError: its id, whether or not a class reopens it */
+  if (rk == CG_OBJECT || rk == comp_core_class(c, CORE_OBJECT)) rnm = NULL;
+  /* a `self` receiver names its class at run time in the miss: not shared */
+  const char *memo = rvk == NK_SelfNode ? NULL : (rnm ? rnm : "");
+  const char *had = memo ? cg_armfn_find(arms[0], narm, def, memo) : NULL;
+  if (had) {
+    buf_printf(b, "%s _t%d = %s(_t%d); _t%d; })", def ? "sp_bool" : "sp_RbVal", tr, had, t, tr);
+    return 1;
+  }
   size_t from = b->len;
   buf_printf(b, "%s _t%d; switch (0) { default: ", def ? "sp_bool" : "sp_RbVal", tr);
   for (int k = 0; k < narm; k++) {
@@ -5429,19 +5473,12 @@ static int emit_dynamic_const_get(Compiler *c, int id, Buf *b) {
     }
     free(pre.p); free(body.p);
   }
-  NodeKind rvk = nt_kind(nt, recv);
-  const char *rnm = (rvk == NK_ConstantReadNode || rvk == NK_ConstantPathNode)
-                    ? nt_str(nt, recv, "name") : NULL;
-  /* the receiver's class (`self` in a class method too) by its Ruby name */
-  int rk = recv >= 0 ? const_get_recv_class(c, id, recv) : CG_NONE;
-  if (rk >= 0 && class_ruby_name(c, rk)) rnm = class_ruby_name(c, rk);
-  /* Object is no qualifier of the NameError: its id, whether or not a class reopens it */
-  if (rk == CG_OBJECT || rk == comp_core_class(c, CORE_OBJECT)) rnm = NULL;
   TyKind nty = TY_STRING;
   if (def) {
     buf_printf(b, "{ if (!(_t%d[0] >= 'A' && _t%d[0] <= 'Z')) sp_raise_cls(\"NameError\", sp_sprintf(\"wrong constant name %%s\", _t%d)); "
                   "_t%d = 0; } ", t, t, t, tr);
     if (!pd_hoist(c, id, "const_defined?", b, from, tr, TY_BOOL, &t, &nty, 1)) buf_puts(b, "}");
+    else if (memo) cg_armfn_add(arms[0], narm, def, memo, b->p + from);
     buf_printf(b, " _t%d; })", tr);
     return 1;
   }
@@ -5457,6 +5494,7 @@ static int emit_dynamic_const_get(Compiler *c, int id, Buf *b) {
                rnm ? rnm : "", rnm ? "::" : "", t);
   buf_printf(b, "_t%d = sp_box_nil(); } ", tr);
   if (!pd_hoist(c, id, "const_get", b, from, tr, TY_POLY, &t, &nty, 1)) buf_puts(b, "}");
+  else if (memo) cg_armfn_add(arms[0], narm, def, memo, b->p + from);
   buf_printf(b, " _t%d; })", tr);
   free(sv.p);
   return 1;

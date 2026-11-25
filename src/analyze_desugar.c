@@ -3208,6 +3208,48 @@ static void cg_cands_free(CgCands *cs) {
    of `recv.const_defined?(:Name)`, under "dyn_cdef_arms", each answered at
    compile time. A receiverless call in a class method or class body was
    given `self` by desugar_bare_class_self_calls first. */
+/* The arm sets already built, by what they depend on: the call's name, the
+   class its constant receiver names, and whether it ignores visibility. Two
+   `Object.const_get(name)` calls reach the same constants through the same
+   receiver, so the second takes the first one's arms: a set per site made
+   the node table grow with the sites times the constants (#12511), and
+   every later pass and the emitter walked each copy. */
+typedef struct { const char *nm; int rk, vis, recv; int *arms; int narm; } CgShared;
+typedef struct { CgShared *v; int n, cap; } CgShares;
+
+/* The key of call ID on RECV when its arms can be shared, else 0: a constant
+   receiver whose class is known here, and no argument past the name. */
+static int cg_share_key(Compiler *c, int id, int recv, int nrest, const char *nm, CgShared *key) {
+  NodeKind rvk = nt_kind(c->nt, recv);
+  if (nrest != 0 || (rvk != NK_ConstantReadNode && rvk != NK_ConstantPathNode)) return 0;
+  int rk = const_get_recv_class(c, id, recv);
+  if (rk < 0 && rk != CG_OBJECT) return 0;
+  *key = (CgShared){ nm, rk, nt_ignore_visibility(c->nt, id) ? 1 : 0, recv, NULL, 0 };
+  return 1;
+}
+
+static CgShared *cg_share_find(CgShares *sh, const CgShared *key) {
+  for (int i = 0; i < sh->n; i++)
+    if (sh->v[i].rk == key->rk && sh->v[i].vis == key->vis && sp_streq(sh->v[i].nm, key->nm)) return &sh->v[i];
+  return NULL;
+}
+
+static void cg_share_add(CgShares *sh, const CgShared *key, const int *arms, int narm) {
+  if (cg_share_find(sh, key)) return;
+  if (sh->n == sh->cap) {
+    sh->cap = sh->cap ? sh->cap * 2 : 8;
+    sh->v = realloc(sh->v, sizeof(CgShared) * (size_t)sh->cap);
+    if (!sh->v) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  }
+  sh->v[sh->n] = *key;
+  /* a copy: the table's array store moves as later sites add theirs */
+  sh->v[sh->n].arms = malloc(sizeof(int) * (size_t)(narm > 0 ? narm : 1));
+  if (!sh->v[sh->n].arms) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  memcpy(sh->v[sh->n].arms, arms, sizeof(int) * (size_t)narm);
+  sh->v[sh->n].narm = narm;
+  sh->n++;
+}
+
 int desugar_dynamic_const_get_arms(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count;
@@ -3241,6 +3283,7 @@ int desugar_dynamic_const_get_arms(Compiler *c) {
   if (!any) return 0;
   CgCands cs = {0};
   cg_cands_collect(c, n0, &cs);
+  CgShares sh = {0};
   char **cand = NULL;
   for (int id = 0; id < n0; id++) {
     if (nt_kind(nt, id) != NK_CallNode) continue;
@@ -3253,18 +3296,28 @@ int desugar_dynamic_const_get_arms(Compiler *c) {
     if (sp_streq(nm, "const_defined?") && nt_kind(nt, recv) == NK_ConstantReadNode &&
         sp_streq(nt_str(nt, recv, "name"), "Socket") && sp_feature_required("socket")) continue;
     if ((sp_streq(nm, "const_get") ? inst_get : inst_def) && !const_get_recv_is_module(c, id, recv)) continue;
-    { int dn = 0; nt_arr(nt, id, stash, &dn); if (dn > 0) continue; }
     int args = nt_ref(nt, id, "arguments");
     if (args < 0) continue;
     int argc = 0; const int *argv = nt_arr(nt, args, "arguments", &argc);
     if (argc < 1 || !argv) continue;
+    int nrest = argc - 1;
+    CgShared key;
+    int shareable = cg_share_key(c, id, recv, nrest, nm, &key);
+    /* a call given its arms in an earlier round offers them to the others */
+    { int dn = 0; const int *da = nt_arr(nt, id, stash, &dn);
+      if (dn > 0) { if (shareable) cg_share_add(&sh, &key, da, dn); continue; } }
     NodeKind k0 = nt_kind(nt, argv[0]);
     if (k0 == NK_SymbolNode || k0 == NK_StringNode) continue;
     /* a const_defined? arm that does not build is dropped, which would answer
        false: only the one-argument form, whose arms all build, is taken */
     if (sp_streq(nm, "const_defined?") && argc != 1) continue;
-    int nrest = argc - 1;
     if (nrest > 8) continue;
+    CgShared *got = shareable ? cg_share_find(&sh, &key) : NULL;
+    if (got) {
+      nt_node_set_arr(nt, id, stash, got->arms, got->narm);
+      changed = 1;
+      continue;
+    }
     int rest[8]; for (int k = 0; k < nrest; k++) rest[k] = argv[k + 1];
     free(cand);
     int ncand = cg_cands_for_recv(c, &cs, const_get_recv_class(c, id, recv), nt_kind(nt, recv) == NK_SelfNode, &cand);
@@ -3329,6 +3382,10 @@ int desugar_dynamic_const_get_arms(Compiler *c) {
     }
     nt_node_set_arr(nt, id, stash, arms, narm);
     free(arms);
+    if (shareable && narm > 0) {
+      int dn = 0; const int *da = nt_arr(nt, id, stash, &dn);
+      cg_share_add(&sh, &key, da, dn);
+    }
     comp_grow_node_arrays(c);
     int encl = c->nscope[id];
     int cb = c->node_cbody ? c->node_cbody[id] : -1;
@@ -3336,6 +3393,8 @@ int desugar_dynamic_const_get_arms(Compiler *c) {
     changed = 1;
   }
   free(cand);
+  for (int i = 0; i < sh.n; i++) free(sh.v[i].arms);
+  free(sh.v);
   cg_cands_free(&cs);
   return changed;
 }

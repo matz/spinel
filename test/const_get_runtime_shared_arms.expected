@@ -1,0 +1,15 @@
+:alpha
+:beta
+42
+true
+false
+:inner
+3
+true
+42
+:beta
+42
+:alpha
+"uninitialized constant Missing"
+"uninitialized constant Outer::Missing"
+"wrong constant name lower"

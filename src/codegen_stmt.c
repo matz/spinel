@@ -22229,6 +22229,7 @@ static void emit_poly_attr_unplaced(Buf *b, int indent, int k, const char *attr,
    nil its own way). */
 static int emit_named_slot_container(Compiler *c, int v, LocalVar *lv, Buf *b) {
   const NodeTable *nt = c->nt;
+  Repr vr = repr_of(c, v);
   int vlit = empty_literal_node(c, v);
   /* `X = [].freeze`: the strip above found the literal so the slot's kind
      builds it; the freeze it stripped still has to happen (#3828). */
@@ -22246,13 +22247,12 @@ static int emit_named_slot_container(Compiler *c, int v, LocalVar *lv, Buf *b) {
      the untyped Hash.new call (#3205). */
   int v_hash_dflt = -1;   /* `$g = Hash.new(default)`: the default's node */
   int v_hash_cap = 0;     /* `$g = Hash.new(capacity: n)` */
-  if (vk == NK_CallNode && ty_is_hash(lv->type) &&
-      nt_str(nt, v, "name") && sp_streq(nt_str(nt, v, "name"), "new") &&
+  if (vk == NK_CallNode && ty_is_hash(lv->type) && is_new_name(nt_str(nt, v, "name")) &&
       nt_ref(nt, v, "block") < 0) {
     int hr = nt_ref(nt, v, "receiver");
     const char *hrn = hr >= 0 && nt_kind(nt, hr) == NK_ConstantReadNode
                       ? nt_str(nt, hr, "name") : NULL;
-    if (hrn && sp_streq(hrn, "Hash")) {
+    if (is_hash_const_name(hrn)) {
       /* the count lives on the ArgumentsNode; asking the CallNode for it
          answered 0 for every form, which is why `$g = Hash.new(5)` on a
          typed slot silently emitted the default-less constructor */
@@ -22296,9 +22296,8 @@ static int emit_named_slot_container(Compiler *c, int v, LocalVar *lv, Buf *b) {
   }
   /* a poly-typed global/const slot boxes a scalar value (`$g = 42` where $g
      elsewhere holds a string/array, so its slot is sp_RbVal) */
-  else if (lv->type == TY_POLY && repr_of(c, v).kind != RK_BOXED) emit_boxed(c, v, b);
-  else if (lv->type == TY_POLY_ARRAY && ty_is_array(comp_ntype(c, v)) &&
-           comp_ntype(c, v) != TY_POLY_ARRAY) {
+  else if (lv->type == TY_POLY && vr.kind != RK_BOXED) emit_boxed(c, v, b);
+  else if (lv->type == TY_POLY_ARRAY && ty_is_array(vr.as_ty) && vr.as_ty != TY_POLY_ARRAY) {
     /* a typed array into a poly-array global: rebuilt with its elements
        boxed, the conversion the local and ivar writes make (a slot that
        widened on a write the node never saw -- under --int-overflow=promote

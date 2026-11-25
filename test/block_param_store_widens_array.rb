@@ -200,3 +200,26 @@ def tab22 = [[4], [5]]
 @f22, @g22 = two22; y1(@f22) { |x| x << +"c" }; p @f22, @g22
 @h22, @i22 = tab22; y1(@h22) { |x| x << +"d" }; p @h22, @i22
 w22, u22 = two22; y1(w22) { |x| x << +"e" }; p w22, u22
+
+# a global, a class variable or a constant reached through a method's
+# value, an op-write, a multiple assignment, a write used as a value or
+# another of them, each followed as an ivar's writes are
+def g23 = $a23
+def mk23 = [1, 2]
+def h23 = ($c23 ||= [3])
+def w23 = ($d23 = [4])
+$a23 = [1]; $a23 += [2]; y1(g23) { |x| x << +"a" }; p $a23
+$b23 = mk23; y1($b23) { |x| x << +"b" }; p $b23
+y1(h23) { |x| x << +"c" }; p $c23
+y1(w23) { |x| x << +"d" }; p $d23
+$e23 = [5]; $f23 = $e23; $e23 = $f23; y1($f23) { |x| x << +"e" }; p $e23.equal?($f23), $e23
+$g23, $h23 = [6], 7; y1($g23) { |x| x << +"f" }; p $g23, $h23
+class K23
+  @@v = [1]
+  @@v += [2]
+  def self.v = @@v
+end
+y1(K23.v) { |x| x << +"g" }; p K23.v
+G23 = mk23
+def c23 = G23
+y1(c23) { |x| x << +"h" }; p G23

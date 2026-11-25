@@ -2170,28 +2170,55 @@ static int widen_aliased_array_ivars(Compiler *c, int node, int cls_id) {
   return changed;
 }
 
-/* The type slot a global, class-variable or constant read names, or NULL. */
+/* The family of the global, class variable or constant node kind k is a
+   read or a write of (NS_NONE for another kind). */
+enum { NS_NONE, NS_GVAR, NS_CVAR, NS_CONST };
+static int named_slot_family(NodeKind k) {
+  switch (k) {
+  case NK_GlobalVariableReadNode: case NK_GlobalVariableWriteNode: case NK_GlobalVariableOrWriteNode:
+  case NK_GlobalVariableAndWriteNode: case NK_GlobalVariableOperatorWriteNode: case NK_GlobalVariableTargetNode:
+    return NS_GVAR;
+  case NK_ClassVariableReadNode: case NK_ClassVariableWriteNode: case NK_ClassVariableOrWriteNode:
+  case NK_ClassVariableAndWriteNode: case NK_ClassVariableOperatorWriteNode: case NK_ClassVariableTargetNode:
+    return NS_CVAR;
+  case NK_ConstantReadNode: case NK_ConstantWriteNode: case NK_ConstantOrWriteNode: case NK_ConstantAndWriteNode:
+  case NK_ConstantOperatorWriteNode: case NK_ConstantTargetNode: case NK_ConstantPathNode:
+  case NK_ConstantPathWriteNode: case NK_ConstantPathOrWriteNode: case NK_ConstantPathAndWriteNode:
+  case NK_ConstantPathOperatorWriteNode: case NK_ConstantPathTargetNode:
+    return NS_CONST;
+  default: return NS_NONE;
+  }
+}
+/* The node that names the slot of a constant path's write: its target. */
+static int named_slot_node(const NodeTable *nt, int n) {
+  NodeKind k = nt_kind(nt, n);
+  return k == NK_ConstantPathWriteNode || k == NK_ConstantPathOrWriteNode || k == NK_ConstantPathAndWriteNode ||
+         k == NK_ConstantPathOperatorWriteNode ? nt_ref(nt, n, "target") : n;
+}
+
+/* The type slot a global, class-variable or constant read names, or a
+   write of one (a target of a multiple assignment too) sets, or NULL. */
 static TyRef named_array_slot(Compiler *c, int recv) {
   const NodeTable *nt = c->nt;
-  const char *nm = nt_str(nt, recv, "name");
+  recv = named_slot_node(nt, recv);
+  const char *nm = recv >= 0 ? nt_str(nt, recv, "name") : NULL;
   if (!nm) return NULL;
-  switch (nt_kind(nt, recv)) {
-    case NK_GlobalVariableReadNode: {
+  NodeKind k = nt_kind(nt, recv);
+  switch (named_slot_family(k)) {
+    case NS_GVAR: {
       const char *rn = comp_resolve_gvar(c, nm + 1);
       LocalVar *lv = rn ? comp_gvar(c, rn) : NULL;
       return lv ? &lv->type : NULL;
     }
-    case NK_ConstantReadNode: {
+    case NS_CONST: {
+      /* `H::L` names the constant its read resolves to (infer_constant_path) */
+      if ((k == NK_ConstantPathNode || k == NK_ConstantPathTargetNode) &&
+          (const_path_in_closed_builtin(c, recv) || const_path_misses_toplevel(c, recv) || const_path_is_private(c, recv)))
+        return NULL;
       LocalVar *lv = comp_const_at(c, recv);
       return lv ? &lv->type : NULL;
     }
-    /* `H::L` names the constant its read resolves to (infer_constant_path) */
-    case NK_ConstantPathNode: {
-      if (const_path_in_closed_builtin(c, recv) || const_path_misses_toplevel(c, recv) || const_path_is_private(c, recv)) return NULL;
-      LocalVar *lv = comp_const_at(c, recv);
-      return lv ? &lv->type : NULL;
-    }
-    case NK_ClassVariableReadNode: {
+    case NS_CVAR: {
       int cid = holder_cvar_owner(c, recv, nm, holder_cbody(c, recv));
       if (cid < 0) return NULL;
       int idx = comp_cvar_index(&c->classes[cid], nm);
@@ -2413,11 +2440,17 @@ static int reader_ivar_set_outside(Compiler *c, int cls, const char *ivn) {
 }
 /* The array source walk's context (array_src_walk): the method each level
    of the walk is in (meth, -1 for none), so a call back into one answers
-   what the method does, and the ivar slots it is following (a class and
-   the ivar's name, niv of them), so a value that reaches one again (`k.v =
-   k.v`, two attributes handed each other) answers what that slot holds,
-   which the walk is following already. */
-typedef struct { int meth[8]; int niv, ivcls[8]; const char *ivn[8]; } SrcWalk;
+   what the method does, and the slots it is following (nslot of them,
+   each a class and a name: an ivar's class, a class variable's owner or
+   -1 for a global or a constant), so a value that reaches one again (`k.v
+   = k.v`, two attributes handed each other, `$a = $b; $b = $a`) answers
+   what that slot holds, which the walk is following already. */
+typedef struct { int meth[8]; int nslot, slcls[8]; const char *slname[8]; } SrcWalk;
+static int src_walk_follows(const SrcWalk *st, int cls, const char *name) {
+  for (int i = 0; i < st->nslot; i++)
+    if (st->slcls[i] == cls && sp_streq(st->slname[i], name)) return 1;
+  return 0;
+}
 static int array_src_walk(Compiler *c, int v, int pinned, int apply, SrcWalk *st, int depth);
 static int ivar_writes_fresh(Compiler *c, int cls, const char *ivn, int apply, int *ch, SrcWalk *st, int depth);
 /* 1 when ivar iv of class cls is a member of a Struct with no initialize of
@@ -2453,7 +2486,7 @@ static int alias_side(Compiler *c, int n, AliasSide *out) {
        the constructor's arguments, which struct_new_types_members_at widens
        with it or, where they cannot widen, keeps the member boxed */
     int member = struct_member_set_by_new(c, dc, iv);
-    SrcWalk st = { .niv = 1, .ivcls = { dc }, .ivn = { ivn } };
+    SrcWalk st = { .nslot = 1, .slcls = { dc }, .slname = { ivn } };
     if (iv < 0 || class_ivar_pinned(ci, ivn) || ci->ivar_int_table[iv] ||
         reader_ivar_set_outside(c, dc, ivn) || (!member && ivar_writes_fresh(c, dc, ivn, 0, NULL, &st, 0) <= 0)) return 0;
     out->slot = &ci->ivar_types[iv]; out->cid = dc; out->iv = iv; out->reader = 1;
@@ -2514,7 +2547,7 @@ static int alias_ivar_widened(Compiler *c, const LWIndex *ivw, const AliasSide *
     ch = 1;
   }
   if (top != TY_POLY_ARRAY) return ch;
-  SrcWalk st = { .niv = 1, .ivcls = { w->cid }, .ivn = { ivn } };
+  SrcWalk st = { .nslot = 1, .slcls = { w->cid }, .slname = { ivn } };
   if (w->reader) ivar_writes_fresh(c, w->cid, ivn, 1, &ch, &st, 0);
   else if (ivw) ch |= widen_ivar_array_params(c, ivw, w->cid, ivn);
   return ch;
@@ -8086,7 +8119,7 @@ static int array_answers_receiver(Compiler *c, int v);
    that returns its receiver, `s.bytes << 3`, is none) */
 static int row_lifts(Compiler *c, int el, TyKind elem) {
   int lv[16];
-  SrcWalk st = { .niv = 0 };
+  SrcWalk st = { .nslot = 0 };
   int n = value_leaves_ex(c, el, lv, 0, 16, VL_NIL);
   if (n <= 0 || n >= 16) return 0;
   for (int i = 0; i < n; i++) {
@@ -8751,39 +8784,6 @@ int ivar_value_slots(Compiler *c, int v, const char **ivn, IvarSlots *sl) {
   return n > 0 ? n : ivar_write_slots(c, v, ivn, sl);
 }
 
-/* 1 when every write of the global, class variable or constant `v` reads
-   stores nil or a new array, as ivar_writes_fresh asks of an ivar. */
-static int named_writes_fresh(Compiler *c, int v) {
-  const NodeTable *nt = c->nt;
-  NodeKind k = nt_kind(nt, v);
-  NodeKind wk[4] = { NK_NONE, NK_NONE, NK_NONE, NK_NONE };
-  if (k == NK_GlobalVariableReadNode) {
-    wk[0] = NK_GlobalVariableWriteNode; wk[1] = NK_GlobalVariableOrWriteNode;
-    wk[2] = NK_GlobalVariableAndWriteNode; wk[3] = NK_GlobalVariableOperatorWriteNode;
-  }
-  else if (k == NK_ClassVariableReadNode) {
-    wk[0] = NK_ClassVariableWriteNode; wk[1] = NK_ClassVariableOrWriteNode;
-    wk[2] = NK_ClassVariableAndWriteNode; wk[3] = NK_ClassVariableOperatorWriteNode;
-  }
-  else wk[0] = NK_ConstantWriteNode;
-  int vcls = -1;
-  if (k == NK_ClassVariableReadNode) vcls = holder_cvar_owner(c, v, nt_str(nt, v, "name"), holder_cbody(c, v));
-  int saw = 0;
-  for (int t = 0; t < 4 && wk[t] != NK_NONE; t++)
-    NT_FOREACH_KIND(nt, wk[t], w) {
-      if (!sp_streq(nt_str(nt, w, "name"), nt_str(nt, v, "name"))) continue;
-      /* a class variable of another class is another slot, unless that class
-         inherits it */
-      if (k == NK_ClassVariableReadNode &&
-          holder_cvar_owner(c, w, nt_str(nt, v, "name"), holder_cbody(c, w)) != vcls) continue;
-      if (t >= 2) return 0;
-      int wv = nt_paren_single(c->nt, nt_ref(nt, w, "value"));
-      if (wv < 0 || (nt_kind(nt, wv) != NK_NilNode && !is_fresh_array(c, wv))) return 0;
-      saw = 1;
-    }
-  return saw;
-}
-
 /* 1 when a read of the local `r` names is anything but the receiver of an
    element read, an iteration or a size, or an argument printed: the local
    may be stored into (`r << v`), aliased or handed on, so its elements may
@@ -9067,19 +9067,36 @@ static int struct_super_member_values(Compiler *c, int cls, int iv, AttrArgWalk 
    multiple assignment's target, which takes its element of the right side,
    masgn_target_value), an attribute writer's call (`k.v = x`, `||=`,
    `&&=`) and a send or instance_variable_set, which hands its value last.
-   An `op=` leaves the Array its operator builds out of the slot's own
-   (`@v += [2]`), which is new. Nonzero stops the walk where the value is
-   no one the walk can follow. */
+   A global's, class variable's or constant's writes are the same kinds
+   (named_src_walk). An `op=` leaves the Array its operator builds out of
+   the slot's own (`@v += [2]`), which is new. Nonzero stops the walk where
+   the value is no one the walk can follow. */
 static int slot_write_walk(Compiler *c, int w, void *ctx) {
   const NodeTable *nt = c->nt;
   AttrArgWalk *aw = ctx;
   NodeKind k = nt_kind(nt, w);
   Scope *ws = comp_scope_of(c, w);
-  if (k == NK_InstanceVariableOperatorWriteNode || k == NK_CallOperatorWriteNode) { aw->n++; return 0; }
-  if (k == NK_InstanceVariableTargetNode) return masgn_target_walk(c, w, aw);
   int arg = -1;
-  if (k == NK_InstanceVariableWriteNode || k == NK_InstanceVariableOrWriteNode || k == NK_InstanceVariableAndWriteNode)
+  switch (k) {
+  case NK_InstanceVariableOperatorWriteNode: case NK_GlobalVariableOperatorWriteNode:
+  case NK_ClassVariableOperatorWriteNode: case NK_ConstantOperatorWriteNode: case NK_CallOperatorWriteNode:
+    aw->n++;
+    return 0;
+  case NK_InstanceVariableTargetNode: case NK_GlobalVariableTargetNode: case NK_ClassVariableTargetNode:
+  case NK_ConstantTargetNode:
+    return masgn_target_walk(c, w, aw);
+  case NK_InstanceVariableWriteNode: case NK_InstanceVariableOrWriteNode: case NK_InstanceVariableAndWriteNode:
+  case NK_GlobalVariableWriteNode: case NK_GlobalVariableOrWriteNode: case NK_GlobalVariableAndWriteNode:
+  case NK_ClassVariableWriteNode: case NK_ClassVariableOrWriteNode: case NK_ClassVariableAndWriteNode:
+  case NK_ConstantWriteNode: case NK_ConstantOrWriteNode: case NK_ConstantAndWriteNode:
     return slot_value_walk(c, ws, nt_ref(nt, w, "value"), aw);
+  /* a constant's write through its path (`M::G = [1]`) stores its value
+     as it is built, which the general Array's slot cannot take */
+  case NK_ConstantPathWriteNode: case NK_ConstantPathOrWriteNode: case NK_ConstantPathAndWriteNode:
+  case NK_ConstantPathOperatorWriteNode: case NK_ConstantPathTargetNode:
+    return 1;
+  default: break;
+  }
   if (k == NK_CallOrWriteNode || k == NK_CallAndWriteNode) arg = nt_ref(nt, w, "value");
   else {
     int a = nt_ref(nt, w, "arguments"), an = 0;
@@ -9186,9 +9203,8 @@ static int ivar_src_walk(Compiler *c, int v, int icls, const char *ivn, int appl
   int ivi = comp_ivar_index(ci, ivn);
   if (ivi < 0 || class_ivar_pinned(ci, ivn) || !c->ivar_widen_src || v >= c->node_cap) return 0;
   /* (a slot the walk follows already: what it holds is being followed) */
-  for (int i = 0; i < st->niv; i++)
-    if (st->ivcls[i] == icls && sp_streq(st->ivn[i], ivn)) return !apply;
-  if (st->niv == 8) return 0;
+  if (src_walk_follows(st, icls, ivn)) return !apply;
+  if (st->nslot == 8) return 0;
   IvWalkEntry *m = depth == 0 ? ivar_walk_memo_at(c, icls, ivi) : NULL;
   if (m && !apply && m->check_at == comp_ty_edits + 1) return m->check;
   /* (an apply that changed nothing changes nothing again but the read's
@@ -9205,7 +9221,7 @@ static int ivar_src_walk(Compiler *c, int v, int icls, const char *ivn, int appl
      (`k.v = [+"s"]`, a member's setter) is one more write, whose value
      is followed as the class's own writes are (attr_writer_calls). */
   int member = struct_member_set_by_new(c, icls, ivi);
-  st->ivcls[st->niv] = icls; st->ivn[st->niv++] = ivn;
+  st->slcls[st->nslot] = icls; st->slname[st->nslot++] = ivn;
   int fresh = member ? 1 : ivar_writes_fresh(c, icls, ivn, 0, NULL, st, depth);
   AttrArgWalk aw = { st, depth, 0, 0, 0 };
   int writer = fresh >= 0 && call_answers(c, -1, icls, ivn + 1, CT_WRITER, NULL);
@@ -9213,7 +9229,7 @@ static int ivar_src_walk(Compiler *c, int v, int icls, const char *ivn, int appl
            !(writer && attr_op_writes(c, icls, ivn + 1, slot_write_walk, &aw)) &&
            !(!member && struct_super_member_values(c, icls, ivi, &aw)) && (fresh || aw.n);
   if (m && !apply) { m->check = (unsigned char)ok; m->check_at = comp_ty_edits + 1; }
-  if (!ok || !apply) { st->niv--; return ok; }
+  if (!ok || !apply) { st->nslot--; return ok; }
   aw.apply = 1; aw.ch = 0;
   attr_writer_calls(c, icls, ivn, slot_write_walk, &aw);
   if (writer) attr_op_writes(c, icls, ivn + 1, slot_write_walk, &aw);
@@ -9225,10 +9241,64 @@ static int ivar_src_walk(Compiler *c, int v, int icls, const char *ivn, int appl
     ch |= alias_ivar_widened(c, NULL, &sd, TY_POLY_ARRAY);
   }
   else ivar_writes_fresh(c, icls, ivn, 1, &ch, st, depth);
-  st->niv--;
+  st->nslot--;
   if (m && !ch) { m->member = (unsigned char)member; m->apply_at = comp_ty_edits + 1; }
   if (!member && !c->ivar_widen_src[v]) { c->ivar_widen_src[v] = 1; ch = 1; }
   return ch;
+}
+/* The name a global's, class variable's or constant's node n goes by in
+   the walk's set: a constant's key (const_key_at, of a path write's
+   target), which tells two classes' constants of one name apart, else its
+   name. */
+static const char *named_slot_name(Compiler *c, int n) {
+  n = named_slot_node(c->nt, n);
+  if (n < 0) return NULL;
+  return named_slot_family(nt_kind(c->nt, n)) == NS_CONST ? const_key_at(c, n) : nt_str(c->nt, n, "name");
+}
+/* array_src_walk's step for a value `v` that reads a global, a class
+   variable or a constant (named_array_slot), or is a write of one, which
+   answers what the slot then holds: every write of the slot leaves a value
+   the walk follows (slot_write_walk), as an ivar's writes do, and with
+   apply those widen and so does the slot. The slot is on st's set while
+   its writes are walked, keyed by the class variable's owner (-1 for a
+   global or a constant) and named_slot_name; a slot with no write holds
+   none. */
+static int named_src_walk(Compiler *c, int v, int apply, SrcWalk *st, int depth) {
+  const NodeTable *nt = c->nt;
+  TyRef ns = named_array_slot(c, v);
+  if (!ns || !ty_is_array(*ns) || ty_is_ptr_array(*ns)) return 0;
+  int fam = named_slot_family(nt_kind(nt, v)), sn = named_slot_node(nt, v);
+  const char *nm = named_slot_name(c, v);
+  int cls = fam == NS_CVAR ? holder_cvar_owner(c, sn, nm, holder_cbody(c, sn)) : -1;
+  if (!nm || st->nslot == 8) return 0;
+  if (src_walk_follows(st, cls, nm)) return !apply;
+  const NodeKind gw[] = { NK_GlobalVariableWriteNode, NK_GlobalVariableOrWriteNode, NK_GlobalVariableAndWriteNode,
+                          NK_GlobalVariableOperatorWriteNode, NK_GlobalVariableTargetNode };
+  const NodeKind cw[] = { NK_ClassVariableWriteNode, NK_ClassVariableOrWriteNode, NK_ClassVariableAndWriteNode,
+                          NK_ClassVariableOperatorWriteNode, NK_ClassVariableTargetNode };
+  const NodeKind kw[] = { NK_ConstantWriteNode, NK_ConstantOrWriteNode, NK_ConstantAndWriteNode,
+                          NK_ConstantOperatorWriteNode, NK_ConstantTargetNode, NK_ConstantPathWriteNode,
+                          NK_ConstantPathOrWriteNode, NK_ConstantPathAndWriteNode, NK_ConstantPathOperatorWriteNode,
+                          NK_ConstantPathTargetNode };
+  const NodeKind *wk = fam == NS_GVAR ? gw : fam == NS_CVAR ? cw : kw;
+  int nk = fam == NS_CONST ? 10 : 5;
+  st->slcls[st->nslot] = cls; st->slname[st->nslot++] = nm;
+  AttrArgWalk aw = { st, depth, apply, 0, 0 };
+  int saw = 0, stop = 0;
+  for (int t = 0; t < nk && !stop; t++)
+    NT_FOREACH_KIND(nt, wk[t], w) {
+      const char *wn = stop ? NULL : named_slot_name(c, w);
+      if (!wn || !sp_streq(wn, nm)) continue;
+      /* a class variable of another class is another slot, unless that class
+         inherits it */
+      if (cls >= 0 && holder_cvar_owner(c, w, nm, holder_cbody(c, w)) != cls) continue;
+      stop = slot_write_walk(c, w, &aw) && !apply;
+      saw = 1;
+    }
+  st->nslot--;
+  if (!apply) return saw && !stop;
+  if (*ns != TY_POLY_ARRAY) { ty_ref_set(c, ns, TY_POLY_ARRAY); aw.ch = 1; }
+  return aw.ch;
 }
 /* array_src_walk's step for method t, one a call no one target is
    resolved for may run (the #10058 arm): each of its values followed and
@@ -9340,14 +9410,7 @@ static int array_src_walk(Compiler *c, int v, int pinned, int apply, SrcWalk *st
     if (!lv->poly_array_pin || lv->type != TY_POLY_ARRAY) { lv_set_type(lv, TY_POLY_ARRAY); lv->poly_array_pin = 1; ch = 1; }
     return ch;
   }
-  if (k == NK_GlobalVariableReadNode || k == NK_ClassVariableReadNode || k == NK_ConstantReadNode) {
-    TyRef ns = named_array_slot(c, v);
-    if (!ns || !ty_is_array(*ns) || ty_is_ptr_array(*ns) || !named_writes_fresh(c, v)) return 0;
-    if (!apply) return 1;
-    if (*ns == TY_POLY_ARRAY) return 0;
-    ty_ref_set(c, ns, TY_POLY_ARRAY);
-    return 1;
-  }
+  if (named_slot_family(k) != NS_NONE) return named_src_walk(c, v, apply, st, depth);
   /* An ivar, read here or through an attr_reader, widens after the
      fixpoint (widen_ivars_from_pushed_params), where the write passes cannot
      narrow it back; the locals and method values on the way are pinned now.
@@ -9430,13 +9493,13 @@ static int array_src_walk(Compiler *c, int v, int pinned, int apply, SrcWalk *st
 /* Can every array the value `v` can be be the general Array
    (array_src_walk without applying it)? */
 int array_sources_widenable(Compiler *c, int v) {
-  SrcWalk st = { .niv = 0 };
+  SrcWalk st = { .nslot = 0 };
   return array_src_walk(c, v, 0, 0, &st, 0) == 1;
 }
 /* Widens every array the value `v` can be to the general Array, when all
    of them can be (array_src_walk). Returns 1 on a change. */
 static int widen_array_sources(Compiler *c, int v) {
-  SrcWalk st = { .niv = 0 };
+  SrcWalk st = { .nslot = 0 };
   if (!array_src_walk(c, v, 0, 0, &st, 0)) return 0;
   return array_src_walk(c, v, 0, 1, &st, 0);
 }
@@ -9499,11 +9562,6 @@ int widen_arg_array(Compiler *c, int arg) {
       lv_set_type(al, TY_POLY_ARRAY); al->poly_array_pin = 1; return !was;
     }
     return widen_array_sources(c, arg);
-  }
-  if (ak == NK_GlobalVariableReadNode || ak == NK_ClassVariableReadNode || ak == NK_ConstantReadNode) {
-    TyRef ns = named_array_slot(c, arg);
-    if (ns && ty_is_array(*ns) && *ns != TY_POLY_ARRAY) { ty_ref_set(c, ns, TY_POLY_ARRAY); return 1; }
-    return 0;
   }
   return widen_array_sources(c, arg);
 }
@@ -9603,7 +9661,7 @@ static int bp_ix_first(Compiler *c, const char *name, int scope) {
    own (a new array a builtin answers, which only a pinned slot converts):
    only then is the slot they are the values of pinned. */
 static int leaves_need_pin(Compiler *c, const int *lv, int n, TyKind elem) {
-  SrcWalk st = { .niv = 0 };
+  SrcWalk st = { .nslot = 0 };
   for (int i = 0; i < n; i++) {
     TyKind t = infer_type(c, lv[i]);
     if (!ty_is_array(t) || t == TY_POLY_ARRAY || ty_is_ptr_array(t) || elem == ty_array_elem(t)) continue;
@@ -9618,7 +9676,7 @@ static int leaves_need_pin(Compiler *c, const int *lv, int n, TyKind elem) {
    array of a typed kind converts there. With `apply` builds them so,
    answering 1 on a change. */
 static int leaves_widen_to_poly_array(Compiler *c, const int *lv, int n, int apply) {
-  SrcWalk st = { .niv = 0 };
+  SrcWalk st = { .nslot = 0 };
   int ch = 0;
   for (int i = 0; i < n; i++) {
     if (infer_type(c, lv[i]) == TY_POLY_ARRAY) continue;

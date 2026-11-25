@@ -245,7 +245,9 @@ there. A method's parameter is a computed name when a caller hands it one
 through a method that passes the parameter on; handed only literals, it keeps
 the literal arms. An element of a table filled with such names is computed too
 (`M = Hash.new { |h, t| h[t] = :"on_#{t}" }` then `send(M[t])`, or a table a
-`[]=` stores them into). A **literal** name is fully resolved -- see below.
+`[]=` stores them into). A caller hands a computed name the same way from an
+instance variable a computed name is written into (`@name = name`, then
+`dispatch(@name)`). A **literal** name is fully resolved -- see below.
 `public_send(*args, &blk)` with the name as the first element of a splatted
 variable (activesupport's `Object#try`) dispatches too: the arms take
 `*args.drop(1)`. The send's block -- written at the send or a forwarded `&blk`

@@ -6560,7 +6560,7 @@ static int param_handed_computed_name(Compiler *c, int arg, const char *vn, int 
     int x = av[pi];
     NodeKind xk = nt_kind(nt, x);
     if (xk == NK_SplatNode || xk == NK_KeywordHashNode || xk == NK_BlockArgumentNode) continue;
-    if (value_is_computed_name(c, x) || (xk == NK_LocalVariableReadNode && send_name_is_computed(c, x, depth + 1))) res = 1;
+    if (value_is_computed_name(c, x) || ((xk == NK_LocalVariableReadNode || xk == NK_InstanceVariableReadNode) && send_name_is_computed(c, x, depth + 1))) res = 1;
   }
   /* the memo may have been rebuilt by a deeper call: write only into the live one */
   if (key >= 0 && c->send_param_memo && c->send_param_memo_nodes == nt->count && key < c->send_param_memo_n)

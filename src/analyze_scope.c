@@ -14808,7 +14808,7 @@ static void bc_check(Bc *b, int id, int in_defined) {
      the read does not look in: once the file runs, the read and defined?
      would take the leaf's class from those scopes */
   if (nt_autoload_named(nt, n)) {
-    unsupported_feature(b->c, id, "--load-model=graph: an autoloaded constant the program defines only in another scope, for now");
+    unsupported_feature(b->c, id, "load model: an autoloaded constant the program defines only in another scope, for now");
     return;
   }
   if (in_defined) {
@@ -14911,7 +14911,7 @@ static void bc_check_scoped(Bc *b, int v) {
     /* a registration of the leaf: refused where the leaf names a constant
        elsewhere, as bc_check refuses a bare read */
     else if (bc_has(&b->nested, nm) || bc_has(&b->defs, nm))
-      unsupported_feature(b->c, v, "--load-model=graph: an autoloaded constant the program defines only in another scope, for now");
+      unsupported_feature(b->c, v, "load model: an autoloaded constant the program defines only in another scope, for now");
   }
   free(p);
 }

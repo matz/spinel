@@ -392,7 +392,7 @@ int prog_cmp(Compiler *c, int a, int b, int at, const char *reader) {
   int o = prog_order_for(c, a, b, reader);
   if (o == PROG_UNKNOWN) {
     char msg[256];
-    snprintf(msg, sizeof msg, "--load-model=graph: %s reads the order of two files, one of them loaded at no fixed point, for now", reader);
+    snprintf(msg, sizeof msg, "load model: %s reads the order of two files, one of them loaded at no fixed point, for now", reader);
     unsupported_feature(c, at, msg);
   }
   return o;
@@ -410,7 +410,7 @@ int prog_cmp_run(Compiler *c, int a, int b, int at, const char *reader) {
   int o = elab_order(c, a, b);
   if (o == PROG_UNKNOWN) {
     char msg[256];
-    snprintf(msg, sizeof msg, "--load-model=graph: %s reads the order of two files, one of them loaded at no fixed point, for now", reader);
+    snprintf(msg, sizeof msg, "load model: %s reads the order of two files, one of them loaded at no fixed point, for now", reader);
     unsupported_feature(c, at, msg);
   }
   return o;
@@ -776,7 +776,7 @@ void prog_refuse_loads(Compiler *c) {
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
     const char *name = nt_str(nt, id, "name");
     if (c->nautoloads && (is_const_query_name(name) || is_constants_list_name(name) || is_autoload_query_name(name)))
-      unsupported_feature(c, id, "--load-model=graph: constant-table query with autoload registrations, for now");
+      unsupported_feature(c, id, "load model: constant-table query with autoload registrations, for now");
     /* a receiverless include of an autoloaded module that is not a plain
        statement of a class body (the top level, a modifier `if`, a block, a
        `send`): the declaration does not take effect there, or the module's
@@ -789,13 +789,13 @@ void prog_refuse_loads(Compiler *c) {
     if (!msend && !(mav && is_mixin_call(name) && !prog_mixin_plain_stmt(c, id))) mav = NULL;
     for (int j = msend ? msent : 0; mav && j < margc; j++)
       if (elab_autoload_read(c, mav[j]))
-        unsupported_feature(c, id, "--load-model=graph loads an autoload's file at its constant's first reference only later, for now");
+        unsupported_feature(c, id, "the load model loads an autoload's file at its constant's first reference only later, for now");
     if (!is_autoload_name(name)) continue;
     int rv = nt_ref(nt, id, "receiver");
     int shadow = elab_autoload_shadow(c, id);
     if (shadow == ELAB_YES || (shadow == ELAB_UNKNOWN && rv < 0)) {
       if (rv < 0)
-        unsupported_feature(c, id, "--load-model=graph loads an autoload's file at its constant's first reference only later, for now");
+        unsupported_feature(c, id, "the load model loads an autoload's file at its constant's first reference only later, for now");
       continue;
     }
     /* on a value no module can be (`Object.new.autoload`, a constant
@@ -805,33 +805,33 @@ void prog_refuse_loads(Compiler *c) {
     NodeKind rk = rv >= 0 ? nt_kind(nt, rv) : NK_SelfNode;
     if (rk != NK_SelfNode && elab_value_not_module(c, rv)) continue;
     if (shadow == ELAB_UNKNOWN || (rk != NK_SelfNode && rk != NK_ConstantReadNode && rk != NK_ConstantPathNode))
-      unsupported_feature(c, id, "--load-model=graph: unresolved autoload owner");
+      unsupported_feature(c, id, "load model: unresolved autoload owner");
     int n; const AutoloadRegistration *a = comp_autoloads(c, id, &n);
-    if (!n) unsupported_feature(c, id, "--load-model=graph: unresolved autoload registration");
+    if (!n) unsupported_feature(c, id, "load model: unresolved autoload registration");
     /* These body emitters do not dispatch an implicit rescue/ensure body.
        Any other dropped ancestor has the same effect on the registration. */
     if (prog_registration_dropped(c, id))
-      unsupported_feature(c, id, "--load-model=graph loads an autoload's file at its constant's first reference only later, for now");
+      unsupported_feature(c, id, "the load model loads an autoload's file at its constant's first reference only later, for now");
     for (int j = 0; j < n; j++) {
       if (elab_point_from(c, id).region > 0 && c->node_cbody[id] >= 0)
-        unsupported_feature(c, id, "--load-model=graph: autoload registration in a deferred class or module body, for now");
-      if (!a[j].slot) unsupported_feature(c, id, "--load-model=graph: unresolved autoload owner");
-      if (!a[j].file) unsupported_feature(c, id, "--load-model=graph does not load the program's own entry file again, for now");
+        unsupported_feature(c, id, "load model: autoload registration in a deferred class or module body, for now");
+      if (!a[j].slot) unsupported_feature(c, id, "load model: unresolved autoload owner");
+      if (!a[j].file) unsupported_feature(c, id, "the load model does not load the program's own entry file again, for now");
       /* after another registration's autoload ran the file, CRuby still
          answers defined? of this one "constant" until its own runs; the
          runtime keeps the file's state, not each registration's */
       if (a[j].file > 0 && prog_autoload_file_shared(c, &a[j]) && !elab_autoload_file_defines(c, a[j].slot, a[j].file))
-        unsupported_feature(c, id, "--load-model=graph: autoload registrations sharing a file that does not define each one's constant, for now");
+        unsupported_feature(c, id, "load model: autoload registrations sharing a file that does not define each one's constant, for now");
     }
   }
   if (c->nautoloads) {
     NT_FOREACH_KIND(nt, NK_ConstantPathNode, id)
       if (elab_autoload_scope_open(c, id))
-        unsupported_feature(c, id, "--load-model=graph loads an autoload's file at its constant's first reference only later, for now");
+        unsupported_feature(c, id, "the load model loads an autoload's file at its constant's first reference only later, for now");
     int ndk = 0; const NodeKind *dk = class_def_kinds(&ndk);
     for (int dh = 0; dh < ndk; dh++) NT_FOREACH_KIND(nt, dk[dh], id)
       if ((class_def_is_class(nt, id) || class_def_is_module(nt, id)) && prog_header_scope_autoloaded(c, id))
-        unsupported_feature(c, id, "--load-model=graph: a class header whose scope an autoload defines, for now");
+        unsupported_feature(c, id, "load model: a class header whose scope an autoload defines, for now");
   }
   int *parent = an_parent_map(nt);
   if (!parent) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
@@ -840,10 +840,10 @@ void prog_refuse_loads(Compiler *c) {
     NodeKind k = kinds[ki];
     if (k == NK_LoadNode) {
       if (nt_int(nt, id, "target_file", -1) == 0)
-        unsupported_feature(c, id, "--load-model=graph does not load the program's own entry file again, for now");
+        unsupported_feature(c, id, "the load model does not load the program's own entry file again, for now");
       for (int j = 0; j < prog_load_ncand(nt, id); j++)
         if (prog_load_cand(nt, id, j) == 0)
-          unsupported_feature(c, id, "--load-model=graph: a computed require may load the program's own entry file again, for now");
+          unsupported_feature(c, id, "load model: a computed require may load the program's own entry file again, for now");
     }
     else if (k == NK_ReturnNode) {
       /* the nearest method, lambda or block around it: a block's, at the top level */
@@ -854,7 +854,7 @@ void prog_refuse_loads(Compiler *c) {
       for (int b = a; r >= 0 && b >= 0; b = parent[b])
         if (nt_kind(nt, b) == NK_DefNode || nt_kind(nt, b) == NK_LambdaNode) r = -1;
       if (r >= 0 && r != nt->root_id)
-        unsupported_feature(c, id, "--load-model=graph: a `return` in a block at a required file's top level, for now");
+        unsupported_feature(c, id, "load model: a `return` in a block at a required file's top level, for now");
     }
   }
   free(parent);
@@ -1625,7 +1625,7 @@ void prog_refuse_order(Compiler *c) {
     for (int k = 0; k < n; k++) {
       int prep; const int *av;
       if (i > 0 && mixin_stmt_args(nt, v[k], &prep, &av) >= 0 && !prep)
-        unsupported_feature(c, v[k], "--load-model=graph: a top-level include in a required file, for now");
+        unsupported_feature(c, v[k], "load model: a top-level include in a required file, for now");
     }
   }
 }

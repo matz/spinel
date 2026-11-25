@@ -177,7 +177,7 @@ def hidden?(name) = name.start_with?("__") || name.include?("#") || name.include
 def spinel_events(spinel, prog)
   ok, rec = run(spinel, "--dump-load-record", prog)
   unless ok
-    refusal = rec.lines.map(&:strip).find { |l| l.match?(/:\d+: --load-model=graph\b/) }
+    refusal = rec.lines.map(&:strip).find { |l| l.match?(/:\d+: (the )?load model\b/) }
     return [nil, refusal, true] if refusal
     return [nil, rec.lines.last.to_s.strip.then { |l| l.empty? ? $?.to_s : l }, false]
   end

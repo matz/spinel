@@ -403,7 +403,7 @@ cat > "$tmp/autoload/main.rb" <<'RUBY'
 def autoload(*) = puts("user top")
 autoload(:Lib, File.join(__dir__, "lib"))
 RUBY
-refused autoload "--load-model=graph loads an autoload's file at its constant's first reference only later, for now"
+refused autoload "the load model loads an autoload's file at its constant's first reference only later, for now"
 cat > "$tmp/autoload/main.rb" <<'RUBY'
 class Holder
   def x(*) = puts("user alias")
@@ -414,7 +414,7 @@ class Holder
 end
 Holder.new.run
 RUBY
-refused autoload "--load-model=graph loads an autoload's file at its constant's first reference only later, for now"
+refused autoload "the load model loads an autoload's file at its constant's first reference only later, for now"
 # A mixin that supplies autoload, even conditionally, prevents registration.
 for form in 'extend Lazy' 'extend Lazy if ARGV.empty?'; do
   cat > "$tmp/autoload/main.rb" <<RUBY
@@ -426,7 +426,7 @@ module Holder
   autoload :Lib, File.join(__dir__, "lib")
 end
 RUBY
-  refused autoload "--load-model=graph loads an autoload's file at its constant's first reference only later, for now"
+  refused autoload "the load model loads an autoload's file at its constant's first reference only later, for now"
 done
 
 # A change to autoload in the receiver's lookup chain must not register a file.
@@ -456,7 +456,7 @@ class Holder
   autoload :Lib, File.join(__dir__, "lib")
 end
 RUBY
-  refused autoload "--load-model=graph loads an autoload's file at its constant's first reference only later, for now"
+  refused autoload "the load model loads an autoload's file at its constant's first reference only later, for now"
 done
 # A scoped read through a class whose superclass chain the record does not
 # know may reach Object's registration: refused as on master.
@@ -471,30 +471,30 @@ rescue NameError
   puts "ne"
 end
 RUBY
-refused autoload "--load-model=graph loads an autoload's file at its constant's first reference only later, for now"
+refused autoload "the load model loads an autoload's file at its constant's first reference only later, for now"
 # A top-level include of an autoloaded module, a scoped read through a builtin
 # class, and a query of the constant table beside a registration are refused.
 printf 'puts "loaded"\nmodule Lib; def hi = 1; end\n' > "$tmp/autoload/lib.rb"
 printf 'autoload :Lib, File.join(__dir__, "lib")\ninclude Lib\np hi\n' > "$tmp/autoload/main.rb"
-refused autoload "--load-model=graph loads an autoload's file at its constant's first reference only later, for now"
+refused autoload "the load model loads an autoload's file at its constant's first reference only later, for now"
 # ... and so are a conditional include and a send of include in a class body.
 for form in 'include Lib if ARGV.empty?' 'send(:include, Lib)'; do
   printf 'autoload :Lib, File.join(__dir__, "lib")\nclass Holder\n  %s\nend\np Holder.new.hi\n' "$form" > "$tmp/autoload/main.rb"
-  refused autoload "--load-model=graph loads an autoload's file at its constant's first reference only later, for now"
+  refused autoload "the load model loads an autoload's file at its constant's first reference only later, for now"
 done
 printf 'autoload :Lib, File.join(__dir__, "lib")\nbegin\n  String::Lib\nrescue NameError\n  puts "ne"\nend\n' > "$tmp/autoload/main.rb"
-refused autoload "--load-model=graph loads an autoload's file at its constant's first reference only later, for now"
+refused autoload "the load model loads an autoload's file at its constant's first reference only later, for now"
 # A feature name with no directory is looked up on the load path, not beside the file.
 printf 'autoload :Lib, "lib"\np Lib\n' > "$tmp/autoload/main.rb"
 refused autoload "unresolved autoload registration"
 for form in 'p Object.autoload?(:Lib)' 'p Object.constants'; do
   printf 'autoload :Lib, File.join(__dir__, "lib")\n%s\n' "$form" > "$tmp/autoload/main.rb"
-  refused autoload "--load-model=graph: constant-table query with autoload registrations, for now"
+  refused autoload "load model: constant-table query with autoload registrations, for now"
 done
 printf 'module Lib; end\n' > "$tmp/autoload/lib.rb"
 for form in 'define_method(["other"].first.to_sym) {}' 'def old; end; alias :"#{:other}" old'; do
   printf 'class Holder\n  %s\n  autoload :Lib, File.join(__dir__, "lib")\nend\n' "$form" > "$tmp/autoload/main.rb"
-  refused autoload "--load-model=graph loads an autoload's file at its constant's first reference only later, for now"
+  refused autoload "the load model loads an autoload's file at its constant's first reference only later, for now"
 done
 printf 'autoload :Lib, File.join(__dir__, "lib")\np Lib\n' > "$tmp/autoload/main.rb"
 # Closed autoload registrations compile; unresolved names and path sets are refused.
@@ -544,7 +544,7 @@ refused autoload "an autoloaded constant the program defines only in another sco
 for body in 'class Holder' 'module Holder' 'class Holder; end; class << Holder'; do
   for clause in rescue ensure; do
     printf '%s\n  autoload :Lib, File.join(__dir__, "lib")\n%s\n  puts "clause"\nend\n' "$body" "$clause" > "$tmp/autoload/main.rb"
-    refused autoload "--load-model=graph loads an autoload's file at its constant's first reference only later, for now"
+    refused autoload "the load model loads an autoload's file at its constant's first reference only later, for now"
   done
 done
 printf 'require_relative "main"\n' > "$tmp/entry/lib.rb"

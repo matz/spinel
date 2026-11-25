@@ -27485,8 +27485,9 @@ static int cn_site_repeats(const NodeTable *nt, const int *parent, int id) {
 }
 /* What a statement of a Class.new block is checked against (cn_stmt_reruns):
    the program's def names, the block's one parameter (its class, NULL for
-   none) and whether the statement stands ahead of a declaration */
-typedef struct { const ANameHash *defnames; const char *param; int early; } CnRerun;
+   none), whether the statement stands ahead of a declaration, and whether
+   the block defines a method of the class itself (`def self.x`) */
+typedef struct { const ANameHash *defnames; const char *param; int early, sdefs; } CnRerun;
 /* Is node s the class the block runs on, read as a plain value: self, or
    its one parameter? */
 static int cn_reads_class(const NodeTable *nt, const CnRerun *r, int s) {
@@ -27504,7 +27505,9 @@ static int cn_reads_class(const NodeTable *nt, const CnRerun *r, int s) {
    where it reads the frame it runs in (block_given?, binding, __method__).
    Ahead of a declaration (early), where the block would see what that
    declaration adds missing, it calls only Kernel's functions of a name the
-   program defines no method of and does not read the class: nothing then
+   program defines no method of, and reads the class only as an argument of
+   a call of a name the program defines no method of, in a block that
+   defines no method of the class itself (`$all << self`): nothing then
    asks the class what it has. */
 static int cn_stmt_reruns(const NodeTable *nt, int s, const CnRerun *r) {
   if (s < 0) return 1;
@@ -27527,7 +27530,13 @@ static int cn_stmt_reruns(const NodeTable *nt, int s, const CnRerun *r) {
     if (!nm || is_class_declaration_call(nm) || is_method_name_reflection(nm) || is_frame_reading_function(nm)) return 0;
     if (!r->early) break;
     if (nt_ref(nt, s, "receiver") < 0 && (!is_kernel_module_function(nm) || anh_has(r->defnames, nm))) return 0;
-    break;
+    if (!cn_stmt_reruns(nt, nt_ref(nt, s, "receiver"), r) || !cn_stmt_reruns(nt, nt_ref(nt, s, "block"), r)) return 0;
+    int args = nt_ref(nt, s, "arguments"), na = 0;
+    const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &na) : NULL;
+    int plain = !anh_has(r->defnames, nm) && !r->sdefs;
+    for (int j = 0; j < na; j++)
+      if (!(plain && cn_reads_class(nt, r, av[j])) && !cn_stmt_reruns(nt, av[j], r)) return 0;
+    return 1;
   }
   default: break;
   }
@@ -27568,8 +27577,11 @@ static void cn_rt_body(NodeTable *nt, int blk, int body, const char *cname, cons
   int n = 0, last = -1, moved = 0, param = cn_block_param(nt, blk);
   const int *st = nt_arr(nt, body, "body", &n);
   if (param == -2) return;
-  CnRerun r = { defnames, param >= 0 ? nt_str(nt, param, "name") : NULL, 0 };
-  for (int i = 0; i < n; i++) if (stmt_only_declares(nt, st[i], defnames)) last = i;
+  CnRerun r = { defnames, param >= 0 ? nt_str(nt, param, "name") : NULL, 0, 0 };
+  for (int i = 0; i < n; i++) {
+    if (stmt_only_declares(nt, st[i], defnames)) last = i;
+    if (nt_kind(nt, st[i]) == NK_DefNode && nt_ref(nt, st[i], "receiver") >= 0) r.sdefs = 1;
+  }
   for (int i = 0; i < n; i++) {
     if (stmt_only_declares(nt, st[i], defnames)) continue;
     r.early = i < last;

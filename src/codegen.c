@@ -14423,10 +14423,11 @@ static void emit_cls_answers_dispatch(Compiler *c, Buf *b) {
   /* the temporaries the allocate arms name live in this function alone:
      hand the counter back so the rest of the program numbers as before */
   int tmp_saved = g_tmp;
-  buf_puts(b, "static sp_int sp_cls_answers_id(sp_RbVal v) {\n"
-              "  if (v.tag != SP_TAG_CLASS) return -1;\n"
-              "  if (v.cls_id != SP_CLASS_BY_NAME) return v.cls_id;\n"
-              "  if (!v.v.s) return -1;\n");
+  char key[64];
+  buf_printf(b, "static sp_int sp_cls_answers_id(sp_RbVal v) {\n"
+                "  if (v.tag != SP_TAG_CLASS) return -1;\n"
+                "  if (v.cls_id != SP_CLASS_BY_NAME) return %s;\n"
+                "  if (!v.v.s) return -1;\n", class_value_key(c, -1, "v", key, sizeof key));
   for (int i = 0; i < c->nclasses; i++) {
     if (is_builtin_reopen(c->classes[i].name)) continue;
     const char *cn = class_ruby_name(c, i);
@@ -18126,14 +18127,17 @@ static void emit_super_value(Compiler *c, int id, Buf *b) {
       buf_printf(&rb, "({ sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d); ", tk, kb.p ? kb.p : "sp_box_nil()", tk);
       emit_super_blockarg_effect(c, id, &rb);
       buf_printf(&rb, "if (_t%d.tag != SP_TAG_CLASS) sp_raise_cls(\"TypeError\", \"class or module required\"); ", tk);
-      /* (a by-value object, detect_value_types, is of the method's class: no class below it builds one) */
-      char scls[96];
-      if (c->classes[s->class_id].is_value_type) snprintf(scls, sizeof scls, "%d", s->class_id);
-      else snprintf(scls, sizeof scls, "%s->cls_id", g_self);
+      /* (a by-value object, detect_value_types, is of the method's class: no class below it builds one;
+         a site class's instance answers its record, emit_obj_class_id) */
+      Buf ob; memset(&ob, 0, sizeof ob);
+      if (c->classes[s->class_id].is_value_type) buf_printf(&ob, "%d", s->class_id);
+      else if (class_family_has_rt_site(c, s->class_id)) emit_obj_class_id(c, s->class_id, g_self, &ob);
+      else buf_printf(&ob, "%s->cls_id", g_self);
       if (barm == BSUP_INSTANCE_OF)
-        buf_printf(&rb, "(sp_bool)(sp_unbox_class(_t%d).cls_id == %s); })", tk, scls);
+        buf_printf(&rb, "(sp_bool)(sp_unbox_class(_t%d).cls_id == %s); })", tk, ob.p);
       else
-        buf_printf(&rb, "(sp_bool)sp_class_le((sp_Class){%s}, sp_unbox_class(_t%d)); })", scls, tk);
+        buf_printf(&rb, "(sp_bool)sp_class_le((sp_Class){%s}, sp_unbox_class(_t%d)); })", ob.p, tk);
+      free(ob.p);
       if (repr_of(c, id).kind == RK_BOXED) emit_boxed_text(c, TY_BOOL, rb.p, b);
       else buf_puts(b, rb.p);
       free(kb.p); free(rb.p);

@@ -7134,10 +7134,12 @@ static int emit_poly_class_when_value(Compiler *c, int cond_id, const char *tmp,
          `when M` matches K itself, as is_a?(M) does */
       if (comp_class_is_module(c, &c->classes[cid])) {
         int any = 0;
+        char uv[256], key[512]; snprintf(uv, sizeof uv, "sp_unbox_class(%s)", tmp);
+        class_value_key(c, -1, uv, key, sizeof key);
         for (int k = 0; k < c->nclasses; k++)
           if (comp_class_singleton_has_module(c, k, cid)) {
             if (!any) buf_printf(b, " || (%s.tag == SP_TAG_CLASS && (", tmp);
-            buf_printf(b, "%ssp_unbox_class(%s).cls_id == %d", any ? " || " : "", tmp, k);
+            buf_printf(b, "%s%s == %d", any ? " || " : "", key, k);
             any = 1;
           }
         if (any) buf_puts(b, "))");

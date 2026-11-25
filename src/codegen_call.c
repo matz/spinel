@@ -1972,6 +1972,8 @@ int emit_reopen_arm_test(Compiler *c, int kmi, const char *name, const char *cls
      reopening as CRuby does. A copy of the reopening's method in the class
      (same def) is the same method. */
   Buf t; memset(&t, 0, sizeof t);
+  char pv[256], key[512]; snprintf(pv, sizeof pv, "(%s)", cls);
+  class_value_key(c, -1, pv, key, sizeof key);
   buf_printf(&t, "!sp_class_nil_p(%s) && !sp_class_is_module_val(%s) && ((%s).cls_id < 0 || ((%s).cls_id != SP_CLASS_BY_NAME", cls, cls, cls, cls);
   int rc = comp_core_class(c, CORE_CLASS_REOPEN), kdef = c->scopes[kmi].def_node;
   mtab_enter(c);   /* (the candidate owner of the classes whose class side answers name otherwise: every class is asked by design, no call's question) */
@@ -1979,7 +1981,7 @@ int emit_reopen_arm_test(Compiler *c, int kmi, const char *name, const char *cls
     if (k == rc || comp_class_is_module(c, &c->classes[k])) continue;
     int own = comp_cmethod_in_chain(c, k, name, NULL);
     if (own >= 0 && own != kmi && c->scopes[own].def_node != kdef)
-      buf_printf(&t, " && (%s).cls_id != %d", cls, k);
+      buf_printf(&t, " && %s != %d", key, k);
   }
   mtab_leave(c);
   buf_puts(&t, "))");
@@ -2244,8 +2246,9 @@ static int emit_poly_cls_value_builtin(Compiler *c, int id, const char *name, in
 static void emit_cls_value_test(Compiler *c, int k, int tv, Buf *b) {
   const char *crn = class_ruby_name(c, k);
   if (!crn) crn = c->classes[k].name;
-  buf_printf(b, "(_t%d.cls_id == %d || (_t%d.cls_id == SP_CLASS_BY_NAME && _t%d.v.s && "
-                "strcmp(_t%d.v.s, \"%s\") == 0)) ? ", tv, k, tv, tv, tv, crn);
+  char tvn[24], key[64]; snprintf(tvn, sizeof tvn, "_t%d", tv);
+  buf_printf(b, "(%s == %d || (_t%d.cls_id == SP_CLASS_BY_NAME && _t%d.v.s && "
+                "strcmp(_t%d.v.s, \"%s\") == 0)) ? ", class_value_key(c, -1, tvn, key, sizeof key), k, tv, tv, tv, crn);
 }
 /* One class value's arm of a class-tag switch (a class-value trial arm of
    cplan_poly_cmeth): the call re-entered on the receiver read as the
@@ -14249,10 +14252,15 @@ static void emit_kwsplat_empty_check(Compiler *c, int id, int kwh, const char *l
 }
 
 /* See codegen_call_arms.h. */
-void emit_class_value_key(Compiler *c, int recv, const char *val, Buf *b) {
+const char *class_value_key(Compiler *c, int recv, const char *val, char *out, size_t n) {
   /* (a class made at run time switches as its site class, sp_rtclass.h) */
-  if (cplan_class_value_may_be_rt(c, recv)) buf_printf(b, "sp_rtclass_site(%s.cls_id)", val);
-  else buf_printf(b, "%s.cls_id", val);
+  if (cplan_class_value_may_be_rt(c, recv)) snprintf(out, n, "sp_rtclass_site(%s.cls_id)", val);
+  else snprintf(out, n, "%s.cls_id", val);
+  return out;
+}
+void emit_class_value_key(Compiler *c, int recv, const char *val, Buf *b) {
+  char k[512];
+  buf_puts(b, class_value_key(c, recv, val, k, sizeof k));
 }
 
 /* See codegen_call_arms.h. */
@@ -21340,11 +21348,13 @@ int class_value_arms_yes(const CplanPresList *l) {
    class's own answer */
 void class_value_responds(Compiler *c, const CplanPresList *l, int tv, Buf *b) {
   if (!class_value_arms_yes(l)) return;
+  char tvn[24], key[64]; snprintf(tvn, sizeof tvn, "_t%d", tv);
+  class_value_key(c, -1, tvn, key, sizeof key);
   buf_printf(b, " || (_t%d.tag == SP_TAG_CLASS && (_t%d.cls_id < 0 || _t%d.cls_id == SP_CLASS_BY_NAME ? %d : (0", tv, tv, tv, l->other);
   for (int i = 0; i < l->n; i++) {
     const CplanPresArm *a = &l->arm[i];
     if (a->ans == PRA_NO) continue;
-    buf_printf(b, " || %s_t%d.cls_id == %d", a->ans == PRA_CELLS ? "(" : "", tv, a->cls);
+    buf_printf(b, " || %s%s == %d", a->ans == PRA_CELLS ? "(" : "", key, a->cls);
     if (a->ans != PRA_CELLS) continue;
     buf_puts(b, " && ");
     emit_class_cells_answer(c, &a->cells, a->cells.els, b);
@@ -24984,15 +24994,17 @@ static void emit_object_reopen_vis_precheck(Compiler *c, int id, int tv, const c
       every = m != oci && comp_class_is_module(c, &c->classes[m]) && call_target(c, id, m, vnm, CT_OWN, NULL) >= 0 &&
               comp_class_singleton_has_module(c, oci, m);
     /* the rule the typed receiver's refusal asks (emit_object_reopen_vis_refusal) */
+    char tvn[24], key[64]; snprintf(tvn, sizeof tvn, "_t%d", tv);
+    class_value_key(c, -1, tvn, key, sizeof key);
     for (int k = 0; k < c->nclasses && !every; k++)
       if (k != oci && (call_target(c, id, k, vnm, CT_CMETHOD, NULL) >= 0 ||
                        object_reopen_class_value_owns(c, id, oci, vnm, 0, k)))
-        buf_printf(&cv, " || _t%d.cls_id == %d", tv, k);
+        buf_printf(&cv, " || %s == %d", key, k);
     if (every) buf_printf(b, " && _t%d.tag != SP_TAG_CLASS", tv);
     /* a builtin class value (Integer, a name-boxed one) passes only when
        some builtin class has a class method of the name (Integer.sqrt) */
     else if (builtin_cmethod_name_known(vnm))
-      buf_printf(b, " && !(_t%d.tag == SP_TAG_CLASS && (_t%d.cls_id < 0 || _t%d.cls_id >= %d%s))", tv, tv, tv, c->nclasses, cv.p ? cv.p : "");
+      buf_printf(b, " && !(_t%d.tag == SP_TAG_CLASS && (_t%d.cls_id < 0 || %s >= %d%s))", tv, tv, key, c->nclasses, cv.p ? cv.p : "");
     else if (cv.p)
       buf_printf(b, " && !(_t%d.tag == SP_TAG_CLASS && (0%s))", tv, cv.p);
     free(cv.p);
@@ -26970,9 +26982,11 @@ int emit_poly_isa_test(Compiler *c, const char *cn, const char *v, int exact, Bu
       if (ext) {
         buf_printf(b, " || (%s.tag == SP_TAG_CLASS && (", v);
         int any = 0;
+        char uv[256], key[512]; snprintf(uv, sizeof uv, "sp_unbox_class(%s)", v);
+        class_value_key(c, -1, uv, key, sizeof key);
         for (int k = 0; k < c->nclasses; k++)
           if (comp_class_singleton_has_module(c, k, cid)) {
-            buf_printf(b, "%ssp_unbox_class(%s).cls_id == %d", any ? " || " : "", v, k);
+            buf_printf(b, "%s%s == %d", any ? " || " : "", key, k);
             any = 1;
           }
         buf_puts(b, ")))");

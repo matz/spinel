@@ -268,6 +268,10 @@ void emit_class_value_new_switch(Compiler *c, int recv, int rt2, int kt, int box
    is the node the value comes from, -1 for one only the run time gives (a
    generated function's parameter, a class method's own `_sp_cls`). */
 void emit_class_value_key(Compiler *c, int recv, const char *val, Buf *b);
+/* ...the same key as text, into out (n bytes), for a compare spelled with
+   printf (`KEY == k`); every read of a class value's id against the
+   program's classes goes through one of the two */
+const char *class_value_key(Compiler *c, int recv, const char *val, char *out, size_t n);
 void emit_ctor_arm_case(Compiler *c, int ci, int initm, int rt2, int self_t, const char *pre, const char *args, int given, Buf *b);
 void struct_nil_fill_stmts(Compiler *c, int ci, int given, const char *obj, Buf *out);
 void emit_ctor_arm_param(Compiler *c, Scope *is, int j, const ArgLayout *L, const int *atmp, Buf *pdpre, Buf *out);

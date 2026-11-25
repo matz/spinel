@@ -2393,7 +2393,8 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
       int tk = ++g_tmp;
       buf_printf(b, "({ sp_Class _t%d = ", tk);
       emit_expr(c, recv, b);
-      buf_printf(b, "; if (_t%d.name || _t%d.cls_id != %d) sp_raise_cls(\"NameError\", sp_nomethod_class_msg(", tk, tk, ivk);
+      char tkn[24], key[64]; snprintf(tkn, sizeof tkn, "_t%d", tk);
+      buf_printf(b, "; if (_t%d.name || %s != %d) sp_raise_cls(\"NameError\", sp_nomethod_class_msg(", tk, class_value_key(c, -1, tkn, key, sizeof key), ivk);
       emit_str_literal(b, sym);
       buf_printf(b, ", sp_box_class(_t%d))); ", tk);
     }

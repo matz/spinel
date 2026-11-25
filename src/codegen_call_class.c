@@ -1591,9 +1591,10 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       CplanPresList pl;
       Buf arms = {0};
       if (cplan_presence_list(c, id, rt, &pl)) {
-        char key[64];
+        char key[96], cn[24], ck[64];
         t = ++g_tmp;
-        snprintf(key, sizeof key, "!sp_class_sclass_p(_c%d) && _c%d.cls_id == ", t, t);
+        snprintf(cn, sizeof cn, "_c%d", t);
+        snprintf(key, sizeof key, "!sp_class_sclass_p(_c%d) && %s == ", t, class_value_key(c, -1, cn, ck, sizeof ck));
         emit_presence_arms(c, &pl, key, &arms);
         cplan_presence_list_free(&pl);
       }
@@ -3325,7 +3326,9 @@ int emit_call_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
           }
         }
         int tcid = ++g_tmp;
-        buf_printf(b, "({ int _t%d = (", tcid); emit_expr(c, recv, b); buf_puts(b, ").cls_id; ");
+        { Buf rv; memset(&rv, 0, sizeof rv); buf_puts(&rv, "("); emit_expr(c, recv, &rv); buf_puts(&rv, ")");
+          buf_printf(b, "({ int _t%d = ", tcid); emit_class_value_key(c, recv, rv.p, b); buf_puts(b, "; ");
+          free(rv.p); }
         nd_stamp(id, ND_SWITCH);
         for (int k = 0; k < ncand; k++) {
           MethodLookup ml = { .def_class = -1 };
@@ -4412,7 +4415,8 @@ int emit_cls_value_sg_accessor_of(Compiler *c, int id, int recv, const char *kte
     const char *rn = comp_resolve_cm_alias_at(c, k, name, NULL);
     if (!rn) rn = name;
     if (setter ? !comp_sg_writer_reached(c, k, name, base, sizeof base) : !comp_is_sg_reader(cls, rn)) continue;
-    buf_printf(b, "%sif (_t%d.cls_id == %d) { ", first ? "" : "else ", tk, k);
+    char tkn[24], key[64]; snprintf(tkn, sizeof tkn, "_t%d", tk);
+    buf_printf(b, "%sif (%s == %d) { ", first ? "" : "else ", class_value_key(c, -1, tkn, key, sizeof key), k);
     first = 0;
     if (setter) {
       buf_puts(b, "(void)");
@@ -4476,8 +4480,9 @@ void emit_boxed_cls_sg_first_arms(Compiler *c, int id, const char *name, int arg
     if (!cls_sg_accessor_first(c, id, k, name, argc)) continue;
     const char *rn = comp_resolve_cm_alias_at(c, k, name, NULL);
     const char *crn = class_ruby_name(c, k) ? class_ruby_name(c, k) : c->classes[k].name;
-    buf_printf(b, "(_t%d.cls_id == %d || (_t%d.cls_id == SP_CLASS_BY_NAME && _t%d.v.s && "
-                  "strcmp(_t%d.v.s, \"%s\") == 0)) ? ({ ", tv, k, tv, tv, tv, crn);
+    char tvn[24], key[64]; snprintf(tvn, sizeof tvn, "_t%d", tv);
+    buf_printf(b, "(%s == %d || (_t%d.cls_id == SP_CLASS_BY_NAME && _t%d.v.s && "
+                  "strcmp(_t%d.v.s, \"%s\") == 0)) ? ({ ", class_value_key(c, -1, tvn, key, sizeof key), k, tv, tv, tv, crn);
     if (setter) {
       buf_puts(b, "(void)");
       emit_sg_accessor(c, id, k, c->classes[k].name, name, argc, argv, b);
@@ -5364,8 +5369,10 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
             buf_puts(b, "; !(0");
             /* BasicObject itself (no class of the table: its builtin id) */
             if (bo) buf_printf(b, " || _t%d.cls_id == %d", tc, builtin_class_id("BasicObject"));
+            char tcn[24], key[64]; snprintf(tcn, sizeof tcn, "_t%d", tc);
+            class_value_key(c, -1, tcn, key, sizeof key);
             for (int k = 0; k < c->nclasses; k++)
-              if (class_below_object(c, k) && !const_defined_from(c, k, cn0)) buf_printf(b, " || _t%d.cls_id == %d", tc, k);
+              if (class_below_object(c, k) && !const_defined_from(c, k, cn0)) buf_printf(b, " || %s == %d", key, k);
             buf_puts(b, ")");
             /* a constant not assigned yet is not defined: asked at run time */
             if (const_has_flag(comp_const(c, cn0))) buf_printf(b, " && cst_%s__set", cn0);
@@ -5382,8 +5389,10 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
           for (int k = 0; k < c->nclasses; k++) {
             if (!const_seen_by_class(c, k, cn0)) continue;
             LocalVar *klv = const_defined_slot(c, k, cn0);
-            if (const_has_flag(klv)) buf_printf(b, " || (_t%d.cls_id == %d && cst_%s__set)", tc, k, klv->name);
-            else buf_printf(b, " || _t%d.cls_id == %d", tc, k);
+            char tcn[24], key[64]; snprintf(tcn, sizeof tcn, "_t%d", tc);
+            class_value_key(c, -1, tcn, key, sizeof key);
+            if (const_has_flag(klv)) buf_printf(b, " || (%s == %d && cst_%s__set)", key, k, klv->name);
+            else buf_printf(b, " || %s == %d", key, k);
           }
           buf_puts(b, ")");
           buf_puts(b, "; })");
@@ -5731,7 +5740,8 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
           if (mcid >= 0 && comp_class_is_module(c, &c->classes[mcid]) && !exact)
             for (int k = 0; k < c->nclasses; k++)
               if (comp_class_singleton_has_module(c, k, mcid)) {
-                buf_printf(b, "%s_cl%d.cls_id == %d", any ? " || " : "", _clt, k);
+                char cln[24], key[64]; snprintf(cln, sizeof cln, "_cl%d", _clt);
+                buf_printf(b, "%s%s == %d", any ? " || " : "", class_value_key(c, -1, cln, key, sizeof key), k);
                 any = 1;
               }
           if (!any) buf_printf(b, "(void)_cl%d, 0", _clt);

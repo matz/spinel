@@ -79,3 +79,19 @@ mk 1
 mk 2
 "babo"
 1
+"éĀ"
+#<Encoding:UTF-8>
+"\xC8\xC9"
+#<Encoding:BINARY (ASCII-8BIT)>
+"éĀ"
+#<Encoding:UTF-8>
+"éĀ"
+#<Encoding:UTF-8>
+"éĀ"
+#<Encoding:UTF-8>
+"\xFF\xC8"
+#<Encoding:BINARY (ASCII-8BIT)>
+"ab\xC8\xC9"
+#<Encoding:BINARY (ASCII-8BIT)>
+"abéc"
+#<Encoding:UTF-8>

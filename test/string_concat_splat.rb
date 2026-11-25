@@ -150,3 +150,22 @@ t = +"a"
 t.concat(*parts, &(cnt += 1; pr))
 t.concat(*op(1), &mk(1))
 p t.prepend(*parts, &mk(2)), cnt
+
+# an Integer is the character it codes in the encoding the operands before it
+# leave the text in
+cps = ["é", 256]
+p ''.b.concat(*cps), ''.b.concat(*cps).encoding
+cps = [200, 201]
+p ''.b.concat(*cps), ''.b.concat(*cps).encoding
+# the same through a literal's splat and written out
+p ''.b.concat(*["é", 256]), ''.b.concat(*["é", 256]).encoding
+p ''.b.concat("é", 256), ''.b.concat("é", 256).encoding
+w = ''.b
+w.concat("é", 256)
+p w, w.encoding
+p (+"").concat("\xff".b, 200), (+"").concat("\xff".b, 200).encoding
+# an ASCII-only literal or an Integer before it leaves the receiver's encoding
+x = ''.b.concat("ab", 200, 201)
+p x, x.encoding
+x = (+"").concat("ab", 0xe9, "c")
+p x, x.encoding

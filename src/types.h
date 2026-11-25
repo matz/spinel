@@ -218,6 +218,7 @@ const char *ty_name(TyKind t);         /* legacy string tag, for diagnostics */
 int ty_builtin_ivar_less(TyKind t);    /* a builtin value that lays out no ivars */
 int ty_bivar_keyed(TyKind t);          /* ...whose ivars the runtime's map can hold */
 int ty_is_numeric(TyKind t);           /* INT or FLOAT */
+int ty_is_string(TyKind t);            /* a String of either face: STRING or STRBUF */
 int ty_never_callable(TyKind t);       /* kind can never answer #call */
 TyKind ty_promote_numeric(TyKind a, TyKind b); /* fold-accumulator numeric promotion */
 /* Can a seeded fold (sum(seed), inject(seed, :op)) keep the element's C type?
@@ -460,7 +461,7 @@ static inline const TyTraits *ty_traits_of(TyKind t) {
    a builtin kind whose row has a box, a String of either face, a user
    object or an object array. An unsettled kind (TY_UNKNOWN) cannot. */
 static inline int ty_boxable(TyKind t) {
-  if (t == TY_STRING || t == TY_STRBUF) return 1;
+  if (ty_is_string(t)) return 1;
   const TyTraits *tr = ty_traits_of(t);
   if (tr) return tr->box_text != 0;
   return ty_is_object(t) || ty_is_obj_array(t);

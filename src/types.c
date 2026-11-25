@@ -330,6 +330,7 @@ const char *ty_hash_cname(TyKind h) {
 }
 
 int ty_is_numeric(TyKind t) { return t == TY_INT || t == TY_BIGINT || t == TY_FLOAT; }
+int ty_is_string(TyKind t) { return t == TY_STRING || t == TY_STRBUF; }
 /* Kinds that can never answer #call: composing one is CRuby's TypeError
    (callable object is expected). A user object stays out -- it may define
    call -- as do poly/unknown, whose value is decided at run time. */

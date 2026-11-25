@@ -577,8 +577,6 @@ static void usage(void) {
     "  --dump-ast  Print the text AST and exit (debug)\n"
     "  --dump-load-graph  Print the files the program loads and what each require\n"
     "              resolves to, and exit (debug)\n"
-    "  --load-model=MODEL  graph (default): each file is its own root and a\n"
-    "              require a load node; inline: required files are spliced in\n"
     "  --dump-value-positions  Print the value positions of each method body and of\n"
     "              the program, and exit (debug)\n"
     "  --check-value-pos  Check the value-position iterator's limits and exit (debug)\n"
@@ -607,17 +605,9 @@ static int table_mode_of(const char *a) {
    universe is known, so a require that resolves to nothing is a bug; `spin
    build` has always compiled this way through SPINEL_STRICT_REQUIRE, and `spin
    flags` needs to hand the same gate to a caller driving the compiler itself
-   (#4105). Each required file is kept as its own root with a load node per
-   require, the one load model: `--load-model=graph` is still taken and
-   chooses nothing, and `--load-model=inline` names the model that was
-   removed. 1 when `a` is one of them. */
+   (#4105). 1 when `a` is one of them. */
 static int parse_flag(const char *a) {
   if (sp_streq(a, "--strict-require")) return g_strict_require_cli = 1;
-  if (sp_streq(a, "--load-model=inline")) {
-    fprintf(stderr, "spinel: --load-model=inline was removed; required files load as --load-model=graph loads them\n");
-    exit(2);
-  }
-  if (sp_streq(a, "--load-model=graph")) return 1;
   return 0;
 }
 /* The dumps of an analysis answer, printed once the analysis has it:

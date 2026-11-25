@@ -1526,7 +1526,42 @@ static void prog_warn_missing(Compiler *c, const unsigned char *seen) {
    its own). A placed file whose require is no longer in the order, since
    its file lost its place, has none either. (A window that tells when a
    method can first be called would tighten this: the statement holding the
-   require is the earliest it can run.) */
+   require is the earliest it can run.) A require in a file with no place
+   runs no earlier than the first statement of the order that may load that
+   file (prog_file_earliest). */
+/* The earliest position in the order (pos) at which file f's top level can
+   begin: the least of the statements holding the requires that may load it,
+   a require in a file with no place counting from that file's own earliest
+   in turn. A requirer the walk is already asking about (a cycle of
+   requires) adds no way in. -1 when no bound is known: an autoload, a
+   require no statement holds, or a file nothing loads. */
+static int prog_file_earliest(Compiler *c, const int *parent, const int *pos, const unsigned char *seen,
+                              int f, int *asking, int depth) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  enum { DEPTH = 32 };
+  if (f <= 0 || depth >= DEPTH) return -1;
+  for (int k = 0; k < c->nautoloads; k++)
+    if (c->autoloads[k].file == f && seen[c->autoloads[k].node]) return -1;
+  asking[depth] = f;
+  int best = -1, any = 0;
+  NT_FOREACH_KIND(nt, NK_LoadNode, id) {
+    if (!seen[id]) continue;
+    int may = (int)nt_int(nt, id, "target_file", -1) == f || prog_load_open(nt, id);
+    for (int k = 0, nc = prog_load_ncand(nt, id); k < nc && !may; k++) may = prog_load_cand(nt, id, k) == f;
+    if (!may) continue;
+    int from = prog_graph_file_of(nt, id);
+    int cyc = 0;
+    for (int k = 0; k <= depth && !cyc; k++) cyc = asking[k] == from;
+    if (cyc) continue;
+    int ts = prog_top_stmt_of(c, parent, id), at = ts >= 0 ? pos[ts] : -1;
+    if (at < 0) at = prog_file_earliest(c, parent, pos, seen, from, asking, depth + 1);
+    if (at < 0) return -1;
+    if (!any || at < best) best = at;
+    any = 1;
+  }
+  return any ? best : -1;
+}
+
 static void prog_unplace_candidates(Compiler *c, const unsigned char *seen, const unsigned char *live) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n = nt_nroots(nt);
@@ -1546,6 +1581,10 @@ static void prog_unplace_candidates(Compiler *c, const unsigned char *seen, cons
       int nc = prog_load_ncand(nt, id), open = prog_load_open(nt, id);
       if (!seen[id] || (!nc && !open)) continue;
       int ts = prog_top_stmt_of(c, parent, id), sp = ts >= 0 ? pos[ts] : -1;
+      if (sp < 0) {
+        int asking[32];
+        sp = prog_file_earliest(c, parent, pos, seen, prog_graph_file_of(nt, id), asking, 0);
+      }
       for (int k = 0; k < (open ? n - 1 : nc); k++) {
         int f = open ? k + 1 : prog_load_cand(nt, id, k), l = f > 0 && f < n && (open ? live[f] : 1) ? prog_load_by(c, f) : -1;
         if (l >= 0 && (sp < 0 || pos[l] > sp)) { nt_node_set_int(nt, nt_root(nt, f), "load_by", -1); again = 1; }

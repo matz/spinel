@@ -47911,7 +47911,7 @@ static void super_args_shape(const NodeTable *nt, int args, int *splat, int *kw)
 }
 /* Each `super` the call plan finds no method of the program's for, whose
    builtin owner has a call path from a program object's self
-   (comp_bsuper_carried), is the builtin's own call on self: its name, with
+   (CallPlan.bpath), is the builtin's own call on self: its name, with
    self as the receiver, marked builtin_only (and blind to visibility, as a
    super is) so the program's methods of the name do not take it; a Kernel
    module function is the bare call (kernel_recv), the route `Kernel.puts x`
@@ -47932,15 +47932,15 @@ static void lower_builtin_supers(Compiler *c) {
     int si = c->nscope[id];
     if (si < 0 || si >= c->nscopes) continue;
     Scope *s = &c->scopes[si];
-    if (s->is_cmethod || !s->name || s->class_id < 0 || s->class_id == c->toplevel_class) continue;
-    MethodLookup ml = { .def_class = -1 };
-    if (cplan_super_target(c, id, s, &ml) >= 0 || !ml.bowner) continue;
+    /* (the plan says which supers lower, and to which path: CallPlan.bpath) */
+    CallPlan sp = cplan_user_fresh(c, id);
+    BsuperPath path = (BsuperPath)sp.bpath;
+    if (path == BSP_NONE) continue;
     const Scope *st = comp_super_site(c, s);
     const char *mname = comp_scope_user_name(st);
     int blk = nt_ref(nt, id, "block");
-    BsuperPath path = mname ? comp_bsuper_carried(c, id, st, mname, ml.bowner) : BSP_NONE;
     int kfn = path == BSP_KERNEL;
-    if (path == BSP_NONE || (kfn && blk >= 0)) continue;
+    if (kfn && blk >= 0) continue;
     int args = k == NK_SuperNode ? nt_ref(nt, id, "arguments") : super_zsuper_args(c, id, s, par0, path == BSP_ARRAY);
     if (k == NK_ForwardingSuperNode && args < 0) {
       /* (an Array subclass's was refused before, for every such parameter list; the other families keep the
@@ -47955,7 +47955,7 @@ static void lower_builtin_supers(Compiler *c) {
     int splat = 0, kw = 0;
     super_args_shape(nt, args, &splat, &kw);
     if (kfn && (kw || splat || super_def_forwards(c, s))) continue;
-    if (kw && k == NK_ForwardingSuperNode && !builtin_method_takes_keywords(ml.bowner, mname)) {
+    if (kw && k == NK_ForwardingSuperNode && !builtin_method_takes_keywords(sp.bowner, mname)) {
       if (path == BSP_ARRAY)
         unsupported_feature(c, id, "a bare `super` from a method with keyword or `**` parameters into a builtin whose keyword "
                                    "parameters are not known is not supported yet; pass the arguments explicitly");

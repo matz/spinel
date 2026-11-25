@@ -6375,34 +6375,6 @@ const char *comp_super_bowner(Compiler *c, const Scope *s, const char *uname) {
   return root ? builtin_super_owner(root, uname, self && !s->is_prepend_copy) : NULL;
 }
 
-/* Does lower_builtin_supers lower a super in site scope st named uname whose
-   plan names builtin bowner? Not every owner has a call path from a program
-   object's self yet: each family is carried when its path is (the owners
-   not carried keep the ladder in emit_super, which answers them, as before).
-   Carried: a Kernel module function that takes no block (BSP_KERNEL: called
-   bare, as `Kernel.format` is); a super in an Array, Hash, String or Time
-   subclass (the instance is the builtin's value) for the names the Array
-   path answers (comp_arysub_builtin_name; BSP_ARRAY, which passes the
-   method's block on); a method a module prepended to a builtin reopening put
-   in front of the builtin's (BSP_PREPENDED). A module included into a
-   reopened builtin, and a prepended one's self typed as the builtin's value,
-   have no such path: `self.m` there reaches no method at run time, or
-   returns an Enumerator where the method answers a boxed value. */
-BsuperPath comp_bsuper_carried(Compiler *c, int id, const Scope *st, const char *uname, const char *bowner) {
-  /* (the stand-in a version entry's else arm calls for the call made before a later include or prepend is that
-     call's method: a Kernel function is private, and the visibility-blind call a lowered super is would answer an
-     explicit receiver where CRuby raises) */
-  if (builtin_owner_kind(bowner) == BOWN_KERNEL && !st->super_behind && is_kernel_module_function(uname) && !is_frame_reading_function(uname) &&
-      !iter_row(BOP_KERNEL, uname, -1, 0))
-    return BSP_KERNEL;
-  int self = 0;
-  const char *root = comp_super_builtin_root(c, st->class_id, &self);
-  int slot = root ? builtin_core_class_slot(root) : -1;
-  if (st->is_prepend_copy && self && slot >= 0 && slot != CORE_OBJECT && is_builtin_reopen_name(root)) return BSP_PREPENDED;
-  /* (Array's initialize and initialize_copy are rewrite_array_subclass_super's) */
-  return comp_ary_root(c, st->class_id) >= 0 && !is_initialize_family(uname) && comp_arysub_builtin_name(c, id, st->class_id, uname) ? BSP_ARRAY : BSP_NONE;
-}
-
 /* The proc-form clone scope `s` runs, or -1. A def that was cloned holds its
    clone (Scope.pf_clone). A yielding def that lost its name to a later one in
    its class, a reopen or a copy an include makes (pf_by_name), runs the clone

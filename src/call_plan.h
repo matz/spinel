@@ -41,6 +41,10 @@ typedef enum {
   CR_GAP         /* a codegen gap (unsupported) */
 } CplanRefuse;
 
+/* The call path a super into a builtin is lowered to (CallPlan.bpath): an Array, Hash, String or Time subclass's
+   own, a Kernel module function's bare call, a module prepended into a builtin, or none (the plan's arm, bsuper) */
+typedef enum { BSP_NONE, BSP_ARRAY, BSP_KERNEL, BSP_PREPENDED } BsuperPath;
+
 /* which decision refuses it, in the order codegen meets them: the prepasses
    before any emission, then the emitters' own */
 typedef enum {
@@ -144,6 +148,7 @@ typedef struct {
   const char *msg;         /* CP_REFUSE: the message, as the compiler prints it */
   unsigned char rfrom;     /* CP_REFUSE: CplanRefuseFrom */
   unsigned char bsuper;    /* a super with no program method (mi -1): BsuperArm */
+  unsigned char bpath;     /* a super with no program method (mi -1): the BsuperPath whose call on self lower_builtin_supers lowers it to, BSP_NONE for bsuper's arm; an argument list that call cannot spell (lower_builtin_supers' own declines) keeps the arm too */
   const char *bowner;      /* UC_SUPER with no program method (mi -1): the builtin class or module whose method the super reaches (MethodLookup.bowner); in a class method, the owner of a definition hook (cplan_core_hook) */
   unsigned char answers_receiver; /* mi is a class method of an ancestor of owner_ci that answers an instance of owner_ci (cmethod_receiver_class): the function returns a pointer to its own class's type, the call is cast to owner_ci's */
   const char *delegate;     /* the protocol method name, before alias resolution */

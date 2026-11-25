@@ -1,0 +1,4 @@
+[:walk, true, 0, true]
+[:walk, true, 10]
+[:walk_index, true, 0, true]
+[:walk_index, true, 10]

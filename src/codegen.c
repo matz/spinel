@@ -6311,7 +6311,7 @@ static int is_line_marker(const char *p, size_t i, size_t le) {
    `#line` lines? A directive names the program's file, and a path such as
    test/setjmp_local_volatile.rb holding "setjmp" read as a setjmp in the
    code, so the C differed with and without --no-line-map. */
-static int text_has_code(const char *p, size_t beg, size_t end, const char *s) {
+int text_has_code(const char *p, size_t beg, size_t end, const char *s) {
   size_t sl = strlen(s);
   for (size_t i = beg; i < end; ) {
     const char *nl = memchr(p + i, '\n', end - i);

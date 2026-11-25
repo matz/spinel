@@ -83,6 +83,22 @@ int interp_is_literal_fold(const NodeTable *nt, int id) {
   return fold;
 }
 
+/* Are the bytes literal id spells, a StringNode or a tree interp_is_literal_fold
+   folds, all ASCII? Such a literal is read as written in any ASCII-compatible
+   encoding, so a text it is appended to keeps its own. */
+int str_literal_ascii(const NodeTable *nt, int id) {
+  int *flat = &id, n = 1, cap = 0, ok = 1;
+  if (nt_kind(nt, id) == NK_InterpolatedStringNode) { flat = NULL; n = 0; interp_flatten(nt, id, &flat, &n, &cap); }
+  for (int k = 0; k < n && ok; k++) {
+    const unsigned char *s = (const unsigned char *)nt_str(nt, flat[k], "content");
+    size_t len = s ? nt_str_len(nt, flat[k], "content") : 0;
+    ok = nt_kind(nt, flat[k]) == NK_StringNode;
+    for (size_t i = 0; i < len && ok; i++) ok = s[i] < 0x80;
+  }
+  if (flat != &id) free(flat);
+  return ok;
+}
+
 /* Single-buffer construction: every part is either an escaped literal
    (compile-time length), a bounded-width scalar (int <= 21 digits, bool
    <= 5), or a dynamic part pre-evaluated -- in part order, preserving

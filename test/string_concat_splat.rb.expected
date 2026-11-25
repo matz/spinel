@@ -95,3 +95,11 @@ mk 2
 #<Encoding:BINARY (ASCII-8BIT)>
 "abéc"
 #<Encoding:UTF-8>
+"ab\xC8"
+#<Encoding:BINARY (ASCII-8BIT)>
+"éĀ"
+#<Encoding:UTF-8>
+"éĀ"
+#<Encoding:UTF-8>
+"aéĀ"
+#<Encoding:UTF-8>

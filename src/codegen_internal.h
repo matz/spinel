@@ -1717,6 +1717,7 @@ const char *re_lit_src(Compiler *c, int nid);
 void emit_interp(Compiler *c, int id, Buf *b);
 int emit_interp_append(Compiler *c, int id, const char *open, const char *open_n, Buf *b, int indent);
 int interp_is_literal_fold(const NodeTable *nt, int id);
+int str_literal_ascii(const NodeTable *nt, int id);
 int emit_regex_pat_to_buf(Compiler *c, int nid, Buf *b);
 int nameset_has(NameSet *s, const char *nm);
 /* the program's own Array#inspect (a reopened Array), or -1 (codegen.c) */

@@ -25514,16 +25514,12 @@ static int concat_arg_stage_allocates(Compiler *c, int v) {
   return !concat_arg_is_handle(c, v);
 }
 /* May concat operand a, a String, change the encoding of the text it is
-   appended to: any String but an ASCII-only literal, which leaves a UTF-8
-   or a BINARY text in its encoding? */
+   appended to: any String but an ASCII-only frozen literal, which leaves a
+   UTF-8 or a BINARY text in its encoding, or a local whose one write, ahead
+   of the read, is such a literal? */
 static int concat_operand_may_recode(Compiler *c, int a) {
-  if (nt_kind(c->nt, a) != NK_StringNode) return 1;
-  const char *k = nt_str(c->nt, a, "unescaped") ? "unescaped" : "content";
-  const unsigned char *s = (const unsigned char *)nt_str(c->nt, a, k);
-  size_t n = nt_str_len(c->nt, a, k);
-  for (size_t i = 0; s && i < n; i++)
-    if (s[i] >= 0x80) return 1;
-  return 0;
+  int v = local_sole_write(c, a);
+  return !repr_frozen_literal_ascii(c, v >= 0 ? v : a);
 }
 /* Do concat's operands, Strings and Integers alone, hold an Integer after a
    String that may change the text's encoding: one whose character only the

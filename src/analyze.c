@@ -43841,6 +43841,36 @@ static int splat_local_len(Compiler *c, int ex, int callid) {
   }
   return writes == 1 && reads == seen ? len : -1;
 }
+/* The value of local read x's one write: its scope, a method's body or the
+   top level (a block shares its method's scope, so a block's write counts
+   too), writes the variable once, as a plain `x = v` statement of the body
+   ahead of the statement that holds x, and x is no parameter. That write
+   is the only value the read can see: v, else -1. */
+int local_sole_write(Compiler *c, int x) {
+  const NodeTable *nt = c->nt;
+  if (x < 0 || x >= c->node_cap || nt_kind(nt, x) != NK_LocalVariableReadNode) return -1;
+  const char *nm = nt_str(nt, x, "name");
+  int sc = c->nscope[x];
+  Scope *s = sc >= 0 && sc < c->nscopes ? &c->scopes[sc] : NULL;
+  if (!nm || !s || s->body < 0 || nt_kind(nt, s->body) != NK_StatementsNode) return -1;
+  LocalVar *lv = scope_local(s, nm);
+  if (!lv || lv->is_param || lv->is_block_param) return -1;
+  int wn = -1;
+  for (int w = comp_lvw_first_sc(c, sc, nm); w >= 0; w = comp_lvw_next_sc(c, w)) {
+    if (w >= c->node_cap || c->nscope[w] != sc) continue;
+    const char *n2 = nt_str(nt, w, "name");
+    if (!n2 || !sp_streq(n2, nm)) continue;
+    if (wn >= 0 || nt_kind(nt, w) != NK_LocalVariableWriteNode) return -1;
+    wn = w;
+  }
+  if (wn < 0) return -1;
+  int bn = 0; const int *bs = nt_arr(nt, s->body, "body", &bn);
+  for (int j = 0, wi = -1; j < bn; j++) {
+    if (bs[j] == wn) wi = j;
+    else if (wi >= 0 && a_subtree_contains(nt, bs[j], x, 0)) return nt_ref(nt, wn, "value");
+  }
+  return -1;
+}
 /* The array literal a splat of local `x` spreads, when its length is sure:
    the method's own body assigns it that literal once, in a statement ahead
    of the one holding the splat, and every other mention of it only indexes
@@ -43853,29 +43883,12 @@ static int splat_local_len(Compiler *c, int ex, int callid) {
 int splat_local_sure_lit(Compiler *c, int x) {
   const NodeTable *nt = c->nt;
   if (x < 0 || x >= c->node_cap || nt_kind(nt, x) != NK_LocalVariableReadNode) return -1;
-  const char *nm = nt_str(nt, x, "name");
+  /* the method's own body writes it once, in a statement ahead of the splat */
   int sc = c->nscope[x];
-  Scope *s = sc >= 0 && sc < c->nscopes ? &c->scopes[sc] : NULL;
-  if (!nm || !s || s->def_node < 0 || s->body < 0 || nt_kind(nt, s->body) != NK_StatementsNode) return -1;
-  LocalVar *lv = scope_local(s, nm);
-  if (!lv || lv->is_param || lv->is_block_param) return -1;
-  int wn = -1, lit = -1;
-  for (int w = comp_lvw_first_sc(c, sc, nm); w >= 0; w = comp_lvw_next_sc(c, w)) {
-    if (w >= c->node_cap || c->nscope[w] != sc) continue;
-    const char *n2 = nt_str(nt, w, "name");
-    if (!n2 || !sp_streq(n2, nm)) continue;
-    if (wn >= 0 || nt_kind(nt, w) != NK_LocalVariableWriteNode) return -1;
-    wn = w; lit = nt_ref(nt, w, "value");
-  }
-  if (wn < 0 || splat_lit_len(c, lit) < 0) return -1;
-  /* the write is a statement of the body itself, the splat in a later one */
-  int bn = 0; const int *bs = nt_arr(nt, s->body, "body", &bn);
-  int wi = -1, after = 0;
-  for (int j = 0; j < bn && !after; j++) {
-    if (bs[j] == wn) wi = j;
-    else if (wi >= 0 && a_subtree_contains(nt, bs[j], x, 0)) after = 1;
-  }
-  if (!after) return -1;
+  if (sc < 0 || sc >= c->nscopes || c->scopes[sc].def_node < 0) return -1;
+  int lit = local_sole_write(c, x);
+  if (splat_lit_len(c, lit) < 0) return -1;
+  const char *nm = nt_str(nt, x, "name");
   int reads = 0, seen = 0;
   for (int r = comp_kind_first(c, NK_LocalVariableReadNode); r >= 0; r = comp_kind_next(c, r)) {
     if (r >= c->node_cap || c->nscope[r] != sc) continue;

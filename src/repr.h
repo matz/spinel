@@ -346,6 +346,7 @@ int repr_static_read_kind(NodeKind k);
    literals are frozen, or a freeze, -@ or dedup of one)? Its handle is the
    literal's own static object, never a new one. */
 int repr_frozen_literal(Compiler *c, int n);
+int repr_frozen_literal_ascii(Compiler *c, int n);
 /* ...with nothing run besides it: no statements before it in parentheses */
 int repr_frozen_literal_alone(Compiler *c, int n);
 

@@ -169,3 +169,17 @@ x = ''.b.concat("ab", 200, 201)
 p x, x.encoding
 x = (+"").concat("ab", 0xe9, "c")
 p x, x.encoding
+# a local whose one write ahead of the read is an ASCII-only frozen literal
+# leaves the receiver's encoding; any other write may change it
+la = "ab"
+x = ''.b.concat(la, 200)
+p x, x.encoding
+lu = "é"
+x = ''.b.concat(lu, 256)
+p x, x.encoding
+lw = "ab"
+[1].each { lw = "é" }
+x = ''.b.concat(lw, 256)
+p x, x.encoding
+x = ''.b.concat("a" "é", 256)
+p x, x.encoding

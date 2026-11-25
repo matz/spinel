@@ -2408,7 +2408,15 @@ static int attr_writer_call_any(Compiler *c, int call, void *ctx) { (void)c; (vo
 static int reader_ivar_set_outside(Compiler *c, int cls, const char *ivn) {
   return attr_writer_calls(c, cls, ivn, attr_writer_call_any, NULL) != 0;
 }
-static int ivar_writes_fresh(Compiler *c, int cls, const char *ivn, int apply, int *ch);
+/* The array source walk's context (array_src_walk): the method each level
+   of the walk is in (meth, -1 for none), so a call back into one answers
+   what the method does, and the ivar slots it is following (a class and
+   the ivar's name, niv of them), so a value that reaches one again (`k.v =
+   k.v`, two attributes handed each other) answers what that slot holds,
+   which the walk is following already. */
+typedef struct { int meth[8]; int niv, ivcls[8]; const char *ivn[8]; } SrcWalk;
+static int array_src_walk(Compiler *c, int v, int pinned, int apply, SrcWalk *st, int depth);
+static int ivar_writes_fresh(Compiler *c, int cls, const char *ivn, int apply, int *ch, SrcWalk *st, int depth);
 /* 1 when ivar iv of class cls is a member of a Struct with no initialize of
    its own: the constructor's arguments set it, and they widen with it
    (struct_new_types_members_at) or, where they cannot, keep it boxed. */
@@ -2426,8 +2434,8 @@ static int alias_side(Compiler *c, int n, AliasSide *out) {
   /* a reader's call names the ivar it answers (`o.items`, a Struct
      member), resolved as the array source walk resolves it
      (ivar_src_slots), and taken on the source walk's terms: no writer
-     called from outside, and every write of the ivar a new Array or a
-     parameter (ivar_writes_fresh) */
+     called from outside, and every write of the ivar one the walk follows
+     (ivar_writes_fresh) */
   if (nt_kind(c->nt, n) == NK_CallNode) {
     const char *ivn = NULL;
     IvarSlots isl;
@@ -2442,8 +2450,9 @@ static int alias_side(Compiler *c, int n, AliasSide *out) {
        the constructor's arguments, which struct_new_types_members_at widens
        with it or, where they cannot widen, keeps the member boxed */
     int member = struct_member_set_by_new(c, dc, iv);
+    SrcWalk st = { .niv = 1, .ivcls = { dc }, .ivn = { ivn } };
     if (iv < 0 || class_ivar_pinned(ci, ivn) || ci->ivar_int_table[iv] ||
-        reader_ivar_set_outside(c, dc, ivn) || (!member && ivar_writes_fresh(c, dc, ivn, 0, NULL) <= 0)) return 0;
+        reader_ivar_set_outside(c, dc, ivn) || (!member && ivar_writes_fresh(c, dc, ivn, 0, NULL, &st, 0) <= 0)) return 0;
     out->slot = &ci->ivar_types[iv]; out->cid = dc; out->iv = iv; out->reader = 1;
     return 1;
   }
@@ -2502,7 +2511,8 @@ static int alias_ivar_widened(Compiler *c, const LWIndex *ivw, const AliasSide *
     ch = 1;
   }
   if (top != TY_POLY_ARRAY) return ch;
-  if (w->reader) ivar_writes_fresh(c, w->cid, ivn, 1, &ch);
+  SrcWalk st = { .niv = 1, .ivcls = { w->cid }, .ivn = { ivn } };
+  if (w->reader) ivar_writes_fresh(c, w->cid, ivn, 1, &ch, &st, 0);
   else if (ivw) ch |= widen_ivar_array_params(c, ivw, w->cid, ivn);
   return ch;
 }
@@ -8058,13 +8068,13 @@ static int row_fresh(Compiler *c, int el) {
     if (!is_fresh_array(c, lv[i])) return 0;
   return 1;
 }
-static int array_src_walk(Compiler *c, int v, int pinned, int apply, int *stack, int depth);
 static int array_answers_receiver(Compiler *c, int v);
 /* 1 when each typed Array the row `el` can be takes an element of kind
    `elem` or is one array_src_walk can build as the general Array (a call
    that returns its receiver, `s.bytes << 3`, is none) */
 static int row_lifts(Compiler *c, int el, TyKind elem) {
-  int lv[16], stack[8];
+  int lv[16];
+  SrcWalk st = { .niv = 0 };
   int n = value_leaves_ex(c, el, lv, 0, 16, VL_NIL);
   if (n <= 0 || n >= 16) return 0;
   for (int i = 0; i < n; i++) {
@@ -8073,7 +8083,7 @@ static int row_lifts(Compiler *c, int el, TyKind elem) {
     if (t == TY_UNKNOWN) return 0;
     if (!ty_is_array(t) || t == TY_POLY_ARRAY || ty_is_ptr_array(t) || elem == ty_array_elem(t)) continue;
     if (nt_kind(c->nt, lv[i]) == NK_CallNode && array_answers_receiver(c, lv[i])) return 0;
-    if (!array_src_walk(c, lv[i], 1, 0, stack, 0)) return 0;
+    if (!array_src_walk(c, lv[i], 1, 0, &st, 0)) return 0;
   }
   return 1;
 }
@@ -8726,13 +8736,16 @@ static int named_writes_fresh(Compiler *c, int v) {
 }
 
 /* 1 when every write of ivar `ivn` of class `cls` (or of a class it shares
-   the slot with) stores nil, a new array nothing else holds, or a parameter
-   of the method writing it, so the slot can be the general Array with no
-   copy the program could see: a parameter it keeps (`@a = a`) is its
-   callers' array, and widens for them as one a store goes through does:
-   1; 0 when nothing in the classes writes it; -1 for a write of another
-   value. With `apply` widens those parameters, setting *ch on a change. */
-static int ivar_writes_fresh(Compiler *c, int cls, const char *ivn, int apply, int *ch) {
+   the slot with) stores nil, a parameter of the method writing it, or a
+   value whose Arrays can all be the general Array (array_src_walk, each
+   arm of a branch, pinned as a writer's argument is), so the slot can be
+   the general Array with no copy the program could see: a parameter it
+   keeps (`@a = a`) is its callers' array, and widens for them as one a
+   store goes through does: 1; 0 when nothing in the classes writes it; -1
+   for an op-write or a value the walk cannot follow. With `apply` widens
+   them, setting *ch on a change. The walk is st at `depth`, the slot
+   among the ones it follows. */
+static int ivar_writes_fresh(Compiler *c, int cls, const char *ivn, int apply, int *ch, SrcWalk *st, int depth) {
   const NodeTable *nt = c->nt;
   static const NodeKind wk[4] = { NK_InstanceVariableWriteNode, NK_InstanceVariableOrWriteNode,
                                   NK_InstanceVariableAndWriteNode, NK_InstanceVariableOperatorWriteNode };
@@ -8745,14 +8758,23 @@ static int ivar_writes_fresh(Compiler *c, int cls, const char *ivn, int apply, i
       if (wc < 0) wc = ivar_main_slot_class(c, ws, w);
       if (wc < 0 || (wc != cls && !is_descendant(c, wc, cls) && !is_descendant(c, cls, wc))) continue;
       if (t >= 2) return -1;
-      int wv = nt_paren_single(c->nt, nt_ref(nt, w, "value"));
-      if (wv < 0) return -1;
+      int wl[16];
+      int nl = value_leaves_ex(c, nt_ref(nt, w, "value"), wl, 0, 16, VL_NIL);
+      if (nl < 0) return -1;
       saw = 1;
-      if (nt_kind(nt, wv) == NK_NilNode || is_fresh_array(c, wv)) continue;
-      LocalVar *pl = unassigned_param_read(c, ws, wv) >= 0 ? scope_local(ws, nt_str(nt, wv, "name")) : NULL;
-      if (!pl || pl->rbs_seeded || !(ty_is_array(pl->type) || pl->type == TY_UNKNOWN) || ty_is_ptr_array(pl->type))
-        return -1;
-      if (apply && pl->type != TY_POLY_ARRAY) *ch |= widen_arg_array(c, wv);
+      for (int i = 0; i < nl; i++) {
+        if (nt_kind(nt, wl[i]) == NK_NilNode) continue;
+        if (unassigned_param_read(c, ws, wl[i]) >= 0) {
+          LocalVar *pl = scope_local(ws, nt_str(nt, wl[i], "name"));
+          if (!pl || pl->rbs_seeded || !(ty_is_array(pl->type) || pl->type == TY_UNKNOWN) || ty_is_ptr_array(pl->type))
+            return -1;
+          if (apply && pl->type != TY_POLY_ARRAY) *ch |= widen_arg_array(c, wl[i]);
+          continue;
+        }
+        int got = array_src_walk(c, wl[i], 1, apply, st, depth + 1);
+        if (!apply && !got) return -1;
+        if (apply) *ch |= got;
+      }
     }
   return saw;
 }
@@ -8850,24 +8872,6 @@ static int literal_rows_read(Compiler *c, int v, int apply) {
   return apply ? ch : 1;
 }
 
-/* The arrays the value `v` can be, followed back to where each is built or
-   held: through a local's writes, a method's values (and a method answering
-   its block's value, the block at this call), a builtin answering its
-   receiver, to an array literal, a new array, a parameter, an ivar, a
-   global, class variable or constant. With `apply` 0 it answers whether
-   every one of them can be the general Array; with 1 it makes them so,
-   answering 1 on a change. A literal is built as one; a parameter widens
-   for its own callers, as a push through it widens it; a local and a
-   method's value are pinned to it, and a new array of a typed kind
-   (`Array.new(n, 0)`, a `map`) is converted where it reaches the pinned
-   slot, which is only right because nothing else holds it (`pinned`: the
-   slot `v` is written to is one). A slot that may keep an array from
-   elsewhere (an ivar a parameter is stored into), a block parameter, an
-   element read, a call nothing resolves or one an override may answer is
-   none of these, and answers 0: the call site refuses it. The methods being
-   walked are on `stack`, and a call back into one of them answers what the
-   method does. */
-static int array_src_walk(Compiler *c, int v, int pinned, int apply, int *stack, int depth);
 /* The value one writer call hands an attribute's ivar (attr_writer_calls,
    attr_op_writes), walked as a write's value is, and counted (n): nonzero
    stops the calls where it is no one plain argument the walk can follow.
@@ -8875,7 +8879,7 @@ static int array_src_walk(Compiler *c, int v, int pinned, int apply, int *stack,
    builds out of the ivar's own, which is new, as a write's `@v + [x]` is.
    A nil holds no Array, as a write's `@v = nil` holds none
    (ivar_writes_fresh): it is passed over. */
-typedef struct { int *stack, depth, apply, ch, n; } AttrArgWalk;
+typedef struct { SrcWalk *st; int depth, apply, ch, n; } AttrArgWalk;
 static int attr_value_walk(Compiler *c, int arg, AttrArgWalk *w) {
   int a = nt_paren_single(c->nt, arg);
   if (nt_kind(c->nt, a) == NK_NilNode) return 0;
@@ -8886,7 +8890,7 @@ static int attr_value_walk(Compiler *c, int arg, AttrArgWalk *w) {
     w->n++;
     return 0;
   }
-  int got = array_src_walk(c, arg, 1, w->apply, w->stack, w->depth + 1);
+  int got = array_src_walk(c, arg, 1, w->apply, w->st, w->depth + 1);
   if (!w->apply && !got) return 1;
   w->ch |= got;
   w->n++;
@@ -9012,10 +9016,14 @@ static IvWalkEntry *ivar_walk_memo_at(Compiler *c, int cls, int ivi) {
 /* array_src_walk's step for a value `v` that reads ivar ivn of class icls
    (ivar_src_slots): whether it can be the general Array, or with apply 1
    making it so, as array_src_walk answers. */
-static int ivar_src_walk(Compiler *c, int v, int icls, const char *ivn, int apply, int *stack, int depth) {
+static int ivar_src_walk(Compiler *c, int v, int icls, const char *ivn, int apply, SrcWalk *st, int depth) {
   ClassInfo *ci = &c->classes[icls];
   int ivi = comp_ivar_index(ci, ivn);
   if (ivi < 0 || class_ivar_pinned(ci, ivn) || !c->ivar_widen_src || v >= c->node_cap) return 0;
+  /* (a slot the walk follows already: what it holds is being followed) */
+  for (int i = 0; i < st->niv; i++)
+    if (st->ivcls[i] == icls && sp_streq(st->ivn[i], ivn)) return !apply;
+  if (st->niv == 8) return 0;
   IvWalkEntry *m = depth == 0 ? ivar_walk_memo_at(c, icls, ivi) : NULL;
   if (m && !apply && m->check_at == comp_ty_edits + 1) return m->check;
   /* (an apply that changed nothing changes nothing again but the read's
@@ -9032,14 +9040,15 @@ static int ivar_src_walk(Compiler *c, int v, int icls, const char *ivn, int appl
      (`k.v = [+"s"]`, a member's setter) is one more write, whose value
      is followed as the class's own writes are (attr_writer_calls). */
   int member = struct_member_set_by_new(c, icls, ivi);
-  int fresh = member ? 1 : ivar_writes_fresh(c, icls, ivn, 0, NULL);
-  AttrArgWalk aw = { stack, depth, 0, 0, 0 };
+  st->ivcls[st->niv] = icls; st->ivn[st->niv++] = ivn;
+  int fresh = member ? 1 : ivar_writes_fresh(c, icls, ivn, 0, NULL, st, depth);
+  AttrArgWalk aw = { st, depth, 0, 0, 0 };
   int writer = fresh >= 0 && call_answers(c, -1, icls, ivn + 1, CT_WRITER, NULL);
   int ok = fresh >= 0 && !attr_writer_calls(c, icls, ivn, attr_writer_arg_walk, &aw) &&
            !(writer && attr_op_writes(c, icls, ivn + 1, attr_writer_arg_walk, &aw)) &&
            !(!member && struct_super_member_values(c, icls, ivi, &aw)) && (fresh || aw.n);
   if (m && !apply) { m->check = (unsigned char)ok; m->check_at = comp_ty_edits + 1; }
-  if (!ok || !apply) return ok;
+  if (!ok || !apply) { st->niv--; return ok; }
   aw.apply = 1; aw.ch = 0;
   attr_writer_calls(c, icls, ivn, attr_writer_arg_walk, &aw);
   if (writer) attr_op_writes(c, icls, ivn + 1, attr_writer_arg_walk, &aw);
@@ -9050,7 +9059,8 @@ static int ivar_src_walk(Compiler *c, int v, int icls, const char *ivn, int appl
     if (*sd.slot != TY_POLY_ARRAY) { ty_ref_set(c, sd.slot, TY_POLY_ARRAY); ch = 1; }
     ch |= alias_ivar_widened(c, NULL, &sd, TY_POLY_ARRAY);
   }
-  else ivar_writes_fresh(c, icls, ivn, 1, &ch);
+  else ivar_writes_fresh(c, icls, ivn, 1, &ch, st, depth);
+  st->niv--;
   if (m && !ch) { m->member = (unsigned char)member; m->apply_at = comp_ty_edits + 1; }
   if (!member && !c->ivar_widen_src[v]) { c->ivar_widen_src[v] = 1; ch = 1; }
   return ch;
@@ -9059,28 +9069,45 @@ static int ivar_src_walk(Compiler *c, int v, int icls, const char *ivn, int appl
    resolved for may run (the #10058 arm): each of its values followed and
    pinned, and its own value pinned, *ch set on a change. 1 when followed,
    0 where a value cannot be, -1 for a method on the walk's stack. */
-static int src_walk_any_body(Compiler *c, int t, int apply, int *stack, int depth, int *ch) {
+static int src_walk_any_body(Compiler *c, int t, int apply, SrcWalk *st, int depth, int *ch) {
   Scope *o = &c->scopes[t];
-  for (int d = 0; d < depth; d++) if (stack[d] == t) return -1;
+  for (int d = 0; d < depth; d++) if (st->meth[d] == t) return -1;
   int ol[16];
   int on = method_value_leaves(c, t, ol, 16);
   if (o->ret_rbs_seeded || o->ret_specialized || o->cs_synth || o->is_lowered_yield ||
       o->ret_oa_pin != TY_UNKNOWN || on <= 0) return 0;
-  stack[depth] = t;
+  st->meth[depth] = t;
   for (int i = 0; i < on; i++) {
     if (nt_kind(c->nt, ol[i]) == NK_YieldNode) return 0;
-    int got = array_src_walk(c, ol[i], 1, apply, stack, depth + 1);
+    int got = array_src_walk(c, ol[i], 1, apply, st, depth + 1);
     if (!apply && !got) return 0;
     *ch |= got;
   }
   if (apply && !o->ret_poly_array_pin) { { o->ret_poly_array_pin = 1; comp_touch_scope(o->idx); } *ch = 1; }
   return 1;
 }
-static int array_src_walk(Compiler *c, int v, int pinned, int apply, int *stack, int depth) {
+/* The arrays the value `v` can be, followed back to where each is built or
+   held: through a local's writes, a method's values (and a method answering
+   its block's value, the block at this call), a builtin answering its
+   receiver, to an array literal, a new array, a parameter, an ivar, a
+   global, class variable or constant. With `apply` 0 it answers whether
+   every one of them can be the general Array; with 1 it makes them so,
+   answering 1 on a change. A literal is built as one; a parameter widens
+   for its own callers, as a push through it widens it; a local and a
+   method's value are pinned to it, and a new array of a typed kind
+   (`Array.new(n, 0)`, a `map`) is converted where it reaches the pinned
+   slot, which is only right because nothing else holds it (`pinned`: the
+   slot `v` is written to is one). A slot that may keep an array from
+   elsewhere (an ivar a parameter is stored into), a block parameter, an
+   element read, a call nothing resolves or one an override may answer is
+   none of these, and answers 0: the call site refuses it. The methods and
+   the ivar slots being walked are on st (SrcWalk), and a call back into one
+   of them, or a value of one, answers what it does. */
+static int array_src_walk(Compiler *c, int v, int pinned, int apply, SrcWalk *st, int depth) {
   const NodeTable *nt = c->nt;
   v = nt_paren_single(c->nt, v);
   if (v < 0 || depth > 6) return 0;
-  stack[depth] = -1;
+  st->meth[depth] = -1;
   TyKind vt = infer_type(c, v);
   if (vt == TY_POLY_ARRAY) return !apply;
   NodeKind k = nt_kind(nt, v);
@@ -9103,7 +9130,7 @@ static int array_src_walk(Compiler *c, int v, int pinned, int apply, int *stack,
   }
   /* a builtin that answers its receiver: the receiver's array is the value */
   if (k == NK_CallNode && array_answers_receiver(c, v))
-    return array_src_walk(c, nt_ref(nt, v, "receiver"), pinned, apply, stack, depth + 1);
+    return array_src_walk(c, nt_ref(nt, v, "receiver"), pinned, apply, st, depth + 1);
   /* `x = y = v`: the inner write's local is the value */
   if (k == NK_LocalVariableReadNode || k == NK_LocalVariableWriteNode) {
     const char *nm = nt_str(nt, v, "name");
@@ -9123,7 +9150,7 @@ static int array_src_walk(Compiler *c, int v, int pinned, int apply, int *stack,
       if (comp_scope_of(c, t) != sc || !sp_streq(nt_str(nt, t, "name"), nm)) continue;
       int tv = masgn_target_value(c, t);
       if (tv < 0) return 0;
-      int got = array_src_walk(c, tv, 0, apply, stack, depth + 1);
+      int got = array_src_walk(c, tv, 0, apply, st, depth + 1);
       if (!apply && !got) return 0;
       ch |= got; saw = 1;
     }
@@ -9139,7 +9166,7 @@ static int array_src_walk(Compiler *c, int v, int pinned, int apply, int *stack,
       for (int i = 0; i < nl; i++) {
         if (nt_kind(nt, wl[i]) == NK_LocalVariableReadNode && comp_scope_of(c, wl[i]) == sc &&
             sp_streq(nt_str(nt, wl[i], "name"), nm)) continue;
-        int got = array_src_walk(c, wl[i], 1, apply, stack, depth + 1);
+        int got = array_src_walk(c, wl[i], 1, apply, st, depth + 1);
         if (!apply && !got) return 0;
         ch |= got;
       }
@@ -9173,23 +9200,11 @@ static int array_src_walk(Compiler *c, int v, int pinned, int apply, int *stack,
     /* (a read on a receiver of several classes reads one slot of each, all
        of which must be followed before any widens) */
     int ch = 0, ok = 1;
-    /* (an ivar write's value is built as the general Array itself, as a
-       writer call's is (attr_value_walk), so the write answers the Array
-       its ivar holds, with no conversion between them) */
-    if (k == NK_InstanceVariableWriteNode) {
-      int wv = nt_ref(nt, v, "value");
-      if (!array_src_walk(c, wv, 1, 0, stack, depth + 1) ||
-          !ivar_src_walk(c, v, isl.cls[0], ivn, 0, stack, depth)) { ivar_slots_free(&isl); return 0; }
-      if (apply) ch = array_src_walk(c, wv, 1, 1, stack, depth + 1);
-      ch |= ivar_src_walk(c, v, isl.cls[0], ivn, apply, stack, depth);
-      ivar_slots_free(&isl);
-      return ch;
-    }
-    if (nicl == 1) ch = ivar_src_walk(c, v, isl.cls[0], ivn, apply, stack, depth);
+    if (nicl == 1) ch = ivar_src_walk(c, v, isl.cls[0], ivn, apply, st, depth);
     else {
-      for (int q = 0; q < nicl && ok; q++) ok = ivar_src_walk(c, v, isl.cls[q], ivn, 0, stack, depth);
+      for (int q = 0; q < nicl && ok; q++) ok = ivar_src_walk(c, v, isl.cls[q], ivn, 0, st, depth);
       if (ok && !apply) ch = 1;
-      for (int q = 0; ok && apply && q < nicl; q++) ch |= ivar_src_walk(c, v, isl.cls[q], ivn, 1, stack, depth);
+      for (int q = 0; ok && apply && q < nicl; q++) ch |= ivar_src_walk(c, v, isl.cls[q], ivn, 1, st, depth);
     }
     ivar_slots_free(&isl);
     return ch;
@@ -9206,7 +9221,7 @@ static int array_src_walk(Compiler *c, int v, int pinned, int apply, int *stack,
     int n = value_leaves(c, nt_ref(nt, tblk, "body"), bl, 0, 16), ch = 0;
     if (n <= 0) return 0;
     for (int i = 0; i < n; i++) {
-      int got = array_src_walk(c, bl[i], pinned, apply, stack, depth + 1);
+      int got = array_src_walk(c, bl[i], pinned, apply, st, depth + 1);
       if (!apply && !got) return 0;
       ch |= got;
     }
@@ -9226,7 +9241,7 @@ static int array_src_walk(Compiler *c, int v, int pinned, int apply, int *stack,
        the scan of every scope was) */
     for (int t = an_scopes_named_first(c, cn); t >= 1; t = an_scopes_named_next(c, cn, t)) {
       if (c->scopes[t].class_id < 0) continue;
-      int got = src_walk_any_body(c, t, apply, stack, depth, &ch);
+      int got = src_walk_any_body(c, t, apply, st, depth, &ch);
       if (got <= 0) return got < 0 ? !apply : 0;
       any = 1;
     }
@@ -9237,14 +9252,14 @@ static int array_src_walk(Compiler *c, int v, int pinned, int apply, int *stack,
     for (int i = 0; i < npc; i++) {
       if (pc[i].native || pc[i].mi < 0 || sp_streq(c->scopes[pc[i].mi].name, cn) ||
           sp_streq(comp_resolve_alias(c, pc[i].cls, cn), cn)) continue;
-      int got = src_walk_any_body(c, pc[i].mi, apply, stack, depth, &ch);
+      int got = src_walk_any_body(c, pc[i].mi, apply, st, depth, &ch);
       if (got <= 0) return got < 0 ? !apply : 0;
       any = 1;
     }
     if (any) return apply ? ch : 1;
   }
   if (mi < 0) return 0;
-  for (int d = 0; d < depth; d++) if (stack[d] == mi) return !apply;
+  for (int d = 0; d < depth; d++) if (st->meth[d] == mi) return !apply;
   Scope *m = &c->scopes[mi];
   if (m->ret_rbs_seeded || m->ret_specialized || m->cs_synth || m->is_lowered_yield ||
       m->ret_oa_pin != TY_UNKNOWN) return 0;
@@ -9252,7 +9267,7 @@ static int array_src_walk(Compiler *c, int v, int pinned, int apply, int *stack,
      its bodies' values: each is followed, and each body's value pinned. */
   if (method_has_other_body(c, mi)) {
     int ch = 0;
-    stack[depth] = mi;
+    st->meth[depth] = mi;
     /* (the scopes of the method's name off the index, mi among them, in
        the ascending order the scan of every scope visited) */
     for (int t = an_scopes_named_first(c, m->name); t >= 1; t = an_scopes_named_next(c, m->name, t)) {
@@ -9267,7 +9282,7 @@ static int array_src_walk(Compiler *c, int v, int pinned, int apply, int *stack,
           o->ret_oa_pin != TY_UNKNOWN || on <= 0) return 0;
       for (int i = 0; i < on; i++) {
         if (nt_kind(nt, ol[i]) == NK_YieldNode) return 0;
-        int got = array_src_walk(c, ol[i], 1, apply, stack, depth + 1);
+        int got = array_src_walk(c, ol[i], 1, apply, st, depth + 1);
         if (!apply && !got) return 0;
         ch |= got;
       }
@@ -9278,7 +9293,7 @@ static int array_src_walk(Compiler *c, int v, int pinned, int apply, int *stack,
   int lv[16];
   int n = method_value_leaves(c, mi, lv, 16);
   if (n <= 0) return 0;
-  stack[depth] = mi;
+  st->meth[depth] = mi;
   /* A method answering its block's value (`def build = yield`) answers, at
      this call, what this call's block does. */
   int yields = 0;
@@ -9292,7 +9307,7 @@ static int array_src_walk(Compiler *c, int v, int pinned, int apply, int *stack,
   }
   int ch = 0;
   for (int i = 0; i < n; i++) {
-    int got = array_src_walk(c, lv[i], !yields, apply, stack, depth + 1);
+    int got = array_src_walk(c, lv[i], !yields, apply, st, depth + 1);
     if (!apply && !got) return 0;
     ch |= got;
   }
@@ -9304,15 +9319,15 @@ static int array_src_walk(Compiler *c, int v, int pinned, int apply, int *stack,
 /* Can every array the value `v` can be be the general Array
    (array_src_walk without applying it)? */
 int array_sources_widenable(Compiler *c, int v) {
-  int stack[8];
-  return array_src_walk(c, v, 0, 0, stack, 0) == 1;
+  SrcWalk st = { .niv = 0 };
+  return array_src_walk(c, v, 0, 0, &st, 0) == 1;
 }
 /* Widens every array the value `v` can be to the general Array, when all
    of them can be (array_src_walk). Returns 1 on a change. */
 static int widen_array_sources(Compiler *c, int v) {
-  int stack[8];
-  if (!array_src_walk(c, v, 0, 0, stack, 0)) return 0;
-  return array_src_walk(c, v, 0, 1, stack, 0);
+  SrcWalk st = { .niv = 0 };
+  if (!array_src_walk(c, v, 0, 0, &st, 0)) return 0;
+  return array_src_walk(c, v, 0, 1, &st, 0);
 }
 
 /* A callee stores into the array argument `arg` names an element its kind
@@ -9477,11 +9492,11 @@ static int bp_ix_first(Compiler *c, const char *name, int scope) {
    own (a new array a builtin answers, which only a pinned slot converts):
    only then is the slot they are the values of pinned. */
 static int leaves_need_pin(Compiler *c, const int *lv, int n, TyKind elem) {
-  int stack[8];
+  SrcWalk st = { .niv = 0 };
   for (int i = 0; i < n; i++) {
     TyKind t = infer_type(c, lv[i]);
     if (!ty_is_array(t) || t == TY_POLY_ARRAY || ty_is_ptr_array(t) || elem == ty_array_elem(t)) continue;
-    if (!array_src_walk(c, lv[i], 0, 0, stack, 0)) return 1;
+    if (!array_src_walk(c, lv[i], 0, 0, &st, 0)) return 1;
   }
   return 0;
 }
@@ -9492,10 +9507,11 @@ static int leaves_need_pin(Compiler *c, const int *lv, int n, TyKind elem) {
    array of a typed kind converts there. With `apply` builds them so,
    answering 1 on a change. */
 static int leaves_widen_to_poly_array(Compiler *c, const int *lv, int n, int apply) {
-  int stack[8], ch = 0;
+  SrcWalk st = { .niv = 0 };
+  int ch = 0;
   for (int i = 0; i < n; i++) {
     if (infer_type(c, lv[i]) == TY_POLY_ARRAY) continue;
-    int got = array_src_walk(c, lv[i], 1, apply, stack, 0);
+    int got = array_src_walk(c, lv[i], 1, apply, &st, 0);
     if (!apply && !got) return 0;
     ch |= got;
   }

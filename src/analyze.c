@@ -17322,7 +17322,7 @@ static void widen_ivars_from_pushed_params(Compiler *c) {
          hold what the callee pushes, so an int array stays an int array. */
       int boxed_hazard = 0;
       if (!p->push_widened) {
-        if (p->type != TY_POLY || (p->boxed_push_elem == TY_UNKNOWN && !p->store_val_src && !p->store_elems_src && !p->store_rest_src)) continue;
+        if (p->type != TY_POLY || (p->boxed_push_elem == TY_UNKNOWN && !p->store_val_src && !p->store_elems_src && !p->store_splat_src && !p->store_rest_src)) continue;
         boxed_hazard = 1;
       }
       const char *aty = nt_type(nt, a);

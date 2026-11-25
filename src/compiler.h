@@ -315,6 +315,18 @@ typedef struct {
                        the key (value). Boxed when the callers disagree, so
                        the binding checks each call's argument j against the
                        container instead. */
+  unsigned long long store_push_src; /* (params, containers) the bits of
+                       store_val_src whose store lands in an Array: a push,
+                       unshift or insert, or an element write by an Integer
+                       key. A boxed argument's Arrays widen for each call's
+                       argument j (widen_boxed_arg_by_sources); a Hash's
+                       value does not reach them. */
+  unsigned long long store_splat_src; /* (params, arrays) bit j set: a push
+                       of the method's own parameter j splatted, or a concat
+                       of it, stores its ELEMENTS through this parameter,
+                       each one a value: the binding checks each call's
+                       argument j's elements as a splat's are
+                       (array_elems_foreign), a boxed one as it lands. */
   unsigned long long store_elems_src; /* (params, arrays) bit j set: a splice
                        through this parameter stores the ELEMENTS of the
                        method's own positional parameter j (`a[i, n] = src`),

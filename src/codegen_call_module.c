@@ -165,7 +165,7 @@ static void emit_dir_glob_dot(Compiler *c, int pattern, Buf *b) {
    already, so it reads as the call without it does -- and KWH_ENC_BINARY
    for an external Encoding::BINARY / ASCII_8BIT or "BINARY" / "ASCII-8BIT",
    which reads as File.binread does. KWH_ENC_NONE for any other hash. */
-enum { KWH_ENC_NONE, KWH_ENC_UTF8, KWH_ENC_BINARY };
+enum { KWH_ENC_NONE, KWH_ENC_UTF8, KWH_ENC_BINARY, KWH_ENC_DEFAULT };
 
 static int kwh_enc_value(const NodeTable *nt, int v) {
   if (v < 0) return KWH_ENC_NONE;
@@ -194,7 +194,8 @@ static int kwh_read_encoding(const NodeTable *nt, int kwh) {
   if (kwh < 0 || nt_kind(nt, kwh) != NK_KeywordHashNode) return KWH_ENC_NONE;
   int en = 0; const int *els = nt_arr(nt, kwh, "elements", &en);
   if (en == 0) return KWH_ENC_NONE;
-  int enc = KWH_ENC_NONE;
+  /* (`encoding:` is ignored beside external_encoding: or internal_encoding:) */
+  int enc = KWH_ENC_NONE, ext = KWH_ENC_NONE, dedicated = 0;
   for (int i = 0; i < en; i++) {
     if (nt_kind(nt, els[i]) != NK_AssocNode) return KWH_ENC_NONE;
     int k = nt_ref(nt, els[i], "key"), v = nt_ref(nt, els[i], "value");
@@ -205,10 +206,14 @@ static int kwh_read_encoding(const NodeTable *nt, int kwh) {
     /* an internal BINARY transcodes; only the external one retags */
     if (e == KWH_ENC_BINARY && sp_streq(kn, "internal_encoding"))
       return KWH_ENC_NONE;
-    if (e == KWH_ENC_NONE || (enc != KWH_ENC_NONE && e != enc))
-      return KWH_ENC_NONE;
+    if (e == KWH_ENC_NONE) return KWH_ENC_NONE;
+    /* an internal UTF-8 converts nothing: the external encoding is the
+       read's, KWH_ENC_DEFAULT (Encoding.default_external) with none given */
+    if (sp_streq(kn, "internal_encoding")) { dedicated = 1; continue; }
+    if (sp_streq(kn, "external_encoding")) { dedicated = 1; ext = e; continue; }
     enc = e;
   }
+  if (dedicated) return ext != KWH_ENC_NONE ? ext : KWH_ENC_DEFAULT;
   return enc;
 }
 
@@ -231,7 +236,7 @@ int emit_call_file_dir_time_arms(Compiler *c, int id, Buf *b, const NodeTable *n
       buf_puts(b, "sp_file_basename2("); emit_path_expr(c, argv[0], b); buf_puts(b, ", ");
       emit_str_expr(c, argv[1], b); buf_puts(b, ")"); return 1;
     }
-    int read_bin = 0;
+    int read_bin = 0, read_utf8 = 0;
     if (sp_streq(name, "read") && argc >= 2 &&
         nt_kind(nt, argv[argc - 1]) == NK_KeywordHashNode) {
       int enc = kwh_read_encoding(nt, argv[argc - 1]);
@@ -242,14 +247,17 @@ int emit_call_file_dir_time_arms(Compiler *c, int id, Buf *b, const NodeTable *n
         return 1;
       }
       read_bin = enc == KWH_ENC_BINARY;
+      read_utf8 = enc == KWH_ENC_UTF8;
       argc--;
     }
     if ((sp_streq(name, "read") || sp_streq(name, "binread")) && argc == 1) {
       /* binread answers BYTES (CRuby names them ASCII-8BIT); read answers text */
       int bin_r = sp_streq(name, "binread") || read_bin;
+      /* an encoding: of UTF-8 is that whatever Encoding.default_external is */
       if (bin_r) buf_puts(b, "sp_str_as_binary(");
+      else if (read_utf8) buf_puts(b, "sp_str_as_text(");
       buf_puts(b, "sp_file_read("); emit_path_expr(c, argv[0], b); buf_puts(b, ")");
-      if (bin_r) buf_puts(b, ")");
+      if (bin_r || read_utf8) buf_puts(b, ")");
       return 1;
     }
     /* File.read(path, length) -> the first length bytes (#2776), and
@@ -259,15 +267,18 @@ int emit_call_file_dir_time_arms(Compiler *c, int id, Buf *b, const NodeTable *n
        a call's arguments unspecified. */
     if ((sp_streq(name, "read") || sp_streq(name, "binread")) && (argc == 2 || argc == 3)) {
       int bin_r = sp_streq(name, "binread") || read_bin;
-      int tp = ++g_tmp, tl = ++g_tmp, to = ++g_tmp;
+      int tp = ++g_tmp, tl = ++g_tmp, to = ++g_tmp, tr = ++g_tmp;
       if (bin_r) buf_puts(b, "sp_str_as_binary(");
       buf_printf(b, "({ const char *_t%d = ", tp); emit_path_expr(c, argv[0], b);
       buf_printf(b, "; SP_GC_ROOT_STR(_t%d); sp_oint _t%d = ", tp, tl); emit_oint_expr(c, argv[1], TY_INT, b);
       if (argc == 3) {
         buf_printf(b, "; sp_int _t%d = ", to); emit_int_expr(c, argv[2], b);
-        buf_printf(b, "; sp_file_read_at_o(_t%d, _t%d, _t%d); })", tp, tl, to);
+        buf_printf(b, "; const char *_t%d = sp_file_read_at_o(_t%d, _t%d, _t%d); ", tr, tp, tl, to);
       }
-      else buf_printf(b, "; sp_file_read_o(_t%d, _t%d); })", tp, tl);
+      else buf_printf(b, "; const char *_t%d = sp_file_read_o(_t%d, _t%d); ", tr, tp, tl);
+      /* an encoding: of UTF-8 is a nil length's; a read with a length is bytes */
+      if (read_utf8 && !bin_r) buf_printf(b, "_t%d.nil ? sp_str_as_text(_t%d) : _t%d; })", tl, tr, tr);
+      else buf_printf(b, "_t%d; })", tr);
       if (bin_r) buf_puts(b, ")");
       return 1;
     }
@@ -616,6 +627,22 @@ int emit_call_file_dir_time_arms(Compiler *c, int id, Buf *b, const NodeTable *n
     if (is_open_constructor(name)) {
       int block = nt_ref(nt, id, "block");
       int kw_mode = -1;
+      /* a literal `encoding:` or `external_encoding:` of UTF-8 or BINARY is
+         the handle's, whatever Encoding.default_external is */
+      int kw_enc = KWH_ENC_NONE, kw_enc_rt = -1, te = 0;
+      if (argc >= 2 && nt_argv_kwh(nt, argv, argc) >= 0) {
+        int ev = kwh_lookup(nt, argv[argc - 1], "external_encoding");
+        if (ev < 0 && kwh_lookup(nt, argv[argc - 1], "internal_encoding") < 0) ev = kwh_lookup(nt, argv[argc - 1], "encoding");
+        kw_enc = kwh_enc_value(nt, ev);
+        /* a variable, a constant or another literal is read at run time
+           (sp_File_with_enc_val); reading one runs no code, so the order of
+           the open and the read does not show */
+        NodeKind evk = ev >= 0 ? nt_kind(nt, ev) : NK_ProgramNode;
+        if (!kw_enc && (evk == NK_LocalVariableReadNode || evk == NK_InstanceVariableReadNode ||
+                        evk == NK_GlobalVariableReadNode || evk == NK_ConstantReadNode ||
+                        evk == NK_ConstantPathNode || evk == NK_StringNode))
+          kw_enc_rt = ev;
+      }
       if (argc >= 2 && nt_argv_kwh(nt, argv, argc) >= 0)
         kw_mode = struct_kwarg_value(c, argv[argc - 1], "mode");
       /* the mode is the `mode:` keyword's value or the second positional;
@@ -673,8 +700,22 @@ int emit_call_file_dir_time_arms(Compiler *c, int id, Buf *b, const NodeTable *n
           buf_puts(b, ")"); \
         } \
       } while (0)
+      #define EMIT_FILE_OPEN_ENC() do { \
+        if (kw_enc_rt >= 0) { \
+          /* the handle is rooted: boxing the value can allocate */ \
+          te = ++g_tmp; \
+          buf_printf(b, "({ sp_File *_t%d = ", te); EMIT_FILE_OPEN(); \
+          buf_printf(b, "; SP_GC_ROOT(_t%d); sp_File_with_enc_val(_t%d, ", te, te); \
+          emit_boxed(c, kw_enc_rt, b); buf_puts(b, "); })"); \
+        } \
+        else { \
+          if (kw_enc) buf_puts(b, "sp_File_with_enc("); \
+          EMIT_FILE_OPEN(); \
+          if (kw_enc) buf_printf(b, ", %d)", kw_enc); \
+        } \
+      } while (0)
       if (block < 0) {
-        EMIT_FILE_OPEN();
+        EMIT_FILE_OPEN_ENC();
         return 1;
       }
       /* File.open(path, mode) { |f| body } -> open, run body, close, return body value */
@@ -687,7 +728,10 @@ int emit_call_file_dir_time_arms(Compiler *c, int id, Buf *b, const NodeTable *n
       int rv = ++g_tmp, tf = ++g_tmp;
       int scalar = is_scalar_ret(res) && res != TY_VOID && res != TY_NIL && res != TY_UNKNOWN;
       buf_puts(b, "({ ");
-      buf_printf(b, "sp_File *_t%d = ", tf); EMIT_FILE_OPEN(); buf_puts(b, "; ");
+      buf_printf(b, "sp_File *_t%d = ", tf);
+      EMIT_FILE_OPEN_ENC();
+      buf_puts(b, "; ");
+      #undef EMIT_FILE_OPEN_ENC
       #undef EMIT_FILE_OPEN
       #undef emit_perm_expr
       /* Root the handle for the block's duration: the body may allocate and
@@ -1276,6 +1320,21 @@ int emit_call_module_fn_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, c
       sp_streq(name, "find") && nt_str(nt, recv, "name") && sp_streq(nt_str(nt, recv, "name"), "Encoding")) {
     buf_puts(b, "sp_encoding_find("); emit_boxed(c, argv[0], b); buf_puts(b, ")");
     return 1;
+  }
+  /* Encoding.default_external / default_internal in a program that assigns
+     one (desugar_encoding_queries folds the others), and the assignments */
+  if (recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode &&
+      nt_str(nt, recv, "name") && sp_streq(nt_str(nt, recv, "name"), "Encoding")) {
+    int ext = !strncmp(name, "default_external", 16), in = !strncmp(name, "default_internal", 16);
+    if ((ext || in) && argc == 0 && !name[16]) {
+      buf_printf(b, "sp_encoding_default_%s()", ext ? "external" : "internal");
+      return 1;
+    }
+    if ((ext || in) && argc == 1 && sp_streq(name + 16, "=")) {
+      buf_printf(b, "sp_encoding_set_default_%s(", ext ? "external" : "internal");
+      emit_boxed(c, argv[0], b); buf_puts(b, ")");
+      return 1;
+    }
   }
   if (recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode && argc == 0 &&
       sp_streq(name, "list") && nt_str(nt, recv, "name") && sp_streq(nt_str(nt, recv, "name"), "Encoding")) {

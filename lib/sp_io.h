@@ -385,10 +385,15 @@ sp_int sp_File_readbyte(sp_File *f);
 void sp_File_ungetbyte(sp_File *f, sp_int byte);
 sp_bool sp_File_binmode_p(sp_File *f);
 void sp_File_set_binmode(sp_File *f);
+/* Encoding.default_external is ASCII-8BIT (lib/sp_cold.c) */
+extern unsigned char sp_enc_default_ext_bin;
 /* Does a read with no length (and getc) answer ASCII-8BIT? */
 static inline sp_bool sp_File_reads_binary(sp_File *f) {
-  return f->ext_enc ? f->ext_enc == 2 : sp_File_binmode_p(f);
+  return f->ext_enc ? f->ext_enc == 2 : sp_File_binmode_p(f) || sp_enc_default_ext_bin;
 }
+/* File.open(path, encoding: e): 1 UTF-8, 2 ASCII-8BIT */
+sp_File *sp_File_with_enc(sp_File *f, int e);
+sp_File *sp_File_with_enc_val(sp_File *f, sp_RbVal v);
 sp_File *sp_File_reopen_io(sp_File *f, sp_File *other);
 sp_File *sp_File_dup(sp_File *f, int keep_frozen);
 const char *sp_io_fd_mode(int fd);

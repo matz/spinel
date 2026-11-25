@@ -22,3 +22,11 @@ FrozenError
 8
 [9, 8, 9, 8, 9, 8, 9, 8]
 [9, 8, 9, 8, 9, 8, 9, 8]
+[:strbuf, "azbcd"]
+[:strbuf2, ArgumentError]
+[:frozen_s, FrozenError]
+[:frozen_a, FrozenError]
+[:int0, NoMethodError]
+[:nil0, NoMethodError]
+[:neg2, [1, 2, 8, 9, 3]]
+[:negsmall, IndexError]

@@ -13176,10 +13176,10 @@ static inline sp_bool sp_poly_frozen(sp_RbVal v);
 /* Array#insert with any number of values after the index: they go in
    consecutively from the resolved index, so a negative one is resolved
    against the length once, before the first of them. With none the array
-   answers itself. String#insert takes exactly one. */
+   answers itself. String#insert, of either face, takes exactly one. */
 static sp_RbVal sp_poly_insert_n(sp_RbVal v, sp_int i, sp_PolyArray *xs) {
   sp_int n = xs->len;
-  if (sp_rbval_is_string(v)) {
+  if (sp_rbval_is_string(v) || sp_poly_is_strbuf(v)) {
     if (n != 1)
       sp_raise_cls("ArgumentError", sp_sprintf("wrong number of arguments (given %lld, expected 2)", (long long)(n + 1)));
     return sp_poly_insert(v, i, xs->data[0]);

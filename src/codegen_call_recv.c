@@ -1495,7 +1495,6 @@ int emit_array_splat_mutator(Compiler *c, int id, Buf *b) {
   /* a frozen receiver raises even when the splats spread no element */
   if (!poly)
     buf_printf(b, " if (_t%d && _t%d->frozen) sp_raise_frozen_array_at(_t%d, %s);", tr, tr, tr, array_frozen_cls(rt));
-  else if (!poly_concat) buf_printf(b, " if (_t%d.tag == SP_TAG_OBJ && sp_poly_is_array_kind(_t%d.cls_id) && sp_poly_frozen(_t%d)) sp_raise_frozen_array_v(_t%d);", tr, tr, tr, tr);
   int tj = ++g_tmp;
   /* the values come boxed, and a nil converts to an Integer or Float
      array's nil element */
@@ -1526,17 +1525,10 @@ int emit_array_splat_mutator(Compiler *c, int id, Buf *b) {
     emit_elem_entry(b, 0, rt, k, "insert", "");
     buf_printf(b, "(_t%d, _t%d, %s(_t%d->data[_t%d]));", tr, tj, pconv, ta, tj); }
   else {
-    /* a negative index is taken afresh against the grown array, which puts
-       each element after the one before it, as counting up does for a
-       non-negative one */
     if (poly) {
-      buf_printf(b, " if ((sp_rbval_is_string(_t%d) || sp_poly_is_strbuf(_t%d)) && _t%d->len != 1)"
-                    " sp_raise_cls(\"ArgumentError\", sp_sprintf(\"wrong number of arguments"
-                    " (given %%lld, expected 2)\", (long long)(_t%d->len + 1)));",
-                 tr, tr, ta, ta);
-      buf_printf(b, " for (sp_int _t%d = 0; _t%d < _t%d->len; _t%d++)"
-                    " _t%d = sp_poly_insert(_t%d, _t%d < 0 ? _t%d : _t%d + _t%d, _t%d->data[_t%d]);",
-                 tj, tj, ta, tj, tr, tr, ti, ti, ti, tj, ta, tj);
+      /* the runtime's many-value entry checks a frozen Array, and String's
+         one value, ahead of the values */
+      buf_printf(b, " _t%d = sp_poly_insert_n(_t%d, _t%d, _t%d);", tr, tr, ti, ta);
       /* a plain String box cannot hold the spliced contents: an lvalue
          receiver takes the result back */
       if (nt_kind(nt, recv) == NK_LocalVariableReadNode ||
@@ -1546,6 +1538,9 @@ int emit_array_splat_mutator(Compiler *c, int id, Buf *b) {
         buf_printf(b, " = _t%d;", tr);
       }
     }
+    /* a negative index is taken afresh against the grown array, which puts
+       each element after the one before it, as counting up does for a
+       non-negative one */
     else
       buf_printf(b, " for (sp_int _t%d = 0; _t%d < _t%d->len; _t%d++)"
                     " sp_%sArray_insert%s(_t%d, _t%d < 0 ? _t%d : _t%d + _t%d, %s(_t%d->data[_t%d]));",

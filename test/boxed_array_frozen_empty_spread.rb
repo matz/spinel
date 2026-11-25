@@ -48,3 +48,23 @@ m = [2, 3]; kz = {z: 1}
 p q.unshift(*m, **kz), q.push(5, *m, 6).size
 w = [[9, 8], +"s"][0]
 p w.unshift(*w), w.push(*w)
+
+# a splat into a boxed receiver's insert goes to the one many-value entry:
+# a String of either face takes exactly one value, and a receiver with no
+# insert raises even when the splat spreads nothing
+def ip(a, i, *r) = a.insert(i, *r)
+def tr(l)
+  r = yield
+  p [l, r]
+rescue => e
+  p [l, e.class]
+end
+sb = +"ab"; sb << "cd"
+tr(:strbuf) { ip(sb, 1, "z") }
+tr(:strbuf2) { ip(sb, 1, "z", "y") }
+tr(:frozen_s) { ip("ab", 1, "z") }
+tr(:frozen_a) { ip([3].freeze, 0, 1) }
+tr(:int0) { ip(5, 0) }
+tr(:nil0) { ip(nil, 0) }
+tr(:neg2) { ip([1, 2, 3], -2, 8, 9) }
+tr(:negsmall) { ip([1, 2], -5, 8, 9) }

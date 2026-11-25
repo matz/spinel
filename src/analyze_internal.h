@@ -850,6 +850,7 @@ int desugar_ie_bare_object_calls(Compiler *c);
 int desugar_main_singleton_calls(Compiler *c);
 int desugar_bare_object_reopen_calls(Compiler *c);
 int desugar_descendant_reader_calls(Compiler *c);
+int desugar_owned_require_loads(Compiler *c);
 int desugar_masgn_store_evidence(Compiler *c);
 int desugar_index_assign_user_recv(Compiler *c);
 int desugar_index_assign_value(Compiler *c);

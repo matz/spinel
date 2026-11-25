@@ -571,6 +571,55 @@ int desugar_bare_object_reopen_calls(Compiler *c) {
   return changed;
 }
 
+/* A receiverless require or require_relative in a method of a class
+   that has a method of the name calls that method, as CRuby does: the
+   parse made it a LoadNode before the classes were known, and it becomes
+   the call again, with its path expression or literal path. */
+int desugar_owned_require_loads(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int n = 0, *ids = NULL, changed = 0;
+  MtabMark mt_pass = mtab_mark(c);
+  NT_FOREACH_KIND(nt, NK_LoadNode, id) {
+    mtab_push_in(c, id);
+    const char *m = nt_str(nt, id, "method");
+    Scope *sc = id < c->node_cap ? comp_scope_of(c, id) : NULL;
+    if (!m || !sc || sc->def_node < 0 || sc->class_id < 0 || nt_int(nt, id, "kernel_recv", 0)) continue;
+    if (sc->is_cmethod ? call_target(c, id, sc->class_id, m, CT_CMETHOD, NULL) < 0
+                       : !call_answers(c, id, sc->class_id, m, 0, NULL)) continue;
+    int *grown = realloc(ids, sizeof(int) * (size_t)(n + 1));
+    if (!grown) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    ids = grown; ids[n++] = id;
+  }
+  mtab_pop(c, mt_pass);
+  for (int i = 0; i < n; i++) {
+    int id = ids[i], arg = nt_ref(nt, id, "argument");
+    char *m = strdup(nt_str(nt, id, "method"));
+    if (arg < 0 && nt_str(nt, id, "path")) {
+      arg = nt_new_node(nt, "StringNode");
+      nt_put_str(nt, arg, "content", nt_str(nt, id, "path"), nt_str_len(nt, id, "path"));
+      if (nt_int(nt, id, "path_fzl", 0)) nt_node_set_int(nt, arg, "fzl", 1);
+    }
+    int args = nt_new_node(nt, "ArgumentsNode");
+    if (!m || arg < 0 || args < 0) { free(m); continue; }
+    comp_grow_node_arrays(c);
+    c->nscope[arg] = c->nscope[args] = c->nscope[id];
+    c->node_cbody[arg] = c->node_cbody[args] = c->node_cbody[id];
+    nt_node_set_arr(nt, args, "arguments", &arg, 1);
+    long long line = nt_int(nt, id, "node_line", 0), file = nt_int(nt, id, "node_file", 0);
+    nt_node_reset(nt, id, "CallNode");
+    nt_node_set_str(nt, id, "name", m);
+    nt_node_set_ref(nt, id, "receiver", -1);
+    nt_node_set_ref(nt, id, "block", -1);
+    nt_node_set_ref(nt, id, "arguments", args);
+    nt_node_set_int(nt, id, "node_line", line);
+    nt_node_set_int(nt, id, "node_file", file);
+    free(m);
+    changed = 1;
+  }
+  free(ids);
+  return changed;
+}
+
 int desugar_descendant_reader_calls(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;

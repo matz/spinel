@@ -52209,6 +52209,7 @@ static void an_phase_infer_fixpoint(Compiler *c) {
     ch |= AN_PASS("desugar_main_singleton_calls", desugar_main_singleton_calls(c));  /* `to_s` on main: its singleton's, the builtin's */
     ch |= AN_PASS("desugar_bare_object_reopen_calls", desugar_bare_object_reopen_calls(c));  /* Object reopened: `helper` -> `self.helper` */
     ch |= AN_PASS("desugar_descendant_reader_calls", desugar_descendant_reader_calls(c));
+    ch |= AN_PASS("desugar_owned_require_loads", desugar_owned_require_loads(c));   /* require(k) in a class with its own require -> the call */
     ch |= AN_PASS("desugar_masgn_store_evidence", desugar_masgn_store_evidence(c));     /* h[k], o.x = v, w -> detached h[k] = v, o.x = w as type evidence */
     ch |= AN_PASS("desugar_index_assign_user_recv", desugar_index_assign_user_recv(c));   /* r[k] ||= v on a user [] / []= receiver -> r[k] || (r[k] = v) */
     ch |= AN_PASS("desugar_dynamic_const_get_arms", desugar_dynamic_const_get_arms(c));   /* recv.const_get(var) on any other receiver -> static name dispatch */

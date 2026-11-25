@@ -16,7 +16,8 @@
 #define SP_RTCLASS_BASE (2 * SP_SCLASS_OFF)
 #define SP_RTCLASS_CHUNK 1024
 #define SP_RTCLASS_CHUNKS 1024
-#define sp_rtclass_id_p(id) ((id) >= SP_RTCLASS_BASE && (id) < SP_RTCLASS_BASE + SP_RTCLASS_CHUNK * SP_RTCLASS_CHUNKS)
+/* is class id `id` a record's? */
+static inline int sp_rtclass_id_p(sp_int id) { return id >= SP_RTCLASS_BASE && id < SP_RTCLASS_BASE + SP_RTCLASS_CHUNK * SP_RTCLASS_CHUNKS; }
 
 typedef struct {
   sp_int site;          /* the site class: the code, layout, constructor and

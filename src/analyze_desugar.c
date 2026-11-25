@@ -27517,9 +27517,10 @@ static int cn_reads_class(const NodeTable *nt, const CnRerun *r, int s) {
 /* May statement s of a Class.new block run again at each evaluation, in a
    class method of the site class with the evaluation's class as self, and
    answer as the block would? Not where it means something else in a method
-   (a yield, return, next, break, redo, retry or super; a def, a class or a
-   constant written), where it writes or reads what the classes share (a
-   class-level instance variable or a class variable), where it declares
+   (a return, next, break or redo, an_subtree_has_local_jump; a yield, retry
+   or super; a def, a class or a constant written), where it writes or reads
+   what the classes share (a class-level instance variable,
+   an_subtree_has_ivar, or a class variable), where it declares
    (a declaration with computed arguments, define_method, a reflection), or
    where it reads the frame it runs in (block_given?, binding, __method__).
    Ahead of a declaration (early), where the block would see what that
@@ -27531,12 +27532,9 @@ static int cn_reads_class(const NodeTable *nt, const CnRerun *r, int s) {
 static int cn_stmt_reruns(const NodeTable *nt, int s, const CnRerun *r) {
   if (s < 0) return 1;
   switch (nt_kind(nt, s)) {
-  case NK_InstanceVariableReadNode: case NK_InstanceVariableWriteNode: case NK_InstanceVariableOperatorWriteNode:
-  case NK_InstanceVariableOrWriteNode: case NK_InstanceVariableAndWriteNode: case NK_InstanceVariableTargetNode:
   case NK_ClassVariableReadNode: case NK_ClassVariableWriteNode: case NK_ClassVariableOperatorWriteNode:
   case NK_ClassVariableOrWriteNode: case NK_ClassVariableAndWriteNode: case NK_ClassVariableTargetNode:
-  case NK_YieldNode: case NK_ReturnNode: case NK_NextNode: case NK_BreakNode: case NK_RedoNode: case NK_RetryNode:
-  case NK_SuperNode: case NK_ForwardingSuperNode: case NK_DefNode: case NK_ClassNode: case NK_ModuleNode:
+  case NK_YieldNode: case NK_RetryNode: case NK_SuperNode: case NK_ForwardingSuperNode: case NK_DefNode: case NK_ClassNode: case NK_ModuleNode:
   case NK_SingletonClassNode: case NK_AliasMethodNode: case NK_UndefNode:
   case NK_ConstantWriteNode: case NK_ConstantPathWriteNode: case NK_ConstantOperatorWriteNode:
   case NK_ConstantOrWriteNode: case NK_ConstantAndWriteNode: case NK_ConstantPathOperatorWriteNode:
@@ -27604,7 +27602,7 @@ static void cn_rt_body(NodeTable *nt, int blk, int body, const char *cname, cons
   for (int i = 0; i < n; i++) {
     if (stmt_only_declares(nt, st[i], defnames)) continue;
     r.early = i < last;
-    if (!cn_stmt_reruns(nt, st[i], &r)) return;
+    if (an_subtree_has_local_jump(nt, st[i]) || an_subtree_has_ivar(nt, st[i], 0) || !cn_stmt_reruns(nt, st[i], &r)) return;
     moved++;
   }
   if (!moved) return;

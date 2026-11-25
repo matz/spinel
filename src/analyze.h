@@ -135,6 +135,9 @@ int an_begin_elides_setjmp(const Compiler *c, int id);
 int an_rescue_mod_elides_setjmp(const Compiler *c, int id);
 int an_rescue_elided(const Compiler *c, int id);
 int an_subtree_has_local_jump(const NodeTable *nt, int id);
+/* Does the subtree under `node` read or write an ivar (past depth 200: it
+   may)? depth is the caller's, 0 at the top. */
+int an_subtree_has_ivar(const NodeTable *nt, int node, int depth);
 /* Which constants a read can reach before their assignment: sets
    LocalVar.const_early on each one whose assignment is not settled
    (analyze_const.c). Runs once the constants are registered, ahead of the

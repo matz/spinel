@@ -1,0 +1,3 @@
+module Names
+  def self.lookup: (Integer) -> String?
+end

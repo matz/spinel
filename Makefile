@@ -4013,7 +4013,7 @@ INLINE_RBS_PARITY := methods attrs association identity_reopen identity_collide 
 INLINE_RBS_CHECKS := false_positives ignored_symlink ignored_errors warnings syntax_error syntax_error_multiline syntax_error_rbs two_annotations precedence_agree precedence_disagree precedence_module_function reader_pin_precedence reader_pin_conflicts stray_rb override_family check_false off_switch \
                      placements duplicate_reopen_agree duplicate_reopen_disagree duplicate_nilable precedence_objarray duplicate_rbs_decl \
                      redefine_unannotated redefine_unannotated_req redefine_define_method redefine_class_eval redefine_ignored redefine_refused mixin_not_applied analyzer_warnings dump_ast_malformed \
-                     contradiction_inline objarray_boxed desugared_warnings self_types_agree sclass_receiver_def
+                     contradiction_inline objarray_boxed desugared_warnings self_types_agree sclass_receiver_def uncalled_method
 INLINE_RBS_PARITY += flag_types self_types optional_on_rest
 INLINE_RBS_PARITY += type_variables
 INLINE_RBS_PARITY += singleton_class_defs
@@ -4134,6 +4134,14 @@ build/inline-rbs-results/%.res: FORCE | rbs-seed-extractor $(SP_RT_LIB) $(SPINEL
 	sclass_receiver_def) \
 	$(SPINEL) $(IRB)/sclass_receiver_def.rb -c --no-line-map -o "$$tmp/srd.c" 2>"$$tmp/srd.err" || { echo "inline-rbs-test: FAIL (a malformed annotation on a def self. in class << self stopped the build)"; sed -n 1,3p "$$tmp/srd.err"; ok=0; }; \
 	[ "$$(grep -c 'not applied' "$$tmp/srd.err")" = 1 ] && grep -q 'sclass_receiver_def.rb:7:' "$$tmp/srd.err" || { echo "inline-rbs-test: FAIL (class << self: the def self. annotation was not the one warning, or the receiverless def's was not applied)"; sed -n 1,3p "$$tmp/srd.err"; ok=0; }; \
+	;; \
+	uncalled_method) \
+	$(SPINEL) $(IRB)/uncalled_method.rb -c --no-line-map -o "$$tmp/u.c" 2>"$$tmp/u.err" || { echo "inline-rbs-test: FAIL (an annotated method nothing calls stopped the build)"; sed -n 1,3p "$$tmp/u.err"; ok=0; }; \
+	if grep -vq '^Wrote ' "$$tmp/u.err"; then echo "inline-rbs-test: FAIL (an annotated method nothing calls drew a diagnostic)"; sed -n 1,3p "$$tmp/u.err"; ok=0; fi; \
+	if $(SPINEL) $(IRB)/uncalled_method.rb --rbs $(IRB)/sig/uncalled_method_disagree -c --no-line-map -o "$$tmp/d.c" >"$$tmp/d.err" 2>&1; then echo "inline-rbs-test: FAIL (inline RBS on a method nothing calls disagreeing with --rbs compiled)"; ok=0; \
+	else grep -q 'uncalled_method.rb:7:.*names.rbs:2' "$$tmp/d.err" || { echo "inline-rbs-test: FAIL (a disagreement on a method nothing calls was refused without naming both)"; sed -n 1,5p "$$tmp/d.err"; ok=0; }; fi; \
+	$(SPINEL) $(IRB)/uncalled_method_replaced.rb --rbs $(IRB)/sig/uncalled_method_disagree -c --no-line-map -o "$$tmp/r.c" 2>"$$tmp/r.err" || { echo "inline-rbs-test: FAIL (a replaced annotated method nothing calls stopped the build)"; sed -n 1,3p "$$tmp/r.err"; ok=0; }; \
+	[ "$$(grep -c 'not applied' "$$tmp/r.err")" = 1 ] && grep -q 'uncalled_method_replaced.rb:5:3: .*uncalled_method_replaced.rb:8, replaces this one' "$$tmp/r.err" || { echo "inline-rbs-test: FAIL (a replaced annotated method nothing calls: the one warning did not name the replacement)"; sed -n 1,3p "$$tmp/r.err"; ok=0; }; \
 	;; \
 	self_types_agree) \
 	$(SPINEL) $(IRB)/self_types.rb --rbs $(IRB)/sig/self_types_agree -c --no-line-map -o "$$tmp/both.c" 2>"$$tmp/both.err" || { echo "inline-rbs-test: FAIL (an inline -> self agreeing with the class the .rbs names was refused)"; sed -n 1,5p "$$tmp/both.err"; ok=0; }; \

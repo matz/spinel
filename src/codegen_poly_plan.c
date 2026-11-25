@@ -3677,7 +3677,7 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
       format = ftmp;
     }
     Buf ub = {0};
-    buf_printf(&ub, "sp_PolyArray_get(sp_str_unpack(sp_rbval_string_bytes(_t%d), %s), 0)", tv, format);
+    buf_printf(&ub, "sp_str_unpack1(sp_rbval_string_bytes(_t%d), %s)", tv, format);
     buf_printf(b, "_t%d = ", tr);
     if (ret == TY_POLY) buf_puts(b, ub.p ? ub.p : "");
     else emit_unbox_text(c, is_scalar_ret(ret) ? ret : TY_INT, ub.p ? ub.p : "", b);

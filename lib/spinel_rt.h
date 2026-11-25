@@ -24891,6 +24891,8 @@ const char *sp_PolyArray_pack_buffer(sp_PolyArray *arr, const char *fmt, const c
 const char *sp_StrArray_pack(sp_StrArray *arr, const char *fmt);
 sp_PolyArray *sp_str_unpack(const char *str, const char *fmt);
 sp_PolyArray *sp_str_unpack_off(const char *str, const char *fmt, sp_int byteoff);
+sp_RbVal sp_str_unpack1(const char *str, const char *fmt);
+sp_RbVal sp_str_unpack1_off(const char *str, const char *fmt, sp_int byteoff);
 sp_IntArray *sp_str_unpack_ints(const char *str, const char *fmt);
 
 /* Does a pack format address bytes it did not write? `@` moves the cursor

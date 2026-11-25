@@ -1163,10 +1163,10 @@ method writing it, or is a value followed the same way (`@w = mk`, `@w =
 k.v`, a branch, `@w = k.v = x`), or is an `op=`, which builds a new Array
 (`@w += [2]`), a Struct member its constructor or its own `initialize`'s
 `super` sets (a Data member, the keyword `super` gives) and nothing writes
-after, or a global, class variable or constant whose writes are followed as
-an ivar's are, one of them used as a value too (`def get = ($g ||= [1])`),
-but not one written through a constant's path (`M::G = [1]`). The method's
-other callers then read the general Array too. An attribute's writes include its writer's calls
+after, or a global, class variable or constant whose writes (through a
+constant's path too, `M::G = [1]`) are followed as an ivar's are, one of
+them used as a value too (`def get = ($g ||= [1])`). The method's other
+callers then read the general Array too. An attribute's writes include its writer's calls
 from outside the class, its `o.v ||=`, `&&=` and `op=`, and a `send`,
 `public_send`, `__send__` or `instance_variable_set` that may set it, by a
 literal or a computed name, with the value it hands last; a writer handed

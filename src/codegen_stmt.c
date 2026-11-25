@@ -22223,6 +22223,103 @@ static void emit_poly_attr_unplaced(Buf *b, int indent, int k, const char *attr,
   emit_indent(b, indent);
   buf_printf(b, "case %d: sp_raise_poly_nomethod(\"%s=\", _t%d); break;\n", k, attr, trecv);
 }
+/* The value a global's or a constant's write stores into its slot lv
+   where the slot's kind decides how it is built, for the plain write and a
+   constant path's write alike: an empty literal or a `Hash.new` built at
+   the slot's kind, a scalar boxed into a boxed slot, a typed Array rebuilt
+   into a general Array slot, an object table built in place. 0 where none
+   applies, and the write stores the value its own way (each also stores a
+   nil its own way). */
+static int emit_named_slot_container(Compiler *c, int v, LocalVar *lv, Buf *b) {
+  const NodeTable *nt = c->nt;
+  int vlit = empty_literal_node(c, v);
+  /* `X = [].freeze`: the strip above found the literal so the slot's kind
+     builds it; the freeze it stripped still has to happen (#3828). */
+  int v_lit_frozen = (vlit != v);
+  NodeKind vk = nt_kind(nt, vlit);
+  int v_empty_arr = 0, v_empty_hash = 0;
+  if (vk == NK_ArrayNode) {
+    int ac = 0; nt_arr(nt, vlit, "elements", &ac); v_empty_arr = (ac == 0);
+  }
+  if (vk == NK_HashNode || vk == NK_KeywordHashNode) {
+    int hec = 0; nt_arr(nt, vlit, "elements", &hec); v_empty_hash = (hec == 0);
+  }
+  /* `$g = Hash.new` (no args/block): an empty hash whose typed slot needs a
+     fresh `sp_XHash_new()`, not the boxed sp_RbVal emit_expr would produce for
+     the untyped Hash.new call (#3205). */
+  int v_hash_dflt = -1;   /* `$g = Hash.new(default)`: the default's node */
+  int v_hash_cap = 0;     /* `$g = Hash.new(capacity: n)` */
+  if (vk == NK_CallNode && ty_is_hash(lv->type) &&
+      nt_str(nt, v, "name") && sp_streq(nt_str(nt, v, "name"), "new") &&
+      nt_ref(nt, v, "block") < 0) {
+    int hr = nt_ref(nt, v, "receiver");
+    const char *hrn = hr >= 0 && nt_kind(nt, hr) == NK_ConstantReadNode
+                      ? nt_str(nt, hr, "name") : NULL;
+    if (hrn && sp_streq(hrn, "Hash")) {
+      /* the count lives on the ArgumentsNode; asking the CallNode for it
+         answered 0 for every form, which is why `$g = Hash.new(5)` on a
+         typed slot silently emitted the default-less constructor */
+      int ha = nt_ref(nt, v, "arguments"); int han = 0;
+      if (ha >= 0) nt_arr(nt, ha, "arguments", &han);
+      if (han == 0) v_empty_hash = 1;
+      /* `Hash.new(default)` on a typed slot: the same fresh variant, carrying
+         the default, as the local write emits (emit_assign). Before, only the
+         argument-less form took this arm and the default form fell to the
+         boxed poly emit, which the typed slot could not hold. */
+      else if (hash_new_default_arg(c, v) >= 0) {
+        v_empty_hash = 1;
+        v_hash_dflt = hash_new_default_arg(c, v);
+        if (nt_kind(nt, v_hash_dflt) == NK_NilNode) v_hash_dflt = -1;   /* Hash.new(nil) is Hash.new */
+      }
+      else v_hash_cap = han == 1;
+      /* a `capacity:` value left to run (desugar_hash_new_capacity) */
+      if (nt_ref(nt, v, "hash_capacity") >= 0) { v_hash_cap = 1; v_empty_hash = 0; }
+    }
+  }
+  if (v_empty_arr && lv->type == TY_POLY_ARRAY) {
+    if (v_lit_frozen) { int _ft = ++g_tmp;
+      buf_printf(b, "({ sp_PolyArray *_t%d = sp_PolyArray_new(); _t%d->frozen = 1; _t%d; })", _ft, _ft, _ft); }
+    else buf_puts(b, "sp_PolyArray_new()");
+  }
+  else if (v_empty_arr && array_kind(lv->type)) {
+    if (v_lit_frozen) { int _ft = ++g_tmp;
+      buf_printf(b, "({ sp_%sArray *_t%d = sp_%sArray_new(); _t%d->frozen = 1; _t%d; })",
+                 array_kind(lv->type), _ft, array_kind(lv->type), _ft, _ft); }
+    else buf_printf(b, "sp_%sArray_new()", array_kind(lv->type));
+  }
+  else if (v_hash_cap && emit_empty_container_for_slot(c, v, lv->type, b)) {
+    /* built at the slot's variant, the capacity evaluated */
+  }
+  else if (v_empty_hash && ty_is_hash(lv->type)) {
+    const char *hcn = ty_hash_cname(lv->type);
+    if (hcn && v_hash_dflt >= 0) emit_hash_new_with_default(c, lv->type, v_hash_dflt, b);
+    else if (hcn && v_lit_frozen) buf_printf(b, "sp_gc_freeze(sp_%sHash_new())", hcn);   /* `X = {}.freeze`: the freeze the strip took off (#4510) */
+    else if (hcn) buf_printf(b, "sp_%sHash_new()", hcn);
+    else emit_expr(c, v, b);
+  }
+  /* a poly-typed global/const slot boxes a scalar value (`$g = 42` where $g
+     elsewhere holds a string/array, so its slot is sp_RbVal) */
+  else if (lv->type == TY_POLY && repr_of(c, v).kind != RK_BOXED) emit_boxed(c, v, b);
+  else if (lv->type == TY_POLY_ARRAY && ty_is_array(comp_ntype(c, v)) &&
+           comp_ntype(c, v) != TY_POLY_ARRAY) {
+    /* a typed array into a poly-array global: rebuilt with its elements
+       boxed, the conversion the local and ivar writes make (a slot that
+       widened on a write the node never saw -- under --int-overflow=promote
+       every array built from widened Integers, #4738) */
+    if (conv_reads_shared_storage(c, v))
+      unsupported(c, v, "widening a typed array READ into a poly global (the conversion copies, so writes would not be shared)");
+    emit_poly_array_from(c, v, b);
+  }
+  /* `NONE = Array.new(n) { Obj.new }` into a constant narrow_object_arrays
+     made an object table: the constructor builds in place at the slot's
+     kind, as a local's and an ivar's write already do. Without it the
+     call was emitted at its own poly type and the write refused, since
+     no conversion keeps a poly array in an sp_PtrArray slot. */
+  else if (ty_is_ptr_array(lv->type) && emit_const_ptr_array_build(c, v, vlit, lv->type, b)) { }
+  else return 0;
+  return 1;
+}
+
 static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int indent, const NodeTable *nt, const char *ty) {
   if (sp_streq(ty, "CallOperatorWriteNode")) {
     /* `recv.attr op= value` (e.g. doom's `sector.ceiling_height -=
@@ -22655,51 +22752,7 @@ static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int in
       buf_puts(b, ";\n");
       return 1;
     }
-    int vlit = empty_literal_node(c, v);
-    /* `X = [].freeze`: the strip above found the literal so the slot's kind
-       builds it; the freeze it stripped still has to happen (#3828). */
-    int v_lit_frozen = (vlit != v);
-    NodeKind vk = nt_kind(nt, vlit);
-    int v_empty_arr = 0, v_empty_hash = 0;
-    if (vk == NK_ArrayNode) {
-      int ac = 0; nt_arr(nt, vlit, "elements", &ac); v_empty_arr = (ac == 0);
-    }
-    if (vk == NK_HashNode || vk == NK_KeywordHashNode) {
-      int hec = 0; nt_arr(nt, vlit, "elements", &hec); v_empty_hash = (hec == 0);
-    }
-    /* `$g = Hash.new` (no args/block): an empty hash whose typed slot needs a
-       fresh `sp_XHash_new()`, not the boxed sp_RbVal emit_expr would produce for
-       the untyped Hash.new call (#3205). */
-    int v_hash_dflt = -1;   /* `$g = Hash.new(default)`: the default's node */
-    int v_hash_cap = 0;     /* `$g = Hash.new(capacity: n)` */
-    if (vk == NK_CallNode && ty_is_hash(lv->type) &&
-        nt_str(nt, v, "name") && sp_streq(nt_str(nt, v, "name"), "new") &&
-        nt_ref(nt, v, "block") < 0) {
-      int hr = nt_ref(nt, v, "receiver");
-      const char *hrn = hr >= 0 && nt_kind(nt, hr) == NK_ConstantReadNode
-                        ? nt_str(nt, hr, "name") : NULL;
-      if (hrn && sp_streq(hrn, "Hash")) {
-        /* the count lives on the ArgumentsNode; asking the CallNode for it
-           answered 0 for every form, which is why `$g = Hash.new(5)` on a
-           typed slot silently emitted the default-less constructor */
-        int ha = nt_ref(nt, v, "arguments"); int han = 0;
-        if (ha >= 0) nt_arr(nt, ha, "arguments", &han);
-        if (han == 0) v_empty_hash = 1;
-        /* `Hash.new(default)` on a typed slot: the same fresh variant, carrying
-           the default, as the local write emits (emit_assign). Before, only the
-           argument-less form took this arm and the default form fell to the
-           boxed poly emit, which the typed slot could not hold. */
-        else if (hash_new_default_arg(c, v) >= 0) {
-          v_empty_hash = 1;
-          v_hash_dflt = hash_new_default_arg(c, v);
-          if (nt_kind(nt, v_hash_dflt) == NK_NilNode) v_hash_dflt = -1;   /* Hash.new(nil) is Hash.new */
-        }
-        else v_hash_cap = han == 1;
-        /* a `capacity:` value left to run (desugar_hash_new_capacity) */
-        if (nt_ref(nt, v, "hash_capacity") >= 0) { v_hash_cap = 1; v_empty_hash = 0; }
-      }
-    }
-    if (vk == NK_NilNode)
+    if (nt_kind(nt, v) == NK_NilNode)
       /* Every nullable kind has a nil of its own that reads back as nil (an
          Integer / Float oint's flag, a String's NULL), and this arm knew only
          the string one: an int-typed global assigned nil got
@@ -22712,47 +22765,8 @@ static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int in
         buf_puts(b, lv->type == TY_RANGE ? "(sp_Range){0}" : nil_sentinel(lv->type)); }
     else if (oint_kind(lv->type) && !gvar_is_oint(c, lv) && node_may_be_nil(c, v))
       refuse_nil_store(c, v, lv->type, "a global variable write");
-    else if (v_empty_arr && lv->type == TY_POLY_ARRAY) {
-      if (v_lit_frozen) { int _ft = ++g_tmp;
-        buf_printf(b, "({ sp_PolyArray *_t%d = sp_PolyArray_new(); _t%d->frozen = 1; _t%d; })", _ft, _ft, _ft); }
-      else buf_puts(b, "sp_PolyArray_new()");
-    }
-    else if (v_empty_arr && array_kind(lv->type)) {
-      if (v_lit_frozen) { int _ft = ++g_tmp;
-        buf_printf(b, "({ sp_%sArray *_t%d = sp_%sArray_new(); _t%d->frozen = 1; _t%d; })",
-                   array_kind(lv->type), _ft, array_kind(lv->type), _ft, _ft); }
-      else buf_printf(b, "sp_%sArray_new()", array_kind(lv->type));
-    }
-    else if (v_hash_cap && emit_empty_container_for_slot(c, v, lv->type, b)) {
-      /* built at the slot's variant, the capacity evaluated */
-    }
-    else if (v_empty_hash && ty_is_hash(lv->type)) {
-      const char *hcn = ty_hash_cname(lv->type);
-      if (hcn && v_hash_dflt >= 0) emit_hash_new_with_default(c, lv->type, v_hash_dflt, b);
-      else if (hcn && v_lit_frozen) buf_printf(b, "sp_gc_freeze(sp_%sHash_new())", hcn);   /* `X = {}.freeze`: the freeze the strip took off (#4510) */
-      else if (hcn) buf_printf(b, "sp_%sHash_new()", hcn);
-      else emit_expr(c, v, b);
-    }
-    /* a poly-typed global/const slot boxes a scalar value (`$g = 42` where $g
-       elsewhere holds a string/array, so its slot is sp_RbVal) */
-    else if (lv->type == TY_POLY && repr_of(c, v).kind != RK_BOXED) emit_boxed(c, v, b);
-    else if (lv->type == TY_POLY_ARRAY && ty_is_array(comp_ntype(c, v)) &&
-             comp_ntype(c, v) != TY_POLY_ARRAY) {
-      /* a typed array into a poly-array global: rebuilt with its elements
-         boxed, the conversion the local and ivar writes make (a slot that
-         widened on a write the node never saw -- under --int-overflow=promote
-         every array built from widened Integers, #4738) */
-      if (conv_reads_shared_storage(c, v))
-        unsupported(c, v, "widening a typed array READ into a poly global (the conversion copies, so writes would not be shared)");
-      emit_poly_array_from(c, v, b);
-    }
-    /* `NONE = Array.new(n) { Obj.new }` into a constant narrow_object_arrays
-       made an object table: the constructor builds in place at the slot's
-       kind, as a local's and an ivar's write already do. Without it the
-       call was emitted at its own poly type and the write refused, since
-       no conversion keeps a poly array in an sp_PtrArray slot. */
-    else if (ty_is_ptr_array(lv->type) && emit_const_ptr_array_build(c, v, vlit, lv->type, b)) { }
-    else emit_coerce(c, v, lv->type, CO_HOLD, isg ? "a global variable write" : "a constant write", b);
+    else if (!emit_named_slot_container(c, v, lv, b))
+      emit_coerce(c, v, lv->type, CO_HOLD, isg ? "a global variable write" : "a constant write", b);
     buf_puts(b, ";\n");
     if (!isg && lv->init_guarded) {
       emit_indent(b, indent); buf_printf(b, "sp_init_in_progress_%s = 0;\n", key);
@@ -22795,18 +22809,6 @@ static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int in
     LocalVar *cv = nm ? comp_const(c, nm) : NULL;
     if (!cv || cv->type == TY_UNKNOWN) { unsupported(c, id, "constant path write"); return 1; }
     int v = nt_ref(nt, id, "value");
-    int vlit = empty_literal_node(c, v);
-    /* `X = [].freeze`: the strip above found the literal so the slot's kind
-       builds it; the freeze it stripped still has to happen (#3828). */
-    int v_lit_frozen = (vlit != v);
-    NodeKind vk = nt_kind(nt, vlit);
-    int v_empty_arr = 0, v_empty_hash = 0;
-    if (vk == NK_ArrayNode) {
-      int ac = 0; nt_arr(nt, vlit, "elements", &ac); v_empty_arr = (ac == 0);
-    }
-    if (vk == NK_HashNode || vk == NK_KeywordHashNode) {
-      int hec = 0; nt_arr(nt, vlit, "elements", &hec); v_empty_hash = (hec == 0);
-    }
     int crecv = nt_ref(nt, tgt, "parent");
     int recv_t = cpath_recv_dynamic(c, crecv, cv->type == TY_CLASS) ? emit_cpath_recv_hold(c, crecv) : -1;
     /* with a receiver to check, the value waits in a temp until it has been */
@@ -22816,33 +22818,14 @@ static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int in
     if (val_t >= 0 && cv->type == TY_STRBUF) buf_printf(b, "__auto_type _t%d = ", val_t);
     else if (val_t >= 0) { emit_ctype(c, cv->type, b); buf_printf(b, " _t%d = ", val_t); }
     else buf_printf(b, "cst_%s = ", nm);
-    if (vk == NK_NilNode)
+    if (nt_kind(nt, v) == NK_NilNode)
       buf_puts(b, cv->type == TY_RANGE ? "(sp_Range){0}" : default_value_from_compiler(c, cv->type));
-    else if (v_empty_arr && cv->type == TY_POLY_ARRAY) {
-      if (v_lit_frozen) { int _ft = ++g_tmp;
-        buf_printf(b, "({ sp_PolyArray *_t%d = sp_PolyArray_new(); _t%d->frozen = 1; _t%d; })", _ft, _ft, _ft); }
-      else buf_puts(b, "sp_PolyArray_new()");
+    else if (cv->type == TY_STRING || cv->type == TY_STRBUF) {
+      int to = val_t < 0 && one_str_to_open(b, cv->type, "cst_%s", nm);
+      emit_expr(c, v, b);
+      if (to) buf_puts(b, ")");
     }
-    else if (v_empty_arr && array_kind(cv->type)) {
-      if (v_lit_frozen) { int _ft = ++g_tmp;
-        buf_printf(b, "({ sp_%sArray *_t%d = sp_%sArray_new(); _t%d->frozen = 1; _t%d; })",
-                   array_kind(cv->type), _ft, array_kind(cv->type), _ft, _ft); }
-      else buf_printf(b, "sp_%sArray_new()", array_kind(cv->type));
-    }
-    else if (v_empty_hash && ty_is_hash(cv->type)) {
-      const char *hcn = ty_hash_cname(cv->type);
-      if (hcn && v_lit_frozen) buf_printf(b, "sp_gc_freeze(sp_%sHash_new())", hcn);
-      else if (hcn) buf_printf(b, "sp_%sHash_new()", hcn);
-      else emit_expr(c, v, b);
-    }
-    /* a boxed constant slot (widened under promote, or a union) takes the
-       value boxed, as the plain ConstantWriteNode does */
-    else if (cv->type == TY_POLY && repr_of(c, v).kind != RK_BOXED) emit_boxed(c, v, b);
-    /* `Mod::X = Array.new(n) { Obj.new }` into an object table builds in
-       place at the slot's kind, as the plain ConstantWriteNode does. */
-    else if (ty_is_ptr_array(cv->type) && emit_const_ptr_array_build(c, v, vlit, cv->type, b)) { }
-    else if (val_t < 0 && one_str_to_open(b, cv->type, "cst_%s", nm)) { emit_expr(c, v, b); buf_puts(b, ")"); }
-    else emit_expr(c, v, b);
+    else if (!emit_named_slot_container(c, v, cv, b)) emit_expr(c, v, b);
     buf_puts(b, ";\n");
     if (recv_t >= 0) {
       emit_cpath_recv_check(recv_t, b, indent);

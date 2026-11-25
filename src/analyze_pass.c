@@ -9079,22 +9079,19 @@ static int slot_write_walk(Compiler *c, int w, void *ctx) {
   int arg = -1;
   switch (k) {
   case NK_InstanceVariableOperatorWriteNode: case NK_GlobalVariableOperatorWriteNode:
-  case NK_ClassVariableOperatorWriteNode: case NK_ConstantOperatorWriteNode: case NK_CallOperatorWriteNode:
+  case NK_ClassVariableOperatorWriteNode: case NK_ConstantOperatorWriteNode:
+  case NK_ConstantPathOperatorWriteNode: case NK_CallOperatorWriteNode:
     aw->n++;
     return 0;
   case NK_InstanceVariableTargetNode: case NK_GlobalVariableTargetNode: case NK_ClassVariableTargetNode:
-  case NK_ConstantTargetNode:
+  case NK_ConstantTargetNode: case NK_ConstantPathTargetNode:
     return masgn_target_walk(c, w, aw);
   case NK_InstanceVariableWriteNode: case NK_InstanceVariableOrWriteNode: case NK_InstanceVariableAndWriteNode:
   case NK_GlobalVariableWriteNode: case NK_GlobalVariableOrWriteNode: case NK_GlobalVariableAndWriteNode:
   case NK_ClassVariableWriteNode: case NK_ClassVariableOrWriteNode: case NK_ClassVariableAndWriteNode:
   case NK_ConstantWriteNode: case NK_ConstantOrWriteNode: case NK_ConstantAndWriteNode:
-    return slot_value_walk(c, ws, nt_ref(nt, w, "value"), aw);
-  /* a constant's write through its path (`M::G = [1]`) stores its value
-     as it is built, which the general Array's slot cannot take */
   case NK_ConstantPathWriteNode: case NK_ConstantPathOrWriteNode: case NK_ConstantPathAndWriteNode:
-  case NK_ConstantPathOperatorWriteNode: case NK_ConstantPathTargetNode:
-    return 1;
+    return slot_value_walk(c, ws, nt_ref(nt, w, "value"), aw);
   default: break;
   }
   if (k == NK_CallOrWriteNode || k == NK_CallAndWriteNode) arg = nt_ref(nt, w, "value");

@@ -223,3 +223,13 @@ y1(K23.v) { |x| x << +"g" }; p K23.v
 G23 = mk23
 def c23 = G23
 y1(c23) { |x| x << +"h" }; p G23
+
+# a constant written through its path, nested too, with the store in a
+# block (also where it never runs) and in a method
+module M24; end
+module A24; module B24; end; end
+def m24(a) = a << +"c"
+M24::G = [1]; y1(M24::G) { |x| x << +"a" } if ARGV.size > 5; p M24::G
+M24::H = [2]; y1(M24::H) { |x| x << +"b" }; p M24::H
+M24::I = [3]; m24(M24::I); p M24::I
+A24::B24::G = [4]; y1(A24::B24::G) { |x| x << +"d" }; p A24::B24::G

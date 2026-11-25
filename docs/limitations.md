@@ -2070,25 +2070,12 @@ unsupported, so `require "English"` does not compile.
 
 #### `autoload`
 
-With the default `--load-model=graph`, a registration with a resolved
-module, constant name, and file loads the file when that constant is first
-referenced. Spinel refuses receiverless calls when the receiver's lookup
-chain may shadow the builtin `autoload`. Definitions on unrelated classes
+A registration with a resolved module, constant name, and file loads the
+file when that constant is first referenced. Spinel refuses receiverless
+calls when the receiver's lookup chain may shadow the builtin `autoload`. Definitions on unrelated classes
 and modules do not prevent registration. Constant-table queries such as
 `autoload?`, `const_defined?`, and `constants` are refused in programs
-with graph-mode autoload registrations.
-
-With `--load-model=inline`, Spinel resolves `require` and `require_relative` when it compiles, and an
-`autoload` whose path it can read is compiled as a require of that file:
-`autoload :X, "path"`, `autoload :X, "#{__dir__}/path"` and
-`autoload :X, File.expand_path("path", __dir__)`. In a required file the
-autoloads become requires at the file's end, and the name may be a local (a
-loop over the names one file defines); in the entry file the require takes
-the call's place, and the name is a Symbol. Any other `autoload` is
-refused. The file is then loaded when the
-program starts, not on the constant's first use. A program that asks
-`autoload?`, `const_defined?` or `constants` before that use, or whose
-autoloaded file has a side effect of its own, sees the difference.
+with autoload registrations.
 
 #### Flip-flop operator
 

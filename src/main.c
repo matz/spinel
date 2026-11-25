@@ -607,9 +607,10 @@ static int table_mode_of(const char *a) {
    universe is known, so a require that resolves to nothing is a bug; `spin
    build` has always compiled this way through SPINEL_STRICT_REQUIRE, and `spin
    flags` needs to hand the same gate to a caller driving the compiler itself
-   (#4105). `--load-model=graph`, each required file kept as its own root
-   with a load node per require, is the only load model and the default; the
-   flag is still taken. 1 when `a` is one of them. */
+   (#4105). Each required file is kept as its own root with a load node per
+   require, the one load model: `--load-model=graph` is still taken and
+   chooses nothing, and `--load-model=inline` names the model that was
+   removed. 1 when `a` is one of them. */
 static int parse_flag(const char *a) {
   if (sp_streq(a, "--strict-require")) return g_strict_require_cli = 1;
   if (sp_streq(a, "--load-model=inline")) {

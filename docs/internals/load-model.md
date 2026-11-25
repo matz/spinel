@@ -1036,17 +1036,11 @@ asking the map as it edits. `SPINEL_ELAB_CHECK=1` reports where the
 plan frame's version of a call differs from the map as it is ("the call
 plan's versions").
 
-## Requires and the two models
+## Requires
 
 [require.md](../require.md) describes `require` as a program sees it.
-The record is made under both load models.
 
-Under `--load-model=inline` required files are spliced into
-the one program text, which has one root. The walk is the same over that
-text: one region, and a statement a desugaring placed in a body has its
-point where it stands, whatever its id.
-
-Under `--load-model=graph`, the default, each file is a root of the node table
+Each file is a root of the node table
 (`nt_root`), and each require a `LoadNode` naming the file it loads
 (`target_file`). The parse's load graph places each file at the
 statement that first loads it (#10305): `prog_ordered_load` answers the
@@ -1071,7 +1065,7 @@ its end once entered. It does not tell apart a region that raises before
 its later definitions (the raise rescued), one that calls back into code of
 another region before them, or an autoload of a constant already defined,
 which never loads its file. `--dump-load-graph` prints the
-files and what each require resolves to. What the graph model does not
+files and what each require resolves to. What the load model does not
 compile it refuses by name (`prog_refuse_loads`, `prog_refuse_order`).
 
 How the load stage's lowerings (`lower_run`, `src/analyze_lower.c`) and
@@ -1092,14 +1086,13 @@ language calls for a node.
   in the plan frame against the map as it is.
 - `make load-graph-test` (`tools/load_graph_check.sh`, part of
   `make test`) compiles each test/load_graph program with an `.expected`
-  under `--load-model=graph` and compares its output, and compares
+  and compares its output, and compares
   `--dump-load-record` of each with a `.load-record` against that file.
   A change to the record's points or histories updates those files.
 - `ruby tools/load_record_oracle.rb PROGRAM...` runs each program under
   CRuby with a tracer that logs what its load phase defines (class
   bodies, methods added, removed and undefined, constants set, mixins)
   and compares it with the record: an event only CRuby ran, a sure entry
-  CRuby did not run, two events in the other order. `--inline` is for a
-  program of one file under the inline model.
+  CRuby did not run, two events in the other order.
 - `--timing` prints the map's builds (`an_elab_points`) and the record's
   own cost (`an_elab_record`).

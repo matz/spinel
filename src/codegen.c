@@ -17616,11 +17616,7 @@ static void emit_super_value(Compiler *c, int id, Buf *b) {
       free(ib.p);
       return;
     }
-    /* (the binding of the arguments' kinds, of those of the name and count the plan found) */
-    TyKind natys[8];
-    int nta = sac < 8 ? sac : 8;
-    for (int a = 0; a < nta; a++) natys[a] = comp_ntype(c, sav[a]);
-    emit_native_super_call(c, id, comp_native_method_find_typed(c, root, uname, sac, 0, nta == sac ? natys : NULL), sac, sav, b);
+    emit_native_super_call(c, id, cplan_super_native(c, id), sac, sav, b);
     return;
   }
   if (mi < 0) {

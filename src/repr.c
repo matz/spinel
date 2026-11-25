@@ -823,29 +823,21 @@ const NativeMethod *repr_native_string_reader(Compiler *c, int node) {
   const NodeTable *nt = c->nt;
   if (node < 0) return NULL;
   NodeKind kind = nt_kind(nt, node);
-  int cid;
-  const char *name;
-  if (kind == NK_CallNode) {
-    int recv = nt_ref(nt, node, "receiver");
-    TyKind rt = recv >= 0 ? comp_ntype(c, recv) : TY_UNKNOWN;
-    if (!ty_is_object(rt)) return NULL;
-    name = nt_str(nt, node, "name");
-    cid = comp_native_answer_class(c, ty_object_class(rt), name);
-  }
-  else if (kind == NK_SuperNode) {
-    const Scope *scope = comp_scope_of(c, node);
-    if (!scope || scope->is_cmethod || scope->class_id < 0) return NULL;
-    cid = c->classes[scope->class_id].nsub_root - 1;
-    if (cid < 0) return NULL;
-    const Scope *site = comp_super_site(c, scope);
-    name = comp_super_name(c, cplan_super_start(c, site), site);
-  }
-  else return NULL;
-  if (cid < 0 || !name) return NULL;
+  if (kind != NK_CallNode && kind != NK_SuperNode) return NULL;
   int argc = 0;
   call_args(nt, node, &argc);
   if (argc != 0) return NULL;
-  int nm = comp_native_method_find(c, cid, name, argc, 0);
+  int nm = -1;
+  /* (a super's: the binding the plan's arm runs, BSUP_NATIVE) */
+  if (kind == NK_SuperNode) nm = cplan_super_native(c, node);
+  else {
+    int recv = nt_ref(nt, node, "receiver");
+    TyKind rt = recv >= 0 ? comp_ntype(c, recv) : TY_UNKNOWN;
+    if (!ty_is_object(rt)) return NULL;
+    const char *name = nt_str(nt, node, "name");
+    int cid = comp_native_answer_class(c, ty_object_class(rt), name);
+    if (cid >= 0 && name) nm = comp_native_method_find(c, cid, name, argc, 0);
+  }
   const NativeMethod *m = nm >= 0 ? &c->native_methods[nm] : NULL;
   return repr_native_string_symbol(m) ? m : NULL;
 }
@@ -900,18 +892,15 @@ static int repr_boxed_native_handle(Compiler *c, int v) {
 const NativeMethod *repr_super_native_keeps(Compiler *c, int n) {
   const NodeTable *nt = c->nt;
   if (!c->share_applied || n < 0 || nt_kind(nt, n) != NK_SuperNode) return NULL;
-  Scope *ms = comp_scope_of(c, n);
-  if (!ms || ms->is_cmethod || ms->class_id < 0 || ms->class_id >= c->nclasses || ms->def_node < 0 ||
-      !ms->name || is_initialize_family(ms->name) || c->classes[ms->class_id].nsub_root <= 0)
-    return NULL;
-  int root = c->classes[ms->class_id].nsub_root - 1;
-  if (root >= c->nclasses || !c->classes[root].native_share_keeps) return NULL;
-  int argc = 0; const int *argv = call_args(nt, n, &argc);
+  int argc = 0;
+  (void)call_args(nt, n, &argc);
   if (argc != 1 || nt_ref(nt, n, "block") >= 0) return NULL;
-  TyKind at = comp_ntype(c, argv[0]);
-  int nm = comp_native_method_find_typed(c, root, ms->name, 1, 0, &at);
-  const NativeMethod *m = nm >= 0 ? &c->native_methods[nm] : NULL;
-  if (!m || m->kind != 0 || !(m->share & NSH_KEEPS) || !m->share_csym || m->rest || m->nargs != 1) return NULL;
+  /* (the binding the plan's arm runs, BSUP_NATIVE) */
+  int nm = cplan_super_native(c, n);
+  Scope *ms = comp_scope_of(c, n);
+  if (nm < 0 || !c->classes[c->classes[ms->class_id].nsub_root - 1].native_share_keeps) return NULL;
+  const NativeMethod *m = &c->native_methods[nm];
+  if (m->kind != 0 || !(m->share & NSH_KEEPS) || !m->share_csym || m->rest || m->nargs != 1) return NULL;
   return m;
 }
 

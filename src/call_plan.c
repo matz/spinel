@@ -1203,6 +1203,19 @@ static BsuperPath cplan_super_path(Compiler *c, int id, const Scope *st, const c
   return comp_ary_root(c, st->class_id) >= 0 && !is_initialize_family(uname) && comp_arysub_builtin_name(c, id, st->class_id, uname) ? BSP_ARRAY : BSP_NONE;
 }
 
+/* See call_plan.h. */
+int cplan_super_native(Compiler *c, int id) {
+  if (nt_kind(c->nt, id) != NK_SuperNode || cplan_user(c, id).bsuper != BSUP_NATIVE) return -1;
+  const Scope *s = comp_scope_of(c, id), *st = comp_super_site(c, s);
+  int sa = nt_ref(c->nt, id, "arguments"), sac = 0;
+  const int *sav = sa >= 0 ? nt_arr(c->nt, sa, "arguments", &sac) : NULL;
+  TyKind natys[8];
+  int nta = sac < 8 ? sac : 8;
+  for (int a = 0; a < nta; a++) natys[a] = comp_ntype(c, sav[a]);
+  return comp_native_method_find_typed(c, c->classes[s->class_id].nsub_root - 1, comp_super_name(c, cplan_super_start(c, st), st),
+                                       sac, 0, nta == sac ? natys : NULL);
+}
+
 static void cplan_resolve_super(Compiler *c, int id, CallPlan *p) {
   Scope *s = comp_scope_of(c, id);
   if (!s || s->class_id < 0 || !s->name) return;

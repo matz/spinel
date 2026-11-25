@@ -454,6 +454,9 @@ int cplan_super_target(Compiler *c, int id, const Scope *s, MethodLookup *ml);
    exception, an Array, a Struct): the builtin's method is the answer, and a reopening of Object's is behind it.
    Every reader of a super's target starts here. */
 int cplan_super_start(Compiler *c, const Scope *s);
+/* The native class's binding (an index into Compiler.native_methods) a super node id whose arm is BSUP_NATIVE runs:
+   of the name and count the plan found, and of the arguments' kinds; -1 for any other super */
+int cplan_super_native(Compiler *c, int id);
 /* Is super node id, in a class method, the call of a definition hook (`inherited`, `method_added`) that only a builtin's no-op answers? */
 int cplan_core_hook(Compiler *c, int id);
 int cplan_kernel_def(Compiler *c, const char *name);   /* a version of the name's top-level history is a program Kernel def */

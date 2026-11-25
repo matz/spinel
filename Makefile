@@ -3288,7 +3288,12 @@ backtrace-test: $(SPINEL) $(SP_RT_LIB)
 	           "block_frames.rb:20:in .block (3 levels) in Runner#run'" "block_frames.rb:29:in .block in <main>'" \
 	           "block_frames.rb:31:in .block in <main>'" "block_frames_lib.rb:2:in .block in lib_blocks'"; do \
 	    grep -q "$$f" "$$tmp/bf.out" || { echo "backtrace-test: FAIL (a frame inside a block: no $$f)"; cat "$$tmp/bf.out"; ok=0; }; \
-	  done;; \
+	  done; \
+	  $(SPINEL) --debug --no-inline-hot test/backtrace/joint_guard_line.rb -o "$$tmp/jg" >/dev/null 2>&1 || \
+	    { echo "backtrace-test: FAIL (compile joint_guard_line)"; ok=0; }; \
+	  "$$tmp/jg" > "$$tmp/jg.out" 2>&1; \
+	  grep -q "joint_guard_line.rb:8:in .upd'" "$$tmp/jg.out" || \
+	    { echo "backtrace-test: FAIL (a joint guard's first index raised under another statement's line)"; cat "$$tmp/jg.out"; ok=0; };; \
 	esac; \
 	rm -rf "$$tmp"; \
 	if [ $$ok -eq 1 ]; then echo "backtrace-test: pass"; else exit 1; fi

@@ -26462,14 +26462,16 @@ static int stmt_only_declares(const NodeTable *nt, int s, const ANameHash *defna
 static int block_only_declares(const NodeTable *nt, int blk, int hooks, const ANameHash *defnames) {
   return !hooks && body_only_declares(nt, nt_ref(nt, blk, "body"), defnames);
 }
-/* ...and for the statements body (-1: none) of a block or a class body */
+/* ...and for the statements body (-1: none) of a block or a class body; the
+   call of the statements a site class's body runs at each evaluation
+   (cn_rt_body) is no statement of it */
 int body_only_declares(const NodeTable *nt, int body, const ANameHash *defnames) {
   int n = 0;
   if (body < 0) return 1;
   if (nt_kind(nt, body) != NK_StatementsNode) return 0;
   const int *st = nt_arr(nt, body, "body", &n);
   for (int i = 0; i < n; i++)
-    if (!stmt_only_declares(nt, st[i], defnames)) return 0;
+    if (!nt_int(nt, st[i], "rt_body_call", 0) && !stmt_only_declares(nt, st[i], defnames)) return 0;
   return 1;
 }
 /* ...and for one statement s of such a body */
@@ -27480,6 +27482,106 @@ static int cn_site_repeats(const NodeTable *nt, const int *parent, int id) {
         pk == NK_WhileNode || pk == NK_UntilNode || pk == NK_ForNode) return 1;
   }
   return 0;
+}
+/* What a statement of a Class.new block is checked against (cn_stmt_reruns):
+   the program's def names and whether the statement stands ahead of a
+   declaration */
+typedef struct { const ANameHash *defnames; int early; } CnRerun;
+/* May statement s of a Class.new block run again at each evaluation, in a
+   class method of the site class with the evaluation's class as self, and
+   answer as the block would? Not where it means something else in a method
+   (a yield, return, next, break, redo, retry or super; a def, a class or a
+   constant written), where it writes or reads what the classes share (a
+   class-level instance variable or a class variable), where it declares
+   (a declaration with computed arguments, define_method, a reflection), or
+   where it reads the frame it runs in (block_given?, binding, __method__).
+   Ahead of a declaration (early), where the block would see what that
+   declaration adds missing, it calls only Kernel's functions of a name the
+   program defines no method of and does not read self: nothing then
+   asks the class what it has. */
+static int cn_stmt_reruns(const NodeTable *nt, int s, const CnRerun *r) {
+  if (s < 0) return 1;
+  switch (nt_kind(nt, s)) {
+  case NK_InstanceVariableReadNode: case NK_InstanceVariableWriteNode: case NK_InstanceVariableOperatorWriteNode:
+  case NK_InstanceVariableOrWriteNode: case NK_InstanceVariableAndWriteNode: case NK_InstanceVariableTargetNode:
+  case NK_ClassVariableReadNode: case NK_ClassVariableWriteNode: case NK_ClassVariableOperatorWriteNode:
+  case NK_ClassVariableOrWriteNode: case NK_ClassVariableAndWriteNode: case NK_ClassVariableTargetNode:
+  case NK_YieldNode: case NK_ReturnNode: case NK_NextNode: case NK_BreakNode: case NK_RedoNode: case NK_RetryNode:
+  case NK_SuperNode: case NK_ForwardingSuperNode: case NK_DefNode: case NK_ClassNode: case NK_ModuleNode:
+  case NK_SingletonClassNode: case NK_AliasMethodNode: case NK_UndefNode:
+  case NK_ConstantWriteNode: case NK_ConstantPathWriteNode: case NK_ConstantOperatorWriteNode:
+  case NK_ConstantOrWriteNode: case NK_ConstantAndWriteNode: case NK_ConstantPathOperatorWriteNode:
+  case NK_ConstantPathOrWriteNode: case NK_ConstantPathAndWriteNode:
+    return 0;
+  case NK_SelfNode:
+    return !r->early;
+  case NK_CallNode: {
+    const char *nm = nt_str(nt, s, "name");
+    if (!nm || is_class_declaration_call(nm) || is_method_name_reflection(nm) || is_frame_reading_function(nm)) return 0;
+    if (!r->early) break;
+    if (nt_ref(nt, s, "receiver") < 0 && (!is_kernel_module_function(nm) || anh_has(r->defnames, nm))) return 0;
+    break;
+  }
+  default: break;
+  }
+  int nr = nt_num_refs(nt, s);
+  for (int i = 0; i < nr; i++) if (!cn_stmt_reruns(nt, nt_ref_at(nt, s, i), r)) return 0;
+  int na = nt_num_arrs(nt, s);
+  for (int i = 0; i < na; i++) {
+    int cnt = 0; const int *ids = nt_arr_at(nt, s, i, &cnt);
+    for (int j = 0; j < cnt; j++) if (!cn_stmt_reruns(nt, ids[j], r)) return 0;
+  }
+  return 1;
+}
+/* A run-time site's block that runs more than declarations: where each such
+   statement may run again (cn_stmt_reruns), they move, in their order, into
+   a class method of the site class, and the body calls it on the site class
+   where the block ended (marked rt_body_call), after every declaration. A
+   site class (register_rt_sites) runs that call at each evaluation, on the
+   class it makes, after the superclass's inherited (cplan_rt_site_body);
+   another runs it in its class body, once, as the block ran before. A block
+   with parameters, or one statement that may not run again, keeps its body:
+   registration then keeps the site class itself. */
+static void cn_rt_body(NodeTable *nt, int blk, int body, const char *cname, const ANameHash *defnames) {
+  int n = 0, last = -1, moved = 0;
+  const int *st = nt_arr(nt, body, "body", &n);
+  if (nt_ref(nt, blk, "parameters") >= 0) return;
+  CnRerun r = { defnames, 0 };
+  for (int i = 0; i < n; i++) if (stmt_only_declares(nt, st[i], defnames)) last = i;
+  for (int i = 0; i < n; i++) {
+    if (stmt_only_declares(nt, st[i], defnames)) continue;
+    r.early = i < last;
+    if (!cn_stmt_reruns(nt, st[i], &r)) return;
+    moved++;
+  }
+  if (!moved) return;
+  int def = fwd_new_node_like(nt, blk, "DefNode"), dself = fwd_new_node_like(nt, blk, "SelfNode");
+  int dbody = fwd_new_node_like(nt, blk, "StatementsNode"), call = fwd_new_node_like(nt, blk, "CallNode");
+  int recv = fwd_new_node_like(nt, blk, "ConstantReadNode");
+  int *keep = malloc(sizeof(int) * (size_t)(n + 2)), *run = malloc(sizeof(int) * (size_t)moved);
+  if (def < 0 || dself < 0 || dbody < 0 || call < 0 || recv < 0 || !keep || !run) {
+    fprintf(stderr, "spinel: out of memory\n");
+    exit(1);
+  }
+  int nk = 0, nr = 0;
+  for (int i = 0; i < n; i++) {
+    if (stmt_only_declares(nt, st[i], defnames)) keep[nk++] = st[i];
+    else run[nr++] = st[i];
+  }
+  nt_node_set_arr(nt, dbody, "body", run, nr);
+  nt_node_set_str(nt, def, "name", RT_BODY_METHOD_NAME);
+  nt_node_set_ref(nt, def, "receiver", dself);
+  nt_node_set_ref(nt, def, "body", dbody);
+  nt_node_set_int(nt, def, "rt_body_def", 1);
+  nt_rekey_scope(nt, def, blk, def);   /* (the block's own variables in them are the method's) */
+  nt_node_set_str(nt, recv, "name", cname);
+  nt_node_set_str(nt, call, "name", RT_BODY_METHOD_NAME);
+  nt_node_set_ref(nt, call, "receiver", recv);
+  nt_node_set_int(nt, call, "rt_body_call", 1);
+  keep[nk++] = def;
+  keep[nk++] = call;
+  nt_node_set_arr(nt, body, "body", keep, nk);
+  free(keep); free(run);
 }
 int desugar_class_new_blocks(Compiler *c, HostStep *h) {
   NodeTable *nt = (NodeTable *)c->nt;

@@ -2932,6 +2932,7 @@ int is_class_name_name(const char *n) { return n && sp_streq(n, "name"); }
 int is_alias_method_name(const char *n) { return n && sp_streq(n, "alias_method"); }
 
 const char DEFINE_METHOD_NAME[] = "define_method";
+const char RT_BODY_METHOD_NAME[] = "__spinel_rt_body";
 int is_define_method_name(const char *n) {
   return n && sp_streq(n, DEFINE_METHOD_NAME);
 }

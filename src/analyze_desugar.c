@@ -30258,9 +30258,33 @@ static int mm_if_call(NodeTable *nt, int id, int pred, int yes, int no, int *els
 /* A send the method_missing of class k makes, lowered before this call
    handed it nm (desugar_dynamic_send ran in an earlier round, over the
    names the program spelled then): lowered again, nm among its arms */
+/* The calls of the send family desugar_missing_method_calls's splits may
+   lower again, gathered once (and the nodes a split adds, as they come):
+   a scan of the whole table at each split cleared nothing at most of them,
+   in a large program the most of the pass's time after its questions. The
+   list is a superset; mm_relower_sends tests each again. */
+typedef struct { int *n; int len, cap, scanned; } MmSends;
+static MmSends g_mm_sends;
+static void mm_sends_gather(NodeTable *nt) {
+  MmSends *s = &g_mm_sends;
+  for (; s->scanned < nt->count; s->scanned++) {
+    int n = s->scanned;
+    if (nt_kind(nt, n) != NK_CallNode || !is_send_family(nt_str(nt, n, "name"))) continue;
+    if (s->len == s->cap) {
+      int nc = s->cap ? 2 * s->cap : 64;
+      int *nn = realloc(s->n, sizeof(int) * (size_t)nc);
+      if (!nn) continue;
+      s->n = nn; s->cap = nc;
+    }
+    s->n[s->len++] = n;
+  }
+}
 static void mm_relower_sends(Compiler *c, NodeTable *nt, int mi, const char *nm) {
   if (mi < 0) return;
-  for (int n = 0; n < nt->count && n < c->node_cap; n++) {
+  mm_sends_gather(nt);
+  for (int s = 0; s < g_mm_sends.len; s++) {
+    int n = g_mm_sends.n[s];
+    if (n >= c->node_cap) continue;
     if (c->nscope[n] != mi || nt_kind(nt, n) != NK_CallNode || !is_send_family(nt_str(nt, n, "name"))) continue;
     int dn = 0; const int *arms = nt_arr(nt, n, "dyn_send_arms", &dn);
     int has = 0;
@@ -30521,6 +30545,8 @@ int desugar_missing_method_calls(Compiler *c) {
     changed = 1;
   }
   cplan_chain_undef_hold(0);
+  free(g_mm_sends.n);
+  g_mm_sends = (MmSends){ 0 };
   free(parent);
   return changed;
 }

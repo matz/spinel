@@ -2,4 +2,5 @@ class Fmt
   def pad: (untyped, ?untyped) -> untyped
   def around: (untyped, *untyped, untyped) -> untyped
   def opts: (?untyped, ?untyped, k: untyped, **untyped) -> untyped
+  def named: (untyped, ?untyped, *untyped, untyped) -> untyped
 end

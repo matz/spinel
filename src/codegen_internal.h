@@ -619,6 +619,9 @@ int hc_joint_run(Compiler *c, const int *stmts, int n);
 /* `a[i] op= x` folds in place on an array the loop being emitted caches:
    *hd its data, *wl the length an index below it writes in place */
 int iow_fused_cached(Compiler *c, int id, char *hd, char *wl, size_t cap);
+/* Its right-hand side is held as an optional value (a nilable Integer or
+   Float) and unwrapped at the operator, which raises for nil */
+int iow_opnd_held(Compiler *c, int id);
 /* Co-bounded reads (codegen_stmt.c): a loop proved over the index local
    bi (the C variable bic) in [0, trip) -- a trip that reads trip_node again
    at each pass, or -1 -- reads other arrays at that index in place, behind one
@@ -2755,8 +2758,11 @@ unsigned view_class_is_read(int tok);
 /* A call re-entered after its enclosing emitter tested the receiver. */
 int view_push_call_nil_tested(Compiler *c, int id);
 int view_call_nil_tested(Compiler *c, int id);
-/* an element write whose index the header cache's joint guard tested */
-int view_push_range_tested(Compiler *c, int id);
+/* an element write whose index the header cache's joint guard tested
+   (view_range_tested answers RANGE_TESTED_INDEX, or 0), and with
+   RANGE_TESTED_OPND its right-hand side's nil too */
+enum { RANGE_TESTED_INDEX = 1, RANGE_TESTED_OPND = 2 };
+int view_push_range_tested(Compiler *c, int id, int tested);
 int view_range_tested(Compiler *c, int id);
 void view_nil_test_written(Compiler *c, int recv);   /* the guard of emit_nil_target_own's arm wrote its test */
 int emit_delegated_equality(Compiler *c, int id, int negate, Buf *b);

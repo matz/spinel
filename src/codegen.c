@@ -5927,14 +5927,22 @@ static void emit_cls_visible_fn(Compiler *c, Buf *b) {
   buf_puts(b, "  default: return k;\n  }\n}\n");
 }
 
-/* `var` (a C name holding a runtime cls_id) mapped through visible_cls_id. */
-void emit_visible_cls_id(Compiler *c, const char *var, Buf *b) {
+/* The id Ruby sees as the class of an object of user class ci or of one of
+   its subclasses, the one reader of an object's visible class: `id` is a C
+   name holding the object's cls_id, `obj` one holding the object (NULL
+   where the caller keeps only the id). It is the id itself unless a class
+   below ci masquerades (cls_id_masquerades); then it is mapped through
+   visible_cls_id, a singleton class to the class it hides behind and the
+   Object stand-in to Object. */
+void emit_visible_cls_id(Compiler *c, int ci, const char *obj, const char *id, Buf *b) {
+  (void)obj;
+  if (!cls_id_masquerades(c, ci)) { buf_puts(b, id); return; }
   buf_puts(b, "(");
   for (int k = 0; k < c->nclasses; k++) {
     int v = visible_cls_id(c, k);
-    if (v != k) buf_printf(b, "%s == %d ? %d : ", var, k, v);
+    if (v != k) buf_printf(b, "%s == %d ? %d : ", id, k, v);
   }
-  buf_printf(b, "%s)", var);
+  buf_printf(b, "%s)", id);
 }
 
 /* Two C slots the delegation can move a value between: identical, or one side

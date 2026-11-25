@@ -5078,13 +5078,10 @@ static int emit_recv_class_value(Compiler *c, int id, Buf *b, const NodeTable *n
                       ? _cidx : cv_builtin_class_id(c, "NilClass");
       /* a singleton class answers as the class it hides behind, the Object
          stand-in as Object: `o.class == Foo` holds after `def o.m` */
-      if (cls_id_masquerades(c, _cidx)) {
-        char tv[24]; snprintf(tv, sizeof tv, "_t%d->cls_id", _tobj);
-        buf_printf(b, "((sp_Class){_t%d ? ", _tobj); emit_visible_cls_id(c, tv, b);
-        buf_printf(b, " : %d})", _nilcls);
-        return 1;
-      }
-      buf_printf(b, "((sp_Class){_t%d ? _t%d->cls_id : %d})", _tobj, _tobj, _nilcls);
+      char to[24], tv[32];
+      snprintf(to, sizeof to, "_t%d", _tobj); snprintf(tv, sizeof tv, "_t%d->cls_id", _tobj);
+      buf_printf(b, "((sp_Class){_t%d ? ", _tobj); emit_visible_cls_id(c, _cidx, to, tv, b);
+      buf_printf(b, " : %d})", _nilcls);
       return 1;
     }
     if (cn && (rt == TY_INT || rt == TY_FLOAT)) {

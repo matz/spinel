@@ -13238,9 +13238,9 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
              singleton class answering as its parent (#4142) */
           int o9 = ++g_tmp;
           char ov[24]; snprintf(ov, sizeof ov, "_t%d", o9);
-          buf_printf(b, "sp_int _t%d = (", o9); emit_expr(c, recv, b); buf_puts(b, ")->cls_id; ");
-          emit_visible_cls_id(c, ov, b);
-          buf_printf(b, " == _t%d.cls_id; })", k);
+          buf_printf(b, "sp_int _t%d = (", o9); emit_expr(c, recv, b); buf_puts(b, ")->cls_id; (");
+          emit_visible_cls_id(c, cid, NULL, ov, b);
+          buf_printf(b, ") == _t%d.cls_id; })", k);
         }
         else buf_printf(b, "((sp_Class){%d}).cls_id == _t%d.cls_id; })", visible_cls_id(c, cid), k);
       }

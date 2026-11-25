@@ -8185,6 +8185,34 @@ int cplan_rt_site_body(Compiler *c, int ci) {
         nt_int(c->nt, c->scopes[s].def_node, "rt_body_def", 0)) return s;
   return -1;
 }
+/* Does a program `inherited` on the chain above site class ci read the
+   class it is handed for more than what it is (is_class_identity_reader_name):
+   an instance, its methods, its constants? CRuby runs the hook at each
+   evaluation before the block declares any of them, and the site class has
+   them from the start. A read of the hook's parameter in the hook's own
+   scope as the receiver of any other call is one; the class handed on as an
+   argument is not followed. */
+static int cplan_rt_hook_reflects(Compiler *c, int ci) {
+  const int *par = comp_parent_map(c);
+  for (int k = ci >= 0 ? c->classes[ci].parent : -1, g = 0; k >= 0 && g < 256; k = c->classes[k].parent, g++) {
+    int dc = -1, mi = comp_cmethod_in_chain(c, k, "inherited", &dc);
+    if (mi < 0 || dc != k) continue;
+    Scope *hs = &c->scopes[mi];
+    int body = hs->def_node >= 0 ? nt_ref(c->nt, hs->def_node, "body") : -1, n = 0, hit = 0;
+    if (hs->nparams < 1 || body < 0) continue;
+    int *ids = nt_subtree_ids(c->nt, &body, 1, &n);
+    for (int i = 0; i < n && !hit; i++) {
+      int r = ids[i], p = par[r];
+      const char *rn = nt_kind(c->nt, r) == NK_LocalVariableReadNode ? nt_str(c->nt, r, "name") : NULL;
+      hit = rn && sp_streq(rn, hs->pnames[0]) && comp_scope_of(c, r) == hs && p >= 0 &&
+            nt_kind(c->nt, p) == NK_CallNode && nt_ref(c->nt, p, "receiver") == r &&
+            !is_class_identity_reader_name(nt_str(c->nt, p, "name"));
+    }
+    free(ids);
+    if (hit) return 1;
+  }
+  return 0;
+}
 int cplan_class_new(const Compiler *c, int id, int *site) {
   int kind = elab_builder_kind(c, id), ci = -1;
   if (kind == EB_RT_SITE || kind == EB_RT_BARE) ci = comp_class_of_def(c, elab_builder_site(c, id));
@@ -10274,6 +10302,7 @@ static const char *feature_limit(Compiler *c, int id, int *stop, int *lx, char *
           "(`->(x) { s << x }`) (see docs/limitations.md)";
 
   if (!why && rcn && const_node_class_index(c, recv) < 0) {
+    int hk = -1;   /* (a Class.new's site class) */
     /* Namespaces that exist only in an interpreter. Keyed on the receiver, so
        every method on them reports the same way rather than one-by-one. */
     if (sp_streq(rcn, "ObjectSpace"))
@@ -10294,6 +10323,12 @@ static const char *feature_limit(Compiler *c, int id, int *stop, int *lx, char *
       why = "Class.new(parent) is not supported by AOT compilation: the class "
             "graph, ancestor chain, and method/ivar layout are baked at compile time. "
             "Declare the class with `class ... end` instead (see docs/limitations.md)";
+    /* a class made at each evaluation that its superclass's `inherited`
+       reflects on: the hook would see what the block declares after it */
+    else if (is_class_new(rcn, name) && cplan_class_new(c, id, &hk) == CNEW_RUNTIME && cplan_rt_hook_reflects(c, hk))
+      why = "Class.new evaluated more than once is not supported where its superclass's `inherited` reads "
+            "the class it is handed (an instance, its methods): CRuby runs the hook before the block defines "
+            "them, and the compiled class has them from the start (see docs/limitations.md)";
     /* a block the desugar leaves on the call (desugar_class_new_blocks):
        one that is not a block literal (`Class.new(&b)`, `Class.new(&:x)`),
        or a literal whose body it cannot lift into a class body */

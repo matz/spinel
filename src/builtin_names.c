@@ -2122,6 +2122,16 @@ int is_method_reader_name(const char *n) {
                sp_streq(n, "source_location") || sp_streq(n, "inspect") || sp_streq(n, "to_s") ||
                sp_streq(n, "==") || sp_streq(n, "hash") || sp_streq(n, "receiver"));
 }
+/* A call on a class that reads only what it is, not what it holds: its
+   name, its superclass, its identity and comparisons. Any other call (an
+   instance, its methods, its constants, an eval in it) reads what its body
+   declares. */
+int is_class_identity_reader_name(const char *n) {
+  return n && (sp_streq(n, "name") || sp_streq(n, "to_s") || sp_streq(n, "inspect") || sp_streq(n, "superclass") ||
+               sp_streq(n, "==") || sp_streq(n, "!=") || sp_streq(n, "equal?") || sp_streq(n, "eql?") ||
+               sp_streq(n, "hash") || sp_streq(n, "class") || sp_streq(n, "frozen?") || sp_streq(n, "object_id") ||
+               sp_streq(n, "instance_of?") || sp_streq(n, "is_a?") || sp_streq(n, "kind_of?") || sp_streq(n, "nil?"));
+}
 /* Marshal, whose load makes objects with any ivars set */
 int is_marshal_const(const char *n) { return n && sp_streq(n, "Marshal"); }
 /* ENV, which answers a new String each read */

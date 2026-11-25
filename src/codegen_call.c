@@ -5357,6 +5357,8 @@ static int emit_dynamic_respond_to(Compiler *c, int id, Buf *b) {
   return 1;
 }
 
+static int pd_hoist(Compiler *c, int id, const char *name, Buf *b, size_t from, int tr, TyKind rct,
+                    const int *pid, const TyKind *pty, int np);
 /* Runtime-name `recv.const_get(name)`: desugar_dynamic_const_get stashed one
    literal `recv.const_get(:Name)` arm per constant the receiver can reach.
    Emit `strcmp(name, "N1") == 0 ? arm1 : ... : NameError`, boxing each arm (a class
@@ -5382,17 +5384,23 @@ static int emit_dynamic_const_get(Compiler *c, int id, Buf *b) {
   int recv = nt_ref(nt, id, "receiver");
   int sym = argv[0];
   TyKind st = comp_ntype(c, sym);
-  int t = ++g_tmp;
-  buf_printf(b, "({ const char *_n%d = ", t);
+  int t = ++g_tmp, tr = ++g_tmp;
+  buf_printf(b, "({ const char *_t%d = ", t);
   /* (one-String mode: a name of either face, `ARGV[0] || "Entry"`) */
   if (st == TY_STRING) { buf_puts(b, "SP_STR_B("); emit_expr(c, sym, b); buf_puts(b, ")"); }
   else if (st == TY_STRING) emit_expr(c, sym, b);
   else if (st == TY_SYMBOL) { buf_puts(b, "sp_sym_to_s("); emit_expr(c, sym, b); buf_puts(b, ")"); }
   else { buf_puts(b, "sp_poly_to_s("); emit_boxed(c, sym, b); buf_puts(b, ")"); }
-  /* the arms are a flat run of `if (...) { ...; break; }` in one do-while,
+  /* the arms are a flat run of `if (...) { ...; break; }` in one switch,
      not an else-if chain: thousands of candidates nest that chain as deep,
-     past what the C compiler's parser takes */
-  buf_printf(b, "; if (!_n%d) _n%d = sp_str_empty; %s _r%d; do { ", t, t, def ? "sp_bool" : "sp_RbVal", t);
+     past what the C compiler's parser takes. The switch, from the result's
+     declaration, is moved into a function every site with the same arms
+     shares (pd_hoist, #12511): each `Object.const_get(name)` reaches the
+     same constants, and a copy of the arms per site made the C grow with
+     the sites times the constants */
+  buf_printf(b, "; if (!_t%d) _t%d = sp_str_empty; ", t, t);
+  size_t from = b->len;
+  buf_printf(b, "%s _t%d; switch (0) { default: ", def ? "sp_bool" : "sp_RbVal", tr);
   for (int k = 0; k < narm; k++) {
     int arm = arms[k];
     TyKind at = repr_of(c, arm).as_ty;
@@ -5411,9 +5419,9 @@ static int emit_dynamic_const_get(Compiler *c, int id, Buf *b) {
     else { ok = 0; arm_probe_dropped(&ap); }
     arm_probe_end(c, &ap, ok);
     if (ok) {
-      buf_printf(b, "if (strcmp(_n%d, \"", t); emit_c_escaped(b, nm); buf_puts(b, "\") == 0) { ");
+      buf_printf(b, "if (strcmp(_t%d, \"", t); emit_c_escaped(b, nm); buf_puts(b, "\") == 0) { ");
       if (pre.p && pre.len) buf_puts(b, pre.p);
-      buf_printf(b, "_r%d = ", t);
+      buf_printf(b, "_t%d = ", tr);
       if (def && at == TY_BOOL) buf_printf(b, "(%s)", body.p ? body.p : "0");
       else if (def) { buf_puts(b, "sp_poly_truthy("); emit_boxed_text(c, at, body.p ? body.p : "0", b); buf_puts(b, ")"); }
       else emit_boxed_text(c, at, body.p ? body.p : "0", b);
@@ -5429,22 +5437,27 @@ static int emit_dynamic_const_get(Compiler *c, int id, Buf *b) {
   if (rk >= 0 && class_ruby_name(c, rk)) rnm = class_ruby_name(c, rk);
   /* Object is no qualifier of the NameError: its id, whether or not a class reopens it */
   if (rk == CG_OBJECT || rk == comp_core_class(c, CORE_OBJECT)) rnm = NULL;
+  TyKind nty = TY_STRING;
   if (def) {
-    buf_printf(b, "{ if (!(_n%d[0] >= 'A' && _n%d[0] <= 'Z')) sp_raise_cls(\"NameError\", sp_sprintf(\"wrong constant name %%s\", _n%d)); "
-                  "_r%d = 0; } } while (0); _r%d; })", t, t, t, t, t);
+    buf_printf(b, "{ if (!(_t%d[0] >= 'A' && _t%d[0] <= 'Z')) sp_raise_cls(\"NameError\", sp_sprintf(\"wrong constant name %%s\", _t%d)); "
+                  "_t%d = 0; } ", t, t, t, tr);
+    if (!pd_hoist(c, id, "const_defined?", b, from, tr, TY_BOOL, &t, &nty, 1)) buf_puts(b, "}");
+    buf_printf(b, " _t%d; })", tr);
     return 1;
   }
   /* `self` in a class method is the class it runs on, a subclass too */
   Buf sv = {0, 0, 0};
   if (rvk == NK_SelfNode && rk >= 0 && repr_of(c, recv).as_ty == TY_CLASS) emit_expr(c, recv, &sv);
-  buf_printf(b, "{ if (!(_n%d[0] >= 'A' && _n%d[0] <= 'Z')) sp_raise_cls(\"NameError\", sp_sprintf(\"wrong constant name %%s\", _n%d)); ", t, t, t);
+  buf_printf(b, "{ if (!(_t%d[0] >= 'A' && _t%d[0] <= 'Z')) sp_raise_cls(\"NameError\", sp_sprintf(\"wrong constant name %%s\", _t%d)); ", t, t, t);
   if (sv.p)
-    buf_printf(b, "else sp_raise_cls(\"NameError\", sp_sprintf(\"uninitialized constant %%s::%%s\", sp_class_val_name(sp_box_class(%s)), _n%d)); ",
+    buf_printf(b, "else sp_raise_cls(\"NameError\", sp_sprintf(\"uninitialized constant %%s::%%s\", sp_class_val_name(sp_box_class(%s)), _t%d)); ",
                sv.p, t);
   else
-    buf_printf(b, "else sp_raise_cls(\"NameError\", sp_sprintf(\"uninitialized constant %s%s%%s\", _n%d)); ",
+    buf_printf(b, "else sp_raise_cls(\"NameError\", sp_sprintf(\"uninitialized constant %s%s%%s\", _t%d)); ",
                rnm ? rnm : "", rnm ? "::" : "", t);
-  buf_printf(b, "_r%d = sp_box_nil(); } } while (0); _r%d; })", t, t);
+  buf_printf(b, "_t%d = sp_box_nil(); } ", tr);
+  if (!pd_hoist(c, id, "const_get", b, from, tr, TY_POLY, &t, &nty, 1)) buf_puts(b, "}");
+  buf_printf(b, " _t%d; })", tr);
   free(sv.p);
   return 1;
 }

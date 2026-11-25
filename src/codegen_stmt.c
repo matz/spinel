@@ -21739,21 +21739,12 @@ static int emit_ivar_cvar_write_stmt(Compiler *c, int id, Buf *b, int indent, co
       buf_puts(b, ";\n");
     }
     else if (op && sp_streq(op, "+") && ty_is_array(vt)) {
-      /* `@arr += other` = `@arr = @arr + other` (#3289), mirroring the
-         local-variable arm: same-kind concat, empty-literal rhs is a no-op
-         concat with NULL */
+      /* `@arr += other` = `@arr = @arr + other` (#3289), as the local form
+         and the other slots take it (emit_array_op_assign): a same-kind
+         concat, a typed rhs converted into a general Array slot, an
+         empty-literal rhs a no-op concat with NULL */
       int ival2 = nt_ref(nt, id, "value");
-      Repr rvt2r = repr_of(c, ival2);
-      TyKind rvt2 = rvt2r.as_ty;
-      const char *k2 = (vt == TY_POLY_ARRAY) ? "Poly" : array_kind(vt);
-      int rhs_empty2 = 0;
-      { NodeKind vty2_k = nt_kind(nt, ival2);
-        if (vty2_k == NK_ArrayNode) {
-          int nel2 = 0; nt_arr(nt, ival2, "elements", &nel2);
-          rhs_empty2 = (nel2 == 0);
-        } }
-      if (k2 && (rvt2 == vt || rhs_empty2 || rvt2 == TY_UNKNOWN || rvt2r.kind == RK_BOXED) &&
-          emit_array_op_assign(c, ref, vt, op, ival2, b)) { }
+      if (emit_array_op_assign(c, ref, vt, op, ival2, b)) { }
       else if (vt == TY_POLY_ARRAY) {
         buf_printf(b, "%s = sp_poly_to_poly_array(sp_poly_add(sp_box_poly_array(%s), ",
                    ref, ref);

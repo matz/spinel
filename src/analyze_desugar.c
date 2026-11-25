@@ -25468,6 +25468,7 @@ static int rod_reader_def(NodeTable *nt, int like, const char *meth) {
   nt_node_set_ref(nt, d, "parameters", -1);
   nt_node_set_ref(nt, d, "body", bd);
   nt_node_set_ref(nt, d, "receiver", -1);
+  nt_node_set_int(nt, d, "reader_over_inherited_def", 1);
   return d;
 }
 int desugar_readers_over_inherited_defs(Compiler *c) {

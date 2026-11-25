@@ -2639,8 +2639,11 @@ int comp_poly_arm_reader_any(Compiler *c, const char *name, int argc) {
 int comp_has_hash_reader(Compiler *c) {
   int n;
   const int *owners = comp_name_reader_owners(c, "hash", &n);
-  for (int i = 0; i < n; i++)
-    if (comp_name_responder(c, owners[i], "hash", 0) < 0) return 1;
+  for (int i = 0; i < n; i++) {
+    int mi = comp_name_responder(c, owners[i], "hash", CT_OWN);
+    /* A reader over an inherited method has its own synthesized def. */
+    if (mi < 0 || nt_int(c->nt, c->scopes[mi].def_node, "reader_over_inherited_def", 0)) return 1;
+  }
   return 0;
 }
 

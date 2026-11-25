@@ -2077,6 +2077,10 @@ Array#tap, Hash#each, or Integer Range#each. Spinel refuses top-level
 block returns if there is no lambda boundary or if a nested block needs
 its own callable. A possible override or removal of builtin `lambda`
 also makes the block return a refusal.
+Inside a deferred block, a receiverless `lambda` call with an
+unresolved `self` cannot establish a new return boundary. For example,
+the inner return in `lambda { inner = lambda { return 2 }; inner.call; 3 }`
+is refused because the outer block can run with a different receiver.
 
 #### `autoload`
 

@@ -403,6 +403,7 @@ for source in \
   'tap { return 1 }' \
   'lambda { proc { return 1 }.call; 2 }' \
   'lambda { Proc.new { return 1 }.call; 2 }' \
+  'L = lambda { inner = lambda { return 2 }; inner.call; 3 }; p L.call' \
   'def hold(&blk); $kept = blk; end; lambda { hold { return 1 }; 2 }' \
   'lambda { [2, 1].sort { return 1 }; 2 }' \
   'lambda(1) { return 1 }' \

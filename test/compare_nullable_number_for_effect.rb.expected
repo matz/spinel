@@ -20,3 +20,14 @@ true
 false
 false
 [true, false, false, true, false, true]
+[false, false]
+2
+false
+false
+false
+5
+[false]
+[:recv, :recv, :recv, :recv, :recv, :recv]
+7
+true
+false

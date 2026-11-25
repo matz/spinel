@@ -18000,10 +18000,18 @@ static int emit_case_eq_call(Compiler *c, int id, Buf *b) {
          reached with an object and with a symbol widens the parameter to
          poly, and folding the comparison to false then answered false for an
          object compared with itself (#3807). Compare the addresses when the
-         box holds one. */
+         box holds one. A receiver that may run code (no pure read,
+         subtree_is_pure_read) runs whatever the box holds (operands with
+         effects on both sides are held in order before this). */
       buf_puts(b, "({ sp_RbVal _eq = "); emit_boxed(c, argv[0], b);
-      buf_puts(b, "; _eq.tag == SP_TAG_OBJ && (void *)_eq.v.p == (void *)(");
-      emit_expr(c, recv, b); buf_puts(b, "); })");
+      if (!subtree_is_pure_read(c, recv)) {
+        buf_puts(b, "; void *_er = (void *)("); emit_expr(c, recv, b);
+        buf_puts(b, "); _eq.tag == SP_TAG_OBJ && (void *)_eq.v.p == _er; })");
+      }
+      else {
+        buf_puts(b, "; _eq.tag == SP_TAG_OBJ && (void *)_eq.v.p == (void *)(");
+        emit_expr(c, recv, b); buf_puts(b, "); })");
+      }
     }
     else {
       buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), (void)(");

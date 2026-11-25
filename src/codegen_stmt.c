@@ -13198,18 +13198,22 @@ void hcv_end(Compiler *c, void *hv, int indent) {
   }
   buf_puts(&rt, rp);
   const char *u = rt.p ? rt.p : "";
+  /* (each asked of the code, not of the line map's `#line` lines, whose
+     path may hold any of these: text_has_code; and its size counted
+     without them: text_code_bytes) */
+  size_t tl = strlen(t), ul = strlen(u);
   /* the arrays the text reads in place (an entry a reader asked for and
      then left to the read as it was takes no part in the test) */
   int used[sizeof v->e / sizeof v->e[0]], nused = 0;
   for (int i = 0; i < v->n; i++) {
     char nm[48]; snprintf(nm, sizeof nm, "_hcv%d_%d[", v->id, i);
-    used[i] = strstr(t, nm) != NULL;
+    used[i] = text_has_code(t, 0, tl, nm);
     nused += used[i];
   }
-  int twice = nused > 0 && strlen(t) <= HCV_MAX_TEXT &&
-              !(g_hc && strstr(u, g_hc->mark)) && !strstr(u, "SP_SAFEPOINT_POLL") &&
-              !strstr(u, "sp_fin_pending_flag") && !strstr(u, "sp_sig_run_pending") &&
-              !strstr(u, "goto ") && !strstr(u, ": ;") && !strstr(u, "#define");
+  int twice = nused > 0 && text_code_bytes(t, 0, tl) <= HCV_MAX_TEXT &&
+              !(g_hc && text_has_code(u, 0, ul, g_hc->mark)) && !text_has_code(u, 0, ul, "SP_SAFEPOINT_POLL") &&
+              !text_has_code(u, 0, ul, "sp_fin_pending_flag") && !text_has_code(u, 0, ul, "sp_sig_run_pending") &&
+              !text_has_code(u, 0, ul, "goto ") && !text_has_code(u, 0, ul, ": ;") && !text_has_code(u, 0, ul, "#define");
   free(rt.p);
   if (twice) twice = decide_node(c->nt, v->node, "hc-cobound", NULL);
   if (!twice) hcv_pick(t, v->id, 0, b);

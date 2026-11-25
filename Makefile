@@ -6970,7 +6970,7 @@ gate-costs: $(SPINEL)
 # directory whose name holds the words the passes over the finished C look
 # for (a setjmp, a loop, a root): the directives carry the file's path, and
 # those passes read the code alone.
-LINE_MAP_SAMPLE = $(shell ls test/*.rb | awk 'NR % 10 == 0') test/setjmp_local_volatile.rb
+LINE_MAP_SAMPLE = $(shell ls test/*.rb | awk 'NR % 10 == 0') test/setjmp_local_volatile.rb test/hcv_text_size_line_map.rb
 ifeq ($(wildcard $(RBS_INC)/rbs/parser.h),)
 LINE_MAP_RBS =
 else
@@ -7014,7 +7014,7 @@ line-map-check: $(SPINEL) $(LINE_MAP_RBS)
 	else echo "line-map-check: --rbs skipped (vendor/rbs not fetched; run 'make deps')"; fi; \
 	d=$$(mktemp -d "$${TMPDIR:-/tmp}/spinel-line-map.XXXXXX") || exit 2; \
 	w="$$d/setjmp goto for (while (do {SP_GC_ROOT sp_gc_nroots"; mkdir -p "$$w"; \
-	cp test/gc_root_elided_array_slot.rb test/setjmp_local_volatile.rb "$$w/"; \
+	cp test/gc_root_elided_array_slot.rb test/setjmp_local_volatile.rb test/each_return_value.rb "$$w/"; \
 	tools/line_map_check.sh "$$w"/*.rb || ok=0; \
 	rm -rf "$${d:?}"; \
 	[ $$ok -eq 1 ]

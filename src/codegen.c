@@ -6906,15 +6906,16 @@ static void gc_frame_build(Compiler *c, Buf *b, size_t ins, const char *site) {
    its initialisation and its root. Its root stays in the body's frame, which
    outlives every part. A program under the threshold, or with no setjmp at
    its top level, is emitted as before. The sizes count the code alone
-   (main_code_bytes): the line map's `#line` lines and the line breaks it
+   (text_code_bytes): the line map's `#line` lines and the line breaks it
    adds cost the C compiler nothing, and with them counted the parts were
    cut elsewhere with and without --no-line-map. */
 #define MAIN_SPLIT_BYTES (64 * 1024)
 #define MAIN_PART_BYTES (32 * 1024)
 
 /* The bytes of [beg, end) that are code: not a line break, and not in a
-   `#line` line (beg starts a line or a statement) */
-static size_t main_code_bytes(const char *p, size_t beg, size_t end) {
+   `#line` line (beg starts a line or a statement). A size a decision reads
+   counts these, so it is the same with and without --no-line-map. */
+size_t text_code_bytes(const char *p, size_t beg, size_t end) {
   size_t n = 0;
   for (size_t i = beg; i < end; ) {
     const char *nl = memchr(p + i, '\n', end - i);
@@ -6995,7 +6996,7 @@ static int main_body_split(Compiler *c, Buf *body, size_t open, size_t *frame_in
      moves with it */
   Scope *s0 = &c->scopes[0];
   size_t dend = nl > 0 ? decl_ends[nl - 1] : dbeg;
-  if (ncuts < 2 || cuts[ncuts - 1] != end || main_code_bytes(p, sbeg, end) < MAIN_SPLIT_BYTES) return 0;
+  if (ncuts < 2 || cuts[ncuts - 1] != end || text_code_bytes(p, sbeg, end) < MAIN_SPLIT_BYTES) return 0;
   if (!main_text_has_word(p, sbeg, end, "setjmp")) return 0;
   /* a `return` at the top level returns from the body; out of a part it
      would only end the part. The body's other C returns are an ensure's
@@ -7008,7 +7009,7 @@ static int main_body_split(Compiler *c, Buf *body, size_t open, size_t *frame_in
   int *pend = (int *)malloc(sizeof(int) * (size_t)ncuts), np = 0;
   size_t from = sbeg, code = 0;
   for (int k = 0; k < ncuts; k++) {
-    code += main_code_bytes(p, k ? cuts[k - 1] : sbeg, cuts[k]);
+    code += text_code_bytes(p, k ? cuts[k - 1] : sbeg, cuts[k]);
     if (code >= MAIN_PART_BYTES || k == ncuts - 1) { pend[np++] = k; code = 0; }
   }
   if (np < 2) { free(pend); return 0; }

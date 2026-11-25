@@ -5944,21 +5944,27 @@ static void emit_rtclass_arm(Compiler *c, const char *stmt, Buf *b) {
 }
 /* The id of the class an instance of class ci is built for, the leading
    argument of a site class's constructor (cplan_rt_site, DESIGN section 2):
-   off the class value `cls` the call holds (a C sp_Class), which may be a
-   class made at run time, or, with cls NULL, ci itself, for a call that
-   names the class statically. */
-static void rtclass_arg_text(int ci, const char *cls, Buf *b) {
-  if (cls) buf_printf(b, "(%s).cls_id", cls);
+   rtid, the C id the call holds (ctor_rt_id of its class value, or a
+   switch's bound id), which may be a class made at run time's, or, with
+   rtid NULL, ci itself, for a call that names the class statically. */
+static void rtclass_arg_text(int ci, const char *rtid, Buf *b) {
+  if (rtid) buf_puts(b, rtid);
   else buf_printf(b, "%d", ci);
+}
+/* See codegen_internal.h. */
+const char *ctor_rt_id(const char *cls, char *out, size_t n) {
+  if (!cls) return NULL;
+  snprintf(out, n, "(%s).cls_id", cls);
+  return out;
 }
 /* Emit that argument at the head of a call of class ci's constructor
    (sp_X_new, _new_blk, _new_noinit): nothing for a class that is no site
    class. Returns the separator the rest of the arguments need. A site
    class's constructor takes it, so a call that does not pass it does not
    compile. */
-const char *emit_ctor_rt_arg(Compiler *c, int ci, const char *cls, Buf *b) {
+const char *emit_ctor_rt_arg(Compiler *c, int ci, const char *rtid, Buf *b) {
   if (!cplan_rt_site(c, ci)) return "";
-  rtclass_arg_text(ci, cls, b);
+  rtclass_arg_text(ci, rtid, b);
   return ", ";
 }
 /* An instance of a site class keeps the class it is built for, set as it is
@@ -13959,7 +13965,7 @@ void emit_class_new(Compiler *c, ClassInfo *ci, Buf *b) {
    the program allocates, each cast to the base as a bare `new` in a class
    method is; a class with no such subclass allocates `base` alone. A site
    class's instance is built for the class the method runs for, which may
-   be one made at run time (emit_obj_alloc_expr's `cls`). */
+   be one made at run time (emit_obj_alloc_expr's `rtid`). */
 void emit_own_class_alloc(Compiler *c, int id, int base, Buf *b) {
   const NodeTable *nt = c->nt;
   Scope *s = comp_scope_of(c, id);
@@ -13991,7 +13997,8 @@ void emit_own_class_alloc(Compiler *c, int id, int base, Buf *b) {
     }
     free(sb.p);
   }
-  const char *cv = cls[0] ? cls : NULL;
+  char rid[528];
+  const char *cv = cls[0] ? ctor_rt_id(cls, rid, sizeof rid) : NULL;
   int nsub = 0;
   for (int k = 0; sel[0] && k < c->nclasses; k++)
     if (k != base && is_descendant(c, k, base) && c->classes[k].instantiated &&
@@ -14034,9 +14041,9 @@ void emit_pool_fwd(Compiler *c, int cid) {
    initialize -- the Class#allocate primitive. Handles both value-type objects
    (returned by value) and pointer objects. The allocation mirrors the body of
    emit_class_new above, minus the initialize call: an instance of a site
-   class keeps the class it is built for, off the class value `cls` the call
-   holds (NULL where it names the class statically: emit_ctor_rt_arg). */
-void emit_obj_alloc_expr(Compiler *c, int cid, const char *cls, Buf *b) {
+   class keeps the class it is built for, the id `rtid` the call holds (NULL
+   where it names the class statically: emit_ctor_rt_arg). */
+void emit_obj_alloc_expr(Compiler *c, int cid, const char *rtid, Buf *b) {
   ClassInfo *ci = &c->classes[cid];
   int is_val = comp_ty_value_obj(c, ty_object(cid));
   int t = ++g_tmp;
@@ -14085,7 +14092,7 @@ void emit_obj_alloc_expr(Compiler *c, int cid, const char *cls, Buf *b) {
     return;
   }
   Buf rt; memset(&rt, 0, sizeof rt);
-  rtclass_arg_text(cid, cls, &rt);
+  rtclass_arg_text(cid, rtid, &rt);
   if (is_val) {
     buf_printf(b, "({ sp_%s _t%d = {0}; _t%d.cls_id = %d;", ci->c_name, t, t, cid);
     char lv[32]; snprintf(lv, sizeof lv, "_t%d.", t);
@@ -14551,7 +14558,7 @@ static void emit_cls_answers_dispatch(Compiler *c, Buf *b) {
         comp_class_is_module(c, ci)) continue;
     Buf ax; memset(&ax, 0, sizeof ax);
     /* (a class made at run time takes its site's arm, and its instance is its own) */
-    emit_obj_alloc_expr(c, i, "v", &ax);
+    emit_obj_alloc_expr(c, i, "(v).cls_id", &ax);
     buf_printf(b, "    case %d: return ", i);
     emit_boxed_text(c, ty_object(i), ax.p ? ax.p : "0", b);
     buf_puts(b, ";\n");

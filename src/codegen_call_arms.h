@@ -239,7 +239,7 @@ int emit_cls_value_sg_accessor_of(Compiler *c, int id, int recv, const char *kte
 void ffi_check_buffer_bounds(Compiler *c, int id, int arg, const char *kind, int off, const char *dir);
 extern int g_setter_value_inner;
 int emit_cmethod_setter_assign(Compiler *c, int id, Buf *b);
-int ctor_alloc_decl(Compiler *c, int cid, const char *cls, Buf *b);
+int ctor_alloc_decl(Compiler *c, int cid, const char *rtid, Buf *b);
 char *ctor_self_text(Compiler *c, int cid, int initm, int t);
 int ctor_new_runs(Compiler *c, int cid, int initm);
 void ctor_arity_add(CtorArityArms *g, int ci, const char *msg);
@@ -260,8 +260,14 @@ void emit_class_value_new_kw(Compiler *c, int id, int recv, int boxed, Buf *b);
    Symbol's or nil's can equal a user class's index, and a user
    object's is its class's, so anything else
    switches on -1, no arm's label, and takes the default's NoMethodError.
-   recv is the receiver node (emit_class_value_key). */
-void emit_class_value_new_switch(Compiler *c, int recv, int rt2, int kt, int boxed, Buf *b);
+   recv is the receiver node (emit_class_value_key). In a program with a
+   site class it binds the class id the arms build for once, ahead of the
+   switch, and answers its temp (switch_rt_id makes the arms' text), -1
+   in any other. */
+int emit_class_value_new_switch(Compiler *c, int recv, int rt2, int kt, int boxed, Buf *b);
+/* The text of that bound id `_t<rid>` into out (n bytes): what the arms
+   pass a site class's constructor (emit_ctor_rt_arg), NULL for rid -1 */
+const char *switch_rt_id(int rid, char *out, size_t n);
 /* The dispatch key of the class value held in the C name `val` (an
    sp_Class, or a box that holds a Class): what a switch over the program's
    classes takes, for every emitter that dispatches on a class value. recv
@@ -273,11 +279,11 @@ void emit_class_value_key(Compiler *c, int recv, const char *val, Buf *b);
    program's classes goes through one of the two */
 const char *class_value_key(Compiler *c, int recv, const char *val, char *out, size_t n);
 void emit_ctor_arm_case(Compiler *c, int ci, int initm, int rt2, int self_t, const char *pre, const char *args, int given,
-                        const char *cls, Buf *b);
+                        const char *rtid, Buf *b);
 void struct_nil_fill_stmts(Compiler *c, int ci, int given, const char *obj, Buf *out);
 void emit_ctor_arm_param(Compiler *c, Scope *is, int j, const ArgLayout *L, const int *atmp, Buf *pdpre, Buf *out);
 void emit_ctor_block_slot(Compiler *c, int id, int initm, const char *lead, Buf *b);
-int emit_ctor_splice_arm(Compiler *c, int id, int ci, int rt2, const char *cls, Buf *b);
+int emit_ctor_splice_arm(Compiler *c, int id, int ci, int rt2, const char *rtid, Buf *b);
 void emit_exc_msg_arg(Compiler *c, int arg, Buf *b);
 void emit_exc_new_msg(Compiler *c, const char *cn, int arg, Buf *b);
 int emit_exc_sub_new_arm(Compiler *c, int id, int ci, int argc, const int *atmp, int rt2, Buf *b);
@@ -292,10 +298,10 @@ int emit_syserr_family_new_reopened(Compiler *c, int id, const char *cn, int arg
 int syserr_reinit_initialize(Compiler *c, int id, const char *cn);
 void syserr_reinit_open(int *t, Buf *b);
 void syserr_reinit_close(Compiler *c, int initm, int t, Buf *b);
-/* The class value a `new` or `allocate` on the constant or local recv
-   naming class ci builds for: the receiver's value for a site class, NULL
-   for any other (codegen_call.c) */
-const char *ctor_recv_cls(Compiler *c, int ci, int recv, char *out, size_t n);
+/* The class id a `new` or `allocate` on the constant or local recv naming
+   class ci builds for: the receiver's value's (ctor_rt_id) for a site
+   class, NULL for any other (codegen_call.c) */
+const char *ctor_recv_rtid(Compiler *c, int ci, int recv, char *out, size_t n);
 int emit_user_new_arm(Compiler *c, int id, int ci, int argc, const int *atmp, int hoisted, int rt2, const char *cls,
                       Buf *b);
 extern int g_ctor_blk_tmp;
@@ -327,7 +333,7 @@ void refl_free(ReflNames *r);
 int refl_note(ReflNames *r, const char *m, int show);   /* r holds m once (1 when it was new) */
 void refl_own_instance_methods(Compiler *c, int ci, int pub, int prot, int priv, int with_modules, ReflNames *r);
 void unhoist_dispatch_args(Compiler *c, int n, int *sv, int *vw);
-int emit_ctor_new_with_proc(Compiler *c, int id, int ci, const char *cls, Buf *b);
+int emit_ctor_new_with_proc(Compiler *c, int id, int ci, const char *rtid, Buf *b);
 void emit_struct_kw_check(Compiler *c, ClassInfo *cls, int ht, int kwh);
 int emit_struct_kw_hash(Compiler *c, int kwh);
 void emit_struct_kw_member(Compiler *c, ClassInfo *cls, int a, int ht, Buf *b);

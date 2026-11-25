@@ -83,7 +83,7 @@ static int emit_cv_new_arm(Compiler *c, int id, int ci, int argc, const int *atm
 }
 
 static void emit_cv_positional_new_arm(Compiler *c, int id, int ci, int argc, const int *argv, const int *atmp, int rt2,
-                                       CtorArityArms *aerr, const char *cls, Buf *b);
+                                       CtorArityArms *aerr, const char *rtid, Buf *b);
 /* `k[args]` on a Class value (cplan_cv_ctor): an arm per Array or Hash
    subclass the fact says it builds, the arm of `new` for each Struct or
    Data class (cplan_cv_ctor's `[]` is their `new`, cplan_as_new), and for
@@ -107,7 +107,7 @@ static int emit_class_value_aref(Compiler *c, int id, Buf *b, int recv, int argc
   }
   if (argc) buf_puts(&av, "}");
   char an[24]; snprintf(an, sizeof an, "%d", argc);
-  emit_class_value_new_switch(c, recv, rt2, kt, 0, b);
+  (void)emit_class_value_new_switch(c, recv, rt2, kt, 0, b);
   CtorArityArms aerr = {0};
   for (int ci = 0; ci < c->nclasses; ci++)
     if (cplan_cv_ctor_builds(c, id, ci)) emit_cv_ctor_arm(c, id, ci, an, av.p, rt2, b);
@@ -3523,9 +3523,9 @@ static void ctor_deferred_arm(int ci, const char *msg, Buf *b) {
    initialize or a record's generated one, takes them as at a static
    `K.new(..)`. A class whose constructor takes some other count gets
    CRuby's ArgumentError (aerr); one that cannot take them gets no arm.
-   cls: the switch's class value, which the object is built for. */
+   rtid: the switch's bound class id, which the object is built for. */
 static void emit_cv_positional_new_arm(Compiler *c, int id, int ci, int argc, const int *argv, const int *atmp, int rt2,
-                                       CtorArityArms *aerr, const char *cls, Buf *b) {
+                                       CtorArityArms *aerr, const char *rtid, Buf *b) {
   const NodeTable *nt = c->nt;
   /* the initialize the plan answers at the site: none before the class
      defines one (emit_ctor_arm_case allocates for it) */
@@ -3603,7 +3603,7 @@ static void emit_cv_positional_new_arm(Compiler *c, int id, int ci, int argc, co
   char *selftxt = NULL;
   int self_t = -1;
   if (ctor_needs_self_defaults(c, initm, argc)) {
-    self_t = ctor_alloc_decl(c, ci, cls, &pdpre);
+    self_t = ctor_alloc_decl(c, ci, rtid, &pdpre);
     selftxt = ctor_self_text(c, ci, initm, self_t);
     g_ctor_self = selftxt;
     g_ctor_self_deref = comp_ty_value_obj(c, ty_object(ci)) ? "." : "->";
@@ -3653,7 +3653,7 @@ static void emit_cv_positional_new_arm(Compiler *c, int id, int ci, int argc, co
   g_ctor_self = sv_cs; g_ctor_self_deref = sv_csd;
   free(selftxt);
   emit_ctor_block_slot(c, id, initm, np > 0 ? ", " : "", &ab);
-  emit_ctor_arm_case(c, ci, initm, rt2, self_t, pdpre.p, ab.p ? ab.p : "", is2 || kw_ctor ? -1 : argc, cls, b);
+  emit_ctor_arm_case(c, ci, initm, rt2, self_t, pdpre.p, ab.p ? ab.p : "", is2 || kw_ctor ? -1 : argc, rtid, b);
   free(pdpre.p); free(ab.p);
 }
 
@@ -3701,7 +3701,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
       buf_printf(b, "sp_RbVal _t%d = ", atmp[a]); emit_boxed(c, argv[a], b);
       buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ", atmp[a]);
     }
-    emit_class_value_new_switch(c, recv, rt2, kt, 0, b);
+    char rv[24]; const char *rtid = switch_rt_id(emit_class_value_new_switch(c, recv, rt2, kt, 0, b), rv, sizeof rv);
     /* (the value an arm's object and a `self.new`'s receiving class are) */
     char kv[24]; snprintf(kv, sizeof kv, "_t%d", kt);
     CtorArityArms aerr = {0};
@@ -3710,7 +3710,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
       if (emit_user_new_arm(c, id, ci, argc, atmp, 1, rt2, kv, b)) continue;
       if (emit_cv_new_arm(c, id, ci, argc, atmp, rt2, b)) continue;
       if (emit_exc_sub_new_arm(c, id, ci, argc, atmp, rt2, b)) continue;
-      emit_cv_positional_new_arm(c, id, ci, argc, argv, atmp, rt2, &aerr, kv, b);
+      emit_cv_positional_new_arm(c, id, ci, argc, argv, atmp, rt2, &aerr, rtid, b);
     }
     /* A class the switch has no arm for is a program that cannot construct it,
        which is a raise -- the sibling emitter below has always said so. Without
@@ -3740,7 +3740,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
     int kt = ++g_tmp, rt2 = ++g_tmp;
     buf_printf(b, "({ sp_Class _t%d = ", kt); emit_expr(c, recv, b); buf_printf(b, "; ");
     int sv_cbt = hoist_ctor_block(c, id, b);
-    emit_class_value_new_switch(c, recv, rt2, kt, 0, b);
+    char rv[24]; const char *rtid = switch_rt_id(emit_class_value_new_switch(c, recv, rt2, kt, 0, b), rv, sizeof rv);
     /* (the value an arm's object and a `self.new`'s receiving class are) */
     char kv[24]; snprintf(kv, sizeof kv, "_t%d", kt);
     CtorArityArms aerr = {0};
@@ -3763,7 +3763,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
       if (!class_has_ctor(&c->classes[ci])) continue;
       if (initm >= 0 && c->scopes[initm].nrequired != 0) continue;
       if (c->classes[ci].is_native_class) continue;
-      if (emit_ctor_splice_arm(c, id, ci, rt2, kv, b)) continue;
+      if (emit_ctor_splice_arm(c, id, ci, rt2, rtid, b)) continue;
       /* A Struct DOES answer a zero-arg `new` -- every member takes nil, which
          is what the constant spelling emits. Skipping it left a local holding
          two anon struct classes (so no single one resolves) with an EMPTY
@@ -3802,7 +3802,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
         Buf av; memset(&av, 0, sizeof av);
         buf_printf(&av, c->classes[ci].is_value_type ? "sp_box_vobj_%s(" : "sp_box_obj(",
                    c->classes[ci].c_name);
-        emit_ctor_alloc_init(c, ci, initm, -1, id, kv, &av);
+        emit_ctor_alloc_init(c, ci, initm, -1, id, rtid, &av);
         if (c->classes[ci].is_value_type) buf_puts(&av, ")");
         else { buf_puts(&av, ","); arysub_box_id(c, ty_object(ci), &av); buf_puts(&av, ")"); }
         g_pre = sv_pre;
@@ -3822,7 +3822,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
       emit_ctor_block_slot(c, id, initm, ab9.p && ab9.p[0] ? ", " : "", &ab9);
       /* (a site class's constructor takes the class first) */
       Buf ra9; memset(&ra9, 0, sizeof ra9);
-      const char *rl9 = emit_ctor_rt_arg(c, ci, kv, &ra9);
+      const char *rl9 = emit_ctor_rt_arg(c, ci, rtid, &ra9);
       if (ab9.p && ab9.p[0]) buf_printf(&ra9, "%s%s", rl9, ab9.p);
       free(ab9.p);
       ab9 = ra9;
@@ -3909,7 +3909,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
       if (boxed_arg_wants_root(c, argv[a])) buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ", atmp[a]);
       else buf_puts(b, "; ");
     }
-    emit_class_value_new_switch(c, recv, rt2, kt, 1, b);
+    char rv[24]; const char *rtid = switch_rt_id(emit_class_value_new_switch(c, recv, rt2, kt, 1, b), rv, sizeof rv);
     /* (the value an arm's object and a `self.new`'s receiving class are) */
     char kv[24]; snprintf(kv, sizeof kv, "_t%d", kt);
     CtorArityArms aerr = {0};
@@ -3932,7 +3932,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
       if (comp_class_is_module(c, &c->classes[ci])) continue;   /* a module has no `new` (#3965) */
       int np = initm >= 0 ? c->scopes[initm].nparams : 0;
       int nreq = initm >= 0 ? c->scopes[initm].nrequired : 0;
-      if (argc >= nreq && emit_ctor_splice_arm(c, id, ci, rt2, kv, b)) continue;
+      if (argc >= nreq && emit_ctor_splice_arm(c, id, ci, rt2, rtid, b)) continue;
       /* A Struct or Data class had no arm here at all, so `{0 => S}.fetch(0)
          .new(5)` raised NoMethodError. Its generated constructor takes the
          members positionally, with the exact test the class-value emitter
@@ -3953,7 +3953,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
         if (!ctor_new_runs(c, ci, initm) || ctor_needs_self_defaults(c, initm, 0)) {
           buf_printf(&av, c->classes[ci].is_value_type ? "sp_box_vobj_%s(" : "sp_box_obj(",
                      c->classes[ci].c_name);
-          emit_ctor_alloc_init(c, ci, initm, -1, id, kv, &av);
+          emit_ctor_alloc_init(c, ci, initm, -1, id, rtid, &av);
           if (c->classes[ci].is_value_type) buf_puts(&av, ")");
           else buf_printf(&av, ",%d)", ci);
         }
@@ -3969,7 +3969,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
           emit_ctor_block_slot(c, id, initm, ad.p && ad.p[0] ? ", " : "", &ad);
           /* (a site class's constructor takes the class first) */
           Buf ra; memset(&ra, 0, sizeof ra);
-          const char *rl = emit_ctor_rt_arg(c, ci, kv, &ra);
+          const char *rl = emit_ctor_rt_arg(c, ci, rtid, &ra);
           if (ad.p && ad.p[0]) buf_printf(&ra, "%s%s", rl, ad.p);
           free(ad.p);
           ad = ra;
@@ -4015,7 +4015,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
       char *selftxt = NULL;
       int self_t = -1;
       if (ctor_needs_self_defaults(c, initm, argc)) {
-        self_t = ctor_alloc_decl(c, ci, kv, &pdpre);
+        self_t = ctor_alloc_decl(c, ci, rtid, &pdpre);
         selftxt = ctor_self_text(c, ci, initm, self_t);
         g_ctor_self = selftxt;
         g_ctor_self_deref = comp_ty_value_obj(c, ty_object(ci)) ? "." : "->";
@@ -4061,7 +4061,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
       free(selftxt);
       emit_ctor_block_slot(c, id, initm, np > 0 ? ", " : "", &ab);
       g_arm_member_fills = afill.p;
-      emit_ctor_arm_case(c, ci, initm, rt2, self_t, pdpre.p, ab.p ? ab.p : "", is ? -1 : argc, kv, b);
+      emit_ctor_arm_case(c, ci, initm, rt2, self_t, pdpre.p, ab.p ? ab.p : "", is ? -1 : argc, rtid, b);
       g_arm_member_fills = NULL;
       free(pdpre.p); free(ab.p); free(afill.p);
     }
@@ -4096,7 +4096,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
     }
     if (acid >= 0) {
       char rcb[256];
-      emit_obj_alloc_expr(c, acid, ctor_recv_cls(c, acid, recv, rcb, sizeof rcb), b);
+      emit_obj_alloc_expr(c, acid, ctor_recv_rtid(c, acid, recv, rcb, sizeof rcb), b);
       return 1;
     }
     /* builtin allocables: the empty value of the class (#2655). CRuby's
@@ -4140,7 +4140,8 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
       free(so.p);
     }
     buf_printf(b, "sp_%s_new(", c->classes[cid].c_name);
-    const char *lead = emit_ctor_rt_arg(c, cid, sc.p, b);
+    char rid[528];
+    const char *lead = emit_ctor_rt_arg(c, cid, ctor_rt_id(sc.p, rid, sizeof rid), b);
     free(sc.p);
     /* the arguments converted to initialize's parameter types, as
        `V.new(...)` does: an `x.to_i` narrowed to sp_int passed raw into a
@@ -4159,7 +4160,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
       nt_kind(nt, recv) == NK_ConstantPathNode) {
     const char *cn = key_name(c, recv);
     int ci = const_node_class_index(c, recv);
-    char rcb[256]; const char *rcls = ctor_recv_cls(c, ci, recv, rcb, sizeof rcb);
+    char rcb[256]; const char *rcls = ctor_recv_rtid(c, ci, recv, rcb, sizeof rcb);
     /* native (C-backed) class reached as ::Name (root-qualified) */
     if (emit_native_ctor(c, id, ci, argc, argv, b)) return 1;
     if (ci >= 0) {
@@ -6082,7 +6083,8 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
       /* the receiving class, which may be one made at run time: the object
          a site class's constructor builds is its instance (emit_ctor_rt_arg),
          and an arm per class below picks by its key (class_value_key) */
-      const char *scls = cmethod_takes_self_cls(c, encl) ? cmethod_self_cls(c, encl) : NULL;
+      char srid[256];
+      const char *scls = ctor_rt_id(cmethod_takes_self_cls(c, encl) ? cmethod_self_cls(c, encl) : NULL, srid, sizeof srid);
       char skey[512] = "";
       if (scls) class_value_key(c, -1, cmethod_cls_token(c, encl), skey, sizeof skey);
       /* ...unless the call reaches the class's own `self.new`, as the plan

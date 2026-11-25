@@ -18084,6 +18084,13 @@ static void masgn_conv(Compiler *c, int id, TyKind st, TyKind vt, const char *va
   else if (vt == TY_POLY && st != TY_POLY && st != TY_UNKNOWN) emit_unbox_text(c, st, val, b);
   else emit_coerce_text(c, id, vt, st, CO_HOLD, val, "a multiple assignment's target", b);
 }
+/* Is a typed Array of Integers, Floats or Strings into general Array slot
+   st a widening? The store converts the element, as a plain write does a
+   new one (emit_coerce_text's widen, which asks the element node, not the
+   target, whether it is new), and refuses one something else may hold. */
+static int masgn_widens_array(TyKind st, TyKind vt) {
+  return st == TY_POLY_ARRAY && (vt == TY_INT_ARRAY || vt == TY_FLOAT_ARRAY || vt == TY_STR_ARRAY);
+}
 /* masgn_conv into a user writer's parameter: one that holds its nil takes
    the element's oint */
 static void masgn_conv_param(Compiler *c, int id, const LocalVar *p, TyKind vt, const char *val, Buf *b) {
@@ -19032,13 +19039,14 @@ static void emit_class_body_stmts(Compiler *c, int ci, int body, Buf *b, int ind
   g_ie_rself_on = saved_rself;
 }
 
-/* An element, `_t<tmp>` of type valt (Ruby nil when tmp < 0 or nil_el), stored
-   into an ivar target of a multiple assignment whose home is h: the frozen
-   guard of an object's field, then the slot set in its own form (an Integer
-   or Float slot that holds its nil with it, a String slot as the handle, a
-   boxed element unboxed). Both arms of a multiple assignment, before and
-   after its splat, store through it. */
-static void masgn_ivar_store(Compiler *c, int tgt, const HolderRef *h, int tmp, TyKind valt, int nil_el, int indent, Buf *b) {
+/* An element `el`, `_t<tmp>` of type valt (Ruby nil when tmp < 0 or
+   nil_el), stored into an ivar target of a multiple assignment whose home
+   is h: the frozen guard of an object's field, then the slot set in its
+   own form (an Integer or Float slot that holds its nil with it, a String
+   slot as the handle, a boxed element unboxed, a typed Array into a
+   general Array slot converted, masgn_widens_array). Both arms of a
+   multiple assignment, before and after its splat, store through it. */
+static void masgn_ivar_store(Compiler *c, int tgt, int el, const HolderRef *h, int tmp, TyKind valt, int nil_el, int indent, Buf *b) {
   const char *ivnm = nt_str(c->nt, tgt, "name");
   int cid = h->cid, st = h->cls_slot;
   int ix = ivnm ? comp_ivar_index(&c->classes[cid], ivnm) : -1;
@@ -19092,6 +19100,7 @@ static void masgn_ivar_store(Compiler *c, int tgt, const HolderRef *h, int tmp, 
     else masgn_conv(c, tgt, ivt, valt, ck.p, b);
     free(ck.p);
   }
+  else if (masgn_widens_array(ivt, valt) && el >= 0) masgn_conv(c, el, ivt, valt, ivex, b);
   else buf_printf(b, "_t%d", tmp);
   buf_puts(b, ";\n");
 }
@@ -20325,9 +20334,9 @@ static int emit_multi_write_stmt_body(Compiler *c, int id, Buf *b, int indent, c
         char tv[24]; snprintf(tv, sizeof tv, "_t%d", tmps[i]);
         masgn_conv_o(c, ltt, valt, tv, b);
       }
-      else if (valt == TY_POLY && ltt != TY_POLY && ltt != TY_UNKNOWN) {
+      else if ((valt == TY_POLY && ltt != TY_POLY && ltt != TY_UNKNOWN) || masgn_widens_array(ltt, valt)) {
         char tv[24]; snprintf(tv, sizeof tv, "_t%d", tmps[i]);
-        masgn_conv(c, lefts[i], ltt, valt, tv, b);
+        masgn_conv(c, masgn_widens_array(ltt, valt) ? els[i] : lefts[i], ltt, valt, tv, b);
       }
       else buf_printf(b, "_t%d", tmps[i]);
       if (proc_cell) buf_puts(b, ")");
@@ -20348,7 +20357,7 @@ static int emit_multi_write_stmt_body(Compiler *c, int id, Buf *b, int indent, c
     }
     else if (lk == NK_InstanceVariableTargetNode) {
       if (masgn_ivar_home(c, lefts[i], &iv_h))
-        masgn_ivar_store(c, lefts[i], &iv_h, tmps[i], tmpts ? tmpts[i] : repr_of(c, els[i]).as_ty, masgn_nil_el(c, els[i]), indent, b);
+        masgn_ivar_store(c, lefts[i], els[i], &iv_h, tmps[i], tmpts ? tmpts[i] : repr_of(c, els[i]).as_ty, masgn_nil_el(c, els[i]), indent, b);
     }
     else if (lk == NK_CallTargetNode) {
       /* setter call: e.g. @c.v = _t<i> */
@@ -20666,7 +20675,10 @@ static int emit_multi_write_stmt_body(Compiler *c, int id, Buf *b, int indent, c
         char rex[32]; snprintf(rex, sizeof rex, "_t%d", tmps[ridx]);
         const char *value = masgn_nil_el(c, els[ridx]) ? NULL : rex;
         if (rjo) masgn_conv_o(c, rjlv->type, value_type, value, b);
-        else masgn_conv(c, rights[j], rjlv ? rjlv->type : value_type, value_type, value, b);
+        else {
+          TyKind rst = rjlv ? rjlv->type : value_type;
+          masgn_conv(c, masgn_widens_array(rst, value_type) ? els[ridx] : rights[j], rst, value_type, value, b);
+        }
       }
       else {
         TyKind tt = repr_of(c, rights[j]).as_ty;
@@ -20678,7 +20690,7 @@ static int emit_multi_write_stmt_body(Compiler *c, int id, Buf *b, int indent, c
     }
     else if (lk == NK_InstanceVariableTargetNode && rnm_j && masgn_ivar_home(c, rights[j], &iv_h)) {
       int has = ridx >= 0 && ridx < en;
-      masgn_ivar_store(c, rights[j], &iv_h, has ? tmps[ridx] : -1,
+      masgn_ivar_store(c, rights[j], has ? els[ridx] : -1, &iv_h, has ? tmps[ridx] : -1,
                        has ? (tmpts ? tmpts[ridx] : repr_of(c, els[ridx]).as_ty) : TY_NIL,
                        has && masgn_nil_el(c, els[ridx]), indent, b);
     }

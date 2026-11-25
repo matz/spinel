@@ -2068,6 +2068,16 @@ Error: global aliasing of regexp special globals is not supported (alias $MATCH 
 Direct reads of the match globals work as usual; only aliasing them is
 unsupported, so `require "English"` does not compile.
 
+#### Block returns in required files
+
+A `return` in a builtin `lambda { ... }` or `-> { ... }` leaves the
+lambda. In a required file's top-level code, a `return` can leave a
+`lambda { ... }` from inlined blocks for Array#each, Array#map,
+Array#tap, Hash#each, or Integer Range#each. Spinel refuses top-level
+block returns if there is no lambda boundary or if a nested block needs
+its own callable. A possible override or removal of builtin `lambda`
+also makes the block return a refusal.
+
 #### `autoload`
 
 A registration with a resolved module, constant name, and file loads the

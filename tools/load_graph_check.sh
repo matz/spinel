@@ -394,6 +394,36 @@ refused() {
     grep -qF -- "$2" "$tmp/$1/out" || { fail "$1 refused without naming why"; sed -n 1,3p "$tmp/$1/out"; }
   fi
 }
+mkdir "$tmp/lambda_block_refusals"
+printf 'require_relative "lib"\n' > "$tmp/lambda_block_refusals/main.rb"
+for source in \
+  'proc { return 1 }' \
+  'Proc.new { return 1 }' \
+  '[1].each { return 1 }' \
+  'tap { return 1 }' \
+  'lambda { proc { return 1 }.call; 2 }' \
+  'lambda { Proc.new { return 1 }.call; 2 }' \
+  'def hold(&blk); $kept = blk; end; lambda { hold { return 1 }; 2 }' \
+  'lambda { [2, 1].sort { return 1 }; 2 }' \
+  'lambda(1) { return 1 }' \
+  'def lambda; yield; end; lambda { return 1 }' \
+  'module Kernel; def lambda; yield; end; end; lambda { return 1 }' \
+  'class Object; def lambda; yield; end; end; lambda { return 1 }' \
+  'module M; def self.lambda; yield; end; lambda { return 1 }; end' \
+  'module M; def lambda; yield; end; end; module N; extend M if ARGV.empty?; lambda { return 1 }; end' \
+  'module Kernel; [:bda].each { |k| define_method("lam#{k}") { 1 } }; end; lambda { return 1 }' \
+  'klass = ARGV.empty? ? Object : Module; klass.define_method("lam#{ARGV[0]}") { 1 }; lambda { return 1 }' \
+  'Object.class_eval(ARGV[0]); lambda { return 1 }' \
+  'undef lambda; lambda { return 1 }' \
+  'module Kernel; remove_method :lambda; end; lambda { return 1 }' \
+  'def Kernel.lambda; yield; end; ::Kernel.lambda { return 1 }' \
+  'module M; module Kernel; def self.lambda; yield; end; end; Kernel.lambda { return 1 }; end' \
+  'Kernel = Object; Kernel.lambda { return 1 }'
+do
+  printf '%s\n' "$source" > "$tmp/lambda_block_refusals/lib.rb"
+  refused lambda_block_refusals 'a `return` in a block at a required file'
+done
+
 mkdir "$tmp/autoload" "$tmp/entry" "$tmp/end" "$tmp/mixin"
 printf 'module Lib; end\n' > "$tmp/autoload/lib.rb"
 printf 'autoload :Lib, File.join(__dir__, "lib")\np Lib\n' > "$tmp/autoload/main.rb"

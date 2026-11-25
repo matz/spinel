@@ -197,6 +197,7 @@ struct LoadRecord {
   unsigned char *auto_forms; int nauto_forms;   /* method-table changes and their coverage in the provisional record */
   int *auto_owner; int nauto_owner;               /* placed receiver class + 2, or an LR_AUTO_* state */
   unsigned char auto_pending, auto_unknown;
+  unsigned char lambda_owners;   /* checked once by the graph return refusal */
   unsigned char names_any;              /* ...and one it defines by a name the record cannot read */
   /* ...the blocks of the define_methods whose name the record cannot read,
      each of which defines one method that runs that block: a call of any
@@ -8228,28 +8229,30 @@ static int lr_reopen_answers(Compiler *c, const char *cls, const char *name) {
   }
   return 0;
 }
-typedef struct { int walk, depth; } LrAutoVisit;
-typedef struct { Compiler *c; LrAutoVisit *modules; int walk; } LrAutoWalk;
+typedef struct { int walk, depth; } LrShadowVisit;
+typedef struct { Compiler *c; LrShadowVisit *modules; int walk; const char *name; } LrShadowWalk;
 
 /* A deeper visit still matters: its descendants can reach the walk's bound. */
-static int lr_auto_enter(void *ud, int mod, int depth) {
-  LrAutoWalk *x = ud;
+static int lr_shadow_enter(void *ud, int mod, int depth) {
+  LrShadowWalk *x = ud;
   if (mod + 1 >= x->c->lrec->ncls) return 0;
-  LrAutoVisit *seen = &x->modules[mod + 1];
+  LrShadowVisit *seen = &x->modules[mod + 1];
   if (seen->walk == x->walk && seen->depth >= depth) return 1;
-  *seen = (LrAutoVisit){ x->walk, depth };
+  *seen = (LrShadowVisit){ x->walk, depth };
   return 0;
 }
 
 /* Any method-table change on the chain counts, including an undef of
    the builtin. The call need not have a unique load point: an earlier or
    later version, or one brought by a conditional mixin, can matter. */
-static int lr_auto_own(void *ud, int cls, int sg) {
-  LrAutoWalk *x = ud;
+static int lr_shadow_own(void *ud, int cls, int sg) {
+  LrShadowWalk *x = ud;
   Compiler *c = x->c;
   LoadRecord *r = c->lrec;
+  if (lr_hist(r, cls, sg, x->name, 0)) return LR_W_STOP;
+  if (!is_autoload_name(x->name)) return lr_opaque_defines(r, cls);
   const LrClass *k = lr_class(r, cls);
-  if (lr_hist(r, cls, sg, "autoload", 0) || (k && (k->auto_computed & (1u << sg)))) return LR_W_STOP;
+  if (k && (k->auto_computed & (1u << sg))) return LR_W_STOP;
   const LrHist *op = lr_hist(r, LR_KEY_OPAQUE, lr_const_owner(cls), "", 0);
   for (int j = 0; op && j < op->n; j++) {
     int node = op->v[j].node;
@@ -8259,23 +8262,24 @@ static int lr_auto_own(void *ud, int cls, int sg) {
   return 0;
 }
 
-static int lr_auto_mixin(void *ud, int cls, int ref) { (void)ud; (void)cls; (void)ref; return LR_W_STOP; }
+static int lr_shadow_mixin(void *ud, int cls, int ref) { (void)ud; (void)cls; (void)ref; return LR_W_STOP; }
 
-static int lr_auto_core(LrAutoWalk *x, const LrWalker *w, int core, int sg) {
+static int lr_shadow_core(LrShadowWalk *x, const LrWalker *w, int core, int sg) {
   int cls = comp_core_class(x->c, core);
   return cls >= 0 && lr_walk_one(x->c, w, x, cls, sg, 0);
 }
 
-static int lr_auto_chain(LrAutoWalk *x, int cls, int object) {
+static int lr_shadow_chain(LrShadowWalk *x, int cls, int object, int own_singleton) {
   Compiler *c = x->c;
-  LrWalker w = { .own = lr_auto_own, .mixin = lr_auto_mixin, .tail_end = LR_TAIL_N, .enter = lr_auto_enter };
+  LrWalker w = { .own = lr_shadow_own, .mixin = lr_shadow_mixin, .tail_end = LR_TAIL_N, .enter = lr_shadow_enter };
+  if (own_singleton) return lr_walk_one(c, &w, x, cls, 1, 0);
   if (lr_chain_open(c, cls) || lr_walk(c, &w, x, cls, 1, 0)) return 1;
   /* An unreopened Object has no record class. Start at main, then
      account for the missing part of the class object's chain. */
-  if (object && lr_auto_core(x, &w, CORE_MODULE, 0)) return 1;
+  if (object && lr_shadow_core(x, &w, CORE_MODULE, 0)) return 1;
   /* Class objects also reach Object and BasicObject's singletons. */
   if (!object && (cls == LR_MAIN || comp_class_is_module(c, &c->classes[cls]))) return 0;
-  return lr_auto_core(x, &w, CORE_CLASS_REOPEN, 0) || lr_auto_core(x, &w, CORE_OBJECT, 1) || lr_auto_core(x, &w, CORE_BASIC_OBJECT, 1);
+  return lr_shadow_core(x, &w, CORE_CLASS_REOPEN, 0) || lr_shadow_core(x, &w, CORE_OBJECT, 1) || lr_shadow_core(x, &w, CORE_BASIC_OBJECT, 1);
 }
 
 int elab_autoload_shadow(Compiler *c, int id) {
@@ -8314,7 +8318,7 @@ static void lr_autoload_settle(Compiler *c) {
   for (int i = 0; !r->auto_unknown && !r->names_any && i < r->ncls; i++)
     if (r->cls[i].unheld && (r->cls[i].auto_computed & 1)) r->auto_unknown = 1;
   unsigned long long work = nt_work_now();
-  LrAutoWalk x = { .c = c };
+  LrShadowWalk x = { .c = c, .name = "autoload" };
   for (int i = 0; !r->auto_unknown && !r->names_any && i < r->nauto_owner; i++) {
     int owner = r->auto_owner[i];
     if (owner <= 0 && owner != LR_AUTO_OBJECT) continue;
@@ -8324,7 +8328,7 @@ static void lr_autoload_settle(Compiler *c) {
     }
     x.walk = i + 1;
     int object = owner == LR_AUTO_OBJECT;
-    if (lr_auto_chain(&x, object ? LR_MAIN : owner - 2, object)) r->auto_owner[i] = LR_AUTO_SHADOWED;
+    if (lr_shadow_chain(&x, object ? LR_MAIN : owner - 2, object, 0)) r->auto_owner[i] = LR_AUTO_SHADOWED;
   }
   free(x.modules);
   nt_work_step("elab_autoload_chain", work);
@@ -11877,6 +11881,127 @@ int elab_self_value_at(Compiler *c, int node) {
   const LrStmt *s = lr_stmt_of(r, node);
   if (!s || s->region < 0 || s->frame < 0 || s->up != s->frame) return LR_UNKNOWN_CLASS;
   return elab_self_at(c, node);
+}
+
+/* Find the class object whose body runs this expression, including in a
+   file that the record cannot place at a unique load point. A block with
+   an unknown caller can run with a different self. */
+static int lr_lambda_self(Compiler *c, int node, const int *parent) {
+  const NodeTable *nt = c->nt;
+  for (int p = parent[node]; p >= 0; node = p, p = parent[p]) {
+    NodeKind k = nt_kind(nt, p);
+    if ((k == NK_ClassNode || k == NK_ModuleNode) && class_def_body(nt, p) == node)
+      return elab_header_class(c, p, NULL, NULL);
+    if (k == NK_DefNode || k == NK_LambdaNode || k == NK_SingletonClassNode ||
+        (k == NK_BlockNode && (parent[p] < 0 || elab_block_when(c, parent[p], 0) != ELAB_BLK_NOW)))
+      return LR_UNKNOWN_CLASS;
+  }
+  return LR_MAIN;
+}
+
+static int lr_lambda_name_arg(const NodeTable *nt, int node, int array) {
+  if (nt_kind(nt, node) == NK_DefNode) return 0;   /* checked at the def itself */
+  if (array && nt_kind(nt, node) == NK_ArrayNode) {
+    int n = 0;
+    const int *v = nt_arr(nt, node, "elements", &n);
+    for (int i = 0; i < n; i++)
+      if (lr_lambda_name_arg(nt, v[i], 0)) return 1;
+    return 0;
+  }
+  const char *name = vis_arg_name(nt, node);
+  return !name || is_lambda_constructor(name);
+}
+
+static int lr_lambda_method_form(const NodeTable *nt, int node) {
+  const char *name = nt_str(nt, node, "name");
+  int n = 0, args = nt_ref(nt, node, "arguments");
+  const int *v = args >= 0 ? nt_arr(nt, args, "arguments", &n) : NULL;
+  if (!name || !n) return 0;
+  if (is_define_method_name(name) || is_define_singleton_method_name(name) || is_alias_method_name(name))
+    return lr_lambda_name_arg(nt, v[0], 0);
+  int vis = visibility_of_name(name) || class_method_vis_of_name(name);
+  if (vis || is_attr_decl_reader(name) || is_undef_method_name(name) || is_remove_method_name(name))
+    for (int i = 0; i < n; i++)
+      if (lr_lambda_name_arg(nt, v[i], vis)) return 1;
+  return 0;
+}
+
+/* Check that every spelling that can change lambda has a recorded owner.
+   Indirect method-table sends and string evals can reach an unknown
+   table even when their syntactic receiver is known. */
+static int lr_lambda_unknown_owner(Compiler *c) {
+  LoadRecord *r = c->lrec;
+  const NodeTable *nt = c->nt;
+  if (r->names_any) NT_FOREACH_KIND(nt, NK_CallNode, f) {
+    const char *name = nt_str(nt, f, "name");
+    int args = nt_ref(nt, f, "arguments"), n = 0;
+    const int *v = args >= 0 ? nt_arr(nt, args, "arguments", &n) : NULL;
+    if (!n) continue;
+    if (is_code_eval_name(name) && nt_ref(nt, f, "block") < 0) return 1;
+    if (is_send_family(name)) {
+      int used = 0;
+      const char *sent = call_sent_name(nt, f, &used);
+      if (!sent ? !lr_send_passes_nothing(nt, f, v, n, used)
+                : is_method_naming_call(sent) || is_code_eval_name(sent)) return 1;
+    }
+  }
+  unsigned char *held = calloc((size_t)nt->count, 1);
+  if (!held) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int i = 0; i < r->nhist; i++) {
+    const LrHist *h = &r->hist[i];
+    int opaque = h->a == LR_KEY_OPAQUE;
+    if (!opaque && (h->a < LR_MAIN || !is_lambda_constructor(h->name))) continue;
+    const LrClass *k = lr_class(r, opaque ? h->b - 2 : h->a);
+    if (!k || (k->unheld && (opaque || !h->b))) continue;
+    for (int j = 0; j < h->n; j++) {
+      int node = h->v[j].node;
+      if (node >= 0 && node < nt->count && (!opaque || h->v[j].vis == LR_OPAQUE_DEFINES)) held[node] = 1;
+    }
+  }
+  int unknown = 0;
+  NT_FOREACH_KIND(nt, NK_DefNode, d)
+    if (!held[d] && is_lambda_constructor(nt_str(nt, d, "name"))) unknown = 1;
+  NT_FOREACH_KIND(nt, NK_AliasMethodNode, a)
+    if (!held[a] && lr_lambda_name_arg(nt, nt_ref(nt, a, "new_name"), 0)) unknown = 1;
+  NT_FOREACH_KIND(nt, NK_UndefNode, u) if (!held[u]) {
+    int n = 0;
+    const int *v = nt_arr(nt, u, "names", &n);
+    for (int i = 0; i < n; i++)
+      if (lr_lambda_name_arg(nt, v[i], 0)) unknown = 1;
+  }
+  NT_FOREACH_KIND(nt, NK_CallNode, f)
+    if (!held[f] && lr_lambda_method_form(nt, f)) unknown = 1;
+  free(held);
+  return unknown;
+}
+
+int elab_builtin_lambda(Compiler *c, int call, const int *parent) {
+  LoadRecord *r = c->lrec;
+  const NodeTable *nt = c->nt;
+  int recv = nt_ref(nt, call, "receiver"), cls;
+  if (recv < 0) cls = lr_lambda_self(c, call, parent);
+  else {
+    NodeKind k = nt_kind(nt, recv);
+    if ((k != NK_ConstantReadNode && k != NK_ConstantPathNode) ||
+        (k == NK_ConstantPathNode && nt_ref(nt, recv, "parent") >= 0) ||
+        !is_kernel_module_name(lr_written_name(nt, recv)) || elab_source_values_const(c, "Kernel")) return 0;
+    int core = -1;
+    cls = lr_class_ref_at(c, recv, &core);
+    if (core != CORE_KERNEL && (cls < 0 || cls != comp_core_class(c, CORE_KERNEL))) return 0;
+  }
+  if (recv < 0 && !lr_class(r, cls)) return 0;
+  if (!r->lambda_owners) r->lambda_owners = lr_lambda_unknown_owner(c) ? 2 : 1;
+  if (r->lambda_owners == 2) return 0;
+  if (!lr_class(r, cls)) return 1;   /* Kernel with no reopening */
+
+  LrShadowWalk x = { .c = c, .walk = 1, .name = "lambda" };
+  x.modules = calloc((size_t)r->ncls, sizeof *x.modules);
+  if (!x.modules) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  /* Kernel's module function is on Kernel's singleton, ahead of Module's
+     instance methods. A receiverless call can reach the whole chain. */
+  int shadow = lr_shadow_chain(&x, cls, 0, recv >= 0);
+  free(x.modules);
+  return !shadow;
 }
 
 /* Does def node `def` use the block it is given anywhere in it: one of the

@@ -762,12 +762,17 @@ static int prog_header_scope_autoloaded(Compiler *c, int id) {
   return 0;
 }
 
-/* Is node b the literal block of a receiverless `lambda` call, a lambda
-   (as return_in_lambda takes it)? */
-static int prog_lambda_block(const NodeTable *nt, const int *parent, int b) {
-  if (nt_kind(nt, b) != NK_BlockNode || parent[b] < 0 || nt_kind(nt, parent[b]) != NK_CallNode) return 0;
-  const char *cn = nt_str(nt, parent[b], "name");
-  return cn && is_lambda_constructor(cn) && nt_ref(nt, parent[b], "receiver") < 0 && nt_ref(nt, parent[b], "block") == b;
+/* A literal block of the zero-argument builtin lambda constructor. */
+static int prog_lambda_block(Compiler *c, const int *parent, int b) {
+  const NodeTable *nt = c->nt;
+  int call = parent[b];
+  return nt_kind(nt, b) == NK_BlockNode && call >= 0 && nt_kind(nt, call) == NK_CallNode &&
+         nt_ref(nt, call, "block") == b && nt_ref(nt, call, "arguments") < 0 &&
+         is_lambda_constructor(nt_str(nt, call, "name")) && elab_builtin_lambda(c, call, parent);
+}
+
+static void prog_refuse_block_return(Compiler *c, int id) {
+  unsupported_feature(c, id, "load model: a `return` in a block at a required file's top level, for now");
 }
 /* What the load model does not load yet, refused by name (#9898), asked
    once the load sites are known, ahead of the desugaring:
@@ -776,7 +781,7 @@ static int prog_lambda_block(const NodeTable *nt, const int *parent, int b) {
      - an autoload: its file loads at the constant's first reference
        (part 4);
      - in a required file, an END block, registered when its statement
-       runs; and a `return` in a block at its top level, which
+       runs; and a non-lambda `return` in a block at its top level, which
        ends the file's load from wherever the block runs. */
 void prog_refuse_loads(Compiler *c) {
   const NodeTable *nt = c->nt;
@@ -853,20 +858,55 @@ void prog_refuse_loads(Compiler *c) {
           unsupported_feature(c, id, "load model: a computed require may load the program's own entry file again, for now");
     }
     else if (k == NK_ReturnNode) {
-      /* the nearest method, lambda or block around it: a block's, at the top level.
-         A receiverless `lambda { }` block is a lambda, whose `return` leaves it
-         (return_in_lambda) */
+      /* A block return at the file's top level needs a lambda boundary. */
       int a = parent[id];
       while (a >= 0 && nt_kind(nt, a) != NK_DefNode && nt_kind(nt, a) != NK_LambdaNode && nt_kind(nt, a) != NK_BlockNode)
         a = parent[a];
       int r = a >= 0 && nt_kind(nt, a) == NK_BlockNode ? prog_root_of(c, parent, id) : -1;
-      for (int b = a; r >= 0 && b >= 0; b = parent[b])
-        if (nt_kind(nt, b) == NK_DefNode || nt_kind(nt, b) == NK_LambdaNode || prog_lambda_block(nt, parent, b)) r = -1;
-      if (r >= 0 && r != nt->root_id)
-        unsupported_feature(c, id, "load model: a `return` in a block at a required file's top level, for now");
+      int lambda = -1;
+      for (int b = a; r >= 0 && r != nt->root_id && b >= 0; b = parent[b]) {
+        NodeKind k = nt_kind(nt, b);
+        if (k == NK_DefNode || k == NK_LambdaNode) r = -1;
+        else if (lambda < 0 && prog_lambda_block(c, parent, b)) lambda = b;
+      }
+      if (r < 0 || r == nt->root_id) continue;
+      if (lambda < 0) prog_refuse_block_return(c, id);
+      for (int b = a; b != lambda; b = parent[b])
+        if (nt_kind(nt, b) == NK_BlockNode) {
+          nt_node_set_int((NodeTable *)nt, b, "graph_lambda_return", id + 1);
+          c->graph_lambda_nested_returns = 1;
+        }
     }
   }
   free(parent);
+}
+
+/* A nested block may be emitted as its own callable, with no return path
+   to the lambda's activation. The inline iterator arms below keep the
+   return in the lambda when the settled call target does not lift it. */
+static int prog_lambda_block_inline(Compiler *c, int call, int block) {
+  const NodeTable *nt = c->nt;
+  if (call < 0 || nt_kind(nt, call) != NK_CallNode || nt_ref(nt, call, "block") != block ||
+      nt_ref(nt, call, "arguments") >= 0 || nt_int(nt, call, "blk_kept", 0)) return 0;
+  int recv = nt_ref(nt, call, "receiver");
+  if (recv < 0) return 0;
+  const char *name = nt_str(nt, call, "name");
+  TyKind rt = infer_type(c, recv);
+  int array = ty_is_array(rt) || ty_is_obj_array(rt);
+  int inlined = is_each_name(name) ? array || ty_is_hash(rt) || rt == TY_RANGE
+                                  : array && (is_map_alias(name) || is_tap_name(name));
+  return inlined && !a_block_is_lifted(c, call);
+}
+
+void prog_refuse_nested_lambda_returns(Compiler *c) {
+  if (!c->graph_lambda_nested_returns) return;
+  const NodeTable *nt = c->nt;
+  const int *parent = comp_parent_map(c);
+  NT_FOREACH_KIND(nt, NK_BlockNode, b) {
+    int ret = nt_int(nt, b, "graph_lambda_return", 0) - 1;
+    if (ret >= 0 && prog_root_of(c, parent, b) >= 0 && !prog_lambda_block_inline(c, parent[b], b))
+      prog_refuse_block_return(c, ret);
+  }
 }
 
 /* What each file the entry reaches is loaded by, once the folds have run

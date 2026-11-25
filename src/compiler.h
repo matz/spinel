@@ -1341,6 +1341,7 @@ typedef struct { int mi; short owner_ci; unsigned char via; } UCallInf;
 typedef struct {
   const NodeTable *nt;
   AutoloadRegistration *autoloads; int nautoloads, auto_nodes;
+  int graph_lambda_nested_returns;   /* a required file's lambda has a return in an inner block */
   int *auto_at; /* parsed node -> first registration + 1; names/paths borrowed from nt */
   SP_TY_FIELD TyKind *ntype;    /* [node_cap] node id -> inferred type */
   int *norigin;     /* [node_cap] node id -> where its degraded type came from: the

@@ -8117,9 +8117,9 @@ int cplan_class_value_may_be_rt(Compiler *c, int node) {
     if (cplan_rt_site(c, k) && cls_set_has(s, k + c->cls_fact_ncls)) return 1;
   return 0;
 }
-/* Does the Method value of node v reach a use that runs it
-   (is_method_running_name), or one this cannot follow? A call on it answers
-   by its name; a local it is written to answers by the calls on each read
+/* Does the Method value of node v reach a use that may run it (any call
+   on it but a reader's, is_method_reader_name), or one this cannot follow?
+   A call on it answers by its name; a local it is written to answers by the calls on each read
    of the local in its scope; a value nothing reads runs nothing. Anything
    else (an argument, an element, a return, a block argument) is a use this
    cannot follow. */
@@ -8128,7 +8128,7 @@ static int cplan_method_value_runs(Compiler *c, const int *par, int v, int local
   if (an_node_dropped(c, v)) return 0;
   int p = par[v];
   if (p >= 0 && nt_kind(nt, p) == NK_CallNode && nt_ref(nt, p, "receiver") == v)
-    return is_method_running_name(nt_str(nt, p, "name"));
+    return !is_method_reader_name(nt_str(nt, p, "name"));
   if (!local || p < 0 || nt_kind(nt, p) != NK_LocalVariableWriteNode || nt_ref(nt, p, "value") != v || !an_node_dropped(c, p))
     return 1;
   const char *vn = nt_str(nt, p, "name");

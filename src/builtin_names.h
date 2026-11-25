@@ -544,7 +544,7 @@ int is_proc_new(const char *recv, const char *meth); /* Proc.new */
 int is_method_ref_name(const char *n);   /* method: Kernel#method */
 int is_method_handoff_name(const char *n); /* is_method_name_reflection less the define and ask names */
 int is_method_object_name(const char *n); /* method public_method instance_method: a Method of the name handed */
-int is_method_running_name(const char *n); /* call [] === yield to_proc curry << >> dup clone unbind super_method bind bind_call: runs a Method or answers one that may */
+int is_method_reader_name(const char *n); /* name arity owner parameters source_location inspect to_s == hash receiver: reads a Method, runs it not */
 int is_marshal_const(const char *n);     /* Marshal, whose load makes objects with any ivars */
 int is_env_const(const char *n);         /* ENV */
 int is_argv_const(const char *n);        /* ARGV */

@@ -2114,15 +2114,13 @@ int is_method_ref_name(const char *n) { return n && sp_streq(n, "method"); }
 int is_method_object_name(const char *n) {
   return n && (sp_streq(n, "method") || sp_streq(n, "public_method") || sp_streq(n, "instance_method"));
 }
-/* A call on a Method (or an UnboundMethod) that runs it, or answers a
-   Method or Proc that may run it later: a copy, a bind, its proc or a
-   composition (`name`, `arity`, `owner` and the other readers answer of the
-   method without running it) */
-int is_method_running_name(const char *n) {
-  return n && (sp_streq(n, "call") || sp_streq(n, "[]") || sp_streq(n, "===") || sp_streq(n, "yield") ||
-               sp_streq(n, "to_proc") || sp_streq(n, "curry") || sp_streq(n, "<<") || sp_streq(n, ">>") ||
-               sp_streq(n, "dup") || sp_streq(n, "clone") || sp_streq(n, "unbind") || sp_streq(n, "super_method") ||
-               is_method_bind_name(n));
+/* A call on a Method (or an UnboundMethod) that only reads it: answers of
+   the method, never running it nor handing it on. Any other call (`call`,
+   a bind, its proc, a copy, `then`, `tap`) may run it. */
+int is_method_reader_name(const char *n) {
+  return n && (sp_streq(n, "name") || sp_streq(n, "arity") || sp_streq(n, "owner") || sp_streq(n, "parameters") ||
+               sp_streq(n, "source_location") || sp_streq(n, "inspect") || sp_streq(n, "to_s") ||
+               sp_streq(n, "==") || sp_streq(n, "hash") || sp_streq(n, "receiver"));
 }
 /* Marshal, whose load makes objects with any ivars set */
 int is_marshal_const(const char *n) { return n && sp_streq(n, "Marshal"); }

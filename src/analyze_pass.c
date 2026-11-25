@@ -8962,12 +8962,69 @@ static int attr_writer_arg_walk(Compiler *c, int call, void *ctx) {
       is_fresh_array(c, a)) return 1;
   return attr_value_walk(c, arg, w);
 }
+/* ivar_src_walk's answers for ivar ivi of class cls, kept on the Compiler
+   (c->ivar_walk_memo) for a walk that starts at the read (depth 0, where
+   no method is on the walk's stack, so the answer is the class's alone):
+   the check's answer, and an apply that changed nothing, each stamped with
+   the edit count (comp_ty_edits) it was made at plus one, and good while no
+   fact the walk reads has moved since, the node table, the class table and
+   the class facts being the ones it was made over. On a receiver of n
+   classes each of m reads walked every class's writer calls, twice for
+   the check and once to apply, n x m per round. */
+typedef struct { unsigned long check_at, apply_at; unsigned char check, member; } IvWalkEntry;
+typedef struct { int nivars; IvWalkEntry *e; } IvWalkRow;
+struct IvarWalkMemo {
+  const NodeTable *nt; int count, nclasses, fact_n; unsigned version;
+  IvWalkRow *rows;
+};
+void ivar_walk_memo_free(Compiler *c) {
+  struct IvarWalkMemo *x = c->ivar_walk_memo;
+  if (!x) return;
+  for (int k = 0; k < x->nclasses; k++) free(x->rows[k].e);
+  free(x->rows); free(x);
+  c->ivar_walk_memo = NULL;
+}
+static IvWalkEntry *ivar_walk_memo_at(Compiler *c, int cls, int ivi) {
+  struct IvarWalkMemo *x = c->ivar_walk_memo;
+  if (x && (x->nt != c->nt || x->count != c->nt->count || x->version != c->nt->version ||
+            x->nclasses != c->nclasses || x->fact_n != c->cls_fact_n)) {
+    ivar_walk_memo_free(c);
+    x = NULL;
+  }
+  if (!x) {
+    x = calloc(1, sizeof *x);
+    if (x) x->rows = calloc((size_t)c->nclasses + 1, sizeof *x->rows);
+    if (!x || !x->rows) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    x->nt = c->nt; x->count = c->nt->count; x->version = c->nt->version;
+    x->nclasses = c->nclasses; x->fact_n = c->cls_fact_n;
+    c->ivar_walk_memo = x;
+  }
+  IvWalkRow *r = &x->rows[cls];
+  int n = c->classes[cls].nivars;
+  if (r->nivars != n) {
+    free(r->e);
+    r->e = calloc((size_t)n + 1, sizeof *r->e);
+    if (!r->e) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    r->nivars = n;
+  }
+  return &r->e[ivi];
+}
 /* array_src_walk's step for a value `v` that reads ivar ivn of class icls
    (ivar_src_slots): whether it can be the general Array, or with apply 1
    making it so, as array_src_walk answers. */
 static int ivar_src_walk(Compiler *c, int v, int icls, const char *ivn, int apply, int *stack, int depth) {
   ClassInfo *ci = &c->classes[icls];
   int ivi = comp_ivar_index(ci, ivn);
+  if (ivi < 0 || class_ivar_pinned(ci, ivn) || !c->ivar_widen_src || v >= c->node_cap) return 0;
+  IvWalkEntry *m = depth == 0 ? ivar_walk_memo_at(c, icls, ivi) : NULL;
+  if (m && !apply && m->check_at == comp_ty_edits + 1) return m->check;
+  /* (an apply that changed nothing changes nothing again but the read's
+     own mark) */
+  if (m && apply && m->apply_at == comp_ty_edits + 1) {
+    if (m->member || c->ivar_widen_src[v]) return 0;
+    c->ivar_widen_src[v] = 1;
+    return 1;
+  }
   /* A Struct member the constructor sets widens now, as the alias step
      widens it (alias_side): the constructions' arguments widen with it
      in the rounds that follow (struct_new_types_members_at), or keep it
@@ -8975,15 +9032,14 @@ static int ivar_src_walk(Compiler *c, int v, int icls, const char *ivn, int appl
      (`k.v = [+"s"]`, a member's setter) is one more write, whose value
      is followed as the class's own writes are (attr_writer_calls). */
   int member = struct_member_set_by_new(c, icls, ivi);
-  int fresh = member || ivi < 0 ? 1 : ivar_writes_fresh(c, icls, ivn, 0, NULL);
-  if (ivi < 0 || class_ivar_pinned(ci, ivn) || !c->ivar_widen_src || v >= c->node_cap || fresh < 0) return 0;
+  int fresh = member ? 1 : ivar_writes_fresh(c, icls, ivn, 0, NULL);
   AttrArgWalk aw = { stack, depth, 0, 0, 0 };
-  int writer = call_answers(c, -1, icls, ivn + 1, CT_WRITER, NULL);
-  if (attr_writer_calls(c, icls, ivn, attr_writer_arg_walk, &aw) ||
-      (writer && attr_op_writes(c, icls, ivn + 1, attr_writer_arg_walk, &aw)) ||
-      (!member && struct_super_member_values(c, icls, ivi, &aw)) ||
-      (!fresh && !aw.n)) return 0;
-  if (!apply) return 1;
+  int writer = fresh >= 0 && call_answers(c, -1, icls, ivn + 1, CT_WRITER, NULL);
+  int ok = fresh >= 0 && !attr_writer_calls(c, icls, ivn, attr_writer_arg_walk, &aw) &&
+           !(writer && attr_op_writes(c, icls, ivn + 1, attr_writer_arg_walk, &aw)) &&
+           !(!member && struct_super_member_values(c, icls, ivi, &aw)) && (fresh || aw.n);
+  if (m && !apply) { m->check = (unsigned char)ok; m->check_at = comp_ty_edits + 1; }
+  if (!ok || !apply) return ok;
   aw.apply = 1; aw.ch = 0;
   attr_writer_calls(c, icls, ivn, attr_writer_arg_walk, &aw);
   if (writer) attr_op_writes(c, icls, ivn + 1, attr_writer_arg_walk, &aw);
@@ -8992,10 +9048,11 @@ static int ivar_src_walk(Compiler *c, int v, int icls, const char *ivn, int appl
   if (member) {
     AliasSide sd = { &ci->ivar_types[ivi], 0, 1, icls, ivi };
     if (*sd.slot != TY_POLY_ARRAY) { ty_ref_set(c, sd.slot, TY_POLY_ARRAY); ch = 1; }
-    return ch | alias_ivar_widened(c, NULL, &sd, TY_POLY_ARRAY);
+    ch |= alias_ivar_widened(c, NULL, &sd, TY_POLY_ARRAY);
   }
-  ivar_writes_fresh(c, icls, ivn, 1, &ch);
-  if (!c->ivar_widen_src[v]) { c->ivar_widen_src[v] = 1; ch = 1; }
+  else ivar_writes_fresh(c, icls, ivn, 1, &ch);
+  if (m && !ch) { m->member = (unsigned char)member; m->apply_at = comp_ty_edits + 1; }
+  if (!member && !c->ivar_widen_src[v]) { c->ivar_widen_src[v] = 1; ch = 1; }
   return ch;
 }
 /* array_src_walk's step for method t, one a call no one target is

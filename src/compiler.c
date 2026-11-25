@@ -704,7 +704,7 @@ void comp_free(Compiler *c) {
   free(c->nil_elem_fact);
   free(c->scope_may_raise);
   free(c->node_elide_setjmp);
-  free(c->cls_fact); cls_pool_free(c->cls_pool, c->ncls_pool); free(c->cls_bk_sub); free(c->cls_bk_sub_ok); cplan_send_owners_free(c); cplan_memo_free(c); attr_call_index_free(c);
+  free(c->cls_fact); cls_pool_free(c->cls_pool, c->ncls_pool); free(c->cls_bk_sub); free(c->cls_bk_sub_ok); cplan_send_owners_free(c); cplan_memo_free(c); attr_call_index_free(c); ivar_walk_memo_free(c);
   free(c->send_param_memo);
   free(c->node_ord); free(c->node_base); free(c->node_pbase);
   for (int k = 0; k < c->node_tag_cap; k++) if (c->node_tag[k] && *c->node_tag[k]) free(c->node_tag[k]);

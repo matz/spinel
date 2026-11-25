@@ -1480,6 +1480,7 @@ typedef struct {
      (k >= cls_fact_ncls) is in no set */
   int cls_fact_ncls;
   struct AttrCallIndex *attr_call_ix;   /* per writer name, its calls by the classes the class facts say their receiver may hold (analyze_pass.c, attr_writer_calls), made on first ask */
+  struct IvarWalkMemo *ivar_walk_memo;   /* per class ivar, the source walk's answers from a read, kept while no fact moves (analyze_pass.c, ivar_src_walk), made on first ask */
   struct CplanMemo *cplan_memo;   /* the call plans kept per node where the node is read as itself, and the storage the plans handed out point into (call_plan.c), made on first use */
   struct SendOwners *send_owners; int nsend_owners, csend_owners;   /* per send name, the builtin classes the tables give as answering it (cplan_send_split_owners) */
   unsigned long long (*cls_bk_sub)[CLS_BK_WORDS]; unsigned char *cls_bk_sub_ok;   /* per builtin class, the mask of it and the classes below it, made on first ask (cls_bk_subtree) */
@@ -2860,6 +2861,7 @@ const ClsSet *cls_fact_node(Compiler *c, int node);
 int cls_fact_may_hold_builtin(Compiler *c, int node, int core);
 void cplan_send_owners_free(Compiler *c);   /* call_plan.c: the memo of the builtin classes that answer a send's name */
 void attr_call_index_free(Compiler *c);   /* analyze_pass.c: the index of the writer calls by receiver class */
+void ivar_walk_memo_free(Compiler *c);   /* analyze_pass.c: the source walk's answers per class ivar */
 void cplan_memo_free(Compiler *c);   /* call_plan.c: the plans kept per node and the storage the plans handed out point into */
 /* Is class k one the fact bounds: a class the program defines, whose
    instances the pass follows from their construction? A reopened builtin's,

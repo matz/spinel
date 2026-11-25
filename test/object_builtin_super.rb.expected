@@ -60,3 +60,6 @@ true
 "#<ByVal:X>"
 "#<ByVal:X @a=1>"
 [false]
+false
+true
+true

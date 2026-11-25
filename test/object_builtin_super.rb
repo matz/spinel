@@ -137,3 +137,11 @@ class NotEq
   def !=(o) = super
 end
 p [NotEq.new != 1]
+
+# a respond_to? super asked about a Symbol made at run time answers for that
+# name, not for one whose id the compile gave out after the symbol table
+class DynSym
+  def respond_to?(m, a = false) = super
+end
+dyn = "zz#{[1].size}".to_sym
+p DynSym.new.respond_to?(dyn), DynSym.new.respond_to?(:inspect), DynSym.new.respond_to?("ins#{[1].size > 0 ? "pect" : ""}".to_sym)

@@ -24867,6 +24867,10 @@ static int hc_joint_emit(Compiler *c, const int *stmts, int m, Buf *b, int inden
     buf_puts(&g, "; ");
     buf_printf(&test, "%s(unsigned long long)_t%d < (unsigned long long)%s", j ? " && " : "", kt[j], wl);
   }
+  /* the first index runs where its statement does, so an error it raises
+     names that statement's line (the later ones raise in the arm as
+     written, behind their own statements' lines) */
+  emit_line_directive(c, stmts[0], b);
   buf_puts(b, g.p);
   free(g.p);
   buf_printf(b, "if (SP_LIKELY(%s)) {\n", test.p);

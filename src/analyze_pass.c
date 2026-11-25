@@ -10175,9 +10175,11 @@ static void widen_boxed_for_stored_arg(Compiler *c, int anode, int a, int *chang
   if (k == NK_BlockArgumentNode) return;
   if (k == NK_SplatNode) { widen_boxed_for_elems(c, anode, nt_ref(nt, a, "expression"), changed, any); return; }
   TyKind t = infer_type(c, a);
-  if (t == TY_UNKNOWN || t == TY_POLY || t == TY_VOID) return;
-  /* (a nil or an empty container is stored boxed: push_elem_ty) */
+  if (t == TY_POLY || t == TY_VOID) return;
+  /* (a nil or an empty container is stored boxed: push_elem_ty; any other
+     value whose kind is not settled yet is left for a later round) */
   TyKind e = push_elem_ty(c, a);
+  if (e == TY_UNKNOWN) return;
   if (e == TY_STRBUF) e = TY_STRING;
   wbas_share_step(changed, any);
   *changed |= widen_boxed_array_sources(c, anode, e, 0);

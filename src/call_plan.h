@@ -471,6 +471,11 @@ int cplan_super_native(Compiler *c, int id);
 enum { SAS_SPLAT = 1, SAS_KW = 2, SAS_FWD = 4, SAS_UNSPELLED = 8, SAS_BARE = 16 };
 unsigned cplan_super_args_shape(Compiler *c, int id, const Scope *s);
 int cplan_def_forwards(Compiler *c, const Scope *s);   /* is the method of scope s a `(...)` forwarder? */
+/* The shape of a bare super's argument list in scope s: the method's parameters, as a call spells them (SAS_* above,
+   always SAS_BARE but for a destructured or unnamed positional). With mixed, a `(...)` whose calls pass different
+   counts is SAS_UNSPELLED too: its slots hold the most any passes, which a call that passed fewer did not. The one
+   decider of whether super_zsuper_args (analyze.c) can spell them. */
+unsigned cplan_zsuper_shape(Compiler *c, const Scope *s, int mixed);
 /* Does super node id's arm (CallPlan.bsuper) answer from the object itself: its address (BSUP_SAME), its frozen bit
    (BSUP_FROZEN), the object (BSUP_SELF), or Kernel's row over it (BSUP_KERNEL_ROW)? A by-value object
    (an_phase_value_types) has none of them. */

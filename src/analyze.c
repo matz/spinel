@@ -47497,30 +47497,24 @@ static const char *zsuper_rest_local(Compiler *c, const int *par, int at, const 
    as a call's, by CRuby's rule: the requireds and optionals as reads, the
    rest as a splat (an anonymous `*` as the anonymous splat), the posts as
    reads, each keyword k as `k: k` and the keyword rest as `**` (an anonymous
-   one likewise), all in one KeywordHashNode. An ArgumentsNode for node `at`,
-   or -1 for a parameter list this spelling does not reproduce (a
-   destructured parameter has no local to read; with strict, a `...` whose
-   calls pass different positional counts too: its __fwd_N slots hold the
-   most any passes, which a builtin that takes what each passes (an
-   Array subclass's, refused before) cannot be given. A module prepended into
-   a builtin keeps the slots, as its super did). The block is the caller's
+   one likewise), all in one KeywordHashNode; a `(...)`'s, the leading
+   parameters and the __fwd_N slots the calls' arity gave it, by position.
+   An ArgumentsNode for node `at`, or -1 for a parameter list no call spells
+   (cplan_zsuper_shape decides it; with strict, a `...` whose calls pass
+   different counts is one: a builtin that takes what each passes (an Array
+   subclass's, refused before) cannot be given the slots. A module prepended
+   into a builtin keeps them, as its super did). The block is the caller's
    (lower_super_call). */
 static int super_zsuper_args(Compiler *c, int at, Scope *s, const int *par, int strict) {
   NodeTable *nt = (NodeTable *)c->nt;
+  if (cplan_zsuper_shape(c, s, strict) & SAS_UNSPELLED) return -1;
   int pn = s->def_node >= 0 ? nt_ref(nt, s->def_node, "parameters") : -1;
   if (pn < 0) return arysub_args(c, at, NULL, 0);
-  /* `(...)` is the scope's parameters, the leading ones and the __fwd_N the
-     calls' arity gave it, passed on by position */
-  int fwd = nt_ref(nt, pn, "keyword_rest");
-  if (fwd >= 0 && nt_kind(nt, fwd) == NK_ForwardingParameterNode) {
-    if (strict && fwd_fixed_call_arity(nt, nt_str(nt, s->def_node, "name")) == -1) return -1;
-    int *ids = (int *)malloc(sizeof(int) * (size_t)(s->nparams + 1)), n = 0, ok = 1;
+  if (cplan_def_forwards(c, s)) {
+    int *ids = (int *)malloc(sizeof(int) * (size_t)(s->nparams + 1)), n = 0;
     if (!ids) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-    for (int j = 0; ok && j < s->nparams; j++) {
-      int rd = s->pnames && s->pnames[j] && j != s->kwrest_idx && j != s->rest_idx ? zsuper_read(c, at, s->pnames[j]) : -1;
-      if (rd < 0 || callee_param_is_declared_kwarg(c, s, s->pnames[j])) ok = 0; else ids[n++] = rd;
-    }
-    int args = ok ? arysub_args(c, at, ids, n) : -1;
+    for (int j = 0; j < s->nparams; j++) ids[n++] = zsuper_read(c, at, s->pnames[j]);
+    int args = arysub_args(c, at, ids, n);
     free(ids);
     return args;
   }
@@ -47528,60 +47522,38 @@ static int super_zsuper_args(Compiler *c, int at, Scope *s, const int *par, int 
   const int *rq = nt_arr(nt, pn, "requireds", &rn), *op = nt_arr(nt, pn, "optionals", &on);
   const int *po = nt_arr(nt, pn, "posts", &qn), *kw = nt_arr(nt, pn, "keywords", &kn);
   int rest = nt_ref(nt, pn, "rest"), kwr = nt_ref(nt, pn, "keyword_rest");
-  int total = rn + on + qn + kn + 3;
-  int *ids = (int *)malloc(sizeof(int) * (size_t)total), *els = (int *)malloc(sizeof(int) * (size_t)(kn + 1));
+  int *ids = (int *)malloc(sizeof(int) * (size_t)(rn + on + qn + 3)), *els = (int *)malloc(sizeof(int) * (size_t)(kn + 1));
   if (!ids || !els) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  int n = 0, ne = 0, ok = 1;
-  for (int i = 0; ok && i < rn + on; i++) {
-    int p = i < rn ? rq[i] : op[i - rn];
-    const char *nm = nt_str(nt, p, "name");
-    int rd = nm && nt_kind(nt, p) != NK_MultiTargetNode ? zsuper_read(c, at, nm) : -1;
-    if (rd < 0) ok = 0; else ids[n++] = rd;
-  }
-  if (ok && rest >= 0 && nt_kind(nt, rest) == NK_RestParameterNode) {
+  int n = 0, ne = 0;
+  for (int i = 0; i < rn + on; i++) ids[n++] = zsuper_read(c, at, nt_str(nt, i < rn ? rq[i] : op[i - rn], "name"));
+  if (rest >= 0 && nt_kind(nt, rest) == NK_RestParameterNode) {
     const char *nm = nt_str(nt, rest, "name");
     char cp[300];
-    if (nm) nm = zsuper_rest_local(c, par, at, nm, cp, sizeof cp);
-    int sp = arysub_node(c, "SplatNode", at), rd = nm ? zsuper_read(c, at, nm) : -1;
-    if (sp < 0 || (nm && rd < 0)) ok = 0;
-    else {
-      if (nm) nt_node_set_ref(nt, sp, "expression", rd);
-      ids[n++] = sp;
-    }
+    int sp = arysub_node(c, "SplatNode", at);
+    if (nm) nt_node_set_ref(nt, sp, "expression", zsuper_read(c, at, zsuper_rest_local(c, par, at, nm, cp, sizeof cp)));
+    ids[n++] = sp;
   }
-  for (int i = 0; ok && i < qn; i++) {
-    const char *nm = nt_str(nt, po[i], "name");
-    int rd = nm && nt_kind(nt, po[i]) != NK_MultiTargetNode ? zsuper_read(c, at, nm) : -1;
-    if (rd < 0) ok = 0; else ids[n++] = rd;
-  }
-  for (int i = 0; ok && i < kn; i++) {
+  for (int i = 0; i < qn; i++) ids[n++] = zsuper_read(c, at, nt_str(nt, po[i], "name"));
+  for (int i = 0; i < kn; i++) {
     const char *nm = nt_str(nt, kw[i], "name");
-    int sy = arysub_node(c, "SymbolNode", at), as = arysub_node(c, "AssocNode", at), rd = nm ? zsuper_read(c, at, nm) : -1;
-    if (sy < 0 || as < 0 || rd < 0) { ok = 0; break; }
+    int sy = arysub_node(c, "SymbolNode", at), as = arysub_node(c, "AssocNode", at);
     nt_node_set_str(nt, sy, "value", nm);
     nt_node_set_ref(nt, as, "key", sy);
-    nt_node_set_ref(nt, as, "value", rd);
+    nt_node_set_ref(nt, as, "value", zsuper_read(c, at, nm));
     els[ne++] = as;
   }
-  if (ok && kwr >= 0 && nt_kind(nt, kwr) == NK_KeywordRestParameterNode) {
+  if (kwr >= 0) {
     const char *nm = nt_str(nt, kwr, "name");
-    int as = arysub_node(c, "AssocSplatNode", at), rd = nm ? zsuper_read(c, at, nm) : -1;
-    if (as < 0 || (nm && rd < 0)) ok = 0;
-    else {
-      if (nm) nt_node_set_ref(nt, as, "value", rd);
-      els[ne++] = as;
-    }
+    int as = arysub_node(c, "AssocSplatNode", at);
+    if (nm) nt_node_set_ref(nt, as, "value", zsuper_read(c, at, nm));
+    els[ne++] = as;
   }
-  else if (ok && kwr >= 0) ok = 0;
-  if (ok && ne) {
+  if (ne) {
     int kh = arysub_node(c, "KeywordHashNode", at);
-    if (kh < 0) ok = 0;
-    else {
-      nt_node_set_arr(nt, kh, "elements", els, ne);
-      ids[n++] = kh;
-    }
+    nt_node_set_arr(nt, kh, "elements", els, ne);
+    ids[n++] = kh;
   }
-  int args = ok ? arysub_args(c, at, ids, n) : -1;
+  int args = arysub_args(c, at, ids, n);
   free(ids);
   free(els);
   return args;

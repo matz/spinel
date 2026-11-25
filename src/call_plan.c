@@ -1274,15 +1274,15 @@ int cplan_def_forwards(Compiler *c, const Scope *s) {
   int kwr = pn >= 0 ? nt_ref(c->nt, pn, "keyword_rest") : -1;
   return kwr >= 0 && nt_kind(c->nt, kwr) == NK_ForwardingParameterNode;
 }
-/* The shape of a bare super's argument list: the parameters of scope s, as super_zsuper_args spells them */
-static unsigned cplan_zsuper_shape(Compiler *c, const Scope *s) {
+/* See call_plan.h. */
+unsigned cplan_zsuper_shape(Compiler *c, const Scope *s, int mixed) {
   const NodeTable *nt = c->nt;
   int pn = s->def_node >= 0 ? nt_ref(nt, s->def_node, "parameters") : -1;
   if (pn < 0) return SAS_BARE;
   /* (a `(...)`'s are the leading parameters and the slots the calls' arity gave it, by position, when every call
      passes it one count: the slots hold the most any passes, which a call that passed fewer did not) */
   if (cplan_def_forwards(c, s)) {
-    if (fwd_fixed_call_arity(nt, nt_str(nt, s->def_node, "name")) == -1) return SAS_BARE | SAS_UNSPELLED;
+    if (mixed && fwd_fixed_call_arity(nt, nt_str(nt, s->def_node, "name")) == -1) return SAS_BARE | SAS_UNSPELLED;
     for (int j = 0; j < s->nparams; j++)
       if (!s->pnames || !s->pnames[j] || j == s->kwrest_idx || j == s->rest_idx ||
           callee_param_is_declared_kwarg(c, (Scope *)s, s->pnames[j]))
@@ -1318,12 +1318,12 @@ static int cplan_def_forwards_only(Compiler *c, const Scope *s) {
 /* See call_plan.h. */
 unsigned cplan_super_args_shape(Compiler *c, int id, const Scope *s) {
   const NodeTable *nt = c->nt;
-  if (nt_kind(nt, id) == NK_ForwardingSuperNode) return cplan_zsuper_shape(c, s);
+  if (nt_kind(nt, id) == NK_ForwardingSuperNode) return cplan_zsuper_shape(c, s, 1);
   unsigned sh = 0;
   int an = 0, args = nt_ref(nt, id, "arguments");
   const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
   /* (a `super(...)` from a method whose parameters are its `...` alone passes what a bare super does) */
-  if (an == 1 && nt_kind(nt, av[0]) == NK_ForwardingArgumentsNode && cplan_def_forwards_only(c, s)) return cplan_zsuper_shape(c, s);
+  if (an == 1 && nt_kind(nt, av[0]) == NK_ForwardingArgumentsNode && cplan_def_forwards_only(c, s)) return cplan_zsuper_shape(c, s, 1);
   for (int i = 0; i < an; i++) {
     NodeKind ak = nt_kind(nt, av[i]);
     if (ak == NK_SplatNode) sh |= SAS_SPLAT;

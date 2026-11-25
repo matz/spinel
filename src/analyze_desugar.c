@@ -30371,9 +30371,9 @@ int desugar_missing_method_calls(Compiler *c) {
       else str_arm = 0;
     }
     if (nmiss <= 0) continue;
-    /* (a split reads the receiver twice: a variable or self, or none) */
+    /* (a split reads the receiver twice: a variable or self, or none, is
+       read again; any other receiver is held in a local, below, run once) */
     if (r < 0 || ie_self) reread = 1;
-    if (others && !reread && !str_arm) continue;
     if (!others) {
       /* every class the value can be misses nm: the call is method_missing's */
       int sym = fwd_new_node_like(nt, id, "SymbolNode");

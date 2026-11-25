@@ -1,0 +1,12 @@
+"mm:boo:[1, 2]"
+"real:[3]"
+["pick0", "arg1", "arg2", "pick1", "arg3"]
+["mm:boo:[]", "real:[]", "mm:boo:[]"]
+nil
+nil
+"mm:boo:[]"
+9
+["mm:boo2:[]", "real2"]
+"mm:boo:[]"
+"mm:boo:[]"
+"undefined method 'nope"

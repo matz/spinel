@@ -30105,6 +30105,7 @@ static int mm_path_node(NodeTable *nt, int like, const char *qn) {
     int cp = fwd_new_node_like(nt, like, "ConstantPathNode");
     nt_node_set_str(nt, cp, "name", seg);
     nt_node_set_ref(nt, cp, "parent", path);
+    nt_node_set_int(nt, cp, "class_test", 1);
     path = cp;
     p = e ? e + 2 : NULL;
   }

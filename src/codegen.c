@@ -15304,7 +15304,7 @@ int obj_arm_calls_own_inspect(Compiler *c, int cid) {
 }
 /* Does the program reach Kernel#inspect itself: a `def inspect = super` the
    plan answers with it (CallPlan.bsuper BSUP_OBJ_TEXT), or the builtin's own
-   inspect of an object by pointer (builtin_only: such a super, lowered)? Only
+   inspect of an object (builtin_only: such a super, lowered)? Only
    then is sp_obj_kernel_inspect emitted. A site no emitted code holds does
    not count: one in a method that is not written out, or a respond_to?
    probe (rt_probe, the analysis' stand-in for a name asked after, such as
@@ -15326,7 +15326,7 @@ int obj_kernel_inspect_used(Compiler *c) {
     if (kernel_inspect_site_dead(c, cn)) continue;
     int r = nt_ref(c->nt, cn, "receiver");
     TyKind rt = r >= 0 ? repr_of(c, r).as_ty : TY_UNKNOWN;
-    if (cplan_builtin_call(c, cn) && is_inspect_name(nt_str(c->nt, cn, "name")) && ty_is_object(rt) && !comp_ty_value_obj(c, rt)) return 1;
+    if (cplan_builtin_call(c, cn) && is_inspect_name(nt_str(c->nt, cn, "name")) && ty_is_object(rt)) return 1;
   }
   return 0;
 }

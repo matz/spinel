@@ -13068,6 +13068,10 @@ static int pivs_var_stores(Compiler *c, NodeKind rk, const char *vn, int key, ch
   for (int e = comp_vsite_first(c, VS_STORE, rk, vn, key); e >= 0; e = comp_vsite_next(c, e)) {
     int w = comp_vsite_var(c, e);
     if (!pivs_names_var(c, w, rk, vn, key)) continue;
+    /* a store in a method no call can reach never runs (an initialize a
+       reopened class defines again): it holds no value */
+    Scope *ws = comp_scope_of(c, w);
+    if (ws && ws->def_node >= 0 && ws->name && !ws->reachable) continue;
     if (nt_kind(nt, w) != (glob ? NK_GlobalVariableWriteNode : NK_InstanceVariableWriteNode) ||
         !pivs_value(c, nt_ref(nt, w, "value"), set, depth + 1)) return 0;
     saw = 1;

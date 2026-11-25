@@ -4975,7 +4975,10 @@ int desugar_hash_iter_with_index(Compiler *c) {
     int pair = ty_is_hash(st) &&
                (sp_streq(m, "select") || sp_streq(m, "filter") || sp_streq(m, "reject") ||
                 sp_streq(m, "filter_map") || sp_streq(m, "each") || sp_streq(m, "each_pair"));
-    int transform = ty_is_hash(st) && (sp_streq(m, "transform_values") || sp_streq(m, "transform_keys"));
+    /* (a boxed receiver too: a Hash at run time, since no method of the
+       program can take the name; not through `&.`) */
+    int transform = sp_streq(m, "transform_values") || sp_streq(m, "transform_keys");
+    if (transform && !ty_is_hash(st)) transform = st == TY_POLY && !nt_safe_nav(nt, recv) && an_name_binder_free(c, m);
     /* an Array walk that calls its block once per element, in order, and
        answers from those calls -- the counter numbers them as with_index does */
     int single = transform || ((ty_is_array(st) || st == TY_POLY) &&

@@ -2035,7 +2035,7 @@ static int emit_poly_array_call(Compiler *c, int id, Buf *b, const NodeTable *nt
       buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < sp_PolyArray_length(_t%d); _t%d++) {\n",
                  ti, ti, trecv, ti);
       if (bp) { emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "sp_RbVal lv_%s = sp_PolyArray_get(_t%d, _t%d);\n", bp, trecv, ti); }
-      for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, g_indent + 1);
+      emit_iter_step_lead(c, body, bn - 1, g_pre, g_indent + 1);
       int sv = g_indent; g_indent++;
       Buf kb; memset(&kb, 0, sizeof kb);
       if (kt == TY_STRING) {
@@ -2092,7 +2092,7 @@ static int emit_kind_array_iter_call(Compiler *c, int id, Buf *b, const NodeTabl
       buf_printf(g_pre, "sp_RbVal _t%d = sp_box_nil(); SP_GC_ROOT_RBVAL(_t%d);\n", tres, tres);
       emit_find_loop_head(c, id, k, ti, trecv);
       int tkeep = bp ? emit_find_elem_decl(c, block, block_param_name(c, block, 0), bp, rt, k, et, trecv, ti) : 0;
-      for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, g_indent + 1);
+      emit_iter_step_lead(c, body, bn - 1, g_pre, g_indent + 1);
       int sv = g_indent; g_indent++;
       /* a boxed parameter's block value is tested by Ruby's truth rules: the
          tail as written is a test only for a typed one (a boxed value is a
@@ -9438,7 +9438,7 @@ static int str_arms_pattern(Compiler *c, int id, Buf *b, const NodeTable *nt, co
                                    comp_ntype(c, argv[0]) == TY_POLY);
     int np = 0; while (block_param_name(c, blk, np)) np++;
     int body = nt_ref(nt, blk, "body");
-    int bn = 0; const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
+    int bn = 0; if (body >= 0) nt_arr(nt, body, "body", &bn);
     int tr = ++g_tmp, tm = ++g_tmp, ti = ++g_tmp, tpat = -1, trx = -1;
     emit_indent(g_pre, g_indent);
     buf_printf(g_pre, "const char *_t%d = %s;\n", tr, r);
@@ -9643,7 +9643,7 @@ static int str_arms_pattern(Compiler *c, int id, Buf *b, const NodeTable *nt, co
        block of a boxed String's scan took the builtin shortcut's int while
        the inference typed it by the program's `empty?` methods */
     int sv_arm = step_arm_begin();
-    for (int j = 0; j < bn; j++) emit_stmt(c, bb[j], g_pre, g_indent);
+    emit_iter_step_lead(c, body, bn, g_pre, g_indent);
     step_arm_end(c, sv_arm);
     g_indent = svind;
     g_c_loop_depth--;
@@ -14761,7 +14761,7 @@ int emit_range_call(Compiler *c, int id, Buf *b) {
         emit_indent(g_pre, g_indent + 1);
         if (lv8 && lv8->type == TY_POLY) buf_printf(g_pre, "lv_%s = sp_box_int(_t%d);\n", bpr, ti8);
         else buf_printf(g_pre, "lv_%s = _t%d;\n", bpr, ti8);
-        for (int j = 0; j + 1 < bn8; j++) emit_stmt(c, bb8[j], g_pre, g_indent + 1);
+        emit_iter_step_lead(c, body8, bn8 - 1, g_pre, g_indent + 1);
         Buf cb8; memset(&cb8, 0, sizeof cb8);
         { int sv8 = g_indent; g_indent += 1; emit_cond(c, bb8[bn8 - 1], &cb8); g_indent = sv8; }
         emit_indent(g_pre, g_indent + 1);
@@ -14792,7 +14792,7 @@ int emit_range_call(Compiler *c, int id, Buf *b) {
                       nt_ref(nt, rn7, "left") < 0 && nt_ref(nt, rn7, "right") >= 0;
       const char *bp7 = block_param_name(c, block, 0);
       int body7 = nt_ref(nt, block, "body");
-      int bn7 = 0; const int *bb7 = body7 >= 0 ? nt_arr(nt, body7, "body", &bn7) : NULL;
+      int bn7 = 0; if (body7 >= 0) nt_arr(nt, body7, "body", &bn7);
       if (beginless && bp7 && bn7 >= 1) {
         Scope *bsc7 = comp_scope_of(c, block);
         LocalVar *lv7 = bsc7 ? scope_local(bsc7, bp7) : NULL;
@@ -14812,7 +14812,7 @@ int emit_range_call(Compiler *c, int id, Buf *b) {
         int sv_lexc7 = g_loop_exc_base, sv_lexc7_rb = g_loop_rescue_base, sv_lens7 = g_loop_ensure_base;
         g_loop_exc_base = g_exc_frame_depth; g_loop_rescue_base = g_rescue_save_depth; g_loop_ensure_base = g_ensure_depth;
         g_c_loop_depth++;
-        for (int j = 0; j < bn7; j++) emit_stmt(c, bb7[j], g_pre, g_indent + 1);
+        emit_iter_step_lead(c, body7, bn7, g_pre, g_indent + 1);
         g_c_loop_depth--;
         g_loop_exc_base = sv_lexc7; g_loop_rescue_base = sv_lexc7_rb; g_loop_ensure_base = sv_lens7;
         emit_indent(g_pre, g_indent); buf_puts(g_pre, "}\n");

@@ -1187,7 +1187,7 @@ int emit_transform_hash_expr(Compiler *c, int id, Buf *b) {
     buf_puts(&vb, dst);
   }
   else {
-    for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, g_indent + 1);
+    emit_iter_step_lead(c, body, bn - 1, g_pre, g_indent + 1);
     int save = g_indent; g_indent++;
     if (value_oint) { emit_oint_expr(c, lastv, TY_INT, &vb); bret = TY_INT; }
     else if (box_result || oset_v) { emit_boxed(c, lastv, &vb); bret = TY_POLY; }
@@ -2641,7 +2641,7 @@ int emit_slice_when_chunk_inspect_expr(Compiler *c, int id, Buf *b) {
     TyKind pta = lva ? lva->type : TY_UNKNOWN, ptb = lvb ? lvb->type : TY_UNKNOWN;
     if (lva && lva->type != TY_POLY) lv_set_storage_type(lva, TY_INT);
     if (lvb && lvb->type != TY_POLY) lv_set_storage_type(lvb, TY_INT);
-    for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, g_indent + 2);
+    emit_iter_step_lead(c, body, bn - 1, g_pre, g_indent + 2);
     int save = g_indent; g_indent += 2;
     Buf cb; memset(&cb, 0, sizeof cb); emit_expr(c, bb[bn - 1], &cb); g_indent = save;
     if (lva) lv_set_storage_type(lva, pta);
@@ -2690,7 +2690,7 @@ int emit_slice_when_chunk_inspect_expr(Compiler *c, int id, Buf *b) {
   LocalVar *lv0 = bsc ? scope_local(bsc, p0n) : NULL;
   TyKind pt0 = lv0 ? lv0->type : TY_UNKNOWN;
   if (lv0) lv_set_storage_type(lv0, TY_INT);
-  for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, g_indent + 1);
+  emit_iter_step_lead(c, body, bn - 1, g_pre, g_indent + 1);
   int save = g_indent; g_indent++;
   Buf kb; memset(&kb, 0, sizeof kb); emit_expr(c, bb[bn - 1], &kb); g_indent = save;
   if (lv0) lv_set_storage_type(lv0, pt0);
@@ -2823,7 +2823,7 @@ static int emit_hash_chunk_first_class(Compiler *c, int pr, Repr hr, int block, 
     g_indent = save;
   }
   else {
-    for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, g_indent + 1);
+    emit_iter_step_lead(c, body, bn - 1, g_pre, g_indent + 1);
     int save = g_indent; g_indent++;
     Buf kb; memset(&kb, 0, sizeof kb); emit_boxed(c, bb[bn - 1], &kb); g_indent = save;
     emit_indent(g_pre, g_indent + 1);
@@ -2918,7 +2918,7 @@ int emit_chunk_first_class_expr(Compiler *c, int id, Buf *b) {
   LocalVar *lv0 = bsc ? scope_local(bsc, p0n) : NULL;
   TyKind pt0 = lv0 ? lv0->type : TY_UNKNOWN;
   if (lv0) lv_set_storage_type(lv0, TY_INT);
-  for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, g_indent + 1);
+  emit_iter_step_lead(c, body, bn - 1, g_pre, g_indent + 1);
   int save = g_indent; g_indent++;
   Buf kb; memset(&kb, 0, sizeof kb); emit_expr(c, bb[bn - 1], &kb); g_indent = save;
   if (lv0) lv_set_storage_type(lv0, pt0);
@@ -3085,7 +3085,7 @@ int emit_chunk_while_expr(Compiler *c, int id, Buf *b) {
   TyKind pta = lva ? lva->type : TY_UNKNOWN, ptb = lvb ? lvb->type : TY_UNKNOWN;
   if (lva && lva->type != TY_POLY) lv_set_storage_type(lva, TY_INT);
   if (lvb && lvb->type != TY_POLY) lv_set_storage_type(lvb, TY_INT);
-  for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, g_indent + 2);
+  emit_iter_step_lead(c, body, bn - 1, g_pre, g_indent + 2);
   int save = g_indent; g_indent += 2;
   /* the block's value by Ruby's truth: a boxed one (`a.send(s, b)`) is no C
      scalar, and an Integer one is true even at 0 */
@@ -3269,7 +3269,7 @@ static int emit_chunk_family_runs(Compiler *c, int ck) {
       buf_puts(&kb, dst);
     }
     else {
-      for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, g_indent + 1);
+      emit_iter_step_lead(c, body, bn - 1, g_pre, g_indent + 1);
       int save = g_indent; g_indent += 1;
       emit_boxed(c, bb[bn - 1], &kb); g_indent = save;
     }
@@ -3297,7 +3297,7 @@ static int emit_chunk_family_runs(Compiler *c, int ck) {
     emit_chunk_elem_bind(c, ta, ti, p0, p1, ptb != TY_UNKNOWN, lva, lvb, at0, at1, pin_poly);
     Buf cb; memset(&cb, 0, sizeof cb);
     if (!emit_block_cond_next(c, block, g_indent + 1, &cb)) {
-      for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, g_indent + 1);
+      emit_iter_step_lead(c, body, bn - 1, g_pre, g_indent + 1);
       int save = g_indent; g_indent += 1;
       emit_cond(c, bb[bn - 1], &cb); g_indent = save;
     }
@@ -3345,7 +3345,7 @@ static int emit_chunk_family_runs(Compiler *c, int ck) {
     }
     Buf cb; memset(&cb, 0, sizeof cb);
     if (!emit_block_cond_next(c, block, g_indent + 2, &cb)) {
-      for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, g_indent + 2);
+      emit_iter_step_lead(c, body, bn - 1, g_pre, g_indent + 2);
       int save = g_indent; g_indent += 2;
       emit_cond(c, bb[bn - 1], &cb); g_indent = save;
     }
@@ -4269,7 +4269,8 @@ int emit_reduce_block_expr(Compiler *c, int id, Buf *b) {
   g_ie_next_var = nx_acc; g_ie_res_poly = (acc_ty == TY_POLY);
   g_c_loop_depth++;
   /* block locals are fresh for every step, and a redo re-runs the step
-     after the parameters' setup */
+     after the parameters' setup; a long pass polls first (emit_step_polls) */
+  emit_step_polls(c, nt_ref(nt, block, "body"), b, 0);
   emit_block_locals_reset(c, block, b, 0);
   int rd_lbl = emit_iter_step_stmts(c, nt_ref(nt, block, "body"), b, 0, " ");
   /* The tail's own prelude (a proc call publishing its args to the boxed
@@ -4440,6 +4441,16 @@ int emit_iter_step_stmts(Compiler *c, int body, Buf *b, int indent, const char *
   return rd_lbl;
 }
 
+/* The first `n` statements of a step's body (all but the tail its caller
+   reads as the answer, or all of them), after the polls a long pass takes
+   (emit_step_polls): for the emitters that write a builtin iterator's step
+   in their own C loop. */
+void emit_iter_step_lead(Compiler *c, int body, int n, Buf *b, int indent) {
+  emit_step_polls(c, body, b, indent);
+  int bn = 0; const int *bb = body >= 0 ? nt_arr(c->nt, body, "body", &bn) : NULL;
+  for (int j = 0; j < n && j < bn; j++) emit_stmt(c, bb[j], b, indent);
+}
+
 /* A step's whole body as statements, its answer dropped, inside the
    iterator's own C loop (a `next` is its `continue`): the block's locals
    reset, then the body, with its own redo label after that setup. */
@@ -4447,6 +4458,7 @@ void emit_iter_step_body(Compiler *c, int block, Buf *b, int indent) {
   const NodeTable *nt = c->nt;
   int body = nt_ref(nt, block, "body");
   int bn = 0; const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
+  emit_step_polls(c, body, b, indent);
   emit_block_locals_reset(c, block, b, indent);
   int rd_lbl = emit_iter_step_stmts(c, body, b, indent, NULL);
   if (bn > 0) emit_stmt(c, bb[bn - 1], b, indent);
@@ -4469,6 +4481,7 @@ void step_arm_end(Compiler *c, int tok) {
    locals' reset, the statements), with the body's own redo label after
    that setup (g_redo_pending), where it had none. */
 void emit_iter_loop_stmts(Compiler *c, int body, Buf *b, int indent) {
+  emit_step_polls(c, body, b, indent);
   int lbl = (body >= 0 && subtree_has_own_redo(c->nt, body)) ? redo_label_push(body) : 0;
   if (lbl) g_redo_pending = lbl;
   int arm = step_arm_begin();
@@ -4540,7 +4553,7 @@ static void emit_iter_step_open_body(Compiler *c, int block, int want_poly, int 
     return;
   }
   emit_block_locals_reset(c, block, g_pre, indent);
-  for (int j = 0; j + 1 < bn; j++) emit_stmt(c, bb[j], g_pre, indent);
+  emit_iter_step_lead(c, body, bn - 1, g_pre, indent);
 }
 
 static TyKind emit_iter_step_tail_body(Compiler *c, const IterStep *st, Buf *vb);
@@ -5053,7 +5066,7 @@ int emit_each_with_index_terminal(Compiler *c, int id, Buf *b) {
      instead of going through emit_stmts, so reset explicitly) */
   if (block >= 0) emit_block_locals_reset(c, block, g_pre, din);
   if (is_each) {
-    for (int j = 0; j < bn; j++) emit_stmt(c, bb[j], g_pre, din);
+    emit_iter_step_lead(c, body, bn, g_pre, din);
   }
   else if (collect_pair && block < 0) {   /* to_a / entries */
     emit_indent(g_pre, din); buf_printf(g_pre, "sp_PolyArray_push(_t%d, ", tres);
@@ -5780,6 +5793,10 @@ void emit_block_value_into(Compiler *c, int block, const char *dest,
      around it holds across the block, g_one_held) */
   int held = g_one_held;
   g_one_held = 0;
+  /* (a builtin iterator's step, whose pass may be long, polls first:
+     emit_step_polls; as does a block run once, `tap`'s, where one poll is
+     harmless) */
+  emit_step_polls(c, block >= 0 ? nt_ref(c->nt, block, "body") : -1, g_pre, indent);
   emit_block_value_into_inner(c, block, dest, want_poly, indent);
   g_one_held = held;
 }
@@ -6453,7 +6470,7 @@ int emit_collect_expr(Compiler *c, int id, Buf *b) {
        push below reads it, where the bare `continue` of a tail read skipped
        the push and dropped the element */
     int nx2 = spair < 0 && bn2 >= 1 && fold_body_has_next(c, body2);
-    if (!nx2) for (int j2 = 0; j2 < bn2 - 1; j2++) emit_stmt(c, bb2[j2], g_pre, g_indent + 2);
+    if (!nx2) emit_iter_step_lead(c, body2, bn2 - 1, g_pre, g_indent + 2);
     int saveIndent2 = g_indent; g_indent = g_indent + 2;
     Buf vb2; memset(&vb2, 0, sizeof vb2);
     if (spair >= 0 && bn2 >= 1) {
@@ -7269,7 +7286,7 @@ int emit_enum_find_expr(Compiler *c, int id, Buf *b) {
     buf_puts(g_pre, ";\n");
   }
   { int sv_in = g_indent; g_indent = din;
-    for (int j = 0; j + 1 < bn; j++) emit_stmt(c, bb[j], g_pre, din);
+    emit_iter_step_lead(c, body, bn - 1, g_pre, din);
     if (bn > 0 || pblk >= 0) {
       int tt = ++g_tmp;
       if (pblk >= 0) {
@@ -7503,7 +7520,7 @@ int emit_find_index_poly_expr(Compiler *c, int id, Buf *b) {
     emit_indent(g_pre, bi);
     emit_block_param_from_boxed(c, p0, pt, src, g_pre);
   }
-  for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, bi);
+  emit_iter_step_lead(c, body, bn - 1, g_pre, bi);
   int sv = g_indent; g_indent = bi;
   Buf cb; memset(&cb, 0, sizeof cb); emit_expr(c, bb[bn - 1], &cb);
   g_indent = sv;
@@ -7649,7 +7666,7 @@ int emit_predicate_expr(Compiler *c, int id, Buf *b) {
       nx_used = 1;
     }
     if (!nx_used) {
-      for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, bodyIndentP);
+      emit_iter_step_lead(c, body, bn - 1, g_pre, bodyIndentP);
       g_indent = bodyIndentP;
       emit_expr(c, bb[bn - 1], &vb);
       g_indent = saveIndentP;
@@ -7735,7 +7752,7 @@ int emit_predicate_expr(Compiler *c, int id, Buf *b) {
     nx2 = 1;
   }
   if (!nx2) {
-    for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, bodyIndent);
+    emit_iter_step_lead(c, body, bn - 1, g_pre, bodyIndent);
     g_indent = bodyIndent;
     emit_expr(c, bb[bn - 1], &vb);
     g_indent = saveIndent;

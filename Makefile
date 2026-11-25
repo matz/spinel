@@ -5347,6 +5347,13 @@ infer-test-1: $(SPINEL) $(SP_RT_LIB)
 	awk '/^[a-z].* sp_total\(.*\{$$/,/^}/' "$$tmp/lbp.c" | awk 'f { print; exit } /while \(\(\{/ { f = 1 }' | grep -qE 'SP_SAFEPOINT_POLL|SP_FIN_POLL|sp_fin_run_pending' && { echo "infer-test: FAIL (a loop that reads a[i] untested polls between its test and the read)"; ok=0; }; \
 	awk '/^[a-z].* sp_back\(.*\{$$/,/^}/' "$$tmp/lbp.c" | grep -qE 'sp_fin_run_pending\(\), _SP_HCR' || { echo "infer-test: FAIL (a cached loop does not read its headers again after a finalizer runs)"; ok=0; }; \
 	$(SPINEL) test/loop_chunked_polls.rb -c --no-line-map -o "$$tmp/lcr.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (loop_chunked_polls: -c)"; ok=0; }; \
+	$(SPINEL) test/loop_slow_pass_trap.rb -c --no-line-map -o "$$tmp/lst.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (loop_slow_pass_trap: -c)"; ok=0; }; \
+	awk '/^[a-z].* sp_W_top_map\(.*\{$$/,/^}/' "$$tmp/lst.c" | grep -q 'sp_sig_' || { echo "infer-test: FAIL (a map whose pass reads what a String holds takes no signal poll at its step)"; ok=0; }; \
+	awk '/^[a-z].* sp_tight_sum\(.*\{$$/,/^}/' "$$tmp/lst.c" | grep -q 'sp_sig_' && { echo "infer-test: FAIL (a map whose pass reads no String's characters takes a signal poll at each step)"; ok=0; }; \
+	$(SPINEL) test/slow_pass_safepoint.rb -c --no-line-map -o "$$tmp/sps.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (slow_pass_safepoint: -c)"; ok=0; }; \
+	[ "$$(awk '/^[a-z].* sp_nested_walk\(.*\{$$/,/^}/' "$$tmp/sps.c" | grep -c 'SP_SAFEPOINT_POLL')" -ge 2 ] || { echo "infer-test: FAIL (a nested walk whose pass reads what a String holds leaves its safepoint poll to the enclosing loop)"; ok=0; }; \
+	awk '/^[a-z].* sp_slow_map\(.*\{$$/,/^}/' "$$tmp/sps.c" | grep -q 'SP_SAFEPOINT_POLL' || { echo "infer-test: FAIL (a map whose pass reads what a String holds takes no safepoint poll at its step)"; ok=0; }; \
+	awk '/^[a-z].* sp_tight_map\(.*\{$$/,/^}/' "$$tmp/sps.c" | grep -qE 'SP_SAFEPOINT_POLL|sp_fin_pending|sp_sig_' && { echo "infer-test: FAIL (a map whose pass reads no String's characters polls at each step)"; ok=0; }; \
 	awk '/^[a-z].* sp_psum\(.*\{$$/,/^}/' "$$tmp/lcr.c" | grep -qE '\} while \(SP_CHUNK_MORE\(lv_[ij], <, _pr[0-9]+\)\);' || { echo "infer-test: FAIL (a proved loop in a threaded program polls at each pass, not once per run)"; ok=0; }; \
 	awk '/^[a-z].* sp_Box_sum_to\(.*\{$$/,/^}/' "$$tmp/lcr.c" | grep -qE '\} while \(SP_CHUNK_MORE\(lv_[ij], <, _pr[0-9]+\)\);' || { echo "infer-test: FAIL (a loop counted to an instance variable's bound polls at each pass, not once per run)"; ok=0; }; \
 	awk '/^[a-z].* sp_Box_sum_lowered\(.*\{$$/,/^}/' "$$tmp/lcr.c" | grep -q '_pr[0-9]* = ' && { echo "infer-test: FAIL (a loop whose body lowers its bound with &&= runs in chunks to the old bound)"; ok=0; }; \

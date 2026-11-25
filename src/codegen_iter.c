@@ -4099,8 +4099,7 @@ int next_is_block_value(Compiler *c, int next) {
 /* A loop that may not end (loop, an unproved while) polls for a delivered
    signal at its back-edge; a counted one only when no loop of its function
    encloses it, so an inner counted loop keeps no poll in its body (#9222),
-   unless it is a pure one a rescue of Interrupt keeps from its pure region
-   (loop_body_polls_alone) */
+   unless loop_keeps_sig_poll */
 int g_loop_uncounted = 0, g_poll_loop_nest = 0;
 /* The signal poll of the loop whose body is being emitted sits at its latch
    (emit_loop_body): after the body, and ahead of each next and redo that
@@ -4121,9 +4120,25 @@ void emit_loop_latch_poll(Buf *b, const char *end) {
    the loop's own included. With `latch`, the signal poll is left to the
    caller, who puts it at the loop's latch; the answer says whether the loop
    takes one. */
+static int emit_polls(Compiler *c, int body, Buf *b, int indent, int uncounted, int nest, int latch, int quiet);
 int emit_loop_polls(Compiler *c, int body, Buf *b, int indent, int uncounted, int nest, int latch) {
   /* an array's walk an enclosing loop polls for (hcv_begin) */
   int quiet = g_loop_quiet; g_loop_quiet = 0;
+  return emit_polls(c, body, b, indent, uncounted, nest, latch, quiet);
+}
+/* A builtin iterator's step (map, select, inject, sort_by, each_char, ...
+   in its own C loop, emitted by the step helpers) whose pass may take as
+   long as what a String holds (loop_pass_grows) polls at the step's head,
+   as a loop body does: one pass may take milliseconds, so the iterator
+   would hold a collection, a thread switch or a signal for the whole walk.
+   Any other step takes none: its pass is short, and the iterator yields,
+   as a runtime call over the array does, when it returns. Nor does a block
+   the runtime calls back (`merge`'s, for a key both hashes hold): a poll
+   there would run a collection inside the runtime's own walk. */
+void emit_step_polls(Compiler *c, int body, Buf *b, int indent) {
+  if (body >= 0 && loop_pass_grows(c, body)) emit_polls(c, body, b, indent, 0, g_poll_loop_nest + 1, 0, 0);
+}
+static int emit_polls(Compiler *c, int body, Buf *b, int indent, int uncounted, int nest, int latch, int quiet) {
   /* (a block loop's region marks its own polls: hc_iter_poll_mark) */
   const char *mo = hc_iter_poll_mark(nest, 0), *mc = hc_iter_poll_mark(nest, 1);
   if (g_uses_threads && !quiet) { emit_indent(b, indent); buf_printf(b, "%sif (SP_UNLIKELY(SP_SAFEPOINT_POLL())) sp_safepoint()%s;%s\n", mo, hc_mark(), mc); }
@@ -4132,7 +4147,7 @@ int emit_loop_polls(Compiler *c, int body, Buf *b, int indent, int uncounted, in
      the cache reloads after one runs, as after a safepoint. */
   if (g_uses_finalizers && !quiet) { emit_indent(b, indent); buf_printf(b, "%sif (SP_UNLIKELY(SP_ATOMIC_LOAD(&sp_fin_pending_flag, __ATOMIC_RELAXED))) sp_fin_run_pending()%s;%s\n", mo, hc_mark(), mc); }
   /* and for a delivered Signal.trap, Ruby code as a finalizer is */
-  if (sig_polls() && (uncounted || nest == 1 || loop_body_polls_alone(c, body)) && !poll_in_pure(c, body)) {
+  if (sig_polls() && (uncounted || nest == 1 || loop_keeps_sig_poll(c, body)) && !poll_in_pure(c, body)) {
     if (latch) return 1;
     emit_indent(b, indent); buf_printf(b, "%s%s%s;%s\n", mo, sig_poll_stmt(), hc_mark(), mc);
   }
@@ -4552,7 +4567,7 @@ int emit_takewhile_with_index(Compiler *c, int id, Buf *b) {
     if (p1lv->type == TY_POLY) buf_printf(g_pre, "lv_%s = sp_box_int(_t%d + _t%d);\n", rename_local(p1), ti, toff);
     else buf_printf(g_pre, "lv_%s = _t%d + _t%d;\n", rename_local(p1), ti, toff);
   }
-  for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, g_indent + 1);
+  emit_iter_step_lead(c, body, bn - 1, g_pre, g_indent + 1);
   int sv = g_indent; g_indent++;
   Buf cb; memset(&cb, 0, sizeof cb); emit_cond(c, bb[bn - 1], &cb); g_indent = sv;
   emit_indent(g_pre, g_indent + 1);

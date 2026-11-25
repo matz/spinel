@@ -61,6 +61,13 @@ is a user guarantee.
   A loop that counts to an array's length or to an Integer bound over a body
   that runs no code polls once per run of up to 1024 passes, ahead of its
   test, so it yields up to that many of those passes late.
+  A builtin iterator's block (`map`, `select`, `inject`, `sort_by`,
+  `each_char`, ...) runs in the iterator's own loop, which takes no poll:
+  the iterator yields when it returns, as a runtime call over the array
+  does. A pass that reads what a String holds (its `length`, a `count`, an
+  `include?`, a comparison, a case conversion, ...), whose time grows with
+  the String, polls at each pass instead, in such a step and in a nested
+  loop alike, so a walk over long Strings yields within one pass.
   The preemption signal is `SIGURG`, overridable with
   `SPINEL_PREEMPT_SIGNAL`.
 - **The single-threaded archive is unchanged.** A program that never uses

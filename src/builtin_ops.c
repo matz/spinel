@@ -2285,10 +2285,10 @@ static const BuiltinOp bop_rows[] = {
      functions, for the slot nothing tests ahead of the call (an ivar only
      other writes fill, ivar_nil_recv_guard) */
   { TY_STRING, "encoding",        0,   0, BF_ANY,      TY_POLY,       BOPE_TEMPLATE, "sp_box_encoding(sp_str_is_binary(sp_nil_recv_named($r, \"encoding\")) ? sp_encoding_binary() : sp_encoding_utf8())", 0 },  /* an Encoding value */
-  { TY_STRING, "upcase",          0, 127, BF_ANY,      TY_STRING,     BOPE_NONE },
-  { TY_STRING, "downcase",        0, 127, BF_ANY,      TY_STRING,     BOPE_NONE },
-  { TY_STRING, "capitalize",      0, 127, BF_ANY,      TY_STRING,     BOPE_NONE },
-  { TY_STRING, "swapcase",        0, 127, BF_ANY,      TY_STRING,     BOPE_NONE },
+  { TY_STRING, "upcase",          0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_WALKS_RECV },
+  { TY_STRING, "downcase",        0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_WALKS_RECV },
+  { TY_STRING, "capitalize",      0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_WALKS_RECV },
+  { TY_STRING, "swapcase",        0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_WALKS_RECV },
   { TY_STRING, "delete_prefix",   1,   1, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_delete_prefix($r, $s0)", 0 },
   { TY_STRING, "delete_suffix",   1,   1, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_delete_suffix($r, $s0)", 0 },
   { TY_STRING, "strip",           1, 127, BF_ANY,      TY_STRING,     BOPE_STR_SET_N, NULL, 0 },
@@ -2300,24 +2300,24 @@ static const BuiltinOp bop_rows[] = {
   { TY_STRING, "chomp",           0, 127, BF_ANY,      TY_STRING,     BOPE_NONE },
   { TY_STRING, "chr",             0, 127, BF_ANY,      TY_STRING,     BOPE_NONE },
   { TY_STRING, "clamp",           0, 127, BF_ANY,      TY_STRING,     BOPE_NONE },
-  { TY_STRING, "squeeze",         2, 127, BF_ANY,      TY_STRING,     BOPE_STR_SET_N, NULL, 0 },
-  { TY_STRING, "squeeze",         0,   0, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_squeeze($r)", 0 },
-  { TY_STRING, "squeeze",         1,   1, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_squeeze_chars($r, $s0)", 0 },
-  { TY_STRING, "squeeze",         0, 127, BF_ANY,      TY_STRING,     BOPE_NONE },
-  { TY_STRING, "tr",              2,   2, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_tr($r, $s0, $s1)", 0 },
-  { TY_STRING, "tr",              0, 127, BF_ANY,      TY_STRING,     BOPE_NONE },
-  { TY_STRING, "tr_s",            2,   2, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_tr_s($r, $s0, $s1)", 0 },
-  { TY_STRING, "tr_s",            0, 127, BF_ANY,      TY_STRING,     BOPE_NONE },
+  { TY_STRING, "squeeze",         2, 127, BF_ANY,      TY_STRING,     BOPE_STR_SET_N, NULL, 0, 0, BOPF_WALKS_RECV },
+  { TY_STRING, "squeeze",         0,   0, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_squeeze($r)", 0, 0, BOPF_WALKS_RECV },
+  { TY_STRING, "squeeze",         1,   1, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_squeeze_chars($r, $s0)", 0, 0, BOPF_WALKS_RECV },
+  { TY_STRING, "squeeze",         0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_WALKS_RECV },
+  { TY_STRING, "tr",              2,   2, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_tr($r, $s0, $s1)", 0, 0, BOPF_WALKS_RECV },
+  { TY_STRING, "tr",              0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_WALKS_RECV },
+  { TY_STRING, "tr_s",            2,   2, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_tr_s($r, $s0, $s1)", 0, 0, BOPF_WALKS_RECV },
+  { TY_STRING, "tr_s",            0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_WALKS_RECV },
   { TY_STRING, "succ",            0, 127, BF_ANY,      TY_STRING,     BOPE_NONE },
   { TY_STRING, "next",            0, 127, BF_ANY,      TY_STRING,     BOPE_NONE },
-  { TY_STRING, "delete",          2, 127, BF_ANY,      TY_STRING,     BOPE_STR_SET_N, NULL, 0 },
-  { TY_STRING, "delete",          1,   1, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_delete($r, $s0)", 0 },
-  { TY_STRING, "delete",          0, 127, BF_ANY,      TY_STRING,     BOPE_NONE },
-  { TY_STRING, "scan", 1, 1, BF_REQUIRED, TY_STRING, BOPE_NONE, NULL, 0, 0, BOPF_SELF },
+  { TY_STRING, "delete",          2, 127, BF_ANY,      TY_STRING,     BOPE_STR_SET_N, NULL, 0, 0, BOPF_WALKS_RECV },
+  { TY_STRING, "delete",          1,   1, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_delete($r, $s0)", 0, 0, BOPF_WALKS_RECV },
+  { TY_STRING, "delete",          0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_WALKS_RECV },
+  { TY_STRING, "scan", 1, 1, BF_REQUIRED, TY_STRING, BOPE_NONE, NULL, 0, 0, BOPF_SELF | BOPF_WALKS_RECV },
   /* Pattern analysis determines the result's element shape. */
-  { TY_STRING, "scan", 1, 1, BF_NONE, TY_UNKNOWN, BOPE_STRING_SCAN_CHECKED, NULL, 0, 0, BOPF_INFERRED },  /* typed from the pattern's source (infer_string_recv_call) */
-  { TY_STRING, "slice!", 1, 2, BF_ANY, TY_STRING, BOPE_STRING_SLICE, 0, 0, 0, BOPF_MAY_NIL, 7 },
-  { TY_STRING, "slice!",          0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_MAY_NIL },  /* removed part, or nil */
+  { TY_STRING, "scan", 1, 1, BF_NONE, TY_UNKNOWN, BOPE_STRING_SCAN_CHECKED, NULL, 0, 0, BOPF_INFERRED | BOPF_WALKS_RECV },  /* typed from the pattern's source (infer_string_recv_call) */
+  { TY_STRING, "slice!", 1, 2, BF_ANY, TY_STRING, BOPE_STRING_SLICE, 0, 0, 0, BOPF_MAY_NIL | BOPF_WALKS_RECV, 7 },
+  { TY_STRING, "slice!",          0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_MAY_NIL | BOPF_WALKS_RECV },  /* removed part, or nil */
   { TY_STRING, "[]",              0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_MAY_NIL },
   { TY_STRING, "slice",           0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_MAY_NIL },
   { TY_STRING, "byteslice",       2,   2, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_byteslice($r, $i0, $i1)", 0, 0, BOPF_MAY_NIL },
@@ -2331,24 +2331,24 @@ static const BuiltinOp bop_rows[] = {
   { TY_STRING, "+@",              0,   0, BF_NONE,     TY_STRBUF,     BOPE_TEMPLATE, "sp_String_uplus($S)", 0, 0, BOPF_SELF_CLASS },
   { TY_STRING, "b",               0,   0, BF_ANY,      TY_STRBUF,     BOPE_TEMPLATE, "sp_String_binary_copy($r)", 0 },
   { TY_STRING, "b",               0, 127, BF_ANY,      TY_STRING,     BOPE_NONE },
-  { TY_STRING, "encode",          0,   0, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_dup((const char *)sp_nil_recv_named($r, \"encode\"))", 0, 0, BOPF_KEYWORDS },  /* the receiver, so nil raises */
-  { TY_STRING, "encode",          0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_KEYWORDS },
-  { TY_STRING, "encode!",         0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF | BOPF_KEYWORDS },
-  { TY_STRING, "dump",            0,   0, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_dump($r)", 0 },
-  { TY_STRING, "undump",          0,   0, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_undump($r)", 0 },
-  { TY_STRING, "scrub",           0,   0, BF_NONE,     TY_STRING,     BOPE_TEMPLATE, "sp_str_scrub($r, 0)", 0 },
-  { TY_STRING, "scrub",           0,   1, BF_REQUIRED, TY_STRING,     BOPE_STRING_SCRUB_BLOCK },
-  { TY_STRING, "scrub",           0, 127, BF_NONE,     TY_STRING,     BOPE_NONE },
-  { TY_STRING, "scrub!",          0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF },
+  { TY_STRING, "encode",          0,   0, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_dup((const char *)sp_nil_recv_named($r, \"encode\"))", 0, 0, BOPF_KEYWORDS | BOPF_WALKS_RECV },  /* the receiver, so nil raises */
+  { TY_STRING, "encode",          0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_KEYWORDS | BOPF_WALKS_RECV },
+  { TY_STRING, "encode!",         0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF | BOPF_KEYWORDS | BOPF_WALKS_RECV },
+  { TY_STRING, "dump",            0,   0, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_dump($r)", 0, 0, BOPF_WALKS_RECV },
+  { TY_STRING, "undump",          0,   0, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_undump($r)", 0, 0, BOPF_WALKS_RECV },
+  { TY_STRING, "scrub",           0,   0, BF_NONE,     TY_STRING,     BOPE_TEMPLATE, "sp_str_scrub($r, 0)", 0, 0, BOPF_WALKS_RECV },
+  { TY_STRING, "scrub",           0,   1, BF_REQUIRED, TY_STRING,     BOPE_STRING_SCRUB_BLOCK, NULL, 0, 0, BOPF_WALKS_RECV },
+  { TY_STRING, "scrub",           0, 127, BF_NONE,     TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_WALKS_RECV },
+  { TY_STRING, "scrub!",          0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF | BOPF_WALKS_RECV },
   { TY_STRING, "crypt",           1,   1, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_crypt($r, $s0)", 0 },
   { TY_STRING, "crypt",           0, 127, BF_ANY,      TY_STRING,     BOPE_NONE },
   /* index: a String or a Regexp needle, both an sp_oint */
-  { TY_STRING, "index",           0, 127, BF_ANY,      TY_INT,        BOPE_NONE },
-  { TY_STRING, "rindex",          0, 127, BF_ANY,      TY_INT,        BOPE_NONE },
+  { TY_STRING, "index",           0, 127, BF_ANY,      TY_INT,        BOPE_NONE, NULL, 0, 0, BOPF_WALKS_RECV },
+  { TY_STRING, "rindex",          0, 127, BF_ANY,      TY_INT,        BOPE_NONE, NULL, 0, 0, BOPF_WALKS_RECV },
   { TY_STRING, "to_i",            0, 127, BF_ANY,      TY_INT,        BOPE_NONE },
-  { TY_STRING, "count",           2, 127, BF_ANY,      TY_INT,        BOPE_STR_SET_N, NULL, 0 },
-  { TY_STRING, "count",           1,   1, BF_ANY,      TY_INT,        BOPE_TEMPLATE, "sp_str_count($r, $s0)", 0 },
-  { TY_STRING, "count",           0, 127, BF_ANY,      TY_INT,        BOPE_NONE },
+  { TY_STRING, "count",           2, 127, BF_ANY,      TY_INT,        BOPE_STR_SET_N, NULL, 0, 0, BOPF_WALKS_RECV },
+  { TY_STRING, "count",           1,   1, BF_ANY,      TY_INT,        BOPE_TEMPLATE, "sp_str_count($r, $s0)", 0, 0, BOPF_WALKS_RECV },
+  { TY_STRING, "count",           0, 127, BF_ANY,      TY_INT,        BOPE_NONE, NULL, 0, 0, BOPF_WALKS_RECV },
   { TY_STRING, "oct",             0,   0, BF_ANY,      TY_INT,        BOPE_TEMPLATE, "sp_str_oct($r)", 0 },
   { TY_STRING, "oct",             0, 127, BF_ANY,      TY_INT,        BOPE_NONE },
   { TY_STRING, "hex",             0,   0, BF_ANY,      TY_INT,        BOPE_TEMPLATE, "sp_str_to_i_base(sp_nil_recv_named($r, \"hex\"), 16)", 0 },  /* to_i(16)'s function, which reads nil as "" */
@@ -2358,31 +2358,31 @@ static const BuiltinOp bop_rows[] = {
   { TY_STRING, "bytesize",        0, 127, BF_ANY,      TY_INT,        BOPE_TEMPLATE, "sp_str_bytesize_m($r)", 0 },
   { TY_STRING, "setbyte",         0, 127, BF_ANY,      TY_INT,        BOPE_NONE },
   { TY_STRING, "getbyte",         0, 127, BF_ANY,      TY_INT,        BOPE_NONE },
-  { TY_STRING, "sum",             0,   0, BF_ANY,      TY_INT,        BOPE_TEMPLATE, "({ const char *_t$t = $r; sp_int _t$u = 16; sp_str_sum_bits(_t$t, _t$u); })", 0 },
-  { TY_STRING, "sum",             1,   1, BF_ANY,      TY_INT,        BOPE_TEMPLATE, "({ const char *_t$t = $r; sp_int _t$u = $i0; sp_str_sum_bits(_t$t, _t$u); })", 0 },
-  { TY_STRING, "sum",             0,   1, BF_ANY,      TY_INT,        BOPE_NONE },
-  { TY_STRING, "partition",       0, 127, BF_ANY,      TY_STR_ARRAY,  BOPE_NONE },
-  { TY_STRING, "rpartition",      0, 127, BF_ANY,      TY_STR_ARRAY,  BOPE_NONE },
+  { TY_STRING, "sum",             0,   0, BF_ANY,      TY_INT,        BOPE_TEMPLATE, "({ const char *_t$t = $r; sp_int _t$u = 16; sp_str_sum_bits(_t$t, _t$u); })", 0, 0, BOPF_WALKS_RECV },
+  { TY_STRING, "sum",             1,   1, BF_ANY,      TY_INT,        BOPE_TEMPLATE, "({ const char *_t$t = $r; sp_int _t$u = $i0; sp_str_sum_bits(_t$t, _t$u); })", 0, 0, BOPF_WALKS_RECV },
+  { TY_STRING, "sum",             0,   1, BF_ANY,      TY_INT,        BOPE_NONE, NULL, 0, 0, BOPF_WALKS_RECV },
+  { TY_STRING, "partition",       0, 127, BF_ANY,      TY_STR_ARRAY,  BOPE_NONE, NULL, 0, 0, BOPF_WALKS_RECV },
+  { TY_STRING, "rpartition",      0, 127, BF_ANY,      TY_STR_ARRAY,  BOPE_NONE, NULL, 0, 0, BOPF_WALKS_RECV },
   /* the value-form mutators: the post-mutation string; the no-change bang
      contract carries nil as NULL through the nullable string. gsub! with a
      pattern alone and no block is an Enumerator of the matches, as gsub's. */
-  { TY_STRING, "gsub!",           1,   1, BF_NONE,     TY_ENUMERATOR, BOPE_NONE },
-  { TY_STRING, "gsub!",           0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF_OR_NIL },
-  { TY_STRING, "sub!",            0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF_OR_NIL },
-  { TY_STRING, "upcase!",         0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF_OR_NIL },
-  { TY_STRING, "downcase!",       0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF_OR_NIL },
-  { TY_STRING, "capitalize!",     0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF_OR_NIL },
-  { TY_STRING, "swapcase!",       0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF_OR_NIL },
+  { TY_STRING, "gsub!",           1,   1, BF_NONE,     TY_ENUMERATOR, BOPE_NONE, NULL, 0, 0, BOPF_WALKS_RECV },
+  { TY_STRING, "gsub!",           0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF_OR_NIL | BOPF_WALKS_RECV },
+  { TY_STRING, "sub!",            0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF_OR_NIL | BOPF_WALKS_RECV },
+  { TY_STRING, "upcase!",         0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF_OR_NIL | BOPF_WALKS_RECV },
+  { TY_STRING, "downcase!",       0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF_OR_NIL | BOPF_WALKS_RECV },
+  { TY_STRING, "capitalize!",     0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF_OR_NIL | BOPF_WALKS_RECV },
+  { TY_STRING, "swapcase!",       0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF_OR_NIL | BOPF_WALKS_RECV },
   { TY_STRING, "strip!",          0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF_OR_NIL },
   { TY_STRING, "lstrip!",         0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF_OR_NIL },
   { TY_STRING, "rstrip!",         0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF_OR_NIL },
   { TY_STRING, "chomp!",          0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF_OR_NIL },
   { TY_STRING, "chop!",           0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF_OR_NIL },
-  { TY_STRING, "squeeze!",        0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF_OR_NIL },
-  { TY_STRING, "tr!",             0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF_OR_NIL },
-  { TY_STRING, "delete!",         0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF_OR_NIL },
-  { TY_STRING, "reverse!",        0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF },
-  { TY_STRING, "tr_s!",           0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF_OR_NIL },
+  { TY_STRING, "squeeze!",        0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF_OR_NIL | BOPF_WALKS_RECV },
+  { TY_STRING, "tr!",             0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF_OR_NIL | BOPF_WALKS_RECV },
+  { TY_STRING, "delete!",         0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF_OR_NIL | BOPF_WALKS_RECV },
+  { TY_STRING, "reverse!",        0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF | BOPF_WALKS_RECV },
+  { TY_STRING, "tr_s!",           0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF_OR_NIL | BOPF_WALKS_RECV },
   { TY_STRING, "delete_prefix!",  0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF_OR_NIL },
   { TY_STRING, "delete_suffix!",  0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF_OR_NIL },
   { TY_STRING, "dedup",           0,   0, BF_ANY,      TY_STRING,     BOPE_STRING_DEDUP, NULL, 0, 0, BOPF_SELF_CLASS },
@@ -2405,43 +2405,43 @@ static const BuiltinOp bop_rows[] = {
   { TY_STRING, "insert",          2,   2, BF_ANY,      TY_STRING,     BOPE_STRING_INSERT, NULL, 0, 0, BOPF_SELF | BOPF_ARGS_BUILTIN, 7 },
   { TY_STRING, "insert",          0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF | BOPF_ARGS_BUILTIN },
   { TY_STRING, "replace",         0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF | BOPF_ARGS_BUILTIN },
-  { TY_STRING, "ascii_only?",     0,   0, BF_ANY,      TY_BOOL,       BOPE_TEMPLATE, "sp_str_ascii_only(sp_nil_recv_named($r, \"ascii_only?\"))", 0 },  /* as encoding's row */
-  { TY_STRING, "ascii_only?",     0, 127, BF_ANY,      TY_BOOL,       BOPE_NONE },
-  { TY_STRING, "valid_encoding?", 0,   0, BF_ANY,      TY_BOOL,       BOPE_TEMPLATE, "sp_str_valid_encoding($r)", 0 },
-  { TY_STRING, "valid_encoding?", 0, 127, BF_ANY,      TY_BOOL,       BOPE_NONE },
+  { TY_STRING, "ascii_only?",     0,   0, BF_ANY,      TY_BOOL,       BOPE_TEMPLATE, "sp_str_ascii_only(sp_nil_recv_named($r, \"ascii_only?\"))", 0, 0, BOPF_WALKS_RECV },  /* as encoding's row */
+  { TY_STRING, "ascii_only?",     0, 127, BF_ANY,      TY_BOOL,       BOPE_NONE, NULL, 0, 0, BOPF_WALKS_RECV },
+  { TY_STRING, "valid_encoding?", 0,   0, BF_ANY,      TY_BOOL,       BOPE_TEMPLATE, "sp_str_valid_encoding($r)", 0, 0, BOPF_WALKS_RECV },
+  { TY_STRING, "valid_encoding?", 0, 127, BF_ANY,      TY_BOOL,       BOPE_NONE, NULL, 0, 0, BOPF_WALKS_RECV },
   { TY_STRING, "to_f",            0,   0, BF_ANY,      TY_FLOAT,      BOPE_TEMPLATE, "sp_str_to_f_cruby($r)", 0 },
   { TY_STRING, "to_f",            0, 127, BF_ANY,      TY_FLOAT,      BOPE_NONE },
   { TY_STRING, "to_r",            0,   0, BF_ANY,      TY_RATIONAL,   BOPE_TEMPLATE, "sp_str_to_r($r)", 0 },
   { TY_STRING, "to_c",            0,   0, BF_ANY,      TY_COMPLEX,    BOPE_TEMPLATE, "sp_str_to_c($r)", 0 },
   /* intern and to_sym: sp_sym_intern_n reads a NULL name, so a nil receiver
      raises ahead of it under the name as written (sp_nil_recv_named) */
-  { TY_STRING, "intern",          1, 127, BF_ANY,      TY_UNKNOWN,    BOPE_TEMPLATE, "({ const char *_t$t = sp_nil_recv_named($r, \"intern\"); sp_sym_intern_n(_t$t, sp_str_byte_len(_t$t)); })", 0 },
-  { TY_STRING, "intern",          0,   0, BF_ANY,      TY_SYMBOL,     BOPE_TEMPLATE, "({ const char *_t$t = sp_nil_recv_named($r, \"intern\"); sp_sym_intern_n(_t$t, sp_str_byte_len(_t$t)); })", 0 },
+  { TY_STRING, "intern",          1, 127, BF_ANY,      TY_UNKNOWN,    BOPE_TEMPLATE, "({ const char *_t$t = sp_nil_recv_named($r, \"intern\"); sp_sym_intern_n(_t$t, sp_str_byte_len(_t$t)); })", 0, 0, BOPF_WALKS_RECV },
+  { TY_STRING, "intern",          0,   0, BF_ANY,      TY_SYMBOL,     BOPE_TEMPLATE, "({ const char *_t$t = sp_nil_recv_named($r, \"intern\"); sp_sym_intern_n(_t$t, sp_str_byte_len(_t$t)); })", 0, 0, BOPF_WALKS_RECV },
   /* the iterators: blockless with no argument an Enumerator; with a block
      they iterate and answer the receiver */
-  { TY_STRING, "each_char",       0,   0, BF_NONE,     TY_ENUMERATOR, BOPE_NONE },
-  { TY_STRING, "each_char",       0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF },
-  { TY_STRING, "each_byte",       0,   0, BF_NONE,     TY_ENUMERATOR, BOPE_NONE },
-  { TY_STRING, "each_byte",       0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF },
-  { TY_STRING, "each_codepoint",  0,   0, BF_NONE,     TY_ENUMERATOR, BOPE_NONE },
-  { TY_STRING, "chars",           0, 127, BF_REQUIRED, TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF },
-  { TY_STRING, "chars",           0, 127, BF_ANY,      TY_STR_ARRAY,  BOPE_NONE },
-  { TY_STRING, "bytes",           0, 127, BF_REQUIRED, TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF },
-  { TY_STRING, "bytes",           0, 127, BF_ANY,      TY_INT_ARRAY,  BOPE_NONE },
-  { TY_STRING, "codepoints",      0,   0, BF_NONE,     TY_INT_ARRAY,  BOPE_TEMPLATE, "sp_str_codepoints($r)", 0 },
-  { TY_STRING, "codepoints",      0, 127, BF_REQUIRED, TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF },
-  { TY_STRING, "codepoints",      0, 127, BF_ANY,      TY_INT_ARRAY,  BOPE_NONE },
-  { TY_STRING, "split",           0,   0, BF_NONE,     TY_STR_ARRAY,  BOPE_TEMPLATE, "sp_str_split_ws($r)", 0 },
-  { TY_STRING, "split",           0, 127, BF_REQUIRED, TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF },
-  { TY_STRING, "split",           0, 127, BF_ANY,      TY_STR_ARRAY,  BOPE_NONE },
+  { TY_STRING, "each_char",       0,   0, BF_NONE,     TY_ENUMERATOR, BOPE_NONE, NULL, 0, 0, BOPF_WALKS_RECV },
+  { TY_STRING, "each_char",       0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF | BOPF_WALKS_RECV },
+  { TY_STRING, "each_byte",       0,   0, BF_NONE,     TY_ENUMERATOR, BOPE_NONE, NULL, 0, 0, BOPF_WALKS_RECV },
+  { TY_STRING, "each_byte",       0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF | BOPF_WALKS_RECV },
+  { TY_STRING, "each_codepoint",  0,   0, BF_NONE,     TY_ENUMERATOR, BOPE_NONE, NULL, 0, 0, BOPF_WALKS_RECV },
+  { TY_STRING, "chars",           0, 127, BF_REQUIRED, TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF | BOPF_WALKS_RECV },
+  { TY_STRING, "chars",           0, 127, BF_ANY,      TY_STR_ARRAY,  BOPE_NONE, NULL, 0, 0, BOPF_WALKS_RECV },
+  { TY_STRING, "bytes",           0, 127, BF_REQUIRED, TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF | BOPF_WALKS_RECV },
+  { TY_STRING, "bytes",           0, 127, BF_ANY,      TY_INT_ARRAY,  BOPE_NONE, NULL, 0, 0, BOPF_WALKS_RECV },
+  { TY_STRING, "codepoints",      0,   0, BF_NONE,     TY_INT_ARRAY,  BOPE_TEMPLATE, "sp_str_codepoints($r)", 0, 0, BOPF_WALKS_RECV },
+  { TY_STRING, "codepoints",      0, 127, BF_REQUIRED, TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF | BOPF_WALKS_RECV },
+  { TY_STRING, "codepoints",      0, 127, BF_ANY,      TY_INT_ARRAY,  BOPE_NONE, NULL, 0, 0, BOPF_WALKS_RECV },
+  { TY_STRING, "split",           0,   0, BF_NONE,     TY_STR_ARRAY,  BOPE_TEMPLATE, "sp_str_split_ws($r)", 0, 0, BOPF_WALKS_RECV },
+  { TY_STRING, "split",           0, 127, BF_REQUIRED, TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF | BOPF_WALKS_RECV },
+  { TY_STRING, "split",           0, 127, BF_ANY,      TY_STR_ARRAY,  BOPE_NONE, NULL, 0, 0, BOPF_WALKS_RECV },
   { TY_STRING, "upto",            1,   1, BF_ANY,      TY_STR_ARRAY,  BOPE_NONE },  /* blockless: the materialized sequence */
-  { TY_STRING, "unpack",          1,   1, BF_NONE,     TY_UNKNOWN,    BOPE_STRING_UNPACK, NULL, 0, 0, BOPF_INFERRED | BOPF_KEYWORDS },  /* typed from the format literal (an_unpack_lit_type) */
-  { TY_STRING, "unpack",          1,   2, BF_NONE,     TY_POLY_ARRAY, BOPE_NONE, NULL, 0, 0, BOPF_KEYWORDS },  /* a block yields each value (desugar_unpack_block) */
-  { TY_STRING, "sub",             2,   2, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_sub_str_str_hash($r, $e0, $e1)", 0, BOP_K(TY_STR_STR_HASH) },
-  { TY_STRING, "sub",             2,   2, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_replace_hash_values($r, $e0, sp_box_obj($e1, SP_BUILTIN_STR_POLY_HASH), 0)", 0, BOP_K(TY_STR_POLY_HASH) },
-  { TY_STRING, "sub",             2,   2, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_replace_hash_values($r, $e0, sp_box_obj($e1, SP_BUILTIN_STR_INT_HASH), 0)", 0, BOP_K(TY_STR_INT_HASH) },
-  { TY_STRING, "sub",             2,   2, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_sub($r, $s0, $s1)", 0 },
-  { TY_STRING, "sub",             0, 127, BF_ANY,      TY_STRING,     BOPE_NONE },
+  { TY_STRING, "unpack",          1,   1, BF_NONE,     TY_UNKNOWN,    BOPE_STRING_UNPACK, NULL, 0, 0, BOPF_INFERRED | BOPF_KEYWORDS | BOPF_WALKS_RECV },  /* typed from the format literal (an_unpack_lit_type) */
+  { TY_STRING, "unpack",          1,   2, BF_NONE,     TY_POLY_ARRAY, BOPE_NONE, NULL, 0, 0, BOPF_KEYWORDS | BOPF_WALKS_RECV },  /* a block yields each value (desugar_unpack_block) */
+  { TY_STRING, "sub",             2,   2, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_sub_str_str_hash($r, $e0, $e1)", 0, BOP_K(TY_STR_STR_HASH), BOPF_WALKS_RECV },
+  { TY_STRING, "sub",             2,   2, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_replace_hash_values($r, $e0, sp_box_obj($e1, SP_BUILTIN_STR_POLY_HASH), 0)", 0, BOP_K(TY_STR_POLY_HASH), BOPF_WALKS_RECV },
+  { TY_STRING, "sub",             2,   2, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_replace_hash_values($r, $e0, sp_box_obj($e1, SP_BUILTIN_STR_INT_HASH), 0)", 0, BOP_K(TY_STR_INT_HASH), BOPF_WALKS_RECV },
+  { TY_STRING, "sub",             2,   2, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_sub($r, $s0, $s1)", 0, 0, BOPF_WALKS_RECV },
+  { TY_STRING, "sub",             0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_WALKS_RECV },
   { TY_STRING, "center",          1,   1, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_center($r, $i0)", 0 },
   { TY_STRING, "center",          2,   2, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_center2($r, $i0, $s1)", 0 },
   { TY_STRING, "center",          0, 127, BF_ANY,      TY_STRING,     BOPE_NONE },
@@ -2452,31 +2452,31 @@ static const BuiltinOp bop_rows[] = {
   { TY_STRING, "rjust",           2,   2, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_rjust2($r, $i0, $s1)", 0 },
   { TY_STRING, "rjust",           0, 127, BF_ANY,      TY_STRING,     BOPE_NONE },
   { TY_STRING, "*",               0, 127, BF_ANY,      TY_STRING,     BOPE_NONE },
-  { TY_STRING, "to_sym",          0, 127, BF_ANY,      TY_SYMBOL,     BOPE_TEMPLATE, "({ const char *_t$t = sp_nil_recv_named($r, \"to_sym\"); sp_sym_intern_n(_t$t, sp_str_byte_len(_t$t)); })", 0 },  /* as intern */
+  { TY_STRING, "to_sym",          0, 127, BF_ANY,      TY_SYMBOL,     BOPE_TEMPLATE, "({ const char *_t$t = sp_nil_recv_named($r, \"to_sym\"); sp_sym_intern_n(_t$t, sp_str_byte_len(_t$t)); })", 0, 0, BOPF_WALKS_RECV },  /* as intern */
   { TY_STRING, "to_s",            0, 127, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "({ const char *_t$t = $r; _t$t ? _t$t : sp_str_frozen_empty; })", 0, 0, BOPF_SELF_EXACT | BOPF_BOXED },
   { TY_STRING, "to_str",          0, 127, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "({ const char *_t$t = $r; if (!_t$t) sp_nil_recv(\"to_str\"); _t$t; })", 0, 0, BOPF_SELF_EXACT },
   { TY_STRING, "empty?",          0, 127, BF_ANY,      TY_BOOL,       BOPE_TEMPLATE, "sp_str_empty_p($r)", 0 },
-  { TY_STRING, "include?",        1,   1, BF_ANY,      TY_BOOL,       BOPE_TEMPLATE, "sp_str_include($r, $s0)", 0, 0, BOPF_BOXED },
+  { TY_STRING, "include?",        1,   1, BF_ANY,      TY_BOOL,       BOPE_TEMPLATE, "sp_str_include($r, $s0)", 0, 0, BOPF_BOXED | BOPF_WALKS_RECV },
   { TY_STRING, "start_with?",     2, 127, BF_ANY,      TY_BOOL,       BOPE_STR_AFFIX_ANY, NULL, 0 },
   { TY_STRING, "start_with?",     0,   0, BF_ANY,      TY_BOOL,       BOPE_TEMPLATE, "((void)($r), (sp_bool)0)", 0 },
   { TY_STRING, "end_with?",       2, 127, BF_ANY,      TY_BOOL,       BOPE_STR_AFFIX_ANY, NULL, 0 },
   { TY_STRING, "end_with?",       0,   0, BF_ANY,      TY_BOOL,       BOPE_TEMPLATE, "((void)($r), (sp_bool)0)", 0 },
   { TY_STRING, "end_with?",       1,   1, BF_ANY,      TY_BOOL,       BOPE_TEMPLATE, "sp_str_end_with($r, $s0)", 0 },
-  { TY_STRING, "=~",              1,   1, BF_ANY,      TY_BOOL,       BOPE_TEMPLATE, "((void)($r), sp_raise_cls(\"TypeError\", \"type mismatch: String given\"), (sp_bool)0)", BOP_K(TY_STRING) },  /* raises; the type is the dead value's box */
-  { TY_STRING, "=~",              1,   1, BF_ANY,      TY_BOOL,       BOPE_TEMPLATE, "((void)($r), sp_raise_cls(\"NoMethodError\", ($e0) ? \"undefined method '=~' for true\" : \"undefined method '=~' for false\"), (sp_bool)0)", BOP_K(TY_BOOL) },  /* raises; the type is the dead value's box */
-  { TY_STRING, "!~",              1,   1, BF_ANY,      TY_UNKNOWN,    BOPE_TEMPLATE, "((void)($r), sp_raise_cls(\"TypeError\", \"type mismatch: String given\"), (sp_bool)0)", BOP_K(TY_STRING) },
-  { TY_STRING, "!~",              1,   1, BF_ANY,      TY_UNKNOWN,    BOPE_TEMPLATE, "((void)($r), sp_raise_cls(\"NoMethodError\", ($e0) ? \"undefined method '=~' for true\" : \"undefined method '=~' for false\"), (sp_bool)0)", BOP_K(TY_BOOL) },
+  { TY_STRING, "=~",              1,   1, BF_ANY,      TY_BOOL,       BOPE_TEMPLATE, "((void)($r), sp_raise_cls(\"TypeError\", \"type mismatch: String given\"), (sp_bool)0)", BOP_K(TY_STRING), 0, BOPF_WALKS_RECV },  /* raises; the type is the dead value's box */
+  { TY_STRING, "=~",              1,   1, BF_ANY,      TY_BOOL,       BOPE_TEMPLATE, "((void)($r), sp_raise_cls(\"NoMethodError\", ($e0) ? \"undefined method '=~' for true\" : \"undefined method '=~' for false\"), (sp_bool)0)", BOP_K(TY_BOOL), 0, BOPF_WALKS_RECV },  /* raises; the type is the dead value's box */
+  { TY_STRING, "!~",              1,   1, BF_ANY,      TY_UNKNOWN,    BOPE_TEMPLATE, "((void)($r), sp_raise_cls(\"TypeError\", \"type mismatch: String given\"), (sp_bool)0)", BOP_K(TY_STRING), 0, BOPF_WALKS_RECV },
+  { TY_STRING, "!~",              1,   1, BF_ANY,      TY_UNKNOWN,    BOPE_TEMPLATE, "((void)($r), sp_raise_cls(\"NoMethodError\", ($e0) ? \"undefined method '=~' for true\" : \"undefined method '=~' for false\"), (sp_bool)0)", BOP_K(TY_BOOL), 0, BOPF_WALKS_RECV },
   { TY_STRING, "casecmp",         1,   1, BF_ANY,      TY_POLY,       BOPE_STRING_CASECMP, NULL, BOP_K(TY_POLY) },
   { TY_STRING, "casecmp?",        1,   1, BF_ANY,      TY_POLY,       BOPE_STRING_CASECMP, NULL, BOP_K(TY_POLY) },
   { TY_STRING, "casecmp",         1,   1, BF_ANY,      TY_INT,        BOPE_TEMPLATE, "sp_str_casecmp($r, $e0)", BOP_K(TY_STRING) | BOP_K(TY_UNKNOWN) },
   { TY_STRING, "casecmp?",        1,   1, BF_ANY,      TY_BOOL,       BOPE_TEMPLATE, "sp_str_casecmp_p($r, $e0)", BOP_K(TY_STRING) | BOP_K(TY_UNKNOWN) },
-  { TY_STRING, "lines",           0,   2, BF_NONE,     TY_STR_ARRAY,  BOPE_STRING_LINES, NULL, 0, 0, BOPF_KEYWORDS },
-  { TY_STRING, "lines",           0,   2, BF_REQUIRED, TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF | BOPF_KEYWORDS },
-  { TY_STRING, "gsub",            2,   2, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_gsub_str_str_hash($r, $e0, $e1)", 0, BOP_K(TY_STR_STR_HASH) },
-  { TY_STRING, "gsub",            2,   2, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_replace_hash_values($r, $e0, sp_box_obj($e1, SP_BUILTIN_STR_POLY_HASH), 1)", 0, BOP_K(TY_STR_POLY_HASH) },
-  { TY_STRING, "gsub",            2,   2, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_replace_hash_values($r, $e0, sp_box_obj($e1, SP_BUILTIN_STR_INT_HASH), 1)", 0, BOP_K(TY_STR_INT_HASH) },
-  { TY_STRING, "gsub",            2,   2, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_gsub($r, $s0, $s1)", 0 },
-  { TY_STRING, "inspect",         0, 127, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "({ const char *_t$t = $r; _t$t ? sp_str_inspect(_t$t) : SPL(\"nil\"); })", 0, 0, BOPF_BOXED },
+  { TY_STRING, "lines",           0,   2, BF_NONE,     TY_STR_ARRAY,  BOPE_STRING_LINES, NULL, 0, 0, BOPF_KEYWORDS | BOPF_WALKS_RECV },
+  { TY_STRING, "lines",           0,   2, BF_REQUIRED, TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF | BOPF_KEYWORDS | BOPF_WALKS_RECV },
+  { TY_STRING, "gsub",            2,   2, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_gsub_str_str_hash($r, $e0, $e1)", 0, BOP_K(TY_STR_STR_HASH), BOPF_WALKS_RECV },
+  { TY_STRING, "gsub",            2,   2, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_replace_hash_values($r, $e0, sp_box_obj($e1, SP_BUILTIN_STR_POLY_HASH), 1)", 0, BOP_K(TY_STR_POLY_HASH), BOPF_WALKS_RECV },
+  { TY_STRING, "gsub",            2,   2, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_replace_hash_values($r, $e0, sp_box_obj($e1, SP_BUILTIN_STR_INT_HASH), 1)", 0, BOP_K(TY_STR_INT_HASH), BOPF_WALKS_RECV },
+  { TY_STRING, "gsub",            2,   2, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_gsub($r, $s0, $s1)", 0, 0, BOPF_WALKS_RECV },
+  { TY_STRING, "inspect",         0, 127, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "({ const char *_t$t = $r; _t$t ? sp_str_inspect(_t$t) : SPL(\"nil\"); })", 0, 0, BOPF_BOXED | BOPF_WALKS_RECV },
   /* String: the methods no row above has, so that each has a row with its
      counts, its block rule and whether it answers the receiver. They type
      nothing: inference keeps the rules after the lookup and codegen the
@@ -2495,27 +2495,27 @@ static const BuiltinOp bop_rows[] = {
   { TY_STRING, ">=",                  1,   1, BF_ANY,      TY_UNKNOWN,    BOPE_NONE, NULL, 0, 0, BOPF_ARGS_BUILTIN },
   { TY_STRING, "between?",            2,   2, BF_ANY,      TY_UNKNOWN,    BOPE_NONE, NULL, 0, 0, BOPF_ARGS_BUILTIN },
   { TY_STRING, "hash",                0,   0, BF_ANY,      TY_UNKNOWN,    BOPE_NONE },
-  { TY_STRING, "length",              0,   0, BF_ANY,      TY_UNKNOWN,    BOPE_NONE },
-  { TY_STRING, "size",                0,   0, BF_ANY,      TY_UNKNOWN,    BOPE_NONE },
+  { TY_STRING, "length",              0,   0, BF_ANY,      TY_UNKNOWN,    BOPE_NONE, NULL, 0, 0, BOPF_WALKS_RECV },
+  { TY_STRING, "size",                0,   0, BF_ANY,      TY_UNKNOWN,    BOPE_NONE, NULL, 0, 0, BOPF_WALKS_RECV },
   { TY_STRING, "dup",                 0,   0, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_COPY_CLASS },
   { TY_STRING, "clone",               0,   0, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_COPY_CLASS | BOPF_KEYWORDS },
   { TY_STRING, "freeze",              0,   0, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF },
   { TY_STRING, "itself",              0,   0, BF_ANY,      TY_STRING,     BOPE_NONE },
-  { TY_STRING, "byteindex",           1,   2, BF_ANY,      TY_UNKNOWN,    BOPE_NONE },
-  { TY_STRING, "byterindex",          1,   2, BF_ANY,      TY_UNKNOWN,    BOPE_NONE },
-  { TY_STRING, "match",               1,   2, BF_ANY,      TY_UNKNOWN,    BOPE_NONE },
-  { TY_STRING, "match?",              1,   2, BF_ANY,      TY_UNKNOWN,    BOPE_NONE },
-  { TY_STRING, "unpack1",             1,   1, BF_ANY,      TY_UNKNOWN,    BOPE_NONE, NULL, 0, 0, BOPF_INFERRED | BOPF_KEYWORDS },  /* typed from the format literal (an_unpack1_lit_type) */
-  { TY_STRING, "unicode_normalize",   0,   1, BF_ANY,      TY_UNKNOWN,    BOPE_NONE },
-  { TY_STRING, "unicode_normalize!",  0,   1, BF_ANY,      TY_UNKNOWN,    BOPE_NONE, NULL, 0, 0, BOPF_SELF },
-  { TY_STRING, "unicode_normalized?", 0,   1, BF_ANY,      TY_UNKNOWN,    BOPE_NONE },
-  { TY_STRING, "each_line",           0,   2, BF_REQUIRED, TY_UNKNOWN,    BOPE_NONE, NULL, 0, 0, BOPF_SELF | BOPF_KEYWORDS },  /* the walks answer the receiver */
-  { TY_STRING, "each_grapheme_cluster", 0,   0, BF_REQUIRED, TY_UNKNOWN,    BOPE_NONE, NULL, 0, 0, BOPF_SELF },
-  { TY_STRING, "each_codepoint",      0,   0, BF_REQUIRED, TY_UNKNOWN,    BOPE_NONE, NULL, 0, 0, BOPF_SELF },
-  { TY_STRING, "grapheme_clusters",   0,   0, BF_REQUIRED, TY_UNKNOWN,    BOPE_NONE, NULL, 0, 0, BOPF_SELF },
-  { TY_STRING, "each_line",           0,   1, BF_NONE,     TY_UNKNOWN,    BOPE_NONE, NULL, 0, 0, BOPF_KEYWORDS },  /* blockless: an Enumerator */
-  { TY_STRING, "each_grapheme_cluster", 0,   0, BF_NONE,     TY_UNKNOWN,    BOPE_NONE },
-  { TY_STRING, "grapheme_clusters",   0,   0, BF_NONE,     TY_UNKNOWN,    BOPE_NONE },  /* an Array */
+  { TY_STRING, "byteindex",           1,   2, BF_ANY,      TY_UNKNOWN,    BOPE_NONE, NULL, 0, 0, BOPF_WALKS_RECV },
+  { TY_STRING, "byterindex",          1,   2, BF_ANY,      TY_UNKNOWN,    BOPE_NONE, NULL, 0, 0, BOPF_WALKS_RECV },
+  { TY_STRING, "match",               1,   2, BF_ANY,      TY_UNKNOWN,    BOPE_NONE, NULL, 0, 0, BOPF_WALKS_RECV },
+  { TY_STRING, "match?",              1,   2, BF_ANY,      TY_UNKNOWN,    BOPE_NONE, NULL, 0, 0, BOPF_WALKS_RECV },
+  { TY_STRING, "unpack1",             1,   1, BF_ANY,      TY_UNKNOWN,    BOPE_NONE, NULL, 0, 0, BOPF_INFERRED | BOPF_KEYWORDS | BOPF_WALKS_RECV },  /* typed from the format literal (an_unpack1_lit_type) */
+  { TY_STRING, "unicode_normalize",   0,   1, BF_ANY,      TY_UNKNOWN,    BOPE_NONE, NULL, 0, 0, BOPF_WALKS_RECV },
+  { TY_STRING, "unicode_normalize!",  0,   1, BF_ANY,      TY_UNKNOWN,    BOPE_NONE, NULL, 0, 0, BOPF_SELF | BOPF_WALKS_RECV },
+  { TY_STRING, "unicode_normalized?", 0,   1, BF_ANY,      TY_UNKNOWN,    BOPE_NONE, NULL, 0, 0, BOPF_WALKS_RECV },
+  { TY_STRING, "each_line",           0,   2, BF_REQUIRED, TY_UNKNOWN,    BOPE_NONE, NULL, 0, 0, BOPF_SELF | BOPF_KEYWORDS | BOPF_WALKS_RECV },  /* the walks answer the receiver */
+  { TY_STRING, "each_grapheme_cluster", 0,   0, BF_REQUIRED, TY_UNKNOWN,    BOPE_NONE, NULL, 0, 0, BOPF_SELF | BOPF_WALKS_RECV },
+  { TY_STRING, "each_codepoint",      0,   0, BF_REQUIRED, TY_UNKNOWN,    BOPE_NONE, NULL, 0, 0, BOPF_SELF | BOPF_WALKS_RECV },
+  { TY_STRING, "grapheme_clusters",   0,   0, BF_REQUIRED, TY_UNKNOWN,    BOPE_NONE, NULL, 0, 0, BOPF_SELF | BOPF_WALKS_RECV },
+  { TY_STRING, "each_line",           0,   1, BF_NONE,     TY_UNKNOWN,    BOPE_NONE, NULL, 0, 0, BOPF_KEYWORDS | BOPF_WALKS_RECV },  /* blockless: an Enumerator */
+  { TY_STRING, "each_grapheme_cluster", 0,   0, BF_NONE,     TY_UNKNOWN,    BOPE_NONE, NULL, 0, 0, BOPF_WALKS_RECV },
+  { TY_STRING, "grapheme_clusters",   0,   0, BF_NONE,     TY_UNKNOWN,    BOPE_NONE, NULL, 0, 0, BOPF_WALKS_RECV },  /* an Array */
 
   /* Hash, any kind (BOP_ANY_HASH): the result kinds read off the name,
      arity and block form, some derived from the receiver's kind. []=/store,
@@ -3308,6 +3308,16 @@ static const BuiltinOp *bop_name_row_next(const char *name, int *i) {
     if (r->name[0] == name[0] && sp_streq(r->name, name) && builtin_library_fact_holds(r->feature)) return r;
   }
   return NULL;
+}
+
+/* The flag is the method's, whatever its arguments: a `=~` whose rows
+   answer for some argument kinds only, or a `gsub` with a block, which has
+   no row of its own, reads the String as any other of its forms does. */
+int bop_walks_recv(TyKind rt, const char *name) {
+  int i = -1;
+  for (const BuiltinOp *r; (r = bop_name_row_next(name, &i)); )
+    if (r->recv == rt && (r->flags & BOPF_WALKS_RECV)) return 1;
+  return 0;
 }
 static int bop_name_rows(const char *name, int want_kw) {
   const BuiltinOp *r;

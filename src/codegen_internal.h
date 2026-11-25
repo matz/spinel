@@ -3225,6 +3225,10 @@ int rescue_is_catchall_name(const char *n);
 int rescue_chain_catches(Compiler *c, int rc, const char *const *above, int bare);
 int loop_rescue_sees_interrupt(Compiler *c, int id);
 int loop_body_polls_alone(Compiler *c, int body);
+int loop_pass_grows(Compiler *c, int body);   /* codegen_stmt.c */
+int loop_keeps_sig_poll(Compiler *c, int body);   /* codegen_stmt.c */
+void emit_step_polls(Compiler *c, int body, Buf *b, int indent);   /* codegen_iter.c */
+void emit_iter_step_lead(Compiler *c, int body, int n, Buf *b, int indent);   /* codegen_fold.c */
 int subtree_has_retry(const NodeTable *nt, int id);
 void emit_rescue(Compiler *c, int id, Buf *b, int indent, int fr, const char *resultvar);
 void emit_begin(Compiler *c, int id, Buf *b, int indent, const char *resultvar);
@@ -3380,6 +3384,7 @@ int proc_body_node(Compiler *c, int create);
 int proc_slot_is_direct(TyKind t);
 int proc_slot_is_ptr(TyKind t);
 int proc_body_has_yield(Compiler *c, int id);
+int proc_body_calls_block(Compiler *c, int id);   /* a yield, or a call of the method's own &blk */
 int proc_body_has_return(Compiler *c, int id);
 int proc_does_nonlocal_return(Compiler *c, int create);
 int scope_creates_returning_proc(Compiler *c, int si);

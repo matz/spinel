@@ -409,6 +409,17 @@ typedef struct BuiltinOp {
    whose length is known at run time (`s.concat(*parts)`); the call's other
    forms are left to the rows and routes of their own. */
 #define BOPF_SPREAD     1048576u
+/* A call whose answer reads every character or byte of its receiver,
+   whatever its arguments (a length that counts characters, a count, a
+   search, match or scan, a case or character conversion, a split, a
+   substitution), so its time grows with what the receiver holds: one call
+   on a long String may take milliseconds. A loop or builtin iterator step
+   whose pass makes one polls at that pass (loop_pass_grows). Not a
+   comparison or a character-indexed read, which stop at the shorter
+   operand or at the index, typically a short literal or the first
+   characters, where a poll at each pass of a tight loop would cost more
+   than it saves. */
+#define BOPF_WALKS_RECV 2097152u
 
 /* A row's recv may name a family of kinds rather than one; a caller looks
    the family up with the family's value. Not a TyKind any value has. */
@@ -495,6 +506,8 @@ const BuiltinOp *bop_row(int i);
 const BuiltinOp *bop_find(TyKind rt, const char *name, int argc, int has_block);
 /* The flags (BOPF_*) of the row of kind rt for `name`, 0 for none */
 unsigned bop_flags(TyKind rt, const char *name);
+/* Does `name` on `rt` walk its receiver (BOPF_WALKS_RECV, on any of its rows)? */
+int bop_walks_recv(TyKind rt, const char *name);
 /* Is there a row of `name` whose method takes no keywords in CRuby (a row
    without BOPF_KEYWORDS, of any kind)? Its call gets a non-empty `**` operand
    as one positional Hash, and an empty one as nothing. */

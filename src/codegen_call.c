@@ -25051,8 +25051,16 @@ int call_on_builtin_class_missing(Compiler *c, int id) {
    of its node as poly. Each override's binding slot and its view (or -1)
    go to *sv/*vw, which unhoist_dispatch_args undoes and frees; the count
    is returned. */
+/* Set by a dispatch over many classes: a plain read or a literal is
+   hoisted too, so the arms read only temps and one function can hold them
+   for every site (pd_hoist, #12511). Left in place, each site's own local
+   or literal made its arms a function of their own, or none. */
+static int g_hoist_plain_args;
 int hoist_dispatch_args(Compiler *c, int argsN, int **sv, int **vw) {
   const NodeTable *nt = c->nt;
+  /* (read once: a dispatch inside an argument decides its own) */
+  int hoist_plain = g_hoist_plain_args;
+  g_hoist_plain_args = 0;
   int hoisted_n = 0, hargc = 0;
   const int *hav = argsN >= 0 ? nt_arr(nt, argsN, "arguments", &hargc) : NULL;
   /* the keywords' values too, and a computed key, in source order: each arm
@@ -25139,14 +25147,14 @@ int hoist_dispatch_args(Compiler *c, int argsN, int **sv, int **vw) {
        left in place, `o.m(@v, f(2))` read what f left in @v (read_rebound_by) */
     int rebound = 0;
     for (int j = a + 1; j < nhn && !rebound; j++) rebound = read_rebound_by(c, hn[a], hn[j]);
-    if (!aty || view_held(hn[a]) || (!rebound && (ak == NK_LocalVariableReadNode ||
-                              ak == NK_InstanceVariableReadNode)) ||
+    int plain = (!rebound && (ak == NK_LocalVariableReadNode || ak == NK_InstanceVariableReadNode)) ||
+                ak == NK_SelfNode || ak == NK_IntegerNode ||
+                ak == NK_FloatNode || ak == NK_StringNode ||
+                ak == NK_SymbolNode || ak == NK_NilNode ||
+                ak == NK_TrueNode || ak == NK_FalseNode;
+    if (!aty || view_held(hn[a]) || (plain && !hoist_plain) ||
         ak == NK_SplatNode || ak == NK_KeywordHashNode ||
-        ak == NK_BlockArgumentNode || nt_kind(nt, hn[a]) == NK_ForwardingArgumentsNode ||
-        ak == NK_SelfNode || ak == NK_IntegerNode ||
-        ak == NK_FloatNode || ak == NK_StringNode ||
-        ak == NK_SymbolNode || ak == NK_NilNode ||
-        ak == NK_TrueNode || ak == NK_FalseNode)
+        ak == NK_BlockArgumentNode || nt_kind(nt, hn[a]) == NK_ForwardingArgumentsNode)
       continue;
     argov_reserve();
     int ht = hoist_boxed_rooted(c, hn[a]);
@@ -26256,7 +26264,14 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
                    "sp_raise_nomethod(sp_nomethod_msg_args(\"%s\", _t%d, 0, (sp_RbVal[]){sp_box_nil()}))",
                    nm, tv);
           int *hoisted_sv, *hoisted_ty;
+          int targ0 = g_tmp;
+          /* (the number of classes past which the arms are shared: a few
+             keep their arguments where they stand) */
+          int sv_plain = g_hoist_plain_args;
+          g_hoist_plain_args = nc >= 64;
           int hoisted_n = hoist_dispatch_args(c, argsN, &hoisted_sv, &hoisted_ty);
+          g_hoist_plain_args = sv_plain;
+          int targ1 = g_tmp;
           int wants_blk = 0, blk_tmp = -1;
           for (int k = 0; k < nc; k++) {
             Scope *ks = &c->scopes[cpf[k] >= 0 ? cpf[k] : cmi[k]];
@@ -26355,27 +26370,60 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
           if (is_name_reader(nm) && class_name_reader_arity_msg(c, id, nm, argc, argv, am, sizeof am))
             snprintf(cls_raise, sizeof cls_raise, "(sp_raise_cls(\"ArgumentError\", \"%s\"), sp_box_nil())", am);
           else snprintf(cls_raise, sizeof cls_raise, "%s", raise);
-          /* The class arms read the receiver alone when the call passes
-             nothing: one function every site with the same arms calls
-             (pd_hoist, #12511), as a poly dispatch's is. A value of a
-             run-time const_get or constantize reaches every class of the
-             program, and a copy of the arms per site made the C grow with
-             the sites times the classes. */
+          /* The class arms read the receiver and the arguments hoisted
+             above: one function every site with the same arms calls
+             (pd_hoist, #12511), as a poly dispatch's is, taking them as its
+             parameters. A value of a run-time const_get or constantize
+             reaches every class of the program, and a copy of the arms per
+             site made the C grow with the sites times the classes. An arm
+             that reads anything else (a local left in place, a block) keeps
+             the arms here. */
           char *hcall = NULL;
-          if (hoisted_n == 0 && blk_tmp < 0 && !setter_val && argc == 0) {
+          int boxed_args = 1;
+          for (int h = 0; h < hoisted_n; h++) if (hoisted_ty[h] < 0) boxed_args = 0;
+          /* a splat, `**`, block argument or `...` is spread in the arm
+             itself, into frame locals (`_sp_bi_a`) a function cannot see */
+          for (int a = 0; a < argc && boxed_args; a++) {
+            NodeKind ak = nt_kind(nt, argv[a]);
+            if (ak == NK_SplatNode || ak == NK_BlockArgumentNode || ak == NK_ForwardingArgumentsNode) boxed_args = 0;
+            if (ak == NK_KeywordHashNode) {
+              int en = 0; const int *el = nt_arr(nt, argv[a], "elements", &en);
+              for (int e = 0; e < en; e++) if (nt_kind(nt, el[e]) != NK_AssocNode) boxed_args = 0;
+            }
+          }
+          if (nt_ref(nt, id, "block") >= 0) boxed_args = 0;
+          if (blk_tmp < 0 && !setter_val && boxed_args) {
             int tr = ++g_tmp;
             Buf cp; memset(&cp, 0, sizeof cp);
             buf_printf(&cp, "sp_RbVal _t%d; switch (0) { default: _t%d = ", tr, tr);
             buf_puts(&cp, b->p + arms_at);
             buf_printf(&cp, "%s; break; ", cls_raise);
-            TyKind pty = TY_POLY;
-            if (pd_hoist(c, id, nm, &cp, 0, tr, TY_POLY, &tv, &pty, 1)) {
-              /* the site is `sp_RbVal _t<tr> = sp_pd_<fn>(_t<tv>);`: its call */
+            /* the parameters: the receiver, then each hoisted argument's
+               boxed temp the arms read, in the order they were made */
+            int ntt = 0, *tnum = NULL; char *tdecl = NULL;
+            /* (a spread lowered ahead of the call reads its frame's
+               `_sp_bi_` locals, which the scan takes for runtime names) */
+            int pok = cp.p && !strstr(cp.p, "_sp_bi_") && pd_region_temps(cp.p, cp.len, 0, &tnum, &tdecl, &ntt);
+            int *pid = malloc(sizeof(int) * (size_t)(ntt + 2));
+            TyKind *pty = malloc(sizeof(TyKind) * (size_t)(ntt + 2));
+            if (!pid || !pty) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+            int np = 0;
+            pid[np] = tv; pty[np++] = TY_POLY;
+            for (int t = targ0 + 1; pok && t <= targ1; t++)
+              for (int k = 0; k < ntt; k++)
+                if (tnum[k] == t && !tdecl[k]) { pid[np] = t; pty[np++] = TY_POLY; break; }
+            for (int k = 0; pok && k < ntt; k++)
+              if (!tdecl[k] && tnum[k] != tv && (tnum[k] <= targ0 || tnum[k] > targ1)) pok = 0;
+            if (pok && pd_hoist(c, id, nm, &cp, 0, tr, TY_POLY, pid, pty, np)) {
+              /* the site is `sp_RbVal _t<tr> = sp_pd_<fn>(_t<tv>, ...);`: its call */
               char *eq = cp.p ? strstr(cp.p, " = ") : NULL;
               char *semi = eq ? strrchr(eq, ';') : NULL;
               if (eq && semi) hcall = strndup(eq + 3, (size_t)(semi - eq - 3));
             }
+            free(tnum); free(tdecl); free(pid); free(pty);
             free(cp.p);
+            /* (an arm set kept here leaves the numbering as it was) */
+            if (!hcall && g_tmp == tr) g_tmp--;
           }
           if (hcall) {
             b->len = chain_at; b->p[chain_at] = 0;

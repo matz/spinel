@@ -65,3 +65,46 @@ true
 "abc"
 "abc"
 nil
+"no implicit conversion of Array into Proc"
+"no implicit conversion of Array into Proc"
+"a"
+"no implicit conversion of Range into Proc"
+"no implicit conversion of Range into Proc"
+"a"
+"no implicit conversion of Integer into Proc"
+"no implicit conversion of Integer into Proc"
+"a"
+op 1
+mk 1
+mk 2
+"babo"
+1
+"éĀ"
+#<Encoding:UTF-8>
+"\xC8\xC9"
+#<Encoding:BINARY (ASCII-8BIT)>
+"éĀ"
+#<Encoding:UTF-8>
+"éĀ"
+#<Encoding:UTF-8>
+"éĀ"
+#<Encoding:UTF-8>
+"\xFF\xC8"
+#<Encoding:BINARY (ASCII-8BIT)>
+"ab\xC8\xC9"
+#<Encoding:BINARY (ASCII-8BIT)>
+"abéc"
+#<Encoding:UTF-8>
+"ab\xC8"
+#<Encoding:BINARY (ASCII-8BIT)>
+"éĀ"
+#<Encoding:UTF-8>
+"éĀ"
+#<Encoding:UTF-8>
+"aéĀ"
+#<Encoding:UTF-8>
+[:u_b_i, Encoding::CompatibilityError]
+[:b_u_i, Encoding::CompatibilityError]
+[:e_u_b_i, Encoding::CompatibilityError]
+[:a_b_i, "a\xC3\xA9\xC8", #<Encoding:BINARY (ASCII-8BIT)>]
+[:splat, Encoding::CompatibilityError]

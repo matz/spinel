@@ -131,3 +131,68 @@ begin; s.concat(*l("b"), &bad); rescue TypeError => e; p e.message; end
 begin; s&.prepend(*l("b"), &bad); rescue TypeError => e; p e.message; end
 begin; xs[0].concat(*l("b"), &bad); rescue TypeError => e; p e.message; end
 p s.concat(*l("b"), &none), s&.concat(*l("c"), &none), none&.concat(*l("d"), &bad)
+
+# a boxed Array, Range or Integer `&` value raises beside a run-time splat,
+# on a `&.` call too, before the receiver changes
+parts = ["b"]
+[[[], proc { }][0], [1..2, proc { }][0], [7, proc { }][0]].each do |v|
+  t = +"a"
+  begin; t.concat(*parts, &v); rescue TypeError => e; p e.message; end
+  begin; t&.prepend(*parts, &v); rescue TypeError => e; p e.message; end
+  p t
+end
+
+# a `&` expression bound as written runs for its effect, after the operands
+def mk(c) = (puts "mk #{c}"; proc { })
+def op(c) = (puts "op #{c}"; ["o"])
+cnt = 0
+t = +"a"
+t.concat(*parts, &(cnt += 1; pr))
+t.concat(*op(1), &mk(1))
+p t.prepend(*parts, &mk(2)), cnt
+
+# an Integer is the character it codes in the encoding the operands before it
+# leave the text in
+cps = ["é", 256]
+p ''.b.concat(*cps), ''.b.concat(*cps).encoding
+cps = [200, 201]
+p ''.b.concat(*cps), ''.b.concat(*cps).encoding
+# the same through a literal's splat and written out
+p ''.b.concat(*["é", 256]), ''.b.concat(*["é", 256]).encoding
+p ''.b.concat("é", 256), ''.b.concat("é", 256).encoding
+w = ''.b
+w.concat("é", 256)
+p w, w.encoding
+p (+"").concat("\xff".b, 200), (+"").concat("\xff".b, 200).encoding
+# an ASCII-only literal or an Integer before it leaves the receiver's encoding
+x = ''.b.concat("ab", 200, 201)
+p x, x.encoding
+x = (+"").concat("ab", 0xe9, "c")
+p x, x.encoding
+# a local whose one write ahead of the read is an ASCII-only frozen literal
+# leaves the receiver's encoding; any other write may change it
+la = "ab"
+x = ''.b.concat(la, 200)
+p x, x.encoding
+lu = "é"
+x = ''.b.concat(lu, 256)
+p x, x.encoding
+lw = "ab"
+[1].each { lw = "é" }
+x = ''.b.concat(lw, 256)
+p x, x.encoding
+x = ''.b.concat("a" "é", 256)
+p x, x.encoding
+# operands staged together check their encodings as CRuby's appends do
+def ce(l)
+  r = yield
+  p [l, r, r.encoding]
+rescue Encoding::CompatibilityError => e
+  p [l, e.class]
+end
+ce(:u_b_i) { (+"é").concat("é".b, 200) }
+ce(:b_u_i) { "é".b.concat("é", 200) }
+ce(:e_u_b_i) { (+"").concat("é", "é".b, 200) }
+ce(:a_b_i) { (+"a").concat("é".b, 200) }
+cpl = [200, "é"]
+ce(:splat) { ''.b.concat(*cpl) }

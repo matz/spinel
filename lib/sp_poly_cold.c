@@ -93,36 +93,52 @@ void sp_strbuf_append_as_bytes(sp_String *s, sp_int argc, const sp_RbVal *args) 
   sp_fd_publish(s);
 }
 
+/* CRuby's encoding check ahead of a String operand of concat_list joining
+   s: a text with bytes past 127 meeting one in the other encoding raises
+   Encoding::CompatibilityError (sp_str_enc_step); otherwise the append
+   picks the encoding. */
+static void sp_strbuf_enc_check(const sp_String *s, const char *t, size_t tl) {
+  sp_str_enc_step((int)s->binary, s->data, (size_t)s->len, t, tl, sp_str_is_binary(t));
+}
+
 /* concat or prepend over an operand list that is known only at run time, a
    splat's (CRuby's rb_str_concat_multi and rb_str_prepend_multi). The
    receiver is checked first, even for no operands. Every operand is then
-   copied, in order, into one new String before the receiver changes: an
-   Integer as the character it codes in the receiver's encoding (concat
-   only; prepend takes Strings), any other value as its String or its
-   #to_str, TypeError otherwise. So a raise part way leaves the receiver as
-   it was, and an operand that is the receiver adds its bytes as they were. */
+   copied, in order, into one new String in the receiver's encoding before
+   the receiver changes: an Integer as the character it codes in the
+   encoding the operands before it left that String in (concat only;
+   prepend takes Strings), any other value as its String or its #to_str,
+   TypeError otherwise. A String meeting text past 127 in the other
+   encoding, in that String or in the receiver, raises
+   Encoding::CompatibilityError, as CRuby's appends do. So a raise part way
+   leaves the receiver as it was, and an operand that is the receiver adds
+   its bytes as they were. */
 void sp_strbuf_concat_list(sp_String *s, sp_int argc, const sp_RbVal *args, int prepend) {
   sp_strbuf_check_modifiable(s, prepend ? "prepend" : "concat");
   if (argc == 0) return;
   SP_GC_ROOT(s);
   sp_String *parts = sp_String_new_len("", 0);
   SP_GC_ROOT(parts);
+  if (s->binary) { parts->binary = 1; sp_fd_publish(parts); }
   for (sp_int i = 0; i < argc; i++) {
     sp_RbVal arg = args[i];
     if (!prepend && arg.tag == SP_TAG_BIGINT) sp_raise_cls("RangeError", "bignum out of char range");
     if (!prepend && arg.tag == SP_TAG_INT) {
-      const char *ch = sp_int_codepoint_to_str_in(s->data, arg.v.i);
+      const char *ch = sp_int_codepoint_to_str_in(parts->data, arg.v.i);
       sp_String_append_n(parts, ch, sp_str_byte_len(ch));
     }
     else if (sp_strface_b_box(arg)) {
       sp_String *part = arg.v.p;
+      sp_strbuf_enc_check(parts, part->data, (size_t)part->len);
       sp_String_append_n(parts, part->data, (size_t)part->len);
     }
     else {
       const char *text = sp_poly_arg_str_chk(arg);
+      sp_strbuf_enc_check(parts, text, sp_str_byte_len(text));
       sp_String_append_n(parts, text, sp_str_byte_len(text));
     }
   }
+  sp_strbuf_enc_check(s, parts->data, (size_t)parts->len);
   if (prepend) sp_String_splice_bytes(s, 0, 0, parts->data, 0, parts->len, 0);
   else sp_String_append_n(s, parts->data, (size_t)parts->len);
 }

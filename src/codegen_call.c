@@ -1106,26 +1106,27 @@ static void emit_non_proc_block_raise(Compiler *c, int id, int recv, const int *
   free(pb.p);
 }
 /* The run-time check of a `&fe` argument the plan leaves to the run (CB_CHECK):
-   nil passes no block, and a boxed Proc, Method, Symbol or Hash becomes one,
-   and so may an object of the program's own classes; a plain Object.new, an
-   Integer, a Float, a String, true or false raises. cn names the class of a
-   typed value that may be nil ("" for a Boolean), NULL for a boxed one. As a
-   statement expression of no value; fe runs in it. */
+   nil passes no block. A boxed value is converted as a `&` operand
+   converted ahead of its call is (__blk_conv's sp_poly_blk_conv): a Proc,
+   a Method, a Symbol and a Hash pass, and anything else (an Array, a Range,
+   an Integer, a String, a program object with no #to_proc) answers CRuby's
+   TypeError; the plan leaves only a program with no #to_proc of its own to
+   the run. cn names the class of a typed value that may be nil ("" for a
+   Boolean), NULL for a boxed one. An expression of no use but its raise;
+   fe runs in it. */
 static void emit_block_arg_check(Compiler *c, int fe, const char *cn, Buf *b) {
+  if (!cn) {
+    buf_puts(b, "sp_poly_blk_conv(");
+    emit_boxed(c, fe, b);
+    buf_printf(b, ", %d)", kw_splat_user_may_convert(c));
+    return;
+  }
   int tv = ++g_tmp;
   buf_printf(b, "({ sp_RbVal _t%d = ", tv);
   emit_boxed(c, fe, b);
-  if (cn) {
-    /* a Boolean's class is its value's; any other typed value's is cn */
-    buf_printf(b, "; if (_t%d.tag != SP_TAG_NIL) sp_raise_cls(\"TypeError\", \"no implicit conversion of %s into Proc\"); })",
-               tv, cn[0] ? cn : "FalseClass");
-  } else
-    buf_printf(b, "; if (_t%d.tag == SP_TAG_INT || _t%d.tag == SP_TAG_FLT || _t%d.tag == SP_TAG_BOOL || "
-                  "sp_rbval_is_string(_t%d) || "
-                  "_t%d.tag == SP_TAG_BIGINT || (_t%d.tag == SP_TAG_OBJ && "
-                  "(_t%d.cls_id == SP_BUILTIN_OBJECT || _t%d.cls_id == SP_BUILTIN_BASIC_OBJECT))) "
-                  "sp_raise_cls(\"TypeError\", sp_sprintf(\"no implicit conversion of %%s into Proc\", sp_poly_class_name(_t%d))); })",
-               tv, tv, tv, tv, tv, tv, tv, tv, tv);
+  /* a Boolean's class is its value's; any other typed value's is cn */
+  buf_printf(b, "; if (_t%d.tag != SP_TAG_NIL) sp_raise_cls(\"TypeError\", \"no implicit conversion of %s into Proc\"); })",
+             tv, cn[0] ? cn : "FalseClass");
 }
 /* Does the check of call id's `&` argument go ahead of the call: the
    receiver, the arguments and fe run nothing a program can see? */
@@ -1206,11 +1207,19 @@ int emit_call_block_arg_stmt(Compiler *c, int id, Buf *b, int indent) {
    `&.` call's value is judged there too (cplan_block_arg_value), for
    nothing ahead of the call checks it. Elsewhere nothing where the check
    goes ahead of the call (np_check_ahead_ok); one that raises is the raise
-   form's, and does not reach the emitter. */
+   form's, and does not reach the emitter. One bound as written runs there
+   for its effect, the call taking no block, unless it runs nothing. */
 void emit_block_arg_check_staged(Compiler *c, int id, Buf *b) {
   const char *cn;
-  if (cplan_block_arg_value(c, id, &cn) == CB_BINDS) return;
   int fe = nt_ref(c->nt, nt_ref(c->nt, id, "block"), "expression");
+  if (cplan_block_arg_value(c, id, &cn) == CB_BINDS) {
+    if (fe >= 0 && !order_operand_inert(c, id, fe, 0)) {
+      buf_puts(b, " (void)(");
+      emit_expr_for_effect(c, fe, b);
+      buf_puts(b, ");");
+    }
+    return;
+  }
   if (!nt_safe_nav(c->nt, id) && np_check_ahead_ok(c, id, fe)) return;
   buf_puts(b, " (void)");
   emit_block_arg_check(c, fe, cn, b);
@@ -7815,8 +7824,6 @@ static int emit_poly_builtin_method(Compiler *c, int id, Buf *b) {
         emit_boxed(c, argv[k], b);
         buf_puts(b, ");");
       }
-      /* a frozen Array raises even when no value is given */
-      buf_printf(b, " if (_t%d.tag == SP_TAG_OBJ && sp_poly_is_array_kind(_t%d.cls_id) && sp_poly_frozen(_t%d)) sp_raise_frozen_array_v(_t%d);", tr, tr, tr, tr);
       buf_printf(b, " sp_poly_insert_n(_t%d, _t%d, _t%d); })", tr, ti, ta);
     }
     if ((rvti_k == NK_LocalVariableReadNode ||
@@ -25511,17 +25518,10 @@ static void emit_block_arg_operand(Compiler *c, int id, int fe, Buf *b) {
   const char *cn;
   int cb = cplan_block_arg(c, id, &cn);
   if (cb == CB_RAISE) emit_block_arg_type_error(c, fe, cn, &ae, 0);
-  else if (cb == CB_CHECK && !cn) {
-    /* a boxed value, converted as a `&` operand converted ahead of its call
-       is (__blk_conv's sp_poly_blk_conv): nil, a Proc, a Method, a Symbol and
-       a Hash pass, anything else (an Array, a Range, a program object with no
-       #to_proc) answers CRuby's TypeError. The call does not run after it, so
-       this is the operand's one conversion. */
-    buf_puts(&ae, "(void)sp_poly_blk_conv(");
-    emit_boxed(c, fe, &ae);
-    buf_printf(&ae, ", %d); ", kw_splat_user_may_convert(c));
-  }
   else if (cb == CB_CHECK) {
+    /* (the call does not run after it, so this is the operand's one
+       conversion) */
+    buf_puts(&ae, "(void)");
     emit_block_arg_check(c, fe, cn, &ae);
     buf_puts(&ae, "; ");
   }

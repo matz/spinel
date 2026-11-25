@@ -1594,6 +1594,8 @@ int product_block_binds_elems(Compiler *c, int block);
 int block_auto_splats(int P, int O, int Q, int R);
 int block_no_keywords(Compiler *c, int block);
 void block_fill(int P, int O, int Q, int R, int n, int *ot, int *ps);
+/* The value of local read x's one write ahead of it, or -1. */
+int local_sole_write(Compiler *c, int x);
 /* The array literal a splat of this local is sure to spread, or -1. */
 int splat_local_sure_lit(Compiler *c, int x);
 const char *block_kwrest_name(Compiler *c, int block);

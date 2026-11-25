@@ -4410,8 +4410,7 @@ static int mrv_no_scope(const NodeTable *nt, int root, int depth) {
     for (int j = 0; j < nd->a[i].n; j++) if (!mrv_no_scope(nt, nd->a[i].ids[j], depth + 1)) return 0;
   return 1;
 }
-static int mrv_is_string(TyKind t) { return t == TY_STRING || t == TY_STRBUF; }
-static int mrv_may_be_string(TyKind t) { return mrv_is_string(t) || t == TY_POLY; }
+static int mrv_may_be_string(TyKind t) { return ty_is_string(t) || t == TY_POLY; }
 /* Does a value leave instead of answering one (`return`, `break`, `next`,
    `redo`, `retry`, also inside a paren)? The call moved onto it would be a
    call on no value, so such an arm keeps the call where it was. */
@@ -4584,7 +4583,7 @@ int desugar_mutator_receiver_value(Compiler *c) {
       int x = nt_ref(nt, r, "receiver");
       NodeKind xk = nt_kind(nt, x);
       if ((xk != NK_LocalVariableReadNode && xk != NK_InstanceVariableReadNode) ||
-          !mrv_is_string(infer_type(c, x))) continue;
+          !ty_is_string(infer_type(c, x))) continue;
       /* a block that assigns the variable leaves it naming another String
          than the one the call answers */
       if (mrv_writes(nt, nt_ref(nt, r, "block"), nt_str(nt, x, "name"), 0)) continue;
@@ -4612,7 +4611,7 @@ int desugar_mutator_receiver_value(Compiler *c) {
       int x = nt_ref(nt, r, "receiver");
       if (!rn || rac != 0 || x < 0 || nt_ref(nt, r, "block") >= 0 ||
           !(sp_streq(rn, "to_s") || sp_streq(rn, "to_str") || sp_streq(rn, "itself")) ||
-          !mrv_is_string(infer_type(c, x))) continue;
+          !ty_is_string(infer_type(c, x))) continue;
       nt_node_set_ref(nt, id, "receiver", x);
       nt_node_reset(nt, r, "NilNode");
       changed = 1;

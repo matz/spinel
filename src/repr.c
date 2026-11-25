@@ -1456,6 +1456,14 @@ int repr_frozen_literal(Compiler *c, int n) {
       (bop_share_named(TY_STRING, nt_str(nt, n, "name")) != BSH_FROZEN && !is_freeze_name(nt_str(nt, n, "name")))) return 0;
   return repr_frozen_literal(c, nt_ref(nt, n, "receiver"));
 }
+/* ...whose bytes are all ASCII (str_literal_ascii): appended to a text, it
+   leaves that text's encoding as it is. */
+int repr_frozen_literal_ascii(Compiler *c, int n) {
+  if (!repr_frozen_literal(c, n)) return 0;
+  vp_one(c->nt, n, VPS_NONE | VP_PARENS_ONLY, &n);
+  if (nt_kind(c->nt, n) == NK_CallNode) return repr_frozen_literal_ascii(c, nt_ref(c->nt, n, "receiver"));
+  return str_literal_ascii(c->nt, n);
+}
 /* ...with nothing run beside it: each parenthesis on the way holds the
    literal alone, `("lit")` or `("lit").freeze`, never `(f; "lit")`, whose
    statements run before the literal answers. */

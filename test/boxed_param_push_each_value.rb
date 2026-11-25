@@ -71,3 +71,15 @@ def put(r, k, v)
 end
 hs = [{a: 1}, [1]]
 p put(hs[0], :b, "s"), put(hs[0], :c, 2), hs[1].push(3)
+
+# an empty Array or Hash pushed from another parameter is a value the Array
+# of Integers cannot hold
+def put_v(dst, value)
+  dst.push(value)
+  nil
+end
+eb = [[1], +"q"][0]
+put_v(eb, [])
+eh = [[2], +"q"][0]
+put_v(eh, {})
+p eb, eh

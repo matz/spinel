@@ -25775,6 +25775,28 @@ static int concat_arg_stage_allocates(Compiler *c, int v) {
   if (!arg_ran_first(v, 0) && subtree_may_allocate(c, v)) return 1;
   return !concat_arg_is_handle(c, v);
 }
+/* May concat operand a, a String, change the encoding of the text it is
+   appended to: any String but an ASCII-only frozen literal, which leaves a
+   UTF-8 or a BINARY text in its encoding, or a local whose one write, ahead
+   of the read, is such a literal? */
+static int concat_operand_may_recode(Compiler *c, int a) {
+  int v = local_sole_write(c, a);
+  return !repr_frozen_literal_ascii(c, v >= 0 ? v : a);
+}
+/* Do concat's operands, Strings and Integers alone, hold an Integer after a
+   String that may change the text's encoding: one whose character only the
+   run knows? */
+static int concat_args_code_late(Compiler *c, int argc, const int *argv) {
+  int recode = 0, late = 0;
+  for (int a = 0; a < argc; a++) {
+    Repr r = repr_of(c, argv[a]);
+    if (r.kind == RK_BOXED) return 0;
+    if (r.ty == TY_INT) late |= recode;
+    else if (ty_is_string(r.ty)) recode |= concat_operand_may_recode(c, argv[a]);
+    else return 0;
+  }
+  return late;
+}
 /* concat(a, b, ...) onto the handle `sref`: every argument taken before
    anything is appended, as CRuby does. One argument goes through the bytes
    face, as `<<` does. Several are staged as their handles (SP_STR_HDL adopts
@@ -25802,6 +25824,25 @@ void emit_str_concat_handle(Compiler *c, const char *sref, int argc, const int *
     buf_printf(b, " if (sp_String_is_immutable(%s)) sp_raise_frozen_str((%s)->data);\n", sref, sref);
     emit_indent(b, indent + 1);
     buf_printf(b, "sp_String_append_bin(%s, _t%d);\n", sref, base);
+    emit_indent(b, indent); buf_puts(b, "}\n");
+    return;
+  }
+  /* An Integer after a String that may change the text's encoding (any but
+     an ASCII-only literal) is the character it codes in the encoding the
+     operands before it leave the text in (CRuby's rb_str_concat_multi
+     stages them in one String), which only the run knows:
+     `''.b.concat("é", 256)` is "éĀ", UTF-8. Such a list of Strings and
+     Integers goes to the runtime's list form, as a splat's does
+     (sp_strbuf_concat_list). */
+  if (concat_args_code_late(c, argc, argv)) {
+    buf_printf(b, " sp_RbVal _t%d[%d];", base, argc);
+    for (int a = 0; a < argc; a++) {
+      buf_printf(b, " _t%d[%d] = ", base, a);
+      emit_boxed(c, argv[a], b);
+      buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d[%d]);", base, a);
+    }
+    free(rt.p);
+    buf_printf(b, " sp_strbuf_concat_list(%s, %d, _t%d, 0);\n", sref, argc, base);
     emit_indent(b, indent); buf_puts(b, "}\n");
     return;
   }

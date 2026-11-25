@@ -4057,12 +4057,54 @@ static int poly_case_arg_boxed(Compiler *c, const PolyTemps *T, const PolyKw *kw
   return 0;
 }
 
+/* Is element argument a a keyword hash of `**h` splats alone, which is no
+   argument when it is empty, as CRuby hands a method without keywords none? */
+static int poly_case_kw_may_vanish(Compiler *c, const PolyTemps *T, const PolyKw *kw, int a) {
+  return kw && kw->kwh >= 0 && a >= T->pos_argc && nt_kwh_splats_only(c->nt, kw->kwh);
+}
+
 /* The `if` ahead of the statement that hands element argument a (its text
-   ab) to an Array: a keyword hash of `**h` splats alone that is empty is
-   no argument, as CRuby hands a method without keywords none. */
+   ab) to an Array: such a hash is handed on only when it is not empty. */
 static void poly_case_kw_elem_guard(Compiler *c, const PolyTemps *T, const PolyKw *kw, int a, const Buf *ab, Buf *b) {
-  if (kw && kw->kwh >= 0 && a >= T->pos_argc && ab->p && nt_kwh_splats_only(c->nt, kw->kwh))
+  if (ab->p && poly_case_kw_may_vanish(c, T, kw, a))
     buf_printf(b, " if (sp_poly_length(%s) != 0)", ab->p);
+}
+
+/* An Array arm's values whose count only the run knows: one of them is a
+   splat or a keyword hash of `**h` splats alone. Such a call hands every
+   value to the runtime's many-value entry (sp_poly_push_n,
+   sp_poly_insert_n), which checks the receiver frozen first, as CRuby
+   does, so it raises even when no value is given. */
+static int poly_case_values_counted_at_run(Compiler *c, const PolyTemps *T, const PolyKw *kw) {
+  for (int a = 0; a < T->argc; a++)
+    if (nt_kind(c->nt, T->argv[a]) == NK_SplatNode || poly_case_kw_may_vanish(c, T, kw, a)) return 1;
+  return 0;
+}
+
+/* The list of such a call's values, in order: a lone splat's own list, or
+   one gathered from a splat's elements and each written value, such a hash
+   only when it is not empty. Writes the statements ahead, inside the arm's
+   block, and answers the list's temp. */
+static int poly_case_value_list(Compiler *c, const PolyTemps *T, const PolyKw *kw, Buf *b) {
+  if (T->argc == 1 && nt_kind(c->nt, T->argv[0]) == NK_SplatNode) return T->atmp[0];
+  int tl = ++g_tmp;
+  buf_printf(b, " sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", tl, tl);
+  for (int a = 0; a < T->argc; a++) {
+    if (nt_kind(c->nt, T->argv[a]) == NK_SplatNode) {
+      int ti = ++g_tmp;
+      buf_printf(b, " for (sp_int _t%d = 0; _t%d < sp_PolyArray_length(_t%d); _t%d++)"
+                    " sp_PolyArray_push(_t%d, sp_PolyArray_get(_t%d, _t%d));",
+                 ti, ti, T->atmp[a], ti, tl, T->atmp[a], ti);
+      continue;
+    }
+    Buf ab; memset(&ab, 0, sizeof ab);
+    int kb = poly_case_arg_boxed(c, T, kw, a, &ab, b);
+    poly_case_kw_elem_guard(c, T, kw, a, &ab, b);
+    buf_printf(b, " sp_PolyArray_push(_t%d, %s);", tl, ab.p ? ab.p : "sp_box_nil()");
+    if (kb) buf_puts(b, " }");
+    free(ab.p);
+  }
+  return tl;
 }
 
 /* The builtin `case` arms a poly dispatch with arguments writes after its
@@ -4391,30 +4433,30 @@ void emit_poly_cases_n(Compiler *c, int id, const char *name, const PolySpecials
     if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_UNSHIFT, -1, TY_UNKNOWN, PC_SAME);
     /* sp_poly_insert is the kind dispatch for a positional splice, so
        `unshift(a, b)` is a insert at 0 and b insert at 1 -- CRuby's order.
-       Answers the receiver, like push. */
+       A call whose count only the run knows is CRuby's `insert(0, ...)` of
+       its list. Answers the receiver, like push. */
     buf_puts(b, " case SP_BUILTIN_INT_ARRAY: case SP_BUILTIN_STR_ARRAY: case SP_BUILTIN_FLT_ARRAY: case SP_BUILTIN_POLY_ARRAY: case SP_BUILTIN_PTR_ARRAY:");
-    for (int a = 0; a < argc; a++) {
-      if (nt_kind(nt, argv[a]) == NK_SplatNode) {
-        int ti = ++g_tmp;
-        buf_printf(b, " for (sp_int _t%d = 0; _t%d < sp_PolyArray_length(_t%d); _t%d++)"
-                      " sp_poly_insert(_t%d, %d + _t%d, sp_PolyArray_get(_t%d, _t%d));",
-                   ti, ti, atmp[a], ti, tv, a, ti, atmp[a], ti);
-        continue;
-      }
-      Buf ab; memset(&ab, 0, sizeof ab);
-      int kb = poly_case_arg_boxed(c, T, kw, a, &ab, b);
-      poly_case_kw_elem_guard(c, T, kw, a, &ab, b);
-      buf_printf(b, " sp_poly_insert(_t%d, %d, %s);", tv, a, ab.p ? ab.p : "sp_box_nil()");
-      if (kb) buf_puts(b, " }");
-      free(ab.p);
+    if (poly_case_values_counted_at_run(c, T, kw)) {
+      buf_puts(b, " {");
+      int tl = poly_case_value_list(c, T, kw, b);
+      buf_printf(b, " sp_poly_insert_n(_t%d, 0, _t%d); }", tv, tl);
     }
+    else
+      for (int a = 0; a < argc; a++) {
+        Buf ab; memset(&ab, 0, sizeof ab);
+        int kb = poly_case_arg_boxed(c, T, kw, a, &ab, b);
+        buf_printf(b, " sp_poly_insert(_t%d, %d, %s);", tv, a, ab.p);
+        if (kb) buf_puts(b, " }");
+        free(ab.p);
+      }
     if (ret == TY_POLY) buf_printf(b, " _t%d = _t%d;", tr, tv);
     buf_puts(b, " break;");
   }
   if (is_push) {
     if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_PUSH, -1, TY_UNKNOWN, PC_SAME);
     /* The value is a builtin array: append each (boxed) arg via sp_poly_shl,
-       which dispatches on the array kind. `push`/`<<`/`append` return the
+       which dispatches on the array kind, or a list whose count only the
+       run knows via sp_poly_push_n. `push`/`<<`/`append` return the
        receiver, so yield it when the result is used (chained). */
     buf_puts(b, " case SP_BUILTIN_INT_ARRAY: case SP_BUILTIN_STR_ARRAY: case SP_BUILTIN_FLT_ARRAY: case SP_BUILTIN_POLY_ARRAY: case SP_BUILTIN_PTR_ARRAY:");
     /* Queue's timed push (an_queue_timeout_arg): an Array's push takes the
@@ -4423,21 +4465,19 @@ void emit_poly_cases_n(Compiler *c, int id, const char *name, const PolySpecials
                   kw->kwn == 1 && an_queue_timeout_arg(nt, id) >= 0;
     if (q_timed && name[0] == '<')
       buf_printf(b, " sp_raise_cls(\"ArgumentError\", \"wrong number of arguments (given %d, expected 1)\");", argc);
-    for (int a = 0; a < argc && !(q_timed && name[0] == '<'); a++) {
-      if (nt_kind(nt, argv[a]) == NK_SplatNode) {
-        int ti = ++g_tmp;
-        buf_printf(b, " for (sp_int _t%d = 0; _t%d < sp_PolyArray_length(_t%d); _t%d++)"
-                      " sp_poly_shl(_t%d, sp_PolyArray_get(_t%d, _t%d));",
-                   ti, ti, atmp[a], ti, tv, atmp[a], ti);
-        continue;
-      }
-      Buf ab; memset(&ab, 0, sizeof ab);
-      int kb = poly_case_arg_boxed(c, T, kw, a, &ab, b);
-      poly_case_kw_elem_guard(c, T, kw, a, &ab, b);
-      buf_printf(b, " sp_poly_shl(_t%d, %s);", tv, ab.p ? ab.p : "sp_box_nil()");
-      if (kb) buf_puts(b, " }");
-      free(ab.p);
+    if (poly_case_values_counted_at_run(c, T, kw)) {
+      buf_puts(b, " {");
+      int tl = poly_case_value_list(c, T, kw, b);
+      buf_printf(b, " sp_poly_push_n(_t%d, _t%d); }", tv, tl);
     }
+    else
+      for (int a = 0; a < argc && !(q_timed && name[0] == '<'); a++) {
+        Buf ab; memset(&ab, 0, sizeof ab);
+        int kb = poly_case_arg_boxed(c, T, kw, a, &ab, b);
+        buf_printf(b, " sp_poly_shl(_t%d, %s);", tv, ab.p);
+        if (kb) buf_puts(b, " }");
+        free(ab.p);
+      }
     if (ret == TY_POLY) buf_printf(b, " _t%d = _t%d;", tr, tv);
     buf_puts(b, " break;");
     /* A Queue's timed push answers the queue, or nil when the wait for

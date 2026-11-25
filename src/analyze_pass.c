@@ -1943,11 +1943,19 @@ static int param_push_args_foreign(Compiler *c, Scope *sc, const int *argv, int 
   return 0;
 }
 
+/* lv stores its scope's rest parameter's elements from element rf on
+   (store_rest_src keeps one past the first such element); -1 for none. */
+static int rest_src_add(LocalVar *lv, int rf) {
+  if (rf < 0 || (lv->store_rest_src != 0 && rf + 1 >= lv->store_rest_src)) return 0;
+  lv->store_rest_src = rf + 1;
+  return 1;
+}
+
 /* The arguments [*from, *to) of a call passing `argv` to method m that
    hold the elements of m's rest parameter that parameter `p` stores (p's
-   store_rest_src); 0 when it stores none. A splat before the rest's
-   position leaves the positions unknown, and every argument from it on is
-   read. */
+   store_rest_src); 0 when it stores none. A splat leaves the positions
+   unknown, and every argument from it, or from the rest's position if that
+   comes first, is read. */
 static int rest_store_args(Compiler *c, Scope *m, LocalVar *p, const int *argv, int an,
                            int *from, int *to) {
   const NodeTable *nt = c->nt;
@@ -1956,8 +1964,8 @@ static int rest_store_args(Compiler *c, Scope *m, LocalVar *p, const int *argv, 
       (callee_declares_kwargs(c, m) || m->kwrest_idx >= 0)) an--;
   int at = m->rest_idx + p->store_rest_src - 1;
   *from = at; *to = an - m->npost_rest;
-  for (int k = 0; k < an && k < at; k++)
-    if (nt_kind(nt, argv[k]) == NK_SplatNode) { *from = k; *to = an; break; }
+  for (int k = 0; k < an; k++)
+    if (nt_kind(nt, argv[k]) == NK_SplatNode) { *from = k < at ? k : at; *to = an; break; }
   return 1;
 }
 
@@ -1971,6 +1979,29 @@ int param_rest_misfits(Compiler *c, Scope *m, LocalVar *p, TyKind ct, const int 
   for (int k = from; k < to; k++)
     if (push_arg_foreign(c, argv[k], ty_array_elem(ct))) return 1;
   return 0;
+}
+
+/* A caller of scope cs that hands its container parameter cp on as p, which
+   stores m's rest's elements: the arguments that fill that rest
+   (rest_store_args) are cs's own rest, splatted or one element of it,
+   another of its parameters, or one splatted, and cp stores them the same
+   way, for cs's own callers' binding to check. */
+static int relay_rest_store(Compiler *c, Scope *m, LocalVar *p, const int *argv, int an, Scope *cs, LocalVar *cp) {
+  const NodeTable *nt = c->nt;
+  int from, to, ch = 0;
+  if (!rest_store_args(c, m, p, argv, an, &from, &to)) return 0;
+  for (int k = from; k < to; k++) {
+    int a = argv[k], rk = rest_elem_arg(c, cs, a);
+    if (rk >= 0) ch |= rest_src_add(cp, rk);
+    else if (nt_kind(nt, a) == NK_SplatNode)
+      ch |= mask_add(&cp->store_splat_src, unassigned_param_read(c, cs, nt_ref(nt, a, "expression")));
+    else {
+      int j = unassigned_param_read(c, cs, a);
+      ch |= mask_add(&cp->store_val_src, j);
+      ch |= mask_add(&cp->store_push_src, j);
+    }
+  }
+  return ch;
 }
 
 /* What the type of a value settles before its form is read. `counts`: a
@@ -3942,10 +3973,7 @@ static int record_push_param_srcs(Compiler *c, int id, Scope *sc, LocalVar *lv, 
   for (int ai = 0; cat_argv && ai < cat_an; ai++)
     if (splice_incoming_elem(c, id, cat_argv[ai]) == TY_POLY)
       ch |= mask_add(&lv->store_splat_src, unassigned_param_read(c, sc, cat_argv[ai]));
-  int rf = argv ? rest_push_first(c, sc, argv, an, from, splat_index) : -1;
-  if (rf >= 0 && (lv->store_rest_src == 0 || rf + 1 < lv->store_rest_src)) {
-    lv->store_rest_src = rf + 1; ch = 1;
-  }
+  ch |= rest_src_add(lv, argv ? rest_push_first(c, sc, argv, an, from, splat_index) : -1);
   return ch;
 }
 
@@ -10385,9 +10413,11 @@ static void widen_boxed_for_stored_arg(Compiler *c, int anode, int a, int *chang
   if (k == NK_BlockArgumentNode) return;
   if (k == NK_SplatNode) { widen_boxed_for_elems(c, anode, nt_ref(nt, a, "expression"), changed, any); return; }
   TyKind t = infer_type(c, a);
-  if (t == TY_UNKNOWN || t == TY_POLY || t == TY_VOID) return;
-  /* (a nil or an empty container is stored boxed: push_elem_ty) */
+  if (t == TY_POLY || t == TY_VOID) return;
+  /* (a nil or an empty container is stored boxed: push_elem_ty; any other
+     value whose kind is not settled yet is left for a later round) */
   TyKind e = push_elem_ty(c, a);
+  if (e == TY_UNKNOWN) return;
   if (e == TY_STRBUF) e = TY_STRING;
   wbas_share_step(changed, any);
   *changed |= widen_boxed_array_sources(c, anode, e, 0);
@@ -10611,10 +10641,11 @@ static int bind_args_params(Compiler *c, int call_id, int mi, const int *argv, i
     int src_misfit = param_src_misfits(c, m, p, p->type == TY_POLY ? at : p->type, argv, &L) ||
                      param_rest_misfits(c, m, p, p->type == TY_POLY ? at : p->type, argv, argc);
     /* A caller that hands its own parameters on, as the container and as
-       the key or value, stores them the same way: record it on the caller's
-       container parameter, for its own callers' binding to check. */
+       the key, the value or the rest's elements (relay_rest_store), stores
+       them the same way: record it on the caller's container parameter, for
+       its own callers' binding to check. */
     if (p->store_key_src | p->store_val_src | p->store_push_src | p->store_elems_src | p->store_splat_src |
-        p->store_merge_src | (unsigned long long)p->store_merge_nblocks) {
+        p->store_merge_src | (unsigned long long)p->store_merge_nblocks | (unsigned long long)p->store_rest_src) {
       Scope *cs = comp_scope_of(c, call_id);
       int ck = unassigned_param_read(c, cs, anode);
       LocalVar *cp = ck >= 0 ? scope_local(cs, cs->pnames[ck]) : NULL;
@@ -10631,6 +10662,7 @@ static int bind_args_params(Compiler *c, int call_id, int mi, const int *argv, i
         if ((p->store_splat_src >> j) & 1ULL) changed |= mask_add(&cp->store_splat_src, cj);
         if ((p->store_merge_src >> j) & 1ULL) changed |= mask_add(&cp->store_merge_src, unassigned_param_or_kwarg_read(c, cs, aj));
       }
+      if (cp && !cp->rbs_seeded) changed |= relay_rest_store(c, m, p, argv, argc, cs, cp);
     }
     if (src_misfit && p->type != TY_POLY) {
       lv_set_type(p, ty_is_array(p->type) ? TY_POLY_ARRAY : TY_POLY_POLY_HASH);

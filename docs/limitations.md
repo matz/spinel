@@ -2153,6 +2153,11 @@ no character interpretation at all, so there is no second interpretation for
 the first one to disagree with. The failure the error exists to prevent cannot
 happen here, so Spinel answers the byte question instead of refusing it.
 
+`String#concat` and `#prepend` given a splat, and `concat` given an Integer
+after a String that is not an ASCII-only literal, stage their operands as
+CRuby does and raise as it does: `(+"é").concat("é".b, 200)` raises
+`Encoding::CompatibilityError`.
+
 Where CRuby produces a *value* rather than an error, Spinel matches it.
 `String#==`, `#eql?`, `#<=>` and `#hash` follow CRuby's `rb_str_comparable`:
 equal bytes are equal strings only when the encodings are comparable -- the

@@ -370,6 +370,7 @@ const char *sp_sock_recv(sp_File *f, sp_int len);
 sp_PolyArray *sp_sock_recvfrom(sp_File *f, sp_int len);
 sp_int sp_sock_optval(sp_RbVal v);
 sp_int sp_sock_level_arg(sp_RbVal v);
+sp_int sp_sock_shutdown_arg(sp_RbVal v);
 sp_int sp_sock_optname_arg(sp_int level, sp_RbVal v);
 sp_int sp_sock_setsockopt(sp_File *f, sp_int level, sp_int opt, sp_int value);
 sp_SockOpt *sp_sock_getsockopt(sp_File *f, sp_int level, sp_int opt);

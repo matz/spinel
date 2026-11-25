@@ -183,6 +183,7 @@ struct LoadRecord {
   struct LrClass *cls; int ncls;
   char **names; int nnames, cnames;     /* the names the program defines methods by, sorted (lr_names_take) */
   LrSite *defs; int ndefs;              /* ...and its defs, sorted by name */
+  LrSite *accs; int naccs;              /* ...and its attr forms' readers and writers (a writer's name with its =), sorted by name, at the form */
   unsigned char callbacks;              /* lr_callbacks_define's memo: 1 + what they may do (LR_OPAQUE_*) */
   unsigned char evhooks;                /* lr_event_hooks' memo: 1 no, 2 yes */
   char **reopens; int nreopens, creopens;   /* the builtin classes and modules a header of the program reopens, sorted (lr_reopens_take) */
@@ -2401,6 +2402,13 @@ static int lr_send_names_nothing(const NodeTable *nt, int n, const int *av, int 
   }
   return 1;
 }
+/* Record the name lr_name just took as an attr form's reader or writer,
+   made at the form `node` */
+static void lr_acc(LoadRecord *r, int node) {
+  LrSite *d = realloc(r->accs, sizeof *r->accs * (size_t)(r->naccs + 1));
+  if (!d) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  (r->accs = d)[r->naccs++] = (LrSite){ r->names[r->nnames - 1], node };
+}
 /* The names the program defines methods by, wherever it does (a statement
    of the load phase, a class the record does not know, a method body or a
    block run later): a def's, an alias's, an attr form's, a define_method's
@@ -2450,11 +2458,16 @@ static void lr_names_take(Compiler *c) {
     }
     else if (is_attr_decl_reader(nm) || is_attr_decl_writer(nm))
       for (int i = 0; i < ac; i++) {
+        const char *a = vis_arg_name(nt, av[i]);
         if (is_attr_decl_reader(nm)) {
-          lr_name(r, vis_arg_name(nt, av[i]), "");
-          lr_auto_form(c, n, vis_arg_name(nt, av[i]));
+          lr_name(r, a, "");
+          if (a) lr_acc(r, n);
+          lr_auto_form(c, n, a);
         }
-        if (is_attr_decl_writer(nm)) lr_name(r, vis_arg_name(nt, av[i]), "=");
+        if (is_attr_decl_writer(nm)) {
+          lr_name(r, a, "=");
+          if (a) lr_acc(r, n);
+        }
       }
     else if (is_define_method_name(nm) || is_define_singleton_method_name(nm) || is_alias_method_name(nm)) {
       const char *dn = vis_arg_name(nt, av[0]);
@@ -2484,6 +2497,7 @@ static void lr_names_take(Compiler *c) {
   }
   if (r->nnames > 1) qsort(r->names, (size_t)r->nnames, sizeof *r->names, lr_name_cmp);
   if (r->ndefs > 1) qsort(r->defs, (size_t)r->ndefs, sizeof *r->defs, lr_name_cmp);   /* the name leads an LrSite */
+  if (r->naccs > 1) qsort(r->accs, (size_t)r->naccs, sizeof *r->accs, lr_name_cmp);
 }
 
 /* The entries of `name` in v, n of size sz sorted by the name that leads
@@ -4464,15 +4478,44 @@ static int lr_anon_defines(Compiler *c, int direct, int depth) {
   return o;
 }
 
+/* May a builtin method `name` run a block the program handed a builtin
+   object before (an Enumerator's, a Thread's or Fiber's, a Proc, a Hash's
+   default proc)? Such a call runs program code no method of the name
+   holds, which the record does not follow: the Enumerator's and
+   Enumerable's own methods (Enumerator::Lazy's force and eager besides),
+   and those of the others that run it. */
+static int lr_name_runs_stored_block(const char *name) {
+  static const char *const runs[] = {
+    "value", "join", "resume", "transfer", "call", "()", "yield", "[]", "===", "to_proc", "dig", "default", "values_at",
+    "fetch_values", "force", "eager" };
+  for (size_t i = 0; i < sizeof runs / sizeof *runs; i++) if (sp_streq(name, runs[i])) return 1;
+  return core_method_vis("Enumerator", name, 0, NULL) > 0 || core_method_vis("Enumerable", name, 0, NULL) > 0;
+}
+
 static int lr_callee_defines(Compiler *c, const char *name, int direct, int depth) {
   LoadRecord *r = c->lrec;
-  int nn = 0, nd = 0, o = 0;
+  int nn = 0, nd = 0, na = 0, o = 0;
   if (r->names_any) return LR_OPAQUE_DEFINES;
   /* (a method a computed define_method makes may be the call's) */
   if (r->nanon && (o = lr_anon_defines(c, direct, depth)) == LR_OPAQUE_DEFINES) return o;
   lr_name_range(r->names, r->nnames, sizeof *r->names, name, &nn);
   const LrSite *d = lr_name_range(r->defs, r->ndefs, sizeof *r->defs, name, &nd);
-  if (nd < nn) return LR_OPAQUE_DEFINES;
+  lr_name_range(r->accs, r->naccs, sizeof *r->accs, name, &na);
+  /* (a method made another way than by a def or an attr form, a
+     define_method's or an alias's, may run anything) */
+  if (nd + na < nn) return LR_OPAQUE_DEFINES;
+  /* (an attr form's reader reads an instance variable and calls nothing;
+     its writer writes one. Wherever the form is, and whether or not the
+     walk has reached it: a call before it runs another method of the name,
+     one the names hold too, or what the runtime calls back for a name
+     nothing answers (method_missing, lr_callbacks_define). An attr form
+     that runs a program's own method of its name makes no reader itself:
+     what that method makes, it makes by a form the names take as well.
+     But a builtin of the name may run a block the program stored, and a
+     receiver the record does not know may be one: such a name may define,
+     as it did before attr forms were read) */
+  if (na && lr_name_runs_stored_block(name)) return LR_OPAQUE_DEFINES;
+  if (na && name[strlen(name) - 1] == '=') o = lr_most(o, LR_OPAQUE_WRITES);
   for (int i = 0; i < nd; i++) {
     LoadPoint p = elab_point_of(c, d[i].node);
     /* (a def the record holds as a body's version is followed: its body

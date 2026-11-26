@@ -16,3 +16,11 @@ true
 [:blk, :blk, :blk, :blk, :blk, :blk, :blk, :blk]
 "wrong number of arguments (given 0, expected 1..2)"
 9
+"wrong number of arguments (given 1, expected 0)"
+[1, :blk]
+"wrong number of arguments (given 2, expected 0)"
+[2, :blk]
+"wrong number of arguments (given 2, expected 1)"
+[C, 4, :blk]
+"wrong number of arguments (given 0, expected 1)"
+[:blk]

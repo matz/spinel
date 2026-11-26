@@ -22793,10 +22793,11 @@ int builtin_count_refused_boxed(Compiler *c, int id) {
 
 /* The raise for a count a method refuses: the receiver (when asked) and the
    arguments evaluated in order, as CRuby evaluates them before it checks the
-   count, then the ArgumentError with `exp` as the range, yielding the call's
-   default value. Shared by the builtin guard and a call through a Method
-   object whose target is known. */
-void emit_wrong_count(Compiler *c, int id, const char *exp, int eval_recv, int given, Buf *b) {
+   count, then `after` (the caller's effect past the arguments, such as a
+   super's block argument, or NULL), then the ArgumentError with `exp` as the
+   range, yielding the call's default value. Shared by the builtin guard, a
+   call through a Method object whose target is known and a super's count arm. */
+void emit_wrong_count(Compiler *c, int id, const char *exp, int eval_recv, int given, const char *after, Buf *b) {
   const NodeTable *nt = c->nt;
   int recv = nt_ref(nt, id, "receiver");
   int anode = nt_ref(nt, id, "arguments");
@@ -22821,6 +22822,7 @@ void emit_wrong_count(Compiler *c, int id, const char *exp, int eval_recv, int g
       if (v >= 0) { buf_puts(b, "(void)("); emit_expr_for_effect(c, v, b); buf_puts(b, "); "); }
     }
   }
+  if (after) buf_puts(b, after);
   buf_printf(b, "sp_raise_cls(\"ArgumentError\","
                 " \"wrong number of arguments (given %d, expected %s)\"); %s; })",
              given, exp, dv ? dv : "0");
@@ -23307,7 +23309,7 @@ int emit_builtin_arity_guard(Compiler *c, int id, Buf *b) {
                tq, argc, argc, dv ? dv : "0");
     return 1;
   }
-  emit_wrong_count(c, id, exp, eval_recv, given, b);
+  emit_wrong_count(c, id, exp, eval_recv, given, NULL, b);
   return 1;
 }
 

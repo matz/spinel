@@ -1510,7 +1510,7 @@ int emit_call_callable_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
        a call without one is CRuby's ArgumentError, where it read the padding
        zero as the operand (`arr.method(:[]).call()` answered `arr[0]`). */
     if (tm && bam_binop_wrapper(tm) && argc < 1) {
-      emit_wrong_count(c, id, "1", 1, 0, b);
+      emit_wrong_count(c, id, "1", 1, 0, NULL, b);
       return 1;
     }
     /* More arguments than the wrapper's operands went to its C function as
@@ -1532,7 +1532,7 @@ int emit_call_callable_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
     if (tm && bam_binop_wrapper(tm) && argc > bop_ops && !bop_flat) {
       char exp[16];
       arity_expected(exp, sizeof exp, bop_min, bop_max);
-      emit_wrong_count(c, id, exp, 1, -1, b);
+      emit_wrong_count(c, id, exp, 1, -1, NULL, b);
       return 1;
     }
     /* When the target is unresolved under promote, fall back to the poly ABI

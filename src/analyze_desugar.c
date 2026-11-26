@@ -6257,6 +6257,18 @@ static const char *cvb_builtin_name(int bid) {
   for (int i = 0; (r = builtin_class_at(i)); i++) if (r->id == bid) return r->name;
   return NULL;
 }
+/* `id` becomes a node of `kind` and keeps the marks of a computed send's arm
+   (dyn_arm, dyn_name, dyn_arm_below), which the dispatch finds its arms by */
+static void nt_reset_keeping_arm(NodeTable *nt, int id, const char *kind) {
+  int arm = (int)nt_int(nt, id, "dyn_arm", 0);
+  const char *dn = nt_str(nt, id, "dyn_name"), *db = nt_str(nt, id, "dyn_arm_below");
+  char *name = dn ? strdup(dn) : NULL, *below = db ? strdup(db) : NULL;
+  nt_node_reset(nt, id, kind);
+  if (arm) nt_node_set_int(nt, id, "dyn_arm", arm);
+  if (name) nt_node_set_str(nt, id, "dyn_name", name);
+  if (below) nt_node_set_str(nt, id, "dyn_arm_below", below);
+  free(name); free(below);
+}
 /* `r.m(args)` on a boxed receiver, where m is a class method of a builtin
    class the value can be (Time.now, Time.at): the dispatch knows the
    program's class methods only, so a Time read back out of an Array raised
@@ -6330,7 +6342,7 @@ static int cvb_split(Compiler *c, int id, const char *nm, const int *bval, int n
   int body = nt_new_node(nt, "StatementsNode");
   nt_node_set_arr(nt, body, "body", &tail, 1);
   long long line = nt_int(nt, id, "node_line", 0), file = nt_int(nt, id, "node_file", 0);
-  nt_node_reset(nt, id, "ParenthesesNode");
+  nt_reset_keeping_arm(nt, id, "ParenthesesNode");
   nt_node_set_ref(nt, id, "body", body);
   nt_node_set_int(nt, id, "node_line", line);
   nt_node_set_int(nt, id, "node_file", file);

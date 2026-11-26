@@ -14,4 +14,5 @@ A
 B
 3
 10000
-a Row of a String and an Integer: at most 72 bytes: yes
+10000
+a Row of a String and an Integer: no larger than a plain Struct's: yes

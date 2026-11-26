@@ -88,11 +88,20 @@ def live_bytes
   s.key?("bytes") ? s["bytes"] : GC.stat(:heap_live_slots) * 40
 end
 
+# Measured beside a Struct of the same members that nothing but its
+# construction writes: a member read as a boxed value makes a Row larger
+# than it, whatever an Integer member's own size is (a boxed slot under
+# --int-overflow=promote).
+Ref = Struct.new(:id, :n)
 N = 10_000
 rows = Array.new(N)
+refs = Array.new(N)
 id = "r"
 b0 = live_bytes
 N.times { |i| rows[i] = Row.new(id, i) }
 per = (live_bytes - b0) / N
-puts rows.size
-puts "a Row of a String and an Integer: at most 72 bytes: " + (per <= 72 ? "yes" : "no (" + per.to_s + ")")
+b1 = live_bytes
+N.times { |i| refs[i] = Ref.new(id, i) }
+per_ref = (live_bytes - b1) / N
+puts rows.size, refs.size
+puts "a Row of a String and an Integer: no larger than a plain Struct's: " + (per <= per_ref ? "yes" : "no (" + per.to_s + " for " + per_ref.to_s + ")")

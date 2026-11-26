@@ -9,6 +9,12 @@ class Box
   def ask(name, *args) = send(name, *args)
   def ask2(name) = send(name, 1, 2)
   def ask_kw(name) = send(name, key: 1) { 2 }
+  # code in a String no literal spells runs in no compiled program, and a
+  # definition form sent to self's own singleton class makes a method of
+  # that object alone (none of these is called)
+  def eval_on(str) = instance_eval(str)
+  def self.add(code) = class_eval(code, __FILE__, __LINE__)
+  def bind(key, value) = singleton_class.send(:define_method, key) { value }
 end
 
 p Box.new.ask(:size, 1)

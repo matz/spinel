@@ -1813,7 +1813,7 @@ static const BuiltinOp bop_rows[] = {
   { TY_IO, "sysseek",        0, 127, BF_ANY, TY_INT,      BOPE_NONE },
   { TY_IO, "size",           0,   0, BF_ANY, TY_INT,      BOPE_TEMPLATE, "sp_oint_arg(sp_stat_size($r))", TY_UNKNOWN },  /* nil only when the stat failed */
   { TY_IO, "size",           0, 127, BF_ANY, TY_INT,      BOPE_NONE },
-  { TY_IO, "chmod",          1,   1, BF_ANY, TY_INT,      BOPE_TEMPLATE, "({ sp_file_chmod($i0, sp_File_path($r)); (sp_int)0; })", TY_UNKNOWN },
+  { TY_IO, "chmod",          1,   1, BF_ANY, TY_INT,      BOPE_TEMPLATE, "sp_File_chmod($r, $i0)", TY_UNKNOWN },
   { TY_IO, "chmod",          0, 127, BF_ANY, TY_INT,      BOPE_NONE },
   { TY_IO, "mode",           0,   0, BF_ANY, TY_INT,      BOPE_TEMPLATE, "sp_stat_mode($r)", TY_UNKNOWN },
   { TY_IO, "mode",           0, 127, BF_ANY, TY_INT,      BOPE_NONE },
@@ -1933,7 +1933,7 @@ static const BuiltinOp bop_rows[] = {
   { TY_IO, "atime",          0, 127, BF_ANY, TY_TIME,     BOPE_NONE },
   { TY_IO, "ctime",          0,   0, BF_ANY, TY_TIME,     BOPE_TEMPLATE, "sp_stat_handle_time($r, 2)", TY_UNKNOWN },
   { TY_IO, "ctime",          0, 127, BF_ANY, TY_TIME,     BOPE_NONE },
-  { TY_IO, "birthtime",      0,   0, BF_ANY, TY_TIME,     BOPE_TEMPLATE, "sp_file_birthtime(sp_File_path($r))", TY_UNKNOWN },
+  { TY_IO, "birthtime",      0,   0, BF_ANY, TY_TIME,     BOPE_TEMPLATE, "sp_io_birthtime($r)", TY_UNKNOWN },
   { TY_IO, "birthtime",      0, 127, BF_ANY, TY_TIME,     BOPE_NONE },
   /* io/console's size, [rows, cols], and its writer, which answers its
      Integer Array: a writer's other operand is left to the refusal after
@@ -3387,6 +3387,12 @@ int bop_below_object_answers(const char *name) {
   for (int i = -1; (r = bop_name_row_next(name, &i));)
     if (bop_row_below_object(r)) return 1;
   return 0;
+}
+
+/* See builtin_ops.h. */
+int bop_any_answers(const char *name) {
+  int i = -1;
+  return !name || builtin_object_method_known(name) || bop_core_name(name) || bop_name_row_next(name, &i);
 }
 
 /* See builtin_ops.h. */

@@ -4304,6 +4304,12 @@ int cplan_typed_to_ary(Compiler *c, TyKind t, int at, int op, int *boxed) {
   return cplan_typed_to_ary_held(c, t, at, op, boxed, NULL);
 }
 /* See call_plan.h. */
+int cplan_masgn_takes_apart(Compiler *c, int mw, int value, TyKind t) {
+  if (ty_is_array(t) || ty_is_obj_array(t) || t == TY_UNKNOWN || t == TY_POLY) return 1;
+  int boxed = 0;
+  return cplan_typed_to_ary(c, t, mw, value, &boxed) >= 0 || boxed;
+}
+/* See call_plan.h. */
 int cplan_index_writer(Compiler *c, int cls, int *cdef) {
   int dc = -1;
   mtab_enter(c);   /* (the plan's own read: the class's `[]=` an index target stores through, as the plan states it) */

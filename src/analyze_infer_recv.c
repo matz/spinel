@@ -2407,10 +2407,13 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
      (cls_fact_may_ostruct): the dispatch's builtin arms for them answer the
      containers' value boxed, beside the member (the call itself is typed by
      ostruct_member_read, in infer_call_inner). Elsewhere they keep the type
-     the others give. */
+     the others give, and so do strip, chomp and chop, whose boxed row
+     answers an unboxed String the arm boxes. */
   if (recv >= 0 && rt == TY_POLY && argc == 0 && nt_ref(nt, id, "block") < 0 &&
-      ostruct_member_name(name) && cls_fact_may_ostruct(c, recv))
-    { *out = TY_POLY; return 1; }
+      ostruct_member_name(name) && cls_fact_may_ostruct(c, recv)) {
+    const BuiltinOp *op = an_bop_find(c, id, TY_POLY, name, 0, 0);
+    if (!(op && op->emit == BOPE_TEMPLATE && op->result != TY_POLY)) { *out = TY_POLY; return 1; }
+  }
 
   /* #clear on a poly value returns the (emptied) receiver, itself poly. */
   if (recv >= 0 && rt == TY_POLY && argc == 0 && nt_ref(nt, id, "block") < 0 &&

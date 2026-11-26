@@ -173,6 +173,10 @@ typedef struct {
    such a nil can be stored THROUGH this name, so the names it was assigned
    or bound from reach it too (mark_elem_slot). */
 enum { NIE_MARKED = 1, NIE_STORED = 2, NIE_REACH = 4 };
+/* The literal indices of a rest's elements whose stores are kept apart
+   (LocalVar.rest_elem_at): the first REST_ELEM_HEAD and the last
+   REST_ELEM_TAIL. ELEM_ANY: an index not known, or past them. */
+enum { REST_ELEM_HEAD = 4, REST_ELEM_TAIL = 2, ELEM_ANY = -1000 };
 typedef struct {
   char *name;       /* Ruby local name (without sigil) */
   char *wname;      /* (a parameter) the name the program wrote where a pass renamed it
@@ -305,6 +309,17 @@ typedef struct {
                        as it lands (#4481), and a concat of no Array raises
                        rather than stores. What a boxed argument's arrays
                        widen for (widen_boxed_array_sources). */
+  TyKind rest_elem_store; /* (a method's rest) the element type a store
+                       through one of the rest's elements carries
+                       (`r[i] << 1`), unified as boxed_push_elem is: the
+                       binding widens, for it, the arrays each call hands
+                       the rest (widen_rest_arg_arrays). */
+  TyKind rest_elem_at[REST_ELEM_HEAD + REST_ELEM_TAIL]; /* (a method's rest)
+                       the same, of a store through the element at a literal
+                       index (`r[0] << 1`, `r.last`): 0 to REST_ELEM_HEAD - 1
+                       first, then -1 to -REST_ELEM_TAIL. The binding widens
+                       for it only the array a call lays there, where the
+                       count is the call's own; another index counts as any. */
   TyKind boxed_store_key, boxed_store_val; /* (params, boxed) the key and the
                        value an element write through this BOXED parameter
                        stores, unified as boxed_push_elem is: the evidence
@@ -1477,6 +1492,8 @@ typedef struct {
      Class object as member k + cls_fact_ncls, and a class registered after
      (k >= cls_fact_ncls) is in no set */
   int cls_fact_ncls;
+  struct AttrCallIndex *attr_call_ix;   /* per writer name, its calls by the classes the class facts say their receiver may hold (analyze_pass.c, attr_writer_calls), made on first ask */
+  struct IvarWalkMemo *ivar_walk_memo;   /* per class ivar, the source walk's answers from a read, kept while no fact moves (analyze_pass.c, ivar_src_walk), made on first ask */
   struct CplanMemo *cplan_memo;   /* the call plans kept per node where the node is read as itself, and the storage the plans handed out point into (call_plan.c), made on first use */
   struct SendOwners *send_owners; int nsend_owners, csend_owners;   /* per send name, the builtin classes the tables give as answering it (cplan_send_split_owners) */
   unsigned long long (*cls_bk_sub)[CLS_BK_WORDS]; unsigned char *cls_bk_sub_ok;   /* per builtin class, the mask of it and the classes below it, made on first ask (cls_bk_subtree) */
@@ -2865,6 +2882,8 @@ const ClsSet *cls_fact_node(Compiler *c, int node);
    class set's (cls_set_has), not this. */
 int cls_fact_may_hold_builtin(Compiler *c, int node, int core);
 void cplan_send_owners_free(Compiler *c);   /* call_plan.c: the memo of the builtin classes that answer a send's name */
+void attr_call_index_free(Compiler *c);   /* analyze_pass.c: the index of the writer calls by receiver class */
+void ivar_walk_memo_free(Compiler *c);   /* analyze_pass.c: the source walk's answers per class ivar */
 void cplan_memo_free(Compiler *c);   /* call_plan.c: the plans kept per node and the storage the plans handed out point into */
 /* Is class k one the fact bounds: a class the program defines, whose
    instances the pass follows from their construction? A reopened builtin's,

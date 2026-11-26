@@ -69,9 +69,7 @@ static int fwd_callable_arity(Compiler *c, int ex, FwdShape *shape) {
   if (pn < 0) return -1;
   int rn = 0; nt_arr(nt, pn, "requireds", &rn);
   if (shape) {
-    NodeKind ck = nt_kind(nt, create);
-    const char *cn = nt_str(nt, create, "name");
-    shape->strict = ck == NK_LambdaNode || (cn && sp_streq(cn, "lambda"));
+    shape->strict = is_lambda_create(c, create);
     shape->arity = params_arity(nt, pn);
   }
   return rn;
@@ -6019,6 +6017,13 @@ int desugar_implicit_send(Compiler *c) {
       nt_set_ignore_visibility(nt, id, 0);
     }
     else nt_node_set_str(nt, id, "send_blind", "1");   /* see desugar_public_send_recv */
+    /* a writer's name with its one value (`send :id=, v`) is `self.id = v`: a
+       receiverless call of it reaches a def's writer and not an attr_writer's
+       (another count keeps the call, whose ArgumentError is CRuby's) */
+    if (nrest == 1 && name_is_plain_setter(namebuf)) {
+      int sn = nt_new_node(nt, "SelfNode");
+      if (sn >= 0) nt_set_self_receiver(nt, id, sn);
+    }
     comp_grow_node_arrays(c);
     int encl = c->nscope[id];
     for (int j = base; j < nt->count; j++) c->nscope[j] = encl;
@@ -6257,6 +6262,18 @@ static const char *cvb_builtin_name(int bid) {
   for (int i = 0; (r = builtin_class_at(i)); i++) if (r->id == bid) return r->name;
   return NULL;
 }
+/* `id` becomes a node of `kind` and keeps the marks of a computed send's arm
+   (dyn_arm, dyn_name, dyn_arm_below), which the dispatch finds its arms by */
+static void nt_reset_keeping_arm(NodeTable *nt, int id, const char *kind) {
+  int arm = (int)nt_int(nt, id, "dyn_arm", 0);
+  const char *dn = nt_str(nt, id, "dyn_name"), *db = nt_str(nt, id, "dyn_arm_below");
+  char *name = dn ? strdup(dn) : NULL, *below = db ? strdup(db) : NULL;
+  nt_node_reset(nt, id, kind);
+  if (arm) nt_node_set_int(nt, id, "dyn_arm", arm);
+  if (name) nt_node_set_str(nt, id, "dyn_name", name);
+  if (below) nt_node_set_str(nt, id, "dyn_arm_below", below);
+  free(name); free(below);
+}
 /* `r.m(args)` on a boxed receiver, where m is a class method of a builtin
    class the value can be (Time.now, Time.at): the dispatch knows the
    program's class methods only, so a Time read back out of an Array raised
@@ -6330,7 +6347,7 @@ static int cvb_split(Compiler *c, int id, const char *nm, const int *bval, int n
   int body = nt_new_node(nt, "StatementsNode");
   nt_node_set_arr(nt, body, "body", &tail, 1);
   long long line = nt_int(nt, id, "node_line", 0), file = nt_int(nt, id, "node_file", 0);
-  nt_node_reset(nt, id, "ParenthesesNode");
+  nt_reset_keeping_arm(nt, id, "ParenthesesNode");
   nt_node_set_ref(nt, id, "body", body);
   nt_node_set_int(nt, id, "node_line", line);
   nt_node_set_int(nt, id, "node_file", file);
@@ -9195,9 +9212,11 @@ static void dsend_param_literals(Compiler *c, int name, ANameHash *out) {
     if (k != sc->rest_idx && sc->pnames[k] && sp_streq(sc->pnames[k], vn)) pi = k;
   int post = sc->rest_idx >= 0 && pi > sc->rest_idx ? pi - sc->rest_idx : 0;
   if (pi < 0 || post > sc->npost_rest) return;
+  /* (a hidden copy, `__prep N m` of an include or a prepend, is called by the name the program wrote) */
+  const char *mn = sc->shadow && sc->shadow_user ? sc->shadow_user : sc->name;
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
     const char *cn = nt_str(nt, id, "name");
-    if (!cn || !sp_streq(cn, sc->name)) continue;
+    if (!cn || !sp_streq(cn, mn)) continue;
     int a = nt_ref(nt, id, "arguments");
     int ac = 0; const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
     int ai = post ? ac - sc->npost_rest + post - 1 : pi;
@@ -31050,6 +31069,10 @@ int desugar_missing_method_calls(Compiler *c) {
       nt_node_set_arr(nt, st, "body", body, 2);
       nt_node_set_ref(nt, par, "body", st);
       parent[id] = st;
+      /* (the hold stands whether or not the call splits below: its nodes run
+         in the call's scope and class body now, as a split's would) */
+      comp_grow_node_arrays(c);
+      for (int j = mark; j < nt->count; j++) { c->nscope[j] = c->nscope[id]; c->node_cbody[j] = c->node_cbody[id]; }
     }
     /* (a split reads a variable or self again, and holds other receivers) */
     if (r < 0 || ie_self) reread = 1;

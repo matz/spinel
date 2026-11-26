@@ -32315,7 +32315,78 @@ static int emit_call_env_box_read(Compiler *c, int id, Buf *b) {
   free(rb.p);
   return 1;
 }
+/* Operand `node` run into a temp at g_pre's end and bound to it (the
+   emitters read the temp); 0 for one with no C value to hold */
+static int fetch_hold_operand(Compiler *c, int node) {
+  TyKind t = repr_of(c, node).as_ty;
+  if (t == TY_UNKNOWN || t == TY_VOID || t == TY_NIL) return 0;
+  int tr = ++g_tmp;
+  Buf vb; memset(&vb, 0, sizeof vb);
+  if (oint_kind(t) && node_is_oint(c, node)) {
+    emit_oint_expr(c, node, t, &vb);
+    emit_indent(g_pre, g_indent);
+    buf_printf(g_pre, "%s _t%d = %s;\n", oint_ctype(t), tr, vb.p ? vb.p : "0");
+    view_bind_temp_o(node, tr);
+  }
+  else {
+    emit_expr(c, node, &vb);
+    emit_indent(g_pre, g_indent);
+    emit_ctype(c, t, g_pre);
+    buf_printf(g_pre, " _t%d = %s; ", tr, vb.p ? vb.p : "0");
+    emit_gc_root_tmp(c, t, tr, g_pre);
+    buf_puts(g_pre, "\n");
+    view_bind_temp(node, tr);
+  }
+  free(vb.p);
+  return 1;
+}
+/* `recv.fetch(key, default)` whose default runs code: Ruby evaluates the
+   default as an argument, on a hit too, but the arms build it only on a
+   miss (`h.fetch(:a, ($t << 1; 9))` left $t empty). The receiver, the key
+   and the default run first, in that order, into temps the arms read
+   (#11506); a receiver or key that is self or a literal is read where it
+   stands. */
+static int g_fetch_held_id = -1;
+static int emit_call_fetch_default_first(Compiler *c, int id, Buf *b) {
+  const NodeTable *nt = c->nt;
+  const char *nm = nt_str(nt, id, "name");
+  int store = sp_streq(nm, "[]=") || sp_streq(nm, "store");
+  if (id == g_fetch_held_id || !g_pre || !(store || sp_streq(nm, "fetch")) || nt_ref(nt, id, "block") >= 0) return 0;
+  int recv = nt_ref(nt, id, "receiver"), argc = 0;
+  const int *argv = call_args(nt, id, &argc);
+  if (recv < 0 || argc != 2 || nt_safe_nav(nt, id) || g_n_argov + 3 > MAX_ARG_OVERRIDE) return 0;
+  for (int i = 0; i < 2; i++) {
+    NodeKind ak = nt_kind(nt, argv[i]);
+    if (ak == NK_SplatNode || ak == NK_KeywordHashNode || ak == NK_BlockArgumentNode || ak == NK_ForwardingArgumentsNode) return 0;
+  }
+  if (!subtree_has_side_effect(c, argv[1]) || arg_ran_first(argv[1], 0)) return 0;
+  /* (a store's value goes to the call as its argument; only a key that
+     runs code ahead of a value that does is held, and the value itself
+     stays where the store takes it: its statements no longer run first) */
+  if (store && (!subtree_has_side_effect(c, argv[0]) || arg_ran_first(argv[0], 0))) return 0;
+  size_t mark = g_pre->len;
+  int t0 = g_tmp, sv = g_n_argov, ok = 1;
+  const int ops[3] = { recv, argv[0], argv[1] };
+  for (int i = 0; i < (store ? 2 : 3) && ok; i++) {
+    NodeKind k = nt_kind(nt, ops[i]);
+    if (i < 2 && (k == NK_SelfNode || k == NK_SymbolNode || k == NK_StringNode || k == NK_IntegerNode || k == NK_NilNode ||
+                  arg_ran_first(ops[i], 0) || (store && i == 0 && !subtree_has_side_effect(c, ops[i])))) continue;
+    ok = fetch_hold_operand(c, ops[i]);
+  }
+  if (!ok) {
+    view_unbind(sv);
+    g_pre->len = mark; if (g_pre->p) g_pre->p[mark] = 0; g_tmp = t0;
+    return 0;
+  }
+  int sv_id = g_fetch_held_id;
+  g_fetch_held_id = id;
+  emit_call(c, id, b);
+  g_fetch_held_id = sv_id;
+  view_unbind(sv);
+  return 1;
+}
 void emit_call(Compiler *c, int id, Buf *b) {
+  if (emit_call_fetch_default_first(c, id, b)) return;
   if (emit_call_env_box_read(c, id, b)) return;
   if (sp_streq(nt_str(c->nt, id, "name"), "===") &&
       emit_undefined_const_test(c, nt_ref(c->nt, id, "receiver"), repr_of(c, id).as_ty, b)) return;

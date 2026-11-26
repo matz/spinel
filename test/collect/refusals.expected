@@ -2268,12 +2268,6 @@ spinel: 1 refusal, nothing written
 == test/reject/typed_array_include_user_eq.rb [promote] rc=1
 spinel: test/reject/typed_array_include_user_eq.rb:7: Array#include? of a user object defining == in a typed Array
 spinel: 1 refusal, nothing written
-== test/reject/typed_array_kept_by_struct_into_boxed_param_store.rb [default] rc=1
-spinel: test/reject/typed_array_kept_by_struct_into_boxed_param_store.rb:11: an Array[Integer] is passed to `m`'s parameter `arr`, which the method stores elements of other kinds into: the caller's array cannot hold them, and the store would go to a copy it never sees. Build the argument where the call can follow it (an array literal or a new array, through locals and method values), so it is widened with the parameter.
-spinel: 1 refusal, nothing written
-== test/reject/typed_array_kept_by_struct_into_boxed_param_store.rb [promote] rc=1
-spinel: test/reject/typed_array_kept_by_struct_into_boxed_param_store.rb:11: an Array[Integer] is passed to `m`'s parameter `arr`, which the method stores elements of other kinds into: the caller's array cannot hold them, and the store would go to a copy it never sees. Build the argument where the call can follow it (an array literal or a new array, through locals and method values), so it is widened with the parameter.
-spinel: 1 refusal, nothing written
 == test/reject/unsupported_node_kind.rb [default] rc=1
 spinel: test/reject/unsupported_node_kind.rb:10: warning: regex literal in condition
 spinel: test/reject/unsupported_node_kind.rb:5: unsupported condition (non-bool): FlipFlopNode at test/reject/unsupported_node_kind.rb:5:8
@@ -2284,6 +2278,12 @@ spinel: test/reject/unsupported_node_kind.rb:10: warning: regex literal in condi
 spinel: test/reject/unsupported_node_kind.rb:5: unsupported condition (non-bool): FlipFlopNode at test/reject/unsupported_node_kind.rb:5:8
 spinel: test/reject/unsupported_node_kind.rb:10: unsupported condition (non-bool): MatchLastLineNode at test/reject/unsupported_node_kind.rb:10:8
 spinel: 2 refusals, nothing written
+== test/reject/writer_hold_when_split_declines.rb [default] rc=1
+spinel: test/reject/writer_hold_when_split_declines.rb:75: undefined method 'title' for a Class: no class in the program defines a class method 'title' (NoMethodError)
+spinel: 1 refusal, nothing written
+== test/reject/writer_hold_when_split_declines.rb [promote] rc=1
+spinel: test/reject/writer_hold_when_split_declines.rb:75: undefined method 'title' for a Class: no class in the program defines a class method 'title' (NoMethodError)
+spinel: 1 refusal, nothing written
 == test/reject/yield_method_only_in_subclass.rb [default] rc=1
 spinel: test/reject/yield_method_only_in_subclass.rb:11: `with_wrapping` takes a block and is defined only in subclasses of `Order`; define it in `Order` too (for example as `raise NotImplementedError`)
 spinel: 1 refusal, nothing written

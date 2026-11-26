@@ -18994,8 +18994,10 @@ static void emit_class_body_stmts(Compiler *c, int ci, int body, Buf *b, int ind
         continue;
       }
       /* a mixin naming a class (`include K`, the load record's mark):
-         CRuby's TypeError where the statement runs, not a declaration */
-      if (nt_int(nt, stmts[k], "mixin_class_arg", 0)) { emit_stmt_or_defer(c, stmts[k], b, indent); continue; }
+         CRuby's TypeError where the statement runs, not a declaration;
+         one naming a constant not defined where it runs: NameError there */
+      if (nt_int(nt, stmts[k], "mixin_class_arg", 0) || nt_int(nt, stmts[k], "mixin_undefined_const", 0) ||
+          nt_int(nt, stmts[k], "mixin_undefined_path", 0)) { emit_stmt_or_defer(c, stmts[k], b, indent); continue; }
       /* an alias_method of a method nothing answers: NameError where it runs */
       if (nt_str(nt, stmts[k], "alias_absent")) { emit_stmt_or_defer(c, stmts[k], b, indent); continue; }
       int executable = prog_stmt_call_executable(c, stmts[k], ci);

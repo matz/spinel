@@ -30284,9 +30284,14 @@ static int mm_object_answers(Compiler *c, int id, const char *nm) {
 static int mm_answers(Compiler *c, int id, int k, const char *nm) {
   MethodLookup ml = { .def_class = -1 };
   if (call_target(c, id, k, nm, 0, &ml) >= 0 || ml.kind == ML_ATTR) return 1;
-  /* (the builtin above its chain, String#length of a String subclass, unless
-     an undef_method of the name stands on the chain: then method_missing takes it) */
-  if (builtin_id_has_instance_method(class_builtin_parent(c, k), nm) && !cplan_undefined(c, k, 0, nm)) return 1;
+  /* (a method of the builtin above its chain, String#length of a String subclass, initialize included,
+     unless an undef_method of the name stands on the chain: then method_missing takes it) */
+  int bp = k >= 0 ? class_builtin_parent(c, k) : -116;
+  if (bp != -116 && bp < 0 && (sp_streq(nm, "initialize") || (builtin_id_has_instance_method(bp, nm) && !cplan_undefined(c, k, 0, nm)))) {
+    /* (a builtin the class makes private or protected answers no call on another receiver: method_missing does) */
+    int r = nt_ref(c->nt, id, "receiver");
+    if (r < 0 || nt_kind(c->nt, r) == NK_SelfNode || cplan_method_vis(c, id, k, nm, 0, NULL) == SP_VIS_PUBLIC) return 1;
+  }
   return mm_object_answers(c, id, nm);
 }
 /* `::A::B` for the qualified class name `A::B` */

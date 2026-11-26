@@ -16860,7 +16860,7 @@ static int zsuper_gather(Compiler *c, Scope *s, int kwpos, Buf *o) {
     zsuper_gather_close(o);
     if (own) {
       LocalVar *kv = scope_local(s, s->pnames[s->kwrest_idx]);
-      Buf txt; memset(&txt, 0, sizeof txt); buf_printf(&txt, "lv_%s", rename_local(s->pnames[s->kwrest_idx]));
+      Buf txt; memset(&txt, 0, sizeof txt); emit_scope_local_ref(c, s, s->pnames[s->kwrest_idx], &txt);
       zsuper_gather_open(o);
       buf_printf(o, "%s(_t%d, ", any ? "sp_kw_merge_any" : "sp_kwrest_merge_poly", t);
       if (kv && kv->type == TY_POLY) buf_puts(o, txt.p);
@@ -16872,7 +16872,7 @@ static int zsuper_gather(Compiler *c, Scope *s, int kwpos, Buf *o) {
     for (int i = 0; i < s->nparams; i++) {
       if (i == s->kwrest_idx || !s->pnames[i] || !callee_param_is_declared_kwarg(c, s, s->pnames[i])) continue;
       LocalVar *kp = scope_local(s, s->pnames[i]);
-      Buf txt; memset(&txt, 0, sizeof txt); buf_printf(&txt, "lv_%s", rename_local(s->pnames[i]));
+      Buf txt; memset(&txt, 0, sizeof txt); emit_scope_local_ref(c, s, s->pnames[i], &txt);
       zsuper_gather_open(o);
       buf_printf(o, any ? "sp_PolyPolyHash_set(_t%d, sp_box_sym(sp_sym_intern(\"%s\")), "
                         : "sp_SymPolyHash_set(_t%d, sp_sym_intern(\"%s\"), ", t, s->pnames[i]);

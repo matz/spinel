@@ -11278,7 +11278,9 @@ void specialize_inherited_cls_new(Compiler *c) {
        switch over the receiver's cls_id whose DEFAULT arm calls this source, so
        the source is referenced even though no `Const.<name>` call names it, and
        DCEing it left the arm pointing at a symbol that was never emitted --
-       an implicit declaration, mistyped arms, and a link error (#4053). */
+       an implicit declaration, mistyped arms, and a link error (#4053). A
+       `superclass.<name>` call is a switch over a Class value the same way, and
+       its value may be this source's own class. */
     for (int id = 0; id < node_count && !called_direct; id++) {
       if (nt_kind(nt, id) != NK_CallNode) continue;
       const char *nm4 = cls_call_name(c, id);
@@ -11286,7 +11288,7 @@ void specialize_inherited_cls_new(Compiler *c) {
       int r4 = nt_ref(nt, id, "receiver");
       if (r4 < 0 || nt_kind(nt, r4) != NK_CallNode) continue;
       const char *rn4 = nt_str(nt, r4, "name");
-      if (rn4 && sp_streq(rn4, "class")) called_direct = 1;
+      if (rn4 && (sp_streq(rn4, "class") || sp_streq(rn4, "superclass"))) called_direct = 1;
     }
     /* ... or if the defining class itself escapes as a value a dynamic
        receiver's call can reach */

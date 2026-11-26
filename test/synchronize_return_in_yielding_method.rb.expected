@@ -1,0 +1,10 @@
+:from_mutex
+:from_monitor
+ensure
+next line
+:from_mutex
+1
+1
+:plain
+false
+"thread: :from_mutex"

@@ -1009,6 +1009,9 @@ void emit_rescue_pops_to(Buf *b, int rescue_base);
 void emit_retry_unwind(Buf *b);
 /* The pops of a deferred return handed on to an enclosing ensure (codegen_stmt.c) */
 void emit_ensure_chain_pops(Buf *b, const EnsureCtx *outer);
+/* A deferred return leaving an ensure frame: handed to the method's enclosing ensure, else out through
+   the method's exit (codegen_stmt.c) */
+void emit_ensure_return(Compiler *c, const EnsureCtx *self, int eid, int has_retval, Buf *b, int indent);
 void emit_loop_unwind(Buf *b);
 int emit_frame_unwind(Buf *b, int pop_base, const char *guard);
 int rescues_crossed(int pop_base);

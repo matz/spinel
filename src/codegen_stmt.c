@@ -16249,7 +16249,7 @@ void emit_ensure_chain_pops(Buf *b, const EnsureCtx *outer) {
    frames down to that method's exit. An inline exit is inside the caller's
    protected regions, which must remain live after the call. */
 static void emit_ensure_return_1(Compiler *c, int eid, int has_retval, Buf *b, int indent);
-static void emit_ensure_return(Compiler *c, const EnsureCtx *self, int eid, int has_retval, Buf *b, int indent) {
+void emit_ensure_return(Compiler *c, const EnsureCtx *self, int eid, int has_retval, Buf *b, int indent) {
   /* a return of another funnel than this frame's (EnsureCtx.oret): taken
      first, as it would be where it was written */
   if (self && self->oret) {

@@ -2302,6 +2302,12 @@ spinel: test/reject/unsupported_node_kind.rb:10: warning: regex literal in condi
 spinel: test/reject/unsupported_node_kind.rb:5: unsupported condition (non-bool): FlipFlopNode at test/reject/unsupported_node_kind.rb:5:8
 spinel: test/reject/unsupported_node_kind.rb:10: unsupported condition (non-bool): MatchLastLineNode at test/reject/unsupported_node_kind.rb:10:8
 spinel: 2 refusals, nothing written
+== test/reject/writer_hold_when_split_declines.rb [default] rc=1
+spinel: test/reject/writer_hold_when_split_declines.rb:75: undefined method 'title' for a Class: no class in the program defines a class method 'title' (NoMethodError)
+spinel: 1 refusal, nothing written
+== test/reject/writer_hold_when_split_declines.rb [promote] rc=1
+spinel: test/reject/writer_hold_when_split_declines.rb:75: undefined method 'title' for a Class: no class in the program defines a class method 'title' (NoMethodError)
+spinel: 1 refusal, nothing written
 == test/reject/yield_method_only_in_subclass.rb [default] rc=1
 spinel: test/reject/yield_method_only_in_subclass.rb:11: `with_wrapping` takes a block and is defined only in subclasses of `Order`; define it in `Order` too (for example as `raise NotImplementedError`)
 spinel: 1 refusal, nothing written

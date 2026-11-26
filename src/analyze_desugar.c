@@ -30822,6 +30822,10 @@ int desugar_missing_method_calls(Compiler *c) {
       nt_node_set_arr(nt, st, "body", body, 2);
       nt_node_set_ref(nt, par, "body", st);
       parent[id] = st;
+      /* (the hold stands whether or not the call splits below: its nodes run
+         in the call's scope and class body now, as a split's would) */
+      comp_grow_node_arrays(c);
+      for (int j = mark; j < nt->count; j++) { c->nscope[j] = c->nscope[id]; c->node_cbody[j] = c->node_cbody[id]; }
     }
     /* (a split reads a variable or self again, and holds other receivers) */
     if (r < 0 || ie_self) reread = 1;

@@ -10771,8 +10771,8 @@ static int value_arm_is(const NodeTable *nt, int v, int node) {
 
 /* The places a yield's value can settle a type from the first call site
    alone (see the YieldNode arm of infer_uncached): a variable write, an
-   array literal's element, an argument, an operator's receiver and the
-   last statement of a rescue or ensure frame. Each diverging yield walked
+   array literal's element, an argument, an operator's receiver, a return's
+   value and the last statement of a rescue or ensure frame. Each diverging yield walked
    the whole table for each of them, every round, and #6185's argument walk
    asked call_may_reach_user_method of every call on the way, so the
    typing grew with yields times nodes. One pass per round lists, for each
@@ -10781,7 +10781,7 @@ static int value_arm_is(const NodeTable *nt, int v, int node) {
    rebuilt per fixpoint iteration and when the table grows, like the
    receiver set above, and each node on it is checked as the walk did, so
    one that no longer holds the yield answers no. */
-enum { YU_WRITE, YU_ELEMENT, YU_ARGUMENT, YU_RECEIVER, YU_FRAME, YU_BLOCK };
+enum { YU_WRITE, YU_ELEMENT, YU_ARGUMENT, YU_RECEIVER, YU_FRAME, YU_BLOCK, YU_RETURN };
 static const NodeKind yu_write_kinds[] = {
   NK_LocalVariableWriteNode, NK_LocalVariableOperatorWriteNode,
   NK_LocalVariableOrWriteNode, NK_LocalVariableAndWriteNode,
@@ -10848,6 +10848,11 @@ static int yield_uses(Compiler *c, int y) {
     }
     NT_FOREACH_KIND(nt, NK_RescueModifierNode, w)
       yu_collect(nt, nt_ref(nt, w, "expression"), w, YU_FRAME);
+    NT_FOREACH_KIND(nt, NK_ReturnNode, w) {
+      int an = nt_ref(nt, w, "arguments");
+      int ac = 0; const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
+      if (ac == 1) yu_collect(nt, av[0], w, YU_RETURN);
+    }
     NT_FOREACH_KIND(nt, NK_BeginNode, w) {
       int st = nt_ref(nt, w, "statements");
       if (st < 0) continue;
@@ -11450,6 +11455,13 @@ static int infer_yield_node(Compiler *c, int id, const NodeTable *nt, NodeKind n
         if (yvd_once(c, ymi, &dv) && yield_recv_builtin_every_site(c, w)) { *out = TY_POLY; return 1; }
         break;
       }
+      case YU_RETURN:
+        /* A `return yield(x)` likewise: the method's return type took the
+           first site's block value, and a call whose block answers another
+           type read its result from it (a nil block at one site gave nil
+           at another). */
+        if (yvd_once(c, ymi, &dv)) { *out = TY_POLY; return 1; }
+        break;
       case YU_FRAME: {
         /* A yield whose value leaves through an ENSURE frame is in the
            same position as one written to a local, for the same reason:

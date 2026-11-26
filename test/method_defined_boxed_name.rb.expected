@@ -1,0 +1,14 @@
+assign: true true true false
+missing: false false false false
+inherited_one: true false true false
+prot: true false false false
+priv: false false false true
+true
+true
+true
+TypeError: 1 is not a symbol nor a string
+assign: [[:req, :to]]
+inherited_one: []
+assign: [[:req, :to]]
+NameError: undefined method 'missing' for class 'Ticket'
+TypeError: 2 is not a symbol nor a string

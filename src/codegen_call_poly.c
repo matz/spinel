@@ -240,6 +240,7 @@ int emit_call_poly_builtin_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
        (#4463); these answer their own C types, not a boxed value */
     else if (sp_streq(name, "alive?")) pm = "sp_poly_fiber_alive";
     else if (sp_streq(name, "status")) pm = "sp_poly_thread_status";
+    else if (sp_streq(name, "report_on_exception")) pm = "sp_poly_thread_report";
     /* and #kill, which a shutdown path reaches through the handle it kept in
        an Array or an ivar rather than a traceable local (#4619) */
     else if (sp_streq(name, "kill")) pm = "sp_poly_thread_kill";
@@ -254,7 +255,7 @@ int emit_call_poly_builtin_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
          general poly dispatch below emits reader arms, so it handles them. */
       if (!poly_name_user_claimed(c, name, argc)) {
         Repr wr = repr_of(c, id);
-        int is_bool = sp_streq(name, "alive?") || sp_streq(name, "blocking?");
+        int is_bool = sp_streq(name, "alive?") || sp_streq(name, "blocking?") || sp_streq(name, "report_on_exception");
         if (is_bool && wr.kind == RK_BOXED) buf_puts(b, "sp_box_bool(");
         buf_printf(b, "%s(", pm); emit_expr(c, recv, b); buf_puts(b, ")");
         if (is_bool && wr.kind == RK_BOXED) buf_puts(b, ")");

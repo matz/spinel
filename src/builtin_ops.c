@@ -1700,6 +1700,10 @@ static const BuiltinOp bop_rows[] = {
   { TY_QUEUE, "length",  0, BOP_ARGC_ANY, BF_ANY, TY_INT,   BOPE_NONE },
   { TY_QUEUE, "max",     0, 0,            BF_ANY, TY_INT,   BOPE_TEMPLATE, "sp_Queue_max($r)" },
   { TY_QUEUE, "max",     0, BOP_ARGC_ANY, BF_ANY, TY_INT,   BOPE_NONE },
+  { TY_QUEUE, "max=",    1, 1,            BF_ANY, TY_INT,   BOPE_TEMPLATE, "sp_Queue_set_max($r, $i0)", BOP_K(TY_INT) },
+  /* another argument converts at run time, raising CRuby's TypeError */
+  { TY_QUEUE, "max=",    1, 1,            BF_ANY, TY_INT,   BOPE_TEMPLATE, "({ sp_queue *_t$t = $r; SP_GC_ROOT(_t$t); sp_RbVal _t$u = $b0; sp_Queue_max_writable(_t$t); sp_Queue_set_max(_t$t, sp_poly_arg_int_chk(_t$u)); })" },
+  { TY_QUEUE, "max=",    0, BOP_ARGC_ANY, BF_ANY, TY_INT,   BOPE_NONE },
   { TY_QUEUE, "num_waiting", 0, 0,            BF_ANY, TY_INT, BOPE_TEMPLATE, "sp_Queue_num_waiting($r)" },
   { TY_QUEUE, "num_waiting", 0, BOP_ARGC_ANY, BF_ANY, TY_INT, BOPE_NONE },
   { TY_QUEUE, "empty?",  0, 0,            BF_ANY, TY_BOOL,  BOPE_TEMPLATE, "sp_Queue_empty($r)" },

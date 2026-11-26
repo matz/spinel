@@ -16249,7 +16249,7 @@ void emit_ensure_chain_pops(Buf *b, const EnsureCtx *outer) {
    frames down to that method's exit. An inline exit is inside the caller's
    protected regions, which must remain live after the call. */
 static void emit_ensure_return_1(Compiler *c, int eid, int has_retval, Buf *b, int indent);
-static void emit_ensure_return(Compiler *c, const EnsureCtx *self, int eid, int has_retval, Buf *b, int indent) {
+void emit_ensure_return(Compiler *c, const EnsureCtx *self, int eid, int has_retval, Buf *b, int indent) {
   /* a return of another funnel than this frame's (EnsureCtx.oret): taken
      first, as it would be where it was written */
   if (self && self->oret) {
@@ -18989,13 +18989,15 @@ static void emit_class_body_stmts(Compiler *c, int ci, int body, Buf *b, int ind
          (desugar_attr_const_splat) would declare nothing: emitted as a
          statement, refused there (deferred at it under --defer-refusals),
          not skipped as a declaration */
-      if (nt_int(nt, stmts[k], "attr_splat", 0)) {
+      if (nt_int(nt, stmts[k], "attr_splat", 0) || nt_int(nt, stmts[k], "attr_name", 0)) {
         emit_stmt_or_defer(c, stmts[k], b, indent);
         continue;
       }
       /* a mixin naming a class (`include K`, the load record's mark):
-         CRuby's TypeError where the statement runs, not a declaration */
-      if (nt_int(nt, stmts[k], "mixin_class_arg", 0)) { emit_stmt_or_defer(c, stmts[k], b, indent); continue; }
+         CRuby's TypeError where the statement runs, not a declaration;
+         one naming a constant the program defines only further down:
+         NameError there */
+      if (nt_int(nt, stmts[k], "mixin_class_arg", 0) || nt_int(nt, stmts[k], "mixin_const_later", 0)) { emit_stmt_or_defer(c, stmts[k], b, indent); continue; }
       /* an alias_method of a method nothing answers: NameError where it runs */
       if (nt_str(nt, stmts[k], "alias_absent")) { emit_stmt_or_defer(c, stmts[k], b, indent); continue; }
       int executable = prog_stmt_call_executable(c, stmts[k], ci);
@@ -23547,6 +23549,12 @@ static void emit_stmt_node(Compiler *c, int id, Buf *b, int indent) {
             sk == NK_InstanceVariableOrWriteNode || sk == NK_InstanceVariableAndWriteNode ||
             sk == NK_InstanceVariableOperatorWriteNode)
           continue;
+        /* (an attr call with a computed name or splat is refused where it
+           stands, deferred at it under --defer-refusals) */
+        if (nt_int(nt, stmts[k], "attr_name", 0) || nt_int(nt, stmts[k], "attr_splat", 0)) {
+          emit_stmt_or_defer(c, stmts[k], b, indent);
+          continue;
+        }
         if (sk == NK_CallNode && nt_ref(nt, stmts[k], "receiver") < 0 && !nt_str(nt, stmts[k], "alias_absent") &&
             !prog_sclass_call_executable(c, stmts[k])) continue;
         emit_stmt(c, stmts[k], b, indent);

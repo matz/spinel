@@ -95,6 +95,7 @@ static int pure_forwarding_target(Compiler *c, int mi, int depth) {
    the cap means unbounded self-recursion -- report it instead of looping (#2908). */
 #define SP_INLINE_DEPTH_MAX 64
 static int g_inline_depth = 0;
+static int g_inline_mi[SP_INLINE_DEPTH_MAX], g_inline_id[SP_INLINE_DEPTH_MAX], g_inline_blk[SP_INLINE_DEPTH_MAX];   /* each depth's method, call and block in scope */
 int inline_splice_depth(void) { return g_inline_depth; }
 void inline_splice_depth_reset(int d) { g_inline_depth = d; }
 
@@ -876,8 +877,20 @@ int emit_inline_call_x(Compiler *c, int id, Buf *b, int indent, int as_expr) {
   }
 
   int tag = ++g_tmp;
-  if (g_inline_depth >= SP_INLINE_DEPTH_MAX)
+  /* (the same call splicing the same method under the same block inside
+     its own copy splices the same copy again at each depth: two such calls
+     in a body made 2^depth copies before the depth bound. A yield to
+     another block nests. A call that forwards `&block` keeps the bound:
+     its proc-form call would name the splice's block parameter.) */
+  int reenters = g_inline_depth >= SP_INLINE_DEPTH_MAX;
+  int fwd_blk = nt_ref(nt, id, "block") >= 0 && nt_kind(nt, nt_ref(nt, id, "block")) == NK_BlockArgumentNode;
+  for (int k = 0; k < g_inline_depth && !reenters && !fwd_blk; k++)
+    reenters = g_inline_mi[k] == mi && g_inline_id[k] == id && g_inline_blk[k] == g_block_id;
+  /* (a re-entry that has a proc form calls it, as an uninlined call does) */
+  if (reenters && g_inline_depth < SP_INLINE_DEPTH_MAX && scope_proc_form_of(c, mi) >= 0) { free(yprocbuf.p); return 0; }
+  if (reenters)
     unsupported_feature(c, id, "a method that uses its block (yield or block.call) and calls itself recursively (inlining cannot terminate; no standalone function to fall back to)");
+  g_inline_mi[g_inline_depth] = mi; g_inline_id[g_inline_depth] = id; g_inline_blk[g_inline_depth] = g_block_id;
   /* --plan-check: the call is spliced from mi (observed at the call's own
      depth, before the body's) */
   if (g_plan_check) ucall_observe(c, id, mi, recv_class >= 0 ? recv_class : cm_class, 0);
@@ -1523,8 +1536,10 @@ static void emit_block_arg_coerced(Compiler *c, int node, TyKind ot, Buf *b) {
   if (ot == TY_POLY && ((ar.kind != RK_BOXED && at != TY_UNKNOWN) || empty_lit)) emit_boxed(c, node, b);
   /* a literal nil into an Integer or a Float parameter (one
      block_settle_types kept nullable, bs_join_val) is the slot's own nil,
-     not the 0 it emits as */
+     not the 0 it emits as; so is one into a Symbol or a Class parameter,
+     whose nil is (sp_sym)-1 (0 is the first Symbol literal) or SP_CLASS_NIL */
   else if (nk == NK_NilNode && oint_kind(ot)) buf_puts(b, oint_nil(ot));
+  else if (nk == NK_NilNode && (ot == TY_SYMBOL || ot == TY_CLASS)) buf_puts(b, default_value(ot));
   /* an untyped value (a call no class answers, which raises NoMethodError
      before it binds anything) into a typed parameter: the raise, and the
      slot's own value after it, as any typed store takes it */
@@ -7545,9 +7560,16 @@ static int iter_hash_arms(Compiler *c, Buf *b, int indent, int block, const char
     }
     Buf rb; memset(&rb, 0, sizeof rb);
     buf_printf(&rb, "_t%d", th2);
+    /* a new key stored by the block raises in the loop's step, as each's
+       does (the step clause runs on `next` too) */
+    int tn = ++g_tmp;
+    emit_indent(b, indent);
+    buf_printf(b, "sp_int _t%d = %s->len;\n", tn, rb.p);
     emit_indent(b, indent);
     buf_printf(b, "for (sp_int _t%d = 0; _t%d < ", t, t);
-    buf_puts(b, rb.p); buf_printf(b, "->len; _t%d++) {\n", t);
+    buf_puts(b, rb.p);
+    buf_printf(b, "->len; ({ if (%s->len > _t%d) sp_raise_cls(\"RuntimeError\","
+                  " \"can't add a new key into hash during iteration\"); _t%d++; })) {\n", rb.p, tn, t);
     if (p0) {
       /* The param may be poly (shared name across hashes of differing
          element types); box a concrete element into the poly slot. */

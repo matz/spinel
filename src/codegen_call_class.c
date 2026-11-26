@@ -1581,7 +1581,9 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
     /* a literal name on a literal class the table does not cover (a builtin
        class, which the literal branch above left) is refused below, as
        refl_md_dynamic_used, which writes the table, does not count it */
-    if (inherit_lit >= 0 && (recv >= 0 || self_cls) && (nty == TY_SYMBOL || nty == TY_STRING) &&
+    /* a boxed name (a Symbol or a String the run time holds) is read as
+       one, anything else is CRuby's TypeError */
+    if (inherit_lit >= 0 && (recv >= 0 || self_cls) && (nty == TY_SYMBOL || nty == TY_STRING || nty == TY_POLY) &&
         !refl_md_literal_call(nt, recv, argv[0])) {
       int mask = (md_pub ? 1 : 0) | (md_prot ? 2 : 0) | (md_priv ? 4 : 0), t = 0;
       /* the classes whose call there takes the entry: their cells (the plan's list, cplan_presence_list), the
@@ -1607,8 +1609,15 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       else buf_puts(b, self_cls);
       if (t) buf_printf(b, "; %ssp_refl_method_defined(_c%d", arms.p, t);
       free(arms.p);
-      buf_puts(b, nty == TY_SYMBOL ? ", sp_sym_to_s_frozen(" : ", (");
-      emit_expr(c, argv[0], b);
+      if (nty == TY_POLY) {
+        buf_puts(b, ", sp_sym_to_s_frozen(sp_thread_local_key(");
+        emit_boxed(c, argv[0], b);
+        buf_puts(b, ")");
+      }
+      else {
+        buf_puts(b, nty == TY_SYMBOL ? ", sp_sym_to_s_frozen(" : ", (");
+        emit_expr(c, argv[0], b);
+      }
       buf_printf(b, "), %d, %d)%s", mask, inherit_lit, t ? "; })" : "");
       return 1;
     }
@@ -7144,7 +7153,7 @@ int emit_refl_im_params_call(Compiler *c, int id, Buf *b) {
   int args = nt_ref(nt, im, "arguments");
   int an = 0; const int *av = nt_arr(nt, args, "arguments", &an);
   TyKind nty = infer_type(c, av[0]);
-  if (nty != TY_SYMBOL && nty != TY_STRING) return 0;
+  if (nty != TY_SYMBOL && nty != TY_STRING && nty != TY_POLY) return 0;
   Scope *encl = comp_scope_of(c, id);
   char selfbuf[48];
   const char *self_cls = NULL;
@@ -7156,8 +7165,9 @@ int emit_refl_im_params_call(Compiler *c, int id, Buf *b) {
   if (recv >= 0 && infer_type(c, recv) == TY_POLY) { buf_puts(b, "sp_unbox_class("); emit_boxed(c, recv, b); buf_puts(b, ")"); }
   else if (recv >= 0) emit_expr(c, recv, b);
   else buf_puts(b, self_cls);
-  buf_puts(b, nty == TY_SYMBOL ? ", sp_sym_to_s_frozen(" : ", (");
-  emit_expr(c, av[0], b);
+  /* a boxed name: a Symbol or a String, else CRuby's TypeError */
+  if (nty == TY_POLY) { buf_puts(b, ", sp_sym_to_s_frozen(sp_thread_local_key("); emit_boxed(c, av[0], b); buf_puts(b, ")"); }
+  else { buf_puts(b, nty == TY_SYMBOL ? ", sp_sym_to_s_frozen(" : ", ("); emit_expr(c, av[0], b); }
   buf_puts(b, "))");
   return 1;
 }

@@ -1,0 +1,25 @@
+"a"
+true
+1
+"a"
+"bcd"
+"abcd"
+"bcdefg"
+"bcdefg"
+true
+"é"
+8
+false
+"y"
+"z"
+#<Encoding:BINARY (ASCII-8BIT)>
+3
+"\xFF"
+"a"
+[254]
+[#<Encoding:BINARY (ASCII-8BIT)>, "a", 1]
+[#<Encoding:UTF-8>, "é", 1]
+[#<Encoding:UTF-8>, "a", 1]
+[#<Encoding:UTF-8>, "é", 1]
+"can't modify frozen String: \"ab\""
+"ab"

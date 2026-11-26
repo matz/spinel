@@ -1009,6 +1009,9 @@ void emit_rescue_pops_to(Buf *b, int rescue_base);
 void emit_retry_unwind(Buf *b);
 /* The pops of a deferred return handed on to an enclosing ensure (codegen_stmt.c) */
 void emit_ensure_chain_pops(Buf *b, const EnsureCtx *outer);
+/* A deferred return leaving an ensure frame: handed to the method's enclosing ensure, else out through
+   the method's exit (codegen_stmt.c) */
+void emit_ensure_return(Compiler *c, const EnsureCtx *self, int eid, int has_retval, Buf *b, int indent);
 void emit_loop_unwind(Buf *b);
 int emit_frame_unwind(Buf *b, int pop_base, const char *guard);
 int rescues_crossed(int pop_base);
@@ -2892,6 +2895,7 @@ void emit_ivar_name_error(Compiler *c, Buf *b, const char *sym, int arg);
 const char *ivar_raise_tail(Compiler *c, int id);   /* that raise's dead value, in the call's C form */
 int emit_exc_ivar_call(Compiler *c, int id, const char *name, int recv, Buf *b);
 /* The concurrency handles' row emitters (codegen_call_concurrency.c) */
+void emit_queue_new(Compiler *c, int argc, const int *argv, Buf *b);
 int emit_op_thread_set_report(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_thread_raise(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_thread_tls(Compiler *c, const BopCtx *x, Buf *b);

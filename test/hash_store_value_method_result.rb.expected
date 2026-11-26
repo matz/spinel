@@ -1,0 +1,22 @@
+["a"]
+[:name, "b"]
+[:name]
+["c"]
+[:name, :parent, "d"]
+[:name, :parent]
+true
+[:name, "f"]
+[:name]
+nil
+["g"]
+[:name, :kids, "h"]
+{name: "h", kids: 1}
+:ghost
+[:name, "j"]
+[:name]
+{name: "x"}
+[:name, "l"]
+[:name]
+:stored
+[:name, "n"]
+[:name]

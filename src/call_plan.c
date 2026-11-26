@@ -10050,6 +10050,11 @@ static const char *feature_limit(Compiler *c, int id, int *stop, int *lx, char *
              "name the attributes (see docs/limitations.md)", name);
     return buf;
   }
+  if (nt_int(nt, id, "attr_name", 0) && cplan_reachable(c, id)) {
+    snprintf(buf, cap, "%s with a non-literal name is not supported; use literal Symbols or Strings "
+             "(see docs/limitations.md)", name);
+    return buf;
+  }
   if (nt_int(nt, id, "define_method_name", 0) == 2 && cplan_reachable(c, id))
     return "Module#define_method with `&` of a block or Proc that is not a literal (`&block`, a parameter, "
            "a constant, a call's result), or with a Proc or Method passed as its body, is not supported: "
@@ -11984,6 +11989,7 @@ static void cpoly_defaults0(Compiler *c, int id, const char *name, const PolySpe
   if (sp_streq(name, "close")) cpoly_family(p, cap, PB_N_IO_CLOSE);
   if (sp_streq(name, "__enum_to_a")) cpoly_family(p, cap, PB_N_ENUM_TO_A);
   if (sp_streq(name, "signal") || sp_streq(name, "broadcast")) cpoly_family(p, cap, PB_N_CONDVAR);
+  if (blockless && (sp_streq(name, "name") || sp_streq(name, "report_on_exception"))) cpoly_family(p, cap, PB_N_THREAD_READER);
 }
 
 /* How a zero-argument dispatch holds and keys its receiver, and the type

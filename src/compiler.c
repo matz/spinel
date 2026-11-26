@@ -2930,7 +2930,8 @@ int comp_arysub_call(Compiler *c, int id, TyKind rt, TyKind *kind) {
   int cid = ty_is_object(rt) ? ty_object_class(rt) : -1;
   if (comp_ary_root(c, cid) < 0 || nt_kind(c->nt, id) != NK_CallNode) return 0;
   const char *n = nt_str(c->nt, id, "name");
-  if (!n) return 0;
+  /* (is_a?, kind_of? and instance_of? ask the instance's own class) */
+  if (!n || is_kind_query(n)) return 0;
   MtabMark mt_was = mtab_push_in(c, id);   /* (what the call's name asks of the subclass's chain is the call's) */
   /* (the identity a dispatch over a splat leaves, nt_set_itself_call, is no builtin method: its value is the instance) */
   int builtin = (cplan_builtin_call(c, id) && !is_itself_name(n)) || comp_arysub_name_is_array(c, id, cid, n);

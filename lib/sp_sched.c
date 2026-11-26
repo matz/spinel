@@ -1994,6 +1994,9 @@ static int sched_place_unstarted(int wid, sp_thread *t) {
   int best = -1, bestn = 0;
   for (int i = 1; i < sp_active_workers; i++) {   /* worker 0 (main) runs no general thread */
     if (!g_wslot[i].active) continue;
+    /* (nor one in a blocking native call: a thread placed there could not run, and a thread
+       left unstarted in a queue is one a steal or main's stranded sweep can still take) */
+    if (SP_ATOMIC_LOAD(&g_native_out[i], __ATOMIC_RELAXED) == SP_OUT_NATIVE) continue;
     int np = SP_ATOMIC_LOAD(&g_wslot[i].pinned, __ATOMIC_RELAXED);
     if (best < 0 || np < bestn) { best = i; bestn = np; }
   }
@@ -3403,12 +3406,15 @@ static sp_thread *thread_spawn(sp_Fiber *f, sp_RbVal arg, int internal) {
   SCHED_LOCK();
   t->id = g_next_id++;
   reg_add(t);
-  /* Prefer the spawning worker's local queue (locality) -- but only when that
-     worker actually drains it. Main is a coordinator: it hands work to helpers
-     and only runs a thread itself in the sole-worker fallback (no helper could
-     be spawned), which drains the global queue too. So a main-spawned thread
-     always goes to the global queue -- never main's local queue, where it would
-     wait on a steal. (g_worker_cap > 0 whenever threads are in use.) */
+  /* A new thread goes to the worker with the fewest pinned threads
+     (sched_place_unstarted), which may grow the pool; it is pinned to that
+     worker at its first run, as a thread is to the worker it first runs on.
+     Main is a coordinator: it hands work to helpers and only runs a thread
+     itself in the sole-worker fallback (no helper could be spawned), which
+     drains the global queue too, so a thread main starts that is not placed
+     goes to the global queue -- never main's local queue, where it would wait
+     on a steal. One another thread starts that is not placed stays in its
+     spawner's local queue. (g_worker_cap > 0 whenever threads are in use.) */
 #ifdef SP_THREADS
   /* (#8702) main places the new thread on its worker now, as
      the picker would (sched_place_unstarted): onto that worker's own queue,
@@ -3416,6 +3422,10 @@ static sp_thread *thread_spawn(sp_Fiber *f, sp_RbVal arg, int internal) {
   if (g_current == &g_main_thread && g_worker_cap > 0) {
     if (!sched_place_unstarted(0, t)) { rq_push(t); SCHED_WAKE(); }
   }
+  /* a thread another thread starts is placed the same way, so the pool grows
+     for it; it stays on the spawner's worker only where that worker is as
+     good as any (#12560) */
+  else if (g_worker_cap > 0 && sched_place_unstarted(sp_worker_id, t)) {}
   else
 #endif
   { lrq_push(sp_worker_id, t); SCHED_WAKE(); }   /* a helper worker may be idle: hand it the new thread */
@@ -4205,6 +4215,7 @@ sp_bool sp_Thread_stop_p(sp_thread *t) {
 /* Mutex#sleep: unlock, sleep until the timeout or a #wakeup, lock again.
    nil when the timeout ran out, else the whole seconds slept. A #kill or
    #raise waits for the lock too, as CRuby re-locks before it unwinds. */
+static void sp_mutex_relock(sp_mutex *m, int deferred);   /* defined beside sp_Mutex_lock */
 sp_RbVal sp_Mutex_sleep(sp_mutex *m, int has_timeout, double timeout) {
   if (has_timeout && timeout != timeout) sp_raise_cls("RangeError", "NaN out of Time range");
   if (has_timeout && timeout < 0.0) sp_raise_cls("ArgumentError", "time interval must not be negative");
@@ -4215,7 +4226,7 @@ sp_RbVal sp_Mutex_sleep(sp_mutex *m, int has_timeout, double timeout) {
      contended lock path would otherwise fire before we get it */
   sp_fiber_defer_inject();
   int woken = sp_sched_sleep_park(timeout);
-  sp_Mutex_lock(m);
+  sp_mutex_relock(m, 1);
   sp_fiber_undefer_inject();
   if (woken < 0) sp_raise_cls("NoMemoryError", "failed to schedule thread timer");
   sp_fiber_fire_inject_if_pending();
@@ -5389,7 +5400,8 @@ sp_queue *sp_SizedQueue_new(sp_int max) {
 }
 
 void sp_Queue_push_options_check(sp_queue *q, int has_non_block, int has_timeout) {
-  if (q->max > 0) return;
+  /* (max is read without the queue's lock: SizedQueue#max= writes it) */
+  if (SP_ATOMIC_LOAD(&q->max, __ATOMIC_RELAXED) > 0) return;
   /* CRuby's Queue#push takes one argument; a timeout: hash counts as one more. */
   if (has_non_block && has_timeout) sp_raise_cls("ArgumentError", "wrong number of arguments (given 3, expected 1)");
   if (has_non_block || has_timeout) sp_raise_cls("ArgumentError", "wrong number of arguments (given 2, expected 1)");
@@ -5405,7 +5417,11 @@ void sp_Queue_push_options_check(sp_queue *q, int has_non_block, int has_timeout
    wake is not lost and the scheduler lock is taken only where the wake needs
    it (main, a timed waiter's timer). A timed wait keeps the scheduler lock
    for its timer and looks at the queue again under q->wl before it parks. */
-static int sp_queue_has_room(void *p) { sp_queue *q = (sp_queue *)p; return q->closed || q->max <= 0 || q->len < q->max; }
+static int sp_queue_has_room(void *p) {
+  sp_queue *q = (sp_queue *)p;
+  sp_int max = SP_ATOMIC_LOAD(&q->max, __ATOMIC_RELAXED);
+  return q->closed || max <= 0 || q->len < max;
+}
 static int sp_queue_has_item(void *p) { sp_queue *q = (sp_queue *)p; return q->closed || q->len > 0; }
 /* Wake every waiter on `*list`, a list under q->wl (held on entry, dropped on
    return): collected under the lock and woken after it, as
@@ -5579,6 +5595,39 @@ sp_int  sp_Queue_num_waiting(sp_queue *q) {
   wl_unlock(&q->wl);
   return n;
 }
+/* a plain Queue has no max=: NoMethodError, before the argument converts */
+void sp_Queue_max_writable(sp_queue *q) {
+  if (SP_ATOMIC_LOAD(&q->max, __ATOMIC_RELAXED) <= 0)
+    sp_raise_cls("NoMethodError", "undefined method 'max=' for an instance of Thread::Queue");
+}
+/* SizedQueue#max=: a plain Queue has no max=, and the size must be
+   positive; a larger size frees slots, so the parked pushers retry */
+sp_int sp_Queue_set_max(sp_queue *q, sp_int max) {
+  wl_lock(&q->wl);
+  if (q->max <= 0) {
+    wl_unlock(&q->wl);
+    sp_raise_cls("NoMethodError", "undefined method 'max=' for an instance of Thread::Queue");
+  }
+  if (max <= 0) {
+    wl_unlock(&q->wl);
+    sp_raise_cls("ArgumentError", "queue size must be positive");
+  }
+  sp_int was = q->max;
+  SP_ATOMIC_STORE(&q->max, max, __ATOMIC_RELAXED);
+  /* wake as many parked pushers as the larger size has new slots, no more:
+     one that finds the queue full parks again and waits for a pop */
+  for (sp_int left = max - was; left > 0;) {
+    sp_thread *ts[64]; int n = 0;
+    for (sp_thread *w; n < 64 && n < left && (w = wl_take_one(&q->push_waiters)) != NULL; ) ts[n++] = w;
+    wl_unlock(&q->wl);
+    for (int i = 0; i < n; i++) sched_wake_unlinked(ts[i]);
+    left -= n;
+    if (n < 64 || left <= 0) return max;
+    wl_lock(&q->wl);
+  }
+  wl_unlock(&q->wl);
+  return max;
+}
 void     sp_Queue_clear(sp_queue *q)  {
   wl_lock(&q->wl);
   q->head = q->len = 0;
@@ -5620,7 +5669,7 @@ const char *sp_Mutex_class_name(sp_mutex *m) {
 }/* A bounded queue is a SizedQueue; an unbounded one is a Queue. One object
    backs both, so the class name reads the bound rather than a separate tag. */
 const char *sp_Queue_class_name(sp_queue *q) {
-  return (q && q->max > 0) ? "Thread::SizedQueue" : "Thread::Queue";
+  return (q && SP_ATOMIC_LOAD(&q->max, __ATOMIC_RELAXED) > 0) ? "Thread::SizedQueue" : "Thread::Queue";
 }
 
 
@@ -5672,7 +5721,25 @@ static inline int sp_mutex_spin_acquire(sp_mutex *m, sp_thread *self) {
   return 0;
 }
 
+/* The trap procs the current thread runs (sp_trap_call), counted on the
+   thread, or here before the program has a thread object */
+static int g_trap_depth_main;
+void sp_sched_trap_enter(void) { if (g_current) g_current->in_trap++; else g_trap_depth_main++; }
+void sp_sched_trap_leave(void) { if (g_current) g_current->in_trap--; else g_trap_depth_main--; }
+/* The re-acquire of Mutex#sleep and ConditionVariable#wait, which released
+   the mutex first. In a trap proc the lock raises, as CRuby's does after the
+   release; a deferred injection is undone before the raise. */
+static void sp_mutex_relock(sp_mutex *m, int deferred) {
+  if (g_current ? g_current->in_trap : g_trap_depth_main) {
+    if (deferred) sp_fiber_undefer_inject();
+    sp_raise_cls("ThreadError", "can't be called from trap context");
+  }
+  sp_Mutex_lock(m);
+}
+
 void sp_Mutex_lock(sp_mutex *m) {
+  if (g_current ? g_current->in_trap : g_trap_depth_main)
+    sp_raise_cls("ThreadError", "can't be called from trap context");
   sp_thread *self = g_current;
   sp_thread *expect = NULL;
   if (SP_ATOMIC_CAS(&m->owner, &expect, self, 0,
@@ -5809,7 +5876,7 @@ static sp_RbVal sp_CondVar_wait_impl(sp_condvar *cv, sp_mutex *m) {
   sp_sched_block_wl(&cv->waiters, &cv->wl, 1, m);
   wl_unlock(&cv->wl);
   if (ct0 > 0) sched_hist_add(g_cv_hist, &g_cv_n, &g_cv_max, (sp_monotonic_now() - ct0) * 1e6);
-  sp_Mutex_lock(m);   /* re-acquire (may block again on the mutex) */
+  sp_mutex_relock(m, 1);   /* re-acquire (may block again on the mutex) */
   sp_fiber_undefer_inject();
   sp_fiber_fire_inject_if_pending();
   return sp_box_int((sp_int)(time(NULL) - beg));
@@ -5827,7 +5894,7 @@ static void sp_CondVar_wait_timeout_blocking(sp_mutex *m, double seconds) {
   sp_mutex_wake_waiter(m);   /* under m's own wait lock */
   SCHED_UNLOCK();
   sp_sleep_plain(seconds, 0, NULL);
-  sp_Mutex_lock(m);
+  sp_mutex_relock(m, 0);
 }
 
 static sp_RbVal sp_CondVar_wait_nb_impl(sp_condvar *cv, sp_mutex *m);
@@ -5848,7 +5915,7 @@ static sp_RbVal sp_CondVar_wait_timeout_impl(sp_condvar *cv, sp_mutex *m, double
   int woken = sp_sched_block_timeout(&cv->waiters, sp_monotonic_now() + seconds, m, &cv->wl, NULL, NULL);
   if (woken < 0) sp_raise_cls("NoMemoryError", "failed to schedule condition variable timeout");
   if (ct0 > 0) { SCHED_LOCK(); sched_hist_add(g_cv_hist, &g_cv_n, &g_cv_max, (sp_monotonic_now() - ct0) * 1e6); SCHED_UNLOCK(); }
-  sp_Mutex_lock(m);
+  sp_mutex_relock(m, 1);
   sp_fiber_undefer_inject();
   sp_fiber_fire_inject_if_pending();
   return woken ? sp_box_int((sp_int)(time(NULL) - beg)) : sp_box_nil();
@@ -5877,7 +5944,7 @@ static sp_RbVal sp_CondVar_wait_nb_impl(sp_condvar *cv, sp_mutex *m) {
   SP_ATOMIC_STORE(&m->owner, NULL, __ATOMIC_SEQ_CST);
   sp_mutex_wake_waiter(m);   /* under m's own wait lock */
   SCHED_UNLOCK();
-  sp_Mutex_lock(m);
+  sp_mutex_relock(m, 1);
   sp_fiber_undefer_inject();
   sp_fiber_fire_inject_if_pending();
   return sp_box_nil();

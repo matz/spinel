@@ -354,7 +354,11 @@ int sp_gc_collection_wanted(void) {
    sp_cold.o, and what it needs, into a C extension's link on macOS. */
 volatile int sp_sig_pending_flag;
 volatile int sp_gc_poll_due;
+extern int (*sp_stack_headroom_low_fn)(void);   /* lib/sp_slab.c, set by sp_fiber_fault_arm */
+extern void (*sp_stack_too_deep_fn)(void);
 void *sp_gc_alloc_nogc(size_t sz, void (*fin)(void *), void (*scn)(void *)) {
+  /* as the slow paths of sp_slab.c: raise ahead of malloc with stack to spare */
+  if (SP_EXPECT(sp_stack_headroom_low_fn && sp_stack_headroom_low_fn(), 0)) sp_stack_too_deep_fn();
   size_t need = sizeof(sp_gc_hdr) + sz;
   sp_gc_hdr *h = (sp_gc_hdr *)sp_slab_alloc(need);
   h->finalize = fin; h->scan = scn; h->size = need; h->marked = 0; h->old = 0; h->dirty = 0;

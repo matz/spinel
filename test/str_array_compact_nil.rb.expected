@@ -1,0 +1,10 @@
+true
+["a", "c"]
+2
+["a", "c"]
+["a", nil, "c"]
+["a", "c"]
+nil
+nil
+["x", "y"]
+FrozenError

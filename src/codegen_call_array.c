@@ -1145,10 +1145,19 @@ int emit_op_array_compact_bang(Compiler *c, const BopCtx *x, Buf *b) {
                k, t, t, rt == TY_INT_ARRAY ? "SP_BUILTIN_INT_ARRAY" : "SP_BUILTIN_FLT_ARRAY");
     return 1;
   }
+  if (sp_streq(name, "compact!") && argc == 0 && rt == TY_STR_ARRAY) {
+    /* an Array of Strings holds nil as a NULL element (a `map` block's
+       `v if c` answers one): dropped in place, self when one was there */
+    int t = ++g_tmp;
+    buf_printf(b, "({ sp_StrArray *_t%d = ", t); emit_expr(c, recv, b);
+    buf_printf(b, "; sp_StrArray_compact_bang(_t%d) ? sp_box_obj(_t%d, SP_BUILTIN_STR_ARRAY) : sp_box_nil(); })", t, t);
+    return 1;
+  }
   if ((sp_streq(name, "flatten!") || sp_streq(name, "compact!")) && argc == 0 &&
       (rt == TY_INT_ARRAY || rt == TY_STR_ARRAY || rt == TY_FLOAT_ARRAY)) {
-    /* a typed array can hold neither sub-arrays nor nils: both bangs are
-       always a no-op, and CRuby's no-op contract is nil */
+    /* a typed array can hold no sub-arrays, and an Integer or Float one
+       no nil where elem_nil_sentinel says so: both bangs are always a
+       no-op, and CRuby's no-op contract is nil */
     buf_puts(b, "((void)("); emit_array_frozen_checked(c, recv, rt, b); buf_puts(b, "), sp_box_nil())");
     return 1;
   }

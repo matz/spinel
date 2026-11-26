@@ -20,8 +20,9 @@ cd "$ROOT" || exit 2
 # every class (a switch on the class id): emit_user_coerce_dispatch and emit_obj_succ_dispatch (the numeric hooks),
 # hash_reader_ivar (the key hash of a class whose `hash` is a reader), emit_cls_answers_dispatch (Struct's members and
 # keyword_init?), emit_exc_text_tail (the exception text hooks), emit_display_overrides
-# (the object display hooks), emit_obj_to_str_bridge (implicit String conversion), and
-# emit_exc_reinit_dispatch (the initializer for errors the runtime raises). No call
+# (the object display hooks), emit_obj_to_str_bridge (implicit String conversion),
+# emit_exc_reinit_dispatch (the initializer for errors the runtime raises), and user_aset_absent (the `[]=` hook's
+# NoMethodError arm for a class with neither `[]=` nor method_missing). No call
 # stands behind an arm: the switch is the class's, so its question is the table's with no site, asked for every class
 # of the program, as the others of this list are. The readers of the compiler's own synthesized helper: obj_each_elems_text
 # and an_phase_procs, for every class an `__enum_to_a` call may reach (its `each` and `__enum_to_a`), whose call is a
@@ -90,6 +91,7 @@ src/codegen.c:emit_user_coerce_dispatch
 src/codegen.c:emit_obj_succ_dispatch
 src/codegen.c:hash_reader_ivar
 src/codegen.c:emit_cls_answers_dispatch
+src/codegen.c:user_aset_absent
 src/codegen.c:emit_exc_text_tail
 src/codegen.c:sg_delegate_scope
 src/codegen.c:emit_method

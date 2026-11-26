@@ -16543,6 +16543,18 @@ static int self_stand_in(Compiler *c, int recv, const char *cname, int ci, int a
   c->nscope[cr] = c->nscope[at];
   return cr;
 }
+static void subtree_self_to_recv(Compiler *c, int root, int recv, const char *cname, int ci, int depth);
+/* (child ch of root, but the block keep that runs with its own self: a self
+   becomes the stand-in, anything else is walked; 0 where no stand-in is made) */
+static int self_to_recv_child(Compiler *c, int root, int ch, int keep, int recv, const char *cname, int ci, int depth) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  if (ch < 0 || ch == keep) return 1;
+  if (nt_kind(nt, ch) != NK_SelfNode) { subtree_self_to_recv(c, ch, recv, cname, ci, depth + 1); return 1; }
+  int cr = self_stand_in(c, recv, cname, ci, root);
+  if (cr < 0) return 0;
+  nt_replace_child(nt, root, ch, cr);
+  return 1;
+}
 static void subtree_self_to_recv(Compiler *c, int root, int recv, const char *cname, int ci, int depth) {
   NodeTable *nt = (NodeTable *)c->nt;
   if (root < 0 || root >= nt->count || depth > 200) return;
@@ -16561,30 +16573,15 @@ static void subtree_self_to_recv(Compiler *c, int root, int recv, const char *cn
     nt_node_set_int(nt, root, "self_call", 1);
   }
   int keep = k == NK_CallNode ? block_with_own_self(c, root) : -1;
-  SpNode *nd = &nt->nodes[root];
-  for (int i = 0; i < nd->nr; i++) {
-    int ch = nd->r[i].ref;
-    if (ch >= 0 && ch == keep) continue;
-    if (ch >= 0 && nt_kind(nt, ch) == NK_SelfNode) {
-      int cr = self_stand_in(c, recv, cname, ci, root);
-      if (cr < 0) return;
-      nd = &nt->nodes[root];        /* nt_new_node may realloc nt->nodes */
-      nd->r[i].ref = cr; nt_parents_moved(nt, root, ch, cr);
-    }
-    else subtree_self_to_recv(c, ch, recv, cname, ci, depth + 1);
-    nd = &nt->nodes[root];
-  }
-  for (int i = 0; i < nd->na; i++) {
-    for (int j = 0; j < nd->a[i].n; j++) {
-      int ch = nd->a[i].ids[j];
-      if (ch >= 0 && nt_kind(nt, ch) == NK_SelfNode) {
-        int cr = self_stand_in(c, recv, cname, ci, root);
-        if (cr < 0) return;
-        nd = &nt->nodes[root];
-        nd->a[i].ids[j] = cr; nt_parents_moved(nt, root, ch, cr);
-      }
-      else subtree_self_to_recv(c, ch, recv, cname, ci, depth + 1);
-      nd = &nt->nodes[root];
+  for (int i = 0; i < nt_num_refs(nt, root); i++)
+    if (!self_to_recv_child(c, root, nt_ref_at(nt, root, i), keep, recv, cname, ci, depth)) return;
+  for (int i = 0; i < nt_num_arrs(nt, root); i++) {
+    int m = 0;
+    nt_arr_at(nt, root, i, &m);
+    for (int j = 0; j < m; j++) {
+      /* (a replacement writes the list anew: read it again) */
+      const int *ids = nt_arr_at(nt, root, i, &m);
+      if (!self_to_recv_child(c, root, ids[j], keep, recv, cname, ci, depth)) return;
     }
   }
 }

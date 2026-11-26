@@ -5943,8 +5943,9 @@ static void emit_rtclass_arm(Compiler *c, const char *stmt, Buf *b) {
   if (cplan_rt_site(c, -1)) buf_printf(b, "if(sp_rtclass_id_p(c.cls_id))%s", stmt);
 }
 /* The id of the class an instance of class ci is built for, the leading
-   argument of a site class's constructor (cplan_rt_site, DESIGN section 2):
-   rtid, the C id the call holds (ctor_rt_id of its class value, or a
+   argument of a site class's constructor (cplan_rt_site), which each
+   instance keeps, since every class made at run time from that site shares
+   the site class's code and layout (sp_rtclass.h): rtid, the C id the call holds (ctor_rt_id of its class value, or a
    switch's bound id), which may be a class made at run time's, or, with
    rtid NULL, ci itself, for a call that names the class statically. */
 static void rtclass_arg_text(int ci, const char *rtid, Buf *b) {

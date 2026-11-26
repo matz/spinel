@@ -61,3 +61,11 @@ a = [+"s"]; b = [+"t"]; S11.new.rr(a, b); p [a, b]
 # child's positional takes widens what the second hands it
 class S12 < S11; def rr(x, y) = super; end
 a = [+"s"]; b = [+"t"]; S12.new.rr(a, b); p [a, b]
+
+# a bare super whose keywords come from a `**` alone: the Hash is an
+# argument only when it is not empty, so the element counted from the end
+# is the child's last positional
+class P13; def rk(*r) = r[-1] << 1; end
+class S13 < P13; def rk(x, **kw) = super; end
+class S14 < P13; def rk(*xs, y, **kw) = super; end
+a13 = [+"s"]; b13 = [+"t"]; S13.new.rk(a13); S14.new.rk(0, b13); p [a13, b13]

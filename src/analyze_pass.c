@@ -13676,7 +13676,12 @@ static int zsuper_rest_elem_stores(Compiler *c, Scope *s, Scope *pm) {
   int pre = srest, post = srest >= 0 ? s->npost_rest : 0;
   if (srest < 0)
     for (pre = 0; pre < s->nparams && pre != s->kwrest_idx && !callee_param_is_declared_kwarg(c, s, s->pnames[pre]); pre++) {}
-  int kwh = zsuper_kw_positional(c, s, pm) ? 1 : 0, O = 0;
+  /* the keyword Hash pm takes positionally is one more argument, always
+     beside a keyword s declares, and beside a `**` alone only when it is
+     not empty (emit_zsuper_gather): a place is then either layout's */
+  int kwh = zsuper_kw_positional(c, s, pm) ? 1 : 0, kw0 = 0, O = 0;
+  for (int i = 0; i < s->nparams && kwh; i++)
+    if (s->pnames[i] && i != s->kwrest_idx && callee_param_is_declared_kwarg(c, s, s->pnames[i])) kw0 = 1;
   for (int k = 0; k < pm->rest_idx; k++) if (pm->pdefault && pm->pdefault[k] >= 0) O++;
   int R = pm->rest_idx - O, Q = pm->npost_rest;
   int def = s->def_node;
@@ -13687,15 +13692,20 @@ static int zsuper_rest_elem_stores(Compiler *c, Scope *s, Scope *pm) {
     TyKind t = k < 0 ? src->rest_elem_store : src->rest_elem_at[k];
     if (t == TY_UNKNOWN) continue;
     int ix = k < 0 ? ELEM_ANY : rest_slot_index(k);
-    for (int q = 0; q < pre + post; q++)
-      if (zsuper_lands(srest >= 0, pre + kwh, q, q < pre ? -1 : pre + post - q + kwh, R, O, Q, ix))
-        ch |= param_takes_store(c, s, q < pre ? q : srest + 1 + (q - pre), t);
+    for (int q = 0; q < pre + post; q++) {
+      int lands = 0;
+      for (int h = kw0; h <= kwh && !lands; h++)
+        lands = zsuper_lands(srest >= 0, pre + h, q, q < pre ? -1 : pre + post - q + h, R, O, Q, ix);
+      if (lands) ch |= param_takes_store(c, s, q < pre ? q : srest + 1 + (q - pre), t);
+    }
     if (!dst || dst->rbs_seeded) continue;
-    /* a place before s's rest or past it names no element of it */
-    if (ix != ELEM_ANY && (ix >= 0 ? R + O + ix < pre : Q - ix <= post + kwh)) continue;
-    int d = !laid || ix == ELEM_ANY ? ELEM_ANY : ix >= 0 ? (O ? ELEM_ANY : R + ix - pre) : -(Q - ix - post - kwh);
-    int slot = rest_elem_slot(d);
-    ch |= fold_store_kind(slot >= 0 ? &dst->rest_elem_at[slot] : &dst->rest_elem_store, t);
+    for (int h = kw0; h <= kwh; h++) {
+      /* a place before s's rest or past it names no element of it */
+      if (ix != ELEM_ANY && (ix >= 0 ? R + O + ix < pre : Q - ix <= post + h)) continue;
+      int d = !laid || ix == ELEM_ANY ? ELEM_ANY : ix >= 0 ? (O ? ELEM_ANY : R + ix - pre) : -(Q - ix - post - h);
+      int slot = rest_elem_slot(d);
+      ch |= fold_store_kind(slot >= 0 ? &dst->rest_elem_at[slot] : &dst->rest_elem_store, t);
+    }
   }
   return ch;
 }

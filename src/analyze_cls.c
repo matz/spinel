@@ -1538,6 +1538,39 @@ static void cf_target_any(CF *f, int t) {
     cf_store(f, nt_ref(nt, t, "receiver"), tmp);
   }
 }
+/* The write a multiple assignment makes through target t, `r.b` or `r[i]`: the call `r.b = e` or `r[i] = e`,
+   where e is what a local in t's place would take of val (cf_masgn_targets), or a value of every class
+   for val < 0 (a splat's rest). The call's classes take e as a single assignment's would. */
+static void cf_call_known(CF *f, int v, int pidx, int recv_el, const char *nm, const int *argv, int argc, int blk);
+static void cf_call_any_at(CF *f, int v, const char *nm, const int *argv, int argc, int blk, int line);
+static void cf_target_write(CF *f, int t, int val) {
+  const NodeTable *nt = f->nt;
+  int r = nt_ref(nt, t, "receiver");
+  const char *nm = nt_str(nt, t, "name");
+  char wn[256];
+  int argv[33], argc = 0;
+  if (r < 0) return;
+  if (nt_kind(nt, t) == NK_IndexTargetNode) {
+    int a = nt_ref(nt, t, "arguments"), an = 0;
+    const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+    for (int i = 0; i < an && argc < 32; i++) argv[argc++] = av[i];
+    nm = "[]=";
+  }
+  else if (nm && *nm && strlen(nm) + 2 <= sizeof wn) { snprintf(wn, sizeof wn, "%s%s", nm, nm[strlen(nm) - 1] == '=' ? "" : "="); nm = wn; }
+  else return;
+  int e = cf_entry(f, -(t + 2), "#tv");
+  if (val < 0) cf_all(f, e);
+  else {
+    cf_flow(f, val, e);
+    cf_load(f, val, e);
+    CFByName *b = cf_byname(f, "to_ary");
+    for (int j = 0; j < b->n; j++) if (!cf_prelude_scope(f, b->mi[j])) cf_load(f, f->ret_el[b->mi[j]], e);
+  }
+  argv[argc++] = e;
+  int pidx = cf_set_of(f, r);
+  if (pidx == CF_ALL) cf_call_any_at(f, t, nm, argv, argc, -1, __LINE__);
+  else cf_call_known(f, t, pidx, r, nm, argv, argc, -1);
+}
 /* the local targets of a multiple assignment node mw (lefts, rights, a
    splat rest, a nested MultiTargetNode), bound from val (cf_masgn_targets);
    depth bounds the nesting */
@@ -1558,7 +1591,7 @@ static void cf_masgn_targets(CF *f, int mw, int val, int depth) {
         CFByName *b = cf_byname(f, "to_ary");
         for (int j = 0; j < b->n; j++) if (!cf_prelude_scope(f, b->mi[j])) cf_load(f, f->ret_el[b->mi[j]], lq);
       }
-      else if (k == NK_CallTargetNode || k == NK_IndexTargetNode) cf_target_any(f, t);
+      else if (k == NK_CallTargetNode || k == NK_IndexTargetNode) { cf_target_any(f, t); cf_target_write(f, t, val); }
       else if (k == NK_MultiTargetNode && depth < 8) {
         /* an element of the value, destructured again */
         int e = -1;
@@ -1571,6 +1604,7 @@ static void cf_masgn_targets(CF *f, int mw, int val, int depth) {
   if (r >= 0 && nt_kind(nt, r) == NK_SplatNode) {
     int e = nt_ref(nt, r, "expression");
     if (e >= 0 && nt_kind(nt, e) == NK_LocalVariableTargetNode) cf_all(f, cf_lv(f, e, nt_str(nt, e, "name")));
+    else if (e >= 0 && (nt_kind(nt, e) == NK_CallTargetNode || nt_kind(nt, e) == NK_IndexTargetNode)) { cf_target_any(f, e); cf_target_write(f, e, -1); }
   }
 }
 /* is target node v a local a multiple assignment binds (cf_masgn_targets)? */

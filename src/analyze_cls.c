@@ -46,6 +46,7 @@
 #include <limits.h>
 #include "builtin_names.h"
 #include "call_plan.h"
+#include "codegen_call_arms.h"
 #include "method_table_check.h"
 
 int class_has_exc_name(Compiler *c, int ci);   /* codegen.c */
@@ -2922,7 +2923,10 @@ static void cf_call_known(CF *f, int v, int pidx, int recv_el, const char *nm, c
     }
     int tl = call_target(c, v, -1, nm, CT_TOP, NULL);
     if (tl >= 0 && CF_UT(tl)) continue;
-    if (comp_method_in_chain(c, k, "method_missing", NULL) >= 0) {
+    /* (one of Object's public methods is found before the hook; on a
+       blank slate, one of BasicObject's own) */
+    if (comp_method_in_chain(c, k, "method_missing", NULL) >= 0 &&
+        !(class_is_blank_slate(c, k) ? basicobject_own_method(nm) : object_public_method_name(nm))) {
       /* (directed) the runtime calls the class's method_missing with the
          name and the arguments, which it has seen, and the block */
       int mm = comp_method_in_chain(c, k, "method_missing", NULL);

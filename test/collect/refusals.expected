@@ -402,6 +402,12 @@ spinel: test/reject/class_eval_block_forwarded_shared_ivar.rb:13: an instance va
 spinel: test/reject/class_eval_block_many_forwarded_calls.rb:28: an instance variable the class's own code in a class_eval block also uses, in a block given there to a method that may run it with instance_exec: which object's variable it is is not known when the program is compiled
 == test/reject/class_eval_block_many_forwarded_calls.rb [promote] rc=1
 spinel: test/reject/class_eval_block_many_forwarded_calls.rb:28: an instance variable the class's own code in a class_eval block also uses, in a block given there to a method that may run it with instance_exec: which object's variable it is is not known when the program is compiled
+== test/reject/class_eval_hooked_site_local.rb [default] rc=1
+spinel: test/reject/class_eval_hooked_site_local.rb:11: unsupported call: node N (CallNode `class_eval`) recv=LocalVariableReadNode/ty49 argc=0
+spinel: 1 refusal, nothing written
+== test/reject/class_eval_hooked_site_local.rb [promote] rc=1
+spinel: test/reject/class_eval_hooked_site_local.rb:11: unsupported call: node N (CallNode `class_eval`) recv=LocalVariableReadNode/ty49 argc=0
+spinel: 1 refusal, nothing written
 == test/reject/class_eval_method_block_effectful_receiver.rb [default] rc=1
 spinel: test/reject/class_eval_method_block_effectful_receiver.rb:12: unsupported call: node N (CallNode `class_eval`) recv=LocalVariableReadNode/ty49 argc=0
 spinel: 1 refusal, nothing written
@@ -421,6 +427,12 @@ spinel: test/reject/class_eval_proc_block_arg.rb:8: unsupported call: node N (Ca
 spinel: 1 refusal, nothing written
 == test/reject/class_eval_proc_block_arg.rb [promote] rc=1
 spinel: test/reject/class_eval_proc_block_arg.rb:8: unsupported call: node N (CallNode `class_eval`) recv=-/ty-1 argc=0
+spinel: 1 refusal, nothing written
+== test/reject/class_eval_site_local_ivar.rb [default] rc=1
+spinel: test/reject/class_eval_site_local_ivar.rb:8: unsupported call: node N (CallNode `class_eval`) recv=LocalVariableReadNode/ty49 argc=0
+spinel: 1 refusal, nothing written
+== test/reject/class_eval_site_local_ivar.rb [promote] rc=1
+spinel: test/reject/class_eval_site_local_ivar.rb:8: unsupported call: node N (CallNode `class_eval`) recv=LocalVariableReadNode/ty49 argc=0
 spinel: 1 refusal, nothing written
 == test/reject/class_eval_static_const_inherited.rb [default] rc=1
 spinel: test/reject/class_eval_static_const_inherited.rb:9: unsupported call: node N (CallNode `class_eval`) recv=-/ty-1 argc=1 arg0ty6

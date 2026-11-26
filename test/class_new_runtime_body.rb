@@ -37,3 +37,12 @@ def mk_plain = Class.new { def self.y = 2; $sm << :plain }
 q1 = mk_plain
 q2 = mk_plain
 p q1.respond_to?(:__spinel_rt_body), q2.respond_to?(:y), q1.equal?(q2), $sm.last(2)
+
+# a class_eval block on a local holding the site's class runs with that class as self
+def mk_eval(n)
+  k = Class.new { def v = 1 }
+  [k, k.class_eval { self == k }, k.class_exec(n) { |x| x * 2 }]
+end
+e1 = mk_eval(1)
+e2 = mk_eval(2)
+p e1[1..], e2[1..], e1[0].equal?(e2[0])

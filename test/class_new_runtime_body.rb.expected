@@ -15,3 +15,6 @@ false
 true
 false
 [:plain, :plain]
+[true, 2]
+[true, 4]
+false

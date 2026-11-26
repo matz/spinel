@@ -6739,7 +6739,9 @@ MISSING_METHOD_SITES_LIMIT ?= 2.6
 # last calling the first (test/scale/cmethod_cycles.sh), compiled to C at
 # K=20 and K=40: the whole compile's counted work, 1.98x where each group
 # of such calls is decided once (cm_self_cls_visit); a walk that worked a
-# method out again on each path into it grew as 2^K.
+# method out again on each path into it grew as 2^K. Each compile runs
+# under a CPU-time limit, as the fan-out cases do, so such a walk fails the
+# case instead of running on.
 CMETHOD_CYCLES_LIMIT ?= 2.20
 # A chain of forty bangs over a String a method answers, compiled to C with
 # under a CPU-time limit, as the hash-literal fan-out is:
@@ -6886,8 +6888,8 @@ scale-test: $(SPINEL_WORK)
 	mma=$$(sws desugar_missing_method_calls -c -o "$$tmp/mm4.c" "$$tmp/mm4.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	mmb=$$(sws desugar_missing_method_calls -c -o "$$tmp/mm8.c" "$$tmp/mm8.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	gen cmethod_cycles 20 cy2.rb; gen cmethod_cycles 40 cy4.rb; \
-	cya=$$(sw -c -o "$$tmp/cy2.c" "$$tmp/cy2.rb") || { rm -rf "$$tmp"; exit 1; }; \
-	cyb=$$(sw -c -o "$$tmp/cy4.c" "$$tmp/cy4.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	cya=$$(ulimit -t 20; sw -c -o "$$tmp/cy2.c" "$$tmp/cy2.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	cyb=$$(ulimit -t 20; sw -c -o "$$tmp/cy4.c" "$$tmp/cy4.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	rm -rf "$$tmp"; \
 	if [ -z "$$wa" ] || [ -z "$$wb" ] || [ -z "$$fa" ] || [ -z "$$fb" ] || [ -z "$$pa" ] || [ -z "$$pb" ] || \
 	   [ -z "$$ha" ] || [ -z "$$hb" ] || [ -z "$$ca" ] || [ -z "$$cb" ] || [ -z "$$sa" ] || [ -z "$$sb" ] || \

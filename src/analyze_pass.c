@@ -9504,11 +9504,7 @@ static int widen_param_elem_sources(Compiler *c, int r, TyKind elem, int depth) 
            block_param_index_values(c, sc, nm, 0, wbp_elem, &x);
   }
   if (!lv->is_param || sc->rest_idx < 0 || !sc->pnames[sc->rest_idx] || !sp_streq(sc->pnames[sc->rest_idx], nm)) return 0;
-  TyKind was = lv->rest_elem_store;
-  TyKind now = was == TY_UNKNOWN ? elem : (was == elem ? was : TY_POLY);
-  if (now == was) return 0;
-  lv->rest_elem_store = now;
-  return 1;
+  return fold_store_kind(&lv->rest_elem_store, elem);
 }
 
 /* The same for the arrays that are elements of the container `r` (the

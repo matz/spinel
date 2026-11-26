@@ -3721,7 +3721,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
     ctor_arity_emit(&aerr, b);
     emit_builtin_new_arms(c, argc, atmp, rt2, kt, 0, b);
     buf_printf(b, "} _t%d; })", rt2);
-    bind_switch_rt_id(&sid, b);
+    bind_switch_rt_id(c, &sid, b);
     g_ctor_blk_tmp = sv_cbt;
     free(atmp);
     c->args_in_call = recv;
@@ -3849,7 +3849,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
     ctor_arity_emit(&aerr, b);
     emit_builtin_new_arms(c, 0, NULL, rt2, kt, 0, b);
     buf_printf(b, "} _t%d; })", rt2);
-    bind_switch_rt_id(&sid, b);
+    bind_switch_rt_id(c, &sid, b);
     g_ctor_blk_tmp = sv_cbt;
     return 1;
   }
@@ -4073,7 +4073,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
     ctor_arity_emit(&aerr, b);
     emit_builtin_new_arms(c, argc, atmp, rt2, kt, 1, b);
     buf_printf(b, "} _t%d; })", rt2);
-    bind_switch_rt_id(&sid, b);
+    bind_switch_rt_id(c, &sid, b);
     g_ctor_blk_tmp = sv_cbt;
     free(atmp);
     c->args_in_call = recv;

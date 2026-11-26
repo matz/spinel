@@ -14282,8 +14282,12 @@ void emit_class_value_new_switch(Compiler *c, int recv, int rt2, int kt, int box
   buf_printf(b, "sp_RbVal _t%d = sp_box_nil(); ", rt2);
   /* (the id a site class's arm builds for, bound once: emit_ctor_rt_arg) */
   if (sid) {
-    sid->text = NULL; sid->at = b->len; sid->kt = kt;
-    if (c->has_rt_classes) { snprintf(sid->name, sizeof sid->name, "_t%d", ++g_tmp); sid->text = sid->name; }
+    *sid = (SwitchRtId){ .at = b->len, .kt = kt, .tok = -1, .up = g_arm.rt_switch };
+    if (c->has_rt_classes) {
+      snprintf(sid->name, sizeof sid->name, "_t%d", ++g_tmp);
+      sid->text = sid->name;
+      sid->tok = view_push_rt_switch(sid);
+    }
   }
   /* (a class boxed by its name, an object's #class read back out of a
      boxed slot, switches on the id of the program's class of that name) */
@@ -14303,15 +14307,11 @@ void emit_class_value_new_switch(Compiler *c, int recv, int rt2, int kt, int box
   else { buf_puts(b, "switch("); emit_class_value_key(c, recv, kv, b); buf_puts(b, "){"); }
 }
 /* See codegen_call_arms.h. */
-void bind_switch_rt_id(const SwitchRtId *sid, Buf *b) {
-  if (!sid->text || !b->p) return;
-  size_t n = strlen(sid->text);
-  for (const char *s = b->p + sid->at; (s = strstr(s, sid->text)); s += n)
-    if (!isdigit((unsigned char)s[n])) {
-      char decl[64]; snprintf(decl, sizeof decl, "sp_int %s = _t%d.cls_id; ", sid->text, sid->kt);
-      buf_insert_at(b, sid->at, decl);
-      return;
-    }
+void bind_switch_rt_id(Compiler *c, SwitchRtId *sid, Buf *b) {
+  if (sid->tok >= 0) view_pop(c, sid->tok);
+  if (!sid->read) return;
+  char decl[64]; snprintf(decl, sizeof decl, "sp_int %s = _t%d.cls_id; ", sid->text, sid->kt);
+  buf_insert_at(b, sid->at, decl);
 }
 
 int emit_struct_new_call(Compiler *c, int id, int ci, int argc, const int *argv, Buf *b);
@@ -14633,7 +14633,7 @@ void emit_class_value_new_kw(Compiler *c, int id, int recv, int boxed, Buf *b) {
     buf_printf(b, "default: sp_raise_nomethod(sp_nomethod_msg(\"new\", _t%d)); } _t%d; })", kt, rt2);
   else
     buf_printf(b, "default: sp_raise_nomethod(sp_nomethod_msg(\"new\", sp_box_class(_t%d))); } _t%d; })", kt, rt2);
-  bind_switch_rt_id(&sid, b);
+  bind_switch_rt_id(c, &sid, b);
   g_ctor_blk_tmp = sv_cbt;
 }
 

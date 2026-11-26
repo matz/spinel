@@ -5949,6 +5949,9 @@ static void emit_rtclass_arm(Compiler *c, const char *stmt, Buf *b) {
    switch's bound id), which may be a class made at run time's, or, with
    rtid NULL, ci itself, for a call that names the class statically. */
 static void rtclass_arg_text(int ci, const char *rtid, Buf *b) {
+  /* (a switch's bound id: the switch binds it, ArmCtx.rt_switch) */
+  for (SwitchRtId *s = rtid ? g_arm.rt_switch : NULL; s; s = s->up)
+    if (s->text == rtid) s->read = 1;
   if (rtid) buf_puts(b, rtid);
   else buf_printf(b, "%d", ci);
 }

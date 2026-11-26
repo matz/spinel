@@ -57,8 +57,10 @@
    declines its own re-entry, g_pd_skip and g_prbd_skip, and
    g_poly_builtin_arm, under which no user class owns a name), and
    view_push_gap_watch for the call whose own gap an arm reads as the
-   builtin declining (ArmCtx.gap_watch), and view_push_dsend for the
-   dynamic send whose arms are being emitted (ArmCtx.dsend). None is a view
+   builtin declining (ArmCtx.gap_watch), view_push_dsend for the
+   dynamic send whose arms are being emitted (ArmCtx.dsend), and
+   view_push_rt_switch for the class-value `new` switch whose arms are
+   being written (ArmCtx.rt_switch). None is a view
    of a node: they count toward neither view_depth nor view_epoch. */
 
 #define SP_NODE_FACT_OWNER 1
@@ -306,6 +308,12 @@ int view_push_gap_watch(int id, int *hit) {
 int view_push_dsend(const DsendFrame *f) {
   int tok = view_save_arm();
   g_arm.dsend = f;
+  return tok;
+}
+
+int view_push_rt_switch(struct SwitchRtId *s) {
+  int tok = view_save_arm();
+  g_arm.rt_switch = s;
   return tok;
 }
 

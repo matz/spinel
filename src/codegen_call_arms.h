@@ -263,18 +263,21 @@ void emit_class_value_new_kw(Compiler *c, int id, int recv, int boxed, Buf *b);
    recv is the receiver node (emit_class_value_key). In a program with a
    site class, sid (NULL where no arm builds an object) names the class id
    the arms build for, a temp bound once ahead of the switch where an arm
-   reads it (bind_switch_rt_id). */
-typedef struct {
+   writes it (ArmCtx.rt_switch, bind_switch_rt_id). */
+typedef struct SwitchRtId {
   const char *text;   /* the temp the arms pass a site class's constructor
                          (emit_ctor_rt_arg), NULL in a program with none */
   char name[24];
   size_t at;          /* where in the switch's buffer its binding goes */
-  int kt;
+  int kt, read;       /* read: an arm wrote the temp (rtclass_arg_text) */
+  int tok;            /* the arm context the switch pushed */
+  struct SwitchRtId *up;   /* the switch this one is written inside of */
 } SwitchRtId;
 void emit_class_value_new_switch(Compiler *c, int recv, int rt2, int kt, int boxed, SwitchRtId *sid, Buf *b);
-/* Once the switch's arms are written into b: bind sid's temp ahead of the
-   switch if an arm read it, so no switch declares an id nothing reads */
-void bind_switch_rt_id(const SwitchRtId *sid, Buf *b);
+/* Once the switch's arms are written into b: pop its arm context and bind
+   sid's temp ahead of the switch where an arm wrote it, so no switch
+   declares an id nothing reads */
+void bind_switch_rt_id(Compiler *c, SwitchRtId *sid, Buf *b);
 /* The dispatch key of the class value held in the C name `val` (an
    sp_Class, or a box that holds a Class): what a switch over the program's
    classes takes, for every emitter that dispatches on a class value. recv

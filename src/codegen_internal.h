@@ -2813,10 +2813,15 @@ int view_mark(void);
    ones it is emitted inside of: an arm that reaches a yielding method
    expands its body, which may hold the same send, and the send is not
    emitted again inside its own arms. count_arm is set while a count's arm
-   of a builtin's generic entry is emitted (bi_generic_fn). */
+   of a builtin's generic entry is emitted (bi_generic_fn). rt_switch names
+   the innermost class-value `new` switch whose arms are being written
+   (emit_class_value_new_switch), linked to the ones it is written inside
+   of: a site class's constructor argument that writes one's class id
+   (rtclass_arg_text) marks it read, and the switch binds the id only then. */
 typedef struct DsendFrame { int id, depth; const struct DsendFrame *up; } DsendFrame;
+struct SwitchRtId;
 typedef struct { int pd_skip, prbd_skip, builtin_arm, send_split, each_inline, each_dispatch, gap_watch; int *gap_hit; const char *arm_cls;
-                 const DsendFrame *dsend; int count_arm; } ArmCtx;
+                 const DsendFrame *dsend; int count_arm; struct SwitchRtId *rt_switch; } ArmCtx;
 extern ArmCtx g_arm;
 #define g_pd_skip (g_arm.pd_skip)
 #define g_prbd_skip (g_arm.prbd_skip)
@@ -2826,6 +2831,8 @@ int view_push_arm(int pd_skip, int prbd_skip, int builtin_arm);
 int view_push_gap_watch(int id, int *hit);
 /* the arm context with frame f the innermost dynamic send (ArmCtx.dsend), popped by view_pop */
 int view_push_dsend(const DsendFrame *f);
+/* the arm context with switch s the innermost class-value `new` switch (ArmCtx.rt_switch), popped by view_pop */
+int view_push_rt_switch(struct SwitchRtId *s);
 /* A node pinned to one face kind for the inference asked under it,
    pushed and popped like a view (view_pop) and put back by view_unwind
    (face_of, analyze.h). */

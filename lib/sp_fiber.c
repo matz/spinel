@@ -574,17 +574,23 @@ void sp_stack_guard_init(void) { sp_fiber_fault_arm(); }
 int sp_stack_headroom_low(void) {
   char here;
   sp_Fiber *f = sp_fiber_current;
-  char *lo;
+  char *lo, *hi;
   size_t margin = SP_STACK_MARGIN;
   if (f && f != &sp_fiber_root && f->stack) {
     lo = f->stack + sp_fiber_guard();
+    hi = lo + f->stack_size;
     if (margin > f->stack_size / 4) margin = f->stack_size / 4;
-  } else if (sp_thread_stack_lo) {
+  } else if (sp_thread_stack_lo && sp_thread_stack_hi) {
     lo = sp_thread_stack_lo;
+    hi = sp_thread_stack_hi;
   } else {
     return 0;
   }
-  return &here < lo || (size_t)(&here - lo) < margin;
+  /* a frame outside the stack these bounds are of runs on another one (a
+     host's thread calling into a C extension, where the bounds are the
+     thread that armed the handler's): nothing is known of its room */
+  if (&here < lo || &here >= hi) return 0;
+  return (size_t)(&here - lo) < margin;
 }
 
 /* ---- the stack the program body runs on -------------------------------

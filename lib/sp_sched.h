@@ -301,6 +301,8 @@ sp_RbVal   sp_Queue_pop_timeout(sp_queue *q, double seconds); /* nil on timeout 
 sp_int    sp_Queue_size(sp_queue *q);              /* #size / #length */
 sp_bool   sp_Queue_empty(sp_queue *q);             /* #empty? */
 sp_int    sp_Queue_max(sp_queue *q);               /* SizedQueue#max */
+sp_int    sp_Queue_set_max(sp_queue *q, sp_int max);   /* SizedQueue#max= */
+void      sp_Queue_max_writable(sp_queue *q);   /* raises for a plain Queue */
 void       sp_Queue_close(sp_queue *q);             /* #close */
 sp_bool   sp_Queue_closed(sp_queue *q);            /* #closed? */
 sp_int    sp_Queue_num_waiting(sp_queue *q);       /* #num_waiting */

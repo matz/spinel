@@ -12765,6 +12765,8 @@ void emit_args_filled_argv(Compiler *c, int callee_idx, const int *argv, int arg
         emit_arg_or_default(c, m, i, -1, out);
         if (m->pdefault) m->pdefault[i] = dflt;
       }
+      view_unbind(argov_saved);
+      arg_layout_free(&L);
       return;
     }
   }

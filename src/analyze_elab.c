@@ -12033,6 +12033,31 @@ static int lr_lambda_method_form(const NodeTable *nt, int node) {
   return 0;
 }
 
+/* Is send f's receiver self in an instance method of a program class,
+   whatever its arguments (`def ask(name, *args) = send(name, *args)`)? That
+   self is no class or module, nor main: the forms that define a method by
+   a name (define_method, alias_method, attr_*, remove_method) are Module's,
+   and define_singleton_method or extend reach only that object's singleton,
+   so the send changes no method a call of main or of a class answers, the
+   `lambda` of a file's top level among them. (A form that evaluates code is
+   no arm of the computed send: lr_send_names_nothing.) A reopening of
+   Object, Kernel or BasicObject, or a module, is not such a class. */
+static int lr_send_on_plain_instance(Compiler *c, int f) {
+  const NodeTable *nt = c->nt;
+  int r = nt_ref(nt, f, "receiver");
+  if (r >= 0 && nt_kind(nt, r) != NK_SelfNode) return 0;
+  const Scope *s = comp_scope_of(c, f);
+  if (!s || s->def_node < 0 || s->is_cmethod || s->class_id < 0 || s->class_id >= c->nclasses) return 0;
+  /* (in a block of the method, self may be another object: instance_exec) */
+  const int *par = comp_parent_map(c);
+  for (int a = f; par && a >= 0 && a < nt->count; a = par[a]) {
+    NodeKind k = nt_kind(nt, a);
+    if (k == NK_DefNode) break;
+    if (k == NK_BlockNode || k == NK_LambdaNode) return 0;
+  }
+  const ClassInfo *k = &c->classes[s->class_id];
+  return !comp_class_is_module(c, (ClassInfo *)k) && !is_object_root(k->name) && !k->is_builtin_const;
+}
 /* Check that every spelling that can change lambda has a recorded owner.
    Indirect method-table sends and string evals can reach an unknown
    table even when their syntactic receiver is known. */
@@ -12048,7 +12073,7 @@ static int lr_lambda_unknown_owner(Compiler *c) {
     if (is_send_family(name)) {
       int used = 0;
       const char *sent = call_sent_name(nt, f, &used);
-      if (!sent ? !lr_send_names_nothing(nt, f, v, n, used)
+      if (!sent ? !lr_send_names_nothing(nt, f, v, n, used) && !lr_send_on_plain_instance(c, f)
                 : is_method_naming_call(sent) || is_code_eval_name(sent)) return 1;
     }
   }

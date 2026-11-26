@@ -41,6 +41,14 @@ sysread: ASCII-8BIT 13 13
   reverse +: Encoding::CompatibilityError: incompatible character encodings: BINARY (ASCII-8BIT) and UTF-8
   interpolation: Encoding::CompatibilityError: incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)
 kept: UTF-8 2
+concat self, bytes: UTF-8 [195, 169]
+concat ascii, bytes: UTF-8 [195, 169]
+concat self, self, bytes: UTF-8 [195, 169]
+concat bytes, text: UTF-8 [97]
+concat self, bytes, text: UTF-8 [97]
+concat splat bytes, text: UTF-8 [97]
+concat self, ascii: UTF-8 5
+concat ascii, bytes onto ascii: ASCII-8BIT 15
 ascii << bytes: ASCII-8BIT 16
 bytes << ascii: ASCII-8BIT 15
 empty << text: UTF-8 2

@@ -220,10 +220,22 @@ static inline void sp_String_append_bin(sp_String*s,const char*t){
    one's evaluation changed is read as it is now). The arguments are the
    handles of the Strings, read here and not before; the receiver's own bytes
    are kept aside once, only when the receiver is among them. The appends
-   cannot collect, so the handles need no root here. */
+   cannot collect, so the handles need no root here. The encodings are
+   checked over every argument first, as CRuby does: one that cannot join
+   raises Encoding::CompatibilityError with the receiver unchanged (and
+   before the receiver's bytes are kept aside). */
 static inline void sp_String_concat_multi(sp_String *s, int n, sp_String *const *a) {
   if (SP_UNLIKELY(!s)) sp_nil_recv("concat");
   if (sp_String_is_immutable(s)) { sp_raise_frozen_str(s->data); return; }
+  {
+    int bin = (int)s->binary, high = !sp_str_ascii_only(s->data);
+    for (int i = 0; i < n; i++) {
+      if (!a[i] || sp_str_ascii_only(a[i]->data)) continue;
+      int tb = sp_str_is_binary(a[i]->data);
+      if (tb != bin) { if (high) sp_str_enc_incompatible(bin); bin = tb; }
+      high = 1;
+    }
+  }
   char *kept = NULL;
   int64_t kept_len = s->len;
   for (int i = 0; i < n && !kept; i++)

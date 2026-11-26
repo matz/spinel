@@ -2814,6 +2814,9 @@ static sp_Class sp_poly_class_val(sp_RbVal v) {
   if (sp_bsub_cls_fn && r.cls_id < 0) { int k = sp_bsub_cls_fn(v); if (k >= 0) r.cls_id = k; }
   /* an object with singleton methods answers the class they hide behind */
   if (sp_cls_visible_fn && r.cls_id >= 0) r.cls_id = sp_cls_visible_fn(r.cls_id);
+  /* an instance of a site class answers the class made at run time it was
+     built for (sp_rtclass.h) */
+  if (sp_obj_rtclass_fn && r.cls_id >= 0) { sp_int k = sp_obj_rtclass_fn(v); if (k >= 0) r.cls_id = (int)k; }
   int bid;
   r.name = sp_poly_class_name_id(v, &bid);
   /* a builtin's class carries its id, as the constant naming it does: the
@@ -19819,7 +19822,10 @@ static sp_File *sp_File_open_val(const char *path, sp_RbVal mode, sp_oint perm) 
    File::Stat this backend models (#2775, #2790). */
 void sp_file_stat_scan(void *p);
 sp_File *sp_file_stat_handle(const char *path);
-sp_File *sp_io_stat_handle(sp_File *f);   /* IO#stat: by path, or fstat(2) for a descriptor handle */
+sp_File *sp_io_stat_handle(sp_File *f);   /* IO#stat: fstat(2) of the descriptor, kept in the handle */
+sp_Time *sp_io_birthtime(sp_File *f);     /* File#birthtime / File::Stat#birthtime */
+sp_int sp_File_chmod(sp_File *f, sp_int mode);            /* File#chmod: fchmod(2) */
+sp_int sp_File_chown(sp_File *f, sp_int uid, sp_int gid); /* File#chown: fchown(2) */
 sp_File *sp_file_lstat_handle(const char *path);
 sp_bool sp_stat_nofollow(sp_File *f);
 sp_oint sp_stat_size(sp_File *f);                  /* File::Stat#size: nil when the stat fails */

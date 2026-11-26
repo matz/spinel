@@ -12042,12 +12042,48 @@ static int lr_lambda_method_form(const NodeTable *nt, int node) {
    `lambda` of a file's top level among them. (A form that evaluates code is
    no arm of the computed send: lr_send_names_nothing.) A reopening of
    Object, Kernel or BasicObject, or a module, is not such a class. */
+static int lr_plain_instance_scope(Compiler *c, int f);
 static int lr_send_on_plain_instance(Compiler *c, int f) {
   const NodeTable *nt = c->nt;
   int r = nt_ref(nt, f, "receiver");
   if (r >= 0 && nt_kind(nt, r) != NK_SelfNode) return 0;
+  return lr_plain_instance_scope(c, f);
+}
+/* Is send f's receiver that self's own singleton class (`singleton_class.send(:define_method, key) { }`)?
+   What a definition form makes there answers on that one object alone. */
+static int lr_send_on_own_singleton(Compiler *c, int f) {
+  const NodeTable *nt = c->nt;
+  int r = nt_ref(nt, f, "receiver");
+  if (r < 0 || nt_kind(nt, r) != NK_CallNode || !sp_streq(nt_str(nt, r, "name"), "singleton_class") ||
+      nt_ref(nt, r, "arguments") >= 0 || nt_ref(nt, r, "block") >= 0) return 0;
+  int rr = nt_ref(nt, r, "receiver");
+  return (rr < 0 || nt_kind(nt, rr) == NK_SelfNode) && lr_plain_instance_scope(c, f);
+}
+/* Can eval call f's code change what a call of a file's top level
+   answers? Code in a String a literal spells may. One a non-literal holds,
+   in a method of a program class on self (`def eval_on(str) =
+   instance_eval(str)`, `def self.add(code) = class_eval(code)`), runs in no
+   compiled program: such an eval is refused where it is emitted. Elsewhere
+   (a file's top level, on Object, Kernel or another receiver) it is taken
+   as one that may. */
+static int lr_eval_may_change(Compiler *c, int f, int a) {
+  const NodeTable *nt = c->nt;
+  if (a >= 0 && nt_kind(nt, a) == NK_StringNode) return 1;
+  int r = nt_ref(nt, f, "receiver");
+  if (r >= 0 && nt_kind(nt, r) != NK_SelfNode) return 1;
   const Scope *s = comp_scope_of(c, f);
-  if (!s || s->def_node < 0 || s->is_cmethod || s->class_id < 0 || s->class_id >= c->nclasses) return 0;
+  if (!s || s->def_node < 0 || s->class_id < 0 || s->class_id >= c->nclasses) return 1;
+  const ClassInfo *k = &c->classes[s->class_id];
+  return is_object_root(k->name) || k->is_builtin_const;
+}
+/* (the scope test of lr_send_on_plain_instance: a method of a plain
+   program class, an instance's or the class's own, not in a block of it.
+   In a class method self is that class: what a definition form makes
+   there is the class's or its singleton's, and main answers neither) */
+static int lr_plain_instance_scope(Compiler *c, int f) {
+  const NodeTable *nt = c->nt;
+  const Scope *s = comp_scope_of(c, f);
+  if (!s || s->def_node < 0 || s->class_id < 0 || s->class_id >= c->nclasses) return 0;
   /* (in a block of the method, self may be another object: instance_exec) */
   const int *par = comp_parent_map(c);
   for (int a = f; par && a >= 0 && a < nt->count; a = par[a]) {
@@ -12069,12 +12105,13 @@ static int lr_lambda_unknown_owner(Compiler *c) {
     int args = nt_ref(nt, f, "arguments"), n = 0;
     const int *v = args >= 0 ? nt_arr(nt, args, "arguments", &n) : NULL;
     if (!n) continue;
-    if (is_code_eval_name(name) && nt_ref(nt, f, "block") < 0) return 1;
+    if (is_code_eval_name(name) && nt_ref(nt, f, "block") < 0 && lr_eval_may_change(c, f, v[0])) return 1;
     if (is_send_family(name)) {
       int used = 0;
       const char *sent = call_sent_name(nt, f, &used);
       if (!sent ? !lr_send_names_nothing(nt, f, v, n, used) && !lr_send_on_plain_instance(c, f)
-                : is_method_naming_call(sent) || is_code_eval_name(sent)) return 1;
+                : ((is_method_naming_call(sent) && !lr_send_on_plain_instance(c, f) && !lr_send_on_own_singleton(c, f)) ||
+                   (is_code_eval_name(sent) && used < n && lr_eval_may_change(c, f, v[used])))) return 1;
     }
   }
   unsigned char *held = calloc((size_t)nt->count, 1);

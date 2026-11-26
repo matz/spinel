@@ -3045,7 +3045,10 @@ static void cf_call_known(CF *f, int v, int pidx, int recv_el, const char *nm, c
       if (sp_streq(nm, "new")) { CFByName *b = cf_byname(f, "initialize"); for (int q = 0; q < b->n; q++) cf_bind_args(f, b->mi[q], argv, argc); }
       return;
     }
-    /* `.class`: the Class objects of the receiver's classes */
+    /* `.class`: the Class objects of the receiver's classes, and a
+       runtime Class object for its builtin part; nothing of the receiver
+       itself (the builtin rule below would hand that on) */
+    int class_of = sp_streq(nm, "class") && argc == 0 && blk < 0;
     if (sp_streq(nm, "class") && argc == 0) cf_add_set(f, v, cf_classvals_of(f, pidx));
     /* a method the program adds to a runtime class or module it reopens
        answers for the runtime's values too (`class Object; def tagged`,
@@ -3053,6 +3056,11 @@ static void cf_call_known(CF *f, int v, int pidx, int recv_el, const char *nm, c
     for (int i = 0; i < f->nopen; i++) {
       int mi = call_target(c, v, f->open[i], nm, 0, NULL);
       if (mi >= 0) cf_user_target(f, v, mi, argv, argc, blk);
+    }
+    if (class_of && pidx != CF_ALL) {
+      s = &f->pool[pidx];   /* (the pool moves as sets are added) */
+      if (s->bv || s->os || cf_set_classless(f, pidx)) cf_add_set(f, v, cf_bset(f, 0, 0, 0, CORE_CLASS));
+      return;
     }
     cf_builtin_rule(f, v, recv_el, argv, argc, blk, nm);
   }

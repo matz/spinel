@@ -1264,7 +1264,7 @@ else {
     }
     /* ...and to the handle it holds when that is an IO (`$stderr = $stdout`,
        a File): the stream its own puts writes to */
-    const char *wfp = serr && serr->type == TY_IO ? "(gv_stderr ? gv_stderr->fp : stderr)" : "stderr";
+    const char *wfp = serr && serr->type == TY_IO ? "gv_stderr" : "NULL";
     /* the runtime gate expression, when a category was given */
     char guard[96]; guard[0] = 0;
     if (cat_guard) snprintf(guard, sizeof guard, "sp_warning_enabled(\"%s\")", cat_guard);
@@ -1328,11 +1328,11 @@ else {
           buf_printf(b, "{ sp_RbVal _ge = gv_stderr; if (_ge.tag == SP_TAG_OBJ && _ge.cls_id == %d)"
                         " sp_StringIO_write((sp_StringIO *)_ge.v.p, ", redirect_boxed);
           emit_str_literal(b, up_pre);
-          buf_puts(b, "); else fputs(");
+          buf_puts(b, "); else sp_poly_warn_str(");
           emit_str_literal(b, up_pre);
           buf_puts(b, ", sp_poly_warn_fp(_ge)); }\n");
         }
-        else { buf_puts(b, "fputs("); emit_str_literal(b, up_pre); buf_printf(b, ", %s);\n", wfp); }
+        else { buf_puts(b, "sp_poly_warn_str("); emit_str_literal(b, up_pre); buf_printf(b, ", %s);\n", wfp); }
         up_pre[0] = 0;
       }
       TyKind at = comp_ntype(c, argv[k]);
@@ -20000,14 +20000,9 @@ static int emit_multi_write_stmt_body(Compiler *c, int id, Buf *b, int indent, c
         emit_indent(b, indent);
         buf_printf(b, "{ int _t%d[2]; sp_io_make_pipe(_t%d); ", tf, tf);
         buf_printf(b, "%s = sp_io_pipe_reader(_t%d[0]); ", rb.p, tf);
-        /* the write end is sync in CRuby: a write reaches the descriptor at
-           once, so the reader (or an IO.select on it) sees it without a
-           flush. sp_io_pipe does the same for the non-destructured call
-           (#4263). */
-        buf_printf(b, "sp_File *_w%d = sp_io_fdopen(_t%d[1], SPL(\"w\")); "
-                      "if (_w%d) { _w%d->sync_on = 1; setvbuf(_w%d->fp, NULL, _IONBF, 0); } "
-                      "%s = _w%d; }\n",
-                   tf, tf, tf, tf, tf, wb.p, tf);
+        /* the write end is sync in CRuby (sp_io_pipe_writer), as sp_io_pipe
+           makes it for the non-destructured call (#4263) */
+        buf_printf(b, "%s = sp_io_pipe_writer(_t%d[1]); }\n", wb.p, tf);
         free(rb.p); free(wb.p);
         return 1;
       }

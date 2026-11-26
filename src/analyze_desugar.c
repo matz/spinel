@@ -26512,6 +26512,18 @@ static int stmt_only_declares(const NodeTable *nt, int s, const ANameHash *defna
   for (int j = 0; j < na; j++) if (!decl_arg_inert(nt, av[j])) return 0;
   return 1;
 }
+/* Does declaration s fire a hook the program defines a method of
+   (definition_form_hooks, *defnames)? CRuby runs the hook at the
+   declaration, so no statement may move past it (cn_rt_body). */
+static int decl_fires_defined_hook(const NodeTable *nt, int s, const ANameHash *defnames) {
+  NodeKind k = nt_kind(nt, s);
+  const char *form = k == NK_DefNode || k == NK_AliasMethodNode ? "define_method" : k == NK_UndefNode ? "undef_method" :
+                     k == NK_CallNode ? nt_str(nt, s, "name") : NULL, *hook[2];
+  int sg = k == NK_DefNode && nt_ref(nt, s, "receiver") >= 0;
+  for (int i = definition_form_hooks(form, sg, hook) - 1; i >= 0; i--)
+    if (anh_has(defnames, hook[i])) return 1;
+  return 0;
+}
 /* The names the program defines methods of, into *defnames; answers
    whether one is a definition hook or method_missing (block_only_declares) */
 int program_def_names(const NodeTable *nt, ANameHash *defnames) {
@@ -27629,22 +27641,26 @@ static int cn_block_param(const NodeTable *nt, int blk) {
    class it makes (cplan_rt_site_body);
    another runs it in its class body, once, as the block ran before. The
    block's one parameter is the class: the method's first statement writes
-   self to it. A block with any other parameters, or one statement that may
-   not run again, keeps its body: registration then keeps the site class
-   itself. */
+   self to it. A block with any other parameters, one statement that may
+   not run again, or one ahead of a declaration firing a hook the program
+   defines (decl_fires_defined_hook: the hook would see it run late), keeps
+   its body: registration then keeps the site class itself. */
 static void cn_rt_body(NodeTable *nt, int blk, int body, const char *cname, const ANameHash *defnames) {
-  int n = 0, last = -1, moved = 0, param = cn_block_param(nt, blk);
+  int n = 0, last = -1, hooked = -1, moved = 0, param = cn_block_param(nt, blk);
   const int *st = nt_arr(nt, body, "body", &n);
   if (param == -2) return;
   CnRerun r = { defnames, param >= 0 ? nt_str(nt, param, "name") : NULL, 0, 0 };
   for (int i = 0; i < n; i++) {
     if (stmt_only_declares(nt, st[i], defnames)) last = i;
+    if (last == i && decl_fires_defined_hook(nt, st[i], defnames)) hooked = i;
     if (nt_kind(nt, st[i]) == NK_DefNode && nt_ref(nt, st[i], "receiver") >= 0) r.sdefs = 1;
   }
   for (int i = 0; i < n; i++) {
     if (stmt_only_declares(nt, st[i], defnames)) continue;
     r.early = i < last;
-    if (an_subtree_has_local_jump(nt, st[i]) || an_subtree_has_ivar(nt, st[i], 0) || !cn_stmt_reruns(nt, st[i], &r)) return;
+    if (i < hooked || an_subtree_has_local_jump(nt, st[i]) || an_subtree_has_ivar(nt, st[i], 0) ||
+        !cn_stmt_reruns(nt, st[i], &r))
+      return;
     moved++;
   }
   if (!moved) return;

@@ -889,7 +889,8 @@ static int emit_call_raise_arms_in(Compiler *c, int id, Buf *b, const NodeTable 
         const char *_ln = (leaf); \
         if (nt_kind(nt, nd) == NK_ConstantPathNode) { \
           int _par = nt_ref(nt, nd, "parent"); \
-          const char *_pnm = (_par >= 0 && nt_kind(nt, _par) == NK_ConstantReadNode) \
+          const char *_pnm = (_par >= 0 && (nt_kind(nt, _par) == NK_ConstantReadNode || \
+                              (nt_kind(nt, _par) == NK_ConstantPathNode && nt_ref(nt, _par, "parent") < 0))) \
                              ? nt_str(nt, _par, "name") : NULL; \
           if (_pnm && _ln) { \
             snprintf(qexc_buf, sizeof qexc_buf, "%s::%s", _pnm, _ln); \

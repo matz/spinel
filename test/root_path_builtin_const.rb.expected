@@ -1,0 +1,10 @@
+false
+:mine
+0
+99
+Errno::EACCES
+"Permission denied - x"
+Errno::EACCES
+App::Errno::EACCES
+9
+9

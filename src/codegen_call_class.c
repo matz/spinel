@@ -4145,9 +4145,12 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
       emit_obj_class_value(c, cid, so.p ? so.p : "self", &sc);
       free(so.p);
     }
-    buf_printf(b, "sp_%s_new(", c->classes[cid].c_name);
     char rid[528];
-    const char *lead = emit_ctor_rt_arg(c, cid, ctor_rt_id(sc.p, rid, sizeof rid), b);
+    const char *rtid = ctor_rt_id(sc.p, rid, sizeof rid);
+    /* (a yielding initialize takes the block as `C.new` hands it) */
+    if (emit_ctor_yield_inline(c, id, cid, rtid, b) || emit_ctor_new_with_proc(c, id, cid, rtid, b)) { free(sc.p); return 1; }
+    buf_printf(b, "sp_%s_new(", c->classes[cid].c_name);
+    const char *lead = emit_ctor_rt_arg(c, cid, rtid, b);
     free(sc.p);
     /* the arguments converted to initialize's parameter types, as
        `V.new(...)` does: an `x.to_i` narrowed to sp_int passed raw into a

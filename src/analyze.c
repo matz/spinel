@@ -47897,8 +47897,11 @@ static void arysub_super_into(Compiler *c, int at, int n, const char *mname, int
      the elements, as the arms after these do */
   /* A capacity value with something to run still runs, after the default:
      the super keeps the entries and takes the default (or the default proc)
-     of `Hash.new(args) { blk }`, which runs it */
-  else if (cap_kept) {
+     of `Hash.new(args) { blk }`, which runs it. One argument that is a
+     splat (`super(*args)`, the bare super of an initialize(*args)) is the
+     same: it may spread to none or several, which Hash.new takes. */
+  else if (cap_kept || (init == 1 && sp_streq(bn, "Hash") && an == 1 &&
+                        nt_kind(c->nt, nt_arr(c->nt, args, "arguments", &an)[0]) == NK_SplatNode)) {
     /* (an argument list of its own: the capacity desugar edits it in place,
        and the arm with the forwarded block and the one without share args) */
     int keep[64];
@@ -47907,17 +47910,19 @@ static void arysub_super_into(Compiler *c, int at, int n, const char *mname, int
     const char *get = blk >= 0 ? "default_proc" : "default";
     int dv = made >= 0 ? arysub_new_call(c, at, made, get, -1, -1) : -1;
     if (dv >= 0) arysub_set_call(c, n, self, blk >= 0 ? "default_proc=" : "default=", arysub_args(c, at, &dv, 1), -1);
+    /* (Hash#initialize's setter, never a subclass's override) */
+    if (dv >= 0) nt_mark_builtin_call((NodeTable *)c->nt, n);
   }
   else if (init == 1 && sp_streq(bn, "Hash") && blk < 0 && (an == 0 ||
            (an == 1 && nt_kind(c->nt, nt_arr(c->nt, args, "arguments", &an)[0]) != NK_KeywordHashNode))) {
     int dv = an == 0 ? arysub_node(c, "NilNode", at) : -1;
     if (an == 0 && dv >= 0) args = arysub_args(c, at, &dv, 1);
-    if (args >= 0) arysub_set_call(c, n, self, "default=", args, -1);
+    if (args >= 0) { arysub_set_call(c, n, self, "default=", args, -1); nt_mark_builtin_call((NodeTable *)c->nt, n); }
   }
   else if (init == 1 && sp_streq(bn, "Hash") && an == 0) {
     int made = arysub_builtin_call(c, at, bn, "new", -1, blk);
     int dp = made >= 0 ? arysub_new_call(c, at, made, "default_proc", -1, -1) : -1;
-    if (dp >= 0) arysub_set_call(c, n, self, "default_proc=", arysub_args(c, at, &dp, 1), -1);
+    if (dp >= 0) { arysub_set_call(c, n, self, "default_proc=", arysub_args(c, at, &dp, 1), -1); nt_mark_builtin_call((NodeTable *)c->nt, n); }
   }
   else if (an == 0 && blk < 0 && !sp_streq(bn, "Time")) arysub_set_call(c, n, self, "clear", -1, -1);
   else {

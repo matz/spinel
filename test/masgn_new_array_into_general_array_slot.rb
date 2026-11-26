@@ -61,3 +61,15 @@ end
 j = J.new
 j.go
 p j.w, j.u
+
+# an attribute target whose field the new Array reaches boxed, before and
+# after another target
+class B8; attr_accessor :items; end
+b8 = B8.new
+b8.items, u8 = "ab".bytes, 5
+y1(b8.items) { |x| x << "q" }
+p b8.items, u8
+b9 = B8.new
+u9, b9.items = 6, Array.new(2, 1)
+y1(b9.items) { |x| x << "r" }
+p b9.items, u9

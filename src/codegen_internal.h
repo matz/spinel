@@ -199,6 +199,11 @@ int emit_strbuf_route(Compiler *c, int v, Buf *b);
 int masgn_flat_targets(const NodeTable *nt, int node, int *out, int n);
 /* does the right side of multiple write mw rebind what `part` (a target's receiver or key) reads (read_rebound_by): a write of a local, a call of a proc that assigns it, user code beside an ivar, gvar or cvar read? */
 int masgn_value_changes(Compiler *c, int mw, int part);
+/* The kind of element i of multiple assignment mw's literal right side, a
+   new typed Array its target holds as the general Array, which is built
+   as one where it is made: an Array its target's box or general Array
+   slot keeps so (box_lift_marked). TY_UNKNOWN for any other element. */
+TyKind masgn_el_lift_from(Compiler *c, int mw, int i);
 /* ...the handle of a boxed receiver's call whose arms answer a String, or of a sequence ending in one */
 void emit_poly_arms_handle(Compiler *c, int base, Buf *b);
 void emit_poly_user_handle(Compiler *c, int v, Buf *b);
@@ -1578,6 +1583,13 @@ int conv_takes_no_args(Compiler *c, int mi);
 void emit_conv_dflt_args(Compiler *c, int mi, Buf *b);
 void emit_str_pattern_expr(Compiler *c, int node, Buf *b);
 void emit_boxed_text(Compiler *c, TyKind t, const char *expr, Buf *b);
+/* Did the analysis mark `node`, a new Array of Integers, Floats or Strings
+   of kind t, one its holder keeps as the general Array (box_lift_arr: a
+   box, a Struct member's `super` argument, a general Array slot)? */
+int box_lift_marked(Compiler *c, int node, TyKind t);
+/* The new Array of kind t `node` builds (box_lift_marked's kinds), as the
+   general Array; a nil (`s&.bytes`) stays NULL. */
+void emit_array_lifted(Compiler *c, int node, TyKind t, Buf *b);
 /* the form --repr-check records when emit_boxed_text boxes a kind t (RF_*) */
 int emit_boxed_text_form(Compiler *c, TyKind t);
 /* emit_boxed_text, but a whole Integer or Float array element read boxes

@@ -487,10 +487,17 @@ static void emit_sockopt_optname(Compiler *c, int tl, int node, Buf *b) {
   if (repr_of(c, node).as_ty == TY_INT) { emit_int_expr(c, node, b); return; }
   buf_printf(b, "sp_sock_optname_arg(_t%d, ", tl); emit_boxed(c, node, b); buf_puts(b, ")");
 }
-/* A shutdown direction: an Integer as given, a Symbol or String name
-   through sp_sock_shutdown_arg */
+/* Does a shutdown direction convert through sp_sock_shutdown_arg? An
+   Integer that cannot be nil is passed as given; a nilable Integer (nil
+   is SHUT_RDWR), a Symbol and a String convert. */
+static int shutdown_how_converts(Compiler *c, int node) {
+  Repr r = repr_of(c, node);
+  return !(r.as_ty == TY_INT && r.kind != RK_OPT);
+}
+/* A shutdown direction: an Integer as given, a nilable Integer, a Symbol
+   or a String name through sp_sock_shutdown_arg */
 static void emit_shutdown_how(Compiler *c, int node, Buf *b) {
-  if (repr_of(c, node).as_ty == TY_INT) { emit_int_expr(c, node, b); return; }
+  if (!shutdown_how_converts(c, node)) { emit_int_expr(c, node, b); return; }
   buf_puts(b, "sp_sock_shutdown_arg("); emit_boxed(c, node, b); buf_puts(b, ")");
 }
 
@@ -549,10 +556,12 @@ static int emit_io_socket_opt_call(Compiler *c, const NodeTable *nt, const char 
       return 1;
     }
   }
+  /* the receiver first, held rooted: a Symbol or String level or option
+     name converts through a call that can allocate */
   if (sp_streq(name, "setsockopt") && argc == 3) {
-    int tl = ++g_tmp;
-    buf_printf(b, "({ sp_int _t%d = ", tl); emit_sockopt_level(c, argv[0], b);
-    buf_printf(b, "; sp_sock_setsockopt(%s, _t%d, ", r, tl);
+    int tl = ++g_tmp, tf = ++g_tmp;
+    buf_printf(b, "({ sp_File *_t%d = %s; SP_GC_ROOT(_t%d); sp_int _t%d = ", tf, r, tf, tl); emit_sockopt_level(c, argv[0], b);
+    buf_printf(b, "; sp_sock_setsockopt(_t%d, _t%d, ", tf, tl);
     emit_sockopt_optname(c, tl, argv[1], b); buf_puts(b, ", ");
     /* the value is an Integer, true/false (1/0) or the option's packed
        bytes, as CRuby takes it; only an Integer converts directly */
@@ -567,9 +576,9 @@ static int emit_io_socket_opt_call(Compiler *c, const NodeTable *nt, const char 
     return 1;
   }
   if (sp_streq(name, "getsockopt") && argc == 2) {
-    int tl = ++g_tmp;
-    buf_printf(b, "({ sp_int _t%d = ", tl); emit_sockopt_level(c, argv[0], b);
-    buf_printf(b, "; sp_sock_getsockopt(%s, _t%d, ", r, tl);
+    int tl = ++g_tmp, tf = ++g_tmp;
+    buf_printf(b, "({ sp_File *_t%d = %s; SP_GC_ROOT(_t%d); sp_int _t%d = ", tf, r, tf, tl); emit_sockopt_level(c, argv[0], b);
+    buf_printf(b, "; sp_sock_getsockopt(_t%d, _t%d, ", tf, tl);
     emit_sockopt_optname(c, tl, argv[1], b); buf_puts(b, "); })");
     return 1;
   }
@@ -1765,6 +1774,14 @@ int emit_call_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const ch
         free(rb.p); return 1;
       }
       if (sp_streq(name, "shutdown") && argc <= 1) {
+        /* a converted direction may allocate: the receiver is held rooted first */
+        if (argc == 1 && shutdown_how_converts(c, argv[0])) {
+          int th = ++g_tmp;
+          buf_printf(b, "({ sp_File *_t%d = %s; SP_GC_ROOT(_t%d); sp_sock_shutdown(_t%d, ", th, r, th, th);
+          emit_shutdown_how(c, argv[0], b);
+          buf_puts(b, "); })");
+          free(rb.p); return 1;
+        }
         buf_printf(b, "sp_sock_shutdown(%s, ", r);
         if (argc == 1) emit_shutdown_how(c, argv[0], b); else buf_puts(b, "2");
         buf_puts(b, ")");

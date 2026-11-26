@@ -3024,8 +3024,12 @@ int emit_call_method_obj_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       continue;
     }
     buf_printf(b, "{ _t%d = ", tr);
-    if (!emit_method_obj_target(c, id, b, nt, name, recv, argc, argv,
-                                to[i] == CPLAN_ARM_NONE ? -1 : cplan_capture_arm(c, id, to[i]), captured_name)) {
+    /* (a yielding version is bound through its proc form, as method_obj_target_mi binds one, where the
+       form runs the version's own def: a copy an include makes, not a later redefinition's clone) */
+    int arm = to[i] == CPLAN_ARM_NONE ? -1 : cplan_capture_arm(c, id, to[i]), arm_pf = scope_proc_form_of(c, arm);
+    int arm_src = arm_pf >= 0 ? proc_form_source(c, arm_pf) : -1;
+    if (arm_src < 0 || c->scopes[arm_src].def_node != c->scopes[arm].def_node) arm_pf = -1;
+    if (!emit_method_obj_target(c, id, b, nt, name, recv, argc, argv, arm_pf >= 0 ? arm_pf : arm, captured_name)) {
       view_unwind(mark);
       buf_erase(b, start, b->len - start);
       return 0;

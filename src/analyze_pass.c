@@ -8625,8 +8625,9 @@ static int local_has_target_write(Compiler *c, Scope *sc, const char *name) {
 /* What a multiple assignment (`a, b = x, y`) binds its target `t` to: the
    element of its literal right side at the target's place (a target past
    a splat, `a, *r, b = x, y, z`, counted from the end), answered as the
-   node, or the right side itself for its first target where it is a value
-   the assignment does not take apart (cplan_masgn_takes_apart); MTV_NIL
+   node, or the right side itself for its first target (past a leading
+   splat, the first after it) where it is a value the assignment does not
+   take apart (cplan_masgn_takes_apart); MTV_NIL
    where the target takes nil (past the elements, or after such a value's
    first target); MTV_ELEM where it takes element *at of a right side that
    is no literal, *rhs, which the assignment *mwp takes apart (an Array, or
@@ -8647,7 +8648,7 @@ static int masgn_target_value(Compiler *c, int t, int *rhs, int *at, int *mwp) {
     if (val < 0) return MTV_NONE;
     if (nt_kind(nt, val) != NK_ArrayNode) {
       TyKind vt = infer_type(c, val);
-      if (!cplan_masgn_takes_apart(c, mw, val, vt)) return i == 0 ? val : MTV_NIL;
+      if (!cplan_masgn_takes_apart(c, mw, val, vt)) return i == 0 && j == 0 ? val : MTV_NIL;
       if (i == ln) return MTV_NONE;
       if (rhs) *rhs = val;
       if (at) *at = i;

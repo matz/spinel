@@ -284,3 +284,16 @@ def y27(a) = yield(a)
 y27(k27.w) { |x| x << +"c" } if ARGV.size > 5
 k27.s([1..2, 3][ARGV.size]); p k27.w, k27.h
 k27.s([[5, 6], 3][ARGV.size]); p k27.w, k27.h
+
+# a target after a leading splat of a value the assignment does not take
+# apart: the first takes the value, the next one nil
+class K28
+  def initialize = (@b = [1])
+  def s = (*@r, @a, @b = 1..2)
+  attr_reader :a, :b, :r
+end
+k28 = K28.new
+y1(k28.b) { |x| x << +"q" }
+p k28.b
+k28.s; p k28.r, k28.a, k28.b
+*r28, a28, b28 = 3..4; p r28, a28, b28

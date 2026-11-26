@@ -623,9 +623,13 @@ no_gsub_enum:
             int tv = ++g_tmp;
             emit_indent(g_pre, g_indent);
             buf_printf(g_pre, "sp_RbVal _t%d = ", tv); emit_expr(c, recv, g_pre); buf_puts(g_pre, ";\n");
+            /* (as the literal pattern's poly arm answers: a Symbol by its
+               name, nil with nil, any other class NoMethodError naming it) */
             buf_printf(b, "(sp_rbval_is_string(_t%d) ? sp_re_match_poly(%s, sp_rbval_string_bytes(_t%d))"
-                          " : sp_raise_nomethod(\"undefined method '=~' for poly\"))",
-                       tv, rp.p, tv);
+                          " : _t%d.tag == SP_TAG_SYM ? sp_re_match_poly(%s, sp_sym_to_s((sp_sym)_t%d.v.i))"
+                          " : _t%d.tag == SP_TAG_NIL ? sp_box_nil()"
+                          " : (sp_raise_nomethod(sp_nomethod_msg(\"=~\", _t%d)), sp_box_nil()))",
+                       tv, rp.p, tv, tv, rp.p, tv, tv, tv);
             free(rp.p); return 1;
           }
           if (sp_streq(name, "!~") && argc == 1) {

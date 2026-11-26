@@ -57,6 +57,12 @@ ArgumentError wrong number of arguments (given 1, expected 0)
 CT
 [CU, CT]
 ArgumentError wrong number of arguments (given 1, expected 0)
+"super: no superclass method 'superclass' for module CO"
+"super: no superclass method 'superclass' for module CO"
+"super: no superclass method 'subclasses' for module CO"
+"super: no superclass method 'superclass' for module CQ"
+"super: no superclass method 'superclass' for module CQ"
+"super: no superclass method 'subclasses' for module CQ"
 "super: no superclass method 'nosuch' for class CV"
 "super: no superclass method 'nosuch' for class CW"
 "super: no superclass method 'nosuch' for class #<Class:0x>"

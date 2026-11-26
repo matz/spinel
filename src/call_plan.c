@@ -1108,11 +1108,14 @@ static int cplan_owner_arity(const char *uname, const char *bowner, int *lo, int
 }
 /* The builtin whose counts a super in s reaches: bowner, or for a class method's super that names none Class's
    method, which the class arms answer; Module's where the method runs on a module (its own singleton method, `def
-   self.` or `class << self`, or a copy an extend or a prepend made into it). A copy of a module's method that runs on
-   a class (extended into one, prepended into Class) is Class's. */
+   self.` or `class << self`, or a copy an extend or a prepend made into it). A copy that runs on a class is Class's:
+   one extended into a class, and one prepended into Class, which the `class Class` reopening holds (registered as
+   the module Class__reopen, whose copies run on every class). */
 static const char *cplan_count_owner(Compiler *c, const Scope *s, const char *bowner) {
   if (bowner || !s->is_cmethod || s->class_id < 0) return bowner;
-  return comp_class_is_module(c, &c->classes[s->class_id]) ? "Module" : "Class";
+  int copy = s->origin_module_ci || s->is_extend_copy || s->is_prepend_copy || s->is_include_copy || s->is_cmethod_copy;
+  int on_classes = copy && s->class_id == comp_core_class(c, CORE_CLASS_REOPEN);
+  return !on_classes && comp_class_is_module(c, &c->classes[s->class_id]) ? "Module" : "Class";
 }
 /* The counts the calls of the `(...)` method of s pass it, lo..hi, keywords as the one Hash a builtin that takes none
    is handed (fwd_call_counts), and *kw when a call passes keywords, which the slots hold as their values, not that

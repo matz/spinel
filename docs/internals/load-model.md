@@ -156,11 +156,12 @@ a site class instead (`desugar_class_new_blocks`, noted `EB_RT_SITE` /
 have records (`register_rt_sites`, `ClassInfo.rt_site`) each evaluation makes
 a record of `lib/sp_rtclass.h` sharing the site class's code. The call plan
 answers every question about it (`cplan_class_new`, `cplan_rt_site`,
-`cplan_class_value_may_be_rt`). The superclass's `inherited` call the walk
-puts in the site's body, and the block's statements that are not
-declarations (moved into a class method of the site class, `cn_rt_body`),
-run at each evaluation instead, on the class it makes
-(`cplan_stmt_at_evaluation`).
+`cplan_class_value_may_be_rt`). The block's statements that are not
+declarations (moved into a class method of the site class, `cn_rt_body`) run
+at each evaluation instead, on the class it makes
+(`cplan_stmt_at_evaluation`). The superclass's `inherited` call the walk puts
+in the site's body (`lr_fire_inherited`) is not a declaration: such a site
+keeps its one class.
 
 ### Extents
 

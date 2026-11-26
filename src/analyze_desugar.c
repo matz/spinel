@@ -27607,7 +27607,7 @@ static int cn_block_param(const NodeTable *nt, int blk) {
    a class method of the site class, and the body calls it on the site class
    where the block ended (marked rt_body_call), after every declaration. A
    site class (register_rt_sites) runs that call at each evaluation, on the
-   class it makes, after the superclass's inherited (cplan_rt_site_body);
+   class it makes (cplan_rt_site_body);
    another runs it in its class body, once, as the block ran before. The
    block's one parameter is the class: the method's first statement writes
    self to it. A block with any other parameters, or one statement that may

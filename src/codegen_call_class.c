@@ -7304,30 +7304,19 @@ void emit_refl_im_params(Compiler *c, Buf *b) {
 /* Class.new / Module.new evaluated more than once (cplan_class_new): a class
    of its own at each evaluation, the record sp_rtclass_new makes for the
    site class, or the site class itself where its family has no records.
-   The superclass's `inherited` runs as each is made, with it as the class
-   its call hands (cplan_rt_site_hook), and then the block's statements
-   that run again, with it as their self (cplan_rt_site_body). */
+   The block's statements that run again run as each is made, with it as
+   their self (cplan_rt_site_body). */
 int emit_op_class_new(Compiler *c, const BopCtx *x, Buf *b) {
   int site;
   if (cplan_class_new(c, x->id, &site) != CNEW_RUNTIME) { buf_printf(b, "((sp_Class){%d})", site); return 1; }
-  int hook = cplan_rt_site_hook(c, site), body = cplan_rt_site_body(c, site);
-  if (hook < 0 && body < 0) { buf_printf(b, "sp_rtclass_new(%d, %d)", site, comp_class_is_module(c, &c->classes[site])); return 1; }
-  int t = ++g_tmp, args = 0;
-  const int *av = hook >= 0 ? call_args(c->nt, hook, &args) : NULL;
+  int body = cplan_rt_site_body(c, site);
+  if (body < 0) { buf_printf(b, "sp_rtclass_new(%d, %d)", site, comp_class_is_module(c, &c->classes[site])); return 1; }
+  int t = ++g_tmp;
+  char cls[32];
+  snprintf(cls, sizeof cls, "_t%d", t);
   buf_printf(b, "({ sp_Class _t%d = sp_rtclass_new(%d, %d); ", t, site, comp_class_is_module(c, &c->classes[site]));
-  if (hook >= 0) {
-    int held = args == 1 ? view_bind(av[0], "_t%d", t) : -1;
-    emit_expr(c, hook, b);
-    if (held >= 0) view_unbind(held);
-    buf_puts(b, "; ");
-  }
-  if (body >= 0) {
-    char cls[32];
-    snprintf(cls, sizeof cls, "_t%d", t);
-    buf_printf(b, "(void)%s(", mc_method(c, &c->scopes[body]));
-    emit_cmethod_self_cls_arg(c, body, site, cls, b);
-    buf_puts(b, "); ");
-  }
-  buf_printf(b, "_t%d; })", t);
+  buf_printf(b, "(void)%s(", mc_method(c, &c->scopes[body]));
+  emit_cmethod_self_cls_arg(c, body, site, cls, b);
+  buf_printf(b, "); _t%d; })", t);
   return 1;
 }

@@ -566,13 +566,11 @@ int cplan_class_value_may_be_rt(Compiler *c, int node);
 int cplan_class_new(const Compiler *c, int id, int *site);
 /* Is node a statement of a site class's body, of a site whose classes are
    made at run time, that each evaluation runs on the class it makes
-   (emit_op_class_new) and the body does not: the superclass's `inherited`
-   call the record fires (lr_fire_inherited), or the call of the block's
-   statements that run again (cn_rt_body)? cplan_rt_site_hook: that call
-   of site class ci; cplan_rt_site_body: the class method its block's
-   statements moved to, which each evaluation calls; -1 for none. */
+   (emit_op_class_new) and the body does not: the call of the block's
+   statements that run again (cn_rt_body)? cplan_rt_site_body: the class
+   method those statements of site class ci moved to, which each evaluation
+   calls; -1 for none. */
 int cplan_stmt_at_evaluation(Compiler *c, int node);
-int cplan_rt_site_hook(Compiler *c, int ci);
 int cplan_rt_site_body(Compiler *c, int ci);
 /* A call that builds an instance of an Array or Hash subclass (or, with
    `[]`, of a Struct or Data class: cplan_as_new) from its arguments through

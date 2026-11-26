@@ -8168,23 +8168,16 @@ static int cplan_rt_class_method_object(Compiler *c, int id, int recv) {
          cplan_method_value_runs(c, comp_parent_map(c), id, 1);
 }
 int cplan_stmt_at_evaluation(Compiler *c, int node) {
-  if (!c->has_rt_classes || node < 0 ||
-      !(nt_int(c->nt, node, "inherited_hook", 0) || nt_int(c->nt, node, "rt_body_call", 0))) return 0;
+  if (!c->has_rt_classes || node < 0 || !nt_int(c->nt, node, "rt_body_call", 0)) return 0;
   int cb = self_class_body(c, node);
   return cb >= 0 && cplan_rt_site(c, cb);
 }
-/* The statement of site class ci's body marked `mark` that runs at each
-   evaluation (cplan_stmt_at_evaluation), -1 for none */
-static int cplan_rt_site_stmt(Compiler *c, int ci, const char *mark) {
-  int def = cplan_rt_site(c, ci) ? c->classes[ci].def_node : -1;
-  int body = def >= 0 ? class_def_body(c->nt, def) : -1, n = 0;
-  const int *st = body >= 0 ? nt_arr(c->nt, body, "body", &n) : NULL;
-  for (int i = 0; i < n; i++) if (nt_int(c->nt, st[i], mark, 0) && cplan_stmt_at_evaluation(c, st[i])) return st[i];
-  return -1;
-}
-int cplan_rt_site_hook(Compiler *c, int ci) { return cplan_rt_site_stmt(c, ci, "inherited_hook"); }
 int cplan_rt_site_body(Compiler *c, int ci) {
-  if (cplan_rt_site_stmt(c, ci, "rt_body_call") < 0) return -1;
+  int def = cplan_rt_site(c, ci) ? c->classes[ci].def_node : -1;
+  int body = def >= 0 ? class_def_body(c->nt, def) : -1, n = 0, call = 0;
+  const int *st = body >= 0 ? nt_arr(c->nt, body, "body", &n) : NULL;
+  for (int i = 0; i < n && !call; i++) call = cplan_stmt_at_evaluation(c, st[i]);
+  if (!call) return -1;
   for (int s = 1; s < c->nscopes; s++)
     if (c->scopes[s].class_id == ci && c->scopes[s].is_cmethod && c->scopes[s].def_node >= 0 &&
         nt_int(c->nt, c->scopes[s].def_node, "rt_body_def", 0)) return s;

@@ -13220,7 +13220,6 @@ static void lr_fire_inherited(Compiler *c, int node) {
   int call = lr_hook_call(c, node, recv, "inherited", lr_made(nt, node, "SelfNode"), NULL);
   nt_node_set_int(nt, call, "class_recv", 1);   /* (a superclass is a class: the receiver is proven one) */
   nt_node_set_int(nt, call, "event_hook", 1);
-  nt_node_set_int(nt, call, "inherited_hook", 1);   /* (a site's runs at each evaluation: cplan_stmt_at_evaluation) */
   out[0] = call;
   if (bn) memcpy(out + 1, bv, sizeof(int) * (size_t)bn);
   nt_node_set_arr(nt, body, "body", out, bn + 1);

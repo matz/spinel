@@ -35605,35 +35605,49 @@ static int super_respond_classes(Compiler *c, int cid, int cls[256]) {
       if (k != cid && is_descendant(c, k, cid)) cls[ncls++] = k;
   return ncls;
 }
+/* The name list super_respond_names builds: each name once, in the order first given */
+typedef struct { char **v; int n, cap; } RespondNames;
+static void respond_names_add(RespondNames *rn, const char *qm) {
+  for (int i = 0; i < rn->n; i++) if (sp_streq(rn->v[i], qm)) return;
+  if (rn->n == rn->cap) {
+    rn->cap = rn->cap ? rn->cap * 2 : 256;
+    rn->v = (char **)realloc(rn->v, sizeof(char *) * (size_t)rn->cap);
+    if (!rn->v) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  }
+  rn->v[rn->n++] = strdup(qm);
+}
+static void respond_names_note(void *ud, const char *m, int vis) { (void)vis; respond_names_add((RespondNames *)ud, m); }
 /* The names the switch of the respond_to? super `id` of class cid has a
    case for, in its order: Object's public methods, the names a run-time
-   send resolves over, and Object's private methods, each once and only
-   where one of the classes answers it. strdup'd; the caller frees. */
+   send resolves over, Object's private methods, and the instance methods of
+   the builtin at the root of the chain and its ancestors (Exception's
+   message, from CRuby's rows), each once and only where one of the classes
+   answers it. strdup'd; the caller frees. */
 static char **super_respond_names(Compiler *c, int id, int cid, int *out_n) {
-  int cls[256], ncls = super_respond_classes(c, cid, cls), ncand = 0, n = 0;
+  int cls[256], ncls = super_respond_classes(c, cid, cls), ncand = 0;
   char **cand = dsend_candidates(c, &ncand);
-  const char *const *priv_universal = object_private_method_names();
-  int cap = ncand + 1;
-  for (int u = 0; respond_universal[u]; u++) cap++;
-  for (int u = 0; priv_universal[u]; u++) cap++;
-  char **out = (char **)malloc(sizeof(char *) * (size_t)cap);
-  if (!out) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  for (int pass = 0; pass < 3; pass++) {
-    const char *const *list = pass == 2 ? priv_universal : respond_universal;
-    for (int q = 0; pass == 1 ? q < ncand : list[q] != NULL; q++) {
-      const char *qm = pass == 1 ? cand[q] : list[q];
-      int dup = 0;
-      for (int u = 0; pass && respond_universal[u] && !dup; u++) dup = sp_streq(qm, respond_universal[u]);
-      for (int u = 0; pass == 2 && u < ncand && !dup; u++) dup = sp_streq(qm, cand[u]);
-      int any = 0;
-      for (int k = 0; k < ncls && !dup && !any; k++) any = cplan_obj_responds(c, cls[k], qm, id) != 0;
-      if (any) out[n++] = strdup(qm);
-    }
+  RespondNames all = {0}, out = {0};
+  for (int u = 0; respond_universal[u]; u++) respond_names_add(&all, respond_universal[u]);
+  for (int q = 0; q < ncand; q++) respond_names_add(&all, cand[q]);
+  for (const char *const *pv = object_private_method_names(); *pv; pv++) respond_names_add(&all, *pv);
+  const char *root = refl_builtin_root(c, cid);
+  for (const char *p = root && *root ? core_class_ancestors(root) : NULL; p;) {
+    size_t l;
+    const char *nx = core_ancestor_step(p, &l);
+    core_own_methods_each(p, l, respond_names_note, &all);
+    p = nx;
   }
+  for (int q = 0; q < all.n; q++) {
+    int any = 0;
+    for (int k = 0; k < ncls && !any; k++) any = cplan_obj_responds(c, cls[k], all.v[q], id) != 0;
+    if (any) respond_names_add(&out, all.v[q]);
+    free(all.v[q]);
+  }
+  free(all.v);
   for (int q = 0; q < ncand; q++) free(cand[q]);
   free(cand);
-  *out_n = n;
-  return out;
+  *out_n = out.n;
+  return out.v;
 }
 /* Interns, ahead of the program's symbol table, the names each respond_to?
    super's switch has a case for (codegen_program, before the table is

@@ -5869,6 +5869,14 @@ int cplan_obj_responds(Compiler *c, int cid, const char *qm, int id) {
       if (rv >= 0 && at >= 0 && at != comp_core_class(c, CORE_OBJECT)) rv = dv;
     }
     if (rv >= 0) return rv == SP_VIS_PUBLIC ? 2 : 1;
+    /* an instance method of the builtin at the root of the chain other than Object, whose names the tiers above
+       answer (Exception's message, Struct's each): CRuby's rows alone, not the program's words, private where
+       the row or the class's visibility word makes it so */
+    const char *root = refl_builtin_root(c, cid);
+    if (root && *root && builtin_core_class_slot(root) != CORE_OBJECT) {
+      int bv = core_vis_of_bit(core_method_vis(root, qm, 1, NULL));
+      if (bv >= 0) return bv == SP_VIS_PUBLIC && pr.vis == SP_VIS_PUBLIC ? 2 : 1;
+    }
   }
   /* Object's private methods (exit, puts, raise) answer to include_all;
      one an Object reopening redefines is left as the chain reads it */

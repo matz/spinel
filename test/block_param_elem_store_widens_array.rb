@@ -70,3 +70,8 @@ def f4(a, &b) = f3(a, &b)
 class S6 < S5; def run(a, &b) = super(a, &b); end
 b = [[+"m"]]; f4(b) { |m| m[0] << 23 }; p b
 b = [[+"m"]]; S6.new.run(b) { |m| m[0] << 24 }; p b
+
+# a lone splat handing one Array, which the block takes apart: its
+# parameters are that Array's elements
+row = [+"s"]; args = [[0, row]]; proc { |x, r| r << 25 }.call(*args); p row
+b = [[+"m"]]; args2 = [[0, b]]; proc { |x, r| r[0] << 26 }.call(*args2); p b

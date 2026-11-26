@@ -794,10 +794,12 @@ const char *block_sig_kw_name(Compiler *c, const BlockSig *s, int k);
 enum { BS_ABSENT = 1, BS_NIL = 2 };
 void block_site_types(Compiler *c, const BlockSig *s, const int *av, int ac,
                       TyKind *pos, char *absent, TyKind *kws);
-/* How a value binds a block parameter (block_site_values): itself, or one
-   of its elements. BLOCK_REST names the rest, whose elements the values are;
-   rix the one of them at a literal index (ELEM_ANY: any). */
-enum { BV_WHOLE, BV_ELEM };
+/* How a value binds a block parameter (block_site_values): itself, one of
+   its elements, or one of its elements' elements (a lone splat's operand
+   whose one element the block takes apart). BLOCK_REST names the rest,
+   whose elements the values are; rix the one of them at a literal index
+   (ELEM_ANY: any). */
+enum { BV_WHOLE, BV_ELEM, BV_ELEM2 };
 enum { BLOCK_REST = -2 };
 typedef int (*BlockValueVisit)(Compiler *c, int v, int how, void *ctx);
 int block_site_values(Compiler *c, const BlockSig *s, const int *av, int ac, int at, int rix,

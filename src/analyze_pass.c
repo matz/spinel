@@ -10225,12 +10225,14 @@ static int block_param_index_values(Compiler *c, Scope *sc, const char *nm, int 
   return ch;
 }
 /* The arrays among what binds block parameter nm, widened where they are
-   built: a value itself, or its elements (BV_*). */
+   built: a value itself, or its elements or theirs (BV_*), the arrays
+   among a value's elements (wbp_elem) one level down. */
 typedef struct { TyKind elem; int depth; } WbpCtx;
+static int wbp_elem(Compiler *c, int v, int how, void *ctx);
 static int wbp_array(Compiler *c, int v, int how, void *ctx) {
   const WbpCtx *x = ctx;
   if (how == BV_WHOLE) return widen_boxed_array_sources(c, v, x->elem, x->depth + 1);
-  return widen_boxed_elem_sources(c, v, x->elem, x->depth + 1);
+  return wbp_elem(c, v, how == BV_ELEM ? BV_WHOLE : BV_ELEM, ctx);
 }
 static int widen_block_param_arrays(Compiler *c, Scope *sc, const char *nm, TyKind elem, int depth) {
   if (depth > 6) return 0;
@@ -10444,14 +10446,15 @@ static int widen_method_value_sources(Compiler *c, int v, int mi, TyKind elem, i
 
 /* The arrays that are elements of an Array a block or proc parameter
    receives (`|m| m[0] << 1`): those of each value its sites bind it to,
-   and for a value taken apart (BV_ELEM), those of each of its elements,
-   a splat's elements' too (`[0, *r]`). */
+   and for a value taken apart (BV_ELEM, BV_ELEM2), those of each of its
+   elements, one level down, a splat's elements' too (`[0, *r]`). */
 static int wbp_elem(Compiler *c, int v, int how, void *ctx) {
   const WbpCtx *x = ctx;
   if (how == BV_WHOLE) return widen_boxed_elem_sources(c, v, x->elem, x->depth + 1);
   if (x->depth > 6) return 0;
   const NodeTable *nt = c->nt;
   int ch = 0;
+  WbpCtx sx = { x->elem, x->depth + 1 };
   ContainerLiterals lits = {0};
   container_literals(c, v, &lits, 0);
   for (int q = 0; q < lits.count; q++) {
@@ -10459,11 +10462,8 @@ static int wbp_elem(Compiler *c, int v, int how, void *ctx) {
     for (int e = 0; e < en; e++) {
       int el = nt_kind(nt, ev[e]) == NK_AssocNode ? nt_ref(nt, ev[e], "value") : ev[e];
       if (el < 0 || nt_kind(nt, el) == NK_AssocSplatNode) continue;
-      if (nt_kind(nt, el) == NK_SplatNode) {
-        WbpCtx sx = { x->elem, x->depth + 1 };
-        ch |= wbp_elem(c, nt_ref(nt, el, "expression"), BV_ELEM, &sx);
-      }
-      else ch |= widen_boxed_elem_sources(c, el, x->elem, x->depth + 2);
+      if (nt_kind(nt, el) == NK_SplatNode) ch |= wbp_elem(c, nt_ref(nt, el, "expression"), how, &sx);
+      else ch |= wbp_elem(c, el, how == BV_ELEM2 ? BV_ELEM : BV_WHOLE, &sx);
     }
   }
   free_container_literals(&lits);
@@ -16187,7 +16187,9 @@ static int bs_type_site(Compiler *c, int site, const int *argv, int argc, void *
    placed as block_site_types places them (block_site_place), each handed
    to fn: BV_WHOLE for the value itself, BV_ELEM for its elements (a
    splat's operand, a lone Array taken apart over the parameters, a `**`
-   operand's values for a keyword). Of the rest's, only the one at literal
+   operand's values for a keyword), BV_ELEM2 for its elements' elements (a
+   lone splat's operand, whose one element may be the Array taken apart).
+   Of the rest's, only the one at literal
    index rix where the site's own count places it (ELEM_ANY: every one). A
    default the parameter may take is one of its values too, and a count
    the run time lays out hands every value a gathered one may be, as
@@ -16220,8 +16222,12 @@ int block_site_values(Compiler *c, const BlockSig *s, const int *av, int ac, int
   if (pl.spread) {
     /* the lone value's elements, or (whole) the value itself, which the
        rest never takes; a lone splat's values are its operand's elements
-       (`yield(0, *r)` is `yield(*[0, *r])`) */
-    if (ac >= 1 && nt_kind(nt, av[0]) == NK_SplatNode) ch |= fn(c, nt_ref(nt, av[0], "expression"), BV_ELEM, ctx);
+       (`yield(0, *r)` is `yield(*[0, *r])`), and where it hands one, that
+       one's elements (`call(*[[0, row]])`) */
+    if (ac >= 1 && nt_kind(nt, av[0]) == NK_SplatNode) {
+      int op = nt_ref(nt, av[0], "expression");
+      ch |= fn(c, op, BV_ELEM, ctx) | fn(c, op, BV_ELEM2, ctx);
+    }
     else if (ac >= 1) {
       ch |= fn(c, av[0], BV_ELEM, ctx);
       if (pl.whole && at != BLOCK_REST) ch |= fn(c, av[0], BV_WHOLE, ctx);

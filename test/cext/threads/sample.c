@@ -25,6 +25,12 @@ static VALUE io_unlocked(VALUE self) {
     return INT2FIX(2);
 }
 static VALUE callback(VALUE self) { (void)self; return rb_yield(INT2FIX(3)); }
+static VALUE string_callback(VALUE self) {
+    (void)self;
+    VALUE text = rb_str_new_cstr("arena");
+    VALUE result = rb_yield(text);
+    return rb_funcall(result, rb_intern("+"), 1, rb_funcall(text, rb_intern("length"), 0));
+}
 static VALUE protected_yield(VALUE unused) { (void)unused; return rb_yield(INT2FIX(1)); }
 static VALUE protected_callback(VALUE self) {
     (void)self;
@@ -118,4 +124,5 @@ void Init_cxl_sample(void) {
     rb_define_singleton_method(module, "unlocked", unlocked, 0);
     rb_define_singleton_method(module, "io_unlocked", io_unlocked, 0);
     rb_define_singleton_method(module, "callback", callback, 0);
+    rb_define_singleton_method(module, "string_callback", string_callback, 0);
 }

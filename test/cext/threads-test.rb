@@ -9,6 +9,7 @@ def run(*args, env: {})
   raise "#{args.join(' ')}\n#{out}#{err}" unless status.success?
   out
 end
+PARKED = "[500, 500, 500, 500]\n10\n20\n"
 Dir.mktmpdir('spinel-cxl-') do |tmp|
   CextRecord.record(name: 'cxl_sample', init: 'Init_cxl_sample',
     libs: [],
@@ -33,9 +34,17 @@ Dir.mktmpdir('spinel-cxl-') do |tmp|
     actual = run(interrupt_exe, env: {'SPINEL_WORKERS' => workers.to_s})
     raise "unexpected interrupt output: #{actual}" unless actual == "kill ensured\ninterrupted\nraise ensured\n1\n"
   end
+  source = File.join(tmp, 'parked.rb')
+  FileUtils.cp(File.join(ROOT, 'test/cext/threads/parked.rb'), source)
+  parked_exe = File.join(tmp, 'parked')
+  run(File.join(ROOT, 'bin/spinel'), source, '--link', File.join(tmp, 'cxl_sample.a'), '-o', parked_exe)
+  [1, 2, 4].each do |workers|
+    actual = run(parked_exe, env: {'SPINEL_WORKERS' => workers.to_s})
+    raise "unexpected parked output: #{actual}" unless actual == PARKED
+  end
   native = File.join(tmp, 'native'); FileUtils.mkdir_p(native)
   FileUtils.cp(File.join(ROOT, 'test/cext/threads/sample.c'), File.join(native, 'cxl_sample.c'))
-  %w[program interrupt].each do |name|
+  %w[program interrupt parked].each do |name|
     FileUtils.cp(File.join(ROOT, "test/cext/threads/#{name}.rb"), File.join(native, "#{name}.rb"))
   end
   Dir.chdir(native) do
@@ -43,6 +52,7 @@ Dir.mktmpdir('spinel-cxl-') do |tmp|
     run('make')
     raise 'CRuby serialization differs' unless run(RbConfig.ruby, 'program.rb') == "80\n"
     raise 'CRuby interruption differs' unless run(RbConfig.ruby, 'interrupt.rb') == "kill ensured\ninterrupted\nraise ensured\n1\n"
+    raise 'CRuby parked differs' unless run(RbConfig.ruby, 'parked.rb') == PARKED
   end
 end
 puts 'CXL threaded bridge: CRuby oracle and GC stress passed'

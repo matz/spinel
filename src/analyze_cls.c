@@ -5988,7 +5988,13 @@ int cls_fact_excludes(Compiler *c, int recv, int k) {
 /* See compiler.h. */
 int cls_fact_excludes_class_value(Compiler *c, int recv, int k) {
   const ClsSet *s = cls_fact_node(c, recv);
-  if (!s || k < 0 || k >= c->nclasses || !cls_fact_bounded(c, k)) return 0;
+  if (!s || k < 0 || k >= c->nclasses) return 0;
+  /* (a module of the program's, a native one too, is left out of cls_fact_bounded for its
+     instances, which are its includers'; its own object is a value its constant reads give,
+     counted as a class's is. A reopened builtin module's may come from the runtime.) */
+  const ClassInfo *ci = &c->classes[k];
+  int own_module = comp_class_is_module(c, ci) && ci->name && !is_builtin_reopen_name(ci->name);
+  if (!own_module && !cls_fact_bounded(c, k)) return 0;
   /* (a receiver no value reaches excludes none, as in cls_fact_excludes;
      nor one a builtin's answer may be a Class object in, bc, where a Class
      object of the program's handed to the runtime comes back, #10303) */

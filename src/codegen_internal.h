@@ -206,6 +206,12 @@ int masgn_value_changes(Compiler *c, int mw, int part);
    a general Array target converts (CF_ARRAY_WIDEN). TY_UNKNOWN for any
    other element. */
 TyKind masgn_el_lift_from(Compiler *c, int mw, int i);
+/* ...and the kind of element i where it keeps its own (a store the plan
+   dispatches, not every arm of which takes the general Array) though it
+   is a new Array a lifting arm takes as the general Array: the value of
+   an assignment read for it then answers the element from a boxed temp
+   (ArmCtx.masgn_back). TY_UNKNOWN for any other element. */
+TyKind masgn_el_back_kind(Compiler *c, int mw, int i);
 /* ...the handle of a boxed receiver's call whose arms answer a String, or of a sequence ending in one */
 void emit_poly_arms_handle(Compiler *c, int base, Buf *b);
 void emit_poly_user_handle(Compiler *c, int v, Buf *b);
@@ -1385,7 +1391,11 @@ void emit_vis_raise_boxed(int vis, const char *vnm, int tv, Buf *b);
 /* The per-class `case` arms that store `src` into each candidate class's
    `base` writer slot through the object pointer text `objp` (codegen_stmt.c).
    box_tv is the boxed receiver's temp (-1 for a typed one), src_tv src's;
-   native_answer: a send's native arm stores the binding's answer in src. */
+   native_answer: a send's native arm stores the binding's answer in src.
+   fresh: src is a new typed Array of kind at nothing else holds
+   (masgn_el_fresh_array), which an arm whose parameter or field is the
+   general Array takes lifted to one; such an arm sets the boxed temp
+   _t<back_tv> (-1 for none) to what it stored. */
 extern int g_writer_arms_attr_only;
 /* Does class k's writer `base=` resolve to an attr writer, the field write
    emit_boxed_writer_arms gives it an arm for (codegen_stmt.c)? */
@@ -1404,7 +1414,7 @@ int poly_writer_attr_arms(Compiler *c, int id, const char *name, int argc, int p
 extern const unsigned char *g_poly_user_arm_skip;
 void emit_boxed_writer_arms(Compiler *c, const char *base, const char *nm,
                             const char *objp, const char *src, TyKind at, int vnode,
-                            int box_tv, int src_tv, int native_answer, Buf *b);
+                            int box_tv, int src_tv, int native_answer, int fresh, int back_tv, Buf *b);
 /* --share-strings: is String value v held as its handle for those arms
    (a field of theirs holds it), -1 when not, else the field's sharing. */
 int  boxed_writer_holds_handle(Compiler *c, const char *base, int v);
@@ -1600,6 +1610,8 @@ int box_lift_marked(Compiler *c, int node, TyKind t);
 /* The new Array of kind t `node` builds (box_lift_marked's kinds), as the
    general Array; a nil (`s&.bytes`) stays NULL. */
 void emit_array_lifted(Compiler *c, int node, TyKind t, Buf *b);
+/* ...of the typed Array of kind t the plain text src (a temp) holds */
+void emit_array_lifted_text(TyKind t, const char *src, Buf *b);
 /* the form --repr-check records when emit_boxed_text boxes a kind t (RF_*) */
 int emit_boxed_text_form(Compiler *c, TyKind t);
 /* emit_boxed_text, but a whole Integer or Float array element read boxes
@@ -2840,11 +2852,16 @@ int view_mark(void);
    the innermost class-value `new` switch whose arms are being written
    (emit_class_value_new_switch), linked to the ones it is written inside
    of: a site class's constructor argument that writes one's class id
-   (rtclass_arg_text) marks it read, and the switch binds the id only then. */
+   (rtclass_arg_text) marks it read, and the switch binds the id only then.
+   masgn_back names, for multiple assignment mw read for its value, the
+   boxed temp _t<tv[i]> (0 for none) the value answers element i from:
+   the writer dispatch of that element's store sets it to what it stored
+   (masgn_el_back_kind). */
 typedef struct DsendFrame { int id, depth; const struct DsendFrame *up; } DsendFrame;
+typedef struct MasgnBack { int mw, n; const int *tv; } MasgnBack;
 struct SwitchRtId;
 typedef struct { int pd_skip, prbd_skip, builtin_arm, send_split, each_inline, each_dispatch, gap_watch; int *gap_hit; const char *arm_cls;
-                 const DsendFrame *dsend; int count_arm; struct SwitchRtId *rt_switch; } ArmCtx;
+                 const DsendFrame *dsend; int count_arm; struct SwitchRtId *rt_switch; const MasgnBack *masgn_back; } ArmCtx;
 extern ArmCtx g_arm;
 #define g_pd_skip (g_arm.pd_skip)
 #define g_prbd_skip (g_arm.prbd_skip)
@@ -2856,6 +2873,8 @@ int view_push_gap_watch(int id, int *hit);
 int view_push_dsend(const DsendFrame *f);
 /* the arm context with switch s the innermost class-value `new` switch (ArmCtx.rt_switch), popped by view_pop */
 int view_push_rt_switch(struct SwitchRtId *s);
+/* the arm context with b the assignment's boxed element temps (ArmCtx.masgn_back), popped by view_pop */
+int view_push_masgn_back(const MasgnBack *mb);
 /* A node pinned to one face kind for the inference asked under it,
    pushed and popped like a view (view_pop) and put back by view_unwind
    (face_of, analyze.h). */

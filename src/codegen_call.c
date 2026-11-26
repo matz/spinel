@@ -11778,7 +11778,7 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
         char an[32], objp[32];
         snprintf(an, sizeof an, "_t%d", wr_src); snprintf(objp, sizeof objp, "_t%d.v.p", tv);
         g_writer_arms_attr_only = 1;
-        emit_boxed_writer_arms(c, wbase, name, objp, an, wr_ty, wr_kw ? -1 : argv[0], tv, wr_src, 0, b);
+        emit_boxed_writer_arms(c, wbase, name, objp, an, wr_ty, wr_kw ? -1 : argv[0], tv, wr_src, 0, 0, -1, b);
         g_writer_arms_attr_only = 0;
       }
       int is_aref = sp_streq(name, "[]") && argc == 1 && splat_a < 0;

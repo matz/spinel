@@ -96,3 +96,14 @@ K20 = Class.new do
 end
 y1(T20[0]) { |x| x << "q" }
 p T20
+
+# a global written or read by its alias is one slot
+alias $b22 $a22
+$a22 ||= ["qr".bytes]
+y1($b22[0]) { |x| x << "q" }
+p $a22
+alias $b23 $a23
+$b23, z23 = ["st".bytes], 0
+def g23 = y1($a23[0]) { |x| x << "q" }
+g23
+p $b23

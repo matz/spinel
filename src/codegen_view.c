@@ -60,7 +60,9 @@
    builtin declining (ArmCtx.gap_watch), view_push_dsend for the
    dynamic send whose arms are being emitted (ArmCtx.dsend), and
    view_push_rt_switch for the class-value `new` switch whose arms are
-   being written (ArmCtx.rt_switch). None is a view
+   being written (ArmCtx.rt_switch), view_push_masgn_back for the boxed
+   element temps of an assignment read for its value (ArmCtx.masgn_back).
+   None is a view
    of a node: they count toward neither view_depth nor view_epoch. */
 
 #define SP_NODE_FACT_OWNER 1
@@ -314,6 +316,12 @@ int view_push_dsend(const DsendFrame *f) {
 int view_push_rt_switch(struct SwitchRtId *s) {
   int tok = view_save_arm();
   g_arm.rt_switch = s;
+  return tok;
+}
+
+int view_push_masgn_back(const MasgnBack *mb) {
+  int tok = view_save_arm();
+  g_arm.masgn_back = mb;
   return tok;
 }
 

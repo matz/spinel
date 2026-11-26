@@ -5113,6 +5113,14 @@ static void sp_sched_block_wl(sp_thread **waitlist, sp_wlock *wl, int defer_inje
   wl_lock(wl);
 }
 
+/* Does the running Fiber of thread self hold m? The thread is owner; of its
+   Fibers, the one that took the lock (owner_fiber), as CRuby's Mutex and
+   Monitor are owned per Fiber. owner_fiber is written only by owner's
+   thread, so it is compared only once owner is self. */
+static inline int sp_mutex_mine(sp_mutex *m, sp_thread *self) {
+  return SP_ATOMIC_LOAD(&m->owner, __ATOMIC_SEQ_CST) == self &&
+         SP_ATOMIC_LOAD(&m->owner_fiber, __ATOMIC_RELAXED) == sp_fiber_current_uid();
+}
 #ifdef SP_THREADS
 /* (#8702) A timed wait parks on its list under the list's own wait lock `wl`
    and schedules its timer under the timer lock, with no scheduler lock held
@@ -5126,7 +5134,7 @@ static void sp_sched_block_wl(sp_thread **waitlist, sp_wlock *wl, int defer_inje
    the deadline -- a join's target dead, a Queue's item there. */
 static int sp_sched_block_timeout(sp_thread **waitlist, double deadline, sp_mutex *mutex, sp_wlock *wl, int (*no_wait)(void *), void *no_wait_arg) {
   sp_thread *self = g_current;
-  if (mutex && SP_ATOMIC_LOAD(&mutex->owner, __ATOMIC_SEQ_CST) != self)
+  if (mutex && !sp_mutex_mine(mutex, self))
     sp_raise_cls("ThreadError", "Attempt to unlock a mutex which is not locked");
   self->timer_expired = 0;
   wl_lock(wl);
@@ -5788,9 +5796,14 @@ static void sp_mutex_relock(sp_mutex *m, int deferred) {
   sp_Mutex_lock(m);
 }
 
+static void sp_mutex_lock_thread(sp_mutex *m);
 void sp_Mutex_lock(sp_mutex *m) {
   if (g_current ? g_current->in_trap : g_trap_depth_main)
     sp_raise_cls("ThreadError", "can't be called from trap context");
+  sp_mutex_lock_thread(m);
+  SP_ATOMIC_STORE(&m->owner_fiber, sp_fiber_current_uid(), __ATOMIC_RELAXED);
+}
+static void sp_mutex_lock_thread(sp_mutex *m) {
   sp_thread *self = g_current;
   sp_thread *expect = NULL;
   if (SP_ATOMIC_CAS(&m->owner, &expect, self, 0,
@@ -5799,7 +5812,12 @@ void sp_Mutex_lock(sp_mutex *m) {
   if (sp_mutex_spin_acquire(m, self))
     { if (sched_lat_enabled()) SP_ATOMIC_FETCH_ADD(&g_mtx_spin, 1, __ATOMIC_RELAXED); return; }
   wl_lock(&m->wl);
-  /* the owner re-entering its own Monitor just goes deeper */
+  /* the owner re-entering its own Monitor just goes deeper; another Fiber
+     of the owner's thread would wait on its own thread for good */
+  if (SP_ATOMIC_LOAD(&m->owner, __ATOMIC_SEQ_CST) == self && !sp_mutex_mine(m, self)) {
+    wl_unlock(&m->wl);
+    sp_raise_cls("ThreadError", "deadlock; lock already owned by another fiber belonging to the same thread");
+  }
   if (SP_ATOMIC_LOAD(&m->owner, __ATOMIC_SEQ_CST) == self && m->reentrant) { m->depth++; wl_unlock(&m->wl); return; }
   if (SP_ATOMIC_LOAD(&m->owner, __ATOMIC_SEQ_CST) == self) { wl_unlock(&m->wl); sp_raise_cls("ThreadError", "deadlock; recursive locking"); }
   expect = NULL;
@@ -5847,7 +5865,8 @@ void sp_Mutex_unlock(sp_mutex *m) {
   /* depth is the owner's own field, so reading it as the owner needs no lock;
      a non-owner fails the exchange below and takes the slow path, which is
      where the ThreadError is raised. */
-  if (m->depth == 0 && SP_ATOMIC_LOAD(&m->nwaiters, __ATOMIC_SEQ_CST) == 0) {
+  if (m->depth == 0 && SP_ATOMIC_LOAD(&m->nwaiters, __ATOMIC_SEQ_CST) == 0 &&
+      SP_ATOMIC_LOAD(&m->owner_fiber, __ATOMIC_RELAXED) == sp_fiber_current_uid()) {
     sp_thread *expect = self;
     if (SP_ATOMIC_CAS(&m->owner, &expect, NULL, 0,
                                     __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) {
@@ -5876,7 +5895,11 @@ void sp_Mutex_unlock(sp_mutex *m) {
     }
   }
   wl_lock(&m->wl);
-  if (m->depth > 0 && SP_ATOMIC_LOAD(&m->owner, __ATOMIC_SEQ_CST) == self) { m->depth--; wl_unlock(&m->wl); return; }
+  if (m->depth > 0 && sp_mutex_mine(m, self)) { m->depth--; wl_unlock(&m->wl); return; }
+  if (SP_ATOMIC_LOAD(&m->owner, __ATOMIC_SEQ_CST) == self && !sp_mutex_mine(m, self)) {
+    wl_unlock(&m->wl);
+    sp_raise_cls("ThreadError", "Attempt to unlock a mutex which is locked by another thread/fiber");
+  }
   if (SP_ATOMIC_LOAD(&m->owner, __ATOMIC_SEQ_CST) != self) {
     wl_unlock(&m->wl);
     sp_raise_cls("ThreadError", "Attempt to unlock a mutex which is not locked");
@@ -5890,17 +5913,18 @@ void sp_Mutex_unlock(sp_mutex *m) {
 sp_bool sp_Mutex_try_lock(sp_mutex *m) {
   SCHED_LOCK();
   sp_bool r;
-  if (SP_ATOMIC_LOAD(&m->owner, __ATOMIC_SEQ_CST) == g_current && m->reentrant) { m->depth++; r = 1; }
+  if (sp_mutex_mine(m, g_current) && m->reentrant) { m->depth++; r = 1; }
   else {
     sp_thread *expect = NULL;
     r = SP_ATOMIC_CAS(&m->owner, &expect, g_current, 0,
                                     __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST) ? 1 : 0;
+    if (r) SP_ATOMIC_STORE(&m->owner_fiber, sp_fiber_current_uid(), __ATOMIC_RELAXED);
   }
   SCHED_UNLOCK();
   return r;
 }
 sp_bool sp_Mutex_locked(sp_mutex *m) { return SP_ATOMIC_LOAD(&m->owner, __ATOMIC_SEQ_CST) != NULL; }
-sp_bool sp_Mutex_owned(sp_mutex *m)  { return SP_ATOMIC_LOAD(&m->owner, __ATOMIC_SEQ_CST) == g_current; }
+sp_bool sp_Mutex_owned(sp_mutex *m)  { return sp_mutex_mine(m, g_current); }
 
 /* ---- ConditionVariable ----
  * #wait releases the mutex, parks on the CV, and re-acquires the mutex on
@@ -5916,7 +5940,7 @@ static sp_RbVal sp_CondVar_wait_impl(sp_condvar *cv, sp_mutex *m) {
   time_t beg = time(NULL);
   /* the owner check and a pending #kill/#raise need no lock; the park
      itself is ordered under the condvar's own (sp_sched_block_wl) */
-  if (SP_ATOMIC_LOAD(&m->owner, __ATOMIC_SEQ_CST) != g_current)
+  if (!sp_mutex_mine(m, g_current))
     sp_raise_cls("ThreadError", "Attempt to unlock a mutex which is not locked");
   if (sp_thread_inject_pending(g_current))
     sp_fiber_fire_inject_if_pending();
@@ -5937,7 +5961,7 @@ static sp_RbVal sp_CondVar_wait_impl(sp_condvar *cv, sp_mutex *m) {
    starts) has no timer heap to park on. */
 static void sp_CondVar_wait_timeout_blocking(sp_mutex *m, double seconds) {
   SCHED_LOCK();
-  if (SP_ATOMIC_LOAD(&m->owner, __ATOMIC_SEQ_CST) != g_current) {
+  if (!sp_mutex_mine(m, g_current)) {
     SCHED_UNLOCK();
     sp_raise_cls("ThreadError", "Attempt to unlock a mutex which is not locked");
   }
@@ -5980,7 +6004,7 @@ static sp_RbVal sp_CondVar_wait_timeout_impl(sp_condvar *cv, sp_mutex *m, double
 static sp_RbVal sp_CondVar_wait_nb_impl(sp_condvar *cv, sp_mutex *m) {
   (void)cv;
   SCHED_LOCK();
-  if (SP_ATOMIC_LOAD(&m->owner, __ATOMIC_SEQ_CST) != g_current) {
+  if (!sp_mutex_mine(m, g_current)) {
     SCHED_UNLOCK();
     sp_raise_cls("ThreadError", "Attempt to unlock a mutex which is not locked");
   }
@@ -6005,7 +6029,7 @@ static sp_RbVal sp_CondVar_wait_nb_impl(sp_condvar *cv, sp_mutex *m) {
    nested synchronize blocks came back holding the count of the thread that
    signalled it (MonitorMixin::ConditionVariable). */
 static int sp_cv_depth_take(sp_mutex *m) {
-  if (!m->reentrant || SP_ATOMIC_LOAD(&m->owner, __ATOMIC_SEQ_CST) != g_current) return 0;
+  if (!m->reentrant || !sp_mutex_mine(m, g_current)) return 0;
   int d = m->depth;
   m->depth = 0;
   return d;

@@ -63,3 +63,8 @@ ArgumentError wrong number of arguments (given 1, expected 0)
 "super: no superclass method 'nosuch' for class CY"
 "super: no superclass method 'nosuch' for class CY!"
 "super: no superclass method 'nosuch' for class CZ"
+true
+true
+true
+ArgumentError wrong number of arguments (given 2, expected 1)
+true

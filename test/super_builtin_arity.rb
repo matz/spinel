@@ -181,3 +181,15 @@ CZ = Class.new(CY)
 rescue NoMethodError => nme
   p nme.message.sub(/0x\h+/, "0x")
 end
+
+# keywords a rest method's super passes are one more positional Hash
+class FL
+  def respond_to?(m, *r, **kw) = super
+  def is_a?(*a, **kw) = super
+  def foo; end
+end
+fl = FL.new
+run { p fl.respond_to?(:foo), fl.is_a?(FL) }
+run { p fl.respond_to?(:foo, k: 1) }
+run { p fl.is_a?(FL, k: 1) }
+run { p fl.respond_to?(:foo, **{}) }

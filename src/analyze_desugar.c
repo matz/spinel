@@ -16376,8 +16376,11 @@ static int fwd_identity_forward(const NodeTable *nt, int id, const int *av, int 
   }
   return k == n;
 }
-int fwd_fixed_call_arity(const NodeTable *nt, const char *name) {
-  int n = -2;
+/* The counts the calls of a `...` forwarder `name` pass, *lo..*hi (*lo > *hi for no call): 0 when one spreads a
+   splat or a `...`, or passes keywords and kw_one is not set; with kw_one, literal keywords are counted as the one
+   Hash CRuby hands a method that takes none, and a `**` spread is a count only the run gives (0). */
+int fwd_call_counts(const NodeTable *nt, const char *name, int kw_one, int *lo, int *hi) {
+  *lo = INT_MAX; *hi = -1;
   for (int id = 0; id < nt->count; id++) {
     if (!fwd_node_is(nt, id, "CallNode")) continue;
     int skip;
@@ -16388,11 +16391,21 @@ int fwd_fixed_call_arity(const NodeTable *nt, const char *name) {
        after its rewrite, passes what the callers counted here pass; one
        that adds arguments, `@inner.fetch(0, ...)`, is counted) */
     if (fwd_identity_forward(nt, id, av, ac, name)) continue;
-    if (nt_argv_has(nt, av, ac, NT_ARG_SPLAT | NT_ARG_KEYWORDS | NT_ARG_FORWARDING)) return -1;
-    if (n != -2 && ac != n) return -1;
-    n = ac;
+    if (nt_argv_has(nt, av, ac, NT_ARG_SPLAT | NT_ARG_FORWARDING)) return 0;
+    if (nt_argv_has(nt, av, ac, NT_ARG_KEYWORDS)) {
+      if (!kw_one) return 0;
+      int en = 0; const int *els = nt_arr(nt, av[ac - 1], "elements", &en);
+      for (int e = 0; e < en; e++) if (nt_kind(nt, els[e]) == NK_AssocSplatNode) return 0;
+    }
+    if (ac < *lo) *lo = ac;
+    if (ac > *hi) *hi = ac;
   }
-  return n;
+  return 1;
+}
+int fwd_fixed_call_arity(const NodeTable *nt, const char *name) {
+  int lo, hi;
+  if (!fwd_call_counts(nt, name, 0, &lo, &hi)) return -1;
+  return lo > hi ? -2 : lo == hi ? lo : -1;
 }
 /* The shape a forwarding `call` in `def` reaches: `super` the parent's
    method, `new` the constructed class's initialize. */

@@ -1114,11 +1114,32 @@ static const char *cplan_count_owner(Compiler *c, const Scope *s, const char *bo
   int copy = s->origin_module_ci || s->is_extend_copy || s->is_prepend_copy || s->is_include_copy || s->is_cmethod_copy;
   return !copy && comp_class_is_module(c, &c->classes[s->class_id]) ? "Module" : "Class";
 }
+/* The counts the calls of the `(...)` method of s pass it, lo..hi, keywords as the one Hash a builtin that takes none
+   is handed (fwd_call_counts), and *kw when a call passes keywords, which the slots hold as their values, not that
+   Hash: 0 for a bare super from no such method, a parameter list the slots do not spell, or a call whose count only
+   the run gives (a splat, a `**`) */
+static int cplan_fwd_counts(Compiler *c, int id, const Scope *s, int *lo, int *hi, int *kw) {
+  if (nt_kind(c->nt, id) != NK_ForwardingSuperNode || !cplan_def_forwards(c, s) ||
+      (cplan_zsuper_shape(c, s, 0) & SAS_UNSPELLED))
+    return 0;
+  const char *name = nt_str(c->nt, s->def_node, "name");
+  int plo, phi;
+  if (!fwd_call_counts(c->nt, name, 1, lo, hi)) return 0;
+  *kw = !fwd_call_counts(c->nt, name, 0, &plo, &phi);
+  if (*lo > *hi) *lo = *hi = s->nparams;   /* (no call: the slots) */
+  return 1;
+}
 /* The count super id in s passes as the plan knows it before the run: comp_super_plain_argc's, or for a bare super
-   from a `(...)` that every call passes one count, its slots (cplan_zsuper_shape); -1 */
-static int cplan_super_static_argc(Compiler *c, int id, const Scope *s) {
-  if (nt_kind(c->nt, id) == NK_ForwardingSuperNode && cplan_def_forwards(c, s))
-    return cplan_zsuper_shape(c, s, 1) & SAS_UNSPELLED ? -1 : s->nparams;
+   from a `(...)` that every call passes one count, that count (cplan_fwd_counts, *kw as there, whatever the
+   counts); -1 */
+static int cplan_super_static_argc(Compiler *c, int id, const Scope *s, int *kw) {
+  int lo, hi, k = 0;
+  if (kw) *kw = 0;
+  if (nt_kind(c->nt, id) == NK_ForwardingSuperNode && cplan_def_forwards(c, s)) {
+    if (!cplan_fwd_counts(c, id, s, &lo, &hi, &k)) return -1;
+    if (kw) *kw = k;
+    return lo == hi ? lo : -1;
+  }
   return comp_super_plain_argc(c, id, s);
 }
 /* Does super id in s pass a list whose count only the run gives, which an arm gathers (emit_super_gathered_args): a
@@ -1126,7 +1147,7 @@ static int cplan_super_static_argc(Compiler *c, int id, const Scope *s) {
    called with more than one count, nor a parameter no call spells, whose slots hold no count */
 static int cplan_super_gathers(Compiler *c, int id, const Scope *s) {
   const NodeTable *nt = c->nt;
-  if (cplan_super_static_argc(c, id, s) >= 0) return 0;
+  if (cplan_super_static_argc(c, id, s, NULL) >= 0) return 0;
   if (nt_kind(nt, id) == NK_ForwardingSuperNode) return !(cplan_zsuper_shape(c, s, 1) & SAS_UNSPELLED);
   int sa = nt_ref(nt, id, "arguments"), n = 0;
   const int *av = sa >= 0 ? nt_arr(nt, sa, "arguments", &n) : NULL;
@@ -1140,13 +1161,16 @@ static int cplan_super_gathers(Compiler *c, int id, const Scope *s) {
 }
 /* Does the arm of owner's uname take what super id in s passes: a count the owner's facts take (one they do not is
    BSUP_ARITY's), or one the run gives, which the arm gathers and checks against them. A `(...)` called with more
-   than one count is read by its slots, which hold the most any call passes (cplan_zsuper_shape). */
+   than one count, or one with keywords, is read by its slots, which hold the most any call passes and each keyword's
+   value (cplan_zsuper_shape): an arm of one count of arguments takes them only when they are that count, one that
+   reads none or optional ones reads the ones it takes. */
 static int cplan_super_arm_takes(Compiler *c, int id, const Scope *s, const char *uname, const char *owner) {
-  int lo, hi, n = cplan_super_static_argc(c, id, s);
+  int lo, hi, kw, n = cplan_super_static_argc(c, id, s, &kw);
   const char *lo_exp, *hi_exp;
   if (!cplan_owner_arity(uname, owner, &lo, &hi, &lo_exp, &hi_exp)) return 0;
-  if (n >= 0) return n >= lo && n <= hi;
-  return cplan_super_gathers(c, id, s) || (nt_kind(c->nt, id) == NK_ForwardingSuperNode && s->nparams >= lo);
+  if (n >= 0 && !kw) return n >= lo && n <= hi;
+  return cplan_super_gathers(c, id, s) ||
+         (nt_kind(c->nt, id) == NK_ForwardingSuperNode && s->nparams >= lo && (s->nparams <= hi || lo < hi || !hi));
 }
 /* See call_plan.h. */
 int cplan_super_gathered(Compiler *c, int id, int *lo, int *hi) {
@@ -1161,7 +1185,7 @@ int cplan_super_gathered(Compiler *c, int id, int *lo, int *hi) {
    (a splat, a keyword, a forwarded list) or the facts do not bound it */
 static int cplan_super_count_fails(Compiler *c, int id, const Scope *s, const char *uname, const char *bowner,
                                    const char **exp) {
-  int argc = bowner && uname ? cplan_super_static_argc(c, id, s) : -1, lo, hi;
+  int argc = bowner && uname ? cplan_super_static_argc(c, id, s, NULL) : -1, lo, hi;
   const char *lo_exp, *hi_exp;
   if (argc < 0 || !cplan_owner_arity(uname, bowner, &lo, &hi, &lo_exp, &hi_exp)) return -1;
   if (argc < lo && lo_exp) { *exp = lo_exp; return argc; }

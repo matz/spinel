@@ -48,3 +48,11 @@ class R8; def m(*r) = r[0] << W8; end
 class R9 < R8; def m(x, *r) = super; end
 class H8; attr_accessor :v; end
 h = H8.new; h.v = [+"s"]; R9.new.m(h.v); p h.v
+
+# a bare super lays an element of the parent's rest on the child's post,
+# and on a positional of a child without a rest
+class P10; def rr(*r) = r[1] << 11; end
+class S10 < P10; def rr(*r, z) = super; end
+class S11 < P10; def rr(x, y) = super; end
+a = [+"s"]; b = [+"t"]; S10.new.rr(a, b); p [a, b]
+a = [+"s"]; b = [+"t"]; S11.new.rr(a, b); p [a, b]

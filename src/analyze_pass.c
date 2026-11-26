@@ -12832,30 +12832,62 @@ int zsuper_kw_positional(Compiler *c, Scope *s, Scope *pm) {
    `**h` gives one), which codegen reads it from (zsuper_kw_begin). Keywords
    a parent without any take as a positional Hash (zsuper_kw_positional)
    may land in any of its positionals, which are boxed for it. */
-/* A store through an element of pm's rest is one through s's own rest's,
-   where a bare `super` in s gathers s's positionals for it
-   (bind_zsuper_params), so the callers of s widen for it too
-   (widen_rest_arg_arrays): pm's element j is the gather's past pm's own
-   positionals, s's rest's element as far past s's; from the end the same
-   index, where neither has posts. One the counts leave to the run time is
-   any index's. One that lands on a positional of s is a store into that
-   parameter (param_takes_store). */
+/* May s's positional at place p of a bare super's arguments land in pm's
+   rest at index ix (ELEM_ANY: anywhere)? The arguments are s's n
+   positionals ahead of its rest, its rest's elements (any count, where
+   s has one) and its posts, then the keyword Hash pm takes positionally;
+   e is a post's place from the end (1 the last), -1 for one ahead of the
+   rest. pm lays R requireds, O optionals and Q posts around its rest. A
+   count the run time decides may be any count past the fixed ones. */
+static int zsuper_lands(int s_rest, int n, int p, int e, int R, int O, int Q, int ix) {
+  if (!s_rest) {
+    int rs = R + (n - R - Q < 0 ? 0 : n - R - Q < O ? n - R - Q : O), re = n - Q;
+    if (p < rs || p >= re) return 0;
+    return ix == ELEM_ANY || (ix >= 0 ? p == rs + ix : p == re + ix);
+  }
+  if (e >= 0) return e > Q && (ix == ELEM_ANY || ix >= 0 || e == Q - ix);
+  if (p < R) return 0;
+  return ix == ELEM_ANY || (ix >= 0 ? p - ix >= R && p - ix <= R + O : 1);
+}
+/* A store through an element of pm's rest is one through what a bare
+   `super` in s lays there (bind_zsuper_params): each positional of s the
+   index may name takes it (param_takes_store), and s's own rest's element
+   at the same place takes it, so the callers of s widen for it too
+   (widen_rest_arg_arrays). The place holds from the front where pm takes
+   no optional, and from the end always; s's rest keeps it while its body
+   leaves the rest as laid (local_read_by_element). Elsewhere the store is
+   any index's. */
 static int param_takes_store(Compiler *c, Scope *s, int g, TyKind t);
 static int zsuper_rest_elem_stores(Compiler *c, Scope *s, Scope *pm) {
-  if (pm->rest_idx < 0 || !pm->pnames[pm->rest_idx] || s->rest_idx < 0 || !s->pnames[s->rest_idx]) return 0;
-  LocalVar *src = scope_local(pm, pm->pnames[pm->rest_idx]), *dst = scope_local(s, s->pnames[s->rest_idx]);
-  if (!src || !dst || dst->rbs_seeded) return 0;
-  int fixed = 1;
-  for (int k = 0; k < pm->rest_idx; k++) if (pm->pdefault && pm->pdefault[k] >= 0) fixed = 0;
-  int ch = src->rest_elem_store != TY_UNKNOWN ? fold_store_kind(&dst->rest_elem_store, src->rest_elem_store) : 0;
-  for (int k = 0; k < REST_ELEM_HEAD + REST_ELEM_TAIL; k++) {
-    if (src->rest_elem_at[k] == TY_UNKNOWN) continue;
-    int ix = rest_slot_index(k), d = ELEM_ANY;
-    if (ix >= 0 && fixed) d = ix + pm->rest_idx - s->rest_idx;
-    else if (ix < 0 && fixed && !pm->npost_rest && !s->npost_rest) d = ix;
-    if (d != ELEM_ANY && d < 0 && ix >= 0) { ch |= param_takes_store(c, s, ix + pm->rest_idx, src->rest_elem_at[k]); continue; }
+  const NodeTable *nt = c->nt;
+  if (pm->rest_idx < 0 || !pm->pnames[pm->rest_idx]) return 0;
+  LocalVar *src = scope_local(pm, pm->pnames[pm->rest_idx]);
+  if (!src) return 0;
+  int srest = s->rest_idx >= 0 && s->pnames[s->rest_idx] ? s->rest_idx : -1;
+  LocalVar *dst = srest >= 0 ? scope_local(s, s->pnames[srest]) : NULL;
+  int pre = srest, post = srest >= 0 ? s->npost_rest : 0;
+  if (srest < 0)
+    for (pre = 0; pre < s->nparams && pre != s->kwrest_idx && !callee_param_is_declared_kwarg(c, s, s->pnames[pre]); pre++) {}
+  int kwh = zsuper_kw_positional(c, s, pm) ? 1 : 0, O = 0;
+  for (int k = 0; k < pm->rest_idx; k++) if (pm->pdefault && pm->pdefault[k] >= 0) O++;
+  int R = pm->rest_idx - O, Q = pm->npost_rest;
+  int def = s->def_node;
+  int laid = dst && def >= 0 && nt_kind(nt, def) == NK_DefNode &&
+             local_read_by_element(nt, nt_ref(nt, def, "body"), s->pnames[srest], 0);
+  int ch = 0;
+  for (int k = -1; k < REST_ELEM_HEAD + REST_ELEM_TAIL; k++) {
+    TyKind t = k < 0 ? src->rest_elem_store : src->rest_elem_at[k];
+    if (t == TY_UNKNOWN) continue;
+    int ix = k < 0 ? ELEM_ANY : rest_slot_index(k);
+    for (int q = 0; q < pre + post; q++)
+      if (zsuper_lands(srest >= 0, pre + kwh, q, q < pre ? -1 : pre + post - q + kwh, R, O, Q, ix))
+        ch |= param_takes_store(c, s, q < pre ? q : srest + 1 + (q - pre), t);
+    if (!dst || dst->rbs_seeded) continue;
+    /* a place before s's rest or past it names no element of it */
+    if (ix != ELEM_ANY && (ix >= 0 ? R + O + ix < pre : Q - ix <= post + kwh)) continue;
+    int d = !laid || ix == ELEM_ANY ? ELEM_ANY : ix >= 0 ? (O ? ELEM_ANY : R + ix - pre) : -(Q - ix - post - kwh);
     int slot = rest_elem_slot(d);
-    ch |= fold_store_kind(slot >= 0 ? &dst->rest_elem_at[slot] : &dst->rest_elem_store, src->rest_elem_at[k]);
+    ch |= fold_store_kind(slot >= 0 ? &dst->rest_elem_at[slot] : &dst->rest_elem_store, t);
   }
   return ch;
 }
@@ -12912,7 +12944,7 @@ static int bind_zsuper_params(Compiler *c, int id, Scope *s, Scope *pm) {
       if (!src || !dst || dst->rbs_seeded || src->type == TY_UNKNOWN) continue;
       if (lv_widen(dst, src->type)) changed = 1;
     }
-    return changed;
+    return changed | zsuper_rest_elem_stores(c, s, pm);
   }
   /* gathered: the parameters ahead of the rest in order, any element after */
   LocalVar *rv = scope_local(s, s->pnames[srest]);

@@ -26479,40 +26479,54 @@ static int decl_arg_inert(const NodeTable *nt, int a) {
    itself. Anything else may show the class, and a definition hook or
    method_missing the program defines (hooks) runs program code at a
    declaration. A statement this does not know costs the name path only. */
+static int stmt_only_declares(const NodeTable *nt, int s, const ANameHash *defnames);
 static int block_only_declares(const NodeTable *nt, int blk, int hooks, const ANameHash *defnames) {
-  int body = nt_ref(nt, blk, "body"), n = 0;
-  if (hooks) return 0;
+  return !hooks && body_only_declares(nt, nt_ref(nt, blk, "body"), defnames);
+}
+/* ...and for the statements body (-1: none) of a block or a class body */
+int body_only_declares(const NodeTable *nt, int body, const ANameHash *defnames) {
+  int n = 0;
   if (body < 0) return 1;
   if (nt_kind(nt, body) != NK_StatementsNode) return 0;
   const int *st = nt_arr(nt, body, "body", &n);
-  for (int i = 0; i < n; i++) {
-    NodeKind k = nt_kind(nt, st[i]);
-    if (k == NK_DefNode || k == NK_AliasMethodNode || k == NK_UndefNode) continue;
-    if (k == NK_ConstantWriteNode) {
-      int v = nt_ref(nt, st[i], "value");
-      if (v >= 0 && nt_kind(nt, v) != NK_DefNode && decl_arg_inert(nt, v)) continue;
-      return 0;
-    }
-    const char *nm = k == NK_CallNode ? nt_str(nt, st[i], "name") : NULL;
-    if (!is_class_declaration_call(nm) || anh_has(defnames, nm) || nt_ref(nt, st[i], "receiver") >= 0 ||
-        nt_ref(nt, st[i], "block") >= 0)
-      return 0;
-    int args = nt_ref(nt, st[i], "arguments"), na = 0;
-    const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &na) : NULL;
-    for (int j = 0; j < na; j++) if (!decl_arg_inert(nt, av[j])) return 0;
-  }
+  for (int i = 0; i < n; i++)
+    if (!stmt_only_declares(nt, st[i], defnames)) return 0;
   return 1;
 }
-int desugar_struct_block_anonymous(Compiler *c) {
-  NodeTable *nt = (NodeTable *)c->nt;
-  int changed = 0, hooks = 0;
-  ANameHash defnames = {0};
+/* ...and for one statement s of such a body */
+static int stmt_only_declares(const NodeTable *nt, int s, const ANameHash *defnames) {
+  NodeKind k = nt_kind(nt, s);
+  if (k == NK_DefNode || k == NK_AliasMethodNode || k == NK_UndefNode) return 1;
+  if (k == NK_ConstantWriteNode) {
+    int v = nt_ref(nt, s, "value");
+    return v >= 0 && nt_kind(nt, v) != NK_DefNode && decl_arg_inert(nt, v);
+  }
+  const char *nm = k == NK_CallNode ? nt_str(nt, s, "name") : NULL;
+  if (!is_class_declaration_call(nm) || anh_has(defnames, nm) || nt_ref(nt, s, "receiver") >= 0 ||
+      nt_ref(nt, s, "block") >= 0)
+    return 0;
+  int args = nt_ref(nt, s, "arguments"), na = 0;
+  const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &na) : NULL;
+  for (int j = 0; j < na; j++) if (!decl_arg_inert(nt, av[j])) return 0;
+  return 1;
+}
+/* The names the program defines methods of, into *defnames; answers
+   whether one is a definition hook or method_missing (block_only_declares) */
+int program_def_names(const NodeTable *nt, ANameHash *defnames) {
+  int hooks = 0;
   for (int id = 0; id < nt->count; id++)
     if (nt_kind(nt, id) == NK_DefNode) {
       const char *dn = nt_str(nt, id, "name");
-      if (dn && !anh_has(&defnames, dn)) anh_add(&defnames, dn);
+      if (dn && !anh_has(defnames, dn)) anh_add(defnames, dn);
       hooks |= is_definition_hook_name(dn) || is_method_missing_name(dn);
     }
+  return hooks;
+}
+int desugar_struct_block_anonymous(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int changed = 0;
+  ANameHash defnames = {0};
+  int hooks = program_def_names(nt, &defnames);
   for (int id = 0; id < nt->count; id++) {
     NodeKind k = nt_kind(nt, id);
     if (k != NK_ConstantWriteNode && k != NK_LocalVariableWriteNode) continue;
@@ -27478,6 +27492,16 @@ static void cn_host_body(Compiler *c, HostStep *h, int cls, int body) {
   nt_arr(c->nt, body, "body", &bn);
   host_splice(c, h, cls, body, 0, bn, NULL, NULL);
 }
+/* Is the Class.new or Module.new call `id` evaluated more than once: in a
+   method, a block, a lambda or a loop? */
+static int cn_site_repeats(const NodeTable *nt, const int *parent, int id) {
+  for (int p = parent[id]; p >= 0; p = parent[p]) {
+    NodeKind pk = nt_kind(nt, p);
+    if (pk == NK_DefNode || pk == NK_BlockNode || pk == NK_LambdaNode ||
+        pk == NK_WhileNode || pk == NK_UntilNode || pk == NK_ForNode) return 1;
+  }
+  return 0;
+}
 int desugar_class_new_blocks(Compiler *c, HostStep *h) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count, changed = 0, serial = 0;
@@ -27570,13 +27594,7 @@ int desugar_class_new_blocks(Compiler *c, HostStep *h) {
       if (super_node >= 0 && is_embedding_builtin(nt_str(nt, super_node, "name"))) continue;
       /* Keep repeated evaluation on its existing path until class identity
          can be preserved: lowering it would reuse one static class. */
-      int repeated = 0;
-      for (int p = parent[id]; p >= 0; p = parent[p]) {
-        NodeKind pk = nt_kind(nt, p);
-        if (pk == NK_DefNode || pk == NK_BlockNode || pk == NK_LambdaNode ||
-            pk == NK_WhileNode || pk == NK_UntilNode || pk == NK_ForNode) { repeated = 1; break; }
-      }
-      if (repeated) continue;
+      if (cn_site_repeats(nt, parent, id)) continue;
       blk = fwd_new_node_like(nt, id, "BlockNode");
       if (blk < 0) continue;
       nt_node_set_ref(nt, id, "block", blk);

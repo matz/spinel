@@ -5927,14 +5927,22 @@ static void emit_cls_visible_fn(Compiler *c, Buf *b) {
   buf_puts(b, "  default: return k;\n  }\n}\n");
 }
 
-/* `var` (a C name holding a runtime cls_id) mapped through visible_cls_id. */
-void emit_visible_cls_id(Compiler *c, const char *var, Buf *b) {
+/* The id Ruby sees as the class of an object of user class ci or of one of
+   its subclasses, the one reader of an object's visible class: `id` is a C
+   name holding the object's cls_id, `obj` one holding the object (NULL
+   where the caller keeps only the id). It is the id itself unless a class
+   below ci masquerades (cls_id_masquerades); then it is mapped through
+   visible_cls_id, a singleton class to the class it hides behind and the
+   Object stand-in to Object. */
+void emit_visible_cls_id(Compiler *c, int ci, const char *obj, const char *id, Buf *b) {
+  (void)obj;
+  if (!cls_id_masquerades(c, ci)) { buf_puts(b, id); return; }
   buf_puts(b, "(");
   for (int k = 0; k < c->nclasses; k++) {
     int v = visible_cls_id(c, k);
-    if (v != k) buf_printf(b, "%s == %d ? %d : ", var, k, v);
+    if (v != k) buf_printf(b, "%s == %d ? %d : ", id, k, v);
   }
-  buf_printf(b, "%s)", var);
+  buf_printf(b, "%s)", id);
 }
 
 /* Two C slots the delegation can move a value between: identical, or one side
@@ -18543,7 +18551,8 @@ static int program_has_own_cmethod_eqq(Compiler *c) {
 static void emit_cmeth_eqq_dispatch(Compiler *c, Buf *b) {
   buf_puts(b, "static int sp_cmeth_eqq_dispatch(sp_RbVal e, sp_Class cl, sp_RbVal *out) {\n"
               "  SP_GC_ROOT_RBVAL(e);\n"
-              "  switch (cl.cls_id) {\n");
+              "  switch (");
+  emit_class_value_key(c, -1, "cl", b); buf_puts(b, ") {\n");
   for (int k = 0; k < c->nclasses; k++) {
     Buf t; memset(&t, 0, sizeof t);
     if (class_own_cmethod_eqq(c, -1, -1, k) >= 0 && emit_class_cmethod_eqq(c, k, "e", TY_POLY, -1, 1, &t) && t.p)
@@ -22661,7 +22670,7 @@ static void emit_class_cmp_user_dispatch(Compiler *c, Buf *b) {
     if (!m->reachable || m->nparams != 1 || m->yields || arm_arg_param(c, m) != 0) continue;
     TyKind pt = scope_param_type(m, 0);
     if (pt != TY_POLY && pt != TY_CLASS) continue;
-    if (!any) buf_puts(b, "  if (a.tag == SP_TAG_CLASS) switch (sp_unbox_class(a).cls_id) {\n");
+    if (!any) { buf_puts(b, "  if (a.tag == SP_TAG_CLASS) switch ("); emit_class_value_key(c, -1, "sp_unbox_class(a)", b); buf_puts(b, ") {\n"); }
     any = 1;
     Buf cb; memset(&cb, 0, sizeof cb);
     buf_puts(&cb, mc_method(c, m));
@@ -23291,7 +23300,7 @@ static void emit_class_machinery(const NodeTable *nt, Compiler *c, Buf *b, char 
       for (int k = 0; k < c->nclasses && !any_ext; k++) if (comp_class_extends_any(c, k)) any_ext = 1;
       if (any_ext) {
         Buf eb; memset(&eb, 0, sizeof eb);
-        buf_puts(&eb, "  if (obj.tag == SP_TAG_CLASS) switch (sp_unbox_class(obj).cls_id) {\n");
+        buf_puts(&eb, "  if (obj.tag == SP_TAG_CLASS) switch ("); emit_class_value_key(c, -1, "sp_unbox_class(obj)", &eb); buf_puts(&eb, ") {\n");
         for (int k = 0; k < c->nclasses; k++) {
           if (!comp_class_extends_any(c, k)) continue;
           buf_printf(&eb, "  case %d: if (", k);
@@ -24281,7 +24290,8 @@ static void emit_cls_user_display_hooks(Compiler *c, Buf *b) {
   static const char *const nms[] = { "to_s", "inspect" };
   for (int q = 0; q < 2; q++) {
     if (!prog_has_cls_user_display(c, nms[q])) continue;
-    buf_printf(b, "static sp_RbVal sp_class_user_%s(sp_Class c, int *found){*found=1;switch(c.cls_id){", nms[q]);
+    buf_printf(b, "static sp_RbVal sp_class_user_%s(sp_Class c, int *found){*found=1;switch(", nms[q]);
+    emit_class_value_key(c, -1, "c", b); buf_puts(b, "){");
     for (int k = 0; k < c->nclasses; k++) {
       int mi = cls_user_display_mi(c, -1, k, nms[q]);
       if (mi < 0) continue;

@@ -547,6 +547,10 @@ int multi_return_elem_nodes(Compiler *c, int value, const int **elems);
 int scope_tuple_elem_nodes(Compiler *c, int mi, const int **elems);   /* analyze_pass.c: the same for a method scope */
 int method_overridden_below(Compiler *c, int site, int cid, const char *name, int mi);   /* analyze_pass.c: a descendant answers `name` with another method */
 void resolve_parents(Compiler *c);
+/* the names the program defines methods of (analyze_desugar.c); does a
+   statements body only declare, so nothing it runs sees its class? */
+int program_def_names(const NodeTable *nt, ANameHash *defnames);
+int body_only_declares(const NodeTable *nt, int body, const ANameHash *defnames);
 void resolve_inherited_aliases(Compiler *c);
 void settle_object_builtin_aliases(Compiler *c);
 void settle_mixin_aliases(Compiler *c);       /* an alias names the method in effect where it appears */

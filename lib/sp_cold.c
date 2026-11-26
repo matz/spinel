@@ -6706,11 +6706,15 @@ sp_RbVal sp_complex_abs2_v(sp_Complex a) {
   return sp_box_float(v);
 }
 unsigned char sp_class_frozen_map[4096];
+unsigned char *(*sp_rtclass_frozen_fn)(sp_int id);
+sp_int (*sp_obj_rtclass_fn)(sp_RbVal v);
 void sp_class_freeze_id(sp_int cls_id) {
+  if (sp_rtclass_frozen_fn && sp_rtclass_id_p(cls_id)) { *sp_rtclass_frozen_fn(cls_id) = 1; return; }
   sp_int ix = cls_id >= 0 ? cls_id : (3900 - cls_id);
   if (ix >= 0 && ix < 4096) sp_class_frozen_map[ix] = 1;
 }
 sp_bool sp_class_frozen_id(sp_int cls_id) {
+  if (sp_rtclass_frozen_fn && sp_rtclass_id_p(cls_id)) return (sp_bool)*sp_rtclass_frozen_fn(cls_id);
   sp_int ix = cls_id >= 0 ? cls_id : (3900 - cls_id);
   return (ix >= 0 && ix < 4096) ? (sp_bool)sp_class_frozen_map[ix] : 0;
 }

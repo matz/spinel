@@ -773,7 +773,7 @@ build/sp_cold.o: lib/sp_cold.c $(RT_HDRS)
 
 SP_RT_LIB = lib/libspinel_rt.a
 
-RT_MEMBERS = sp_bigint sp_crypto sp_pack sp_time sp_core sp_net sp_system sp_gc sp_slab sp_alloc sp_dtoa sp_marshal sp_format sp_string sp_inspect sp_poly_cold sp_array sp_str sp_str_cold sp_str_crypt sp_hash sp_proc sp_exc sp_re sp_random sp_fiber sp_sched sp_io sp_iobuffer sp_cold sp_enum_str sp_process sp_process_status
+RT_MEMBERS = sp_bigint sp_crypto sp_pack sp_time sp_core sp_net sp_system sp_gc sp_slab sp_alloc sp_dtoa sp_marshal sp_format sp_string sp_inspect sp_poly_cold sp_array sp_str sp_str_cold sp_str_crypt sp_hash sp_proc sp_exc sp_re sp_random sp_fiber sp_sched sp_io sp_iobuffer sp_cold sp_enum_str sp_process sp_process_status sp_rtclass
 
 # Opt-in runtime for carried C extensions. The regular archive has no hook
 # branches or extension state, preserving its instruction stream.

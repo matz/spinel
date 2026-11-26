@@ -2406,7 +2406,9 @@ int emit_poly_cls_value_prearm(Compiler *c, int id, const char *name, int argc,
   int nc8 = poly_cls_value_cands(c, id, name, argc, &pargs, 1, ccls8, cmi8, cexp8, &wants_blk);
   if (nc8 == 0) { free(ccls8); free(cmi8); free(cexp8); return 0; }
   if (wants_blk && blk_tmp < 0) blk_tmp = hoist_call_block_proc(c, id);
-  buf_printf(b, "if (_t%d.tag == SP_TAG_CLASS) { switch (_t%d.cls_id) {", tv, tv);
+  char tvn8[24]; snprintf(tvn8, sizeof tvn8, "_t%d", tv);
+  buf_printf(b, "if (_t%d.tag == SP_TAG_CLASS) { switch (", tv);
+  emit_class_value_key(c, nt_ref(nt, id, "receiver"), tvn8, b); buf_puts(b, ") {");
   char rcls8[48], rraise8[256];
   snprintf(rcls8, sizeof rcls8, "sp_unbox_class(_t%d)", tv);
   snprintf(rraise8, sizeof rraise8, "sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d))", name, tv);
@@ -14156,8 +14158,9 @@ void emit_raise_class_value(Compiler *c, int id, int kn, int mn, Buf *b) {
   if (mn >= 0) {
     mt = hold_operand(c, mn, TY_POLY, 1, mt, 1, " ", b);
   }
-  buf_printf(b, "sp_RbVal _t%d = sp_box_nil(); if (_t%d.tag == SP_TAG_CLASS) switch (_t%d.cls_id) {",
-             rt, kt, kt);
+  char ktn[24]; snprintf(ktn, sizeof ktn, "_t%d", kt);
+  buf_printf(b, "sp_RbVal _t%d = sp_box_nil(); if (_t%d.tag == SP_TAG_CLASS) switch (", rt, kt);
+  emit_class_value_key(c, kn, ktn, b); buf_puts(b, ") {");
   CtorArityArms aerr = {0};
   for (int ci = 0; ci < c->nclasses; ci++) {
     if (is_builtin_reopen(c->classes[ci].name) || c->classes[ci].is_native_class) continue;
@@ -14246,21 +14249,31 @@ static void emit_kwsplat_empty_check(Compiler *c, int id, int kwh, const char *l
 }
 
 /* See codegen_call_arms.h. */
-void emit_class_value_new_switch(Compiler *c, int rt2, int kt, int boxed, Buf *b) {
+void emit_class_value_key(Compiler *c, int recv, const char *val, Buf *b) {
+  (void)c; (void)recv;
+  buf_printf(b, "%s.cls_id", val);
+}
+
+/* See codegen_call_arms.h. */
+void emit_class_value_new_switch(Compiler *c, int recv, int rt2, int kt, int boxed, Buf *b) {
+  char kv[24]; snprintf(kv, sizeof kv, "_t%d", kt);
   buf_printf(b, "sp_RbVal _t%d = sp_box_nil(); ", rt2);
   /* (a class boxed by its name, an object's #class read back out of a
      boxed slot, switches on the id of the program's class of that name) */
   if (boxed && g_emit_class_names) {
     int k = ++g_tmp;
-    buf_printf(b, "sp_int _t%d = _t%d.tag == SP_TAG_CLASS ? _t%d.cls_id : -1; "
+    buf_printf(b, "sp_int _t%d = _t%d.tag == SP_TAG_CLASS ? ", k, kt); emit_class_value_key(c, recv, kv, b);
+    buf_printf(b, " : -1; "
                   "if (_t%d == SP_CLASS_BY_NAME) { _t%d = -1; for (sp_int _j = 0; _j < %d; _j++) { "
                   "const char *_s = sp_class_to_s((sp_Class){_j, NULL}); "
                   "if (_s && _s[0] && _t%d.v.s && !strcmp(_s, _t%d.v.s)) { _t%d = _j; break; } } } ",
-               k, kt, kt, k, k, c->nclasses, kt, kt, k);
+               k, k, c->nclasses, kt, kt, k);
     buf_printf(b, "switch (_t%d) {", k);
   }
-  else if (boxed) buf_printf(b, "switch (_t%d.tag == SP_TAG_CLASS ? _t%d.cls_id : -1) {", kt, kt);
-  else buf_printf(b, "switch(_t%d.cls_id){", kt);
+  else if (boxed) {
+    buf_printf(b, "switch (_t%d.tag == SP_TAG_CLASS ? ", kt); emit_class_value_key(c, recv, kv, b); buf_puts(b, " : -1) {");
+  }
+  else { buf_puts(b, "switch("); emit_class_value_key(c, recv, kv, b); buf_puts(b, "){"); }
 }
 
 int emit_struct_new_call(Compiler *c, int id, int ci, int argc, const int *argv, Buf *b);
@@ -14285,7 +14298,7 @@ void emit_class_value_new_kw(Compiler *c, int id, int recv, int boxed, Buf *b) {
   buf_printf(b, "({ %s _t%d = ", boxed ? "sp_RbVal" : "sp_Class", kt); emit_expr(c, recv, b);
   buf_puts(b, "; ");
   int sv_cbt = hoist_ctor_block(c, id, b);
-  emit_class_value_new_switch(c, rt2, kt, boxed, b);
+  emit_class_value_new_switch(c, recv, rt2, kt, boxed, b);
   /* the operand of a sole `*splat`, or the SplatNode itself for an anonymous
      `*` forwarding the method's rest (`k.new(*)`) */
   int sole_splat = argc == 1 && nt_kind(nt, argv[0]) == NK_SplatNode ? nt_ref(nt, argv[0], "expression") : -1;
@@ -14783,8 +14796,9 @@ void emit_super_class_new(Compiler *c, int id, Buf *b) {
   }
   if (!nr) { emit_super_new_ctor(c, id, own, b); return; }
   int boxed = repr_of(c, id).kind == RK_BOXED, rt = ++g_tmp;
-  if (boxed) buf_printf(b, "({ sp_RbVal _t%d = sp_box_nil(); switch (_sp_cls.cls_id) {", rt);
-  else buf_printf(b, "({ %s *_t%d = NULL; switch (_sp_cls.cls_id) {", class_ctype(c, own), rt);
+  if (boxed) buf_printf(b, "({ sp_RbVal _t%d = sp_box_nil(); switch (", rt);
+  else buf_printf(b, "({ %s *_t%d = NULL; switch (", class_ctype(c, own), rt);
+  emit_class_value_key(c, -1, "_sp_cls", b); buf_puts(b, ") {");
   for (int d = -1; d < nd; d++) {
     int k = d < 0 ? own : ds[d];
     if (d >= 0 && !comp_new_receiver(c, k)) continue;
@@ -21224,7 +21238,8 @@ static int emit_vis_cell_writes(Compiler *c, int id, int elem, Buf *b) {
   for (int k = 0; cplan_vis_cell_after(c, id, k, &g, &v, &only, &we); k++) {
     if (!g || we != elem) continue;
     if (n++) buf_puts(b, ", ");
-    if (only >= 0) buf_printf(b, "_sp_cls.cls_id == %d ? (void)(", only);   /* (the class the include ran on) */
+    /* (the class the include ran on) */
+    if (only >= 0) { emit_class_value_key(c, -1, "_sp_cls", b); buf_printf(b, " == %d ? (void)(", only); }
     buf_printf(b, repr_slot_kind(c, g) == RK_BOXED ? "gv_%s = sp_box_int(%dLL)" : "gv_%s = %dLL", g->name, v);
     if (only >= 0) buf_puts(b, ") : (void)0");
   }
@@ -21384,7 +21399,8 @@ void emit_class_value_responds_helper(Compiler *c, const char *const *texts, int
       class_value_name_once(&reopen, &seen, sc->name);
   }
   free(seen.p);
-  buf_printf(b, "static sp_bool sp_class_value_responds(sp_RbVal v, const char *n) {\n  if (v.tag != SP_TAG_CLASS) return 0;\n  if (sp_str_in_list(n, (const char *const[]){%sNULL})) return 1;\n  sp_bool r = 0;\n  switch (v.cls_id) {", uni.p ? uni.p : "");
+  buf_printf(b, "static sp_bool sp_class_value_responds(sp_RbVal v, const char *n) {\n  if (v.tag != SP_TAG_CLASS) return 0;\n  if (sp_str_in_list(n, (const char *const[]){%sNULL})) return 1;\n  sp_bool r = 0;\n  switch (", uni.p ? uni.p : "");
+  emit_class_value_key(c, -1, "v", b); buf_puts(b, ") {");
   /* the class methods of the program, asked of each class's chain: the names the call plan lists for the class's side */
   for (int k = 0; k < c->nclasses; k++) {
     if (k == comp_core_class(c, CORE_CLASS_REOPEN)) continue;
@@ -35292,6 +35308,7 @@ void emit_bind_call_boxed(Compiler *c, int id, int target, int kn, const char *s
   if (repr_native_call_handle(c, id)) slot = repr_call_result_storage(slot);
   if (slot == TY_VOID || slot == TY_UNKNOWN) slot = TY_POLY;
   int tk = ++g_tmp, to = ++g_tmp, tr = ++g_tmp;
+  char tkn[24]; snprintf(tkn, sizeof tkn, "_t%d", tk);
   buf_puts(b, "({ ");
   if (kn >= 0) {
     Buf kb; memset(&kb, 0, sizeof kb);
@@ -35307,7 +35324,7 @@ void emit_bind_call_boxed(Compiler *c, int id, int target, int kn, const char *s
                     "sp_Class _t%d = sp_unbox_class(_t%dv); ", tk, kb.p ? kb.p : "sp_box_nil()", tk, tk, tk, tk);
     }
     free(kb.p);
-    buf_printf(b, "switch (_t%d.cls_id) {", tk);
+    buf_puts(b, "switch ("); emit_class_value_key(c, kn, tkn, b); buf_puts(b, ") {");
     for (int k = 0; k < c->nclasses; k++)
       if (class_value_bind_call_target(c, nt_ref(c->nt, id, "receiver"), k, sym, NULL) >= 0)
         buf_printf(b, " case %d:", k);
@@ -35330,7 +35347,7 @@ void emit_bind_call_boxed(Compiler *c, int id, int target, int kn, const char *s
   buf_printf(b, " _t%d = %s; ", tr, slot == TY_POLY ? "sp_box_nil()" : default_value_from_compiler(c, slot));
   if (kn < 0) emit_bind_call_arm(c, id, target, argv, argc, to, tr, slot, b);
   else {
-    buf_printf(b, "switch (_t%d.cls_id) {", tk);
+    buf_puts(b, "switch ("); emit_class_value_key(c, kn, tkn, b); buf_puts(b, ") {");
     for (int k = 0; k < c->nclasses; k++) {
       int tmi = class_value_bind_call_target(c, nt_ref(c->nt, id, "receiver"), k, sym, NULL);
       if (tmi < 0) continue;

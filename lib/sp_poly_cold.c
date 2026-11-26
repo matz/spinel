@@ -581,6 +581,9 @@ const char *sp_poly_cold_class_to_s(sp_Class c) {
 static const char *sp_poly_obj_class_display(sp_RbVal v) {
   if (v.tag == SP_TAG_OBJ && sp_class_display_fn && v.cls_id >= 0) {
     sp_Class c = {v.cls_id, NULL};
+    /* (an instance of a site class: the class made at run time it was built for) */
+    sp_int k = sp_obj_rtclass_fn ? sp_obj_rtclass_fn(v) : -1;
+    if (k >= 0) c.cls_id = (int)k;
     return sp_class_display_fn(c);
   }
   return sp_poly_class_name(v);
@@ -901,7 +904,13 @@ static const char *sp_poly_class_name_arm(sp_RbVal v, int *id)
           if (e && e->cls_id) *id = e->cls_id;
           return sp_exc_class_name((volatile struct sp_Exception_s *)v.v.p);
         }
-        default: { sp_Class c = {v.cls_id}; return sp_class_to_s(c); }
+        default: {
+          sp_Class c = {v.cls_id};
+          /* (an instance of a site class names the class made at run time it was built for) */
+          sp_int k = sp_obj_rtclass_fn && sp_class_display_fn ? sp_obj_rtclass_fn(v) : -1;
+          if (k >= 0) return sp_class_display_fn((sp_Class){(int)k, NULL});
+          return sp_class_to_s(c);
+        }
       }
     default: return (*id = SP_BCLS_OBJECT, SPL("Object"));
   }

@@ -1276,7 +1276,7 @@ int cls_id_masquerades(Compiler *c, int cid);
 int visible_as_target(Compiler *c, int k, int target);
 int class_mixes_in(Compiler *c, int cid, int mod, int depth);
 int class_is_comparable(Compiler *c, int cid);
-void emit_visible_cls_id(Compiler *c, const char *var, Buf *b);
+void emit_visible_cls_id(Compiler *c, int ci, const char *obj, const char *id, Buf *b);
 void obj_default_name(Compiler *c, int ci, char *name, size_t nn, char *arg, size_t na);
 /* Kernel#to_s or #inspect (want_inspect) of an object of program class cid,
    the builtin's own text whatever the program defines: #<Name:0x...>, and

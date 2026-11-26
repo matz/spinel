@@ -9038,20 +9038,46 @@ char **dsend_candidates(Compiler *c, int *out_n) {
     if (nt_kind(nt, id) != NK_CallNode) continue;
     const char *rn = nt_str(nt, id, "name");
     if (!rn || !is_instance_method_list(rn)) continue;
-    int rr = nt_ref(nt, id, "receiver"), rci = -1;
+    /* (wide 1: a class method's list, of the class that received the call, the
+       method's or one above or below it; 2: a list on a class held in a value,
+       of a class of the program) */
+    int rr = nt_ref(nt, id, "receiver"), rci = -1, wide = 0;
     if (rr < 0 || nt_kind(nt, rr) == NK_SelfNode) {
       /* a statement of a class body (not of a def in it): the body's class */
       Scope *ls = comp_scope_of(c, id);
       if ((!ls || !ls->name) && c->node_cbody && id < c->node_cap) rci = c->node_cbody[id];
+      else if (ls && ls->is_cmethod && ls->class_id >= 0) rci = ls->class_id, wide = 1;
     }
     else if (nt_kind(nt, rr) == NK_ConstantReadNode) rci = const_node_class_index(c, rr);
-    if (rci < 0) continue;
+    else if (nt_kind(nt, rr) != NK_ConstantPathNode) wide = 2;
+    if (rci < 0 && wide != 2) continue;
+    /* the listed classes' defs, attr readers and (as `x=`) writers */
+    ANameHash listed, listed_w;
+    memset(&listed, 0, sizeof listed); memset(&listed_w, 0, sizeof listed_w);
     for (int s = 0; s < c->nscopes; s++) {
       const char *sn = c->scopes[s].name;
-      if (!sn || c->scopes[s].class_id != rci || c->scopes[s].is_cmethod || anh_has(&c->dsn.lits, sn)) continue;
-      for (int k = 0; k < ncand; k++)
-        if (sp_streq(cand[k], sn)) { anh_add(&c->dsn.lits, cand[k]); break; }
+      int k = c->scopes[s].class_id;
+      if (!sn || k < 0 || c->scopes[s].is_cmethod) continue;
+      if (wide == 0 ? k != rci : wide == 1 && k != rci && !is_descendant(c, k, rci) && !is_descendant(c, rci, k)) continue;
+      anh_add(&listed, sn);
     }
+    for (int k = 0; k < c->nclasses; k++) {
+      if (wide == 0 ? k != rci : wide == 1 && k != rci && !is_descendant(c, k, rci) && !is_descendant(c, rci, k)) continue;
+      for (int j = 0; j < c->classes[k].nreaders; j++) anh_add(&listed, c->classes[k].readers[j]);
+      for (int j = 0; j < c->classes[k].nwriters; j++) anh_add(&listed_w, c->classes[k].writers[j]);
+    }
+    for (int k = 0; k < ncand; k++) {
+      if (anh_has(&c->dsn.lits, cand[k])) continue;
+      size_t len = strlen(cand[k]);
+      char stem[200];
+      int hit = anh_has(&listed, cand[k]);
+      if (!hit && len > 1 && len < sizeof stem && cand[k][len - 1] == '=') {
+        memcpy(stem, cand[k], len - 1); stem[len - 1] = 0;
+        hit = anh_has(&listed_w, stem);
+      }
+      if (hit) anh_add(&c->dsn.lits, cand[k]);
+    }
+    anh_free(&listed); anh_free(&listed_w);
   }
   anh_free(&cand_set);
   int any_computed = 0;

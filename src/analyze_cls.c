@@ -2015,9 +2015,32 @@ static void cf_each_yields(CF *f, int recv_el, int pe) {
     for (int y = 0; y < CF_YARGS; y++) cf_flow(f, f->yarg_el[mi][y], pe);
   }
 }
+/* May the value at x be an instance of builtin class `core` or of a class below it? Yes unless the set names
+   builtin classes and none of them is: every class, a class of the program's (it may be below `core`, or
+   reopen it) and no value yet rule nothing out, as cls_fact_may_hold_builtin reads a fact. */
+static int cf_may_be_core(CF *f, int x, int core) {
+  int ps = x >= 0 ? cf_set_of(f, x) : CF_ALL;
+  if (ps == CF_ALL || ps == CF_EMPTY || f->pool[ps].n || f->pool[ps].os) return 1;
+  const unsigned long long *sub = cls_bk_subtree(f->c, core);
+  for (int i = 0; i < CLS_BK_WORDS; i++) if (f->pool[ps].bk[i] & sub[i]) return 1;
+  return 0;
+}
+/* May `recv[...] = x` put the elements of x into the receiver? An Array's `a[i, n] = x` and `a[i..j] = x` do.
+   `a[i] = x` and a Hash's `h[k] = x` keep x whole, as one element. A splat may spread to either form. */
+static int cf_index_assign_splices(CF *f, int recv_el, const int *argv, int argc) {
+  if (!cf_may_be_core(f, recv_el, CORE_ARRAY)) return 0;
+  int n = 0, idx = -1;
+  for (int i = 0; i < argc; i++) {
+    NodeKind k = nt_kind(f->nt, argv[i]);
+    if (k == NK_BlockArgumentNode) continue;
+    if (k == NK_SplatNode) return 1;
+    if (n++ == 0) idx = argv[i];
+  }
+  return n != 2 || cf_may_be_core(f, idx, CORE_RANGE);
+}
 /* the class-fact rule of one share kind (bop_share_kinds): what the
    call's value is made of; known cleared for a kind with no rule */
-static void cf_share_kind_rule(CF *f, int sh, const char *nm, int v, int recv_el, const int *pos, int npos, int blk, int has_blk, int *known) {
+static void cf_share_kind_rule(CF *f, int sh, int v, int recv_el, const int *pos, int npos, int blk, int has_blk, int splices, int *known) {
   switch (sh) {
   case BSH_PURE: case BSH_ITER_FRESH:
     cf_add_set(f, v, cf_bv_set(f));
@@ -2045,7 +2068,7 @@ static void cf_share_kind_rule(CF *f, int sh, const char *nm, int v, int recv_el
       cf_store(f, recv_el, t);
     }
     /* `a[i, n] = [x]` and `a[i..j] = [x]` put the elements of the last argument into the receiver */
-    else if (npos > 0 && is_index_assign(nm)) {
+    else if (npos > 0 && splices) {
       int t = cf_entry(f, -(v + 2), "#as");
       cf_load(f, pos[npos - 1], t);
       cf_store(f, recv_el, t);
@@ -2296,7 +2319,8 @@ static void cf_builtin_rule(CF *f, int v, int recv_el, const int *argv, int argc
     cf_load(f, nt_ref(nt, argv[i], "expression"), spl);
   }
   int has_blk = blk >= 0 && nt_kind(nt, blk) == NK_BlockNode;
-  for (int i = 0; i < nk && known; i++) cf_share_kind_rule(f, kinds[i], nm, v, recv_el, pos, npos, blk, has_blk, &known);
+  int splices = nm && is_index_assign(nm) && cf_index_assign_splices(f, recv_el, argv, argc);
+  for (int i = 0; i < nk && known; i++) cf_share_kind_rule(f, kinds[i], v, recv_el, pos, npos, blk, has_blk, splices, &known);
   /* an iterator may answer an Enumerator, whatever its row says it answers (`[].each` with no block is not the
      receiver, `lazy` and `chunk` are Enumerators with one), and so do to_enum and lazy */
   int enumer = nm && (is_enumerator_maker(nm) || is_lazy_name(nm));

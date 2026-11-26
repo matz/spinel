@@ -48,7 +48,7 @@ module BoxedMethodsCheck
                   mon_locked?],
     "ConditionVariable" => %w[wait signal broadcast],
     "Queue" => %w[pop shift deq push << enq close clear length num_waiting empty? closed?
-                  size max],
+                  size max max=],
   }.freeze
 
   module_function

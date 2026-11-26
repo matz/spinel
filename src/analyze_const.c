@@ -356,6 +356,8 @@ int an_const_read_finds(Compiler *c, int id, const char *name) {
 }
 
 static int const_class_presence(Compiler *c, int id, int program);
+static void plain_headers_build(Compiler *c);
+static void plain_headers_free(void);
 
 /* 1 + the Integer or Float literal write node `first` assigns when it is
    its constant's only write (LocalVar.const_lit), else 0 */
@@ -492,6 +494,7 @@ void an_const_presence(Compiler *c) {
     if (c->classes[ci].def_node >= 0 && nt_kind(nt, c->classes[ci].def_node) == NK_ConstantPathWriteNode)
       for (int e = c->classes[ci].enclosing_class; e >= 0 && !c->classes[e].path_ns; e = c->classes[e].enclosing_class)
         c->classes[e].path_ns = 1;
+  plain_headers_build(c);
   NodeKind kinds[] = { NK_ConstantReadNode, NK_ConstantPathNode };
   for (int k = 0; k < 2; k++) NT_FOREACH_KIND(nt, kinds[k], id) {
     int parent = w.par[id];
@@ -500,8 +503,11 @@ void an_const_presence(Compiler *c) {
     int ci = const_class_presence(c, id, 1);
     if (!ci) continue;
     c->classes[ci - 1].presence_read = 1;
-    if (nt_kind(nt, c->classes[ci - 1].def_node) == NK_ConstantPathWriteNode && id < (int)nn) own[id] = 1;
+    if (id >= (int)nn) continue;
+    if (!an_class_needs_presence(c, ci - 1)) own[id] = 2;   /* a plain header's class (plain_presence) */
+    else if (nt_kind(nt, c->classes[ci - 1].def_node) == NK_ConstantPathWriteNode) own[id] = 1;
   }
+  plain_headers_free();
   /* Class#subclasses lists the subclasses whose header has run, as CRuby's
      does while classes load (a library walking a class's descendants from
      class bodies sees only those loaded so far): the call asks each
@@ -529,7 +535,8 @@ void an_const_presence(Compiler *c) {
   for (int id = 0; id < (int)nn && id < nt->count; id++) {
     /* (a read a desugar made with its holder's name keeps it) */
     if (cref[id] && !nt_str(nt, id, "const_cref")) nt_node_set_str((NodeTable *)nt, id, "const_cref", cref[id] > 1 ? w.crefs[cref[id] - 2] : "");
-    if (own[id]) nt_node_set_str((NodeTable *)nt, id, "own_presence", "1");
+    if (own[id] == 1) nt_node_set_str((NodeTable *)nt, id, "own_presence", "1");
+    if (own[id] == 2) nt_node_set_str((NodeTable *)nt, id, "plain_presence", "1");
   }
   free(cref); free(own);
   for (int i = 0; i < w.ncrefs; i++) free(w.crefs[i]);
@@ -565,6 +572,89 @@ int an_class_needs_presence(Compiler *c, int ci) {
   if (node >= 0 && nt_kind(c->nt, node) == NK_ConstantPathWriteNode) return 1;
   return c->classes[ci].path_ns || header_in_unplaced_file(c, ci);
 }
+/* A class of the program's own that only plain headers (`class K`, `module
+   K`) open, each a statement the load phase runs at its point in region 0
+   without a condition, is present once the first of them has run, as an
+   assignment makes its constant: a read the program writes ahead of it
+   raises NameError. 1 + that header, or 0 for any other class: one a
+   constant write binds (`K = Class.new`, an alias of it), or a header
+   opens that has no point (in a method, a block, a file loaded from a
+   method or under a condition), whose presence the record cannot tell. A
+   header with the class's leaf name the record does not map to a class
+   counts as one of its own. */
+/* (the table class_first_header answers from, built once per constant
+   pass over every header and constant write at once: per class, 1 + its
+   first header, 0 for none seen, -1 for a class that does not qualify) */
+static int *plain_first, plain_nclasses;
+static const char *class_leaf(const char *full) {
+  const char *l = full ? strrchr(full, ':') : NULL;
+  return l ? l + 1 : full;
+}
+static const Compiler *leaf_c;
+static int leaf_cmp(const void *a, const void *b) {
+  return strcmp(class_leaf(leaf_c->classes[*(const int *)a].name), class_leaf(leaf_c->classes[*(const int *)b].name));
+}
+/* Disqualify each class whose leaf name is `leaf` (`by`: the class indices
+   sorted by leaf) */
+static void plain_drop_leaf(Compiler *c, const int *by, int n, const char *leaf) {
+  int a = 0, b = n;
+  while (a < b) { int m = (a + b) / 2; if (strcmp(class_leaf(c->classes[by[m]].name), leaf) < 0) a = m + 1; else b = m; }
+  for (; a < n && sp_streq(class_leaf(c->classes[by[a]].name), leaf); a++) plain_first[by[a]] = -1;
+}
+static void plain_headers_build(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  int n = c->nclasses, nb = 0;
+  free(plain_first);
+  plain_first = calloc((size_t)(n ? n : 1), sizeof *plain_first);
+  int *by = malloc(sizeof(int) * (size_t)(n ? n : 1));
+  if (!plain_first || !by) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  plain_nclasses = n;
+  for (int ci = 0; ci < n; ci++) {
+    const char *full = c->classes[ci].name;
+    int def = c->classes[ci].def_node;
+    NodeKind dk = def >= 0 ? nt_kind(nt, def) : NK_NONE;
+    if (!full || c->classes[ci].is_builtin_const || builtin_class_id(full) || is_builtin_exception_name(full) ||
+        (dk != NK_ClassNode && dk != NK_ModuleNode)) plain_first[ci] = -1;
+    if (full) by[nb++] = ci;
+  }
+  leaf_c = c;
+  qsort(by, (size_t)nb, sizeof *by, leaf_cmp);
+  NodeKind hk[] = { NK_ClassNode, NK_ModuleNode };
+  for (int k = 0; k < 2; k++) NT_FOREACH_KIND(nt, hk[k], id) {
+    const char *hl = class_leaf(class_def_name(nt, id));
+    if (!hl) continue;
+    int hc = elab_header_class(c, id, NULL, NULL);
+    /* (a header the record maps to no class counts as one of each class
+       with its leaf name) */
+    if (hc < 0 || hc >= n) { plain_drop_leaf(c, by, nb, hl); continue; }
+    if (plain_first[hc] < 0) continue;
+    LoadPoint hp = elab_point_of(c, id);
+    if (hp.region != 0 || elab_point_may(c, id) || elab_in_method_body(c, id)) plain_first[hc] = -1;
+    else if (!plain_first[hc] || elab_cmp(hp, elab_point_of(c, plain_first[hc] - 1)) == PROG_BEFORE) plain_first[hc] = id + 1;
+  }
+  NodeKind wk[] = { NK_ConstantWriteNode, NK_ConstantPathWriteNode };
+  for (int k = 0; k < 2; k++) NT_FOREACH_KIND(nt, wk[k], id) {
+    int t = k ? nt_ref(nt, id, "target") : id;
+    const char *wn = t >= 0 ? nt_str(nt, t, "name") : NULL;
+    if (wn) plain_drop_leaf(c, by, nb, wn);
+  }
+  free(by);
+}
+static void plain_headers_free(void) { free(plain_first); plain_first = NULL; plain_nclasses = 0; }
+static int class_first_header(Compiler *c, int ci) {
+  (void)c;
+  return plain_first && ci >= 0 && ci < plain_nclasses && plain_first[ci] > 0 ? plain_first[ci] : 0;
+}
+/* Is this constant read one the program wrote (parsed, or a copy of one
+   parsed), not one a pass made to test or name a class it already holds
+   (a value path's arms, a rescue's class list)? */
+static int const_read_written(const NodeTable *nt, int id) {
+  for (int k = 0; k < 32 && id >= 0; k++) {
+    if (!nt->orig_lo || id < nt->orig_lo) return 1;
+    id = nt_clone_source(nt, id);
+  }
+  return 0;
+}
 /* The lexical class and its enclosing classes already exist when their
    bodies or methods run. The scope walk owns both of these facts. A path
    builder's constant is bound only once its block has run: a read finds
@@ -579,18 +669,25 @@ static int const_class_presence(Compiler *c, int id, int program) {
   const char *nm = key_name(c, id);
   NodeKind ik = nt_kind(c->nt, id);
   int ci = !nm ? -1 : ik == NK_ConstantReadNode || ik == NK_ConstantPathNode ? const_node_class_index(c, id) : comp_class_index(c, nm);
-  if (!an_class_needs_presence(c, ci)) return 0;
-  int def = c->classes[ci].def_node, in_own = 0;
+  int plain = 0;
+  if (!an_class_needs_presence(c, ci)) {
+    /* (a plain header's class: the constant pass answers each read once and
+       marks those that ask `plain_presence`, so a later ask costs no walk
+       and no rebuild of the record) */
+    if (!program) return ci >= 0 && nt_str(c->nt, id, "plain_presence") ? ci + 1 : 0;
+    plain = const_read_written(c->nt, id) ? class_first_header(c, ci) : 0;
+    if (!plain) return 0;
+  }
+  int def = plain ? plain - 1 : c->classes[ci].def_node, in_own = 0;
   Scope *scope = comp_scope_of(c, id);
   int own = scope && scope->class_id >= 0 ? scope->class_id : id < c->node_cap ? c->node_cbody[id] : -1;
   for (; own >= 0 && !in_own; own = c->classes[own].enclosing_class) in_own = own == ci;
   if (nt_kind(c->nt, def) != NK_ConstantPathWriteNode) {
     if (in_own) return 0;
     if (header_in_unplaced_file(c, ci)) return ci + 1;
-    /* a header a path builder is written under: a read that can run ahead
-       of the header (top-level code, BEGIN, a method or a proc made before
-       it), or after one that may not have run (under a condition), asks its
-       flag */
+    /* a read that can run ahead of the header (top-level code, BEGIN, a
+       method or a proc made before it), or after one that may not have run
+       (under a condition), asks its flag */
     LoadPoint rp = elab_point_from(c, id);
     return rp.region >= 0 && (elab_point_may(c, def) || elab_cmp(rp, elab_point_of(c, def)) != PROG_AFTER) ? ci + 1 : 0;
   }
@@ -620,8 +717,12 @@ ConstReadEffect an_const_read_effect(Compiler *c, int id) {
   NodeKind k = nt_kind(c->nt, id);
   if (!nt_kind_is_constant(k)) return (ConstReadEffect){0};
   LocalVar *lv = comp_const_at(c, id);
+  /* (a read copied after the constant pass, whose class that pass gave no
+     flag, asks none) */
+  int cp = const_class_presence(c, id, 0);
+  if (cp && !an_class_presence_is_read(c, cp - 1)) cp = 0;
   return (ConstReadEffect){ const_has_flag(lv) && (k != NK_ConstantPathNode || const_path_reaches_leaf_const(c, id)) ? lv : NULL,
-                           elab_autoload_read(c, id), const_class_presence(c, id, 0) };
+                           elab_autoload_read(c, id), cp };
 }
 
 /* A definition-only file still runs a header's presence store when a

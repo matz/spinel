@@ -188,6 +188,24 @@ spinel: 1 refusal, nothing written
 spinel: test/reject/array_fresh_row_pushed_later.rb:7: an Array push given a String, which no conversion keeps in its sp_int slot
 spinel: 1 refusal, nothing written
 == test/reject/array_fresh_row_pushed_later.rb [promote] rc=0
+== test/reject/attr_accessor_local_in_singleton_class.rb [default] rc=1
+spinel: test/reject/attr_accessor_local_in_singleton_class.rb:6: attr_accessor with a non-literal name is not supported; use literal Symbols or Strings (see docs/limitations.md)
+spinel: 1 refusal, nothing written
+== test/reject/attr_accessor_local_in_singleton_class.rb [promote] rc=1
+spinel: test/reject/attr_accessor_local_in_singleton_class.rb:6: attr_accessor with a non-literal name is not supported; use literal Symbols or Strings (see docs/limitations.md)
+spinel: 1 refusal, nothing written
+== test/reject/attr_accessor_loop_in_class_method.rb [default] rc=1
+spinel: test/reject/attr_accessor_loop_in_class_method.rb:5: attr_accessor with a non-literal name is not supported; use literal Symbols or Strings (see docs/limitations.md)
+spinel: 1 refusal, nothing written
+== test/reject/attr_accessor_loop_in_class_method.rb [promote] rc=1
+spinel: test/reject/attr_accessor_loop_in_class_method.rb:5: attr_accessor with a non-literal name is not supported; use literal Symbols or Strings (see docs/limitations.md)
+spinel: 1 refusal, nothing written
+== test/reject/attr_splat_in_singleton_class.rb [default] rc=1
+spinel: test/reject/attr_splat_in_singleton_class.rb:5: attr_accessor with a splat of anything but a constant Array literal of Symbols or Strings (written once, ahead of the call, and never changed) is not supported; name the attributes (see docs/limitations.md)
+spinel: 1 refusal, nothing written
+== test/reject/attr_splat_in_singleton_class.rb [promote] rc=1
+spinel: test/reject/attr_splat_in_singleton_class.rb:5: attr_accessor with a splat of anything but a constant Array literal of Symbols or Strings (written once, ahead of the call, and never changed) is not supported; name the attributes (see docs/limitations.md)
+spinel: 1 refusal, nothing written
 == test/reject/bare_const_unreachable_const_missing.rb [default] rc=1
 spinel: test/reject/bare_const_unreachable_const_missing.rb:9: uninitialized constant B::X (NameError): the program defines it only as A::X, which CRuby's lookup from B (its lexical scope, then its ancestors) does not reach; CRuby then calls const_missing (or raises NameError), which spinel does not follow here
 == test/reject/bare_const_unreachable_const_missing.rb [promote] rc=1
@@ -690,24 +708,6 @@ spinel: 2 refusals, nothing written
 spinel: test/reject/class_new_variable_rest_write_included.rb:6: Class.new with a non-constant superclass is not supported; use a constant superclass (see docs/limitations.md)
 spinel: test/reject/class_new_variable_rest_write_included.rb:6: Class.new with a non-constant superclass is not supported; use a constant superclass (see docs/limitations.md)
 spinel: 2 refusals, nothing written
-== test/reject/class_new_without_block_iterator.rb [default] rc=1
-spinel: test/reject/class_new_without_block_iterator.rb:5: Class.new(parent) is not supported by AOT compilation: the class graph, ancestor chain, and method/ivar layout are baked at compile time. Declare the class with `class ... end` instead (see docs/limitations.md)
-spinel: 1 refusal, nothing written
-== test/reject/class_new_without_block_iterator.rb [promote] rc=1
-spinel: test/reject/class_new_without_block_iterator.rb:5: Class.new(parent) is not supported by AOT compilation: the class graph, ancestor chain, and method/ivar layout are baked at compile time. Declare the class with `class ... end` instead (see docs/limitations.md)
-spinel: 1 refusal, nothing written
-== test/reject/class_new_without_block_loop.rb [default] rc=1
-spinel: test/reject/class_new_without_block_loop.rb:6: Class.new(parent) is not supported by AOT compilation: the class graph, ancestor chain, and method/ivar layout are baked at compile time. Declare the class with `class ... end` instead (see docs/limitations.md)
-spinel: 1 refusal, nothing written
-== test/reject/class_new_without_block_loop.rb [promote] rc=1
-spinel: test/reject/class_new_without_block_loop.rb:6: Class.new(parent) is not supported by AOT compilation: the class graph, ancestor chain, and method/ivar layout are baked at compile time. Declare the class with `class ... end` instead (see docs/limitations.md)
-spinel: 1 refusal, nothing written
-== test/reject/class_new_without_block_repeated.rb [default] rc=1
-spinel: test/reject/class_new_without_block_repeated.rb:4: Class.new(parent) is not supported by AOT compilation: the class graph, ancestor chain, and method/ivar layout are baked at compile time. Declare the class with `class ... end` instead (see docs/limitations.md)
-spinel: 1 refusal, nothing written
-== test/reject/class_new_without_block_repeated.rb [promote] rc=1
-spinel: test/reject/class_new_without_block_repeated.rb:4: Class.new(parent) is not supported by AOT compilation: the class graph, ancestor chain, and method/ivar layout are baked at compile time. Declare the class with `class ... end` instead (see docs/limitations.md)
-spinel: 1 refusal, nothing written
 == test/reject/class_paren_superclass_rescue.rb [default] rc=1
 spinel: test/reject/class_paren_superclass_rescue.rb:8: unsupported superclass expression (RescueModifierNode): write the superclass as a constant
 == test/reject/class_paren_superclass_rescue.rb [promote] rc=1
@@ -1187,6 +1187,42 @@ spinel: test/reject/forwarding_super_yielding_optional.rb:5: `super(...)` into a
 spinel: 1 refusal, nothing written
 == test/reject/forwarding_super_yielding_optional.rb [promote] rc=1
 spinel: test/reject/forwarding_super_yielding_optional.rb:5: `super(...)` into a method that yields and takes an optional or *rest parameter: the forwarded arguments cannot leave one out
+spinel: 1 refusal, nothing written
+== test/reject/fwd_new_class_value_record_anon_data.rb [default] rc=1
+spinel: test/reject/fwd_new_class_value_record_anon_data.rb:10: `...` forwarded to `new` on a class value, where an initialize takes keywords and a Struct or Data class could be constructed
+spinel: 1 refusal, nothing written
+== test/reject/fwd_new_class_value_record_anon_data.rb [promote] rc=1
+spinel: test/reject/fwd_new_class_value_record_anon_data.rb:10: `...` forwarded to `new` on a class value, where an initialize takes keywords and a Struct or Data class could be constructed
+spinel: 1 refusal, nothing written
+== test/reject/fwd_new_class_value_record_anon_struct.rb [default] rc=1
+spinel: test/reject/fwd_new_class_value_record_anon_struct.rb:10: `...` forwarded to `new` on a class value, where an initialize takes keywords and a Struct or Data class could be constructed
+spinel: 1 refusal, nothing written
+== test/reject/fwd_new_class_value_record_anon_struct.rb [promote] rc=1
+spinel: test/reject/fwd_new_class_value_record_anon_struct.rb:10: `...` forwarded to `new` on a class value, where an initialize takes keywords and a Struct or Data class could be constructed
+spinel: 1 refusal, nothing written
+== test/reject/fwd_new_class_value_record_data.rb [default] rc=1
+spinel: test/reject/fwd_new_class_value_record_data.rb:11: `...` forwarded to `new` on a class value, where an initialize takes keywords and a Struct or Data class could be constructed
+spinel: 1 refusal, nothing written
+== test/reject/fwd_new_class_value_record_data.rb [promote] rc=1
+spinel: test/reject/fwd_new_class_value_record_data.rb:11: `...` forwarded to `new` on a class value, where an initialize takes keywords and a Struct or Data class could be constructed
+spinel: 1 refusal, nothing written
+== test/reject/fwd_new_class_value_record_itself.rb [default] rc=1
+spinel: test/reject/fwd_new_class_value_record_itself.rb:11: `...` forwarded to `new` on a class value, where an initialize takes keywords and a Struct or Data class could be constructed
+spinel: 1 refusal, nothing written
+== test/reject/fwd_new_class_value_record_itself.rb [promote] rc=1
+spinel: test/reject/fwd_new_class_value_record_itself.rb:11: `...` forwarded to `new` on a class value, where an initialize takes keywords and a Struct or Data class could be constructed
+spinel: 1 refusal, nothing written
+== test/reject/fwd_new_class_value_record_tap.rb [default] rc=1
+spinel: test/reject/fwd_new_class_value_record_tap.rb:11: `...` forwarded to `new` on a class value, where an initialize takes keywords and a Struct or Data class could be constructed
+spinel: 1 refusal, nothing written
+== test/reject/fwd_new_class_value_record_tap.rb [promote] rc=1
+spinel: test/reject/fwd_new_class_value_record_tap.rb:11: `...` forwarded to `new` on a class value, where an initialize takes keywords and a Struct or Data class could be constructed
+spinel: 1 refusal, nothing written
+== test/reject/fwd_new_class_value_record_tap_splat.rb [default] rc=1
+spinel: test/reject/fwd_new_class_value_record_tap_splat.rb:11: `...` forwarded to `new` on a class value, where an initialize takes keywords and a Struct or Data class could be constructed
+spinel: 1 refusal, nothing written
+== test/reject/fwd_new_class_value_record_tap_splat.rb [promote] rc=1
+spinel: test/reject/fwd_new_class_value_record_tap_splat.rb:11: `...` forwarded to `new` on a class value, where an initialize takes keywords and a Struct or Data class could be constructed
 spinel: 1 refusal, nothing written
 == test/reject/include_module_from_expression.rb [default] rc=1
 spinel: test/reject/include_module_from_expression.rb:9: `include` of a module named by an expression, not a constant, is not supported (the mixin is resolved at compile time)
@@ -2232,12 +2268,6 @@ spinel: 1 refusal, nothing written
 == test/reject/typed_array_include_user_eq.rb [promote] rc=1
 spinel: test/reject/typed_array_include_user_eq.rb:7: Array#include? of a user object defining == in a typed Array
 spinel: 1 refusal, nothing written
-== test/reject/typed_array_kept_by_struct_into_boxed_param_store.rb [default] rc=1
-spinel: test/reject/typed_array_kept_by_struct_into_boxed_param_store.rb:11: an Array[Integer] is passed to `m`'s parameter `arr`, which the method stores elements of other kinds into: the caller's array cannot hold them, and the store would go to a copy it never sees. Build the argument where the call can follow it (an array literal or a new array, through locals and method values), so it is widened with the parameter.
-spinel: 1 refusal, nothing written
-== test/reject/typed_array_kept_by_struct_into_boxed_param_store.rb [promote] rc=1
-spinel: test/reject/typed_array_kept_by_struct_into_boxed_param_store.rb:11: an Array[Integer] is passed to `m`'s parameter `arr`, which the method stores elements of other kinds into: the caller's array cannot hold them, and the store would go to a copy it never sees. Build the argument where the call can follow it (an array literal or a new array, through locals and method values), so it is widened with the parameter.
-spinel: 1 refusal, nothing written
 == test/reject/unsupported_node_kind.rb [default] rc=1
 spinel: test/reject/unsupported_node_kind.rb:10: warning: regex literal in condition
 spinel: test/reject/unsupported_node_kind.rb:5: unsupported condition (non-bool): FlipFlopNode at test/reject/unsupported_node_kind.rb:5:8
@@ -2248,6 +2278,12 @@ spinel: test/reject/unsupported_node_kind.rb:10: warning: regex literal in condi
 spinel: test/reject/unsupported_node_kind.rb:5: unsupported condition (non-bool): FlipFlopNode at test/reject/unsupported_node_kind.rb:5:8
 spinel: test/reject/unsupported_node_kind.rb:10: unsupported condition (non-bool): MatchLastLineNode at test/reject/unsupported_node_kind.rb:10:8
 spinel: 2 refusals, nothing written
+== test/reject/writer_hold_when_split_declines.rb [default] rc=1
+spinel: test/reject/writer_hold_when_split_declines.rb:75: undefined method 'title' for a Class: no class in the program defines a class method 'title' (NoMethodError)
+spinel: 1 refusal, nothing written
+== test/reject/writer_hold_when_split_declines.rb [promote] rc=1
+spinel: test/reject/writer_hold_when_split_declines.rb:75: undefined method 'title' for a Class: no class in the program defines a class method 'title' (NoMethodError)
+spinel: 1 refusal, nothing written
 == test/reject/yield_method_only_in_subclass.rb [default] rc=1
 spinel: test/reject/yield_method_only_in_subclass.rb:11: `with_wrapping` takes a block and is defined only in subclasses of `Order`; define it in `Order` too (for example as `raise NotImplementedError`)
 spinel: 1 refusal, nothing written

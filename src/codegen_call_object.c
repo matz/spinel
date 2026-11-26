@@ -2776,7 +2776,7 @@ int emit_call_object_override_arms(Compiler *c, int id, Buf *b, const NodeTable 
         {
           char head[200]; snprintf(head, sizeof head, "%s '%s' for an instance of ", bsv ? "undefined local variable or method" : "undefined method", bsnm);
           buf_printf(b, "sp_raise_cls(\"%s\", ", bsv ? "NameError" : "NoMethodError");
-          if (!anon_class_text(c, bsci, head, b)) buf_printf(b, "(&(\"\\xff\" \"%s%s\")[1])", head, bscn);
+          if (!anon_class_text(c, bsci, NULL, head, b)) buf_printf(b, "(&(\"\\xff\" \"%s%s\")[1])", head, bscn);
           buf_printf(b, "); %s; })", default_value_from_compiler(c, repr_of(c, id).as_ty));
         }
         return 1;
@@ -2961,8 +2961,16 @@ int emit_call_print_arms(Compiler *c, Buf *b, const NodeTable *nt, const char *n
       !comp_ty_value_obj(c, rt)) {
     /* default Object#to_s: #<Name:0xADDR> */
     int dcid = ty_object_class(rt);
-    char drn[512], darg[96];
-    obj_default_name(c, dcid, drn, sizeof drn, darg, sizeof darg);
+    char drn[512], darg[512];
+    /* (an object of a site class's family is held: its class names it) */
+    if (cplan_rt_family(c, dcid)) {
+      char ho[24]; snprintf(ho, sizeof ho, "_t%d", ++g_tmp);
+      obj_default_name(c, dcid, ho, drn, sizeof drn, darg, sizeof darg);
+      buf_printf(b, "({ void *%s = (void *)(", ho); emit_expr(c, recv, b);
+      buf_printf(b, "); sp_sprintf(\"#<%s:0x%%016llx>\", %s(unsigned long long)(uintptr_t)%s); })", drn, darg, ho);
+      return 1;
+    }
+    obj_default_name(c, dcid, NULL, drn, sizeof drn, darg, sizeof darg);
     buf_printf(b, "sp_sprintf(\"#<%s:0x%%016llx>\", %s(unsigned long long)(uintptr_t)(", drn, darg);
     emit_expr(c, recv, b); buf_puts(b, "))");
     return 1;
@@ -3424,12 +3432,13 @@ static void emit_ivar_set_recv(Compiler *c, int recv, int t, int held, Buf *b) {
 /* Hold the receiver and value before the frozen check and write.
    Reflection-only slots also keep an assigned bit beside their value. */
 static void emit_reflect_ivar_set(Compiler *c, int id, int recv, int value, int cid,
-                                  const char *sym, TyKind mt, int is_val, Buf *b) {
+                                  const char *sym, TyKind mt, int is_val, int ptr_self, Buf *b) {
   int tr = ++g_tmp, tv = ++g_tmp;
   buf_printf(b, "({ sp_%s *_t%d = ", c->classes[cid].c_name, tr);
-  if (is_val) buf_puts(b, "&(");
+  /* (a value object lives on the stack, behind a pointer in its initialize: never rooted) */
+  if (is_val && !ptr_self) buf_puts(b, "&(");
   emit_expr(c, recv, b);
-  if (is_val) buf_puts(b, ")");
+  if (is_val && !ptr_self) buf_puts(b, ")");
   buf_puts(b, "; ");
   if (!is_val) buf_printf(b, "SP_GC_ROOT(_t%d); ", tr);
   /* a number field with a nil bit takes the value with its nil */
@@ -3473,6 +3482,8 @@ static void emit_reflect_ivar_set(Compiler *c, int id, int recv, int value, int 
   else if (nb) { oint_open(c, id, mt, b); buf_puts(b, val); oint_close(c, id, b); }
   else if (ivar_set_slot_read(c, id, mt)) emit_strbuf_node_read(c, id, val, b);
   else if (mt == TY_STRBUF && rp.as_ty == TY_STRING && rp.kind != RK_BOXED) buf_puts(b, val);
+  /* (a statement's value nobody reads: no conversion into the call's type) */
+  else if (comp_value_discarded_stored(c, id)) buf_puts(b, "0");
   else emit_coerce_text(c, id, mt, rp.as_ty, CO_HOLD, val, "an instance variable write result", b);
   buf_puts(b, "; })");
 }
@@ -3513,6 +3524,9 @@ int emit_object_ivar_call(Compiler *c, int id, const char *name, int recv, TyKin
     if (!is_set && argc != 1) { unsupported(c, id, "instance_variable_get takes exactly 1 argument"); return 1; }
     int is_val = repr_of(c, recv).kind == RK_VOBJ;
     NodeKind rk = nt_kind(nt, recv);
+    /* (a value object's self where the method takes it by pointer, as its initialize does: the field access a
+       plain `@x = v` writes through g_self_deref; still a value object, so never rooted) */
+    int ptr_self = is_val && (recv < 0 || rk == NK_SelfNode) && g_self_deref && sp_streq(g_self_deref, "->");
     int recv_lvalue = (rk == NK_LocalVariableReadNode ||
                               rk == NK_InstanceVariableReadNode || rk == NK_SelfNode);
     /* A name that is no ivar name (`"bad"`, `:@1`) raises NameError at
@@ -3541,10 +3555,10 @@ int emit_object_ivar_call(Compiler *c, int id, const char *name, int recv, TyKin
         return 1;
       }
       TyKind mt = c->classes[cid].ivar_types[mi];
-      const char *acc = is_val ? "." : "->";
+      const char *acc = is_val && !ptr_self ? "." : "->";
       if (is_set) {
         if (mt == TY_STRBUF || ivar_set_kind(c, cid, sym) == 3) {
-          emit_reflect_ivar_set(c, id, recv, argv[1], cid, sym, mt, is_val, b);
+          emit_reflect_ivar_set(c, id, recv, argv[1], cid, sym, mt, is_val, ptr_self, b);
           return 1;
         }
         /* the write is a mutation like any other: a frozen receiver raises
@@ -3576,12 +3590,13 @@ int emit_object_ivar_call(Compiler *c, int id, const char *name, int recv, TyKin
           buf_puts(b, "})");
           return 1;
         }
-        if (oint_kind(mt) && ivar_has_nilbit(c, cid, mi) && !is_val) {
+        if (oint_kind(mt) && ivar_has_nilbit(c, cid, mi) && (!is_val || ptr_self)) {
           /* the bit beside the field: the receiver held in a temp for the
-             two writes, rooted unless held as for the plain store */
+             two writes, rooted unless held as for the plain store (a value
+             object's self, on the stack, never) */
           int tfo = ++g_tmp;
           buf_printf(b, "({ sp_%s *_t%d = ", c->classes[cid].c_name, tfo);
-          emit_ivar_set_recv(c, recv, tfo, recv_lvalue, b);
+          emit_ivar_set_recv(c, recv, tfo, recv_lvalue || ptr_self, b);
           buf_printf(b, "char objp_unused_%d = 0; (void)objp_unused_%d; ", tfo, tfo);
           char objp[40]; snprintf(objp, sizeof objp, "_t%d->", tfo);
           buf_printf(b, "%siv_%s = ", objp, iv_c(c->classes[cid].ivars[mi] + 1));

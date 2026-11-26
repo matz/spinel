@@ -186,7 +186,7 @@ c2_rescue_cvar.rb:7 call f: none (pure)
 == c3_reader_literal_recv.rb
 c3_reader_literal_recv.rb:2 call attr_reader: none (pure)
 c3_reader_literal_recv.rb:6 call attr_reader: none (pure)
-c3_reader_literal_recv.rb:10 call bump: none (pure)
+c3_reader_literal_recv.rb:10 call bump: none (tail)
 c3_reader_literal_recv.rb:10 call bump: none (pure)
 c3_reader_literal_recv.rb:10 call bump: none (pure)
 c3_reader_literal_recv.rb:15 array: 0 @@x HOLD(by 1) across | 1 o.w AHEAD code | guard=call steps=0

@@ -1700,6 +1700,10 @@ static const BuiltinOp bop_rows[] = {
   { TY_QUEUE, "length",  0, BOP_ARGC_ANY, BF_ANY, TY_INT,   BOPE_NONE },
   { TY_QUEUE, "max",     0, 0,            BF_ANY, TY_INT,   BOPE_TEMPLATE, "sp_Queue_max($r)" },
   { TY_QUEUE, "max",     0, BOP_ARGC_ANY, BF_ANY, TY_INT,   BOPE_NONE },
+  { TY_QUEUE, "max=",    1, 1,            BF_ANY, TY_INT,   BOPE_TEMPLATE, "sp_Queue_set_max($r, $i0)", BOP_K(TY_INT) },
+  /* another argument converts at run time, raising CRuby's TypeError */
+  { TY_QUEUE, "max=",    1, 1,            BF_ANY, TY_INT,   BOPE_TEMPLATE, "({ sp_queue *_t$t = $r; SP_GC_ROOT(_t$t); sp_RbVal _t$u = $b0; sp_Queue_max_writable(_t$t); sp_Queue_set_max(_t$t, sp_poly_arg_int_chk(_t$u)); })" },
+  { TY_QUEUE, "max=",    0, BOP_ARGC_ANY, BF_ANY, TY_INT,   BOPE_NONE },
   { TY_QUEUE, "num_waiting", 0, 0,            BF_ANY, TY_INT, BOPE_TEMPLATE, "sp_Queue_num_waiting($r)" },
   { TY_QUEUE, "num_waiting", 0, BOP_ARGC_ANY, BF_ANY, TY_INT, BOPE_NONE },
   { TY_QUEUE, "empty?",  0, 0,            BF_ANY, TY_BOOL,  BOPE_TEMPLATE, "sp_Queue_empty($r)" },
@@ -1809,7 +1813,7 @@ static const BuiltinOp bop_rows[] = {
   { TY_IO, "sysseek",        0, 127, BF_ANY, TY_INT,      BOPE_NONE },
   { TY_IO, "size",           0,   0, BF_ANY, TY_INT,      BOPE_TEMPLATE, "sp_oint_arg(sp_stat_size($r))", TY_UNKNOWN },  /* nil only when the stat failed */
   { TY_IO, "size",           0, 127, BF_ANY, TY_INT,      BOPE_NONE },
-  { TY_IO, "chmod",          1,   1, BF_ANY, TY_INT,      BOPE_TEMPLATE, "({ sp_file_chmod($i0, sp_File_path($r)); (sp_int)0; })", TY_UNKNOWN },
+  { TY_IO, "chmod",          1,   1, BF_ANY, TY_INT,      BOPE_TEMPLATE, "sp_File_chmod($r, $i0)", TY_UNKNOWN },
   { TY_IO, "chmod",          0, 127, BF_ANY, TY_INT,      BOPE_NONE },
   { TY_IO, "mode",           0,   0, BF_ANY, TY_INT,      BOPE_TEMPLATE, "sp_stat_mode($r)", TY_UNKNOWN },
   { TY_IO, "mode",           0, 127, BF_ANY, TY_INT,      BOPE_NONE },
@@ -1929,7 +1933,7 @@ static const BuiltinOp bop_rows[] = {
   { TY_IO, "atime",          0, 127, BF_ANY, TY_TIME,     BOPE_NONE },
   { TY_IO, "ctime",          0,   0, BF_ANY, TY_TIME,     BOPE_TEMPLATE, "sp_stat_handle_time($r, 2)", TY_UNKNOWN },
   { TY_IO, "ctime",          0, 127, BF_ANY, TY_TIME,     BOPE_NONE },
-  { TY_IO, "birthtime",      0,   0, BF_ANY, TY_TIME,     BOPE_TEMPLATE, "sp_file_birthtime(sp_File_path($r))", TY_UNKNOWN },
+  { TY_IO, "birthtime",      0,   0, BF_ANY, TY_TIME,     BOPE_TEMPLATE, "sp_io_birthtime($r)", TY_UNKNOWN },
   { TY_IO, "birthtime",      0, 127, BF_ANY, TY_TIME,     BOPE_NONE },
   /* io/console's size, [rows, cols], and its writer, which answers its
      Integer Array: a writer's other operand is left to the refusal after
@@ -3266,6 +3270,10 @@ static const BuiltinClassOp bop_class_rows[] = {
   { "IO", { TY_CLASS, "copy_stream", 0, 127, BF_ANY, TY_INT,        BOPE_NONE } },
   { "IO", { TY_CLASS, "sysopen",     1,   3, BF_ANY, TY_INT,        BOPE_IO_SYSOPEN } },
   { "IO", { TY_CLASS, "sysopen",     0, 127, BF_ANY, TY_INT,        BOPE_NONE } },
+  /* a Class.new or Module.new evaluated more than once, the desugar's
+     lowering left with no argument and no block (cplan_class_new) */
+  { "Class",  { TY_CLASS, "new", 0, 0, BF_NONE, TY_CLASS, BOPE_CLASS_NEW, NULL, 0, 0, BOPF_OWN_CLASS } },
+  { "Module", { TY_CLASS, "new", 0, 0, BF_NONE, TY_CLASS, BOPE_CLASS_NEW, NULL, 0, 0, BOPF_OWN_CLASS } },
 };
 
 const char *bop_class_owner(const char *cls, const char *name) {
@@ -3379,6 +3387,12 @@ int bop_below_object_answers(const char *name) {
   for (int i = -1; (r = bop_name_row_next(name, &i));)
     if (bop_row_below_object(r)) return 1;
   return 0;
+}
+
+/* See builtin_ops.h. */
+int bop_any_answers(const char *name) {
+  int i = -1;
+  return !name || builtin_object_method_known(name) || bop_core_name(name) || bop_name_row_next(name, &i);
 }
 
 /* See builtin_ops.h. */

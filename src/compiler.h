@@ -173,6 +173,10 @@ typedef struct {
    such a nil can be stored THROUGH this name, so the names it was assigned
    or bound from reach it too (mark_elem_slot). */
 enum { NIE_MARKED = 1, NIE_STORED = 2, NIE_REACH = 4 };
+/* The literal indices of a rest's elements whose stores are kept apart
+   (LocalVar.rest_elem_at): the first REST_ELEM_HEAD and the last
+   REST_ELEM_TAIL. ELEM_ANY: an index not known, or past them. */
+enum { REST_ELEM_HEAD = 4, REST_ELEM_TAIL = 2, ELEM_ANY = -1000 };
 typedef struct {
   char *name;       /* Ruby local name (without sigil) */
   char *wname;      /* (a parameter) the name the program wrote where a pass renamed it
@@ -305,6 +309,17 @@ typedef struct {
                        as it lands (#4481), and a concat of no Array raises
                        rather than stores. What a boxed argument's arrays
                        widen for (widen_boxed_array_sources). */
+  TyKind rest_elem_store; /* (a method's rest) the element type a store
+                       through one of the rest's elements carries
+                       (`r[i] << 1`), unified as boxed_push_elem is: the
+                       binding widens, for it, the arrays each call hands
+                       the rest (widen_rest_arg_arrays). */
+  TyKind rest_elem_at[REST_ELEM_HEAD + REST_ELEM_TAIL]; /* (a method's rest)
+                       the same, of a store through the element at a literal
+                       index (`r[0] << 1`, `r.last`): 0 to REST_ELEM_HEAD - 1
+                       first, then -1 to -REST_ELEM_TAIL. The binding widens
+                       for it only the array a call lays there, where the
+                       count is the call's own; another index counts as any. */
   TyKind boxed_store_key, boxed_store_val; /* (params, boxed) the key and the
                        value an element write through this BOXED parameter
                        stores, unified as boxed_push_elem is: the evidence
@@ -871,6 +886,7 @@ typedef struct {
 } NameIdx;
 int name_idx_find(NameIdx *x, char *const *list, int n, const char *name);
 
+enum { RT_SITE_NONE, RT_SITE_OWN, RT_SITE_BARE };   /* ClassInfo.rt_site */
 typedef struct {
   char *name;          /* class name ("Point"); also drives semantic checks
                           (builtin reopen, name matching) and Ruby-visible output */
@@ -1053,6 +1069,18 @@ typedef struct {
   int nmembers;        /* is_struct/is_data: ivars[0..nmembers) back the
                           members, in declaration order; any later ivar is an
                           attr's or a method's own instance variable. */
+  int rt_site;         /* the site class of a Class.new or Module.new evaluated
+                          more than once, whose family and body let each
+                          evaluation make a class of its own at run time, with
+                          this one's code and layout: RT_SITE_BARE for a call
+                          with no block, which is one only where the program
+                          answers class identity per evaluation, RT_SITE_OWN
+                          for any other (register_rt_sites;
+                          read through cplan_rt_site) */
+  unsigned char rt_family; /* this class or one below it is a site class
+                          (cplan_rt_site): its instances may carry a class made
+                          at run time (register_rt_sites; read through
+                          cplan_rt_family) */
   int is_anon_struct;  /* k = Struct.new(:a, :b): synthesized for a local-held
                           anonymous struct class; #inspect omits the name. */
   int is_singleton_of; /* +1-based parent class index (0 = not one): a
@@ -1464,6 +1492,8 @@ typedef struct {
      Class object as member k + cls_fact_ncls, and a class registered after
      (k >= cls_fact_ncls) is in no set */
   int cls_fact_ncls;
+  struct AttrCallIndex *attr_call_ix;   /* per writer name, its calls by the classes the class facts say their receiver may hold (analyze_pass.c, attr_writer_calls), made on first ask */
+  struct IvarWalkMemo *ivar_walk_memo;   /* per class ivar, the source walk's answers from a read, kept while no fact moves (analyze_pass.c, ivar_src_walk), made on first ask */
   struct CplanMemo *cplan_memo;   /* the call plans kept per node where the node is read as itself, and the storage the plans handed out point into (call_plan.c), made on first use */
   struct SendOwners *send_owners; int nsend_owners, csend_owners;   /* per send name, the builtin classes the tables give as answering it (cplan_send_split_owners) */
   unsigned long long (*cls_bk_sub)[CLS_BK_WORDS]; unsigned char *cls_bk_sub_ok;   /* per builtin class, the mask of it and the classes below it, made on first ask (cls_bk_subtree) */
@@ -1592,6 +1622,15 @@ typedef struct {
   int *anon_struct_ids;
   int n_anon_struct_ids, anon_struct_ids_valid;
   int has_anonymous_classes; /* Class.new identities with execution-time names */
+  int has_rt_classes;  /* some class is a run-time class's site (cplan_rt_site) */
+  int rt_identity_per_eval; /* the program answers class identity per evaluation: no
+                          repeated Class.new with a block, Struct.new or
+                          Data.define keeps one class for every evaluation
+                          (register_rt_sites; read by cplan_rt_site) */
+  ANameHash *rt_method_runs; /* [rt_method_runs_n] per scope, the locals a read of
+                          which may run a Method held in it (cplan_method_value_runs):
+                          one walk of the program, built at the first lookup */
+  int rt_method_runs_n;
   struct UserMethodKinds { char name[32]; int kinds; } user_methods[8];   /* the UDM_ kinds of the program's own methods of a name, by name (an_user_method_kinds) */
   int nuser_methods;
 
@@ -2843,6 +2882,8 @@ const ClsSet *cls_fact_node(Compiler *c, int node);
    class set's (cls_set_has), not this. */
 int cls_fact_may_hold_builtin(Compiler *c, int node, int core);
 void cplan_send_owners_free(Compiler *c);   /* call_plan.c: the memo of the builtin classes that answer a send's name */
+void attr_call_index_free(Compiler *c);   /* analyze_pass.c: the index of the writer calls by receiver class */
+void ivar_walk_memo_free(Compiler *c);   /* analyze_pass.c: the source walk's answers per class ivar */
 void cplan_memo_free(Compiler *c);   /* call_plan.c: the plans kept per node and the storage the plans handed out point into */
 /* Is class k one the fact bounds: a class the program defines, whose
    instances the pass follows from their construction? A reopened builtin's,
@@ -2917,6 +2958,9 @@ int        comp_enum_answers_first(Compiler *c, int id, int cid, const char *nam
 int        comp_comparable_answers_first(Compiler *c, int id, int cid, const char *name);
 int        comp_comparable_reaches(Compiler *c, int cid);
 int        comp_enum_reaches(Compiler *c, int cid);   /* Enumerable among its ancestors */
+/* The one write of constant `name` in the program (a ConstantWriteNode), or -1 where it is written
+   never or more than once: an alias (`Impl = ::Hash`, `Impl = Base`) is followed through it. */
+int        const_single_write(Compiler *c, const char *name);   /* analyze_scope.c */
 int        class_builtin_parent(Compiler *c, int cid);   /* codegen.c: the builtin class above the user chain of the class */
 int        class_is_exc_subclass(Compiler *c, int ci);   /* analyze.c */
 int        comp_plain_class(Compiler *c, int cid);    /* only Object's and Kernel's builtin methods behind the class: no core class or core module among its ancestors */

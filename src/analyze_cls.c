@@ -46,6 +46,7 @@
 #include <limits.h>
 #include "builtin_names.h"
 #include "call_plan.h"
+#include "codegen_call_arms.h"
 #include "method_table_check.h"
 
 int class_has_exc_name(Compiler *c, int ci);   /* codegen.c */
@@ -2014,9 +2015,32 @@ static void cf_each_yields(CF *f, int recv_el, int pe) {
     for (int y = 0; y < CF_YARGS; y++) cf_flow(f, f->yarg_el[mi][y], pe);
   }
 }
+/* May the value at x be an instance of builtin class `core` or of a class below it? Yes unless the set names
+   builtin classes and none of them is: every class, a class of the program's (it may be below `core`, or
+   reopen it) and no value yet rule nothing out, as cls_fact_may_hold_builtin reads a fact. */
+static int cf_may_be_core(CF *f, int x, int core) {
+  int ps = x >= 0 ? cf_set_of(f, x) : CF_ALL;
+  if (ps == CF_ALL || ps == CF_EMPTY || f->pool[ps].n || f->pool[ps].os) return 1;
+  const unsigned long long *sub = cls_bk_subtree(f->c, core);
+  for (int i = 0; i < CLS_BK_WORDS; i++) if (f->pool[ps].bk[i] & sub[i]) return 1;
+  return 0;
+}
+/* May `recv[...] = x` put the elements of x into the receiver? An Array's `a[i, n] = x` and `a[i..j] = x` do.
+   `a[i] = x` and a Hash's `h[k] = x` keep x whole, as one element. A splat may spread to either form. */
+static int cf_index_assign_splices(CF *f, int recv_el, const int *argv, int argc) {
+  if (!cf_may_be_core(f, recv_el, CORE_ARRAY)) return 0;
+  int n = 0, idx = -1;
+  for (int i = 0; i < argc; i++) {
+    NodeKind k = nt_kind(f->nt, argv[i]);
+    if (k == NK_BlockArgumentNode) continue;
+    if (k == NK_SplatNode) return 1;
+    if (n++ == 0) idx = argv[i];
+  }
+  return n != 2 || cf_may_be_core(f, idx, CORE_RANGE);
+}
 /* the class-fact rule of one share kind (bop_share_kinds): what the
    call's value is made of; known cleared for a kind with no rule */
-static void cf_share_kind_rule(CF *f, int sh, const char *nm, int v, int recv_el, const int *pos, int npos, int blk, int has_blk, int *known) {
+static void cf_share_kind_rule(CF *f, int sh, int v, int recv_el, const int *pos, int npos, int blk, int has_blk, int splices, int *known) {
   switch (sh) {
   case BSH_PURE: case BSH_ITER_FRESH:
     cf_add_set(f, v, cf_bv_set(f));
@@ -2044,7 +2068,7 @@ static void cf_share_kind_rule(CF *f, int sh, const char *nm, int v, int recv_el
       cf_store(f, recv_el, t);
     }
     /* `a[i, n] = [x]` and `a[i..j] = [x]` put the elements of the last argument into the receiver */
-    else if (npos > 0 && is_index_assign(nm)) {
+    else if (npos > 0 && splices) {
       int t = cf_entry(f, -(v + 2), "#as");
       cf_load(f, pos[npos - 1], t);
       cf_store(f, recv_el, t);
@@ -2295,7 +2319,8 @@ static void cf_builtin_rule(CF *f, int v, int recv_el, const int *argv, int argc
     cf_load(f, nt_ref(nt, argv[i], "expression"), spl);
   }
   int has_blk = blk >= 0 && nt_kind(nt, blk) == NK_BlockNode;
-  for (int i = 0; i < nk && known; i++) cf_share_kind_rule(f, kinds[i], nm, v, recv_el, pos, npos, blk, has_blk, &known);
+  int splices = nm && is_index_assign(nm) && cf_index_assign_splices(f, recv_el, argv, argc);
+  for (int i = 0; i < nk && known; i++) cf_share_kind_rule(f, kinds[i], v, recv_el, pos, npos, blk, has_blk, splices, &known);
   /* an iterator may answer an Enumerator, whatever its row says it answers (`[].each` with no block is not the
      receiver, `lazy` and `chunk` are Enumerators with one), and so do to_enum and lazy */
   int enumer = nm && (is_enumerator_maker(nm) || is_lazy_name(nm));
@@ -2922,7 +2947,10 @@ static void cf_call_known(CF *f, int v, int pidx, int recv_el, const char *nm, c
     }
     int tl = call_target(c, v, -1, nm, CT_TOP, NULL);
     if (tl >= 0 && CF_UT(tl)) continue;
-    if (comp_method_in_chain(c, k, "method_missing", NULL) >= 0) {
+    /* (one of Object's public methods is found before the hook; on a
+       blank slate, one of BasicObject's own) */
+    if (comp_method_in_chain(c, k, "method_missing", NULL) >= 0 &&
+        !(class_is_blank_slate(c, k) ? basicobject_own_method(nm) : object_public_method_name(nm))) {
       /* (directed) the runtime calls the class's method_missing with the
          name and the arguments, which it has seen, and the block */
       int mm = comp_method_in_chain(c, k, "method_missing", NULL);
@@ -3553,6 +3581,9 @@ static void cf_call(CF *f, int v) {
   { char sb[256]; if (setter_base_name(nm, sb, sizeof sb) || is_index_assign(nm)) cf_add_set(f, v, cf_bk_any(f)); }
   cf_scal_bind(f, v, nm, r, argv, argc, blk);
   cf_anon_struct_value(f, v);
+  /* a Class.new or Module.new the plan answers (cplan_class_new): its site
+     class's Class object, which each run-time class made there shares */
+  { int site; if (cplan_class_new(f->c, v, &site) != CNEW_NONE) { cf_add_set(f, v, cf_classval(f, site)); return; } }
   cf_modfn_bind(f, v, nm, argv, argc, blk);
   if (cf_blk_call(f, v, r, nm, argv, argc)) return;
   /* `k.superclass` (#8837): the Class objects of the parents of the
@@ -3698,6 +3729,13 @@ static void cf_call(CF *f, int v) {
       if (sp_streq(nm, "new") || sp_streq(nm, "allocate")) { cf_construct(f, v, cb, argv, argc, blk, nm); return; }
       int cm = call_target(c, v, cb, nm, CT_CMETHOD, NULL);
       if (cm >= 0 && cf_user_target(f, v, cm, argv, argc, blk)) found = 1;
+      /* (a block of the body that may run under another self, an exec
+         block: an instance's method of the name may answer the call too,
+         as on the object instance_exec gives it) */
+      if (found && cf_owner_block(f, v, 0) >= 0 && cf_in_exec_block(f, v) && cf_byname(f, nm)->n) {
+        cf_call_any(f, v, nm, argv, argc, blk);
+        return;
+      }
     }
     if (!found) {
       int tl = call_target(c, v, -1, nm, CT_TOP, NULL);
@@ -3746,6 +3784,9 @@ static void cf_call(CF *f, int v) {
     if (cf_owner_block(f, v, 0) >= 0 && cf_in_exec_block(f, v)) {
       CFByName *b = cf_byname(f, nm);
       if (b->n || b->ncm || b->nrd || b->nwr) { cf_call_any(f, v, nm, argv, argc, blk); return; }
+      /* a name no method of the program answers, where a class's
+         method_missing may: what the hook answers, as for `self.name` */
+      if (f->has_mm && !ie_kernel_global(nm) && !cf_opaque_name(nm)) { cf_call_any(f, v, nm, argv, argc, blk); return; }
     }
     /* Kernel: a conversion, an iteration, `lambda`, `proc`, `loop`, `raise`
        hand on what they are given; `new` has no class here */
@@ -3829,8 +3870,10 @@ static void cf_call(CF *f, int v) {
     if (cf_kernel_proc_call(f, v, k->name, nm, argv, argc, blk)) return;
     if (cf_poison_class_call(f, v, k->name, nm, argv, argc, blk)) return;
     /* a method of Class or Module: nothing of the program's own comes out,
-       except through a block */
+       except through a block, and Kernel's itself and tap, which answer
+       the Class object */
     if (blk >= 0 && nt_kind(nt, blk) == NK_BlockNode) cf_all_block_params(f, blk);
+    if (is_itself_name(nm) || is_tap_name(nm)) cf_add_set(f, v, cf_classval(f, x));
     cf_builtin_rule(f, v, -1, argv, argc, blk, nm);
     return;
   }
@@ -5972,7 +6015,13 @@ int cls_fact_excludes(Compiler *c, int recv, int k) {
 /* See compiler.h. */
 int cls_fact_excludes_class_value(Compiler *c, int recv, int k) {
   const ClsSet *s = cls_fact_node(c, recv);
-  if (!s || k < 0 || k >= c->nclasses || !cls_fact_bounded(c, k)) return 0;
+  if (!s || k < 0 || k >= c->nclasses) return 0;
+  /* (a module of the program's, a native one too, is left out of cls_fact_bounded for its
+     instances, which are its includers'; its own object is a value its constant reads give,
+     counted as a class's is. A reopened builtin module's may come from the runtime.) */
+  const ClassInfo *ci = &c->classes[k];
+  int own_module = comp_class_is_module(c, ci) && ci->name && !is_builtin_reopen_name(ci->name);
+  if (!own_module && !cls_fact_bounded(c, k)) return 0;
   /* (a receiver no value reaches excludes none, as in cls_fact_excludes;
      nor one a builtin's answer may be a Class object in, bc, where a Class
      object of the program's handed to the runtime comes back, #10303) */

@@ -1615,6 +1615,10 @@ int emit_call_callable_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
        callable address. Invoking it jumped through NULL; the poly-slot and
        first-class routes decline with NoMethodError, so decline the same way
        here instead of dereferencing it. */
+    /* a Method value that holds nil (`super_method` with no super): the
+       call is nil's, which has no method of the name (`===` is nil's own) */
+    if (!sp_streq(name, "==="))
+      buf_printf(b, "if (!_t%d) sp_raise_cls(\"NoMethodError\", \"undefined method '%s' for nil\"); ", tr, name);
     buf_printf(b, "if (!_t%d->fn) sp_raise_cls(\"NoMethodError\","
                   " sp_sprintf(\"undefined method '%%s' for an instance of Object\","
                   " _t%d->name ? _t%d->name : \"?\")); ", tr, tr, tr);
@@ -2389,7 +2393,8 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
       int tk = ++g_tmp;
       buf_printf(b, "({ sp_Class _t%d = ", tk);
       emit_expr(c, recv, b);
-      buf_printf(b, "; if (_t%d.name || _t%d.cls_id != %d) sp_raise_cls(\"NameError\", sp_nomethod_class_msg(", tk, tk, ivk);
+      char tkn[24], key[64]; snprintf(tkn, sizeof tkn, "_t%d", tk);
+      buf_printf(b, "; if (_t%d.name || %s != %d) sp_raise_cls(\"NameError\", sp_nomethod_class_msg(", tk, class_value_key(c, -1, tkn, key, sizeof key), ivk);
       emit_str_literal(b, sym);
       buf_printf(b, ", sp_box_class(_t%d))); ", tk);
     }
@@ -2874,16 +2879,19 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
 
 /* CRuby's NameError for capture id, whose plan finds no method (CallPlan.absent), as a statement. A
    Class.new class is named as it prints at run time: by the constant written with it, once written
-   (obj_default_name's display). A module whose singleton class is not made yet is named 'Module'.
-   The method name is an argument of that format, not part of it: an operator's name may hold a `%`. */
-static void emit_capture_absent_raise(Compiler *c, const char *mn, const CallPlan *plan, Buf *b) {
+   (obj_default_name's display), the object obj's (C, NULL for none). A module whose singleton class
+   is not made yet is named 'Module'. The method name is an argument of that format, not part of it:
+   an operator's name may hold a `%`. */
+static void emit_capture_absent_raise(Compiler *c, const char *mn, const CallPlan *plan, const char *obj, Buf *b) {
   int module = plan->absent == CP_ABSENT_MODULE;
   const char *cn = module ? "Module" : class_ruby_name(c, plan->owner_ci), *open = plan->absent == CP_ABSENT_SG ? "#<Class:" : "", *close = plan->absent == CP_ABSENT_SG ? ">" : "";
   /* (the name is escaped for the C literal: :"a\"b") */
   if (!module && comp_class_anonymous(c, plan->owner_ci)) {
     buf_printf(b, "sp_raise_cls(\"NameError\", sp_sprintf(\"undefined method '%%s' for class '%s%%s%s'\", \"", open, close);
     emit_c_escaped(b, mn ? mn : "");
-    buf_printf(b, "\", sp_class_display((sp_Class){%d})));", plan->owner_ci);
+    buf_puts(b, "\", sp_class_display((sp_Class){");
+    emit_obj_class_id(c, plan->owner_ci, plan->absent == CP_ABSENT_SG ? NULL : obj, b);
+    buf_puts(b, "})));");
     return;
   }
   buf_puts(b, "sp_raise_cls(\"NameError\", (&(\"\\xff\" \"undefined method '\" \"");
@@ -2933,10 +2941,16 @@ int emit_call_method_obj_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
   int closed = is_method_object_maker(name) && (plan.closed == SP_VIS_PRIVATE || plan.closed == SP_VIS_PROTECTED);
   if ((plan.absent && plan.mi < 0 && is_method_object_maker(name)) || closed) {
     buf_puts(b, "({ ");
-    if (recv >= 0) { buf_puts(b, "(void)("); emit_expr(c, recv, b); buf_puts(b, "); "); }
+    /* (an object of a site class's family is held: its class names it) */
+    char ho[24] = "";
+    if (recv >= 0 && ty_is_object(repr_of(c, recv).as_ty) && cplan_rt_family(c, plan.owner_ci)) {
+      snprintf(ho, sizeof ho, "_t%d", ++g_tmp);
+      buf_printf(b, "void *%s = (void *)(", ho); emit_expr(c, recv, b); buf_puts(b, "); ");
+    }
+    else if (recv >= 0) { buf_puts(b, "(void)("); emit_expr(c, recv, b); buf_puts(b, "); "); }
     if (closed) emit_capture_closed_raise(c, method_sym_arg(c, id), &plan, b);
     else if (plan.absent == CP_ABSENT_MAIN) emit_main_capture_absent_raise(c, id, b);
-    else emit_capture_absent_raise(c, method_sym_arg(c, id), &plan, b);
+    else emit_capture_absent_raise(c, method_sym_arg(c, id), &plan, ho[0] ? ho : NULL, b);
     buf_puts(b, " ");
     emit_unread_value(c, id, b);
     buf_puts(b, "; })");
@@ -3004,7 +3018,7 @@ int emit_call_method_obj_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
        NameError (CallPlan.absent) */
     if (t[0] < 0 && t[1] < 0 && plan.absent) {
       buf_puts(b, "{ ");
-      emit_capture_absent_raise(c, method_sym_arg(c, id), &plan, b);
+      emit_capture_absent_raise(c, method_sym_arg(c, id), &plan, NULL, b);
       buf_printf(b, " _t%d = NULL; }\n", tr);
       continue;
     }
@@ -3019,13 +3033,17 @@ int emit_call_method_obj_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
     if (to[i] == CPLAN_ARM_NONE && c->scopes[mi].class_id == comp_core_class(c, CORE_STRING)) {
       CallPlan missing = { .owner_ci = c->scopes[mi].class_id };
       buf_puts(b, "{ ");
-      emit_capture_absent_raise(c, captured_name ? captured_name : method_sym_arg(c, id), &missing, b);
+      emit_capture_absent_raise(c, captured_name ? captured_name : method_sym_arg(c, id), &missing, NULL, b);
       buf_printf(b, " _t%d = NULL; }\n", tr);
       continue;
     }
     buf_printf(b, "{ _t%d = ", tr);
-    if (!emit_method_obj_target(c, id, b, nt, name, recv, argc, argv,
-                                to[i] == CPLAN_ARM_NONE ? -1 : cplan_capture_arm(c, id, to[i]), captured_name)) {
+    /* (a yielding version is bound through its proc form, as method_obj_target_mi binds one, where the
+       form runs the version's own def: a copy an include makes, not a later redefinition's clone) */
+    int arm = to[i] == CPLAN_ARM_NONE ? -1 : cplan_capture_arm(c, id, to[i]), arm_pf = scope_proc_form_of(c, arm);
+    int arm_src = arm_pf >= 0 ? proc_form_source(c, arm_pf) : -1;
+    if (arm_src < 0 || c->scopes[arm_src].def_node != c->scopes[arm].def_node) arm_pf = -1;
+    if (!emit_method_obj_target(c, id, b, nt, name, recv, argc, argv, arm_pf >= 0 ? arm_pf : arm, captured_name)) {
       view_unwind(mark);
       buf_erase(b, start, b->len - start);
       return 0;
@@ -3114,8 +3132,10 @@ int emit_call_poly_callable_arms(Compiler *c, int id, Buf *b, const NodeTable *n
                       " : _t%d.tag == SP_TAG_ENCODING ? sp_box_str_new(sp_str_uminus_val(_t%d.v.s))"
                       " : _t%d.tag == SP_TAG_SYM ? sp_box_str_new(sp_sym_name_str((sp_sym)_t%d.v.i))"   /* (a Symbol's name: its one frozen String, no fstring) */
                       " : (_t%d.tag == SP_TAG_OBJ && _t%d.v.p && (_t%d.cls_id == SP_BUILTIN_EXCEPTION || sp_is_exc_subclass_cls(_t%d.cls_id)))"
-                      " ? sp_exc_name_acc((sp_Exception *)_t%d.v.p)",
-                   t, t, cls_arm, t, t, t, t, t, t, t, t, t);
+                      " ? sp_exc_name_acc((sp_Exception *)_t%d.v.p)"
+                      " : (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_THREAD && _t%d.v.p)"   /* a Thread's name or nil */
+                      " ? sp_Thread_get_name((sp_thread *)_t%d.v.p)",
+                   t, t, cls_arm, t, t, t, t, t, t, t, t, t, t, t, t, t);
       }
       else if (sp_streq(name, "owner"))
         buf_printf(b, "sp_box_class(sp_bm_owner((sp_BoundMethod *)_t%d.v.p))", t);

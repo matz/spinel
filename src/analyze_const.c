@@ -559,6 +559,8 @@ int an_class_needs_presence(Compiler *c, int ci) {
   /* A builtin already exists; a later header only reopens it. */
   if (c->classes[ci].is_builtin_const || builtin_class_id(c->classes[ci].name) ||
       is_builtin_exception_name(c->classes[ci].name)) return 0;
+  /* (a singleton class the passes made for one object, `def U.inspect`, is no constant of the program) */
+  if (c->classes[ci].is_singleton_of || c->object_standin == ci + 1) return 0;
   int node = c->classes[ci].def_node;
   if (node >= 0 && nt_kind(c->nt, node) == NK_ConstantPathWriteNode) return 1;
   return c->classes[ci].path_ns || header_in_unplaced_file(c, ci);

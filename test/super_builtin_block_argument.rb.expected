@@ -1,0 +1,18 @@
+true
+[:blk]
+Object
+[:blk, :blk]
+[]
+3
+K
+[:blk, :blk, :blk, :blk]
+"wrong number of arguments (given 1, expected 0)"
+[:blk, :blk, :blk, :blk, :blk]
+"wrong number of arguments (given 0, expected 1)"
+[:blk, :blk, :blk, :blk, :blk, :blk, :blk]
+true
+[:blk, :blk, :blk, :blk, :blk, :blk, :blk]
+true
+[:blk, :blk, :blk, :blk, :blk, :blk, :blk, :blk]
+"wrong number of arguments (given 0, expected 1..2)"
+9

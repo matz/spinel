@@ -35751,9 +35751,9 @@ void emit_super_respond_to(Compiler *c, int id, Scope *s, Buf *b) {
   /* the runtime class: this one, or a descendant inheriting the method */
   int cls[256], ncls = super_respond_classes(c, cid, cls);
   if (ncls > 1) buf_printf(b, "; sp_int _c%d = sp_obj_cls_id_of((void *)%s)", t, g_self);
-  /* a block argument runs after the arguments, for its effect */
+  /* a block argument runs after the arguments, for its effect (a gathered list's ran it before its count check) */
   buf_puts(b, "; ");
-  emit_super_blockarg_effect(c, id, b);
+  if (ga == -1) emit_super_blockarg_effect(c, id, b);
   /* not a Symbol or a String is CRuby's TypeError */
   if (tn >= 0)
     buf_printf(b, "if (_t%d.tag != SP_TAG_SYM && !sp_poly_check_str(_t%d)) "

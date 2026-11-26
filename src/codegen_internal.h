@@ -1267,9 +1267,10 @@ void emit_boxed_fwd_param(Compiler *c, Scope *s, int pi, Buf *b);
 /* a super's block argument run for its effect: "(void)(x); " */
 void emit_super_blockarg_effect(Compiler *c, int id, Buf *b);
 /* What super id in s passes where its builtin arm gathers it (cplan_super_gathered), the arm reading its first nread
-   arguments: an Array of it built and rooted into b, inside an open statement expression, then CRuby's ArgumentError
-   for a count the builtin cannot take; the Array's temp, or -1 where the arm reads its arguments as written (a bare
-   super's rest past them is counted with no Array). */
+   arguments: an Array of it built and rooted into b, inside an open statement expression, then the block argument's
+   effect (emit_super_blockarg_effect), which runs after the arguments, and CRuby's ArgumentError for a count the
+   builtin cannot take; the Array's temp, -2 where the arm reads its arguments as written and a bare super's rest past
+   them is counted with no Array, or -1 where nothing is gathered (the arm runs the block argument itself). */
 int emit_super_gathered_args(Compiler *c, int id, Scope *s, int nread, Buf *b);
 int exc_reopen_definers(Compiler *c, const char *mname, int *out, int max);
 int exc_super_reopen_initialize(Compiler *c, int ci);

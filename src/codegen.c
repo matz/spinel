@@ -16920,9 +16920,10 @@ int emit_super_gathered_args(Compiler *c, int id, Scope *s, int nread, Buf *b) {
       emit_zsuper_boxed(c, rv, rv && rv->type != TY_UNKNOWN ? rv->type : TY_POLY, txt.p, &rb);
       snprintf(gv, sizeof gv, "%d + sp_poly_length(%s)", s->nparams - 1, rb.p ? rb.p : "sp_box_nil()");
       free(txt.p); free(rb.p);
+      emit_super_blockarg_effect(c, id, b);
       emit_arity_check(b, gv, lo, hi, NULL);
       buf_puts(b, "; ");
-      return -1;
+      return -2;
     }
     ct = zsuper_gather(c, s, kwpos, b);
   }
@@ -16941,6 +16942,7 @@ int emit_super_gathered_args(Compiler *c, int id, Scope *s, int nread, Buf *b) {
   }
   if (ct < 0) return -1;
   snprintf(gv, sizeof gv, "_t%d->len", ct);
+  emit_super_blockarg_effect(c, id, b);
   emit_arity_check(b, gv, lo, hi, NULL);
   buf_puts(b, "; ");
   return ct;
@@ -17772,17 +17774,21 @@ static void emit_super_include_p(Compiler *c, int id, Scope *s, Buf *b) {
   buf_printf(b, "%s({ %ssp_Class _t%d = ", sr.kind == RK_BOXED ? "sp_box_bool(" : "", gb.p ? gb.p : "", tc);
   if (cmethod_takes_self_cls(c, s)) buf_puts(b, cmethod_cls_token(c, s));
   else buf_printf(b, "((sp_Class){%d, NULL})", s->class_id);
+  /* (the block argument runs after the argument, before include? reads it) */
+  Buf eb; memset(&eb, 0, sizeof eb);
+  if (ga == -1) emit_super_blockarg_effect(c, id, &eb);
   if (typed)
-    buf_printf(b, "; sp_Class _t%d = %s; if (!sp_class_is_module_val(_t%d)) "
+    buf_printf(b, "; sp_Class _t%d = %s; %sif (!sp_class_is_module_val(_t%d)) "
                   "sp_raise_cls(\"TypeError\", \"wrong argument type Class (expected Module)\"); ",
-               tm, ab.p ? ab.p : "", tm);
+               tm, ab.p ? ab.p : "", eb.p ? eb.p : "", tm);
   else {
     int tv = ++g_tmp;
-    buf_printf(b, "; sp_RbVal _t%d = %s; if (_t%d.tag != SP_TAG_CLASS || !sp_class_is_module_val(sp_unbox_class(_t%d))) "
+    buf_printf(b, "; sp_RbVal _t%d = %s; %sif (_t%d.tag != SP_TAG_CLASS || !sp_class_is_module_val(sp_unbox_class(_t%d))) "
                   "sp_raise_cls(\"TypeError\", sp_sprintf(\"wrong argument type %%s (expected Module)\", "
                   "sp_convert_src_name(_t%d))); sp_Class _t%d = sp_unbox_class(_t%d); ",
-               tv, ab.p ? ab.p : "", tv, tv, tv, tm, tv);
+               tv, ab.p ? ab.p : "", eb.p ? eb.p : "", tv, tv, tv, tm, tv);
   }
+  free(eb.p);
   buf_printf(b, "_t%d.cls_id != _t%d.cls_id && sp_class_le(_t%d, _t%d); })%s", tc, tm, tc, tm,
              sr.kind == RK_BOXED ? ")" : "");
   free(ab.p); free(gb.p);
@@ -17944,7 +17950,7 @@ static void emit_super_value(Compiler *c, int id, Buf *b) {
       int ta = ++g_tmp, tc = ++g_tmp;
       /* (a list whose count the run gives is gathered and checked first) */
       buf_puts(b, "({ ");
-      (void)emit_super_gathered_args(c, id, s, 0, b);
+      if (emit_super_gathered_args(c, id, s, 0, b) == -1) emit_super_blockarg_effect(c, id, b);
       buf_printf(b, "sp_Class _t%d = ", tc);
       if (cmethod_takes_self_cls(c, s)) buf_puts(b, cmethod_cls_token(c, s));
       else buf_printf(b, "((sp_Class){%d, NULL})", s->class_id);
@@ -17969,7 +17975,7 @@ static void emit_super_value(Compiler *c, int id, Buf *b) {
     if (cmi < 0 && (barm == BSUP_ANCESTORS || barm == BSUP_SUPERCLASS)) {
       int tc = ++g_tmp;
       buf_puts(b, "({ ");
-      (void)emit_super_gathered_args(c, id, s, 0, b);
+      if (emit_super_gathered_args(c, id, s, 0, b) == -1) emit_super_blockarg_effect(c, id, b);
       buf_printf(b, "sp_Class _t%d = ", tc);
       if (cmethod_takes_self_cls(c, s)) buf_puts(b, cmethod_cls_token(c, s));
       else buf_printf(b, "((sp_Class){%d, NULL})", s->class_id);
@@ -18428,7 +18434,7 @@ static void emit_super_value(Compiler *c, int id, Buf *b) {
       else if (fwd) emit_boxed_fwd_param(c, s, 0, &kb);
       else emit_boxed(c, sargv[0], &kb);
       buf_printf(&rb, "sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d); ", tk, kb.p ? kb.p : "sp_box_nil()", tk);
-      emit_super_blockarg_effect(c, id, &rb);
+      if (ga == -1) emit_super_blockarg_effect(c, id, &rb);
       buf_printf(&rb, "if (_t%d.tag != SP_TAG_CLASS) sp_raise_cls(\"TypeError\", \"class or module required\"); ", tk);
       /* (a by-value object, detect_value_types, is of the method's class: no class below it builds one,
          and no site class's family is by value; a site class's instance answers its record, emit_obj_class_id) */

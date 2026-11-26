@@ -1,0 +1,6 @@
+token, in a method: abc
+token, in a stored block: abc
+"abc"
+"abc!"
+["abc", 3]
+"hooks"

@@ -1,0 +1,12 @@
+[#<Encoding:BINARY (ASCII-8BIT)>, true, true, 2]
+[#<Encoding:BINARY (ASCII-8BIT)>, true, true, 2]
+[#<Encoding:BINARY (ASCII-8BIT)>, true, true, 2]
+[#<Encoding:BINARY (ASCII-8BIT)>, true, true, 2]
+#<Encoding:BINARY (ASCII-8BIT)>
+true
+true
+1
+2
+"abc!"
+"ABC"
+3

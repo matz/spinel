@@ -120,6 +120,7 @@ static const char *b64_dec(const char *src, size_t n, const unsigned char *tbl) 
   else if (nb == 2) { acc <<= 12; r[o++] = (char)(acc >> 16); }
   r[o] = '\0';
   sp_str_set_len(r, o);
+  sp_str_mark_binary(r);   /* the bytes, as CRuby's decoders answer them */
   return r;
 }
 
@@ -175,6 +176,7 @@ static const char *b64_dec_strict(const char *src, size_t n, size_t pad, const u
   }
   r[o] = '\0';
   sp_str_set_len(r, o);
+  sp_str_mark_binary(r);
   return r;
 }
 

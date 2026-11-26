@@ -3702,6 +3702,13 @@ static void cf_call(CF *f, int v) {
       if (sp_streq(nm, "new") || sp_streq(nm, "allocate")) { cf_construct(f, v, cb, argv, argc, blk, nm); return; }
       int cm = call_target(c, v, cb, nm, CT_CMETHOD, NULL);
       if (cm >= 0 && cf_user_target(f, v, cm, argv, argc, blk)) found = 1;
+      /* (a block of the body that may run under another self, an exec
+         block: an instance's method of the name may answer the call too,
+         as on the object instance_exec gives it) */
+      if (found && cf_owner_block(f, v, 0) >= 0 && cf_in_exec_block(f, v) && cf_byname(f, nm)->n) {
+        cf_call_any(f, v, nm, argv, argc, blk);
+        return;
+      }
     }
     if (!found) {
       int tl = call_target(c, v, -1, nm, CT_TOP, NULL);

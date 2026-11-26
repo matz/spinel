@@ -13228,7 +13228,11 @@ static int pivs_visit(Compiler *c, int v, char *set, int depth, int elems) {
     memset(f->seen[key].done, 0, sizeof f->seen[key].done);
   }
   uint64_t bit = UINT64_C(1) << depth;
-  if (f->seen[key].done[slot] & bit) return 1;
+  /* Not this depth's bit alone: a visit that finished deeper, with less of
+     the walk's depth left, finishes from here too, into the same query's
+     set. Read per depth, a node reached at many depths was walked again at
+     each, and a Rails program's Rack env origins took 12M visits a query. */
+  if (f->seen[key].done[slot] & ~(bit - 1)) return 1;
   int ok = elems ? pivs_elems_uncached(c, v, set, depth) : pivs_value_uncached(c, v, set, depth);
   /* (a failure the initialize walk walks past is not done: a walk outside
      it visits the node again) */

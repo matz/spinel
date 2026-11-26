@@ -487,6 +487,12 @@ static void emit_sockopt_optname(Compiler *c, int tl, int node, Buf *b) {
   if (repr_of(c, node).as_ty == TY_INT) { emit_int_expr(c, node, b); return; }
   buf_printf(b, "sp_sock_optname_arg(_t%d, ", tl); emit_boxed(c, node, b); buf_puts(b, ")");
 }
+/* A shutdown direction: an Integer as given, a Symbol or String name
+   through sp_sock_shutdown_arg */
+static void emit_shutdown_how(Compiler *c, int node, Buf *b) {
+  if (repr_of(c, node).as_ty == TY_INT) { emit_int_expr(c, node, b); return; }
+  buf_puts(b, "sp_sock_shutdown_arg("); emit_boxed(c, node, b); buf_puts(b, ")");
+}
 
 /* connect_nonblock, setsockopt and getsockopt of the socket in C expression
    r: the typed arm's, and a socket read back out of a container (a boxed
@@ -1208,8 +1214,8 @@ int emit_call_poly_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
       else if (sp_streq(name, "reopen")) { emit_io_reopen_poly(c, tio, argv[0], b); buf_puts(b, "; })"); }
       else if (sp_streq(name, "accept")) buf_printf(b, "sp_sock_accept(_t%d); })", tio2);
       else if (sp_streq(name, "shutdown")) {
-        buf_printf(b, "sp_sock_shutdown(_t%d, ", tio2);
-        if (argc == 1) emit_int_expr(c, argv[0], b); else buf_puts(b, "2");
+        buf_printf(b, "SP_GC_ROOT(_t%d); sp_sock_shutdown(_t%d, ", tio2, tio2);
+        if (argc == 1) emit_shutdown_how(c, argv[0], b); else buf_puts(b, "2");
         buf_puts(b, "); })");
       }
       else if (socket_recv_call(name, argc)) {
@@ -1760,7 +1766,7 @@ int emit_call_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const ch
       }
       if (sp_streq(name, "shutdown") && argc <= 1) {
         buf_printf(b, "sp_sock_shutdown(%s, ", r);
-        if (argc == 1) emit_int_expr(c, argv[0], b); else buf_puts(b, "2");
+        if (argc == 1) emit_shutdown_how(c, argv[0], b); else buf_puts(b, "2");
         buf_puts(b, ")");
         free(rb.p); return 1;
       }

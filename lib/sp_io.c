@@ -2436,6 +2436,19 @@ sp_int sp_sock_optname_arg(sp_int level, sp_RbVal v) {SP_GC_ROOT_RBVAL(v);
   if (opt < 0) sp_raise_cls("SocketError", sp_sprintf("unknown %s level option name: %s", what, name));
   return opt;
 }
+/* A shutdown direction: an Integer, nil for SHUT_RDWR, or a Symbol or String
+   with or without its prefix (:WR and :SHUT_WR), as CRuby's
+   rsock_shutdown_how_arg takes it. */
+sp_int sp_sock_shutdown_arg(sp_RbVal v) {SP_GC_ROOT_RBVAL(v);
+  if (v.tag == SP_TAG_INT) return v.v.i;
+  if (v.tag == SP_TAG_NIL) return SHUT_RDWR;
+  const char *name = sp_sock_opt_name(v);
+  if (!name) return sp_sock_opt_int(v);
+  const char *full = strncmp(name, "SHUT_", 5) == 0 ? name : sp_sprintf("SHUT_%s", name);
+  sp_int how = sp_sock_opt_name_nul(name) ? -1 : sp_sock_const(full);
+  if (how < 0) sp_raise_cls("SocketError", sp_sprintf("unknown shutdown argument: %s", name));
+  return how;
+}
 
 sp_int sp_sock_setsockopt(sp_File *f, sp_int level, sp_int opt, sp_int value) {SP_GC_ROOT(f);
   extern int sp_net_setsockopt_int(int fd, int level, int optname, int value);

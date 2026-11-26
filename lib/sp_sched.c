@@ -68,6 +68,7 @@ void *sp_exc_ctx_new(void);
 void  sp_exc_ctx_save(void *p);
 void  sp_exc_ctx_load(void *p);
 void  sp_exc_ctx_free(void *p);
+void  sp_exc_ctx_free_loaded(void *p);
 
 /* Safepoint (design 5.1). Set while a collector wants the world stopped; polled
    at loop back-edges (codegen) and at blocking points. Defined unconditionally
@@ -1439,12 +1440,12 @@ static unsigned long long g_ev_arms = 0, g_ev_adds = 0, g_ev_lost = 0, g_ev_time
    its home worker (home_wid); past SP_SNAP_POOL a context is freed. What a
    pooled context held is never read again: save rewrites every count and
    the live prefix of every array, and load and the mark go by the counts.
-   A build with C extensions keeps the extension arena in the context,
-   which its free disposes of, so it takes a new context each time as
-   before. */
+   A build with C extensions takes a new context each time as before, and
+   frees it with sp_exc_ctx_free_loaded: after the load the extension arena
+   it copied is the thread's live one again. */
 #ifdef SP_CEXT
 static void *sp_snap_take(void) { return sp_exc_ctx_new(); }
-static void sp_snap_give(void *p) { sp_exc_ctx_free(p); }
+static void sp_snap_give(void *p) { sp_exc_ctx_free_loaded(p); }
 #else
 #define SP_SNAP_POOL 64
 static SP_TLS void *g_snap_pool[SP_SNAP_POOL];

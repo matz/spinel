@@ -1607,6 +1607,16 @@ void sp_exc_ctx_free(void *p) {
   free(x->rrf); free(x->rrem); free(x->rrcm); free(x->rrbm);
   free(x->erm); free(x->ersm); free(x->crm); free(x);
 }
+/* A park's snapshot, once loaded: its arena is the thread's live one again,
+   so only the context goes. */
+void sp_exc_ctx_free_loaded(void *p) {
+  sp_exc_ctx_t *x = (sp_exc_ctx_t *)p;
+  if (!x) return;
+#ifdef SP_CEXT
+  memset(&x->cext_arena, 0, sizeof x->cext_arena);
+#endif
+  sp_exc_ctx_free(x);
+}
 void sp_exc_ctx_mark(void *p) {            /* GC: mark a suspended fiber's carried exc objects */
   sp_exc_ctx_t *x = (sp_exc_ctx_t *)p;
   /* a running fiber's context is a stale copy (see `live`): its live

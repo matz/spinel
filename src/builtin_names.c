@@ -1153,6 +1153,12 @@ int is_array_push_family(const char *n) {
   return sp_streq(n, "push") || sp_streq(n, "<<") || sp_streq(n, "append") || sp_streq(n, "unshift") || sp_streq(n, "prepend");
 }
 
+int is_array_row_read(const char *n) {
+  static const char *const reads[] = { "[]", "first", "last", "fetch", "each", "each_with_index",
+                                       "size", "length", "empty?", "inspect", "to_s", NULL };
+  return n && str_in(n, reads);
+}
+
 int array_answers_receiver_name(const char *n) {
   static const char *const self_ret[] = {
     "<<", "push", "append", "unshift", "prepend", "insert", "concat", "fill", "replace",

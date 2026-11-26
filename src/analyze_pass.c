@@ -4204,6 +4204,20 @@ static int elem_read_call(const NodeTable *nt, int v) {
   return (is_aref_name(nm) && an == 1) || (is_fetch_name(nm) && an >= 1) ||
          (nm && is_endpoint_query(nm) && an == 0);
 }
+/* What the call `v` does with the Array its receiver is, for the walks
+   that ask whether a local's Array is used only as it was built
+   (local_rows_escape_ex, local_read_by_element): an element read
+   (elem_read_call), another read (an iteration, a size, an inspect, or an
+   element read's name with other arguments), a store into it (row_stores), or
+   some other call. */
+enum { RECV_ELEM_READ, RECV_READ, RECV_STORE, RECV_OTHER };
+static int row_store_shape(const char *name);
+static int recv_array_use(const NodeTable *nt, int v) {
+  const char *nm = nt_kind(nt, v) == NK_CallNode ? nt_str(nt, v, "name") : NULL;
+  if (!nm) return RECV_OTHER;
+  if (elem_read_call(nt, v)) return RECV_ELEM_READ;
+  return is_array_row_read(nm) ? RECV_READ : row_store_shape(nm) >= 0 ? RECV_STORE : RECV_OTHER;
+}
 /* Does the code under node use the local rn only as an element read's
    receiver (elem_read_call), never writing it, changing it in place,
    passing it on or naming it in another value? A rest so used holds what
@@ -4223,7 +4237,7 @@ static int local_read_by_element(const NodeTable *nt, int node, const char *rn, 
   }
   /* the receiver of an element read is the one use that leaves it laid */
   int skip = -1;
-  if (elem_read_call(nt, node)) {
+  if (recv_array_use(nt, node) == RECV_ELEM_READ) {
     int r = nt_ref(nt, node, "receiver");
     if (nt_kind(nt, r) == NK_LocalVariableReadNode && nt_str(nt, r, "name") && sp_streq(nt_str(nt, r, "name"), rn))
       skip = r;
@@ -8709,8 +8723,6 @@ static int ivar_writes_fresh(Compiler *c, int cls, const char *ivn, int apply, i
    be arrays none of its literals shows. With `stores_only` the receiver of
    a call other than a store (`r.dup`, `r.map`) is no such read either. */
 static int local_rows_escape_ex(Compiler *c, int r, int stores_only) {
-  static const char *const reads[] = { "[]", "first", "last", "fetch", "each", "each_with_index",
-                                       "size", "length", "empty?", "inspect", "to_s", NULL };
   const NodeTable *nt = c->nt;
   const char *nm = nt_str(nt, r, "name");
   Scope *sc = comp_scope_of(c, r);
@@ -8723,7 +8735,8 @@ static int local_rows_escape_ex(Compiler *c, int r, int stores_only) {
     if (!cn) continue;
     if (rc >= 0 && nt_kind(nt, rc) == NK_LocalVariableReadNode && comp_scope_of(c, rc) == sc &&
         sp_streq(nt_str(nt, rc, "name"), nm)) {
-      if (stores_only ? row_store_shape(cn) < 0 : str_in(cn, reads)) nok++;
+      int use = recv_array_use(nt, call);
+      if (stores_only ? use != RECV_STORE : use == RECV_ELEM_READ || use == RECV_READ) nok++;
       continue;
     }
     if (rc >= 0 || !(sp_streq(cn, "p") || sp_streq(cn, "puts") || sp_streq(cn, "print") || sp_streq(cn, "pp")))

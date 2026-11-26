@@ -386,6 +386,7 @@ int is_const_missing_name(const char *n); /* const_missing */
 int is_const_table_def_name(const char *n); /* __const_get__ __const_defined__ */
 int is_string_position_mutator(const char *n); /* []= clear insert setbyte slice! */
 int is_array_push_family(const char *n); /* << append prepend push unshift */
+int is_array_row_read(const char *n);  /* [] first last fetch each each_with_index size length empty? inspect to_s: an Array read that adds no element */
 int array_answers_receiver_name(const char *n); /* << push concat sort! map! tap itself to_a to_ary ...: an Array method that answers its receiver itself */
 
 int is_io_class_name(const char *n); /* File IO */

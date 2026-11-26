@@ -10045,6 +10045,9 @@ static int desugar_dynamic_send_inner(Compiler *c) {
         { char cl[16 * 12]; int o = 0;
           for (int q = 0; q < nmmk && o < (int)sizeof cl - 12; q++) o += snprintf(cl + o, sizeof cl - (size_t)o, "%s%d", q ? "," : "", mmk[q]);
           nt_node_set_str(nt, ts, "dsend_mm_classes", cl); }
+        /* (the dispatch's own conversion of its name: a method_missing split
+           of it relowered this send, which made a new one each round) */
+        nt_node_set_int(nt, ts, "mm_split", 1);
         int mv[65]; mv[0] = ts;
         for (int k = 0; k < nrest; k++) mv[k + 1] = rest[k];
         nt_node_set_arr(nt, mna, "arguments", mv, nrest + 1);

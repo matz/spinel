@@ -1728,12 +1728,14 @@ static int file_constants_index(const char *n) {
 }
 /* (`IO` or `::IO`) */
 static int const_read_is(NodeTable *nt, int id, const char *name) {
-  if (id < 0 || !sp_streq(nt_str(nt, id, "name"), name)) return 0;
-  return nt_kind(nt, id) == NK_ConstantReadNode || (nt_kind(nt, id) == NK_ConstantPathNode && nt_ref(nt, id, "parent") < 0);
+  if (id < 0 || !(nt_kind(nt, id) == NK_ConstantReadNode || (nt_kind(nt, id) == NK_ConstantPathNode && nt_ref(nt, id, "parent") < 0)))
+    return 0;
+  const char *n = nt_str(nt, id, "name");
+  return n && sp_streq(n, name);
 }
 int desugar_file_constants(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
-  int n0 = nt->count, changed = 0, own_io = 0, own_file = 0;
+  int n0 = nt->count, changed = 0, own_io = 0, own_file = 0, *parent = NULL;
   if (n0 <= 0) return 0;
   char written[32] = {0};   /* per name index: 1 when the program writes IO::X, 2 when File::X */
   char *is_target = calloc((size_t)n0, 1);   /* the path of `IO::RDONLY = 7` is written, not read */
@@ -1763,12 +1765,26 @@ int desugar_file_constants(Compiler *c) {
     }
     if (!dn && (k == NK_ConstantWriteNode || k == NK_ConstantOrWriteNode || k == NK_ConstantAndWriteNode ||
                 k == NK_ConstantOperatorWriteNode || k == NK_ConstantTargetNode)) dn = nt_str(nt, id, "name");
-    if (dn && sp_streq(dn, "Constants")) own_file = 1;
+    /* (a Constants a `File::Constants` read may find: not one nested in another namespace, `Sock::Constants`) */
+    if (dn && sp_streq(dn, "Constants")) {
+      if (!parent) parent = an_parent_map(nt);
+      const char *encl = NULL;
+      for (int p = parent ? parent[id] : -1, g = 0; p >= 0 && !encl && g < 256; p = parent[p], g++)
+        if (nt_kind(nt, p) == NK_ClassNode || nt_kind(nt, p) == NK_ModuleNode) encl = class_def_name(nt, p);
+      int wp = w >= 0 ? nt_ref(nt, w, "parent") : -1;
+      /* (a header written `module File::Constants`, whatever namespace it stands in) */
+      int cp = k == NK_ClassNode || k == NK_ModuleNode ? nt_ref(nt, id, "constant_path") : -1;
+      if (cp >= 0 && nt_kind(nt, cp) == NK_ConstantPathNode && const_read_is(nt, nt_ref(nt, cp, "parent"), "File")) own_file = 1;
+      if (w >= 0 ? const_read_is(nt, wp, "File") || (wp < 0 && !encl) ||
+                   (wp >= 0 && nt_kind(nt, wp) == NK_SelfNode && encl && sp_streq(encl, "File"))   /* `self::Constants` in class File */
+                 : !encl || sp_streq(encl, "File")) own_file = 1;
+    }
     if (dn && sp_streq(dn, "File") &&
         !(is_top[id] && k == NK_ClassNode && const_read_is(nt, nt_ref(nt, id, "constant_path"), "File"))) own_file = 1;
     if (dn && sp_streq(dn, "IO")) own_io = 1;
   }
   free(is_top);
+  free(parent);
   if (own_file) { free(is_target); return 0; }
   for (int id = 0; id < n0; id++) {
     if (is_target[id] || nt_kind(nt, id) != NK_ConstantPathNode) continue;

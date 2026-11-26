@@ -2917,6 +2917,9 @@ int        comp_enum_answers_first(Compiler *c, int id, int cid, const char *nam
 int        comp_comparable_answers_first(Compiler *c, int id, int cid, const char *name);
 int        comp_comparable_reaches(Compiler *c, int cid);
 int        comp_enum_reaches(Compiler *c, int cid);   /* Enumerable among its ancestors */
+/* The one write of constant `name` in the program (a ConstantWriteNode), or -1 where it is written
+   never or more than once: an alias (`Impl = ::Hash`, `Impl = Base`) is followed through it. */
+int        const_single_write(Compiler *c, const char *name);   /* analyze_scope.c */
 int        class_builtin_parent(Compiler *c, int cid);   /* codegen.c: the builtin class above the user chain of the class */
 int        class_is_exc_subclass(Compiler *c, int ci);   /* analyze.c */
 int        comp_plain_class(Compiler *c, int cid);    /* only Object's and Kernel's builtin methods behind the class: no core class or core module among its ancestors */

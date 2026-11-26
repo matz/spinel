@@ -576,6 +576,9 @@ int is_minmax_pair(const char *n) { return n && sp_streq(n, "minmax"); }
 int is_endpoint_query(const char *n) {
   return sp_streq(n, "first") || sp_streq(n, "last");
 }
+int is_endpoint_first(const char *n) {
+  return n && sp_streq(n, "first");
+}
 
 int is_map_alias(const char *n) {
   return sp_streq(n, "map") || sp_streq(n, "collect");

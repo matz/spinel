@@ -18,3 +18,7 @@ class D
   define_method(:m4) { |*r| r[0] << 5 }
 end
 a = [+"s"]; D.new.m4(a); p a
+
+# stores of two kinds into two elements, each into its own
+def m5(*r) = (r[0] << 7; r[-1] << :s)
+a = [1]; b = [+"t"]; m5(a, 0, b); p [a.sum, b]

@@ -3984,6 +3984,40 @@ static int record_push_param_srcs(Compiler *c, int id, Scope *sc, LocalVar *lv, 
   return ch;
 }
 
+/* The slot of LocalVar.rest_elem_at a rest's element at literal index ix
+   keeps its stores in, or -1 (rest_elem_store: any index); and back. */
+static int rest_elem_slot(int ix) {
+  if (ix >= 0) return ix < REST_ELEM_HEAD ? ix : -1;
+  return ix != ELEM_ANY && -ix <= REST_ELEM_TAIL ? REST_ELEM_HEAD - ix - 1 : -1;
+}
+static int rest_slot_index(int k) {
+  return k < REST_ELEM_HEAD ? k : REST_ELEM_HEAD - k - 1;
+}
+/* The store evidence element j of a rest that takes n values needs (n < 0:
+   a count the run time decides, so any index's): the stores at any index
+   and those at j, counted from either end. */
+static TyKind rest_elem_need(const LocalVar *rp, int j, int n) {
+  TyKind t = rp->rest_elem_store;
+  for (int k = 0; k < REST_ELEM_HEAD + REST_ELEM_TAIL; k++) {
+    int ix = rest_slot_index(k);
+    if (rp->rest_elem_at[k] != TY_UNKNOWN && (n < 0 || ix == j || ix == j - n))
+      fold_store_kind(&t, rp->rest_elem_at[k]);
+  }
+  return t;
+}
+
+/* The literal index the element read v (`r[0]`, `r.fetch(-1)`, `r.first`,
+   `r.last`) reads, or ELEM_ANY. */
+static int elem_read_index(Compiler *c, int v) {
+  const NodeTable *nt = c->nt;
+  int a = nt_ref(nt, v, "arguments"), an = 0;
+  const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+  if (an == 0) return is_endpoint_first(nt_str(nt, v, "name")) ? 0 : -1;
+  if (nt_kind(nt, av[0]) != NK_IntegerNode || nt_str(nt, av[0], "bigval")) return ELEM_ANY;
+  long long k = nt_int(nt, av[0], "value", 0);
+  return k >= -REST_ELEM_TAIL && k < REST_ELEM_HEAD ? (int)k : ELEM_ANY;
+}
+
 static int infer_write_container_usage(Compiler *c, const NodeTable *nt, int nfb, int *fb, LWIndex lw_ix, LWIndex ivw_ix) {
   int changed = 0, any = 0;
   /* the walks the stores start share what they found unchanged, until a
@@ -8689,7 +8723,9 @@ int widen_arg_array(Compiler *c, int arg) {
 const char *block_param_name(Compiler *c, int block, int idx);
 static int widen_boxed_elem_sources(Compiler *c, int r, TyKind elem, int depth);
 static int widen_boxed_sub_elem_sources(Compiler *c, int r, int k, TyKind elem, int depth);
-static int widen_param_elem_sources(Compiler *c, int r, TyKind elem, int depth);
+static int widen_param_elem_sources(Compiler *c, int r, int ix, TyKind elem, int depth);
+static int widen_boxed_elem_sources_at(Compiler *c, int r, int ix, TyKind elem, int depth);
+static int widen_elem_literal_sources(Compiler *c, int r, TyKind elem, int depth);
 
 /* The named parameters of the literal blocks and the proc and lambda
    literals, keyed by the name and the scope that holds them: for each, the
@@ -9245,9 +9281,10 @@ static int widen_iter_param_elems(Compiler *c, Scope *sc, const char *nm, TyKind
 }
 /* Every value the sites that bind block or proc-literal parameter `nm` of
    scope `sc` pass it (block_param_values), for each block and literal of
-   the scope with a parameter of the name: the rest's elements when `rest`,
-   else the other parameters' values. Answers the OR of what fn answers. */
-static int block_param_index_values(Compiler *c, Scope *sc, const char *nm, int rest,
+   the scope with a parameter of the name: the rest's elements when `rest`
+   (the one at literal index rix, or ELEM_ANY), else the other parameters'
+   values. Answers the OR of what fn answers. */
+static int block_param_index_values(Compiler *c, Scope *sc, const char *nm, int rest, int rix,
                                     BlockValueVisit fn, void *ctx) {
   int si = (int)(sc - c->scopes), ch = 0, n = 0, cap = 8;
   int *hv = malloc(sizeof(int) * 2 * (size_t)cap);
@@ -9263,7 +9300,7 @@ static int block_param_index_values(Compiler *c, Scope *sc, const char *nm, int 
     }
     hv[2 * n] = bp_ix.call[e]; hv[2 * n + 1] = bp_ix.pos[e]; n++;
   }
-  for (int i = 0; i < n; i++) ch |= block_param_values(c, hv[2 * i], hv[2 * i + 1], fn, ctx);
+  for (int i = 0; i < n; i++) ch |= block_param_values(c, hv[2 * i], hv[2 * i + 1], rix, fn, ctx);
   free(hv);
   return ch;
 }
@@ -9278,7 +9315,7 @@ static int wbp_array(Compiler *c, int v, int how, void *ctx) {
 static int widen_block_param_arrays(Compiler *c, Scope *sc, const char *nm, TyKind elem, int depth) {
   if (depth > 6) return 0;
   WbpCtx x = { elem, depth };
-  return block_param_index_values(c, sc, nm, 0, wbp_array, &x);
+  return block_param_index_values(c, sc, nm, 0, ELEM_ANY, wbp_array, &x);
 }
 /* The Hashes that bind boxed block parameter nm, written as a Hash
    (`proc { |t| t[:k] = 2 }`): each takes the key and the value, as a
@@ -9290,7 +9327,7 @@ static int wbp_hash(Compiler *c, int v, int how, void *ctx) {
 }
 static int widen_block_param_hash_args(Compiler *c, Scope *sc, const char *nm, TyKind hk, TyKind hv) {
   WbhCtx x = { hk, hv };
-  return block_param_index_values(c, sc, nm, 0, wbp_hash, &x);
+  return block_param_index_values(c, sc, nm, 0, ELEM_ANY, wbp_hash, &x);
 }
 /* The read of boxed local `nm` of scope `sc` (widen_boxed_array_sources):
    what it is written, bound or handed. The same for every read of it. */
@@ -9428,7 +9465,7 @@ static int widen_boxed_array_sources_1(Compiler *c, int v, TyKind elem, int dept
   if (!nm || nt_ref(nt, v, "block") >= 0) return 0;
   if (r >= 0 && ((sp_streq(nm, "[]") && an == 1) || (sp_streq(nm, "fetch") && an >= 1) ||
                  ((is_endpoint_query(nm)) && an == 0)))
-    return widen_boxed_elem_sources(c, r, elem, depth + 1);
+    return widen_boxed_elem_sources_at(c, r, elem_read_index(c, v), elem, depth + 1);
   int mi = backprop_call_target(c, v);
   if (mi >= 0) return widen_method_value_sources(c, v, mi, elem, depth, 0);
   /* a call no one method is resolved for, on a receiver whose class only the
@@ -9518,7 +9555,7 @@ static int wbp_elem(Compiler *c, int v, int how, void *ctx) {
    each call hands it (widen_rest_arg_arrays), as a parameter's push widens
    through the reverse binding; a method's other parameters reach their
    callers' arguments through container_literals. */
-static int widen_param_elem_sources(Compiler *c, int r, TyKind elem, int depth) {
+static int widen_param_elem_sources(Compiler *c, int r, int ix, TyKind elem, int depth) {
   const NodeTable *nt = c->nt;
   r = nt_paren_single(nt, r);
   if (r < 0 || nt_kind(nt, r) != NK_LocalVariableReadNode || nt_int(nt, r, "depth", 0) != 0) return 0;
@@ -9528,11 +9565,22 @@ static int widen_param_elem_sources(Compiler *c, int r, TyKind elem, int depth) 
   if (!lv || lv->rbs_seeded) return 0;
   if (lv->is_block_param) {
     WbpCtx x = { elem, depth };
-    return block_param_index_values(c, sc, nm, 1, wbp_array, &x) |
-           block_param_index_values(c, sc, nm, 0, wbp_elem, &x);
+    return block_param_index_values(c, sc, nm, 1, ix, wbp_array, &x) |
+           block_param_index_values(c, sc, nm, 0, ELEM_ANY, wbp_elem, &x);
   }
   if (!lv->is_param || sc->rest_idx < 0 || !sc->pnames[sc->rest_idx] || !sp_streq(sc->pnames[sc->rest_idx], nm)) return 0;
-  return fold_store_kind(&lv->rest_elem_store, elem);
+  int slot = rest_elem_slot(ix);
+  return fold_store_kind(slot >= 0 ? &lv->rest_elem_at[slot] : &lv->rest_elem_store, elem);
+}
+
+/* widen_boxed_elem_sources for the element at literal index ix of `r`
+   (ELEM_ANY: any): a rest's store then needs only the value laid there
+   (widen_param_elem_sources). (Kept by the element read's own record,
+   wbas_seen's arrays one.) */
+static int widen_boxed_elem_sources_at(Compiler *c, int r, int ix, TyKind elem, int depth) {
+  if (ix == ELEM_ANY) return widen_boxed_elem_sources(c, r, elem, depth);
+  if (depth > 6) return 0;
+  return widen_param_elem_sources(c, r, ix, elem, depth) | widen_elem_literal_sources(c, r, elem, depth);
 }
 
 /* The same for the arrays that are elements of the container `r` (the
@@ -9573,8 +9621,12 @@ static int literal_local_rows_added(Compiler *c, int lit) {
   return 0;
 }
 static int widen_boxed_elem_sources_1(Compiler *c, int r, TyKind elem, int depth) {
+  return widen_param_elem_sources(c, r, ELEM_ANY, elem, depth) | widen_elem_literal_sources(c, r, elem, depth);
+}
+/* The arrays that are elements of the literals `r` can be. */
+static int widen_elem_literal_sources(Compiler *c, int r, TyKind elem, int depth) {
   const NodeTable *nt = c->nt;
-  int ch = widen_param_elem_sources(c, r, elem, depth);
+  int ch = 0;
   ContainerLiterals lits = {0};
   container_literals(c, r, &lits, 0);
   int rl = nt_paren_single(nt, r);
@@ -9915,24 +9967,29 @@ int layout_plain_arg(Compiler *c, Scope *m, const int *argv, const ArgLayout *L,
    splat's elements too. The arguments another parameter takes stay out;
    where the count is the run time's, every one that may land there is in
    (gather_reaches). */
+static int rest_arg_laid(Compiler *c, Scope *m, const int *argv, const ArgLayout *L, int s) {
+  if (nt_kind(c->nt, argv[s]) == NK_BlockArgumentNode) return 0;
+  if (L->gather) return gather_reaches(c, m, argv, L->pos_argc, L->gather_kwh, s, m->rest_idx);
+  for (int i = 0; i < L->n; i++) if (i != m->rest_idx && L->from[i] == ARG_NODE && L->arg[i] == s) return 0;
+  return 1;
+}
 static int widen_rest_arg_arrays(Compiler *c, Scope *m, const int *argv, const ArgLayout *L) {
   const NodeTable *nt = c->nt;
   LocalVar *rp = m->pnames[m->rest_idx] ? scope_local(m, m->pnames[m->rest_idx]) : NULL;
-  if (!rp || rp->rbs_seeded || rp->rest_elem_store == TY_UNKNOWN || g_infer_optimistic || !argv) return 0;
+  if (!rp || rp->rbs_seeded || g_infer_optimistic || !argv || rest_elem_need(rp, 0, -1) == TY_UNKNOWN) return 0;
+  /* a store at a literal index needs only the value laid there, where the
+     call's own arguments decide the count: none is a splat */
+  int n = 0;
+  for (int s = 0; s < L->pos_argc && n >= 0; s++)
+    if (rest_arg_laid(c, m, argv, L, s)) n = L->gather || nt_kind(nt, argv[s]) == NK_SplatNode ? -1 : n + 1;
   int ch = 0;
-  for (int s = 0; s < L->pos_argc; s++) {
-    if (nt_kind(nt, argv[s]) == NK_BlockArgumentNode) continue;
-    if (L->gather) {
-      if (!gather_reaches(c, m, argv, L->pos_argc, L->gather_kwh, s, m->rest_idx)) continue;
-    }
-    else {
-      int other = 0;
-      for (int i = 0; i < L->n && !other; i++) other = i != m->rest_idx && L->from[i] == ARG_NODE && L->arg[i] == s;
-      if (other) continue;
-    }
+  for (int s = 0, j = 0; s < L->pos_argc; s++) {
+    if (!rest_arg_laid(c, m, argv, L, s)) continue;
+    TyKind need = rest_elem_need(rp, j++, n);
+    if (need == TY_UNKNOWN) continue;
     if (nt_kind(nt, argv[s]) == NK_SplatNode)
-      ch |= widen_boxed_elem_sources(c, nt_ref(nt, argv[s], "expression"), rp->rest_elem_store, 0);
-    else ch |= widen_boxed_array_sources(c, argv[s], rp->rest_elem_store, 0);
+      ch |= widen_boxed_elem_sources(c, nt_ref(nt, argv[s], "expression"), need, 0);
+    else ch |= widen_boxed_array_sources(c, argv[s], need, 0);
   }
   return ch;
 }
@@ -15104,11 +15161,12 @@ static int bs_type_site(Compiler *c, int site, const int *argv, int argc, void *
    placed as block_site_types places them (block_site_place), each handed
    to fn: BV_WHOLE for the value itself, BV_ELEM for its elements (a
    splat's operand, a lone Array taken apart over the parameters, a `**`
-   operand's values for a keyword). A
+   operand's values for a keyword). Of the rest's, only the one at literal
+   index rix where the site's own count places it (ELEM_ANY: every one). A
    default the parameter may take is one of its values too, and a count
    the run time lays out hands every value a gathered one may be, as
    typing joins them. Answers the OR of what fn answers. */
-int block_site_values(Compiler *c, const BlockSig *s, const int *av, int ac, int at,
+int block_site_values(Compiler *c, const BlockSig *s, const int *av, int ac, int at, int rix,
                       BlockValueVisit fn, void *ctx) {
   const NodeTable *nt = c->nt;
   int P = s->P, O = s->O, np = P + O + s->Q, ch = 0;
@@ -15157,7 +15215,9 @@ int block_site_values(Compiler *c, const BlockSig *s, const int *av, int ac, int
   }
   else if (at == BLOCK_REST) {
     /* what the requireds, the optionals and the posts leave */
-    for (int k = P + pl.ot; k < pl.ps && k < ac; k++) ch |= fn(c, av[k], BV_WHOLE, ctx);
+    int lo = P + pl.ot, hi = pl.ps < ac ? pl.ps : ac;
+    int only = rix == ELEM_ANY ? -1 : rix >= 0 ? lo + rix : hi + rix;
+    for (int k = lo; k < hi; k++) if (rix == ELEM_ANY || k == only) ch |= fn(c, av[k], BV_WHOLE, ctx);
   }
   else {
     int vi = at < P ? at : at < P + O ? (at - P < pl.ot ? at : -1) : pl.ps + (at - P - O);
@@ -18731,11 +18791,11 @@ static int block_bind_plan(Compiler *c, int id, int block, int mi, int ym, int y
    literal's at the calls that run it (proc_call_sites). Sites out of
    sight (a kept block, a Proc handed where no call shows) bind what they
    bind unseen. Answers the OR of what fn answers. */
-typedef struct { BlockSig s; int at, ch; BlockValueVisit fn; void *ctx; } BpvCtx;
+typedef struct { BlockSig s; int at, rix, ch; BlockValueVisit fn; void *ctx; } BpvCtx;
 static int bpv_site(Compiler *c, int site, const int *argv, int argc, void *ctx) {
   (void)site;
   BpvCtx *x = ctx;
-  x->ch |= block_site_values(c, &x->s, argv, argc, x->at, x->fn, x->ctx);
+  x->ch |= block_site_values(c, &x->s, argv, argc, x->at, x->rix, x->fn, x->ctx);
   return 0;
 }
 static void bpv_proc_sites(Compiler *c, int lit, BpvCtx *x) {
@@ -18762,9 +18822,9 @@ static void bpv_proc_sites(Compiler *c, int lit, BpvCtx *x) {
   }
   free(sites);
 }
-int block_param_values(Compiler *c, int holder, int at, BlockValueVisit fn, void *ctx) {
+int block_param_values(Compiler *c, int holder, int at, int rix, BlockValueVisit fn, void *ctx) {
   const NodeTable *nt = c->nt;
-  BpvCtx x = { .at = at, .fn = fn, .ctx = ctx };
+  BpvCtx x = { .at = at, .rix = rix, .fn = fn, .ctx = ctx };
   if (is_proc_create(c, holder)) {
     block_sig(c, a_proc_params_node(c, holder), is_lambda_create(c, holder), &x.s);
     bpv_proc_sites(c, holder, &x);

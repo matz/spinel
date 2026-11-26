@@ -173,6 +173,10 @@ typedef struct {
    such a nil can be stored THROUGH this name, so the names it was assigned
    or bound from reach it too (mark_elem_slot). */
 enum { NIE_MARKED = 1, NIE_STORED = 2, NIE_REACH = 4 };
+/* The literal indices of a rest's elements whose stores are kept apart
+   (LocalVar.rest_elem_at): the first REST_ELEM_HEAD and the last
+   REST_ELEM_TAIL. ELEM_ANY: an index not known, or past them. */
+enum { REST_ELEM_HEAD = 4, REST_ELEM_TAIL = 2, ELEM_ANY = -1000 };
 typedef struct {
   char *name;       /* Ruby local name (without sigil) */
   char *wname;      /* (a parameter) the name the program wrote where a pass renamed it
@@ -307,9 +311,15 @@ typedef struct {
                        widen for (widen_boxed_array_sources). */
   TyKind rest_elem_store; /* (a method's rest) the element type a store
                        through one of the rest's elements carries
-                       (`r[0] << 1`), unified as boxed_push_elem is: the
+                       (`r[i] << 1`), unified as boxed_push_elem is: the
                        binding widens, for it, the arrays each call hands
                        the rest (widen_rest_arg_arrays). */
+  TyKind rest_elem_at[REST_ELEM_HEAD + REST_ELEM_TAIL]; /* (a method's rest)
+                       the same, of a store through the element at a literal
+                       index (`r[0] << 1`, `r.last`): 0 to REST_ELEM_HEAD - 1
+                       first, then -1 to -REST_ELEM_TAIL. The binding widens
+                       for it only the array a call lays there, where the
+                       count is the call's own; another index counts as any. */
   TyKind boxed_store_key, boxed_store_val; /* (params, boxed) the key and the
                        value an element write through this BOXED parameter
                        stores, unified as boxed_push_elem is: the evidence

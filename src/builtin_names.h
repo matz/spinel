@@ -149,6 +149,7 @@ int is_reduce_alias(const char *n); /* inject reduce: Enumerable reduction alias
 int is_minmax_query(const char *n); /* min max: extrema queries */
 int is_minmax_pair(const char *n); /* minmax: both extrema in one answer */
 int is_endpoint_query(const char *n); /* first last: collection or Range endpoints */
+int is_endpoint_first(const char *n); /* first: the endpoint at the front (element 0) */
 int is_map_alias(const char *n); /* map collect: Enumerable transformation aliases */
 int is_instance_eval_family(const char *n); /* instance_eval instance_exec */
 int is_reflective_access(const char *n); /* instance_variable_get/set, class_variable_get/set, const_get/set, remove_* */

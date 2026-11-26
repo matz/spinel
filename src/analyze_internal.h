@@ -790,13 +790,14 @@ enum { BS_ABSENT = 1, BS_NIL = 2 };
 void block_site_types(Compiler *c, const BlockSig *s, const int *av, int ac,
                       TyKind *pos, char *absent, TyKind *kws);
 /* How a value binds a block parameter (block_site_values): itself, or one
-   of its elements. BLOCK_REST names the rest, whose elements the values are. */
+   of its elements. BLOCK_REST names the rest, whose elements the values are;
+   rix the one of them at a literal index (ELEM_ANY: any). */
 enum { BV_WHOLE, BV_ELEM };
 enum { BLOCK_REST = -2 };
 typedef int (*BlockValueVisit)(Compiler *c, int v, int how, void *ctx);
-int block_site_values(Compiler *c, const BlockSig *s, const int *av, int ac, int at,
+int block_site_values(Compiler *c, const BlockSig *s, const int *av, int ac, int at, int rix,
                       BlockValueVisit fn, void *ctx);
-int block_param_values(Compiler *c, int holder, int at, BlockValueVisit fn, void *ctx);
+int block_param_values(Compiler *c, int holder, int at, int rix, BlockValueVisit fn, void *ctx);
 int block_settle_types(Compiler *c, int blk, const BlockSig *s,
                        const TyKind *pos, const char *absent, const TyKind *kws);
 int a_proc_params_node(Compiler *c, int create);

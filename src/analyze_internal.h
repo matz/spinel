@@ -377,6 +377,7 @@ int sclass_value_call(Compiler *c, int id);   /* analyze_infer.c */
 /* 1 if `id` is any proc-creating literal: a proc/lambda/Proc.new call (above)
    or a `->(){}` LambdaNode. */
 int is_proc_create(Compiler *c, int id);
+int is_lambda_create(Compiler *c, int create);
 int local_proc_literal_param_of(Compiler *c, Scope *sc, const char *nm);
 int proc_literal_calls_in_sight(Compiler *c, int lit);
 int proc_literal_uncalled(Compiler *c, int lit);
@@ -792,6 +793,15 @@ const char *block_sig_kw_name(Compiler *c, const BlockSig *s, int k);
 enum { BS_ABSENT = 1, BS_NIL = 2 };
 void block_site_types(Compiler *c, const BlockSig *s, const int *av, int ac,
                       TyKind *pos, char *absent, TyKind *kws);
+/* How a value binds a block parameter (block_site_values): itself, or one
+   of its elements. BLOCK_REST names the rest, whose elements the values are;
+   rix the one of them at a literal index (ELEM_ANY: any). */
+enum { BV_WHOLE, BV_ELEM };
+enum { BLOCK_REST = -2 };
+typedef int (*BlockValueVisit)(Compiler *c, int v, int how, void *ctx);
+int block_site_values(Compiler *c, const BlockSig *s, const int *av, int ac, int at, int rix,
+                      BlockValueVisit fn, void *ctx);
+int block_param_values(Compiler *c, int holder, int at, int rix, BlockValueVisit fn, void *ctx);
 int block_settle_types(Compiler *c, int blk, const BlockSig *s,
                        const TyKind *pos, const char *absent, const TyKind *kws);
 int a_proc_params_node(Compiler *c, int create);
@@ -1260,7 +1270,13 @@ TyKind return_node_type(Compiler *c, int id);
 int infer_return_types(Compiler *c);
 int backprop_hash_return_types(Compiler *c);
 int backprop_call_target(Compiler *c, int call_id);
-int ivar_src_slot(Compiler *c, int v, const char **ivn);
+/* the classes whose ivar a value reads (ivar_src_slots, analyze_pass.c), or
+   reads or stores as a write's value (ivar_value_slots): cls[0..n), in
+   `one` for a single class, else malloc'd (ivar_slots_free) */
+typedef struct { int *cls, n, one; } IvarSlots;
+int ivar_src_slots(Compiler *c, int v, const char **ivn, IvarSlots *sl);
+int ivar_value_slots(Compiler *c, int v, const char **ivn, IvarSlots *sl);
+void ivar_slots_free(IvarSlots *sl);
 void cr_collect_calls(Compiler *c, const NodeTable *nt, int id, char ***out, int *n, int *cap, int instance_self);
 void cr_collect_program_end(Compiler *c, char ***out, int *n, int *cap);   /* the printer of an uncaught exception */
 int cr_ty_builtin_value(Compiler *c, TyKind t);

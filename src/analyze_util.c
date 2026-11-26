@@ -1499,7 +1499,9 @@ const char *an_literal_name(const NodeTable *nt, int node) {
   NodeKind k = node >= 0 ? nt_kind(nt, node) : NK_NONE;
   if (k != NK_SymbolNode && k != NK_StringNode) return NULL;
   const char *v = nt_str(nt, node, "value");
-  return v ? v : nt_str(nt, node, "unescaped");
+  if (!v) v = nt_str(nt, node, "unescaped");
+  /* (a String literal as the parser gives it holds its text as content) */
+  return v ? v : nt_str(nt, node, "content");
 }
 /* Does the program alias method `a` or `b` (NULL for none): an `alias` or an `alias_method` whose old name is one of
    them, or is no literal name (it may be)? The copy an alias makes keeps the method it found. */
@@ -5296,6 +5298,13 @@ int is_proc_create(Compiler *c, int id) {
   NodeKind k = nt_kind(c->nt, id);
   if (k == NK_LambdaNode) return 1;
   return is_proc_literal(c, id);
+}
+/* Is proc literal `create` (is_proc_create) a lambda, binding its
+   arguments strictly: `->(a) { }` or `lambda { |a| }`? */
+int is_lambda_create(Compiler *c, int create) {
+  const NodeTable *nt = c->nt;
+  const char *cn = nt_str(nt, create, "name");
+  return nt_kind(nt, create) == NK_LambdaNode || (cn && is_lambda_constructor(cn));
 }
 /* Unify the value types of `return <expr>` nodes lexically inside a proc body,
    without descending into a nested scope (a def/class/module, or a nested block

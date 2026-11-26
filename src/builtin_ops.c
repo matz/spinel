@@ -3386,6 +3386,12 @@ int bop_below_object_answers(const char *name) {
 }
 
 /* See builtin_ops.h. */
+int bop_any_answers(const char *name) {
+  int i = -1;
+  return !name || builtin_object_method_known(name) || bop_core_name(name) || bop_name_row_next(name, &i);
+}
+
+/* See builtin_ops.h. */
 int bop_class_answers(const char *name, int argc, int has_block) {
   const BuiltinOp *r = argc >= 0 ? bop_find(TY_CLASS, name, argc, has_block) : NULL;
   return r && !(r->flags & BOPF_PRIVATE);

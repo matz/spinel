@@ -38,6 +38,8 @@ int is_object_class_name(const char *n);   /* Object alone: the top level's cons
 int is_object_root(const char *n);    /* Object Kernel BasicObject: the classes every object has */
 int is_send_family(const char *n);    /* send __send__ public_send */
 int is_public_send(const char *n);    /* public_send, which enforces visibility */
+extern const char *const dyn_ivar_set_names[]; /* send __send__ public_send instance_variable_set: may set an ivar by a name they are handed, NULL-terminated */
+int is_dyn_ivar_set_name(const char *n); /* a name in dyn_ivar_set_names */
 int builtin_name_takes_keywords(const char *n);   /* a builtin of the name takes keywords in CRuby (clone, round, lines ...) */
 /* Does a CRuby fact of a method of `feature` hold for this program: a core
    method's (feature NULL) always, a library's (io/console) where the
@@ -149,6 +151,7 @@ int is_reduce_alias(const char *n); /* inject reduce: Enumerable reduction alias
 int is_minmax_query(const char *n); /* min max: extrema queries */
 int is_minmax_pair(const char *n); /* minmax: both extrema in one answer */
 int is_endpoint_query(const char *n); /* first last: collection or Range endpoints */
+int is_endpoint_first(const char *n); /* first: the endpoint at the front (element 0) */
 int is_map_alias(const char *n); /* map collect: Enumerable transformation aliases */
 int is_instance_eval_family(const char *n); /* instance_eval instance_exec */
 int is_reflective_access(const char *n); /* instance_variable_get/set, class_variable_get/set, const_get/set, remove_* */
@@ -383,6 +386,8 @@ int is_const_missing_name(const char *n); /* const_missing */
 int is_const_table_def_name(const char *n); /* __const_get__ __const_defined__ */
 int is_string_position_mutator(const char *n); /* []= clear insert setbyte slice! */
 int is_array_push_family(const char *n); /* << append prepend push unshift */
+int is_array_row_read(const char *n);  /* [] first last fetch each each_with_index size length empty? inspect to_s: an Array read that adds no element */
+int array_answers_receiver_name(const char *n); /* << push concat sort! map! tap itself to_a to_ary ...: an Array method that answers its receiver itself */
 
 int is_io_class_name(const char *n); /* File IO */
 int is_immediate_class_name(const char *n); /* FalseClass NilClass TrueClass */
@@ -552,6 +557,7 @@ int is_file_string_const(const char *n); /* File::SEPARATOR PATH_SEPARATOR NULL 
 int is_to_proc_name(const char *n); /* to_proc */
 int is_proc_conversion_name(const char *n); /* to_proc curry: makes a proc */
 int is_aref_name(const char *n);         /* []: an element read */
+int is_fetch_name(const char *n);        /* fetch: an element read with a fallback */
 int is_shovel_name(const char *n);       /* <<: an append, a chain's link */
 
 const char *dir_surface_alias(const char *n, int blockless_iter);

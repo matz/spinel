@@ -2868,6 +2868,26 @@ static int emit_boxed_sequence(Compiler *c, int node, Buf *b) {
   return 1;
 }
 
+/* The function that builds the general Array out of a typed one of
+   Integers, Floats or Strings; NULL for another kind. */
+static const char *array_lift_fn(TyKind t) {
+  return t == TY_INT_ARRAY ? "sp_PolyArray_from_int_array" : t == TY_FLOAT_ARRAY ? "sp_PolyArray_from_float_array"
+       : t == TY_STR_ARRAY ? "sp_PolyArray_from_str_array" : NULL;
+}
+/* The new Array of kind t `node` builds (array_lift_fn's kinds), as the
+   general Array; a nil (`s&.bytes`) stays NULL. */
+static void emit_array_lifted(Compiler *c, int node, TyKind t, Buf *b) {
+  int lt = ++g_tmp;
+  buf_printf(b, "({ %s_t%d = ", t == TY_INT_ARRAY ? "sp_IntArray *" : t == TY_FLOAT_ARRAY ? "sp_FloatArray *" : "sp_StrArray *", lt);
+  emit_expr(c, node, b);
+  buf_printf(b, "; _t%d ? %s(_t%d) : NULL; })", lt, array_lift_fn(t), lt);
+}
+/* Did the analysis mark `node` a new Array its holder keeps as the general
+   Array (box_lift_arr: a box, a Struct member's `super` argument)? */
+static int box_lift_marked(Compiler *c, int node) {
+  node = nt_paren_single(c->nt, node);
+  return c->box_lift_arr && node >= 0 && node < c->node_cap && c->box_lift_arr[node];
+}
 static void emit_boxed_impl(Compiler *c, int node, Buf *b) {
   /* Parentheses are transparent: box the inner expression directly so a
      wrapped yield (`out << (yield x)`) reaches the per-call-site yield boxing
@@ -3334,17 +3354,10 @@ static void emit_boxed_impl(Compiler *c, int node, Buf *b) {
                     : t == TY_OPENSTRUCT ? "SP_BUILTIN_OPENSTRUCT" : NULL;
     if (aid) {
       /* a new Array a push of another kind reaches (box_lift_arr) */
-      const char *lift = !c->box_lift_arr || node >= c->node_cap || !c->box_lift_arr[node] ? NULL
-                       : t == TY_INT_ARRAY ? "sp_PolyArray_from_int_array"
-                       : t == TY_FLOAT_ARRAY ? "sp_PolyArray_from_float_array"
-                       : t == TY_STR_ARRAY ? "sp_PolyArray_from_str_array" : NULL;
-      if (lift) {
-        /* (a nil `s&.bytes` stays nil) */
-        int lt = ++g_tmp;
-        buf_printf(b, "sp_box_nullable_obj((void *)(({ %s_t%d = ", t == TY_INT_ARRAY ? "sp_IntArray *"
-                   : t == TY_FLOAT_ARRAY ? "sp_FloatArray *" : "sp_StrArray *", lt);
-        emit_expr(c, node, b);
-        buf_printf(b, "; _t%d ? %s(_t%d) : NULL; })), SP_BUILTIN_POLY_ARRAY)", lt, lift, lt);
+      if (box_lift_marked(c, node) && array_lift_fn(t)) {
+        buf_puts(b, "sp_box_nullable_obj((void *)(");
+        emit_array_lifted(c, node, t, b);
+        buf_puts(b, "), SP_BUILTIN_POLY_ARRAY)");
         RC(RF_NULLABLE, RW_NONE);
         return;
       }
@@ -17214,6 +17227,28 @@ static int super_member_nilbit(Compiler *c, ClassInfo *cls, int a, int v, Buf *b
   free(ob.p);
   return 1;
 }
+/* The value v a `super(...)` hands Struct / Data member a, into the
+   member's slot: with its nil bit (super_member_nilbit), as the handle of
+   a String member, boxed or unboxed to the member's kind (a poly arg, e.g.
+   an initialize param that stayed poly, into a scalar member slot: unboxed
+   to the member's C type), and a new Array into a general Array member
+   built as one, as nothing else holds it (the source walk marks it so,
+   struct_super_member_values: box_lift_arr, as emit_boxed_impl's lift
+   reads it). */
+static void emit_super_member_arg(Compiler *c, ClassInfo *cls, int a, int v, Buf *b) {
+  TyKind ivt = cls->ivar_types[a];
+  if (super_member_nilbit(c, cls, a, v, b)) return;
+  Repr vr = repr_of(c, v);
+  int at_boxed = vr.kind == RK_BOXED;
+  if (ivt == TY_STRBUF && struct_super_handle_arg(c, v, b)) {}
+  else if (ivt == TY_POLY && !at_boxed) emit_boxed(c, v, b);
+  else if (ivt != TY_POLY && at_boxed) {
+    Buf ex; memset(&ex, 0, sizeof ex); emit_expr(c, v, &ex);
+    emit_unbox_nilable_text(c, ivt, ex.p ? ex.p : "", b); free(ex.p);
+  }
+  else if (ivt == TY_POLY_ARRAY && array_lift_fn(vr.as_ty) && box_lift_marked(c, v)) emit_array_lifted(c, v, vr.as_ty, b);
+  else emit_expr(c, v, b);
+}
 /* A super's forwarded parameter pi, boxed: an Integer or Float parameter
    that also takes nil boxes as its oint. */
 void emit_boxed_fwd_param(Compiler *c, Scope *s, int pi, Buf *b) {
@@ -17935,31 +17970,9 @@ static void emit_super_value(Compiler *c, int id, Buf *b) {
             else
               buf_printf(b, "%s)", default_value_from_compiler(c, ivt));
           }
-          else if (super_member_nilbit(c, cls, a, vnode, b)) {}
-          else {
-            int at_boxed = repr_of(c, vnode).kind == RK_BOXED;
-            if (ivt == TY_STRBUF && struct_super_handle_arg(c, vnode, b)) {}
-            else if (ivt == TY_POLY && !at_boxed) emit_boxed(c, vnode, b);
-            else if (ivt != TY_POLY && at_boxed) {
-              Buf ex; memset(&ex, 0, sizeof ex); emit_expr(c, vnode, &ex);
-              emit_unbox_nilable_text(c, ivt, ex.p ? ex.p : "", b); free(ex.p);
-            }
-            else emit_expr(c, vnode, b);
-          }
+          else emit_super_member_arg(c, cls, a, vnode, b);
         }
-        else if (super_member_nilbit(c, cls, a, sargv[a], b)) {}
-        else {
-          int at_boxed = repr_of(c, sargv[a]).kind == RK_BOXED;
-          if (ivt == TY_STRBUF && struct_super_handle_arg(c, sargv[a], b)) {}
-          else if (ivt == TY_POLY && !at_boxed) emit_boxed(c, sargv[a], b);
-          else if (ivt != TY_POLY && at_boxed) {
-            /* poly arg (e.g. an initialize param that stayed poly) into a scalar
-               member slot: unbox to the member's C type. */
-            Buf ex; memset(&ex, 0, sizeof ex); emit_expr(c, sargv[a], &ex);
-            emit_unbox_nilable_text(c, ivt, ex.p ? ex.p : "", b); free(ex.p);
-          }
-          else emit_expr(c, sargv[a], b);
-        }
+        else emit_super_member_arg(c, cls, a, sargv[a], b);
         if (one_to) buf_puts(b, ")");
         buf_puts(b, ", ");
       }

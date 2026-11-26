@@ -12364,15 +12364,15 @@ TyKind infer_uncached(Compiler *c, int id) {
        Toplevel slot, which the value alone does not type (`(@a ||= []) << 1`,
        a boxed `@i += 1` read back as the slot); so does a plain write of an
        untyped value (`y = (@a = [])`, where a later write made the slot a
-       poly array) */
-    if (wcls < 0 && !s->is_cmethod && id < c->node_cap && c->node_cbody[id] < 0 &&
-        (nk == NK_InstanceVariableOrWriteNode || nk == NK_InstanceVariableAndWriteNode ||
-         nk == NK_InstanceVariableOperatorWriteNode ||
-         (nk == NK_InstanceVariableWriteNode && infer_type(c, nt_ref(nt, id, "value")) == TY_UNKNOWN))) {
+       poly array), and of a typed Array the slot holds as the general Array
+       (`k.v = @w = [1, 2]` with @w widened: the store converts it, and the
+       value handed on is that one Array) */
+    if (wcls < 0 && !s->is_cmethod && id < c->node_cap && c->node_cbody[id] < 0) {
       int tl = c->toplevel_class;
       int tiv = tl >= 0 && nm ? comp_ivar_index(&c->classes[tl], nm) : -1;
       TyKind tt = tiv >= 0 ? ivar_value_ty(&c->classes[tl], tiv) : TY_UNKNOWN;
-      if (tt != TY_UNKNOWN) return tt;
+      TyKind vt = nk == NK_InstanceVariableWriteNode ? infer_type(c, nt_ref(nt, id, "value")) : TY_UNKNOWN;
+      if (tt != TY_UNKNOWN && (vt == TY_UNKNOWN || (tt == TY_POLY_ARRAY && ty_is_array(vt)))) return tt;
     }
     /* a class or module body's own ivar: the class's slot, which the store
        there writes (the civ_ static) */

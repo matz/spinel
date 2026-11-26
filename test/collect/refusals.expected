@@ -194,11 +194,17 @@ spinel: 1 refusal, nothing written
 == test/reject/attr_accessor_local_in_singleton_class.rb [promote] rc=1
 spinel: test/reject/attr_accessor_local_in_singleton_class.rb:6: attr_accessor with a non-literal name is not supported; use literal Symbols or Strings (see docs/limitations.md)
 spinel: 1 refusal, nothing written
-== test/reject/attr_accessor_loop_in_class_method.rb [default] rc=1
-spinel: test/reject/attr_accessor_loop_in_class_method.rb:5: attr_accessor with a non-literal name is not supported; use literal Symbols or Strings (see docs/limitations.md)
+== test/reject/attr_loop_keyword_param.rb [default] rc=1
+spinel: test/reject/attr_loop_keyword_param.rb:4: attr_accessor with a non-literal name is not supported; use literal Symbols or Strings (see docs/limitations.md)
 spinel: 1 refusal, nothing written
-== test/reject/attr_accessor_loop_in_class_method.rb [promote] rc=1
-spinel: test/reject/attr_accessor_loop_in_class_method.rb:5: attr_accessor with a non-literal name is not supported; use literal Symbols or Strings (see docs/limitations.md)
+== test/reject/attr_loop_keyword_param.rb [promote] rc=1
+spinel: test/reject/attr_loop_keyword_param.rb:4: attr_accessor with a non-literal name is not supported; use literal Symbols or Strings (see docs/limitations.md)
+spinel: 1 refusal, nothing written
+== test/reject/attr_loop_undone_ivar.rb [default] rc=1
+spinel: test/reject/attr_loop_undone_ivar.rb:10: attr_accessor with a non-literal name is not supported; use literal Symbols or Strings (see docs/limitations.md)
+spinel: 1 refusal, nothing written
+== test/reject/attr_loop_undone_ivar.rb [promote] rc=1
+spinel: test/reject/attr_loop_undone_ivar.rb:10: attr_accessor with a non-literal name is not supported; use literal Symbols or Strings (see docs/limitations.md)
 spinel: 1 refusal, nothing written
 == test/reject/attr_splat_in_singleton_class.rb [default] rc=1
 spinel: test/reject/attr_splat_in_singleton_class.rb:5: attr_accessor with a splat of anything but a constant Array literal of Symbols or Strings (written once, ahead of the call, and never changed) is not supported; name the attributes (see docs/limitations.md)

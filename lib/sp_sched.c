@@ -5388,7 +5388,8 @@ sp_queue *sp_SizedQueue_new(sp_int max) {
 }
 
 void sp_Queue_push_options_check(sp_queue *q, int has_non_block, int has_timeout) {
-  if (q->max > 0) return;
+  /* (max is read without the queue's lock: SizedQueue#max= writes it) */
+  if (SP_ATOMIC_LOAD(&q->max, __ATOMIC_RELAXED) > 0) return;
   /* CRuby's Queue#push takes one argument; a timeout: hash counts as one more. */
   if (has_non_block && has_timeout) sp_raise_cls("ArgumentError", "wrong number of arguments (given 3, expected 1)");
   if (has_non_block || has_timeout) sp_raise_cls("ArgumentError", "wrong number of arguments (given 2, expected 1)");
@@ -5404,7 +5405,11 @@ void sp_Queue_push_options_check(sp_queue *q, int has_non_block, int has_timeout
    wake is not lost and the scheduler lock is taken only where the wake needs
    it (main, a timed waiter's timer). A timed wait keeps the scheduler lock
    for its timer and looks at the queue again under q->wl before it parks. */
-static int sp_queue_has_room(void *p) { sp_queue *q = (sp_queue *)p; return q->closed || q->max <= 0 || q->len < q->max; }
+static int sp_queue_has_room(void *p) {
+  sp_queue *q = (sp_queue *)p;
+  sp_int max = SP_ATOMIC_LOAD(&q->max, __ATOMIC_RELAXED);
+  return q->closed || max <= 0 || q->len < max;
+}
 static int sp_queue_has_item(void *p) { sp_queue *q = (sp_queue *)p; return q->closed || q->len > 0; }
 /* Wake every waiter on `*list`, a list under q->wl (held on entry, dropped on
    return): collected under the lock and woken after it, as
@@ -5578,6 +5583,39 @@ sp_int  sp_Queue_num_waiting(sp_queue *q) {
   wl_unlock(&q->wl);
   return n;
 }
+/* a plain Queue has no max=: NoMethodError, before the argument converts */
+void sp_Queue_max_writable(sp_queue *q) {
+  if (SP_ATOMIC_LOAD(&q->max, __ATOMIC_RELAXED) <= 0)
+    sp_raise_cls("NoMethodError", "undefined method 'max=' for an instance of Thread::Queue");
+}
+/* SizedQueue#max=: a plain Queue has no max=, and the size must be
+   positive; a larger size frees slots, so the parked pushers retry */
+sp_int sp_Queue_set_max(sp_queue *q, sp_int max) {
+  wl_lock(&q->wl);
+  if (q->max <= 0) {
+    wl_unlock(&q->wl);
+    sp_raise_cls("NoMethodError", "undefined method 'max=' for an instance of Thread::Queue");
+  }
+  if (max <= 0) {
+    wl_unlock(&q->wl);
+    sp_raise_cls("ArgumentError", "queue size must be positive");
+  }
+  sp_int was = q->max;
+  SP_ATOMIC_STORE(&q->max, max, __ATOMIC_RELAXED);
+  /* wake as many parked pushers as the larger size has new slots, no more:
+     one that finds the queue full parks again and waits for a pop */
+  for (sp_int left = max - was; left > 0;) {
+    sp_thread *ts[64]; int n = 0;
+    for (sp_thread *w; n < 64 && n < left && (w = wl_take_one(&q->push_waiters)) != NULL; ) ts[n++] = w;
+    wl_unlock(&q->wl);
+    for (int i = 0; i < n; i++) sched_wake_unlinked(ts[i]);
+    left -= n;
+    if (n < 64 || left <= 0) return max;
+    wl_lock(&q->wl);
+  }
+  wl_unlock(&q->wl);
+  return max;
+}
 void     sp_Queue_clear(sp_queue *q)  {
   wl_lock(&q->wl);
   q->head = q->len = 0;
@@ -5619,7 +5657,7 @@ const char *sp_Mutex_class_name(sp_mutex *m) {
 }/* A bounded queue is a SizedQueue; an unbounded one is a Queue. One object
    backs both, so the class name reads the bound rather than a separate tag. */
 const char *sp_Queue_class_name(sp_queue *q) {
-  return (q && q->max > 0) ? "Thread::SizedQueue" : "Thread::Queue";
+  return (q && SP_ATOMIC_LOAD(&q->max, __ATOMIC_RELAXED) > 0) ? "Thread::SizedQueue" : "Thread::Queue";
 }
 
 

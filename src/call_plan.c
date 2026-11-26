@@ -11984,6 +11984,7 @@ static void cpoly_defaults0(Compiler *c, int id, const char *name, const PolySpe
   if (sp_streq(name, "close")) cpoly_family(p, cap, PB_N_IO_CLOSE);
   if (sp_streq(name, "__enum_to_a")) cpoly_family(p, cap, PB_N_ENUM_TO_A);
   if (sp_streq(name, "signal") || sp_streq(name, "broadcast")) cpoly_family(p, cap, PB_N_CONDVAR);
+  if (blockless && (sp_streq(name, "name") || sp_streq(name, "report_on_exception"))) cpoly_family(p, cap, PB_N_THREAD_READER);
 }
 
 /* How a zero-argument dispatch holds and keys its receiver, and the type

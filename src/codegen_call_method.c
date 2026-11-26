@@ -3114,8 +3114,10 @@ int emit_call_poly_callable_arms(Compiler *c, int id, Buf *b, const NodeTable *n
                       " : _t%d.tag == SP_TAG_ENCODING ? sp_box_str_new(sp_str_uminus_val(_t%d.v.s))"
                       " : _t%d.tag == SP_TAG_SYM ? sp_box_str_new(sp_sym_name_str((sp_sym)_t%d.v.i))"   /* (a Symbol's name: its one frozen String, no fstring) */
                       " : (_t%d.tag == SP_TAG_OBJ && _t%d.v.p && (_t%d.cls_id == SP_BUILTIN_EXCEPTION || sp_is_exc_subclass_cls(_t%d.cls_id)))"
-                      " ? sp_exc_name_acc((sp_Exception *)_t%d.v.p)",
-                   t, t, cls_arm, t, t, t, t, t, t, t, t, t);
+                      " ? sp_exc_name_acc((sp_Exception *)_t%d.v.p)"
+                      " : (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_THREAD && _t%d.v.p)"   /* a Thread's name or nil */
+                      " ? sp_Thread_get_name((sp_thread *)_t%d.v.p)",
+                   t, t, cls_arm, t, t, t, t, t, t, t, t, t, t, t, t, t);
       }
       else if (sp_streq(name, "owner"))
         buf_printf(b, "sp_box_class(sp_bm_owner((sp_BoundMethod *)_t%d.v.p))", t);

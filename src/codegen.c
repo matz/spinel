@@ -14484,17 +14484,23 @@ static int obj_deconstruct_keys_method(Compiler *c, int ci, int *defc) {
    PolyArray arr: the class boxed by id (a class-side dispatch switches on
    it, and sp_class_to_s names it), listed once its header has run (the
    flag the constant pass had the call ask); for a site class, the classes
-   made at run time from it instead, newest first as CRuby lists them. */
-void emit_subclass_push(Compiler *c, int k, const char *arr, Buf *b) {
+   made at run time from it instead, newest first as CRuby lists them.
+   when (C, NULL for none) is a condition the entry is listed under. */
+void emit_subclass_push(Compiler *c, int k, const char *arr, const char *when, Buf *b) {
   if (cplan_rt_site(c, k)) {
     int r = ++g_tmp;
+    if (when) buf_printf(b, " if (%s)", when);
     buf_printf(b, " for (sp_int _t%d = sp_rtclass_made(); _t%d-- > 0; )"
                   " if (sp_rtclass_at(SP_RTCLASS_BASE + _t%d)->site == %d)"
                   " sp_PolyArray_push(%s, sp_box_class(((sp_Class){SP_RTCLASS_BASE + _t%d, NULL})));",
                r, r, r, k, arr, r);
     return;
   }
-  if (an_class_presence_is_read(c, k)) buf_printf(b, " if (sp_class_present_%d)", k);
+  int present = an_class_presence_is_read(c, k);
+  if (when || present)
+    buf_printf(b, " if (%s%s", when ? when : "", when && present ? " && " : "");
+  if (present) buf_printf(b, "sp_class_present_%d", k);
+  if (when || present) buf_puts(b, ")");
   buf_printf(b, " sp_PolyArray_push(%s, sp_box_class(((sp_Class){%d, NULL})));", arr, k);
 }
 
@@ -14537,7 +14543,7 @@ static void emit_cls_answers_dispatch(Compiler *c, Buf *b) {
     for (int k = 0; k < c->nclasses; k++) {
       if (c->classes[k].parent != i || is_builtin_reopen(c->classes[k].name)) continue;
       if (c->classes[k].is_singleton_of) continue;   /* a singleton class is not listed */
-      emit_subclass_push(c, k, "a", b);
+      emit_subclass_push(c, k, "a", NULL, b);
     }
     buf_puts(b, " return a;\n");
   }
@@ -17707,11 +17713,11 @@ static void emit_super_value(Compiler *c, int id, Buf *b) {
         int par = c->classes[k].parent;
         if (par < 0 || (par != s->class_id && !is_descendant(c, par, s->class_id))) continue;
         if (is_builtin_reopen(c->classes[k].name) || c->classes[k].is_singleton_of) continue;
-        /* boxed by id, as Class#subclasses boxes them; listed once its header
-           has run (the flag the constant pass had the super ask) */
-        buf_printf(b, " if (_t%d.cls_id == %d", tc, par);
-        if (an_class_presence_is_read(c, k)) buf_printf(b, " && sp_class_present_%d", k);
-        buf_printf(b, ") sp_PolyArray_push(_t%d, sp_box_class(((sp_Class){%d, NULL})));", ta, k);
+        /* listed as Class#subclasses lists it, where the receiving class is its parent */
+        char arr[24], when[48];
+        snprintf(arr, sizeof arr, "_t%d", ta);
+        snprintf(when, sizeof when, "_t%d.cls_id == %d", tc, par);
+        emit_subclass_push(c, k, arr, when, b);
       }
       Repr sr = repr_of(c, id);
       if (sr.kind == RK_BOXED) buf_printf(b, " sp_box_poly_array(_t%d); })", ta);

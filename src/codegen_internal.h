@@ -1282,7 +1282,7 @@ int obj_default_name(Compiler *c, int ci, const char *obj, char *name, size_t nn
 void emit_obj_class_id(Compiler *c, int ci, const char *obj, Buf *b);
 void emit_obj_class_value(Compiler *c, int ci, const char *obj, Buf *b);   /* the same, as an sp_Class */
 /* Class#subclasses' entry for class k onto the PolyArray arr (codegen.c) */
-void emit_subclass_push(Compiler *c, int k, const char *arr, Buf *b);
+void emit_subclass_push(Compiler *c, int k, const char *arr, const char *when, Buf *b);
 /* Kernel#to_s or #inspect (want_inspect) of an object of program class cid,
    the builtin's own text whatever the program defines: #<Name:0x...>, and
    for inspect the default ivar walk (sp_obj_kernel_inspect). obj is the C

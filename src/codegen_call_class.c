@@ -5617,7 +5617,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
              singleton class, which Class#subclasses leaves out */
           if (c->classes[k].is_singleton_of) continue;
           char arr[24]; snprintf(arr, sizeof arr, "_t%d", ta);
-          emit_subclass_push(c, k, arr, b);
+          emit_subclass_push(c, k, arr, NULL, b);
         }
         buf_printf(b, " _t%d; })", ta);
         return 1;

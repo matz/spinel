@@ -4959,12 +4959,80 @@ static const char *ie_table_key(Compiler *c, int t, int *owner) {
    back as `instance_exec(&self.class.bodies[name])`): each literal block
    a call of such a method is given. -1 for a read of a table some other
    write fills, or of no table the program fills so. */
+/* The scope whose own &block a stored value v is, through at most one
+   method that takes it as a positional parameter (`def self.define(name,
+   block) = bodies[name] = block`, called as `define(name, block)` by a
+   method that hands on its &block): into scopes (at most cap), their
+   count; -1 for any other value, or a call of such a method that hands it
+   something else. */
+static int ie_block_param_storers(Compiler *c, const Scope *s, int v, int *scopes, int cap, int depth) {
+  const NodeTable *nt = c->nt;
+  if (v < 0 || nt_kind(nt, v) != NK_LocalVariableReadNode || !s || !s->name) return -1;
+  const char *vn = nt_str(nt, v, "name");
+  if (s->blk_param && s->blk_param[0] && sp_streq(vn, s->blk_param)) {
+    if (cap < 1) return -1;
+    scopes[0] = (int)(s - c->scopes);
+    return 1;
+  }
+  int pi = -1;
+  for (int i = 0; i < s->nparams; i++) if (s->pnames[i] && sp_streq(s->pnames[i], vn)) pi = i;
+  if (depth > 0 || pi < 0 || pi >= s->nrequired || s->rest_idx >= 0 || s->def_node < 0 || s->class_id < 0) return -1;
+  /* (a parameter the method writes is no longer what it was handed) */
+  for (int id = 0; id < nt->count; id++) {
+    NodeKind k = nt_kind(nt, id);
+    if ((k == NK_LocalVariableWriteNode || k == NK_LocalVariableTargetNode || k == NK_LocalVariableOperatorWriteNode ||
+         k == NK_LocalVariableOrWriteNode || k == NK_LocalVariableAndWriteNode) &&
+        sp_streq(nt_str(nt, id, "name"), vn) && comp_scope_of(c, id) == s) return -1;
+  }
+  int si = (int)(s - c->scopes), n = 0, any = 0;
+  NT_FOREACH_KIND(nt, NK_CallNode, call) {
+    const char *cn = nt_str(nt, call, "name");
+    if (!cn || !sp_streq(cn, s->name)) continue;
+    int cr = nt_ref(nt, call, "receiver");
+    const Scope *cs = comp_scope_of(c, call);
+    if ((cr >= 0 && nt_kind(nt, cr) != NK_SelfNode) || !cs || cs->def_node < 0 || cs->class_id < 0) return -1;
+    if (call_target(c, call, cs->class_id, cn, cs->is_cmethod ? CT_CMETHOD : CT_METHODS, NULL) != si) continue;
+    int a = nt_ref(nt, call, "arguments"), an = 0;
+    const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+    if (an != s->nparams) return -1;
+    int k = ie_block_param_storers(c, cs, av[pi], scopes + n, cap - n, depth + 1);
+    if (k < 0) return -1;
+    n += k; any = 1;
+  }
+  return any ? n : -1;
+}
+/* The value a table read finds, where the write stores a Hash literal of
+   Symbol keys (`bodies[name] = { body: block }`, read as
+   `bodies[name][:body]`): the element of key ikey; v itself when ikey is NULL */
+static int ie_store_value_at(const NodeTable *nt, int v, const char *ikey) {
+  if (!ikey) return v;
+  if (v < 0 || nt_kind(nt, v) != NK_HashNode) return -1;
+  int n = 0, found = -1; const int *els = nt_arr(nt, v, "elements", &n);
+  for (int i = 0; i < n; i++) {
+    if (nt_kind(nt, els[i]) != NK_AssocNode) return -1;
+    int k = nt_ref(nt, els[i], "key");
+    if (k < 0 || nt_kind(nt, k) != NK_SymbolNode) return -1;
+    if (sp_streq(nt_str(nt, k, "value"), ikey)) found = nt_ref(nt, els[i], "value");
+  }
+  return found;
+}
 static int ie_trace_index_store(Compiler *c, int x, int *out, int cap) {
   const NodeTable *nt = c->nt;
   int a = nt_ref(nt, x, "arguments"), an = 0;
-  if (a >= 0) nt_arr(nt, a, "arguments", &an);
+  const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+  /* (`T[k][:sym]`: the element sym of the Hash literal each write stores) */
+  const char *ikey = NULL;
+  int tx = x, xr = nt_ref(nt, x, "receiver");
+  if (an == 1 && nt_kind(nt, av[0]) == NK_SymbolNode && xr >= 0 && nt_kind(nt, xr) == NK_CallNode &&
+      sp_streq(nt_str(nt, xr, "name"), "[]")) {
+    int ra = nt_ref(nt, xr, "arguments"), rn = 0;
+    if (ra >= 0) nt_arr(nt, ra, "arguments", &rn);
+    int rown = -1;
+    if (rn == 1 && ie_table_key(c, nt_ref(nt, xr, "receiver"), &rown)) { ikey = nt_str(nt, av[0], "value"); tx = xr; }
+  }
+  if (tx != x) { a = nt_ref(nt, tx, "arguments"); av = nt_arr(nt, a, "arguments", &an); }
   int kown = -1;
-  const char *key = ie_table_key(c, nt_ref(nt, x, "receiver"), &kown);
+  const char *key = ie_table_key(c, nt_ref(nt, tx, "receiver"), &kown);
   if (an != 1 || !key) return -1;
   int storers[16], ns = 0;
   NT_FOREACH_KIND(nt, NK_CallNode, w) {
@@ -4976,17 +5044,44 @@ static int ie_trace_index_store(Compiler *c, int x, int *out, int cap) {
     int wa = nt_ref(nt, w, "arguments"), wn2 = 0;
     const int *wv = wa >= 0 ? nt_arr(nt, wa, "arguments", &wn2) : NULL;
     const Scope *s = comp_scope_of(c, w);
-    int v = wn2 == 2 ? wv[1] : -1;
-    /* (a write of anything but the storing method's own block makes the table's content unknown) */
-    if (v < 0 || nt_kind(nt, v) != NK_LocalVariableReadNode || !s || !s->name || !s->blk_param ||
-        !s->blk_param[0] || !sp_streq(nt_str(nt, v, "name"), s->blk_param)) return -1;
-    int si = (int)(s - c->scopes), seen = 0;
-    for (int q = 0; q < ns; q++) seen |= storers[q] == si;
-    if (seen) continue;
-    if (ns >= 16) return -1;
-    storers[ns++] = si;
+    int v = ie_store_value_at(nt, wn2 == 2 ? wv[1] : -1, ikey);
+    /* (a write of anything but a storing method's own block makes the table's content unknown) */
+    int found[16], nf = ie_block_param_storers(c, s, v, found, 16, 0);
+    if (nf < 0) return -1;
+    for (int f = 0; f < nf; f++) {
+      int si = found[f], seen = 0;
+      for (int q = 0; q < ns; q++) seen |= storers[q] == si;
+      if (seen) continue;
+      if (ns >= 16) return -1;
+      storers[ns++] = si;
+    }
   }
   return ns ? ie_calls_into(c, storers, ns, out, cap) : -1;
+}
+/* Is call x one with a literal block whose every method of its name
+   answers that &block and nothing else (`def keep(&block) = block`)? */
+static int ie_block_identity_call(Compiler *c, int x) {
+  const NodeTable *nt = c->nt;
+  const char *nm = nt_str(nt, x, "name");
+  int b = nt_ref(nt, x, "block");
+  if (!nm || b < 0 || nt_kind(nt, b) != NK_BlockNode) return 0;
+  int any = 0;
+  for (int si = 0; si < c->nscopes; si++) {
+    const Scope *s = &c->scopes[si];
+    if (!s->name || !sp_streq(s->name, nm) || s->def_node < 0) continue;
+    if (!s->blk_param || !s->blk_param[0] || s->body < 0) return 0;
+    int e = s->body;
+    for (int d = 0; e >= 0 && d < 4; d++) {
+      NodeKind ek = nt_kind(nt, e);
+      if (ek == NK_ParenthesesNode) { e = nt_ref(nt, e, "body"); continue; }
+      if (ek != NK_StatementsNode) break;
+      int n = 0; const int *st = nt_arr(nt, e, "body", &n);
+      e = n == 1 ? st[0] : -1;
+    }
+    if (e < 0 || nt_kind(nt, e) != NK_LocalVariableReadNode || !sp_streq(nt_str(nt, e, "name"), s->blk_param)) return 0;
+    any = 1;
+  }
+  return any;
 }
 /* A local read x stands for: the value of the one write of it in its
    scope (`b = self.class.bodies[name]`), or, for a required parameter of
@@ -5096,6 +5191,13 @@ int ie_trace_bodies(Compiler *c, int x, int *out, int cap, int depth) {
          answers no literal block) */
       if (nt_str(nt, x, "name") && sp_streq(nt_str(nt, x, "name"), "method_missing") && nt_ignore_visibility(nt, x)) return 0;
       if (nt_str(nt, x, "name") && sp_streq(nt_str(nt, x, "name"), "[]")) return ie_trace_index_store(c, x, out, cap);
+      /* a literal block handed to a method that answers its own &block
+         (`def keep(&block) = block`, `body = keep { id }`): that block */
+      if (ie_block_identity_call(c, x)) {
+        if (cap < 1) return -1;
+        out[0] = nt_ref(nt, nt_ref(nt, x, "block"), "body");
+        return 1;
+      }
       break;
     default: return -1;
   }

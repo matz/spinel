@@ -16525,6 +16525,19 @@ static int bare_call_on_class(Compiler *c, int ci, const char *nm) {
   return call_target(c, -1, ci, nm, CT_CMETHOD | CT_SHARED, NULL) >= 0 || is_name_reader(nm) ||
          bare_self_reflection_name(nm);
 }
+/* What a block's self becomes once the block runs as part of the code
+   around it, a node at `at`'s scope: a read of the class constant cname
+   (class ci). */
+static int self_stand_in(Compiler *c, const char *cname, int ci, int at) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int cr = nt_new_node(nt, "ConstantReadNode");
+  if (cr < 0) return -1;
+  nt_node_set_str(nt, cr, "name", cname);
+  if (ci >= 0) nt_node_set_int(nt, cr, "made_class", ci + 1);
+  comp_grow_node_arrays(c);
+  c->nscope[cr] = c->nscope[at];
+  return cr;
+}
 static void subtree_self_to_const(Compiler *c, int root, const char *cname, int ci, int depth) {
   NodeTable *nt = (NodeTable *)c->nt;
   if (root < 0 || root >= nt->count || depth > 200) return;
@@ -16537,12 +16550,8 @@ static void subtree_self_to_const(Compiler *c, int root, const char *cname, int 
      answered "A"). */
   if (k == NK_CallNode && nt_ref(nt, root, "receiver") < 0 &&
       (is_cvar_reflection_name(nt_str(nt, root, "name")) || bare_call_on_class(c, ci, nt_str(nt, root, "name")))) {
-    int cr = nt_new_node(nt, "ConstantReadNode");
+    int cr = self_stand_in(c, cname, ci, root);
     if (cr < 0) return;
-    nt_node_set_str(nt, cr, "name", cname);
-    if (ci >= 0) nt_node_set_int(nt, cr, "made_class", ci + 1);
-    comp_grow_node_arrays(c);
-    c->nscope[cr] = c->nscope[root];
     nt_node_set_ref(nt, root, "receiver", cr);
     nt_node_set_int(nt, root, "self_call", 1);
   }
@@ -16552,12 +16561,8 @@ static void subtree_self_to_const(Compiler *c, int root, const char *cname, int 
     int ch = nd->r[i].ref;
     if (ch >= 0 && ch == keep) continue;
     if (ch >= 0 && nt_kind(nt, ch) == NK_SelfNode) {
-      int cr = nt_new_node(nt, "ConstantReadNode");
+      int cr = self_stand_in(c, cname, ci, root);
       if (cr < 0) return;
-      nt_node_set_str(nt, cr, "name", cname);
-      if (ci >= 0) nt_node_set_int(nt, cr, "made_class", ci + 1);
-      comp_grow_node_arrays(c);
-      c->nscope[cr] = c->nscope[root];
       nd = &nt->nodes[root];        /* nt_new_node may realloc nt->nodes */
       nd->r[i].ref = cr; nt_parents_moved(nt, root, ch, cr);
     }
@@ -16568,12 +16573,8 @@ static void subtree_self_to_const(Compiler *c, int root, const char *cname, int 
     for (int j = 0; j < nd->a[i].n; j++) {
       int ch = nd->a[i].ids[j];
       if (ch >= 0 && nt_kind(nt, ch) == NK_SelfNode) {
-        int cr = nt_new_node(nt, "ConstantReadNode");
+        int cr = self_stand_in(c, cname, ci, root);
         if (cr < 0) return;
-        nt_node_set_str(nt, cr, "name", cname);
-        if (ci >= 0) nt_node_set_int(nt, cr, "made_class", ci + 1);
-        comp_grow_node_arrays(c);
-        c->nscope[cr] = c->nscope[root];
         nd = &nt->nodes[root];
         nd->a[i].ids[j] = cr; nt_parents_moved(nt, root, ch, cr);
       }

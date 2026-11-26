@@ -16240,9 +16240,13 @@ void emit_rescue(Compiler *c, int id, Buf *b, int indent, int fr, const char *re
    outer's frame. A rescue between the ensures also leaves scope; the
    ordinary one-frame spelling stays when there is nothing else (#8275). */
 void emit_ensure_chain_pops(Buf *b, const EnsureCtx *outer) {
-  if (g_exc_frame_depth == outer->exc_base + 1 && rescues_crossed(outer->exc_base) == 0)
-    buf_puts(b, "sp_exc_top--; ");
-  else emit_frame_unwind(b, outer->exc_base, NULL);
+  /* the rescue bodies entered since outer opened: a rescue body the ensure
+     sits in (a caller's, around an inline call) can have outer's frame
+     depth, so the depth cannot tell it apart */
+  int pops = g_exc_frame_depth - outer->exc_base;
+  if (pops == 1) buf_puts(b, "sp_exc_top--; ");
+  else if (pops > 1) buf_printf(b, "sp_exc_top -= %d; ", pops);
+  emit_rescue_pops_to(b, outer->rescue_base);
 }
 
 /* A deferred return runs only ensures belonging to its method, then pops

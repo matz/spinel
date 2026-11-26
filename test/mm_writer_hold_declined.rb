@@ -1,7 +1,7 @@
 # a store into an element that may be a method_missing class, as rack's
-# files.rb writes `response[1]["content-range"] = ...`: the rewrite does not
-# take the call, so the value is not held, and a later run of the pass does
-# not hold it again (make infer-test reads the C for a nested hold)
+# files.rb writes `response[1]["content-range"] = ...`: the rewrite splits
+# the call and holds the value once, and a later run of the pass does not
+# hold it again (make infer-test reads the C for a nested hold)
 class Proxy
   def initialize(b) = @b = b
   def method_missing(name, *args, &blk) = @b.__send__(name, *args, &blk)

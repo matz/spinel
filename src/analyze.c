@@ -46756,6 +46756,10 @@ static int desugar_mutator_recv_rebind(Compiler *c) {
     }
     const char *vn = nt_str(nt, base, "name");
     if (!vn) continue;
+    /* Not a snapshot this pass made: its write sits beside the call, inside
+       the same proc, so the writes the proc holds name it, and the call was
+       rebound again to a fresh snapshot every round to the fixpoint's cap */
+    if (strncmp(vn, "__rr_", 5) == 0) continue;
     int hit = 0;
     for (int cur = id; cur >= 0 && cur != base && !hit; cur = nt_ref(nt, cur, "receiver"))
       hit = rr_writes_var(nt, nt_ref(nt, cur, "arguments"), pfx, vn) ||

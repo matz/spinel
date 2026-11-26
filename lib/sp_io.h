@@ -161,6 +161,9 @@ void sp_File_put_byte(sp_File *f, int c);
 /* Access-mode checks retain closed-stream error precedence. */
 void sp_io_check_readable(sp_File *f);
 void sp_io_check_writable(sp_File *f);
+int sp_io_fd_use(sp_File *f);         /* the descriptor, with a use of the handle held */
+void sp_io_fd_unuse(sp_File *f);      /* drop it; errno is kept */
+void sp_io_flush_for_size(sp_File *f); /* File#size's flush, raising as a write does */
 void sp_io_stdout_check_frozen(void);
 void sp_io_wait_readable(sp_File *f);
 void sp_io_wait_fd_readable(int fd);

@@ -13,6 +13,7 @@ a = File.open(path, "r+")
 old_ino = File.stat(path).ino
 File.rename(path, moved)
 File.write(path, "new")
+File.chmod(0o644, path)   # whatever the umask, so the chmod line below is fixed
 File.utime(Time.at(1_500_000_000), Time.at(1_500_000_000), path)
 
 s = a.stat

@@ -18877,6 +18877,32 @@ static int user_aset_scope(Compiler *c, int k, int *defcls) {
   return mi;
 }
 
+/* Whether class k is a plain class of the program with neither `[]=` nor
+   method_missing: a boxed store into one raises NoMethodError, which the
+   aset table below raises (the builtin store helpers dropped the value). */
+static int user_aset_absent(Compiler *c, int k) {
+  int self = 0;
+  const char *root = comp_super_builtin_root(c, k, &self);
+  if (!c->classes[k].instantiated || c->classes[k].is_struct || c->classes[k].is_data ||
+      (root && !sp_streq(root, "Object"))) return 0;
+  return call_target(c, -1, k, "[]=", CT_METHODS | CT_SHARED, NULL) < 0 &&
+         call_target(c, -1, k, METHOD_MISSING_NAME, CT_METHODS | CT_SHARED, NULL) < 0;
+}
+
+/* Whether the program stores with `[]=` or `store` into a receiver whose
+   type is poly, the stores that reach the runtime's boxed store helpers */
+static int program_has_poly_aset(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  for (int id = 0; id < nt->count && id < c->node_cap; id++) {
+    if (nt_kind(nt, id) != NK_CallNode) continue;
+    const char *nm = nt_str(nt, id, "name");
+    if (!nm || !(sp_streq(nm, "[]=") || sp_streq(nm, "store"))) continue;
+    int r = nt_ref(nt, id, "receiver");
+    if (r >= 0 && infer_type(c, r) == TY_POLY) return 1;
+  }
+  return 0;
+}
+
 /* Generate sp_user_aset_dispatch: the `[]=` counterpart of the binop table
    below, installed as sp_user_aset_hook. `r[k] ||= v` and `r[k] += v` on a
    boxed r store through sp_poly_set_poly, which knew only the builtin
@@ -18887,6 +18913,10 @@ static void emit_user_aset_dispatch(Compiler *c, Buf *b) {
   buf_puts(b, "  *handled = FALSE;\n  switch (a.cls_id) {\n");
   for (int ci = 0; ci < c->nclasses; ci++) {
     if (!c->classes[ci].instantiated) continue;
+    if (user_aset_absent(c, ci)) {
+      buf_printf(b, "    case %d: sp_raise_poly_nomethod(\"[]=\", a);\n", ci);
+      continue;
+    }
     int defcls = -1;
     int mi = user_aset_scope(c, ci, &defcls);
     if (mi < 0) continue;
@@ -25896,6 +25926,10 @@ char *codegen_program(const NodeTable *nt) {
   g_has_user_aset = 0;
   for (int k = 0; k < c->nclasses && !g_has_user_aset; k++)
     if (c->classes[k].instantiated && user_aset_scope(c, k, NULL) >= 0) g_has_user_aset = 1;
+  /* (and to raise for a class with none, where a store has a boxed receiver) */
+  if (!g_has_user_aset && program_has_poly_aset(c))
+    for (int k = 0; k < c->nclasses && !g_has_user_aset; k++)
+      if (user_aset_absent(c, k)) g_has_user_aset = 1;
   g_has_user_init_copy = 0;
   for (int id = 0, r, dc; id < c->nt->count && !g_has_user_init_copy; id++) {
     const char *dn = nt_kind(c->nt, id) == NK_CallNode ? nt_str(c->nt, id, "name") : NULL;

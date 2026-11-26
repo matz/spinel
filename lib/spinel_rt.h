@@ -15519,6 +15519,12 @@ static sp_RbVal sp_poly_set_str(sp_RbVal v, const char *key, sp_RbVal val) {
     SP_GC_ROOT_RBVAL(v); SP_GC_ROOT_RBVAL(val);
     return sp_poly_set_poly(v, sp_box_str_new(key), val);
   }
+  /* a user object's own []=, or the NoMethodError of one with none */
+  if (sp_poly_is_user_obj(v) && sp_user_aset_hook) {
+    sp_bool h = FALSE;
+    SP_GC_ROOT_RBVAL(v); SP_GC_ROOT_RBVAL(val);
+    sp_user_aset_hook(v, sp_box_str_new(key), val, &h);
+  }
   return val;
 }
 /* Merge every pair of one boxed hash into another, whatever variants the two
@@ -15547,7 +15553,10 @@ static sp_RbVal sp_poly_set_sym(sp_RbVal v, sp_sym key, sp_RbVal val) {
        sp_OpenStruct_get reader (without this the poly-dispatch write was dropped
        and the reader kept the old value) (#3201). */
     case SP_BUILTIN_OPENSTRUCT:     sp_OpenStruct_set((sp_OpenStruct*)v.v.p, key, val); break;
-    default: break;
+    /* a user object's own []=, or the NoMethodError of one with none */
+    default:
+      if (sp_poly_is_user_obj(v) && sp_user_aset_hook) { sp_bool h = FALSE; sp_user_aset_hook(v, sp_box_sym(key), val, &h); }
+      break;
   }
   return val;
 }
@@ -15576,8 +15585,12 @@ static sp_RbVal sp_poly_arr_set(sp_RbVal v, sp_int idx, sp_RbVal val) {
                                                  sp_poly_elem_e(val)); break;
     case SP_BUILTIN_POLY_ARRAY: sp_PolyArray_set((sp_PolyArray*)v.v.p, idx, val); break;
     case SP_BUILTIN_PTR_ARRAY: { sp_PtrArray *_pa = (sp_PtrArray*)v.v.p; sp_PtrArray_set_grow(_pa, idx, sp_PtrArray_elem_unbox(_pa, val)); break; }
-    /* an Integer key into a boxed hash: stored, or refused by its variant */
-    default: if (sp_poly_is_hash_kind(v.cls_id)) sp_poly_set_poly(v, sp_box_int(idx), val); break;
+    /* an Integer key into a boxed hash: stored, or refused by its variant;
+       a user object's own []=, or the NoMethodError of one with none */
+    default:
+      if (sp_poly_is_hash_kind(v.cls_id)) sp_poly_set_poly(v, sp_box_int(idx), val);
+      else if (sp_poly_is_user_obj(v) && sp_user_aset_hook) { sp_bool h = FALSE; sp_user_aset_hook(v, sp_box_int(idx), val, &h); }
+      break;
   }
   return val;
 }

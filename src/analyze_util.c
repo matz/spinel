@@ -6558,6 +6558,22 @@ static int param_handed_computed_name(Compiler *c, int arg, const char *vn, int 
     const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
     if (pi >= an) continue;
     int x = av[pi];
+    /* A dynamic send's method_missing arm (`recv.method_missing(name.to_sym,
+       *rest)`, dsend_mm) hands the method_missing of the classes its receiver
+       may hold the send's own name: one of another class's reads nothing
+       from it, and the name is as computed as the send's, which a variable
+       holding the program's literals is not. Read as its to_sym, a literal
+       name made every forwarding method_missing's send computed, and one on
+       a receiver of no known class passed the arm cap and was refused. */
+    if (nt_int(nt, id, "dsend_mm", 0)) {
+      int ts = av[0], reaches = 0;
+      for (const char *p = nt_str(nt, ts, "dsend_mm_classes"); p && *p && !reaches; p = strchr(p, ',') ? strchr(p, ',') + 1 : "") {
+        int k = atoi(p);
+        if (k >= 0 && k < c->nclasses && call_target(c, id, k, cnames[ci], CT_METHODS, NULL) == si) reaches = 1;
+      }
+      if (!reaches) continue;
+      if (x == ts) x = nt_ref(nt, ts, "receiver");
+    }
     NodeKind xk = nt_kind(nt, x);
     if (xk == NK_SplatNode || xk == NK_KeywordHashNode || xk == NK_BlockArgumentNode) continue;
     if (value_is_computed_name(c, x) || ((xk == NK_LocalVariableReadNode || xk == NK_InstanceVariableReadNode) && send_name_is_computed(c, x, depth + 1))) res = 1;

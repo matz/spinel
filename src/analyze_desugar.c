@@ -9966,6 +9966,14 @@ static int desugar_dynamic_send_inner(Compiler *c) {
       if (ts >= 0 && mna >= 0 && mm >= 0 && sn > 0) {
         nt_node_set_str(nt, ts, "name", "to_sym");
         nt_node_set_ref(nt, ts, "receiver", sv[0]);
+        /* The arm hands the method_missing of the classes in mmk the send's
+           own name: a parameter it reaches asks of that name whether it is
+           computed, not of this to_sym, and only where the arm reaches the
+           parameter's method, one of these classes' (param_handed_computed_name) */
+        nt_node_set_int(nt, ts, "dsend_mm_name", 1);
+        { char cl[16 * 12]; int o = 0;
+          for (int q = 0; q < nmmk && o < (int)sizeof cl - 12; q++) o += snprintf(cl + o, sizeof cl - (size_t)o, "%s%d", q ? "," : "", mmk[q]);
+          nt_node_set_str(nt, ts, "dsend_mm_classes", cl); }
         int mv[65]; mv[0] = ts;
         for (int k = 0; k < nrest; k++) mv[k + 1] = rest[k];
         nt_node_set_arr(nt, mna, "arguments", mv, nrest + 1);

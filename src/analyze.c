@@ -52462,6 +52462,7 @@ static void an_phase_infer_fixpoint(Compiler *c) {
     ch |= AN_PASS("desugar_hash_block_arg", desugar_hash_block_arg(c));           /* m(&hash) -> m { |x| hash[x] } */
     ch |= AN_PASS("desugar_method_call_runtime_name", desugar_method_call_runtime_name(c)); /* method(var).call(a) -> send(var, a) */
     ch |= AN_PASS("desugar_method_missing_super", desugar_method_missing_super(c));   /* super in the one method_missing -> raise NoMethodError naming the call */
+    ch |= AN_PASS("desugar_super_method_missing", desugar_super_method_missing(c));   /* super no method above answers -> method_missing(:name, args, &blk) */
     ch |= AN_PASS("desugar_missing_method_calls", desugar_missing_method_calls(c));   /* proxy.m(a) no method answers -> proxy.method_missing(:m, a) */
     ch |= AN_PASS("desugar_dynamic_send", desugar_dynamic_send(c));             /* recv.send(var, a) -> static name dispatch */
     ch |= AN_PASS("desugar_dynamic_method", desugar_dynamic_method(c));

@@ -1,0 +1,11 @@
+[1, 2]
+[:each]
+42
+[:each, :call]
+[:pair, [1, 2], nil]
+[:swapped, [2, 1], nil]
+[:none, [], nil]
+[:with_block, [], :blk]
+"own go [3]"
+super: no superclass method 'go' for an instance of Plain
+"abc"

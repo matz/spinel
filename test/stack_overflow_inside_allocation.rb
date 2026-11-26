@@ -12,7 +12,10 @@ def deep(n, s) = deep(n + 1, s + "x") + 1
 p Fiber.new { begin; deep(0, ""); rescue SystemStackError => e; "fiber: #{e.class}"; end }.resume
 t = Thread.new { begin; deep(0, ""); rescue SystemStackError => e; "thread: #{e.class}"; end }
 p t.value
-def deep_main(n) = deep_main(n + 1) + ("x" * 512).size
+def deep_main(n)
+  size = ("x" * 512).size   # before the call: the level allocates, then recurses
+  deep_main(n + 1) + size
+end
 begin
   deep_main(0)
 rescue SystemStackError => e

@@ -9143,9 +9143,11 @@ static void dsend_param_literals(Compiler *c, int name, ANameHash *out) {
     if (k != sc->rest_idx && sc->pnames[k] && sp_streq(sc->pnames[k], vn)) pi = k;
   int post = sc->rest_idx >= 0 && pi > sc->rest_idx ? pi - sc->rest_idx : 0;
   if (pi < 0 || post > sc->npost_rest) return;
+  /* (a hidden copy, `__prep N m` of an include or a prepend, is called by the name the program wrote) */
+  const char *mn = sc->shadow && sc->shadow_user ? sc->shadow_user : sc->name;
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
     const char *cn = nt_str(nt, id, "name");
-    if (!cn || !sp_streq(cn, sc->name)) continue;
+    if (!cn || !sp_streq(cn, mn)) continue;
     int a = nt_ref(nt, id, "arguments");
     int ac = 0; const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
     int ai = post ? ac - sc->npost_rest + post - 1 : pi;

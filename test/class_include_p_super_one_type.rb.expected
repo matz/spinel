@@ -1,0 +1,4 @@
+"wrong argument type Float (expected Module)"
+"wrong argument type String (expected Module)"
+"wrong argument type Symbol (expected Module)"
+"wrong argument type Integer (expected Module)"

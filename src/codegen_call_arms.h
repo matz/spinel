@@ -435,7 +435,7 @@ void emit_bm_spread_call(Compiler *c, int id, int recv, const int *argv, int arg
 void emit_bound_method_call(Compiler *c, int id, int recv, int target, Buf *b);
 void emit_method_call_block(Compiler *c, int id, Scope *tm, int lead_comma, Buf *b);
 void emit_named_root(Compiler *c, TyKind t, const char *name, int idx, Buf *b);
-void emit_wrong_count(Compiler *c, int id, const char *exp, int eval_recv, int given, Buf *b);
+void emit_wrong_count(Compiler *c, int id, const char *exp, int eval_recv, int given, const char *after, Buf *b);
 const char *forwarded_real_proc(int blk0, int blk);
 extern int g_sn_proc_node;
 int is_proc_create(Compiler *c, int id);

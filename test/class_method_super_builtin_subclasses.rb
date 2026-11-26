@@ -35,3 +35,8 @@ p Mid.subclasses.map { |k| [k.name, k.descendants] }
 # and so does one a class value's subclasses answers
 k = [Root, Mid][1]
 p k.subclasses.map { |s| [s.name, s.descendants] }
+# (so does a class the program makes at run time, and a builtin one)
+anon = Class.new
+j = [anon, Mid][ARGV.size]
+p j.subclasses
+p [Integer, Mid][ARGV.size].subclasses

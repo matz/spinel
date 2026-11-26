@@ -16531,6 +16531,7 @@ static int zsuper_npos(Compiler *c, Scope *s) {
 }
 
 static int emit_zsuper_gather(Compiler *c, Scope *s, Scope *pm);
+static void emit_zsuper_boxed(Compiler *c, LocalVar *ep, TyKind et, const char *txt, Buf *b);
 
 /* The parent's **kwrest from a bare super: this method's `**`, less the
    keywords the parent names, and the keywords the parent declares no
@@ -16557,8 +16558,7 @@ static int emit_zsuper_kwrest(Compiler *c, Scope *s, Scope *pm) {
     Buf txt; memset(&txt, 0, sizeof txt); emit_scope_local_ref(c, s, s->pnames[s->kwrest_idx], &txt);
     emit_indent(g_pre, g_indent);
     buf_printf(g_pre, "%s(_t%d, ", any ? "sp_kw_merge_any" : "sp_kwrest_merge_poly", t);
-    if (kv && kv->type == TY_POLY) buf_puts(g_pre, txt.p);
-    else emit_boxed_text(c, kv ? kv->type : TY_SYM_POLY_HASH, txt.p, g_pre);
+    emit_zsuper_boxed(c, kv, kv ? kv->type : TY_SYM_POLY_HASH, txt.p, g_pre);
     buf_puts(g_pre, ");\n");
     free(txt.p);
     /* less the keywords the parent names: those bind from it by name */
@@ -16577,8 +16577,7 @@ static int emit_zsuper_kwrest(Compiler *c, Scope *s, Scope *pm) {
     emit_indent(g_pre, g_indent);
     buf_printf(g_pre, any ? "sp_PolyPolyHash_set(_t%d, sp_box_sym((sp_sym)%d), "
                           : "sp_SymPolyHash_set(_t%d, (sp_sym)%d, ", t, comp_sym_intern(c, s->pnames[i]));
-    if (ep && ep->type == TY_POLY) buf_puts(g_pre, txt.p);
-    else emit_boxed_text(c, ep ? ep->type : TY_POLY, txt.p, g_pre);
+    emit_zsuper_boxed(c, ep, ep ? ep->type : TY_POLY, txt.p, g_pre);
     buf_puts(g_pre, ");\n");
     free(txt.p);
   }
@@ -16881,11 +16880,10 @@ static int zsuper_gather(Compiler *c, Scope *s, int kwpos, Buf *o) {
     zsuper_gather_close(o);
     if (own) {
       LocalVar *kv = scope_local(s, s->pnames[s->kwrest_idx]);
-      Buf txt; memset(&txt, 0, sizeof txt); buf_printf(&txt, "lv_%s", rename_local(s->pnames[s->kwrest_idx]));
+      Buf txt; memset(&txt, 0, sizeof txt); emit_scope_local_ref(c, s, s->pnames[s->kwrest_idx], &txt);
       zsuper_gather_open(o);
       buf_printf(o, "%s(_t%d, ", any ? "sp_kw_merge_any" : "sp_kwrest_merge_poly", t);
-      if (kv && kv->type == TY_POLY) buf_puts(o, txt.p);
-      else emit_boxed_text(c, kv ? kv->type : TY_SYM_POLY_HASH, txt.p, o);
+      emit_zsuper_boxed(c, kv, kv ? kv->type : TY_SYM_POLY_HASH, txt.p, o);
       buf_puts(o, ");");
       zsuper_gather_close(o);
       free(txt.p);
@@ -16893,12 +16891,11 @@ static int zsuper_gather(Compiler *c, Scope *s, int kwpos, Buf *o) {
     for (int i = 0; i < s->nparams; i++) {
       if (i == s->kwrest_idx || !s->pnames[i] || !callee_param_is_declared_kwarg(c, s, s->pnames[i])) continue;
       LocalVar *kp = scope_local(s, s->pnames[i]);
-      Buf txt; memset(&txt, 0, sizeof txt); buf_printf(&txt, "lv_%s", rename_local(s->pnames[i]));
+      Buf txt; memset(&txt, 0, sizeof txt); emit_scope_local_ref(c, s, s->pnames[i], &txt);
       zsuper_gather_open(o);
       buf_printf(o, any ? "sp_PolyPolyHash_set(_t%d, sp_box_sym(sp_sym_intern(\"%s\")), "
                         : "sp_SymPolyHash_set(_t%d, sp_sym_intern(\"%s\"), ", t, s->pnames[i]);
-      if (kp && kp->type == TY_POLY) buf_puts(o, txt.p);
-      else emit_boxed_text(c, kp ? kp->type : TY_POLY, txt.p, o);
+      emit_zsuper_boxed(c, kp, kp ? kp->type : TY_POLY, txt.p, o);
       buf_puts(o, ");");
       zsuper_gather_close(o);
       free(txt.p);
@@ -16941,9 +16938,10 @@ int emit_super_gathered_args(Compiler *c, int id, Scope *s, int nread, Buf *b) {
       emit_zsuper_boxed(c, rv, rv && rv->type != TY_UNKNOWN ? rv->type : TY_POLY, txt.p, &rb);
       snprintf(gv, sizeof gv, "%d + sp_poly_length(%s)", s->nparams - 1, rb.p ? rb.p : "sp_box_nil()");
       free(txt.p); free(rb.p);
+      emit_super_blockarg_effect(c, id, b);
       emit_arity_check(b, gv, lo, hi, NULL);
       buf_puts(b, "; ");
-      return -1;
+      return -2;
     }
     ct = zsuper_gather(c, s, kwpos, b);
   }
@@ -16962,6 +16960,7 @@ int emit_super_gathered_args(Compiler *c, int id, Scope *s, int nread, Buf *b) {
   }
   if (ct < 0) return -1;
   snprintf(gv, sizeof gv, "_t%d->len", ct);
+  emit_super_blockarg_effect(c, id, b);
   emit_arity_check(b, gv, lo, hi, NULL);
   buf_puts(b, "; ");
   return ct;
@@ -17781,11 +17780,13 @@ static void emit_super_include_p(Compiler *c, int id, Scope *s, Buf *b) {
     else emit_boxed(c, sav[0], &ab);
   }
   else {
+    /* (the parameter as its slot holds it: a Class as it is, any other value boxed by its type) */
     LocalVar *lv = scope_local(s, s->pnames[0]);
     Buf lr; memset(&lr, 0, sizeof lr);
     emit_local_ref(c, id, s->pnames[0], &lr);
     typed = lv && lv->type == TY_CLASS;
-    buf_puts(&ab, lr.p ? lr.p : "sp_box_nil()");
+    if (typed) buf_puts(&ab, lr.p ? lr.p : "");
+    else emit_zsuper_boxed(c, lv, lv && lv->type != TY_UNKNOWN ? lv->type : TY_POLY, lr.p ? lr.p : "sp_box_nil()", &ab);
     free(lr.p);
   }
   int tc = ++g_tmp, tm = ++g_tmp;
@@ -17793,17 +17794,21 @@ static void emit_super_include_p(Compiler *c, int id, Scope *s, Buf *b) {
   buf_printf(b, "%s({ %ssp_Class _t%d = ", sr.kind == RK_BOXED ? "sp_box_bool(" : "", gb.p ? gb.p : "", tc);
   if (cmethod_takes_self_cls(c, s)) buf_puts(b, cmethod_cls_token(c, s));
   else buf_printf(b, "((sp_Class){%d, NULL})", s->class_id);
+  /* (the block argument runs after the argument, before include? reads it) */
+  Buf eb; memset(&eb, 0, sizeof eb);
+  if (ga == -1) emit_super_blockarg_effect(c, id, &eb);
   if (typed)
-    buf_printf(b, "; sp_Class _t%d = %s; if (!sp_class_is_module_val(_t%d)) "
+    buf_printf(b, "; sp_Class _t%d = %s; %sif (!sp_class_is_module_val(_t%d)) "
                   "sp_raise_cls(\"TypeError\", \"wrong argument type Class (expected Module)\"); ",
-               tm, ab.p ? ab.p : "", tm);
+               tm, ab.p ? ab.p : "", eb.p ? eb.p : "", tm);
   else {
     int tv = ++g_tmp;
-    buf_printf(b, "; sp_RbVal _t%d = %s; if (_t%d.tag != SP_TAG_CLASS || !sp_class_is_module_val(sp_unbox_class(_t%d))) "
+    buf_printf(b, "; sp_RbVal _t%d = %s; %sif (_t%d.tag != SP_TAG_CLASS || !sp_class_is_module_val(sp_unbox_class(_t%d))) "
                   "sp_raise_cls(\"TypeError\", sp_sprintf(\"wrong argument type %%s (expected Module)\", "
                   "sp_convert_src_name(_t%d))); sp_Class _t%d = sp_unbox_class(_t%d); ",
-               tv, ab.p ? ab.p : "", tv, tv, tv, tm, tv);
+               tv, ab.p ? ab.p : "", eb.p ? eb.p : "", tv, tv, tv, tm, tv);
   }
+  free(eb.p);
   buf_printf(b, "_t%d.cls_id != _t%d.cls_id && sp_class_le(_t%d, _t%d); })%s", tc, tm, tc, tm,
              sr.kind == RK_BOXED ? ")" : "");
   free(ab.p); free(gb.p);
@@ -17826,11 +17831,15 @@ static void emit_super_value(Compiler *c, int id, Buf *b) {
   /* `def inspect = super` / `def to_s = super` reaching Kernel's: the default
      rendering of self's class, which no override of the program's takes
      (sp_obj_kernel_inspect; #<Name:0x...> for to_s) */
-  /* a count the builtin's own method cannot take: its arguments run, then CRuby's ArgumentError */
+  /* a count the builtin's own method cannot take: its arguments run, then
+     the block argument, then CRuby's ArgumentError */
   if (barm == BSUP_ARITY) {
     const char *exp = NULL;
     int given = cplan_super_wrong_count(c, id, &exp);
-    emit_wrong_count(c, id, exp ? exp : "0", 0, given, b);
+    Buf eb; memset(&eb, 0, sizeof eb);
+    emit_super_blockarg_effect(c, id, &eb);
+    emit_wrong_count(c, id, exp ? exp : "0", 0, given, eb.p, b);
+    free(eb.p);
     return;
   }
   if (barm == BSUP_OBJ_TEXT) {
@@ -17965,7 +17974,7 @@ static void emit_super_value(Compiler *c, int id, Buf *b) {
       int ta = ++g_tmp, tc = ++g_tmp;
       /* (a list whose count the run gives is gathered and checked first) */
       buf_puts(b, "({ ");
-      (void)emit_super_gathered_args(c, id, s, 0, b);
+      if (emit_super_gathered_args(c, id, s, 0, b) == -1) emit_super_blockarg_effect(c, id, b);
       buf_printf(b, "sp_Class _t%d = ", tc);
       if (cmethod_takes_self_cls(c, s)) buf_puts(b, cmethod_cls_token(c, s));
       else buf_printf(b, "((sp_Class){%d, NULL})", s->class_id);
@@ -17990,7 +17999,7 @@ static void emit_super_value(Compiler *c, int id, Buf *b) {
     if (cmi < 0 && (barm == BSUP_ANCESTORS || barm == BSUP_SUPERCLASS)) {
       int tc = ++g_tmp;
       buf_puts(b, "({ ");
-      (void)emit_super_gathered_args(c, id, s, 0, b);
+      if (emit_super_gathered_args(c, id, s, 0, b) == -1) emit_super_blockarg_effect(c, id, b);
       buf_printf(b, "sp_Class _t%d = ", tc);
       if (cmethod_takes_self_cls(c, s)) buf_puts(b, cmethod_cls_token(c, s));
       else buf_printf(b, "((sp_Class){%d, NULL})", s->class_id);
@@ -18449,7 +18458,7 @@ static void emit_super_value(Compiler *c, int id, Buf *b) {
       else if (fwd) emit_boxed_fwd_param(c, s, 0, &kb);
       else emit_boxed(c, sargv[0], &kb);
       buf_printf(&rb, "sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d); ", tk, kb.p ? kb.p : "sp_box_nil()", tk);
-      emit_super_blockarg_effect(c, id, &rb);
+      if (ga == -1) emit_super_blockarg_effect(c, id, &rb);
       buf_printf(&rb, "if (_t%d.tag != SP_TAG_CLASS) sp_raise_cls(\"TypeError\", \"class or module required\"); ", tk);
       /* (a by-value object, detect_value_types, is of the method's class: no class below it builds one,
          and no site class's family is by value; a site class's instance answers its record, emit_obj_class_id) */

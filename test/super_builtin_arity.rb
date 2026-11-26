@@ -166,6 +166,25 @@ class CU < CT; end
 run { p CT.superclass(1) }
 run { p CT.ancestors.first, CU.ancestors.first(2) }
 run { p CT.ancestors(1) }
+# (and so is a module's method a module extends with, or one prepended into
+# a module's singleton class: it runs on the module)
+module CG
+  def superclass(*a) = super
+  def subclasses = super
+end
+module CO
+  extend CG
+end
+module CQ
+  class << self
+    prepend CG
+  end
+end
+[CO, CQ].each do |m|
+  begin; p m.superclass; rescue NoMethodError => nme; p nme.message; end
+  begin; p m.superclass(1); rescue NoMethodError => nme; p nme.message; end
+  begin; p m.subclasses; rescue NoMethodError => nme; p nme.message; end
+end
 # (a super that reaches no method names the receiving class and its kind)
 class CV < CK
   def self.nosuch = super

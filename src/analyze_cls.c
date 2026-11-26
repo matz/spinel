@@ -166,6 +166,8 @@ typedef struct CF {
   int *orig;                  /* (directed, SPINEL_CLS_FLOW=why) per element, the rule line that made it every class */
   int pts_max;                /* objects an element holds before it joins the summary (CF_PTS_MAX) */
   unsigned char *exc_kw;   /* per node, made when first needed: cf_exc_ctor_kw */
+  int *xself;              /* per node, made when first needed: the receiver of the instance_exec
+                              that runs a block body handed to it as `&b`, -2 for several (cf_exec_self_recv) */
 } CF;
 /* the class walk of the closed world (#8837): the directed walk */
 #define CF_CLOSED(f) ((f)->closed)
@@ -1676,13 +1678,78 @@ static const char *cf_ivar_lit(CF *f, int call);
 /* The receiver whose object is self in v's block, when that block is the
    literal block of `x.instance_eval` or `x.instance_exec` (x not self),
    which runs it with x as its self; else -1 */
+static int cf_exec_runner(const char *pn) {
+  return pn && (sp_streq(pn, "instance_eval") || sp_streq(pn, "instance_exec"));
+}
+int ie_trace_bodies(Compiler *c, int x, int *out, int cap, int depth);   /* analyze.c */
+/* The body of the block a local read x holds, when its scope writes it
+   once with a literal `proc { }`, `lambda { }` or `Proc.new { }` and reads
+   it only as the `&x` of an instance_exec or instance_eval: 1 with it in
+   out[0], else -1 */
+static int cf_local_proc_body(CF *f, int x, int *out) {
+  const NodeTable *nt = f->nt;
+  if (x < 0 || nt_kind(nt, x) != NK_LocalVariableReadNode) return -1;
+  const char *ln = nt_str(nt, x, "name");
+  const Scope *s = comp_scope_of(f->c, x);
+  if (!ln || !s) return -1;
+  int w = -1;
+  for (int id = 0; id < nt->count && id < f->nnodes; id++) {
+    NodeKind k = nt_kind(nt, id);
+    int lv = k == NK_LocalVariableWriteNode || k == NK_LocalVariableTargetNode || k == NK_LocalVariableOperatorWriteNode ||
+             k == NK_LocalVariableOrWriteNode || k == NK_LocalVariableAndWriteNode || k == NK_LocalVariableReadNode;
+    if (!lv || !sp_streq(nt_str(nt, id, "name"), ln) || comp_scope_of(f->c, id) != s) continue;
+    if (k == NK_LocalVariableReadNode) {
+      int ba = f->par ? f->par[id] : -1, call = ba >= 0 ? f->par[ba] : -1;
+      if (ba < 0 || nt_kind(nt, ba) != NK_BlockArgumentNode || call < 0 || nt_kind(nt, call) != NK_CallNode ||
+          nt_ref(nt, call, "block") != ba || !cf_exec_runner(nt_str(nt, call, "name"))) return -1;
+      continue;
+    }
+    if (k != NK_LocalVariableWriteNode || w >= 0) return -1;
+    w = id;
+  }
+  for (int i = 0; i < s->nparams; i++) if (s->pnames[i] && sp_streq(s->pnames[i], ln)) return -1;
+  int v = w >= 0 ? nt_ref(nt, w, "value") : -1;
+  if (v < 0 || nt_kind(nt, v) != NK_CallNode) return -1;
+  const char *vn = nt_str(nt, v, "name");
+  int vr = nt_ref(nt, v, "receiver"), vb = nt_ref(nt, v, "block");
+  int maker = vn && ((vr < 0 && (sp_streq(vn, "proc") || sp_streq(vn, "lambda"))) ||
+                     (vr >= 0 && sp_streq(vn, "new") && nt_kind(nt, vr) == NK_ConstantReadNode && sp_streq(nt_str(nt, vr, "name"), "Proc")));
+  if (!maker || nt_ref(nt, v, "arguments") >= 0 || vb < 0 || nt_kind(nt, vb) != NK_BlockNode) return -1;
+  if (vr < 0 && cf_byname(f, vn)->n) return -1;   /* (a `proc` or `lambda` of the program's) */
+  out[0] = nt_ref(nt, vb, "body");
+  return out[0] >= 0 ? 1 : -1;
+}
 static int cf_exec_self_recv(CF *f, int v) {
+  const NodeTable *nt = f->nt;
   int q = cf_owner_block(f, v, 0), p = q >= 0 && f->par ? f->par[q] : -1;
-  if (p < 0 || nt_kind(f->nt, p) != NK_CallNode || nt_ref(f->nt, p, "block") != q) return -1;
-  const char *pn = nt_str(f->nt, p, "name");
-  if (!pn || (!sp_streq(pn, "instance_eval") && !sp_streq(pn, "instance_exec"))) return -1;
-  int pr = nt_ref(f->nt, p, "receiver");
-  return pr >= 0 && nt_kind(f->nt, pr) != NK_SelfNode ? pr : -1;
+  if (p >= 0 && nt_kind(nt, p) == NK_CallNode && nt_ref(nt, p, "block") == q && cf_exec_runner(nt_str(nt, p, "name"))) {
+    int pr = nt_ref(nt, p, "receiver");
+    return pr >= 0 && nt_kind(nt, pr) != NK_SelfNode ? pr : -1;
+  }
+  /* a block handed on as `x.instance_exec(&b)`, where b traces to it alone
+     (ie_trace_bodies, as the instance_eval map has it) and no other runner
+     with another receiver takes it */
+  if (q < 0 || nt_kind(nt, q) != NK_BlockNode) return -1;
+  if (!f->xself) {
+    f->xself = malloc(sizeof(int) * ((size_t)f->nnodes + 1));
+    if (!f->xself) cf_oom();
+    for (int i = 0; i < f->nnodes; i++) f->xself[i] = -1;
+    NT_FOREACH_KIND(nt, NK_CallNode, id) {
+      if (id >= f->nnodes || !cf_exec_runner(nt_str(nt, id, "name"))) continue;
+      int ba = nt_ref(nt, id, "block"), pr = nt_ref(nt, id, "receiver");
+      if (ba < 0 || nt_kind(nt, ba) != NK_BlockArgumentNode) continue;
+      int traced[16], tn = cf_local_proc_body(f, nt_ref(nt, ba, "expression"), traced);
+      if (tn < 0) tn = ie_trace_bodies(f->c, nt_ref(nt, ba, "expression"), traced, 16, 0);
+      int known = pr >= 0 && nt_kind(nt, pr) != NK_SelfNode;
+      for (int t = 0; t < tn; t++) {
+        int tb = traced[t];
+        if (tb < 0 || tb >= f->nnodes) continue;
+        f->xself[tb] = known && (f->xself[tb] == -1 || f->xself[tb] == pr) ? pr : -2;
+      }
+    }
+  }
+  int body = nt_ref(nt, q, "body");
+  return body >= 0 && body < f->nnodes && f->xself[body] >= 0 ? f->xself[body] : -1;
 }
 
 /* the loop a break under v leaves: the nearest enclosing while, until or
@@ -5741,7 +5808,7 @@ static void cf_solve(Compiler *c, int directed, int dump_facts) {
     free(f.ld); free(f.nld); free(f.cld); free(f.st); free(f.nst); free(f.cst); free(f.oe_out); free(f.oe_in);
     free(f.ptop); free(f.esc); free(f.elobj); free(f.summ); free(f.smc); free(f.obj_cont); free(f.obj_str); free(f.fs);
   }
-  free(f.exc_kw);
+  free(f.exc_kw); free(f.xself);
   mtab_leave(c);
 }
 

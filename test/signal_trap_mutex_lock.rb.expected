@@ -1,0 +1,10 @@
+"synchronize: can't be called from trap context"
+"lock: can't be called from trap context"
+"monitor: can't be called from trap context"
+[true, true, true]
+false
+"wait: can't be called from trap context"
+false
+:main_locks
+"from trap"
+true

@@ -3557,6 +3557,9 @@ static void cf_call(CF *f, int v) {
   { char sb[256]; if (setter_base_name(nm, sb, sizeof sb) || is_index_assign(nm)) cf_add_set(f, v, cf_bk_any(f)); }
   cf_scal_bind(f, v, nm, r, argv, argc, blk);
   cf_anon_struct_value(f, v);
+  /* a Class.new or Module.new the plan answers (cplan_class_new): its site
+     class's Class object, which each run-time class made there shares */
+  { int site; if (cplan_class_new(f->c, v, &site) != CNEW_NONE) { cf_add_set(f, v, cf_classval(f, site)); return; } }
   cf_modfn_bind(f, v, nm, argv, argc, blk);
   if (cf_blk_call(f, v, r, nm, argv, argc)) return;
   /* `k.superclass` (#8837): the Class objects of the parents of the

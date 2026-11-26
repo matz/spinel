@@ -2776,7 +2776,7 @@ int emit_call_object_override_arms(Compiler *c, int id, Buf *b, const NodeTable 
         {
           char head[200]; snprintf(head, sizeof head, "%s '%s' for an instance of ", bsv ? "undefined local variable or method" : "undefined method", bsnm);
           buf_printf(b, "sp_raise_cls(\"%s\", ", bsv ? "NameError" : "NoMethodError");
-          if (!anon_class_text(c, bsci, head, b)) buf_printf(b, "(&(\"\\xff\" \"%s%s\")[1])", head, bscn);
+          if (!anon_class_text(c, bsci, NULL, head, b)) buf_printf(b, "(&(\"\\xff\" \"%s%s\")[1])", head, bscn);
           buf_printf(b, "); %s; })", default_value_from_compiler(c, repr_of(c, id).as_ty));
         }
         return 1;
@@ -2961,8 +2961,16 @@ int emit_call_print_arms(Compiler *c, Buf *b, const NodeTable *nt, const char *n
       !comp_ty_value_obj(c, rt)) {
     /* default Object#to_s: #<Name:0xADDR> */
     int dcid = ty_object_class(rt);
-    char drn[512], darg[96];
-    obj_default_name(c, dcid, drn, sizeof drn, darg, sizeof darg);
+    char drn[512], darg[512];
+    /* (an object of a site class's family is held: its class names it) */
+    if (cplan_rt_family(c, dcid)) {
+      char ho[24]; snprintf(ho, sizeof ho, "_t%d", ++g_tmp);
+      obj_default_name(c, dcid, ho, drn, sizeof drn, darg, sizeof darg);
+      buf_printf(b, "({ void *%s = (void *)(", ho); emit_expr(c, recv, b);
+      buf_printf(b, "); sp_sprintf(\"#<%s:0x%%016llx>\", %s(unsigned long long)(uintptr_t)%s); })", drn, darg, ho);
+      return 1;
+    }
+    obj_default_name(c, dcid, NULL, drn, sizeof drn, darg, sizeof darg);
     buf_printf(b, "sp_sprintf(\"#<%s:0x%%016llx>\", %s(unsigned long long)(uintptr_t)(", drn, darg);
     emit_expr(c, recv, b); buf_puts(b, "))");
     return 1;

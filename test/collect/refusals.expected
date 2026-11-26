@@ -708,24 +708,6 @@ spinel: 2 refusals, nothing written
 spinel: test/reject/class_new_variable_rest_write_included.rb:6: Class.new with a non-constant superclass is not supported; use a constant superclass (see docs/limitations.md)
 spinel: test/reject/class_new_variable_rest_write_included.rb:6: Class.new with a non-constant superclass is not supported; use a constant superclass (see docs/limitations.md)
 spinel: 2 refusals, nothing written
-== test/reject/class_new_without_block_iterator.rb [default] rc=1
-spinel: test/reject/class_new_without_block_iterator.rb:5: Class.new(parent) is not supported by AOT compilation: the class graph, ancestor chain, and method/ivar layout are baked at compile time. Declare the class with `class ... end` instead (see docs/limitations.md)
-spinel: 1 refusal, nothing written
-== test/reject/class_new_without_block_iterator.rb [promote] rc=1
-spinel: test/reject/class_new_without_block_iterator.rb:5: Class.new(parent) is not supported by AOT compilation: the class graph, ancestor chain, and method/ivar layout are baked at compile time. Declare the class with `class ... end` instead (see docs/limitations.md)
-spinel: 1 refusal, nothing written
-== test/reject/class_new_without_block_loop.rb [default] rc=1
-spinel: test/reject/class_new_without_block_loop.rb:6: Class.new(parent) is not supported by AOT compilation: the class graph, ancestor chain, and method/ivar layout are baked at compile time. Declare the class with `class ... end` instead (see docs/limitations.md)
-spinel: 1 refusal, nothing written
-== test/reject/class_new_without_block_loop.rb [promote] rc=1
-spinel: test/reject/class_new_without_block_loop.rb:6: Class.new(parent) is not supported by AOT compilation: the class graph, ancestor chain, and method/ivar layout are baked at compile time. Declare the class with `class ... end` instead (see docs/limitations.md)
-spinel: 1 refusal, nothing written
-== test/reject/class_new_without_block_repeated.rb [default] rc=1
-spinel: test/reject/class_new_without_block_repeated.rb:4: Class.new(parent) is not supported by AOT compilation: the class graph, ancestor chain, and method/ivar layout are baked at compile time. Declare the class with `class ... end` instead (see docs/limitations.md)
-spinel: 1 refusal, nothing written
-== test/reject/class_new_without_block_repeated.rb [promote] rc=1
-spinel: test/reject/class_new_without_block_repeated.rb:4: Class.new(parent) is not supported by AOT compilation: the class graph, ancestor chain, and method/ivar layout are baked at compile time. Declare the class with `class ... end` instead (see docs/limitations.md)
-spinel: 1 refusal, nothing written
 == test/reject/class_paren_superclass_rescue.rb [default] rc=1
 spinel: test/reject/class_paren_superclass_rescue.rb:8: unsupported superclass expression (RescueModifierNode): write the superclass as a constant
 == test/reject/class_paren_superclass_rescue.rb [promote] rc=1

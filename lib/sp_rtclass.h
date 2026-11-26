@@ -16,7 +16,8 @@
 #define SP_RTCLASS_BASE (2 * SP_SCLASS_OFF)
 #define SP_RTCLASS_CHUNK 1024
 #define SP_RTCLASS_CHUNKS 1024
-#define sp_rtclass_id_p(id) ((id) >= SP_RTCLASS_BASE && (id) < SP_RTCLASS_BASE + SP_RTCLASS_CHUNK * SP_RTCLASS_CHUNKS)
+/* is class id `id` a record's? */
+static inline int sp_rtclass_id_p(sp_int id) { return id >= SP_RTCLASS_BASE && id < SP_RTCLASS_BASE + SP_RTCLASS_CHUNK * SP_RTCLASS_CHUNKS; }
 
 typedef struct {
   sp_int site;          /* the site class: the code, layout, constructor and
@@ -30,6 +31,9 @@ typedef struct {
 extern sp_RtClass *sp_rtclass_chunks[SP_RTCLASS_CHUNKS];
 
 sp_Class sp_rtclass_new(sp_int site, int is_module);
+/* how many records there are: their ids run from SP_RTCLASS_BASE, oldest
+   first (Class#subclasses walks them) */
+sp_int sp_rtclass_made(void);
 static inline sp_RtClass *sp_rtclass_at(sp_int id) {
   sp_int n = id - SP_RTCLASS_BASE;
   return &sp_rtclass_chunks[n / SP_RTCLASS_CHUNK][n % SP_RTCLASS_CHUNK];

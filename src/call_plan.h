@@ -532,8 +532,46 @@ const struct BuiltinOp *cplan_builtin_handle_row(Compiler *c, int id);
    its constant receiver: NULL where none of cls's singleton chain has one,
    or where a class method the program gives a class of the chain, up to
    the row's own, stands in front of it (`class IO; def self.select` is
-   what File.select runs). */
+   what File.select runs). A Class.new or Module.new row is the call's
+   only where the plan answers the call (cplan_class_new). */
 const BuiltinClassOp *cplan_builtin_class_row(Compiler *c, int id, const char *cls);
+/* Is program class ci the site class of classes made at run time
+   (ClassInfo.rt_site): its instances carry the class each was made from,
+   and a value of its class may be any of them? A site with no block is one
+   only where the program answers class identity per evaluation
+   (Compiler.rt_identity_per_eval). ci -1: does the
+   program have any such class? */
+int cplan_rt_site(const Compiler *c, int ci);
+/* ...is ci or a class below it one (ClassInfo.rt_family)? */
+int cplan_rt_family(const Compiler *c, int ci);
+/* What a Class.new or Module.new evaluated more than once answers
+   (desugar_class_new_blocks noted it, EB_RT_SITE / EB_RT_BARE), and in
+   *site (NULL: not asked) its site class: CNEW_RUNTIME, a class of its own
+   at each evaluation; CNEW_STATIC, the site class itself, where its family
+   or its block cannot have records (register_rt_sites) and the call has a
+   block, as every evaluation answered before; for a call without a block
+   whose site is no run-time site (cplan_rt_site), refused (feature_limit):
+   CNEW_MIXED where that is only because the program does not answer class
+   identity per evaluation (Compiler.rt_identity_per_eval), CNEW_REFUSED
+   where its family or its body cannot have records; CNEW_NONE for any
+   other call. */
+enum { CNEW_NONE, CNEW_RUNTIME, CNEW_STATIC, CNEW_REFUSED, CNEW_MIXED };
+/* May the class value at node (-1: one no node gives) be a class made at
+   run time, its id a record's: a site class's Class object is in its class
+   fact, or the fact is not bounded, in a program that has one? A constant
+   that names a class (the program's or a builtin's, elab_class_ref_at) is
+   that class, never a record's; one that holds a class value is asked as
+   any value is. */
+int cplan_class_value_may_be_rt(Compiler *c, int node);
+int cplan_class_new(const Compiler *c, int id, int *site);
+/* Is node a statement of a site class's body, of a site whose classes are
+   made at run time, that each evaluation runs on the class it makes
+   (emit_op_class_new) and the body does not: the call of the block's
+   statements that run again (cn_rt_body)? cplan_rt_site_body: the class
+   method those statements of site class ci moved to, which each evaluation
+   calls; -1 for none. */
+int cplan_stmt_at_evaluation(Compiler *c, int node);
+int cplan_rt_site_body(Compiler *c, int ci);
 /* A call that builds an instance of an Array or Hash subclass (or, with
    `[]`, of a Struct or Data class: cplan_as_new) from its arguments through
    a Class value known only at run time (a parameter, an element, a call's

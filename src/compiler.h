@@ -886,6 +886,7 @@ typedef struct {
 } NameIdx;
 int name_idx_find(NameIdx *x, char *const *list, int n, const char *name);
 
+enum { RT_SITE_NONE, RT_SITE_OWN, RT_SITE_BARE };   /* ClassInfo.rt_site */
 typedef struct {
   char *name;          /* class name ("Point"); also drives semantic checks
                           (builtin reopen, name matching) and Ruby-visible output */
@@ -1068,6 +1069,18 @@ typedef struct {
   int nmembers;        /* is_struct/is_data: ivars[0..nmembers) back the
                           members, in declaration order; any later ivar is an
                           attr's or a method's own instance variable. */
+  int rt_site;         /* the site class of a Class.new or Module.new evaluated
+                          more than once, whose family and body let each
+                          evaluation make a class of its own at run time, with
+                          this one's code and layout: RT_SITE_BARE for a call
+                          with no block, which is one only where the program
+                          answers class identity per evaluation, RT_SITE_OWN
+                          for any other (register_rt_sites;
+                          read through cplan_rt_site) */
+  unsigned char rt_family; /* this class or one below it is a site class
+                          (cplan_rt_site): its instances may carry a class made
+                          at run time (register_rt_sites; read through
+                          cplan_rt_family) */
   int is_anon_struct;  /* k = Struct.new(:a, :b): synthesized for a local-held
                           anonymous struct class; #inspect omits the name. */
   int is_singleton_of; /* +1-based parent class index (0 = not one): a
@@ -1609,6 +1622,15 @@ typedef struct {
   int *anon_struct_ids;
   int n_anon_struct_ids, anon_struct_ids_valid;
   int has_anonymous_classes; /* Class.new identities with execution-time names */
+  int has_rt_classes;  /* some class is a run-time class's site (cplan_rt_site) */
+  int rt_identity_per_eval; /* the program answers class identity per evaluation: no
+                          repeated Class.new with a block, Struct.new or
+                          Data.define keeps one class for every evaluation
+                          (register_rt_sites; read by cplan_rt_site) */
+  ANameHash *rt_method_runs; /* [rt_method_runs_n] per scope, the locals a read of
+                          which may run a Method held in it (cplan_method_value_runs):
+                          one walk of the program, built at the first lookup */
+  int rt_method_runs_n;
   struct UserMethodKinds { char name[32]; int kinds; } user_methods[8];   /* the UDM_ kinds of the program's own methods of a name, by name (an_user_method_kinds) */
   int nuser_methods;
 

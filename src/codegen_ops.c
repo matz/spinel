@@ -627,6 +627,7 @@ static int (*const bop_emitters[BOPE__COUNT])(Compiler *, const BopCtx *, Buf *)
   [BOPE_IO_COPY_STREAM] = emit_op_io_copy_stream,
   [BOPE_IO_SYSOPEN] = emit_op_io_sysopen,
   [BOPE_IO_SET_WINSIZE] = emit_op_io_set_winsize,
+  [BOPE_CLASS_NEW] = emit_op_class_new,
 };
 
 /* A reader of a Method whose capture raises wherever it runs (CallPlan.absent), or where its method is closed to it

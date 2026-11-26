@@ -11235,8 +11235,13 @@ static int class_has_descendants(Compiler *c, int cid) {
    the constant. */
 static void emit_isa_self_class(Compiler *c, int recv, int cid, Buf *b) {
   if (cid >= 0 && cid < c->nclasses && !c->classes[cid].is_value_type &&
-      (c->classes[cid].is_singleton_of || class_has_descendants(c, cid))) {
-    buf_puts(b, "((sp_Class){("); emit_expr(c, recv, b); buf_puts(b, ")->cls_id})");
+      (c->classes[cid].is_singleton_of || class_has_descendants(c, cid) || cplan_rt_family(c, cid))) {
+    if (!cplan_rt_family(c, cid)) { buf_puts(b, "((sp_Class){("); emit_expr(c, recv, b); buf_puts(b, ")->cls_id})"); return; }
+    /* (an instance of a site class starts at the class made at run time) */
+    int t = ++g_tmp;
+    char to[24], tv[32]; snprintf(to, sizeof to, "_t%d", t); snprintf(tv, sizeof tv, "_t%d->cls_id", t);
+    buf_printf(b, "({ %s *_t%d = (", class_ctype(c, cid), t); emit_expr(c, recv, b);
+    buf_puts(b, "); ((sp_Class){"); emit_visible_cls_id(c, cid, to, tv, 0, b); buf_puts(b, "}); })");
     return;
   }
   buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b); buf_printf(b, "), (sp_Class){%d})", cid);
@@ -13174,6 +13179,16 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
                are the target and any singleton class of it, which is a set the
                compiler can enumerate (#4142). */
             int t9 = ++g_tmp;
+            /* (a site class's instance answers the class made at run time it
+               was built for, which no constant names: the visible class) */
+            if (cplan_rt_family(c, cid)) {
+              char to[24], tv[48];
+              snprintf(to, sizeof to, "_t%d", t9); snprintf(tv, sizeof tv, "_t%d->cls_id", t9);
+              buf_printf(b, "({ sp_%s *_t%d = (", c->classes[cid].c_name, t9); emit_expr(c, recv, b);
+              buf_puts(b, "); "); emit_visible_cls_id(c, cid, to, tv, 1, b);
+              buf_printf(b, " == %d; })", target);
+              return 1;
+            }
             buf_printf(b, "({ sp_int _t%d = (", t9); emit_expr(c, recv, b);
             buf_printf(b, ")->cls_id; ");
             int first = 1;
@@ -13231,15 +13246,21 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
       else emit_expr(c, argv[0], b);
       buf_printf(b, "; ");
       if (sp_streq(name, "instance_of?")) {
-        if (cid >= 0 && cid < c->nclasses && !c->classes[cid].is_value_type && class_has_descendants(c, cid)) {
+        int rtf = cid >= 0 && cid < c->nclasses && cplan_rt_family(c, cid);
+        if (cid >= 0 && cid < c->nclasses && !c->classes[cid].is_value_type && (class_has_descendants(c, cid) || rtf)) {
           /* the object's own class, which a subclass instance running an
              inherited method (`instance_of?(w(Animal))` in a Dog) does not
              share with the method's: read off the object, a synthesized
-             singleton class answering as its parent (#4142) */
-          int o9 = ++g_tmp;
-          char ov[24]; snprintf(ov, sizeof ov, "_t%d", o9);
-          buf_printf(b, "sp_int _t%d = (", o9); emit_expr(c, recv, b); buf_puts(b, ")->cls_id; (");
-          emit_visible_cls_id(c, cid, NULL, ov, b);
+             singleton class answering as its parent (#4142), an instance of
+             a site class as the class made at run time it was built for */
+          int o9 = ++g_tmp, o8 = rtf ? ++g_tmp : -1;
+          char ov[24], on[24]; snprintf(ov, sizeof ov, "_t%d", o9); snprintf(on, sizeof on, "_t%d", o8);
+          if (rtf) buf_printf(b, "%s *%s = (", class_ctype(c, cid), on);
+          else buf_printf(b, "sp_int _t%d = (", o9);
+          emit_expr(c, recv, b);
+          if (rtf) buf_printf(b, "); sp_int _t%d = %s->cls_id; (", o9, on);
+          else buf_puts(b, ")->cls_id; (");
+          emit_visible_cls_id(c, cid, rtf ? on : NULL, ov, 1, b);
           buf_printf(b, ") == _t%d.cls_id; })", k);
         }
         else buf_printf(b, "((sp_Class){%d}).cls_id == _t%d.cls_id; })", visible_cls_id(c, cid), k);
@@ -13346,7 +13367,7 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
     if (cplan_builtin_call(c, id)) { emit_obj_builtin_text(c, id, recv, cid2, want_ins, b); return 1; }
     if (ci2->is_value_type) {
       char rn2[512], rarg2[96];
-      obj_default_name(c, cid2, rn2, sizeof rn2, rarg2, sizeof rarg2);
+      obj_default_name(c, cid2, NULL, rn2, sizeof rn2, rarg2, sizeof rarg2);
       int tv2 = ++g_tmp;
       buf_printf(b, "({ sp_%s _t%d = ", ci2->c_name, tv2); emit_expr(c, recv, b);
       buf_printf(b, "; sp_sprintf(\"#<%s:0x%%016llx", rn2);
@@ -13415,7 +13436,7 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
       {
         char head[200]; snprintf(head, sizeof head, "undefined method '%s' for an instance of ", name);
         buf_puts(b, "(sp_raise_cls(\"NoMethodError\",");
-        if (!anon_class_text(c, cid, head, b)) buf_printf(b, "\"%s%s\"", head, c->classes[cid].name);
+        if (!anon_class_text(c, cid, NULL, head, b)) buf_printf(b, "\"%s%s\"", head, c->classes[cid].name);
         buf_printf(b, "),%s)", ret_ty == TY_RANGE ? "(sp_Range){0}" : default_value_from_compiler(c, ret_ty));
       }
       return 1;

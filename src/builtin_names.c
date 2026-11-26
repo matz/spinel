@@ -2131,6 +2131,14 @@ int is_method_ref_name(const char *n) { return n && sp_streq(n, "method"); }
 int is_method_object_name(const char *n) {
   return n && (sp_streq(n, "method") || sp_streq(n, "public_method") || sp_streq(n, "instance_method"));
 }
+/* A call on a Method (or an UnboundMethod) that only reads it: answers of
+   the method, never running it nor handing it on. Any other call (`call`,
+   a bind, its proc, a copy, `then`, `tap`) may run it. */
+int is_method_reader_name(const char *n) {
+  return n && (sp_streq(n, "name") || sp_streq(n, "arity") || sp_streq(n, "owner") || sp_streq(n, "parameters") ||
+               sp_streq(n, "source_location") || sp_streq(n, "inspect") || sp_streq(n, "to_s") ||
+               sp_streq(n, "==") || sp_streq(n, "hash") || sp_streq(n, "receiver"));
+}
 /* Marshal, whose load makes objects with any ivars set */
 int is_marshal_const(const char *n) { return n && sp_streq(n, "Marshal"); }
 /* ENV, which answers a new String each read */
@@ -2955,6 +2963,7 @@ int is_class_name_name(const char *n) { return n && sp_streq(n, "name"); }
 int is_alias_method_name(const char *n) { return n && sp_streq(n, "alias_method"); }
 
 const char DEFINE_METHOD_NAME[] = "define_method";
+const char RT_BODY_METHOD_NAME[] = "__spinel_rt_body";
 int is_define_method_name(const char *n) {
   return n && sp_streq(n, DEFINE_METHOD_NAME);
 }

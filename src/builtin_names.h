@@ -549,6 +549,7 @@ int is_proc_new(const char *recv, const char *meth); /* Proc.new */
 int is_method_ref_name(const char *n);   /* method: Kernel#method */
 int is_method_handoff_name(const char *n); /* is_method_name_reflection less the define and ask names */
 int is_method_object_name(const char *n); /* method public_method instance_method: a Method of the name handed */
+int is_method_reader_name(const char *n); /* name arity owner parameters source_location inspect to_s == hash receiver: reads a Method, runs it not */
 int is_marshal_const(const char *n);     /* Marshal, whose load makes objects with any ivars */
 int is_env_const(const char *n);         /* ENV */
 int is_argv_const(const char *n);        /* ARGV */
@@ -666,6 +667,7 @@ int is_untabled_native_class_name(const char *n);
 
 int is_define_method_name(const char *n); /* define_method */
 extern const char DEFINE_METHOD_NAME[];   /* "define_method", the name a lookup of Module's definer asks */
+extern const char RT_BODY_METHOD_NAME[];  /* the class method a run-time site's block statements move to (cn_rt_body) */
 int is_define_singleton_method_name(const char *n); /* define_singleton_method */
 int is_singleton_class_name(const char *n); /* singleton_class */
 int is_reopen_self_name(const char *n);       /* __self: the receiver of a method a builtin's reopening defines */

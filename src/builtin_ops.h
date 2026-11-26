@@ -232,6 +232,8 @@ typedef enum {
   BOPE_IO_COPY_STREAM,    /* IO.copy_stream(src, dst) */
   BOPE_IO_SYSOPEN,        /* IO.sysopen(path [, mode [, perm]]) */
   BOPE_IO_SET_WINSIZE,    /* IO#winsize= (io/console) with an Integer Array */
+  /* Class.new / Module.new the call plan answers (cplan_class_new, codegen_call_class.c) */
+  BOPE_CLASS_NEW,
   BOPE__COUNT
 } BopEmit;
 

@@ -868,8 +868,9 @@ extern const char *g_proc_return_home;
 int cmethod_takes_self_cls(Compiler *c, const Scope *s);
 /* self, boxed, in method scope s of class s->class_id: a builtin's reopening holds it as the builtin's own value */
 void emit_reopen_self_boxed(Compiler *c, Scope *s, Buf *b);
-const char *emit_cmethod_self_cls_arg(Compiler *c, int mi, int recv_cls, Buf *b);
-int emit_class_cmethod_eqq(Compiler *c, int ci, const char *subj, TyKind pt, int node, int boxed, Buf *b);
+const char *emit_cmethod_self_cls_arg(Compiler *c, int mi, int recv_cls, const char *recv_val, Buf *b);
+/* (cls: the class value the call is on, its receiving class: emit_cmethod_self_cls_arg) */
+int emit_class_cmethod_eqq(Compiler *c, int ci, const char *subj, TyKind pt, int node, int boxed, const char *cls, Buf *b);
 const char *cmethod_cls_token(Compiler *c, Scope *encl);
 const char *cmethod_self_cls(Compiler *c, Scope *encl);
 Scope *open_default_method(void);
@@ -877,10 +878,11 @@ int reopen_self_defaults(Compiler *c, int mi);
 int ctor_needs_self_defaults(Compiler *c, int initm, int argc);
 int bytesplice_form_ok(Compiler *c, const int *argv, int argc);
 void emit_bytesplice_in_place(Compiler *c, const int *argv, int argc, const char *rs, const char *h, Buf *b);
-void emit_ctor_alloc_init(Compiler *c, int cid, int initm, int argsNode, int call_id, Buf *b);
+/* (rtid: the class id the construction builds for, as emit_obj_alloc_expr takes it) */
+void emit_ctor_alloc_init(Compiler *c, int cid, int initm, int argsNode, int call_id, const char *rtid, Buf *b);
 int ctor_needs_self_defaults_argv(Compiler *c, int initm, const int *argv, int argc);
 void emit_ctor_alloc_init_argv(Compiler *c, int cid, int initm, const int *argv, int argc, int argsNode,
-                               Buf *b);
+                               const char *rtid, Buf *b);
 void emit_super_class_new(Compiler *c, int id, Buf *b); /* super in `self.new` */
 extern const char *g_ctor_self;
 extern const char *g_ctor_self_deref;
@@ -1276,8 +1278,12 @@ int cls_id_masquerades(Compiler *c, int cid);
 int visible_as_target(Compiler *c, int k, int target);
 int class_mixes_in(Compiler *c, int cid, int mod, int depth);
 int class_is_comparable(Compiler *c, int cid);
-void emit_visible_cls_id(Compiler *c, int ci, const char *obj, const char *id, Buf *b);
-void obj_default_name(Compiler *c, int ci, char *name, size_t nn, char *arg, size_t na);
+void emit_visible_cls_id(Compiler *c, int ci, const char *obj, const char *id, int masq, Buf *b);
+int obj_default_name(Compiler *c, int ci, const char *obj, char *name, size_t nn, char *arg, size_t na);
+void emit_obj_class_id(Compiler *c, int ci, const char *obj, Buf *b);
+void emit_obj_class_value(Compiler *c, int ci, const char *obj, Buf *b);   /* the same, as an sp_Class */
+/* Class#subclasses' entry for class k onto the PolyArray arr (codegen.c) */
+void emit_subclass_push(Compiler *c, int k, const char *arr, const char *when, Buf *b);
 /* Kernel#to_s or #inspect (want_inspect) of an object of program class cid,
    the builtin's own text whatever the program defines: #<Name:0x...>, and
    for inspect the default ivar walk (sp_obj_kernel_inspect). obj is the C
@@ -1285,8 +1291,13 @@ void obj_default_name(Compiler *c, int ci, char *name, size_t nn, char *arg, siz
    a by-value one), evaluated once or twice. */
 void emit_obj_kernel_text(Compiler *c, int cid, int want_inspect, const char *obj, Buf *b);
 void emit_obj_default_inspect(Compiler *c, int cid, const char *p, Buf *b);
+const char *emit_ctor_rt_arg(Compiler *c, int ci, const char *rtid, Buf *b);   /* a site class's constructor's leading argument */
+/* The C id `(cls).cls_id` of the class value text cls, into out (n bytes):
+   what a construction that holds a class value builds for (rtid), NULL
+   for cls NULL */
+const char *ctor_rt_id(const char *cls, char *out, size_t n);
 int class_has_ctor(const ClassInfo *ci);   /* does the class get a sp_X_new (an object of it may exist) */
-int anon_class_text(Compiler *c, int ci, const char *head, Buf *b);
+int anon_class_text(Compiler *c, int ci, const char *obj, const char *head, Buf *b);
 void emit_missing_operand(Compiler *c, int op, int t, Buf *b);
 void emit_raise_operands(Compiler *c, int m, int staged, int t0, Buf *b);
 int scope_def_line(Compiler *c, Scope *s);
@@ -2311,7 +2322,7 @@ int each_split_applies(Compiler *c, int id);
 /* The condition the dispatch's enum-proc arm tests `_t<tv>` with: an Array,
    Hash, Range, String Range or Enumerator (codegen_poly_plan.c) */
 void emit_penum_kind_test(Buf *b, int tv);
-void emit_obj_alloc_expr(Compiler *c, int cid, Buf *b);
+void emit_obj_alloc_expr(Compiler *c, int cid, const char *rtid, Buf *b);
 void emit_struct_members_ctor_name(Compiler *c, int cid, Buf *b);
 void emit_pool_fwd(Compiler *c, int cid);
 /* a body written to g_procs ahead of the constructors begins and ends (emit_pool_fwd) */
@@ -2678,7 +2689,7 @@ TyKind reader_override_ty(Compiler *c, int id, int cid, const char *name);
 int emit_tap_then_expr(Compiler *c, int id, Buf *b);
 int recv_is_const(const Compiler *c, const NodeTable *nt, int recv, const char *name);
 int sp_is_fiber_storage_recv(const NodeTable *nt, int recv);
-int emit_ctor_yield_inline(Compiler *c, int id, int ci, Buf *b);
+int emit_ctor_yield_inline(Compiler *c, int id, int ci, const char *rtid, Buf *b);
 int emit_env_args_before(Compiler *c, int id);
 void emit_env_store_value(Compiler *c, int id, const int *argv, TyKind face, Buf *b);
 /* The value ENV.delete(k)'s literal missing-key block answers (its last
@@ -2803,10 +2814,15 @@ int view_mark(void);
    ones it is emitted inside of: an arm that reaches a yielding method
    expands its body, which may hold the same send, and the send is not
    emitted again inside its own arms. count_arm is set while a count's arm
-   of a builtin's generic entry is emitted (bi_generic_fn). */
+   of a builtin's generic entry is emitted (bi_generic_fn). rt_switch names
+   the innermost class-value `new` switch whose arms are being written
+   (emit_class_value_new_switch), linked to the ones it is written inside
+   of: a site class's constructor argument that writes one's class id
+   (rtclass_arg_text) marks it read, and the switch binds the id only then. */
 typedef struct DsendFrame { int id, depth; const struct DsendFrame *up; } DsendFrame;
+struct SwitchRtId;
 typedef struct { int pd_skip, prbd_skip, builtin_arm, send_split, each_inline, each_dispatch, gap_watch; int *gap_hit; const char *arm_cls;
-                 const DsendFrame *dsend; int count_arm; } ArmCtx;
+                 const DsendFrame *dsend; int count_arm; struct SwitchRtId *rt_switch; } ArmCtx;
 extern ArmCtx g_arm;
 #define g_pd_skip (g_arm.pd_skip)
 #define g_prbd_skip (g_arm.prbd_skip)
@@ -2816,6 +2832,8 @@ int view_push_arm(int pd_skip, int prbd_skip, int builtin_arm);
 int view_push_gap_watch(int id, int *hit);
 /* the arm context with frame f the innermost dynamic send (ArmCtx.dsend), popped by view_pop */
 int view_push_dsend(const DsendFrame *f);
+/* the arm context with switch s the innermost class-value `new` switch (ArmCtx.rt_switch), popped by view_pop */
+int view_push_rt_switch(struct SwitchRtId *s);
 /* A node pinned to one face kind for the inference asked under it,
    pushed and popped like a view (view_pop) and put back by view_unwind
    (face_of, analyze.h). */
@@ -3027,6 +3045,7 @@ int emit_op_io_for_fd(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_io_select(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_io_copy_stream(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_io_sysopen(Compiler *c, const BopCtx *x, Buf *b);
+int emit_op_class_new(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_io_set_winsize(Compiler *c, const BopCtx *x, Buf *b);
 /* A typed array receiver of a compare (`ck` "cmp") or a blockless sum (`ck`
    "sum"), wrapped in the runtime's nil check where the array can hold nil

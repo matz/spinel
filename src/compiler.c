@@ -5022,6 +5022,13 @@ static void cv_build(Compiler *c) {
   /* constants read as values, and self in a class's own body */
   NT_FOREACH_KIND(nt, NK_ConstantReadNode, n) if (!nonval[n]) cv_mark_name(c, v, key_name(c, n));
   NT_FOREACH_KIND(nt, NK_ConstantPathNode, n) if (!nonval[n]) cv_mark_name(c, v, key_name(c, n));
+  /* a Class.new evaluated more than once whose family keeps the one class
+     the site makes answers that class itself, where no constant names it
+     (cplan_class_new) */
+  NT_FOREACH_KIND(nt, NK_CallNode, n) {
+    int site = -1;
+    if (!nonval[n] && cplan_class_new(c, n, &site) == CNEW_STATIC && site >= 0 && site < nk) v[site] = 1;
+  }
   for (int k = 0; k < nk; k++) {
     int dn = c->classes[k].def_node;
     if (!class_def_opens_frame(nt, dn)) continue;

@@ -276,8 +276,8 @@ void emit_puts_one(Compiler *c, int arg, Buf *b, int indent) {
   else if (ty_is_object(t)) {
     /* default Object#to_s: #<Name:0xADDR>, like CRuby (no ivars) */
     int cid = ty_object_class(t);
-    char rn[512], rarg[96];
-    obj_default_name(c, cid, rn, sizeof rn, rarg, sizeof rarg);
+    char rn[512], rarg[512];
+    obj_default_name(c, cid, "_po", rn, sizeof rn, rarg, sizeof rarg);
     buf_printf(b, "{ void *_po = (void *)("); emit_expr(c, arg, b);
     buf_printf(b, "); sp_puts_line(_po ? sp_sprintf(\"#<%s:0x%%016llx>\", %s(unsigned long long)(uintptr_t)_po) : \"\"); }\n", rn, rarg);
   }
@@ -7134,10 +7134,12 @@ static int emit_poly_class_when_value(Compiler *c, int cond_id, const char *tmp,
          `when M` matches K itself, as is_a?(M) does */
       if (comp_class_is_module(c, &c->classes[cid])) {
         int any = 0;
+        char uv[256], key[512]; snprintf(uv, sizeof uv, "sp_unbox_class(%s)", tmp);
+        class_value_key(c, -1, uv, key, sizeof key);
         for (int k = 0; k < c->nclasses; k++)
           if (comp_class_singleton_has_module(c, k, cid)) {
             if (!any) buf_printf(b, " || (%s.tag == SP_TAG_CLASS && (", tmp);
-            buf_printf(b, "%ssp_unbox_class(%s).cls_id == %d", any ? " || " : "", tmp, k);
+            buf_printf(b, "%s%s == %d", any ? " || " : "", key, k);
             any = 1;
           }
         if (any) buf_puts(b, "))");
@@ -7955,6 +7957,13 @@ static int pm_value_const(Compiler *c, int pat, const char *cn) {
   if (lv && lv->type != TY_UNKNOWN && lv->type != TY_CLASS) return 1;
   if (comp_ffi_const_at(c, pat, NULL)) return 1;
   return when_builtin_value_const(c, pat);
+}
+/* A constant in `when` that holds a value, not a class or module: one
+   pm_value_const answers, or one holding a class value that may be a class
+   made at run time (cplan_class_value_may_be_rt), whose own === answers
+   through the class-value arm, as a local holding it does. */
+static int when_value_const(Compiler *c, int cond, const char *cn) {
+  return pm_value_const(c, cond, cn) || cplan_class_value_may_be_rt(c, cond);
 }
 /* the kinds whose === is ==, so the arm is the equality test of `in ^x` */
 static int pm_eq_scalar(TyKind k) {
@@ -10635,7 +10644,7 @@ static void emit_when_boxed_user_arms(Compiler *c, int cond, int t, TyKind pt, i
    the value in C variable `subj` of type `pt`, and test the answer as `if`
    does (or give it boxed). The value is boxed when the method's parameter
    is. 0: no such method, or one this call cannot pass the value to. */
-int emit_class_cmethod_eqq(Compiler *c, int ci, const char *subj, TyKind pt, int node, int boxed, Buf *b) {
+int emit_class_cmethod_eqq(Compiler *c, int ci, const char *subj, TyKind pt, int node, int boxed, const char *cls, Buf *b) {
   int mi = pm_own_cmethod_eqq(c, node, ci);
   if (mi < 0 || !c->scopes[mi].reachable) return 0;
   Scope *ws = &c->scopes[mi];
@@ -10648,7 +10657,7 @@ int emit_class_cmethod_eqq(Compiler *c, int ci, const char *subj, TyKind pt, int
   }
   Buf cl; memset(&cl, 0, sizeof cl);
   buf_printf(&cl, "%s(", mc_method(c, ws));
-  buf_puts(&cl, emit_cmethod_self_cls_arg(c, mi, ci, &cl));
+  buf_puts(&cl, emit_cmethod_self_cls_arg(c, mi, ci, cls, &cl));
   if (raw || pt == TY_POLY) buf_puts(&cl, subj);
   else emit_boxed_text(c, pt, subj, &cl);
   /* (the optional parameters take their plain defaults) */
@@ -10677,7 +10686,14 @@ int emit_class_cmethod_eqq(Compiler *c, int ci, const char *subj, TyKind pt, int
    method `===`: the arm calls it with the subject. 0: no such method. */
 static int emit_when_class_cmethod_eq(Compiler *c, int cond, int t, TyKind pt, Buf *b) {
   char sref[24]; snprintf(sref, sizeof sref, "_t%d", t);
-  return emit_class_cmethod_eqq(c, const_node_class_index(c, cond), sref, pt, cond, 0, b);
+  int ci = const_node_class_index(c, cond);
+  /* (a constant of a site's family may hold a class made at run time: its
+     value is the receiving class) */
+  Buf cv; memset(&cv, 0, sizeof cv);
+  if (ci >= 0 && cplan_rt_family(c, ci)) emit_expr(c, cond, &cv);
+  int r = emit_class_cmethod_eqq(c, ci, sref, pt, cond, 0, cv.p, b);
+  free(cv.p);
+  return r;
 }
 
 static int when_boxed_has_user_arm(Compiler *c, int cond) {
@@ -10900,12 +10916,24 @@ static int emit_when_typed_test(Compiler *c, int cond, int t, TyKind pt, Buf *b)
        shape a variable pattern already uses (#4271). Comparing the
        subject to the class with `==` did not even compile. */
     char scref[32]; snprintf(scref, sizeof scref, "_t%d", t);
-    buf_puts(b, "sp_poly_is_a_dyn(");
-    if (pt == TY_POLY) buf_puts(b, scref);
-    else emit_boxed_text(c, pt, scref, b);
-    buf_puts(b, ", sp_box_class(");
-    emit_expr(c, cond, b);
-    buf_puts(b, "), 0)");
+    /* (a class made at run time is no name: its own === answers, through
+       the class-method hook, and membership otherwise) */
+    if (cplan_class_value_may_be_rt(c, cond)) {
+      buf_puts(b, "sp_poly_case_eq(sp_box_class(");
+      emit_expr(c, cond, b);
+      buf_puts(b, "), ");
+      if (pt == TY_POLY) buf_puts(b, scref);
+      else emit_boxed_text(c, pt, scref, b);
+      buf_puts(b, ")");
+    }
+    else {
+      buf_puts(b, "sp_poly_is_a_dyn(");
+      if (pt == TY_POLY) buf_puts(b, scref);
+      else emit_boxed_text(c, pt, scref, b);
+      buf_puts(b, ", sp_box_class(");
+      emit_expr(c, cond, b);
+      buf_puts(b, "), 0)");
+    }
   }
   else if (eq_family(pt) && eq_family(comp_ntype(c, cond)) && eq_family(pt) != eq_family(comp_ntype(c, cond))) {
     /* a when value of a different comparable family never matches; one
@@ -11246,7 +11274,7 @@ static void emit_case_in(Compiler *c, int id, Buf *b, int indent) {
              to a constant false and the branch was never taken. So is a
              builtin's value constant (`Socket::AF_INET`, `File::SEPARATOR`):
              typed a number or a String, not a class (pm_value_const). */
-          if (cn2 && pm_value_const(c, conds[j], cn2)) cn2 = NULL;
+          if (cn2 && when_value_const(c, conds[j], cn2)) cn2 = NULL;
         /* a class whose own class method `===` (or an ancestor's) answers
            `when Klass`: that method with the subject, as CRuby calls it */
         if (cn2 && emit_when_class_cmethod_eq(c, conds[j], t, pt, b)) { }
@@ -11650,7 +11678,7 @@ static void emit_case_expr_in(Compiler *c, int id, Buf *b) {
         const char *cn2 = (cty2_k == NK_ConstantReadNode || cty2_k == NK_ConstantPathNode)
                          ? isa_match_class_name(c, conds[j], cq2, sizeof cq2) : NULL;
         /* value constant in `when`: equality, not a class test (see above) */
-        if (cn2 && pm_value_const(c, conds[j], cn2)) cn2 = NULL;
+        if (cn2 && when_value_const(c, conds[j], cn2)) cn2 = NULL;
         /* a class whose own class method `===` (or an ancestor's) answers
            `when Klass`: that method with the subject, as CRuby calls it */
         if (cn2 && emit_when_class_cmethod_eq(c, conds[j], t, pt, b)) { }
@@ -17270,6 +17298,8 @@ void emit_stmt(Compiler *c, int id, Buf *b, int indent) {
   if (g_repr_check) repr_check_ask(c, id);
   /* a version cell no emitted code reads is not written (ver_cells_settle) */
   if (cplan_cell_write_dropped(c, id)) return;
+  /* (a site class's `inherited` call and its block's statements run at each evaluation instead) */
+  if (cplan_stmt_at_evaluation(c, id)) return;
   emit_line_directive(c, id, b);
   if (nt_kind(c->nt, id) == NK_LoadNode) { emit_with_prelude(c, id, b, indent, emit_load_stmt); return; }   /* (a computed path's temps) */
   if (emit_const_recv_stmt_wrap(c, id, b, indent, 0)) return;

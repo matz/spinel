@@ -149,7 +149,19 @@ way (a mixin's module, a form's "runs program code", an alias's
 visibility) are asked again once all of it is made (`lr_settle_regions`).
 A class builder's class (`X = Struct.new(:a) do ... end`, a local's too) is
 made where the walk reaches its write (`record_write_class`), so its block
-is recorded as that class's body like a header's.
+is recorded as that class's body like a header's. A `Class.new` or
+`Module.new` evaluated more than once whose block only declares is lowered to
+a site class instead (`desugar_class_new_blocks`, noted `EB_RT_SITE` /
+`EB_RT_BARE` with the site): the call stays, and where the site's family can
+have records (`register_rt_sites`, `ClassInfo.rt_site`) each evaluation makes
+a record of `lib/sp_rtclass.h` sharing the site class's code. The call plan
+answers every question about it (`cplan_class_new`, `cplan_rt_site`,
+`cplan_class_value_may_be_rt`). The block's statements that are not
+declarations (moved into a class method of the site class, `cn_rt_body`) run
+at each evaluation instead, on the class it makes
+(`cplan_stmt_at_evaluation`). The superclass's `inherited` call the walk puts
+in the site's body (`lr_fire_inherited`) is not a declaration: such a site
+keeps its one class.
 
 ### Extents
 

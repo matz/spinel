@@ -8347,6 +8347,58 @@ void resolve_parents(Compiler *c) {
   mark_anon_superclass_reflection(c);
 }
 
+/* The site classes of the Class.new and Module.new calls evaluated more than
+   once (desugar_class_new_blocks, class_new_anonymous 3): each evaluation
+   makes a class of its own, a record at run time with the site class's code
+   and layout, where nothing in the site class's chain lays its instances out
+   as a builtin or a builder does. A chain that reaches an exception, a
+   Struct or Data class, an Array, Hash, String or Time subclass, or a native
+   or extension class keeps the one class the site makes, and so does a body
+   that runs more than declarations (body_only_declares), the hooks the
+   record fires there and the included hooks inlined into it among them: it
+   runs once, with the site class as self. A site whose superclass chain has
+   an `inherited` the program defines is one: the record fires it in the
+   body (lr_fire_inherited), and the site keeps its one class.
+   Where such a site has a block, or a block the desugar gave one class
+   repeats (class_new_static_repeat: a builtin superclass, a constant's
+   class), every evaluation answers that one class, so
+   the program does not answer class identity per evaluation
+   (Compiler.rt_identity_per_eval), and its calls with a superclass written
+   and no block are no run-time sites (cplan_rt_site), refused as before
+   they made classes: the program they kept from compiling would otherwise
+   show the block site's one class. */
+void register_rt_sites(Compiler *c) {
+  ANameHash defnames = {0};
+  int named = 0, per_eval = 1;
+  for (int i = 0; i < c->nclasses; i++) {
+    int def = c->classes[i].def_node, bare = nt_int(c->nt, def, "rt_bare", 0);
+    int rec = c->classes[i].is_struct || c->classes[i].is_data ? class_def_record(c->nt, def) : -1;
+    if (nt_int(c->nt, def, "class_new_static_repeat", 0) || (rec >= 0 && nt_int(c->nt, rec, "class_new_static_repeat", 0)))
+      per_eval = 0;
+    if (nt_int(c->nt, def, "class_new_anonymous", 0) != 3) continue;
+    if (!named) { program_def_names(c->nt, &defnames); named = 1; }
+    int ok = !class_inherits_builtin_exception(c, i) && body_only_declares(c->nt, class_def_body(c->nt, def), &defnames);
+    for (int k = i, g = 0; ok && k >= 0 && g < 256; k = c->classes[k].parent, g++) {
+      const ClassInfo *a = &c->classes[k];
+      ok = !a->is_struct && !a->is_data && !a->is_anon_struct && !a->ary_root && !a->ary_hash && !a->ary_str &&
+           !a->ary_time && !a->c_struct && !a->is_native_class && !a->nsub_root && !a->cext_layout;
+      if (k == a->parent) break;
+    }
+    if (ok) c->classes[i].rt_site = bare ? RT_SITE_BARE : RT_SITE_OWN;
+    else if (!bare) per_eval = 0;
+  }
+  c->rt_identity_per_eval = per_eval;
+  for (int i = 0; i < c->nclasses; i++) {
+    if (!cplan_rt_site(c, i)) continue;
+    c->has_rt_classes = 1;
+    for (int k = i, g = 0; k >= 0 && g < 256 && !(k != i && c->classes[k].rt_family); k = c->classes[k].parent, g++) {
+      c->classes[k].rt_family = 1;
+      if (k == c->classes[k].parent) break;
+    }
+  }
+  anh_free(&defnames);
+}
+
 /* Does class p define method od before node `at` -- a class method for a
    singleton alias (sg), an instance method otherwise? */
 static int inherited_alias_def_before(Compiler *c, int p, const char *od, int at, int sg) {

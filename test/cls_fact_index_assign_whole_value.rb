@@ -90,8 +90,9 @@ end
 
 N = 10_000
 rows = Array.new(N)
+id = "r"
 b0 = live_bytes
-N.times { |i| rows[i] = Row.new("r", i) }
+N.times { |i| rows[i] = Row.new(id, i) }
 per = (live_bytes - b0) / N
 puts rows.size
 puts "a Row of a String and an Integer: at most 72 bytes: " + (per <= 72 ? "yes" : "no (" + per.to_s + ")")

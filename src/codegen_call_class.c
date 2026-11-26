@@ -4890,7 +4890,8 @@ static int emit_class_own_instance_methods(Compiler *c, int id, Buf *b, const No
     if (nks > 0) {
       int rt = ++g_tmp;
       buf_printf(b, "({ sp_PolyArray *_t%d = NULL; ", rt);
-      if (dyn) buf_puts(b, "switch (_sp_cls.cls_id) {");
+      /* (a class made at run time lists its site class's: class_value_key) */
+      if (dyn) { buf_puts(b, "switch ("); emit_class_value_key(c, -1, "_sp_cls", b); buf_puts(b, ") {"); }
       for (int i = 0; i < nks; i++) {
         ReflNames r = {0};
         refl_at(&r, id, ks[i], CT_OWN);

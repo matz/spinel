@@ -344,10 +344,10 @@ as CRuby does: its identity, its name (the first constant assigned it), its
 in its superclass's `subclasses`, and the `class` its instances answer, also
 inside `initialize`, in the block's class methods and in those it inherits.
 The classes one call makes share the block's methods, compiled once. At each
-evaluation the superclass's `inherited` runs, and then the block's statements
-other than its declarations, in their order, with the evaluation's class as
-`self` and as the block's one parameter (`Class.new { |k| ... }`). Such a
-class is never freed. These forms still answer one class for every evaluation, as before:
+evaluation the block's statements other than its declarations run, in their
+order, with the evaluation's class as `self` and as the block's one parameter
+(`Class.new { |k| ... }`). Such a class is never freed. These forms still
+answer one class for every evaluation, as before:
 
 - a block with a statement that may not run again on each class: one that
   reads or writes a class-level instance variable or a class variable, that
@@ -363,32 +363,12 @@ class is never freed. These forms still answer one class for every evaluation, a
 - a superclass whose instances are laid out as a builtin's or as a builder's:
   an exception class, a Struct or Data class, a subclass of Array, Hash, String
   or Time, a native or C-extension class, or a builtin superclass other than
-  `Object`. Without a block such a call is refused at compile time;
+  `Object`; and a superclass whose chain has an `inherited` the program
+  defines (its own, an ancestor's or an extended module's), which runs once,
+  where the call is compiled, as the block's statements do. Without a block
+  such a call is refused at compile time;
 - a constant write's value (`Foo = Class.new { ... }` in a block, a lambda
   or a loop), which defines the one class the constant names.
-
-A `Class.new` evaluated more than once whose superclass's `inherited` asks
-the class it is handed for something its block declares is refused at
-compile time: CRuby runs the hook before the block declares anything, and
-the compiled class has the block's declarations from the start. The question
-counts only where it asks about the kind of thing the block declares: its
-instance methods (`instance_methods`, `method_defined?`, an instance), its
-own methods (`respond_to?`, `method`, `is_a?`, against a `def self.` or an
-`extend`), its ancestry (`ancestors`, `include?`, `<`, against an `include`
-or `prepend`), or its constants. Any question the block answers with a method
-of the same name on the class itself (`def self.name`, `def self.to_s`, or an
-`extend`) counts too, and so does printing or interpolating the class where
-the block replaces its `to_s` or `inspect`. The class is followed through the
-local, instance and global variables the hook writes it to and the
-collections it stores it in, held in any of those or in a constant (`subs <<
-k`, `seen[k] = true`, `REG[k.object_id] = k`, a Set's `add`), and a hook that
-hands it to a method of the program, a send, a proc or a block, or reads such
-a collection for more than its size or whether it holds a value, is refused
-too. So is a hook that stores it where another method reads it (an instance
-variable, a global or a constant) and then calls a method of the program, a
-send, a block or a `super` that reaches another `inherited`. A hook that
-counts, collects or names the classes it is handed, passes it to `super`, or
-asks about a kind the block does not declare, runs at each evaluation.
 
 In a program with one of these forms evaluated more than once (a
 `Struct.new` or `Data.define` evaluated more than once counts as one), a

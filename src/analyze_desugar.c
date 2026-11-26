@@ -26463,18 +26463,17 @@ static int block_only_declares(const NodeTable *nt, int blk, int hooks, const AN
   return !hooks && body_only_declares(nt, nt_ref(nt, blk, "body"), defnames);
 }
 /* ...and for the statements body (-1: none) of a block or a class body; the
-   superclass's inherited call the record fires in a class body, and the call
-   of the statements a site class's body runs at each evaluation
-   (cn_rt_body), are no statements of it (they run at each evaluation,
-   cplan_stmt_at_evaluation) */
+   call of the statements a site class's body runs at each evaluation
+   (cn_rt_body) is no statement of it (it runs at each evaluation,
+   cplan_stmt_at_evaluation). The superclass's `inherited` call the record
+   fires in a class body (lr_fire_inherited) runs program code. */
 int body_only_declares(const NodeTable *nt, int body, const ANameHash *defnames) {
   int n = 0;
   if (body < 0) return 1;
   if (nt_kind(nt, body) != NK_StatementsNode) return 0;
   const int *st = nt_arr(nt, body, "body", &n);
   for (int i = 0; i < n; i++)
-    if (!nt_int(nt, st[i], "inherited_hook", 0) && !nt_int(nt, st[i], "rt_body_call", 0) &&
-        !stmt_only_declares(nt, st[i], defnames)) return 0;
+    if (!nt_int(nt, st[i], "rt_body_call", 0) && !stmt_only_declares(nt, st[i], defnames)) return 0;
   return 1;
 }
 /* ...and for one statement s of such a body */

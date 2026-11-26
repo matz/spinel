@@ -549,10 +549,13 @@ int cplan_rt_family(const Compiler *c, int ci);
    *site (NULL: not asked) its site class: CNEW_RUNTIME, a class of its own
    at each evaluation; CNEW_STATIC, the site class itself, where its family
    or its block cannot have records (register_rt_sites) and the call has a
-   block, as every evaluation answered before; CNEW_REFUSED, a call without
-   a block whose site is no run-time site (cplan_rt_site), refused
-   (feature_limit); CNEW_NONE for any other call. */
-enum { CNEW_NONE, CNEW_RUNTIME, CNEW_STATIC, CNEW_REFUSED };
+   block, as every evaluation answered before; for a call without a block
+   whose site is no run-time site (cplan_rt_site), refused (feature_limit):
+   CNEW_MIXED where that is only because the program does not answer class
+   identity per evaluation (Compiler.rt_identity_per_eval), CNEW_REFUSED
+   where its family or its body cannot have records; CNEW_NONE for any
+   other call. */
+enum { CNEW_NONE, CNEW_RUNTIME, CNEW_STATIC, CNEW_REFUSED, CNEW_MIXED };
 /* May the class value at node (-1: one no node gives) be a class made at
    run time, its id a record's: a site class's Class object is in its class
    fact, or the fact is not bounded, in a program that has one? A constant

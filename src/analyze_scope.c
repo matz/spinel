@@ -8356,7 +8356,9 @@ void resolve_parents(Compiler *c) {
    or extension class keeps the one class the site makes, and so does a body
    that runs more than declarations (body_only_declares), the hooks the
    record fires there and the included hooks inlined into it among them: it
-   runs once, with the site class as self.
+   runs once, with the site class as self. A site whose superclass chain has
+   an `inherited` the program defines is one: the record fires it in the
+   body (lr_fire_inherited), and the site keeps its one class.
    Where such a site has a block, or a block the desugar gave one class
    repeats (class_new_static_repeat: a builtin superclass, a constant's
    class), every evaluation answers that one class, so

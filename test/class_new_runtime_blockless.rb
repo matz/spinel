@@ -1,13 +1,6 @@
 # Class.new and Module.new without a block, evaluated more than once: a class
-# (a module) of its own each time, and the superclass's inherited runs at
-# each evaluation, with the class it makes, before the call answers it.
+# (a module) of its own each time.
 class Plugin
-  @made = []
-  def self.inherited(sub)
-    @made << sub
-    super
-  end
-  def self.made = @made
   def kind = :plugin
 end
 
@@ -17,7 +10,7 @@ def mod = Module.new
 
 ps = []
 3.times { ps << plugin }
-p Plugin.made.size, Plugin.made == ps, ps.uniq.size
+p ps.uniq.size, ps.first == ps.last
 p ps.map { |k| k.new.kind }.uniq, ps.all? { |k| k.superclass == Plugin }
 c = bare
 d = bare

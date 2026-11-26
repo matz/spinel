@@ -1,4 +1,4 @@
-[:hook, :body, :value, :hook, :body, :value]
+[:body, :value, :body, :value]
 false
 4
 4
@@ -9,6 +9,3 @@ true
 true
 true
 :cm
-[[true, false, true], [true, false, true]]
-:v
-false

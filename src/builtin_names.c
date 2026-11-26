@@ -2122,62 +2122,6 @@ int is_method_reader_name(const char *n) {
                sp_streq(n, "source_location") || sp_streq(n, "inspect") || sp_streq(n, "to_s") ||
                sp_streq(n, "==") || sp_streq(n, "hash") || sp_streq(n, "receiver"));
 }
-/* What a call on a class observes of what the class's body declares
-   (CDECL_*, builtin_names.h): nothing for one that reads only what the
-   class is (its name, its superclass, its identity, comparisons); its
-   ancestry for an ancestry question; its instance methods for a method
-   table question; its own methods and extends for respond_to?, a method
-   object or is_a?; its constants (and those of what it includes) for a
-   constant question. Any other call (an instance, an eval in it, a send)
-   may observe all of it. */
-int class_reader_observes(const char *n) {
-  static const struct { const char *name; int kinds; } rows[] = {
-    { "name", 0 }, { "to_s", 0 }, { "inspect", 0 }, { "superclass", 0 }, { "==", 0 }, { "!=", 0 },
-    { "equal?", 0 }, { "eql?", 0 }, { "hash", 0 }, { "class", 0 }, { "frozen?", 0 }, { "object_id", 0 },
-    { "instance_of?", 0 }, { "nil?", 0 },
-    { "ancestors", CDECL_ANCESTORS }, { "include?", CDECL_ANCESTORS }, { "included_modules", CDECL_ANCESTORS },
-    { "<", CDECL_ANCESTORS }, { "<=", CDECL_ANCESTORS }, { ">", CDECL_ANCESTORS }, { ">=", CDECL_ANCESTORS },
-    { "<=>", CDECL_ANCESTORS },
-    { "instance_methods", CDECL_METHODS }, { "public_instance_methods", CDECL_METHODS },
-    { "private_instance_methods", CDECL_METHODS }, { "protected_instance_methods", CDECL_METHODS },
-    { "instance_method", CDECL_METHODS }, { "public_instance_method", CDECL_METHODS },
-    { "method_defined?", CDECL_METHODS }, { "public_method_defined?", CDECL_METHODS },
-    { "private_method_defined?", CDECL_METHODS }, { "protected_method_defined?", CDECL_METHODS },
-    { "respond_to?", CDECL_SMETHODS }, { "method", CDECL_SMETHODS }, { "public_method", CDECL_SMETHODS },
-    { "singleton_method", CDECL_SMETHODS }, { "singleton_methods", CDECL_SMETHODS }, { "methods", CDECL_SMETHODS },
-    { "public_methods", CDECL_SMETHODS }, { "is_a?", CDECL_SMETHODS }, { "kind_of?", CDECL_SMETHODS },
-    { "constants", CDECL_CONSTS | CDECL_ANCESTORS }, { "const_get", CDECL_CONSTS | CDECL_ANCESTORS },
-    { "const_defined?", CDECL_CONSTS | CDECL_ANCESTORS }, { "const_source_location", CDECL_CONSTS | CDECL_ANCESTORS },
-    { NULL, 0 } };
-  for (int i = 0; n && rows[i].name; i++) if (sp_streq(n, rows[i].name)) return rows[i].kinds;
-  return CDECL_ALL;
-}
-/* A call on a collection that asks only what it holds, by identity: its
-   size, whether it is empty, whether it holds a value (with no block) */
-int is_collection_store(const char *n) {
-  return n && (is_array_push_family(n) || is_insert_name(n) || is_store_alias(n) || sp_streq(n, "add") || sp_streq(n, "add?"));
-}
-int is_collection_identity_query(const char *n) {
-  static const char *const names[] = { "size", "length", "count", "empty?", "include?", "member?", "any?", "none?", NULL };
-  return n && builtin_name_in(n, names);
-}
-/* What a receiverless class-body declaration call adds to its class
-   (CDECL_*): a visibility change, an attribute, an alias or a removal its
-   instance methods; a class-method visibility change its own methods; a
-   constant visibility change its constants; an include or prepend its
-   ancestry, instance methods and constants; an extend its own methods.
-   Any other call may add anything. */
-int class_declaration_adds(const char *n) {
-  if (!n) return CDECL_ALL;
-  if (visibility_of_name(n) == BVIS_MODULE_FUNCTION) return CDECL_METHODS | CDECL_SMETHODS;
-  if (visibility_of_name(n) || is_attr_decl_reader(n) || is_attr_decl_writer(n) || is_alias_method_name(n) ||
-      is_undef_method_name(n) || is_remove_method_name(n))
-    return CDECL_METHODS;
-  if (class_method_vis_of_name(n)) return CDECL_SMETHODS;
-  if (is_const_visibility_name(n)) return CDECL_CONSTS;
-  if (is_mixin_call(n)) return is_extend_name(n) ? CDECL_SMETHODS : CDECL_ANCESTORS | CDECL_METHODS | CDECL_CONSTS;
-  return CDECL_ALL;
-}
 /* Marshal, whose load makes objects with any ivars set */
 int is_marshal_const(const char *n) { return n && sp_streq(n, "Marshal"); }
 /* ENV, which answers a new String each read */

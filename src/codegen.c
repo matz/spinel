@@ -13768,9 +13768,7 @@ void emit_class_new(Compiler *c, ClassInfo *ci, Buf *b) {
     /* value-type: build on the stack and return by value (no heap / GC) */
     buf_printf(b, "static sp_%s sp_%s_new(", ci->c_name, ci->c_name);
     emit_ctor_params(c, cid, init, init_has_blk, b);
-    buf_printf(b, ") {\n  sp_%s self = {0};\n  self.cls_id = %d;", ci->c_name, cid);
-    emit_rtclass_store(c, cid, "self.", "_sp_rt", b);
-    buf_puts(b, "\n");
+    buf_printf(b, ") {\n  sp_%s self = {0};\n  self.cls_id = %d;\n", ci->c_name, cid);
     emit_ivar_nil_inits(c, b, ci, "self.", "  ", ";\n");
     if (comp_class_is_module(c, ci)) {
       /* A MODULE has no `new` -- `Buffering.new` is a NoMethodError in Ruby --
@@ -14096,12 +14094,9 @@ void emit_obj_alloc_expr(Compiler *c, int cid, const char *rtid, Buf *b) {
     buf_printf(b, " _t%d; })", t);
     return;
   }
-  Buf rt; memset(&rt, 0, sizeof rt);
-  rtclass_arg_text(cid, rtid, &rt);
   if (is_val) {
     buf_printf(b, "({ sp_%s _t%d = {0}; _t%d.cls_id = %d;", ci->c_name, t, t, cid);
     char lv[32]; snprintf(lv, sizeof lv, "_t%d.", t);
-    emit_rtclass_store(c, cid, lv, rt.p, b);
     emit_ivar_nil_inits(c, b, ci, lv, " ", ";");
     buf_printf(b, " _t%d; })", t);
   }
@@ -14117,11 +14112,13 @@ void emit_obj_alloc_expr(Compiler *c, int cid, const char *rtid, Buf *b) {
                class_needs_scan(ci) ? "sp_" : "", class_needs_scan(ci) ? ci->c_name : "NULL",
                class_needs_scan(ci) ? "__gc_scan" : "", t, t, t, cid);
     char lv[32]; snprintf(lv, sizeof lv, "_t%d->", t);
+    Buf rt; memset(&rt, 0, sizeof rt);
+    rtclass_arg_text(cid, rtid, &rt);
     emit_rtclass_store(c, cid, lv, rt.p, b);
+    free(rt.p);
     emit_ivar_nil_inits(c, b, ci, lv, " ", ";");
     buf_printf(b, " _t%d; })", t);
   }
-  free(rt.p);
 }
 
 /* The runtime calls the hooks below (sp_obj_to_a, sp_obj_conv_sw, the

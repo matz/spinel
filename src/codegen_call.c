@@ -20570,6 +20570,19 @@ void refl_emit_sym_array(Compiler *c, int cid, ReflNames *r, Buf *b) {
   mtab_build_leave(c);
 }
 
+/* See codegen_call_arms.h. */
+int refl_names_may_list(Compiler *c, const ReflNames *r) {
+  int n = 0;
+  mtab_build_enter(c);
+  for (int i = 0; i < r->n; i++) {
+    CplanCells cs;
+    int guarded, cells = refl_name_cells(c, r, i, &cs, &guarded);
+    n += guarded || cells || (r->show[i] & REFL_SHOWN);
+  }
+  mtab_build_leave(c);
+  return n;
+}
+
 /* The names obj.methods(false) / public_methods(false) /
    singleton_methods(false) answer for an instance of `cid`: the singleton
    methods the object has of its own (public and protected), and for

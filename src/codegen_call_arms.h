@@ -338,6 +338,10 @@ void refl_class_instance_methods(Compiler *c, int ci, int pub, int prot, ReflNam
 void refl_module_instance_methods(Compiler *c, int m, int prot, ReflNames *r);
 void refl_module_own_methods(Compiler *c, int m, int pub, int prot, int priv, ReflNames *r);
 void refl_emit_sym_array(Compiler *c, int cid, ReflNames *r, Buf *b);
+/* How many names of r that array may list: one shown, or one whose
+   presence or visibility the run tells (a name the plan then omits counts
+   too). */
+int refl_names_may_list(Compiler *c, const ReflNames *r);
 void refl_at(ReflNames *r, int id, int cls, unsigned side);
 void refl_free(ReflNames *r);
 int refl_note(ReflNames *r, const char *m, int show);   /* r holds m once (1 when it was new) */

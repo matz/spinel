@@ -32,7 +32,11 @@ int poly_recv_may_be(Compiler *c, int call, int k);
 int call_reaches_program_method(Compiler *c, int call);
 /* The classes and modules the same receiver can be ITSELF, as a value (a
    constant naming one, `{b: Integer}`), marked in a set over the class
-   table, or NULL when the walk cannot bound the receiver's values */
+   table, or NULL when the walk cannot bound the receiver's values. A mark
+   holds CV_SITE where a Class.new site's value is the class (the site's
+   one class, or one made at run time keyed by it), CV_VALUE for any other
+   way. */
+enum { CV_VALUE = 1, CV_SITE = 2 };
 const char *poly_recv_class_values(Compiler *c, int call);
 /* Can a class method of class k be reached through that receiver: k is a
    class every class value answers for (Class, Module, ...), or one of

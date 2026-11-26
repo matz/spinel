@@ -4281,6 +4281,20 @@ static const char *cls_value_recv_classes(Compiler *c, int id, int recv) {
   if (rk == NK_SelfNode || rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) return NULL;
   return poly_recv_class_values(c, id);
 }
+/* Does the own-method list of class ci, a Class.new site's value (mark,
+   CV_SITE) the receiver may hold, hold two names or more? CRuby lists them
+   in its method table's order, which follows the ids of every name it
+   interned, and the rows keep definition order only: that class's arm is
+   left out, as a site's value was before the walk bounded it. */
+static int own_list_order_untold(Compiler *c, int id, int ci, int mark, int pub, int prot, int priv) {
+  if (!(mark & CV_SITE) || mark & CV_VALUE) return 0;
+  ReflNames r = {0};
+  refl_at(&r, id, ci, CT_OWN);
+  refl_own_instance_methods(c, ci, pub, prot, priv, 0, &r);
+  int many = refl_names_may_list(c, &r) >= 2;
+  refl_free(&r);
+  return many;
+}
 /* The default arm of a switch on a Class value's class id over the
    classes the walk bounds it to: a builtin class's methods are not
    listed, so it raises rather than answer short. */
@@ -4913,15 +4927,21 @@ static int emit_class_own_instance_methods(Compiler *c, int id, Buf *b, const No
   /* a class held in a value: a switch on its class id over the
      classes the walk bounds it to, each listing its own */
   const char *cv = ci2 < 0 ? cls_value_recv_classes(c, id, recv) : NULL;
-  int any = 0;
-  for (int k = 0; cv && k < c->nclasses; k++) any |= cv[k];
+  int any = 0, untold = 0, named = 0;
+  for (int k = 0; cv && k < c->nclasses; k++) {
+    int u = cv[k] && own_list_order_untold(c, id, k, cv[k], im_pub, im_prot, im_priv);
+    any |= cv[k] && !u; untold |= u; named |= cv[k] & CV_VALUE;
+  }
+  /* (where only sites' values reach it, one whose order is untold leaves
+     the whole list to the refusal, as before the walk bounded them) */
+  if (untold && !named) any = 0;
   if (any) {
     int tc = ++g_tmp, rt = ++g_tmp;
     char clv[24]; snprintf(clv, sizeof clv, "_cl%d", tc);
     buf_printf(b, "({ sp_Class _cl%d = ", tc); emit_expr(c, recv, b);
     buf_printf(b, "; sp_PolyArray *_t%d = NULL; switch (", rt); emit_class_value_key(c, recv, clv, b); buf_puts(b, ") {");
     for (int k = 0; k < c->nclasses; k++) {
-      if (!cv[k]) continue;
+      if (!cv[k] || own_list_order_untold(c, id, k, cv[k], im_pub, im_prot, im_priv)) continue;
       ReflNames r = {0};
       refl_at(&r, id, k, CT_OWN);
       if (comp_class_is_module(c, &c->classes[k]) && cplan_module_listable(c, k, name))

@@ -44142,7 +44142,7 @@ static int splat_builtin_range(const char *name, int *lo, int *hi, int *variadic
     { "[]", 1, 2, 0 }, { "[]=", 2, 3, 0 },
     { "key?", 1, 1, 0 }, { "has_key?", 1, 1, 0 }, { "include?", 1, 1, 0 },
     { "member?", 1, 1, 0 }, { "value?", 1, 1, 0 }, { "has_value?", 1, 1, 0 },
-    { "index", 0, 2, 0 }, { "rindex", 0, 2, 0 }, { "count", 0, 8, 1 },
+    { "index", 0, 2, 0 }, { "rindex", 0, 2, 0 }, { "count", 0, 8, 1 }, { "squeeze", 0, 8, 1 },
     { "split", 0, 2, 0 }, { "join", 0, 1, 0 },
     { "start_with?", 0, 8, 1 }, { "end_with?", 0, 8, 1 },
     { "tr", 2, 2, 0 }, { "tr_s", 2, 2, 0 },

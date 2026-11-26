@@ -1,0 +1,12 @@
+7
+14
+7
+"bind argument must be an instance of #<Class:X>"
+"bind argument must be an instance of #<Class:X>"
+"bind argument must be an instance of Named"
+7
+TypeError
+1
+2
+"bind argument must be an instance of #<Class:X>"
+"bind argument must be an instance of #<Class:X>"

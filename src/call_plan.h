@@ -563,6 +563,14 @@ enum { CNEW_NONE, CNEW_RUNTIME, CNEW_STATIC, CNEW_REFUSED, CNEW_MIXED };
    that class, never a record's; one that holds a class value is asked as
    any value is. */
 int cplan_class_value_may_be_rt(Compiler *c, int node);
+/* `k.instance_method(:m).bind_call(o, ...)` whose target k's class picks
+   at run time (class_value_instance_method_sym) or whose one target a site
+   class owns (cplan_rt_site), and that bind_call lowers (an obj that is no
+   splat, an arm for each class, cplan_bind_call_gap): k's node, -1 for any
+   other call. The call binds through emit_bind_call_boxed, each arm checking o against the class
+   k holds, which may be made at run time, so the lookup is no use that runs
+   the site class's method in that class's place (cplan_rt_class_method_object). */
+int cplan_bind_call_rt_owner(Compiler *c, int id);
 int cplan_class_new(const Compiler *c, int id, int *site);
 /* Is node a statement of a site class's body, of a site whose classes are
    made at run time, that each evaluation runs on the class it makes

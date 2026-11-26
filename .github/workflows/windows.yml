@@ -88,5 +88,6 @@ jobs:
         run: |
           printf 'require "pty"\np defined?(PTY)\n' > no_pty.rb
           bin/spinel no_pty.rb -o no_pty.exe 2> no_pty.err
-          grep -q "'pty' is not available" no_pty.err
-          test "$(./no_pty.exe)" = "nil"
+          grep -q "cannot load such file -- pty" no_pty.err
+          if ./no_pty.exe > no_pty.out 2>&1; then exit 1; fi
+          grep -q "cannot load such file -- pty (LoadError)" no_pty.out

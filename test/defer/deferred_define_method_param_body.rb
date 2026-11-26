@@ -5,15 +5,17 @@
 # method only through a send of a run-time name builds and runs. Without
 # the flag it is refused.
 # spinel: defer-refusals: 2:start SELECT 1 true after
+# (the proxy is a class the program names: a Class.new made in the method
+# is a class of its own at each call, and its class_eval is refused first)
+class Proxy
+  def initialize; @ctx = 1; end
+end
 class Database
   def create_aggregate(name, step = nil)
-    proxy = Class.new do
-      def initialize; @ctx = 1; end
-    end
-    proxy.class_eval do
+    Proxy.class_eval do
       define_method(:step_with_ctx, step)
     end
-    proxy
+    Proxy
   end
   def execute(sql) = sql.upcase
 end

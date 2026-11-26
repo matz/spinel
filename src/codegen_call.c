@@ -32246,7 +32246,9 @@ static int fetch_hold_operand(Compiler *c, int node) {
 static int g_fetch_held_id = -1;
 static int emit_call_fetch_default_first(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
-  if (id == g_fetch_held_id || !g_pre || !sp_streq(nt_str(nt, id, "name"), "fetch") || nt_ref(nt, id, "block") >= 0) return 0;
+  const char *nm = nt_str(nt, id, "name");
+  int store = sp_streq(nm, "[]=") || sp_streq(nm, "store");
+  if (id == g_fetch_held_id || !g_pre || !(store || sp_streq(nm, "fetch")) || nt_ref(nt, id, "block") >= 0) return 0;
   int recv = nt_ref(nt, id, "receiver"), argc = 0;
   const int *argv = call_args(nt, id, &argc);
   if (recv < 0 || argc != 2 || nt_safe_nav(nt, id) || g_n_argov + 3 > MAX_ARG_OVERRIDE) return 0;
@@ -32255,13 +32257,17 @@ static int emit_call_fetch_default_first(Compiler *c, int id, Buf *b) {
     if (ak == NK_SplatNode || ak == NK_KeywordHashNode || ak == NK_BlockArgumentNode || ak == NK_ForwardingArgumentsNode) return 0;
   }
   if (!subtree_has_side_effect(c, argv[1]) || arg_ran_first(argv[1], 0)) return 0;
+  /* (a store's value goes to the call as its argument; only a key that
+     runs code ahead of a value that does is held, and the value itself
+     stays where the store takes it: its statements no longer run first) */
+  if (store && (!subtree_has_side_effect(c, argv[0]) || arg_ran_first(argv[0], 0))) return 0;
   size_t mark = g_pre->len;
   int t0 = g_tmp, sv = g_n_argov, ok = 1;
   const int ops[3] = { recv, argv[0], argv[1] };
-  for (int i = 0; i < 3 && ok; i++) {
+  for (int i = 0; i < (store ? 2 : 3) && ok; i++) {
     NodeKind k = nt_kind(nt, ops[i]);
     if (i < 2 && (k == NK_SelfNode || k == NK_SymbolNode || k == NK_StringNode || k == NK_IntegerNode || k == NK_NilNode ||
-                  arg_ran_first(ops[i], 0))) continue;
+                  arg_ran_first(ops[i], 0) || (store && i == 0 && !subtree_has_side_effect(c, ops[i])))) continue;
     ok = fetch_hold_operand(c, ops[i]);
   }
   if (!ok) {

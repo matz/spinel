@@ -105,6 +105,12 @@ typedef struct {
                                   of them reads a freed FILE or a descriptor
                                   number already reused (sp_io_use, sp_io.c) */
   struct sp_io_timeout *timeout;
+  unsigned char stat_snap;     /* a File::Stat that IO#stat made: the struct
+                                  stat fstat(2) of the descriptor gave follows
+                                  the handle in its own allocation, so it
+                                  describes the open file after the path
+                                  names another and after the stream closes
+                                  (sp_io_stat_handle, sp_cold.c) */
 } sp_File;
 
 sp_RbVal sp_File_timeout(sp_File *f);

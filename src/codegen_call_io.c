@@ -1694,10 +1694,10 @@ int emit_call_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const ch
     io_hold_effectful_recv(c, name, recv, argc, &rb);
     r = rb.p ? rb.p : "NULL";
     /* metadata via the handle's path (#2790) */
-    /* f.chown(uid, gid) on the handle's path; a nil id leaves it unchanged and
-       the instance form evaluates to 0, not the path count (#3104) */
+    /* f.chown(uid, gid): fchown(2) of the descriptor; a nil id leaves it
+       unchanged and the instance form evaluates to 0, not the path count (#3104) */
     if (sp_streq(name, "chown") && argc == 2) {
-      buf_printf(b, "((void)sp_file_chown(sp_File_path(%s), ", r);
+      buf_printf(b, "((void)sp_File_chown(%s, ", r);
       for (int ci = 0; ci < 2; ci++) {
         if (ci) buf_puts(b, ", ");
         if (nt_kind(nt, argv[ci]) == NK_NilNode) buf_puts(b, "-1LL");

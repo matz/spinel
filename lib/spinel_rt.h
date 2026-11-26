@@ -19807,7 +19807,10 @@ static sp_File *sp_File_open_val(const char *path, sp_RbVal mode, sp_oint perm) 
    File::Stat this backend models (#2775, #2790). */
 void sp_file_stat_scan(void *p);
 sp_File *sp_file_stat_handle(const char *path);
-sp_File *sp_io_stat_handle(sp_File *f);   /* IO#stat: by path, or fstat(2) for a descriptor handle */
+sp_File *sp_io_stat_handle(sp_File *f);   /* IO#stat: fstat(2) of the descriptor, kept in the handle */
+sp_Time *sp_io_birthtime(sp_File *f);     /* File#birthtime / File::Stat#birthtime */
+sp_int sp_File_chmod(sp_File *f, sp_int mode);            /* File#chmod: fchmod(2) */
+sp_int sp_File_chown(sp_File *f, sp_int uid, sp_int gid); /* File#chown: fchown(2) */
 sp_File *sp_file_lstat_handle(const char *path);
 sp_bool sp_stat_nofollow(sp_File *f);
 sp_oint sp_stat_size(sp_File *f);                  /* File::Stat#size: nil when the stat fails */

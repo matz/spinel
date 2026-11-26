@@ -14277,18 +14277,14 @@ void emit_class_value_key(Compiler *c, int recv, const char *val, Buf *b) {
 }
 
 /* See codegen_call_arms.h. */
-const char *switch_rt_id(int rid, char *out, size_t n) {
-  if (rid < 0) return NULL;
-  snprintf(out, n, "_t%d", rid);
-  return out;
-}
-/* See codegen_call_arms.h. */
-int emit_class_value_new_switch(Compiler *c, int recv, int rt2, int kt, int boxed, Buf *b) {
+void emit_class_value_new_switch(Compiler *c, int recv, int rt2, int kt, int boxed, SwitchRtId *sid, Buf *b) {
   char kv[24]; snprintf(kv, sizeof kv, "_t%d", kt);
   buf_printf(b, "sp_RbVal _t%d = sp_box_nil(); ", rt2);
   /* (the id a site class's arm builds for, bound once: emit_ctor_rt_arg) */
-  int rid = c->has_rt_classes ? ++g_tmp : -1;
-  if (rid >= 0) buf_printf(b, "sp_int _t%d = _t%d.cls_id; ", rid, kt);
+  if (sid) {
+    sid->text = NULL; sid->at = b->len; sid->kt = kt;
+    if (c->has_rt_classes) { snprintf(sid->name, sizeof sid->name, "_t%d", ++g_tmp); sid->text = sid->name; }
+  }
   /* (a class boxed by its name, an object's #class read back out of a
      boxed slot, switches on the id of the program's class of that name) */
   if (boxed && g_emit_class_names) {
@@ -14305,7 +14301,17 @@ int emit_class_value_new_switch(Compiler *c, int recv, int rt2, int kt, int boxe
     buf_printf(b, "switch (_t%d.tag == SP_TAG_CLASS ? ", kt); emit_class_value_key(c, recv, kv, b); buf_puts(b, " : -1) {");
   }
   else { buf_puts(b, "switch("); emit_class_value_key(c, recv, kv, b); buf_puts(b, "){"); }
-  return rid;
+}
+/* See codegen_call_arms.h. */
+void bind_switch_rt_id(const SwitchRtId *sid, Buf *b) {
+  if (!sid->text || !b->p) return;
+  size_t n = strlen(sid->text);
+  for (const char *s = b->p + sid->at; (s = strstr(s, sid->text)); s += n)
+    if (!isdigit((unsigned char)s[n])) {
+      char decl[64]; snprintf(decl, sizeof decl, "sp_int %s = _t%d.cls_id; ", sid->text, sid->kt);
+      buf_insert_at(b, sid->at, decl);
+      return;
+    }
 }
 
 int emit_struct_new_call(Compiler *c, int id, int ci, int argc, const int *argv, Buf *b);
@@ -14332,7 +14338,8 @@ void emit_class_value_new_kw(Compiler *c, int id, int recv, int boxed, Buf *b) {
   buf_printf(b, "({ %s _t%d = ", boxed ? "sp_RbVal" : "sp_Class", kt); emit_expr(c, recv, b);
   buf_puts(b, "; ");
   int sv_cbt = hoist_ctor_block(c, id, b);
-  char rv[24]; const char *rtid = switch_rt_id(emit_class_value_new_switch(c, recv, rt2, kt, boxed, b), rv, sizeof rv);
+  SwitchRtId sid; emit_class_value_new_switch(c, recv, rt2, kt, boxed, &sid, b);
+  const char *rtid = sid.text;
   /* the operand of a sole `*splat`, or the SplatNode itself for an anonymous
      `*` forwarding the method's rest (`k.new(*)`) */
   int sole_splat = argc == 1 && nt_kind(nt, argv[0]) == NK_SplatNode ? nt_ref(nt, argv[0], "expression") : -1;
@@ -14626,6 +14633,7 @@ void emit_class_value_new_kw(Compiler *c, int id, int recv, int boxed, Buf *b) {
     buf_printf(b, "default: sp_raise_nomethod(sp_nomethod_msg(\"new\", _t%d)); } _t%d; })", kt, rt2);
   else
     buf_printf(b, "default: sp_raise_nomethod(sp_nomethod_msg(\"new\", sp_box_class(_t%d))); } _t%d; })", kt, rt2);
+  bind_switch_rt_id(&sid, b);
   g_ctor_blk_tmp = sv_cbt;
 }
 

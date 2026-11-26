@@ -107,7 +107,7 @@ static int emit_class_value_aref(Compiler *c, int id, Buf *b, int recv, int argc
   }
   if (argc) buf_puts(&av, "}");
   char an[24]; snprintf(an, sizeof an, "%d", argc);
-  (void)emit_class_value_new_switch(c, recv, rt2, kt, 0, b);
+  emit_class_value_new_switch(c, recv, rt2, kt, 0, NULL, b);
   CtorArityArms aerr = {0};
   for (int ci = 0; ci < c->nclasses; ci++)
     if (cplan_cv_ctor_builds(c, id, ci)) emit_cv_ctor_arm(c, id, ci, an, av.p, rt2, b);
@@ -3701,7 +3701,8 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
       buf_printf(b, "sp_RbVal _t%d = ", atmp[a]); emit_boxed(c, argv[a], b);
       buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ", atmp[a]);
     }
-    char rv[24]; const char *rtid = switch_rt_id(emit_class_value_new_switch(c, recv, rt2, kt, 0, b), rv, sizeof rv);
+    SwitchRtId sid; emit_class_value_new_switch(c, recv, rt2, kt, 0, &sid, b);
+    const char *rtid = sid.text;
     /* (the value an arm's object and a `self.new`'s receiving class are) */
     char kv[24]; snprintf(kv, sizeof kv, "_t%d", kt);
     CtorArityArms aerr = {0};
@@ -3720,6 +3721,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
     ctor_arity_emit(&aerr, b);
     emit_builtin_new_arms(c, argc, atmp, rt2, kt, 0, b);
     buf_printf(b, "} _t%d; })", rt2);
+    bind_switch_rt_id(&sid, b);
     g_ctor_blk_tmp = sv_cbt;
     free(atmp);
     c->args_in_call = recv;
@@ -3740,7 +3742,8 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
     int kt = ++g_tmp, rt2 = ++g_tmp;
     buf_printf(b, "({ sp_Class _t%d = ", kt); emit_expr(c, recv, b); buf_printf(b, "; ");
     int sv_cbt = hoist_ctor_block(c, id, b);
-    char rv[24]; const char *rtid = switch_rt_id(emit_class_value_new_switch(c, recv, rt2, kt, 0, b), rv, sizeof rv);
+    SwitchRtId sid; emit_class_value_new_switch(c, recv, rt2, kt, 0, &sid, b);
+    const char *rtid = sid.text;
     /* (the value an arm's object and a `self.new`'s receiving class are) */
     char kv[24]; snprintf(kv, sizeof kv, "_t%d", kt);
     CtorArityArms aerr = {0};
@@ -3846,6 +3849,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
     ctor_arity_emit(&aerr, b);
     emit_builtin_new_arms(c, 0, NULL, rt2, kt, 0, b);
     buf_printf(b, "} _t%d; })", rt2);
+    bind_switch_rt_id(&sid, b);
     g_ctor_blk_tmp = sv_cbt;
     return 1;
   }
@@ -3909,7 +3913,8 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
       if (boxed_arg_wants_root(c, argv[a])) buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ", atmp[a]);
       else buf_puts(b, "; ");
     }
-    char rv[24]; const char *rtid = switch_rt_id(emit_class_value_new_switch(c, recv, rt2, kt, 1, b), rv, sizeof rv);
+    SwitchRtId sid; emit_class_value_new_switch(c, recv, rt2, kt, 1, &sid, b);
+    const char *rtid = sid.text;
     /* (the value an arm's object and a `self.new`'s receiving class are) */
     char kv[24]; snprintf(kv, sizeof kv, "_t%d", kt);
     CtorArityArms aerr = {0};
@@ -4068,6 +4073,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
     ctor_arity_emit(&aerr, b);
     emit_builtin_new_arms(c, argc, atmp, rt2, kt, 1, b);
     buf_printf(b, "} _t%d; })", rt2);
+    bind_switch_rt_id(&sid, b);
     g_ctor_blk_tmp = sv_cbt;
     free(atmp);
     c->args_in_call = recv;

@@ -8,12 +8,14 @@ def bad_lines(text)
   text.lines.count { |l| l !~ /\At\d line \d+\n\z/ }
 end
 
+# 1,000 lines of at most 12 bytes stay under a pipe's smallest buffer
+# (16 KB), so no writer waits for the reader thread to drain the pipe
 def spam(io)
-  (0...4).map { |n| Thread.new(n) { |t| 2000.times { |i| io.puts "t#{t} line #{i}" } } }.each { |th| th.join(30) }
+  (0...4).map { |n| Thread.new(n) { |t| 250.times { |i| io.puts "t#{t} line #{i}" } } }.each { |th| th.join(30) }
 end
 
 def spam_warn
-  (0...4).map { |n| Thread.new(n) { |t| 2000.times { |i| warn "t#{t} line #{i}" } } }.each { |th| th.join(30) }
+  (0...4).map { |n| Thread.new(n) { |t| 250.times { |i| warn "t#{t} line #{i}" } } }.each { |th| th.join(30) }
 end
 
 def through_pipe(std)
@@ -49,7 +51,7 @@ p [text.lines.size, bad_lines(text)]
 text = through_pipe($stdout) { spam($stdout) }
 p [text.lines.size, bad_lines(text)]
 
-# CRuby 4.0 keeps about 5,300 of the 8,000 warn lines through the reopened
+# CRuby 4.0 drops some of the warn lines written through the reopened
 # $stderr, so the count is a lower bound
 text = through_pipe($stderr) { spam_warn }
-p [text.lines.size >= 4000, bad_lines(text)]
+p [text.lines.size >= 500, bad_lines(text)]

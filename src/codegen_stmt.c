@@ -18989,7 +18989,7 @@ static void emit_class_body_stmts(Compiler *c, int ci, int body, Buf *b, int ind
          (desugar_attr_const_splat) would declare nothing: emitted as a
          statement, refused there (deferred at it under --defer-refusals),
          not skipped as a declaration */
-      if (nt_int(nt, stmts[k], "attr_splat", 0)) {
+      if (nt_int(nt, stmts[k], "attr_splat", 0) || nt_int(nt, stmts[k], "attr_name", 0)) {
         emit_stmt_or_defer(c, stmts[k], b, indent);
         continue;
       }
@@ -23549,6 +23549,12 @@ static void emit_stmt_node(Compiler *c, int id, Buf *b, int indent) {
             sk == NK_InstanceVariableOrWriteNode || sk == NK_InstanceVariableAndWriteNode ||
             sk == NK_InstanceVariableOperatorWriteNode)
           continue;
+        /* (an attr call with a computed name or splat is refused where it
+           stands, deferred at it under --defer-refusals) */
+        if (nt_int(nt, stmts[k], "attr_name", 0) || nt_int(nt, stmts[k], "attr_splat", 0)) {
+          emit_stmt_or_defer(c, stmts[k], b, indent);
+          continue;
+        }
         if (sk == NK_CallNode && nt_ref(nt, stmts[k], "receiver") < 0 && !nt_str(nt, stmts[k], "alias_absent") &&
             !prog_sclass_call_executable(c, stmts[k])) continue;
         emit_stmt(c, stmts[k], b, indent);

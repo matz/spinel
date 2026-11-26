@@ -7956,16 +7956,24 @@ static void add_container_literal(ContainerLiterals *out, int n, int nodes) {
   out->items[out->count++] = n;
 }
 
-/* Revisit a slot only from a shorter path, where the depth or the hand-on
-   bound permits more of its producers to be reached. Keep separate visits
-   for an element read's intermediate collection of receiver literals. */
+/* Revisit a slot only from a path no earlier visit bounds, where the depth
+   or the hand-on bound permits more of its producers to be reached: a
+   visit at no greater depth with no more hand-ons reached all this one
+   can. Each visit is kept as it was, as two visits' smaller bounds taken
+   together are no one path's; a visit this one bounds is replaced. Keep
+   separate visits for an element read's intermediate collection of
+   receiver literals. */
 static int container_local_seen(ContainerLiterals *out, int scope, const char *name, int depth) {
+  int bounded = -1;
   for (int i = 0; i < out->nlocals; i++) {
     ContainerLocalVisit *visit = &out->locals[i];
     if (visit->scope != scope || !sp_streq(visit->name, name)) continue;
     if (visit->depth <= depth && visit->levels <= out->levels) return 1;
-    if (depth < visit->depth) visit->depth = depth;
-    if (out->levels < visit->levels) visit->levels = out->levels;
+    if (bounded < 0 && depth <= visit->depth && out->levels <= visit->levels) bounded = i;
+  }
+  if (bounded >= 0) {
+    out->locals[bounded].depth = depth;
+    out->locals[bounded].levels = out->levels;
     return 0;
   }
   if (!out->locals) {

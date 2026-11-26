@@ -26,3 +26,18 @@ b.push(2, 3)
 p b.length
 p b.count_them
 p b.first
+
+# An undef_method on the chain takes the builtin's answer away: the name
+# reaches method_missing, as it does in CRuby. (A String subclass's receiver
+# is typed String and is not split here; its undef is a separate matter.)
+class Muted < Array
+  undef_method :length
+  def method_missing(name, *args)
+    return :muted if name == :length
+    super
+  end
+end
+m = Muted.new
+m << 1
+p m.length
+p m.size

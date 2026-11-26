@@ -2892,6 +2892,7 @@ void emit_ivar_name_error(Compiler *c, Buf *b, const char *sym, int arg);
 const char *ivar_raise_tail(Compiler *c, int id);   /* that raise's dead value, in the call's C form */
 int emit_exc_ivar_call(Compiler *c, int id, const char *name, int recv, Buf *b);
 /* The concurrency handles' row emitters (codegen_call_concurrency.c) */
+void emit_queue_new(Compiler *c, int argc, const int *argv, Buf *b);
 int emit_op_thread_set_report(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_thread_raise(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_thread_tls(Compiler *c, const BopCtx *x, Buf *b);

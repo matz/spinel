@@ -13218,6 +13218,44 @@ static int hash_new_capacity_pure(Compiler *c, int n, int depth) {
   return 0;
 }
 
+/* Queue.new(items) converts items with to_a, as CRuby's Queue#initialize
+   does: written as the call items.to_a, so a program class's own to_a is
+   the method called. An Array or nil literal is left as it is. */
+static int desugar_queue_new_items(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int changed = 0;
+  for (int id = comp_kind_first(c, NK_CallNode); id >= 0; id = comp_kind_next(c, id)) {
+    if (nt_kind(nt, id) != NK_CallNode) continue;
+    const char *nm = nt_str(nt, id, "name");
+    int r = nt_ref(nt, id, "receiver");
+    const char *rn = r >= 0 ? key_name(c, r) : NULL;
+    if (!nm || !sp_streq(nm, "new") || !rn || (!sp_streq(rn, "Queue") && !sp_streq(rn, "Thread::Queue")) ||
+        nt_ref(nt, id, "block") >= 0) continue;
+    int ci = const_node_class_index(c, r);
+    if (ci >= 0 && !is_builtin_reopen(c->classes[ci].name)) continue;
+    int argsn = nt_ref(nt, id, "arguments"), an = 0;
+    const int *av = argsn >= 0 ? nt_arr(nt, argsn, "arguments", &an) : NULL;
+    if (an != 1) continue;
+    int arg = av[0];
+    NodeKind ak = nt_kind(nt, arg);
+    const char *an0 = ak == NK_CallNode ? nt_str(nt, arg, "name") : NULL;
+    if (ak == NK_SplatNode || ak == NK_KeywordHashNode || ak == NK_ArrayNode || ak == NK_NilNode ||
+        (an0 && sp_streq(an0, "to_a") && nt_ref(nt, arg, "arguments") < 0)) continue;
+    int call = nt_new_node(nt, "CallNode");
+    if (call < 0) continue;
+    nt_node_set_str(nt, call, "name", "to_a");
+    nt_node_set_int(nt, call, "node_line", nt_int(nt, arg, "node_line", 0));
+    nt_node_set_int(nt, call, "node_file", nt_int(nt, arg, "node_file", 0));
+    nt_replace_child(nt, argsn, arg, call);
+    nt_node_set_ref(nt, call, "receiver", arg);
+    comp_grow_node_arrays(c);
+    c->nscope[call] = c->nscope[id];
+    if (c->node_cbody) c->node_cbody[call] = c->node_cbody[id];
+    changed = 1;
+  }
+  return changed;
+}
+
 static int kwb_explicit(NodeTable *nt, const char *kname, const char *dflt, int h, Scope *sc);
 /* `Hash.new(capacity: n)`: the capacity only sizes the table, so the
    keyword is dropped and the call is the Hash.new it would be without it.
@@ -52363,6 +52401,7 @@ static void an_phase_infer_fixpoint(Compiler *c) {
     ch |= AN_PASS("infer_default_param_types", infer_default_param_types(c));
     ch |= AN_PASS("expand_literal_splat_args", expand_literal_splat_args(c));        /* builtin/proc m(*[a,b]) -> m(a, b) */
     ch |= AN_PASS("desugar_hash_new_capacity", desugar_hash_new_capacity(c));        /* Hash.new(capacity: n) -> Hash.new */
+    ch |= AN_PASS("desugar_queue_new_items", desugar_queue_new_items(c));            /* Queue.new(x) -> Queue.new(x.to_a) */
     ch |= AN_PASS("desugar_builtin_new_init_args", desugar_builtin_new_init_args(c));   /* an empty initialize on a builtin: its `new` is the empty value */
     ch |= AN_PASS("pin_arg_position_hash_new", pin_arg_position_hash_new(c));        /* f(Hash.new(d)) -> PolyPoly variant */
     ch |= AN_PASS("pad_unsupplied_params", pad_unsupplied_params(c));            /* under-supplied call: placeholder param type */

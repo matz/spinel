@@ -164,6 +164,20 @@ int emit_op_condvar_wait(Compiler *c, const BopCtx *x, Buf *b) {
   return 1;
 }
 
+/* Queue.new, and Queue.new(items): a Queue that starts with the elements
+   of items, an Array (desugar_queue_new_items wrote the call of to_a), or
+   nil for none */
+void emit_queue_new(Compiler *c, int argc, const int *argv, Buf *b) {
+  if (argc != 1) { buf_puts(b, "sp_Queue_new()"); return; }
+  int ta = ++g_tmp, tq = ++g_tmp, ti = ++g_tmp;
+  buf_printf(b, "({ sp_PolyArray *_t%d = sp_poly_to_a_arr_as(", ta);
+  emit_boxed(c, argv[0], b);
+  buf_printf(b, ", \"to_a\", 1); SP_GC_ROOT(_t%d); sp_queue *_t%d = sp_Queue_new(); SP_GC_ROOT(_t%d); "
+                "for (sp_int _t%d = 0; _t%d < sp_PolyArray_length(_t%d); _t%d++) "
+                "sp_Queue_push(_t%d, sp_PolyArray_get(_t%d, _t%d)); _t%d; })",
+             ta, tq, tq, ti, ti, ta, ti, tq, ta, ti, tq);
+}
+
 /* Queue#push / << / enq (value, non_block = false, timeout: nil). The
    row's arity counts the keyword hash; one or two positional arguments are
    taken. */

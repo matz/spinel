@@ -4620,6 +4620,10 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
         /* a boxed Thread's flag */
         if (sp_streq(name, "report_on_exception")) { *out = TY_BOOL; return 1; }
       }
+      /* a boxed Mutex's sleep and a boxed ConditionVariable's wait: the runtime's answer */
+      if (((sp_streq(name, "sleep") && argc <= 1) || (sp_streq(name, "wait") && (argc == 1 || argc == 2))) &&
+          !nt_argv_has_splat(nt, argv, argc) && !an_user_poly_arm(c, name, argc))
+        { *out = TY_POLY; return 1; }
       if (sp_streq(name, "alive?") || sp_streq(name, "dead?") || sp_streq(name, "closed?") ||
           (sp_streq(name, "mon_owned?") && argc == 0) ||
           (sp_streq(name, "blocking?") && argc == 0) ||

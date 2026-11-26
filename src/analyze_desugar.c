@@ -1668,6 +1668,83 @@ int desugar_socket_constants(Compiler *c) {
   return changed;
 }
 
+/* `File::Constants::RDONLY` and `IO::RDONLY`: CRuby's File::Constants module, which IO includes, holds File's
+   open, flock and fnmatch constants, so the read is `File::RDONLY`, which the constant arms resolve. */
+static int file_constants_index(const char *n) {
+  static const char *const names[] = {
+    "RDONLY", "WRONLY", "RDWR", "APPEND", "CREAT", "EXCL", "NONBLOCK", "TRUNC", "NOCTTY", "BINARY",
+    "SYNC", "DSYNC", "NOFOLLOW", "LOCK_SH", "LOCK_EX", "LOCK_UN", "LOCK_NB", "NULL",
+    "FNM_SYSCASE", "FNM_NOESCAPE", "FNM_PATHNAME", "FNM_DOTMATCH", "FNM_CASEFOLD", "FNM_EXTGLOB", "FNM_SHORTNAME",
+  };
+  for (int i = 0; n && i < (int)(sizeof names / sizeof names[0]); i++) if (sp_streq(n, names[i])) return i;
+  return -1;
+}
+/* (`IO` or `::IO`) */
+static int const_read_is(NodeTable *nt, int id, const char *name) {
+  if (id < 0 || !sp_streq(nt_str(nt, id, "name"), name)) return 0;
+  return nt_kind(nt, id) == NK_ConstantReadNode || (nt_kind(nt, id) == NK_ConstantPathNode && nt_ref(nt, id, "parent") < 0);
+}
+int desugar_file_constants(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int n0 = nt->count, changed = 0, own_io = 0, own_file = 0;
+  if (n0 <= 0) return 0;
+  char written[32] = {0};   /* per name index: 1 when the program writes IO::X, 2 when File::X */
+  char *is_target = calloc((size_t)n0, 1);   /* the path of `IO::RDONLY = 7` is written, not read */
+  if (!is_target) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  /* (none where the program declares or assigns a Constants itself, or a File other than a top-level
+     `class File` reopening, whose constants a `File::X` read would return; no IO::X where it declares or assigns
+     an IO; no rewrite of X where the program writes IO::X or File::X) */
+  char *is_top = calloc((size_t)n0, 1);
+  int ntop = 0;
+  int *top = prog_top_seq(c, &ntop, NULL);
+  if (!is_top) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int i = 0; i < ntop; i++) if (top[i] >= 0 && top[i] < n0) is_top[top[i]] = 1;
+  free(top);
+  for (int id = 0; id < n0; id++) {
+    const char *dn = class_def_name(nt, id);
+    NodeKind k = nt_kind(nt, id);
+    int w = -1;
+    if (k == NK_ConstantPathWriteNode || k == NK_ConstantPathOrWriteNode ||
+        k == NK_ConstantPathAndWriteNode || k == NK_ConstantPathOperatorWriteNode) w = nt_ref(nt, id, "target");
+    else if (k == NK_ConstantPathTargetNode) w = id;
+    if (w >= 0 && w < n0) {
+      is_target[w] = 1;
+      int wp = nt_ref(nt, w, "parent"), x = file_constants_index(nt_str(nt, w, "name"));
+      if (x >= 0 && const_read_is(nt, wp, "IO")) written[x] |= 1;
+      if (x >= 0 && const_read_is(nt, wp, "File")) written[x] |= 2;
+      if (!dn) dn = nt_str(nt, w, "name");
+    }
+    if (!dn && (k == NK_ConstantWriteNode || k == NK_ConstantOrWriteNode || k == NK_ConstantAndWriteNode ||
+                k == NK_ConstantOperatorWriteNode || k == NK_ConstantTargetNode)) dn = nt_str(nt, id, "name");
+    if (dn && sp_streq(dn, "Constants")) own_file = 1;
+    if (dn && sp_streq(dn, "File") &&
+        !(is_top[id] && k == NK_ClassNode && const_read_is(nt, nt_ref(nt, id, "constant_path"), "File"))) own_file = 1;
+    if (dn && sp_streq(dn, "IO")) own_io = 1;
+  }
+  free(is_top);
+  if (own_file) { free(is_target); return 0; }
+  for (int id = 0; id < n0; id++) {
+    if (is_target[id] || nt_kind(nt, id) != NK_ConstantPathNode) continue;
+    int x = file_constants_index(nt_str(nt, id, "name"));
+    if (x < 0) continue;
+    int mid = nt_ref(nt, id, "parent");
+    if (mid < 0) continue;
+    if (const_read_is(nt, mid, "IO")) {
+      if (own_io || written[x]) continue;
+      nt_node_set_str(nt, mid, "name", "File");
+      changed = 1;
+      continue;
+    }
+    if (nt_kind(nt, mid) != NK_ConstantPathNode || !sp_streq(nt_str(nt, mid, "name"), "Constants")) continue;
+    int root = nt_ref(nt, mid, "parent");
+    if (!const_read_is(nt, root, "File") || (written[x] & 2)) continue;
+    nt_node_set_ref(nt, id, "parent", root);
+    changed = 1;
+  }
+  free(is_target);
+  return changed;
+}
+
 int desugar_instance_eval_defs(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count, changed = 0;
@@ -8961,20 +9038,46 @@ char **dsend_candidates(Compiler *c, int *out_n) {
     if (nt_kind(nt, id) != NK_CallNode) continue;
     const char *rn = nt_str(nt, id, "name");
     if (!rn || !is_instance_method_list(rn)) continue;
-    int rr = nt_ref(nt, id, "receiver"), rci = -1;
+    /* (wide 1: a class method's list, of the class that received the call, the
+       method's or one above or below it; 2: a list on a class held in a value,
+       of a class of the program) */
+    int rr = nt_ref(nt, id, "receiver"), rci = -1, wide = 0;
     if (rr < 0 || nt_kind(nt, rr) == NK_SelfNode) {
       /* a statement of a class body (not of a def in it): the body's class */
       Scope *ls = comp_scope_of(c, id);
       if ((!ls || !ls->name) && c->node_cbody && id < c->node_cap) rci = c->node_cbody[id];
+      else if (ls && ls->is_cmethod && ls->class_id >= 0) rci = ls->class_id, wide = 1;
     }
     else if (nt_kind(nt, rr) == NK_ConstantReadNode) rci = const_node_class_index(c, rr);
-    if (rci < 0) continue;
+    else if (nt_kind(nt, rr) != NK_ConstantPathNode) wide = 2;
+    if (rci < 0 && wide != 2) continue;
+    /* the listed classes' defs, attr readers and (as `x=`) writers */
+    ANameHash listed, listed_w;
+    memset(&listed, 0, sizeof listed); memset(&listed_w, 0, sizeof listed_w);
     for (int s = 0; s < c->nscopes; s++) {
       const char *sn = c->scopes[s].name;
-      if (!sn || c->scopes[s].class_id != rci || c->scopes[s].is_cmethod || anh_has(&c->dsn.lits, sn)) continue;
-      for (int k = 0; k < ncand; k++)
-        if (sp_streq(cand[k], sn)) { anh_add(&c->dsn.lits, cand[k]); break; }
+      int k = c->scopes[s].class_id;
+      if (!sn || k < 0 || c->scopes[s].is_cmethod) continue;
+      if (wide == 0 ? k != rci : wide == 1 && k != rci && !is_descendant(c, k, rci) && !is_descendant(c, rci, k)) continue;
+      anh_add(&listed, sn);
     }
+    for (int k = 0; k < c->nclasses; k++) {
+      if (wide == 0 ? k != rci : wide == 1 && k != rci && !is_descendant(c, k, rci) && !is_descendant(c, rci, k)) continue;
+      for (int j = 0; j < c->classes[k].nreaders; j++) anh_add(&listed, c->classes[k].readers[j]);
+      for (int j = 0; j < c->classes[k].nwriters; j++) anh_add(&listed_w, c->classes[k].writers[j]);
+    }
+    for (int k = 0; k < ncand; k++) {
+      if (anh_has(&c->dsn.lits, cand[k])) continue;
+      size_t len = strlen(cand[k]);
+      char stem[200];
+      int hit = anh_has(&listed, cand[k]);
+      if (!hit && len > 1 && len < sizeof stem && cand[k][len - 1] == '=') {
+        memcpy(stem, cand[k], len - 1); stem[len - 1] = 0;
+        hit = anh_has(&listed_w, stem);
+      }
+      if (hit) anh_add(&c->dsn.lits, cand[k]);
+    }
+    anh_free(&listed); anh_free(&listed_w);
   }
   anh_free(&cand_set);
   int any_computed = 0;
@@ -24512,7 +24615,8 @@ int desugar_duplicate_underscore_params_at(Compiler *c, LowerCtx *lc, int id) {
  * Spinel strings are UTF-8 (or binary), so the answers are fixed:
  * Encoding.default_internal is nil, default_external is UTF-8, and
  * Encoding.find with a literal name of one of the encodings a string here can
- * carry is that constant. The setters take their value and change nothing. */
+ * carry is that constant. A default the program assigns is read at run time
+ * (sp_encoding_default_external). */
 /* the text of a literal String or Symbol argument, else NULL */
 static const char *sym_or_str_literal(const NodeTable *nt, int node) {
   if (node < 0) return NULL;
@@ -24535,12 +24639,25 @@ static int enc_const(NodeTable *nt, int like, const char *cname) {
   return cp;
 }
 
-enum { ENC_NONE, ENC_NIL, ENC_UTF8, ENC_ASSIGN, ENC_FIND };
+enum { ENC_NONE, ENC_NIL, ENC_UTF8, ENC_FIND };
+
+/* Whether the program assigns Encoding's default named by the setter `set`:
+   `Encoding.default_external = e`, or `||=` and its kin */
+static int enc_default_assigned(const NodeTable *nt, const char *set) {
+  /* (a multiple assignment's target, `Encoding.default_internal, x = ...`, too) */
+  static const NodeKind kinds[] = { NK_CallNode, NK_CallTargetNode, NK_CallOrWriteNode, NK_CallAndWriteNode, NK_CallOperatorWriteNode };
+  for (int k = 0; k < 5; k++)
+    NT_FOREACH_KIND(nt, kinds[k], id) {
+      const char *nm = nt_str(nt, id, kinds[k] == NK_CallNode || kinds[k] == NK_CallTargetNode ? "name" : "write_name");
+      if (nm && sp_streq(nm, set)) return 1;
+    }
+  return 0;
+}
 
 /* Which query of Encoding the call at id is: default_internal (nil),
-   default_external (UTF-8), a setter (its value), find("utf-8") (the constant
-   it names, *cn). */
-static int enc_query(const Compiler *c, const NodeTable *nt, int id, const char **cn) {
+   default_external (UTF-8), find("utf-8") (the constant it names, *cn).
+   `memo[]`: enc_default_assigned of each setter, -1 until asked. */
+static int enc_query(const Compiler *c, const NodeTable *nt, int id, const char **cn, int memo[2]) {
   int recv = nt_ref(nt, id, "receiver");
   if (recv < 0) return ENC_NONE;
   NodeKind rk = nt_kind(nt, recv);
@@ -24551,9 +24668,14 @@ static int enc_query(const Compiler *c, const NodeTable *nt, int id, const char 
   if (!nm) return ENC_NONE;
   int an = nt_ref(nt, id, "arguments");
   int ac = 0; const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
-  if (sp_streq(nm, "default_internal") && ac == 0) return ENC_NIL;
-  if (sp_streq(nm, "default_external") && ac == 0) return ENC_UTF8;
-  if ((sp_streq(nm, "default_internal=") || sp_streq(nm, "default_external=")) && ac == 1) return ENC_ASSIGN;
+  if (sp_streq(nm, "default_internal") && ac == 0) {
+    if (memo[0] < 0) memo[0] = enc_default_assigned(nt, "default_internal=");
+    return memo[0] ? ENC_NONE : ENC_NIL;
+  }
+  if (sp_streq(nm, "default_external") && ac == 0) {
+    if (memo[1] < 0) memo[1] = enc_default_assigned(nt, "default_external=");
+    return memo[1] ? ENC_NONE : ENC_UTF8;
+  }
   if (!sp_streq(nm, "find") || ac != 1) return ENC_NONE;
   /* a literal name only: the constant it names */
   const char *lit = sym_or_str_literal(nt, av[0]);
@@ -24567,26 +24689,16 @@ static int enc_query(const Compiler *c, const NodeTable *nt, int id, const char 
 
 int desugar_encoding_queries_left(Compiler *c, LowerCtx *lc, int id) {
   const char *cn = NULL;
-  return enc_query(c, c->nt, id, &cn) != ENC_NONE;
+  return enc_query(c, c->nt, id, &cn, lc->prog_memo) != ENC_NONE;
 }
 
 int desugar_encoding_queries_at(Compiler *c, LowerCtx *lc, int id) {
   NodeTable *nt = (NodeTable *)c->nt;
   const char *cn = NULL;
-  int q = enc_query(c, nt, id, &cn);
+  int q = enc_query(c, nt, id, &cn, lc->prog_memo);
   if (q == ENC_NONE) return 0;
   if (q == ENC_NIL) {
     nt_node_reset(nt, id, "NilNode");
-    return 1;
-  }
-  if (q == ENC_ASSIGN) {
-    /* the assigned value is the expression's value */
-    int ac = 0;
-    int v = nt_arr(nt, nt_ref(nt, id, "arguments"), "arguments", &ac)[0];
-    nt_node_set_ref(nt, id, "receiver", -1);
-    nt_set_itself_call(nt, id);
-    nt_node_set_ref(nt, id, "arguments", -1);
-    nt_node_set_ref(nt, id, "receiver", v);
     return 1;
   }
   if (q == ENC_UTF8) cn = "UTF_8";
@@ -30120,6 +30232,9 @@ static int mm_object_answers(Compiler *c, int id, const char *nm) {
 static int mm_answers(Compiler *c, int id, int k, const char *nm) {
   MethodLookup ml = { .def_class = -1 };
   if (call_target(c, id, k, nm, 0, &ml) >= 0 || ml.kind == ML_ATTR) return 1;
+  /* (the builtin above its chain, String#length of a String subclass, unless
+     an undef_method of the name stands on the chain: then method_missing takes it) */
+  if (builtin_id_has_instance_method(class_builtin_parent(c, k), nm) && !cplan_undefined(c, k, 0, nm)) return 1;
   return mm_object_answers(c, id, nm);
 }
 /* `::A::B` for the qualified class name `A::B` */

@@ -19751,6 +19751,36 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
                                        "named_captures", "names", NULL };
     int want_rx = 0;
     for (int i = 0; RXO[i] && !want_rx; i++) if (sp_streq(name, RXO[i]) && argc == 0) want_rx = 1;
+    /* (a class the receiver holds has a class method of the name: the method's
+       call, or for a local with a boxed result the Regexp's where the value is
+       a pattern at run time) */
+    static int rx_split_skip = -1;
+    if (want_rx && rx_split_skip == id) want_rx = 0;
+    if (want_rx && poly_recv_cls_method_owns(c, id, name)) {
+      want_rx = 0;
+      if (nt_kind(nt, recv) == NK_LocalVariableReadNode && repr_of(c, id).kind == RK_BOXED) {
+        int trx = ++g_tmp;
+        Buf rbx; memset(&rbx, 0, sizeof rbx); emit_expr(c, recv, &rbx);
+        emit_indent(g_pre, g_indent);
+        buf_printf(g_pre, "mrb_regexp_pattern *_t%d = sp_poly_as_pattern(%s);\n", trx, rbx.p ? rbx.p : "sp_box_nil()");
+        free(rbx.p);
+        Buf rx; memset(&rx, 0, sizeof rx);
+        view_bind_temp(recv, trx);
+        int v = view_push(c, recv, TY_REGEX);
+        int ok = emit_builtin_op_arm_boxed(c, id, recv, TY_REGEX, name, &rx);
+        view_pop(c, v);
+        view_unbind(g_n_argov - 1);
+        Buf gen; memset(&gen, 0, sizeof gen);
+        int was = rx_split_skip;
+        rx_split_skip = id;
+        emit_call(c, id, &gen);
+        rx_split_skip = was;
+        if (ok) buf_printf(b, "(_t%d ? %s : %s)", trx, rx.p ? rx.p : "sp_box_nil()", gen.p ? gen.p : "sp_box_nil()");
+        else buf_puts(b, gen.p ? gen.p : "sp_box_nil()");
+        free(rx.p); free(gen.p);
+        return 1;
+      }
+    }
     if (want_rx) {
       int trx = ++g_tmp;
       Buf rbx; memset(&rbx, 0, sizeof rbx); emit_expr(c, recv, &rbx);

@@ -13,8 +13,12 @@
    wasm32-wasi has no user or group database (docs/wasm.md): there a
    lookup finds no entry, a walk finds none, and the login name is
    $USER's. */
+#if defined(__linux__) && !defined(_GNU_SOURCE)
+#define _GNU_SOURCE   /* sched_getaffinity / CPU_COUNT for Etc.nprocessors */
+#endif
 #include "spinel/runtime.h"
 #ifndef __wasi__
+#include <errno.h>
 #include <grp.h>
 #endif
 #include <pwd.h>
@@ -22,6 +26,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#ifdef __linux__
+#include <sched.h>
+#endif
 
 #define SP_ETC_FS "\x1f"
 #define SP_ETC_RS "\x1e"
@@ -168,4 +175,29 @@ const char *sp_etc_group_all(void) {
   endgrent();
 #endif
   return buf_done(&b);
+}
+
+/* Etc.nprocessors: the CPUs in this process's affinity mask on Linux,
+   else the online CPUs, as CRuby's etc.c counts them */
+sp_int sp_etc_nprocessors(void) {
+#ifdef __linux__
+  /* a mask wider than the set passed is EINVAL: try a larger set, as
+     ruby/etc does */
+  for (int ncpu = CPU_SETSIZE; ncpu <= 64 * CPU_SETSIZE; ncpu *= 2) {
+    cpu_set_t *set = CPU_ALLOC(ncpu);
+    if (!set) break;
+    size_t size = CPU_ALLOC_SIZE(ncpu);
+    CPU_ZERO_S(size, set);
+    int r = sched_getaffinity(0, size, set), err = errno;
+    int a = r == 0 ? CPU_COUNT_S(size, set) : 0;
+    CPU_FREE(set);
+    if (r == 0) { if (a > 0) return a; break; }
+    if (err != EINVAL) break;
+  }
+#endif
+#ifdef _SC_NPROCESSORS_ONLN
+  long c = sysconf(_SC_NPROCESSORS_ONLN);
+  if (c > 0) return (sp_int)c;
+#endif
+  return 1;
 }

@@ -860,6 +860,7 @@ int incl_give_self(NodeTable *nt, int node, const char *cname);
 int desugar_sclass_hooks(Compiler *c);
 int desugar_toplevel_hooked_mixins(Compiler *c);
 int desugar_socket_constants(Compiler *c);
+int desugar_file_constants(Compiler *c);
 int desugar_instance_eval_defs(Compiler *c);
 int desugar_user_send_others(Compiler *c);
 int desugar_method_missing_super(Compiler *c);

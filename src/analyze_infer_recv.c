@@ -2028,6 +2028,14 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
      typed one. Untyped, the call boxed nil and `re.source` on a block
      parameter answered nil (#3961). */
   if (recv >= 0 && rt == TY_POLY && argc == 0 && nt_ref(nt, id, "block") < 0 &&
+      (sp_streq(name, "source") || sp_streq(name, "options") || sp_streq(name, "casefold?") ||
+       sp_streq(name, "names") || sp_streq(name, "named_captures")) &&
+      !an_user_defines_or_reads(c, name) && poly_recv_cls_method_owns(c, id, name)) {
+    /* (a class method of the name, and a Regexp the receiver may hold: either
+       method's value, boxed) */
+    if (cls_fact_may_hold_builtin(c, recv, CORE_REGEXP)) { *out = TY_POLY; return 1; }
+  }
+  else if (recv >= 0 && rt == TY_POLY && argc == 0 && nt_ref(nt, id, "block") < 0 &&
       !an_user_defines_or_reads(c, name)) {
     if (sp_streq(name, "source")) { *out = TY_STRING; return 1; }
     if (sp_streq(name, "options")) { *out = TY_INT; return 1; }

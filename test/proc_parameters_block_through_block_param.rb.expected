@@ -1,0 +1,8 @@
+[[:opt, :row], [:keyreq, :token]]
+[[:opt, :row], [:keyreq, :title]]
+[:a, [[:opt, :row], [:keyreq, :token]], 2]
+[:b, [[:opt, :x], [:opt, :y], [:rest, :r], [:key, :k], [:keyrest, :o], [:block, :blk]], -2]
+[:c, [[:opt, :_1], [:opt, :_2]], 2]
+[:d, [[:opt], [:opt, :z]], 2]
+[[:opt, :s]]
+[[:opt]]

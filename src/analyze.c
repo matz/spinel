@@ -4875,6 +4875,119 @@ static int ie_stored_reader_ivar(Compiler *c, const Scope *s) {
   }
   return found;
 }
+static int ie_calls_into(Compiler *c, const int *readers, int nreaders, int *out, int cap);
+/* The locals a traced sequence wrote ahead of the part being traced
+   (`__mm_r = <table>; if ... else __mm_r[k] end`, a split's hold): a read of
+   one stands for its value */
+static struct { const char *name; int value; } g_ie_held[8];
+static int g_ie_nheld;
+/* The instance variable a table read or write `T[k]` is keyed on, and in
+   *owner the class that holds it, for matching a read with the writes into
+   the same table: T an instance variable, or a reader call with no
+   argument (`bodies`, `self.class.bodies`) whose one method answers one;
+   NULL otherwise */
+/* Are owners a and b (class_id * 2 + class side) one table's: the same
+   side of the same class or of one a descendant of the other? */
+static int ie_owner_related(Compiler *c, int a, int b) {
+  if (a < 0 || b < 0 || (a & 1) != (b & 1)) return 0;
+  int ka = a / 2, kb = b / 2;
+  return ka == kb || is_descendant(c, ka, kb) || is_descendant(c, kb, ka);
+}
+static const char *ie_table_key(Compiler *c, int t, int *owner) {
+  const NodeTable *nt = c->nt;
+  NodeKind k = t >= 0 ? nt_kind(nt, t) : NK_NONE;
+  if (k == NK_LocalVariableReadNode)
+    for (int i = g_ie_nheld - 1; i >= 0; i--)
+      if (sp_streq(g_ie_held[i].name, nt_str(nt, t, "name"))) return ie_table_key(c, g_ie_held[i].value, owner);
+  /* (the scope an instance variable is read in owns it: its class, the
+     class side apart, as class_id * 2 + is_cmethod) */
+  if (k == NK_InstanceVariableReadNode) {
+    const Scope *s = comp_scope_of(c, t);
+    if (!s || s->class_id < 0) return NULL;
+    *owner = s->class_id * 2 + (s->is_cmethod ? 1 : 0);
+    return nt_str(nt, t, "name");
+  }
+  if (k != NK_CallNode || nt_ref(nt, t, "arguments") >= 0 || nt_ref(nt, t, "block") >= 0) return NULL;
+  /* a reader call: the instance variable the one method of its name
+     answers (`def self.bodies = @bodies ||= {}`), as a write through the
+     reader reads once it is inlined; a name more than one method has is
+     no one table */
+  const char *nm = nt_str(nt, t, "name"), *iv = NULL;
+  int own = -1;
+  /* (where the read names the class whose reader it calls -- `self.class.bodies`
+     or `bodies` in an instance method, `bodies` or `self.bodies` in a class
+     method -- only readers of that class's line count) */
+  int ctx = -1, tr = nt_ref(nt, t, "receiver");
+  const Scope *ts = comp_scope_of(c, t);
+  if (ts && ts->class_id >= 0 && ts->def_node >= 0) {
+    NodeKind trk = tr >= 0 ? nt_kind(nt, tr) : NK_NONE;
+    int self_class = trk == NK_CallNode && sp_streq(nt_str(nt, tr, "name"), "class") && nt_ref(nt, tr, "arguments") < 0 &&
+                     (nt_ref(nt, tr, "receiver") < 0 || nt_kind(nt, nt_ref(nt, tr, "receiver")) == NK_SelfNode);
+    if (!ts->is_cmethod && self_class) ctx = ts->class_id * 2 + 1;
+    else if (tr < 0 || trk == NK_SelfNode) ctx = ts->class_id * 2 + (ts->is_cmethod ? 1 : 0);
+  }
+  for (int si = 0; nm && si < c->nscopes; si++) {
+    const Scope *s = &c->scopes[si];
+    if (!s->name || !sp_streq(s->name, nm) || s->body < 0) continue;
+    if (ctx >= 0 && (s->class_id < 0 || !ie_owner_related(c, ctx, s->class_id * 2 + (s->is_cmethod ? 1 : 0)))) continue;
+    /* (the body's one statement, through parentheses: `def self.bodies = (@bodies ||= {})`) */
+    int e = s->body;
+    for (int d = 0; e >= 0 && d < 4; d++) {
+      NodeKind ek = nt_kind(nt, e);
+      if (ek == NK_ParenthesesNode) { e = nt_ref(nt, e, "body"); continue; }
+      if (ek != NK_StatementsNode) break;
+      int n = 0; const int *st = nt_arr(nt, e, "body", &n);
+      e = n == 1 ? st[0] : -1;
+    }
+    NodeKind lk = e >= 0 ? nt_kind(nt, e) : NK_NONE;
+    const char *v = lk == NK_InstanceVariableReadNode || lk == NK_InstanceVariableOrWriteNode ? nt_str(nt, e, "name") : NULL;
+    if (!v || s->class_id < 0 || (iv && !sp_streq(iv, v))) return NULL;
+    /* (a subclass's copy of the method reads the same table: the class
+       that holds it is the one the others descend from) */
+    int o = s->class_id * 2 + (s->is_cmethod ? 1 : 0);
+    if (iv && !ie_owner_related(c, own, o)) return NULL;
+    if (!iv || is_descendant(c, own / 2, o / 2)) own = o;
+    iv = v;
+  }
+  *owner = own;
+  return iv;
+}
+/* The literal blocks a table read `T[k]` handed to instance_eval /
+   instance_exec can be, where the program fills T by `T[name] = block`
+   only in methods that store their own &block parameter there (a
+   framework's `def self.body(name, &block) = bodies[name] = block`, read
+   back as `instance_exec(&self.class.bodies[name])`): each literal block
+   a call of such a method is given. -1 for a read of a table some other
+   write fills, or of no table the program fills so. */
+static int ie_trace_index_store(Compiler *c, int x, int *out, int cap) {
+  const NodeTable *nt = c->nt;
+  int a = nt_ref(nt, x, "arguments"), an = 0;
+  if (a >= 0) nt_arr(nt, a, "arguments", &an);
+  int kown = -1;
+  const char *key = ie_table_key(c, nt_ref(nt, x, "receiver"), &kown);
+  if (an != 1 || !key) return -1;
+  int storers[16], ns = 0;
+  NT_FOREACH_KIND(nt, NK_CallNode, w) {
+    const char *wn = nt_str(nt, w, "name");
+    if (!wn || !sp_streq(wn, "[]=")) continue;
+    int wown = -1;
+    const char *wkey = ie_table_key(c, nt_ref(nt, w, "receiver"), &wown);
+    if (!wkey || !sp_streq(wkey, key) || !ie_owner_related(c, wown, kown)) continue;
+    int wa = nt_ref(nt, w, "arguments"), wn2 = 0;
+    const int *wv = wa >= 0 ? nt_arr(nt, wa, "arguments", &wn2) : NULL;
+    const Scope *s = comp_scope_of(c, w);
+    int v = wn2 == 2 ? wv[1] : -1;
+    /* (a write of anything but the storing method's own block makes the table's content unknown) */
+    if (v < 0 || nt_kind(nt, v) != NK_LocalVariableReadNode || !s || !s->name || !s->blk_param ||
+        !s->blk_param[0] || !sp_streq(nt_str(nt, v, "name"), s->blk_param)) return -1;
+    int si = (int)(s - c->scopes), seen = 0;
+    for (int q = 0; q < ns; q++) seen |= storers[q] == si;
+    if (seen) continue;
+    if (ns >= 16) return -1;
+    storers[ns++] = si;
+  }
+  return ns ? ie_calls_into(c, storers, ns, out, cap) : -1;
+}
 int ie_trace_bodies(Compiler *c, int x, int *out, int cap, int depth) {
   const NodeTable *nt = c->nt;
   if (x < 0 || depth > 8) return -1;
@@ -4882,7 +4995,24 @@ int ie_trace_bodies(Compiler *c, int x, int *out, int cap, int depth) {
     case NK_ParenthesesNode: return ie_trace_bodies(c, nt_ref(nt, x, "body"), out, cap, depth + 1);
     case NK_StatementsNode: {
       int n = 0; const int *st = nt_arr(nt, x, "body", &n);
-      return n > 0 ? ie_trace_bodies(c, st[n - 1], out, cap, depth + 1) : -1;
+      if (n <= 0) return -1;
+      /* (a sequence that reads back a local it wrote ahead, as the operand
+         order holds a block argument, `(__bo = <expr>; __bo)`: that value) */
+      int last = st[n - 1];
+      if (nt_kind(nt, last) == NK_LocalVariableReadNode)
+        for (int i = n - 2; i >= 0; i--)
+          if (nt_kind(nt, st[i]) == NK_LocalVariableWriteNode && sp_streq(nt_str(nt, st[i], "name"), nt_str(nt, last, "name")))
+            return ie_trace_bodies(c, nt_ref(nt, st[i], "value"), out, cap, depth + 1);
+      /* (and the locals written ahead stand for their values below) */
+      int held0 = g_ie_nheld;
+      for (int i = 0; i < n - 1 && g_ie_nheld < 8; i++)
+        if (nt_kind(nt, st[i]) == NK_LocalVariableWriteNode) {
+          g_ie_held[g_ie_nheld].name = nt_str(nt, st[i], "name");
+          g_ie_held[g_ie_nheld++].value = nt_ref(nt, st[i], "value");
+        }
+      int r = ie_trace_bodies(c, last, out, cap, depth + 1);
+      g_ie_nheld = held0;
+      return r;
     }
     case NK_IfNode: case NK_UnlessNode: {
       int a = ie_trace_bodies(c, nt_ref(nt, x, "statements"), out, cap, depth + 1);
@@ -4912,6 +5042,11 @@ int ie_trace_bodies(Compiler *c, int x, int *out, int cap, int depth) {
     case NK_CallNode:
       /* an arm that raises hands no block on */
       if (nt_ref(nt, x, "receiver") < 0 && nt_str(nt, x, "name") && sp_streq(nt_str(nt, x, "name"), "raise")) return 0;
+      /* (nor does the method_missing arm of a split: it runs only on an
+         instance of a class whose method_missing the program defines, and
+         answers no literal block) */
+      if (nt_str(nt, x, "name") && sp_streq(nt_str(nt, x, "name"), "method_missing") && nt_ignore_visibility(nt, x)) return 0;
+      if (nt_str(nt, x, "name") && sp_streq(nt_str(nt, x, "name"), "[]")) return ie_trace_index_store(c, x, out, cap);
       break;
     default: return -1;
   }
@@ -4929,11 +5064,22 @@ int ie_trace_bodies(Compiler *c, int x, int *out, int cap, int depth) {
     readers[nreaders++] = si;
   }
   if (!nreaders) return -1;
+  return ie_calls_into(c, readers, nreaders, out, cap);
+}
+/* The bodies of the literal blocks the program hands to the methods
+   readers[0..n) (scopes that each keep their block): each call of one's
+   name that reaches it, receiverless in a class body or on a constant or
+   self; -1 where such a call's block is not a literal or past cap */
+static int ie_calls_into(Compiler *c, const int *readers, int nreaders, int *out, int cap) {
+  const NodeTable *nt = c->nt;
   int total = 0;
   NT_FOREACH_KIND(nt, NK_CallNode, call) {
     const char *cn = nt_str(nt, call, "name");
     int b = nt_ref(nt, call, "block");
-    if (!cn || !sp_streq(cn, nm) || b < 0) continue;
+    int named = 0;
+    for (int r = 0; cn && r < nreaders && !named; r++) named = sp_streq(cn, c->scopes[readers[r]].name);
+    if (!named || b < 0) continue;
+    const char *nm = cn;
     /* (a call that reaches a reader: a receiverless one in a class body, or on a constant) */
     int cr = nt_ref(nt, call, "receiver");
     const Scope *cs = comp_scope_of(c, call);
@@ -50650,6 +50796,7 @@ static void an_phase_desugar_register(Compiler *c) {
   AN_STEP_V("desugar_builtin_reopen_self_cmethods", desugar_builtin_reopen_self_cmethods(c)); /* self.sqrt in an Integer class method -> Integer.sqrt */
   AN_STEP_V("desugar_engine_branches", desugar_engine_branches(c));
   AN_STEP_V("desugar_socket_constants", desugar_socket_constants(c));           /* Socket::Constants::X -> Socket::X */
+  AN_STEP_V("desugar_file_constants", desugar_file_constants(c));               /* File::Constants::X, IO::X -> File::X */
   lower_run(c, &lc, LW_PAREN_DEF_BODY);            /* def m = (a; b) -> def m; a; b; end */
   desugar_def_unless_method_defined(c); /* def m .. end unless method_defined?(:m), answered in program order --
                                            ahead of the runtime-condition defs, which it answers statically */
@@ -51724,6 +51871,22 @@ static void an_phase_pre_fixpoint(Compiler *c) {
   free(par);
   for (int id = 0; id < c->nt->count; id++)
     if (is_proc_create(c, id)) proc_param_syms_intern(c, id);
+  /* and a block a call hands on, which a method can take as its &block and
+     answer (`def keep(&b) = b`): its Proc is made with the same parameter
+     table, whose names the prologue sizes the table for too, where the
+     program asks a Proc its parameters at all */
+  if (comp_kind_first(c, NK_CallNode) >= 0) {
+    int asks = 0;
+    NT_FOREACH_KIND(c->nt, NK_CallNode, q) {
+      const char *qn = nt_str(c->nt, q, "name");
+      if (qn && sp_streq(qn, "parameters")) { asks = 1; break; }
+    }
+    if (asks)
+      NT_FOREACH_KIND(c->nt, NK_CallNode, q) {
+        int blk = nt_ref(c->nt, q, "block");
+        if (blk >= 0 && nt_kind(c->nt, blk) == NK_BlockNode && !is_proc_create(c, q)) proc_param_syms_intern(c, q);
+      }
+  }
 
   /* Apply --rbs advisory seeds (pin param/return/ivar types) before the
      fixpoint so the inference passes observe the pinned types from round one.

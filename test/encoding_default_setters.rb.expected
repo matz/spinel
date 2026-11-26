@@ -1,0 +1,148 @@
+#<Encoding:UTF-8>
+nil
+#<Encoding:UTF-8>
+#<Encoding:UTF-8>
+#<Encoding:UTF-8>
+#<Encoding:UTF-8>
+#<Encoding:UTF-8>
+#<Encoding:UTF-8>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:UTF-8>
+#<Encoding:UTF-8>
+#<Encoding:UTF-8>
+#<Encoding:UTF-8>
+#<Encoding:UTF-8>
+#<Encoding:UTF-8>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:UTF-8>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:UTF-8>
+#<Encoding:UTF-8>
+#<Encoding:UTF-8>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:UTF-8>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:UTF-8>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:UTF-8>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:UTF-8>
+#<Encoding:UTF-8>
+#<Encoding:UTF-8>
+#<Encoding:UTF-8>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+true
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:UTF-8>
+nil
+nil
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:UTF-8>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:UTF-8>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:UTF-8>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:UTF-8>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:UTF-8>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:UTF-8>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:UTF-8>
+#<Encoding:UTF-8>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:UTF-8>
+#<Encoding:UTF-8>
+#<Encoding:UTF-8>
+#<Encoding:BINARY (ASCII-8BIT)>
+[195]
+[195, 169]
+[65, 128]
+"w1"
+false
+"w2"
+false
+#<Encoding:UTF-8>
+#<Encoding:UTF-8>
+#<Encoding:BINARY (ASCII-8BIT)>
+"utf-8"
+#<Encoding:UTF-8>
+"external"
+#<Encoding:UTF-8>
+"internal"
+"UTF-8"
+"internal"
+#<Encoding:UTF-8>
+#<Encoding:UTF-8>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:EUC-JP>
+#<Encoding:EUC-JP>
+#<Encoding:EUC-JP>
+"Shift_JIS"
+#<Encoding:Shift_JIS>
+ArgumentError: default external can not be nil
+TypeError: no implicit conversion of Integer into String
+TypeError: no implicit conversion of Symbol into String
+ArgumentError: unknown encoding name - nope
+TypeError: no implicit conversion of Integer into String
+ArgumentError: unknown encoding name - nope
+[#<Encoding:EUC-JP>, #<Encoding:Shift_JIS>]
+#<Encoding:UTF-8>
+#<Encoding:UTF-8>
+#<Encoding:UTF-8>
+#<Encoding:UTF-8>
+#<Encoding:UTF-8>
+#<Encoding:UTF-8>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:UTF-8>
+#<Encoding:UTF-8>
+#<Encoding:UTF-8>
+#<Encoding:UTF-8>
+#<Encoding:UTF-8>
+#<Encoding:UTF-8>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:UTF-8>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:UTF-8>
+#<Encoding:UTF-8>
+#<Encoding:UTF-8>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:UTF-8>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:UTF-8>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:UTF-8>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:UTF-8>
+#<Encoding:UTF-8>
+#<Encoding:UTF-8>
+#<Encoding:UTF-8>

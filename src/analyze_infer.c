@@ -5144,6 +5144,13 @@ static int infer_builtin_cmethod_call(Compiler *c, int id, const NodeTable *nt, 
         key_name(c, recv) && sp_streq(key_name(c, recv), "Encoding") &&
         sp_streq(name, "find") && argc == 1)
       { *out = TY_POLY; return 1; }
+    /* Encoding.default_external / default_internal the program assigns, and
+       the assignments: a boxed Encoding, nil or the assigned value */
+    if (rk == NK_ConstantReadNode &&
+        key_name(c, recv) && sp_streq(key_name(c, recv), "Encoding") &&
+        (((sp_streq(name, "default_external") || sp_streq(name, "default_internal")) && argc == 0) ||
+         ((sp_streq(name, "default_external=") || sp_streq(name, "default_internal=")) && argc == 1)))
+      { *out = TY_POLY; return 1; }
     /* Encoding.list: an Array of them */
     if (rk == NK_ConstantReadNode &&
         key_name(c, recv) && sp_streq(key_name(c, recv), "Encoding") &&

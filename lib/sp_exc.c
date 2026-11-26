@@ -1607,6 +1607,16 @@ void sp_exc_ctx_free(void *p) {
   free(x->rrf); free(x->rrem); free(x->rrcm); free(x->rrbm);
   free(x->erm); free(x->ersm); free(x->crm); free(x);
 }
+/* A park's snapshot, once loaded: its arena is the thread's live one again,
+   so only the context goes. */
+void sp_exc_ctx_free_loaded(void *p) {
+  sp_exc_ctx_t *x = (sp_exc_ctx_t *)p;
+  if (!x) return;
+#ifdef SP_CEXT
+  memset(&x->cext_arena, 0, sizeof x->cext_arena);
+#endif
+  sp_exc_ctx_free(x);
+}
 void sp_exc_ctx_mark(void *p) {            /* GC: mark a suspended fiber's carried exc objects */
   sp_exc_ctx_t *x = (sp_exc_ctx_t *)p;
   /* a running fiber's context is a stale copy (see `live`): its live
@@ -1902,11 +1912,18 @@ static void *sp_exc_recover_named(const char *cls, const char *msg) {
    the class in parentheses. The class is shown as it prints: an unnamed
    Class.new class prints its #<Class:0x...> form, and CRuby adds no
    "(Class)" suffix for it. */
+/* The class goes after the first line of the message, and the other lines
+   follow it, as CRuby reports and as sp_exc_detailed_text writes: a lone
+   final newline is replaced by the class, and the other lines keep their
+   bytes, and the report ends with a newline of its own. */
 static void sp_exc_print_uncaught_text(const char *cls, const char *msg, int class_only) {
   const char *shown = sp_exc_cls_display(cls);
   const char *text = (!class_only && msg && *msg) ? msg : shown;
-  if (class_only || sp_exc_cls_unnamed(shown)) fprintf(stderr, "%s\n", text);
-  else fprintf(stderr, "%s (%s)\n", text, shown);
+  if (class_only || sp_exc_cls_unnamed(shown)) { fprintf(stderr, "%s\n", text); return; }
+  const char *nl = strchr(text, '\n');
+  if (!nl) { fprintf(stderr, "%s (%s)\n", text, shown); return; }
+  fprintf(stderr, "%.*s (%s)\n", (int)(nl - text), text, shown);
+  if (nl[1]) fprintf(stderr, "%s\n", nl + 1);
 }
 static void sp_exc_write_uncaught(const char *cls, const char *msg, sp_StrArray *bt, int class_only) {
 #if SP_BT_AVAILABLE

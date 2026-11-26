@@ -18283,6 +18283,7 @@ TyKind masgn_el_lift_from(Compiler *c, int mw, int i) {
   TyKind st = nt_kind(nt, tgt) == NK_CallTargetNode ? masgn_attr_slot_type(c, tgt) : masgn_slot_type(c, mw, tgt);
   TyKind et = repr_of(c, els[i]).as_ty;
   if ((st == TY_POLY || st == TY_POLY_ARRAY) && box_lift_marked(c, els[i], et)) return et;
+  if (st == TY_POLY_ARRAY && repr_coerce_text_form(c, els[i], et, st, CO_HOLD) == CF_ARRAY_WIDEN) return et;
   return TY_UNKNOWN;
 }
 /* Unboxing into an Array slot can allocate a conversion of a typed Array. */

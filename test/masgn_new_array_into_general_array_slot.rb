@@ -73,3 +73,21 @@ b9 = B8.new
 u9, b9.items = 6, Array.new(2, 1)
 y1(b9.items) { |x| x << "r" }
 p b9.items, u9
+
+# the assignment as a value: its element is the Array its target holds,
+# before and after a splat, in a method's value too
+r10 = (w10, u10 = "cd".bytes, 0)
+y1(w10) { |x| x << "q" }
+r10[0] << 7
+p w10, r10, r10[0].equal?(w10)
+r11 = (h11, *s11, w11 = 0, 1, "ef".bytes)
+y1(w11) { |x| x << "r" }
+p r11, r11[2].equal?(w11)
+def mk12(o)
+  r = (o.items, u = "gh".bytes, 1)
+  [r, r[0].equal?(o.items)]
+end
+b12 = B8.new
+p mk12(b12)
+y1(b12.items) { |x| x << "s" }
+p b12.items

@@ -201,8 +201,10 @@ int masgn_flat_targets(const NodeTable *nt, int node, int *out, int n);
 int masgn_value_changes(Compiler *c, int mw, int part);
 /* The kind of element i of multiple assignment mw's literal right side, a
    new typed Array its target holds as the general Array, which is built
-   as one where it is made: an Array its target's box or general Array
-   slot keeps so (box_lift_marked). TY_UNKNOWN for any other element. */
+   as one where it is made, so the target and the assignment's value hold
+   one Array: an Array its target's box keeps so (box_lift_marked), or one
+   a general Array target converts (CF_ARRAY_WIDEN). TY_UNKNOWN for any
+   other element. */
 TyKind masgn_el_lift_from(Compiler *c, int mw, int i);
 /* ...the handle of a boxed receiver's call whose arms answer a String, or of a sequence ending in one */
 void emit_poly_arms_handle(Compiler *c, int base, Buf *b);

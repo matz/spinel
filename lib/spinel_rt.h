@@ -10582,6 +10582,22 @@ static void sp_puts_line(const char *s) {
   putc_unlocked('\n', stdout);
   funlockfile(stdout);
 }
+/* Kernel#p's line for an inspect result: its byte count, an embedded NUL
+   too, then one newline. */
+static SP_UNUSED void sp_p_line(const char *s) {
+  flockfile(stdout);
+  if (s) fwrite(s, 1, sp_str_byte_len(s), stdout);
+  putc_unlocked('\n', stdout);
+  funlockfile(stdout);
+}
+/* Kernel#puts on a to_s result of n bytes: a trailing newline is not
+   doubled. */
+static void sp_puts_bytes_line(const char *s, size_t n) {
+  flockfile(stdout);
+  if (s && n) fwrite(s, 1, n, stdout);
+  if (!s || !n || s[n - 1] != '\n') putc_unlocked('\n', stdout);
+  funlockfile(stdout);
+}
 /* Kernel#puts on a C string (a to_s result): a trailing newline is not
    doubled. */
 static void sp_puts_cstr_line(const char *s) {
@@ -10619,9 +10635,10 @@ static void sp_puts_elems(sp_RbVal a) {
     /* checked after a to_s runs and before the write; an empty Array
        element writes nothing */
     if (s) { sp_io_stdout_check_frozen(); sp_puts_str_line(s); continue; }
-    const char *t = sp_poly_to_s(e);
+    size_t tn = 0;
+    const char *t = sp_poly_to_s_bytes(e, &tn);
     sp_io_stdout_check_frozen();
-    sp_puts_cstr_line(t);
+    sp_puts_bytes_line(t, tn);
   }
   sp_poly_recur_pop(pmark);
 }
@@ -10647,8 +10664,9 @@ static void sp_splat_print(sp_RbVal a) {
       sp_print_str_bin(s);
       continue;
     }
-    const char *s = sp_poly_to_s(v);
-    if (s && *s) { sp_io_stdout_check_frozen(); fputs(s, stdout); }
+    size_t sn = 0;
+    const char *s = sp_poly_to_s_bytes(v, &sn);
+    if (s && sn) { sp_io_stdout_check_frozen(); fwrite(s, 1, sn, stdout); }
   }
 }
 static void sp_splat_p(sp_RbVal a) {
@@ -10656,7 +10674,7 @@ static void sp_splat_p(sp_RbVal a) {
   for (sp_int i = 0; i < n; i++) {
     const char *s = sp_poly_inspect(sp_poly_arr_get(a, i));
     sp_io_stdout_check_frozen();
-    fputs(s ? s : "nil", stdout); putchar(10);
+    sp_p_line(s ? s : SPL("nil"));
   }
 }
 /* format(*args): the first element is the format string, the rest its args

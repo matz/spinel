@@ -1,0 +1,26 @@
+#<Err: a>
+#<ConnErr: failed: a, b>
+ConnErr
+#<Timeout: failed: x, timeout>
+Timeout
+[ConnErr, "failed: p, q"]
+[Timeout, "failed: r, timeout"]
+"explicit"
+"bare"
+"Plain"
+"sym"
+"Bare"
+"wrong number of arguments (given 2, expected 0..1)"
+"coded"
+7
+Coded
+"missing"
+Missing
+[Bare, "raised"]
+"c"
+"b"
+"m"
+"Rest"
+"f"
+"wrong number of arguments (given 2, expected 0..1)"
+"w"

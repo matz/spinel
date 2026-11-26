@@ -4846,9 +4846,9 @@ static int infer_new_call(Compiler *c, int id, const NodeTable *nt, const char *
         /* an exception-subclass instance keeps its concrete class (its custom
            methods must dispatch); the exception-shaped queries route through
            the base helpers like a specialized rescue var does */
-        if (class_inherits_builtin_exception(c, ci))
-          { *out = ty_object(ci); return 1; }
         int ucnew = cplan_user_new(c, id, ci);
+        if (class_inherits_builtin_exception(c, ci) && ucnew < 0)
+          { *out = ty_object(ci); return 1; }
         if (ucnew >= 0) {
           an_user_call_record(c, id, ucnew, UC_CMETH, ci);
           TyKind rr = cmethod_receiver_ret(c, ucnew, ci);
@@ -4903,9 +4903,9 @@ static int infer_new_call(Compiler *c, int id, const NodeTable *nt, const char *
         /* an exception-subclass instance keeps its concrete class (its custom
            methods must dispatch); the exception-shaped queries route through
            the base helpers like a specialized rescue var does */
-        if (class_inherits_builtin_exception(c, ci))
-          { *out = ty_object(ci); return 1; }
         int ucnew = cplan_user_new(c, id, ci);
+        if (class_inherits_builtin_exception(c, ci) && ucnew < 0)
+          { *out = ty_object(ci); return 1; }
         if (ucnew >= 0) {
           an_user_call_record(c, id, ucnew, UC_CMETH, ci);
           TyKind rr = cmethod_receiver_ret(c, ucnew, ci);

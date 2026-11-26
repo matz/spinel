@@ -14672,14 +14672,53 @@ static void emit_super_new_forward(Compiler *c, int id, int ci, Scope *s,
   buf_puts(b, "); })");
 }
 
+/* super in `self.new` of an exception subclass with no initialize of its
+   own: Exception#initialize's, built as Klass.new(...) builds it
+   (emit_exc_new_no_init). A bare super passes the method's parameters,
+   each read as a local and the rest spread; a keyword rest is refused.
+   0 for a bare super with keyword parameters, which the general path takes. */
+static int emit_super_exc_no_init(Compiler *c, int id, int ci, Buf *b) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int argc = 0;
+  if (nt_kind(nt, id) != NK_ForwardingSuperNode) {
+    int argsn = nt_ref(nt, id, "arguments");
+    const int *argv = argsn >= 0 ? nt_arr(nt, argsn, "arguments", &argc) : NULL;
+    emit_exc_new_no_init(c, id, ci, argc, argv, b);
+    return 1;
+  }
+  Scope *s = comp_scope_of(c, id);
+  if (!s) return 0;
+  /* (Exception#initialize takes no keywords, and ignores a block) */
+  if (s->kwrest_idx >= 0) unsupported(c, id, "bare super in an exception's `self.new` with a keyword-rest parameter");
+  for (int i = 0; i < s->nparams; i++)
+    if (!s->pnames[i] || callee_param_is_declared_kwarg(c, s, s->pnames[i])) return 0;
+  int *pv = s->nparams > 0 ? malloc(sizeof(int) * (size_t)s->nparams) : NULL, *rd = s->nparams > 0 ? malloc(sizeof(int) * (size_t)s->nparams) : NULL;
+  for (int i = 0; i < s->nparams; i++) {
+    rd[i] = pv[i] = nt_new_node(nt, "LocalVariableReadNode");
+    nt_node_set_str(nt, pv[i], "name", s->pnames[i]);
+    /* (the rest parameter goes on spread, as `super(*args)`) */
+    if (i == s->rest_idx) { pv[i] = nt_new_node(nt, "SplatNode"); nt_node_set_ref(nt, pv[i], "expression", rd[i]); }
+  }
+  comp_grow_node_arrays(c);
+  for (int i = 0; i < s->nparams; i++) {
+    LocalVar *lv = scope_local(s, s->pnames[i]);
+    c->nscope[pv[i]] = c->nscope[rd[i]] = c->nscope[id];
+    comp_set_ntype(c, rd[i], lv && lv->type != TY_UNKNOWN ? lv->type : TY_POLY);
+  }
+  emit_exc_new_no_init(c, id, ci, s->nparams, pv, b);
+  free(pv); free(rd);
+  return 1;
+}
+
 static void emit_super_new_ctor(Compiler *c, int id, int ci, Buf *b) {
   const NodeTable *nt = c->nt;
   ClassInfo *k = &c->classes[ci];
   /* (a reopened builtin exception has no struct of its own: its `self.new`
      typed an `sp_NoMethodError` the C side never declared, K-056) */
-  if (k->is_struct || k->is_native_class || class_is_exc_subclass(c, ci) || class_is_exc_reopen(c, ci))
+  if (k->is_struct || k->is_native_class || class_is_exc_reopen(c, ci))
     unsupported(c, id, "super in `self.new` of a Struct, Data, exception or native class");
   int initm = cplan_hook_target(c, -1, ci, "initialize", NULL);
+  if (initm < 0 && class_is_exc_subclass(c, ci) && emit_super_exc_no_init(c, id, ci, b)) return;
   int argsn = nt_ref(nt, id, "arguments");
   int argc = 0; if (argsn >= 0) nt_arr(nt, argsn, "arguments", &argc);
   if (nt_kind(nt, id) == NK_ForwardingSuperNode) {
@@ -14788,14 +14827,18 @@ void emit_super_class_new(Compiler *c, int id, Buf *b) {
   for (int d = -1; d < nd; d++) {
     int k = d < 0 ? own : ds[d];
     if (d >= 0 && !comp_new_receiver(c, k)) continue;
-    Buf cb; memset(&cb, 0, sizeof cb);
+    /* (an argument's prelude runs in its arm alone: a splat's `shift` once) */
+    Buf cb, pb; memset(&cb, 0, sizeof cb); memset(&pb, 0, sizeof pb);
+    Buf *sv_pre = g_pre; int sv_ind = g_indent;
+    g_pre = &pb; g_indent = 0;
     emit_super_new_ctor(c, id, k, &cb);
-    buf_printf(b, " case %d: _t%d = ", k, rt);
+    g_pre = sv_pre; g_indent = sv_ind;
+    buf_printf(b, " case %d: { %s_t%d = ", k, pb.p ? pb.p : "", rt);
     if (!boxed) buf_printf(b, "(%s *)%s", class_ctype(c, own), cb.p ? cb.p : "NULL");
     else if (c->classes[k].is_value_type) buf_printf(b, "sp_box_vobj_%s(%s)", c->classes[k].c_name, cb.p ? cb.p : "");
     else { buf_printf(b, "sp_box_obj(%s, ", cb.p ? cb.p : "NULL"); arysub_box_id(c, ty_object(k), b); buf_puts(b, ")"); }
-    buf_puts(b, "; break;");
-    free(cb.p);
+    buf_puts(b, "; } break;");
+    free(cb.p); free(pb.p);
   }
   buf_printf(b, " default: break; } _t%d; })", rt);
 }
@@ -16388,8 +16431,9 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
     if (ci >= 0 && c->classes[ci].is_struct) refuse_from_plan(c, id, CRF_RECORD_NEW, "refuse-record-new");
     if (ci >= 0 && c->classes[ci].is_struct && cplan_user_new(c, id, ci) < 0) { *out = emit_struct_new_call(c, id, ci, argc, argv, b); return 1; }
     if (ci >= 0 && !reopen_builtin_new) {
-      /* user exception subclass: use the generated constructor */
-      if (class_is_exc_subclass(c, ci)) {
+      /* user exception subclass: use the generated constructor, unless a
+         `self.new` of the program's takes the call (below) */
+      if (class_is_exc_subclass(c, ci) && cplan_user_new(c, id, ci) < 0) {
         int initm = cplan_hook_target(c, id, ci, "initialize", NULL);
         /* a yielding initialize takes this site's block the way any class's does */
         if (initm >= 0 && c->scopes[initm].yields && nt_ref(nt, id, "block") >= 0 &&

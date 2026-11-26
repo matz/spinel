@@ -35,17 +35,19 @@ module OpenSSL
     class AuthTagError < ::OpenSSL::Cipher::CipherError
     end
 
-    # name => [key bytes, iv bytes]. GCM's 12-byte IV is the one every
-    # protocol that names AES-GCM uses; another length is accepted, since GCM
-    # defines them, but this is what #random_iv answers.
+    # name => [key bytes, iv bytes, OpenSSL's name]. GCM's 12-byte IV is the
+    # one every protocol that names AES-GCM uses; another length is accepted,
+    # since GCM defines them, but this is what #random_iv answers. #name
+    # returns OpenSSL's spelling, as CRuby does, which is not always the
+    # upcased key (ChaCha20-Poly1305).
     CIPHERS = {
-      "aes-128-gcm" => [16, 12],
-      "aes-256-gcm" => [32, 12],
+      "aes-128-gcm" => [16, 12, "AES-128-GCM"],
+      "aes-256-gcm" => [32, 12, "AES-256-GCM"],
     }
 
     # [s].join copies a String's bytes without running a subclass's dup or to_s,
-    # so what's retained here can't change after it's set.
-    def name = [@name].join
+    # so what's returned here can't change what the object keeps.
+    def name = [CIPHERS[@name][2]].join
 
     def initialize(name)
       @name = [name.to_s].join.downcase

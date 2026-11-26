@@ -2,7 +2,8 @@
 # Each evaluation of a Class.new makes its own class, and every way of
 # building an instance builds it for that class: new, allocate, a class
 # method's bare new or allocate, one inherited from a static parent, a
-# super into the parent's, and the value-type layout.
+# super into the parent's, and a small class of one scalar ivar, which
+# keeps the pointer layout.
 
 def mk_alloc = Class.new { def v = 2; def self.make = allocate }
 b = mk_alloc

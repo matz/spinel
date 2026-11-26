@@ -33,3 +33,8 @@ b.freeze
 p a.frozen?, b.frozen?
 ks = 3.times.map { make }
 p ks.uniq.size, ks.map(&:superclass).uniq == [Base]
+# a small class of scalar ivars keeps its own class in its methods
+mkv = -> { Class.new { def initialize(n) = (@n = n); def n = @n; def kl = self.class; def nxt = self.class.new(@n + 1); def own?(k) = instance_of?(k) } }
+va = mkv.call
+vb = mkv.call
+p va.new(1).kl == va, vb.new(1).kl == vb, va.new(1).own?(vb), vb.new(2).nxt.n, vb.new(2).nxt.class == vb

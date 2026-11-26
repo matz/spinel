@@ -1,0 +1,4 @@
+[416, {"content-type" => "text/plain", "content-length" => "24", "content-range" => "bytes */3"}, ["Byte range unsatisfiable"]]
+{"content-type" => "200"}
+["bytes */3", [416, {"content-range" => "bytes */3", "content-type" => "3"}, []]]
+Proxy

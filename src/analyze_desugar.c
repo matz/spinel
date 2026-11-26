@@ -30729,6 +30729,38 @@ static void mm_relower_sends(Compiler *c, NodeTable *nt, int mi, const char *nm)
     nt_node_set_int(nt, n, "dyn_send_complete", 0);
   }
 }
+/* An assignment's value held in __mm_v<id> where it is evaluated, and the
+   call wrapped as `(call; __mm_v<id>)`, once the call is rewritten: a call
+   left as it was would meet the pass again and be held again */
+static void mm_hold_written_value(Compiler *c, NodeTable *nt, int id, int a, int *parent, int n0) {
+  int an = 0; const int *av0 = nt_arr(nt, a, "arguments", &an);
+  int *av = malloc(sizeof(int) * (size_t)an);
+  if (!av) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  memcpy(av, av0, sizeof(int) * (size_t)an);
+  char vh[32];
+  snprintf(vh, sizeof vh, "__mm_v%d", id);
+  scope_local_intern(comp_scope_of(c, id), vh);
+  int vw = fwd_new_node_like(nt, id, "LocalVariableWriteNode");
+  nt_node_set_str(nt, vw, "name", vh);
+  nt_node_set_int(nt, vw, "depth", 0);
+  int inner = av[an - 1];
+  nt_node_set_ref(nt, vw, "value", inner);
+  av[an - 1] = vw;
+  /* (a writer nested in the value, `a.x = b.y = 7`, is now under the hold) */
+  if (inner >= 0 && inner < n0) parent[inner] = vw;
+  nt_node_set_arr(nt, a, "arguments", av, an);
+  free(av);
+  int st = fwd_new_node_like(nt, id, "StatementsNode"), par = fwd_new_node_like(nt, id, "ParenthesesNode");
+  int body[2] = { id, local_read_like(nt, id, vh) };
+  nt_replace_child(nt, parent[id], id, par);
+  nt_node_set_arr(nt, st, "body", body, 2);
+  nt_node_set_ref(nt, par, "body", st);
+  parent[id] = st;
+  /* (the hold's nodes run in the call's scope and class body) */
+  comp_grow_node_arrays(c);
+  for (int j = vw; j < nt->count; j++) { c->nscope[j] = c->nscope[id]; c->node_cbody[j] = c->node_cbody[id]; }
+}
+
 int desugar_missing_method_calls(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   if (!c->cls_fact) return 0;
@@ -30831,42 +30863,18 @@ int desugar_missing_method_calls(Compiler *c) {
     /* an assignment (`s.port = v`, `s[:a] = v`) answers the value it assigns, not what method_missing
        answers: the value is held where it is evaluated and read after the call. A send of a writer's
        name is a method call and answers method_missing's value. */
+    int hold_value = 0;
     if (nt_int(nt, id, "attr_write", 0) && parent[id] >= 0) {
       /* (`s&.port = v` answers nil on a nil receiver, which the held value cannot be: left as it was) */
       if (nt_int(nt, id, "safe_nav", 0)) continue;
-      Scope *vs = comp_scope_of(c, id);
       int an = 0; const int *av0 = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
-      if (!vs || an < 1 || nt_kind(nt, av0[an - 1]) == NK_SplatNode) continue;
-      int *av = malloc(sizeof(int) * (size_t)an);
-      if (!av) continue;
-      memcpy(av, av0, sizeof(int) * (size_t)an);
-      char vh[32];
-      snprintf(vh, sizeof vh, "__mm_v%d", id);
-      scope_local_intern(vs, vh);
-      int vw = fwd_new_node_like(nt, id, "LocalVariableWriteNode");
-      nt_node_set_str(nt, vw, "name", vh);
-      nt_node_set_int(nt, vw, "depth", 0);
-      int inner = av[an - 1];
-      nt_node_set_ref(nt, vw, "value", inner);
-      av[an - 1] = vw;
-      /* (a writer nested in the value, `a.x = b.y = 7`, is now under the hold) */
-      if (inner >= 0 && inner < n0) parent[inner] = vw;
-      nt_node_set_arr(nt, a, "arguments", av, an);
-      free(av);
-      int st = fwd_new_node_like(nt, id, "StatementsNode"), par = fwd_new_node_like(nt, id, "ParenthesesNode");
-      int body[2] = { id, local_read_like(nt, id, vh) };
-      nt_replace_child(nt, parent[id], id, par);
-      nt_node_set_arr(nt, st, "body", body, 2);
-      nt_node_set_ref(nt, par, "body", st);
-      parent[id] = st;
-      /* (the hold stands whether or not the call splits below: its nodes run
-         in the call's scope and class body now, as a split's would) */
-      comp_grow_node_arrays(c);
-      for (int j = mark; j < nt->count; j++) { c->nscope[j] = c->nscope[id]; c->node_cbody[j] = c->node_cbody[id]; }
+      if (!comp_scope_of(c, id) || an < 1 || nt_kind(nt, av0[an - 1]) == NK_SplatNode) continue;
+      hold_value = 1;
     }
     /* (a split reads a variable or self again, and holds other receivers) */
     if (r < 0 || ie_self) reread = 1;
     if (!others) {
+      if (hold_value) mm_hold_written_value(c, nt, id, a, parent, n0);
       /* every class the value can be misses nm: the call is method_missing's */
       int sym = fwd_new_node_like(nt, id, "SymbolNode");
       nt_node_set_str(nt, sym, "value", nm);
@@ -30901,6 +30909,8 @@ int desugar_missing_method_calls(Compiler *c) {
     int named = 0;
     while (named < nmiss && c->classes[miss[named]].name) named++;
     if (named < nmiss) continue;
+    /* (no check below declines a writer: sd_hold_call_operands fails only for `...`) */
+    if (hold_value) { mm_hold_written_value(c, nt, id, a, parent, n0); p = parent[id]; }
     int *pre = NULL, npre = 0;
     if (guard) {
       npre = sd_hold_call_operands(c, id, &pre, 1);

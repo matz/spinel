@@ -2,6 +2,8 @@
 # level filtering, progname, a formatter proc (or the default
 # "S, [time #pid] SEVERITY -- progname: message" line), blocks for lazy
 # messages, and IO / file-name / nil destinations.
+require "monitor"
+
 class Logger
   module Severity
     DEBUG = 0
@@ -46,6 +48,9 @@ class Logger
     @logdev = nil
     @own = false
     @filename = nil
+    # as CRuby's LogDevice: one write at a time from several threads, and
+    # reentrant, so a device or formatter that logs again does not deadlock
+    @mon = Monitor.new
     case logdev
     when String
       @logdev = File.open(logdev.to_s, "a")
@@ -119,7 +124,7 @@ class Logger
     else
       @default_formatter.call(label, Time.now, progname, message)
     end
-    @logdev.write(line)
+    write_dev(line)
     true
   end
   alias log add
@@ -132,34 +137,38 @@ class Logger
   def unknown(progname = nil, &block); add(UNKNOWN, nil, progname, &block); end
 
   def <<(msg)
-    @logdev.write(msg) if @logdev
+    write_dev(msg) if @logdev
   end
 
   # Without an argument a logger writing to a file it opened by name opens
   # that name again, as CRuby's does: the file may have been rotated away.
   def reopen(logdev = nil)
-    logdev = @filename if logdev.nil?
-    return self if @logdev.nil? || logdev.nil?
-
-    if logdev.is_a?(String)
-      new_logdev = File.open(logdev.to_s, "a")
-      new_logdev.sync = true
-      close if @own
-      @logdev = new_logdev
-      @own = true
-      @filename = logdev
-    else
-      close if @own
-      @logdev = logdev
-      @own = false
-      @filename = nil
+    @mon.synchronize do
+      logdev = @filename if logdev.nil?
+      unless @logdev.nil? || logdev.nil?
+        new_logdev = logdev
+        if logdev.is_a?(String)
+          new_logdev = File.open(logdev.to_s, "a")
+          new_logdev.sync = true
+        end
+        close if @own
+        @logdev = new_logdev
+        @own = logdev.is_a?(String)
+        @filename = @own ? logdev : nil
+      end
     end
     self
   end
 
   def close
-    @logdev.close if @logdev
+    @mon.synchronize { @logdev.close if @logdev }
   rescue StandardError
     nil
+  end
+
+  private
+
+  def write_dev(message)
+    @mon.synchronize { @logdev.write(message) }
   end
 end

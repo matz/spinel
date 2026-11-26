@@ -11,3 +11,7 @@ true
 :cm
 [:singleton_method_added, :x, :stmt]
 1
+false
+true
+false
+[:plain, :plain]

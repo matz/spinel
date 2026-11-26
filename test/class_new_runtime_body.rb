@@ -31,3 +31,9 @@ $sm = []
 def mk_hooked = Class.new { def self.singleton_method_added(n) = ($sm << n); def self.x = 1; $sm << :stmt }
 h1 = mk_hooked
 p $sm, h1.x
+
+# ...nor answers respond_to?
+def mk_plain = Class.new { def self.y = 2; $sm << :plain }
+q1 = mk_plain
+q2 = mk_plain
+p q1.respond_to?(:__spinel_rt_body), q2.respond_to?(:y), q1.equal?(q2), $sm.last(2)

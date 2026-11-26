@@ -18272,6 +18272,24 @@ static TyKind masgn_attr_slot_type(Compiler *c, int tgt) {
   int owner, ix = masgn_attr_field(c, cls, ivn, &writer, &owner);
   return ix >= 0 ? c->classes[owner].ivar_types[ix] : TY_UNKNOWN;
 }
+/* See codegen_internal.h. */
+TyKind masgn_el_lift_from(Compiler *c, int mw, int i) {
+  const NodeTable *nt = c->nt;
+  int ln = 0, rn = 0, en = 0;
+  const int *lefts = nt_arr(nt, mw, "lefts", &ln), *rights = nt_arr(nt, mw, "rights", &rn);
+  int value = nt_paren_single(nt, nt_ref(nt, mw, "value"));
+  const int *els = value >= 0 && nt_kind(nt, value) == NK_ArrayNode ? nt_arr(nt, value, "elements", &en) : NULL;
+  if (!els || i < 0 || i >= en) return TY_UNKNOWN;
+  for (int e = 0; e < en; e++) if (nt_kind(nt, els[e]) == NK_SplatNode) return TY_UNKNOWN;
+  int right_start = en - rn > ln ? en - rn : ln;
+  int tgt = i < ln ? lefts[i] : i >= right_start && i - right_start < rn ? rights[i - right_start] : -1;
+  if (tgt < 0) return TY_UNKNOWN;
+  TyKind st = nt_kind(nt, tgt) == NK_CallTargetNode ? masgn_attr_slot_type(c, tgt) : masgn_slot_type(c, mw, tgt);
+  TyKind et = repr_of(c, els[i]).as_ty;
+  if ((st == TY_POLY || st == TY_POLY_ARRAY) && box_lift_marked(c, els[i], et)) return et;
+  if (st == TY_POLY_ARRAY && repr_coerce_text_form(c, els[i], et, st, CO_HOLD) == CF_ARRAY_WIDEN) return et;
+  return TY_UNKNOWN;
+}
 /* Unboxing into an Array slot can allocate a conversion of a typed Array. */
 static int masgn_slot_unbox_allocates(Compiler *c, int id, int tgt) {
   TyKind ty = nt_kind(c->nt, tgt) == NK_CallTargetNode ?
@@ -20240,6 +20258,10 @@ static int emit_multi_write_stmt_body(Compiler *c, int id, Buf *b, int indent, c
         if (nt_kind(nt, pev[q]) == NK_SplatNode || nt_kind(nt, pev[q]) == NK_KeywordHashNode) lit_poly = 0;
       if (lit_poly) elt = TY_POLY_ARRAY;
     }
+    /* a new Array its target holds as the general Array is built as one
+       (masgn_el_lift_from), whichever of the stores below then takes it */
+    TyKind lift_from = nilish || boxed_el || lit_poly ? TY_UNKNOWN : masgn_el_lift_from(c, id, i);
+    if (lift_from != TY_UNKNOWN) elt = TY_POLY_ARRAY;
     emit_ctype(c, nilish || boxed_el ? TY_POLY : elt, b);
     buf_printf(b, " _t%d = ", tmps[i]);
     if (lit_poly) {
@@ -20253,6 +20275,7 @@ static int emit_multi_write_stmt_body(Compiler *c, int id, Buf *b, int indent, c
       }
       buf_printf(b, "_t%d; })", pt);
     }
+    else if (lift_from != TY_UNKNOWN) emit_array_lifted(c, els[i], lift_from, b);
     else if (nilish) {
       /* A void element (e.g. a call that raises) still runs for its side
          effects; only its absent value is replaced with nil. */

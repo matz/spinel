@@ -2894,19 +2894,17 @@ static const char *array_lift_fn(TyKind t) {
   return t == TY_INT_ARRAY ? "sp_PolyArray_from_int_array" : t == TY_FLOAT_ARRAY ? "sp_PolyArray_from_float_array"
        : t == TY_STR_ARRAY ? "sp_PolyArray_from_str_array" : NULL;
 }
-/* The new Array of kind t `node` builds (array_lift_fn's kinds), as the
-   general Array; a nil (`s&.bytes`) stays NULL. */
-static void emit_array_lifted(Compiler *c, int node, TyKind t, Buf *b) {
+/* See codegen_internal.h. */
+void emit_array_lifted(Compiler *c, int node, TyKind t, Buf *b) {
   int lt = ++g_tmp;
   buf_printf(b, "({ %s_t%d = ", t == TY_INT_ARRAY ? "sp_IntArray *" : t == TY_FLOAT_ARRAY ? "sp_FloatArray *" : "sp_StrArray *", lt);
   emit_expr(c, node, b);
   buf_printf(b, "; _t%d ? %s(_t%d) : NULL; })", lt, array_lift_fn(t), lt);
 }
-/* Did the analysis mark `node` a new Array its holder keeps as the general
-   Array (box_lift_arr: a box, a Struct member's `super` argument)? */
-static int box_lift_marked(Compiler *c, int node) {
+/* See codegen_internal.h. */
+int box_lift_marked(Compiler *c, int node, TyKind t) {
   node = nt_paren_single(c->nt, node);
-  return c->box_lift_arr && node >= 0 && node < c->node_cap && c->box_lift_arr[node];
+  return array_lift_fn(t) && c->box_lift_arr && node >= 0 && node < c->node_cap && c->box_lift_arr[node];
 }
 static void emit_boxed_impl(Compiler *c, int node, Buf *b) {
   /* Parentheses are transparent: box the inner expression directly so a
@@ -3384,7 +3382,7 @@ static void emit_boxed_impl(Compiler *c, int node, Buf *b) {
                     : t == TY_OPENSTRUCT ? "SP_BUILTIN_OPENSTRUCT" : NULL;
     if (aid) {
       /* a new Array a push of another kind reaches (box_lift_arr) */
-      if (box_lift_marked(c, node) && array_lift_fn(t)) {
+      if (box_lift_marked(c, node, t)) {
         buf_puts(b, "sp_box_nullable_obj((void *)(");
         emit_array_lifted(c, node, t, b);
         buf_puts(b, "), SP_BUILTIN_POLY_ARRAY)");
@@ -17502,7 +17500,7 @@ static void emit_super_member_arg(Compiler *c, ClassInfo *cls, int a, int v, Buf
     Buf ex; memset(&ex, 0, sizeof ex); emit_expr(c, v, &ex);
     emit_unbox_nilable_text(c, ivt, ex.p ? ex.p : "", b); free(ex.p);
   }
-  else if (ivt == TY_POLY_ARRAY && array_lift_fn(vr.as_ty) && box_lift_marked(c, v)) emit_array_lifted(c, v, vr.as_ty, b);
+  else if (ivt == TY_POLY_ARRAY && box_lift_marked(c, v, vr.as_ty)) emit_array_lifted(c, v, vr.as_ty, b);
   else emit_expr(c, v, b);
 }
 /* A super's forwarded parameter pi, boxed: an Integer or Float parameter

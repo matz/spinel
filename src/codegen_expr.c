@@ -7166,7 +7166,8 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
     for (int i = 0; i < en; i++)
       if (nt_kind(nt, els[i]) == NK_SplatNode) { els = NULL; en = 0; break; }
     int one = els ? -1 : value;
-    int held = 0;
+    int held = 0, nlift = 0;
+    int *lift_views = en > 0 ? alloca(sizeof(int) * (size_t)en) : NULL;
     held += masgn_hold_target_parts(c, id);
     for (int i = els ? 0 : -1; i < en; i++) {
       int v = i < 0 ? one : els[i];
@@ -7191,8 +7192,13 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
         held++;
         continue;
       }
+      /* a new Array its target holds as the general Array is held as one,
+         which the target and the value both take (masgn_el_lift_from) */
+      TyKind lift = i >= 0 ? masgn_el_lift_from(c, id, i) : TY_UNKNOWN;
       Buf vb; memset(&vb, 0, sizeof vb);
-      emit_expr_face(c, v, vt, &vb);   /* (one representation: in the temp's face) */
+      if (lift != TY_UNKNOWN) emit_array_lifted(c, v, lift, &vb);
+      else emit_expr_face(c, v, vt, &vb);   /* (one representation: in the temp's face) */
+      if (lift != TY_UNKNOWN) { vt = TY_POLY_ARRAY; lift_views[nlift++] = view_push(c, v, TY_POLY_ARRAY); }
       emit_indent(g_pre, g_indent);
       if (vt == TY_NIL || vt == TY_VOID) {
         buf_printf(g_pre, "(void)(%s);\n", vb.p ? vb.p : "0");
@@ -7215,6 +7221,7 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
     }
     emit_stmt(c, id, g_pre, g_indent);
     emit_expr(c, value, b);
+    while (nlift > 0) view_pop(c, lift_views[--nlift]);
     view_unbind(g_n_argov - (held));
     return;
   }

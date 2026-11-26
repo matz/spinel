@@ -67,11 +67,15 @@ typedef struct sp_thread {
                                         next safepoint poll (cooperative preemption, §5) */
   unsigned char     in_trap;     /* the depth of trap procs this thread runs (sp_trap_call):
                                     Mutex#lock raises ThreadError inside one, as CRuby's does */
-  short             home_wid;      /* worker this thread FIRST ran on, -1 before its first run.
+  short             home_wid;      /* worker this thread is pinned to: the one it first ran on,
+                                      or the one sched_place_unstarted queued it on (`placed`);
+                                      -1 while it may run anywhere.
                                       A started green thread is pinned there: its live C frames
                                       hold compiler-cached addresses of that worker's __thread
                                       data (GC shadow stack, exception stack, ...), so resuming
                                       it on another worker corrupts both workers' TLS. */
+  unsigned char     placed;        /* queued on home_wid by placement and not yet run: a worker
+                                      going into a blocking call gives it back (sched_unplace_locked) */
   double            readied_at;  /* SPINEL_SCHED_STATS=2: when it was last put on a run queue */
   struct sp_thread *rq_next;     /* run-queue link while RUNNABLE */
   struct sp_thread *joiners;     /* threads parked in #join/#value on this one */

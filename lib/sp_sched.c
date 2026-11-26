@@ -874,6 +874,9 @@ static void sp_out_leave_locked(int wid) {
     SCHED_LOCK();
   }
 }
+#ifdef SP_THREADS
+static void sched_unplace_locked(int wid);
+#endif
 void sp_native_enter(void) {
   if (g_native_depth++ > 0) return;
   if (!g_workers_started) { g_native_noop = 1; return; }   /* one worker, no collector to leave the world for */
@@ -881,6 +884,9 @@ void sp_native_enter(void) {
   /* a collection already running: park through it first, as a poll would */
   if (g_stw_active) sp_stw_park_locked();
   sp_out_enter_locked(sp_worker_id, SP_OUT_NATIVE);
+#ifdef SP_THREADS
+  sched_unplace_locked(sp_worker_id);
+#endif
   SCHED_UNLOCK();
 }
 void sp_native_leave(void) {
@@ -2007,10 +2013,47 @@ static int sched_place_unstarted(int wid, sp_thread *t) {
     if (g_helpers_spawned > before) { best = g_helpers_spawned; bestn = 0; }
   }
   if (best == wid || (wid > 0 && SP_ATOMIC_LOAD(&g_wslot[wid].pinned, __ATOMIC_RELAXED) <= bestn)) return 0;   /* here is as good */
-  t->home_wid = (short)best; SP_ATOMIC_FETCH_ADD(&g_wslot[best].pinned, 1, __ATOMIC_RELAXED);
+  t->home_wid = (short)best; t->placed = 1; SP_ATOMIC_FETCH_ADD(&g_wslot[best].pinned, 1, __ATOMIC_RELAXED);
   lrq_push(best, t);
   sched_wake_home(best);
   return 1;
+}
+#endif
+#ifdef SP_THREADS
+/* A worker going into a blocking call gives back the threads placement
+   queued on it that have not run: they could not run until the call returns,
+   and one may be what the call waits for. They go to the global queue
+   unpinned, for another worker, a new helper or main's stranded sweep,
+   which main runs when it wakes: main waiting in its pump while this worker
+   went out has to look again. PRE: sched lock held. */
+static void sched_unplace_locked(int wid) {
+  if (wid <= 0 || wid >= SP_MAX_WORKERS) return;
+  if (!SP_ATOMIC_LOAD(&g_lrq[wid].head, __ATOMIC_RELAXED)) {
+    if (g_grq.head || SP_ATOMIC_LOAD(&g_lrq_unstarted, __ATOMIC_SEQ_CST)) SCHED_WAKE_MAIN();
+    return;
+  }
+  sp_thread *back = NULL, **bt = &back;
+  RQ_LOCK(wid);
+  sp_thread **pp = &g_lrq[wid].head, *last = NULL;
+  while (*pp) {
+    sp_thread *t = *pp;
+    if (!t->placed) { last = t; pp = &t->rq_next; continue; }
+    SP_ATOMIC_STORE(pp, t->rq_next, __ATOMIC_RELAXED);
+    if (g_lrq[wid].woke == t) g_lrq[wid].woke = NULL;
+    t->rq_next = NULL; *bt = t; bt = &t->rq_next;
+  }
+  g_lrq[wid].tail = last;
+  RQ_UNLOCK(wid);
+  while (back) {
+    sp_thread *t = back; back = t->rq_next; t->rq_next = NULL;
+    t->placed = 0; t->home_wid = -1;
+    int np = SP_ATOMIC_LOAD(&g_wslot[wid].pinned, __ATOMIC_RELAXED);
+    while (np > 0 && !SP_ATOMIC_CAS(&g_wslot[wid].pinned, &np, np - 1, 0, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {}
+    RUNNABLE_DEC();
+    runq_push(&g_grq, t);
+    SCHED_WAKE();
+  }
+  if (g_grq.head || SP_ATOMIC_LOAD(&g_lrq_unstarted, __ATOMIC_SEQ_CST)) SCHED_WAKE_MAIN();
 }
 #endif
 #ifdef SP_THREADS
@@ -2963,6 +3006,7 @@ static void run_thread_once(sp_thread *t) { sp_gc_wb((void*)t);   /* PRE/POST: s
   else RUNNING_INC();
   SP_TH_SET_STATE(t, SP_TH_RUNNING);
   SP_ATOMIC_STORE(&t->park, SP_PK_RUN, __ATOMIC_SEQ_CST);   /* on-cpu now */
+  t->placed = 0;
   if (t->home_wid < 0) {   /* pin to this worker (TLS affinity) */
     if (!locked) SCHED_LOCK();
     t->home_wid = (short)sp_worker_id;
@@ -3178,6 +3222,9 @@ static void sp_safepoint_preempt(void) {
    meant `Thread.new { sleep 30 }` at the top of a script hung the process
    after its last statement, and `exit 0` was the difference between a program
    that ended and one that did not (#4394, #4397, rofl0r). */
+#ifdef SP_THREADS
+static sp_thread *sched_pass_stranded(void);
+#endif
 static void sp_sched_pump(sp_thread *target, int may_wait) {
   for (;;) {
 #ifdef SP_THREADS
@@ -3213,6 +3260,9 @@ static void sp_sched_pump(sp_thread *target, int may_wait) {
 #ifdef SP_THREADS
     if (sp_active_workers > 1) {
       RQ_LOCK(0); sp_thread *t = runq_pop(&g_lrq[0]); RQ_UNLOCK(0);
+      /* nor one that waits for a worker while every helper is in a blocking
+         call, as main's Thread.pass sweep does */
+      if (!t) t = sched_pass_stranded();
       if (t) { run_thread_once(t); continue; }
     }
     else
@@ -3291,7 +3341,7 @@ static sp_thread *runq_pop_pinned(sp_runq *q) {
    grow. When it cannot and every helper is in such a call, main does, the one
    worker left, and the thread is pinned here. */
 static sp_thread *sched_pass_stranded(void) {
-  if (!SP_ATOMIC_LOAD(&g_lrq_unstarted, __ATOMIC_SEQ_CST)) return NULL;
+  if (!SP_ATOMIC_LOAD(&g_lrq_unstarted, __ATOMIC_SEQ_CST) && !g_grq.head) return NULL;
   int before = g_helpers_spawned;
   sp_sched_maybe_grow();
   if (g_helpers_spawned > before) return NULL;

@@ -10968,7 +10968,9 @@ static void emit_proc_ie_self(Compiler *c, int ie_mark, int ie_cls, int rself, i
                "    if (!self) sp_raise_cls(\"NotImplementedError\", \"proc bound to instance_eval called without it\");\n",
                c->classes[ie_cls].c_name, c->classes[ie_cls].c_name);
   else if (ie_mark >= 0) buf_puts(pb, "    _sp_ie_self = NULL;\n");  /* the caller set it; no later call may read it */
-  if (rself != 1) return;
+  /* a literal an instance_eval runs has that self: a runtime self of the
+     body this literal sits in is not its own */
+  if (rself != 1) { if (ie_mark >= 0) g_ie_rself_on = 0; return; }
   if (g_rself_default_boxed) { buf_printf(pb, "    sp_RbVal _sp_rself = sp_ie_rself(((_proc_cap_%s *)_cap)->__rself_dflt); (void)_sp_rself;\n", g_rself_default_boxed_pid); return; }
   Buf rb; memset(&rb, 0, sizeof rb);
   g_ie_rself_on = 0;

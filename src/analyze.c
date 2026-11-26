@@ -46521,6 +46521,17 @@ static int bo_read_rebound(const NodeTable *nt, int x, int be) {
    that only reads is held too when the block expression may change what it
    reads (bo_read_rebound): Ruby read it first. The original node becomes
    the parentheses, keeping its id, line and scope. */
+static int mrr_rebinds_by_code(Compiler *c, int x, const char *vn, int encl);
+/* Is operand x a read of a local that block expression be may rebind by
+   running a proc of the scope that assigns it (`fb(s, &g.call)` with
+   `g = proc { s = +"x"; :upcase }`)? */
+static int bo_local_rebound_by_code(Compiler *c, int x, int be) {
+  const NodeTable *nt = c->nt;
+  if (x < 0 || nt_kind(nt, x) != NK_LocalVariableReadNode || be < 0) return 0;
+  const char *nm = nt_str(nt, x, "name");
+  int enc = x < c->node_cap ? c->nscope[x] : -1;
+  return nm && mrr_rebinds_by_code(c, be, nm, enc);
+}
 static void desugar_block_arg_order(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count;
@@ -46551,12 +46562,12 @@ static void desugar_block_arg_order(Compiler *c) {
     int ahead = bo_may_act(c, recv), plain = 1;
     /* (the reads ahead the block expression may change: held in their turn) */
     int bact = !seq && !lread && bo_may_act(c, be);
-    int rb_recv = bact && bo_read_rebound(nt, recv, be), rebound = rb_recv;
+    int rb_recv = bact && (bo_read_rebound(nt, recv, be) || bo_local_rebound_by_code(c, recv, be)), rebound = rb_recv;
     for (int k = 0; k < an; k++) {
       NodeKind ak = nt_kind(nt, av0[k]);
       if (bact && ak != NK_SplatNode && ak != NK_KeywordHashNode && ak != NK_BlockArgumentNode &&
           ak != NK_ForwardingArgumentsNode)
-        rebound |= bo_read_rebound(nt, av0[k], be);
+        rebound |= bo_read_rebound(nt, av0[k], be) || bo_local_rebound_by_code(c, av0[k], be);
       if (ak == NK_BlockArgumentNode || ak == NK_ForwardingArgumentsNode) plain = 0;
       else if (ak == NK_SplatNode) ahead |= bo_may_act(c, nt_ref(nt, av0[k], "expression"));
       else if (ak == NK_KeywordHashNode) {
@@ -46608,7 +46619,7 @@ static void desugar_block_arg_order(Compiler *c) {
         }
         free(el);
       }
-      else av[k] = bo_hoist(&h, av[k], bact && bo_read_rebound(nt, av[k], be));
+      else av[k] = bo_hoist(&h, av[k], bact && (bo_read_rebound(nt, av[k], be) || bo_local_rebound_by_code(c, av[k], be)));
     }
     /* `&(log; proc { ... })`: the sequence's statements run here, in turn,
        and the proc literal they end in is the block itself -- hoisted whole,

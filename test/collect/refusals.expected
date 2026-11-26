@@ -188,6 +188,24 @@ spinel: 1 refusal, nothing written
 spinel: test/reject/array_fresh_row_pushed_later.rb:7: an Array push given a String, which no conversion keeps in its sp_int slot
 spinel: 1 refusal, nothing written
 == test/reject/array_fresh_row_pushed_later.rb [promote] rc=0
+== test/reject/attr_accessor_local_in_singleton_class.rb [default] rc=1
+spinel: test/reject/attr_accessor_local_in_singleton_class.rb:6: attr_accessor with a non-literal name is not supported; use literal Symbols or Strings (see docs/limitations.md)
+spinel: 1 refusal, nothing written
+== test/reject/attr_accessor_local_in_singleton_class.rb [promote] rc=1
+spinel: test/reject/attr_accessor_local_in_singleton_class.rb:6: attr_accessor with a non-literal name is not supported; use literal Symbols or Strings (see docs/limitations.md)
+spinel: 1 refusal, nothing written
+== test/reject/attr_accessor_loop_in_class_method.rb [default] rc=1
+spinel: test/reject/attr_accessor_loop_in_class_method.rb:5: attr_accessor with a non-literal name is not supported; use literal Symbols or Strings (see docs/limitations.md)
+spinel: 1 refusal, nothing written
+== test/reject/attr_accessor_loop_in_class_method.rb [promote] rc=1
+spinel: test/reject/attr_accessor_loop_in_class_method.rb:5: attr_accessor with a non-literal name is not supported; use literal Symbols or Strings (see docs/limitations.md)
+spinel: 1 refusal, nothing written
+== test/reject/attr_splat_in_singleton_class.rb [default] rc=1
+spinel: test/reject/attr_splat_in_singleton_class.rb:5: attr_accessor with a splat of anything but a constant Array literal of Symbols or Strings (written once, ahead of the call, and never changed) is not supported; name the attributes (see docs/limitations.md)
+spinel: 1 refusal, nothing written
+== test/reject/attr_splat_in_singleton_class.rb [promote] rc=1
+spinel: test/reject/attr_splat_in_singleton_class.rb:5: attr_accessor with a splat of anything but a constant Array literal of Symbols or Strings (written once, ahead of the call, and never changed) is not supported; name the attributes (see docs/limitations.md)
+spinel: 1 refusal, nothing written
 == test/reject/bare_const_unreachable_const_missing.rb [default] rc=1
 spinel: test/reject/bare_const_unreachable_const_missing.rb:9: uninitialized constant B::X (NameError): the program defines it only as A::X, which CRuby's lookup from B (its lexical scope, then its ancestors) does not reach; CRuby then calls const_missing (or raises NameError), which spinel does not follow here
 == test/reject/bare_const_unreachable_const_missing.rb [promote] rc=1

@@ -36091,6 +36091,31 @@ static int attr_family(const char *nm) {
   return nm && (sp_streq(nm, "attr_accessor") || sp_streq(nm, "attr_reader") ||
                 sp_streq(nm, "attr_writer") || sp_streq(nm, "attr"));
 }
+/* Does the program def a method of attr family name nm (`def self.attr_accessor`, a module's
+   `def attr_reader`)? A call of nm may reach it in place of Module's. */
+static int attr_name_defined(const NodeTable *nt, const char *nm) {
+  NT_FOREACH_KIND(nt, NK_DefNode, d) {
+    const char *dn = nt_str(nt, d, "name");
+    if (dn && sp_streq(dn, nm)) return 1;
+  }
+  /* (an alias of the name: `alias each clear`) */
+  NT_FOREACH_KIND(nt, NK_AliasMethodNode, d) {
+    int nn = nt_ref(nt, d, "new_name");
+    const char *v = nn >= 0 && nt_kind(nt, nn) == NK_SymbolNode ? nt_str(nt, nn, "value") : NULL;
+    if (v && sp_streq(v, nm)) return 1;
+  }
+  /* (and a define_method or alias_method of the name: `define_method(:each) { }`) */
+  NT_FOREACH_KIND(nt, NK_CallNode, d) {
+    const char *cn = nt_str(nt, d, "name");
+    int args = cn && (is_define_method_name(cn) || sp_streq(cn, "alias_method")) ? nt_ref(nt, d, "arguments") : -1, an = 0;
+    const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
+    if (an >= 1 && (nt_kind(nt, av[0]) == NK_SymbolNode || nt_kind(nt, av[0]) == NK_StringNode)) {
+      const char *v = nt_str(nt, av[0], nt_kind(nt, av[0]) == NK_SymbolNode ? "value" : "content");
+      if (v && sp_streq(v, nm)) return 1;
+    }
+  }
+  return 0;
+}
 /* the `*NAME` arguments of attr calls in the program: reads of NAME that
    leave the Array as it is. One already spelled out stays in the table, cut
    off from the call (marked attr_splat_done). */
@@ -36573,6 +36598,55 @@ int desugar_table_loop_defines(Compiler *c) {
   return changed;
 }
 
+/* `[:a, "b"].each { |v| attr_accessor v }`, statement i of a class body:
+   the one call with the literals as its names, then the table (the loop's
+   value); 0 when st is no such loop */
+static int attr_each_expand(NodeTable *nt, int body, int i, int st) {
+  /* (a class body whose value is read: its last statement's value is written to a global first) */
+  int capture = nt_kind(nt, st) == NK_GlobalVariableWriteNode ? st : -1;
+  if (capture >= 0) st = nt_ref(nt, capture, "value");
+  if (st < 0 || nt_kind(nt, st) != NK_CallNode) return 0;
+  const char *nm = nt_str(nt, st, "name");
+  int r = nt_ref(nt, st, "receiver"), blk = nt_ref(nt, st, "block");
+  if (!nm || !sp_streq(nm, "each") || nt_ref(nt, st, "arguments") >= 0 || r < 0 ||
+      nt_kind(nt, r) != NK_ArrayNode || blk < 0 || nt_kind(nt, blk) != NK_BlockNode) return 0;
+  int en = 0; const int *el = nt_arr(nt, r, "elements", &en);
+  if (en < 1) return 0;
+  for (int e = 0; e < en; e++)
+    if (nt_kind(nt, el[e]) != NK_SymbolNode && nt_kind(nt, el[e]) != NK_StringNode) return 0;
+  int bp = nt_ref(nt, blk, "parameters"), ps = bp >= 0 ? nt_ref(nt, bp, "parameters") : -1, rn = 0;
+  const int *rq = ps >= 0 ? nt_arr(nt, ps, "requireds", &rn) : NULL;
+  const char *v = rn == 1 && nt_kind(nt, rq[0]) == NK_RequiredParameterNode ? nt_str(nt, rq[0], "name") : NULL;
+  /* (one required variable: a default, a splat or a keyword runs code or binds otherwise) */
+  static const char *const OTHER[] = { "optionals", "posts", "keywords", NULL };
+  for (int k = 0; v && ps >= 0 && OTHER[k]; k++) { int n = 0; (void)nt_arr(nt, ps, OTHER[k], &n); if (n) v = NULL; }
+  if (v && (nt_ref(nt, ps, "rest") >= 0 || nt_ref(nt, ps, "keyword_rest") >= 0 || nt_ref(nt, ps, "block") >= 0)) v = NULL;
+  int bb = nt_ref(nt, blk, "body"), sn = 0;
+  const int *ss = v && bb >= 0 && nt_kind(nt, bb) == NK_StatementsNode ? nt_arr(nt, bb, "body", &sn) : NULL;
+  if (sn != 1 || nt_kind(nt, ss[0]) != NK_CallNode || !attr_family(nt_str(nt, ss[0], "name")) ||
+      nt_ref(nt, ss[0], "receiver") >= 0 || nt_ref(nt, ss[0], "block") >= 0) return 0;
+  /* (a method of the program's of the name takes each call as written) */
+  if (attr_name_defined(nt, nt_str(nt, ss[0], "name")) || attr_name_defined(nt, "each")) return 0;
+  int call = ss[0], args = nt_ref(nt, call, "arguments"), an = 0;
+  const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
+  if (an != 1 || nt_kind(nt, av[0]) != NK_LocalVariableReadNode || !nt_str(nt, av[0], "name") ||
+      !sp_streq(nt_str(nt, av[0], "name"), v)) return 0;
+  int *names = (int *)malloc(sizeof(int) * (size_t)en);
+  if (!names) { fprintf(stderr, "out of memory\n"); exit(1); }
+  for (int e = 0; e < en; e++) names[e] = nt_clone_subtree(nt, el[e]);
+  nt_node_set_arr(nt, args, "arguments", names, en);
+  free(names);
+  int bn = 0; const int *b0 = nt_arr(nt, body, "body", &bn);
+  int *nb = (int *)malloc(sizeof(int) * (size_t)(bn + 1));
+  if (!nb) { fprintf(stderr, "out of memory\n"); exit(1); }
+  for (int k = 0, o = 0; k < bn; k++) {
+    if (k == i) { nb[o++] = call; if (capture >= 0) nt_node_set_ref(nt, capture, "value", r); nb[o++] = capture >= 0 ? capture : r; }
+    else nb[o++] = b0[k];
+  }
+  nt_node_set_arr(nt, body, "body", nb, bn + 1);
+  free(nb);
+  return 1;
+}
 int desugar_attr_const_splat(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count, changed = 0;
@@ -36599,6 +36673,11 @@ int desugar_attr_const_splat(Compiler *c) {
         bb = nt_arr(nt, body, "body", &bn);
         continue;
       }
+      if ((nt_kind(nt, st) == NK_CallNode || nt_kind(nt, st) == NK_GlobalVariableWriteNode) && attr_each_expand(nt, body, i, st)) {
+        changed = 1;
+        bb = nt_arr(nt, body, "body", &bn);
+        st = bb[i];
+      }
       if (nt_kind(nt, st) != NK_CallNode || !attr_family(nt_str(nt, st, "name"))) continue;
       if (!attr_splat_recv_ok(nt, nt_ref(nt, st, "receiver"))) continue;
       changed |= attr_splat_expand(nt, &consts, body, i, st);
@@ -36611,7 +36690,20 @@ int desugar_attr_const_splat(Compiler *c) {
     if (!attr_family(nt_str(nt, it.id, "name"))) continue;
     int args = nt_ref(nt, it.id, "arguments"), an = 0;
     const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
-    if (nt_argv_has_splat(nt, av, an)) nt_node_set_int(nt, it.id, "attr_splat", 1);
+    if (nt_argv_has_splat(nt, av, an)) { nt_node_set_int(nt, it.id, "attr_splat", 1); continue; }
+    /* a name the program computes (a block's variable, a parameter, a
+       local) declares nothing where the call runs: refused where it is
+       reachable (attr_name), so a class method the compile-time runner
+       folds, which is not emitted, keeps working */
+    int rcv = nt_ref(nt, it.id, "receiver");
+    if (rcv >= 0 && nt_kind(nt, rcv) != NK_SelfNode) continue;
+    int computed = 0;
+    /* (`attr :x, false`: attr's trailing flag is no name) */
+    int flag = sp_streq(nt_str(nt, it.id, "name"), "attr") && an == 2 &&
+               (nt_kind(nt, av[1]) == NK_TrueNode || nt_kind(nt, av[1]) == NK_FalseNode);
+    for (int a = 0; a < an - flag && !computed; a++)
+      computed = nt_kind(nt, av[a]) != NK_SymbolNode && nt_kind(nt, av[a]) != NK_StringNode;
+    if (computed && !attr_name_defined(nt, nt_str(nt, it.id, "name"))) nt_node_set_int(nt, it.id, "attr_name", 1);
   }
   nt_kind_iter_close(&it);
   sce_consts_free(&consts);

@@ -4625,7 +4625,7 @@ void refuse_prepass_at_emit(Compiler *c, int id) {
   /* an attr call whose splat the desugar could not spell out
      (desugar_attr_const_splat): refused where it is emitted, so a deferred
      refusal stands at its own statement */
-  if (nt_int(c->nt, id, "attr_splat", 0)) diagnose_unsupported_call(c, id);
+  if (nt_int(c->nt, id, "attr_splat", 0) || nt_int(c->nt, id, "attr_name", 0)) diagnose_unsupported_call(c, id);
   if (!defer_refusals_at(c, id)) return;
   refuse_from_plan(c, id, CRF_SEND, "refuse-send");
   refuse_from_plan(c, id, CRF_CONST_GET, "refuse-const-get");

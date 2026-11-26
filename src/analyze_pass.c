@@ -8187,14 +8187,24 @@ static int row_store_shape(const char *name) {
   return -1;
 }
 /* 1 when each value the row `el` can be is a new Array nothing else holds
-   (`s.bytes`, `f ? s.bytes : t.bytes`) */
-static int row_fresh(Compiler *c, int el) {
-  int lv[16];
+   (`s.bytes`, `f ? s.bytes : t.bytes`). With RF_LIFT each is one a box
+   lifts (box_liftable_array: a builtin's new Array of Integers, Floats or
+   Strings), and with RF_NIL a nil may be among them, beside at least one
+   such Array (`f ? s.bytes : nil`). */
+enum { RF_NIL = 1, RF_LIFT = 2 };
+static int box_liftable_array(Compiler *c, int v);
+static int row_fresh(Compiler *c, int el, int how) {
+  const NodeTable *nt = c->nt;
+  int lv[16], arrays = 0;
   int n = value_leaves_ex(c, el, lv, 0, 16, VL_NIL);
   if (n <= 0 || n >= 16) return 0;
-  for (int i = 0; i < n; i++)
-    if (!is_fresh_array(c, lv[i])) return 0;
-  return 1;
+  for (int i = 0; i < n; i++) {
+    int a = nt_paren_single(nt, lv[i]);
+    if ((how & RF_NIL) && nt_kind(nt, a) == NK_NilNode) continue;
+    if (!(how & RF_LIFT ? box_liftable_array(c, a) : is_fresh_array(c, a))) return 0;
+    arrays++;
+  }
+  return arrays > 0;
 }
 static int array_answers_receiver(Compiler *c, int v);
 /* 1 when each typed Array the row `el` can be takes an element of kind
@@ -8267,7 +8277,7 @@ static int lift_literal_rows_1(Compiler *c, int lit, TyKind elem, int depth, int
     if ((et != TY_INT_ARRAY && et != TY_FLOAT_ARRAY && et != TY_STR_ARRAY) || elem == ty_array_elem(et)) continue;
     lifted = 1;
     ch |= widen_boxed_array_sources(c, el, elem, 0);
-    if (el < c->node_cap && !c->box_lift_arr[el] && row_fresh(c, el)) { c->box_lift_arr[el] = 1; ch = 1; }
+    if (el < c->node_cap && !c->box_lift_arr[el] && row_fresh(c, el, 0)) { c->box_lift_arr[el] = 1; ch = 1; }
   }
   if (!apply) return lift_added_rows(c, lit, elem, depth, 0);
   ch |= lift_added_rows(c, lit, elem, depth, 1);
@@ -8320,7 +8330,7 @@ static int widen_stored_rows(Compiler *c, int call, int shape, TyKind elem, int 
     else if (!apply) ch |= (shape != ROWS_INDEX || an == 2) && !row_lifts(c, arg, elem);
     else if (shape != ROWS_INDEX || an == 2) {
       ch |= widen_boxed_array_sources(c, arg, elem, 0);
-      if (arg < c->node_cap && !c->box_lift_arr[arg] && nt_kind(nt, arg) != NK_ArrayNode && row_fresh(c, arg)) {
+      if (arg < c->node_cap && !c->box_lift_arr[arg] && nt_kind(nt, arg) != NK_ArrayNode && row_fresh(c, arg, 0)) {
         TyKind at = infer_type(c, arg);
         if ((at == TY_INT_ARRAY || at == TY_FLOAT_ARRAY || at == TY_STR_ARRAY) && elem != ty_array_elem(at)) {
           c->box_lift_arr[arg] = 1;
@@ -8966,14 +8976,20 @@ static int literal_rows_read(Compiler *c, int v, int apply) {
    the writing method ws that it keeps (`@a = a`) is its callers' array,
    which widens for them as one a store goes through does. A new Array a
    builtin answers (`s.bytes`) is held as the general Array, by a box too
-   (box_lift_arr). The walk is st at depth (AttrArgWalk), which with apply
-   widens them, setting ch on a change. */
+   (box_lift_arr), and so is a conditional all of whose Arrays are such
+   (`f ? s.bytes : t.bytes`), built as its arm's Array is. The walk is st
+   at depth (AttrArgWalk), which with apply widens them, setting ch on a
+   change. */
 typedef struct { SrcWalk *st; int depth, apply, ch, n; } AttrArgWalk;
 static int slot_value_walk(Compiler *c, Scope *ws, int v, AttrArgWalk *w) {
   const NodeTable *nt = c->nt;
   int wl[16];
   int nl = value_leaves_ex(c, v, wl, 0, 16, VL_NIL);
   if (nl < 0) return 1;
+  /* (a conditional of such Arrays, as its arms are, row_fresh) */
+  int whole = nt_paren_single(nt, v);
+  if (w->apply && nl > 0 && nt_paren_single(nt, wl[0]) != whole && whole < c->node_cap && !c->box_lift_arr[whole] &&
+      row_fresh(c, v, RF_NIL | RF_LIFT)) { c->box_lift_arr[whole] = 1; w->ch = 1; }
   for (int i = 0; i < nl; i++) {
     int a = nt_paren_single(nt, wl[i]);
     if (nt_kind(nt, a) == NK_NilNode) continue;

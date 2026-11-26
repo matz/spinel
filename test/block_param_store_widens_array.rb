@@ -297,3 +297,17 @@ y1(k28.b) { |x| x << +"q" }
 p k28.b
 k28.s; p k28.r, k28.a, k28.b
 *r28, a28, b28 = 3..4; p r28, a28, b28
+
+# a Struct member a super hands a conditional of new Arrays, each built as
+# the general Array
+S29 = Struct.new(:v) do
+  def initialize(s, t, f) = super(f ? s.bytes : t.bytes)
+end
+s29 = S29.new("ab", "cd", ARGV.empty?); y1(s29.v) { |x| x << +"t" }; p s29.v, S29.new("e", "fg", false).v
+# and an `||` of new Arrays, handed to a member or written to an attribute
+S30 = Struct.new(:v) do
+  def initialize(s, t) = super(s.bytes || t.bytes)
+end
+s30 = S30.new("hi", "jk"); y1(s30.v) { |x| x << +"u" }; p s30.v
+class B31; attr_accessor :items; end
+b31 = B31.new; b31.items = "lm".bytes || "no".bytes; y1(b31.items) { |x| x << +"v" }; p b31.items

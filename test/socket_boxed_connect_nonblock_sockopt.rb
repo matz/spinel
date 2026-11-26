@@ -16,8 +16,8 @@ p conn.getsockopt(Socket::SOL_SOCKET, Socket::SO_ERROR).int
 begin
   conn.connect_nonblock(Socket.sockaddr_in(port, "127.0.0.1"))
   p :connected
-rescue Errno::EISCONN
-  p :eisconn
+rescue Errno::EISCONN   # Linux answers this first call after the handshake 0, macOS EISCONN
+  p :connected
 end
 p conn.setsockopt(Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1)
 p conn.getsockopt(Socket::IPPROTO_TCP, Socket::TCP_NODELAY).bool

@@ -5560,6 +5560,8 @@ static int infer_handle_call(Compiler *c, int id, const NodeTable *nt, const cha
         if (blv && is_byte_codepoint_each(name)) lv_set_type(blv, TY_INT);
         else an_bind_line_param(blv);
       }
+      /* without a block, an Enumerator that reads as it is walked */
+      if (blk < 0 && argc == 0) { *out = TY_ENUMERATOR; return 1; }
       { *out = TY_IO; return 1; }
     }
     /* tap runs its block and returns the handle, which codegen emits as the

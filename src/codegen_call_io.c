@@ -2070,6 +2070,19 @@ int emit_call_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const ch
       buf_printf(b, "({ sp_File_write_bin(%s, sp_str_format_polyarr(_t%d, _t%d)); sp_box_nil(); })", r, tfp, tfa);
       free(rb.p); return 1;
     }
+    /* each_char, each_byte, each_codepoint, each_line and each without a
+       block or an argument: an Enumerator that reads the handle as it is
+       walked (sp_io_each_enumerator), as the boxed arm answers */
+    if ((sp_streq(name, "each_char") || sp_streq(name, "each_byte") || sp_streq(name, "each_codepoint") ||
+         sp_streq(name, "each_line") || sp_streq(name, "each")) &&
+        argc == 0 && nt_ref(nt, id, "block") < 0) {
+      const char *meth = sp_streq(name, "each") ? "each_line" : name;
+      int boxed = repr_of(c, id).kind == RK_BOXED;
+      if (boxed) buf_puts(b, "sp_box_obj(");
+      buf_printf(b, "sp_io_each_enumerator(%s, SPL(\"%s\"))", r, meth);
+      if (boxed) buf_puts(b, ", SP_BUILTIN_ENUMERATOR)");
+      free(rb.p); return 1;
+    }
     /* each_char / each_byte (#2794) / each_codepoint (#3038) */
     if ((sp_streq(name, "each_char") || sp_streq(name, "each_byte") ||
          sp_streq(name, "each_codepoint")) &&

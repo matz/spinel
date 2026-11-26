@@ -3728,12 +3728,16 @@ sp_oint sp_stat_size_q(sp_File *f) {SP_GC_ROOT(f);
    whose path is gone or absent. Buffered bytes are flushed first so the file
    is cut at the size the program believes it has written. */
 /* File#size on a handle: fstat(2) of the descriptor, as CRuby reads it --
-   the path may have been renamed or unlinked since the open. */
+   the path may have been renamed or unlinked since the open. The flush
+   and the fstat hold a use of the handle, as the typed File#size does
+   (sp_stat_size), so the two give one answer and one error. */
 sp_int sp_File_size(sp_File *f) {SP_GC_ROOT(f);
-  SP_IO_OPEN(f);
+  sp_io_flush_for_size(f);
   struct stat st;
-  fflush(f->fp);
-  if (fstat(fileno(f->fp), &st) != 0) sp_file_raise_errno("rb_file_size", f->path ? f->path : "");
+  int fd = sp_io_fd_use(f);
+  int r = fstat(fd, &st);
+  sp_io_fd_unuse(f);
+  if (r != 0) sp_file_raise_errno("rb_file_size", f->path ? f->path : "");
   if ((off_t)(sp_int)st.st_size != st.st_size) {
     sp_raise_cls("RangeError", "file size out of range for Integer");
     return 0;

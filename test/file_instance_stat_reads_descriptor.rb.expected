@@ -10,6 +10,8 @@ chmod old 600 new 644
 truncate old 3 new 3
 the earlier stat keeps its size 12
 size counts a pending write 5
+boxed size counts a pending write [6, 3]
+boxed size on a closed File: IOError closed stream
 stat after close names the old file, size 12
 stat on a closed File: IOError closed stream
 size on a closed File: IOError closed stream

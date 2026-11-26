@@ -8652,6 +8652,14 @@ int elab_method_vis_gated(Compiler *c, const char *name) {
   return x->vgate == 2;
 }
 
+int elab_history_vis_word(Compiler *c, int cls, int sg, const char *name) {
+  LoadRecord *r = c->lrec;
+  const LrHist *h = r && r->recorded && name ? lr_hist(r, cls, sg != 0, name, 0) : NULL;
+  for (int j = 0; h && j < h->n; j++)
+    if (h->v[j].kind == LR_VIS && !h->v[j].unplaced && !h->v[j].absent) return 1;
+  return 0;
+}
+
 static int lr_chain_may_hold(Compiler *c, int cls, int sg, int k, LoadPoint p);
 /* See analyze.h. */
 int elab_method_vis_tied(Compiler *c, int cls, const char *name, int def_cls, LoadPoint p) {

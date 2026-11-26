@@ -447,6 +447,9 @@ int elab_class_live_at(Compiler *c, int cls, int sg, LoadPoint p);
    only the run time knows? Made once for every history, as the record
    stands (a later entry asks it again). 0 before the record is made. */
 int elab_history_open(Compiler *c, int cls, int sg, const char *name);
+/* ...does cls's own history of `name` hold a visibility word (`private :name`, a section), whose cell
+   the run writes? */
+int elab_history_vis_word(Compiler *c, int cls, int sg, const char *name);
 /* ...and open with no version applied for sure (all may not have run, or
    are partial): the method may be absent wherever it is asked */
 int elab_history_absent(Compiler *c, int cls, int sg, const char *name);

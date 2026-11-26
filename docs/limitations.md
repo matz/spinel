@@ -392,7 +392,9 @@ by the class `k` holds alone, so an instance of another class the same call
 made raises; one `k` inherits from its superclass binds an instance of that
 superclass or of any class under it, the classes the same call made among
 them. A method a module `k` includes owns is bound only to an instance of
-`k`: any other object raises TypeError, where CRuby binds any object.
+`k`: an object of another class raises TypeError, and a value of a builtin
+type (a String, an Integer, nil, an Array) is refused at compile time, where
+CRuby binds any object.
 
 A `Class.new` or `Module.new` block that captures outer locals is refused at
 compile time for constant assignments, local assignments and reachable method

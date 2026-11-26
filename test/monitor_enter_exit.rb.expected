@@ -1,0 +1,13 @@
+true
+true
+true
+false
+nil
+true
+nil
+true
+true
+false
+false
+false
+undefined method 'try_enter' for an instance of Thread::Mutex

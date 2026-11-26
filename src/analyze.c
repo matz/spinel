@@ -51724,6 +51724,22 @@ static void an_phase_pre_fixpoint(Compiler *c) {
   free(par);
   for (int id = 0; id < c->nt->count; id++)
     if (is_proc_create(c, id)) proc_param_syms_intern(c, id);
+  /* and a block a call hands on, which a method can take as its &block and
+     answer (`def keep(&b) = b`): its Proc is made with the same parameter
+     table, whose names the prologue sizes the table for too, where the
+     program asks a Proc its parameters at all */
+  if (comp_kind_first(c, NK_CallNode) >= 0) {
+    int asks = 0;
+    NT_FOREACH_KIND(c->nt, NK_CallNode, q) {
+      const char *qn = nt_str(c->nt, q, "name");
+      if (qn && sp_streq(qn, "parameters")) { asks = 1; break; }
+    }
+    if (asks)
+      NT_FOREACH_KIND(c->nt, NK_CallNode, q) {
+        int blk = nt_ref(c->nt, q, "block");
+        if (blk >= 0 && nt_kind(c->nt, blk) == NK_BlockNode && !is_proc_create(c, q)) proc_param_syms_intern(c, q);
+      }
+  }
 
   /* Apply --rbs advisory seeds (pin param/return/ivar types) before the
      fixpoint so the inference passes observe the pinned types from round one.

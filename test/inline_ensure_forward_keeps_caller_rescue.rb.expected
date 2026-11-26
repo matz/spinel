@@ -1,0 +1,8 @@
+[20, "boom", [:inner, :outer]]
+"two"
+"boom"
+nil
+"three"
+[5, "own"]
+[:inner, :outer, :own_inner, :own_outer]
+nil

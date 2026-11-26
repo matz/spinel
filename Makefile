@@ -4965,6 +4965,7 @@ check:
 	+@$(MAKE) --no-print-directory infer-test
 	+@$(MAKE) --no-print-directory respond-to-audit
 	+@$(MAKE) --no-print-directory gen-respond-to-tables-test
+	+@$(MAKE) --no-print-directory boxed-methods-check
 	+@$(MAKE) --no-print-directory spin-check
 
 # tools/gen_respond_to_tables.rb's own unit tests (dedup, false-positive
@@ -4978,6 +4979,15 @@ check:
 gen-respond-to-tables-test: lib/spinel_rt.h
 	ruby tools/gen_respond_to_tables_test.rb
 	ruby tools/gen_respond_to_tables_makefile_test.rb
+
+# The IO, Thread, Mutex, ConditionVariable and Queue rows of
+# src/builtin_ops.c against the respond_to? lists a boxed receiver answers
+# from, with a known-gap list that only shrinks (tools/boxed_methods_check.rb).
+.PHONY: boxed-methods-check
+boxed-methods-check:
+	ruby tools/boxed_methods_check.rb
+	ruby tools/boxed_methods_check_test.rb
+gate-props: boxed-methods-check
 
 # Cross-checks sp_poly_responds_builtin's per-class method tables
 # (lib/spinel_rt.h) against src/builtin_ops.c's bop_rows, the actual

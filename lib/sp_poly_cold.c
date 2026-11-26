@@ -191,8 +191,26 @@ sp_StrArray *sp_poly_string_lines(sp_RbVal receiver, sp_RbVal separator,
   return lines;
 }
 
+/* the IO a boxed line walk reads, or NULL for another receiver (a stat
+   rides in the same boxed handle and has no lines) */
+static sp_File *sp_string_line_io(sp_RbVal v) {
+  if (v.tag != SP_TAG_OBJ || v.cls_id != SP_BUILTIN_IO || !v.v.p) return NULL;
+  sp_File *io = (sp_File *)v.v.p;
+  if (io->mode && (strcmp(io->mode, "stat") == 0 || strcmp(io->mode, "lstat") == 0)) return NULL;
+  return io;
+}
+
 void sp_string_line_begin(sp_StringLineWalk *walk, sp_RbVal receiver, sp_RbVal separator,
                           sp_RbVal keywords, sp_int argc, const char *method) {
+  sp_File *io = sp_string_line_io(receiver);
+  if (io) {
+    if (argc > 1) sp_raise_arity(argc, 0, 1, NULL);
+    walk->chomp = sp_string_line_chomp(keywords);
+    walk->io = io;
+    /* a nil separator reads to the end (sp_File_gets_sep takes NULL) */
+    walk->separator = argc && sp_poly_nil_p(separator) ? NULL : argc ? sp_poly_arg_str_chk(separator) : SPL("\n");
+    return;
+  }
   if (!sp_poly_face_str_ok(receiver)) sp_raise_poly_nomethod(method, receiver);
   if (argc > 1) sp_raise_arity(argc, 0, 1, NULL);
   walk->chomp = sp_string_line_chomp(keywords);
@@ -210,6 +228,10 @@ void sp_string_line_begin(sp_StringLineWalk *walk, sp_RbVal receiver, sp_RbVal s
 }
 
 sp_String *sp_string_line_step(sp_StringLineWalk *walk) {
+  if (walk->io) {
+    const char *line = sp_File_gets_sep(walk->io, walk->separator, 0, walk->chomp);
+    return line ? sp_String_new_shared(line) : NULL;
+  }
   if (walk->whole) {
     sp_String *whole = walk->whole;
     walk->whole = NULL;
@@ -237,7 +259,15 @@ static void sp_string_line_gen(sp_Fiber *f) {
   SP_GC_ROOT(cap);
   if (cap->argc > 1) sp_raise_arity(cap->argc, 0, 1, NULL);
   sp_bool chomp = sp_string_line_chomp(cap->keywords);
-  if (cap->argc && sp_poly_nil_p(cap->separator)) {
+  sp_File *io = sp_string_line_io(cap->receiver);
+  if (io) {
+    const char *sep = cap->argc && sp_poly_nil_p(cap->separator) ? NULL
+                    : cap->argc ? sp_poly_arg_str_chk(cap->separator) : SPL("\n");
+    SP_GC_ROOT_STR(sep);
+    for (const char *line; (line = sp_File_gets_sep(io, sep, 0, chomp));)
+      sp_Fiber_yield(sp_box_obj(sp_String_new_shared(line), SP_BUILTIN_STRBUF));
+  }
+  else if (cap->argc && sp_poly_nil_p(cap->separator)) {
     sp_Fiber_yield(cap->receiver);
   }
   else {
@@ -267,7 +297,16 @@ sp_Enumerator *sp_poly_string_line_enum(sp_RbVal receiver, sp_RbVal separator,
   SP_GC_ROOT_RBVAL(receiver);
   SP_GC_ROOT_RBVAL(separator);
   SP_GC_ROOT_RBVAL(keywords);
-  if (!sp_poly_face_str_ok(receiver)) sp_raise_poly_nomethod("each_line", receiver);
+  sp_File *io = sp_string_line_io(receiver);
+  if (!sp_poly_face_str_ok(receiver) && !io) sp_raise_poly_nomethod("each_line", receiver);
+  /* an IO's walk is the IO Enumerator, whose rewind seeks the stream back
+     to its start, with the separator and chomp it was given */
+  if (io) {
+    if (argc > 1) sp_raise_arity(argc, 0, 1, NULL);
+    sp_bool chomp = sp_string_line_chomp(keywords);
+    const char *sep = argc && sp_poly_nil_p(separator) ? NULL : argc ? sp_str_dup(sp_poly_arg_str_chk(separator)) : SPL("\n");
+    return sp_io_line_enumerator(io, sep, chomp);
+  }
   sp_StringLineCap *cap = (sp_StringLineCap *)sp_gc_alloc(sizeof *cap, NULL, sp_string_line_scan);
   SP_GC_ROOT(cap);
   cap->receiver = receiver;

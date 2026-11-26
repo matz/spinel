@@ -1,0 +1,15 @@
+[true, true, true]
+[false, false, "Attempt to unlock a mutex which is locked by another thread/fiber", "deadlock; lock already owned by another fiber belonging to the same thread", false, false]
+:released
+false
+false
+[true, true, true]
+[false, false, "Attempt to unlock a mutex which is locked by another thread/fiber", "deadlock; lock already owned by another fiber belonging to the same thread", false, false]
+:released
+false
+false
+[true, false]
+[true, true]
+false
+[[false, "Attempt to unlock a mutex which is locked by another thread/fiber"]]
+true

@@ -313,6 +313,7 @@ void       sp_Queue_clear(sp_queue *q);             /* #clear */
  * GC scan over its owner/waiter pointers. */
 typedef struct sp_mutex {
   struct sp_thread *owner;     /* NULL = unlocked */
+  _Alignas(8) unsigned long long owner_fiber; /* the uid of owner's Fiber that holds it: owned? is per Fiber, as CRuby's */
   struct sp_thread *waiters;   /* threads blocked in #lock */
   /* Monitor is a REENTRANT mutex, and that is the whole reason it exists:
      `m.synchronize { m.synchronize { } }` is the ordinary way to write a

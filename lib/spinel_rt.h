@@ -11676,7 +11676,8 @@ static const char *sp_PolyArray_join(sp_PolyArray *a, const char *sep) {
      heap string instead (#3151). */
   sp_poly_recur_pop(rmark);
   const char *r = sp_str_from_bytes(s->data, (size_t)s->len);
-  if (st == 1 && r && *r) sp_str_mark_binary((char *)r);
+  /* (by the length: a join whose first byte is a NUL, `[0.chr, 200.chr]`, is no empty String) */
+  if (st == 1 && r && s->len > 0) sp_str_mark_binary((char *)r);
   return r;
 }
 /* join on a boxed array (poly value holding any array kind) */

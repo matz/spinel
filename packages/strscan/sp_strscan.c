@@ -779,6 +779,35 @@ const char *sp_StringScanner_string_set(sp_StringScanner *sc, const char *str) {
   return str;
 }
 
+/* #concat / #<<: append to the String the scanner reads; the position
+   and the last match stay, as offsets into the longer source. The result
+   is a new String: the String given to StringScanner.new keeps its value,
+   where CRuby appends to it. */
+sp_StringScanner *sp_StringScanner_concat(sp_StringScanner *sc, const char *str) {SP_GC_ROOT(sc);
+  if (!sc || !str) return sc;
+  sp_str_check_mutable(sc->source);   /* FrozenError for a frozen source, as String#<< */
+  SP_GC_ROOT_STR(str);
+  size_t a = sp_str_byte_len(sc->source), b = sp_str_byte_len(str);
+  /* the result's encoding as String#<< sets it: an ASCII-only side takes
+     the other side's, and two sides with high bytes make BINARY */
+  int sbin = sp_str_is_binary(sc->source), bin = sbin;
+  if (b > 0 && sp_str_is_binary(str) != sbin) {
+    if (a == 0) bin = sp_str_ascii_only(str) ? sbin : !sbin;
+    else if (sp_str_ascii_only(str)) bin = sbin;
+    else bin = sp_str_ascii_only(sc->source) ? !sbin : 1;
+  }
+  char *out = sp_str_alloc(a + b);
+  memcpy(out, sc->source, a);
+  memcpy(out + a, str, b);
+  out[a + b] = 0;
+  sp_str_set_len(out, a + b);
+  if (bin) sp_str_mark_binary(out);
+  if (bin != sbin) sc_reset_charpos(sc);
+  sp_gc_wb((void *)sc);
+  sc->source = out;
+  return sc;
+}
+
 sp_StringScanner *sp_StringScanner_reset(sp_StringScanner *sc) {
   if (!sc) return sc;
   sc->pos = 0;

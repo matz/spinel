@@ -410,6 +410,11 @@ sp_Proc *sp_method_to_proc(sp_BoundMethod *m) {
   SP_GC_ROOT(m);   /* `&method(:m)` hands over a Method nothing else holds */
   return sp_proc_new_meta((void *)sp_method_proc_tramp, m, sp_method_proc_scan, 1, TRUE, 0, NULL, NULL);
 }
+/* For Signal.trap (lib/sp_cold.c): a Method handler's proc, a proc around a
+   C function, and the Method a handler proc was made from */
+sp_Proc *sp_proc_of_method(void *m) { return sp_method_to_proc((sp_BoundMethod *)m); }
+sp_Proc *sp_proc_of_cfn(void *fn) { return sp_proc_new(fn, NULL, NULL); }
+void *sp_proc_bound_method(sp_Proc *p) { return p && p->fn == (void *)sp_method_proc_tramp ? p->cap : NULL; }
 /* Bound Method object: `obj.method(:foo)` / `method(:foo)`. `self` is the
    bound receiver (NULL for a top-level method), `fn` the function address
    (cast to the right signature at the call site), `name` the method name

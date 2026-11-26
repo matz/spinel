@@ -1,0 +1,21 @@
+{}
+5
+"y!"
+{}
+7
+"abab"
+{}
+:none
+{k: 1}
+Bare
+wrong number of arguments (given 2, expected 0..1)
+{seed: 1}
+0
+"z"
+{seed: 1, z: "z"}
+5
+nil
+5
+:y
+nil
+3

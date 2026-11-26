@@ -12514,11 +12514,13 @@ static int param_made_in_place(Compiler *c, Scope *m, const ArgLayout *L, int i,
    its parameters at entry, so one handle made in the list is held by then.
    It is lost only where something allocates between its making and that
    entry: a class's `new`, which pools the object before initialize takes
-   the parameters (the list leads with nothing there; a method's or a
-   super's leads with self), or a second value of the list made in place. */
+   the parameters (the list leads with nothing there, or with a site
+   class's class, emit_ctor_rt_arg: an initialize of a site's family holds
+   them under a super too; a method's or a super's leads with self), or a
+   second value of the list made in place. */
 static int elems_want_hold(Compiler *c, Scope *m, const ArgLayout *L, const int *argv,
                            const char *lead, TyKind splat_at, int argov_from) {
-  if (m->name && sp_streq(m->name, "initialize") && !lead[0]) return 1;
+  if (m->name && is_initialize_name(m->name) && (!lead[0] || cplan_rt_family(c, m->class_id))) return 1;
   int made = 0;
   for (int i = 0; i < m->nparams && made < 2; i++)
     made += param_made_in_place(c, m, L, i, argv, splat_at, argov_from);

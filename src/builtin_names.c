@@ -108,7 +108,7 @@ int fresh_array_builtin_name(const char *nm) {
     "map", "collect", "flat_map", "collect_concat", "filter_map", "select", "filter",
     "reject", "sort", "sort_by", "reverse", "uniq", "compact", "flatten", "zip",
     "split", "chars", "bytes", "unpack", "lines", "scan", "keys", "values", "dup",
-    "take", "drop", "take_while", "drop_while", "rotate", "shuffle", "divmod",
+    "take", "drop", "take_while", "drop_while", "rotate", "shuffle", "divmod", "entries",
     "+", "-", "*", "&", "|", NULL };
   return nm && str_in(nm, fresh);
 }
@@ -575,6 +575,9 @@ int is_minmax_pair(const char *n) { return n && sp_streq(n, "minmax"); }
 
 int is_endpoint_query(const char *n) {
   return sp_streq(n, "first") || sp_streq(n, "last");
+}
+int is_endpoint_first(const char *n) {
+  return n && sp_streq(n, "first");
 }
 
 int is_map_alias(const char *n) {
@@ -1148,6 +1151,20 @@ int is_add_sub(const char *n) {
 
 int is_array_push_family(const char *n) {
   return sp_streq(n, "push") || sp_streq(n, "<<") || sp_streq(n, "append") || sp_streq(n, "unshift") || sp_streq(n, "prepend");
+}
+
+int is_array_row_read(const char *n) {
+  static const char *const reads[] = { "[]", "first", "last", "fetch", "each", "each_with_index",
+                                       "size", "length", "empty?", "inspect", "to_s", NULL };
+  return n && str_in(n, reads);
+}
+
+int array_answers_receiver_name(const char *n) {
+  static const char *const self_ret[] = {
+    "<<", "push", "append", "unshift", "prepend", "insert", "concat", "fill", "replace",
+    "sort!", "sort_by!", "reverse!", "rotate!", "shuffle!", "map!", "collect!", "tap",
+    "freeze", "itself", "to_a", "to_ary", NULL };
+  return n && str_in(n, self_ret);
 }
 
 int is_take_drop(const char *n) {
@@ -2114,6 +2131,14 @@ int is_method_ref_name(const char *n) { return n && sp_streq(n, "method"); }
 int is_method_object_name(const char *n) {
   return n && (sp_streq(n, "method") || sp_streq(n, "public_method") || sp_streq(n, "instance_method"));
 }
+/* A call on a Method (or an UnboundMethod) that only reads it: answers of
+   the method, never running it nor handing it on. Any other call (`call`,
+   a bind, its proc, a copy, `then`, `tap`) may run it. */
+int is_method_reader_name(const char *n) {
+  return n && (sp_streq(n, "name") || sp_streq(n, "arity") || sp_streq(n, "owner") || sp_streq(n, "parameters") ||
+               sp_streq(n, "source_location") || sp_streq(n, "inspect") || sp_streq(n, "to_s") ||
+               sp_streq(n, "==") || sp_streq(n, "hash") || sp_streq(n, "receiver"));
+}
 /* Marshal, whose load makes objects with any ivars set */
 int is_marshal_const(const char *n) { return n && sp_streq(n, "Marshal"); }
 /* ENV, which answers a new String each read */
@@ -2140,6 +2165,8 @@ int is_to_proc_name(const char *n) { return n && sp_streq(n, "to_proc"); }
 int is_proc_conversion_name(const char *n) { return is_to_proc_name(n) || (n && sp_streq(n, "curry")); }
 /* `[]` alone: an element read, not its write */
 int is_aref_name(const char *n) { return n && sp_streq(n, "[]"); }
+/* `fetch`: an element read whose miss takes a fallback */
+int is_fetch_name(const char *n) { return n && sp_streq(n, "fetch"); }
 /* `<<` alone: String#<<'s append, a chain's link */
 int is_shovel_name(const char *n) { return n && sp_streq(n, "<<"); }
 
@@ -2303,6 +2330,10 @@ int is_struct_core_name(const char *n, int kind) {
   if (sp_streq(n, "with")) return kind == 2;
   return builtin_name_in(n, struct_core_names) || (kind == 1 && builtin_name_in(n, struct_names));
 }
+/* The calls that may set an ivar by a name they are handed: the send
+   family, which can call a writer, and instance_variable_set */
+const char *const dyn_ivar_set_names[] = { "send", "__send__", "public_send", "instance_variable_set", NULL };
+int is_dyn_ivar_set_name(const char *n) { return n && builtin_name_in(n, dyn_ivar_set_names); }
 /* A question whether a receiver has a method: of one by name (1), or a
    list of its methods: one that answers the whole program (2), or one a
    receiver's own chain decides (3) */
@@ -2932,6 +2963,7 @@ int is_class_name_name(const char *n) { return n && sp_streq(n, "name"); }
 int is_alias_method_name(const char *n) { return n && sp_streq(n, "alias_method"); }
 
 const char DEFINE_METHOD_NAME[] = "define_method";
+const char RT_BODY_METHOD_NAME[] = "__spinel_rt_body";
 int is_define_method_name(const char *n) {
   return n && sp_streq(n, DEFINE_METHOD_NAME);
 }

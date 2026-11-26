@@ -65,11 +65,17 @@ typedef struct sp_thread {
                                       its place in the arrival order */
   unsigned char     preempt_request; /* sysmon set this thread over its timeslice; it yields at its
                                         next safepoint poll (cooperative preemption, §5) */
-  short             home_wid;      /* worker this thread FIRST ran on, -1 before its first run.
+  unsigned char     in_trap;     /* the depth of trap procs this thread runs (sp_trap_call):
+                                    Mutex#lock raises ThreadError inside one, as CRuby's does */
+  short             home_wid;      /* worker this thread is pinned to: the one it first ran on,
+                                      or the one sched_place_unstarted queued it on (`placed`);
+                                      -1 while it may run anywhere.
                                       A started green thread is pinned there: its live C frames
                                       hold compiler-cached addresses of that worker's __thread
                                       data (GC shadow stack, exception stack, ...), so resuming
                                       it on another worker corrupts both workers' TLS. */
+  unsigned char     placed;        /* queued on home_wid by placement and not yet run: a worker
+                                      going into a blocking call gives it back (sched_unplace_locked) */
   double            readied_at;  /* SPINEL_SCHED_STATS=2: when it was last put on a run queue */
   struct sp_thread *rq_next;     /* run-queue link while RUNNABLE */
   struct sp_thread *joiners;     /* threads parked in #join/#value on this one */
@@ -299,6 +305,8 @@ sp_RbVal   sp_Queue_pop_timeout(sp_queue *q, double seconds); /* nil on timeout 
 sp_int    sp_Queue_size(sp_queue *q);              /* #size / #length */
 sp_bool   sp_Queue_empty(sp_queue *q);             /* #empty? */
 sp_int    sp_Queue_max(sp_queue *q);               /* SizedQueue#max */
+sp_int    sp_Queue_set_max(sp_queue *q, sp_int max);   /* SizedQueue#max= */
+void      sp_Queue_max_writable(sp_queue *q);   /* raises for a plain Queue */
 void       sp_Queue_close(sp_queue *q);             /* #close */
 sp_bool   sp_Queue_closed(sp_queue *q);            /* #closed? */
 sp_int    sp_Queue_num_waiting(sp_queue *q);       /* #num_waiting */
@@ -330,6 +338,8 @@ sp_mutex  *sp_Monitor_new(void);              /* a Mutex with reentrancy on */
 const char *sp_Mutex_class_name(sp_mutex *m); /* "Monitor" or "Thread::Mutex" */
 const char *sp_Queue_class_name(sp_queue *q);  /* "Thread::SizedQueue" or "Thread::Queue" */
 void       sp_Mutex_lock(sp_mutex *m);
+void       sp_sched_trap_enter(void);   /* sp_trap_call runs a trap proc */
+void       sp_sched_trap_leave(void);
 void       sp_Mutex_unlock(sp_mutex *m);
 sp_RbVal   sp_Mutex_sleep(sp_mutex *m, int has_timeout, double timeout);  /* #sleep / #sleep(t) */
 sp_bool   sp_Mutex_try_lock(sp_mutex *m);   /* #try_lock: true if acquired */

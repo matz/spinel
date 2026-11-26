@@ -1,0 +1,7 @@
+:first_symbol
+[nil, :head]
+["nil", ":head"]
+[nil, :x]
+[nil, Integer]
+[nil, "s"]
+[nil, 3]

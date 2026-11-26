@@ -1,0 +1,5 @@
+[:nomethod, "struct-hi", :nomethod]
+[:nomethod, "err-hi"]
+[:nomethod, "list-hi"]
+:no
+"struct-hi"

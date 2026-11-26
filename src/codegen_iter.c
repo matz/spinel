@@ -95,6 +95,7 @@ static int pure_forwarding_target(Compiler *c, int mi, int depth) {
    the cap means unbounded self-recursion -- report it instead of looping (#2908). */
 #define SP_INLINE_DEPTH_MAX 64
 static int g_inline_depth = 0;
+static int g_inline_mi[SP_INLINE_DEPTH_MAX], g_inline_id[SP_INLINE_DEPTH_MAX], g_inline_blk[SP_INLINE_DEPTH_MAX];   /* each depth's method, call and block in scope */
 int inline_splice_depth(void) { return g_inline_depth; }
 void inline_splice_depth_reset(int d) { g_inline_depth = d; }
 
@@ -245,7 +246,7 @@ BlockRetHome block_ret_home_enter(int block, int saved_block) {
      block's return is the real function's, as before */
   if (g_method_pr_label && strncmp(g_method_pr_label, "_yret", 5) == 0) {
     h.label = g_method_pr_label; h.var = g_method_pr_var; h.rt = g_ret_type; h.ro = g_ret_oint;
-    h.exc = g_method_pr_exc_depth; h.ens = g_method_pr_ensure_depth; h.set = 1;
+    h.exc = g_method_pr_exc_depth; h.ens = g_method_pr_ensure_depth; h.rsc = g_method_pr_rescue_depth; h.set = 1;
   }
   g_blk_ret_home[block] = h;
   old.set |= 2;   /* a slot to give back */
@@ -876,8 +877,20 @@ int emit_inline_call_x(Compiler *c, int id, Buf *b, int indent, int as_expr) {
   }
 
   int tag = ++g_tmp;
-  if (g_inline_depth >= SP_INLINE_DEPTH_MAX)
+  /* (the same call splicing the same method under the same block inside
+     its own copy splices the same copy again at each depth: two such calls
+     in a body made 2^depth copies before the depth bound. A yield to
+     another block nests. A call that forwards `&block` keeps the bound:
+     its proc-form call would name the splice's block parameter.) */
+  int reenters = g_inline_depth >= SP_INLINE_DEPTH_MAX;
+  int fwd_blk = nt_ref(nt, id, "block") >= 0 && nt_kind(nt, nt_ref(nt, id, "block")) == NK_BlockArgumentNode;
+  for (int k = 0; k < g_inline_depth && !reenters && !fwd_blk; k++)
+    reenters = g_inline_mi[k] == mi && g_inline_id[k] == id && g_inline_blk[k] == g_block_id;
+  /* (a re-entry that has a proc form calls it, as an uninlined call does) */
+  if (reenters && g_inline_depth < SP_INLINE_DEPTH_MAX && scope_proc_form_of(c, mi) >= 0) { free(yprocbuf.p); return 0; }
+  if (reenters)
     unsupported_feature(c, id, "a method that uses its block (yield or block.call) and calls itself recursively (inlining cannot terminate; no standalone function to fall back to)");
+  g_inline_mi[g_inline_depth] = mi; g_inline_id[g_inline_depth] = id; g_inline_blk[g_inline_depth] = g_block_id;
   /* --plan-check: the call is spliced from mi (observed at the call's own
      depth, before the body's) */
   if (g_plan_check) ucall_observe(c, id, mi, recv_class >= 0 ? recv_class : cm_class, 0);
@@ -1151,7 +1164,7 @@ int emit_inline_call_x(Compiler *c, int id, Buf *b, int indent, int as_expr) {
   char inl_lbl[32];
   const char *sv_prl = g_method_pr_label, *sv_prv = g_method_pr_var;
   TyKind sv_prt = g_ret_type;
-  int sv_prexc = g_method_pr_exc_depth;
+  int sv_prexc = g_method_pr_exc_depth, sv_prrsc = g_method_pr_rescue_depth;
   int sv_prens = g_method_pr_ensure_depth;
   if (as_expr) {
     /* Use a result var so the tail uses assignment, not `return`, in the
@@ -1182,7 +1195,7 @@ int emit_inline_call_x(Compiler *c, int id, Buf *b, int indent, int as_expr) {
     if (m_has_ret) {
       snprintf(inl_lbl, sizeof inl_lbl, "_yret%d", tag);
       g_method_pr_label = inl_lbl; g_method_pr_var = rvbuf; g_ret_type = rt;
-      g_method_pr_exc_depth = g_exc_frame_depth;
+      g_method_pr_exc_depth = g_exc_frame_depth; g_method_pr_rescue_depth = g_rescue_save_depth;
       g_method_pr_ensure_depth = g_ensure_depth;
       /* body in its own scope: the funnel goto then EXITS the scopes of any
          cleanup-attributed GC roots the body declares (legal, cleanups run)
@@ -1192,7 +1205,7 @@ int emit_inline_call_x(Compiler *c, int id, Buf *b, int indent, int as_expr) {
     emit_stmts_tail(c, m->body, b, m_has_ret ? din + 1 : din);
     if (m_has_ret) {
       g_method_pr_label = sv_prl; g_method_pr_var = sv_prv; g_ret_type = sv_prt;
-      g_method_pr_exc_depth = sv_prexc;
+      g_method_pr_exc_depth = sv_prexc; g_method_pr_rescue_depth = sv_prrsc;
       g_method_pr_ensure_depth = sv_prens;
       emit_indent(b, din); buf_puts(b, "}\n");
       emit_indent(b, din); buf_printf(b, "_yret%d: ;\n", tag);
@@ -1210,14 +1223,14 @@ int emit_inline_call_x(Compiler *c, int id, Buf *b, int indent, int as_expr) {
     if (m_has_ret) {
       snprintf(inl_lbl, sizeof inl_lbl, "_yret%d", tag);
       g_method_pr_label = inl_lbl; g_method_pr_var = NULL;
-      g_method_pr_exc_depth = g_exc_frame_depth;
+      g_method_pr_exc_depth = g_exc_frame_depth; g_method_pr_rescue_depth = g_rescue_save_depth;
       g_method_pr_ensure_depth = g_ensure_depth;
       emit_indent(b, din); buf_puts(b, "{\n");   /* see expr-path comment */
     }
     emit_stmts(c, m->body, b, m_has_ret ? din + 1 : din);
     if (m_has_ret) {
       g_method_pr_label = sv_prl; g_method_pr_var = sv_prv;
-      g_method_pr_exc_depth = sv_prexc;
+      g_method_pr_exc_depth = sv_prexc; g_method_pr_rescue_depth = sv_prrsc;
       g_method_pr_ensure_depth = sv_prens;
       emit_indent(b, din); buf_puts(b, "}\n");
       emit_indent(b, din); buf_printf(b, "_yret%d: ;\n", tag);
@@ -1523,8 +1536,10 @@ static void emit_block_arg_coerced(Compiler *c, int node, TyKind ot, Buf *b) {
   if (ot == TY_POLY && ((ar.kind != RK_BOXED && at != TY_UNKNOWN) || empty_lit)) emit_boxed(c, node, b);
   /* a literal nil into an Integer or a Float parameter (one
      block_settle_types kept nullable, bs_join_val) is the slot's own nil,
-     not the 0 it emits as */
+     not the 0 it emits as; so is one into a Symbol or a Class parameter,
+     whose nil is (sp_sym)-1 (0 is the first Symbol literal) or SP_CLASS_NIL */
   else if (nk == NK_NilNode && oint_kind(ot)) buf_puts(b, oint_nil(ot));
+  else if (nk == NK_NilNode && (ot == TY_SYMBOL || ot == TY_CLASS)) buf_puts(b, default_value(ot));
   /* an untyped value (a call no class answers, which raises NoMethodError
      before it binds anything) into a typed parameter: the raise, and the
      slot's own value after it, as any typed store takes it */
@@ -2668,7 +2683,12 @@ static int block_tail_lacks_value(Compiler *c, int id, int poly) {
   int recv = nt_ref(c->nt, id, "receiver");
   if (recv < 0 && nm && is_raise_alias(nm)) return 0;
   if (call_never_returns(c, id)) return 1;
-  if (!poly || !nm || (recv >= 0 && nt_kind(c->nt, recv) != NK_SelfNode)) return 0;
+  if (!poly || !nm) return 0;
+  /* a call bound to a void method through a constant or an object receiver
+     (`g { C.unknown(x) }`, C.unknown only raising): its value form is the
+     String's nil, `(const char *)0`, which the boxed slot does not take */
+  if (call_answers_no_value(c, id)) return 1;
+  if (recv >= 0 && nt_kind(c->nt, recv) != NK_SelfNode) return 0;
   int mi = comp_self_call_mi(c, id, nm);
   return mi >= 0 && method_is_void(&c->scopes[mi]);
 }
@@ -2801,19 +2821,20 @@ void emit_block_invoke(Compiler *c, int site, Buf *b, int indent, int as_expr,
   const char *sv_bl = g_method_pr_label, *sv_bv = g_method_pr_var;
   TyKind sv_bt = g_ret_type;
   int sv_bro = g_ret_oint;
-  int sv_bexc = g_method_pr_exc_depth;
+  int sv_bexc = g_method_pr_exc_depth, sv_brsc = g_method_pr_rescue_depth;
   int sv_bens = g_method_pr_ensure_depth;
   g_method_pr_label = g_fn_pr_label; g_method_pr_var = g_fn_pr_var;
   /* (and the slot's form: an inline answering its oint set g_ret_oint) */
   g_ret_type = g_fn_ret_type; g_ret_oint = g_fn_ret_oint;
   g_method_pr_exc_depth = 0;   /* the real function's funnel sits at depth 0 */
+  g_method_pr_rescue_depth = 0;
   g_method_pr_ensure_depth = 0;
   /* ... unless the block was written in a method body that is itself
      spliced: its `return` leaves that inline */
   { const BlockRetHome *h = block_ret_home(blk);
     if (h) {
       g_method_pr_label = h->label; g_method_pr_var = h->var; g_ret_type = h->rt; g_ret_oint = h->ro;
-      g_method_pr_exc_depth = h->exc; g_method_pr_ensure_depth = h->ens;
+      g_method_pr_exc_depth = h->exc; g_method_pr_ensure_depth = h->ens; g_method_pr_rescue_depth = h->rsc;
     } }
   /* likewise, the block body's `self` is the CALLER's (an ivar read inside
      the block must not resolve against the inlined method's receiver) -- and
@@ -3290,7 +3311,7 @@ void emit_block_invoke(Compiler *c, int site, Buf *b, int indent, int as_expr,
   g_yield_proc_ref = sv_bypr; g_yield_slot_ty = sv_byslot;
   g_yield_proc_ref_fallback = sv_yprf; g_yield_slot_ty_fallback = sv_yslotf;
   g_method_pr_label = sv_bl; g_method_pr_var = sv_bv; g_ret_type = sv_bt; g_ret_oint = sv_bro;
-  g_method_pr_exc_depth = sv_bexc;
+  g_method_pr_exc_depth = sv_bexc; g_method_pr_rescue_depth = sv_brsc;
   g_method_pr_ensure_depth = sv_bens;
   g_brk_ser_var = svser; g_brk_ensure_base = svebase; g_brk_exc_base = svbexc; g_brk_rescue_base = svbres;
   g_block_brk_var = svbbv; g_block_brk_ebase = svbbe;
@@ -7545,9 +7566,16 @@ static int iter_hash_arms(Compiler *c, Buf *b, int indent, int block, const char
     }
     Buf rb; memset(&rb, 0, sizeof rb);
     buf_printf(&rb, "_t%d", th2);
+    /* a new key stored by the block raises in the loop's step, as each's
+       does (the step clause runs on `next` too) */
+    int tn = ++g_tmp;
+    emit_indent(b, indent);
+    buf_printf(b, "sp_int _t%d = %s->len;\n", tn, rb.p);
     emit_indent(b, indent);
     buf_printf(b, "for (sp_int _t%d = 0; _t%d < ", t, t);
-    buf_puts(b, rb.p); buf_printf(b, "->len; _t%d++) {\n", t);
+    buf_puts(b, rb.p);
+    buf_printf(b, "->len; ({ if (%s->len > _t%d) sp_raise_cls(\"RuntimeError\","
+                  " \"can't add a new key into hash during iteration\"); _t%d++; })) {\n", rb.p, tn, t);
     if (p0) {
       /* The param may be poly (shared name across hashes of differing
          element types); box a concrete element into the poly slot. */

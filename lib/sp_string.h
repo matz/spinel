@@ -190,15 +190,18 @@ static inline void sp_String_set_bin_enc(sp_String*s,const char*t){
    CRuby's compatibility rule picks it (sp_str_cat_binary): an ASCII-only
    operand keeps the receiver's, an ASCII-only receiver takes the operand's
    -- `+"hdr" << png.b` is ASCII-8BIT -- and two runs with high bytes in
-   different encodings stay binary. The bytes are scanned only when the two
-   encodings differ. */
+   different encodings cannot be joined: Encoding::CompatibilityError, raised
+   before s changes. The bytes are scanned only when the two encodings
+   differ. */
+void sp_str_enc_incompatible(int recv_bin);
 static inline void sp_String_append_enc(sp_String*s,const char*t,size_t tl){
   int tb=sp_str_is_binary(t);
   if(SP_EXPECT((int)s->binary==tb,1))return;
   for(size_t i=0;i<tl;i++)
     if((unsigned char)t[i]>=0x80){
-      if(sp_str_ascii_only(s->data)&&!tb){s->binary=0;sp_str_as_text(s->data);}
-      else s->binary=1;
+      if(!sp_str_ascii_only(s->data))sp_str_enc_incompatible((int)s->binary);
+      if(tb)s->binary=1;
+      else{s->binary=0;sp_str_as_text(s->data);}
       return;
     }
 }
@@ -217,10 +220,26 @@ static inline void sp_String_append_bin(sp_String*s,const char*t){
    one's evaluation changed is read as it is now). The arguments are the
    handles of the Strings, read here and not before; the receiver's own bytes
    are kept aside once, only when the receiver is among them. The appends
-   cannot collect, so the handles need no root here. */
+   cannot collect, so the handles need no root here. The encodings are
+   checked over every argument first, as CRuby does: one that cannot join
+   raises Encoding::CompatibilityError with the receiver unchanged (and
+   before the receiver's bytes are kept aside). Only an argument with high
+   bytes in the other encoding reads the receiver's bytes, so building an
+   ASCII or same-encoding String with concat stays linear. */
 static inline void sp_String_concat_multi(sp_String *s, int n, sp_String *const *a) {
   if (SP_UNLIKELY(!s)) sp_nil_recv("concat");
   if (sp_String_is_immutable(s)) { sp_raise_frozen_str(s->data); return; }
+  {
+    int bin = (int)s->binary, high = 0;   /* high: an argument before brought high bytes */
+    for (int i = 0; i < n; i++) {
+      if (!a[i]) continue;
+      int tb = sp_str_is_binary(a[i]->data);
+      if (tb == bin) { if (!high && a[i] != s) high = !sp_str_ascii_only(a[i]->data); continue; }
+      if (sp_str_ascii_only(a[i]->data)) continue;
+      if (high || !sp_str_ascii_only(s->data)) sp_str_enc_incompatible(bin);
+      bin = tb; high = 1;
+    }
+  }
   char *kept = NULL;
   int64_t kept_len = s->len;
   for (int i = 0; i < n && !kept; i++)

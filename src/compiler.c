@@ -704,7 +704,7 @@ void comp_free(Compiler *c) {
   free(c->nil_elem_fact);
   free(c->scope_may_raise);
   free(c->node_elide_setjmp);
-  free(c->cls_fact); cls_pool_free(c->cls_pool, c->ncls_pool); free(c->cls_bk_sub); free(c->cls_bk_sub_ok); cplan_send_owners_free(c); cplan_memo_free(c);
+  free(c->cls_fact); cls_pool_free(c->cls_pool, c->ncls_pool); free(c->cls_bk_sub); free(c->cls_bk_sub_ok); cplan_send_owners_free(c); cplan_memo_free(c); attr_call_index_free(c); ivar_walk_memo_free(c);
   free(c->send_param_memo);
   free(c->node_ord); free(c->node_base); free(c->node_pbase);
   for (int k = 0; k < c->node_tag_cap; k++) if (c->node_tag[k] && *c->node_tag[k]) free(c->node_tag[k]);
@@ -2930,7 +2930,8 @@ int comp_arysub_call(Compiler *c, int id, TyKind rt, TyKind *kind) {
   int cid = ty_is_object(rt) ? ty_object_class(rt) : -1;
   if (comp_ary_root(c, cid) < 0 || nt_kind(c->nt, id) != NK_CallNode) return 0;
   const char *n = nt_str(c->nt, id, "name");
-  if (!n) return 0;
+  /* (is_a?, kind_of? and instance_of? ask the instance's own class) */
+  if (!n || is_kind_query(n)) return 0;
   MtabMark mt_was = mtab_push_in(c, id);   /* (what the call's name asks of the subclass's chain is the call's) */
   /* (the identity a dispatch over a splat leaves, nt_set_itself_call, is no builtin method: its value is the instance) */
   int builtin = (cplan_builtin_call(c, id) && !is_itself_name(n)) || comp_arysub_name_is_array(c, id, cid, n);
@@ -5021,6 +5022,13 @@ static void cv_build(Compiler *c) {
   /* constants read as values, and self in a class's own body */
   NT_FOREACH_KIND(nt, NK_ConstantReadNode, n) if (!nonval[n]) cv_mark_name(c, v, key_name(c, n));
   NT_FOREACH_KIND(nt, NK_ConstantPathNode, n) if (!nonval[n]) cv_mark_name(c, v, key_name(c, n));
+  /* a Class.new evaluated more than once whose family keeps the one class
+     the site makes answers that class itself, where no constant names it
+     (cplan_class_new) */
+  NT_FOREACH_KIND(nt, NK_CallNode, n) {
+    int site = -1;
+    if (!nonval[n] && cplan_class_new(c, n, &site) == CNEW_STATIC && site >= 0 && site < nk) v[site] = 1;
+  }
   for (int k = 0; k < nk; k++) {
     int dn = c->classes[k].def_node;
     if (!class_def_opens_frame(nt, dn)) continue;

@@ -1680,6 +1680,7 @@ int g_block_brk_exc_base = 0;   /* ... for yield-block re-entry (mirrors g_block
 int g_brk_rescue_base = 0;      /* rescue bodies open at the valued-break wrapper */
 int g_block_brk_rescue_base = 0;
 int g_method_pr_exc_depth = 0;
+int g_method_pr_rescue_depth = 0;
 /* ... and the ENSURE depth at that target. A `return` inside a yielding
    method's body inlined under a caller's begin..ensure was routed through
    the caller's frame (the frame route fired on any open ensure), which made
@@ -4449,16 +4450,18 @@ void unsupported_feature_collect(Compiler *c, int id, const char *msg) {
    raised and kept per raise site as a persistent string, because the raise
    stages it before anything roots it; it is rebuilt only when the class's
    display changes. In a program that uses Threads the site's cache is per
-   worker, so no two workers read or write it at once. 0 (nothing appended)
-   for any other class. */
-int anon_class_text(Compiler *c, int ci, const char *head, Buf *b) {
+   worker, so no two workers read or write it at once. The object obj (C,
+   NULL for none) names the class made at run time it was built for
+   (emit_obj_class_id). 0 (nothing appended) for any other class. */
+int anon_class_text(Compiler *c, int ci, const char *obj, const char *head, Buf *b) {
   if (!comp_class_anonymous(c, ci)) return 0;
   int t = ++g_tmp;
   /* in a program that uses Threads each worker keeps its own pair (SP_TLS), so
      two workers running this site never share it */
-  buf_printf(b, "({ static %sconst char *_nd%d, *_nm%d; const char *_d%d = sp_class_display((sp_Class){%d}); "
-                "if (_d%d != _nd%d || !_nm%d) { const char *_m%d = sp_anon_text(\"%s\", _d%d); _nm%d = _m%d; _nd%d = _d%d; } _nm%d; })",
-             g_uses_threads ? "SP_TLS " : "", t, t, t, ci, t, t, t, t, head, t, t, t, t, t, t);
+  buf_printf(b, "({ static %sconst char *_nd%d, *_nm%d; const char *_d%d = sp_class_display((sp_Class){", g_uses_threads ? "SP_TLS " : "", t, t, t);
+  emit_obj_class_id(c, ci, obj, b);
+  buf_printf(b, "}); if (_d%d != _nd%d || !_nm%d) { const char *_m%d = sp_anon_text(\"%s\", _d%d); _nm%d = _m%d; _nd%d = _d%d; } _nm%d; })",
+             t, t, t, t, head, t, t, t, t, t, t);
   return 1;
 }
 
@@ -4615,17 +4618,27 @@ void refuse_from_plan(Compiler *c, int id, int from, const char *site) {
    (actionpack's polymorphic route helpers), though it never runs the line.
    Under the flag those passes step aside and the same refusal, with the
    same words, is raised here, where the call is emitted. */
+/* May the class value recv of a `new` hold a Struct or Data class (one the
+   program builds, an anonymous one written at a call, or a subclass of
+   one)? */
+static int class_value_may_be_record(Compiler *c, int recv) {
+  for (int k = 0; k < c->nclasses; k++)
+    if ((c->classes[k].is_struct || c->classes[k].is_data || elab_record_class_of(c, k) >= 0) &&
+        !cls_fact_excludes_class_value(c, recv, k)) return 1;
+  return 0;
+}
+
 void refuse_prepass_at_emit(Compiler *c, int id) {
   /* `...` forwarded to `new` on a class value that could be a Struct or
      Data class while an initialize takes keywords: left to be refused here
      by the `...` desugar, with or without the flag */
-  if (nt_int(c->nt, id, "fwd_new_class_value", 0))
+  if (nt_int(c->nt, id, "fwd_new_class_value", 0) && class_value_may_be_record(c, nt_ref(c->nt, id, "receiver")))
     unsupported_feature(c, id, "`...` forwarded to `new` on a class value, where an initialize "
                                "takes keywords and a Struct or Data class could be constructed");
   /* an attr call whose splat the desugar could not spell out
      (desugar_attr_const_splat): refused where it is emitted, so a deferred
      refusal stands at its own statement */
-  if (nt_int(c->nt, id, "attr_splat", 0)) diagnose_unsupported_call(c, id);
+  if (nt_int(c->nt, id, "attr_splat", 0) || nt_int(c->nt, id, "attr_name", 0)) diagnose_unsupported_call(c, id);
   if (!defer_refusals_at(c, id)) return;
   refuse_from_plan(c, id, CRF_SEND, "refuse-send");
   refuse_from_plan(c, id, CRF_CONST_GET, "refuse-const-get");

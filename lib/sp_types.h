@@ -200,10 +200,13 @@ typedef struct{sp_int cls_id;const char *name;}sp_Class;
 /* The singleton class of class id `id` (`Foo.singleton_class`, self in a
    `class << Foo` body): the id moved past every real one, a user class's up
    by SP_SCLASS_OFF and a builtin's down by it, so it stays clear of
-   SP_CLASS_NIL_ID and SP_CLASS_BY_NAME and fits a 32-bit sp_int. */
+   SP_CLASS_NIL_ID and SP_CLASS_BY_NAME and fits a 32-bit sp_int. A class
+   made at run time (sp_rtclass.h, ids 2..3 * SP_SCLASS_OFF) has its
+   singleton class up by the same offset, past every record. */
 #define SP_SCLASS_OFF ((sp_int)1 << 20)
 #define sp_sclass_id(id) ((id) >= 0 ? (id) + SP_SCLASS_OFF : (id) - SP_SCLASS_OFF)
 #define sp_sclass_id_p(id) (((id) >= SP_SCLASS_OFF && (id) < 2 * SP_SCLASS_OFF) || \
+                            ((id) >= 3 * SP_SCLASS_OFF && (id) < 4 * SP_SCLASS_OFF) || \
                             ((id) <= -SP_SCLASS_OFF && (id) > -2 * SP_SCLASS_OFF))
 #define sp_sclass_base_id(id) ((id) >= 0 ? (id) - SP_SCLASS_OFF : (id) + SP_SCLASS_OFF)
 #define sp_class_sclass_p(c) ((c).name == NULL && sp_sclass_id_p((c).cls_id))

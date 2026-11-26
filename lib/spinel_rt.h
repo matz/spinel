@@ -2325,18 +2325,18 @@ static sp_bool sp_io_responds(sp_File *f, const char *m, int typed) {
     "mtime", NULL };
   static const char *const statm_b[] = { "<", "<=", ">", ">=", "between?", "clamp",
     NULL };
-  static const char *const iom[] = { "<<", "advise", "binmode", "close", "close_read",
-    "close_write", "closed?", "each", "eof?", "fcntl", "fdatasync", "fileno", "flush",
-    "fsync", "getbyte", "gets", "isatty", "path", "pos", "pos=", "pread", "print",
-    "printf", "putc", "puts", "pwrite", "read", "read_nonblock", "readline",
+  static const char *const iom[] = { "<<", "advise", "autoclose?", "binmode",
+    "binmode?", "close", "close_on_exec?", "close_read", "close_write", "closed?",
+    "each", "each_byte", "each_char", "each_line", "eof", "eof?", "fcntl",
+    "fdatasync", "fileno", "flush", "fsync", "getbyte", "getc", "gets", "isatty",
+    "lineno", "path", "pos", "pos=", "pread", "print", "printf", "putc", "puts",
+    "pwrite", "read", "read_nonblock", "readbyte", "readchar", "readline",
     "readlines", "readpartial", "rewind", "seek", "set_encoding", "stat", "sync",
-    "sync=", "sysseek", "tell", "to_i", "to_path", "tty?", "wait_priority",
-    "wait_readable", "wait_writable", "write", "write_nonblock", NULL };
-  static const char *const iom_t[] = { "autoclose=", "autoclose?",
-    "binmode?", "close_on_exec=", "close_on_exec?",
-    "each_byte", "each_char", "each_codepoint", "each_line", "eof",
-    "getc", "lineno", "lineno=", "pid", "readbyte", "readchar", "reopen", "sysread",
-    "syswrite", "to_io", "ungetbyte", "ungetc", "wait", NULL };
+    "sync=", "sysread", "sysseek", "syswrite", "tell", "to_i", "to_io", "to_path",
+    "tty?", "ungetbyte", "ungetc", "wait_priority", "wait_readable", "wait_writable",
+    "write", "write_nonblock", NULL };
+  static const char *const iom_t[] = { "autoclose=", "close_on_exec=",
+    "each_codepoint", "lineno=", "pid", "reopen", "wait", NULL };
   static const char *const iom_b[] = { "collect_concat", "count", "detect",
     "drop_while", "each_entry", "each_with_index", "filter_map", "find", "first",
     "flat_map", "group_by", "include?", "max_by", "member?", "min_by", "minmax_by",
@@ -2607,6 +2607,22 @@ static sp_bool sp_poly_responds_builtin(sp_RbVal v, const char *m) {
      by its kind */
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_IO && v.v.p)
     return sp_io_responds((sp_File *)v.v.p, m, 0);
+  /* a boxed Thread: the names its boxed dispatch answers */
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_THREAD) {
+    static const char *const threadm[] = { "[]", "[]=", "alive?", "exit", "join", "key?", "kill",
+      "name", "raise", "report_on_exception", "status", "terminate", "value", NULL };
+    return sp_str_in_list(m, threadm);
+  }
+  /* a boxed Mutex or ConditionVariable: the names its boxed dispatch answers */
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_MUTEX && v.v.p && !((sp_mutex *)v.v.p)->reentrant) {
+    static const char *const mutexm[] = { "lock", "locked?", "owned?", "sleep", "synchronize",
+      "try_lock", "unlock", NULL };
+    return sp_str_in_list(m, mutexm);
+  }
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_CONDVAR) {
+    static const char *const condvarm[] = { "broadcast", "signal", "wait", NULL };
+    return sp_str_in_list(m, condvarm);
+  }
   if (v.tag == SP_TAG_OBJ && v.v.p &&
       (v.cls_id == SP_BUILTIN_EXCEPTION ||
        /* A user exception boxes under its own class id, not
@@ -2808,6 +2824,9 @@ static sp_Class sp_poly_class_val(sp_RbVal v) {
   if (sp_bsub_cls_fn && r.cls_id < 0) { int k = sp_bsub_cls_fn(v); if (k >= 0) r.cls_id = k; }
   /* an object with singleton methods answers the class they hide behind */
   if (sp_cls_visible_fn && r.cls_id >= 0) r.cls_id = sp_cls_visible_fn(r.cls_id);
+  /* an instance of a site class answers the class made at run time it was
+     built for (sp_rtclass.h) */
+  if (sp_obj_rtclass_fn && r.cls_id >= 0) { sp_int k = sp_obj_rtclass_fn(v); if (k >= 0) r.cls_id = (int)k; }
   int bid;
   r.name = sp_poly_class_name_id(v, &bid);
   /* a builtin's class carries its id, as the constant naming it does: the
@@ -11667,7 +11686,8 @@ static const char *sp_PolyArray_join(sp_PolyArray *a, const char *sep) {
      heap string instead (#3151). */
   sp_poly_recur_pop(rmark);
   const char *r = sp_str_from_bytes(s->data, (size_t)s->len);
-  if (st == 1 && r && *r) sp_str_mark_binary((char *)r);
+  /* (by the length: a join whose first byte is a NUL, `[0.chr, 200.chr]`, is no empty String) */
+  if (st == 1 && r && s->len > 0) sp_str_mark_binary((char *)r);
   return r;
 }
 /* join on a boxed array (poly value holding any array kind) */
@@ -17367,6 +17387,53 @@ static sp_condvar *sp_poly_as_condvar(sp_RbVal v, const char *name) {
 }
 static SP_UNUSED sp_RbVal sp_poly_condvar_signal(sp_RbVal v) { sp_CondVar_signal(sp_poly_as_condvar(v, "signal")); return v; }
 static SP_UNUSED sp_RbVal sp_poly_condvar_broadcast(sp_RbVal v) { sp_CondVar_broadcast(sp_poly_as_condvar(v, "broadcast")); return v; }
+static double sp_poly_time_interval(sp_RbVal v);   /* defined below */
+/* Mutex#sleep on a boxed receiver, with or without a timeout (nil is
+   none). Another receiver raises CRuby's NoMethodError: Kernel#sleep is
+   private, so an explicit receiver cannot call it. */
+static SP_UNUSED sp_RbVal sp_poly_mutex_sleep(sp_RbVal v, sp_bool has_t, sp_RbVal t) {
+  SP_GC_ROOT_RBVAL(v); SP_GC_ROOT_RBVAL(t);
+  /* a Monitor is a reentrant mutex with no sleep of its own */
+  if (!(v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_MUTEX && v.v.p) || ((sp_mutex *)v.v.p)->reentrant)
+    sp_raise_cls("NoMethodError", sp_stage_recv_msg(sp_sprintf("private method 'sleep' called for %s", sp_nomethod_recv_desc(v)), v));
+  sp_mutex *m = (sp_mutex *)v.v.p;
+  int timed = has_t && t.tag != SP_TAG_NIL;
+  double s = timed ? sp_poly_time_interval(t) : 0.0;
+  if (timed && isinf(s) && s > 0) sp_raise_cls("RangeError", "Inf out of Time range");
+#ifdef SP_THREADS
+  return sp_Mutex_sleep(m, timed, s);
+#else
+  /* the single-threaded runtime has no sp_Mutex_sleep, and no other thread
+     can wake the sleeper: the timeout runs out (nil), or it sleeps for good */
+  if (timed && s != s) sp_raise_cls("RangeError", "NaN out of Time range");
+  if (timed && s < 0.0) sp_raise_cls("ArgumentError", "time interval must not be negative");
+  sp_Mutex_unlock(m);
+  if (timed) sp_sleep(s); else sp_sleep_forever();
+  sp_Mutex_lock(m);
+  return sp_box_nil();
+#endif
+}
+/* ConditionVariable#wait(mutex[, timeout]) on a boxed receiver. CRuby
+   calls the argument's sleep: a Mutex is released and re-acquired around
+   the wait, and another builtin value runs Kernel#sleep for the timeout
+   and answers 0. */
+static SP_UNUSED sp_RbVal sp_poly_condvar_wait(sp_RbVal v, sp_RbVal mv, sp_bool has_t, sp_RbVal t) {
+  SP_GC_ROOT_RBVAL(v); SP_GC_ROOT_RBVAL(mv); SP_GC_ROOT_RBVAL(t);
+  sp_condvar *cv = sp_poly_as_condvar(v, "wait");
+  int timed = has_t && t.tag != SP_TAG_NIL;
+  double s = timed ? sp_poly_time_interval(t) : 0.0;
+  if (timed && s != s) sp_raise_cls("RangeError", "NaN out of Time range");
+  if (timed && isinf(s) && s > 0) sp_raise_cls("RangeError", "Inf out of Time range");
+  if (timed && s < 0.0) sp_raise_cls("ArgumentError", "time interval must not be negative");
+  /* (a Monitor has no sleep of its own either: Kernel#sleep runs) */
+  if (!(mv.tag == SP_TAG_OBJ && mv.cls_id == SP_BUILTIN_MUTEX && mv.v.p) || ((sp_mutex *)mv.v.p)->reentrant) {
+    if (timed) sp_sleep(s); else sp_sleep_forever();
+    return sp_box_int(0);
+  }
+  sp_mutex *m = (sp_mutex *)mv.v.p;
+  /* the timed wait takes zero as the wait that does not park */
+  return timed ? sp_CondVar_wait_timeout(cv, m, s) : sp_CondVar_wait(cv, m);
+}
 /* pop/shift/deq(non_block): an Array's pop(true) is still CRuby's TypeError */
 static sp_RbVal sp_poly_queue_pop_flag(sp_RbVal v, const char *name, sp_bool nb) {
   if (v.tag == SP_TAG_OBJ && sp_poly_is_array_kind(v.cls_id))
@@ -17552,6 +17619,12 @@ static sp_RbVal sp_io_wait_timeout_value(sp_File *f, sp_RbVal value, sp_int kind
   if (!explicit_wait)
     seconds = value.tag == SP_TAG_NIL ? sp_io_timeout_seconds(f) : sp_io_wait_interval(value);
   return sp_box_nullable_obj(sp_io_wait_events(f, seconds, kind), SP_BUILTIN_IO);
+}
+/* A boxed Thread's #report_on_exception; another receiver raises NoMethodError. */
+static sp_bool sp_poly_thread_report(sp_RbVal v) {
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_THREAD && v.v.p) return sp_Thread_get_report((sp_thread *)v.v.p);
+  sp_raise_nomethod(sp_nomethod_msg("report_on_exception", v));
+  return 0;
 }
 static sp_RbVal sp_poly_thread_status(sp_RbVal v) {
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_THREAD) return sp_Thread_status((sp_thread *)v.v.p);
@@ -19807,7 +19880,10 @@ static sp_File *sp_File_open_val(const char *path, sp_RbVal mode, sp_oint perm) 
    File::Stat this backend models (#2775, #2790). */
 void sp_file_stat_scan(void *p);
 sp_File *sp_file_stat_handle(const char *path);
-sp_File *sp_io_stat_handle(sp_File *f);   /* IO#stat: by path, or fstat(2) for a descriptor handle */
+sp_File *sp_io_stat_handle(sp_File *f);   /* IO#stat: fstat(2) of the descriptor, kept in the handle */
+sp_Time *sp_io_birthtime(sp_File *f);     /* File#birthtime / File::Stat#birthtime */
+sp_int sp_File_chmod(sp_File *f, sp_int mode);            /* File#chmod: fchmod(2) */
+sp_int sp_File_chown(sp_File *f, sp_int uid, sp_int gid); /* File#chown: fchown(2) */
 sp_File *sp_file_lstat_handle(const char *path);
 sp_bool sp_stat_nofollow(sp_File *f);
 sp_oint sp_stat_size(sp_File *f);                  /* File::Stat#size: nil when the stat fails */
@@ -22318,10 +22394,22 @@ typedef struct {
   sp_String *whole;
   size_t offset;
   sp_bool chomp;
+  sp_File *io;   /* a boxed IO's lines, read per step; the receiver roots it */
 } sp_StringLineWalk;
 void sp_string_line_begin(sp_StringLineWalk *walk, sp_RbVal receiver, sp_RbVal separator,
                           sp_RbVal keywords, sp_int argc, const char *method);
 sp_String *sp_string_line_step(sp_StringLineWalk *walk);
+sp_Enumerator *sp_io_each_enumerator(sp_File *io, const char *meth);
+sp_Enumerator *sp_io_line_enumerator(sp_File *io, const char *sep, sp_bool chomp);
+/* A boxed IO for the each_byte / each_char block walks, or NULL for
+   another receiver; a stat rides in the same boxed handle and raises
+   NoMethodError. */
+static sp_File *sp_poly_each_io(sp_RbVal v, const char *meth) {
+  if (v.tag != SP_TAG_OBJ || v.cls_id != SP_BUILTIN_IO || !v.v.p) return NULL;
+  sp_File *io = (sp_File *)v.v.p;
+  if (io->mode && (strcmp(io->mode, "stat") == 0 || strcmp(io->mode, "lstat") == 0)) sp_raise_poly_nomethod(meth, v);
+  return io;
+}
 /* A blockless each_char / each_line / each_byte / each_codepoint on a boxed
    receiver: CRuby's Enumerator, as on a typed String. A box of a shared
    String's handle (--share-strings) gives the Enumerator over that handle,
@@ -22329,6 +22417,12 @@ sp_String *sp_string_line_step(sp_StringLineWalk *walk);
 static sp_Enumerator *sp_poly_str_each_enum(sp_RbVal v, const char *meth) {
   SP_GC_ROOT_RBVAL(v);
   if (sp_poly_is_strbuf(v) && v.v.p) return sp_enum_str_each_h((sp_String *)v.v.p, meth);
+  /* a boxed IO's Enumerator reads the stream as it is walked */
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_IO && v.v.p) {
+    sp_File *io = (sp_File *)v.v.p;
+    if (io->mode && (strcmp(io->mode, "stat") == 0 || strcmp(io->mode, "lstat") == 0)) sp_raise_poly_nomethod(meth, v);
+    return sp_io_each_enumerator(io, meth);
+  }
   const char *s = sp_poly_recv_s(v, meth);
   SP_GC_ROOT_STR(s);
   int kind = strcmp(meth, "each_char") == 0 ? SP_ENUM_STR_CHAR : strcmp(meth, "each_line") == 0 ? SP_ENUM_STR_LINE
@@ -23224,9 +23318,11 @@ static SP_UNUSED void sp_sig_default_handler(int no) {
   sp_sig_unblock(no, 0);
   sp_sig_default_raise(no);
 }
+extern void (*sp_sig_default_handler_fn)(int);
 static SP_UNUSED void sp_sig_install_defaults(void) {
   static const int sigs[] = { SIGINT, SIGTERM };
   sp_sig_default_raiser = sp_sig_default_raise;
+  sp_sig_default_handler_fn = sp_sig_default_handler;
   for (int i = 0; i < 2; i++) {
     int no = sigs[i];
     if (sp_trap_proc[no] || sp_trap_state[no]) continue;

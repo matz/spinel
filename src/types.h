@@ -220,6 +220,12 @@ int ty_bivar_keyed(TyKind t);          /* ...whose ivars the runtime's map can h
 int ty_is_numeric(TyKind t);           /* INT or FLOAT */
 int ty_is_string(TyKind t);            /* a String of either face: STRING or STRBUF */
 int ty_never_callable(TyKind t);       /* kind can never answer #call */
+/* The runtime check (sp_slot_*_ck) through which a slot of kind t takes a
+   boxed value: one of its kind or nil is stored, any other raises; NULL
+   for a kind that has none. Read by the emitter's store and by the
+   inference, which keeps such a slot typed where a boxed value is
+   destructured into it. */
+const char *ty_slot_check_fn(TyKind t);
 TyKind ty_promote_numeric(TyKind a, TyKind b); /* fold-accumulator numeric promotion */
 /* Can a seeded fold (sum(seed), inject(seed, :op)) keep the element's C type?
    Ruby's accumulator is the SEED's object and every step is the seed's own

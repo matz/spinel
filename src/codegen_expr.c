@@ -1620,7 +1620,7 @@ static void emit_orw_raise(Compiler *c, const char *head, int cid, TyKind rt,
                            const char *recv, Buf *b) {
   buf_puts(b, "(sp_exc_stage_recv("); emit_boxed_text(c, rt, recv, b);
   buf_puts(b, "), sp_raise_cls(\"NoMethodError\", ");
-  if (anon_class_text(c, cid, head, b)) buf_puts(b, "))");
+  if (anon_class_text(c, cid, ty_is_object(rt) ? recv : NULL, head, b)) buf_puts(b, "))");
   else {
     const char *rn = class_ruby_name(c, cid) ? class_ruby_name(c, cid) : c->classes[cid].name;
     buf_printf(b, "(&(\"\\xff\" \"%s%s\")[1])))", head, rn);
@@ -3858,8 +3858,10 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
         if (boxed) buf_puts(b, "sp_RbVal");
         else if (strbuf) buf_puts(b, "sp_String");
         else emit_ctype(c, ct, b);
-        buf_printf(b, " %s%s_t%d = %s; switch (_t%d.cls_id) {", strbuf ? "*" : "", slot ? "*" : "", tr,
-                   boxed ? default_value_from_compiler(c, TY_POLY) : slot || strbuf ? "NULL" : default_value_from_compiler(c, ct), tk);
+        char tkn[24]; snprintf(tkn, sizeof tkn, "_t%d", tk);
+        buf_printf(b, " %s%s_t%d = %s; switch (", strbuf ? "*" : "", slot ? "*" : "", tr,
+                   boxed ? default_value_from_compiler(c, TY_POLY) : slot || strbuf ? "NULL" : default_value_from_compiler(c, ct));
+        emit_class_value_key(c, par_idc, tkn, b); buf_puts(b, ") {");
         for (int i = 0; i < nc; i++) {
           /* the arm's value: the slot, its address, or its box */
           Buf rhs; memset(&rhs, 0, sizeof rhs);
@@ -4237,7 +4239,9 @@ static int defined_value_path(Compiler *c, int v, Buf *b) {
   /* (a poly slot carries the class boxed, as the read unwraps it) */
   if (pr.kind == RK_BOXED) { buf_puts(b, "sp_unbox_class("); emit_boxed(c, par, b); buf_puts(b, ")"); }
   else emit_expr(c, par, b);
-  buf_printf(b, "; const char *_t%d_r = NULL; switch (_t%d.cls_id) {", tk, tk);
+  char tkn[24]; snprintf(tkn, sizeof tkn, "_t%d", tk);
+  buf_printf(b, "; const char *_t%d_r = NULL; switch (", tk);
+  emit_class_value_key(c, par, tkn, b); buf_puts(b, ") {");
   for (int k = 0; k < c->nclasses; k++) {
     if (k == obj_k) continue;
     int ci2 = const_path_value_const(c, k, nm, cands, ncands);

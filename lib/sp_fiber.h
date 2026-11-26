@@ -176,6 +176,7 @@ void sp_stack_guard_init(void);
    wins over it. */
 void sp_main_stack_hint(size_t bytes);
 void sp_main_stack_run(void (*body)(void));
+void sp_sigpipe_default(void);   /* SIGPIPE does nothing: a write raises Errno::EPIPE */
 
 /* The running thread's own stack, for the fault handler's overflow test: a
    fault just below `lo` is this stack growing past its end. Recorded per
@@ -183,6 +184,14 @@ void sp_main_stack_run(void (*body)(void));
 extern SP_TLS char *sp_thread_stack_lo;
 /* the PROT_NONE bytes below a fiber's usable stack, at f->stack */
 size_t sp_fiber_guard(void);
+/* The stack left above the running stack's guard is under SP_STACK_MARGIN
+   (sp_stack_headroom_low): the allocator's slow paths raise SystemStackError
+   there, ahead of malloc's lock and of a collection, where an overflow could
+   not be raised out of (sp_slab.c). */
+#ifndef SP_STACK_MARGIN
+#define SP_STACK_MARGIN (64 * 1024)
+#endif
+int sp_stack_headroom_low(void);
 extern SP_TLS char *sp_thread_stack_hi;
 
 #endif

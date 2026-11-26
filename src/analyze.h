@@ -135,6 +135,9 @@ int an_begin_elides_setjmp(const Compiler *c, int id);
 int an_rescue_mod_elides_setjmp(const Compiler *c, int id);
 int an_rescue_elided(const Compiler *c, int id);
 int an_subtree_has_local_jump(const NodeTable *nt, int id);
+/* Does the subtree under `node` read or write an ivar (past depth 200: it
+   may)? depth is the caller's, 0 at the top. */
+int an_subtree_has_ivar(const NodeTable *nt, int node, int depth);
 /* Which constants a read can reach before their assignment: sets
    LocalVar.const_early on each one whose assignment is not settled
    (analyze_const.c). Runs once the constants are registered, ahead of the
@@ -1120,10 +1123,14 @@ void const_pairs_free(Compiler *c);   /* the pairs program_writes_const_in kept 
 /* what a class builder's call (Class.new, Module.new) makes, as the
    builders' lowering noted it ahead of the walk (elab_builder_note); a copy
    answers as the node it copies: EB_NONE for none noted; EB_DYNAMIC_SUPER,
-   a class of a superclass only the run time holds */
-enum { EB_NONE, EB_DYNAMIC_SUPER };
+   a class of a superclass only the run time holds; EB_RT_SITE (written
+   with a block) and EB_RT_BARE (without), a call evaluated more than once,
+   each evaluation a class of its own whose code is the site class: the
+   class node elab_builder_site answers (-1 for any other) */
+enum { EB_NONE, EB_DYNAMIC_SUPER, EB_RT_SITE, EB_RT_BARE };
 int elab_builder_kind(const Compiler *c, int node);
-void elab_builder_note(Compiler *c, int node, int kind);
+int elab_builder_site(const Compiler *c, int node);
+void elab_builder_note(Compiler *c, int node, int kind, int site_def);
 /* nt_swap_nodes, and the record's entries of the two nodes trade places
    with their contents */
 void elab_swap_nodes(Compiler *c, int a, int b);
@@ -1676,6 +1683,7 @@ enum { DPN_OWN, DPN_WRITTEN, DPN_NAMELESS, DPN_NONE };
 int desugared_param_name(const NodeTable *nt, int p, const char **written);
 int ie_kwhash_value(Compiler *c, int kwhash, const char *name);
 TyKind ie_kwhash_computed_type(Compiler *c, int kwhash);
+int ie_kwhash_computed_value(const NodeTable *nt, int el);
 
 /* instance_exec trampoline body-arg resolution (mixed local/ivar/literal args):
    effective arg count, and the node to bind/emit for the p-th block param

@@ -1,0 +1,19 @@
+3
+3
+1
+:pushed
+2
+2
+ArgumentError: queue size must be positive
+ArgumentError: queue size must be positive
+3
+NoMethodError: undefined method 'max=' for an instance of Thread::Queue
+NoMethodError: undefined method 'max=' for an instance of Thread::Queue
+TypeError: no implicit conversion of String into Integer
+TypeError: no implicit conversion from nil to integer
+TypeError: no implicit conversion of Symbol into Integer
+2
+2
+2
+[0, 1, 2, 3]
+0

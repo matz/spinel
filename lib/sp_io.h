@@ -105,6 +105,12 @@ typedef struct {
                                   of them reads a freed FILE or a descriptor
                                   number already reused (sp_io_use, sp_io.c) */
   struct sp_io_timeout *timeout;
+  unsigned char stat_snap;     /* a File::Stat that IO#stat made: the struct
+                                  stat fstat(2) of the descriptor gave follows
+                                  the handle in its own allocation, so it
+                                  describes the open file after the path
+                                  names another and after the stream closes
+                                  (sp_io_stat_handle, sp_cold.c) */
 } sp_File;
 
 sp_RbVal sp_File_timeout(sp_File *f);
@@ -155,6 +161,9 @@ void sp_File_put_byte(sp_File *f, int c);
 /* Access-mode checks retain closed-stream error precedence. */
 void sp_io_check_readable(sp_File *f);
 void sp_io_check_writable(sp_File *f);
+int sp_io_fd_use(sp_File *f);         /* the descriptor, with a use of the handle held */
+void sp_io_fd_unuse(sp_File *f);      /* drop it; errno is kept */
+void sp_io_flush_for_size(sp_File *f); /* File#size's flush, raising as a write does */
 void sp_io_stdout_check_frozen(void);
 void sp_io_wait_readable(sp_File *f);
 void sp_io_wait_fd_readable(int fd);

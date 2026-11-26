@@ -1,0 +1,6 @@
+each_value: can't add a new key into hash during iteration
+each_key: can't add a new key into hash during iteration
+each_pair: can't add a new key into hash during iteration
+{1 => 21, 2 => 20}
+[2]
+[1, 3]

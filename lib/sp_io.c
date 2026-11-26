@@ -1120,6 +1120,35 @@ void sp_io_check_writable(sp_File *f) {
   if (!sp_io_mode_allows(f, 1))
     sp_raise_cls("IOError", (&("\xff" "not opened for writing")[1]));
 }
+/* The descriptor, for a call made on it outside this file (File#stat,
+   #chmod, #chown, #size): a use of the handle is taken, so a close on
+   another thread cannot release the descriptor -- and the next open be
+   given its number -- before the call is made. sp_io_fd_unuse drops the
+   use and keeps the call's errno. */
+int sp_io_fd_use(sp_File *f) {
+  SP_IO_OPEN(f);
+  return fileno(sp_io_use(f));
+}
+void sp_io_fd_unuse(sp_File *f) {
+  int e = errno;
+  sp_io_unuse(f);
+  errno = e;
+}
+/* File#size: the buffered output written first, as CRuby flushes before it
+   asks; output that cannot be written raises as a write does. Only a
+   writable stream is checked: BSD stdio's fflush on a read-only stream
+   fails with EBADF, whatever the descriptor's own mode. */
+void sp_io_flush_for_size(sp_File *f) {
+  SP_IO_OPEN(f);
+  FILE *fp = sp_io_use(f);
+  int bad = fflush(fp) != 0 && sp_io_mode_allows(f, 1);
+  int e = bad ? (errno ? errno : EIO) : 0;
+  sp_io_unuse(f);
+  if (bad) {
+    errno = e;
+    sp_file_raise_errno("rb_sys_fail_on_write", f->path ? f->path : "");
+  }
+}
 void sp_io_check_readable(sp_File *f) {
   SP_IO_OPEN(f);
   if (!sp_io_mode_allows(f, 0))

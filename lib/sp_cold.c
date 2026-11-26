@@ -3483,8 +3483,10 @@ static int sp_stat_pathless(sp_File *f) {
 static int sp_stat_read(sp_File *f, struct stat *st) {
   if (f && f->stat_snap) { *st = sp_stat_snap_of(f)->st; return 0; }
   if (f && !sp_stat_handle_p(f)) {
-    SP_IO_OPEN(f);
-    return fstat(fileno(f->fp), st);
+    int fd = sp_io_fd_use(f);
+    int r = fstat(fd, st);
+    sp_io_fd_unuse(f);
+    return r;
   }
   const char *p = (f && f->path) ? f->path : "";
   return sp_stat_nofollow(f) ? lstat(p, st) : stat(p, st);
@@ -3493,12 +3495,14 @@ static int sp_stat_read(sp_File *f, struct stat *st) {
    CRuby's File::Stat is a copy of the struct. Stating the path instead
    described whatever file the path names now, not the open one. */
 sp_File *sp_io_stat_handle(sp_File *f) {SP_GC_ROOT(f);
-  SP_IO_OPEN(f);
   struct stat st;
-  if (fstat(fileno(f->fp), &st) != 0)
-    sp_file_raise_errno("rb_io_stat", (f->path && f->path[0] != '<') ? f->path : "");
   sp_Time bt = {0, 0, 0};
-  int has_bt = sp_fd_btime(fileno(f->fp), &st, &bt) > 0;
+  int fd = sp_io_fd_use(f);
+  int r = fstat(fd, &st);
+  int has_bt = r == 0 && sp_fd_btime(fd, &st, &bt) > 0;
+  sp_io_fd_unuse(f);
+  if (r != 0)
+    sp_file_raise_errno("rb_io_stat", (f->path && f->path[0] != '<') ? f->path : "");
   sp_File *h = (sp_File *)sp_gc_alloc(sizeof(sp_File) + sizeof(sp_stat_snap), NULL, sp_file_stat_scan);
   h->fp = NULL;
   h->path = sp_str_empty;
@@ -3523,10 +3527,10 @@ sp_Time sp_io_birthtimev(sp_File *f) {SP_GC_ROOT(f);
   } else if (sp_stat_handle_p(f)) {
     return sp_filev_birthtime(f->path);
   } else {
-    SP_IO_OPEN(f);
     struct stat st;
-    if (fstat(fileno(f->fp), &st) != 0) r = -1;
-    else r = sp_fd_btime(fileno(f->fp), &st, &bt);
+    int fd = sp_io_fd_use(f);
+    r = fstat(fd, &st) != 0 ? -1 : sp_fd_btime(fd, &st, &bt);
+    sp_io_fd_unuse(f);
   }
   if (r < 0) sp_file_raise_errno("rb_file_birthtime", (f && f->path) ? f->path : "");
   if (r == 0) {
@@ -3539,14 +3543,18 @@ sp_Time *sp_io_birthtime(sp_File *f) { return sp_time_ref(sp_io_birthtimev(f)); 
 /* File#chmod and File#chown: fchmod(2) / fchown(2) of the descriptor, as
    CRuby changes the open file and not whatever its path names now. */
 sp_int sp_File_chmod(sp_File *f, sp_int mode) {SP_GC_ROOT(f);
-  SP_IO_OPEN(f);
-  if (fchmod(fileno(f->fp), (mode_t)mode) != 0)
+  int fd = sp_io_fd_use(f);
+  int r = fchmod(fd, (mode_t)mode);
+  sp_io_fd_unuse(f);
+  if (r != 0)
     sp_file_raise_errno("rb_file_chmod", (f->path && f->path[0] != '<') ? f->path : "");
   return 0;
 }
 sp_int sp_File_chown(sp_File *f, sp_int uid, sp_int gid) {SP_GC_ROOT(f);
-  SP_IO_OPEN(f);
-  if (fchown(fileno(f->fp), (uid_t)uid, (gid_t)gid) != 0)
+  int fd = sp_io_fd_use(f);
+  int r = fchown(fd, (uid_t)uid, (gid_t)gid);
+  sp_io_fd_unuse(f);
+  if (r != 0)
     sp_file_raise_errno("rb_file_chown", (f->path && f->path[0] != '<') ? f->path : "");
   return 0;
 }
@@ -3716,9 +3724,8 @@ sp_int sp_File_truncate(sp_File *f, sp_int n) {SP_GC_ROOT(f);
 }
 sp_oint sp_stat_size(sp_File *f) {SP_GC_ROOT(f);
   struct stat st;
-  /* File#size counts the bytes written and still buffered, as CRuby
-     flushes before it asks */
-  if (f && !f->stat_snap && !sp_stat_handle_p(f)) { SP_IO_OPEN(f); fflush(f->fp); }
+  /* File#size counts the bytes written and still buffered */
+  if (f && !f->stat_snap && !sp_stat_handle_p(f)) sp_io_flush_for_size(f);
   int r = sp_stat_read(f, &st);
   return r == 0 ? sp_oint_of((sp_int)st.st_size) : sp_oint_nil();
 }

@@ -30699,10 +30699,6 @@ int desugar_missing_method_calls(Compiler *c) {
        may make miss is split, and every other call keeps its plan, as the
        pass's early return had it before String's misses were planned) */
     if (!mm_any && !cplan_string_may_undef(c, nm)) continue;
-    /* (an assignment's value is what it assigns, not what method_missing answers) */
-    size_t nl = strlen(nm);
-    if (nl > 1 && nm[nl - 1] == '=' && !sp_streq(nm, "==") && !sp_streq(nm, "!=") && !sp_streq(nm, "<=") &&
-        !sp_streq(nm, ">=") && !sp_streq(nm, "===")) continue;
     /* (a defined? operand is not run: it answers for the name as written) */
     if (!parent) parent = an_parent_map(nt);
     { int d = parent ? parent[id] : -1;
@@ -30782,6 +30778,38 @@ int desugar_missing_method_calls(Compiler *c) {
       else str_arm = 0;
     }
     if (nmiss <= 0) continue;
+    /* an assignment (`s.port = v`, `s[:a] = v`) answers the value it assigns, not what method_missing
+       answers: the value is held where it is evaluated and read after the call. A send of a writer's
+       name is a method call and answers method_missing's value. */
+    if (nt_int(nt, id, "attr_write", 0) && parent[id] >= 0) {
+      /* (`s&.port = v` answers nil on a nil receiver, which the held value cannot be: left as it was) */
+      if (nt_int(nt, id, "safe_nav", 0)) continue;
+      Scope *vs = comp_scope_of(c, id);
+      int an = 0; const int *av0 = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+      if (!vs || an < 1 || nt_kind(nt, av0[an - 1]) == NK_SplatNode) continue;
+      int *av = malloc(sizeof(int) * (size_t)an);
+      if (!av) continue;
+      memcpy(av, av0, sizeof(int) * (size_t)an);
+      char vh[32];
+      snprintf(vh, sizeof vh, "__mm_v%d", id);
+      scope_local_intern(vs, vh);
+      int vw = fwd_new_node_like(nt, id, "LocalVariableWriteNode");
+      nt_node_set_str(nt, vw, "name", vh);
+      nt_node_set_int(nt, vw, "depth", 0);
+      int inner = av[an - 1];
+      nt_node_set_ref(nt, vw, "value", inner);
+      av[an - 1] = vw;
+      /* (a writer nested in the value, `a.x = b.y = 7`, is now under the hold) */
+      if (inner >= 0 && inner < n0) parent[inner] = vw;
+      nt_node_set_arr(nt, a, "arguments", av, an);
+      free(av);
+      int st = fwd_new_node_like(nt, id, "StatementsNode"), par = fwd_new_node_like(nt, id, "ParenthesesNode");
+      int body[2] = { id, local_read_like(nt, id, vh) };
+      nt_replace_child(nt, parent[id], id, par);
+      nt_node_set_arr(nt, st, "body", body, 2);
+      nt_node_set_ref(nt, par, "body", st);
+      parent[id] = st;
+    }
     /* (a split reads a variable or self again, and holds other receivers) */
     if (r < 0 || ie_self) reread = 1;
     if (!others) {

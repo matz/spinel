@@ -6894,6 +6894,60 @@ int rejoin_local_writes(Compiler *c) {
    __bam wrapper: the Method's self slot carries param[0], so call arg k binds
    param[k + shift]. The wrapper's params are plain requireds (no splat or
    keyword shapes to handle). */
+/* The `method(...)` captures whose value can be boxed, by node: every one
+   but a capture written straight to a local that stays a Method, in the
+   same scope, whose every read is the receiver of a call or a reflection
+   read (call, (), [], ===, arity, name, owner, ...): never passed,
+   returned, stored or yielded. A boxed `when` operand can call any other
+   (infer_param_types_ex). */
+static int mcb_local_use(const char *nm) {
+  static const char *const ok[] = { "call", "()", "[]", "===", "yield", "arity", "name", "owner",
+                                    "receiver", "parameters", "source_location", "original_name",
+                                    "inspect", "to_s", "hash", "==", "eql?", "super_method", NULL };
+  for (int k = 0; nm && ok[k]; k++) if (sp_streq(nm, ok[k])) return 1;
+  return 0;
+}
+static char *method_caps_boxed(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  char *out = calloc((size_t)(nt->count > 0 ? nt->count : 1), 1);
+  if (!out) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  const int *par = nt_parents(nt);
+  NT_FOREACH_KIND(nt, NK_CallNode, mn) {
+    if (!is_method_obj_call(c, mn)) continue;
+    out[mn] = 1;
+    int w = par ? par[mn] : -1;
+    if (w < 0 || nt_kind(nt, w) != NK_LocalVariableWriteNode || nt_ref(nt, w, "value") != mn) continue;
+    if (infer_type(c, w) != TY_METHOD) continue;
+    /* the write is a statement whose value is discarded: not an operand,
+       and not a body's last statement, which is its value */
+    int st = par[w];
+    if (st < 0 || nt_kind(nt, st) != NK_StatementsNode) continue;
+    { int bn = 0; const int *bs = nt_arr(nt, st, "body", &bn);
+      int sp = par[st];
+      if (bn > 0 && bs[bn - 1] == w && !(sp >= 0 && nt_kind(nt, sp) == NK_ProgramNode)) continue; }
+    const char *ln = nt_str(nt, w, "name");
+    Scope *ws = comp_scope_of(c, w);
+    int local = ln != NULL;
+    NT_FOREACH_KIND(nt, NK_LocalVariableReadNode, rd) {
+      if (!local) break;
+      const char *rn = nt_str(nt, rd, "name");
+      if (!rn || !sp_streq(rn, ln) || comp_scope_of(c, rd) != ws) continue;
+      int pc = par ? par[rd] : -1;
+      if (pc < 0 || nt_kind(nt, pc) != NK_CallNode || nt_ref(nt, pc, "receiver") != rd ||
+          !mcb_local_use(nt_str(nt, pc, "name")))
+        local = 0;
+    }
+    /* (a read in a block is another scope's: the capture is left boxed) */
+    NT_FOREACH_KIND(nt, NK_LocalVariableReadNode, rd) {
+      if (!local) break;
+      const char *rn = nt_str(nt, rd, "name");
+      if (rn && sp_streq(rn, ln) && comp_scope_of(c, rd) != ws && nt_int(nt, rd, "depth", 0) > 0) local = 0;
+    }
+    if (local) out[mn] = 0;
+  }
+  return out;
+}
+
 static int bind_call_args_shifted(Compiler *c, int call_id, int mi, int shift) {
   const NodeTable *nt = c->nt;
   Scope *m = &c->scopes[mi];
@@ -15118,6 +15172,59 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
       else if (omb < 0) changed |= bind_call_params(c, id, plan_top_def_target(c, id));
     }
   }
+  /* `case x when m` with m a Method calls m with x, as `m === x` does */
+  char *boxed_caps = NULL;
+  NT_FOREACH_KIND(nt, NK_CaseNode, cs) {
+    int pred = nt_ref(nt, cs, "predicate");
+    if (pred < 0) continue;
+    int nw = 0; const int *whens = nt_arr(nt, cs, "conditions", &nw);
+    for (int w = 0; w < nw; w++) {
+      int wc = 0; const int *conds = nt_arr(nt, whens[w], "conditions", &wc);
+      for (int k = 0; k < wc; k++) {
+        TyKind ct = infer_type(c, conds[k]);
+        /* a boxed operand can hold any Method the program captures: each
+           captured target takes the subject in its first parameter, as a
+           boxed call's argument reaches the captures */
+        if (ct == TY_POLY && nt_kind(nt, conds[k]) != NK_SplatNode) {
+          TyKind at = infer_type(c, pred);
+          if (at == TY_VOID || at == TY_NIL || at == TY_UNKNOWN) at = TY_POLY;
+          if (!boxed_caps) boxed_caps = method_caps_boxed(c);
+          NT_FOREACH_KIND(nt, NK_CallNode, mn) {
+            /* (only a capture whose value can be boxed: one held in a
+               Method local and only called keeps its typed parameter) */
+            if (!boxed_caps[mn] || !is_method_obj_call(c, mn)) continue;
+            int tmi = method_obj_target_mi(c, mn);
+            if (tmi < 0) continue;
+            Scope *tm = &c->scopes[tmi];
+            int pi = method_call_param_shift(c, mn, tmi);
+            LocalVar *p0 = pi < tm->nparams && pi != tm->rest_idx && tm->pnames[pi] ? scope_local(tm, tm->pnames[pi]) : NULL;
+            /* (a builtin's wrapper takes it boxed: the boxed call reaches a
+               wrapper through its poly ABI, which a pointer slot has not) */
+            if (p0 && !p0->rbs_seeded && p0->type != TY_METHOD && lv_widen(p0, pi ? TY_POLY : at)) changed = 1;
+          }
+          continue;
+        }
+        if (ct != TY_METHOD) continue;
+        int *mns; int nmn = method_recv_nodes(c, conds[k], &mns);
+        for (int j = 0; j < nmn; j++) {
+          int tmi = method_obj_target_mi(c, mns[j]);
+          if (tmi < 0) continue;
+          int shift = method_call_param_shift(c, mns[j], tmi);
+          if (!shift) { changed |= bind_args_params(c, cs, tmi, &pred, 1); continue; }
+          /* a bound builtin's wrapper: the subject is its first operand */
+          Scope *tm = &c->scopes[tmi];
+          LocalVar *p0 = shift < tm->nparams && shift != tm->rest_idx ? scope_local(tm, tm->pnames[shift]) : NULL;
+          if (p0 && !p0->rbs_seeded) {
+            TyKind at = infer_type(c, pred);
+            if (at == TY_VOID || at == TY_NIL) at = TY_POLY;
+            if (lv_widen(p0, at)) changed = 1;
+          }
+        }
+        free(mns);
+      }
+    }
+  }
+  free(boxed_caps);
   mtab_pop(c, mt_pass);
   if (!settle || !ipt_work_next(c, &w, &ids, &nids)) break;
   }

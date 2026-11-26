@@ -1,0 +1,27 @@
+[:small, 2]
+[:big, 4]
+:v_big
+:sup_hit
+:miss
+:nil_hit
+:eq
+:incl
+:sw
+:gt
+:ehit
+:ahit
+:mmiss
+:mhit
+true
+false
+true
+:swhit
+:none
+:inc
+:beq
+:beq
+[:churn2, :hit]
+[:churn2, :hit]
+[:churn2, :hit]
+0
+:chit

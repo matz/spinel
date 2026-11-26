@@ -11646,6 +11646,7 @@ static void process_prepend_body(Compiler *c, int ci, int body) {
           if (sc->body >= 0) {
             int nb = nt_clone_subtree((NodeTable *)nt, sc->body);
             comp_grow_node_arrays(c);
+            if (nb >= 0) g_inc_did_clone = 1;   /* (its locals, interned in register_prepends) */
             sc = &c->scopes[ms_i]; dst = &c->scopes[dst_i];
             if (nb >= 0 && is_builtin_reopen(c->classes[ci].name)) {
               /* as the include path does for a reopened builtin */
@@ -11710,9 +11711,12 @@ void register_prepends(Compiler *c) {
   g_list_has_c = c;
   cell_writes_defer(c);
   ElabBody *bo = elab_all_bodies(c, &nb);
+  g_inc_did_clone = 0;
   for (int b = 0; b < nb; b++) process_prepend_body(c, bo[b].cls, bo[b].body);
   free(bo);
   cell_writes_flush(c);
+  /* the cloned bodies introduced new local nodes, as the include clone's do */
+  if (g_inc_did_clone) register_locals(c);
   mtab_leave(c);
 }
 

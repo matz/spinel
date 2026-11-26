@@ -16,6 +16,7 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <signal.h>
 
 /* OpenBSD requires the stack a coroutine runs on to be MAP_STACK, else the
    first push faults. Linux defines MAP_STACK as a (currently) no-op; keep it
@@ -638,6 +639,28 @@ static size_t sp_main_stack_bytes(void) {
   return sz;
 }
 
+#ifdef SIGPIPE
+static void sp_sigpipe_nothing(int sig) { (void)sig; }
+#endif
+
+/* SIGPIPE does nothing to the program: a write to a pipe or a socket whose
+   reader is gone fails with EPIPE, and the program raises Errno::EPIPE, as
+   CRuby's does (sig_do_nothing in its signal.c). A handler and not SIG_IGN:
+   a child process that exec starts gets the default disposition back, and
+   SIG_IGN would stay with it. The runtime installs it at the start of the
+   program (sp_main_stack_run), and trap("PIPE", "DEFAULT") puts it back.
+   The socket code (sp_net.c) relies on it and sets nothing of its own. */
+void sp_sigpipe_default(void) {
+#ifdef SIGPIPE
+  struct sigaction sa;
+  memset(&sa, 0, sizeof sa);
+  sa.sa_handler = sp_sigpipe_nothing;
+  sigemptyset(&sa.sa_mask);
+  sa.sa_flags = SA_RESTART;
+  sigaction(SIGPIPE, &sa, NULL);
+#endif
+}
+
 static char *sp_main_stack_base = 0;   /* mmap base (guard + stack), or NULL */
 static size_t sp_main_stack_map = 0;
 static void (*sp_main_stack_body)(void) = 0;
@@ -655,6 +678,7 @@ static void sp_main_stack_entry(void) {
    any size, down to the floor -- run it where we are: a program must not fail
    to start because it could not reserve a big stack. */
 void sp_main_stack_run(void (*body)(void)) {
+  sp_sigpipe_default();
   /* STDOUT on a terminal is written through, as CRuby's is (its FMODE_TTY):
      what a write call wrote is on the terminal when the call returns, though
      STDOUT.sync answers false. stdio's line buffering kept a partial line

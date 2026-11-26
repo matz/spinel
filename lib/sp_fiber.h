@@ -176,6 +176,7 @@ void sp_stack_guard_init(void);
    wins over it. */
 void sp_main_stack_hint(size_t bytes);
 void sp_main_stack_run(void (*body)(void));
+void sp_sigpipe_default(void);   /* SIGPIPE does nothing: a write raises Errno::EPIPE */
 
 /* The running thread's own stack, for the fault handler's overflow test: a
    fault just below `lo` is this stack growing past its end. Recorded per

@@ -171,7 +171,6 @@ static int sp_net_backlog(int backlog) {
    resolver as given, as CRuby passes it. Returns the listening fd, or -1.
    (#2922) */
 int sp_net_listen_host(const char *host, int port, int backlog) {
-    signal(SIGPIPE, SIG_IGN);
     struct addrinfo hints, *res = NULL;
     memset(&hints, 0, sizeof(hints));
     hints.ai_family   = AF_UNSPEC;
@@ -209,7 +208,6 @@ int sp_net_listen_host(const char *host, int port, int backlog) {
    with *op the resolver's message. The port goes to the resolver as given,
    as CRuby passes it, so the resolver decides what an out-of-range one is. */
 int sp_net_listen_all(const char *host, int port, int *fds, int cap, const char **op) {
-    signal(SIGPIPE, SIG_IGN);
     struct addrinfo hints, *res = NULL;
     memset(&hints, 0, sizeof(hints));
     hints.ai_family   = AF_UNSPEC;
@@ -338,8 +336,6 @@ int sp_net_listen(int port, int reuseport) {
     }
 #endif
     setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
-    /* Don't die on a write to a peer that closed. */
-    signal(SIGPIPE, SIG_IGN);
 
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
@@ -434,7 +430,6 @@ int sp_net_accept_nb(int sfd) {
 
 /* An unbound UDP socket; #bind attaches it to a local address later. */
 int sp_net_udp_open(int family) {
-    signal(SIGPIPE, SIG_IGN);
     return sp_net_socket_cloexec(family > 0 ? family : AF_INET, SOCK_DGRAM, 0);
 }
 /* The family the fd was opened with. An address resolved for the other family
@@ -531,7 +526,6 @@ static int sp_net_unix_addr(const char *path, struct sockaddr_un *sa) {
 int sp_net_unix_listen(const char *path, int backlog) {SP_GC_ROOT_STR(path);
     struct sockaddr_un sa;
     if (sp_net_unix_addr(path, &sa) != 0) return -1;
-    signal(SIGPIPE, SIG_IGN);
     int fd = sp_net_socket_cloexec(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) return -1;
     if (bind(fd, (struct sockaddr *)&sa, sizeof sa) != 0) { close(fd); return -1; }
@@ -541,7 +535,6 @@ int sp_net_unix_listen(const char *path, int backlog) {SP_GC_ROOT_STR(path);
 int sp_net_unix_connect(const char *path) {SP_GC_ROOT_STR(path);
     struct sockaddr_un sa;
     if (sp_net_unix_addr(path, &sa) != 0) return -1;
-    signal(SIGPIPE, SIG_IGN);
     int fd = sp_net_socket_cloexec(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) return -1;
     if (SP_SIG_BLOCKING(connect(fd, (struct sockaddr *)&sa, sizeof sa)) != 0) { close(fd); return -1; }
@@ -570,7 +563,6 @@ int sp_net_gethostname(char *buf, int cap) {
 }
 /* A connected pair of the given domain/type; fds[0]/fds[1] on success. */
 int sp_net_socketpair(int domain, int type, int protocol, int fds[2]) {
-    signal(SIGPIPE, SIG_IGN);
 #ifdef SOCK_CLOEXEC
     return socketpair(domain > 0 ? domain : AF_UNIX,
                       (type > 0 ? type : SOCK_STREAM) | SOCK_CLOEXEC, protocol, fds);
@@ -583,7 +575,6 @@ int sp_net_socketpair(int domain, int type, int protocol, int fds[2]) {
 #endif
 }
 int sp_net_socket(int domain, int type, int protocol) {
-    signal(SIGPIPE, SIG_IGN);
     return sp_net_socket_cloexec(domain, type, protocol);
 }
 /* getaddrinfo, one resolution at a time: `idx` selects the entry so the caller
@@ -700,9 +691,6 @@ static SP_TLS socklen_t sp_net_connect_failed_len;
 
 int sp_net_connect(const char *host, int port) {
     sp_net_connect_failed_len = 0;
-    /* A client that never listens still needs SIGPIPE ignored: a write
-     * to an upstream that closed would otherwise kill the process. */
-    signal(SIGPIPE, SIG_IGN);
 
     struct addrinfo hints, *res = NULL;
     memset(&hints, 0, sizeof(hints));
@@ -805,7 +793,6 @@ static void sp_net_connect_gave_up(const struct addrinfo *ai) {
 int sp_net_connect_timeout(const char *host, int port, double timeout_s) {
     sp_net_connect_timed_out = 0;
     if (timeout_s < 0) return sp_net_connect(host, port);
-    signal(SIGPIPE, SIG_IGN);
 
     struct addrinfo hints, *res = NULL;
     memset(&hints, 0, sizeof(hints));

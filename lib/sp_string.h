@@ -223,17 +223,21 @@ static inline void sp_String_append_bin(sp_String*s,const char*t){
    cannot collect, so the handles need no root here. The encodings are
    checked over every argument first, as CRuby does: one that cannot join
    raises Encoding::CompatibilityError with the receiver unchanged (and
-   before the receiver's bytes are kept aside). */
+   before the receiver's bytes are kept aside). Only an argument with high
+   bytes in the other encoding reads the receiver's bytes, so building an
+   ASCII or same-encoding String with concat stays linear. */
 static inline void sp_String_concat_multi(sp_String *s, int n, sp_String *const *a) {
   if (SP_UNLIKELY(!s)) sp_nil_recv("concat");
   if (sp_String_is_immutable(s)) { sp_raise_frozen_str(s->data); return; }
   {
-    int bin = (int)s->binary, high = !sp_str_ascii_only(s->data);
+    int bin = (int)s->binary, high = 0;   /* high: an argument before brought high bytes */
     for (int i = 0; i < n; i++) {
-      if (!a[i] || sp_str_ascii_only(a[i]->data)) continue;
+      if (!a[i]) continue;
       int tb = sp_str_is_binary(a[i]->data);
-      if (tb != bin) { if (high) sp_str_enc_incompatible(bin); bin = tb; }
-      high = 1;
+      if (tb == bin) { if (!high && a[i] != s) high = !sp_str_ascii_only(a[i]->data); continue; }
+      if (sp_str_ascii_only(a[i]->data)) continue;
+      if (high || !sp_str_ascii_only(s->data)) sp_str_enc_incompatible(bin);
+      bin = tb; high = 1;
     }
   }
   char *kept = NULL;

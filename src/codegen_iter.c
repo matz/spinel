@@ -95,6 +95,7 @@ static int pure_forwarding_target(Compiler *c, int mi, int depth) {
    the cap means unbounded self-recursion -- report it instead of looping (#2908). */
 #define SP_INLINE_DEPTH_MAX 64
 static int g_inline_depth = 0;
+static int g_inline_mi[SP_INLINE_DEPTH_MAX], g_inline_id[SP_INLINE_DEPTH_MAX], g_inline_blk[SP_INLINE_DEPTH_MAX];   /* each depth's method, call and block in scope */
 int inline_splice_depth(void) { return g_inline_depth; }
 void inline_splice_depth_reset(int d) { g_inline_depth = d; }
 
@@ -876,8 +877,20 @@ int emit_inline_call_x(Compiler *c, int id, Buf *b, int indent, int as_expr) {
   }
 
   int tag = ++g_tmp;
-  if (g_inline_depth >= SP_INLINE_DEPTH_MAX)
+  /* (the same call splicing the same method under the same block inside
+     its own copy splices the same copy again at each depth: two such calls
+     in a body made 2^depth copies before the depth bound. A yield to
+     another block nests. A call that forwards `&block` keeps the bound:
+     its proc-form call would name the splice's block parameter.) */
+  int reenters = g_inline_depth >= SP_INLINE_DEPTH_MAX;
+  int fwd_blk = nt_ref(nt, id, "block") >= 0 && nt_kind(nt, nt_ref(nt, id, "block")) == NK_BlockArgumentNode;
+  for (int k = 0; k < g_inline_depth && !reenters && !fwd_blk; k++)
+    reenters = g_inline_mi[k] == mi && g_inline_id[k] == id && g_inline_blk[k] == g_block_id;
+  /* (a re-entry that has a proc form calls it, as an uninlined call does) */
+  if (reenters && g_inline_depth < SP_INLINE_DEPTH_MAX && scope_proc_form_of(c, mi) >= 0) { free(yprocbuf.p); return 0; }
+  if (reenters)
     unsupported_feature(c, id, "a method that uses its block (yield or block.call) and calls itself recursively (inlining cannot terminate; no standalone function to fall back to)");
+  g_inline_mi[g_inline_depth] = mi; g_inline_id[g_inline_depth] = id; g_inline_blk[g_inline_depth] = g_block_id;
   /* --plan-check: the call is spliced from mi (observed at the call's own
      depth, before the body's) */
   if (g_plan_check) ucall_observe(c, id, mi, recv_class >= 0 ? recv_class : cm_class, 0);

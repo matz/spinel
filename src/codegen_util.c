@@ -4615,11 +4615,21 @@ void refuse_from_plan(Compiler *c, int id, int from, const char *site) {
    (actionpack's polymorphic route helpers), though it never runs the line.
    Under the flag those passes step aside and the same refusal, with the
    same words, is raised here, where the call is emitted. */
+/* May the class value recv of a `new` hold a Struct or Data class (one the
+   program builds, an anonymous one written at a call, or a subclass of
+   one)? */
+static int class_value_may_be_record(Compiler *c, int recv) {
+  for (int k = 0; k < c->nclasses; k++)
+    if ((c->classes[k].is_struct || c->classes[k].is_data || elab_record_class_of(c, k) >= 0) &&
+        !cls_fact_excludes_class_value(c, recv, k)) return 1;
+  return 0;
+}
+
 void refuse_prepass_at_emit(Compiler *c, int id) {
   /* `...` forwarded to `new` on a class value that could be a Struct or
      Data class while an initialize takes keywords: left to be refused here
      by the `...` desugar, with or without the flag */
-  if (nt_int(c->nt, id, "fwd_new_class_value", 0))
+  if (nt_int(c->nt, id, "fwd_new_class_value", 0) && class_value_may_be_record(c, nt_ref(c->nt, id, "receiver")))
     unsupported_feature(c, id, "`...` forwarded to `new` on a class value, where an initialize "
                                "takes keywords and a Struct or Data class could be constructed");
   /* an attr call whose splat the desugar could not spell out

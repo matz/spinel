@@ -390,6 +390,10 @@ spinel: 1 refusal, nothing written
 == test/reject/builtin_singleton_super_new.rb [promote] rc=1
 spinel: test/reject/builtin_singleton_super_new.rb:4: File.new: super to an inherited builtin singleton method is not supported; see docs/limitations.md
 spinel: 1 refusal, nothing written
+== test/reject/class_attribute_writer_redefines_reader.rb [default] rc=1
+spinel: test/reject/class_attribute_writer_redefines_reader.rb:9: Module#define_singleton_method in a method body with a block that reads or writes a local from outside it, where the definer is inside another definer's block is not supported (see docs/limitations.md)
+== test/reject/class_attribute_writer_redefines_reader.rb [promote] rc=1
+spinel: test/reject/class_attribute_writer_redefines_reader.rb:9: Module#define_singleton_method in a method body with a block that reads or writes a local from outside it, where the definer is inside another definer's block is not supported (see docs/limitations.md)
 == test/reject/class_body_block_next.rb [default] rc=1
 spinel: test/reject/class_body_block_next.rb:7: next in a block that is a class body (the block of Class.new, Module.new, Struct.new or Data.define): the definitions after it would be made or not at run time
 == test/reject/class_body_block_next.rb [promote] rc=1
@@ -1546,6 +1550,18 @@ spinel: 1 refusal, nothing written
 spinel: test/reject/native_struct_bare_leaf_collision.rb:10: this class shares its name with a native class declared under a qualified path (constant lookups are leaf-keyed, so the two would merge); rename the class
 == test/reject/native_struct_bare_leaf_collision.rb [promote] rc=1
 spinel: test/reject/native_struct_bare_leaf_collision.rb:10: this class shares its name with a native class declared under a qualified path (constant lookups are leaf-keyed, so the two would merge); rename the class
+== test/reject/nested_define_method_replaces_instance_reader.rb [default] rc=1
+spinel: test/reject/nested_define_method_replaces_instance_reader.rb:5: Module#define_method in a method body is supported only for a method the class does not answer yet, where the load record does not order it against the calls: it is defined from the start, not when that method runs (see docs/limitations.md)
+== test/reject/nested_define_method_replaces_instance_reader.rb [promote] rc=1
+spinel: test/reject/nested_define_method_replaces_instance_reader.rb:5: Module#define_method in a method body is supported only for a method the class does not answer yet, where the load record does not order it against the calls: it is defined from the start, not when that method runs (see docs/limitations.md)
+== test/reject/nested_definer_replaces_class_reader.rb [default] rc=1
+spinel: test/reject/nested_definer_replaces_class_reader.rb:7: Module#define_singleton_method in a method body is supported only for a method the class does not answer yet, where the load record does not order it against the calls: it is defined from the start, not when that method runs (see docs/limitations.md)
+== test/reject/nested_definer_replaces_class_reader.rb [promote] rc=1
+spinel: test/reject/nested_definer_replaces_class_reader.rb:7: Module#define_singleton_method in a method body is supported only for a method the class does not answer yet, where the load record does not order it against the calls: it is defined from the start, not when that method runs (see docs/limitations.md)
+== test/reject/nested_definer_replaces_inherited_reader.rb [default] rc=1
+spinel: test/reject/nested_definer_replaces_inherited_reader.rb:8: Module#define_singleton_method in a method body is supported only for a method the class does not answer yet, where the load record does not order it against the calls: it is defined from the start, not when that method runs (see docs/limitations.md)
+== test/reject/nested_definer_replaces_inherited_reader.rb [promote] rc=1
+spinel: test/reject/nested_definer_replaces_inherited_reader.rb:8: Module#define_singleton_method in a method body is supported only for a method the class does not answer yet, where the load record does not order it against the calls: it is defined from the start, not when that method runs (see docs/limitations.md)
 == test/reject/new_receiver_class_chain_still_reached.rb [default] rc=1
 spinel: test/reject/new_receiver_class_chain_still_reached.rb:5: undefined method '[]=' for a Class: no class in the program defines a class method '[]=' (NoMethodError)
 spinel: 1 refusal, nothing written

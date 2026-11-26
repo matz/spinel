@@ -4522,15 +4522,18 @@ int cmethod_takes_self_cls(Compiler *c, const Scope *s) {
    spelled at the call site, after it, where the method's own `_sp_cls` is
    not declared (cmethod_cls_token). */
 static int g_cls_tok_mi = -1;
-static char g_cls_tok[1024];   /* (an object's class value, emit_obj_class_value, spans several reads) */
+static Buf g_cls_tok;   /* (an object's class value, emit_obj_class_value, spans several reads) */
 
 const char *emit_cmethod_self_cls_arg(Compiler *c, int mi, int recv_cls, const char *recv_val, Buf *b) {
   if (mi < 0 || !cmethod_takes_self_cls(c, &c->scopes[mi])) return "";
   int rc = recv_cls >= 0 || recv_cls <= -100 ? recv_cls : c->scopes[mi].class_id;
   if (rc == c->scopes[mi].class_id && class_reopen_cmethod(c, -1, -1, c->scopes[mi].name) == mi) rc = builtin_class_id("Class");
-  if (recv_val && cplan_rt_family(c, rc)) snprintf(g_cls_tok, sizeof g_cls_tok, "%s", recv_val);
-  else snprintf(g_cls_tok, sizeof g_cls_tok, "((sp_Class){%d, NULL})", rc);
-  buf_puts(b, g_cls_tok);
+  Buf tok; memset(&tok, 0, sizeof tok);
+  if (recv_val && cplan_rt_family(c, rc)) buf_puts(&tok, recv_val);
+  else buf_printf(&tok, "((sp_Class){%d, NULL})", rc);
+  buf_puts(b, tok.p);
+  free(g_cls_tok.p);
+  g_cls_tok = tok;
   g_cls_tok_mi = mi;
   return ", ";
 }
@@ -4539,7 +4542,7 @@ const char *emit_cmethod_self_cls_arg(Compiler *c, int mi, int recv_cls, const c
    parameter, or, in a default of its parameter spelled at its call site,
    the class that call passed. */
 const char *cmethod_cls_token(Compiler *c, Scope *encl) {
-  if (encl && open_default_method() == encl && g_cls_tok_mi == (int)(encl - c->scopes)) return g_cls_tok;
+  if (encl && open_default_method() == encl && g_cls_tok_mi == (int)(encl - c->scopes)) return g_cls_tok.p;
   return "_sp_cls";
 }
 /* ...and, in a yielding method (its body spliced where the call is), the class value its call site holds in g_self */
@@ -14026,7 +14029,8 @@ void emit_class_new(Compiler *c, ClassInfo *ci, Buf *b) {
 void emit_own_class_alloc(Compiler *c, int id, int base, Buf *b) {
   const NodeTable *nt = c->nt;
   Scope *s = comp_scope_of(c, id);
-  char sel[256] = "", cls[512] = "";
+  Buf sel, cls;   /* (the id it picks by, and a class value: as long as their object's text) */
+  memset(&sel, 0, sizeof sel); memset(&cls, 0, sizeof cls);
   if (s && s->is_cmethod) {
     /* a class method is copied for each subclass it runs for, as one with
        a bare `new` is: the copy allocates its class */
@@ -14036,34 +14040,31 @@ void emit_own_class_alloc(Compiler *c, int id, int base, Buf *b) {
     /* (the token `self` reads there: a yielding method inlined at its
        caller reads g_self, a parameter default the call's class) */
     if (cmethod_takes_self_cls(c, s)) {
-      snprintf(cls, sizeof cls, "(%s)", cmethod_self_cls(c, s));
-      class_value_key(c, -1, cls, sel, sizeof sel);
+      buf_printf(&cls, "(%s)", cmethod_self_cls(c, s));
+      emit_class_value_key(c, -1, cls.p, &sel);
     }
   }
   else if (!comp_ty_value_obj(c, ty_object(base))) {
     int recv = nt_ref(nt, id, "receiver");
     Buf sb; memset(&sb, 0, sizeof sb);
     emit_expr(c, nt_ref(nt, recv, "receiver"), &sb);
-    if (sb.p) snprintf(sel, sizeof sel, "(%s)->cls_id", sb.p);
+    if (sb.p) buf_printf(&sel, "(%s)->cls_id", sb.p);
     /* (the class an instance of a site class's family answers) */
-    if (sb.p && cplan_rt_family(c, base)) {
-      Buf ib; memset(&ib, 0, sizeof ib);
-      emit_obj_class_value(c, base, sb.p, &ib);
-      snprintf(cls, sizeof cls, "%s", ib.p);
-      free(ib.p);
-    }
+    if (sb.p && cplan_rt_family(c, base)) emit_obj_class_value(c, base, sb.p, &cls);
     free(sb.p);
   }
-  char rid[528];
-  const char *cv = cls[0] ? ctor_rt_id(cls, rid, sizeof rid) : NULL;
+  size_t rn = cls.p ? strlen(cls.p) + 16 : 0;
+  char *rid = rn ? malloc(rn) : NULL;
+  if (rn && !rid) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  const char *cv = rid ? ctor_rt_id(cls.p, rid, rn) : NULL;
   int nsub = 0;
-  for (int k = 0; sel[0] && k < c->nclasses; k++)
+  for (int k = 0; sel.p && k < c->nclasses; k++)
     if (k != base && is_descendant(c, k, base) && c->classes[k].instantiated &&
         !class_is_exc_subclass(c, k) && !c->classes[k].is_native_class &&
         !comp_ty_value_obj(c, ty_object(k))) nsub++;
-  if (!nsub) { emit_obj_alloc_expr(c, base, cv, b); return; }
+  if (!nsub) { emit_obj_alloc_expr(c, base, cv, b); free(rid); free(cls.p); free(sel.p); return; }
   int t = ++g_tmp;
-  buf_printf(b, "({ int _ac%d = %s; ", t, sel);
+  buf_printf(b, "({ int _ac%d = %s; ", t, sel.p);
   for (int k = 0; k < c->nclasses; k++) {
     if (k == base || !is_descendant(c, k, base) || !c->classes[k].instantiated ||
         class_is_exc_subclass(c, k) || c->classes[k].is_native_class ||
@@ -14074,6 +14075,7 @@ void emit_own_class_alloc(Compiler *c, int id, int base, Buf *b) {
   }
   emit_obj_alloc_expr(c, base, cv, b);
   buf_puts(b, "; })");
+  free(rid); free(cls.p); free(sel.p);
 }
 
 /* A proc, fiber or Hash default block body is written out ahead of the

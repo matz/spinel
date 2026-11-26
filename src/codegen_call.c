@@ -14264,16 +14264,17 @@ static void emit_kwsplat_empty_check(Compiler *c, int id, int kwh, const char *l
   }
 }
 
+/* (a class made at run time switches as its site class, sp_rtclass.h) */
+static const char *class_value_key_form(Compiler *c, int recv) {
+  return cplan_class_value_may_be_rt(c, recv) ? "sp_rtclass_site(%s.cls_id)" : "%s.cls_id";
+}
 /* See codegen_call_arms.h. */
 const char *class_value_key(Compiler *c, int recv, const char *val, char *out, size_t n) {
-  /* (a class made at run time switches as its site class, sp_rtclass.h) */
-  if (cplan_class_value_may_be_rt(c, recv)) snprintf(out, n, "sp_rtclass_site(%s.cls_id)", val);
-  else snprintf(out, n, "%s.cls_id", val);
+  snprintf(out, n, class_value_key_form(c, recv), val);
   return out;
 }
 void emit_class_value_key(Compiler *c, int recv, const char *val, Buf *b) {
-  char k[512];
-  buf_puts(b, class_value_key(c, recv, val, k, sizeof k));
+  buf_printf(b, class_value_key_form(c, recv), val);
 }
 
 /* See codegen_call_arms.h. */

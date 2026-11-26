@@ -46,5 +46,72 @@ bytes << ascii: ASCII-8BIT 15
 empty << text: UTF-8 2
 bytes << text: Encoding::CompatibilityError: incompatible character encodings: BINARY (ASCII-8BIT) and UTF-8
 a + b + bytes: Encoding::CompatibilityError: incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)
+a + a + a: UTF-8 3
+a + a + e: UTF-8 4
+a + a + A: UTF-8 3
+a + a + B: ASCII-8BIT 15
+a + e + a: UTF-8 4
+a + e + e: UTF-8 5
+a + e + A: UTF-8 4
+a + e + B: Encoding::CompatibilityError: incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)
+a + A + a: UTF-8 3
+a + A + e: UTF-8 4
+a + A + A: UTF-8 3
+a + A + B: ASCII-8BIT 15
+a + B + a: ASCII-8BIT 15
+a + B + e: Encoding::CompatibilityError: incompatible character encodings: BINARY (ASCII-8BIT) and UTF-8
+a + B + A: ASCII-8BIT 15
+a + B + B: ASCII-8BIT 27
+e + a + a: UTF-8 4
+e + a + e: UTF-8 5
+e + a + A: UTF-8 4
+e + a + B: Encoding::CompatibilityError: incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)
+e + e + a: UTF-8 5
+e + e + e: UTF-8 6
+e + e + A: UTF-8 5
+e + e + B: Encoding::CompatibilityError: incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)
+e + A + a: UTF-8 4
+e + A + e: UTF-8 5
+e + A + A: UTF-8 4
+e + A + B: Encoding::CompatibilityError: incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)
+e + B + a: Encoding::CompatibilityError: incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)
+e + B + e: Encoding::CompatibilityError: incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)
+e + B + A: Encoding::CompatibilityError: incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)
+e + B + B: Encoding::CompatibilityError: incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)
+A + a + a: ASCII-8BIT 3
+A + a + e: UTF-8 4
+A + a + A: ASCII-8BIT 3
+A + a + B: ASCII-8BIT 15
+A + e + a: UTF-8 4
+A + e + e: UTF-8 5
+A + e + A: UTF-8 4
+A + e + B: Encoding::CompatibilityError: incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)
+A + A + a: ASCII-8BIT 3
+A + A + e: UTF-8 4
+A + A + A: ASCII-8BIT 3
+A + A + B: ASCII-8BIT 15
+A + B + a: ASCII-8BIT 15
+A + B + e: Encoding::CompatibilityError: incompatible character encodings: BINARY (ASCII-8BIT) and UTF-8
+A + B + A: ASCII-8BIT 15
+A + B + B: ASCII-8BIT 27
+B + a + a: ASCII-8BIT 15
+B + a + e: Encoding::CompatibilityError: incompatible character encodings: BINARY (ASCII-8BIT) and UTF-8
+B + a + A: ASCII-8BIT 15
+B + a + B: ASCII-8BIT 27
+B + e + a: Encoding::CompatibilityError: incompatible character encodings: BINARY (ASCII-8BIT) and UTF-8
+B + e + e: Encoding::CompatibilityError: incompatible character encodings: BINARY (ASCII-8BIT) and UTF-8
+B + e + A: Encoding::CompatibilityError: incompatible character encodings: BINARY (ASCII-8BIT) and UTF-8
+B + e + B: Encoding::CompatibilityError: incompatible character encodings: BINARY (ASCII-8BIT) and UTF-8
+B + A + a: ASCII-8BIT 15
+B + A + e: Encoding::CompatibilityError: incompatible character encodings: BINARY (ASCII-8BIT) and UTF-8
+B + A + A: ASCII-8BIT 15
+B + A + B: ASCII-8BIT 27
+B + B + a: ASCII-8BIT 27
+B + B + e: Encoding::CompatibilityError: incompatible character encodings: BINARY (ASCII-8BIT) and UTF-8
+B + B + A: ASCII-8BIT 27
+B + B + B: ASCII-8BIT 39
+lit e + a + bytes: Encoding::CompatibilityError: incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)
+bytes + lit a + e: Encoding::CompatibilityError: incompatible character encodings: BINARY (ASCII-8BIT) and UTF-8
+lit a + bytes + e: Encoding::CompatibilityError: incompatible character encodings: BINARY (ASCII-8BIT) and UTF-8
 text << ascii bytes: UTF-8 8
 text + ascii bytes: UTF-8 8

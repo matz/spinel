@@ -27,15 +27,24 @@ rescue Encoding::CompatibilityError => e
   puts "#{name}: #{e.class}: #{e.message}"
 end
 
+# A partial read may answer fewer bytes than the peer wrote: read with the
+# same call until all n are in (binary onto binary stays binary).
+def read_all(n)
+  buf = yield
+  buf << yield while buf.bytesize < n
+  buf
+end
+
 text = "café 日本\n"
+n = text.bytesize
 reads = {
   "gets" => peer_read(text) { |cl| cl.gets },
   "readline" => peer_read(text) { |cl| cl.readline },
-  "readpartial" => peer_read(text) { |cl| cl.readpartial(64) },
-  "read(n)" => peer_read(text) { |cl| cl.read(text.bytesize) },
+  "readpartial" => peer_read(text) { |cl| read_all(n) { cl.readpartial(64) } },
+  "read(n)" => peer_read(text) { |cl| cl.read(n) },
   "read" => peer_read(text) { |cl| cl.read },
-  "recv" => peer_read(text) { |cl| cl.recv(64) },
-  "sysread" => peer_read(text) { |cl| cl.sysread(64) },
+  "recv" => peer_read(text) { |cl| read_all(n) { cl.recv(64) } },
+  "sysread" => peer_read(text) { |cl| read_all(n) { cl.sysread(64) } },
 }
 
 reads.each do |name, buf|
@@ -60,6 +69,22 @@ try("bytes << ascii") { v = buf.dup; v << "ok" }
 try("empty << text") { v = String.new; v << "é" }
 try("bytes << text") { v = buf.dup; v << "é" }
 try("a + b + bytes") { "a" + "é" + buf }
-ascii = peer_read("hello\n") { |cl| cl.readpartial(64) }
+
+# Three-operand + chains, every order of ASCII text, non-ASCII text,
+# ASCII bytes and non-ASCII bytes: high bytes in both encodings anywhere
+# in the chain raise, whichever operand brings them.
+ops = { "a" => "a", "e" => "é", "A" => "a".b, "B" => buf }
+ops.each do |n1, x|
+  ops.each do |n2, y|
+    ops.each do |n3, z|
+      try("#{n1} + #{n2} + #{n3}") { x + y + z }
+    end
+  end
+end
+try("lit e + a + bytes") { "é" + "a" + buf }
+try("bytes + lit a + e") { buf + "a" + "é" }
+try("lit a + bytes + e") { "a" + buf + "é" }
+
+ascii = peer_read("hello\n") { |cl| read_all(6) { cl.readpartial(64) } }
 try("text << ascii bytes") { v = +"é"; v << ascii }
 try("text + ascii bytes") { "é" + ascii }

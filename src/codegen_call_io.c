@@ -704,11 +704,24 @@ static int boxed_io_library_call(Compiler *c, int id, const char *name) {
   return bop_io_library_row(op) || io_library_count_refused(c, id, op, name);
 }
 
+/* The argumentless readers and predicates the boxed IO arm calls through
+   one runtime function each, as the TY_IO arm does */
+static const char *boxed_io_reader_fn(const char *name) {
+  static const char *const map[][2] = {
+    { "getc", "sp_File_getc" }, { "readchar", "sp_File_readchar" }, { "readbyte", "sp_File_readbyte" },
+    { "lineno", "sp_File_lineno" }, { "eof", "sp_File_eof_p" }, { "autoclose?", "sp_File_autoclose_p" },
+    { "binmode?", "sp_File_binmode_p" }, { "close_on_exec?", "sp_File_close_on_exec_p" } };
+  for (size_t i = 0; i < sizeof map / sizeof map[0]; i++) if (sp_streq(name, map[i][0])) return map[i][1];
+  return NULL;
+}
+
 /* getbyte, binmode, set_encoding and the half closes, at the arities the
    TY_IO arm takes them */
 static int boxed_io_byte_mode(const NodeTable *nt, const char *name, int argc, const int *argv) {
   if (argc == 0 && (sp_streq(name, "getbyte") || sp_streq(name, "binmode") ||
                     sp_streq(name, "close_read") || sp_streq(name, "close_write"))) return 1;
+  if (argc == 0 && boxed_io_reader_fn(name)) return 1;
+  if (argc == 1 && (sp_streq(name, "ungetbyte") || sp_streq(name, "ungetc")) && !nt_argv_has_splat(nt, argv, argc)) return 1;
   return sp_streq(name, "set_encoding") && (argc == 1 || argc == 2) &&
          !nt_argv_has_splat(nt, argv, argc) && nt_argv_kwh(nt, argv, argc) < 0;
 }
@@ -1206,7 +1219,41 @@ int emit_call_poly_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
       else if (sp_streq(name, "closed?")) buf_printf(b, "sp_File_closed_p(_t%d); })", tio2);
       else if (boxed_io_byte_mode(nt, name, argc, argv)) {
         Repr res = repr_of(c, id);
-        if (sp_streq(name, "getbyte")) {
+        const char *rfn = argc == 0 ? boxed_io_reader_fn(name) : NULL;
+        if (rfn && sp_streq(name, "getc")) {
+          int tg = ++g_tmp;
+          buf_printf(b, "const char *_t%d = sp_File_getc(_t%d); ", tg, tio2);
+          if (res.kind == RK_BOXED) buf_printf(b, "_t%d ? sp_box_str_new(_t%d) : sp_box_nil(); })", tg, tg);
+          else buf_printf(b, "_t%d; })", tg);
+        }
+        else if (rfn) {
+          char call[96];
+          snprintf(call, sizeof call, "%s(_t%d)", rfn, tio2);
+          TyKind k = sp_streq(name, "readchar") ? TY_STRING
+                   : sp_streq(name, "readbyte") || sp_streq(name, "lineno") ? TY_INT : TY_BOOL;
+          if (res.kind == RK_BOXED) emit_boxed_text(c, k, call, b); else buf_puts(b, call);
+          buf_puts(b, "; })");
+        }
+        else if (sp_streq(name, "ungetbyte") || sp_streq(name, "ungetc")) {
+          int ta = ++g_tmp;
+          buf_printf(b, "SP_GC_ROOT(_t%d); ", tio2);
+          if (sp_streq(name, "ungetbyte") && repr_of(c, argv[0]).as_ty == TY_INT && repr_of(c, argv[0]).kind != RK_BOXED) {
+            buf_printf(b, "sp_int _t%d = ", ta); emit_int_expr(c, argv[0], b);
+            buf_printf(b, "; sp_File_ungetbyte(_t%d, _t%d); ", tio2, ta);
+          }
+          else if (sp_streq(name, "ungetbyte")) {
+            /* an Integer pushes back one byte, a String its bytes (as ungetc does) */
+            buf_printf(b, "sp_RbVal _t%d = ", ta); emit_boxed(c, argv[0], b);
+            buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); if (_t%d.tag == SP_TAG_INT) sp_File_ungetbyte(_t%d, _t%d.v.i);"
+                          " else sp_File_ungetc(_t%d, _t%d); ", ta, ta, tio2, ta, tio2, ta);
+          }
+          else {
+            buf_printf(b, "sp_RbVal _t%d = ", ta); emit_boxed(c, argv[0], b);
+            buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_File_ungetc(_t%d, _t%d); ", ta, tio2, ta);
+          }
+          buf_puts(b, res.kind == RK_BOXED ? "sp_box_nil(); })" : "((sp_int)0); })");
+        }
+        else if (sp_streq(name, "getbyte")) {
           int tg = ++g_tmp;
           buf_printf(b, "sp_oint _t%d = sp_File_getbyte(_t%d); ", tg, tio2);
           if (res.kind == RK_OPT) buf_printf(b, "_t%d; })", tg);

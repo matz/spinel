@@ -2210,7 +2210,8 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
       nt_ref(nt, id, "block") >= 0 && !an_user_defines_or_reads(c, name) &&
       !an_user_defines_or_reads(c, sp_streq(name, "each_char") ? "chars" : "lines")) {
     infer_boxed_string_param(c, nt_ref(nt, id, "block"));
-    { *out = TY_STRING; return 1; }
+    /* the receiver, which may be a boxed IO where the program makes one */
+    { *out = sp_streq(name, "each_char") && an_program_makes_io(c) ? TY_POLY : TY_STRING; return 1; }
   }
   if (recv >= 0 && rt == TY_POLY && argc == 0 && is_byte_codepoint_each(name) &&
       nt_ref(nt, id, "block") >= 0 && !an_user_defines_or_reads(c, name)) {
@@ -2220,7 +2221,7 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
     LocalVar *ebl = (ebs && ebp) ? scope_local(ebs, ebp) : NULL;
     if (!an_read_only_inference() && ebl && ebl->type != TY_INT && ebl->type != TY_POLY)
       lv_set_type(ebl, ebl->type == TY_UNKNOWN ? TY_INT : TY_POLY);
-    { *out = TY_STRING; return 1; }
+    { *out = an_program_makes_io(c) ? TY_POLY : TY_STRING; return 1; }
   }
   /* `poly.empty?`: the dispatch carries builtin String / Array / Hash arms, so
      the call answers a boolean even when a user class defines the name too --
@@ -2532,6 +2533,11 @@ int poly_io_codepoint_enum(Compiler *c, int id) {
 }
 int poly_str_iter_enum(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
+  /* where a boxed value may be an IO, each_byte and each_char answer the
+     Enumerator, which reads an IO as it is walked (sp_poly_str_each_enum):
+     an Array would read the whole stream before a bounded consumer runs */
+  const char *nm = nt_str(nt, id, "name");
+  if (nm && (sp_streq(nm, "each_byte") || sp_streq(nm, "each_char")) && an_program_makes_io(c)) return 1;
   int q = comp_recv_parent(c, id);
   if (q < 0) return 1;
   const char *qn = nt_str(nt, q, "name");

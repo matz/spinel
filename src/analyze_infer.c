@@ -4744,6 +4744,18 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
         { *out = an_poly_concrete(c, id, name, TY_IO); return 1; }
       if ((sp_streq(name, "close_read") || sp_streq(name, "close_write")) && argc == 0)
         { *out = an_poly_concrete(c, id, name, TY_NIL); return 1; }
+      /* the readers and predicates of the same arm: getc's String or nil,
+         readchar's String, readbyte's and lineno's Integer, the predicates'
+         bool, and nil from ungetbyte and ungetc */
+      if (argc == 0 && sp_streq(name, "getc")) { *out = an_poly_concrete(c, id, name, TY_POLY); return 1; }
+      if (argc == 0 && sp_streq(name, "readchar")) { *out = an_poly_concrete(c, id, name, TY_STRING); return 1; }
+      if (argc == 0 && (sp_streq(name, "readbyte") || sp_streq(name, "lineno")))
+        { *out = an_poly_concrete(c, id, name, TY_INT); return 1; }
+      if (argc == 0 && (sp_streq(name, "eof") || sp_streq(name, "autoclose?") || sp_streq(name, "binmode?") ||
+                        sp_streq(name, "close_on_exec?")))
+        { *out = an_poly_concrete(c, id, name, TY_BOOL); return 1; }
+      if (argc == 1 && (sp_streq(name, "ungetbyte") || sp_streq(name, "ungetc")) && !nt_argv_has_splat(nt, argv, argc))
+        { *out = an_poly_concrete(c, id, name, TY_NIL); return 1; }
       /* the descriptor controls, at the arities the poly-IO arm takes them:
          integers, and advise's nil boxed as the TY_IO arm boxes it. Only
          where that arm emits the call: a class of the program's own (Object

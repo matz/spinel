@@ -17203,6 +17203,29 @@ static int emit_poly_call0_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
     int ebody = nt_ref(nt, eblk, "body");
     int ebn = 0; const int *ebb = ebody >= 0 ? nt_arr(nt, ebody, "body", &ebn) : NULL;
     int ts = ++g_tmp, ta = ++g_tmp, ti = ++g_tmp;
+    if (an_program_makes_io(c)) {
+      /* a boxed IO is read a char per step (sp_poly_each_io), a String
+         walks its chars; the call answers the receiver */
+      int tv = ++g_tmp, tio = ++g_tmp, te = ++g_tmp;
+      buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_boxed(c, recv, b);
+      buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_File *_t%d = sp_poly_each_io(_t%d, \"%s\");", tv, tio, tv, name);
+      buf_printf(b, " const char *_t%d = _t%d ? NULL : sp_poly_recv_s(_t%d, \"%s\"); SP_GC_ROOT(_t%d);", ts, tio, tv, name, ts);
+      buf_printf(b, " sp_StrArray *_t%d = _t%d ? NULL : sp_str_chars(_t%d); SP_GC_ROOT(_t%d);", ta, tio, ts, ta);
+      buf_printf(b, " for (sp_int _t%d = 0; ; _t%d++) { sp_strelem _t%d;", ti, ti, te);
+      buf_printf(b, " if (_t%d) { const char *_c = sp_File_getc(_t%d); if (!_c) break; _t%d = sp_String_new_shared(_c); }", tio, tio, te);
+      buf_printf(b, " else { if (_t%d >= sp_StrArray_length(_t%d)) break; _t%d = sp_StrArray_get%s(_t%d, _t%d); }",
+                 ti, ta, te, typed_elem_store_sfx(TY_STR_ARRAY), ta, ti);
+      buf_printf(b, " SP_GC_ROOT(_t%d);", te);
+      if (ebpn) {
+        char element[32];
+        snprintf(element, sizeof element, "_t%d", te);
+        emit_str_elem_param(c, eblk, ebp, ebpn, element, b);
+      }
+      emit_iter_step_lead(c, ebody, ebn, b, 0);
+      if (repr_of(c, id).kind == RK_BOXED) buf_printf(b, " } _t%d; })", tv);
+      else buf_printf(b, " } _t%d; })", ts);
+      { *out = 1; return 1; }
+    }
     buf_printf(b, "({ const char *_t%d = sp_poly_recv_s(", ts); emit_expr(c, recv, b);
     buf_printf(b, ", \"%s\"); SP_GC_ROOT(_t%d);", name, ts);
     buf_printf(b, " sp_StrArray *_t%d = sp_str_chars(_t%d); SP_GC_ROOT(_t%d);", ta, ts, ta);
@@ -17228,6 +17251,30 @@ static int emit_poly_call0_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
     int ebn = 0; const int *ebb = ebody >= 0 ? nt_arr(nt, ebody, "body", &ebn) : NULL;
     const char *fn = sp_streq(name, "each_byte") ? "sp_str_bytes" : "sp_str_codepoints";
     int ts = ++g_tmp, ta = ++g_tmp, ti = ++g_tmp;
+    if (an_program_makes_io(c)) {
+      /* a boxed IO is read a byte or a char per step (sp_poly_each_io), a
+         String walks its array; the call answers the receiver */
+      int tv = ++g_tmp, tio = ++g_tmp, te = ++g_tmp;
+      int bytes = sp_streq(name, "each_byte");
+      buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_boxed(c, recv, b);
+      buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_File *_t%d = sp_poly_each_io(_t%d, \"%s\");", tv, tio, tv, name);
+      buf_printf(b, " const char *_t%d = _t%d ? NULL : sp_poly_recv_s(_t%d, \"%s\"); SP_GC_ROOT(_t%d);", ts, tio, tv, name, ts);
+      buf_printf(b, " sp_IntArray *_t%d = _t%d ? NULL : %s(_t%d); SP_GC_ROOT(_t%d);", ta, tio, fn, ts, ta);
+      buf_printf(b, " for (sp_int _t%d = 0; ; _t%d++) { sp_int _t%d;", ti, ti, te);
+      if (bytes) buf_printf(b, " if (_t%d) { sp_oint _o = sp_File_getbyte(_t%d); if (_o.nil) break; _t%d = _o.v; }", tio, tio, te);
+      else buf_printf(b, " if (_t%d) { const char *_c = sp_File_getc(_t%d); if (!_c) break; _t%d = sp_str_ord(_c); }", tio, tio, te);
+      buf_printf(b, " else { if (_t%d >= sp_IntArray_length(_t%d)) break; _t%d = sp_IntArray_get(_t%d, _t%d); }", ti, ta, te, ta, ti);
+      if (ebpn) {
+        Scope *ebs = comp_scope_of(c, eblk);
+        LocalVar *eblv = ebs ? scope_local(ebs, ebp) : NULL;
+        if (eblv && eblv->type == TY_POLY) buf_printf(b, " sp_RbVal lv_%s = sp_box_int(_t%d);", ebpn, te);
+        else buf_printf(b, " sp_int lv_%s = _t%d;", ebpn, te);
+      }
+      emit_iter_step_lead(c, ebody, ebn, b, 0);
+      if (repr_of(c, id).kind == RK_BOXED) buf_printf(b, " } _t%d; })", tv);
+      else buf_printf(b, " } _t%d; })", ts);
+      { *out = 1; return 1; }
+    }
     buf_printf(b, "({ const char *_t%d = sp_poly_recv_s(", ts); emit_expr(c, recv, b);
     buf_printf(b, ", \"%s\"); SP_GC_ROOT(_t%d);", name, ts);
     buf_printf(b, " sp_IntArray *_t%d = %s(_t%d); SP_GC_ROOT(_t%d);", ta, fn, ts, ta);

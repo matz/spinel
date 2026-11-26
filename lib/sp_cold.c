@@ -4345,24 +4345,54 @@ sp_Enumerator *sp_loop_enum(void) {
   return e;
 }
 
-/* IO codepoints are read when the Enumerator is walked, retaining its source. */
-typedef struct { sp_File *io; } sp_IOCodepointCap;
+/* IO codepoints, bytes, chars and lines are read when the Enumerator is
+   walked, retaining its source. */
+enum { SP_IO_EACH_CODEPOINT, SP_IO_EACH_BYTE, SP_IO_EACH_CHAR, SP_IO_EACH_LINE };
+typedef struct { sp_File *io; int kind; const char *sep; sp_bool chomp; } sp_IOCodepointCap;
 static void sp_io_codepoint_scan(void *p) {
   sp_gc_mark(((sp_IOCodepointCap *)p)->io);
+  if (((sp_IOCodepointCap *)p)->sep) sp_mark_string(((sp_IOCodepointCap *)p)->sep);
 }
 static void sp_io_codepoint_gen(sp_Fiber *f) {
   sp_IOCodepointCap *cap = (sp_IOCodepointCap *)f->user_data; SP_GC_ROOT(cap);
   const char *text = NULL; SP_GC_ROOT_STR(text);
-  while ((text = sp_File_getc(cap->io)) != NULL)
-    sp_Fiber_yield(sp_box_int(sp_str_ord(text)));
+  if (cap->kind == SP_IO_EACH_BYTE) {
+    for (sp_oint b; !(b = sp_File_getbyte(cap->io)).nil;) sp_Fiber_yield(sp_box_int(b.v));
+  }
+  else if (cap->kind == SP_IO_EACH_LINE) {
+    /* the separator is "\n", another String, or NULL (nil: to the end) */
+    while ((text = sp_File_gets_sep(cap->io, cap->sep, 0, cap->chomp)) != NULL)
+      sp_Fiber_yield(sp_box_obj(sp_String_new_shared(text), SP_BUILTIN_STRBUF));
+  }
+  else {
+    while ((text = sp_File_getc(cap->io)) != NULL)
+      sp_Fiber_yield(cap->kind == SP_IO_EACH_CHAR ? sp_box_str_new(text) : sp_box_int(sp_str_ord(text)));
+  }
   sp_gc_wb((void *)f);
   f->yielded_value = sp_box_obj(cap->io, SP_BUILTIN_IO);
 }
-sp_Enumerator *sp_io_codepoint_enumerator(sp_File *io) {SP_GC_ROOT(io);
+sp_Enumerator *sp_io_each_enumerator(sp_File *io, const char *meth) {SP_GC_ROOT(io);SP_GC_ROOT_STR(meth);
   sp_IOCodepointCap *cap = (sp_IOCodepointCap *)sp_gc_alloc(sizeof *cap, NULL, sp_io_codepoint_scan);
   SP_GC_ROOT(cap); cap->io = io;
+  cap->kind = strcmp(meth, "each_byte") == 0 ? SP_IO_EACH_BYTE : strcmp(meth, "each_char") == 0 ? SP_IO_EACH_CHAR
+            : strcmp(meth, "each_line") == 0 ? SP_IO_EACH_LINE : SP_IO_EACH_CODEPOINT;
+  cap->sep = SPL("\n");
   sp_Enumerator *e = sp_Enumerator_new_gen(sp_io_codepoint_gen, cap, sp_box_nil());
-  return sp_enum_with_src(e, sp_box_obj(io, SP_BUILTIN_IO), SPL("each_codepoint"));
+  return sp_enum_with_src(e, sp_box_obj(io, SP_BUILTIN_IO), meth);
+}
+/* each_line with a separator (NULL for nil) and chomp, read as it is walked;
+   its rewind seeks the stream back to its start as the other IO walks do */
+sp_Enumerator *sp_io_line_enumerator(sp_File *io, const char *sep, sp_bool chomp) {SP_GC_ROOT(io);SP_GC_ROOT_STR(sep);
+  sp_Enumerator *e = sp_io_each_enumerator(io, SPL("each_line"));
+  SP_GC_ROOT(e);
+  sp_IOCodepointCap *cap = (sp_IOCodepointCap *)e->gen_cap;
+  sp_gc_wb((void *)cap);
+  cap->sep = sep;
+  cap->chomp = chomp;
+  return e;
+}
+sp_Enumerator *sp_io_codepoint_enumerator(sp_File *io) {
+  return sp_io_each_enumerator(io, SPL("each_codepoint"));
 }
 static void sp_io_codepoint_rewind(sp_Enumerator *e) {SP_GC_ROOT(e);
   sp_File *io = ((sp_IOCodepointCap *)e->gen_cap)->io;

@@ -2325,18 +2325,18 @@ static sp_bool sp_io_responds(sp_File *f, const char *m, int typed) {
     "mtime", NULL };
   static const char *const statm_b[] = { "<", "<=", ">", ">=", "between?", "clamp",
     NULL };
-  static const char *const iom[] = { "<<", "advise", "binmode", "close", "close_read",
-    "close_write", "closed?", "each", "eof?", "fcntl", "fdatasync", "fileno", "flush",
-    "fsync", "getbyte", "gets", "isatty", "path", "pos", "pos=", "pread", "print",
-    "printf", "putc", "puts", "pwrite", "read", "read_nonblock", "readline",
+  static const char *const iom[] = { "<<", "advise", "autoclose?", "binmode",
+    "binmode?", "close", "close_on_exec?", "close_read", "close_write", "closed?",
+    "each", "each_byte", "each_char", "each_line", "eof", "eof?", "fcntl",
+    "fdatasync", "fileno", "flush", "fsync", "getbyte", "getc", "gets", "isatty",
+    "lineno", "path", "pos", "pos=", "pread", "print", "printf", "putc", "puts",
+    "pwrite", "read", "read_nonblock", "readbyte", "readchar", "readline",
     "readlines", "readpartial", "rewind", "seek", "set_encoding", "stat", "sync",
-    "sync=", "sysseek", "tell", "to_i", "to_path", "tty?", "wait_priority",
-    "wait_readable", "wait_writable", "write", "write_nonblock", NULL };
-  static const char *const iom_t[] = { "autoclose=", "autoclose?",
-    "binmode?", "close_on_exec=", "close_on_exec?",
-    "each_byte", "each_char", "each_codepoint", "each_line", "eof",
-    "getc", "lineno", "lineno=", "pid", "readbyte", "readchar", "reopen", "sysread",
-    "syswrite", "to_io", "ungetbyte", "ungetc", "wait", NULL };
+    "sync=", "sysread", "sysseek", "syswrite", "tell", "to_i", "to_io", "to_path",
+    "tty?", "ungetbyte", "ungetc", "wait_priority", "wait_readable", "wait_writable",
+    "write", "write_nonblock", NULL };
+  static const char *const iom_t[] = { "autoclose=", "close_on_exec=",
+    "each_codepoint", "lineno=", "pid", "reopen", "wait", NULL };
   static const char *const iom_b[] = { "collect_concat", "count", "detect",
     "drop_while", "each_entry", "each_with_index", "filter_map", "find", "first",
     "flat_map", "group_by", "include?", "max_by", "member?", "min_by", "minmax_by",
@@ -22318,10 +22318,22 @@ typedef struct {
   sp_String *whole;
   size_t offset;
   sp_bool chomp;
+  sp_File *io;   /* a boxed IO's lines, read per step; the receiver roots it */
 } sp_StringLineWalk;
 void sp_string_line_begin(sp_StringLineWalk *walk, sp_RbVal receiver, sp_RbVal separator,
                           sp_RbVal keywords, sp_int argc, const char *method);
 sp_String *sp_string_line_step(sp_StringLineWalk *walk);
+sp_Enumerator *sp_io_each_enumerator(sp_File *io, const char *meth);
+sp_Enumerator *sp_io_line_enumerator(sp_File *io, const char *sep, sp_bool chomp);
+/* A boxed IO for the each_byte / each_char block walks, or NULL for
+   another receiver; a stat rides in the same boxed handle and raises
+   NoMethodError. */
+static sp_File *sp_poly_each_io(sp_RbVal v, const char *meth) {
+  if (v.tag != SP_TAG_OBJ || v.cls_id != SP_BUILTIN_IO || !v.v.p) return NULL;
+  sp_File *io = (sp_File *)v.v.p;
+  if (io->mode && (strcmp(io->mode, "stat") == 0 || strcmp(io->mode, "lstat") == 0)) sp_raise_poly_nomethod(meth, v);
+  return io;
+}
 /* A blockless each_char / each_line / each_byte / each_codepoint on a boxed
    receiver: CRuby's Enumerator, as on a typed String. A box of a shared
    String's handle (--share-strings) gives the Enumerator over that handle,
@@ -22329,6 +22341,12 @@ sp_String *sp_string_line_step(sp_StringLineWalk *walk);
 static sp_Enumerator *sp_poly_str_each_enum(sp_RbVal v, const char *meth) {
   SP_GC_ROOT_RBVAL(v);
   if (sp_poly_is_strbuf(v) && v.v.p) return sp_enum_str_each_h((sp_String *)v.v.p, meth);
+  /* a boxed IO's Enumerator reads the stream as it is walked */
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_IO && v.v.p) {
+    sp_File *io = (sp_File *)v.v.p;
+    if (io->mode && (strcmp(io->mode, "stat") == 0 || strcmp(io->mode, "lstat") == 0)) sp_raise_poly_nomethod(meth, v);
+    return sp_io_each_enumerator(io, meth);
+  }
   const char *s = sp_poly_recv_s(v, meth);
   SP_GC_ROOT_STR(s);
   int kind = strcmp(meth, "each_char") == 0 ? SP_ENUM_STR_CHAR : strcmp(meth, "each_line") == 0 ? SP_ENUM_STR_LINE

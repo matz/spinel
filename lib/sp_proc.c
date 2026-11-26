@@ -424,5 +424,5 @@ void sp_BoundMethod_scan(void *p) {
   sp_BoundMethod *m = (sp_BoundMethod *)p;
   if (!m->self) return;
   if (m->self_kind == SP_BM_SELF_OBJ) sp_gc_mark(m->self);
-  else if (m->self_kind == SP_BM_SELF_STR) sp_mark_string((const char *)m->self);
+  else if (m->self_kind == SP_BM_SELF_STR || m->self_kind == SP_BM_SELF_CLASS) sp_mark_string((const char *)m->self);
 }

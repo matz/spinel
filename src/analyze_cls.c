@@ -1673,6 +1673,18 @@ static int cf_in_exec_block(CF *f, int v);
 static void cf_ivar_write_any(CF *f, const char *name, int v);
 static const char *cf_ivar_lit(CF *f, int call);
 
+/* The receiver whose object is self in v's block, when that block is the
+   literal block of `x.instance_eval` or `x.instance_exec` (x not self),
+   which runs it with x as its self; else -1 */
+static int cf_exec_self_recv(CF *f, int v) {
+  int q = cf_owner_block(f, v, 0), p = q >= 0 && f->par ? f->par[q] : -1;
+  if (p < 0 || nt_kind(f->nt, p) != NK_CallNode || nt_ref(f->nt, p, "block") != q) return -1;
+  const char *pn = nt_str(f->nt, p, "name");
+  if (!pn || (!sp_streq(pn, "instance_eval") && !sp_streq(pn, "instance_exec"))) return -1;
+  int pr = nt_ref(f->nt, p, "receiver");
+  return pr >= 0 && nt_kind(f->nt, pr) != NK_SelfNode ? pr : -1;
+}
+
 /* the loop a break under v leaves: the nearest enclosing while, until or
    for, or -1 when a block, a lambda or a def is nearer */
 static int cf_owner_loop(CF *f, int v) {
@@ -3677,7 +3689,13 @@ static void cf_call(CF *f, int v) {
        instance runs this code; else the top-level def; else Kernel's */
     int si = cf_scope_of(f, v);
     /* (in a block that may run under another self the method may be a builtin's) */
-    if (cf_owner_block(f, v, 0) >= 0 && cf_in_exec_block(f, v)) cf_add_set(f, v, cf_bk_any(f));
+    /* (the literal block of `x.instance_eval` or `x.instance_exec` runs
+       with x as its self: the call is one on x's classes, as `x.m` is) */
+    if (cf_owner_block(f, v, 0) >= 0 && cf_in_exec_block(f, v)) {
+      int pr = cf_exec_self_recv(f, v), ps = pr >= 0 ? cf_set_of(f, pr) : CF_ALL;
+      if (ps != CF_ALL) { cf_call_known(f, v, ps, pr, nm, argv, argc, blk); return; }
+      cf_add_set(f, v, cf_bk_any(f));
+    }
     Scope *s = &c->scopes[si];
     int found = 0;
     if (s->def_node >= 0 && s->class_id >= 0) {
@@ -4241,7 +4259,11 @@ static void cf_node(CF *f, int v) {
     return;
   }
   case NK_SelfNode: {
-    if (cf_in_exec_block(f, v) || nt_int(nt, v, "ie_rself", 0)) { cf_all(f, v); return; }
+    if (cf_in_exec_block(f, v) || nt_int(nt, v, "ie_rself", 0)) {
+      int pr = cf_exec_self_recv(f, v);
+      if (pr >= 0) cf_flow(f, pr, v); else cf_all(f, v);
+      return;
+    }
     int si = cf_scope_of(f, v);
     /* a self a pass gave a call as its receiver after the scopes were
        walked (`r` -> `self.r`) has none recorded: the call's is its */

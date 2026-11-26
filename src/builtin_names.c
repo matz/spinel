@@ -2154,6 +2154,9 @@ int class_reader_observes(const char *n) {
 }
 /* A call on a collection that asks only what it holds, by identity: its
    size, whether it is empty, whether it holds a value (with no block) */
+int is_collection_store(const char *n) {
+  return n && (is_array_push_family(n) || is_insert_name(n) || is_store_alias(n) || sp_streq(n, "add") || sp_streq(n, "add?"));
+}
 int is_collection_identity_query(const char *n) {
   static const char *const names[] = { "size", "length", "count", "empty?", "include?", "member?", "any?", "none?", NULL };
   return n && builtin_name_in(n, names);

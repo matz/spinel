@@ -375,13 +375,20 @@ counts only where it asks about the kind of thing the block declares: its
 instance methods (`instance_methods`, `method_defined?`, an instance), its
 own methods (`respond_to?`, `method`, `is_a?`, against a `def self.` or an
 `extend`), its ancestry (`ancestors`, `include?`, `<`, against an `include`
-or `prepend`), or its constants. The class is followed through the local and
-instance variables the hook writes it to and the collections it stores it in
-(`subs << k`, `seen[k] = true`), and a hook that hands it to a method of the
-program, a send, a proc or a block, or reads such a collection for more than
-its size or whether it holds a value, is refused too. A hook that counts,
-collects or names the classes it is handed, passes it to `super`, or asks
-about a kind the block does not declare, runs at each evaluation.
+or `prepend`), or its constants. Any question the block answers with a method
+of the same name on the class itself (`def self.name`, `def self.to_s`, or an
+`extend`) counts too, and so does printing or interpolating the class where
+the block replaces its `to_s` or `inspect`. The class is followed through the
+local, instance and global variables the hook writes it to and the
+collections it stores it in, held in any of those or in a constant (`subs <<
+k`, `seen[k] = true`, `REG[k.object_id] = k`, a Set's `add`), and a hook that
+hands it to a method of the program, a send, a proc or a block, or reads such
+a collection for more than its size or whether it holds a value, is refused
+too. So is a hook that stores it where another method reads it (an instance
+variable, a global or a constant) and then calls a method of the program, a
+send, a block or a `super` that reaches another `inherited`. A hook that
+counts, collects or names the classes it is handed, passes it to `super`, or
+asks about a kind the block does not declare, runs at each evaluation.
 
 In a program with one of these forms evaluated more than once (a
 `Struct.new` or `Data.define` evaluated more than once counts as one), a

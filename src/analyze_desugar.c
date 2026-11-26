@@ -30534,6 +30534,19 @@ static int mm_object_answers(Compiler *c, int id, const char *nm) {
   for (int i = 0; object_methods[i]; i++) if (sp_streq(nm, object_methods[i])) return 1;
   return object_instance_method_name(nm) || builtin_object_method_known(nm) || is_kernel_module_function(nm);
 }
+/* The builtin whose methods stand above class k's chain: the one the
+   chain's root reopens (under a program's `class String`, a String subclass's
+   root is String itself, which class_builtin_parent reads as a class under
+   Object), else the builtin above the root. */
+static int mm_builtin_above(Compiler *c, int k) {
+  int root = k;
+  while (root >= 0 && c->classes[root].parent >= 0) root = c->classes[root].parent;
+  if (root >= 0 && c->classes[root].name && is_builtin_reopen(c->classes[root].name)) {
+    int bid = builtin_class_id(c->classes[root].name);
+    if (bid != 0) return bid;
+  }
+  return class_builtin_parent(c, k);
+}
 /* Does class k answer nm without method_missing: a method or an accessor of
    its chain, or a method every object has? */
 static int mm_answers(Compiler *c, int id, int k, const char *nm) {
@@ -30541,7 +30554,7 @@ static int mm_answers(Compiler *c, int id, int k, const char *nm) {
   if (call_target(c, id, k, nm, 0, &ml) >= 0 || ml.kind == ML_ATTR) return 1;
   /* (a method of the builtin above its chain, String#length of a String subclass, initialize included,
      unless an undef_method of the name stands on the chain: then method_missing takes it) */
-  int bp = k >= 0 ? class_builtin_parent(c, k) : -116;
+  int bp = k >= 0 ? mm_builtin_above(c, k) : -116;
   if (bp != -116 && bp < 0 && (sp_streq(nm, "initialize") || (builtin_id_has_instance_method(bp, nm) && !cplan_undefined(c, k, 0, nm)))) {
     /* (a builtin the class makes private or protected answers no call on another receiver: method_missing does) */
     int r = nt_ref(c->nt, id, "receiver");

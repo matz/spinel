@@ -205,6 +205,22 @@ static int program_writes_const_through(Compiler *c, int k, const char *nm) {
   asking = 0;
   return hit;
 }
+/* Does the program write the constant nm through a path whose parent
+   names the builtin in core slot `core` as the record resolves it there
+   (`File::NAME = v`, File not reopened)? */
+static int program_writes_core_const(Compiler *c, int core, const char *nm) {
+  const NodeTable *nt = c->nt;
+  static const NodeKind writes[] = { NK_ConstantPathWriteNode, NK_ConstantPathOrWriteNode,
+                                     NK_ConstantPathAndWriteNode, NK_ConstantPathOperatorWriteNode };
+  for (int i = 0; i < 5; i++)
+    NT_FOREACH_KIND(nt, i < 4 ? writes[i] : NK_ConstantPathTargetNode, w) {
+      int t = i < 4 ? nt_ref(nt, w, "target") : w;
+      if (t < 0 || !sp_streq(nt_str(nt, t, "name"), nm)) continue;
+      int par = nt_ref(nt, t, "parent"), wc = -1;
+      if (par >= 0 && elab_class_ref_at(c, par, &wc) < 0 && wc == core) return 1;
+    }
+  return 0;
+}
 /* The Ruby leaf of a class's name: a name qualify_colliding_classes gave
    (`Cache__Coder`) carries its path, and its leaf is the last component. */
 static const char *class_leaf_name(const char *n) {
@@ -802,7 +818,8 @@ int const_path_builtin_other(Compiler *c, int id, int k) {
   const NodeTable *nt = c->nt;
   if (k < 0 || id < 0 || nt_kind(nt, id) != NK_ConstantPathNode) return 0;
   int par = nt_ref(nt, id, "parent");
-  int root = par >= 0 && nt_kind(nt, par) == NK_ConstantPathNode && nt_ref(nt, par, "parent") < 0;
+  int root = par >= 0 && ((nt_kind(nt, par) == NK_ConstantPathNode && nt_ref(nt, par, "parent") < 0) ||
+                           nt_int(nt, par, "root_anchored", 0));
   const char *pn = par >= 0 && (root || nt_kind(nt, par) == NK_ConstantReadNode) ? nt_str(nt, par, "name") : NULL;
   const char *nm = nt_str(nt, id, "name"), *rn = class_ruby_name(c, k);
   char qn[256];
@@ -862,9 +879,18 @@ int const_path_in_closed_builtin(Compiler *c, int id) {
     memset(memo, -1, (size_t)memo_cap);
     memo_ver = nt->version; memo_ncls = c->nclasses;
   }
-  if (memo[id] < 0)
-    memo[id] = (signed char)(!lexically_sees_nested(c, id, pn) && !program_writes_const_in(c, pn, nm) &&
+  /* (`::Process::X` names the builtin whatever a namespace around it nests: no lexical lookup) */
+  int root = (pk == NK_ConstantPathNode && nt_ref(nt, par, "parent") < 0) || nt_int(nt, par, "root_anchored", 0);
+  if (memo[id] < 0) {
+    /* (a write into it: by the leaf of a namespace for a bare path, which a nested module of the name may be;
+       for `::X`, the record's constant on the class X resolves to, which a nested module is not) */
+    int core = -1, ci = root ? elab_class_ref_at(c, par, &core) : -1;
+    int writes = !root ? program_writes_const_in(c, pn, nm)
+                 : ci >= 0 ? elab_const_owned_key(c, ci, nm) != NULL
+                 : core >= 0 ? program_writes_core_const(c, core, nm) : program_writes_const_in(c, pn, nm);
+    memo[id] = (signed char)((root || !lexically_sees_nested(c, id, pn)) && !writes &&
                              !builtin_class_sees_object_const(c, pn, nm));
+  }
   return memo[id];
 }
 /* Can the path write `t` (`Q::NAME = v`) define NAME where a lookup

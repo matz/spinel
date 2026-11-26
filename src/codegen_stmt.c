@@ -15428,7 +15428,9 @@ static void emit_return_deferred(Compiler *c, const int *a, int n, Buf *b, int i
   EnsureCtx *ctx = &g_ensure_stack[g_ensure_depth - 1];
   emit_indent(b, indent);
   buf_puts(b, "{ ");
-  if (ctx->has_retval) {
+  /* a statement-position inline's own return has no result slot to fill
+     (the frame's slot is kept for a return of another funnel) */
+  if (ctx->has_retval && !(g_method_pr_label && !g_method_pr_var)) {
     if (n > 1) {
       int ta = emit_return_values(c, a, n, "", b);
       /* a frame slot holding other values too takes the Array boxed */

@@ -1680,6 +1680,7 @@ int g_block_brk_exc_base = 0;   /* ... for yield-block re-entry (mirrors g_block
 int g_brk_rescue_base = 0;      /* rescue bodies open at the valued-break wrapper */
 int g_block_brk_rescue_base = 0;
 int g_method_pr_exc_depth = 0;
+int g_method_pr_rescue_depth = 0;
 /* ... and the ENSURE depth at that target. A `return` inside a yielding
    method's body inlined under a caller's begin..ensure was routed through
    the caller's frame (the frame route fired on any open ensure), which made

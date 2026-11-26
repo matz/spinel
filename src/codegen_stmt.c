@@ -15385,7 +15385,7 @@ static void ensure_note_oret(EnsureCtx *ctx) {
   if (ctx->oret) return;
   ctx->oret = 1;
   ctx->oret_label = g_method_pr_label; ctx->oret_var = g_method_pr_var; ctx->oret_ty = g_ret_type;
-  ctx->oret_exc = g_method_pr_exc_depth; ctx->oret_ens = g_method_pr_ensure_depth;
+  ctx->oret_exc = g_method_pr_exc_depth; ctx->oret_ens = g_method_pr_ensure_depth; ctx->oret_rsc = g_method_pr_rescue_depth;
 }
 static void emit_return_deferred(Compiler *c, const int *a, int n, Buf *b, int indent) {
   EnsureCtx *ctx = &g_ensure_stack[g_ensure_depth - 1];
@@ -16254,15 +16254,15 @@ void emit_ensure_return(Compiler *c, const EnsureCtx *self, int eid, int has_ret
      first, as it would be where it was written */
   if (self && self->oret) {
     const char *sl = g_method_pr_label, *sv = g_method_pr_var;
-    TyKind st = g_ret_type; int se = g_method_pr_exc_depth, sn = g_method_pr_ensure_depth;
+    TyKind st = g_ret_type; int se = g_method_pr_exc_depth, sn = g_method_pr_ensure_depth, sr = g_method_pr_rescue_depth;
     g_method_pr_label = self->oret_label; g_method_pr_var = self->oret_var; g_ret_type = self->oret_ty;
-    g_method_pr_exc_depth = self->oret_exc; g_method_pr_ensure_depth = self->oret_ens;
+    g_method_pr_exc_depth = self->oret_exc; g_method_pr_ensure_depth = self->oret_ens; g_method_pr_rescue_depth = self->oret_rsc;
     buf_printf(b, "if (_retf%d == 2) { ", eid);
     emit_ensure_return_1(c, eid, has_retval, b, indent);
     buf_puts(b, "}\n");
     emit_indent(b, indent);
     g_method_pr_label = sl; g_method_pr_var = sv; g_ret_type = st;
-    g_method_pr_exc_depth = se; g_method_pr_ensure_depth = sn;
+    g_method_pr_exc_depth = se; g_method_pr_ensure_depth = sn; g_method_pr_rescue_depth = sr;
   }
   emit_ensure_return_1(c, eid, has_retval, b, indent);
 }
@@ -16282,12 +16282,22 @@ static void emit_ensure_return_1(Compiler *c, int eid, int has_retval, Buf *b, i
     buf_printf(b, "goto _ensure%d; }\n", outer->lid);
     return;
   }
-  /* An inline return leaves only the method's frames. The caller's
-     handlers stay live until control leaves their own protected body. */
-  {
+  /* An inline return leaves only the method's frames and the rescue
+     bodies opened since the splice. The caller's handlers stay live until
+     control leaves their own protected body: a rescue body the call sits
+     in has the inline's frame depth, so the depth cannot tell it apart. */
+  if (g_method_pr_label) {
+    int pops = g_exc_frame_depth - g_method_pr_exc_depth;
+    int k = g_rescue_save_depth - g_method_pr_rescue_depth;
+    if (pops > 0 || k > 0) {
+      buf_printf(b, "if (_retf%d) { ", eid);
+      if (pops > 0) buf_printf(b, "sp_exc_top -= %d; ", pops);
+      emit_rescue_pops_to(b, g_method_pr_rescue_depth);
+      buf_puts(b, "}\n"); emit_indent(b, indent);
+    }
+  } else {
     char g[24]; snprintf(g, sizeof g, "_retf%d", eid);
-    int base = g_method_pr_label ? g_method_pr_exc_depth : 0;
-    if (emit_frame_unwind(b, base, g)) { buf_puts(b, "\n"); emit_indent(b, indent); }
+    if (emit_frame_unwind(b, 0, g)) { buf_puts(b, "\n"); emit_indent(b, indent); }
   }
   /* Inside an INLINED method the enclosing C function belongs to the
      CALLER, so a raw `return` here returns from that one -- `return

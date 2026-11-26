@@ -16929,7 +16929,7 @@ int emit_super_inline(Compiler *c, int id, Buf *b, int indent, int as_expr) {
 
   const char *sv_prl = g_method_pr_label, *sv_prv = g_method_pr_var;
   TyKind sv_prt = g_ret_type;
-  int sv_prexc = g_method_pr_exc_depth, sv_prens = g_method_pr_ensure_depth;
+  int sv_prexc = g_method_pr_exc_depth, sv_prens = g_method_pr_ensure_depth, sv_prrsc = g_method_pr_rescue_depth;
   char inl_lbl[32]; snprintf(inl_lbl, sizeof inl_lbl, "_sret%d", tag);
   if (as_expr) {
     TyKind rt = repr_of(c, id).as_ty;
@@ -16957,14 +16957,14 @@ int emit_super_inline(Compiler *c, int id, Buf *b, int indent, int as_expr) {
     int sv_rro = g_ret_oint; g_ret_oint = ro;
     if (m_has_ret) {
       g_method_pr_label = inl_lbl; g_method_pr_var = rvbuf; g_ret_type = rt;
-      g_method_pr_exc_depth = g_exc_frame_depth;
+      g_method_pr_exc_depth = g_exc_frame_depth; g_method_pr_rescue_depth = g_rescue_save_depth;
       g_method_pr_ensure_depth = g_ensure_depth;
       emit_indent(b, din); buf_puts(b, "{\n");
     }
     emit_stmts_tail(c, m->body, b, m_has_ret ? din + 1 : din);
     if (m_has_ret) {
       g_method_pr_label = sv_prl; g_method_pr_var = sv_prv; g_ret_type = sv_prt;
-      g_method_pr_exc_depth = sv_prexc; g_method_pr_ensure_depth = sv_prens;
+      g_method_pr_exc_depth = sv_prexc; g_method_pr_ensure_depth = sv_prens; g_method_pr_rescue_depth = sv_prrsc;
       emit_indent(b, din); buf_puts(b, "}\n");
       emit_indent(b, din); buf_printf(b, "%s: ;\n", inl_lbl);
     }
@@ -16975,14 +16975,14 @@ int emit_super_inline(Compiler *c, int id, Buf *b, int indent, int as_expr) {
   else {
     if (m_has_ret) {
       g_method_pr_label = inl_lbl; g_method_pr_var = NULL;
-      g_method_pr_exc_depth = g_exc_frame_depth;
+      g_method_pr_exc_depth = g_exc_frame_depth; g_method_pr_rescue_depth = g_rescue_save_depth;
       g_method_pr_ensure_depth = g_ensure_depth;
       emit_indent(b, din); buf_puts(b, "{\n");
     }
     emit_stmts(c, m->body, b, m_has_ret ? din + 1 : din);
     if (m_has_ret) {
       g_method_pr_label = sv_prl; g_method_pr_var = sv_prv;
-      g_method_pr_exc_depth = sv_prexc; g_method_pr_ensure_depth = sv_prens;
+      g_method_pr_exc_depth = sv_prexc; g_method_pr_ensure_depth = sv_prens; g_method_pr_rescue_depth = sv_prrsc;
       emit_indent(b, din); buf_puts(b, "}\n");
       emit_indent(b, din); buf_printf(b, "%s: ;\n", inl_lbl);
     }

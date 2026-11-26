@@ -23,10 +23,10 @@ static unsigned char *sp_rtclass_frozen_flag(sp_int id) { return &sp_rtclass_at(
 
 /* A text kept for good: the 0xff marker in front of it is a literal's, which
    the collector leaves alone, so a message staged before anything roots it
-   can hold it. */
+   can hold it. NULL when it cannot be allocated. */
 static const char *sp_rtclass_text(const char *fmt, int is_module, const void *p) {
   char *m = (char *)malloc(48);
-  if (!m) sp_raise_cls("NoMemoryError", "failed to allocate a class");
+  if (!m) return NULL;
   m[0] = (char)0xff;
   snprintf(m + 1, 47, fmt, is_module ? "Module" : "Class", (unsigned long long)(uintptr_t)p);
   return m + 1;
@@ -40,15 +40,18 @@ sp_Class sp_rtclass_new(sp_int site, int is_module) {
   sp_RtClass *chunk = n / SP_RTCLASS_CHUNK < SP_RTCLASS_CHUNKS ? sp_rtclass_chunks[n / SP_RTCLASS_CHUNK] : NULL;
   if (!chunk && n / SP_RTCLASS_CHUNK < SP_RTCLASS_CHUNKS)
     chunk = sp_rtclass_chunks[n / SP_RTCLASS_CHUNK] = (sp_RtClass *)calloc(SP_RTCLASS_CHUNK, sizeof(sp_RtClass));
-  if (!chunk) {
+  sp_RtClass *r = chunk ? &chunk[n % SP_RTCLASS_CHUNK] : NULL;
+  const char *key = r ? sp_rtclass_text("#<%s:0x%016llx>", is_module, r) : NULL;
+  /* the lock is released before the raise, which can longjmp past this
+     frame; the count stays, so a later call takes the same slot */
+  if (!key) {
 #ifdef SP_THREADS
     pthread_mutex_unlock(&sp_rtclass_lock);
 #endif
     sp_raise_cls("NoMemoryError", "failed to allocate a class");
   }
-  sp_RtClass *r = &chunk[n % SP_RTCLASS_CHUNK];
   r->site = site;
-  r->key = sp_rtclass_text("#<%s:0x%016llx>", is_module, r);
+  r->key = key;
   sp_rtclass_count = n + 1;
   sp_rtclass_frozen_fn = sp_rtclass_frozen_flag;
 #ifdef SP_THREADS

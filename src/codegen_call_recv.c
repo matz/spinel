@@ -8468,6 +8468,28 @@ int emit_op_str_set_n(Compiler *c, const BopCtx *x, Buf *b) {
   int argc;
   const int *argv = call_args(c->nt, x->id, &argc);
   if (!x->rtext) return 0;
+  /* a splat among the sets (`strip(*sets)`, `strip(*)`, a forward's `...`):
+     the sets are gathered when the call runs, each a String (CRuby's
+     TypeError for another) whose conversion the gathered array keeps, and
+     none is the method without sets (whitespace for strip), or for delete
+     and count, which take one at least, CRuby's ArgumentError */
+  if (nt_argv_has_splat(c->nt, argv, argc)) {
+    int tr = ++g_tmp, ta = ++g_tmp, ti = ++g_tmp, ts = ++g_tmp;
+    int one = sp_streq(x->name, "delete") || sp_streq(x->name, "count");
+    buf_printf(b, "({ const char *_t%d = %s; SP_GC_ROOT_STR(_t%d); ", tr, x->rtext, tr);
+    emit_gather_call_args(c, argv, argc, ta, b);
+    buf_printf(b, " sp_int _t%d = _t%d->len; const char *_t%d[_t%d > 0 ? _t%d : 1]; "
+                  "for (sp_int _i = 0; _i < _t%d; _i++) { if (!sp_rbval_is_string(_t%d->data[_i])) "
+                  "sp_PolyArray_set(_t%d, _i, sp_box_nullable_obj(sp_poly_arg_str_handle(_t%d->data[_i]), SP_BUILTIN_STRBUF)); } "
+                  "for (sp_int _i = 0; _i < _t%d; _i++) _t%d[_i] = sp_rbval_string_bytes(_t%d->data[_i]); ",
+               ti, ta, ts, ti, ti, ti, ta, ta, ta, ti, ts, ta);
+    if (one)
+      buf_printf(b, "if (_t%d == 0) sp_raise_cls(\"ArgumentError\", \"wrong number of arguments (given 0, expected 1+)\"); "
+                    "sp_str_%s_n(_t%d, _t%d, _t%d); })", ti, x->name, tr, ts, ti);
+    else
+      buf_printf(b, "_t%d > 0 ? sp_str_%s_n(_t%d, _t%d, _t%d) : sp_str_%s(_t%d); })", ti, x->name, tr, ts, ti, x->name, tr);
+    return 1;
+  }
   int literals = 1;
   for (int a = 0; a < argc; a++)
     if (nt_kind(c->nt, argv[a]) != NK_StringNode) literals = 0;

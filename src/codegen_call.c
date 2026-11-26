@@ -20753,7 +20753,12 @@ int emit_value_methods_reflection(Compiler *c, int id, Buf *b) {
   const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
   const char *name = nt_str(nt, id, "name");
   TyKind rt = comp_ntype(c, recv);
-  const char *cls = an_value_methods_class(c, recv, rt, name, argc, argv);
+  const char *cls = an_value_methods_class_at(c, id, recv, rt, name, argc, argv);
+  /* the builtin default of a boxed call beside a class's own `methods`
+     (emit_poly_builtin_default): the list, for the receivers no arm took */
+  if (!cls && rt == TY_POLY && g_arm.builtin_arm && g_arm.pd_skip == id && nt_kind(nt, recv) != NK_SelfNode &&
+      (sp_streq(name, "methods") || sp_streq(name, "public_methods")) &&
+      an_object_methods_all_arg(c, -1, argc, argv) == 1) cls = "";
   if (!cls) return 0;
   int prot = sp_streq(name, "methods");
   if (!cls[0]) {

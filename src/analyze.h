@@ -1650,6 +1650,8 @@ int an_poly_object_methods_listable(Compiler *c, int id, const char *name, int a
 /* obj.methods / public_methods on a builtin value: the core class it lists as */
 const char *an_value_methods_class(Compiler *c, int recv, TyKind rt, const char *name, int argc,
                                    const int *argv);
+const char *an_value_methods_class_at(Compiler *c, int id, int recv, TyKind rt, const char *name, int argc,
+                                      const int *argv);
 int an_class_singleton_methods_listable(Compiler *c, int cid);
 int an_singleton_methods_foldable(Compiler *c, int recv);
 int an_class_method_list_foldable(Compiler *c, const char *name, int recv, int argc, const int *argv);

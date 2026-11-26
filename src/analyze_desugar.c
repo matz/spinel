@@ -31107,8 +31107,9 @@ int desugar_missing_method_calls(Compiler *c) {
       changed = 1;
       continue;
     }
-    /* (an unbounded computed receiver gives no class evidence for a split) */
-    if (!reread && !str_arm && cls_fact_unbounded(c, r)) continue;
+    /* (an unbounded computed receiver gives no class evidence for a split,
+       but an assignment left unsplit loses its value on a missing class) */
+    if (!reread && !str_arm && !nt_int(nt, id, "attr_write", 0) && cls_fact_unbounded(c, r)) continue;
     /* (a literal block would be the two calls' one block) */
     if (blk >= 0 && nt_kind(nt, blk) == NK_BlockNode) continue;
     if (!parent) parent = an_parent_map(nt);

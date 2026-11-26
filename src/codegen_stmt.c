@@ -17495,6 +17495,23 @@ static void emit_writer_arm_src_root(TyKind at, const char *src, Buf *b) {
   if (at == TY_POLY) buf_printf(b, "SP_GC_ROOT_RBVAL(%s); ", src);
   else if (at == TY_STRING || at == TY_STRBUF) buf_printf(b, "SP_GC_ROOT(%s); ", src);
 }
+/* A fresh typed Array of kind at in src, as the general Array a writer arm
+   of kind t takes: the Array itself, or boxed as one for a box. The boxed
+   temp _t<back_tv> (-1 for none) is set to it on the way. */
+static void emit_writer_arm_lifted(Compiler *c, TyKind at, TyKind t, const char *src, int back_tv, Buf *b) {
+  char ln[24]; snprintf(ln, sizeof ln, "_t%d", ++g_tmp);
+  buf_printf(b, "({ sp_PolyArray *%s = ", ln);
+  emit_array_lifted_text(at, src, b);
+  buf_puts(b, "; ");
+  if (back_tv >= 0) {
+    buf_printf(b, "_t%d = ", back_tv);
+    emit_boxed_text(c, TY_POLY_ARRAY, ln, b);
+    buf_puts(b, "; ");
+  }
+  if (t == TY_POLY) emit_boxed_text(c, TY_POLY_ARRAY, ln, b);
+  else buf_puts(b, ln);
+  buf_puts(b, "; })");
+}
 
 /* The writer `base=` a boxed receiver of class k reaches, as the dispatch's
    arm for k stores through it: *mi its explicit `def base=` (-1 for none),
@@ -17515,6 +17532,57 @@ static int boxed_writer_of(Compiler *c, int k, const char *base, int *mi, int *d
 int boxed_writer_attr_wins(Compiler *c, int k, const char *base) {
   int mi, dc;
   return boxed_writer_of(c, k, base, &mi, &dc) == 1;
+}
+/* The arm the boxed writer dispatch (emit_boxed_writer_arms) has for class
+   k and a value of kind at: -1 when k has no writer `base=`, 0 when its
+   writer cannot take the value, so the arm is left out and a runtime
+   object of k lands in the dispatch's NoMethodError, 1 when it has one. *w
+   gets the writer (boxed_writer_of) and what it takes: an explicit def's
+   parameter (arm_arg_param, w->pt; TY_POLY where inference left it open),
+   else the field the attr writer stores (w->ivt, w->iv). A fresh value (a
+   new typed Array nothing else holds, emit_boxed_writer_arms) is taken
+   lifted where the parameter or field is the general Array. */
+typedef struct { int attr, mi, def_class, api, iv; TyKind pt, ivt; } WriterArm;
+static int writer_arm_of(Compiler *c, int k, const char *base, TyKind at, int fresh, WriterArm *w) {
+  *w = (WriterArm){ .api = -1, .iv = -1, .pt = TY_POLY, .ivt = at };
+  w->attr = boxed_writer_of(c, k, base, &w->mi, &w->def_class);
+  if (w->attr < 0) return -1;
+  if (!w->attr) {
+    Scope *arm = &c->scopes[w->mi];
+    w->api = arm_arg_param(c, arm);
+    if (w->api >= 0 && arm->pnames && arm->pnames[w->api]) {
+      LocalVar *pl = scope_local(arm, arm->pnames[w->api]);
+      w->pt = (pl && pl->type != TY_UNKNOWN) ? pl->type : TY_POLY;
+    }
+    /* Skip a class whose PARAMETER cannot take this concrete value -- the
+       attr arm below has had this skip all along, and the method arm did
+       not: an unrelated class's `def session=` seeded `(Integer?)` by an
+       .rbs got an arm passing it an object pointer, and the build stopped
+       on a class the receiver can never be (#4171). A runtime object of
+       that class lands in the default raise instead, as it does for the
+       attr arms. Numeric widths convert in C and keep their arms. A String
+       held as its handle is read for a String parameter, and a String into
+       a parameter the writer changes in place (a handle) is wrapped. */
+    TyKind pt = w->pt;
+    if (fresh && pt == TY_POLY_ARRAY) return 1;
+    return !(at != pt && at != TY_POLY && at != TY_UNKNOWN && pt != TY_POLY && pt != TY_UNKNOWN &&
+             !(ty_is_numeric(at) && ty_is_numeric(pt)) && !(at == TY_STRBUF && pt == TY_STRING) &&
+             !(at == TY_STRING && pt == TY_STRBUF));
+  }
+  char ivn[256]; snprintf(ivn, sizeof ivn, "@%s", base);
+  w->iv = comp_ivar_index(&c->classes[k], ivn);
+  w->ivt = w->iv >= 0 ? c->classes[k].ivar_types[w->iv] : at;
+  /* skip a class whose slot can't hold this concrete rhs (the runtime object
+     isn't that class anyway): a raw assignment between mismatched C types
+     would not compile. A slot typed as an ancestor of the rhs's class does
+     hold it, through the upcast: with `@left` settled as Node, a Column
+     stored through `obj.left = col` lost every arm and raised
+     NoMethodError for a writer the receiver has. (A String into a field
+     that holds a handle is wrapped as a new one.) */
+  TyKind ivt = w->ivt;
+  if (fresh && ivt == TY_POLY_ARRAY) return 1;
+  return !(at != ivt && at != TY_POLY && ivt != TY_POLY && !(at == TY_STRING && ivt == TY_STRBUF) &&
+           !slot_takes_subclass(c, ivt, at));
 }
 
 int poly_writer_attr_arms(Compiler *c, int id, const char *name, int argc, int pos_argc, int kwh,
@@ -17540,7 +17608,7 @@ int poly_writer_attr_arms(Compiler *c, int id, const char *name, int argc, int p
 int g_writer_arms_attr_only;
 void emit_boxed_writer_arms(Compiler *c, const char *base, const char *nm,
                             const char *objp, const char *src, TyKind at, int vnode,
-                            int box_tv, int src_tv, int native_answer, Buf *b) {
+                            int box_tv, int src_tv, int native_answer, int fresh, int back_tv, Buf *b) {
   if (box_tv >= 0 && sp_streq(nm, "timeout=") && (!native_answer || at == TY_POLY)) {
     int tf = ++g_tmp;
     buf_printf(b, " case SP_BUILTIN_IO: { sp_File *_t%d = (sp_File *)_t%d.v.p; ", tf, box_tv);
@@ -17580,47 +17648,38 @@ void emit_boxed_writer_arms(Compiler *c, const char *base, const char *nm,
         continue;
       }
     }
-    int kmi, wmdc;
-    int attr = boxed_writer_of(c, k, base, &kmi, &wmdc);
-    if (attr < 0) continue;
-    int writer_wins = attr;
+    WriterArm wa;
+    int takes = writer_arm_of(c, k, base, at, fresh, &wa);
+    if (takes < 0) continue;
+    int kmi = wa.mi, wmdc = wa.def_class, writer_wins = wa.attr;
     /* (beside a method dispatch's own arms: only the classes it has none for) */
     if (g_writer_arms_attr_only && !writer_wins) continue;
     /* --share-strings: inside a dispatch's builtin arm, an explicit writer's
        class was the dispatch's own arm (no user class owns the name here) */
     if (!writer_wins && g_poly_builtin_arm) continue;
+    /* (a class whose writer cannot take the value: writer_arm_of) */
+    if (!takes) continue;
     if (!writer_wins) {
       Scope *arm = &c->scopes[kmi];
-      TyKind pt = TY_POLY;
-      int api = arm_arg_param(c, arm);
-      if (api >= 0 && arm->pnames && arm->pnames[api]) {
-        LocalVar *pl = scope_local(arm, arm->pnames[api]);
-        pt = (pl && pl->type != TY_UNKNOWN) ? pl->type : TY_POLY;
-      }
-      /* Skip a class whose PARAMETER cannot take this concrete value -- the
-         attr arm below has had this skip all along, and the method arm did
-         not: an unrelated class's `def session=` seeded `(Integer?)` by an
-         .rbs got an arm passing it an object pointer, and the build stopped
-         on a class the receiver can never be (#4171). A runtime object of
-         that class lands in the default raise instead, as it does for the
-         attr arms. Numeric widths convert in C and keep their arms. */
+      TyKind pt = wa.pt;
+      int api = wa.api;
       /* (a String held as its handle, boxed_writer_holds_handle, is read
          for a String parameter) */
       int hread = at == TY_STRBUF && pt == TY_STRING;
       /* (a String into a parameter the writer changes in place, a handle:
          wrapped, as a call's argument is) */
       int wrap = at == TY_STRING && pt == TY_STRBUF;
-      if (at != pt && at != TY_POLY && at != TY_UNKNOWN &&
-          pt != TY_POLY && pt != TY_UNKNOWN &&
-          !(ty_is_numeric(at) && ty_is_numeric(pt)) && !hread && !wrap)
-        continue;
       /* (a parameter that holds its nil takes the value as its oint, nil
          and all: handed the bare number, the writer's C call did not
          compile) */
       int po = api >= 0 && arm->pnames && arm->pnames[api] && oint_kind(pt) &&
                slot_is_oint(scope_local(arm, arm->pnames[api]));
+      /* (a fresh Array into a parameter that holds the general Array, or a
+         box: lifted to one, as the element would have been built) */
+      int flift = fresh && (pt == TY_POLY || pt == TY_POLY_ARRAY);
       Buf vb; memset(&vb, 0, sizeof vb);
-      if (po && at == TY_POLY) buf_printf(&vb, "%s(%s)", oint_unbox(pt), src);
+      if (flift) emit_writer_arm_lifted(c, at, pt, src, back_tv, &vb);
+      else if (po && at == TY_POLY) buf_printf(&vb, "%s(%s)", oint_unbox(pt), src);
       else if (po && (at == TY_NIL || at == TY_VOID)) buf_puts(&vb, oint_nil(pt));
       else if (po && ty_is_numeric(at)) buf_printf(&vb, "%s(%s)", oint_of(pt), src);
       else if (hread) buf_printf(&vb, "sp_strbuf_read(%s)", src);
@@ -17654,22 +17713,16 @@ void emit_boxed_writer_arms(Compiler *c, const char *base, const char *nm,
       continue;
     }
     char ivn[256]; snprintf(ivn, sizeof ivn, "@%s", base);
-    int iv = comp_ivar_index(&c->classes[k], ivn);
-    TyKind ivt = iv >= 0 ? c->classes[k].ivar_types[iv] : at;
-    /* skip a class whose slot can't hold this concrete rhs (the runtime object
-       isn't that class anyway): a raw assignment between mismatched C types
-       would not compile. A slot typed as an ancestor of the rhs's class does
-       hold it, through the upcast: with `@left` settled as Node, a Column
-       stored through `obj.left = col` lost every arm and raised
-       NoMethodError for a writer the receiver has. */
+    int iv = wa.iv;
+    TyKind ivt = wa.ivt;
     /* (a String into a field that holds a handle, wrapped as a new one) */
     int hwrap = at == TY_STRING && ivt == TY_STRBUF;
-    if (at != ivt && at != TY_POLY && ivt != TY_POLY && !hwrap && !slot_takes_subclass(c, ivt, at)) continue;
     /* (a value that allocates is stored as a statement of its own, which
        the write barrier follows: wrapped beside the store, the barrier ran
        before the allocation, whose collection dropped its record; a boxed
        String unboxed into a handle field is wrapped in a new handle) */
-    int alloc_store = hwrap || (lift && ivt == TY_POLY && at != TY_POLY) ||
+    int flift = fresh && (ivt == TY_POLY || ivt == TY_POLY_ARRAY);
+    int alloc_store = hwrap || flift || (lift && ivt == TY_POLY && at != TY_POLY) ||
                       (at == TY_POLY && ivt == TY_STRBUF);
     buf_printf(b, " case %d: %s", k, alloc_store ? "{ " : "");
     if (alloc_store) emit_writer_arm_src_root(at, src, b);
@@ -17688,6 +17741,7 @@ void emit_boxed_writer_arms(Compiler *c, const char *base, const char *nm,
       snprintf(pfx, sizeof pfx, "((sp_%s *)%s)->", c->classes[k].c_name, objp);
       emit_ivar_text_nilbit(c, k, iv, pfx, ot, b);
     }
+    else if (flift) emit_writer_arm_lifted(c, at, ivt, src, back_tv, b);
     else if (ivt == TY_POLY && at != TY_POLY) {
       if (lift) buf_puts(b, "sp_poly_strbuf_lift(");
       emit_boxed_text(c, at, src, b);
@@ -18268,23 +18322,81 @@ static TyKind masgn_attr_slot_type(Compiler *c, int tgt) {
   int owner, ix = masgn_attr_field(c, cls, ivn, &writer, &owner);
   return ix >= 0 ? c->classes[owner].ivar_types[ix] : TY_UNKNOWN;
 }
-/* See codegen_internal.h. */
-TyKind masgn_el_lift_from(Compiler *c, int mw, int i) {
+/* Element i of multiple assignment mw's literal right side (*el), and the
+   target it goes to; -1 where it has none or the side has a splat. */
+static int masgn_el_target(Compiler *c, int mw, int i, int *el) {
   const NodeTable *nt = c->nt;
   int ln = 0, rn = 0, en = 0;
   const int *lefts = nt_arr(nt, mw, "lefts", &ln), *rights = nt_arr(nt, mw, "rights", &rn);
   int value = nt_paren_single(nt, nt_ref(nt, mw, "value"));
   const int *els = value >= 0 && nt_kind(nt, value) == NK_ArrayNode ? nt_arr(nt, value, "elements", &en) : NULL;
-  if (!els || i < 0 || i >= en) return TY_UNKNOWN;
-  for (int e = 0; e < en; e++) if (nt_kind(nt, els[e]) == NK_SplatNode) return TY_UNKNOWN;
+  if (!els || i < 0 || i >= en) return -1;
+  for (int e = 0; e < en; e++) if (nt_kind(nt, els[e]) == NK_SplatNode) return -1;
   int right_start = en - rn > ln ? en - rn : ln;
-  int tgt = i < ln ? lefts[i] : i >= right_start && i - right_start < rn ? rights[i - right_start] : -1;
-  if (tgt < 0) return TY_UNKNOWN;
-  TyKind st = nt_kind(nt, tgt) == NK_CallTargetNode ? masgn_attr_slot_type(c, tgt) : masgn_slot_type(c, mw, tgt);
-  TyKind et = repr_of(c, els[i]).as_ty;
-  if ((st == TY_POLY || st == TY_POLY_ARRAY) && box_lift_marked(c, els[i], et)) return et;
-  if (st == TY_POLY_ARRAY && repr_coerce_text_form(c, els[i], et, st, CO_HOLD) == CF_ARRAY_WIDEN) return et;
+  *el = els[i];
+  return i < ln ? lefts[i] : i >= right_start && i - right_start < rn ? rights[i - right_start] : -1;
+}
+/* Does the dispatch the plan makes for attribute target tgt, a descendant
+   overriding the writer, give every class it can reach an arm that takes
+   the general Array (writer_arm_of)? 1 for a store that does not dispatch. */
+static int masgn_writer_arms_take_poly(Compiler *c, int tgt) {
+  const NodeTable *nt = c->nt;
+  int crecv = nt_kind(nt, tgt) == NK_CallTargetNode ? nt_ref(nt, tgt, "receiver") : -1;
+  TyKind crt = crecv >= 0 ? repr_of(c, crecv).as_ty : TY_UNKNOWN;
+  const char *tnm = crecv >= 0 ? nt_str(nt, tgt, "name") : NULL;
+  if (!ty_is_object(crt) || !cplan_target_writer_switch(c, tgt, ty_object_class(crt), tnm)) return 1;
+  char base[256];
+  int cls = ty_object_class(crt), nd = 0;
+  if (!setter_base_name(tnm, base, sizeof base)) return 0;
+  const int *ds = comp_descendants(c, cls, &nd);
+  WriterArm wa;
+  for (int d = -1; d < nd; d++) if (!writer_arm_of(c, d < 0 ? cls : ds[d], base, TY_POLY_ARRAY, 0, &wa)) return 0;
+  return 1;
+}
+/* The kind of element el, a new typed Array that target tgt of mw holds as
+   the general Array (box_lift_marked, CF_ARRAY_WIDEN); TY_UNKNOWN else. */
+static TyKind masgn_el_liftable(Compiler *c, int mw, int tgt, int el) {
+  TyKind st = nt_kind(c->nt, tgt) == NK_CallTargetNode ? masgn_attr_slot_type(c, tgt) : masgn_slot_type(c, mw, tgt);
+  TyKind et = repr_of(c, el).as_ty;
+  if ((st == TY_POLY || st == TY_POLY_ARRAY) && box_lift_marked(c, el, et)) return et;
+  if (st == TY_POLY_ARRAY && repr_coerce_text_form(c, el, et, st, CO_HOLD) == CF_ARRAY_WIDEN) return et;
   return TY_UNKNOWN;
+}
+/* See codegen_internal.h. A store the plan dispatches reaches the arm for
+   the class the receiver is at run time: the element is built as the
+   general Array only when every arm takes one; it keeps its own kind
+   otherwise (and masgn_el_fresh_array lifts it in the arms that take the
+   general Array). */
+TyKind masgn_el_lift_from(Compiler *c, int mw, int i) {
+  int el = -1, tgt = masgn_el_target(c, mw, i, &el);
+  if (tgt < 0 || !masgn_writer_arms_take_poly(c, tgt)) return TY_UNKNOWN;
+  return masgn_el_liftable(c, mw, tgt, el);
+}
+/* See codegen_internal.h. */
+TyKind masgn_el_back_kind(Compiler *c, int mw, int i) {
+  int el = -1, tgt = masgn_el_target(c, mw, i, &el);
+  if (tgt < 0 || masgn_writer_arms_take_poly(c, tgt)) return TY_UNKNOWN;
+  TyKind et = masgn_el_liftable(c, mw, tgt, el);
+  return et != TY_UNKNOWN && box_lift_marked(c, el, et) ? et : TY_UNKNOWN;
+}
+/* Is target tgt of mw's statement handed a new typed Array of kind vt that
+   nothing else holds: a builtin's answer (box_lift_marked) its own
+   element, with the statement's value unread (emit_expr holds a read
+   one's elements first), or answering the element from the boxed temp
+   the store sets (ArmCtx.masgn_back, *back_tv), so a copy of it is not
+   seen? */
+static int masgn_el_fresh_array(Compiler *c, int mw, int tgt, TyKind vt, int *back_tv) {
+  int value = nt_paren_single(c->nt, nt_ref(c->nt, mw, "value")), en = 0, el = -1;
+  const MasgnBack *mb = g_arm.masgn_back;
+  *back_tv = -1;
+  if (value >= 0 && nt_kind(c->nt, value) == NK_ArrayNode) nt_arr(c->nt, value, "elements", &en);
+  for (int i = 0; i < en; i++)
+    if (masgn_el_target(c, mw, i, &el) == tgt) {
+      if (mb && mb->mw == mw && i < mb->n && mb->tv[i] > 0) *back_tv = mb->tv[i];
+      return (*back_tv >= 0 || !arg_ran_first(el, 0)) && box_lift_marked(c, el, vt) &&
+             masgn_el_liftable(c, mw, tgt, el) == vt;
+    }
+  return 0;
 }
 /* Unboxing into an Array slot can allocate a conversion of a typed Array. */
 static int masgn_slot_unbox_allocates(Compiler *c, int id, int tgt) {
@@ -18695,7 +18807,8 @@ static int masgn_store(Compiler *c, int id, const MasgnTmps *mt, int tgt, const 
       buf_puts(b, "; switch ("); emit_obj_switch_key(c, tv, b); buf_puts(b, ") {");
       char src[32]; snprintf(src, sizeof src, "_t%d", tval);
       char objp[32]; snprintf(objp, sizeof objp, "_t%d.v.p", tv);
-      emit_boxed_writer_arms(c, base, nm, objp, src, at, -1, tv, tval, 0, b);
+      int back = -1, fresh = val && masgn_el_fresh_array(c, id, tgt, at, &back);
+      emit_boxed_writer_arms(c, base, nm, objp, src, at, -1, tv, tval, 0, fresh, back, b);
       buf_printf(b, " default: sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d)); break;", nm, tv);
       buf_puts(b, " } }\n");
       return 1;
@@ -21211,7 +21324,7 @@ static int emit_call_stmt(Compiler *c, int id, Buf *b, int indent, const NodeTab
               buf_printf(b, " switch (_t%d->cls_id) {", tp);
               char src[32]; snprintf(src, sizeof src, "_t%d", tval);
               char objp[32]; snprintf(objp, sizeof objp, "_t%d", tp);
-              emit_boxed_writer_arms(c, base, nm, objp, src, at, argv[0], -1, tval, 0, b);
+              emit_boxed_writer_arms(c, base, nm, objp, src, at, argv[0], -1, tval, 0, 0, -1, b);
               buf_printf(b, " default: sp_raise_nomethod(sp_nomethod_msg(\"%s\", "
                             "sp_box_obj((void *)_t%d, _t%d->cls_id))); break;", nm, tp, tp);
               buf_puts(b, " } }\n");
@@ -21282,7 +21395,7 @@ static int emit_call_stmt(Compiler *c, int id, Buf *b, int indent, const NodeTab
             buf_puts(b, " switch ("); emit_obj_switch_key(c, tv, b); buf_puts(b, ") {");
             char src[32]; snprintf(src, sizeof src, "_t%d", tval);
             char objp[32]; snprintf(objp, sizeof objp, "_t%d.v.p", tv);
-            emit_boxed_writer_arms(c, base, nm, objp, src, at_eff, argv[0], tv, tval, 0, b);
+            emit_boxed_writer_arms(c, base, nm, objp, src, at_eff, argv[0], tv, tval, 0, 0, -1, b);
             buf_printf(b, " default: sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d)); break;", nm, tv);
             buf_puts(b, " } }\n");
             return 1;

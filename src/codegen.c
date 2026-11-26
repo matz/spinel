@@ -2897,9 +2897,16 @@ static const char *array_lift_fn(TyKind t) {
 /* See codegen_internal.h. */
 void emit_array_lifted(Compiler *c, int node, TyKind t, Buf *b) {
   int lt = ++g_tmp;
-  buf_printf(b, "({ %s_t%d = ", t == TY_INT_ARRAY ? "sp_IntArray *" : t == TY_FLOAT_ARRAY ? "sp_FloatArray *" : "sp_StrArray *", lt);
+  char ln[24]; snprintf(ln, sizeof ln, "_t%d", lt);
+  buf_printf(b, "({ %s%s = ", t == TY_INT_ARRAY ? "sp_IntArray *" : t == TY_FLOAT_ARRAY ? "sp_FloatArray *" : "sp_StrArray *", ln);
   emit_expr(c, node, b);
-  buf_printf(b, "; _t%d ? %s(_t%d) : NULL; })", lt, array_lift_fn(t), lt);
+  buf_puts(b, "; ");
+  emit_array_lifted_text(t, ln, b);
+  buf_puts(b, "; })");
+}
+/* See codegen_internal.h. */
+void emit_array_lifted_text(TyKind t, const char *src, Buf *b) {
+  buf_printf(b, "%s ? %s(%s) : NULL", src, array_lift_fn(t), src);
 }
 /* See codegen_internal.h. */
 int box_lift_marked(Compiler *c, int node, TyKind t) {

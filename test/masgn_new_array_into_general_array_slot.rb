@@ -91,3 +91,66 @@ b12 = B8.new
 p mk12(b12)
 y1(b12.items) { |x| x << "s" }
 p b12.items
+
+# an attribute target in a parent's method, whose writer a subclass
+# overrides with one that takes the Integer Array: the store dispatches
+# on the class, and the subclass's writer takes the element, beside a
+# store of another kind through the parent's field
+class B13
+  attr_accessor :items
+  def fill = (self.items, u = "ij".bytes, 0)
+end
+class S13 < B13
+  def items=(v)
+    @w = v
+  end
+  attr_reader :w
+end
+s13 = S13.new
+p s13.fill, s13.w
+b13 = B13.new
+b13.fill
+y1(b13.items) { |x| x << "q" } if ARGV.size > 5
+p b13.items
+
+# ...and in statement position, where the element is a new Array nothing
+# else holds: the subclass's writer takes it as the Integer Array and the
+# parent's field as the general Array, which a push of another kind reaches
+class B14
+  attr_accessor :items
+  def fill
+    self.items, u = "kl".bytes, 0
+    nil
+  end
+end
+class S14 < B14
+  def items=(v)
+    @w = v
+  end
+  attr_reader :w
+end
+s14 = S14.new
+s14.fill
+p s14.w
+b14 = B14.new
+b14.fill
+y1(b14.items) { |x| x << "q" }
+p b14.items
+o14 = ARGV.size > 5 ? B14.new : S14.new
+o14.items, u14 = "mn".bytes, 0
+p o14.w
+c14 = B14.new
+c14.items, u14 = "op".bytes, 0
+y1(c14.items) { |x| x << "r" }
+p c14.items
+
+# ...and read for its value, a method's value too: the element the value
+# answers is the Array the parent's field holds
+b15 = B13.new
+r15 = b15.fill
+y1(b15.items) { |x| x << "q" }
+p b15.items, r15, r15[0].equal?(b15.items)
+c15 = B14.new
+r15b = (c15.items, u15 = "qr".bytes, 0)
+r15b[0] << "s"
+p c15.items, r15b[0].equal?(c15.items)

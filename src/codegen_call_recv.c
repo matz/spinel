@@ -17595,7 +17595,7 @@ static int emit_poly_index_call(Compiler *c, int id, Buf *b, const NodeTable *nt
       char src[32]; snprintf(src, sizeof src, "_t%d", tval);
       char objp[32]; snprintf(objp, sizeof objp, "_t%d.v.p", tv);
       emit_boxed_writer_arms(c, base, name, objp, src, at_eff, argv[0], tv, tval,
-                             !call_is_setter_assign(nt, id), b);
+                             !call_is_setter_assign(nt, id), 0, -1, b);
       buf_printf(b, " default: sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d)); break;", name, tv);
       /* the call answers the value it stored; a shared handle stored where
          the call is read as a String answers the String it holds */

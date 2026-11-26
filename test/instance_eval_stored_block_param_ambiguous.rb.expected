@@ -1,0 +1,8 @@
+written parameter: instance_eval of a proc spinel could not trace to Written
+another table passed: instance_eval of a proc spinel could not trace to Other
+local written twice: instance_eval of a proc spinel could not trace to Twice
+only a splat call: instance_eval of a proc spinel could not trace to Splat
+self.class with a subclass: instance_eval of a proc spinel could not trace to Parent
+parameter or-written: instance_eval of a proc spinel could not trace to OrWritten
+value list with a splat: instance_eval of a proc spinel could not trace to SplatValue
+target after a splat: instance_eval of a proc spinel could not trace to Trailing

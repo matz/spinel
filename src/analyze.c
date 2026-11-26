@@ -4895,12 +4895,130 @@ static int ie_owner_related(Compiler *c, int a, int b) {
   int ka = a / 2, kb = b / 2;
   return ka == kb || is_descendant(c, ka, kb) || is_descendant(c, kb, ka);
 }
+static const char *ie_table_key(Compiler *c, int t, int *owner);
+/* The table a local reads, where its method writes it once (`mapping,
+   @map = @map, nil` too), or it is a positional parameter of its def,
+   written nowhere, that the calls of the def's name pass one table:
+   generate_map(default_app, mapping), called with @map. A call whose
+   argument has no key (a send's `*args` forward) marks nothing, and a
+   proc it passes keeps the run-time check; two tables are none. */
+/* Does a subtree name pn (a block's parameters declaring it)? */
+static int ie_names_local(const NodeTable *nt, int n, const char *pn) {
+  if (n < 0) return 0;
+  const char *nm = nt_str(nt, n, "name");
+  if (nm && sp_streq(nm, pn)) return 1;
+  /* (a default value reads, it binds nothing) */
+  if (nt_kind(nt, n) == NK_OptionalParameterNode || nt_kind(nt, n) == NK_OptionalKeywordParameterNode) return 0;
+  for (int i = 0, nr = nt_num_refs(nt, n); i < nr; i++) if (ie_names_local(nt, nt_ref_at(nt, n, i), pn)) return 1;
+  for (int i = 0, na = nt_num_arrs(nt, n); i < na; i++) {
+    int m = 0; const int *ids = nt_arr_at(nt, n, i, &m);
+    for (int j = 0; j < m; j++) if (ie_names_local(nt, ids[j], pn)) return 1;
+  }
+  return 0;
+}
+/* Is node n, below def, inside a block or lambda that binds its own pn? */
+static int ie_local_shadowed(const NodeTable *nt, const int *par, int n, int def, const char *pn) {
+  for (int u = par[n]; u >= 0 && u != def; u = par[u]) {
+    NodeKind k = nt_kind(nt, u);
+    if ((k == NK_BlockNode || k == NK_LambdaNode) && ie_names_local(nt, nt_ref(nt, u, "parameters"), pn)) return 1;
+  }
+  return 0;
+}
+static const char *ie_local_table_key(Compiler *c, int t, int *owner) {
+  static int depth;
+  NodeTable *nt = (NodeTable *)c->nt;
+  const char *pn = nt_str(nt, t, "name"), *key = NULL;
+  const int *par = nt_parents(nt);
+  int def = par[t];
+  while (def >= 0 && nt_kind(nt, def) != NK_DefNode) def = par[def];
+  if (!pn || def < 0 || depth >= 4) return NULL;
+  /* (a block's own binding of the name is another local) */
+  if (ie_local_shadowed(nt, par, t, def, pn)) return NULL;
+  int one = -1, writes = 0;
+  NT_FOREACH_KIND(nt, NK_LocalVariableWriteNode, w) {
+    if (!nt_str(nt, w, "name") || !sp_streq(nt_str(nt, w, "name"), pn) || ie_local_shadowed(nt, par, w, def, pn)) continue;
+    int d = par[w];
+    while (d >= 0 && nt_kind(nt, d) != NK_DefNode) d = par[d];
+    if (d == def) { writes++; one = nt_ref(nt, w, "value"); }
+  }
+  NT_FOREACH_KIND(nt, NK_MultiWriteNode, w) {
+    int ln = 0, en = 0, v = nt_ref(nt, w, "value");
+    const int *ls = nt_arr(nt, w, "lefts", &ln);
+    const int *es = v >= 0 && nt_kind(nt, v) == NK_ArrayNode ? nt_arr(nt, v, "elements", &en) : NULL;
+    int d = par[w], rn = 0, spread = 0;
+    const int *rs = nt_arr(nt, w, "rights", &rn);
+    while (d >= 0 && nt_kind(nt, d) != NK_DefNode) d = par[d];
+    if (d == def && ie_local_shadowed(nt, par, w, def, pn)) d = -1;
+    /* (a value list with a splat matches no target by position) */
+    for (int i = 0; i < en; i++) spread |= nt_kind(nt, es[i]) == NK_SplatNode;
+    for (int i = 0; i < ln && d == def; i++)
+      if (nt_kind(nt, ls[i]) == NK_LocalVariableTargetNode && nt_str(nt, ls[i], "name") && sp_streq(nt_str(nt, ls[i], "name"), pn)) {
+        writes++; one = es && !spread && i < en && en == ln ? es[i] : -1;
+      }
+    /* (a target after the list's splat takes no one value) */
+    for (int i = 0; i < rn && d == def; i++)
+      if (nt_kind(nt, rs[i]) == NK_LocalVariableTargetNode && nt_str(nt, rs[i], "name") && sp_streq(nt_str(nt, rs[i], "name"), pn)) {
+        writes += 2; one = -1;
+      }
+  }
+  /* (any other write, `||=` or a target outside such a list, is no one value) */
+  static const NodeKind rmw[] = { NK_LocalVariableOrWriteNode, NK_LocalVariableAndWriteNode,
+                                  NK_LocalVariableOperatorWriteNode, NK_LocalVariableTargetNode };
+  for (int i = 0; i < 4; i++)
+    NT_FOREACH_KIND(nt, rmw[i], w) {
+      const char *wn = nt_str(nt, w, "name");
+      int d = par[w];
+      if (!wn || !sp_streq(wn, pn) || (i == 3 && d >= 0 && nt_kind(nt, d) == NK_MultiWriteNode) ||
+          ie_local_shadowed(nt, par, w, def, pn)) continue;
+      while (d >= 0 && nt_kind(nt, d) != NK_DefNode) d = par[d];
+      if (d == def) { writes += 2; one = -1; }
+    }
+  int pos = -1, at = 0, params = nt_ref(nt, def, "parameters");
+  static const char *const lists[] = { "requireds", "optionals" };
+  int nreq = 0, nposts = 0;
+  if (params >= 0) { nt_arr(nt, params, "requireds", &nreq); nt_arr(nt, params, "posts", &nposts); }
+  for (int l = 0; l < 2 && params >= 0 && pos < 0; l++) {
+    int n = 0; const int *ps = nt_arr(nt, params, lists[l], &n);
+    for (int i = 0; i < n; i++, at++) if (sp_streq(nt_str(nt, ps[i], "name"), pn)) { pos = at; break; }
+  }
+  /* (the def's own scope, the one call_target must answer for a call) */
+  int dsi = -1;
+  for (int i = 0; i < c->nscopes && dsi < 0; i++) if (c->scopes[i].def_node == def) dsi = i;
+  depth++;
+  if (pos < 0 && writes == 1 && one >= 0) key = ie_table_key(c, one, owner);
+  else if (pos >= 0 && !writes) {
+    const char *dn = nt_str(nt, def, "name");
+    int calls = 0, bad = 0;
+    NT_FOREACH_KIND(nt, NK_CallNode, u) {
+      if (bad || !dn || dsi < 0 || !nt_str(nt, u, "name") || !sp_streq(nt_str(nt, u, "name"), dn)) continue;
+      /* (only a call that reaches this def: receiverless or on self in a
+         method of the class line, or on the class for a class method) */
+      int cr = nt_ref(nt, u, "receiver"), ucls = -1, uside = 0;
+      const Scope *us = comp_scope_of(c, u);
+      if ((cr < 0 || nt_kind(nt, cr) == NK_SelfNode) && us && us->class_id >= 0) ucls = us->class_id, uside = us->is_cmethod;
+      else if (cr >= 0 && nt_kind(nt, cr) == NK_ConstantReadNode) ucls = comp_class_at_ruby_path(c, nt_str(nt, cr, "name")), uside = 1;
+      if (ucls < 0 || call_target(c, u, ucls, dn, uside ? CT_CMETHOD : CT_METHODS, NULL) != dsi) continue;
+      int args = nt_ref(nt, u, "arguments"), an = 0, o = -1;
+      const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
+      /* (an optional parameter takes an argument only past the trailing requireds) */
+      int fits = pos < an && (pos < nreq || pos < an - nposts);
+      const char *k = !nt_argv_has(nt, av, an, NT_ARG_SPLAT | NT_ARG_KEYWORDS) && fits ? ie_table_key(c, av[pos], &o) : NULL;
+      if (!k) continue;
+      if (calls && (!sp_streq(k, key) || !ie_owner_related(c, o, *owner))) { bad = 1; continue; }
+      key = k; *owner = o; calls++;
+    }
+    if (bad) key = NULL;
+  }
+  depth--;
+  return key;
+}
 static const char *ie_table_key(Compiler *c, int t, int *owner) {
   const NodeTable *nt = c->nt;
   NodeKind k = t >= 0 ? nt_kind(nt, t) : NK_NONE;
   if (k == NK_LocalVariableReadNode)
     for (int i = g_ie_nheld - 1; i >= 0; i--)
       if (sp_streq(g_ie_held[i].name, nt_str(nt, t, "name"))) return ie_table_key(c, g_ie_held[i].value, owner);
+  if (k == NK_LocalVariableReadNode) return ie_local_table_key(c, t, owner);
   /* (the scope an instance variable is read in owns it: its class, the
      class side apart, as class_id * 2 + is_cmethod) */
   if (k == NK_InstanceVariableReadNode) {
@@ -5420,7 +5538,11 @@ static int ie_class_value_target(Compiler *c, int id, int recv, TyKind rt, int b
   const char *nm = nt_str(c->nt, id, "name");
   int arg = nt_kind(c->nt, blk) == NK_BlockArgumentNode, cls = -1;
   if (rt == TY_CLASS && is_instance_eval_family(nm)) return -2 - id;
-  if (rt == TY_CLASS) return ie_fwd_resolve(c, ie_forward_target(c, id, class_recv_static_ci(c, recv), 1, nm, 0, rb), blk, rb);
+  if (rt == TY_CLASS) {
+    /* (`self.class` naming one class too: Rack::Builder's self.class.new) */
+    int sci = class_recv_static_ci(c, recv);
+    return ie_fwd_resolve(c, ie_forward_target(c, id, sci >= 0 ? sci : self_class_static_ci(c, recv), 1, nm, 0, rb), blk, rb);
+  }
   int may = rt == TY_POLY && ie_name_may_forward(c, nm);
   /* The classes whose chain answers the name, on each side, in place of
      every class on both: a class whose chain does not answer forwards

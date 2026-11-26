@@ -4207,6 +4207,7 @@ sp_bool sp_Thread_stop_p(sp_thread *t) {
    #raise waits for the lock too, as CRuby re-locks before it unwinds. */
 sp_RbVal sp_Mutex_sleep(sp_mutex *m, int has_timeout, double timeout) {
   if (has_timeout && timeout != timeout) sp_raise_cls("RangeError", "NaN out of Time range");
+  if (has_timeout && isinf(timeout) && timeout > 0) sp_raise_cls("RangeError", "Inf out of Time range");
   if (has_timeout && timeout < 0.0) sp_raise_cls("ArgumentError", "time interval must not be negative");
   if (!has_timeout) timeout = -1.0;
   sp_Mutex_unlock(m);   /* raises ThreadError when we don't hold it */
@@ -5832,8 +5833,6 @@ static void sp_CondVar_wait_timeout_blocking(sp_mutex *m, double seconds) {
 
 static sp_RbVal sp_CondVar_wait_nb_impl(sp_condvar *cv, sp_mutex *m);
 static sp_RbVal sp_CondVar_wait_timeout_impl(sp_condvar *cv, sp_mutex *m, double seconds) {
-  /* CRuby checks the interval before it lets go of the mutex */
-  if (seconds < 0.0) sp_raise_cls("ArgumentError", "time interval must not be negative");
   if (!(seconds > 0.0)) return sp_CondVar_wait_nb_impl(cv, m);
 #ifdef SP_THREADS
   /* With no spawned green threads there is no monitor yet. Release the mutex
@@ -5901,6 +5900,11 @@ sp_RbVal sp_CondVar_wait(sp_condvar *cv, sp_mutex *m) {
   return r;
 }
 sp_RbVal sp_CondVar_wait_timeout(sp_condvar *cv, sp_mutex *m, double seconds) {
+  /* CRuby checks the interval before it lets go of the mutex, so a Monitor
+     keeps its depth */
+  if (seconds != seconds) sp_raise_cls("RangeError", "NaN out of Time range");
+  if (isinf(seconds) && seconds > 0) sp_raise_cls("RangeError", "Inf out of Time range");
+  if (seconds < 0.0) sp_raise_cls("ArgumentError", "time interval must not be negative");
   int d = sp_cv_depth_take(m);
   sp_RbVal r = sp_CondVar_wait_timeout_impl(cv, m, seconds);
   m->depth = d;

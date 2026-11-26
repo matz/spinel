@@ -4888,7 +4888,9 @@ static int g_ie_nheld;
    NULL otherwise */
 /* Are owners a and b (class_id * 2 + class side) one table's: the same
    side of the same class or of one a descendant of the other? */
+#define IE_CONST_OWNER (1 << 30)   /* (a table a constant holds: its one write names it) */
 static int ie_owner_related(Compiler *c, int a, int b) {
+  if (a == IE_CONST_OWNER || b == IE_CONST_OWNER) return a == b;
   if (a < 0 || b < 0 || (a & 1) != (b & 1)) return 0;
   int ka = a / 2, kb = b / 2;
   return ka == kb || is_descendant(c, ka, kb) || is_descendant(c, kb, ka);
@@ -4906,6 +4908,20 @@ static const char *ie_table_key(Compiler *c, int t, int *owner) {
     if (!s || s->class_id < 0) return NULL;
     *owner = s->class_id * 2 + (s->is_cmethod ? 1 : 0);
     return nt_str(nt, t, "name");
+  }
+  /* a constant (`PAGES`, `App::PAGES`) that one write in the program
+     names: the table it holds, whatever scope reads it */
+  if (k == NK_ConstantReadNode || k == NK_ConstantPathNode) {
+    const char *cn = nt_str(nt, t, "name");
+    int nw = 0;
+    NT_FOREACH_KIND(nt, NK_ConstantWriteNode, w) if (sp_streq(nt_str(nt, w, "name"), cn)) nw++;
+    NT_FOREACH_KIND(nt, NK_ConstantPathWriteNode, w) {
+      int tg = nt_ref(nt, w, "target");
+      if (tg >= 0 && sp_streq(nt_str(nt, tg, "name"), cn)) nw++;
+    }
+    if (!cn || nw != 1) return NULL;
+    *owner = IE_CONST_OWNER;
+    return cn;
   }
   if (k != NK_CallNode || nt_ref(nt, t, "arguments") >= 0 || nt_ref(nt, t, "block") >= 0) return NULL;
   /* a reader call: the instance variable the one method of its name

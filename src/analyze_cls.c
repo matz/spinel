@@ -3746,6 +3746,9 @@ static void cf_call(CF *f, int v) {
     if (cf_owner_block(f, v, 0) >= 0 && cf_in_exec_block(f, v)) {
       CFByName *b = cf_byname(f, nm);
       if (b->n || b->ncm || b->nrd || b->nwr) { cf_call_any(f, v, nm, argv, argc, blk); return; }
+      /* a name no method of the program answers, where a class's
+         method_missing may: what the hook answers, as for `self.name` */
+      if (f->has_mm && !ie_kernel_global(nm) && !cf_opaque_name(nm)) { cf_call_any(f, v, nm, argv, argc, blk); return; }
     }
     /* Kernel: a conversion, an iteration, `lambda`, `proc`, `loop`, `raise`
        hand on what they are given; `new` has no class here */

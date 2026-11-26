@@ -1826,6 +1826,7 @@ test-corpus-summary: test-corpus-results
 		    head -40 "$$f.diff"; \
 		  elif [ "$$status" = ERR ]; then \
 		    echo "ERR:  $$bn"; \
+		    if [ -s "$$f.err" ]; then head -20 "$$f.err"; fi; \
 		  fi; \
 		done; \
 	fi; \
@@ -4523,7 +4524,7 @@ args=""; \
 if [ -f "$<.args" ]; then args=$$(cat "$<.args"); fi; \
 stdinf=/dev/null; \
 if [ -f "$<.stdin" ]; then stdinf="$<.stdin"; fi; \
-rm -f "$@.diff" "$@.cached" "$@.plan"; \
+rm -f "$@.diff" "$@.cached" "$@.plan" "$@.err"; \
 ckey=""; hit=0; own=0; \
 { $(SPINEL) "$<" $(SP_OV_FLAG) $(TEST_PLAN_CHECK) -c --no-line-map -o "$$cfile" 2>"$$tmpdir/sperr"; sprc=$$?; \
   if [ -n "$(TEST_PLAN_CHECK)" ]; then { grep "^plan-check:" "$$tmpdir/sperr" | sed "s|^|$<: |"; \
@@ -4585,10 +4586,10 @@ perl tools/test_c_metadata.pl < "$$cfile" > "$$tmpdir/cmeta" && \
   if [ $$hit = 1 ]; then \
     :; \
   elif [ -n "$(TEST_SINGLE_INVOKE)" ]; then \
-    $(CC) $(CFLAGS) $$bigopt $(SP_OV_DEFINE) $$mtdef -Werror $(TEST_WARN_SUPPRESS) $(SEC_FLAGS) $$pchuse -Ilib $$cextinc "$$cfile" $$natobjs $$rtlib $(TEST_LDFLAGS) -lm $$mtld $$xlibs $(GC_FLAGS) -o "$$bin" 2>/dev/null; \
+    $(CC) $(CFLAGS) $$bigopt $(SP_OV_DEFINE) $$mtdef -Werror $(TEST_WARN_SUPPRESS) $(SEC_FLAGS) $$pchuse -Ilib $$cextinc "$$cfile" $$natobjs $$rtlib $(TEST_LDFLAGS) -lm $$mtld $$xlibs $(GC_FLAGS) -o "$$bin" 2>>"$$tmpdir/ccerr"; \
   else \
-    $(CC) $(CFLAGS) $$bigopt $(SP_OV_DEFINE) $$mtdef -Werror $(TEST_WARN_SUPPRESS) $(SEC_FLAGS) $$pchuse -Ilib $$cextinc -c "$$cfile" -o "$$cfile.o" 2>/dev/null && \
-    $(CC) $(CFLAGS) "$$cfile.o" $$natobjs $$rtlib $(TEST_LDFLAGS) -lm $$mtld $$xlibs $(GC_FLAGS) -o "$$bin" 2>/dev/null; \
+    $(CC) $(CFLAGS) $$bigopt $(SP_OV_DEFINE) $$mtdef -Werror $(TEST_WARN_SUPPRESS) $(SEC_FLAGS) $$pchuse -Ilib $$cextinc -c "$$cfile" -o "$$cfile.o" 2>>"$$tmpdir/ccerr" && \
+    $(CC) $(CFLAGS) "$$cfile.o" $$natobjs $$rtlib $(TEST_LDFLAGS) -lm $$mtld $$xlibs $(GC_FLAGS) -o "$$bin" 2>>"$$tmpdir/ccerr"; \
   fi; }; \
 built=$$?; \
 if [ $$built -eq 0 ] && [ $$hit = 1 ]; then \
@@ -4627,6 +4628,7 @@ elif [ $$built -eq 0 ]; then \
   fi; \
 else \
   echo ERR > "$@"; \
+  cat "$$tmpdir/sperr" "$$tmpdir/ccerr" > "$@.err" 2>/dev/null; \
   if [ -t 1 ]; then printf E; fi; \
 fi; \
 if [ $$own = 1 ]; then tools/result_cache.sh release "$$ckey"; fi; \

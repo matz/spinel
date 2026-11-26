@@ -8,7 +8,7 @@
 # separator; the Struct is built here. A group's members cross as one
 # field, joined by commas, as a name holds none.
 #
-# Not here: uname, nprocessors, sysconf, confstr, sysconfdir and systmpdir,
+# Not here: uname, sysconf, confstr, sysconfdir and systmpdir,
 # and the forms of passwd and group without a block, which in CRuby step
 # through the database one call at a time.
 module Etc
@@ -22,6 +22,7 @@ module Etc
     native_func :getgrgid,   [:int],    :nstring, "sp_etc_getgrgid"
     native_func :passwd_all, [],        :string,  "sp_etc_passwd_all"
     native_func :group_all,  [],        :string,  "sp_etc_group_all"
+    native_func :nprocessors, [],       :int,     "sp_etc_nprocessors"
   end
 
   # The portable members of CRuby's structs. CRuby adds change, uclass
@@ -41,6 +42,12 @@ module Etc
   def self.__group_of(rec)
     f = rec.split(FIELD_SEPARATOR, -1)
     Group.new(f[0], f[1], f[2].to_i, f[3].empty? ? [] : f[3].split(","))
+  end
+
+  # The CPUs this process may use: its affinity mask on Linux, else the
+  # online CPUs.
+  def self.nprocessors
+    Native.nprocessors
   end
 
   # The login name: getlogin(3), else $USER, else nil, as CRuby answers.

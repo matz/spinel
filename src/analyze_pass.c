@@ -9217,6 +9217,99 @@ static int slot_write_walk(Compiler *c, int w, void *ctx) {
       is_fresh_array(c, a)) return 1;
   return slot_value_walk(c, ws, arg, aw);
 }
+/* The name a global's, class variable's or constant's node n goes by in
+   the walk's set: a constant's key (const_key_at, of a path write's
+   target), which tells two classes' constants of one name apart, else its
+   name. */
+static const char *named_slot_name(Compiler *c, int n) {
+  n = named_slot_node(c->nt, n);
+  if (n < 0) return NULL;
+  return named_slot_family(nt_kind(c->nt, n)) == NS_CONST ? const_key_at(c, n) : nt_str(c->nt, n, "name");
+}
+/* The class an ivar's node is of: its method's class, a class body's,
+   or main's (ivar_main_slot_class); -1 for none. */
+static int ivar_node_class(Compiler *c, int n) {
+  Scope *s = comp_scope_of(c, n);
+  int k = s && s->class_id >= 0 ? s->class_id : c->node_cbody[n];
+  return k >= 0 ? k : ivar_main_slot_class(c, s, n);
+}
+/* Each named slot's writes (slot_write_kind), by family and name
+   (named_slot_name), each name's in the order of their kinds and then of
+   the tree. Rebuilt when the node table or the constants' keys change. */
+struct SlotWriteIndex {
+  const NodeTable *nt; unsigned version; int count, kgen;
+  ANameHash names[NS_IVAR + 1];
+  int *first[NS_IVAR + 1], cap[NS_IVAR + 1], *next;
+};
+void slot_write_index_free(Compiler *c) {
+  struct SlotWriteIndex *x = c->slot_write_index;
+  if (!x) return;
+  for (int f = 0; f <= NS_IVAR; f++) { anh_free(&x->names[f]); free(x->first[f]); }
+  free(x->next); free(x);
+  c->slot_write_index = NULL;
+}
+static int slot_write_first(Compiler *c, int fam, const char *key) {
+  const NodeTable *nt = c->nt;
+  struct SlotWriteIndex *x = c->slot_write_index;
+  if (x && (x->nt != nt || x->version != nt->version || x->count != nt->count || x->kgen != elab_const_keys_gen(c)))
+    slot_write_index_free(c), x = NULL;
+  if (!x) {
+    x = calloc(1, sizeof *x);
+    if (x) x->next = malloc(sizeof(int) * (size_t)(nt->count > 0 ? nt->count : 1));
+    if (!x || !x->next) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    x->nt = nt; x->version = nt->version; x->count = nt->count; x->kgen = elab_const_keys_gen(c);
+    c->slot_write_index = x;
+    int *last[NS_IVAR + 1] = {0};
+    for (NodeKind wk = NK_NONE; wk < NK__COUNT; wk++) {
+      int f = named_slot_family(wk);
+      if (f == NS_NONE || !slot_write_kind(wk, f)) continue;
+      NT_FOREACH_KIND(nt, wk, w) {
+        const char *wn = named_slot_name(c, w);
+        if (!wn) continue;
+        x->next[w] = -1;
+        int k = anh_find(&x->names[f], wn);
+        if (k >= 0) { x->next[last[f][k]] = w; last[f][k] = w; continue; }
+        anh_add(&x->names[f], wn); k = x->names[f].n - 1;
+        if (k >= x->cap[f]) {
+          x->cap[f] = x->cap[f] ? x->cap[f] * 2 : 64;
+          x->first[f] = realloc(x->first[f], sizeof(int) * (size_t)x->cap[f]);
+          last[f] = realloc(last[f], sizeof(int) * (size_t)x->cap[f]);
+          if (!x->first[f] || !last[f]) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+        }
+        x->first[f][k] = last[f][k] = w;
+      }
+    }
+    for (int f = 0; f <= NS_IVAR; f++) free(last[f]);
+  }
+  int k = key && fam > NS_NONE && fam <= NS_IVAR ? anh_find(&x->names[fam], key) : -1;
+  return k >= 0 ? x->first[fam][k] : -1;
+}
+/* Hands fn each write of the slot of family fam named key (a constant's
+   key, named_slot_name), of class cls where the family is a class's: a
+   class variable whose owner is cls (holder_cvar_owner), an ivar of cls or
+   of a class above or below it (ivar_node_class); cls -1 takes every
+   write of the name. Stops where fn answers nonzero, and answers that. */
+static int slot_writes_each(Compiler *c, int fam, const char *key, int cls, int (*fn)(Compiler *, int, void *), void *ctx) {
+  for (int w = slot_write_first(c, fam, key); w >= 0; w = c->slot_write_index->next[w]) {
+    if (cls >= 0 && fam == NS_CVAR && holder_cvar_owner(c, w, key, holder_cbody(c, w)) != cls) continue;
+    if (cls >= 0 && fam == NS_IVAR) {
+      int wc = ivar_node_class(c, w);
+      if (wc < 0 || (wc != cls && !is_descendant(c, wc, cls) && !is_descendant(c, cls, wc))) continue;
+    }
+    int r = fn(c, w, ctx);
+    if (r) return r;
+  }
+  return 0;
+}
+typedef struct { AttrArgWalk aw; int saw; } SlotWritesWalk;
+/* slot_writes_each's step for ivar_writes_fresh and named_src_walk: the
+   write walked (slot_write_walk), stopping where a check meets one it
+   cannot follow */
+static int slot_writes_walk_one(Compiler *c, int w, void *ctx) {
+  SlotWritesWalk *x = ctx;
+  x->saw = 1;
+  return slot_write_walk(c, w, &x->aw) && !x->aw.apply;
+}
 /* 1 when every write of ivar `ivn` of class `cls` (or of a class it shares
    the slot with) leaves a value whose Arrays can all be the general Array
    (slot_write_walk), so the slot can be the general Array with no copy the
@@ -9224,21 +9317,10 @@ static int slot_write_walk(Compiler *c, int w, void *ctx) {
    value cannot be followed. With `apply` widens them, setting *ch on a
    change. The walk is st at `depth`, the slot among the ones it follows. */
 static int ivar_writes_fresh(Compiler *c, int cls, const char *ivn, int apply, int *ch, SrcWalk *st, int depth) {
-  const NodeTable *nt = c->nt;
-  AttrArgWalk aw = { st, depth, apply, 0, 0 };
-  int saw = 0;
-  for (NodeKind wk = NK_NONE; wk < NK__COUNT; wk++)
-    if (slot_write_kind(wk, NS_IVAR)) NT_FOREACH_KIND(nt, wk, w) {
-      if (!sp_streq(nt_str(nt, w, "name"), ivn)) continue;
-      Scope *ws = comp_scope_of(c, w);
-      int wc = ws && ws->class_id >= 0 ? ws->class_id : c->node_cbody[w];
-      if (wc < 0) wc = ivar_main_slot_class(c, ws, w);
-      if (wc < 0 || (wc != cls && !is_descendant(c, wc, cls) && !is_descendant(c, cls, wc))) continue;
-      if (slot_write_walk(c, w, &aw) && !apply) return -1;
-      saw = 1;
-    }
-  if (apply) *ch |= aw.ch;
-  return saw;
+  SlotWritesWalk x = { { st, depth, apply, 0, 0 }, 0 };
+  if (slot_writes_each(c, NS_IVAR, ivn, cls, slot_writes_walk_one, &x)) return -1;
+  if (apply) *ch |= x.aw.ch;
+  return x.saw;
 }
 /* ivar_src_walk's answers for ivar ivi of class cls, kept on the Compiler
    (c->ivar_walk_memo) for a walk that starts at the read (depth 0, where
@@ -9338,15 +9420,6 @@ static int ivar_src_walk(Compiler *c, int v, int icls, const char *ivn, int appl
   if (!member && !c->ivar_widen_src[v]) { c->ivar_widen_src[v] = 1; ch = 1; }
   return ch;
 }
-/* The name a global's, class variable's or constant's node n goes by in
-   the walk's set: a constant's key (const_key_at, of a path write's
-   target), which tells two classes' constants of one name apart, else its
-   name. */
-static const char *named_slot_name(Compiler *c, int n) {
-  n = named_slot_node(c->nt, n);
-  if (n < 0) return NULL;
-  return named_slot_family(nt_kind(c->nt, n)) == NS_CONST ? const_key_at(c, n) : nt_str(c->nt, n, "name");
-}
 /* array_src_walk's step for a value `v` that reads a global, a class
    variable or a constant (named_array_slot), or is a write of one, which
    answers what the slot then holds: every write of the slot leaves a value
@@ -9365,22 +9438,14 @@ static int named_src_walk(Compiler *c, int v, int apply, SrcWalk *st, int depth)
   if (!nm || st->nslot == 8) return 0;
   if (src_walk_follows(st, cls, nm)) return !apply;
   st->slcls[st->nslot] = cls; st->slname[st->nslot++] = nm;
-  AttrArgWalk aw = { st, depth, apply, 0, 0 };
-  int saw = 0, stop = 0;
-  for (NodeKind wk = NK_NONE; wk < NK__COUNT && !stop; wk++)
-    if (slot_write_kind(wk, fam)) NT_FOREACH_KIND(nt, wk, w) {
-      const char *wn = stop ? NULL : named_slot_name(c, w);
-      if (!wn || !sp_streq(wn, nm)) continue;
-      /* a class variable of another class is another slot, unless that class
-         inherits it */
-      if (cls >= 0 && holder_cvar_owner(c, w, nm, holder_cbody(c, w)) != cls) continue;
-      stop = slot_write_walk(c, w, &aw) && !apply;
-      saw = 1;
-    }
+  /* (a class variable of another class is another slot, unless that class
+     inherits it) */
+  SlotWritesWalk x = { { st, depth, apply, 0, 0 }, 0 };
+  int stop = slot_writes_each(c, fam, nm, cls, slot_writes_walk_one, &x);
   st->nslot--;
-  if (!apply) return saw && !stop;
-  if (*ns != TY_POLY_ARRAY) { ty_ref_set(c, ns, TY_POLY_ARRAY); aw.ch = 1; }
-  return aw.ch;
+  if (!apply) return x.saw && !stop;
+  if (*ns != TY_POLY_ARRAY) { ty_ref_set(c, ns, TY_POLY_ARRAY); x.aw.ch = 1; }
+  return x.aw.ch;
 }
 /* array_src_walk's step for method t, one a call no one target is
    resolved for may run (the #10058 arm): each of its values followed and

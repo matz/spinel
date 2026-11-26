@@ -2,3 +2,16 @@ true
 false
 true
 true
+"wrong number of arguments (given 2, expected 1)"
+"wrong number of arguments (given 2, expected 1)"
+true
+false
+"wrong number of arguments (given 2, expected 1)"
+"wrong number of arguments (given 2, expected 1)"
+[1, {k: nil, j: 1.5}]
+[0, {k: 2, j: nil}]
+[3, {k: 4, j: 2.0}]
+[[1], {k: nil, j: 1.5}]
+[[0], {k: 2, j: nil}]
+[[3], {k: 4, j: 2.0}]
+[{k: nil}, {k: 3}, {z: 1, k: 7}]

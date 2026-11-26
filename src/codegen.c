@@ -16510,6 +16510,7 @@ static int zsuper_npos(Compiler *c, Scope *s) {
 }
 
 static int emit_zsuper_gather(Compiler *c, Scope *s, Scope *pm);
+static void emit_zsuper_boxed(Compiler *c, LocalVar *ep, TyKind et, const char *txt, Buf *b);
 
 /* The parent's **kwrest from a bare super: this method's `**`, less the
    keywords the parent names, and the keywords the parent declares no
@@ -16536,8 +16537,7 @@ static int emit_zsuper_kwrest(Compiler *c, Scope *s, Scope *pm) {
     Buf txt; memset(&txt, 0, sizeof txt); emit_scope_local_ref(c, s, s->pnames[s->kwrest_idx], &txt);
     emit_indent(g_pre, g_indent);
     buf_printf(g_pre, "%s(_t%d, ", any ? "sp_kw_merge_any" : "sp_kwrest_merge_poly", t);
-    if (kv && kv->type == TY_POLY) buf_puts(g_pre, txt.p);
-    else emit_boxed_text(c, kv ? kv->type : TY_SYM_POLY_HASH, txt.p, g_pre);
+    emit_zsuper_boxed(c, kv, kv ? kv->type : TY_SYM_POLY_HASH, txt.p, g_pre);
     buf_puts(g_pre, ");\n");
     free(txt.p);
     /* less the keywords the parent names: those bind from it by name */
@@ -16556,8 +16556,7 @@ static int emit_zsuper_kwrest(Compiler *c, Scope *s, Scope *pm) {
     emit_indent(g_pre, g_indent);
     buf_printf(g_pre, any ? "sp_PolyPolyHash_set(_t%d, sp_box_sym((sp_sym)%d), "
                           : "sp_SymPolyHash_set(_t%d, (sp_sym)%d, ", t, comp_sym_intern(c, s->pnames[i]));
-    if (ep && ep->type == TY_POLY) buf_puts(g_pre, txt.p);
-    else emit_boxed_text(c, ep ? ep->type : TY_POLY, txt.p, g_pre);
+    emit_zsuper_boxed(c, ep, ep ? ep->type : TY_POLY, txt.p, g_pre);
     buf_puts(g_pre, ");\n");
     free(txt.p);
   }
@@ -16863,8 +16862,7 @@ static int zsuper_gather(Compiler *c, Scope *s, int kwpos, Buf *o) {
       Buf txt; memset(&txt, 0, sizeof txt); emit_scope_local_ref(c, s, s->pnames[s->kwrest_idx], &txt);
       zsuper_gather_open(o);
       buf_printf(o, "%s(_t%d, ", any ? "sp_kw_merge_any" : "sp_kwrest_merge_poly", t);
-      if (kv && kv->type == TY_POLY) buf_puts(o, txt.p);
-      else emit_boxed_text(c, kv ? kv->type : TY_SYM_POLY_HASH, txt.p, o);
+      emit_zsuper_boxed(c, kv, kv ? kv->type : TY_SYM_POLY_HASH, txt.p, o);
       buf_puts(o, ");");
       zsuper_gather_close(o);
       free(txt.p);
@@ -16876,8 +16874,7 @@ static int zsuper_gather(Compiler *c, Scope *s, int kwpos, Buf *o) {
       zsuper_gather_open(o);
       buf_printf(o, any ? "sp_PolyPolyHash_set(_t%d, sp_box_sym(sp_sym_intern(\"%s\")), "
                         : "sp_SymPolyHash_set(_t%d, sp_sym_intern(\"%s\"), ", t, s->pnames[i]);
-      if (kp && kp->type == TY_POLY) buf_puts(o, txt.p);
-      else emit_boxed_text(c, kp ? kp->type : TY_POLY, txt.p, o);
+      emit_zsuper_boxed(c, kp, kp ? kp->type : TY_POLY, txt.p, o);
       buf_puts(o, ");");
       zsuper_gather_close(o);
       free(txt.p);

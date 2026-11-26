@@ -6620,6 +6620,36 @@ int desugar_step_kwargs(Compiler *c) {
    stranding an un-emittable top-level instance_exec (which links to an undefined
    function). Class-level instance_exec forwarders DO rebind self to the instance
    and are handled by their own trampoline splice, so they are left untouched. */
+/* In an instance method, a receiverless `instance_exec(&expr)` or
+   `instance_eval(&expr)` of a stored block (an expression, not a local:
+   `&self.class.bodies[name]`) is `self.instance_exec(&expr)`, the form that
+   lowers; the receiverless one was refused. A local's block is left to the
+   forwarders that splice a method's own &block. */
+static int ie_stored_block_self(Compiler *c, NodeTable *nt, int id, const char *nm, int sc) {
+  if (!sp_streq(nm, "instance_exec") && !sp_streq(nm, "instance_eval")) return 0;
+  const Scope *s = &c->scopes[sc];
+  if (s->class_id < 0 || s->is_cmethod || s->def_node < 0) return 0;
+  int blk = nt_call_block_arg(nt, id);
+  int bexpr = blk >= 0 ? nt_ref(nt, blk, "expression") : -1;
+  if (bexpr < 0 || nt_kind(nt, bexpr) == NK_LocalVariableReadNode) return 0;
+  int sn = nt_new_node(nt, "SelfNode");
+  if (sn < 0) return 0;
+  comp_grow_node_arrays(c);
+  c->nscope[sn] = c->nscope[id];
+  nt_set_self_receiver(nt, id, sn);
+  return 1;
+}
+int desugar_ie_stored_block_self_recv(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int changed = 0, n0 = nt->count;
+  for (int id = 0; id < n0; id++) {
+    if (nt_kind(nt, id) != NK_CallNode || nt_ref(nt, id, "receiver") >= 0) continue;
+    const char *nm = nt_str(nt, id, "name");
+    int sc = id < c->node_cap ? c->nscope[id] : -1;
+    if (nm && sc >= 0 && sc < c->nscopes && ie_stored_block_self(c, nt, id, nm, sc)) changed = 1;
+  }
+  return changed;
+}
 int desugar_toplevel_instance_exec(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;

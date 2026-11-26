@@ -1167,6 +1167,7 @@ int disp_super_call(NodeTable *nt, int ar, int blk);
 int disp_method_missing_call(NodeTable *nt, const char *name, int ar, int blk);
 int desugar_dynamic_respond_to(Compiler *c);
 int desugar_toplevel_instance_exec(Compiler *c);
+int desugar_ie_stored_block_self_recv(Compiler *c);   /* instance method: instance_exec(&<stored>) -> self.instance_exec */
 int desugar_binding_lvget(Compiler *c);
 int desugar_step_kwargs(Compiler *c);
 int desugar_defined_method_call(Compiler *c);

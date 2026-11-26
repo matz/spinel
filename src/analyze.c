@@ -51356,6 +51356,8 @@ static void an_phase_block_inline(Compiler *c) {
 
   AN_STEP_V("desugar_ivar_reflection_self_recv", desugar_ivar_reflection_self_recv(c));
 
+  AN_STEP_V("desugar_ie_stored_block_self_recv", desugar_ie_stored_block_self_recv(c));
+
   AN_STEP_V("desugar_struct_builtin_self_recv", desugar_struct_builtin_self_recv(c));
 
   /* `&block` + block.call: a method whose block parameter never escapes

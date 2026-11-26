@@ -46755,6 +46755,34 @@ static int mrr_rebinds_by_code(Compiler *c, int x, const char *vn, int encl) {
   for (int i = 0; i < g_mrr_n && !found; i++) found = g_mrr_w[i].encl == encl && sp_streq(g_mrr_w[i].name, vn);
   return found && subtree_may_run_proc(c, x);
 }
+/* Does subtree x call a method of the program whose body assigns the
+   variable of prefix pfx and name vn where it is written, or calls one
+   that does (to a depth of two)? A method of the name in any class
+   counts. (A broader "may it write" asks too much here: the snapshot a
+   hit takes reads the variable as a String, and one that is nil at the
+   call lost nil's NoMethodError, so only a write the source spells
+   takes it.) */
+static int mrr_calls_assign(Compiler *c, int x, const char *pfx, const char *vn, int depth) {
+  const NodeTable *nt = c->nt;
+  if (x < 0 || depth > 2) return 0;
+  NodeKind k = nt_kind(nt, x);
+  if (k == NK_DefNode || k == NK_LambdaNode) return 0;
+  if (k == NK_CallNode) {
+    const char *nm = nt_str(nt, x, "name");
+    for (int si = 0; nm && si < c->nscopes; si++) {
+      const Scope *s = &c->scopes[si];
+      if (!s->name || !sp_streq(s->name, nm) || s->body < 0 || s->def_node < 0) continue;
+      if (rr_writes_var(nt, s->body, pfx, vn) || mrr_calls_assign(c, s->body, pfx, vn, depth + 1)) return 1;
+    }
+  }
+  for (int i = 0, nr = nt_num_refs(nt, x); i < nr; i++)
+    if (mrr_calls_assign(c, nt_ref_at(nt, x, i), pfx, vn, depth)) return 1;
+  for (int i = 0, na = nt_num_arrs(nt, x); i < na; i++) {
+    int m = 0; const int *ids = nt_arr_at(nt, x, i, &m);
+    for (int j = 0; j < m; j++) if (mrr_calls_assign(c, ids[j], pfx, vn, depth)) return 1;
+  }
+  return 0;
+}
 static int desugar_mutator_recv_rebind(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count, changed = 0;
@@ -46794,6 +46822,13 @@ static int desugar_mutator_recv_rebind(Compiler *c) {
     for (int cur = id; pfx[0] == 'L' && cur >= 0 && cur != base && !hit; cur = nt_ref(nt, cur, "receiver"))
       hit = mrr_rebinds_by_code(c, nt_ref(nt, cur, "arguments"), vn, benc) ||
             mrr_rebinds_by_code(c, nt_ref(nt, cur, "block"), vn, benc);
+    /* ...and an ivar, a global or a class variable, a method the argument
+       calls may assign (`@s << reas(2)` with `def reas = (@s = +"WXYZ"; ...)`):
+       an ivar by a method of self's class, as subtree_may_write_ivar follows
+       them, and any of them where self is no instance of one */
+    for (int cur = id; pfx[0] != 'L' && cur >= 0 && cur != base && !hit; cur = nt_ref(nt, cur, "receiver"))
+      hit = mrr_calls_assign(c, nt_ref(nt, cur, "arguments"), pfx, vn, 0) ||
+            mrr_calls_assign(c, nt_ref(nt, cur, "block"), pfx, vn, 0);
     if (!hit) continue;
     /* These names also belong to Arrays, Hashes and user objects. Only a
        String receiver needs the String emitters' receiver snapshot. */

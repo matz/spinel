@@ -1,0 +1,5 @@
+["\"abqrs\"", "WXYZ", [2]]
+["\"qrs\"", "WXYZ", [2, 3]]
+["\"abqrs\"", "WXYZ"]
+["\"aqrsb\"", "WXYZ"]
+["\"abqrs\"", "WXYZ"]

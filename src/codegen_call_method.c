@@ -1292,8 +1292,13 @@ int emit_op_method_receiver(Compiler *c, const BopCtx *x, Buf *b) {
     buf_printf(b, "({ sp_BoundMethod *_t%d = ", tm);
     emit_expr(c, recv, b);
     buf_printf(b, "; SP_GC_ROOT(_t%d); ", tm);
-    if (repr_of(c, mrecv).kind == RK_BOXED) buf_puts(b, rv);
-    else emit_unbox_text(c, repr_of(c, mrecv).as_ty, rv, b);
+    Repr kr = repr_of(c, mrecv);
+    /* (an object slot's value is of its class or nil: the payload is the
+       pointer, which needs no class check, nor the class bank such a check
+       reads, sp_poly_unbox_cls) */
+    if (kr.kind == RK_PTR && ty_is_object(kr.as_ty)) buf_printf(b, "(%s *)%s.v.p", class_ctype(c, ty_object_class(kr.as_ty)), rv);
+    else if (kr.kind == RK_BOXED) buf_puts(b, rv);
+    else emit_unbox_text(c, kr.as_ty, rv, b);
     buf_puts(b, "; })");
     return 1;
   }

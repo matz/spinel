@@ -25346,6 +25346,7 @@ char *codegen_program(const NodeTable *nt) {
   /* Feature flags must be computed BEFORE the preamble emit below: the
      symbol runtime, class-name table, inspect dispatch, and Marshal stub
      emissions are gated on them (a `puts "hello"` program gets none). */
+  intern_super_respond_names(c);   /* names the symbol table must list */
   g_needs_class_machinery = program_needs_class_machinery(c);
   scan_prologue_features(c);
   refuse_syserr_errno_const(c);

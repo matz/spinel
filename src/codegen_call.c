@@ -35594,6 +35594,66 @@ int object_private_method_name(const char *qm) {
 }
 
 
+/* The classes whose objects a respond_to? super of class cid answers for:
+   cid, and (unless its objects are by-value) the descendants that inherit
+   the method and its super. */
+static int super_respond_classes(Compiler *c, int cid, int cls[256]) {
+  int ncls = 0;
+  cls[ncls++] = cid;
+  if (!c->classes[cid].is_value_type)
+    for (int k = 0; k < c->nclasses && ncls < 256; k++)
+      if (k != cid && is_descendant(c, k, cid)) cls[ncls++] = k;
+  return ncls;
+}
+/* The names the switch of the respond_to? super `id` of class cid has a
+   case for, in its order: Object's public methods, the names a run-time
+   send resolves over, and Object's private methods, each once and only
+   where one of the classes answers it. strdup'd; the caller frees. */
+static char **super_respond_names(Compiler *c, int id, int cid, int *out_n) {
+  int cls[256], ncls = super_respond_classes(c, cid, cls), ncand = 0, n = 0;
+  char **cand = dsend_candidates(c, &ncand);
+  const char *const *priv_universal = object_private_method_names();
+  int cap = ncand + 1;
+  for (int u = 0; respond_universal[u]; u++) cap++;
+  for (int u = 0; priv_universal[u]; u++) cap++;
+  char **out = (char **)malloc(sizeof(char *) * (size_t)cap);
+  if (!out) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int pass = 0; pass < 3; pass++) {
+    const char *const *list = pass == 2 ? priv_universal : respond_universal;
+    for (int q = 0; pass == 1 ? q < ncand : list[q] != NULL; q++) {
+      const char *qm = pass == 1 ? cand[q] : list[q];
+      int dup = 0;
+      for (int u = 0; pass && respond_universal[u] && !dup; u++) dup = sp_streq(qm, respond_universal[u]);
+      for (int u = 0; pass == 2 && u < ncand && !dup; u++) dup = sp_streq(qm, cand[u]);
+      int any = 0;
+      for (int k = 0; k < ncls && !dup && !any; k++) any = cplan_obj_responds(c, cls[k], qm, id) != 0;
+      if (any) out[n++] = strdup(qm);
+    }
+  }
+  for (int q = 0; q < ncand; q++) free(cand[q]);
+  free(cand);
+  *out_n = n;
+  return out;
+}
+/* Interns, ahead of the program's symbol table, the names each respond_to?
+   super's switch has a case for (codegen_program, before the table is
+   written). Interned while the switch was emitted, a case's id came after
+   the table, so a Symbol the run made took that id and answered for the
+   case's name. */
+void intern_super_respond_names(Compiler *c) {
+  for (int id = 0; id < c->nt->count; id++) {
+    NodeKind k = nt_kind(c->nt, id);
+    if (k != NK_SuperNode && k != NK_ForwardingSuperNode) continue;
+    int si = c->nscope[id];
+    if (si < 0 || si >= c->nscopes || c->scopes[si].class_id < 0) continue;
+    if ((BsuperArm)cplan_user(c, id).bsuper != BSUP_RESPOND_TO) continue;
+    int n = 0;
+    char **names = super_respond_names(c, id, c->scopes[si].class_id, &n);
+    for (int q = 0; q < n; q++) { comp_sym_intern(c, names[q]); free(names[q]); }
+    free(names);
+  }
+}
+
 /* `super` inside a user-defined respond_to?(m, include_all = false) that no
    ancestor defines is Object#respond_to? for this object: a switch over the
    interned name, each arm the method-table answer for the object's runtime
@@ -35675,12 +35735,7 @@ void emit_super_respond_to(Compiler *c, int id, Scope *s, Buf *b) {
   else { buf_puts(b, "sp_poly_truthy("); emit_boxed_text(c, ia_ty, ia.p ? ia.p : "sp_box_nil()", b); buf_puts(b, ")"); }
   free(ia.p);
   /* the runtime class: this one, or a descendant inheriting the method */
-  int ncls = 0, cls[256];
-  cls[ncls++] = cid;
-  int by_value = c->classes[cid].is_value_type;
-  if (!by_value)
-    for (int k = 0; k < c->nclasses && ncls < 256; k++)
-      if (k != cid && is_descendant(c, k, cid)) cls[ncls++] = k;
+  int cls[256], ncls = super_respond_classes(c, cid, cls);
   if (ncls > 1) buf_printf(b, "; sp_int _c%d = sp_obj_cls_id_of((void *)%s)", t, g_self);
   /* a block argument runs after the arguments, for its effect */
   buf_puts(b, "; ");
@@ -35692,44 +35747,29 @@ void emit_super_respond_to(Compiler *c, int id, Scope *s, Buf *b) {
                   "_s%d = _t%d.tag == SP_TAG_SYM ? (sp_sym)_t%d.v.i : sp_sym_intern(sp_poly_to_s(_t%d)); ",
                tn, tn, tn, t, tn, tn, tn);
   buf_printf(b, "sp_bool _r%d = 0; switch (_s%d) {", t, t);
-  int ncand = 0;
-  char **cand = dsend_candidates(c, &ncand);
-  /* the names every object has privately (Object's private methods), which
-     neither list need carry */
-  const char *const *priv_universal = object_private_method_names();
-  for (int pass = 0; pass < 3; pass++) {
-    int n = pass == 1 ? ncand : 0;
-    const char *const *list = pass == 2 ? priv_universal : respond_universal;
-    for (int q = 0; pass == 1 ? q < n : list[q] != NULL; q++) {
-      const char *qm = pass == 1 ? cand[q] : list[q];
-      if (pass) {
-        int dup = 0;
-        for (int u = 0; respond_universal[u]; u++) if (sp_streq(qm, respond_universal[u])) { dup = 1; break; }
-        for (int u = 0; pass == 2 && u < ncand; u++) if (sp_streq(qm, cand[u])) { dup = 1; break; }
-        if (dup) continue;
-      }
-      int ans[256], same = 1, any = 0;
-      for (int k = 0; k < ncls; k++) {
-        ans[k] = cplan_obj_responds(c, cls[k], qm, id);
-        if (ans[k]) any = 1;
-        if (ans[k] != ans[0]) same = 0;
-      }
-      if (!any) continue;
-      char incl[24]; snprintf(incl, sizeof incl, "_i%d", t);
-      buf_printf(b, " case %d:", comp_sym_intern(c, qm));
-      if (same) buf_printf(b, " _r%d = %s; break;", t, ans[0] == 2 ? "1" : incl);
-      else {
-        buf_printf(b, " _r%d = ", t);
-        for (int k = 0; k < ncls; k++) {
-          if (!ans[k]) continue;
-          buf_printf(b, "_c%d == %d ? %s : ", t, cls[k], ans[k] == 2 ? "1" : incl);
-        }
-        buf_puts(b, "0; break;");
-      }
+  int nn = 0;
+  char **names = super_respond_names(c, id, cid, &nn);
+  char incl[24]; snprintf(incl, sizeof incl, "_i%d", t);
+  for (int q = 0; q < nn; q++) {
+    int ans[256], same = 1;
+    for (int k = 0; k < ncls; k++) {
+      ans[k] = cplan_obj_responds(c, cls[k], names[q], id);
+      if (ans[k] != ans[0]) same = 0;
     }
+    /* (interned ahead of the symbol table: intern_super_respond_names) */
+    buf_printf(b, " case %d:", comp_sym_intern(c, names[q]));
+    if (same) buf_printf(b, " _r%d = %s; break;", t, ans[0] == 2 ? "1" : incl);
+    else {
+      buf_printf(b, " _r%d = ", t);
+      for (int k = 0; k < ncls; k++) {
+        if (!ans[k]) continue;
+        buf_printf(b, "_c%d == %d ? %s : ", t, cls[k], ans[k] == 2 ? "1" : incl);
+      }
+      buf_puts(b, "0; break;");
+    }
+    free(names[q]);
   }
-  for (int q = 0; q < ncand; q++) free(cand[q]);
-  free(cand);
+  free(names);
   buf_printf(b, " default: _r%d = 0; } _r%d; })", t, t);
 }
 

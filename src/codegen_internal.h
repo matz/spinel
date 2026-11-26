@@ -1260,6 +1260,8 @@ int class_has_exc_name(Compiler *c, int ci);
 int any_exc_reopen(Compiler *c);
 char **dsend_candidates(Compiler *c, int *out_n);
 void emit_super_respond_to(Compiler *c, int id, Scope *s, Buf *b);
+/* the names respond_to? supers' switches case on, interned before the symbol table is written */
+void intern_super_respond_names(Compiler *c);
 /* a super's forwarded parameter pi, boxed (an oint slot through oint_box) */
 void emit_boxed_fwd_param(Compiler *c, Scope *s, int pi, Buf *b);
 /* a super's block argument run for its effect: "(void)(x); " */

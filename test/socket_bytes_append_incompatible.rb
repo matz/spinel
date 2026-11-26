@@ -64,6 +64,27 @@ rescue Encoding::CompatibilityError
 end
 puts "kept: #{u.encoding} #{u.bytesize}"
 
+# concat with several arguments checks them all before it appends any:
+# the receiver is left as it was, even when it is one of the arguments.
+def concat_kept(name, s)
+  3.times do
+    begin
+      yield s
+    rescue Encoding::CompatibilityError
+    end
+  end
+  puts "concat #{name}: #{s.encoding} #{s.bytes.inspect}"
+end
+concat_kept("self, bytes", +"é") { |s| s.concat(s, buf) }
+concat_kept("ascii, bytes", +"é") { |s| s.concat("x", buf) }
+concat_kept("self, self, bytes", +"é") { |s| s.concat(s, s, buf) }
+concat_kept("bytes, text", +"a") { |s| s.concat(buf, "é") }
+concat_kept("self, bytes, text", +"a") { |s| s.concat(s, buf, "é") }
+args = [buf, "é"]
+concat_kept("splat bytes, text", +"a") { |s| s.concat(*args) }
+try("concat self, ascii") { s = +"é"; s.concat(s, "x") }
+try("concat ascii, bytes onto ascii") { s = +"a"; s.concat("b", buf) }
+
 try("ascii << bytes") { v = +"id="; v << buf }
 try("bytes << ascii") { v = buf.dup; v << "ok" }
 try("empty << text") { v = String.new; v << "é" }

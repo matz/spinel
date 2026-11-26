@@ -16828,7 +16828,7 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       if (tfb) buf_printf(b, "; _t%d->blocking = sp_poly_truthy(_t%d); _t%d; })", tfb, tbl, tfb);
       { *out = 1; return 1; }
     }
-    if (cn && sp_streq(cn, "Queue")) { buf_puts(b, "sp_Queue_new()"); { *out = 1; return 1; } }
+    if (cn && sp_streq(cn, "Queue")) { emit_queue_new(c, argc, argv, b); { *out = 1; return 1; } }
     if (cn && sp_streq(cn, "SizedQueue") && argc == 1) {
       buf_puts(b, "sp_SizedQueue_new("); emit_int_expr(c, argv[0], b); buf_puts(b, ")"); { *out = 1; return 1; }
     }
@@ -20753,7 +20753,12 @@ int emit_value_methods_reflection(Compiler *c, int id, Buf *b) {
   const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
   const char *name = nt_str(nt, id, "name");
   TyKind rt = comp_ntype(c, recv);
-  const char *cls = an_value_methods_class(c, recv, rt, name, argc, argv);
+  const char *cls = an_value_methods_class_at(c, id, recv, rt, name, argc, argv);
+  /* the builtin default of a boxed call beside a class's own `methods`
+     (emit_poly_builtin_default): the list, for the receivers no arm took */
+  if (!cls && rt == TY_POLY && g_arm.builtin_arm && g_arm.pd_skip == id && nt_kind(nt, recv) != NK_SelfNode &&
+      (sp_streq(name, "methods") || sp_streq(name, "public_methods")) &&
+      an_object_methods_all_arg(c, -1, argc, argv) == 1) cls = "";
   if (!cls) return 0;
   int prot = sp_streq(name, "methods");
   if (!cls[0]) {

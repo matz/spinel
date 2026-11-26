@@ -10968,7 +10968,9 @@ static void emit_proc_ie_self(Compiler *c, int ie_mark, int ie_cls, int rself, i
                "    if (!self) sp_raise_cls(\"NotImplementedError\", \"proc bound to instance_eval called without it\");\n",
                c->classes[ie_cls].c_name, c->classes[ie_cls].c_name);
   else if (ie_mark >= 0) buf_puts(pb, "    _sp_ie_self = NULL;\n");  /* the caller set it; no later call may read it */
-  if (rself != 1) return;
+  /* a literal an instance_eval runs has that self: a runtime self of the
+     body this literal sits in is not its own */
+  if (rself != 1) { if (ie_mark >= 0) g_ie_rself_on = 0; return; }
   if (g_rself_default_boxed) { buf_printf(pb, "    sp_RbVal _sp_rself = sp_ie_rself(((_proc_cap_%s *)_cap)->__rself_dflt); (void)_sp_rself;\n", g_rself_default_boxed_pid); return; }
   Buf rb; memset(&rb, 0, sizeof rb);
   g_ie_rself_on = 0;
@@ -20554,6 +20556,21 @@ int class_builtin_superclass(Compiler *c, int i) {
        "DomainError", has no id, and the class sat under Object */
     const char *exc_nm = superclass_builtin_exc_name(c, c->nt, sc_node);
     if (exc_nm) sc_nm = exc_nm;
+    /* a constant that holds a builtin (`Impl = ::Hash`), written once (const_single_write) */
+    int sc_top = sc_k == NK_ConstantReadNode || (sc_k == NK_ConstantPathNode && nt_ref(c->nt, sc_node, "parent") < 0);   /* (`Impl` or `::Impl`) */
+    for (int d = 0; sc_nm && sc_top && builtin_class_id(sc_nm) == 0 && comp_class_index(c, sc_nm) < 0 && d < 8; d++) {
+      int w = const_single_write(c, sc_nm), v = w >= 0 ? nt_ref(c->nt, w, "value") : -1;
+      sc_k = v >= 0 ? nt_kind(c->nt, v) : NK_NONE;
+      sc_nm = sc_k == NK_ConstantReadNode || sc_k == NK_ConstantPathNode ? key_name(c, v) : NULL;
+      sc_top = sc_k == NK_ConstantReadNode || (sc_k == NK_ConstantPathNode && nt_ref(c->nt, v, "parent") < 0);
+      /* (a qualified target names a builtin only as Thread's, as builtin_value_superclass reads one:
+         `Other::Hash` is another module's constant) */
+      if (sc_nm && !sc_top) {
+        int pp = nt_ref(c->nt, v, "parent");
+        const char *pn = pp >= 0 && nt_kind(c->nt, pp) == NK_ConstantReadNode ? nt_str(c->nt, pp, "name") : NULL;
+        if (!pn || !sp_streq(pn, "Thread")) sc_nm = NULL;
+      }
+    }
     if (sc_nm) { int bid = builtin_class_id(sc_nm); if (bid != 0) builtin_par = bid; }
   }
   return builtin_par;

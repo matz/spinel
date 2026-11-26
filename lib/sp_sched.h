@@ -65,6 +65,8 @@ typedef struct sp_thread {
                                       its place in the arrival order */
   unsigned char     preempt_request; /* sysmon set this thread over its timeslice; it yields at its
                                         next safepoint poll (cooperative preemption, §5) */
+  unsigned char     in_trap;     /* the depth of trap procs this thread runs (sp_trap_call):
+                                    Mutex#lock raises ThreadError inside one, as CRuby's does */
   short             home_wid;      /* worker this thread FIRST ran on, -1 before its first run.
                                       A started green thread is pinned there: its live C frames
                                       hold compiler-cached addresses of that worker's __thread
@@ -332,6 +334,8 @@ sp_mutex  *sp_Monitor_new(void);              /* a Mutex with reentrancy on */
 const char *sp_Mutex_class_name(sp_mutex *m); /* "Monitor" or "Thread::Mutex" */
 const char *sp_Queue_class_name(sp_queue *q);  /* "Thread::SizedQueue" or "Thread::Queue" */
 void       sp_Mutex_lock(sp_mutex *m);
+void       sp_sched_trap_enter(void);   /* sp_trap_call runs a trap proc */
+void       sp_sched_trap_leave(void);
 void       sp_Mutex_unlock(sp_mutex *m);
 sp_RbVal   sp_Mutex_sleep(sp_mutex *m, int has_timeout, double timeout);  /* #sleep / #sleep(t) */
 sp_bool   sp_Mutex_try_lock(sp_mutex *m);   /* #try_lock: true if acquired */

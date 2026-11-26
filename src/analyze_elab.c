@@ -5200,7 +5200,7 @@ static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int
          nowhere, or `Known::Thing` where Known holds no Thing): the
          statement raises NameError where it runs, before it mixes any in,
          so it is no mixin and defines nothing (codegen reads the mark) */
-      int fail = -1;
+      int fail = -1, later = 0;
       for (int q = 0; q < ac && fail < 0; q++)
         if (q == i ? mod < 0 : lr_class_ref_at(x->c, av[q], NULL) < 0) {
           if (q != i || mod != LR_LATER) fail = lr_const_path_fails(x->c, av[q]);
@@ -5208,8 +5208,12 @@ static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int
              walk made of a hook's body, on the class the hook was given,
              stands in no body of the source) */
           if (fail < 0 && (recv < 0 || nt_kind(nt, recv) == NK_SelfNode) && lr_written_in(x->c, node, fnode))
-            fail = lr_const_root_later(x->c, av[q]);
+            later = (fail = lr_const_root_later(x->c, av[q])) >= 0;
         }
+      /* (a name the program defines further down: a bare statement of a
+         body raises too, which codegen reads; one it defines nowhere may
+         be a module the compiler supplies, FFI's, and stays a declaration there) */
+      if (later) nt_node_set_int((NodeTable *)nt, node, "mixin_const_later", 1);
       if (fail >= 0) {
         int path = nt_kind(nt, fail) == NK_ConstantPathNode && nt_ref(nt, fail, "parent") >= 0;
         nt_node_set_int((NodeTable *)nt, node, path ? "mixin_undefined_path" : "mixin_undefined_const", path ? fail + 1 : 1);
@@ -8650,6 +8654,14 @@ int elab_method_vis_gated(Compiler *c, const char *name) {
     x->vgate = (unsigned char)(gated ? 2 : 1);
   }
   return x->vgate == 2;
+}
+
+int elab_history_vis_word(Compiler *c, int cls, int sg, const char *name) {
+  LoadRecord *r = c->lrec;
+  const LrHist *h = r && r->recorded && name ? lr_hist(r, cls, sg != 0, name, 0) : NULL;
+  for (int j = 0; h && j < h->n; j++)
+    if (h->v[j].kind == LR_VIS && !h->v[j].unplaced && !h->v[j].absent) return 1;
+  return 0;
 }
 
 static int lr_chain_may_hold(Compiler *c, int cls, int sg, int k, LoadPoint p);

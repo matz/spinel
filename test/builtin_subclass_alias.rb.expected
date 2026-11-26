@@ -1,0 +1,18 @@
+{a: 1, b: 2}
+2
+[:a, :b]
+MyHash
+true
+{x: 1, y: 2}
+20
+true
+true
+Hash
+[3]
+true
+MyArr
+{r: 1}
+true
+Hash
+Object
+false

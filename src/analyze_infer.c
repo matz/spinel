@@ -4617,6 +4617,8 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
         if (sp_streq(name, "lock") || sp_streq(name, "unlock")) { *out = TY_POLY; return 1; }
         if (sp_streq(name, "signal") || sp_streq(name, "broadcast")) { *out = TY_POLY; return 1; }
         if (sp_streq(name, "try_lock") || sp_streq(name, "locked?")) { *out = TY_BOOL; return 1; }
+        /* a boxed Thread's flag */
+        if (sp_streq(name, "report_on_exception")) { *out = TY_BOOL; return 1; }
       }
       if (sp_streq(name, "alive?") || sp_streq(name, "dead?") || sp_streq(name, "closed?") ||
           (sp_streq(name, "mon_owned?") && argc == 0) ||
@@ -4735,6 +4737,27 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
       if (sp_streq(name, "close") && argc == 0) { *out = an_poly_concrete(c, id, name, TY_POLY); return 1; }
       if (sp_streq(name, "close") || sp_streq(name, "flush")) { *out = an_poly_concrete(c, id, name, TY_NIL); return 1; }
       if (sp_streq(name, "fileno")) { *out = an_poly_concrete(c, id, name, TY_INT); return 1; }
+      /* getbyte's byte or nil, the handle from binmode and set_encoding, nil
+         from the half closes, as the TY_IO arm types them */
+      if (sp_streq(name, "getbyte") && argc == 0) { *out = an_poly_concrete(c, id, name, TY_POLY); return 1; }
+      if ((sp_streq(name, "binmode") && argc == 0) ||
+          (sp_streq(name, "set_encoding") && (argc == 1 || argc == 2) && !nt_argv_has_splat(nt, argv, argc) &&
+           nt_argv_kwh(nt, argv, argc) < 0))
+        { *out = an_poly_concrete(c, id, name, TY_IO); return 1; }
+      if ((sp_streq(name, "close_read") || sp_streq(name, "close_write")) && argc == 0)
+        { *out = an_poly_concrete(c, id, name, TY_NIL); return 1; }
+      /* the readers and predicates of the same arm: getc's String or nil,
+         readchar's String, readbyte's and lineno's Integer, the predicates'
+         bool, and nil from ungetbyte and ungetc */
+      if (argc == 0 && sp_streq(name, "getc")) { *out = an_poly_concrete(c, id, name, TY_POLY); return 1; }
+      if (argc == 0 && sp_streq(name, "readchar")) { *out = an_poly_concrete(c, id, name, TY_STRING); return 1; }
+      if (argc == 0 && (sp_streq(name, "readbyte") || sp_streq(name, "lineno")))
+        { *out = an_poly_concrete(c, id, name, TY_INT); return 1; }
+      if (argc == 0 && (sp_streq(name, "eof") || sp_streq(name, "autoclose?") || sp_streq(name, "binmode?") ||
+                        sp_streq(name, "close_on_exec?")))
+        { *out = an_poly_concrete(c, id, name, TY_BOOL); return 1; }
+      if (argc == 1 && (sp_streq(name, "ungetbyte") || sp_streq(name, "ungetc")) && !nt_argv_has_splat(nt, argv, argc))
+        { *out = an_poly_concrete(c, id, name, TY_NIL); return 1; }
       /* the descriptor controls, at the arities the poly-IO arm takes them:
          integers, and advise's nil boxed as the TY_IO arm boxes it. Only
          where that arm emits the call: a class of the program's own (Object
@@ -5122,6 +5145,13 @@ static int infer_builtin_cmethod_call(Compiler *c, int id, const NodeTable *nt, 
     if (rk == NK_ConstantReadNode &&
         key_name(c, recv) && sp_streq(key_name(c, recv), "Encoding") &&
         sp_streq(name, "find") && argc == 1)
+      { *out = TY_POLY; return 1; }
+    /* Encoding.default_external / default_internal the program assigns, and
+       the assignments: a boxed Encoding, nil or the assigned value */
+    if (rk == NK_ConstantReadNode &&
+        key_name(c, recv) && sp_streq(key_name(c, recv), "Encoding") &&
+        (((sp_streq(name, "default_external") || sp_streq(name, "default_internal")) && argc == 0) ||
+         ((sp_streq(name, "default_external=") || sp_streq(name, "default_internal=")) && argc == 1)))
       { *out = TY_POLY; return 1; }
     /* Encoding.list: an Array of them */
     if (rk == NK_ConstantReadNode &&
@@ -9537,6 +9567,23 @@ int an_poly_object_methods_listable(Compiler *c, int id, const char *name, int a
   return any;
 }
 
+/* an_value_methods_class at call id: a boxed receiver's list, unless a
+   class the receiver can hold has its own reader of the name,
+   an attr or a Struct member (#10345), which the dispatch calls */
+const char *an_value_methods_class_at(Compiler *c, int id, int recv, TyKind rt, const char *name, int argc,
+                                      const int *argv) {
+  const char *cn = an_value_methods_class(c, recv, rt, name, argc, argv);
+  if (!cn || cn[0] || an_builtin_only) return cn;
+  int nk = 0;
+  const int *ks = poly_recv_classes(c, id, &nk);
+  for (int i = 0, n = ks ? nk : c->nclasses; i < n; i++) {
+    int k = ks ? ks[i] : i;
+    if (k >= 0 && k < c->nclasses && c->classes[k].instantiated && call_answers(c, id, k, name, 0, NULL))
+      return NULL;
+  }
+  return cn;
+}
+
 static int infer_methods_listed(Compiler *c, int id, int recv, TyKind rt, const char *name, int argc,
                                 const int *argv) {
   if (recv >= 0 && ty_is_object(rt) &&
@@ -9546,7 +9593,7 @@ static int infer_methods_listed(Compiler *c, int id, int recv, TyKind rt, const 
       an_object_methods_listable(c, id, ty_object_class(rt), name))
     return 1;
   if (recv >= 0 && rt == TY_POLY && an_poly_object_methods_listable(c, id, name, argc, argv)) return 1;
-  return an_value_methods_class(c, recv, rt, name, argc, argv) != NULL;
+  return an_value_methods_class_at(c, id, recv, rt, name, argc, argv) != NULL;
 }
 
 /* Complex(x, exception: false) or Rational(x, exception: false) can answer

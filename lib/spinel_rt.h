@@ -2325,18 +2325,18 @@ static sp_bool sp_io_responds(sp_File *f, const char *m, int typed) {
     "mtime", NULL };
   static const char *const statm_b[] = { "<", "<=", ">", ">=", "between?", "clamp",
     NULL };
-  static const char *const iom[] = { "<<", "advise", "close", "closed?", "each",
-    "eof?", "fcntl", "fdatasync", "fileno", "flush", "fsync", "gets", "isatty",
-    "path", "pos", "pos=", "pread", "print", "printf", "putc", "puts", "pwrite",
-    "read", "read_nonblock", "readline", "readlines", "readpartial", "rewind",
-    "seek", "stat", "sync", "sync=", "sysseek", "tell", "to_i", "to_path", "tty?",
-    "wait_priority", "wait_readable", "wait_writable", "write", "write_nonblock",
-    NULL };
-  static const char *const iom_t[] = { "autoclose=", "autoclose?", "binmode",
-    "binmode?", "close_on_exec=", "close_on_exec?", "close_read", "close_write",
-    "each_byte", "each_char", "each_codepoint", "each_line", "eof", "getbyte",
-    "getc", "lineno", "lineno=", "pid", "readbyte", "readchar", "reopen", "sysread",
-    "syswrite", "to_io", "ungetbyte", "ungetc", "wait", NULL };
+  static const char *const iom[] = { "<<", "advise", "autoclose?", "binmode",
+    "binmode?", "close", "close_on_exec?", "close_read", "close_write", "closed?",
+    "each", "each_byte", "each_char", "each_line", "eof", "eof?", "fcntl",
+    "fdatasync", "fileno", "flush", "fsync", "getbyte", "getc", "gets", "isatty",
+    "lineno", "path", "pos", "pos=", "pread", "print", "printf", "putc", "puts",
+    "pwrite", "read", "read_nonblock", "readbyte", "readchar", "readline",
+    "readlines", "readpartial", "rewind", "seek", "set_encoding", "stat", "sync",
+    "sync=", "sysread", "sysseek", "syswrite", "tell", "to_i", "to_io", "to_path",
+    "tty?", "ungetbyte", "ungetc", "wait_priority", "wait_readable", "wait_writable",
+    "write", "write_nonblock", NULL };
+  static const char *const iom_t[] = { "autoclose=", "close_on_exec=",
+    "each_codepoint", "lineno=", "pid", "reopen", "wait", NULL };
   static const char *const iom_b[] = { "collect_concat", "count", "detect",
     "drop_while", "each_entry", "each_with_index", "filter_map", "find", "first",
     "flat_map", "group_by", "include?", "max_by", "member?", "min_by", "minmax_by",
@@ -2607,6 +2607,12 @@ static sp_bool sp_poly_responds_builtin(sp_RbVal v, const char *m) {
      by its kind */
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_IO && v.v.p)
     return sp_io_responds((sp_File *)v.v.p, m, 0);
+  /* a boxed Thread: the names its boxed dispatch answers */
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_THREAD) {
+    static const char *const threadm[] = { "[]", "[]=", "alive?", "exit", "join", "key?", "kill",
+      "name", "raise", "report_on_exception", "status", "terminate", "value", NULL };
+    return sp_str_in_list(m, threadm);
+  }
   if (v.tag == SP_TAG_OBJ && v.v.p &&
       (v.cls_id == SP_BUILTIN_EXCEPTION ||
        /* A user exception boxes under its own class id, not
@@ -13679,8 +13685,11 @@ static void sp_poly_warn_line(sp_RbVal v, FILE *f) {
   const char *s = sp_poly_to_s(v);
   if (!s) s = sp_str_empty;
   size_t n = sp_rbval_is_string(v) ? sp_str_byte_len(s) : strlen(s);
+  /* the text and its newline under one stream lock, as sp_puts_line */
+  flockfile(f);
   fwrite(s, 1, n, f);
-  if (!n || s[n - 1] != '\n') fputc('\n', f);
+  if (!n || s[n - 1] != '\n') putc_unlocked('\n', f);
+  funlockfile(f);
 }
 /* The same lines as one String, for a $stderr that holds a StringIO. */
 static const char *sp_poly_warn_text(sp_RbVal v) {
@@ -17549,6 +17558,12 @@ static sp_RbVal sp_io_wait_timeout_value(sp_File *f, sp_RbVal value, sp_int kind
   if (!explicit_wait)
     seconds = value.tag == SP_TAG_NIL ? sp_io_timeout_seconds(f) : sp_io_wait_interval(value);
   return sp_box_nullable_obj(sp_io_wait_events(f, seconds, kind), SP_BUILTIN_IO);
+}
+/* A boxed Thread's #report_on_exception; another receiver raises NoMethodError. */
+static sp_bool sp_poly_thread_report(sp_RbVal v) {
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_THREAD && v.v.p) return sp_Thread_get_report((sp_thread *)v.v.p);
+  sp_raise_nomethod(sp_nomethod_msg("report_on_exception", v));
+  return 0;
 }
 static sp_RbVal sp_poly_thread_status(sp_RbVal v) {
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_THREAD) return sp_Thread_status((sp_thread *)v.v.p);
@@ -22315,10 +22330,22 @@ typedef struct {
   sp_String *whole;
   size_t offset;
   sp_bool chomp;
+  sp_File *io;   /* a boxed IO's lines, read per step; the receiver roots it */
 } sp_StringLineWalk;
 void sp_string_line_begin(sp_StringLineWalk *walk, sp_RbVal receiver, sp_RbVal separator,
                           sp_RbVal keywords, sp_int argc, const char *method);
 sp_String *sp_string_line_step(sp_StringLineWalk *walk);
+sp_Enumerator *sp_io_each_enumerator(sp_File *io, const char *meth);
+sp_Enumerator *sp_io_line_enumerator(sp_File *io, const char *sep, sp_bool chomp);
+/* A boxed IO for the each_byte / each_char block walks, or NULL for
+   another receiver; a stat rides in the same boxed handle and raises
+   NoMethodError. */
+static sp_File *sp_poly_each_io(sp_RbVal v, const char *meth) {
+  if (v.tag != SP_TAG_OBJ || v.cls_id != SP_BUILTIN_IO || !v.v.p) return NULL;
+  sp_File *io = (sp_File *)v.v.p;
+  if (io->mode && (strcmp(io->mode, "stat") == 0 || strcmp(io->mode, "lstat") == 0)) sp_raise_poly_nomethod(meth, v);
+  return io;
+}
 /* A blockless each_char / each_line / each_byte / each_codepoint on a boxed
    receiver: CRuby's Enumerator, as on a typed String. A box of a shared
    String's handle (--share-strings) gives the Enumerator over that handle,
@@ -22326,6 +22353,12 @@ sp_String *sp_string_line_step(sp_StringLineWalk *walk);
 static sp_Enumerator *sp_poly_str_each_enum(sp_RbVal v, const char *meth) {
   SP_GC_ROOT_RBVAL(v);
   if (sp_poly_is_strbuf(v) && v.v.p) return sp_enum_str_each_h((sp_String *)v.v.p, meth);
+  /* a boxed IO's Enumerator reads the stream as it is walked */
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_IO && v.v.p) {
+    sp_File *io = (sp_File *)v.v.p;
+    if (io->mode && (strcmp(io->mode, "stat") == 0 || strcmp(io->mode, "lstat") == 0)) sp_raise_poly_nomethod(meth, v);
+    return sp_io_each_enumerator(io, meth);
+  }
   const char *s = sp_poly_recv_s(v, meth);
   SP_GC_ROOT_STR(s);
   int kind = strcmp(meth, "each_char") == 0 ? SP_ENUM_STR_CHAR : strcmp(meth, "each_line") == 0 ? SP_ENUM_STR_LINE
@@ -23221,9 +23254,11 @@ static SP_UNUSED void sp_sig_default_handler(int no) {
   sp_sig_unblock(no, 0);
   sp_sig_default_raise(no);
 }
+extern void (*sp_sig_default_handler_fn)(int);
 static SP_UNUSED void sp_sig_install_defaults(void) {
   static const int sigs[] = { SIGINT, SIGTERM };
   sp_sig_default_raiser = sp_sig_default_raise;
+  sp_sig_default_handler_fn = sp_sig_default_handler;
   for (int i = 0; i < 2; i++) {
     int no = sigs[i];
     if (sp_trap_proc[no] || sp_trap_state[no]) continue;

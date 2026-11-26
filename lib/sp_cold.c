@@ -427,6 +427,7 @@ const char *sp_file_readlink(const char *path) {SP_GC_ROOT_STR(path);
   memcpy(out, buf, (size_t)n);
   out[n] = 0;
   sp_str_set_len(out, (size_t)n);
+  if (sp_enc_default_ext_bin) sp_str_mark_binary(out);
   return out;
 }
 
@@ -1214,6 +1215,7 @@ sp_StrArray *sp_file_readlines(const char *path) {SP_GC_ROOT_STR(path);
     char *_r = sp_str_alloc_raw(_l + 1);
     memcpy(_r, _buf, _l); _r[_l] = '\0';
     sp_str_set_len(_r, _l);
+    if (sp_enc_default_ext_bin) sp_str_mark_binary(_r);
     sp_StrArray_push_e(a, sp_String_new_shared(_r));
   }
   free(_buf);
@@ -1237,6 +1239,7 @@ sp_StrArray *sp_file_readlines_chomp(const char *path) {SP_GC_ROOT_STR(path);
     char *_r = sp_str_alloc_raw(_l + 1);
     memcpy(_r, _buf, _l); _r[_l] = '\0';
     sp_str_set_len(_r, _l);
+    if (sp_enc_default_ext_bin) sp_str_mark_binary(_r);
     sp_StrArray_push_e(a, sp_String_new_shared(_r));
   }
   free(_buf);
@@ -1401,6 +1404,8 @@ const char *sp_file_read(const char *path) {SP_GC_ROOT_STR(path);
   }
   const char *r = sp_slurp_stream(f);
   fclose(f);
+  /* a file's text has the default external encoding */
+  if (sp_enc_default_ext_bin) sp_str_mark_binary((char *)r);
   return r;
 }
 
@@ -2162,6 +2167,7 @@ const char *sp_backtick(const char *cmd) {SP_GC_ROOT_STR(cmd);
   if (len) memcpy(r, buf, len);
   r[len] = 0;
   sp_str_set_len(r, len);
+  if (sp_enc_default_ext_bin) sp_str_mark_binary(r);
   free(buf);
   /* the signals recorded in the wait run once the output is a String and
      the buffer is freed: a trap that raises leaves nothing behind */
@@ -2224,7 +2230,8 @@ const char *sp_file_extname(const char *path) {SP_GC_ROOT_STR(path);
   return buf;
 }
 
-sp_StrArray *sp_dir_entries_impl(const char *path, int children) {
+/* `bin`: the names are ASCII-8BIT */
+static sp_StrArray *sp_dir_entries_bin(const char *path, int children, int bin) {
   SP_GC_ROOT_STR(path);
   if (!path) sp_raise_cls("TypeError", "no implicit conversion of nil into String");
   DIR *d = opendir(path);
@@ -2238,11 +2245,16 @@ sp_StrArray *sp_dir_entries_impl(const char *path, int children) {
         (name[1] == 0 || (name[1] == '.' && name[2] == 0))) continue;
     char *copy = sp_str_alloc(strlen(name));
     strcpy(copy, name);
+    if (bin) sp_str_mark_binary(copy);
     sp_StrArray_push_e(a, sp_String_new_shared(copy));
   }
   closedir(d);
   sp_StrArray_sort_bang(a);
   return a;
+}
+/* a file's name has the default external encoding, as its text has */
+sp_StrArray *sp_dir_entries_impl(const char *path, int children) {
+  return sp_dir_entries_bin(path, children, sp_enc_default_ext_bin);
 }
 
 /* The rows of a transpose are Arrays; a row that is not is CRuby's TypeError,
@@ -2871,7 +2883,7 @@ const char *sp_File_gets_sep(sp_File *f, const char *sep, sp_int limit, sp_bool 
     /* the separator ends the line where it is matched whole, and not where
        it would start inside a character (on a continuation byte) */
     if (sl && (unsigned char)ch == (unsigned char)sep[sl - 1] && len >= sl &&
-        !(((unsigned char)buf[len - sl] & 0xC0) == 0x80 && len > sl) &&
+        (sp_File_reads_binary(f) || !(((unsigned char)buf[len - sl] & 0xC0) == 0x80 && len > sl)) &&
         memcmp(buf + len - sl, sep, sl) == 0) { ended = 1; break; }
     /* the limit cuts the line wherever it falls (CRuby 4.0.9; 4.0.7's
        getline let a byte that could end a longer separator pass it
@@ -2879,7 +2891,7 @@ const char *sp_File_gets_sep(sp_File *f, const char *sep, sp_int limit, sp_bool 
     if (lim > 0 && (sp_int)len == lim) {
       /* as CRuby's getline: a limit that falls inside a character reads on to
          its end (by up to 16 bytes) */
-      if (extra > 0 && sp_File_tail_incomplete((const unsigned char *)buf, len)) { lim = (sp_int)len + 1; extra--; continue; }
+      if (extra > 0 && !sp_File_reads_binary(f) && sp_File_tail_incomplete((const unsigned char *)buf, len)) { lim = (sp_int)len + 1; extra--; continue; }
       break;
     }
   }
@@ -3120,6 +3132,7 @@ const char *sp_file_read_len(const char *path, sp_int n) {SP_GC_ROOT_STR(path);
   fclose(fp);
   r[got] = 0;
   sp_str_set_len(r, got);
+  sp_str_mark_binary(r);   /* a read with a length is bytes, as CRuby's */
   return r;
 }
 static FILE *sp_file_open_at(const char *path, sp_int off) {
@@ -3144,6 +3157,7 @@ const char *sp_file_read_at(const char *path, sp_int n, sp_int off) {SP_GC_ROOT_
   fclose(fp);
   r[got] = 0;
   sp_str_set_len(r, got);
+  sp_str_mark_binary(r);   /* a read with a length is bytes, as CRuby's */
   return r;
 }
 const char *sp_file_read_from(const char *path, sp_int off) {SP_GC_ROOT_STR(path);
@@ -3151,6 +3165,7 @@ const char *sp_file_read_from(const char *path, sp_int off) {SP_GC_ROOT_STR(path
   sp_file_read_refuse_dir(fp, path);
   const char *r = sp_slurp_stream(fp);
   fclose(fp);
+  if (sp_enc_default_ext_bin) sp_str_mark_binary((char *)r);
   return r;
 }
 const char *sp_file_read_o(const char *path, sp_oint n) {
@@ -3335,6 +3350,7 @@ sp_File *sp_File_open_flags(const char *path, sp_int fl) {
    form. The mode is checked before the file is opened, so a bad one raises
    CRuby's ArgumentError and leaves no descriptor behind. A nil perm is
    CRuby's default, 0666. */
+static int sp_io_mode_enc(const char *name);
 sp_File *sp_File_open_perm(const char *path, const char *mode, sp_oint perm) {SP_GC_ROOT_STR(path);SP_GC_ROOT_STR(mode);
   path = sp_str_keep(path);   /* (the File keeps its path: a copy of a live payload, sp_str_keep) */
   const char *m = mode && mode[0] ? mode : "r";
@@ -3348,8 +3364,18 @@ sp_File *sp_File_open_perm(const char *path, const char *mode, sp_oint perm) {SP
   f->path = sp_str_retained(path);
   f->mode = m;
   f->is_file = 1;
+  /* "r:utf-8": an external encoding in the mode is the handle's, whatever
+     Encoding.default_external is */
+  const char *ext = strchr(m, ':');
+  if (ext) {
+    char eb[64];
+    snprintf(eb, sizeof eb, "%.*s", (int)strcspn(ext + 1, ":"), ext + 1);
+    int e = sp_io_mode_enc(eb);
+    if (e >= 0) f->ext_enc = (unsigned char)(e ? 2 : 1);
+  }
   return f;
 }
+sp_File *sp_File_with_enc(sp_File *f, int e) { f->ext_enc = (unsigned char)e; return f; }
 void sp_file_stat_scan(void *p) {
   sp_File *f = (sp_File *)p;
   if (f->path) sp_mark_string(f->path);
@@ -3759,6 +3785,7 @@ const char *sp_dir_pwd(void) {
   size_t n = strlen(tmp);
   char *buf = sp_str_alloc(n);
   memcpy(buf, tmp, n + 1);
+  if (sp_enc_default_ext_bin) sp_str_mark_binary(buf);
   return buf;
 }
 /* Dir.mkdir / Dir.rmdir / Dir.chdir: 0, or the Errno CRuby raises, under
@@ -3794,7 +3821,9 @@ sp_int sp_dir_chdir0(const char *path) {SP_GC_ROOT_STR(path);
 const char *sp_dir_home(void) {
   const char *h = getenv("HOME");
   if (!h) return sp_str_empty;
-  return sp_str_dup_external(h);
+  const char *r = sp_str_dup_external(h);
+  if (sp_enc_default_ext_bin) sp_str_mark_binary((char *)r);
+  return r;
 }
 void sp_Dir_fin(void *p) { sp_Dir *d = (sp_Dir *)p; if (d->dp) { closedir(d->dp); d->dp = NULL; } }
 void sp_Dir_scan(void *p) { sp_Dir *d = (sp_Dir *)p; if (d->path) sp_mark_string(d->path); }
@@ -3841,7 +3870,9 @@ sp_StrArray *sp_Dir_entries_h(sp_Dir *d, sp_int children) {SP_GC_ROOT(d);
   struct dirent *e;
   while ((e = readdir(d->dp)) != NULL) {
     if (children && (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0)) continue;
-    sp_StrArray_push_e(a, sp_String_new_shared(sp_sprintf("%s", e->d_name)));
+    const char *name = sp_sprintf("%s", e->d_name);
+    if (sp_enc_default_ext_bin) sp_str_mark_binary((char *)name);
+    sp_StrArray_push_e(a, sp_String_new_shared(name));
   }
   rewinddir(d->dp);
   return a;
@@ -3857,7 +3888,10 @@ SP_NORETURN SP_COLD void sp_dir_raise_closed(void) {
 const char *sp_Dir_read(sp_Dir *d) {
   SP_DIR_OPEN(d);
   struct dirent *e = readdir(d->dp);
-  return e ? sp_sprintf("%s", e->d_name) : NULL;
+  if (!e) return NULL;
+  const char *r = sp_sprintf("%s", e->d_name);
+  if (sp_enc_default_ext_bin) sp_str_mark_binary((char *)r);
+  return r;
 }
 /* NULL is Ruby nil in the string convention: a Dir from Dir.for_fd has no path,
    and CRuby answers nil for it rather than an empty string (#3365). */
@@ -3917,15 +3951,13 @@ sp_StrArray *sp_dir_children(const char *path) {SP_GC_ROOT_STR(path); return sp_
    default. A String tells only binary from text, so ASCII-8BIT marks the
    names binary and any other encoding leaves them as they are. */
 sp_StrArray *sp_dir_entries_enc(const char *path, int children, sp_RbVal enc) {SP_GC_ROOT_STR(path);
-  int binary = 0;
+  /* an encoding: is the names', whatever Encoding.default_external is */
+  int binary = sp_enc_default_ext_bin;
   if (enc.tag != SP_TAG_NIL) {
     sp_RbVal e = sp_encoding_find(enc);
     binary = e.tag == SP_TAG_ENCODING && e.v.s && strcmp(e.v.s, "ASCII-8BIT") == 0;
   }
-  sp_StrArray *a = sp_dir_entries_impl(path, children);
-  if (binary)
-    for (sp_int i = 0; i < a->len; i++) if (a->data[i]) { a->data[i]->binary = 1; sp_fd_publish(a->data[i]); }
-  return a;
+  return sp_dir_entries_bin(path, children, binary);
 }
 
 /* ---- Signal trap machinery + Enumerator cursor/generator ops moved from
@@ -4307,6 +4339,7 @@ static void sp_dir_foreach_gen(sp_Fiber *f) {
   while ((name = sp_Dir_read(dir)) != NULL) {
     if (cap->children && (strcmp(name, ".") == 0 || strcmp(name, "..") == 0)) continue;
     if (binary) sp_str_as_binary(name);
+    else if (cap->encoding.tag != SP_TAG_NIL) sp_str_as_text(name);
     sp_PolyArray_push(names, sp_box_str_new(name));
   }
   sp_Dir_close(dir);
@@ -4345,24 +4378,54 @@ sp_Enumerator *sp_loop_enum(void) {
   return e;
 }
 
-/* IO codepoints are read when the Enumerator is walked, retaining its source. */
-typedef struct { sp_File *io; } sp_IOCodepointCap;
+/* IO codepoints, bytes, chars and lines are read when the Enumerator is
+   walked, retaining its source. */
+enum { SP_IO_EACH_CODEPOINT, SP_IO_EACH_BYTE, SP_IO_EACH_CHAR, SP_IO_EACH_LINE };
+typedef struct { sp_File *io; int kind; const char *sep; sp_bool chomp; } sp_IOCodepointCap;
 static void sp_io_codepoint_scan(void *p) {
   sp_gc_mark(((sp_IOCodepointCap *)p)->io);
+  if (((sp_IOCodepointCap *)p)->sep) sp_mark_string(((sp_IOCodepointCap *)p)->sep);
 }
 static void sp_io_codepoint_gen(sp_Fiber *f) {
   sp_IOCodepointCap *cap = (sp_IOCodepointCap *)f->user_data; SP_GC_ROOT(cap);
   const char *text = NULL; SP_GC_ROOT_STR(text);
-  while ((text = sp_File_getc(cap->io)) != NULL)
-    sp_Fiber_yield(sp_box_int(sp_str_ord(text)));
+  if (cap->kind == SP_IO_EACH_BYTE) {
+    for (sp_oint b; !(b = sp_File_getbyte(cap->io)).nil;) sp_Fiber_yield(sp_box_int(b.v));
+  }
+  else if (cap->kind == SP_IO_EACH_LINE) {
+    /* the separator is "\n", another String, or NULL (nil: to the end) */
+    while ((text = sp_File_gets_sep(cap->io, cap->sep, 0, cap->chomp)) != NULL)
+      sp_Fiber_yield(sp_box_obj(sp_String_new_shared(text), SP_BUILTIN_STRBUF));
+  }
+  else {
+    while ((text = sp_File_getc(cap->io)) != NULL)
+      sp_Fiber_yield(cap->kind == SP_IO_EACH_CHAR ? sp_box_str_new(text) : sp_box_int(sp_str_ord(text)));
+  }
   sp_gc_wb((void *)f);
   f->yielded_value = sp_box_obj(cap->io, SP_BUILTIN_IO);
 }
-sp_Enumerator *sp_io_codepoint_enumerator(sp_File *io) {SP_GC_ROOT(io);
+sp_Enumerator *sp_io_each_enumerator(sp_File *io, const char *meth) {SP_GC_ROOT(io);SP_GC_ROOT_STR(meth);
   sp_IOCodepointCap *cap = (sp_IOCodepointCap *)sp_gc_alloc(sizeof *cap, NULL, sp_io_codepoint_scan);
   SP_GC_ROOT(cap); cap->io = io;
+  cap->kind = strcmp(meth, "each_byte") == 0 ? SP_IO_EACH_BYTE : strcmp(meth, "each_char") == 0 ? SP_IO_EACH_CHAR
+            : strcmp(meth, "each_line") == 0 ? SP_IO_EACH_LINE : SP_IO_EACH_CODEPOINT;
+  cap->sep = SPL("\n");
   sp_Enumerator *e = sp_Enumerator_new_gen(sp_io_codepoint_gen, cap, sp_box_nil());
-  return sp_enum_with_src(e, sp_box_obj(io, SP_BUILTIN_IO), SPL("each_codepoint"));
+  return sp_enum_with_src(e, sp_box_obj(io, SP_BUILTIN_IO), meth);
+}
+/* each_line with a separator (NULL for nil) and chomp, read as it is walked;
+   its rewind seeks the stream back to its start as the other IO walks do */
+sp_Enumerator *sp_io_line_enumerator(sp_File *io, const char *sep, sp_bool chomp) {SP_GC_ROOT(io);SP_GC_ROOT_STR(sep);
+  sp_Enumerator *e = sp_io_each_enumerator(io, SPL("each_line"));
+  SP_GC_ROOT(e);
+  sp_IOCodepointCap *cap = (sp_IOCodepointCap *)e->gen_cap;
+  sp_gc_wb((void *)cap);
+  cap->sep = sep;
+  cap->chomp = chomp;
+  return e;
+}
+sp_Enumerator *sp_io_codepoint_enumerator(sp_File *io) {
+  return sp_io_each_enumerator(io, SPL("each_codepoint"));
 }
 static void sp_io_codepoint_rewind(sp_Enumerator *e) {SP_GC_ROOT(e);
   sp_File *io = ((sp_IOCodepointCap *)e->gen_cap)->io;
@@ -4833,22 +4896,54 @@ static const char *sp_trap_default_name(int no) {
   }
   return (&("\xff" "SYSTEM_DEFAULT")[1]);
 }
+/* trap(sig, nil) ignores the signal and reads back as nil: its state is
+   this marker. An "EXIT" command is a proc that raises SystemExit, so
+   at_exit runs, and reads back as "EXIT". */
+static const char sp_trap_nil_state[] = "";
+static const char *const sp_trap_exit_state = (&("\xff" "EXIT")[1]);
+static sp_int sp_trap_exit_fn(void *cap, sp_int argc, sp_int *args) {
+  (void)cap; (void)argc; (void)args;
+  sp_raise_cls("SystemExit", "exit");
+  return 0;
+}
+/* lib/sp_proc.c: a Method's proc, a proc around a C function, and the
+   Method a proc was made from (NULL for another proc) */
+sp_Proc *sp_proc_of_method(void *m);
+sp_Proc *sp_proc_of_cfn(void *fn);
+void *sp_proc_bound_method(sp_Proc *p);
+/* the default handler of SIGINT and SIGTERM (sp_sig_install_defaults), which
+   a "DEFAULT" command puts back */
+void (*sp_sig_default_handler_fn)(int);
+/* the handler of a signal was given as a Method, which reads back as itself */
+static unsigned char sp_trap_method_given[SP_SIG_MAX];
 sp_RbVal sp_signal_trap(sp_RbVal sig, sp_RbVal handler) {SP_GC_ROOT_RBVAL(sig);SP_GC_ROOT_RBVAL(handler);
   int no = sp_signal_resolve(sig);
   if (no == SIGKILL || no == SIGSTOP)
     sp_raise_cls("Errno::EINVAL",
                  sp_sprintf("Invalid argument - SIG%s", sp_signal_signame(no)));
-  /* the previous handler: a stored proc or command string; an untouched
-     signal reads its default (sp_trap_default_name), and EXIT nil (#2839) */
+  /* the previous handler: a stored proc (the Method a Method handler was
+     made from) or command string; an untouched signal reads its default
+     (sp_trap_default_name), and EXIT nil (#2839) */
   const char *dflt = no == 0 ? NULL : sp_trap_default_name(no);
-  sp_RbVal prev = sp_trap_proc[no] ? sp_box_proc((sp_Proc *)sp_trap_proc[no])
+  sp_Proc *pp = (sp_Proc *)sp_trap_proc[no];
+  sp_RbVal prev = sp_trap_state[no] == sp_trap_exit_state ? sp_box_str_fresh(sp_trap_exit_state)
+                : sp_trap_state[no] == sp_trap_nil_state ? sp_box_nil()
+                : pp && sp_trap_method_given[no] ? sp_box_obj(sp_proc_bound_method(pp), SP_BUILTIN_METHOD)
+                : pp ? sp_box_proc(pp)
                 : sp_trap_state[no] ? sp_box_str_fresh(sp_trap_state[no])
                 : dflt ? sp_box_str_fresh(dflt)
                 : sp_box_nil();
   SP_GC_ROOT_RBVAL(prev);
+  /* a Method handler runs as its proc; an "EXIT" command as a proc that exits */
+  const char *hs0 = sp_rbval_string_bytes(handler);
+  int exit_cmd = hs0 && strcmp(hs0, "EXIT") == 0 && no != 0;
+  int method_given = handler.tag == SP_TAG_OBJ && handler.cls_id == SP_BUILTIN_METHOD && handler.v.p;
+  sp_trap_method_given[no] = (unsigned char)method_given;
+  if (method_given) handler = sp_box_proc(sp_proc_of_method(handler.v.p));
+  else if (exit_cmd) handler = sp_box_proc(sp_proc_of_cfn((void *)sp_trap_exit_fn));
   if (handler.tag == SP_TAG_OBJ && handler.cls_id == SP_BUILTIN_PROC && handler.v.p) {
     sp_trap_proc[no] = (sp_Proc *)handler.v.p;
-    sp_trap_state[no] = NULL;
+    sp_trap_state[no] = exit_cmd ? sp_trap_exit_state : NULL;
     if (no == 0) { static int armed = 0; if (!armed) { armed = 1; atexit(sp_sig_exit_dispatch); } }
     else {
 #ifdef SP_THREADS
@@ -4864,18 +4959,32 @@ sp_RbVal sp_signal_trap(sp_RbVal sig, sp_RbVal handler) {SP_GC_ROOT_RBVAL(sig);S
     }
   }
   else {
+    int is_nil = handler.tag == SP_TAG_NIL;
     const char *hs = sp_rbval_string_bytes(handler);
-    if (!hs) hs = "DEFAULT";
-    int ignore = strcmp(hs, "IGNORE") == 0 || strcmp(hs, "SIG_IGN") == 0;
+    if (!hs) hs = is_nil ? "" : "DEFAULT";
+    /* nil, "" , "IGNORE" and "SIG_IGN" ignore the signal */
+    int ignore = hs[0] == '\0' || strcmp(hs, "IGNORE") == 0 || strcmp(hs, "SIG_IGN") == 0;
+    int sysdef = strcmp(hs, "SYSTEM_DEFAULT") == 0;
     sp_trap_proc[no] = NULL;
     /* SYSTEM_DEFAULT reads back as itself (#2839); it installs SIG_DFL too.
        DEFAULT reads back as the default of the signal (sp_trap_default_name).
        An EXIT string command clears the handler, whose read-back is nil. */
     sp_trap_state[no] = no == 0 ? NULL
+                      : is_nil ? sp_trap_nil_state
                       : ignore ? (&("\xff" "IGNORE")[1])
-                      : strcmp(hs, "SYSTEM_DEFAULT") == 0 ? (&("\xff" "SYSTEM_DEFAULT")[1])
+                      : sysdef ? (&("\xff" "SYSTEM_DEFAULT")[1])
                       : dflt;
-    if (no != 0) signal(no, ignore ? SIG_IGN : SIG_DFL);
+    if (no != 0) {
+      /* DEFAULT on SIGINT or SIGTERM puts back the handler that raises
+         Interrupt or SignalException, as an untrapped signal has */
+      if (!ignore && !sysdef && (no == SIGINT || no == SIGTERM) && sp_sig_default_handler_fn) {
+        struct sigaction sa; memset(&sa, 0, sizeof sa);
+        sa.sa_handler = sp_sig_default_handler_fn;
+        sigemptyset(&sa.sa_mask);
+        sigaction(no, &sa, NULL);
+      }
+      else signal(no, ignore ? SIG_IGN : SIG_DFL);
+    }
   }
   return prev;
 }
@@ -5493,6 +5602,7 @@ const char *sp_argf_gets(void) {
       char *r = sp_str_alloc_raw((size_t)n + 1);
       memcpy(r, line, (size_t)n); r[n] = '\0';
       sp_str_set_len(r, (size_t)n);
+      if (sp_enc_default_ext_bin) sp_str_mark_binary(r);
       return r;
     }
     if (sp_argf_obj.cur && sp_argf_obj.cur != stdin) fclose(sp_argf_obj.cur);
@@ -5503,7 +5613,9 @@ const char *sp_argf_read(void) {
   sp_String *s = sp_String_new(""); SP_GC_ROOT(s);
   const char *line;
   while ((line = sp_argf_gets())) sp_String_append(s, line);
-  return sp_str_dup(s->data);
+  const char *r = sp_str_dup(s->data);
+  if (sp_enc_default_ext_bin) sp_str_mark_binary((char *)r);
+  return r;
 }
 sp_StrArray *sp_argf_readlines(void) {
   sp_StrArray *a = sp_StrArray_new(); SP_GC_ROOT(a);
@@ -5894,18 +6006,43 @@ sp_RbVal sp_box_i64(int64_t v) {
 sp_RbVal sp_box_encoding(sp_Encoding e) { sp_RbVal r; r.tag = SP_TAG_ENCODING; r.cls_id = 0; r.v.s = sp_encoding_name(e); return r; }
 /* Encoding.find(name) with a name known at run time: an Encoding answers
    itself, a name or alias the encoding it names (case-insensitively, as
-   CRuby), "external" / "locale" / "filesystem" UTF-8 and "internal" nil;
-   anything else is CRuby's ArgumentError. */
+   CRuby), "locale" UTF-8, "external" / "filesystem" the default external
+   and "internal" the default internal; anything else is CRuby's
+   ArgumentError. */
 static const char *const sp_encoding_names[][2] = {
 #include "sp_encoding_names.h"
   { NULL, NULL } };
+/* Encoding.default_external and default_internal (NULL for nil), by name */
+static const char *sp_enc_default_ext = "UTF-8", *sp_enc_default_int;
+unsigned char sp_enc_default_ext_bin;
 /* The encoding a name or alias names (case-insensitively, as CRuby), with
-   "external" / "locale" / "filesystem" UTF-8; NULL for a name no encoding has */
+   "locale" UTF-8 and "external" / "filesystem" the default external; NULL
+   for a name no encoding has */
 static const char *sp_encoding_canon(const char *n) {
-  if (!strcasecmp(n, "external") || !strcasecmp(n, "locale") || !strcasecmp(n, "filesystem")) return "UTF-8";
+  if (!strcasecmp(n, "locale")) return "UTF-8";
+  if (!strcasecmp(n, "external") || !strcasecmp(n, "filesystem")) return sp_enc_default_ext;
   for (int i = 0; sp_encoding_names[i][0]; i++)
     if (!strcasecmp(n, sp_encoding_names[i][0])) return sp_encoding_names[i][1];
   return NULL;
+}
+/* The encoding in a mode such as "r:utf-8": 1 for ASCII-8BIT, 0 for another
+   encoding (a read is UTF-8 here), -1 for a name no encoding has */
+static int sp_io_mode_enc(const char *name) {
+  const char *n = sp_encoding_canon(name);
+  if (!n) return -1;
+  return !strcmp(n, "ASCII-8BIT");
+}
+/* File.open(path, encoding: v) with v known at run time: an Encoding or a
+   name ("ext:int" too); anything else leaves the handle as it is */
+sp_File *sp_File_with_enc_val(sp_File *f, sp_RbVal v) {
+  const char *s = v.tag == SP_TAG_ENCODING ? v.v.s : sp_rbval_string_bytes(v);
+  if (s) {
+    char eb[64];
+    snprintf(eb, sizeof eb, "%.*s", (int)strcspn(s, ":"), s);
+    int e = sp_io_mode_enc(eb);
+    if (e >= 0) f->ext_enc = (unsigned char)(e ? 2 : 1);
+  }
+  return f;
 }
 sp_RbVal sp_encoding_find(sp_RbVal v) {
   if (v.tag == SP_TAG_ENCODING) return v;
@@ -5916,11 +6053,33 @@ sp_RbVal sp_encoding_find(sp_RbVal v) {
     sp_raise_cls("TypeError", sp_sprintf("no implicit conversion of %s into String", cn));
   }
   const char *n = sp_rbval_string_bytes(v);
-  if (!strcasecmp(n, "internal")) return sp_box_nil();
+  if (!strcasecmp(n, "internal")) return sp_encoding_default_internal();
   const char *cn = sp_encoding_canon(n);
   if (cn) return sp_box_encoding((sp_Encoding){ cn });
   sp_raise_cls("ArgumentError", sp_sprintf("unknown encoding name - %s", n));
   return sp_box_nil();
+}
+sp_RbVal sp_encoding_default_external(void) { return sp_box_encoding((sp_Encoding){ sp_enc_default_ext }); }
+sp_RbVal sp_encoding_default_internal(void) {
+  return sp_enc_default_int ? sp_box_encoding((sp_Encoding){ sp_enc_default_int }) : sp_box_nil();
+}
+/* Encoding.default_external = v and default_internal = v: an Encoding or a
+   name, and nil for the internal one. The value is the assignment's. A read
+   follows the external one between UTF-8 and ASCII-8BIT
+   (sp_File_reads_binary); another encoding is kept for the getters. */
+sp_RbVal sp_encoding_set_default_external(sp_RbVal v) {
+  if (v.tag == SP_TAG_NIL) sp_raise_cls("ArgumentError", "default external can not be nil");
+  sp_RbVal e = sp_encoding_find(v);
+  if (e.tag == SP_TAG_ENCODING && e.v.s) {
+    sp_enc_default_ext = e.v.s;
+    sp_enc_default_ext_bin = !strcmp(e.v.s, "ASCII-8BIT");
+  }
+  return v;
+}
+sp_RbVal sp_encoding_set_default_internal(sp_RbVal v) {
+  sp_RbVal e = v.tag == SP_TAG_NIL ? v : sp_encoding_find(v);
+  sp_enc_default_int = e.tag == SP_TAG_ENCODING ? e.v.s : NULL;
+  return v;
 }
 /* Encoding.list: an Encoding for every name it may answer, in CRuby's order */
 static const char *const sp_encoding_list_names[] = {
@@ -5945,8 +6104,8 @@ int sp_force_encoding_mode(sp_RbVal enc) {
   return -1;
 }
 /* The encoding a set_encoding argument names, of the two a String can
-   have: 1 UTF-8 (US-ASCII is UTF-8 here, and so is nil, the default
-   external), 2 ASCII-8BIT, -1 another encoding, -2 a "BOM|" one, 0 a name
+   have: 1 UTF-8 (US-ASCII is UTF-8 here), 2 ASCII-8BIT (nil is the default
+   external, one of the two), -1 another encoding, -2 a "BOM|" one, 0 a name
    no encoding has. `*nm` is the name. */
 static int sp_io_enc_side(sp_RbVal v, const char *s, const char **nm) {
   const char *n = NULL;
@@ -5956,7 +6115,7 @@ static int sp_io_enc_side(sp_RbVal v, const char *s, const char **nm) {
     n = sp_encoding_canon(s);
     if (!n) { *nm = s; return 0; }
   }
-  else if (v.tag == SP_TAG_NIL) n = "UTF-8";
+  else if (v.tag == SP_TAG_NIL) n = sp_enc_default_ext_bin ? "ASCII-8BIT" : "UTF-8";
   else n = sp_encoding_find(v).v.s;   /* an Encoding, or CRuby's TypeError */
   *nm = n;
   if (!strcmp(n, "ASCII-8BIT")) return 2;

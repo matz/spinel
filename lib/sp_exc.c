@@ -1607,6 +1607,16 @@ void sp_exc_ctx_free(void *p) {
   free(x->rrf); free(x->rrem); free(x->rrcm); free(x->rrbm);
   free(x->erm); free(x->ersm); free(x->crm); free(x);
 }
+/* A park's snapshot, once loaded: its arena is the thread's live one again,
+   so only the context goes. */
+void sp_exc_ctx_free_loaded(void *p) {
+  sp_exc_ctx_t *x = (sp_exc_ctx_t *)p;
+  if (!x) return;
+#ifdef SP_CEXT
+  memset(&x->cext_arena, 0, sizeof x->cext_arena);
+#endif
+  sp_exc_ctx_free(x);
+}
 void sp_exc_ctx_mark(void *p) {            /* GC: mark a suspended fiber's carried exc objects */
   sp_exc_ctx_t *x = (sp_exc_ctx_t *)p;
   /* a running fiber's context is a stale copy (see `live`): its live
@@ -1902,11 +1912,18 @@ static void *sp_exc_recover_named(const char *cls, const char *msg) {
    the class in parentheses. The class is shown as it prints: an unnamed
    Class.new class prints its #<Class:0x...> form, and CRuby adds no
    "(Class)" suffix for it. */
+/* The class goes after the first line of the message, and the other lines
+   follow it, as CRuby reports and as sp_exc_detailed_text writes: a lone
+   final newline is replaced by the class, and the other lines keep their
+   bytes, and the report ends with a newline of its own. */
 static void sp_exc_print_uncaught_text(const char *cls, const char *msg, int class_only) {
   const char *shown = sp_exc_cls_display(cls);
   const char *text = (!class_only && msg && *msg) ? msg : shown;
-  if (class_only || sp_exc_cls_unnamed(shown)) fprintf(stderr, "%s\n", text);
-  else fprintf(stderr, "%s (%s)\n", text, shown);
+  if (class_only || sp_exc_cls_unnamed(shown)) { fprintf(stderr, "%s\n", text); return; }
+  const char *nl = strchr(text, '\n');
+  if (!nl) { fprintf(stderr, "%s (%s)\n", text, shown); return; }
+  fprintf(stderr, "%.*s (%s)\n", (int)(nl - text), text, shown);
+  if (nl[1]) fprintf(stderr, "%s\n", nl + 1);
 }
 static void sp_exc_write_uncaught(const char *cls, const char *msg, sp_StrArray *bt, int class_only) {
 #if SP_BT_AVAILABLE
@@ -2337,18 +2354,23 @@ int sp_exc_protect(void (*fn)(void *), void *ctx) {
   sp_explicit_cause = NULL; sp_explicit_cause_set = 0;
   return 1;
 }
+void sp_sched_trap_enter(void);   /* lib/sp_sched.c: Mutex#lock raises inside a trap proc */
+void sp_sched_trap_leave(void);
 void sp_trap_call(sp_Proc *p, int no) {
   sp_exc_check_depth();
   sp_exc_rootmark[sp_exc_top] = sp_gc_nroots; sp_rescue_mark[sp_exc_top] = sp_rescue_sp;
   sp_exc_msg[sp_exc_top] = 0; sp_exc_obj[sp_exc_top] = 0; sp_exc_top++;
+  sp_sched_trap_enter();
   if (setjmp(sp_exc_stack[sp_exc_top - 1]) == 0) {
     SP_GC_ROOT(p);   /* the proc may re-trap its signal, dropping sp_trap_proc's hold */
     sp_int slot = (sp_int)no;
     _sp_proc_poly_args[0] = sp_box_int((sp_int)no);
     sp_proc_call(p, 1, &slot);
+    sp_sched_trap_leave();
     sp_exc_top--;
     return;
   }
+  sp_sched_trap_leave();
   sp_exc_top--;
   sp_gc_nroots = sp_exc_rootmark[sp_exc_top]; sp_rescue_sp = sp_rescue_mark[sp_exc_top];
   /* Take the exit before unblocking: a delivery that was pending runs its

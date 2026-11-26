@@ -1,0 +1,33 @@
+["test_a"]
+["test_a"]
+"t-source"
+[:a, :b]
+true
+{"k" => 1}
+[:test_b]
+["year", "mon"]
+"(?<year>\\d+)-(?<mon>\\d+)"
+1
+true
+{"year" => [1], "mon" => [2]}
+["test_a"]
+"t-source"
+[:a, :b]
+{"k" => 1}
+["day"]
+"(?<day>\\d+)"
+0
+{"day" => [1]}
+true
+false
+true
+true
+"(?<y>a)"
+1
+["y"]
+{"y" => [1]}
+7
+:sym
+"opts"
+[1, 2]
+nil

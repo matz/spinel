@@ -1,0 +1,7 @@
+uninitialized constant C::M
+uninitialized constant Tools::Helpers
+uninitialized constant D::Outer
+false
+false
+false
+42

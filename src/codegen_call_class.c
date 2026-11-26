@@ -1581,7 +1581,9 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
     /* a literal name on a literal class the table does not cover (a builtin
        class, which the literal branch above left) is refused below, as
        refl_md_dynamic_used, which writes the table, does not count it */
-    if (inherit_lit >= 0 && (recv >= 0 || self_cls) && (nty == TY_SYMBOL || nty == TY_STRING) &&
+    /* a boxed name (a Symbol or a String the run time holds) is read as
+       one, anything else is CRuby's TypeError */
+    if (inherit_lit >= 0 && (recv >= 0 || self_cls) && (nty == TY_SYMBOL || nty == TY_STRING || nty == TY_POLY) &&
         !refl_md_literal_call(nt, recv, argv[0])) {
       int mask = (md_pub ? 1 : 0) | (md_prot ? 2 : 0) | (md_priv ? 4 : 0), t = 0;
       /* the classes whose call there takes the entry: their cells (the plan's list, cplan_presence_list), the
@@ -1607,8 +1609,15 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       else buf_puts(b, self_cls);
       if (t) buf_printf(b, "; %ssp_refl_method_defined(_c%d", arms.p, t);
       free(arms.p);
-      buf_puts(b, nty == TY_SYMBOL ? ", sp_sym_to_s_frozen(" : ", (");
-      emit_expr(c, argv[0], b);
+      if (nty == TY_POLY) {
+        buf_puts(b, ", sp_sym_to_s_frozen(sp_thread_local_key(");
+        emit_boxed(c, argv[0], b);
+        buf_puts(b, ")");
+      }
+      else {
+        buf_puts(b, nty == TY_SYMBOL ? ", sp_sym_to_s_frozen(" : ", (");
+        emit_expr(c, argv[0], b);
+      }
       buf_printf(b, "), %d, %d)%s", mask, inherit_lit, t ? "; })" : "");
       return 1;
     }
@@ -4759,6 +4768,22 @@ static int cls_value_row_default(Compiler *c, int id, int recv, const char *name
   return 1;
 }
 
+/* (a name of class cls's list whose own history the run decides: more than one version, an alias or
+   a method body's def, a late or open version, or a visibility word; the names refl_cand_note leaves
+   out are skipped) */
+typedef struct { Compiler *c; int cls, any; } OwnListVersioned;
+static void own_list_versioned_note(void *ud, const char *nm, int vis) {
+  OwnListVersioned *v = ud;
+  ElabVersion vs[2];
+  if (vis < 0 || name_is_synth_method(v->c, nm) || is_initialize_family(nm)) return;
+  int n = elab_history_versions(v->c, v->cls, 0, nm, vs, 2);
+  LrKind k = n == 1 ? vs[0].v->kind : LR_OPAQUE;
+  if (n != 1 || (k != LR_DEF && k != LR_READER && k != LR_WRITER) || vs[0].v->body ||
+      elab_versions_late(v->c, nm, vs, n) == 2 || elab_history_open(v->c, v->cls, 0, nm) ||
+      elab_history_vis_word(v->c, v->cls, 0, nm))
+    v->any = 1;
+}
+
 /* ClassName.{,public_,private_,protected_}instance_methods(false):
    compile-time sym array of own methods, filtered by visibility. CRuby's
    `instance_methods` is public+protected; the prefixed forms narrow to a
@@ -4788,6 +4813,44 @@ static int emit_class_own_instance_methods(Compiler *c, int id, Buf *b, const No
     buf_puts(b, ")");
     refl_free(&r);
     return 1;
+  }
+  /* a class method's self, and the classes below it where the method takes
+     its receiving class (cplan_self_list_classes), each listing its own */
+  if ((recv < 0 || nt_kind(nt, recv) == NK_SelfNode) && (sp_streq(name, "instance_methods") || sp_streq(name, "public_instance_methods"))) {
+    int *ks = malloc(sizeof *ks * (size_t)(c->nclasses > 0 ? c->nclasses : 1)), ci = -1;
+    if (!ks) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    unsigned form = 0;
+    int nks = cplan_self_list_classes(c, id, recv, name, ks, &ci, &form), dyn = (form & CSL_DYN) != 0, at_site = 0;
+    if (nks > 0 && (form & CSL_SPLICE) && g_self && g_emitting_class_id >= 0) ci = g_emitting_class_id, dyn = 0, at_site = 1;
+    if (nks > 0 && !dyn) nks = 1, ks[0] = ci;
+    /* (a method that neither takes its receiving class nor has it at the site, in a class with a class below
+       it that can receive the call, a `class << self` def or an extended module's method: left to raise) */
+    if (nks > 0 && !dyn && !at_site) { int nd = 0; comp_descendants(c, ci, &nd); if (nd > 0) nks = 0; }
+    /* (a list with such a name is left to raise: this arm reads no cell) */
+    OwnListVersioned ver = { c, -1, 0 };
+    for (int i = 0; i < nks && !ver.any; i++) ver.cls = ks[i], cplan_list_candidates(c, ks[i], CT_OWN, own_list_versioned_note, &ver);
+    if (ver.any) nks = 0;
+    if (nks > 0) {
+      int rt = ++g_tmp;
+      buf_printf(b, "({ sp_PolyArray *_t%d = NULL; ", rt);
+      if (dyn) buf_puts(b, "switch (_sp_cls.cls_id) {");
+      for (int i = 0; i < nks; i++) {
+        ReflNames r = {0};
+        refl_at(&r, id, ks[i], CT_OWN);
+        refl_own_instance_methods(c, ks[i], im_pub, im_prot, im_priv, 0, &r);
+        if (dyn) buf_printf(b, " case %d:", ks[i]);
+        buf_printf(b, " _t%d = ", rt);
+        refl_emit_sym_array(c, ks[i], &r, b);
+        buf_puts(b, ";");
+        if (dyn) buf_puts(b, " break;");
+        refl_free(&r);
+      }
+      if (dyn) buf_puts(b, " default: break; }");
+      buf_printf(b, " sp_box_poly_array(_t%d ? _t%d : sp_PolyArray_new()); })", rt, rt);
+      free(ks);
+      return 1;
+    }
+    free(ks);
   }
   /* a class held in a value: a switch on its class id over the
      classes the walk bounds it to, each listing its own */
@@ -5134,6 +5197,8 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
   }
 
   if (emit_class_instance_methods_all(c, id, b, nt, name, recv, argc, argv)) return 1;
+  /* (the `(false)` form with no receiver in a class method) */
+  if (recv < 0 && emit_class_own_instance_methods(c, id, b, nt, name, recv, argc, argv)) return 1;
   /* TY_CLASS method dispatch */
   if (recv >= 0 && comp_ntype(c, recv) == TY_CLASS) {
     int _clt = ++g_tmp;
@@ -7088,7 +7153,7 @@ int emit_refl_im_params_call(Compiler *c, int id, Buf *b) {
   int args = nt_ref(nt, im, "arguments");
   int an = 0; const int *av = nt_arr(nt, args, "arguments", &an);
   TyKind nty = infer_type(c, av[0]);
-  if (nty != TY_SYMBOL && nty != TY_STRING) return 0;
+  if (nty != TY_SYMBOL && nty != TY_STRING && nty != TY_POLY) return 0;
   Scope *encl = comp_scope_of(c, id);
   char selfbuf[48];
   const char *self_cls = NULL;
@@ -7100,8 +7165,9 @@ int emit_refl_im_params_call(Compiler *c, int id, Buf *b) {
   if (recv >= 0 && infer_type(c, recv) == TY_POLY) { buf_puts(b, "sp_unbox_class("); emit_boxed(c, recv, b); buf_puts(b, ")"); }
   else if (recv >= 0) emit_expr(c, recv, b);
   else buf_puts(b, self_cls);
-  buf_puts(b, nty == TY_SYMBOL ? ", sp_sym_to_s_frozen(" : ", (");
-  emit_expr(c, av[0], b);
+  /* a boxed name: a Symbol or a String, else CRuby's TypeError */
+  if (nty == TY_POLY) { buf_puts(b, ", sp_sym_to_s_frozen(sp_thread_local_key("); emit_boxed(c, av[0], b); buf_puts(b, ")"); }
+  else { buf_puts(b, nty == TY_SYMBOL ? ", sp_sym_to_s_frozen(" : ", ("); emit_expr(c, av[0], b); }
   buf_puts(b, "))");
   return 1;
 }

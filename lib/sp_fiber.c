@@ -512,7 +512,13 @@ static void sp_thread_stack_bounds(char *here) {
 static SP_TLS int sp_fiber_fault_armed = 0;
 /* this thread's sigaltstack buffer; external, so the store is not optimized away */
 SP_TLS void *sp_fiber_altstack;
+extern int (*sp_stack_headroom_low_fn)(void);   /* lib/sp_slab.c */
+extern void (*sp_stack_too_deep_fn)(void);
+extern void sp_stack_too_deep(void);            /* lib/sp_exc.c */
 static void sp_fiber_fault_arm(void) {
+  /* the allocator's slow paths check the stack left through these */
+  sp_stack_headroom_low_fn = sp_stack_headroom_low;
+  sp_stack_too_deep_fn = sp_stack_too_deep;
 #ifdef SP_NO_SIGNALS
   /* Targets with no signals (ESP32: newlib+FreeRTOS): no handler can be
      installed, and the per-thread 64 KB sigaltstack buffer would be charged
@@ -554,6 +560,38 @@ static void sp_fiber_fault_arm(void) {
    into SystemStackError. Fiber creation and worker startup arm it too, so
    this is a no-op once either has run. */
 void sp_stack_guard_init(void) { sp_fiber_fault_arm(); }
+
+/* Whether the running stack has less than SP_STACK_MARGIN left above its
+   guard: a fiber's own stack, or the thread's (sp_thread_stack_lo); a
+   fiber's margin is at most a quarter of its stack. The fault handler above
+   raises an overflow by a longjmp out of the frame that faulted, which is
+   safe in the program's frames and in the runtime's, but not inside libc:
+   an overflow in malloc left its lock held, and the next malloc, from the
+   rescue clause, aborted the process. So the allocator's slow paths, which
+   take malloc and start a collection, ask this first and raise the
+   SystemStackError themselves, from a frame of their own, with the margin
+   for malloc and for the collector's frames (sp_slab.c, sp_alloc.c). */
+int sp_stack_headroom_low(void) {
+  char here;
+  sp_Fiber *f = sp_fiber_current;
+  char *lo, *hi;
+  size_t margin = SP_STACK_MARGIN;
+  if (f && f != &sp_fiber_root && f->stack) {
+    lo = f->stack + sp_fiber_guard();
+    hi = lo + f->stack_size;
+    if (margin > f->stack_size / 4) margin = f->stack_size / 4;
+  } else if (sp_thread_stack_lo && sp_thread_stack_hi) {
+    lo = sp_thread_stack_lo;
+    hi = sp_thread_stack_hi;
+  } else {
+    return 0;
+  }
+  /* a frame outside the stack these bounds are of runs on another one (a
+     host's thread calling into a C extension, where the bounds are the
+     thread that armed the handler's): nothing is known of its room */
+  if (&here < lo || &here >= hi) return 0;
+  return (size_t)(&here - lo) < margin;
+}
 
 /* ---- the stack the program body runs on -------------------------------
    The OS gives a process one stack and decides how big: 8 MB on macOS, and

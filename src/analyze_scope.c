@@ -7930,7 +7930,7 @@ static void check_unrewritten_delegators(Compiler *c) {
    Hash and String are listed too, but a subclass of one is no longer
    refused: its instances are real Arrays, Hashes or Strings (#7449,
    mark_array_subclasses). */
-static const char *builtin_value_superclass(Compiler *c, int sc) {
+static const char *builtin_value_superclass_at(Compiler *c, int sc, int depth) {
   static const char *const refused[] = {
     "Array", "Hash", "String", "Range", "Proc", "Method", "UnboundMethod",
     "Integer", "Float", "Symbol", "Rational", "Complex",
@@ -7942,7 +7942,14 @@ static const char *builtin_value_superclass(Compiler *c, int sc) {
   NodeKind k = nt_kind(nt, sc);
   if (k != NK_ConstantReadNode && k != NK_ConstantPathNode) return NULL;
   const char *nm = key_name(c, sc);
-  if (!nm || !str_in(nm, refused)) return NULL;
+  if (!nm) return NULL;
+  /* a constant that holds one (`Impl = ::Hash; class H < Impl`), written once, followed to it
+     (const_single_write, as superclass_alias_target follows a class of the program) */
+  if (!str_in(nm, refused)) {
+    int top = k == NK_ConstantReadNode || (k == NK_ConstantPathNode && nt_ref(nt, sc, "parent") < 0);   /* (`Impl` or `::Impl`) */
+    int w = top && depth < 8 && comp_class_index(c, nm) < 0 ? const_single_write(c, nm) : -1;
+    return w >= 0 ? builtin_value_superclass_at(c, nt_ref(nt, w, "value"), depth + 1) : NULL;
+  }
   if (k == NK_ConstantPathNode) {
     int par = nt_ref(nt, sc, "parent");
     if (par >= 0) {
@@ -7960,6 +7967,7 @@ static const char *builtin_value_superclass(Compiler *c, int sc) {
   }
   return nm;
 }
+static const char *builtin_value_superclass(Compiler *c, int sc) { return builtin_value_superclass_at(c, sc, 0); }
 
 static const char *refused_builtin_superclass(Compiler *c, int sc) {
   const char *nm = builtin_value_superclass(c, sc);
@@ -8131,6 +8139,29 @@ static void mark_array_subclasses(Compiler *c) {
   }
 }
 
+/* See compiler.h. */
+int const_single_write(Compiler *c, const char *name) {
+  const NodeTable *nt = c->nt;
+  int w = -1, nw = 0;
+  if (!name) return -1;
+  NT_FOREACH_KIND(nt, NK_ConstantWriteNode, id) {
+    const char *n = const_key_at(c, id);
+    if (n && sp_streq(n, name)) { w = id; nw++; }
+  }
+  /* (and every other write of the name: `||=`, `&&=`, `op=`, and a path write `::Impl = v` by its last name) */
+  static const NodeKind other[] = { NK_ConstantOrWriteNode, NK_ConstantAndWriteNode, NK_ConstantOperatorWriteNode };
+  for (int k = 0; k < 3 && nw <= 1; k++)
+    NT_FOREACH_KIND(nt, other[k], id) {
+      const char *n = const_key_at(c, id);
+      if (n && sp_streq(n, name)) nw++;
+    }
+  if (nw == 1) NT_FOREACH_KIND(nt, NK_ConstantPathWriteNode, id) {
+    int t = nt_ref(nt, id, "target");
+    const char *n = t >= 0 ? nt_str(nt, t, "name") : NULL;
+    if (n && sp_streq(n, name)) nw++;
+  }
+  return nw == 1 ? w : -1;
+}
 /* The class a superclass constant that names no class of its own holds:
    `Impl = Base; class Sub < Impl`, a chain of such constants followed to
    the class. -1 where it is not one constant the program writes once (a
@@ -8140,12 +8171,8 @@ static void mark_array_subclasses(Compiler *c) {
 static int superclass_alias_target(Compiler *c, const char *name, int depth, int *wr) {
   const NodeTable *nt = c->nt;
   if (!name || depth > 8) return -1;
-  int w = -1, nw = 0;
-  NT_FOREACH_KIND(nt, NK_ConstantWriteNode, id) {
-    const char *n = const_key_at(c, id);
-    if (n && sp_streq(n, name)) { w = id; nw++; }
-  }
-  if (nw != 1) return -1;
+  int w = const_single_write(c, name);
+  if (w < 0) return -1;
   int v = nt_ref(nt, w, "value");
   NodeKind vk = v >= 0 ? nt_kind(nt, v) : NK_NONE;
   if (vk == NK_ConstantReadNode || vk == NK_ConstantPathNode) {
@@ -11278,7 +11305,9 @@ void specialize_inherited_cls_new(Compiler *c) {
        switch over the receiver's cls_id whose DEFAULT arm calls this source, so
        the source is referenced even though no `Const.<name>` call names it, and
        DCEing it left the arm pointing at a symbol that was never emitted --
-       an implicit declaration, mistyped arms, and a link error (#4053). */
+       an implicit declaration, mistyped arms, and a link error (#4053). A
+       `superclass.<name>` call is a switch over a Class value the same way, and
+       its value may be this source's own class. */
     for (int id = 0; id < node_count && !called_direct; id++) {
       if (nt_kind(nt, id) != NK_CallNode) continue;
       const char *nm4 = cls_call_name(c, id);
@@ -11286,7 +11315,7 @@ void specialize_inherited_cls_new(Compiler *c) {
       int r4 = nt_ref(nt, id, "receiver");
       if (r4 < 0 || nt_kind(nt, r4) != NK_CallNode) continue;
       const char *rn4 = nt_str(nt, r4, "name");
-      if (rn4 && sp_streq(rn4, "class")) called_direct = 1;
+      if (rn4 && (sp_streq(rn4, "class") || sp_streq(rn4, "superclass"))) called_direct = 1;
     }
     /* ... or if the defining class itself escapes as a value a dynamic
        receiver's call can reach */
@@ -11617,6 +11646,7 @@ static void process_prepend_body(Compiler *c, int ci, int body) {
           if (sc->body >= 0) {
             int nb = nt_clone_subtree((NodeTable *)nt, sc->body);
             comp_grow_node_arrays(c);
+            if (nb >= 0) g_inc_did_clone = 1;   /* (its locals, interned in register_prepends) */
             sc = &c->scopes[ms_i]; dst = &c->scopes[dst_i];
             if (nb >= 0 && is_builtin_reopen(c->classes[ci].name)) {
               /* as the include path does for a reopened builtin */
@@ -11681,9 +11711,12 @@ void register_prepends(Compiler *c) {
   g_list_has_c = c;
   cell_writes_defer(c);
   ElabBody *bo = elab_all_bodies(c, &nb);
+  g_inc_did_clone = 0;
   for (int b = 0; b < nb; b++) process_prepend_body(c, bo[b].cls, bo[b].body);
   free(bo);
   cell_writes_flush(c);
+  /* the cloned bodies introduced new local nodes, as the include clone's do */
+  if (g_inc_did_clone) register_locals(c);
   mtab_leave(c);
 }
 
@@ -12625,8 +12658,9 @@ static void pivs_each_arg(Compiler *c, const int *av, int ac, char *set, int dep
    of the method's name passes there, or its default. A Symbol of the name
    (send, method, define_method) may reach it some other way, which leaves
    it unbounded. With no parameter name, follow the same calls' receivers
-   to bound a root method's boxed self. */
-static int pivs_param(Compiler *c, Scope *s, const char *pn, char *set, int depth) {
+   to bound a root method's boxed self. With `elems`, the elements of the
+   arguments (pivs_elems), for a parameter that is no initialize's. */
+static int pivs_param(Compiler *c, Scope *s, const char *pn, char *set, int depth, int elems) {
   /* Compiled C dispatch supplies values without a Ruby AST call site. */
   if (c->n_cext_extensions && s->def_node >= 0 && nt_int(c->nt, s->def_node, "cext_stub", 0)) return 0;
   const NodeTable *nt = c->nt;
@@ -12645,10 +12679,11 @@ static int pivs_param(Compiler *c, Scope *s, const char *pn, char *set, int dept
      whose class resolves to this initialize, in a query that asks for it. */
   int init = pn && c->pivs->init_args && is_initialize_name(mn) && !s->is_cmethod && s->class_id >= 0 &&
              !class_is_exc_subclass(c, s->class_id);
+  if (elems && (init || pivs_unfollowed(c))) return 0;
   if (!init) for (int k = 0; PROTO[k]; k++) if (sp_streq(mn, PROTO[k])) return 0;
   if (init && c->pivs->hash_mode == 1 && !c->pivs->init_walk) {
     c->pivs->init_walk = 1;
-    int ok = pivs_param(c, s, pn, set, depth);
+    int ok = pivs_param(c, s, pn, set, depth, elems);
     c->pivs->init_walk = 0;
     return ok;
   }
@@ -12727,7 +12762,7 @@ static int pivs_param(Compiler *c, Scope *s, const char *pn, char *set, int dept
       /* (each initialize once per query: modules passing on to each other) */
       int ui = (int)(us - c->scopes);
       if (!an || (f->init_done_q[ui] == f->query && f->init_done_pn[ui] == an)) continue;
-      pivs_param(c, us, an, set, depth + 1);
+      pivs_param(c, us, an, set, depth + 1, 0);
       f->init_done_q[ui] = f->query; f->init_done_pn[ui] = an;
     }
     nopen--;
@@ -12786,7 +12821,7 @@ static int pivs_param(Compiler *c, Scope *s, const char *pn, char *set, int dept
     }
     int x = i < ac ? av[i] : dflt;
     if (x < 0) continue;   /* too few: ArgumentError, no value */
-    if (!pivs_value(c, x, set, depth + 1)) return 0;
+    if (!(elems ? pivs_elems(c, x, set, depth + 1) : pivs_value(c, x, set, depth + 1))) return 0;
     ncalls++;
   }
   return !pn || ncalls > 0 || pivs_unfollowed(c);
@@ -12919,10 +12954,19 @@ static int pivs_local_push_ok(Compiler *c, int u, char *set, int depth) {
     for (int k = 0; k < ac; k++) if (!pivs_elems(c, av[k], set, depth + 1)) return 0;
   }
   else if (sp_streq(un, "[]=")) {
-    if (ac != 2 || nt_kind(nt, av[0]) != NK_IntegerNode) return 0;
+    /* (one element at an Integer index, or a Hash's at a key: a Range
+       key is a splice of the value's elements) */
+    NodeKind kk = ac == 2 ? nt_kind(nt, av[0]) : NK_NONE;
+    if (kk != NK_IntegerNode && kk != NK_StringNode && kk != NK_SymbolNode && kk != NK_LocalVariableReadNode) return 0;
+    if (kk == NK_LocalVariableReadNode) {
+      TyKind kt = infer_type(c, av[0]);
+      if (kt != TY_INT && kt != TY_STRING && kt != TY_SYMBOL) return 0;
+    }
     if (!pivs_value(c, av[1], set, depth + 1)) return 0;
   }
-  else if (array_mutator_name(un) ||
+  /* (a Hash's other stores: `store`, `update`, a default) */
+  else if (array_mutator_name(un) || sp_streq(un, "store") || sp_streq(un, "update") ||
+           sp_streq(un, "default=") || sp_streq(un, "default_proc=") ||
            nt_call_has_block_arg(nt, u))
     return 0;
   return 1;
@@ -13012,10 +13056,12 @@ static int pivs_local(Compiler *c, int v, char *set, int depth, int elems) {
       if (c->nscope[w] == si && sp_streq(nt_str(nt, w, "name"), vn)) return 0;
     return pivs_elems(c, ur, set, depth + 1);
   }
-  for (int i = 0; i < s->nparams; i++)
-    if (s->pnames[i] && sp_streq(s->pnames[i], vn))
-      return !elems && pivs_param(c, s, vn, set, depth);
-  if (!pivs_local_writes_ok(c, si, vn)) return 0;
+  /* a parameter: what its callers pass (pivs_param); its elements are
+     their arguments' elements and what the method stores through it */
+  int param = 0;
+  for (int i = 0; i < s->nparams && !param; i++) param = s->pnames[i] && sp_streq(s->pnames[i], vn);
+  if (param && !elems) return pivs_param(c, s, vn, set, depth, 0);
+  if (!param && !pivs_local_writes_ok(c, si, vn)) return 0;
   if (elems) {
     /* an Array local: what its literal writes hold, and what is pushed onto
        it; handed anywhere else, it may gain what this does not see. The
@@ -13038,6 +13084,7 @@ static int pivs_local(Compiler *c, int v, char *set, int depth, int elems) {
     if (!ok) return 0;
     if (pivs_local_escapes(c, vn)) return 0;
   }
+  if (param) return pivs_param(c, s, vn, set, depth, 1);
   for (int w = comp_lvw_first_sc(c, si, vn); w >= 0; w = comp_lvw_next_sc(c, w)) {
     if (c->nscope[w] != si || !sp_streq(nt_str(nt, w, "name"), vn)) continue;
     int wv = nt_ref(nt, w, "value");
@@ -13223,6 +13270,16 @@ static int pivs_value_uncached(Compiler *c, int v, char *set, int depth) {
 }
 static int pivs_value_walk(Compiler *c, int v, char *set, int depth) {
   const NodeTable *nt = c->nt;
+  /* an element store written as one (`h[k] = v`, a method's last
+     expression) is its value whatever `[]=` returns, so ahead of the
+     call's targets; `h&.[k] = v` is nil for a nil h. A call by name
+     (`h.[]=(k, v)`) returns what the method it reaches returns. */
+  if (nt_kind(nt, v) == NK_CallNode && nt_attr_write(nt, v) && !nt_safe_nav(nt, v) &&
+      nt_ref(nt, v, "block") < 0 && sp_streq(nt_str(nt, v, "name") ? nt_str(nt, v, "name") : "", "[]=")) {
+    int sn = 0;
+    const int *sa = nt_arr(nt, nt_ref(nt, v, "arguments"), "arguments", &sn);
+    if (sn >= 2) return pivs_value(c, sa[sn - 1], set, depth + 1);
+  }
   int br = pivs_branches(c, v, set, depth, 0);
   if (br >= 0) return br;
   /* a callables query keeps the callable literals it reaches (in the
@@ -13265,7 +13322,7 @@ static int pivs_value_walk(Compiler *c, int v, char *set, int depth) {
       if (!s || s->is_cmethod || s->class_id < 0) return 0;
       /* Object's boxed self is not bounded by the recorded class parents. */
       if (is_object_root(c->classes[s->class_id].name))
-        return !s->reachable || pivs_param(c, s, NULL, set, depth);
+        return !s->reachable || pivs_param(c, s, NULL, set, depth, 0);
       for (int k = 0; k < c->nclasses; k++)
         if (k == s->class_id || is_descendant(c, k, s->class_id)) set[k] = 1;
       return 1;

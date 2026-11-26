@@ -46,6 +46,7 @@
 #include <limits.h>
 #include "builtin_names.h"
 #include "call_plan.h"
+#include "codegen_call_arms.h"
 #include "method_table_check.h"
 
 int class_has_exc_name(Compiler *c, int ci);   /* codegen.c */
@@ -2922,7 +2923,10 @@ static void cf_call_known(CF *f, int v, int pidx, int recv_el, const char *nm, c
     }
     int tl = call_target(c, v, -1, nm, CT_TOP, NULL);
     if (tl >= 0 && CF_UT(tl)) continue;
-    if (comp_method_in_chain(c, k, "method_missing", NULL) >= 0) {
+    /* (one of Object's public methods is found before the hook; on a
+       blank slate, one of BasicObject's own) */
+    if (comp_method_in_chain(c, k, "method_missing", NULL) >= 0 &&
+        !(class_is_blank_slate(c, k) ? basicobject_own_method(nm) : object_public_method_name(nm))) {
       /* (directed) the runtime calls the class's method_missing with the
          name and the arguments, which it has seen, and the block */
       int mm = comp_method_in_chain(c, k, "method_missing", NULL);
@@ -3746,6 +3750,9 @@ static void cf_call(CF *f, int v) {
     if (cf_owner_block(f, v, 0) >= 0 && cf_in_exec_block(f, v)) {
       CFByName *b = cf_byname(f, nm);
       if (b->n || b->ncm || b->nrd || b->nwr) { cf_call_any(f, v, nm, argv, argc, blk); return; }
+      /* a name no method of the program answers, where a class's
+         method_missing may: what the hook answers, as for `self.name` */
+      if (f->has_mm && !ie_kernel_global(nm) && !cf_opaque_name(nm)) { cf_call_any(f, v, nm, argv, argc, blk); return; }
     }
     /* Kernel: a conversion, an iteration, `lambda`, `proc`, `loop`, `raise`
        hand on what they are given; `new` has no class here */
@@ -3829,8 +3836,10 @@ static void cf_call(CF *f, int v) {
     if (cf_kernel_proc_call(f, v, k->name, nm, argv, argc, blk)) return;
     if (cf_poison_class_call(f, v, k->name, nm, argv, argc, blk)) return;
     /* a method of Class or Module: nothing of the program's own comes out,
-       except through a block */
+       except through a block, and Kernel's itself and tap, which answer
+       the Class object */
     if (blk >= 0 && nt_kind(nt, blk) == NK_BlockNode) cf_all_block_params(f, blk);
+    if (is_itself_name(nm) || is_tap_name(nm)) cf_add_set(f, v, cf_classval(f, x));
     cf_builtin_rule(f, v, -1, argv, argc, blk, nm);
     return;
   }

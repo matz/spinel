@@ -97,6 +97,7 @@ typedef struct {
 
 void *sp_exc_ctx_new(void);
 void sp_exc_ctx_free(void *p);
+void sp_exc_ctx_free_loaded(void *p);
 void sp_exc_ctx_mark(void *p);   /* GC: a suspended fiber's carried exc objects */
 
 /* The stacks the two helpers below read, declared (and documented) with the

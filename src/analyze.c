@@ -56174,6 +56174,10 @@ static void an_phase_value_types(Compiler *c) {
        subclass with a scalar ivar was wrongly returned by value and never
        got a struct (#1415). */
     if (class_def_super(c->nt, ci->def_node) >= 0) continue;
+    /* A site class's instances carry the class made at run time they were
+       built for, which a by-value copy of self cannot hand on: its family
+       keeps the pointer layout (cplan_rt_family) */
+    if (cplan_rt_family(c, i)) continue;
     int scalar = 1;
     for (int j = 0; j < ci->nivars; j++) {
       if (!comp_ivar_on(ci, j, IVS_INST)) continue;

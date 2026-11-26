@@ -18218,8 +18218,8 @@ static void emit_super_value(Compiler *c, int id, Buf *b) {
       buf_printf(&rb, "({ sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d); ", tk, kb.p ? kb.p : "sp_box_nil()", tk);
       emit_super_blockarg_effect(c, id, &rb);
       buf_printf(&rb, "if (_t%d.tag != SP_TAG_CLASS) sp_raise_cls(\"TypeError\", \"class or module required\"); ", tk);
-      /* (a by-value object, detect_value_types, is of the method's class: no class below it builds one;
-         a site class's instance answers its record, emit_obj_class_id) */
+      /* (a by-value object, detect_value_types, is of the method's class: no class below it builds one,
+         and no site class's family is by value; a site class's instance answers its record, emit_obj_class_id) */
       Buf ob; memset(&ob, 0, sizeof ob);
       if (c->classes[s->class_id].is_value_type) buf_printf(&ob, "%d", s->class_id);
       else if (cplan_rt_family(c, s->class_id)) emit_obj_class_id(c, s->class_id, g_self, &ob);

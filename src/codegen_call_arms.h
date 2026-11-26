@@ -455,6 +455,7 @@ int builtin_numeric_owns(const char *cls, const char *m);
 int builtin_numeric_arity(const char *m, int *out);
 void emit_bind_call(Compiler *c, int id, int target, const int *argv, int argc, Buf *b);
 void emit_bind_call_boxed(Compiler *c, int id, int target, int kn, const char *sym, const int *argv, int argc, Buf *b);
+int emit_bind_call_target(Compiler *c, int id, int recv, int target, const int *argv, int argc, Buf *b);
 void emit_bm_abi_args(Buf *b, const char *rb, int abi, const char *sig, int fixed, int rest, int ret, int poly, int pfixed, const char *thunk, int tmin, int tmax);
 int emit_method_obj_on_constant(Compiler *c, int id, int recv, const char *sym, Buf *b);
 int method_obj_of_native_func(Compiler *c, int recv, const char *sym);

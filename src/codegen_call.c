@@ -35449,6 +35449,26 @@ void emit_bind_call_boxed(Compiler *c, int id, int target, int kn, const char *s
   unhoist_dispatch_args(c, hn, hsv, hty);
 }
 
+/* `um.bind_call(obj, args...)` whose UnboundMethod has instance method
+   `target` (-1 for none): a direct call on an obj of a known class
+   (emit_bind_call), or on a boxed obj, its class checked at run time, where
+   the class um is looked up on binds that target too (emit_bind_call_boxed).
+   Returns 0, emitting nothing, for any other call. */
+int emit_bind_call_target(Compiler *c, int id, int recv, int target, const int *argv, int argc, Buf *b) {
+  if (target < 0 || c->scopes[target].class_id < 0 || c->scopes[target].is_cmethod) return 0;
+  if (ty_is_object(comp_ntype(c, argv[0]))) {
+    emit_bind_call(c, id, target, argv, argc, b);
+    return 1;
+  }
+  if (repr_of(c, argv[0]).kind == RK_BOXED && nt_kind(c->nt, argv[0]) != NK_SplatNode &&
+      class_value_bind_call_target(c, method_recv_node(c, recv), c->scopes[target].class_id,
+                                   c->scopes[target].name, NULL) == target) {
+    emit_bind_call_boxed(c, id, target, -1, NULL, argv, argc, b);
+    return 1;
+  }
+  return 0;
+}
+
 void emit_exc_exception(Compiler *c, int recv, int arg, Buf *b) {
   /* `e.exception(e)`: an argument that is the receiver itself answers the
      receiver (CRuby's exc_exception), not a copy with its text as message */

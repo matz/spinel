@@ -2333,19 +2333,7 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
       buf_puts(b, "; })");
       return 1;
     }
-    if (t2 >= 0 && c->scopes[t2].class_id >= 0 && !c->scopes[t2].is_cmethod &&
-        ty_is_object(comp_ntype(c, argv[0]))) {
-      emit_bind_call(c, id, t2, argv, argc, b);
-      return 1;
-    }
-    /* a boxed obj: its class is checked at run time */
-    if (t2 >= 0 && c->scopes[t2].class_id >= 0 && !c->scopes[t2].is_cmethod &&
-        repr_of(c, argv[0]).kind == RK_BOXED && nt_kind(nt, argv[0]) != NK_SplatNode &&
-        class_value_bind_call_target(c, method_recv_node(c, recv), c->scopes[t2].class_id,
-                                     c->scopes[t2].name, NULL) == t2) {
-      emit_bind_call_boxed(c, id, t2, -1, NULL, argv, argc, b);
-      return 1;
-    }
+    if (emit_bind_call_target(c, id, recv, t2, argv, argc, b)) return 1;
   }
   /* ...and on a Class value known only at run time, a switch on its class */
   if (recv >= 0 && argc >= 1 && sp_streq(name, "bind_call") && nt_kind(nt, argv[0]) != NK_SplatNode) {

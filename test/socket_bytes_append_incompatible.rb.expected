@@ -1,0 +1,50 @@
+gets: ASCII-8BIT 13 13
+  <<: Encoding::CompatibilityError: incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)
+  concat: Encoding::CompatibilityError: incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)
+  +: Encoding::CompatibilityError: incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)
+  reverse +: Encoding::CompatibilityError: incompatible character encodings: BINARY (ASCII-8BIT) and UTF-8
+  interpolation: Encoding::CompatibilityError: incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)
+readline: ASCII-8BIT 13 13
+  <<: Encoding::CompatibilityError: incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)
+  concat: Encoding::CompatibilityError: incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)
+  +: Encoding::CompatibilityError: incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)
+  reverse +: Encoding::CompatibilityError: incompatible character encodings: BINARY (ASCII-8BIT) and UTF-8
+  interpolation: Encoding::CompatibilityError: incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)
+readpartial: ASCII-8BIT 13 13
+  <<: Encoding::CompatibilityError: incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)
+  concat: Encoding::CompatibilityError: incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)
+  +: Encoding::CompatibilityError: incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)
+  reverse +: Encoding::CompatibilityError: incompatible character encodings: BINARY (ASCII-8BIT) and UTF-8
+  interpolation: Encoding::CompatibilityError: incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)
+read(n): ASCII-8BIT 13 13
+  <<: Encoding::CompatibilityError: incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)
+  concat: Encoding::CompatibilityError: incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)
+  +: Encoding::CompatibilityError: incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)
+  reverse +: Encoding::CompatibilityError: incompatible character encodings: BINARY (ASCII-8BIT) and UTF-8
+  interpolation: Encoding::CompatibilityError: incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)
+read: ASCII-8BIT 13 13
+  <<: Encoding::CompatibilityError: incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)
+  concat: Encoding::CompatibilityError: incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)
+  +: Encoding::CompatibilityError: incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)
+  reverse +: Encoding::CompatibilityError: incompatible character encodings: BINARY (ASCII-8BIT) and UTF-8
+  interpolation: Encoding::CompatibilityError: incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)
+recv: ASCII-8BIT 13 13
+  <<: Encoding::CompatibilityError: incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)
+  concat: Encoding::CompatibilityError: incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)
+  +: Encoding::CompatibilityError: incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)
+  reverse +: Encoding::CompatibilityError: incompatible character encodings: BINARY (ASCII-8BIT) and UTF-8
+  interpolation: Encoding::CompatibilityError: incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)
+sysread: ASCII-8BIT 13 13
+  <<: Encoding::CompatibilityError: incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)
+  concat: Encoding::CompatibilityError: incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)
+  +: Encoding::CompatibilityError: incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)
+  reverse +: Encoding::CompatibilityError: incompatible character encodings: BINARY (ASCII-8BIT) and UTF-8
+  interpolation: Encoding::CompatibilityError: incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)
+kept: UTF-8 2
+ascii << bytes: ASCII-8BIT 16
+bytes << ascii: ASCII-8BIT 15
+empty << text: UTF-8 2
+bytes << text: Encoding::CompatibilityError: incompatible character encodings: BINARY (ASCII-8BIT) and UTF-8
+a + b + bytes: Encoding::CompatibilityError: incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)
+text << ascii bytes: UTF-8 8
+text + ascii bytes: UTF-8 8

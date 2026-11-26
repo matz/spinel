@@ -190,15 +190,18 @@ static inline void sp_String_set_bin_enc(sp_String*s,const char*t){
    CRuby's compatibility rule picks it (sp_str_cat_binary): an ASCII-only
    operand keeps the receiver's, an ASCII-only receiver takes the operand's
    -- `+"hdr" << png.b` is ASCII-8BIT -- and two runs with high bytes in
-   different encodings stay binary. The bytes are scanned only when the two
-   encodings differ. */
+   different encodings cannot be joined: Encoding::CompatibilityError, raised
+   before s changes. The bytes are scanned only when the two encodings
+   differ. */
+void sp_str_enc_incompatible(int recv_bin);
 static inline void sp_String_append_enc(sp_String*s,const char*t,size_t tl){
   int tb=sp_str_is_binary(t);
   if(SP_EXPECT((int)s->binary==tb,1))return;
   for(size_t i=0;i<tl;i++)
     if((unsigned char)t[i]>=0x80){
-      if(sp_str_ascii_only(s->data)&&!tb){s->binary=0;sp_str_as_text(s->data);}
-      else s->binary=1;
+      if(!sp_str_ascii_only(s->data))sp_str_enc_incompatible((int)s->binary);
+      if(tb)s->binary=1;
+      else{s->binary=0;sp_str_as_text(s->data);}
       return;
     }
 }

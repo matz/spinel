@@ -115,11 +115,11 @@ sp_int sp_str_field_count(const char*s,const char*sep){
    binary input is binary -- "hdr" + digest is ASCII-8BIT there, and a slice of
    a binary string is binary because a slice of bytes is bytes.
 
-   Where CRuby would instead raise Encoding::CompatibilityError (two operands
-   that BOTH carry bytes >= 0x80 in different encodings), spinel answers binary
-   rather than raising; that is the existing posture of a runtime with two
-   encodings, and answering text there was the bug -- an untagged result does
-   not compare equal to the same bytes from pack, File.binread or a socket.
+   Two operands that BOTH carry bytes >= 0x80 in different encodings cannot
+   be joined: that raises Encoding::CompatibilityError, as CRuby's
+   rb_enc_check does (sp_str_enc_incompatible), so appending a socket's
+   non-ASCII bytes to a UTF-8 String with non-ASCII text is the error it is
+   under CRuby rather than a binary result.
 
    Only freshly allocated results are marked. The shared empty string and other
    static returns are never touched: marking one would tag it for every other
@@ -129,6 +129,13 @@ static inline char *sp_str_bin_from(char *r, const char *a) {
   return r;
 }
 
+/* The error two Strings with high bytes in different encodings raise when
+   joined; `recv_bin` is the encoding of the left (receiver) side. */
+void sp_str_enc_incompatible(int recv_bin) {
+  sp_raise_cls("Encoding::CompatibilityError", recv_bin
+    ? "incompatible character encodings: BINARY (ASCII-8BIT) and UTF-8"
+    : "incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)");
+}
 /* One step of the encoding rule over an interpolation. `state` is the
    encoding so far, -1 while only
    US-ASCII parts (an Integer's to_s, nothing yet) have gone in, 0 UTF-8, 1
@@ -141,31 +148,34 @@ int sp_str_enc_step(int state, const char *acc, size_t acc_len, const char *part
   if (part_bin == state || part_len == 0) return state;
   for (size_t i = 0; i < part_len; i++)
     if ((unsigned char)part[i] >= 0x80) {
-      for (size_t j = 0; j < acc_len; j++) {
-        if ((unsigned char)acc[j] >= 0x80)
-          sp_raise_cls("Encoding::CompatibilityError", state == 1
-            ? "incompatible character encodings: BINARY (ASCII-8BIT) and UTF-8"
-            : "incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)");
-      }
+      for (size_t j = 0; j < acc_len; j++)
+        if ((unsigned char)acc[j] >= 0x80) sp_str_enc_incompatible(state);
       return part_bin;
     }
   return state;
 }
 /* Whether a + b is binary, as CRuby's compatibility rule picks it: the
    operands' shared encoding, else the one an ASCII-only operand gives way
-   to -- `String.new + "\u00e9"` is UTF-8 -- else binary (see above). */
+   to -- `String.new + "\u00e9"` is UTF-8 -- else neither gives way and the
+   two cannot be joined (see above). */
 static int sp_str_cat_binary(const char *a, const char *b) {
   int ab = sp_str_is_binary(a), bb = sp_str_is_binary(b);
   if (ab == bb) return ab;
   if (sp_str_ascii_only(b)) return ab;
   if (sp_str_ascii_only(a)) return bb;
+  sp_str_enc_incompatible(ab);
   return 1;
 }
 /* The result r of a substitution of rep into s: binary as s + rep is, since
    CRuby gives a substitution the encoding its receiver and replacement
-   share (sp_re_gsub, sp_str_gsub and their kin). */
+   share (sp_re_gsub, sp_str_gsub and their kin). Where both hold high bytes
+   in different encodings it answers binary: CRuby judges that case by the
+   bytes of s the substitution kept, not by the whole of s, so
+   `"é".sub("é", "\xff".b)` is a binary "\xFF" there. */
 char *sp_str_bin_cat_like(const char *s, const char *rep, char *r) {
-  if (sp_str_cat_binary(s, rep)) sp_str_mark_binary(r);
+  int sb = sp_str_is_binary(s), rb = sp_str_is_binary(rep);
+  if (sb == rb ? sb : sp_str_ascii_only(rep) ? sb : sp_str_ascii_only(s) ? rb : 1)
+    sp_str_mark_binary(r);
   return r;
 }
 /* The same rule folded over a run of parts: `bin` is the encoding of the
@@ -174,7 +184,7 @@ char *sp_str_bin_cat_like(const char *s, const char *rep, char *r) {
 static int sp_str_bin_fold(const char *r, size_t pl, int bin, const char *s) {
   int sb = sp_str_is_binary(s);
   if (sb == bin || sp_str_ascii_only(s)) return bin;
-  for (size_t i = 0; i < pl; i++) if ((unsigned char)r[i] >= 0x80) return 1;
+  for (size_t i = 0; i < pl; i++) if ((unsigned char)r[i] >= 0x80) sp_str_enc_incompatible(bin);
   return sb;
 }
 const char*sp_str_concat(const char*a,const char*b){SP_GC_ROOT_STR(a);SP_GC_ROOT_STR(b);if(!a)a=sp_str_empty;if(!b)b=sp_str_empty;size_t la=sp_str_byte_len(a),lb=sp_str_byte_len(b);char*r=sp_str_alloc(la+lb);memcpy(r,a,la);memcpy(r+la,b,lb);if(sp_str_cat_binary(a,b))sp_str_mark_binary(r);return r;}
@@ -232,11 +242,13 @@ const char *sp_str_plus_lit(const char *a, const char *lit, size_t ll) {
   memcpy(r, a, la);
   memcpy(r + la, lit, ll);
   /* a binary receiver keeps its encoding unless it is ASCII-only and the
-     literal is not: then the result is the literal's UTF-8, as CRuby picks */
+     literal is not: then the result is the literal's UTF-8, as CRuby picks;
+     high bytes on both sides cannot be joined (sp_str_cat_binary) */
   if (sp_str_is_binary(a)) {
     int lit_ascii = 1;
     for (size_t i = 0; i < ll && lit_ascii; i++) lit_ascii = (unsigned char)lit[i] < 0x80;
-    if (lit_ascii || !sp_str_ascii_only(a)) sp_str_mark_binary(r);
+    if (!lit_ascii && !sp_str_ascii_only(a)) sp_str_enc_incompatible(1);
+    if (lit_ascii) sp_str_mark_binary(r);
   }
   return r;
 }
@@ -332,12 +344,16 @@ size_t sp_uc_title_utf8(uint32_t cp, char *o) {
   return (size_t)sp_utf8_encode(sp_uc_toupper(cp), o);
 }
 /* The encoding `s << t` gives s, for the first lb bytes of t: the rule of
-   sp_str_cat_binary, read before the bytes go in. */
+   sp_str_cat_binary, read before the bytes go in (so an incompatible t
+   raises with s unchanged). */
 static int sp_str_cat_binary_n(const char *s, const char *t, size_t lb) {
   int sb = sp_str_is_binary(s), tb = sp_str_is_binary(t);
   if (sb == tb) return sb;
   for (size_t i = 0; i < lb; i++)
-    if ((unsigned char)t[i] >= 0x80) return sp_str_ascii_only(s) ? tb : 1;
+    if ((unsigned char)t[i] >= 0x80) {
+      if (!sp_str_ascii_only(s)) sp_str_enc_incompatible(sb);
+      return tb;
+    }
   return sb;
 }
 /* an in-place append's receiver takes the encoding the rule picked */

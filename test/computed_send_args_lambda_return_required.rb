@@ -1,7 +1,6 @@
-# A send of a computed name on self in an instance method, with a splat,
-# two arguments or keywords and a block, does not stop a lambda's return in
-# a required file's top level: that self is no class nor main, so the send
-# cannot redefine the `lambda` the file calls.
+# Sends of a computed name, on any receiver, and evals of code in a String
+# do not stop a lambda's return in a required file's top level: redefining
+# or removing the builtin `lambda` that way is not supported.
 require_relative "computed_send_args_lambda_return_required/codec"
 
 class Box
@@ -9,20 +8,24 @@ class Box
   def ask(name, *args) = send(name, *args)
   def ask2(name) = send(name, 1, 2)
   def ask_kw(name) = send(name, key: 1) { 2 }
-  # code in a String no literal spells runs in no compiled program, and a
-  # definition form sent to self's own singleton class makes a method of
-  # that object alone (none of these is called)
+  # (none of these is called)
   def eval_on(str) = instance_eval(str)
   def self.add(code) = class_eval(code, __FILE__, __LINE__)
   def bind(key, value) = singleton_class.send(:define_method, key) { value }
-  # in a class method self is the class: what a send defines there is the
-  # class's, which main does not answer
   def self.make(name, *args) = send(name, *args)
   def self.defn(key) = send(:define_method, key) { 1 }
+end
+
+class Relay
+  def initialize(to) = @to = to
+  def ask(name, *args) = @to.send(name, *args)
+  def ask_pub(name, a, b) = @to.public_send(name, a, b)
 end
 
 p Box.new.ask(:size, 1)
 p Box.new.ask2(:size)
 p Box.new.ask_kw(:size)
+p Relay.new(Box.new).ask(:size, 2)
+p Relay.new(Box.new).ask_pub(:size, 1, 1)
 p Pairs.call([1, 2, 3, 4])
 p Pairs.call(7)

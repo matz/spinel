@@ -2193,8 +2193,14 @@ lambda. In a required file's top-level code, a `return` can leave a
 `lambda { ... }` from inlined blocks for Array#each, Array#map,
 Array#tap, Hash#each, or Integer Range#each. Spinel refuses top-level
 block returns if there is no lambda boundary or if a nested block needs
-its own callable. A possible override or removal of builtin `lambda`
-also makes the block return a refusal.
+its own callable.
+Redefining or removing the builtin `lambda` by a form the source does
+not spell (a `send` or `public_send` of a computed name, `define_method`
+of a computed name, or code in a String given to `eval`, `class_eval` or
+`instance_eval`) is not supported: Spinel does not look for one, and a
+`lambda { ... }` is taken as Kernel's. A `def lambda`, an `alias`, an
+`undef`, or a `define_method`, `alias_method` or `remove_method` naming
+`lambda` literally, still makes the block return a refusal.
 Inside a deferred block, a receiverless `lambda` call with an
 unresolved `self` cannot establish a new return boundary. For example,
 the inner return in `lambda { inner = lambda { return 2 }; inner.call; 3 }`

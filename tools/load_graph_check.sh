@@ -413,8 +413,6 @@ for source in \
   'module M; def self.lambda; yield; end; lambda { return 1 }; end' \
   'module M; def lambda; yield; end; end; module N; extend M if ARGV.empty?; lambda { return 1 }; end' \
   'module Kernel; [:bda].each { |k| define_method("lam#{k}") { 1 } }; end; lambda { return 1 }' \
-  'klass = ARGV.empty? ? Object : Module; klass.define_method("lam#{ARGV[0]}") { 1 }; lambda { return 1 }' \
-  'Object.class_eval(ARGV[0]); lambda { return 1 }' \
   'undef lambda; lambda { return 1 }' \
   'module Kernel; remove_method :lambda; end; lambda { return 1 }' \
   'def Kernel.lambda; yield; end; ::Kernel.lambda { return 1 }' \

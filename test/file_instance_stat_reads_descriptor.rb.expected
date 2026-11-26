@@ -1,0 +1,18 @@
+stat names the old file
+stat size 12 file? true ftype file
+stat == File.stat(moved) true
+stat mtime 1000000000
+size 12
+mtime 1000000000 atime 1000000000
+ctime of the open file true
+lstat reads the path, size 3
+chmod old 600 new 644
+truncate old 3 new 3
+the earlier stat keeps its size 12
+size counts a pending write 5
+stat after close names the old file, size 12
+stat on a closed File: IOError closed stream
+size on a closed File: IOError closed stream
+mtime on a closed File: IOError closed stream
+chmod on a closed File: IOError closed stream
+pipe stat pipe? true

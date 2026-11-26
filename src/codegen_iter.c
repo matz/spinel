@@ -7547,9 +7547,16 @@ static int iter_hash_arms(Compiler *c, Buf *b, int indent, int block, const char
     }
     Buf rb; memset(&rb, 0, sizeof rb);
     buf_printf(&rb, "_t%d", th2);
+    /* a new key stored by the block raises in the loop's step, as each's
+       does (the step clause runs on `next` too) */
+    int tn = ++g_tmp;
+    emit_indent(b, indent);
+    buf_printf(b, "sp_int _t%d = %s->len;\n", tn, rb.p);
     emit_indent(b, indent);
     buf_printf(b, "for (sp_int _t%d = 0; _t%d < ", t, t);
-    buf_puts(b, rb.p); buf_printf(b, "->len; _t%d++) {\n", t);
+    buf_puts(b, rb.p);
+    buf_printf(b, "->len; ({ if (%s->len > _t%d) sp_raise_cls(\"RuntimeError\","
+                  " \"can't add a new key into hash during iteration\"); _t%d++; })) {\n", rb.p, tn, t);
     if (p0) {
       /* The param may be poly (shared name across hashes of differing
          element types); box a concrete element into the poly slot. */

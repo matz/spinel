@@ -12076,12 +12076,14 @@ static int lr_eval_may_change(Compiler *c, int f, int a) {
   const ClassInfo *k = &c->classes[s->class_id];
   return is_object_root(k->name) || k->is_builtin_const;
 }
-/* (the scope test of lr_send_on_plain_instance: an instance method of a
-   plain program class, not in a block of it) */
+/* (the scope test of lr_send_on_plain_instance: a method of a plain
+   program class, an instance's or the class's own, not in a block of it.
+   In a class method self is that class: what a definition form makes
+   there is the class's or its singleton's, and main answers neither) */
 static int lr_plain_instance_scope(Compiler *c, int f) {
   const NodeTable *nt = c->nt;
   const Scope *s = comp_scope_of(c, f);
-  if (!s || s->def_node < 0 || s->is_cmethod || s->class_id < 0 || s->class_id >= c->nclasses) return 0;
+  if (!s || s->def_node < 0 || s->class_id < 0 || s->class_id >= c->nclasses) return 0;
   /* (in a block of the method, self may be another object: instance_exec) */
   const int *par = comp_parent_map(c);
   for (int a = f; par && a >= 0 && a < nt->count; a = par[a]) {

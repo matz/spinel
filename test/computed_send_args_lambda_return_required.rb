@@ -15,6 +15,10 @@ class Box
   def eval_on(str) = instance_eval(str)
   def self.add(code) = class_eval(code, __FILE__, __LINE__)
   def bind(key, value) = singleton_class.send(:define_method, key) { value }
+  # in a class method self is the class: what a send defines there is the
+  # class's, which main does not answer
+  def self.make(name, *args) = send(name, *args)
+  def self.defn(key) = send(:define_method, key) { 1 }
 end
 
 p Box.new.ask(:size, 1)

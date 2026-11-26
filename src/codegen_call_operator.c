@@ -1820,9 +1820,10 @@ int emit_call_operator_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
     Repr vt2r = repr_of(c, id);
     TyKind vt2 = vt2r.as_ty;
     int ans = (vt2 == TY_PROC || vt2r.kind == RK_BOXED || vt2 == TY_UNKNOWN) ? tp2 : th2;
-    buf_printf(b, " _t%d->dproc = _sp_hash_dproc_%s; _t%d->dproc_self = (void *)_t%d;"
+    /* (the proc replaces a default value, as CRuby's does) */
+    buf_printf(b, " _t%d->dproc = _sp_hash_dproc_%s; _t%d->dproc_self = (void *)_t%d; _t%d->default_v = sp_box_nil();"
                   " sp_gc_wb((void *)_t%d); _t%d; })",
-               th2, dn2, th2, tp2, th2, ans);
+               th2, dn2, th2, tp2, th2, th2, ans);
     return 1;
   }
   /* String#[]= (and insert, clear, slice!) change the receiver's String in

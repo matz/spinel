@@ -124,11 +124,16 @@ int emit_op_hash_default_proc(Compiler *c, const BopCtx *x, Buf *b) {
       "  _sp_proc_poly_ret = (src && src->dproc && argc >= 2)"
       " ? src->dproc(h, %s, src->dproc_self) : sp_box_nil();\n"
       "  return 0;\n}\n"
+      /* the Proc keeps the default proc it was read with: a shell holding
+         a copy, so a later default= or default_proc= on the hash does not
+         change a Proc already returned */
       "static sp_Proc *_hdp_%s(sp_%sHash *h) {\n"
       "  if (!h || !h->dproc) return NULL;\n"
       "  SP_GC_ROOT(h);\n"
-      "  return sp_proc_new_meta((void *)_hdp_tramp_%s, h, sp_bm_cap_scan, 2, FALSE, 0, NULL, NULL);\n}\n",
-      hnn, hnn, hnn, hnn, hnn, kexpr, hnn, hnn, hnn);
+      "  sp_%sHash *snap = sp_%sHash_new(); SP_GC_ROOT(snap);\n"
+      "  snap->dproc = h->dproc; snap->dproc_self = h->dproc_self;\n"
+      "  return sp_proc_new_meta((void *)_hdp_tramp_%s, snap, sp_bm_cap_scan, 2, FALSE, 0, NULL, NULL);\n}\n",
+      hnn, hnn, hnn, hnn, hnn, kexpr, hnn, hnn, hnn, hnn, hnn);
   }
   buf_printf(b, "_hdp_%s(", hnn);
   emit_expr(c, recv, b);
@@ -643,6 +648,8 @@ int emit_op_hash_set_default(Compiler *c, const BopCtx *x, Buf *b) {
      it, since the value's own expression can allocate and would clear a
      record made before it. A nil or an Integer default stores no reference. */
   if (rt == TY_SYM_POLY_HASH || rt == TY_STR_POLY_HASH || rt == TY_POLY_POLY_HASH) {
+    /* the default replaces a default proc, as CRuby's does */
+    buf_printf(b, " if (_t%d) { _t%d->dproc = NULL; _t%d->dproc_self = NULL; }", t, t, t);
     buf_printf(b, is_nil ? " if (_t%d) _t%d->default_v = " : " if (_t%d) { _t%d->default_v = ", t, t);
     if (is_nil) buf_puts(b, "sp_box_nil()");
     else if (ohold) buf_printf(b, "%s(%s)", at == TY_FLOAT ? "sp_box_ofloat" : "sp_box_oint", av);

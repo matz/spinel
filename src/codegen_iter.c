@@ -1523,8 +1523,10 @@ static void emit_block_arg_coerced(Compiler *c, int node, TyKind ot, Buf *b) {
   if (ot == TY_POLY && ((ar.kind != RK_BOXED && at != TY_UNKNOWN) || empty_lit)) emit_boxed(c, node, b);
   /* a literal nil into an Integer or a Float parameter (one
      block_settle_types kept nullable, bs_join_val) is the slot's own nil,
-     not the 0 it emits as */
+     not the 0 it emits as; so is one into a Symbol or a Class parameter,
+     whose nil is (sp_sym)-1 (0 is the first Symbol literal) or SP_CLASS_NIL */
   else if (nk == NK_NilNode && oint_kind(ot)) buf_puts(b, oint_nil(ot));
+  else if (nk == NK_NilNode && (ot == TY_SYMBOL || ot == TY_CLASS)) buf_puts(b, default_value(ot));
   /* an untyped value (a call no class answers, which raises NoMethodError
      before it binds anything) into a typed parameter: the raise, and the
      slot's own value after it, as any typed store takes it */

@@ -3227,17 +3227,22 @@ void emit_block_invoke(Compiler *c, int site, Buf *b, int indent, int as_expr,
       free(tb.p); }
     buf_puts(b, "; ");
   }
-  else if (as_expr && !rd_lbl && !nx_own && bn3 > 0 && !nx_tail_stmt &&
+  else if (as_expr && !nx_own && bn3 > 0 && !nx_tail_stmt &&
            nt_kind(nt, bd3[bn3 - 1]) == NK_CallNode &&
            ((repr_of(c, bd3[bn3 - 1]).opt_producer && tail_iter_receiver(c, bd3[bn3 - 1]) < 0) ||
-            sn_guard_pending(c, bd3[bn3 - 1]))) {
+            sn_guard_pending(c, bd3[bn3 - 1]) ||
+            cplan_nil(c, bd3[bn3 - 1]) == CN_ANSWER || cplan_nil(c, bd3[bn3 - 1]) == CN_PROGRAM)) {
     /* a tail call answering its oint, read as the statement expression's
        value in the plain form: emitted as the value, not as a statement
        (which discards an oint); a `&.` call whose nil guard is pending is the
        same, its statement form being the guard around a call whose value is
        dropped */
     if (block_of_body(c, bbody) >= 0) emit_block_locals_reset(c, block_of_body(c, bbody), b, 0);
-    for (int k3 = 0; k3 < bn3 - 1; k3++) emit_stmt(c, bd3[k3], b, 0);
+    for (int k3 = 0; k3 < bn3 - 1; k3++) {
+      if (rd_lbl && k3 == rd_head) buf_printf(b, "_redo_%d: ; ", rd_lbl);
+      emit_stmt(c, bd3[k3], b, 0);
+    }
+    if (rd_lbl && rd_head >= bn3 - 1) buf_printf(b, "_redo_%d: ; ", rd_lbl);
     { Buf tb; memset(&tb, 0, sizeof tb);
       Buf *svp3 = g_pre; int svi3 = g_indent; g_pre = b; g_indent = 0;
       emit_expr(c, bd3[bn3 - 1], &tb);

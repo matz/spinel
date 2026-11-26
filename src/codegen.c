@@ -20556,6 +20556,21 @@ int class_builtin_superclass(Compiler *c, int i) {
        "DomainError", has no id, and the class sat under Object */
     const char *exc_nm = superclass_builtin_exc_name(c, c->nt, sc_node);
     if (exc_nm) sc_nm = exc_nm;
+    /* a constant that holds a builtin (`Impl = ::Hash`), written once (const_single_write) */
+    int sc_top = sc_k == NK_ConstantReadNode || (sc_k == NK_ConstantPathNode && nt_ref(c->nt, sc_node, "parent") < 0);   /* (`Impl` or `::Impl`) */
+    for (int d = 0; sc_nm && sc_top && builtin_class_id(sc_nm) == 0 && comp_class_index(c, sc_nm) < 0 && d < 8; d++) {
+      int w = const_single_write(c, sc_nm), v = w >= 0 ? nt_ref(c->nt, w, "value") : -1;
+      sc_k = v >= 0 ? nt_kind(c->nt, v) : NK_NONE;
+      sc_nm = sc_k == NK_ConstantReadNode || sc_k == NK_ConstantPathNode ? key_name(c, v) : NULL;
+      sc_top = sc_k == NK_ConstantReadNode || (sc_k == NK_ConstantPathNode && nt_ref(c->nt, v, "parent") < 0);
+      /* (a qualified target names a builtin only as Thread's, as builtin_value_superclass reads one:
+         `Other::Hash` is another module's constant) */
+      if (sc_nm && !sc_top) {
+        int pp = nt_ref(c->nt, v, "parent");
+        const char *pn = pp >= 0 && nt_kind(c->nt, pp) == NK_ConstantReadNode ? nt_str(c->nt, pp, "name") : NULL;
+        if (!pn || !sp_streq(pn, "Thread")) sc_nm = NULL;
+      }
+    }
     if (sc_nm) { int bid = builtin_class_id(sc_nm); if (bid != 0) builtin_par = bid; }
   }
   return builtin_par;

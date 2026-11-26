@@ -30875,6 +30875,87 @@ static int mm_call(Compiler *c, NodeTable *nt, int id, int r, const char *nm, in
   nt_set_ignore_visibility(nt, call, 1);
   return call;
 }
+/* A super that no method above answers, in an instance method of a class
+   whose program method_missing answers: CRuby calls method_missing on the
+   object with the method's name, the super's arguments (a bare super's are
+   the parameters) and its block (Rack::Events' EventedBodyProxy#each over
+   BodyProxy#method_missing). `method_missing(:name, <args>, &blk)` on self.
+   A bare super in a method with keyword parameters is left as it is. */
+int desugar_super_method_missing(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int n0 = nt->count, changed = 0, *parent = NULL;
+  for (int def = 0; def < n0; def++) {
+    if (nt_kind(nt, def) != NK_DefNode || nt_ref(nt, def, "receiver") >= 0) continue;
+    const char *dn = nt_str(nt, def, "name");
+    if (!dn || sp_streq(dn, "method_missing")) continue;
+    Scope *s = NULL;
+    for (int i = 0; i < c->nscopes && !s; i++) if (c->scopes[i].def_node == def) s = &c->scopes[i];
+    if (!s || s->is_cmethod || s->class_id < 0 || comp_class_is_module(c, &c->classes[s->class_id]) ||
+        c->classes[s->class_id].nsub_root > 0) continue;   /* (a native class's subclass: its super is the native binding's) */
+    int sup[64], dep[64], ns = 0;
+    if (!mms_collect(nt, nt_ref(nt, def, "body"), 0, sup, dep, 64, &ns) || ns == 0) continue;
+    int pn = nt_ref(nt, def, "parameters"), rn = 0, on = 0, qn = 0, kn = 0;
+    const int *req = pn >= 0 ? nt_arr(nt, pn, "requireds", &rn) : NULL;
+    const int *opt = pn >= 0 ? nt_arr(nt, pn, "optionals", &on) : NULL;
+    const int *post = pn >= 0 ? nt_arr(nt, pn, "posts", &qn) : NULL;
+    if (pn >= 0) nt_arr(nt, pn, "keywords", &kn);
+    int rest = pn >= 0 ? nt_ref(nt, pn, "rest") : -1, kwrest = pn >= 0 ? nt_ref(nt, pn, "keyword_rest") : -1;
+    for (int i = 0; i < ns; i++) {
+      int sp = sup[i];
+      CallPlan pl = cplan_user(c, sp);
+      /* (a builtin arm, a native class's binding or constructor among them,
+         answers it, or the plan refuses it) */
+      if (pl.mi >= 0 || pl.bowner || pl.bsuper != BSUP_NONE || pl.dispatch == CP_REFUSE || mm_user(c, sp, s->class_id) < 0) continue;
+      int fwd = nt_kind(nt, sp) == NK_ForwardingSuperNode, args[64], an = 0, mark = nt->count;
+      if (fwd) {
+        if (kn > 0 || kwrest >= 0 || rn + on + qn + (rest >= 0) > 63) continue;
+        if (rest >= 0 && (nt_kind(nt, rest) != NK_RestParameterNode || !nt_str(nt, rest, "name"))) continue;
+        int ok = 1;
+        for (int j = 0; j < rn; j++) ok &= nt_kind(nt, req[j]) == NK_RequiredParameterNode;
+        for (int j = 0; j < qn; j++) ok &= nt_kind(nt, post[j]) == NK_RequiredParameterNode;
+        if (!ok) continue;
+        for (int j = 0; j < rn; j++) args[an++] = mms_local(nt, sp, nt_str(nt, req[j], "name"), dep[i]);
+        for (int j = 0; j < on; j++) args[an++] = mms_local(nt, sp, nt_str(nt, opt[j], "name"), dep[i]);
+        if (rest >= 0) {
+          int sn = fwd_new_node_like(nt, sp, "SplatNode");
+          nt_node_set_ref(nt, sn, "expression", mms_local(nt, sp, nt_str(nt, rest, "name"), dep[i]));
+          args[an++] = sn;
+        }
+        for (int j = 0; j < qn; j++) args[an++] = mms_local(nt, sp, nt_str(nt, post[j], "name"), dep[i]);
+      } else {
+        int a = nt_ref(nt, sp, "arguments"), n = 0;
+        const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &n) : NULL;
+        if (n > 63) continue;
+        for (int j = 0; j < n; j++) args[an++] = av[j];
+      }
+      /* (a super passes the method's block when it names none, as CRuby's does) */
+      int blk = nt_ref(nt, sp, "block");
+      if (blk < 0) {
+        if (!s->blk_param) {
+          s->blk_param = strdup("__sblk__");
+          LocalVar *sblk = scope_local_intern(s, s->blk_param);
+          if (sblk) { lv_set_type(sblk, TY_PROC); sblk->is_param = 1; }
+        }
+        blk = fwd_new_node_like(nt, sp, "BlockArgumentNode");
+        nt_node_set_ref(nt, blk, "expression", mms_local(nt, sp, s->blk_param, dep[i]));
+      }
+      int al = fwd_new_node_like(nt, sp, "ArgumentsNode");
+      nt_node_set_arr(nt, al, "arguments", args, an);
+      int call = mm_call(c, nt, sp, -1, dn, an ? al : -1, blk);
+      if (!parent) parent = an_parent_map(nt);
+      if (!parent || parent[sp] < 0) continue;
+      nt_replace_child(nt, parent[sp], sp, call);
+      comp_grow_node_arrays(c);
+      for (int j = mark; j < nt->count; j++) {
+        c->nscope[j] = c->nscope[sp];
+        if (c->node_cbody && j < c->node_cap && sp < c->node_cap) c->node_cbody[j] = c->node_cbody[sp];
+      }
+      changed = 1;
+    }
+  }
+  free(parent);
+  return changed;
+}
 static int mm_string_raise(Compiler *c, int id, int recv, const char *name, int args) {
   NodeTable *nt = (NodeTable *)c->nt;
   int list = fwd_new_node_like(nt, id, "ArrayNode"), n = 0;

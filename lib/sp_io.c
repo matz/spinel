@@ -684,8 +684,11 @@ SP_NORETURN static void sp_io_raise_read_errno(const char *sock_call) {
    next request yet, and the read(2) would only answer EAGAIN. A read that
    finds bytes without parking, or fills all the free space after a park
    (more were waiting: a stream), turns it off; and the sixteenth fill in a
-   row reads first anyway, so no peer stays parked-first for good. */
-static int sp_io_rbuf_fill_as(sp_File *f, const char *sock_call) {SP_GC_ROOT(f);
+   row reads first anyway, so no peer stays parked-first for good.
+
+   limit caps the bytes one read takes, for a readpartial of n: a filled
+   buffer means more were waiting only when the read had the whole space. */
+static int sp_io_rbuf_fill_as(sp_File *f, const char *sock_call, size_t limit) {SP_GC_ROOT(f);
   int parked = 0;   /* this fill has parked */
   for (;;) {
     FILE *fp = sp_io_use(f);
@@ -711,13 +714,14 @@ static int sp_io_rbuf_fill_as(sp_File *f, const char *sock_call) {SP_GC_ROOT(f);
       }
     }
     size_t space = f->rcap;
+    if (limit && limit < space) space = limit;
     ssize_t r = sp_io_own_read(f, fd, f->rbuf, space);
     int e = errno;
     if (r > 0) f->rlen = (size_t)r;
     sp_io_runlock(f);
     sp_io_unuse(f);
     if (r > 0) {
-      if (!parked || (size_t)r == space) { f->park_first = 0; f->park_first_run = 0; }
+      if (!parked || ((size_t)r == space && space == f->rcap)) { f->park_first = 0; f->park_first_run = 0; }
       return 1;
     }
     if (r == 0) return 0;
@@ -728,7 +732,7 @@ static int sp_io_rbuf_fill_as(sp_File *f, const char *sock_call) {SP_GC_ROOT(f);
     parked = 1;
   }
 }
-int sp_io_rbuf_fill(sp_File *f) { return sp_io_rbuf_fill_as(f, NULL); }
+int sp_io_rbuf_fill(sp_File *f) { return sp_io_rbuf_fill_as(f, NULL, 0); }
 
 /* Up to n of the bytes rbuf holds, never a read. */
 size_t sp_io_rbuf_take(sp_File *f, void *buf, size_t n) {
@@ -2255,7 +2259,10 @@ sp_int sp_sock_send(sp_File *f, const char *data, sp_int len, sp_int flags, cons
   return (sp_int)n;
 }
 /* #readpartial(n) / #recv(n) on a handle with own_buf: what rbuf holds, or
-   what one fill brings, read before the String exists (the fill can park);
+   what one read of at most n bytes brings (a fill with that limit: the
+   bytes past n stay in the pipe or the socket for another reader, a child
+   process that inherits the descriptor among them, as CRuby leaves them),
+   read before the String exists (the fill can park);
    for an n larger than rbuf and nothing held, one read(2) straight into a
    String of n held rooted, as stdio's read was. NULL at the end of the
    stream, or for a zero-length recv once bytes are there. */
@@ -2270,7 +2277,7 @@ static const char *sp_io_rbuf_partial(sp_File *f, size_t n, int is_recv) {SP_GC_
       if (!got) return NULL;
     }
     else {
-      if (!sp_io_pending(f) && !sp_io_rbuf_fill_as(f, is_recv ? "recvfrom(2)" : NULL)) return NULL;
+      if (!sp_io_pending(f) && !sp_io_rbuf_fill_as(f, is_recv ? "recvfrom(2)" : NULL, n)) return NULL;
       if (is_recv && n == 0) return NULL;
       size_t pend = sp_io_pending(f), want = n < pend ? n : pend;
       r = sp_str_alloc(want);
@@ -2686,7 +2693,7 @@ const char *sp_File_readpartial_into(sp_File *f, sp_int n, sp_String *buf) {SP_G
   if (n > 0 && f->own_buf && ((size_t)n <= SP_IO_RBUF_MIN || sp_io_pending(f))) {
     sp_io_wait_readable(f);
     for (;;) {
-      if (!sp_io_pending(f) && !sp_io_rbuf_fill(f)) break;
+      if (!sp_io_pending(f) && !sp_io_rbuf_fill_as(f, NULL, (size_t)n)) break;
       size_t pend = sp_io_pending(f), want = (size_t)n < pend ? (size_t)n : pend;
       if (!sp_fd_grow(buf, (int64_t)want)) sp_raise_cls("NoMemoryError", "failed to allocate memory");
       size_t got = sp_io_rbuf_take(f, buf->data, want);

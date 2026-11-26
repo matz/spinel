@@ -12919,10 +12919,19 @@ static int pivs_local_push_ok(Compiler *c, int u, char *set, int depth) {
     for (int k = 0; k < ac; k++) if (!pivs_elems(c, av[k], set, depth + 1)) return 0;
   }
   else if (sp_streq(un, "[]=")) {
-    if (ac != 2 || nt_kind(nt, av[0]) != NK_IntegerNode) return 0;
+    /* (one element at an Integer index, or a Hash's at a key: a Range
+       key is a splice of the value's elements) */
+    NodeKind kk = ac == 2 ? nt_kind(nt, av[0]) : NK_NONE;
+    if (kk != NK_IntegerNode && kk != NK_StringNode && kk != NK_SymbolNode && kk != NK_LocalVariableReadNode) return 0;
+    if (kk == NK_LocalVariableReadNode) {
+      TyKind kt = infer_type(c, av[0]);
+      if (kt != TY_INT && kt != TY_STRING && kt != TY_SYMBOL) return 0;
+    }
     if (!pivs_value(c, av[1], set, depth + 1)) return 0;
   }
-  else if (array_mutator_name(un) ||
+  /* (a Hash's other stores: `store`, `update`, a default) */
+  else if (array_mutator_name(un) || sp_streq(un, "store") || sp_streq(un, "update") ||
+           sp_streq(un, "default=") || sp_streq(un, "default_proc=") ||
            nt_call_has_block_arg(nt, u))
     return 0;
   return 1;

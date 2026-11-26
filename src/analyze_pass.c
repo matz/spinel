@@ -4066,6 +4066,46 @@ static int elem_read_index(Compiler *c, int v) {
   return k >= -REST_ELEM_TAIL && k < REST_ELEM_HEAD ? (int)k : ELEM_ANY;
 }
 
+/* A push of kind t (TY_UNKNOWN: not known) through parameter p, which
+   stores into its caller's Array, as the binding takes it; a store into
+   an element of p's rest that lands on p is one (param_takes_store).
+   argv [from, an): the push's value arguments, or NULL for one value of
+   kind t (fold_push_values). foreign: a value the push spreads is of another kind
+   (param_push_args_foreign); known: t may stand as the known element (no
+   scalar a concat takes apart). 1 on a change.
+
+   A BOXED parameter is the same hazard with the container hidden: the
+   callee pushes through it into the caller's own array, and the container
+   is not visible here to compare against. Record WHAT is pushed and let
+   the ivar-widening pass, which can see both sides, decide -- an `@rows =
+   []` kept the empty-array default (an int array) while a helper pushed
+   objects into it, and the push failed at run time. Recording the element
+   rather than widening outright is what keeps an ivar that really does
+   hold ints in its typed representation. Each value a push stores is its
+   own evidence, as for a typed parameter: unified, `r.push(a, "t")` or
+   `r.push(*a, **k)` read as one boxed value, which records no known kind,
+   and the caller's boxed Array of Integers was left typed.
+
+   A typed Array parameter widens to the general one for a value of
+   another kind. A POLY value is exempt, as it is for `[]=`: it is decided
+   at run time and usually the element kind, and the typed push refuses a
+   foreign one with TypeError (#4481). Widening the parameter to the
+   general Array instead made every typed caller copy its array into the
+   call, which is the copy #4480 refuses. */
+static int param_push_note(Compiler *c, LocalVar *p, const int *argv, int from, int an, TyKind t, int foreign,
+                           int known) {
+  if (p->type == TY_POLY) {
+    int ch = fold_push_values(c, &p->boxed_push_elem, argv, from, an, t, 0);
+    if (known) ch |= fold_push_values(c, &p->boxed_known_elem, argv, from, an, t, 1);
+    return ch;
+  }
+  if (!ty_is_array(p->type) || p->type == TY_POLY_ARRAY) return 0;
+  if (!foreign && (t == TY_UNKNOWN || t == TY_POLY || t == TY_POLY_ARRAY || t == ty_array_elem(p->type))) return 0;
+  lv_set_type(p, TY_POLY_ARRAY);
+  p->push_widened = 1;
+  return 1;
+}
+
 static int infer_write_container_usage(Compiler *c, const NodeTable *nt, int nfb, int *fb, LWIndex lw_ix, LWIndex ivw_ix) {
   int changed = 0, any = 0;
   /* the walks the stores start share what they found unchanged, until a
@@ -4690,35 +4730,11 @@ static int infer_write_container_usage(Compiler *c, const NodeTable *nt, int nfb
           changed |= fold_push_values(c, &lv->push_fill_elem, elem_argv, elem_from, elem_an, (TyKind)vt, 0);
           if (lv->type == TY_UNKNOWN) continue;
         }
-        /* A BOXED parameter is the same hazard with the container hidden:
-           the callee pushes through it into the caller's own array, and the
-           container is not visible here to compare against. Record WHAT is
-           pushed and let the ivar-widening pass, which can see both sides,
-           decide -- an `@rows = []` kept the empty-array default (an int
-           array) while a helper pushed objects into it, and the push failed at
-           run time. Recording the element rather than widening outright is
-           what keeps an ivar that really does hold ints in its typed
-           representation. Each value a push stores is its own evidence, as
-           for a typed parameter: unified, `r.push(a, "t")` or
-           `r.push(*a, **k)` read as one boxed value, which records no known
-           kind, and the caller's boxed Array of Integers was left typed. */
-        if (lv->type == TY_POLY) {
-          changed |= fold_push_values(c, &lv->boxed_push_elem, elem_argv, elem_from, elem_an, (TyKind)vt, 0);
-          if (!concat_scalar)
-            changed |= fold_push_values(c, &lv->boxed_known_elem, elem_argv, elem_from, elem_an, (TyKind)vt, 1);
-          continue;
-        }
-        if (!ty_is_array(lv->type) || lv->type == TY_POLY_ARRAY) continue;
-        /* A POLY value is exempt, as it is for `[]=` below: it is decided at
-           run time and usually the element kind, and the typed push refuses
-           a foreign one with TypeError (#4481). Widening the parameter to the
-           general Array instead made every typed caller copy its array into
-           the call, which is the copy #4480 refuses. */
-        if (!(elem_argv && param_push_args_foreign(c, lsc, elem_argv, elem_an, elem_from,
-                                                   elem_splat_index, ty_array_elem(lv->type))) &&
-            (vt == TY_UNKNOWN || vt == TY_POLY || vt == TY_POLY_ARRAY ||
-             vt == ty_array_elem(lv->type))) continue;
-        lv_set_type(lv, TY_POLY_ARRAY); lv->push_widened = 1; changed = 1;
+        int typed = ty_is_array(lv->type) && lv->type != TY_POLY_ARRAY;
+        int foreign = typed && elem_argv &&
+                      param_push_args_foreign(c, lsc, elem_argv, elem_an, elem_from, elem_splat_index,
+                                              ty_array_elem(lv->type));
+        changed |= param_push_note(c, lv, elem_argv, elem_from, elem_an, vt, foreign, !concat_scalar);
         continue;
       }
       if (elem_splat_index) continue;
@@ -12843,19 +12859,11 @@ static int zsuper_rest_elem_stores(Compiler *c, Scope *s, Scope *pm) {
   }
   return ch;
 }
-/* A store of kind t into positional g of s, as a push through it is taken
-   (infer_write_container_usage): a typed Array it cannot hold becomes the
-   general one, which its callers' binding widens for, and a boxed one
-   records the evidence its callers' Arrays widen for. 1 on a change. */
+/* A store of kind t into positional g of s, taken as a push through it
+   (param_push_note). 1 on a change. */
 static int param_takes_store(Compiler *c, Scope *s, int g, TyKind t) {
   LocalVar *p = g >= 0 && g < s->nparams && s->pnames[g] ? scope_local(s, s->pnames[g]) : NULL;
-  if (!p || p->rbs_seeded) return 0;
-  if (p->type == TY_POLY)
-    return fold_store_kind(&p->boxed_push_elem, t) | (t != TY_POLY && fold_store_kind(&p->boxed_known_elem, t));
-  if (!ty_is_array(p->type) || p->type == TY_POLY_ARRAY || ty_is_ptr_array(p->type) || ty_array_elem(p->type) == t) return 0;
-  lv_set_type(p, TY_POLY_ARRAY);
-  p->push_widened = 1;
-  return 1;
+  return p && !p->rbs_seeded ? param_push_note(c, p, NULL, 0, 0, t, 0, 1) : 0;
 }
 static int bind_zsuper_params(Compiler *c, int id, Scope *s, Scope *pm) {
   int changed = 0;

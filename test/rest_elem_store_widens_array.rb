@@ -40,3 +40,11 @@ a = [+"s"]; b = [+"t"]; y2(a, b) { |*r| r.reverse!; r[0] << 9 }; p [a, b]
 # a keyword hash the rest takes at its tail is one more value
 def m7(*r) = r[-2] << 10
 a = [+"s"]; m7(a, k: 1); p a
+
+# a value of a kind the run time decides, handed by a bare super onto a
+# positional, is the push the positional takes: it stays typed
+W8 = ARGV.size > 5 ? 1 : +"z"
+class R8; def m(*r) = r[0] << W8; end
+class R9 < R8; def m(x, *r) = super; end
+class H8; attr_accessor :v; end
+h = H8.new; h.v = [+"s"]; R9.new.m(h.v); p h.v

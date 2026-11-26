@@ -5734,6 +5734,10 @@ infer-test-2: $(SPINEL) $(SP_RT_LIB)
 	case "$$rounds" in ''|*[!0-9]*) echo "infer-test: FAIL (no fixpoint round count -- SP_FIXPOINT_LOG gone?)"; ok=0;; \
 	  *) [ "$$rounds" -lt 128 ] || { echo "infer-test: FAIL (the inference fixpoint ran to its $$rounds-round cap: it stopped mid-oscillation, and where it stops decides which typing is emitted)"; ok=0; };; \
 	esac; \
+	rounds=$$(SP_FIXPOINT_LOG=1 $(SPINEL) test/dynamic_send_name_conversion_converges.rb -c --no-line-map -o "$$tmp/dnc.c" 2>&1 | sed -n 's/^\[fp\] rounds=\([0-9]*\).*/\1/p' | tail -1); \
+	case "$$rounds" in ''|*[!0-9]*) echo "infer-test: FAIL (no fixpoint round count for dynamic_send_name_conversion_converges)"; ok=0;; \
+	  *) [ "$$rounds" -lt 128 ] || { echo "infer-test: FAIL (a send's to_sym was split on method_missing and the send lowered again every round: the fixpoint ran to its cap)"; ok=0; };; \
+	esac; \
 	rounds=$$(SP_FIXPOINT_LOG=1 $(SPINEL) test/infer/module_ivar_object_array_converges.rb -c --no-line-map -o "$$tmp/mio.c" 2>&1 | sed -n 's/^\[fp\] rounds=\([0-9]*\).*/\1/p' | tail -1); \
 	case "$$rounds" in ''|*[!0-9]*) echo "infer-test: FAIL (no fixpoint round count for module_ivar_object_array_converges)"; ok=0;; \
 	  *) [ "$$rounds" -lt 128 ] || { echo "infer-test: FAIL (a module's ivar write widened the includer's narrowed object array every round: the fixpoint ran to its cap)"; ok=0; };; \

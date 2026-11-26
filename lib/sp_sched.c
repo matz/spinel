@@ -4204,6 +4204,7 @@ sp_bool sp_Thread_stop_p(sp_thread *t) {
 /* Mutex#sleep: unlock, sleep until the timeout or a #wakeup, lock again.
    nil when the timeout ran out, else the whole seconds slept. A #kill or
    #raise waits for the lock too, as CRuby re-locks before it unwinds. */
+static void sp_mutex_relock(sp_mutex *m, int deferred);   /* defined beside sp_Mutex_lock */
 sp_RbVal sp_Mutex_sleep(sp_mutex *m, int has_timeout, double timeout) {
   if (has_timeout && timeout != timeout) sp_raise_cls("RangeError", "NaN out of Time range");
   if (has_timeout && timeout < 0.0) sp_raise_cls("ArgumentError", "time interval must not be negative");
@@ -4214,7 +4215,7 @@ sp_RbVal sp_Mutex_sleep(sp_mutex *m, int has_timeout, double timeout) {
      contended lock path would otherwise fire before we get it */
   sp_fiber_defer_inject();
   int woken = sp_sched_sleep_park(timeout);
-  sp_Mutex_lock(m);
+  sp_mutex_relock(m, 1);
   sp_fiber_undefer_inject();
   if (woken < 0) sp_raise_cls("NoMemoryError", "failed to schedule thread timer");
   sp_fiber_fire_inject_if_pending();
@@ -5671,7 +5672,25 @@ static inline int sp_mutex_spin_acquire(sp_mutex *m, sp_thread *self) {
   return 0;
 }
 
+/* The trap procs the current thread runs (sp_trap_call), counted on the
+   thread, or here before the program has a thread object */
+static int g_trap_depth_main;
+void sp_sched_trap_enter(void) { if (g_current) g_current->in_trap++; else g_trap_depth_main++; }
+void sp_sched_trap_leave(void) { if (g_current) g_current->in_trap--; else g_trap_depth_main--; }
+/* The re-acquire of Mutex#sleep and ConditionVariable#wait, which released
+   the mutex first. In a trap proc the lock raises, as CRuby's does after the
+   release; a deferred injection is undone before the raise. */
+static void sp_mutex_relock(sp_mutex *m, int deferred) {
+  if (g_current ? g_current->in_trap : g_trap_depth_main) {
+    if (deferred) sp_fiber_undefer_inject();
+    sp_raise_cls("ThreadError", "can't be called from trap context");
+  }
+  sp_Mutex_lock(m);
+}
+
 void sp_Mutex_lock(sp_mutex *m) {
+  if (g_current ? g_current->in_trap : g_trap_depth_main)
+    sp_raise_cls("ThreadError", "can't be called from trap context");
   sp_thread *self = g_current;
   sp_thread *expect = NULL;
   if (SP_ATOMIC_CAS(&m->owner, &expect, self, 0,
@@ -5808,7 +5827,7 @@ static sp_RbVal sp_CondVar_wait_impl(sp_condvar *cv, sp_mutex *m) {
   sp_sched_block_wl(&cv->waiters, &cv->wl, 1, m);
   wl_unlock(&cv->wl);
   if (ct0 > 0) sched_hist_add(g_cv_hist, &g_cv_n, &g_cv_max, (sp_monotonic_now() - ct0) * 1e6);
-  sp_Mutex_lock(m);   /* re-acquire (may block again on the mutex) */
+  sp_mutex_relock(m, 1);   /* re-acquire (may block again on the mutex) */
   sp_fiber_undefer_inject();
   sp_fiber_fire_inject_if_pending();
   return sp_box_int((sp_int)(time(NULL) - beg));
@@ -5826,7 +5845,7 @@ static void sp_CondVar_wait_timeout_blocking(sp_mutex *m, double seconds) {
   sp_mutex_wake_waiter(m);   /* under m's own wait lock */
   SCHED_UNLOCK();
   sp_sleep_plain(seconds, 0, NULL);
-  sp_Mutex_lock(m);
+  sp_mutex_relock(m, 0);
 }
 
 static sp_RbVal sp_CondVar_wait_nb_impl(sp_condvar *cv, sp_mutex *m);
@@ -5847,7 +5866,7 @@ static sp_RbVal sp_CondVar_wait_timeout_impl(sp_condvar *cv, sp_mutex *m, double
   int woken = sp_sched_block_timeout(&cv->waiters, sp_monotonic_now() + seconds, m, &cv->wl, NULL, NULL);
   if (woken < 0) sp_raise_cls("NoMemoryError", "failed to schedule condition variable timeout");
   if (ct0 > 0) { SCHED_LOCK(); sched_hist_add(g_cv_hist, &g_cv_n, &g_cv_max, (sp_monotonic_now() - ct0) * 1e6); SCHED_UNLOCK(); }
-  sp_Mutex_lock(m);
+  sp_mutex_relock(m, 1);
   sp_fiber_undefer_inject();
   sp_fiber_fire_inject_if_pending();
   return woken ? sp_box_int((sp_int)(time(NULL) - beg)) : sp_box_nil();
@@ -5876,7 +5895,7 @@ static sp_RbVal sp_CondVar_wait_nb_impl(sp_condvar *cv, sp_mutex *m) {
   SP_ATOMIC_STORE(&m->owner, NULL, __ATOMIC_SEQ_CST);
   sp_mutex_wake_waiter(m);   /* under m's own wait lock */
   SCHED_UNLOCK();
-  sp_Mutex_lock(m);
+  sp_mutex_relock(m, 1);
   sp_fiber_undefer_inject();
   sp_fiber_fire_inject_if_pending();
   return sp_box_nil();

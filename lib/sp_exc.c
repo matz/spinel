@@ -2337,18 +2337,23 @@ int sp_exc_protect(void (*fn)(void *), void *ctx) {
   sp_explicit_cause = NULL; sp_explicit_cause_set = 0;
   return 1;
 }
+void sp_sched_trap_enter(void);   /* lib/sp_sched.c: Mutex#lock raises inside a trap proc */
+void sp_sched_trap_leave(void);
 void sp_trap_call(sp_Proc *p, int no) {
   sp_exc_check_depth();
   sp_exc_rootmark[sp_exc_top] = sp_gc_nroots; sp_rescue_mark[sp_exc_top] = sp_rescue_sp;
   sp_exc_msg[sp_exc_top] = 0; sp_exc_obj[sp_exc_top] = 0; sp_exc_top++;
+  sp_sched_trap_enter();
   if (setjmp(sp_exc_stack[sp_exc_top - 1]) == 0) {
     SP_GC_ROOT(p);   /* the proc may re-trap its signal, dropping sp_trap_proc's hold */
     sp_int slot = (sp_int)no;
     _sp_proc_poly_args[0] = sp_box_int((sp_int)no);
     sp_proc_call(p, 1, &slot);
+    sp_sched_trap_leave();
     sp_exc_top--;
     return;
   }
+  sp_sched_trap_leave();
   sp_exc_top--;
   sp_gc_nroots = sp_exc_rootmark[sp_exc_top]; sp_rescue_sp = sp_rescue_mark[sp_exc_top];
   /* Take the exit before unblocking: a delivery that was pending runs its

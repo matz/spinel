@@ -13679,8 +13679,11 @@ static void sp_poly_warn_line(sp_RbVal v, FILE *f) {
   const char *s = sp_poly_to_s(v);
   if (!s) s = sp_str_empty;
   size_t n = sp_rbval_is_string(v) ? sp_str_byte_len(s) : strlen(s);
+  /* the text and its newline under one stream lock, as sp_puts_line */
+  flockfile(f);
   fwrite(s, 1, n, f);
-  if (!n || s[n - 1] != '\n') fputc('\n', f);
+  if (!n || s[n - 1] != '\n') putc_unlocked('\n', f);
+  funlockfile(f);
 }
 /* The same lines as one String, for a $stderr that holds a StringIO. */
 static const char *sp_poly_warn_text(sp_RbVal v) {

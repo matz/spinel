@@ -2917,15 +2917,24 @@ const char *sp_File_inspect(sp_File *f) {SP_GC_ROOT(f);
   return sp_sprintf("#<%s:%s>", cls, p);
 }
 
+/* One puts line as one write: the text and its newline in one buffer, so the
+   line of another thread's puts on the same unbuffered stream ($stderr) does
+   not land between the text and the newline. */
 static void sp_File_puts_n(sp_File *f, const char *s, size_t n) {
   sp_io_check_writable(f);
-  if (f->is_sock || f->own_buf == SP_OWN_SOCK) {
-    sp_sock_write(f, s, n);
-    if (n == 0 || s[n - 1] != '\n') sp_sock_write(f, "\n", 1);
-    return;
+  char small[256], *line = (char *)s, *big = NULL;
+  SP_GC_ROOT_STR(big);
+  size_t len = n;
+  if (n == 0 || s[n - 1] != '\n') {
+    /* a long line in a collected String, so a write that raises leaks nothing */
+    if (n >= sizeof small) big = sp_str_alloc(n + 1);
+    line = big ? big : small;
+    memcpy(line, s, n);
+    line[n] = '\n';
+    len = n + 1;
   }
-  fwrite(s, 1, n, f->fp);
-  if (n == 0 || s[n - 1] != '\n') fputc('\n', f->fp);
+  if (f->is_sock || f->own_buf == SP_OWN_SOCK) sp_sock_write(f, line, len);
+  else fwrite(line, 1, len, f->fp);
 }
 void sp_File_puts(sp_File *f, const char *s) {SP_GC_ROOT(f);SP_GC_ROOT_STR(s);
   if (!s) { SP_IO_OPEN(f); return; }

@@ -1,0 +1,19 @@
+true
+true
+false
+true
+false
+true
+Mt::Skip
+"skip"
+:skip
+:skip
+[true, false]
+[:skip, :other]
+true
+false
+true
+true
+false
+[true, :skip]
+[false, :none]

@@ -1993,6 +1993,9 @@ static int sched_place_unstarted(int wid, sp_thread *t) {
   int best = -1, bestn = 0;
   for (int i = 1; i < sp_active_workers; i++) {   /* worker 0 (main) runs no general thread */
     if (!g_wslot[i].active) continue;
+    /* (nor one in a blocking native call: a thread placed there could not run, and a thread
+       left unstarted in a queue is one a steal or main's stranded sweep can still take) */
+    if (SP_ATOMIC_LOAD(&g_native_out[i], __ATOMIC_RELAXED) == SP_OUT_NATIVE) continue;
     int np = SP_ATOMIC_LOAD(&g_wslot[i].pinned, __ATOMIC_RELAXED);
     if (best < 0 || np < bestn) { best = i; bestn = np; }
   }
@@ -3402,12 +3405,15 @@ static sp_thread *thread_spawn(sp_Fiber *f, sp_RbVal arg, int internal) {
   SCHED_LOCK();
   t->id = g_next_id++;
   reg_add(t);
-  /* Prefer the spawning worker's local queue (locality) -- but only when that
-     worker actually drains it. Main is a coordinator: it hands work to helpers
-     and only runs a thread itself in the sole-worker fallback (no helper could
-     be spawned), which drains the global queue too. So a main-spawned thread
-     always goes to the global queue -- never main's local queue, where it would
-     wait on a steal. (g_worker_cap > 0 whenever threads are in use.) */
+  /* A new thread goes to the worker with the fewest pinned threads
+     (sched_place_unstarted), which may grow the pool; it is pinned to that
+     worker at its first run, as a thread is to the worker it first runs on.
+     Main is a coordinator: it hands work to helpers and only runs a thread
+     itself in the sole-worker fallback (no helper could be spawned), which
+     drains the global queue too, so a thread main starts that is not placed
+     goes to the global queue -- never main's local queue, where it would wait
+     on a steal. One another thread starts that is not placed stays in its
+     spawner's local queue. (g_worker_cap > 0 whenever threads are in use.) */
 #ifdef SP_THREADS
   /* (#8702) main places the new thread on its worker now, as
      the picker would (sched_place_unstarted): onto that worker's own queue,
@@ -3415,6 +3421,10 @@ static sp_thread *thread_spawn(sp_Fiber *f, sp_RbVal arg, int internal) {
   if (g_current == &g_main_thread && g_worker_cap > 0) {
     if (!sched_place_unstarted(0, t)) { rq_push(t); SCHED_WAKE(); }
   }
+  /* a thread another thread starts is placed the same way, so the pool grows
+     for it; it stays on the spawner's worker only where that worker is as
+     good as any (#12560) */
+  else if (g_worker_cap > 0 && sched_place_unstarted(sp_worker_id, t)) {}
   else
 #endif
   { lrq_push(sp_worker_id, t); SCHED_WAKE(); }   /* a helper worker may be idle: hand it the new thread */

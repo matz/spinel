@@ -1209,6 +1209,10 @@ typedef struct { int cls, sg, kind, node; const char *name, *target; int scope, 
    time (lr_stmt_applied: 2) */
 enum { ELAB_ENTRY_MAY = 1 << 30 };
 ElabEntry *elab_entries(Compiler *c, unsigned mask, int *n);
+/* The load record's generation of its histories and mixins (LoadRecord.hgen),
+   bumped by every change to them; 0 with no record. A list read from the
+   histories (elab_entries) holds while it is the same. */
+unsigned long elab_hist_gen(Compiler *c);
 /* Drop the aliases whose original no method answers where they run (see
    LrDef.absent), once the accessors are registered; each statement carries
    its NameError message ("alias_absent") for the emitter. */

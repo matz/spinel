@@ -35,6 +35,8 @@ int oa_seed_row_literal(int lit);
 /* Does the program make a bare Object (`Object.new`)? (analyze_infer.c) */
 int an_program_news_object(Compiler *c);
 int ie_kernel_global(const char *n);
+/* set while desugar_missing_method_calls runs: ivn_build keeps the writer entries it read (analyze_pass.c) */
+extern int g_ivn_entries_hold;
 
 /* Forward declarations for FFI helpers defined later in this file. */
 const char *ffi_arg_str(const NodeTable *nt, int nid);

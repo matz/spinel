@@ -921,6 +921,7 @@ static void ivn_note(IvnSet *v, const char *nm, int cls) {
   v->cls[v->n] = cls; v->next[v->n] = v->head[k]; v->head[k] = v->n++;
 }
 
+int g_ivn_entries_hold;
 static void ivn_build(Compiler *c) {
   const NodeTable *nt = c->nt;
   ivn_reset(&ivn_w); ivn_reset(&ivn_a);
@@ -940,10 +941,18 @@ static void ivn_build(Compiler *c) {
   /* the attr writers the load record registers, those under a run-time
      condition too (ELAB_ENTRY_MAY), by their writer name ("x="); main's
      (cls < 0) are Object's, which any object answers */
-  int nwe = 0;
-  ElabEntry *we = elab_entries(c, 1u << LR_WRITER | ELAB_ENTRY_MAY, &nwe);
+  /* (kept while desugar_missing_method_calls runs, if the record's histories
+     stay the same: its splits only add nodes, which add no writer and move no
+     statement, and reading the entries rebuilt the record's map at each of
+     the pass's asks, #12542) */
+  static ElabEntry *we; static int nwe; static unsigned long we_gen; static Compiler *we_c;
+  unsigned long gen = elab_hist_gen(c);
+  if (!g_ivn_entries_hold || !gen || we_c != c || we_gen != gen) {
+    free(we);
+    we = elab_entries(c, 1u << LR_WRITER | ELAB_ENTRY_MAY, &nwe);
+    we_c = c; we_gen = gen;
+  }
   for (int i = 0; i < nwe; i++) if (we[i].name) ivn_note(&ivn_a, we[i].name, we[i].cls >= 0 ? we[i].cls : -1);
-  free(we);
   /* a Struct's or Data's members: the slots its generated constructor
      and writers set, which no write node spells */
   for (int k = 0; k < c->nclasses; k++) {

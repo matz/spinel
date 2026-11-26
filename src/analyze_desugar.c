@@ -30982,6 +30982,7 @@ int desugar_missing_method_calls(Compiler *c) {
   unsigned long long work = nt_work_now();
   int n0 = nt->count, changed = 0, *parent = NULL;
   cplan_chain_undef_hold(1);
+  g_ivn_entries_hold = 1;
   for (int id = 0; id < n0; id++) {
     if (nt_kind(nt, id) != NK_CallNode || nt_int(nt, id, "mm_split", 0) || nt_int(nt, id, "dyn_arm", 0)) continue;
     const char *nm = nt_str(nt, id, "name");
@@ -31239,6 +31240,7 @@ int desugar_missing_method_calls(Compiler *c) {
     changed = 1;
   }
   cplan_chain_undef_hold(0);
+  g_ivn_entries_hold = 0;
   free(g_mm_sends.n);
   g_mm_sends = (MmSends){ 0 };
   free(parent);

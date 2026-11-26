@@ -14835,6 +14835,10 @@ static int lr_entry_arg(const NodeTable *nt, int node, const char *name, int wri
   return 0;
 }
 
+/* See analyze.h. */
+unsigned long elab_hist_gen(Compiler *c) {
+  return c->lrec && c->lrec->recorded ? c->lrec->hgen + 1 : 0;
+}
 ElabEntry *elab_entries(Compiler *c, unsigned mask, int *n) {
   LoadRecord *r = c->lrec;
   int k = 0, cap = 0;

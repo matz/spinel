@@ -16828,7 +16828,7 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       if (tfb) buf_printf(b, "; _t%d->blocking = sp_poly_truthy(_t%d); _t%d; })", tfb, tbl, tfb);
       { *out = 1; return 1; }
     }
-    if (cn && sp_streq(cn, "Queue")) { buf_puts(b, "sp_Queue_new()"); { *out = 1; return 1; } }
+    if (cn && sp_streq(cn, "Queue")) { emit_queue_new(c, argc, argv, b); { *out = 1; return 1; } }
     if (cn && sp_streq(cn, "SizedQueue") && argc == 1) {
       buf_puts(b, "sp_SizedQueue_new("); emit_int_expr(c, argv[0], b); buf_puts(b, ")"); { *out = 1; return 1; }
     }

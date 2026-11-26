@@ -2116,6 +2116,12 @@ spinel: test/reject/subclass_range.rb:3: class Span < Range: subclassing Range i
 spinel: test/reject/subclass_thread_queue.rb:3: class Jobs < Queue: subclassing Queue is not supported yet (a subclass would answer differently from CRuby); wrap a Queue in an instance variable instead
 == test/reject/subclass_thread_queue.rb [promote] rc=1
 spinel: test/reject/subclass_thread_queue.rb:3: class Jobs < Queue: subclassing Queue is not supported yet (a subclass would answer differently from CRuby); wrap a Queue in an instance variable instead
+== test/reject/super_forwarding_args_builtin.rb [default] rc=1
+spinel: test/reject/super_forwarding_args_builtin.rb:6: K.is_a?: `...` forwarded by `super(...)` into the builtin `is_a?` is not supported; see docs/limitations.md
+spinel: 1 refusal, nothing written
+== test/reject/super_forwarding_args_builtin.rb [promote] rc=1
+spinel: test/reject/super_forwarding_args_builtin.rb:6: K.is_a?: `...` forwarded by `super(...)` into the builtin `is_a?` is not supported; see docs/limitations.md
+spinel: 1 refusal, nothing written
 == test/reject/super_init_value.rb [default] rc=1
 spinel: test/reject/super_init_value.rb:13: unsupported value of `super` in initialize: initialize is compiled to return nothing, so the parent's last value is not there to answer (see docs/limitations.md)
 == test/reject/super_init_value.rb [promote] rc=1

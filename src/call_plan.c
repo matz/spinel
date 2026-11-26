@@ -1163,14 +1163,21 @@ static int cplan_super_gathers(Compiler *c, int id, const Scope *s) {
    BSUP_ARITY's), or one the run gives, which the arm gathers and checks against them. A `(...)` called with more
    than one count, or one with keywords, is read by its slots, which hold the most any call passes and each keyword's
    value (cplan_zsuper_shape): an arm of one count of arguments takes them only when they are that count, one that
-   reads none or optional ones reads the ones it takes. */
-static int cplan_super_arm_takes(Compiler *c, int id, const Scope *s, const char *uname, const char *owner) {
+   reads none or optional ones reads the ones it takes. *unread where an explicit list forwards a `...` (`super(...)`
+   from a method the `...` rewrite left as it is), whose count no arm reads: refused, not answered by the NoMethodError
+   of no arm. */
+static int cplan_super_arm_takes(Compiler *c, int id, const Scope *s, const char *uname, const char *owner, int *unread) {
   int lo, hi, kw, n = cplan_super_static_argc(c, id, s, &kw);
   const char *lo_exp, *hi_exp;
   if (!cplan_owner_arity(uname, owner, &lo, &hi, &lo_exp, &hi_exp)) return 0;
   if (n >= 0 && !kw) return n >= lo && n <= hi;
-  return cplan_super_gathers(c, id, s) ||
-         (nt_kind(c->nt, id) == NK_ForwardingSuperNode && s->nparams >= lo && (s->nparams <= hi || lo < hi || !hi));
+  if (cplan_super_gathers(c, id, s) ||
+      (nt_kind(c->nt, id) == NK_ForwardingSuperNode && s->nparams >= lo && (s->nparams <= hi || lo < hi || !hi)))
+    return 1;
+  int sa = nt_ref(c->nt, id, "arguments"), an = 0;
+  const int *av = sa >= 0 ? nt_arr(c->nt, sa, "arguments", &an) : NULL;
+  *unread = nt_argv_has_forwarding(c->nt, av, an);
+  return 0;
 }
 /* See call_plan.h. */
 int cplan_super_gathered(Compiler *c, int id, int *lo, int *hi) {
@@ -1201,8 +1208,10 @@ int cplan_super_wrong_count(Compiler *c, int id, const char **exp) {
   return cplan_super_count_fails(c, id, s, comp_super_name(c, cplan_super_start(c, st), st), cplan_count_owner(c, s, p.bowner), exp);
 }
 
-/* A class method's super that no program method answers: the builtin's arm (BsuperArm) */
-static BsuperArm cplan_super_class_arm(Compiler *c, int id, const Scope *s, const char *uname, const char *bowner) {
+/* A class method's super that no program method answers: the builtin's arm (BsuperArm); *unread as
+   cplan_super_arm_takes says */
+static BsuperArm cplan_super_class_arm(Compiler *c, int id, const Scope *s, const char *uname, const char *bowner,
+                                       int *unread) {
   if (comp_super_is_class_new(c, id)) return BSUP_CLASS_NEW;
   if (allocate_super_reaches_class(c, id)) return BSUP_ALLOCATE;
   if (bowner) return BSUP_CORE_HOOK;
@@ -1213,7 +1222,7 @@ static BsuperArm cplan_super_class_arm(Compiler *c, int id, const Scope *s, cons
   const char *own = cplan_count_owner(c, s, NULL), *exp;
   if (csa == CSA_NONE || s->class_id < 0) csa = CSA_NONE;
   else if (cplan_super_count_fails(c, id, s, uname, own, &exp) >= 0) return BSUP_ARITY;
-  else if (!cplan_super_arm_takes(c, id, s, uname, own)) csa = CSA_NONE;
+  else if (!cplan_super_arm_takes(c, id, s, uname, own, unread)) csa = CSA_NONE;
   switch (csa) {
   case CSA_SUBCLASSES: return BSUP_SUBCLASSES;
   case CSA_ANCESTORS: return BSUP_ANCESTORS;
@@ -1225,8 +1234,10 @@ static BsuperArm cplan_super_class_arm(Compiler *c, int id, const Scope *s, cons
   return is_backtick_name(uname) && an_super_backtick_shape(c, id, s, &bt_arg) >= 0 ? BSUP_BACKTICK : BSUP_NONE;
 }
 
-/* An instance method's super that no program method answers: the builtin's arm (BsuperArm) */
-static BsuperArm cplan_super_instance_arm(Compiler *c, int id, const Scope *s, const char *uname, const char *bowner) {
+/* An instance method's super that no program method answers: the builtin's arm (BsuperArm); *unread as
+   cplan_super_arm_takes says */
+static BsuperArm cplan_super_instance_arm(Compiler *c, int id, const Scope *s, const char *uname, const char *bowner,
+                                          int *unread) {
   int cid = s->class_id, fwd = nt_kind(c->nt, id) == NK_ForwardingSuperNode;
   const ClassInfo *ci = &c->classes[cid];
   /* a subclass of a native class (#9269): the native class's constructor or binding */
@@ -1257,10 +1268,10 @@ static BsuperArm cplan_super_instance_arm(Compiler *c, int id, const Scope *s, c
   if (cplan_super_count_fails(c, id, s, uname, bowner, &exp) >= 0) return BSUP_ARITY;
   if (exc && is_exception_message(uname)) return BSUP_EXC_TEXT;
   switch (object_super_arm(uname)) {
-  case OSA_RESPOND_TO: if (cplan_super_arm_takes(c, id, s, uname, bowner)) return BSUP_RESPOND_TO; break;
+  case OSA_RESPOND_TO: if (cplan_super_arm_takes(c, id, s, uname, bowner, unread)) return BSUP_RESPOND_TO; break;
   case OSA_FREEZE: return BSUP_FREEZE;
-  case OSA_IS_A: if (cplan_super_arm_takes(c, id, s, uname, bowner)) return BSUP_IS_A; break;
-  case OSA_INSTANCE_OF: if (cplan_super_arm_takes(c, id, s, uname, bowner)) return BSUP_INSTANCE_OF; break;
+  case OSA_IS_A: if (cplan_super_arm_takes(c, id, s, uname, bowner, unread)) return BSUP_IS_A; break;
+  case OSA_INSTANCE_OF: if (cplan_super_arm_takes(c, id, s, uname, bowner, unread)) return BSUP_INSTANCE_OF; break;
   default: break;
   }
   if (is_with_name(uname) && ci->is_struct && ci->is_data) return BSUP_DATA_WITH;
@@ -1483,9 +1494,18 @@ static void cplan_resolve_super(Compiler *c, int id, CallPlan *p) {
     p->bpath = (unsigned char)cplan_super_path(c, id, s, st, mname, ml.bowner);
   /* (the default text answers ahead of a prepend chain's shadow; a class method's shadow is its own lookup) */
   p->bsuper = (unsigned char)cplan_super_text(c, id, s, p->bowner);
+  int unread = 0;
   if (p->bsuper == BSUP_NONE && uname)
-    p->bsuper = (unsigned char)(s->is_cmethod ? cplan_super_class_arm(c, id, s, uname, p->bowner)
-                                              : cplan_super_instance_arm(c, id, s, uname, p->bowner));
+    p->bsuper = (unsigned char)(s->is_cmethod ? cplan_super_class_arm(c, id, s, uname, p->bowner, &unread)
+                                              : cplan_super_instance_arm(c, id, s, uname, p->bowner, &unread));
+  if (unread && p->bsuper == BSUP_NONE && p->bpath == BSP_NONE) {
+    char msg[300];
+    snprintf(msg, sizeof msg, "`...` forwarded by `super(...)` into the builtin `%s` is not supported; "
+             "see docs/limitations.md", uname);
+    cplan_set(p, -1, s->class_id, UC_SUPER, CP_REFUSE);
+    p->rkind = CR_FEATURE; p->rfrom = CRF_LIMIT;
+    p->msg = cplan_keep(c, strdup(msg));
+  }
 }
 
 /* The name of class-method super id's method when the super raises a NoMethodError, no method of the program's and

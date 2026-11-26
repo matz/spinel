@@ -1,0 +1,3 @@
+"fiber: SystemStackError"
+"thread: SystemStackError"
+main: SystemStackError

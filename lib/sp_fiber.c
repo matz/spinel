@@ -555,6 +555,32 @@ static void sp_fiber_fault_arm(void) {
    this is a no-op once either has run. */
 void sp_stack_guard_init(void) { sp_fiber_fault_arm(); }
 
+/* Whether the running stack has less than SP_STACK_MARGIN left above its
+   guard: a fiber's own stack, or the thread's (sp_thread_stack_lo); a
+   fiber's margin is at most a quarter of its stack. The fault handler above
+   raises an overflow by a longjmp out of the frame that faulted, which is
+   safe in the program's frames and in the runtime's, but not inside libc:
+   an overflow in malloc left its lock held, and the next malloc, from the
+   rescue clause, aborted the process. So the allocator's slow paths, which
+   take malloc and start a collection, ask this first and raise the
+   SystemStackError themselves, from a frame of their own, with the margin
+   for malloc and for the collector's frames (sp_slab.c, sp_alloc.c). */
+int sp_stack_headroom_low(void) {
+  char here;
+  sp_Fiber *f = sp_fiber_current;
+  char *lo;
+  size_t margin = SP_STACK_MARGIN;
+  if (f && f != &sp_fiber_root && f->stack) {
+    lo = f->stack + sp_fiber_guard();
+    if (margin > f->stack_size / 4) margin = f->stack_size / 4;
+  } else if (sp_thread_stack_lo) {
+    lo = sp_thread_stack_lo;
+  } else {
+    return 0;
+  }
+  return &here < lo || (size_t)(&here - lo) < margin;
+}
+
 /* ---- the stack the program body runs on -------------------------------
    The OS gives a process one stack and decides how big: 8 MB on macOS, and
    a recursion that is merely deep -- generated code reaches depths written

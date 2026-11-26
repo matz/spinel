@@ -76,6 +76,13 @@
 #include <time.h>
 #include "sp_gc.h"
 #include "sp_alloc.h"   /* sp_gc_alloc is here: the collector's bookkeeping around the claim */
+
+/* the slow paths raise SystemStackError with SP_STACK_MARGIN of stack left
+   (sp_stack_headroom_low, lib/sp_fiber.c): an overflow inside malloc or a
+   collection could not be raised out of */
+extern int sp_stack_headroom_low(void);
+extern void sp_stack_too_deep(void);
+#define SP_SLAB_STACK_CHECK() do { if (SP_EXPECT(sp_stack_headroom_low(), 0)) sp_stack_too_deep(); } while (0)
 #ifndef MAP_ANONYMOUS
 #define MAP_ANONYMOUS MAP_ANON
 #endif
@@ -683,6 +690,7 @@ static SP_INLINE void sp_slab_zero_small(void *p, unsigned csize) {
    off, malloc. A failed malloc ends the program, or answers NULL when the
    caller can collect and try again (may_fail). */
 static SP_NOINLINE void *sp_slab_alloc_slow(size_t need, int payload, int zero, int may_fail) {
+  SP_SLAB_STACK_CHECK();
   if (SP_EXPECT(sp_slab_on < 0, 0)) sp_slab_init();
   if (sp_slab_on && need <= SP_SLAB_MAX) {
     int cls = sp_slab_cls_of[(need + 15) >> 4];
@@ -868,6 +876,7 @@ static void *sp_gc_alloc_or_collect(size_t need, void (*fin)(void *)) {
   return sp_slab_alloc_in(need, 0, fin != NULL, 1);
 }
 static SP_NOINLINE void *sp_gc_alloc_full(size_t sz, void (*fin)(void *), void (*scn)(void *)) {
+  SP_SLAB_STACK_CHECK();
 #ifdef SP_THREADS
   /* Lock-free fast path: the list push is a CAS (SP_GC_HEAP_PUSH) and the live-
      byte counter is atomic, so concurrent allocations need no mutex -- the old

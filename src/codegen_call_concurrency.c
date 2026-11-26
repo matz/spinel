@@ -450,7 +450,7 @@ int emit_call_synchronize_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
       }
       g_ensure_stack[g_ensure_depth++] = (EnsureCtx){ .lid = eid, .has_retval = has_retval, .exc_base = g_exc_frame_depth,
                                                       .retv_ty = g_ret_type, .rescue_base = g_rescue_save_depth,
-                                                      .retv_o = g_ret_oint };
+                                                      .retv_o = g_ret_oint, .pr_track = 1, .pr_label = g_method_pr_label };
       buf_puts(b, "sp_exc_check_depth(); sp_exc_rootmark[sp_exc_top] = sp_gc_nroots; ");
       buf_puts(b, "sp_exc_msg[sp_exc_top] = 0; sp_exc_obj[sp_exc_top] = 0; sp_exc_top++; if (setjmp(sp_exc_stack[sp_exc_top-1]) == 0) { ");
       g_exc_frame_depth++;
@@ -536,15 +536,14 @@ int emit_call_synchronize_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
         if (fpl > 0) buf_printf(b, "sp_exc_top -= %d; ", fpl);
         buf_printf(b, "sp_rescue_sp -= _brkf%d - 1; break; } ", eid);
       }
+      /* the deferred return, as a begin..ensure hands it on (codegen_stmt.c): to an
+         enclosing ensure of the method, else out through the method's exit, which
+         for a yielding method spliced at its call is the splice's, not the caller's */
+      emit_ensure_return(c, &region, eid, has_retval, b, 0);
       if (g_ensure_depth > 0) {
-        /* nested inside another begin..ensure / synchronize: hand the deferred
-           return and unhandled exception to the enclosing ensure. */
+        /* nested inside another begin..ensure / synchronize: hand the unhandled
+           exception to the enclosing ensure. */
         EnsureCtx *outer = &g_ensure_stack[g_ensure_depth - 1];
-        buf_printf(b, "if (_retf%d) { ", eid);
-        if (has_retval && outer->has_retval) buf_printf(b, "_retv%d = _retv%d; ", outer->lid, eid);
-        buf_printf(b, "_retf%d = 1; ", outer->lid);
-        emit_ensure_chain_pops(b, outer);
-        buf_printf(b, "goto _ensure%d; } ", outer->lid);
         /* An intervening rescue owns the exception after the unlock, as
            in the begin..ensure epilogue. Its still-live frame distinguishes
            it from a direct handoff to the enclosing ensure. */
@@ -556,32 +555,6 @@ int emit_call_synchronize_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
                      eid, outer->lid, outer->lid, eid, outer->lid, eid, outer->lid, eid, outer->lid);
       }
       else {
-        /* the deferred return leaves through every enclosing live begin
-           frame: pop them (see the begin..ensure epilogue in codegen_stmt.c),
-           and pop the sp_rescue_sp handler for each rescue body it leaves */
-        { char g[24]; snprintf(g, sizeof g, "_retf%d", eid);
-          if (emit_frame_unwind(b, 0, g)) buf_puts(b, " "); }
-        /* Inside a first-class proc body whose returns route through the boxed
-           slot, the deferred value leaves through the slot -- a raw C return
-           of an sp_RbVal from an sp_int function does not compile. The
-           statement-side copy of this funnel (codegen_stmt.c) has had the
-           branch; this one did not, so `Mutex#synchronize` inside a proc body
-           emitted it (#3383). */
-        if (has_retval && g_ret_type == TY_POLY && proc_ret_slot())
-          buf_printf(b, "if (_retf%d) { %s = _retv%d; return 0; } ", eid, proc_ret_slot(), eid);
-        /* a fiber body is `static void`: see g_c_ret_void */
-        else if (has_retval && g_c_ret_void) buf_printf(b, "if (_retf%d) return; ", eid);
-        /* (a handle slot's answer is published as it returns, as
-           emit_retf_return's is) */
-        else if (has_retval) buf_printf(b, "if (_retf%d) return _retv%d; ", eid, eid);
-        else if (g_in_proc_body && g_result_var && g_result_poly)
-          buf_printf(b, "if (_retf%d) { %s = sp_box_nil(); return 0; } ", eid, g_result_var);
-        else if (g_c_ret_void) buf_printf(b, "if (_retf%d) return; ", eid);
-        else if (g_ret_type == TY_POLY) buf_printf(b, "if (_retf%d) return sp_box_nil(); ", eid);
-        else if (g_ret_type == TY_UNKNOWN) buf_printf(b, "if (_retf%d) return 0; ", eid);
-        /* a proc body returns sp_int: see the sibling in codegen_iter.c */
-        else if (g_in_proc_body) buf_printf(b, "if (_retf%d) return 0; ", eid);
-        else buf_printf(b, "if (_retf%d) return; ", eid);
         buf_printf(b, "if (_excf%d) { sp_pending_exc_obj = _excobj%d; sp_reraise_continues = 1; sp_raise_cls(_exccls%d, _excmsg%d); } ", eid, eid, eid, eid);
       }
     }

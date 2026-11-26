@@ -17741,6 +17741,52 @@ void emit_obj_kernel_text(Compiler *c, int cid, int want_inspect, const char *ob
   else
     buf_printf(b, "sp_sprintf(\"#<%s:0x%%016llx>\", %s(unsigned long long)(uintptr_t)%s)", drn, darg, obj);
 }
+/* Module#include? at the end of a class method's super chain: the receiving class's, as a dynamic receiver's
+   default answers it (builtin_ops' TY_CLASS row) -- an override's `mod == R ? false : super` raised there. Its
+   argument is one plain argument, a bare super's one parameter, or the first of a list the run counts; one that may
+   hold anything is checked for a module and named in CRuby's TypeError as it is (nil, true, Integer, Class). */
+static void emit_super_include_p(Compiler *c, int id, Scope *s, Buf *b) {
+  int sargs = nt_kind(c->nt, id) == NK_SuperNode ? nt_ref(c->nt, id, "arguments") : -1;
+  int san = 0;
+  const int *sav = sargs >= 0 ? nt_arr(c->nt, sargs, "arguments", &san) : NULL;
+  Buf gb; memset(&gb, 0, sizeof gb);
+  int ga = emit_super_gathered_args(c, id, s, 1, &gb);
+  Buf ab; memset(&ab, 0, sizeof ab);
+  int typed = 0;   /* (ab is an sp_Class, else a boxed value) */
+  if (ga >= 0) buf_printf(&ab, "_t%d->data[0]", ga);
+  else if (sargs >= 0) {
+    typed = comp_ntype(c, sav[0]) == TY_CLASS;
+    if (typed) emit_expr(c, sav[0], &ab);
+    else emit_boxed(c, sav[0], &ab);
+  }
+  else {
+    LocalVar *lv = scope_local(s, s->pnames[0]);
+    Buf lr; memset(&lr, 0, sizeof lr);
+    emit_local_ref(c, id, s->pnames[0], &lr);
+    typed = lv && lv->type == TY_CLASS;
+    buf_puts(&ab, lr.p ? lr.p : "sp_box_nil()");
+    free(lr.p);
+  }
+  int tc = ++g_tmp, tm = ++g_tmp;
+  Repr sr = repr_of(c, id);
+  buf_printf(b, "%s({ %ssp_Class _t%d = ", sr.kind == RK_BOXED ? "sp_box_bool(" : "", gb.p ? gb.p : "", tc);
+  if (cmethod_takes_self_cls(c, s)) buf_puts(b, cmethod_cls_token(c, s));
+  else buf_printf(b, "((sp_Class){%d, NULL})", s->class_id);
+  if (typed)
+    buf_printf(b, "; sp_Class _t%d = %s; if (!sp_class_is_module_val(_t%d)) "
+                  "sp_raise_cls(\"TypeError\", \"wrong argument type Class (expected Module)\"); ",
+               tm, ab.p ? ab.p : "", tm);
+  else {
+    int tv = ++g_tmp;
+    buf_printf(b, "; sp_RbVal _t%d = %s; if (_t%d.tag != SP_TAG_CLASS || !sp_class_is_module_val(sp_unbox_class(_t%d))) "
+                  "sp_raise_cls(\"TypeError\", sp_sprintf(\"wrong argument type %%s (expected Module)\", "
+                  "sp_convert_src_name(_t%d))); sp_Class _t%d = sp_unbox_class(_t%d); ",
+               tv, ab.p ? ab.p : "", tv, tv, tv, tm, tv);
+  }
+  buf_printf(b, "_t%d.cls_id != _t%d.cls_id && sp_class_le(_t%d, _t%d); })%s", tc, tm, tc, tm,
+             sr.kind == RK_BOXED ? ")" : "");
+  free(ab.p); free(gb.p);
+}
 void emit_super(Compiler *c, int id, Buf *b) {
   int read = repr_of(c, id).as_ty == TY_STRING && repr_native_call_handle(c, id);
   if (read) buf_puts(b, "SP_STR_B(");
@@ -17937,42 +17983,8 @@ static void emit_super_value(Compiler *c, int id, Buf *b) {
       }
       return;
     }
-    /* Module#include? at the end of the chain: the receiving class's, as a
-       dynamic receiver's default answers it (builtin_ops' TY_CLASS row) --
-       an override's `mod == R ? false : super` raised there */
-    if (cmi < 0 && barm == BSUP_INCLUDE_P) {
-      /* (one plain argument, a bare super's one parameter, or the first of a list the run counts) */
-      int sargs = nt_kind(c->nt, id) == NK_SuperNode ? nt_ref(c->nt, id, "arguments") : -1;
-      int san = 0;
-      const int *sav = sargs >= 0 ? nt_arr(c->nt, sargs, "arguments", &san) : NULL;
-      Buf gb; memset(&gb, 0, sizeof gb);
-      int ga = emit_super_gathered_args(c, id, s, 1, &gb);
-      Buf ab; memset(&ab, 0, sizeof ab);
-      if (ga >= 0) buf_printf(&ab, "sp_unbox_class(_t%d->data[0])", ga);
-      else if (sargs >= 0) {
-        if (comp_ntype(c, sav[0]) == TY_CLASS) emit_expr(c, sav[0], &ab);
-        else { buf_puts(&ab, "sp_unbox_class("); emit_boxed(c, sav[0], &ab); buf_puts(&ab, ")"); }
-      }
-      else {
-        LocalVar *lv = scope_local(s, s->pnames[0]);
-        Buf lr; memset(&lr, 0, sizeof lr);
-        emit_local_ref(c, id, s->pnames[0], &lr);
-        if (lv && lv->type == TY_CLASS) buf_puts(&ab, lr.p ? lr.p : "");
-        else buf_printf(&ab, "sp_unbox_class(%s)", lr.p ? lr.p : "sp_box_nil()");
-        free(lr.p);
-      }
-      int tc = ++g_tmp, tm = ++g_tmp;
-      Repr sr = repr_of(c, id);
-      buf_printf(b, "%s({ %ssp_Class _t%d = ", sr.kind == RK_BOXED ? "sp_box_bool(" : "", gb.p ? gb.p : "", tc);
-      if (cmethod_takes_self_cls(c, s)) buf_puts(b, cmethod_cls_token(c, s));
-      else buf_printf(b, "((sp_Class){%d, NULL})", s->class_id);
-      buf_printf(b, "; sp_Class _t%d = %s; if (!sp_class_is_module_val(_t%d)) "
-                    "sp_raise_cls(\"TypeError\", \"wrong argument type Class (expected Module)\"); "
-                    "_t%d.cls_id != _t%d.cls_id && sp_class_le(_t%d, _t%d); })%s",
-                 tm, ab.p ? ab.p : "", tm, tc, tm, tc, tm, sr.kind == RK_BOXED ? ")" : "");
-      free(ab.p); free(gb.p);
-      return;
-    }
+    /* Module#include? at the end of the chain */
+    if (cmi < 0 && barm == BSUP_INCLUDE_P) { emit_super_include_p(c, id, s, b); return; }
     /* `super` in a class-level ` override is Kernel#` too */
     if (cmi < 0 && barm == BSUP_BACKTICK) { emit_super_backtick(c, id, s, b); return; }
     if (cmi < 0) {

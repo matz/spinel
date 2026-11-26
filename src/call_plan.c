@@ -1440,6 +1440,8 @@ static void cplan_resolve_super(Compiler *c, int id, CallPlan *p) {
   p->bowner = ml.bowner;
   const Scope *st = comp_super_site(c, s);
   const char *uname = comp_super_shadow(c, st) ? NULL : comp_super_name(c, ml.from, st);
+  int fkw = 0;   /* (a `(...)` whose calls pass keywords, cplan_fwd_counts) */
+  if (uname && s->is_cmethod) (void)cplan_super_static_argc(c, id, s, &fkw);
   if (uname && s->is_cmethod &&
            builtin_super_cmethod_known(c->classes[s->class_id].name, uname) &&
            ml.kind == ML_NONE) {
@@ -1462,6 +1464,14 @@ static void cplan_resolve_super(Compiler *c, int id, CallPlan *p) {
     cplan_set(p, -1, s->class_id, UC_SUPER, CP_REFUSE);
     p->rkind = CR_FEATURE; p->rfrom = CRF_LIMIT;
     p->msg = cplan_keep(c, strdup(msg));
+  }
+  else if (fkw && !ml.bowner && class_super_arm(uname) == CSA_INCLUDE_P) {
+    /* a `(...)` whose calls pass keywords: its slots hold each keyword's value, where Module#include? is handed
+       the one Hash (CRuby's TypeError) */
+    cplan_set(p, -1, s->class_id, UC_SUPER, CP_REFUSE);
+    p->rkind = CR_FEATURE; p->rfrom = CRF_LIMIT;
+    p->msg = "a bare `super` into Module#include? from a `(...)` method whose calls pass keywords is not supported; "
+             "see docs/limitations.md";
   }
   if (p->dispatch == CP_REFUSE) return;
   /* (the call path a super is lowered to: never a refused one's) */

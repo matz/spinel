@@ -12044,8 +12044,6 @@ static TyKind ctr_site_join(TyKind nat, TyKind want) {
   }
   return nat;
 }
-/* What a super that comp_super_object_builtin answers (kind) is typed: self for
-   itself, the row's result for Kernel's row, a Boolean for the rest. */
 /* The type a super into a builtin answers, where no method of the program's does: the call plan's arm's
    (CallPlan.bsuper), the one the super emission renders */
 static TyKind super_builtin_type(Compiler *c, int id, Scope *s, const char *uname) {
@@ -12065,9 +12063,11 @@ static TyKind super_builtin_type(Compiler *c, int id, Scope *s, const char *unam
     switch (class_super_arm(uname)) {
     case CSA_SUPERCLASS: return TY_CLASS;
     case CSA_SUBCLASSES: case CSA_ANCESTORS: return TY_POLY_ARRAY;
+    case CSA_INCLUDE_P: return TY_BOOL;
     default: return TY_UNKNOWN;
     }
   case BSUP_RESPOND_TO: case BSUP_IS_A: case BSUP_INSTANCE_OF: case BSUP_SAME: case BSUP_FALSE: case BSUP_FROZEN:
+  case BSUP_INCLUDE_P:
     return TY_BOOL;
   case BSUP_SELF: return repr_self_boxed(c, (int)(s - c->scopes)) ? TY_POLY : ty_object(s->class_id);
   case BSUP_KERNEL_ROW: return bop_result(comp_super_kernel_row(c, s, uname, id), BOP_KERNEL);

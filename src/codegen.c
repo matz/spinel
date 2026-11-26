@@ -4453,20 +4453,18 @@ int method_is_void(Scope *s) {
    care. */
 static int8_t *g_cm_selfcls = NULL;
 static int g_cm_selfcls_n = -1;
-int cmethod_takes_self_cls(Compiler *c, const Scope *s) {
-  if (!s) return 0;
-  if (!s->is_cmethod || s->class_id < 0 || s->body < 0) return 0;
-  /* (the memo, the nodes' scope table and the lookups below are all keyed by the index) */
-  int si = (int)(s - c->scopes);
-  if (g_cm_selfcls_n != c->nscopes) {
-    free(g_cm_selfcls);
-    g_cm_selfcls = (int8_t *)calloc((size_t)c->nscopes, 1);
-    g_cm_selfcls_n = c->nscopes;
-    if (!g_cm_selfcls) { g_cm_selfcls_n = -1; return 0; }
-    for (int k = 0; k < c->nscopes; k++) g_cm_selfcls[k] = -1;
-  }
-  if (!g_cm_selfcls) return 0;
-  if (g_cm_selfcls[si] >= 0) return g_cm_selfcls[si];
+/* The memo answers -1 (not worked out), 0 or 1. A method takes the class
+   when its own body reads it or a class method it calls bare takes it, so
+   the methods of a cycle of bare calls answer together: the walk decides
+   them one strongly connected group at a time (Tarjan's order), each
+   method worked out once, a group's answer the OR of its members' and of
+   the groups they call. */
+typedef struct { int *ix, *low, *stk, nstk, next; int8_t *acc; } CmSelfClsWalk;
+static int cm_self_cls_node(const Scope *s) { return s && s->is_cmethod && s->class_id >= 0 && s->body >= 0; }
+static void cm_self_cls_visit(Compiler *c, CmSelfClsWalk *w, int si) {
+  const Scope *s = &c->scopes[si];
+  w->ix[si] = w->low[si] = ++w->next;
+  w->stk[w->nstk++] = si;
   int ans = class_reopen_cmethod(c, -1, -1, s->name) == si || cplan_kern_site_by_class(c, si), has_desc = 0;
   /* a descendant some reached code names (comp_new_receiver), off the
      class's descendant list rather than every class (#10546); a site
@@ -4491,23 +4489,46 @@ int cmethod_takes_self_cls(Compiler *c, const Scope *s) {
         const char *nm = nt_str(c->nt, nid, "name");
         if (nm && sp_streq(nm, "name")) ans = 1;
         /* a bare call to a class method that reads its receiving class
-           hands it this one's (a cycle answers no until it is settled) */
+           hands it this one's */
         else if (nm) {
           /* (a method a top-level include brings, whose copy in Object's chain takes the call's self) */
           int imi = call_target(c, nid, -1, nm, CT_INCLUDED, NULL);
           if (imi >= 0 && repr_self_boxed(c, imi)) { ans = 1; break; }
           int cmi = call_target(c, nid, s->class_id, nm, CT_CMETHOD, NULL);
-          if (cmi >= 0 && cmi != si) {
-            g_cm_selfcls[si] = 0;
-            if (cmethod_takes_self_cls(c, &c->scopes[cmi])) ans = 1;
-            g_cm_selfcls[si] = -1;
-          }
+          if (cmi < 0 || cmi == si || !cm_self_cls_node(&c->scopes[cmi])) continue;
+          /* (a method of a group still open is on the stack: its answer is the group's, settled when it closes) */
+          if (g_cm_selfcls[cmi] < 0 && !w->ix[cmi]) cm_self_cls_visit(c, w, cmi);
+          if (g_cm_selfcls[cmi] >= 0) ans = g_cm_selfcls[cmi];
+          else if (w->low[cmi] < w->low[si]) w->low[si] = w->low[cmi];
         }
       }
     }
   }
-  g_cm_selfcls[si] = (int8_t)ans;
-  return ans;
+  w->acc[si] = (int8_t)ans;
+  if (w->low[si] != w->ix[si]) return;
+  int top = w->nstk, k = top;
+  do { k--; ans |= w->acc[w->stk[k]]; } while (w->stk[k] != si);
+  for (int j = k; j < top; j++) g_cm_selfcls[w->stk[j]] = (int8_t)ans;
+  w->nstk = k;
+}
+int cmethod_takes_self_cls(Compiler *c, const Scope *s) {
+  if (g_cm_selfcls_n != c->nscopes) {
+    free(g_cm_selfcls);
+    g_cm_selfcls = (int8_t *)calloc((size_t)c->nscopes, 1);
+    g_cm_selfcls_n = c->nscopes;
+    if (!g_cm_selfcls) { g_cm_selfcls_n = -1; return 0; }
+    for (int k = 0; k < c->nscopes; k++) g_cm_selfcls[k] = -1;
+  }
+  if (!g_cm_selfcls || !cm_self_cls_node(s)) return 0;
+  int si = (int)(s - c->scopes);
+  if (g_cm_selfcls[si] < 0) {
+    size_t n = (size_t)c->nscopes;
+    CmSelfClsWalk w = { calloc(n, sizeof(int)), calloc(n, sizeof(int)), calloc(n, sizeof(int)), 0, 0, calloc(n, 1) };
+    if (w.ix && w.low && w.stk && w.acc) cm_self_cls_visit(c, &w, si);
+    free(w.ix); free(w.low); free(w.stk); free(w.acc);
+    if (g_cm_selfcls[si] < 0) return 0;
+  }
+  return g_cm_selfcls[si];
 }
 
 /* Emit the receiving-class argument for such a call: the class the call names,

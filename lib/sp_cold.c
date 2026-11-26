@@ -5058,6 +5058,9 @@ sp_RbVal sp_signal_trap(sp_RbVal sig, sp_RbVal handler) {SP_GC_ROOT_RBVAL(sig);S
         sigemptyset(&sa.sa_mask);
         sigaction(no, &sa, NULL);
       }
+      /* DEFAULT on SIGPIPE puts back the handler that does nothing, as the
+         program started with it (sp_sigpipe_default); CRuby's does the same */
+      else if (!ignore && !sysdef && no == SIGPIPE) { extern void sp_sigpipe_default(void); sp_sigpipe_default(); }
       else signal(no, ignore ? SIG_IGN : SIG_DFL);
     }
   }

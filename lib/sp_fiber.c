@@ -512,7 +512,13 @@ static void sp_thread_stack_bounds(char *here) {
 static SP_TLS int sp_fiber_fault_armed = 0;
 /* this thread's sigaltstack buffer; external, so the store is not optimized away */
 SP_TLS void *sp_fiber_altstack;
+extern int (*sp_stack_headroom_low_fn)(void);   /* lib/sp_slab.c */
+extern void (*sp_stack_too_deep_fn)(void);
+extern void sp_stack_too_deep(void);            /* lib/sp_exc.c */
 static void sp_fiber_fault_arm(void) {
+  /* the allocator's slow paths check the stack left through these */
+  sp_stack_headroom_low_fn = sp_stack_headroom_low;
+  sp_stack_too_deep_fn = sp_stack_too_deep;
 #ifdef SP_NO_SIGNALS
   /* Targets with no signals (ESP32: newlib+FreeRTOS): no handler can be
      installed, and the per-thread 64 KB sigaltstack buffer would be charged

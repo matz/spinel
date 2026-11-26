@@ -80,9 +80,13 @@
 /* the slow paths raise SystemStackError with SP_STACK_MARGIN of stack left
    (sp_stack_headroom_low, lib/sp_fiber.c): an overflow inside malloc or a
    collection could not be raised out of */
-extern int sp_stack_headroom_low(void);
-extern void sp_stack_too_deep(void);
-#define SP_SLAB_STACK_CHECK() do { if (SP_EXPECT(sp_stack_headroom_low(), 0)) sp_stack_too_deep(); } while (0)
+/* Reached through pointers that arming the fault handler sets
+   (sp_fiber_fault_arm): a link that takes the slab alone, a C extension's
+   test fixture, draws neither sp_fiber.o nor sp_exc.o, and with them the
+   symbols only a generated unit defines. Unset, there is no check. */
+int (*sp_stack_headroom_low_fn)(void);
+void (*sp_stack_too_deep_fn)(void);
+#define SP_SLAB_STACK_CHECK() do { if (SP_EXPECT(sp_stack_headroom_low_fn && sp_stack_headroom_low_fn(), 0)) sp_stack_too_deep_fn(); } while (0)
 #ifndef MAP_ANONYMOUS
 #define MAP_ANONYMOUS MAP_ANON
 #endif

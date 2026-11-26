@@ -245,7 +245,7 @@ BlockRetHome block_ret_home_enter(int block, int saved_block) {
      block's return is the real function's, as before */
   if (g_method_pr_label && strncmp(g_method_pr_label, "_yret", 5) == 0) {
     h.label = g_method_pr_label; h.var = g_method_pr_var; h.rt = g_ret_type; h.ro = g_ret_oint;
-    h.exc = g_method_pr_exc_depth; h.ens = g_method_pr_ensure_depth; h.set = 1;
+    h.exc = g_method_pr_exc_depth; h.ens = g_method_pr_ensure_depth; h.rsc = g_method_pr_rescue_depth; h.set = 1;
   }
   g_blk_ret_home[block] = h;
   old.set |= 2;   /* a slot to give back */
@@ -1151,7 +1151,7 @@ int emit_inline_call_x(Compiler *c, int id, Buf *b, int indent, int as_expr) {
   char inl_lbl[32];
   const char *sv_prl = g_method_pr_label, *sv_prv = g_method_pr_var;
   TyKind sv_prt = g_ret_type;
-  int sv_prexc = g_method_pr_exc_depth;
+  int sv_prexc = g_method_pr_exc_depth, sv_prrsc = g_method_pr_rescue_depth;
   int sv_prens = g_method_pr_ensure_depth;
   if (as_expr) {
     /* Use a result var so the tail uses assignment, not `return`, in the
@@ -1182,7 +1182,7 @@ int emit_inline_call_x(Compiler *c, int id, Buf *b, int indent, int as_expr) {
     if (m_has_ret) {
       snprintf(inl_lbl, sizeof inl_lbl, "_yret%d", tag);
       g_method_pr_label = inl_lbl; g_method_pr_var = rvbuf; g_ret_type = rt;
-      g_method_pr_exc_depth = g_exc_frame_depth;
+      g_method_pr_exc_depth = g_exc_frame_depth; g_method_pr_rescue_depth = g_rescue_save_depth;
       g_method_pr_ensure_depth = g_ensure_depth;
       /* body in its own scope: the funnel goto then EXITS the scopes of any
          cleanup-attributed GC roots the body declares (legal, cleanups run)
@@ -1192,7 +1192,7 @@ int emit_inline_call_x(Compiler *c, int id, Buf *b, int indent, int as_expr) {
     emit_stmts_tail(c, m->body, b, m_has_ret ? din + 1 : din);
     if (m_has_ret) {
       g_method_pr_label = sv_prl; g_method_pr_var = sv_prv; g_ret_type = sv_prt;
-      g_method_pr_exc_depth = sv_prexc;
+      g_method_pr_exc_depth = sv_prexc; g_method_pr_rescue_depth = sv_prrsc;
       g_method_pr_ensure_depth = sv_prens;
       emit_indent(b, din); buf_puts(b, "}\n");
       emit_indent(b, din); buf_printf(b, "_yret%d: ;\n", tag);
@@ -1210,14 +1210,14 @@ int emit_inline_call_x(Compiler *c, int id, Buf *b, int indent, int as_expr) {
     if (m_has_ret) {
       snprintf(inl_lbl, sizeof inl_lbl, "_yret%d", tag);
       g_method_pr_label = inl_lbl; g_method_pr_var = NULL;
-      g_method_pr_exc_depth = g_exc_frame_depth;
+      g_method_pr_exc_depth = g_exc_frame_depth; g_method_pr_rescue_depth = g_rescue_save_depth;
       g_method_pr_ensure_depth = g_ensure_depth;
       emit_indent(b, din); buf_puts(b, "{\n");   /* see expr-path comment */
     }
     emit_stmts(c, m->body, b, m_has_ret ? din + 1 : din);
     if (m_has_ret) {
       g_method_pr_label = sv_prl; g_method_pr_var = sv_prv;
-      g_method_pr_exc_depth = sv_prexc;
+      g_method_pr_exc_depth = sv_prexc; g_method_pr_rescue_depth = sv_prrsc;
       g_method_pr_ensure_depth = sv_prens;
       emit_indent(b, din); buf_puts(b, "}\n");
       emit_indent(b, din); buf_printf(b, "_yret%d: ;\n", tag);
@@ -2801,19 +2801,20 @@ void emit_block_invoke(Compiler *c, int site, Buf *b, int indent, int as_expr,
   const char *sv_bl = g_method_pr_label, *sv_bv = g_method_pr_var;
   TyKind sv_bt = g_ret_type;
   int sv_bro = g_ret_oint;
-  int sv_bexc = g_method_pr_exc_depth;
+  int sv_bexc = g_method_pr_exc_depth, sv_brsc = g_method_pr_rescue_depth;
   int sv_bens = g_method_pr_ensure_depth;
   g_method_pr_label = g_fn_pr_label; g_method_pr_var = g_fn_pr_var;
   /* (and the slot's form: an inline answering its oint set g_ret_oint) */
   g_ret_type = g_fn_ret_type; g_ret_oint = g_fn_ret_oint;
   g_method_pr_exc_depth = 0;   /* the real function's funnel sits at depth 0 */
+  g_method_pr_rescue_depth = 0;
   g_method_pr_ensure_depth = 0;
   /* ... unless the block was written in a method body that is itself
      spliced: its `return` leaves that inline */
   { const BlockRetHome *h = block_ret_home(blk);
     if (h) {
       g_method_pr_label = h->label; g_method_pr_var = h->var; g_ret_type = h->rt; g_ret_oint = h->ro;
-      g_method_pr_exc_depth = h->exc; g_method_pr_ensure_depth = h->ens;
+      g_method_pr_exc_depth = h->exc; g_method_pr_ensure_depth = h->ens; g_method_pr_rescue_depth = h->rsc;
     } }
   /* likewise, the block body's `self` is the CALLER's (an ivar read inside
      the block must not resolve against the inlined method's receiver) -- and
@@ -3290,7 +3291,7 @@ void emit_block_invoke(Compiler *c, int site, Buf *b, int indent, int as_expr,
   g_yield_proc_ref = sv_bypr; g_yield_slot_ty = sv_byslot;
   g_yield_proc_ref_fallback = sv_yprf; g_yield_slot_ty_fallback = sv_yslotf;
   g_method_pr_label = sv_bl; g_method_pr_var = sv_bv; g_ret_type = sv_bt; g_ret_oint = sv_bro;
-  g_method_pr_exc_depth = sv_bexc;
+  g_method_pr_exc_depth = sv_bexc; g_method_pr_rescue_depth = sv_brsc;
   g_method_pr_ensure_depth = sv_bens;
   g_brk_ser_var = svser; g_brk_ensure_base = svebase; g_brk_exc_base = svbexc; g_brk_rescue_base = svbres;
   g_block_brk_var = svbbv; g_block_brk_ebase = svbbe;

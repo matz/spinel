@@ -25,3 +25,9 @@ p $made.map(&:hi), $made[0].class == f, $made[1].instance_of?(g)
 
 def mk = Class.new { def self.cm = 1 }
 p mk.method(:cm).name
+
+# the method the moved statements run in fires no definition hook
+$sm = []
+def mk_hooked = Class.new { def self.singleton_method_added(n) = ($sm << n); def self.x = 1; $sm << :stmt }
+h1 = mk_hooked
+p $sm, h1.x

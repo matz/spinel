@@ -9,3 +9,5 @@ true
 true
 true
 :cm
+[:singleton_method_added, :x, :stmt]
+1

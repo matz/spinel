@@ -13688,7 +13688,7 @@ static sp_PolyArray *sp_poly_product_n(sp_RbVal a, sp_PolyArray *ops) {
    element (recursively, so a nested array flattens and an empty one
    contributes nothing); anything else is its to_s on a line of its own. A
    message that already ends in a newline does not get a second one. */
-static void sp_poly_warn_line(sp_RbVal v, FILE *f) {
+static void sp_poly_warn_line(sp_RbVal v, sp_File *f) {
   if (v.tag == SP_TAG_OBJ && sp_poly_is_array_kind(v.cls_id)) {
     /* rooted while its elements render, as sp_poly_warn_text roots it */
     SP_GC_ROOT_RBVAL(v);
@@ -13699,11 +13699,22 @@ static void sp_poly_warn_line(sp_RbVal v, FILE *f) {
   const char *s = sp_poly_to_s(v);
   if (!s) s = sp_str_empty;
   size_t n = sp_rbval_is_string(v) ? sp_str_byte_len(s) : strlen(s);
-  /* the text and its newline under one stream lock, as sp_puts_line */
-  flockfile(f);
-  fwrite(s, 1, n, f);
-  if (!n || s[n - 1] != '\n') putc_unlocked('\n', f);
-  funlockfile(f);
+  /* the text and its newline in one write, as IO#write writes it (f NULL:
+     the standard stderr), which waits while a pipe is full */
+  if (!f) f = sp_io_stderr();
+  SP_GC_ROOT_STR(s);
+  if (n && s[n - 1] == '\n') { sp_File_write_bytes(f, s, n); return; }
+  /* (a zero in front of the stack buffer: the write roots it as a String,
+     whose mark reads that byte) */
+  char small[257], *line = n < sizeof small - 1 ? small + 1 : (char *)sp_str_alloc(n + 1);
+  small[0] = 0;
+  memcpy(line, s, n);
+  line[n] = '\n';
+  sp_File_write_bytes(f, line, n + 1);
+}
+/* warn's uplevel prefix, onto the same handle */
+static void sp_poly_warn_str(const char *s, sp_File *f) {
+  sp_File_write_bytes(f ? f : sp_io_stderr(), s, strlen(s));
 }
 /* The same lines as one String, for a $stderr that holds a StringIO. */
 static const char *sp_poly_warn_text(sp_RbVal v) {
@@ -13722,11 +13733,11 @@ static const char *sp_poly_warn_text(sp_RbVal v) {
   size_t n = sp_rbval_is_string(v) ? sp_str_byte_len(s) : strlen(s);
   return (!n || s[n - 1] != '\n') ? sp_str_concat(s, "\n") : s;
 }
-/* The C stream a boxed $stderr writes to: the IO it holds, else (never
-   assigned) the standard one. */
-static FILE *sp_poly_warn_fp(sp_RbVal io) {
-  if (io.tag == SP_TAG_OBJ && io.cls_id == SP_BUILTIN_IO && io.v.p) return ((sp_File *)io.v.p)->fp;
-  return stderr;
+/* The handle a boxed $stderr writes to: the IO it holds, else (never
+   assigned, NULL) the standard one. */
+static sp_File *sp_poly_warn_fp(sp_RbVal io) {
+  if (io.tag == SP_TAG_OBJ && io.cls_id == SP_BUILTIN_IO && io.v.p) return (sp_File *)io.v.p;
+  return NULL;
 }
 
 /* A copy of a Hash in another variant (the three below) keeps the source's

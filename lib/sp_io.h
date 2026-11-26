@@ -52,6 +52,11 @@ typedef struct {
                                   end, as the runtime set it; with own_buf, as
                                   last found (sp_io_own_nb). 0 not asked,
                                   1 yes, 2 no or could not (#4307) */
+  unsigned char wown;          /* the program made this write end (IO.pipe), so
+                                  its open file is the program's own: only then
+                                  does sp_sock_write set O_NONBLOCK on it, as an
+                                  inherited descriptor shares its flags with
+                                  other processes and descriptors (2>&1) */
   unsigned char wstream;       /* SOCK_STREAM, asked once: 0 not yet, 1 yes,
                                   2 no. Only a byte stream may have a write
                                   split at the send buffer's free space; on a
@@ -156,6 +161,7 @@ void sp_io_take_own_buf(sp_File *f);
 /* IO.pipe's read end over fd: a non-blocking descriptor read through
    own_buf. */
 sp_File *sp_io_pipe_reader(int fd);
+sp_File *sp_io_pipe_writer(int fd);
 /* IO#putc's byte: through stdio, or straight to the descriptor (own_buf). */
 void sp_File_put_byte(sp_File *f, int c);
 /* Access-mode checks retain closed-stream error precedence. */
@@ -277,6 +283,7 @@ static inline size_t sp_io_pending(sp_File *f) {
 const char *sp_slurp_stream_parked(sp_File *f);
 sp_int sp_File_write(sp_File *f, const char *s);
 sp_int sp_File_write_bin(sp_File *f, const char *s);
+void sp_File_write_bytes(sp_File *f, const char *s, size_t n);   /* one write, parking as IO#write does */
 sp_int sp_File_syswrite(sp_File *f, const char *s, size_t n);
 sp_int sp_File_write_poly(sp_File *f, sp_RbVal v);
 sp_int sp_File_syswrite_poly(sp_File *f, sp_RbVal v);

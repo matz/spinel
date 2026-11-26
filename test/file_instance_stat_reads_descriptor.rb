@@ -34,8 +34,17 @@ puts "the earlier stat keeps its size #{s.size}"
 a.seek(0, IO::SEEK_END)
 a.write("xy")
 puts "size counts a pending write #{a.size}"
+a.write("z")
+mixed = [a, "abc"]   # a boxed File beside a String
+puts "boxed size counts a pending write #{mixed.map(&:size).inspect}"
 
 a.close
+begin
+  mixed[0].size
+  puts "boxed size on a closed File: no error"
+rescue IOError => e
+  puts "boxed size on a closed File: #{e.class} #{e.message}"
+end
 puts "stat after close names the #{s.ino == old_ino ? 'old' : 'new'} file, size #{s.size}"
 %w[stat size mtime chmod].each do |m|
   begin

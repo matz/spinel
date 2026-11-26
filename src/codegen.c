@@ -13238,15 +13238,20 @@ static TyKind scope_param_type(Scope *s, int i) {
   return (p && p->type != TY_UNKNOWN) ? p->type : TY_POLY;
 }
 
+/* The C type of initialize's parameter i in each constructor's signature
+   (sp_X_new, sp_X_new_noinit, sp_X_new_blk, prototypes and definitions), as
+   initialize's own signature declares it: an oint slot included, so a
+   nilable Integer or Float parameter is one type in all of them. */
+static void emit_ctor_param_ctype(Compiler *c, Scope *s, int i, Buf *b) {
+  LocalVar *pl = scope_local(s, s->pnames[i]);
+  if (pl && pl->type != TY_UNKNOWN) emit_slot_ctype(c, pl, b); else emit_ctype(c, scope_param_type(s, i), b);
+}
 static void emit_ctor_params(Compiler *c, int init, int init_has_blk, Buf *b) {
   if (init >= 0 && (c->scopes[init].nparams > 0 || init_has_blk)) {
     Scope *s = &c->scopes[init];
     for (int i = 0; i < s->nparams; i++) {
       if (i) buf_puts(b, ", ");
-      TyKind pt = scope_param_type(s, i);
-      LocalVar *pl = scope_local(s, s->pnames[i]);
-      /* as initialize's own signature declares it (an oint slot included) */
-      if (pl && pl->type != TY_UNKNOWN) emit_slot_ctype(c, pl, b); else emit_ctype(c, pt, b);
+      emit_ctor_param_ctype(c, s, i, b);
       buf_printf(b, " lv_%s", s->pnames[i]);
     }
     if (init_has_blk) {
@@ -13810,7 +13815,7 @@ void emit_class_new(Compiler *c, ClassInfo *ci, Buf *b) {
   Scope *s = &c->scopes[init], *pf = &c->scopes[init_pf];
   buf_printf(b, "static sp_%s *sp_%s_new_blk(", ci->c_name, ci->c_name);
   for (int i = 0; i < s->nparams; i++) {
-    emit_ctype(c, scope_param_type(s, i), b);
+    emit_ctor_param_ctype(c, s, i, b);
     buf_printf(b, " lv_%s, ", s->pnames[i]);
   }
   buf_printf(b, "sp_Proc *_sp_blk) {\n  sp_%s *self = sp_%s_new_noinit(", ci->c_name, ci->c_name);
@@ -13826,7 +13831,10 @@ void emit_class_new(Compiler *c, ClassInfo *ci, Buf *b) {
     TyKind qt = (q && q->type != TY_UNKNOWN) ? q->type : TY_POLY;
     char ln[128]; snprintf(ln, sizeof ln, "lv_%s", s->pnames[i]);
     buf_puts(b, ", ");
-    if (qt == TY_POLY && pt != TY_POLY) emit_boxed_text(c, pt, ln, b);
+    /* (an oint slot, emit_ctor_param_ctype's, boxes with its nil) */
+    if (qt == TY_POLY && pt != TY_POLY && p && slot_is_oint(p))
+      buf_printf(b, "%s(%s)", pt == TY_FLOAT ? "sp_box_ofloat" : "sp_box_oint", ln);
+    else if (qt == TY_POLY && pt != TY_POLY) emit_boxed_text(c, pt, ln, b);
     else if (pt == TY_POLY && qt != TY_POLY) emit_unbox_text(c, qt, ln, b);
     else buf_puts(b, ln);
   }
@@ -13834,7 +13842,7 @@ void emit_class_new(Compiler *c, ClassInfo *ci, Buf *b) {
   buf_printf(b, "static sp_%s *sp_%s_new(", ci->c_name, ci->c_name);
   for (int i = 0; i < s->nparams; i++) {
     if (i) buf_puts(b, ", ");
-    emit_ctype(c, scope_param_type(s, i), b);
+    emit_ctor_param_ctype(c, s, i, b);
     buf_printf(b, " lv_%s", s->pnames[i]);
   }
   if (s->nparams == 0) buf_puts(b, "void");
@@ -25279,10 +25287,7 @@ char *codegen_program(const NodeTable *nt) {
         Scope *s = &c->scopes[scust];
         for (int m = 0; m < s->nparams; m++) {
           if (m) buf_puts(&b, ", ");
-          TyKind pm = scope_param_type(s, m);
-          LocalVar *pl = scope_local(s, s->pnames[m]);
-          /* as emit_ctor_params declares it (an oint slot included) */
-          if (pl && pl->type != TY_UNKNOWN) emit_slot_ctype(c, pl, &b); else emit_ctype(c, pm, &b);
+          emit_ctor_param_ctype(c, s, m, &b);
         }
         if (s->blk_param && s->blk_param[0] && !s->yields) buf_puts(&b, s->nparams > 0 ? ", sp_Proc *" : "sp_Proc *");
         else if (s->nparams == 0) buf_puts(&b, "void");
@@ -25304,10 +25309,7 @@ char *codegen_program(const NodeTable *nt) {
         Scope *s = &c->scopes[init];
         for (int m = 0; m < s->nparams; m++) {
           if (m) buf_puts(&b, ", ");
-          TyKind pm = scope_param_type(s, m);
-          LocalVar *pl = scope_local(s, s->pnames[m]);
-          /* as emit_ctor_params declares it (an oint slot included) */
-          if (pl && pl->type != TY_UNKNOWN) emit_slot_ctype(c, pl, &b); else emit_ctype(c, pm, &b);
+          emit_ctor_param_ctype(c, s, m, &b);
         }
         if (p_has_blk) { if (s->nparams > 0) buf_puts(&b, ", "); buf_puts(&b, "sp_Proc *"); }
         buf_puts(&b, ");\n");
@@ -25323,13 +25325,13 @@ char *codegen_program(const NodeTable *nt) {
         Scope *s = &c->scopes[init];
         for (int m = 0; m < s->nparams; m++) {
           if (m) buf_puts(&b, ", ");
-          emit_ctype(c, scope_param_type(s, m), &b);
+          emit_ctor_param_ctype(c, s, m, &b);
         }
         if (s->nparams == 0) buf_puts(&b, "void");
         buf_puts(&b, ");\n");
         buf_printf(&b, "static sp_%s *sp_%s_new_blk(", ci->c_name, ci->c_name);
         for (int m = 0; m < s->nparams; m++) {
-          emit_ctype(c, scope_param_type(s, m), &b);
+          emit_ctor_param_ctype(c, s, m, &b);
           buf_puts(&b, ", ");
         }
         buf_puts(&b, "sp_Proc *);\n");

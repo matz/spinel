@@ -323,7 +323,7 @@ const char*sp_str_delete_suffix(const char*s,const char*p){SP_GC_ROOT_STR(s);SP_
    length-tracked heap string so any interior NUL survives. (A frozen
    literal with an embedded NUL is still truncated at the C level -- that
    needs length-tracked literals, out of scope.) */
-const char*sp_str_strip(const char*s){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("strip");size_t len=sp_str_byte_len(s);size_t a=0;while(a<len&&(isspace((unsigned char)s[a])||s[a]=='\0'))a++;size_t b=len;while(b>a&&(isspace((unsigned char)s[b-1])||s[b-1]=='\0'))b--;size_t n=b-a;char*r=sp_str_alloc(n);memcpy(r,s+a,n);r[n]=0;return sp_str_bin_like(s,r);}
+const char*sp_str_strip(const char*s){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("strip");size_t len=sp_str_byte_len(s);size_t a=0;while(a<len&&(isspace((unsigned char)s[a])||s[a]=='\0'))a++;sp_str_lstrip_check(s,a,len);sp_str_rstrip_check(s);size_t b=len;while(b>a&&(isspace((unsigned char)s[b-1])||s[b-1]=='\0'))b--;size_t n=b-a;char*r=sp_str_alloc(n);memcpy(r,s+a,n);r[n]=0;return sp_str_bin_like(s,r);}
 const char*sp_str_chomp(const char*s){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("chomp");size_t l=sp_str_byte_len(s);if(l>=2&&s[l-2]=='\r'&&s[l-1]=='\n')l-=2;else if(l>0&&s[l-1]=='\n')l--;else if(l>0&&s[l-1]=='\r')l--;char*r=sp_str_alloc_raw(l+1);memcpy(r,s,l);r[l]=0;sp_str_set_len(r,l);return sp_str_bin_like(s,r);}
 /* Issue #881: `"hello!".chomp("!")` strips the explicit separator.
    Empty sep strips any trailing newlines (CRuby paragraph mode).

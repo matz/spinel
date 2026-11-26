@@ -1,0 +1,26 @@
+strip right edge: Encoding::CompatibilityError invalid byte sequence in UTF-8
+strip left edge: ArgumentError invalid byte sequence in UTF-8
+strip middle: Encoding::CompatibilityError invalid byte sequence in UTF-8
+strip only invalid: ArgumentError invalid byte sequence in UTF-8
+rstrip right edge: Encoding::CompatibilityError invalid byte sequence in UTF-8
+rstrip left edge: Encoding::CompatibilityError invalid byte sequence in UTF-8
+rstrip truncated char: Encoding::CompatibilityError invalid byte sequence in UTF-8
+lstrip left edge: ArgumentError invalid byte sequence in UTF-8
+lstrip later byte: "x\x81 "
+lstrip after a char: "ax\x81"
+strip!: Encoding::CompatibilityError invalid byte sequence in UTF-8
+" x\x81 "
+rstrip!: Encoding::CompatibilityError invalid byte sequence in UTF-8
+lstrip!: ArgumentError invalid byte sequence in UTF-8
+strip chars: Encoding::CompatibilityError invalid byte sequence in UTF-8
+strip chars left: ArgumentError invalid byte sequence in UTF-8
+lstrip chars stripped first: ArgumentError invalid byte sequence in UTF-8
+lstrip chars later byte: "x\x81"
+boxed: Encoding::CompatibilityError invalid byte sequence in UTF-8
+boxed: "ok"
+built rstrip: Encoding::CompatibilityError invalid byte sequence in UTF-8
+built lstrip: "A\xFF "
+binary strip: "x\x81"
+binary rstrip: "x\x81"
+binary strip chars: "x\x81"
+valid multibyte: [227, 129, 130]

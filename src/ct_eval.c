@@ -293,6 +293,13 @@ static int ct_eval_call(const NodeTable *nt, CtEnv *e, int call, CtVal *out) {
     out->mv.frozen = is_class_name_name(name);
     return 1;
   }
+  /* Kernel#Array of an Array is that Array (ActionCable's `Array(identifiers).each`) */
+  if (name && argc == 1 && !strcmp(name, "Array") && nt_ref(nt, call, "block") < 0 && ct_self_core(nt, e, call, name)) {
+    memset(out, 0, sizeof *out);
+    if (!ct_value(nt, e, av[0], &out->mv) || out->mv.k != MV_ARR) return 0;
+    ct_env_ran(e, "Kernel", name);
+    return 1;
+  }
   if (!name || rv < 0 || nt_kind(nt, rv) == NK_SelfNode || argc < 0 || nt_ref(nt, call, "block") >= 0) return 0;
   if (is_new_name(name)) return ct_class_new(nt, e, call, out);
   Mv r, a0;
@@ -357,7 +364,7 @@ int ct_eval(const NodeTable *nt, CtEnv *e, int node, CtVal *out) {
     return 1;
   case NK_LocalVariableReadNode: {
     const char *nm = nt_str(nt, node, "name");
-    CtVal *v = nm && nt_int(nt, node, "depth", 0) == 0 ? ct_lookup(e, nm) : NULL;
+    CtVal *v = nm && nt_int(nt, node, "depth", 0) <= e->blk ? ct_lookup(e, nm) : NULL;
     if (!v) return 0;
     *out = *v;
     return 1;
@@ -698,6 +705,79 @@ static int ct_exec_call(const NodeTable *nt, CtEnv *e, int call) {
       }
       return ok;
     }
+  }
+  /* `a.each { |x| ... }` (or each_with_index) over an Array the frame knows:
+     the block's statements run per element, each a call followed here; one
+     not followed undoes the loop, which is then left as written */
+  if (e->self_name && name && (!strcmp(name, "each") || !strcmp(name, "each_with_index")) && argc == 0 &&
+      rv >= 0 && blk >= 0 && nt_kind(nt, blk) == NK_BlockNode) {
+    int wi = name[4] != 0, bp = nt_ref(nt, blk, "parameters"), ps = bp >= 0 ? nt_ref(nt, bp, "parameters") : -1;
+    int rn = 0, sn = 0, on = 0;
+    const int *req = ps >= 0 ? nt_arr(nt, ps, "requireds", &rn) : NULL;
+    int bb = nt_ref(nt, blk, "body");
+    if (bb >= 0 && nt_kind(nt, bb) != NK_StatementsNode) return 0;   /* (a rescue or ensure in the block) */
+    const int *body = bb >= 0 ? nt_arr(nt, bb, "body", &sn) : NULL;
+    if (ps >= 0) nt_arr(nt, ps, "optionals", &on);
+    Mv arr;
+    int kn = 0, ln = 0;
+    if (ps >= 0) nt_arr(nt, ps, "keywords", &kn);
+    if (bp >= 0) nt_arr(nt, bp, "locals", &ln);   /* (`|n; x|`: a block-local x, nil in the block) */
+    if (rn != 1 + wi || on || kn || ln || nt_ref(nt, ps, "rest") >= 0 || nt_ref(nt, ps, "block") >= 0 ||
+        nt_ref(nt, ps, "keyword_rest") >= 0 || !ct_value(nt, e, rv, &arr) || arr.k != MV_ARR || arr.n > 64) return 0;
+    /* (a program's own Array#each or each_with_index would change what the loop does: ct_macro_core_changed) */
+    ct_env_ran(e, "Array", "each");
+    if (wi) ct_env_ran(e, "Array", name);
+    const char *pn[2];
+    for (int k = 0; k < rn; k++) {
+      pn[k] = nt_kind(nt, req[k]) == NK_RequiredParameterNode ? nt_str(nt, req[k], "name") : NULL;
+      if (!pn[k]) return 0;
+    }
+    /* (a frame local the block's parameter shadows is as it was after the loop, its writes too) */
+    CtLocal sv[2]; int had[2] = {0, 0};
+    for (int k = 0; k < rn; k++) { CtLocal *o = ct_local(e, pn[k]); if (o) { sv[k] = *o; had[k] = 1; } }
+    /* (and self's instance variables, which a macro the block calls may write, where the loop is undone) */
+    int niv0 = e->nivar;
+    CtLocal *iv0 = niv0 ? malloc(sizeof *iv0 * (size_t)niv0) : NULL;
+    if (niv0 && !iv0) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    if (niv0) memcpy(iv0, e->ivar, sizeof *iv0 * (size_t)niv0);
+    int nfx0 = e->nfx, ok = 1;
+    e->blk++;
+    for (int i = 0; i < arr.n && ok; i++) {
+      CtVal v; memset(&v, 0, sizeof v);
+      v.mv = arr.a[i];
+      ok = ct_env_set(e, pn[0], v);
+      if (ok && wi) { v.mv = mv_nil(); v.mv.k = MV_INT; v.mv.i = i; ok = ct_env_set(e, pn[1], v); }
+      for (int j = 0; j < sn && ok; j++) ok = nt_kind(nt, body[j]) == NK_CallNode && ct_exec_call(nt, e, body[j]);
+    }
+    e->blk--;
+    /* (attr_* only: a define_method's block would read the loop variable after the loop) */
+    for (int i = nfx0; ok && i < e->nfx; i++) ok = e->fx[i].k == CT_FX_ATTR;
+    for (int k = 0; k < rn && arr.n > 0; k++) {
+      CtLocal *o = ct_local(e, pn[k]);
+      if (!o) continue;
+      if (had[k]) { o->v = sv[k].v; o->wr = sv[k].wr; o->nw = sv[k].nw; continue; }
+      /* (a name no local had before the loop is the block's alone: unbound after it) */
+      int at = (int)(o - e->loc);
+      free(o->name);
+      memmove(&e->loc[at], &e->loc[at + 1], sizeof *e->loc * (size_t)(e->nloc - at - 1));
+      e->nloc--;
+    }
+    if (!ok) {
+      while (e->nfx > nfx0) ct_fx_clear(&e->fx[--e->nfx]);
+      /* (a name the undone loop relied on was relied on before nfx0 effects: ct_relied_redefined reads that many) */
+      for (int i = 0; i < e->nrelied; i++) if (e->relied[i].after > nfx0) e->relied[i].after = nfx0;
+      /* (the loop left as written runs its calls at run time, which may write any of self's
+         instance variables: none is known after it) */
+      while (e->nivar > niv0) free(e->ivar[--e->nivar].name);
+      for (int i = 0; i < niv0; i++) {
+        /* (the whole value: a class's or a constant's tag stays readable without its mv) */
+        memset(&e->ivar[i].v, 0, sizeof e->ivar[i].v);
+        e->ivar[i].v.mv = mv_undef(); e->ivar[i].wr = iv0[i].wr; e->ivar[i].nw = iv0[i].nw;
+      }
+      e->ivar_open = 1;
+    }
+    free(iv0);
+    return ok;
   }
   /* attr_* of self or of its singleton class, by names the frame computes */
   if (e->self_name && name && argc > 0 && blk < 0 && (is_attr_reader_family(name) || is_attr_writer_family(name))) {

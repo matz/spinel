@@ -122,6 +122,9 @@ typedef struct {
   CtLocal *ivar; int nivar, civar, ivar_open;
   /* a `return` ran in the frame running (returning), with this value */
   CtVal ret; int returning;
+  /* how many loop blocks the run is inside: a local read that many scopes
+     out is the frame's (ct_exec_call's each) */
+  int blk;
 } CtEnv;
 
 /* the value of expression `node`, 1 when it is known */

@@ -4091,6 +4091,8 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
         (nt_argv_has_splat(nt, argv, argc) || nt_argv_kwh(nt, argv, argc) >= 0) &&
         emit_struct_new_call(c, id, cid, argc, argv, b))
       return 1;
+    /* (a yielding initialize takes the block as `C.new` hands it) */
+    if (emit_ctor_yield_inline(c, id, cid, b) || emit_ctor_new_with_proc(c, id, cid, b)) return 1;
     buf_printf(b, "sp_%s_new(", c->classes[cid].c_name);
     /* the arguments converted to initialize's parameter types, as
        `V.new(...)` does: an `x.to_i` narrowed to sp_int passed raw into a

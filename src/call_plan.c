@@ -11093,6 +11093,39 @@ static const char *cplan_body_definer_gap(Compiler *c, int id, char *buf, size_t
     snprintf(buf, cap, "Module#%s in a method body with a block that %s is not supported (see docs/limitations.md)", nm, envgap);
     return buf;
   }
+  /* a definer in a method another definer's block made (a class_attribute writer that redefines its reader), which
+     the record holds as no version: it is registered from the start, so a block reading the outer block's locals
+     has no environment, and a name the class answers already would be replaced for the class and its subclasses
+     alike before any run */
+  const char *mk = !def && host < 0 && hs->def_node >= 0 && nt_kind(nt, hs->def_node) == NK_CallNode ? nt_str(nt, hs->def_node, "name") : NULL;
+  if (run && lit && (dm || dsm) && mk && (is_define_method_name(mk) || is_define_singleton_method_name(mk)) &&
+      an_name_reached(c, mn, av[0])) {
+    /* (a method of the name some other definer or def makes on that side: a copy of this call, the macro
+       expansion's, stands at the same place in the source) */
+    /* (self is the class in a class method: define_method makes an instance method there, define_singleton_method a
+       class method; in an instance method's body a define_singleton_method is the object's, not scanned) */
+    int scan = dm || hs->is_cmethod, other = 0;
+    long long fl = nt_int(nt, id, "node_file", 0), ln = nt_int(nt, id, "node_line", 0), co = nt_int(nt, id, "node_col", -1);
+    for (int s = 1; scan && !other && s < c->nscopes; s++) {
+      const Scope *o = &c->scopes[s];
+      int dn = o->def_node, own = 0;
+      /* (the class's own method of the name, or one it inherits from a superclass) */
+      for (int k = hs->class_id, g = 0; k >= 0 && k < c->nclasses && !own && g < 64; k = c->classes[k].parent, g++)
+        own = o->class_id == k;
+      other = own && o->name && sp_streq(o->name, mn) && o->is_cmethod == (dsm ? 1 : 0) &&
+              !o->is_proc_form && dn >= 0 && (nt_int(nt, dn, "node_file", 0) != fl || nt_int(nt, dn, "node_line", 0) != ln ||
+              nt_int(nt, dn, "node_col", -1) != co);
+    }
+    if (envgap)
+      snprintf(buf, cap, "Module#%s in a method body with a block that %s is not supported (see docs/limitations.md)", nm, envgap);
+    else if (other)
+      snprintf(buf, cap, "Module#%s in a method body is supported only for a method the class does not answer yet, "
+               "where the load record does not order it against the calls: it is defined from the start, not when that "
+               "method runs (see docs/limitations.md)", nm);
+    else
+      return NULL;
+    return buf;
+  }
   char b[ELAB_FORM_NAME_CAP];
   const char *vn, *why = NULL;
   for (int k = 0; run && host >= 0 && !why && (vn = elab_call_form_name(nt, id, k, b, sizeof b, NULL)); k++)

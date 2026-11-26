@@ -7382,7 +7382,13 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
          the write and the read then share. Without this the value form
          declined outright, which is what `v[s.tag] += 1` as a block's last
          expression hit (#3417). */
-      int cheap = idx_opw_node_is_cheap(nt, ir) && idx_opw_node_is_cheap(nt, iav[0]);
+      /* (and a right-hand side that runs code can rebind the variable the
+         receiver or the key reads, `p(a[2] += (a = [7]; 2))`: the read-back
+         then read the new object's slot, so the two are held as for a call
+         receiver, #11506) */
+      int ov = nt_ref(nt, id, "value");
+      int cheap = idx_opw_node_is_cheap(nt, ir) && idx_opw_node_is_cheap(nt, iav[0]) &&
+                  !(ov >= 0 && subtree_has_side_effect(c, ov));
       /* a boxed receiver's store answers the stored value into a temp of its
          own (emit_index_opw_value_into): a String's slot read back after the
          splice is one character of it */

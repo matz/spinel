@@ -3324,7 +3324,11 @@ static int sp_flatten_call_as(int id, pm_call_node_t *n) {
 }
 
 /* ---- require_relative resolution ---- */
-static char *read_file(const char *path) {
+/* read_file, with the byte length in *lenp (a NUL byte in the text, as in
+   a data section, is part of it) */
+static char *read_file_len(const char *path, size_t *lenp);
+static char *read_file(const char *path) { return read_file_len(path, NULL); }
+static char *read_file_len(const char *path, size_t *lenp) {
   FILE *f = fopen(path, "rb");
   if (!f) return NULL;
   if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return NULL; }
@@ -3342,6 +3346,7 @@ static char *read_file(const char *path) {
   if (nread != (size_t)len) { free(buf); fclose(f); return NULL; }
   buf[nread] = '\0';
   fclose(f);
+  if (lenp) *lenp = nread;
   return buf;
 }
 
@@ -7017,6 +7022,86 @@ static void sp_graph_scan_sites(SpLoadGraph *g, int f, const char *path, SpNames
   sp_names_of(facts, &r->src.parser, r->src.root, pre);
 }
 
+/* DATA, in an entry file with an `__END__` line whose code names it: the
+   code is kept and the data section becomes `BEGIN { require "stringio";
+   DATA = StringIO.new(<the whole file>); DATA.pos = <after __END__> }`, so
+   DATA reads the data, its pos counts from the file's start and rewind
+   reads the program, as CRuby's File does. Another text is returned as
+   it is. */
+typedef struct { const pm_parser_t *p; int named; } SpDataRef;
+/* a read of the constant DATA, bare or `::DATA` */
+/* `::DATA`, `Object::DATA` or `::Object::DATA` */
+static int sp_data_path_is(const pm_parser_t *p, const pm_node_t *node) {
+  const pm_constant_path_node_t *cp = (const pm_constant_path_node_t *)node;
+  if (!sp_pre_pm_id_is(p, cp->name, "DATA")) return 0;
+  const pm_node_t *up = cp->parent;
+  if (!up) return 1;
+  if (PM_NODE_TYPE(up) == PM_CONSTANT_READ_NODE) return sp_pre_pm_id_is(p, ((const pm_constant_read_node_t *)up)->name, "Object");
+  return PM_NODE_TYPE(up) == PM_CONSTANT_PATH_NODE && !((const pm_constant_path_node_t *)up)->parent &&
+         sp_pre_pm_id_is(p, ((const pm_constant_path_node_t *)up)->name, "Object");
+}
+static bool sp_data_ref_visit(const pm_node_t *node, void *data) {
+  SpDataRef *r = data;
+  if (r->named) return false;
+  pm_node_type_t t = PM_NODE_TYPE(node);
+  if (t == PM_CONSTANT_READ_NODE)
+    r->named = sp_pre_pm_id_is(r->p, ((const pm_constant_read_node_t *)node)->name, "DATA");
+  /* (`DATA ||= x`, `&&=` and `+=` read it first) */
+  else if (t == PM_CONSTANT_OR_WRITE_NODE || t == PM_CONSTANT_AND_WRITE_NODE || t == PM_CONSTANT_OPERATOR_WRITE_NODE)
+    r->named = sp_pre_pm_id_is(r->p, t == PM_CONSTANT_OR_WRITE_NODE ? ((const pm_constant_or_write_node_t *)node)->name
+                                   : t == PM_CONSTANT_AND_WRITE_NODE ? ((const pm_constant_and_write_node_t *)node)->name
+                                   : ((const pm_constant_operator_write_node_t *)node)->name, "DATA");
+  else if (t == PM_CONSTANT_PATH_NODE) r->named = sp_data_path_is(r->p, node);
+  /* (a plain `::DATA = x` writes it: the receiver and the value are read) */
+  else if (t == PM_CONSTANT_PATH_WRITE_NODE) {
+    const pm_constant_path_node_t *tg = ((const pm_constant_path_write_node_t *)node)->target;
+    if (tg && tg->parent) pm_visit_node(tg->parent, sp_data_ref_visit, r);
+    if (!r->named) pm_visit_node(((const pm_constant_path_write_node_t *)node)->value, sp_data_ref_visit, r);
+    return false;
+  }
+  return !r->named;
+}
+static char *sp_entry_data_prelude(char *text, size_t n, const char *path) {
+  if (!text || (strncmp(text, "__END__", 7) && !strstr(text, "\n__END__"))) return text;
+  SpSrcFile t;
+  sp_src_file_parse(&t, text, path);
+  /* (a file that does not parse is left to the parse that reports it) */
+  if (t.parser.error_list.size) { sp_src_file_free(&t); return text; }
+  const uint8_t *d = t.parser.data_loc.start;
+  size_t code = d ? (size_t)(d - t.parser.start) : 0, ins = code;
+  /* (ahead of the program's first BEGIN, on its line: CRuby's DATA is set
+     before any BEGIN block runs) */
+  pm_statements_node_t *top = t.root ? ((pm_program_node_t *)t.root)->statements : NULL;
+  for (size_t i = 0; d && top && i < top->body.size; i++)
+    if (PM_NODE_TYPE(top->body.nodes[i]) == PM_PRE_EXECUTION_NODE) {
+      ins = (size_t)(top->body.nodes[i]->location.start - t.parser.start);
+      break;
+    }
+  /* (the code's own reads of DATA, a BEGIN block's among them: a comment
+     or a String that spells it is none) */
+  SpDataRef dr = { &t.parser, 0 };
+  if (d && t.root) pm_visit_node(t.root, sp_data_ref_visit, &dr);
+  sp_src_file_free(&t);
+  if (!dr.named) return text;
+  const char *nl = strchr(text + code, '\n');
+  size_t pos = nl ? (size_t)(nl + 1 - text) : strlen(text);
+  char *out = malloc(code + n * 4 + 128);
+  if (!out) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  size_t o = (size_t)sprintf(out, "%.*sBEGIN { require \"stringio\"; DATA = StringIO.new(\"", (int)ins, text);
+  for (size_t i = 0; i < n; i++) {
+    unsigned char ch = (unsigned char)text[i];
+    if (ch == '"' || ch == '\\' || ch == '#') { out[o++] = '\\'; out[o++] = (char)ch; }
+    else if (ch < 0x20 || ch >= 0x7f) o += (size_t)sprintf(out + o, "\\x%02X", ch);
+    else out[o++] = (char)ch;
+  }
+  o += (size_t)sprintf(out + o, "\"); DATA.pos = %zu }", pos);
+  if (ins < code) o += (size_t)sprintf(out + o, "; %.*s", (int)(code - ins), text + ins);
+  else out[o++] = '\n';
+  out[o] = 0;
+  free(text);
+  return out;
+}
+
 /* file `f` of graph `g` read and parsed, before any
    file is flattened: its requires resolved (each target file a file of the
    graph, read in its turn) and the names it uses added to `facts`. 0 when it
@@ -7027,7 +7112,9 @@ static int sp_graph_read(SpLoadGraph *g, int f, const char *source_file, SpNames
      tier the require that found the file gave it, and beside the path the
      require found it at: a package file that is a symlink has its
      declarations beside the link) */
-  char *text = sp_lib_text_appended(read_file(path), f ? g->found[f] : source_file, sp_load_tier(g, f));
+  size_t tlen = 0;
+  char *text = sp_lib_text_appended(read_file_len(path, &tlen), f ? g->found[f] : source_file, sp_load_tier(g, f));
+  if (!f) text = sp_entry_data_prelude(text, tlen, path);
   if (!text) { fprintf(stderr, "spinel_parse: cannot open '%s'\n", path); return 0; }
   SpGraphFile *r = sp_graph_rec(g, f);
   r->text = text;

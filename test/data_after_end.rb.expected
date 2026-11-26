@@ -1,0 +1,13 @@
+3
+"2 \"q\" \\"
+true
+"first line"
+"café \#{x} \"y\" \\z"
+"\xFF\xFE"
+true
+"first line\ncafé \#{x} \"y\" \\z\n\xFF\xFE\n"
+0
+"# DATA reads the text after the __END__ line; its pos counts from the start\n"
+1
+true
+[10, 255, 254, 10]

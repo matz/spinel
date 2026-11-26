@@ -4304,6 +4304,12 @@ int cplan_typed_to_ary(Compiler *c, TyKind t, int at, int op, int *boxed) {
   return cplan_typed_to_ary_held(c, t, at, op, boxed, NULL);
 }
 /* See call_plan.h. */
+int cplan_masgn_takes_apart(Compiler *c, int mw, int value, TyKind t) {
+  if (ty_is_array(t) || ty_is_obj_array(t) || t == TY_UNKNOWN || t == TY_POLY) return 1;
+  int boxed = 0;
+  return cplan_typed_to_ary(c, t, mw, value, &boxed) >= 0 || boxed;
+}
+/* See call_plan.h. */
 int cplan_index_writer(Compiler *c, int cls, int *cdef) {
   int dc = -1;
   mtab_enter(c);   /* (the plan's own read: the class's `[]=` an index target stores through, as the plan states it) */
@@ -10050,6 +10056,11 @@ static const char *feature_limit(Compiler *c, int id, int *stop, int *lx, char *
              "name the attributes (see docs/limitations.md)", name);
     return buf;
   }
+  if (nt_int(nt, id, "attr_name", 0) && cplan_reachable(c, id)) {
+    snprintf(buf, cap, "%s with a non-literal name is not supported; use literal Symbols or Strings "
+             "(see docs/limitations.md)", name);
+    return buf;
+  }
   if (nt_int(nt, id, "define_method_name", 0) == 2 && cplan_reachable(c, id))
     return "Module#define_method with `&` of a block or Proc that is not a literal (`&block`, a parameter, "
            "a constant, a call's result), or with a Proc or Method passed as its body, is not supported: "
@@ -11984,6 +11995,7 @@ static void cpoly_defaults0(Compiler *c, int id, const char *name, const PolySpe
   if (sp_streq(name, "close")) cpoly_family(p, cap, PB_N_IO_CLOSE);
   if (sp_streq(name, "__enum_to_a")) cpoly_family(p, cap, PB_N_ENUM_TO_A);
   if (sp_streq(name, "signal") || sp_streq(name, "broadcast")) cpoly_family(p, cap, PB_N_CONDVAR);
+  if (blockless && (sp_streq(name, "name") || sp_streq(name, "report_on_exception"))) cpoly_family(p, cap, PB_N_THREAD_READER);
 }
 
 /* How a zero-argument dispatch holds and keys its receiver, and the type

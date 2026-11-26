@@ -31,6 +31,10 @@ is a user guarantee.
   `SPINEL_WORKERS=N`, and `SPINEL_WORKERS=2` runs every thread on one
   helper. Give such a program `SPINEL_WORKERS=N+1` for N threads of work,
   or leave the variable unset.
+  A new thread, whether main or another thread starts it, is placed on the
+  helper with the fewest threads, and a helper is added for it while the
+  count allows. It stays on the worker it first ran on, not the one that
+  started it.
 - **Real parallelism, no GVL.** Two threads run Ruby code on two cores
   simultaneously. There is no implicit per-object lock, so unsynchronized
   shared mutation is a data race (see [By design](#by-design) below).
@@ -44,7 +48,7 @@ is a user guarantee.
   The same is true of a worker inside an `ffi_func` declared `blocking: true`
   (see [FFI.md](FFI.md)). The green threads that share that worker wait
   while the call runs C: a thread stays for life on the worker it first ran
-  on, and no other worker runs it. A callback from the call that sleeps or
+  on (not the one that started it), and no other worker runs it. A callback from the call that sleeps or
   waits on I/O parks its thread and lets them run meanwhile. A call declared
   `offload: true` instead runs on an offload thread, and the caller waits as
   for I/O, leaving its worker to the others (Spinel's own; the C function runs

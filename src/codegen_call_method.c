@@ -1615,6 +1615,10 @@ int emit_call_callable_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
        callable address. Invoking it jumped through NULL; the poly-slot and
        first-class routes decline with NoMethodError, so decline the same way
        here instead of dereferencing it. */
+    /* a Method value that holds nil (`super_method` with no super): the
+       call is nil's, which has no method of the name (`===` is nil's own) */
+    if (!sp_streq(name, "==="))
+      buf_printf(b, "if (!_t%d) sp_raise_cls(\"NoMethodError\", \"undefined method '%s' for nil\"); ", tr, name);
     buf_printf(b, "if (!_t%d->fn) sp_raise_cls(\"NoMethodError\","
                   " sp_sprintf(\"undefined method '%%s' for an instance of Object\","
                   " _t%d->name ? _t%d->name : \"?\")); ", tr, tr, tr);
@@ -3024,8 +3028,12 @@ int emit_call_method_obj_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       continue;
     }
     buf_printf(b, "{ _t%d = ", tr);
-    if (!emit_method_obj_target(c, id, b, nt, name, recv, argc, argv,
-                                to[i] == CPLAN_ARM_NONE ? -1 : cplan_capture_arm(c, id, to[i]), captured_name)) {
+    /* (a yielding version is bound through its proc form, as method_obj_target_mi binds one, where the
+       form runs the version's own def: a copy an include makes, not a later redefinition's clone) */
+    int arm = to[i] == CPLAN_ARM_NONE ? -1 : cplan_capture_arm(c, id, to[i]), arm_pf = scope_proc_form_of(c, arm);
+    int arm_src = arm_pf >= 0 ? proc_form_source(c, arm_pf) : -1;
+    if (arm_src < 0 || c->scopes[arm_src].def_node != c->scopes[arm].def_node) arm_pf = -1;
+    if (!emit_method_obj_target(c, id, b, nt, name, recv, argc, argv, arm_pf >= 0 ? arm_pf : arm, captured_name)) {
       view_unwind(mark);
       buf_erase(b, start, b->len - start);
       return 0;
@@ -3114,8 +3122,10 @@ int emit_call_poly_callable_arms(Compiler *c, int id, Buf *b, const NodeTable *n
                       " : _t%d.tag == SP_TAG_ENCODING ? sp_box_str_new(sp_str_uminus_val(_t%d.v.s))"
                       " : _t%d.tag == SP_TAG_SYM ? sp_box_str_new(sp_sym_name_str((sp_sym)_t%d.v.i))"   /* (a Symbol's name: its one frozen String, no fstring) */
                       " : (_t%d.tag == SP_TAG_OBJ && _t%d.v.p && (_t%d.cls_id == SP_BUILTIN_EXCEPTION || sp_is_exc_subclass_cls(_t%d.cls_id)))"
-                      " ? sp_exc_name_acc((sp_Exception *)_t%d.v.p)",
-                   t, t, cls_arm, t, t, t, t, t, t, t, t, t);
+                      " ? sp_exc_name_acc((sp_Exception *)_t%d.v.p)"
+                      " : (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_THREAD && _t%d.v.p)"   /* a Thread's name or nil */
+                      " ? sp_Thread_get_name((sp_thread *)_t%d.v.p)",
+                   t, t, cls_arm, t, t, t, t, t, t, t, t, t, t, t, t, t);
       }
       else if (sp_streq(name, "owner"))
         buf_printf(b, "sp_box_class(sp_bm_owner((sp_BoundMethod *)_t%d.v.p))", t);

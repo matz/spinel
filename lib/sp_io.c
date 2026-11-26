@@ -1120,6 +1120,35 @@ void sp_io_check_writable(sp_File *f) {
   if (!sp_io_mode_allows(f, 1))
     sp_raise_cls("IOError", (&("\xff" "not opened for writing")[1]));
 }
+/* The descriptor, for a call made on it outside this file (File#stat,
+   #chmod, #chown, #size): a use of the handle is taken, so a close on
+   another thread cannot release the descriptor -- and the next open be
+   given its number -- before the call is made. sp_io_fd_unuse drops the
+   use and keeps the call's errno. */
+int sp_io_fd_use(sp_File *f) {
+  SP_IO_OPEN(f);
+  return fileno(sp_io_use(f));
+}
+void sp_io_fd_unuse(sp_File *f) {
+  int e = errno;
+  sp_io_unuse(f);
+  errno = e;
+}
+/* File#size: the buffered output written first, as CRuby flushes before it
+   asks; output that cannot be written raises as a write does. Only a
+   writable stream is checked: BSD stdio's fflush on a read-only stream
+   fails with EBADF, whatever the descriptor's own mode. */
+void sp_io_flush_for_size(sp_File *f) {
+  SP_IO_OPEN(f);
+  FILE *fp = sp_io_use(f);
+  int bad = fflush(fp) != 0 && sp_io_mode_allows(f, 1);
+  int e = bad ? (errno ? errno : EIO) : 0;
+  sp_io_unuse(f);
+  if (bad) {
+    errno = e;
+    sp_file_raise_errno("rb_sys_fail_on_write", f->path ? f->path : "");
+  }
+}
 void sp_io_check_readable(sp_File *f) {
   SP_IO_OPEN(f);
   if (!sp_io_mode_allows(f, 0))
@@ -2806,11 +2835,12 @@ sp_oint sp_sock_connect_nb(sp_File *f, const char *host, sp_int port, sp_bool ex
   errno = ce;
   if (rc == 0) return sp_oint_of(0);
   sp_sock_raise_if_unresolved("getaddrinfo");
-  if (errno == EINPROGRESS || errno == EALREADY) {
+  if (errno == EINPROGRESS) {
     if (!exc) return sp_oint_nil();
     sp_raise_cls("IO::EINPROGRESSWaitWritable", "operation in progress - connect(2) would block");
   }
-  if (errno == EISCONN) return sp_oint_of(0);
+  /* already connected is 0 only under exception: false, as in CRuby */
+  if (errno == EISCONN && !exc) return sp_oint_of(0);
   sp_sock_raise_errno_host_port("connect(2)", host, port);
 }
 /* connect_nonblock(sockaddr). The peer is already resolved into a packed
@@ -2848,14 +2878,15 @@ sp_oint sp_sock_connect_nb_sa(sp_File *f, const char *sa, sp_int salen, sp_bool 
   sp_io_nb_end(f, saved);
   errno = ce;
   if (rc == 0) return sp_oint_of(0);
-  if (errno == EINPROGRESS || errno == EALREADY) {
+  /* Only EINPROGRESS is the wait: a connect still in flight answers
+     EALREADY, which CRuby raises as Errno::EALREADY in both modes. */
+  if (errno == EINPROGRESS) {
     if (!exc) return sp_oint_nil();
     sp_raise_cls("IO::EINPROGRESSWaitWritable", "operation in progress - connect(2) would block");
   }
-  /* Already connected answers 0, the same as the two-argument form above and
-     the same as CRuby answers here -- measured on both, in both exception
-     modes, including a second connect to a different address. */
-  if (errno == EISCONN) return sp_oint_of(0);
+  /* Already connected answers 0 under exception: false and raises
+     Errno::EISCONN otherwise, as CRuby's sock_connect_nonblock does. */
+  if (errno == EISCONN && !exc) return sp_oint_of(0);
   sp_sock_raise_errno_sa("connect(2)", sa, salen);
   return sp_oint_of(-1);
 }

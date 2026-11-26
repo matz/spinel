@@ -713,7 +713,7 @@ int yield_target_cur(void);
 /* Where a literal block's `return` goes, recorded while the call holding
    the block is spliced (codegen_iter.c): enter when the splice makes the
    block current, leave with what enter answered when it is done. */
-typedef struct { const char *label, *var; TyKind rt; int ro, exc, ens, set; } BlockRetHome;
+typedef struct { const char *label, *var; TyKind rt; int ro, exc, ens, rsc, set; } BlockRetHome;
 BlockRetHome block_ret_home_enter(int block, int saved_block);
 /* The whole block context an inline runs its callee's body under: the block
    current and what its splice binds, the one level out, the forwarded proc
@@ -900,6 +900,7 @@ extern int g_expr_depth;
 extern int g_proc_toplevel_return;
 extern int g_exc_frame_depth;      /* live begin/rescue setjmp frames (see codegen_util.c) */
 extern int g_method_pr_exc_depth;
+extern int g_method_pr_rescue_depth;  /* g_rescue_save_depth there */
 extern int g_method_pr_ensure_depth;  /* g_ensure_depth at the return-funnel target (see codegen_util.c) */
 extern int g_loop_exc_base;
 extern int g_loop_rescue_base;
@@ -986,7 +987,7 @@ typedef struct { int lid; int has_retval; int exc_base; TyKind retv_ty; int resc
                     block was written in) is flagged 2 and taken there after the
                     ensure, through the funnel it was written under (#9511) */
                  int pr_track; const char *pr_label;
-                 int oret; const char *oret_label, *oret_var; TyKind oret_ty; int oret_exc, oret_ens; } EnsureCtx;
+                 int oret; const char *oret_label, *oret_var; TyKind oret_ty; int oret_exc, oret_ens, oret_rsc; } EnsureCtx;
 extern EnsureCtx g_ensure_stack[MAX_ENSURE_DEPTH];
 extern int       g_ensure_depth;
 void emit_redo_region_open(Buf *b, int label, int indent);
@@ -1009,6 +1010,9 @@ void emit_rescue_pops_to(Buf *b, int rescue_base);
 void emit_retry_unwind(Buf *b);
 /* The pops of a deferred return handed on to an enclosing ensure (codegen_stmt.c) */
 void emit_ensure_chain_pops(Buf *b, const EnsureCtx *outer);
+/* A deferred return leaving an ensure frame: handed to the method's enclosing ensure, else out through
+   the method's exit (codegen_stmt.c) */
+void emit_ensure_return(Compiler *c, const EnsureCtx *self, int eid, int has_retval, Buf *b, int indent);
 void emit_loop_unwind(Buf *b);
 int emit_frame_unwind(Buf *b, int pop_base, const char *guard);
 int rescues_crossed(int pop_base);
@@ -1272,7 +1276,7 @@ int cls_id_masquerades(Compiler *c, int cid);
 int visible_as_target(Compiler *c, int k, int target);
 int class_mixes_in(Compiler *c, int cid, int mod, int depth);
 int class_is_comparable(Compiler *c, int cid);
-void emit_visible_cls_id(Compiler *c, const char *var, Buf *b);
+void emit_visible_cls_id(Compiler *c, int ci, const char *obj, const char *id, Buf *b);
 void obj_default_name(Compiler *c, int ci, char *name, size_t nn, char *arg, size_t na);
 /* Kernel#to_s or #inspect (want_inspect) of an object of program class cid,
    the builtin's own text whatever the program defines: #<Name:0x...>, and
@@ -2892,6 +2896,7 @@ void emit_ivar_name_error(Compiler *c, Buf *b, const char *sym, int arg);
 const char *ivar_raise_tail(Compiler *c, int id);   /* that raise's dead value, in the call's C form */
 int emit_exc_ivar_call(Compiler *c, int id, const char *name, int recv, Buf *b);
 /* The concurrency handles' row emitters (codegen_call_concurrency.c) */
+void emit_queue_new(Compiler *c, int argc, const int *argv, Buf *b);
 int emit_op_thread_set_report(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_thread_raise(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_thread_tls(Compiler *c, const BopCtx *x, Buf *b);

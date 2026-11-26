@@ -96,7 +96,7 @@ static void pa_arm_text(Compiler *c, const PolyArm *a, char *out, size_t n) {
                                      "default to_i/to_f", "default any?/none?", "default to_h", "default display",
                                      "default hash",
                                      "each_index", "join", "alive?", "kill", "status", "queue", "io-read",
-                                     "io-flush", "io-close", "enum-to_a", "condvar",
+                                     "io-flush", "io-close", "enum-to_a", "condvar", "thread-reader",
                                      "cover?", "try_convert", "gcdlcm", "unpack1", "include?", "str-delete",
                                      "str-partition", "str-setop", "store", "str-encode", "str-split",
                                      "int-bitref", "str-aset", "index-cases", "io-read_nonblock", "io-readpartial", "io-readpartial(buf)",
@@ -3063,6 +3063,19 @@ int emit_poly_defaults0(Compiler *c, int id, int recv, const char *name, const P
     buf_printf(b, " case SP_BUILTIN_CONDVAR: _t%d = ", tr);
     if (ret == TY_POLY) buf_puts(b, cv);
     else emit_unbox_text(c, ret, cv, b);
+    buf_puts(b, "; break;");
+  }
+  /* a boxed Thread's #name and #report_on_exception, beside a user class's
+     own and the other builtins that answer name (a Class, a Symbol) */
+  if (argc == 0 && nt_ref(nt, id, "block") < 0 && (sp_streq(name, "name") || sp_streq(name, "report_on_exception"))) {
+    if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_N_THREAD_READER, -1, TY_UNKNOWN, PC_SAME);
+    int is_name = sp_streq(name, "name");
+    char tv2[96];
+    snprintf(tv2, sizeof tv2, is_name ? "sp_Thread_get_name((sp_thread *)_t%d.v.p)" : "sp_Thread_get_report((sp_thread *)_t%d.v.p)", tv);
+    buf_printf(b, " case SP_BUILTIN_THREAD: _t%d = ", tr);
+    if (ret == TY_POLY) { if (is_name) buf_puts(b, tv2); else emit_boxed_text(c, TY_BOOL, tv2, b); }
+    else if (!is_name && ret == TY_BOOL) buf_puts(b, tv2);
+    else emit_unbox_text(c, ret, tv2, b);
     buf_puts(b, "; break;");
   }
   /* IO#read on a poly value when a user class owns `read` (ffi's

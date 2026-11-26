@@ -1195,6 +1195,7 @@ sp_RbVal sp_box_openstruct(sp_OpenStruct *o);
 
 /* ---- class-frozen bitmap (Class#freeze / #frozen?): state stays
    per-process like sp_argv, extern instead of spinel_rt.h-static. ---- */
+#include "sp_rtclass.h"   /* classes made at run time: their ids and records */
 extern unsigned char sp_class_frozen_map[4096];   /* one definition: lib/sp_cold.c */
 void sp_class_freeze_id(sp_int cls_id);
 sp_bool sp_class_frozen_id(sp_int cls_id);

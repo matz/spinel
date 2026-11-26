@@ -874,6 +874,14 @@ int cplan_typed_to_ary(Compiler *c, TyKind t, int at, int op, int *boxed);
    1 for it to do so, and the destructure reads the temp for the one
    element a nil answer leaves. */
 int cplan_typed_to_ary_held(Compiler *c, TyKind t, int at, int op, int *boxed, int *hold);
+/* 1 when the multiple assignment mw takes apart its right side value, of
+   kind t, as CRuby takes apart an Array or a value that answers to_ary: an
+   Array kind; a boxed or not yet known value, which may hold an Array when
+   it runs; or a value whose class's to_ary the plan answers there
+   (cplan_typed_to_ary), typed or boxed. Any other value is whole: the
+   first target takes it and the others nil (`a, b = 1..2`). The widening
+   walk's target step and the emitter's arm for such a value both ask it. */
+int cplan_masgn_takes_apart(Compiler *c, int mw, int value, TyKind t);
 /* How a class's boxed to_ary runs where the plan answers it: the method
    table's method (the one sp_obj_to_ary calls), the version entry, or
    another version its window proves; for the program's String, the
@@ -1209,7 +1217,7 @@ typedef enum {
   PB_D_EXC_ACC, PB_D_ENUM_EACH, PB_D_TO_S, PB_D_CASE_CONV, PB_D_NUM, PB_D_DIGITS, PB_D_ARRAY_TRANSFORM, PB_D_PRED,
   PB_D_TO_IF, PB_D_ANY_NONE, PB_D_TO_H, PB_D_DISPLAY, PB_D_HASH,
   PB_N_EACH_INDEX, PB_N_JOIN, PB_N_ALIVE, PB_N_KILL, PB_N_STATUS, PB_N_QUEUE, PB_N_IO_READ,
-  PB_N_IO_FLUSH, PB_N_IO_CLOSE, PB_N_ENUM_TO_A, PB_N_CONDVAR,
+  PB_N_IO_FLUSH, PB_N_IO_CLOSE, PB_N_ENUM_TO_A, PB_N_CONDVAR, PB_N_THREAD_READER,
   /* the tag pre-arms of a dispatch with arguments (emit_poly_prearms_n) */
   PB_COVER, PB_TRY_CONVERT, PB_GCDLCM, PB_UNPACK1, PB_INCLUDE, PB_STR_DELETE, PB_STR_PARTITION,
   PB_STR_SETOP, PB_STORE, PB_STR_ENCODE, PB_STR_SPLIT_N, PB_INT_BITREF,

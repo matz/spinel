@@ -91,6 +91,7 @@ registry, or stack reification -- none of which exist in a flat compiled binary.
 | `super` from a singleton override to an inherited builtin singleton method, such as `File.read` or `File.open` reaching `IO`, or `Kernel.puts` reaching the Kernel instance method through Object | refused at compile time | this dispatch has no compiled user method to call. A `super` that resolves to a user singleton method remains supported; a method with no superclass implementation still raises `NoMethodError`. |
 | `Object#singleton_class` as an OBJECT (and `Class#attached_object`) | unsupported | the singleton class above is synthesized, not reified: there is no runtime class object to hand back. `class << obj` as a *definition* form works -- see the row above. `singleton_class.prepend(Mod)` / `singleton_class.include(Mod)` as a statement of a class or module body (activesupport's const_missing hook on Enumerable) is read as `extend Mod`, the precedence between Mod and the class's own singleton methods aside; so is `X.singleton_class.prepend(Mod)` as a statement of the program (X a class or module the program declares, or Process, Kernel, Math, GC, Signal or Warning, whose reopening takes Mod's methods as its own), and from a method the file calls as it loads (sqlite3's `ForkSafety.hook!` prepends its `_fork` hook onto `::Process`), where the mixin is hoisted to the program's start as a define_method in a method body is. `prepend Mod` / `include Mod` in a top-level `class << K` (K a class or module the program declares) is K's own `class << self` mixin; in any other `class << x`, or on any other builtin's singleton class, it is refused. Likewise a declaration told to a class's singleton class -- `attr_*`, `define_method`, `alias_method`, the same through `send` / `public_send`, or a `class_eval` block that reads no outer local -- is a `class << X` body when it is a statement of the program's or a class or module body and the receiver is a constant or self (`Foo.singleton_class.attr_accessor :a`), and so is an attr_* call of Symbols whose value an assignment statement keeps (`names = singleton_class.attr_accessor :a, :b` declares them and assigns `[:a, :a=, :b, :b=]`); in a method, under a condition, or on a value, it stays refused |
 | `attr_accessor(*NAMES)` (and `attr_reader` / `attr_writer` / `attr`) with a splat | supported when `NAMES` is an Array literal of Symbols or Strings (frozen or not) written once in the same class or module body ahead of the call and never changed, as a constant or as a local that no statement between the write and the call names; the call may be `singleton_class.attr_accessor(*NAMES)` or stand in the body's `class << self`; any other splat is refused at compile time | the attributes an attr call declares are fixed at compile time, so its names have to be readable there |
+| `attr_accessor name` (and `attr_reader` / `attr_writer` / `attr`) with a name that is not a literal Symbol or String (a block's variable, a parameter, a local, a constant) | a class body's `[:a, "b"].each { \|v\| attr_accessor v }` over an Array literal of Symbols or Strings declares each name; a class method the compiler runs with the call's values (`def self.idb(name) = attr_accessor(name)`, called as `idb :user` in a class body) declares the name it is given; any other such call is refused at compile time where it may run (`names.each { \|name\| attr_accessor name }` in a class method, or a local in `class << self`). In a program that defines a method of that name itself (`def self.attr_accessor`, a module's `def attr_reader`), the loop and the call stay as written, and so does the loop in a program that defines a method named `each` | the attributes an attr call declares are fixed at compile time, so its names have to be readable there |
 | Runtime structural mutation of a class through an explicit receiver (`Klass.include(M)`, `Klass.attr_accessor(...)`, `Klass.define_method(...)` outside the class body) | unsupported | the class graph, ancestor chain, and method/ivar layout are baked at compile time; the same declarations *inside* a `class` body work. `K.include(M)` / `K.prepend(M)` / `K.extend(M)` / `K.attr_*(:x)` as a statement of the program (K a class or module the program declares, every argument a constant or a symbol) is that reopening, `class K; prepend M; end`, and is supported, as are `Fiber.include(M)` / `Fiber.prepend(M)` and the same on Thread (fiber-annotation), whose reopenings are supported; likewise in K's own body, and through `K.send(:include, M)` / `__send__` / `public_send`. On a builtin class (Object, String, Integer, Array, ...) the include and prepend forms are the builtin's reopening the same way. In a method, a block or a condition, through a constant holding a class (`A = Object`), on a Class held in a variable (`[A, B].each { |k| k.include(M) }`) and `define_method` it stays refused |
 | A class method of the program named `include`, `prepend` or `extend` (`def self.include(*mods)`, a superclass's, an extended module's) that may reach a builtin mixin (it calls `super`, another mixin, `send`, a bound Module method, or an alias of the builtin), or that a condition defines, reached from a mixin statement | refused at compile time, at the statement | the call runs the program's method, and the builtin mixin it may reach (or the untaken branch) would change the class's ancestors as the program runs; the ancestors are fixed at compile time. Such a method that reaches no builtin mixin runs, and mixes nothing in, as in CRuby. An alias of a builtin mixin under its name (`class << self; alias include prepend; end`) is not followed: the statement mixes in as the builtin of its own name |
 | `const_set` with a literal name on a receiver whose class or module is known only at run time (a parameter, a local written more than one class, a constant holding a class), of a name constants of more than one module hold | refused at compile time | constants are compile-time globals kept apart by the module they are written in, so which module's constant such a call sets would have to be known where it is compiled. `M.const_set(:N, v)` on a constant naming Object or a class or module the program defines is `M::N = v`, and `const_set(:N, v)` or `self.const_set(:N, v)` in a class or module body is `N = v` there: each defines the constant if it is new. On a local holding one class or module, on `self.class`, or on `self` in a class method of a class without subclasses, the call re-assigns that module's existing constant; on any other receiver it re-assigns the one constant of the name, which may be another module's than the one the receiver holds at run time. On a receiver whose module is known, a name that module does not already hold has no storage there and is refused, as is a name no module holds |
@@ -1150,21 +1151,78 @@ A parameter the method stores elements of another kind into is compiled as a
 general Array (or a boxed value, when its callers disagree), and a typed
 array (`Array[Integer]`) passed to it has to be one too, since the two store
 their elements differently. The compiler follows the argument back to where
-its arrays are built and builds them as general Arrays: an array literal or a
-new array, through locals (their `||=` and the arms of a branch too), the
+its arrays are built and builds them as general Arrays: an array literal or
+a new array, through locals (their `||=` and the arms of a branch too), the
 value of a method (or a chain of them, a method a subclass overrides, or a
 method answering its block's value), a `then` block, a multiple assignment
-from a literal, a row of a literal table, a builtin that answers its receiver
-(`push`, `concat`, `tap`), an ivar or attr_reader every write of which builds
-a new array or keeps a parameter of the method writing it, a global, class
-variable or constant. The method's other callers then read the general Array
-too. A boxed argument -- a local written arrays of two kinds, an element read
-out of a general container, a block parameter, a `for` variable -- is
-followed the same way, to each typed array the store cannot fit.
+from a literal, a row of a literal table, a builtin that answers its
+receiver (`push`, `concat`, `tap`, an Array's own `to_a`), an ivar (the main
+object's too) or attr_reader every write of which (an `||=`, a `&&=`, a
+multiple assignment's, beside a splat too) is nil, keeps a parameter of the
+method writing it, or is a value followed the same way (`@w = mk`, `@w =
+k.v`, a branch, `@w = k.v = x`), or is an `op=`, which builds a new Array
+(`@w += [2]`), a Struct member its constructor or its own `initialize`'s
+`super` sets (a Data member, the keyword `super` gives) and nothing writes
+after, or a global, class variable or constant whose writes (through a
+constant's path too, `M::G = [1]`) are followed as an ivar's are, one of
+them used as a value too (`def get = ($g ||= [1])`). The method's other
+callers then read the general Array too. An attribute's writes include its writer's calls
+from outside the class, its `o.v ||=`, `&&=` and `op=`, and a `send`,
+`public_send`, `__send__` or `instance_variable_set` that may set it, by a
+literal or a computed name, with the value it hands last; a writer handed
+nil, and a computed name's value of a kind that is no Array (a keyword Hash
+too), are passed over, and a `send` that hands no value sets nothing; an
+`instance_variable_set` sets an ivar of a class with no writer too. A slot
+reached again through its own writes (`k.v = k.v`, two attributes handed
+each other, `$a = $b; $b = $a`) holds what its other writes hold. A writer's or an ivar's value
+may itself be a write, of another attribute (`k.v = q.v = x`, `q.send(:v=,
+x)` too), of an ivar (`k.v = @w = x`) or by a literal
+`instance_variable_set` (`k.v = q.instance_variable_set(:@v, x)`), whose
+holder is followed with it, so both keep the one general Array. A new Array
+a builtin answers (`s.bytes`, a `map`, a `split`, `entries`, a Range's or a
+Hash's `to_a`, an Array subclass's `to_a` or `entries`, `Array.new`) handed
+to a writer or to a Struct's constructor, or stored through a multiple
+assignment (`w, u = s.bytes, 2`), is held as the general Array; a `to_a` of
+a value that may be nil or an Array is taken as such a new Array too, so a
+store through where it is kept does not reach the receiver's Array. The read
+may be the reader's, on a receiver that may hold objects of any number of
+classes when each answers the reader by an attribute (the class and classes
+below it, or unrelated classes or Structs whose attributes share the name)
+or by nothing at all, and then each attribute's writes are followed, and a
+class that answers it by an alias of a method has that method's value
+followed; or, for a Struct member, `s[:v]`, `s["v"]` or its place (`s[0]`,
+`s[-1]`). Not followed: a `send` that splats its arguments, a `super(*a)` or
+`super(**h)` in a Struct's `initialize`, and the `initialize` of a class
+below the Struct. A boxed argument -- a local written arrays of two kinds,
+an element read out of a general container, a block parameter, a `for`
+variable -- is followed the same way, to each typed array the store cannot
+fit.
+
+A block or proc parameter that stores another kind into the Array it
+receives, or into an Array that is an element of it (`|m| m[0] << 1`), does
+the same for the values the sites binding it pass: a yield or a block's
+`call` in each method the block is handed to (and on through `&blk`, and a
+`super` in a method that takes `&blk`), the calls of a proc or lambda
+literal, at an optional, a post, a keyword (also one a `**` of a Hash
+literal supplies) or as an element of a rest (a method's rest too, also one
+a bare `super` hands on), where the store is in the block's own body. Not
+followed: a block a method keeps (stored in an ivar, or answered as a
+value) and calls later, one a bare `super` hands on from a method without
+`&blk`, a Thread or Fiber body, a proc called from an ivar or a constant,
+through `curry`, after a `&` hand-off or more than one method down from
+where it is passed, a block given to a `Method` object's `call`, a block's
+`**`, a `**` of a Hash built by index writes, a destructuring parameter
+(`|(x)|`), an element of what a `define_method` body receives, a store from
+a block nested in the body, an Array that is an element of an element, a
+rest's element read by `dig`, `values_at` or `first(n)` or stored into by
+`[]=`, and a splat of a Hash into a block or of a method's rest into another
+method. Such a store raises `TypeError` as above, and a `[]=` into a rest's
+element is dropped.
 
 Where it cannot follow a typed argument, the one conversion left is a copy,
 and the mutation would land in the copy where CRuby changes the caller's
-array. Such a call is refused at compile time:
+array. Such a call is refused at compile time, also where the store is in a
+branch that never runs:
 
 ```ruby
 Box = Struct.new(:a)            # the member keeps the caller's array

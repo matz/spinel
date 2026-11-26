@@ -1,0 +1,24 @@
+true
+false
+10
+"PRODUCTION"
+StringInquirer
+true
+false
+2
+"cat"
+"mm zzz"
+0
+2
+true
+false
+true
+false
+true
+false
+"mm zzz"
+NoMethodError
+"mm size"
+2
+"mm upcase"
+"AB"

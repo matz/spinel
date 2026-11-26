@@ -7930,7 +7930,7 @@ static void check_unrewritten_delegators(Compiler *c) {
    Hash and String are listed too, but a subclass of one is no longer
    refused: its instances are real Arrays, Hashes or Strings (#7449,
    mark_array_subclasses). */
-static const char *builtin_value_superclass(Compiler *c, int sc) {
+static const char *builtin_value_superclass_at(Compiler *c, int sc, int depth) {
   static const char *const refused[] = {
     "Array", "Hash", "String", "Range", "Proc", "Method", "UnboundMethod",
     "Integer", "Float", "Symbol", "Rational", "Complex",
@@ -7942,7 +7942,14 @@ static const char *builtin_value_superclass(Compiler *c, int sc) {
   NodeKind k = nt_kind(nt, sc);
   if (k != NK_ConstantReadNode && k != NK_ConstantPathNode) return NULL;
   const char *nm = key_name(c, sc);
-  if (!nm || !str_in(nm, refused)) return NULL;
+  if (!nm) return NULL;
+  /* a constant that holds one (`Impl = ::Hash; class H < Impl`), written once, followed to it
+     (const_single_write, as superclass_alias_target follows a class of the program) */
+  if (!str_in(nm, refused)) {
+    int top = k == NK_ConstantReadNode || (k == NK_ConstantPathNode && nt_ref(nt, sc, "parent") < 0);   /* (`Impl` or `::Impl`) */
+    int w = top && depth < 8 && comp_class_index(c, nm) < 0 ? const_single_write(c, nm) : -1;
+    return w >= 0 ? builtin_value_superclass_at(c, nt_ref(nt, w, "value"), depth + 1) : NULL;
+  }
   if (k == NK_ConstantPathNode) {
     int par = nt_ref(nt, sc, "parent");
     if (par >= 0) {
@@ -7960,6 +7967,7 @@ static const char *builtin_value_superclass(Compiler *c, int sc) {
   }
   return nm;
 }
+static const char *builtin_value_superclass(Compiler *c, int sc) { return builtin_value_superclass_at(c, sc, 0); }
 
 static const char *refused_builtin_superclass(Compiler *c, int sc) {
   const char *nm = builtin_value_superclass(c, sc);
@@ -8131,6 +8139,29 @@ static void mark_array_subclasses(Compiler *c) {
   }
 }
 
+/* See compiler.h. */
+int const_single_write(Compiler *c, const char *name) {
+  const NodeTable *nt = c->nt;
+  int w = -1, nw = 0;
+  if (!name) return -1;
+  NT_FOREACH_KIND(nt, NK_ConstantWriteNode, id) {
+    const char *n = const_key_at(c, id);
+    if (n && sp_streq(n, name)) { w = id; nw++; }
+  }
+  /* (and every other write of the name: `||=`, `&&=`, `op=`, and a path write `::Impl = v` by its last name) */
+  static const NodeKind other[] = { NK_ConstantOrWriteNode, NK_ConstantAndWriteNode, NK_ConstantOperatorWriteNode };
+  for (int k = 0; k < 3 && nw <= 1; k++)
+    NT_FOREACH_KIND(nt, other[k], id) {
+      const char *n = const_key_at(c, id);
+      if (n && sp_streq(n, name)) nw++;
+    }
+  if (nw == 1) NT_FOREACH_KIND(nt, NK_ConstantPathWriteNode, id) {
+    int t = nt_ref(nt, id, "target");
+    const char *n = t >= 0 ? nt_str(nt, t, "name") : NULL;
+    if (n && sp_streq(n, name)) nw++;
+  }
+  return nw == 1 ? w : -1;
+}
 /* The class a superclass constant that names no class of its own holds:
    `Impl = Base; class Sub < Impl`, a chain of such constants followed to
    the class. -1 where it is not one constant the program writes once (a
@@ -8140,12 +8171,8 @@ static void mark_array_subclasses(Compiler *c) {
 static int superclass_alias_target(Compiler *c, const char *name, int depth, int *wr) {
   const NodeTable *nt = c->nt;
   if (!name || depth > 8) return -1;
-  int w = -1, nw = 0;
-  NT_FOREACH_KIND(nt, NK_ConstantWriteNode, id) {
-    const char *n = const_key_at(c, id);
-    if (n && sp_streq(n, name)) { w = id; nw++; }
-  }
-  if (nw != 1) return -1;
+  int w = const_single_write(c, name);
+  if (w < 0) return -1;
   int v = nt_ref(nt, w, "value");
   NodeKind vk = v >= 0 ? nt_kind(nt, v) : NK_NONE;
   if (vk == NK_ConstantReadNode || vk == NK_ConstantPathNode) {
@@ -11278,7 +11305,9 @@ void specialize_inherited_cls_new(Compiler *c) {
        switch over the receiver's cls_id whose DEFAULT arm calls this source, so
        the source is referenced even though no `Const.<name>` call names it, and
        DCEing it left the arm pointing at a symbol that was never emitted --
-       an implicit declaration, mistyped arms, and a link error (#4053). */
+       an implicit declaration, mistyped arms, and a link error (#4053). A
+       `superclass.<name>` call is a switch over a Class value the same way, and
+       its value may be this source's own class. */
     for (int id = 0; id < node_count && !called_direct; id++) {
       if (nt_kind(nt, id) != NK_CallNode) continue;
       const char *nm4 = cls_call_name(c, id);
@@ -11286,7 +11315,7 @@ void specialize_inherited_cls_new(Compiler *c) {
       int r4 = nt_ref(nt, id, "receiver");
       if (r4 < 0 || nt_kind(nt, r4) != NK_CallNode) continue;
       const char *rn4 = nt_str(nt, r4, "name");
-      if (rn4 && sp_streq(rn4, "class")) called_direct = 1;
+      if (rn4 && (sp_streq(rn4, "class") || sp_streq(rn4, "superclass"))) called_direct = 1;
     }
     /* ... or if the defining class itself escapes as a value a dynamic
        receiver's call can reach */
@@ -11617,6 +11646,7 @@ static void process_prepend_body(Compiler *c, int ci, int body) {
           if (sc->body >= 0) {
             int nb = nt_clone_subtree((NodeTable *)nt, sc->body);
             comp_grow_node_arrays(c);
+            if (nb >= 0) g_inc_did_clone = 1;   /* (its locals, interned in register_prepends) */
             sc = &c->scopes[ms_i]; dst = &c->scopes[dst_i];
             if (nb >= 0 && is_builtin_reopen(c->classes[ci].name)) {
               /* as the include path does for a reopened builtin */
@@ -11681,9 +11711,12 @@ void register_prepends(Compiler *c) {
   g_list_has_c = c;
   cell_writes_defer(c);
   ElabBody *bo = elab_all_bodies(c, &nb);
+  g_inc_did_clone = 0;
   for (int b = 0; b < nb; b++) process_prepend_body(c, bo[b].cls, bo[b].body);
   free(bo);
   cell_writes_flush(c);
+  /* the cloned bodies introduced new local nodes, as the include clone's do */
+  if (g_inc_did_clone) register_locals(c);
   mtab_leave(c);
 }
 
@@ -13237,6 +13270,16 @@ static int pivs_value_uncached(Compiler *c, int v, char *set, int depth) {
 }
 static int pivs_value_walk(Compiler *c, int v, char *set, int depth) {
   const NodeTable *nt = c->nt;
+  /* an element store written as one (`h[k] = v`, a method's last
+     expression) is its value whatever `[]=` returns, so ahead of the
+     call's targets; `h&.[k] = v` is nil for a nil h. A call by name
+     (`h.[]=(k, v)`) returns what the method it reaches returns. */
+  if (nt_kind(nt, v) == NK_CallNode && nt_attr_write(nt, v) && !nt_safe_nav(nt, v) &&
+      nt_ref(nt, v, "block") < 0 && sp_streq(nt_str(nt, v, "name") ? nt_str(nt, v, "name") : "", "[]=")) {
+    int sn = 0;
+    const int *sa = nt_arr(nt, nt_ref(nt, v, "arguments"), "arguments", &sn);
+    if (sn >= 2) return pivs_value(c, sa[sn - 1], set, depth + 1);
+  }
   int br = pivs_branches(c, v, set, depth, 0);
   if (br >= 0) return br;
   /* a callables query keeps the callable literals it reaches (in the

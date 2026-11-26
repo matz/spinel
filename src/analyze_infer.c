@@ -4617,6 +4617,8 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
         if (sp_streq(name, "lock") || sp_streq(name, "unlock")) { *out = TY_POLY; return 1; }
         if (sp_streq(name, "signal") || sp_streq(name, "broadcast")) { *out = TY_POLY; return 1; }
         if (sp_streq(name, "try_lock") || sp_streq(name, "locked?")) { *out = TY_BOOL; return 1; }
+        /* a boxed Thread's flag */
+        if (sp_streq(name, "report_on_exception")) { *out = TY_BOOL; return 1; }
       }
       if (sp_streq(name, "alive?") || sp_streq(name, "dead?") || sp_streq(name, "closed?") ||
           (sp_streq(name, "mon_owned?") && argc == 0) ||
@@ -4743,6 +4745,18 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
            nt_argv_kwh(nt, argv, argc) < 0))
         { *out = an_poly_concrete(c, id, name, TY_IO); return 1; }
       if ((sp_streq(name, "close_read") || sp_streq(name, "close_write")) && argc == 0)
+        { *out = an_poly_concrete(c, id, name, TY_NIL); return 1; }
+      /* the readers and predicates of the same arm: getc's String or nil,
+         readchar's String, readbyte's and lineno's Integer, the predicates'
+         bool, and nil from ungetbyte and ungetc */
+      if (argc == 0 && sp_streq(name, "getc")) { *out = an_poly_concrete(c, id, name, TY_POLY); return 1; }
+      if (argc == 0 && sp_streq(name, "readchar")) { *out = an_poly_concrete(c, id, name, TY_STRING); return 1; }
+      if (argc == 0 && (sp_streq(name, "readbyte") || sp_streq(name, "lineno")))
+        { *out = an_poly_concrete(c, id, name, TY_INT); return 1; }
+      if (argc == 0 && (sp_streq(name, "eof") || sp_streq(name, "autoclose?") || sp_streq(name, "binmode?") ||
+                        sp_streq(name, "close_on_exec?")))
+        { *out = an_poly_concrete(c, id, name, TY_BOOL); return 1; }
+      if (argc == 1 && (sp_streq(name, "ungetbyte") || sp_streq(name, "ungetc")) && !nt_argv_has_splat(nt, argv, argc))
         { *out = an_poly_concrete(c, id, name, TY_NIL); return 1; }
       /* the descriptor controls, at the arities the poly-IO arm takes them:
          integers, and advise's nil boxed as the TY_IO arm boxes it. Only
@@ -10757,8 +10771,8 @@ static int value_arm_is(const NodeTable *nt, int v, int node) {
 
 /* The places a yield's value can settle a type from the first call site
    alone (see the YieldNode arm of infer_uncached): a variable write, an
-   array literal's element, an argument, an operator's receiver and the
-   last statement of a rescue or ensure frame. Each diverging yield walked
+   array literal's element, an argument, an operator's receiver, a return's
+   value and the last statement of a rescue or ensure frame. Each diverging yield walked
    the whole table for each of them, every round, and #6185's argument walk
    asked call_may_reach_user_method of every call on the way, so the
    typing grew with yields times nodes. One pass per round lists, for each
@@ -10767,7 +10781,7 @@ static int value_arm_is(const NodeTable *nt, int v, int node) {
    rebuilt per fixpoint iteration and when the table grows, like the
    receiver set above, and each node on it is checked as the walk did, so
    one that no longer holds the yield answers no. */
-enum { YU_WRITE, YU_ELEMENT, YU_ARGUMENT, YU_RECEIVER, YU_FRAME, YU_BLOCK };
+enum { YU_WRITE, YU_ELEMENT, YU_ARGUMENT, YU_RECEIVER, YU_FRAME, YU_BLOCK, YU_RETURN };
 static const NodeKind yu_write_kinds[] = {
   NK_LocalVariableWriteNode, NK_LocalVariableOperatorWriteNode,
   NK_LocalVariableOrWriteNode, NK_LocalVariableAndWriteNode,
@@ -10834,6 +10848,11 @@ static int yield_uses(Compiler *c, int y) {
     }
     NT_FOREACH_KIND(nt, NK_RescueModifierNode, w)
       yu_collect(nt, nt_ref(nt, w, "expression"), w, YU_FRAME);
+    NT_FOREACH_KIND(nt, NK_ReturnNode, w) {
+      int an = nt_ref(nt, w, "arguments");
+      int ac = 0; const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
+      if (ac == 1) yu_collect(nt, av[0], w, YU_RETURN);
+    }
     NT_FOREACH_KIND(nt, NK_BeginNode, w) {
       int st = nt_ref(nt, w, "statements");
       if (st < 0) continue;
@@ -11436,6 +11455,13 @@ static int infer_yield_node(Compiler *c, int id, const NodeTable *nt, NodeKind n
         if (yvd_once(c, ymi, &dv) && yield_recv_builtin_every_site(c, w)) { *out = TY_POLY; return 1; }
         break;
       }
+      case YU_RETURN:
+        /* A `return yield(x)` likewise: the method's return type took the
+           first site's block value, and a call whose block answers another
+           type read its result from it (a nil block at one site gave nil
+           at another). */
+        if (yvd_once(c, ymi, &dv)) { *out = TY_POLY; return 1; }
+        break;
       case YU_FRAME: {
         /* A yield whose value leaves through an ENSURE frame is in the
            same position as one written to a local, for the same reason:
@@ -12338,15 +12364,15 @@ TyKind infer_uncached(Compiler *c, int id) {
        Toplevel slot, which the value alone does not type (`(@a ||= []) << 1`,
        a boxed `@i += 1` read back as the slot); so does a plain write of an
        untyped value (`y = (@a = [])`, where a later write made the slot a
-       poly array) */
-    if (wcls < 0 && !s->is_cmethod && id < c->node_cap && c->node_cbody[id] < 0 &&
-        (nk == NK_InstanceVariableOrWriteNode || nk == NK_InstanceVariableAndWriteNode ||
-         nk == NK_InstanceVariableOperatorWriteNode ||
-         (nk == NK_InstanceVariableWriteNode && infer_type(c, nt_ref(nt, id, "value")) == TY_UNKNOWN))) {
+       poly array), and of a typed Array the slot holds as the general Array
+       (`k.v = @w = [1, 2]` with @w widened: the store converts it, and the
+       value handed on is that one Array) */
+    if (wcls < 0 && !s->is_cmethod && id < c->node_cap && c->node_cbody[id] < 0) {
       int tl = c->toplevel_class;
       int tiv = tl >= 0 && nm ? comp_ivar_index(&c->classes[tl], nm) : -1;
       TyKind tt = tiv >= 0 ? ivar_value_ty(&c->classes[tl], tiv) : TY_UNKNOWN;
-      if (tt != TY_UNKNOWN) return tt;
+      TyKind vt = nk == NK_InstanceVariableWriteNode ? infer_type(c, nt_ref(nt, id, "value")) : TY_UNKNOWN;
+      if (tt != TY_UNKNOWN && (vt == TY_UNKNOWN || (tt == TY_POLY_ARRAY && ty_is_array(vt)))) return tt;
     }
     /* a class or module body's own ivar: the class's slot, which the store
        there writes (the civ_ static) */

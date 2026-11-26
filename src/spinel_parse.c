@@ -3315,6 +3315,10 @@ static int sp_flatten_call_as(int id, pm_call_node_t *n) {
   free(m);
   emit_int(id, "line", pm_newline_list_line(&g_parser->newline_list, node->location.start, g_parser->start_line));
   if (PM_NODE_TYPE(arg) == PM_STRING_NODE) emit_pm_string(id, "path", &((pm_string_node_t *)arg)->unescaped);
+  /* (for a class's own require, desugar_owned_require_loads: Kernel.require
+     stays Kernel's, and a literal path keeps its frozen state) */
+  if (n->receiver) emit_int(id, "kernel_recv", 1);
+  if (PM_NODE_TYPE(arg) == PM_STRING_NODE && sp_node_fsl(arg)) emit_int(id, "path_fzl", 1);
   if (sp_graph_site_take(id, node)) emit_ref(id, "argument", arg);
   return 1;
 }

@@ -5200,7 +5200,7 @@ static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int
          nowhere, or `Known::Thing` where Known holds no Thing): the
          statement raises NameError where it runs, before it mixes any in,
          so it is no mixin and defines nothing (codegen reads the mark) */
-      int fail = -1;
+      int fail = -1, later = 0;
       for (int q = 0; q < ac && fail < 0; q++)
         if (q == i ? mod < 0 : lr_class_ref_at(x->c, av[q], NULL) < 0) {
           if (q != i || mod != LR_LATER) fail = lr_const_path_fails(x->c, av[q]);
@@ -5208,8 +5208,12 @@ static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int
              walk made of a hook's body, on the class the hook was given,
              stands in no body of the source) */
           if (fail < 0 && (recv < 0 || nt_kind(nt, recv) == NK_SelfNode) && lr_written_in(x->c, node, fnode))
-            fail = lr_const_root_later(x->c, av[q]);
+            later = (fail = lr_const_root_later(x->c, av[q])) >= 0;
         }
+      /* (a name the program defines further down: a bare statement of a
+         body raises too, which codegen reads; one it defines nowhere may
+         be a module the compiler supplies, FFI's, and stays a declaration there) */
+      if (later) nt_node_set_int((NodeTable *)nt, node, "mixin_const_later", 1);
       if (fail >= 0) {
         int path = nt_kind(nt, fail) == NK_ConstantPathNode && nt_ref(nt, fail, "parent") >= 0;
         nt_node_set_int((NodeTable *)nt, node, path ? "mixin_undefined_path" : "mixin_undefined_const", path ? fail + 1 : 1);
@@ -12029,6 +12033,67 @@ static int lr_lambda_method_form(const NodeTable *nt, int node) {
   return 0;
 }
 
+/* Is send f's receiver self in an instance method of a program class,
+   whatever its arguments (`def ask(name, *args) = send(name, *args)`)? That
+   self is no class or module, nor main: the forms that define a method by
+   a name (define_method, alias_method, attr_*, remove_method) are Module's,
+   and define_singleton_method or extend reach only that object's singleton,
+   so the send changes no method a call of main or of a class answers, the
+   `lambda` of a file's top level among them. (A form that evaluates code is
+   no arm of the computed send: lr_send_names_nothing.) A reopening of
+   Object, Kernel or BasicObject, or a module, is not such a class. */
+static int lr_plain_instance_scope(Compiler *c, int f);
+static int lr_send_on_plain_instance(Compiler *c, int f) {
+  const NodeTable *nt = c->nt;
+  int r = nt_ref(nt, f, "receiver");
+  if (r >= 0 && nt_kind(nt, r) != NK_SelfNode) return 0;
+  return lr_plain_instance_scope(c, f);
+}
+/* Is send f's receiver that self's own singleton class (`singleton_class.send(:define_method, key) { }`)?
+   What a definition form makes there answers on that one object alone. */
+static int lr_send_on_own_singleton(Compiler *c, int f) {
+  const NodeTable *nt = c->nt;
+  int r = nt_ref(nt, f, "receiver");
+  if (r < 0 || nt_kind(nt, r) != NK_CallNode || !sp_streq(nt_str(nt, r, "name"), "singleton_class") ||
+      nt_ref(nt, r, "arguments") >= 0 || nt_ref(nt, r, "block") >= 0) return 0;
+  int rr = nt_ref(nt, r, "receiver");
+  return (rr < 0 || nt_kind(nt, rr) == NK_SelfNode) && lr_plain_instance_scope(c, f);
+}
+/* Can eval call f's code change what a call of a file's top level
+   answers? Code in a String a literal spells may. One a non-literal holds,
+   in a method of a program class on self (`def eval_on(str) =
+   instance_eval(str)`, `def self.add(code) = class_eval(code)`), runs in no
+   compiled program: such an eval is refused where it is emitted. Elsewhere
+   (a file's top level, on Object, Kernel or another receiver) it is taken
+   as one that may. */
+static int lr_eval_may_change(Compiler *c, int f, int a) {
+  const NodeTable *nt = c->nt;
+  if (a >= 0 && nt_kind(nt, a) == NK_StringNode) return 1;
+  int r = nt_ref(nt, f, "receiver");
+  if (r >= 0 && nt_kind(nt, r) != NK_SelfNode) return 1;
+  const Scope *s = comp_scope_of(c, f);
+  if (!s || s->def_node < 0 || s->class_id < 0 || s->class_id >= c->nclasses) return 1;
+  const ClassInfo *k = &c->classes[s->class_id];
+  return is_object_root(k->name) || k->is_builtin_const;
+}
+/* (the scope test of lr_send_on_plain_instance: a method of a plain
+   program class, an instance's or the class's own, not in a block of it.
+   In a class method self is that class: what a definition form makes
+   there is the class's or its singleton's, and main answers neither) */
+static int lr_plain_instance_scope(Compiler *c, int f) {
+  const NodeTable *nt = c->nt;
+  const Scope *s = comp_scope_of(c, f);
+  if (!s || s->def_node < 0 || s->class_id < 0 || s->class_id >= c->nclasses) return 0;
+  /* (in a block of the method, self may be another object: instance_exec) */
+  const int *par = comp_parent_map(c);
+  for (int a = f; par && a >= 0 && a < nt->count; a = par[a]) {
+    NodeKind k = nt_kind(nt, a);
+    if (k == NK_DefNode) break;
+    if (k == NK_BlockNode || k == NK_LambdaNode) return 0;
+  }
+  const ClassInfo *k = &c->classes[s->class_id];
+  return !comp_class_is_module(c, (ClassInfo *)k) && !is_object_root(k->name) && !k->is_builtin_const;
+}
 /* Check that every spelling that can change lambda has a recorded owner.
    Indirect method-table sends and string evals can reach an unknown
    table even when their syntactic receiver is known. */
@@ -12040,12 +12105,13 @@ static int lr_lambda_unknown_owner(Compiler *c) {
     int args = nt_ref(nt, f, "arguments"), n = 0;
     const int *v = args >= 0 ? nt_arr(nt, args, "arguments", &n) : NULL;
     if (!n) continue;
-    if (is_code_eval_name(name) && nt_ref(nt, f, "block") < 0) return 1;
+    if (is_code_eval_name(name) && nt_ref(nt, f, "block") < 0 && lr_eval_may_change(c, f, v[0])) return 1;
     if (is_send_family(name)) {
       int used = 0;
       const char *sent = call_sent_name(nt, f, &used);
-      if (!sent ? !lr_send_names_nothing(nt, f, v, n, used)
-                : is_method_naming_call(sent) || is_code_eval_name(sent)) return 1;
+      if (!sent ? !lr_send_names_nothing(nt, f, v, n, used) && !lr_send_on_plain_instance(c, f)
+                : ((is_method_naming_call(sent) && !lr_send_on_plain_instance(c, f) && !lr_send_on_own_singleton(c, f)) ||
+                   (is_code_eval_name(sent) && used < n && lr_eval_may_change(c, f, v[used])))) return 1;
     }
   }
   unsigned char *held = calloc((size_t)nt->count, 1);

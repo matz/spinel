@@ -344,6 +344,18 @@ int ty_never_callable(TyKind t) {
          t == TY_ENUMERATOR || ty_is_array(t) || ty_is_obj_array(t) ||
          ty_is_hash(t);
 }
+const char *ty_slot_check_fn(TyKind t) {
+  switch (t) {
+  case TY_INT: return "sp_slot_oint_ck";
+  case TY_FLOAT: return "sp_slot_ofloat_ck";
+  case TY_STRING: return "sp_slot_str_ck";
+  case TY_BOOL: return "sp_slot_bool_ck";
+  case TY_SYMBOL: return "sp_slot_sym_ck";
+  /* (one-String mode: a String slot holds the handle) */
+  case TY_STRBUF: return "sp_slot_strbuf_ck";
+  default: return NULL;
+  }
+}
 int ty_is_array(TyKind t) {
   return t == TY_INT_ARRAY || t == TY_FLOAT_ARRAY ||
          t == TY_STR_ARRAY || t == TY_POLY_ARRAY || t == TY_INT_ARRAY_ARRAY ||

@@ -115,11 +115,11 @@ sp_int sp_str_field_count(const char*s,const char*sep){
    binary input is binary -- "hdr" + digest is ASCII-8BIT there, and a slice of
    a binary string is binary because a slice of bytes is bytes.
 
-   Where CRuby would instead raise Encoding::CompatibilityError (two operands
-   that BOTH carry bytes >= 0x80 in different encodings), spinel answers binary
-   rather than raising; that is the existing posture of a runtime with two
-   encodings, and answering text there was the bug -- an untagged result does
-   not compare equal to the same bytes from pack, File.binread or a socket.
+   Two operands that BOTH carry bytes >= 0x80 in different encodings cannot
+   be joined: that raises Encoding::CompatibilityError, as CRuby's
+   rb_enc_check does (sp_str_enc_incompatible), so appending a socket's
+   non-ASCII bytes to a UTF-8 String with non-ASCII text is the error it is
+   under CRuby rather than a binary result.
 
    Only freshly allocated results are marked. The shared empty string and other
    static returns are never touched: marking one would tag it for every other
@@ -129,6 +129,13 @@ static inline char *sp_str_bin_from(char *r, const char *a) {
   return r;
 }
 
+/* The error two Strings with high bytes in different encodings raise when
+   joined; `recv_bin` is the encoding of the left (receiver) side. */
+void sp_str_enc_incompatible(int recv_bin) {
+  sp_raise_cls("Encoding::CompatibilityError", recv_bin
+    ? "incompatible character encodings: BINARY (ASCII-8BIT) and UTF-8"
+    : "incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)");
+}
 /* One step of the encoding rule over an interpolation. `state` is the
    encoding so far, -1 while only
    US-ASCII parts (an Integer's to_s, nothing yet) have gone in, 0 UTF-8, 1
@@ -141,31 +148,34 @@ int sp_str_enc_step(int state, const char *acc, size_t acc_len, const char *part
   if (part_bin == state || part_len == 0) return state;
   for (size_t i = 0; i < part_len; i++)
     if ((unsigned char)part[i] >= 0x80) {
-      for (size_t j = 0; j < acc_len; j++) {
-        if ((unsigned char)acc[j] >= 0x80)
-          sp_raise_cls("Encoding::CompatibilityError", state == 1
-            ? "incompatible character encodings: BINARY (ASCII-8BIT) and UTF-8"
-            : "incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)");
-      }
+      for (size_t j = 0; j < acc_len; j++)
+        if ((unsigned char)acc[j] >= 0x80) sp_str_enc_incompatible(state);
       return part_bin;
     }
   return state;
 }
 /* Whether a + b is binary, as CRuby's compatibility rule picks it: the
    operands' shared encoding, else the one an ASCII-only operand gives way
-   to -- `String.new + "\u00e9"` is UTF-8 -- else binary (see above). */
+   to -- `String.new + "\u00e9"` is UTF-8 -- else neither gives way and the
+   two cannot be joined (see above). */
 static int sp_str_cat_binary(const char *a, const char *b) {
   int ab = sp_str_is_binary(a), bb = sp_str_is_binary(b);
   if (ab == bb) return ab;
   if (sp_str_ascii_only(b)) return ab;
   if (sp_str_ascii_only(a)) return bb;
+  sp_str_enc_incompatible(ab);
   return 1;
 }
 /* The result r of a substitution of rep into s: binary as s + rep is, since
    CRuby gives a substitution the encoding its receiver and replacement
-   share (sp_re_gsub, sp_str_gsub and their kin). */
+   share (sp_re_gsub, sp_str_gsub and their kin). Where both hold high bytes
+   in different encodings it answers binary: CRuby judges that case by the
+   bytes of s the substitution kept, not by the whole of s, so
+   `"é".sub("é", "\xff".b)` is a binary "\xFF" there. */
 char *sp_str_bin_cat_like(const char *s, const char *rep, char *r) {
-  if (sp_str_cat_binary(s, rep)) sp_str_mark_binary(r);
+  int sb = sp_str_is_binary(s), rb = sp_str_is_binary(rep);
+  if (sb == rb ? sb : sp_str_ascii_only(rep) ? sb : sp_str_ascii_only(s) ? rb : 1)
+    sp_str_mark_binary(r);
   return r;
 }
 /* The same rule folded over a run of parts: `bin` is the encoding of the
@@ -174,12 +184,12 @@ char *sp_str_bin_cat_like(const char *s, const char *rep, char *r) {
 static int sp_str_bin_fold(const char *r, size_t pl, int bin, const char *s) {
   int sb = sp_str_is_binary(s);
   if (sb == bin || sp_str_ascii_only(s)) return bin;
-  for (size_t i = 0; i < pl; i++) if ((unsigned char)r[i] >= 0x80) return 1;
+  for (size_t i = 0; i < pl; i++) if ((unsigned char)r[i] >= 0x80) sp_str_enc_incompatible(bin);
   return sb;
 }
 const char*sp_str_concat(const char*a,const char*b){SP_GC_ROOT_STR(a);SP_GC_ROOT_STR(b);if(!a)a=sp_str_empty;if(!b)b=sp_str_empty;size_t la=sp_str_byte_len(a),lb=sp_str_byte_len(b);char*r=sp_str_alloc(la+lb);memcpy(r,a,la);memcpy(r+la,b,lb);if(sp_str_cat_binary(a,b))sp_str_mark_binary(r);return r;}
 /* Issue #760: NULL src to memcpy is UB. Treat NULL as empty string. */
-const char*sp_str_concat3(const char*a,const char*b,const char*c){SP_GC_ROOT_STR(a);SP_GC_ROOT_STR(b);SP_GC_ROOT_STR(c);if(!a)a=sp_str_empty;if(!b)b=sp_str_empty;if(!c)c=sp_str_empty;size_t la=sp_str_byte_len(a),lb=sp_str_byte_len(b),lc=sp_str_byte_len(c);char*r=sp_str_alloc(la+lb+lc);memcpy(r,a,la);memcpy(r+la,b,lb);memcpy(r+la+lb,c,lc);{int ab=sp_str_cat_binary(a,b);int rb=ab==sp_str_is_binary(c)?ab:sp_str_ascii_only(c)?ab:(sp_str_ascii_only(a)&&sp_str_ascii_only(b))?sp_str_is_binary(c):1;if(rb)sp_str_mark_binary(r);}return r;}
+const char*sp_str_concat3(const char*a,const char*b,const char*c){SP_GC_ROOT_STR(a);SP_GC_ROOT_STR(b);SP_GC_ROOT_STR(c);if(!a)a=sp_str_empty;if(!b)b=sp_str_empty;if(!c)c=sp_str_empty;size_t la=sp_str_byte_len(a),lb=sp_str_byte_len(b),lc=sp_str_byte_len(c);char*r=sp_str_alloc(la+lb+lc);memcpy(r,a,la);memcpy(r+la,b,lb);memcpy(r+la+lb,c,lc);{int rb=sp_str_is_binary(a);rb=sp_str_bin_fold(r,la,rb,b);rb=sp_str_bin_fold(r,la+lb,rb,c);if(rb)sp_str_mark_binary(r);}return r;}
 const char*sp_str_concat4(const char*a,const char*b,const char*c,const char*d){SP_GC_ROOT_STR(a);SP_GC_ROOT_STR(b);SP_GC_ROOT_STR(c);SP_GC_ROOT_STR(d);if(!a)a=sp_str_empty;if(!b)b=sp_str_empty;if(!c)c=sp_str_empty;if(!d)d=sp_str_empty;size_t la=sp_str_byte_len(a),lb=sp_str_byte_len(b),lc=sp_str_byte_len(c),ld=sp_str_byte_len(d);char*r=sp_str_alloc(la+lb+lc+ld);memcpy(r,a,la);memcpy(r+la,b,lb);memcpy(r+la+lb,c,lc);memcpy(r+la+lb+lc,d,ld);{int rb=sp_str_is_binary(a);rb=sp_str_bin_fold(r,la,rb,b);rb=sp_str_bin_fold(r,la+lb,rb,c);rb=sp_str_bin_fold(r,la+lb+lc,rb,d);if(rb)sp_str_mark_binary(r);}return r;}
 /* Concatenate N strings into a single GC-managed buffer. */
 /* Issue #760: NULL entries treated as empty strings. */
@@ -232,11 +242,13 @@ const char *sp_str_plus_lit(const char *a, const char *lit, size_t ll) {
   memcpy(r, a, la);
   memcpy(r + la, lit, ll);
   /* a binary receiver keeps its encoding unless it is ASCII-only and the
-     literal is not: then the result is the literal's UTF-8, as CRuby picks */
+     literal is not: then the result is the literal's UTF-8, as CRuby picks;
+     high bytes on both sides cannot be joined (sp_str_cat_binary) */
   if (sp_str_is_binary(a)) {
     int lit_ascii = 1;
     for (size_t i = 0; i < ll && lit_ascii; i++) lit_ascii = (unsigned char)lit[i] < 0x80;
-    if (lit_ascii || !sp_str_ascii_only(a)) sp_str_mark_binary(r);
+    if (!lit_ascii && !sp_str_ascii_only(a)) sp_str_enc_incompatible(1);
+    if (lit_ascii) sp_str_mark_binary(r);
   }
   return r;
 }
@@ -332,12 +344,16 @@ size_t sp_uc_title_utf8(uint32_t cp, char *o) {
   return (size_t)sp_utf8_encode(sp_uc_toupper(cp), o);
 }
 /* The encoding `s << t` gives s, for the first lb bytes of t: the rule of
-   sp_str_cat_binary, read before the bytes go in. */
+   sp_str_cat_binary, read before the bytes go in (so an incompatible t
+   raises with s unchanged). */
 static int sp_str_cat_binary_n(const char *s, const char *t, size_t lb) {
   int sb = sp_str_is_binary(s), tb = sp_str_is_binary(t);
   if (sb == tb) return sb;
   for (size_t i = 0; i < lb; i++)
-    if ((unsigned char)t[i] >= 0x80) return sp_str_ascii_only(s) ? tb : 1;
+    if ((unsigned char)t[i] >= 0x80) {
+      if (!sp_str_ascii_only(s)) sp_str_enc_incompatible(sb);
+      return tb;
+    }
   return sb;
 }
 /* an in-place append's receiver takes the encoding the rule picked */
@@ -659,8 +675,17 @@ const char *sp_str_repeat(const char *s, sp_int n) {
    made at its final size: pushed into from empty, it was reallocated at
    every doubling past 16 and checked for room at every byte. */
 sp_IntArray*sp_str_bytes(const char*s){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("bytes");size_t n=sp_str_byte_len(s);sp_IntArray*a=sp_IntArray_new_fill((sp_int)n,0);for(size_t i=0;i<n;i++)a->data[i]=(sp_int)(unsigned char)s[i];return a;}
-const char*sp_str_lstrip(const char*s){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("lstrip");size_t len=sp_str_byte_len(s);size_t a=0;while(a<len&&(isspace((unsigned char)s[a])||s[a]=='\0'))a++;size_t n=len-a;char*r=sp_str_alloc(n);memcpy(r,s+a,n);r[n]=0;return sp_str_bin_like(s,r);}
-const char*sp_str_rstrip(const char*s){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("rstrip");size_t len=sp_str_byte_len(s);size_t b=len;while(b>0&&(isspace((unsigned char)s[b-1])||s[b-1]=='\0'))b--;char*r=sp_str_alloc(b);memcpy(r,s,b);r[b]=0;return sp_str_bin_like(s,r);}
+/* CRuby's lstrip reads characters from the front and stops at the first one
+   that is not a space or NUL; reading an invalid UTF-8 byte there raises
+   ArgumentError (rb_enc_codepoint_len). An invalid byte further in is never
+   read, so the check walks the characters up to and including the one at
+   byte `a`, where the strip stopped. rstrip instead refuses a broken String outright, wherever the bad
+   byte sits, with Encoding::CompatibilityError (rstrip_offset). A binary
+   String has no invalid bytes. */
+void sp_str_lstrip_check(const char*s,size_t a,size_t len){if(sp_str_is_binary(s))return;size_t i=0;while(i<len&&i<=a){unsigned char c=(unsigned char)s[i];if(c<0x80){i++;continue;}int w=sp_utf8_valid_len((const unsigned char*)s+i,len-i);if(!w)sp_raise_cls("ArgumentError",SPL("invalid byte sequence in UTF-8"));i+=(size_t)w;}}
+void sp_str_rstrip_check(const char*s){if(!sp_str_valid_encoding(s))sp_raise_cls("Encoding::CompatibilityError",SPL("invalid byte sequence in UTF-8"));}
+const char*sp_str_lstrip(const char*s){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("lstrip");size_t len=sp_str_byte_len(s);size_t a=0;while(a<len&&(isspace((unsigned char)s[a])||s[a]=='\0'))a++;sp_str_lstrip_check(s,a,len);size_t n=len-a;char*r=sp_str_alloc(n);memcpy(r,s+a,n);r[n]=0;return sp_str_bin_like(s,r);}
+const char*sp_str_rstrip(const char*s){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("rstrip");sp_str_rstrip_check(s);size_t len=sp_str_byte_len(s);size_t b=len;while(b>0&&(isspace((unsigned char)s[b-1])||s[b-1]=='\0'))b--;char*r=sp_str_alloc(b);memcpy(r,s,b);r[b]=0;return sp_str_bin_like(s,r);}
 /* String#b: a fresh, unfrozen copy tagged BINARY (ASCII-8BIT). The dup alone
    left the copy UTF-8, so `"caf\u00e9".b.inspect` printed the characters where
    CRuby prints the escaped bytes, and length kept counting characters. pack
@@ -1283,7 +1308,7 @@ else if(cp!=prev){memcpy(r+n,p,cn);n+=cn;prev=cp;}p+=cn;}r[n]=0;sp_str_set_len(r
 const char*sp_str_delete_n(const char*s,const char**chars,sp_int n){SP_GC_ROOT_STR(s);if (SP_UNLIKELY(!s)) sp_nil_recv("delete");if(n<=0)return sp_str_one_answer(s);size_t*setns=(size_t*)malloc(n*sizeof(size_t));uint32_t**sets=(uint32_t**)malloc(n*sizeof(uint32_t*));int*negs=(int*)malloc(n*sizeof(int));for(sp_int i=0;i<n;i++){if(!chars[i])sp_raise_cls("TypeError","no implicit conversion of nil into String");sets[i]=sp_str_charset(s,chars[i],&negs[i],&setns[i]);}size_t bl=sp_str_byte_len(s);char*buf=(char*)malloc(bl+1);if(!buf)sp_oom_die();size_t m=0;const char*p=s,*pe=s+bl;int bin=sp_str_is_binary(s);while(p<pe){uint32_t cp;int cn=sp_str_cp_at(p,&cp,bin);int all=1;for(sp_int i=0;i<n;i++){int in_set=sp_utf8_set_has(sets[i],setns[i],cp);if(negs[i])in_set=!in_set;if(!in_set){all=0;break;}}if(!all){memcpy(buf+m,p,cn);m+=cn;}p+=cn;}buf[m]=0;for(sp_int i=0;i<n;i++)free(sets[i]);free(sets);free(setns);free(negs);char*r=sp_str_alloc(m);memcpy(r,buf,m+1);free(buf);return sp_str_bin_like(s,r);}
 const char*sp_str_squeeze_n(const char*s,const char**chars,sp_int n){SP_GC_ROOT_STR(s);if (SP_UNLIKELY(!s)) sp_nil_recv("squeeze");if(n<=0)return sp_str_squeeze(s);size_t*setns=(size_t*)malloc(n*sizeof(size_t));uint32_t**sets=(uint32_t**)malloc(n*sizeof(uint32_t*));int*negs=(int*)malloc(n*sizeof(int));for(sp_int i=0;i<n;i++){if(!chars[i])sp_raise_cls("TypeError","no implicit conversion of nil into String");sets[i]=sp_str_charset(s,chars[i],&negs[i],&setns[i]);}size_t bl=sp_str_byte_len(s);char*r=sp_str_alloc_raw(bl+1);size_t m=0;uint32_t prev=0xFFFFFFFFu;const char*p=s,*pe=s+bl;int bin=sp_str_is_binary(s);while(p<pe){uint32_t cp;int cn=sp_str_cp_at(p,&cp,bin);int all=1;for(sp_int i=0;i<n;i++){int in_set=sp_utf8_set_has(sets[i],setns[i],cp);if(negs[i])in_set=!in_set;if(!in_set){all=0;break;}}if(!all){memcpy(r+m,p,cn);m+=cn;prev=0xFFFFFFFFu;}
 else if(cp!=prev){memcpy(r+m,p,cn);m+=cn;prev=cp;}p+=cn;}r[m]=0;sp_str_set_len(r,m);for(sp_int i=0;i<n;i++)free(sets[i]);free(sets);free(setns);free(negs);return sp_str_bin_like(s,r);}
-static const char*sp_str_strip_sets(const char*s,const char**chars,sp_int n,int mode){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv(mode==1?"lstrip":mode==2?"rstrip":"strip");size_t*setns=(size_t*)malloc(n*sizeof(size_t));uint32_t**sets=(uint32_t**)malloc(n*sizeof(uint32_t*));int*negs=(int*)malloc(n*sizeof(int));for(sp_int i=0;i<n;i++){if(!chars[i])sp_raise_cls("TypeError","no implicit conversion of nil into String");sets[i]=sp_str_charset(s,chars[i],&negs[i],&setns[i]);}size_t bl=sp_str_byte_len(s),a=bl,e=0;const char*p=s,*pe=s+bl;int bin=sp_str_is_binary(s);while(p<pe){uint32_t cp;int cn=sp_str_cp_at(p,&cp,bin);int all=1;for(sp_int i=0;i<n;i++){int in_set=sp_utf8_set_has(sets[i],setns[i],cp);if(negs[i])in_set=!in_set;if(!in_set){all=0;break;}}if(!all){if(a==bl)a=(size_t)(p-s);e=(size_t)(p-s)+cn;}p+=cn;}for(sp_int i=0;i<n;i++)free(sets[i]);free(sets);free(setns);free(negs);if(mode==1)e=bl;else if(mode==2)a=0;if(e<a)e=a;size_t m=e-a;char*r=sp_str_alloc(m);memcpy(r,s+a,m);r[m]=0;if(sp_str_is_binary(s))sp_str_mark_binary(r);return r;}
+static const char*sp_str_strip_sets(const char*s,const char**chars,sp_int n,int mode){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv(mode==1?"lstrip":mode==2?"rstrip":"strip");size_t*setns=(size_t*)malloc(n*sizeof(size_t));uint32_t**sets=(uint32_t**)malloc(n*sizeof(uint32_t*));int*negs=(int*)malloc(n*sizeof(int));for(sp_int i=0;i<n;i++){if(!chars[i])sp_raise_cls("TypeError","no implicit conversion of nil into String");sets[i]=sp_str_charset(s,chars[i],&negs[i],&setns[i]);}size_t bl=sp_str_byte_len(s),a=bl,e=0;const char*p=s,*pe=s+bl;int bin=sp_str_is_binary(s);while(p<pe){uint32_t cp;int cn=sp_str_cp_at(p,&cp,bin);int all=1;for(sp_int i=0;i<n;i++){int in_set=sp_utf8_set_has(sets[i],setns[i],cp);if(negs[i])in_set=!in_set;if(!in_set){all=0;break;}}if(!all){if(a==bl)a=(size_t)(p-s);e=(size_t)(p-s)+cn;}p+=cn;}for(sp_int i=0;i<n;i++)free(sets[i]);free(sets);free(setns);free(negs);if(mode!=2)sp_str_lstrip_check(s,a,bl);if(mode!=1)sp_str_rstrip_check(s);if(mode==1)e=bl;else if(mode==2)a=0;if(e<a)e=a;size_t m=e-a;char*r=sp_str_alloc(m);memcpy(r,s+a,m);r[m]=0;if(sp_str_is_binary(s))sp_str_mark_binary(r);return r;}
 const char*sp_str_strip_n(const char*s,const char**chars,sp_int n){return sp_str_strip_sets(s,chars,n,3);}
 const char*sp_str_lstrip_n(const char*s,const char**chars,sp_int n){return sp_str_strip_sets(s,chars,n,1);}
 const char*sp_str_rstrip_n(const char*s,const char**chars,sp_int n){return sp_str_strip_sets(s,chars,n,2);}

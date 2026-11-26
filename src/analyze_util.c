@@ -1499,7 +1499,9 @@ const char *an_literal_name(const NodeTable *nt, int node) {
   NodeKind k = node >= 0 ? nt_kind(nt, node) : NK_NONE;
   if (k != NK_SymbolNode && k != NK_StringNode) return NULL;
   const char *v = nt_str(nt, node, "value");
-  return v ? v : nt_str(nt, node, "unescaped");
+  if (!v) v = nt_str(nt, node, "unescaped");
+  /* (a String literal as the parser gives it holds its text as content) */
+  return v ? v : nt_str(nt, node, "content");
 }
 /* Does the program alias method `a` or `b` (NULL for none): an `alias` or an `alias_method` whose old name is one of
    them, or is no literal name (it may be)? The copy an alias makes keeps the method it found. */
@@ -5297,6 +5299,13 @@ int is_proc_create(Compiler *c, int id) {
   if (k == NK_LambdaNode) return 1;
   return is_proc_literal(c, id);
 }
+/* Is proc literal `create` (is_proc_create) a lambda, binding its
+   arguments strictly: `->(a) { }` or `lambda { |a| }`? */
+int is_lambda_create(Compiler *c, int create) {
+  const NodeTable *nt = c->nt;
+  const char *cn = nt_str(nt, create, "name");
+  return nt_kind(nt, create) == NK_LambdaNode || (cn && is_lambda_constructor(cn));
+}
 /* Unify the value types of `return <expr>` nodes lexically inside a proc body,
    without descending into a nested scope (a def/class/module, or a nested block
    or lambda -- whose returns are their own or non-local). Used to widen a proc
@@ -6569,6 +6578,9 @@ static int param_handed_computed_name(Compiler *c, int arg, const char *vn, int 
     c->send_param_memo_nodes = nt->count;
   }
   if (key >= 0 && c->send_param_memo && c->send_param_memo[key]) return c->send_param_memo[key] == 2;
+  /* (3: being answered. A method_missing's own forwarding send takes an arm
+     that hands the parameter back to it, at this depth: the cycle names nothing) */
+  if (key >= 0 && c->send_param_memo) c->send_param_memo[key] = 3;
   int res = 0;
   /* the calls of the method's name, off the calls-by-name index: every
      call of the program was read for each parameter asked about. An
@@ -6591,6 +6603,7 @@ static int param_handed_computed_name(Compiler *c, int arg, const char *vn, int 
        holding the program's literals is not. Read as its to_sym, a literal
        name made every forwarding method_missing's send computed, and one on
        a receiver of no known class passed the arm cap and was refused. */
+    int mm_hop = 0;   /* x is the send's own name, read at this depth: the hop costs none */
     if (nt_int(nt, id, "dsend_mm", 0)) {
       int ts = av[0], reaches = 0;
       for (const char *p = nt_str(nt, ts, "dsend_mm_classes"); p && *p && !reaches; p = strchr(p, ',') ? strchr(p, ',') + 1 : "") {
@@ -6598,11 +6611,11 @@ static int param_handed_computed_name(Compiler *c, int arg, const char *vn, int 
         if (k >= 0 && k < c->nclasses && call_target(c, id, k, cnames[ci], CT_METHODS, NULL) == si) reaches = 1;
       }
       if (!reaches) continue;
-      if (x == ts) x = nt_ref(nt, ts, "receiver");
+      if (x == ts) { x = nt_ref(nt, ts, "receiver"); mm_hop = 1; }
     }
     NodeKind xk = nt_kind(nt, x);
     if (xk == NK_SplatNode || xk == NK_KeywordHashNode || xk == NK_BlockArgumentNode) continue;
-    if (value_is_computed_name(c, x) || ((xk == NK_LocalVariableReadNode || xk == NK_InstanceVariableReadNode) && send_name_is_computed(c, x, depth + 1))) res = 1;
+    if (value_is_computed_name(c, x) || ((xk == NK_LocalVariableReadNode || xk == NK_InstanceVariableReadNode) && send_name_is_computed(c, x, mm_hop ? depth : depth + 1))) res = 1;
   }
   /* the memo may have been rebuilt by a deeper call: write only into the live one */
   if (key >= 0 && c->send_param_memo && c->send_param_memo_nodes == nt->count && key < c->send_param_memo_n)

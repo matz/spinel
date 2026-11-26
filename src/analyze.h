@@ -1676,6 +1676,7 @@ enum { DPN_OWN, DPN_WRITTEN, DPN_NAMELESS, DPN_NONE };
 int desugared_param_name(const NodeTable *nt, int p, const char **written);
 int ie_kwhash_value(Compiler *c, int kwhash, const char *name);
 TyKind ie_kwhash_computed_type(Compiler *c, int kwhash);
+int ie_kwhash_computed_value(const NodeTable *nt, int el);
 
 /* instance_exec trampoline body-arg resolution (mixed local/ivar/literal args):
    effective arg count, and the node to bind/emit for the p-th block param

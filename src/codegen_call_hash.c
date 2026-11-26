@@ -611,6 +611,11 @@ int emit_op_hash_set_default(Compiler *c, const BopCtx *x, Buf *b) {
   if (shared_default) at = TY_STRBUF;
   int is_nil = at == TY_NIL || at == TY_VOID;
   int held = !is_nil && (ty_is_object(at) || c_type_name(at));
+  /* an Integer or a Float that may be nil (sp_oint, sp_ofloat) is held with
+     its nil, for a hash that keeps a nil default: unwrapped, a nil raised */
+  int ohold = held && (at == TY_INT || at == TY_FLOAT) && node_is_oint(c, argv[0]) &&
+              (rt == TY_SYM_POLY_HASH || rt == TY_STR_POLY_HASH || rt == TY_POLY_POLY_HASH ||
+               (at == TY_INT && (rt == TY_STR_INT_HASH || rt == TY_INT_INT_HASH)));
   int t = ++g_tmp, tv = ++g_tmp;
   char av[32];
   snprintf(av, sizeof av, is_nil ? "0" : "_t%d", tv);
@@ -619,6 +624,11 @@ int emit_op_hash_set_default(Compiler *c, const BopCtx *x, Buf *b) {
   if (shared_default) {
     buf_printf(b, " sp_String *_t%d = ", tv); emit_strbuf_handle_of(c, argv[0], b);
     buf_printf(b, "; SP_GC_ROOT(_t%d);", tv);
+  }
+  else if (ohold) {
+    buf_printf(b, " %s _t%d = ", at == TY_FLOAT ? "sp_ofloat" : "sp_oint", tv);
+    emit_oint_expr(c, argv[0], at, b);
+    buf_puts(b, ";");
   }
   else if (held) { buf_puts(b, " "); emit_ctype(c, at, b); buf_printf(b, " _t%d = ", tv); emit_expr(c, argv[0], b); buf_puts(b, ";"); }
   else if (is_nil) { buf_puts(b, " (void)("); emit_expr_for_effect(c, argv[0], b); buf_puts(b, ");"); }
@@ -635,6 +645,7 @@ int emit_op_hash_set_default(Compiler *c, const BopCtx *x, Buf *b) {
   if (rt == TY_SYM_POLY_HASH || rt == TY_STR_POLY_HASH || rt == TY_POLY_POLY_HASH) {
     buf_printf(b, is_nil ? " if (_t%d) _t%d->default_v = " : " if (_t%d) { _t%d->default_v = ", t, t);
     if (is_nil) buf_puts(b, "sp_box_nil()");
+    else if (ohold) buf_printf(b, "%s(%s)", at == TY_FLOAT ? "sp_box_ofloat" : "sp_box_oint", av);
     else if (dhandle) buf_printf(b, "sp_box_nullable_obj(%s, SP_BUILTIN_STRBUF)", dref.p);
     else if (held) emit_boxed_text(c, at, av, b); else emit_boxed(c, argv[0], b);
     if (is_nil) buf_puts(b, ";");
@@ -652,6 +663,10 @@ int emit_op_hash_set_default(Compiler *c, const BopCtx *x, Buf *b) {
   else if (rt == TY_STR_INT_HASH || rt == TY_INT_INT_HASH) {
     /* a nil default is the hash's default_nil flag, not a value */
     if (is_nil) buf_printf(b, " if (_t%d) { _t%d->default_nil = 1; _t%d->default_v = 0; }", t, t, t);
+    /* (a nilable Integer: its nil is the flag) */
+    else if (ohold)
+      buf_printf(b, " if (_t%d) { _t%d->default_nil = %s.nil; _t%d->default_v = %s.nil ? 0 : %s.v; }",
+                 t, t, av, t, av, av);
     /* a boxed default that is nil is the flag too (the comment above: nil
        is kept); any other is unboxed as before */
     else if (held && at == TY_POLY)
@@ -680,6 +695,8 @@ int emit_op_hash_set_default(Compiler *c, const BopCtx *x, Buf *b) {
   }
   buf_puts(b, " ");
   if (shared_default && !repr_of(c, x->id).demand) buf_printf(b, "sp_strbuf_read(%s)", av);
+  /* (the setter's value: the argument as the call's own slot holds it) */
+  else if (ohold && !node_is_oint(c, x->id)) buf_printf(b, "%s(%s)", at == TY_FLOAT ? "sp_ofloat_arg" : "sp_oint_arg", av);
   else if (held || is_nil) buf_puts(b, av); else emit_expr(c, argv[0], b);
   free(dref.p);
   buf_puts(b, "; })"); return 1;

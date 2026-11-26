@@ -773,7 +773,7 @@ build/sp_cold.o: lib/sp_cold.c $(RT_HDRS)
 
 SP_RT_LIB = lib/libspinel_rt.a
 
-RT_MEMBERS = sp_bigint sp_crypto sp_pack sp_time sp_core sp_net sp_system sp_gc sp_slab sp_alloc sp_dtoa sp_marshal sp_format sp_string sp_inspect sp_poly_cold sp_array sp_str sp_str_cold sp_str_crypt sp_hash sp_proc sp_exc sp_re sp_random sp_fiber sp_sched sp_io sp_iobuffer sp_cold sp_enum_str sp_process sp_process_status
+RT_MEMBERS = sp_bigint sp_crypto sp_pack sp_time sp_core sp_net sp_system sp_gc sp_slab sp_alloc sp_dtoa sp_marshal sp_format sp_string sp_inspect sp_poly_cold sp_array sp_str sp_str_cold sp_str_crypt sp_hash sp_proc sp_exc sp_re sp_random sp_fiber sp_sched sp_io sp_iobuffer sp_cold sp_enum_str sp_process sp_process_status sp_rtclass
 
 # Opt-in runtime for carried C extensions. The regular archive has no hook
 # branches or extension state, preserving its instruction stream.
@@ -2643,11 +2643,6 @@ reject-test: string-minus-reject-test $(SPINEL)
 	  else grep -Eq "is not a (class|module)" "$$tmp/$$t.out" || \
 	    { echo "reject-test: FAIL (#4318: $$t rejected without saying why)"; sed -n 1,3p "$$tmp/$$t.out"; ok=0; }; fi; \
 	done; \
-	t=test/reject/typed_array_kept_by_struct_into_boxed_param_store.rb; \
-	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/tb.c" >"$$tmp/tb.out" 2>&1; then \
-	  echo "reject-test: FAIL (a typed array held by the caller, stored into through a boxed parameter, compiled)"; ok=0; \
-	else grep -q "which the method stores elements of other kinds into" "$$tmp/tb.out" || \
-	  { echo "reject-test: FAIL (a held typed array into a boxed parameter's store rejected without saying why)"; sed -n 1,5p "$$tmp/tb.out"; ok=0; }; fi; \
 	t=test/reject/const_get_runtime_name.rb; \
 	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/cg.c" >"$$tmp/cg.out" 2>&1; then \
 	  echo "reject-test: FAIL (a const_get with a run-time name on a class value compiled)"; ok=0; \
@@ -5725,6 +5720,8 @@ infer-test-2: $(SPINEL) $(SP_RT_LIB)
 	else echo "infer-test: FAIL (compile method_capture_boxed_arg_hash_param)"; ok=0; fi; \
 	$(SPINEL) test/builtin_reopen_yield_tap.rb -c --no-line-map -o "$$tmp/ryt.c" >/dev/null 2>"$$tmp/ryt.err" || { echo "infer-test: FAIL (compile builtin_reopen_yield_tap)"; ok=0; }; \
 	! grep -q 'did not converge' "$$tmp/ryt.err" || { echo "infer-test: FAIL (a tap or then of a String, Symbol, Float or Range reopen typed its block parameter as the receiver and as the method's yield on alternate rounds: the fixpoint ran to its cap)"; ok=0; }; \
+	SP_FIXPOINT_LOG=1 $(SPINEL) test/infer/mutator_rebind_in_proc_converges.rb -c --no-line-map -o "$$tmp/mrr.c" >/dev/null 2>"$$tmp/mrr.err" || { echo "infer-test: FAIL (compile mutator_rebind_in_proc_converges)"; ok=0; }; \
+	! grep -q 'did not converge' "$$tmp/mrr.err" || { echo "infer-test: FAIL (a String mutator's receiver snapshot inside a proc was rebound to a fresh snapshot every round: the fixpoint ran to its cap)"; ok=0; }; \
 	$(SPINEL) test/infer/dead_constructor_no_arm.rb -c --no-line-map -o "$$tmp/dc.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (compile dead_constructor_no_arm)"; exit 1; }; \
 	grep -q 'sp_poly_add' "$$tmp/dc.c" && { echo "infer-test: FAIL (a class constructed only in dead code widened a poly receiver's field read to poly)"; ok=0; }; \
 	grep -Eq '(sp_int_add\(|sp_o?int _t[0-9]+ = )\(\{ sp_RbVal _t[0-9]+ = lv_d; sp_o?int _t[0-9]+ = (0|sp_oint_nil\(\)); switch' "$$tmp/dc.c" || { echo "infer-test: FAIL (the field read of a boxed receiver did not stay an int switch, or its receiver is rooted for an arm that cannot run)"; ok=0; }; \

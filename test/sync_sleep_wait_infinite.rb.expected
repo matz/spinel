@@ -1,0 +1,11 @@
+[:sleep, Infinity, [RangeError, "Inf out of Time range", true]]
+[:wait, Infinity, [RangeError, "Inf out of Time range", true]]
+[:sleep, -Infinity, [ArgumentError, "time interval must not be negative", true]]
+[:wait, -Infinity, [ArgumentError, "time interval must not be negative", true]]
+[:sleep, NaN, [RangeError, "NaN out of Time range", true]]
+[:wait, NaN, [RangeError, "NaN out of Time range", true]]
+[:sleep, -1.0, [ArgumentError, "time interval must not be negative", true]]
+[:wait, -1.0, [ArgumentError, "time interval must not be negative", true]]
+false
+[:monitor, Infinity, true, false]
+[:monitor, -1.0, true, false]

@@ -3417,10 +3417,9 @@ sp_File *sp_file_lstat_handle(const char *path) {SP_GC_ROOT_STR(path);
 static int sp_stat_handle_p(sp_File *f) {
   return f && f->mode && (strcmp(f->mode, "stat") == 0 || strcmp(f->mode, "lstat") == 0);
 }
+static int sp_stat_read(sp_File *f, struct stat *st);
 static int sp_stat_handle_mtime(sp_File *f, struct stat *st) {
-  if (f->path && f->path[0])
-    return (strcmp(f->mode, "lstat") == 0 ? lstat(f->path, st) : stat(f->path, st)) == 0;
-  return f->fp && fstat(fileno(f->fp), st) == 0;
+  return sp_stat_read(f, st) == 0;
 }
 sp_bool sp_io_eq(sp_File *a, sp_File *b) {
   if (a == b) return TRUE;
@@ -3467,27 +3466,123 @@ const char *sp_io_to_s(sp_File *f) {
 sp_bool sp_stat_nofollow(sp_File *f) {
   return f && f->mode && strcmp(f->mode, "lstat") == 0;
 }
-/* IO#stat. A handle opened from a descriptor (IO.new(fd) / IO.for_fd) has no
-   path to stat, so the handle it answers carries the stream instead and the
-   accessors below fstat(2) it. */
-static int sp_stat_pathless(sp_File *f) {
-  return f && f->fp && (!f->path || f->path[0] == 0);
-}
-sp_File *sp_io_stat_handle(sp_File *f) {SP_GC_ROOT(f);
-  SP_IO_OPEN(f);
-  /* a standard stream's "<STDOUT>" is a placeholder, not a path: fstat it,
-     as a handle opened from a descriptor is; a File opened by a name that
-     starts with '<' still goes by its path */
-  if (f->path && f->path[0] && (f->path[0] != '<' || f->is_file)) return sp_file_stat_handle(f->path);
+/* What IO#stat keeps after its handle: the descriptor's struct stat and,
+   read at the same time, its birth time. */
+typedef struct {
   struct stat st;
-  if (fstat(fileno(f->fp), &st) != 0)
-    sp_raise_cls("Errno::EBADF", "Bad file descriptor");
-  sp_File *h = (sp_File *)sp_gc_alloc(sizeof(sp_File), NULL, sp_file_stat_scan);
-  h->fp = f->fp;
+  sp_Time btime;   /* the birth time, when has_btime */
+  int has_btime;   /* 0: the platform or the filesystem keeps none */
+} sp_stat_snap;
+static sp_stat_snap *sp_stat_snap_of(sp_File *f) { return (sp_stat_snap *)(void *)(f + 1); }
+/* The birth time of the file open on fd, whose fstat(2) is st: 1 with *out
+   set, 0 when there is none to read, -1 with errno set when asking failed. */
+static int sp_fd_btime(int fd, const struct stat *st, sp_Time *out) {
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__DragonFly__)
+  (void)fd;
+  *out = (sp_Time){(int64_t)st->st_birthtimespec.tv_sec, (int32_t)st->st_birthtimespec.tv_nsec, 0};
+  return 1;
+#elif defined(__linux__) && defined(STATX_BTIME)
+  (void)st;
+  struct statx stx;
+  if (statx(fd, "", AT_EMPTY_PATH | AT_STATX_SYNC_AS_STAT, STATX_BTIME, &stx) != 0) return -1;
+  if (!(stx.stx_mask & STATX_BTIME)) return 0;
+  *out = (sp_Time){(int64_t)stx.stx_btime.tv_sec, (int32_t)stx.stx_btime.tv_nsec, 0};
+  return 1;
+#elif defined(_WIN32)
+  (void)fd;
+  *out = (sp_Time){(int64_t)st->st_birthtim.tv_sec, (int32_t)st->st_birthtim.tv_nsec, 0};
+  return 1;
+#else
+  (void)fd; (void)st; (void)out;
+  return 0;
+#endif
+}
+/* Which struct stat an accessor below reads. A File::Stat that IO#stat
+   made answers the one it kept, fstat(2) of the descriptor when it was made;
+   an open File or IO itself (File#size, File#mtime, ...) is fstat(2)ed now,
+   as CRuby reads them from the descriptor -- its path may have been renamed
+   or unlinked since the open; a stat handle of a path (File.stat,
+   File.lstat, File#lstat) stats that path. */
+static int sp_stat_pathless(sp_File *f) {
+  return f && (f->stat_snap || !sp_stat_handle_p(f));
+}
+static int sp_stat_read(sp_File *f, struct stat *st) {
+  if (f && f->stat_snap) { *st = sp_stat_snap_of(f)->st; return 0; }
+  if (f && !sp_stat_handle_p(f)) {
+    int fd = sp_io_fd_use(f);
+    int r = fstat(fd, st);
+    sp_io_fd_unuse(f);
+    return r;
+  }
+  const char *p = (f && f->path) ? f->path : "";
+  return sp_stat_nofollow(f) ? lstat(p, st) : stat(p, st);
+}
+/* IO#stat: fstat(2) of the descriptor, kept in the handle it answers, as
+   CRuby's File::Stat is a copy of the struct. Stating the path instead
+   described whatever file the path names now, not the open one. */
+sp_File *sp_io_stat_handle(sp_File *f) {SP_GC_ROOT(f);
+  struct stat st;
+  sp_Time bt = {0, 0, 0};
+  int fd = sp_io_fd_use(f);
+  int r = fstat(fd, &st);
+  int has_bt = r == 0 && sp_fd_btime(fd, &st, &bt) > 0;
+  sp_io_fd_unuse(f);
+  if (r != 0)
+    sp_file_raise_errno("rb_io_stat", (f->path && f->path[0] != '<') ? f->path : "");
+  sp_File *h = (sp_File *)sp_gc_alloc(sizeof(sp_File) + sizeof(sp_stat_snap), NULL, sp_file_stat_scan);
+  h->fp = NULL;
   h->path = sp_str_empty;
   h->mode = (&("\xff" "stat")[1]);
   h->lineno = 0;
+  sp_stat_snap *snap = sp_stat_snap_of(h);
+  snap->st = st;
+  snap->btime = bt;
+  snap->has_btime = has_bt;
+  h->stat_snap = 1;
   return h;
+}
+/* File#birthtime and File::Stat#birthtime. An open File asks its
+   descriptor, as CRuby does, and IO#stat's handle answers the birth time it
+   kept; a stat handle of a path asks that path. */
+sp_Time sp_io_birthtimev(sp_File *f) {SP_GC_ROOT(f);
+  sp_Time bt = {0, 0, 0};
+  int r;
+  if (f && f->stat_snap) {
+    sp_stat_snap *snap = sp_stat_snap_of(f);
+    bt = snap->btime; r = snap->has_btime;
+  } else if (sp_stat_handle_p(f)) {
+    return sp_filev_birthtime(f->path);
+  } else {
+    struct stat st;
+    int fd = sp_io_fd_use(f);
+    r = fstat(fd, &st) != 0 ? -1 : sp_fd_btime(fd, &st, &bt);
+    sp_io_fd_unuse(f);
+  }
+  if (r < 0) sp_file_raise_errno("rb_file_birthtime", (f && f->path) ? f->path : "");
+  if (r == 0) {
+    sp_raise_cls("NotImplementedError", "birthtime() function is unimplemented on this filesystem");
+    return (sp_Time){0, 0, 0};
+  }
+  return bt;
+}
+sp_Time *sp_io_birthtime(sp_File *f) { return sp_time_ref(sp_io_birthtimev(f)); }
+/* File#chmod and File#chown: fchmod(2) / fchown(2) of the descriptor, as
+   CRuby changes the open file and not whatever its path names now. */
+sp_int sp_File_chmod(sp_File *f, sp_int mode) {SP_GC_ROOT(f);
+  int fd = sp_io_fd_use(f);
+  int r = fchmod(fd, (mode_t)mode);
+  sp_io_fd_unuse(f);
+  if (r != 0)
+    sp_file_raise_errno("rb_file_chmod", (f->path && f->path[0] != '<') ? f->path : "");
+  return 0;
+}
+sp_int sp_File_chown(sp_File *f, sp_int uid, sp_int gid) {SP_GC_ROOT(f);
+  int fd = sp_io_fd_use(f);
+  int r = fchown(fd, (uid_t)uid, (gid_t)gid);
+  sp_io_fd_unuse(f);
+  if (r != 0)
+    sp_file_raise_errno("rb_file_chown", (f->path && f->path[0] != '<') ? f->path : "");
+  return 0;
 }
 /* One stat(2) field by index, so File::Stat's numeric accessors need one
    runtime entry rather than a dozen. 0=uid 1=gid 2=nlink 3=dev 4=ino
@@ -3499,12 +3594,7 @@ static sp_int sp_stat_field_n(sp_File *f, sp_int which, int *ok);
 sp_oint sp_stat_field(sp_File *f, sp_int which) {SP_GC_ROOT(f); int ok = 1; sp_int n = sp_stat_field_n(f, which, &ok); return ok ? sp_oint_of(n) : sp_oint_nil(); }
 static sp_int sp_stat_field_n(sp_File *f, sp_int which, int *ok) {SP_GC_ROOT(f);
   struct stat st;
-  int r;
-  if (sp_stat_pathless(f)) r = fstat(fileno(f->fp), &st);
-  else {
-    const char *p = (f && f->path) ? f->path : "";
-    r = sp_stat_nofollow(f) ? lstat(p, &st) : stat(p, &st);
-  }
+  int r = sp_stat_read(f, &st);
   if (r != 0) { *ok = 0; return 0; }
   switch (which) {
     case 0: return (sp_int)st.st_uid;
@@ -3544,12 +3634,7 @@ static sp_int sp_stat_field_n(sp_File *f, sp_int which, int *ok) {SP_GC_ROOT(f);
    1=atime 2=ctime. */
 sp_Time sp_statv_handle_time(sp_File *f, sp_int kind) {SP_GC_ROOT(f);
   struct stat st;
-  int r;
-  if (sp_stat_pathless(f)) r = fstat(fileno(f->fp), &st);
-  else {
-    const char *p = (f && f->path) ? f->path : "";
-    r = sp_stat_nofollow(f) ? lstat(p, &st) : stat(p, &st);
-  }
+  int r = sp_stat_read(f, &st);
   if (r != 0) {
     sp_file_raise_errno("rb_file_s_mtime", (f && f->path) ? f->path : "");
     return (sp_Time){0, 0, 0};
@@ -3571,12 +3656,7 @@ sp_Time sp_statv_handle_time(sp_File *f, sp_int kind) {SP_GC_ROOT(f);
    7=sticky? 8=socket?. */
 sp_int sp_stat_type_pred(sp_File *f, sp_int kind) {SP_GC_ROOT(f);
   struct stat st;
-  int r;
-  if (sp_stat_pathless(f)) r = fstat(fileno(f->fp), &st);
-  else {
-    const char *p = (f && f->path) ? f->path : "";
-    r = sp_stat_nofollow(f) ? lstat(p, &st) : stat(p, &st);
-  }
+  int r = sp_stat_read(f, &st);
   if (r != 0) return 0;
   switch (kind) {
     case 0: return S_ISREG(st.st_mode) ? 1 : 0;
@@ -3621,12 +3701,7 @@ static sp_bool sp_stat_real_access(const struct stat *st, mode_t usr, mode_t grp
    (7, size?, is sp_stat_size_q). */
 sp_int sp_stat_pred(sp_File *f, sp_int kind) {SP_GC_ROOT(f);
   struct stat st;
-  int r;
-  if (sp_stat_pathless(f)) r = fstat(fileno(f->fp), &st);
-  else {
-    const char *p = (f && f->path) ? f->path : "";
-    r = sp_stat_nofollow(f) ? lstat(p, &st) : stat(p, &st);
-  }
+  int r = sp_stat_read(f, &st);
   if (r != 0) return 0;
   switch (kind) {
     case 0: return S_ISFIFO(st.st_mode) ? 1 : 0;
@@ -3653,12 +3728,16 @@ sp_oint sp_stat_size_q(sp_File *f) {SP_GC_ROOT(f);
    whose path is gone or absent. Buffered bytes are flushed first so the file
    is cut at the size the program believes it has written. */
 /* File#size on a handle: fstat(2) of the descriptor, as CRuby reads it --
-   the path may have been renamed or unlinked since the open. */
+   the path may have been renamed or unlinked since the open. The flush
+   and the fstat hold a use of the handle, as the typed File#size does
+   (sp_stat_size), so the two give one answer and one error. */
 sp_int sp_File_size(sp_File *f) {SP_GC_ROOT(f);
-  SP_IO_OPEN(f);
+  sp_io_flush_for_size(f);
   struct stat st;
-  fflush(f->fp);
-  if (fstat(fileno(f->fp), &st) != 0) sp_file_raise_errno("rb_file_size", f->path ? f->path : "");
+  int fd = sp_io_fd_use(f);
+  int r = fstat(fd, &st);
+  sp_io_fd_unuse(f);
+  if (r != 0) sp_file_raise_errno("rb_file_size", f->path ? f->path : "");
   if ((off_t)(sp_int)st.st_size != st.st_size) {
     sp_raise_cls("RangeError", "file size out of range for Integer");
     return 0;
@@ -3675,24 +3754,20 @@ sp_int sp_File_truncate(sp_File *f, sp_int n) {SP_GC_ROOT(f);
 }
 sp_oint sp_stat_size(sp_File *f) {SP_GC_ROOT(f);
   struct stat st;
-  if (sp_stat_pathless(f))
-    return fstat(fileno(f->fp), &st) == 0 ? sp_oint_of((sp_int)st.st_size) : sp_oint_nil();
-  const char *p = (f && f->path) ? f->path : "";
-  int r = sp_stat_nofollow(f) ? lstat(p, &st) : stat(p, &st);
+  /* File#size counts the bytes written and still buffered */
+  if (f && !f->stat_snap && !sp_stat_handle_p(f)) sp_io_flush_for_size(f);
+  int r = sp_stat_read(f, &st);
   return r == 0 ? sp_oint_of((sp_int)st.st_size) : sp_oint_nil();
 }
 sp_int sp_stat_mode(sp_File *f) {SP_GC_ROOT(f);
   struct stat st;
-  if (sp_stat_pathless(f))
-    return fstat(fileno(f->fp), &st) == 0 ? (sp_int)st.st_mode : 0;
-  const char *p = (f && f->path) ? f->path : "";
-  int r = sp_stat_nofollow(f) ? lstat(p, &st) : stat(p, &st);
+  int r = sp_stat_read(f, &st);
   return r == 0 ? (sp_int)st.st_mode : 0;
 }
 const char *sp_stat_ftype(sp_File *f) {SP_GC_ROOT(f);
   if (sp_stat_pathless(f)) {
     struct stat st;
-    if (fstat(fileno(f->fp), &st) != 0) return sp_str_empty;
+    if (sp_stat_read(f, &st) != 0) return sp_str_empty;
     if (S_ISDIR(st.st_mode))  return (&("\xff" "directory")[1]);
     if (S_ISCHR(st.st_mode))  return (&("\xff" "characterSpecial")[1]);
     if (S_ISBLK(st.st_mode))  return (&("\xff" "blockSpecial")[1]);
@@ -6631,11 +6706,15 @@ sp_RbVal sp_complex_abs2_v(sp_Complex a) {
   return sp_box_float(v);
 }
 unsigned char sp_class_frozen_map[4096];
+unsigned char *(*sp_rtclass_frozen_fn)(sp_int id);
+sp_int (*sp_obj_rtclass_fn)(sp_RbVal v);
 void sp_class_freeze_id(sp_int cls_id) {
+  if (sp_rtclass_frozen_fn && sp_rtclass_id_p(cls_id)) { *sp_rtclass_frozen_fn(cls_id) = 1; return; }
   sp_int ix = cls_id >= 0 ? cls_id : (3900 - cls_id);
   if (ix >= 0 && ix < 4096) sp_class_frozen_map[ix] = 1;
 }
 sp_bool sp_class_frozen_id(sp_int cls_id) {
+  if (sp_rtclass_frozen_fn && sp_rtclass_id_p(cls_id)) return (sp_bool)*sp_rtclass_frozen_fn(cls_id);
   sp_int ix = cls_id >= 0 ? cls_id : (3900 - cls_id);
   return (ix >= 0 && ix < 4096) ? (sp_bool)sp_class_frozen_map[ix] : 0;
 }

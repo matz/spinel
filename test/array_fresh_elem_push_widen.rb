@@ -54,3 +54,12 @@ o2[:a] << "x" if o2[:a]
 r2 = [s2&.bytes]
 r2[0] << "x" if r2[0]
 p o2, r2
+
+# a new Array of to_a or Array.new, held in a Hash or an Array
+h3 = { a: (1..3).to_a }
+h3[:a] << "x"
+r3 = [Array.new(2, 0)]
+r3[0] << "y"
+h4 = { b: Array.new(1, 2.5) }
+h4.each_value { |e| e << "z" }
+p h3, r3, h4

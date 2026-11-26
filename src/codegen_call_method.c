@@ -1454,7 +1454,61 @@ int emit_op_method_arity(Compiler *c, const BopCtx *x, Buf *b) {
 
 /* calling a Method or a Proc (call / () / [] / ===), composing Procs (<< >>), and a Proc's
    own methods (its builtin-op rows, parameters, source_location) */
+static int g_nil_eqq_node = -1;
 int emit_call_callable_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv) {
+  /* `m === x` on a Method value that is nil (`super_method` with no
+     super) is nil's own `===`, true for a nil argument. The receiver goes
+     into a temp the call reads, so it is evaluated once. */
+  if (sp_streq(name, "===") && argc == 1 && recv >= 0 && comp_ntype(c, recv) == TY_METHOD &&
+      g_nil_eqq_node != id && g_n_argov < MAX_ARG_OVERRIDE) {
+    Repr rr = repr_of(c, id);
+    int boxed = rr.kind == RK_BOXED || rr.as_ty == TY_POLY;
+    if (boxed || rr.as_ty == TY_BOOL) {
+      int tq = ++g_tmp;
+      Buf rq; memset(&rq, 0, sizeof rq); emit_expr(c, recv, &rq);
+      emit_indent(g_pre, g_indent);
+      buf_printf(g_pre, "sp_BoundMethod *_t%d = %s; SP_GC_ROOT(_t%d);\n", tq, rq.p ? rq.p : "NULL", tq);
+      free(rq.p);
+      int ov = g_n_argov;
+      view_bind_temp(recv, tq);
+      /* an argument with an effect runs once, and both arms read it */
+      Repr ar = repr_of(c, argv[0]);
+      TyKind at = ar.kind == RK_BOXED ? TY_POLY : ar.as_ty;
+      if (subtree_has_side_effect(c, argv[0]) && at != TY_NIL && at != TY_VOID && at != TY_UNKNOWN &&
+          g_n_argov < MAX_ARG_OVERRIDE) {
+        /* (a nullable Integer or Float keeps its nil in its oint) */
+        int so = oint_kind(at) && node_is_oint(c, argv[0]);
+        int ta = ++g_tmp;
+        Buf av; memset(&av, 0, sizeof av);
+        if (so) emit_oint_expr(c, argv[0], at, &av); else emit_expr(c, argv[0], &av);
+        emit_indent(g_pre, g_indent);
+        if (so) buf_puts(g_pre, oint_ctype(at)); else emit_ctype(c, at, g_pre);
+        buf_printf(g_pre, " _t%d = %s; ", ta, av.p ? av.p : "0");
+        if (!so) emit_gc_root_tmp(c, at, ta, g_pre);
+        buf_puts(g_pre, "\n");
+        free(av.p);
+        if (so) view_bind_temp_o(argv[0], ta); else view_bind_temp(argv[0], ta);
+      }
+      /* a nil-valued one runs once for its effect; both arms read nil */
+      else if (subtree_has_side_effect(c, argv[0]) && (at == TY_NIL || at == TY_VOID) &&
+               g_n_argov < MAX_ARG_OVERRIDE) {
+        Buf av; memset(&av, 0, sizeof av); emit_expr_for_effect(c, argv[0], &av);
+        emit_indent(g_pre, g_indent);
+        buf_printf(g_pre, "(void)(%s);\n", av.p ? av.p : "0");
+        free(av.p);
+        view_bind(argv[0], "0");
+      }
+      int sv = g_nil_eqq_node; g_nil_eqq_node = id;
+      Buf cb; memset(&cb, 0, sizeof cb); emit_expr(c, id, &cb);
+      g_nil_eqq_node = sv;
+      Buf ab; memset(&ab, 0, sizeof ab); emit_boxed(c, argv[0], &ab);
+      view_unbind(ov);
+      buf_printf(b, "(_t%d ? %s : %s((%s).tag == SP_TAG_NIL))", tq, cb.p ? cb.p : "sp_box_nil()",
+                 boxed ? "sp_box_bool" : "", ab.p ? ab.p : "sp_box_nil()");
+      free(cb.p); free(ab.p);
+      return 1;
+    }
+  }
   /* <method>.call(args) / [] -> invoke the bound function. A top-level
      method ref calls its function directly; an object-bound Method casts
      fn through the (void *self, sp_int...) ABI, evaluating recv once. */

@@ -18785,7 +18785,7 @@ static void sp_raise_exc(volatile sp_Exception *ve) {
      longjmp; sp_raise_cls moves it into the current frame's slot. */
   sp_pending_exc_obj = (void *)e;
   /* a message never given is the class name, as #message answers it */
-  sp_raise_cls(e->cls_name, (e->msg && !e->msg_h) ? e->msg : sp_exc_message(e));
+  sp_raise_cls(e->cls_name, sp_exc_raise_msg(e));
 }
 /* A dispatcher's raise of NoMethodError for a call that finds no method,
    out of line so the call that does not raise carries nothing for it: the
@@ -18801,6 +18801,23 @@ SP_NORETURN SP_COLD SP_NOINLINE static void sp_raise_nomethod_obj(const char *ms
   e->xname = name;
   e->xkey = sp_box_poly_array(a);
   e->xrecv = recv;
+  e->has_recv = 1;
+  sp_raise_exc(e);
+  SP_UNREACHABLE();   /* sp_raise_exc longjmps */
+}
+/* A class method's super that finds no method: the NoMethodError naming the
+   receiving class cls and the method name, whose message is built when it is
+   read (sp_exc_msg_deferred), as CRuby's is, so the raise runs nothing of the
+   program's */
+SP_NORETURN SP_COLD SP_NOINLINE static void sp_raise_super_nomethod(sp_Class cls, const char *name) {
+  sp_PolyArray *a = sp_PolyArray_new();
+  SP_GC_ROOT(a);
+  sp_Exception *e = sp_exc_new("NoMethodError", NULL);
+  SP_GC_ROOT(e);
+  e->msg = sp_exc_msg_deferred;
+  e->xname = sp_box_sym(sp_sym_intern(name));
+  e->xkey = sp_box_poly_array(a);
+  e->xrecv = sp_box_class(cls);
   e->has_recv = 1;
   sp_raise_exc(e);
   SP_UNREACHABLE();   /* sp_raise_exc longjmps */
@@ -23076,7 +23093,7 @@ static int sp_at_exit_run(int status) {
       SP_GC_ROOT(eobj);
       if (ecls && sp_exc_cls_matches(ecls, "SystemExit")) st = sp_exc_exit_status(eobj);
       else {
-        sp_exc_print_uncaught(ecls ? ecls : "RuntimeError", emsg, eobj ? ((sp_Exception *)eobj)->backtrace : NULL);
+        sp_exc_print_uncaught(ecls ? ecls : "RuntimeError", sp_exc_msg_resolve(emsg, eobj), eobj ? ((sp_Exception *)eobj)->backtrace : NULL);
         st = 1;
       }
       /* the hooks after this one read it as `$!` */

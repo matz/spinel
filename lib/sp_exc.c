@@ -334,11 +334,20 @@ int sp_exc_is_standard_error(const char *raised) {
 }
 /* the 0xff byte is the frozen-literal marker sp_exc_gc_scan reads at msg[-1];
    the string itself is the empty one that follows it */
-static const char sp_exc_no_msg_storage[] = "\xff" "\0" "\xff";
+static const char sp_exc_no_msg_storage[] = "\xff" "\0" "\xff" "\0" "\xff";
 const char *const sp_exc_no_msg = sp_exc_no_msg_storage + 1;
 /* the frozen empty sentinel: the second "" of the same storage, behind a
    marker byte of its own (sp_exc_no_msg's NUL, then 0xff) */
 const char *const sp_exc_no_msg_frozen = sp_exc_no_msg_storage + 3;
+/* the deferred message (sp_exc_msg_built_on_read): the third "", behind its own marker */
+const char *const sp_exc_msg_deferred = sp_exc_no_msg_storage + 5;
+const char *(*sp_exc_super_text_fn)(sp_RbVal recv, sp_RbVal name) = NULL;
+/* See sp_exc.h. */
+const char *sp_exc_msg_resolve(const char *m, const void *o) {
+  const sp_Exception *e = (const sp_Exception *)o;
+  if (!sp_exc_msg_built_on_read(m) || !e || !sp_exc_super_text_fn) return m;
+  return sp_exc_super_text_fn(e->xrecv, e->xname);
+}
 
 /* SystemCallError#errno reads what SystemCallError#initialize stored: the
    number of the Errno class the exception descends from. An exception built
@@ -637,6 +646,10 @@ sp_bool sp_exc_eq(sp_Exception *a, sp_Exception *b) {
      the tag. We keep the rendered text in ->msg, so skip it for that class
      (#3098). Backtraces are empty here by design, see docs/limitations.md. */
   if (a->cls_name && strcmp(a->cls_name, "UncaughtThrowError") == 0) return 1;
+  /* a deferred message is CRuby's NameError::message, equal to another for the
+     same receiver and name, without building either text */
+  if (sp_exc_msg_built_on_read(a->msg) || sp_exc_msg_built_on_read(b->msg))
+    return a->msg == b->msg && a->xrecv.tag == b->xrecv.tag && a->xrecv.v.i == b->xrecv.v.i && a->xname.v.i == b->xname.v.i;
   { const char *am = sp_exc_msg_text(a), *bm = sp_exc_msg_text(b);
     /* a message never given is nil in CRuby, which equals only another nil:
        not an empty message, not the class name #message shows */
@@ -812,12 +825,17 @@ const char *sp_exc_class_name(volatile sp_Exception *ve) {
 const char *sp_exc_msg_text(volatile sp_Exception *ve) {
   sp_Exception *e = (sp_Exception *)ve;
   if (!e) return NULL;
-  return e->msg_h ? sp_String_cstr((sp_String *)e->msg_h) : e->msg;
+  return e->msg_h ? sp_String_cstr((sp_String *)e->msg_h) : sp_exc_msg_resolve(e->msg, e);
 }
 void *sp_exc_attach_msg(void *p, void *h) {
   sp_Exception *e = (sp_Exception *)p;
   if (e && h) { e->msg_h = h; sp_gc_wb((void *)e); }
   return p;
+}
+/* See sp_exc.h. */
+const char *sp_exc_raise_msg(volatile sp_Exception *ve) {
+  sp_Exception *e = (sp_Exception *)ve;
+  return e->msg && !e->msg_h ? e->msg : sp_exc_message(e);
 }
 const char *sp_exc_message(volatile sp_Exception *ve) {
   sp_Exception *e = (sp_Exception *)ve;
@@ -826,7 +844,7 @@ const char *sp_exc_message(volatile sp_Exception *ve) {
   if (!e) return sp_str_empty;
   /* (one representation: the message String itself, its bytes face) */
   if (e->msg_h) return sp_String_cstr((sp_String *)e->msg_h);
-  if (e->msg) return e->msg;
+  if (e->msg) return sp_exc_msg_resolve(e->msg, e);
   /* none given: the class name as it shows now, read when it is asked, so a
      class named after the exception was built answers its new name */
   return e->cls_name ? sp_str_dup_external(sp_exc_cls_display(e->cls_name)) : sp_str_empty;
@@ -2053,7 +2071,8 @@ SP_NORETURN SP_COLD void sp_raise_cls(const char *cls, const char *msg) {
      lib/sp_exc.c documents above sp_exc_new; sp_msg_heapify allocates without
      giving the collector a turn, so there is no window between the two. The
      no-message sentinel keeps its identity: that identity is what tells an
-     empty message apart from no message at all (#3711).
+     empty message apart from no message at all (#3711); the deferred one
+     keeps it too, as what builds its text when it is read.
      The root is never popped, because this function longjmps -- and that costs
      nothing: every exception landing restores sp_gc_nroots to the watermark it
      recorded before its own setjmp (sp_exc_rootmark, or a C local in the
@@ -2065,9 +2084,9 @@ SP_NORETURN SP_COLD void sp_raise_cls(const char *cls, const char *msg) {
   sp_exc_user_raise = 0;
   int cont = sp_reraise_continues;   /* an ensure resuming its exception (see there) */
   sp_reraise_continues = 0;
-  if (!sp_exc_msg_empty_given(msg)) msg = sp_msg_heapify(msg);
+  if (!sp_exc_msg_sentinel(msg)) msg = sp_msg_heapify(msg);
   /* a frozen message (a literal's) as frozen text (sp_exc_msg_plain) */
-  if (!sp_exc_msg_empty_given(msg)) msg = sp_exc_msg_plain(msg);
+  if (!sp_exc_msg_sentinel(msg)) msg = sp_exc_msg_plain(msg);
   SP_GC_ROOT_STR(msg);
 #if SP_BT_AVAILABLE
   /* A pass-through, a bare raise, or an ensure resuming its saved exception
@@ -2248,7 +2267,10 @@ SP_NORETURN SP_COLD void sp_raise_cls(const char *cls, const char *msg) {
   if (_bt_keep_n > 0) memcpy(sp_bt_buf, _bt_keep, sizeof(void *) * (size_t)_bt_keep_n);
   sp_bt_n = _bt_keep_n;
 #endif
+  /* (a deferred message is built after the hooks, when the report reads it) */
+  void *ending = sp_pending_exc_obj; SP_GC_ROOT(ending);
   { int status = sp_exc_at_exit(1);
+    msg = sp_exc_msg_resolve(msg, ending); SP_GC_ROOT_STR(msg);
 #if SP_BT_AVAILABLE
     if (_bt_keep_n > 0) { memcpy(sp_bt_buf, _bt_keep, sizeof(void *) * (size_t)_bt_keep_n); sp_bt_n = _bt_keep_n; }
     sp_exc_write_uncaught(cls, msg, _bt_obj, report_failed);

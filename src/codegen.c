@@ -17603,6 +17603,55 @@ static int emit_super_object_builtin(Compiler *c, int id, Scope *s, const char *
   return 1;
 }
 
+/* Is super node id one that raises CRuby's NoMethodError naming its class (cplan_super_names_class), in a method
+   that is written out (iter_scope_emitted)? */
+static int super_names_class_emitted(Compiler *c, int id) {
+  const Scope *s = comp_scope_of(c, id);
+  return cplan_super_names_class(c, id) && iter_scope_emitted(c, (int)(s - c->scopes));
+}
+
+/* Whether the program has such a super: its message is sp_super_nomethod_text's */
+static int prog_super_names_class(Compiler *c) {
+  NT_FOREACH_KIND(c->nt, NK_SuperNode, id) if (super_names_class_emitted(c, id)) return 1;
+  NT_FOREACH_KIND(c->nt, NK_ForwardingSuperNode, id) if (super_names_class_emitted(c, id)) return 1;
+  return 0;
+}
+
+/* Whether the program has sp_class_user_name: a class method `name` of its own (cls_user_display_mi) that such a
+   message asks */
+static int cls_user_name_hook(Compiler *c) {
+  return !g_ext_init_name && prog_has_cls_user_display(c, "name") && prog_super_names_class(c);
+}
+
+/* sp_super_nomethod_text: the message of such a super, built when it is read (sp_exc_msg_deferred), as CRuby builds
+   it, from the receiving class and the method's name. The class is named by what a class method `name` of the
+   program's answers (a String; nil passes on, any other value is the class's #<Class:0x...>, sp_class_user_name),
+   else by a named class's path (a Class.new class once a constant names it), else by its inspect, a class method
+   inspect in its chain included (sp_class_inspect_name); a module whose singleton method's super raises it is a
+   module. */
+static void emit_super_nomethod_text(Compiler *c, Buf *b) {
+  if (!prog_super_names_class(c)) return;
+  buf_puts(b, "static const char *sp_super_nomethod_text(sp_RbVal recv, sp_RbVal name){sp_Class rc = sp_unbox_class(recv);"
+              "const char *rn = ");
+  if (cls_user_name_hook(c))
+    buf_puts(b, "NULL;int uf;sp_RbVal uv = sp_class_user_name(rc, &uf);SP_GC_ROOT_RBVAL(uv);"
+                "if(!uf)rn = sp_class_name_or_nil(rc);"
+                "else if(uv.tag != SP_TAG_NIL && !(rn = sp_strface_b_box(uv)))rn = sp_obj_to_s_fallback(recv);");
+  else buf_puts(b, "sp_class_name_or_nil(rc);");
+  buf_puts(b, "int md = 0");
+  char *seen = calloc((size_t)c->nclasses + 1, 1);
+  for (int k = 0; k < 2; k++)
+    NT_FOREACH_KIND(c->nt, k ? NK_ForwardingSuperNode : NK_SuperNode, id) {
+      const Scope *s = comp_scope_of(c, id);
+      if (!super_names_class_emitted(c, id) || seen[s->class_id] || !comp_class_is_module(c, &c->classes[s->class_id])) continue;
+      seen[s->class_id] = 1;
+      buf_printf(b, " || rc.cls_id == %d", s->class_id);
+    }
+  free(seen);
+  buf_puts(b, ";return sp_sprintf(\"super: no superclass method '%s' for %s %s\", sp_sym_to_s((sp_sym)name.v.i), "
+              "md ? \"module\" : \"class\", rn ? rn : sp_class_inspect_name(rc));}\n");
+}
+
 /* `super` in a ` override no ancestor defines is Kernel#` (BSUP_BACKTICK): it
    runs the command and answers its output. A super of another shape (a
    splat, no argument, two) is refused. */
@@ -17927,10 +17976,22 @@ static void emit_super_value(Compiler *c, int id, Buf *b) {
     /* `super` in a class-level ` override is Kernel#` too */
     if (cmi < 0 && barm == BSUP_BACKTICK) { emit_super_backtick(c, id, s, b); return; }
     if (cmi < 0) {
+      /* CRuby's NoMethodError for the receiving class: this one, or the one the run passes when the method takes it
+         (a subclass's call; a spliced body's call site holds it), its message built when it is read
+         (sp_super_nomethod_text). A method_missing's super is BasicObject#method_missing, whose message names the
+         call (the instance side's mms_rewrite): master's text until that rewrite takes a class method
+         (cplan_super_names_class; the text is written for those in a method written out, super_names_class_emitted). */
+      const char *tail = raise_tail_value_c(c, repr_of(c, id).as_ty);
+      if (super_names_class_emitted(c, id)) {
+        char own[48];
+        snprintf(own, sizeof own, "((sp_Class){%d, NULL})", s->class_id);
+        buf_printf(b, "(sp_raise_super_nomethod(%s, \"%s\"), %s)", cmethod_takes_self_cls(c, s) ? cmethod_self_cls(c, s) : own,
+                   uname, tail);
+        return;
+      }
       const char *scn2 = class_ruby_name(c, s->class_id);
       if (!scn2) scn2 = c->classes[s->class_id].name;
-      buf_printf(b, "(sp_raise_cls(\"NoMethodError\", \"super: no superclass method '%s' for %s\"), %s)",
-                 uname, scn2, raise_tail_value_c(c, repr_of(c, id).as_ty));
+      buf_printf(b, "(sp_raise_cls(\"NoMethodError\", \"super: no superclass method '%s' for %s\"), %s)", uname, scn2, tail);
       return;
     }
     if (g_plan_check) ucall_observe(c, id, cmi, cdef, 0);
@@ -19605,6 +19666,8 @@ void emit_regex_section(Compiler *c, Buf *b) {
     buf_puts(b, "static sp_int sp_obj_cmp_dispatch(sp_RbVal a, sp_RbVal b, sp_bool *comparable);\n");
   if (c->gen_comparable)
     buf_puts(b, "static sp_bool sp_obj_comparable_dispatch(int cls_id);\n");
+  if (prog_super_names_class(c))
+    buf_puts(b, "static const char *sp_super_nomethod_text(sp_RbVal recv, sp_RbVal name);\n");
   if (g_has_user_binop)
     buf_puts(b, "static sp_RbVal sp_user_binop_dispatch(const char *op, sp_RbVal a, sp_RbVal b, sp_bool *handled);\n");
   if (program_has_user_eql(c))
@@ -19759,6 +19822,7 @@ void emit_regex_section(Compiler *c, Buf *b) {
     buf_puts(b, "  sp_user_exc_to_s_fn = sp_user_exc_to_s;\n  sp_user_exc_message_fn = sp_user_exc_message;\n");
   if (exc_has_reopen_initialize(c))
     buf_puts(b, "  sp_user_exc_reinit_fn = sp_user_exc_reinit;\n");
+  if (prog_super_names_class(c)) buf_puts(b, "  sp_exc_super_text_fn = sp_super_nomethod_text;\n");
   if (c->bivar_table)
     buf_puts(b, "  sp_exc_bivar_copy_fn = sp_exc_bivar_copy;\n");
   if (exc_ivar_classes(c))
@@ -24464,6 +24528,7 @@ static void emit_sym_class_name_rt(Compiler *c, Buf *b) {
        main's body, installed through the runtime's hook) */
     if (prog_has_cls_user_display(c, "to_s")) buf_puts(b, "static sp_RbVal sp_class_user_to_s(sp_Class c, int *found);\n");
     if (prog_has_cls_user_display(c, "inspect")) buf_puts(b, "static sp_RbVal sp_class_user_inspect(sp_Class c, int *found);\n");
+    if (cls_user_name_hook(c)) buf_puts(b, "static sp_RbVal sp_class_user_name(sp_Class c, int *found);\n");
     if (prog_has_cls_user_display(c, "to_s"))
       buf_puts(b, "static const char *sp_class_to_s_disp(sp_Class c){return sp_class_val_user(sp_box_class(c),sp_class_user_to_s_fn);}\n\n");
     /* (apart from the hook's table only where the program has a hook:
@@ -24576,16 +24641,17 @@ int pp_prints_by_rt(Compiler *c) {
 }
 /* sp_class_user_to_s / sp_class_user_inspect: a class's own class method
    to_s or inspect (cls_user_display_mi) for the class printed, NULL for any
-   other, which prints by its name */
+   other, which prints by its name; sp_class_user_name, its name, for the
+   NoMethodError of a super (cls_user_name_hook) */
 static void emit_cls_user_display_hooks(Compiler *c, Buf *b) {
   /* sp_array_user_inspect: the program's own Array#inspect, for an Array
      printed boxed (sp_poly_inspect) and by p */
   int ami = array_user_inspect_mi(c);
   if (ami >= 0) buf_printf(b, "static const char *sp_array_user_inspect(sp_RbVal v){return SP_STR_B(%s(v));}\n", mc_method(c, &c->scopes[ami]));
-  static const char *const nms[] = { "to_s", "inspect" };
-  for (int q = 0; q < 2; q++) {
-    if (!prog_has_cls_user_display(c, nms[q])) continue;
-    buf_printf(b, "static sp_RbVal sp_class_user_%s(sp_Class c, int *found){*found=1;switch(", nms[q]);
+  static const char *const nms[] = { "to_s", "inspect", "name" };
+  for (int q = 0; q < 3; q++) {
+    if (q < 2 ? !prog_has_cls_user_display(c, nms[q]) : !cls_user_name_hook(c)) continue;
+    buf_printf(b, "static sp_RbVal sp_class_user_%s%s(sp_Class c, int *found){*found=1;switch(", nms[q], q < 2 ? "" : "_run");
     emit_class_value_key(c, -1, "c", b); buf_puts(b, "){");
     for (int k = 0; k < c->nclasses; k++) {
       int mi = cls_user_display_mi(c, -1, k, nms[q]);
@@ -24599,6 +24665,14 @@ static void emit_cls_user_display_hooks(Compiler *c, Buf *b) {
     }
     buf_puts(b, "default:*found=0;return sp_box_nil();}}\n");
   }
+  /* a raise out of the program's name is caught, as CRuby's rb_protect does: nil, so the inspect answers */
+  if (cls_user_name_hook(c))
+    buf_puts(b, "static sp_RbVal sp_class_user_name(sp_Class c, int *found){volatile sp_RbVal r = sp_box_nil();"
+                "sp_exc_check_depth();sp_exc_rootmark[sp_exc_top]=sp_gc_nroots;sp_rescue_mark[sp_exc_top]=sp_rescue_sp;"
+                "sp_exc_msg[sp_exc_top]=0;sp_exc_obj[sp_exc_top]=0;sp_exc_top++;"
+                "if(setjmp(sp_exc_stack[sp_exc_top-1])==0){r=sp_class_user_name_run(c,found);sp_exc_top--;return r;}"
+                "sp_exc_top--;sp_gc_nroots=sp_exc_rootmark[sp_exc_top];sp_rescue_sp=sp_rescue_mark[sp_exc_top];"
+                "if(sp_unwind_kind!=SP_UNWIND_NONE)sp_unwind_resume();return sp_box_nil();}\n");
 }
 
 /* Bind a zero-argument render to its selected method, including defaults on
@@ -25965,8 +26039,10 @@ char *codegen_program(const NodeTable *nt) {
       "  sp_exc_top--;\n"
       "  sp_gc_nroots = sp_exc_rootmark[sp_exc_top]; sp_rescue_sp = sp_rescue_mark[sp_exc_top];\n"
       "  if (cls) *cls = (const char *)sp_last_exc_cls;\n"
-      "  if (msg) *msg = sp_exc_msg[sp_exc_top] ? sp_exc_msg[sp_exc_top] : \"\";\n"
-      "  return 1;\n}\n", g_ext_init_name);
+      "  if (msg) *msg = sp_exc_msg[sp_exc_top] ? %s : \"\";\n"
+      "  return 1;\n}\n", g_ext_init_name,
+      /* (a message built when it is read: sp_super_nomethod_text) */
+      prog_super_names_class(c) ? "sp_exc_msg_resolve(sp_exc_msg[sp_exc_top], sp_exc_obj[sp_exc_top])" : "sp_exc_msg[sp_exc_top]");
     buf_printf(body, "void %s(void){\n", g_ext_init_name);
     buf_puts(body, "    SP_GC_SAVE();\n");
     main_frame_ins = body->len;
@@ -26155,6 +26231,7 @@ char *codegen_program(const NodeTable *nt) {
     emit_display_overrides(c, &hooks);
   }
   if (!g_ext_init_name) emit_cls_user_display_hooks(c, &hooks);
+  emit_super_nomethod_text(c, &hooks);
   emit_exc_text_tail(c, &hooks);
   emit_exc_reinit_dispatch(c, &hooks);
   { const char *pdt[] = { g_procs.p, body->p, b.p, hooks.p };

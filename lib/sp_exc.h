@@ -62,9 +62,23 @@ typedef struct sp_Exception_s {
                                  (sp_exc_attach_msg). Read the message
                                  through sp_exc_message / sp_exc_msg_text. */
 } sp_Exception;
+/* The message of a class method's super that finds no method
+   (sp_raise_super_nomethod): CRuby builds its text from the receiving class
+   (xrecv) and the method's name (xname) each time it is read, so it calls no
+   method of the program's at the raise. Copies keep it as it is; every reader
+   of the text gets it through sp_exc_msg_resolve. */
+extern const char *const sp_exc_msg_deferred;
+static inline int sp_exc_msg_built_on_read(const char *m) { return m == sp_exc_msg_deferred; }
+/* the program's builder of that text, which codegen emits beside such a super's raise */
+extern const char *(*sp_exc_super_text_fn)(sp_RbVal recv, sp_RbVal name);
+/* The text of message m, which exception o (NULL for none) holds or the
+   handler stack carries beside it: m itself, or the text a deferred one
+   builds now */
+const char *sp_exc_msg_resolve(const char *m, const void *o);
 /* No message was given: msg is NULL (a constructor given none, or super(nil)).
-   #message then answers the class name, read when it is asked. */
-static inline int sp_exc_msg_absent(const sp_Exception *e) { return !e->msg; }
+   #message then answers the class name, read when it is asked; a deferred one
+   also builds its text when asked. */
+static inline int sp_exc_msg_absent(const sp_Exception *e) { return !e->msg || sp_exc_msg_built_on_read(e->msg); }
 
 extern const char *(*sp_user_exc_parent_fn)(const char *);   /* set by the generated main() */
 /* A program's exception class with ivars of its own, for an instance the
@@ -130,6 +144,11 @@ extern const char *const sp_exc_no_msg_frozen;
 static inline int sp_exc_msg_empty_given(const char *m) {
   return m == sp_exc_no_msg || m == sp_exc_no_msg_frozen;
 }
+/* Is m a sentinel a raise keeps by its identity: one of those two, or the
+   deferred one? */
+static inline int sp_exc_msg_sentinel(const char *m) {
+  return sp_exc_msg_empty_given(m) || sp_exc_msg_built_on_read(m);
+}
 /* An explicitly given raise message: an empty one stays empty rather than
    falling back to the class name the way a message-less raise does. */
 const char *sp_exc_msg_counted(const char *m, size_t n);   /* lib/sp_exc.c */
@@ -177,6 +196,9 @@ const char *sp_exc_class_name(volatile sp_Exception *ve);
 const char *sp_exc_cls_display(const char *cn);   /* how class `cn` prints (a Class.new class: #<Class:0x...>) */
 sp_bool sp_exc_cls_unnamed(const char *shown);   /* an unnamed Class.new class's address form */
 const char *sp_exc_message(volatile sp_Exception *ve);
+/* the message a raise of e carries on the handler stack: the one it holds as
+   it is (a deferred one too), else its text (a message never given) */
+const char *sp_exc_raise_msg(volatile sp_Exception *ve);
 /* the message's text now, not to be kept (a handle's live buffer) */
 const char *sp_exc_msg_text(volatile sp_Exception *ve);
 /* e with the String handle h as its message (sp_Exception.msg_h); answers e */

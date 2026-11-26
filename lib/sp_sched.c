@@ -2905,6 +2905,7 @@ static void sp_thread_report(sp_thread *t) {
   SP_GC_ROOT_STR(msg);
   const char *ins = sp_Thread_inspect(t);
   fprintf(stderr, "%s terminated with exception (report_on_exception is true):\n", ins);
+  msg = sp_exc_msg_resolve(msg, t->exc_obj);   /* (a deferred one, built under the line above, as CRuby's is) */
   const char *shown = sp_exc_cls_display(cls);   /* an unnamed Class.new class takes no suffix */
   if (sp_exc_cls_unnamed(shown)) fprintf(stderr, "%s\n", (msg && *msg) ? msg : shown);
   else fprintf(stderr, "%s (%s)\n", (msg && *msg) ? msg : shown, shown);

@@ -143,3 +143,41 @@ run { p rc.is_a?(*[RB]) }
 run { p rc.is_a?(RB, RB) }
 run { p ra.instance_of?(RA), rc.instance_of?(RA), rc.instance_of?(RC) }
 run { p rc.instance_of? }
+
+# a module's own singleton method, `def self.` or `class << self`, is
+# Module's: no superclass or subclasses there
+module CS
+  class << self
+    def superclass = super
+    def subclasses = super
+    def ancestors(x = 1) = super
+  end
+end
+begin; p CS.superclass; rescue NoMethodError => nme; p nme.message; end
+begin; p CS.subclasses; rescue NoMethodError => nme; p nme.message; end
+run { p CS.ancestors }
+class CT < CK
+  class << self
+    def superclass(x) = super
+    def ancestors(*a) = super
+  end
+end
+class CU < CT; end
+run { p CT.superclass(1) }
+run { p CT.ancestors.first, CU.ancestors.first(2) }
+run { p CT.ancestors(1) }
+# (a super that reaches no method names the receiving class and its kind)
+class CV < CK
+  def self.nosuch = super
+end
+class CW < CV; end
+# (an anonymous one by its inspect, a class method inspect in its chain included; a named one by its path)
+class CY < CV
+  def self.inspect = "CY!"
+end
+CZ = Class.new(CY)
+[CV, CW, Class.new(CW), CY, Class.new(CY), CZ].each do |k|
+  k.nosuch
+rescue NoMethodError => nme
+  p nme.message.sub(/0x\h+/, "0x")
+end

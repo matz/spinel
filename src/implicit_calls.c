@@ -104,6 +104,8 @@ static int ic_super_calls(Compiler *c, int id, IcSink *s) {
   if (!c->ic || !c->ic->typed || !sc || sc->class_id < 0 || !sc->name || cplan_user(c, id).mi >= 0) return 0;
   const char *name = comp_scope_def_name(c, sc);
   if (!name) return 0;
+  /* one that raises CRuby's NoMethodError asks the receiving class for its name and its inspect */
+  if (cplan_super_names_class(c, id)) { ic_push(s, "name", id, BCR_SELF, 0, NULL); ic_push(s, "inspect", id, BCR_SELF, 0, NULL); }
   if (!sc->is_cmethod && ic_plain_class(c, sc->class_id) && ic_class_rows(s, name, core_class_ancestors("Object"), id)) return s->n;
   if (bop_name_callbacks(name, NULL) < 0) return IC_ANY;
   ic_builtin_callbacks(s, name, NULL, id, BCR_ALL, 0);

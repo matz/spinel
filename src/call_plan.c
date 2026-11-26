@@ -1107,12 +1107,12 @@ static int cplan_owner_arity(const char *uname, const char *bowner, int *lo, int
   return bowner && uname && builtin_class_arity_spec(cls, uname, lo, hi, lo_exp, hi_exp);
 }
 /* The builtin whose counts a super in s reaches: bowner, or for a class method's super that names none Class's
-   method, which the class arms answer; Module's from a module's own `def self.` (a module's instance method that
-   answers as a class method, prepended into Class, runs on a class) */
+   method, which the class arms answer; Module's from a module's own singleton method (`def self.` or `class <<
+   self`). A copy of a module's method that runs on a class (extended into one, prepended into Class) is Class's. */
 static const char *cplan_count_owner(Compiler *c, const Scope *s, const char *bowner) {
   if (bowner || !s->is_cmethod || s->class_id < 0) return bowner;
-  int own = s->def_node >= 0 && nt_ref(c->nt, s->def_node, "receiver") >= 0;
-  return own && comp_class_is_module(c, &c->classes[s->class_id]) ? "Module" : "Class";
+  int copy = s->origin_module_ci || s->is_extend_copy || s->is_prepend_copy || s->is_include_copy || s->is_cmethod_copy;
+  return !copy && comp_class_is_module(c, &c->classes[s->class_id]) ? "Module" : "Class";
 }
 /* The count super id in s passes as the plan knows it before the run: comp_super_plain_argc's, or for a bare super
    from a `(...)` that every call passes one count, its slots (cplan_zsuper_shape); -1 */
@@ -1401,6 +1401,12 @@ int cplan_super_reads_self(Compiler *c, int id) {
   }
 }
 
+/* Is super node id the operand of a defined?, which asks after the super and never calls it? */
+static int cplan_super_defined_operand(Compiler *c, int id) {
+  const int *par = comp_parent_map(c);
+  return par[id] >= 0 && nt_kind(c->nt, par[id]) == NK_DefinedNode;
+}
+
 static void cplan_resolve_super(Compiler *c, int id, CallPlan *p) {
   Scope *s = comp_scope_of(c, id);
   if (!s || s->class_id < 0 || !s->name) return;
@@ -1438,15 +1444,56 @@ static void cplan_resolve_super(Compiler *c, int id, CallPlan *p) {
   const char *mname = comp_scope_user_name(st);
   /* (nor one an attribute answers, `attr_reader :inspect` in a superclass, ML_ATTR, nor the operand of a defined?,
      which asks after the super itself) */
-  const int *par = comp_parent_map(c);
   if (!s->is_cmethod && s->class_id != c->toplevel_class && ml.bowner && mname && ml.kind != ML_ATTR &&
-      !(par[id] >= 0 && nt_kind(c->nt, par[id]) == NK_DefinedNode))
+      !cplan_super_defined_operand(c, id))
     p->bpath = (unsigned char)cplan_super_path(c, id, s, st, mname, ml.bowner);
   /* (the default text answers ahead of a prepend chain's shadow; a class method's shadow is its own lookup) */
   p->bsuper = (unsigned char)cplan_super_text(c, id, s, p->bowner);
   if (p->bsuper == BSUP_NONE && uname)
     p->bsuper = (unsigned char)(s->is_cmethod ? cplan_super_class_arm(c, id, s, uname, p->bowner)
                                               : cplan_super_instance_arm(c, id, s, uname, p->bowner));
+}
+
+/* The name of class-method super id's method when the super raises a NoMethodError, no method of the program's and
+   no builtin's arm answering it (BSUP_NONE), else NULL; *row, the builtin whose rows a class of the super's answers
+   from (Class, or Module for a module's) */
+static const char *cplan_super_unarmed_name(Compiler *c, int id, const char **row) {
+  const Scope *s = comp_scope_of(c, id);
+  if (!s || !s->is_cmethod || s->class_id < 0 || !s->name || cplan_super_defined_operand(c, id)) return NULL;
+  const CallPlan p = cplan_user(c, id);
+  if (p.dispatch == CP_REFUSE || p.bsuper != BSUP_NONE || (p.via == UC_SUPER && p.mi >= 0 && c->scopes[p.mi].is_cmethod))
+    return NULL;
+  *row = comp_class_is_module(c, &c->classes[s->class_id]) ? "Module" : "Class";
+  return comp_scope_def_name(c, s);
+}
+
+/* Is nm a method row's rows define, which CRuby answers where a super with no arm raises here? */
+static int cplan_row_defines(const char *row, const char *nm) {
+  return core_vis_of_bit(core_method_vis(row, nm, 1, NULL)) >= 0;
+}
+
+/* Does a class method `name` or `inspect` of the program that the message of such a super in class cls may read (one
+   of cls's ancestors' or descendants') itself super into its row's method with no arm (that answer is CRuby's, this
+   one's a raise)? */
+static int cplan_display_super_unarmed(Compiler *c, int cls) {
+  for (int k = 0; k < 2; k++)
+    NT_FOREACH_KIND(c->nt, k ? NK_ForwardingSuperNode : NK_SuperNode, id) {
+      const char *row, *nm = cplan_super_unarmed_name(c, id, &row);
+      int dc = nm ? comp_scope_of(c, id)->class_id : -1;
+      if (nm && (is_class_name_name(nm) || is_inspect_name(nm)) && cplan_row_defines(row, nm) &&
+          (dc == cls || is_descendant(c, dc, cls) || is_descendant(c, cls, dc)))
+        return 1;
+    }
+  return 0;
+}
+
+/* See call_plan.h. */
+int cplan_super_names_class(Compiler *c, int id) {
+  /* (a name Class's or Module's rows define CRuby answers, where this one has no arm; and the class's name read
+     through such a super: master's text for now) */
+  const char *row, *nm = cplan_super_unarmed_name(c, id, &row);
+  return nm && !is_method_missing_method(nm) && !cplan_row_defines(row, nm) &&
+         !cplan_display_super_unarmed(c, comp_scope_of(c, id)->class_id);
 }
 
 /* See call_plan.h. */

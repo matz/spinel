@@ -2806,11 +2806,12 @@ sp_oint sp_sock_connect_nb(sp_File *f, const char *host, sp_int port, sp_bool ex
   errno = ce;
   if (rc == 0) return sp_oint_of(0);
   sp_sock_raise_if_unresolved("getaddrinfo");
-  if (errno == EINPROGRESS || errno == EALREADY) {
+  if (errno == EINPROGRESS) {
     if (!exc) return sp_oint_nil();
     sp_raise_cls("IO::EINPROGRESSWaitWritable", "operation in progress - connect(2) would block");
   }
-  if (errno == EISCONN) return sp_oint_of(0);
+  /* already connected is 0 only under exception: false, as in CRuby */
+  if (errno == EISCONN && !exc) return sp_oint_of(0);
   sp_sock_raise_errno_host_port("connect(2)", host, port);
 }
 /* connect_nonblock(sockaddr). The peer is already resolved into a packed
@@ -2848,14 +2849,15 @@ sp_oint sp_sock_connect_nb_sa(sp_File *f, const char *sa, sp_int salen, sp_bool 
   sp_io_nb_end(f, saved);
   errno = ce;
   if (rc == 0) return sp_oint_of(0);
-  if (errno == EINPROGRESS || errno == EALREADY) {
+  /* Only EINPROGRESS is the wait: a connect still in flight answers
+     EALREADY, which CRuby raises as Errno::EALREADY in both modes. */
+  if (errno == EINPROGRESS) {
     if (!exc) return sp_oint_nil();
     sp_raise_cls("IO::EINPROGRESSWaitWritable", "operation in progress - connect(2) would block");
   }
-  /* Already connected answers 0, the same as the two-argument form above and
-     the same as CRuby answers here -- measured on both, in both exception
-     modes, including a second connect to a different address. */
-  if (errno == EISCONN) return sp_oint_of(0);
+  /* Already connected answers 0 under exception: false and raises
+     Errno::EISCONN otherwise, as CRuby's sock_connect_nonblock does. */
+  if (errno == EISCONN && !exc) return sp_oint_of(0);
   sp_sock_raise_errno_sa("connect(2)", sa, salen);
   return sp_oint_of(-1);
 }

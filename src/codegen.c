@@ -12496,21 +12496,24 @@ void emit_obj_default_inspect(Compiler *c, int cid, const char *p, Buf *b) {
 /* The class name a default Object#to_s / #inspect of class `ci` prints, as the
    two halves of a C format: `name` goes inside "#<...>" and `arg` leads the
    call's arguments. A Class.new class prints at run time (a constant may
-   name it only after the program starts), as the class the object obj (C,
-   NULL for none) was built for (emit_obj_class_id); any other class has its
-   Ruby name fixed here. */
-void obj_default_name(Compiler *c, int ci, const char *obj, char *name, size_t nn, char *arg, size_t na) {
-  if (comp_class_anonymous(c, ci)) {
+   name it only after the program starts), and so does any class of a site
+   class's family held as the object obj (C, NULL for none): both print the
+   class the object was built for (emit_obj_class_id). Any other class has
+   its Ruby name fixed here. Answers 1 where the name is read off obj. */
+int obj_default_name(Compiler *c, int ci, const char *obj, char *name, size_t nn, char *arg, size_t na) {
+  int by_obj = obj && cplan_rt_family(c, ci);
+  if (by_obj || comp_class_anonymous(c, ci)) {
     Buf k; memset(&k, 0, sizeof k);
     emit_obj_class_id(c, ci, obj, &k);
     snprintf(name, nn, "%%s");
     snprintf(arg, na, "sp_class_display((sp_Class){%s}), ", k.p);
     free(k.p);
-    return;
+    return by_obj;
   }
   const char *rn = class_ruby_name(c, ci);
   snprintf(name, nn, "%s", rn ? rn : c->classes[ci].name);
   arg[0] = '\0';
+  return 0;
 }
 
 /* Build the full Ruby-style qualified name ("ActiveRecord::RecordNotFound") for
@@ -17528,17 +17531,18 @@ void emit_obj_kernel_text(Compiler *c, int cid, int want_inspect, const char *ob
   char cls[160];
   if (!vt && class_has_subclass(c, cid)) snprintf(cls, sizeof cls, "(%s)->cls_id", obj);
   else snprintf(cls, sizeof cls, "%d", cid);
-  /* with no switch written no object of a program class exists, and the
-     rendering is the one the name gives (obj_default_name) */
-  if (!g_emit_obj_dispatch) {
-    char drn[512], darg[512];
-    obj_default_name(c, cid, vt ? NULL : obj, drn, sizeof drn, darg, sizeof darg);
-    buf_printf(b, "sp_sprintf(\"#<%s:0x%%016llx>\", %s(unsigned long long)(uintptr_t)%s)", drn, darg, obj);
-  }
-  else if (want_inspect)
+  /* the name the object's class prints (obj_default_name): with no switch
+     written no object of a program class exists and it is the rendering; an
+     object of a site class's family names the class it was built for; any
+     other to_s names the object's class through the switch */
+  char drn[512], darg[512];
+  int by_obj = obj_default_name(c, cid, obj, drn, sizeof drn, darg, sizeof darg);
+  if (g_emit_obj_dispatch && want_inspect)
     buf_printf(b, "sp_obj_kernel_inspect(%s, (void *)%s)", cls, obj);
-  else
+  else if (g_emit_obj_dispatch && !by_obj)
     buf_printf(b, "sp_sprintf(\"#<%%s:0x%%016llx>\", sp_obj_cls_name_rt(%s), (unsigned long long)(uintptr_t)%s)", cls, obj);
+  else
+    buf_printf(b, "sp_sprintf(\"#<%s:0x%%016llx>\", %s(unsigned long long)(uintptr_t)%s)", drn, darg, obj);
 }
 void emit_super(Compiler *c, int id, Buf *b) {
   int read = repr_of(c, id).as_ty == TY_STRING && repr_native_call_handle(c, id);

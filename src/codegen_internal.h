@@ -1278,7 +1278,7 @@ int visible_as_target(Compiler *c, int k, int target);
 int class_mixes_in(Compiler *c, int cid, int mod, int depth);
 int class_is_comparable(Compiler *c, int cid);
 void emit_visible_cls_id(Compiler *c, int ci, const char *obj, const char *id, int masq, Buf *b);
-void obj_default_name(Compiler *c, int ci, const char *obj, char *name, size_t nn, char *arg, size_t na);
+int obj_default_name(Compiler *c, int ci, const char *obj, char *name, size_t nn, char *arg, size_t na);
 void emit_obj_class_id(Compiler *c, int ci, const char *obj, Buf *b);
 void emit_obj_class_value(Compiler *c, int ci, const char *obj, Buf *b);   /* the same, as an sp_Class */
 /* Class#subclasses' entry for class k onto the PolyArray arr (codegen.c) */

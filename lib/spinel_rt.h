@@ -23254,9 +23254,11 @@ static SP_UNUSED void sp_sig_default_handler(int no) {
   sp_sig_unblock(no, 0);
   sp_sig_default_raise(no);
 }
+extern void (*sp_sig_default_handler_fn)(int);
 static SP_UNUSED void sp_sig_install_defaults(void) {
   static const int sigs[] = { SIGINT, SIGTERM };
   sp_sig_default_raiser = sp_sig_default_raise;
+  sp_sig_default_handler_fn = sp_sig_default_handler;
   for (int i = 0; i < 2; i++) {
     int no = sigs[i];
     if (sp_trap_proc[no] || sp_trap_state[no]) continue;

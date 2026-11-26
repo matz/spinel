@@ -1,0 +1,11 @@
+on_hup 1
+Method
+true
+alive after nil
+nil
+alive after empty
+"IGNORE"
+"IGNORE"
+"SYSTEM_DEFAULT"
+"EXIT"
+at_exit ran

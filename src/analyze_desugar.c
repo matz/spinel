@@ -5967,6 +5967,13 @@ int desugar_implicit_send(Compiler *c) {
       nt_set_ignore_visibility(nt, id, 0);
     }
     else nt_node_set_str(nt, id, "send_blind", "1");   /* see desugar_public_send_recv */
+    /* a writer's name with its one value (`send :id=, v`) is `self.id = v`: a
+       receiverless call of it reaches a def's writer and not an attr_writer's
+       (another count keeps the call, whose ArgumentError is CRuby's) */
+    if (nrest == 1 && name_is_plain_setter(namebuf)) {
+      int sn = nt_new_node(nt, "SelfNode");
+      if (sn >= 0) nt_set_self_receiver(nt, id, sn);
+    }
     comp_grow_node_arrays(c);
     int encl = c->nscope[id];
     for (int j = base; j < nt->count; j++) c->nscope[j] = encl;

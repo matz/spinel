@@ -87,7 +87,27 @@ void sp_w32_makecontext(ucontext_t *uc, void (*fn)(void), int argc, ...) {
   MEMORY_BASIC_INFORMATION mbi;
   if (VirtualQuery((void *)(top - 1), &mbi, sizeof mbi)) {
     dealloc = mbi.AllocationBase;
-    limit = mbi.State == MEM_COMMIT ? mbi.BaseAddress : (void *)top;
+    limit = (void *)top;
+    if (mbi.State == MEM_COMMIT) {
+      /* VirtualQuery's BaseAddress is the page of the address asked about,
+         not the start of the run it belongs to: walk the reservation from
+         its start to the run holding the top, whose BaseAddress is then the
+         bottom of the committed top. With the top page alone as StackLimit,
+         every frame deeper than one page (the rest of the committed top,
+         which no guard page fault ever reports to the memory manager) was
+         outside the stack to RtlUnwindEx, and a C++ exception thrown there
+         -- DirectWrite throws and catches its own -- ended the process with
+         STATUS_BAD_STACK (0xC0000028). */
+      char *q = (char *)dealloc;
+      MEMORY_BASIC_INFORMATION r;
+      while (q < (char *)top && VirtualQuery(q, &r, sizeof r)) {
+        if ((char *)r.BaseAddress + r.RegionSize >= (char *)top) {
+          if (r.State == MEM_COMMIT && !(r.Protect & PAGE_GUARD)) limit = r.BaseAddress;
+          break;
+        }
+        q = (char *)r.BaseAddress + r.RegionSize;
+      }
+    }
   }
   /* fn's first instruction sees rsp % 16 == 8, as after a call, with its
      32 bytes of home space above the return slot */

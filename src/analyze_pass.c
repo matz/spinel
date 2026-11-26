@@ -8047,9 +8047,9 @@ typedef struct { ContainerLiterals *out; int depth; } ClWrites;
 /* A bare `N ||= v` or `N &&= v` whose constant the record puts on a class
    or module (not Object), or on a singleton's table (`class << self`),
    reads the N the lookup finds there, an outer one too, and writes that
-   class's own. The record keys it to the class's N, whose read master does
-   not let fall back to an outer N at run time, so its value is not followed
-   until that read does. A class builder's block (`Struct.new do`) writes
+   class's own. The record keys it to the class's N, whose read the
+   compiler does not let fall back to an outer N at run time, so its value
+   is not followed until that read does. A class builder's block (`Struct.new do`) writes
    the enclosing scope's N, and is followed. */
 static int const_body_cond_write(Compiler *c, int w) {
   NodeKind k = nt_kind(c->nt, w);

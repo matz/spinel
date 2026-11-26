@@ -2472,14 +2472,16 @@ static int reader_ivar_set_outside(Compiler *c, int cls, const char *ivn) {
 /* The array source walk's context (array_src_walk): the method each level
    of the walk is in (meth, -1 for none), so a call back into one answers
    what the method does, and the slots it is following (nslot of them,
-   each a class and a name: an ivar's class, a class variable's owner or
-   -1 for a global or a constant), so a value that reaches one again (`k.v
-   = k.v`, two attributes handed each other, `$a = $b; $b = $a`) answers
-   what that slot holds, which the walk is following already. */
-typedef struct { int meth[8]; int nslot, slcls[8]; const char *slname[8]; } SrcWalk;
-static int src_walk_follows(const SrcWalk *st, int cls, const char *name) {
+   each a family, a class and a name: an ivar's class, a class variable's
+   owner or -1 for a global or a constant), so a value that reaches one
+   again (`k.v = k.v`, two attributes handed each other, `$a = $b; $b =
+   $a`) answers what that slot holds, which the walk is following already.
+   (The family tells a global's name, held without its `$`, from a
+   constant's key.) */
+typedef struct { int meth[8]; int nslot, slfam[8], slcls[8]; const char *slname[8]; } SrcWalk;
+static int src_walk_follows(const SrcWalk *st, int fam, int cls, const char *name) {
   for (int i = 0; i < st->nslot; i++)
-    if (st->slcls[i] == cls && sp_streq(st->slname[i], name)) return 1;
+    if (st->slfam[i] == fam && st->slcls[i] == cls && sp_streq(st->slname[i], name)) return 1;
   return 0;
 }
 static int array_src_walk(Compiler *c, int v, int pinned, int apply, SrcWalk *st, int depth);
@@ -2517,7 +2519,7 @@ static int alias_side(Compiler *c, int n, AliasSide *out) {
        the constructor's arguments, which struct_new_types_members_at widens
        with it or, where they cannot widen, keeps the member boxed */
     int member = struct_member_set_by_new(c, dc, iv);
-    SrcWalk st = { .nslot = 1, .slcls = { dc }, .slname = { ivn } };
+    SrcWalk st = { .nslot = 1, .slfam = { NS_IVAR }, .slcls = { dc }, .slname = { ivn } };
     if (iv < 0 || class_ivar_pinned(ci, ivn) || ci->ivar_int_table[iv] ||
         reader_ivar_set_outside(c, dc, ivn) || (!member && ivar_writes_fresh(c, dc, ivn, 0, NULL, &st, 0) <= 0)) return 0;
     out->slot = &ci->ivar_types[iv]; out->cid = dc; out->iv = iv; out->reader = 1;
@@ -2578,7 +2580,7 @@ static int alias_ivar_widened(Compiler *c, const LWIndex *ivw, const AliasSide *
     ch = 1;
   }
   if (top != TY_POLY_ARRAY) return ch;
-  SrcWalk st = { .nslot = 1, .slcls = { w->cid }, .slname = { ivn } };
+  SrcWalk st = { .nslot = 1, .slfam = { NS_IVAR }, .slcls = { w->cid }, .slname = { ivn } };
   if (w->reader) ivar_writes_fresh(c, w->cid, ivn, 1, &ch, &st, 0);
   else if (ivw) ch |= widen_ivar_array_params(c, ivw, w->cid, ivn);
   return ch;
@@ -9187,12 +9189,15 @@ static int slot_write_walk(Compiler *c, int w, void *ctx) {
 }
 /* The name a global's, class variable's or constant's node n goes by in
    the walk's set: a constant's key (const_key_at, of a path write's
-   target), which tells two classes' constants of one name apart, else its
-   name. */
+   target), which tells two classes' constants of one name apart, a
+   global's name past its alias (comp_resolve_gvar, without the `$`:
+   `alias $b $a` makes one slot), else its name. */
 static const char *named_slot_name(Compiler *c, int n) {
   n = named_slot_node(c->nt, n);
   if (n < 0) return NULL;
-  return named_slot_family(nt_kind(c->nt, n)) == NS_CONST ? const_key_at(c, n) : nt_str(c->nt, n, "name");
+  int fam = named_slot_family(nt_kind(c->nt, n));
+  const char *nm = fam == NS_CONST ? const_key_at(c, n) : nt_str(c->nt, n, "name");
+  return fam == NS_GVAR && nm && nm[0] == '$' ? comp_resolve_gvar(c, nm + 1) : nm;
 }
 /* The class an ivar's node is of: its method's class, a class body's,
    or main's (ivar_main_slot_class); -1 for none. */
@@ -9345,7 +9350,7 @@ static int ivar_src_walk(Compiler *c, int v, int icls, const char *ivn, int appl
   int ivi = comp_ivar_index(ci, ivn);
   if (ivi < 0 || class_ivar_pinned(ci, ivn) || !c->ivar_widen_src || v >= c->node_cap) return 0;
   /* (a slot the walk follows already: what it holds is being followed) */
-  if (src_walk_follows(st, icls, ivn)) return !apply;
+  if (src_walk_follows(st, NS_IVAR, icls, ivn)) return !apply;
   if (st->nslot == 8) return 0;
   IvWalkEntry *m = depth == 0 ? ivar_walk_memo_at(c, icls, ivi) : NULL;
   if (m && !apply && m->check_at == comp_ty_edits + 1) return m->check;
@@ -9363,7 +9368,7 @@ static int ivar_src_walk(Compiler *c, int v, int icls, const char *ivn, int appl
      (`k.v = [+"s"]`, a member's setter) is one more write, whose value
      is followed as the class's own writes are (attr_writer_calls). */
   int member = struct_member_set_by_new(c, icls, ivi);
-  st->slcls[st->nslot] = icls; st->slname[st->nslot++] = ivn;
+  st->slfam[st->nslot] = NS_IVAR; st->slcls[st->nslot] = icls; st->slname[st->nslot++] = ivn;
   int fresh = member ? 1 : ivar_writes_fresh(c, icls, ivn, 0, NULL, st, depth);
   AttrArgWalk aw = { st, depth, 0, 0, 0 };
   int writer = fresh >= 0 && call_answers(c, -1, icls, ivn + 1, CT_WRITER, NULL);
@@ -9404,8 +9409,8 @@ static int named_src_walk(Compiler *c, int v, int apply, SrcWalk *st, int depth)
   const char *nm = named_slot_name(c, v);
   int cls = fam == NS_CVAR ? holder_cvar_owner(c, sn, nm, holder_cbody(c, sn)) : -1;
   if (!nm || st->nslot == 8) return 0;
-  if (src_walk_follows(st, cls, nm)) return !apply;
-  st->slcls[st->nslot] = cls; st->slname[st->nslot++] = nm;
+  if (src_walk_follows(st, fam, cls, nm)) return !apply;
+  st->slfam[st->nslot] = fam; st->slcls[st->nslot] = cls; st->slname[st->nslot++] = nm;
   /* (a class variable of another class is another slot, unless that class
      inherits it) */
   SlotWritesWalk x = { { st, depth, apply, 0, 0 }, 0 };

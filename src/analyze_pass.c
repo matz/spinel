@@ -7747,59 +7747,6 @@ int is_fresh_array(Compiler *c, int v) {
   return fresh_array_builtin_name(nm);
 }
 
-/* The writes of each name, by write kind (ivar, gvar, cvar, constant),
-   ascending: container_literals follows the writes of the name a read
-   names, and walked every write of the kind for each read, comparing
-   names -- on a Rails application half of its own time, under the boxed
-   element widening's asks every round. Rebuilt when the node table
-   changes, as the other such indexes are (cst_first). */
-static const NodeTable *clw_nt; static unsigned clw_ver; static int clw_cnt;
-static ANameHash clw_names[4]; static int *clw_first[4], clw_cap[4], *clw_next;
-static int clw_slot(NodeKind wk) {
-  return wk == NK_InstanceVariableWriteNode ? 0 : wk == NK_GlobalVariableWriteNode ? 1 :
-         wk == NK_ClassVariableWriteNode ? 2 : wk == NK_ConstantWriteNode ? 3 : -1;
-}
-static int clw_first_named(Compiler *c, NodeKind wk, const char *name) {
-  const NodeTable *nt = c->nt;
-  int slot = clw_slot(wk);
-  if (slot < 0 || !name) return -1;
-  if (clw_nt != nt || clw_ver != nt->version || clw_cnt != nt->count) {
-    static const NodeKind kinds[4] = { NK_InstanceVariableWriteNode, NK_GlobalVariableWriteNode,
-                                       NK_ClassVariableWriteNode, NK_ConstantWriteNode };
-    free(clw_next);
-    clw_next = malloc(sizeof(int) * (size_t)(nt->count > 0 ? nt->count : 1));
-    if (!clw_next) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-    for (int s = 0; s < 4; s++) {
-      anh_free(&clw_names[s]); memset(&clw_names[s], 0, sizeof clw_names[s]);
-      /* (last: each name's latest write so far, as long as the firsts) */
-      int *last = clw_cap[s] ? malloc(sizeof(int) * (size_t)clw_cap[s]) : NULL;
-      if (clw_cap[s] && !last) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-      NT_FOREACH_KIND(nt, kinds[s], w) {
-        const char *wn = nt_str(nt, w, "name");
-        if (!wn) continue;
-        clw_next[w] = -1;
-        int k = anh_find(&clw_names[s], wn);
-        if (k < 0) {
-          anh_add(&clw_names[s], wn); k = clw_names[s].n - 1;
-          if (k >= clw_cap[s]) {
-            clw_cap[s] = clw_cap[s] ? clw_cap[s] * 2 : 64;
-            clw_first[s] = realloc(clw_first[s], sizeof(int) * (size_t)clw_cap[s]);
-            last = realloc(last, sizeof(int) * (size_t)clw_cap[s]);
-            if (!clw_first[s] || !last) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-          }
-          clw_first[s][k] = w;
-        }
-        else clw_next[last[k]] = w;
-        last[k] = w;
-      }
-      free(last);
-    }
-    clw_nt = nt; clw_ver = nt->version; clw_cnt = nt->count;
-  }
-  int k = anh_find(&clw_names[slot], name);
-  return k >= 0 ? clw_first[slot][k] : -1;
-}
-
 /* The argument index call `call` hands parameter pi of method si by its
    layout, or -1 (container_literals, the parameter case): the layout is
    decided from the call's argument nodes and the method's parameter list
@@ -8090,6 +8037,36 @@ static void container_super_literals(Compiler *c, int si, Scope *sc, int pi, Con
    as the program shows: a literal itself, the literals a variable is
    assigned, and, for an element read `x[k]` (`fetch`, `first`, `last`),
    the container-literal elements of those `x` can be. */
+static const char *named_slot_name(Compiler *c, int n);
+static int ivar_node_class(Compiler *c, int n);
+static int masgn_target_value(Compiler *c, int t, int *rhs, int *at, int *mwp);
+static int slot_writes_each(Compiler *c, int fam, const char *key, int cls, int (*fn)(Compiler *, int, void *), void *ctx);
+typedef struct { ContainerLiterals *out; int depth; } ClWrites;
+/* A bare `N ||= v` or `N &&= v` whose constant the record puts on a class
+   or module (not Object), or on a singleton's table (`class << self`),
+   reads the N the lookup finds there, an outer one too, and writes that
+   class's own. The record keys it to the class's N, whose read master does
+   not let fall back to an outer N at run time, so its value is not followed
+   until that read does. A class builder's block (`Struct.new do`) writes
+   the enclosing scope's N, and is followed. */
+static int const_body_cond_write(Compiler *c, int w) {
+  NodeKind k = nt_kind(c->nt, w);
+  if (k != NK_ConstantOrWriteNode && k != NK_ConstantAndWriteNode) return 0;
+  int owner = elab_const_write_owner(c, w);
+  return (owner >= 0 && owner != comp_core_class(c, CORE_OBJECT)) || elab_const_write_on_singleton(c, w);
+}
+/* slot_writes_each's step for container_literals: the value write w
+   leaves, a write of its value's or a multiple assignment's target's
+   element (masgn_target_value); an op-write builds its own */
+static int container_write_literals(Compiler *c, int w, void *ctx) {
+  ClWrites *x = ctx;
+  if (const_body_cond_write(c, w)) return 0;
+  int form = slot_write_form(nt_kind(c->nt, w));
+  int v = form == SW_VALUE ? nt_ref(c->nt, w, "value")
+        : form == SW_TARGET ? masgn_target_value(c, w, NULL, NULL, NULL) : -1;
+  if (v >= 0) container_literals(c, v, x->out, x->depth + 1);
+  return 0;
+}
 static void container_literals(Compiler *c, int n, ContainerLiterals *out, int depth) {
   const NodeTable *nt = c->nt;
   n = value_node_or_self(nt, n);   /* `(a; [1])` is the literal */
@@ -8097,6 +8074,21 @@ static void container_literals(Compiler *c, int n, ContainerLiterals *out, int d
   NodeKind k = nt_kind(nt, n);
   if (k == NK_ArrayNode || k == NK_HashNode) {
     add_container_literal(out, n, nt->count);
+    return;
+  }
+  /* a named slot's read (an ivar, a global, a class variable, a constant
+     by its name or its path): the value of each of the slot's writes
+     (slot_writes_each), `N = [...]`, `@t ||= [...]`, `$g &&= [...]`, `M::N
+     = [...]`, a multiple assignment's target's element; an ivar's of the
+     read's class or one above or below it, a class variable's of its
+     owner, a constant's by its key (named_slot_name) */
+  int fam = named_slot_family(k);
+  if (fam != NS_NONE && slot_write_form(k) == SW_NONE) {
+    const char *key = named_slot_name(c, n);
+    int cls = fam == NS_IVAR ? ivar_node_class(c, n)
+            : fam == NS_CVAR && key ? holder_cvar_owner(c, n, key, holder_cbody(c, n)) : -1;
+    ClWrites x = { out, depth };
+    if (key) slot_writes_each(c, fam, key, cls, container_write_literals, &x);
     return;
   }
   const char *nm = nt_str(nt, n, "name");
@@ -8141,31 +8133,7 @@ static void container_literals(Compiler *c, int n, ContainerLiterals *out, int d
     return;
   }
   Scope *sc = comp_scope_of(c, n);
-  if (!sc) return;
-  if (k == NK_LocalVariableReadNode) {
-    container_local_literals(c, sc, nm, out, depth);
-    return;
-  }
-  NodeKind wk = k == NK_InstanceVariableReadNode ? NK_InstanceVariableWriteNode
-              : k == NK_GlobalVariableReadNode ? NK_GlobalVariableWriteNode
-              : k == NK_ClassVariableReadNode ? NK_ClassVariableWriteNode
-              : k == NK_ConstantReadNode ? NK_ConstantWriteNode : NK_NONE;
-  if (wk == NK_NONE) return;
-  int cid = -1;
-  if (k == NK_InstanceVariableReadNode) cid = sc->class_id >= 0 ? sc->class_id : c->toplevel_class;
-  if (k == NK_ClassVariableReadNode) cid = holder_cvar_owner(c, n, nm, holder_cbody(c, n));
-  for (int w = clw_first_named(c, wk, nm); w >= 0; w = clw_next[w]) {
-    if (cid >= 0) {
-      int wc;
-      if (k == NK_ClassVariableReadNode) wc = holder_cvar_owner(c, w, nm, holder_cbody(c, w));
-      else {
-        Scope *ws = comp_scope_of(c, w);
-        wc = ws && ws->class_id >= 0 ? ws->class_id : c->toplevel_class;
-      }
-      if (wc != cid) continue;
-    }
-    container_literals(c, nt_ref(nt, w, "value"), out, depth + 1);
-  }
+  if (sc && k == NK_LocalVariableReadNode) container_local_literals(c, sc, nm, out, depth);
 }
 
 static int widen_boxed_elem_sources(Compiler *c, int r, TyKind elem, int depth);

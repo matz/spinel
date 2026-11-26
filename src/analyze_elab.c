@@ -16555,6 +16555,12 @@ int elab_const_write_owner(Compiler *c, int node) {
   if (cls == LR_MAIN) cls = comp_core_class(c, CORE_OBJECT);
   return cls >= 0 ? cls : -2;
 }
+/* Does a constant write (its node or its target) put its constant on a
+   singleton's table, as the record found it (`class << self; N = v`)? */
+int elab_const_write_on_singleton(Compiler *c, int node) {
+  const LoadRecord *r = c->lrec;
+  return r && r->cwown && node >= 0 && node < r->ncent && r->cwown[node] < 0;
+}
 /* The key of the value constant entity node is a write of or a read
    names, as elab_const_keys found it; NULL for none (a class's, one the
    record does not bind, a node made since) */

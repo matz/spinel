@@ -1198,7 +1198,11 @@ its arrays are built and builds them as general Arrays: an array literal or
 a new array, through locals (their `||=` and the arms of a branch too), the
 value of a method (or a chain of them, a method a subclass overrides, or a
 method answering its block's value), a `then` block, a multiple assignment
-from a literal, a row of a literal table, a builtin that answers its
+from a literal, a row of a literal table (one a constant, a global, an
+ivar or a class variable holds too, whichever of its writes sets it: `N ||=
+[s.bytes]`, `@t &&= [...]`, `M::N = [...]`, `$g, z = [...], 0`, but not a
+bare `N ||=` or `N &&=` in a class, module or `class << self` body),
+a builtin that answers its
 receiver (`push`, `concat`, `tap`, an Array's own `to_a`), an ivar (the main
 object's too) or attr_reader every write of which (an `||=`, a `&&=`, a
 multiple assignment's, beside a splat too) is nil, keeps a parameter of the

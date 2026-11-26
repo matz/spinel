@@ -2613,6 +2613,16 @@ static sp_bool sp_poly_responds_builtin(sp_RbVal v, const char *m) {
       "name", "raise", "report_on_exception", "status", "terminate", "value", NULL };
     return sp_str_in_list(m, threadm);
   }
+  /* a boxed Mutex or ConditionVariable: the names its boxed dispatch answers */
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_MUTEX && v.v.p && !((sp_mutex *)v.v.p)->reentrant) {
+    static const char *const mutexm[] = { "lock", "locked?", "owned?", "sleep", "synchronize",
+      "try_lock", "unlock", NULL };
+    return sp_str_in_list(m, mutexm);
+  }
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_CONDVAR) {
+    static const char *const condvarm[] = { "broadcast", "signal", "wait", NULL };
+    return sp_str_in_list(m, condvarm);
+  }
   if (v.tag == SP_TAG_OBJ && v.v.p &&
       (v.cls_id == SP_BUILTIN_EXCEPTION ||
        /* A user exception boxes under its own class id, not
@@ -17377,6 +17387,53 @@ static sp_condvar *sp_poly_as_condvar(sp_RbVal v, const char *name) {
 }
 static SP_UNUSED sp_RbVal sp_poly_condvar_signal(sp_RbVal v) { sp_CondVar_signal(sp_poly_as_condvar(v, "signal")); return v; }
 static SP_UNUSED sp_RbVal sp_poly_condvar_broadcast(sp_RbVal v) { sp_CondVar_broadcast(sp_poly_as_condvar(v, "broadcast")); return v; }
+static double sp_poly_time_interval(sp_RbVal v);   /* defined below */
+/* Mutex#sleep on a boxed receiver, with or without a timeout (nil is
+   none). Another receiver raises CRuby's NoMethodError: Kernel#sleep is
+   private, so an explicit receiver cannot call it. */
+static SP_UNUSED sp_RbVal sp_poly_mutex_sleep(sp_RbVal v, sp_bool has_t, sp_RbVal t) {
+  SP_GC_ROOT_RBVAL(v); SP_GC_ROOT_RBVAL(t);
+  /* a Monitor is a reentrant mutex with no sleep of its own */
+  if (!(v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_MUTEX && v.v.p) || ((sp_mutex *)v.v.p)->reentrant)
+    sp_raise_cls("NoMethodError", sp_stage_recv_msg(sp_sprintf("private method 'sleep' called for %s", sp_nomethod_recv_desc(v)), v));
+  sp_mutex *m = (sp_mutex *)v.v.p;
+  int timed = has_t && t.tag != SP_TAG_NIL;
+  double s = timed ? sp_poly_time_interval(t) : 0.0;
+  if (timed && isinf(s) && s > 0) sp_raise_cls("RangeError", "Inf out of Time range");
+#ifdef SP_THREADS
+  return sp_Mutex_sleep(m, timed, s);
+#else
+  /* the single-threaded runtime has no sp_Mutex_sleep, and no other thread
+     can wake the sleeper: the timeout runs out (nil), or it sleeps for good */
+  if (timed && s != s) sp_raise_cls("RangeError", "NaN out of Time range");
+  if (timed && s < 0.0) sp_raise_cls("ArgumentError", "time interval must not be negative");
+  sp_Mutex_unlock(m);
+  if (timed) sp_sleep(s); else sp_sleep_forever();
+  sp_Mutex_lock(m);
+  return sp_box_nil();
+#endif
+}
+/* ConditionVariable#wait(mutex[, timeout]) on a boxed receiver. CRuby
+   calls the argument's sleep: a Mutex is released and re-acquired around
+   the wait, and another builtin value runs Kernel#sleep for the timeout
+   and answers 0. */
+static SP_UNUSED sp_RbVal sp_poly_condvar_wait(sp_RbVal v, sp_RbVal mv, sp_bool has_t, sp_RbVal t) {
+  SP_GC_ROOT_RBVAL(v); SP_GC_ROOT_RBVAL(mv); SP_GC_ROOT_RBVAL(t);
+  sp_condvar *cv = sp_poly_as_condvar(v, "wait");
+  int timed = has_t && t.tag != SP_TAG_NIL;
+  double s = timed ? sp_poly_time_interval(t) : 0.0;
+  if (timed && s != s) sp_raise_cls("RangeError", "NaN out of Time range");
+  if (timed && isinf(s) && s > 0) sp_raise_cls("RangeError", "Inf out of Time range");
+  if (timed && s < 0.0) sp_raise_cls("ArgumentError", "time interval must not be negative");
+  /* (a Monitor has no sleep of its own either: Kernel#sleep runs) */
+  if (!(mv.tag == SP_TAG_OBJ && mv.cls_id == SP_BUILTIN_MUTEX && mv.v.p) || ((sp_mutex *)mv.v.p)->reentrant) {
+    if (timed) sp_sleep(s); else sp_sleep_forever();
+    return sp_box_int(0);
+  }
+  sp_mutex *m = (sp_mutex *)mv.v.p;
+  /* the timed wait takes zero as the wait that does not park */
+  return timed ? sp_CondVar_wait_timeout(cv, m, s) : sp_CondVar_wait(cv, m);
+}
 /* pop/shift/deq(non_block): an Array's pop(true) is still CRuby's TypeError */
 static sp_RbVal sp_poly_queue_pop_flag(sp_RbVal v, const char *name, sp_bool nb) {
   if (v.tag == SP_TAG_OBJ && sp_poly_is_array_kind(v.cls_id))

@@ -1,0 +1,26 @@
+nil
+nil
+nil
+[:napper_sleep, 0.01]
+nil
+[:napper_wait, 0.01]
+true
+true
+ArgumentError: time interval must not be negative
+ArgumentError: time interval must not be negative
+RangeError: NaN out of Time range
+RangeError: Inf out of Time range
+ArgumentError: time interval must not be negative
+RangeError: NaN out of Time range
+RangeError: Inf out of Time range
+nil
+NoMethodError: private method 'sleep' called for an instance of Integer
+false
+[true, true, true, true, true, true, true]
+[true, true, true]
+NoMethodError: private method 'sleep' called for an instance of Monitor
+false
+false
+true
+:done
+[:recv, :arg, :recv, :arg, :recv, :arg]

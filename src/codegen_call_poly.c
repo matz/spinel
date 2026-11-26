@@ -87,6 +87,21 @@ int emit_op_boxed_array_count(Compiler *c, const BopCtx *x, Buf *b) {
 }
 
 /* builtin methods on a poly receiver the runtime answers by the value it holds: inject / reduce(:op), the Array reductions and slices, values_at, Fiber's resume / transfer / raise, Queue's enq / deq */
+/* An argument of a boxed sync call into the boxed temp _t<tn>, rooted,
+   with what it hoists placed here, after the receiver's temp, rather than
+   ahead of the whole statement (emit_poly_arg_temp's capture) */
+static void poly_sync_arg_after_recv(Compiler *c, int node, int tn, Buf *mv) {
+  Buf pre; memset(&pre, 0, sizeof pre);
+  Buf val; memset(&val, 0, sizeof val);
+  Buf *sv_pre = g_pre;
+  if (subtree_has_side_effect(c, node)) g_pre = &pre;
+  emit_boxed(c, node, &val);
+  g_pre = sv_pre;
+  if (pre.p) buf_puts(mv, pre.p);
+  buf_printf(mv, "sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d); ", tn, val.p ? val.p : "sp_box_nil()", tn);
+  free(pre.p); free(val.p);
+}
+
 int emit_call_poly_builtin_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt) {
   /* Array-reduction methods on a boxed array element of a poly array (e.g.
      `runs.map { |r| r.sum }` over chunk_while runs). The runtime helper switches
@@ -311,6 +326,31 @@ int emit_call_poly_builtin_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
     Repr wr = repr_of(c, id);
     if (is_bool && wr.kind == RK_BOXED) buf_printf(b, "sp_box_bool(%s)", mv.p);
     else if (is_bool || wr.kind == RK_BOXED) buf_puts(b, mv.p);
+    else emit_unbox_text(c, wr.as_ty, mv.p, b);
+    free(mv.p);
+    return 1;
+  }
+  /* and a boxed Mutex's #sleep and a boxed ConditionVariable's #wait, where
+     the call has an explicit receiver (a receiverless sleep is Kernel's) */
+  if (recv >= 0 && rt == TY_POLY && nt_ref(nt, id, "block") < 0 && !nt_argv_has_splat(nt, argv, argc) &&
+      nt_argv_kwh(nt, argv, argc) < 0 &&
+      ((sp_streq(name, "sleep") && argc <= 1) || (sp_streq(name, "wait") && (argc == 1 || argc == 2))) &&
+      !poly_name_user_claimed(c, name, argc)) {
+    int is_wait = sp_streq(name, "wait");
+    int tv = ++g_tmp, ta = ++g_tmp, tt = ++g_tmp;
+    Buf mv; memset(&mv, 0, sizeof mv);
+    buf_printf(&mv, "({ sp_RbVal _t%d = ", tv); emit_boxed(c, recv, &mv);
+    buf_printf(&mv, "; SP_GC_ROOT_RBVAL(_t%d); ", tv);
+    /* each argument's own prelude (a boxed values_at's pushes) runs after
+       the receiver's temp, as emit_poly_arg_temp places it */
+    if (is_wait) poly_sync_arg_after_recv(c, argv[0], ta, &mv);
+    int targ = is_wait ? 1 : 0;
+    if (argc > targ) poly_sync_arg_after_recv(c, argv[targ], tt, &mv);
+    else buf_printf(&mv, "sp_RbVal _t%d = sp_box_nil(); ", tt);
+    if (is_wait) buf_printf(&mv, "sp_poly_condvar_wait(_t%d, _t%d, %d, _t%d); })", tv, ta, argc == 2, tt);
+    else buf_printf(&mv, "sp_poly_mutex_sleep(_t%d, %d, _t%d); })", tv, argc == 1, tt);
+    Repr wr = repr_of(c, id);
+    if (wr.kind == RK_BOXED) buf_puts(b, mv.p);
     else emit_unbox_text(c, wr.as_ty, mv.p, b);
     free(mv.p);
     return 1;

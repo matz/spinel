@@ -10129,7 +10129,21 @@ static void emit_arg_first(Compiler *c, int v, int rebound, Buf *b) {
   if (!effect && !rebound) return;
   TyKind at = repr_of(c, x).as_ty;
   if (ty_is_object(at) || c_type_name(at)) {
+    int na = g_n_argov;
     emit_arg_temp(c, x);
+    /* A splat spreads its Array where it stands: CRuby takes the elements
+       before a later argument runs, so `f(*@a, (@a << 9; 2))` passes the
+       three, not the four. Held as the Array itself, the spread read it
+       after the push; a splat a later argument may change is held as a
+       copy (#11506). */
+    const char *dup = nt_kind(nt, v) != NK_SplatNode || !rebound ? NULL :
+                      at == TY_INT_ARRAY ? "sp_IntArray_dup" : at == TY_FLOAT_ARRAY ? "sp_FloatArray_dup" :
+                      at == TY_STR_ARRAY ? "sp_StrArray_dup" : at == TY_POLY_ARRAY ? "sp_PolyArray_dup" : NULL;
+    int t;
+    if (dup && g_n_argov > na && g_argov_node[g_n_argov - 1] == x && sscanf(g_argov_text[g_n_argov - 1], "_t%d", &t) == 1) {
+      emit_indent(g_pre, g_indent);
+      buf_printf(g_pre, "_t%d = %s(_t%d);\n", t, dup, t);
+    }
     return;
   }
   if (!effect) return;   /* a nil read reads nil whenever it runs */

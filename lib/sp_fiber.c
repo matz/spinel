@@ -648,7 +648,8 @@ static void sp_sigpipe_nothing(int sig) { (void)sig; }
    CRuby's does (sig_do_nothing in its signal.c). A handler and not SIG_IGN:
    a child process that exec starts gets the default disposition back, and
    SIG_IGN would stay with it. The runtime installs it at the start of the
-   program (sp_main_stack_run), and trap("PIPE", "DEFAULT") puts it back. */
+   program (sp_main_stack_run), and trap("PIPE", "DEFAULT") puts it back.
+   The socket code (sp_net.c) relies on it and sets nothing of its own. */
 void sp_sigpipe_default(void) {
 #ifdef SIGPIPE
   struct sigaction sa;

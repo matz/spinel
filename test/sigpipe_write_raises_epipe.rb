@@ -26,3 +26,18 @@ rescue Errno::EPIPE => e
   puts "EPIPE again"
 end
 puts "alive"
+
+# opening a socket changes nothing: the write still raises, and a child
+# still gets the default
+require "socket"
+server = TCPServer.new("127.0.0.1", 0)
+r, w = IO.pipe
+r.close
+begin
+  w.write("z")
+rescue Errno::EPIPE
+  puts "EPIPE with a socket open"
+end
+system("sh", "-c", "kill -PIPE $$")
+p $?.termsig
+server.close

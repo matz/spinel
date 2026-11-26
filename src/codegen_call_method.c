@@ -1615,6 +1615,10 @@ int emit_call_callable_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
        callable address. Invoking it jumped through NULL; the poly-slot and
        first-class routes decline with NoMethodError, so decline the same way
        here instead of dereferencing it. */
+    /* a Method value that holds nil (`super_method` with no super): the
+       call is nil's, which has no method of the name (`===` is nil's own) */
+    if (!sp_streq(name, "==="))
+      buf_printf(b, "if (!_t%d) sp_raise_cls(\"NoMethodError\", \"undefined method '%s' for nil\"); ", tr, name);
     buf_printf(b, "if (!_t%d->fn) sp_raise_cls(\"NoMethodError\","
                   " sp_sprintf(\"undefined method '%%s' for an instance of Object\","
                   " _t%d->name ? _t%d->name : \"?\")); ", tr, tr, tr);

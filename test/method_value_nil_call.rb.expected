@@ -1,0 +1,5 @@
+nil
+[NoMethodError, "undefined method 'call' for nil"]
+[NoMethodError, "undefined method 'call' for nil"]
+[NoMethodError, "undefined method '[]' for nil"]
+3

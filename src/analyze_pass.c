@@ -2192,6 +2192,34 @@ static int named_slot_family(NodeKind k) {
   default: return NS_NONE;
   }
 }
+/* How slot_write_walk takes a write of kind k: SW_OP an op-write, SW_TARGET
+   a multiple assignment's target, SW_VALUE a write of its value node;
+   SW_NONE for any other kind (a read, an attribute writer's call). With
+   named_slot_family it lists the writes of a slot (slot_write_kind). */
+enum { SW_NONE, SW_OP, SW_TARGET, SW_VALUE };
+static int slot_write_form(NodeKind k) {
+  switch (k) {
+  case NK_InstanceVariableOperatorWriteNode: case NK_GlobalVariableOperatorWriteNode:
+  case NK_ClassVariableOperatorWriteNode: case NK_ConstantOperatorWriteNode:
+  case NK_ConstantPathOperatorWriteNode: case NK_CallOperatorWriteNode:
+    return SW_OP;
+  case NK_InstanceVariableTargetNode: case NK_GlobalVariableTargetNode: case NK_ClassVariableTargetNode:
+  case NK_ConstantTargetNode: case NK_ConstantPathTargetNode:
+    return SW_TARGET;
+  case NK_InstanceVariableWriteNode: case NK_InstanceVariableOrWriteNode: case NK_InstanceVariableAndWriteNode:
+  case NK_GlobalVariableWriteNode: case NK_GlobalVariableOrWriteNode: case NK_GlobalVariableAndWriteNode:
+  case NK_ClassVariableWriteNode: case NK_ClassVariableOrWriteNode: case NK_ClassVariableAndWriteNode:
+  case NK_ConstantWriteNode: case NK_ConstantOrWriteNode: case NK_ConstantAndWriteNode:
+  case NK_ConstantPathWriteNode: case NK_ConstantPathOrWriteNode: case NK_ConstantPathAndWriteNode:
+    return SW_VALUE;
+  default: return SW_NONE;
+  }
+}
+/* Is k a kind of write of a slot of family fam (named_slot_family), one
+   slot_write_walk takes? */
+static int slot_write_kind(NodeKind k, int fam) {
+  return named_slot_family(k) == fam && slot_write_form(k) != SW_NONE;
+}
 /* The node that names the slot of a constant path's write: its target. */
 static int named_slot_node(const NodeTable *nt, int n) {
   NodeKind k = nt_kind(nt, n);
@@ -8179,14 +8207,15 @@ static int row_lifts(Compiler *c, int el, TyKind elem) {
   }
   return 1;
 }
-/* 1 when the Array literal `lit` is the value a constant is written
-   (`N = [s.bytes]`, `N = [s.bytes].freeze`) */
+/* 1 when the Array literal `lit` is the value a constant is written by any
+   write of its value (slot_write_form): `N = [s.bytes]`, `N ||=
+   [s.bytes].freeze`, `M::N &&= [s.bytes]` */
 static int literal_in_constant(Compiler *c, int lit) {
   const NodeTable *nt = c->nt;
   const int *par = comp_parent_map(c);
   for (int up = par ? par[lit] : -1, d = 0; up >= 0 && d < 4; up = par[up], d++) {
     NodeKind k = nt_kind(nt, up);
-    if (k == NK_ConstantWriteNode || k == NK_ConstantPathWriteNode || k == NK_ConstantOrWriteNode) return 1;
+    if (named_slot_family(k) == NS_CONST && slot_write_form(k) == SW_VALUE) return 1;
     if (k != NK_CallNode && k != NK_ParenthesesNode && k != NK_StatementsNode) return 0;
   }
   return 0;
@@ -9122,34 +9151,6 @@ static int struct_super_member_values(Compiler *c, int cls, int iv, AttrArgWalk 
    (named_src_walk). An `op=` leaves the Array its operator builds out of
    the slot's own (`@v += [2]`), which is new. Nonzero stops the walk where
    the value is no one the walk can follow. */
-/* How slot_write_walk takes a write of kind k: SW_OP an op-write, SW_TARGET
-   a multiple assignment's target, SW_VALUE a write of its value node;
-   SW_NONE for any other kind (a read, an attribute writer's call). With
-   named_slot_family it lists the writes of a slot (slot_write_kind). */
-enum { SW_NONE, SW_OP, SW_TARGET, SW_VALUE };
-static int slot_write_form(NodeKind k) {
-  switch (k) {
-  case NK_InstanceVariableOperatorWriteNode: case NK_GlobalVariableOperatorWriteNode:
-  case NK_ClassVariableOperatorWriteNode: case NK_ConstantOperatorWriteNode:
-  case NK_ConstantPathOperatorWriteNode: case NK_CallOperatorWriteNode:
-    return SW_OP;
-  case NK_InstanceVariableTargetNode: case NK_GlobalVariableTargetNode: case NK_ClassVariableTargetNode:
-  case NK_ConstantTargetNode: case NK_ConstantPathTargetNode:
-    return SW_TARGET;
-  case NK_InstanceVariableWriteNode: case NK_InstanceVariableOrWriteNode: case NK_InstanceVariableAndWriteNode:
-  case NK_GlobalVariableWriteNode: case NK_GlobalVariableOrWriteNode: case NK_GlobalVariableAndWriteNode:
-  case NK_ClassVariableWriteNode: case NK_ClassVariableOrWriteNode: case NK_ClassVariableAndWriteNode:
-  case NK_ConstantWriteNode: case NK_ConstantOrWriteNode: case NK_ConstantAndWriteNode:
-  case NK_ConstantPathWriteNode: case NK_ConstantPathOrWriteNode: case NK_ConstantPathAndWriteNode:
-    return SW_VALUE;
-  default: return SW_NONE;
-  }
-}
-/* Is k a kind of write of a slot of family fam (named_slot_family), one
-   slot_write_walk takes? */
-static int slot_write_kind(NodeKind k, int fam) {
-  return named_slot_family(k) == fam && slot_write_form(k) != SW_NONE;
-}
 static int slot_write_walk(Compiler *c, int w, void *ctx) {
   const NodeTable *nt = c->nt;
   AttrArgWalk *aw = ctx;

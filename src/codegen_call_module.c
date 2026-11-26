@@ -270,7 +270,52 @@ int emit_call_file_dir_time_arms(Compiler *c, int id, Buf *b, const NodeTable *n
       int tp = ++g_tmp, tl = ++g_tmp, to = ++g_tmp, tr = ++g_tmp;
       if (bin_r) buf_puts(b, "sp_str_as_binary(");
       buf_printf(b, "({ const char *_t%d = ", tp); emit_path_expr(c, argv[0], b);
-      buf_printf(b, "; SP_GC_ROOT_STR(_t%d); sp_oint _t%d = ", tp, tl); emit_oint_expr(c, argv[1], TY_INT, b);
+      /* a length of a kind no Integer converts from (a String buffer handed
+         to IO.read, as an `io.read(n, buf)` on a receiver that may be the
+         class IO compiles) raises as the Integer slot does, where CRuby
+         converts it: after the offset and after the file is opened */
+      TyKind lt = comp_ntype(c, argv[1]);
+      const char *lbad = conv_wrong_cls_name(lt);
+      if (lt == TY_BOOL || (lbad && lt != TY_INT && lt != TY_BIGINT && lt != TY_FLOAT)) {
+        /* read converts and checks the offset, then opens; binread opens,
+           then converts the offset and seeks to it (EINVAL for a negative
+           one); both convert the length last */
+        int bin_m = sp_streq(name, "binread");
+        buf_printf(b, "; SP_GC_ROOT_STR(_t%d); ", tp);
+        if (bin_m) buf_printf(b, "sp_file_read_open_check(_t%d); ", tp);
+        if (argc == 3) {
+          buf_printf(b, "sp_int _t%d = ", to);
+          TyKind ot = comp_ntype(c, argv[2]);
+          if (bin_m && (ot == TY_STRING || ot == TY_STRBUF)) {
+            buf_puts(b, "({ (void)("); emit_expr_for_effect(c, argv[2], b);
+            buf_puts(b, "); sp_raise_cls(\"TypeError\", \"no implicit conversion from string\"); (sp_int)0; })");
+          }
+          else if (bin_m) emit_int_expr_offt(c, argv[2], b);
+          else emit_int_expr(c, argv[2], b);
+          buf_printf(b, "; sp_file_read_offset_check(_t%d, _t%d, %d); ", tp, to, bin_m);
+        }
+        if (!bin_m) buf_printf(b, "sp_file_read_open_check(_t%d); ", tp);
+        buf_printf(b, "sp_oint _t%d = sp_oint_of(", tl);
+        emit_int_expr(c, argv[1], b);
+        buf_printf(b, "); (void)_t%d; (const char *)0; })", tl);
+        if (bin_r) buf_puts(b, ")");
+        return 1;
+      }
+      buf_printf(b, "; SP_GC_ROOT_STR(_t%d); sp_oint _t%d = ", tp, tl);
+      if (lt == TY_POLY) {
+        /* a boxed length: nil reads the rest, an Integer is the length, and
+           anything else raises as the Integer slot does (a numeric String
+           too), after the open as CRuby converts it */
+        int tv = ++g_tmp;
+        buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_boxed(c, argv[1], b);
+        /* (a Float converts, so the read itself opens the file once; only a length that will be
+           rejected opens it first, for the missing file's error) */
+        buf_printf(b, "; _t%d.tag == SP_TAG_NIL ? sp_oint_nil() : _t%d.tag == SP_TAG_INT ? sp_oint_of(_t%d.v.i)"
+                      " : _t%d.tag == SP_TAG_FLT ? sp_oint_of(sp_poly_arg_int_chk(_t%d))"
+                      " : (sp_file_read_open_check(_t%d), sp_oint_of(sp_poly_arg_int_chk(_t%d))); })",
+                   tv, tv, tv, tv, tv, tp, tv);
+      }
+      else emit_oint_expr(c, argv[1], TY_INT, b);
       if (argc == 3) {
         buf_printf(b, "; sp_int _t%d = ", to); emit_int_expr(c, argv[2], b);
         buf_printf(b, "; const char *_t%d = sp_file_read_at_o(_t%d, _t%d, _t%d); ", tr, tp, tl, to);

@@ -2771,6 +2771,8 @@ const char *sp_file_read_at(const char *path, sp_int n, sp_int off);
 const char *sp_file_read_from(const char *path, sp_int off);
 const char *sp_file_read_o(const char *path, sp_oint n);
 const char *sp_file_read_at_o(const char *path, sp_oint n, sp_int off);
+void sp_file_read_open_check(const char *path);
+void sp_file_read_offset_check(const char *path, sp_int off, int bin);
 sp_int sp_file_chmod(sp_int mode, const char *path);
 sp_int sp_file_truncate(const char *path, sp_int n);
 sp_int sp_file_write_at(const char *path, const char *data, sp_int off);
@@ -3170,6 +3172,21 @@ const char *sp_file_read_from(const char *path, sp_int off) {SP_GC_ROOT_STR(path
 }
 const char *sp_file_read_o(const char *path, sp_oint n) {
   return n.nil ? sp_file_read(path) : sp_file_read_len(path, n.v);
+}
+/* File.read opens the file before it converts the length, so a missing
+   file is named ahead of a length of the wrong kind */
+void sp_file_read_open_check(const char *path) {SP_GC_ROOT_STR(path);
+  FILE *fp = fopen(path ? path : "", "rb");
+  if (!fp) sp_file_raise_errno("rb_sysopen", path);
+  fclose(fp);
+}
+/* the offset of File.read (ArgumentError, before the open) or of
+   File.binread (its seek's EINVAL, after the open) when it is negative */
+void sp_file_read_offset_check(const char *path, sp_int off, int bin) {SP_GC_ROOT_STR(path);
+  if (off >= 0) return;
+  if (!bin) sp_raise_cls("ArgumentError", sp_sprintf("negative offset %lld given", (long long)off));
+  errno = EINVAL;
+  sp_file_raise_errno("rb_io_seek", path);
 }
 const char *sp_file_read_at_o(const char *path, sp_oint n, sp_int off) {
   return n.nil ? sp_file_read_from(path, off) : sp_file_read_at(path, n.v, off);

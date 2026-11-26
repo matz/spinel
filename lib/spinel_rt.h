@@ -19851,6 +19851,8 @@ const char *sp_file_read_len(const char *path, sp_int n);
 const char *sp_file_read_at(const char *path, sp_int n, sp_int off);
 const char *sp_file_read_from(const char *path, sp_int off);
 const char *sp_file_read_o(const char *path, sp_oint n);
+void sp_file_read_open_check(const char *path);
+void sp_file_read_offset_check(const char *path, sp_int off, int bin);
 const char *sp_file_read_at_o(const char *path, sp_oint n, sp_int off);
 sp_int sp_file_chmod(sp_int mode, const char *path);
 sp_int sp_file_truncate(const char *path, sp_int n);

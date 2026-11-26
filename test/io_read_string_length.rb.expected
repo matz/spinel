@@ -1,0 +1,24 @@
+[TypeError, "no implicit conversion of String into Integer"]
+[TypeError, "no implicit conversion of String into Integer"]
+[TypeError, "no implicit conversion of String into Integer"]
+[TypeError, "no implicit conversion of Symbol into Integer"]
+[TypeError, "no implicit conversion of Array into Integer"]
+[TypeError, "no implicit conversion of Integer into String"]
+[Errno::ENOENT, "No such file or directory @ rb_sysopen - /nope/x"]
+[Errno::ENOENT, "No such file or directory @ rb_sysopen - /nope/x"]
+[TypeError, "no implicit conversion of String into Integer"]
+[Errno::ENOENT, "No such file or directory @ rb_sysopen - /nope/x"]
+[TypeError, "no implicit conversion of String into Integer"]
+[ArgumentError, "negative offset -1 given"]
+[ArgumentError, "negative offset -1 given"]
+[TypeError, "no implicit conversion of String into Integer"]
+[Errno::ENOENT, "No such file or directory @ rb_sysopen - /nope/x"]
+[Errno::ENOENT, "No such file or directory @ rb_sysopen - /nope/x"]
+TypeError
+Errno::EINVAL
+[TypeError, "no implicit conversion of String into Integer"]
+"ab"
+"bcdef"
+"ab"
+"abcdef"
+"abcd"

@@ -783,9 +783,12 @@ static int class_leaf_is(Compiler *c, int j, const char *leaf) {
 static int lexically_sees_nested(Compiler *c, int id, const char *leaf) {
   if (!c->node_cbody || id >= c->node_cap) return program_nests_class_named(c, leaf);
   int d = 0;
-  for (int k = c->node_cbody[id]; k >= 0 && k < c->nclasses && d < 64; k = c->classes[k].enclosing_class, d++)
+  for (int k = c->node_cbody[id]; k >= 0 && k < c->nclasses && d < 64; k = c->classes[k].enclosing_class, d++) {
     for (int j = 0; j < c->nclasses; j++)
       if (c->classes[j].enclosing_class == k && class_leaf_is(c, j, leaf)) return 1;
+    /* (or a constant of that name the namespace writes, `IO = Flags` in App) */
+    if (program_writes_const_in(c, c->classes[k].name, leaf)) return 1;
+  }
   return 0;
 }
 /* Is class k a constant of a namespace `leaf` nested in a scope around node

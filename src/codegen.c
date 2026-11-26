@@ -831,6 +831,25 @@ static void rc_note(Compiler *c, int node, int form, int why, int from_text) {
      (#4486).
    A kind whose row has no box_text cannot be boxed, and stops the compile
    rather than fall back to an int box (the poly-box bug family). */
+/* A program exception of type t whose class has subclasses: its box takes
+   the class its name names (sp_user_exc_class), since the object carries a
+   name in place of an id and a slot of the class may hold a subclass's.
+   0 and nothing written for any other type. */
+static int exc_own_box_applies(Compiler *c, TyKind t) {
+  int cid = ty_is_object(t) ? ty_object_class(t) : -1, sub = 0;
+  if (cid < 0 || cid >= c->nclasses || !class_is_exc_subclass(c, cid) || comp_ty_value_obj(c, t)) return 0;
+  for (int k = 0; k < c->nclasses && !sub; k++) sub = k != cid && c->classes[k].parent == cid;
+  return sub;
+}
+static int emit_exc_own_box(Compiler *c, TyKind t, const char *expr, Buf *b) {
+  if (!exc_own_box_applies(c, t)) return 0;
+  int ep = ++g_tmp;
+  buf_printf(b, "({ void *_t%d = (void *)(%s); _t%d ? sp_box_obj(_t%d, ({ sp_Class _k%d = sp_user_exc_class(((sp_Exception *)_t%d)->cls_name);"
+                " _k%d.cls_id >= 0 ? (int)_k%d.cls_id : ", ep, expr, ep, ep, ep, ep, ep, ep);
+  arysub_box_id(c, t, b);
+  buf_puts(b, "; })) : sp_box_nil(); })");
+  return 1;
+}
 void emit_boxed_text(Compiler *c, TyKind t, const char *expr, Buf *b) {
   if (g_plan_check) pa_box_text(t);
   if (g_repr_check) { rc_text_form = -1; rc_text_ty = t; }
@@ -860,6 +879,7 @@ void emit_boxed_text(Compiler *c, TyKind t, const char *expr, Buf *b) {
        rule emit_boxed follows (repr_dyn_cls): an exception keeps the static
        id, since its object starts with its class name, not an id */
     int dyn = repr_dyn_cls(c, t);
+    if (!dyn && emit_exc_own_box(c, t, expr, b)) { RCT(RF_NULLABLE); return; }
     if (comp_ty_value_obj(c, t))
       buf_printf(b, "sp_box_vobj_%s(%s)", c->classes[ty_object_class(t)].c_name, expr);
     else
@@ -3286,6 +3306,16 @@ static void emit_boxed_impl(Compiler *c, int node, Buf *b) {
        boxed value then dispatched as the parent (#3773), so the box reads the
        id the object carries (dyn_cls; an exception, whose object starts with
        its class name, keeps the static id: repr_dyn_cls). */
+    /* (an exception keeps its static id there; one of a class with subclasses
+       is boxed by the class its name names, so a class test reads its own) */
+    if (!tr.dyn_cls && exc_own_box_applies(c, t)) {
+      Buf ex; memset(&ex, 0, sizeof ex);
+      emit_expr(c, node, &ex);
+      emit_exc_own_box(c, t, ex.p ? ex.p : "NULL", b);
+      free(ex.p);
+      RC(RF_NULLABLE, RW_NONE);
+      return;
+    }
     buf_puts(b, tr.dyn_cls ? "sp_box_nullable_obj_dyn((void *)(" : "sp_box_nullable_obj((void *)(");
     emit_expr(c, node, b);
     buf_puts(b, "), ");

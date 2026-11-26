@@ -7791,6 +7791,15 @@ static int emit_obj_class_when(Compiler *c, TyKind pt, const char *cn, int pat, 
   if (!emit_obj_exc_when(c, cid, cn, t, &eb)) {
     free(eb.p);
     if (tcid < 0 || !is_descendant(c, tcid, cid)) return 0;
+    /* an exception carries its class as a name (its cls_id field is a
+       builtin's): the chain of that name answers, as is_a? reads it */
+    if (class_is_exc_subclass(c, cid)) {
+      const char *rn = class_ruby_name(c, tcid);
+      if (!rn) rn = c->classes[tcid].name;
+      if (obj_subject_nilable(c, pt)) buf_printf(b, "(_t%d != NULL && sp_exc_is_a((sp_Exception *)_t%d, \"%s\"))", t, t, rn);
+      else buf_printf(b, "sp_exc_is_a((sp_Exception *)_t%d, \"%s\")", t, rn);
+      return 1;
+    }
     const char *acc = comp_ty_value_obj(c, pt) ? "." : "->";
     int first = 1;
     buf_puts(b, "(");

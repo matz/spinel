@@ -351,6 +351,9 @@ module OpenSSL
       end
     end
 
+    # The same MAC Base64-encoded, as Digest.base64digest encodes a digest.
+    def self.base64digest(algo, key, data) = [digest(algo, key, data)].pack("m0")
+
     # The algorithm's name, upcased: a Digest instance's own (only its
     # algorithm counts, not what it was given to hash), or the String's.
     def self.algorithm(algo)

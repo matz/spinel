@@ -4617,6 +4617,8 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
         if (sp_streq(name, "lock") || sp_streq(name, "unlock")) { *out = TY_POLY; return 1; }
         if (sp_streq(name, "signal") || sp_streq(name, "broadcast")) { *out = TY_POLY; return 1; }
         if (sp_streq(name, "try_lock") || sp_streq(name, "locked?")) { *out = TY_BOOL; return 1; }
+        /* a boxed Thread's flag */
+        if (sp_streq(name, "report_on_exception")) { *out = TY_BOOL; return 1; }
       }
       if (sp_streq(name, "alive?") || sp_streq(name, "dead?") || sp_streq(name, "closed?") ||
           (sp_streq(name, "mon_owned?") && argc == 0) ||

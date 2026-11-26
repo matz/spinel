@@ -2607,6 +2607,12 @@ static sp_bool sp_poly_responds_builtin(sp_RbVal v, const char *m) {
      by its kind */
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_IO && v.v.p)
     return sp_io_responds((sp_File *)v.v.p, m, 0);
+  /* a boxed Thread: the names its boxed dispatch answers */
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_THREAD) {
+    static const char *const threadm[] = { "[]", "[]=", "alive?", "exit", "join", "key?", "kill",
+      "name", "raise", "report_on_exception", "status", "terminate", "value", NULL };
+    return sp_str_in_list(m, threadm);
+  }
   if (v.tag == SP_TAG_OBJ && v.v.p &&
       (v.cls_id == SP_BUILTIN_EXCEPTION ||
        /* A user exception boxes under its own class id, not
@@ -17549,6 +17555,12 @@ static sp_RbVal sp_io_wait_timeout_value(sp_File *f, sp_RbVal value, sp_int kind
   if (!explicit_wait)
     seconds = value.tag == SP_TAG_NIL ? sp_io_timeout_seconds(f) : sp_io_wait_interval(value);
   return sp_box_nullable_obj(sp_io_wait_events(f, seconds, kind), SP_BUILTIN_IO);
+}
+/* A boxed Thread's #report_on_exception; another receiver raises NoMethodError. */
+static sp_bool sp_poly_thread_report(sp_RbVal v) {
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_THREAD && v.v.p) return sp_Thread_get_report((sp_thread *)v.v.p);
+  sp_raise_nomethod(sp_nomethod_msg("report_on_exception", v));
+  return 0;
 }
 static sp_RbVal sp_poly_thread_status(sp_RbVal v) {
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_THREAD) return sp_Thread_status((sp_thread *)v.v.p);

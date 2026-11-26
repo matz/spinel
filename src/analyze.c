@@ -46781,8 +46781,10 @@ static int desugar_mutator_recv_rebind(Compiler *c) {
     if (!vn) continue;
     /* Not a snapshot this pass made: its write sits beside the call, inside
        the same proc, so the writes the proc holds name it, and the call was
-       rebound again to a fresh snapshot every round to the fixpoint's cap */
-    if (strncmp(vn, "__rr_", 5) == 0) continue;
+       rebound again to a fresh snapshot every round to the fixpoint's cap.
+       Marked on the read, not told by the name: a local of the program's
+       own may be spelled the same. */
+    if (nt_int(nt, base, "rr_snapshot", 0)) continue;
     int hit = 0;
     for (int cur = id; cur >= 0 && cur != base && !hit; cur = nt_ref(nt, cur, "receiver"))
       hit = rr_writes_var(nt, nt_ref(nt, cur, "arguments"), pfx, vn) ||
@@ -46820,6 +46822,7 @@ static int desugar_mutator_recv_rebind(Compiler *c) {
               bc = nt_int(nt, base, "node_col", 0);
     nt_node_reset(nt, base, "LocalVariableReadNode");
     nt_node_set_str(nt, base, "name", tn);
+    nt_node_set_int(nt, base, "rr_snapshot", 1);
     nt_node_set_int(nt, base, "node_line", bl);
     nt_node_set_int(nt, base, "node_file", bf);
     nt_node_set_int(nt, base, "node_col", bc);

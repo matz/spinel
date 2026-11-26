@@ -5722,6 +5722,8 @@ infer-test-2: $(SPINEL) $(SP_RT_LIB)
 	! grep -q 'did not converge' "$$tmp/ryt.err" || { echo "infer-test: FAIL (a tap or then of a String, Symbol, Float or Range reopen typed its block parameter as the receiver and as the method's yield on alternate rounds: the fixpoint ran to its cap)"; ok=0; }; \
 	SP_FIXPOINT_LOG=1 $(SPINEL) test/infer/mutator_rebind_in_proc_converges.rb -c --no-line-map -o "$$tmp/mrr.c" >/dev/null 2>"$$tmp/mrr.err" || { echo "infer-test: FAIL (compile mutator_rebind_in_proc_converges)"; ok=0; }; \
 	! grep -q 'did not converge' "$$tmp/mrr.err" || { echo "infer-test: FAIL (a String mutator's receiver snapshot inside a proc was rebound to a fresh snapshot every round: the fixpoint ran to its cap)"; ok=0; }; \
+	$(SPINEL) test/infer/when_boxed_keeps_capture_typed.rb -c --no-line-map -o "$$tmp/wbk.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (compile when_boxed_keeps_capture_typed)"; ok=0; }; \
+	grep -q 'sp_int sp_sq(sp_int lv_x)' "$$tmp/wbk.c" || { echo "infer-test: FAIL (a boxed when operand widened a Method capture held in a Method local and only called: sq's parameter went boxed)"; ok=0; }; \
 	$(SPINEL) test/infer/dead_constructor_no_arm.rb -c --no-line-map -o "$$tmp/dc.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (compile dead_constructor_no_arm)"; exit 1; }; \
 	grep -q 'sp_poly_add' "$$tmp/dc.c" && { echo "infer-test: FAIL (a class constructed only in dead code widened a poly receiver's field read to poly)"; ok=0; }; \
 	grep -Eq '(sp_int_add\(|sp_o?int _t[0-9]+ = )\(\{ sp_RbVal _t[0-9]+ = lv_d; sp_o?int _t[0-9]+ = (0|sp_oint_nil\(\)); switch' "$$tmp/dc.c" || { echo "infer-test: FAIL (the field read of a boxed receiver did not stay an int switch, or its receiver is rooted for an arm that cannot run)"; ok=0; }; \

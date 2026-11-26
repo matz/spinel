@@ -11758,6 +11758,22 @@ static void bam_tab_build(Compiler *c) {
     for (int j = 0; j < nmn; j++) if (mns[j] != recv) bam_tab_add(mns[j], id);
     free(mns);
   }
+  /* `case x when m` calls m with x, a site of one argument: kept as
+     -2 - x, the subject node */
+  NT_FOREACH_KIND(nt, NK_CaseNode, cs) {
+    int pred = nt_ref(nt, cs, "predicate");
+    if (pred < 0) continue;
+    int nw = 0; const int *whens = nt_arr(nt, cs, "conditions", &nw);
+    for (int w = 0; w < nw; w++) {
+      int wc = 0; const int *conds = nt_arr(nt, whens[w], "conditions", &wc);
+      for (int k = 0; k < wc; k++) {
+        if (nt_kind(nt, conds[k]) == NK_SplatNode) continue;
+        int *mns, nmn = method_recv_nodes(c, conds[k], &mns);
+        for (int j = 0; j < nmn; j++) bam_tab_add(mns[j], -2 - pred);
+        free(mns);
+      }
+    }
+  }
 }
 static int bam_call_argc(Compiler *c, int mnode, int *passed) {
   const NodeTable *nt = c->nt;
@@ -11770,11 +11786,11 @@ static int bam_call_argc(Compiler *c, int mnode, int *passed) {
   int keys[2] = { mnode, nt_int(nt, mnode, "dyn_of", -1) };
   for (int q = 0; q < 2; q++)
   for (int e = keys[q] >= 0 && keys[q] < bam_tab.nodes ? bam_tab.head[keys[q]] : -1; e >= 0; e = bam_tab.next_e[e]) {
-    int id = bam_tab.site[e];
-    if (nt_ref(nt, id, "block") >= 0) return -1;
-    int argsn = nt_ref(nt, id, "arguments");
-    int an = 0;
-    const int *av = argsn >= 0 ? nt_arr(nt, argsn, "arguments", &an) : NULL;
+    int id = bam_tab.site[e], subj = id < -1 ? -2 - id : -1;
+    if (subj < 0 && nt_ref(nt, id, "block") >= 0) return -1;
+    int argsn = subj < 0 ? nt_ref(nt, id, "arguments") : -1;
+    int an = subj >= 0 ? 1 : 0;
+    const int *av = subj >= 0 ? &subj : argsn >= 0 ? nt_arr(nt, argsn, "arguments", &an) : NULL;
     for (int k = 0; k < an; k++) {
       const char *aty = av[k] >= 0 ? nt_type(nt, av[k]) : NULL;
       NodeKind ak = nt_kind(nt, av[k]);
@@ -12324,6 +12340,12 @@ static int desugar_builtin_method_obj(Compiler *c) {
        name's arm, dyn_of, is sized as before.) */
     if (poly_self && !binop && !passed && sites == -1 && nt_int(nt, id, "dyn_of", -1) < 0)
       nfwd = BAM_VARIADIC;
+    /* ... and a typed receiver's Method no site calls (stored in an Array,
+       then called boxed or matched by a `when`) takes the builtin's own
+       fixed count, where a wrapper of none raised NoMethodError */
+    else if (!poly_self && !binop && !passed && sites == -1 && have_arity && sym_arity != 0 &&
+             nt_int(nt, id, "dyn_of", -1) < 0)
+      nfwd = sym_arity > 0 ? sym_arity : BAM_VARIADIC;
     if (nfwd > 8) nfwd = BAM_VARIADIC;
     if (nfwd != BAM_VARIADIC && nfwd < 0) nfwd = 0;
     int params, cargs;

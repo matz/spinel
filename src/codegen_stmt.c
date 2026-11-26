@@ -10367,6 +10367,9 @@ static int case_subject_needs_root(Compiler *c, TyKind pt, const int *whens, int
     int wc = 0; const int *conds = nt_arr(nt, whens[w], "conditions", &wc);
     for (int k = 0; k < wc; k++) {
       if (subtree_allocates(c, conds[k])) return 1;
+      /* a boxed or Method operand is called with the subject, and the call
+         can run any code (emit_when_boxed_test) */
+      if (repr_of(c, conds[k]).kind == RK_BOXED || comp_ntype(c, conds[k]) == TY_METHOD) return 1;
       /* `when *x` of anything but a typed Array boxes x and spreads it at
          run time (sp_case_splat_match), which allocates */
       if (nt_kind(nt, conds[k]) == NK_SplatNode) {
@@ -10702,6 +10705,59 @@ static int when_boxed_has_user_arm(Compiler *c, int cond) {
   return 0;
 }
 
+/* `when m` with m a Method: Method#===, emitted as `m === subject` would be
+   (a builtin's bound wrapper included), on the Method held in a temp. A nil
+   Method (`super_method` with no super) is nil's pattern. */
+static void emit_when_method_test(Compiler *c, int cond, int t, TyKind pt, Buf *b) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int call = nt_new_node(nt, "CallNode"), arg = nt_new_node(nt, "LocalVariableReadNode");
+  int args = nt_new_node(nt, "ArgumentsNode");
+  nt_node_set_str(nt, arg, "name", "__spinel_when_subject");
+  nt_node_set_arr(nt, args, "arguments", &arg, 1);
+  nt_node_set_str(nt, call, "name", "===");
+  nt_node_set_ref(nt, call, "receiver", cond);
+  nt_node_set_ref(nt, call, "arguments", args);
+  nt_node_set_ref(nt, call, "block", -1);
+  comp_grow_node_arrays(c);
+  int sc = c->nscope[cond];
+  c->nscope[call] = c->nscope[arg] = c->nscope[args] = sc;
+  /* an Integer or Float subject that can be nil: a nil one matches no live
+     Method, as before the Method was called (the parameter the call binds
+     has no nil to take) */
+  int so = g_case_scrut_oint == t && oint_kind(pt);
+  comp_set_ntype(c, arg, pt); comp_set_nilnarrow(c, arg, pt);
+  /* typed as the target answers, which a call of a resolved target emits */
+  CallPlan mp = cplan_method_call(c, call);
+  TyKind rt = mp.method_call && mp.mi >= 0 && mp.dispatch != CP_SWITCH ? (TyKind)c->scopes[mp.mi].ret : TY_POLY;
+  if (rt == TY_UNKNOWN || rt == TY_VOID) rt = TY_POLY;
+  comp_set_ntype(c, call, rt); comp_set_nilnarrow(c, call, rt);
+  int tm = ++g_tmp;
+  Buf mb; memset(&mb, 0, sizeof mb); emit_expr(c, cond, &mb);
+  /* (with no prelude, as in a parameter default, the temp is the
+     expression's own) */
+  int inl = g_pre == NULL;
+  if (inl) buf_printf(b, "({ sp_BoundMethod *_t%d = %s; SP_GC_ROOT(_t%d); ", tm, mb.p ? mb.p : "NULL", tm);
+  else {
+    emit_indent(g_pre, g_indent);
+    buf_printf(g_pre, "sp_BoundMethod *_t%d = %s; SP_GC_ROOT(_t%d);\n", tm, mb.p ? mb.p : "NULL", tm);
+  }
+  free(mb.p);
+  buf_puts(b, "(");
+  int ov = g_n_argov;
+  view_bind_temp(cond, tm);
+  view_bind(arg, "_t%d", t);
+  buf_printf(b, so ? "_t%d ? (!_o%d.nil && " : "_t%d ? (", tm, t);
+  emit_cond(c, call, b);
+  buf_puts(b, ") : ");
+  if (so) buf_printf(b, "_o%d.nil", t);
+  else if (pt == TY_POLY) buf_printf(b, "_t%d.tag == SP_TAG_NIL", t);
+  else if (pt == TY_NIL) buf_puts(b, "1");
+  else if (needs_root(pt) && !comp_ty_value_obj(c, pt)) buf_printf(b, "_t%d == NULL", t);
+  else buf_puts(b, "0");
+  view_unbind(ov);
+  buf_puts(b, inl ? "); })" : ")");
+}
+
 static void emit_when_boxed_test(Compiler *c, int cond, int t, TyKind pt, Buf *b) {
   char subjp[32]; snprintf(subjp, sizeof subjp, "_t%d", t);
   int tpw = ++g_tmp;
@@ -10715,7 +10771,11 @@ static void emit_when_boxed_test(Compiler *c, int cond, int t, TyKind pt, Buf *b
   buf_printf(b, "_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_PROC", tpw, tpw);
   buf_printf(b, " ? sp_poly_truthy(sp_penum_call1((sp_Proc *)_t%d.v.p, ", tpw);
   if (pt == TY_POLY) buf_puts(b, subjp); else emit_boxed_text(c, pt, subjp, b);
-  buf_printf(b, ")) : sp_poly_case_eq_match(_t%d, ", tpw);
+  /* Method#=== calls the method with the subject */
+  buf_printf(b, ")) : _t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_METHOD && _t%d.v.p"
+                " ? sp_poly_truthy((_sp_proc_poly_args[0] = ", tpw, tpw, tpw);
+  if (pt == TY_POLY) buf_puts(b, subjp); else emit_boxed_text(c, pt, subjp, b);
+  buf_printf(b, ", sp_bm_call_boxed(_t%d.v.p, 1))) : sp_poly_case_eq_match(_t%d, ", tpw, tpw);
   if (pt == TY_POLY) buf_puts(b, subjp); else emit_boxed_text(c, pt, subjp, b);
   buf_puts(b, "); })");
 }
@@ -11230,6 +11290,7 @@ static void emit_case_in(Compiler *c, int id, Buf *b, int indent) {
           /* a Proc read out of a container arrives boxed: dispatch on the tag
              so it is CALLED and not compared (#3683) */
           else if (repr_of(c, conds[j]).kind == RK_BOXED) emit_when_boxed_test(c, conds[j], t, pt, b);
+          else if (comp_ntype(c, conds[j]) == TY_METHOD) emit_when_method_test(c, conds[j], typed_t, typed_pt, b);
           else if (comp_ntype(c, conds[j]) == TY_PROC) emit_when_proc_test(c, conds[j], typed_t, typed_pt, b);
           /* `when *arr`: membership -- any element of the splatted array
              matching the scrutinee selects this branch (value equality;
@@ -11714,6 +11775,7 @@ static void emit_case_expr_in(Compiler *c, int id, Buf *b) {
         /* a Proc read out of a container arrives boxed: dispatch on the tag so
            it is CALLED and not compared (#3683) */
         else if (repr_of(c, conds[j]).kind == RK_BOXED) emit_when_boxed_test(c, conds[j], t, pt, b);
+        else if (comp_ntype(c, conds[j]) == TY_METHOD) emit_when_method_test(c, conds[j], typed_t, typed_pt, b);
         else if (comp_ntype(c, conds[j]) == TY_PROC) {
           /* `when <proc>`: Proc#=== calls the proc with the subject. The
              subject is published both in the sp_int slot (typed callee

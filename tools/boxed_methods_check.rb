@@ -43,7 +43,9 @@ module BoxedMethodsCheck
                    report_on_exception report_on_exception= status name name= priority
                    priority= [] []= key? thread_variable_get thread_variable_set
                    thread_variable? keys],
-    "Mutex" => %w[lock unlock try_lock locked? owned? mon_owned? synchronize sleep],
+    "Mutex" => %w[lock unlock try_lock locked? owned? mon_owned? synchronize sleep
+                  enter mon_enter exit mon_exit try_enter mon_try_enter try_mon_enter
+                  mon_locked?],
     "ConditionVariable" => %w[wait signal broadcast],
     "Queue" => %w[pop shift deq push << enq close clear length num_waiting empty? closed?
                   size max],

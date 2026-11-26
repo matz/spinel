@@ -79,6 +79,29 @@ jobs:
           output="$(timeout 60 ./gc_smoke.exe)" &&
           test "$output" = "collected"
 
+      # The program runs on a stack the runtime mapped, which the TEB names
+      # while it runs. RtlUnwindEx checks every frame against those bounds,
+      # so a C++ exception thrown and caught in C the program calls (as
+      # DirectWrite does inside) ends it with STATUS_BAD_STACK when they are
+      # wrong. The throw sits more than a page down, past the top page.
+      - name: A C++ exception unwinds on the program's stack
+        run: |
+          cat > cxx_throw.cpp <<'EOF'
+          #include <stdexcept>
+          static int deep(int n) {
+            volatile char pad[512]; pad[0] = (char)n;
+            if (n == 0) throw std::runtime_error("deep");
+            return deep(n - 1) + pad[0];
+          }
+          extern "C" int cxx_throw_catch(int n) {
+            try { return deep(n); } catch (const std::exception &) { return 42; }
+          }
+          EOF
+          g++ -O1 -c cxx_throw.cpp -o cxx_throw.o
+          printf 'module CXX\n  ffi_func :cxx_throw_catch, [:int], :int\nend\nputs CXX.cxx_throw_catch(16)\n' > cxx_throw.rb
+          bin/spinel cxx_throw.rb -o cxx_throw.exe --link cxx_throw.o --link -lstdc++
+          test "$(timeout 60 ./cxx_throw.exe)" = "42"
+
       # Every bundled package's C, as a shared object takes it: a package
       # that compiles only on POSIX stops this build here.
       - name: Build the bundled packages

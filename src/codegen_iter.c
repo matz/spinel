@@ -2683,7 +2683,12 @@ static int block_tail_lacks_value(Compiler *c, int id, int poly) {
   int recv = nt_ref(c->nt, id, "receiver");
   if (recv < 0 && nm && is_raise_alias(nm)) return 0;
   if (call_never_returns(c, id)) return 1;
-  if (!poly || !nm || (recv >= 0 && nt_kind(c->nt, recv) != NK_SelfNode)) return 0;
+  if (!poly || !nm) return 0;
+  /* a call bound to a void method through a constant or an object receiver
+     (`g { C.unknown(x) }`, C.unknown only raising): its value form is the
+     String's nil, `(const char *)0`, which the boxed slot does not take */
+  if (call_answers_no_value(c, id)) return 1;
+  if (recv >= 0 && nt_kind(c->nt, recv) != NK_SelfNode) return 0;
   int mi = comp_self_call_mi(c, id, nm);
   return mi >= 0 && method_is_void(&c->scopes[mi]);
 }

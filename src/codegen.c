@@ -5945,9 +5945,10 @@ static void emit_rtclass_arm(Compiler *c, const char *stmt, Buf *b) {
 /* The id of the class an instance of class ci is built for, the leading
    argument of a site class's constructor (cplan_rt_site), which each
    instance keeps, since every class made at run time from that site shares
-   the site class's code and layout (sp_rtclass.h): rtid, the C id the call holds (ctor_rt_id of its class value, or a
-   switch's bound id), which may be a class made at run time's, or, with
-   rtid NULL, ci itself, for a call that names the class statically. */
+   the site class's code and layout (sp_rtclass.h): rtid, the C id the call
+   holds (ctor_rt_id of its class value, or a switch's bound id), which may
+   be a class made at run time's, or, with rtid NULL, ci itself, for a call
+   that names the class statically. */
 static void rtclass_arg_text(int ci, const char *rtid, Buf *b) {
   /* (a switch's bound id: the switch binds it, ArmCtx.rt_switch) */
   for (SwitchRtId *s = rtid ? g_arm.rt_switch : NULL; s; s = s->up)

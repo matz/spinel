@@ -4988,10 +4988,59 @@ static int ie_trace_index_store(Compiler *c, int x, int *out, int cap) {
   }
   return ns ? ie_calls_into(c, storers, ns, out, cap) : -1;
 }
+/* A local read x stands for: the value of the one write of it in its
+   scope (`b = self.class.bodies[name]`), or, for a required parameter of
+   a method, the argument at its place in each call that reaches the
+   method (`run_body(self.class.bodies[name])`). Traced into out as
+   ie_trace_bodies does; -1 where a write or a call is of another shape. */
+int ie_trace_bodies(Compiler *c, int x, int *out, int cap, int depth);
+static int ie_trace_local(Compiler *c, int x, int *out, int cap, int depth) {
+  const NodeTable *nt = c->nt;
+  const char *ln = nt_str(nt, x, "name");
+  const Scope *s = comp_scope_of(c, x);
+  if (!ln || !s) return -1;
+  int w = -1;
+  for (int id = 0; id < nt->count; id++) {
+    NodeKind k = nt_kind(nt, id);
+    if (k != NK_LocalVariableWriteNode && k != NK_LocalVariableTargetNode && k != NK_LocalVariableOperatorWriteNode &&
+        k != NK_LocalVariableOrWriteNode && k != NK_LocalVariableAndWriteNode) continue;
+    if (!sp_streq(nt_str(nt, id, "name"), ln) || comp_scope_of(c, id) != s) continue;
+    if (k != NK_LocalVariableWriteNode || w >= 0) return -1;
+    w = id;
+  }
+  int pi = -1;
+  for (int i = 0; i < s->nparams; i++) if (s->pnames[i] && sp_streq(s->pnames[i], ln)) pi = i;
+  if (w >= 0) return pi >= 0 ? -1 : ie_trace_bodies(c, nt_ref(nt, w, "value"), out, cap, depth + 1);
+  /* a parameter: a method's required positional one, before any optional or rest */
+  if (pi < 0 || s->def_node < 0 || !s->name || s->class_id < 0 || pi >= s->nrequired || s->rest_idx >= 0 ||
+      (s->pdefault && s->pdefault[pi] >= 0)) return -1;
+  int si = (int)(s - c->scopes), total = 0, any = 0;
+  NT_FOREACH_KIND(nt, NK_CallNode, call) {
+    const char *cn = nt_str(nt, call, "name");
+    if (!cn || !sp_streq(cn, s->name)) continue;
+    /* (a call that may reach the method: receiverless or on self in a
+       method of its class line, which call_target answers; any other is
+       one whose block no trace follows) */
+    int cr = nt_ref(nt, call, "receiver");
+    const Scope *cs = comp_scope_of(c, call);
+    if ((cr >= 0 && nt_kind(nt, cr) != NK_SelfNode) || !cs || cs->def_node < 0 || cs->class_id < 0 ||
+        cs->is_cmethod != s->is_cmethod) return -1;
+    if (call_target(c, call, cs->class_id, cn, s->is_cmethod ? CT_CMETHOD : CT_METHODS, NULL) != si) continue;
+    int a = nt_ref(nt, call, "arguments"), an = 0;
+    const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+    if (an != s->nparams || nt_ref(nt, call, "block") >= 0) return -1;
+    for (int i = 0; i < an; i++) { NodeKind ak = nt_kind(nt, av[i]); if (ak == NK_SplatNode || ak == NK_KeywordHashNode) return -1; }
+    int k = ie_trace_bodies(c, av[pi], out + total, cap - total, depth + 1);
+    if (k < 0) return -1;
+    total += k; any = 1;
+  }
+  return any ? total : -1;
+}
 int ie_trace_bodies(Compiler *c, int x, int *out, int cap, int depth) {
   const NodeTable *nt = c->nt;
   if (x < 0 || depth > 8) return -1;
   switch (nt_kind(nt, x)) {
+    case NK_LocalVariableReadNode: return ie_trace_local(c, x, out, cap, depth);
     case NK_ParenthesesNode: return ie_trace_bodies(c, nt_ref(nt, x, "body"), out, cap, depth + 1);
     case NK_StatementsNode: {
       int n = 0; const int *st = nt_arr(nt, x, "body", &n);

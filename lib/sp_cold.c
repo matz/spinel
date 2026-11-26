@@ -427,6 +427,7 @@ const char *sp_file_readlink(const char *path) {SP_GC_ROOT_STR(path);
   memcpy(out, buf, (size_t)n);
   out[n] = 0;
   sp_str_set_len(out, (size_t)n);
+  if (sp_enc_default_ext_bin) sp_str_mark_binary(out);
   return out;
 }
 
@@ -1214,6 +1215,7 @@ sp_StrArray *sp_file_readlines(const char *path) {SP_GC_ROOT_STR(path);
     char *_r = sp_str_alloc_raw(_l + 1);
     memcpy(_r, _buf, _l); _r[_l] = '\0';
     sp_str_set_len(_r, _l);
+    if (sp_enc_default_ext_bin) sp_str_mark_binary(_r);
     sp_StrArray_push_e(a, sp_String_new_shared(_r));
   }
   free(_buf);
@@ -1237,6 +1239,7 @@ sp_StrArray *sp_file_readlines_chomp(const char *path) {SP_GC_ROOT_STR(path);
     char *_r = sp_str_alloc_raw(_l + 1);
     memcpy(_r, _buf, _l); _r[_l] = '\0';
     sp_str_set_len(_r, _l);
+    if (sp_enc_default_ext_bin) sp_str_mark_binary(_r);
     sp_StrArray_push_e(a, sp_String_new_shared(_r));
   }
   free(_buf);
@@ -1401,6 +1404,8 @@ const char *sp_file_read(const char *path) {SP_GC_ROOT_STR(path);
   }
   const char *r = sp_slurp_stream(f);
   fclose(f);
+  /* a file's text has the default external encoding */
+  if (sp_enc_default_ext_bin) sp_str_mark_binary((char *)r);
   return r;
 }
 
@@ -2162,6 +2167,7 @@ const char *sp_backtick(const char *cmd) {SP_GC_ROOT_STR(cmd);
   if (len) memcpy(r, buf, len);
   r[len] = 0;
   sp_str_set_len(r, len);
+  if (sp_enc_default_ext_bin) sp_str_mark_binary(r);
   free(buf);
   /* the signals recorded in the wait run once the output is a String and
      the buffer is freed: a trap that raises leaves nothing behind */
@@ -2224,7 +2230,8 @@ const char *sp_file_extname(const char *path) {SP_GC_ROOT_STR(path);
   return buf;
 }
 
-sp_StrArray *sp_dir_entries_impl(const char *path, int children) {
+/* `bin`: the names are ASCII-8BIT */
+static sp_StrArray *sp_dir_entries_bin(const char *path, int children, int bin) {
   SP_GC_ROOT_STR(path);
   if (!path) sp_raise_cls("TypeError", "no implicit conversion of nil into String");
   DIR *d = opendir(path);
@@ -2238,11 +2245,16 @@ sp_StrArray *sp_dir_entries_impl(const char *path, int children) {
         (name[1] == 0 || (name[1] == '.' && name[2] == 0))) continue;
     char *copy = sp_str_alloc(strlen(name));
     strcpy(copy, name);
+    if (bin) sp_str_mark_binary(copy);
     sp_StrArray_push_e(a, sp_String_new_shared(copy));
   }
   closedir(d);
   sp_StrArray_sort_bang(a);
   return a;
+}
+/* a file's name has the default external encoding, as its text has */
+sp_StrArray *sp_dir_entries_impl(const char *path, int children) {
+  return sp_dir_entries_bin(path, children, sp_enc_default_ext_bin);
 }
 
 /* The rows of a transpose are Arrays; a row that is not is CRuby's TypeError,
@@ -2871,7 +2883,7 @@ const char *sp_File_gets_sep(sp_File *f, const char *sep, sp_int limit, sp_bool 
     /* the separator ends the line where it is matched whole, and not where
        it would start inside a character (on a continuation byte) */
     if (sl && (unsigned char)ch == (unsigned char)sep[sl - 1] && len >= sl &&
-        !(((unsigned char)buf[len - sl] & 0xC0) == 0x80 && len > sl) &&
+        (sp_File_reads_binary(f) || !(((unsigned char)buf[len - sl] & 0xC0) == 0x80 && len > sl)) &&
         memcmp(buf + len - sl, sep, sl) == 0) { ended = 1; break; }
     /* the limit cuts the line wherever it falls (CRuby 4.0.9; 4.0.7's
        getline let a byte that could end a longer separator pass it
@@ -2879,7 +2891,7 @@ const char *sp_File_gets_sep(sp_File *f, const char *sep, sp_int limit, sp_bool 
     if (lim > 0 && (sp_int)len == lim) {
       /* as CRuby's getline: a limit that falls inside a character reads on to
          its end (by up to 16 bytes) */
-      if (extra > 0 && sp_File_tail_incomplete((const unsigned char *)buf, len)) { lim = (sp_int)len + 1; extra--; continue; }
+      if (extra > 0 && !sp_File_reads_binary(f) && sp_File_tail_incomplete((const unsigned char *)buf, len)) { lim = (sp_int)len + 1; extra--; continue; }
       break;
     }
   }
@@ -3120,6 +3132,7 @@ const char *sp_file_read_len(const char *path, sp_int n) {SP_GC_ROOT_STR(path);
   fclose(fp);
   r[got] = 0;
   sp_str_set_len(r, got);
+  sp_str_mark_binary(r);   /* a read with a length is bytes, as CRuby's */
   return r;
 }
 static FILE *sp_file_open_at(const char *path, sp_int off) {
@@ -3144,6 +3157,7 @@ const char *sp_file_read_at(const char *path, sp_int n, sp_int off) {SP_GC_ROOT_
   fclose(fp);
   r[got] = 0;
   sp_str_set_len(r, got);
+  sp_str_mark_binary(r);   /* a read with a length is bytes, as CRuby's */
   return r;
 }
 const char *sp_file_read_from(const char *path, sp_int off) {SP_GC_ROOT_STR(path);
@@ -3151,6 +3165,7 @@ const char *sp_file_read_from(const char *path, sp_int off) {SP_GC_ROOT_STR(path
   sp_file_read_refuse_dir(fp, path);
   const char *r = sp_slurp_stream(fp);
   fclose(fp);
+  if (sp_enc_default_ext_bin) sp_str_mark_binary((char *)r);
   return r;
 }
 const char *sp_file_read_o(const char *path, sp_oint n) {
@@ -3335,6 +3350,7 @@ sp_File *sp_File_open_flags(const char *path, sp_int fl) {
    form. The mode is checked before the file is opened, so a bad one raises
    CRuby's ArgumentError and leaves no descriptor behind. A nil perm is
    CRuby's default, 0666. */
+static int sp_io_mode_enc(const char *name);
 sp_File *sp_File_open_perm(const char *path, const char *mode, sp_oint perm) {SP_GC_ROOT_STR(path);SP_GC_ROOT_STR(mode);
   path = sp_str_keep(path);   /* (the File keeps its path: a copy of a live payload, sp_str_keep) */
   const char *m = mode && mode[0] ? mode : "r";
@@ -3348,8 +3364,18 @@ sp_File *sp_File_open_perm(const char *path, const char *mode, sp_oint perm) {SP
   f->path = sp_str_retained(path);
   f->mode = m;
   f->is_file = 1;
+  /* "r:utf-8": an external encoding in the mode is the handle's, whatever
+     Encoding.default_external is */
+  const char *ext = strchr(m, ':');
+  if (ext) {
+    char eb[64];
+    snprintf(eb, sizeof eb, "%.*s", (int)strcspn(ext + 1, ":"), ext + 1);
+    int e = sp_io_mode_enc(eb);
+    if (e >= 0) f->ext_enc = (unsigned char)(e ? 2 : 1);
+  }
   return f;
 }
+sp_File *sp_File_with_enc(sp_File *f, int e) { f->ext_enc = (unsigned char)e; return f; }
 void sp_file_stat_scan(void *p) {
   sp_File *f = (sp_File *)p;
   if (f->path) sp_mark_string(f->path);
@@ -3759,6 +3785,7 @@ const char *sp_dir_pwd(void) {
   size_t n = strlen(tmp);
   char *buf = sp_str_alloc(n);
   memcpy(buf, tmp, n + 1);
+  if (sp_enc_default_ext_bin) sp_str_mark_binary(buf);
   return buf;
 }
 /* Dir.mkdir / Dir.rmdir / Dir.chdir: 0, or the Errno CRuby raises, under
@@ -3794,7 +3821,9 @@ sp_int sp_dir_chdir0(const char *path) {SP_GC_ROOT_STR(path);
 const char *sp_dir_home(void) {
   const char *h = getenv("HOME");
   if (!h) return sp_str_empty;
-  return sp_str_dup_external(h);
+  const char *r = sp_str_dup_external(h);
+  if (sp_enc_default_ext_bin) sp_str_mark_binary((char *)r);
+  return r;
 }
 void sp_Dir_fin(void *p) { sp_Dir *d = (sp_Dir *)p; if (d->dp) { closedir(d->dp); d->dp = NULL; } }
 void sp_Dir_scan(void *p) { sp_Dir *d = (sp_Dir *)p; if (d->path) sp_mark_string(d->path); }
@@ -3841,7 +3870,9 @@ sp_StrArray *sp_Dir_entries_h(sp_Dir *d, sp_int children) {SP_GC_ROOT(d);
   struct dirent *e;
   while ((e = readdir(d->dp)) != NULL) {
     if (children && (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0)) continue;
-    sp_StrArray_push_e(a, sp_String_new_shared(sp_sprintf("%s", e->d_name)));
+    const char *name = sp_sprintf("%s", e->d_name);
+    if (sp_enc_default_ext_bin) sp_str_mark_binary((char *)name);
+    sp_StrArray_push_e(a, sp_String_new_shared(name));
   }
   rewinddir(d->dp);
   return a;
@@ -3857,7 +3888,10 @@ SP_NORETURN SP_COLD void sp_dir_raise_closed(void) {
 const char *sp_Dir_read(sp_Dir *d) {
   SP_DIR_OPEN(d);
   struct dirent *e = readdir(d->dp);
-  return e ? sp_sprintf("%s", e->d_name) : NULL;
+  if (!e) return NULL;
+  const char *r = sp_sprintf("%s", e->d_name);
+  if (sp_enc_default_ext_bin) sp_str_mark_binary((char *)r);
+  return r;
 }
 /* NULL is Ruby nil in the string convention: a Dir from Dir.for_fd has no path,
    and CRuby answers nil for it rather than an empty string (#3365). */
@@ -3917,15 +3951,13 @@ sp_StrArray *sp_dir_children(const char *path) {SP_GC_ROOT_STR(path); return sp_
    default. A String tells only binary from text, so ASCII-8BIT marks the
    names binary and any other encoding leaves them as they are. */
 sp_StrArray *sp_dir_entries_enc(const char *path, int children, sp_RbVal enc) {SP_GC_ROOT_STR(path);
-  int binary = 0;
+  /* an encoding: is the names', whatever Encoding.default_external is */
+  int binary = sp_enc_default_ext_bin;
   if (enc.tag != SP_TAG_NIL) {
     sp_RbVal e = sp_encoding_find(enc);
     binary = e.tag == SP_TAG_ENCODING && e.v.s && strcmp(e.v.s, "ASCII-8BIT") == 0;
   }
-  sp_StrArray *a = sp_dir_entries_impl(path, children);
-  if (binary)
-    for (sp_int i = 0; i < a->len; i++) if (a->data[i]) { a->data[i]->binary = 1; sp_fd_publish(a->data[i]); }
-  return a;
+  return sp_dir_entries_bin(path, children, binary);
 }
 
 /* ---- Signal trap machinery + Enumerator cursor/generator ops moved from
@@ -4307,6 +4339,7 @@ static void sp_dir_foreach_gen(sp_Fiber *f) {
   while ((name = sp_Dir_read(dir)) != NULL) {
     if (cap->children && (strcmp(name, ".") == 0 || strcmp(name, "..") == 0)) continue;
     if (binary) sp_str_as_binary(name);
+    else if (cap->encoding.tag != SP_TAG_NIL) sp_str_as_text(name);
     sp_PolyArray_push(names, sp_box_str_new(name));
   }
   sp_Dir_close(dir);
@@ -5493,6 +5526,7 @@ const char *sp_argf_gets(void) {
       char *r = sp_str_alloc_raw((size_t)n + 1);
       memcpy(r, line, (size_t)n); r[n] = '\0';
       sp_str_set_len(r, (size_t)n);
+      if (sp_enc_default_ext_bin) sp_str_mark_binary(r);
       return r;
     }
     if (sp_argf_obj.cur && sp_argf_obj.cur != stdin) fclose(sp_argf_obj.cur);
@@ -5503,7 +5537,9 @@ const char *sp_argf_read(void) {
   sp_String *s = sp_String_new(""); SP_GC_ROOT(s);
   const char *line;
   while ((line = sp_argf_gets())) sp_String_append(s, line);
-  return sp_str_dup(s->data);
+  const char *r = sp_str_dup(s->data);
+  if (sp_enc_default_ext_bin) sp_str_mark_binary((char *)r);
+  return r;
 }
 sp_StrArray *sp_argf_readlines(void) {
   sp_StrArray *a = sp_StrArray_new(); SP_GC_ROOT(a);
@@ -5894,18 +5930,43 @@ sp_RbVal sp_box_i64(int64_t v) {
 sp_RbVal sp_box_encoding(sp_Encoding e) { sp_RbVal r; r.tag = SP_TAG_ENCODING; r.cls_id = 0; r.v.s = sp_encoding_name(e); return r; }
 /* Encoding.find(name) with a name known at run time: an Encoding answers
    itself, a name or alias the encoding it names (case-insensitively, as
-   CRuby), "external" / "locale" / "filesystem" UTF-8 and "internal" nil;
-   anything else is CRuby's ArgumentError. */
+   CRuby), "locale" UTF-8, "external" / "filesystem" the default external
+   and "internal" the default internal; anything else is CRuby's
+   ArgumentError. */
 static const char *const sp_encoding_names[][2] = {
 #include "sp_encoding_names.h"
   { NULL, NULL } };
+/* Encoding.default_external and default_internal (NULL for nil), by name */
+static const char *sp_enc_default_ext = "UTF-8", *sp_enc_default_int;
+unsigned char sp_enc_default_ext_bin;
 /* The encoding a name or alias names (case-insensitively, as CRuby), with
-   "external" / "locale" / "filesystem" UTF-8; NULL for a name no encoding has */
+   "locale" UTF-8 and "external" / "filesystem" the default external; NULL
+   for a name no encoding has */
 static const char *sp_encoding_canon(const char *n) {
-  if (!strcasecmp(n, "external") || !strcasecmp(n, "locale") || !strcasecmp(n, "filesystem")) return "UTF-8";
+  if (!strcasecmp(n, "locale")) return "UTF-8";
+  if (!strcasecmp(n, "external") || !strcasecmp(n, "filesystem")) return sp_enc_default_ext;
   for (int i = 0; sp_encoding_names[i][0]; i++)
     if (!strcasecmp(n, sp_encoding_names[i][0])) return sp_encoding_names[i][1];
   return NULL;
+}
+/* The encoding in a mode such as "r:utf-8": 1 for ASCII-8BIT, 0 for another
+   encoding (a read is UTF-8 here), -1 for a name no encoding has */
+static int sp_io_mode_enc(const char *name) {
+  const char *n = sp_encoding_canon(name);
+  if (!n) return -1;
+  return !strcmp(n, "ASCII-8BIT");
+}
+/* File.open(path, encoding: v) with v known at run time: an Encoding or a
+   name ("ext:int" too); anything else leaves the handle as it is */
+sp_File *sp_File_with_enc_val(sp_File *f, sp_RbVal v) {
+  const char *s = v.tag == SP_TAG_ENCODING ? v.v.s : sp_rbval_string_bytes(v);
+  if (s) {
+    char eb[64];
+    snprintf(eb, sizeof eb, "%.*s", (int)strcspn(s, ":"), s);
+    int e = sp_io_mode_enc(eb);
+    if (e >= 0) f->ext_enc = (unsigned char)(e ? 2 : 1);
+  }
+  return f;
 }
 sp_RbVal sp_encoding_find(sp_RbVal v) {
   if (v.tag == SP_TAG_ENCODING) return v;
@@ -5916,11 +5977,33 @@ sp_RbVal sp_encoding_find(sp_RbVal v) {
     sp_raise_cls("TypeError", sp_sprintf("no implicit conversion of %s into String", cn));
   }
   const char *n = sp_rbval_string_bytes(v);
-  if (!strcasecmp(n, "internal")) return sp_box_nil();
+  if (!strcasecmp(n, "internal")) return sp_encoding_default_internal();
   const char *cn = sp_encoding_canon(n);
   if (cn) return sp_box_encoding((sp_Encoding){ cn });
   sp_raise_cls("ArgumentError", sp_sprintf("unknown encoding name - %s", n));
   return sp_box_nil();
+}
+sp_RbVal sp_encoding_default_external(void) { return sp_box_encoding((sp_Encoding){ sp_enc_default_ext }); }
+sp_RbVal sp_encoding_default_internal(void) {
+  return sp_enc_default_int ? sp_box_encoding((sp_Encoding){ sp_enc_default_int }) : sp_box_nil();
+}
+/* Encoding.default_external = v and default_internal = v: an Encoding or a
+   name, and nil for the internal one. The value is the assignment's. A read
+   follows the external one between UTF-8 and ASCII-8BIT
+   (sp_File_reads_binary); another encoding is kept for the getters. */
+sp_RbVal sp_encoding_set_default_external(sp_RbVal v) {
+  if (v.tag == SP_TAG_NIL) sp_raise_cls("ArgumentError", "default external can not be nil");
+  sp_RbVal e = sp_encoding_find(v);
+  if (e.tag == SP_TAG_ENCODING && e.v.s) {
+    sp_enc_default_ext = e.v.s;
+    sp_enc_default_ext_bin = !strcmp(e.v.s, "ASCII-8BIT");
+  }
+  return v;
+}
+sp_RbVal sp_encoding_set_default_internal(sp_RbVal v) {
+  sp_RbVal e = v.tag == SP_TAG_NIL ? v : sp_encoding_find(v);
+  sp_enc_default_int = e.tag == SP_TAG_ENCODING ? e.v.s : NULL;
+  return v;
 }
 /* Encoding.list: an Encoding for every name it may answer, in CRuby's order */
 static const char *const sp_encoding_list_names[] = {
@@ -5945,8 +6028,8 @@ int sp_force_encoding_mode(sp_RbVal enc) {
   return -1;
 }
 /* The encoding a set_encoding argument names, of the two a String can
-   have: 1 UTF-8 (US-ASCII is UTF-8 here, and so is nil, the default
-   external), 2 ASCII-8BIT, -1 another encoding, -2 a "BOM|" one, 0 a name
+   have: 1 UTF-8 (US-ASCII is UTF-8 here), 2 ASCII-8BIT (nil is the default
+   external, one of the two), -1 another encoding, -2 a "BOM|" one, 0 a name
    no encoding has. `*nm` is the name. */
 static int sp_io_enc_side(sp_RbVal v, const char *s, const char **nm) {
   const char *n = NULL;
@@ -5956,7 +6039,7 @@ static int sp_io_enc_side(sp_RbVal v, const char *s, const char **nm) {
     n = sp_encoding_canon(s);
     if (!n) { *nm = s; return 0; }
   }
-  else if (v.tag == SP_TAG_NIL) n = "UTF-8";
+  else if (v.tag == SP_TAG_NIL) n = sp_enc_default_ext_bin ? "ASCII-8BIT" : "UTF-8";
   else n = sp_encoding_find(v).v.s;   /* an Encoding, or CRuby's TypeError */
   *nm = n;
   if (!strcmp(n, "ASCII-8BIT")) return 2;

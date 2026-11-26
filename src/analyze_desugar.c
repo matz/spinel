@@ -24615,7 +24615,8 @@ int desugar_duplicate_underscore_params_at(Compiler *c, LowerCtx *lc, int id) {
  * Spinel strings are UTF-8 (or binary), so the answers are fixed:
  * Encoding.default_internal is nil, default_external is UTF-8, and
  * Encoding.find with a literal name of one of the encodings a string here can
- * carry is that constant. The setters take their value and change nothing. */
+ * carry is that constant. A default the program assigns is read at run time
+ * (sp_encoding_default_external). */
 /* the text of a literal String or Symbol argument, else NULL */
 static const char *sym_or_str_literal(const NodeTable *nt, int node) {
   if (node < 0) return NULL;
@@ -24638,12 +24639,25 @@ static int enc_const(NodeTable *nt, int like, const char *cname) {
   return cp;
 }
 
-enum { ENC_NONE, ENC_NIL, ENC_UTF8, ENC_ASSIGN, ENC_FIND };
+enum { ENC_NONE, ENC_NIL, ENC_UTF8, ENC_FIND };
+
+/* Whether the program assigns Encoding's default named by the setter `set`:
+   `Encoding.default_external = e`, or `||=` and its kin */
+static int enc_default_assigned(const NodeTable *nt, const char *set) {
+  /* (a multiple assignment's target, `Encoding.default_internal, x = ...`, too) */
+  static const NodeKind kinds[] = { NK_CallNode, NK_CallTargetNode, NK_CallOrWriteNode, NK_CallAndWriteNode, NK_CallOperatorWriteNode };
+  for (int k = 0; k < 5; k++)
+    NT_FOREACH_KIND(nt, kinds[k], id) {
+      const char *nm = nt_str(nt, id, kinds[k] == NK_CallNode || kinds[k] == NK_CallTargetNode ? "name" : "write_name");
+      if (nm && sp_streq(nm, set)) return 1;
+    }
+  return 0;
+}
 
 /* Which query of Encoding the call at id is: default_internal (nil),
-   default_external (UTF-8), a setter (its value), find("utf-8") (the constant
-   it names, *cn). */
-static int enc_query(const Compiler *c, const NodeTable *nt, int id, const char **cn) {
+   default_external (UTF-8), find("utf-8") (the constant it names, *cn).
+   `memo[]`: enc_default_assigned of each setter, -1 until asked. */
+static int enc_query(const Compiler *c, const NodeTable *nt, int id, const char **cn, int memo[2]) {
   int recv = nt_ref(nt, id, "receiver");
   if (recv < 0) return ENC_NONE;
   NodeKind rk = nt_kind(nt, recv);
@@ -24654,9 +24668,14 @@ static int enc_query(const Compiler *c, const NodeTable *nt, int id, const char 
   if (!nm) return ENC_NONE;
   int an = nt_ref(nt, id, "arguments");
   int ac = 0; const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
-  if (sp_streq(nm, "default_internal") && ac == 0) return ENC_NIL;
-  if (sp_streq(nm, "default_external") && ac == 0) return ENC_UTF8;
-  if ((sp_streq(nm, "default_internal=") || sp_streq(nm, "default_external=")) && ac == 1) return ENC_ASSIGN;
+  if (sp_streq(nm, "default_internal") && ac == 0) {
+    if (memo[0] < 0) memo[0] = enc_default_assigned(nt, "default_internal=");
+    return memo[0] ? ENC_NONE : ENC_NIL;
+  }
+  if (sp_streq(nm, "default_external") && ac == 0) {
+    if (memo[1] < 0) memo[1] = enc_default_assigned(nt, "default_external=");
+    return memo[1] ? ENC_NONE : ENC_UTF8;
+  }
   if (!sp_streq(nm, "find") || ac != 1) return ENC_NONE;
   /* a literal name only: the constant it names */
   const char *lit = sym_or_str_literal(nt, av[0]);
@@ -24670,26 +24689,16 @@ static int enc_query(const Compiler *c, const NodeTable *nt, int id, const char 
 
 int desugar_encoding_queries_left(Compiler *c, LowerCtx *lc, int id) {
   const char *cn = NULL;
-  return enc_query(c, c->nt, id, &cn) != ENC_NONE;
+  return enc_query(c, c->nt, id, &cn, lc->prog_memo) != ENC_NONE;
 }
 
 int desugar_encoding_queries_at(Compiler *c, LowerCtx *lc, int id) {
   NodeTable *nt = (NodeTable *)c->nt;
   const char *cn = NULL;
-  int q = enc_query(c, nt, id, &cn);
+  int q = enc_query(c, nt, id, &cn, lc->prog_memo);
   if (q == ENC_NONE) return 0;
   if (q == ENC_NIL) {
     nt_node_reset(nt, id, "NilNode");
-    return 1;
-  }
-  if (q == ENC_ASSIGN) {
-    /* the assigned value is the expression's value */
-    int ac = 0;
-    int v = nt_arr(nt, nt_ref(nt, id, "arguments"), "arguments", &ac)[0];
-    nt_node_set_ref(nt, id, "receiver", -1);
-    nt_set_itself_call(nt, id);
-    nt_node_set_ref(nt, id, "arguments", -1);
-    nt_node_set_ref(nt, id, "receiver", v);
     return 1;
   }
   if (q == ENC_UTF8) cn = "UTF_8";

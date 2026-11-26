@@ -28,3 +28,25 @@ s = "abc"
 i = s.index("z")
 p o != i, o == i
 p :sym == i, :sym != i
+
+# a nullable number made by a call with an effect, as an operand: it runs
+# exactly once, whether it gives nil or a number
+$runs = []
+def counted(f) = ($runs << f; f ? 7 : nil)
+def counted_f(f) = ($runs << f; f ? 1.5 : nil)
+p o == counted(true), o != counted(false), t == counted_f(false), :s != counted(true)
+p o.equal?(counted(false)), o.equal?(counted(true))
+p $runs
+
+# an object's identity against a nullable number or a boxed value: the
+# receiver runs whatever the argument holds, and first
+$log = []
+def build = ($log << :recv; K.new)
+def same(x) = build.equal?(x)
+def pick(f, k) = f ? k : :sym
+n = maybe_int(false)
+v = pick(false, o)
+p [build.equal?(n), build.equal?(v)], $log.size
+p same(maybe_int(true)), same(n), same(v), $log.size
+p [1].map { build.equal?(counted(false)) }, $log, $runs.size
+p o.equal?(pick(true, o)), o.equal?(pick(false, o))

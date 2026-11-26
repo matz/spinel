@@ -1,0 +1,18 @@
+false
+false
+[:v, :v, :arg]
+true
+false
+false
+[:k, :k, :arg]
+[false, false]
+4
+false
+false
+[:k, :arg, :k, :arg, :k, :arg, :k, :k, :arg]
+[false, false]
+[:k, :arg, :arg]
+false
+false
+true
+[:f, :f, :f, :arg]

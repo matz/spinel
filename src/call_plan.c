@@ -1106,12 +1106,86 @@ static int cplan_owner_arity(const char *uname, const char *bowner, int *lo, int
   const char *cls = builtin_owner_kind(bowner) == BOWN_KERNEL || slot == CORE_BASIC_OBJECT || slot == CORE_OBJECT ? "Object" : bowner;
   return bowner && uname && builtin_class_arity_spec(cls, uname, lo, hi, lo_exp, hi_exp);
 }
+/* The builtin whose counts a super in s reaches: bowner, or for a class method's super that names none Class's
+   method, which the class arms answer; Module's from a module's own singleton method (`def self.` or `class <<
+   self`). A copy of a module's method that runs on a class (extended into one, prepended into Class) is Class's. */
+static const char *cplan_count_owner(Compiler *c, const Scope *s, const char *bowner) {
+  if (bowner || !s->is_cmethod || s->class_id < 0) return bowner;
+  int copy = s->origin_module_ci || s->is_extend_copy || s->is_prepend_copy || s->is_include_copy || s->is_cmethod_copy;
+  return !copy && comp_class_is_module(c, &c->classes[s->class_id]) ? "Module" : "Class";
+}
+/* The counts the calls of the `(...)` method of s pass it, lo..hi, keywords as the one Hash a builtin that takes none
+   is handed (fwd_call_counts), and *kw when a call passes keywords, which the slots hold as their values, not that
+   Hash: 0 for a bare super from no such method, a parameter list the slots do not spell, or a call whose count only
+   the run gives (a splat, a `**`) */
+static int cplan_fwd_counts(Compiler *c, int id, const Scope *s, int *lo, int *hi, int *kw) {
+  if (nt_kind(c->nt, id) != NK_ForwardingSuperNode || !cplan_def_forwards(c, s) ||
+      (cplan_zsuper_shape(c, s, 0) & SAS_UNSPELLED))
+    return 0;
+  const char *name = nt_str(c->nt, s->def_node, "name");
+  int plo, phi;
+  if (!fwd_call_counts(c->nt, name, 1, lo, hi)) return 0;
+  *kw = !fwd_call_counts(c->nt, name, 0, &plo, &phi);
+  if (*lo > *hi) *lo = *hi = s->nparams;   /* (no call: the slots) */
+  return 1;
+}
+/* The count super id in s passes as the plan knows it before the run: comp_super_plain_argc's, or for a bare super
+   from a `(...)` that every call passes one count, that count (cplan_fwd_counts, *kw as there, whatever the
+   counts); -1 */
+static int cplan_super_static_argc(Compiler *c, int id, const Scope *s, int *kw) {
+  int lo, hi, k = 0;
+  if (kw) *kw = 0;
+  if (nt_kind(c->nt, id) == NK_ForwardingSuperNode && cplan_def_forwards(c, s)) {
+    if (!cplan_fwd_counts(c, id, s, &lo, &hi, &k)) return -1;
+    if (kw) *kw = k;
+    return lo == hi ? lo : -1;
+  }
+  return comp_super_plain_argc(c, id, s);
+}
+/* Does super id in s pass a list whose count only the run gives, which an arm gathers (emit_super_gathered_args): a
+   bare super's rest or keywords, or an explicit list that spreads a named splat and passes no keywords; not a `(...)`
+   called with more than one count, nor a parameter no call spells, whose slots hold no count */
+static int cplan_super_gathers(Compiler *c, int id, const Scope *s) {
+  const NodeTable *nt = c->nt;
+  if (cplan_super_static_argc(c, id, s, NULL) >= 0) return 0;
+  if (nt_kind(nt, id) == NK_ForwardingSuperNode) return !(cplan_zsuper_shape(c, s, 1) & SAS_UNSPELLED);
+  int sa = nt_ref(nt, id, "arguments"), n = 0;
+  const int *av = sa >= 0 ? nt_arr(nt, sa, "arguments", &n) : NULL;
+  for (int i = 0; i < n; i++) {
+    NodeKind k = nt_kind(nt, av[i]);
+    if (k == NK_ForwardingArgumentsNode || k == NK_KeywordHashNode || k == NK_BlockArgumentNode ||
+        (k == NK_SplatNode && nt_ref(nt, av[i], "expression") < 0))
+      return 0;
+  }
+  return 1;
+}
+/* Does the arm of owner's uname take what super id in s passes: a count the owner's facts take (one they do not is
+   BSUP_ARITY's), or one the run gives, which the arm gathers and checks against them. A `(...)` called with more
+   than one count, or one with keywords, is read by its slots, which hold the most any call passes and each keyword's
+   value (cplan_zsuper_shape): an arm of one count of arguments takes them only when they are that count, one that
+   reads none or optional ones reads the ones it takes. */
+static int cplan_super_arm_takes(Compiler *c, int id, const Scope *s, const char *uname, const char *owner) {
+  int lo, hi, kw, n = cplan_super_static_argc(c, id, s, &kw);
+  const char *lo_exp, *hi_exp;
+  if (!cplan_owner_arity(uname, owner, &lo, &hi, &lo_exp, &hi_exp)) return 0;
+  if (n >= 0 && !kw) return n >= lo && n <= hi;
+  return cplan_super_gathers(c, id, s) ||
+         (nt_kind(c->nt, id) == NK_ForwardingSuperNode && s->nparams >= lo && (s->nparams <= hi || lo < hi || !hi));
+}
+/* See call_plan.h. */
+int cplan_super_gathered(Compiler *c, int id, int *lo, int *hi) {
+  const Scope *s = comp_scope_of(c, id);
+  if (!s || !cplan_super_gathers(c, id, s)) return 0;
+  const Scope *st = comp_super_site(c, s);
+  const char *uname = comp_super_name(c, cplan_super_start(c, st), st), *lo_exp, *hi_exp;
+  return cplan_owner_arity(uname, cplan_count_owner(c, s, cplan_user(c, id).bowner), lo, hi, &lo_exp, &hi_exp);
+}
 /* The count super id in s passes where bowner's method uname cannot take it, from the owner's facts
    (cplan_owner_arity), and CRuby's "expected" text; -1 where it can, the count is the run's
    (a splat, a keyword, a forwarded list) or the facts do not bound it */
 static int cplan_super_count_fails(Compiler *c, int id, const Scope *s, const char *uname, const char *bowner,
                                    const char **exp) {
-  int argc = bowner && uname ? comp_super_plain_argc(c, id, s) : -1, lo, hi;
+  int argc = bowner && uname ? cplan_super_static_argc(c, id, s, NULL) : -1, lo, hi;
   const char *lo_exp, *hi_exp;
   if (argc < 0 || !cplan_owner_arity(uname, bowner, &lo, &hi, &lo_exp, &hi_exp)) return -1;
   if (argc < lo && lo_exp) { *exp = lo_exp; return argc; }
@@ -1124,7 +1198,7 @@ int cplan_super_wrong_count(Compiler *c, int id, const char **exp) {
   const Scope *s = comp_scope_of(c, id);
   if (p.bsuper != BSUP_ARITY || !s) return -1;
   const Scope *st = comp_super_site(c, s);
-  return cplan_super_count_fails(c, id, s, comp_super_name(c, cplan_super_start(c, st), st), p.bowner, exp);
+  return cplan_super_count_fails(c, id, s, comp_super_name(c, cplan_super_start(c, st), st), cplan_count_owner(c, s, p.bowner), exp);
 }
 
 /* A class method's super that no program method answers: the builtin's arm (BsuperArm) */
@@ -1132,22 +1206,19 @@ static BsuperArm cplan_super_class_arm(Compiler *c, int id, const Scope *s, cons
   if (comp_super_is_class_new(c, id)) return BSUP_CLASS_NEW;
   if (allocate_super_reaches_class(c, id)) return BSUP_ALLOCATE;
   if (bowner) return BSUP_CORE_HOOK;
-  int noargs = nt_ref(c->nt, id, "arguments") < 0, fwd = nt_kind(c->nt, id) == NK_ForwardingSuperNode;
-  switch (class_super_arm(uname)) {
-  case CSA_SUBCLASSES: if (noargs) return BSUP_SUBCLASSES; break;
-  case CSA_ANCESTORS: if (noargs && s->class_id >= 0) return BSUP_ANCESTORS; break;
-  case CSA_SUPERCLASS:
-    if (noargs && s->class_id >= 0 && !comp_class_is_module(c, &c->classes[s->class_id])) return BSUP_SUPERCLASS;
-    break;
-  case CSA_INCLUDE_P: {
-    /* one plain argument, or a bare super from a method of one parameter */
-    int sa = fwd ? -1 : nt_ref(c->nt, id, "arguments"), san = 0;
-    const int *sav = sa >= 0 ? nt_arr(c->nt, sa, "arguments", &san) : NULL;
-    if (s->class_id >= 0 && ((sa >= 0 && san == 1 && nt_kind(c->nt, sav[0]) != NK_SplatNode) ||
-                             (sa < 0 && fwd && s->nparams == 1 && s->pnames && s->pnames[0])))
-      return BSUP_INCLUDE_P;
-    break;
-  }
+  /* (Class's method, or Module's from a module, whose counts the facts give: a count they do not take is CRuby's
+     ArgumentError, one the run gives the arm gathers, cplan_super_arm_takes; a name Module lacks, superclass or
+     subclasses, has no arm there) */
+  ClassSuperArm csa = class_super_arm(uname);
+  const char *own = cplan_count_owner(c, s, NULL), *exp;
+  if (csa == CSA_NONE || s->class_id < 0) csa = CSA_NONE;
+  else if (cplan_super_count_fails(c, id, s, uname, own, &exp) >= 0) return BSUP_ARITY;
+  else if (!cplan_super_arm_takes(c, id, s, uname, own)) csa = CSA_NONE;
+  switch (csa) {
+  case CSA_SUBCLASSES: return BSUP_SUBCLASSES;
+  case CSA_ANCESTORS: return BSUP_ANCESTORS;
+  case CSA_SUPERCLASS: return BSUP_SUPERCLASS;
+  case CSA_INCLUDE_P: return BSUP_INCLUDE_P;
   default: break;
   }
   int bt_arg;
@@ -1186,10 +1257,10 @@ static BsuperArm cplan_super_instance_arm(Compiler *c, int id, const Scope *s, c
   if (cplan_super_count_fails(c, id, s, uname, bowner, &exp) >= 0) return BSUP_ARITY;
   if (exc && is_exception_message(uname)) return BSUP_EXC_TEXT;
   switch (object_super_arm(uname)) {
-  case OSA_RESPOND_TO: if (cplan_super_argc(c, id, s) >= 1) return BSUP_RESPOND_TO; break;
+  case OSA_RESPOND_TO: if (cplan_super_arm_takes(c, id, s, uname, bowner)) return BSUP_RESPOND_TO; break;
   case OSA_FREEZE: return BSUP_FREEZE;
-  case OSA_IS_A: if (cplan_super_argc(c, id, s) == 1) return BSUP_IS_A; break;
-  case OSA_INSTANCE_OF: if (cplan_super_argc(c, id, s) == 1) return BSUP_INSTANCE_OF; break;
+  case OSA_IS_A: if (cplan_super_arm_takes(c, id, s, uname, bowner)) return BSUP_IS_A; break;
+  case OSA_INSTANCE_OF: if (cplan_super_arm_takes(c, id, s, uname, bowner)) return BSUP_INSTANCE_OF; break;
   default: break;
   }
   if (is_with_name(uname) && ci->is_struct && ci->is_data) return BSUP_DATA_WITH;
@@ -1213,7 +1284,7 @@ static int cplan_object_args_spelled(Compiler *c, int id, const Scope *s, const 
   unsigned sh = cplan_super_args_shape(c, id, s);
   if (sh & (SAS_FWD | SAS_UNSPELLED)) return 0;
   /* (nor a spread of a run-time length into a method of a bounded count, whose call the call layer does not take:
-     the plan's arm reads the count the run gives, emit_super) */
+     the plan's arm gathers it and checks the count the run gives, emit_super_gathered_args) */
   int lo, hi;
   const char *lo_exp, *hi_exp;
   if ((sh & SAS_SPLAT) && cplan_owner_arity(uname, bowner, &lo, &hi, &lo_exp, &hi_exp)) return 0;
@@ -1354,6 +1425,12 @@ int cplan_super_reads_self(Compiler *c, int id) {
   }
 }
 
+/* Is super node id the operand of a defined?, which asks after the super and never calls it? */
+static int cplan_super_defined_operand(Compiler *c, int id) {
+  const int *par = comp_parent_map(c);
+  return par[id] >= 0 && nt_kind(c->nt, par[id]) == NK_DefinedNode;
+}
+
 static void cplan_resolve_super(Compiler *c, int id, CallPlan *p) {
   Scope *s = comp_scope_of(c, id);
   if (!s || s->class_id < 0 || !s->name) return;
@@ -1363,6 +1440,8 @@ static void cplan_resolve_super(Compiler *c, int id, CallPlan *p) {
   p->bowner = ml.bowner;
   const Scope *st = comp_super_site(c, s);
   const char *uname = comp_super_shadow(c, st) ? NULL : comp_super_name(c, ml.from, st);
+  int fkw = 0;   /* (a `(...)` whose calls pass keywords, cplan_fwd_counts) */
+  if (uname && s->is_cmethod) (void)cplan_super_static_argc(c, id, s, &fkw);
   if (uname && s->is_cmethod &&
            builtin_super_cmethod_known(c->classes[s->class_id].name, uname) &&
            ml.kind == ML_NONE) {
@@ -1386,20 +1465,69 @@ static void cplan_resolve_super(Compiler *c, int id, CallPlan *p) {
     p->rkind = CR_FEATURE; p->rfrom = CRF_LIMIT;
     p->msg = cplan_keep(c, strdup(msg));
   }
+  else if (fkw && !ml.bowner && class_super_arm(uname) == CSA_INCLUDE_P) {
+    /* a `(...)` whose calls pass keywords: its slots hold each keyword's value, where Module#include? is handed
+       the one Hash (CRuby's TypeError) */
+    cplan_set(p, -1, s->class_id, UC_SUPER, CP_REFUSE);
+    p->rkind = CR_FEATURE; p->rfrom = CRF_LIMIT;
+    p->msg = "a bare `super` into Module#include? from a `(...)` method whose calls pass keywords is not supported; "
+             "see docs/limitations.md";
+  }
   if (p->dispatch == CP_REFUSE) return;
   /* (the call path a super is lowered to: never a refused one's) */
   const char *mname = comp_scope_user_name(st);
   /* (nor one an attribute answers, `attr_reader :inspect` in a superclass, ML_ATTR, nor the operand of a defined?,
      which asks after the super itself) */
-  const int *par = comp_parent_map(c);
   if (!s->is_cmethod && s->class_id != c->toplevel_class && ml.bowner && mname && ml.kind != ML_ATTR &&
-      !(par[id] >= 0 && nt_kind(c->nt, par[id]) == NK_DefinedNode))
+      !cplan_super_defined_operand(c, id))
     p->bpath = (unsigned char)cplan_super_path(c, id, s, st, mname, ml.bowner);
   /* (the default text answers ahead of a prepend chain's shadow; a class method's shadow is its own lookup) */
   p->bsuper = (unsigned char)cplan_super_text(c, id, s, p->bowner);
   if (p->bsuper == BSUP_NONE && uname)
     p->bsuper = (unsigned char)(s->is_cmethod ? cplan_super_class_arm(c, id, s, uname, p->bowner)
                                               : cplan_super_instance_arm(c, id, s, uname, p->bowner));
+}
+
+/* The name of class-method super id's method when the super raises a NoMethodError, no method of the program's and
+   no builtin's arm answering it (BSUP_NONE), else NULL; *row, the builtin whose rows a class of the super's answers
+   from (Class, or Module for a module's) */
+static const char *cplan_super_unarmed_name(Compiler *c, int id, const char **row) {
+  const Scope *s = comp_scope_of(c, id);
+  if (!s || !s->is_cmethod || s->class_id < 0 || !s->name || cplan_super_defined_operand(c, id)) return NULL;
+  const CallPlan p = cplan_user(c, id);
+  if (p.dispatch == CP_REFUSE || p.bsuper != BSUP_NONE || (p.via == UC_SUPER && p.mi >= 0 && c->scopes[p.mi].is_cmethod))
+    return NULL;
+  *row = comp_class_is_module(c, &c->classes[s->class_id]) ? "Module" : "Class";
+  return comp_scope_def_name(c, s);
+}
+
+/* Is nm a method row's rows define, which CRuby answers where a super with no arm raises here? */
+static int cplan_row_defines(const char *row, const char *nm) {
+  return core_vis_of_bit(core_method_vis(row, nm, 1, NULL)) >= 0;
+}
+
+/* Does a class method `name` or `inspect` of the program that the message of such a super in class cls may read (one
+   of cls's ancestors' or descendants') itself super into its row's method with no arm (that answer is CRuby's, this
+   one's a raise)? */
+static int cplan_display_super_unarmed(Compiler *c, int cls) {
+  for (int k = 0; k < 2; k++)
+    NT_FOREACH_KIND(c->nt, k ? NK_ForwardingSuperNode : NK_SuperNode, id) {
+      const char *row, *nm = cplan_super_unarmed_name(c, id, &row);
+      int dc = nm ? comp_scope_of(c, id)->class_id : -1;
+      if (nm && (is_class_name_name(nm) || is_inspect_name(nm)) && cplan_row_defines(row, nm) &&
+          (dc == cls || is_descendant(c, dc, cls) || is_descendant(c, cls, dc)))
+        return 1;
+    }
+  return 0;
+}
+
+/* See call_plan.h. */
+int cplan_super_names_class(Compiler *c, int id) {
+  /* (a name Class's or Module's rows define CRuby answers, where this one has no arm; and the class's name read
+     through such a super: master's text for now) */
+  const char *row, *nm = cplan_super_unarmed_name(c, id, &row);
+  return nm && !is_method_missing_method(nm) && !cplan_row_defines(row, nm) &&
+         !cplan_display_super_unarmed(c, comp_scope_of(c, id)->class_id);
 }
 
 /* See call_plan.h. */
@@ -5751,6 +5879,14 @@ int cplan_obj_responds(Compiler *c, int cid, const char *qm, int id) {
       if (rv >= 0 && at >= 0 && at != comp_core_class(c, CORE_OBJECT)) rv = dv;
     }
     if (rv >= 0) return rv == SP_VIS_PUBLIC ? 2 : 1;
+    /* an instance method of the builtin at the root of the chain other than Object, whose names the tiers above
+       answer (Exception's message, Struct's each): CRuby's rows alone, not the program's words, private where
+       the row or the class's visibility word makes it so */
+    const char *root = refl_builtin_root(c, cid);
+    if (root && *root && builtin_core_class_slot(root) != CORE_OBJECT) {
+      int bv = core_vis_of_bit(core_method_vis(root, qm, 1, NULL));
+      if (bv >= 0) return bv == SP_VIS_PUBLIC && pr.vis == SP_VIS_PUBLIC ? 2 : 1;
+    }
   }
   /* Object's private methods (exit, puts, raise) answer to include_all;
      one an Object reopening redefines is left as the chain reads it */

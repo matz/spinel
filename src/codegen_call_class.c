@@ -700,25 +700,27 @@ static int refl_builtin_vis_in(Compiler *c, int k, const char *m, int depth, int
 /* refl_builtin_vis's walk of ci's chain, with the visibilities the program
    gives its classes' methods (own) or without */
 static int refl_builtin_vis_walk(Compiler *c, int ci, const char *m, int inherit, int own, const char **owner) {
-  int root = ci;
   for (int k = ci; k >= 0; k = c->classes[k].parent) {
     int v = refl_builtin_vis_in(c, k, m, 0, inherit == 2 && k == ci, own, owner);
     if (v) return v;
-    root = k;
   }
+  const char *sup = refl_builtin_root(c, ci);
+  return !sup ? 0 : !*sup ? -1 : core_method_vis(sup, m, 1, owner);
+}
+
+/* See codegen_call_arms.h. */
+const char *refl_builtin_root(Compiler *c, int ci) {
+  int root = ci;
+  for (int k = ci; k >= 0; k = c->classes[k].parent) root = k;
   const ClassInfo *ri = &c->classes[root];
-  if ((ri->is_builtin_const && ri->enclosing_class < 0) || comp_class_is_module(c, (ClassInfo *)ri)) return 0;
-  const char *sup = "Object";
-  if (ri->is_struct) sup = ri->is_data ? "Data" : "Struct";
-  else {
-    int sc = class_def_super(c->nt, ri->def_node);
-    const char *exc = sc >= 0 ? superclass_builtin_exc_name(c, c->nt, sc) : NULL;
-    NodeKind sk = sc >= 0 ? nt_kind(c->nt, sc) : NK_NilNode;
-    if (exc) sup = exc;
-    else if (sk == NK_ConstantReadNode || sk == NK_ConstantPathNode) sup = nt_str(c->nt, sc, "name");
-    else if (sc >= 0) return -1;
-  }
-  return core_method_vis(sup, m, 1, owner);
+  if ((ri->is_builtin_const && ri->enclosing_class < 0) || comp_class_is_module(c, (ClassInfo *)ri)) return NULL;
+  if (ri->is_struct) return ri->is_data ? "Data" : "Struct";
+  int sc = class_def_super(c->nt, ri->def_node);
+  const char *exc = sc >= 0 ? superclass_builtin_exc_name(c, c->nt, sc) : NULL;
+  NodeKind sk = sc >= 0 ? nt_kind(c->nt, sc) : NK_NilNode;
+  if (exc) return exc;
+  if (sk == NK_ConstantReadNode || sk == NK_ConstantPathNode) return nt_str(c->nt, sc, "name");
+  return sc >= 0 ? "" : "Object";
 }
 
 /* The visibility CRuby gives instance method m of class ci where the

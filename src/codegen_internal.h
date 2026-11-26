@@ -1260,10 +1260,17 @@ int class_has_exc_name(Compiler *c, int ci);
 int any_exc_reopen(Compiler *c);
 char **dsend_candidates(Compiler *c, int *out_n);
 void emit_super_respond_to(Compiler *c, int id, Scope *s, Buf *b);
+/* the names respond_to? supers' switches case on, interned before the symbol table is written */
+void intern_super_respond_names(Compiler *c);
 /* a super's forwarded parameter pi, boxed (an oint slot through oint_box) */
 void emit_boxed_fwd_param(Compiler *c, Scope *s, int pi, Buf *b);
 /* a super's block argument run for its effect: "(void)(x); " */
 void emit_super_blockarg_effect(Compiler *c, int id, Buf *b);
+/* What super id in s passes where its builtin arm gathers it (cplan_super_gathered), the arm reading its first nread
+   arguments: an Array of it built and rooted into b, inside an open statement expression, then CRuby's ArgumentError
+   for a count the builtin cannot take; the Array's temp, or -1 where the arm reads its arguments as written (a bare
+   super's rest past them is counted with no Array). */
+int emit_super_gathered_args(Compiler *c, int id, Scope *s, int nread, Buf *b);
 int exc_reopen_definers(Compiler *c, const char *mname, int *out, int max);
 int exc_super_reopen_initialize(Compiler *c, int ci);
 int exc_reopen_initialize_above(Compiler *c, const char *from, int inclusive, int skip_ci);

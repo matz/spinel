@@ -443,6 +443,10 @@ const char *builtin_method_params(const char *owner, const char *m, int *in_c);
 int builtin_method_known(const char *cls, const char *m);
 int core_method_vis(const char *cls, const char *m, int inherit, const char **owner);   /* codegen_call_class.c */
 int refl_builtin_vis(Compiler *c, int ci, const char *m, int inherit, int own, const char **owner);   /* codegen_call_class.c */
+/* The builtin class at the root of program class ci's chain, whose rows answer the methods the program defines none of
+   (refl_builtin_vis): Object unless the root names another, Struct or Data for theirs; NULL for a builtin or a module at
+   the root, "" for a superclass the rows cannot read (codegen_call_class.c) */
+const char *refl_builtin_root(Compiler *c, int ci);
 const char *core_class_ancestors(const char *cls);   /* codegen_call_class.c */
 const char *core_ancestor_step(const char *p, size_t *len);   /* codegen_call_class.c */
 void core_own_methods_each(const char *cls, size_t cl, void (*f)(void *, const char *, int), void *ud);

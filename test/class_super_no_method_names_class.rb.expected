@@ -1,0 +1,39 @@
+"NoMethodError: super: no superclass method 'nope' for class AN"
+"NoMethodError: super: no superclass method 'nope' for class AN"
+"NoMethodError: super: no superclass method 'nope' for class AN"
+["NoMethodError: super: no superclass method 'nope' for class AN", "NoMethodError: super: no superclass method 'nope' for class AN"]
+"NoMethodError: super: no superclass method 'nope' for class AN"
+"NoMethodError: super: no superclass method 'nope' for class AN"
+"NoMethodError: super: no superclass method 'nope' for class D"
+"NoMethodError: super: no superclass method 'nope' for class #<Class:0x>"
+"NoMethodError: super: no superclass method 'nope' for class D2I"
+"NoMethodError: super: no superclass method 'nope' for class D2I"
+"NoMethodError: super: no superclass method 'nope' for class #<Class:0x>"
+"NoMethodError: super: no superclass method 'nope' for class FromExt"
+"NoMethodError: super: no superclass method 'nope' for class FS"
+"NoMethodError: super: no superclass method 'nope' for class P"
+"NoMethodError: super: no superclass method 'nope' for class QN"
+"NoMethodError: super: no superclass method 'nope' for class QN"
+"NoMethodError: super: no superclass method 'nope' for class #<Class:0x>"
+"NoMethodError: super: no superclass method 'nope' for module MN"
+"NoMethodError: super: no superclass method 'nope' for class G"
+"NoMethodError: super: no superclass method 'nope' for class #<Class:0x>"
+"NoMethodError: super: no superclass method 'nope' for class I1"
+"NoMethodError: super: no superclass method 'nope' for class I2"
+"NoMethodError: super: no superclass method 'upcase' for class UN"
+"NoMethodError: super: no superclass method 'upcase' for class UN"
+nil
+"NoMethodError: super: no superclass method 'nope' for class KN"
+"NoMethodError: super: no superclass method 'nope' for class KN"
+0
+NoMethodError
+0
+2
+:nope
+L
+[]
+true
+2
+"other"
+2
+"super: no superclass method 'nope' for class LNamed"

@@ -12,3 +12,59 @@
 false
 true
 true
+ArgumentError wrong number of arguments (given 1, expected 0)
+ArgumentError wrong number of arguments (given 1, expected 0)
+[CM]
+[CM]
+ArgumentError wrong number of arguments (given 2, expected 0)
+ArgumentError wrong number of arguments (given 1, expected 0)
+ArgumentError wrong number of arguments (given 1, expected 0)
+[CK, CK]
+[CN, CK]
+ArgumentError wrong number of arguments (given 1, expected 0)
+ArgumentError wrong number of arguments (given 1, expected 0)
+ArgumentError wrong number of arguments (given 1, expected 0)
+CK
+ArgumentError wrong number of arguments (given 1, expected 0)
+NoMethodError
+true
+true
+false
+true
+true
+true
+true
+TypeError nil is not a symbol nor a string
+true
+[true, false]
+ArgumentError wrong number of arguments (given 0, expected 1..2)
+ArgumentError wrong number of arguments (given 3, expected 1..2)
+ArgumentError wrong number of arguments (given 3, expected 1..2)
+true
+true
+false
+TypeError class or module required
+true
+ArgumentError wrong number of arguments (given 2, expected 1)
+true
+false
+true
+ArgumentError wrong number of arguments (given 0, expected 1)
+"super: no superclass method 'superclass' for module CS"
+"super: no superclass method 'subclasses' for module CS"
+ArgumentError wrong number of arguments (given 1, expected 0)
+ArgumentError wrong number of arguments (given 1, expected 0)
+CT
+[CU, CT]
+ArgumentError wrong number of arguments (given 1, expected 0)
+"super: no superclass method 'nosuch' for class CV"
+"super: no superclass method 'nosuch' for class CW"
+"super: no superclass method 'nosuch' for class #<Class:0x>"
+"super: no superclass method 'nosuch' for class CY"
+"super: no superclass method 'nosuch' for class CY!"
+"super: no superclass method 'nosuch' for class CZ"
+true
+true
+true
+ArgumentError wrong number of arguments (given 2, expected 1)
+true

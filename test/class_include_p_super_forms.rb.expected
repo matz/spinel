@@ -1,0 +1,31 @@
+true
+true
+true
+true
+false
+true
+false
+false
+true
+false
+true
+true
+"wrong number of arguments (given 2, expected 1)"
+"wrong argument type nil (expected Module)"
+"wrong argument type Class (expected Module)"
+"wrong argument type Class (expected Module)"
+true
+[true, true]
+:y
+"wrong argument type nil (expected Module)"
+"wrong argument type nil (expected Module)"
+"wrong argument type Integer (expected Module)"
+"wrong argument type true (expected Module)"
+"wrong argument type Class (expected Module)"
+true
+"wrong argument type nil (expected Module)"
+"wrong argument type Integer (expected Module)"
+"wrong argument type Class (expected Module)"
+false
+"wrong number of arguments (given 0, expected 1)"
+"wrong number of arguments (given 2, expected 1)"

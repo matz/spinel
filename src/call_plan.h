@@ -116,6 +116,9 @@ typedef enum {
 /* The count super id passes where the builtin it reaches cannot take it (BSUP_ARITY), and CRuby's "expected"
    text into *exp; -1 where it can, or the owner's facts do not prove it */
 int cplan_super_wrong_count(Compiler *c, int id, const char **exp);
+/* Does super id's builtin arm gather what it passes, a count only the run gives (a bare super's rest or keywords, a
+   splat), and check it against lo..hi, the counts the builtin takes (emit_super_gathered_args)? */
+int cplan_super_gathered(Compiler *c, int id, int *lo, int *hi);
 
 typedef struct {
   int mi;                  /* the method scope, or -1 */
@@ -480,6 +483,12 @@ unsigned cplan_zsuper_shape(Compiler *c, const Scope *s, int mixed);
    (BSUP_FROZEN), the object (BSUP_SELF), or Kernel's row over it (BSUP_KERNEL_ROW)? A by-value object
    (an_phase_value_types) has none of them. */
 int cplan_super_reads_self(Compiler *c, int id);
+/* Does super node id, in a class method, raise CRuby's NoMethodError that names its receiving class: no method of the
+   program's and no builtin's arm answers it (BSUP_NONE), its name is none Class's or Module's rows define (which
+   CRuby answers), and it is no method_missing's (whose super is BasicObject#method_missing's, naming the call) nor a
+   defined?'s operand (never called)? The message, built when it is read, asks the class its name, then its inspect,
+   so none of those methods of its class's ancestors and descendants may itself super into Module's with no arm. */
+int cplan_super_names_class(Compiler *c, int id);
 /* Is super node id, in a class method, the call of a definition hook (`inherited`, `method_added`) that only a builtin's no-op answers? */
 int cplan_core_hook(Compiler *c, int id);
 int cplan_kernel_def(Compiler *c, const char *name);   /* a version of the name's top-level history is a program Kernel def */

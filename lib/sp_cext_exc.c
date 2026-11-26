@@ -170,7 +170,7 @@ void rb_raise(VALUE klass, const char *fmt, ...) {
 void rb_exc_raise(VALUE value) {
     sp_Exception *e = exception(value);
     sp_cext_set_errinfo(value);
-    sp_fiber_reraise(e->cls_name, sp_exc_message(e), e);
+    sp_fiber_reraise(e->cls_name, sp_exc_raise_msg(e), e);
     abort();
 }
 VALUE rb_errinfo(void) { return errinfo; }

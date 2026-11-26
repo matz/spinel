@@ -1,0 +1,23 @@
+[1, 2]
+[1, [1, 2]]
+1
+[1, 2]
+1
+[1, 2]
+1
+[1, 2]
+nil
+[1, 2]
+1
+[1, 2]
+false
+[1, 2]
+true
+[1, 2]
+"b"
+[1, 2]
+1
+[]
+"undefined method '=~' for an instance of Integer"
+1
+[:recv, :pat]

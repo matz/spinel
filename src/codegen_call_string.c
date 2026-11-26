@@ -160,7 +160,48 @@ static void emit_matchdata_as_call(Compiler *c, int id, const char *md, Buf *b) 
   else buf_puts(b, md ? md : "NULL");
 }
 
+static int emit_call_regexp_arms_inner(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt, TyKind a0);
+/* The match family on a receiver whose pattern runs code (`(x; s) =~
+   (y; /b/)`): the receiver runs first, as CRuby evaluates it, and the
+   pattern after it, though the arms below set the pattern up ahead of the
+   statement (the runtime takes it first). The receiver is held in a temp
+   ahead of the pattern's setup and read from it; an arm that declines
+   leaves the prelude as it was (#11506). */
 int emit_call_regexp_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt, TyKind a0) {
+  NodeKind rk = recv >= 0 ? nt_kind(nt, recv) : NK_NONE;
+  int first = g_pre && recv >= 0 && argc >= 1 && is_match_family(name) && rt != TY_UNKNOWN && rt != TY_VOID &&
+              rk != NK_SelfNode && rk != NK_StringNode && rk != NK_SymbolNode && rk != NK_NilNode &&
+              rk != NK_RegularExpressionNode && nt_kind(nt, argv[0]) != NK_RegularExpressionNode &&
+              subtree_has_side_effect(c, argv[0]) && g_n_argov < MAX_ARG_OVERRIDE;
+  if (!first) return emit_call_regexp_arms_inner(c, id, b, nt, name, recv, argc, argv, rt, a0);
+  size_t mark = g_pre->len;
+  int t0 = g_tmp, sv = g_n_argov, tr = ++g_tmp;
+  Buf rb; memset(&rb, 0, sizeof rb);
+  if (oint_kind(rt) && node_is_oint(c, recv)) {
+    emit_oint_expr(c, recv, rt, &rb);
+    emit_indent(g_pre, g_indent);
+    buf_printf(g_pre, "%s _t%d = %s;\n", oint_ctype(rt), tr, rb.p ? rb.p : "0");
+    view_bind_temp_o(recv, tr);
+  }
+  else {
+    emit_expr(c, recv, &rb);
+    emit_indent(g_pre, g_indent);
+    emit_ctype(c, rt, g_pre);
+    buf_printf(g_pre, " _t%d = %s; ", tr, rb.p ? rb.p : "0");
+    emit_gc_root_tmp(c, rt, tr, g_pre);
+    buf_puts(g_pre, "\n");
+    view_bind_temp(recv, tr);
+  }
+  free(rb.p);
+  int held = g_tmp - t0;
+  int r = emit_call_regexp_arms_inner(c, id, b, nt, name, recv, argc, argv, rt, a0);
+  view_unbind(sv);
+  /* (declined: the prelude and the temps the hold took are given back, so
+     the path that takes the call numbers its temps as before) */
+  if (!r) { g_pre->len = mark; if (g_pre->p) g_pre->p[mark] = 0; g_tmp -= held; }
+  return r;
+}
+static int emit_call_regexp_arms_inner(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt, TyKind a0) {
   /* regex literal match predicates (bool-returning, no MatchData/globals):
      /re/.match?(str[, pos])  and  str.match?(/re/[, pos]) */
   {

@@ -17762,11 +17762,13 @@ static void emit_super_include_p(Compiler *c, int id, Scope *s, Buf *b) {
     else emit_boxed(c, sav[0], &ab);
   }
   else {
+    /* (the parameter as its slot holds it: a Class as it is, any other value boxed by its type) */
     LocalVar *lv = scope_local(s, s->pnames[0]);
     Buf lr; memset(&lr, 0, sizeof lr);
     emit_local_ref(c, id, s->pnames[0], &lr);
     typed = lv && lv->type == TY_CLASS;
-    buf_puts(&ab, lr.p ? lr.p : "sp_box_nil()");
+    if (typed) buf_puts(&ab, lr.p ? lr.p : "");
+    else emit_zsuper_boxed(c, lv, lv && lv->type != TY_UNKNOWN ? lv->type : TY_POLY, lr.p ? lr.p : "sp_box_nil()", &ab);
     free(lr.p);
   }
   int tc = ++g_tmp, tm = ++g_tmp;

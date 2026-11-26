@@ -386,6 +386,9 @@ adds to any of them at run time. A `Method` taken from such a class
 `hash`), and is refused at compile time where the program calls any other
 method on it (`call`, a bind, `to_proc`, `then`) or hands it where the
 compiler cannot follow it, since it would run the call's compiled class.
+A `bind_call` on the lookup itself (`k.instance_method(:m).bind_call(o)`)
+binds the method as CRuby does: `o` must be an instance of the class `k`
+holds, else TypeError names that class.
 
 A `Class.new` or `Module.new` block that captures outer locals is refused at
 compile time for constant assignments, local assignments and reachable method

@@ -14264,16 +14264,17 @@ static void emit_kwsplat_empty_check(Compiler *c, int id, int kwh, const char *l
   }
 }
 
+/* (a class made at run time switches as its site class, sp_rtclass.h) */
+static const char *class_value_key_form(Compiler *c, int recv) {
+  return cplan_class_value_may_be_rt(c, recv) ? "sp_rtclass_site(%s.cls_id)" : "%s.cls_id";
+}
 /* See codegen_call_arms.h. */
 const char *class_value_key(Compiler *c, int recv, const char *val, char *out, size_t n) {
-  /* (a class made at run time switches as its site class, sp_rtclass.h) */
-  if (cplan_class_value_may_be_rt(c, recv)) snprintf(out, n, "sp_rtclass_site(%s.cls_id)", val);
-  else snprintf(out, n, "%s.cls_id", val);
+  snprintf(out, n, class_value_key_form(c, recv), val);
   return out;
 }
 void emit_class_value_key(Compiler *c, int recv, const char *val, Buf *b) {
-  char k[512];
-  buf_puts(b, class_value_key(c, recv, val, k, sizeof k));
+  buf_printf(b, class_value_key_form(c, recv), val);
 }
 
 /* See codegen_call_arms.h. */
@@ -20619,6 +20620,19 @@ void refl_emit_sym_array(Compiler *c, int cid, ReflNames *r, Buf *b) {
   }
   buf_printf(b, "_t%d; })", ta);
   mtab_build_leave(c);
+}
+
+/* See codegen_call_arms.h. */
+int refl_names_may_list(Compiler *c, const ReflNames *r) {
+  int n = 0;
+  mtab_build_enter(c);
+  for (int i = 0; i < r->n; i++) {
+    CplanCells cs;
+    int guarded, cells = refl_name_cells(c, r, i, &cs, &guarded);
+    n += guarded || cells || (r->show[i] & REFL_SHOWN);
+  }
+  mtab_build_leave(c);
+  return n;
 }
 
 /* The names obj.methods(false) / public_methods(false) /
@@ -35374,7 +35388,7 @@ void emit_bind_call(Compiler *c, int id, int target, const int *argv, int argc, 
    bound as emit_bind_call binds them, and its answer goes to `_t<tr>`, a slot
    of `slot`'s type. */
 static void emit_bind_call_arm(Compiler *c, int id, int target, const int *argv, int argc,
-                               int to, int tr, TyKind slot, Buf *b) {
+                               int to, int tr, TyKind slot, const char *kv, Buf *b) {
   Scope *tm = &c->scopes[target];
   int cid = tm->class_id;
   const char *cn = c->classes[cid].name;
@@ -35392,10 +35406,16 @@ static void emit_bind_call_arm(Compiler *c, int id, int target, const int *argv,
     if (any) buf_printf(b, ")) sp_raise_cls(\"TypeError\", \"bind argument must be an instance of %s\"); ", cn);
   }
   else {
+    /* (a site's method is owned by each class made there: obj must be an
+       instance of the one the Method came from, `kv`, which the message names) */
+    int rt = kv && cplan_rt_site(c, cid);
     buf_printf(b, "if (!(_t%d.tag == SP_TAG_OBJ && (0", to);
     for (int k = 0; k < c->nclasses; k++)
       if (class_isa_user(c, k, cid)) buf_printf(b, " || _t%d.cls_id == %d", to, k);
-    buf_printf(b, "))) sp_raise_cls(\"TypeError\", \"bind argument must be an instance of %s\"); ", cn);
+    if (!rt) buf_printf(b, "))) sp_raise_cls(\"TypeError\", \"bind argument must be an instance of %s\"); ", cn);
+    else
+      buf_printf(b, ") && (!sp_rtclass_id_p(%s.cls_id) || sp_obj_rtclass_fn(_t%d) == %s.cls_id))) sp_raise_cls(\"TypeError\", "
+                    "sp_sprintf(\"bind argument must be an instance of %%s\", sp_class_display(%s))); ", kv, to, kv, kv);
   }
   char selfp[96];
   if (boxed_self) snprintf(selfp, sizeof selfp, "_t%d", to);
@@ -35437,7 +35457,9 @@ static void emit_bind_call_arm(Compiler *c, int id, int target, const int *argv,
    into boxed temporaries (hoist_dispatch_args), and a switch on k's class
    picks the class's own `m`, each arm checking obj and binding the
    arguments for its target (emit_bind_call_arm). `target` is the one target
-   when um has it, else -1 and `kn` is the Class value. The call answers
+   when um has it, else -1 and `kn` is the Class value; with both, k runs
+   first and the one arm also checks obj against k's class, which may be
+   made at run time (cplan_bind_call_rt_owner). The call answers
    `id`'s type. Such a site fell through to the call on a value of unknown
    type and raised NoMethodError, "undefined method 'bind_call' for
    unknown", or, with a boxed obj, was refused. */
@@ -35463,6 +35485,8 @@ void emit_bind_call_boxed(Compiler *c, int id, int target, int kn, const char *s
                     "sp_Class _t%d = sp_unbox_class(_t%dv); ", tk, kb.p ? kb.p : "sp_box_nil()", tk, tk, tk, tk);
     }
     free(kb.p);
+  }
+  if (kn >= 0 && target < 0) {
     buf_puts(b, "switch ("); emit_class_value_key(c, kn, tkn, b); buf_puts(b, ") {");
     for (int k = 0; k < c->nclasses; k++)
       if (class_value_bind_call_target(c, nt_ref(c->nt, id, "receiver"), k, sym, NULL) >= 0)
@@ -35484,20 +35508,48 @@ void emit_bind_call_boxed(Compiler *c, int id, int target, int kn, const char *s
   free(ob.p);
   emit_ctype(c, slot, b);
   buf_printf(b, " _t%d = %s; ", tr, slot == TY_POLY ? "sp_box_nil()" : default_value_from_compiler(c, slot));
-  if (kn < 0) emit_bind_call_arm(c, id, target, argv, argc, to, tr, slot, b);
+  if (target >= 0) emit_bind_call_arm(c, id, target, argv, argc, to, tr, slot, kn >= 0 ? tkn : NULL, b);
   else {
     buf_puts(b, "switch ("); emit_class_value_key(c, kn, tkn, b); buf_puts(b, ") {");
     for (int k = 0; k < c->nclasses; k++) {
       int tmi = class_value_bind_call_target(c, nt_ref(c->nt, id, "receiver"), k, sym, NULL);
       if (tmi < 0) continue;
       buf_printf(b, " case %d: { ", k);
-      emit_bind_call_arm(c, id, tmi, argv, argc, to, tr, slot, b);
+      emit_bind_call_arm(c, id, tmi, argv, argc, to, tr, slot, tkn, b);
       buf_puts(b, " } break;");
     }
     buf_puts(b, " } ");
   }
   buf_printf(b, "_t%d; })", tr);
   unhoist_dispatch_args(c, hn, hsv, hty);
+}
+
+/* `um.bind_call(obj, args...)` whose UnboundMethod has instance method
+   `target` (-1 for none): a direct call on an obj of a known class
+   (emit_bind_call), or on a boxed obj, its class checked at run time, where
+   the class um is looked up on binds that target too (emit_bind_call_boxed),
+   as it is where a site class owns the target (cplan_bind_call_rt_owner).
+   Returns 0, emitting nothing, for any other call. */
+int emit_bind_call_target(Compiler *c, int id, int recv, int target, const int *argv, int argc, Buf *b) {
+  if (target < 0 || c->scopes[target].class_id < 0 || c->scopes[target].is_cmethod) return 0;
+  /* (a target a site class owns, on the class value the call chains on:
+     that value runs first and the arm checks obj against it) */
+  int rk = cplan_bind_call_rt_owner(c, id);
+  if (rk >= 0) {
+    emit_bind_call_boxed(c, id, target, rk, NULL, argv, argc, b);
+    return 1;
+  }
+  if (ty_is_object(comp_ntype(c, argv[0]))) {
+    emit_bind_call(c, id, target, argv, argc, b);
+    return 1;
+  }
+  if (repr_of(c, argv[0]).kind == RK_BOXED && nt_kind(c->nt, argv[0]) != NK_SplatNode &&
+      class_value_bind_call_target(c, method_recv_node(c, recv), c->scopes[target].class_id,
+                                   c->scopes[target].name, NULL) == target) {
+    emit_bind_call_boxed(c, id, target, -1, NULL, argv, argc, b);
+    return 1;
+  }
+  return 0;
 }
 
 void emit_exc_exception(Compiler *c, int recv, int arg, Buf *b) {

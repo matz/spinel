@@ -338,6 +338,10 @@ void refl_class_instance_methods(Compiler *c, int ci, int pub, int prot, ReflNam
 void refl_module_instance_methods(Compiler *c, int m, int prot, ReflNames *r);
 void refl_module_own_methods(Compiler *c, int m, int pub, int prot, int priv, ReflNames *r);
 void refl_emit_sym_array(Compiler *c, int cid, ReflNames *r, Buf *b);
+/* How many names of r that array may list: one shown, or one whose
+   presence or visibility the run tells (a name the plan then omits counts
+   too). */
+int refl_names_may_list(Compiler *c, const ReflNames *r);
 void refl_at(ReflNames *r, int id, int cls, unsigned side);
 void refl_free(ReflNames *r);
 int refl_note(ReflNames *r, const char *m, int show);   /* r holds m once (1 when it was new) */
@@ -459,6 +463,7 @@ int builtin_numeric_owns(const char *cls, const char *m);
 int builtin_numeric_arity(const char *m, int *out);
 void emit_bind_call(Compiler *c, int id, int target, const int *argv, int argc, Buf *b);
 void emit_bind_call_boxed(Compiler *c, int id, int target, int kn, const char *sym, const int *argv, int argc, Buf *b);
+int emit_bind_call_target(Compiler *c, int id, int recv, int target, const int *argv, int argc, Buf *b);
 void emit_bm_abi_args(Buf *b, const char *rb, int abi, const char *sig, int fixed, int rest, int ret, int poly, int pfixed, const char *thunk, int tmin, int tmax);
 int emit_method_obj_on_constant(Compiler *c, int id, int recv, const char *sym, Buf *b);
 int method_obj_of_native_func(Compiler *c, int recv, const char *sym);

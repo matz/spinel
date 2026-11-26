@@ -8278,7 +8278,7 @@ static int cplan_method_value_runs(Compiler *c, const int *par, int v, int local
   if (an_node_dropped(c, v)) return 0;
   int p = par[v];
   if (p >= 0 && nt_kind(nt, p) == NK_CallNode && nt_ref(nt, p, "receiver") == v)
-    return !is_method_reader_name(nt_str(nt, p, "name"));
+    return !is_method_reader_name(nt_str(nt, p, "name")) && cplan_bind_call_rt_owner(c, p) < 0;
   if (!local || p < 0 || nt_kind(nt, p) != NK_LocalVariableWriteNode || nt_ref(nt, p, "value") != v || !an_node_dropped(c, p))
     return 1;
   const char *vn = nt_str(nt, p, "name");
@@ -8305,6 +8305,24 @@ static int cplan_method_value_runs(Compiler *c, const int *par, int v, int local
    would run the site class's method (a Method of a class value binds no
    function of its own)? Its name and its other readers answer as for any
    class value. */
+static int cplan_bind_call_gap(Compiler *c, int id);
+/* See call_plan.h. */
+int cplan_bind_call_rt_owner(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  if (!c->has_rt_classes || id < 0 || nt_kind(nt, id) != NK_CallNode || !is_bind_call(nt_str(nt, id, "name"))) return -1;
+  int um = nt_ref(nt, id, "receiver"), k = um >= 0 && is_method_obj_call(c, um) ? nt_ref(nt, um, "receiver") : -1;
+  if (k < 0 || comp_ntype(c, k) != TY_CLASS) return -1;
+  /* (only a call the boxed bind_call lowers: an obj that is no splat, and
+     an arm for every class the value may hold, cplan_bind_call_gap) */
+  int argc = 0;
+  const int *argv = call_args(nt, id, &argc);
+  if (argc < 1 || nt_kind(nt, argv[0]) == NK_SplatNode) return -1;
+  /* (k's class picks the target at run time: each arm checks o) */
+  if (class_value_instance_method_sym(c, um)) return cplan_bind_call_gap(c, id) ? -1 : k;
+  CallPlan plan = cplan_method_call(c, id);
+  int t = plan.dispatch == CP_SWITCH ? -1 : plan.mi;
+  return t >= 0 && !c->scopes[t].is_cmethod && cplan_rt_site(c, c->scopes[t].class_id) ? k : -1;
+}
 static int cplan_rt_class_method_object(Compiler *c, int id, int recv) {
   return recv >= 0 && comp_ntype(c, recv) == TY_CLASS && cplan_class_value_may_be_rt(c, recv) &&
          cplan_method_value_runs(c, comp_parent_map(c), id, 1);

@@ -53,7 +53,8 @@ sp_Class sp_rtclass_new(sp_int site, int is_module) {
   r->site = site;
   r->key = key;
   SP_ATOMIC_STORE(&sp_rtclass_count, n + 1, __ATOMIC_RELEASE);
-  sp_rtclass_frozen_fn = sp_rtclass_frozen_flag;
+  /* (read without the lock, sp_class_freeze_id) */
+  SP_ATOMIC_STORE(&sp_rtclass_frozen_fn, sp_rtclass_frozen_flag, __ATOMIC_RELEASE);
 #ifdef SP_THREADS
   pthread_mutex_unlock(&sp_rtclass_lock);
 #endif

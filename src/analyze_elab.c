@@ -13733,7 +13733,9 @@ int elab_fire_after(Compiler *c, int list, int j) {
     }
     const char *hook = lr_event_hook((LrKind)v->kind, v->sg);
     const LrDef *d = NULL;
-    int live = body && v->stmt == e && lr_form_leads(nt, node, v->node) && lr_hook_live(c, v->cls, hook, p, &d);
+    /* (a run-time site's body method, cn_rt_body, is the compiler's: no hook sees it) */
+    int live = body && v->stmt == e && lr_form_leads(nt, node, v->node) && !nt_int(nt, v->node, "rt_body_def", 0) &&
+               lr_hook_live(c, v->cls, hook, p, &d);
     /* a visibility word gives the class an entry of its own, and calls the
        hook, only for a method it does not hold itself and whose visibility
        it changes */

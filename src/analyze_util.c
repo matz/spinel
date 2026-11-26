@@ -5522,6 +5522,10 @@ int name_is_synth_method(Compiler *c, const char *m) {
     for (int si = an_scopes_named_first(c, m); si >= 0; si = an_scopes_named_next(c, m, si))
       if (c->scopes[si].def_node >= 0 && nt_int(c->nt, c->scopes[si].def_node, "civ_accessor", 0)) return 1;
   }
+  /* the class method a run-time site's block statements move to
+     (cn_rt_body), known by the mark on its DefNode */
+  for (int si = an_scopes_named_first(c, m); si >= 0; si = an_scopes_named_next(c, m, si))
+    if (c->scopes[si].def_node >= 0 && nt_int(c->nt, c->scopes[si].def_node, "rt_body_def", 0)) return 1;
   /* `m#pf`, the proc-form clone of a yielding method: `#` is never part of a
      Ruby method name */
   if (strchr(m, '#')) return 1;

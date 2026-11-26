@@ -16608,7 +16608,37 @@ static int bare_call_on_class(Compiler *c, int ci, const char *nm) {
   return call_target(c, -1, ci, nm, CT_CMETHOD | CT_SHARED, NULL) >= 0 || is_name_reader(nm) ||
          bare_self_reflection_name(nm);
 }
-static void subtree_self_to_const(Compiler *c, int root, const char *cname, int ci, int depth) {
+/* What a block's self becomes once the block runs as part of the code
+   around it, a node at `at`'s scope: a read of the class constant cname
+   (class ci), or, for a call on a local holding a site's class
+   (class_eval_site_local), a read of that local: the class made at run
+   time it holds. */
+static int self_stand_in(Compiler *c, int recv, const char *cname, int ci, int at) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int local = nt_kind(nt, recv) == NK_LocalVariableReadNode;
+  int cr = local ? nt_new_local_of(nt, "LocalVariableReadNode", recv) : nt_new_node(nt, "ConstantReadNode");
+  if (cr < 0) return -1;
+  if (!local) {
+    nt_node_set_str(nt, cr, "name", cname);
+    if (ci >= 0) nt_node_set_int(nt, cr, "made_class", ci + 1);
+  }
+  comp_grow_node_arrays(c);
+  c->nscope[cr] = c->nscope[at];
+  return cr;
+}
+static void subtree_self_to_recv(Compiler *c, int root, int recv, const char *cname, int ci, int depth);
+/* (child ch of root, but the block keep that runs with its own self: a self
+   becomes the stand-in, anything else is walked; 0 where no stand-in is made) */
+static int self_to_recv_child(Compiler *c, int root, int ch, int keep, int recv, const char *cname, int ci, int depth) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  if (ch < 0 || ch == keep) return 1;
+  if (nt_kind(nt, ch) != NK_SelfNode) { subtree_self_to_recv(c, ch, recv, cname, ci, depth + 1); return 1; }
+  int cr = self_stand_in(c, recv, cname, ci, root);
+  if (cr < 0) return 0;
+  nt_replace_child(nt, root, ch, cr);
+  return 1;
+}
+static void subtree_self_to_recv(Compiler *c, int root, int recv, const char *cname, int ci, int depth) {
   NodeTable *nt = (NodeTable *)c->nt;
   if (root < 0 || root >= nt->count || depth > 200) return;
   NodeKind k = nt_kind(nt, root);
@@ -16620,50 +16650,36 @@ static void subtree_self_to_const(Compiler *c, int root, const char *cname, int 
      answered "A"). */
   if (k == NK_CallNode && nt_ref(nt, root, "receiver") < 0 &&
       (is_cvar_reflection_name(nt_str(nt, root, "name")) || bare_call_on_class(c, ci, nt_str(nt, root, "name")))) {
-    int cr = nt_new_node(nt, "ConstantReadNode");
+    int cr = self_stand_in(c, recv, cname, ci, root);
     if (cr < 0) return;
-    nt_node_set_str(nt, cr, "name", cname);
-    if (ci >= 0) nt_node_set_int(nt, cr, "made_class", ci + 1);
-    comp_grow_node_arrays(c);
-    c->nscope[cr] = c->nscope[root];
     nt_node_set_ref(nt, root, "receiver", cr);
     nt_node_set_int(nt, root, "self_call", 1);
   }
   int keep = k == NK_CallNode ? block_with_own_self(c, root) : -1;
-  SpNode *nd = &nt->nodes[root];
-  for (int i = 0; i < nd->nr; i++) {
-    int ch = nd->r[i].ref;
-    if (ch >= 0 && ch == keep) continue;
-    if (ch >= 0 && nt_kind(nt, ch) == NK_SelfNode) {
-      int cr = nt_new_node(nt, "ConstantReadNode");
-      if (cr < 0) return;
-      nt_node_set_str(nt, cr, "name", cname);
-      if (ci >= 0) nt_node_set_int(nt, cr, "made_class", ci + 1);
-      comp_grow_node_arrays(c);
-      c->nscope[cr] = c->nscope[root];
-      nd = &nt->nodes[root];        /* nt_new_node may realloc nt->nodes */
-      nd->r[i].ref = cr; nt_parents_moved(nt, root, ch, cr);
-    }
-    else subtree_self_to_const(c, ch, cname, ci, depth + 1);
-    nd = &nt->nodes[root];
-  }
-  for (int i = 0; i < nd->na; i++) {
-    for (int j = 0; j < nd->a[i].n; j++) {
-      int ch = nd->a[i].ids[j];
-      if (ch >= 0 && nt_kind(nt, ch) == NK_SelfNode) {
-        int cr = nt_new_node(nt, "ConstantReadNode");
-        if (cr < 0) return;
-        nt_node_set_str(nt, cr, "name", cname);
-        if (ci >= 0) nt_node_set_int(nt, cr, "made_class", ci + 1);
-        comp_grow_node_arrays(c);
-        c->nscope[cr] = c->nscope[root];
-        nd = &nt->nodes[root];
-        nd->a[i].ids[j] = cr; nt_parents_moved(nt, root, ch, cr);
-      }
-      else subtree_self_to_const(c, ch, cname, ci, depth + 1);
-      nd = &nt->nodes[root];
+  for (int i = 0; i < nt_num_refs(nt, root); i++)
+    if (!self_to_recv_child(c, root, nt_ref_at(nt, root, i), keep, recv, cname, ci, depth)) return;
+  for (int i = 0; i < nt_num_arrs(nt, root); i++) {
+    int m = 0;
+    nt_arr_at(nt, root, i, &m);
+    for (int j = 0; j < m; j++) {
+      /* (a replacement writes the list anew: read it again) */
+      const int *ids = nt_arr_at(nt, root, i, &m);
+      if (!self_to_recv_child(c, root, ids[j], keep, recv, cname, ci, depth)) return;
     }
   }
+}
+
+/* The site class of the class a local read x holds, where its one write
+   (local_sole_write) is a Class.new site's call that makes a class of its
+   own at each evaluation (cplan_class_new's CNEW_RUNTIME). -1 for any other
+   local, a site whose one class stands for every evaluation (CNEW_STATIC)
+   too: a block run on that class would answer for each evaluation what the
+   one class holds. The block of a class_eval on it runs with that class as
+   self, as on the constant a class made once would be. */
+static int class_eval_site_local(Compiler *c, int x) {
+  int v = local_sole_write(c, x), site = -1;
+  int k = v >= 0 ? cplan_class_new(c, v, &site) : CNEW_NONE;
+  return k == CNEW_RUNTIME ? site : -1;
 }
 
 /* Splice a block body into the enclosing scope `encl`: re-home every node
@@ -16752,7 +16768,8 @@ static int exec_param_reads_arg(Compiler *c, int body, const char *pn, int arg) 
 
    reusing the block's own parameters/body nodes, with SelfNode occurrences in
    the body, and the receiver of a bare class_variable_get / _set /
-   _defined?, repointed at the receiver constant. #2697 */
+   _defined?, repointed at the receiver constant, or at a local that holds
+   a site's class (class_eval_site_local). #2697 */
 int desugar_class_eval_value(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;
@@ -16765,15 +16782,21 @@ int desugar_class_eval_value(Compiler *c) {
     if (!nm || !is_class_eval_family(nm)) continue;
     int recv = nt_ref(nt, id, "receiver");
     /* (a constant path -- `Outer::Inner.class_eval { }`, `::Base.class_eval { }` -- names its class as a bare constant does) */
-    if (recv < 0 || (nt_kind(nt, recv) != NK_ConstantReadNode && nt_kind(nt, recv) != NK_ConstantPathNode)) continue;
-    const char *cname = key_name(c, recv);
-    int rci = cname ? const_node_class_index(c, recv) : -1;
+    NodeKind rk = recv >= 0 ? nt_kind(nt, recv) : NK_NONE;
+    int site = rk == NK_LocalVariableReadNode ? class_eval_site_local(c, recv) : -1;
+    if (site < 0 && rk != NK_ConstantReadNode && rk != NK_ConstantPathNode) continue;
+    const char *cname = site >= 0 ? c->classes[site].name : key_name(c, recv);
+    int rci = site >= 0 ? site : cname ? const_node_class_index(c, recv) : -1;
     if (rci < 0) continue;
     int blk = nt_ref(nt, id, "block");
     if (blk < 0 || nt_kind(nt, blk) != NK_BlockNode) continue;
     int body = nt_ref(nt, blk, "body");
     if (body < 0) continue;
     if (nt_subtree_has_kind(nt, body, NK_DefNode)) continue;   /* reopen path */
+    /* (an ivar in the block is the class's own: a site's classes made at
+       run time would share the one set its accessors keep, so such a
+       block is left to the refusal) */
+    if (site >= 0 && an_subtree_has_ivar(nt, body, 0)) continue;
 
     /* the block's params bind the exec args; collect their names */
     const char *pnames[8]; int pnodes[8], pvals[8]; int np = 0;
@@ -16800,7 +16823,7 @@ int desugar_class_eval_value(Compiler *c) {
       np = rn;
     }
 
-    subtree_self_to_const(c, body, cname, rci, 0);
+    subtree_self_to_recv(c, body, recv, cname, rci, 0);
     int base = nt->count;
     /* `param = arg` writes prepended to the body, then the body statements */
     int items[8 + 64]; int ni = 0;

@@ -12603,6 +12603,15 @@ static void pivs_note_builtin(Compiler *c) {
 static int pivs_unfollowed(Compiler *c) {
   return c->pivs->hash_mode == 1 && c->pivs->init_walk;
 }
+/* (class ci's value, -1 for a builtin class's, recorded in the query's
+   memo entry with how it was reached, CV_*) */
+static int pivs_note_class(Compiler *c, int ci, int how) {
+  PivsFacts *f = c->pivs;
+  if (f->hash_mode != 0 || f->active < 0) return 0;
+  f->memo[f->active].has_class = 1;
+  if (ci >= 0) f->memo[f->active].cvals[ci] |= (char)how;
+  return 1;
+}
 /* A constant naming a class or module, or a self that is one, read as a
    value: the class query records it beside its instance set
    (poly_recv_class_values) and walks on, though the instance set's own
@@ -12628,9 +12637,7 @@ static int pivs_note_class_value(Compiler *c, int v) {
     if (ci >= 0 && comp_const(c, cn)) return 0;   /* a value constant of the name */
     if (ci < 0 && builtin_class_id(cn) == 0) return 0;
   }
-  f->memo[f->active].has_class = 1;
-  if (ci >= 0) f->memo[f->active].cvals[ci] = 1;
-  return 1;
+  return pivs_note_class(c, ci, CV_VALUE);
 }
 /* A class method's self, read as a value: the class, or a subclass the
    method was called on, each recorded beside the instance set as
@@ -12641,7 +12648,7 @@ static int pivs_note_cmethod_self(Compiler *c, Scope *s) {
   if (comp_class_is_module(c, &c->classes[s->class_id]) || is_builtin_reopen(c->classes[s->class_id].name)) return 0;
   f->memo[f->active].has_class = 1;
   for (int k = 0; k < c->nclasses; k++)
-    if (k == s->class_id || is_descendant(c, k, s->class_id)) f->memo[f->active].cvals[k] = 1;
+    if (k == s->class_id || is_descendant(c, k, s->class_id)) f->memo[f->active].cvals[k] |= CV_VALUE;
   return 1;
 }
 /* `r.superclass` (call v) read as a value: any ancestor of a program
@@ -13389,6 +13396,10 @@ static int pivs_value_walk(Compiler *c, int v, char *set, int depth) {
       int a = nt_ref(nt, v, "arguments"), ac = 0;
       if (a >= 0) nt_arr(nt, a, "arguments", &ac);
       if (!un || r < 0) return 0;
+      /* a Class.new site's value: a class of its site, which a class made
+         at run time answers for (cplan_class_new), recorded as a constant's */
+      int site = -1, cnew = cplan_class_new(c, v, &site);
+      if ((cnew == CNEW_RUNTIME || cnew == CNEW_STATIC) && pivs_note_class(c, site, CV_SITE)) return 1;
       if (sp_streq(un, "new") && (nt_kind(nt, r) == NK_ConstantReadNode || nt_kind(nt, r) == NK_ConstantPathNode)) {
         if (c->pivs->hash_mode && sp_streq(nt_str(nt, r, "name"), "Hash")) return 0;
         int ci = const_node_class_index(c, r);

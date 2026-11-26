@@ -79,13 +79,15 @@ sp_Curry *sp_curry_apply(sp_Curry *c, sp_RbVal arg);
 /* What `self` holds, so the scan knows whether to follow it: a Method can be
    bound to an Integer or a Float as easily as to an object, and marking the
    raw value as a pointer reads whatever address it names. */
-#define SP_BM_SELF_NONE 0   /* not a reference: a number, a class value, unbound */
+#define SP_BM_SELF_NONE 0   /* not a reference: a number, a class value it does not keep, unbound */
 #define SP_BM_SELF_OBJ  1
 #define SP_BM_SELF_STR  2
 #define SP_BM_SELF_SYM  4   /* a Symbol, held as its id: boxed back as a Symbol, not an Integer */
 #define SP_BM_SELF_BOOL 3   /* true or false, held as 1 or 0: no reference either, but a value #receiver answers */
 #define SP_BM_SELF_MAIN 5   /* main, the top level's self (sp_main_obj, a root of its own): boxed back as sp_main_self() */
 #define SP_BM_SELF_INT  6   /* an Integer, held as its value: no reference, boxed back as that Integer */
+#define SP_BM_SELF_CLASS 7  /* a class value, kept by sp_bm_set_self_class: its id in self_cls, and its
+                               name in self where only the name identifies it (SP_CLASS_BY_NAME) */
 /* How the legacy sp_int C return is boxed back into a Ruby value. Any method
    whose C return fits the register records its kind here: a plain Integer, a
    `const char *` String, a nullable `sp_Bigint *`, a void/nil, a bool, a
@@ -306,6 +308,14 @@ static inline sp_RbVal sp_bm_box_ret(sp_BoundMethod *m, sp_int raw) {
 static inline sp_int sp_bm_norm_ret(sp_BoundMethod *m, sp_int raw) {
   return (m && SP_BM_RET_KIND(m->legacy_ret) == SP_BM_RET_BOOL) ? ((raw & 0xff) != 0) : raw;
 }
+/* Keep the class value a Method of it was looked up on, which #receiver
+   answers after the program rebinds the slot it was read from; the calls
+   take no self (recv_bound), so the slot only carries it. */
+static inline sp_BoundMethod *sp_bm_set_self_class(sp_BoundMethod *m, sp_Class k) {
+  if (m) { m->self_kind = SP_BM_SELF_CLASS; m->self_cls = k.cls_id; m->self = k.cls_id == SP_CLASS_BY_NAME ? (void *)k.name : NULL; }
+  return m;
+}
+static inline sp_Class sp_bm_self_class(const sp_BoundMethod *m) { sp_Class k = { m->self_cls, (const char *)m->self }; return k; }
 /* The Method's receiver as a boxed value, for a target that takes self boxed
    (a reopening of Object): by what the self slot holds. */
 static inline sp_RbVal sp_bm_self_boxed(const sp_BoundMethod *m) {
@@ -315,6 +325,7 @@ static inline sp_RbVal sp_bm_self_boxed(const sp_BoundMethod *m) {
     case SP_BM_SELF_BOOL: return sp_box_bool((sp_bool)(uintptr_t)m->self);
     case SP_BM_SELF_SYM:  return sp_box_sym((sp_sym)(uintptr_t)m->self);
     case SP_BM_SELF_MAIN: return sp_main_self();
+    case SP_BM_SELF_CLASS: return sp_box_class(sp_bm_self_class(m));
     default:              return sp_box_int((sp_int)(uintptr_t)m->self);
   }
 }
@@ -346,6 +357,7 @@ static inline sp_RbVal sp_bm_receiver(const sp_BoundMethod *m) {
     case SP_BM_SELF_SYM:  return sp_box_sym((sp_sym)(uintptr_t)m->self);
     case SP_BM_SELF_MAIN: return sp_main_self();
     case SP_BM_SELF_INT:  return sp_box_int((sp_int)(intptr_t)m->self);
+    case SP_BM_SELF_CLASS: return sp_box_class(sp_bm_self_class(m));
     default:              return sp_box_nil();
   }
 }

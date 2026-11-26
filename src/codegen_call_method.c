@@ -1254,14 +1254,49 @@ int emit_op_method_owner(Compiler *c, const BopCtx *x, Buf *b) {
   return 0;
 }
 
+/* Does a Method looked up on mrecv keep mrecv's value, which the program may
+   rebind (a local's or an ivar's) before #receiver asks? A bound lookup
+   keeps an object, a String, an Array or a Hash by its pointer, an Integer,
+   a true or false and a Symbol by value and a boxed receiver in its holder
+   (emit_method_obj_target), and a class value by sp_bm_set_self_class
+   (emit_bm_self_keep_open); a by-value object, a Float or a Range keeps
+   none. */
+static int method_keeps_receiver(Compiler *c, int mrecv) {
+  NodeKind k = nt_kind(c->nt, mrecv);
+  if (k != NK_LocalVariableReadNode && k != NK_InstanceVariableReadNode) return 0;
+  Repr r = repr_of(c, mrecv);
+  TyKind t = r.as_ty;
+  if (r.kind == RK_STRUCT) return t == TY_CLASS;
+  if (r.kind == RK_SCALAR) return t == TY_INT || t == TY_BOOL || t == TY_SYMBOL;
+  if (r.kind == RK_STRBUF) return t == TY_STRING;
+  if (r.kind == RK_BOXED) return 1;
+  return r.kind == RK_PTR && (ty_is_object(t) || ty_is_array(t) || ty_is_hash(t));
+}
+
 /* Method#receiver (#2701). The receiver re-emits when doing so cannot repeat a
-   side effect (a literal or a local read). */
+   side effect (a literal or a local read) and the program cannot have
+   rebound it since the lookup; a rebindable one the Method keeps is read
+   back out of it. */
 int emit_op_method_receiver(Compiler *c, const BopCtx *x, Buf *b) {
   const NodeTable *nt = c->nt;
   int recv = x->recv;
   int mn = method_recv_node(c, recv);
   int mrecv = mn >= 0 ? nt_ref(nt, mn, "receiver") : -1;
   if (mrecv < 0) return 0;
+  /* (a bound lookup's: a bind's receiver is its argument, and an unbound
+     Method has none) */
+  if (method_keeps_receiver(c, mrecv) && is_method_ref_name(nt_str(nt, mn, "name")) &&
+      !method_expr_is_unbound(c, recv)) {
+    int tm = ++g_tmp;
+    char rv[48]; snprintf(rv, sizeof rv, "sp_bm_receiver(_t%d)", tm);
+    buf_printf(b, "({ sp_BoundMethod *_t%d = ", tm);
+    emit_expr(c, recv, b);
+    buf_printf(b, "; SP_GC_ROOT(_t%d); ", tm);
+    if (repr_of(c, mrecv).kind == RK_BOXED) buf_puts(b, rv);
+    else emit_unbox_text(c, repr_of(c, mrecv).as_ty, rv, b);
+    buf_puts(b, "; })");
+    return 1;
+  }
   NodeKind mrk = nt_kind(nt, mrecv);
   int pure = (mrk == NK_LocalVariableReadNode ||
                       mrk == NK_IntegerNode || mrk == NK_FloatNode ||
@@ -2318,6 +2353,31 @@ static void emit_bound_call_in_block(Compiler *c, int id, Buf *b, const NodeTabl
   free(pre.p); free(call.p);
 }
 
+/* What a Method keeps beside its self slot, around its constructor: a
+   builtin bound by its pointer keeps its box's class id (sp_bm_set_self_cls),
+   and a class value the program may rebind keeps itself
+   (sp_bm_set_self_class), which #receiver reads back (method_keeps_receiver). */
+static int method_keeps_class(Compiler *c, int recv) {
+  return recv >= 0 && repr_of(c, recv).kind == RK_STRUCT && method_keeps_receiver(c, recv);
+}
+static void emit_bm_self_keep_open(Compiler *c, int recv, int set_cls, Buf *b) {
+  if (set_cls) buf_puts(b, "sp_bm_set_self_cls(");
+  if (method_keeps_class(c, recv)) buf_puts(b, "sp_bm_set_self_class(");
+}
+static void emit_bm_self_keep_close(Compiler *c, int recv, int set_cls, TyKind self_box_ty, int self_tmp, Buf *b) {
+  if (method_keeps_class(c, recv)) { buf_puts(b, ", "); emit_expr(c, recv, b); buf_puts(b, ")"); }
+  if (!set_cls) return;
+  /* (the temporary is a void *: a String handle is named as one, so the
+     box is the handle's own and nothing allocates before the Method is
+     rooted) */
+  char st[48];
+  if (self_box_ty == TY_STRBUF) snprintf(st, sizeof st, "((sp_String *)_t%d)", self_tmp);
+  else snprintf(st, sizeof st, "_t%d", self_tmp);
+  buf_puts(b, ", (");
+  emit_boxed_text(c, self_box_ty, st, b);
+  buf_puts(b, ").cls_id)");
+}
+
 static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, int capture, const char *captured_name) {
   /* Klass.instance_method(:sym) -> the unbound object: the same
      sp_BoundMethod with a NULL self, so name/arity/owner ride the Method
@@ -2387,19 +2447,7 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
       buf_puts(b, "; })");
       return 1;
     }
-    if (t2 >= 0 && c->scopes[t2].class_id >= 0 && !c->scopes[t2].is_cmethod &&
-        ty_is_object(comp_ntype(c, argv[0]))) {
-      emit_bind_call(c, id, t2, argv, argc, b);
-      return 1;
-    }
-    /* a boxed obj: its class is checked at run time */
-    if (t2 >= 0 && c->scopes[t2].class_id >= 0 && !c->scopes[t2].is_cmethod &&
-        repr_of(c, argv[0]).kind == RK_BOXED && nt_kind(nt, argv[0]) != NK_SplatNode &&
-        class_value_bind_call_target(c, method_recv_node(c, recv), c->scopes[t2].class_id,
-                                     c->scopes[t2].name, NULL) == t2) {
-      emit_bind_call_boxed(c, id, t2, -1, NULL, argv, argc, b);
-      return 1;
-    }
+    if (emit_bind_call_target(c, id, recv, t2, argv, argc, b)) return 1;
   }
   /* ...and on a Class value known only at run time, a switch on its class */
   if (recv >= 0 && argc >= 1 && sp_streq(name, "bind_call") && nt_kind(nt, argv[0]) != NK_SplatNode) {
@@ -2626,7 +2674,7 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
        Method finds its own written name in (sp_bm_set_group) */
     int grp = held || ident != NULL;
     int set_cls = self_rooted && !held && self_box_ty != TY_UNKNOWN;
-    if (set_cls) buf_puts(b, "sp_bm_set_self_cls(");
+    emit_bm_self_keep_open(c, recv, set_cls, b);
     if (grp) buf_puts(b, "sp_bm_set_group(");
     if (held) buf_puts(b, "sp_bm_set_held(");
     if (ident) buf_puts(b, "sp_bm_set_ident(");
@@ -2881,17 +2929,7 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
       free(map);
       buf_printf(b, ", (sp_int)%uu)", builtin_name_group_hash(ident && hash ? hash + 1 : disp));
     }
-    if (set_cls) {
-      /* (the temporary is a void *: a String handle is named as one, so the
-         box is the handle's own and nothing allocates before the Method
-         is rooted) */
-      char st[48];
-      if (self_box_ty == TY_STRBUF) snprintf(st, sizeof st, "((sp_String *)_t%d)", self_tmp);
-      else snprintf(st, sizeof st, "_t%d", self_tmp);
-      buf_puts(b, ", (");
-      emit_boxed_text(c, self_box_ty, st, b);
-      buf_puts(b, ").cls_id)");
-    }
+    emit_bm_self_keep_close(c, recv, set_cls, self_box_ty, self_tmp, b);
     if (mmq >= 0 && (self_rooted || recv < 0)) buf_puts(b, ")");
     if (self_rooted) buf_puts(b, "; })");
     if (ivk >= 0) buf_puts(b, "; })");

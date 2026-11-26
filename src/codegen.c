@@ -4451,20 +4451,18 @@ int method_is_void(Scope *s) {
    care. */
 static int8_t *g_cm_selfcls = NULL;
 static int g_cm_selfcls_n = -1;
-int cmethod_takes_self_cls(Compiler *c, const Scope *s) {
-  if (!s) return 0;
-  if (!s->is_cmethod || s->class_id < 0 || s->body < 0) return 0;
-  /* (the memo, the nodes' scope table and the lookups below are all keyed by the index) */
-  int si = (int)(s - c->scopes);
-  if (g_cm_selfcls_n != c->nscopes) {
-    free(g_cm_selfcls);
-    g_cm_selfcls = (int8_t *)calloc((size_t)c->nscopes, 1);
-    g_cm_selfcls_n = c->nscopes;
-    if (!g_cm_selfcls) { g_cm_selfcls_n = -1; return 0; }
-    for (int k = 0; k < c->nscopes; k++) g_cm_selfcls[k] = -1;
-  }
-  if (!g_cm_selfcls) return 0;
-  if (g_cm_selfcls[si] >= 0) return g_cm_selfcls[si];
+/* The memo answers -1 (not worked out), 0 or 1. A method takes the class
+   when its own body reads it or a class method it calls bare takes it, so
+   the methods of a cycle of bare calls answer together: the walk decides
+   them one strongly connected group at a time (Tarjan's order), each
+   method worked out once, a group's answer the OR of its members' and of
+   the groups they call. */
+typedef struct { int *ix, *low, *stk, nstk, next; int8_t *acc; } CmSelfClsWalk;
+static int cm_self_cls_node(const Scope *s) { return s && s->is_cmethod && s->class_id >= 0 && s->body >= 0; }
+static void cm_self_cls_visit(Compiler *c, CmSelfClsWalk *w, int si) {
+  const Scope *s = &c->scopes[si];
+  w->ix[si] = w->low[si] = ++w->next;
+  w->stk[w->nstk++] = si;
   int ans = class_reopen_cmethod(c, -1, -1, s->name) == si || cplan_kern_site_by_class(c, si), has_desc = 0;
   /* a descendant some reached code names (comp_new_receiver), off the
      class's descendant list rather than every class (#10546); a site
@@ -4489,23 +4487,46 @@ int cmethod_takes_self_cls(Compiler *c, const Scope *s) {
         const char *nm = nt_str(c->nt, nid, "name");
         if (nm && sp_streq(nm, "name")) ans = 1;
         /* a bare call to a class method that reads its receiving class
-           hands it this one's (a cycle answers no until it is settled) */
+           hands it this one's */
         else if (nm) {
           /* (a method a top-level include brings, whose copy in Object's chain takes the call's self) */
           int imi = call_target(c, nid, -1, nm, CT_INCLUDED, NULL);
           if (imi >= 0 && repr_self_boxed(c, imi)) { ans = 1; break; }
           int cmi = call_target(c, nid, s->class_id, nm, CT_CMETHOD, NULL);
-          if (cmi >= 0 && cmi != si) {
-            g_cm_selfcls[si] = 0;
-            if (cmethod_takes_self_cls(c, &c->scopes[cmi])) ans = 1;
-            g_cm_selfcls[si] = -1;
-          }
+          if (cmi < 0 || cmi == si || !cm_self_cls_node(&c->scopes[cmi])) continue;
+          /* (a method of a group still open is on the stack: its answer is the group's, settled when it closes) */
+          if (g_cm_selfcls[cmi] < 0 && !w->ix[cmi]) cm_self_cls_visit(c, w, cmi);
+          if (g_cm_selfcls[cmi] >= 0) ans = g_cm_selfcls[cmi];
+          else if (w->low[cmi] < w->low[si]) w->low[si] = w->low[cmi];
         }
       }
     }
   }
-  g_cm_selfcls[si] = (int8_t)ans;
-  return ans;
+  w->acc[si] = (int8_t)ans;
+  if (w->low[si] != w->ix[si]) return;
+  int top = w->nstk, k = top;
+  do { k--; ans |= w->acc[w->stk[k]]; } while (w->stk[k] != si);
+  for (int j = k; j < top; j++) g_cm_selfcls[w->stk[j]] = (int8_t)ans;
+  w->nstk = k;
+}
+int cmethod_takes_self_cls(Compiler *c, const Scope *s) {
+  if (g_cm_selfcls_n != c->nscopes) {
+    free(g_cm_selfcls);
+    g_cm_selfcls = (int8_t *)calloc((size_t)c->nscopes, 1);
+    g_cm_selfcls_n = c->nscopes;
+    if (!g_cm_selfcls) { g_cm_selfcls_n = -1; return 0; }
+    for (int k = 0; k < c->nscopes; k++) g_cm_selfcls[k] = -1;
+  }
+  if (!g_cm_selfcls || !cm_self_cls_node(s)) return 0;
+  int si = (int)(s - c->scopes);
+  if (g_cm_selfcls[si] < 0) {
+    size_t n = (size_t)c->nscopes;
+    CmSelfClsWalk w = { calloc(n, sizeof(int)), calloc(n, sizeof(int)), calloc(n, sizeof(int)), 0, 0, calloc(n, 1) };
+    if (w.ix && w.low && w.stk && w.acc) cm_self_cls_visit(c, &w, si);
+    free(w.ix); free(w.low); free(w.stk); free(w.acc);
+    if (g_cm_selfcls[si] < 0) return 0;
+  }
+  return g_cm_selfcls[si];
 }
 
 /* Emit the receiving-class argument for such a call: the class the call names,
@@ -4520,15 +4541,18 @@ int cmethod_takes_self_cls(Compiler *c, const Scope *s) {
    spelled at the call site, after it, where the method's own `_sp_cls` is
    not declared (cmethod_cls_token). */
 static int g_cls_tok_mi = -1;
-static char g_cls_tok[1024];   /* (an object's class value, emit_obj_class_value, spans several reads) */
+static Buf g_cls_tok;   /* (an object's class value, emit_obj_class_value, spans several reads) */
 
 const char *emit_cmethod_self_cls_arg(Compiler *c, int mi, int recv_cls, const char *recv_val, Buf *b) {
   if (mi < 0 || !cmethod_takes_self_cls(c, &c->scopes[mi])) return "";
   int rc = recv_cls >= 0 || recv_cls <= -100 ? recv_cls : c->scopes[mi].class_id;
   if (rc == c->scopes[mi].class_id && class_reopen_cmethod(c, -1, -1, c->scopes[mi].name) == mi) rc = builtin_class_id("Class");
-  if (recv_val && cplan_rt_family(c, rc)) snprintf(g_cls_tok, sizeof g_cls_tok, "%s", recv_val);
-  else snprintf(g_cls_tok, sizeof g_cls_tok, "((sp_Class){%d, NULL})", rc);
-  buf_puts(b, g_cls_tok);
+  Buf tok; memset(&tok, 0, sizeof tok);
+  if (recv_val && cplan_rt_family(c, rc)) buf_puts(&tok, recv_val);
+  else buf_printf(&tok, "((sp_Class){%d, NULL})", rc);
+  buf_puts(b, tok.p);
+  free(g_cls_tok.p);
+  g_cls_tok = tok;
   g_cls_tok_mi = mi;
   return ", ";
 }
@@ -4537,7 +4561,7 @@ const char *emit_cmethod_self_cls_arg(Compiler *c, int mi, int recv_cls, const c
    parameter, or, in a default of its parameter spelled at its call site,
    the class that call passed. */
 const char *cmethod_cls_token(Compiler *c, Scope *encl) {
-  if (encl && open_default_method() == encl && g_cls_tok_mi == (int)(encl - c->scopes)) return g_cls_tok;
+  if (encl && open_default_method() == encl && g_cls_tok_mi == (int)(encl - c->scopes)) return g_cls_tok.p;
   return "_sp_cls";
 }
 /* ...and, in a yielding method (its body spliced where the call is), the class value its call site holds in g_self */
@@ -14024,7 +14048,8 @@ void emit_class_new(Compiler *c, ClassInfo *ci, Buf *b) {
 void emit_own_class_alloc(Compiler *c, int id, int base, Buf *b) {
   const NodeTable *nt = c->nt;
   Scope *s = comp_scope_of(c, id);
-  char sel[256] = "", cls[512] = "";
+  Buf sel, cls;   /* (the id it picks by, and a class value: as long as their object's text) */
+  memset(&sel, 0, sizeof sel); memset(&cls, 0, sizeof cls);
   if (s && s->is_cmethod) {
     /* a class method is copied for each subclass it runs for, as one with
        a bare `new` is: the copy allocates its class */
@@ -14034,34 +14059,31 @@ void emit_own_class_alloc(Compiler *c, int id, int base, Buf *b) {
     /* (the token `self` reads there: a yielding method inlined at its
        caller reads g_self, a parameter default the call's class) */
     if (cmethod_takes_self_cls(c, s)) {
-      snprintf(cls, sizeof cls, "(%s)", cmethod_self_cls(c, s));
-      class_value_key(c, -1, cls, sel, sizeof sel);
+      buf_printf(&cls, "(%s)", cmethod_self_cls(c, s));
+      emit_class_value_key(c, -1, cls.p, &sel);
     }
   }
   else if (!comp_ty_value_obj(c, ty_object(base))) {
     int recv = nt_ref(nt, id, "receiver");
     Buf sb; memset(&sb, 0, sizeof sb);
     emit_expr(c, nt_ref(nt, recv, "receiver"), &sb);
-    if (sb.p) snprintf(sel, sizeof sel, "(%s)->cls_id", sb.p);
+    if (sb.p) buf_printf(&sel, "(%s)->cls_id", sb.p);
     /* (the class an instance of a site class's family answers) */
-    if (sb.p && cplan_rt_family(c, base)) {
-      Buf ib; memset(&ib, 0, sizeof ib);
-      emit_obj_class_value(c, base, sb.p, &ib);
-      snprintf(cls, sizeof cls, "%s", ib.p);
-      free(ib.p);
-    }
+    if (sb.p && cplan_rt_family(c, base)) emit_obj_class_value(c, base, sb.p, &cls);
     free(sb.p);
   }
-  char rid[528];
-  const char *cv = cls[0] ? ctor_rt_id(cls, rid, sizeof rid) : NULL;
+  size_t rn = cls.p ? strlen(cls.p) + 16 : 0;
+  char *rid = rn ? malloc(rn) : NULL;
+  if (rn && !rid) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  const char *cv = rid ? ctor_rt_id(cls.p, rid, rn) : NULL;
   int nsub = 0;
-  for (int k = 0; sel[0] && k < c->nclasses; k++)
+  for (int k = 0; sel.p && k < c->nclasses; k++)
     if (k != base && is_descendant(c, k, base) && c->classes[k].instantiated &&
         !class_is_exc_subclass(c, k) && !c->classes[k].is_native_class &&
         !comp_ty_value_obj(c, ty_object(k))) nsub++;
-  if (!nsub) { emit_obj_alloc_expr(c, base, cv, b); return; }
+  if (!nsub) { emit_obj_alloc_expr(c, base, cv, b); free(rid); free(cls.p); free(sel.p); return; }
   int t = ++g_tmp;
-  buf_printf(b, "({ int _ac%d = %s; ", t, sel);
+  buf_printf(b, "({ int _ac%d = %s; ", t, sel.p);
   for (int k = 0; k < c->nclasses; k++) {
     if (k == base || !is_descendant(c, k, base) || !c->classes[k].instantiated ||
         class_is_exc_subclass(c, k) || c->classes[k].is_native_class ||
@@ -14072,6 +14094,7 @@ void emit_own_class_alloc(Compiler *c, int id, int base, Buf *b) {
   }
   emit_obj_alloc_expr(c, base, cv, b);
   buf_puts(b, "; })");
+  free(rid); free(cls.p); free(sel.p);
 }
 
 /* A proc, fiber or Hash default block body is written out ahead of the

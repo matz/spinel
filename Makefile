@@ -6741,6 +6741,12 @@ BLOCK_CONDITIONS_LIMIT ?= 2.2
 # at the next site's undef ask, outside the plan frame; 2.37x with the
 # asks in the frame (#12542). The limit sits between them.
 MISSING_METHOD_SITES_LIMIT ?= 2.6
+# K layers of two class methods calling both of the next layer bare, the
+# last calling the first (test/scale/cmethod_cycles.sh), compiled to C at
+# K=20 and K=40: the whole compile's counted work, 1.98x where each group
+# of such calls is decided once (cm_self_cls_visit); a walk that worked a
+# method out again on each path into it grew as 2^K.
+CMETHOD_CYCLES_LIMIT ?= 2.20
 # A chain of forty bangs over a String a method answers, compiled to C with
 # under a CPU-time limit, as the hash-literal fan-out is:
 # strbuf_bang_self_local asked each link once per path that reaches it,
@@ -6885,6 +6891,9 @@ scale-test: $(SPINEL_WORK)
 	gen missing_method_sites 400 mm4.rb; gen missing_method_sites 800 mm8.rb; \
 	mma=$$(sws desugar_missing_method_calls -c -o "$$tmp/mm4.c" "$$tmp/mm4.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	mmb=$$(sws desugar_missing_method_calls -c -o "$$tmp/mm8.c" "$$tmp/mm8.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	gen cmethod_cycles 20 cy2.rb; gen cmethod_cycles 40 cy4.rb; \
+	cya=$$(sw -c -o "$$tmp/cy2.c" "$$tmp/cy2.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	cyb=$$(sw -c -o "$$tmp/cy4.c" "$$tmp/cy4.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	rm -rf "$$tmp"; \
 	if [ -z "$$wa" ] || [ -z "$$wb" ] || [ -z "$$fa" ] || [ -z "$$fb" ] || [ -z "$$pa" ] || [ -z "$$pb" ] || \
 	   [ -z "$$ha" ] || [ -z "$$hb" ] || [ -z "$$ca" ] || [ -z "$$cb" ] || [ -z "$$sa" ] || [ -z "$$sb" ] || \
@@ -6896,7 +6905,7 @@ scale-test: $(SPINEL_WORK)
 	   [ -z "$$jra" ] || [ -z "$$jrb" ] || \
 	   [ -z "$$sea" ] || [ -z "$$seb" ] || [ -z "$$spa" ] || [ -z "$$spb" ] || \
 	   [ -z "$$ica" ] || [ -z "$$icb" ] || [ -z "$$ipa" ] || [ -z "$$ipb" ] || \
-	   [ -z "$$bca" ] || [ -z "$$bcb" ] || [ -z "$$bpa" ] || [ -z "$$bpb" ]; then \
+	   [ -z "$$bca" ] || [ -z "$$bcb" ] || [ -z "$$bpa" ] || [ -z "$$bpb" ] || [ -z "$$cya" ] || [ -z "$$cyb" ]; then \
 	  echo "scale-test: FAIL (the counting compiler reported no work count)"; exit 1; fi; \
 	awk -v a="$$ha" -v b="$$hb" 'BEGIN { r = b / a; \
 	  printf "scale-test: boxed Hash store work at 2x the methods is %.2fx (limit 2.20)\n", r; exit (r > 2.20) }' || \
@@ -6996,7 +7005,10 @@ scale-test: $(SPINEL_WORK)
 	  { echo "scale-test: FAIL (each class-body call scanned every scope per ancestor for its name: see comp_scope_batch_begin)"; exit 1; }; \
 	awk -v a="$$mma" -v b="$$mmb" -v lim="$(MISSING_METHOD_SITES_LIMIT)" 'BEGIN { if (a <= 0) a = 1; r = b / a; \
 	  printf "scale-test: missing-method split work at 2x the call sites is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
-	  { echo "scale-test: FAIL (desugar_missing_method_calls's counted work grew faster than its call sites, as where an undef ask rebuilt the map per site outside the plan frame: see cplan_undef_at and cplan_undef_before)"; exit 1; }
+	  { echo "scale-test: FAIL (desugar_missing_method_calls's counted work grew faster than its call sites, as where an undef ask rebuilt the map per site outside the plan frame: see cplan_undef_at and cplan_undef_before)"; exit 1; }; \
+	awk -v a="$$cya" -v b="$$cyb" -v lim="$(CMETHOD_CYCLES_LIMIT)" 'BEGIN { if (a <= 0) a = 1; r = b / a; \
+	  printf "scale-test: receiving-class work at 2x a cycle of bare class-method calls is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
+	  { echo "scale-test: FAIL (a class method in a cycle of bare calls was worked out again on each path into it: see cm_self_cls_visit)"; exit 1; }
 
 .PHONY: bisect-test
 # `spinel bisect`, end to end. The search has its own corpus test

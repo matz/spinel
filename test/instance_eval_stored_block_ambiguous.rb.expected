@@ -1,0 +1,8 @@
+second store: instance_eval of a proc spinel could not trace to Second
+written parameter: instance_eval of a proc spinel could not trace to Written
+non-literal caller: instance_eval of a proc spinel could not trace to Handed
+storing method writes its block: instance_eval of a proc spinel could not trace to Swapped
+parameter and-written: instance_eval of a proc spinel could not trace to AndWritten
+table rewritten by map!: instance_eval of a proc spinel could not trace to Replaced
+table ivar reassigned: instance_eval of a proc spinel could not trace to Reassigned
+element replaced in place: instance_eval of a proc spinel could not trace to Swapped0

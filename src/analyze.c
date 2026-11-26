@@ -4968,13 +4968,6 @@ static const char *ie_table_key(Compiler *c, int t, int *owner) {
   *owner = own;
   return iv;
 }
-/* The literal blocks a table read `T[k]` handed to instance_eval /
-   instance_exec can be, where the program fills T by `T[name] = block`
-   only in methods that store their own &block parameter there (a
-   framework's `def self.body(name, &block) = bodies[name] = block`, read
-   back as `instance_exec(&self.class.bodies[name])`): each literal block
-   a call of such a method is given. -1 for a read of a table some other
-   write fills, or of no table the program fills so. */
 /* The scope whose own &block a stored value v is, through at most one
    method that takes it as a positional parameter (`def self.define(name,
    block) = bodies[name] = block`, called as `define(name, block)` by a
@@ -5032,6 +5025,108 @@ static int ie_store_value_at(const NodeTable *nt, int v, const char *ikey) {
   }
   return found;
 }
+/* Is local `name` written anywhere under node root (`=`, `||=`, `&&=`,
+   `+=`, a multiple assignment's target)? */
+static int ie_local_written_in(Compiler *c, const char *name, int root) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  static const NodeKind kinds[] = { NK_LocalVariableWriteNode, NK_LocalVariableOrWriteNode, NK_LocalVariableAndWriteNode,
+                                    NK_LocalVariableOperatorWriteNode, NK_LocalVariableTargetNode };
+  const int *par = nt_parents(nt);
+  for (int i = 0; i < 5; i++)
+    NT_FOREACH_KIND(nt, kinds[i], w) {
+      const char *wn = nt_str(nt, w, "name");
+      if (!wn || !sp_streq(wn, name)) continue;
+      for (int u = par[w]; u >= 0; u = par[u]) if (u == root) return 1;
+    }
+  return 0;
+}
+/* A value an assignment to a table's ivar may store and keep it a table
+   of stored blocks only: nil, or an empty literal (`@map ||= {}`) */
+static int ie_table_reset_value(const NodeTable *nt, int v) {
+  NodeKind k = v >= 0 ? nt_kind(nt, v) : NK_NONE;
+  int n = 0;
+  if (k == NK_NilNode) return 1;
+  if (k == NK_ArrayNode) { nt_arr(nt, v, "elements", &n); return n == 0; }
+  if (k == NK_HashNode) { nt_arr(nt, v, "elements", &n); return n == 0; }
+  return 0;
+}
+/* The literal blocks table `key` can hold, where only methods storing
+   their own &block fill it (`T[k] = block` in a Hash, `T << block` in an
+   Array), never writing it, and its ivar is only ever set to nil or an
+   empty literal: those their callers pass (the element ikey of a stored
+   Hash literal where ikey is given). -1 for any other fill. */
+static int ie_table_stored_literals(Compiler *c, const char *key, int kown, int hash, const char *ikey, int *out, int cap) {
+  const NodeTable *nt = c->nt;
+  static const char *const other[] = { "unshift", "prepend", "insert", "concat", "replace", "fill", "merge!", "update", "map!", "collect!",
+                                       "delete", "delete_at", "delete_if", "reject!", "select!", "filter!", "keep_if", "clear", "pop",
+                                       "shift", "slice!", "compact!", "transform_values!", NULL };
+  /* (an assignment to the ivar of anything but nil or an empty literal) */
+  static const NodeKind ivw[] = { NK_InstanceVariableWriteNode, NK_InstanceVariableOrWriteNode, NK_InstanceVariableAndWriteNode,
+                                  NK_InstanceVariableOperatorWriteNode, NK_InstanceVariableTargetNode };
+  const int *par = nt_parents((NodeTable *)nt);
+  for (int i = 0; i < 5; i++)
+    NT_FOREACH_KIND(nt, ivw[i], w) {
+      const char *wn = nt_str(nt, w, "name");
+      const Scope *ws = comp_scope_of(c, w);
+      if (!wn || !sp_streq(wn, key) || !ws || ws->class_id < 0 ||
+          !ie_owner_related(c, ws->class_id * 2 + (ws->is_cmethod ? 1 : 0), kown)) continue;
+      int v = -1;
+      if (i == 4) {
+        int mw = par[w], ln = 0, en = 0;
+        const int *ls = mw >= 0 && nt_kind(nt, mw) == NK_MultiWriteNode ? nt_arr(nt, mw, "lefts", &ln) : NULL;
+        int mv = ls ? nt_ref(nt, mw, "value") : -1;
+        const int *es = mv >= 0 && nt_kind(nt, mv) == NK_ArrayNode ? nt_arr(nt, mv, "elements", &en) : NULL;
+        int spread = 0;
+        for (int j = 0; j < en; j++) spread |= nt_kind(nt, es[j]) == NK_SplatNode;
+        for (int j = 0; j < ln && es && en == ln && !spread; j++) if (ls[j] == w) v = es[j];
+      }
+      else if (i != 3) v = nt_ref(nt, w, "value");
+      if (!ie_table_reset_value(nt, v)) return -1;
+    }
+  /* (an element write in place, `T[i] ||= x`, `&&=`, `+=` or a target) */
+  static const NodeKind ixw[] = { NK_IndexOrWriteNode, NK_IndexAndWriteNode, NK_IndexOperatorWriteNode, NK_IndexTargetNode };
+  for (int i = 0; i < 4; i++)
+    NT_FOREACH_KIND(nt, ixw[i], w) {
+      int wown = -1;
+      const char *wkey = ie_table_key(c, nt_ref(nt, w, "receiver"), &wown);
+      if (wkey && sp_streq(wkey, key) && ie_owner_related(c, wown, kown)) return -1;
+    }
+  int storers[16], ns = 0;
+  NT_FOREACH_KIND(nt, NK_CallNode, w) {
+    const char *wn = nt_str(nt, w, "name");
+    if (!wn) continue;
+    int keyed = sp_streq(wn, "[]=") || sp_streq(wn, "store"), listed = sp_streq(wn, "<<") || sp_streq(wn, "push") || sp_streq(wn, "append");
+    int changes = keyed || listed;
+    for (int o = 0; other[o] && !changes; o++) changes = sp_streq(wn, other[o]);
+    if (!changes) continue;
+    int wown = -1;
+    const char *wkey = ie_table_key(c, nt_ref(nt, w, "receiver"), &wown);
+    if (!wkey || !sp_streq(wkey, key) || !ie_owner_related(c, wown, kown)) continue;
+    if (keyed != hash || listed == hash) return -1;
+    int wa = nt_ref(nt, w, "arguments"), wn2 = 0;
+    const int *wv = wa >= 0 ? nt_arr(nt, wa, "arguments", &wn2) : NULL;
+    const Scope *s = comp_scope_of(c, w);
+    int v = ie_store_value_at(nt, wn2 == (hash ? 2 : 1) ? wv[wn2 - 1] : -1, ikey);
+    /* (a write of anything but a storing method's own block, one the
+       method never writes, makes the table's content unknown) */
+    int found[16], nf = ie_block_param_storers(c, s, v, found, 16, 0);
+    if (nf < 0) return -1;
+    for (int f = 0; f < nf; f++) {
+      int si = found[f], seen = 0;
+      const Scope *fs = &c->scopes[si];
+      if (fs->blk_param && fs->blk_param[0] && fs->def_node >= 0 && ie_local_written_in(c, fs->blk_param, fs->def_node)) return -1;
+      for (int q = 0; q < ns; q++) seen |= storers[q] == si;
+      if (seen) continue;
+      if (ns >= 16) return -1;
+      storers[ns++] = si;
+    }
+  }
+  return ns ? ie_calls_into(c, storers, ns, out, cap) : -1;
+}
+/* The literal blocks a table read `T[k]` handed to instance_eval /
+   instance_exec can be (ie_table_stored_literals: a framework's
+   `def self.body(name, &block) = bodies[name] = block`, read back as
+   `instance_exec(&self.class.bodies[name])`) */
 static int ie_trace_index_store(Compiler *c, int x, int *out, int cap) {
   const NodeTable *nt = c->nt;
   int a = nt_ref(nt, x, "arguments"), an = 0;
@@ -5050,29 +5145,38 @@ static int ie_trace_index_store(Compiler *c, int x, int *out, int cap) {
   int kown = -1;
   const char *key = ie_table_key(c, nt_ref(nt, tx, "receiver"), &kown);
   if (an != 1 || !key) return -1;
-  int storers[16], ns = 0;
-  NT_FOREACH_KIND(nt, NK_CallNode, w) {
-    const char *wn = nt_str(nt, w, "name");
-    if (!wn || !sp_streq(wn, "[]=")) continue;
-    int wown = -1;
-    const char *wkey = ie_table_key(c, nt_ref(nt, w, "receiver"), &wown);
-    if (!wkey || !sp_streq(wkey, key) || !ie_owner_related(c, wown, kown)) continue;
-    int wa = nt_ref(nt, w, "arguments"), wn2 = 0;
-    const int *wv = wa >= 0 ? nt_arr(nt, wa, "arguments", &wn2) : NULL;
-    const Scope *s = comp_scope_of(c, w);
-    int v = ie_store_value_at(nt, wn2 == 2 ? wv[1] : -1, ikey);
-    /* (a write of anything but a storing method's own block makes the table's content unknown) */
-    int found[16], nf = ie_block_param_storers(c, s, v, found, 16, 0);
-    if (nf < 0) return -1;
-    for (int f = 0; f < nf; f++) {
-      int si = found[f], seen = 0;
-      for (int q = 0; q < ns; q++) seen |= storers[q] == si;
-      if (seen) continue;
-      if (ns >= 16) return -1;
-      storers[ns++] = si;
+  return ie_table_stored_literals(c, key, kown, 1, ikey, out, cap);
+}
+/* The literal blocks parameter x of a block iterating a table can be:
+   `T.each { |b| }` or map over an Array, `T.each { |k, b| }`, each_pair,
+   map or each_value over a Hash, x written nowhere in the block */
+static int ie_trace_element(Compiler *c, int x, int *out, int cap) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  const char *pn = nt_str(nt, x, "name");
+  const int *par = nt_parents(nt);
+  int blk = -1, idx = -1;
+  for (int u = par[x]; pn && u >= 0 && blk < 0; u = par[u]) {
+    NodeKind uk = nt_kind(nt, u);
+    if (uk == NK_DefNode || uk == NK_LambdaNode || uk == NK_ClassNode || uk == NK_ModuleNode) return -1;
+    if (uk != NK_BlockNode) continue;
+    for (int k = 0; k < 3; k++) {
+      const char *bn = block_param_name(c, u, k);
+      if (bn && sp_streq(bn, pn)) { blk = u; idx = k; break; }
     }
   }
-  return ns ? ie_calls_into(c, storers, ns, out, cap) : -1;
+  int call = blk >= 0 ? par[blk] : -1;
+  if (call < 0 || nt_kind(nt, call) != NK_CallNode || nt_ref(nt, call, "block") != blk ||
+      nt_ref(nt, call, "arguments") >= 0 || block_param_name(c, blk, 2)) return -1;
+  const char *cn = nt_str(nt, call, "name");
+  int two = block_param_name(c, blk, 1) != NULL, hash;
+  if (cn && sp_streq(cn, "each_value") && !two && idx == 0) hash = 1;
+  else if (cn && (sp_streq(cn, "each") || sp_streq(cn, "map")) && !two && idx == 0) hash = 0;
+  else if (cn && (sp_streq(cn, "each") || sp_streq(cn, "each_pair") || sp_streq(cn, "map")) && two && idx == 1) hash = 1;
+  else return -1;
+  if (ie_local_written_in(c, pn, blk)) return -1;
+  int kown = -1;
+  const char *key = ie_table_key(c, nt_ref(nt, call, "receiver"), &kown);
+  return key ? ie_table_stored_literals(c, key, kown, hash, NULL, out, cap) : -1;
 }
 /* Is call x one with a literal block whose every method of its name
    answers that &block and nothing else (`def keep(&block) = block`)? */
@@ -5151,7 +5255,11 @@ int ie_trace_bodies(Compiler *c, int x, int *out, int cap, int depth) {
   const NodeTable *nt = c->nt;
   if (x < 0 || depth > 8) return -1;
   switch (nt_kind(nt, x)) {
-    case NK_LocalVariableReadNode: return ie_trace_local(c, x, out, cap, depth);
+    case NK_LocalVariableReadNode: {
+      /* (an iteration's element, ie_trace_element, else ie_trace_local's) */
+      int te = ie_trace_element(c, x, out, cap);
+      return te >= 0 ? te : ie_trace_local(c, x, out, cap, depth);
+    }
     case NK_ParenthesesNode: return ie_trace_bodies(c, nt_ref(nt, x, "body"), out, cap, depth + 1);
     case NK_StatementsNode: {
       int n = 0; const int *st = nt_arr(nt, x, "body", &n);
@@ -5251,11 +5359,14 @@ static int ie_calls_into(Compiler *c, const int *readers, int nreaders, int *out
     int cr = nt_ref(nt, call, "receiver");
     const Scope *cs = comp_scope_of(c, call);
     int in_body = cs && cs->def_node < 0 && call < c->node_cap && c->node_cbody[call] >= 0;
-    if (!(cr < 0 ? in_body : nt_kind(nt, cr) == NK_ConstantReadNode || nt_kind(nt, cr) == NK_SelfNode)) continue;
+    /* (or a receiverless one in a block the map already runs on a class) */
+    int on_ie = cr < 0 && !in_body && ie_class_of(c, call) >= 0;
+    if (!(cr < 0 ? in_body || on_ie : nt_kind(nt, cr) == NK_ConstantReadNode || nt_kind(nt, cr) == NK_SelfNode)) continue;
     /* Not a call of the name the reader is not what it reaches (`self.info { }` in
        Logger#report): its block runs on Logger, not on the instance_eval receiver */
     int cls = -1, cside = 1;
     if (cr >= 0 && nt_kind(nt, cr) == NK_ConstantReadNode) cls = comp_class_at_ruby_path(c, nt_str(nt, cr, "name"));
+    else if (on_ie) cls = ie_class_of(c, call), cside = 0;
     else if (cs && cs->def_node >= 0) cls = cs->class_id, cside = cs->is_cmethod;
     else if (in_body) cls = c->node_cbody[call];
     int mi = cls < 0 ? -1 : call_target(c, call, cls, nm, cside ? CT_CMETHOD : CT_METHODS, NULL);
@@ -5768,6 +5879,8 @@ void build_ie_map(Compiler *c) {
     if (c->ie_map.cls[i] != -1) { c->ie_map.cls[i] = -1; comp_touch_node(c, i); }
   }
   ie_param_n = 0;
+  int *dfr = malloc(sizeof(int) * 3 * (size_t)nt->count), dfr_n = 0;
+  if (!dfr) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   for (int pass = 0; pass < 2; pass++)
   for (int id = 0; id < nt->count; id++) {
     NodeKind k = nt_kind(nt, id);
@@ -5838,12 +5951,40 @@ void build_ie_map(Compiler *c) {
         }
       }
     }
+    /* (a `&x` handed on to a method running it on cls: traced below) */
+    if (body < 0 && pass && nt_kind(nt, blk) == NK_BlockArgumentNode && !is_instance_eval_family(nm)) {
+      dfr[3 * dfr_n] = id; dfr[3 * dfr_n + 1] = cls; dfr[3 * dfr_n + 2] = rb; dfr_n++;
+    }
     if (body < 0) continue;
     if (rb) ie_rb_mark(nt, rb_new, rb_n, nt_kind(nt, blk) == NK_BlockNode ? blk : body, IE_RB_IN);
     if (rb && !is_instance_eval_family(nm) && nt_kind(nt, blk) == NK_BlockNode && blk < rb_n) rb_new[blk] |= IE_RB_FWD;
     if (pass) pend[body] = pend[body] == -1 || pend[body] == cls ? cls : -2 - id;
     mark_ie_own(c, body, pass ? pend[body] : cls);
   }
+  /* The literals each handed-on `&x` can be, marked to run on its cls; a
+     trace may read through a literal this step marked (a map in a mapped
+     block), so it runs again while it marks more, four rounds at most. */
+  for (int round = 0, more = dfr_n > 0; more && round < 4; round++) {
+    more = 0;
+    for (int d = 0; d < dfr_n; d++) {
+      int id = dfr[3 * d], cls = dfr[3 * d + 1], rb = dfr[3 * d + 2], traced[16];
+      int tn = ie_trace_bodies(c, nt_ref(nt, nt_ref(nt, id, "block"), "expression"), traced, 16, 0);
+      for (int t = 0; t < tn; t++) {
+        int tb = traced[t], was;
+        if (tb < 0) continue;
+        was = pend[tb];
+        pend[tb] = pend[tb] == -1 || pend[tb] == cls ? cls : -2 - id;
+        if (rb) {
+          ie_rb_mark(nt, rb_new, rb_n, tb, IE_RB_IN);
+          ie_rb_mark(nt, rb_new, rb_n, ie_body_params(c, tb), IE_RB_IN);
+        }
+        if (pend[tb] == was) continue;
+        more = 1;
+        mark_ie_own(c, tb, pend[tb]);
+      }
+    }
+  }
+  free(dfr);
   for (int i = 0; i < pend_n; i++) if (pend[i] != -1) mark_ie_own(c, i, pend[i]);
   for (int i = 0; i < ie_param_n; i++) mark_ie_own(c, ie_param_marks[i][0], ie_param_marks[i][1]);
   ie_param_n = 0;

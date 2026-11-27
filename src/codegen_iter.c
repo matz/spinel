@@ -3878,7 +3878,19 @@ int call_targets_yielding_method(Compiler *c, int id) {
   return mi >= 0 && c->scopes[mi].yields;
 }
 
+static int emit_inline_expr_held(Compiler *c, int id, Buf *b);
+/* ...with the enclosing call's conversion hold suspended: a conversion the
+   inlined body makes (the String a regex match reads from a boxed local of
+   the body) is of the body's own locals, declared inside the splice, and
+   held in front of the enclosing call it read them before they were. */
 int emit_inline_expr(Compiler *c, int id, Buf *b) {
+  ConvHold *sv_hold = g_conv_hold;
+  g_conv_hold = NULL;
+  int ok = emit_inline_expr_held(c, id, b);
+  g_conv_hold = sv_hold;
+  return ok;
+}
+static int emit_inline_expr_held(Compiler *c, int id, Buf *b) {
   /* only when a value is actually produced (scalar return) */
   TyKind rt = repr_of(c, id).as_ty;
   if (!is_scalar_ret(rt)) {

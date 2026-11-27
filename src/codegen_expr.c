@@ -6748,9 +6748,11 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
     for (int ti = 0; ti < tcount; ti++) {
       const char *tnm = nt_str(nt, tv[ti], "name");
       if (!tnm) continue;
-      /* (one representation: the capture, new bytes, into the variable's face) */
+      /* (one representation: the capture, new bytes, into the variable's face;
+         the scope holds the local by the name the program wrote, rename_local
+         gives its C name in a yield-inlined copy) */
       Scope *nsc = comp_scope_of(c, tv[ti]);
-      LocalVar *nlv = nsc ? scope_local(nsc, rename_local(tnm)) : NULL;
+      LocalVar *nlv = nsc ? scope_local(nsc, tnm) : NULL;
       int one_to = nlv && (nlv->type == TY_STRING || nlv->type == TY_STRBUF);
       if (one_to) buf_printf(b, "lv_%s = SP_STR_TO(lv_%s, sp_re_named_capture(sp_re_pat_%d, ", rename_local(tnm), rename_local(tnm), reidx);
       else buf_printf(b, "lv_%s = sp_re_named_capture(sp_re_pat_%d, ", rename_local(tnm), reidx);

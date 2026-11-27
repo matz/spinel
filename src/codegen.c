@@ -18944,9 +18944,11 @@ static void emit_user_aset_dispatch(Compiler *c, Buf *b) {
     buf_printf(b, "    case %d:\n", ci);
     buf_printf(b, "      if ((%s) && (%s)) {\n", g0[0] ? g0 : "1", g1[0] ? g1 : "1");
     /* (a `[]=` with a `&block` parameter, or the dispatcher of one defined
-       under a condition, takes the block slot after the value: no block here) */
+       under a condition, takes the block slot after the value, as its
+       signature declares it (emit_method_signature): no block here) */
+    int blk_slot = m->blk_param && m->blk_param[0] && !m->yields;
     buf_printf(b, "        *handled = TRUE; (void)%s(%s(sp_%s *)a.v.p, %s, %s%s);\n      }\n",
-               mc_method(c, m), c->classes[defcls].is_value_type ? "*" : "", dcn, a0, a1, m->blk_param ? ", NULL" : "");
+               mc_method(c, m), c->classes[defcls].is_value_type ? "*" : "", dcn, a0, a1, blk_slot ? ", NULL" : "");
     buf_puts(b, "      break;\n");
   }
   buf_puts(b, "    default: break;\n  }\n}\n");

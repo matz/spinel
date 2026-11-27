@@ -36,3 +36,25 @@ a = [Attrs.new, {}][ARGV.size % 2]
 a[:x] ||= "v"
 a[:y] = 3
 p a[:x], a[:y]
+
+# an anonymous `&` parameter, and a `[]=` with none beside them
+class AnonBlk
+  def initialize = @h = {}
+  def [](k) = @h[k]
+  def []=(k, v, &)
+    @h[k] = v
+  end
+end
+class Plain
+  def initialize = @h = {}
+  def [](k) = @h[k]
+  def []=(k, v)
+    @h[k] = v
+  end
+end
+[AnonBlk.new, Plain.new, {}].each_with_index do |r, i|
+  r = [r, {}][ARGV.size % 2]
+  r[:n] ||= i
+  r[:n] += 1
+  p r[:n]
+end

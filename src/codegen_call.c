@@ -2216,8 +2216,12 @@ static int emit_poly_cls_value_builtin(Compiler *c, int id, const char *name, in
      probe asked the call, whose type is the join of every arm's (poly where
      a class method of the name in the program answers nothing, as a stub
      that raises does), and the arm handed the bytes to the boxed slot. */
-  if (got == TY_POLY && argc == 0 && (is_class_name_name(name) || is_to_s_name(name) || is_inspect_name(name)))
-    got = TY_STRING;
+/* ...and with arguments the reader raises the arity ArgumentError after
+   reading them (emit_class_name_reader_arity), a statement expression
+   whose value is the bytes' NULL: bytes too, boxed below */
+if (got == TY_POLY && (is_class_name_name(name) || is_to_s_name(name) || is_inspect_name(name)) &&
+    (argc == 0 || class_name_reader_argc_raises(c, id, name, argc, argv)))
+  got = TY_STRING;
   /* an answer that can itself raise NoMethodError is the Class emitter's
      own class-method switch (the program's methods of the name, then the
      raise): no better than the default it would replace */

@@ -5446,7 +5446,8 @@ int desugar_user_match_operand(Compiler *c) {
   for (int s = 0; s < c->nscopes; s++) {
     const Scope *sc = &c->scopes[s];
     if (!sc->name || !sp_streq(sc->name, "=~") || sc->class_id < 0) continue;
-    if (sp_streq(c->classes[sc->class_id].name, "String")) return 0;
+    /* (String's own =~ is an instance method: a `def self.=~` there answers String =~ x, not s =~ x) */
+    if (sp_streq(c->classes[sc->class_id].name, "String")) { if (!sc->is_cmethod) return 0; continue; }
     user = 1;
   }
   if (!user) return 0;

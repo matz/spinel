@@ -1589,15 +1589,88 @@ static int prog_class_named(const NodeTable *nt, const char *leaf) {
 }
 /* The instance initialize the body of ClassNode cls defines, -1 for none */
 static int prog_class_initialize(const NodeTable *nt, int cls) {
-  int body = nt_ref(nt, cls, "body"), n = 0;
+  int body = nt_ref(nt, cls, "body"), n = 0, found = -1;
   const int *b = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &n) : NULL;
   for (int i = 0; i < n; i++)
-    if (nt_kind(nt, b[i]) == NK_DefNode && nt_ref(nt, b[i], "receiver") < 0 && sp_streq(nt_str(nt, b[i], "name"), "initialize")) return b[i];
-  return -1;
+    if (nt_kind(nt, b[i]) == NK_DefNode && nt_ref(nt, b[i], "receiver") < 0 && sp_streq(nt_str(nt, b[i], "name"), "initialize")) {
+      /* (not one of two: the later is the one `new` runs) */
+      if (found >= 0) return -1;
+      found = b[i];
+    }
+  return found;
 }
 static int prog_stmts_never_complete(const NodeTable *nt, int st);
 /* Does statement n never complete: a bare raise, a begin whose body and
    every rescue end so, or an if both of whose arms do? */
+/* Does the body of class or module node k define an instance raise or fail? */
+static int prog_body_defines_raise(const NodeTable *nt, int k) {
+  int body = k >= 0 ? nt_ref(nt, k, "body") : -1, n = 0;
+  const int *b = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &n) : NULL;
+  for (int i = 0; i < n; i++) {
+    const char *nm = nt_kind(nt, b[i]) == NK_DefNode && nt_ref(nt, b[i], "receiver") < 0 ? nt_str(nt, b[i], "name") : NULL;
+    if (nm && (sp_streq(nm, "raise") || sp_streq(nm, "fail"))) return 1;
+  }
+  return 0;
+}
+/* May a bare raise or fail in an instance method of ClassNode cls answer a
+   method of the program's, which may return: one cls, a class above it, a
+   module either mixes in (or one not read off the tree), or a reopening of
+   Object or Kernel defines (parslet's Parslet::Cause#raise is none of
+   these for tzinfo's RubyDataSource)? */
+static int prog_class_may_own_raise(const NodeTable *nt, int cls) {
+  NT_FOREACH_KIND(nt, NK_ClassNode, k) {
+    const char *nm = prog_const_leaf(nt, nt_ref(nt, k, "constant_path"));
+    if (nm && (sp_streq(nm, "Object") || sp_streq(nm, "BasicObject")) && prog_body_defines_raise(nt, k)) return 1;
+  }
+  NT_FOREACH_KIND(nt, NK_ModuleNode, k) {
+    const char *nm = prog_const_leaf(nt, nt_ref(nt, k, "constant_path"));
+    if (nm && sp_streq(nm, "Kernel") && prog_body_defines_raise(nt, k)) return 1;
+  }
+  for (int c = cls, d = 0; c >= 0 && d < 32; d++) {
+    if (prog_body_defines_raise(nt, c)) return 1;
+    int body = nt_ref(nt, c, "body"), n = 0;
+    const int *b = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &n) : NULL;
+    for (int i = 0; i < n; i++) {
+      const char *call = nt_kind(nt, b[i]) == NK_CallNode && nt_ref(nt, b[i], "receiver") < 0 ? nt_str(nt, b[i], "name") : NULL;
+      if (!call || !(sp_streq(call, "include") || sp_streq(call, "extend") || sp_streq(call, "prepend"))) continue;
+      int a = nt_ref(nt, b[i], "arguments"), an = 0;
+      const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+      for (int j = 0; j < an; j++) {
+        const char *mn = prog_const_leaf(nt, av[j]);
+        if (!mn) return 1;
+        NT_FOREACH_KIND(nt, NK_ModuleNode, m) {
+          const char *nm = prog_const_leaf(nt, nt_ref(nt, m, "constant_path"));
+          if (nm && sp_streq(nm, mn) && prog_body_defines_raise(nt, m)) return 1;
+        }
+      }
+    }
+    const char *sup = prog_const_leaf(nt, nt_ref(nt, c, "superclass"));
+    c = sup ? prog_class_named(nt, sup) : -1;
+    if (sup && c < 0) {
+      /* (a superclass not one class of the tree: a builtin's, which defines no raise, or one not read) */
+      int any = 0;
+      NT_FOREACH_KIND(nt, NK_ClassNode, k) {
+        const char *nm = prog_const_leaf(nt, nt_ref(nt, k, "constant_path"));
+        if (nm && sp_streq(nm, sup)) any = 1;
+      }
+      if (any) return 1;
+    }
+  }
+  return 0;
+}
+/* Does node n leave its statements early: a return, break, next or retry
+   under it? */
+static int prog_exits_early(const NodeTable *nt, int n) {
+  if (n < 0) return 0;
+  NodeKind k = nt_kind(nt, n);
+  if (k == NK_ReturnNode || k == NK_BreakNode || k == NK_NextNode || k == NK_RetryNode) return 1;
+  for (int i = 0, nr = nt_num_refs(nt, n); i < nr; i++) if (prog_exits_early(nt, nt_ref_at(nt, n, i))) return 1;
+  for (int i = 0, na = nt_num_arrs(nt, n); i < na; i++) {
+    int m = 0; const int *ids = nt_arr_at(nt, n, i, &m);
+    for (int j = 0; j < m; j++) if (prog_exits_early(nt, ids[j])) return 1;
+  }
+  return 0;
+}
 static int prog_never_completes(const NodeTable *nt, int n) {
   if (n < 0) return 0;
   NodeKind k = nt_kind(nt, n);
@@ -1616,7 +1689,11 @@ static int prog_never_completes(const NodeTable *nt, int n) {
 static int prog_stmts_never_complete(const NodeTable *nt, int st) {
   if (st < 0 || nt_kind(nt, st) != NK_StatementsNode) return prog_never_completes(nt, st);
   int n = 0; const int *b = nt_arr(nt, st, "body", &n);
-  for (int i = 0; i < n; i++) if (prog_never_completes(nt, b[i])) return 1;
+  for (int i = 0; i < n; i++) {
+    if (prog_never_completes(nt, b[i])) return 1;
+    /* (not one a statement before it leaves past: `return; raise`) */
+    if (prog_exits_early(nt, b[i])) return 0;
+  }
   return 0;
 }
 /* Does node n call a method on self (receiverless but raise and fail, or on
@@ -1624,7 +1701,8 @@ static int prog_stmts_never_complete(const NodeTable *nt, int st) {
 static int prog_calls_on_self(const NodeTable *nt, int n) {
   if (n < 0) return 0;
   NodeKind k = nt_kind(nt, n);
-  if (k == NK_YieldNode || k == NK_BlockArgumentNode || k == NK_SuperNode || k == NK_ForwardingSuperNode) return 1;
+  /* (a require too: one in an ensure runs though the statement raises) */
+  if (k == NK_YieldNode || k == NK_BlockArgumentNode || k == NK_SuperNode || k == NK_ForwardingSuperNode || k == NK_LoadNode) return 1;
   if (k == NK_CallNode) {
     int r = nt_ref(nt, n, "receiver");
     const char *nm = nt_str(nt, n, "name");
@@ -1687,13 +1765,17 @@ static int prog_load_in_unmade_class(const NodeTable *nt, const int *parent, int
     if (sup && sp_streq(sup, leaf)) return 0;
   }
   int init = prog_class_initialize(nt, cls), body = init >= 0 ? nt_ref(nt, init, "body") : -1, n = 0;
+  /* (not where a bare raise may be a method of the program's that returns) */
+  if (prog_class_may_own_raise(nt, cls)) return 0;
+  /* (its parameters' defaults run before the body) */
+  if (init >= 0 && prog_calls_on_self(nt, nt_ref(nt, init, "parameters"))) return 0;
   const int *b = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &n) : NULL;
   for (int i = 0; i < n; i++) {
     if (prog_never_completes(nt, b[i])) return !prog_calls_on_self(nt, b[i]);
     if (nt_kind(nt, b[i]) != NK_ForwardingSuperNode) return 0;
     const char *sup = prog_const_leaf(nt, nt_ref(nt, cls, "superclass"));
     int scls = sup ? prog_class_named(nt, sup) : -1, sinit = scls >= 0 ? prog_class_initialize(nt, scls) : -1;
-    if (sinit < 0 || prog_calls_on_self(nt, nt_ref(nt, sinit, "body"))) return 0;
+    if (sinit < 0 || prog_calls_on_self(nt, nt_ref(nt, sinit, "body")) || prog_calls_on_self(nt, nt_ref(nt, sinit, "parameters"))) return 0;
   }
   return 0;
 }

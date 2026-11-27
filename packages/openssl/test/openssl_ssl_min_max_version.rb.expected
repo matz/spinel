@@ -1,0 +1,16 @@
+[2, 768, 769, 770, 771, 772]
+["TLSv1.3", "TLSv1.3"]
+["TLSv1.2", "TLSv1.2"]
+["TLSv1.2", "TLSv1.2"]
+["refused", "refused"]
+["refused", "refused"]
+["TLSv1.3", "TLSv1.3"]
+:prefix
+[Symbol, ArgumentError, "unrecognized version \"TLS9\""]
+[String, ArgumentError, "unrecognized version \"nope\""]
+[Integer, OpenSSL::SSL::SSLError, "SSL_CTX_set_max_proto_version"]
+[String, OpenSSL::SSL::SSLError, "SSL_CTX_set_max_proto_version"]
+[Float, TypeError, "no implicit conversion of Float into String"]
+[Object, TypeError, "no implicit conversion of Object into String"]
+OpenSSL::SSL::SSLError
+["TLSv1.2", "TLSv1.2"]

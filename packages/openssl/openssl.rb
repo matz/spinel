@@ -12,7 +12,8 @@
 # its key material as bytes, with BN and EC::Point wrappers for group order
 # and public-point export, and Cipher keeps
 # CRuby's object while buffering rather than streaming, over aes-128-gcm and
-# aes-256-gcm only.
+# aes-256-gcm, and over AES-CTR (aes-128-ctr, aes-192-ctr, aes-256-ctr),
+# which streams.
 #
 # Spinel implements neither TLS nor any of the arithmetic below it.
 # sp_openssl.c is glue over the system libssl and libcrypto, and the trust
@@ -117,6 +118,10 @@ module OpenSSL
                 :string, "sp_aes_gcm_encrypt"
     native_func :aes_gcm_decrypt, [:string, :string, :string, :string, :string, :string],
                 :string, "sp_aes_gcm_decrypt"
+    # AES-CTR: name, key, the message's IV, the byte offset into the
+    # message, and the data; answers the transformed data, "" on failure.
+    native_func :aes_ctr, [:string, :string, :string, :int, :string],
+                :string, "sp_aes_ctr"
 
     # ECDSA's last argument selects raw r || s (0) or ASN.1 DER (1).
     native_func :ecdsa_sign,    [:string, :string, :string, :int],          :cbinstr, "sp_ecdsa_sign"

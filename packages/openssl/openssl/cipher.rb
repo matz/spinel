@@ -18,7 +18,17 @@
 # before the operation succeeds. As in CRuby, plaintext returned by update is
 # unauthenticated until then. The keystream is cleared even if final rejects.
 #
-# THE ALGORITHM SET IS aes-128-gcm AND aes-256-gcm, and any other name raises.
+# Counter mode (aes-128-ctr, aes-192-ctr, aes-256-ctr) keeps the same shape
+# with no tag and nothing buffered: an update is one native call that takes
+# the IV the message started from and the number of bytes already answered,
+# so the C reaches the right counter block and keystream byte itself. #final
+# answers "" and, as in CRuby, does not end the stream. Setting the key or
+# calling #encrypt / #decrypt re-initialises the context as CRuby's EVP call
+# does: the counter carries on from the next whole block and the key has to
+# be set again before an update.
+#
+# THE ALGORITHM SET IS aes-128-gcm, aes-256-gcm AND aes-{128,192,256}-ctr,
+# and any other name raises.
 # Cipher.new's argument is an algorithm chosen by a runtime string, which
 # openssl/digest.rb refuses for Digest -- "an algorithm chosen by a runtime
 # string cannot resolve to a C function at compile time". The two are the same
@@ -43,6 +53,9 @@ module OpenSSL
     CIPHERS = {
       "aes-128-gcm" => [16, 12, "AES-128-GCM"],
       "aes-256-gcm" => [32, 12, "AES-256-GCM"],
+      "aes-128-ctr" => [16, 16, "AES-128-CTR"],
+      "aes-192-ctr" => [24, 16, "AES-192-CTR"],
+      "aes-256-ctr" => [32, 16, "AES-256-CTR"],
     }
 
     # [s].join copies a String's bytes without running a subclass's dup or to_s,
@@ -66,17 +79,21 @@ module OpenSSL
       @auth_tag = ""
       @expected_tag = ""
       @done = false
+      @ctr = @name.end_with?("-ctr")
+      @key_set = false
     end
 
     # CRuby returns self from both, so `c.encrypt; ...` and `c.encrypt.key = k`
     # both work.
     def encrypt
       @encrypting = true
+      reinit if @ctr
       self
     end
 
     def decrypt
       @encrypting = false
+      reinit if @ctr
       self
     end
 
@@ -86,6 +103,7 @@ module OpenSSL
     def iv_len  = @iv_len || CIPHERS[@name][1]
 
     def iv_len=(n)
+      raise ::OpenSSL::Cipher::CipherError, "cipher does not support AEAD" if @ctr
       n = n.to_int
       raise ArgumentError, "iv_len must be positive" unless n > 0
       @iv_len = n
@@ -97,15 +115,28 @@ module OpenSSL
     def key=(k)
       raise ArgumentError, "key must be #{key_len} bytes" unless k.bytesize == key_len
       @key = [k].join
-      restart
+      if @ctr
+        reinit
+        @key_set = true
+      else
+        restart
+      end
       k
     end
 
     def iv=(v)
       raise ArgumentError, "iv must be #{iv_len} bytes" unless v.bytesize == iv_len
       @iv = [v].join
-      restart
+      @ctr ? @emitted = 0 : restart
       v
+    end
+
+    # CTR's re-initialisation without an IV, as EVP_CipherInit_ex does it for
+    # a key or a direction: the counter goes on from the block after the last
+    # one any keystream came from, and the key is unset until it is given.
+    private def reinit
+      @emitted = (@emitted + 15) / 16 * 16
+      @key_set = false
     end
 
     # Setting the key or the iv starts a new message, as CRuby's EVP re-init
@@ -121,6 +152,7 @@ module OpenSSL
 
     # Covered by the tag, absent from the output.
     def auth_data=(a)
+      raise ::OpenSSL::Cipher::CipherError, "AEAD not supported by this cipher" if @ctr
       @auth_data = [a].join
       a
     end
@@ -128,6 +160,7 @@ module OpenSSL
     # The tag to check, on the decrypt side. CRuby takes it before #final,
     # because #final is what verifies it.
     def auth_tag=(t)
+      raise ::OpenSSL::Cipher::CipherError, "authentication tag not supported by this cipher" if @ctr
       unless t.bytesize == 16
         raise ::OpenSSL::Cipher::CipherError, "auth tag must be 16 bytes"
       end
@@ -145,6 +178,7 @@ module OpenSSL
 
     # Keep the bytes consumed by each call, even if the caller changes its input.
     def update(data)
+      return ctr_update(data) if @ctr
       raise ::OpenSSL::Cipher::CipherError, "cipher already finished" if @done
       part = [data].join
       needed = @emitted + part.bytesize
@@ -169,6 +203,10 @@ module OpenSSL
 
     # The whole operation, in one C call.
     def final
+      if @ctr
+        raise ::OpenSSL::Cipher::CipherError, "key not set" unless @key_set
+        return String.new(encoding: Encoding::BINARY)
+      end
       raise ::OpenSSL::Cipher::CipherError, "cipher already finished" if @done
       raise ::OpenSSL::Cipher::CipherError, "key not set" if @key.empty?
       raise ::OpenSSL::Cipher::CipherError, "iv not set" if @iv.empty?
@@ -202,11 +240,25 @@ module OpenSSL
 
     # Available after #final on the encrypt side, as in CRuby.
     def auth_tag
+      raise ::OpenSSL::Cipher::CipherError, "authentication tag not supported by this cipher" if @ctr
       raise ::OpenSSL::Cipher::CipherError, "auth_tag is not available until final" unless @done
       [@auth_tag].join
     end
 
     private
+
+    # One native call per update: the IV the message started from (zeros
+    # until one is set, as in CRuby) and how far into it the updates are.
+    def ctr_update(data)
+      raise ::OpenSSL::Cipher::CipherError, "key not set" unless @key_set
+      data = OpenSSL.send(:comparison_string, data)
+      return String.new(encoding: Encoding::BINARY) if data.empty?
+      iv = @iv.empty? ? "\0" * 16 : @iv
+      out = Native.aes_ctr(@name, @key, iv, @emitted, data)
+      raise ::OpenSSL::Cipher::CipherError, reason("AES-CTR update failed") unless out.bytesize == data.bytesize
+      @emitted += data.bytesize
+      out
+    end
 
     # last_error is per-thread, so this is the caller's own reason; it is the
     # wording of a failure the return value has already established, never the

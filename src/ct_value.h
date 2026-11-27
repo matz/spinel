@@ -1,6 +1,6 @@
 /* Compile-time values: what Ruby code the compiler runs ahead of time
- * computes -- a class body's macro call (the parse layer's sp_macro.c), a
- * loop over a constant table (sp_const_loop.c) -- and the operations on them
+ * computes -- a class body's macro call, a loop over a constant table, as
+ * the analysis runs them (ct_eval.c) -- and the operations on them
  * the evaluators share. nil, true, false, an Integer within 64 bits, a
  * String, a Symbol, and an Array of these.
  *

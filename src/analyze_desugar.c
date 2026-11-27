@@ -37369,7 +37369,7 @@ int desugar_attr_const_splat(Compiler *c) {
 /* A program that gives class_eval / module_eval a method of its own, or
    hooks what a graft does (method_added, singleton_method_added,
    const_added), is grafted nowhere: the splice would bypass the override or
-   the hook (the rule sp_macro.c's expansion follows). */
+   the hook). */
 static int sce_name_reflective(const char *nm) {
   static const char *const NAMES[] = { "class_eval", "module_eval", "method_added",
     "singleton_method_added", "const_added", NULL };

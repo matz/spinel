@@ -294,8 +294,7 @@ static char *cstr(pm_constant_id_t id) {
 
 static int sp_in_builtin(const uint8_t *at);
 #include "prism_eval.c"
-#include "sp_macro.c"
-#include "sp_const_loop.c"
+#include "sp_snippet.c"
 
 /* `s` as the body of a JSON string: the two escapes JSON requires and the
    control characters, for the parse-error diagnostics --emit-types writes

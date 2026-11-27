@@ -714,6 +714,59 @@ const char *sp_ssl_peer_subject(sp_int h) {
   return sp_str_dup_external(buf);
 }
 
+/* SSLSocket#peer_cert: the peer's leaf certificate as its DER, which Ruby
+   makes an X509::Certificate of, as it makes one of any DER. "" when the
+   peer sent none -- a client a server did not ask, or no handshake yet --
+   and SSLSocket#peer_cert answers nil for that, as CRuby's does. */
+static SP_TLS sp_x509_out sp_ssl_peer_out;
+
+const char *sp_ssl_peer_cert(sp_int h) {
+  sp_ssl_conn *c = sp_ssl_at(h);
+  X509 *cert;
+  size_t at = 0;
+  int ok;
+
+  sp_ffi_bin_len = 0;
+  if (!c || !(cert = SP_SSL_PEER_CERT(c->ssl))) return "";
+  ok = sp_x509_append(&sp_ssl_peer_out, &at, cert);
+  X509_free(cert);
+  if (!ok) return sp_x509_fail("i2d_X509");
+  sp_ffi_bin_len = (int)at - 4;
+  return sp_ssl_peer_out.p + 4;
+}
+
+/* SSLSocket#export_keying_material: `length` bytes both ends of the
+   connection derive alike from the label and the context, the RFC 5705
+   exporter (RFC 8446 7.5 under TLS 1.3), which DTLS-SRTP and channel
+   binding take their keys from. `use_context` is 0 for no context at all,
+   which TLS 1.2 tells apart from an empty one.
+   Answers 0x01 || the bytes, or "" with the reason in sp_ssl_last_error: a
+   zero-length export is a legitimate answer, so the status rides in the
+   answer itself, as sp_aes_gcm_decrypt's does. */
+const char *sp_ssl_export_keying_material(sp_int h, const char *label, sp_int length,
+                                          const char *context, sp_int use_context) {
+  sp_ssl_conn *c = sp_ssl_at(h);
+  char *out;
+
+  sp_ssl_errbuf[0] = 0;
+  if (!c || length < 0 || (size_t)length > (size_t)INT_MAX - 2) {
+    sp_ssl_note("SSL_export_keying_material");
+    return sp_str_from_bytes("", 0);
+  }
+  out = sp_str_alloc((size_t)length + 1);
+  out[0] = 1;
+  if (SSL_export_keying_material(c->ssl, (unsigned char *)out + 1, (size_t)length,
+                                 label, sp_str_byte_len(label),
+                                 (const unsigned char *)context, sp_str_byte_len(context),
+                                 use_context ? 1 : 0) != 1) {
+    sp_ssl_note("SSL_export_keying_material");
+    return sp_str_from_bytes("", 0);
+  }
+  out[length + 1] = 0;
+  sp_str_set_len(out, (size_t)length + 1);
+  return sp_str_as_binary(out);
+}
+
 const char *sp_ssl_version(sp_int h) {
   sp_ssl_conn *c = sp_ssl_at(h);
   return sp_str_dup_external(c ? SSL_get_version(c->ssl) : "");

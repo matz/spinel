@@ -76,6 +76,11 @@ module OpenSSL
     native_func :discard,      [:int],                :int,    "sp_ssl_discard"
     native_func :last_error,   [],                    :string, "sp_ssl_last_error"
     native_func :peer_subject, [:int],                :string, "sp_ssl_peer_subject"
+    # The peer's leaf as its DER, "" for none; and the RFC 5705 exporter,
+    # 0x01 || the bytes, or "" with the reason in last_error.
+    native_func :peer_cert,    [:int],                :cbinstr, "sp_ssl_peer_cert"
+    native_func :export_keying_material, [:int, :string, :int, :string, :int], :string,
+                "sp_ssl_export_keying_material"
     native_func :version,      [:int],                :string, "sp_ssl_version"
     native_func :cipher,       [:int],                :string, "sp_ssl_cipher"
     native_func :connect_nb,   [:int, :string, :int, :int, :any, :string, :string, :string], :int, "sp_ssl_connect_nb"
@@ -536,6 +541,32 @@ module OpenSSL
 
       def peer_subject
         @handle < 0 ? "" : Native.peer_subject(@handle)
+      end
+
+      # CRuby's: the peer's certificate, the server's to a client and the
+      # client's to a server that asked for one, or nil when the peer sent
+      # none or there has been no handshake.
+      def peer_cert
+        return nil if @handle < 0
+        der = Native.peer_cert(@handle)
+        der.empty? ? nil : OpenSSL::X509::Certificate.new(der)
+      end
+
+      # CRuby's: `length` bytes that both ends of the connection derive alike
+      # from `label` and `context`, the RFC 5705 exporter (RFC 8446 7.5 under
+      # TLS 1.3), which DTLS-SRTP and channel binding take their keys from. A
+      # nil context is no context, which TLS 1.2 tells apart from "", and
+      # TLS 1.3 does not. Before a handshake there is nothing to export from,
+      # and the SSLError is CRuby's.
+      def export_keying_material(label, length, context = nil)
+        label = OpenSSL.send(:comparison_string, label)
+        length = length.to_int
+        raise ArgumentError, "negative string size (or size too big)" if length < 0
+        bytes = context.nil? ? "" : OpenSSL.send(:comparison_string, context)
+        raise SSLError, "SSL_export_keying_material" if @handle < 0
+        out = Native.export_keying_material(@handle, label, length, bytes, context.nil? ? 0 : 1)
+        raise SSLError, Native.last_error if out.empty?
+        out.byteslice(1, out.bytesize - 1)
       end
 
       def ssl_version

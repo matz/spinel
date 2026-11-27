@@ -353,6 +353,8 @@ static int lr_add(ElabWalk *w, int node, ElabPos *pos) {
      the class. Under the registration's walk alone: a record a step ahead
      of it asks for is made while that step still reads the call bare. */
   if (w->reg && cb_walk_give_self(w->c, node)) lr_fit(r, w->c->nt->count);
+  /* ...and a class_eval of a text in it is grafted here, as the body's statements */
+  if (w->reg && sce_walk_frame(w->c, r->host, node)) lr_fit(r, w->c->nt->count);
   return k;
 }
 
@@ -15590,21 +15592,26 @@ int host_prewalk_shape_at(NodeTable *nt, const int *ids, int n, int flags) {
 /* One splice is one scope: its first statement names it (lower_span). Its
    code runs in a frame of the locals `locals` (comma-joined; NULL: not
    known) but `gone`, which its class_eval text reads. */
+/* The statements body[at..at + n) of owner's body, which the walk reaches
+   next: lowered now, as one span, with the steps run so far */
+void host_lower_now(Compiler *c, HostStep *h, int owner, int body, int at, int n) {
+  int bn = 0;
+  const int *st = nt_arr(c->nt, body, "body", &bn);
+  if (at + n > bn) return;
+  if (h->lc->check && host_prewalk_shape_at((NodeTable *)c->nt, st + at, n, HPS_WALK | HPS_NO_ALIAS) >= 0)
+    lower_say(h->lc, "host_splice", "a statement spliced in the walk carries a shape a step before the walk reads");
+  int *sp = malloc(sizeof(int) * (size_t)(2 * n + 1));   /* a row may replace the body's array */
+  if (!sp) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int i = 0; i < n; i++) { sp[i] = st[at + i]; sp[n + i] = st[at]; }
+  h->lc->span_now = 1;
+  lower_span(c, h->lc, owner, body, sp, sp + n, n);
+  free(sp);
+}
 int host_splice(Compiler *c, HostStep *h, int owner, int body, int at, int n, const char *locals, const char *gone) {
   n = sce_span(c, h, owner, body, at, n, locals, gone);
   int bn = 0;
   const int *st = nt_arr(c->nt, body, "body", &bn);
-  if (h->now && h->lc->check && at + n <= bn && host_prewalk_shape_at((NodeTable *)c->nt, st + at, n, HPS_WALK | HPS_NO_ALIAS) >= 0)
-    lower_say(h->lc, "host_splice", "a statement spliced in the walk carries a shape a step before the walk reads");
-  if (h->now && at + n <= bn) {   /* the walk reaches them next: lowered now, as one span */
-    int *sp = malloc(sizeof(int) * (size_t)(2 * n + 1));   /* a row may replace the body's array */
-    if (!sp) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-    for (int i = 0; i < n; i++) { sp[i] = st[at + i]; sp[n + i] = st[at]; }
-    h->lc->span_now = 1;
-    lower_span(c, h->lc, owner, body, sp, sp + n, n);
-    free(sp);
-    return n;
-  }
+  if (h->now && at + n <= bn) { host_lower_now(c, h, owner, body, at, n); return n; }
   for (int i = at; i < at + n && i < bn; i++) {
     if (h->nspans + 4 > h->cspans) {
       h->cspans = h->cspans ? h->cspans * 2 : 64;

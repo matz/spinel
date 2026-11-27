@@ -36632,9 +36632,75 @@ static void sce_text_walk(NodeTable *t, int id, int nest, int in_def, SceText *w
     for (int j = 0; j < an; j++) sce_text_walk(t, av[j], sub, ins, w);
   }
 }
+/* Is the text's code (its statements ss, in its own table t) one the walk
+   grafts where it reaches the class_eval, instead of the step ahead of the
+   walk: defs of self's methods alone, each unasked by a folded definition
+   query and none a hook, their bodies with no class, module, singleton
+   class, alias, undef, constant, operator write or call that loads, defines
+   or reflects, and none of the other shapes a step before the walk reads
+   (host_prewalk_shape). A text of another shape is read by those steps
+   (a method_defined? the step folds, a body local a closure shares, a
+   builtin the step splices), so it is grafted ahead of them, as before. */
+struct SceFacts;
+static int sce_name_asked(const NodeTable *nt, struct SceFacts *f, const char *dn);
+static struct SceFacts *sce_facts(HostStep *h);
+/* A call the step ahead of the walk rewrites onto a builtin's Ruby
+   implementation (enumerable.rb, builtins/*.rb): the text's def would be
+   read by it */
+extern int sp_builtin_extra_names_n(int idx);
+extern int sp_builtin_extra_name_index(int idx, const char *name);
+static int sce_spliced_name(const char *nm) {
+  if (!nm) return 0;
+  if (builtin_enum_name_index(nm) >= 0) return 1;
+  for (int bx = 0; bx < 4; bx++) if (sp_builtin_extra_names_n(bx) > 0 && sp_builtin_extra_name_index(bx, nm) >= 0) return 1;
+  return 0;
+}
+static int sce_text_walk_safe(Compiler *c, struct SceFacts *f, NodeTable *t, const int *ss, int sn) {
+  if (sn <= 0) return 0;
+  for (int i = 0; i < sn; i++) {
+    int d = ss[i];
+    const char *dn = nt_kind(t, d) == NK_DefNode ? nt_str(t, d, "name") : NULL;
+    if (!dn || nt_ref(t, d, "receiver") >= 0 || is_definition_hook_name(dn) ||
+        name_list_has(c->def_asked, c->ndef_asked, dn) || sce_name_asked(c->nt, f, dn)) return 0;
+  }
+  int nn = 0, ok = 1;
+  int *all = nt_subtree_ids(t, ss, sn, &nn);
+  for (int i = 0; i < nn && ok; i++) {
+    int id = all[i], top = 0;
+    const char *nm = nt_str(t, id, "name");
+    for (int k = 0; k < sn && !top; k++) top = ss[k] == id;
+    switch (nt_kind(t, id)) {
+    case NK_ClassNode: case NK_ModuleNode: case NK_SingletonClassNode: case NK_AliasMethodNode:
+    case NK_AliasGlobalVariableNode: case NK_UndefNode:
+    case NK_ConstantReadNode: case NK_ConstantPathNode: case NK_ConstantWriteNode: case NK_ConstantOperatorWriteNode:
+    case NK_ConstantOrWriteNode: case NK_ConstantAndWriteNode: case NK_ConstantTargetNode:
+      ok = 0;
+      break;
+    case NK_DefNode: ok = top; break;
+    case NK_CallNode:
+      ok = !is_load_effect_call(nm) && !is_reflective_access(nm) && !is_definition_hook_name(nm) &&
+           !is_singleton_class_name(nm) && !is_eval_exec_family(nm) && !sce_spliced_name(nm);
+      break;
+    default: break;
+    }
+    if (nt_str(t, id, "binary_operator")) ok = 0;
+  }
+  free(all);
+  return ok && host_prewalk_shape(t, ss, sn) < 0;
+}
+/* Where the graft runs: under the walk (sce_walk_frame), where every text
+   is grafted; in the step ahead of it (desugar_static_class_eval), which
+   leaves a text the walk can graft to it; or over a splice (sce_span: a
+   hook's body, a Class.new body), which grafts every text, as the walk
+   reaches no class header for it. */
+enum { SCE_SPAN, SCE_STEP, SCE_WALK };
+static int sce_where = SCE_SPAN;
+static HostStep *sce_step_host;   /* (the step's, for its facts) */
+
 /* Parse `text`, the eval at site, in frame fr and graft its statements into
    nt; up and k name its own locals apart (SceText). 0, or -1 when it does
-   not parse or reads what the graft cannot keep. */
+   not parse or reads what the graft cannot keep; -2 for a text left to the
+   walk. */
 static int sce_graft(Compiler *c, const SceFrame *fr, SceText *up, int k, const char *text, int site,
                      const LoadPoint *at, int **out, int *n) {
   NodeTable *nt = (NodeTable *)c->nt;
@@ -36672,6 +36738,7 @@ static int sce_graft(Compiler *c, const SceFrame *fr, SceText *up, int k, const 
   int prog = tmp->root_id;
   int stmts = prog >= 0 ? nt_ref(tmp, prog, "statements") : -1;
   int sn = 0; const int *ss = stmts >= 0 ? nt_arr(tmp, stmts, "body", &sn) : NULL;
+  if (sce_where == SCE_STEP && !up && !at && sce_text_walk_safe(c, sce_facts(sce_step_host), tmp, ss, sn)) { nt_free(tmp); return -2; }
   for (int i = 0; i < sn && !w.bad; i++)
     if (sce_eval_string(tmp, ss[i]) < 0) sce_text_walk(tmp, ss[i], 0, 0, &w);
   int ok = !w.bad;
@@ -37744,6 +37811,9 @@ struct SceFacts {
      visibility call, and whether one was: the splices of a step into one
      body come in order, so each reads on from the last */
   int vis_body, vis_upto, vis;
+  /* the names the program's definition queries name by a literal (sce_name_asked):
+     the nodes below asked_upto are read; asked_any, a query of a computed name */
+  char **asked; int nasked, casked, asked_upto, asked_any;
 };
 static struct SceFacts *sce_facts(HostStep *h) {
   if (!h->sce) {
@@ -37756,9 +37826,36 @@ static struct SceFacts *sce_facts(HostStep *h) {
 }
 void sce_facts_free(struct SceFacts *f) {
   if (!f) return;
+  for (int i = 0; i < f->nasked; i++) free(f->asked[i]);
+  free(f->asked);
   free(f->scoped.names);
   sce_consts_free(&f->consts);
   free(f);
+}
+/* Does a definition query of the program (method_defined?, respond_to?, a
+   Method maker: is_method_presence_query) name dn by a literal? The step
+   that folds such a query ahead of the walk must see the text's def. */
+static int sce_name_asked(const NodeTable *nt, struct SceFacts *f, const char *dn) {
+  /* (the nodes appended since the last ask: a graft's, read once each) */
+  for (int q = f->asked_upto; q < nt->count; q++) {
+    if (nt_kind(nt, q) != NK_CallNode) continue;
+    int ac = 0, a = 0;
+    const char *qn = call_sent_name(nt, q, &a);
+    if (!qn || !is_method_presence_query(qn)) continue;
+    const int *av = call_args(nt, q, &ac);
+    const char *an = a < ac ? vis_arg_name(nt, av[a]) : NULL;
+    if (!an) { f->asked_any = 1; continue; }   /* (a computed name asks every name) */
+    if (f->nasked == f->casked) {
+      f->casked = f->casked ? f->casked * 2 : 16;
+      f->asked = realloc(f->asked, sizeof *f->asked * (size_t)f->casked);
+      if (!f->asked) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    }
+    if (!(f->asked[f->nasked++] = strdup(an))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  }
+  f->asked_upto = nt->count;
+  if (f->asked_any) return 1;
+  for (int i = 0; i < f->nasked; i++) if (sp_streq(f->asked[i], dn)) return 1;
+  return 0;
 }
 
 /* The statements body[at..at + n) of a class or module body (owner's): a
@@ -37859,9 +37956,38 @@ static int sce_body(Compiler *c, HostStep *h, int owner, int body, int at, int n
   return n;
 }
 
+/* The graft over the body of class header frame, as the registration's walk
+   reaches it: statement by statement, the statements a text becomes lowered
+   with the steps run so far (host_lower_now). The texts the step ahead of
+   the walk left to it (sce_text_walk_safe), and any it declined. */
+int sce_walk_frame(Compiler *c, HostStep *h, int frame) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  NodeKind k = nt_kind(nt, frame);
+  if (!h || (k != NK_ModuleNode && k != NK_ClassNode)) return 0;
+  int body = nt_ref(nt, frame, "body"), changed = 0;
+  if (body < 0 || nt_kind(nt, body) != NK_StatementsNode) return 0;
+  const char *ls = nt_str(nt, frame, "locals");
+  /* (the text's nodes are named as the step's are: the same C either way) */
+  const char *pass = nt_set_pass(nt, "desugar_static_class_eval");
+  sce_where = SCE_WALK;
+  for (int i = 0;; i++) {
+    int bn = 0; const int *bb = nt_arr(nt, body, "body", &bn);
+    if (i >= bn) break;
+    int ch = 0;
+    int n = sce_body(c, h, frame, body, i, 1, ls ? ls : "", NULL, &ch);
+    if (ch) { changed = 1; host_lower_now(c, h, frame, body, i, n); }
+    i += n - 1;
+  }
+  sce_where = SCE_SPAN;
+  nt_set_pass(nt, pass);
+  if (changed) comp_grow_node_arrays(c);
+  return changed;
+}
+
 int desugar_static_class_eval(Compiler *c, HostStep *h) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count, changed = 0;
+  sce_where = SCE_STEP; sce_step_host = h;
   for (int id = 0; id < n0; id++) {
     NodeKind k = nt_kind(nt, id);
     if (k != NK_ModuleNode && k != NK_ClassNode) continue;
@@ -37871,6 +37997,7 @@ int desugar_static_class_eval(Compiler *c, HostStep *h) {
     const char *ls = nt_str(nt, id, "locals");
     sce_body(c, h, id, body, 0, bn, ls ? ls : "", NULL, &changed);
   }
+  sce_where = SCE_SPAN;
   if (changed) comp_grow_node_arrays(c);
   return changed;
 }

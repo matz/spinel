@@ -1,6 +1,7 @@
 # UDPSocket#send in one thread, to a host and port and to a packed sockaddr,
 # while another thread closes the socket: each sender stops on CRuby's
-# IOError, never an error from a descriptor the close has let go.
+# IOError, never an error from a descriptor the close has let go, and a
+# send that raises or is killed leaves the descriptor to the close.
 require "socket"
 receiver = UDPSocket.new
 receiver.bind("127.0.0.1", 0)
@@ -55,4 +56,29 @@ other.close
 again = UDPSocket.new
 p again.fileno == fd
 again.close
+
+# A send to a host name resolves it before taking its use, as the lookup
+# parks: a thread killed there, or anywhere in its sends, holds no use, so
+# the close lets the descriptor go.
+3.times do
+  sock = UDPSocket.new
+  fd = sock.fileno
+  ready = Queue.new
+  t = Thread.new do
+    n = 0
+    loop do
+      sock.send("Yeouido", 0, "localhost", port)
+      n += 1
+      ready << true if n == 1
+    end
+  end
+  ready.pop
+  sleep 0.05
+  t.kill
+  t.join
+  sock.close
+  again = UDPSocket.new
+  p again.fileno == fd
+  again.close
+end
 receiver.close

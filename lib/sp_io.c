@@ -2303,18 +2303,33 @@ static sp_int sp_sock_send_waiting(sp_File *f, const char *data, sp_int len, int
   }
 }
 sp_int sp_sock_send(sp_File *f, const char *data, sp_int len, sp_int flags, const char *host, sp_int port) {SP_GC_ROOT(f);SP_GC_ROOT_STR(data);SP_GC_ROOT_STR(host);
-  extern int sp_net_udp_send_to(int fd, const char *data, int len, int flags, const char *host, int port);
+  extern int sp_net_udp_dest(int family, const char *host, int port, void *to, int cap);
+  extern int sp_net_fd_family(int fd);
   sp_sock_require(f, "send");
-  int fl = sp_sock_int_arg(flags);   /* raises before the use is taken */
+  int fl = sp_sock_int_arg(flags);   /* raises before a use is taken */
   if (f->own_buf && !host) return sp_sock_send_waiting(f, data, len, fl, NULL, 0);
-  /* a use around the call, as sp_sock_send_waiting holds one: a close in
-     another thread retires the FILE only once it is let go */
-  int n = sp_net_udp_send_to(fileno(sp_io_use(f)), data, (int)len, fl, host, (int)port);
+  struct sockaddr_storage to;
+  int tolen = 0;
+  if (host && *host) {
+    /* resolved before the send takes its use: the lookup parks, a use spans
+       no park, and a Thread#kill delivered there would leave it held */
+    int family = sp_net_fd_family(fileno(sp_io_use(f)));
+    sp_io_unuse(f);
+    tolen = sp_net_udp_dest(family, host, (int)port, &to, (int)sizeof to);
+    if (tolen < 0) {
+      sp_sock_raise_if_unresolved("getaddrinfo");
+      sp_sock_raise_errno_host_port("sendto(2)", host, port);
+    }
+  }
+  /* a use around the send alone, as sp_sock_send_waiting holds one: a close
+     in another thread retires the FILE only once it is let go */
+  int fd = fileno(sp_io_use(f));
+  ssize_t n = tolen ? sendto(fd, data, (size_t)len, fl, (const struct sockaddr *)&to, (socklen_t)tolen)
+                    : send(fd, data, (size_t)len, fl);
   int e = errno;
   sp_io_unuse(f);
   errno = e;
   if (n < 0) {
-    sp_sock_raise_if_unresolved("getaddrinfo");
     if (!host) sp_sock_raise_errno("send(2)");
     sp_sock_raise_errno_host_port("sendto(2)", host, port);
   }

@@ -2223,6 +2223,7 @@ void comp_node_pbases(Compiler *c);   /* the parsed program nodes' bases (comp_n
 const char *comp_node_tag(Compiler *c, int id);
 void comp_name_locals(Compiler *c, int from);
 int comp_import_subtree(Compiler *c, const NodeTable *src, int root);   /* nt_import_subtree, then the locals named */   /* the locals of nodes from `from` on, named by their scope (a slot) */
+int comp_import_subtree_from(Compiler *c, const NodeTable *src, int root, int from, char how, int a);   /* ...the root given its origin first */
 
 /* If `id` is a ternary `cond ? A : B` -- an IfNode whose then- and else-clauses
    are each a single value expression (the shape the ternary emitter lowers to a

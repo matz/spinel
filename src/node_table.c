@@ -169,6 +169,9 @@ static void nt_set_origin(NodeTable *nt, int node, int from, char how, int a) {
   x->pass = nt_pass_hash(nt);
   x->k = nt_count_next(nt, x->pass, from, how, a);
 }
+void nt_origin_set(NodeTable *nt, int node, int from, char how, int a) {
+  if (nt->orig_lo && node >= nt->orig_lo) nt_set_origin(nt, node, from, how, a);
+}
 /* `child` linked under `parent`: the first link of a node appended since
    nt_track_origins is where it came from */
 static void nt_place(NodeTable *nt, int parent, int child, char how, int a) {

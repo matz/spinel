@@ -36678,7 +36678,8 @@ static int sce_graft(Compiler *c, const SceFrame *fr, SceText *up, int k, const 
   /* a class_eval among the statements runs in this text's frame */
   SceScope *in = NULL;
   for (int i = 0; i < sn && ok; i++) {
-    int id = comp_import_subtree(c, tmp, ss[i]);
+    /* (the statement is the text's i-th, of the class_eval at site: its name) */
+    int id = comp_import_subtree_from(c, tmp, ss[i], site, 'e', i);
     int str = id >= 0 ? sce_eval_string(nt, id) : -1;
     if (id < 0) ok = 0;
     else if (str < 0) xc_push(out, n, id);

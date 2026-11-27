@@ -407,8 +407,16 @@ static void comp_node_ords(Compiler *c) {
 
 /* A subtree of a parsed snippet imported into the program (nt_import_subtree), its locals named by their scope. */
 int comp_import_subtree(Compiler *c, const NodeTable *src, int root) {
+  return comp_import_subtree_from(c, src, root, -1, 0, 0);
+}
+/* ...the subtree's root given its origin (`from`, how, a) before its locals
+   are named: a name invented for a node without one takes the next free
+   number, in the order the nodes are asked, so a root linked only after its
+   locals are named (a grafted text's statement) is named by what made it. */
+int comp_import_subtree_from(Compiler *c, const NodeTable *src, int root, int from, char how, int a) {
   NodeTable *nt = (NodeTable *)c->nt;
   int first = nt->count, id = nt_import_subtree(nt, src, root);
+  if (id >= 0 && from >= 0) nt_origin_set(nt, id, from, how, a);
   if (id >= 0) comp_name_locals(c, first);
   return id;
 }

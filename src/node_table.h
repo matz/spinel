@@ -381,6 +381,11 @@ void nt_subtree_blank(NodeTable *nt, int id);   /* every node of the subtree a N
 void nt_swap_nodes(NodeTable *nt, int a, int b);
 /* Copy the subtree at root of src into dst; the new root's id, or -1. */
 int nt_import_subtree(NodeTable *dst, const NodeTable *src, int root);
+/* `node`, appended since nt_track_origins, given its origin by hand: `from`
+   (how, a) as the first link under a parent would give it, for a node named
+   before it is linked (a grafted text's statement, from the class_eval that
+   held the text) */
+void nt_origin_set(NodeTable *nt, int node, int from, char how, int a);
 /* Are a call's arguments all positional -- no splat, no block argument? (A
    braceless trailing hash is one positional argument to the builtin surface.)
    The face table's rows describe positional calls, and the two halves that

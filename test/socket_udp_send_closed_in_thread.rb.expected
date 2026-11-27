@@ -1,0 +1,5 @@
+4
+4
+[true, IOError]
+[true, IOError]
+[IOError, "closed stream"]

@@ -2306,7 +2306,12 @@ sp_int sp_sock_send(sp_File *f, const char *data, sp_int len, sp_int flags, cons
   extern int sp_net_udp_send_to(int fd, const char *data, int len, int flags, const char *host, int port);
   sp_sock_require(f, "send");
   if (f->own_buf && !host) return sp_sock_send_waiting(f, data, len, sp_sock_int_arg(flags), NULL, 0);
-  int n = sp_net_udp_send_to(fileno(f->fp), data, (int)len, sp_sock_int_arg(flags), host, (int)port);
+  /* a use around the call, as sp_sock_send_waiting holds one: a close in
+     another thread retires the FILE only once it is let go */
+  int n = sp_net_udp_send_to(fileno(sp_io_use(f)), data, (int)len, sp_sock_int_arg(flags), host, (int)port);
+  int e = errno;
+  sp_io_unuse(f);
+  errno = e;
   if (n < 0) {
     sp_sock_raise_if_unresolved("getaddrinfo");
     if (!host) sp_sock_raise_errno("send(2)");
@@ -2328,8 +2333,13 @@ sp_int sp_sock_send_sa(sp_File *f, const char *data, sp_int len, sp_int flags, c
   int fl = sp_sock_int_arg(flags);
   if (f->own_buf) return sp_sock_send_waiting(f, data, len, fl, (const struct sockaddr *)&to, (socklen_t)tolen);
   ssize_t put;
-  do { put = sendto(fileno(f->fp), data, (size_t)len, fl, (const struct sockaddr *)&to, (socklen_t)tolen); }
-  while (put < 0 && errno == EINTR);
+  int e;
+  do {
+    put = sendto(fileno(sp_io_use(f)), data, (size_t)len, fl, (const struct sockaddr *)&to, (socklen_t)tolen);
+    e = errno;
+    sp_io_unuse(f);
+  } while (put < 0 && e == EINTR);
+  errno = e;
   if (put < 0) sp_sock_raise_errno("sendto(2)");
   return (sp_int)put;
 }

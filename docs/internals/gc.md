@@ -174,6 +174,8 @@ Level 2 sets the floor to zero for every allocation point that can collect.
 After a collection that frees less than a quarter of the previous bytes,
 the collector doubles the previous live count for the next threshold.
 Otherwise it takes twice the surviving bytes, with the initial floor.
+`SPINEL_GC_HEADROOM_KB` caps what the doubling adds: the threshold is then the
+surviving bytes plus at most that many KB per worker, still with the floor.
 Object handles and their String payloads contribute to the same count.
 
 ## Threads

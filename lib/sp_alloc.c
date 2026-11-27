@@ -32,6 +32,10 @@ int sp_gc_obj_budget_mode = 2;
 size_t sp_gc_obj_alpha1024 = 1024;
 /* Hold the object heap's collection budget at its floor. */
 int sp_gc_obj_budget_fixed = 0;
+/* SPINEL_GC_HEADROOM_KB: the most the adaptive threshold adds to the bytes
+   that survived a collection. 0, the default, leaves it at twice the
+   survivors. Scaled by the worker pool as the floor is. */
+static size_t sp_gc_headroom = 0;
 
 const char sp_str_empty_data[] = "\xff";
 /* nil.to_s, true.to_s and false.to_s answer FROZEN Strings in CRuby: a
@@ -118,6 +122,9 @@ static void sp_alloc_floor_from_env(const char *name) {
 void sp_alloc_floors_from_env(void) {
   sp_alloc_floor_from_env("SPINEL_GC_THRESHOLD_KB");
   sp_alloc_floor_from_env("SPINEL_GC_THRESHOLD_OBJ_KB");
+  { const char *h = getenv("SPINEL_GC_HEADROOM_KB");
+    long v = (h && *h) ? atol(h) : 0;
+    sp_gc_headroom = v > 0 ? (size_t)v * 1024 : 0; }
   /* Level 2 overrides either floor and the allocator's one-shot check. */
   { const char *st = getenv("SPINEL_GC_STRESS");
     if (st && atoi(st) >= 2) {
@@ -136,6 +143,7 @@ void sp_alloc_worker_tune(int workers) {
   if (workers > SP_MAX_WORKERS) workers = SP_MAX_WORKERS;
   if (workers == 1) return;
   sp_gc_threshold_init *= (size_t)workers;
+  sp_gc_headroom *= (size_t)workers;
   /* Raise the CURRENT threshold to the new base, do not multiply it. The cost
      budgeted above -- N * 256 KB retained between collections -- is what the
      multiply costs when it lands on the base, which is where it lands for a
@@ -289,6 +297,14 @@ void sp_gc_retune_object(size_t before) {
   size_t freed = before > live ? before - live : 0;
 
   size_t next = sp_gc_sat_mul(freed < before / 4 ? before : live, 2);
+  /* Twice the survivors is headroom equal to the live set: a program that
+     holds 600 MB collects at 1.2 GB however little it allocates between
+     collections. With SPINEL_GC_HEADROOM_KB set, the threshold is the
+     survivors plus at most that much. Counted from the survivors on a sweep
+     that freed little too: counted from the bytes before it, each such sweep
+     would add the headroom again, until a quarter of the heap was garbage. */
+  if (sp_gc_headroom && live > sp_gc_headroom)
+    next = live + (sp_gc_headroom < (size_t)-1 - live ? sp_gc_headroom : (size_t)-1 - live);
   sp_gc_threshold = next < sp_gc_threshold_init ? sp_gc_threshold_init : next;
 }
 /* The collector the allocation triggers call. A program built with

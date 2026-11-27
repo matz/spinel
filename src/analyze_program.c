@@ -1643,6 +1643,32 @@ static int prog_calls_on_self(const NodeTable *nt, int n) {
    initialize runs a statement that never completes with only a bare `super`
    before it, the superclass's initialize and that statement calling nothing
    on the object (tzinfo's RubyDataSource without tzinfo-data). */
+/* Does the body of ClassNode cls define a class method `new` (`def self.new`,
+   or one in a `class << self`), which may build an object without initialize? */
+static int prog_class_defines_new(const NodeTable *nt, int cls) {
+  int body = nt_ref(nt, cls, "body"), n = 0;
+  const int *b = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &n) : NULL;
+  for (int i = 0; i < n; i++) {
+    NodeKind k = nt_kind(nt, b[i]);
+    if (k == NK_DefNode && nt_ref(nt, b[i], "receiver") >= 0 && sp_streq(nt_str(nt, b[i], "name"), "new")) return 1;
+    if (k == NK_SingletonClassNode) {
+      int sb = nt_ref(nt, b[i], "body"), sn = 0;
+      const int *sv = sb >= 0 && nt_kind(nt, sb) == NK_StatementsNode ? nt_arr(nt, sb, "body", &sn) : NULL;
+      for (int j = 0; j < sn; j++)
+        if (nt_kind(nt, sv[j]) == NK_DefNode && sp_streq(nt_str(nt, sv[j], "name"), "new")) return 1;
+    }
+  }
+  return 0;
+}
+/* Is `leaf.allocate` called anywhere: an object made without initialize */
+static int prog_class_allocated(const NodeTable *nt, const char *leaf) {
+  NT_FOREACH_KIND(nt, NK_CallNode, k) {
+    if (!sp_streq(nt_str(nt, k, "name"), "allocate")) continue;
+    const char *rn = prog_const_leaf(nt, nt_ref(nt, k, "receiver"));
+    if (rn && sp_streq(rn, leaf)) return 1;
+  }
+  return 0;
+}
 static int prog_load_in_unmade_class(const NodeTable *nt, const int *parent, int load) {
   int def = -1, cls = -1;
   for (int p = parent[load], d = 0; p >= 0 && d < 256; p = parent[p], d++) {
@@ -1654,6 +1680,8 @@ static int prog_load_in_unmade_class(const NodeTable *nt, const int *parent, int
   if (def < 0 || cls < 0) return 0;
   const char *leaf = prog_const_leaf(nt, nt_ref(nt, cls, "constant_path"));
   if (!leaf || prog_class_named(nt, leaf) != cls) return 0;
+  /* (an object made past initialize: a class method `new` of its own, or an allocate) */
+  if (prog_class_defines_new(nt, cls) || prog_class_allocated(nt, leaf)) return 0;
   NT_FOREACH_KIND(nt, NK_ClassNode, k) {
     const char *sup = prog_const_leaf(nt, nt_ref(nt, k, "superclass"));
     if (sup && sp_streq(sup, leaf)) return 0;

@@ -13798,7 +13798,8 @@ static int nil_writes_apply(Compiler *c, NilWrites *w) {
       ClassInfo *ci = &c->classes[a];
       int iv = comp_ivar_index(ci, w->nm[k]);
       if (iv < 0 || class_ivar_pinned(ci, w->nm[k]) || ci->ivar_int_table[iv]) continue;
-      TyKind t = nil_write_type(ci->ivar_types[iv]);
+      /* (a slot only nil was written to has no type of its own: boxed) */
+      TyKind t = ci->ivar_types[iv] == TY_UNKNOWN ? TY_POLY : nil_write_type(ci->ivar_types[iv]);
       if (t == ci->ivar_types[iv]) continue;
       ivar_set_type(ci, iv, t);
       changed = 1;
@@ -14397,6 +14398,14 @@ int infer_ivar_types(Compiler *c) {
       int own = cls_id2 >= 0 && cls_id2 == s->class_id;
       if (nil_write) {
         nil_write_note(&nilw, cls_id2 >= 0 ? cls_id2 : c->toplevel_class, nm);
+/* a class body's `@x = nil` declares the class-level slot (a setting
+   an accessor answers until a write: `class << self; attr_accessor
+   :engine; end` reads civ_, and the slot was never declared) */
+if (cls_id2 >= 0 && side == IVS_CLASS) {
+  int old_cn = c->classes[cls_id2].nivars;
+  comp_ivar_intern(&c->classes[cls_id2], nm, IVS_CLASS);
+  if (c->classes[cls_id2].nivars != old_cn) changed = 1;
+}
         /* the transplanted copies of this method (see below) */
         if (own && s->def_node >= 0) {
           for (int si = comp_def_newest(c, s->def_node); si >= 0; si = comp_def_older(c, si)) {

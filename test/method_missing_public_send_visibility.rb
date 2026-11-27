@@ -72,3 +72,24 @@ class Out
 end
 p Out.new.poke([Q, Q][ARGV.size].new)
 p [Q, Q][ARGV.size].new.pm
+# A protected method is open to a caller whose self is of the method's owner, a sibling subclass included.
+class Base
+  def method_missing(name, *args) = "mm:#{name}"
+  def respond_to_missing?(*) = true
+  protected def token = 7
+end
+class Left < Base
+  def read(o) = o.token
+end
+class Right < Base; end
+p Left.new.read([Right, Right][ARGV.size].new)
+# Inside instance_eval, self is the receiver: a protected method answers that caller.
+class Qe
+  def method_missing(name, *args) = "mm:#{name}"
+  def respond_to_missing?(*) = true
+  protected def pm = 2
+end
+class OutE
+  def poke(o) = Qe.new.instance_eval { o.pm }
+end
+p OutE.new.poke([Qe, Qe][ARGV.size].new)

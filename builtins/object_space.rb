@@ -1,8 +1,8 @@
 # ObjectSpace.define_finalizer / undefine_finalizer, spliced by the parser
 # when a program (or a library it requires) names them. The rest of
-# ObjectSpace (each_object, count_objects, the weak maps) needs a live-object
+# ObjectSpace (each_object, count_objects) needs a live-object
 # index or weak references the collector does not keep, and stays
-# unsupported.
+# unsupported; ObjectSpace::WeakMap is builtins/weak_map.rb, keyed by identity.
 #
 # The callables live here, in FINALIZERS (with the object's id, the argument
 # they are called with), which keeps them alive; the runtime (lib/sp_gc.c)

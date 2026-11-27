@@ -1,0 +1,33 @@
+2
+true
+false
+discard a
+discard b
+2
+2
+:first
+:second
+nil
+true
+true
+false
+1=first
+1=second
+pair first
+pair second
+1
+1
+:first
+:second
+[1, 1]
+[:first, :second]
+:first
+1
+nil
+"none 1"
+[:second]
+1
+1
+true
+true
+true

@@ -342,7 +342,7 @@ int emit_call_identity_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
     /* a class value: the identity its box carries (its id, or the name a
        name-backed class boxes by), so a boxed copy of it answers the same */
     else if (rt == TY_CLASS) {
-      buf_puts(b, "sp_identity_object_id(sp_poly_identity_ptr(sp_box_class(");
+      buf_puts(b, "((sp_int)(uintptr_t)sp_poly_identity_ptr(sp_box_class(");
       emit_expr(c, recv, b);
       buf_puts(b, ")))");
     }

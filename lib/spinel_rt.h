@@ -3407,6 +3407,10 @@ static inline sp_int sp_poly_object_id(sp_RbVal v) {
     case SP_TAG_BOOL: return v.v.i ? SP_TRUE_OBJECT_ID : SP_FALSE_OBJECT_ID;
     case SP_TAG_NIL: return SP_NIL_OBJECT_ID;
     case SP_TAG_FLT: return sp_rbval_hash_key(v);
+    /* (a class value's identity is its id or its name's bytes, not an
+       object's address: taken whole, as the typed arm takes it, so that
+       two classes stay apart on a 32-bit word) */
+    case SP_TAG_CLASS: return (sp_int)(uintptr_t)sp_poly_identity_ptr(v);
     default: return sp_identity_object_id(sp_poly_identity_ptr(v));
   }
 }

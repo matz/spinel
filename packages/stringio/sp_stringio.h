@@ -29,6 +29,7 @@ typedef struct sp_StringIO_s {
   sp_String *str;
   int ro;              /* no write: 1 opened on a frozen String (even after
                           #string=), 2 handed one by #string= */
+  int lock;            /* 1 while a thread writes (sio_lock, threaded build) */
 } sp_StringIO;
 
 sp_StringIO *sp_StringIO_new(sp_int cls_id);

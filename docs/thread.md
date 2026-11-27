@@ -140,7 +140,8 @@ These are deliberate consequences of real parallelism, listed in
 - **Data races are observable.** Two threads mutating the same
   `Array`/`Hash`/object without a `Mutex` race, similar to `Array`/`Hash` in
   JRuby and `Array` in TruffleRuby. CRuby's GVL makes individual operations
-  appear atomic; Spinel does not, and adds no implicit per-object locking.
+  appear atomic; Spinel does not, and adds no implicit per-object locking
+  beyond a StringIO's writes (below).
   Correctness across threads is the program's responsibility via
   `Mutex` / `Queue` / `ConditionVariable`.
 
@@ -175,6 +176,12 @@ These are deliberate consequences of real parallelism, listed in
     across its iterations and see another thread's change only at its next
     safepoint. A shared container needs a `Mutex`, or a `Queue`, which is
     itself thread-safe.
+  - **A StringIO's writes are whole.** A StringIO stands in for an IO, and
+    several threads write one as they would `$stdout` (a test's Logger
+    sink, say): each `write`, `print`, `<<`, `putc` and `puts` of one value
+    runs under the StringIO's own lock, so no write is lost or torn and a
+    `puts` keeps its newline with its line. Which thread's write comes first
+    is unordered, and a read racing a write still needs a `Mutex`.
 - **A green thread's C stack is fixed.** Every thread, Fiber and generator
   Enumerator body runs on its own C stack, 256 KB by default (half of
   CRuby's machine stack for a fiber); the process stack is only the main

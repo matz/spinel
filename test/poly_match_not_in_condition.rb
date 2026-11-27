@@ -9,6 +9,7 @@ class Matcher
   def =~(re) = nil
 end
 class MailTo
+  HEADER_REGEXP = /\A[a-z]+=/
   attr_reader :to, :headers
   def initialize(opts)
     @to = nil
@@ -20,13 +21,13 @@ class MailTo
     if to !~ /\A(?:[^@,;]+@[^@,;]+(?:\z|[,;]))*\z/
       raise ArgumentError, "unrecognised: #{to}"
     end
-    if !headers.nil? && !headers.empty? && headers !~ /\A[a-z]+=/
+    if !headers.nil? && !headers.empty? && headers !~ HEADER_REGEXP
       raise ArgumentError, "bad headers"
     end
     true
   end
   def odd? = (to !~ /@/)
-  def report = [to !~ /@/, headers !~ /=/]
+  def report = [to !~ /@/, headers !~ /=/, headers !~ HEADER_REGEXP]
 end
 opts = ARGV.empty? ? { to: "a@b.c", headers: "subject=hi" } : { to: Matcher.new, headers: :sym }
 m = MailTo.new(opts)

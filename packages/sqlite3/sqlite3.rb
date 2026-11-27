@@ -1,10 +1,8 @@
-# support multiple ruby version (fat binaries under windows)
-begin
-  RUBY_VERSION =~ /(\d+\.\d+)/
-  require "sqlite3/#{$1}/sqlite3_native"
-rescue LoadError
-  require "sqlite3/sqlite3_native"
-end
+# The declarations of the C extension, one file (the gem probes for a
+# precompiled extension under the running Ruby version first, by a computed
+# path under a rescue, which would load this file at no fixed point of the
+# load order)
+require "sqlite3/sqlite3_native"
 
 require "sqlite3/database"
 require "sqlite3/version"

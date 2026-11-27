@@ -875,8 +875,8 @@ int desugar_index_assign_user_recv(Compiler *c);
 int desugar_index_assign_value(Compiler *c);
 int desugar_io_console_modes(Compiler *c);
 int desugar_reader_index_write(Compiler *c);
-int desugar_body_module_eval(Compiler *c);
-int incl_give_self(NodeTable *nt, int node, const char *cname);
+int class_eval_on_body_self(Compiler *c, int call);   /* the block runs as the statements of the body the call stands in, self its class */
+int incl_give_self(Compiler *c, NodeTable *nt, int node, const char *cname);
 int desugar_sclass_hooks(Compiler *c);
 int desugar_toplevel_hooked_mixins(Compiler *c);
 int desugar_socket_constants(Compiler *c);

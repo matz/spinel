@@ -1345,59 +1345,41 @@ static int me_count_writes(const NodeTable *nt, int n, const char *v) {
     for (int k2 = 0; k2 < nd->a[j].n; k2++) cnt += me_count_writes(nt, nd->a[j].ids[k2], v);
   return cnt;
 }
-static int fwd_new_node_like(NodeTable *nt, int like, const char *type);
-int desugar_body_module_eval(Compiler *c) {
-  NodeTable *nt = (NodeTable *)c->nt;
-  int n0 = nt->count, changed = 0;
-  for (int id = 0; id < n0; id++) {
-    if (!class_def_opens_frame(nt, id)) continue;
-    const char *own = me_const_leaf(nt, nt_ref(nt, id, "constant_path"));
-    int body = class_def_body(nt, id);
-    if (!own || body < 0 || nt_kind(nt, body) != NK_StatementsNode) continue;
-    int bn = 0; const int *bb0 = nt_arr(nt, body, "body", &bn);
-    int *bb = (int *)malloc(sizeof(int) * (size_t)(bn > 0 ? bn : 1));
-    if (!bb) continue;
-    if (bn > 0) memcpy(bb, bb0, sizeof(int) * (size_t)bn);
-    for (int i = 0; i < bn; i++) {
-      int st = bb[i];
-      int blk = class_eval_block(nt, st);
-      int is_eval = blk >= 0 && nt_ref(nt, blk, "parameters") < 0;
-      int recv = is_eval ? nt_ref(nt, st, "receiver") : -1;
-      int is_own = 0;
-      if (is_eval && recv >= 0) {
-        if (nt_kind(nt, recv) == NK_LocalVariableReadNode) {
-          const char *v = nt_str(nt, recv, "name");
-          /* the local's one write, a statement of this body ahead of the call */
-          if (v && me_count_writes(nt, body, v) == 1)
-            for (int j = 0; j < i; j++)
-              if (nt_kind(nt, bb[j]) == NK_LocalVariableWriteNode && nt_str(nt, bb[j], "name") &&
-                  sp_streq(nt_str(nt, bb[j], "name"), v))
-                is_own = me_is_own(c, nt_ref(nt, bb[j], "value"), own, 0);
-        }
-        else is_own = me_is_own(c, recv, own, 0);
-      }
-      int bbody = is_own ? nt_ref(nt, blk, "body") : -1;
-      /* Nothing is spliced: the walk records the block's defs on the class
-         (the class_eval frame), the scope pass places them there, and
-         codegen emits the block's other statements where the call stands,
-         as the body's own (class_eval_reopen_class). A block that holds
-         such statements takes self for its receiver where the body's own
-         class was reached another way (its name, a local holding it, a
-         static `if` of them): the readers of a body's own class_eval block
-         ask for no receiver or self (#10785). */
-      if (bbody >= 0 && nt_kind(nt, bbody) == NK_StatementsNode && recv >= 0 && nt_kind(nt, recv) != NK_SelfNode) {
-        int dn = 0, mixed = 0; const int *ds = nt_arr(nt, bbody, "body", &dn);
-        for (int j = 0; j < dn; j++) if (nt_kind(nt, ds[j]) != NK_DefNode) mixed = 1;
-        if (mixed) {
-          int self = fwd_new_node_like(nt, st, "SelfNode");
-          if (self >= 0) { nt_node_set_ref(nt, st, "receiver", self); changed = 1; }
-        }
-      }
-    }
-    free(bb);
-  }
-  if (changed) comp_grow_node_arrays(c);
-  return changed;
+/* Does class_eval call `call` run its block as statements of the body it
+   stands in, with that body's class for self? It does with no receiver or
+   self; and where the receiver names the body's own class another way (its
+   name, a local of the body that holds it, a static `if` of them) and the
+   block, which takes no parameters, holds more than defs: a direct
+   statement of a class or module body, as the walk records it (#10785). A
+   block of defs only on a named class is a reopening of that class
+   (class_eval_reopen_class). */
+int class_eval_on_body_self(Compiler *c, int call) {
+  const NodeTable *nt = c->nt;
+  int recv = call >= 0 ? nt_ref(nt, call, "receiver") : -1;
+  if (recv < 0 || nt_kind(nt, recv) == NK_SelfNode) return 1;
+  int blk = class_eval_block(nt, call);
+  if (blk < 0 || nt_ref(nt, blk, "parameters") >= 0) return 0;
+  int bbody = nt_ref(nt, blk, "body");
+  if (bbody < 0 || nt_kind(nt, bbody) != NK_StatementsNode) return 0;
+  int dn = 0, mixed = 0; const int *ds = nt_arr(nt, bbody, "body", &dn);
+  for (int j = 0; j < dn; j++) if (nt_kind(nt, ds[j]) != NK_DefNode) mixed = 1;
+  if (!mixed) return 0;
+  int frame = -1, list = elab_stmt_list(c, call, &frame);
+  if (list < 0 || frame < 0 || !class_def_opens_frame(nt, frame)) return 0;
+  const char *own = me_const_leaf(nt, nt_ref(nt, frame, "constant_path"));
+  int body = class_def_body(nt, frame);
+  if (!own || body < 0 || body != list || nt_kind(nt, body) != NK_StatementsNode) return 0;
+  if (nt_kind(nt, recv) != NK_LocalVariableReadNode) return me_is_own(c, recv, own, 0);
+  /* the local's one write, a statement of this body ahead of the call */
+  const char *v = nt_str(nt, recv, "name");
+  if (!v || me_count_writes(nt, body, v) != 1) return 0;
+  int bn = 0; const int *bb = nt_arr(nt, body, "body", &bn);
+  int own_w = 0;
+  for (int j = 0; j < bn && bb[j] != call; j++)
+    if (nt_kind(nt, bb[j]) == NK_LocalVariableWriteNode && nt_str(nt, bb[j], "name") &&
+        sp_streq(nt_str(nt, bb[j], "name"), v))
+      own_w = me_is_own(c, nt_ref(nt, bb[j], "value"), own, 0);
+  return own_w;
 }
 
 /* ---- `extend self` in a module body --------------------------------------
@@ -17437,8 +17419,8 @@ int desugar_define_method_captures_at(Compiler *c, LowerCtx *lc, int id) {
     int bn = 0; const int *bb = nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &bn) : NULL;
     for (int q = 0; q < bn; q++) {
       int st = bb[q];
-      int blk = class_eval_block(nt, st), recv = blk >= 0 ? nt_ref(nt, st, "receiver") : -1;
-      if (blk < 0 || !(recv < 0 || nt_kind(nt, recv) == NK_SelfNode) || nt_ref(nt, blk, "parameters") >= 0) continue;
+      int blk = class_eval_block(nt, st);
+      if (blk < 0 || !class_eval_on_body_self(c, st) || nt_ref(nt, blk, "parameters") >= 0) continue;
       int bbody = nt_ref(nt, blk, "body");
       DmcNames bs = { 0 };
       dmc_walk(nt, bbody, 0, 0, NULL, &bs, 0);
@@ -28885,7 +28867,7 @@ static int cb_struct_act(const NodeTable *nt, int s) {
   return is_record_block_self_cmethod(nm);
 }
 
-static int cb_give_self(NodeTable *nt, int node, const char *builtin, int strct, const char *cname, int inblk) {
+static int cb_give_self(Compiler *c, NodeTable *nt, int node, const char *builtin, int strct, const char *cname, int inblk) {
   if (node < 0) return 0;
   NodeKind k = nt_kind(nt, node);
   if (k == NK_DefNode || class_def_opens_frame(nt, node) || k == NK_SingletonClassNode ||
@@ -28927,23 +28909,23 @@ static int cb_give_self(NodeTable *nt, int node, const char *builtin, int strct,
   int blk = k == NK_CallNode ? nt_ref(nt, node, "block") : -1;
   const char *rn = r >= 0 && nt_kind(nt, r) == NK_ConstantReadNode ? nt_str(nt, r, "name") : NULL;
   int keeps = blk >= 0 && nt_kind(nt, blk) == NK_BlockNode && !is_block_self_call(rn, cm);
-  if (keeps) changed |= cb_give_self(nt, nt_ref(nt, blk, "body"), builtin, strct, cname, 1);
+  if (keeps) changed |= cb_give_self(c, nt, nt_ref(nt, blk, "body"), builtin, strct, cname, 1);
   /* a class_eval block on the body's own class (no receiver, or self), not
      itself in a block: its statements are the body's, with the class for
      self (#10785) */
   int eblk = !inblk ? class_eval_block(nt, node) : -1;
-  if (eblk >= 0 && (r < 0 || nt_kind(nt, r) == NK_SelfNode) && nt_ref(nt, eblk, "parameters") < 0)
-    changed |= cb_give_self(nt, nt_ref(nt, eblk, "body"), builtin, strct, cname, 0);
+  if (eblk >= 0 && class_eval_on_body_self(c, node) && nt_ref(nt, eblk, "parameters") < 0)
+    changed |= cb_give_self(c, nt, nt_ref(nt, eblk, "body"), builtin, strct, cname, 0);
   int nr = nt_num_refs(nt, node);
   for (int i = 0; i < nr; i++) {
     int ch = nt_ref_at(nt, node, i);
-    if (ch != blk || !keeps) changed |= cb_give_self(nt, ch, builtin, strct, cname, inblk);
+    if (ch != blk || !keeps) changed |= cb_give_self(c, nt, ch, builtin, strct, cname, inblk);
   }
   int na = nt_num_arrs(nt, node);
   for (int i = 0; i < na; i++) {
     int cnt = 0;
     const int *ids = nt_arr_at(nt, node, i, &cnt);
-    for (int j = 0; j < cnt; j++) changed |= cb_give_self(nt, ids[j], builtin, strct, cname, inblk);
+    for (int j = 0; j < cnt; j++) changed |= cb_give_self(c, nt, ids[j], builtin, strct, cname, inblk);
   }
   return changed;
 }
@@ -28952,8 +28934,8 @@ static int cb_give_self(NodeTable *nt, int node, const char *builtin, int strct,
    body: a bare Object or Module method among them has the class for self,
    as one written in the body has (desugar_class_body_object_acts ran before
    the walk made them). */
-int incl_give_self(NodeTable *nt, int node, const char *cname) {
-  return cb_give_self(nt, node, NULL, 0, cname, 0);
+int incl_give_self(Compiler *c, NodeTable *nt, int node, const char *cname) {
+  return cb_give_self(c, nt, node, NULL, 0, cname, 0);
 }
 
 /* Does id define or remove a method (a def, an alias, an undef) anywhere
@@ -29079,7 +29061,7 @@ int desugar_class_body_object_acts(Compiler *c) {
     const char *cname = cpk == NK_ConstantReadNode || cpk == NK_ConstantPathNode ? key_name(c, cp) : NULL;
     int builtin = cname && (is_builtin_class_name(cname) || is_builtin_module_name(cname)) &&
                   (cpk == NK_ConstantReadNode ? !engine_lexically_nested(nt, cn) : nt_ref(nt, cp, "parent") < 0);
-    changed |= cb_give_self(nt, class_def_body(nt, cn), builtin ? cname : NULL, 0, cname, 0);
+    changed |= cb_give_self(c, nt, class_def_body(nt, cn), builtin ? cname : NULL, 0, cname, 0);
   }
   /* a Struct.new / Data.define block a constant or a local holds is the
      class's body, where self is the class as well */
@@ -29088,7 +29070,7 @@ int desugar_class_body_object_acts(Compiler *c) {
     if (wk != NK_ConstantWriteNode && wk != NK_LocalVariableWriteNode) continue;
     int val = nt_ref(nt, w, "value");
     int blk = class_def_is_record_call(nt, val) ? nt_ref(nt, val, "block") : -1;
-    if (blk >= 0 && nt_kind(nt, blk) == NK_BlockNode) changed |= cb_give_self(nt, nt_ref(nt, blk, "body"), NULL, 1, NULL, 0);
+    if (blk >= 0 && nt_kind(nt, blk) == NK_BlockNode) changed |= cb_give_self(c, nt, nt_ref(nt, blk, "body"), NULL, 1, NULL, 0);
   }
   if (changed) comp_grow_node_arrays(c);
   return changed;
@@ -32706,7 +32688,7 @@ static const char *cbi_defined_ivar(const NodeTable *nt, int node) {
 
 /* `no_procs`: in the arguments of a self-changing call, whose procs are
    entered by the other self */
-static void cbi_collect(const NodeTable *nt, int node, int in_block, int no_procs,
+static void cbi_collect(Compiler *c, const NodeTable *nt, int node, int in_block, int no_procs,
                         CbiProcLocals *pl, int **hits, int *nhits, int *cap, int *trigger) {
   if (node < 0) return;
   NodeKind k = nt_kind(nt, node);
@@ -32720,19 +32702,18 @@ static void cbi_collect(const NodeTable *nt, int node, int in_block, int no_proc
      and the block's statements are body code (#10785) */
   int cb = !in_block && !no_procs ? class_eval_block(nt, node) : -1;
   if (cb >= 0) {
-    int cr = nt_ref(nt, node, "receiver");
-    if ((cr < 0 || nt_kind(nt, cr) == NK_SelfNode) && nt_ref(nt, cb, "parameters") < 0) {
-      cbi_collect(nt, nt_ref(nt, cb, "body"), 0, 0, pl, hits, nhits, cap, trigger);
+    if (class_eval_on_body_self(c, node) && nt_ref(nt, cb, "parameters") < 0) {
+      cbi_collect(c, nt, nt_ref(nt, cb, "body"), 0, 0, pl, hits, nhits, cap, trigger);
       return;
     }
   }
   if (k == NK_CallNode && cbi_rebinds_self(nt, node, pl)) {
     /* the receiver and arguments are still body code, their procs are not */
-    cbi_collect(nt, nt_ref(nt, node, "receiver"), in_block, no_procs, pl, hits, nhits, cap, trigger);
-    cbi_collect(nt, nt_ref(nt, node, "arguments"), in_block, 1, pl, hits, nhits, cap, trigger);
+    cbi_collect(c, nt, nt_ref(nt, node, "receiver"), in_block, no_procs, pl, hits, nhits, cap, trigger);
+    cbi_collect(c, nt, nt_ref(nt, node, "arguments"), in_block, 1, pl, hits, nhits, cap, trigger);
     int ba = nt_ref(nt, node, "block");
     if (ba >= 0 && nt_kind(nt, ba) == NK_BlockArgumentNode)
-      cbi_collect(nt, ba, in_block, 1, pl, hits, nhits, cap, trigger);
+      cbi_collect(c, nt, ba, in_block, 1, pl, hits, nhits, cap, trigger);
     return;
   }
   if (k == NK_LocalVariableWriteNode && nt_str(nt, node, "name")) {
@@ -32758,12 +32739,12 @@ static void cbi_collect(const NodeTable *nt, int node, int in_block, int no_proc
   int blk = (k == NK_BlockNode || k == NK_LambdaNode) ? 1 : in_block;
   int nr = nt_num_refs(nt, node);
   for (int i = 0; i < nr; i++)
-    cbi_collect(nt, nt_ref_at(nt, node, i), blk, no_procs, pl, hits, nhits, cap, trigger);
+    cbi_collect(c, nt, nt_ref_at(nt, node, i), blk, no_procs, pl, hits, nhits, cap, trigger);
   int na = nt_num_arrs(nt, node);
   for (int i = 0; i < na; i++) {
     int cnt = 0; const int *ids = nt_arr_at(nt, node, i, &cnt);
     for (int j = 0; j < cnt; j++)
-      cbi_collect(nt, ids[j], blk, no_procs, pl, hits, nhits, cap, trigger);
+      cbi_collect(c, nt, ids[j], blk, no_procs, pl, hits, nhits, cap, trigger);
   }
 }
 
@@ -33351,7 +33332,7 @@ static int cvce_program_owns_class_eval(const NodeTable *nt, const int *parent) 
   }
   return 0;
 }
-static int cvce_rewrite(NodeTable *nt, const int *parent, int id, int r, int blk) {
+static int cvce_rewrite(Compiler *c, NodeTable *nt, const int *parent, int id, int r, int blk) {
   int body = nt_ref(nt, blk, "body");
   if (nt_ref(nt, blk, "parameters") >= 0 || body < 0 || nt_kind(nt, body) != NK_StatementsNode) return 0;
   int m = civ_class_value_owner(nt, parent, r);
@@ -33379,7 +33360,7 @@ static int cvce_rewrite(NodeTable *nt, const int *parent, int id, int r, int blk
   int *hits = NULL, cap = 0, nhits = 0, trigger = 0;
   CbiProcLocals pl = {0};
   pl.cev = 1;
-  cbi_collect(nt, body, 1, 0, &pl, &hits, &nhits, &cap, &trigger);
+  cbi_collect(c, nt, body, 1, 0, &pl, &hits, &nhits, &cap, &trigger);
   for (int h = 0; h < nhits; h++) {
     const char *iv0;
     int kind = cbi_access_kind(nt, hits[h], &iv0);
@@ -33421,7 +33402,7 @@ int desugar_class_eval_ivars(Compiler *c) {
          name, which sce_program_owns_class_eval counts, is not reached) */
       if (!parent && !(parent = an_parent_map(nt))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
       if (own_cv < 0) own_cv = cvce_program_owns_class_eval(nt, parent);
-      if (!own_cv && cvce_rewrite(nt, parent, id, r, blk)) changed = 1;
+      if (!own_cv && cvce_rewrite(c, nt, parent, id, r, blk)) changed = 1;
       continue;
     }
     if (ie ? own_ie : own) continue;
@@ -33435,7 +33416,7 @@ int desugar_class_eval_ivars(Compiler *c) {
     CbiProcLocals pl = {0};
     pl.cev = 1;
     cbi_proc_locals(nt, body, &pl);
-    cbi_collect(nt, body, 1, 0, &pl, &hits, &nhits, &cap, &trigger);
+    cbi_collect(c, nt, body, 1, 0, &pl, &hits, &nhits, &cap, &trigger);
     /* an instance_eval block on a class that writes an ivar stays as it
        is (refused): only its reads, which agree with class_eval's writes */
     int writes = 0;
@@ -33454,7 +33435,7 @@ int desugar_class_eval_ivars(Compiler *c) {
     }
     if (lowered) {
       nhits = 0; pl.ndoubt = 0;
-      cbi_collect(nt, body, 1, 0, &pl, &hits, &nhits, &cap, &trigger);
+      cbi_collect(c, nt, body, 1, 0, &pl, &hits, &nhits, &cap, &trigger);
     }
     /* a block given to a call that may run it with another self keeps its
        ivars as they are; one naming an ivar the class's own code here
@@ -33536,13 +33517,13 @@ int desugar_body_ivars(Compiler *c) {
     int bn = 0; const int *bs = nt_arr(nt, body, "body", &bn);
     CbiProcLocals pl = {0};
     for (int k = 0; k < bn; k++) cbi_proc_locals(nt, bs[k], &pl);
-    for (int k = 0; k < bn; k++) cbi_collect(nt, bs[k], 0, 0, &pl, &hits, &nhits, &cap, &trigger);
+    for (int k = 0; k < bn; k++) cbi_collect(c, nt, bs[k], 0, 0, &pl, &hits, &nhits, &cap, &trigger);
     if (trigger) {
       for (int k = 0; k < bn; k++) cbi_lower_op_writes(nt, bs[k]);
       bs = nt_arr(nt, body, "body", &bn);
       nhits = 0; pl.n = 0;
       for (int k = 0; k < bn; k++) cbi_proc_locals(nt, bs[k], &pl);
-      for (int k = 0; k < bn; k++) cbi_collect(nt, bs[k], 0, 0, &pl, &hits, &nhits, &cap, &trigger);
+      for (int k = 0; k < bn; k++) cbi_collect(c, nt, bs[k], 0, 0, &pl, &hits, &nhits, &cap, &trigger);
     }
     free(pl.names);
     if (!trigger || nhits == 0) { free(hits); continue; }

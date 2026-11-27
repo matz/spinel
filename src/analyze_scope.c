@@ -1080,9 +1080,10 @@ static const char *dm_registerable_name(const NodeTable *nt, int id) {
    the target's class index, else -1.
 
    The receiver may be a constant (`Klass` / `M::Klass`), resolved by short name;
-   or `self`/absent, which reopens `enclosing_class` -- the class whose body we are
-   directly in (analyze passes its walk's direct class, codegen g_class_body_id,
-   both -1 inside method bodies). Restricting to definition-only blocks keeps a
+   or `self`/absent, or another receiver that names the body's own class
+   (class_eval_on_body_self: a local of the body holding it), which reopens
+   `enclosing_class` -- the class whose body we are directly in (analyze
+   passes its walk's direct class, codegen g_class_body_id, both -1 inside method bodies). Restricting to definition-only blocks keeps a
    class_eval that runs other code falling through to the normal (unsupported) path
    instead of being silently dropped. Used by both analyze (to register the methods
    on the target) and codegen (to emit the call as a no-op). */
@@ -1102,7 +1103,8 @@ int class_eval_reopen_class(Compiler *c, int id, int enclosing_class) {
   int recv = nt_ref(nt, id, "receiver");
   NodeKind recv_k = nt_kind(nt, recv);
   int ci;
-  if (recv < 0 || (recv_k == NK_SelfNode)) {
+  if (recv < 0 || recv_k == NK_SelfNode ||
+      (recv_k != NK_ConstantReadNode && recv_k != NK_ConstantPathNode && class_eval_on_body_self(c, id))) {
     /* bare / `self.` receiver reopens the enclosing class -- but only at
        class-body level, where `self` is the class object. */
     if (enclosing_class < 0) return -1;
@@ -4697,7 +4699,7 @@ void register_structs(Compiler *c) {
 }
 
 /* A body statement that is, or holds under an if / unless, a write of `ivname` */
-static int body_stmt_assigns_civ(const NodeTable *nt, int n, const char *ivname) {
+static int body_stmt_assigns_civ(Compiler *c, const NodeTable *nt, int n, const char *ivname) {
   if (n < 0) return 0;
   NodeKind k = nt_kind(nt, n);
   if (k == NK_InstanceVariableWriteNode || k == NK_InstanceVariableTargetNode ||
@@ -4709,31 +4711,30 @@ static int body_stmt_assigns_civ(const NodeTable *nt, int n, const char *ivname)
     static const char *const parts[] = { "lefts", "rights", NULL };
     for (int p = 0; parts[p]; p++) {
       int m = 0; const int *t = nt_arr(nt, n, parts[p], &m);
-      for (int i = 0; i < m; i++) if (body_stmt_assigns_civ(nt, t[i], ivname)) return 1;
+      for (int i = 0; i < m; i++) if (body_stmt_assigns_civ(c, nt, t[i], ivname)) return 1;
     }
     int rest = nt_ref(nt, n, "rest");
     if (rest >= 0 && nt_kind(nt, rest) == NK_SplatNode) rest = nt_ref(nt, rest, "expression");
-    return body_stmt_assigns_civ(nt, rest, ivname);
+    return body_stmt_assigns_civ(c, nt, rest, ivname);
   }
   if (k == NK_StatementsNode) {
     int m = 0; const int *st = nt_arr(nt, n, "body", &m);
-    for (int i = 0; i < m; i++) if (body_stmt_assigns_civ(nt, st[i], ivname)) return 1;
+    for (int i = 0; i < m; i++) if (body_stmt_assigns_civ(c, nt, st[i], ivname)) return 1;
     return 0;
   }
   if (k == NK_IfNode)
-    return body_stmt_assigns_civ(nt, nt_ref(nt, n, "statements"), ivname) ||
-           body_stmt_assigns_civ(nt, nt_ref(nt, n, "subsequent"), ivname);
+    return body_stmt_assigns_civ(c, nt, nt_ref(nt, n, "statements"), ivname) ||
+           body_stmt_assigns_civ(c, nt, nt_ref(nt, n, "subsequent"), ivname);
   if (k == NK_UnlessNode)
-    return body_stmt_assigns_civ(nt, nt_ref(nt, n, "statements"), ivname) ||
-           body_stmt_assigns_civ(nt, nt_ref(nt, n, "else_clause"), ivname);
-  if (k == NK_ElseNode) return body_stmt_assigns_civ(nt, nt_ref(nt, n, "statements"), ivname);
+    return body_stmt_assigns_civ(c, nt, nt_ref(nt, n, "statements"), ivname) ||
+           body_stmt_assigns_civ(c, nt, nt_ref(nt, n, "else_clause"), ivname);
+  if (k == NK_ElseNode) return body_stmt_assigns_civ(c, nt, nt_ref(nt, n, "statements"), ivname);
   /* a class_eval block on the body's own class: its statements are the
      body's (#10785) */
   int blk = k == NK_CallNode ? class_eval_block(nt, n) : -1;
   if (blk >= 0) {
-    int recv = nt_ref(nt, n, "receiver");
-    if ((recv < 0 || nt_kind(nt, recv) == NK_SelfNode) && nt_ref(nt, blk, "parameters") < 0)
-      return body_stmt_assigns_civ(nt, nt_ref(nt, blk, "body"), ivname);
+    if (class_eval_on_body_self(c, n) && nt_ref(nt, blk, "parameters") < 0)
+      return body_stmt_assigns_civ(c, nt, nt_ref(nt, blk, "body"), ivname);
   }
   return 0;
 }
@@ -4748,7 +4749,7 @@ static int body_assigns_civ(Compiler *c, int ci, const char *ivname) {
     if (o[b].body < 0) continue;
     int n = 0; const int *st = nt_arr(c->nt, o[b].body, "body", &n);
     for (int k = 0; k < n; k++)
-      if (body_stmt_assigns_civ(c->nt, st[k], ivname)) return 1;
+      if (body_stmt_assigns_civ(c, c->nt, st[k], ivname)) return 1;
   }
   return 0;
 }

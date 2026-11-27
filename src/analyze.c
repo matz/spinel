@@ -51448,7 +51448,6 @@ static void an_phase_desugar_register(Compiler *c) {
   lower_run(c, &lc, LW_YIELD_IN_CLOSURE);           /* `yield` inside proc { } -> blk.call(...) */
   lower_run(c, &lc, LW_SAFE_NAV_ATTR_WRITE);        /* r&.a op= v -> (t = r; t.nil? ? nil : t.a op= v) */
   lower_run(c, &lc, LW_CONST_ATTR_OP_ASSIGN);       /* Klass.a op= v -> Klass.a = Klass.a op v (a class-level accessor) */
-  desugar_body_module_eval(c);           /* X.module_eval do S end on a body's own class -> self.module_eval do S end */
                 /* `extend self` -> a def self.m twin per def */
   AN_STEP_V("desugar_kernel_reopen", desugar_kernel_reopen(c));              /* module Kernel; def m -> a top-level def m */
   AN_STEP_V("desugar_ffi_library_functions", desugar_ffi_library_functions(c));   /* attach_function :f -> def self.f (the ffi gem) */

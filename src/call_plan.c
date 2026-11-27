@@ -16137,7 +16137,7 @@ static void ver_write_add(VerWrite **w, int *nw, VerWrite x) {
    whose defs the reopen registers and whose call runs none of its
    statements (class_eval_reopen_class), the call's, after it, once the
    block's defs are made */
-static int ver_write_stmt(const NodeTable *nt, const int *par, int node) {
+static int ver_write_stmt(Compiler *c, const NodeTable *nt, const int *par, int node) {
   int st = node;
   for (;;) {
     while (st >= 0 && par[st] >= 0 && nt_kind(nt, par[st]) != NK_StatementsNode) st = par[st];
@@ -16150,10 +16150,10 @@ static int ver_write_stmt(const NodeTable *nt, const int *par, int node) {
        them where it stands, as the body's: the write goes beside the def
        in the block's own list, between the statements around it, #10785) */
     if (is_class_eval_family(nm)) {
-      int cr = nt_ref(nt, call, "receiver"), bb = nt_ref(nt, blk, "body"), bn = 0, mixed = 0;
+      int bb = nt_ref(nt, blk, "body"), bn = 0, mixed = 0;
       const int *bs = bb >= 0 && nt_kind(nt, bb) == NK_StatementsNode ? nt_arr(nt, bb, "body", &bn) : NULL;
       for (int i = 0; i < bn; i++) mixed |= nt_kind(nt, bs[i]) != NK_DefNode;
-      if (mixed && (cr < 0 || nt_kind(nt, cr) == NK_SelfNode) && nt_ref(nt, blk, "parameters") < 0) return st;
+      if (mixed && class_eval_on_body_self(c, call) && nt_ref(nt, blk, "parameters") < 0) return st;
     }
     st = call;
   }
@@ -16220,7 +16220,7 @@ static void ver_copy_writes(Compiler *c, const int *par, VerCellsAt *cells, VerW
       if ((o = nt_clone_source(nt, o)) < 0 || o >= nt->count) break;
       k = of[o];
     }
-    if (!k || (st = ver_write_stmt(nt, par, d)) < 0 || par[st] < 0) continue;
+    if (!k || (st = ver_write_stmt(c, nt, par, d)) < 0 || par[st] < 0) continue;
     for (int j = k; j; j = nx[j - 1]) {
       VerWrite x = (*wp)[j - 1];
       if (!ver_cell_once(cells, d, x.vis ? -2 - x.cell : x.cell)) continue;
@@ -16422,7 +16422,7 @@ int cplan_cell_write_dropped(Compiler *c, int id) {
    ahead of one that runs no code (ver_stmt_runs_no_code) or whose value is
    read, `r = def self.m = 1` ending a body, which the write would answer */
 static void ver_write_version(Compiler *c, NodeTable *nt, const int *par, VerCellsAt *cells, const ElabVersion *v, int rt, int pass, VerWrite **wp, int *nwp, int *nh) {
-  int node = v->v->node, st = ver_write_stmt(nt, par, node);
+  int node = v->v->node, st = ver_write_stmt(c, nt, par, node);
   if (st < 0 || par[st] < 0) return;
   /* (each cell once: an entry without a face may have written the
      version's; an undef has no visibility to write) */
@@ -16438,7 +16438,7 @@ static void ver_write_version(Compiler *c, NodeTable *nt, const int *par, VerCel
      method is there as soon as one of its arms (`name#__condN`, cond_disp) runs in its branch */
   if (nt_int(nt, node, "cond_lone_disp", 0)) {
     for (int d = nt_int(nt, node, "cond_first_arm", 0); d > 0; d = nt_int(nt, d, "cond_next_arm", 0)) {
-      int ast = ver_write_stmt(nt, par, d);
+      int ast = ver_write_stmt(c, nt, par, d);
       if (ast < 0 || par[ast] < 0) continue;
       int acw = ver_cell_once(cells, d, v->cell), avw = vw && ver_cell_once(cells, d, -2 - v->cell);
       VerWrite y = { par[ast], ast, d, v->n, v->cell, nt_kind(nt, ast) != NK_DefNode, 0, -1 };
@@ -16597,7 +16597,7 @@ static void ver_word_writes(Compiler *c, const int *par, VerCellsAt *cells, VerW
   const NodeTable *nt = c->nt;
   for (int j = 0; j < nv; j++)
     for (int k = 0, wn, wv, we, o; (o = elab_version_word(c, &vs[j], k, &wn, &wv, &we)) >= 0; k++) {
-      int st = o ? ver_write_stmt(nt, par, wn) : -1;
+      int st = o ? ver_write_stmt(c, nt, par, wn) : -1;
       if (st < 0 || par[st] < 0 || !ver_cell_once(cells, wn, -2 - vs[j].cell) || !pass) continue;
       int d = vs[j].v->node, takes = d >= 0 && par[d] >= 0 && nt_kind(nt, par[d]) == NK_ArgumentsNode && par[par[d]] == wn;
       /* (a name the word changes only where the names ahead of it the run's cells decide are present is written as the word
@@ -16626,7 +16626,7 @@ static void ver_guard_writes(Compiler *c, const int *par, VerCellsAt *cells, Ver
     int nv = elab_history_versions(c, -1 /* main */, 0, r->name, vs, VER_MAX_ARMS);
     if (nv != 1 || vs[0].cell != r->cell) continue;
     ver_word_writes(c, par, cells, w, nw, nh, vs, nv, pass);
-    int node = vs[0].v->node, st = ver_write_stmt(nt, par, node);
+    int node = vs[0].v->node, st = ver_write_stmt(c, nt, par, node);
     if (st < 0 || par[st] < 0 || !ver_cell_once(cells, node, -2 - vs[0].cell) || !pass) continue;
     ver_write_add(w, nw, (VerWrite){ par[st], st, node, vs[0].v->vis, vs[0].cell, !ver_stmt_runs_no_code(nt, st), 0, -1, vs[0].v->body != 0, 1 });
     if (vs[0].cell >= *nh) *nh = vs[0].cell + 1;

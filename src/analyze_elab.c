@@ -2059,8 +2059,11 @@ static void lr_frame(ElabRec *x, int e) {
   else if (call == LR_UNKNOWN_CLASS) { cls = LR_UNKNOWN_CLASS; sg = 0; }
   else if (call >= 0) {
     const char *nm = nt_str(nt, call, "name");
-    int rsg;
-    cls = is_class_eval_family(nm) || is_instance_eval_family(nm) ? lr_receiver(x, nt_ref(nt, call, "receiver"), cls, sg, &rsg, 0) : LR_UNKNOWN_CLASS;
+    int rsg, crecv = nt_ref(nt, call, "receiver");
+    /* (a receiver naming the body's own class another way than self, as a
+       local that holds it: the block is the body's, #10785) */
+    if (crecv >= 0 && is_class_eval_family(nm) && class_eval_on_body_self(x->c, call)) crecv = -1;
+    cls = is_class_eval_family(nm) || is_instance_eval_family(nm) ? lr_receiver(x, crecv, cls, sg, &rsg, 0) : LR_UNKNOWN_CLASS;
     /* the receiver's singleton side is self's, and a class_eval's definee */
     sg = is_instance_eval_family(nm) ? (rsg ? LR_FS_IEVAL_SCLASS : LR_FS_IEVAL) : rsg ? LR_FS_SCLASS : LR_FS_NONE;
   }
@@ -13531,7 +13534,7 @@ static void lr_fire_mixin(Compiler *c, const LrEvent *v, int node, int frame, Lo
   incl_detach_shell(nt, clone, ids, n);   /* (the clone's shell, once its statements are the span's) */
   /* a bare Object or Module method among them has the class for self, as
      one written in the body has: the step that gives it ran before the walk */
-  for (int q = 0; q < n; q++) incl_give_self(nt, ids[q], class_def_key(c, frame));
+  for (int q = 0; q < n; q++) incl_give_self(c, nt, ids[q], class_def_key(c, frame));
   lr_span_add(out, ids, n, fr, param);
 }
 
@@ -13571,8 +13574,7 @@ int elab_fire_after(Compiler *c, int list, int j) {
      body: its statements are the body's, and self is the class, #10785) */
   int host = frame;
   if (!body && frame >= 0 && nt_kind(nt, frame) == NK_CallNode && is_class_eval_family(nt_str(nt, frame, "name"))) {
-    int fr = nt_ref(nt, frame, "receiver");
-    const LrStmt *fs = fr < 0 || nt_kind(nt, fr) == NK_SelfNode ? lr_stmt_of(r, frame) : NULL;
+    const LrStmt *fs = class_eval_on_body_self(c, frame) ? lr_stmt_of(r, frame) : NULL;
     int up = fs && fs->frame >= 0 ? r->st[fs->frame].node : -1;
     if (up >= 0 && class_def_opens_frame(nt, up)) { body = 1; host = up; }
   }

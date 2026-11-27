@@ -5143,7 +5143,7 @@ int emit_array_filter_loop(Compiler *c, int recv, int block, TyKind rt, const ch
   }
   int t = ++g_tmp, ti = ++g_tmp, to = ++g_tmp, tw = ++g_tmp, tk = ++g_tmp, tnv = ++g_tmp, te = ++g_tmp;
   int eid = ++g_tmp, tj = ++g_tmp;
-  int has_retval = (g_ret_type != TY_VOID && g_ret_type != TY_UNKNOWN);
+  int has_retval = ensure_region_has_retval();
   /* Over a boxed Array (emit_face_arm), the loop reads, writes and cuts the
      box itself through the boxed accessors, where the receiver here is the
      poly copy the face made: a block that pushes onto the receiver or writes

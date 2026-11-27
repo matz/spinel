@@ -8287,6 +8287,22 @@ void emit_main_exit(Buf *b) {
   buf_puts(b, "return; }\n");
 }
 
+/* Whether an ensure region opened in the function being emitted (a
+   begin..ensure, an inlined Mutex#synchronize, a select!/reject! loop) holds
+   a deferred return value in its _retvN slot. A slot only exists for a kind
+   with a C type to declare it with. VOID and UNKNOWN were excluded; TY_NIL
+   was not, and emit_ctype has no name for it, so an ensure inside a
+   nil-returning instantiation or a proc whose body ends in nil declared
+   `void _retvN` and the build stopped (#4245). nil carries no value to
+   defer, exactly like void. Object kinds are declared by emit_ctype through
+   their class, which c_type_name does not name: asking it alone dropped
+   every object-returning method to a bare `return;` out of a non-void C
+   function, and the build stopped again. */
+int ensure_region_has_retval(void) {
+  return g_ret_type != TY_VOID && g_ret_type != TY_UNKNOWN && g_ret_type != TY_NIL &&
+         (ty_is_object(g_ret_type) || c_type_name(g_ret_type) != NULL);
+}
+
 void emit_retf_return(int eid, int has_retval, Buf *b) {
   if (g_c_ret_void && g_ret_type == TY_UNKNOWN && !g_in_file_top) { buf_printf(b, "if (_retf%d) { ", eid); emit_main_exit(b); }
   /* A fiber body is `static void`: returning the value there is a C

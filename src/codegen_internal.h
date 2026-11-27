@@ -1717,6 +1717,7 @@ void emit_inlined_local_decl(Compiler *c, LocalVar *lv, const char *rn, Buf *b, 
    binds an argument to, for a later default to read, gets that cell too. */
 void emit_pd_cell_alias_into(Compiler *c, LocalVar *plv, const char *uniq, Buf *b, int indent);
 void emit_inlined_locals(Compiler *c, Scope *m, int tag, Buf *b, int din);
+int ensure_region_has_retval(void);
 void emit_retf_return(int eid, int has_retval, Buf *b);
 void emit_main_exit(Buf *b);
 /* The assignment target for an inlined method's parameter, spelled by the same

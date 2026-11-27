@@ -78,9 +78,23 @@ int sp_net_take_resolution_error(void) {
     return rc;
 }
 
-/* A DNS lookup can take seconds, so we leave the world while it runs and
-   the GC doesn't wait for us. The host is copied first, since a GC may
-   run meanwhile and nothing may be rooting it. */
+/* A DNS lookup can take seconds (a resolver that does not answer, an mDNS
+   name nobody has), so it runs on an offload thread (sp_offload_call) while
+   this thread waits for it as for I/O: the other threads of this worker run
+   meanwhile, and a collection does not wait for the lookup. getaddrinfo keeps
+   nothing per thread, so it may run on any. The host is copied first, since
+   a GC may run meanwhile and nothing may be rooting it; the copy and the
+   job live on this thread's stack, which waits for the lookup to finish. */
+struct sp_net_resolve_job {
+    const char *host, *port;
+    const struct addrinfo *hints;
+    struct addrinfo **res;
+    int rc;
+};
+static void sp_net_resolve_run(void *p) {
+    struct sp_net_resolve_job *j = p;
+    j->rc = getaddrinfo(j->host, j->port, j->hints, j->res);
+}
 static int sp_net_resolve(const char *host, const char *port,
                           const struct addrinfo *hints, struct addrinfo **res) {
     char buf[NI_MAXHOST];
@@ -89,11 +103,16 @@ static int sp_net_resolve(const char *host, const char *port,
         strcpy(buf, host);
         host = buf;
     }
-    sp_native_enter();
-    int rc = getaddrinfo(host, port, hints, res);
+    struct sp_net_resolve_job j = { host, port, hints, res, 0 };
+#if defined(SP_THREADS) && !defined(_WIN32)
+    sp_offload_call(sp_net_resolve_run, &j);
+#else
+    sp_native_enter();   /* (no offload threads here: leave the world for it) */
+    sp_net_resolve_run(&j);
     sp_native_leave();
-    sp_net_gai_error = rc;
-    return rc;
+#endif
+    sp_net_gai_error = j.rc;
+    return j.rc;
 }
 
 /* Self-pipe: the term handler writes a byte here so a blocked accept (via
@@ -303,7 +322,20 @@ int sp_net_sock_name(int fd, int peer, void *out, int cap) {
 /* The host name the local/peer address of a socket fd reverse-resolves to,
    into hostbuf: 0, or -1 when it has none (the caller then reports the
    numeric address, as CRuby does). A lookup may take seconds, so it runs
-   outside the world, as getaddrinfo does. */
+   on an offload thread, as getaddrinfo does (sp_net_resolve). */
+#ifdef NI_NAMEREQD
+struct sp_net_rname_job {
+    const struct sockaddr *sa;
+    socklen_t len;
+    char *host;
+    socklen_t cap;
+    int rc;
+};
+static void sp_net_rname_run(void *p) {
+    struct sp_net_rname_job *j = p;
+    j->rc = getnameinfo(j->sa, j->len, j->host, j->cap, NULL, 0, NI_NAMEREQD);
+}
+#endif
 int sp_net_sock_host(int fd, int peer, char *hostbuf, int cap) {
     struct sockaddr_storage ss;
     socklen_t len = sizeof(ss);
@@ -312,10 +344,15 @@ int sp_net_sock_host(int fd, int peer, char *hostbuf, int cap) {
     if (r != 0) return -1;
     if (ss.ss_family != AF_INET && ss.ss_family != AF_INET6) return -1;
 #ifdef NI_NAMEREQD
+    struct sp_net_rname_job j = { (struct sockaddr *)&ss, len, hostbuf, (socklen_t)cap, 0 };
+#if defined(SP_THREADS) && !defined(_WIN32)
+    sp_offload_call(sp_net_rname_run, &j);
+#else
     sp_native_enter();
-    int rc = getnameinfo((struct sockaddr *)&ss, len, hostbuf, (socklen_t)cap, NULL, 0, NI_NAMEREQD);
+    sp_net_rname_run(&j);
     sp_native_leave();
-    return rc == 0 ? 0 : -1;
+#endif
+    return j.rc == 0 ? 0 : -1;
 #else
     /* no reverse lookup on this platform (wasm32-wasi): the numeric address */
     (void)len; (void)hostbuf; (void)cap;

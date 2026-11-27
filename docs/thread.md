@@ -113,6 +113,11 @@ on the descriptor between non-blocking record-layer steps. A backtick,
 holding the worker either, and so do the waits with flags (`Process.wait2(pid,
 Process::WUNTRACED)`); `Process::WNOHANG` asks once and answers nil for a child
 still running, with no wait at all.
+A name lookup (`Socket.getaddrinfo`, `IPSocket.getaddress`, the one
+`TCPSocket.new` or `TCPServer.new` makes for a host name, the reverse
+lookup of a socket's address) runs `getaddrinfo(3)` or `getnameinfo(3)` on
+another OS thread and waits for it the same way, so a resolver that does
+not answer holds the thread that asked, not the others on its worker.
 
 Why this matters beyond fairness: a collection stops the world at
 safepoints, and a worker sitting in a syscall never reaches one, so a thread

@@ -36660,8 +36660,18 @@ static int sce_text_walk_safe(Compiler *c, struct SceFacts *f, NodeTable *t, con
   if (sn <= 0) return 0;
   for (int i = 0; i < sn; i++) {
     int d = ss[i];
-    const char *dn = nt_kind(t, d) == NK_DefNode ? nt_str(t, d, "name") : NULL;
-    if (!dn || nt_ref(t, d, "receiver") >= 0 || is_definition_hook_name(dn) ||
+    NodeKind dk = nt_kind(t, d);
+    const char *dn = NULL;
+    if (dk == NK_DefNode) { dn = nt_str(t, d, "name"); if (nt_ref(t, d, "receiver") >= 0) return 0; }
+    /* a write or read of a local: the body's, named by the body's scope as
+       the span is lowered (host_lower_now with the body for its scope), or
+       the text's own (sce_text_local). A define_method whose block captures
+       one is left to the step: the global the capture row makes for it at
+       the walk is typed nullable where the step's was not (its first write
+       is read in another order). */
+    else if (dk == NK_LocalVariableWriteNode || dk == NK_LocalVariableReadNode) continue;
+    else return 0;
+    if (!dn || is_definition_hook_name(dn) ||
         name_list_has(c->def_asked, c->ndef_asked, dn) || sce_name_asked(c->nt, f, dn)) return 0;
   }
   int nn = 0, ok = 1;
@@ -37976,7 +37986,7 @@ int sce_walk_frame(Compiler *c, HostStep *h, int frame) {
     if (i >= bn) break;
     int ch = 0;
     int n = sce_body(c, h, frame, body, i, 1, ls ? ls : "", NULL, &ch);
-    if (ch) { changed = 1; host_lower_now(c, h, frame, body, i, n); }
+    if (ch) { changed = 1; host_lower_now(c, h, frame, body, i, n, frame); }   /* (the text runs in the body's frame: its locals are the body's) */
     i += n - 1;
   }
   sce_where = SCE_SPAN;

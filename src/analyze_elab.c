@@ -15593,8 +15593,11 @@ int host_prewalk_shape_at(NodeTable *nt, const int *ids, int n, int flags) {
    code runs in a frame of the locals `locals` (comma-joined; NULL: not
    known) but `gone`, which its class_eval text reads. */
 /* The statements body[at..at + n) of owner's body, which the walk reaches
-   next: lowered now, as one span, with the steps run so far */
-void host_lower_now(Compiler *c, HostStep *h, int owner, int body, int at, int n) {
+   next: lowered now, as one span, with the steps run so far. The span's
+   locals are the scope's that `scope` names: the splice's own (-1: its
+   first statement names it, as a hook's body is a scope of its own), or
+   the body's, for a class_eval text, which runs in the body's frame. */
+void host_lower_now(Compiler *c, HostStep *h, int owner, int body, int at, int n, int scope) {
   int bn = 0;
   const int *st = nt_arr(c->nt, body, "body", &bn);
   if (at + n > bn) return;
@@ -15602,7 +15605,7 @@ void host_lower_now(Compiler *c, HostStep *h, int owner, int body, int at, int n
     lower_say(h->lc, "host_splice", "a statement spliced in the walk carries a shape a step before the walk reads");
   int *sp = malloc(sizeof(int) * (size_t)(2 * n + 1));   /* a row may replace the body's array */
   if (!sp) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  for (int i = 0; i < n; i++) { sp[i] = st[at + i]; sp[n + i] = st[at]; }
+  for (int i = 0; i < n; i++) { sp[i] = st[at + i]; sp[n + i] = scope >= 0 ? scope : st[at]; }
   h->lc->span_now = 1;
   lower_span(c, h->lc, owner, body, sp, sp + n, n);
   free(sp);
@@ -15611,7 +15614,7 @@ int host_splice(Compiler *c, HostStep *h, int owner, int body, int at, int n, co
   n = sce_span(c, h, owner, body, at, n, locals, gone);
   int bn = 0;
   const int *st = nt_arr(c->nt, body, "body", &bn);
-  if (h->now && at + n <= bn) { host_lower_now(c, h, owner, body, at, n); return n; }
+  if (h->now && at + n <= bn) { host_lower_now(c, h, owner, body, at, n, -1); return n; }
   for (int i = at; i < at + n && i < bn; i++) {
     if (h->nspans + 4 > h->cspans) {
       h->cspans = h->cspans ? h->cspans * 2 : 64;

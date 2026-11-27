@@ -20343,6 +20343,45 @@ static int oa_scope_never_entered(Compiler *c, OaSpelled *named, int s) {
   if (!M->name || M->def_node < 0 || oa_entered_unseen(M) || sp_streq(M->name, "initialize")) return 0;
   return !oa_name_spelled(c, named, M->name);
 }
+/* A pass that starts each round from the same shape resets the program's
+   slots it narrowed last round (constants put back on the poly array) and
+   derives them again. Each such write moves the program's version, and a
+   move of it ends every answer infer_type's memo keeps, round after round,
+   though the slots nearly always come back as they were. As
+   infer_write_types does for the scopes it resets (#10325), the version is
+   put back when the pass moved it only through those slots' types and
+   every constant and global ends as it began; what was derived off the
+   reset state goes. */
+typedef struct { unsigned long ver, at, moves, slot_moves; LocalVar *consts, *gvars; int nconsts, ngvars; } AnProgramSlots;
+static void an_program_slots_note(Compiler *c, AnProgramSlots *ps) {
+  ps->ver = comp_global_ver; ps->at = comp_ty_edits;
+  ps->moves = comp_global_moves; ps->slot_moves = comp_slot_global_moves;
+  ps->nconsts = c->nconsts; ps->ngvars = c->ngvars;
+  ps->consts = malloc(sizeof(LocalVar) * (size_t)(c->nconsts + 1));
+  ps->gvars = malloc(sizeof(LocalVar) * (size_t)(c->ngvars + 1));
+  if (!ps->consts || !ps->gvars) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  if (c->nconsts) memcpy(ps->consts, c->consts, sizeof(LocalVar) * (size_t)c->nconsts);
+  if (c->ngvars) memcpy(ps->gvars, c->gvars, sizeof(LocalVar) * (size_t)c->ngvars);
+}
+static void an_program_slots_settle(Compiler *c, AnProgramSlots *ps) {
+  if (comp_global_ver != ps->ver &&
+      comp_global_moves - ps->moves == comp_slot_global_moves - ps->slot_moves &&
+      c->nconsts == ps->nconsts && c->ngvars == ps->ngvars &&
+      (!c->nconsts || memcmp(c->consts, ps->consts, sizeof(LocalVar) * (size_t)c->nconsts) == 0) &&
+      (!c->ngvars || memcmp(c->gvars, ps->gvars, sizeof(LocalVar) * (size_t)c->ngvars) == 0)) {
+    comp_global_ver = ps->ver;
+    infer_memo_forget_since(ps->at);
+  }
+  free(ps->consts); free(ps->gvars);
+}
+static int narrow_object_arrays(Compiler *c);
+static int narrow_object_arrays_framed(Compiler *c) {
+  AnProgramSlots ps;
+  an_program_slots_note(c, &ps);
+  int r = narrow_object_arrays(c);
+  an_program_slots_settle(c, &ps);
+  return r;
+}
 static int narrow_object_arrays(Compiler *c) {
   const NodeTable *nt = c->nt;
   int changed = 0; MethodLookup ml = { .def_class = -1 };
@@ -52936,7 +52975,7 @@ static void an_phase_infer_fixpoint(Compiler *c) {
        the round the call is first seen, and a parameter only ever widens. Run
        after the ivar narrowing so a table read out of an ivar is already
        typed when the local reading it is derived. */
-    if (AN_PASS("narrow_object_arrays", narrow_object_arrays(c))) ch |= AN_PASS("infer_write_types", infer_write_types(c));
+    if (AN_PASS("narrow_object_arrays", narrow_object_arrays_framed(c))) ch |= AN_PASS("infer_write_types", infer_write_types(c));
     /* Enumerable over a Hash/Range with only an Array arm: route through to_a
        (needs the receiver kind, so it runs inside the fixpoint). */
     if (AN_PASS("desugar_enumerable_via_to_a", desugar_enumerable_via_to_a(c))) ch |= AN_PASS("infer_write_types", infer_write_types(c));
@@ -55124,7 +55163,7 @@ static void an_phase_late_widen(Compiler *c, NodeTypes *promote_before) {
      types to every `arr[i]` / `arr[i].field` site. */
   AN_STEP_V("narrow_int_table_ivars", narrow_int_table_ivars(c, 0));
   g_oa_after_fixpoint = 1;
-  AN_STEP_V("narrow_object_arrays", narrow_object_arrays(c));
+  AN_STEP_V("narrow_object_arrays", narrow_object_arrays_framed(c));
   g_oa_after_fixpoint = 0;
   AN_STEP_V("narrow_locals_from_arrays", narrow_locals_from_arrays(c));
   /* after the locals: a parameter can be fed an element the local rule has

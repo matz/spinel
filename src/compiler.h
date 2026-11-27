@@ -81,7 +81,12 @@ extern int *comp_touch_count, *comp_lv_touch_count;
 #define COMP_TOUCH_LOG_CAP (1 << 22)
 extern int *comp_touch_log;
 static inline void comp_touch_note(int key) { if (comp_touch_log) comp_touch_log[comp_ty_edits & (COMP_TOUCH_LOG_CAP - 1)] = key; }
-static inline void comp_touch_global_r(int why) { (void)why; comp_global_ver = ++comp_ty_edits; comp_touch_note(-1); }
+/* how many times the program's version moved, and how many of those were a
+   constant's or a global's type or proc return (lv_set_storage_type,
+   lv_set_proc_ret): a pass that only resets such slots and derives them
+   back can tell its moves were no change (an_program_slots_*) */
+extern unsigned long comp_global_moves, comp_slot_global_moves;
+static inline void comp_touch_global_r(int why) { (void)why; comp_global_moves++; comp_global_ver = ++comp_ty_edits; comp_touch_note(-1); }
 static inline void comp_touch_global(void) { comp_touch_global_r(0); }
 static inline void comp_touch_scope(int idx) {
   if (idx >= 0 && idx < comp_scope_ver_cap) { comp_scope_ver[idx] = ++comp_ty_edits; comp_touch_note(idx); if (comp_touch_count) comp_touch_count[idx]++; }
@@ -486,6 +491,7 @@ static inline TyKind lv_set_storage_type(LocalVar *lv, TyKind t) {
   if (lv->type != t) {
     *(TyKind *)&lv->type = t;
     if (comp_lv_touch_count && lv->owner >= 0 && lv->owner < comp_scope_ver_cap) comp_lv_touch_count[lv->owner]++;
+    if (lv->owner < 0) comp_slot_global_moves++;
     comp_touch_scope(lv->owner);
   }
   return t;
@@ -497,6 +503,7 @@ static inline int lv_set_proc_ret(LocalVar *lv, int t) {
   if (lv->proc_ret != t) {
     *(int *)&lv->proc_ret = t;
     if (comp_lv_touch_count && lv->owner >= 0 && lv->owner < comp_scope_ver_cap) comp_lv_touch_count[lv->owner]++;
+    if (lv->owner < 0) comp_slot_global_moves++;
     comp_touch_scope(lv->owner);
   }
   return t;

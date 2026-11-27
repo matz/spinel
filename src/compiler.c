@@ -88,6 +88,7 @@ int comp_scalar_literal_chain_bottom(const NodeTable *nt, int v) {
 
 /* see compiler.h: every change of a table infer_type reads */
 unsigned long comp_ty_edits;
+unsigned long comp_global_moves, comp_slot_global_moves;
 /* the owners' versions (compiler.h): per scope, per class, and the program's */
 unsigned long *comp_scope_ver, *comp_class_ver, comp_global_ver;
 int *comp_touch_count, *comp_lv_touch_count;

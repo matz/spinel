@@ -21,6 +21,6 @@ end
 p held.map(&:fileno).uniq.size == held.size, held.none?(&:closed?)
 first_w.write("x")
 p first_r.read(1)
+Process.setrlimit(:NOFILE, soft, max)   # a close wants a descriptor of its own (macOS)
 held.each(&:close)
-Process.setrlimit(:NOFILE, soft, max)
 p :done

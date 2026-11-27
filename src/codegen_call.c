@@ -17047,7 +17047,8 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
          self, so pass NULL there. (#1379) */
       int dp_self = (g_emitting_class_id >= 0 && g_self && sp_streq(g_self, "self") &&
                      g_self_deref && sp_streq(g_self_deref, "->"));
-      const char *dp_cls = dp_self ? c->classes[g_emitting_class_id].name : NULL;
+      /* (the struct is named by the class's C name: a long name is hashed) */
+      const char *dp_cls = dp_self ? c->classes[g_emitting_class_id].c_name : NULL;
       buf_printf(pb, "static sp_RbVal _sp_hash_dproc_%s(sp_PolyPolyHash *_self_h, sp_RbVal _key, void *_dproc_self) {\n", dn);
       if (dp_self) buf_printf(pb, "  sp_%s *self = (sp_%s *)_dproc_self; (void)self;\n", dp_cls, dp_cls);
       else buf_puts(pb, "  (void)_dproc_self;\n");

@@ -3,3 +3,5 @@
 [true, IOError]
 [true, IOError]
 [IOError, "closed stream"]
+RangeError
+true

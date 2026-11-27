@@ -2305,10 +2305,11 @@ static sp_int sp_sock_send_waiting(sp_File *f, const char *data, sp_int len, int
 sp_int sp_sock_send(sp_File *f, const char *data, sp_int len, sp_int flags, const char *host, sp_int port) {SP_GC_ROOT(f);SP_GC_ROOT_STR(data);SP_GC_ROOT_STR(host);
   extern int sp_net_udp_send_to(int fd, const char *data, int len, int flags, const char *host, int port);
   sp_sock_require(f, "send");
-  if (f->own_buf && !host) return sp_sock_send_waiting(f, data, len, sp_sock_int_arg(flags), NULL, 0);
+  int fl = sp_sock_int_arg(flags);   /* raises before the use is taken */
+  if (f->own_buf && !host) return sp_sock_send_waiting(f, data, len, fl, NULL, 0);
   /* a use around the call, as sp_sock_send_waiting holds one: a close in
      another thread retires the FILE only once it is let go */
-  int n = sp_net_udp_send_to(fileno(sp_io_use(f)), data, (int)len, sp_sock_int_arg(flags), host, (int)port);
+  int n = sp_net_udp_send_to(fileno(sp_io_use(f)), data, (int)len, fl, host, (int)port);
   int e = errno;
   sp_io_unuse(f);
   errno = e;

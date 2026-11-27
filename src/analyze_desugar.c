@@ -1808,7 +1808,14 @@ int desugar_file_constants(Compiler *c) {
   return changed;
 }
 
-int desugar_instance_eval_defs(Compiler *c) {
+/* A def in an instance_eval or instance_exec block defines a singleton
+   method of the receiver; the walk records it on the class's singleton
+   (elab_def_definee) and the scope pass places it there. That holds for a
+   receiver that is a class or module the program names (or self in its
+   body): any other receiver (a local, a constant holding a value, a path
+   that does not resolve) names no singleton the method can be registered
+   on, so the call is refused rather than the def landing elsewhere. */
+int refuse_instance_eval_defs(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count, changed = 0;
   if (program_defines_name(nt, n0, "instance_eval") || program_defines_name(nt, n0, "instance_exec")) return 0;
@@ -1843,15 +1850,11 @@ int desugar_instance_eval_defs(Compiler *c) {
       cls = recv;
     else if (rk == NK_SelfNode && body_of[id] > 0)
       cls = body_of[id] - 1;
-    if (!pure || cls < 0 || an > 0) {
-      unsupported_feature_collect(c, id, "a method defined in an instance_eval block, other than one of defs only "
-                                         "on a class or module the program defines and without arguments, is not "
-                                         "supported: name the receiver (`def Klass.m`) instead");
-      continue;
-    }
-    /* (the defs stay where they are: the walk records them on the class's
-       singleton, elab_def_definee, and the scope pass places them there) */
-    (void)stmts;
+    (void)stmts; (void)pure; (void)an;
+    if (cls < 0)
+      unsupported_feature_collect(c, id, "a method defined in an instance_eval block on a receiver other than a "
+                                         "class or module the program names is not supported: name the receiver "
+                                         "(`def Klass.m`) instead");
   }
   free(body_of);
   ied_paths_free(&ip);

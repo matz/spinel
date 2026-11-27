@@ -1280,26 +1280,18 @@ spinel: 1 refusal, nothing written
 == test/reject/initialize_versions_defaults.rb [promote] rc=1
 spinel: test/reject/initialize_versions_defaults/first.rb:2: an initialize with optional parameters defined more than once, where the load order the program runs leaves which definition the class ends with to run time: `new` would run the first one; give the definitions the same parameters with no defaults, or load the files in one order
 spinel: 1 refusal, nothing written
-== test/reject/instance_eval_def_beside_statements.rb [default] rc=1
-spinel: test/reject/instance_eval_def_beside_statements.rb:6: a method defined in an instance_eval block, other than one of defs only on a class or module the program defines and without arguments, is not supported: name the receiver (`def Klass.m`) instead
-== test/reject/instance_eval_def_beside_statements.rb [promote] rc=1
-spinel: test/reject/instance_eval_def_beside_statements.rb:6: a method defined in an instance_eval block, other than one of defs only on a class or module the program defines and without arguments, is not supported: name the receiver (`def Klass.m`) instead
 == test/reject/instance_eval_def_shadowed_path.rb [default] rc=1
-spinel: test/reject/instance_eval_def_shadowed_path.rb:10: a method defined in an instance_eval block, other than one of defs only on a class or module the program defines and without arguments, is not supported: name the receiver (`def Klass.m`) instead
+spinel: test/reject/instance_eval_def_shadowed_path.rb:10: a method defined in an instance_eval block on a receiver other than a class or module the program names is not supported: name the receiver (`def Klass.m`) instead
 == test/reject/instance_eval_def_shadowed_path.rb [promote] rc=1
-spinel: test/reject/instance_eval_def_shadowed_path.rb:10: a method defined in an instance_eval block, other than one of defs only on a class or module the program defines and without arguments, is not supported: name the receiver (`def Klass.m`) instead
+spinel: test/reject/instance_eval_def_shadowed_path.rb:10: a method defined in an instance_eval block on a receiver other than a class or module the program names is not supported: name the receiver (`def Klass.m`) instead
 == test/reject/instance_eval_def_unnamed_receiver.rb [default] rc=1
-spinel: test/reject/instance_eval_def_unnamed_receiver.rb:8: a method defined in an instance_eval block, other than one of defs only on a class or module the program defines and without arguments, is not supported: name the receiver (`def Klass.m`) instead
+spinel: test/reject/instance_eval_def_unnamed_receiver.rb:8: a method defined in an instance_eval block on a receiver other than a class or module the program names is not supported: name the receiver (`def Klass.m`) instead
 == test/reject/instance_eval_def_unnamed_receiver.rb [promote] rc=1
-spinel: test/reject/instance_eval_def_unnamed_receiver.rb:8: a method defined in an instance_eval block, other than one of defs only on a class or module the program defines and without arguments, is not supported: name the receiver (`def Klass.m`) instead
+spinel: test/reject/instance_eval_def_unnamed_receiver.rb:8: a method defined in an instance_eval block on a receiver other than a class or module the program names is not supported: name the receiver (`def Klass.m`) instead
 == test/reject/instance_eval_def_value_constant.rb [default] rc=1
-spinel: test/reject/instance_eval_def_value_constant.rb:12: a method defined in an instance_eval block, other than one of defs only on a class or module the program defines and without arguments, is not supported: name the receiver (`def Klass.m`) instead
+spinel: test/reject/instance_eval_def_value_constant.rb:12: a method defined in an instance_eval block on a receiver other than a class or module the program names is not supported: name the receiver (`def Klass.m`) instead
 == test/reject/instance_eval_def_value_constant.rb [promote] rc=1
-spinel: test/reject/instance_eval_def_value_constant.rb:12: a method defined in an instance_eval block, other than one of defs only on a class or module the program defines and without arguments, is not supported: name the receiver (`def Klass.m`) instead
-== test/reject/instance_exec_def_with_argument.rb [default] rc=1
-spinel: test/reject/instance_exec_def_with_argument.rb:8: a method defined in an instance_eval block, other than one of defs only on a class or module the program defines and without arguments, is not supported: name the receiver (`def Klass.m`) instead
-== test/reject/instance_exec_def_with_argument.rb [promote] rc=1
-spinel: test/reject/instance_exec_def_with_argument.rb:8: a method defined in an instance_eval block, other than one of defs only on a class or module the program defines and without arguments, is not supported: name the receiver (`def Klass.m`) instead
+spinel: test/reject/instance_eval_def_value_constant.rb:12: a method defined in an instance_eval block on a receiver other than a class or module the program names is not supported: name the receiver (`def Klass.m`) instead
 == test/reject/instance_exec_default_ivar_write.rb [default] rc=1
 spinel: test/reject/instance_exec_default_ivar_write.rb:6: an instance variable written in a block that instance_exec or instance_eval runs on a value with no instance variable layout (nil, a builtin value, Object.new): the value has no slot to hold it at run time
 spinel: 1 refusal, nothing written

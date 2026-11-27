@@ -976,6 +976,9 @@ sp_FloatArray*sp_FloatArray_compact(sp_FloatArray*a){SP_GC_ROOT(a);sp_FloatArray
 /* compact! on one of those: the nils go in place, and the answer is whether
    any did (CRuby's self, or nil for a no-op). */
 sp_bool sp_IntArray_compact_bang(sp_IntArray*a){SP_GC_ROOT(a);if (SP_UNLIKELY(!a)) sp_nil_recv("compact!");if(a->frozen){sp_raise_frozen_array_at(a,SP_BUILTIN_INT_ARRAY);return FALSE;}return sp_IntArray_delete_nil(a);}
+/* compact! on an Array of Strings, whose nil is a NULL element: drops them in
+   place, TRUE when one was there (CRuby's self; FALSE its nil) */
+sp_bool sp_StrArray_compact_bang(sp_StrArray*a){SP_GC_ROOT(a);if (SP_UNLIKELY(!a)) sp_nil_recv("compact!");if(a->frozen){sp_raise_frozen_array_at(a,SP_BUILTIN_STR_ARRAY);return FALSE;}sp_gc_wb((void*)a);sp_int w=0;for(sp_int i=0;i<a->len;i++)if(a->data[i]!=NULL)a->data[w++]=a->data[i];sp_bool ch=w!=a->len;a->len=w;return ch;}
 sp_bool sp_FloatArray_compact_bang(sp_FloatArray*a){SP_GC_ROOT(a);if (SP_UNLIKELY(!a)) sp_nil_recv("compact!");if(a->frozen){sp_raise_frozen_array_at(a,SP_BUILTIN_FLT_ARRAY);return FALSE;}return sp_FloatArray_delete_nil(a);}
 /* min, max, minmax and sort compare the elements pairwise, and nil compares
    with nothing but nil, so CRuby raises once one meets a number; an array of

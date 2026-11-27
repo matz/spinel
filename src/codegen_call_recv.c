@@ -2591,12 +2591,16 @@ static void emit_kind_array_fetch(Compiler *c, int id, Buf *b, int recv, int arg
   /* (a String Array's read is its element's handle, as the raw read
      the node is takes it, else the bytes) */
   int hraw = typed_elem_read_raw(rt, id);
-  if (boxed) {
+  /* (an Integer or Float element is read with its nil, oget: a slot that
+     holds nil answers nil, not the 0 its value field holds) */
+  if (boxed && oint_kind(et))
+    buf_printf(b, "%s(sp_%sArray_oget(_t%d, _t%d))", et == TY_FLOAT ? "sp_box_ofloat" : "sp_box_oint", k, ta, tnorm);
+  else if (boxed) {
     char getexpr[96];
     typed_elem_getf(getexpr, sizeof getexpr, rt, k, "_t%d, _t%d", ta, tnorm);
     emit_boxed_text(c, et, getexpr, b);
   }
-  else if (fo) buf_printf(b, "%s(sp_%sArray_get(_t%d, _t%d))", oint_of(et), k, ta, tnorm);
+  else if (fo) buf_printf(b, "sp_%sArray_oget(_t%d, _t%d)", k, ta, tnorm);
   else {
     int rd = typed_elem_read_open(rt, id, b);
     buf_printf(b, "sp_%sArray_get%s(_t%d, _t%d)", k, typed_elem_store_sfx(rt), ta, tnorm);

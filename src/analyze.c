@@ -37814,7 +37814,7 @@ int elem_preserving_call(const char *nm) {
   static const char *const N[] = { "select", "filter", "reject", "sort", "sort_by",
                                    "uniq", "reverse", "rotate", "take", "drop",
                                    "take_while", "drop_while", "shuffle", "to_a",
-                                   "dup", "clone", "freeze", "values_at", "slice",
+                                   "dup", "clone", "freeze", "slice",
                                    "flatten", "first", "last", "sample", "slice!", "*", "-",
                                    "&", "difference", "intersection", NULL };
   return str_in(nm, N);
@@ -38039,6 +38039,10 @@ int elem_block_params(Compiler *c, int call, int *recv_out) {
   const char *rnm2 = nt_str(nt, call, "name");
   *recv_out = -1;
   if (recv < 0 || blk < 0 || !rnm2) return 0;
+  /* a block handed the index (or the missing one) binds no element:
+     `fetch(i) { |i| }`, `fetch_values`, `each_index`, `fill { |i| }` */
+  if (sp_streq(rnm2, "fetch") || sp_streq(rnm2, "fetch_values") || sp_streq(rnm2, "each_index") ||
+      sp_streq(rnm2, "fill")) return 0;
   int both = is_reduce_alias(rnm2) || is_sort_family(rnm2) || is_extrema_family(rnm2) ||
              sp_streq(rnm2, "slice_when") || sp_streq(rnm2, "chunk_while");
   int first = strbuf_elem_first_iterator(rnm2) || is_enumerator_with(rnm2);
@@ -38694,6 +38698,9 @@ static int nullable_int_elem_expr(Compiler *c, int v, int depth) {
     if (!obj_rc && nm && sp_streq(nm, "[]") && slice_read_call(c, v))
       return nullable_int_elem_expr(c, rc, depth + 1);
     if (!obj_rc && elem_preserving_call(nm)) return nullable_int_elem_expr(c, rc, depth + 1);
+    /* `a.values_at(i, j)`: an index outside the Array is a nil element of
+       the Array it answers, whatever the receiver holds */
+    if (!obj_rc && nm && sp_streq(nm, "values_at") && rc >= 0 && ty_is_array(infer_type(c, rc))) return 1;
     /* `a + b`, `a | b`, `a.union(b)`: the elements of either side, and
        Kernel#Array(a) is `a` itself */
     if (!obj_rc && nm && (sp_streq(nm, "+") || sp_streq(nm, "|") || sp_streq(nm, "union") ||

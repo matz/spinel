@@ -740,6 +740,7 @@ sp_IntArray *sp_IntArray_compact(sp_IntArray *a);
 sp_FloatArray *sp_FloatArray_compact(sp_FloatArray *a);
 sp_bool sp_IntArray_compact_bang(sp_IntArray *a);
 sp_bool sp_FloatArray_compact_bang(sp_FloatArray *a);
+sp_bool sp_StrArray_compact_bang(sp_StrArray *a);
 sp_IntArray *sp_IntArray_nil_cmp_ck(sp_IntArray *a);
 sp_FloatArray *sp_FloatArray_nil_cmp_ck(sp_FloatArray *a);
 sp_IntArray *sp_IntArray_nil_sum_ck(sp_IntArray *a, int float_seed);

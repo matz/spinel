@@ -1,0 +1,47 @@
+[["CN", "h\xC3\xA9llo", 12], ["C", "KR", 19], ["emailAddress", "a@example.org", 22], ["O", "Example", 19]]
+"/CN=h\\xC3\\xA9llo/C=KR/emailAddress=a@example.org/O=Example"
+"/CN=h\\xC3\\xA9llo/C=KR/emailAddress=a@example.org/O=Example"
+true
+[["CN", "media", 12], ["O", "Example", 12]]
+[["CN", "media", 12], ["O", "Example", 12]]
+true
+true
+false
+false
+-1
+1
+["", [], "3000"]
+true
+[["CN", "z", 12], ["O", "y", 22]]
+OpenSSL::X509::NameError: X509_NAME_add_entry_by_txt: invalid field name (name=NOPE)
+19
+12
+[12, 19, 22]
+[0, 0, "", []]
+OpenSSL::X509::CertificateError: illegal zero content
+[2, "305419896", "/CN=media.example/O=Example", 2023-11-14 22:13:20 UTC, 2023-12-14 22:13:20 UTC]
+unsigned: OpenSSL::X509::CertificateError
+true
+true
+false
+[2, "305419896", OpenSSL::BN, "/CN=media.example/O=Example", "/CN=media.example/O=Example"]
+[2023-11-14 22:13:20 UTC, true, 2023-12-14 22:13:20 UTC]
+OpenSSL::PKey::EC
+true
+true
+true
+[2, "305419896", true, 1702592000]
+true
+[true, true]
+["/CN=other.example", false]
+["/CN=other.example", true]
+[true, OpenSSL::PKey::RSA, 7]
+OpenSSL::X509::CertificateError: wrong public key type
+true
+false
+[2, 5349, "/CN=turn.jayang-dong.example", "/CN=Han River Test CA"]
+[2026-10-17 13:15:53 UTC, 2126-09-23 13:15:53 UTC]
+[["CN", "turn.jayang-dong.example", 12]]
+OpenSSL::PKey::EC
+"hello from the client\n"
+"served"

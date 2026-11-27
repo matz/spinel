@@ -2065,6 +2065,433 @@ static EVP_PKEY *sp_ec_evp_private(const char *curve, const char *priv) {
   return k;
 }
 
+/* ---- Building an X509::Certificate, and X509::Name ----
+
+   The same shape as the rest of the X509 calls: a certificate is its DER, a
+   name is its DER, and each call parses what Ruby holds, changes or reads
+   it, and answers bytes; no X509 * or X509_NAME * outlives the call.
+
+   A certificate that has not been signed yet cannot be encoded (its
+   signature algorithm is empty, which DER refuses), so Ruby holds its
+   fields until #sign, and sp_x509_build makes the certificate from them in
+   the call that signs it. A certificate that has a DER takes a field change
+   as a build over that DER without a key: the old signature stays, as it
+   does in CRuby, until the certificate is signed again. */
+
+/* The reason of the last error OpenSSL queued, as CRuby words it: the
+   caller's name for the step, the reason, and the error's data. */
+static void sp_x509_reason(const char *what) {
+  const char *data = NULL, *reason;
+  int flags = 0;
+  unsigned long e;
+#if !defined(LIBRESSL_VERSION_NUMBER) && OPENSSL_VERSION_NUMBER >= 0x30000000L
+  e = ERR_peek_last_error_all(NULL, NULL, NULL, &data, &flags);
+#else
+  e = ERR_peek_last_error_line_data(NULL, NULL, &data, &flags);
+#endif
+  reason = e ? ERR_reason_error_string(e) : NULL;
+  if (!(flags & ERR_TXT_STRING) || (data && !*data)) data = NULL;
+  if (!reason) snprintf(sp_ssl_errbuf, sizeof sp_ssl_errbuf, "%s", what ? what : "unknown error");
+  else if (what && data) snprintf(sp_ssl_errbuf, sizeof sp_ssl_errbuf, "%s: %s (%s)", what, reason, data);
+  else if (what) snprintf(sp_ssl_errbuf, sizeof sp_ssl_errbuf, "%s: %s", what, reason);
+  else snprintf(sp_ssl_errbuf, sizeof sp_ssl_errbuf, "%s", reason);
+  ERR_clear_error();
+}
+
+static SP_TLS sp_x509_out sp_x509_build_out, sp_x509_field_out, sp_x509_name_out;
+
+static X509_NAME *sp_x509_name_from_der(const char *der) {
+  const unsigned char *p = (const unsigned char *)der;
+  size_t len = sp_str_byte_len(der);
+  if (len == 0) return X509_NAME_new();
+  if (len > (size_t)INT_MAX) return NULL;
+  return d2i_X509_NAME(NULL, &p, (long)len);
+}
+
+static const char *sp_x509_name_answer(X509_NAME *name, const char *what) {
+  int n = name ? i2d_X509_NAME(name, NULL) : -1;
+  unsigned char *p;
+  if (n <= 0 || !sp_x509_room(&sp_x509_name_out, (size_t)n)) {
+    X509_NAME_free(name);
+    sp_x509_reason(what);
+    sp_ffi_bin_len = 0;
+    return "";
+  }
+  p = (unsigned char *)sp_x509_name_out.p;
+  i2d_X509_NAME(name, &p);
+  X509_NAME_free(name);
+  sp_ffi_bin_len = n;
+  return sp_x509_name_out.p;
+}
+
+/* Name.new(der): the name, encoded again, or "" if it does not parse. */
+const char *sp_x509_name_der(const char *der) {
+  sp_ssl_errbuf[0] = 0;
+  return sp_x509_name_answer(sp_x509_name_from_der(der), NULL);
+}
+
+/* Name#add_entry: the name with one more entry at its end, of ASN.1 string
+   type `type` (CRuby passes the type as it is, UTF8STRING by default). */
+const char *sp_x509_name_add(const char *der, const char *field, const char *value, sp_int type) {
+  X509_NAME *name;
+  size_t len = sp_str_byte_len(value);
+
+  sp_ssl_errbuf[0] = 0;
+  ERR_clear_error();
+  if (!(name = sp_x509_name_from_der(der))) return sp_x509_name_answer(NULL, "d2i_X509_NAME");
+  if (len > (size_t)INT_MAX ||
+      !X509_NAME_add_entry_by_txt(name, field, (int)type, (const unsigned char *)value, (int)len, -1, 0)) {
+    X509_NAME_free(name);
+    sp_x509_reason("X509_NAME_add_entry_by_txt");
+    sp_ffi_bin_len = 0;
+    return "";
+  }
+  return sp_x509_name_answer(name, "i2d_X509_NAME");
+}
+
+/* Name#to_s: X509_NAME_oneline's "/CN=x/O=y", as CRuby's to_s with no
+   format. */
+const char *sp_x509_name_oneline(const char *der) {
+  X509_NAME *name = sp_x509_name_from_der(der);
+  char *s;
+  size_t n;
+
+  sp_ssl_errbuf[0] = 0;
+  if (!name || !(s = X509_NAME_oneline(name, NULL, 0))) {
+    X509_NAME_free(name);
+    sp_x509_reason("X509_NAME_oneline");
+    sp_ffi_bin_len = 0;
+    return "";
+  }
+  X509_NAME_free(name);
+  n = strlen(s);
+  if (!sp_x509_room(&sp_x509_name_out, n + 1)) { OPENSSL_free(s); sp_ffi_bin_len = 0; return ""; }
+  memcpy(sp_x509_name_out.p, s, n);
+  OPENSSL_free(s);
+  sp_ffi_bin_len = (int)n;
+  return sp_x509_name_out.p;
+}
+
+static int sp_x509_put(sp_x509_out *o, size_t *at, const void *bytes, size_t n) {
+  unsigned char *p;
+  if (n > (size_t)INT_MAX || !sp_x509_room(o, *at + 4 + n)) return 0;
+  p = (unsigned char *)o->p + *at;
+  p[0] = (unsigned char)(n >> 24);
+  p[1] = (unsigned char)(n >> 16);
+  p[2] = (unsigned char)(n >> 8);
+  p[3] = (unsigned char)n;
+  if (n) memcpy(p + 4, bytes, n);
+  *at += 4 + n;
+  return 1;
+}
+
+/* Name#to_a: each entry as three length-prefixed parts, its short name (or
+   its OID, for one OpenSSL has no name for), its value's bytes, and its
+   ASN.1 type as decimal digits. The name is found as CRuby finds it: the
+   long name OBJ_obj2txt gives, and the short name of that. */
+const char *sp_x509_name_entries(const char *der) {
+  X509_NAME *name = sp_x509_name_from_der(der);
+  size_t at = 0;
+  int count;
+
+  sp_ssl_errbuf[0] = 0;
+  if (!name) { sp_x509_reason("d2i_X509_NAME"); sp_ffi_bin_len = 0; return ""; }
+  count = X509_NAME_entry_count(name);
+  if (!sp_x509_room(&sp_x509_name_out, 1)) { X509_NAME_free(name); sp_ffi_bin_len = 0; return ""; }
+  for (int i = 0; i < count; i++) {
+    const X509_NAME_ENTRY *e = X509_NAME_get_entry(name, i);
+    const ASN1_STRING *v = X509_NAME_ENTRY_get_data(e);
+    char longname[256], type[16];
+    const char *label = longname;
+    int nid;
+    if (OBJ_obj2txt(longname, sizeof longname, X509_NAME_ENTRY_get_object(e), 0) <= 0) longname[0] = 0;
+    if ((nid = OBJ_ln2nid(longname)) != NID_undef) label = OBJ_nid2sn(nid);
+    snprintf(type, sizeof type, "%d", ASN1_STRING_type(v));
+    if (!sp_x509_put(&sp_x509_name_out, &at, label, strlen(label)) ||
+        !sp_x509_put(&sp_x509_name_out, &at, ASN1_STRING_get0_data(v), (size_t)ASN1_STRING_length(v)) ||
+        !sp_x509_put(&sp_x509_name_out, &at, type, strlen(type))) {
+      X509_NAME_free(name);
+      sp_ffi_bin_len = 0;
+      return "";
+    }
+  }
+  X509_NAME_free(name);
+  sp_ffi_bin_len = (int)at;
+  return sp_x509_name_out.p;
+}
+
+/* Name#cmp: X509_NAME_cmp's order, as -1, 0 or 1; -2 if either does not
+   parse. */
+sp_int sp_x509_name_cmp(const char *a, const char *b) {
+  X509_NAME *x = sp_x509_name_from_der(a), *y = sp_x509_name_from_der(b);
+  int r = -2;
+  if (x && y) {
+    r = X509_NAME_cmp(x, y);
+    r = r < 0 ? -1 : r > 0 ? 1 : 0;
+  }
+  X509_NAME_free(x);
+  X509_NAME_free(y);
+  ERR_clear_error();
+  return r;
+}
+
+/* Seconds since the epoch of a civil UTC date (proleptic Gregorian), so no
+   timegm is needed: Windows has none. */
+static int64_t sp_x509_days_from_civil(int64_t y, unsigned m, unsigned d) {
+  int64_t era;
+  unsigned yoe, doy, doe;
+  y -= m <= 2;
+  era = (y >= 0 ? y : y - 399) / 400;
+  yoe = (unsigned)(y - era * 400);
+  doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+  doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+  return era * 146097 + (int64_t)doe - 719468;
+}
+
+static int sp_x509_time_epoch(const ASN1_TIME *t, int64_t *out) {
+  struct tm tm;
+  memset(&tm, 0, sizeof tm);
+  if (!t || ASN1_STRING_length(t) == 0) return 0;
+#if defined(LIBRESSL_VERSION_NUMBER)
+  if (ASN1_time_parse((const char *)ASN1_STRING_get0_data(t), (size_t)ASN1_STRING_length(t), &tm, 0) == -1)
+    return 0;
+#elif OPENSSL_VERSION_NUMBER >= 0x10101000L
+  if (!ASN1_TIME_to_tm(t, &tm)) return 0;
+#else
+  {
+    int days = 0, secs = 0, ok;
+    ASN1_TIME *epoch = ASN1_TIME_set(NULL, 0);
+    ok = epoch && ASN1_TIME_diff(&days, &secs, epoch, t);
+    ASN1_TIME_free(epoch);
+    if (!ok) return 0;
+    *out = (int64_t)days * 86400 + secs;
+    return 1;
+  }
+#endif
+  *out = sp_x509_days_from_civil((int64_t)tm.tm_year + 1900, (unsigned)tm.tm_mon + 1, (unsigned)tm.tm_mday) * 86400 +
+         tm.tm_hour * 3600 + tm.tm_min * 60 + tm.tm_sec;
+  return 1;
+}
+
+/* One field record of what Ruby hands sp_x509_build: a code byte, a 4-byte
+   big-endian length and the field's bytes. */
+static int sp_x509_apply(X509 *x, char code, const unsigned char *v, size_t n) {
+  char num[64];
+  const unsigned char *p = v;
+  int ok = 0;
+
+  if ((code == 'v' || code == 's' || code == 'b' || code == 'a') && n >= sizeof num) return 0;
+  if (code == 'v' || code == 's' || code == 'b' || code == 'a') {
+    memcpy(num, v, n);
+    num[n] = 0;
+  }
+  switch (code) {
+  case 'v':
+    return X509_set_version(x, strtol(num, NULL, 10));
+  case 's': {
+    BIGNUM *bn = NULL;
+    ASN1_INTEGER *ai = NULL;
+    ok = BN_dec2bn(&bn, num) > 0 && (ai = BN_to_ASN1_INTEGER(bn, NULL)) && X509_set_serialNumber(x, ai);
+    ASN1_INTEGER_free(ai);
+    BN_free(bn);
+    return ok;
+  }
+  case 'S':
+  case 'I': {
+    X509_NAME *name = n <= (size_t)INT_MAX ? d2i_X509_NAME(NULL, &p, (long)n) : NULL;
+    ok = name && (code == 'S' ? X509_set_subject_name(x, name) : X509_set_issuer_name(x, name));
+    X509_NAME_free(name);
+    return ok;
+  }
+  case 'b':
+  case 'a': {
+    long long secs = strtoll(num, NULL, 10);
+    ASN1_TIME *t = code == 'b' ? X509_getm_notBefore(x) : X509_getm_notAfter(x);
+    return ASN1_TIME_set(t, (time_t)secs) != NULL;
+  }
+  case 'k': {
+    EVP_PKEY *k = n <= (size_t)INT_MAX ? d2i_PUBKEY(NULL, &p, (long)n) : NULL;
+    ok = k && X509_set_pubkey(x, k);
+    EVP_PKEY_free(k);
+    return ok;
+  }
+  }
+  return 0;
+}
+
+/* The certificate in `base` (a new one when it is empty) with the fields in
+   `fields` set on it, signed with the key when one is given (an EC key as
+   its curve and scalar, an RSA key as an empty curve and its PKCS#1 DER,
+   as SSLContext hands keys to the C) over the digest `md_name`. Answers
+   the DER, or "" with the reason: an unsigned new certificate cannot be
+   encoded, and answers DER's own reason for that, as CRuby's to_der does. */
+const char *sp_x509_build(const char *base, const char *fields, const char *curve,
+                          const char *key, const char *md_name) {
+  const unsigned char *f = (const unsigned char *)fields;
+  size_t flen = sp_str_byte_len(fields), at = 0;
+  int signing = sp_str_byte_len(key) > 0;
+  const EVP_MD *md = NULL;
+  X509 *x;
+
+  sp_ssl_errbuf[0] = 0;
+  ERR_clear_error();
+  /* first, as it raises DigestError for a name OpenSSL does not know, and
+     nothing is allocated yet */
+  if (signing) md = sp_openssl_md(md_name);
+  if (sp_str_byte_len(base) == 0) x = X509_new();
+  else if (!(x = sp_x509_from_der(base))) { SP_MD_FREE(md); return sp_x509_fail("d2i_X509"); }
+  if (!x) { SP_MD_FREE(md); return sp_x509_fail("X509_new"); }
+  while (at < flen) {
+    size_t n;
+    char code;
+    if (flen - at < 5) { X509_free(x); SP_MD_FREE(md); return sp_x509_fail("malformed certificate fields"); }
+    code = (char)f[at];
+    n = ((size_t)f[at + 1] << 24) | ((size_t)f[at + 2] << 16) | ((size_t)f[at + 3] << 8) | f[at + 4];
+    at += 5;
+    if (n > flen - at) { X509_free(x); SP_MD_FREE(md); return sp_x509_fail("malformed certificate fields"); }
+    if (!sp_x509_apply(x, code, f + at, n)) {
+      X509_free(x);
+      SP_MD_FREE(md);
+      sp_x509_reason(NULL);
+      sp_ffi_bin_len = 0;
+      return "";
+    }
+    at += n;
+  }
+  if (signing) {
+    EVP_PKEY *k = curve[0] ? sp_ec_evp_private(curve, key) : sp_rsa_evp_private(key);
+    int ok = k && X509_sign(x, k, md) > 0;
+    SP_MD_FREE(md);
+    EVP_PKEY_free(k);
+    if (!ok) { X509_free(x); sp_x509_reason("X509_sign"); sp_ffi_bin_len = 0; return ""; }
+  }
+  /* A field changed on a certificate that was read, and not signed again:
+     OpenSSL 3.0 keeps the TBS encoding it read and i2d_X509 writes that one
+     out, the change dropped, where 3.2 and later write the change. Encoding
+     it again here gives the changed fields under the old signature on every
+     version, as CRuby shows them. X509_sign does this itself. */
+  else if (flen > 0 && sp_str_byte_len(base) > 0 && i2d_re_X509_tbs(x, NULL) <= 0) {
+    X509_free(x);
+    sp_x509_reason("i2d_re_X509_tbs");
+    sp_ffi_bin_len = 0;
+    return "";
+  }
+  {
+    int n = i2d_X509(x, NULL);
+    unsigned char *p;
+    if (n <= 0 || !sp_x509_room(&sp_x509_build_out, (size_t)n)) {
+      X509_free(x);
+      sp_x509_reason(NULL);
+      sp_ffi_bin_len = 0;
+      return "";
+    }
+    p = (unsigned char *)sp_x509_build_out.p;
+    i2d_X509(x, &p);
+    X509_free(x);
+    sp_ffi_bin_len = n;
+    return sp_x509_build_out.p;
+  }
+}
+
+/* One field of the certificate in `der`, for the readers: version, serial
+   and the two times as decimal digits (a time OpenSSL cannot read answers
+   ""), the subject and the issuer as their DER, the public key as its
+   SubjectPublicKeyInfo DER. "" with the reason when the DER does not parse. */
+const char *sp_x509_field(const char *der, sp_int code) {
+  X509 *x = sp_x509_from_der(der);
+  char num[512];
+  const char *out = num;
+  size_t n = 0;
+
+  sp_ssl_errbuf[0] = 0;
+  if (!x) return sp_x509_fail("d2i_X509");
+  num[0] = 0;
+  switch ((char)code) {
+  case 'v':
+    snprintf(num, sizeof num, "%ld", X509_get_version(x));
+    n = strlen(num);
+    break;
+  case 's': {
+    BIGNUM *bn = ASN1_INTEGER_to_BN(X509_get0_serialNumber(x), NULL);
+    char *dec = bn ? BN_bn2dec(bn) : NULL;
+    if (dec) snprintf(num, sizeof num, "%s", dec);
+    OPENSSL_free(dec);
+    BN_free(bn);
+    n = strlen(num);
+    break;
+  }
+  case 'b':
+  case 'a': {
+    int64_t secs;
+    if (sp_x509_time_epoch(code == 'b' ? X509_get0_notBefore(x) : X509_get0_notAfter(x), &secs))
+      snprintf(num, sizeof num, "%lld", (long long)secs);
+    n = strlen(num);
+    break;
+  }
+  case 'S':
+  case 'I': {
+    X509_NAME *name = (X509_NAME *)(code == 'S' ? X509_get_subject_name(x) : X509_get_issuer_name(x));
+    int len = i2d_X509_NAME(name, NULL);
+    unsigned char *p;
+    if (len <= 0 || !sp_x509_room(&sp_x509_field_out, (size_t)len)) { X509_free(x); return sp_x509_fail("i2d_X509_NAME"); }
+    p = (unsigned char *)sp_x509_field_out.p;
+    i2d_X509_NAME(name, &p);
+    X509_free(x);
+    sp_ffi_bin_len = len;
+    return sp_x509_field_out.p;
+  }
+  case 'k': {
+    EVP_PKEY *k = X509_get0_pubkey(x);
+    int len = k ? i2d_PUBKEY(k, NULL) : -1;
+    unsigned char *p;
+    if (len <= 0 || !sp_x509_room(&sp_x509_field_out, (size_t)len)) {
+      X509_free(x);
+      sp_x509_reason("X509_get_pubkey");
+      sp_ffi_bin_len = 0;
+      return "";
+    }
+    p = (unsigned char *)sp_x509_field_out.p;
+    i2d_PUBKEY(k, &p);
+    X509_free(x);
+    sp_ffi_bin_len = len;
+    return sp_x509_field_out.p;
+  }
+  default:
+    X509_free(x);
+    return sp_x509_fail("unknown certificate field");
+  }
+  X509_free(x);
+  ERR_clear_error();
+  if (!sp_x509_room(&sp_x509_field_out, n + 1)) return sp_x509_fail("out of memory");
+  memcpy(sp_x509_field_out.p, out, n);
+  sp_ffi_bin_len = (int)n;
+  return sp_x509_field_out.p;
+}
+
+/* Certificate#verify: 1 when the key verifies the signature, 0 when it does
+   not, -1 with the reason when the DER or the key does not parse. */
+sp_int sp_x509_verify(const char *der, const char *spki) {
+  X509 *x = sp_x509_from_der(der);
+  const unsigned char *p = (const unsigned char *)spki;
+  EVP_PKEY *k = NULL;
+  int r;
+
+  sp_ssl_errbuf[0] = 0;
+  if (!x) { sp_x509_reason("d2i_X509"); return -1; }
+  if (sp_str_byte_len(spki) > (size_t)INT_MAX ||
+      !(k = d2i_PUBKEY(NULL, &p, (long)sp_str_byte_len(spki)))) {
+    X509_free(x);
+    sp_x509_reason("d2i_PUBKEY");
+    return -1;
+  }
+  r = X509_verify(x, k);
+  EVP_PKEY_free(k);
+  X509_free(x);
+  if (r < 0) { sp_x509_reason(NULL); return -1; }
+  ERR_clear_error();
+  return r > 0 ? 1 : 0;
+}
+
 /* A context's own certificates and key, a server's or a client's: the
    certificate before the key, so SSL_CTX_use_PrivateKey is the call that
    finds a key that is not the certificate's, with CRuby's reason for it.

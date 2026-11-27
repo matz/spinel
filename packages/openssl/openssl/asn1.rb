@@ -16,6 +16,38 @@ module OpenSSL
   module ASN1
     class ASN1Error < OpenSSLError; end
 
+    # The universal tag numbers, CRuby's constants: X509::Name takes a
+    # string type as one of these.
+    EOC = 0
+    BOOLEAN = 1
+    INTEGER = 2
+    BIT_STRING = 3
+    OCTET_STRING = 4
+    NULL = 5
+    OBJECT = 6
+    OBJECT_DESCRIPTOR = 7
+    EXTERNAL = 8
+    REAL = 9
+    ENUMERATED = 10
+    EMBEDDED_PDV = 11
+    UTF8STRING = 12
+    RELATIVE_OID = 13
+    SEQUENCE = 16
+    SET = 17
+    NUMERICSTRING = 18
+    PRINTABLESTRING = 19
+    T61STRING = 20
+    VIDEOTEXSTRING = 21
+    IA5STRING = 22
+    UTCTIME = 23
+    GENERALIZEDTIME = 24
+    GRAPHICSTRING = 25
+    ISO64STRING = 26
+    GENERALSTRING = 27
+    UNIVERSALSTRING = 28
+    CHARACTER_STRING = 29
+    BMPSTRING = 30
+
     def self.decode(der)
       der = der.__send__(:to_der) if der.respond_to?(:to_der)
       der = String.new(OpenSSL.send(:comparison_string, der))

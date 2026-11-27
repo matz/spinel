@@ -1,0 +1,13 @@
+"ok Incheon\n"
+nil
+[60, 60, 60, 60, 60, 32]
+[#<Encoding:BINARY (ASCII-8BIT)>]
+true
+[true, true, false, false, false]
+OpenSSL::X509::Certificate
+true
+nil
+"ok Incheon\n"
+true
+true
+[OpenSSL::SSL::SSLError, "SSL_export_keying_material"]

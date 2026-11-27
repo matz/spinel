@@ -71,7 +71,7 @@ static const uint32_t sp_crypto_sha256_k[64] = {
 };
 
 #if SP_HAVE_ARM_SHA2
-static SP_INLINE uint32x4_t sp_crypto_sha256_load_be(const uint8_t *p) {
+static SP_INLINE uint32x4_t sp_crypto_load_be32x4(const uint8_t *p) {
     return vreinterpretq_u32_u8(vrev32q_u8(vld1q_u8(p)));
 }
 
@@ -79,10 +79,10 @@ static void sp_crypto_sha256_blocks(uint32_t H[8], const uint8_t *p, size_t n) {
     uint32x4_t abcd = vld1q_u32(H), efgh = vld1q_u32(H + 4);
     for (; n > 0; n--, p += 64) {
         uint32x4_t initial_abcd = abcd, initial_efgh = efgh;
-        uint32x4_t w0 = sp_crypto_sha256_load_be(p);
-        uint32x4_t w1 = sp_crypto_sha256_load_be(p + 16);
-        uint32x4_t w2 = sp_crypto_sha256_load_be(p + 32);
-        uint32x4_t w3 = sp_crypto_sha256_load_be(p + 48);
+        uint32x4_t w0 = sp_crypto_load_be32x4(p);
+        uint32x4_t w1 = sp_crypto_load_be32x4(p + 16);
+        uint32x4_t w2 = sp_crypto_load_be32x4(p + 32);
+        uint32x4_t w3 = sp_crypto_load_be32x4(p + 48);
         for (int i = 0; i < 64; i += 4) {
             uint32x4_t wk = vaddq_u32(w0, vld1q_u32(sp_crypto_sha256_k + i));
             uint32x4_t old_abcd = abcd;
@@ -225,10 +225,11 @@ SP_TARGET_X86_SHA static void sp_crypto_sha256_blocks_ni(uint32_t H[8], const ui
 }
 
 /* Whether this CPU has the SHA extensions, and the SSSE3 and SSE4.1 the
- * function above is compiled with: CPUID leaf 7 EBX bit 29, leaf 1 ECX bits
+ * function above (and SHA-1's below) is compiled with: one CPUID bit covers
+ * the SHA-1 and SHA-256 instructions both. Leaf 7 EBX bit 29, leaf 1 ECX bits
  * 9 and 19. They use the SSE registers, which every x86-64 system saves, so
  * there is no operating-system side to ask. */
-static SP_NOINLINE SP_COLD int sp_crypto_sha256_ni_probe(void) {
+static SP_NOINLINE SP_COLD int sp_crypto_sha_ni_probe(void) {
     unsigned int a, b, c, d;
     if (__get_cpuid_max(0, 0) < 7) return 0;
     __cpuid(1, a, b, c, d);
@@ -238,15 +239,15 @@ static SP_NOINLINE SP_COLD int sp_crypto_sha256_ni_probe(void) {
 }
 
 /* The answer, asked once a process: 0 not asked yet, 1 yes, -1 no. */
-static int sp_crypto_sha256_ni_state;
+static int sp_crypto_sha_ni_state;
 
-/* Whether to take the function above. Threads that ask at the same moment
- * store the same value. */
-static SP_INLINE int sp_crypto_sha256_ni(void) {
-    int s = SP_ATOMIC_LOAD(&sp_crypto_sha256_ni_state, __ATOMIC_RELAXED);
+/* Whether to take the SHA-extension functions. Threads that ask at the same
+ * moment store the same value. */
+static SP_INLINE int sp_crypto_sha_ni(void) {
+    int s = SP_ATOMIC_LOAD(&sp_crypto_sha_ni_state, __ATOMIC_RELAXED);
     if (SP_UNLIKELY(s == 0)) {
-        s = sp_crypto_sha256_ni_probe() ? 1 : -1;
-        SP_ATOMIC_STORE(&sp_crypto_sha256_ni_state, s, __ATOMIC_RELAXED);
+        s = sp_crypto_sha_ni_probe() ? 1 : -1;
+        SP_ATOMIC_STORE(&sp_crypto_sha_ni_state, s, __ATOMIC_RELAXED);
     }
     return s > 0;
 }
@@ -256,7 +257,7 @@ static SP_INLINE int sp_crypto_sha256_ni(void) {
  * by the C above everywhere else. */
 static void sp_crypto_sha256_blocks(uint32_t H[8], const uint8_t *p, size_t n) {
 #if SP_HAVE_X86_SHA
-    if (sp_crypto_sha256_ni()) {
+    if (sp_crypto_sha_ni()) {
         sp_crypto_sha256_blocks_ni(H, p, n);
         return;
     }
@@ -304,11 +305,77 @@ else {
 
 /* ---------- SHA-1 ----------
  * FIPS-180-4 (legacy hash, kept for WebSocket handshake -- RFC 6455
- * requires SHA-1 specifically for Sec-WebSocket-Accept). Do not use
- * for new security designs; SHA-256 is the right primitive for those.
- * Compact reference implementation -- public domain.
+ * requires SHA-1 specifically for Sec-WebSocket-Accept -- and for the
+ * HMAC-SHA1 that STUN and SRTP authenticate with). Do not use for new
+ * security designs; SHA-256 is the right primitive for those. Compact
+ * reference implementation -- public domain. The CPU's SHA instructions
+ * run the same compression where SHA-256's do: on a little-endian AArch64
+ * SHA2 target always (its feature covers both hashes), on an x86-64 CPU
+ * with the SHA extensions when it says so.
  */
 
+#if SP_HAVE_ARM_SHA2
+/* Four rounds on words w, round function f of rounds 20f to 20f + 19: one
+ * instruction for the rounds, and sha1h for the E of the next four, from
+ * this group's A before the rounds change it. */
+static SP_INLINE uint32x4_t sp_crypto_sha1_arm_rounds(uint32x4_t abcd, uint32_t *e, uint32x4_t w, int f) {
+    static const uint32_t k[4] = { 0x5A827999, 0x6ED9EBA1, 0x8F1BBCDC, 0xCA62C1D6 };
+    uint32x4_t wk = vaddq_u32(w, vdupq_n_u32(k[f]));
+    uint32_t next = vsha1h_u32(vgetq_lane_u32(abcd, 0));
+    if (f == 0)
+        abcd = vsha1cq_u32(abcd, *e, wk);
+    else if (f == 2)
+        abcd = vsha1mq_u32(abcd, *e, wk);
+    else
+        abcd = vsha1pq_u32(abcd, *e, wk);
+    *e = next;
+    return abcd;
+}
+
+/* The next four schedule words from the sixteen before them, oldest first. */
+static SP_INLINE uint32x4_t sp_crypto_sha1_arm_next(uint32x4_t w4, uint32x4_t w3, uint32x4_t w2, uint32x4_t w1) {
+    return vsha1su1q_u32(vsha1su0q_u32(w4, w3, w2), w1);
+}
+
+/* n blocks at p into H, the twenty groups of four rounds written out so
+ * that each names its round function and its register. */
+static void sp_crypto_sha1_blocks(uint32_t H[5], const uint8_t *p, size_t n) {
+    uint32x4_t abcd = vld1q_u32(H);
+    uint32_t e = H[4];
+    for (; n > 0; n--, p += 64) {
+        uint32x4_t abcd0 = abcd;
+        uint32_t e0 = e;
+        uint32x4_t w0 = sp_crypto_load_be32x4(p);
+        uint32x4_t w1 = sp_crypto_load_be32x4(p + 16);
+        uint32x4_t w2 = sp_crypto_load_be32x4(p + 32);
+        uint32x4_t w3 = sp_crypto_load_be32x4(p + 48);
+        abcd = sp_crypto_sha1_arm_rounds(abcd, &e, w0, 0);                                                /* 0-3 */
+        abcd = sp_crypto_sha1_arm_rounds(abcd, &e, w1, 0);
+        abcd = sp_crypto_sha1_arm_rounds(abcd, &e, w2, 0);
+        abcd = sp_crypto_sha1_arm_rounds(abcd, &e, w3, 0);
+        w0 = sp_crypto_sha1_arm_next(w0, w1, w2, w3); abcd = sp_crypto_sha1_arm_rounds(abcd, &e, w0, 0);  /* 16-19 */
+        w1 = sp_crypto_sha1_arm_next(w1, w2, w3, w0); abcd = sp_crypto_sha1_arm_rounds(abcd, &e, w1, 1);  /* 20-23 */
+        w2 = sp_crypto_sha1_arm_next(w2, w3, w0, w1); abcd = sp_crypto_sha1_arm_rounds(abcd, &e, w2, 1);
+        w3 = sp_crypto_sha1_arm_next(w3, w0, w1, w2); abcd = sp_crypto_sha1_arm_rounds(abcd, &e, w3, 1);
+        w0 = sp_crypto_sha1_arm_next(w0, w1, w2, w3); abcd = sp_crypto_sha1_arm_rounds(abcd, &e, w0, 1);
+        w1 = sp_crypto_sha1_arm_next(w1, w2, w3, w0); abcd = sp_crypto_sha1_arm_rounds(abcd, &e, w1, 1);
+        w2 = sp_crypto_sha1_arm_next(w2, w3, w0, w1); abcd = sp_crypto_sha1_arm_rounds(abcd, &e, w2, 2);  /* 40-43 */
+        w3 = sp_crypto_sha1_arm_next(w3, w0, w1, w2); abcd = sp_crypto_sha1_arm_rounds(abcd, &e, w3, 2);
+        w0 = sp_crypto_sha1_arm_next(w0, w1, w2, w3); abcd = sp_crypto_sha1_arm_rounds(abcd, &e, w0, 2);
+        w1 = sp_crypto_sha1_arm_next(w1, w2, w3, w0); abcd = sp_crypto_sha1_arm_rounds(abcd, &e, w1, 2);
+        w2 = sp_crypto_sha1_arm_next(w2, w3, w0, w1); abcd = sp_crypto_sha1_arm_rounds(abcd, &e, w2, 2);
+        w3 = sp_crypto_sha1_arm_next(w3, w0, w1, w2); abcd = sp_crypto_sha1_arm_rounds(abcd, &e, w3, 3);  /* 60-63 */
+        w0 = sp_crypto_sha1_arm_next(w0, w1, w2, w3); abcd = sp_crypto_sha1_arm_rounds(abcd, &e, w0, 3);
+        w1 = sp_crypto_sha1_arm_next(w1, w2, w3, w0); abcd = sp_crypto_sha1_arm_rounds(abcd, &e, w1, 3);
+        w2 = sp_crypto_sha1_arm_next(w2, w3, w0, w1); abcd = sp_crypto_sha1_arm_rounds(abcd, &e, w2, 3);
+        w3 = sp_crypto_sha1_arm_next(w3, w0, w1, w2); abcd = sp_crypto_sha1_arm_rounds(abcd, &e, w3, 3);  /* 76-79 */
+        abcd = vaddq_u32(abcd, abcd0);
+        e += e0;
+    }
+    vst1q_u32(H, abcd);
+    H[4] = e;
+}
+#else
 static void sp_crypto_sha1_block(uint32_t H[5], const uint8_t b[64]) {
     uint32_t w[80], a, sa, sb, sc, sd, se, f, k;
     int i;
@@ -332,19 +399,102 @@ static void sp_crypto_sha1_block(uint32_t H[5], const uint8_t b[64]) {
     H[0] += sa; H[1] += sb; H[2] += sc; H[3] += sd; H[4] += se;
 }
 
+#if SP_HAVE_X86_SHA
+/* SHA-1 on the x86 SHA extensions. sha1rnds4 runs four rounds and takes the
+ * round function as an immediate, so each one is spelled out. */
+SP_TARGET_X86_SHA static SP_INLINE __m128i sp_crypto_sha1_ni_rounds(__m128i abcd, __m128i e, int f) {
+    switch (f) {
+    case 0:
+        return _mm_sha1rnds4_epu32(abcd, e, 0);
+    case 1:
+        return _mm_sha1rnds4_epu32(abcd, e, 1);
+    case 2:
+        return _mm_sha1rnds4_epu32(abcd, e, 2);
+    default:
+        return _mm_sha1rnds4_epu32(abcd, e, 3);
+    }
+}
+
+/* The next four schedule words from the sixteen before them, oldest first. */
+SP_TARGET_X86_SHA static SP_INLINE __m128i sp_crypto_sha1_ni_next(__m128i w4, __m128i w3, __m128i w2, __m128i w1) {
+    return _mm_sha1msg2_epu32(_mm_xor_si128(_mm_sha1msg1_epu32(w4, w3), w2), w1);
+}
+
+/* Four rounds after the first four: sha1nexte makes their E from the A the
+ * group before began with (*a) and adds the words; this group's A is kept
+ * for the next. */
+SP_TARGET_X86_SHA static SP_INLINE void sp_crypto_sha1_ni_group(__m128i *abcd, __m128i *a, __m128i w, int f) {
+    __m128i e = _mm_sha1nexte_epu32(*a, w);
+    *a = *abcd;
+    *abcd = sp_crypto_sha1_ni_rounds(*abcd, e, f);
+}
+
+/* n blocks at p into H. A is the high lane of abcd and E the high lane of e,
+ * as the instructions take them, and the words are loaded reversed. */
+SP_TARGET_X86_SHA static void sp_crypto_sha1_blocks_ni(uint32_t H[5], const uint8_t *p, size_t n) {
+    const __m128i be = _mm_set_epi64x(0x0001020304050607LL, 0x08090a0b0c0d0e0fLL);
+    __m128i abcd = _mm_shuffle_epi32(_mm_loadu_si128((const __m128i *)H), 0x1B);
+    __m128i e = _mm_set_epi32((int)H[4], 0, 0, 0);
+    for (; n > 0; n--, p += 64) {
+        __m128i abcd0 = abcd, e0 = e, a = abcd;
+        __m128i w0 = _mm_shuffle_epi8(_mm_loadu_si128((const __m128i *)p), be);
+        __m128i w1 = _mm_shuffle_epi8(_mm_loadu_si128((const __m128i *)(p + 16)), be);
+        __m128i w2 = _mm_shuffle_epi8(_mm_loadu_si128((const __m128i *)(p + 32)), be);
+        __m128i w3 = _mm_shuffle_epi8(_mm_loadu_si128((const __m128i *)(p + 48)), be);
+        abcd = sp_crypto_sha1_ni_rounds(abcd, _mm_add_epi32(e, w0), 0);                          /* 0-3 */
+        sp_crypto_sha1_ni_group(&abcd, &a, w1, 0);
+        sp_crypto_sha1_ni_group(&abcd, &a, w2, 0);
+        sp_crypto_sha1_ni_group(&abcd, &a, w3, 0);
+        w0 = sp_crypto_sha1_ni_next(w0, w1, w2, w3); sp_crypto_sha1_ni_group(&abcd, &a, w0, 0);  /* 16-19 */
+        w1 = sp_crypto_sha1_ni_next(w1, w2, w3, w0); sp_crypto_sha1_ni_group(&abcd, &a, w1, 1);  /* 20-23 */
+        w2 = sp_crypto_sha1_ni_next(w2, w3, w0, w1); sp_crypto_sha1_ni_group(&abcd, &a, w2, 1);
+        w3 = sp_crypto_sha1_ni_next(w3, w0, w1, w2); sp_crypto_sha1_ni_group(&abcd, &a, w3, 1);
+        w0 = sp_crypto_sha1_ni_next(w0, w1, w2, w3); sp_crypto_sha1_ni_group(&abcd, &a, w0, 1);
+        w1 = sp_crypto_sha1_ni_next(w1, w2, w3, w0); sp_crypto_sha1_ni_group(&abcd, &a, w1, 1);
+        w2 = sp_crypto_sha1_ni_next(w2, w3, w0, w1); sp_crypto_sha1_ni_group(&abcd, &a, w2, 2);  /* 40-43 */
+        w3 = sp_crypto_sha1_ni_next(w3, w0, w1, w2); sp_crypto_sha1_ni_group(&abcd, &a, w3, 2);
+        w0 = sp_crypto_sha1_ni_next(w0, w1, w2, w3); sp_crypto_sha1_ni_group(&abcd, &a, w0, 2);
+        w1 = sp_crypto_sha1_ni_next(w1, w2, w3, w0); sp_crypto_sha1_ni_group(&abcd, &a, w1, 2);
+        w2 = sp_crypto_sha1_ni_next(w2, w3, w0, w1); sp_crypto_sha1_ni_group(&abcd, &a, w2, 2);
+        w3 = sp_crypto_sha1_ni_next(w3, w0, w1, w2); sp_crypto_sha1_ni_group(&abcd, &a, w3, 3);  /* 60-63 */
+        w0 = sp_crypto_sha1_ni_next(w0, w1, w2, w3); sp_crypto_sha1_ni_group(&abcd, &a, w0, 3);
+        w1 = sp_crypto_sha1_ni_next(w1, w2, w3, w0); sp_crypto_sha1_ni_group(&abcd, &a, w1, 3);
+        w2 = sp_crypto_sha1_ni_next(w2, w3, w0, w1); sp_crypto_sha1_ni_group(&abcd, &a, w2, 3);
+        w3 = sp_crypto_sha1_ni_next(w3, w0, w1, w2); sp_crypto_sha1_ni_group(&abcd, &a, w3, 3);  /* 76-79 */
+        e = _mm_sha1nexte_epu32(a, e0);
+        abcd = _mm_add_epi32(abcd, abcd0);
+    }
+    _mm_storeu_si128((__m128i *)H, _mm_shuffle_epi32(abcd, 0x1B));
+    H[4] = (uint32_t)_mm_extract_epi32(e, 3);
+}
+#endif
+
+/* n whole blocks at p into H: on the SHA extensions where the CPU has them,
+ * by the C above everywhere else. */
+static void sp_crypto_sha1_blocks(uint32_t H[5], const uint8_t *p, size_t n) {
+#if SP_HAVE_X86_SHA
+    if (sp_crypto_sha_ni()) {
+        sp_crypto_sha1_blocks_ni(H, p, n);
+        return;
+    }
+#endif
+    for (; n > 0; n--, p += 64) sp_crypto_sha1_block(H, p);
+}
+#endif /* SP_HAVE_ARM_SHA2 */
+
 static void sp_crypto_sha1(const uint8_t *msg, size_t len, uint8_t out[20]) {
     uint32_t H[5] = {
         0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0
     };
     uint8_t buf[64];
     size_t i, full = len & ~((size_t)63);
-    for (i = 0; i < full; i += 64) sp_crypto_sha1_block(H, msg + i);
+    if (full) sp_crypto_sha1_blocks(H, msg, full / 64);
     size_t rem = len - full;
     for (i = 0; i < rem; i++) buf[i] = msg[full + i];
     buf[rem] = 0x80;
     if (rem >= 56) {
         for (i = rem + 1; i < 64; i++) buf[i] = 0;
-        sp_crypto_sha1_block(H, buf);
+        sp_crypto_sha1_blocks(H, buf, 1);
         for (i = 0; i < 56; i++) buf[i] = 0;
     }
 else {
@@ -352,7 +502,7 @@ else {
     }
     uint64_t bits = (uint64_t)len * 8;
     for (i = 0; i < 8; i++) buf[56 + i] = (uint8_t)(bits >> (56 - 8*i));
-    sp_crypto_sha1_block(H, buf);
+    sp_crypto_sha1_blocks(H, buf, 1);
     sp_crypto_store_be32(out, H, 5);
 }
 
@@ -515,10 +665,6 @@ const char *sp_crypto_md5_bin(const char *msg) {SP_GC_ROOT_STR(msg);
  * count (8 bytes) and the partial block (64 bytes), copied in and out of a
  * binary String, so a digest object keeps no more than that between calls.
  */
-
-static void sp_crypto_sha1_blocks(uint32_t *H, const uint8_t *p, size_t n) {
-    for (; n > 0; n--, p += 64) sp_crypto_sha1_block(H, p);
-}
 
 static void sp_crypto_md5_blocks(uint32_t *H, const uint8_t *p, size_t n) {
     for (; n > 0; n--, p += 64) sp_crypto_md5_block(H, p);
@@ -1234,16 +1380,16 @@ else {
         uint32_t H[5] = {
             0x67452301,0xEFCDAB89,0x98BADCFE,0x10325476,0xC3D2E1F0
         };
-        sp_crypto_sha1_block(H, ipad);
+        sp_crypto_sha1_blocks(H, ipad, 1);
         uint8_t buf[64];
         size_t full = mlen & ~((size_t)63);
-        for (i = 0; i < full; i += 64) sp_crypto_sha1_block(H, msg + i);
+        if (full) sp_crypto_sha1_blocks(H, msg, full / 64);
         size_t rem = mlen - full;
         for (i = 0; i < rem; i++) buf[i] = msg[full + i];
         buf[rem] = 0x80;
         if (rem >= 56) {
             for (i = rem + 1; i < 64; i++) buf[i] = 0;
-            sp_crypto_sha1_block(H, buf);
+            sp_crypto_sha1_blocks(H, buf, 1);
             for (i = 0; i < 56; i++) buf[i] = 0;
         }
 else {
@@ -1251,7 +1397,7 @@ else {
         }
         uint64_t bits = (uint64_t)(64 + mlen) * 8;
         for (i = 0; i < 8; i++) buf[56 + i] = (uint8_t)(bits >> (56 - 8*i));
-        sp_crypto_sha1_block(H, buf);
+        sp_crypto_sha1_blocks(H, buf, 1);
         for (i = 0; i < 5; i++) {
             inner[i*4]   = (uint8_t)(H[i] >> 24);
             inner[i*4+1] = (uint8_t)(H[i] >> 16);
@@ -1264,14 +1410,14 @@ else {
         uint32_t H[5] = {
             0x67452301,0xEFCDAB89,0x98BADCFE,0x10325476,0xC3D2E1F0
         };
-        sp_crypto_sha1_block(H, opad);
+        sp_crypto_sha1_blocks(H, opad, 1);
         uint8_t buf[64];
         for (i = 0; i < 20; i++) buf[i] = inner[i];
         buf[20] = 0x80;
         for (i = 21; i < 56; i++) buf[i] = 0;
         uint64_t bits = (uint64_t)(64 + 20) * 8;
         for (i = 0; i < 8; i++) buf[56 + i] = (uint8_t)(bits >> (56 - 8*i));
-        sp_crypto_sha1_block(H, buf);
+        sp_crypto_sha1_blocks(H, buf, 1);
         sp_crypto_store_be32(out, H, 5);
     }
 }

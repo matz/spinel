@@ -510,15 +510,29 @@ int sp_net_udp_connect(int fd, const char *host, int port) {SP_GC_ROOT_STR(host)
     freeaddrinfo(head);
     return rc;
 }
-int sp_net_udp_send_to(int fd, const char *data, int len, int flags, const char *host, int port) {SP_GC_ROOT_STR(data);SP_GC_ROOT_STR(host);
-    if (fd < 0) return -1;
-    if (!host || !*host) return (int)send(fd, data, (size_t)len, flags);
+/* Where send(mesg, flags, host, port) goes: the first address `host` and
+   `port` resolve to within `family`, copied into `to` (of `cap` bytes), and
+   its length; -1 when they do not resolve. Apart from the sendto because
+   the lookup parks: the caller takes its use of the handle for the sendto
+   alone, as a use spans no park (sp_io.c). */
+int sp_net_udp_dest(int family, const char *host, int port, void *to, int cap) {SP_GC_ROOT_STR(host);
+    struct addrinfo hints;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family   = family;
+    hints.ai_socktype = SOCK_DGRAM;
+    char portbuf[16];
+    snprintf(portbuf, sizeof(portbuf), "%d", port);
     struct addrinfo *head = NULL;
-    struct addrinfo *ai = sp_net_udp_resolve(fd, host, port, 0, &head);
-    if (!ai) return -1;
-    int rc = (int)sendto(fd, data, (size_t)len, flags, ai->ai_addr, ai->ai_addrlen);
+    if (sp_net_resolve((host && *host) ? host : NULL, portbuf, &hints, &head) != 0) return -1;
+    if (!head || head->ai_addrlen > (socklen_t)cap) {
+        if (head) freeaddrinfo(head);
+        errno = EINVAL;
+        return -1;
+    }
+    int len = (int)head->ai_addrlen;
+    memcpy(to, head->ai_addr, (size_t)len);
     freeaddrinfo(head);
-    return rc;
+    return len;
 }
 /* Reads one datagram into `buf`; fills the sender's IP/port when asked.
    Returns the byte count, or -1. A cap of 0 still takes the datagram (and

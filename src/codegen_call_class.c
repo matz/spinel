@@ -6142,6 +6142,27 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
         int oc = allocate_on_own_class(c, id);
         if (oc >= 0 && !class_is_exc_subclass(c, oc)) { emit_own_class_alloc(c, id, oc, b); return 1; }
       }
+      /* a subclass's instance where the call's slot is the ancestor's (an
+         ancestor's class method run with a subclass as self, nokogiri's
+         XML::Document.parse for HTML5::Document): the pointer as that slot
+         spells it, which C asks for although the layouts agree (#3418) */
+      static int s_new_upcast;
+      if (is_new_name(name) && user_new < 0 && !s_new_upcast) {
+        TyKind nt_ty = comp_ntype(c, id);
+        int sc = ty_is_object(nt_ty) ? ty_object_class(nt_ty) : -1;
+        int below = 0;
+        for (int k = sc >= 0 && sc != new_cls ? c->classes[new_cls].parent : -1; k >= 0; k = c->classes[k].parent)
+          if (k == sc) { below = 1; break; }
+        if (below && !c->classes[sc].is_value_type && !c->classes[new_cls].is_value_type) {
+          Buf inner; memset(&inner, 0, sizeof inner);
+          s_new_upcast = 1;
+          int done = emit_call_class_method_arms(c, id, &inner, nt, name, recv, argc, argv);
+          s_new_upcast = 0;
+          if (done) buf_printf(b, "((sp_%s *)%s)", c->classes[sc].c_name, inner.p ? inner.p : "");
+          free(inner.p);
+          if (done) return 1;
+        }
+      }
       if (is_new_name(name) && user_new < 0) {
         ClassInfo *ncls = &c->classes[new_cls];
         /* a native class's bare `new` uses the declared constructor, exactly

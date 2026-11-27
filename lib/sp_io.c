@@ -237,6 +237,16 @@ int sp_io_make_pipe(int fds[2]) {
 #endif
 }
 
+/* The pipe IO.pipe makes, or CRuby's error for one the system refuses
+   (Errno::EMFILE at the descriptor limit): the generated code and sp_io_pipe
+   read the descriptors only after this returns. */
+void sp_io_pipe_or_raise(int fds[2]) {
+  if (sp_io_make_pipe(fds) != 0) {
+    int e = errno;
+    sp_raise_cls(sp_errno_class_name(e), strerror(e));
+  }
+}
+
 /* IO.pipe end: wrap a raw pipe fd in a GC-managed sp_File so the
    sp_File_* I/O ops work on it. Same finalizer/scan as sp_File_open. */
 /* owns_fd: the descriptor is this handle's to release when fdopen fails --

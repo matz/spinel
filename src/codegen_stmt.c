@@ -20238,7 +20238,8 @@ static int emit_multi_write_stmt_body(Compiler *c, int id, Buf *b, int indent, c
         emit_local_ref(c, lefts[0], rn0, &rb);
         emit_local_ref(c, lefts[1], wn0, &wb);
         emit_indent(b, indent);
-        buf_printf(b, "{ int _t%d[2]; sp_io_make_pipe(_t%d); ", tf, tf);
+        /* (a pipe the system refuses, at the descriptor limit, is CRuby's Errno) */
+        buf_printf(b, "{ int _t%d[2]; sp_io_pipe_or_raise(_t%d); ", tf, tf);
         buf_printf(b, "%s = sp_io_pipe_reader(_t%d[0]); ", rb.p, tf);
         /* the write end is sync in CRuby (sp_io_pipe_writer), as sp_io_pipe
            makes it for the non-destructured call (#4263) */

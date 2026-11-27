@@ -6766,7 +6766,7 @@ int sp_typed_arr_frozen(sp_RbVal v) {
 /* IO.pipe -> [reader, writer] handles (#2815) */
 sp_PolyArray *sp_io_pipe(void) {
   int fds[2];
-  if (sp_io_make_pipe(fds) != 0) sp_raise_cls("IOError", "pipe failed");
+  sp_io_pipe_or_raise(fds);
   sp_PolyArray *a = sp_PolyArray_new();
   SP_GC_ROOT(a);
   sp_PolyArray_push(a, sp_box_obj(sp_io_pipe_reader(fds[0]), SP_BUILTIN_IO));

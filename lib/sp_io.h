@@ -140,6 +140,7 @@ const char *sp_io_to_s(sp_File *f);
 sp_File *sp_File_open(const char *path, const char *mode);
 /* pipe(2) wrapper. 0 ok, -1 error. */
 int sp_io_make_pipe(int fds[2]);
+void sp_io_pipe_or_raise(int fds[2]);   /* the pipe, or CRuby's Errno for one the system refuses */
 /* IO.pipe end: wrap a raw pipe fd in a GC-managed sp_File. */
 sp_File *sp_io_fdopen(int fd, const char *mode);
 sp_File *sp_io_fdopen_ex(int fd, const char *mode, int owns_fd);

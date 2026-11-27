@@ -12321,11 +12321,13 @@ static int desugar_builtin_method_obj(Compiler *c) {
        or when they disagree def __bam_<id>(__bam_r, *__bam_a) = __bam_r.<sym>(*__bam_a) */
     int passed = 0;
     int sites = bam_call_argc(c, id, &passed);
+    /* an Array or a String, or an instance of a subclass of either, whose [] takes a start and a length too */
+    int slice_recv = ty_is_array(rt) || rt == TY_STRING || (sub_bcls && (sp_streq(sub_bcls, "Array") || sp_streq(sub_bcls, "String")));
     int nfwd = sites;
     if (binop) nfwd = 1;
     /* an Array's or a String's [] also takes a start and a length: its
        wrapper forwards the two when its call sites pass them */
-    if (binop && sp_streq(sym, "[]") && !poly_self && (ty_is_array(rt) || rt == TY_STRING) &&
+    if (binop && sp_streq(sym, "[]") && !poly_self && slice_recv &&
         (sites == 2 || sites == BAM_VARIADIC))
       nfwd = sites;
     /* A Method passed as a block is called by the block's yield, which no
@@ -12341,7 +12343,7 @@ static int desugar_builtin_method_obj(Compiler *c) {
        (arity -1): passed as a block, it takes the two values a yield like
        each_with_index's hands it, where the operand wrapper dropped the
        second. A Hash's takes its one key. */
-    if (passed && binop && sp_streq(sym, "[]") && !poly_self && (ty_is_array(rt) || rt == TY_STRING))
+    if (passed && binop && sp_streq(sym, "[]") && !poly_self && slice_recv)
       nfwd = BAM_VARIADIC;
     /* A boxed receiver's Method that no site above calls (held in an
        ivar, or merged with another value as the arm a split on the
@@ -12381,8 +12383,7 @@ static int desugar_builtin_method_obj(Compiler *c) {
        (splat_dispatch_on_length); the table leaves slice out for Hash#slice,
        whose keys are any number, so `a.method(:slice)` called with one and
        with two arguments put the splatted array in the index slot. */
-    int slice_alias = nfwd == BAM_VARIADIC && sp_streq(sym, "slice") && !poly_self &&
-                      (ty_is_array(rt) || rt == TY_STRING);
+    int slice_alias = nfwd == BAM_VARIADIC && sp_streq(sym, "slice") && !poly_self && slice_recv;
     nt_node_set_str(nt, call, "name", slice_alias ? "[]" : sym);
     nt_node_set_ref(nt, call, "receiver", rread);
     if (name_is_plain_setter(sym)) nt_set_attr_write(nt, call, 1);   /* `__bam_r.attr = __bam_a` */

@@ -1285,20 +1285,32 @@ module URI
 
   # Percent-encode one www-form component: everything but the unreserved set,
   # with a space as "+", which is what CRuby does here (and what differs from
-  # a path escape).
+  # a path escape). Byte by byte, as CRuby's gsub over the bytes is: a String
+  # for each character, a regexp match on it and a format for each escaped
+  # byte made 4 to 5 objects a byte.
   def self.encode_www_form_component(str)
+    s = str.to_s
     out = String.new
-    str.to_s.each_char do |ch|
-      if ch =~ /\A[A-Za-z0-9\*\-\.\_]\z/
-        out << ch
-      elsif ch == " "
-        out << "+"
+    n = s.bytesize
+    i = 0
+    while i < n
+      b = s.getbyte(i)
+      if (b >= 97 && b <= 122) || (b >= 65 && b <= 90) || (b >= 48 && b <= 57) ||
+         b == 42 || b == 45 || b == 46 || b == 95
+        out << b
+      elsif b == 32
+        out << 43
       else
-        ch.bytes.each { |b| out << format("%%%02X", b) }
+        out << 37
+        out << FORM_HEX.getbyte(b >> 4)
+        out << FORM_HEX.getbyte(b & 15)
       end
+      i += 1
     end
     out
   end
+  FORM_HEX = "0123456789ABCDEF"
+  private_constant :FORM_HEX
 
   # The value of the hex digit byte +b+, or nil for any other byte (or nil).
   def self.hex_value(b)

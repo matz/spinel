@@ -1020,11 +1020,16 @@ static void emit_ternary_arm_o(Compiler *c, int nd, TyKind res, int res_o, Buf *
   NodeKind bk = nt_kind(nt, nd);
   if (res_o && oint_kind(res)) { emit_oint_expr(c, nd, res, b); return; }
   if (res == TY_POLY && repr_of(c, nd).kind != RK_BOXED) { emit_boxed(c, nd, b); return; }
-  /* A byte-valued conditional reads a handle arm through its byte face. */
+  /* A byte-valued conditional reads a handle arm through its byte face: the
+     face macro, which reads a handle and keeps bytes, since an arm the
+     representation holds as a handle may render as bytes (a format call, an
+     interpolation, each a fresh String): sp_strbuf_read of those did not
+     compile. SP_STR_BC where the read is held across a block the program
+     runs, as str_read_face reads one. */
   if (res == TY_STRING && repr_of(c, nd).as_ty == TY_STRBUF) {
-    str_read_handle_open(b);
+    buf_puts(b, g_one_held ? "SP_STR_BC(" : "SP_STR_B(");
     emit_expr(c, nd, b);
-    str_read_handle_close(b);
+    buf_puts(b, ")");
     return;
   }
   /* An arm with no C VALUE cannot sit in a C conditional beside a typed

@@ -163,8 +163,9 @@ only once the program sets `verify_mode` (or calls `set_params`), and checks
 what it gets against its `cert_store`, which is empty unless one is given
 (CRuby's `set_params` gives it the system's); `verify_mode` reads
 `VERIFY_PEER` before it is set, where CRuby's reads nil. `set_params` reads
-`verify_mode` and `verify_hostname` from its params and no other key, and
-answers the context, where CRuby's answers the params.
+`verify_mode`, `verify_hostname`, `min_version` and `max_version` from its
+params and no other key, and answers the context, where CRuby's answers the
+params.
 `OpenSSL::Digest` (`SHA256` / `SHA384` / `SHA512` / `SHA1` / `MD5`, the class-method forms, also
 with the algorithm named, and the object: `OpenSSL::Digest.new("SHA256")`,
 `update` / `<<`, `digest` / `hexdigest` / `base64digest` and their `!` forms,

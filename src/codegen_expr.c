@@ -2554,6 +2554,13 @@ static int emit_local_ivar_write_expr(Compiler *c, int id, Buf *b, const NodeTab
        `y = [] if i == 0` there stopped the C build. */
     else if (lv && v_empty_array && ty_is_ptr_array(lv->type)) buf_puts(b, ptr_array_new_c(lv->type));
     else if (lv && v_empty_array && emit_empty_container_for_slot(c, v, lv->type, b)) { }
+    /* ...and an empty `{}` at the slot's variant, as the statement form and
+       the ivar twin build it (emit_empty_literal_as): its own, the variant
+       the reads elsewhere suggested, went into a slot of another, the
+       inner write of a chain (`@cache = cache = {}`) whose local the ivar's
+       poly-keyed reads typed */
+    else if (lv && nt_kind(nt, v) == NK_HashNode && (nt_arr(nt, v, "elements", &ven), ven == 0) &&
+             ty_is_hash(lv->type) && emit_empty_literal_as(c, v, lv->type, b)) { }
     else if (lv && lv->type == TY_POLY_ARRAY && ty_is_array(comp_ntype(c, v)) &&
              repr_of(c, v).elem != TY_POLY) {
       /* a typed array into a poly-array slot: convert, as emit_assign does

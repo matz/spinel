@@ -63,7 +63,14 @@ module OpenSSL
       def initialize(name = nil, template = OBJECT_TYPE_TEMPLATE)
         @der = "\x30\x00".b
         if name.is_a?(Array)
-          name.each { |e| add_entry(e[0], e[1], e[2] || template[e[0]]) }
+          # an entry's own type, else the template's, else UTF8STRING, as
+          # CRuby's: a template without the field does not mean add_entry's
+          name.each do |e|
+            type = e[2]
+            type = template[e[0]] if type.nil?
+            type = DEFAULT_OBJECT_TYPE if type.nil?
+            add_entry(e[0], e[1], type)
+          end
         elsif !name.nil?
           der = Native.x509_name_der(OpenSSL.send(:comparison_string, name))
           raise NameError, Native.last_error if der.empty?

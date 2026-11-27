@@ -2103,7 +2103,8 @@ static SP_TLS sp_x509_out sp_x509_build_out, sp_x509_field_out, sp_x509_name_out
 static X509_NAME *sp_x509_name_from_der(const char *der) {
   const unsigned char *p = (const unsigned char *)der;
   size_t len = sp_str_byte_len(der);
-  if (len == 0) return X509_NAME_new();
+  /* "" is no name: it fails to decode, as CRuby's Name.new("") does; an
+     empty name is 30 00, which Name.new starts from */
   if (len > (size_t)INT_MAX) return NULL;
   return d2i_X509_NAME(NULL, &p, (long)len);
 }
@@ -2201,15 +2202,28 @@ const char *sp_x509_name_entries(const char *der) {
   for (int i = 0; i < count; i++) {
     const X509_NAME_ENTRY *e = X509_NAME_get_entry(name, i);
     const ASN1_STRING *v = X509_NAME_ENTRY_get_data(e);
-    char longname[256], type[16];
-    const char *label = longname;
-    int nid;
-    if (OBJ_obj2txt(longname, sizeof longname, X509_NAME_ENTRY_get_object(e), 0) <= 0) longname[0] = 0;
-    if ((nid = OBJ_ln2nid(longname)) != NID_undef) label = OBJ_nid2sn(nid);
+    const ASN1_OBJECT *obj = X509_NAME_ENTRY_get_object(e);
+    char buf[256], type[16];
+    char *longname = buf;
+    const char *label;
+    int nid, need = OBJ_obj2txt(buf, sizeof buf, obj, 0);
+    /* an OID longer than the buffer, OBJ_obj2txt cut short: the length it
+       answers is the whole text's, so the text is taken again in full */
+    if (need >= (int)sizeof buf && (longname = OPENSSL_malloc((size_t)need + 1)) != NULL)
+      OBJ_obj2txt(longname, need + 1, obj, 0);
+    else if (need >= (int)sizeof buf) {
+      X509_NAME_free(name);
+      sp_ffi_bin_len = 0;
+      return "";
+    }
+    if (need <= 0) longname[0] = 0;
+    label = (nid = OBJ_ln2nid(longname)) != NID_undef ? OBJ_nid2sn(nid) : longname;
     snprintf(type, sizeof type, "%d", ASN1_STRING_type(v));
-    if (!sp_x509_put(&sp_x509_name_out, &at, label, strlen(label)) ||
-        !sp_x509_put(&sp_x509_name_out, &at, ASN1_STRING_get0_data(v), (size_t)ASN1_STRING_length(v)) ||
-        !sp_x509_put(&sp_x509_name_out, &at, type, strlen(type))) {
+    int put = sp_x509_put(&sp_x509_name_out, &at, label, strlen(label)) &&
+              sp_x509_put(&sp_x509_name_out, &at, ASN1_STRING_get0_data(v), (size_t)ASN1_STRING_length(v)) &&
+              sp_x509_put(&sp_x509_name_out, &at, type, strlen(type));
+    if (longname != buf) OPENSSL_free(longname);
+    if (!put) {
       X509_NAME_free(name);
       sp_ffi_bin_len = 0;
       return "";
@@ -2280,8 +2294,10 @@ static int sp_x509_apply(X509 *x, char code, const unsigned char *v, size_t n) {
   const unsigned char *p = v;
   int ok = 0;
 
-  if ((code == 'v' || code == 's' || code == 'b' || code == 'a') && n >= sizeof num) return 0;
-  if (code == 'v' || code == 's' || code == 'b' || code == 'a') {
+  /* the serial is an INTEGER of any size, as CRuby's goes through a BN, so
+     only the fixed-width fields go through num */
+  if ((code == 'v' || code == 'b' || code == 'a') && n >= sizeof num) return 0;
+  if (code == 'v' || code == 'b' || code == 'a') {
     memcpy(num, v, n);
     num[n] = 0;
   }
@@ -2291,7 +2307,12 @@ static int sp_x509_apply(X509 *x, char code, const unsigned char *v, size_t n) {
   case 's': {
     BIGNUM *bn = NULL;
     ASN1_INTEGER *ai = NULL;
-    ok = BN_dec2bn(&bn, num) > 0 && (ai = BN_to_ASN1_INTEGER(bn, NULL)) && X509_set_serialNumber(x, ai);
+    char *dec = n < (size_t)INT_MAX ? OPENSSL_malloc(n + 1) : NULL;
+    if (!dec) return 0;
+    memcpy(dec, v, n);
+    dec[n] = 0;
+    ok = BN_dec2bn(&bn, dec) > 0 && (ai = BN_to_ASN1_INTEGER(bn, NULL)) && X509_set_serialNumber(x, ai);
+    OPENSSL_free(dec);
     ASN1_INTEGER_free(ai);
     BN_free(bn);
     return ok;
@@ -2412,13 +2433,22 @@ const char *sp_x509_field(const char *der, sp_int code) {
     n = strlen(num);
     break;
   case 's': {
+    /* every digit, as CRuby's serial is the INTEGER as a BN: num is for
+       the fixed-width fields */
     BIGNUM *bn = ASN1_INTEGER_to_BN(X509_get0_serialNumber(x), NULL);
     char *dec = bn ? BN_bn2dec(bn) : NULL;
-    if (dec) snprintf(num, sizeof num, "%s", dec);
-    OPENSSL_free(dec);
+    size_t len = dec ? strlen(dec) : 0;
     BN_free(bn);
-    n = strlen(num);
-    break;
+    X509_free(x);
+    if (!dec || !sp_x509_room(&sp_x509_field_out, len + 1)) {
+      OPENSSL_free(dec);
+      return sp_x509_fail("ASN1_INTEGER_to_BN");
+    }
+    memcpy(sp_x509_field_out.p, dec, len);
+    OPENSSL_free(dec);
+    ERR_clear_error();
+    sp_ffi_bin_len = (int)len;
+    return sp_x509_field_out.p;
   }
   case 'b':
   case 'a': {

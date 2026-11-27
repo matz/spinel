@@ -349,6 +349,8 @@ static int lr_add(ElabWalk *w, int node, ElabPos *pos) {
   r->st[k].bmay = pos->bmay; r->st[k].blk = pos->blk; r->st[k].skip = pos->skip; r->st[k].unsure = pos->unsure;
   r->at[node] = k;
   pos->e = k; pos->top = r->st[k].top; pos->kind = EP_SPINE;
+  /* a class header: a bare method_defined? in its body asks the class */
+  if (cb_walk_give_self(w->c, node)) lr_fit(r, w->c->nt->count);
   return k;
 }
 

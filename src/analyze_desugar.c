@@ -28867,6 +28867,11 @@ static int cb_struct_act(const NodeTable *nt, int s) {
   return is_record_block_self_cmethod(nm);
 }
 
+/* Which calls cb_give_self gives self: CB_ALL, every name; CB_NOT_MD, all
+   but method_defined? and its kin, which the walk gives (CB_MD) as it
+   reaches the class's header (cb_walk_give_self) */
+enum { CB_ALL, CB_NOT_MD, CB_MD };
+static int cb_mode = CB_ALL;
 static int cb_give_self(Compiler *c, NodeTable *nt, int node, const char *builtin, int strct, const char *cname, int inblk) {
   if (node < 0) return 0;
   NodeKind k = nt_kind(nt, node);
@@ -28875,9 +28880,11 @@ static int cb_give_self(Compiler *c, NodeTable *nt, int node, const char *builti
   int changed = 0;
   const char *cm = k == NK_CallNode ? nt_str(nt, node, "name") : NULL;
   int r = k == NK_CallNode ? nt_ref(nt, node, "receiver") : -1;
+  /* (another mode's call: its parts alone) */
+  int give = cb_mode == CB_ALL || (is_method_defined_query(cm) != 0) == (cb_mode == CB_MD);
   /* method_defined? and its kin, which answer a builtin's methods from
      CRuby's table, take the class by name. */
-  if (builtin && is_method_defined_query(cm) && !cb_program_defines(nt, cm, cname) &&
+  if (give && builtin && is_method_defined_query(cm) && !cb_program_defines(nt, cm, cname) &&
       (r < 0 || nt_kind(nt, r) == NK_SelfNode)) {
     int cls = fwd_new_node_like(nt, node, "ConstantReadNode");
     if (cls >= 0) {
@@ -28890,7 +28897,7 @@ static int cb_give_self(Compiler *c, NodeTable *nt, int node, const char *builti
      reopened builtin class (String, Array), which answers them for the
      program's own methods alone: they are refused rather than answered
      without the builtin's methods. */
-  else if (((strct && cb_struct_act(nt, node)) || (cb_self_act(nt, node) && !cb_program_defines(nt, cm, cname))) &&
+  else if (give && ((strct && cb_struct_act(nt, node)) || (cb_self_act(nt, node) && !cb_program_defines(nt, cm, cname))) &&
            !(builtin && is_instance_method_table_read(cm)) && !(inblk && !is_name_reader(cm))) {
     int self = fwd_new_node_like(nt, node, "SelfNode");
     if (self >= 0) {
@@ -28936,6 +28943,36 @@ static int cb_give_self(Compiler *c, NodeTable *nt, int node, const char *builti
    the walk made them). */
 int incl_give_self(Compiler *c, NodeTable *nt, int node, const char *cname) {
   return cb_give_self(c, nt, node, NULL, 0, cname, 0);
+}
+
+/* The builtin class or module class header cn reopens, by its name (`String`
+   at the top level, or `::String`, not a class of that name in another
+   namespace: `Foo::String`, or `String` inside `module Foo`), and in *cname
+   the header's name; NULL for a program class */
+static const char *cb_frame_builtin(Compiler *c, int cn, const char **cname) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int cp = nt_ref(nt, cn, "constant_path");
+  NodeKind cpk = cp >= 0 ? nt_kind(nt, cp) : NK_NilNode;
+  *cname = cpk == NK_ConstantReadNode || cpk == NK_ConstantPathNode ? key_name(c, cp) : NULL;
+  int builtin = *cname && (is_builtin_class_name(*cname) || is_builtin_module_name(*cname)) &&
+                (cpk == NK_ConstantReadNode ? !engine_lexically_nested(nt, cn) : nt_ref(nt, cp, "parent") < 0);
+  return builtin ? *cname : NULL;
+}
+
+/* Class header frame of a class of the program's, as the walk reaches it: a
+   bare method_defined? or one of its kin in its body is asked of the class, as
+   desugar_class_body_object_acts gives the other Object and Module methods
+   self ahead of the walk */
+int cb_walk_give_self(Compiler *c, int frame) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  if (frame < 0 || !class_def_opens_frame(nt, frame)) return 0;
+  const char *cname = NULL;
+  if (cb_frame_builtin(c, frame, &cname)) return 0;   /* (a builtin's reopening: given ahead of the walk) */
+  cb_mode = CB_MD;
+  int changed = cb_give_self(c, nt, class_def_body(nt, frame), NULL, 0, cname, 0);
+  cb_mode = CB_ALL;
+  if (changed) comp_grow_node_arrays(c);
+  return changed;
 }
 
 /* Does id define or remove a method (a def, an alias, an undef) anywhere
@@ -29053,15 +29090,12 @@ int desugar_class_body_object_acts(Compiler *c) {
   int n0 = nt->count, changed = 0;
   for (int cn = 0; cn < n0; cn++) {
     if (!class_def_opens_frame(nt, cn)) continue;
-    /* the builtin itself: `String` at the top level, or `::String`, not a
-       class of that name in another namespace (`Foo::String`, or `String`
-       inside `module Foo`) */
-    int cp = nt_ref(nt, cn, "constant_path");
-    NodeKind cpk = cp >= 0 ? nt_kind(nt, cp) : NK_NilNode;
-    const char *cname = cpk == NK_ConstantReadNode || cpk == NK_ConstantPathNode ? key_name(c, cp) : NULL;
-    int builtin = cname && (is_builtin_class_name(cname) || is_builtin_module_name(cname)) &&
-                  (cpk == NK_ConstantReadNode ? !engine_lexically_nested(nt, cn) : nt_ref(nt, cp, "parent") < 0);
-    changed |= cb_give_self(c, nt, class_def_body(nt, cn), builtin ? cname : NULL, 0, cname, 0);
+    const char *cname = NULL, *builtin = cb_frame_builtin(c, cn, &cname);
+    /* (method_defined? and its kin in a program's class: the walk, cb_walk_give_self; in a builtin's
+       reopening they are given here, ahead of the steps that lower the reopening's methods) */
+    cb_mode = builtin ? CB_ALL : CB_NOT_MD;
+    changed |= cb_give_self(c, nt, class_def_body(nt, cn), builtin, 0, cname, 0);
+    cb_mode = CB_ALL;
   }
   /* a Struct.new / Data.define block a constant or a local holds is the
      class's body, where self is the class as well */

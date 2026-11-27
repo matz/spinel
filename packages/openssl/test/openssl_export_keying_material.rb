@@ -117,6 +117,7 @@ def connect(client_cert)
   before = ssl.peer_cert
   ssl.connect
   mine = exports(ssl)
+  version = ssl.ssl_version
   cert = ssl.peer_cert
   ssl.write("Incheon\n")
   reply = ssl.gets
@@ -124,10 +125,10 @@ def connect(client_cert)
   sock.close
   theirs, server_sees = t.value
   server.close
-  [before, mine, cert, theirs, server_sees, reply]
+  [before, mine, cert, theirs, server_sees, reply, version]
 end
 
-before, mine, cert, theirs, server_sees, reply = connect(false)
+before, mine, cert, theirs, server_sees, reply, version = connect(false)
 p reply
 p before
 # Each answer is a binary String of the length asked for.
@@ -135,17 +136,23 @@ p mine.map(&:bytesize)
 p mine.map { |s| s.encoding }.uniq
 # The two ends agree on every request.
 p mine == theirs
-# No context and an empty one are the same request under TLS 1.3 (RFC 8446
-# 7.5), which the handshake here negotiates; a context, another label or
+# Two answers depend on the version the handshake negotiates, which is TLS
+# 1.2 where the library has no 1.3 (OpenSSL 1.1.0). Under TLS 1.3 (RFC 8446
+# 7.5) no context and an empty one are the same request, and the length is
+# part of what is derived, so a shorter answer is not a prefix of a longer
+# one. Under TLS 1.2 (RFC 5705) an empty context is a context, and the PRF's
+# output is one stream, so it is. Either way a context, another label or
 # another length is another answer.
-p [mine[0] == mine[1], mine[1] == mine[2], mine[0] == mine[3], mine[0] == mine[4], mine[0].byteslice(0, 32) == mine[5]]
+tls13 = version == "TLSv1.3"
+p [mine[0] == mine[1], (mine[1] == mine[2]) == tls13, mine[0] == mine[3], mine[0] == mine[4],
+   (mine[0].byteslice(0, 32) == mine[5]) == !tls13]
 # The client's view of the server's certificate is the one the server has.
 p cert.class
 p cert.to_der == LEAF.to_der
 # A client sent no certificate, so the server has none to show.
 p server_sees
 
-_, mine, _, theirs, server_sees, reply = connect(true)
+_, mine, _, theirs, server_sees, reply, _ = connect(true)
 p reply
 p mine == theirs
 p server_sees.to_der == CLIENT.to_der

@@ -4670,7 +4670,7 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
         { *out = an_poly_concrete(c, id, name, TY_INT); return 1; }
       /* and its send, where no dispatch was lowered for it (the poly-IO arm's
          socket_send_call): the byte count */
-      if (sp_feature_required("socket") && sp_streq(name, "send") && (argc == 2 || argc == 4) &&
+      if (sp_feature_required("socket") && sp_streq(name, "send") && is_socket_send_argc(argc) &&
           !nt_argv_has_splat(nt, argv, argc) && nt_kind(nt, argv[0]) != NK_SymbolNode &&
           (nt_kind(nt, argv[1]) == NK_IntegerNode || nt_kind(nt, argv[1]) == NK_ConstantPathNode))
         { *out = an_poly_concrete(c, id, name, TY_INT); return 1; }
@@ -5547,7 +5547,7 @@ static int infer_handle_call(Compiler *c, int id, const NodeTable *nt, const cha
          sockaddr */
       if (((sp_streq(name, "bind") || sp_streq(name, "connect")) &&
            (argc == 2 || (argc == 1 && nt_kind(nt, argv[0]) != NK_SplatNode))) ||
-          (sp_streq(name, "send") && (argc == 2 || argc == 4)) ||
+          (sp_streq(name, "send") && is_socket_send_argc(argc)) ||
           (sp_streq(name, "shutdown") && argc <= 1) ||
           (sp_streq(name, "listen") && argc == 1) ||
           (sp_streq(name, "setsockopt") && argc == 3))

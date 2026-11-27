@@ -4851,6 +4851,17 @@ static TyKind infer_array_new_fill(Compiler *c, int fill) {
   TyKind ft = infer_type(c, fill);
   return ty_array_of(ft);
 }
+/* Module.new / Class.new in a program that reopens Module or Class: the call
+   makes a class (cplan_class_new), the class value emit_op_class_new writes,
+   not an instance of the reopened class. Its row is the class's `new`, as
+   codegen emits it (plan-check reads the two). */
+static int infer_builder_new(Compiler *c, int id, const char *cn, int argc, TyKind *out) {
+  if (!cn || !(sp_streq(cn, "Module") || sp_streq(cn, "Class")) || cplan_class_new(c, id, NULL) == CNEW_NONE) return 0;
+  const BuiltinClassOp *row = bop_class_find(cn, "new", argc, nt_ref(c->nt, id, "block") >= 0);
+  if (row && an_bop_records(c, id)) c->bop_inf[id] = &row->op;
+  *out = TY_CLASS;
+  return 1;
+}
 /* A constructor call: a class's .new, and the builtin constructors (infer_call_inner's rules, in their order) */
 static int infer_new_call(Compiler *c, int id, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind *out) {
   /* Class.new(...) -> an instance of that class; built-in .new constructors */
@@ -4864,11 +4875,7 @@ static int infer_new_call(Compiler *c, int id, const NodeTable *nt, const char *
         /* an exception-subclass instance keeps its concrete class (its custom
            methods must dispatch); the exception-shaped queries route through
            the base helpers like a specialized rescue var does */
-/* Module.new / Class.new in a program that reopens Module or Class: the
-   call makes a class (cplan_class_new), the class value
-   emit_op_class_new writes, not an instance of the reopened class */
-if (cn && (sp_streq(cn, "Module") || sp_streq(cn, "Class")) && cplan_class_new(c, id, NULL) != CNEW_NONE)
-  { *out = TY_CLASS; return 1; }
+        if (infer_builder_new(c, id, cn, argc, out)) return 1;
         int ucnew = cplan_user_new(c, id, ci);
         if (class_inherits_builtin_exception(c, ci) && ucnew < 0)
           { *out = ty_object(ci); return 1; }
@@ -4926,11 +4933,7 @@ if (cn && (sp_streq(cn, "Module") || sp_streq(cn, "Class")) && cplan_class_new(c
         /* an exception-subclass instance keeps its concrete class (its custom
            methods must dispatch); the exception-shaped queries route through
            the base helpers like a specialized rescue var does */
-/* Module.new / Class.new in a program that reopens Module or Class: the
-   call makes a class (cplan_class_new), the class value
-   emit_op_class_new writes, not an instance of the reopened class */
-if (cn && (sp_streq(cn, "Module") || sp_streq(cn, "Class")) && cplan_class_new(c, id, NULL) != CNEW_NONE)
-  { *out = TY_CLASS; return 1; }
+        if (infer_builder_new(c, id, cn, argc, out)) return 1;
         int ucnew = cplan_user_new(c, id, ci);
         if (class_inherits_builtin_exception(c, ci) && ucnew < 0)
           { *out = ty_object(ci); return 1; }

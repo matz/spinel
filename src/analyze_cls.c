@@ -3305,6 +3305,25 @@ static void cf_call_any_at(CF *f, int v, const char *nm, const int *argv, int ar
 
 /* (the call site's line is the root's, for SPINEL_CLS_FLOW=why) */
 #define cf_call_any(f, v, nm, argv, argc, blk) cf_call_any_at((f), (v), (nm), (argv), (argc), (blk), __LINE__)
+/* A send of a computed name on a builtin container may be one of its stores (push, <<, []=, insert, fill, concat,
+   replace, map!): an argument past the name, the elements of one (concat, a slice assignment, and a splat, whose
+   elements are the arguments) and the block's value may each end up among the receiver's elements. */
+static void cf_send_stores(CF *f, int v, int r, const int *argv, int argc, int blk) {
+  const NodeTable *nt = f->nt;
+  int rv = r >= 0 ? r : cf_self_recv(f, v, cf_scope_of(f, v), "send");
+  if (rv < 0) return;
+  int t = cf_entry(f, -(v + 2), "#ds");
+  for (int i = 1; i < argc; i++) {
+    NodeKind k = nt_kind(nt, argv[i]);
+    if (k == NK_BlockArgumentNode) continue;
+    int a = k == NK_SplatNode ? nt_ref(nt, argv[i], "expression") : argv[i];
+    if (k != NK_SplatNode) cf_store(f, rv, a);
+    cf_load(f, a, t);
+  }
+  cf_load(f, t, t);
+  cf_store(f, rv, t);
+  if (blk >= 0 && nt_kind(nt, blk) == NK_BlockNode) cf_store(f, rv, blk);
+}
 static void cf_send_writers(CF *f, int v, int r, const int *argv, int argc) {
   Compiler *c = f->c;
   Scope *sc = &c->scopes[cf_scope_of(f, v)];
@@ -3751,9 +3770,11 @@ static void cf_call(CF *f, int v) {
   }
   if (cf_opaque_name(nm) && CF_CLOSED(f) && f->rtc >= 0 && f->dynarg >= 0) {
     cf_opaque_answer(f, v, r, nm, argv, argc, blk);
-    if (argc >= 2 && (sp_streq(nm, "send") || sp_streq(nm, "__send__") || sp_streq(nm, "public_send")) &&
-        nt_kind(nt, argv[0]) != NK_SymbolNode && nt_kind(nt, argv[0]) != NK_StringNode)
-      cf_send_writers(f, v, r, argv, argc);
+    if (argc >= 1 && (sp_streq(nm, "send") || sp_streq(nm, "__send__") || sp_streq(nm, "public_send")) &&
+        nt_kind(nt, argv[0]) != NK_SymbolNode && nt_kind(nt, argv[0]) != NK_StringNode) {
+      cf_send_stores(f, v, r, argv, argc, blk);
+      if (argc >= 2) cf_send_writers(f, v, r, argv, argc);
+    }
     return;
   }
   if (cf_opaque_name(nm)) {
@@ -3761,9 +3782,11 @@ static void cf_call(CF *f, int v) {
     for (int i = 0; i < argc; i++) cf_all(f, argv[i]);
     if (sp_streq(nm, "instance_variable_set") && argc == 2 && cf_ivar_lit(f, v)) cf_ivar_write_any(f, cf_ivar_lit(f, v), argv[1]);
     if (blk >= 0 && nt_kind(nt, blk) == NK_BlockNode) { cf_all_block_params(f, blk); cf_all(f, blk); }
-    if (argc >= 2 && (sp_streq(nm, "send") || sp_streq(nm, "__send__") || sp_streq(nm, "public_send")) &&
-        nt_kind(nt, argv[0]) != NK_SymbolNode && nt_kind(nt, argv[0]) != NK_StringNode)
-      cf_send_writers(f, v, r, argv, argc);
+    if (argc >= 1 && (sp_streq(nm, "send") || sp_streq(nm, "__send__") || sp_streq(nm, "public_send")) &&
+        nt_kind(nt, argv[0]) != NK_SymbolNode && nt_kind(nt, argv[0]) != NK_StringNode) {
+      cf_send_stores(f, v, r, argv, argc, blk);
+      if (argc >= 2) cf_send_writers(f, v, r, argv, argc);
+    }
     return;
   }
   /* an alias that captured a builtin (`alias old_dup dup`, #8914) calls the

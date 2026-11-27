@@ -1466,6 +1466,9 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
      one visibility. inherit=false restricts the lookup to own definitions. */
   int md_mask = method_defined_vis_mask(name), md_family = md_mask != 0;
   int md_pub = md_mask & 1, md_prot = (md_mask & 2) != 0, md_priv = (md_mask & 4) != 0;
+  /* an object whose class defines the name itself (an options object's
+     accessor) answers through that method, as its const_get does */
+  if (md_family && recv >= 0 && obj_defines_own(c, id, recv, name)) md_family = 0;
   /* a constant path receiver (`CGI::EscapeExt.method_defined?`, cgi/escape.rb)
      names its class by the leaf, as constant paths resolve here */
   if (md_family && recv >= 0 && argc >= 1 && nt_type(nt, recv) &&

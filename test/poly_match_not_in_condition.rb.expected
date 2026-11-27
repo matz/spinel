@@ -1,8 +1,8 @@
 true
 false
-[false, false]
+[false, false, false]
 unrecognised: x,,
 "unrecognised: "
 true
-[true, true]
+[true, true, true]
 undefined method '=~' for an instance of Integer

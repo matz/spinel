@@ -685,12 +685,16 @@ no_gsub_enum:
                sp_re_match's const char * slot. */
             if (rt == TY_POLY) {
               int tv = ++g_tmp;
+              /* (boxed where the call's slot is, as the literal pattern's arm) */
+              int boxed = repr_of(c, id).kind == RK_BOXED;
+              if (boxed) buf_puts(b, "sp_box_bool(");
               buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_expr(c, recv, b);
-              buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); (sp_rbval_is_string(_t%d) ? sp_re_match(%s, sp_rbval_string_bytes(_t%d)) < 0"
+              buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); (sp_bool)(sp_rbval_is_string(_t%d) ? sp_re_match(%s, sp_rbval_string_bytes(_t%d)) < 0"
                             " : _t%d.tag == SP_TAG_SYM ? sp_re_match(%s, sp_sym_to_s((sp_sym)_t%d.v.i)) < 0"
                             " : _t%d.tag == SP_TAG_NIL ? 1"
                             " : (sp_raise_nomethod(sp_nomethod_msg(\"=~\", _t%d)), 0)); })",
                          tv, tv, rp.p, tv, tv, rp.p, tv, tv, tv);
+              if (boxed) buf_puts(b, ")");
               free(rp.p); return 1;
             }
             buf_printf(b, "(sp_re_match(%s, ", rp.p); emit_expr(c, recv, b); buf_puts(b, ") < 0)");

@@ -30602,19 +30602,28 @@ static int mm_builtin_above(Compiler *c, int k) {
    its chain, or a method every object has? */
 static int mm_answers(Compiler *c, int id, int k, const char *nm) {
   MethodLookup ml = { .def_class = -1 };
-  if (call_target(c, id, k, nm, 0, &ml) >= 0 || ml.kind == ML_ATTR) return 1;
-  /* (a writer of an attr_writer or attr_accessor on the chain, public unless the call is on self) */
+  /* (a call on self or a send reaches a private method or a protected one, and a public_send only a public one) */
+  int r = nt_ref(c->nt, id, "receiver"), pub = nt_str(c->nt, id, "vis_enforce") != NULL;
+  int any_vis = !pub && (r < 0 || nt_kind(c->nt, r) == NK_SelfNode || nt_ignore_visibility(c->nt, id) || nt_str(c->nt, id, "send_blind"));
+  /* (a protected method or writer is open to a caller whose self is of the receiver's class line) */
+  Scope *cs = comp_scope_of(c, id);
+  int kc = cs && !cs->is_cmethod ? cs->class_id : -1;
+  int prot = !pub && k >= 0 && kc >= 0 && (kc == k || is_descendant(c, kc, k) || is_descendant(c, k, kc));
+  if (call_target(c, id, k, nm, 0, &ml) >= 0 || ml.kind == ML_ATTR) {
+    int vis = pub || !any_vis ? cplan_method_vis(c, id, k, nm, 0, NULL) : SP_VIS_PUBLIC;
+    return vis == SP_VIS_PUBLIC || (vis == SP_VIS_PROTECTED && prot);
+  }
+  /* (a writer of an attr_writer or attr_accessor on the chain, at the same visibility) */
   char base[256];
   if (setter_base_name(nm, base, sizeof base) && call_attr_target(c, id, k, base, CT_ATTR | CT_WRITER, NULL)) {
-    int r = nt_ref(c->nt, id, "receiver");
-    if (r < 0 || nt_kind(c->nt, r) == NK_SelfNode || cplan_method_vis(c, id, k, nm, 0, NULL) == SP_VIS_PUBLIC) return 1;
+    int vis = any_vis ? SP_VIS_PUBLIC : cplan_method_vis(c, id, k, nm, 0, NULL);
+    if (vis == SP_VIS_PUBLIC || (vis == SP_VIS_PROTECTED && prot)) return 1;
   }
   /* (a method of the builtin above its chain, String#length of a String subclass, initialize included,
      unless an undef_method of the name stands on the chain: then method_missing takes it) */
   int bp = k >= 0 ? mm_builtin_above(c, k) : -116;
   if (bp != -116 && bp < 0 && (sp_streq(nm, "initialize") || (builtin_id_has_instance_method(bp, nm) && !cplan_undefined(c, k, 0, nm)))) {
     /* (a builtin the class makes private or protected answers no call on another receiver: method_missing does) */
-    int r = nt_ref(c->nt, id, "receiver");
     if (r < 0 || nt_kind(c->nt, r) == NK_SelfNode || cplan_method_vis(c, id, k, nm, 0, NULL) == SP_VIS_PUBLIC) return 1;
   }
   return mm_object_answers(c, id, nm);
@@ -31164,7 +31173,7 @@ int desugar_missing_method_calls(Compiler *c) {
     int str_arm = 0, str_guard = -1, hook_guard = -1;
     int a = nt_ref(nt, id, "arguments"), blk = nt_ref(nt, id, "block");
     /* (`self.m` in a block the map runs on one class asks that class, as a bare `m` there does: its self is typed boxed) */
-    int ie_self = r >= 0 && nt_kind(nt, r) == NK_SelfNode && ie_block_self_class_of(c, id) >= 0;
+    int ie_self = r >= 0 && nt_kind(nt, r) == NK_SelfNode && (ie_block_self_class_of(c, id) >= 0 || r >= c->cls_fact_n);
     if (r < 0 || ie_self) {
       if (object_answers) continue;
       /* a receiverless call: self is the method's class or a subclass, or
@@ -31242,6 +31251,29 @@ int desugar_missing_method_calls(Compiler *c) {
     if (r < 0 || ie_self) reread = 1;
     if (!others) {
       if (hold_value) mm_hold_written_value(c, nt, id, a, parent, n0);
+      /* (a public_send's call is replaced: its vis_enforce would hold the method_missing call to a public one) */
+      if (nt_str(nt, id, "vis_enforce") && parent[id] >= 0) {
+        int mm = mm_call(c, nt, id, r, nm, a, blk);
+        nt_replace_child(nt, parent[id], id, mm);
+        for (int i = 0; i < nmiss; i++) mm_relower_sends(c, nt, mm_user(c, id, miss[i]), nm);
+        comp_grow_node_arrays(c);
+        /* (the moved receiver, arguments and block now stand under the new nodes) */
+        for (int j = mark; j < nt->count; j++) {
+          c->nscope[j] = c->nscope[id];
+          for (int q = 0, nr = nt_num_refs(nt, j); q < nr; q++) {
+            int child = nt_ref_at(nt, j, q);
+            if (child >= 0 && child < n0) parent[child] = j;
+          }
+          for (int q = 0, na = nt_num_arrs(nt, j); q < na; q++) {
+            int ne = 0;
+            const int *items = nt_arr_at(nt, j, q, &ne);
+            for (int e = 0; e < ne; e++)
+              if (items[e] >= 0 && items[e] < n0) parent[items[e]] = j;
+          }
+        }
+        changed = 1;
+        continue;
+      }
       /* every class the value can be misses nm: the call is method_missing's */
       int sym = fwd_new_node_like(nt, id, "SymbolNode");
       nt_node_set_str(nt, sym, "value", nm);

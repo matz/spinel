@@ -177,8 +177,10 @@ own crypto rather than libssl, and no HMAC-MD5; the digest and HMAC objects keep
 the running hash state between updates, not their input. `Cipher` (aes-gcm and
 aes-ctr) and `PKey::EC` are subsets,
 each described in its file under `packages/openssl/openssl/`. Cipher updates
-return each call's bytes, and final verifies the authentication tag. The
-optional output-buffer argument is not supported. An aes-gcm Cipher still retains all
+return each call's bytes. An aes-gcm Cipher's final verifies the
+authentication tag; aes-ctr has no tag, so its final answers "" and checks
+nothing, and nothing an aes-ctr Cipher decrypts is authenticated, after
+final or before it. The optional output-buffer argument is not supported. An aes-gcm Cipher still retains all
 input until final, plus a private keystream grown geometrically for linear update
 work. This is not bounded-memory streaming. Decrypted update output is unauthenticated until final succeeds.
 An aes-ctr Cipher (`aes-128-ctr`, `aes-192-ctr`, `aes-256-ctr`) retains nothing

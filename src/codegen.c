@@ -2095,18 +2095,6 @@ void emit_str_expr(Compiler *c, int node, Buf *b) {
    a boxed one goes through sp_poly_arg_path, whose generated bridge reaches
    the same methods. A class defining neither is refused at compile time the
    way the String slot refuses it, naming both methods. */
-/* Is `node` an argument of a call the boxed dispatch split out for a builtin
-   class its receiver may be (cvb_split, the receiver that class's constant)? */
-static int path_arg_in_cvb_arm(Compiler *c, int node) {
-  NodeTable *nt = (NodeTable *)c->nt;
-  const int *par = nt_parents(nt);
-  int up = par ? par[node] : -1;
-  if (up >= 0 && nt_kind(nt, up) == NK_ArgumentsNode) up = par[up];
-  if (up < 0 || nt_kind(nt, up) != NK_CallNode || !nt_int(nt, up, "cvb_split", 0)) return 0;
-  int r = nt_ref(nt, up, "receiver");
-  return r >= 0 && nt_kind(nt, r) == NK_ConstantReadNode && nt_int(nt, r, "builtin_ref", 0);
-}
-
 void emit_path_expr(Compiler *c, int node, Buf *b) {
   if (yield_site_type(c, node) == TY_POLY) {
     int tmp; Buf *hb = conv_hold_begin(b, &tmp);
@@ -2155,7 +2143,9 @@ void emit_path_expr(Compiler *c, int node, Buf *b) {
          receiver may be (cvb_split: `proxy.new(store)` as `File.new(store)`
          where proxy may be File): run, it raises CRuby's TypeError, and the
          arm may never run */
-      if (path_arg_in_cvb_arm(c, node)) {
+      if (conv_arg_of_cvb_arm(c, node)) {
+        /* (a conversion for the operand-order gate, as emit_obj_conv's raise) */
+        g_conv_emitted++;
         buf_puts(b, "({ (void)(");
         emit_expr_for_effect(c, node, b);
         buf_printf(b, "); sp_raise_cls(\"TypeError\", \"no implicit conversion of %s into String\"); (const char *)0; })", cn ? cn : "Object");

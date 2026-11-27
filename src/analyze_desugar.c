@@ -5441,7 +5441,9 @@ static int match_operand_pure(const NodeTable *nt, int n) {
 int desugar_user_match_operand(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int user = 0;
-  for (int s = 0; s < c->nscopes && !user; s++) {
+  /* every scope, not to the first: a String reopening's own =~ later in the
+     table still keeps the call as written */
+  for (int s = 0; s < c->nscopes; s++) {
     const Scope *sc = &c->scopes[s];
     if (!sc->name || !sp_streq(sc->name, "=~") || sc->class_id < 0) continue;
     if (sp_streq(c->classes[sc->class_id].name, "String")) return 0;

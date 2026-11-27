@@ -75,10 +75,11 @@ p [again.version, again.serial.to_s, again.subject == subject, again.not_after.t
 p again.verify(key)
 p OpenSSL::X509::Certificate.load(cert.to_pem + cert.to_pem).map { |c| c.to_der == der }
 
-# A change after signing keeps the old signature, which then fails, until
-# the certificate is signed again
+# A change after signing keeps the old signature until the certificate is
+# signed again (whether verify sees the change before that depends on the
+# OpenSSL version CRuby runs on, so it is not read here)
 again.subject = OpenSSL::X509::Name.parse("/CN=other.example")
-p [again.subject.to_s, again.verify(key)]
+p again.subject.to_s
 again.sign(key, OpenSSL::Digest.new("SHA384"))
 p [again.subject.to_s, again.verify(key)]
 

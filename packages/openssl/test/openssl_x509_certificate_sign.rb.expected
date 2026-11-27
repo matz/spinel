@@ -33,7 +33,7 @@ true
 [2, "305419896", true, 1702592000]
 true
 [true, true]
-["/CN=other.example", false]
+"/CN=other.example"
 ["/CN=other.example", true]
 [true, OpenSSL::PKey::RSA, 7]
 OpenSSL::X509::CertificateError: wrong public key type

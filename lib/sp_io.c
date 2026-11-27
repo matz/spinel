@@ -3338,6 +3338,18 @@ sp_File *sp_File_reopen_io(sp_File *f, sp_File *other) {SP_GC_ROOT(f);SP_GC_ROOT
   sp_io_stdout_rebuffer(f, was_tty);
   if (f->own_buf || other->own_buf) sp_io_own_buf_reopened(f);
   sp_io_write_state_reopened(f);   /* the new descriptor is asked again */
+  /* the other's sync, as CRuby's reopen takes its mode: onto an IO.pipe
+     write end the handle writes through, and a full pipe parks its writer
+     in the scheduler (sp_io_write_parks) instead of holding the worker in
+     write(2) while a reader thread on that worker waits to drain it; back
+     onto a dup of the stream it is buffered again. stderr stays unbuffered. */
+  /* and the other's open file is the program's own IO.pipe end, made
+     before any child had it: a write may set it non-blocking, so two
+     writers between a poll and a write cannot sleep in the kernel either */
+  if (other->wown) { f->wown = 1; f->wgen = other->wgen; }
+  { int osync = other->is_sock || other->sync_on;
+    if (osync && !f->sync_on) sp_File_set_sync(f, 1);
+    else if (!osync && f->sync_on && f->fp != stderr) sp_File_set_sync(f, 0); }
   /* a thread parked on the number waits on the old file, which the event
      set holds, not the number: readied now (sp_sched_ev_forget), it writes
      to the new one, as #reopen(path) does */

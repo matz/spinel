@@ -10,6 +10,7 @@
 #include "analyze_internal.h"
 #include "value_pos.h"
 #include "call_plan.h"
+#include "codegen_internal.h"
 #include "implied_calls.h"
 #include "method_table_check.h"
 #include "pre_const.h"
@@ -30605,20 +30606,14 @@ static int mm_answers(Compiler *c, int id, int k, const char *nm) {
   /* (a call on self or a send reaches a private method or a protected one, and a public_send only a public one) */
   int r = nt_ref(c->nt, id, "receiver"), pub = nt_str(c->nt, id, "vis_enforce") != NULL;
   int any_vis = !pub && (r < 0 || nt_kind(c->nt, r) == NK_SelfNode || nt_ignore_visibility(c->nt, id) || nt_str(c->nt, id, "send_blind"));
-  /* (a protected method or writer is open to a caller whose self is of the receiver's class line) */
-  Scope *cs = comp_scope_of(c, id);
-  int kc = cs && !cs->is_cmethod ? cs->class_id : -1;
-  int prot = !pub && k >= 0 && kc >= 0 && (kc == k || is_descendant(c, kc, k) || is_descendant(c, k, kc));
-  if (call_target(c, id, k, nm, 0, &ml) >= 0 || ml.kind == ML_ATTR) {
-    int vis = pub || !any_vis ? cplan_method_vis(c, id, k, nm, 0, NULL) : SP_VIS_PUBLIC;
-    return vis == SP_VIS_PUBLIC || (vis == SP_VIS_PROTECTED && prot);
-  }
+  /* (a protected method or writer is open to a caller whose self is of its owner, the self an instance_eval
+     block rebinds included, as codegen reads it: method_vis_for_caller) */
+  int vis = any_vis ? SP_VIS_PUBLIC : pub ? cplan_method_vis(c, id, k, nm, 0, NULL) : method_vis_for_caller(c, id, k, nm);
+  if (call_target(c, id, k, nm, 0, &ml) >= 0 || ml.kind == ML_ATTR) return vis == SP_VIS_PUBLIC;
   /* (a writer of an attr_writer or attr_accessor on the chain, at the same visibility) */
   char base[256];
-  if (setter_base_name(nm, base, sizeof base) && call_attr_target(c, id, k, base, CT_ATTR | CT_WRITER, NULL)) {
-    int vis = any_vis ? SP_VIS_PUBLIC : cplan_method_vis(c, id, k, nm, 0, NULL);
-    if (vis == SP_VIS_PUBLIC || (vis == SP_VIS_PROTECTED && prot)) return 1;
-  }
+  if (setter_base_name(nm, base, sizeof base) && call_attr_target(c, id, k, base, CT_ATTR | CT_WRITER, NULL) &&
+      vis == SP_VIS_PUBLIC) return 1;
   /* (a method of the builtin above its chain, String#length of a String subclass, initialize included,
      unless an undef_method of the name stands on the chain: then method_missing takes it) */
   int bp = k >= 0 ? mm_builtin_above(c, k) : -116;
@@ -31297,7 +31292,10 @@ int desugar_missing_method_calls(Compiler *c) {
     }
     /* (an unbounded computed receiver gives no class evidence for a split,
        but an assignment left unsplit loses its value on a missing class) */
-    if (!reread && !str_arm && !nt_int(nt, id, "attr_write", 0) && cls_fact_unbounded(c, r)) continue;
+    /* (a receiver typed as one class of the program's is evidence: the
+       call is planned on that class, which misses nm) */
+    if (!reread && !str_arm && !nt_int(nt, id, "attr_write", 0) && cls_fact_unbounded(c, r) &&
+        !ty_is_object(infer_type(c, r))) continue;
     /* (a literal block would be the two calls' one block) */
     if (blk >= 0 && nt_kind(nt, blk) == NK_BlockNode) continue;
     if (!parent) parent = an_parent_map(nt);

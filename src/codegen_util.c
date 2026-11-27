@@ -5493,13 +5493,18 @@ void emit_coerce(Compiler *c, int node, TyKind slot, int how, const char *what, 
     }
     /* a call whose receiver raises (`raise("...").first`) is untyped too, and
        its text is the raise with a boxed nil behind it: into a slot of
-       another kind it answers that slot's zero, as a bare raise does (#9879) */
-    if (nt_kind(c->nt, node) == NK_CallNode && slot != TY_POLY && slot != TY_UNKNOWN &&
-        (comp_ntype(c, node) == TY_UNKNOWN || repr_of(c, node).kind == RK_BOXED)) {
+       another kind it answers that slot's zero, as a bare raise does (#9879).
+       The unresolved-call gate's token is coerced here, not only by the
+       statement writes before they call this: a value-position write
+       (`f = @h = a.undefined_call`) reaches this arm with it. */
+    if (slot != TY_POLY && slot != TY_UNKNOWN &&
+        (comp_ntype(c, node) == TY_UNKNOWN ||
+         (nt_kind(c->nt, node) == NK_CallNode && repr_of(c, node).kind == RK_BOXED))) {
       Buf t; memset(&t, 0, sizeof t);
       emit_expr(c, node, &t);
       const char *tx = t.p ? t.p : "";
-      if (strncmp(tx, "((void)(", 8) == 0 && text_diverges(tx))
+      if (emitted_no_method(past_open_parens(tx))) emit_unresolved_coerced_text(c, node, slot, tx, b);
+      else if (strncmp(tx, "((void)(", 8) == 0 && text_diverges(tx))
         buf_printf(b, "({ (void)%s; %s; })", tx, default_value_from_compiler(c, slot));
       else buf_puts(b, tx);
       free(t.p);
@@ -8285,6 +8290,22 @@ void emit_main_exit(Buf *b) {
   buf_puts(b, "_sp_main_rc = sp_at_exit_run(0); ");
   if (g_uses_threads) buf_puts(b, "sp_sched_drain(); ");
   buf_puts(b, "return; }\n");
+}
+
+/* Whether an ensure region opened in the function being emitted (a
+   begin..ensure, an inlined Mutex#synchronize, a select!/reject! loop) holds
+   a deferred return value in its _retvN slot. A slot only exists for a kind
+   with a C type to declare it with. VOID and UNKNOWN were excluded; TY_NIL
+   was not, and emit_ctype has no name for it, so an ensure inside a
+   nil-returning instantiation or a proc whose body ends in nil declared
+   `void _retvN` and the build stopped (#4245). nil carries no value to
+   defer, exactly like void. Object kinds are declared by emit_ctype through
+   their class, which c_type_name does not name: asking it alone dropped
+   every object-returning method to a bare `return;` out of a non-void C
+   function, and the build stopped again. */
+int ensure_region_has_retval(void) {
+  return g_ret_type != TY_VOID && g_ret_type != TY_UNKNOWN && g_ret_type != TY_NIL &&
+         (ty_is_object(g_ret_type) || c_type_name(g_ret_type) != NULL);
 }
 
 void emit_retf_return(int eid, int has_retval, Buf *b) {

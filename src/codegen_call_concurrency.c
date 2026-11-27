@@ -418,7 +418,7 @@ int emit_call_synchronize_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
     if (scalar) { emit_ctype(c, res, b); buf_printf(b, " _t%d = %s; ", rv, default_value_from_compiler(c, res)); }
     if (is_mx) {
       mtmp = ++g_tmp; eid = ++g_tmp;
-      has_retval = (g_ret_type != TY_VOID && g_ret_type != TY_UNKNOWN);
+      has_retval = ensure_region_has_retval();
       buf_printf(b, "sp_mutex *_t%d = ", mtmp);
       if (rtyr.kind == RK_BOXED) { buf_puts(b, "sp_poly_mutex_recv("); emit_boxed(c, recv, b); buf_puts(b, ")"); }
       else emit_expr(c, recv, b);

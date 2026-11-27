@@ -6093,7 +6093,7 @@ static int socket_send_untyped(const NodeTable *nt, int id, TyKind recv_ty) {
   int args = nt_ref(nt, id, "arguments");
   if (args < 0) return 0;
   int argc = 0; const int *argv = nt_arr(nt, args, "arguments", &argc);
-  if (!argv || argc < 2 || argc > 4) return 0;
+  if (!argv || !is_socket_send_argc(argc)) return 0;
   NodeKind flags = nt_kind(nt, argv[1]);
   return flags == NK_IntegerNode || flags == NK_ConstantPathNode;
 }
@@ -6108,7 +6108,7 @@ static int socket_send_boxed(Compiler *c, const NodeTable *nt, int id, TyKind re
   if (recv_ty != TY_POLY || !socket_send_untyped(nt, id, TY_UNKNOWN)) return 0;
   if (nt_ref(nt, id, "block") >= 0) return 0;
   int argc = 0; const int *argv = nt_arr(nt, nt_ref(nt, id, "arguments"), "arguments", &argc);
-  if ((argc != 2 && argc != 4) || nt_argv_has_splat(nt, argv, argc) || nt_argv_kwh(nt, argv, argc) >= 0) return 0;
+  if (!is_socket_send_argc(argc) || nt_argv_has_splat(nt, argv, argc) || nt_argv_kwh(nt, argv, argc) >= 0) return 0;
   return nt_kind(nt, argv[0]) != NK_SymbolNode && infer_type(c, argv[0]) != TY_SYMBOL;
 }
 

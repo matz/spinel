@@ -2283,24 +2283,29 @@ sp_int sp_sock_connect_sa(sp_File *f, const char *sa, sp_int salen) {SP_GC_ROOT(
     sp_sock_raise_errno_sa("connect(2)", sa, salen);
   return 0;
 }
+/* A send on a handle with its own buffer, whose descriptor is non-blocking:
+   one that finds the buffer full waits for room, as CRuby's does, instead of
+   answering EAGAIN. `to` NULL is the connected peer's send(2), else
+   sendto(2). The caller holds data rooted across the wait. */
+static sp_int sp_sock_send_waiting(sp_File *f, const char *data, sp_int len, int flags,
+                                   const struct sockaddr *to, socklen_t tolen) {SP_GC_ROOT(f);
+  double deadline = sp_io_deadline(f);
+  for (;;) {
+    int fd = fileno(sp_io_use(f));
+    ssize_t put = to ? sendto(fd, data, (size_t)len, flags | SP_MSG_DONTWAIT, to, tolen)
+                     : send(fd, data, (size_t)len, flags | SP_MSG_DONTWAIT);
+    int e = errno;
+    sp_io_unuse(f);
+    if (put >= 0) return (sp_int)put;
+    if (e == EINTR) continue;
+    if (e != EAGAIN && e != EWOULDBLOCK) { errno = e; sp_sock_raise_errno(to ? "sendto(2)" : "send(2)"); }
+    sp_io_write_wait(f, deadline);
+  }
+}
 sp_int sp_sock_send(sp_File *f, const char *data, sp_int len, sp_int flags, const char *host, sp_int port) {SP_GC_ROOT(f);SP_GC_ROOT_STR(data);SP_GC_ROOT_STR(host);
   extern int sp_net_udp_send_to(int fd, const char *data, int len, int flags, const char *host, int port);
   sp_sock_require(f, "send");
-  if (f->own_buf && !host) {
-    /* a non-blocking descriptor: a send that finds the buffer full waits for
-       room, as CRuby's does, instead of answering EAGAIN */
-    double deadline = sp_io_deadline(f);
-    for (;;) {
-      int fd = fileno(sp_io_use(f));
-      ssize_t put = send(fd, data, (size_t)len, sp_sock_int_arg(flags) | SP_MSG_DONTWAIT);
-      int e = errno;
-      sp_io_unuse(f);
-      if (put >= 0) return (sp_int)put;
-      if (e == EINTR) continue;
-      if (e != EAGAIN && e != EWOULDBLOCK) { errno = e; sp_sock_raise_errno("send(2)"); }
-      sp_io_write_wait(f, deadline);
-    }
-  }
+  if (f->own_buf && !host) return sp_sock_send_waiting(f, data, len, sp_sock_int_arg(flags), NULL, 0);
   int n = sp_net_udp_send_to(fileno(f->fp), data, (int)len, sp_sock_int_arg(flags), host, (int)port);
   if (n < 0) {
     sp_sock_raise_if_unresolved("getaddrinfo");
@@ -2308,6 +2313,25 @@ sp_int sp_sock_send(sp_File *f, const char *data, sp_int len, sp_int flags, cons
     sp_sock_raise_errno_host_port("sendto(2)", host, port);
   }
   return (sp_int)n;
+}
+/* send(data, flags, dest_sockaddr): the packed address Socket.sockaddr_in
+   and Addrinfo#to_sockaddr make, handed to sendto(2) as CRuby hands it, so
+   no name is resolved on each datagram. nil is no address: the connected
+   peer's send(2), as in CRuby. */
+sp_int sp_sock_send_sa(sp_File *f, const char *data, sp_int len, sp_int flags, const char *sa) {SP_GC_ROOT(f);SP_GC_ROOT_STR(data);SP_GC_ROOT_STR(sa);
+  if (!sa) return sp_sock_send(f, data, len, flags, NULL, 0);
+  sp_sock_require(f, "send");
+  struct sockaddr_storage to;   /* aligned, as the kernel reads it */
+  size_t tolen = sp_str_byte_len(sa);
+  if (tolen > sizeof to) { errno = EINVAL; sp_sock_raise_errno("sendto(2)"); }
+  memcpy(&to, sa, tolen);
+  int fl = sp_sock_int_arg(flags);
+  if (f->own_buf) return sp_sock_send_waiting(f, data, len, fl, (const struct sockaddr *)&to, (socklen_t)tolen);
+  ssize_t put;
+  do { put = sendto(fileno(f->fp), data, (size_t)len, fl, (const struct sockaddr *)&to, (socklen_t)tolen); }
+  while (put < 0 && errno == EINTR);
+  if (put < 0) sp_sock_raise_errno("sendto(2)");
+  return (sp_int)put;
 }
 /* #readpartial(n) / #recv(n) on a handle with own_buf: what rbuf holds, or
    what one read of at most n bytes brings (a fill with that limit: the

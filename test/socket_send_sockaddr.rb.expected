@@ -1,0 +1,12 @@
+1
+"a"
+2
+"bc"
+2
+["\xC3\xA9", #<Encoding:BINARY (ASCII-8BIT)>]
+[12000, 12000]
+[true, true]
+[true, true]
+4
+"sock"
+IOError: closed stream

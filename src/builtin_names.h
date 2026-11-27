@@ -216,6 +216,7 @@ int is_rindex_name(const char *n);  /* rindex */
 int is_modulo_alias(const char *n); /* % modulo */
 int is_append_concat(const char *n); /* << concat */
 int is_socket_address(const char *n); /* addr peeraddr */
+int is_socket_send_argc(int argc); /* send(mesg, flags[, dest_sockaddr | host, port]) */
 int is_attr_writer_family(const char *n); /* attr_accessor attr_writer */
 int is_take_drop(const char *n); /* drop take */
 int is_byte_codepoint_each(const char *n); /* each_byte each_codepoint */

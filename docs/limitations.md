@@ -632,7 +632,9 @@ nothing answers after that long and raises `IO::TimeoutError`, as CRuby does;
 resolves to, and do not cover the name lookup.
 
 **Methods.** `#accept`, `#addr`, `#peeraddr`, `#local_address`,
-`#remote_address`, `#bind`, `#connect`, `#send`, `#recv`, `#recvfrom`,
+`#remote_address`, `#bind`, `#connect`, `#send` (to the connected peer, to a
+packed sockaddr as `Socket.sockaddr_in` or `Addrinfo#to_sockaddr` makes it,
+or to a host and port, which is resolved on each call), `#recv`, `#recvfrom`,
 `#listen`, `#shutdown`, `#setsockopt`, `#getsockopt`, and
 the whole IO surface a handle carries (`#gets`, `#read`, `#readpartial`,
 `#write`, `#puts`, `#print`, `#flush`, `#close`, `#closed?`, `#eof?`,

@@ -380,6 +380,7 @@ sp_int sp_sock_connect(sp_File *f, const char *host, sp_int port);
 sp_int sp_sock_bind_sa(sp_File *f, const char *sa, sp_int salen);
 sp_int sp_sock_connect_sa(sp_File *f, const char *sa, sp_int salen);
 sp_int sp_sock_send(sp_File *f, const char *data, sp_int len, sp_int flags, const char *host, sp_int port);
+sp_int sp_sock_send_sa(sp_File *f, const char *data, sp_int len, sp_int flags, const char *sa);
 sp_int sp_sock_shutdown(sp_File *f, sp_int how);
 sp_int sp_sock_const(const char *n);
 sp_bool sp_sock_const_defined(const char *n);

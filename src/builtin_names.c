@@ -1214,6 +1214,13 @@ int is_socket_address(const char *n) {
   return sp_streq(n, "addr") || sp_streq(n, "peeraddr");
 }
 
+/* BasicSocket#send's arities: to the connected peer (mesg, flags), to a
+   packed sockaddr (mesg, flags, dest_sockaddr), and UDPSocket's to a host
+   and port (mesg, flags, host, port) */
+int is_socket_send_argc(int argc) {
+  return argc >= 2 && argc <= 4;
+}
+
 int is_nonblock_io(const char *n) {
   return sp_streq(n, "read_nonblock") || sp_streq(n, "write_nonblock");
 }

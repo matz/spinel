@@ -367,12 +367,23 @@ int emit_strbuf_io_read(Compiler *c, int id, Buf *b) {
 static void emit_io_read_overcount(Compiler *c, const char *name, const char *r, const int *argv, int argc,
                                    const char *expected, Buf *b);
 
-/* send(data, flags[, host, port]) of the socket in C expression r: the
-   typed arm's, and a boxed receiver's when its value is a socket
-   (emit_dynamic_send). The flags reach send(2) / sendto(2). */
+/* send(data, flags[, dest_sockaddr | host, port]) of the socket in C
+   expression r: the typed arm's, and a boxed receiver's when its value is a
+   socket (emit_dynamic_send). The flags reach send(2) / sendto(2). A packed
+   sockaddr goes to sendto(2) as it is, with no name to resolve; it is held
+   rooted beside the payload, as its expression can allocate. */
 void emit_io_socket_send_call(Compiler *c, const char *r, int argc, const int *argv, Buf *b) {
   int tsd = ++g_tmp;
   buf_printf(b, "({ const char *_t%d = ", tsd); emit_str_expr(c, argv[0], b);
+  if (argc == 3) {
+    int tsa = ++g_tmp;
+    buf_printf(b, "; SP_GC_ROOT_STR(_t%d); const char *_t%d = ", tsd, tsa); emit_str_expr_nilable(c, argv[2], b);
+    buf_printf(b, "; SP_GC_ROOT_STR(_t%d); sp_sock_send_sa(%s, _t%d, (sp_int)sp_str_byte_len(_t%d), ",
+               tsa, r, tsd, tsd);
+    emit_int_expr(c, argv[1], b);
+    buf_printf(b, ", _t%d); })", tsa);
+    return;
+  }
   buf_printf(b, "; sp_sock_send(%s, _t%d, (sp_int)sp_str_byte_len(_t%d), ", r, tsd, tsd);
   emit_int_expr(c, argv[1], b); buf_puts(b, ", ");
   if (argc == 4) { emit_str_expr(c, argv[2], b); buf_puts(b, ", "); emit_int_expr(c, argv[3], b); }
@@ -384,7 +395,7 @@ void emit_io_socket_send_call(Compiler *c, const char *r, int argc, const int *a
    that is an Integer literal or a constant path, and no Symbol payload (a
    method's name for Object#send) */
 static int socket_send_call(const NodeTable *nt, const char *name, int argc, const int *argv) {
-  if (!sp_streq(name, "send") || (argc != 2 && argc != 4) || nt_argv_has_splat(nt, argv, argc)) return 0;
+  if (!sp_streq(name, "send") || !is_socket_send_argc(argc) || nt_argv_has_splat(nt, argv, argc)) return 0;
   NodeKind flags = nt_kind(nt, argv[1]);
   return (flags == NK_IntegerNode || flags == NK_ConstantPathNode) && nt_kind(nt, argv[0]) != NK_SymbolNode;
 }
@@ -1848,9 +1859,9 @@ int emit_call_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const ch
       free(rb.p); return 1;
     }
     if (sp_feature_required("socket")) {
-      /* UDPSocket#send's 3-arg form carries the destination, the 2-arg form
-         goes to the connected peer */
-      if (sp_streq(name, "send") && (argc == 2 || argc == 4)) {
+      /* send's 2-arg form goes to the connected peer, the 3-arg form to a
+         packed sockaddr, UDPSocket's 4-arg form to a host and port */
+      if (sp_streq(name, "send") && is_socket_send_argc(argc)) {
         emit_io_socket_send_call(c, r, argc, argv, b);
         free(rb.p); return 1;
       }

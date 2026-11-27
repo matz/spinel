@@ -12597,6 +12597,16 @@ static int pivs_elems(Compiler *c, int arr, char *set, int depth);
 static void pivs_note_builtin(Compiler *c) {
   if (c->pivs->active >= 0) c->pivs->memo[c->pivs->active].builtin = 1;
 }
+/* A literal origin into the query's list, once: not by the node's visit
+   state, which the initialize walk keeps apart, so a literal reached both
+   ways took two of the 64 slots and could crowd out one reached later. */
+static int pivs_keep_literal(Compiler *c, int v) {
+  int m = c->pivs->active, n = c->pivs->memo[m].nhash;
+  for (int i = 0; i < n; i++) if (c->pivs->memo[m].hash[i] == v) return 1;
+  if (n == 64) return 0;
+  c->pivs->memo[m].hash[n] = v; c->pivs->memo[m].nhash++;
+  return 1;
+}
 /* Inside the walk of an initialize parameter, a Hash origins query walks
    on past a branch it cannot follow: the store widens the Hashes found on
    the other branches (infer_hash_aset_call). */
@@ -13365,23 +13375,11 @@ static int pivs_value_walk(Compiler *c, int v, char *set, int depth) {
   if (br >= 0) return br;
   /* a callables query keeps the callable literals it reaches (in the
      origins' slots) */
-  if (c->pivs->hash_mode == 2 && pivs_callable_lit(c, v)) {
-    if (!c->pivs->seen[v].done[0]) {
-      int m = c->pivs->active, n = c->pivs->memo[m].nhash;
-      if (n == 64) return 0;
-      c->pivs->memo[m].hash[n] = v; c->pivs->memo[m].nhash++;
-    }
-    return 1;
-  }
+  if (c->pivs->hash_mode == 2 && pivs_callable_lit(c, v)) return pivs_keep_literal(c, v);
   switch (nt_kind(nt, v)) {
     case NK_HashNode: case NK_KeywordHashNode:
       pivs_note_builtin(c);
-      if (c->pivs->hash_mode == 1 && !c->pivs->seen[v].done[0]) {
-        int m = c->pivs->active, n = c->pivs->memo[m].nhash;
-        if (n == 64) return 0;
-        c->pivs->memo[m].hash[n] = v; c->pivs->memo[m].nhash++;
-      }
-      return 1;
+      return c->pivs->hash_mode == 1 ? pivs_keep_literal(c, v) : 1;
     case NK_NilNode: case NK_TrueNode: case NK_FalseNode: case NK_IntegerNode: case NK_FloatNode:
     case NK_RationalNode: case NK_ImaginaryNode: case NK_StringNode: case NK_InterpolatedStringNode:
     case NK_XStringNode: case NK_SymbolNode: case NK_InterpolatedSymbolNode: case NK_ArrayNode:

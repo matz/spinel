@@ -1267,7 +1267,6 @@ void incl_detach_shell(NodeTable *nt, int node, const int *out, int no);   /* an
 char *incl_frame_add(char *fr, const char *locals);
 int incl_hook_called(const NodeTable *nt, int body, const char *param);
 int incl_hook_returns(const NodeTable *nt, int node);   /* a `return` that leaves the hook */
-int desugar_class_body_object_acts(Compiler *c);
 int desugar_struct_block_anonymous(Compiler *c);
 int desugar_eval_method_block(Compiler *c);
 int desugar_singleton_body_self(Compiler *c);

@@ -28980,8 +28980,8 @@ static int cb_give_self(Compiler *c, NodeTable *nt, int node, const char *builti
 
 /* The statements the walk splices of a hook's body, at the includer's
    body: a bare Object or Module method among them has the class for self,
-   as one written in the body has (desugar_class_body_object_acts ran before
-   the walk made them). */
+   as one written in the body has (cb_walk_give_self gave it at
+   the class's header). */
 int incl_give_self(Compiler *c, NodeTable *nt, int node, const char *cname) {
   return cb_give_self(c, nt, node, NULL, 0, cname, 0);
 }
@@ -29006,9 +29006,21 @@ static const char *cb_frame_builtin(Compiler *c, int cn, const char **cname) {
    its kin the class by name) */
 int cb_walk_give_self(Compiler *c, int frame) {
   NodeTable *nt = (NodeTable *)c->nt;
-  if (frame < 0 || !class_def_opens_frame(nt, frame)) return 0;
+  if (frame < 0) return 0;
+  int changed = 0;
+  NodeKind wk = nt_kind(nt, frame);
+  int val = wk == NK_ConstantWriteNode || wk == NK_LocalVariableWriteNode ? nt_ref(nt, frame, "value") : -1;
+  if (val >= 0 && class_def_is_record_call(nt, val)) {
+    /* a Struct.new / Data.define block a constant or a local holds is the
+       class's body, where self is the class as well */
+    int blk = nt_ref(nt, val, "block");
+    if (blk >= 0 && nt_kind(nt, blk) == NK_BlockNode) changed = cb_give_self(c, nt, nt_ref(nt, blk, "body"), NULL, 1, NULL, 0);
+    if (changed) comp_grow_node_arrays(c);
+    return changed;
+  }
+  if (!class_def_opens_frame(nt, frame)) return 0;
   const char *cname = NULL, *builtin = cb_frame_builtin(c, frame, &cname);
-  int changed = cb_give_self(c, nt, class_def_body(nt, frame), builtin, 0, cname, 0);
+  changed = cb_give_self(c, nt, class_def_body(nt, frame), builtin, 0, cname, 0);
   if (changed) comp_grow_node_arrays(c);
   return changed;
 }
@@ -29123,22 +29135,6 @@ int desugar_self_class_eval_blocks(Compiler *c) {
   return changed;
 }
 
-int desugar_class_body_object_acts(Compiler *c) {
-  NodeTable *nt = (NodeTable *)c->nt;
-  int n0 = nt->count, changed = 0;
-  /* (a class or module body is given self by the walk, at its header: cb_walk_give_self) */
-  /* a Struct.new / Data.define block a constant or a local holds is the
-     class's body, where self is the class as well */
-  for (int w = 0; w < n0; w++) {
-    NodeKind wk = nt_kind(nt, w);
-    if (wk != NK_ConstantWriteNode && wk != NK_LocalVariableWriteNode) continue;
-    int val = nt_ref(nt, w, "value");
-    int blk = class_def_is_record_call(nt, val) ? nt_ref(nt, val, "block") : -1;
-    if (blk >= 0 && nt_kind(nt, blk) == NK_BlockNode) changed |= cb_give_self(c, nt, nt_ref(nt, blk, "body"), NULL, 1, NULL, 0);
-  }
-  if (changed) comp_grow_node_arrays(c);
-  return changed;
-}
 
 /* ---- the qualified names of the program's classes ----
  *

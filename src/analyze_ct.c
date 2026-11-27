@@ -1255,7 +1255,7 @@ static int ct_bind(CtBind *b, int id, int lv, int par, int gpar) {
   case NK_CallNode:   /* block_given? there asks of the macro call, not of the defined method */
     if (is_local_reflection(nt_str(nt, id, "name")) || is_block_given_name(nt_str(nt, id, "name"))) return 0;
     /* a local's value calls self's name, to_s or inspect: in a class body
-       they are written on self, as desugar_class_body_object_acts writes
+       they are written on self, as cb_walk_give_self writes
        the body's own */
     if (b->value && b->apply && nt_ref(nt, id, "receiver") < 0) {
       nt_set_self_receiver(nt, id, ct_node(nt, "SelfNode"));

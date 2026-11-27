@@ -349,8 +349,10 @@ static int lr_add(ElabWalk *w, int node, ElabPos *pos) {
   r->st[k].bmay = pos->bmay; r->st[k].blk = pos->blk; r->st[k].skip = pos->skip; r->st[k].unsure = pos->unsure;
   r->at[node] = k;
   pos->e = k; pos->top = r->st[k].top; pos->kind = EP_SPINE;
-  /* a class header: a bare Object or Module method in its body is a call on the class */
-  if (cb_walk_give_self(w->c, node)) lr_fit(r, w->c->nt->count);
+  /* a class header: a bare Object or Module method in its body is a call on
+     the class. Under the registration's walk alone: a record a step ahead
+     of it asks for is made while that step still reads the call bare. */
+  if (w->reg && cb_walk_give_self(w->c, node)) lr_fit(r, w->c->nt->count);
   return k;
 }
 

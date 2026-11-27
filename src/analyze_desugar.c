@@ -29000,16 +29000,15 @@ static const char *cb_frame_builtin(Compiler *c, int cn, const char **cname) {
   return builtin ? *cname : NULL;
 }
 
-/* Class header frame of a class of the program's, as the walk reaches it:
-   a bare Object or Module method in its body is a call on the class, and
-   is given self here, at the class's point. A builtin's reopening is given
-   it ahead of the walk (desugar_class_body_object_acts). */
+/* Class header frame, as the registration's walk reaches it: a bare Object
+   or Module method in its body is a call on the class, and is given self
+   here, at the class's point (in a builtin's reopening, method_defined? and
+   its kin the class by name) */
 int cb_walk_give_self(Compiler *c, int frame) {
   NodeTable *nt = (NodeTable *)c->nt;
   if (frame < 0 || !class_def_opens_frame(nt, frame)) return 0;
-  const char *cname = NULL;
-  if (cb_frame_builtin(c, frame, &cname)) return 0;
-  int changed = cb_give_self(c, nt, class_def_body(nt, frame), NULL, 0, cname, 0);
+  const char *cname = NULL, *builtin = cb_frame_builtin(c, frame, &cname);
+  int changed = cb_give_self(c, nt, class_def_body(nt, frame), builtin, 0, cname, 0);
   if (changed) comp_grow_node_arrays(c);
   return changed;
 }
@@ -29127,14 +29126,7 @@ int desugar_self_class_eval_blocks(Compiler *c) {
 int desugar_class_body_object_acts(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count, changed = 0;
-  for (int cn = 0; cn < n0; cn++) {
-    if (!class_def_opens_frame(nt, cn)) continue;
-    /* a builtin's reopening, ahead of the steps that lower its methods,
-       which read the receiver; a class of the program's is given self by
-       the walk, at its header (cb_walk_give_self) */
-    const char *cname = NULL, *builtin = cb_frame_builtin(c, cn, &cname);
-    if (builtin) changed |= cb_give_self(c, nt, class_def_body(nt, cn), builtin, 0, cname, 0);
-  }
+  /* (a class or module body is given self by the walk, at its header: cb_walk_give_self) */
   /* a Struct.new / Data.define block a constant or a local holds is the
      class's body, where self is the class as well */
   for (int w = 0; w < n0; w++) {

@@ -41787,6 +41787,49 @@ static void ps_index_build(Compiler *c) {
   qsort(g_ps_lits, (size_t)g_ps_nlits, sizeof *g_ps_lits, ps_name_cmp);
   qsort(g_ps_calls, (size_t)g_ps_ncalls, sizeof *g_ps_calls, ps_name_cmp);
 }
+/* What a call of the name resolves to, for ps_reached_plainly: the method
+   (-1: none), PS_CALL_ANY when it can reach any method of the name (a boxed
+   or untyped receiver, or an object one with no method of it), PS_CALL_BUILTIN
+   for a builtin's own method. It is the same for every method of the name,
+   which each asks of every such call: at 800 classes each with its own `m`,
+   640,000 resolutions of 800 answers. As dyn_call_target_mi, an answer stays
+   while no type moved (comp_ty_edits), the table is the one it was asked of
+   and no scope was added. */
+enum { PS_CALL_ANY = -2, PS_CALL_BUILTIN = -3 };
+static struct { int *t; unsigned long *at; int count, nscopes; unsigned ver; } g_ps_tgt;
+static int ps_call_target_uncached(Compiler *c, int id, const char *cn) {
+  const NodeTable *nt = c->nt;
+  int r = nt_ref(nt, id, "receiver");
+  int t = -1;
+  if (r < 0) t = comp_self_call_mi(c, id, cn);
+  else if (nt_kind(nt, r) == NK_ConstantReadNode || nt_kind(nt, r) == NK_ConstantPathNode) {
+    int rc = const_node_class_index(c, r);
+    t = rc >= 0 ? call_target(c, id, rc, cn, CT_CMETHOD, NULL) : -1;
+  }
+  else {
+    TyKind rt = infer_type(c, r);
+    if (rt == TY_POLY || rt == TY_UNKNOWN) return PS_CALL_ANY;
+    if (ty_is_object(rt)) t = call_target(c, id, ty_object_class(rt), cn, 0, NULL);
+    else return PS_CALL_BUILTIN;
+  }
+  if (t < 0 && r >= 0 && ty_is_object(infer_type(c, r))) return PS_CALL_ANY;
+  return t;
+}
+static int ps_call_target(Compiler *c, int id, const char *cn) {
+  const NodeTable *nt = c->nt;
+  if (id < 0 || id >= nt->count) return ps_call_target_uncached(c, id, cn);
+  if (!g_ps_tgt.t || g_ps_tgt.count != nt->count || g_ps_tgt.ver != nt->version || g_ps_tgt.nscopes != c->nscopes) {
+    free(g_ps_tgt.t); free(g_ps_tgt.at);
+    g_ps_tgt.t = malloc(sizeof(int) * (size_t)nt->count);
+    g_ps_tgt.at = calloc((size_t)nt->count, sizeof(unsigned long));
+    if (!g_ps_tgt.t || !g_ps_tgt.at) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    g_ps_tgt.count = nt->count; g_ps_tgt.ver = nt->version; g_ps_tgt.nscopes = c->nscopes;
+  }
+  if (g_ps_tgt.at[id] == comp_ty_edits + 1) return g_ps_tgt.t[id];
+  int t = ps_call_target_uncached(c, id, cn);
+  g_ps_tgt.t[id] = t; g_ps_tgt.at[id] = comp_ty_edits + 1;
+  return t;
+}
 /* Can method mi be reached only by plain positional calls resolved to it? */
 static int ps_reached_plainly(Compiler *c, int mi) {
   const NodeTable *nt = c->nt;
@@ -41805,22 +41848,9 @@ static int ps_reached_plainly(Compiler *c, int mi) {
   if (li < g_ps_nlits && sp_streq(g_ps_lits[li].name, nm)) return 0;
   for (int i = ps_name_first(g_ps_calls, g_ps_ncalls, nm); i < g_ps_ncalls && sp_streq(g_ps_calls[i].name, nm); i++) {
     int id = g_ps_calls[i].id;
-    const char *cn = g_ps_calls[i].name;
-    int r = nt_ref(nt, id, "receiver");
-    int t = -1;
-    if (r < 0) t = comp_self_call_mi(c, id, cn);
-    else if (nt_kind(nt, r) == NK_ConstantReadNode || nt_kind(nt, r) == NK_ConstantPathNode) {
-      int rc = const_node_class_index(c, r);
-      t = rc >= 0 ? call_target(c, id, rc, cn, CT_CMETHOD, NULL) : -1;
-    }
-    else {
-      TyKind rt = infer_type(c, r);
-      if (rt == TY_POLY || rt == TY_UNKNOWN) return 0;
-      if (ty_is_object(rt)) t = call_target(c, id, ty_object_class(rt), cn, 0, NULL);
-      else continue;   /* a builtin's own method of the name */
-    }
-    if (t < 0 && r >= 0 && ty_is_object(infer_type(c, r))) return 0;
-    if (t != mi) continue;
+    int t = ps_call_target(c, id, g_ps_calls[i].name);
+    if (t == PS_CALL_ANY) return 0;
+    if (t != mi) continue;   /* (PS_CALL_BUILTIN: a builtin's own method of the name) */
     int a = nt_ref(nt, id, "arguments"), an = 0;
     const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
     if (an != m->nparams || nt_ref(nt, id, "block") >= 0) return 0;

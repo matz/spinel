@@ -12400,7 +12400,8 @@ int poly_ivar_set_class(Compiler *c, int k) {
    serves. */
 enum { PX_BLOCK_PARAM, PX_SYMBOL, PX_BLOCK_WRITE, PX_SUPER, PX_N };
 typedef struct PivsFacts {
-  struct { int ok; char *set; int *cls, ncls; int *hash, nhash, typed, sweep, builtin;
+  struct PivsMemo { int ok; char *set; int *cls, ncls; int *hash, nhash, typed, sweep, builtin; unsigned drops;
+           int *key_node, *key_kind, nkey, ckey;
            int walked, has_class; char *cvals; } *memo;
   int *memo_at;             /* per node: its call's memo entry + 1, or 0 */
                            /* three slots: classes, Hash origins, callables */
@@ -12412,6 +12413,8 @@ typedef struct PivsFacts {
   int init_args;            /* the query follows an initialize parameter through the arguments
                                of the `K.new` calls that reach it (presence and Hash origin queries) */
   int init_walk;            /* a Hash origins query is inside such a walk (pivs_unfollowed) */
+  struct { int owner; const char *name; int m; } *shared;  /* pivs_call_set's ivar receivers */
+  int nshared, cshared;
   int *init_done_q, ninit_done;   /* per scope: the query that walked it through a bare super, */
   const char **init_done_pn;      /* and the parameter (pivs_param) */
   int stores_settled, stores_held, stores_widened;
@@ -12596,6 +12599,25 @@ static int pivs_elems(Compiler *c, int arr, char *set, int depth);
    query's memo entry (poly_recv_builtin). */
 static void pivs_note_builtin(Compiler *c) {
   if (c->pivs->active >= 0) c->pivs->memo[c->pivs->active].builtin = 1;
+}
+/* A local key's type an answer read (pivs_value's `[]=`): a later sweep
+   asks those types again rather than walking again (pivs_keys_hold). */
+static void pivs_note_key(Compiler *c, int node, int kind) {
+  if (c->pivs->active < 0) return;
+  struct PivsMemo *m = &c->pivs->memo[c->pivs->active];
+  if (m->nkey == m->ckey) {
+    m->ckey = m->ckey ? m->ckey * 2 : 4;
+    m->key_node = realloc(m->key_node, sizeof(int) * (size_t)m->ckey);
+    m->key_kind = realloc(m->key_kind, sizeof(int) * (size_t)m->ckey);
+    if (!m->key_node || !m->key_kind) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  }
+  m->key_node[m->nkey] = node; m->key_kind[m->nkey] = kind; m->nkey++;
+}
+static int pivs_keys_hold(Compiler *c, int mi) {
+  struct PivsMemo *m = &c->pivs->memo[mi];
+  for (int i = 0; i < m->nkey; i++)
+    if ((int)infer_type(c, m->key_node[i]) != m->key_kind[i]) return 0;
+  return 1;
 }
 /* Inside the walk of an initialize parameter, a Hash origins query walks
    on past a branch it cannot follow: the store widens the Hashes found on
@@ -13019,6 +13041,7 @@ static int pivs_local_push_ok(Compiler *c, int u, char *set, int depth) {
     if (kk != NK_IntegerNode && kk != NK_StringNode && kk != NK_SymbolNode && kk != NK_LocalVariableReadNode) return 0;
     if (kk == NK_LocalVariableReadNode) {
       TyKind kt = infer_type(c, av[0]);
+      pivs_note_key(c, av[0], kt);
       if (kt != TY_INT && kt != TY_STRING && kt != TY_SYMBOL) return 0;
     }
     if (!pivs_value(c, av[1], set, depth + 1)) return 0;
@@ -13495,9 +13518,13 @@ static PivsFacts *pivs_ready(Compiler *c) {
   ie_rebound_marks(c);
   if (f->memo_n != c->nclasses || f->memo_count != c->nt->count ||
       f->memo_ver != c->nt->version || f->memo_rb != c->ie_map.rb_ver) {
-    for (int i = 0; i < f->nmemo; i++) { free(f->memo[i].set); free(f->memo[i].cls); free(f->memo[i].hash); free(f->memo[i].cvals); }
+    for (int i = 0; i < f->nmemo; i++) {
+      free(f->memo[i].set); free(f->memo[i].cls); free(f->memo[i].hash); free(f->memo[i].cvals);
+      free(f->memo[i].key_node); free(f->memo[i].key_kind);
+    }
     free(f->memo_at); free(f->seen);
     f->nmemo = f->query = 0; f->memo_n = c->nclasses; f->memo_count = c->nt->count;
+    f->nshared = 0;
     f->ninit_done = 0;
     f->memo_ver = c->nt->version;
     f->memo_rb = c->ie_map.rb_ver;
@@ -13513,6 +13540,21 @@ static const char *pivs_call_set(Compiler *c, int call, const int **cls, int *n,
   if (cls) { *cls = NULL; *n = 0; }
   if (call < 0 || call >= f->memo_count) return NULL;
   int m = f->memo_at[(size_t)call * 3 + hashes] - 1;
+  /* A Hash store on an ivar asks what every store on that ivar of its owner
+     asks (the walk reads the ivar's stores, not the call): one memo entry
+     answers them all. */
+  int share_owner = -1; const char *share_name = NULL;
+  if (m < 0 && hashes == 1) {
+    int r = nt_ref(c->nt, call, "receiver");
+    if (r >= 0 && nt_kind(c->nt, r) == NK_InstanceVariableReadNode) {
+      share_owner = comp_ivar_owner(c, r); share_name = nt_str(c->nt, r, "name");
+      if (share_owner < 0 || !share_name) share_owner = -1;
+      for (int i = 0; share_owner >= 0 && i < f->nshared; i++)
+        if (f->shared[i].owner == share_owner && sp_streq(f->shared[i].name, share_name)) {
+          m = f->shared[i].m; f->memo_at[(size_t)call * 3 + hashes] = m + 1; break;
+        }
+    }
+  }
   if (m < 0) {
     if (f->nmemo == f->cmemo) {
       f->cmemo = f->cmemo ? f->cmemo * 2 : 16;
@@ -13522,6 +13564,15 @@ static const char *pivs_call_set(Compiler *c, int call, const int **cls, int *n,
     }
     m = f->nmemo++;
     f->memo_at[(size_t)call * 3 + hashes] = m + 1;
+    if (share_owner >= 0) {
+      if (f->nshared == f->cshared) {
+        f->cshared = f->cshared ? f->cshared * 2 : 16;
+        void *ns = realloc(f->shared, sizeof *f->shared * (size_t)f->cshared);
+        if (!ns) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+        f->shared = ns;
+      }
+      f->shared[f->nshared].owner = share_owner; f->shared[f->nshared].name = share_name; f->shared[f->nshared].m = m; f->nshared++;
+    }
     memset(&f->memo[m], 0, sizeof f->memo[m]);
     f->memo[m].sweep = -1;
     f->memo[m].set = (char *)calloc((size_t)(c->nclasses > 0 ? c->nclasses : 1), 1);
@@ -13530,8 +13581,18 @@ static const char *pivs_call_set(Compiler *c, int call, const int **cls, int *n,
     if (hashes) f->memo[m].hash = malloc(64 * sizeof *f->memo[m].hash);
     if (hashes && !f->memo[m].hash) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   }
-  if (f->memo[m].sweep < 0 || (hashes == 1 && f->memo[m].typed && f->memo[m].sweep != f->sweep)) {
+  /* Not every sweep: the call targets an answer read are kept until
+     cplan_targets_drop, so only a drop can change them, and the local keys'
+     types it read are asked again; while both hold, the walk would take the
+     same path to the same answer. */
+  int stale = 0;
+  if (hashes == 1 && f->memo[m].sweep >= 0 && f->memo[m].sweep != f->sweep && (f->memo[m].typed || f->memo[m].nkey > 0)) {
+    stale = (f->memo[m].typed && f->memo[m].drops != cplan_targets_drops()) || !pivs_keys_hold(c, m);
+    if (!stale) f->memo[m].sweep = f->sweep;
+  }
+  if (f->memo[m].sweep < 0 || stale) {
     f->memo[m].sweep = f->sweep; f->memo[m].nhash = 0; f->memo[m].typed = 0; f->memo[m].builtin = 0;
+    f->memo[m].nkey = 0; f->memo[m].drops = cplan_targets_drops();
     f->hash_mode = hashes; f->active = m; f->query++;
     memset(f->memo[m].set, 0, (size_t)(c->nclasses > 0 ? c->nclasses : 1));
     memset(f->memo[m].cvals, 0, (size_t)(c->nclasses > 0 ? c->nclasses : 1));

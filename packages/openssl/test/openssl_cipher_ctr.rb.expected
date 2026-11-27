@@ -1,0 +1,40 @@
+aes-128-ctr sp800-38a ok
+aes-128-ctr decrypt ok
+aes-128-ctr name=AES-128-CTR key_len=16 iv_len=16
+aes-192-ctr sp800-38a ok
+aes-192-ctr decrypt ok
+aes-192-ctr name=AES-192-CTR key_len=24 iv_len=16
+aes-256-ctr sp800-38a ok
+aes-256-ctr decrypt ok
+aes-256-ctr name=AES-256-CTR key_len=32 iv_len=16
+rfc3711 b.2 head ok
+rfc3711 b.2 tail ok
+rfc3711 b.3 label 0 ok
+rfc3711 b.3 label 1 ok
+rfc3711 b.3 label 2 ok
+wrap ok 8af2860142f786f409307c1a3f7eaaac7df76b0c1ab899b33e42f047b91b546f57127d4034b1bebfaef466b9c7726fc6
+carry dacc9148febbffe342d5805537ea155ff644566de02f529aa57d9a6064ac0ab6
+chunks [1, 15, 16, 17] ok
+chunks [5, 5, 5, 5] ok
+chunks [299, 1] ok
+chunks [16, 16, 16, 16] ok
+whole cb8dfc26d3b0dd742eb26695604023c150f992b25675d85b ASCII-8BIT
+final "" ASCII-8BIT continue 3dd3999b863d24d0
+iv restart 3dd3999b863d24d0
+key reinit 77ad1fb5
+after decrypt: OpenSSL::Cipher::CipherError: key not set
+decrypt then key 71af
+iv then encrypt then key 3dd3999b
+zero iv ok
+no key: key not set
+OpenSSL::Cipher::CipherError: AEAD not supported by this cipher
+OpenSSL::Cipher::CipherError: authentication tag not supported by this cipher
+OpenSSL::Cipher::CipherError: authentication tag not supported by this cipher
+OpenSSL::Cipher::CipherError: cipher does not support AEAD
+ArgumentError: iv must be 16 bytes
+ArgumentError: key must be 16 bytes
+TypeError: no implicit conversion of nil into String
+TypeError: no implicit conversion of Integer into String
+empty update "" ASCII-8BIT
+random_key 16 random_iv 16
+aes-512-ctr: OpenSSL::Cipher::CipherError

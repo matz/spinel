@@ -1274,6 +1274,77 @@ const char *sp_aes_gcm_decrypt(const char *name, const char *key, const char *iv
   return sp_str_as_binary(out);
 }
 
+/* ---------- AES-CTR, one update per call ----------
+
+   Counter mode is the GCM keystream without the tag, and SRTP's AES-CM is
+   this mode with the IV it builds per packet. As for GCM the Ruby Cipher
+   holds the state and each call here is stateless: the IV the message
+   started from, and how many bytes of it updates have already answered.
+   The counter block is the IV plus offset / 16, a big-endian add over all
+   128 bits that wraps as OpenSSL's own increment does, and offset % 16
+   keystream bytes are run off before the data, so one update is one call
+   whatever the sizes of the updates before it.
+
+   Same rule as sp_gcm_by_name: the three names are the gate, not whatever
+   EVP knows. */
+static const EVP_CIPHER *sp_ctr_by_name(const char *name) {
+  if (strcmp(name, "aes-128-ctr") == 0) return EVP_aes_128_ctr();
+  if (strcmp(name, "aes-192-ctr") == 0) return EVP_aes_192_ctr();
+  if (strcmp(name, "aes-256-ctr") == 0) return EVP_aes_256_ctr();
+  return NULL;
+}
+
+/* The ciphertext of data at byte offset `offset` of the message the IV
+   starts, which is also its plaintext: the transform is its own inverse.
+   An empty answer for non-empty data is a failure, with the reason in
+   sp_ssl_last_error; the answer is otherwise exactly as long as the data. */
+const char *sp_aes_ctr(const char *name, const char *key, const char *iv,
+                       sp_int offset, const char *data) {
+  static const unsigned char zeros[16] = {0};
+  const EVP_CIPHER *c = sp_ctr_by_name(name);
+  size_t n = sp_str_byte_len(data);
+  unsigned char counter[16], skipped[16];
+  uint64_t blocks;
+  unsigned carry = 0;
+  EVP_CIPHER_CTX *ctx;
+  char *out;
+  int got = 0, run = 0, ok;
+
+  sp_ssl_errbuf[0] = 0;
+  if (!c) { sp_ssl_note("unsupported cipher"); return sp_str_from_bytes("", 0); }
+  if ((int)sp_str_byte_len(key) != EVP_CIPHER_key_length(c) || sp_str_byte_len(iv) != 16) {
+    sp_ssl_note("key or iv is not the cipher's length");
+    return sp_str_from_bytes("", 0);
+  }
+  if (offset < 0 || n > INT_MAX) {
+    sp_ssl_note("AES-CTR offset or length out of range");
+    return sp_str_from_bytes("", 0);
+  }
+  memcpy(counter, iv, 16);
+  blocks = (uint64_t)offset / 16;
+  for (int i = 15; i >= 0 && (blocks || carry); i--) {
+    unsigned sum = counter[i] + (unsigned)(blocks & 0xff) + carry;
+    counter[i] = (unsigned char)sum;
+    carry = sum >> 8;
+    blocks >>= 8;
+  }
+  if (!(ctx = EVP_CIPHER_CTX_new())) { sp_ssl_note("EVP_CIPHER_CTX_new"); return sp_str_from_bytes("", 0); }
+  out = sp_str_alloc(n);
+  ok = EVP_EncryptInit_ex(ctx, c, NULL, (const unsigned char *)key, counter) &&
+       (offset % 16 == 0 ||
+        EVP_EncryptUpdate(ctx, skipped, &run, zeros, (int)(offset % 16))) &&
+       EVP_EncryptUpdate(ctx, (unsigned char *)out, &got, (const unsigned char *)data, (int)n);
+  EVP_CIPHER_CTX_free(ctx);
+  OPENSSL_cleanse(skipped, sizeof skipped);
+  if (!ok || (size_t)got != n) {
+    sp_ssl_note("AES-CTR update failed");
+    return sp_str_from_bytes("", 0);
+  }
+  out[n] = 0;
+  sp_str_set_len(out, n);
+  return sp_str_as_binary(out);
+}
+
 /* ---------- ECDSA over the same curves ----------
 
    Signing is the one place in this file where no single API spans its version

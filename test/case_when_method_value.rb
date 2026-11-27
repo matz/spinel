@@ -107,3 +107,12 @@ def check2(x) = x * 2
 p check2(0)
 patterns = [(cm = method(:check2))]
 p(case "ab" when patterns[0] then :chit else :cmiss end)
+# a boxed pattern binds the subject where one argument binds: after a leading optional, and before a rest
+def lead_opt(a = 0, b) = b.to_s.size > 1
+p lead_opt(5)
+lp = [method(:lead_opt)]
+p(case "ab" when lp[0] then :hit else :miss end)
+def post_req(*r, b) = b.to_s.size > 1
+p post_req(5)
+rp = [method(:post_req)]
+p(case "ab" when rp[0] then :hit else :miss end)

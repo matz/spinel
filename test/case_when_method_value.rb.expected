@@ -25,3 +25,7 @@ true
 [:churn2, :hit]
 0
 :chit
+false
+:hit
+false
+:hit

@@ -15265,7 +15265,8 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
       for (int k = 0; k < wc; k++) {
         TyKind ct = infer_type(c, conds[k]);
         /* a boxed operand can hold any Method the program captures: each
-           captured target takes the subject in its first parameter, as a
+           captured target takes the subject in the parameter one argument binds
+           to, as a
            boxed call's argument reaches the captures */
         if (ct == TY_POLY && nt_kind(nt, conds[k]) != NK_SplatNode) {
           TyKind at = infer_type(c, pred);
@@ -15278,11 +15279,19 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
             int tmi = method_obj_target_mi(c, mn);
             if (tmi < 0) continue;
             Scope *tm = &c->scopes[tmi];
-            int pi = method_call_param_shift(c, mn, tmi);
-            LocalVar *p0 = pi < tm->nparams && pi != tm->rest_idx && tm->pnames[pi] ? scope_local(tm, tm->pnames[pi]) : NULL;
+            int shift = method_call_param_shift(c, mn, tmi), pi = shift;
+            /* (the parameter one argument binds to: `def m(a = 0, b)` binds it to b) */
+            if (!shift) {
+              ArgLayout L;
+              call_layout(c, tm, &pred, 1, &L);
+              pi = -1;
+              for (int i = 0; i < L.n; i++) if (L.from[i] == ARG_NODE && L.arg[i] == 0) { pi = i; break; }
+              arg_layout_free(&L);
+            }
+            LocalVar *p0 = pi >= 0 && pi < tm->nparams && pi != tm->rest_idx && tm->pnames[pi] ? scope_local(tm, tm->pnames[pi]) : NULL;
             /* (a builtin's wrapper takes it boxed: the boxed call reaches a
                wrapper through its poly ABI, which a pointer slot has not) */
-            if (p0 && !p0->rbs_seeded && p0->type != TY_METHOD && lv_widen(p0, pi ? TY_POLY : at)) changed = 1;
+            if (p0 && !p0->rbs_seeded && p0->type != TY_METHOD && lv_widen(p0, shift ? TY_POLY : at)) changed = 1;
           }
           continue;
         }

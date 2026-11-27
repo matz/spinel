@@ -1113,6 +1113,7 @@ int desugar_reduce_proc_arg(Compiler *c);
 int desugar_reduce_splat_args(Compiler *c);
 int desugar_block_capture_wrap(Compiler *c);
 int desugar_user_not_match(Compiler *c);
+int desugar_user_match_operand(Compiler *c);
 int desugar_exception_class_ctor(Compiler *c);
 /* Is node id a super (bare or not) in a class method `exception` of an
    Exception class (not a module)? desugar_exception_super_new spells the

@@ -5423,6 +5423,52 @@ int desugar_user_not_match(Compiler *c) {
   return changed;
 }
 
+/* `s =~ obj`, s a String and obj not yet known to be a Regexp, where a program
+   class defines `=~`: String#=~ hands a non-Regexp operand the call, as
+   `obj =~ s`, and a Regexp's answer is the same both ways round. The swapped
+   call takes the receiver's dispatch, which reaches the program's `=~`; the
+   String receiver's arm matched only a Regexp, and its answer was refused as
+   a condition. Only operands whose reads have no effect swap, so the order
+   they run in is not seen. */
+static int match_operand_pure(const NodeTable *nt, int n) {
+  switch (nt_kind(nt, n)) {
+    case NK_LocalVariableReadNode: case NK_InstanceVariableReadNode: case NK_ConstantReadNode:
+    case NK_SelfNode: case NK_StringNode: case NK_RegularExpressionNode: case NK_SymbolNode: case NK_NilNode:
+      return 1;
+    default: return 0;
+  }
+}
+int desugar_user_match_operand(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int user = 0;
+  for (int s = 0; s < c->nscopes && !user; s++) {
+    const Scope *sc = &c->scopes[s];
+    if (!sc->name || !sp_streq(sc->name, "=~") || sc->class_id < 0) continue;
+    if (sp_streq(c->classes[sc->class_id].name, "String")) return 0;
+    user = 1;
+  }
+  if (!user) return 0;
+  int changed = 0;
+  static const char *const calls_of[] = { "=~", NULL };
+  int *calls, ncalls = an_calls_named_any(c, calls_of, nt->count, &calls);
+  for (int q = 0; q < ncalls; q++) {
+    int id = calls[q];
+    if (nt_kind(nt, id) != NK_CallNode || nt_ref(nt, id, "block") >= 0 || nt_safe_nav(nt, id)) continue;
+    int recv = nt_ref(nt, id, "receiver"), args = nt_ref(nt, id, "arguments"), n = 0;
+    const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &n) : NULL;
+    if (recv < 0 || n != 1 || !match_operand_pure(nt, recv) || !match_operand_pure(nt, av[0])) continue;
+    TyKind rt = infer_type(c, recv), at = infer_type(c, av[0]);
+    if (rt != TY_STRING && rt != TY_STRBUF) continue;
+    if (at == TY_REGEX || at == TY_STRING || at == TY_STRBUF || at == TY_NIL || nt_kind(nt, av[0]) == NK_RegularExpressionNode) continue;
+    int arg = av[0];
+    nt_node_set_arr(nt, args, "arguments", &recv, 1);
+    nt_node_set_ref(nt, id, "receiver", arg);
+    changed = 1;
+  }
+  free(calls);
+  return changed;
+}
+
 /* A name ENV answers: its enumeration and read surface (env_enum_method)
    and the reads and writes its own arms answer. A call of another name on a
    boxed value is none ENV takes, so it is not read through the

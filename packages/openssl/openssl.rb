@@ -83,7 +83,11 @@ module OpenSSL
                 "sp_ssl_export_keying_material"
     native_func :version,      [:int],                :string, "sp_ssl_version"
     native_func :cipher,       [:int],                :string, "sp_ssl_cipher"
-    native_func :connect_nb,   [:int, :string, :int, :int, :any, :string, :string, :string], :int, "sp_ssl_connect_nb"
+    # The last two of connect_nb and accept_nb are the context's protocol
+    # bounds, 0 for none; proto_check is min_version= and max_version='s
+    # check, 0 or which bound OpenSSL refused.
+    native_func :connect_nb,   [:int, :string, :int, :int, :any, :string, :string, :string, :int, :int], :int,
+                "sp_ssl_connect_nb"
     native_func :handshake_cont, [:int],              :int,    "sp_ssl_handshake_cont"
     native_func :read_nb,      [:int, :int],          :string, "sp_ssl_read_nb"
     native_func :want,         [],                    :int,    "sp_ssl_want"
@@ -91,8 +95,9 @@ module OpenSSL
     # A context's own certificates as x509_load lays them out, the leaf
     # first, and its key as its curve and scalar: a server's, and a client's
     # for a server that asks. See SSLContext below.
-    native_func :accept_nb,    [:int, :string, :string, :string, :int, :any], :int, "sp_ssl_accept_nb"
+    native_func :accept_nb,    [:int, :string, :string, :string, :int, :any, :int, :int], :int, "sp_ssl_accept_nb"
     native_func :server_check, [:string, :string, :string],       :int, "sp_ssl_server_check"
+    native_func :proto_check,  [:int, :int],                      :int, "sp_ssl_proto_check"
 
     # EC, over the same object. Bytes in, bytes out, and an empty answer
     # means the reason is in last_error -- see openssl/pkey.rb.
@@ -165,6 +170,15 @@ module OpenSSL
     VERIFY_FAIL_IF_NO_PEER_CERT = 2
     VERIFY_CLIENT_ONCE = 4
 
+    # The protocol versions SSLContext#min_version= and #max_version= take,
+    # numbered as OpenSSL numbers them, as CRuby's are.
+    SSL2_VERSION = 0x0002
+    SSL3_VERSION = 0x0300
+    TLS1_VERSION = 0x0301
+    TLS1_1_VERSION = 0x0302
+    TLS1_2_VERSION = 0x0303
+    TLS1_3_VERSION = 0x0304
+
     class SSLError < OpenSSLError
     end
 
@@ -219,6 +233,8 @@ module OpenSSL
         @added_chain = ""
         @added_key = nil
         @verify_mode_set = false
+        @min_proto = 0
+        @max_proto = 0
       end
 
       def verify_mode=(mode)
@@ -243,6 +259,59 @@ module OpenSSL
         self.verify_mode = mode
         @verify_hostname = hostname
         self
+      end
+
+      # CRuby's: the oldest and newest protocol version a connection made
+      # with this context may use, as an Integer constant (TLS1_2_VERSION), a
+      # Symbol or String naming one (:TLS1_2), or nil for no bound. Checked
+      # when it is called, as CRuby checks it, and a bound OpenSSL refuses
+      # leaves the one before it. Without a minimum the floor is TLS 1.2, as
+      # for a context that never set one; a program can set a lower one.
+      def min_version=(version)
+        v = SSLContext.proto_version(version)
+        SSLContext.check_proto(v, @max_proto)
+        @min_proto = v
+      end
+
+      def max_version=(version)
+        v = SSLContext.proto_version(version)
+        SSLContext.check_proto(@min_proto, v)
+        @max_proto = v
+      end
+
+      # Not CRuby's: the bounds SSLSocket#connect and #accept hand to the C,
+      # 0 where none was set.
+      def proto_min = @min_proto
+      def proto_max = @max_proto
+
+      # The names CRuby takes, matched as CRuby matches them: by the name's
+      # first letters, so :TLS is TLS1 and "" is SSL2, which OpenSSL then
+      # refuses.
+      PROTO_NAMES = ["SSL2", "SSL3", "TLS1", "TLS1_1", "TLS1_2", "TLS1_3"]
+      PROTO_NUMBERS = [SSL2_VERSION, SSL3_VERSION, TLS1_VERSION, TLS1_1_VERSION, TLS1_2_VERSION, TLS1_3_VERSION]
+
+      def self.proto_version(version)
+        return 0 if version.nil?
+        if version.is_a?(Integer)
+          raise RangeError, "integer #{version} too big to convert to 'int'" if version > 2_147_483_647
+          raise RangeError, "integer #{version} too small to convert to 'int'" if version < -2_147_483_648
+          return version
+        end
+        name = version.is_a?(Symbol) ? version.to_s : OpenSSL.send(:comparison_string, version)
+        i = 0
+        while i < PROTO_NAMES.size
+          return PROTO_NUMBERS[i] if PROTO_NAMES[i].start_with?(name)
+          i += 1
+        end
+        raise ArgumentError, "unrecognized version #{name.inspect}"
+      end
+
+      def self.check_proto(min, max)
+        case Native.proto_check(min, max)
+        when 1 then raise SSLError, "SSL_CTX_set_min_proto_version"
+        when 2 then raise SSLError, "SSL_CTX_set_max_proto_version"
+        end
+        nil
       end
 
       # Not CRuby's: the verify_mode SSLSocket#accept hands to the C, which is
@@ -587,7 +656,8 @@ module OpenSSL
                               @context.verify_mode == VERIFY_NONE ? 0 : 1,
                               @context.verify_hostname ? 1 : 0,
                               @context.cert_store, @context.own_chain,
-                              key ? SSLContext.key_curve(key) : "", key ? SSLContext.key_bytes(key) : "")
+                              key ? SSLContext.key_curve(key) : "", key ? SSLContext.key_bytes(key) : "",
+                              @context.proto_min, @context.proto_max)
         if h < 0
           raise SSLError, "SSL_connect returned an error: #{Native.last_error}"
         end
@@ -598,7 +668,8 @@ module OpenSSL
         key = own_key
         h = Native.accept_nb(@io.fileno, @context.own_chain,
                              key ? SSLContext.key_curve(key) : "", key ? SSLContext.key_bytes(key) : "",
-                             @context.accept_verify_mode, @context.cert_store)
+                             @context.accept_verify_mode, @context.cert_store,
+                             @context.proto_min, @context.proto_max)
         if h < 0
           raise SSLError, "SSL_accept returned an error: #{Native.last_error}"
         end

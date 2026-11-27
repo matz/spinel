@@ -478,15 +478,47 @@ const char *sp_x509_pem(const char *der) {
    context has none; OpenSSL sends them only to a server that asks. */
 static int sp_ssl_use_chain(SSL_CTX *ctx, const char *chain, const char *curve, const char *priv);
 
+/* The protocol bounds SSLContext#min_version= and #max_version= set, 0 where
+   the program set none. TLS 1.2 is the floor a context without a minimum
+   gets: 1.0 and 1.1 are withdrawn, and a server offering only those is not
+   one to fall back to silently. A program that sets a lower minimum has
+   asked for it, which is not silent. The bounds were checked when they were
+   set (sp_ssl_proto_check), so this fails only as SSL_CTX_new could. */
+static int sp_ssl_bounds(SSL_CTX *ctx, sp_int min, sp_int max) {
+  if (!SSL_CTX_set_min_proto_version(ctx, min ? (int)min : TLS1_2_VERSION)) {
+    sp_ssl_note("SSL_CTX_set_min_proto_version");
+    return 0;
+  }
+  if (!SSL_CTX_set_max_proto_version(ctx, (int)max)) {
+    sp_ssl_note("SSL_CTX_set_max_proto_version");
+    return 0;
+  }
+  return 1;
+}
+
+/* min_version= and max_version='s check, made when they are called, as
+   CRuby makes it on its context: 0 when OpenSSL takes both bounds, 1 when it
+   refuses the minimum, 2 the maximum. The context is built and dropped, as
+   sp_ssl_server_check's is. */
+sp_int sp_ssl_proto_check(sp_int min, sp_int max) {
+  SSL_CTX *ctx = SSL_CTX_new(TLS_method());
+  sp_int r = 0;
+
+  if (!ctx) return 1;
+  if (!SSL_CTX_set_min_proto_version(ctx, (int)min)) r = 1;
+  else if (!SSL_CTX_set_max_proto_version(ctx, (int)max)) r = 2;
+  SSL_CTX_free(ctx);
+  ERR_clear_error();
+  return r;
+}
+
 static int sp_ssl_setup(sp_int fd, const char *hostname, sp_int verify, sp_int verify_hostname, sp_RbVal cert_store,
-                        const char *chain, const char *curve, const char *priv) {
+                        const char *chain, const char *curve, const char *priv, sp_int min, sp_int max) {
   sp_ssl_errbuf[0] = 0;
 
   SSL_CTX *ctx = SSL_CTX_new(TLS_client_method());
   if (!ctx) { sp_ssl_note("SSL_CTX_new"); return -1; }
-  /* TLS 1.2 is the floor: 1.0 and 1.1 are withdrawn and a server offering
-     only those is not one to fall back to silently. */
-  SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
+  if (!sp_ssl_bounds(ctx, min, max)) { SSL_CTX_free(ctx); return -1; }
   /* A write that had to wait is retried from Ruby with the same bytes, and
      nothing promises they are at the same address; OpenSSL refuses a retry
      from a moved buffer unless this is set. */
@@ -600,8 +632,8 @@ static void sp_ssl_handshake_step(sp_ssl_conn *c) {
    or -1 when the connection could not be built. The handle is kept across
    calls so the handshake can be resumed. */
 sp_int sp_ssl_connect_nb(sp_int fd, const char *hostname, sp_int verify, sp_int verify_hostname, sp_RbVal cert_store,
-                         const char *chain, const char *curve, const char *priv) {
-  int i = sp_ssl_setup(fd, hostname, verify, verify_hostname, cert_store, chain, curve, priv);
+                         const char *chain, const char *curve, const char *priv, sp_int min, sp_int max) {
+  int i = sp_ssl_setup(fd, hostname, verify, verify_hostname, cert_store, chain, curve, priv, min, max);
   if (i < 0) { sp_ssl_want_state = 4; return -1; }
   sp_ssl_conn *c = &sp_ssl_tab[i];
   int fl = fcntl(c->fd, F_GETFL, 0);
@@ -2102,9 +2134,10 @@ static SSL_CTX *sp_ssl_server_ctx(const char *chain, const char *curve, const ch
    `verify` is the SSL_VERIFY_* bits a server's verify_mode holds, 0 unless
    the program set it (4a in #9341): with SSL_VERIFY_PEER the server asks
    for a client certificate and validates one against `cert_store`, which
-   is empty when the context has none, as CRuby's is. */
+   is empty when the context has none, as CRuby's is. `min` and `max` are
+   the context's protocol bounds, as for a client (sp_ssl_bounds). */
 sp_int sp_ssl_accept_nb(sp_int fd, const char *chain, const char *curve, const char *priv,
-                        sp_int verify, sp_RbVal cert_store) {
+                        sp_int verify, sp_RbVal cert_store, sp_int min, sp_int max) {
   SSL_CTX *ctx;
   SSL *ssl;
   int i;
@@ -2112,6 +2145,7 @@ sp_int sp_ssl_accept_nb(sp_int fd, const char *chain, const char *curve, const c
   sp_ssl_want_state = 4;
   sp_ssl_errbuf[0] = 0;
   if (!(ctx = sp_ssl_server_ctx(chain, curve, priv))) return -1;
+  if (!sp_ssl_bounds(ctx, min, max)) { SSL_CTX_free(ctx); return -1; }
   SSL_CTX_set_verify(ctx, (int)verify, NULL);
   if (cert_store.tag != SP_TAG_NIL) {
     sp_X509_Store *store = (sp_X509_Store *)cert_store.v.p;

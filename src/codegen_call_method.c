@@ -1376,6 +1376,10 @@ int emit_op_method_arity(Compiler *c, const BopCtx *x, Buf *b) {
                      : mrt == TY_FLOAT ? "Float" : mrt == TY_SYMBOL ? "Symbol"
                      : ty_is_array(mrt) ? "Array" : ty_is_hash(mrt) ? "Hash"
                      : mrt == TY_RANGE ? "Range" : mrt == TY_TIME ? "Time" : NULL;
+    /* a builtin subclass's instance (`class S < String`) has an object type; its
+       wrapper names the builtin whose method it captured (bam_owner) */
+    if (!mcls && is_bam && c->scopes[target].def_node >= 0 && ty_is_object(mrt))
+      mcls = nt_str(nt, c->scopes[target].def_node, "bam_owner");
     int ba = 0, have_ba = 0;
     if (msym && mcls && builtin_method_arity(mcls, msym, &ba)) have_ba = 1;
     /* Comparable's methods, which the class's own table leaves out */

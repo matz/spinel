@@ -12204,6 +12204,7 @@ static int desugar_builtin_method_obj(Compiler *c) {
     int accessor = 0;     /* the wrapper stands for an accessor */
     int attr_decl = -1;   /* the attr_* call an accessor's wrapper stands for */
     int owner_ci = -1;    /* the class declaring it, its Method's #owner */
+    const char *sub_bcls = NULL;   /* a builtin subclass's instance: the builtin whose method the name is */
     if (ty_is_object(rt)) {
       int ocid = ty_object_class(rt);
       int obj_accessor = 0;
@@ -12217,17 +12218,28 @@ static int desugar_builtin_method_obj(Compiler *c) {
           if (wr) binop = 1;
         }
       }
-      if (!obj_accessor) continue;                    /* real def / non-accessor: handled elsewhere */
-      /* the owner and the position of the accessor the bind site meets, as
-         of the bind (cplan_accessor_met): a subclass's accessor lists hold
-         its ancestors' too, and a later reopening's attr_* the Method does
-         not see; where the record cannot tell which one the bind meets,
-         the last one sure to run */
-      CplanAccessor acc;
-      cplan_accessor_met(c, id, ocid, sym, &acc);
-      accessor = 1;
-      owner_ci = acc.owner;
-      attr_decl = acc.pos == 1 ? acc.node : -1;
+      /* an instance of a builtin's subclass (`class S < String`) captures the
+         builtin's own method where its chain defines none of the name: the
+         wrapper below, whose body call dispatches on the receiver as a direct
+         call does, with the builtin's owner and arity */
+      if (!obj_accessor && ocid >= 0 && call_target(c, -1, ocid, sym, 0, NULL) < 0) {
+        int bp = class_builtin_parent(c, ocid);
+        for (int i = 0; bp != -116 && builtin_class_at(i); i++)
+          if (builtin_class_at(i)->id == bp && builtin_id_has_instance_method(bp, sym)) { sub_bcls = builtin_class_at(i)->name; break; }
+      }
+      if (!obj_accessor && !sub_bcls) continue;       /* real def / non-accessor: handled elsewhere */
+      if (obj_accessor) {
+        /* the owner and the position of the accessor the bind site meets, as
+           of the bind (cplan_accessor_met): a subclass's accessor lists hold
+           its ancestors' too, and a later reopening's attr_* the Method does
+           not see; where the record cannot tell which one the bind meets,
+           the last one sure to run */
+        CplanAccessor acc;
+        cplan_accessor_met(c, id, ocid, sym, &acc);
+        accessor = 1;
+        owner_ci = acc.owner;
+        attr_decl = acc.pos == 1 ? acc.node : -1;
+      }
     }
     /* (ENV's methods have no compiled function a wrapper could name: its
        Method is refused at the call, emit_method_obj_on_constant) */
@@ -12268,7 +12280,7 @@ static int desugar_builtin_method_obj(Compiler *c) {
                        : rt == TY_FLOAT ? "Float" : rt == TY_SYMBOL ? "Symbol"
                        : ty_is_array(rt) ? "Array" : ty_is_hash(rt) ? "Hash"
                        : rt == TY_RANGE ? "Range" : rt == TY_TIME ? "Time"
-                       : rt == TY_BOOL ? "Object" : NULL;
+                       : rt == TY_BOOL ? "Object" : sub_bcls;
       /* (a true's or false's own method is TrueClass's or FalseClass's: a
          receiver of either class, where nothing tells which, has both) */
       const char *bool_cls = rt == TY_BOOL ? bool_value_class(nt, recv) : NULL;

@@ -1,3 +1,4 @@
+# spinel: not-cruby -- GC.stat["threshold"] and ["bytes"] are Spinel's own counters; CRuby has neither
 # After a collection the next threshold is twice the bytes that survived, so
 # a program holding a large live set lets as much garbage again pile up before
 # it collects: 600 MB of live data collects at 1.2 GB however little is

@@ -17456,7 +17456,25 @@ int desugar_define_method_captures_at(Compiler *c, LowerCtx *lc, int id) {
   if (s.n) {
     /* the global carries the class's stable number, not its node id */
     char ctag[64]; snprintf(ctag, sizeof ctag, "%s", comp_node_tag(c, id));
+    /* the body's statements as they are: one this run turns into the
+       global's write may be recorded already (a define_method the walk
+       grafted from a class_eval text captures a local written ahead of it),
+       and the record takes the write then */
+    int bn0 = 0; const int *bb0 = nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &bn0) : NULL;
+    int *was = bn0 ? malloc(sizeof(int) * (size_t)(2 * bn0)) : NULL;
+    if (bn0 && !was) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    for (int q = 0; q < bn0; q++) { was[2 * q] = bb0[q]; was[2 * q + 1] = (int)nt_kind(nt, bb0[q]); }
     dmc_walk(nt, body, 0, 0, ctag, &s, 1);
+    int bn1 = 0; const int *bb1 = nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &bn1) : NULL;
+    for (int q = 0; q < bn0 && q < bn1; q++) {
+      NodeKind k1 = nt_kind(nt, bb1[q]);
+      if (bb1[q] == was[2 * q] && (int)k1 != was[2 * q + 1] &&
+          (k1 == NK_GlobalVariableWriteNode || k1 == NK_GlobalVariableOrWriteNode)) {
+        elab_rerecord_write(c, bb1[q]);
+        elab_record_write(c, bb1[q]);
+      }
+    }
+    free(was);
     changed = 1;
   }
   for (int i = 0; i < s.n; i++) free(s.names[i]);
@@ -36420,11 +36438,17 @@ static int sce_text_walk_safe(Compiler *c, struct SceFacts *f, NodeTable *t, con
     if (dk == NK_DefNode) { dn = nt_str(t, d, "name"); if (nt_ref(t, d, "receiver") >= 0) return 0; }
     /* a write or read of a local: the body's, named by the body's scope as
        the span is lowered (host_lower_now with the body for its scope), or
-       the text's own (sce_text_local). A define_method whose block captures
-       one is left to the step: the global the capture row makes for it at
-       the walk is typed nullable where the step's was not (its first write
-       is read in another order). */
+       the text's own (sce_text_local) */
     else if (dk == NK_LocalVariableWriteNode || dk == NK_LocalVariableReadNode) continue;
+    else if (dk == NK_CallNode && nt_ref(t, d, "receiver") < 0 && is_define_method_name(nt_str(t, d, "name"))) {
+      /* define_method(:m) { }: a literal name, a block; the row that makes a
+         global of a body local the block captures runs over the span, and
+         the body's write it rewrites is recorded again (elab_rerecord_write) */
+      int ac = 0, blk = nt_ref(t, d, "block");
+      const int *av = call_args(t, d, &ac);
+      dn = ac == 1 ? vis_arg_name(t, av[0]) : NULL;
+      if (!dn || blk < 0 || nt_kind(t, blk) != NK_BlockNode) return 0;
+    }
     else return 0;
     if (!dn || is_definition_hook_name(dn) ||
         name_list_has(c->def_asked, c->ndef_asked, dn) || sce_name_asked(c->nt, f, dn)) return 0;
@@ -36444,8 +36468,9 @@ static int sce_text_walk_safe(Compiler *c, struct SceFacts *f, NodeTable *t, con
       break;
     case NK_DefNode: ok = top; break;
     case NK_CallNode:
-      ok = !is_load_effect_call(nm) && !is_reflective_access(nm) && !is_definition_hook_name(nm) &&
-           !is_singleton_class_name(nm) && !is_eval_exec_family(nm) && !sce_spliced_name(nm);
+      ok = (top && is_define_method_name(nm)) ||
+           (!is_load_effect_call(nm) && !is_reflective_access(nm) && !is_definition_hook_name(nm) &&
+            !is_singleton_class_name(nm) && !is_eval_exec_family(nm) && !sce_spliced_name(nm));
       break;
     default: break;
     }
@@ -37741,7 +37766,10 @@ int sce_walk_frame(Compiler *c, HostStep *h, int frame) {
     if (i >= bn) break;
     int ch = 0;
     int n = sce_body(c, h, frame, body, i, 1, ls ? ls : "", NULL, &ch);
-    if (ch) { changed = 1; host_lower_now(c, h, frame, body, i, n, frame); }   /* (the text runs in the body's frame: its locals are the body's) */
+    if (ch) {
+      changed = 1;
+      host_lower_now(c, h, frame, body, i, n, frame);   /* (the text runs in the body's frame: its locals are the body's) */
+    }
     i += n - 1;
   }
   sce_where = SCE_SPAN;

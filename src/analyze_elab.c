@@ -5517,6 +5517,17 @@ static void lr_record_stmt(ElabRec *x, int e) {
   }
 }
 
+/* A statement the registration's walk has recorded, which a row then
+   rewrote into a write of a global (a body local a define_method's block
+   captures, made a global as a class_eval text is grafted at the walk):
+   its write recorded now, as the record records one. Under the
+   registration's walk alone, for a statement already behind its frontier. */
+void elab_rerecord_write(Compiler *c, int stmt) {
+  LoadRecord *r = c->lrec;
+  if (!r || !r->walk || r->recorded || stmt < 0 || stmt >= r->n) return;
+  int e = r->at[stmt];
+  if (e >= 0 && e < r->frontier && r->st[e].node == stmt) lr_value_write(c, e);
+}
 /* A write a pass adds to the load phase after the record (a mixin guard's
    flag): stmt, a statement the walk reaches, written to a global or to
    main's instance variable, recorded as the record records one */

@@ -30600,6 +30600,12 @@ static int mm_builtin_above(Compiler *c, int k) {
 static int mm_answers(Compiler *c, int id, int k, const char *nm) {
   MethodLookup ml = { .def_class = -1 };
   if (call_target(c, id, k, nm, 0, &ml) >= 0 || ml.kind == ML_ATTR) return 1;
+  /* (a writer of an attr_writer or attr_accessor on the chain, public unless the call is on self) */
+  char base[256];
+  if (setter_base_name(nm, base, sizeof base) && call_attr_target(c, id, k, base, CT_ATTR | CT_WRITER, NULL)) {
+    int r = nt_ref(c->nt, id, "receiver");
+    if (r < 0 || nt_kind(c->nt, r) == NK_SelfNode || cplan_method_vis(c, id, k, nm, 0, NULL) == SP_VIS_PUBLIC) return 1;
+  }
   /* (a method of the builtin above its chain, String#length of a String subclass, initialize included,
      unless an undef_method of the name stands on the chain: then method_missing takes it) */
   int bp = k >= 0 ? mm_builtin_above(c, k) : -116;

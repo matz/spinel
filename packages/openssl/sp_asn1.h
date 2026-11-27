@@ -7,7 +7,10 @@ static SP_TLS sp_x509_out sp_asn1_out;
    in LibreSSL, it is the low bits of the flags word. _set1 refuses two
    values the flags word took -- padding bits that are not zero, and unused
    bits in an empty string -- so it is handed the bytes i2d wrote from the
-   flags word: the padding cleared, and an empty string with none unused. */
+   flags word: the padding cleared, and an empty string with none unused.
+   _get_length refuses the second of those too, which d2i still reads (03
+   01 07), so a decoded count it refuses is the encoding's own first content
+   octet, the count the flags word answered before 4. */
 #if !defined(LIBRESSL_VERSION_NUMBER) && OPENSSL_VERSION_NUMBER >= 0x40000000L
 static int sp_asn1_bits_set(ASN1_BIT_STRING *bits, const char *data, size_t size, int unused) {
   if (size == 0) return ASN1_BIT_STRING_set1(bits, (const uint8_t *)"", 0, 0);
@@ -20,10 +23,14 @@ static int sp_asn1_bits_set(ASN1_BIT_STRING *bits, const char *data, size_t size
   return ok;
 }
 
-static int sp_asn1_bits_unused(const ASN1_BIT_STRING *bits) {
+static int sp_asn1_bits_unused(const ASN1_BIT_STRING *bits, const unsigned char *der, long size) {
   size_t length = 0;
   int unused = 0;
-  return ASN1_BIT_STRING_get_length(bits, &length, &unused) ? unused : 0;
+  if (ASN1_BIT_STRING_get_length(bits, &length, &unused)) return unused;
+  long content = 0;
+  int tag = 0, xclass = 0;
+  int form = ASN1_get_object(&der, &content, &tag, &xclass, size);
+  return !(form & 0x80) && !(form & V_ASN1_CONSTRUCTED) && content > 0 ? der[0] & 7 : 0;
 }
 #else
 static int sp_asn1_bits_set(ASN1_BIT_STRING *bits, const char *data, size_t size, int unused) {
@@ -32,7 +39,8 @@ static int sp_asn1_bits_set(ASN1_BIT_STRING *bits, const char *data, size_t size
   return 1;
 }
 
-static int sp_asn1_bits_unused(const ASN1_BIT_STRING *bits) {
+static int sp_asn1_bits_unused(const ASN1_BIT_STRING *bits, const unsigned char *der, long size) {
+  (void)der; (void)size;
   return (int)(bits->flags & 7);
 }
 #endif
@@ -232,7 +240,7 @@ const char *sp_openssl_asn1_decode_value(const char *der, sp_int tag) {
     ASN1_BIT_STRING *bits = d2i_ASN1_BIT_STRING(NULL, &p, size);
     if (!bits) sp_asn1_decode_error("d2i_ASN1_BIT_STRING");
     length = ASN1_STRING_length(bits);
-    int unused = sp_asn1_bits_unused(bits);
+    int unused = sp_asn1_bits_unused(bits, (const unsigned char *)der, size);
     const unsigned char *bytes = ASN1_STRING_get0_data(bits);
     ok = length >= 0 && length < INT_MAX &&
          sp_x509_room(&sp_asn1_out, (size_t)length + 1);

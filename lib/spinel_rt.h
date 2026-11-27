@@ -3392,6 +3392,14 @@ static sp_RbVal sp_orange_max(const sp_ObjRange *r);
    identity.
    The box's payload was read as the id, which for an Integer, a Symbol and
    true is not the typed one. */
+/* An object's #object_id from its identity: the address, non-negative as
+   CRuby's id is. Where sp_int is the 32-bit pointer width, an address past
+   half the range would be negative: halved (an object is aligned, so the
+   ids stay distinct). */
+static inline sp_int sp_identity_object_id(const void *p) {
+  uintptr_t u = (uintptr_t)p;
+  return sizeof(sp_int) < 8 ? (sp_int)(u >> 1) : (sp_int)u;
+}
 static inline sp_int sp_poly_object_id(sp_RbVal v) {
   switch (v.tag) {
     case SP_TAG_INT: return (sp_int)(2 * (uintptr_t)v.v.i + 1);   /* (unsigned: an Integer past half the range wraps, as the typed arm does) */
@@ -3399,7 +3407,7 @@ static inline sp_int sp_poly_object_id(sp_RbVal v) {
     case SP_TAG_BOOL: return v.v.i ? SP_TRUE_OBJECT_ID : SP_FALSE_OBJECT_ID;
     case SP_TAG_NIL: return SP_NIL_OBJECT_ID;
     case SP_TAG_FLT: return sp_rbval_hash_key(v);
-    default: return (sp_int)(uintptr_t)sp_poly_identity_ptr(v);
+    default: return sp_identity_object_id(sp_poly_identity_ptr(v));
   }
 }
 /* --share-strings: a String Array moved into a boxed Array with each

@@ -12404,7 +12404,7 @@ typedef struct PivsFacts {
            int walked, has_class; char *cvals; } *memo;
   int *memo_at;             /* per node: its call's memo entry + 1, or 0 */
                            /* three slots: classes, Hash origins, callables */
-  struct { int call; uint64_t done[4]; } *seen;
+  struct { int call; uint64_t done[4]; unsigned char state[8]; } *seen;
   int nmemo, cmemo, memo_n, memo_count;
   unsigned memo_ver, memo_rb;  /* memo_rb: the rebound marks' version (ie_rebound_marks) */
   int query, sweep, active;  /* active: the memo entry the query fills, -1 for none */
@@ -13262,14 +13262,15 @@ static int pivs_elems_uncached(Compiler *c, int v, char *set, int depth);
    clearing the table per query; failed or unfinished visits are never reused.
    A Hash query that follows inferred method targets advances that number
    when its answer is recomputed for a new inference sweep. */
+enum { PIVS_WALKING = 1, PIVS_DONE, PIVS_FAILED };
 static int pivs_visit(Compiler *c, int v, char *set, int depth, int elems) {
   if (v < 0) {
     /* an absent value (a missing else) is nil */
     if (!elems) pivs_note_builtin(c);
     return !elems;
   }
-  if (depth > 32) return pivs_unfollowed(c);
   PivsFacts *f = c->pivs;
+  if (depth > (f->hash_mode ? 512 : 32)) return pivs_unfollowed(c);
   int key = v, slot = elems;
   if (nt_kind(c->nt, v) == NK_LocalVariableReadNode) {
     const char *vn = nt_str(c->nt, v, "name");
@@ -13285,13 +13286,30 @@ static int pivs_visit(Compiler *c, int v, char *set, int depth, int elems) {
   if (f->seen[key].call != f->query) {
     f->seen[key].call = f->query;
     memset(f->seen[key].done, 0, sizeof f->seen[key].done);
+    memset(f->seen[key].state, 0, sizeof f->seen[key].state);
   }
+  /* A Hash or callable query visits each node once, not once per depth: a
+     node reached at many depths was walked again at each, and a Rails
+     program's Rack env origins took 12M visits a query. A finished visit
+     found all it ever will, into the same query's set. A revisit of one still
+     in progress is a cycle, which the depth bound used to turn into an
+     unbounded answer, and still does; a failure is an unbounded answer
+     wherever the node is reached from. The initialize walk walks past a
+     failure, so its visits are kept apart from the rest. */
+  if (f->hash_mode) {
+    unsigned char *st = &f->seen[key].state[slot + (f->init_walk ? 4 : 0)];
+    if (*st == PIVS_DONE) return 1;
+    if (*st == PIVS_WALKING || *st == PIVS_FAILED) return pivs_unfollowed(c);
+    *st = PIVS_WALKING;
+    int ok = elems ? pivs_elems_uncached(c, v, set, depth) : pivs_value_uncached(c, v, set, depth);
+    *st = ok ? PIVS_DONE : PIVS_FAILED;
+    return ok || pivs_unfollowed(c);
+  }
+  /* A class query keeps the exact depth: its superclass step empties the set
+     it then reads (pivs_superclass), so a visit done elsewhere has not filled
+     this one's. */
   uint64_t bit = UINT64_C(1) << depth;
-  /* Not this depth's bit alone: a visit that finished deeper, with less of
-     the walk's depth left, finishes from here too, into the same query's
-     set. Read per depth, a node reached at many depths was walked again at
-     each, and a Rails program's Rack env origins took 12M visits a query. */
-  if (f->seen[key].done[slot] & ~(bit - 1)) return 1;
+  if (f->seen[key].done[slot] & bit) return 1;
   int ok = elems ? pivs_elems_uncached(c, v, set, depth) : pivs_value_uncached(c, v, set, depth);
   /* (a failure the initialize walk walks past is not done: a walk outside
      it visits the node again) */

@@ -1594,7 +1594,7 @@ static int ied_block_defs(const NodeTable *nt, int id, const int **stmts, int *n
    instance_eval whose block defines a method is refused: the method would
    land on no singleton the program can name. */
 /* `class << self; def extended(base) ... end; end` in a class or module body: the hook as `def self.extended`,
-   right after the singleton class block. The hook steps (desugar_included_hooks, the walk's firing) find a
+   right after the singleton class block. The walk's firing of a hook finds a
    hook as a def on self, and missed this spelling, so `extend Basic` never ran version_gem's
    `base.extend(Api)`. */
 int desugar_sclass_hooks(Compiler *c) {
@@ -27413,7 +27413,7 @@ static int scm_lift_attr_value(Compiler *c, NodeTable *nt, const int *parent, in
    class as self? One with no receiver (or self) that is a statement of a
    class or module body; or a module's hook, `def self.included(base)`
    (extended, prepended) whose body states `base.class_eval do ... end`,
-   which desugar_included_hooks splices into each including class's body. */
+   which the walk splices into each including class's body as it fires the hook. */
 static int scm_body_eval_block(const NodeTable *nt, const int *parent, int b) {
   if (b < 0 || nt_kind(nt, b) != NK_BlockNode || nt_ref(nt, b, "parameters") >= 0) return 0;
   int call = parent[b];
@@ -27790,7 +27790,7 @@ int desugar_class_new_blocks(Compiler *c, HostStep *h) {
       }
       /* `base.class_eval do def m; end end` in a module's `self.included(base)`
          or `self.extended(base)` hook: base is the including class, which the
-         hook inliner (desugar_included_hooks) substitutes at the include site,
+         walk's splice of the hook substitutes at the include site,
          so the defs land on that class; leave the call for it */
       int hook_base = 0;
       if (rk0 == NK_LocalVariableReadNode) {
@@ -28012,56 +28012,6 @@ int desugar_class_new_blocks(Compiler *c, HostStep *h) {
   return changed;
 }
 
-/* ---- Module.included hooks ----
- *
- * `include M` calls M.included(base) as the class body runs, and the hook's
- * usual work is to shape the includer: `base.class_eval { layout ... }`,
- * `base.extend(ClassMethods)`, `base.attr_accessor :x`. The includer is known
- * at each include site, so the hook's body is spliced in right after the
- * include, with `base` as the class the body belongs to:
- *
- *   base.class_eval do BODY end   ->  BODY           (self is the class)
- *   base.m(args)                  ->  m(args)        (a class-body call)
- *   base.x = v                    ->  Base.x = v     (the class's own writer)
- *   super                         ->  nil            (Module's own hook does nothing)
- *   any other read of base        ->  the class's constant
- *   self                          ->  M              (outside those blocks)
- *   m(args), m M's singleton      ->  M.__send__(:m, args)
- *
- * A body with a `return` of its own is not spliced: the include runs
- * `M.__send__(:included, self)`, the call CRuby makes.
- *
- * The hook method itself stays on M for anything that calls it by name. */
-static int incl_find_hook_named(const NodeTable *nt, const char *mn, char *const *qn, int n0,
-                                const char **param, const char *hook_name, int *mod_out);
-/* The `def self.<hook_name>(param)` of a module, or -1; the module node that
-   defines it in *mod_out. With `qn` (the qualified name of each module node)
-   the module is the one whose qualified name is `mn`; without, any whose own
-   last name is `mn`. */
-static int incl_find_hook_named(const NodeTable *nt, const char *mn, char *const *qn, int n0,
-                                const char **param, const char *hook_name, int *mod_out) {
-  for (int m = 0; m < n0; m++) {
-    if (!class_def_is_module(nt, m)) continue;
-    const char *nm = qn ? qn[m] : class_def_name(nt, m);
-    if (!nm || !sp_streq(nm, mn)) continue;
-    int body = class_def_body(nt, m);
-    int n = 0; const int *st = body >= 0 ? nt_arr(nt, body, "body", &n) : NULL;
-    for (int k = 0; k < n; k++) {
-      int d = st[k];
-      if (nt_kind(nt, d) != NK_DefNode) continue;
-      const char *dn = nt_str(nt, d, "name");
-      int r = nt_ref(nt, d, "receiver");
-      if (!dn || !sp_streq(dn, hook_name) || r < 0 || nt_kind(nt, r) != NK_SelfNode) continue;
-      int ps = nt_ref(nt, d, "parameters");
-      int rn = 0; const int *rq = ps >= 0 ? nt_arr(nt, ps, "requireds", &rn) : NULL;
-      if (rn != 1) continue;
-      *param = nt_str(nt, rq[0], "name");
-      *mod_out = m;
-      return *param ? d : -1;
-    }
-  }
-  return -1;
-}
 
 /* Does the body of module node `m`, the one that defines the hook, define
    singleton method `meth` (`def self.meth`, `module_function def meth`, or
@@ -28469,23 +28419,6 @@ int incl_hook_called(const NodeTable *nt, int body, const char *param) {
 }
 
 
-/* `M.__send__(:included, self)`: the hook run as the method it is, for a body
-   that cannot be spliced. -1 when a node cannot be made. */
-static int incl_hook_call(NodeTable *nt, int at, int mod, const char *hook_name) {
-  int recv = nt_clone_subtree(nt, mod);
-  int call = fwd_new_node_like(nt, at, "CallNode");
-  int args = fwd_new_node_like(nt, at, "ArgumentsNode");
-  int sym = fwd_new_node_like(nt, at, "SymbolNode");
-  int self = fwd_new_node_like(nt, at, "SelfNode");
-  if (recv < 0 || call < 0 || args < 0 || sym < 0 || self < 0) return -1;
-  nt_node_set_str(nt, sym, "value", hook_name);
-  nt_node_set_str(nt, call, "name", "__send__");
-  nt_node_set_ref(nt, call, "receiver", recv);
-  int av[2] = { sym, self };
-  nt_node_set_arr(nt, args, "arguments", av, 2);
-  nt_node_set_ref(nt, call, "arguments", args);
-  return call;
-}
 
 /* The text of constant path `node` (`A::B`, a leading `::` kept) into buf. */
 static void incl_path_text(const NodeTable *nt, int node, char *buf, size_t cap) {
@@ -28512,34 +28445,14 @@ static void incl_qualified(const NodeTable *nt, const int *parent, int m, char *
   snprintf(buf, cap, "%s::%s", outer, own);
 }
 
-/* The hook of the module `include`/`extend` argument `arg` names at the
-   include site `site` (a class or module node, or a Struct.new write): the
-   constant resolved lexically, from the innermost enclosing namespace out to
-   the top level, against the modules' qualified names. A name no module of
-   the program is qualified as falls back to the last segment alone. */
-static int incl_find_hook_at(const NodeTable *nt, const int *parent, char *const *qn, int n0, int site,
-                             int arg, const char **param, const char *hook_name, int *mod_out) {
-  char path[512], target[1536];
-  incl_path_text(nt, arg, path, sizeof path);
-  if (path[0] == ':') return incl_find_hook_named(nt, path + 2, qn, n0, param, hook_name, mod_out);
-  for (int a = site; a >= 0; a = parent[a]) {
-    if (!class_def_opens_cref(nt, a)) continue;
-    if (!qn[a]) continue;
-    snprintf(target, sizeof target, "%s::%s", qn[a], path);
-    int h = incl_find_hook_named(nt, target, qn, n0, param, hook_name, mod_out);
-    if (h >= 0) return h;
-    /* the constant resolves here, to a module without the hook: neither an
-       outer namespace's module of the name nor another of its last name is
-       the one included */
-    for (int m = 0; m < n0; m++)
-      if (qn[m] && class_def_is_module(nt, m) && sp_streq(qn[m], target)) return -1;
-  }
-  int h = incl_find_hook_named(nt, path, qn, n0, param, hook_name, mod_out);
-  if (h >= 0) return h;
-  for (int m = 0; m < n0; m++)   /* a module the qualified names know: none other */
-    if (qn[m] && class_def_is_module(nt, m) && sp_streq(qn[m], path)) return -1;
-  return incl_find_hook_named(nt, nt_str(nt, arg, "name"), NULL, n0, param, hook_name, mod_out);
-}
+
+
+/* What a hook splices into a body: the statements out[at[i]..at[i] + n[i])
+   that were not the body's before (one call of a hook, one class_eval
+   block the splice unwraps), handed to the host once the body is set. Each
+   is a scope of its own, so two that meet stay two splices. A hook call's
+   carries the frame its code runs in (frame, taken; NULL: not known) and
+   the parameter that frame does not keep (gone): the hook's base. */
 
 /* Each node's parent, and each class and module node's qualified name, for
    incl_find_hook_at. */
@@ -28558,33 +28471,10 @@ static void incl_names_build(const NodeTable *nt, int n0, int **parent_out, char
   *parent_out = parent; *qn_out = qn;
 }
 
-/* What a hook splices into a body: the statements out[at[i]..at[i] + n[i])
-   that were not the body's before (one call of a hook, one class_eval
-   block the splice unwraps), handed to the host once the body is set. Each
-   is a scope of its own, so two that meet stay two splices. A hook call's
-   carries the frame its code runs in (frame, taken; NULL: not known) and
-   the parameter that frame does not keep (gone): the hook's base. */
-typedef struct { int *at, *n, len, cap; char **frame, **gone; } InclRanges;
-static void incl_range_add(InclRanges *r, int from, int to, char *frame, const char *gone) {
-  if (to <= from) { free(frame); return; }
-  if (r->len == r->cap) {
-    r->cap = r->cap ? r->cap * 2 : 8;
-    r->at = realloc(r->at, sizeof(int) * (size_t)r->cap);
-    r->n = realloc(r->n, sizeof(int) * (size_t)r->cap);
-    r->frame = realloc(r->frame, sizeof(char *) * (size_t)r->cap);
-    r->gone = realloc(r->gone, sizeof(char *) * (size_t)r->cap);
-    if (!r->at || !r->n || !r->frame || !r->gone) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  }
-  r->at[r->len] = from;
-  r->frame[r->len] = frame;
-  r->gone[r->len] = gone ? strdup(gone) : NULL;
-  r->n[r->len++] = to - from;
-}
-
 /* `Ver.extend(Basic)` at the top level, Basic a module with a `def self.extended(base)`: as `module Ver; extend
-   ::Basic; end`, the reopening desugar_included_hooks splices the hook into. Left a statement, the load record took
-   it as Ver's extend but declined to splice a hook whose body a step before the walk reads (version_gem's
-   `base.extend(Api)`), so Api never reached Ver. The argument is rooted: a reopening reads names from Ver first. */
+   ::Basic; end`, the reopening the walk splices the hook into. Left a statement, the load record took
+   it as Ver's extend and called the hook, whose `base.extend(Api)` was an extend on a value (version_gem's),
+   so Api never reached Ver. The argument is rooted: a reopening reads names from Ver first. */
 int desugar_toplevel_hooked_mixins(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count, changed = 0;
@@ -28671,141 +28561,6 @@ int desugar_toplevel_hooked_mixins(Compiler *c) {
   return changed;
 }
 
-int desugar_included_hooks(Compiler *c, HostStep *h) {
-  NodeTable *nt = (NodeTable *)c->nt;
-  int n0 = nt->count;
-  int changed = 0;
-  /* no `def self.included` or `def self.extended` anywhere: no hook to
-     splice, and each include need not look for one */
-  int any_hook = 0;
-  for (int d = 0; d < n0 && !any_hook; d++) {
-    if (nt_kind(nt, d) != NK_DefNode) continue;
-    const char *dn = nt_str(nt, d, "name");
-    int r = nt_ref(nt, d, "receiver");
-    any_hook = dn && (sp_streq(dn, "included") || sp_streq(dn, "extended")) && r >= 0 &&
-               nt_kind(nt, r) == NK_SelfNode;
-  }
-  if (!any_hook) return 0;
-  /* each node's parent, and each class and module node's qualified name:
-     built when an include or extend first asks, since a pass over every
-     node on every call is work that grows with the program however few
-     hooks it has */
-  int *parent = NULL;
-  char **qn = NULL;
-  for (int cn = 0; cn < n0; cn++) {
-    NodeKind ck = nt_kind(nt, cn);
-    const char *cls = NULL;
-    int body = -1;
-    if (class_def_opens_frame(nt, cn)) {
-      cls = class_def_key(c, cn);
-      body = class_def_body(nt, cn);
-    }
-    else if (ck == NK_ConstantWriteNode) {   /* Name = Struct.new(...) do ... end */
-      cls = nt_str(nt, cn, "name");
-      body = class_def_body(nt, cn);
-    }
-    else if (ck == NK_LocalVariableWriteNode) {   /* k = Struct.new(...) do ... end: base is self */
-      body = class_def_body(nt, cn);
-    }
-    else continue;
-    if ((!cls && ck != NK_LocalVariableWriteNode) || body < 0 || nt_kind(nt, body) != NK_StatementsNode) continue;
-    /* The walk fires a hook live at the mixin's point (elab_fire_after) in
-       every class and module body, a core class's reopening too; the one
-       kind read here is a Struct or class builder's block, whose class the
-       record does not hold. Its hooks are spliced here, the first def found,
-       as before. No shape of the hook's own body keeps one here: the steps
-       that read one are rows the walk's splice runs, or read the hook where
-       it is written. */
-    if (ck == NK_ModuleNode || ck == NK_ClassNode) continue;
-    int n = 0; const int *st = nt_arr(nt, body, "body", &n);
-    int *out = NULL; int no = 0, cap = 0, spliced = 0;
-    int *clones = NULL, ncl = 0, ccl = 0;   /* the hook bodies cloned, for incl_detach_shell */
-    InclRanges rg = {0};
-    for (int k = 0; k < n; k++) {
-      int s = st[k], was = no;
-      incl_emit_stmt(nt, s, &out, &no, &cap, NULL);   /* the statement itself */
-      if (no != was + 1 || out[was] != s) incl_range_add(&rg, was, no, NULL, NULL);   /* a class_eval block, unwrapped */
-      /* incl_emit_stmt only unwraps receiverless class_eval; a plain
-         statement passes through, so this is the statement as written */
-      if (nt_kind(nt, s) != NK_CallNode || nt_ref(nt, s, "receiver") >= 0) continue;
-      const char *nm = nt_str(nt, s, "name");
-      /* `extend M` runs M.extended(base) the same way */
-      int is_ext = nm && sp_streq(nm, "extend");
-      if (!nm || (!sp_streq(nm, "include") && !is_ext)) continue;
-      int an = nt_ref(nt, s, "arguments");
-      int ac = 0; const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
-      for (int j = 0; j < ac; j++) {
-        NodeKind ak = nt_kind(nt, av[j]);
-        if (ak != NK_ConstantReadNode && ak != NK_ConstantPathNode) continue;
-        const char *param = NULL;
-        int hook_mod = -1;
-        if (!parent) incl_names_build(nt, n0, &parent, &qn);
-        const char *hname = is_ext ? "extended" : "included";
-        int hook = incl_find_hook_at(nt, parent, qn, n0, cn, av[j], &param, hname, &hook_mod);
-        nt_node_set_int(nt, av[j], "incl_prewalk", 1);
-        if (hook < 0) continue;
-        int hb = nt_ref(nt, hook, "body");
-        if (hb < 0) continue;
-        int was = no;
-        /* (a body kept here for a shape of its own is spliced unless a
-           `return` forbids it: one that names the module's ivar is read
-           by the ivar steps, as before) */
-        if (incl_hook_returns(nt, hb)) {
-          int call = incl_hook_call(nt, s, av[j], is_ext ? "extended" : "included");
-          if (call < 0) continue;
-          incl_emit_stmt(nt, call, &out, &no, &cap, NULL);
-          incl_range_add(&rg, was, no, NULL, NULL);
-          spliced = 1;
-          continue;
-        }
-        int clone = nt_clone_subtree(nt, hb);
-        if (clone < 0) continue;
-        if (ncl == ccl) {
-          ccl = ccl ? ccl * 2 : 8;
-          clones = realloc(clones, sizeof(int) * (size_t)ccl);
-          if (!clones) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-        }
-        clones[ncl++] = clone;
-        InclSubst is = { param, cls, av[j], hook_mod, -1 };
-        incl_subst(c, nt, clone, &is, 1);
-        int hn = 0; const int *hs = nt_kind(nt, clone) == NK_StatementsNode ? nt_arr(nt, clone, "body", &hn) : NULL;
-        const char *hl = nt_str(nt, hook, "locals");
-        char *frame = strdup(hl ? hl : "");   /* the hook's frame, then the blocks' it unwraps */
-        if (!frame) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-        if (!hs) { incl_emit_stmt(nt, clone, &out, &no, &cap, &frame); incl_range_add(&rg, was, no, frame, param); spliced = 1; continue; }
-        int *hcp = hn > 0 ? malloc(sizeof(int) * (size_t)hn) : NULL;
-        if (hn > 0 && !hcp) { free(frame); continue; }
-        if (hn > 0) memcpy(hcp, hs, sizeof(int) * (size_t)hn);
-        for (int q = 0; q < hn; q++) incl_emit_stmt(nt, hcp[q], &out, &no, &cap, &frame);
-        free(hcp);
-        incl_range_add(&rg, was, no, frame, param);
-        spliced = 1;
-      }
-    }
-    if (spliced) {
-      int *old = n > 0 ? malloc(sizeof(int) * (size_t)n) : NULL;
-      if (n > 0 && !old) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-      if (n > 0) memcpy(old, st, sizeof(int) * (size_t)n);
-      nt_node_set_arr(nt, body, "body", out, no);
-      for (int k = 0; k < n; k++) incl_detach_shell(nt, old[k], out, no);
-      for (int k = 0; k < ncl; k++) incl_detach_shell(nt, clones[k], out, no);
-      free(old);
-      changed = 1;
-      /* each range as the host leaves it: a graft can change its count */
-      for (int i = 0, grew = 0; i < rg.len; i++)
-        grew += host_splice(c, h, cn, body, rg.at[i] + grew, rg.n[i], rg.frame[i], rg.gone[i]) - rg.n[i];
-    }
-    for (int i = 0; i < rg.len; i++) { free(rg.frame[i]); free(rg.gone[i]); }
-    free(rg.at); free(rg.n); free(rg.frame); free(rg.gone);
-    free(out);
-    free(clones);
-  }
-  if (qn) for (int m = 0; m < n0; m++) free(qn[m]);
-  free(qn);
-  free(parent);
-  if (changed) comp_grow_node_arrays(c);
-  return changed;
-}
 
 /* ---- Object's and Module's methods on self in a class body ----
  *

@@ -1500,7 +1500,7 @@ static int ct_fx_stmt(CtBind *b, Compiler *c, int list, int call, const CtFx *f)
    (sce_graft_text), into *ids (*n): 0 where it may not run there. Only a
    class's body, not a module's. Only defs of
    self's methods (and `NAME = <literal>`, the text's const_set), each unasked by a folded definition query and none a
-   hook (desugar_included_hooks reads those), nor a class method `extend
+   hook (the walk fires those at the mixin), nor a class method `extend
    Enumerable` routes (desugar_extend_enumerable reads those), nor one
    singleton_method_added would see. In their bodies: no class, module,
    singleton class, nested def, alias or undef; no constant

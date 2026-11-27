@@ -4873,8 +4873,7 @@ static const char *lr_mix_hook(int kind) {
 /* A mixin the walk has recorded at the statement it is recording, of
    module mod (named by the argument arg) into class cls, whose hook the
    program may define: noted for the scope walk to fire as it leaves the
-   statement (elab_fire_after), unless the pre-walk splice took the mixin
-   (desugar_included_hooks marks it) */
+   statement (elab_fire_after) */
 static void lr_mix_event(ElabRec *x, int cls, int node, int arg, int mod, int kind) {
   LoadRecord *r = x->r;
   const char *hook = lr_mix_hook(kind);
@@ -15542,8 +15541,8 @@ static int host_id_cmp(const void *a, const void *b) {
    registration's walk reads, one that is not a row and that no form or
    query of the walk has taken over (the precondition rule, H3-PLAN 2.4), or
    -1: an ffi declaration (desugar_ffi_library_functions,
-   desugar_native_func_defs), a mixin (desugar_included_hooks,
-   desugar_explicit_receiver_mixin, desugar_extend_enumerable), a class builder (desugar_class_new_blocks,
+   desugar_native_func_defs), a mixin (desugar_explicit_receiver_mixin,
+   desugar_extend_enumerable), a class builder (desugar_class_new_blocks,
    desugar_inline_struct_blocks), const_get (desugar_literal_const_get,
    desugar_self_const_get, desugar_dynamic_const_get), a write through a
    constant path (desugar_constant_path_self_alias, qualify_colliding_classes),

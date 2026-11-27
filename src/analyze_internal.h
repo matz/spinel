@@ -1251,10 +1251,9 @@ int desugar_inline_struct_blocks(Compiler *c);
 int desugar_singleton_class_meta(Compiler *c);
 int desugar_class_new_blocks(Compiler *c, HostStep *h);
 int desugar_extend_enumerable(Compiler *c, HostStep *h);
-int desugar_included_hooks(Compiler *c, HostStep *h);
 /* An included / extended / prepended hook body spliced at its mixin
-   (desugar_included_hooks before the walk, elab_fire_after at the walk's
-   mixin event): what the cloned body is rewritten with, the hook's
+   (elab_fire_after, at the walk's mixin event): what the cloned body is
+   rewritten with, the hook's
    parameter, the including class's name (NULL: the class is self), the
    mixin's argument naming the module, the module node whose body defines
    the hook, and a node naming the including class that a read of the

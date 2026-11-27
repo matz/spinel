@@ -13473,6 +13473,16 @@ static int lr_mix_hooks(Compiler *c) {
   return lr_named(c, "included") || lr_named(c, "extended") || lr_named(c, "prepended");
 }
 
+/* Is frame a class builder's write (`K = Class.new do`, `S = Struct.new(:a)
+   do`, `d = Data.define(:x) do`): a body whose class is made at the write,
+   which no constant names while the block runs */
+static int lr_frame_builder(const NodeTable *nt, int frame) {
+  if (frame < 0) return 0;
+  if (class_def_builder(nt, frame) >= 0) return 1;
+  NodeKind k = nt_kind(nt, frame);
+  return (k == NK_ConstantWriteNode || k == NK_LocalVariableWriteNode) && class_def_is_record_call(nt, nt_ref(nt, frame, "value"));
+}
+
 /* The hook a mixin event v fires, after the mixin statement node in the body
    of frame (a class or module header), at point p: the version live on the
    module's singleton there (lr_hook_live) or none. A `def self.<hook>(base)`
@@ -13494,7 +13504,11 @@ static void lr_fire_mixin(Compiler *c, const LrEvent *v, int node, int frame, Lo
   /* the includer: the frame's class, or the receiver a record-taken
      mixin names (`K.include(M)` at the top level or in another body) */
   int recv = nt_int(nt, node, "mixin_by_record", 0) ? nt_ref(nt, node, "receiver") : -1;
-  int base = recv >= 0 ? nt_clone_subtree(nt, recv) : lr_frame_const(c, frame);
+  /* a class builder's block (`S = Struct.new do include M end`): the constant
+     is written when the block has run, so nothing names the class while it
+     runs, as in CRuby; self in the block is the class, and the hook takes
+     self, as the pre-walk splice gave it (a bare `extend`) */
+  int base = recv >= 0 ? nt_clone_subtree(nt, recv) : lr_frame_builder(nt, frame) ? lr_made(nt, frame, "SelfNode") : lr_frame_const(c, frame);
   if (base < 0) return;   /* (a body with no constant to name its class by) */
   /* spliced: the module's own def self.<hook>(base), one required parameter
      (a keyword or a block parameter beside it as the pre-walk splice takes
@@ -13505,9 +13519,12 @@ static void lr_fire_mixin(Compiler *c, const LrEvent *v, int node, int frame, Lo
   int hdr = ds && ds->frame >= 0 ? c->lrec->st[ds->frame].node : -1;
   int dr = dn >= 0 ? nt_ref(nt, dn, "receiver") : -1, hb = dn >= 0 ? nt_ref(nt, dn, "body") : -1;
   const char *param = rn == 1 ? nt_str(nt, rq[0], "name") : NULL;
+  /* (a class builder's block is a body too: the hook's statements join it,
+     as the pre-walk splice joined them, with self for `base` where no
+     constant names the class) */
   int splice = param && dr >= 0 && nt_kind(nt, dr) == NK_SelfNode && hdr >= 0 && class_def_is_module(nt, hdr) &&
                nt_ref(nt, node, "receiver") < 0 && !nt_int(nt, dn, "cond_lone_disp", 0) &&
-               (nt_kind(nt, frame) == NK_ClassNode || nt_kind(nt, frame) == NK_ModuleNode) &&
+               (nt_kind(nt, frame) == NK_ClassNode || nt_kind(nt, frame) == NK_ModuleNode || lr_frame_builder(nt, frame)) &&
                !incl_hook_called(nt, hb, param);
   if (!splice) {
     int call = lr_hook_call(c, node, nt_clone_subtree(nt, v->arg), v->name, base, NULL);
@@ -13575,7 +13592,8 @@ int elab_fire_after(Compiler *c, int list, int j) {
   if (!r->nev || elab_stmt_list(c, node, &frame) != list) return 0;
   /* in a class or module body, or a class builder's block: a class_eval
      block run in a frame of its own (a top-level one) has the caller's self */
-  int body = frame >= 0 && (class_def_opens_frame(nt, frame) || nt_kind(nt, frame) == NK_SingletonClassNode);
+  int body = frame >= 0 && (class_def_opens_frame(nt, frame) || nt_kind(nt, frame) == NK_SingletonClassNode ||
+                            lr_frame_builder(nt, frame));   /* (a Struct.new / Data.define block too) */
   /* (...and a class_eval block on the body's own class, written in that
      body: its statements are the body's, and self is the class, #10785) */
   int host = frame;

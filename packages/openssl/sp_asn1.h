@@ -2,6 +2,41 @@
 #include <errno.h>
 static SP_TLS sp_x509_out sp_asn1_out;
 
+/* A BIT STRING's unused-bit count. OpenSSL 4 made ASN1_STRING opaque, so
+   there it goes through ASN1_BIT_STRING_get_length and _set1; before 4, and
+   in LibreSSL, it is the low bits of the flags word. _set1 refuses two
+   values the flags word took -- padding bits that are not zero, and unused
+   bits in an empty string -- so it is handed the bytes i2d wrote from the
+   flags word: the padding cleared, and an empty string with none unused. */
+#if !defined(LIBRESSL_VERSION_NUMBER) && OPENSSL_VERSION_NUMBER >= 0x40000000L
+static int sp_asn1_bits_set(ASN1_BIT_STRING *bits, const char *data, size_t size, int unused) {
+  if (size == 0) return ASN1_BIT_STRING_set1(bits, (const uint8_t *)"", 0, 0);
+  uint8_t *bytes = OPENSSL_malloc(size);
+  if (!bytes) return 0;
+  memcpy(bytes, data, size);
+  bytes[size - 1] &= (uint8_t)(0xff << unused);
+  int ok = ASN1_BIT_STRING_set1(bits, bytes, size, unused);
+  OPENSSL_free(bytes);
+  return ok;
+}
+
+static int sp_asn1_bits_unused(const ASN1_BIT_STRING *bits) {
+  size_t length = 0;
+  int unused = 0;
+  return ASN1_BIT_STRING_get_length(bits, &length, &unused) ? unused : 0;
+}
+#else
+static int sp_asn1_bits_set(ASN1_BIT_STRING *bits, const char *data, size_t size, int unused) {
+  if (!ASN1_BIT_STRING_set(bits, (unsigned char *)data, (int)size)) return 0;
+  bits->flags = (bits->flags & ~(ASN1_STRING_FLAG_BITS_LEFT | 7)) | ASN1_STRING_FLAG_BITS_LEFT | unused;
+  return 1;
+}
+
+static int sp_asn1_bits_unused(const ASN1_BIT_STRING *bits) {
+  return (int)(bits->flags & 7);
+}
+#endif
+
 static ASN1_OBJECT *sp_asn1_object(const char *name, int required) {
   if (!name) sp_raise_cls("TypeError", "no implicit conversion of nil into String");
   if (memchr(name, 0, sp_str_byte_len(name)))
@@ -47,10 +82,8 @@ const char *sp_openssl_asn1_der(sp_int tag, const char *data, sp_int unused) {
     if (unused < 0 || unused > 7)
       sp_raise_cls("OpenSSL::ASN1::ASN1Error", "unused_bits for a bitstring value must be in the range 0 to 7");
     bits = ASN1_BIT_STRING_new();
-    if (bits && ASN1_BIT_STRING_set(bits, (unsigned char *)data, (int)size)) {
-      bits->flags = (bits->flags & ~(ASN1_STRING_FLAG_BITS_LEFT | 7)) | ASN1_STRING_FLAG_BITS_LEFT | unused;
+    if (bits && sp_asn1_bits_set(bits, data, size, (int)unused))
       length = i2d_ASN1_BIT_STRING(bits, NULL);
-    }
   } else if (tag == V_ASN1_SEQUENCE) length = ASN1_object_size(1, (int)size, V_ASN1_SEQUENCE);
   int ok = length > 0 && sp_x509_room(&sp_asn1_out, (size_t)length);
   if (ok) {
@@ -199,7 +232,7 @@ const char *sp_openssl_asn1_decode_value(const char *der, sp_int tag) {
     ASN1_BIT_STRING *bits = d2i_ASN1_BIT_STRING(NULL, &p, size);
     if (!bits) sp_asn1_decode_error("d2i_ASN1_BIT_STRING");
     length = ASN1_STRING_length(bits);
-    int unused = bits->flags & 7;
+    int unused = sp_asn1_bits_unused(bits);
     const unsigned char *bytes = ASN1_STRING_get0_data(bits);
     ok = length >= 0 && length < INT_MAX &&
          sp_x509_room(&sp_asn1_out, (size_t)length + 1);

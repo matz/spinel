@@ -13,3 +13,6 @@ p m.call, m.owner, m.arity, m.name
 p e.method(:shout).call, e.method(:length).call, e.method(:start_with?).call("dev")
 b = Bag.new([3, 1, 2])
 p b.method(:size).call, b.method(:second).call, b.method(:sort).call, b.method(:include?).call(2)
+p e.method(:[]).call(1, 2), e.method(:[]).call(0), b.method(:[]).call(1, 2), b.method(:[]).call(0)
+sl = e.method(:slice)
+p sl.call(1, 2), sl.call(0), b.method(:slice).call(0, 2)

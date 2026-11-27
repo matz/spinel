@@ -5737,6 +5737,21 @@ static void cf_solve(Compiler *c, int directed, int dump_facts) {
       if (c->n_cext_extensions && s->def_node >= 0 && nt_int(c->nt, s->def_node, "cext_stub", 0)) cf_all(&f, f.ret_el[mi]);
       /* a copy's initialize_copy / initialize_dup / initialize_clone takes
          the original: an instance of the class, or of a subclass */
+      /* a class's `inherited` hears of a subclass as it is defined: the
+         runtime hands it that subclass, never another value it has seen. As a
+         protocol name its parameter held every value the runtime had seen, so
+         rack-attack's `proxies << klass` held every class and `proxy.new(store)`
+         took File.new's arm. A send of a computed name still binds it, when one
+         may reach it (cf_dyn_by_send). */
+      if (s->def_node >= 0 && s->class_id >= 0 && s->is_cmethod && s->nparams >= 1 && sp_streq(s->name, "inherited") &&
+          !comp_class_is_module(c, &c->classes[s->class_id]) && !f.dyn_all) {
+        int pe = cf_param_el(&f, mi, 0);
+        if (pe >= 0) cf_add_set(&f, pe, cf_classvals_of(&f, f.desc[s->class_id]));
+        for (int i = 1; i < s->nparams; i++) cf_all(&f, cf_param_el(&f, mi, i));
+        if (s->blk_param && s->blk_param[0]) cf_all(&f, cf_lv_in(&f, mi, s->blk_param));
+        if (cf_dyn_by_send(&f, s->name)) cf_push_int(&f.dsend_pend, &f.ndsend_pend, &f.cdsend_pend, mi);
+        continue;
+      }
       if (s->def_node >= 0 && s->class_id >= 0 && !s->is_cmethod && s->nparams >= 1 &&
           (sp_streq(s->name, "initialize_copy") || sp_streq(s->name, "initialize_dup") || sp_streq(s->name, "initialize_clone")) &&
           !cf_opaque_name(s->name) && !cf_is_dyn(&f, s->name)) {

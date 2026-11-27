@@ -389,12 +389,17 @@ no_gsub_enum:
        non-poly (string) receiver keeps the direct negated-match emit. */
     if (are >= 0 && sp_streq(name, "!~") && rpoly) {
       int tv = ++g_tmp;
+      /* (the answer is a C truth value; where the call's slot is boxed, as a
+         condition read through sp_poly_truthy is, it is boxed, as match? is) */
+      int boxed = repr_of(c, id).kind == RK_BOXED;
+      if (boxed) buf_puts(b, "sp_box_bool(");
       buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_expr(c, recv, b);
-      buf_printf(b, "; (sp_rbval_is_string(_t%d) ? sp_re_match(sp_re_pat_%d, sp_rbval_string_bytes(_t%d)) < 0"
+      buf_printf(b, "; (sp_bool)(sp_rbval_is_string(_t%d) ? sp_re_match(sp_re_pat_%d, sp_rbval_string_bytes(_t%d)) < 0"
                     " : _t%d.tag == SP_TAG_SYM ? sp_re_match(sp_re_pat_%d, sp_sym_to_s((sp_sym)_t%d.v.i)) < 0"
                     " : _t%d.tag == SP_TAG_NIL ? 1"
                     " : (sp_raise_nomethod(sp_nomethod_msg(\"=~\", _t%d)), 0)); })",
                  tv, are, tv, tv, are, tv, tv, tv);
+      if (boxed) buf_puts(b, ")");
       return 1;
     }
     if (are >= 0 && sp_streq(name, "!~")) {

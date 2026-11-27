@@ -198,8 +198,14 @@ with neither half, and so does an encrypted PEM, since there is no passphrase
 argument.
 `X509::Certificate` reads a certificate from PEM or DER (`new`, and `load`
 for every certificate in a chain file) and writes it back (`to_der`,
-`to_pem`); it holds the DER, and the fields inside it (`subject`, `issuer`,
-`not_after`, extensions) are not read. Beyond that and `X509::Store` (`new`,
+`to_pem`), and builds one: `new` with no argument, `version=`, `serial=`,
+`subject=`, `issuer=`, `not_before=`, `not_after=` and `public_key=` (an EC
+or RSA key), then `sign` with an EC or RSA key and `verify`. The same names
+read those fields back, from a certificate loaded or built. Extensions are
+not added or read. `X509::Name` is built from an Array of entries, `parse` /
+`parse_openssl` of `"/CN=x/O=y"` or `"CN=x, O=y"`, its DER or `add_entry`,
+and answers `to_s` (with no format argument), `to_a`, `to_der`, `cmp`, `<=>`
+and `==`. Beyond that and `X509::Store` (`new`,
 `set_default_paths`, `add_cert`), most of
 `X509` is not there: a call to a method the package does not define compiles
 into CRuby's NoMethodError, raised when it is reached. Spinel

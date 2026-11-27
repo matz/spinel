@@ -5,9 +5,9 @@
 # nothing. What is missing is missing the way a subset is missing things --
 # most of X509 is not here, and a program that uses it fails at COMPILE time
 # with an unresolved call rather than at run time somewhere deep. Digest,
-# HMAC, KDF, PKey::EC, Cipher and X509::Certificate are here; a certificate
-# is its DER, read from PEM or DER and written back, and its fields are not
-# read (openssl/x509.rb). PKey::EC and Cipher are subsets of
+# HMAC, KDF, PKey::EC, Cipher, X509::Certificate and X509::Name are here; a
+# certificate is its DER, read from PEM or DER or built and signed, and its
+# fields read back, without its extensions (openssl/x509.rb). PKey::EC and Cipher are subsets of
 # CRuby's in a second sense, each spelled out in its own file: EC keeps
 # its key material as bytes, with BN and EC::Point wrappers for group order
 # and public-point export, and Cipher keeps
@@ -141,6 +141,18 @@ module OpenSSL
     native_func :x509_der,  [:string], :cbinstr, "sp_x509_der"
     native_func :x509_load, [:string], :cbinstr, "sp_x509_load"
     native_func :x509_pem,  [:string], :cbinstr, "sp_x509_pem"
+    # Building one: the DER (or "" for a new certificate), field records,
+    # and a key as SSLContext hands it to the C (curve and scalar, or "" and
+    # the RSA PKCS#1 DER; both "" to leave it unsigned) with a digest name.
+    native_func :x509_build,  [:string, :string, :string, :string, :string], :cbinstr, "sp_x509_build"
+    native_func :x509_field,  [:string, :int], :cbinstr, "sp_x509_field"
+    native_func :x509_verify, [:string, :string], :int, "sp_x509_verify"
+    # X509::Name, which is its DER.
+    native_func :x509_name_der,     [:string], :cbinstr, "sp_x509_name_der"
+    native_func :x509_name_add,     [:string, :string, :string, :int], :cbinstr, "sp_x509_name_add"
+    native_func :x509_name_oneline, [:string], :cbinstr, "sp_x509_name_oneline"
+    native_func :x509_name_entries, [:string], :cbinstr, "sp_x509_name_entries"
+    native_func :x509_name_cmp,     [:string, :string], :int, "sp_x509_name_cmp"
     # X509::Store#add_cert: the store, and the certificate's DER.
     native_func :x509_store_add, [:any, :string], :int, "sp_x509_store_add"
 

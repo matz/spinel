@@ -5364,6 +5364,12 @@ void emit_coerce_text(Compiler *c, int node, TyKind from, TyKind slot, int how,
     buf_printf(b, "sp_bigint_new_int(%s)", text);
     RCCT(CF_INT2BIG);
     return;
+  case CF_EXC_UP:
+    /* Every program exception subclass lays out sp_Exception as its leading
+       common initial sequence (ivar-less classes are typedef sp_Exception). */
+    buf_printf(b, "((sp_Exception *)(%s))", text);
+    RCCT(CF_EXC_UP);
+    return;
   case CF_HASH_WIDEN:
     /* A narrower Hash widened into a poly-valued or general Hash slot:
        preserve NULL (nil) and frozen/default state via the runtime converters. */

@@ -1,7 +1,8 @@
 # SSLContext#set_params reads verify_mode and verify_hostname from its
 # params, over CRuby's defaults. Net::SMTP's tls_verify: false hands it
 # verify_mode: VERIFY_NONE, and a client then connects without verifying; a
-# server given VERIFY_NONE asks for no client certificate.
+# server given VERIFY_NONE asks for no client certificate. min_version and
+# max_version go to their writers, so a handshake keeps to them.
 require "openssl"
 require "socket"
 
@@ -125,3 +126,56 @@ client.cert = CLIENT
 client.key = CLIENT_KEY
 exchange(server(verify_mode: OpenSSL::SSL::VERIFY_NONE), client)
 exchange(server({}), client)
+
+# The version a server and a client made from these params agree on, or
+# that they agree on none.
+def version_between(server_params, client_params)
+  sctx = OpenSSL::SSL::SSLContext.new
+  sctx.add_certificate(LEAF, KEY)
+  sctx.set_params(server_params)
+  cctx = OpenSSL::SSL::SSLContext.new
+  cctx.set_params(client_params)
+  server = TCPServer.new("127.0.0.1", 0)
+  t = Thread.new do
+    sock = server.accept
+    ssl = OpenSSL::SSL::SSLSocket.new(sock, sctx)
+    begin
+      ssl.accept
+      ssl.close
+    rescue OpenSSL::SSL::SSLError, SystemCallError
+    ensure
+      sock.close
+    end
+  end
+  sock = TCPSocket.new("127.0.0.1", server.addr[1])
+  ssl = OpenSSL::SSL::SSLSocket.new(sock, cctx)
+  version = "none"
+  begin
+    ssl.connect
+    version = ssl.ssl_version
+  rescue OpenSSL::SSL::SSLError, SystemCallError
+  ensure
+    ssl.close
+  end
+  sock.close
+  t.join
+  server.close
+  version
+end
+
+none = OpenSSL::SSL::VERIFY_NONE
+p version_between({ verify_mode: none, max_version: OpenSSL::SSL::TLS1_2_VERSION }, { verify_mode: none })
+p version_between({ verify_mode: none }, { verify_mode: none, max_version: :TLS1_2 })
+p version_between({ verify_mode: none, min_version: :TLS1_3 }, { verify_mode: none, max_version: :TLS1_2 })
+p version_between({ verify_mode: none, min_version: :TLS1_2, max_version: :TLS1_2 },
+                  { verify_mode: none, min_version: :TLS1_2 })
+
+# An unknown version raises from set_params as from the writer, after the
+# keys before it are set.
+ctx = OpenSSL::SSL::SSLContext.new
+begin
+  ctx.set_params(verify_mode: none, min_version: :TLS1_9)
+rescue ArgumentError => e
+  p e.message
+end
+p ctx.verify_mode

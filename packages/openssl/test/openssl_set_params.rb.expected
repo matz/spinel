@@ -6,3 +6,9 @@
 ["no reply", "refused"]
 ["Han River: Gimpo\n", "accepted"]
 ["no reply", "refused"]
+"TLSv1.2"
+"TLSv1.2"
+"none"
+"TLSv1.2"
+"unrecognized version \"TLS1_9\""
+0

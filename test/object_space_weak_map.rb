@@ -43,3 +43,12 @@ m.each_value { |v| p v }
 p m.keys.map(&:n), m.values
 p m.delete(k1), m.size, m.delete(k1), m.delete(k1) { |k| "none #{k.n}" }
 p m.map { |k, v| v }, m.count, m.to_a.size
+
+# inspect: an immediate entry as its inspect, any other object in its
+# default form, so a map holding itself prints
+m2 = ObjectSpace::WeakMap.new
+p(m2.inspect.match?(/\A#<ObjectSpace::WeakMap:0x[0-9a-f]+>\z/))
+m2[:a] = 1
+p(m2.inspect.match?(/\A#<ObjectSpace::WeakMap:0x[0-9a-f]+: :a => 1>\z/))
+m2[m2] = m2
+p(m2.inspect.match?(/\A#<ObjectSpace::WeakMap:0x[0-9a-f]+: :a => 1, #<ObjectSpace::WeakMap:0x[0-9a-f]+> => #<ObjectSpace::WeakMap:0x[0-9a-f]+>>\z/))

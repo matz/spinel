@@ -53,8 +53,22 @@ module ObjectSpace
     def size = @map.size
     alias length size
 
+    # CRuby's inspect writes an immediate entry as its inspect and any other
+    # object in its default form (rb_any_to_s), never through the object's
+    # own inspect: an entry holding the map itself (`m[k] = m`) is finite
     def inspect
-      "#<ObjectSpace::WeakMap #{@map.map { |k, v| "#{k.inspect} => #{v.inspect}" }.join(", ")}>"
+      s = "#<ObjectSpace::WeakMap:0x#{__addr(self)}"
+      s << ": " << @map.map { |k, v| "#{__entry(k)} => #{__entry(v)}" }.join(", ") unless @map.empty?
+      s << ">"
+    end
+
+    def __addr(x) = x.object_id.to_s(16).rjust(16, "0")
+
+    def __entry(x)
+      case x
+      when nil, true, false, Integer, Float, Symbol then x.inspect
+      else "#<#{x.class}:0x#{__addr(x)}>"
+      end
     end
   end
 end

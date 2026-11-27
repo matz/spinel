@@ -1568,6 +1568,108 @@ static int prog_file_earliest(Compiler *c, const int *parent, const int *pos, co
   return any ? best : -1;
 }
 
+/* The last segment a class header or a superclass names, NULL for another form */
+static const char *prog_const_leaf(const NodeTable *nt, int n) {
+  if (n < 0) return NULL;
+  NodeKind k = nt_kind(nt, n);
+  if (k == NK_ConstantReadNode) return nt_str(nt, n, "name");
+  if (k == NK_ConstantPathNode) return nt_str(nt, n, "name");
+  return NULL;
+}
+/* The one ClassNode whose header names leaf, -1 for none or more than one */
+static int prog_class_named(const NodeTable *nt, const char *leaf) {
+  int found = -1;
+  NT_FOREACH_KIND(nt, NK_ClassNode, k) {
+    const char *nm = prog_const_leaf(nt, nt_ref(nt, k, "constant_path"));
+    if (!nm || !sp_streq(nm, leaf)) continue;
+    if (found >= 0) return -1;
+    found = k;
+  }
+  return found;
+}
+/* The instance initialize the body of ClassNode cls defines, -1 for none */
+static int prog_class_initialize(const NodeTable *nt, int cls) {
+  int body = nt_ref(nt, cls, "body"), n = 0;
+  const int *b = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &n) : NULL;
+  for (int i = 0; i < n; i++)
+    if (nt_kind(nt, b[i]) == NK_DefNode && nt_ref(nt, b[i], "receiver") < 0 && sp_streq(nt_str(nt, b[i], "name"), "initialize")) return b[i];
+  return -1;
+}
+static int prog_stmts_never_complete(const NodeTable *nt, int st);
+/* Does statement n never complete: a bare raise, a begin whose body and
+   every rescue end so, or an if both of whose arms do? */
+static int prog_never_completes(const NodeTable *nt, int n) {
+  if (n < 0) return 0;
+  NodeKind k = nt_kind(nt, n);
+  if (k == NK_CallNode && nt_ref(nt, n, "receiver") < 0) {
+    const char *nm = nt_str(nt, n, "name");
+    return nm && (sp_streq(nm, "raise") || sp_streq(nm, "fail"));
+  }
+  if (k == NK_BeginNode) {
+    if (!prog_stmts_never_complete(nt, nt_ref(nt, n, "statements"))) return 0;
+    for (int rc = nt_ref(nt, n, "rescue_clause"), d = 0; rc >= 0 && d < 64; rc = nt_ref(nt, rc, "subsequent"), d++)
+      if (!prog_stmts_never_complete(nt, nt_ref(nt, rc, "statements"))) return 0;
+    return 1;
+  }
+  return 0;
+}
+static int prog_stmts_never_complete(const NodeTable *nt, int st) {
+  if (st < 0 || nt_kind(nt, st) != NK_StatementsNode) return prog_never_completes(nt, st);
+  int n = 0; const int *b = nt_arr(nt, st, "body", &n);
+  for (int i = 0; i < n; i++) if (prog_never_completes(nt, b[i])) return 1;
+  return 0;
+}
+/* Does node n call a method on self (receiverless but raise and fail, or on
+   self), yield, super or pass a block on? */
+static int prog_calls_on_self(const NodeTable *nt, int n) {
+  if (n < 0) return 0;
+  NodeKind k = nt_kind(nt, n);
+  if (k == NK_YieldNode || k == NK_BlockArgumentNode || k == NK_SuperNode || k == NK_ForwardingSuperNode) return 1;
+  if (k == NK_CallNode) {
+    int r = nt_ref(nt, n, "receiver");
+    const char *nm = nt_str(nt, n, "name");
+    if ((r < 0 && !(nm && (sp_streq(nm, "raise") || sp_streq(nm, "fail")))) || (r >= 0 && nt_kind(nt, r) == NK_SelfNode)) return 1;
+  }
+  for (int i = 0, nr = nt_num_refs(nt, n); i < nr; i++) if (prog_calls_on_self(nt, nt_ref_at(nt, n, i))) return 1;
+  for (int i = 0, na = nt_num_arrs(nt, n); i < na; i++) {
+    int m = 0; const int *ids = nt_arr_at(nt, n, i, &m);
+    for (int j = 0; j < m; j++) if (prog_calls_on_self(nt, ids[j])) return 1;
+  }
+  return 0;
+}
+/* Is load in an instance method of a class no object of which is ever made,
+   read off the tree alone (the classes are not registered yet): the one
+   class of its name, which no class names as its superclass, whose own
+   initialize runs a statement that never completes with only a bare `super`
+   before it, the superclass's initialize and that statement calling nothing
+   on the object (tzinfo's RubyDataSource without tzinfo-data). */
+static int prog_load_in_unmade_class(const NodeTable *nt, const int *parent, int load) {
+  int def = -1, cls = -1;
+  for (int p = parent[load], d = 0; p >= 0 && d < 256; p = parent[p], d++) {
+    NodeKind k = nt_kind(nt, p);
+    if (def < 0 && k == NK_DefNode) { if (nt_ref(nt, p, "receiver") >= 0) return 0; def = p; continue; }
+    if (k == NK_SingletonClassNode || k == NK_ModuleNode) return 0;
+    if (k == NK_ClassNode) { cls = p; break; }
+  }
+  if (def < 0 || cls < 0) return 0;
+  const char *leaf = prog_const_leaf(nt, nt_ref(nt, cls, "constant_path"));
+  if (!leaf || prog_class_named(nt, leaf) != cls) return 0;
+  NT_FOREACH_KIND(nt, NK_ClassNode, k) {
+    const char *sup = prog_const_leaf(nt, nt_ref(nt, k, "superclass"));
+    if (sup && sp_streq(sup, leaf)) return 0;
+  }
+  int init = prog_class_initialize(nt, cls), body = init >= 0 ? nt_ref(nt, init, "body") : -1, n = 0;
+  const int *b = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &n) : NULL;
+  for (int i = 0; i < n; i++) {
+    if (prog_never_completes(nt, b[i])) return !prog_calls_on_self(nt, b[i]);
+    if (nt_kind(nt, b[i]) != NK_ForwardingSuperNode) return 0;
+    const char *sup = prog_const_leaf(nt, nt_ref(nt, cls, "superclass"));
+    int scls = sup ? prog_class_named(nt, sup) : -1, sinit = scls >= 0 ? prog_class_initialize(nt, scls) : -1;
+    if (sinit < 0 || prog_calls_on_self(nt, nt_ref(nt, sinit, "body"))) return 0;
+  }
+  return 0;
+}
+
 static void prog_unplace_candidates(Compiler *c, const unsigned char *seen, const unsigned char *live) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n = nt_nroots(nt);
@@ -1586,6 +1688,10 @@ static void prog_unplace_candidates(Compiler *c, const unsigned char *seen, cons
     NT_FOREACH_KIND(nt, NK_LoadNode, id) {
       int nc = prog_load_ncand(nt, id), open = prog_load_open(nt, id);
       if (!seen[id] || (!nc && !open)) continue;
+      /* (not one in an instance method of a class no object of which is
+         ever made: it never runs, tzinfo's RubyDataSource#require_data
+         without tzinfo-data) */
+      if (prog_load_in_unmade_class(nt, parent, id)) continue;
       int ts = prog_top_stmt_of(c, parent, id), sp = ts >= 0 ? pos[ts] : -1;
       if (sp < 0) {
         int asking[32];

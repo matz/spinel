@@ -31131,6 +31131,11 @@ int desugar_missing_method_calls(Compiler *c) {
   int n0 = nt->count, changed = 0, *parent = NULL;
   cplan_chain_undef_hold(1);
   g_ivn_entries_hold = 1;
+  /* (and the load record: a split adds nodes but moves no statement, so
+     each point answers as it did at the pass's start; a new node takes its
+     parent's, lr_par. Without the hold the first question after each
+     split rebuilt the map, #12542) */
+  elab_hold(c, 1);
   for (int id = 0; id < n0; id++) {
     if (nt_kind(nt, id) != NK_CallNode || nt_int(nt, id, "mm_split", 0) || nt_int(nt, id, "dyn_arm", 0)) continue;
     const char *nm = nt_str(nt, id, "name");
@@ -31390,6 +31395,7 @@ int desugar_missing_method_calls(Compiler *c) {
   }
   cplan_chain_undef_hold(0);
   g_ivn_entries_hold = 0;
+  elab_hold(c, 0);
   free(g_mm_sends.n);
   g_mm_sends = (MmSends){ 0 };
   free(parent);

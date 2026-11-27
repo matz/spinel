@@ -258,9 +258,12 @@ module OpenSSL
       # gives for those two, set through the writer as CRuby's set_params
       # sets them: Net::SMTP's tls_verify: false passes VERIFY_NONE here, and
       # a server context asks for a client certificate unless params says
-      # VERIFY_NONE. The other keys CRuby's takes name members this context
-      # does not have, and are not read. CRuby answers the merged params;
-      # this answers the context.
+      # VERIFY_NONE. min_version and max_version go to their writers too, in
+      # the order params gives them, as CRuby sends each key to its writer:
+      # an unknown version raises here, and a bound set before it stays. The
+      # other keys CRuby's takes name members this context does not have,
+      # and are not read. CRuby answers the merged params; this answers the
+      # context.
       def set_params(params = nil)
         mode = VERIFY_PEER
         hostname = true
@@ -270,6 +273,15 @@ module OpenSSL
         end
         self.verify_mode = mode
         @verify_hostname = hostname
+        unless params.nil?
+          params.each_key do |name|
+            if name == :min_version
+              self.min_version = params[:min_version]
+            elsif name == :max_version
+              self.max_version = params[:max_version]
+            end
+          end
+        end
         self
       end
 

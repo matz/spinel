@@ -3943,11 +3943,13 @@ static void *sp_sysmon_main(void *arg) {
     /* Rebuilding the poll set walks the I/O waiters and grows with the
        population. The event backend holds descriptors in the kernel, so skip
        that walk until a deadline is due; the timer heap still fires due
-       handles above without scanning parked threads. */
+       handles above without scanning parked threads. A thread whose worker
+       could not make a set (out of descriptors) parks on g_io_waiters even
+       while other workers' sets are up, and only this poll wakes it. */
     int skip_walks = 0;
 #ifdef SP_EV_BACKEND
     { double gn = nearest_get();
-      skip_walks = (g_ev_fd >= 0 && !(gn != 0.0 && now >= gn)); }
+      skip_walks = (g_ev_fd >= 0 && !g_io_waiters && !(gn != 0.0 && now >= gn)); }
 #endif
     if (skip_walks) {
       double gn = nearest_get();
@@ -3960,8 +3962,9 @@ static void *sp_sysmon_main(void *arg) {
        waits; this list is only for readiness registration. */
 #ifdef SP_EV_BACKEND
     /* the kernel holds the interest set: nothing to build, and have_io below
-       reads the list head, so the waiters need no walk to be counted */
-    if (g_ev_fd < 0)
+       reads the list head, so the waiters need no walk to be counted. The
+       threads on g_io_waiters are in no set, so they are polled here. */
+    if (g_ev_fd < 0 || g_io_waiters)
 #endif
     for (sp_thread **wp = &g_io_waiters; *wp; ) {
       sp_thread *w = *wp;
@@ -4065,7 +4068,7 @@ static void *sp_sysmon_main(void *arg) {
          that has not waited on I/O yet -- the monitor rounded every deadline
          under 1 ms up to 1 ms, so `sleep 0.0002` took about 1.2 ms. Timing
          alone, it waits on the condvar too. */
-      if (g_ev_fd > 0 || npf == 1) {
+      if (npf == 1) {
         /* The descriptors are in the WORKERS' sets now, so the monitor has no
            fds of its own to watch: it is a timer, for deadlines and the
            timeslice, and a condvar is the right thing to wait on. Its own wake

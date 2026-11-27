@@ -1580,6 +1580,9 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       self_cls = scope_self_cls_text(c, encl, selfbuf, sizeof selfbuf);
     }
     TyKind nty = infer_type(c, argv[0]);
+    /* a splat (`*args` in a synthesized wrapper) is not a name: the array
+       its elements make is no Symbol or String */
+    if (nt_kind(nt, argv[0]) == NK_SplatNode) nty = TY_UNKNOWN;
     /* a literal name on a literal class the table does not cover (a builtin
        class, which the literal branch above left) is refused below, as
        refl_md_dynamic_used, which writes the table, does not count it */
@@ -1588,6 +1591,9 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
     if (inherit_lit >= 0 && (recv >= 0 || self_cls) && (nty == TY_SYMBOL || nty == TY_STRING || nty == TY_POLY) &&
         !refl_md_literal_call(nt, recv, argv[0])) {
       int mask = (md_pub ? 1 : 0) | (md_prot ? 2 : 0) | (md_priv ? 4 : 0), t = 0;
+      /* the answer is a C int; where the call's value is boxed (a program method
+         of the name beside this one lets the dispatch answer anything), box it */
+      int boxed = repr_of(c, id).kind == RK_BOXED;
       /* the classes whose call there takes the entry: their cells (the plan's list, cplan_presence_list), the
          reflection table for any other */
       CplanPresList pl;
@@ -1600,6 +1606,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
         emit_presence_arms(c, &pl, key, &arms);
         cplan_presence_list_free(&pl);
       }
+      if (boxed) buf_puts(b, "sp_box_bool(");
       if (t) buf_printf(b, "({ sp_Class _c%d = ", t);
       else buf_puts(b, "sp_refl_method_defined(");
       /* a class held boxed (out of an Array, say) is unboxed to its sp_Class */
@@ -1621,7 +1628,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
         buf_puts(b, nty == TY_SYMBOL ? ", sp_sym_to_s_frozen(" : ", (");
         emit_expr(c, argv[0], b);
       }
-      buf_printf(b, "), %d, %d)%s", mask, inherit_lit, t ? "; })" : "");
+      buf_printf(b, "), %d, %d)%s%s", mask, inherit_lit, t ? "; })" : "", boxed ? ")" : "");
       return 1;
     }
   }

@@ -3291,6 +3291,14 @@ backtrace-test: $(SPINEL) $(SP_RT_LIB)
 	  grep -q "joint_guard_line.rb:8:in .upd'" "$$tmp/jg.out" || \
 	    { echo "backtrace-test: FAIL (a joint guard's first index raised under another statement's line)"; cat "$$tmp/jg.out"; ok=0; };; \
 	esac; \
+	$(SPINEL) -g test/backtrace/cold_split.rb -o "$$tmp/cs" >/dev/null 2>&1 || \
+	  { echo "backtrace-test: FAIL (compile cold_split)"; ok=0; }; \
+	"$$tmp/cs" > "$$tmp/cs.out" 2>&1; \
+	grep -q "in .Spike.inner'" "$$tmp/cs.out" || { echo "backtrace-test: FAIL (-g: no Spike.inner frame)"; cat "$$tmp/cs.out"; ok=0; }; \
+	[ "$$(grep -c "in .Spike.inner'" "$$tmp/cs.out")" -eq 1 ] || \
+	  { echo "backtrace-test: FAIL (-g: Spike.inner named twice, once for its cold piece)"; cat "$$tmp/cs.out"; ok=0; }; \
+	grep -q "in .[^']*[.]\(cold\|part\|isra\|constprop\)" "$$tmp/cs.out" && \
+	  { echo "backtrace-test: FAIL (-g: a frame keeps the C compiler's clone suffix)"; cat "$$tmp/cs.out"; ok=0; }; \
 	rm -rf "$$tmp"; \
 	if [ $$ok -eq 1 ]; then echo "backtrace-test: pass"; else exit 1; fi
 

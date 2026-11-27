@@ -2451,7 +2451,7 @@ static int sp_bt_is_runtime(const char *n) {
      - macOS:       "<idx> <image> <addr> <symbol> + <off>".
    Returns NULL if it isn't a keepable user frame. Detect Linux by the '('
    that delimits the symbol (the macOS format has none). */
-static const char *sp_bt_symbol(const char *line, char *raw, size_t rawcap) {
+static const char *sp_bt_symbol(const char *line, char *raw, size_t rawcap, int *cold) {
   char sym[256];
   const char *lp = strchr(line, '(');
   if (lp) {                                       /* glibc/Linux paren form */
@@ -2476,6 +2476,15 @@ else {                                        /* macOS: "<idx> <image> <addr> <s
     if (len == 0 || len > 250) return 0;
     memcpy(sym, p, len); sym[len] = 0;
   }
+  /* A C identifier has no '.': what follows one is the name the C compiler
+     gave a piece it split off the function or a copy it specialized
+     (`sp_Foo_s_bar.cold.1` for clang's outlined cold path, `.cold`, `.part.0`,
+     `.isra.0`, `.constprop.0` for gcc's), which is still that method's frame.
+     A cold piece clang outlines is a function of its own, called from the
+     method, so the method's frame follows it; the caller drops that one. */
+  char *dot = strchr(sym, '.');
+  if (cold) *cold = dot && strncmp(dot, ".cold", 5) == 0;
+  if (dot) *dot = 0;
   if (raw && rawcap) snprintf(raw, rawcap, "%s", sym);
   /* The top level runs in the emitted body function, which the compiler
      hands to sp_main_stack_run (see lib/sp_fiber.c). That frame IS `<main>`;
@@ -2660,9 +2669,18 @@ sp_StrArray *sp_bt_format(void **buf, int n) {
   const char **files = (const char **)calloc((size_t)n, sizeof *files);
   if (!names || !files) { free(names); free(files); free(lfiles); free(lines); free(syms); return a; }
   if (lines) sp_bt_lines(buf, n, lines, lfiles);
+  char prev[256]; prev[0] = 0;
+  int prev_cold = 0;
   for (int i = 0; i < n; i++) {
     char raw[256]; raw[0] = 0;
-    char *name = (char *)sp_bt_symbol(syms[i], raw, sizeof raw);  /* always strdup'd; free after use */
+    int cold = 0;
+    char *name = (char *)sp_bt_symbol(syms[i], raw, sizeof raw, &cold);  /* always strdup'd; free after use */
+    /* the method's own frame under the cold piece it called names the same
+       Ruby frame again: the piece's frame stands for it, at the raising line */
+    int again = name && prev_cold && !cold && strcmp(raw, prev) == 0;
+    snprintf(prev, sizeof prev, "%s", raw);
+    prev_cold = name ? cold : 0;
+    if (again) { free(name); continue; }
     if (!name) continue;
     /* a method of a required file names that file, not the entry script */
     const char *file = src;

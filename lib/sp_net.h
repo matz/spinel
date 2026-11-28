@@ -86,15 +86,13 @@ int sp_net_take_connect_timeout(void);
 int sp_net_connect_timeout_ip(char *ipbuf, int cap);
 
 /* ---- UDP ----
- * udp_open: an unbound SOCK_DGRAM fd. bind/connect attach it to a local /
- * remote address. udp_dest resolves a send's destination apart from the
- * send itself.
+ * udp_open: an unbound SOCK_DGRAM fd. udp_addr resolves the address a
+ * bind, a connect or a send names, apart from the call itself, which the
+ * caller makes on the fd.
  * recv_from reads one datagram and reports the sender. */
 int sp_net_udp_open(int family);
 int sp_net_fd_family(int fd);
-int sp_net_udp_bind(int fd, const char *host, int port);
-int sp_net_udp_connect(int fd, const char *host, int port);
-int sp_net_udp_dest(int family, const char *host, int port, void *to, int cap);
+int sp_net_udp_addr(int family, const char *host, int port, int passive, void *to, int cap);
 int sp_net_udp_recv_from(int fd, char *buf, int cap, char *ipbuf, int ipcap, int *port_out);
 
 /* ---- UNIX-domain stream sockets ---- */

@@ -477,49 +477,19 @@ int sp_net_fd_family(int fd) {
     if (fd < 0 || getsockname(fd, (struct sockaddr *)&ss, &sl) != 0) return AF_UNSPEC;
     return (int)ss.ss_family;
 }
-/* First resolution matching `family` (any, when AF_UNSPEC). */
-static struct addrinfo *sp_net_udp_resolve(int fd, const char *host, int port,
-                                           int passive, struct addrinfo **head) {
-    struct addrinfo hints;
-    memset(&hints, 0, sizeof(hints));
-    hints.ai_family   = sp_net_fd_family(fd);
-    hints.ai_socktype = SOCK_DGRAM;
-    if (passive) hints.ai_flags = AI_PASSIVE;
-    char portbuf[16];
-    snprintf(portbuf, sizeof(portbuf), "%d", port);
-    *head = NULL;
-    if (sp_net_resolve((host && *host) ? host : NULL, portbuf, &hints, head) != 0) return NULL;
-    return *head;
-}
-int sp_net_udp_bind(int fd, const char *host, int port) {SP_GC_ROOT_STR(host);
-    if (fd < 0 || port < 0 || port > 65535) return -1;
-    struct addrinfo *head = NULL;
-    struct addrinfo *ai = sp_net_udp_resolve(fd, host, port, (host && *host) ? 0 : 1, &head);
-    if (!ai) return -1;
-    int rc = bind(fd, ai->ai_addr, ai->ai_addrlen);
-    freeaddrinfo(head);
-    return rc;
-}
-/* #connect fixes the peer so #send / #write need no address. */
-int sp_net_udp_connect(int fd, const char *host, int port) {SP_GC_ROOT_STR(host);
-    if (fd < 0 || port < 0 || port > 65535) return -1;
-    struct addrinfo *head = NULL;
-    struct addrinfo *ai = sp_net_udp_resolve(fd, host, port, 0, &head);
-    if (!ai) return -1;
-    int rc = SP_SIG_BLOCKING(connect(fd, ai->ai_addr, ai->ai_addrlen));
-    freeaddrinfo(head);
-    return rc;
-}
-/* Where send(mesg, flags, host, port) goes: the first address `host` and
-   `port` resolve to within `family`, copied into `to` (of `cap` bytes), and
-   its length; -1 when they do not resolve. Apart from the sendto because
-   the lookup parks: the caller takes its use of the handle for the sendto
-   alone, as a use spans no park (sp_io.c). */
-int sp_net_udp_dest(int family, const char *host, int port, void *to, int cap) {SP_GC_ROOT_STR(host);
+/* Where a datagram socket's bind, connect or send(mesg, flags, host, port)
+   goes: the first address `host` and `port` resolve to within `family`
+   (any, when AF_UNSPEC), copied into `to` (of `cap` bytes), and its length;
+   -1 when they do not resolve. `passive` takes the wildcard address for no
+   host, as a bind does. Apart from the call itself because the lookup
+   parks: the caller takes its use of the handle for the call alone, as a
+   use spans no park (sp_io.c). */
+int sp_net_udp_addr(int family, const char *host, int port, int passive, void *to, int cap) {SP_GC_ROOT_STR(host);
     struct addrinfo hints;
     memset(&hints, 0, sizeof(hints));
     hints.ai_family   = family;
     hints.ai_socktype = SOCK_DGRAM;
+    if (passive) hints.ai_flags = AI_PASSIVE;
     char portbuf[16];
     snprintf(portbuf, sizeof(portbuf), "%d", port);
     struct addrinfo *head = NULL;

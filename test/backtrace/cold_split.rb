@@ -3,9 +3,10 @@
 # the method calls, so one Ruby frame has two C frames; gcc's `.cold` is the
 # method's own blocks in another section, with no frame of its own. Either way
 # the backtrace names the method once per call, without the piece's suffix
-# (backtrace-test). `inner` calls itself, so the C compiler does not inline it
-# away, and the recursive caller's frame stays: `Spike.inner` twice, under
-# two different lines. (macOS clang splits this one into `.cold.N` pieces.)
+# (backtrace-test). `inner` calls itself, so at least one frame of it stays a
+# real function; how many of its calls keep a frame at -O2 is the C
+# compiler's choice, so the test counts no frames, it only wants no frame
+# named twice in a row. (macOS clang splits this one into `.cold.N` pieces.)
 module Spike
   def self.outer(n) = middle(n)
   def self.middle(n) = inner(n)

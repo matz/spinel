@@ -6286,6 +6286,17 @@ int sp_sched_fork(void) {
 #endif
 }
 
+/* SPINEL_WORKERS=1: main is the one worker (no helper), so a green thread
+   of the runtime runs only when main pumps (lib/sp_cold.c reads it for the
+   trap thread). */
+int sp_sched_single_worker(void) {
+#ifdef SP_THREADS
+  return g_worker_cap == 0;
+#else
+  return 1;
+#endif
+}
+
 /* Whether the first Thread has brought up the worker pool, its monitor and the
    collector's sweepers: OS threads a fork does not carry into the child
    (Process.daemon, lib/sp_process.c). Before that the program is one thread. */

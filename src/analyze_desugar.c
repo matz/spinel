@@ -36572,7 +36572,7 @@ static int sce_text_walk_safe(Compiler *c, struct SceFacts *f, NodeTable *t, con
       dn = ac == 1 ? vis_arg_name(t, av[0]) : NULL;
       if (!dn || blk < 0 || nt_kind(t, blk) != NK_BlockNode) return 0;
     }
-    else return 0;
+    else continue;   /* (any other statement: a constant's write, a call, a begin; the subtree is read below) */
     if (!dn || is_definition_hook_name(dn)) return 0;
   }
   int nn = 0, ok = 1;
@@ -36584,8 +36584,6 @@ static int sce_text_walk_safe(Compiler *c, struct SceFacts *f, NodeTable *t, con
     switch (nt_kind(t, id)) {
     case NK_ClassNode: case NK_ModuleNode: case NK_SingletonClassNode: case NK_AliasMethodNode:
     case NK_AliasGlobalVariableNode: case NK_UndefNode:
-    case NK_ConstantWriteNode: case NK_ConstantOperatorWriteNode:
-    case NK_ConstantOrWriteNode: case NK_ConstantAndWriteNode: case NK_ConstantTargetNode:
       ok = 0;
       break;
     case NK_DefNode: ok = top; break;

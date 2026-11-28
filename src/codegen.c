@@ -4187,90 +4187,43 @@ static void emit_cell_decl(Compiler *c, Scope *s, LocalVar *lv, Buf *b) {
       return;
 }
 
-/* ---- deferred cells ----
-   A method whose body opens with guards (`return x if cond`) and creates a
-   real closure further down allocated every captured local's cell at entry,
-   so a call the guards turned away paid for cells no closure ever took
-   (100k early returns made 200k cells). Such a cell is now made after the
-   guards, at the body's top level, which every later statement -- every
-   closure creation among them -- comes after. Until then `_cell_x` points
-   at a stack slot of the cell's type that holds the local (a parameter's
-   incoming value, or its starting nil), rooted as an ordinary local, so a
-   guard's reads go through `*_cell_x` unchanged; at the switch the slot's
-   value moves into a fresh heap cell, rooted through `_cellh_x` (NULL until
-   then, which marks nothing), and `_cell_x` takes it.
+/* ---- cells made where their closure is ----
+   A method holding a block Spinel cannot inline keeps each local the block
+   captures in a heap cell, and the cell used to be made on entry: a call
+   that never reached the block -- a guard returned first, or the block sat
+   in a branch the call did not take, such as the arm of a poly receiver's
+   #each that a Hash never runs -- still paid for every cell.
 
-   The guards are held to a small shape that cannot let the stack address
-   escape or need the barrier a cell store takes: an `if`/`unless` with no
-   else whose body is one `return`, built of reads, literals and calls with
-   no block (none of the names that reach the frame: binding, eval, ...). */
-static int g_cdefer_stmts = -1, g_cdefer_at = -1;
+   Now `_cell_x` points at a stack slot of the cell's type, `_cellv_x`,
+   rooted as an ordinary local, and the heap cell is made by the statement
+   that hands it to a closure: the one that fills a capture struct's field
+   with `_cell_x`. Ahead of it, `if (!_cellh_x)` makes the cell, copies the
+   slot's value in, and points `_cell_x` at it (`_cellh_x`, NULL until then,
+   roots it), so every closure of the call shares the one cell and every read
+   and write before and after goes through `*_cell_x` unchanged. A store's
+   barrier is put on `_cellh_x` (gc_wb_cells), which is NULL, and needs none,
+   while the value is still on the stack.
+
+   Decided on the method's C once it is written (cdefer_finish): a use of
+   `_cell_x` other than a read or write through it, the declaration and such
+   a fill -- its address handed to a callee, an alias of it, a declaration
+   of another `_cell_x` -- or a setjmp in the method whose landing goes on
+   to run the body (a rescue's: the longjmp would land with `_cell_x` as
+   setjmp saw it) makes the cell on entry instead, as before. */
+typedef struct { char *name; char *alloc; } CDeferCell;
+#define CDEFER_TAG " /* made at capture */"
 static Scope *g_cdefer_scope = NULL;
-static Buf *g_cdefer_buf = NULL;
-static Buf g_cdefer_text;
+static CDeferCell *g_cdefer_v = NULL;
+static int g_cdefer_n = 0, g_cdefer_cap = 0;
 
-static int cdefer_plain_node(Compiler *c, int id) {
-  const NodeTable *nt = c->nt;
-  if (id < 0) return 1;
-  switch (nt_kind(nt, id)) {
-  case NK_LocalVariableReadNode: case NK_InstanceVariableReadNode:
-  case NK_ConstantReadNode: case NK_ConstantPathNode: case NK_SelfNode:
-  case NK_NilNode: case NK_TrueNode: case NK_FalseNode: case NK_IntegerNode:
-  case NK_FloatNode: case NK_StringNode: case NK_SymbolNode:
-  case NK_AndNode: case NK_OrNode: case NK_ParenthesesNode:
-  case NK_ArgumentsNode: case NK_StatementsNode: case NK_ArrayNode:
-    break;
-  case NK_CallNode: {
-    if (nt_ref(nt, id, "block") >= 0) return 0;
-    static const char *const FRAME[] = {
-      "binding", "eval", "local_variables", "proc", "lambda", "define_method",
-      "instance_eval", "instance_exec", "class_eval", "module_eval", "class_exec",
-      "module_exec", "send", "__send__", "public_send", "method", "block_given?",
-      "to_enum", "enum_for", NULL };
-    const char *nm = nt_str(nt, id, "name");
-    if (!nm) return 0;
-    for (int i = 0; FRAME[i]; i++) if (sp_streq(nm, FRAME[i])) return 0;
-    break;
-  }
-  default: return 0;
-  }
-  int nr = nt_num_refs(nt, id);
-  for (int i = 0; i < nr; i++) if (!cdefer_plain_node(c, nt_ref_at(nt, id, i))) return 0;
-  int na = nt_num_arrs(nt, id);
-  for (int i = 0; i < na; i++) {
-    int n = 0; const int *ids = nt_arr_at(nt, id, i, &n);
-    for (int k = 0; k < n; k++) if (!cdefer_plain_node(c, ids[k])) return 0;
-  }
-  return 1;
-}
-
-/* `return x if cond` / `return x unless cond`, of plain nodes */
-static int cdefer_guard_stmt(Compiler *c, int id) {
-  const NodeTable *nt = c->nt;
-  NodeKind k = nt_kind(nt, id);
-  if (k != NK_IfNode && k != NK_UnlessNode) return 0;
-  if (nt_ref(nt, id, "subsequent") >= 0 || nt_ref(nt, id, "else_clause") >= 0) return 0;
-  if (!cdefer_plain_node(c, nt_ref(nt, id, "predicate"))) return 0;
-  int st = nt_ref(nt, id, "statements");
-  if (st < 0 || nt_kind(nt, st) != NK_StatementsNode) return 0;
-  int n = 0; const int *v = nt_arr(nt, st, "body", &n);
-  if (n != 1 || nt_kind(nt, v[0]) != NK_ReturnNode) return 0;
-  return cdefer_plain_node(c, nt_ref(nt, v[0], "arguments"));
-}
-
-/* How many guard statements open method `s`'s body, when at least one does
-   and something follows them; 0 otherwise */
-static int cdefer_guard_count(Compiler *c, Scope *s) {
+/* Which methods make their cells lazily: a def's own body */
+static int cdefer_method_ok(Compiler *c, Scope *s) {
   const NodeTable *nt = c->nt;
   if (!s->name || s->def_node < 0 || nt_kind(nt, s->def_node) != NK_DefNode) return 0;
-  if (s->dm_subst_name || s->body < 0 || nt_kind(nt, s->body) != NK_StatementsNode) return 0;
-  int n = 0; const int *v = nt_arr(nt, s->body, "body", &n);
-  int g = 0;
-  while (g < n && cdefer_guard_stmt(c, v[g])) g++;
-  return g < n ? g : 0;
+  return !s->dm_subst_name && s->body >= 0;
 }
 
-/* Can `lv`'s cell wait for the switch? Its kind's slot must be one a plain
+/* Can `lv`'s cell wait for its closure? Its kind's slot must be one a plain
    local roots the same way: an Integer, Boolean, Symbol, Float or nilable
    number, a boxed value, or a rootable heap pointer. A Proc (laundered
    through an int) and a by-value struct keep the entry allocation. */
@@ -4282,8 +4235,9 @@ static int cdefer_local_ok(Compiler *c, Scope *s, LocalVar *lv) {
   return lv->type == TY_INT || lv->type == TY_BOOL || lv->type == TY_SYMBOL;
 }
 
-/* The deferred form of emit_cell_decl: the stack slot, the NULL heap cell
-   and the pointer at the slot here, the allocation into g_cdefer_text. */
+/* The lazy form of emit_cell_decl: the stack slot, the NULL heap cell and
+   the pointer at the slot here, the allocation into g_cdefer_v for
+   cdefer_finish to place. */
 static void emit_cell_decl_deferred(Compiler *c, Scope *s, LocalVar *lv, Buf *b) {
   (void)s;
   const char *nm = lv->name;
@@ -4320,34 +4274,182 @@ static void emit_cell_decl_deferred(Compiler *c, Scope *s, LocalVar *lv, Buf *b)
   buf_printf(b, "    %s *_cell_%s = &_cellv_%s;\n", ty, nm, nm);
   /* (one line naming `_cell_x` beside its scan, as the entry allocation's
      does: gc_wb_cells reads which cells hold references from it) */
-  buf_printf(&g_cdefer_text, "_cell_%s = _cellh_%s = (%s *)sp_gc_alloc(sizeof(%s), NULL, %s);"
-                             " *_cell_%s = _cellv_%s;", nm, nm, ty, ty, scan, nm, nm);
-  /* Past the switch nothing reads the slot, but its root lasts until the
-     method returns: a captured parameter the body then reassigns kept its
-     first value alive that long, which the entry allocation never held.
+  Buf al; memset(&al, 0, sizeof al);
+  buf_printf(&al, "_cell_%s = _cellh_%s = (%s *)sp_gc_alloc(sizeof(%s), NULL, %s);"
+                  " *_cell_%s = _cellv_%s;", nm, nm, ty, ty, scan, nm, nm);
+  /* Once the cell is made nothing reads the slot, but its root lasts until
+     the method returns: a captured parameter the body then reassigns kept
+     its first value alive that long, which the entry allocation never held.
      A slot the collector reads is emptied once its value is in the cell. */
   if (scanned)
-    buf_printf(&g_cdefer_text, " _cellv_%s = %s;", nm, lv->type == TY_POLY ? "sp_box_nil()" : "NULL");
-  buf_puts(&g_cdefer_text, "\n");
+    buf_printf(&al, " _cellv_%s = %s;", nm, lv->type == TY_POLY ? "sp_box_nil()" : "NULL");
+  if (g_cdefer_n == g_cdefer_cap) {
+    g_cdefer_cap = g_cdefer_cap ? g_cdefer_cap * 2 : 8;
+    g_cdefer_v = (CDeferCell *)realloc(g_cdefer_v, sizeof *g_cdefer_v * (size_t)g_cdefer_cap);
+  }
+  g_cdefer_v[g_cdefer_n].name = strdup(nm);
+  g_cdefer_v[g_cdefer_n].alloc = al.p;
+  g_cdefer_n++;
   free(et.p);
 }
 
-/* emit_stmts' hook: the switch, ahead of the first statement past the
-   guards of the method being emitted */
-void emit_cell_defer_switch(Compiler *c, int id, int k, Buf *b, int indent) {
-  (void)c;
-  if (id != g_cdefer_stmts || k != g_cdefer_at || b != g_cdefer_buf || indent != 1) return;
-  if (!g_cdefer_text.p) return;
-  emit_indent(b, indent);
-  buf_puts(b, "/* the closure cells, past the guards */\n");
-  const char *p = g_cdefer_text.p;
-  while (*p) {
-    const char *nl = strchr(p, '\n');
-    size_t n = nl ? (size_t)(nl - p) + 1 : strlen(p);
-    emit_indent(b, indent);
-    buf_putn(b, p, n);
-    p += n;
+static int cdefer_ident(char ch) { return isalnum((unsigned char)ch) || ch == '_'; }
+
+/* Where the statement that fills a capture struct's field with `_cell_x`
+   starts, given the `->` of `<lvalue>->c_<f> = _cell_x;`: the start of the
+   lvalue, a plain identifier, when a statement boundary comes before it;
+   (size_t)-1 otherwise. */
+static size_t cdefer_fill_start(const Buf *b, size_t from, size_t arrow) {
+  size_t q = arrow;
+  while (q > from && cdefer_ident(b->p[q-1])) q--;
+  if (q == arrow || q == from) return (size_t)-1;
+  char pc = b->p[q-1];
+  return (pc == ' ' || pc == '\n' || pc == ';' || pc == '{' || pc == '}') ? q : (size_t)-1;
+}
+
+/* The method's C, written from `from` on: for each lazy cell, put its
+   allocation ahead of each statement that hands `_cell_x` to a closure, or
+   back on entry when the C uses `_cell_x` some other way (see above).
+
+   A fill can sit inside an expression, a `({ ... })` arm of a poly
+   receiver's dispatch; the allocation then goes in front of it there. C
+   does not order that against the rest of the full expression, so the C
+   statement around it must not use `_cell_x` anywhere else: a store through
+   a `_cell_x` read before the cell is made would land on the stack slot. */
+static void cdefer_finish(Buf *b, size_t from) {
+  /* (the proc-return frame's landing, `setjmp(_h.jb)`, only returns
+     `_h.val`: nothing past it reads a cell) */
+  int sj = 0;
+  for (size_t i = from; i + 7 <= b->len; i++)
+    if (b->p[i] == 's' && !strncmp(b->p + i, "setjmp(", 7) && strncmp(b->p + i + 7, "_h.jb)", 6)) { sj = 1; break; }
+  for (int k = 0; k < g_cdefer_n; k++) {
+    const char *nm = g_cdefer_v[k].name;
+    char tok[512], decl[1100];
+    snprintf(tok, sizeof tok, "_cell_%s", nm);
+    snprintf(decl, sizeof decl, "*_cell_%s = &_cellv_%s;", nm, nm);
+    size_t tn = strlen(tok), dn = strlen(decl);
+    size_t decl_end = 0;
+    /* each use: where its statement starts and ends (a fill), the C
+       statement it is in, and whether that is nested in an expression */
+    typedef struct { size_t s0, s1, ar; int stmt, nested, is_fill; } Use;
+    Use *use = NULL; int nuse = 0, capuse = 0;
+    int bad = sj;
+    int pd = 0, str = 0, chr = 0, cmt = 0, stmt = 0;   /* open parentheses, outside literals and comments */
+    /* `_cell_x = (T *)sp_gc_alloc(...)`, a block's local made afresh for a
+       run of the block: the form above roots `_cellh_x`, not `_cell_x`, so
+       the fresh cell goes into both. Not where another declaration of the
+       name (an inlined call's cell, a lifted block's) is in scope: from the
+       brace depth `shd` it was made at until that brace closes. */
+    size_t *rea = NULL; int nrea = 0, caprea = 0;
+    int bd = 0, shd = -1;
+    /* (scanned to the end whatever it finds: the declaration is where an
+       entry allocation goes) */
+    for (size_t i = from; i + tn <= b->len; i++) {
+      char x = b->p[i];
+      if (cmt) { if (x == '*' && b->p[i+1] == '/') { cmt = 0; i++; } continue; }
+      if (str) { if (x == '\\') i++; else if (x == '"') str = 0; continue; }
+      if (chr) { if (x == '\\') i++; else if (x == '\'') chr = 0; continue; }
+      if (x == '/' && b->p[i+1] == '*') { cmt = 1; i++; continue; }
+      if (x == '"') { str = 1; continue; }
+      if (x == '\'') { chr = 1; continue; }
+      if (x == '(') { pd++; continue; }
+      if (x == ')') { pd--; continue; }
+      if (x == '{') bd++;
+      if (x == '}') { bd--; if (shd > bd) shd = -1; }
+      if (!pd && (x == ';' || x == '{' || x == '}')) { stmt++; continue; }
+      if (x == '{' || x == '}') continue;
+      if (x != '_' || strncmp(b->p + i, tok, tn)) continue;
+      if ((i > from && cdefer_ident(b->p[i-1])) || (i + tn < b->len && cdefer_ident(b->p[i+tn]))) continue;
+      size_t at = i; i += tn - 1;
+      Use u = { 0, 0, 0, stmt, pd > 0, 0 };
+      if (at > from && b->p[at-1] == '*') {
+        size_t st = at - 1;
+        if (!strncmp(b->p + st, decl, dn)) { if (decl_end) bad = 1; decl_end = st + dn; continue; }
+        /* not its address (`&*_cell_x`, `&(*_cell_x)`) */
+        if (st > from && (b->p[st-1] == '&' || (b->p[st-1] == '(' && st - 1 > from && b->p[st-2] == '&'))) { bad = 1; continue; }
+        /* and not another declaration (`T *_cell_x = ...`) */
+        size_t p = st;
+        while (p > from && b->p[p-1] == ' ') p--;
+        if (p > from && (cdefer_ident(b->p[p-1]) || b->p[p-1] == '*')) {
+          size_t w = p;
+          while (w > from && cdefer_ident(b->p[w-1])) w--;
+          if (!(p - w == 6 && !strncmp(b->p + w, "return", 6))) { bad = 1; if (shd < 0) shd = bd; }
+        }
+      }
+      else {
+        /* `<lvalue>->c_<f> = _cell_x;` */
+        size_t p = at, q, fe, s0 = (size_t)-1;
+        while (p > from && b->p[p-1] == ' ') p--;
+        if (decl_end && shd < 0 && p > from && strchr(";{}\n", b->p[p-1]) &&
+            !strncmp(b->p + at + tn, " = (", 4)) {
+          if (nrea == caprea) { caprea = caprea ? caprea * 2 : 4; rea = (size_t *)realloc(rea, sizeof *rea * (size_t)caprea); }
+          rea[nrea++] = at;
+        }
+        if (at + tn < b->len && b->p[at+tn] == ';' && p > from && b->p[p-1] == '=') {
+          q = p - 1;
+          while (q > from && b->p[q-1] == ' ') q--;
+          fe = q;
+          while (q > from && cdefer_ident(b->p[q-1])) q--;
+          if (fe - q > 2 && !strncmp(b->p + q, "c_", 2) && q >= from + 2 && b->p[q-2] == '-' && b->p[q-1] == '>')
+            s0 = cdefer_fill_start(b, from, q - 2);
+        }
+        if (s0 == (size_t)-1) { bad = 1; continue; }
+        u.s0 = s0; u.s1 = at + tn + 1; u.ar = q - 2; u.is_fill = 1;
+        stmt++;   /* (its `;`, skipped with it) */
+        i = at + tn;
+      }
+      if (nuse == capuse) { capuse = capuse ? capuse * 2 : 8; use = (Use *)realloc(use, sizeof *use * (size_t)capuse); }
+      use[nuse++] = u;
+    }
+    for (int f = 0; !bad && f < nuse; f++) {
+      if (!use[f].is_fill || !use[f].nested) continue;
+      for (int g = 0; g < nuse; g++)
+        if (g != f && use[g].stmt == use[f].stmt && !(use[g].is_fill && use[g].nested)) { bad = 1; break; }
+    }
+    if (!decl_end) bad = 0, nuse = 0;   /* (not this method's: nothing to place) */
+    if (bad && decl_end)
+      for (int r = nrea - 1; r >= 0; r--) {
+        char t[600]; snprintf(t, sizeof t, "_cellh_%s = ", nm);
+        buf_insert_at(b, rea[r], t);
+      }
+    free(rea);
+    if (bad) {
+      /* on entry, right after the slot's declarations */
+      Buf t; memset(&t, 0, sizeof t);
+      buf_printf(&t, "\n    %s", g_cdefer_v[k].alloc);
+      buf_insert_at(b, decl_end, t.p);
+      free(t.p);
+    }
+    else
+      for (int f = nuse - 1; f >= 0; f--) {
+        if (!use[f].is_fill) continue;
+        Buf t; memset(&t, 0, sizeof t);
+        /* The holder can be older than the cell just made (a capture struct
+           made first and promoted while rooted): the store is recorded. */
+        buf_printf(&t, " sp_gc_wb((void *)%.*s); }", (int)(use[f].ar - use[f].s0), b->p + use[f].s0);
+        buf_insert_at(b, use[f].s1, t.p);
+        t.len = 0; if (t.p) t.p[0] = '\0';
+        buf_printf(&t, "{ if (!_cellh_%s) { %s } ", nm, g_cdefer_v[k].alloc);
+        buf_insert_at(b, use[f].s0, t.p);
+        free(t.p);
+      }
+    if (!bad && decl_end) {
+      /* the tag gc_wb_cells reads: this cell's barrier goes on `_cellh_x`.
+         A cell made on entry keeps it on `_cell_x`, which a fresh cell per
+         block run or an inner declaration of the name moves off `_cellh_x`. */
+      char hd[600];
+      snprintf(hd, sizeof hd, "*_cellh_%s = NULL;", nm);
+      char *h = strstr(b->p + from, hd);
+      if (h) buf_insert_at(b, (size_t)(h - b->p) + strlen(hd), CDEFER_TAG);
+    }
+    free(use);
   }
+}
+
+static void cdefer_clear(void) {
+  for (int k = 0; k < g_cdefer_n; k++) { free(g_cdefer_v[k].name); free(g_cdefer_v[k].alloc); }
+  free(g_cdefer_v);
+  g_cdefer_v = NULL; g_cdefer_n = g_cdefer_cap = 0;
 }
 
 void emit_scope_decls(Compiler *c, Scope *s, Buf *b) {
@@ -7610,6 +7712,35 @@ static int wb_header_has_param(const Buf *b, size_t h, const char *nm, size_t nn
   }
   return 0;
 }
+/* Whether the function whose header is at `h` makes cell `nm` where its
+   closure takes it (cdefer_finish): it declares `*_cellh_<nm> = NULL;` with
+   CDEFER_TAG after it.
+   Until the cell is made `_cell_x` points at a stack slot, where a barrier
+   would read a header that is not there; `_cellh_x` is the cell or NULL, so
+   the barrier goes on that. The declarations come first, so the names are
+   read once per function, up to its first store. */
+typedef struct { size_t h; WbCells names; } WbLazyCells;
+static int wb_fn_lazy_cell(const Buf *b, size_t h, size_t at, WbLazyCells *lz, const char *nm, size_t nn) {
+  if (lz->h != h) {
+    for (int k = 0; k < lz->names.n; k++) free(lz->names.v[k]);
+    lz->names.n = 0;
+    lz->h = h;
+    for (size_t k = h; k + 8 < at; k++) {
+      if (b->p[k] != '*' || strncmp(b->p + k + 1, "_cellh_", 7)) continue;
+      size_t s = k + 8, e = s;
+      while (e < b->len && (isalnum((unsigned char)b->p[e]) || b->p[e] == '_')) e++;
+      size_t tl = 8 + strlen(CDEFER_TAG);
+      if (e == s || e + tl > b->len || strncmp(b->p + e, " = NULL;", 8) || strncmp(b->p + e + 8, CDEFER_TAG, tl - 8)) continue;
+      if (wb_cells_has(&lz->names, b->p + s, e - s)) continue;
+      WbCells *cs = &lz->names;
+      if (cs->n == cs->cap) { cs->cap = cs->cap ? cs->cap * 2 : 8;
+                              cs->v = (char **)realloc(cs->v, sizeof(char *) * cs->cap); }
+      cs->v[cs->n] = (char *)malloc(e - s + 1);
+      memcpy(cs->v[cs->n], b->p + s, e - s); cs->v[cs->n][e - s] = '\0'; cs->n++;
+    }
+  }
+  return wb_cells_has(&lz->names, nm, nn);
+}
 /* Where the expression that starts after `q` ends: the `;` that closes it, or
    the unmatched closer of the group it sits in, at depth 0 and outside string
    and character literals. b->len when neither is found. */
@@ -7813,6 +7944,7 @@ static void gc_wb_cells(Compiler *c, Buf *b) {
   wb_cells_collect(&cs, b->p, b->len);
   if (!cs.n) { free(cs.v); return; }
   size_t hdr_at = 0, hdr_h = (size_t)-1, seg_to = 0;   /* seg_to: the text before it was searched for segment lines */
+  WbLazyCells lz; memset(&lz, 0, sizeof lz); lz.h = (size_t)-1;
   g_tmp = 0;
   for (size_t i = 0; i + 3 < b->len; i++) {
     if (b->p[i] != '(' || b->p[i+1] != '*') continue;
@@ -7844,9 +7976,11 @@ static void gc_wb_cells(Compiler *c, Buf *b) {
     else if (nn > 2 && !strncmp(nm, "c_", 2) && ns >= 2 && b->p[ns-1] == '>' && b->p[ns-2] == '-') { nm += 2; nn -= 2; }
     if (!wb_cells_has(&cs, nm, nn)) continue;
     if (!strncmp(b->p + is, "SP_WBO(", 7)) continue;
+    int lazy = 0;
     if (local_cell) {
       size_t h = wb_fn_header(b, i, &hdr_at, &hdr_h);
       if (h != (size_t)-1 && wb_header_has_param(b, h, nm, nn)) continue;
+      lazy = h != (size_t)-1 && wb_fn_lazy_cell(b, h, i, &lz, nm, nn);
     }
     /* At statement position, run the barrier AFTER the store: the value
        usually allocates, and an allocation between the barrier and the store
@@ -7878,7 +8012,12 @@ static void gc_wb_cells(Compiler *c, Buf *b) {
       buf_printf(&ins, "; (*_wc%d)", wid);
       size_t eq_at = ins.len + (q - (j + 1));
       buf_putn(&ins, b->p + j + 1, send - j);
-      buf_printf(&ins, " sp_gc_wb((void *)_wc%d); }", wid);
+      if (lazy) {
+        buf_puts(&ins, " sp_gc_wb((void *)_cellh_");
+        buf_putn(&ins, nm, nn);
+        buf_puts(&ins, "); }");
+      }
+      else buf_printf(&ins, " sp_gc_wb((void *)_wc%d); }", wid);
       size_t grew2 = ins.len - (send + 1 - i);
       size_t tail2 = b->len - (send + 1);
       for (size_t g = 0; g < grew2; g++) buf_putn(b, "\0", 1);
@@ -7894,9 +8033,18 @@ static void gc_wb_cells(Compiler *c, Buf *b) {
       free(ins.p);
       continue;
     }
-    buf_puts(&ins, "SP_WBO(");
-    buf_putn(&ins, b->p + is, ie - is);
-    buf_puts(&ins, ")");
+    if (lazy) {
+      buf_puts(&ins, "(sp_gc_wb((void *)_cellh_");
+      buf_putn(&ins, nm, nn);
+      buf_puts(&ins, "), ");
+      buf_putn(&ins, b->p + is, ie - is);
+      buf_puts(&ins, ")");
+    }
+    else {
+      buf_puts(&ins, "SP_WBO(");
+      buf_putn(&ins, b->p + is, ie - is);
+      buf_puts(&ins, ")");
+    }
     size_t grew = ins.len - (ie - is);
     size_t tail = b->len - ie;
     for (size_t g = 0; g < grew; g++) buf_putn(b, "\0", 1);
@@ -7908,6 +8056,8 @@ static void gc_wb_cells(Compiler *c, Buf *b) {
   }
   for (int k = 0; k < cs.n; k++) free(cs.v[k]);
   free(cs.v);
+  for (int k = 0; k < lz.names.n; k++) free(lz.names.v[k]);
+  free(lz.names.v);
   (void)c;
 }
 
@@ -8506,16 +8656,13 @@ static void emit_method(Compiler *c, Scope *s, Buf *b, int loop_callee) {
     emit_env_load(c, s, b, &env_names, env_st, sizeof env_st);
     g_cap_struct = env_st; g_cap_names = &env_names;
   }
-  /* a body that opens with guards makes its closure cells past them */
-  int cdefer_at = cdefer_guard_count(c, s);
-  Scope *sv_cdscope = g_cdefer_scope; int sv_cdstmts = g_cdefer_stmts, sv_cdat = g_cdefer_at;
-  Buf *sv_cdbuf = g_cdefer_buf; Buf sv_cdtext = g_cdefer_text;
-  memset(&g_cdefer_text, 0, sizeof g_cdefer_text);
-  g_cdefer_scope = cdefer_at > 0 ? s : NULL;
+  /* a def's closure cells are made where its closures take them */
+  Scope *sv_cdscope = g_cdefer_scope;
+  CDeferCell *sv_cdv = g_cdefer_v; int sv_cdn = g_cdefer_n, sv_cdcap = g_cdefer_cap;
+  g_cdefer_v = NULL; g_cdefer_n = g_cdefer_cap = 0;
+  g_cdefer_scope = cdefer_method_ok(c, s) ? s : NULL;
   emit_scope_decls(c, s, b);
   g_cdefer_scope = NULL;
-  g_cdefer_stmts = g_cdefer_text.p ? s->body : -1;
-  g_cdefer_at = cdefer_at; g_cdefer_buf = b;
   /* a method's entry is a safe point for pending finalizers (sp_gc.h) */
   if (g_uses_finalizers) buf_puts(b, "    SP_FIN_POLL();\n");
   /* and for a delivered Signal.trap */
@@ -8641,9 +8788,6 @@ static void emit_method(Compiler *c, Scope *s, Buf *b, int loop_callee) {
     buf_printf(b, "%s;\n", method_ret_zero(c, s));
   }
   g_result_var = sv_rv2; g_result_poly = sv_rp2; g_result_ty = sv_rty2; g_result_oint = sv_ro2;
-  free(g_cdefer_text.p);
-  g_cdefer_text = sv_cdtext; g_cdefer_scope = sv_cdscope; g_cdefer_stmts = sv_cdstmts;
-  g_cdefer_at = sv_cdat; g_cdefer_buf = sv_cdbuf;
   g_method_pr_label = NULL; g_method_pr_var = NULL;
   g_fn_pr_label = NULL; g_fn_pr_var = NULL; g_fn_ret_type = TY_UNKNOWN; g_fn_ret_oint = 0;
   g_self_deref = saved_deref;
@@ -8659,6 +8803,9 @@ static void emit_method(Compiler *c, Scope *s, Buf *b, int loop_callee) {
   g_yield_proc_ref = sv_ypr9; g_yield_slot_ty = sv_yst9; free(ypr9.p);
   g_cap_struct = sv_envst; g_cap_names = sv_envn; free(env_names.v);
   buf_puts(b, "}\n");
+  cdefer_finish(b, gc_save_off);
+  cdefer_clear();
+  g_cdefer_v = sv_cdv; g_cdefer_n = sv_cdn; g_cdefer_cap = sv_cdcap; g_cdefer_scope = sv_cdscope;
   if (!g_no_root_elision) gc_roots_take_back(c, s, b, gc_save_off);
   const char *site = decide_method_site(c, s);
   int context = loop_callee && !rh_wrap && !s->is_ext_entry && !poll_pure_wrapped(c, s->idx) && !method_inline_force(c, s) &&

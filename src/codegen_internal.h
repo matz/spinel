@@ -1736,7 +1736,6 @@ typedef struct { const char *st; NameSet *names; NameSet caps; char capst[32]; s
 void env_bind_begin(Compiler *c, Scope *dm, int dflt, Buf *out, EnvBind *sv);   /* the opening of a default spelled in a define_method method's environment */
 void env_bind_end(Buf *out, EnvBind *sv);
 void emit_env_store(Compiler *c, int id, Buf *b, int indent);   /* a define_method block's environment, stored where its definer runs */
-void emit_cell_defer_switch(Compiler *c, int id, int k, Buf *b, int indent);
 int splat_string_var(Compiler *c, const int *av, int ac, int *fs);
 void refuse_super_splat(Compiler *c, int id, int target);
 void refuse_yield_splat(Compiler *c, int blk, int yc, const int *yv);

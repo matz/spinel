@@ -25279,7 +25279,6 @@ void emit_stmts(Compiler *c, int id, Buf *b, int indent) {
     for (int k = 0; k < n; k++) {
       if (redo_lbl && k == head) { emit_indent(b, indent); buf_printf(b, "_redo_%d: ;\n", redo_lbl); }
       g_stmt_cur = body[k]; g_stmt_prev = k ? body[k - 1] : -1;
-      emit_cell_defer_switch(c, id, k, b, indent);
       /* a run of element updates behind one joint guard (hc_joint_run),
          within the statements ahead of a redo label or past it */
       int jm = hc_joint_run(c, body + k, (redo_lbl && k < head ? head : n) - k);
@@ -25409,7 +25408,6 @@ void emit_stmts_tail(Compiler *c, int id, Buf *b, int indent) {
     const int *body = nt_arr(nt, id, "body", &n);
     for (int k = 0; k < n; k++) {
       g_stmt_cur = body[k]; g_stmt_prev = k ? body[k - 1] : -1;
-      emit_cell_defer_switch(c, id, k, b, indent);
       if (k == n - 1) emit_body_stmt(c, body[k], b, indent, 1);
       else {
         if (!emit_body_stmt(c, body[k], b, indent, 0)) break;

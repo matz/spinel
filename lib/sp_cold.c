@@ -4873,6 +4873,7 @@ static int sp_sig_procs_here(void) {
    the proc's own: it waits in the count until the proc leaves, by a return
    or a jump (sp_trap_call), and runs then. */
 static int sp_sig_active[SP_SIG_MAX];
+void sp_trap_check_depth(void);   /* lib/sp_exc.c */
 void sp_sig_proc_left(int no) {
   SP_ATOMIC_STORE(&sp_sig_active[no], 0, __ATOMIC_RELEASE);
   if (!SP_ATOMIC_LOAD(&sp_sig_pending[no], __ATOMIC_ACQUIRE)) return;
@@ -4901,15 +4902,26 @@ void sp_sig_run_pending(void) {
   if (!here) return;   /* (the flag stays up for main or the trap thread) */
   for (int no = 1; no < SP_SIG_MAX; no++) {
     if (!SP_ATOMIC_LOAD(&sp_sig_pending[no], __ATOMIC_RELAXED)) continue;
-    /* the proc of this signal runs now: sp_sig_proc_left raises the flag again */
+    /* the proc of this signal runs now: sp_sig_proc_left raises the flag again.
+       The depth check sp_trap_call makes first is made here, before the
+       claim: its raise would leave the claim held for good. */
+    sp_trap_check_depth();
     int idle = 0;
     if (!SP_ATOMIC_CAS(&sp_sig_active[no], &idle, 1, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) continue;
-    /* (a Process.spawn began on another thread: the signals left wait for it) */
-    if (!sp_sig_take_begin()) { SP_ATOMIC_STORE(&sp_sig_active[no], 0, __ATOMIC_RELEASE); sp_sig_left_pending(); return; }
+    /* A Process.spawn began on another thread: the signals left wait for it,
+       and its sp_sig_hold_end wakes the trap thread. The wake may have come
+       while the claim was held, and found it: a hold over by now is
+       re-signalled here (sp_sig_proc_left), one still on is left to its end. */
+    if (!sp_sig_take_begin()) {
+      SP_ATOMIC_STORE(&sp_sig_active[no], 0, __ATOMIC_RELEASE);
+      if (SP_ATOMIC_LOAD(&sp_sig_hold, __ATOMIC_SEQ_CST)) sp_sig_left_pending(); else sp_sig_proc_left(no);
+      return;
+    }
     int n = SP_ATOMIC_EXCHANGE(&sp_sig_pending[no], 0, __ATOMIC_ACQUIRE);
     sp_sig_take_end();
     sp_Proc *p = n ? (sp_Proc *)sp_trap_proc[no] : NULL;
-    if (!p) { SP_ATOMIC_STORE(&sp_sig_active[no], 0, __ATOMIC_RELEASE); continue; }
+    /* (nothing to run: a delivery recorded since the exchange is re-signalled) */
+    if (!p) { sp_sig_proc_left(no); continue; }
     sigset_t m; sigemptyset(&m); sigaddset(&m, no);
 #ifdef SP_THREADS
     pthread_sigmask(SIG_BLOCK, &m, NULL);

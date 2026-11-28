@@ -2946,7 +2946,6 @@ static TyKind an_poly_concrete(Compiler *c, int id, const char *name, TyKind t) 
      comp_method_in_chain over every class on every poly call (#4965) */
   int npc = 0;
   const PolyCand *pcs = comp_poly_candidates_at(c, id, name, &npc);
-  int live = an_poly_name_live(c, name);
   for (int pi = 0; pi < npc; pi++) {
     int k = pcs[pi].cls;
     /* A native class's methods are its declared bindings, and that is the
@@ -2957,7 +2956,9 @@ static TyKind an_poly_concrete(Compiler *c, int id, const char *name, TyKind t) 
        the codegen half: `[$stdin, nil][0].read(4)` was typed poly here while
        the poly-IO arm answered its raw const char *, and the C did not
        build. an_user_read_ty and the dispatch union already skip them. */
-    if (c->classes[k].is_native_class || (live && !an_poly_class_live(c, k))) continue;
+    /* Unlike the bare union, a dead class is skipped even when the census leaves the name no live
+       class: t is the builtin answer, so the union is never empty, and the dispatch builds no dead arm. */
+    if (c->classes[k].is_native_class || !an_poly_class_live(c, k)) continue;
     int mi = cplan_cand_target(c, id, name, &pcs[pi], 0);   /* (the method its arm calls) */
     if ((mi < 0 || mi >= c->nscopes) && pcs[pi].rdcls < 0) continue;
     TyKind r = mi >= 0 && mi < c->nscopes ? (TyKind)c->scopes[mi].ret : an_reader_ret(c, k, pcs[pi].rdcls, name);

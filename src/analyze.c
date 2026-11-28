@@ -1138,16 +1138,20 @@ static void cr_live_event(CrLive *lv, const CrRead *r) {
   if (lv->all) return;
   if (r->kind == CR_SELF_CALL) {
     /* self is the class or a subclass of it the program names */
+    /* (`instance_method(:m)` on self captures an instance method the
+       program may bind to any object: the instance side opens, the class's
+       and each named subclass's, as `K.instance_method(:m)` opens K's) */
+    int im = is_instance_method_name(r->call);
     int nd = cr_live_desc(lv, r->cls);
     if (nd >= 0) {
       for (int i = 0; i < nd; i++) {
         int d = lv->desc[i];
-        if (d == r->cls || !lv->held_c[d]) cr_live_call(lv, d, r->call);
+        if (d == r->cls || !lv->held_c[d]) { cr_live_call(lv, d, r->call); if (im) cr_live_instance(lv, d); }
       }
       return;
     }
     for (int d = 0; d < c->nclasses; d++)
-      if (d == r->cls || (!lv->held_c[d] && cr_live_descends(c, d, r->cls))) cr_live_call(lv, d, r->call);
+      if (d == r->cls || (!lv->held_c[d] && cr_live_descends(c, d, r->cls))) { cr_live_call(lv, d, r->call); if (im) cr_live_instance(lv, d); }
     return;
   }
   if (r->kind == CR_BODY_CALL) {

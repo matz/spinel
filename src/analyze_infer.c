@@ -7685,8 +7685,9 @@ static int infer_method_proc_call(Compiler *c, int id, const NodeTable *nt, cons
     const BuiltinOp *op = an_bop_find_arg(c, id, rt, name, argc, argv, nt_ref(nt, id, "block") >= 0);
     if (op && op->result != TY_UNKNOWN) { *out = an_bop_result(c, op, rt, id, argc, argv); return 1; }
   }
-  /* Klass.instance_method(:m) -> an (unbound) method object; #bind re-binds (#2676) */
-  if (recv >= 0 && sp_streq(name, "instance_method") && method_sym_arg(c, id) != NULL &&
+  /* Klass.instance_method(:m) -> an (unbound) method object; #bind re-binds
+     (#2676); bare in a class method, the class's own (method_obj_lookup) */
+  if (sp_streq(name, "instance_method") && method_sym_arg(c, id) != NULL &&
       method_obj_target_mi(c, id) >= 0) { *out = TY_METHOD; return 1; }
   /* Method#receiver is the bound receiver (#2701) */
   if (recv >= 0 && rt == TY_METHOD && argc == 0 && sp_streq(name, "receiver")) {

@@ -16173,6 +16173,18 @@ static void emit_dproc_block_locals(Compiler *c, int blk, const char *hp, const 
    one (a method's `&b` given no block) is no default proc. The block-literal
    arm splices a body, and a block argument has none: its default answered
    nil. */
+/* The Hash variant of a Hash.new that is the value of a local's write typed
+   a Hash, where the node itself was not: `h = Hash.new(0).tap { }` is
+   lowered to the write of the receiver and the block's statements after it,
+   and the variant pinned on the tap went to the write, not to the receiver.
+   TY_UNKNOWN for a node not such a value. */
+static TyKind hash_new_local_write_ty(Compiler *c, int id) {
+  const int *par = comp_parent_map(c);
+  int p = par ? par[id] : -1;
+  if (p < 0 || nt_kind(c->nt, p) != NK_LocalVariableWriteNode || nt_ref(c->nt, p, "value") != id) return TY_UNKNOWN;
+  TyKind t = comp_ntype(c, p);
+  return ty_is_hash(t) ? t : TY_UNKNOWN;
+}
 static int emit_hash_new_block_arg(Compiler *c, int id, int argc, Buf *b) {
   const NodeTable *nt = c->nt;
   int blk = nt_ref(nt, id, "block");
@@ -17003,12 +17015,15 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       { *out = 1; return 1; }
     }
     /* Hash.new / Hash.new(default) whose variant was pinned on the node
-       (argument position pins PolyPoly): construct that variant directly. */
+       (argument position pins PolyPoly): construct that variant directly.
+       `Hash.new(0).tap { }` is lowered to a local's write of the receiver,
+       which holds the variant: the constructor takes it from there
+       (hash_new_local_write_ty). */
     if (cn && sp_streq(cn, "Hash") && nt_ref(nt, id, "block") < 0 &&
         (ty_is_hash(comp_ntype(c, id)) ||
-         ty_is_hash(write_slot_ty(c, id)))) {
+         ty_is_hash(write_slot_ty(c, id)) || ty_is_hash(hash_new_local_write_ty(c, id)))) {
       TyKind ht = ty_is_hash(comp_ntype(c, id)) ? comp_ntype(c, id)
-                                                : write_slot_ty(c, id);
+                : ty_is_hash(write_slot_ty(c, id)) ? write_slot_ty(c, id) : hash_new_local_write_ty(c, id);
       const char *hcn = ty_hash_cname(ht);
       if (argc == 0 || nt_kind(nt, argv[0]) == NK_NilNode) buf_printf(b, "sp_%sHash_new()", hcn);
       else emit_hash_new_with_default(c, ht, argv[0], b);

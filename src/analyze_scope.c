@@ -5225,8 +5225,13 @@ static void alias_register(Compiler *c, ClassInfo *cls, const char *nw, const ch
      its own `def []=`, as activesupport's HashWithIndifferentAccess has, or
      `alias original_concat concat` ahead of SafeBuffer's own concat) */
   const char *ep = singleton ? NULL : alias_embedding_parent(c, cls, od);
+  /* ...and in a program class's singleton, of `new`, the allocation every
+     class answers: `alias_method :create, :new` ahead of its own `def new`
+     (activesupport's TimeZone, whose new looks a zone up and whose create
+     builds one) keeps naming the allocation */
+  int class_new = singleton && sp_streq(od, "new") && !is_builtin_reopen(cls->name) && !comp_class_is_module(c, cls);
   if (s >= 0 && cid >= 0 &&
-      (singleton ? builtin_cmethod_known(cls->name, od) :
+      (singleton ? builtin_cmethod_known(cls->name, od) || class_new :
        alias_prim_class(cls->name) || (ep && builtin_instance_method_known(ep, od))) &&
       !alias_target_defined_before(c, cls, cid, od, s, singleton)) {
     for (int i = cls->naliases - 1; i >= 0; i--)

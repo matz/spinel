@@ -10,6 +10,8 @@ true
 2
 "a\nb\nc\n"
 "o\nx\n"
+"of the call\n"
+false
 "o\nt\n"
 ""
 "x\n"

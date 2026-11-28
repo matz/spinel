@@ -13,6 +13,8 @@ true
 "of the call\n"
 false
 "o\nt\n"
+"keep\n"
+"o\nt\n"
 ""
 "x\n"
 true
@@ -34,6 +36,7 @@ Errno::EBADF
 RangeError: integer 4294967297 too big to convert to 'int'
 RangeError: integer 4294967297 too big to convert to 'int'
 ArgumentError: negative file descriptor
+RangeError: integer 4294967297 too big to convert to 'int'
 RangeError: integer 4294967297 too big to convert to 'int'
 wrong exec redirect action
 child fd 9 is not redirected

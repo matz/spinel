@@ -2313,6 +2313,11 @@ else {
 /* A grouped redirection shares one open file description across its slots. */
 static int sp_process_redirect_slot(sp_RbVal key) {
   if (key.tag == SP_TAG_INT) return key.v.i >= 0 && key.v.i < 3 ? (int)key.v.i : -1;
+  /* (an IO names its descriptor: `$stdout => f`, `[$stdout, 3] => f`) */
+  if (key.tag == SP_TAG_OBJ && key.cls_id == SP_BUILTIN_IO && key.v.p) {
+    sp_int fd = sp_File_fileno((sp_File *)key.v.p);
+    return fd >= 0 && fd < 3 ? (int)fd : -1;
+  }
   if (key.tag != SP_TAG_SYM || !sp_sym_name_fn) return -1;
   const char *name = sp_sym_name_fn((sp_sym)key.v.i);
   return strcmp(name, "in") == 0 ? 0 : strcmp(name, "out") == 0 ? 1 :
@@ -2368,13 +2373,29 @@ sp_RbVal sp_process_redirect_value(sp_RbVal opts, int slot, sp_bool *found, int 
   for (sp_int j = 0, n = sp_poly_length(opts); j < n; j++) {
     sp_RbVal key, value;
     sp_poly_hash_pair(opts, j, &key, &value);
-    if (key.tag == SP_TAG_SYM && sp_process_redirect_slot(key) == slot) {
+    if (!sp_rbval_is_array(key) && sp_process_redirect_slot(key) == slot) {
       *found = TRUE; return value;
     }
     int mask = sp_process_redirect_group(key);
     if (mask & (1 << slot)) {
       for (int k = 0; k < slot; k++) if (mask & (1 << k)) { *prior = k; break; }
-      *found = TRUE; return value;
+      *found = TRUE;
+      /* A path for a group with a member past 2 is opened to read, as CRuby
+         opens it, where a path for :out alone is written: it goes on as
+         `[path]`, which sp_process_open_redirect_array opens to read. */
+      if (sp_rbval_is_string(value) && *prior < 0) {
+        int past = 0;
+        for (sp_int i = 0, m = sp_poly_length(key); i < m && !past; i++)
+          past = sp_process_past_std_fd(sp_poly_arr_get(key, i)) > 2;
+        if (past) {
+          SP_GC_ROOT_RBVAL(value);
+          sp_PolyArray *one = sp_PolyArray_new();
+          SP_GC_ROOT(one);
+          sp_PolyArray_push(one, value);
+          return sp_box_poly_array(one);
+        }
+      }
+      return value;
     }
   }
   return sp_box_nil();
@@ -2405,7 +2426,8 @@ static int sp_process_mode_flags(sp_RbVal mode) {
 int sp_process_open_redirect_array(sp_RbVal v, int slot, int *owned) {
   sp_int n = sp_poly_length(v);
   sp_RbVal path = sp_poly_arr_get(v, 0);
-  int flags = n > 1 ? sp_process_mode_flags(sp_poly_arr_get(v, 1)) : slot == 0 ? O_RDONLY : O_WRONLY | O_CREAT | O_TRUNC;
+  /* (`[path]` with no mode is opened to read, whatever the stream, as CRuby opens it) */
+  int flags = n > 1 ? sp_process_mode_flags(sp_poly_arr_get(v, 1)) : O_RDONLY;
   sp_RbVal perm = n > 2 ? sp_poly_arr_get(v, 2) : sp_box_int(0644);
   if (n > 3 || flags < 0 || perm.tag != SP_TAG_INT) sp_process_spawn_fail(owned, "ArgumentError", "wrong exec redirect action");
   return sp_process_open_redirect_flags(sp_rbval_string_bytes(path), flags, (int)perm.v.i, slot, owned);
@@ -2449,6 +2471,8 @@ sp_RbVal sp_process_redirect_past_std(sp_RbVal opts) {
       int dst = sp_process_past_std_fd(group ? sp_poly_arr_get(key, i) : key);
       if (dst < 0) continue;
       if (!a) a = sp_PolyArray_new();
+      /* (asked for each member, a later one of a group too, which takes no value of its own) */
+      if (value.tag == SP_TAG_INT) sp_process_fd_range(value.v.i);
       /* (each member of a group that is closed is closed: there is no file to share) */
       int closes = value.tag == SP_TAG_SYM && value.v.i == sp_sym_intern("close");
       if (first >= 0 && !closes) { sp_process_past_std_push(a, dst, 2, first, sp_box_nil(), 0, 0); continue; }

@@ -917,7 +917,7 @@ the member:
   nondeterministic, where the single-worker model was deterministic.
   `Thread#raise` targeting the **main** thread is delivered at main's next
   wait (a `sleep`, a `Queue#pop`, a `join`, a `Mutex#lock`, an IO wait),
-  `Thread.pass` or safe point (a method entry, a loop iteration): a main that
+  `Thread.pass` or safe point (a loop iteration): a main that
   runs is asked to its next safe point when the raise is queued, as the
   monitor asks it past a quantum, where CRuby raises at the thread's next
   check. A raise from a `Signal.trap` proc, which the threaded runtime runs

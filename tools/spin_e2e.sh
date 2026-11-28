@@ -1299,6 +1299,14 @@ printf '[dependencies]\nrefgem = { git = "file://%s/refgem", ref = "v2" }\n' "$W
 "$SPIN" lock >/dev/null 2>&1 || fail "refapp: lock at v2"
 grep -q "^ref = \"$REF_V2\"$" spin.lock || fail "refapp: moving ref to v2 kept the v1 pin"
 expect "refapp: the build takes the new ref" "two" "$("$SPIN" run 2>&1 | tail -1)"
+# offline, a ref changed since the lock is refused, not resolved to the
+# vendored copy of the old pin
+"$SPIN" vendor >/dev/null 2>&1 || fail "refapp: vendor at v2"
+printf '[dependencies]\nrefgem = { git = "file://%s/refgem", ref = "v1" }\n' "$WORK" > spin.toml
+OUT=$(SPIN_OFFLINE=1 "$SPIN" lock 2>&1) && fail "refapp: offline lock took a changed ref"
+echo "$OUT" | grep -q "ref changed since spin.lock" || fail "refapp: offline refusal does not say why: $OUT"
+grep -q "^ref = \"$REF_V2\"$" spin.lock || fail "refapp: the refused offline lock rewrote spin.lock"
+printf '[dependencies]\nrefgem = { git = "file://%s/refgem", ref = "v2" }\n' "$WORK" > spin.toml
 # the same ref with the tag moved behind it: the pin stays
 ( cd "$WORK/refgem" && git tag -f v2 "$REF_V1" >/dev/null 2>&1 )
 "$SPIN" lock >/dev/null 2>&1 || fail "refapp: relock at a moved v2"

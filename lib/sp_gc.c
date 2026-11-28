@@ -169,6 +169,10 @@ static int sp_gc_full_interval = SP_GC_FULL_INTERVAL;
    stays where the last sweep left it. */
 size_t sp_gc_old_live = 0;   /* what the last full found live in the old generation */
 #define SP_GC_OLD_GROWTH_SLACK (4u * 1024u * 1024u)
+/* Promoted garbage the default cadence may carry before the reading below
+   takes the cadence under the default: the same slack, by the same reasoning,
+   that an old generation is allowed past what is live in it. */
+#define SP_GC_PROMOTED_DEAD_FLOOR SP_GC_OLD_GROWTH_SLACK
 static int sp_gc_full_interval_fixed = 0;   /* SPINEL_GC_FULL_INTERVAL pins it */
 int sp_gc_full_runs = 0;    /* read by GC.stat (lib/sp_cold.c) */
 int sp_gc_trim_wanted = 0;  /* a full cycle asks the trimmer thread for a malloc_trim (sp_sched.c) */
@@ -1685,7 +1689,27 @@ void sp_gc_collect(void){
         double per_minor=(double)dead/(double)kept/(double)sp_gc_minors_since_full;
         sp_gc_last_per_minor=per_minor;
         if(per_minor>SP_GC_PROMOTED_DEAD_CUT){
-          if(sp_gc_full_interval>SP_GC_FULL_INTERVAL_MIN) sp_gc_full_interval/=2;
+          /* ...but toward every cycle full only when that garbage is large
+             in bytes, not only against the live set. A full every cycle
+             walks the whole live set on every collection to free what the
+             default cadence would hold; when that is a few MB, as for a
+             server's in-flight requests against a live set of one or two,
+             the walk costs more than the garbage (a blog served by one
+             worker: 80% of collections full and 0.79 ms of CPU a request,
+             against 12.5% and 0.60 ms at a fixed interval of 8, which this
+             rule now matches). What is carried is counted per
+             COLLECTION since the last full, not per minor: a full promotes
+             its survivors too, and at a short cadence what the previous full
+             promoted and this one frees would read as the minors' doing.
+             The floor is divided by the default cadence rather than the
+             rate multiplied by it, so that a large death on a 32-bit size_t
+             cannot wrap to a small reading. */
+          size_t per_collection=dead/(size_t)(sp_gc_minors_since_full+1);
+          if(per_collection>SP_GC_PROMOTED_DEAD_FLOOR/SP_GC_FULL_INTERVAL){
+            if(sp_gc_full_interval>SP_GC_FULL_INTERVAL_MIN) sp_gc_full_interval/=2;
+          }
+          else if(sp_gc_full_interval>SP_GC_FULL_INTERVAL) sp_gc_full_interval/=2;
+          else if(sp_gc_full_interval<SP_GC_FULL_INTERVAL) sp_gc_full_interval*=2;
         }
         sp_gc_fulls_at_min=0;
       }

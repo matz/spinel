@@ -47154,6 +47154,63 @@ static int mrr_rebinds_by_code(Compiler *c, int x, const char *vn, int encl) {
    hit takes reads the variable as a String, and one that is nil at the
    call lost nil's NoMethodError, so only a write the source spells
    takes it.) */
+/* The answer for a callee name, kept for the pass (mrr_memo_reset): each
+   call of the name walked every method of it, and what they call, again,
+   and a program's views ask it for every `@output_buffer << helper(...)`
+   (most of lobsters' analysis). The pass adds no write of a variable the
+   question names, so an answer holds until it ends. */
+typedef struct { const char *nm, *pfx, *vn; int depth, ans; } MrrMemo;
+static MrrMemo *g_mrr_memo; static int g_mrr_memo_cap, g_mrr_memo_n;
+static void mrr_memo_reset(void) {
+  for (int i = 0; i < g_mrr_memo_cap; i++) if (g_mrr_memo[i].nm) { free((char *)g_mrr_memo[i].nm); free((char *)g_mrr_memo[i].vn); }
+  free(g_mrr_memo); g_mrr_memo = NULL; g_mrr_memo_cap = g_mrr_memo_n = 0;
+}
+static unsigned mrr_memo_hash(const char *nm, const char *pfx, const char *vn, int depth) {
+  return (sp_strhash(nm) * 31u + sp_strhash(vn)) * 31u + (unsigned)pfx[0] * 7u + (unsigned)depth;
+}
+static int *mrr_memo_find(const char *nm, const char *pfx, const char *vn, int depth) {
+  if (!g_mrr_memo_cap) return NULL;
+  for (unsigned h = mrr_memo_hash(nm, pfx, vn, depth) & (unsigned)(g_mrr_memo_cap - 1);; h = (h + 1) & (unsigned)(g_mrr_memo_cap - 1)) {
+    MrrMemo *e = &g_mrr_memo[h];
+    if (!e->nm) return NULL;
+    if (e->depth == depth && sp_streq(e->nm, nm) && sp_streq(e->pfx, pfx) && sp_streq(e->vn, vn)) return &e->ans;
+  }
+}
+static void mrr_memo_put(const char *nm, const char *pfx, const char *vn, int depth, int ans) {
+  if ((g_mrr_memo_n + 1) * 2 > g_mrr_memo_cap) {
+    MrrMemo *old = g_mrr_memo; int ocap = g_mrr_memo_cap;
+    g_mrr_memo_cap = ocap ? ocap * 2 : 1024;
+    g_mrr_memo = calloc((size_t)g_mrr_memo_cap, sizeof *g_mrr_memo);
+    if (!g_mrr_memo) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    g_mrr_memo_n = 0;
+    for (int i = 0; i < ocap; i++) if (old[i].nm) mrr_memo_put(old[i].nm, old[i].pfx, old[i].vn, old[i].depth, old[i].ans);
+    free(old);
+  }
+  unsigned h = mrr_memo_hash(nm, pfx, vn, depth) & (unsigned)(g_mrr_memo_cap - 1);
+  while (g_mrr_memo[h].nm) h = (h + 1) & (unsigned)(g_mrr_memo_cap - 1);
+  g_mrr_memo[h] = (MrrMemo){ nm, pfx, vn, depth, ans };
+  g_mrr_memo_n++;
+}
+/* (the keys copied: a node's string may move as the pass adds nodes) */
+static void mrr_memo_add(const char *nm, const char *pfx, const char *vn, int depth, int ans) {
+  char *n2 = strdup(nm), *v2 = strdup(vn);
+  if (!n2 || !v2) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  mrr_memo_put(n2, pfx, v2, depth, ans);
+}
+static int mrr_calls_assign(Compiler *c, int x, const char *pfx, const char *vn, int depth);
+static int mrr_callee_assigns(Compiler *c, const char *nm, const char *pfx, const char *vn, int depth) {
+  const NodeTable *nt = c->nt;
+  int *memo = mrr_memo_find(nm, pfx, vn, depth);
+  if (memo) return *memo;
+  int ans = 0;
+  for (int si = an_scopes_named_first(c, nm); si >= 0 && !ans; si = an_scopes_named_next(c, nm, si)) {
+    const Scope *s = &c->scopes[si];
+    if (s->body < 0 || s->def_node < 0) continue;
+    ans = rr_writes_var(nt, s->body, pfx, vn) || mrr_calls_assign(c, s->body, pfx, vn, depth + 1);
+  }
+  mrr_memo_add(nm, pfx, vn, depth, ans);
+  return ans;
+}
 static int mrr_calls_assign(Compiler *c, int x, const char *pfx, const char *vn, int depth) {
   const NodeTable *nt = c->nt;
   if (x < 0 || depth > 2) return 0;
@@ -47161,11 +47218,7 @@ static int mrr_calls_assign(Compiler *c, int x, const char *pfx, const char *vn,
   if (k == NK_DefNode || k == NK_LambdaNode) return 0;
   if (k == NK_CallNode) {
     const char *nm = nt_str(nt, x, "name");
-    for (int si = 0; nm && si < c->nscopes; si++) {
-      const Scope *s = &c->scopes[si];
-      if (!s->name || !sp_streq(s->name, nm) || s->body < 0 || s->def_node < 0) continue;
-      if (rr_writes_var(nt, s->body, pfx, vn) || mrr_calls_assign(c, s->body, pfx, vn, depth + 1)) return 1;
-    }
+    if (nm && mrr_callee_assigns(c, nm, pfx, vn, depth)) return 1;
   }
   for (int i = 0, nr = nt_num_refs(nt, x); i < nr; i++)
     if (mrr_calls_assign(c, nt_ref_at(nt, x, i), pfx, vn, depth)) return 1;
@@ -47273,6 +47326,7 @@ static int desugar_mutator_recv_rebind(Compiler *c) {
     changed = 1;
   }
   mrr_writes_free();
+  mrr_memo_reset();
   return changed;
 }
 

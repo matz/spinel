@@ -1036,6 +1036,7 @@ void lower_finish(Compiler *c, LowerCtx *lc);   /* frees; under the check, repor
 /* the rows' functions, in the files that own the rewrites */
 LowerFn desugar_nil_block_arg_at, desugar_nil_block_arg_left;               /* analyze_desugar.c */
 LowerFn desugar_guarded_include_at, desugar_guarded_include_left;         /* analyze_desugar.c */
+LowerGate desugar_guarded_include_gate;
 LowerGate desugar_thread_start_gate, desugar_marshal_restore_gate, desugar_socket_open_gate;   /* analyze.c */
 LowerGate desugar_system_options_gate, desugar_io_popen_block_gate;
 LowerFn desugar_thread_start_at, desugar_thread_start_left;

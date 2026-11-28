@@ -37750,6 +37750,13 @@ static int guarded_include_parts(const NodeTable *nt, int id, int *inc) {
   *inc = st;
   return 1;
 }
+/* Not where the program answers `include?` itself -- a `def self.include?`,
+   a singleton class's, or a reopened Module's or Class's: the guard asks that
+   method, and its answer decides (test/include_guarded_by_own_include_p.rb). */
+int desugar_guarded_include_gate(Compiler *c, LowerCtx *lc) {
+  (void)lc;
+  return !cb_program_defines(c->nt, "include?", NULL);
+}
 int desugar_guarded_include_left(Compiler *c, LowerCtx *lc, int id) {
   int inc;
   return guarded_include_parts(c->nt, id, &inc);

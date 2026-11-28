@@ -1,27 +1,24 @@
 # Process.spawn with :close as a redirection: the child's descriptor is
-# closed. The child reports through its status, which does not depend on the
-# shell's wording of a closed stream (dash and bash differ in what they print
-# and in the status code); a write to a closed stream is silenced in the
-# child, so no shell's complaint reaches this program's streams.
-def failed?(cmd, **opts)
-  pid = spawn('sh', '-c', cmd, **opts)
-  Process.wait(pid)
-  !$?.success?
+# closed, where nil or false leave it inherited. The child asks the shell to
+# dup the descriptor, which fails on a closed one in every sh alike, and says
+# so on the descriptor named.
+$stdout.sync = true
+# (the message of a failed dup goes to a stderr of its own for 0 and 1; a probe
+# of 2 lets it go to 2, which is closed when the dup fails, or it would open 2)
+probe = ->(fd, to) { "(exec 3<&#{fd}) #{fd == 2 ? "" : "2>/dev/null "}&& echo '#{fd}: open' >&#{to} || echo '#{fd}: closed' >&#{to}" }
+def capture
+  r, w = IO.pipe
+  yield w
+  w.close
+  print r.read
+  r.close
 end
-p failed?('read x 2>/dev/null', in: :close)
-p failed?('read x </dev/null 2>/dev/null')          # the stream open: read reaches its end, status 1 either way
-p failed?('echo out 2>/dev/null', out: :close)
-p failed?('echo out 2>/dev/null')
-p failed?('echo err >&2 2>/dev/null', err: :close)
-p failed?('echo err 2>/dev/null >&2')   # the open stream, its line kept off this program's stderr
-system('sh', '-c', 'read x 2>/dev/null', in: :close)
+capture { |w| Process.wait(spawn('sh', '-c', "#{probe[0, 1]}; #{probe[2, 1]}", in: :close, out: w)) }
+capture { |w| Process.wait(spawn('sh', '-c', "#{probe[0, 2]}; #{probe[1, 2]}", out: :close, err: w)) }
+capture { |w| Process.wait(spawn('sh', '-c', "#{probe[1, 1]}; #{probe[2, 1]}", err: :close, out: w)) }
+capture { |w| system('sh', '-c', probe[0, 1], in: :close, out: w) }
 p $?.success?
-# a group
-p failed?('{ echo both; echo both >&2; } 2>/dev/null', [:out, :err] => :close)
-# the other streams stay open: err carries a line out while out is closed
-r, w = IO.pipe
-pid = spawn('sh', '-c', 'echo "err stays open" >&2', out: :close, err: w)
-w.close
-Process.wait(pid)
-puts r.read
-r.close
+capture { |w| Process.wait(spawn('sh', '-c', "#{probe[1, 3]}; #{probe[2, 3]}", [:out, :err] => :close, 3 => w)) }
+# the copies come before the close: the child's stderr is the parent's
+# stdout, and its stdout is closed
+Process.wait(spawn('sh', '-c', "echo 'err: the parent stdout' >&2; #{probe[1, 2]}", out: :close, err: 1))

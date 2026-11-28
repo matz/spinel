@@ -160,6 +160,12 @@ int sp_system_start(const char *line, const char *prog, char *const *argv, char 
   }
   if (pid == 0) {
     close(err_pipe[0]);
+    /* (the pipe took a standard number when the parent had one closed, and
+       the dup of the output below would take it: it moves above 2 first) */
+    if (err_pipe[1] <= 2) {
+      int up = fcntl(err_pipe[1], F_DUPFD_CLOEXEC, 3);
+      if (up >= 0) { close(err_pipe[1]); err_pipe[1] = up; }
+    }
     if (close_fd >= 0) close(close_fd);
     if (out_fd >= 0) {
       if (out_fd != 1) { dup2(out_fd, 1); close(out_fd); }

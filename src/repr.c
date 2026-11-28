@@ -1665,6 +1665,11 @@ int repr_coerce_text_form(Compiler *c, int node, TyKind from, TyKind slot, int h
   if (slot == TY_POLY) return CF_BOX;
   if (from == TY_VOID || from == TY_NIL) return CF_NIL_SENT;
   if (slot == TY_BIGINT && from == TY_INT) return CF_INT2BIG;
+  if (slot == TY_EXCEPTION && ty_is_object(from)) {
+    int cid = ty_object_class(from);
+    if (cid >= 0 && cid < c->nclasses && !c->classes[cid].is_value_type && class_is_exc_subclass(c, cid))
+      return CF_EXC_UP;
+  }
   if (how == CO_HOLD && repr_hash_widen_ok(c, node, from, slot)) return CF_HASH_WIDEN;
   if (how == CO_HOLD && repr_array_widen_ok(c, node, from, slot)) return CF_ARRAY_WIDEN;
   if (how == CO_CONVERT && slot == TY_FLOAT && (from == TY_BIGINT || from == TY_RATIONAL))
@@ -1705,7 +1710,7 @@ int repr_coerce_form(Compiler *c, int node, TyKind slot, int how) {
 
 const char *repr_coerce_form_name(int form) {
   static const char *const names[CF__COUNT] = {
-    "FIT", "BOX", "EMPTY_LIT", "NIL_SENT", "INT2BIG", "POLY_RHS", "CHECKED_UNBOX", "STRBUF_HANDLE",
+    "FIT", "BOX", "EMPTY_LIT", "NIL_SENT", "INT2BIG", "EXC_UP", "POLY_RHS", "CHECKED_UNBOX", "STRBUF_HANDLE",
     "HASH_WIDEN", "ARRAY_WIDEN", "CONVERT", "REFUSE",
   };
   return form >= 0 && form < CF__COUNT ? names[form] : "?";

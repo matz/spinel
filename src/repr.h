@@ -298,6 +298,7 @@ typedef enum {
                        literal, or a value with no C type evaluated for its
                        effect */
   CF_INT2BIG,       /* an Integer widened into a Bignum slot */
+  CF_EXC_UP,        /* a program exception subclass pointer upcast to sp_Exception * */
   CF_POLY_RHS,      /* a boxed value through its scalar conversion
                        (emit_poly_rhs_coerced) */
   CF_CHECKED_UNBOX, /* a boxed value through the checked unbox */

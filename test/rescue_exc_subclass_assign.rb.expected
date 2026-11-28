@@ -1,0 +1,17 @@
+1: NotFound: gone
+2: Coded: missing: 404: 404:http,get: #<Coded: missing>
+2a: isa=true,true,false iof=true,false
+2b: case=Coded
+2c: dup=Coded:missing:404:404:http,get:same=false
+2d: exc=Coded:changed:404:404:http,get
+2e: bt=["app.rb:10:in 'run'"] ivget=404
+2f: frozen=true clone=true dup=false
+2g: raised=Coded:missing:404:404:http,get
+3a: SubCoded: deep: 503: retry: true
+3b: Mod::ScopedErr: scoped: db: true
+4a: RuntimeError:orig:true
+4b: NotFound:gone:true
+5: pre=NotFound:pre mid=RuntimeError:mid cap=Coded:post x=Coded:201
+5r: Coded:post:201:201:ok
+6: msg=[T1] to_s(T1) to_s=to_s(T1)
+7: NotFound:r1

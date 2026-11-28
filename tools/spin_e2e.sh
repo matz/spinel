@@ -1268,4 +1268,40 @@ REQGATEEOF
   fail "reqgate: spin build refused a Kernel.require in a dead RUBY_ENGINE branch"
 expect "reqgate: the dead Kernel.require's branch never runs" "spinel" "$("$SPIN" run 2>&1 | tail -1)"
 
+# --- a git dependency's pin follows its manifest: moving `ref` from one tag to
+# the next, or the dependency to another URL, is resolved again on `spin lock`,
+# where the lock used to keep the old tag's commit until it was deleted. An
+# unchanged ref keeps its pin when the tag it named has since moved. ---------
+cd "$WORK"
+mkdir refgem
+cd refgem
+git init -q
+printf '[package]\nname = "refgem"\nversion = "1.0.0"\n' > spin.toml
+printf 'module Refgem\n  def self.which = "one"\nend\n' > refgem.rb
+git add spin.toml refgem.rb
+git -c user.email=spin@e2e -c user.name=spin-e2e commit -qm one
+git tag v1
+printf '[package]\nname = "refgem"\nversion = "2.0.0"\n' > spin.toml
+printf 'module Refgem\n  def self.which = "two"\nend\n' > refgem.rb
+git -c user.email=spin@e2e -c user.name=spin-e2e commit -qam two
+git tag v2
+REF_V1=$(git rev-parse v1)
+REF_V2=$(git rev-parse v2)
+cd "$WORK"
+"$SPIN" new refapp >/dev/null || fail "refapp: new refapp"
+cd refapp
+printf 'require "refgem"\nputs Refgem.which\n' > bin/refapp.rb
+printf '[dependencies]\nrefgem = { git = "file://%s/refgem", ref = "v1" }\n' "$WORK" > spin.toml
+"$SPIN" lock >/dev/null 2>&1 || fail "refapp: lock at v1"
+grep -q "^ref = \"$REF_V1\"$" spin.lock || fail "refapp: the lock does not pin v1"
+grep -q '^requested = "v1"$' spin.lock || fail "refapp: the lock does not record the ref it answers"
+printf '[dependencies]\nrefgem = { git = "file://%s/refgem", ref = "v2" }\n' "$WORK" > spin.toml
+"$SPIN" lock >/dev/null 2>&1 || fail "refapp: lock at v2"
+grep -q "^ref = \"$REF_V2\"$" spin.lock || fail "refapp: moving ref to v2 kept the v1 pin"
+expect "refapp: the build takes the new ref" "two" "$("$SPIN" run 2>&1 | tail -1)"
+# the same ref with the tag moved behind it: the pin stays
+( cd "$WORK/refgem" && git tag -f v2 "$REF_V1" >/dev/null 2>&1 )
+"$SPIN" lock >/dev/null 2>&1 || fail "refapp: relock at a moved v2"
+grep -q "^ref = \"$REF_V2\"$" spin.lock || fail "refapp: an unchanged ref lost its pin"
+
 echo "spin-e2e: ALL GREEN"

@@ -1017,6 +1017,7 @@ int elab_walk_replace(Compiler *c, int old, int with);   /* ...and node with, sp
 int elab_class_opening_body(Compiler *c, int cls, int i, int *header);   /* the i-th opening's statements of class cls the record holds (-1: none), -2 past the last; *header its header */
 int elab_stmt_list(Compiler *c, int node, int *frame);   /* the statement list statement node is an element of, *frame the class or module header around it (-1: main's); -1 for no statement */
 int sce_walk_frame(Compiler *c, HostStep *h, int frame);
+int enum_sites_after_graft(Compiler *c, HostStep *h, int body, int at, int n);   /* a grafted text's sites of a builtin's Ruby implementation take their copies */
 void host_lower_now(Compiler *c, HostStep *h, int owner, int body, int at, int n, int scope);
 void elab_rerecord_write(Compiler *c, int stmt);   /* a recorded statement a row made a global's write */
 int desugar_static_class_eval(Compiler *c, HostStep *h);   /* analyze_desugar.c: the graft over every class and module body */

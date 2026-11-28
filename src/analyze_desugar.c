@@ -19645,6 +19645,150 @@ static int bi_value_builds_name(const NodeTable *nt, int v) {
   return nm && (sp_streq(nm, "to_sym") || sp_streq(nm, "intern") || sp_streq(nm, "+"));
 }
 
+/* The per-site half of desugar_builtins, for one call node: the copy of the
+   generic definition the site takes (and the copies the copy's own sites
+   take, which the caller's loop reaches as the table grows). In the step,
+   from the generic definitions in the table (gdef, bdef); under the walk
+   (from_keep), for a call a class_eval text grafted there, from the copies
+   the step kept of them (g_enum_keep). 0 when out of memory. */
+typedef struct {
+  NodeTable *nt; int n0; const unsigned char *in_generic;
+  int *gdef, *bdef; int nbdef, nbuiltin;
+  int from_keep;
+} EnumSiteCtx;
+static int *site_seq = NULL;              /* the copies made per builtin name, numbered in order */
+static int site_seq_n = 0;
+static NodeTable *g_enum_keep;            /* the generic definitions, kept past the step */
+static int *g_enum_keep_g, *g_enum_keep_b, g_enum_keep_n, g_enum_keep_nbdef, g_enum_keep_nbuiltin;
+static int enum_site_has_gdef(const EnumSiteCtx *x, int bi) {
+  return x->from_keep ? bi < g_enum_keep_n && g_enum_keep_g[bi] >= 0 : x->gdef[bi] >= 0;
+}
+static int enum_site_has_bdef(const EnumSiteCtx *x, int bi) {
+  return x->from_keep ? bi < g_enum_keep_nbdef && g_enum_keep_b[bi] >= 0 : x->bdef[bi] >= 0;
+}
+static long long enum_site_gdef_int(const EnumSiteCtx *x, int bi, const char *key) {
+  return x->from_keep ? nt_int(g_enum_keep, g_enum_keep_g[bi], key, 0) : nt_int(x->nt, x->gdef[bi], key, 0);
+}
+/* a fresh copy, in the program's table, of the kept generic (own: the builtins/ one a reopening replaced) */
+static int enum_keep_fresh(Compiler *c, int bi, int own) {
+  int root = own ? g_enum_keep_b[bi] : g_enum_keep_g[bi];
+  return root >= 0 ? comp_import_subtree(c, g_enum_keep, root) : -1;
+}
+static int enum_site_bdef(Compiler *c, const EnumSiteCtx *x, int bi) {
+  return x->from_keep ? enum_keep_fresh(c, bi, 1) : x->bdef[bi];
+}
+static int enum_site_one(Compiler *c, const EnumSiteCtx *x, int id, int **nbp, int *nbnp, int *capp) {
+  NodeTable *nt = x->nt;
+  int *nb = *nbp, nbn = *nbnp, cap = *capp;
+#define RET(v) do { *nbp = nb; *nbnp = nbn; *capp = cap; return (v); } while (0)
+    const char *cn0 = nt_str(nt, id, "name");
+    int send_site = 0;   /* cn0 is a literal send's name */
+    int each_site = 0;   /* cn0 is the inner call's name, on the outer each */
+    int cr0 = nt_ref(nt, id, "receiver");   /* the receiver of the call cn0 names */
+    /* `enum.with_object(memo)` is renamed to each_with_object by the
+       Enumerator desugar inside the fixpoint, after this pass: give it its
+       copy under the name it will have. `recv.m(args).each { blk }` becomes
+       `recv.m(args) { blk }` there too, on the OUTER node (#4332), so that
+       node takes a copy of the inner's name. */
+    if (cn0 && sp_streq(cn0, "each") && nt_ref(nt, id, "block") >= 0) {
+      int er = nt_ref(nt, id, "receiver");
+      if (er >= 0 && nt_kind(nt, er) == NK_CallNode && nt_ref(nt, er, "block") < 0) { cn0 = nt_str(nt, er, "name"); cr0 = nt_ref(nt, er, "receiver"); each_site = 1; }
+    }
+    if (cn0 && sp_streq(cn0, "with_object")) cn0 = "each_with_object";
+    /* `arr.rfind.each { blk }`: only a typed Array chains (a poly receiver's
+       blockless rfind is not an Enumerator), and the typed lowering has
+       already turned the blockless inner call into `arr.reverse.find`, which
+       the chain rule then hands to this outer node. The site's copy is the
+       find the call ends up named, not the rfind it was written as, or the
+       copy reverses an array that arrives reversed */
+    if (each_site && cn0 && sp_streq(cn0, "rfind")) cn0 = "find";
+    /* Array#index with a block and no argument is find_index, renamed so in
+       the fixpoint once the receiver is an Array (desugar_builtin_enum_calls);
+       so is the block-only arm a delegator's `index(*args, &block)` splits
+       into (desugar_builtin_splat_forward), which keeps this site's copy */
+    if (cn0 && sp_streq(cn0, "index") && nt_ref(nt, id, "block") >= 0 && nt_ref(nt, id, "receiver") >= 0) {
+      int ia = nt_ref(nt, id, "arguments"), iac = 0;
+      const int *iav = ia >= 0 ? nt_arr(nt, ia, "arguments", &iac) : NULL;
+      if (iac == 0 || (iac == 1 && nt_kind(nt, iav[0]) == NK_SplatNode)) cn0 = "find_index";
+    }
+    /* `recv.send(:tally)` / public_send / __send__ with a literal name is
+       retargeted onto `recv.tally` inside the fixpoint
+       (desugar_public_send_recv), after this pass: give it its copy under
+       the name it will have, or the retargeted call found no definition and
+       raised NoMethodError for an Array's own tally */
+    if (cn0 && (sp_streq(cn0, "send") || sp_streq(cn0, "public_send") || sp_streq(cn0, "__send__")) &&
+        nt_ref(nt, id, "receiver") >= 0) {
+      int sa = nt_ref(nt, id, "arguments"), sac = 0;
+      const int *sav = sa >= 0 ? nt_arr(nt, sa, "arguments", &sac) : NULL;
+      if (sac >= 1 && nt_kind(nt, sav[0]) == NK_SymbolNode && nt_str(nt, sav[0], "value")) {
+        cn0 = nt_str(nt, sav[0], "value");
+        send_site = 1;
+      }
+    }
+    /* collect_concat is flat_map under another name, and detect find: the
+       call takes the name the definition has (LR_ENUM_NAME's rows). A class
+       of the program with its own method of the alias keeps it: the rewrite
+       answers a receiver of that class by the name the call was written
+       with (orig_name), where a program-wide test left an Array's
+       collect_concat no method at all. A class method or a top-level
+       method of the alias keeps every call of it as written
+       (program_defines_name_off_class), and a top-level one each call
+       that can reach it. */
+    const LowerRow *alias = lower_row_named(LR_ENUM_NAME, cn0);
+    if (alias && builtin_enum_name_index(alias->target) >= 0 &&
+        !program_defines_name_off_class(nt, x->n0, alias->name, cr0)) {
+      /* (a send keeps its own name until desugar_public_send_recv
+         retargets it, which renames it so: renamed here, `a.send(:detect)`
+         was a call of find with :detect for its argument; an outer each
+         keeps its own too, the inner call is renamed where it is visited,
+         and renamed here `c.collect_concat.each { }` called flat_map on c) */
+      if (!send_site && !each_site) {
+        nt_node_set_str(nt, id, "orig_name", cn0);
+        nt_node_set_str(nt, id, "name", alias->target);
+      }
+      cn0 = alias->target;
+    }
+    int bi = builtin_enum_name_index(cn0);
+    if (bi < 0 || !enum_site_has_gdef(x, bi)) RET(1);
+    if (enum_site_gdef_int(x, bi, "enum_self_only") && !nt_ignore_visibility(nt, id)) RET(1);
+    int in_copy = (int)nt_int(nt, id, "enum_in_copy", -1), rec = -1;
+    for (int a = in_copy; a >= 0 && rec < 0; a = (int)nt_int(nt, a, "enum_in_copy", -1))
+      if ((int)nt_int(nt, a, "enum_bi", -1) == bi) rec = a;
+    if (rec >= 0) {
+      nt_node_set_int(nt, id, "enum_copy", rec);
+      /* a reopening's method calling its name on an Array (`[1].take_while`
+         in its own take_while) takes the builtins/ copy all the same */
+      if (bi < x->nbdef && enum_site_has_bdef(x, bi) && nt_int(nt, rec, "enum_prog_def", 0) &&
+          !enum_own_copy(nt, enum_site_bdef(c, x, bi), bi, id, in_copy, site_seq[bi]++, &nb, &nbn, &cap)) RET(0);
+      RET(1);
+    }
+    int cbase = nt->count;
+    int copy = x->from_keep ? enum_keep_fresh(c, bi, 0) : nt_clone_subtree(nt, x->gdef[bi]);
+    if (copy < 0) RET(0);
+    char cn[256]; snprintf(cn, sizeof cn, "__enum_%s__%d", sp_builtin_enum_names[bi], site_seq[bi]++);
+    nt_node_set_str(nt, copy, "name", cn);
+    nt_node_set_int(nt, copy, "private_helper", 1);   /* no Ruby method (comp_scope_is_private_helper) */
+    nt_node_set_int(nt, copy, "enum_site", id);   /* the call it serves (enum_copy_site) */
+    if (bi >= x->nbuiltin) nt_node_set_int(nt, copy, "enum_own_def", 1);   /* a reopening's method (desugar_builtin_enum_calls) */
+    if (enum_site_gdef_int(x, bi, "enum_prog_def")) nt_node_set_int(nt, copy, "enum_prog_def", 1);
+    nt_node_set_int(nt, id, "enum_copy", copy);
+    /* the calls in the copy are its sites, the walk reaches them below */
+    nt_node_set_int(nt, copy, "enum_bi", bi);
+    nt_node_set_int(nt, copy, "enum_in_copy", in_copy);
+    for (int j = cbase; j < nt->count; j++)
+      if (j != copy && nt_kind(nt, j) == NK_CallNode) nt_node_set_int(nt, j, "enum_in_copy", copy);
+    { int sb = nt_ref(nt, id, "block");
+      if (bi < x->nbuiltin && sb >= 0 && nt_kind(nt, sb) == NK_BlockNode) bi_flag_dead_else(nt, copy); }
+    if (nbn >= cap) { cap *= 2; int *g = (int *)realloc(nb, sizeof(int) * (size_t)cap); if (!g) RET(0); nb = g; }
+    nb[nbn++] = copy;
+    /* the builtins/ definition the reopening replaced, for a receiver whose
+       class has its own method of the name (enum_copy_own) */
+    if (bi < x->nbdef && enum_site_has_bdef(x, bi) &&
+        !enum_own_copy(nt, enum_site_bdef(c, x, bi), bi, id, in_copy, site_seq[bi] - 1, &nb, &nbn, &cap)) RET(0);
+    RET(1);
+#undef RET
+}
+
 /* Does the program call a method whose call a later pass writes: a send of
    a name it holds rather than spells (`send(m)`, `public_send("#{q}_by")`,
    `map(&m)`), whose arms desugar_dynamic_send makes inside the fixpoint, or
@@ -19690,6 +19834,7 @@ static int bi_program_calls_late(const NodeTable *nt, int n0) {
 }
 
 int desugar_builtins(Compiler *c) {
+  if (g_enum_keep) { nt_free(g_enum_keep); g_enum_keep = NULL; }
   if (sp_builtin_enum_names_n == 0) return 0;
   BiRoots br = { .n = 0 };
   NodeTable *nt = (NodeTable *)c->nt;
@@ -19859,8 +20004,6 @@ int desugar_builtins(Compiler *c) {
   int n0 = nt->count;   /* the program's own nodes (the generics among them): the call sites to clone for */
   /* the numbers carry on across calls: a second pass's copies must not
      take names the first pass's already have */
-  static int *site_seq = NULL;
-  static int site_seq_n = 0;
   if (site_seq_n < sp_builtin_enum_names_n + 1) {
     int *g = (int *)realloc(site_seq, sizeof(int) * (size_t)(sp_builtin_enum_names_n + 1));
     if (!g) { free(gdef); free(bdef); free(nb); return 0; }
@@ -19948,118 +20091,73 @@ int desugar_builtins(Compiler *c) {
     if (id == own_lo) id = n0;
     if (id >= nt->count) break;
     if (nt_kind(nt, id) != NK_CallNode || (id < n0 && in_generic[id]) || nt_int(nt, id, "enum_dead_arm", 0)) continue;
-    const char *cn0 = nt_str(nt, id, "name");
-    int send_site = 0;   /* cn0 is a literal send's name */
-    int each_site = 0;   /* cn0 is the inner call's name, on the outer each */
-    int cr0 = nt_ref(nt, id, "receiver");   /* the receiver of the call cn0 names */
-    /* `enum.with_object(memo)` is renamed to each_with_object by the
-       Enumerator desugar inside the fixpoint, after this pass: give it its
-       copy under the name it will have. `recv.m(args).each { blk }` becomes
-       `recv.m(args) { blk }` there too, on the OUTER node (#4332), so that
-       node takes a copy of the inner's name. */
-    if (cn0 && sp_streq(cn0, "each") && nt_ref(nt, id, "block") >= 0) {
-      int er = nt_ref(nt, id, "receiver");
-      if (er >= 0 && nt_kind(nt, er) == NK_CallNode && nt_ref(nt, er, "block") < 0) { cn0 = nt_str(nt, er, "name"); cr0 = nt_ref(nt, er, "receiver"); each_site = 1; }
-    }
-    if (cn0 && sp_streq(cn0, "with_object")) cn0 = "each_with_object";
-    /* `arr.rfind.each { blk }`: only a typed Array chains (a poly receiver's
-       blockless rfind is not an Enumerator), and the typed lowering has
-       already turned the blockless inner call into `arr.reverse.find`, which
-       the chain rule then hands to this outer node. The site's copy is the
-       find the call ends up named, not the rfind it was written as, or the
-       copy reverses an array that arrives reversed */
-    if (each_site && cn0 && sp_streq(cn0, "rfind")) cn0 = "find";
-    /* Array#index with a block and no argument is find_index, renamed so in
-       the fixpoint once the receiver is an Array (desugar_builtin_enum_calls);
-       so is the block-only arm a delegator's `index(*args, &block)` splits
-       into (desugar_builtin_splat_forward), which keeps this site's copy */
-    if (cn0 && sp_streq(cn0, "index") && nt_ref(nt, id, "block") >= 0 && nt_ref(nt, id, "receiver") >= 0) {
-      int ia = nt_ref(nt, id, "arguments"), iac = 0;
-      const int *iav = ia >= 0 ? nt_arr(nt, ia, "arguments", &iac) : NULL;
-      if (iac == 0 || (iac == 1 && nt_kind(nt, iav[0]) == NK_SplatNode)) cn0 = "find_index";
-    }
-    /* `recv.send(:tally)` / public_send / __send__ with a literal name is
-       retargeted onto `recv.tally` inside the fixpoint
-       (desugar_public_send_recv), after this pass: give it its copy under
-       the name it will have, or the retargeted call found no definition and
-       raised NoMethodError for an Array's own tally */
-    if (cn0 && (sp_streq(cn0, "send") || sp_streq(cn0, "public_send") || sp_streq(cn0, "__send__")) &&
-        nt_ref(nt, id, "receiver") >= 0) {
-      int sa = nt_ref(nt, id, "arguments"), sac = 0;
-      const int *sav = sa >= 0 ? nt_arr(nt, sa, "arguments", &sac) : NULL;
-      if (sac >= 1 && nt_kind(nt, sav[0]) == NK_SymbolNode && nt_str(nt, sav[0], "value")) {
-        cn0 = nt_str(nt, sav[0], "value");
-        send_site = 1;
-      }
-    }
-    /* collect_concat is flat_map under another name, and detect find: the
-       call takes the name the definition has (LR_ENUM_NAME's rows). A class
-       of the program with its own method of the alias keeps it: the rewrite
-       answers a receiver of that class by the name the call was written
-       with (orig_name), where a program-wide test left an Array's
-       collect_concat no method at all. A class method or a top-level
-       method of the alias keeps every call of it as written
-       (program_defines_name_off_class), and a top-level one each call
-       that can reach it. */
-    const LowerRow *alias = lower_row_named(LR_ENUM_NAME, cn0);
-    if (alias && builtin_enum_name_index(alias->target) >= 0 &&
-        !program_defines_name_off_class(nt, n0, alias->name, cr0)) {
-      /* (a send keeps its own name until desugar_public_send_recv
-         retargets it, which renames it so: renamed here, `a.send(:detect)`
-         was a call of find with :detect for its argument; an outer each
-         keeps its own too, the inner call is renamed where it is visited,
-         and renamed here `c.collect_concat.each { }` called flat_map on c) */
-      if (!send_site && !each_site) {
-        nt_node_set_str(nt, id, "orig_name", cn0);
-        nt_node_set_str(nt, id, "name", alias->target);
-      }
-      cn0 = alias->target;
-    }
-    int bi = builtin_enum_name_index(cn0);
-    if (bi < 0 || gdef[bi] < 0) continue;
-    if (nt_int(nt, gdef[bi], "enum_self_only", 0) && !nt_ignore_visibility(nt, id)) continue;
-    int in_copy = (int)nt_int(nt, id, "enum_in_copy", -1), rec = -1;
-    for (int a = in_copy; a >= 0 && rec < 0; a = (int)nt_int(nt, a, "enum_in_copy", -1))
-      if ((int)nt_int(nt, a, "enum_bi", -1) == bi) rec = a;
-    if (rec >= 0) {
-      nt_node_set_int(nt, id, "enum_copy", rec);
-      /* a reopening's method calling its name on an Array (`[1].take_while`
-         in its own take_while) takes the builtins/ copy all the same */
-      if (bi < nbdef && bdef[bi] >= 0 && nt_int(nt, rec, "enum_prog_def", 0) &&
-          !enum_own_copy(nt, bdef[bi], bi, id, in_copy, site_seq[bi]++, &nb, &nbn, &cap)) break;
-      continue;
-    }
-    int cbase = nt->count;
-    int copy = nt_clone_subtree(nt, gdef[bi]);
-    if (copy < 0) break;
-    char cn[256]; snprintf(cn, sizeof cn, "__enum_%s__%d", sp_builtin_enum_names[bi], site_seq[bi]++);
-    nt_node_set_str(nt, copy, "name", cn);
-    nt_node_set_int(nt, copy, "private_helper", 1);   /* no Ruby method (comp_scope_is_private_helper) */
-    nt_node_set_int(nt, copy, "enum_site", id);   /* the call it serves (enum_copy_site) */
-    if (bi >= nbuiltin) nt_node_set_int(nt, copy, "enum_own_def", 1);   /* a reopening's method (desugar_builtin_enum_calls) */
-    if (nt_int(nt, gdef[bi], "enum_prog_def", 0)) nt_node_set_int(nt, copy, "enum_prog_def", 1);
-    nt_node_set_int(nt, id, "enum_copy", copy);
-    /* the calls in the copy are its sites, the walk reaches them below */
-    nt_node_set_int(nt, copy, "enum_bi", bi);
-    nt_node_set_int(nt, copy, "enum_in_copy", in_copy);
-    for (int j = cbase; j < nt->count; j++)
-      if (j != copy && nt_kind(nt, j) == NK_CallNode) nt_node_set_int(nt, j, "enum_in_copy", copy);
-    { int sb = nt_ref(nt, id, "block");
-      if (bi < nbuiltin && sb >= 0 && nt_kind(nt, sb) == NK_BlockNode) bi_flag_dead_else(nt, copy); }
-    if (nbn >= cap) { cap *= 2; int *g = (int *)realloc(nb, sizeof(int) * (size_t)cap); if (!g) break; nb = g; }
-    nb[nbn++] = copy;
-    /* the builtins/ definition the reopening replaced, for a receiver whose
-       class has its own method of the name (enum_copy_own) */
-    if (bi < nbdef && bdef[bi] >= 0 &&
-        !enum_own_copy(nt, bdef[bi], bi, id, in_copy, site_seq[bi] - 1, &nb, &nbn, &cap)) break;
+    EnumSiteCtx x = { nt, n0, in_generic, gdef, bdef, nbdef, nbuiltin, 0 };
+    if (!enum_site_one(c, &x, id, &nb, &nbn, &cap)) break;
   }
   free(in_generic);
   nt_node_set_arr(nt, top, "body", nb, nbn);
+  /* the generic definitions, kept apart from the table for a site the walk
+     adds (a class_eval text's def calling partition: enum_sites_after_graft) */
+  if (g_enum_keep) nt_free(g_enum_keep);
+  free(g_enum_keep_g); free(g_enum_keep_b);
+  g_enum_keep = nt_new_table();
+  g_enum_keep_n = sp_builtin_enum_names_n; g_enum_keep_nbdef = nbdef; g_enum_keep_nbuiltin = nbuiltin;
+  g_enum_keep_g = malloc(sizeof(int) * (size_t)(g_enum_keep_n + 1));
+  g_enum_keep_b = malloc(sizeof(int) * (size_t)(nbdef + 1));
+  if (!g_enum_keep || !g_enum_keep_g || !g_enum_keep_b) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int i = 0; i < g_enum_keep_n; i++) g_enum_keep_g[i] = gdef[i] >= 0 ? nt_import_subtree(g_enum_keep, nt, gdef[i]) : -1;
+  for (int i = 0; i < nbdef; i++) g_enum_keep_b[i] = bdef[i] >= 0 ? nt_import_subtree(g_enum_keep, nt, bdef[i]) : -1;
   for (int i = 0; i < sp_builtin_enum_names_n; i++) if (gdef[i] >= 0) nt_subtree_blank(nt, gdef[i]);
   for (int i = 0; i < nbdef; i++) if (bdef[i] >= 0) nt_subtree_blank(nt, bdef[i]);
   comp_grow_node_arrays(c);
   free(gdef); free(bdef); free(nb);
   return 1;
+}
+
+/* The calls under the statements body[at..at + n), which a splice under the
+   walk brought in (a class_eval text's, a hook's body): each site of a
+   builtin's Ruby implementation not yet served takes its copy of the generic
+   definition, as the step gave the program's own sites (enum_site_one), the
+   copies joining the entry file's top level, lowered with the steps run so
+   far, where the walk reaches them. */
+int enum_sites_after_graft(Compiler *c, HostStep *h, int body, int at, int n) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  if (!g_enum_keep || !h || n <= 0) return 0;
+  int root = nt->root_id, top = root >= 0 ? nt_ref(nt, root, "statements") : -1;
+  if (top < 0) return 0;
+  int bn0 = 0; const int *st = nt_arr(nt, body, "body", &bn0);
+  if (at + n > bn0) return 0;
+  int lo = nt->count, nids = 0;
+  int *ids = nt_subtree_ids(nt, st + at, n, &nids);
+  if (!ids) return 0;
+  int nbn = 0, cap = 16;   /* (the copies' list grows by doubling: never from 0) */
+  int *nb = malloc(sizeof(int) * (size_t)cap);
+  if (!nb) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  EnumSiteCtx x = { nt, 0, NULL, NULL, NULL, g_enum_keep_nbdef, g_enum_keep_nbuiltin, 1 };
+  int ok = 1;
+  for (int k = 0; k < nids && ok; k++) {
+    int id = ids[k];
+    if (nt_kind(nt, id) != NK_CallNode || nt_int(nt, id, "enum_dead_arm", 0) || nt_int(nt, id, "enum_copy", -1) >= 0) continue;
+    ok = enum_site_one(c, &x, id, &nb, &nbn, &cap);
+  }
+  free(ids);
+  for (int id = lo; id < nt->count && ok; id++) {   /* the copies' own sites */
+    if (nt_kind(nt, id) != NK_CallNode || nt_int(nt, id, "enum_dead_arm", 0)) continue;
+    ok = enum_site_one(c, &x, id, &nb, &nbn, &cap);
+  }
+  if (nbn) {
+    int bn = 0; const int *bb = nt_arr(nt, top, "body", &bn);
+    int *all = malloc(sizeof(int) * (size_t)(bn + nbn));
+    if (!all) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    memcpy(all, bb, sizeof(int) * (size_t)bn);
+    memcpy(all + bn, nb, sizeof(int) * (size_t)nbn);
+    nt_node_set_arr(nt, top, "body", all, bn + nbn);
+    free(all);
+    comp_grow_node_arrays(c);
+    host_lower_now(c, h, root, top, bn, nbn, -1);
+  }
+  free(nb);
+  return nbn > 0;
 }
 
 /* Is vn the name of a parameter among the first n0
@@ -36470,7 +36568,7 @@ static int sce_text_walk_safe(Compiler *c, struct SceFacts *f, NodeTable *t, con
     case NK_CallNode:
       ok = (top && is_define_method_name(nm)) ||
            (!is_load_effect_call(nm) && !is_reflective_access(nm) && !is_definition_hook_name(nm) &&
-            !is_singleton_class_name(nm) && !is_eval_exec_family(nm) && !sce_spliced_name(nm));
+            !is_singleton_class_name(nm) && !is_eval_exec_family(nm));
       break;
     default: break;
     }
@@ -37769,6 +37867,7 @@ int sce_walk_frame(Compiler *c, HostStep *h, int frame) {
     if (ch) {
       changed = 1;
       host_lower_now(c, h, frame, body, i, n, frame);   /* (the text runs in the body's frame: its locals are the body's) */
+      enum_sites_after_graft(c, h, body, i, n);   /* (a builtin's Ruby implementation the text calls: its site's copy) */
     }
     i += n - 1;
   }

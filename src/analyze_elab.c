@@ -743,11 +743,18 @@ static void elab_walk(ElabWalk *w, int id, ElabPos pos) {
     }
     for (int i = 0; pass == 1 && i < na; i++) {
       int m = 0;
-      const int *v = nt_arr_at(nt, id, i, &m);
+      const int *v0 = nt_arr_at(nt, id, i, &m);
+      /* the children as the loop begins, copied: a graft under the walk (a
+         class_eval text's statements, the copies a builtin's site takes at
+         the top level) may move the array, and the walk visits what it saw */
+      int vbuf[64], *v = m <= 64 ? vbuf : malloc(sizeof(int) * (size_t)m);
+      if (!v) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      memcpy(v, v0, sizeof(int) * (size_t)m);
       for (int j = 0; j < m; j++) {
         ElabPos q = elab_child(w->c, id, v[j], &pos);
         if (q.kind != EP_NODE || w->reg) elab_walk(w, v[j], q);
       }
+      if (v != vbuf) free(v);
     }
   }
   if (!w->reg && nt_kind(nt, id) == NK_LoadNode && pos.kind != EP_NODE) elab_site_file(w, id, &pos);
@@ -15642,7 +15649,11 @@ int host_splice(Compiler *c, HostStep *h, int owner, int body, int at, int n, co
   n = sce_span(c, h, owner, body, at, n, locals, gone);
   int bn = 0;
   const int *st = nt_arr(c->nt, body, "body", &bn);
-  if (h->now && at + n <= bn) { host_lower_now(c, h, owner, body, at, n, -1); return n; }
+  if (h->now && at + n <= bn) {
+    host_lower_now(c, h, owner, body, at, n, -1);
+    enum_sites_after_graft(c, h, body, at, n);   /* (a builtin's Ruby implementation a spliced statement calls: its site's copy) */
+    return n;
+  }
   for (int i = at; i < at + n && i < bn; i++) {
     if (h->nspans + 4 > h->cspans) {
       h->cspans = h->cspans ? h->cspans * 2 : 64;

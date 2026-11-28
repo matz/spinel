@@ -2318,12 +2318,25 @@ static int sp_process_redirect_slot(sp_RbVal key) {
   return strcmp(name, "in") == 0 ? 0 : strcmp(name, "out") == 0 ? 1 :
          strcmp(name, "err") == 0 ? 2 : -1;
 }
+/* The descriptor a key of the options names, when it is past the standard
+   streams: an Integer, or an IO by its fileno; else -1. */
+static int sp_process_past_std_fd(sp_RbVal key) {
+  if (key.tag == SP_TAG_INT) return key.v.i > 2 && key.v.i <= 0x7fffffff ? (int)key.v.i : -1;
+  if (key.tag == SP_TAG_OBJ && key.cls_id == SP_BUILTIN_IO && key.v.p) {
+    sp_int fd = sp_File_fileno((sp_File *)key.v.p);
+    return fd > 2 ? (int)fd : -1;
+  }
+  return -1;
+}
 static int sp_process_redirect_group(sp_RbVal key) {
   if (!sp_rbval_is_array(key)) return 0;
   int mask = 0;
   sp_int n = sp_poly_length(key);
   for (sp_int j = 0; j < n; j++) {
-    int slot = sp_process_redirect_slot(sp_poly_arr_get(key, j));
+    sp_RbVal m = sp_poly_arr_get(key, j);
+    int slot = sp_process_redirect_slot(m);
+    /* (a member past 2 is sp_process_redirect_past_std's: `[1, 3] => f`) */
+    if (slot < 0 && sp_process_past_std_fd(m) > 2) continue;
     if (slot < 0) return 0;
     mask |= 1 << slot;
   }
@@ -2351,6 +2364,96 @@ sp_RbVal sp_process_redirect_value(sp_RbVal opts, int slot, sp_bool *found, int 
     }
   }
   return sp_box_nil();
+}
+
+/* The open flags of a mode of a redirection to a file: an Integer as it
+   is, or "r", "w", "a" with "+" and the "b" and "t" that change nothing
+   here; -1 for another String. */
+static int sp_process_mode_flags(sp_RbVal mode) {
+  if (mode.tag == SP_TAG_INT) return (int)mode.v.i;
+  if (!sp_rbval_is_string(mode)) return -1;
+  const char *m = sp_rbval_string_bytes(mode);
+  int plus = 0;
+  for (const char *p = m + (*m ? 1 : 0); *p; p++) {
+    if (*p == '+') plus = 1;
+    else if (*p != 'b' && *p != 't') return -1;
+  }
+  switch (*m) {
+    case 'r': return plus ? O_RDWR : O_RDONLY;
+    case 'w': return (plus ? O_RDWR : O_WRONLY) | O_CREAT | O_TRUNC;
+    case 'a': return (plus ? O_RDWR : O_WRONLY) | O_CREAT | O_APPEND;
+    default: return -1;
+  }
+}
+static void sp_process_past_std_push(sp_PolyArray *a, int dst, int kind, sp_int src, sp_RbVal path, int flags, int perm) {
+  sp_PolyArray_push(a, sp_box_int(dst));
+  sp_PolyArray_push(a, sp_box_int(kind));
+  sp_PolyArray_push(a, sp_box_int(src));
+  sp_PolyArray_push(a, path);
+  sp_PolyArray_push(a, sp_box_int(flags));
+  sp_PolyArray_push(a, sp_box_int(perm));
+}
+/* Process.spawn's redirections of the descriptors past 2, as slot 10 of the
+   options array of lib/sp_process.c reads them: six values for each
+   (the kinds are its SP_SPAWN_X_*: 0 a dup of a descriptor of this
+   process, 1 a close, 2 a dup of a descriptor of the child, 3 a file the
+   child opens). A key is an Integer past 2, an IO whose fileno is past 2,
+   or an Array with such a member. A value is an IO or an Integer (the
+   descriptor of this process), :close, [:child, :in|:out|:err|n], a path
+   (the child opens it to read, as CRuby does for a descriptor past 2), or
+   [path, mode] and [path, mode, perm]. The members of a group share one
+   open file: those after the first are dups of it in the child, of the
+   standard stream of the group when it has one. nil when the options have
+   no such key. */
+sp_RbVal sp_process_redirect_past_std(sp_RbVal opts) {
+  SP_GC_ROOT_RBVAL(opts);
+  if (sp_json_kind(opts) != 2) return sp_box_nil();
+  sp_PolyArray *a = NULL;
+  SP_GC_ROOT(a);
+  for (sp_int j = 0, n = sp_poly_length(opts); j < n; j++) {
+    sp_RbVal key, value;
+    sp_poly_hash_pair(opts, j, &key, &value);
+    SP_GC_ROOT_RBVAL(key);
+    SP_GC_ROOT_RBVAL(value);
+    int group = sp_rbval_is_array(key);
+    sp_int members = group ? sp_poly_length(key) : 1;
+    int first = -1;   /* the descriptor of the child the later members dup */
+    if (group)
+      for (sp_int i = 0; i < members && first < 0; i++) first = sp_process_redirect_slot(sp_poly_arr_get(key, i));
+    for (sp_int i = 0; i < members; i++) {
+      int dst = sp_process_past_std_fd(group ? sp_poly_arr_get(key, i) : key);
+      if (dst < 0) continue;
+      if (!a) a = sp_PolyArray_new();
+      if (first >= 0) { sp_process_past_std_push(a, dst, 2, first, sp_box_nil(), 0, 0); continue; }
+      first = dst;
+      if (value.tag == SP_TAG_INT) sp_process_past_std_push(a, dst, 0, value.v.i, sp_box_nil(), 0, 0);
+      else if (value.tag == SP_TAG_OBJ && value.cls_id == SP_BUILTIN_IO && value.v.p)
+        sp_process_past_std_push(a, dst, 0, sp_File_fileno((sp_File *)value.v.p), sp_box_nil(), 0, 0);
+      else if (value.tag == SP_TAG_SYM && value.v.i == sp_sym_intern("close"))
+        sp_process_past_std_push(a, dst, 1, -1, sp_box_nil(), 0, 0);
+      else if (sp_rbval_is_string(value)) sp_process_past_std_push(a, dst, 3, -1, value, O_RDONLY, 0644);
+      else if (sp_rbval_is_array(value)) {
+        sp_int vn = sp_poly_length(value);
+        sp_RbVal v0 = vn > 0 ? sp_poly_arr_get(value, 0) : sp_box_nil();
+        sp_RbVal v1 = vn > 1 ? sp_poly_arr_get(value, 1) : sp_box_nil();
+        if (vn == 2 && v0.tag == SP_TAG_SYM && v0.v.i == sp_sym_intern("child")) {
+          int c = sp_process_redirect_slot(v1);
+          if (c < 0) c = sp_process_past_std_fd(v1);
+          if (c < 0) sp_raise_cls("ArgumentError", "wrong exec redirect action");
+          sp_process_past_std_push(a, dst, 2, c, sp_box_nil(), 0, 0);
+        }
+        else if (vn >= 1 && vn <= 3 && sp_rbval_is_string(v0)) {
+          int flags = vn > 1 ? sp_process_mode_flags(v1) : O_RDONLY;
+          sp_RbVal v2 = vn > 2 ? sp_poly_arr_get(value, 2) : sp_box_int(0644);
+          if (flags < 0 || v2.tag != SP_TAG_INT) sp_raise_cls("ArgumentError", "wrong exec redirect action");
+          sp_process_past_std_push(a, dst, 3, -1, v0, flags, (int)v2.v.i);
+        }
+        else sp_raise_cls("ArgumentError", "wrong exec redirect action");
+      }
+      else sp_raise_cls("ArgumentError", "wrong exec redirect action");
+    }
+  }
+  return a ? sp_box_poly_array(a) : sp_box_nil();
 }
 
 /* What a user #to_int answered, reached through the generated bridge

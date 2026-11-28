@@ -1,0 +1,26 @@
+"hi\n"
+0
+true
+"got-abc\n"
+"num\n"
+"key\n"
+"three\n"
+true
+"again\n"
+2
+"a\nb\nc\n"
+"o\nx\n"
+Errno::ENOENT
+true
+0
+"from file\n"
+0
+false
+""
+"one\ntwo\n"
+Errno::ENOENT
+""
+Errno::ECHILD
+"thread\n"
+wrong exec redirect action
+exec

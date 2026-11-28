@@ -39,6 +39,15 @@
  *                      A caller's IO or Integer fd is never in the mask.
  *   [8] env          - the Hash a call gave before the command, or nil.
  *   [9] unsetenv_others - true clears inherited entries; false/nil keeps them.
+ *  [10] past_std     - the redirections of the descriptors past 2
+ *                      (`3 => w`), or nil: a flat Array of six values each,
+ *                      which sp_process_redirect_past_std builds
+ *                      (lib/sp_poly_cold.c): the descriptor of the child,
+ *                      the kind (SP_SPAWN_X_*), a descriptor (of this
+ *                      process for a dup, of the child for [:child, n]), a
+ *                      path, its open flags and its permission. The child
+ *                      opens a path itself, so no fd of these is the
+ *                      parent's to close.
  *
  * An IO value in opts[0..2] is resolved to its fd by the codegen (which
  * has access to sp_File_fileno); a String value reaches the runtime
@@ -295,6 +304,16 @@ static int slot_to_fd(sp_RbVal v) {
   return -1;
 }
 
+/* A redirection of a descriptor past 2: a dup of a descriptor of this
+   process, a close, a dup of a descriptor of the child ([:child, :out], or
+   the first member of a group), or a file the child opens. The numbers are
+   those sp_process_redirect_past_std writes (lib/sp_poly_cold.c). */
+#define SP_SPAWN_X_DUP 0
+#define SP_SPAWN_X_CLOSE 1
+#define SP_SPAWN_X_CHILD 2
+#define SP_SPAWN_X_OPEN 3
+#define SP_SPAWN_X_MAX 32
+
 /* The options of a spawn or an exec, read from the array the generated
    program builds (the slots at the top of this file): the descriptors of
    the three standard streams, -1 for one left as it is; the process group;
@@ -307,6 +326,14 @@ typedef struct {
   const char *chdir_to;      /* NULL for none */
   sp_RbVal env;              /* nil for none */
   int unsetenv_others;
+  /* the descriptors past 2 (slot 10), in the order of the options */
+  int nx;
+  int xdst[SP_SPAWN_X_MAX];          /* the descriptor of the child */
+  int xkind[SP_SPAWN_X_MAX];         /* SP_SPAWN_X_* */
+  int xsrc[SP_SPAWN_X_MAX];          /* DUP: a descriptor of this process; CHILD: one of the child */
+  const char *xpath[SP_SPAWN_X_MAX]; /* OPEN: the file, with its flags and permission */
+  int xflags[SP_SPAWN_X_MAX], xperm[SP_SPAWN_X_MAX];
+  int xtmp[SP_SPAWN_X_MAX];          /* the source held above every target while the streams move */
 } sp_spawn_opts;
 
 /* Read the options array into *o; owned gets the fds the generated program
@@ -365,6 +392,77 @@ static void spawn_opts_read(sp_RbVal opts_box, sp_spawn_opts *o, int *owned) {
     sp_process_spawn_fail(owned, "ArgumentError", "expected true or false as unsetenv_others");
   o->unsetenv_others = clear.tag == SP_TAG_BOOL && clear.v.b;
   if (o->env.tag != SP_TAG_NIL) sp_spawn_env_check(o->env, owned);
+
+  /* Slot 10: the descriptors past 2, six values each. The paths stay the
+     Strings of the array, which the caller roots. */
+  o->nx = 0;
+  if (opts->len > 10 && opts->data[10].tag == SP_TAG_OBJ && opts->data[10].cls_id == SP_BUILTIN_POLY_ARRAY) {
+    sp_PolyArray *x = (sp_PolyArray *)opts->data[10].v.p;
+    if (x->len / 6 > SP_SPAWN_X_MAX)
+      sp_process_spawn_fail(owned, "ArgumentError", "too many redirections of descriptors past 2");
+    for (sp_int i = 0; i + 5 < x->len; i += 6) {
+      int k = o->nx++;
+      o->xdst[k] = (int)x->data[i].v.i;
+      o->xkind[k] = (int)x->data[i + 1].v.i;
+      o->xsrc[k] = (int)x->data[i + 2].v.i;
+      o->xpath[k] = sp_rbval_string_bytes(x->data[i + 3]);
+      o->xflags[k] = (int)x->data[i + 4].v.i;
+      o->xperm[k] = (int)x->data[i + 5].v.i;
+      o->xtmp[k] = -1;
+    }
+  }
+}
+
+/* The first descriptor above every target of the redirections past 2: a
+   source held from there up is not one a later dup2 or close takes. */
+static int spawn_past_std_floor(const sp_spawn_opts *o) {
+  int floor = 3;
+  for (int i = 0; i < o->nx; i++) if (o->xdst[i] >= floor) floor = o->xdst[i] + 1;
+  return floor;
+}
+
+/* The descriptors past 2, first half, before the standard streams move: a
+   source is a descriptor of this process as it is now (`3 => $stdout`
+   beside `out: f`), so each is held above every target: a dup of the
+   descriptor, or the file opened. Only async-signal-safe calls: this runs
+   in the child of a fork. 0, or -1 with errno set and *which 2 + the index
+   of the file that did not open (0 for a dup). */
+static int spawn_past_std_hold(sp_spawn_opts *o, int *which) {
+  int floor = spawn_past_std_floor(o);
+  for (int i = 0; i < o->nx; i++) {
+    int fd = -1;
+    if (o->xkind[i] == SP_SPAWN_X_DUP) {
+      fd = fcntl(o->xsrc[i], F_DUPFD_CLOEXEC, floor);
+      if (fd < 0) { *which = 0; return -1; }
+    }
+    else if (o->xkind[i] == SP_SPAWN_X_OPEN) {
+      int got = open(o->xpath[i], o->xflags[i] | O_CLOEXEC, (mode_t)o->xperm[i]);
+      if (got < 0) { *which = 2 + i; return -1; }
+      fd = got;
+      if (got < floor) {
+        fd = fcntl(got, F_DUPFD_CLOEXEC, floor);
+        int e = errno;
+        close(got);
+        if (fd < 0) { errno = e; *which = 2 + i; return -1; }
+      }
+    }
+    o->xtmp[i] = fd;
+  }
+  return 0;
+}
+
+/* The second half, after the standard streams: each target takes its held
+   source (dup2 leaves the target open across the exec), a descriptor of
+   the child as the streams and the targets before it now are, or is
+   closed. */
+static int spawn_past_std_place(sp_spawn_opts *o, int *which) {
+  for (int i = 0; i < o->nx; i++) {
+    if (o->xkind[i] == SP_SPAWN_X_CLOSE) { close(o->xdst[i]); continue; }
+    int from = o->xkind[i] == SP_SPAWN_X_CHILD ? o->xsrc[i] : o->xtmp[i];
+    if (from != o->xdst[i] && dup2(from, o->xdst[i]) < 0) { *which = 0; return -1; }
+    if (o->xtmp[i] >= 0) { close(o->xtmp[i]); o->xtmp[i] = -1; }
+  }
+  return 0;
 }
 
 /* Apply the options to this process: the directory, the rlimits, the
@@ -373,7 +471,7 @@ static void spawn_opts_read(sp_RbVal opts_box, sp_spawn_opts *o, int *owned) {
    a child (for_exec 0); an exec marks them close-on-exec instead, so a
    failed exec still has them. 0, or -1 with errno set and *which 1 for a
    chdir that failed and 0 for a redirection, as the child reports them. */
-static int spawn_opts_apply(const sp_spawn_opts *o, int for_exec, int *which) {
+static int spawn_opts_apply(sp_spawn_opts *o, int for_exec, int *which) {
   if (o->chdir_to && chdir(o->chdir_to) != 0) { *which = 1; return -1; }
   if (o->rlimit_cpu_set) {
     struct rlimit rl = { o->rlimit_cpu_val, RLIM_INFINITY };
@@ -387,6 +485,7 @@ static int spawn_opts_apply(const sp_spawn_opts *o, int for_exec, int *which) {
 #endif
   if (o->pgroup == 1) setpgid(0, 0);
   else if (o->pgroup > 1) setpgid(0, o->pgroup);
+  if (spawn_past_std_hold(o, which) != 0) return -1;
   if (apply_redirect(0, o->in_fd) != 0 || apply_redirect(1, o->out_fd) != 0 ||
       apply_redirect(2, o->err_fd) != 0) { *which = 0; return -1; }
   if (!for_exec) close_redirect_srcs(o->in_fd, o->out_fd, o->err_fd);
@@ -398,7 +497,7 @@ static int spawn_opts_apply(const sp_spawn_opts *o, int for_exec, int *which) {
       if (fl >= 0) fcntl(fds[i], F_SETFD, fl | FD_CLOEXEC);
     }
   }
-  return 0;
+  return spawn_past_std_place(o, which);
 }
 
 /* Become prog: execvp, through the search path of the parent's environment
@@ -543,6 +642,12 @@ sp_int sp_process_spawn(sp_RbVal cmd, sp_RbVal args_box,
     posix_spawn_file_actions_t fa;
     posix_spawnattr_t at;
     (void)rlimit_cpu_set; (void)rlimit_cpu_val; (void)rlimit_as_set; (void)rlimit_as_val;
+    /* (CreateProcess hands a child the three standard handles only) */
+    if (o.nx > 0) {
+      free(argv);
+      free(envp);
+      sp_process_spawn_fail(owned, "NotImplementedError", "a redirection of a descriptor past 2 is unimplemented on this machine");
+    }
     if (chdir_to) {
       struct stat cst;
       int sr = stat(chdir_to, &cst);
@@ -643,6 +748,12 @@ sp_int sp_process_spawn(sp_RbVal cmd, sp_RbVal args_box,
       struct pollfd hp; hp.fd = hold_fd; hp.events = POLLIN; hp.revents = 0;
       (void)poll(&hp, 1, -1);
     }
+    /* (a redirection past 2 may name the number this pipe took: the pipe
+       moves above every target first, and keeps its close-on-exec) */
+    if (o.nx > 0 && err_pipe[1] < spawn_past_std_floor(&o)) {
+      int up = fcntl(err_pipe[1], F_DUPFD_CLOEXEC, spawn_past_std_floor(&o));
+      if (up >= 0) { close(err_pipe[1]); err_pipe[1] = up; }
+    }
     { int which = 0;
       if (spawn_opts_apply(&o, 0, &which) != 0) {
         int fail[2] = { errno, which };
@@ -696,13 +807,16 @@ sp_int sp_process_spawn(sp_RbVal cmd, sp_RbVal args_box,
       do { r = SP_SIG_BLOCKING(waitpid(pid, &st, 0)); } while (r < 0 && errno == EINTR);
       /* the reaped child is the last one waited for, so $? reads its
          exit 127, as it does under CRuby */
-      if (r == pid) { sp_last_status = st; sp_last_pid = (int)pid; } }
+      /* (a file of a descriptor past 2 that does not open: CRuby opens it
+         before it forks, so $? stays as it was) */
+      if (r == pid && fail[1] < 2) { sp_last_status = st; sp_last_pid = (int)pid; } }
     sp_sig_hold_end();
     errno = fail[0];
     sp_raise_cls(errno == ENOENT ? "Errno::ENOENT" :
                  errno == EACCES ? "Errno::EACCES" :
                  "SystemCallError",
-                 sp_errf_path(errno, fail[1] == 1 && chdir_to ? chdir_to : prog));
+                 sp_errf_path(errno, fail[1] == 1 && chdir_to ? chdir_to :
+                                     fail[1] >= 2 && fail[1] - 2 < o.nx && o.xpath[fail[1] - 2] ? o.xpath[fail[1] - 2] : prog));
   }
   sp_sig_hold_end();
   return (sp_int)pid;
@@ -784,7 +898,8 @@ void sp_process_exec(sp_RbVal cmd, sp_RbVal args_box, sp_RbVal opts_box) {
   }
   int e = errno;
   environ = env_was;
-  const char *at = applied != 0 && which == 1 ? o.chdir_to : prog;
+  const char *at = applied != 0 && which == 1 ? o.chdir_to :
+                   applied != 0 && which >= 2 && o.xpath[which - 2] ? o.xpath[which - 2] : prog;
   free(argv);
   free(envp);
   errno = e;

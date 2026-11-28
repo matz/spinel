@@ -36547,74 +36547,60 @@ static void sce_text_walk(NodeTable *t, int id, int nest, int in_def, SceText *w
    (a method_defined? the step folds, a body local a closure shares, a
    builtin the step splices), so it is grafted ahead of them, as before. */
 struct SceFacts;
-static struct SceFacts *sce_facts(HostStep *h);
-static int sce_text_walk_safe(Compiler *c, struct SceFacts *f, NodeTable *t, const int *ss, int sn) {
-  if (sn <= 0) return 0;
-  for (int i = 0; i < sn; i++) {
-    int d = ss[i];
-    NodeKind dk = nt_kind(t, d);
-    const char *dn = NULL;
-    if (dk == NK_DefNode) {   /* (a def of the class's own, or of its singleton: `def self.m`) */
-      int rv = nt_ref(t, d, "receiver");
-      dn = nt_str(t, d, "name");
-      if (rv >= 0 && nt_kind(t, rv) != NK_SelfNode) return 0;
-    }
-    /* a write or read of a local: the body's, named by the body's scope as
-       the span is lowered (host_lower_now with the body for its scope), or
-       the text's own (sce_text_local) */
-    else if (dk == NK_LocalVariableWriteNode || dk == NK_LocalVariableReadNode) continue;
-    else if (dk == NK_CallNode && nt_ref(t, d, "receiver") < 0 && is_define_method_name(nt_str(t, d, "name"))) {
-      /* define_method(:m) { }: a literal name, a block; the row that makes a
-         global of a body local the block captures runs over the span, and
-         the body's write it rewrites is recorded again (elab_rerecord_write) */
-      int ac = 0, blk = nt_ref(t, d, "block");
-      const int *av = call_args(t, d, &ac);
-      dn = ac == 1 ? vis_arg_name(t, av[0]) : NULL;
-      if (!dn || blk < 0 || nt_kind(t, blk) != NK_BlockNode) return 0;
-    }
-    else continue;   /* (any other statement: a constant's write, a call, a begin; the subtree is read below) */
-    if (!dn || is_definition_hook_name(dn)) return 0;
-  }
-  int nn = 0, ok = 1;
-  int *all = nt_subtree_ids(t, ss, sn, &nn);
-  for (int i = 0; i < nn && ok; i++) {
-    int id = all[i], top = 0;
-    const char *nm = nt_str(t, id, "name");
-    for (int k = 0; k < sn && !top; k++) top = ss[k] == id;
-    switch (nt_kind(t, id)) {
-    case NK_ClassNode: case NK_ModuleNode: case NK_SingletonClassNode: case NK_AliasMethodNode:
-    case NK_AliasGlobalVariableNode: case NK_UndefNode:
-      ok = 0;
-      break;
-    case NK_DefNode: ok = top; break;
-    case NK_CallNode:
-      /* (a class_eval among the statements is grafted with the text, in its
-         frame; `__send__` is the call sce_text writes for a method named by a
-         constant's value) */
-      ok = (top && is_define_method_name(nm)) || (nm && (is_eval_exec_family(nm) || sp_streq(nm, "__send__"))) ||
-           (top && body_vis_word(t, id) && nt_ref(t, id, "arguments") >= 0) ||   /* (`private :m`, of the text's def) */
-           (!is_load_effect_call(nm) && !is_reflective_access(nm) && !is_definition_hook_name(nm) &&
-            !is_singleton_class_name(nm));
-      break;
-    default: break;
-    }
-    /* (an operator write of a local is the body's or the text's own, as its
-       plain write is; one of a constant, an instance variable or an index
-       stays the step's) */
-    if (nt_str(t, id, "binary_operator") && nt_kind(t, id) != NK_LocalVariableOperatorWriteNode) ok = 0;
-  }
-  free(all);
-  return ok && host_prewalk_shape(t, ss, sn) < 0;
-}
 /* Where the graft runs: under the walk (sce_walk_frame), where every text
-   is grafted; in the step ahead of it (desugar_static_class_eval), which
-   leaves a text the walk can graft to it; or over a splice (sce_span: a
-   hook's body, a Class.new body), which grafts every text, as the walk
-   reaches no class header for it. */
+   is grafted; in the step ahead of it (declare_class_eval_texts), which
+   grafts none and reads each text's defs for the folds ahead of the walk;
+   or over a splice (sce_span: a hook's body, a Class.new body), which
+   grafts every text, as the walk reaches no class header for it. */
 enum { SCE_SPAN, SCE_STEP, SCE_WALK };
 static int sce_where = SCE_SPAN;
-static HostStep *sce_step_host;   /* (the step's, for its facts) */
 static int sce_step_stmt = -1;    /* (the body statement whose text the step reads: sce_pending_add) */
+
+/* The names statement d of a text defines, as me_stmt_defines reads a
+   statement of the class's body: a bare def's, alias_method's new name, the
+   names attr_*, define_method and alias_method are given (a writer's with
+   its `=`). Registered against the body statement the text is written in. */
+static void sce_declare_stmt(const NodeTable *t, int d, int stmt) {
+  NodeKind k = nt_kind(t, d);
+  if (k == NK_DefNode) {
+    if (nt_ref(t, d, "receiver") < 0 && nt_str(t, d, "name")) sce_pending_add(stmt, nt_str(t, d, "name"));
+    return;
+  }
+  if (k == NK_AliasMethodNode) {
+    int nn = nt_ref(t, d, "new_name");
+    if (nn >= 0 && nt_kind(t, nn) == NK_SymbolNode && nt_str(t, nn, "value")) sce_pending_add(stmt, nt_str(t, nn, "value"));
+    return;
+  }
+  const char *cn = k == NK_CallNode ? nt_str(t, d, "name") : NULL;
+  if (!cn || (!is_attr_name(cn) && !is_define_method_name(cn) && !is_alias_method_name(cn))) return;
+  int w = is_attr_writer_family(cn), r = !sp_streq(cn, "attr_writer");
+  int an = 0; const int *av = nt_arr(t, nt_ref(t, d, "arguments"), "arguments", &an);
+  for (int a = 0; a < an; a++) {
+    NodeKind ak = nt_kind(t, av[a]);
+    const char *v = ak == NK_SymbolNode ? nt_str(t, av[a], "value") : ak == NK_StringNode ? nt_str(t, av[a], "content") : NULL;
+    if (!v) continue;
+    if (r) sce_pending_add(stmt, v);
+    if (w) { char buf[512]; snprintf(buf, sizeof buf, "%s=", v); sce_pending_add(stmt, buf); }
+  }
+}
+/* The defs of a text's statements ss[0..sn), and of the class_eval texts
+   among them, which run in the text's frame (parsed as the text was, for
+   their names) */
+static void sce_declare(const NodeTable *t, const int *ss, int sn, int stmt, const SnipFrame *sf) {
+  for (int i = 0; i < sn; i++) {
+    sce_declare_stmt(t, ss[i], stmt);
+    int str = sce_eval_string(t, ss[i]);
+    char *text = str >= 0 ? sce_text(t, str, NULL, NULL) : NULL;
+    NodeTable *in = text ? sp_parse_snippet_in(text, sf) : NULL;
+    if (in) {
+      int prog = in->root_id, stmts = prog >= 0 ? nt_ref(in, prog, "statements") : -1, n = 0;
+      const int *sv = stmts >= 0 ? nt_arr(in, stmts, "body", &n) : NULL;
+      sce_declare(in, sv, n, stmt, sf);
+      nt_free(in);
+    }
+    free(text);
+  }
+}
 
 /* Parse `text`, the eval at site, in frame fr and graft its statements into
    nt; up and k name its own locals apart (SceText). 0, or -1 when it does
@@ -36657,18 +36643,11 @@ static int sce_graft(Compiler *c, const SceFrame *fr, SceText *up, int k, const 
   int prog = tmp->root_id;
   int stmts = prog >= 0 ? nt_ref(tmp, prog, "statements") : -1;
   int sn = 0; const int *ss = stmts >= 0 ? nt_arr(tmp, stmts, "body", &sn) : NULL;
-  if (sce_where == SCE_STEP && !up && !at && sce_text_walk_safe(c, sce_facts(sce_step_host), tmp, ss, sn)) {
-    /* (left to the walk: the folds ahead of it read the statement as the text's defs) */
-    for (int i = 0; i < sn; i++) {
-      const char *dn = NULL;
-      if (nt_kind(tmp, ss[i]) == NK_DefNode) dn = nt_str(tmp, ss[i], "name");
-      else if (nt_kind(tmp, ss[i]) == NK_CallNode) {
-        int ac = 0; const int *av = call_args(tmp, ss[i], &ac);
-        dn = ac == 1 ? vis_arg_name(tmp, av[0]) : NULL;
-      }
-      if (dn && sce_step_stmt >= 0) sce_pending_add(sce_step_stmt, dn);
-    }
-    nt_free(tmp); return -2;
+  if (sce_where == SCE_STEP) {   /* (the walk grafts it; the folds ahead of the walk read the statement as its defs) */
+    SnipFrame nf = { NULL, 0, sf.line, NULL, sf.site_line, sf.site_file };   /* (sf's locals and path are freed above) */
+    sce_declare(tmp, ss, sn, sce_step_stmt, &nf);
+    nt_free(tmp);
+    return -2;
   }
   for (int i = 0; i < sn && !w.bad; i++)
     if (sce_eval_string(tmp, ss[i]) < 0) sce_text_walk(tmp, ss[i], 0, 0, &w);
@@ -37859,8 +37838,9 @@ static int sce_body(Compiler *c, HostStep *h, int owner, int body, int at, int n
 
 /* The graft over the body of class header frame, as the registration's walk
    reaches it: statement by statement, the statements a text becomes lowered
-   with the steps run so far (host_lower_now). The texts the step ahead of
-   the walk left to it (sce_text_walk_safe), and any it declined. */
+   with the steps run so far (host_lower_now). Every text written in the
+   body is grafted here (the step ahead of the walk reads their defs and
+   grafts none: declare_class_eval_texts). */
 int sce_walk_frame(Compiler *c, HostStep *h, int frame) {
   NodeTable *nt = (NodeTable *)c->nt;
   NodeKind k = nt_kind(nt, frame);
@@ -37868,7 +37848,8 @@ int sce_walk_frame(Compiler *c, HostStep *h, int frame) {
   int body = nt_ref(nt, frame, "body"), changed = 0;
   if (body < 0 || nt_kind(nt, body) != NK_StatementsNode) return 0;
   const char *ls = nt_str(nt, frame, "locals");
-  /* (the text's nodes are named as the step's are: the same C either way) */
+  /* (the text's nodes keep the pass tag the step that grafted them had, the
+     names it gives them with it: the same C as then) */
   const char *pass = nt_set_pass(nt, "desugar_static_class_eval");
   sce_where = SCE_WALK;
   for (int i = 0;; i++) {
@@ -37889,11 +37870,16 @@ int sce_walk_frame(Compiler *c, HostStep *h, int frame) {
   return changed;
 }
 
-int desugar_static_class_eval(Compiler *c, HostStep *h) {
+/* The first step: the class_eval texts written in class and module bodies
+   are the walk's to graft (sce_walk_frame); here each is read for the names
+   its defs give the class (sce_declare), which the folds ahead of the walk
+   ask about (desugar_engine_branches, desugar_def_unless_method_defined, the
+   method_defined? fold of a builtin's reopening). The tree is not changed. */
+int declare_class_eval_texts(Compiler *c, HostStep *h) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count, changed = 0;
   sce_pending_clear();
-  sce_where = SCE_STEP; sce_step_host = h;
+  sce_where = SCE_STEP;
   for (int id = 0; id < n0; id++) {
     NodeKind k = nt_kind(nt, id);
     if (k != NK_ModuleNode && k != NK_ClassNode) continue;

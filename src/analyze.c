@@ -51415,7 +51415,7 @@ static void an_phase_desugar_register(Compiler *c) {
   /* class_eval "<text known now>" -> that code, grafted into the body. First,
      so every pass below reads the grafted code as it reads the program's */
   host_begin(&hs, &lc);
-  AN_STEP_V("desugar_static_class_eval", desugar_static_class_eval(c, &hs));
+  AN_STEP_V("declare_class_eval_texts", declare_class_eval_texts(c, &hs));
   host_end(c, &hs);
   /* `m(&nil)` is the blockless call */
   lower_run(c, &lc, LW_NIL_BLOCK_ARG);

@@ -3,7 +3,7 @@
  * parse such a String in the body's frame). */
 
 /* ---- may a string module_eval / class_eval be read as the body's own code?
-   desugar_static_class_eval parses the text a class body evaluates in the
+   The class_eval graft (sce_graft) parses the text a class body evaluates in the
    body's frame, but CRuby runs it in a scope of its own, so reading it as
    the body's code answers differently when the text
    - reads or writes a local, or names one Prism cannot tell from a call

@@ -1021,7 +1021,7 @@ void sce_pending_clear(void);   /* the texts' defs the folds ahead of the walk r
 int enum_sites_after_graft(Compiler *c, HostStep *h, int body, int at, int n);   /* a grafted text's sites of a builtin's Ruby implementation take their copies */
 void host_lower_now(Compiler *c, HostStep *h, int owner, int body, int at, int n, int scope);
 void elab_rerecord_write(Compiler *c, int stmt);   /* a recorded statement a row made a global's write */
-int desugar_static_class_eval(Compiler *c, HostStep *h);   /* analyze_desugar.c: the graft over every class and module body */
+int declare_class_eval_texts(Compiler *c, HostStep *h);   /* analyze_desugar.c: the defs of every class_eval text written in a class or module body, read for the folds ahead of the walk; the walk grafts the texts (sce_walk_frame) */
 int sce_span(Compiler *c, HostStep *h, int owner, int body, int at, int n, const char *locals, const char *gone);   /* ... over spliced statements */
 void sce_facts_free(struct SceFacts *f);
 int sce_graft_text(Compiler *c, HostStep *h, int owner, const char *text, int site, LoadPoint at, int **out, int *n);   /* a macro's computed class_eval text, grafted, not placed */

@@ -3893,6 +3893,9 @@ static int yvt_poly_recv_may_reach(Compiler *c, int cid, int mi) {
   return infer_type(c, crecv) == TY_POLY;
 }
 
+/* the yield_value_type query in progress: is its method an initialize that
+   yields (-1: no query, yvt_reaches asks itself) */
+static int g_yvt_mi_init = -1;
 static int yvt_reaches(Compiler *c, int cid, int mi) {
   /* A `new` on a cycle of constructors hands its block to the initialize's
      proc-form clone as a proc (ctor_site_on_cycle), so it is no site of the
@@ -3907,8 +3910,9 @@ static int yvt_reaches(Compiler *c, int cid, int mi) {
   /* the rest is a `new` reaching an initialize: the method's side first,
      before the site's fields are read (every site asks this of every
      yielding method) */
+  if (g_yvt_mi_init == 0) return 0;
   const char *mn = c->scopes[mi].name;
-  if (!mn || !is_initialize_name(mn) || !c->scopes[mi].yields) return 0;
+  if (g_yvt_mi_init < 0 && (!mn || !is_initialize_name(mn) || !c->scopes[mi].yields)) return 0;
   const NodeTable *nt = c->nt;
   const char *cn = nt_str(nt, cid, "name");
   int crecv = nt_ref(nt, cid, "receiver");
@@ -4204,26 +4208,20 @@ TyKind yield_value_type(Compiler *c, int mi) {
   int pf_fwd = 0, poly_site = 0;
   YvtIndex *y = yvt_get(c);
   YvtIt yit; yvt_it_init(c, &yit, mi);
-  /* The call sites are taken in the program's order (prog_sort): where the
-     first site's block answers (a method specialized per site keeps one), it
-     is the site the program reaches first, whichever file holds it, not the
-     one the node table happens to number first. */
+  /* The call sites that reach the method are taken in the program's order
+     (prog_sort): where the first site's block answers (a method specialized
+     per site keeps one), it is the site the program reaches first, whichever
+     file holds it, not the one the node table happens to number first. The
+     sites of the name that do not reach it, nearly all of the list on a
+     large program (every `each` is a site of every each), are dropped first:
+     sorting them all for each method's value was a third of a Rails
+     program's fixpoint. */
   int nsite = 0, csite = 0, si = 0, *site = NULL;
+  int mi_init = is_initialize_name(c->scopes[mi].name ? c->scopes[mi].name : "") && c->scopes[mi].yields;
+  int saved_init = g_yvt_mi_init; g_yvt_mi_init = mi_init;
   for (int ii; (ii = yvt_it_next(&yit)) >= 0; ) {
-    if (nsite == csite) {
-      csite = csite ? csite * 2 : 16;
-      site = realloc(site, sizeof(int) * (size_t)csite);
-      if (!site) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-    }
-    site[nsite++] = ii;
-  }
-  prog_sort(c, site, nsite, y->ids);
-  for (int ii; (ii = si < nsite ? site[si++] : -1) >= 0; ) {
     int cid = y->ids[ii];
-    /* A `callee(...)` forward carries its block implicitly inside the `...`
-       (no explicit block node); treat it as a forwarded block too. */
     if (!yvt_may_reach(c, ii, mi)) continue;
-    int fwd_args = y->fwd ? y->fwd[ii] : yvt_call_forwards_block(nt, cid);
     /* skip calls that live inside method mi itself (recursive self-calls);
        only external call sites provide a concrete block value type */
     if ((int)(comp_scope_of(c, cid) - c->scopes) == mi) continue;
@@ -4231,6 +4229,20 @@ TyKind yield_value_type(Compiler *c, int mi) {
       if (yvt_poly_recv_may_reach(c, cid, mi)) poly_site = 1;
       continue;
     }
+    if (nsite == csite) {
+      csite = csite ? csite * 2 : 16;
+      site = realloc(site, sizeof(int) * (size_t)csite);
+      if (!site) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    }
+    site[nsite++] = ii;
+  }
+  g_yvt_mi_init = saved_init;
+  prog_sort(c, site, nsite, y->ids);
+  for (int ii; (ii = si < nsite ? site[si++] : -1) >= 0; ) {
+    int cid = y->ids[ii];
+    /* A `callee(...)` forward carries its block implicitly inside the `...`
+       (no explicit block node); treat it as a forwarded block too. */
+    int fwd_args = y->fwd ? y->fwd[ii] : yvt_call_forwards_block(nt, cid);
     /* read once the site is known to reach: the sites that do not are
        nearly all of the list */
     int blk = nt_ref(nt, cid, "block");

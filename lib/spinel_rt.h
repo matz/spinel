@@ -535,6 +535,8 @@ static inline sp_float sp_math_gamma(sp_float x){if(x<0.0&&x==floor(x))sp_raise_
 sp_int sp_process_spawn(sp_RbVal cmd, sp_RbVal args, sp_RbVal opts);
 sp_RbVal sp_process_redirect_value(sp_RbVal opts, int slot, sp_bool *found, int *prior);   /* lib/sp_poly_cold.c: needs this header's Hash walk */
 sp_RbVal sp_process_redirect_past_std(sp_RbVal opts);   /* lib/sp_poly_cold.c: the descriptors past 2, slot 10 of the options array */
+int sp_process_open_redirect_array(sp_RbVal v, int slot, int *owned);   /* lib/sp_poly_cold.c: `out: [path, mode, perm]` */
+int sp_process_open_redirect_flags(const char *path, int flags, int perm, int slot, int *owned);
 void sp_system_env_check(sp_RbVal env);   /* raises as system would, before argv is built */
 int sp_system_prog_env_args(sp_RbVal env, const char *prog, int argc, const char *const *argv);   /* lib/sp_process.c: prog NULL unless system([program, argv0], ...); env nil for none */
 void sp_process_exec(sp_RbVal cmd, sp_RbVal args, sp_RbVal opts);   /* lib/sp_process.c: Kernel#exec, with spawn's options */

@@ -70,6 +70,25 @@ Dir.mktmpdir do |d|
     Process.wait(pid)
   end
   p File.read(File.join(d, "mixed.txt"))
+  # a group with a standard stream, to a file by its path and mode
+  pid = spawn("sh", "-c", "echo o; echo t >&3", [1, 3] => [File.join(d, "log.txt"), "w"])
+  Process.wait(pid)
+  p File.read(File.join(d, "log.txt"))
+  # [:child, n] is the descriptor as the options make it, whatever their order
+  File.open(File.join(d, "a.txt"), "w") do |f|
+    pid = spawn("sh", "-c", "echo x >&3", 3 => [:child, f.fileno], f.fileno => [File.join(d, "b.txt"), "w"])
+    Process.wait(pid)
+  end
+  p File.read(File.join(d, "a.txt")), File.read(File.join(d, "b.txt"))
+  # the files a call that fails opened are closed again
+  before = Dir.children("/dev/fd").size
+  3.times do
+    begin
+      spawn("true", 3 => File.join(d, "a.txt"), 4 => File.join(d, "no", "such"))
+    rescue SystemCallError
+    end
+  end
+  p Dir.children("/dev/fd").size == before
   # a file that does not open raises, with the path, and leaves no child
   begin
     spawn("true", 3 => File.join(d, "no", "such"))
@@ -135,11 +154,25 @@ t = Thread.new do
 end
 p t.value
 
-# a value that is no redirection
-begin
-  spawn("true", 3 => 1.5)
-rescue ArgumentError => e
-  puts e.message
+# each member of a group that is closed is closed
+r, w = IO.pipe
+r3, w3 = IO.pipe
+pid = spawn("sh", "-c", "echo a >&#{w.fileno}; echo b >&#{w3.fileno}", [w.fileno, w3.fileno] => :close, err: File::NULL)
+Process.wait(pid)
+w.close
+w3.close
+p r.read, r3.read
+r.close
+r3.close
+
+# a value that is no redirection, a descriptor of the child that no option
+# makes, and a loop of them
+[{ 3 => 1.5 }, { 3 => [:child, 9] }, { 3 => [:child, 4], 4 => [:child, 3] }].each do |opts|
+  begin
+    spawn("true", opts)
+  rescue ArgumentError => e
+    puts e.message
+  end
 end
 
 # exec makes them too: the command writes to this program's output

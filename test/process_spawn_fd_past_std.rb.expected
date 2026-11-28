@@ -10,6 +10,10 @@ true
 2
 "a\nb\nc\n"
 "o\nx\n"
+"o\nt\n"
+""
+"x\n"
+true
 Errno::ENOENT
 true
 0
@@ -22,5 +26,9 @@ Errno::ENOENT
 ""
 Errno::ECHILD
 "thread\n"
+""
+""
 wrong exec redirect action
+child fd 9 is not redirected
+cyclic child fd redirection from 4
 exec

@@ -2321,7 +2321,9 @@ static int sp_process_redirect_slot(sp_RbVal key) {
 /* The descriptor a key of the options names, when it is past the standard
    streams: an Integer, or an IO by its fileno; else -1. */
 static int sp_process_past_std_fd(sp_RbVal key) {
-  if (key.tag == SP_TAG_INT) return key.v.i > 2 && key.v.i <= 0x7fffffff ? (int)key.v.i : -1;
+  /* (no descriptor is that high, and the child counts one past the highest) */
+  if (key.tag == SP_TAG_INT && key.v.i >= 0x7fffffff) sp_raise_cls("Errno::EBADF", "Bad file descriptor");
+  if (key.tag == SP_TAG_INT) return key.v.i > 2 ? (int)key.v.i : -1;
   if (key.tag == SP_TAG_OBJ && key.cls_id == SP_BUILTIN_IO && key.v.p) {
     sp_int fd = sp_File_fileno((sp_File *)key.v.p);
     return fd > 2 ? (int)fd : -1;
@@ -2385,6 +2387,17 @@ static int sp_process_mode_flags(sp_RbVal mode) {
     default: return -1;
   }
 }
+/* A standard stream sent to `[path]`, `[path, mode]` or `[path, mode,
+   perm]`: the file opened as File.open reads them, with the default of the
+   slot for no mode. The fd is this spawn's (owned[slot]). */
+int sp_process_open_redirect_array(sp_RbVal v, int slot, int *owned) {
+  sp_int n = sp_poly_length(v);
+  sp_RbVal path = sp_poly_arr_get(v, 0);
+  int flags = n > 1 ? sp_process_mode_flags(sp_poly_arr_get(v, 1)) : slot == 0 ? O_RDONLY : O_WRONLY | O_CREAT | O_TRUNC;
+  sp_RbVal perm = n > 2 ? sp_poly_arr_get(v, 2) : sp_box_int(0644);
+  if (n > 3 || flags < 0 || perm.tag != SP_TAG_INT) sp_process_spawn_fail(owned, "ArgumentError", "wrong exec redirect action");
+  return sp_process_open_redirect_flags(sp_rbval_string_bytes(path), flags, (int)perm.v.i, slot, owned);
+}
 static void sp_process_past_std_push(sp_PolyArray *a, int dst, int kind, sp_int src, sp_RbVal path, int flags, int perm) {
   sp_PolyArray_push(a, sp_box_int(dst));
   sp_PolyArray_push(a, sp_box_int(kind));
@@ -2424,7 +2437,9 @@ sp_RbVal sp_process_redirect_past_std(sp_RbVal opts) {
       int dst = sp_process_past_std_fd(group ? sp_poly_arr_get(key, i) : key);
       if (dst < 0) continue;
       if (!a) a = sp_PolyArray_new();
-      if (first >= 0) { sp_process_past_std_push(a, dst, 2, first, sp_box_nil(), 0, 0); continue; }
+      /* (each member of a group that is closed is closed: there is no file to share) */
+      int closes = value.tag == SP_TAG_SYM && value.v.i == sp_sym_intern("close");
+      if (first >= 0 && !closes) { sp_process_past_std_push(a, dst, 2, first, sp_box_nil(), 0, 0); continue; }
       first = dst;
       if (value.tag == SP_TAG_INT) sp_process_past_std_push(a, dst, 0, value.v.i, sp_box_nil(), 0, 0);
       else if (value.tag == SP_TAG_OBJ && value.cls_id == SP_BUILTIN_IO && value.v.p)

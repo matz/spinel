@@ -33,6 +33,8 @@ static void emit_spawn_fd_options(Compiler *c, Buf *b, int tkv, int tfd, int tth
       "    sp_PolyArray_push(_t%d, sp_box_int(sp_File_fileno((sp_File*)_v.v.p))); "
       "  }\nelse if (sp_rbval_is_string(_v)) { "
       "    sp_PolyArray_push(_t%d, sp_box_int(sp_process_open_redirect(sp_rbval_string_bytes(_v), %d, _t%d))); "
+      "  }\nelse if (sp_rbval_is_array(_v) && sp_poly_length(_v) >= 1 && sp_rbval_is_string(sp_poly_arr_get(_v, 0))) { "
+      "    sp_PolyArray_push(_t%d, sp_box_int(sp_process_open_redirect_array(_v, %d, _t%d))); "
       "  }\nelse if (_v.tag == SP_TAG_OBJ && _v.cls_id == SP_BUILTIN_POLY_ARRAY) { "
       "    sp_PolyArray *_a = (sp_PolyArray*)_v.v.p; "
       "    if (_a->len >= 2 && _a->data[0].tag == SP_TAG_SYM "
@@ -64,6 +66,7 @@ static void emit_spawn_fd_options(Compiler *c, Buf *b, int tkv, int tfd, int tth
       topts,
       topts,
       topts,
+      topts, i, town,
       topts, i, town,
       topts,
       topts,

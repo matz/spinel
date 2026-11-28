@@ -3183,11 +3183,15 @@ static void sp_safepoint_preempt(void) {
   /* SPINEL_WORKERS=1 (#9840): main is the only worker, and the monitor
      asks it, past a slice of its own code with a thread runnable, to give
      each runnable thread one slice, as Thread.pass from main does */
-  if (self == &g_main_thread && g_worker_cap == 0 && SP_ATOMIC_LOAD(&self->preempt_request, __ATOMIC_ACQUIRE)) {
+  /* Main is asked here by the monitor at SPINEL_WORKERS=1 (above), and by
+     a #raise aimed at it while it runs (sp_thread_raise_main_locked), with
+     any number of workers: the pass is the single worker's alone, the
+     inject fires either way. */
+  if (self == &g_main_thread && SP_ATOMIC_LOAD(&self->preempt_request, __ATOMIC_ACQUIRE)) {
     SP_ATOMIC_STORE(&self->preempt_request, 0, __ATOMIC_RELEASE);
     g_npreempt--;
     sp_recompute_safepoint_flag();
-    sp_sched_pass();
+    if (g_worker_cap == 0) sp_sched_pass();
     SCHED_UNLOCK();
     sp_fiber_fire_inject_if_pending();   /* a #raise one of them aimed at main */
     SCHED_LOCK();
@@ -5345,6 +5349,18 @@ static void sp_thread_raise_main_locked(const char *cls, const char *msg, void *
     sp_sched_unpark(t);
     SP_TH_SET_STATE(t, SP_TH_RUNNABLE);
   }
+  /* A main that runs has no wait to be woken from: it is asked to its next
+     safe point, as the monitor asks it past a quantum, and the raise fires
+     there (sp_safepoint_preempt), as CRuby raises it at the thread's next
+     check. Before, it waited for main's next wait or Thread.pass, and a
+     main that computed on, or ran a loop of a shell's, never took it. */
+#ifdef SP_THREADS
+  if (SP_TH_STATE(t) == SP_TH_RUNNING && !SP_ATOMIC_LOAD(&t->preempt_request, __ATOMIC_ACQUIRE)) {
+    SP_ATOMIC_STORE(&t->preempt_request, 1, __ATOMIC_SEQ_CST);
+    g_npreempt++;
+    sp_recompute_safepoint_flag();
+  }
+#endif
   SCHED_WAKE_MAIN();   /* a joining main pumps without being BLOCKED */
 }
 

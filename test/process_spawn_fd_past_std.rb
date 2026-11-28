@@ -70,6 +70,15 @@ Dir.mktmpdir do |d|
     Process.wait(pid)
   end
   p File.read(File.join(d, "mixed.txt"))
+  # a path is one of the directory of the call, not of chdir:
+  Dir.mkdir(File.join(d, "sub"))
+  Dir.chdir(d) do
+    File.write("rel.txt", "of the call\n")
+    File.write(File.join("sub", "rel.txt"), "of chdir\n")
+    pid = spawn("sh", "-c", "cat <&3 >&4", 3 => "rel.txt", 4 => ["rel_out.txt", "w"], chdir: "sub")
+    Process.wait(pid)
+    p File.read("rel_out.txt"), File.exist?(File.join("sub", "rel_out.txt"))
+  end
   # a group with a standard stream, to a file by its path and mode
   pid = spawn("sh", "-c", "echo o; echo t >&3", [1, 3] => [File.join(d, "log.txt"), "w"])
   Process.wait(pid)

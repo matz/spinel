@@ -533,7 +533,11 @@ static int spawn_past_std_place(sp_spawn_opts *o, int *which) {
    failed exec still has them. 0, or -1 with errno set and *which 1 for a
    chdir that failed and 0 for a redirection, as the child reports them. */
 static int spawn_opts_apply(sp_spawn_opts *o, int for_exec, int *which) {
-  if (o->chdir_to && chdir(o->chdir_to) != 0) { *which = 1; return -1; }
+  /* (before the chdir: a path of a descriptor past 2 is one of the
+     directory of the call, as the file of a standard stream is, which the
+     caller opened) */
+  if (spawn_past_std_hold(o, which) != 0) return -1;
+  if (o->chdir_to && chdir(o->chdir_to) != 0) { *which = 1; spawn_past_std_release(o); return -1; }
   if (o->rlimit_cpu_set) {
     struct rlimit rl = { o->rlimit_cpu_val, RLIM_INFINITY };
     setrlimit(RLIMIT_CPU, &rl);
@@ -546,7 +550,6 @@ static int spawn_opts_apply(sp_spawn_opts *o, int for_exec, int *which) {
 #endif
   if (o->pgroup == 1) setpgid(0, 0);
   else if (o->pgroup > 1) setpgid(0, o->pgroup);
-  if (spawn_past_std_hold(o, which) != 0) return -1;
   if (apply_redirect(0, o->in_fd) != 0 || apply_redirect(1, o->out_fd) != 0 ||
       apply_redirect(2, o->err_fd) != 0) { *which = 0; spawn_past_std_release(o); return -1; }
   if (!for_exec) close_redirect_srcs(o->in_fd, o->out_fd, o->err_fd);
@@ -907,6 +910,11 @@ void sp_process_exec(sp_RbVal cmd, sp_RbVal args_box, sp_RbVal opts_box) {
   int owned[3] = { -1, -1, -1 };
   sp_spawn_opts o;
   spawn_opts_read(opts_box, &o, owned);
+#if defined(_WIN32)
+  /* (as in sp_process_spawn: a program gets the three standard handles only) */
+  if (o.nx > 0)
+    sp_process_spawn_fail(owned, "NotImplementedError", "a redirection of a descriptor past 2 is unimplemented on this machine");
+#endif
   sp_PolyArray *args = (args_box.tag == SP_TAG_OBJ && args_box.cls_id == SP_BUILTIN_POLY_ARRAY)
                        ? (sp_PolyArray *)args_box.v.p : NULL;
   int na = args ? (int)args->len : 0;

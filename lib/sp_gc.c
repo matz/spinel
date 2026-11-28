@@ -1700,9 +1700,12 @@ void sp_gc_collect(void){
              rule now matches). What is carried is counted per
              COLLECTION since the last full, not per minor: a full promotes
              its survivors too, and at a short cadence what the previous full
-             promoted and this one frees would read as the minors' doing. */
-          size_t carried=dead/(size_t)(sp_gc_minors_since_full+1)*(size_t)SP_GC_FULL_INTERVAL;
-          if(carried>SP_GC_PROMOTED_DEAD_FLOOR){
+             promoted and this one frees would read as the minors' doing.
+             The floor is divided by the default cadence rather than the
+             rate multiplied by it, so that a large death on a 32-bit size_t
+             cannot wrap to a small reading. */
+          size_t per_collection=dead/(size_t)(sp_gc_minors_since_full+1);
+          if(per_collection>SP_GC_PROMOTED_DEAD_FLOOR/SP_GC_FULL_INTERVAL){
             if(sp_gc_full_interval>SP_GC_FULL_INTERVAL_MIN) sp_gc_full_interval/=2;
           }
           else if(sp_gc_full_interval>SP_GC_FULL_INTERVAL) sp_gc_full_interval/=2;

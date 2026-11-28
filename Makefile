@@ -3294,7 +3294,7 @@ backtrace-test: $(SPINEL) $(SP_RT_LIB)
 	$(SPINEL) -g test/backtrace/cold_split.rb -o "$$tmp/cs" >/dev/null 2>&1 || \
 	  { echo "backtrace-test: FAIL (compile cold_split)"; ok=0; }; \
 	"$$tmp/cs" > "$$tmp/cs.out" 2>&1; \
-	grep -q "in .Spike.inner'" "$$tmp/cs.out" || \
+	grep -q "in .Spike[.]inner'" "$$tmp/cs.out" || \
 	  { echo "backtrace-test: FAIL (-g: no Spike.inner frame)"; cat "$$tmp/cs.out"; ok=0; }; \
 	[ -z "$$(uniq -d "$$tmp/cs.out")" ] || \
 	  { echo "backtrace-test: FAIL (-g: one frame named twice in a row, again for its cold piece)"; cat "$$tmp/cs.out"; ok=0; }; \

@@ -30,6 +30,10 @@ const char *sp_str_crypt(const char *s, const char *salt) {SP_GC_ROOT_STR(s);SP_
      macOS ships it in unistd.h. */
   extern char *crypt(const char *key, const char *slt);
   if (!s) sp_nil_recv("crypt");
+  /* (crypt(3) reads to a NUL: a receiver with one inside is CRuby's
+     ArgumentError, not a hash of the bytes before it; a salt is read as
+     crypt(3) reads it, past its first two bytes) */
+  if (memchr(s, '\0', sp_str_byte_len(s))) sp_raise_cls("ArgumentError", "string contains null byte");
   if (!salt || !salt[0] || !salt[1])
     sp_raise_cls("ArgumentError", "salt too short (need >=2 bytes)");
   /* (no allocation runs while the lock is held: the answer is copied to
@@ -47,5 +51,7 @@ const char *sp_str_crypt(const char *s, const char *salt) {SP_GC_ROOT_STR(s);SP_
   else { strncpy(hash, d, sizeof hash - 1); hash[sizeof hash - 1] = 0; }
   SP_CRYPT_UNLOCK();
   if (fail) sp_raise_cls(sp_errno_class_name(e), sp_sprintf("%s - crypt", strerror(e)));
-  return sp_str_dup_external(hash);
+  const char *r = sp_str_dup_external(hash);
+  sp_str_mark_binary((char *)r);   /* (the hash is BINARY, as CRuby's) */
+  return r;
 }

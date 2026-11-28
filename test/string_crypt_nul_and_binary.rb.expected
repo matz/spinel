@@ -1,0 +1,5 @@
+#<Encoding:BINARY (ASCII-8BIT)>
+"abiQ6Ep3EYTHc"
+#<ArgumentError: string contains null byte>
+#<ArgumentError: salt too short (need >=2 bytes)>
+true

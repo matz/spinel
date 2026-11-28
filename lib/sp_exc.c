@@ -2378,6 +2378,7 @@ int sp_exc_protect(void (*fn)(void *), void *ctx) {
 }
 void sp_sched_trap_enter(void);   /* lib/sp_sched.c: Mutex#lock raises inside a trap proc */
 void sp_sched_trap_leave(void);
+void sp_sig_proc_left(int no);   /* lib/sp_cold.c: a delivery that waited for the proc runs next */
 void sp_trap_call(sp_Proc *p, int no) {
   sp_exc_check_depth();
   sp_exc_rootmark[sp_exc_top] = sp_gc_nroots; sp_rescue_mark[sp_exc_top] = sp_rescue_sp;
@@ -2406,6 +2407,7 @@ void sp_trap_call(sp_Proc *p, int no) {
   /* out of line on purpose: glibc marks sigprocmask __leaf__, and GCC would
      keep the unwind state in registers across a direct call */
   sp_sig_unblock(no, 0);
+  sp_sig_proc_left(no);
   sp_unwind_restore(&state);
   if (sp_unwind_kind != SP_UNWIND_NONE) sp_unwind_resume();
   sp_pending_exc_obj = eobj; sp_raise_cls(ecls, emsg);

@@ -4851,6 +4851,37 @@ static void sp_sig_left_pending(void) {
 #endif
   SP_ATOMIC_STORE(&sp_sig_pending_flag, 1, __ATOMIC_RELEASE);
 }
+/* The procs run on the main thread, where CRuby runs every trap, or on the
+   trap thread, which hands a raise to main (sp_sig_thread_dispatch). Any
+   other thread polls the same flag, and left to it would run the proc and
+   die of its raise while main slept on: it only runs the collection asked of
+   the safe point and leaves the signal recorded. */
+#ifdef SP_THREADS
+static sp_thread *sp_sig_trap_thread;
+#endif
+static int sp_sig_procs_here(void) {
+#ifdef SP_THREADS
+  sp_thread *cur = sp_Thread_current();
+  return cur == NULL || cur == sp_Thread_main() || cur == sp_sig_trap_thread;
+#else
+  return 1;
+#endif
+}
+/* The signals whose proc runs now. A second delivery of one reaches a thread
+   that does not block it (the handler blocks it on the thread of the proc
+   alone), is recorded, and would start the proc inside itself at a poll of
+   the proc's own: it waits in the count until the proc leaves, by a return
+   or a jump (sp_trap_call), and runs then. */
+static int sp_sig_active[SP_SIG_MAX];
+void sp_sig_proc_left(int no) {
+  SP_ATOMIC_STORE(&sp_sig_active[no], 0, __ATOMIC_RELEASE);
+  if (!SP_ATOMIC_LOAD(&sp_sig_pending[no], __ATOMIC_ACQUIRE)) return;
+  SP_ATOMIC_STORE(&sp_sig_pending_flag, 1, __ATOMIC_RELEASE);
+#ifdef SP_THREADS
+  int wfd = SP_ATOMIC_LOAD(&sp_sig_wake[1], __ATOMIC_ACQUIRE);
+  if (wfd >= 0) { char b = 0; ssize_t w = write(wfd, &b, 1); (void)w; }
+#endif
+}
 /* Run the procs of the signals delivered since the last call. Deliveries of
    one signal that arrive before its proc runs are one run, as the kernel
    merges them while the signal is pending. The signal is blocked while its
@@ -4859,22 +4890,26 @@ static void sp_sig_left_pending(void) {
    leaves by a raise or a throw. */
 void sp_sig_run_pending(void) {
   if (!sp_sig_take_begin()) { sp_gc_poll_run(); return; }
-  SP_ATOMIC_STORE(&sp_sig_pending_flag, 0, __ATOMIC_RELAXED);
+  int here = sp_sig_procs_here();
+  if (here) SP_ATOMIC_STORE(&sp_sig_pending_flag, 0, __ATOMIC_RELAXED);
   int dno = 0;
   if (sp_sig_default_raiser) dno = sp_sig_default_take();
   sp_sig_take_end();
   sp_gc_poll_run();   /* (a collection sp_gc_alloc_nogc asked of this safe point) */
   /* a recorded default SIGINT / SIGTERM first: its raise leaves */
   if (dno) sp_sig_default_raiser(dno);
+  if (!here) return;   /* (the flag stays up for main or the trap thread) */
   for (int no = 1; no < SP_SIG_MAX; no++) {
     if (!SP_ATOMIC_LOAD(&sp_sig_pending[no], __ATOMIC_RELAXED)) continue;
+    /* the proc of this signal runs now: sp_sig_proc_left raises the flag again */
+    int idle = 0;
+    if (!SP_ATOMIC_CAS(&sp_sig_active[no], &idle, 1, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) continue;
     /* (a Process.spawn began on another thread: the signals left wait for it) */
-    if (!sp_sig_take_begin()) { sp_sig_left_pending(); return; }
+    if (!sp_sig_take_begin()) { SP_ATOMIC_STORE(&sp_sig_active[no], 0, __ATOMIC_RELEASE); sp_sig_left_pending(); return; }
     int n = SP_ATOMIC_EXCHANGE(&sp_sig_pending[no], 0, __ATOMIC_ACQUIRE);
     sp_sig_take_end();
-    if (!n) continue;
-    sp_Proc *p = (sp_Proc *)sp_trap_proc[no];
-    if (!p) continue;
+    sp_Proc *p = n ? (sp_Proc *)sp_trap_proc[no] : NULL;
+    if (!p) { SP_ATOMIC_STORE(&sp_sig_active[no], 0, __ATOMIC_RELEASE); continue; }
     sigset_t m; sigemptyset(&m); sigaddset(&m, no);
 #ifdef SP_THREADS
     pthread_sigmask(SIG_BLOCK, &m, NULL);
@@ -4883,6 +4918,7 @@ void sp_sig_run_pending(void) {
 #endif
     sp_trap_call(p, no);
     sp_sig_unblock(no, 0);
+    sp_sig_proc_left(no);
   }
 }
 /* SP_SIG_BLOCKING, with sp_sig_async_ok raised: a default signal recorded
@@ -4948,6 +4984,7 @@ int sp_sig_trap_set(void) {
    one to the main thread, where CRuby raises it). */
 static void sp_sig_thread_body(sp_Fiber *f) {
   (void)f;
+  sp_sig_trap_thread = sp_Thread_current();
   for (;;) {
     sp_io_wait_fd_readable(sp_sig_wake[0]);
     char buf[64];

@@ -1,0 +1,10 @@
+true
+true
+true
+true
+true
+"12345678901234567890123"
+[Float, "Cannot convert into OpenSSL::BN"]
+[String, "Cannot convert into OpenSSL::BN"]
+[Seventeen, "Cannot convert into OpenSSL::BN"]
+[NilClass, "Can't convert nil into Integer"]

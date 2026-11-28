@@ -41799,11 +41799,13 @@ static void ps_index_build(Compiler *c) {
    or untyped receiver, or an object one with no method of it), PS_CALL_BUILTIN
    for a builtin's own method. It is the same for every method of the name,
    which each asks of every such call: at 800 classes each with its own `m`,
-   640,000 resolutions of 800 answers. As dyn_call_target_mi, an answer stays
-   while no type moved (comp_ty_edits), the table is the one it was asked of
-   and no scope was added. */
+   640,000 resolutions of 800 answers. An answer is kept exactly as long as
+   infer_type's memo keeps the types it was derived from (infer_memo_edits),
+   for the table it was asked of while no scope was added, and none is kept
+   or read while the memo is off (infer_memo_usable: a face, a pinned block
+   local) */
 enum { PS_CALL_ANY = -2, PS_CALL_BUILTIN = -3 };
-static struct { int *t; unsigned long *at; int count, nscopes; unsigned ver; } g_ps_tgt;
+static struct { int *t; unsigned long *at; int count, nscopes; } g_ps_tgt;
 static int ps_call_target_uncached(Compiler *c, int id, const char *cn) {
   const NodeTable *nt = c->nt;
   int r = nt_ref(nt, id, "receiver");
@@ -41824,17 +41826,20 @@ static int ps_call_target_uncached(Compiler *c, int id, const char *cn) {
 }
 static int ps_call_target(Compiler *c, int id, const char *cn) {
   const NodeTable *nt = c->nt;
-  if (id < 0 || id >= nt->count) return ps_call_target_uncached(c, id, cn);
-  if (!g_ps_tgt.t || g_ps_tgt.count != nt->count || g_ps_tgt.ver != nt->version || g_ps_tgt.nscopes != c->nscopes) {
+  if (id < 0 || id >= nt->count || !infer_memo_usable()) return ps_call_target_uncached(c, id, cn);
+  if (!g_ps_tgt.t || g_ps_tgt.count != nt->count || g_ps_tgt.nscopes != c->nscopes) {
     free(g_ps_tgt.t); free(g_ps_tgt.at);
     g_ps_tgt.t = malloc(sizeof(int) * (size_t)nt->count);
     g_ps_tgt.at = calloc((size_t)nt->count, sizeof(unsigned long));
     if (!g_ps_tgt.t || !g_ps_tgt.at) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-    g_ps_tgt.count = nt->count; g_ps_tgt.ver = nt->version; g_ps_tgt.nscopes = c->nscopes;
+    g_ps_tgt.count = nt->count; g_ps_tgt.nscopes = c->nscopes;
   }
-  if (g_ps_tgt.at[id] == comp_ty_edits + 1) return g_ps_tgt.t[id];
+  unsigned long at = infer_memo_edits(c) + 1;
+  if (g_ps_tgt.at[id] == at) return g_ps_tgt.t[id];
   int t = ps_call_target_uncached(c, id, cn);
-  g_ps_tgt.t[id] = t; g_ps_tgt.at[id] = comp_ty_edits + 1;
+  /* (the resolution's own infer_type calls can move the stamp: a node edit
+     they see first; the answer is then kept for the stamp it ended on) */
+  g_ps_tgt.t[id] = t; g_ps_tgt.at[id] = infer_memo_edits(c) + 1;
   return t;
 }
 /* Can method mi be reached only by plain positional calls resolved to it? */

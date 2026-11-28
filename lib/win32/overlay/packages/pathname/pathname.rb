@@ -40,20 +40,20 @@ class Pathname
     body == "" ? "." : body
   end
 
-  # self + other. An absolute `other` replaces the receiver entirely, and the
-  # result is cleaned, so `Pathname.new("a/b") + ".."` is `a` rather than
-  # `a/b/..`.
+  # self + other, as the base's + joins them (CRuby's Pathname#plus), with a
+  # drive's root counted as a root: an `other` that starts at one replaces
+  # the receiver, and a receiver under one is joined below it, where a ".."
+  # has nothing left to take off. File.basename knows no drive, so the
+  # base's join alone would take "C:" for a name and a ".." would cancel it.
   def +(other)
     # Every branch answers a Pathname. A method that returns its argument on
     # one path and a fresh object on another has no single type here, and the
     # boxed result made the NEXT `/` in a chain compile as numeric division.
     o = "#{other}"
     return Pathname.new(o) if Pathname.root_str(o) != ""
-    return Pathname.new(o) if @path == ""
-    return self if o == "" || o == "."
-
-    joined = Pathname.clean_str("#{@path}#{SEPARATOR}#{o}")
-    Pathname.new(Pathname.dir_form?(o, joined) ? "#{joined}#{SEPARATOR}" : joined)
+    root = Pathname.root_str(@path)
+    return Pathname.new(Pathname.plus_str(@path, o)) if root.length < 3
+    Pathname.new("#{root[0, 2]}#{Pathname.plus_str(@path[2..], o)}")
   end
 
   def absolute?

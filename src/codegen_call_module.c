@@ -56,6 +56,8 @@ static void emit_spawn_fd_options(Compiler *c, Buf *b, int tkv, int tfd, int tth
       "    }\nelse { "
       "      sp_process_spawn_fail(_t%d, \"ArgumentError\", \"bad child-array shape\"); "
       "    } "
+      "  }\nelse if (_v.tag == SP_TAG_SYM && _v.v.i == sp_sym_intern(\"close\")) { "
+      "    sp_PolyArray_push(_t%d, sp_box_int(-2)); "   /* :close: the child's descriptor is closed (SP_SPAWN_FD_CLOSE) */
       "  }\nelse { "
       "    sp_process_spawn_fail(_t%d, \"ArgumentError\", \"bad redirect type\"); "
       "  } "
@@ -74,6 +76,7 @@ static void emit_spawn_fd_options(Compiler *c, Buf *b, int tkv, int tfd, int tth
       topts,
       town,
       town,
+      topts,
       town,
       topts);
   }

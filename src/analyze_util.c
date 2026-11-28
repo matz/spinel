@@ -4903,6 +4903,11 @@ TyKind dispatch_ret_over(Compiler *c, int cid, const char *name, int cmeth, int 
   int nd = 0;
   const int *ds = call_id >= 0 && cplan_pinned(c, call_id) ? NULL : comp_descendants(c, cid, &nd);
   for (int i = 0; i < nd; i++) {
+    /* (a descendant no reached code names has no instance, and the dispatch
+       has no arm for it, as dispatch_impl_count counts: its override does not
+       widen the answer, or a call the plan binds to the one method left
+       answered that method's object as a boxed value) */
+    if (c->classes[ds[i]].unreferenced) continue;
     int kmi = call_target(c, call_id, ds[i], name, cmeth ? CT_CMETHOD : 0, NULL);
     if (kmi < 0 || kmi == base_mi) continue;
     r = ty_unify(r, call_id >= 0 && c->scopes[kmi].yields ? method_call_ret(c, kmi, call_id)

@@ -417,6 +417,12 @@ static void spawn_opts_read(sp_RbVal opts_box, sp_spawn_opts *o, int *owned) {
       o->xtmp[k] = -1;
     }
   }
+  /* A source is a descriptor of this process that is open now: asked here,
+     before the error pipe of the spawn or a held source takes the number
+     of a closed one, and the child would hand that on. */
+  for (int i = 0; i < o->nx; i++)
+    if (o->xkind[i] == SP_SPAWN_X_DUP && fcntl(o->xsrc[i], F_GETFD) < 0)
+      sp_process_spawn_fail(owned, "Errno::EBADF", "Bad file descriptor");
   /* [:child, n] names a descriptor that the options redirect, and no loop
      of them, as CRuby checks both before it starts a child */
   for (int i = 0; i < o->nx; i++) {

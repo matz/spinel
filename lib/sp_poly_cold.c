@@ -2468,6 +2468,12 @@ sp_RbVal sp_process_redirect_past_std(sp_RbVal opts) {
       else sp_raise_cls("ArgumentError", "wrong exec redirect action");
     }
   }
+#if defined(_WIN32)
+  /* CreateProcess hands a child the three standard handles only. Said
+     here, before the generated program opens a file for a standard
+     stream: a refusal after that had truncated the file of `out:`. */
+  if (a) sp_raise_cls("NotImplementedError", "a redirection of a descriptor past 2 is unimplemented on this machine");
+#endif
   return a ? sp_box_poly_array(a) : sp_box_nil();
 }
 

@@ -30,6 +30,7 @@ Errno::ECHILD
 "thread\n"
 ""
 ""
+Errno::EBADF
 wrong exec redirect action
 child fd 9 is not redirected
 cyclic child fd redirection from 4

@@ -8572,7 +8572,10 @@ static int infer_nil_chain_call(Compiler *c, int id, const NodeTable *nt, const 
        ((sp_streq(name, "slice_before") || sp_streq(name, "slice_after")) &&
         nt_ref(nt, id, "arguments") < 0))) {
     TyKind crt = infer_type(c, recv);
-    if (crt == TY_POLY_ARRAY || crt == TY_INT_ARRAY || crt == TY_FLOAT_ARRAY || crt == TY_STR_ARRAY ||
+    /* (an empty Array literal has no element type of its own, and no type
+       yet: its runs are an Array's, as a typed Array's are) */
+    int empty_lit = nt_kind(nt, recv) == NK_ArrayNode && crt != TY_POLY;
+    if (crt == TY_POLY_ARRAY || crt == TY_INT_ARRAY || crt == TY_FLOAT_ARRAY || crt == TY_STR_ARRAY || empty_lit ||
         (crt == TY_RANGE && range_enum_redispatch(c, id))) {
       *out = an_chunk_family_to_a(c, id) ? TY_POLY_ARRAY : TY_ENUMERATOR;
       return 1;

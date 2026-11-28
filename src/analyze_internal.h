@@ -918,7 +918,7 @@ int ct_in_walk_loop_block(const NodeTable *nt, const int *parent, int call);   /
 
 /* the rows, in the order the stage runs them */
 enum {
-  LW_NIL_BLOCK_ARG, LW_CONST_SET_WRITE, LW_THREAD_START, LW_MARSHAL_RESTORE, LW_SOCKET_OPEN, LW_SYSTEM_OPTIONS, LW_IO_POPEN_BLOCK,
+  LW_NIL_BLOCK_ARG, LW_GUARDED_INCLUDE, LW_CONST_SET_WRITE, LW_THREAD_START, LW_MARSHAL_RESTORE, LW_SOCKET_OPEN, LW_SYSTEM_OPTIONS, LW_IO_POPEN_BLOCK,
   LW_USER_BACKTICK, LW_LITERAL_UNDEF_METHOD, LW_EXPLICIT_INITIALIZE_CALLS, LW_NOARG_DISPLAY_WRAPPERS, LW_BIND_ATTR_HELPERS,
   LW_PAREN_BLOCK_ARG, LW_PAREN_OPERANDS, LW_SEND_CLASS_MAKERS, LW_BODY_SEND_DECL, LW_BODY_CLASS_EXEC_ARGS, LW_BUILTIN_REOPEN_SELF_CALLS, LW_BUILTIN_IVARS, LW_SELF_SUPERCLASS, LW_STRUCT_SUBCLASS_NEW_WRITE,
   LW_REFUSE_SUPERCLASS_EXPRS, LW_RESCUE_BLOCK_BODIES, LW_BIND_MEMBER_HELPERS,
@@ -1035,6 +1035,8 @@ void lower_finish(Compiler *c, LowerCtx *lc);   /* frees; under the check, repor
 
 /* the rows' functions, in the files that own the rewrites */
 LowerFn desugar_nil_block_arg_at, desugar_nil_block_arg_left;               /* analyze_desugar.c */
+LowerFn desugar_guarded_include_at, desugar_guarded_include_left;         /* analyze_desugar.c */
+LowerGate desugar_guarded_include_gate;
 LowerGate desugar_thread_start_gate, desugar_marshal_restore_gate, desugar_socket_open_gate;   /* analyze.c */
 LowerGate desugar_system_options_gate, desugar_io_popen_block_gate;
 LowerFn desugar_thread_start_at, desugar_thread_start_left;

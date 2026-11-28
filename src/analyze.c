@@ -51419,6 +51419,7 @@ static void an_phase_desugar_register(Compiler *c) {
   host_end(c, &hs);
   /* `m(&nil)` is the blockless call */
   lower_run(c, &lc, LW_NIL_BLOCK_ARG);
+  lower_run(c, &lc, LW_GUARDED_INCLUDE);            /* include M unless include?(M) -> include M */
   lower_run(c, &lc, LW_CONST_SET_WRITE);            /* M.const_set(:N, v) -> M::N = v, a constant write to every pass */
   lower_run(c, &lc, LW_THREAD_START);               /* Thread.start / .fork -> Thread.new */
   lower_run(c, &lc, LW_MARSHAL_RESTORE);            /* Marshal.restore -> Marshal.load */

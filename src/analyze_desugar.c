@@ -37709,6 +37709,78 @@ int desugar_nil_block_arg_at(Compiler *c, LowerCtx *lc, int id) {
   return 1;
 }
 
+/* `include M unless include?(M)` (Rails's AttributeMethods#alias_attribute
+   includes its AliasResolution so; a large application program writes it in
+   class bodies and in the class_eval blocks of its included hooks):
+   Module#include leaves a module already in the ancestry
+   where it is, so the guard changes nothing and the statement is the
+   include. The passes read a body's includes as its own statements, and
+   under the guard the include was never one: the module's methods were not
+   the class's, and a call of one on self was unresolved ("unsupported
+   call", NotImplementedError where it ran). Lowered to the include ahead
+   of every pass. The same constant on both sides, as written; a bare
+   include? and include, which ask and change self. */
+/* the same constant, as written: `M` and `M`, `A::M` and `A::M` */
+static int guarded_include_same_const(const NodeTable *nt, int a, int b) {
+  if (a < 0 || b < 0 || nt_kind(nt, a) != nt_kind(nt, b)) return 0;
+  const char *na = nt_str(nt, a, "name"), *nb = nt_str(nt, b, "name");
+  if (!na || !nb || !sp_streq(na, nb)) return 0;
+  if (nt_kind(nt, a) == NK_ConstantReadNode) return 1;
+  int pa = nt_ref(nt, a, "parent"), pb = nt_ref(nt, b, "parent");
+  if (pa < 0 && pb < 0) return 1;
+  return guarded_include_same_const(nt, pa, pb);
+}
+static int guarded_include_parts(const NodeTable *nt, int id, int *inc) {
+  if (nt_kind(nt, id) != NK_UnlessNode || nt_ref(nt, id, "else_clause") >= 0) return 0;
+  int pred = nt_ref(nt, id, "predicate"), sts = nt_ref(nt, id, "statements");
+  if (pred < 0 || sts < 0 || nt_kind(nt, sts) != NK_StatementsNode) return 0;
+  int n = 0; const int *b = nt_arr(nt, sts, "body", &n);
+  if (n != 1) return 0;
+  int st = b[0];
+  const char *pn = nt_kind(nt, pred) == NK_CallNode ? nt_str(nt, pred, "name") : NULL;
+  const char *sn = nt_kind(nt, st) == NK_CallNode ? nt_str(nt, st, "name") : NULL;
+  if (!pn || !sn || !sp_streq(pn, "include?") || !sp_streq(sn, "include")) return 0;
+  if (nt_ref(nt, pred, "receiver") >= 0 || nt_ref(nt, pred, "block") >= 0 ||
+      nt_ref(nt, st, "receiver") >= 0 || nt_ref(nt, st, "block") >= 0) return 0;
+  int pa = nt_ref(nt, pred, "arguments"), sa = nt_ref(nt, st, "arguments"), pc = 0, sc = 0;
+  const int *pv = pa >= 0 ? nt_arr(nt, pa, "arguments", &pc) : NULL;
+  const int *sv = sa >= 0 ? nt_arr(nt, sa, "arguments", &sc) : NULL;
+  if (pc != 1 || sc != 1 || !nt_kind_is_constant(nt_kind(nt, pv[0])) || !nt_kind_is_constant(nt_kind(nt, sv[0]))) return 0;
+  if (!guarded_include_same_const(nt, pv[0], sv[0])) return 0;
+  *inc = st;
+  return 1;
+}
+/* Not where the program answers `include?` itself -- a `def self.include?`,
+   a singleton class's, or a reopened Module's or Class's: the guard asks that
+   method, and its answer decides (test/include_guarded_by_own_include_p.rb). */
+int desugar_guarded_include_gate(Compiler *c, LowerCtx *lc) {
+  (void)lc;
+  return !cb_program_defines(c->nt, "include?", NULL);
+}
+int desugar_guarded_include_left(Compiler *c, LowerCtx *lc, int id) {
+  int inc;
+  return guarded_include_parts(c->nt, id, &inc);
+}
+int desugar_guarded_include_at(Compiler *c, LowerCtx *lc, int id) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int inc, pred = nt_ref(nt, id, "predicate");
+  if (!guarded_include_parts(nt, id, &inc)) return 0;
+  int args = nt_ref(nt, inc, "arguments");
+  long long at[3] = { nt_int(nt, inc, "node_line", 0), nt_int(nt, inc, "node_file", 0), nt_int(nt, inc, "node_col", 0) };
+  /* the arguments move to the statement; the include's and the guard's own
+     nodes are left as nothing, so no scan of the table reads them as calls */
+  nt_node_set_ref(nt, inc, "arguments", -1);
+  nt_node_reset(nt, inc, "NilNode");
+  nt_node_reset(nt, pred, "NilNode");
+  nt_node_reset(nt, id, "CallNode");
+  nt_node_set_str(nt, id, "name", "include");
+  nt_node_set_ref(nt, id, "arguments", args);
+  nt_node_set_int(nt, id, "node_line", at[0]);
+  nt_node_set_int(nt, id, "node_file", at[1]);
+  nt_node_set_int(nt, id, "node_col", at[2]);
+  return 1;
+}
+
 /* What the graft asks of the whole program, once per step (HostStep): a
    program that hooks or reopens what a graft would bypass grafts nothing,
    asked at the step's first candidate (sce_program_reflects_scoped), and

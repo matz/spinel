@@ -19827,13 +19827,21 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
        a pattern at run time) */
     static int rx_split_skip = -1;
     if (want_rx && rx_split_skip == id) want_rx = 0;
-    if (want_rx && poly_recv_cls_method_owns(c, id, name)) {
+    /* (a native class binds the name too, StringScanner#named_captures once
+       strscan loads: inference types the call by every arm, so the answer is
+       boxed, and only a value that is a Regexp takes the Regexp's) */
+    int native_owns = want_rx && an_user_defines_or_reads(c, name);
+    if (want_rx && (native_owns || poly_recv_cls_method_owns(c, id, name))) {
       want_rx = 0;
       if (nt_kind(nt, recv) == NK_LocalVariableReadNode && repr_of(c, id).kind == RK_BOXED) {
         int trx = ++g_tmp;
         Buf rbx; memset(&rbx, 0, sizeof rbx); emit_expr(c, recv, &rbx);
         emit_indent(g_pre, g_indent);
-        buf_printf(g_pre, "mrb_regexp_pattern *_t%d = sp_poly_as_pattern(%s);\n", trx, rbx.p ? rbx.p : "sp_box_nil()");
+        if (native_owns)
+          buf_printf(g_pre, "mrb_regexp_pattern *_t%d = (%s).tag == SP_TAG_OBJ && (%s).cls_id == SP_BUILTIN_REGEX ? (mrb_regexp_pattern *)(%s).v.p : NULL;\n",
+                     trx, rbx.p, rbx.p, rbx.p);
+        else
+          buf_printf(g_pre, "mrb_regexp_pattern *_t%d = sp_poly_as_pattern(%s);\n", trx, rbx.p ? rbx.p : "sp_box_nil()");
         free(rbx.p);
         Buf rx; memset(&rx, 0, sizeof rx);
         view_bind_temp(recv, trx);

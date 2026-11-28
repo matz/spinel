@@ -904,7 +904,15 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
     if (lrt == TY_STRING && lat == TY_STRING) {
       int tc = ++g_tmp;
       oint_lift_open(c, id, TY_INT, b);
-      buf_printf(b, "({ int _t%d = sp_str_cmp_bytes(", tc); emit_expr(c, recv, b); buf_puts(b, ", "); emit_expr(c, argv[0], b);
+      /* (the receiver held rooted across an operand that may allocate, as
+         the ordered operators hold it) */
+      int a0 = nt_paren_single(c->nt, argv[0]);
+      if (a0 >= 0 && nt_kind(c->nt, a0) == NK_CallNode) {
+        int tr = ++g_tmp;
+        buf_printf(b, "({ __auto_type _t%d = (", tr); emit_expr(c, recv, b);
+        buf_printf(b, "); SP_GC_ROOT(_t%d); int _t%d = sp_str_cmp_bytes(_t%d, ", tr, tc, tr); emit_expr(c, argv[0], b);
+      }
+      else { buf_printf(b, "({ int _t%d = sp_str_cmp_bytes(", tc); emit_expr(c, recv, b); buf_puts(b, ", "); emit_expr(c, argv[0], b); }
       buf_printf(b, "); (sp_int)((_t%d > 0) - (_t%d < 0)); })", tc, tc);
       oint_lift_close(c, id, b);
       return 1;
@@ -1187,6 +1195,19 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
                       " sp_cmperr_desc(_t%d))), FALSE); })",
                    tr, ts, name, to);
         free(rb.p);
+        return 1;
+      }
+      /* A receiver that is a fresh String (`"b".dup`) ahead of an operand
+         that may allocate (a call, `("abc".scan(/\\w/).join)`): the receiver
+         is held rooted while the operand runs, or a collection there freed
+         it before the compare. The operand-order wrapper holds both where
+         it takes the call; a parenthesized operand it leaves to here. */
+      int a0 = nt_paren_single(c->nt, argv[0]);
+      if (a0 >= 0 && nt_kind(c->nt, a0) == NK_CallNode) {
+        int tr = ++g_tmp;
+        buf_printf(b, "({ __auto_type _t%d = (", tr); emit_expr(c, recv, b);
+        buf_printf(b, "); SP_GC_ROOT(_t%d); (sp_str_cmp_bytes(_t%d, ", tr, tr); emit_expr(c, argv[0], b);
+        buf_printf(b, ") %s 0); })", name);
         return 1;
       }
       buf_puts(b, "(sp_str_cmp_bytes(");

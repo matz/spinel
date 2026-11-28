@@ -2184,8 +2184,6 @@ sp_Addrinfo *sp_sock_address(sp_File *f, sp_int peer) {SP_GC_ROOT(f);
     sp_raise_cls("NoMethodError",
                  sp_sprintf("undefined method '%s' for an instance of %s",
                             peer ? "remote_address" : "local_address", sp_io_kind_name(f)));
-  SP_IO_OPEN(f);
-  int fd = fileno(f->fp);
   const char *k = sp_io_kind_name(f);
   int is_unix = (strcmp(k, "UNIXSocket") == 0 || strcmp(k, "UNIXServer") == 0);
   /* The address goes to sp_addrinfo_new as a String: it roots its argument
@@ -2193,11 +2191,14 @@ sp_Addrinfo *sp_sock_address(sp_File *f, sp_int peer) {SP_GC_ROOT(f);
      collector read the byte before the array for a tag. */
   char buf[256];
   buf[0] = '\0';
+  int fd = sp_io_fd_use(f);
   if (is_unix) {
     sp_net_unix_path(fd, (int)peer, buf, (int)sizeof buf);
+    sp_io_fd_unuse(f);
     return sp_addrinfo_new(sp_str_dup_external(buf), 0, SOCK_STREAM, 1);
   }
   int port = sp_net_sock_ip(fd, (int)peer, buf, (int)sizeof buf);
+  sp_io_fd_unuse(f);
   if (port < 0) { buf[0] = '\0'; port = 0; }
   int stype = (strcmp(k, "UDPSocket") == 0) ? SOCK_DGRAM : SOCK_STREAM;
   return sp_addrinfo_new(sp_str_dup_external(buf), (sp_int)port, stype, 0);
@@ -2211,9 +2212,9 @@ const char *sp_sock_getname(sp_File *f, sp_int peer) {SP_GC_ROOT(f);
   if (!f || !f->is_sock)
     sp_raise_cls("NoMethodError",
                  sp_sprintf("undefined method '%s' for an instance of %s", m, sp_io_kind_name(f)));
-  SP_IO_OPEN(f);
   char buf[256];
-  int n = sp_net_sock_name(fileno(f->fp), (int)peer, buf, (int)sizeof buf);
+  int n = sp_net_sock_name(sp_io_fd_use(f), (int)peer, buf, (int)sizeof buf);
+  sp_io_fd_unuse(f);
   if (n < 0) {
     int e = errno;
     sp_raise_cls(sp_errno_class_name(e), sp_sprintf("%s - %s(2)", strerror(e), m));
@@ -2231,19 +2232,47 @@ static void sp_sock_require(sp_File *f, const char *m) {SP_GC_ROOT(f);SP_GC_ROOT
                  sp_sprintf("undefined method '%s' for an instance of %s", m, sp_io_kind_name(f)));
   SP_IO_OPEN(f);
 }
+/* The address a datagram socket's bind, connect or send names, resolved
+   within the socket's family into `to`: its length, or -1. The lookup
+   parks, so it runs with no use held -- a use spans no park, and a
+   Thread#kill delivered there would leave one held -- and the caller takes
+   its use for the call alone; a close meanwhile lets the descriptor go,
+   and that use raises, where the call would have reached whatever socket
+   was given the number next. A port no socket has goes to getaddrinfo as
+   the others do, which refuses it, as CRuby's does. */
+static int sp_sock_udp_addr(sp_File *f, const char *host, sp_int port, int passive,
+                            struct sockaddr_storage *to) {SP_GC_ROOT(f);SP_GC_ROOT_STR(host);
+  extern int sp_net_udp_addr(int family, const char *host, int port, int passive, void *to, int cap);
+  extern int sp_net_fd_family(int fd);
+  int family = sp_net_fd_family(fileno(sp_io_use(f)));
+  sp_io_unuse(f);
+  return sp_net_udp_addr(family, host, (int)port, passive, to, (int)sizeof *to);
+}
 sp_int sp_sock_bind(sp_File *f, const char *host, sp_int port) {SP_GC_ROOT(f);SP_GC_ROOT_STR(host);
-  extern int sp_net_udp_bind(int fd, const char *host, int port);
   sp_sock_require(f, "bind");
-  if (sp_net_udp_bind(fileno(f->fp), host, (int)port) != 0) {
+  struct sockaddr_storage at;
+  int len = sp_sock_udp_addr(f, host, port, !(host && *host), &at);
+  int rc = -1;
+  if (len >= 0) {
+    rc = bind(sp_io_fd_use(f), (const struct sockaddr *)&at, (socklen_t)len);
+    sp_io_fd_unuse(f);
+  }
+  if (rc != 0) {
     sp_sock_raise_if_unresolved("getaddrinfo");
     sp_sock_raise_errno_host_port("bind(2)", host, port);
   }
   return 0;
 }
 sp_int sp_sock_connect(sp_File *f, const char *host, sp_int port) {SP_GC_ROOT(f);SP_GC_ROOT_STR(host);
-  extern int sp_net_udp_connect(int fd, const char *host, int port);
   sp_sock_require(f, "connect");
-  if (sp_net_udp_connect(fileno(f->fp), host, (int)port) != 0) {
+  struct sockaddr_storage at;
+  int len = sp_sock_udp_addr(f, host, port, 0, &at);
+  int rc = -1;
+  if (len >= 0) {
+    rc = SP_SIG_BLOCKING(connect(sp_io_fd_use(f), (const struct sockaddr *)&at, (socklen_t)len));
+    sp_io_fd_unuse(f);
+  }
+  if (rc != 0) {
     sp_sock_raise_if_unresolved("getaddrinfo");
     sp_sock_raise_errno_host_port("connect(2)", host, port);
   }
@@ -2271,16 +2300,40 @@ static void sp_sock_sa_prepare(sp_File *f, const char *m, const char *sa, sp_int
 sp_int sp_sock_bind_sa(sp_File *f, const char *sa, sp_int salen) {SP_GC_ROOT(f);SP_GC_ROOT_STR(sa);
   struct sockaddr_storage aligned_sa;
   sp_sock_sa_prepare(f, "bind", sa, salen, &aligned_sa);
-  if (bind(fileno(f->fp), (const struct sockaddr *)&aligned_sa, (socklen_t)salen) != 0)
-    sp_sock_raise_errno_sa("bind(2)", sa, salen);
+  int rc = bind(sp_io_fd_use(f), (const struct sockaddr *)&aligned_sa, (socklen_t)salen);
+  sp_io_fd_unuse(f);
+  if (rc != 0) sp_sock_raise_errno_sa("bind(2)", sa, salen);
   return 0;
 }
 sp_int sp_sock_connect_sa(sp_File *f, const char *sa, sp_int salen) {SP_GC_ROOT(f);SP_GC_ROOT_STR(sa);
-  extern int sp_net_connect_sa(int fd, const void *sa, int len);
   struct sockaddr_storage aligned_sa;
   sp_sock_sa_prepare(f, "connect", sa, salen, &aligned_sa);
-  if (sp_net_connect_sa(fileno(f->fp), &aligned_sa, (int)salen) != 0)
-    sp_sock_raise_errno_sa("connect(2)", sa, salen);
+#ifdef SP_THREADS
+  /* A connect that does not finish at once is waited for parked, and a use
+     spans no park: the use is taken for the connect(2) and again for its
+     answer, and the wait between them is the close's to cancel, as a read's
+     is (sp_io_wait_deadline). */
+  extern int sp_net_set_nonblock(int fd);
+  int fd = sp_io_fd_use(f);
+  sp_net_set_nonblock(fd);
+  int rc = SP_SIG_BLOCKING(connect(fd, (const struct sockaddr *)&aligned_sa, (socklen_t)salen));
+  sp_io_fd_unuse(f);
+  if (rc != 0 && (errno == EINPROGRESS || errno == EINTR)) {
+    sp_io_wait_deadline(f, POLLOUT, -1.0);
+    int err = 0;
+    socklen_t elen = sizeof err;
+    rc = getsockopt(sp_io_fd_use(f), SOL_SOCKET, SO_ERROR, &err, &elen);
+    sp_io_fd_unuse(f);
+    if (rc == 0 && err) { errno = err; rc = -1; }
+  }
+#else
+  /* without threads the connect blocks in the kernel, and nothing else
+     runs to close the socket meanwhile */
+  extern int sp_net_connect_sa(int fd, const void *sa, int len);
+  int rc = sp_net_connect_sa(sp_io_fd_use(f), &aligned_sa, (int)salen);
+  sp_io_fd_unuse(f);
+#endif
+  if (rc != 0) sp_sock_raise_errno_sa("connect(2)", sa, salen);
   return 0;
 }
 /* A send on a handle with its own buffer, whose descriptor is non-blocking:
@@ -2303,19 +2356,14 @@ static sp_int sp_sock_send_waiting(sp_File *f, const char *data, sp_int len, int
   }
 }
 sp_int sp_sock_send(sp_File *f, const char *data, sp_int len, sp_int flags, const char *host, sp_int port) {SP_GC_ROOT(f);SP_GC_ROOT_STR(data);SP_GC_ROOT_STR(host);
-  extern int sp_net_udp_dest(int family, const char *host, int port, void *to, int cap);
-  extern int sp_net_fd_family(int fd);
   sp_sock_require(f, "send");
   int fl = sp_sock_int_arg(flags);   /* raises before a use is taken */
   if (f->own_buf && !host) return sp_sock_send_waiting(f, data, len, fl, NULL, 0);
   struct sockaddr_storage to;
   int tolen = 0;
   if (host && *host) {
-    /* resolved before the send takes its use: the lookup parks, a use spans
-       no park, and a Thread#kill delivered there would leave it held */
-    int family = sp_net_fd_family(fileno(sp_io_use(f)));
-    sp_io_unuse(f);
-    tolen = sp_net_udp_dest(family, host, (int)port, &to, (int)sizeof to);
+    /* resolved before the send takes its use (sp_sock_udp_addr) */
+    tolen = sp_sock_udp_addr(f, host, port, 0, &to);
     if (tolen < 0) {
       sp_sock_raise_if_unresolved("getaddrinfo");
       sp_sock_raise_errno_host_port("sendto(2)", host, port);
@@ -2502,7 +2550,9 @@ sp_PolyArray *sp_sock_recvfrom(sp_File *f, sp_int len) {SP_GC_ROOT(f);
 sp_int sp_sock_shutdown(sp_File *f, sp_int how) {SP_GC_ROOT(f);
   extern int sp_net_shutdown(int fd, int how);
   sp_sock_require(f, "shutdown");
-  if (sp_net_shutdown(fileno(f->fp), (int)how) != 0) sp_sock_raise_errno("shutdown(2)");
+  int rc = sp_net_shutdown(sp_io_fd_use(f), (int)how);
+  sp_io_fd_unuse(f);
+  if (rc != 0) sp_sock_raise_errno("shutdown(2)");
   return 0;
 }
 /* A setsockopt value as the int the option takes: an Integer, true/false as
@@ -2590,8 +2640,9 @@ sp_int sp_sock_shutdown_arg(sp_RbVal v) {SP_GC_ROOT_RBVAL(v);
 sp_int sp_sock_setsockopt(sp_File *f, sp_int level, sp_int opt, sp_int value) {SP_GC_ROOT(f);
   extern int sp_net_setsockopt_int(int fd, int level, int optname, int value);
   sp_sock_require(f, "setsockopt");
-  if (sp_net_setsockopt_int(fileno(f->fp), (int)level, (int)opt, (int)value) != 0)
-    sp_sock_raise_errno("setsockopt(2)");
+  int rc = sp_net_setsockopt_int(sp_io_fd_use(f), (int)level, (int)opt, (int)value);
+  sp_io_fd_unuse(f);
+  if (rc != 0) sp_sock_raise_errno("setsockopt(2)");
   return 0;
 }
 sp_SockOpt *sp_sock_getsockopt(sp_File *f, sp_int level, sp_int opt) {SP_GC_ROOT(f);
@@ -2599,15 +2650,20 @@ sp_SockOpt *sp_sock_getsockopt(sp_File *f, sp_int level, sp_int opt) {SP_GC_ROOT
   extern sp_SockOpt *sp_sockopt_new(sp_int family, sp_int level, sp_int optname, sp_int value);
   extern int sp_net_fd_family(int fd);
   sp_sock_require(f, "getsockopt");
+  int fd = sp_io_fd_use(f);
   errno = 0;
-  int v = sp_net_getsockopt_int(fileno(f->fp), (int)level, (int)opt);
+  int v = sp_net_getsockopt_int(fd, (int)level, (int)opt);
+  int family = sp_net_fd_family(fd);
+  sp_io_fd_unuse(f);
   /* (an option can hold -1; a failure sets errno) */
   if (v == -1 && errno != 0) sp_sock_raise_errno("getsockopt(2)");
-  return sp_sockopt_new((sp_int)sp_net_fd_family(fileno(f->fp)), level, opt, (sp_int)v);
+  return sp_sockopt_new((sp_int)family, level, opt, (sp_int)v);
 }
 sp_int sp_sock_listen(sp_File *f, sp_int backlog) {SP_GC_ROOT(f);
   sp_sock_require(f, "listen");
-  if (listen(fileno(f->fp), (int)backlog) != 0) sp_sock_raise_errno("listen(2)");
+  int rc = listen(sp_io_fd_use(f), (int)backlog);
+  sp_io_fd_unuse(f);
+  if (rc != 0) sp_sock_raise_errno("listen(2)");
   return 0;
 }
 
@@ -2617,15 +2673,15 @@ sp_int sp_sock_listen(sp_File *f, sp_int backlog) {SP_GC_ROOT(f);
    :wait_writable, otherwise the matching IO::*Wait* exception, which carries
    both its Errno parent and the IO::Wait* module (see lib/sp_exc.c). */
 /* O_NONBLOCK is set for the duration of one call and put back: leaving it on
-   would make a later blocking #gets treat EAGAIN as EOF. */
-static int sp_io_nb_begin(sp_File *f) {
-  int fd = fileno(f->fp);
+   would make a later blocking #gets treat EAGAIN as EOF. `fd` is the
+   descriptor of a handle the caller holds a use of, for the call between. */
+static int sp_io_nb_begin(int fd) {
   int fl = fcntl(fd, F_GETFL);
   if (fl >= 0 && !(fl & O_NONBLOCK)) fcntl(fd, F_SETFL, fl | O_NONBLOCK);
   return fl;
 }
-static void sp_io_nb_end(sp_File *f, int saved) {
-  if (saved >= 0 && !(saved & O_NONBLOCK)) fcntl(fileno(f->fp), F_SETFL, saved);
+static void sp_io_nb_end(int fd, int saved) {
+  if (saved >= 0 && !(saved & O_NONBLOCK)) fcntl(fd, F_SETFL, saved);
 }
 
 static ssize_t sp_io_read_chunk_timed(sp_File *f, char *buf, size_t count) {
@@ -2653,11 +2709,11 @@ static ssize_t sp_io_read_chunk_timed(sp_File *f, char *buf, size_t count) {
     }
     if (deadline == -2.0) deadline = sp_io_deadline(f);
     sp_io_wait_deadline(f, POLLIN, deadline);
-    FILE *fp = sp_io_use(f);
-    int saved = sp_io_nb_begin(f);
-    ssize_t got = SP_SIG_BLOCKING(read(fileno(fp), buf, count));
+    int fd = fileno(sp_io_use(f));
+    int saved = sp_io_nb_begin(fd);
+    ssize_t got = SP_SIG_BLOCKING(read(fd, buf, count));
     int error = errno;
-    sp_io_nb_end(f, saved);
+    sp_io_nb_end(fd, saved);
     sp_io_unuse(f);
     if (got >= 0) return got;
     if (error == EINTR || error == EAGAIN || error == EWOULDBLOCK) continue;
@@ -2716,10 +2772,12 @@ static const char *sp_sock_accepted_kind(sp_File *f) {
 sp_File *sp_sock_accept_nb(sp_File *f, sp_bool exc) {SP_GC_ROOT(f);
   extern int sp_net_accept_nb(int sfd);
   sp_sock_nb_prepare(f, "accept_nonblock");
-  int saved = sp_io_nb_begin(f);
-  int fd = sp_net_accept_nb(fileno(f->fp));
+  int lfd = sp_io_fd_use(f);
+  int saved = sp_io_nb_begin(lfd);
+  int fd = sp_net_accept_nb(lfd);
   int e = errno;
-  sp_io_nb_end(f, saved);
+  sp_io_nb_end(lfd, saved);
+  sp_io_fd_unuse(f);
   errno = e;
   if (fd >= 0) return sp_io_fdopen_sock(fd, sp_sock_accepted_kind(f));
   if (sp_sock_would_block()) {
@@ -2867,10 +2925,10 @@ const char *sp_sock_read_nb(sp_File *f, sp_int len, sp_bool exc, sp_bool is_recv
     n = (ssize_t)sp_io_take(f, buf, want);
   }
   if (n == 0) {   /* nothing held, or another reader took it first */
-    int saved = sp_io_nb_begin(f);
+    int saved = sp_io_nb_begin(fileno(fp));
     do { n = SP_SIG_BLOCKING(read(fileno(fp), buf, (size_t)len)); } while (n < 0 && errno == EINTR);
     int e = errno;
-    sp_io_nb_end(f, saved);
+    sp_io_nb_end(fileno(fp), saved);
     errno = e;
   }
   { int e = errno; sp_io_unuse(f); errno = e; }
@@ -2902,10 +2960,12 @@ const char *sp_sock_read_nb(sp_File *f, sp_int len, sp_bool exc, sp_bool is_recv
    the _n entry once converted, which keep its bytes past a NUL. */
 static sp_oint sp_sock_write_nb_len(sp_File *f, const char *data, size_t len, sp_bool exc) {SP_GC_ROOT(f);SP_GC_ROOT_STR(data);
   ssize_t n;
-  int saved = sp_io_nb_begin(f);
-  do { n = write(fileno(f->fp), data ? data : "", len); } while (n < 0 && errno == EINTR);
+  int fd = sp_io_fd_use(f);
+  int saved = sp_io_nb_begin(fd);
+  do { n = write(fd, data ? data : "", len); } while (n < 0 && errno == EINTR);
   int we = errno;
-  sp_io_nb_end(f, saved);
+  sp_io_nb_end(fd, saved);
+  sp_io_fd_unuse(f);
   errno = we;
   if (n >= 0) return sp_oint_of((sp_int)n);
   if (sp_sock_would_block()) {
@@ -2934,13 +2994,19 @@ sp_oint sp_sock_write_nb_bin(sp_File *f, const char *data, sp_bool exc) {SP_GC_R
 }
 /* connect_nonblock: an in-flight connect is IO::EINPROGRESSWaitWritable. */
 sp_oint sp_sock_connect_nb(sp_File *f, const char *host, sp_int port, sp_bool exc) {SP_GC_ROOT(f);SP_GC_ROOT_STR(host);
-  extern int sp_net_udp_connect(int fd, const char *host, int port);
   sp_sock_nb_prepare(f, "connect_nonblock");
-  int saved = sp_io_nb_begin(f);
-  int rc = sp_net_udp_connect(fileno(f->fp), host, (int)port);
-  int ce = errno;
-  sp_io_nb_end(f, saved);
-  errno = ce;
+  struct sockaddr_storage at;
+  int len = sp_sock_udp_addr(f, host, port, 0, &at);
+  int rc = -1;
+  if (len >= 0) {
+    int fd = sp_io_fd_use(f);
+    int saved = sp_io_nb_begin(fd);
+    rc = SP_SIG_BLOCKING(connect(fd, (const struct sockaddr *)&at, (socklen_t)len));
+    int ce = errno;
+    sp_io_nb_end(fd, saved);
+    sp_io_fd_unuse(f);
+    errno = ce;
+  }
   if (rc == 0) return sp_oint_of(0);
   sp_sock_raise_if_unresolved("getaddrinfo");
   if (errno == EINPROGRESS) {
@@ -2980,10 +3046,12 @@ sp_oint sp_sock_connect_nb_sa(sp_File *f, const char *sa, sp_int salen, sp_bool 
   }
   struct sockaddr_storage aligned_sa;
   memcpy(&aligned_sa, sa, (size_t)salen);
-  int saved = sp_io_nb_begin(f);
-  int rc = SP_SIG_BLOCKING(connect(fileno(f->fp), (const struct sockaddr *)&aligned_sa, (socklen_t)salen));
+  int fd = sp_io_fd_use(f);
+  int saved = sp_io_nb_begin(fd);
+  int rc = SP_SIG_BLOCKING(connect(fd, (const struct sockaddr *)&aligned_sa, (socklen_t)salen));
   int ce = errno;
-  sp_io_nb_end(f, saved);
+  sp_io_nb_end(fd, saved);
+  sp_io_fd_unuse(f);
   errno = ce;
   if (rc == 0) return sp_oint_of(0);
   /* Only EINPROGRESS is the wait: a connect still in flight answers
@@ -3051,8 +3119,15 @@ const char *sp_File_inspect(sp_File *f) {SP_GC_ROOT(f);
   const char *cls = (p[0] && p[0] != '<') ? "File" : "IO";
   if (!f->fp || f->closed) return p[0] ? sp_sprintf("#<%s:%s (closed)>", cls, p)
                           : sp_sprintf("#<IO:(closed)>");
-  /* a pipe end or a wrapped descriptor has no path: CRuby names the fd */
-  if (!p[0]) return sp_sprintf("#<IO:fd %d>", fileno(f->fp));
+  /* a pipe end or a wrapped descriptor has no path: CRuby names the fd,
+     read with a use held, as a close in another thread releases the FILE */
+  if (!p[0]) {
+    FILE *fp = sp_io_try_use(f);
+    if (!fp) return sp_sprintf("#<IO:(closed)>");
+    int fd = fileno(fp);
+    sp_io_unuse(f);
+    return sp_sprintf("#<IO:fd %d>", fd);
+  }
   return sp_sprintf("#<%s:%s>", cls, p);
 }
 
@@ -3184,7 +3259,14 @@ int sp_io_read_errno(sp_File *f) {
 
 SP_NORETURN void sp_io_raise_read_error(sp_File *f, int e, int fillbuf) {SP_GC_ROOT(f);
   const char *msg;
-  if (fillbuf) msg = sp_sprintf("%s @ io_fillbuf - fd:%d %s", strerror(e), fileno(f->fp), f->path ? f->path : "");
+  if (fillbuf) {
+    /* the number read with a use held, as the close of another thread
+       releases the FILE */
+    FILE *fp = sp_io_try_use(f);
+    int fd = fp ? fileno(fp) : -1;
+    if (fp) sp_io_unuse(f);
+    msg = sp_sprintf("%s @ io_fillbuf - fd:%d %s", strerror(e), fd, f->path ? f->path : "");
+  }
   else if (f->path) msg = sp_sprintf("%s @ io_fread - %s", strerror(e), f->path);
   else msg = sp_sprintf("%s", strerror(e));
   sp_raise_cls(sp_errno_class_name(e), msg);

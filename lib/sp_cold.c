@@ -4803,6 +4803,12 @@ void sp_sig_poll_raise(void) {
 }
 #ifdef SP_THREADS
 static int sp_sig_wake[2] = { -1, -1 };
+/* SPINEL_WORKERS=1 (sp_sig_thread_start): the trap thread runs only when
+   main pumps, in a wait, so a signal that comes while main computes is
+   flagged for main's next poll as well, where the proc then runs on main,
+   as CRuby runs every trap; the two take the signal with one exchange, so
+   whichever comes first runs the proc and the other finds none. */
+static volatile int sp_sig_flag_main_too;
 #endif
 void sp_sig_c_handler(int no) {
   if (no <= 0 || no >= SP_SIG_MAX) return;
@@ -4811,7 +4817,8 @@ void sp_sig_c_handler(int no) {
 #ifdef SP_THREADS
   int wfd = SP_ATOMIC_LOAD(&sp_sig_wake[1], __ATOMIC_ACQUIRE);
   if (wfd >= 0) { char b = 0; ssize_t w = write(wfd, &b, 1); (void)w; }
-  else SP_ATOMIC_STORE(&sp_sig_pending_flag, 1, __ATOMIC_RELEASE);   /* no thread yet: as below */
+  if (wfd < 0 || SP_ATOMIC_LOAD(&sp_sig_flag_main_too, __ATOMIC_RELAXED))
+    SP_ATOMIC_STORE(&sp_sig_pending_flag, 1, __ATOMIC_RELEASE);   /* no thread yet: as below */
 #else
   SP_ATOMIC_STORE(&sp_sig_pending_flag, 1, __ATOMIC_RELEASE);
 #endif
@@ -4956,6 +4963,7 @@ static void sp_sig_thread_start(void) {
   for (int e = 0; e < 2; e++) { int fl = fcntl(pf[e], F_GETFL, 0); if (fl >= 0) fcntl(pf[e], F_SETFL, fl | O_NONBLOCK); }
   sp_sig_wake[0] = pf[0];
   SP_ATOMIC_STORE(&sp_sig_wake[1], pf[1], __ATOMIC_RELEASE);   /* the handler writes it from here on */
+  { extern int sp_sched_single_worker(void); SP_ATOMIC_STORE(&sp_sig_flag_main_too, sp_sched_single_worker(), __ATOMIC_RELAXED); }
   started = 1;
   sp_Thread_spawn_internal(sp_Fiber_new(sp_sig_thread_body));
   /* a delivery recorded before the pipe, whose proc has not run yet */

@@ -16,3 +16,13 @@ end
 p Picky.new.respond_to?(:run_callbacks)
 p Picky.include?(Callbacks)
 
+
+# a module the class extends answers include? for it: the guard stays here too
+module Policy
+  def include?(mod) = true
+end
+class Governed
+  extend Policy
+  include Callbacks unless include?(Callbacks)
+end
+p Governed.new.respond_to?(:run_callbacks)

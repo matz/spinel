@@ -37753,20 +37753,47 @@ static int guarded_include_parts(const NodeTable *nt, int id, int *inc) {
   *inc = st;
   return 1;
 }
+/* Does a module the program extends a class or module with (`extend Policy`,
+   `K.extend Policy`) define `include?` as an instance method? The class's
+   singleton gains it, and a class body's bare `include?` asks it. */
+static int guarded_include_extended_answers(const NodeTable *nt) {
+  NT_FOREACH_KIND(nt, NK_ModuleNode, m) {
+    if (!cb_body_defs(nt, class_def_body(nt, m), "include?")) continue;
+    const char *mn = class_def_name(nt, m);
+    if (!mn) continue;
+    NT_FOREACH_KIND(nt, NK_CallNode, s) {
+      const char *nm = nt_str(nt, s, "name");
+      int r = nt_ref(nt, s, "receiver");
+      if (!nm || !sp_streq(nm, "extend") || (r >= 0 && !nt_kind_is_constant(nt_kind(nt, r)) && nt_kind(nt, r) != NK_SelfNode)) continue;
+      int an = 0; const int *av = nt_arr(nt, nt_ref(nt, s, "arguments"), "arguments", &an);
+      for (int a = 0; a < an; a++) {
+        const char *cn = nt_kind_is_constant(nt_kind(nt, av[a])) ? nt_str(nt, av[a], "name") : NULL;
+        if (cn && sp_streq(cn, mn)) return 1;
+      }
+    }
+  }
+  return 0;
+}
 /* Not where the program answers `include?` itself -- a `def self.include?`,
-   a singleton class's, or a reopened Module's or Class's: the guard asks that
-   method, and its answer decides (test/include_guarded_by_own_include_p.rb). */
+   a singleton class's, a reopened Module's or Class's, or an instance
+   method of a module the program extends something with: the guard asks
+   that method, and its answer decides (test/include_guarded_by_own_include_p.rb). */
 int desugar_guarded_include_gate(Compiler *c, LowerCtx *lc) {
   (void)lc;
-  return !cb_program_defines(c->nt, "include?", NULL);
+  return !cb_program_defines(c->nt, "include?", NULL) && !guarded_include_extended_answers(c->nt);
 }
 /* the shape as a statement (one of a statement list: a body's, a block's, a
    def's): its value is nil where the guard skips the include, and a value
-   read (`r = (include M unless include?(M))`, an argument) keeps the guard */
+   read (`r = (include M unless include?(M))`, whose parentheses hold a
+   statement list of their own, an argument) keeps the guard. Not in a
+   `class << self` body: the guard asks the singleton class there, which the
+   hoist of that body turns into an extend of the class. */
 static int guarded_include_stmt(Compiler *c, LowerCtx *lc, int id) {
   const int *par = lower_parents(c, lc);
   int p = par ? par[id] : -1;
-  return p >= 0 && nt_kind(c->nt, p) == NK_StatementsNode;
+  if (p < 0 || nt_kind(c->nt, p) != NK_StatementsNode) return 0;
+  int pp = par[p];
+  return pp < 0 || (nt_kind(c->nt, pp) != NK_ParenthesesNode && nt_kind(c->nt, pp) != NK_SingletonClassNode);
 }
 int desugar_guarded_include_left(Compiler *c, LowerCtx *lc, int id) {
   int inc;

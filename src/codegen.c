@@ -4395,7 +4395,7 @@ static void cdefer_finish(Buf *b, size_t from) {
         }
         if (s0 == (size_t)-1) { bad = 1; continue; }
         u.s0 = s0; u.s1 = at + tn + 1; u.ar = q - 2; u.is_fill = 1;
-        stmt++;   /* (its `;`, skipped with it) */
+        if (!pd) stmt++;   /* (its `;`, skipped with it; one inside parentheses counts none) */
         i = at + tn;
       }
       if (nuse == capuse) { capuse = capuse ? capuse * 2 : 8; use = (Use *)realloc(use, sizeof *use * (size_t)capuse); }

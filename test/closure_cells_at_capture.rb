@@ -54,7 +54,7 @@ end
 def loops(xs)
   seen = 0
   i = 0
-  while i < 3
+  while i < 4
     xs.each { |x| seen += x + i } if i.odd?
     i += 1
   end

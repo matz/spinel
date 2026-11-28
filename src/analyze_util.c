@@ -3893,9 +3893,11 @@ static int yvt_poly_recv_may_reach(Compiler *c, int cid, int mi) {
   return infer_type(c, crecv) == TY_POLY;
 }
 
-/* the yield_value_type query in progress: is its method an initialize that
-   yields (-1: no query, yvt_reaches asks itself) */
-static int g_yvt_mi_init = -1;
+/* the yield_value_type query in progress: its method, and whether that method
+   is an initialize that yields. yvt_reaches reads the answer for that method
+   alone, and asks itself for any other (a collector nested in the query,
+   yield_block_tails through a receiver's inference, asks of its own). */
+static int g_yvt_mi_init = -1, g_yvt_mi_init_mi = -1;
 static int yvt_reaches(Compiler *c, int cid, int mi) {
   /* A `new` on a cycle of constructors hands its block to the initialize's
      proc-form clone as a proc (ctor_site_on_cycle), so it is no site of the
@@ -3910,9 +3912,10 @@ static int yvt_reaches(Compiler *c, int cid, int mi) {
   /* the rest is a `new` reaching an initialize: the method's side first,
      before the site's fields are read (every site asks this of every
      yielding method) */
-  if (g_yvt_mi_init == 0) return 0;
+  int known = mi == g_yvt_mi_init_mi ? g_yvt_mi_init : -1;
+  if (known == 0) return 0;
   const char *mn = c->scopes[mi].name;
-  if (g_yvt_mi_init < 0 && (!mn || !is_initialize_name(mn) || !c->scopes[mi].yields)) return 0;
+  if (known < 0 && (!mn || !is_initialize_name(mn) || !c->scopes[mi].yields)) return 0;
   const NodeTable *nt = c->nt;
   const char *cn = nt_str(nt, cid, "name");
   int crecv = nt_ref(nt, cid, "receiver");
@@ -4218,7 +4221,8 @@ TyKind yield_value_type(Compiler *c, int mi) {
      program's fixpoint. */
   int nsite = 0, csite = 0, si = 0, *site = NULL;
   int mi_init = is_initialize_name(c->scopes[mi].name ? c->scopes[mi].name : "") && c->scopes[mi].yields;
-  int saved_init = g_yvt_mi_init; g_yvt_mi_init = mi_init;
+  int saved_init = g_yvt_mi_init, saved_init_mi = g_yvt_mi_init_mi;
+  g_yvt_mi_init = mi_init; g_yvt_mi_init_mi = mi;
   for (int ii; (ii = yvt_it_next(&yit)) >= 0; ) {
     int cid = y->ids[ii];
     if (!yvt_may_reach(c, ii, mi)) continue;
@@ -4236,7 +4240,7 @@ TyKind yield_value_type(Compiler *c, int mi) {
     }
     site[nsite++] = ii;
   }
-  g_yvt_mi_init = saved_init;
+  g_yvt_mi_init = saved_init; g_yvt_mi_init_mi = saved_init_mi;
   prog_sort(c, site, nsite, y->ids);
   for (int ii; (ii = si < nsite ? site[si++] : -1) >= 0; ) {
     int cid = y->ids[ii];

@@ -472,10 +472,18 @@ SP_CONSTRUCTOR static void sp_alloc_install_hooks(void) {
    with no locale dependency (pure integer arithmetic; see sp_dtoa.c); the
    fixed vs scientific layout is Ruby's Float#to_s rule (which differs from
    %g's), preserved from the previous strtod-probe implementation. */
+/* (a fixed text as a String, its length set: one left unset read as empty
+   where the String was appended to, `0.0.to_s << "a"`) */
+static const char *sp_float_text(const char *t, size_t n) {
+  char *r = sp_str_alloc_raw(n + 1);
+  memcpy(r, t, n + 1);
+  sp_str_set_len(r, n);
+  return r;
+}
 const char *sp_float_to_s(sp_float f) {
-  if(f!=f){char*r=sp_str_alloc_raw(4);r[0]='N';r[1]='a';r[2]='N';r[3]=0;return r;}
-  if(f==HUGE_VAL||f==-HUGE_VAL){if(f<0){char*r=sp_str_alloc_raw(10);memcpy(r,"-Infinity",10);return r;}char*r=sp_str_alloc_raw(9);memcpy(r,"Infinity",9);return r;}
-  if(f==0.0){if(signbit(f)){char*r=sp_str_alloc_raw(5);memcpy(r,"-0.0",5);return r;}char*r=sp_str_alloc_raw(4);memcpy(r,"0.0",4);return r;}
+  if(f!=f)return sp_float_text("NaN",3);
+  if(f==HUGE_VAL||f==-HUGE_VAL)return f<0?sp_float_text("-Infinity",9):sp_float_text("Infinity",8);
+  if(f==0.0)return signbit(f)?sp_float_text("-0.0",4):sp_float_text("0.0",3);
   int neg = signbit(f);
   char digits[32]; int dlen;
   int exp = sp_float_shortest(neg ? -f : f, digits, &dlen);

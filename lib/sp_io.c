@@ -2269,7 +2269,10 @@ sp_int sp_sock_connect(sp_File *f, const char *host, sp_int port) {SP_GC_ROOT(f)
   int len = sp_sock_udp_addr(f, host, port, 0, &at);
   int rc = -1;
   if (len >= 0) {
-    rc = SP_SIG_BLOCKING(connect(sp_io_fd_use(f), (const struct sockaddr *)&at, (socklen_t)len));
+    /* a datagram socket's connect only sets the peer: it never waits, so
+       it is no SP_SIG_BLOCKING call, whose default signal would raise with
+       the use held and leave it taken for good */
+    rc = connect(sp_io_fd_use(f), (const struct sockaddr *)&at, (socklen_t)len);
     sp_io_fd_unuse(f);
   }
   if (rc != 0) {
@@ -2316,7 +2319,9 @@ sp_int sp_sock_connect_sa(sp_File *f, const char *sa, sp_int salen) {SP_GC_ROOT(
   extern int sp_net_set_nonblock(int fd);
   int fd = sp_io_fd_use(f);
   sp_net_set_nonblock(fd);
-  int rc = SP_SIG_BLOCKING(connect(fd, (const struct sockaddr *)&aligned_sa, (socklen_t)salen));
+  /* non-blocking, so it does not wait and is no SP_SIG_BLOCKING call: a
+     default signal raised there would leave the use taken */
+  int rc = connect(fd, (const struct sockaddr *)&aligned_sa, (socklen_t)salen);
   sp_io_fd_unuse(f);
   if (rc != 0 && (errno == EINPROGRESS || errno == EINTR)) {
     sp_io_wait_deadline(f, POLLOUT, -1.0);
@@ -2327,11 +2332,14 @@ sp_int sp_sock_connect_sa(sp_File *f, const char *sa, sp_int salen) {SP_GC_ROOT(
     if (rc == 0 && err) { errno = err; rc = -1; }
   }
 #else
-  /* without threads the connect blocks in the kernel, and nothing else
-     runs to close the socket meanwhile */
+  /* Without threads the connect blocks in the kernel, and nothing else runs
+     to close the socket meanwhile, so it takes no use: a SIGINT that raises
+     Interrupt in the wait (SP_SIG_BLOCKING) would leave one taken, and the
+     close the program then makes would never release the descriptor. */
   extern int sp_net_connect_sa(int fd, const void *sa, int len);
-  int rc = sp_net_connect_sa(sp_io_fd_use(f), &aligned_sa, (int)salen);
+  int fd = sp_io_fd_use(f);
   sp_io_fd_unuse(f);
+  int rc = sp_net_connect_sa(fd, &aligned_sa, (int)salen);
 #endif
   if (rc != 0) sp_sock_raise_errno_sa("connect(2)", sa, salen);
   return 0;
@@ -3001,7 +3009,7 @@ sp_oint sp_sock_connect_nb(sp_File *f, const char *host, sp_int port, sp_bool ex
   if (len >= 0) {
     int fd = sp_io_fd_use(f);
     int saved = sp_io_nb_begin(fd);
-    rc = SP_SIG_BLOCKING(connect(fd, (const struct sockaddr *)&at, (socklen_t)len));
+    rc = connect(fd, (const struct sockaddr *)&at, (socklen_t)len);    /* non-blocking: no wait */
     int ce = errno;
     sp_io_nb_end(fd, saved);
     sp_io_fd_unuse(f);
@@ -3048,7 +3056,7 @@ sp_oint sp_sock_connect_nb_sa(sp_File *f, const char *sa, sp_int salen, sp_bool 
   memcpy(&aligned_sa, sa, (size_t)salen);
   int fd = sp_io_fd_use(f);
   int saved = sp_io_nb_begin(fd);
-  int rc = SP_SIG_BLOCKING(connect(fd, (const struct sockaddr *)&aligned_sa, (socklen_t)salen));
+  int rc = connect(fd, (const struct sockaddr *)&aligned_sa, (socklen_t)salen);   /* non-blocking: no wait */
   int ce = errno;
   sp_io_nb_end(fd, saved);
   sp_io_fd_unuse(f);

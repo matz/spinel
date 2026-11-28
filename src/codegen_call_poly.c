@@ -125,6 +125,26 @@ int emit_call_poly_builtin_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
       return 1;
     }
   }
+  /* inject/reduce(init, op) with the operator not written as a Symbol (a
+     local, `a.inject(10, op)`): the same fold from the initial value, where
+     the call answers a boxed value. A literal Symbol's fold is written out
+     below, and a fold over a program class's objects
+     (`credits.reduce(Fixed.new(0), :+)`) is typed by that class and takes
+     the dispatch. */
+  if (recv >= 0 && rt == TY_POLY && argc == 2 && nt_ref(nt, id, "block") < 0 &&
+      (is_reduce_alias(name)) && nt_kind(nt, argv[1]) != NK_SymbolNode &&
+      comp_ntype(c, argv[1]) != TY_UNKNOWN && comp_ntype(c, id) == TY_POLY) {
+    if (!poly_name_user_claimed(c, name, argc)) {
+      int tr = ++g_tmp, ti = ++g_tmp;
+      buf_printf(b, "({ sp_RbVal _t%d = ", tr); emit_expr(c, recv, b);
+      buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_RbVal _t%d = ", tr, ti); emit_boxed(c, argv[0], b);
+      buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_poly_inject_init_sym(_t%d, _t%d, ", ti, tr, ti);
+      if (comp_ntype(c, argv[1]) == TY_SYMBOL) emit_expr(c, argv[1], b);
+      else { buf_puts(b, "sp_poly_inject_op("); emit_boxed(c, argv[1], b); buf_puts(b, ")"); }
+      buf_puts(b, "); })");
+      return 1;
+    }
+  }
   /* sum(seed) on a container-read row: numeric-tower accumulation from the
      boxed seed (#3234) */
   if (recv >= 0 && rt == TY_POLY && argc == 1 && nt_ref(nt, id, "block") < 0 &&

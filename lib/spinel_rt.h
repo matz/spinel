@@ -9752,6 +9752,33 @@ static sp_RbVal sp_poly_inject_sym(sp_RbVal v, sp_sym op) {
   }
   return acc;
 }
+/* inject/reduce(init, :op) over a poly iterable: the fold of sp_poly_inject_sym
+   from init over every element (CRuby's two-argument form). */
+static sp_RbVal sp_poly_inject_init_sym(sp_RbVal v, sp_RbVal init, sp_sym op) {
+  sp_PolyArray *a = sp_poly_arr_recv(v, "inject");
+  SP_GC_ROOT_RBVAL(init);
+  if (!a) return init;
+  const char *nm = sp_sym_name_fn ? sp_sym_name_fn(op) : "";
+  sp_RbVal (*fn)(sp_RbVal, sp_RbVal) = NULL;
+  if (!strcmp(nm, "+")) fn = sp_poly_add;
+  else if (!strcmp(nm, "-")) fn = sp_poly_sub;
+  else if (!strcmp(nm, "*")) fn = sp_poly_mul;
+  else if (!strcmp(nm, "/")) fn = sp_poly_div;
+  else if (!strcmp(nm, "%")) fn = sp_poly_mod;
+  else if (!strcmp(nm, "**")) fn = sp_poly_pow;
+  else if (!strcmp(nm, "&")) fn = sp_poly_band;
+  else if (!strcmp(nm, "|")) fn = sp_poly_bor;
+  else if (!strcmp(nm, "^")) fn = sp_poly_bxor;
+  else if (!strcmp(nm, "<<")) fn = sp_poly_shl;
+  else if (!strcmp(nm, ">>")) fn = sp_poly_shr;
+  sp_RbVal acc = init;
+  for (sp_int i = 0; i < a->len; i++) {
+    sp_RbVal e = sp_PolyArray_get(a, i);
+    if (!fn) sp_raise_nomethod(sp_nomethod_msg(nm, acc));
+    acc = fn(acc, e);
+  }
+  return acc;
+}
 /* The argument vector for `format`/`String#%` from a single poly right-hand
    side: an Array value is spread across the directives, any other value formats
    as a one-element list. Used when the `%` RHS is statically poly so the array

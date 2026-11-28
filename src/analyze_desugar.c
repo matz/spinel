@@ -36592,12 +36592,16 @@ static int sce_text_walk_safe(Compiler *c, struct SceFacts *f, NodeTable *t, con
          frame; `__send__` is the call sce_text writes for a method named by a
          constant's value) */
       ok = (top && is_define_method_name(nm)) || (nm && (is_eval_exec_family(nm) || sp_streq(nm, "__send__"))) ||
+           (top && body_vis_word(t, id) && nt_ref(t, id, "arguments") >= 0) ||   /* (`private :m`, of the text's def) */
            (!is_load_effect_call(nm) && !is_reflective_access(nm) && !is_definition_hook_name(nm) &&
             !is_singleton_class_name(nm));
       break;
     default: break;
     }
-    if (nt_str(t, id, "binary_operator")) ok = 0;
+    /* (an operator write of a local is the body's or the text's own, as its
+       plain write is; one of a constant, an instance variable or an index
+       stays the step's) */
+    if (nt_str(t, id, "binary_operator") && nt_kind(t, id) != NK_LocalVariableOperatorWriteNode) ok = 0;
   }
   free(all);
   return ok && host_prewalk_shape(t, ss, sn) < 0;

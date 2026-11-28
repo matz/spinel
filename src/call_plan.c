@@ -13677,9 +13677,9 @@ int cplan_nil(Compiler *c, int id) {
    last version, as for the other calls, where that keeps the table's
    answer); *absent tells which, and *finds what that else arm finds
    (ver_else_finds). */
-/* Are defs a and b one def of the source, a file inlined twice (two
-   requires of it the inline load model both keeps)? Its copies are one
-   method: any of them answers as the others do. */
+/* Are defs a and b one def of the source (the same file, line and
+   column)? Copies of one def are one method: any of them answers as the
+   others do. */
 static int ver_same_source(const NodeTable *nt, int a, int b) {
   static const char *const at[] = { "node_file", "node_line", "node_col" };
   if (a < 0 || b < 0) return 0;

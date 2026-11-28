@@ -24738,8 +24738,8 @@ int mark_range_locals_at(Compiler *c, LowerCtx *lc, int id) {
   int v = nt_paren_single(c->nt, nt_ref(nt, w, "value"));
   const char *nm = nt_str(nt, w, "name");
   if (v < 0 || !nm || nt_kind(nt, v) != NK_RangeNode || nt_int(nt, v, "index_of", 0)) return 0;
-  /* nscope alone is not the scope here: under the graph load model a file's
-     scopes are not made yet, and every node reads as the top level's (0) */
+  /* nscope alone is not the scope here: a file's scopes are not made yet
+     when this runs, and every node reads as the top level's (0) */
   const int *par = lower_parents(c, lc);
   int owner = range_local_owner(nt, par, w);
   for (int u = 0; u < nt->count; u++) {

@@ -669,7 +669,7 @@ int prog_stmt_call_executable(Compiler *c, int id, int ci) {
      lookup on self goes on through the class of a class, whose body
      evaluates a String (`module_eval("def #{name} = ...")`): skipped, the
      methods it writes were missing where nothing expanded it (a module's
-     body under the graph model, ct_macro_form), and the call now runs
+     body, ct_macro_form), and the call now runs
      there, refused as its eval is */
   for (int u = 0; !is_user && cn && ci >= 0 && u < 2; u++) {
     if (u == 0 && comp_class_is_module(c, &c->classes[ci])) continue;

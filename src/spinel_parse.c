@@ -5061,9 +5061,8 @@ static int sp_lib_lookup(const char *lib_dir, const char *lib_name, char *out, s
   return SP_LIB_PACKAGE;
 }
 
-/* What the compiler appends after a library file's own text, whichever
-   load model reads the file: the one place both models ask, so they
-   cannot differ on a file's text. Only the compiler's own libraries
+/* What the compiler appends after a library file's own text, asked in
+   the one place that reads the file, so no reader differs on its text. Only the compiler's own libraries
    (`tier` is SP_LIB_BUILTIN or SP_LIB_PACKAGE, as the require that found
    the file says) have any. `content` is the file's text and is consumed;
    `path` is the file as found. First, what a native Windows build

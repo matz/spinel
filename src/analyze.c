@@ -46273,7 +46273,7 @@ static void kwsplat_drop_rows(NodeTable *nt, int id) {
    method of the name included. It runs ahead of everything that reads a
    call, so each later step sees the two branches as calls written so, and
    nodes made here are scanned too (a literal block's copy holds its own
-   calls). The graph model decides which builtins/ files to load from the
+   calls). The load graph decides which builtins/ files to load from the
    parse, before this runs, and repeats this rule there (sp_names_lowerings
    in spinel_parse.c). */
 static void split_kwsplat_calls(Compiler *c, int from) {

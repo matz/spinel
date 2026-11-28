@@ -146,18 +146,34 @@ module Zlib
 
     # What the stream gave so far and was not handed over yet. Past the end
     # of the stream the input is kept for #finish and nothing is answered.
+    # With a block, the output goes to the block (when there is any) and
+    # the call answers nil, as CRuby's does; so does #finish.
     def inflate(str = nil)
+      return inflate_output(str) unless block_given?
+      out = inflate_output(str)
+      yield out unless out.empty?
+      nil
+    end
+
+    # The rest of the output, then the input that came after the stream. A
+    # stream that has not ended is a BufError, and can still be fed.
+    def finish
+      return finish_output unless block_given?
+      out = finish_output
+      yield out unless out.empty?
+      nil
+    end
+
+    def inflate_output(str)
       ready
-      return finish if str.nil?
+      return finish_output if str.nil?
       ended = finished?
       read(str.to_s)
       return String.new if ended
       take
     end
 
-    # The rest of the output, then the input that came after the stream. A
-    # stream that has not ended is a BufError, and can still be fed.
-    def finish
+    def finish_output
       ready
       raise BufError, "buffer error" unless finished?
       out = take
@@ -165,6 +181,7 @@ module Zlib
       @buf = String.new
       out
     end
+    private :inflate_output, :finish_output
 
     def total_in
       ready
@@ -338,11 +355,20 @@ module Zlib
     end
 
     # What this call wrote: nothing for NO_FLUSH, the input so far as a block
-    # for SYNC_FLUSH and FULL_FLUSH, the end of the stream for FINISH.
+    # for SYNC_FLUSH and FULL_FLUSH, the end of the stream for FINISH. With
+    # a block, the output goes to the block (when there is any) and the call
+    # answers nil, as CRuby's does; so do #flush and #finish.
     def deflate(str = nil, mode = Zlib::NO_FLUSH)
+      return deflate_output(str, mode) unless block_given?
+      out = deflate_output(str, mode)
+      yield out unless out.empty?
+      nil
+    end
+
+    def deflate_output(str, mode)
       return after_finish(str, mode) if @finished
       @buf << str.to_s unless str.nil?
-      flush(mode)
+      flush_output(mode)
     end
 
     # A SYNC_FLUSH with nothing new since the last flush is a BufError, as
@@ -350,7 +376,14 @@ module Zlib
     # FULL_FLUSH writes the empty block all the same. Past finish, a flush is
     # a StreamError, as is #deflate.
     def flush(mode = Zlib::SYNC_FLUSH)
-      return finish if mode == Zlib::FINISH
+      return flush_output(mode) unless block_given?
+      out = flush_output(mode)
+      yield out unless out.empty?
+      nil
+    end
+
+    def flush_output(mode)
+      return finish_output if mode == Zlib::FINISH
       return String.new if mode == Zlib::NO_FLUSH
       raise StreamError, "stream error" if @finished
       raise BufError, "buffer error" if mode == Zlib::SYNC_FLUSH && @started && @buf.empty?
@@ -365,6 +398,13 @@ module Zlib
     # finished and its input still buffered: nothing is written down before
     # the native call answers.
     def finish
+      return finish_output unless block_given?
+      out = finish_output
+      yield out unless out.empty?
+      nil
+    end
+
+    def finish_output
       return String.new if @finished
       unless @started
         data = @buf
@@ -379,6 +419,7 @@ module Zlib
       out << trailer
       out
     end
+    private :deflate_output, :flush_output, :finish_output
 
     def total_in
       @total_in + @buf.bytesize

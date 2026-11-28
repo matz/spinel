@@ -1128,6 +1128,22 @@ def resolve_deps(root, offline)
         queue.push(d2)
       elsif url != ""
         want = lock.get("lock." + dep, "ref")
+        # The pin is the commit the manifest asked for when it was locked. A
+        # manifest whose git URL or ref has changed since asks for another,
+        # so the pin is dropped and the dependency resolved again, as an index
+        # pin outside its constraint is reselected below: bumping `ref` from
+        # one tag to the next used to keep the old tag's commit until
+        # spin.lock was deleted. A lock written before `requested` was
+        # recorded keeps its pin unless the URL changed.
+        if want != ""
+          lt = "lock." + dep
+          moved = lock.get(lt, "git") != url
+          moved = true if lock.table_keys(lt).include?("requested") && lock.get(lt, "requested") != ref
+          if moved
+            $stderr.puts "spin: spin.lock pins " + dep + " for another git source or ref; resolving it again"
+            want = ""
+          end
+        end
         rec = ""
         if offline
           hit = ""
@@ -1147,7 +1163,7 @@ def resolve_deps(root, offline)
         # want may be "" (no spin.lock yet): split drops the trailing empty
         # field, so read the SHA defensively rather than trusting parts[2].
         sha = parts.length > 2 ? parts[2] : ""
-        out += dep + "\t" + parts[0] + "\t" + parts[1] + "\tgit\t" + url + "\x01" + sha + "\n"
+        out += dep + "\t" + parts[0] + "\t" + parts[1] + "\tgit\t" + url + "\x01" + sha + "\x01" + ref + "\n"
         queue.push(parts[0])
       else
         # a plain string value is an index constraint: foo = "~> 1.2" / "*";
@@ -2092,6 +2108,9 @@ def lock_from_records(prj)
     if f[3] == "git" || f[3] == "index"
       us = f[4].split("\x01")
       lines.push("git = \"" + us[0] + "\"\nref = \"" + us[1] + "\"\n")
+      # the manifest's ref the pin answers, "" for the default branch; split
+      # drops a trailing empty field, so it is read defensively
+      lines.push("requested = \"" + (us.length > 2 ? us[2] : "") + "\"\n") if f[3] == "git"
     else
       lines.push("path = \"" + f[4] + "\"\n")
     end

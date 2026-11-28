@@ -36588,9 +36588,12 @@ static int sce_text_walk_safe(Compiler *c, struct SceFacts *f, NodeTable *t, con
       break;
     case NK_DefNode: ok = top; break;
     case NK_CallNode:
-      ok = (top && is_define_method_name(nm)) ||
+      /* (a class_eval among the statements is grafted with the text, in its
+         frame; `__send__` is the call sce_text writes for a method named by a
+         constant's value) */
+      ok = (top && is_define_method_name(nm)) || (nm && (is_eval_exec_family(nm) || sp_streq(nm, "__send__"))) ||
            (!is_load_effect_call(nm) && !is_reflective_access(nm) && !is_definition_hook_name(nm) &&
-            !is_singleton_class_name(nm) && !is_eval_exec_family(nm));
+            !is_singleton_class_name(nm));
       break;
     default: break;
     }

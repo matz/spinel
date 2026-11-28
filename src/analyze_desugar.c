@@ -36548,24 +36548,17 @@ static void sce_text_walk(NodeTable *t, int id, int nest, int in_def, SceText *w
    builtin the step splices), so it is grafted ahead of them, as before. */
 struct SceFacts;
 static struct SceFacts *sce_facts(HostStep *h);
-/* A call the step ahead of the walk rewrites onto a builtin's Ruby
-   implementation (enumerable.rb, builtins/*.rb): the text's def would be
-   read by it */
-extern int sp_builtin_extra_names_n(int idx);
-extern int sp_builtin_extra_name_index(int idx, const char *name);
-static int sce_spliced_name(const char *nm) {
-  if (!nm) return 0;
-  if (builtin_enum_name_index(nm) >= 0) return 1;
-  for (int bx = 0; bx < 4; bx++) if (sp_builtin_extra_names_n(bx) > 0 && sp_builtin_extra_name_index(bx, nm) >= 0) return 1;
-  return 0;
-}
 static int sce_text_walk_safe(Compiler *c, struct SceFacts *f, NodeTable *t, const int *ss, int sn) {
   if (sn <= 0) return 0;
   for (int i = 0; i < sn; i++) {
     int d = ss[i];
     NodeKind dk = nt_kind(t, d);
     const char *dn = NULL;
-    if (dk == NK_DefNode) { dn = nt_str(t, d, "name"); if (nt_ref(t, d, "receiver") >= 0) return 0; }
+    if (dk == NK_DefNode) {   /* (a def of the class's own, or of its singleton: `def self.m`) */
+      int rv = nt_ref(t, d, "receiver");
+      dn = nt_str(t, d, "name");
+      if (rv >= 0 && nt_kind(t, rv) != NK_SelfNode) return 0;
+    }
     /* a write or read of a local: the body's, named by the body's scope as
        the span is lowered (host_lower_now with the body for its scope), or
        the text's own (sce_text_local) */
@@ -36591,7 +36584,7 @@ static int sce_text_walk_safe(Compiler *c, struct SceFacts *f, NodeTable *t, con
     switch (nt_kind(t, id)) {
     case NK_ClassNode: case NK_ModuleNode: case NK_SingletonClassNode: case NK_AliasMethodNode:
     case NK_AliasGlobalVariableNode: case NK_UndefNode:
-    case NK_ConstantReadNode: case NK_ConstantPathNode: case NK_ConstantWriteNode: case NK_ConstantOperatorWriteNode:
+    case NK_ConstantWriteNode: case NK_ConstantOperatorWriteNode:
     case NK_ConstantOrWriteNode: case NK_ConstantAndWriteNode: case NK_ConstantTargetNode:
       ok = 0;
       break;

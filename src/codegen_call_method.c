@@ -3687,6 +3687,15 @@ int emit_call_proc_literal_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
           emit_proc_literal(c, g_block_id, b);
           return 1;
         }
+        /* the same param at a splice with no block (`as_proc()` of `def
+           as_proc(&b) = proc(&b)`): the param is nil there, and `proc` of
+           none is CRuby's ArgumentError; the name itself exists in no
+           spliced context */
+        if (_fnm && g_block_id < 0 && g_block_param_name &&
+            sp_streq(_fnm, g_block_param_name)) {
+          buf_puts(b, "((sp_Proc *)(sp_raise_cls(\"ArgumentError\", \"tried to create Proc object without a block\"), NULL))");
+          return 1;
+        }
         if (_fwd >= 0 && comp_ntype(c, _fwd) == TY_PROC) { emit_expr(c, _fwd, b); return 1; }
         if (g_block_id >= 0) { emit_proc_literal(c, g_block_id, b); return 1; }
       }

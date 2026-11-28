@@ -31,6 +31,10 @@ Errno::ECHILD
 ""
 ""
 Errno::EBADF
+RangeError: integer 4294967297 too big to convert to 'int'
+RangeError: integer 4294967297 too big to convert to 'int'
+ArgumentError: negative file descriptor
+RangeError: integer 4294967297 too big to convert to 'int'
 wrong exec redirect action
 child fd 9 is not redirected
 cyclic child fd redirection from 4

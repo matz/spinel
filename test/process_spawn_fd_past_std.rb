@@ -182,6 +182,15 @@ rescue SystemCallError => e
   p e.class
 end
 
+# a number that is no descriptor: past a C int, or negative
+[{ 3 => 0x100000001 }, { 0x100000001 => 1 }, { -1 => 1 }, { 3 => [:child, 0x100000001] }].each do |opts|
+  begin
+    spawn("true", opts)
+  rescue RangeError, ArgumentError => e
+    puts "#{e.class}: #{e.message}"
+  end
+end
+
 # a value that is no redirection, a descriptor of the child that no option
 # makes, and a loop of them
 [{ 3 => 1.5 }, { 3 => [:child, 9] }, { 3 => [:child, 4], 4 => [:child, 3] }].each do |opts|

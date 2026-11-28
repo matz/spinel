@@ -2318,12 +2318,24 @@ static int sp_process_redirect_slot(sp_RbVal key) {
   return strcmp(name, "in") == 0 ? 0 : strcmp(name, "out") == 0 ? 1 :
          strcmp(name, "err") == 0 ? 2 : -1;
 }
+/* A descriptor number is a C int: one past it raises CRuby's RangeError
+   before the number is narrowed (`3 => 0x100000001` would name 1). */
+static void sp_process_fd_range(sp_int n) {
+  if (n > 0x7fffffff)
+    sp_raise_cls("RangeError", sp_sprintf("integer %lld too big to convert to 'int'", (long long)n));
+  if (n < -0x7fffffff - 1)
+    sp_raise_cls("RangeError", sp_sprintf("integer %lld too small to convert to 'int'", (long long)n));
+}
 /* The descriptor a key of the options names, when it is past the standard
    streams: an Integer, or an IO by its fileno; else -1. */
 static int sp_process_past_std_fd(sp_RbVal key) {
-  /* (no descriptor is that high, and the child counts one past the highest) */
-  if (key.tag == SP_TAG_INT && key.v.i >= 0x7fffffff) sp_raise_cls("Errno::EBADF", "Bad file descriptor");
-  if (key.tag == SP_TAG_INT) return key.v.i > 2 ? (int)key.v.i : -1;
+  if (key.tag == SP_TAG_INT) {
+    sp_process_fd_range(key.v.i);
+    if (key.v.i < 0) sp_raise_cls("ArgumentError", "negative file descriptor");
+    /* (no descriptor is that high, and the child counts one past the highest) */
+    if (key.v.i == 0x7fffffff) sp_raise_cls("Errno::EBADF", "Bad file descriptor");
+    return key.v.i > 2 ? (int)key.v.i : -1;
+  }
   if (key.tag == SP_TAG_OBJ && key.cls_id == SP_BUILTIN_IO && key.v.p) {
     sp_int fd = sp_File_fileno((sp_File *)key.v.p);
     return fd > 2 ? (int)fd : -1;
@@ -2441,7 +2453,10 @@ sp_RbVal sp_process_redirect_past_std(sp_RbVal opts) {
       int closes = value.tag == SP_TAG_SYM && value.v.i == sp_sym_intern("close");
       if (first >= 0 && !closes) { sp_process_past_std_push(a, dst, 2, first, sp_box_nil(), 0, 0); continue; }
       first = dst;
-      if (value.tag == SP_TAG_INT) sp_process_past_std_push(a, dst, 0, value.v.i, sp_box_nil(), 0, 0);
+      if (value.tag == SP_TAG_INT) {
+        sp_process_fd_range(value.v.i);
+        sp_process_past_std_push(a, dst, 0, value.v.i, sp_box_nil(), 0, 0);
+      }
       else if (value.tag == SP_TAG_OBJ && value.cls_id == SP_BUILTIN_IO && value.v.p)
         sp_process_past_std_push(a, dst, 0, sp_File_fileno((sp_File *)value.v.p), sp_box_nil(), 0, 0);
       else if (value.tag == SP_TAG_SYM && value.v.i == sp_sym_intern("close"))

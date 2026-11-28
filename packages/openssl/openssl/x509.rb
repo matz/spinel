@@ -179,8 +179,15 @@ module OpenSSL
 
       def serial = BN.new(@der ? field("s") : (@fields["s"] || "0"))
 
+      # An Integer or a BN, as CRuby's num_to_asn1integer takes: nothing is
+      # converted, so a Float, a String or an object with #to_int is the
+      # TypeError CRuby raises. An Integer goes to its text as it is; a Bignum
+      # held in a boxed slot has no sp_int to pass through (#to_int raises
+      # RangeError there outside --int-overflow=promote).
       def serial=(serial)
-        n = serial.is_a?(BN) ? serial.to_i : serial.to_int
+        raise TypeError, "Can't convert nil into Integer" if serial.nil?
+        n = serial.is_a?(BN) ? serial.to_i : serial
+        raise TypeError, "Cannot convert into OpenSSL::BN" unless n.is_a?(::Integer)
         change("s", n.to_s)
         serial
       end

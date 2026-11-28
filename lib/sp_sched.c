@@ -3427,7 +3427,10 @@ static inline void sp_sig_run_if_pending(void) {
   if (SP_ATOMIC_LOAD(&sp_sig_pending_flag, __ATOMIC_ACQUIRE)) sp_sig_run_pending();
 }
 static void sp_sig_run_if_pending_fn(void) { sp_sig_run_if_pending(); }
-sp_thread *sp_Thread_spawn_fiber_at(sp_Fiber *f, sp_RbVal arg, const char *file, sp_int line) {SP_GC_ROOT_RBVAL(arg);SP_GC_ROOT(f);SP_GC_ROOT_STR(file);
+/* `file` is the C literal the call site emits (rodata, as birth_file is),
+   not a String: it is not rooted, since the mark would read the byte in
+   front of the literal for a String header that is not there */
+sp_thread *sp_Thread_spawn_fiber_at(sp_Fiber *f, sp_RbVal arg, const char *file, sp_int line) {SP_GC_ROOT_RBVAL(arg);SP_GC_ROOT(f);
   sp_thread *t = sp_Thread_spawn_fiber(f, arg);
   t->birth_file = file;
   t->birth_line = line;

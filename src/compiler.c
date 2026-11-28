@@ -88,6 +88,7 @@ int comp_scalar_literal_chain_bottom(const NodeTable *nt, int v) {
 
 /* see compiler.h: every change of a table infer_type reads */
 unsigned long comp_ty_edits;
+unsigned long comp_global_moves, comp_slot_global_moves;
 /* the owners' versions (compiler.h): per scope, per class, and the program's */
 unsigned long *comp_scope_ver, *comp_class_ver, comp_global_ver;
 int *comp_touch_count, *comp_lv_touch_count;
@@ -863,7 +864,7 @@ static int gvar_probe(const Compiler *c, const char *name) {
   return (int)j;
 }
 LocalVar *comp_gvar(Compiler *c, const char *name) {
-  IMEMO_DEP_GLOBAL();
+  /* (as comp_const: a global's slot is the program's) */
   int j = gvar_probe(c, name);
   return j >= 0 && c->gvar_ix[j] >= 0 ? &c->gvars[c->gvar_ix[j]] : NULL;
 }
@@ -1084,8 +1085,7 @@ int comp_class_owned_const(Compiler *c, int k, const char *nm, const int *cands,
    large program has thousands: a hash over the names, rebuilt when the table
    grows or moves (its names are unique, interned by comp_const_intern). */
 static int *cst_idx; static int cst_cap, cst_n = -1; static const LocalVar *cst_base;
-/* (the lookup itself, which comp_const below also records as a read of
-   the whole table for the memo) */
+/* (the lookup itself; comp_const below is the memo's view of it) */
 static int const_index_raw(Compiler *c, const char *name) {
   if (c->nconsts < 16) { for (int i = 0; i < c->nconsts; i++) if (sp_streq(c->consts[i].name, name)) return i; return -1; }
   if (cst_n != c->nconsts || cst_base != c->consts) {
@@ -1109,7 +1109,9 @@ static int const_index_raw(Compiler *c, const char *name) {
 }
 LocalVar *comp_const(Compiler *c, const char *name) {
   if (!name) return NULL;
-  IMEMO_DEP_GLOBAL();
+  /* (no read of the whole program: a constant's slot is the program's, so
+     its writes and a new constant move comp_global_ver, which every kept
+     answer is checked against) */
   int i = const_index_raw(c, name);
   return i >= 0 ? &c->consts[i] : NULL;
 }

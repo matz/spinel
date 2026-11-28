@@ -2379,6 +2379,9 @@ int sp_exc_protect(void (*fn)(void *), void *ctx) {
 void sp_sched_trap_enter(void);   /* lib/sp_sched.c: Mutex#lock raises inside a trap proc */
 void sp_sched_trap_leave(void);
 void sp_sig_proc_left(int no);   /* lib/sp_cold.c: a delivery that waited for the proc runs next */
+/* The depth check of sp_trap_call, for sp_sig_run_pending to make before it
+   claims the signal (sp_exc_check_depth is this file's) */
+void sp_trap_check_depth(void) { sp_exc_check_depth(); }
 void sp_trap_call(sp_Proc *p, int no) {
   sp_exc_check_depth();
   sp_exc_rootmark[sp_exc_top] = sp_gc_nroots; sp_rescue_mark[sp_exc_top] = sp_rescue_sp;

@@ -1000,7 +1000,11 @@ int repr_native_call_handle(Compiler *c, int v) {
     const char *name = nt_str(nt, v, "name");
     if (r >= 0 && comp_ntype(c, r) == TY_POLY && !user_defines_or_reads(c, name)) return 0;
   }
-  int user = plan.dispatch != CP_NONE && !(k == NK_CallNode && repr_boxed_call_no_user_arm(c, v));
+  /* (...unless the planned target is main's own method: it is no class's
+     arm, and the dispatch's default calls it, a `send(:shout)` reaching a
+     top-level def; its String is the method's handle) */
+  int main_target = plan.mi >= 0 && plan.mi < c->nscopes && c->scopes[plan.mi].class_id < 0 && !c->scopes[plan.mi].is_cmethod;
+  int user = plan.dispatch != CP_NONE && !(k == NK_CallNode && !main_target && repr_boxed_call_no_user_arm(c, v));
   if (user && plan.dispatch == CP_DIRECT && plan.mi >= 0)
     return repr_method_ret_storage(&c->scopes[plan.mi]) == TY_STRBUF;
   if (!user || (plan.dispatch != CP_SWITCH && plan.dispatch != CP_PER_ARM)) {

@@ -512,6 +512,28 @@ sp_int sp_ssl_proto_check(sp_int min, sp_int max) {
   return r;
 }
 
+/* The host name check takes the subject's CN where CRuby's
+   verify_certificate_identity takes it: for a certificate whose
+   subjectAltName names no DNS name and no IP address. OpenSSL's own rule is
+   not that, and not one rule: 3.x looks at the CN unless there is a DNS name
+   (so beside an IP address too), and 4 never does unless asked. So the leaf
+   is looked at before the chain is verified, and the check told which. */
+static int sp_ssl_verify_chain(X509_STORE_CTX *sctx, void *arg) {
+  (void)arg;
+  X509 *leaf = X509_STORE_CTX_get0_cert(sctx);
+  int named = 0;
+  GENERAL_NAMES *gens = leaf ? X509_get_ext_d2i(leaf, NID_subject_alt_name, NULL, NULL) : NULL;
+  for (int i = 0; i < sk_GENERAL_NAME_num(gens); i++) {
+    int type = sk_GENERAL_NAME_value(gens, i)->type;
+    if (type == GEN_DNS || type == GEN_IPADD) named = 1;
+  }
+  GENERAL_NAMES_free(gens);
+  X509_VERIFY_PARAM_set_hostflags(X509_STORE_CTX_get0_param(sctx),
+                                  X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS |
+                                  (named ? X509_CHECK_FLAG_NEVER_CHECK_SUBJECT : X509_CHECK_FLAG_ALWAYS_CHECK_SUBJECT));
+  return X509_verify_cert(sctx);
+}
+
 static int sp_ssl_setup(sp_int fd, const char *hostname, sp_int verify, sp_int verify_hostname, sp_RbVal cert_store,
                         const char *chain, const char *curve, const char *priv, sp_int min, sp_int max) {
   sp_ssl_errbuf[0] = 0;
@@ -565,6 +587,7 @@ else {
         SSL_free(ssl); SSL_CTX_free(ctx);
         return -1;
       }
+      SSL_CTX_set_cert_verify_callback(ctx, sp_ssl_verify_chain, NULL);
     }
   }
   if (!SSL_set_fd(ssl, (int)fd)) {

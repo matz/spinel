@@ -10,8 +10,12 @@ N = 300_000
 LIMIT_KB = 12_000
 
 def rss_kb
-  if File.exist?("/proc/self/statm")
-    File.read("/proc/self/statm").split[1].to_i * 4
+  if File.exist?("/proc/self/status")
+    kb = 0
+    File.read("/proc/self/status").each_line do |l|
+      kb = l.split[1].to_i if l.start_with?("VmRSS:")
+    end
+    kb
   else
     `ps -o rss= -p #{Process.pid}`.strip.to_i
   end

@@ -21,7 +21,7 @@
  * Process.waitpid2(pid) -> [pid, raw_status]
  *
  * opts is a PolyArray with these slots (the last two are optional):
- *   [0] in_fd        - Integer fd (>= 0), -1 for false/nil/absent. An IO
+ *   [0] in_fd        - Integer fd (>= 0), -1 for false/nil/absent, -2 for :close (SP_SPAWN_FD_CLOSE). An IO
  *                      was resolved to its fd by the codegen; a String
  *                      path was opened here, by sp_process_open_redirect,
  *                      which the generated program calls before this
@@ -117,7 +117,9 @@ static const char *sp_errf_conv(sp_RbVal v) {
    The previous /dev/null behaviour silently swallowed the child's stderr
    and made `Process.spawn("cc -c foo.c")` in verbose mode look like it
    produced no output. */
+#define SP_SPAWN_FD_CLOSE (-2)   /* `in: :close`: the child's descriptor is closed */
 static int apply_redirect(int target_fd, int src_fd) {
+  if (src_fd == SP_SPAWN_FD_CLOSE) { close(target_fd); return 0; }
   if (src_fd < 0) return 0;
   if (src_fd != target_fd) { dup2(src_fd, target_fd); return 0; }
   /* already in place (a pipe took a free fd 0): no dup2 clears close-on-exec */
@@ -737,6 +739,9 @@ sp_int sp_process_spawn(sp_RbVal cmd, sp_RbVal args_box,
     if (in_fd  >= 0 && in_fd  != 0) posix_spawn_file_actions_adddup2(&fa, in_fd, 0);
     if (out_fd >= 0 && out_fd != 1) posix_spawn_file_actions_adddup2(&fa, out_fd, 1);
     if (err_fd >= 0 && err_fd != 2) posix_spawn_file_actions_adddup2(&fa, err_fd, 2);
+    if (in_fd  == SP_SPAWN_FD_CLOSE) posix_spawn_file_actions_addclose(&fa, 0);
+    if (out_fd == SP_SPAWN_FD_CLOSE) posix_spawn_file_actions_addclose(&fa, 1);
+    if (err_fd == SP_SPAWN_FD_CLOSE) posix_spawn_file_actions_addclose(&fa, 2);
     { int srcs[3] = { in_fd, out_fd, err_fd };
       for (int i = 0; i < 3; i++) {
         if (srcs[i] <= 2) continue;

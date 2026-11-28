@@ -2914,6 +2914,21 @@ static int lr_word_is_mf(const NodeTable *nt, int node) {
    ahead of it, an included module's are not */
 static int lr_mixin_class(Compiler *c, LrMixin *m);
 static int lr_mod_has(Compiler *c, int j, const char *nm, int depth);
+/* Is module mod an ancestor of class cls as the record holds them where the walk is: one of cls's includes or
+   prepends, of a module they mix in, or a superclass's? (`include M unless include?(M)`, lowered to the include
+   with the mark guarded_include, runs nothing and fires no hook where it is.) */
+static int lr_mixes_in(Compiler *c, int cls, int mod, int depth) {
+  if (cls < 0 || cls >= c->nclasses || mod < 0 || depth > lr_chain_bound(c)) return 0;
+  LrClass *k = lr_class(c->lrec, cls);
+  for (int i = 0; k && i < k->nmix; i++) {
+    LrMixin *m = &k->mix[i];
+    if (m->kind != LR_INCLUDE && m->kind != LR_PREPEND) continue;
+    int mm = lr_mixin_class(c, m);
+    if (mm == mod) return 1;
+    if (mm >= 0 && mm != cls && lr_mixes_in(c, mm, mod, depth + 1)) return 1;
+  }
+  return k && k->has_sup && k->sup >= 0 && k->sup != cls && lr_mixes_in(c, k->sup, mod, depth + 1);
+}
 /* ...does the module mixin m mixes in, other than j, have it: a program module's chain, or a builtin module the
    program does not reopen by its builtin id (lr_mixin_class) */
 static int lr_mixin_has(Compiler *c, LrMixin *m, int j, const char *nm, int depth) {
@@ -5235,6 +5250,12 @@ static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int
         continue;
       }
       if (mod < 0 && mod != LR_LATER) opaque = LR_OPAQUE_DEFINES;
+      /* `include M unless include?(M)` (desugar_guarded_include): an ancestor
+         already, M is included again by nothing, and its hook does not fire */
+      if (mod >= 0 && nt_int(nt, node, "guarded_include", 0) && lr_mixes_in(x->c, cls, mod, 0)) {
+        nt_node_set_int((NodeTable *)nt, node, "mixin_already", 1);
+        continue;
+      }
       if (!k) continue;
       k->mix = lr_grow(k->mix, &k->cmix, k->nmix, sizeof *k->mix);
       x->r->hgen++;

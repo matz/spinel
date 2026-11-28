@@ -37718,11 +37718,14 @@ int desugar_nil_block_arg_at(Compiler *c, LowerCtx *lc, int id) {
    under the guard the include was never one: the module's methods were not
    the class's, and a call of one on self was unresolved ("unsupported
    call", NotImplementedError where it ran). Lowered to the include ahead
-   of every pass. The same constant on both sides, as written; a bare
-   include? and include, which ask and change self. */
+   of every pass, marked for the load record: Ruby runs M's included hook
+   at every `include M`, and the guard is what spares a second run where M
+   is an ancestor already, so there the record registers no mixin and fires
+   no hook. The same constant on both sides, as written; a bare include?
+   and include, which ask and change self. */
 /* the same constant, as written: `M` and `M`, `A::M` and `A::M` */
 static int guarded_include_same_const(const NodeTable *nt, int a, int b) {
-  if (a < 0 || b < 0 || nt_kind(nt, a) != nt_kind(nt, b)) return 0;
+  if (a < 0 || b < 0 || nt_kind(nt, a) != nt_kind(nt, b) || !nt_kind_is_constant(nt_kind(nt, a))) return 0;
   const char *na = nt_str(nt, a, "name"), *nb = nt_str(nt, b, "name");
   if (!na || !nb || !sp_streq(na, nb)) return 0;
   if (nt_kind(nt, a) == NK_ConstantReadNode) return 1;
@@ -37757,14 +37760,22 @@ int desugar_guarded_include_gate(Compiler *c, LowerCtx *lc) {
   (void)lc;
   return !cb_program_defines(c->nt, "include?", NULL);
 }
+/* the shape as a statement (one of a statement list: a body's, a block's, a
+   def's): its value is nil where the guard skips the include, and a value
+   read (`r = (include M unless include?(M))`, an argument) keeps the guard */
+static int guarded_include_stmt(Compiler *c, LowerCtx *lc, int id) {
+  const int *par = lower_parents(c, lc);
+  int p = par ? par[id] : -1;
+  return p >= 0 && nt_kind(c->nt, p) == NK_StatementsNode;
+}
 int desugar_guarded_include_left(Compiler *c, LowerCtx *lc, int id) {
   int inc;
-  return guarded_include_parts(c->nt, id, &inc);
+  return guarded_include_parts(c->nt, id, &inc) && guarded_include_stmt(c, lc, id);
 }
 int desugar_guarded_include_at(Compiler *c, LowerCtx *lc, int id) {
   NodeTable *nt = (NodeTable *)c->nt;
   int inc, pred = nt_ref(nt, id, "predicate");
-  if (!guarded_include_parts(nt, id, &inc)) return 0;
+  if (!guarded_include_parts(nt, id, &inc) || !guarded_include_stmt(c, lc, id)) return 0;
   int args = nt_ref(nt, inc, "arguments");
   long long at[3] = { nt_int(nt, inc, "node_line", 0), nt_int(nt, inc, "node_file", 0), nt_int(nt, inc, "node_col", 0) };
   /* the arguments move to the statement; the include's and the guard's own
@@ -37775,6 +37786,9 @@ int desugar_guarded_include_at(Compiler *c, LowerCtx *lc, int id) {
   nt_node_reset(nt, id, "CallNode");
   nt_node_set_str(nt, id, "name", "include");
   nt_node_set_ref(nt, id, "arguments", args);
+  /* the load record reads the mark: where M is an ancestor already, the
+     include runs nothing, and no hook fires (lr_mixes_in) */
+  nt_node_set_int(nt, id, "guarded_include", 1);
   nt_node_set_int(nt, id, "node_line", at[0]);
   nt_node_set_int(nt, id, "node_file", at[1]);
   nt_node_set_int(nt, id, "node_col", at[2]);

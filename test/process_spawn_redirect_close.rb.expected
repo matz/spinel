@@ -1,8 +1,10 @@
-in: 1
-0
+true
+true
+true
 out
-out: 1
-err: 1
-system in: 1
-0
-1
+false
+true
+false
+false
+false
+err stays open

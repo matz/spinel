@@ -9232,7 +9232,7 @@ static int str_arms_case_search(Compiler *c, Buf *b, const NodeTable *nt, const 
       NodeKind fk = nt_kind(nt, fv);
       fz1 = fk == NK_TrueNode;
     }
-    if (fz1) buf_printf(b, "sp_str_freeze_val(sp_str_dup(%s))", r);
+    if (fz1) buf_printf(b, "sp_str_frozen_copy(%s)", r);
     else buf_printf(b, "sp_str_dup(%s)", r);
   }
   else if (sp_streq(name, "start_with?") && argc == 1 && re_lit_index(c, argv[0]) >= 0) {

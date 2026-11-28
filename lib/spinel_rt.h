@@ -1298,14 +1298,21 @@ static void sp_mark_sym_names(void)
 /* The cold extension runtime reads this unit's canonical Symbol name. */
 sp_String *sp_cext_sym_name_handle(sp_sym id) { return sp_sym_name_handle(id); }
 #endif
+/* A frozen copy of s, frozen on its own handle as .freeze and Symbol#to_s
+   freeze theirs, so the collector frees it once nothing reaches it. The 0xf1
+   marker sp_str_freeze_val gives a bare heap String is immortal: the copy is
+   pinned and every clone of a frozen String stayed for the rest of the run. */
+static inline const char *sp_str_frozen_copy(const char *s) {
+  if (!s) return NULL;
+  SP_GC_ROOT_STR(s);
+  return sp_String_cstr(sp_String_freeze(sp_String_new_unfrozen(s)));
+}
 /* String#clone: a copy that preserves the frozen state, unlike #dup which always
-   returns an unfrozen copy (CRuby semantics). Carries the 0xf1 heap-frozen marker
-   across to the fresh buffer. */
+   returns an unfrozen copy (CRuby semantics). */
 static inline const char *sp_str_clone_val(const char *s) {
   if (!s) return NULL;
-  const char *r = sp_str_dup(s);  /* byte_len-aware: clone carries embedded NULs */
-  if (r && sp_str_is_frozen_val(s)) { ((unsigned char *)r)[-1] = 0xf1; sp_slab_pin(r); }
-  return r;
+  if (sp_str_is_frozen_val(s)) return sp_str_frozen_copy(s);
+  return sp_str_dup(s);  /* byte_len-aware: clone carries embedded NULs */
 }
 /* s[from, n] = val (char-based splice): prefix + val + suffix. A negative
    `from` counts from the end; out-of-range raises (RangeError for the range

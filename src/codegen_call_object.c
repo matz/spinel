@@ -1632,10 +1632,10 @@ int emit_call_freeze_dup_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
          as frozen? does, or the clone of a frozen String came back unfrozen. */
       Buf clref; memset(&clref, 0, sizeof clref);
       if (sp_streq(name, "clone") && strbuf_slot_text(c, recv, &clref)) {
-        int th = ++g_tmp, tcl = ++g_tmp;
-        buf_printf(b, "({ sp_String *_t%d = SP_STR_HDL(%s); const char *_t%d = _t%d ? sp_str_dup(sp_String_cstr(_t%d)) : NULL;"
-                      " _t%d && sp_String_is_frozen(_t%d) ? sp_str_freeze_val(_t%d) : _t%d; })",
-                   th, clref.p, tcl, th, th, tcl, th, tcl, tcl);
+        int th = ++g_tmp;
+        buf_printf(b, "({ sp_String *_t%d = SP_STR_HDL(%s); !_t%d ? (const char *)NULL :"
+                      " sp_String_is_frozen(_t%d) ? sp_str_frozen_copy(sp_String_cstr(_t%d)) : sp_str_dup(sp_String_cstr(_t%d)); })",
+                   th, clref.p, th, th, th, th);
         free(clref.p);
         return 1;
       }

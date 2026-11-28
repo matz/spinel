@@ -59,6 +59,7 @@ static void emit_spawn_fd_options(Compiler *c, Buf *b, int tkv, int tfd, int tth
       "  }\nelse if (_v.tag == SP_TAG_SYM && _v.v.i == sp_sym_intern(\"close\")) { "
       "    sp_PolyArray_push(_t%d, sp_box_int(-2)); "   /* :close: the child's descriptor is closed (SP_SPAWN_FD_CLOSE) */
       "  }\nelse { "
+      "    sp_process_fd_range_box(_v); "   /* (a Bignum, past a C int: RangeError, where sp_int is 32 bits too) */
       "    sp_process_spawn_fail(_t%d, \"ArgumentError\", \"bad redirect type\"); "
       "  } "
       "}}\nelse { sp_PolyArray_push(_t%d, sp_box_int(-1)); } }",

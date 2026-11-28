@@ -2324,7 +2324,14 @@ static int sp_process_redirect_slot(sp_RbVal key) {
          strcmp(name, "err") == 0 ? 2 : -1;
 }
 /* A descriptor number is a C int: one past it raises CRuby's RangeError
-   before the number is narrowed (`3 => 0x100000001` would name 1). */
+   before the number is narrowed (`3 => 0x100000001` would name 1). A
+   Bignum is past it wherever sp_int ends (on a 32-bit machine 0x100000001
+   is one already), and raises the same, with its own digits. */
+void sp_process_fd_range_box(sp_RbVal v) {
+  if (v.tag != SP_TAG_BIGINT) return;
+  const char *d = sp_bigint_to_s((sp_Bigint *)v.v.p);
+  sp_raise_cls("RangeError", sp_sprintf("integer %s too %s to convert to 'int'", d, d[0] == '-' ? "small" : "big"));
+}
 static void sp_process_fd_range(sp_int n) {
   if (n > 0x7fffffff)
     sp_raise_cls("RangeError", sp_sprintf("integer %lld too big to convert to 'int'", (long long)n));
@@ -2334,6 +2341,7 @@ static void sp_process_fd_range(sp_int n) {
 /* The descriptor a key of the options names, when it is past the standard
    streams: an Integer, or an IO by its fileno; else -1. */
 static int sp_process_past_std_fd(sp_RbVal key) {
+  sp_process_fd_range_box(key);
   if (key.tag == SP_TAG_INT) {
     sp_process_fd_range(key.v.i);
     if (key.v.i < 0) sp_raise_cls("ArgumentError", "negative file descriptor");
@@ -2472,6 +2480,7 @@ sp_RbVal sp_process_redirect_past_std(sp_RbVal opts) {
       if (dst < 0) continue;
       if (!a) a = sp_PolyArray_new();
       /* (asked for each member, a later one of a group too, which takes no value of its own) */
+      sp_process_fd_range_box(value);
       if (value.tag == SP_TAG_INT) sp_process_fd_range(value.v.i);
       /* (each member of a group that is closed is closed: there is no file to share) */
       int closes = value.tag == SP_TAG_SYM && value.v.i == sp_sym_intern("close");
@@ -2491,6 +2500,7 @@ sp_RbVal sp_process_redirect_past_std(sp_RbVal opts) {
         sp_RbVal v0 = vn > 0 ? sp_poly_arr_get(value, 0) : sp_box_nil();
         sp_RbVal v1 = vn > 1 ? sp_poly_arr_get(value, 1) : sp_box_nil();
         if (vn == 2 && v0.tag == SP_TAG_SYM && v0.v.i == sp_sym_intern("child")) {
+          sp_process_fd_range_box(v1);
           int c = sp_process_redirect_slot(v1);
           if (c < 0) c = sp_process_past_std_fd(v1);
           if (c < 0) sp_raise_cls("ArgumentError", "wrong exec redirect action");

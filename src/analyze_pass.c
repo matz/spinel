@@ -21212,6 +21212,17 @@ static int infer_block_params_enum_arms(Compiler *c, const NodeTable *nt, int id
       if (bp_widen(bs, ip, TY_INT)) changed = 1;
       return changed | 2;
     }
+    /* a receiver known only at run time (a thread's parameter, a local of
+       two kinds) hands its pairs boxed, through the Enumerator its dispatch
+       answers. Left to the late widen, the element was untyped for the whole
+       fixpoint, so a socket's send(mesg, flags) on it never became the boxed
+       write (socket_send_boxed) and was refused as a runtime-named send. */
+    if (chain_at == TY_POLY && !block_param_is_multi(c, block, 0) && vp && ip) {
+      Scope *bs = comp_scope_of(c, block);
+      if (bp_widen(bs, vp, TY_POLY)) changed = 1;
+      if (bp_widen(bs, ip, TY_POLY)) changed = 1;
+      return changed | 2;
+    }
   }
 
   /* array.{map,collect,each,select,filter,reject}.with_index(off) { |x, i| }:

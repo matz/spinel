@@ -31,3 +31,14 @@ p Value.ser_name
 p Value.deser_owner
 p Sub.deser_owner
 [Value, Sub].each { |k| p k.compatible? }
+
+# a subclass that overrides with an accessor: its reader is the method, arity 0
+class Value
+  def self.ser_arity = instance_method(:ser).arity
+end
+class Acc < Value
+  attr_reader :ser
+end
+p Acc.ser_owner
+p Acc.ser_arity
+p Sub.ser_arity

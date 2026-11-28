@@ -5214,6 +5214,16 @@ static int hash_new_body_needs_frame(Compiler *c, int id, const char *hp, const 
     if (!nm || !((hp && sp_streq(nm, hp)) || (kp && sp_streq(nm, kp)))) return 1;
   }
   if (ty_k == NK_LambdaNode) return 1;
+  /* self, or a bare call on it, in a class method: the receiving class the
+     method runs for (`_sp_cls`, where subclasses call it too) is a parameter
+     of the method's function, which the bare function never had -- it took the
+     instance self alone (#1379); the proc captures the class as it captures
+     the instance (ActiveRecord::Base._load_from_sql's `Hash.new do |h, type|
+     h[type] = discriminate_class_for_record(inheritance_column => type) end`) */
+  if (ty_k == NK_SelfNode || (ty_k == NK_CallNode && nt_ref(nt, id, "receiver") < 0)) {
+    Scope *es = comp_scope_of(c, id);
+    if (es && es->is_cmethod) return 1;
+  }
   /* a nested default block that stays bare is a function of its own, its
      parameters its own; one that does not is a proc made here */
   if (is_hash_new_block(nt, id)) return hash_new_block_is_proc(c, id);

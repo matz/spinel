@@ -40,7 +40,12 @@ begin
 rescue Interrupt
   interrupted = true
 end
-Process.wait(helper) unless reaped
+# The wait the signal interrupted may have reaped the helper first (it
+# woke to the signal and the exit together), and then there is none left.
+begin
+  Process.wait(helper) unless reaped
+rescue Errno::ECHILD
+end
 p interrupted
 s.close
 again = Socket.new(:INET, :STREAM)

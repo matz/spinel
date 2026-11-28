@@ -75,9 +75,13 @@ static void sio_mode_check(int frozen, const char *mode) {
    for it leaves the world, as for the ivar tables' lock, and a collection
    does not wait on it. */
 #ifdef SP_THREADS
-static void sio_lock(sp_StringIO *sio) {
+static int sio_trylock(sp_StringIO *sio) {
   int z = 0;
-  if (SP_ATOMIC_CAS(&sio->lock, &z, 1, 0, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) return;
+  return SP_ATOMIC_CAS(&sio->lock, &z, 1, 0, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED);
+}
+/* after a failed sio_trylock */
+static void sio_lock_wait(sp_StringIO *sio) {
+  int z;
   sp_native_enter();
   for (;;) {
     z = 0;
@@ -89,10 +93,11 @@ static void sio_lock(sp_StringIO *sio) {
 }
 static void sio_unlock(sp_StringIO *sio) { SP_ATOMIC_STORE(&sio->lock, 0, __ATOMIC_RELEASE); }
 #else
-static void sio_lock(sp_StringIO *sio) { (void)sio; }
+static int sio_trylock(sp_StringIO *sio) { (void)sio; return 1; }
+static void sio_lock_wait(sp_StringIO *sio) { (void)sio; }
 static void sio_unlock(sp_StringIO *sio) { (void)sio; }
 #endif
-/* under sio_lock; sio_write has checked the stream takes the write */
+/* under the StringIO's lock; sio_write has checked the stream takes the write */
 static void sio_grow(sp_StringIO *sio, int64_t need) {SP_GC_ROOT(sio);
   if (sio->str) {
     if (!sp_fd_grow(sio->str, sio->pos + need)) sp_oom_die();
@@ -100,7 +105,7 @@ static void sio_grow(sp_StringIO *sio, int64_t need) {SP_GC_ROOT(sio);
     return;
   }
   sio_own(sio); int64_t req = sio->pos + need; if (req <= sio->cap) return; int64_t nc = sio->cap ? sio->cap : 64; while (nc < req) nc *= 2; char *nb = (char *)realloc(sio->buf, nc + 1); if (!nb) sp_oom_die(); sio->buf = nb; sio->cap = nc; }
-/* under sio_lock */
+/* under the StringIO's lock */
 static void sio_put_locked(sp_StringIO *sio, const char *d, int64_t dl) {
   sio_sync(sio);
   /* A to_s result can be the stream's own String. Growth can move it,
@@ -117,14 +122,28 @@ static void sio_put_locked(sp_StringIO *sio, const char *d, int64_t dl) {
   sio_publish(sio);
 }
 /* The bytes, and for puts (line) the newline they do not end with, as one
-   write: another thread's line does not fall between them, as under CRuby */
-static int64_t sio_write_ln(sp_StringIO *sio, const char *d, int64_t dl, int line) {
+   write: another thread's line does not fall between them, as under CRuby.
+   A worker waiting for the lock lets a collection run, and the bytes may be
+   a String nothing roots (the display String sio_write_val makes for an
+   Integer), a literal or a byte on the stack, which no root takes: a write
+   that has to wait writes a copy of them. */
+static int64_t sio_write_ln(sp_StringIO *sio, const char *d, int64_t dl, int line) {SP_GC_ROOT(sio);
   sio_check_write(sio);
-  sio_lock(sio);
+  char *copy = NULL;
+  if (!sio_trylock(sio)) {
+    if (dl > 0) {
+      copy = (char *)malloc((size_t)dl);
+      if (!copy) sp_oom_die();
+      memcpy(copy, d, (size_t)dl);
+      d = copy;
+    }
+    sio_lock_wait(sio);
+  }
   sio_put_locked(sio, d, dl);
   int64_t w = dl;
   if (line && (dl == 0 || sio->buf[sio->pos - 1] != '\n')) { sio_put_locked(sio, "\n", 1); w++; }
   sio_unlock(sio);
+  free(copy);
   return w;
 }
 static int64_t sio_write(sp_StringIO *sio, const char *d, int64_t dl) { return sio_write_ln(sio, d, dl, 0); }
@@ -583,11 +602,12 @@ static int64_t sio_write_val(sp_StringIO *s, sp_RbVal v, int is_puts) {SP_GC_ROO
 /* print asks for the write side before its values, which may write
    nothing (print(nil)), as CRuby's does; puts does not ask for an empty one */
 void sp_StringIO_print_v1(sp_StringIO *s, sp_RbVal a) { sio_check_write(s); sio_write_val(s, a, 0); }
-void sp_StringIO_print_v2(sp_StringIO *s, sp_RbVal a, sp_RbVal b) { sio_check_write(s); sio_write_val(s, a, 0); sio_write_val(s, b, 0); }
-void sp_StringIO_print_v3(sp_StringIO *s, sp_RbVal a, sp_RbVal b, sp_RbVal c2) { sio_check_write(s); sio_write_val(s, a, 0); sio_write_val(s, b, 0); sio_write_val(s, c2, 0); }
+/* the later values stay rooted while an earlier one's write waits */
+void sp_StringIO_print_v2(sp_StringIO *s, sp_RbVal a, sp_RbVal b) {SP_GC_ROOT_RBVAL(b); sio_check_write(s); sio_write_val(s, a, 0); sio_write_val(s, b, 0); }
+void sp_StringIO_print_v3(sp_StringIO *s, sp_RbVal a, sp_RbVal b, sp_RbVal c2) {SP_GC_ROOT_RBVAL(b);SP_GC_ROOT_RBVAL(c2); sio_check_write(s); sio_write_val(s, a, 0); sio_write_val(s, b, 0); sio_write_val(s, c2, 0); }
 void sp_StringIO_puts_v1(sp_StringIO *s, sp_RbVal a) { sio_write_val(s, a, 1); }
-void sp_StringIO_puts_v2(sp_StringIO *s, sp_RbVal a, sp_RbVal b) { sio_write_val(s, a, 1); sio_write_val(s, b, 1); }
-void sp_StringIO_puts_v3(sp_StringIO *s, sp_RbVal a, sp_RbVal b, sp_RbVal c2) { sio_write_val(s, a, 1); sio_write_val(s, b, 1); sio_write_val(s, c2, 1); }
+void sp_StringIO_puts_v2(sp_StringIO *s, sp_RbVal a, sp_RbVal b) {SP_GC_ROOT_RBVAL(b); sio_write_val(s, a, 1); sio_write_val(s, b, 1); }
+void sp_StringIO_puts_v3(sp_StringIO *s, sp_RbVal a, sp_RbVal b, sp_RbVal c2) {SP_GC_ROOT_RBVAL(b);SP_GC_ROOT_RBVAL(c2); sio_write_val(s, a, 1); sio_write_val(s, b, 1); sio_write_val(s, c2, 1); }
 /* print and puts past three arguments: the :rest binding hands over a count
    and the boxed arguments, each rooted while the ones before it are written */
 static int64_t sio_write_vals(sp_StringIO *s, sp_int n, sp_RbVal *v, int is_puts) {SP_GC_ROOT(s);

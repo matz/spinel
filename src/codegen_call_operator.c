@@ -1090,6 +1090,18 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
                    cn9, an9);
         return 1;
       }
+      /* ...and one typed a container or a program object (an Array, a Hash,
+         a Range, a String Array), which CRuby names by its class: compared
+         as C numbers, the pointer met the double and the C did not build */
+      if (ty_is_array(cat) || ty_is_hash(cat) || cat == TY_RANGE || cat == TY_FLOAT_RANGE || cat == TY_STR_RANGE ||
+          (ty_is_object(cat) && !comp_ty_value_obj(c, cat))) {
+        const char *cn9 = rt == TY_FLOAT ? "Float" : rt == TY_RATIONAL ? "Rational" : "Integer";
+        buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b);
+        buf_printf(b, "), sp_raise_cls(\"ArgumentError\", sp_sprintf(\"comparison of %s with %%s failed\", sp_cmperr_desc(", cn9);
+        emit_boxed(c, argv[0], b);
+        buf_puts(b, "))), 0)");
+        return 1;
+      }
       TyKind rht9 = (rt == TY_FLOAT || rt == TY_RATIONAL) ? TY_FLOAT : TY_INT;
       /* An Integer or Float slot can hold nil (an ivar written nil, a
          `--rbs` `Integer?`, a hash read). Every arithmetic helper tests for

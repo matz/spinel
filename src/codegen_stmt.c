@@ -2247,6 +2247,11 @@ int strbuf_route_inline_call(Compiler *c, int v) {
   const NodeTable *nt = c->nt;
   v = nt_paren_single(c->nt, v);
   if (v < 0 || nt_kind(nt, v) != NK_CallNode) return 0;
+  /* (a call typed a value that is no String -- `m { |x| x + 1 }`, an
+     Integer -- hands no handle on: a to_s or an append over it renders the
+     value's own kind, where the route read the Integer as a handle) */
+  TyKind vt = comp_ntype(c, v);
+  if (vt != TY_STRING && vt != TY_STRBUF && vt != TY_POLY && vt != TY_UNKNOWN && vt != TY_NIL) return 0;
   int blk = nt_ref(nt, v, "block"), fwd_proc = 0;
   /* (a call that hands on the block its spliced method was given, `&blk`
      or `...`, runs the callee with that literal block: the outer call's

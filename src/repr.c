@@ -957,6 +957,18 @@ int repr_string_iterator_handle(Compiler *c, int node) {
          cplan_user(c, node).dispatch == CP_NONE;
 }
 
+/* A boxed receiver's call whose planned target is a class nothing constructs: the dispatch builds no
+   class arm for it (compute_instantiated), so the builtin row answers alone and its String is the builtin's.
+   (cplan_poly_arms lists the class arms only: none at all is that case too.) */
+static int repr_boxed_call_no_user_arm(Compiler *c, int v) {
+  int r = nt_ref(c->nt, v, "receiver");
+  if (r < 0 || comp_ntype(c, r) != TY_POLY) return 0;
+  const PolyPlan p = cplan_poly_arms(c, v);
+  for (int i = 0; i < p.n; i++)
+    if (p.arm[i].kind != PA_BUILTIN && p.arm[i].kind != PA_TRIAL) return 0;
+  return 1;
+}
+
 /* A call with a native String result has an object to pass to its caller.
    Reflection keeps its callee's signature. A setter expression selects its
    argument independently of what the invoked method returns. */
@@ -988,9 +1000,10 @@ int repr_native_call_handle(Compiler *c, int v) {
     const char *name = nt_str(nt, v, "name");
     if (r >= 0 && comp_ntype(c, r) == TY_POLY && !user_defines_or_reads(c, name)) return 0;
   }
-  if (plan.dispatch == CP_DIRECT && plan.mi >= 0)
+  int user = plan.dispatch != CP_NONE && !(k == NK_CallNode && repr_boxed_call_no_user_arm(c, v));
+  if (user && plan.dispatch == CP_DIRECT && plan.mi >= 0)
     return repr_method_ret_storage(&c->scopes[plan.mi]) == TY_STRBUF;
-  if (plan.dispatch != CP_SWITCH && plan.dispatch != CP_PER_ARM) {
+  if (!user || (plan.dispatch != CP_SWITCH && plan.dispatch != CP_PER_ARM)) {
     if (repr_native_string_reader(c, v)) return 1;
     return k == NK_CallNode ? repr_string_iterator_handle(c, v) || repr_boxed_native_handle(c, v)
                             : cplan_builtin_handle_row(c, v) || repr_super_native_keeps(c, v);

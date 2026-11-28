@@ -3,8 +3,8 @@
 # rescues it and closes the socket, the descriptor is free, and the next
 # socket is given the same number. The connect waits on a listener whose
 # queue is full, which keeps it waiting on Linux; where the kernel completes
-# it anyway (macOS), the signal lands in the sleep after it instead, and the
-# output is the same.
+# it anyway (macOS), the signal lands in the wait for the helper after it
+# instead, and the output is the same.
 require "socket"
 
 srv = Socket.new(:INET, :STREAM)
@@ -25,16 +25,22 @@ s = Socket.new(:INET, :STREAM)
 fd = s.fileno
 helper = Process.spawn("sh", "-c", "sleep 0.5; kill -INT #{Process.pid}")
 interrupted = false
+reaped = false
 begin
   begin
     s.connect(Socket.sockaddr_in(port, "127.0.0.1"))
   rescue SystemCallError
   end
-  sleep 5
+  # The helper's SIGINT lands in the connect, or in this wait however late
+  # it comes: waiting for the helper is waiting for its signal. One posted
+  # as the helper exited is raised in the sleep.
+  Process.wait(helper)
+  reaped = true
+  sleep 1
 rescue Interrupt
   interrupted = true
 end
-Process.wait(helper)
+Process.wait(helper) unless reaped
 p interrupted
 s.close
 again = Socket.new(:INET, :STREAM)

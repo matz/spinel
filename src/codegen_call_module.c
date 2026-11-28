@@ -33,6 +33,8 @@ static void emit_spawn_fd_options(Compiler *c, Buf *b, int tkv, int tfd, int tth
       "    sp_PolyArray_push(_t%d, sp_box_int(sp_File_fileno((sp_File*)_v.v.p))); "
       "  }\nelse if (sp_rbval_is_string(_v)) { "
       "    sp_PolyArray_push(_t%d, sp_box_int(sp_process_open_redirect(sp_rbval_string_bytes(_v), %d, _t%d))); "
+      "  }\nelse if (sp_rbval_is_array(_v) && sp_poly_length(_v) >= 1 && sp_rbval_is_string(sp_poly_arr_get(_v, 0))) { "
+      "    sp_PolyArray_push(_t%d, sp_box_int(sp_process_open_redirect_array(_v, %d, _t%d))); "
       "  }\nelse if (_v.tag == SP_TAG_OBJ && _v.cls_id == SP_BUILTIN_POLY_ARRAY) { "
       "    sp_PolyArray *_a = (sp_PolyArray*)_v.v.p; "
       "    if (_a->len >= 2 && _a->data[0].tag == SP_TAG_SYM "
@@ -64,6 +66,7 @@ static void emit_spawn_fd_options(Compiler *c, Buf *b, int tkv, int tfd, int tth
       topts,
       topts,
       topts,
+      topts, i, town,
       topts, i, town,
       topts,
       topts,
@@ -2185,9 +2188,8 @@ int emit_call_builtin_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable 
       int last_is_opts = 0;
       if (extra >= 1 && nt_kind(nt, argv[argc - 1]) != NK_SplatNode) {
         TyKind ltk = repr_of(c, argv[argc - 1]).as_ty;
-        if (ltk == TY_SYM_POLY_HASH || ltk == TY_STR_POLY_HASH ||
-            ltk == TY_POLY_POLY_HASH || ltk == TY_UNKNOWN ||
-            ltk == TY_POLY) {
+        /* (a Hash of any typing: `7 => w.fileno` is one of Integers) */
+        if (ty_is_hash(ltk) || ltk == TY_UNKNOWN || ltk == TY_POLY) {
           last_is_opts = 1;
         }
       }
@@ -2261,6 +2263,8 @@ int emit_call_builtin_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable 
       buf_printf(b, " int _t%d[3] = { -1, -1, -1 };", town);
       int tunset = ++g_tmp;
       buf_printf(b, " sp_RbVal _t%d = sp_box_nil(); SP_GC_ROOT_RBVAL(_t%d);", tunset, tunset);
+      int tpast = ++g_tmp;
+      buf_printf(b, " sp_RbVal _t%d = sp_box_nil(); SP_GC_ROOT_RBVAL(_t%d);", tpast, tpast);
       if (last_is_opts) {
         int tth = ++g_tmp;
         int tkv = ++g_tmp;
@@ -2268,6 +2272,10 @@ int emit_call_builtin_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable 
         buf_printf(b, " sp_RbVal _t%d = ", tth);
         emit_boxed(c, argv[argc - 1], b);
         buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d);", tth);
+        /* The descriptors past 2 (`3 => w`), read from the options at run
+           time, before a slot below opens a file: a raise here leaves none
+           open. */
+        buf_printf(b, " _t%d = sp_process_redirect_past_std(_t%d);", tpast, tth);
         buf_printf(b, " { sp_bool _t%d; _t%d = sp_poly_hash_get_pair_val(_t%d, "
                       "sp_box_sym(sp_sym_intern(\"unsetenv_others\")), &_t%d); }", tfd, tunset, tth, tfd);
         /* For the three fd slots (in/out/err): look up the value and
@@ -2338,6 +2346,8 @@ int emit_call_builtin_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable 
       if (tenv) buf_printf(b, " sp_PolyArray_push(_t%d, _t%d);", topts, tenv);
       else buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_nil());", topts);
       buf_printf(b, " sp_PolyArray_push(_t%d, _t%d);", topts, tunset);
+      /* Slot 10: the redirections of the descriptors past 2 (`3 => w`) */
+      buf_printf(b, " sp_PolyArray_push(_t%d, _t%d);", topts, tpast);
       if (is_exec)   /* Kernel#exec: the process becomes the command, with the options applied to it, or raises its Errno */
         buf_printf(b, " sp_process_exec(_t%d, sp_box_poly_array(_t%d), sp_box_poly_array(_t%d)); sp_int _r = 0;", tcmd, targs, topts);
       else

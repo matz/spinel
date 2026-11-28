@@ -1,8 +1,12 @@
-in: 1
-0
-out
-out: 1
-err: 1
-system in: 1
-0
-1
+0: closed
+2: open
+0: open
+1: closed
+1: open
+2: closed
+0: closed
+true
+1: closed
+2: closed
+err: the parent stdout
+1: closed

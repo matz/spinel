@@ -117,10 +117,12 @@ static const char *sp_errf_conv(sp_RbVal v) {
    The previous /dev/null behaviour silently swallowed the child's stderr
    and made `Process.spawn("cc -c foo.c")` in verbose mode look like it
    produced no output. */
-#define SP_SPAWN_FD_CLOSE (-2)   /* `in: :close`: the child's descriptor is closed */
+/* `in: :close`: the child's descriptor is closed, once every copy is made
+   (close_std_marked): `in: :close, out: 0` copies the parent's stdin to the
+   child's stdout first. */
+#define SP_SPAWN_FD_CLOSE (-2)
 static int apply_redirect(int target_fd, int src_fd) {
-  if (src_fd == SP_SPAWN_FD_CLOSE) { close(target_fd); return 0; }
-  if (src_fd < 0) return 0;
+  if (src_fd < 0) return 0;   /* (unset, or :close) */
   if (src_fd != target_fd) { dup2(src_fd, target_fd); return 0; }
   /* already in place (a pipe took a free fd 0): no dup2 clears close-on-exec */
   int fl = fcntl(target_fd, F_GETFD);
@@ -560,6 +562,8 @@ static int spawn_opts_apply(sp_spawn_opts *o, int for_exec, int *which) {
   else if (o->pgroup > 1) setpgid(0, o->pgroup);
   if (apply_redirect(0, o->in_fd) != 0 || apply_redirect(1, o->out_fd) != 0 ||
       apply_redirect(2, o->err_fd) != 0) { *which = 0; spawn_past_std_release(o); return -1; }
+  { int fds[3] = { o->in_fd, o->out_fd, o->err_fd };
+    for (int i = 0; i < 3; i++) if (fds[i] == SP_SPAWN_FD_CLOSE) close(i); }
   if (!for_exec) close_redirect_srcs(o->in_fd, o->out_fd, o->err_fd);
   else {
     int fds[3] = { o->in_fd, o->out_fd, o->err_fd };
@@ -823,10 +827,13 @@ sp_int sp_process_spawn(sp_RbVal cmd, sp_RbVal args_box,
       struct pollfd hp; hp.fd = hold_fd; hp.events = POLLIN; hp.revents = 0;
       (void)poll(&hp, 1, -1);
     }
-    /* (a redirection past 2 may name the number this pipe took: the pipe
-       moves above every target first, and keeps its close-on-exec) */
-    if (o.nx > 0 && err_pipe[1] < spawn_past_std_floor(&o)) {
-      int up = fcntl(err_pipe[1], F_DUPFD_CLOEXEC, spawn_past_std_floor(&o));
+    /* A redirection past 2 may name the number this pipe took, and the pipe
+       took a standard number when the parent had one closed, which a :close
+       or a copy of the child's would take from it: the pipe moves above
+       every target first, and keeps its close-on-exec. */
+    { int floor = o.nx > 0 ? spawn_past_std_floor(&o) : 3;
+    if (err_pipe[1] < floor) {
+      int up = fcntl(err_pipe[1], F_DUPFD_CLOEXEC, floor);
       if (up < 0) {   /* no descriptor that high: said through the pipe as it is */
         int fail[2] = { errno, 0 };
         (void)!write(err_pipe[1], fail, sizeof fail);
@@ -834,7 +841,7 @@ sp_int sp_process_spawn(sp_RbVal cmd, sp_RbVal args_box,
       }
       close(err_pipe[1]);
       err_pipe[1] = up;
-    }
+    } }
     { int which = 0;
       if (spawn_opts_apply(&o, 0, &which) != 0) {
         int fail[2] = { errno, which };

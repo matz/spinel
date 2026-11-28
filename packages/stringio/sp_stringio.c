@@ -5,8 +5,12 @@
    sp_stringio.h, the interface the compiler's StringIO dispatch emits calls to. */
 #include "sp_stringio.h"      /* the StringIO struct + this unit's prototypes */
 #include "sp_string.h"        /* sp_String, for a boxed shared-mutable String */
+#include "sp_sched.h"         /* sp_native_enter / sp_native_leave: no-ops without threads */
 #include <stdlib.h>
 #include <string.h>
+#ifdef SP_THREADS
+#include <sched.h>
+#endif
 
 /* Detach a borrowed (GC-string-backed) buffer into a private malloc'd copy
    before any mutation. Spinel strings are immutable char*, so a StringIO
@@ -64,15 +68,40 @@ static void sio_mode_check(int frozen, const char *mode) {
   if (frozen && mode && (mode[0] == 'w' || mode[0] == 'a' || strchr(mode, '+')))
     sp_raise_cls("Errno::EACCES", "Permission denied");
 }
+/* One write at a time on a StringIO, as under CRuby's GVL: a write that
+   grows the buffer reallocates it, and another thread's write into the old
+   one, or its own realloc of it, corrupts the heap. The section takes no
+   safepoint and raises nothing (sio_write checks first), so a worker waiting
+   for it leaves the world, as for the ivar tables' lock, and a collection
+   does not wait on it. */
+#ifdef SP_THREADS
+static void sio_lock(sp_StringIO *sio) {
+  int z = 0;
+  if (SP_ATOMIC_CAS(&sio->lock, &z, 1, 0, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) return;
+  sp_native_enter();
+  for (;;) {
+    z = 0;
+    if (SP_ATOMIC_LOAD(&sio->lock, __ATOMIC_RELAXED) == 0 &&
+        SP_ATOMIC_CAS(&sio->lock, &z, 1, 0, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) break;
+    sched_yield();
+  }
+  sp_native_leave();
+}
+static void sio_unlock(sp_StringIO *sio) { SP_ATOMIC_STORE(&sio->lock, 0, __ATOMIC_RELEASE); }
+#else
+static void sio_lock(sp_StringIO *sio) { (void)sio; }
+static void sio_unlock(sp_StringIO *sio) { (void)sio; }
+#endif
+/* under sio_lock; sio_write has checked the stream takes the write */
 static void sio_grow(sp_StringIO *sio, int64_t need) {SP_GC_ROOT(sio);
-  sio_check_write(sio);
   if (sio->str) {
     if (!sp_fd_grow(sio->str, sio->pos + need)) sp_oom_die();
     sio_sync(sio);
     return;
   }
   sio_own(sio); int64_t req = sio->pos + need; if (req <= sio->cap) return; int64_t nc = sio->cap ? sio->cap : 64; while (nc < req) nc *= 2; char *nb = (char *)realloc(sio->buf, nc + 1); if (!nb) sp_oom_die(); sio->buf = nb; sio->cap = nc; }
-static int64_t sio_write(sp_StringIO *sio, const char *d, int64_t dl) {
+/* under sio_lock */
+static void sio_put_locked(sp_StringIO *sio, const char *d, int64_t dl) {
   sio_sync(sio);
   /* A to_s result can be the stream's own String. Growth can move it,
      and writes can overlap it even when its capacity is sufficient. */
@@ -86,8 +115,19 @@ static int64_t sio_write(sp_StringIO *sio, const char *d, int64_t dl) {
   if (sio->pos > sio->len) sio->len = sio->pos;
   sio->buf[sio->len] = '\0';
   sio_publish(sio);
-  return dl;
 }
+/* The bytes, and for puts (line) the newline they do not end with, as one
+   write: another thread's line does not fall between them, as under CRuby */
+static int64_t sio_write_ln(sp_StringIO *sio, const char *d, int64_t dl, int line) {
+  sio_check_write(sio);
+  sio_lock(sio);
+  sio_put_locked(sio, d, dl);
+  int64_t w = dl;
+  if (line && (dl == 0 || sio->buf[sio->pos - 1] != '\n')) { sio_put_locked(sio, "\n", 1); w++; }
+  sio_unlock(sio);
+  return w;
+}
+static int64_t sio_write(sp_StringIO *sio, const char *d, int64_t dl) { return sio_write_ln(sio, d, dl, 0); }
 
 /* the bytes of a shared handle (s->str) are the handle's: it keeps them
    alive and frees them */
@@ -142,7 +182,7 @@ sp_int sp_StringIO_size(sp_StringIO *s) { sio_sync(s); return s->len; }
 /* Binary-safe: a Ruby String may carry an embedded NUL (`[0].pack("C")`),
    so the operand is measured with its recorded length, not strlen. */
 sp_int sp_StringIO_write(sp_StringIO *s, const char *str) { return sio_write(s, str, (int64_t)sp_str_byte_len(str)); }
-void sp_StringIO_puts(sp_StringIO *s, const char *str) { int64_t l = (int64_t)sp_str_byte_len(str); sio_write(s, str, l); if (l == 0 || str[l-1] != '\n') sio_write(s, "\n", 1); }
+void sp_StringIO_puts(sp_StringIO *s, const char *str) { sio_write_ln(s, str, (int64_t)sp_str_byte_len(str), 1); }
 void sp_StringIO_puts_empty(sp_StringIO *s) { sio_write(s, "\n", 1); }
 void sp_StringIO_print(sp_StringIO *s, const char *str) { sio_write(s, str, (int64_t)sp_str_byte_len(str)); }
 sp_int sp_StringIO_putc(sp_StringIO *s, sp_int ch) { char c = (char)(ch & 0xFF); sio_write(s, &c, 1); return ch; }
@@ -512,33 +552,32 @@ sp_RbVal sp_StringIO_readlines(sp_StringIO *s) {SP_GC_ROOT(s);
    line, via the generic container hooks) and terminates lines. A value kind
    this in-memory stream can't render raises rather than writing garbage. */
 static int64_t sio_write_val(sp_StringIO *s, sp_RbVal v, int is_puts) {SP_GC_ROOT(s);SP_GC_ROOT_RBVAL(v);
-  int64_t p0 = s->pos, w = 0;
+  const char *t = NULL;
+  size_t n = 0;
   if (sp_rbval_is_string(v)) {
-    const char *t = sp_rbval_string_bytes(v);
-    if (t) w += sio_write(s, t, (int64_t)sp_str_byte_len(t));
+    t = sp_rbval_string_bytes(v);
+    if (t) n = sp_str_byte_len(t);
   }
   else switch (v.tag) {
-    case SP_TAG_INT: { const char *t = sp_int_to_s(v.v.i); w += sio_write(s, t, (int64_t)strlen(t)); break; }
-    case SP_TAG_FLT: { const char *t = sp_float_to_s(v.v.f); w += sio_write(s, t, (int64_t)strlen(t)); break; }
-    case SP_TAG_BOOL: { const char *t = v.v.b ? "true" : "false"; w += sio_write(s, t, (int64_t)strlen(t)); break; }
+    case SP_TAG_INT: t = sp_int_to_s(v.v.i); n = strlen(t); break;
+    case SP_TAG_FLT: t = sp_float_to_s(v.v.f); n = strlen(t); break;
+    case SP_TAG_BOOL: t = v.v.b ? "true" : "false"; n = strlen(t); break;
     case SP_TAG_NIL: break;  /* puts nil -> bare newline; print nil -> nothing */
     default:
       if (is_puts && sp_json_kind_fn && sp_json_kind_fn(v) == 1) {
-        sp_int n = sp_json_len_fn(v);
-        for (sp_int i = 0; i < n; i++) w += sio_write_val(s, sp_json_aref_fn(v, i), 1);
+        int64_t w = 0;
+        sp_int len = sp_json_len_fn(v);
+        for (sp_int i = 0; i < len; i++) w += sio_write_val(s, sp_json_aref_fn(v, i), 1);
         return w;  /* elements each terminated their own line */
       }
       /* Write the selected display result and its byte length. */
-      {
-        size_t n;
-        const char *t = sp_poly_to_s_bytes(v, &n);
-        w += sio_write(s, t, (int64_t)n);
-        break;
-      }
+      t = sp_poly_to_s_bytes(v, &n);
+      break;
   }
-  /* terminate the line unless THIS value's bytes already ended with one */
-  if (is_puts && (s->pos == p0 || s->buf[s->pos - 1] != '\n')) w += sio_write(s, "\n", 1);
-  return w;
+  /* terminated unless THIS value's bytes already end with a newline */
+  if (!t) { t = ""; n = 0; }
+  if (n == 0 && !is_puts) return 0;
+  return sio_write_ln(s, t, (int64_t)n, is_puts);
 }
 
 /* print asks for the write side before its values, which may write

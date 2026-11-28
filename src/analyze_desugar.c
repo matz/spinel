@@ -1191,7 +1191,37 @@ static int me_leaf_defined(const NodeTable *nt, const char *leaf) {
   }
   return 0;
 }
+/* The defs of a class_eval text the first step leaves to the walk (sce_graft,
+   -2): the statement that holds the class_eval (the call, or the each over
+   constants it is written in) and each name a top-level def of the text
+   defines. A fold ahead of the walk that asks whether a class defines a name
+   reads the statement as the defs it becomes (me_stmt_defines, body_vis_walk,
+   mdfold_answer_sure), so it answers as it did with the text grafted ahead
+   of it. Cleared as the walk begins (sce_pending_clear). */
+typedef struct { int stmt; char *name; } ScePending;
+static ScePending *g_sce_pend;
+static int g_sce_npend, g_sce_cpend;
+static void sce_pending_add(int stmt, const char *name) {
+  if (g_sce_npend == g_sce_cpend) {
+    g_sce_cpend = g_sce_cpend ? g_sce_cpend * 2 : 16;
+    g_sce_pend = realloc(g_sce_pend, sizeof *g_sce_pend * (size_t)g_sce_cpend);
+    if (!g_sce_pend) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  }
+  g_sce_pend[g_sce_npend].stmt = stmt;
+  if (!(g_sce_pend[g_sce_npend++].name = strdup(name))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+}
+void sce_pending_clear(void) {
+  for (int i = 0; i < g_sce_npend; i++) free(g_sce_pend[i].name);
+  g_sce_npend = 0;
+}
+/* does statement s hold a class_eval text left to the walk that defines m? */
+static int sce_pending_stmt_defines(const NodeTable *nt, int s, const char *m) {
+  if (!g_sce_npend || s < 0 || nt_kind(nt, s) != NK_CallNode) return 0;
+  for (int i = 0; i < g_sce_npend; i++) if (g_sce_pend[i].stmt == s && sp_streq(g_sce_pend[i].name, m)) return 1;
+  return 0;
+}
 static int me_stmt_defines(const NodeTable *nt, int s, const char *m) {
+  if (sce_pending_stmt_defines(nt, s, m)) return 1;
   NodeKind sk = nt_kind(nt, s);
   if (sk == NK_DefNode) return nt_ref(nt, s, "receiver") < 0 && nt_str(nt, s, "name") && sp_streq(nt_str(nt, s, "name"), m);
   int nn = sk == NK_AliasMethodNode ? nt_ref(nt, s, "new_name") : -1;
@@ -1231,7 +1261,7 @@ static int me_body_defines(Compiler *c, const char *leaf, const char *m, int ski
     for (int i = 0; i < bn; i++) {
       int rv = nt_ref(nt, bb[i], "receiver");
       /* a def the load record proves runs after the point asked is not there yet; one it cannot order counts */
-      if ((rv < 0 || nt_kind(nt, rv) == NK_SelfNode) && me_stmt_defines(nt, bb[i], m) &&
+      if ((((rv < 0 || nt_kind(nt, rv) == NK_SelfNode) && me_stmt_defines(nt, bb[i], m)) || sce_pending_stmt_defines(nt, bb[i], m)) &&
           !(me_runs_after(c, bb[i], at, &once) || (!subtree_has(nt, id, at) && me_runs_after(c, id, at, &once)))) return 1;
     }
   }
@@ -7554,7 +7584,7 @@ static int me_record_defines(Compiler *c, const char *cls, const char *m, int in
     int bn = 0; const int *bb = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &bn) : NULL;
     for (int i = 0; i < bn; i++) {
       int rv = nt_ref(nt, bb[i], "receiver");
-      if ((rv < 0 || nt_kind(nt, rv) == NK_SelfNode) && me_stmt_defines(nt, bb[i], m)) found = 1;
+      if (((rv < 0 || nt_kind(nt, rv) == NK_SelfNode) && me_stmt_defines(nt, bb[i], m)) || sce_pending_stmt_defines(nt, bb[i], m)) found = 1;
     }
   }
   /* (a reopen's `private :mem` or undef_method) */
@@ -7997,6 +8027,8 @@ static int mdfold_answer_sure(NodeTable *nt, const int *parent, const char *m, i
   static const char *const changers[] = { "remove_method", "undef_method", "alias_method", "define_method",
     "private", "public", "protected", "module_function", "private_class_method", "public_class_method",
     "attr", "attr_reader", "attr_writer", "attr_accessor", NULL };
+  for (int i = 0; i < g_sce_npend; i++)   /* (a def of the name in a text left to the walk) */
+    if (sp_streq(g_sce_pend[i].name, m) && !mdfold_within(parent, g_sce_pend[i].stmt, cond)) return 0;
   for (int id = 0; id < nt->count; id++) {
     NodeKind k = nt_kind(nt, id);
     if (k == NK_DefNode && nt_str(nt, id, "name") && sp_streq(nt_str(nt, id, "name"), m) &&
@@ -19139,6 +19171,7 @@ static void body_vis_walk(const NodeTable *nt, int n, const char *m, int before,
     return;
   }
   if (k == NK_ClassNode || k == NK_ModuleNode || k == NK_SingletonClassNode) return;
+  if (k == NK_CallNode && n < before && sce_pending_stmt_defines(nt, n, m)) { st->seen = 1; st->vis = st->sect; return; }
   int vis = body_vis_word(nt, n);
   if (vis) {
     int an = 0; const int *av = nt_arr(nt, nt_ref(nt, n, "arguments"), "arguments", &an);
@@ -36514,7 +36547,6 @@ static void sce_text_walk(NodeTable *t, int id, int nest, int in_def, SceText *w
    (a method_defined? the step folds, a body local a closure shares, a
    builtin the step splices), so it is grafted ahead of them, as before. */
 struct SceFacts;
-static int sce_name_asked(const NodeTable *nt, struct SceFacts *f, const char *dn);
 static struct SceFacts *sce_facts(HostStep *h);
 /* A call the step ahead of the walk rewrites onto a builtin's Ruby
    implementation (enumerable.rb, builtins/*.rb): the text's def would be
@@ -36548,8 +36580,7 @@ static int sce_text_walk_safe(Compiler *c, struct SceFacts *f, NodeTable *t, con
       if (!dn || blk < 0 || nt_kind(t, blk) != NK_BlockNode) return 0;
     }
     else return 0;
-    if (!dn || is_definition_hook_name(dn) ||
-        name_list_has(c->def_asked, c->ndef_asked, dn) || sce_name_asked(c->nt, f, dn)) return 0;
+    if (!dn || is_definition_hook_name(dn)) return 0;
   }
   int nn = 0, ok = 1;
   int *all = nt_subtree_ids(t, ss, sn, &nn);
@@ -36585,6 +36616,7 @@ static int sce_text_walk_safe(Compiler *c, struct SceFacts *f, NodeTable *t, con
 enum { SCE_SPAN, SCE_STEP, SCE_WALK };
 static int sce_where = SCE_SPAN;
 static HostStep *sce_step_host;   /* (the step's, for its facts) */
+static int sce_step_stmt = -1;    /* (the body statement whose text the step reads: sce_pending_add) */
 
 /* Parse `text`, the eval at site, in frame fr and graft its statements into
    nt; up and k name its own locals apart (SceText). 0, or -1 when it does
@@ -36627,7 +36659,19 @@ static int sce_graft(Compiler *c, const SceFrame *fr, SceText *up, int k, const 
   int prog = tmp->root_id;
   int stmts = prog >= 0 ? nt_ref(tmp, prog, "statements") : -1;
   int sn = 0; const int *ss = stmts >= 0 ? nt_arr(tmp, stmts, "body", &sn) : NULL;
-  if (sce_where == SCE_STEP && !up && !at && sce_text_walk_safe(c, sce_facts(sce_step_host), tmp, ss, sn)) { nt_free(tmp); return -2; }
+  if (sce_where == SCE_STEP && !up && !at && sce_text_walk_safe(c, sce_facts(sce_step_host), tmp, ss, sn)) {
+    /* (left to the walk: the folds ahead of it read the statement as the text's defs) */
+    for (int i = 0; i < sn; i++) {
+      const char *dn = NULL;
+      if (nt_kind(tmp, ss[i]) == NK_DefNode) dn = nt_str(tmp, ss[i], "name");
+      else if (nt_kind(tmp, ss[i]) == NK_CallNode) {
+        int ac = 0; const int *av = call_args(tmp, ss[i], &ac);
+        dn = ac == 1 ? vis_arg_name(tmp, av[0]) : NULL;
+      }
+      if (dn && sce_step_stmt >= 0) sce_pending_add(sce_step_stmt, dn);
+    }
+    nt_free(tmp); return -2;
+  }
   for (int i = 0; i < sn && !w.bad; i++)
     if (sce_eval_string(tmp, ss[i]) < 0) sce_text_walk(tmp, ss[i], 0, 0, &w);
   int ok = !w.bad;
@@ -37700,9 +37744,6 @@ struct SceFacts {
      visibility call, and whether one was: the splices of a step into one
      body come in order, so each reads on from the last */
   int vis_body, vis_upto, vis;
-  /* the names the program's definition queries name by a literal (sce_name_asked):
-     the nodes below asked_upto are read; asked_any, a query of a computed name */
-  char **asked; int nasked, casked, asked_upto, asked_any;
 };
 static struct SceFacts *sce_facts(HostStep *h) {
   if (!h->sce) {
@@ -37715,38 +37756,10 @@ static struct SceFacts *sce_facts(HostStep *h) {
 }
 void sce_facts_free(struct SceFacts *f) {
   if (!f) return;
-  for (int i = 0; i < f->nasked; i++) free(f->asked[i]);
-  free(f->asked);
   free(f->scoped.names);
   sce_consts_free(&f->consts);
   free(f);
 }
-/* Does a definition query of the program (method_defined?, respond_to?, a
-   Method maker: is_method_presence_query) name dn by a literal? The step
-   that folds such a query ahead of the walk must see the text's def. */
-static int sce_name_asked(const NodeTable *nt, struct SceFacts *f, const char *dn) {
-  /* (the nodes appended since the last ask: a graft's, read once each) */
-  for (int q = f->asked_upto; q < nt->count; q++) {
-    if (nt_kind(nt, q) != NK_CallNode) continue;
-    int ac = 0, a = 0;
-    const char *qn = call_sent_name(nt, q, &a);
-    if (!qn || !is_method_presence_query(qn)) continue;
-    const int *av = call_args(nt, q, &ac);
-    const char *an = a < ac ? vis_arg_name(nt, av[a]) : NULL;
-    if (!an) { f->asked_any = 1; continue; }   /* (a computed name asks every name) */
-    if (f->nasked == f->casked) {
-      f->casked = f->casked ? f->casked * 2 : 16;
-      f->asked = realloc(f->asked, sizeof *f->asked * (size_t)f->casked);
-      if (!f->asked) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-    }
-    if (!(f->asked[f->nasked++] = strdup(an))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  }
-  f->asked_upto = nt->count;
-  if (f->asked_any) return 1;
-  for (int i = 0; i < f->nasked; i++) if (sp_streq(f->asked[i], dn)) return 1;
-  return 0;
-}
-
 /* The statements body[at..at + n) of a class or module body (owner's): a
    class_eval of text known now becomes the text's statements, in place,
    run in the frame whose locals are `locals` (comma-joined; NULL: a frame
@@ -37786,6 +37799,7 @@ static int sce_body(Compiler *c, HostStep *h, int owner, int body, int at, int n
     }
     framed |= str >= 0 || each;
     SceFrame fr = { &scope, known };
+    sce_step_stmt = st;
     if (str >= 0) {
       char *text = sce_text(nt, str, NULL, NULL);
       if (text) { ok = sce_graft(c, &fr, NULL, -1, text, st, NULL, &ins, &nins) >= 0; free(text); }
@@ -37880,6 +37894,7 @@ int sce_walk_frame(Compiler *c, HostStep *h, int frame) {
 int desugar_static_class_eval(Compiler *c, HostStep *h) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count, changed = 0;
+  sce_pending_clear();
   sce_where = SCE_STEP; sce_step_host = h;
   for (int id = 0; id < n0; id++) {
     NodeKind k = nt_kind(nt, id);

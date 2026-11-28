@@ -51593,6 +51593,7 @@ static void an_phase_desugar_register(Compiler *c) {
      program run once, at the walk's end */
   host_begin(&hs, &lc);
   scope_read_keys_from(c);   /* (the reads qualify keys after the walk: read_key_name) */
+  sce_pending_clear();   /* (the class_eval texts left to the walk are grafted there) */
   AN_STEP_V("elab_program", elab_program(c, &hs));   /* walk_scope of each file's top level, and the load record */
   an_work_step(c, "elab_prov_apply", elab_prov_apply);   /* the nested classes take their names, by the rule (qc_rule_qualifies) */
   scope_read_keys_from(NULL);

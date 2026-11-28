@@ -59,3 +59,25 @@ class Qualified
   include Outer::Inner unless include?(Outer::Inner)
 end
 p Qualified.new.inner
+
+# a module already in the ancestry runs no include and no hook: the guard
+# skips both, directly and through a module that includes it
+module Hooked
+  def self.included(base) = puts("Hooked into #{base}")
+  def hooked = "hooked"
+end
+class Once
+  include Hooked
+  include Hooked unless include?(Hooked)
+end
+p Once.new.hooked
+module Carrier
+  include Hooked
+end
+class Via
+  include Carrier
+  include Hooked unless include?(Hooked)
+  def both = [hooked, Via.include?(Hooked)]
+end
+p Via.new.both
+

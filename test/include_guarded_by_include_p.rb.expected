@@ -5,3 +5,7 @@ true
 1
 1
 "inner"
+Hooked into Once
+"hooked"
+Hooked into Carrier
+["hooked", true]

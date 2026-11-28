@@ -29734,7 +29734,11 @@ static void emit_nil_target_head_r(Compiler *c, int id, Buf *b, const char *lead
          NULL handle is nil to the test below. One nothing runs after
          keeps its bytes.) */
       hstr = !ko && ob.p && ty[i] == TY_STRING &&
-             (rest_runs || later_operand_runs(c, node, n, -1, i));
+             (rest_runs || later_operand_runs(c, node, n, -1, i) ||
+              /* a call answers its String as the handle when the callee is
+                 spliced in (repr_call_result_storage): held as one too,
+                 where a bytes temp took the handle for its bytes */
+              nt_kind(c->nt, node[i]) == NK_CallNode);
       if (hstr) buf_puts(b, "sp_String *");
       else if (ko) buf_puts(b, oint_ctype(ty[i])); else emit_ctype(c, ty[i], b);
       /* (one representation: the handle temp takes a value of either face,

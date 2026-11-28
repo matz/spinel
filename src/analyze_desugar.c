@@ -37832,11 +37832,14 @@ static int guarded_include_extended_answers(const NodeTable *nt) {
    Class's, or an instance method of a module the program extends something
    with (or of a module such a module includes): the guard asks that method,
    and its answer decides (test/include_guarded_by_own_include_p.rb,
-   test/include_guarded_by_extended_include_p.rb). */
+   test/include_guarded_by_extended_include_p.rb). Nor where the program
+   defines `include` so (a `def self.include`): the guard is what spares that
+   method a call where the module is in already. (Such a method that calls
+   super is refused anyway: a class's ancestors are fixed at compile time.) */
 int desugar_guarded_include_gate(Compiler *c, LowerCtx *lc) {
   (void)lc;
   const NodeTable *nt = c->nt;
-  if (cb_program_defines(nt, "include?", NULL) || guarded_include_extended_answers(nt)) return 0;
+  if (cb_program_defines(nt, "include?", NULL) || cb_program_defines(nt, "include", NULL) || guarded_include_extended_answers(nt)) return 0;
   NT_FOREACH_KIND(nt, NK_SingletonClassNode, sc)
     if (guarded_include_defines_deep(nt, nt_ref(nt, sc, "body"), 0)) return 0;
   NT_FOREACH_KIND(nt, NK_CallNode, s) {

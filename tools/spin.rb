@@ -1135,6 +1135,7 @@ def resolve_deps(root, offline)
         # one tag to the next used to keep the old tag's commit until
         # spin.lock was deleted. A lock written before `requested` was
         # recorded keeps its pin unless the URL changed.
+        moved = false
         if want != ""
           lt = "lock." + dep
           moved = lock.get(lt, "git") != url
@@ -1146,6 +1147,10 @@ def resolve_deps(root, offline)
         end
         rec = ""
         if offline
+          # Offline nothing can say which commit the new ref names, and the
+          # vendored copy is the old pin's: resolving it there would lock
+          # that copy under the new ref. So a moved pin is refused offline.
+          spin_die("--offline: " + dep + "'s git source or ref changed since spin.lock; resolve it online first (spin lock)") if moved
           hit = ""
           Dir.glob(cache_packages_dir + "/" + dep + "-*").each do |h|
             st = File.join(h, ".spin-sha")

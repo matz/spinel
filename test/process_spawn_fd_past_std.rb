@@ -138,7 +138,7 @@ r.close
 
 # :close: the child has no descriptor 3
 r, w = IO.pipe
-pid = spawn("sh", "-c", "echo x >&#{w.fileno}", w.fileno => :close, err: File::NULL)
+pid = spawn("sh", "-c", "echo x >/dev/fd/#{w.fileno}", w.fileno => :close, err: File::NULL)
 Process.wait(pid)
 p $?.success?
 w.close
@@ -180,7 +180,7 @@ p t.value
 # each member of a group that is closed is closed
 r, w = IO.pipe
 r3, w3 = IO.pipe
-pid = spawn("sh", "-c", "echo a >&#{w.fileno}; echo b >&#{w3.fileno}", [w.fileno, w3.fileno] => :close, err: File::NULL)
+pid = spawn("sh", "-c", "echo a >/dev/fd/#{w.fileno}; echo b >/dev/fd/#{w3.fileno}", [w.fileno, w3.fileno] => :close, err: File::NULL)
 Process.wait(pid)
 w.close
 w3.close

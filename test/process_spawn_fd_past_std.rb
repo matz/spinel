@@ -174,6 +174,14 @@ p r.read, r3.read
 r.close
 r3.close
 
+# a source that is not open raises
+closed = IO.pipe.then { |a, b| n = a.fileno; a.close; b.close; n }
+begin
+  spawn("true", 3 => closed)
+rescue SystemCallError => e
+  p e.class
+end
+
 # a value that is no redirection, a descriptor of the child that no option
 # makes, and a loop of them
 [{ 3 => 1.5 }, { 3 => [:child, 9] }, { 3 => [:child, 4], 4 => [:child, 3] }].each do |opts|
